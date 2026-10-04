@@ -1,6 +1,6 @@
-# Native 与静态 FFmpeg 接入设计（待最终评审）
+# Native 与静态 FFmpeg 接入设计（已批准）
 
-状态：待用户最终评审，不授权实现。源码研究见 research/ffmpeg-static-source-audit.md；板端 profile 和实测仍待环境证据。
+状态：用户已在最终摘要后明确回复“开始实现”，批准进入实施。源码研究见 research/ffmpeg-static-source-audit.md；板端 profile 和实测仍待环境证据。
 
 ## 1. 构建边界
 开发主机负责 FFmpeg → Engine → Go/CGO 的全部编译和最终链接；板端只部署与测试。
