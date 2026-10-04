@@ -1,0 +1,128 @@
+# ==========================================
+# Zhulong 全栈异构系统 .gitignore
+# ==========================================
+
+# ------------------------------------------
+# 1. Go 后端构建与测试产物
+# ------------------------------------------
+/Zhulong
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 测试与性能分析文件 (pprof / trace)
+*.test
+*.out
+cover.out
+coverage.html
+cpu.pprof
+mem.pprof
+pprof.*.samples.*.pb.gz
+
+# ------------------------------------------
+# 2. C / C++ & CGO 原生引擎构建产物
+# ------------------------------------------
+# 中间对象与静态/动态库
+*.o
+*.obj
+*.a
+*.lib
+*.lo
+*.la
+
+# CMake / Makefile 临时目录与编译数据库
+/build/
+/build-*/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.cmake
+compile_commands.json
+
+# 调试转储与 Core Dump
+core
+core.*
+*.dSYM/
+*.gdb
+vgcore.*
+
+# ------------------------------------------
+# 3. React 前端 WebUI
+# ------------------------------------------
+webui/node_modules/
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 前端构建产物与缓存
+webui/dist/
+dist/
+.vite/
+.eslintcache
+.stylelintcache
+
+# ------------------------------------------
+# 4. 数据存储、媒体流与模型权重 (⚠️ 重点防爆)
+# ------------------------------------------
+# SQLite 数据库与 WAL 临时文件
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# 录像临时切片与截图缓存
+/recordings/
+/snapshots/
+*.mp4
+*.h264
+*.h265
+
+# 异构 NPU 转换权重与本地模型 (避免超大二进制污染 Git 历史)
+/models/*.onnx
+/models/*.rknn
+/models/*.om
+/models/*.engine
+/models/*.bin
+!/models/.gitkeep
+
+# ------------------------------------------
+# 5. 本地环境与凭证
+# ------------------------------------------
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.cert
+
+# ------------------------------------------
+# 6. 编辑器与 IDE
+# ------------------------------------------
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ------------------------------------------
+# 7. AI 辅助开发工具本地状态
+# ------------------------------------------
+.claude/
+.agents/
+.pi/
