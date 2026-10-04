@@ -1,0 +1,46 @@
+{
+  "app": {
+    "brand": "Zhulong",
+    "environment": "Local edge host",
+    "title": "System status",
+    "description": "Runtime readiness for this Zhulong host."
+  },
+  "a11y": {
+    "skipToContent": "Skip to system status"
+  },
+  "controls": {
+    "language": "Language",
+    "themeToDark": "Use dark theme",
+    "themeToLight": "Use light theme"
+  },
+  "overview": {
+    "heading": "Host status",
+    "description": "Core services and the local runtime, in one place."
+  },
+  "health": {
+    "title": "Runtime readiness",
+    "loadingTitle": "Checking the local host",
+    "loading": "Connecting to the local health endpoint…",
+    "readyTitle": "All components are ready",
+    "readyDescription": "The host and its required services responded successfully.",
+    "errorTitle": "The host could not be reached",
+    "errorDescription": "{{message}}",
+    "loadError": "The local health check did not complete. Verify that the host is running, then retry.",
+    "retry": "Retry check",
+    "refresh": "Refresh status",
+    "lastChecked": "Last checked {{time}}",
+    "notChecked": "Waiting for first check",
+    "ready": "Ready",
+    "checking": "Checking"
+  },
+  "components": {
+    "host": "Application host",
+    "database": "Local database",
+    "engine": "Native engine stub",
+    "engineNote": "Lifecycle only · no media pipeline"
+  },
+  "footer": {
+    "runtime": "Runtime foundation",
+    "hardware": "No camera or accelerator SDK configured"
+  }
+}

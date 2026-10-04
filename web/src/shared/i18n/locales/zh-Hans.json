@@ -1,0 +1,46 @@
+{
+  "app": {
+    "brand": "Zhulong",
+    "environment": "本地主机",
+    "title": "系统状态",
+    "description": "Zhulong 主机的运行就绪状态。"
+  },
+  "a11y": {
+    "skipToContent": "跳到系统状态"
+  },
+  "controls": {
+    "language": "语言",
+    "themeToDark": "切换为深色主题",
+    "themeToLight": "切换为浅色主题"
+  },
+  "overview": {
+    "heading": "主机状态",
+    "description": "集中查看核心服务与本地运行状态。"
+  },
+  "health": {
+    "title": "运行就绪状态",
+    "loadingTitle": "正在检查本地主机",
+    "loading": "正在连接本地健康检查接口…",
+    "readyTitle": "所有组件均已就绪",
+    "readyDescription": "主机及其必需服务均已成功响应。",
+    "errorTitle": "无法连接主机",
+    "errorDescription": "{{message}}",
+    "loadError": "本地健康检查未完成。请确认主机正在运行，然后重试。",
+    "retry": "重试检查",
+    "refresh": "刷新状态",
+    "lastChecked": "上次检查：{{time}}",
+    "notChecked": "等待首次检查",
+    "ready": "就绪",
+    "checking": "检查中"
+  },
+  "components": {
+    "host": "应用主机",
+    "database": "本地数据库",
+    "engine": "原生引擎桩",
+    "engineNote": "仅验证生命周期 · 尚无媒体流水线"
+  },
+  "footer": {
+    "runtime": "运行时基础框架",
+    "hardware": "尚未配置摄像机或加速器 SDK"
+  }
+}

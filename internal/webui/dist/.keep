@@ -1,0 +1,1 @@
+This file keeps the Go embed target present before the first Vite build.

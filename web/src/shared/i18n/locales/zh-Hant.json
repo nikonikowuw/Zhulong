@@ -1,0 +1,46 @@
+{
+  "app": {
+    "brand": "Zhulong",
+    "environment": "本機主機",
+    "title": "系統狀態",
+    "description": "Zhulong 主機的執行就緒狀態。"
+  },
+  "a11y": {
+    "skipToContent": "跳至系統狀態"
+  },
+  "controls": {
+    "language": "語言",
+    "themeToDark": "切換為深色主題",
+    "themeToLight": "切換為淺色主題"
+  },
+  "overview": {
+    "heading": "主機狀態",
+    "description": "集中檢視核心服務與本機執行狀態。"
+  },
+  "health": {
+    "title": "執行就緒狀態",
+    "loadingTitle": "正在檢查本機主機",
+    "loading": "正在連線至本機健康檢查端點…",
+    "readyTitle": "所有元件皆已就緒",
+    "readyDescription": "主機及其必要服務均已成功回應。",
+    "errorTitle": "無法連線至主機",
+    "errorDescription": "{{message}}",
+    "loadError": "本機健康檢查未完成。請確認主機正在執行，然後重試。",
+    "retry": "重試檢查",
+    "refresh": "重新整理狀態",
+    "lastChecked": "上次檢查：{{time}}",
+    "notChecked": "等待首次檢查",
+    "ready": "就緒",
+    "checking": "檢查中"
+  },
+  "components": {
+    "host": "應用主機",
+    "database": "本機資料庫",
+    "engine": "原生引擎桩",
+    "engineNote": "僅驗證生命週期 · 尚無媒體處理流程"
+  },
+  "footer": {
+    "runtime": "執行環境基礎框架",
+    "hardware": "尚未設定攝影機或加速器 SDK"
+  }
+}
