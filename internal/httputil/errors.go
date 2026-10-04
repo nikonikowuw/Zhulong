@@ -46,6 +46,11 @@ func NewValidationError(message string, details []FieldDetail) *AppError {
 	}
 }
 
+// WritePayloadTooLarge writes the standard response for requests exceeding the API body limit.
+func WritePayloadTooLarge(c *gin.Context) {
+	WriteError(c, NewError(http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "Request body too large", nil))
+}
+
 // WriteError writes a sanitized API error and logs its internal cause server-side.
 func WriteError(c *gin.Context, err error) {
 	var appError *AppError

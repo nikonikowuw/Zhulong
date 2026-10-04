@@ -45,10 +45,27 @@ describe("App", () => {
     }
     document.documentElement.lang = "en";
     await i18n.changeLanguage("en");
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => readyResponse,
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((input: string | Request) => {
+      const url = typeof input === "string" ? input : input.url;
+      if (url.includes("/api/v1/auth/status")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ code: "OK", message: "Success", data: { initialized: true } }),
+        });
+      }
+      if (url.includes("/api/v1/auth/me")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ code: "OK", message: "Success", data: { id: 1, username: "admin" } }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => readyResponse,
+      });
     }));
   });
 

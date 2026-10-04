@@ -1,6 +1,9 @@
 package app
 
 import (
+	"time"
+
+	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/webui"
@@ -11,6 +14,7 @@ import (
 type applicationServices struct {
 	database *database.Store
 	native   *engine.Engine
+	auth     auth.AuthService
 	logger   *zap.Logger
 }
 
@@ -32,9 +36,15 @@ func New(config Config) *fx.App {
 }
 
 func newServices(config Config, logger *zap.Logger) *applicationServices {
+	dbStore := database.New(config.DataDir, logger)
+	userStore := auth.NewUserStore(dbStore.DB)
+	sessionStore := auth.NewMemorySessionStore(7 * 24 * time.Hour)
+	authSvc := auth.NewAuthService(userStore, sessionStore, nil, logger)
+
 	return &applicationServices{
-		database: database.New(config.DataDir, logger),
+		database: dbStore,
 		native:   engine.New(),
+		auth:     authSvc,
 		logger:   logger,
 	}
 }

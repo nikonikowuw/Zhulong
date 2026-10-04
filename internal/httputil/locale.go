@@ -1,6 +1,8 @@
 package httputil
 
 import (
+	"sync"
+
 	"github.com/gin-gonic/gin"
 	"golang.org/x/text/language"
 )
@@ -17,7 +19,9 @@ var (
 		language.TraditionalChinese,
 	}
 	languageMatcher = language.NewMatcher(preferredLanguages)
-	messages        = map[string]map[string]string{
+
+	messagesMu sync.RWMutex
+	messages   = map[string]map[string]string{
 		"OK": {
 			"en":      "Success",
 			"zh-Hans": "成功",
@@ -78,6 +82,11 @@ var (
 			"zh-Hans": "格式无效",
 			"zh-Hant": "格式無效",
 		},
+		"PAYLOAD_TOO_LARGE": {
+			"en":      "Request body is too large",
+			"zh-Hans": "请求内容过大",
+			"zh-Hant": "請求內容過大",
+		},
 		"INVALID_URL": {
 			"en":      "Enter a valid URL",
 			"zh-Hans": "请输入有效的 URL",
@@ -90,6 +99,20 @@ var (
 		},
 	}
 )
+
+// RegisterMessages registers domain-specific or custom error code translations in a thread-safe manner.
+func RegisterMessages(custom map[string]map[string]string) {
+	messagesMu.Lock()
+	defer messagesMu.Unlock()
+	for code, translations := range custom {
+		if _, ok := messages[code]; !ok {
+			messages[code] = make(map[string]string, len(translations))
+		}
+		for lang, text := range translations {
+			messages[code][lang] = text
+		}
+	}
+}
 
 func requestLocale(acceptLanguage string) string {
 	tags, _, err := language.ParseAcceptLanguage(acceptLanguage)
@@ -109,6 +132,12 @@ func requestLocale(acceptLanguage string) string {
 }
 
 func localizedMessage(code, locale string) string {
+	messagesMu.RLock()
+	defer messagesMu.RUnlock()
+	return localizedCatalogMessage(code, locale)
+}
+
+func localizedCatalogMessage(code, locale string) string {
 	if translations, ok := messages[code]; ok {
 		if message, ok := translations[locale]; ok {
 			return message
@@ -118,8 +147,10 @@ func localizedMessage(code, locale string) string {
 }
 
 func localizedValidationMessage(code, locale string) string {
+	messagesMu.RLock()
+	defer messagesMu.RUnlock()
 	if _, ok := messages[code]; !ok {
 		code = "INVALID_VALUE"
 	}
-	return localizedMessage(code, locale)
+	return localizedCatalogMessage(code, locale)
 }

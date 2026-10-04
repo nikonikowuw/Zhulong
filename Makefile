@@ -40,7 +40,7 @@ native-test: native-build
 	$(CTEST) --test-dir $(NATIVE_BUILD_DIR) --output-on-failure
 
 api-docs:
-	$(GO) run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init --dir cmd/Zhulong,internal/app,internal/httputil --generalInfo main.go --output internal/apidocs --parseInternal
+	$(GO) run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init --dir cmd/Zhulong,internal/app,internal/httputil,internal/auth --generalInfo main.go --output internal/apidocs --parseInternal
 
 go-check: native-build
 	test -z "$$(gofmt -l cmd internal)"

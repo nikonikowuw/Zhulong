@@ -133,6 +133,24 @@ func TestUnknownValidationCodeUsesLocalizedGenericMessage(t *testing.T) {
 	}
 }
 
+func TestPayloadTooLargeErrorIsLocalized(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/init", nil)
+	context.Request.Header.Set("Accept-Language", "zh-Hant")
+
+	WritePayloadTooLarge(context)
+
+	var body Response
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if recorder.Code != http.StatusRequestEntityTooLarge || body.Code != "PAYLOAD_TOO_LARGE" || body.Message != "請求內容過大" || body.Data != nil {
+		t.Fatalf("unexpected payload-too-large response: status=%d body=%+v", recorder.Code, body)
+	}
+}
+
 func TestNonValidationErrorOmitsDetails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
@@ -150,5 +168,31 @@ func TestNonValidationErrorOmitsDetails(t *testing.T) {
 	}
 	if string(body["data"]) != "null" {
 		t.Fatalf("expected null data, got %s", body["data"])
+	}
+}
+
+func TestRegisterMessages_ConcurrentAndLocalized(t *testing.T) {
+	RegisterMessages(map[string]map[string]string{
+		"CUSTOM_TEST_CODE": {
+			"en":      "Custom test message",
+			"zh-Hans": "自定义测试消息",
+			"zh-Hant": "自訂測試訊息",
+		},
+	})
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
+	context.Request.Header.Set("Accept-Language", "zh-Hant")
+
+	WriteError(context, NewError(http.StatusBadRequest, "CUSTOM_TEST_CODE", "raw message", nil))
+
+	var body Response
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Code != "CUSTOM_TEST_CODE" || body.Message != "自訂測試訊息" {
+		t.Fatalf("expected registered custom message, got %+v", body)
 	}
 }

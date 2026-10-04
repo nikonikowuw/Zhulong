@@ -1,6 +1,7 @@
 import i18n from "i18next";
 import LanguageDetector from "i18next-browser-languagedetector";
 import { initReactI18next } from "react-i18next";
+import { authLocales } from "@/features/auth";
 import en from "./locales/en.json";
 import zhHans from "./locales/zh-Hans.json";
 import zhHant from "./locales/zh-Hant.json";
@@ -16,15 +17,32 @@ function normalizeDetectedLanguage(language: string): SupportedLanguage {
   return "en";
 }
 
+const resources = {
+  en: {
+    translation: {
+      ...en,
+      auth: authLocales.en,
+    },
+  },
+  "zh-Hans": {
+    translation: {
+      ...zhHans,
+      auth: authLocales["zh-Hans"],
+    },
+  },
+  "zh-Hant": {
+    translation: {
+      ...zhHant,
+      auth: authLocales["zh-Hant"],
+    },
+  },
+};
+
 void i18n
   .use(LanguageDetector)
   .use(initReactI18next)
   .init({
-    resources: {
-      en: { translation: en },
-      "zh-Hans": { translation: zhHans },
-      "zh-Hant": { translation: zhHant },
-    },
+    resources,
     fallbackLng: "en",
     showSupportNotice: false,
     supportedLngs: [...supportedLanguages],

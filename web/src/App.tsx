@@ -1,9 +1,23 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Cpu, Moon, Sun } from "lucide-react";
+import { AuthGuard, AuthProvider, UserNav } from "@/features/auth";
 import { HealthPanel } from "@/features/systemStatus";
 import { currentLanguage } from "@/shared/i18n";
 import { useTheme } from "@/shared/theme/useTheme";
+
+function SystemStatusContent() {
+  const { t } = useTranslation();
+  return (
+    <>
+      <section className="page-heading" aria-labelledby="page-title">
+        <h1 id="page-title">{t("overview.heading")}</h1>
+        <p className="page-description">{t("overview.description")}</p>
+      </section>
+      <HealthPanel />
+    </>
+  );
+}
 
 function SystemStatusPage() {
   const { t, i18n } = useTranslation();
@@ -35,6 +49,7 @@ function SystemStatusPage() {
           <span className="brand-context">{t("app.environment")}</span>
         </a>
         <div className="header-controls">
+          <UserNav />
           <label className="language-control">
             <span>{t("controls.language")}</span>
             <select
@@ -62,11 +77,9 @@ function SystemStatusPage() {
       </header>
 
       <main id="main" className="workspace" tabIndex={-1}>
-        <section className="page-heading" aria-labelledby="page-title">
-          <h1 id="page-title">{t("overview.heading")}</h1>
-          <p className="page-description">{t("overview.description")}</p>
-        </section>
-        <HealthPanel />
+        <AuthGuard>
+          <SystemStatusContent />
+        </AuthGuard>
         <footer className="workspace-footer">
           <span>{t("footer.runtime")}</span>
           <span>{t("footer.hardware")}</span>
@@ -77,5 +90,9 @@ function SystemStatusPage() {
 }
 
 export default function App() {
-  return <SystemStatusPage />;
+  return (
+    <AuthProvider>
+      <SystemStatusPage />
+    </AuthProvider>
+  );
 }

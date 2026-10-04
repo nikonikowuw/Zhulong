@@ -11,6 +11,7 @@
 | [目录架构](./directory-structure.md) | 业务能力模块分包、包依赖方向与路径规划 |
 | [跨语言命名规范](../naming-guidelines.md) | 文件、CLI 命令/参数、Go 标识符及领域术语 |
 | [HTTP API 与 Swagger](./http-api-guidelines.md) | Gin 路由、DTO 校验、Swaggo 2.0 文档、SPA 回退 |
+| [单用户认证](./authentication-guidelines.md) | SQLite 单用户凭据、内存 Session、Cookie、限流及前后端认证态契约 |
 | [HTTP 中间件开发与编排](./middleware-guidelines.md) | 中间件分层隔离、流水线时序、Request ID、Access Log、CORS 与类型安全 |
 | [数据库与版本化迁移](./database-guidelines.md) | GORM+SQLite、WAL/Pragma 配置、启动自动迁移、事务约束 |
 | [依赖注入与生命周期](./dependency-injection.md) | Uber Fx 装配、启动失败回滚、HTTP 排空、native/数据库关闭顺序 |

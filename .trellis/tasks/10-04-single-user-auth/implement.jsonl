@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "Follow HTTP API response envelope and Gin routing guidelines"}
+{"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "Follow Gin middleware registration and execution rules"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Follow SQLite migration and GORM model conventions"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "Follow feature slice layout and public barrel rules"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "Follow tri-lingual i18n dictionary standards"}

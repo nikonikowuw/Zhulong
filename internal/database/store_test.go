@@ -28,12 +28,20 @@ func TestOpenAndMigrateCreatesVersionedSchema(t *testing.T) {
 		t.Fatal("database should be ready after migration")
 	}
 
-	var tableName string
-	if err := store.db.Raw("SELECT name FROM sqlite_master WHERE type = ? AND name = ?", "table", "system_metadata").Scan(&tableName).Error; err != nil {
-		t.Fatalf("query migrated table: %v", err)
+	var metadataTable string
+	if err := store.db.Raw("SELECT name FROM sqlite_master WHERE type = ? AND name = ?", "table", "system_metadata").Scan(&metadataTable).Error; err != nil {
+		t.Fatalf("query migrated table system_metadata: %v", err)
 	}
-	if tableName != "system_metadata" {
-		t.Fatalf("expected migrated system_metadata table, got %q", tableName)
+	if metadataTable != "system_metadata" {
+		t.Fatalf("expected migrated system_metadata table, got %q", metadataTable)
+	}
+
+	var usersTable string
+	if err := store.db.Raw("SELECT name FROM sqlite_master WHERE type = ? AND name = ?", "table", "users").Scan(&usersTable).Error; err != nil {
+		t.Fatalf("query migrated table users: %v", err)
+	}
+	if usersTable != "users" {
+		t.Fatalf("expected migrated users table, got %q", usersTable)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

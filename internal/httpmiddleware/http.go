@@ -17,6 +17,9 @@ import (
 
 const requestIDKey = "zhulong.request_id"
 
+// MaxAPIRequestBodyBytes bounds non-file API request bodies to 1 MiB.
+const MaxAPIRequestBodyBytes int64 = 1 << 20
+
 var fallbackRequestIDCounter atomic.Uint64
 
 // Recovery converts panics from HTTP handlers into a sanitized API response.
@@ -83,6 +86,18 @@ func AccessLog(logger *zap.Logger) gin.HandlerFunc {
 		default:
 			logger.Info("HTTP request", fields...)
 		}
+	}
+}
+
+// MaxBodyLimit rejects oversized API requests and caps bodies without a known length.
+func MaxBodyLimit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.ContentLength > MaxAPIRequestBodyBytes {
+			httputil.WritePayloadTooLarge(c)
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxAPIRequestBodyBytes)
+		c.Next()
 	}
 }
 

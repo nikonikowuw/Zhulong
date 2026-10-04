@@ -90,6 +90,13 @@ func (s *Store) Ready() bool {
 	return s.db != nil
 }
 
+// DB returns the active GORM database instance or nil when unready.
+func (s *Store) DB() *gorm.DB {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.db
+}
+
 // Close closes the SQL connection pool. Calling Close more than once is safe.
 func (s *Store) Close() error {
 	s.mu.Lock()

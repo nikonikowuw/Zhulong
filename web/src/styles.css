@@ -21,6 +21,7 @@
   --accent: #0071e3;
   --button-background: #0071e3;
   --button-hover: #0077ed;
+  --button-foreground: #ffffff;
   --danger: #c5221f;
   --danger-soft: #fcebea;
   --focus: #0071e3;
@@ -44,6 +45,7 @@
   --accent: #0a84ff;
   --button-background: #005bbd;
   --button-hover: #0066cc;
+  --button-foreground: #ffffff;
   --danger: #ff6961;
   --danger-soft: #452725;
   --focus: #64b5ff;

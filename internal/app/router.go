@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/nikonikowuw/Zhulong/internal/apidocs"
+	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	swaggerFiles "github.com/swaggo/files"
@@ -26,13 +27,18 @@ type serviceReadiness interface {
 	Ready() bool
 }
 
-func newRouter(logger *zap.Logger, database serviceReadiness, native serviceReadiness, assets http.FileSystem) *gin.Engine {
+func newRouter(logger *zap.Logger, database serviceReadiness, native serviceReadiness, authService auth.AuthService, assets http.FileSystem) *gin.Engine {
 	router := gin.New()
 	router.Use(httpmiddleware.Recovery(logger), httpmiddleware.RequestID())
 
 	api := router.Group("/api/v1")
-	api.Use(httpmiddleware.AccessLog(logger))
+	api.Use(httpmiddleware.AccessLog(logger), httpmiddleware.MaxBodyLimit())
 	api.GET("/health", healthHandler(database, native))
+
+	if authService != nil {
+		authHandler := auth.NewHandler(authService)
+		authHandler.RegisterRoutes(api)
+	}
 
 	swaggerHandler := ginSwagger.WrapHandler(swaggerFiles.Handler)
 	router.GET("/swagger", func(c *gin.Context) {
@@ -95,7 +101,7 @@ func newHTTPServer(config Config, services *applicationServices, assets http.Fil
 		return nil, fmt.Errorf("validate HTTP address: %w", err)
 	}
 
-	router := newRouter(services.logger, services.database, services.native, assets)
+	router := newRouter(services.logger, services.database, services.native, services.auth, assets)
 	return &http.Server{
 		Addr:              config.HTTPAddress,
 		Handler:           router,

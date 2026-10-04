@@ -147,3 +147,13 @@ httputil.Success(c, result)
 ```json
 { "code": "VALIDATION_FAILED", "message": "Invalid request", "data": null, "details": [{ "field": "password", "code": "MIN_LENGTH", "message": "Password is too short" }] }
 ```
+
+---
+
+## 4. 模块化 i18n 字典注册规范 (Catalog Registry)
+
+为防止 `internal/httputil` 膨胀为包含全系统业务错误码的单体杂物箱，采用注册式目录模式：
+
+1. **平台通用字典**：`internal/httputil/locale.go` 仅保留通用 HTTP 状态与表单校验码（`INTERNAL_ERROR`、`ROUTE_NOT_FOUND`、`VALIDATION_FAILED`、`REQUIRED` 等），并通过读写锁保证并发安全。
+2. **业务专属字典**：各业务模块（如 `internal/auth`、`internal/camera`）在自己的 `locale.go` 中维护本模块的错误码三语映射，并在 `init()` 阶段调用 `httputil.RegisterMessages(map[string]map[string]string{...})`。
+3. **高内聚与自包含**：业务模块重构或废弃时，对应语言字典随包一并删除，杜绝平台基础包遗留死文案。

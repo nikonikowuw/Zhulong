@@ -1,17 +1,20 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/auth"
+	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
-	"testing/fstest"
 )
 
 type readinessStub bool
@@ -32,7 +35,7 @@ func TestRouterSeparatesAPIAndSPA(t *testing.T) {
 		"index.html":    &fstest.MapFile{Data: []byte("<!doctype html><title>shell</title>")},
 		"assets/app.js": &fstest.MapFile{Data: []byte("window.app = true")},
 	})
-	router := newRouter(zap.NewNop(), readinessStub(true), readinessStub(true), assets)
+	router := newRouter(zap.NewNop(), readinessStub(true), readinessStub(true), nil, assets)
 
 	tests := []struct {
 		name       string
@@ -67,7 +70,7 @@ func TestRouterSeparatesAPIAndSPA(t *testing.T) {
 
 func TestHealthRequiresInitializedDependencies(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	router := newRouter(zap.NewNop(), readinessStub(false), readinessStub(true), http.FS(fstest.MapFS{
+	router := newRouter(zap.NewNop(), readinessStub(false), readinessStub(true), nil, http.FS(fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("shell")},
 	}))
 	recorder := httptest.NewRecorder()
@@ -90,6 +93,59 @@ func TestUnknownErrorIsWrappedForClient(t *testing.T) {
 	httputil.WriteError(context, errors.New("private detail"))
 	if recorder.Code != http.StatusInternalServerError || contains(recorder.Body.String(), "private detail") {
 		t.Fatalf("unexpected error response: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+type authStubService struct {
+	auth.AuthService
+}
+
+func (a authStubService) GetStatus(ctx context.Context) (auth.AuthStatusResponse, error) {
+	return auth.AuthStatusResponse{Initialized: false}, nil
+}
+
+func TestRouterMountsAuthEndpoints(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := newRouter(zap.NewNop(), readinessStub(true), readinessStub(true), authStubService{}, http.FS(fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("shell")},
+	}))
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 on /api/v1/auth/status, got %d", recorder.Code)
+	}
+	if !contains(recorder.Body.String(), `"initialized":false`) {
+		t.Fatalf("unexpected body: %s", recorder.Body.String())
+	}
+}
+
+func TestRouterRejectsOversizedAPIRequestBodies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := newRouter(zap.NewNop(), readinessStub(true), readinessStub(true), authStubService{}, http.FS(fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("shell")},
+	}))
+	body := `{"padding":"` + strings.Repeat("a", int(httpmiddleware.MaxAPIRequestBodyBytes)) + `"}`
+
+	for _, knownLength := range []bool{true, false} {
+		name := "unknown content length"
+		if knownLength {
+			name = "known content length"
+		}
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/init", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			if !knownLength {
+				request.ContentLength = -1
+			}
+			router.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusRequestEntityTooLarge || !contains(recorder.Body.String(), `"code":"PAYLOAD_TOO_LARGE"`) {
+				t.Fatalf("expected localized 413 error response, got %d: %s", recorder.Code, recorder.Body.String())
+			}
+		})
 	}
 }
 

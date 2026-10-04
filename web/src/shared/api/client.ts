@@ -20,11 +20,51 @@ export class ApiError extends Error {
   }
 }
 
-export async function getApiData<T>(
+export type UnauthorizedHandler = () => void;
+const unauthorizedListeners = new Set<UnauthorizedHandler>();
+
+export function onUnauthorized(handler: UnauthorizedHandler): () => void {
+  unauthorizedListeners.add(handler);
+  return () => {
+    unauthorizedListeners.delete(handler);
+  };
+}
+
+function notifyUnauthorized(): void {
+  for (const listener of unauthorizedListeners) {
+    try {
+      listener();
+    } catch {
+      // Ignore listener runtime errors
+    }
+  }
+}
+
+interface RequestOptions {
+  method?: "GET" | "POST" | "PUT" | "DELETE";
+  body?: unknown;
+  language: SupportedLanguage;
+  signal?: AbortSignal;
+  notifyOnUnauthorized?: boolean;
+}
+
+export interface ApiCallOptions {
+  signal?: AbortSignal;
+  notifyOnUnauthorized?: boolean;
+}
+
+function parseCallOptions(signalOrOptions?: AbortSignal | ApiCallOptions): ApiCallOptions {
+  if (!signalOrOptions) return {};
+  if (signalOrOptions instanceof AbortSignal) {
+    return { signal: signalOrOptions };
+  }
+  return signalOrOptions;
+}
+
+async function requestApiData<T>(
   path: string,
   schema: z.ZodType<T>,
-  language: SupportedLanguage,
-  signal?: AbortSignal,
+  options: RequestOptions,
 ): Promise<T> {
   const controller = new AbortController();
   let timedOut = false;
@@ -34,26 +74,40 @@ export async function getApiData<T>(
   }, API_REQUEST_TIMEOUT_MS);
   const abortRequest = () => controller.abort();
 
-  if (signal?.aborted) {
+  if (options.signal?.aborted) {
     abortRequest();
   } else {
-    signal?.addEventListener("abort", abortRequest, { once: true });
+    options.signal?.addEventListener("abort", abortRequest, { once: true });
+  }
+
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    "Accept-Language": options.language,
+  };
+  if (options.body !== undefined) {
+    headers["Content-Type"] = "application/json";
   }
 
   try {
     const response = await fetch(path, {
+      method: options.method ?? "GET",
+      credentials: "include",
       signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-        "Accept-Language": language,
-      },
+      headers,
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     });
+
+    const shouldNotify =
+      options.notifyOnUnauthorized ?? (!path.includes("/auth/login") && !path.includes("/auth/status"));
+    if (response.status === 401 && shouldNotify) {
+      notifyUnauthorized();
+    }
 
     let body: unknown;
     try {
       body = await response.json();
     } catch (error) {
-      if (signal?.aborted) throw error;
+      if (options.signal?.aborted) throw error;
       throw new ApiError("Invalid server response", response.status, "INVALID_RESPONSE");
     }
 
@@ -77,6 +131,38 @@ export async function getApiData<T>(
     throw error;
   } finally {
     clearTimeout(timeoutId);
-    signal?.removeEventListener("abort", abortRequest);
+    options.signal?.removeEventListener("abort", abortRequest);
   }
+}
+
+export function getApiData<T>(
+  path: string,
+  schema: z.ZodType<T>,
+  language: SupportedLanguage,
+  signalOrOptions?: AbortSignal | ApiCallOptions,
+): Promise<T> {
+  const opts = parseCallOptions(signalOrOptions);
+  return requestApiData(path, schema, {
+    method: "GET",
+    language,
+    signal: opts.signal,
+    notifyOnUnauthorized: opts.notifyOnUnauthorized,
+  });
+}
+
+export function postApiData<T>(
+  path: string,
+  bodyData: unknown,
+  schema: z.ZodType<T>,
+  language: SupportedLanguage,
+  signalOrOptions?: AbortSignal | ApiCallOptions,
+): Promise<T> {
+  const opts = parseCallOptions(signalOrOptions);
+  return requestApiData(path, schema, {
+    method: "POST",
+    body: bodyData,
+    language,
+    signal: opts.signal,
+    notifyOnUnauthorized: opts.notifyOnUnauthorized,
+  });
 }

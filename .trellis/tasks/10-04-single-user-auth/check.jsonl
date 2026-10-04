@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend test coverage, race detection, and lint standards"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend test coverage, component testing, and build standards"}
