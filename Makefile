@@ -6,8 +6,9 @@ BUILD_DIR ?= build
 NATIVE_BUILD_DIR := $(BUILD_DIR)/native
 BINARY := $(BUILD_DIR)/Zhulong
 SWAG_VERSION := v1.16.6
+AIR ?= air
 
-.PHONY: all build check frontend-install frontend-build frontend-check native-configure native-build native-test api-docs go-check smoke run web-dev
+.PHONY: all build check frontend-install frontend-build frontend-check native-configure native-build native-test api-docs go-check smoke run web-dev dev-backend dev-frontend dev
 
 all: build
 
@@ -61,3 +62,21 @@ run: build
 
 web-dev:
 	$(NPM) run dev --prefix web
+
+dev-frontend: web-dev
+
+dev-backend: native-build
+	@which $(AIR) > /dev/null 2>&1 || (echo "air is not installed. Run: go install github.com/air-verse/air@latest" && exit 1)
+	$(AIR)
+
+dev: native-build
+	@which $(AIR) > /dev/null 2>&1 || (echo "air is not installed. Run: go install github.com/air-verse/air@latest" && exit 1)
+	@echo "Starting Zhulong full-stack dev (Air + Vite)..."
+	@bash -c '\
+		cleanup() { kill $$P1 $$P2 2>/dev/null || true; }; \
+		trap cleanup INT TERM EXIT; \
+		$(AIR) & P1=$$!; \
+		$(NPM) run dev --prefix web & P2=$$!; \
+		wait -n $$P1 $$P2 2>/dev/null || true'
+
+

@@ -1,0 +1,39 @@
+# Air configuration for Zhulong
+# Reference: https://github.com/air-verse/air
+
+root = "."
+tmp_dir = "build/air"
+
+[build]
+  cmd = "CGO_ENABLED=1 go build -o ./build/air/Zhulong ./cmd/Zhulong"
+  bin = "./build/air/Zhulong"
+  full_bin = "./build/air/Zhulong"
+  include_ext = ["go", "toml"]
+  exclude_dir = [
+    "web",
+    "native",
+    "build",
+    ".trellis",
+    ".git",
+    "internal/webui/dist",
+  ]
+  include_dir = ["cmd", "internal"]
+  exclude_regex = ["_test\\.go$"]
+  exclude_unchanged = true
+  delay = 500
+  stop_on_error = true
+  send_interrupt = true
+  kill_delay = "1000ms"
+
+[log]
+  time = true
+  main_only = false
+
+[color]
+  main = "magenta"
+  watcher = "cyan"
+  build = "yellow"
+  runner = "green"
+
+[misc]
+  clean_on_exit = true
