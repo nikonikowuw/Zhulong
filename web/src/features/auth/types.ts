@@ -23,5 +23,4 @@ export interface InitAdminPayload {
 export interface LoginPayload {
   username: string;
   password: string;
-  rememberMe?: boolean;
 }

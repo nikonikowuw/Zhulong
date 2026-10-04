@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"go.uber.org/zap"
 )
 
@@ -51,10 +52,44 @@ func WritePayloadTooLarge(c *gin.Context) {
 	WriteError(c, NewError(http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "Request body too large", nil))
 }
 
+// KindToHTTPStatus maps an apperr.Kind to its standard HTTP status code.
+func KindToHTTPStatus(k apperr.Kind) int {
+	switch k {
+	case apperr.KindInvalid:
+		return http.StatusUnprocessableEntity
+	case apperr.KindUnauthenticated:
+		return http.StatusUnauthorized
+	case apperr.KindPermissionDenied:
+		return http.StatusForbidden
+	case apperr.KindNotFound:
+		return http.StatusNotFound
+	case apperr.KindConflict:
+		return http.StatusConflict
+	case apperr.KindPrecondition:
+		return http.StatusPreconditionFailed
+	case apperr.KindRateLimited:
+		return http.StatusTooManyRequests
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
 // WriteError writes a sanitized API error and logs its internal cause server-side.
 func WriteError(c *gin.Context, err error) {
 	var appError *AppError
-	if !errors.As(err, &appError) || appError == nil {
+	var appErr *apperr.Error
+	var fallbackMsg string
+
+	if errors.As(err, &appErr) && appErr != nil {
+		status := KindToHTTPStatus(appErr.Kind)
+		fallbackMsg = appErr.Message
+		appError = &AppError{
+			Status:  status,
+			Code:    appErr.Code,
+			Message: appErr.Message,
+			Err:     appErr.Err,
+		}
+	} else if !errors.As(err, &appError) || appError == nil {
 		appError = NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", err)
 	}
 
@@ -66,9 +101,17 @@ func WriteError(c *gin.Context, err error) {
 
 	locale := requestLocale(c.GetHeader("Accept-Language"))
 	setLanguageHeaders(c, locale)
+	msg, found := lookupMessage(appError.Code, locale)
+	if !found {
+		if fallbackMsg != "" {
+			msg = fallbackMsg
+		} else {
+			msg = localizedMessage("REQUEST_FAILED", locale)
+		}
+	}
 	response := Response{
 		Code:    appError.Code,
-		Message: localizedMessage(appError.Code, locale),
+		Message: msg,
 		Data:    nil,
 	}
 	if status == http.StatusUnprocessableEntity && appError.Code == "VALIDATION_FAILED" {

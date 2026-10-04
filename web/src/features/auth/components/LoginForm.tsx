@@ -4,18 +4,11 @@ import { AlertCircle, LoaderCircle, Lock, LogIn, User as UserIcon } from "lucide
 import { useAuth } from "../hooks/useAuth";
 import { AuthCard } from "./AuthCard";
 
-const REMEMBERED_USER_KEY = "zhulong_remembered_username";
-
 export function LoginForm() {
   const { t } = useTranslation();
   const { login, error, clearError } = useAuth();
-  const [username, setUsername] = useState(() => {
-    return localStorage.getItem(REMEMBERED_USER_KEY) || "";
-  });
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(() => {
-    return Boolean(localStorage.getItem(REMEMBERED_USER_KEY));
-  });
   const [touched, setTouched] = useState({ username: false, password: false });
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
@@ -87,13 +80,7 @@ export function LoginForm() {
       await login({
         username: trimmedUser,
         password,
-        ...(rememberMe ? { rememberMe: true } : {}),
       });
-      if (rememberMe) {
-        localStorage.setItem(REMEMBERED_USER_KEY, trimmedUser);
-      } else {
-        localStorage.removeItem(REMEMBERED_USER_KEY);
-      }
     } catch (err) {
       if (err instanceof Error) {
         setLocalError(err.message);
@@ -197,23 +184,6 @@ export function LoginForm() {
               <span>{passwordError}</span>
             </p>
           )}
-        </div>
-
-        <div className="flex items-center justify-between pt-0.5">
-          <label
-            htmlFor="login-remember-me"
-            className="flex items-center gap-2 cursor-pointer select-none text-xs text-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
-          >
-            <input
-              id="login-remember-me"
-              name="rememberMe"
-              type="checkbox"
-              checked={rememberMe}
-              onChange={(e) => setRememberMe(e.target.checked)}
-              className="h-3.5 w-3.5 rounded border border-black/20 dark:border-white/20 bg-[var(--surface-muted)] text-[#0071e3] focus:ring-1 focus:ring-[#0071e3] transition-colors cursor-pointer"
-            />
-            <span>{t("auth.rememberMe")}</span>
-          </label>
         </div>
 
         <button

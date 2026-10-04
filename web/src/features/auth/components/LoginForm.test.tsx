@@ -40,33 +40,12 @@ describe("LoginForm", () => {
     vi.clearAllMocks();
   });
 
-  it("renders username, password, remember me, and login button", () => {
+  it("renders username, password, and login button", () => {
     renderLoginForm();
     expect(screen.getByRole("heading", { name: "Administrator Login" })).toBeInTheDocument();
     expect(screen.getByLabelText("Username")).toBeInTheDocument();
     expect(screen.getByLabelText("Password")).toBeInTheDocument();
-    expect(screen.getByLabelText("Remember me")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Login" })).toBeInTheDocument();
-  });
-
-  it("submits the form with entered credentials and remember me checked", async () => {
-    const user = userEvent.setup();
-    const loginMock = vi.fn().mockResolvedValue(undefined);
-    renderLoginForm({ login: loginMock });
-
-    await user.type(screen.getByLabelText("Username"), "admin");
-    const passwordInput = screen.getByLabelText("Password");
-    const rememberMeCheckbox = screen.getByLabelText("Remember me");
-    await user.type(passwordInput, "secret123");
-    await user.click(rememberMeCheckbox);
-    await user.click(screen.getByRole("button", { name: "Login" }));
-
-    expect(loginMock).toHaveBeenCalledWith({
-      username: "admin",
-      password: "secret123",
-      rememberMe: true,
-    });
-    expect(localStorage.getItem("zhulong_remembered_username")).toBe("admin");
   });
 
   it("submits the form with entered credentials", async () => {

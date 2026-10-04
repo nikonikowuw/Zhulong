@@ -157,3 +157,19 @@ httputil.Success(c, result)
 1. **平台通用字典**：`internal/httputil/locale.go` 仅保留通用 HTTP 状态与表单校验码（`INTERNAL_ERROR`、`ROUTE_NOT_FOUND`、`VALIDATION_FAILED`、`REQUIRED` 等），并通过读写锁保证并发安全。
 2. **业务专属字典**：各业务模块（如 `internal/auth`、`internal/camera`）在自己的 `locale.go` 中维护本模块的错误码三语映射，并在 `init()` 阶段调用 `httputil.RegisterMessages(map[string]map[string]string{...})`。
 3. **高内聚与自包含**：业务模块重构或废弃时，对应语言字典随包一并删除，杜绝平台基础包遗留死文案。
+
+---
+
+## 5. 领域语义错误 (`apperr`) 与泛型端点适配器
+
+为彻底解耦领域层（Service）与传输层（HTTP）并消除 Handler 样板代码：
+
+1. **领域语义错误 (`internal/apperr`)**：
+   - 领域层不引用 `net/http` 或 `gin`。
+   - 错误通过 `apperr.Kind` 分类（`KindInvalid`、`KindUnauthenticated`、`KindPermissionDenied`、`KindNotFound`、`KindConflict`、`KindPrecondition`、`KindRateLimited` 等）。
+   - 携带机器码 `Code`、兜底文案 `Message` 与脱敏原因 `Err`。
+2. **泛型端点适配器 (`internal/httputil`)**：
+   - 使用 `httputil.HandleJSON[Req, Resp]` 与 `httputil.Handle[Resp]` 挂载路由。
+   - 统一自动处理 `ShouldBindJSON`、413 Payload 超限、422 字段校验转换与 `Success` 响应信封。
+   - `httputil.WriteError` 自动识别 `*apperr.Error`，将 `Kind` 映射为对应的 HTTP 状态码并联动 i18n 消息。
+

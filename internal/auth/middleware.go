@@ -1,9 +1,8 @@
 package auth
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
 
@@ -46,7 +45,7 @@ func GetSessionToken(c *gin.Context) string {
 }
 
 func writeUnauthorized(c *gin.Context) {
-	httputil.WriteError(c, httputil.NewError(http.StatusUnauthorized, "UNAUTHORIZED", "Authentication required", nil))
+	httputil.WriteError(c, apperr.Unauthenticated("UNAUTHORIZED", "Authentication required", nil))
 }
 
 // RequireAuth middleware verifies the session cookie and injects CurrentUser into context.

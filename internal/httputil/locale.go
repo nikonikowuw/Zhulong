@@ -137,6 +137,17 @@ func localizedMessage(code, locale string) string {
 	return localizedCatalogMessage(code, locale)
 }
 
+func lookupMessage(code, locale string) (string, bool) {
+	messagesMu.RLock()
+	defer messagesMu.RUnlock()
+	if translations, ok := messages[code]; ok {
+		if message, ok := translations[locale]; ok {
+			return message, true
+		}
+	}
+	return "", false
+}
+
 func localizedCatalogMessage(code, locale string) string {
 	if translations, ok := messages[code]; ok {
 		if message, ok := translations[locale]; ok {

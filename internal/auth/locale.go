@@ -1,8 +1,18 @@
 package auth
 
-import "github.com/nikonikowuw/Zhulong/internal/httputil"
+import (
+	"github.com/go-playground/validator/v10"
+	"github.com/nikonikowuw/Zhulong/internal/httputil"
+)
 
 func init() {
+	httputil.RegisterValidationMapper(func(fieldError validator.FieldError) string {
+		if fieldError.StructField() == "Password" && fieldError.Tag() == "min" {
+			return "PASSWORD_TOO_SHORT"
+		}
+		return ""
+	})
+
 	httputil.RegisterMessages(map[string]map[string]string{
 		"UNAUTHORIZED": {
 			"en":      "Authentication required",

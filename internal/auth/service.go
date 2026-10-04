@@ -7,17 +7,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 )
 
 var (
-	ErrAlreadyInitialized = errors.New("system is already initialized")
-	ErrNotInitialized     = errors.New("system is not initialized")
-	ErrInvalidCredentials = errors.New("invalid username or password")
-	ErrPasswordMismatch   = errors.New("passwords do not match")
-	ErrPasswordTooShort   = errors.New("password must be at least 8 characters")
-	ErrTooManyAttempts    = errors.New("too many failed login attempts")
+	ErrAlreadyInitialized = apperr.PermissionDenied("SYSTEM_ALREADY_INITIALIZED", "system is already initialized", nil)
+	ErrNotInitialized     = apperr.Precondition("SYSTEM_NOT_INITIALIZED", "system is not initialized", nil)
+	ErrInvalidCredentials = apperr.Unauthenticated("INVALID_CREDENTIALS", "invalid username or password", nil)
+	ErrPasswordMismatch   = apperr.Invalid("PASSWORD_MISMATCH", "passwords do not match", nil)
+	ErrPasswordTooShort   = apperr.Invalid("PASSWORD_TOO_SHORT", "password must be at least 8 characters", nil)
+	ErrTooManyAttempts    = apperr.RateLimited("TOO_MANY_ATTEMPTS", "too many failed login attempts", nil)
 )
 
 // AuthService defines the business operations for user authentication and session management.

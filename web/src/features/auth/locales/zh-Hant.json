@@ -11,7 +11,6 @@
   "confirmPasswordPlaceholder": "請再次輸入密碼",
   "initButton": "完成初始化並進入系統",
   "loginButton": "登入",
-  "rememberMe": "記住我",
   "logoutButton": "登出",
   "loading": "正在驗證工作階段狀態...",
   "submitting": "正在處理...",
