@@ -1,0 +1,68 @@
+basePath: /api/v1
+definitions:
+  app.HealthData:
+    properties:
+      components:
+        additionalProperties:
+          type: string
+        type: object
+      status:
+        type: string
+    type: object
+  httputil.FieldDetail:
+    properties:
+      code:
+        type: string
+      field:
+        type: string
+      message:
+        type: string
+    required:
+    - code
+    - field
+    - message
+    type: object
+  httputil.Response:
+    properties:
+      code:
+        type: string
+      data: {}
+      details:
+        items:
+          $ref: '#/definitions/httputil.FieldDetail'
+        type: array
+      message:
+        type: string
+    required:
+    - code
+    - data
+    - message
+    type: object
+info:
+  contact: {}
+  description: Local API for the Zhulong edge operations host.
+  title: Zhulong API
+  version: "1.0"
+paths:
+  /health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/app.HealthData'
+              type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get host health
+      tags:
+      - system
+swagger: "2.0"

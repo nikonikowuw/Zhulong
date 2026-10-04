@@ -1,0 +1,13 @@
+# Zhulong runtime configuration.
+# The service reads this file from its working directory at startup.
+
+[http]
+address = "127.0.0.1:8080"
+
+[logging]
+development = false
+
+# The data directory defaults to the operating system's user config directory.
+# Uncomment to choose a custom directory for the SQLite database:
+# [data]
+# directory = "./data"
