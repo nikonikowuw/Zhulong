@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/architecture.md", "reason": "系统总体架构模型、方案A单二进制约束及跨层防爆门契约"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "CGO 不透明句柄、内存所有权、指针规则与 unsafe.Slice 借用规范"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "原生节点流水线、有界队列背压、不可变帧包裹与优雅停机时序"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "Gin 统一三字段响应信封、Swagger 文档与路由规约"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "领域错误注册、HTTP 映射与三语本地化规范"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "React 18 特性切片、WebSocket 实时订阅与主题/i18n 规范"}

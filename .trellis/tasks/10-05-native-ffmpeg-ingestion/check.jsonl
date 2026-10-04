@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/native/index.md", "reason": "Native 检查入口"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "公开 ABI 与内部目录边界"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "所有权、异常及 CGO 边界"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "停止与队列规范；解码前丢包冲突以子任务无解码范围规避"}
+{"file": ".trellis/spec/naming-guidelines.md", "reason": "跨语言命名"}
+{"file": ".trellis/spec/guides/index.md", "reason": "跨层与复用检查入口"}
+{"file": ".trellis/tasks/10-05-native-ffmpeg-ingestion/research/ffmpeg-static-source-audit.md", "reason": "固定源码和静态接入研究证据"}

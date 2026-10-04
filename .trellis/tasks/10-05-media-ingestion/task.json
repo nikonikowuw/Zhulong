@@ -1,0 +1,28 @@
+{
+  "id": "media-ingestion",
+  "name": "media-ingestion",
+  "title": "媒体接入与流转管道",
+  "description": "实现基于 C++ Native 静态 FFmpeg 的 RTSP 媒体接入、物理流复用池、按需 CGO 订阅流转、Go 摄像机探测状态机与前端 WebSocket H.265/H.264 三级自适应预览",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": "backend",
+  "priority": "P2",
+  "creator": "nikoniko",
+  "assignee": "nikoniko",
+  "createdAt": "2026-10-05",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "feat/project-skeleton",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "10-05-native-ffmpeg-ingestion"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

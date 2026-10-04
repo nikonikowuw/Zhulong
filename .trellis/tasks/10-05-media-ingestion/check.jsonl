@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture.md", "reason": "验证单二进制交付与跨层防爆门边界"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "验证 CGO 内存所有权与指针无泄漏规则"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "验证背压队列容量、Drop-Oldest 策略与五步优雅停机"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "验证摄像机 API 统一响应格式与 Swagger 同步"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验证探测失败及断流错误码与三语字典完整性"}
