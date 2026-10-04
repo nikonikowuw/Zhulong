@@ -98,7 +98,8 @@ async function requestApiData<T>(
     });
 
     const shouldNotify =
-      options.notifyOnUnauthorized ?? (!path.includes("/auth/login") && !path.includes("/auth/status"));
+      options.notifyOnUnauthorized ??
+      (!path.includes("/auth/login") && !path.includes("/auth/status") && !path.includes("/auth/me"));
     if (response.status === 401 && shouldNotify) {
       notifyUnauthorized();
     }

@@ -6,7 +6,12 @@
 
 ## 1. 深浅双色主题规范 (Light / Dark)
 
-- **语义设计 Token**：严禁硬编码十六进制颜色。统一使用 Tailwind CSS / shadcn/ui 语义 CSS 变量（`--background`, `--foreground`, `--border`, `--muted` 等）。
+- **语义设计 Token**：严禁硬编码随意颜色。统一使用 Tailwind CSS 语义 CSS 变量（`--background`, `--foreground`, `--border`, `--muted`, `--accent`, `--surface` 等）。
+- **Apple Style 视觉体系与红线**：
+  - **绝对禁止**：严禁渐变（`bg-gradient-*`）、重阴影（`shadow-2xl`）、粗边框（`border-2/4`）与杂乱高饱和多色装饰。
+  - **色彩基准**：浅色背景 Apple 灰 `#f5f5f7`、白底卡片 `#ffffff`；深色背景 `#1c1c1e`、卡片表面 `#2c2c2e`；强调色 Apple 蓝 `#0071e3`（深色 `#0a84ff`）、状态绿 `#34c759`、状态红 `#ff3b30`。
+  - **圆角与阴影**：卡片 `rounded-2xl`，输入框 `rounded-xl`，主操作按钮 `rounded-full` 胶囊；阴影统一使用克制微阴影 `shadow-[0_4px_12px_rgba(0,0,0,0.08)]`。
+  - **动效与触感**：全局统一使用减速缓动 `cubic-bezier(0.25, 0.1, 0.25, 1)`；所有交互按钮/卡片必须具备按压阻尼微缩放 `active:scale-[0.98]`。
 - **全要素覆盖**：主题必须覆盖所有弹出层（Dialog, Popover, Select）、图表线条与输入框 Focus 环。
 
 ---

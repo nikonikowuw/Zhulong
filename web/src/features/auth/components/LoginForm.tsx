@@ -1,26 +1,99 @@
 import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Lock, LogIn, User as UserIcon } from "lucide-react";
+import { AlertCircle, LoaderCircle, Lock, LogIn, User as UserIcon } from "lucide-react";
 import { useAuth } from "../hooks/useAuth";
 import { AuthCard } from "./AuthCard";
+
+const REMEMBERED_USER_KEY = "zhulong_remembered_username";
 
 export function LoginForm() {
   const { t } = useTranslation();
   const { login, error, clearError } = useAuth();
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState(() => {
+    return localStorage.getItem(REMEMBERED_USER_KEY) || "";
+  });
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(() => {
+    return Boolean(localStorage.getItem(REMEMBERED_USER_KEY));
+  });
+  const [touched, setTouched] = useState({ username: false, password: false });
+  const [usernameError, setUsernameError] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
+  const validateUsername = (val: string): string | null => {
+    if (!val.trim()) {
+      return t("auth.usernameRequired");
+    }
+    return null;
+  };
+
+  const validatePassword = (val: string): string | null => {
+    if (!val) {
+      return t("auth.passwordRequired");
+    }
+    return null;
+  };
+
+  const handleUsernameBlur = () => {
+    setTouched((prev) => ({ ...prev, username: true }));
+    setUsernameError(validateUsername(username));
+  };
+
+  const handlePasswordBlur = () => {
+    setTouched((prev) => ({ ...prev, password: true }));
+    setPasswordError(validatePassword(password));
+  };
+
+  const handleUsernameChange = (val: string) => {
+    setUsername(val);
+    if (touched.username) {
+      setUsernameError(validateUsername(val));
+    }
+    if (localError) setLocalError(null);
+  };
+
+  const handlePasswordChange = (val: string) => {
+    setPassword(val);
+    if (touched.password) {
+      setPasswordError(validatePassword(val));
+    }
+    if (localError) setLocalError(null);
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !password) return;
-
     setLocalError(null);
     clearError();
+
+    const uError = validateUsername(username);
+    if (uError) {
+      setTouched((prev) => ({ ...prev, username: true }));
+      setUsernameError(uError);
+      return;
+    }
+
+    const pError = validatePassword(password);
+    if (pError) {
+      setTouched((prev) => ({ ...prev, password: true }));
+      setPasswordError(pError);
+      return;
+    }
+
+    const trimmedUser = username.trim();
     setIsSubmitting(true);
     try {
-      await login({ username: username.trim(), password });
+      await login({
+        username: trimmedUser,
+        password,
+        ...(rememberMe ? { rememberMe: true } : {}),
+      });
+      if (rememberMe) {
+        localStorage.setItem(REMEMBERED_USER_KEY, trimmedUser);
+      } else {
+        localStorage.removeItem(REMEMBERED_USER_KEY);
+      }
     } catch (err) {
       if (err instanceof Error) {
         setLocalError(err.message);
@@ -34,22 +107,22 @@ export function LoginForm() {
 
   return (
     <AuthCard
-      icon={<Lock size={24} aria-hidden="true" />}
+      icon={<Lock size={20} aria-hidden="true" />}
       title={t("auth.loginTitle")}
       subtitle={t("auth.loginSubtitle")}
       error={activeError}
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
+      <form onSubmit={handleSubmit} noValidate className="space-y-3.5">
+        <div className="space-y-1">
           <label
             htmlFor="login-username"
-            className="mb-1 block text-sm font-medium text-[var(--foreground)]"
+            className="block text-xs font-medium text-[var(--muted)]"
           >
             {t("auth.username")}
           </label>
-          <div className="relative">
-            <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--muted)]">
-              <UserIcon size={16} aria-hidden="true" />
+          <div className="relative flex items-center">
+            <span className="pointer-events-none absolute left-3 text-[var(--muted)]">
+              <UserIcon size={14} aria-hidden="true" />
             </span>
             <input
               id="login-username"
@@ -59,23 +132,40 @@ export function LoginForm() {
               required
               disabled={isSubmitting}
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              onBlur={handleUsernameBlur}
+              onChange={(e) => handleUsernameChange(e.target.value)}
               placeholder={t("auth.usernamePlaceholder")}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] py-2.5 pr-3 pl-9 text-sm text-[var(--foreground)] outline-none transition focus:border-[var(--focus)] focus:ring-2 focus:ring-[var(--focus-shadow)]"
+              aria-invalid={Boolean(usernameError)}
+              aria-describedby={usernameError ? "login-username-error" : undefined}
+              className={`h-9 sm:h-10 w-full rounded-xl bg-[var(--surface-muted)] py-1.5 pr-3 pl-9 text-[13px] text-[var(--foreground)] placeholder:text-[var(--muted)]/50 outline-none transition-all duration-200 disabled:opacity-60 ${
+                usernameError
+                  ? "ring-1 ring-[#ff3b30] focus:ring-2 focus:ring-[#ff3b30] bg-[#ff3b30]/[0.02]"
+                  : "ring-1 ring-black/[0.05] dark:ring-white/[0.08] hover:ring-black/[0.12] dark:hover:ring-white/[0.15] focus:bg-[var(--surface)] focus:ring-2 focus:ring-[#0071e3]"
+              }`}
             />
           </div>
+          {usernameError && (
+            <p
+              id="login-username-error"
+              role="alert"
+              className="flex items-center gap-1 pt-0.5 text-[11px] font-medium text-[#ff3b30]"
+            >
+              <AlertCircle size={12} className="shrink-0" aria-hidden="true" />
+              <span>{usernameError}</span>
+            </p>
+          )}
         </div>
 
-        <div>
+        <div className="space-y-1">
           <label
             htmlFor="login-password"
-            className="mb-1 block text-sm font-medium text-[var(--foreground)]"
+            className="block text-xs font-medium text-[var(--muted)]"
           >
             {t("auth.password")}
           </label>
-          <div className="relative">
-            <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--muted)]">
-              <Lock size={16} aria-hidden="true" />
+          <div className="relative flex items-center">
+            <span className="pointer-events-none absolute left-3 text-[var(--muted)]">
+              <Lock size={14} aria-hidden="true" />
             </span>
             <input
               id="login-password"
@@ -85,20 +175,63 @@ export function LoginForm() {
               required
               disabled={isSubmitting}
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onBlur={handlePasswordBlur}
+              onChange={(e) => handlePasswordChange(e.target.value)}
               placeholder={t("auth.passwordPlaceholder")}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] py-2.5 pr-3 pl-9 text-sm text-[var(--foreground)] outline-none transition focus:border-[var(--focus)] focus:ring-2 focus:ring-[var(--focus-shadow)]"
+              aria-invalid={Boolean(passwordError)}
+              aria-describedby={passwordError ? "login-password-error" : undefined}
+              className={`h-9 sm:h-10 w-full rounded-xl bg-[var(--surface-muted)] py-1.5 pr-3 pl-9 text-[13px] text-[var(--foreground)] placeholder:text-[var(--muted)]/50 outline-none transition-all duration-200 disabled:opacity-60 ${
+                passwordError
+                  ? "ring-1 ring-[#ff3b30] focus:ring-2 focus:ring-[#ff3b30] bg-[#ff3b30]/[0.02]"
+                  : "ring-1 ring-black/[0.05] dark:ring-white/[0.08] hover:ring-black/[0.12] dark:hover:ring-white/[0.15] focus:bg-[var(--surface)] focus:ring-2 focus:ring-[#0071e3]"
+              }`}
             />
           </div>
+          {passwordError && (
+            <p
+              id="login-password-error"
+              role="alert"
+              className="flex items-center gap-1 pt-0.5 text-[11px] font-medium text-[#ff3b30]"
+            >
+              <AlertCircle size={12} className="shrink-0" aria-hidden="true" />
+              <span>{passwordError}</span>
+            </p>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between pt-0.5">
+          <label
+            htmlFor="login-remember-me"
+            className="flex items-center gap-2 cursor-pointer select-none text-xs text-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
+          >
+            <input
+              id="login-remember-me"
+              name="rememberMe"
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border border-black/20 dark:border-white/20 bg-[var(--surface-muted)] text-[#0071e3] focus:ring-1 focus:ring-[#0071e3] transition-colors cursor-pointer"
+            />
+            <span>{t("auth.rememberMe")}</span>
+          </label>
         </div>
 
         <button
           type="submit"
-          disabled={isSubmitting || !username.trim() || !password}
-          className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--button-background)] py-2.5 text-sm font-semibold text-[var(--button-foreground)] transition hover:bg-[var(--button-hover)] disabled:opacity-50"
+          disabled={isSubmitting}
+          className="mt-5 flex h-9 sm:h-10 w-full items-center justify-center gap-1.5 rounded-full bg-[#0071e3] px-5 text-[13px] font-medium text-white transition-all duration-200 ease-[cubic-bezier(0.25,0.1,0.25,1)] hover:bg-[#0077ed] active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100 shadow-[0_1px_2px_rgba(0,113,227,0.2)]"
         >
-          <LogIn size={16} aria-hidden="true" />
-          {isSubmitting ? t("auth.submitting") : t("auth.loginButton")}
+          {isSubmitting ? (
+            <>
+              <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />
+              <span>{t("auth.submitting")}</span>
+            </>
+          ) : (
+            <>
+              <LogIn size={15} aria-hidden="true" />
+              <span>{t("auth.loginButton")}</span>
+            </>
+          )}
         </button>
       </form>
     </AuthCard>

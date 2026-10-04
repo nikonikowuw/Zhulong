@@ -48,5 +48,8 @@ export function getMe(
   language: SupportedLanguage,
   signal?: AbortSignal,
 ): Promise<User> {
-  return getApiData("/api/v1/auth/me", userSchema, language, signal);
+  return getApiData("/api/v1/auth/me", userSchema, language, {
+    signal,
+    notifyOnUnauthorized: false,
+  });
 }

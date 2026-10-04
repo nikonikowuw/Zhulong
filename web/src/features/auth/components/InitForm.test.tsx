@@ -47,11 +47,45 @@ describe("InitForm", () => {
     expect(screen.getByRole("button", { name: "Complete Setup & Enter" })).toBeInTheDocument();
   });
 
+  it("displays validation error on blur if a field is left invalid", async () => {
+    const user = userEvent.setup();
+    renderInitForm();
+
+    const usernameInput = screen.getByLabelText("Username");
+    await user.click(usernameInput);
+    await user.click(document.body);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Username is required");
+    expect(usernameInput).toHaveAttribute("aria-invalid", "true");
+
+    await user.type(usernameInput, "admin");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    const passwordInput = screen.getByLabelText("Password");
+    await user.type(passwordInput, "short");
+    await user.click(document.body);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Password must be at least 8 characters");
+    expect(passwordInput).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("warns when username is empty", async () => {
+    const user = userEvent.setup();
+    const initMock = vi.fn();
+    renderInitForm({ initAdmin: initMock });
+
+    await user.click(screen.getByRole("button", { name: "Complete Setup & Enter" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Username is required");
+    expect(initMock).not.toHaveBeenCalled();
+  });
+
   it("warns when password is shorter than 8 characters", async () => {
     const user = userEvent.setup();
     const initMock = vi.fn();
     renderInitForm({ initAdmin: initMock });
 
+    await user.type(screen.getByLabelText("Username"), "admin");
     await user.type(screen.getByLabelText("Password"), "short");
     await user.type(screen.getByLabelText("Confirm Password"), "short");
     await user.click(screen.getByRole("button", { name: "Complete Setup & Enter" }));
@@ -65,6 +99,7 @@ describe("InitForm", () => {
     const initMock = vi.fn();
     renderInitForm({ initAdmin: initMock });
 
+    await user.type(screen.getByLabelText("Username"), "admin");
     await user.type(screen.getByLabelText("Password"), "password123");
     await user.type(screen.getByLabelText("Confirm Password"), "password456");
     await user.click(screen.getByRole("button", { name: "Complete Setup & Enter" }));
@@ -78,6 +113,7 @@ describe("InitForm", () => {
     const initMock = vi.fn().mockResolvedValue(undefined);
     renderInitForm({ initAdmin: initMock });
 
+    await user.type(screen.getByLabelText("Username"), "admin");
     await user.type(screen.getByLabelText("Password"), "password123");
     await user.type(screen.getByLabelText("Confirm Password"), "password123");
     await user.click(screen.getByRole("button", { name: "Complete Setup & Enter" }));

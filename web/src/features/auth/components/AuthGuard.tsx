@@ -12,15 +12,17 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   if (phase === "loading") {
     return (
       <div
-        className="flex min-h-[60vh] flex-col items-center justify-center p-8 text-center"
+        className="flex min-h-[50vh] flex-col items-center justify-center p-8 text-center"
         role="status"
       >
-        <LoaderCircle
-          className="animate-spin text-[var(--accent)]"
-          size={32}
-          aria-hidden="true"
-        />
-        <p className="mt-4 text-sm font-medium text-[var(--muted)]">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--surface-muted)] text-[var(--accent)] ring-1 ring-black/[0.04] dark:ring-white/[0.08] shadow-[0_2px_6px_rgba(0,0,0,0.03)]">
+          <LoaderCircle
+            className="animate-spin"
+            size={22}
+            aria-hidden="true"
+          />
+        </div>
+        <p className="mt-3.5 text-xs font-medium tracking-tight text-[var(--muted)]">
           {t("auth.loading")}
         </p>
       </div>
@@ -30,26 +32,26 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   if (phase === "error") {
     return (
       <div
-        className="flex min-h-[60vh] flex-col items-center justify-center p-8 text-center"
+        className="flex min-h-[50vh] flex-col items-center justify-center p-8 text-center"
         role="alert"
       >
-        <AlertCircle
-          className="text-[var(--danger)]"
-          size={36}
-          aria-hidden="true"
-        />
-        <h2 className="mt-4 text-xl font-bold text-[var(--foreground)]">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--danger-soft)] text-[var(--danger)]">
+          <AlertCircle size={22} aria-hidden="true" />
+        </div>
+        <h2 className="mt-4 text-base md:text-lg font-semibold tracking-tight text-[var(--foreground)]">
           {t("auth.loadError")}
         </h2>
         {error && (
-          <p className="mt-2 text-sm text-[var(--muted)]">{error}</p>
+          <p className="mt-1.5 max-w-[42ch] text-xs text-[var(--muted)] leading-relaxed">
+            {error}
+          </p>
         )}
         <button
           type="button"
           onClick={() => void checkAuth()}
-          className="mt-6 inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--surface-hover)]"
+          className="mt-5 inline-flex items-center gap-2 rounded-full bg-[var(--surface-muted)] px-5 py-2 text-xs font-medium text-[var(--foreground)] transition-all duration-200 hover:bg-[var(--surface-hover)] active:scale-95"
         >
-          <RotateCw size={16} aria-hidden="true" />
+          <RotateCw size={14} aria-hidden="true" />
           <span>{t("auth.retry")}</span>
         </button>
       </div>

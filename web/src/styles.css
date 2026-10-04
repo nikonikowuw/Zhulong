@@ -7,26 +7,26 @@
 
 :root {
   color-scheme: light;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Icons", "Helvetica Neue", Helvetica, Arial, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  letter-spacing: 0;
+  letter-spacing: -0.01em;
   --background: #f5f5f7;
   --surface: #ffffff;
   --surface-muted: #f5f5f7;
   --surface-hover: #ebebf0;
   --foreground: #1d1d1f;
-  --muted: #6e6e73;
-  --border: #d2d2d7;
+  --muted: #86868b;
+  --border: #e5e5ea;
   --accent: #0071e3;
   --button-background: #0071e3;
   --button-hover: #0077ed;
   --button-foreground: #ffffff;
-  --danger: #c5221f;
-  --danger-soft: #fcebea;
+  --danger: #ff3b30;
+  --danger-soft: rgba(255, 59, 48, 0.08);
   --focus: #0071e3;
-  --focus-shadow: rgba(0, 113, 227, 0.3);
-  --positive: #1b6e35;
+  --focus-shadow: rgba(0, 113, 227, 0.25);
+  --positive: #34c759;
   --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   --control-height: 44px;
   background: var(--background);
@@ -41,17 +41,17 @@
   --surface-hover: #48484a;
   --foreground: #f5f5f7;
   --muted: #a1a1a6;
-  --border: #48484a;
+  --border: #38383a;
   --accent: #0a84ff;
-  --button-background: #005bbd;
-  --button-hover: #0066cc;
+  --button-background: #0071e3;
+  --button-hover: #0077ed;
   --button-foreground: #ffffff;
-  --danger: #ff6961;
-  --danger-soft: #452725;
-  --focus: #64b5ff;
-  --focus-shadow: rgba(100, 181, 255, 0.35);
-  --positive: #6bd890;
-  --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  --danger: #ff453a;
+  --danger-soft: rgba(255, 69, 58, 0.15);
+  --focus: #0a84ff;
+  --focus-shadow: rgba(10, 132, 255, 0.3);
+  --positive: #30d158;
+  --card-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 
 * {
@@ -94,6 +94,146 @@ select:focus-visible {
 
 .application {
   min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* macOS Aurora Ambient Mesh Orbs */
+.ambient-background {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background-image: radial-gradient(rgba(0, 0, 0, 0.04) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+:root[data-theme="dark"] .ambient-background {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.ambient-orb {
+  position: absolute;
+  border-radius: 50%;
+  will-change: transform;
+}
+
+.ambient-orb-1 {
+  top: -10%;
+  left: -5%;
+  width: 55vw;
+  height: 55vw;
+  max-width: 700px;
+  max-height: 700px;
+  background: radial-gradient(circle, rgba(0, 113, 227, 0.32) 0%, rgba(0, 113, 227, 0) 70%);
+  filter: blur(60px);
+  animation: aurora-float-1 14s ease-in-out infinite alternate;
+}
+
+.ambient-orb-2 {
+  bottom: -15%;
+  right: -8%;
+  width: 55vw;
+  height: 55vw;
+  max-width: 720px;
+  max-height: 720px;
+  background: radial-gradient(circle, rgba(124, 58, 237, 0.25) 0%, rgba(124, 58, 237, 0) 70%);
+  filter: blur(65px);
+  animation: aurora-float-2 18s ease-in-out infinite alternate;
+}
+
+.ambient-orb-3 {
+  top: 35%;
+  right: 18%;
+  width: 42vw;
+  height: 42vw;
+  max-width: 520px;
+  max-height: 520px;
+  background: radial-gradient(circle, rgba(6, 182, 212, 0.28) 0%, rgba(6, 182, 212, 0) 70%);
+  filter: blur(55px);
+  animation: aurora-float-3 12s ease-in-out infinite alternate;
+}
+
+.ambient-orb-4 {
+  bottom: 20%;
+  left: 20%;
+  width: 38vw;
+  height: 38vw;
+  max-width: 480px;
+  max-height: 480px;
+  background: radial-gradient(circle, rgba(236, 72, 153, 0.18) 0%, rgba(236, 72, 153, 0) 70%);
+  filter: blur(60px);
+  animation: aurora-float-4 15s ease-in-out infinite alternate;
+}
+
+:root[data-theme="dark"] .ambient-orb-1 {
+  background: radial-gradient(circle, rgba(10, 132, 255, 0.45) 0%, rgba(10, 132, 255, 0) 70%);
+  filter: blur(75px);
+}
+
+:root[data-theme="dark"] .ambient-orb-2 {
+  background: radial-gradient(circle, rgba(139, 92, 246, 0.40) 0%, rgba(139, 92, 246, 0) 70%);
+  filter: blur(80px);
+}
+
+:root[data-theme="dark"] .ambient-orb-3 {
+  background: radial-gradient(circle, rgba(14, 165, 233, 0.38) 0%, rgba(14, 165, 233, 0) 70%);
+  filter: blur(65px);
+}
+
+:root[data-theme="dark"] .ambient-orb-4 {
+  background: radial-gradient(circle, rgba(244, 63, 94, 0.25) 0%, rgba(244, 63, 94, 0) 70%);
+  filter: blur(70px);
+}
+
+@keyframes aurora-float-1 {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(80px, 60px, 0) scale(1.18);
+  }
+  100% {
+    transform: translate3d(-40px, 80px, 0) scale(0.92);
+  }
+}
+
+@keyframes aurora-float-2 {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(-70px, -60px, 0) scale(1.2);
+  }
+  100% {
+    transform: translate3d(60px, -35px, 0) scale(0.88);
+  }
+}
+
+@keyframes aurora-float-3 {
+  0% {
+    transform: translate3d(0, 0, 0) scale(0.92);
+  }
+  50% {
+    transform: translate3d(-60px, 45px, 0) scale(1.22);
+  }
+  100% {
+    transform: translate3d(50px, -50px, 0) scale(1.02);
+  }
+}
+
+@keyframes aurora-float-4 {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(50px, -45px, 0) scale(1.15);
+  }
+  100% {
+    transform: translate3d(-35px, 35px, 0) scale(0.95);
+  }
 }
 
 .skip-link {
@@ -118,14 +258,21 @@ select:focus-visible {
 }
 
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: flex;
-  min-height: 72px;
+  width: 100%;
+  min-height: 50px;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px max(24px, calc((100vw - 980px) / 2));
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  padding: 0 24px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  transition: background-color 300ms cubic-bezier(0.25, 0.1, 0.25, 1), border-color 300ms cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
 .brand,
@@ -156,47 +303,43 @@ select:focus-visible {
 
 .brand-mark {
   display: grid;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
   place-items: center;
-  border-radius: 12px;
+  border-radius: 9px;
   background: var(--accent);
   color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 113, 227, 0.3);
 }
 
 .brand-name {
-  font-size: 17px;
-  font-weight: 650;
-}
-
-.brand-context {
-  margin-left: 8px;
-  padding-left: 16px;
-  border-left: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 13px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
 }
 
 .header-controls {
-  gap: 12px;
+  gap: 8px;
 }
 
 .language-control {
-  gap: 9px;
-  color: var(--muted);
-  font-size: 13px;
+  position: relative;
 }
 
 .language-control select {
-  min-width: 124px;
-  min-height: var(--control-height);
-  padding: 0 34px 0 14px;
+  min-width: 108px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 26px 0 28px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 999px;
   background: var(--surface-muted);
   color: var(--foreground);
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
+  appearance: none;
   transition: background-color 200ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 200ms cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
@@ -211,9 +354,9 @@ select:focus-visible {
 
 .icon-button {
   display: inline-grid;
-  width: var(--control-height);
-  height: var(--control-height);
-  flex: 0 0 var(--control-height);
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
   place-items: center;
   border: 0;
   border-radius: 50%;
@@ -235,48 +378,57 @@ select:focus-visible {
 }
 
 .workspace {
-  width: min(100% - 48px, 980px);
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 1200px;
   margin: 0 auto;
-  padding: 76px 0 56px;
+  padding: 24px 24px 48px;
+}
+
+.auth-canvas {
+  position: relative;
+  z-index: 1;
+  min-height: calc(100dvh - 48px);
 }
 
 .page-heading {
-  max-width: 680px;
-  margin: 0 auto 44px;
-  text-align: center;
+  margin: 0 0 20px;
+  text-align: left;
 }
 
 .page-heading h1 {
-  margin: 0 0 12px;
-  font-size: 44px;
-  font-weight: 650;
-  line-height: 1.12;
-  letter-spacing: 0;
+  margin: 0 0 4px;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
 }
 
 .page-description {
-  max-width: 60ch;
-  margin: 0 auto;
+  margin: 0;
   color: var(--muted);
-  font-size: 17px;
-  line-height: 1.55;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .health-panel {
   overflow: hidden;
-  border-radius: 24px;
+  border-radius: 16px;
   background: var(--surface);
-  box-shadow: var(--card-shadow);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.02);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .panel-heading {
   display: flex;
-  min-height: 88px;
+  min-height: 56px;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding: 20px 30px;
-  border-bottom: 1px solid var(--border);
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  background: color-mix(in srgb, var(--surface) 96%, var(--surface-muted));
 }
 
 .panel-heading>div:first-child {
@@ -285,20 +437,20 @@ select:focus-visible {
 
 .panel-heading h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0;
+  letter-spacing: -0.01em;
 }
 
 .panel-indicator {
   flex: 0 0 auto;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 4px 10px;
   border-radius: 999px;
   background: var(--surface-muted);
   color: var(--muted);
-  font-size: 13px;
-  font-weight: 550;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .panel-indicator.is-unavailable {
@@ -307,26 +459,26 @@ select:focus-visible {
 }
 
 .panel-tools {
-  gap: 14px;
+  gap: 12px;
 }
 
 .last-checked {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .health-message {
   display: flex;
-  min-height: 106px;
+  min-height: 72px;
   align-items: flex-start;
-  gap: 14px;
-  padding: 26px 30px;
-  border-bottom: 1px solid var(--border);
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .health-message h3 {
-  margin: 0 0 4px;
-  font-size: 16px;
+  margin: 0 0 2px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -334,6 +486,7 @@ select:focus-visible {
   max-width: 68ch;
   margin: 0;
   color: var(--muted);
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 
@@ -347,11 +500,11 @@ select:focus-visible {
 
 .health-state-icon {
   flex: 0 0 auto;
-  margin-top: 2px;
+  margin-top: 1px;
 }
 
 .loading-rail {
-  height: 3px;
+  height: 2px;
   overflow: hidden;
   background: var(--surface-muted);
 }
@@ -380,50 +533,51 @@ select:focus-visible {
 .component-row {
   display: flex;
   min-width: 0;
-  min-height: 96px;
+  min-height: 72px;
   align-items: flex-start;
-  gap: 13px;
-  padding: 24px 26px;
+  gap: 12px;
+  padding: 16px 20px;
   color: var(--accent);
 }
 
 .component-row+.component-row {
-  border-left: 1px solid var(--border);
+  border-left: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .component-copy {
   display: grid;
   min-width: 0;
-  gap: 3px;
+  gap: 2px;
   color: var(--foreground);
 }
 
 .component-copy span {
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 
 .component-copy strong {
   color: var(--positive);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .component-copy small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .action-button {
-  min-height: 48px;
-  gap: 9px;
-  margin: 0 30px 28px;
-  padding: 12px 24px;
+  min-height: 38px;
+  gap: 7px;
+  margin: 0 20px 20px;
+  padding: 8px 18px;
   border: 0;
   border-radius: 999px;
   background: var(--button-background);
   color: #ffffff;
-  font-size: 15px;
-  font-weight: 550;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   transition: background-color 200ms cubic-bezier(0.25, 0.1, 0.25, 1), transform 200ms cubic-bezier(0.25, 0.1, 0.25, 1);
 }
@@ -436,7 +590,7 @@ select:focus-visible {
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  margin-top: 24px;
+  margin-top: 20px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -460,45 +614,31 @@ select:focus-visible {
 @media (max-width: 720px) {
   .topbar {
     gap: 12px;
-    padding-inline: 16px;
-  }
-
-  .brand-context {
-    display: none;
+    padding: 0 16px;
   }
 
   .header-controls {
     gap: 8px;
   }
 
-  .language-control>span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-  }
-
   .language-control select {
-    min-width: 112px;
+    min-width: 96px;
   }
 
   .workspace {
-    width: min(100% - 32px, 980px);
-    padding-top: 54px;
+    padding: 16px 16px 32px;
   }
 
   .page-heading {
-    margin-bottom: 32px;
+    margin-bottom: 16px;
   }
 
   .page-heading h1 {
-    font-size: 36px;
+    font-size: 20px;
   }
 
   .page-description {
-    font-size: 16px;
+    font-size: 13px;
   }
 
   .component-grid {
@@ -506,12 +646,12 @@ select:focus-visible {
   }
 
   .component-row {
-    min-height: 76px;
-    padding: 18px 24px;
+    min-height: 64px;
+    padding: 14px 16px;
   }
 
   .component-row+.component-row {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
     border-left: 0;
   }
 
@@ -523,15 +663,15 @@ select:focus-visible {
 
 @media (max-width: 440px) {
   .topbar {
-    padding-inline: 16px;
+    padding: 0 12px;
   }
 
   .brand {
-    gap: 8px;
+    gap: 6px;
   }
 
   .brand-name {
-    font-size: 16px;
+    font-size: 14px;
   }
 
   .header-controls {
@@ -539,23 +679,22 @@ select:focus-visible {
   }
 
   .language-control select {
-    min-width: 104px;
-    padding-inline: 10px 26px;
+    min-width: 90px;
   }
 
   .workspace {
-    padding-top: 46px;
+    padding: 14px 12px 28px;
   }
 
   .page-heading h1 {
-    font-size: 32px;
+    font-size: 18px;
   }
 
   .panel-heading {
     align-items: flex-start;
     flex-direction: column;
-    gap: 14px;
-    padding: 22px;
+    gap: 10px;
+    padding: 14px 16px;
   }
 
   .panel-tools {
@@ -564,11 +703,11 @@ select:focus-visible {
   }
 
   .health-message {
-    padding: 22px;
+    padding: 14px 16px;
   }
 
   .action-button {
-    margin: 0 22px 22px;
+    margin: 0 16px 16px;
   }
 }
 
