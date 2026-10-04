@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验证错误信封、422 details 结构与多语言本地化契约"}
+{"file": ".trellis/spec/backend/authentication-guidelines.md", "reason": "验证认证模块 401/403/412/429 状态码与 Cookie 属性契约"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "验证测试覆盖率、竞态检测 (-race) 与静态分析 (go vet)"}

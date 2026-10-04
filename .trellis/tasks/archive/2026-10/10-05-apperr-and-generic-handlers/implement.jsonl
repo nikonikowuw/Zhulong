@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "规范 AppError 结构、统一响应信封、后端 i18n 翻译与日志脱敏标准"}
+{"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "规范 HTTP 中间件挂载隔离原则与错误拦截边界"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "规范 HTTP RESTful API 设计与响应信封契约"}
+{"file": ".trellis/spec/backend/authentication-guidelines.md", "reason": "规范单用户认证 API 状态码、错误矩阵与会话管理"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "规范 Go 代码质量、单元测试、竞态检测与错误处理"}
