@@ -1,0 +1,28 @@
+{
+  "id": "00-bootstrap-guidelines",
+  "name": "00-bootstrap-guidelines",
+  "title": "Bootstrap Guidelines",
+  "description": "Fill in project development guidelines for AI agents",
+  "status": "completed",
+  "dev_type": "docs",
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "nikoniko",
+  "assignee": "nikoniko",
+  "createdAt": "2026-10-03",
+  "completedAt": "2026-10-04",
+  "branch": "dev",
+  "base_branch": null,
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    ".trellis/spec/"
+  ],
+  "notes": "First-time setup task reused for greenfield NVR specifications. The owner confirmed the Go/CGO/C++/React stack, SQLite, embedded frontend, C++ processing-node Pipeline, deployment option A with allowed external native runtimes, module-oriented Go packages, and the frontend stack/layout/eleven coding rules. PRD, design, and execution plan now include the native layout proposal plus required light/dark themes and complete English/Simplified Chinese/Traditional Chinese UI localization. The owner approved saved user preferences taking priority, system-default theme, browser-matched language, and English fallback. Gin, GORM/SQLite, Fx, and Swagger 2.0 (Swaggo) are now owner-selected backend requirements. Versioned database migrations run automatically at application startup before serving traffic. The unified 3-field response contract (code: 'ok', message, data) with string error codes and internal error redaction is confirmed. Planning is fully converged and ready for final summary approval before task activation. No specification implementation or application code has started.",
+  "meta": {}
+}

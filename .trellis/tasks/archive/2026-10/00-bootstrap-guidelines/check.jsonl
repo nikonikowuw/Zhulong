@@ -1,0 +1,3 @@
+{"file": ".trellis/tasks/00-bootstrap-guidelines/research/baseline.md", "reason": "Check factual claims, scope protection, and empty-repository validation limits"}
+{"file": ".trellis/tasks/00-bootstrap-guidelines/research/backend-tooling.md", "reason": "Verify Swagger format claims against upstream evidence; treat Wire notes as superseded historical context"}
+{"file": ".trellis/tasks/00-bootstrap-guidelines/research/di-comparison.md", "reason": "Verify Fx demand-driven construction, explicit startup ordering, partial-start cleanup and CGO timeout boundaries"}
