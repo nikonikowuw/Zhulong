@@ -12,12 +12,14 @@
 
 ---
 
-## 2. 生命周期启停时序
+## 2. 当前骨架生命周期时序
 
 | 阶段 | 严格顺序 |
 | --- | --- |
-| **启动 (OnStart 追加顺序)** | 1. 打开 SQLite & 配置 PRAGMA ➔ 2. **执行版本化迁移 (失败则阻断)** ➔ 3. 初始化 C++ 原生引擎句柄 ➔ 4. 启动音视频处理流水线 ➔ 5. 启动 Gin HTTP 监听 |
-| **停止 (OnStop 逆序执行)** | 1. 停止 Gin HTTP 监听 (排空请求) ➔ 2. 发出停止信号并 Join 汇合 C++ 工作线程 ➔ 3. 释放 C++ 原生句柄与 NPU 硬件资源 ➔ 4. 关闭 SQLite 连接 (安全落盘) |
+| **启动 (`lifecycleRuntime.Start`)** | 1. 打开 GORM/SQLite 并执行嵌入式版本化迁移 (失败则阻断) ➔ 2. 创建并启动无硬件 C++ 生命周期 stub ➔ 3. 绑定 TCP listener 并启动 Gin HTTP Serve |
+| **停止 (`lifecycleRuntime.Stop`)** | 1. 优雅关闭 HTTP 并等待 Serve 退出 ➔ 2. 停止并销毁 C++ opaque handle ➔ 3. 关闭 SQLite pool ➔ 4. Sync Zap |
+
+启动的后续步骤失败时，`lifecycleRuntime.Start` 在返回错误前按逆序清理已打开资源，因为 Fx 不会对失败的 `OnStart` 自动调用该 hook 的 `OnStop`。正常停机时先排空 HTTP 请求，再释放 native 与数据库资源。当前 native stub 不创建 worker thread、媒体流水线或 NPU context；未来增加后台线程时，必须先停止、唤醒并 Join 后才能销毁句柄。
 
 ---
 
@@ -41,9 +43,10 @@ import (
  "github.com/nikonikowuw/Zhulong/internal/app"
 )
 
+// Internal `app` package test.
 func TestAppDependencyGraph(t *testing.T) {
- if err := fx.ValidateApp(app.Module); err != nil {
-  t.Fatalf("Fx dependency graph validation failed: %v", err)
- }
+    if err := fx.ValidateApp(fx.Supply(app.DefaultConfig()), app.Module, fx.NopLogger); err != nil {
+        t.Fatalf("Fx dependency graph validation failed: %v", err)
+    }
 }
 ```

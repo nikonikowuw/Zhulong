@@ -30,8 +30,7 @@
 ## 3. 质量检验基线
 
 ```bash
-# 待构建系统建立后配置：开启 ASan 与 UBSan 门禁
-# -fsanitize=address -fsanitize=undefined
+make native-test
 ```
 
-*绿地基线准则：当前尚未选定构建系统（CMake/Makefile）与硬件 SDK，规范为架构约束，测试门禁将在构建系统引入后落地。*
+该 target 以 CMake 构建 C++17 静态 stub，分别运行 C++ 生命周期测试和纯 C 编译/链接的 ABI 测试。全栈门禁由根目录 `make check` 统一执行；AddressSanitizer/UndefinedBehaviorSanitizer 可在后续 native 代码进入实际缓冲区处理后加入，不宣称当前 stub 已验证硬件或媒体路径。

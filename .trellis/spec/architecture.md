@@ -17,7 +17,7 @@
 │                        Go 业务应用宿主 (Host)                           │
 │  业务模块分包 (cmd/Zhulong, internal/{camera,recording,inference,...})    │
 │  Uber Fx 生命周期编排 (OnStart/OnStop), GORM + SQLite, Swaggo 2.0      │
-│  统一三字段响应体: { code: "ok", message, data }                        │
+│  统一响应信封: { code: "OK", message, data, details? }                │
 └───────────────────────────────────▲────────────────────────────────────┘
                                     │ CGO / C ABI 门面 (include/Zhulong/engine.h)
 ┌───────────────────────────────────▼────────────────────────────────────┐
@@ -38,9 +38,13 @@
 
 1. **单宿主可执行程序**：Go 编译为单个应用二进制（如 `Zhulong`）。
 2. **内嵌前端静态资源**：Vite 构建产物通过 `//go:embed` 打包至 `internal/webui`，由 Go 直接托管，零 Node.js 运行时依赖。
-3. **原生 C++ 内联链接**：自研流水线与 C ABI 静态/同仓链接进主程序。
-4. **允许外部动态链接**：允许动态依赖宿主 Linux 的 C 运行时（glibc/musl）、线程库及厂商 NPU/编解码专有驱动（非 all-static）。
-5. **外部持久化存储分离**：SQLite 数据库（`/var/lib/Zhulong/data.db`）与录像文件/权重存放于外部挂载卷。
+3. **原生 C++ 内联链接**：当前仅交付无硬件生命周期 stub，通过 C ABI 静态链接进主程序；未来媒体流水线另行实现。
+4. **允许外部动态链接**：允许动态依赖宿主 Linux 的 C 运行时（glibc/musl）、线程库及未来选择的厂商驱动（非 all-static）。
+5. **外部持久化存储分离**：当前本机 host 将 SQLite 存于 `<data-dir>/zhulong.db`，默认目录为 `os.UserConfigDir()/Zhulong`，可由 `--data-dir` 覆盖；未来录像文件与模型权重另行放入配置的数据卷。
+
+## 当前实现边界
+
+本仓库当前只实现 `cmd/Zhulong`、`internal/app`、`database`、`engine`、`httputil` 和 `webui` 骨架。摄像机、录像、推理模块以及 C++ 采集/解码/预处理流水线仍属后续目标，不得把架构目标图解读为已交付功能。当前 native 组件只暴露无硬件 create/start/stop/destroy 生命周期。
 
 ---
 
@@ -48,7 +52,7 @@
 
 | 跨层边界 | 允许的交互方式 | 绝对严禁的反模式 |
 | --- | --- | --- |
-| **React ⇄ Go** | Gin 处理标准 JSON、SSE 推送实时检测、WebSocket 设备遥测 | 暴露底层指针地址；裸漏 SQLite 报错或 CGO 堆栈 |
+| **React ⇄ Go** | Gin 处理标准 JSON、SSE 推送实时检测、WebSocket 设备遥测；中间件流水线 (Recovery/RequestID/AccessLog) 保障隔离与追踪 | 暴露底层指针地址；裸漏 SQLite 报错或 CGO 堆栈；全局滥挂 API 中间件污染 SPA 静态文件 |
 | **Go ⇄ CGO / C ABI** | 仅经 `include/Zhulong/engine.h` 交互；使用不透明句柄与基本类型 | 跨 CGO 传含 Go 指针的内存；C 长期持有未 Pinned 的 Go 指针；漏调 `C.free` |
 | **C ABI ⇄ C++** | 在 `src/abi/` 内以 `try-catch (...)` 拦截所有异常并转为状态码 | C++ 异常穿越 C ABI；公开头文件出现 C++ class/STL/模板 |
 | **C++ ⇄ 驱动/NPU** | DMA-BUF 零拷贝流转、V4L2 抓帧、硬件加速上下文 | 网络断流或推理拥塞时无界堆积内存；多线程无保护竞态访问硬件上下文 |
@@ -57,9 +61,6 @@
 
 ## 4. 延迟决定的技术选型 (Deferred Selections)
 
-以下选型在实现阶段根据硬件靶机明确，不提前主观假设：
-
-- 具体 NPU 厂商 SDK（RKNN / CANN / TensorRT / QNN / OpenVINO）。
-- C++ 构建系统（CMake / Makefile）。
-- SQLite 底层驱动库版本及编译参数（CGO vs Pure Go）。
-- 前端 i18n 库具体选型（如 `i18next`）与锁文件策略。
+- **CMake 构建系统**：已选用 CMake 管理 C++17 静态库；根级 Makefile 编排前端、native、Swagger 和 Go build 顺序。
+- **SQLite 驱动**：使用 CGO `mattn/go-sqlite3`，GORM SQLite driver 用于业务连接，`golang-migrate` sqlite3 adapter 用于版本化 migrations。
+- **前端 i18n**：使用 `react-i18next` / `i18next`，语言选项为 `en`、`zh-Hans`、`zh-Hant`；硬件与部署目标仍待实机选定。

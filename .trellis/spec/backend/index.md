@@ -11,9 +11,11 @@
 | [目录架构](./directory-structure.md) | 业务能力模块分包、包依赖方向与路径规划 |
 | [跨语言命名规范](../naming-guidelines.md) | 文件、CLI 命令/参数、Go 标识符及领域术语 |
 | [HTTP API 与 Swagger](./http-api-guidelines.md) | Gin 路由、DTO 校验、Swaggo 2.0 文档、SPA 回退 |
+| [HTTP 中间件开发与编排](./middleware-guidelines.md) | 中间件分层隔离、流水线时序、Request ID、Access Log、CORS 与类型安全 |
 | [数据库与版本化迁移](./database-guidelines.md) | GORM+SQLite、WAL/Pragma 配置、启动自动迁移、事务约束 |
-| [依赖注入与生命周期](./dependency-injection.md) | Uber Fx 装配、生命周期钩子（OnStart/OnStop）、优雅停机时序 |
-| [错误处理与统一契约](./error-handling.md) | `AppError` 结构、三字段响应、后端 i18n 错误翻译、Zap 日志脱敏 |
+| [依赖注入与生命周期](./dependency-injection.md) | Uber Fx 装配、启动失败回滚、HTTP 排空、native/数据库关闭顺序 |
+| [宿主启动与构建合同](./host-runtime-contract.md) | CLI、health/SPA/Swagger、迁移、CGO 静态链接与跨层验证合同 |
+| [错误处理与统一契约](./error-handling.md) | `AppError` 结构、必需三字段与可选字段级 `details`、后端 i18n 错误翻译、Zap 日志脱敏 |
 | [结构化日志规范](./logging-guidelines.md) | Uber Zap 规约、强类型字段、等级划分、敏感信息脱敏 |
 | [质量检查与测试门禁](./quality-guidelines.md) | 格式化、`-race` 竞态检测、空仓库基线守则 |
 
@@ -25,7 +27,10 @@
 - [ ] **命名自然清晰**：文件、Go 标识符、CLI 命令与参数是否自然且见名知意？
 - [ ] **依赖单向无环**：是否未反向引用 `internal/app`？无模块间循环引用？
 - [ ] **Fx 纯粹性**：业务构造函数是否保持普通纯函数（无 `fx.App` 侵入业务包）？
-- [ ] **统一响应体**：Handler 是否使用 `{ code, message, data }` 契约？
+- [ ] **统一响应体**：Handler 是否遵循 `{ code, message, data }`，且仅 422 字段校验错误可附带 `details`？
+- [ ] **中间件分层隔离**：API 中间件（日志/鉴权/CORS）是否仅挂载在 `/api/` 路由组，未污染 SPA 静态资源与 Swagger？
+- [ ] **中间件执行时序**：中间件流水线是否遵循 Recovery ➔ RequestID ➔ CORS ➔ AccessLog ➔ Handler？
+- [ ] **Context 存取类型安全**：Gin 上下文数据是否使用私有 key 与导出 Accessor 包装，未直接使用裸字符串 `c.Set/c.Get`？
 - [ ] **底层错误脱敏**：SQLite/CGO 底层真实错误是否封装在内部打日志，未裸抛给前端？
 - [ ] **严禁 AutoMigrate**：表变动是否以严格递增的 SQL 脚本置于 `migrations/`？
 
@@ -34,9 +39,9 @@
 ## 3. 质量验证命令
 
 ```bash
-go fmt ./...
-go vet ./...
-go test -v -race ./...
+gofmt -w cmd internal
+go vet ./cmd/... ./internal/...
+go test -v -race ./cmd/... ./internal/...
 ```
 
-*注：当前绿地仓库执行 `go test ./...` 报告 `no packages to test` 属于正常基线，切勿伪报为通过全量测试。*
+*本仓库的 Go 门禁限定在 `cmd/` 和 `internal/` 自有包，避免 `./...` 递归扫描 `web/node_modules` 中第三方包自带的 Go 示例。*

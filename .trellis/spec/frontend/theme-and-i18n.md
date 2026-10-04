@@ -17,9 +17,8 @@
 
 1. **100% 文本国际化**：标题、按钮、占位符、Zod 校验报错、Toast 提示、图例及 ARIA 标签全部包裹 `t(...)`，严禁 JSX 中出现硬编码文本。
 2. **用户自输入数据保留原样**：相机自定义名称、IP、密码等用户输入原文展示，仅翻译包裹它们的系统 Label。
-3. **后端错误直接 Toast 弹出 (后端翻译)**：
-   - 前端所有 API 请求在 Header 中自动携带用户当前语言（`Accept-Language: en` / `zh-Hans` / `zh-Hant`）。
-   - 后端直接返回翻译后的本地化 `message`；前端捕获异常后直接调用 **Toast 组件（如 shadcn/ui Toast / Sonner）** 输出展示：`toast.error(error.message)`。前端 i18n 字典专注 UI 静态文本，无需在前端重复维护后端错误码字典。
+3. **后端错误直接展示 (后端翻译)**：前端 API 请求携带当前 `Accept-Language`；后端返回已本地化的安全 `message`，前端不重复翻译后端错误码。切换 UI 语言时同步更新 `<html lang>`，让辅助技术获得正确的文本语言。
+4. **时间本地化显示**：API 时间戳按 RFC3339Nano UTC 接收并解析；用 `Intl.DateTimeFormat(i18n.resolvedLanguage, ...)` 格式化展示，默认使用浏览器本地时区。若产品需要显示设备/站点时区，必须使用明确配置的 IANA 时区；不得依赖宿主本地时区或手工切割时间字符串。`YYYY-MM-DD` 纯日期不做时区转换，格式化后的显示文本不得回传 API。
 
 ---
 

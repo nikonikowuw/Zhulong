@@ -7,12 +7,12 @@
 ## 1. 质量检验命令与门禁标准
 
 ```bash
-go fmt ./...
-go vet ./...
-go test -v -race ./...
+gofmt -w cmd internal
+go vet ./cmd/... ./internal/...
+go test -v -race ./cmd/... ./internal/...
 ```
 
-*绿地基线准则：在未建立业务包前，`go test ./...` 报告 `no packages to test` 是预期结果，严禁将其虚报为“全量测试通过”。*
+*本仓库的 Go 门禁限定在 `cmd/` 和 `internal/` 自有包，避免 `./...` 递归扫描 `web/node_modules` 中第三方包自带的 Go 示例。*
 
 ---
 

@@ -1,0 +1,21 @@
+{"file":".trellis/spec/architecture.md","reason":"全栈边界、单宿主交付和跨层响应/ABI 契约。"}
+{"file":".trellis/spec/naming-guidelines.md","reason":"Go、C ABI、C++、前端及 CLI 标识符命名约定。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"实现与验证 React、Go、CGO、C++ 之间的端到端数据流。"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"决定共享响应、配置和生命周期抽象边界。"}
+{"file":".trellis/spec/backend/index.md","reason":"Go 后端开发前检查清单和质量基线。"}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Go 宿主和 internal 模块的目录及依赖方向。"}
+{"file":".trellis/spec/backend/http-api-guidelines.md","reason":"Gin 健康路由、API fallback、Swagger 和响应 envelope。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"本任务已确认的三必需字段与可选 422 字段 details 合同。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"SQLite/GORM 连接、嵌入式版本迁移和启动阻断要求。"}
+{"file":".trellis/spec/backend/dependency-injection.md","reason":"Fx 构造函数约束、启动顺序、停机和资源回滚。"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Zap 配置、生命周期 Sync 和敏感数据脱敏。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Go format、vet、race test 和测试基线。"}
+{"file":".trellis/spec/frontend/index.md","reason":"React 编码检查清单和前端质量门禁。"}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Vite、React 特性切片和共享资源组织约定。"}
+{"file":".trellis/spec/frontend/development-guidelines.md","reason":"严格 TypeScript、Query 状态管理和可访问 UI 约定。"}
+{"file":".trellis/spec/frontend/theme-and-i18n.md","reason":"三语言、浅深主题以及偏好初始化和持久化合同。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Vite embed 构建、Vitest/RTL 与前端质量门禁。"}
+{"file":".trellis/spec/native/index.md","reason":"C++/CGO 原生边界开发前检查清单。"}
+{"file":".trellis/spec/native/directory-structure.md","reason":"公开 C ABI 头文件与 C++ 原生源码的布局边界。"}
+{"file":".trellis/spec/native/cgo-contract.md","reason":"不透明句柄、内存所有权和 Go-C 指针安全。"}
+{"file":".trellis/spec/native/pipeline-guidelines.md","reason":"原生 lifecycle stub 的线程停机和资源释放约束。"}

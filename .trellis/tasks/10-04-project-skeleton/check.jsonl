@@ -1,0 +1,16 @@
+{"file":".trellis/spec/architecture.md","reason":"核对 Go 宿主、嵌入式 UI、CGO/C ABI 的集成边界。"}
+{"file":".trellis/spec/backend/http-api-guidelines.md","reason":"验证健康 API、错误路由、HTTP 状态和 Swagger 合同。"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"验证必需响应字段、可选 details、错误本地化与脱敏。"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"检查迁移顺序、SQLite 参数和迁移失败行为。"}
+{"file":".trellis/spec/backend/dependency-injection.md","reason":"验证 Fx startup rollback、正常 shutdown 顺序和 context 生命周期。"}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"检查敏感数据没有写入客户端响应或日志字段。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"执行 Go 格式、静态检查、race 与测试门禁。"}
+{"file":".trellis/spec/frontend/index.md","reason":"按 React 项目检查清单进行独立质量复核。"}
+{"file":".trellis/spec/frontend/development-guidelines.md","reason":"检查 TypeScript strict、状态边界和语义化交互。"}
+{"file":".trellis/spec/frontend/theme-and-i18n.md","reason":"验证语言回退、三语覆盖和主题系统偏好。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"验证前端 lint、类型、Vitest 和 embed 生产构建。"}
+{"file":".trellis/spec/native/index.md","reason":"按原生层 ABI、安全和质量清单复核。"}
+{"file":".trellis/spec/native/directory-structure.md","reason":"确认 Go 仅依赖唯一公开纯 C 头文件。"}
+{"file":".trellis/spec/native/cgo-contract.md","reason":"复核 C-owned handle 生命周期、无 Go 指针长期保留和释放配对。"}
+{"file":".trellis/spec/native/pipeline-guidelines.md","reason":"检查停止、join 和销毁的先后关系。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"沿 React 到 C++ 的数据/生命周期链路检查集成缺口。"}

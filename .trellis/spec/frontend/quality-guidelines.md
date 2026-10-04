@@ -38,4 +38,6 @@ npm run build        # Vite 生产构建 (验证无告警并输出至 Go 嵌入�
 - **打包要点**：
   - 产物不得引用本地绝对路径；
   - 静态资源使用相对路径，确保 Go `embed.FS` 正确路由；
-  - 构建产物必须包含 3 种语言的完整翻译字典。
+  - 构建产物必须包含 3 种语言的完整翻译字典；
+  - Vite `emptyOutDir` 会清理输出目录；`preserve-go-embed-target` 插件在 build 完成后重建跟踪的 `.keep`，保证干净检出或清理后的目录仍满足 `//go:embed all:dist`；
+  - 根级 `make build` 必须先构建前端，再编译 CMake native 库和 Go 主程序。直接运行 `go build` 不是完整交付构建入口。
