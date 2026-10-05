@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Go 包边界与质量入口"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "engine 隔离 C 类型，禁止反向依赖业务与 app"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "race、协程退出、构建脚本链接门禁"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "保留构造函数无副作用和应用停机顺序；现状以代码为准"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "底层错误安全与上层领域/HTTP 映射隔离"}
+{"file": ".trellis/spec/native/index.md", "reason": "原生/CGO 检验基线"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "指针、cgo.Handle 与 C/Go 所有权"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "现有 ABI、drain、timebase、失败流和静态链接合同"}
+{"file": ".trellis/spec/naming-guidelines.md", "reason": "Go/C 文件及跨语言符号命名"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据寿命、安全与背压核对"}
+{"file": ".trellis/tasks/10-05-go-cgo-media-bridge/research/bridge-baseline.md", "reason": "真实 ABI/生命周期证据、取消方案、fixture 复用与父草案冲突"}

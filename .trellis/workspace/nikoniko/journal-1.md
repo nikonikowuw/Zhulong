@@ -91,3 +91,23 @@ Rebuilt system theme layout as an edge-to-edge macOS console with GPU dynamic au
 ### Status
 
 [OK] **Completed**
+
+---
+
+**Date**: 2026-10-05
+**Task**: Go/CGO 媒体桥接与订阅生命周期 (`10-05-go-cgo-media-bridge`)
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+完成媒体接入阶段二首个交付：实现 `internal/engine/` 中的纯 Go 门面与 CGO 跨语言桥接。
+1. 封装 Native 视频流探测（`Probe`），采用独立私有 Native Engine 隔离取消，支持最多 4 路并发控制与 context deadline 收敛。
+2. 封装物理 RTSP 流获取与复用（`Acquire` / `Release` / `Status`），支持连接池复用与 8 秒宽限期语义。
+3. 实现按需视频包订阅（`Subscribe` / `Next`），在 CGO 回调中通过借用指针与 `unsafe.Slice` 深拷贝到 Go-owned 内存，配合有界包数与字节队列（默认 32 包 / 16 MiB 上限）提供明确的 `ErrBackpressure` 终态。
+4. 保证 `cgo.Handle` 生命周期安全：仅在 Native unsubscribe 同步排空（Drain）完成后执行 `handle.Delete()`，杜绝悬空指针访问。
+5. 编写测试运行器 `native/tests/run_go_bridge_tests.py` 并接入 `make go-check`，在真实 loopback RTSP 服务桩上验证 H.264/H.265、TCP/UDP、超大参数集、慢订阅背压隔离与敏感凭据脱敏。全栈 `make check`、`make smoke` 及 `GOEXPERIMENT=cgocheck2` 均 100% 通过。
+
+### Status
+
+[OK] **Ready for commit review**

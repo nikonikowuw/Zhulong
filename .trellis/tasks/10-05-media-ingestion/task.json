@@ -19,7 +19,8 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "10-05-native-ffmpeg-ingestion"
+    "10-05-native-ffmpeg-ingestion",
+    "10-05-go-cgo-media-bridge"
   ],
   "parent": null,
   "relatedFiles": [],

@@ -3,6 +3,17 @@
 > 对应 PRD: `.trellis/tasks/10-05-media-ingestion/prd.md`
 > 涉及包：`native/` (C++17), `internal/camera/` (Go), `internal/engine/` (CGO), `web/` (React/TypeScript)
 
+## 实施来源与待修订边界（2026-10-05）
+
+本文件下方保留早期全链路草案，不是当前可直接复制的 ABI/协议。Native 的现行签名以 `native/include/Zhulong/engine.h` 和已批准 Native 子设计为准；下一步 Go 桥接以 `../10-05-go-cgo-media-bridge/design.md` 的已批准方案为准。用户先选择 A 进入规划，后于 2026-10-05 审阅摘要并回复“开始实现”；该批准仅限桥接子任务，不批准全部旧草案落地。
+
+- 旧错误码、probe 函数、512 字节 extradata、字符串 consumer ID、状态回调已与实际 ABI 不符；当前是动态 result-view、整数 ID、状态查询和 drain 语义。
+- `unsafe.Slice` 不能跨回调持有。桥接拟用一次受限复制进入 Go-owned 队列；不在同步回调里做 WebSocket 网络写入。
+- 现有认证是内存 Session + HttpOnly Cookie，不是 JWT。后续 WS 必须做 Origin/会话生命周期安全规划。
+- 旧裸 URL LastIndex('@') + QueryEscape、鉴权“100% 成功”和单 uint64 PTS 的 wire 示例不可作为已验证保证；摄像机/WS 子任务需分别修订歧义解析与时间戳/参数集协议。
+- 失败物理流在 grace 内重获取不会自动重启；业务重连不得通过 Stop 全局 Engine 影响其他相机。后续设计须解决失败流重试契约。
+- 解码前随意丢 B/P 包与连续 GOP 要求冲突，仍禁止按下方早期草案直接实现。
+
 ---
 
 ## 1. 总体架构与数据流拓扑

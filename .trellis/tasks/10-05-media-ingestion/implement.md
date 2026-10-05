@@ -30,6 +30,12 @@
 
 ## 阶段二：Go 业务模块与 CGO 跨层桥接 (Phase 2: Backend & CGO)
 
+> 2026-10-05：用户选择 A，保留 Native 交叉/板端待验收项，先在宿主推进本阶段。
+> 实施顺序：**桥接 → 摄像机业务 → WebSocket 分发**，每项独立规划、实现与检查。
+> Step 2.1 由 `.trellis/tasks/10-05-go-cgo-media-bridge/` 承接；2026-10-05 用户审阅后批准“开始实现”，已 start，状态 in_progress。
+> Step 2.2/2.3 与业务状态机/退避/SSE、Step 2.4 分别留给后续子任务，尚未创建/批准；不在桥接中顺带实现。
+> 下方旧示例命令/签名由各子任务基于实际代码收敛，Go 验证须使用 `native/scripts/build.py go ...` 或 Make 注入静态链接。认证使用现有 Cookie Session，不引入草案 JWT。
+
 - [ ] **Step 2.1: CGO 门面与按需订阅借用实现**
   - 在 `internal/engine/engine.go` 封装新增的 C ABI
   - 实现 `cgo.Handle` 安全注册与注销机制，使用 `unsafe.Slice` 借用数据切片
