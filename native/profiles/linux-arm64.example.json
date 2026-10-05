@@ -1,0 +1,13 @@
+{
+  "name": "linux-arm64-example",
+  "cc": "/opt/target-sdk/bin/aarch64-linux-gnu-gcc",
+  "cxx": "/opt/target-sdk/bin/aarch64-linux-gnu-g++",
+  "ar": "/opt/target-sdk/bin/aarch64-linux-gnu-ar",
+  "ranlib": "/opt/target-sdk/bin/aarch64-linux-gnu-ranlib",
+  "sysroot": "/opt/target-sdk/sysroot",
+  "arch": "aarch64",
+  "goarch": "arm64",
+  "target_os": "linux",
+  "cflags": [],
+  "ldflags": []
+}

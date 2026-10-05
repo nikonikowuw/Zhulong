@@ -11,6 +11,7 @@
 | [目录架构](./directory-structure.md) | C ABI 公开头文件、私有节点目录、适配层边界及单向依赖 |
 | [跨语言命名规范](../naming-guidelines.md) | C/C++ 文件、类型、函数、变量及 C ABI 符号 |
 | [CGO 交互与内存契约](./cgo-contract.md) | 内存所有权、不透明句柄、Go 指针规则、异常隔离与线程绑定 |
+| [RTSP 接入与静态构建合同](./ingestion-contract.md) | 已实现 ABI、回调 drain、时钟/超时、FFmpeg 缓存与 host/cross/CGO 链接 |
 | [节点流水线设计](./pipeline-guidelines.md) | 节点职责、有界队列背压、零拷贝缓冲传递、5 步优雅停机 |
 
 ---
@@ -33,4 +34,4 @@
 make native-test
 ```
 
-该 target 以 CMake 构建 C++17 静态 stub，分别运行 C++ 生命周期测试和纯 C 编译/链接的 ABI 测试。全栈门禁由根目录 `make check` 统一执行；AddressSanitizer/UndefinedBehaviorSanitizer 可在后续 native 代码进入实际缓冲区处理后加入，不宣称当前 stub 已验证硬件或媒体路径。
+该 target 离线构建 C++17 Engine 与固定 FFmpeg 7.1.5 静态依赖，运行生命周期、纯 C ABI、capture 单元、真实 loopback RTSP/RTP 和构建合同测试。首次显式执行 `make native-deps` 或导入本地固定源码包。`make check` 是全栈门禁；ASan/UBSan 与 TSan 使用独立目录，见 [接入合同](./ingestion-contract.md)。Linux 主机验证不等于跨编译或 RK3568 运行验证。

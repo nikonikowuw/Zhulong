@@ -3,12 +3,12 @@ NPM ?= npm
 CMAKE ?= cmake
 CTEST ?= ctest
 BUILD_DIR ?= build
-NATIVE_BUILD_DIR := $(BUILD_DIR)/native
+NATIVE_BUILD := python3 native/scripts/build.py
 BINARY := $(BUILD_DIR)/Zhulong
 SWAG_VERSION := v1.16.6
 AIR ?= air
 
-.PHONY: all build check frontend-install frontend-build frontend-check native-configure native-build native-test api-docs go-check smoke run web-dev dev-backend dev-frontend dev
+.PHONY: all build go-build check frontend-install frontend-build frontend-check native-deps native-configure native-build native-test native-cross-build api-docs go-check smoke run web-dev dev-backend dev-frontend dev
 
 all: build
 
@@ -16,7 +16,7 @@ build: go-build
 
 go-build: frontend-build native-build api-docs
 	mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=1 $(GO) build -o $(BINARY) ./cmd/Zhulong
+	$(NATIVE_BUILD) go build -o $(BINARY) ./cmd/Zhulong
 
 frontend-install:
 	$(NPM) ci --prefix web
@@ -31,22 +31,34 @@ frontend-check: frontend-install
 	$(NPM) audit --prefix web
 	$(NPM) run build --prefix web
 
+# 准备 Native 外部依赖源码（唯一允许发起外网下载的构建目标）
+native-deps:
+	$(NATIVE_BUILD) prepare --download
+
+# 生成与校验 Native CMake 构建环境（离线）
 native-configure:
-	$(CMAKE) -S native -B $(NATIVE_BUILD_DIR) -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON
+	$(NATIVE_BUILD) configure
 
-native-build: native-configure
-	$(CMAKE) --build $(NATIVE_BUILD_DIR) --parallel
+# 编译 Native C++ 引擎静态库与测试目标
+native-build:
+	$(NATIVE_BUILD) build
 
-native-test: native-build
-	$(CTEST) --test-dir $(NATIVE_BUILD_DIR) --output-on-failure
+# 执行 Native CTest 单元测试与集成测试套件
+native-test:
+	$(NATIVE_BUILD) test
+
+# 交叉编译目标二进制（严格要求指定目标板 Profile 与输出路径，防 Host/Cross 产物混淆）
+native-cross-build:
+	test -n "$(CROSS_PROFILE)" && test -n "$(CROSS_OUTPUT)"
+	$(NATIVE_BUILD) --profile "$(CROSS_PROFILE)" go build -ldflags=-linkmode=external -o "$(CROSS_OUTPUT)" ./cmd/Zhulong
 
 api-docs:
 	$(GO) run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init --dir cmd/Zhulong,internal/app,internal/httputil,internal/auth --generalInfo main.go --output internal/apidocs --parseInternal
 
 go-check: native-build
 	test -z "$$(gofmt -l cmd internal)"
-	$(GO) vet ./cmd/... ./internal/...
-	CGO_ENABLED=1 $(GO) test -race ./cmd/... ./internal/...
+	$(NATIVE_BUILD) go vet ./cmd/... ./internal/...
+	$(NATIVE_BUILD) go test -race ./cmd/... ./internal/...
 
 check:
 	$(MAKE) frontend-check

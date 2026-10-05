@@ -6,6 +6,8 @@
 
 ## 1. 核心链路与节点职责
 
+当前仅实现 `src/nodes/capture/rtsp_input.*` 与 `src/pipeline/engine.*` 的压缩包采集/复用，**没有 DecodeNode 或异步帧队列**。同步回调必须有界非阻塞；停止与所有权以 [接入合同](./ingestion-contract.md) 为准。下表是后续流水线设计方向，不得把解码前任意丢弃 B/P 包直接用于当前码流（可能破坏完整 GOP/参考关系）；该冲突须由后续解码任务设计恢复策略。
+
 ```txt
 Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC) ➔ Inference Node (NPU/GPU)
          │                         │                          │                          │

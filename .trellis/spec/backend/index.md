@@ -41,8 +41,7 @@
 
 ```bash
 gofmt -w cmd internal
-go vet ./cmd/... ./internal/...
-go test -v -race ./cmd/... ./internal/...
+make go-check
 ```
 
-*本仓库的 Go 门禁限定在 `cmd/` 和 `internal/` 自有包，避免 `./...` 递归扫描 `web/node_modules` 中第三方包自带的 Go 示例。*
+*`make go-check` 通过 Native 构建脚本为 vet/race 注入正确的静态链接输入；详见 [Native 接入合同](../native/ingestion-contract.md)。门禁限定在 `cmd/` 和 `internal/` 自有包，避免 `./...` 递归扫描 `web/node_modules` 中第三方包自带的 Go 示例。*

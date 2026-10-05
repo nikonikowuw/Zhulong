@@ -4,9 +4,11 @@
 
 ---
 
-## 1. 规划目录结构（Proposed Layout）
+## 1. 当前实现与规划目录
 
-> ⚠️ 以下为指导后续实现的规划约定，功能未开始前严禁创建空目录。
+当前实现：`src/abi/engine.cpp` 为异常/句柄边界，`src/pipeline/engine.*` 为流池、生命周期与回调 drain，`src/nodes/capture/rtsp_input.*` 为 FFmpeg 所有权、URI 与时钟契约；`scripts/build.py` 负责依赖/目标/最终 Go 链接，`tests/` 包含 Native、纯 C、真实 loopback RTSP 和构建回归。没有厂商 SDK 或 DecodeNode。
+
+以下仍是后续完整节点架构的规划，功能未开始前严禁创建空目录。
 
 ```text
 native/
@@ -29,11 +31,14 @@ native/
 
 ## 2. 单向流转与边界铁律
 
+当前已实现依赖：`include/Zhulong/engine.h ➔ src/abi ➔ src/pipeline/engine（编排） ➔ src/nodes/capture`，无反向依赖；采集层只依赖公开中立 C view/内部 FFmpeg。后续具体节点与中立 pipeline 数据契约分层时，保持节点只依赖契约、不互相窥探，厂商适配头仍隔离在 backends。
+
 ```txt
-include/Zhulong/engine.h (纯 C ABI) ➔ src/abi ➔ src/nodes ➔ src/pipeline (契约/队列) ➔ src/backends (厂商 SDK)
+未来节点数据契约：src/nodes ➔ src/pipeline（中立契约/队列）
+厂商 SDK：只在 src/backends 内包含专有头文件
 ```
 
 1. **唯一对外公开头文件**：`include/Zhulong/engine.h` 是 Go/CGO **唯一允许引入的原生头文件**，严禁引入 C++ 容器、模板或厂商 SDK 头文件。
 2. **ABI 异常防爆门**：`src/abi` 必须在最外层以 `try { ... } catch (...) { return Zhulong_ERR_INTERNAL; }` 包覆，严禁 C++ 异常穿越到 CGO。
-3. **节点解耦流转**：各节点严禁直接互相调用或窥探内部状态，只能通过有界队列单向传递 `std::shared_ptr<const Frame>` 或 `std::shared_ptr<const Packet>`。
+3. **节点解耦流转**：未来异步处理节点不得直接窥探其他节点状态，应通过有界队列传递不可变包/帧。当前只有采集层与同步包回调，没有解码队列；详见 [接入合同](./ingestion-contract.md)。
 4. **厂商 SDK 物理隔离**：特定 NPU/GPU 专有头文件只能在 `src/backends/` 内引用，严禁污染核心流水线契约。

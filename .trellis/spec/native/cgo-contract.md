@@ -56,15 +56,14 @@ void Zhulong_engine_destroy(Zhulong_engine_h engine);
 #endif
 ```
 
-所有 ABI 函数捕获 C++ 异常；`start` / `stop` 返回状态码，`destroy` 无返回值且空句柄可安全销毁。公开头文件保持纯 C，不暴露 C++ 类型。
+所有 ABI 函数捕获 C++ 异常；`start` / `stop` 返回状态码，`destroy` 无返回值且空句柄可安全销毁。公开头文件保持纯 C，不暴露 C++ 类型。以上仅示范保留的生命周期子集；新增 probe、stream、subscription 的完整签名以 `native/include/Zhulong/engine.h` 为准，执行合同见 [ingestion-contract.md](./ingestion-contract.md)。
 
 ### Go 侧桥接 (`internal/engine/engine.go`)
 
 ```go
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../native/include
-#cgo darwin LDFLAGS: -L${SRCDIR}/../../build/native -lZhulongEngine -lc++
-#cgo linux LDFLAGS: -L${SRCDIR}/../../build/native -lZhulongEngine -lstdc++ -pthread
+// 完整静态库与系统依赖由 native/scripts/build.py 的 CGO_LDFLAGS 提供。
 #include <Zhulong/engine.h>
 */
 import "C"
@@ -81,7 +80,7 @@ func (e *Engine) Ready() bool
 func (e *Engine) Close() error
 ```
 
-`Start` 在持锁下创建 C-owned handle 并启动；启动失败时销毁 handle。`Stop` 不销毁句柄；幂等 `Close` 停止并销毁。Go 只保存不透明句柄值，不向当前 C ABI 传递 Go 指针。C++ 静态库由 `make native-build` 构建到 `build/native/libZhulongEngine.a`，随后才能完成 CGO 链接。
+`Start` 在持锁下创建 C-owned handle 并启动；启动失败时销毁 handle。`Stop` 不销毁句柄；幂等 `Close` 停止并销毁。Go 只保存不透明句柄值，不向当前 Go 生命周期桥接传递 Go 指针。C++ 静态库由 `make native-build` 构建到 `build/native/host/libZhulongEngine.a`。Go 命令必须通过 `native/scripts/build.py go ...` 或 Make：脚本传递 Engine 内容摘要路径、FFmpeg 三个静态归档及目标系统库，避免 Go 外部归档缓存过期。交叉产物使用独立目录，不覆盖 host。
 
 ---
 
@@ -92,9 +91,10 @@ func (e *Engine) Close() error
 
 ---
 
-## 5. 当前无硬件 stub 的验证边界
+## 5. 当前接入实现的验证边界
 
-- `native/CMakeLists.txt` 构建 C++17 静态目标 `ZhulongEngine`，并同时构建 C++ 生命周期测试和以 C 编译器验证公开 ABI 的测试。
-- `make native-test` 运行 CTest；`make check` 还运行 `go test -race ./cmd/... ./internal/...`。
-- 当前 ABI 不接收帧、RTSP URL、回调或缓冲区，不包含 worker thread；不得在文档或健康状态中声称已具备媒体、解码、推理或加速器能力。
-- 后续增加 buffer API 时，必须单独更新签名、所有权、尺寸/stride/alignment、异步生命周期和对应 C/Go 回归测试。
+- `make native-test` 运行 C++17 生命周期、纯 C ABI、真实本地 RTSP/RTP 和构建合同测试；`make check` 包含 Go vet/race。
+- Native ABI 已接受 RTSP URL、probe-result view 与整数令牌包回调；当前 Go wrapper **仍仅实现生命周期**，没有 Go 订阅 API。
+- 包只在同步回调期间借用；probe-result view 仅在 result destroy 前有效。注销须 drain 在途回调后才允许未来 Go 侧 `cgo.Handle.Delete()`。
+- stop 取消输入和 probe、join worker/reaper，之后才释放资源。回调内控制 API 返回 CALLBACK_CONTEXT，destroy 由外部所有者串行调用。
+- Linux host 与 Native sanitizer 检查不证明真实摄像机、解码、板端或旧系统兼容；具体命令/断言/残余限制见 [接入合同](./ingestion-contract.md)。

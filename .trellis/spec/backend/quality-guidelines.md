@@ -8,11 +8,10 @@
 
 ```bash
 gofmt -w cmd internal
-go vet ./cmd/... ./internal/...
-go test -v -race ./cmd/... ./internal/...
+make go-check
 ```
 
-*本仓库的 Go 门禁限定在 `cmd/` 和 `internal/` 自有包，避免 `./...` 递归扫描 `web/node_modules` 中第三方包自带的 Go 示例。*
+*`make go-check` 通过 Native 构建脚本传递静态 FFmpeg 与内容摘要 Engine 归档，随后运行 vet/race。需要单独 Go 命令时使用 `python3 native/scripts/build.py go test -race ./internal/engine`，不要依赖固定路径的 CGO 外部归档缓存。门禁限定在 `cmd/` 和 `internal/` 自有包，避免 `./...` 递归扫描 `web/node_modules` 中第三方包自带的 Go 示例。*
 
 ---
 

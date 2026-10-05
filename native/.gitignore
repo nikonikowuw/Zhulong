@@ -1,0 +1,2 @@
+# Python test/import bytecode is generated, not a source artifact.
+__pycache__/
