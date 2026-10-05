@@ -111,3 +111,44 @@ Rebuilt system theme layout as an edge-to-edge macOS console with GPU dynamic au
 ### Status
 
 [OK] **Ready for commit review**
+
+
+## Session 4: Go/CGO 媒体桥接与订阅生命周期落地与审查收尾
+<!-- trellis-session: v=2 fp=03ae9bff29ab9c43 -->
+
+**Date**: 2026-10-05
+**Task**: Go/CGO 媒体桥接与订阅生命周期落地与审查收尾
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+完成 internal/engine 中的纯 Go 门面与 CGO 跨语言桥接，通过真实 RTSP 回环与全栈质量门禁，并完成并发边界与内存泄露修复收尾与子任务归档。
+
+### Main Changes
+
+- 实现 Probe、Acquire、Status、Subscribe、Next 等 Go 原生媒体接入与订阅接口
+- 修复 cgo.Handle 在 ERR_NOT_FOUND 终态下的释放，杜绝内部句柄泄露
+- 修复 Probe 并发状态读取的 Data Race 与 TOCTOU 竞态
+- 修复 Acquire 在底层调用返回后的代次与停止状态二次校验，杜绝孤儿流
+- 优化 Subscription.Next 出队置空 Packet{}，避免 GC 内存切片驻留
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8a6a887` | feat(engine): implement Go/CGO media bridge and packet subscription lifecycle |
+| `dfae13e` | chore(task): update task planning and journal for 10-05-go-cgo-media-bridge |
+
+### Testing
+
+- [OK] make go-check：通过 Go vet、race 竞态测试及真实 RTSP 服务桩集成测试（run_go_bridge_tests.py）
+- [OK] make check：通过前端代码检查/单元测试/构建、Native 单元与集成测试、Swagger 文档生成与 Go 质量门禁
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 启动父任务下的摄像机业务与四态管理独立子任务
