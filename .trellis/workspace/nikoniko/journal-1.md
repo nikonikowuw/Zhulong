@@ -64,3 +64,30 @@ Rebuilt system theme layout as an edge-to-edge macOS console with GPU dynamic au
 ### Next Steps
 
 - Review and commit remaining backend error-handling changes when ready
+
+
+## Session 3: 项目骨架、认证收尾与媒体接入
+<!-- trellis-session: v=2 fp=1e9dac347825b643 -->
+
+**Date**: 2026-10-05
+**Task**: 项目骨架、认证收尾与媒体接入
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+完成项目骨架与单用户认证任务归档；提交认证错误解耦及全栈开发入口，规划并实现静态 FFmpeg RTSP 原生接入。make check 与 smoke 已通过；实际目标交叉编译和板端验证仍未完成，Native 子任务保持进行中。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `233a482` | refactor(auth): decouple domain errors with apperr, add generic endpoints, and remove rememberMe |
+| `47a5b27` | build: add air live reload configuration and fullstack dev targets |
+| `e84fc3d` | chore(task): add planning artifacts for media ingestion pipelines |
+| `5abbe4d` | chore(task): update 10-05-native-ffmpeg-ingestion planning status |
+| `0080930` | feat(native): implement C++ media engine with static FFmpeg RTSP ingestion |
+
+### Status
+
+[OK] **Completed**
