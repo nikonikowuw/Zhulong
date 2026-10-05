@@ -64,23 +64,32 @@ void Zhulong_engine_destroy(Zhulong_engine_h engine);
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../native/include
 // 完整静态库与系统依赖由 native/scripts/build.py 的 CGO_LDFLAGS 提供。
+#include <stdint.h>
 #include <Zhulong/engine.h>
+
+void zhulongPacketCallbackBridge(uintptr_t token, const Zhulong_packet_view *packet);
 */
 import "C"
 
-type Engine struct {
-    mu     sync.Mutex
-    handle C.Zhulong_engine_h
-}
-
+type Engine struct { ... }
 func New() *Engine
 func (e *Engine) Start() error
 func (e *Engine) Stop() error
 func (e *Engine) Ready() bool
 func (e *Engine) Close() error
+
+func (e *Engine) Probe(ctx context.Context, uri string, options StreamOptions) (VideoInfo, error)
+func (e *Engine) Acquire(ctx context.Context, uri string, consumerID uint64, kind ConsumerKind, options StreamOptions) (*Stream, error)
+func (s *Stream) Status(ctx context.Context) (StreamStatus, error)
+func (s *Stream) Subscribe(ctx context.Context, options SubscriptionOptions) (*Subscription, error)
+func (s *Stream) Close() error
+func (s *Subscription) Next(ctx context.Context) (Packet, error)
+func (s *Subscription) Done() <-chan struct{}
+func (s *Subscription) Err() error
+func (s *Subscription) Close() error
 ```
 
-`Start` 在持锁下创建 C-owned handle 并启动；启动失败时销毁 handle。`Stop` 不销毁句柄；幂等 `Close` 停止并销毁。Go 只保存不透明句柄值，不向当前 Go 生命周期桥接传递 Go 指针。C++ 静态库由 `make native-build` 构建到 `build/native/host/libZhulongEngine.a`。Go 命令必须通过 `native/scripts/build.py go ...` 或 Make：脚本传递 Engine 内容摘要路径、FFmpeg 三个静态归档及目标系统库，避免 Go 外部归档缓存过期。交叉产物使用独立目录，不覆盖 host。
+`Start` 在持锁下创建 C-owned handle 并启动；启动失败时销毁 handle。`Stop` 不销毁句柄；幂等 `Close` 停止并销毁。Go 只保存不透明句柄值，不向 C 侧暴露可逃逸的 Go 指针。C++ 静态库由 `make native-build` 构建到 `build/native/host/libZhulongEngine.a`。Go 命令必须通过 `native/scripts/build.py go ...` 或 Make：脚本传递 Engine 内容摘要路径、FFmpeg 三个静态归档及目标系统库，避免 Go 外部归档缓存过期。交叉产物使用独立目录，不覆盖 host。
 
 ---
 
@@ -93,8 +102,8 @@ func (e *Engine) Close() error
 
 ## 5. 当前接入实现的验证边界
 
-- `make native-test` 运行 C++17 生命周期、纯 C ABI、真实本地 RTSP/RTP 和构建合同测试；`make check` 包含 Go vet/race。
-- Native ABI 已接受 RTSP URL、probe-result view 与整数令牌包回调；当前 Go wrapper **仍仅实现生命周期**，没有 Go 订阅 API。
-- 包只在同步回调期间借用；probe-result view 仅在 result destroy 前有效。注销须 drain 在途回调后才允许未来 Go 侧 `cgo.Handle.Delete()`。
+- `make native-test` 运行 C++17 生命周期、纯 C ABI、真实本地 RTSP/RTP 和构建合同测试；`make go-check` 包含 Go vet/race 与真实 loopback RTSP 桥接门禁（`run_go_bridge_tests.py`）。
+- Go Engine wrapper 已完整实现 Probe 探测（独立私有 Engine 隔离取消）、Stream 物理流复用/宽限期管理、有界深拷贝包订阅（Subscription）、同步排空后释放 `cgo.Handle`。
+- 包只在同步回调期间借用，入队前深拷贝至 Go 内存；probe-result view 仅在 result destroy 前有效。注销须 drain 在途回调后才允许 Go 侧 `cgo.Handle.Delete()`。
 - stop 取消输入和 probe、join worker/reaper，之后才释放资源。回调内控制 API 返回 CALLBACK_CONTEXT，destroy 由外部所有者串行调用。
 - Linux host 与 Native sanitizer 检查不证明真实摄像机、解码、板端或旧系统兼容；具体命令/断言/残余限制见 [接入合同](./ingestion-contract.md)。

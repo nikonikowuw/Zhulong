@@ -4,7 +4,7 @@
 
 Changes to `native/include/Zhulong/engine.h`, RTSP capture/lifecycle, static
 FFmpeg dependency selection, CMake, CGO linking, or cross-target selection require
-these regression checks. Go camera/subscription wrappers, decoding, recording,
+these regression checks. Go camera business logic, decoding, recording,
 VPU/NPU and board support are outside the current implementation.
 
 ## 2. Signatures

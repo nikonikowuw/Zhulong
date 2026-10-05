@@ -59,6 +59,7 @@ go-check: native-build
 	test -z "$$(gofmt -l cmd internal)"
 	$(NATIVE_BUILD) go vet ./cmd/... ./internal/...
 	$(NATIVE_BUILD) go test -race ./cmd/... ./internal/...
+	python3 native/tests/run_go_bridge_tests.py
 
 check:
 	$(MAKE) frontend-check
