@@ -122,9 +122,27 @@ class BuildContractTests(unittest.TestCase):
             prefix = Path(directory)
             self.make_pc(prefix)
             self.assertEqual(build.system_libraries(prefix), ["-pthread", "-lm", "-latomic"])
+            self.make_pc(prefix, "-framework CoreFoundation -framework CoreVideo")
+            self.assertEqual(build.system_libraries(prefix), ["-framework CoreFoundation", "-framework CoreVideo"])
+            self.make_pc(prefix, "-framework UnreviewedFramework")
+            with self.assertRaisesRegex(ValueError, "unexpected static FFmpeg framework"):
+                build.system_libraries(prefix)
             self.make_pc(prefix, "-lUnreviewedSharedCodec")
             with self.assertRaisesRegex(ValueError, "unexpected static FFmpeg dependency"):
                 build.system_libraries(prefix)
+
+    def test_darwin_xcrun_defaults_are_sanitized(self):
+        """测试 macOS xcrun 自动注入的默认环境变量被静默净化，不误伤构建"""
+        with patch("platform.system", return_value="Darwin"):
+            with patch.dict(os.environ, {
+                "CPATH": "/usr/local/include",
+                "LIBRARY_PATH": "/usr/local/lib",
+                "SDKROOT": "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
+            }):
+                build.sanitize_environment()
+                self.assertNotIn("CPATH", os.environ)
+                self.assertNotIn("LIBRARY_PATH", os.environ)
+                self.assertNotIn("SDKROOT", os.environ)
 
     def test_engine_archive_content_invalidates_cgo_link_flags(self):
         """测试 Engine 静态归档内容变更会生成新的 CGO 链接路径（防止 Go CGO 缓存失效失灵）"""

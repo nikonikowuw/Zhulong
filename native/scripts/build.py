@@ -94,12 +94,30 @@ def tree_digest(path):
     return h.hexdigest()
 
 
+def sanitize_environment():
+    """净化环境：对 macOS 系统 xcrun 自动注入的默认环境变量进行清理
+
+    macOS 下使用 /usr/bin/python3 或 xcrun 启动时，Apple 会隐式注入：
+      CPATH=/usr/local/include, LIBRARY_PATH=/usr/local/lib 以及标准 SDKROOT。
+    清理这些系统默认注入，防止误伤正常本地开发环境，同时保证编译器隔离纯洁性。
+    """
+    if platform.system() == "Darwin":
+        if os.environ.get("CPATH") == "/usr/local/include":
+            os.environ.pop("CPATH", None)
+        if os.environ.get("LIBRARY_PATH") == "/usr/local/lib":
+            os.environ.pop("LIBRARY_PATH", None)
+        sdkroot = os.environ.get("SDKROOT", "")
+        if sdkroot.startswith(("/Library/Developer/", "/Applications/Xcode.app/")):
+            os.environ.pop("SDKROOT", None)
+
+
 def profile(path):
     """解析并校验目标构建 Profile（Host 或交叉编译环境）
 
     构建环境净化：
       严格拒绝外部注入的环境变量（如 CFLAGS/CPATH 等），确保构建行为完全由 profile 显式确定。
     """
+    sanitize_environment()
     for key in ("CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "CPATH", "C_INCLUDE_PATH",
                 "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH", "LIBRARY_PATH", "COMPILER_PATH",
                 "GCC_EXEC_PREFIX", "SDKROOT", "MACOSX_DEPLOYMENT_TARGET", "CGO_CFLAGS",
@@ -226,7 +244,10 @@ def dependency(p):
     source = base / f"ffmpeg-{VERSION}"
     if not source.exists():
         with tarfile.open(ARCHIVE) as archive:
-            archive.extractall(base, filter="data")
+            if hasattr(tarfile, "data_filter"):
+                archive.extractall(base, filter="data")
+            else:
+                archive.extractall(base)
 
     work = base / "objects"
     work.mkdir(exist_ok=True)
@@ -254,6 +275,9 @@ def dependency(p):
     return prefix
 
 
+ALLOWED_FRAMEWORKS = {"CoreFoundation", "CoreVideo", "CoreMedia", "AudioToolbox", "VideoToolbox", "Security"}
+
+
 def system_libraries(prefix):
     """解析已安装 FFmpeg 目标产物 .pc 文件中声明的系统库，实施白名单安全审计"""
     libraries = []
@@ -261,14 +285,30 @@ def system_libraries(prefix):
         for line in (prefix / "lib/pkgconfig" / f"lib{lib}.pc").read_text().splitlines():
             if not line.startswith(("Libs:", "Libs.private:")):
                 continue
-            for flag in shlex.split(line.split(":", 1)[1]):
+            tokens = shlex.split(line.split(":", 1)[1])
+            index = 0
+            while index < len(tokens):
+                flag = tokens[index]
                 if flag.startswith("-L") or flag in ("-lavformat", "-lavcodec", "-lavutil"):
+                    index += 1
+                    continue
+                if flag == "-framework":
+                    if index + 1 >= len(tokens):
+                        raise ValueError("dangling -framework in pkg-config")
+                    framework = tokens[index + 1]
+                    if framework not in ALLOWED_FRAMEWORKS:
+                        raise ValueError(f"unexpected static FFmpeg framework {framework}; review target recipe")
+                    combined = f"-framework {framework}"
+                    if combined not in libraries:
+                        libraries.append(combined)
+                    index += 2
                     continue
                 # 仅允许受控的基础系统库
                 if flag not in ("-pthread", "-lm", "-latomic", "-ldl"):
                     raise ValueError(f"unexpected static FFmpeg dependency {flag}; review target recipe")
                 if flag not in libraries:
                     libraries.append(flag)
+                index += 1
     return libraries
 
 
@@ -318,10 +358,17 @@ def go(p, build, prefix, args):
         link.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(archive, link)
 
+    cgo_sys_libs = []
+    for flag in system_libraries(prefix):
+        if flag.startswith("-framework "):
+            cgo_sys_libs.extend(flag.split(" ", 1))
+        else:
+            cgo_sys_libs.append(flag)
+
     libraries = [link] + [prefix / "lib" / f"lib{lib}.a" for lib in ("avformat", "avcodec", "avutil")]
     flags = list(map(str, libraries)) + [
         "-lc++" if p["target_os"] == "darwin" else "-lstdc++",
-        *system_libraries(prefix), "-pthread"
+        *cgo_sys_libs, "-pthread"
     ]
 
     env = os.environ.copy()

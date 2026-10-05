@@ -6,7 +6,7 @@ BUILD_DIR ?= build
 NATIVE_BUILD := python3 native/scripts/build.py
 BINARY := $(BUILD_DIR)/Zhulong
 SWAG_VERSION := v1.16.6
-AIR ?= air
+AIR ?= $(shell command -v air 2>/dev/null || (test -x "$$(go env GOPATH 2>/dev/null)/bin/air" && echo "$$(go env GOPATH)/bin/air") || echo air)
 
 .PHONY: all build go-build check frontend-install frontend-build frontend-check native-deps native-configure native-build native-test native-cross-build api-docs go-check smoke run web-dev dev-backend dev-frontend dev
 
@@ -85,10 +85,16 @@ dev: native-build
 	@which $(AIR) > /dev/null 2>&1 || (echo "air is not installed. Run: go install github.com/air-verse/air@latest" && exit 1)
 	@echo "Starting Zhulong full-stack dev (Air + Vite)..."
 	@bash -c '\
-		cleanup() { kill $$P1 $$P2 2>/dev/null || true; }; \
+		cleanup() { \
+			kill $$P1 $$P2 2>/dev/null || true; \
+			pkill -P $$P2 2>/dev/null || true; \
+			pkill -P $$P1 2>/dev/null || true; \
+		}; \
 		trap cleanup INT TERM EXIT; \
 		$(AIR) & P1=$$!; \
 		$(NPM) run dev --prefix web & P2=$$!; \
-		wait -n $$P1 $$P2 2>/dev/null || true'
+		while kill -0 $$P1 2>/dev/null && kill -0 $$P2 2>/dev/null; do \
+			sleep 1 & wait $$!; \
+		done'
 
 
