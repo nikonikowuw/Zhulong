@@ -50,6 +50,187 @@ definitions:
       username:
         type: string
     type: object
+  camera.CameraCredentialsResponse:
+    properties:
+      cameraId:
+        type: string
+      credentials:
+        additionalProperties:
+          type: string
+        description: role -> full plaintext RTSP URL
+        type: object
+    type: object
+  camera.CameraResponse:
+    properties:
+      createdAt:
+        type: string
+      degraded:
+        type: boolean
+      enabled:
+        type: boolean
+      health:
+        type: string
+      id:
+        type: string
+      lastCheckedAt:
+        type: string
+      lastSuccessAt:
+        type: string
+      name:
+        type: string
+      reason:
+        type: string
+      revision:
+        type: integer
+      session:
+        type: string
+      stale:
+        type: boolean
+      streams:
+        items:
+          $ref: '#/definitions/camera.StreamResponse'
+        type: array
+      updatedAt:
+        type: string
+    type: object
+  camera.CameraStateInfo:
+    properties:
+      cameraId:
+        type: string
+      degraded:
+        type: boolean
+      enabled:
+        type: boolean
+      health:
+        type: string
+      lastCheckedAt:
+        type: string
+      lastSuccessAt:
+        type: string
+      reason:
+        type: string
+      revision:
+        type: integer
+      session:
+        type: string
+      stale:
+        type: boolean
+      streams:
+        additionalProperties:
+          $ref: '#/definitions/camera.StreamStateInfo'
+        type: object
+    type: object
+  camera.CreateCameraRequest:
+    properties:
+      enabled:
+        type: boolean
+      id:
+        type: string
+      mainStream:
+        $ref: '#/definitions/camera.CreateStreamRequest'
+      name:
+        maxLength: 64
+        minLength: 1
+        type: string
+      subStream:
+        $ref: '#/definitions/camera.CreateStreamRequest'
+    required:
+    - mainStream
+    - name
+    type: object
+  camera.CreateStreamRequest:
+    properties:
+      protocol:
+        description: '"rtsp" (default)'
+        type: string
+      role:
+        description: '"main" or "sub"'
+        type: string
+      rtspUrl:
+        type: string
+      transport:
+        description: '"tcp" or "udp" (default "tcp")'
+        type: string
+    required:
+    - rtspUrl
+    type: object
+  camera.DiagnoseResponse:
+    properties:
+      cameraId:
+        type: string
+      message:
+        type: string
+      state:
+        $ref: '#/definitions/camera.CameraStateInfo'
+    type: object
+  camera.StreamResponse:
+    properties:
+      codec:
+        type: string
+      createdAt:
+        type: string
+      fps:
+        type: number
+      fpsString:
+        type: string
+      height:
+        type: integer
+      id:
+        type: integer
+      protocol:
+        type: string
+      role:
+        type: string
+      rtspUrl:
+        description: Complete RTSP URL for frontend playback and display
+        type: string
+      runtimeState:
+        $ref: '#/definitions/camera.StreamStateInfo'
+      transport:
+        type: string
+      updatedAt:
+        type: string
+      width:
+        type: integer
+    type: object
+  camera.StreamStateInfo:
+    properties:
+      consecutiveFailures:
+        type: integer
+      errorMessage:
+        type: string
+      evidenceType:
+        type: string
+      health:
+        type: string
+      lastCheckedAt:
+        type: string
+      lastSuccessAt:
+        type: string
+      reason:
+        type: string
+      role:
+        type: string
+      session:
+        type: string
+    type: object
+  camera.UpdateCameraRequest:
+    properties:
+      enabled:
+        type: boolean
+      mainStream:
+        $ref: '#/definitions/camera.CreateStreamRequest'
+      name:
+        maxLength: 64
+        minLength: 1
+        type: string
+      revision:
+        type: integer
+      subStream:
+        $ref: '#/definitions/camera.CreateStreamRequest'
+    required:
+    - revision
+    type: object
   httputil.FieldDetail:
     properties:
       code:
@@ -220,6 +401,226 @@ paths:
       summary: Get system initialization status
       tags:
       - auth
+  /cameras:
+    get:
+      parameters:
+      - description: Pagination limit
+        in: query
+        name: limit
+        type: integer
+      - description: Pagination offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  type: object
+              type: object
+      summary: List cameras
+      tags:
+      - camera
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Camera parameters
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/camera.CreateCameraRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/camera.CameraResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Create a new camera
+      tags:
+      - camera
+  /cameras/{id}:
+    delete:
+      parameters:
+      - description: Camera ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  type: object
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Delete camera
+      tags:
+      - camera
+    get:
+      parameters:
+      - description: Camera ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/camera.CameraResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get camera by ID
+      tags:
+      - camera
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Camera ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Updated parameters
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/camera.UpdateCameraRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/camera.CameraResponse'
+              type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Update camera configuration
+      tags:
+      - camera
+  /cameras/{id}/credentials:
+    get:
+      parameters:
+      - description: Camera ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/camera.CameraCredentialsResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get camera plaintext credentials
+      tags:
+      - camera
+  /cameras/{id}/diagnose:
+    post:
+      parameters:
+      - description: Camera ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/camera.DiagnoseResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Manually diagnose camera connection
+      tags:
+      - camera
+  /cameras/events:
+    get:
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: Server-Sent Events stream
+          schema:
+            type: string
+      summary: Subscribe to camera state events via SSE
+      tags:
+      - camera
   /health:
     get:
       produces:

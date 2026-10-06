@@ -25,7 +25,6 @@ Committed repository/Go setup and Trellis workflow/specs separately; corrected t
 
 [OK] **Completed**
 
-
 ## Session 2: Apple-Style UI Overhaul and Auth UX Refactoring
 <!-- trellis-session: v=2 fp=2006807dd10f453a -->
 
@@ -65,7 +64,6 @@ Rebuilt system theme layout as an edge-to-edge macOS console with GPU dynamic au
 
 - Review and commit remaining backend error-handling changes when ready
 
-
 ## Session 3: 项目骨架、认证收尾与媒体接入
 <!-- trellis-session: v=2 fp=1e9dac347825b643 -->
 
@@ -81,7 +79,7 @@ Rebuilt system theme layout as an edge-to-edge macOS console with GPU dynamic au
 ### Git Commits
 
 | Hash | Message |
-|------|---------|
+| ------ | --------- |
 | `233a482` | refactor(auth): decouple domain errors with apperr, add generic endpoints, and remove rememberMe |
 | `47a5b27` | build: add air live reload configuration and fullstack dev targets |
 | `e84fc3d` | chore(task): add planning artifacts for media ingestion pipelines |
@@ -102,6 +100,7 @@ Rebuilt system theme layout as an edge-to-edge macOS console with GPU dynamic au
 ### Summary
 
 完成媒体接入阶段二首个交付：实现 `internal/engine/` 中的纯 Go 门面与 CGO 跨语言桥接。
+
 1. 封装 Native 视频流探测（`Probe`），采用独立私有 Native Engine 隔离取消，支持最多 4 路并发控制与 context deadline 收敛。
 2. 封装物理 RTSP 流获取与复用（`Acquire` / `Release` / `Status`），支持连接池复用与 8 秒宽限期语义。
 3. 实现按需视频包订阅（`Subscribe` / `Next`），在 CGO 回调中通过借用指针与 `unsafe.Slice` 深拷贝到 Go-owned 内存，配合有界包数与字节队列（默认 32 包 / 16 MiB 上限）提供明确的 `ErrBackpressure` 终态。
@@ -111,7 +110,6 @@ Rebuilt system theme layout as an edge-to-edge macOS console with GPU dynamic au
 ### Status
 
 [OK] **Ready for commit review**
-
 
 ## Session 4: Go/CGO 媒体桥接与订阅生命周期落地与审查收尾
 <!-- trellis-session: v=2 fp=03ae9bff29ab9c43 -->
@@ -152,3 +150,47 @@ Rebuilt system theme layout as an edge-to-edge macOS console with GPU dynamic au
 ### Next Steps
 
 - 启动父任务下的摄像机业务与四态管理独立子任务
+
+## Session 5: 摄像机生命周期管理与健康度检测落地
+<!-- trellis-session: v=2 fp=7e2d9a184c2f10b8 -->
+
+**Date**: 2026-10-06
+**Task**: 摄像机业务与四态管理（10-05-camera-lifecycle）
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+完成 `10-05-camera-lifecycle` 摄像机全生命周期后端实现：
+
+1. **SQLite 迁移与存储**：增加 `000003_create_cameras_tables.up.sql`/`down.sql`，提供 `cameras` 与 `camera_streams` 外键级联存储，实现带 Revision CAS 乐观锁检测的 GORM Store。
+2. **凭据安全与加密**：实现基于 AES-256-GCM 与 AAD (`v1:<camera_id>:<role>`) 的密钥管理器，强制 0600 文件权限，库内存在密文但密钥缺失时阻断启动。
+3. **RTSP 鉴权与轻量 DESCRIBE 探活**：集成 `github.com/icholy/digest v1.2.0` 低层 API 适配 RTSP Digest 鉴权（支持 MD5/SHA-256、qop=auth 与 opaque="" 规范化），实现单连接轻量 DESCRIBE 探测，绝不发送 SETUP/PLAY/RTP。
+4. **主子流共享原子探测门禁**：入库与修改时并发验证主子流，共享 5s 预算，容忍未知 FPS（0/1）并拒绝非法分辨率与非 H.264/H.265 编码，任一流失败整笔配置不生效。
+5. **正交状态模型与分级调度器**：严格解耦 `enabled`、`health`（unknown/online/offline/error）与 `session`（idle/starting/running/reconnecting/error）；活跃流采用 4s 收包超时判定；空闲流采用 30s 周期（±20% 抖动，8 并发有界信号量）轻量 DESCRIBE 探活，支持 3 次连续失败转 offline 与 240s stale 判定。
+6. **SSE 事件流**：实现有界队列缓冲、单调增量序号、原子初始快照、慢消费者驱逐及 16 连接上限控制。
+7. **REST API、i18n 与 Swagger**：实现摄像机 CRUD、管理员明文凭据安全查询、诊断与 SSE 端点，提供中/英/繁三语错误码支持，完成 Swagger 文档更新。
+8. **Uber Fx 装配与安全生命周期**：在 `internal/app` 完成装配与优雅停机顺序（HTTP 排空 ➔ 停止调度与关闭 SSE ➔ 释放 Native ➔ 关闭 SQLite ➔ 同步日志），测试验证启动失败逆序回滚。
+9. **质量门禁与基线保护**：严格保留 `native/src/pipeline/engine.hpp` 既存修改（SHA-256 保持 `dad479e08adc077e9c5c484c8ebcd87964c4eb6683d669cb838944dc21256148`），全栈 `make check`、`make go-check`、`make native-test`、`make smoke` 100% 通过。
+
+### Main Changes
+
+- `internal/database/migrations/000003_create_cameras_tables.*`：摄像机表与流表迁移
+- `internal/database/`：删除 `base_model.go`，避免对领域 Model 的隐式类型绑定和包耦合
+- `internal/auth/user.go`：改为显式自包含定义 `ID`、`Username`、`PasswordHash`、`CreatedAt`、`UpdatedAt`，与 `camera` 及主流 Go 社区实践保持一致
+- `internal/app/`：重构 `newRouter` 与 Fx 装配，引入 `RouteRegistrar` 与 `group:"public_routes"` / `group:"protected_routes"` Value Groups 多重绑定，移除 `router.go` 对 `internal/camera` 的硬编码耦合，实现新增业务模块全局路由器零修改
+- `internal/camera/`：包含 crypto、store、uri、rtsp_auth、rtsp_describe、probe、state、scheduler、events、service、handler、locale、requests、responses 及完备测试；遵循地道 Go 规范将请求与响应契约拆分为 requests.go 与 responses.go（与 internal/auth 对齐），实体模型采用自包含显式字段定义，针对已认证管理员直接返回完整明文 RTSP URL（含账密与参数），数据库保留 AES-GCM 密文存储，日志保持脱敏
+- `internal/app/`：注入 Camera 模块，更新 Fx 装配与生命周期顺序，完善单元测试
+- `Makefile`：添加 `internal/camera` 进 Swagger 解析目录并更新 api-docs
+- `.trellis/spec/backend/dependency-injection.md`：同步 Fx 生命周期时序规范
+
+### Testing
+
+- [OK] `make go-check`：Go vet、race 竞态测试、真实 RTSP 回环桥接测试全部通过
+- [OK] `make native-test`：纯 C ABI、引擎生命周期与 Native 集成测试全部通过
+- [OK] `make check`：前端规范、Native 测试、Swagger 生成与 Go 检查全量通过
+- [OK] `make smoke`：单二进制运行冒烟测试（Health、SPA、API 404 隔离、Swagger、优雅停机）通过
+
+### Status
+
+[OK] **Completed**

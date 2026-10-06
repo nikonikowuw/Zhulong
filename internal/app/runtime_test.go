@@ -61,6 +61,26 @@ func (e engineStub) Close() error {
 	return nil
 }
 
+type cameraStub struct {
+	events    *eventLog
+	cipherErr error
+	startErr  error
+}
+
+func (c cameraStub) InitCipher(context.Context) error {
+	c.events.add("camera.cipher")
+	return c.cipherErr
+}
+
+func (c cameraStub) Start(context.Context) error {
+	c.events.add("camera.start")
+	return c.startErr
+}
+
+func (c cameraStub) Stop() {
+	c.events.add("camera.stop")
+}
+
 func TestMigrationFailurePreventsHTTPListener(t *testing.T) {
 	events := &eventLog{}
 	migrationErr := errors.New("migration rejected")
@@ -197,5 +217,62 @@ func TestListenerFailureRollsBackNativeAndDatabase(t *testing.T) {
 	}
 	if got, want := events.snapshot(), []string{"database.open", "engine.start", "http.listen", "engine.close", "database.close"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected startup rollback order: got %v, want %v", got, want)
+	}
+}
+
+func TestCameraInitCipherFailureRollsBackNativeAndDatabase(t *testing.T) {
+	events := &eventLog{}
+	cipherErr := errors.New("key missing with encrypted streams")
+	runtime := &lifecycleRuntime{
+		database: databaseStub{events: events},
+		native:   engineStub{events: events},
+		camera:   cameraStub{events: events, cipherErr: cipherErr},
+		server:   &http.Server{Addr: "127.0.0.1:0"},
+		logger:   zap.NewNop(),
+		listen: func(string, string) (net.Listener, error) {
+			events.add("http.listen")
+			return nil, errors.New("listener must not be called")
+		},
+	}
+
+	err := runtime.Start(context.Background())
+	if !errors.Is(err, cipherErr) {
+		t.Fatalf("expected cipher error, got %v", err)
+	}
+	if runtime.listener != nil {
+		t.Fatal("listener was created despite camera cipher failure")
+	}
+	if got, want := events.snapshot(), []string{"database.open", "engine.start", "camera.cipher", "engine.close", "database.close"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected startup/rollback order: got %v, want %v", got, want)
+	}
+}
+
+func TestCameraShutdownOrderAfterHTTPDrain(t *testing.T) {
+	events := &eventLog{}
+	serveDone := make(chan error, 1)
+	runtime := &lifecycleRuntime{
+		database:      databaseStub{events: events},
+		native:        engineStub{events: events},
+		camera:        cameraStub{events: events},
+		server:        &http.Server{Addr: "127.0.0.1:0"},
+		logger:        zap.NewNop(),
+		databaseReady: true,
+		nativeReady:   true,
+		cameraReady:   true,
+		httpReady:     true,
+		serveDone:     serveDone,
+		shutdown: func(ctx context.Context) error {
+			events.add("http.shutdown")
+			serveDone <- http.ErrServerClosed
+			return nil
+		},
+	}
+
+	err := runtime.Stop(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected stop error: %v", err)
+	}
+	if got, want := events.snapshot(), []string{"http.shutdown", "camera.stop", "engine.close", "database.close"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected shutdown order: got %v, want %v", got, want)
 	}
 }

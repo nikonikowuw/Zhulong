@@ -10,10 +10,13 @@ import (
 	"github.com/gin-gonic/gin"
 	_ "github.com/nikonikowuw/Zhulong/internal/apidocs"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
+	"github.com/nikonikowuw/Zhulong/internal/database"
+	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
+	"go.uber.org/fx"
 	"go.uber.org/zap"
 )
 
@@ -23,21 +26,67 @@ type HealthData struct {
 	Components map[string]string `json:"components"`
 }
 
-type serviceReadiness interface {
+// ServiceReadiness represents a component reporting readiness for health checks.
+type ServiceReadiness interface {
 	Ready() bool
 }
 
-func newRouter(logger *zap.Logger, database serviceReadiness, native serviceReadiness, authService auth.AuthService, assets http.FileSystem) *gin.Engine {
+// RouteRegistrar defines a modular component that mounts its HTTP routes onto a Gin RouterGroup.
+// Any feature module (auth, camera, recording, ai, etc.) implementing this interface can be
+// automatically collected via Uber Fx Value Groups without modifying the router.
+type RouteRegistrar interface {
+	RegisterRoutes(rg *gin.RouterGroup)
+}
+
+// RouterParams specifies the dependencies needed to assemble the Gin HTTP router.
+type RouterParams struct {
+	fx.In
+
+	Logger          *zap.Logger
+	Database        *database.Store  `optional:"true"`
+	Native          *engine.Engine   `optional:"true"`
+	DatabaseReady   ServiceReadiness `optional:"true" name:"db_ready"`
+	NativeReady     ServiceReadiness `optional:"true" name:"native_ready"`
+	AuthService     auth.AuthService `optional:"true"`
+	Assets          http.FileSystem
+	PublicRoutes    []RouteRegistrar `group:"public_routes"`
+	ProtectedRoutes []RouteRegistrar `group:"protected_routes"`
+}
+
+func newRouter(p RouterParams) *gin.Engine {
 	router := gin.New()
-	router.Use(httpmiddleware.Recovery(logger), httpmiddleware.RequestID())
+	router.Use(httpmiddleware.Recovery(p.Logger), httpmiddleware.RequestID())
 
 	api := router.Group("/api/v1")
-	api.Use(httpmiddleware.AccessLog(logger), httpmiddleware.MaxBodyLimit())
-	api.GET("/health", healthHandler(database, native))
+	api.Use(httpmiddleware.AccessLog(p.Logger), httpmiddleware.MaxBodyLimit())
 
-	if authService != nil {
-		authHandler := auth.NewHandler(authService)
-		authHandler.RegisterRoutes(api)
+	var dbReady ServiceReadiness
+	if p.Database != nil {
+		dbReady = p.Database
+	} else if p.DatabaseReady != nil {
+		dbReady = p.DatabaseReady
+	}
+
+	var nativeReady ServiceReadiness
+	if p.Native != nil {
+		nativeReady = p.Native
+	} else if p.NativeReady != nil {
+		nativeReady = p.NativeReady
+	}
+	api.GET("/health", healthHandler(dbReady, nativeReady))
+
+	// Mount public routes (e.g. auth login, status, init)
+	for _, r := range p.PublicRoutes {
+		r.RegisterRoutes(api)
+	}
+
+	// Mount protected routes (guarded by session authentication)
+	protected := api.Group("")
+	if p.AuthService != nil {
+		protected.Use(auth.RequireAuth(p.AuthService))
+	}
+	for _, r := range p.ProtectedRoutes {
+		r.RegisterRoutes(protected)
 	}
 
 	swaggerHandler := ginSwagger.WrapHandler(swaggerFiles.Handler)
@@ -46,7 +95,7 @@ func newRouter(logger *zap.Logger, database serviceReadiness, native serviceRead
 	})
 	router.GET("/swagger/*any", swaggerHandler)
 
-	staticHandler := http.FileServer(assets)
+	staticHandler := http.FileServer(p.Assets)
 	router.NoRoute(func(c *gin.Context) {
 		requestPath := c.Request.URL.Path
 		if isReservedPath(requestPath) {
@@ -80,9 +129,11 @@ func newRouter(logger *zap.Logger, database serviceReadiness, native serviceRead
 // @Success      200  {object}  httputil.Response{data=HealthData}
 // @Failure      503  {object}  httputil.Response
 // @Router       /health [get]
-func healthHandler(database serviceReadiness, native serviceReadiness) gin.HandlerFunc {
+func healthHandler(database ServiceReadiness, native ServiceReadiness) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !database.Ready() || !native.Ready() {
+		dbReady := database != nil && database.Ready()
+		nativeReady := native != nil && native.Ready()
+		if !dbReady || !nativeReady {
 			httputil.WriteError(c, httputil.NewError(http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "Service is not ready", nil))
 			return
 		}
@@ -96,12 +147,11 @@ func healthHandler(database serviceReadiness, native serviceReadiness) gin.Handl
 	}
 }
 
-func newHTTPServer(config Config, services *applicationServices, assets http.FileSystem) (*http.Server, error) {
+func newHTTPServer(config Config, router *gin.Engine) (*http.Server, error) {
 	if err := validateHTTPAddress(config.HTTPAddress); err != nil {
 		return nil, fmt.Errorf("validate HTTP address: %w", err)
 	}
 
-	router := newRouter(services.logger, services.database, services.native, services.auth, assets)
 	return &http.Server{
 		Addr:              config.HTTPAddress,
 		Handler:           router,

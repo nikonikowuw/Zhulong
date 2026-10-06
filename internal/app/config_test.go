@@ -34,7 +34,7 @@ func TestValidateHTTPAddress(t *testing.T) {
 }
 
 func TestNewHTTPServerRejectsInvalidAddress(t *testing.T) {
-	if _, err := newHTTPServer(Config{HTTPAddress: ""}, nil, nil); err == nil {
+	if _, err := newHTTPServer(Config{HTTPAddress: ""}, nil); err == nil {
 		t.Fatal("expected an empty HTTP address to fail validation")
 	}
 }

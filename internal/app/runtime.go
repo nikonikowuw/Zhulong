@@ -21,9 +21,16 @@ type engineLifecycle interface {
 	Close() error
 }
 
+type cameraLifecycle interface {
+	InitCipher(context.Context) error
+	Start(context.Context) error
+	Stop()
+}
+
 type lifecycleRuntime struct {
 	database databaseLifecycle
 	native   engineLifecycle
+	camera   cameraLifecycle
 	server   *http.Server
 	logger   *zap.Logger
 	listen   func(string, string) (net.Listener, error)
@@ -33,6 +40,7 @@ type lifecycleRuntime struct {
 	serveDone     chan error
 	databaseReady bool
 	nativeReady   bool
+	cameraReady   bool
 	httpReady     bool
 	loggerSynced  bool
 }
@@ -41,6 +49,7 @@ func newLifecycleRuntime(services *applicationServices, server *http.Server) *li
 	return &lifecycleRuntime{
 		database: services.database,
 		native:   services.native,
+		camera:   services.cameraMgr,
 		server:   server,
 		logger:   services.logger,
 		listen:   net.Listen,
@@ -64,10 +73,23 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	}
 	r.nativeReady = true
 
+	if r.camera != nil {
+		if err := r.camera.InitCipher(ctx); err != nil {
+			startupErr := fmt.Errorf("initialize camera cipher: %w", err)
+			return errors.Join(startupErr, r.closeNative(), r.closeDatabase(), r.syncLogger())
+		}
+		if err := r.camera.Start(ctx); err != nil {
+			startupErr := fmt.Errorf("start camera scheduler: %w", err)
+			r.camera.Stop()
+			return errors.Join(startupErr, r.closeNative(), r.closeDatabase(), r.syncLogger())
+		}
+		r.cameraReady = true
+	}
+
 	listener, err := r.listen("tcp", r.server.Addr)
 	if err != nil {
 		startupErr := fmt.Errorf("listen on %s: %w", r.server.Addr, err)
-		return errors.Join(startupErr, r.closeNative(), r.closeDatabase(), r.syncLogger())
+		return errors.Join(startupErr, r.closeCamera(), r.closeNative(), r.closeDatabase(), r.syncLogger())
 	}
 	r.listener = listener
 	r.serveDone = make(chan error, 1)
@@ -108,6 +130,9 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 		r.listener = nil
 	}
 
+	if err := r.closeCamera(); err != nil {
+		stopErrors = append(stopErrors, err)
+	}
 	if err := r.closeNative(); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
@@ -118,6 +143,17 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 		stopErrors = append(stopErrors, err)
 	}
 	return errors.Join(stopErrors...)
+}
+
+func (r *lifecycleRuntime) closeCamera() error {
+	if !r.cameraReady {
+		return nil
+	}
+	r.cameraReady = false
+	if r.camera != nil {
+		r.camera.Stop()
+	}
+	return nil
 }
 
 func (r *lifecycleRuntime) closeNative() error {

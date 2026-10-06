@@ -246,6 +246,375 @@ const docTemplate = `{
                 }
             }
         },
+        "/cameras": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "camera"
+                ],
+                "summary": "List cameras",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Pagination limit",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Pagination offset",
+                        "name": "offset",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "camera"
+                ],
+                "summary": "Create a new camera",
+                "parameters": [
+                    {
+                        "description": "Camera parameters",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/camera.CreateCameraRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/camera.CameraResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/cameras/events": {
+            "get": {
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "camera"
+                ],
+                "summary": "Subscribe to camera state events via SSE",
+                "responses": {
+                    "200": {
+                        "description": "Server-Sent Events stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/cameras/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "camera"
+                ],
+                "summary": "Get camera by ID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Camera ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/camera.CameraResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "camera"
+                ],
+                "summary": "Update camera configuration",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Camera ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Updated parameters",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/camera.UpdateCameraRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/camera.CameraResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "camera"
+                ],
+                "summary": "Delete camera",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Camera ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/cameras/{id}/credentials": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "camera"
+                ],
+                "summary": "Get camera plaintext credentials",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Camera ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/camera.CameraCredentialsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/cameras/{id}/diagnose": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "camera"
+                ],
+                "summary": "Manually diagnose camera connection",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Camera ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/camera.DiagnoseResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/health": {
             "get": {
                 "produces": [
@@ -356,6 +725,277 @@ const docTemplate = `{
                 },
                 "username": {
                     "type": "string"
+                }
+            }
+        },
+        "camera.CameraCredentialsResponse": {
+            "type": "object",
+            "properties": {
+                "cameraId": {
+                    "type": "string"
+                },
+                "credentials": {
+                    "description": "role -\u003e full plaintext RTSP URL",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "camera.CameraResponse": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "degraded": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "health": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lastCheckedAt": {
+                    "type": "string"
+                },
+                "lastSuccessAt": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "integer"
+                },
+                "session": {
+                    "type": "string"
+                },
+                "stale": {
+                    "type": "boolean"
+                },
+                "streams": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/camera.StreamResponse"
+                    }
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "camera.CameraStateInfo": {
+            "type": "object",
+            "properties": {
+                "cameraId": {
+                    "type": "string"
+                },
+                "degraded": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "health": {
+                    "type": "string"
+                },
+                "lastCheckedAt": {
+                    "type": "string"
+                },
+                "lastSuccessAt": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "integer"
+                },
+                "session": {
+                    "type": "string"
+                },
+                "stale": {
+                    "type": "boolean"
+                },
+                "streams": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/camera.StreamStateInfo"
+                    }
+                }
+            }
+        },
+        "camera.CreateCameraRequest": {
+            "type": "object",
+            "required": [
+                "mainStream",
+                "name"
+            ],
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "mainStream": {
+                    "$ref": "#/definitions/camera.CreateStreamRequest"
+                },
+                "name": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 1
+                },
+                "subStream": {
+                    "$ref": "#/definitions/camera.CreateStreamRequest"
+                }
+            }
+        },
+        "camera.CreateStreamRequest": {
+            "type": "object",
+            "required": [
+                "rtspUrl"
+            ],
+            "properties": {
+                "protocol": {
+                    "description": "\"rtsp\" (default)",
+                    "type": "string"
+                },
+                "role": {
+                    "description": "\"main\" or \"sub\"",
+                    "type": "string"
+                },
+                "rtspUrl": {
+                    "type": "string"
+                },
+                "transport": {
+                    "description": "\"tcp\" or \"udp\" (default \"tcp\")",
+                    "type": "string"
+                }
+            }
+        },
+        "camera.DiagnoseResponse": {
+            "type": "object",
+            "properties": {
+                "cameraId": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "state": {
+                    "$ref": "#/definitions/camera.CameraStateInfo"
+                }
+            }
+        },
+        "camera.StreamResponse": {
+            "type": "object",
+            "properties": {
+                "codec": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "fps": {
+                    "type": "number"
+                },
+                "fpsString": {
+                    "type": "string"
+                },
+                "height": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "protocol": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "rtspUrl": {
+                    "description": "Complete RTSP URL for frontend playback and display",
+                    "type": "string"
+                },
+                "runtimeState": {
+                    "$ref": "#/definitions/camera.StreamStateInfo"
+                },
+                "transport": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "width": {
+                    "type": "integer"
+                }
+            }
+        },
+        "camera.StreamStateInfo": {
+            "type": "object",
+            "properties": {
+                "consecutiveFailures": {
+                    "type": "integer"
+                },
+                "errorMessage": {
+                    "type": "string"
+                },
+                "evidenceType": {
+                    "type": "string"
+                },
+                "health": {
+                    "type": "string"
+                },
+                "lastCheckedAt": {
+                    "type": "string"
+                },
+                "lastSuccessAt": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "session": {
+                    "type": "string"
+                }
+            }
+        },
+        "camera.UpdateCameraRequest": {
+            "type": "object",
+            "required": [
+                "revision"
+            ],
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "mainStream": {
+                    "$ref": "#/definitions/camera.CreateStreamRequest"
+                },
+                "name": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 1
+                },
+                "revision": {
+                    "type": "integer"
+                },
+                "subStream": {
+                    "$ref": "#/definitions/camera.CreateStreamRequest"
                 }
             }
         },

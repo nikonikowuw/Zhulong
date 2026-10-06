@@ -20,7 +20,8 @@
   "subtasks": [],
   "children": [
     "10-05-native-ffmpeg-ingestion",
-    "10-05-go-cgo-media-bridge"
+    "10-05-go-cgo-media-bridge",
+    "10-05-camera-lifecycle"
   ],
   "parent": null,
   "relatedFiles": [],

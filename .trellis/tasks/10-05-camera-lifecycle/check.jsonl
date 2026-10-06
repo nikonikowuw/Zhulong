@@ -1,0 +1,15 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "摄像机后端规划、跨层合同与验证边界"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "摄像机后端规划、跨层合同与验证边界"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "摄像机后端规划、跨层合同与验证边界"}
+{"file": ".trellis/spec/backend/authentication-guidelines.md", "reason": "摄像机后端规划、跨层合同与验证边界"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "摄像机后端规划、跨层合同与验证边界"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "摄像机后端规划、跨层合同与验证边界"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "摄像机后端规划、跨层合同与验证边界"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "摄像机后端规划、跨层合同与验证边界"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "摄像机后端规划、跨层合同与验证边界"}
+{"file": ".trellis/tasks/10-05-camera-lifecycle/research/health-check-strategy.md", "reason": "摄像机后端规划、跨层合同与验证边界"}
+{"file": ".trellis/tasks/10-05-camera-lifecycle/research/repository-boundaries.md", "reason": "摄像机后端规划、跨层合同与验证边界"}
+{"file":".trellis/tasks/10-05-camera-lifecycle/research/rtsp-client-selection.md","reason":"固定候选源码、自动重定向风险和未完成的依赖门禁"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "Native extensions and ownership"}
+{"file": ".trellis/tasks/10-05-camera-lifecycle/research/rtsp-auth-alternatives.md", "reason": "Verify Digest URI qop opaque and no implicit downgrade contracts"}
+{"file": ".trellis/tasks/10-05-camera-lifecycle/research/planning-gates.md", "reason": "Check join drain handle borrowing token lifetime generation and sized outputs"}

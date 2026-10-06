@@ -35,7 +35,12 @@ func TestRouterSeparatesAPIAndSPA(t *testing.T) {
 		"index.html":    &fstest.MapFile{Data: []byte("<!doctype html><title>shell</title>")},
 		"assets/app.js": &fstest.MapFile{Data: []byte("window.app = true")},
 	})
-	router := newRouter(zap.NewNop(), readinessStub(true), readinessStub(true), nil, assets)
+	router := newRouter(RouterParams{
+		Logger:        zap.NewNop(),
+		DatabaseReady: readinessStub(true),
+		NativeReady:   readinessStub(true),
+		Assets:        assets,
+	})
 
 	tests := []struct {
 		name       string
@@ -70,9 +75,14 @@ func TestRouterSeparatesAPIAndSPA(t *testing.T) {
 
 func TestHealthRequiresInitializedDependencies(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	router := newRouter(zap.NewNop(), readinessStub(false), readinessStub(true), nil, http.FS(fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte("shell")},
-	}))
+	router := newRouter(RouterParams{
+		Logger:        zap.NewNop(),
+		DatabaseReady: readinessStub(false),
+		NativeReady:   readinessStub(true),
+		Assets: http.FS(fstest.MapFS{
+			"index.html": &fstest.MapFile{Data: []byte("shell")},
+		}),
+	})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	router.ServeHTTP(recorder, request)
@@ -106,9 +116,17 @@ func (a authStubService) GetStatus(ctx context.Context) (auth.AuthStatusResponse
 
 func TestRouterMountsAuthEndpoints(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	router := newRouter(zap.NewNop(), readinessStub(true), readinessStub(true), authStubService{}, http.FS(fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte("shell")},
-	}))
+	authStub := authStubService{}
+	router := newRouter(RouterParams{
+		Logger:        zap.NewNop(),
+		DatabaseReady: readinessStub(true),
+		NativeReady:   readinessStub(true),
+		AuthService:   authStub,
+		PublicRoutes:  []RouteRegistrar{auth.NewHandler(authStub)},
+		Assets: http.FS(fstest.MapFS{
+			"index.html": &fstest.MapFile{Data: []byte("shell")},
+		}),
+	})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil)
 	router.ServeHTTP(recorder, request)
@@ -123,9 +141,17 @@ func TestRouterMountsAuthEndpoints(t *testing.T) {
 
 func TestRouterRejectsOversizedAPIRequestBodies(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	router := newRouter(zap.NewNop(), readinessStub(true), readinessStub(true), authStubService{}, http.FS(fstest.MapFS{
-		"index.html": &fstest.MapFile{Data: []byte("shell")},
-	}))
+	authStub := authStubService{}
+	router := newRouter(RouterParams{
+		Logger:        zap.NewNop(),
+		DatabaseReady: readinessStub(true),
+		NativeReady:   readinessStub(true),
+		AuthService:   authStub,
+		PublicRoutes:  []RouteRegistrar{auth.NewHandler(authStub)},
+		Assets: http.FS(fstest.MapFS{
+			"index.html": &fstest.MapFile{Data: []byte("shell")},
+		}),
+	})
 	body := `{"padding":"` + strings.Repeat("a", int(httpmiddleware.MaxAPIRequestBodyBytes)) + `"}`
 
 	for _, knownLength := range []bool{true, false} {
@@ -146,6 +172,52 @@ func TestRouterRejectsOversizedAPIRequestBodies(t *testing.T) {
 				t.Fatalf("expected localized 413 error response, got %d: %s", recorder.Code, recorder.Body.String())
 			}
 		})
+	}
+}
+
+type dummyModularRegistrar struct {
+	path string
+}
+
+func (d dummyModularRegistrar) RegisterRoutes(rg *gin.RouterGroup) {
+	rg.GET(d.path, func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"module": d.path})
+	})
+}
+
+func TestRouterModularRouteRegistration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	authStub := authStubService{}
+	router := newRouter(RouterParams{
+		Logger:        zap.NewNop(),
+		DatabaseReady: readinessStub(true),
+		NativeReady:   readinessStub(true),
+		AuthService:   authStub,
+		PublicRoutes: []RouteRegistrar{
+			dummyModularRegistrar{path: "/public-demo"},
+		},
+		ProtectedRoutes: []RouteRegistrar{
+			dummyModularRegistrar{path: "/protected-demo"},
+		},
+		Assets: http.FS(fstest.MapFS{
+			"index.html": &fstest.MapFile{Data: []byte("shell")},
+		}),
+	})
+
+	// Public route should be reachable without auth
+	w1 := httptest.NewRecorder()
+	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/public-demo", nil)
+	router.ServeHTTP(w1, req1)
+	if w1.Code != http.StatusOK || !contains(w1.Body.String(), `"module":"/public-demo"`) {
+		t.Fatalf("unexpected public modular route response: %d, %s", w1.Code, w1.Body.String())
+	}
+
+	// Protected route should require auth (401 unauthorized when unauthenticated)
+	w2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/protected-demo", nil)
+	router.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 on protected modular route without session, got %d", w2.Code)
 	}
 }
 

@@ -16,8 +16,8 @@
 
 | 阶段 | 严格顺序 |
 | --- | --- |
-| **启动 (`lifecycleRuntime.Start`)** | 1. 打开 GORM/SQLite 并执行嵌入式版本化迁移 (失败则阻断) ➔ 2. 创建并启动无硬件 C++ 生命周期 stub ➔ 3. 绑定 TCP listener 并启动 Gin HTTP Serve |
-| **停止 (`lifecycleRuntime.Stop`)** | 1. 优雅关闭 HTTP 并等待 Serve 退出 ➔ 2. 停止并销毁 C++ opaque handle ➔ 3. 关闭 SQLite pool ➔ 4. Sync Zap |
+| **启动 (`lifecycleRuntime.Start`)** | 1. 打开 GORM/SQLite 并执行嵌入式版本化迁移 (失败则阻断) ➔ 2. 创建并启动 Native C++ Engine ➔ 3. 校验/初始化相机 AES-256-GCM 密钥（已有密文而密钥缺失则阻断）➔ 4. 启动 Camera HealthScheduler ➔ 5. 绑定 TCP listener 并启动 Gin HTTP Serve |
+| **停止 (`lifecycleRuntime.Stop`)** | 1. 优雅关闭 HTTP 并等待 Serve 退出 ➔ 2. 关闭 SSE Hub 与停止 Camera HealthScheduler ➔ 3. 停止并销毁 C++ opaque handle ➔ 4. 关闭 SQLite pool ➔ 5. Sync Zap |
 
 启动的后续步骤失败时，`lifecycleRuntime.Start` 在返回错误前按逆序清理已打开资源，因为 Fx 不会对失败的 `OnStart` 自动调用该 hook 的 `OnStop`。正常停机时先排空 HTTP 请求，再释放 native 与数据库资源。当前 native stub 不创建 worker thread、媒体流水线或 NPU context；未来增加后台线程时，必须先停止、唤醒并 Join 后才能销毁句柄。
 
@@ -50,3 +50,16 @@ func TestAppDependencyGraph(t *testing.T) {
     }
 }
 ```
+
+---
+
+## 5. 模块化路由自动装配 (Value Groups)
+
+为避免每次新增业务模块都修改全局 `router.go`，采用 Uber Fx 值组（Value Groups / Multibindings）进行解耦：
+
+1. **统一注册接口**：在 `internal/app/router.go` 定义 `RouteRegistrar` 接口（`RegisterRoutes(rg *gin.RouterGroup)`）。业务 Handler 直接实现该接口（如 `camera.Handler`、`auth.Handler`）。
+2. **公开与保护路由分流**：
+   - 公开端点（如初始化、登录）：在装配中作为 `RouteRegistrar` 打标 `group:"public_routes"`，挂载至 `/api/v1` 根组。
+   - 受保护端点（如摄像机、录像、AI）：在装配中打标 `group:"protected_routes"`，自动挂载至受 `auth.RequireAuth` 保护的子路由组。
+3. **上帝路由器解耦**：`newRouter` 仅接收 `p.PublicRoutes` 与 `p.ProtectedRoutes` 切片并遍历挂载，不引用任何特定业务包（如 `internal/camera`），新增模块时 `router.go` 保持零修改。
+

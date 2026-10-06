@@ -43,6 +43,22 @@ func TestOpenAndMigrateCreatesVersionedSchema(t *testing.T) {
 	if usersTable != "users" {
 		t.Fatalf("expected migrated users table, got %q", usersTable)
 	}
+
+	var camerasTable string
+	if err := store.db.Raw("SELECT name FROM sqlite_master WHERE type = ? AND name = ?", "table", "cameras").Scan(&camerasTable).Error; err != nil {
+		t.Fatalf("query migrated table cameras: %v", err)
+	}
+	if camerasTable != "cameras" {
+		t.Fatalf("expected migrated cameras table, got %q", camerasTable)
+	}
+
+	var streamsTable string
+	if err := store.db.Raw("SELECT name FROM sqlite_master WHERE type = ? AND name = ?", "table", "camera_streams").Scan(&streamsTable).Error; err != nil {
+		t.Fatalf("query migrated table camera_streams: %v", err)
+	}
+	if streamsTable != "camera_streams" {
+		t.Fatalf("expected migrated camera_streams table, got %q", streamsTable)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
