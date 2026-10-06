@@ -365,14 +365,38 @@ Session summary was not supplied.
 | `71af22d` | docs(spec): document packet activity throttling and singleflight streaming |
 | `9695458` | docs(task): record task planning and implementation for 10-06-camera-stream-fixes |
 
-### Testing
-
-- [OK] `go test -race -v -count=1 ./internal/camera/...`: 31 项测试 100% 通过，无数据竞态
-- [OK] `go test -race ./cmd/... ./internal/...`: 全量后端模块测试全部通过
-- [OK] `go vet ./cmd/... ./internal/...`: 静态分析 0 警告
-- [OK] `gofmt -l cmd internal`: 代码格式符合规范
-
 ### Status
 
 [OK] **Completed**
+
+---
+
+## 2026-10-06 管理控制台 Console 布局重构与管理仪表盘升级
+
+全面重构前端 UI 体系，彻底去除 SaaS 产品介绍/营销落地页（Landing Page）风格，蜕变为专业高密度的安防与设备管理控制台（Management Console）。
+
+### Main Changes
+
+- **经典管理后台架构 (`Sidebar.tsx`, `ConsoleTopbar.tsx`, `App.tsx`)**：
+  - 采用固定/可收缩左侧边栏（`Sidebar`），支持 240px 展开 / 64px 紧凑图标模式，偏好自动保存至 `localStorage`，并在小屏设备下支持抽屉式遮罩交互。
+  - 统一控制台顶部操作栏（`ConsoleTopbar`），集成模块面包屑、全局在线设备状态徽章、全屏模式切换、手动数据刷新、三语语言选择与主题切换。
+  - 彻底解开工作区 `max-width: 1200px` 限制，采用全宽自适应流式工作台（Fluid Workspace），使实时监控多路矩阵与设备卡片网格能够充分利用大屏宽度。
+- **视觉彻底去营销化 (`styles.css`)**：
+  - 移除 `.ambient-background` 与 4 个浮动毛玻璃大光斑（`.ambient-orb-1~4`）及其 Keyframe 动画，显著降低 GPU 与合成器额外开销。
+  - 规范现代工业质感配色彩板，采用 Slate/Zinc 高对比度、精炼边框与紧凑状态指示灯。
+- **系统概览升级为综合管理仪表盘 (`OverviewDashboard.tsx`)**：
+  - 增加 4 大核心运行 KPI 卡片：摄像机资产总览、实时视频流就绪通道、AI 原生推理引擎加速态、主机服务就绪态。
+  - 融合组件健康详情面板（Host / Database / Native Engine），并提供直达实时监控、设备管理与流诊断的快速通道。
+- **三语国际化与测试覆盖**：
+  - 同步补齐 `en.json`、`zh-Hans.json`、`zh-Hant.json` 中的控制台相关词条。
+  - 为 `Sidebar`、`ConsoleTopbar` 与 `OverviewDashboard` 补全单元与交互测试，全量 25 个测试套件（93 个测试用例）100% 通过。
+
+### Testing
+
+- [OK] `npm run type-check`: TypeScript 严格类型检查无任何 `any`
+- [OK] `npm run lint`: ESLint 0 错误 0 警告
+- [OK] `npm run test`: Vitest 25 个测试文件 93 个测试用例全部通过
+- [OK] `npm run build`: Vite 生产环境构建打包成功
+- [OK] `python3 native/scripts/build.py go test ./...`: 后端与 CGO 原生引擎回归测试全部通过
+
 

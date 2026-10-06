@@ -99,6 +99,38 @@ web/src/
 - `camera.emptySearchDesc`: 请尝试调整搜索关键词或重置筛选条件
 - `camera.clearFilters`: 清除筛选
 
+### 2.6 管理控制台架构与仪表盘设计 (`app` & `systemStatus`)
+- **布局分层设计**：
+  ```txt
+  ConsoleLayout
+  ├── Sidebar (固定左侧，width: 240px，折叠时 64px)
+  │   ├── Brand (Logo + "Zhulong Console" + 折叠按钮)
+  │   ├── NavMenu (概览 / 实时监控 / 设备管理)
+  │   └── Footer (硬件运行环境与版本号、折叠切换)
+  └── MainLayout (flex-1 flex-col min-w-0)
+      ├── Topbar (粘性顶部，高 52px)
+      │   ├── Left: 面包屑 / 页面标题 + 实时状态徽标 (如 "在线: 2/3")
+      │   └── Right: 全屏按钮 + 刷新 + 语言 + 主题 + 用户
+      ├── FluidWorkspace (flex-1 p-4 md:p-6 min-h-0 overflow-auto)
+      │   └── Active Page (Overview / Live / Cameras)
+      └── ConsoleFooter (简洁系统状态信息)
+  ```
+- **工作区自适应策略**：
+  - 去除 `.workspace { max-width: 1200px; margin: 0 auto; }`。
+  - 对于 `/live` 监控页面，提供接近 100% 宽度和自适应纵向高度的视口网格，支持侧边栏折叠以最大化监视空间。
+  - 对于 `/cameras` 设备页面，支持流式自适应网格与搜索栏。
+- **系统概览仪表盘 (Overview Dashboard)**：
+  - 核心 KPI Cards：
+    - 设备总数 / 在线率统计（总数、在线、离线、告警数）
+    - 实时流传输与路数状态
+    - NPU / AI 推理引擎就绪状态
+    - 系统服务运行健康度
+  - 健康度细节列表（Host / Database / Engine）
+  - 快捷操作工具卡（直达多路监控、添加设备、一键诊断）
+- **去营销化视觉设计**：
+  - 彻底移除 `styles.css` 中的 `.ambient-background` 和 `.ambient-orb` 及其 keyframe 动效。
+  - 采用现代专业控制台样式：清晰的边框、工控仪表风格的暗色/亮色对比度、微阴影、规整的网格间距。
+
 ---
 
 ## 3. 风险与降级措施
@@ -108,3 +140,5 @@ web/src/
 | **Canvas 跨域污损 (Tainted Canvas)** | 画面来自纯二进制 WebCodecs `VideoFrame` 直接绘制在同源 Canvas，不存在 CORS 跨域限制，`toBlob` 安全 |
 | **内存/显存泄漏** | RAF 节流中如有未绘制的新旧帧替换，必须严格且立即调用 `frame.close()` |
 | **快捷键与其他操作冲突** | 监听时严格判定 `document.activeElement`，输入框、Modal 激活状态下自动屏蔽 1/4/9 快捷键 |
+| **移动端侧边栏遮挡** | 采用响应式设计：小屏幕（<768px）折叠为抽屉式（Drawer）覆盖层，点击外部背景自动关闭 |
+| **大屏监控空间不足** | 侧边栏支持一键收起为紧凑图标栏（64px），实时监控视图自动撑满剩余宽度 |

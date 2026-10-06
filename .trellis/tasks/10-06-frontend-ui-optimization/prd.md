@@ -43,6 +43,25 @@
 - **REQ-4.2 质量门禁检验**：
   - TypeScript 严格类型检查无 `any`，ESLint 规范通过，Vitest 单元/组件测试 100% 通过，生产构建 `npm run build` 成功。
 
+### REQ-5: 管理系统控制台布局与管理仪表盘重构 (`app` & `systemStatus`)
+- **REQ-5.1 侧边栏控制台布局 (Sidebar Console Layout)**：
+  - 彻底重构从单栏 1200px 居中产品介绍页到管理系统经典架构：左侧固定/可折叠 Sidebar + 顶部控制台 Topbar + 右侧流式全宽工作区 (Fluid Workspace)。
+  - Sidebar 支持展开/折叠（Icon 模式），记住折叠状态（localStorage），在移动端支持抽屉遮罩交互。
+  - Sidebar 包含品牌 Logo、管理后台标签、模块菜单（系统概览、实时监控、设备管理），以及底部折叠开关与硬件运行环境信息。
+- **REQ-5.2 顶部控制台栏 (Console Topbar)**：
+  - 包含当前模块的面包屑导航（Breadcrumb）或视图标题。
+  - 包含快捷全局运行状态指示徽章（例如在线设备统计与健康指示）。
+  - 右侧保留全屏切换、全局刷新、语言选择、主题切换、用户登出面板。
+- **REQ-5.3 移除营销/展示页视觉噪音 (De-landing Aesthetics)**：
+  - 彻底移除 `ambient-background` 与 4 个 `ambient-orb` 漂浮光斑与相关过度模糊动画，减轻 GPU 渲染负担并提升工业专业感。
+  - 移除大号居中口号和宣讲性副标题，转为紧凑专业的控制台头部。
+  - 解除 `max-width: 1200px` 限制，使多路实时监控（Live View）和设备列表（Camera Grid）能充分利用屏幕宽度，实现自适应流式排版。
+- **REQ-5.4 系统概览重构为管理仪表盘 (Overview Dashboard)**：
+  - 概览页从单调的单个居中卡片升级为管理仪表盘模式：
+    - 顶部 4 个核心 KPI 卡片：已接入设备总数/在线数、活跃流状态、推理加速/引擎状态、系统健康概况。
+    - 中部服务健康度（Host / DB / Engine）状态面板。
+    - 快速操作指引入口（一键跳转实时监控、添加设备、推流诊断）。
+
 ## Acceptance Criteria
 
 - [ ] 按键盘 `1` / `4` / `9` 正常切换 1/4/9 宫格，`Esc` 退出全屏，文本输入聚焦时不误触。
@@ -51,6 +70,10 @@
 - [ ] 摄像机页面提供搜索栏、状态过滤标签与排序下拉选择，能够精确多条件联合筛选。
 - [ ] 筛选无匹配结果时显示「未找到匹配的摄像机」及「清除筛选」重置按钮。
 - [ ] WebCodecs 渲染由 RAF 节流保护，`VideoFrame.close()` 严格闭合无内存泄漏。
+- [ ] 系统采用左侧边栏 (Sidebar) + 顶部控制台栏 (Topbar) + 全宽流式工作区 (Fluid Workspace) 布局。
+- [ ] 侧边栏支持展开与折叠（收起至紧凑图标栏），并在移动端响应式显示。
+- [ ] 移除 `ambient-background`、`ambient-orb` 动画及固定 1200px 宽度限制，实时监控与设备列表占满自适应工作区。
+- [ ] 概览页重构为包含 KPI 指标卡片、组件健康面板与快捷操作的管理控制台仪表盘。
 - [ ] `locales/en.json`、`locales/zh-Hans.json`、`locales/zh-Hant.json` 包含全部新增文本。
 - [ ] `npm run lint`、`npm run type-check`、`npm run test`、`npm run build` 在 `web/` 下全部通过。
 
