@@ -64,18 +64,18 @@
 
 ## Acceptance Criteria
 
-- [ ] 按键盘 `1` / `4` / `9` 正常切换 1/4/9 宫格，`Esc` 退出全屏，文本输入聚焦时不误触。
-- [ ] 活动视口支持点击截图按钮，正确导出当前画面 PNG 图片并带相机 ID 和时间戳。
-- [ ] 活动视口支持切换 Telemetry HUD 显隐，保持独立或默认偏好受控。
-- [ ] 摄像机页面提供搜索栏、状态过滤标签与排序下拉选择，能够精确多条件联合筛选。
-- [ ] 筛选无匹配结果时显示「未找到匹配的摄像机」及「清除筛选」重置按钮。
-- [ ] WebCodecs 渲染由 RAF 节流保护，`VideoFrame.close()` 严格闭合无内存泄漏。
-- [ ] 系统采用左侧边栏 (Sidebar) + 顶部控制台栏 (Topbar) + 全宽流式工作区 (Fluid Workspace) 布局。
-- [ ] 侧边栏支持展开与折叠（收起至紧凑图标栏），并在移动端响应式显示。
-- [ ] 移除 `ambient-background`、`ambient-orb` 动画及固定 1200px 宽度限制，实时监控与设备列表占满自适应工作区。
-- [ ] 概览页重构为包含 KPI 指标卡片、组件健康面板与快捷操作的管理控制台仪表盘。
-- [ ] `locales/en.json`、`locales/zh-Hans.json`、`locales/zh-Hant.json` 包含全部新增文本。
-- [ ] `npm run lint`、`npm run type-check`、`npm run test`、`npm run build` 在 `web/` 下全部通过。
+- [x] 按键盘 `1` / `4` / `9` 正常切换 1/4/9 宫格，`Esc` 退出全屏，文本输入聚焦时不误触。
+- [x] 活动视口支持点击截图按钮，正确导出当前画面 PNG 图片并带相机 ID 和时间戳。
+- [x] 活动视口支持切换 Telemetry HUD 显隐，保持独立或默认偏好受控。
+- [x] 摄像机页面提供搜索栏、状态过滤标签与排序下拉选择，能够精确多条件联合筛选。
+- [x] 筛选无匹配结果时显示「未找到匹配的摄像机」及「清除筛选」重置按钮。
+- [x] WebCodecs 渲染由 RAF 节流保护，`VideoFrame.close()` 严格闭合无内存泄漏。
+- [x] 系统采用左侧边栏 (Sidebar) + 顶部控制台栏 (Topbar) + 全宽流式工作区 (Fluid Workspace) 布局。
+- [x] 侧边栏支持展开与折叠（收起至紧凑图标栏），并在移动端响应式显示。
+- [x] 移除 `ambient-background`、`ambient-orb` 动画及固定 1200px 宽度限制，实时监控与设备列表占满自适应工作区。
+- [x] 概览页重构为包含 KPI 指标卡片、组件健康面板与快捷操作的管理控制台仪表盘。
+- [x] `locales/en.json`、`locales/zh-Hans.json`、`locales/zh-Hant.json` 包含全部新增文本。
+- [x] `npm run lint`、`npm run type-check`、`npm run test`、`npm run build` 在 `web/` 下全部通过。
 
 ## Notes
 
