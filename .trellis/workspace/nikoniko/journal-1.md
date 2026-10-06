@@ -400,6 +400,7 @@ Session summary was not supplied.
 | `2f3f4a1` | docs(task): update planning and journal for management console layout redesign |
 | `703d475` | refactor(web): move user nav and logout action from topbar to sidebar bottom |
 | `260c1a1` | refactor(web): remove obsolete mock footer text and streamline system info |
+| `8ec913f` | fix(web): enforce app viewport lock so topbar and sidebar stay fixed |
 
 ### Testing
 
