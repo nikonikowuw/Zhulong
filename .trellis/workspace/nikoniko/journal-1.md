@@ -399,6 +399,7 @@ Session summary was not supplied.
 | `8fff639` | docs(spec): document console layout and dashboard guidelines |
 | `2f3f4a1` | docs(task): update planning and journal for management console layout redesign |
 | `703d475` | refactor(web): move user nav and logout action from topbar to sidebar bottom |
+| `260c1a1` | refactor(web): remove obsolete mock footer text and streamline system info |
 
 ### Testing
 
