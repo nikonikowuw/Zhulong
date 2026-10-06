@@ -1,6 +1,6 @@
 import i18n from "@/shared/i18n";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CameraPage } from "./CameraPage";
@@ -26,6 +26,7 @@ describe("CameraPage", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -102,5 +103,36 @@ describe("CameraPage", () => {
     }
 
     expect(screen.getByRole("heading", { name: "Add Camera" })).toBeInTheDocument();
+  });
+
+  it("filters cameras by search input and shows empty filter state when no match", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        code: "OK",
+        message: "success",
+        data: [mockCamera],
+      }),
+    } as Response);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CameraPage />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Warehouse Gate")).toBeInTheDocument();
+
+    const searchInput = screen.getByPlaceholderText(/Search camera name or ID/i);
+    await user.type(searchInput, "Nonexistent");
+
+    expect(screen.queryByText("Warehouse Gate")).not.toBeInTheDocument();
+    expect(screen.getByText("No Matching Cameras Found")).toBeInTheDocument();
+
+    const clearBtn = screen.getByRole("button", { name: "Clear Filters" });
+    await user.click(clearBtn);
+
+    expect(screen.getByText("Warehouse Gate")).toBeInTheDocument();
   });
 });

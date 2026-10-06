@@ -64,5 +64,23 @@
   "diagnosing": "正在探测摄像机...",
   "diagnoseSuccess": "诊断探测已完成",
   "probeResult": "探测结果",
-  "errorMessage": "异常详情"
+  "errorMessage": "异常详情",
+  "filter": {
+    "all": "全部",
+    "online": "在线",
+    "offline": "离线",
+    "abnormal": "异常",
+    "statusGroup": "状态筛选",
+    "searchPlaceholder": "搜索摄像机名称或 ID..."
+  },
+  "sort": {
+    "label": "排序",
+    "health": "状态优先 (异常靠前)",
+    "nameAsc": "名称升序 (A-Z)",
+    "nameDesc": "名称降序 (Z-A)",
+    "updatedDesc": "最近更新优先"
+  },
+  "emptySearchTitle": "未找到匹配的摄像机",
+  "emptySearchDesc": "请尝试调整搜索关键词或重置筛选条件。",
+  "clearFilters": "清除筛选"
 }

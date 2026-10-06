@@ -18,5 +18,9 @@
   "reconnecting": "Attempting automatic reconnection...",
   "streamError": "Stream ingestion failed, check network or camera",
   "unsupportedTitle": "WebCodecs Unsupported",
-  "unsupportedDesc": "WebCodecs hardware acceleration is unavailable in this environment (requires HTTPS or localhost)."
+  "unsupportedDesc": "WebCodecs hardware acceleration is unavailable in this environment (requires HTTPS or localhost).",
+  "snapshot": "Capture Snapshot",
+  "snapshotUnavailable": "Awaiting first frame for snapshot",
+  "showTelemetry": "Show Telemetry",
+  "hideTelemetry": "Hide Telemetry"
 }

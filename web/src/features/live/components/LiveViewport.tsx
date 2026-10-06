@@ -1,9 +1,9 @@
-import { Maximize2, Minimize2, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
-import React, { useState } from 'react';
+import { Activity, Camera, Check, Maximize2, Minimize2, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
+import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SlotBinding } from '../core/types';
 import { LiveAssignModal } from './LiveAssignModal';
-import { LivePlayer } from './LivePlayer';
+import { LivePlayer, type LivePlayerHandle } from './LivePlayer';
 
 interface LiveViewportProps {
   slotIndex: number;
@@ -26,6 +26,19 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
 }) => {
   const { t } = useTranslation();
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSnapshotReady, setIsSnapshotReady] = useState(false);
+  const [isSnapshotSaved, setIsSnapshotSaved] = useState(false);
+  const [showTelemetry, setShowTelemetry] = useState(true);
+  const playerRef = useRef<LivePlayerHandle | null>(null);
+
+  const handleTakeSnapshot = async () => {
+    if (!playerRef.current || !isSnapshotReady) return;
+    const ok = await playerRef.current.takeSnapshot();
+    if (ok) {
+      setIsSnapshotSaved(true);
+      setTimeout(() => setIsSnapshotSaved(false), 1500);
+    }
+  };
 
   return (
     <div
@@ -53,8 +66,35 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
               </button>
             </div>
 
-            {/* 右侧：单槽位全屏与关闭按钮 */}
-            <div className="flex items-center gap-1.5 pointer-events-auto backdrop-blur-md bg-black/60 border border-white/10 p-1 rounded-full shadow-sm">
+            {/* 右侧：截图、遥测、更换、单槽位全屏与关闭按钮 */}
+            <div className="flex items-center gap-1 pointer-events-auto backdrop-blur-md bg-black/60 border border-white/10 p-1 rounded-full shadow-sm">
+              <button
+                type="button"
+                onClick={() => void handleTakeSnapshot()}
+                disabled={!isSnapshotReady}
+                title={isSnapshotReady ? t('live.snapshot', '截取画面快照') : t('live.snapshotUnavailable', '等待首帧就绪后截图')}
+                className={`p-1 rounded-full transition-colors cursor-pointer ${
+                  isSnapshotReady
+                    ? 'hover:bg-white/20 text-white/80 hover:text-white'
+                    : 'opacity-40 cursor-not-allowed text-white/40'
+                }`}
+              >
+                {isSnapshotSaved ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                ) : (
+                  <Camera className="w-3.5 h-3.5" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowTelemetry((prev) => !prev)}
+                title={showTelemetry ? t('live.hideTelemetry', '隐藏遥测指标') : t('live.showTelemetry', '显示遥测指标')}
+                className={`p-1 rounded-full transition-colors cursor-pointer ${
+                  showTelemetry ? 'text-blue-400 hover:bg-white/20' : 'text-white/40 hover:bg-white/20'
+                }`}
+              >
+                <Activity className="w-3.5 h-3.5" />
+              </button>
               <button
                 type="button"
                 onClick={() => setIsModalOpen(true)}
@@ -87,7 +127,13 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
           </div>
 
           {/* 核心播放器 */}
-          <LivePlayer cameraId={binding.cameraId} role={binding.role} />
+          <LivePlayer
+            ref={playerRef}
+            cameraId={binding.cameraId}
+            role={binding.role}
+            showTelemetry={showTelemetry}
+            onSnapshotReady={setIsSnapshotReady}
+          />
         </>
       ) : (
         /* 空视口引导占位 */

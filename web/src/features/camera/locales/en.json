@@ -64,5 +64,23 @@
   "diagnosing": "Probing camera...",
   "diagnoseSuccess": "Diagnostic probe completed",
   "probeResult": "Probe Result",
-  "errorMessage": "Error Details"
+  "errorMessage": "Error Details",
+  "filter": {
+    "all": "All",
+    "online": "Online",
+    "offline": "Offline",
+    "abnormal": "Abnormal",
+    "statusGroup": "Health Filter",
+    "searchPlaceholder": "Search camera name or ID..."
+  },
+  "sort": {
+    "label": "Sort",
+    "health": "Health Priority",
+    "nameAsc": "Name (A-Z)",
+    "nameDesc": "Name (Z-A)",
+    "updatedDesc": "Recently Updated"
+  },
+  "emptySearchTitle": "No Matching Cameras Found",
+  "emptySearchDesc": "Try adjusting your search query or reset status filters.",
+  "clearFilters": "Clear Filters"
 }

@@ -64,5 +64,23 @@
   "diagnosing": "正在探測攝影機...",
   "diagnoseSuccess": "診斷探測已完成",
   "probeResult": "探測結果",
-  "errorMessage": "異常詳情"
+  "errorMessage": "異常詳情",
+  "filter": {
+    "all": "全部",
+    "online": "在線",
+    "offline": "離線",
+    "abnormal": "異常",
+    "statusGroup": "狀態篩選",
+    "searchPlaceholder": "搜尋攝影機名稱或 ID..."
+  },
+  "sort": {
+    "label": "排序",
+    "health": "狀態優先 (異常靠前)",
+    "nameAsc": "名稱升序 (A-Z)",
+    "nameDesc": "名稱降序 (Z-A)",
+    "updatedDesc": "最近更新優先"
+  },
+  "emptySearchTitle": "未找到匹配的攝影機",
+  "emptySearchDesc": "請嘗試調整搜尋關鍵詞或重置篩選條件。",
+  "clearFilters": "清除篩選"
 }

@@ -20,13 +20,25 @@ export const LiveDashboard: React.FC = () => {
   // 键盘快捷键监听：Esc 退出单视口全屏，1/4/9 切换布局
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // 避免在输入框、文本域或选择框中误触快捷键
+      const isInputActive = ['INPUT', 'TEXTAREA', 'SELECT'].includes(
+        (document.activeElement?.tagName || '').toUpperCase(),
+      );
+      if (isInputActive) return;
+
       if (e.key === 'Escape' && fullscreenSlot !== null) {
         setFullscreenSlot(null);
+      } else if (e.key === '1') {
+        setMode(1);
+      } else if (e.key === '4') {
+        setMode(4);
+      } else if (e.key === '9') {
+        setMode(9);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [fullscreenSlot, setFullscreenSlot]);
+  }, [fullscreenSlot, setFullscreenSlot, setMode]);
 
   const slotCount = mode;
   const slotIndices = Array.from({ length: slotCount }, (_, i) => i);

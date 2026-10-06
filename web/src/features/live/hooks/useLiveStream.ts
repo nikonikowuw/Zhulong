@@ -49,10 +49,11 @@ export function useLiveStream({
     codec: 'unknown',
   });
 
-  // 遥测计数
+  // 遥测计数与渲染调度
   const frameCountRef = useRef(0);
   const byteCountRef = useRef(0);
   const lastMetricsTimeRef = useRef(0);
+  const lastResolutionRef = useRef<string | null>(null);
   const decoderRef = useRef<StreamDecoder | null>(null);
 
   useEffect(() => {
@@ -63,6 +64,28 @@ export function useLiveStream({
     frameCountRef.current = 0;
     byteCountRef.current = 0;
     lastMetricsTimeRef.current = Date.now();
+    lastResolutionRef.current = null;
+
+    let pendingFrame: VideoFrame | null = null;
+    let rafId: number | null = null;
+
+    const renderLoop = () => {
+      if (pendingFrame && canvasRef?.current) {
+        const frame = pendingFrame;
+        pendingFrame = null;
+        const canvas = canvasRef.current;
+        if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+          canvas.width = frame.displayWidth;
+          canvas.height = frame.displayHeight;
+        }
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+        }
+        frame.close();
+      }
+      rafId = null;
+    };
 
     // 初始化解码器
     if (isSupported) {
@@ -71,25 +94,39 @@ export function useLiveStream({
           frameCountRef.current++;
           setHasFirstFrame(true);
 
-          if (canvasRef?.current) {
-            const canvas = canvasRef.current;
-            if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
-              canvas.width = frame.displayWidth;
-              canvas.height = frame.displayHeight;
-            }
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-              ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
-            }
+          // 仅在分辨率变更时触发 React 状态更新，避免 30/60fps 持续触发组件重渲染
+          const resStr = `${frame.displayWidth}x${frame.displayHeight}`;
+          if (lastResolutionRef.current !== resStr) {
+            lastResolutionRef.current = resStr;
+            setTelemetry((prev) => ({
+              ...prev,
+              resolution: resStr,
+            }));
           }
 
-          setTelemetry((prev) => ({
-            ...prev,
-            resolution: `${frame.displayWidth}x${frame.displayHeight}`,
-          }));
-
-          // ⚠️ 极其关键：必须主动关闭以释放底层显存！
-          frame.close();
+          // 利用 requestAnimationFrame 节流绘制；若旧帧未被消耗则先行释放以防显存泄漏
+          if (typeof requestAnimationFrame !== 'undefined') {
+            if (pendingFrame) {
+              pendingFrame.close();
+            }
+            pendingFrame = frame;
+            if (rafId === null) {
+              rafId = requestAnimationFrame(renderLoop);
+            }
+          } else {
+            if (canvasRef?.current) {
+              const canvas = canvasRef.current;
+              if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
+                canvas.width = frame.displayWidth;
+                canvas.height = frame.displayHeight;
+              }
+              const ctx = canvas.getContext('2d');
+              if (ctx) {
+                ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+              }
+            }
+            frame.close();
+          }
         },
         onError: (err) => {
           setError(err.message);
@@ -140,6 +177,14 @@ export function useLiveStream({
 
     return () => {
       clearInterval(metricsInterval);
+      if (rafId !== null && typeof cancelAnimationFrame !== 'undefined') {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      if (pendingFrame) {
+        pendingFrame.close();
+        pendingFrame = null;
+      }
       unsubscribe();
       if (decoderRef.current) {
         decoderRef.current.close();

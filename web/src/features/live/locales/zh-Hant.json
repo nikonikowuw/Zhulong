@@ -18,5 +18,9 @@
   "reconnecting": "正在嘗試自動重連...",
   "streamError": "碼流拉取異常，請檢查設備或網絡",
   "unsupportedTitle": "WebCodecs 不可用",
-  "unsupportedDesc": "當前瀏覽器未啟用 WebCodecs 硬件加速或處於非安全上下文（需 HTTPS 或 localhost）。"
+  "unsupportedDesc": "當前瀏覽器未啟用 WebCodecs 硬件加速或處於非安全上下文（需 HTTPS 或 localhost）。",
+  "snapshot": "截取畫面快照",
+  "snapshotUnavailable": "等待首幀就緒後截圖",
+  "showTelemetry": "顯示遙測指標",
+  "hideTelemetry": "隱藏遙測指標"
 }

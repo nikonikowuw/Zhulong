@@ -9,3 +9,5 @@ HTMLCanvasElement.prototype.getContext = (() => ({
   measureText: () => ({ width: 0 }),
   drawImage: () => {},
 } as unknown as CanvasRenderingContext2D)) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+
+HTMLCanvasElement.prototype.toDataURL = (() => 'data:image/png;base64,mock') as unknown as typeof HTMLCanvasElement.prototype.toDataURL;

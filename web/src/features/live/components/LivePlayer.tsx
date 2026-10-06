@@ -1,24 +1,33 @@
 import { AlertCircle, AlertTriangle, Loader2 } from 'lucide-react';
-import React, { useRef } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { RoiBox } from '../core/types';
 import { useLiveStream } from '../hooks/useLiveStream';
 import { LiveTelemetryHud } from './LiveTelemetryHud';
 import { RoiOverlayCanvas } from './RoiOverlayCanvas';
 
-interface LivePlayerProps {
+export interface LivePlayerHandle {
+  takeSnapshot: () => Promise<boolean>;
+}
+
+export interface LivePlayerProps {
   cameraId: string;
   role?: 'main' | 'sub';
   boxes?: RoiBox[];
   showTelemetry?: boolean;
+  onSnapshotReady?: (ready: boolean) => void;
 }
 
-export const LivePlayer: React.FC<LivePlayerProps> = ({
-  cameraId,
-  role = 'main',
-  boxes = [],
-  showTelemetry = true,
-}) => {
+export const LivePlayer = forwardRef<LivePlayerHandle, LivePlayerProps>(function LivePlayer(
+  {
+    cameraId,
+    role = 'main',
+    boxes = [],
+    showTelemetry = true,
+    onSnapshotReady,
+  },
+  ref,
+) {
   const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -28,6 +37,39 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
     canvasRef,
     enabled: true,
   });
+
+  useEffect(() => {
+    onSnapshotReady?.(hasFirstFrame);
+  }, [hasFirstFrame, onSnapshotReady]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      takeSnapshot: async () => {
+        const canvas = canvasRef.current;
+        if (!canvas || !hasFirstFrame) {
+          return false;
+        }
+        try {
+          const dataUrl = canvas.toDataURL('image/png');
+          const a = document.createElement('a');
+          const now = new Date();
+          const pad = (n: number) => String(n).padStart(2, '0');
+          const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+          a.href = dataUrl;
+          a.download = `snapshot_${cameraId}_${role}_${timestamp}.png`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          return true;
+        } catch (e) {
+          console.error('Failed to take snapshot:', e);
+          return false;
+        }
+      },
+    }),
+    [cameraId, role, hasFirstFrame],
+  );
 
   return (
     <div className="relative w-full h-full bg-neutral-950 flex items-center justify-center overflow-hidden select-none group">
@@ -89,4 +131,4 @@ export const LivePlayer: React.FC<LivePlayerProps> = ({
       )}
     </div>
   );
-};
+});

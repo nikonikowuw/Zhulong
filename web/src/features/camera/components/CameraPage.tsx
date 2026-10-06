@@ -4,7 +4,6 @@ import {
   LoaderCircle,
   Plus,
   RefreshCw,
-  Video,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
@@ -15,8 +14,11 @@ import {
   useDiagnoseCameraMutation,
 } from "../hooks/useCameras";
 import { useCameraEvents } from "../hooks/useCameraEvents";
+import { useCameraFilter } from "../hooks/useCameraFilter";
 import { CameraDashboard } from "./CameraDashboard";
 import { CameraCard } from "./CameraCard";
+import { CameraFilterBar } from "./CameraFilterBar";
+import { CameraEmptyState } from "./CameraEmptyState";
 import { CameraFormModal } from "./CameraFormModal";
 import { CameraDiagnoseModal } from "./CameraDiagnoseModal";
 import { DeleteConfirmModal } from "./DeleteConfirmModal";
@@ -34,6 +36,19 @@ export function CameraPage() {
   const updateMutation = useUpdateCameraMutation();
   const deleteMutation = useDeleteCameraMutation();
   const diagnoseMutation = useDiagnoseCameraMutation();
+
+  // Filter, search and sorting state
+  const {
+    keyword,
+    setKeyword,
+    healthFilter,
+    setHealthFilter,
+    sortOption,
+    setSortOption,
+    filteredCameras,
+    clearFilters,
+    counts,
+  } = useCameraFilter({ cameras: cameras ?? [] });
 
   // Modal States
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -169,38 +184,38 @@ export function CameraPage() {
         </div>
       ) : !cameras || cameras.length === 0 ? (
         /* Empty State */
-        <div className="flex flex-col items-center justify-center py-16 px-4 text-center rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface)]">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--surface-muted)] text-[var(--muted)] mb-3">
-            <Video size={28} />
-          </div>
-          <h2 className="text-base font-semibold text-[var(--foreground)]">{t("camera.emptyTitle")}</h2>
-          <p className="mt-1 text-xs text-[var(--muted)] max-w-md leading-relaxed">
-            {t("camera.emptyDescription")}
-          </p>
-          <button
-            type="button"
-            className="mt-5 inline-flex items-center gap-1.5 rounded-xl bg-[var(--button-background)] hover:bg-[var(--button-hover)] text-white px-5 py-2.5 text-xs font-medium shadow-xs transition-colors"
-            onClick={handleOpenCreate}
-          >
-            <Plus size={16} />
-            <span>{t("camera.addCamera")}</span>
-          </button>
-        </div>
+        <CameraEmptyState isFiltered={false} onAddCamera={handleOpenCreate} />
       ) : (
-        /* Camera Grid */
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2" role="region" aria-label={t("camera.title")}>
-          {cameras.map((camera) => (
-            <CameraCard
-              key={camera.id}
-              camera={camera}
-              onEdit={handleOpenEdit}
-              onDelete={handleOpenDelete}
-              onDiagnose={handleOpenDiagnose}
-              onToggleEnabled={handleToggleEnabled}
-              isToggling={togglingCameraId === camera.id}
-            />
-          ))}
-        </div>
+        /* Camera Filter Bar + Camera Grid */
+        <>
+          <CameraFilterBar
+            keyword={keyword}
+            onKeywordChange={setKeyword}
+            healthFilter={healthFilter}
+            onHealthFilterChange={setHealthFilter}
+            sortOption={sortOption}
+            onSortOptionChange={setSortOption}
+            counts={counts}
+          />
+
+          {filteredCameras.length === 0 ? (
+            <CameraEmptyState isFiltered={true} onClearFilters={clearFilters} />
+          ) : (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2" role="region" aria-label={t("camera.title")}>
+              {filteredCameras.map((camera) => (
+                <CameraCard
+                  key={camera.id}
+                  camera={camera}
+                  onEdit={handleOpenEdit}
+                  onDelete={handleOpenDelete}
+                  onDiagnose={handleOpenDiagnose}
+                  onToggleEnabled={handleToggleEnabled}
+                  isToggling={togglingCameraId === camera.id}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {/* Modals */}
