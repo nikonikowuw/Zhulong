@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/camera-guidelines.md", "reason": "摄像机主子流配置、凭据解密与正交会话状态定义"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "原生媒体流 Acquire、Preview 订阅、数据包格式与 8s 宽限期约定"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "Go-CGO 内存所有权、零拷贝与安全边界规范"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Uber Fx 生命周期装配与停机排空顺序"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "Gin 路由组织、Cookie Session 保护与 Swagger 注释"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Go 质量门禁、竞态检测与反模式约束"}

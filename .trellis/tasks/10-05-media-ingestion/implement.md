@@ -41,18 +41,18 @@
   - 实现 `cgo.Handle` 安全注册与注销机制，使用 `unsafe.Slice` 借用数据切片
   - 编写 Go-CGO 单元测试，确保无内存逃逸与指针越权
   - *验证命令*：`go test -race -v ./internal/engine/...`
-- [ ] **Step 2.2: 摄像机数据模型与 SQLite 迁移**
+- [x] **Step 2.2: 摄像机数据模型与 SQLite 迁移**
   - 创建 `internal/database/migrations/000003_create_cameras_table.up.sql`
   - 定义 `Camera` GORM 实体与凭据安全存储（AES-GCM 加密），DTO 支持为已认证管理员返回可读凭据，日志输出强制脱敏
   - 注册数据库迁移并验证向上/向下兼容
   - *验证命令*：`go test -v ./internal/database/...`
-- [ ] **Step 2.3: `internal/camera` 业务服务与探测门禁**
+- [x] **Step 2.3: `internal/camera` 业务服务与探测门禁**
   - 实现 `ParseAndSanitizeRTSP` 逆向消歧与 RFC 3986 百分号转义算法（输出规范 URL、脱敏 URL、用户名与密码），编写特殊字符测试用例
   - 实现 `CameraStore` 与 `CameraService`（详情接口向已登录管理员解密返回完整可用 RTSP URL 与密码）
   - 实现 `CreateCamera` 流程中的 3~5s 异步 Probe 探测门禁，错误配置拦截返回对应语义错误
   - 注册 `locale.go` 错误码三语翻译映射
   - *验证命令*：`go test -race -v ./internal/camera/...`
-- [ ] **Step 2.4: WebSocket 码流广播中心与 HTTP 端点**
+- [x] **Step 2.4: WebSocket 码流广播中心与 HTTP 端点**
   - 实现 `StreamHub` 广播器，维护当前通道的 Web 订阅连接列表
   - 实现 `/api/v1/cameras/:id/stream/ws` 端点（集成 JWT 鉴权与心跳保活）
   - 生成并更新 Swagger 2.0 文档
