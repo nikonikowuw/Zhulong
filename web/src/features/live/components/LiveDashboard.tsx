@@ -114,7 +114,7 @@ export const LiveDashboard: React.FC = () => {
 
       {/* 监控宫格视口容器 */}
       <div
-        className={`grid ${getGridClass()} gap-3 w-full h-[calc(100vh-13.5rem)] min-h-[500px] auto-rows-fr`}
+        className={`grid ${getGridClass()} gap-3 w-full items-start`}
       >
         {slotIndices.map((index) => {
           const binding = slots[index] || null;

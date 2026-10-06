@@ -42,9 +42,11 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
 
   return (
     <div
-      className={`relative w-full h-full bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden flex flex-col group transition-all duration-300 ${
-        isFullscreen ? 'fixed inset-0 z-50 rounded-none border-none' : 'shadow-sm'
-      }`}
+      className={`relative w-full ${
+        isFullscreen
+          ? 'fixed inset-0 z-50 rounded-none border-none h-full bg-black flex items-center justify-center'
+          : 'aspect-video rounded-xl border border-neutral-800/80 shadow-xs bg-neutral-900'
+      } overflow-hidden flex flex-col group transition-all duration-300`}
     >
       {binding ? (
         <>
