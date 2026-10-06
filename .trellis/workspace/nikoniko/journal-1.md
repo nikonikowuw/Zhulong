@@ -289,3 +289,49 @@ Session summary was not supplied.
 ### Next Steps
 
 - 推进 10-05-media-ingestion 的实时预览看板与播放器组件（10-06-live-player-grid 或 Step 3.1/3.3）
+
+
+## Session 9: 实现实时视频播放器组件与多路监控宫格看板 (10-06-live-player-grid)
+<!-- trellis-session: v=2 fp=38a9ce7fbe35d0ae -->
+
+**Date**: 2026-10-06
+**Task**: 实现实时视频播放器组件与多路监控宫格看板 (10-06-live-player-grid)
+**Package**: frontend
+**Branch**: `dev`
+
+### Summary
+
+构建纯前端低延迟视频播放与多路监控大盘，实现 ZLM1 协议解包器、FrontendStreamPool 引用计数与 3s 防抖连接池、WebCodecs 极低延迟硬件解码渲染、1/4/9 宫格看板、ROI 覆盖层与三级导航整合。
+
+### Main Changes
+
+- 实现 ZLM1 协议解包器与 Annex B NALU 提取器，严格解析 24 字节大端序帧头
+- 实现 FrontendStreamPool 单例流连接池，支持多视口单例复用、引用计数与 3s Grace Period 防抖延迟释放
+- 基于原生 WebCodecs VideoDecoder 与 Canvas 开发极低延迟 LivePlayer 播放器
+- 开发 1/4/9 宫格监控看板、视口指派、主子流切换、单槽位全屏展开与 localStorage 持久化
+- 实现 RoiOverlayCanvas 目标检测覆盖层与 LiveTelemetryHud 实时帧率/码率悬浮层
+- 顶栏导航增加实时监控 (Live) 入口，支持 Hash 路由同步与 en/zh-Hans/zh-Hant 完整三语
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8de89cd` | feat(web): implement LivePlayer, FrontendStreamPool, and 1/4/9 live dashboard |
+| `7fb247f` | docs(spec): document live player and multi-grid surveillance specifications |
+| `4163f03` | docs(task): record task planning and implementation for 10-06-live-player-grid |
+
+### Testing
+
+- [OK] npm run type-check: TypeScript 严格类型检查 0 错误
+- [OK] npm run lint: ESLint 与 React 19 Compiler 检查 0 警告 0 错误
+- [OK] npm test: 21 个测试套件 82 项单元测试 100% 通过
+- [OK] make check: 前端生产构建、Native C++ 测试、Go vet/test -race 全量门禁通过
+- [OK] make smoke: 单二进制生产交付冒烟测试通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推进 10-05-media-ingestion 的端到端流转与物理流复用集成验收 (Step 4.1/4.2) 或 Native FFmpeg 接入 (10-05-native-ffmpeg-ingestion)
