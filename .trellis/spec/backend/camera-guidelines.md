@@ -67,6 +67,8 @@ CREATE TABLE camera_streams (
 1. **轻量 DESCRIBE 铁律**：空闲探活仅发送 DESCRIBE 校验状态码 200 与视频 SDP，**绝对禁止发送 SETUP、PLAY 或拉取 RTP 数据**，避免无谓消耗网络与摄像机编码器资源。
 2. **Digest 认证适配**：集成 `icholy/digest` 低层 API，支持 MD5/SHA-256、`qop=auth` 与参数规范化，单连接完成挑战与重试，限制单次探测总预算 ≤5s。
 3. **有界调度与并发控制**：后台调度器使用带权信号量（默认并发上限 4～8），对同一摄像机的同一流去重避免并发重复探测。
+4. **收包证据节流与活跃判定**：活跃流推流期间，分发器在遇到关键帧或时间间隔 ≥1s 时节流上报 `EvidencePacketActivity` 刷新 `LastCheckedAt`，保证 250ms 轮询检测准确反映物理收包真实性，避免误判超时。
+5. **调度器快速优雅停机**：调度器内部维护随 `Stop()` 级联取消的根 Context；轻量 DESCRIBE 客户端通过监听上下文取消触发 `conn.SetDeadline(time.Now())` 立即打断网络阻塞，实现停机时延 <100ms。
 
 ---
 
@@ -92,9 +94,10 @@ CREATE TABLE camera_streams (
    - `Bytes 24..N`：Annex B NALU 载荷（以 `00 00 00 01` 或 `00 00 01` 起始码分隔）
 2. **按需生命周期与单例拉流**：
    - 路由：`GET /api/v1/cameras/:id/streams/:role/ws`（及 `/api/v1/cameras/:id/ws` 默认主流），严格受 `auth.RequireAuth` 保护。
-   - $0 \rightarrow 1$ 激活：首个 Web 客户端连入时，解密 RTSP 凭据并向 Native 引擎发起 `Acquire(ConsumerPreview)` 与 `Subscribe`，状态切为 `SessionStateRunning`。
+   - $0 \rightarrow 1$ 激活：首个 Web 客户端连入时，解密 RTSP 凭据并向 Native 引擎发起 `Acquire(ConsumerPreview)` 与 `Subscribe`，状态切为 `SessionStateRunning`，并立即向 `/api/v1/cameras/events` 广播状态变更。
+   - 并发 Singleflight 保护：StreamHub 采用 `singleflight.Group` 协同合并对同一路流的并发获取请求，彻底避免击穿造成对摄像机重复发起物理 RTSP 握手与 C++ 句柄开销。
    - $1 \rightarrow N$ 扇出：同一路流多个 Web 观众共享单例物理拉流，单次封包并发扇出。
-   - $1 \rightarrow 0$ 释放：所有客户端断开后，注销拉流，进入 Native 8s Grace Period 防抖休眠，状态切为 `SessionStateIdle`。
+   - $1 \rightarrow 0$ 释放：所有客户端断开后，注销拉流，进入 Native 8s Grace Period 防抖休眠，状态切为 `SessionStateIdle`，并向 SSE 广播状态变更。
 3. **GOP 秒开缓存 (Instant Playback)**：
    - 分发器持续缓存最近的关键帧（包含 SPS/PPS/VPS）。新连入的客户端立即收到该帧，消除等待长 GOP 造成的黑屏。
 4. **背压与慢客户端淘汰**：
