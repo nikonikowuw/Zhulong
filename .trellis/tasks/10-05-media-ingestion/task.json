@@ -22,7 +22,8 @@
     "10-05-native-ffmpeg-ingestion",
     "10-05-go-cgo-media-bridge",
     "10-05-camera-lifecycle",
-    "10-06-websocket-streaming"
+    "10-06-websocket-streaming",
+    "10-06-camera-management-ui"
   ],
   "parent": null,
   "relatedFiles": [],

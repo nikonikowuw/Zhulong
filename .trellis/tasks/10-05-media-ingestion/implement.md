@@ -69,7 +69,7 @@
   - 编写 `RoiOverlayCanvas.tsx` 支撑后续 AI 检测框绘制
   - 编写前端流池引用计数单元测试（验证同一相机多视口挂载仅开单条 WS，视口归零销毁 WS）
   - *验证命令*：`cd web && npm run type-check && npm run lint && npm test`
-- [ ] **Step 3.2: 摄像机管理独立菜单与视图 (`web/src/features/camera/` ➔ `/cameras`)**
+- [x] **Step 3.2: 摄像机管理独立菜单与视图 (`web/src/features/camera/` ➔ `/cameras`)**
   - 实现摄像机列表表格、增删改查弹窗（支持结构化与单行 URL 两种输入）
   - 实现密码明文显隐（小眼睛 👁️）与一键复制完整可用 RTSP 地址功能，方便外部播放器调试
   - 实现入库前 3~5s 异步探测 Loading 与结果回显

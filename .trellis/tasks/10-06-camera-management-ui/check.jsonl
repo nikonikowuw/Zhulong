@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/camera-guidelines.md", "reason": "验证前端状态展示是否与后端正交状态定义（health/session/degraded/stale）完全对齐"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "验证前端请求响应、错误处理与 i18n 是否符合 API 契约"}
