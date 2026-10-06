@@ -44,7 +44,7 @@
 
 ## 当前实现边界
 
-本仓库当前只实现 `cmd/Zhulong`、`internal/app`、`database`、`engine`、`httputil` 和 `webui` 骨架。摄像机、录像、推理模块以及 C++ 采集/解码/预处理流水线仍属后续目标，不得把架构目标图解读为已交付功能。当前 native 组件只暴露无硬件 create/start/stop/destroy 生命周期。
+本仓库已完成 `cmd/Zhulong`、`internal/app`、`database`、`engine`、`httputil`、`webui`、`auth` 单用户凭据会话以及 `camera` 全生命周期管理。录像、推理模块以及 C++ 解码/预处理流水线仍属后续目标，不得把架构目标图解读为已全量交付。当前 native 组件已支持宿主 C ABI、流探测、按需包借用与订阅生命周期。
 
 ---
 
