@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite schema migrations and GORM usage standards"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "RESTful endpoints, error response and routing conventions"}
+{"file": ".trellis/spec/backend/authentication-guidelines.md", "reason": "Session authentication and login hooks for audit logging"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "React components, query hooks, and feature directory conventions"}

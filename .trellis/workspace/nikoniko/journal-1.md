@@ -412,4 +412,32 @@ Session summary was not supplied.
 - [OK] `npm run build`: Vite 生产环境构建打包成功
 - [OK] `python3 native/scripts/build.py go test ./...`: 后端与 CGO 原生引擎回归测试全部通过
 
+---
+
+## 2026-10-06 轻量级系统操作与安全审计日志模块规划
+
+**Task**: `10-06-audit-log`
+**Status**: Planning
+**Package**: `backend`
+**Branch**: `dev`
+
+### Summary
+
+针对单用户边缘视频智能分析设备，完成操作与安全审计日志模块的全链路端到端技术规划（选项 A）。规划方案兼顾边缘端低资源消耗与存储防爆盘保护，制定了 SQLite 迁移、FIFO 自动淘汰、异步缓冲写入以及前端控制台审计页面的完整落地计划。
+
+### Main Changes
+
+- **需求制定 (`prd.md`)**：明确覆盖管理员认证（`auth.init`, `auth.login`, `auth.logout`）与关键资源管理（`camera.create/update/delete/toggle`）两大核心场景，确立 5,000 条上限的 FIFO 滚动淘汰与防爆盘安全要求。
+- **技术设计 (`design.md`)**：
+  - 设计 `audit_logs` 表版本化迁移 Schema。
+  - 设计 `AuditService` 异步缓冲 Channel (512 深度) 与单 Worker 批量写入机制，确保对主请求零阻塞；定义系统关机优雅 Drain。
+  - 设计 `web/src/features/audit` 前端架构、控制台侧边栏集成、筛选交互与多语言词条。
+- **实施计划 (`implement.md`)**：分 4 个阶段有序推进后端存储/服务、模块装配与埋点、前端页面与路由、端到端全量回归测试。
+- **上下文配置**：建立并通过 `implement.jsonl` 与 `check.jsonl` 规范校验。
+
+### Status
+
+[OK] **Planning Completed**
+
+
 
