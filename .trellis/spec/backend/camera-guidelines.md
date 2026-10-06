@@ -76,3 +76,27 @@ CREATE TABLE camera_streams (
 2. **原子初始快照**：客户端订阅成功后，首条消息推送 `event: snapshot`，携带当前所有摄像机完整状态快照与单调自增 `sequence`，消除快照与增量事件间的时序间隙。
 3. **有界队列与慢消费者驱逐**：单个 SSE 连接维护有界缓冲通道（默认 32），广播塞满时主动断开该客户端（Eviction），防止慢客户端引起服务端内存泄漏。
 4. **会话时效校验**：SSE 维持长连接期间，每 30 秒主动校验 Cookie 中的会话 Token，会话撤销或过期时立即断开连接。
+
+---
+
+## 5. WebSocket 实时推流与 ZLM1 协议规约
+
+1. **二进制封包协议 (Wire Protocol: ZLM1)**：
+   每个推送到 WebSocket 客户端的二进制消息包含 24 字节大端序固定头：
+   - `Bytes 0..3`：Magic `0x5A4C4D31` ("ZLM1")
+   - `Byte 4`：Codec（`0x01` = H.264, `0x02` = H.265）
+   - `Byte 5`：Flags（位掩码：Bit 0 = KeyFrame, Bit 1 = HasPTS, Bit 2 = HasDTS）
+   - `Bytes 6..7`：Reserved（`0x0000`）
+   - `Bytes 8..15`：PTS（`int64` 大端序，90kHz 时钟基）
+   - `Bytes 16..23`：DTS（`int64` 大端序）
+   - `Bytes 24..N`：Annex B NALU 载荷（以 `00 00 00 01` 或 `00 00 01` 起始码分隔）
+2. **按需生命周期与单例拉流**：
+   - 路由：`GET /api/v1/cameras/:id/streams/:role/ws`（及 `/api/v1/cameras/:id/ws` 默认主流），严格受 `auth.RequireAuth` 保护。
+   - $0 \rightarrow 1$ 激活：首个 Web 客户端连入时，解密 RTSP 凭据并向 Native 引擎发起 `Acquire(ConsumerPreview)` 与 `Subscribe`，状态切为 `SessionStateRunning`。
+   - $1 \rightarrow N$ 扇出：同一路流多个 Web 观众共享单例物理拉流，单次封包并发扇出。
+   - $1 \rightarrow 0$ 释放：所有客户端断开后，注销拉流，进入 Native 8s Grace Period 防抖休眠，状态切为 `SessionStateIdle`。
+3. **GOP 秒开缓存 (Instant Playback)**：
+   - 分发器持续缓存最近的关键帧（包含 SPS/PPS/VPS）。新连入的客户端立即收到该帧，消除等待长 GOP 造成的黑屏。
+4. **背压与慢客户端淘汰**：
+   - 每个客户端分配 64-slot 有界缓冲。拥塞时优先丢弃非关键帧；持续阻塞则主动断开连接（Close 1008 Policy Violation），保护服务端内存。
+
