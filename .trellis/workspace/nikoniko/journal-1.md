@@ -218,3 +218,28 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: WebSocket 媒体流分发与按需订阅 (10-06-websocket-streaming) 实施与归档
+<!-- trellis-session: v=2 fp=05028726f3d9613c -->
+
+**Date**: 2026-10-06
+**Task**: WebSocket 媒体流分发与按需订阅 (10-06-websocket-streaming) 实施与归档
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+完成了媒体接入子任务 10-06-websocket-streaming 的全链路实现与门禁验证：引入 gorilla/websocket，实现 ZLM1 24 字节大端序二进制 Wire Protocol 封包与解包；构建了单源多端分发的 StreamDispatcher 与 GOP 关键帧秒开缓存；封装了支持按需 CGO 借用、0 消费者释放与 8s 宽限期防抖的 StreamHub；挂载了经过认证保护的 WebSocket 端点与 Swagger 2.0 文档；装配进 Uber Fx 并保证 HTTP 优雅排空后逆序释放底层资源。全量通过 make go-check、make native-test、make check 与 make smoke 门禁，顺利归档任务。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2c95fd6` | feat(camera): implement WebSocket video streaming, ZLM1 protocol, and on-demand StreamHub |
+| `e60b54e` | docs(spec): document WebSocket streaming, ZLM1 wire protocol, and StreamHub lifecycle |
+| `0f75165` | docs(task): record task planning and implementation for 10-06-websocket-streaming |
+
+### Status
+
+[OK] **Completed**
