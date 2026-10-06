@@ -1,4 +1,4 @@
-import { Activity, Camera, ChevronLeft, ChevronRight, Cpu, LayoutGrid, ShieldCheck } from "lucide-react";
+import { Activity, Camera, ChevronLeft, ChevronRight, Cpu, LayoutGrid } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { UserNav } from "@/features/auth";
 import type { FC } from "react";
@@ -89,17 +89,7 @@ export const Sidebar: FC<SidebarProps> = ({
               <Cpu size={18} aria-hidden="true" />
             </div>
             {!isCollapsed && (
-              <div className="flex flex-col min-w-0">
-                <div className="flex items-center gap-1.5 leading-none">
-                  <span className="text-sm font-bold tracking-tight">{t("app.brand")}</span>
-                  <span className="rounded bg-[var(--accent)]/10 px-1 py-0.5 text-[9px] font-semibold text-[var(--accent)] leading-none uppercase">
-                    {t("console.tag")}
-                  </span>
-                </div>
-                <span className="text-[10px] text-[var(--muted)] truncate mt-1">
-                  {t("app.environment")}
-                </span>
-              </div>
+              <span className="text-sm font-bold tracking-tight">{t("app.brand")}</span>
             )}
           </a>
 
@@ -158,30 +148,19 @@ export const Sidebar: FC<SidebarProps> = ({
         </nav>
 
         {/* Sidebar Footer */}
-        <div className="border-t border-[var(--border)] p-2 space-y-2">
+        <div className="border-t border-[var(--border)] p-2 space-y-1.5">
           {/* User Profile & Logout */}
           <UserNav isCollapsed={isCollapsed} />
 
-          {/* Quick Engine Status indicator */}
-          {!isCollapsed && (
-            <div className="flex items-center gap-2 rounded-lg bg-[var(--surface-muted)] px-2.5 py-1.5 text-[11px] text-[var(--muted)]">
-              <ShieldCheck size={14} className="text-[var(--positive)] shrink-0" aria-hidden="true" />
-              <div className="flex flex-col min-w-0">
-                <span className="font-medium text-[var(--foreground)] leading-tight truncate">
-                  {t("console.dashboard.systemCard")}
-                </span>
-                <span className="text-[10px] text-[var(--muted)] truncate">
-                  v0.1.0 · {t("app.environment")}
-                </span>
-              </div>
+          {/* Version / Expand */}
+          {!isCollapsed ? (
+            <div className="px-1 text-[10px] font-mono text-[var(--muted)]/60 select-none">
+              v0.1.0
             </div>
-          )}
-
-          {/* Expand Button when collapsed */}
-          {isCollapsed && (
+          ) : (
             <button
               type="button"
-              className="flex w-full items-center justify-center rounded-lg py-2 text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--foreground)] transition-colors"
+              className="flex w-full items-center justify-center rounded-lg py-1.5 text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--foreground)] transition-colors"
               onClick={onToggleCollapse}
               aria-label={t("console.expand")}
               title={t("console.expand")}
