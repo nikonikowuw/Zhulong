@@ -171,7 +171,7 @@ export const Sidebar: FC<SidebarProps> = ({
                   {t("console.dashboard.systemCard")}
                 </span>
                 <span className="text-[10px] text-[var(--muted)] truncate">
-                  {t("footer.runtime")}
+                  v0.1.0 · {t("app.environment")}
                 </span>
               </div>
             </div>

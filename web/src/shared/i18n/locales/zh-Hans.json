@@ -44,10 +44,6 @@
     "engine": "原生引擎桩",
     "engineNote": "仅验证生命周期 · 尚无媒体流水线"
   },
-  "footer": {
-    "runtime": "运行时基础框架",
-    "hardware": "尚未配置摄像机或加速器 SDK"
-  },
   "console": {
     "tag": "管理控制台",
     "collapse": "收起侧边栏",

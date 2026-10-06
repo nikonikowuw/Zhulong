@@ -134,10 +134,6 @@ function SystemStatusPage() {
                   <OverviewDashboard onNavigateTab={switchTab} />
                 )}
               </AuthGuard>
-              <footer className="workspace-footer mt-auto pt-6 border-t border-[var(--border)]/40 flex justify-between text-xs text-[var(--muted)]">
-                <span>{t("footer.runtime")}</span>
-                <span>{t("footer.hardware")}</span>
-              </footer>
             </main>
           ) : (
             <main id="main" className="auth-canvas flex flex-1 flex-col items-center justify-center p-4" tabIndex={-1}>
@@ -147,7 +143,7 @@ function SystemStatusPage() {
               <footer className="mt-6 flex items-center gap-2 text-xs text-[var(--muted)] opacity-70">
                 <span>{t("app.brand")}</span>
                 <span>·</span>
-                <span>{t("footer.runtime")}</span>
+                <span>v0.1.0</span>
               </footer>
             </main>
           )}

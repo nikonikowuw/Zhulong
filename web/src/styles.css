@@ -462,15 +462,6 @@ select:focus-visible {
   background: var(--button-hover);
 }
 
-.workspace-footer {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 20px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
 @keyframes loading-progress {
   from {
     transform: scaleX(0.55);
@@ -529,11 +520,6 @@ select:focus-visible {
   .component-row+.component-row {
     border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
     border-left: 0;
-  }
-
-  .workspace-footer {
-    flex-direction: column;
-    gap: 4px;
   }
 }
 

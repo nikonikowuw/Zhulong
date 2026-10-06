@@ -44,10 +44,6 @@
     "engine": "Native engine stub",
     "engineNote": "Lifecycle only · no media pipeline"
   },
-  "footer": {
-    "runtime": "Runtime foundation",
-    "hardware": "No camera or accelerator SDK configured"
-  },
   "console": {
     "tag": "Console",
     "collapse": "Collapse sidebar",

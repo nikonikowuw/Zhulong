@@ -196,11 +196,11 @@ export const OverviewDashboard: FC<OverviewDashboardProps> = ({ onNavigateTab })
               </div>
               <div className="flex justify-between py-1 border-b border-[var(--border)]/60">
                 <dt className="text-[var(--muted)]">{t("console.dashboard.runtimeLabel")}</dt>
-                <dd className="font-medium text-[var(--foreground)]">{t("footer.runtime")}</dd>
+                <dd className="font-medium text-[var(--foreground)]">Zhulong v0.1.0</dd>
               </div>
               <div className="flex justify-between py-1">
-                <dt className="text-[var(--muted)]">Accelerators</dt>
-                <dd className="font-medium text-[var(--muted)]">{t("footer.hardware")}</dd>
+                <dt className="text-[var(--muted)]">Pipeline</dt>
+                <dd className="font-medium text-[var(--positive)]">FFmpeg CGO Native</dd>
               </div>
             </dl>
           </div>
