@@ -401,6 +401,7 @@ Session summary was not supplied.
 | `703d475` | refactor(web): move user nav and logout action from topbar to sidebar bottom |
 | `260c1a1` | refactor(web): remove obsolete mock footer text and streamline system info |
 | `8ec913f` | fix(web): enforce app viewport lock so topbar and sidebar stay fixed |
+| `99037f1` | refactor(web): remove fake status card and redundant tags from sidebar |
 
 ### Testing
 
