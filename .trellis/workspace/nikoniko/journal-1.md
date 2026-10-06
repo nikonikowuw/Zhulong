@@ -391,6 +391,15 @@ Session summary was not supplied.
   - 同步补齐 `en.json`、`zh-Hans.json`、`zh-Hant.json` 中的控制台相关词条。
   - 为 `Sidebar`、`ConsoleTopbar` 与 `OverviewDashboard` 补全单元与交互测试，全量 25 个测试套件（93 个测试用例）100% 通过。
 
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a5bb031` | feat(web): redesign layout to professional management console and add dashboard |
+| `8fff639` | docs(spec): document console layout and dashboard guidelines |
+| `2f3f4a1` | docs(task): update planning and journal for management console layout redesign |
+| `703d475` | refactor(web): move user nav and logout action from topbar to sidebar bottom |
+
 ### Testing
 
 - [OK] `npm run type-check`: TypeScript 严格类型检查无任何 `any`
