@@ -162,7 +162,7 @@ func TestStreamHubOnDemandAcquireAndRelease(t *testing.T) {
 	})
 	logger := zap.NewNop()
 
-	hub := NewStreamHub(mockEngine, store, cipher, registry, logger)
+	hub := NewStreamHub(mockEngine, store, cipher, registry, nil, logger)
 	defer hub.Close()
 
 	if hub.ActiveStreams() != 0 {
@@ -348,7 +348,7 @@ func TestStreamHubShutdown(t *testing.T) {
 		Revision: 1,
 		Streams:  []CameraStream{{Role: "main"}},
 	})
-	hub := NewStreamHub(mockEngine, store, cipher, registry, zap.NewNop())
+	hub := NewStreamHub(mockEngine, store, cipher, registry, nil, zap.NewNop())
 
 	disp, err := hub.GetOrCreateDispatcher(context.Background(), camID, "main")
 	if err != nil {
@@ -380,5 +380,189 @@ func TestStreamHubShutdown(t *testing.T) {
 	_, err = hub.GetOrCreateDispatcher(context.Background(), camID, "main")
 	if !errors.Is(err, ErrStreamHubClosed) {
 		t.Fatalf("expected ErrStreamHubClosed, got %v", err)
+	}
+}
+
+func TestStreamHubSingleflightConcurrentRequests(t *testing.T) {
+	store, cipher, camID, cleanup := setupTestStoreAndCipher(t)
+	defer cleanup()
+
+	mockEngine := newMockMediaEngine()
+	registry := NewStateRegistry()
+	registry.InitCameraState(&Camera{
+		ID:       camID,
+		Name:     "Hub Test Camera",
+		Enabled:  true,
+		Revision: 1,
+		Streams:  []CameraStream{{Role: "main"}},
+	})
+
+	hub := NewStreamHub(mockEngine, store, cipher, registry, nil, zap.NewNop())
+	defer hub.Close()
+
+	const concurrentCount = 10
+	var wg sync.WaitGroup
+	dispatchers := make([]*StreamDispatcher, concurrentCount)
+	errs := make([]error, concurrentCount)
+
+	wg.Add(concurrentCount)
+	for i := 0; i < concurrentCount; i++ {
+		idx := i
+		go func() {
+			defer wg.Done()
+			disp, err := hub.GetOrCreateDispatcher(context.Background(), camID, "main")
+			dispatchers[idx] = disp
+			errs[idx] = err
+		}()
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d failed: %v", i, err)
+		}
+	}
+
+	first := dispatchers[0]
+	if first == nil {
+		t.Fatal("first dispatcher is nil")
+	}
+	for i := 1; i < concurrentCount; i++ {
+		if dispatchers[i] != first {
+			t.Fatalf("goroutine %d got different dispatcher %p != %p", i, dispatchers[i], first)
+		}
+	}
+
+	if mockEngine.getAcquireCount() != 1 {
+		t.Fatalf("expected exactly 1 acquire call due to singleflight, got %d", mockEngine.getAcquireCount())
+	}
+}
+
+func TestStreamHubSessionStateBroadcast(t *testing.T) {
+	store, cipher, camID, cleanup := setupTestStoreAndCipher(t)
+	defer cleanup()
+
+	mockEngine := newMockMediaEngine()
+	registry := NewStateRegistry()
+	registry.InitCameraState(&Camera{
+		ID:       camID,
+		Name:     "Hub Test Camera",
+		Enabled:  true,
+		Revision: 1,
+		Streams:  []CameraStream{{Role: "main"}},
+	})
+	eventHub := NewEventHub(registry)
+	defer eventHub.Close()
+
+	sub, _, err := eventHub.Subscribe()
+	if err != nil {
+		t.Fatalf("subscribe eventHub: %v", err)
+	}
+	defer eventHub.Unsubscribe(sub)
+
+	hub := NewStreamHub(mockEngine, store, cipher, registry, eventHub, zap.NewNop())
+	defer hub.Close()
+
+	// 1. 获取 Dispatcher -> 触发 SessionStateRunning 广播
+	disp, err := hub.GetOrCreateDispatcher(context.Background(), camID, "main")
+	if err != nil {
+		t.Fatalf("get or create dispatcher: %v", err)
+	}
+
+	// 监听 SessionStateRunning 事件
+	var gotRunning bool
+	timeout := time.After(time.Second)
+	for !gotRunning {
+		select {
+		case msg := <-sub.Channel():
+			if msg.Event == EventTypeChange {
+				if info, ok := msg.Data.(*CameraStateInfo); ok && info.CameraID == camID {
+					if streamInfo, ok := info.Streams["main"]; ok && streamInfo.Session == SessionStateRunning {
+						gotRunning = true
+					}
+				}
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for SessionStateRunning event")
+		}
+	}
+
+	// 2. 注册并注销客户端 -> 触发 StreamDispatcher.Close 与 SessionStateIdle 广播
+	client := &StreamClient{
+		sendChan:   make(chan []byte, 16),
+		dispatcher: disp,
+		done:       make(chan struct{}),
+		logger:     zap.NewNop(),
+	}
+	disp.RegisterClient(client)
+	disp.UnregisterClient(client)
+
+	var gotIdle bool
+	timeout = time.After(time.Second)
+	for !gotIdle {
+		select {
+		case msg := <-sub.Channel():
+			if msg.Event == EventTypeChange {
+				if info, ok := msg.Data.(*CameraStateInfo); ok && info.CameraID == camID {
+					if streamInfo, ok := info.Streams["main"]; ok && streamInfo.Session == SessionStateIdle {
+						gotIdle = true
+					}
+				}
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for SessionStateIdle event")
+		}
+	}
+}
+
+func TestStreamDispatcherPacketActivityThrottledReporting(t *testing.T) {
+	mockStream := &mockMediaStream{source: newMockPacketSource(16)}
+	registry := NewStateRegistry()
+	camID := "cam_packet_test"
+	registry.InitCameraState(&Camera{
+		ID:       camID,
+		Name:     "Packet Test",
+		Enabled:  true,
+		Revision: 1,
+		Streams:  []CameraStream{{Role: "main"}},
+	})
+	registry.UpdateSessionState(camID, "main", SessionStateRunning)
+
+	hub := NewStreamHub(nil, nil, nil, registry, nil, zap.NewNop())
+	pumpCtx, cancelPump := context.WithCancel(context.Background())
+	defer cancelPump()
+
+	disp := NewStreamDispatcher(hub, camID, "main", mockStream, mockStream.source, cancelPump, zap.NewNop())
+	defer disp.Close()
+
+	go disp.RunPumpLoop(pumpCtx)
+
+	// 发送一帧关键帧
+	mockStream.source.packets <- engine.Packet{
+		Codec:    engine.CodecH264,
+		KeyFrame: true,
+		Data:     []byte{0x00, 0x00, 0x00, 0x01, 0x67},
+	}
+
+	// 等待 Pump 处理
+	time.Sleep(50 * time.Millisecond)
+
+	state, ok := registry.GetState(camID)
+	if !ok || state == nil {
+		t.Fatal("expected state in registry")
+	}
+	mainStream := state.Streams["main"]
+	if mainStream == nil {
+		t.Fatal("expected main stream in registry")
+	}
+
+	if mainStream.EvidenceType != EvidencePacketActivity {
+		t.Fatalf("expected evidence %s, got %s", EvidencePacketActivity, mainStream.EvidenceType)
+	}
+	if mainStream.Health != HealthStateOnline {
+		t.Fatalf("expected health %s, got %s", HealthStateOnline, mainStream.Health)
+	}
+	if mainStream.LastCheckedAt == nil {
+		t.Fatal("expected non-nil LastCheckedAt")
 	}
 }

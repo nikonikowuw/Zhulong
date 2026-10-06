@@ -119,3 +119,73 @@ func TestHealthSchedulerTriggerCheck(t *testing.T) {
 		t.Fatalf("expected online state after check, got: %+v", state)
 	}
 }
+
+func TestHealthSchedulerGracefulStopCancelsProbes(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	_ = dbStore.OpenAndMigrate(context.Background())
+	defer dbStore.Close()
+
+	km := NewKeyManager(tempDir)
+	cipher, _ := km.InitOrLoadKey(false)
+	store := NewCameraStore(dbStore.DB)
+	registry := NewStateRegistry()
+	hub := NewEventHub(registry)
+	defer hub.Close()
+
+	// 启动一个监听但不读取的挂起 TCP 服务器，模拟网络阻塞
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen failed: %v", err)
+	}
+	defer l.Close()
+
+	hangingAddr := l.Addr().String()
+
+	scheduler := NewHealthScheduler(store, cipher, registry, hub, nil, zap.NewNop())
+	cam := &Camera{
+		ID:      "cam_hanging",
+		Name:    "Hanging Cam",
+		Enabled: true,
+	}
+	uri := fmt.Sprintf("rtsp://%s/live", hangingAddr)
+	aad := MakeAAD(cam.ID, StreamRoleMain)
+	encrypted, _ := cipher.Encrypt([]byte(uri), aad)
+	streams := []CameraStream{
+		{
+			Role:         StreamRoleMain,
+			Protocol:     ProtocolRTSP,
+			EncryptedURI: encrypted,
+			Transport:    TransportTCP,
+			Codec:        "h264",
+			Width:        1920,
+			Height:       1080,
+		},
+	}
+	_ = store.Create(context.Background(), cam, streams)
+	registry.InitCameraState(cam)
+
+	// 启动异步探测
+	scheduler.checkStreamAsync(cam, &streams[0])
+
+	// 稍等让 goroutine 建立连接
+	time.Sleep(50 * time.Millisecond)
+
+	// 调用 Stop，记录耗时
+	start := time.Now()
+	stopDone := make(chan struct{})
+	go func() {
+		scheduler.Stop()
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
+		elapsed := time.Since(start)
+		if elapsed > 2*time.Second {
+			t.Fatalf("scheduler.Stop took %v, expected < 1s due to context cancellation", elapsed)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("scheduler.Stop hung for > 3s without canceling in-flight probe")
+	}
+}

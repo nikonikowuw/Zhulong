@@ -105,6 +105,16 @@ func (c *DescribeClient) Describe(ctx context.Context, info *StreamConnectionInf
 	// Enforce monotonic deadline on the socket for all subsequent operations
 	_ = conn.SetDeadline(deadline)
 
+	stopWait := make(chan struct{})
+	defer close(stopWait)
+	go func() {
+		select {
+		case <-dialCtx.Done():
+			_ = conn.SetDeadline(time.Now())
+		case <-stopWait:
+		}
+	}()
+
 	reader := bufio.NewReaderSize(conn, 8192)
 	writer := bufio.NewWriter(conn)
 
@@ -113,6 +123,12 @@ func (c *DescribeClient) Describe(ctx context.Context, info *StreamConnectionInf
 	// Request 1: Initial DESCRIBE without credentials
 	resp, err := c.sendDescribe(writer, reader, info.CleanURI, cseq, "")
 	if err != nil {
+		if dialCtx.Err() != nil {
+			if errors.Is(dialCtx.Err(), context.DeadlineExceeded) {
+				return nil, ErrRTSPTimeout
+			}
+			return nil, dialCtx.Err()
+		}
 		return nil, err
 	}
 

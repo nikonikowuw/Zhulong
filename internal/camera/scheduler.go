@@ -35,6 +35,9 @@ type HealthScheduler struct {
 	stopCh     chan struct{}
 	stopped    atomic.Bool
 	wg         sync.WaitGroup
+
+	rootCtx    context.Context
+	cancelRoot context.CancelFunc
 }
 
 // NewHealthScheduler constructs a HealthScheduler.
@@ -53,6 +56,7 @@ func NewHealthScheduler(
 		describeClient = NewDescribeClient()
 	}
 
+	rootCtx, cancelRoot := context.WithCancel(context.Background())
 	return &HealthScheduler{
 		store:          store,
 		cipher:         cipher,
@@ -64,6 +68,8 @@ func NewHealthScheduler(
 		semaphore:      make(chan struct{}, DefaultProbeConcurrency),
 		inFlight:       make(map[string]bool),
 		stopCh:         make(chan struct{}),
+		rootCtx:        rootCtx,
+		cancelRoot:     cancelRoot,
 	}
 }
 
@@ -91,6 +97,7 @@ func (s *HealthScheduler) Stop() {
 	if !s.stopped.CompareAndSwap(false, true) {
 		return
 	}
+	s.cancelRoot()
 	close(s.stopCh)
 	s.wg.Wait()
 	s.logger.Info("camera health scheduler stopped")
@@ -149,7 +156,7 @@ func (s *HealthScheduler) activeMonitorLoop() {
 }
 
 func (s *HealthScheduler) runScheduledChecks() {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(s.rootCtx, 15*time.Second)
 	defer cancel()
 
 	cameras, _, err := s.store.List(ctx, 100, 0)
@@ -234,7 +241,7 @@ func (s *HealthScheduler) checkStreamAsync(cam *Camera, stream *CameraStream) {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultProbeTimeout)
+		ctx, cancel := context.WithTimeout(s.rootCtx, DefaultProbeTimeout)
 		defer cancel()
 
 		s.checkStream(ctx, cam, stream)

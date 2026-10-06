@@ -3,6 +3,7 @@ package camera
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
@@ -146,13 +147,17 @@ func (d *StreamDispatcher) Broadcast(pkt engine.Packet) {
 // RunPumpLoop 持续从底层包源读取数据并广播，直到上下文取消或流出错。
 func (d *StreamDispatcher) RunPumpLoop(ctx context.Context) {
 	if d.hub != nil && d.hub.registry != nil {
-		d.hub.registry.UpdateSessionState(d.cameraID, d.role, SessionStateRunning)
+		newState := d.hub.registry.UpdateSessionState(d.cameraID, d.role, SessionStateRunning)
+		if newState != nil {
+			d.hub.broadcastState(newState)
+		}
 	}
 
 	defer func() {
 		d.Close()
 	}()
 
+	var lastReport time.Time
 	for {
 		pkt, err := d.sub.Next(ctx)
 		if err != nil {
@@ -163,6 +168,15 @@ func (d *StreamDispatcher) RunPumpLoop(ctx context.Context) {
 			)
 			break
 		}
+
+		now := time.Now()
+		if pkt.KeyFrame || now.Sub(lastReport) >= time.Second {
+			lastReport = now
+			if d.hub != nil {
+				d.hub.recordPacketActivity(d.cameraID, d.role)
+			}
+		}
+
 		d.Broadcast(pkt)
 	}
 }
@@ -208,7 +222,10 @@ func (d *StreamDispatcher) Close() {
 		if d.hub != nil {
 			d.hub.removeDispatcher(d.cameraID, d.role)
 			if d.hub.registry != nil {
-				d.hub.registry.UpdateSessionState(d.cameraID, d.role, SessionStateIdle)
+				newState := d.hub.registry.UpdateSessionState(d.cameraID, d.role, SessionStateIdle)
+				if newState != nil {
+					d.hub.broadcastState(newState)
+				}
 			}
 		}
 

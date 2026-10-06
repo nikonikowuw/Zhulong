@@ -47,7 +47,7 @@ func setupTestCameraApp(t *testing.T) (*gin.Engine, *CameraService, *EventHub, *
 	scheduler := NewHealthScheduler(store, lazyCipher, registry, hub, nil, zap.NewNop())
 	service := NewCameraService(store, lazyCipher, probeService, registry, hub, scheduler, zap.NewNop())
 	mockEngine := newMockMediaEngine()
-	streamHub := NewStreamHub(mockEngine, store, lazyCipher, registry, zap.NewNop())
+	streamHub := NewStreamHub(mockEngine, store, lazyCipher, registry, hub, zap.NewNop())
 	handler := NewHandler(service, hub, streamHub, zap.NewNop())
 
 	router := gin.New()

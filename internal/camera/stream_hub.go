@@ -9,6 +9,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 )
 
 var (
@@ -23,12 +24,14 @@ type StreamHub struct {
 	store    CameraStore
 	cipher   *LazyCipher
 	registry *StateRegistry
+	eventHub *EventHub
 	logger   *zap.Logger
 
 	mu             sync.Mutex
 	dispatchers    map[string]*StreamDispatcher
 	closed         bool
 	nextConsumerID atomic.Uint64
+	flight         singleflight.Group
 }
 
 // NewStreamHub 构造全局流分发中心。
@@ -37,6 +40,7 @@ func NewStreamHub(
 	store CameraStore,
 	cipher *LazyCipher,
 	registry *StateRegistry,
+	eventHub *EventHub,
 	logger *zap.Logger,
 ) *StreamHub {
 	if logger == nil {
@@ -47,11 +51,35 @@ func NewStreamHub(
 		store:       store,
 		cipher:      cipher,
 		registry:    registry,
+		eventHub:    eventHub,
 		logger:      logger.Named("stream_hub"),
 		dispatchers: make(map[string]*StreamDispatcher),
 	}
 	hub.nextConsumerID.Store(1000)
 	return hub
+}
+
+func (h *StreamHub) broadcastState(state *CameraStateInfo) {
+	if h.eventHub != nil && state != nil {
+		h.eventHub.BroadcastChange(state)
+	}
+}
+
+func (h *StreamHub) recordPacketActivity(cameraID, role string) {
+	if h.registry == nil {
+		return
+	}
+	var wasNonOnline bool
+	if st, ok := h.registry.GetState(cameraID); ok && st != nil {
+		if st.Health != HealthStateOnline || (st.Streams != nil && st.Streams[role] != nil && st.Streams[role].Health != HealthStateOnline) {
+			wasNonOnline = true
+		}
+	}
+
+	state := h.registry.RecordStreamSuccess(cameraID, 0, role, EvidencePacketActivity)
+	if wasNonOnline && state != nil {
+		h.broadcastState(state)
+	}
 }
 
 // GetOrCreateDispatcher 获取或按需拉起指定摄像机流的分发器。
@@ -74,6 +102,34 @@ func (h *StreamHub) GetOrCreateDispatcher(ctx context.Context, cameraID, role st
 	}
 	h.mu.Unlock()
 
+	// 慢速路径：使用 singleflight 防并发击穿
+	val, err, _ := h.flight.Do(key, func() (any, error) {
+		h.mu.Lock()
+		if h.closed {
+			h.mu.Unlock()
+			return nil, ErrStreamHubClosed
+		}
+		if d, ok := h.dispatchers[key]; ok {
+			d.mu.Lock()
+			isClosed := d.closed
+			d.mu.Unlock()
+			if !isClosed {
+				h.mu.Unlock()
+				return d, nil
+			}
+		}
+		h.mu.Unlock()
+
+		return h.createDispatcher(ctx, cameraID, role, key)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return val.(*StreamDispatcher), nil
+}
+
+func (h *StreamHub) createDispatcher(ctx context.Context, cameraID, role, key string) (*StreamDispatcher, error) {
 	// 1. 查询摄像机与流信息
 	cam, err := h.store.GetByID(ctx, cameraID)
 	if err != nil {
@@ -162,10 +218,15 @@ func (h *StreamHub) GetOrCreateDispatcher(ctx context.Context, cameraID, role st
 	}
 
 	h.dispatchers[key] = dispatcher
+	var newState *CameraStateInfo
 	if h.registry != nil {
-		h.registry.UpdateSessionState(cameraID, role, SessionStateRunning)
+		newState = h.registry.UpdateSessionState(cameraID, role, SessionStateRunning)
 	}
 	h.mu.Unlock()
+
+	if newState != nil {
+		h.broadcastState(newState)
+	}
 
 	go dispatcher.RunPumpLoop(pumpCtx)
 

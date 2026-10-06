@@ -72,7 +72,7 @@ func newServices(config Config, logger *zap.Logger) servicesOut {
 
 	eng := engine.New()
 	engAdapter := camera.NewEngineMediaAdapter(eng)
-	streamHub := camera.NewStreamHub(engAdapter, camStore, lazyC, reg, logger)
+	streamHub := camera.NewStreamHub(engAdapter, camStore, lazyC, reg, hub, logger)
 	prober := camera.NewProbeService(eng)
 	describeClient := camera.NewDescribeClient()
 	scheduler := camera.NewHealthScheduler(camStore, lazyC, reg, hub, describeClient, logger)
