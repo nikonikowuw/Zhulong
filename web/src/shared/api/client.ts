@@ -167,3 +167,36 @@ export function postApiData<T>(
     notifyOnUnauthorized: opts.notifyOnUnauthorized,
   });
 }
+
+export function putApiData<T>(
+  path: string,
+  bodyData: unknown,
+  schema: z.ZodType<T>,
+  language: SupportedLanguage,
+  signalOrOptions?: AbortSignal | ApiCallOptions,
+): Promise<T> {
+  const opts = parseCallOptions(signalOrOptions);
+  return requestApiData(path, schema, {
+    method: "PUT",
+    body: bodyData,
+    language,
+    signal: opts.signal,
+    notifyOnUnauthorized: opts.notifyOnUnauthorized,
+  });
+}
+
+export function deleteApiData<T>(
+  path: string,
+  schema: z.ZodType<T>,
+  language: SupportedLanguage,
+  signalOrOptions?: AbortSignal | ApiCallOptions,
+): Promise<T> {
+  const opts = parseCallOptions(signalOrOptions);
+  return requestApiData(path, schema, {
+    method: "DELETE",
+    language,
+    signal: opts.signal,
+    notifyOnUnauthorized: opts.notifyOnUnauthorized,
+  });
+}
+

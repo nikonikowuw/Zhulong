@@ -2,6 +2,7 @@ import i18n from "i18next";
 import LanguageDetector from "i18next-browser-languagedetector";
 import { initReactI18next } from "react-i18next";
 import { authLocales } from "@/features/auth/locales";
+import { cameraLocales } from "@/features/camera/locales";
 import en from "./locales/en.json";
 import zhHans from "./locales/zh-Hans.json";
 import zhHant from "./locales/zh-Hant.json";
@@ -22,18 +23,21 @@ const resources = {
     translation: {
       ...en,
       auth: authLocales.en,
+      camera: cameraLocales.en,
     },
   },
   "zh-Hans": {
     translation: {
       ...zhHans,
       auth: authLocales["zh-Hans"],
+      camera: cameraLocales["zh-Hans"],
     },
   },
   "zh-Hant": {
     translation: {
       ...zhHant,
       auth: authLocales["zh-Hant"],
+      camera: cameraLocales["zh-Hant"],
     },
   },
 };

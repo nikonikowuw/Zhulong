@@ -13,6 +13,10 @@
     "themeToDark": "Use dark theme",
     "themeToLight": "Use light theme"
   },
+  "nav": {
+    "overview": "Overview",
+    "cameras": "Cameras"
+  },
   "overview": {
     "heading": "Host status",
     "description": "Core services and the local runtime, in one place."

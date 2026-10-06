@@ -98,4 +98,23 @@ describe("App", () => {
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute("content", "#1c1c1e");
   });
+
+  it("switches between Overview and Cameras tabs when authenticated", async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "Host status" })).toBeInTheDocument();
+
+    const camerasNavBtn = screen.getByRole("button", { name: "Cameras" });
+    await user.click(camerasNavBtn);
+
+    expect(await screen.findByRole("heading", { name: "Cameras" })).toBeInTheDocument();
+    expect(window.location.hash).toBe("#cameras");
+
+    const overviewNavBtn = screen.getByRole("button", { name: "Overview" });
+    await user.click(overviewNavBtn);
+
+    expect(await screen.findByRole("heading", { name: "Host status" })).toBeInTheDocument();
+    expect(window.location.hash).toBe("#overview");
+  });
 });

@@ -13,6 +13,10 @@
     "themeToDark": "切換為深色主題",
     "themeToLight": "切換為淺色主題"
   },
+  "nav": {
+    "overview": "系統概覽",
+    "cameras": "攝影機管理"
+  },
   "overview": {
     "heading": "主機狀態",
     "description": "集中檢視核心服務與本機執行狀態。"

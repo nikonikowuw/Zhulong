@@ -1,10 +1,20 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Cpu, Globe, Moon, Sun } from "lucide-react";
+import { Activity, Camera, Cpu, Globe, Moon, Sun } from "lucide-react";
 import { AuthGuard, AuthProvider, UserNav, useAuth } from "@/features/auth";
+import { CameraPage } from "@/features/camera";
 import { HealthPanel } from "@/features/systemStatus";
 import { currentLanguage } from "@/shared/i18n";
 import { useTheme } from "@/shared/theme/useTheme";
+
+type ActiveTab = "overview" | "cameras";
+
+function getTabFromHash(): ActiveTab {
+  if (typeof window !== "undefined" && window.location.hash === "#cameras") {
+    return "cameras";
+  }
+  return "overview";
+}
 
 function SystemStatusContent() {
   const { t } = useTranslation();
@@ -23,10 +33,26 @@ function SystemStatusPage() {
   const { t, i18n } = useTranslation();
   const { theme, toggleTheme } = useTheme();
   const { phase } = useAuth();
+  const [activeTab, setActiveTab] = useState<ActiveTab>(getTabFromHash);
   const language = currentLanguage(i18n.resolvedLanguage ?? i18n.language);
   const themeLabel = theme === "dark" ? t("controls.themeToLight") : t("controls.themeToDark");
   const ThemeIcon = theme === "dark" ? Sun : Moon;
   const isAuthenticated = phase === "authenticated";
+
+  useEffect(() => {
+    function handleHashChange() {
+      setActiveTab(getTabFromHash());
+    }
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
+
+  function switchTab(tab: ActiveTab) {
+    setActiveTab(tab);
+    if (typeof window !== "undefined") {
+      window.location.hash = tab === "cameras" ? "#cameras" : "#overview";
+    }
+  }
 
   useEffect(() => {
     document.documentElement.lang = language;
@@ -57,6 +83,36 @@ function SystemStatusPage() {
           </span>
           <span className="brand-name">{t("app.brand")}</span>
         </a>
+
+        {isAuthenticated && (
+          <nav className="header-nav flex items-center gap-1 bg-[var(--surface-muted)] p-1 rounded-xl border border-[var(--border)]" aria-label="Main Navigation">
+            <button
+              type="button"
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                activeTab === "overview"
+                  ? "bg-[var(--surface)] text-[var(--foreground)] shadow-xs"
+                  : "text-[var(--muted)] hover:text-[var(--foreground)]"
+              }`}
+              onClick={() => switchTab("overview")}
+            >
+              <Activity size={13} aria-hidden="true" />
+              <span>{t("nav.overview")}</span>
+            </button>
+            <button
+              type="button"
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                activeTab === "cameras"
+                  ? "bg-[var(--surface)] text-[var(--foreground)] shadow-xs"
+                  : "text-[var(--muted)] hover:text-[var(--foreground)]"
+              }`}
+              onClick={() => switchTab("cameras")}
+            >
+              <Camera size={13} aria-hidden="true" />
+              <span>{t("nav.cameras")}</span>
+            </button>
+          </nav>
+        )}
+
         <div className="header-controls">
           <UserNav />
           <div className="language-control relative flex items-center">
@@ -93,7 +149,7 @@ function SystemStatusPage() {
       {isAuthenticated ? (
         <main id="main" className="workspace flex-1" tabIndex={-1}>
           <AuthGuard>
-            <SystemStatusContent />
+            {activeTab === "cameras" ? <CameraPage /> : <SystemStatusContent />}
           </AuthGuard>
           <footer className="workspace-footer">
             <span>{t("footer.runtime")}</span>

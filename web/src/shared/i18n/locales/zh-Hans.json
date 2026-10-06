@@ -13,6 +13,10 @@
     "themeToDark": "切换为深色主题",
     "themeToLight": "切换为浅色主题"
   },
+  "nav": {
+    "overview": "系统概览",
+    "cameras": "摄像机管理"
+  },
   "overview": {
     "heading": "主机状态",
     "description": "集中查看核心服务与本地运行状态。"
