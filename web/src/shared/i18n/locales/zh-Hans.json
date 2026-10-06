@@ -15,6 +15,7 @@
   },
   "nav": {
     "overview": "系统概览",
+    "live": "实时监控",
     "cameras": "摄像机管理"
   },
   "overview": {

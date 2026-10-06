@@ -99,11 +99,17 @@ describe("App", () => {
     expect(document.querySelector('meta[name="theme-color"]')).toHaveAttribute("content", "#1c1c1e");
   });
 
-  it("switches between Overview and Cameras tabs when authenticated", async () => {
+  it("switches between Overview, Live, and Cameras tabs when authenticated", async () => {
     const user = userEvent.setup();
     renderApp();
 
     expect(await screen.findByRole("heading", { name: "Host status" })).toBeInTheDocument();
+
+    const liveNavBtn = screen.getByRole("button", { name: "Live" });
+    await user.click(liveNavBtn);
+
+    expect(await screen.findByRole("heading", { name: "Live Video Surveillance" })).toBeInTheDocument();
+    expect(window.location.hash).toBe("#live");
 
     const camerasNavBtn = screen.getByRole("button", { name: "Cameras" });
     await user.click(camerasNavBtn);

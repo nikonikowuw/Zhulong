@@ -1,17 +1,19 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Activity, Camera, Cpu, Globe, Moon, Sun } from "lucide-react";
+import { Activity, Camera, Cpu, Globe, LayoutGrid, Moon, Sun } from "lucide-react";
 import { AuthGuard, AuthProvider, UserNav, useAuth } from "@/features/auth";
 import { CameraPage } from "@/features/camera";
+import { LivePage } from "@/features/live";
 import { HealthPanel } from "@/features/systemStatus";
 import { currentLanguage } from "@/shared/i18n";
 import { useTheme } from "@/shared/theme/useTheme";
 
-type ActiveTab = "overview" | "cameras";
+type ActiveTab = "overview" | "live" | "cameras";
 
 function getTabFromHash(): ActiveTab {
-  if (typeof window !== "undefined" && window.location.hash === "#cameras") {
-    return "cameras";
+  if (typeof window !== "undefined") {
+    if (window.location.hash === "#live") return "live";
+    if (window.location.hash === "#cameras") return "cameras";
   }
   return "overview";
 }
@@ -50,7 +52,9 @@ function SystemStatusPage() {
   function switchTab(tab: ActiveTab) {
     setActiveTab(tab);
     if (typeof window !== "undefined") {
-      window.location.hash = tab === "cameras" ? "#cameras" : "#overview";
+      if (tab === "live") window.location.hash = "#live";
+      else if (tab === "cameras") window.location.hash = "#cameras";
+      else window.location.hash = "#overview";
     }
   }
 
@@ -97,6 +101,18 @@ function SystemStatusPage() {
             >
               <Activity size={13} aria-hidden="true" />
               <span>{t("nav.overview")}</span>
+            </button>
+            <button
+              type="button"
+              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
+                activeTab === "live"
+                  ? "bg-[var(--surface)] text-[var(--foreground)] shadow-xs"
+                  : "text-[var(--muted)] hover:text-[var(--foreground)]"
+              }`}
+              onClick={() => switchTab("live")}
+            >
+              <LayoutGrid size={13} aria-hidden="true" />
+              <span>{t("nav.live")}</span>
             </button>
             <button
               type="button"
@@ -149,7 +165,13 @@ function SystemStatusPage() {
       {isAuthenticated ? (
         <main id="main" className="workspace flex-1" tabIndex={-1}>
           <AuthGuard>
-            {activeTab === "cameras" ? <CameraPage /> : <SystemStatusContent />}
+            {activeTab === "cameras" ? (
+              <CameraPage />
+            ) : activeTab === "live" ? (
+              <LivePage />
+            ) : (
+              <SystemStatusContent />
+            )}
           </AuthGuard>
           <footer className="workspace-footer">
             <span>{t("footer.runtime")}</span>

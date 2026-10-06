@@ -1,0 +1,22 @@
+{
+  "title": "Live Video Surveillance",
+  "grid1": "Single (1x1)",
+  "grid4": "Quad (2x2)",
+  "grid9": "9-Split (3x3)",
+  "emptySlot": "Slot {{index}} - Click to Assign",
+  "emptySlotHint": "Assign live RTSP video stream",
+  "assignModalTitle": "Assign Stream to Viewport",
+  "selectCamera": "Select Device",
+  "selectStreamRole": "Stream Channel",
+  "toggleRole": "Toggle Main/Sub Stream",
+  "changeCamera": "Change Device",
+  "fullscreen": "Fullscreen",
+  "exitFullscreen": "Exit Fullscreen",
+  "removeSlot": "Unassign Viewport",
+  "connecting": "Connecting WebSocket stream...",
+  "awaitingFrame": "Awaiting keyframe (GOP cache)...",
+  "reconnecting": "Attempting automatic reconnection...",
+  "streamError": "Stream ingestion failed, check network or camera",
+  "unsupportedTitle": "WebCodecs Unsupported",
+  "unsupportedDesc": "WebCodecs hardware acceleration is unavailable in this environment (requires HTTPS or localhost)."
+}

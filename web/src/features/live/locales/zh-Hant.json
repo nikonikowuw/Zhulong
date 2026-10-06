@@ -1,0 +1,22 @@
+{
+  "title": "實時視頻監控",
+  "grid1": "單視口 (1x1)",
+  "grid4": "四分屏 (2x2)",
+  "grid9": "九分屏 (3x3)",
+  "emptySlot": "視口 {{index}} - 點擊分配",
+  "emptySlotHint": "分配 RTSP 實時碼流",
+  "assignModalTitle": "分配視口監控流",
+  "selectCamera": "選擇設備",
+  "selectStreamRole": "選擇流通道",
+  "toggleRole": "點擊切換主/子流",
+  "changeCamera": "更換攝像機",
+  "fullscreen": "單視口全螢幕",
+  "exitFullscreen": "退出全螢幕",
+  "removeSlot": "移除視口",
+  "connecting": "正在連接 WebSocket 碼流...",
+  "awaitingFrame": "等待關鍵幀首包 (GOP Cache)...",
+  "reconnecting": "正在嘗試自動重連...",
+  "streamError": "碼流拉取異常，請檢查設備或網絡",
+  "unsupportedTitle": "WebCodecs 不可用",
+  "unsupportedDesc": "當前瀏覽器未啟用 WebCodecs 硬件加速或處於非安全上下文（需 HTTPS 或 localhost）。"
+}
