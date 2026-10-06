@@ -151,13 +151,21 @@ Rebuilt system theme layout as an edge-to-edge macOS console with GPU dynamic au
 
 - 启动父任务下的摄像机业务与四态管理独立子任务
 
-## Session 5: 摄像机生命周期管理与健康度检测落地
-<!-- trellis-session: v=2 fp=7e2d9a184c2f10b8 -->
+
+
+## Session 6: 摄像机生命周期管理与健康度检测落地
+<!-- trellis-session: v=2 fp=6d81cfdcc1e7c9f7 -->
 
 **Date**: 2026-10-06
-**Task**: 摄像机业务与四态管理（10-05-camera-lifecycle）
+**Task**: 摄像机生命周期管理与健康度检测落地
 **Package**: backend
 **Branch**: `dev`
+
+### Summary
+
+Session summary was not supplied.
+
+### Main Changes
 
 ### Summary
 
@@ -171,18 +179,17 @@ Rebuilt system theme layout as an edge-to-edge macOS console with GPU dynamic au
 6. **SSE 事件流**：实现有界队列缓冲、单调增量序号、原子初始快照、慢消费者驱逐及 16 连接上限控制。
 7. **REST API、i18n 与 Swagger**：实现摄像机 CRUD、管理员明文凭据安全查询、诊断与 SSE 端点，提供中/英/繁三语错误码支持，完成 Swagger 文档更新。
 8. **Uber Fx 装配与安全生命周期**：在 `internal/app` 完成装配与优雅停机顺序（HTTP 排空 ➔ 停止调度与关闭 SSE ➔ 释放 Native ➔ 关闭 SQLite ➔ 同步日志），测试验证启动失败逆序回滚。
-9. **质量门禁与基线保护**：严格保留 `native/src/pipeline/engine.hpp` 既存修改（SHA-256 保持 `dad479e08adc077e9c5c484c8ebcd87964c4eb6683d669cb838944dc21256148`），全栈 `make check`、`make go-check`、`make native-test`、`make smoke` 100% 通过。
+9. **规范沉淀**：建立 `.trellis/spec/backend/camera-guidelines.md` 规范文档，并在架构与后端规范索引中注册。
 
 ### Main Changes
 
 - `internal/database/migrations/000003_create_cameras_tables.*`：摄像机表与流表迁移
 - `internal/database/`：删除 `base_model.go`，避免对领域 Model 的隐式类型绑定和包耦合
-- `internal/auth/user.go`：改为显式自包含定义 `ID`、`Username`、`PasswordHash`、`CreatedAt`、`UpdatedAt`，与 `camera` 及主流 Go 社区实践保持一致
-- `internal/app/`：重构 `newRouter` 与 Fx 装配，引入 `RouteRegistrar` 与 `group:"public_routes"` / `group:"protected_routes"` Value Groups 多重绑定，移除 `router.go` 对 `internal/camera` 的硬编码耦合，实现新增业务模块全局路由器零修改
-- `internal/camera/`：包含 crypto、store、uri、rtsp_auth、rtsp_describe、probe、state、scheduler、events、service、handler、locale、requests、responses 及完备测试；遵循地道 Go 规范将请求与响应契约拆分为 requests.go 与 responses.go（与 internal/auth 对齐），实体模型采用自包含显式字段定义，针对已认证管理员直接返回完整明文 RTSP URL（含账密与参数），数据库保留 AES-GCM 密文存储，日志保持脱敏
+- `internal/auth/user.go`：改为显式自包含定义，与 `camera` 及主流 Go 社区实践保持一致
+- `internal/app/`：重构 `newRouter` 与 Fx 装配，引入 `RouteRegistrar` 与 Value Groups 多重绑定，解耦全局路由器
+- `internal/camera/`：包含 crypto、store、uri、rtsp_auth、rtsp_describe、probe、state、scheduler、events、service、handler、locale、requests、responses 及完备测试；遵循地道 Go 规范，实体模型显式定义，已认证管理员直接返回完整明文 RTSP URL（含账密与参数），数据库保留 AES-GCM 密文存储，日志保持脱敏
 - `internal/app/`：注入 Camera 模块，更新 Fx 装配与生命周期顺序，完善单元测试
-- `Makefile`：添加 `internal/camera` 进 Swagger 解析目录并更新 api-docs
-- `.trellis/spec/backend/dependency-injection.md`：同步 Fx 生命周期时序规范
+- `.trellis/spec/backend/camera-guidelines.md`：建立摄像机业务与生命周期规范
 
 ### Testing
 
@@ -190,6 +197,23 @@ Rebuilt system theme layout as an edge-to-edge macOS console with GPU dynamic au
 - [OK] `make native-test`：纯 C ABI、引擎生命周期与 Native 集成测试全部通过
 - [OK] `make check`：前端规范、Native 测试、Swagger 生成与 Go 检查全量通过
 - [OK] `make smoke`：单二进制运行冒烟测试（Health、SPA、API 404 隔离、Swagger、优雅停机）通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 规划与实现 WebSocket 视频流分发子任务
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6929c71` | feat(camera): implement camera lifecycle, AES-GCM encryption, and health scheduling |
+| `9c65162` | docs(spec): document camera lifecycle, encryption, and dual-stream gate |
+| `68e9d20` | docs(task): update acceptance criteria to checked for 10-05-camera-lifecycle |
 
 ### Status
 

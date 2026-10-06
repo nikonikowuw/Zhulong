@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
-- **Last Active**: 2026-10-05
+- **Total Sessions**: 6
+- **Last Active**: 2026-10-06
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~154 | Active |
+| `journal-1.md` | ~220 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-10-06 | 摄像机生命周期管理与健康度检测落地 | `6929c71`, `9c65162`, `68e9d20` | `dev` |
 | 4 | 2026-10-05 | Go/CGO 媒体桥接与订阅生命周期落地与审查收尾 | `8a6a887`, `dfae13e` | `dev` |
 | 3 | 2026-10-05 | 项目骨架、认证收尾与媒体接入 | `233a482`, `47a5b27`, `e84fc3d`, `5abbe4d`, `0080930` | `dev` |
 | 2 | 2026-10-05 | Apple-Style UI Overhaul and Auth UX Refactoring | `813ec4b` | `feat/project-skeleton` |
