@@ -114,4 +114,24 @@ CREATE TABLE camera_streams (
 3. **CAS Revision 乐观锁处理**：更新摄像机携带当前 `revision`；遇 409 冲突弹出防覆写提示并引导刷新。
 4. **全量国际化 (i18n)**：所有标签、状态徽标、表单校验与错误信息必须完整覆盖 `en` / `zh-Hans` / `zh-Hant`。
 
+---
+
+## 7. 前端实时播放器与多路宫格监控规范 (`features/live/`)
+
+1. **协议解包 (`wireParser.ts`)**：
+   - 严格解析 24 字节大端序 ZLM1 帧头，校验魔数 `0x5A4C4D31`、Codec（H.264 / H.265）、Flags（KeyFrame/PTS/DTS）以及 90kHz PTS/DTS；
+   - 提取 Annex B NALU 载荷；解析错误主动忽略保护。
+2. **连接池复用与防抖释放 (`streamPool.ts`)**：
+   - `FrontendStreamPool` 针对每个 `${cameraId}:${role}` 维护 WebSocket 单例与 `refCount`；
+   - 多个视口绑定同路流时共享同一条物理 WebSocket，单包广播分发；
+   - 视口全部卸载（`refCount == 0`）后启动 3 秒 Grace Period 防抖，超时才真正关闭 WebSocket，避免布局切换时频密握手。
+3. **WebCodecs 硬件加速渲染 (`LivePlayer.tsx`)**：
+   - 优先通过 `VideoDecoder` 进行低延迟解码并绘制至 `<canvas>`；
+   - 队列堆积超过 6 帧时丢弃非关键帧实现快速追帧（端到端延迟控制在 150ms 以内）；
+   - 收到帧后及时调用 `frame.close()` 释放 GPU 显存。
+4. **1 / 4 / 9 宫格监控看板 (`LiveDashboard.tsx`)**：
+   - 支持 1、4、9 宫格响应式排布；支持视口分配摄像机、主/子流切换、单视口独立全屏；
+   - 视口绑定与布局模式持久化存储在 `localStorage`。
+
+
 
