@@ -73,7 +73,7 @@ export const Sidebar: FC<SidebarProps> = ({
 
       {/* Sidebar Container */}
       <aside
-        className={`fixed top-0 bottom-0 left-0 z-50 flex flex-col border-r border-[var(--border)] bg-[var(--surface)] text-[var(--foreground)] transition-all duration-200 ease-in-out md:static ${
+        className={`fixed top-0 bottom-0 left-0 z-50 flex h-full shrink-0 flex-col border-r border-[var(--border)] bg-[var(--surface)] text-[var(--foreground)] transition-all duration-200 ease-in-out md:static ${
           isCollapsed ? "w-16" : "w-60"
         } ${isMobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}
         aria-label="Sidebar Navigation"

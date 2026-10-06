@@ -58,15 +58,17 @@
   box-sizing: border-box;
 }
 
-html {
+html,
+body,
+#root {
   min-width: 320px;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
   background: var(--background);
 }
 
 body {
-  min-width: 320px;
-  min-height: 100vh;
-  margin: 0;
   font-size: 16px;
   line-height: 1.5;
 }
@@ -93,9 +95,9 @@ select:focus-visible {
 }
 
 .application {
-  min-height: 100vh;
+  height: 100%;
   position: relative;
-  overflow-x: hidden;
+  overflow: hidden;
   background: var(--background);
 }
 

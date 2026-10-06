@@ -88,11 +88,11 @@ function SystemStatusPage() {
   }, [theme]);
 
   return (
-    <div className="application flex min-h-dvh flex-col bg-[var(--background)] text-[var(--foreground)]">
+    <div className="application flex h-dvh w-full flex-col overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
       <div className="console-bg" aria-hidden="true" />
       <a className="skip-link" href="#main">{t("a11y.skipToContent")}</a>
 
-      <div className="flex min-h-dvh w-full overflow-hidden">
+      <div className="flex h-full w-full overflow-hidden">
         {/* Professional Management Sidebar */}
         {isAuthenticated && (
           <Sidebar
@@ -108,7 +108,7 @@ function SystemStatusPage() {
         )}
 
         {/* Main Content Area with Console Topbar */}
-        <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
+        <div className="flex flex-1 flex-col min-w-0 h-full overflow-hidden">
           <ConsoleTopbar
             activeTab={activeTab}
             onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
@@ -136,7 +136,7 @@ function SystemStatusPage() {
               </AuthGuard>
             </main>
           ) : (
-            <main id="main" className="auth-canvas flex flex-1 flex-col items-center justify-center p-4" tabIndex={-1}>
+            <main id="main" className="auth-canvas flex flex-1 flex-col items-center justify-center p-4 overflow-y-auto" tabIndex={-1}>
               <AuthGuard>
                 <OverviewDashboard onNavigateTab={switchTab} />
               </AuthGuard>
