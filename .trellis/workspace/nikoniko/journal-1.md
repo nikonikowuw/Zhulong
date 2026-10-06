@@ -414,26 +414,27 @@ Session summary was not supplied.
 
 ---
 
-## 2026-10-06 轻量级系统操作与安全审计日志模块规划
+## 2026-10-06 边缘异构系统网络配置与两阶段安全回滚模块规划
 
-**Task**: `10-06-audit-log`
+**Task**: `10-06-system-network-config`
 **Status**: Planning
 **Package**: `backend`
 **Branch**: `dev`
 
 ### Summary
 
-针对单用户边缘视频智能分析设备，完成操作与安全审计日志模块的全链路端到端技术规划（选项 A）。规划方案兼顾边缘端低资源消耗与存储防爆盘保护，制定了 SQLite 迁移、FIFO 自动淘汰、异步缓冲写入以及前端控制台审计页面的完整落地计划。
+针对面向极端边缘异构 Linux 设备（如 RK3588、Jetson、昇腾及通用工控机）的烛龙（Zhulong）应用，通过 `/grilling` 深入推演并完成了宿主机网络配置管理模块的完整规划。方案确立了底层 Linux 内核 Netlink/sysfs 跨平台状态读取、主流网络栈（NetworkManager / systemd-networkd / 自定义 Hook 脚本）自适应探测、防掉电两阶段回滚看门狗事务、跨 IP 一次性免密快速确认、单默认网关约束以及极端环境 CLI `--reset-network` 紧急救援机制。
 
 ### Main Changes
 
-- **需求制定 (`prd.md`)**：明确覆盖管理员认证（`auth.init`, `auth.login`, `auth.logout`）与关键资源管理（`camera.create/update/delete/toggle`）两大核心场景，确立 5,000 条上限的 FIFO 滚动淘汰与防爆盘安全要求。
+- **需求制定 (`prd.md`)**：确立纯操作系统网卡层边界，定义物理网卡过滤、当前访问网卡标记 (`is_current`)、单默认网关互斥、60s 回滚看门狗、一次性确认令牌与 CLI 紧急恢复验收标准。
 - **技术设计 (`design.md`)**：
-  - 设计 `audit_logs` 表版本化迁移 Schema。
-  - 设计 `AuditService` 异步缓冲 Channel (512 深度) 与单 Worker 批量写入机制，确保对主请求零阻塞；定义系统关机优雅 Drain。
-  - 设计 `web/src/features/audit` 前端架构、控制台侧边栏集成、筛选交互与多语言词条。
-- **实施计划 (`implement.md`)**：分 4 个阶段有序推进后端存储/服务、模块装配与埋点、前端页面与路由、端到端全量回归测试。
-- **上下文配置**：建立并通过 `implement.jsonl` 与 `check.jsonl` 规范校验。
+  - 设计 `internal/network` 模块架构与 `NetworkProvider` 接口驱动体系；
+  - 设计基于 `<data-dir>/network_transaction.json` 的防掉电落盘状态机，在 Fx `OnStart` 生命周期执行开机自检与未确认事务自动回滚；
+  - 设计延时异步生效与携带 `confirm_token` 的跨 IP 免密快速确认协议；
+  - 设计 React 前端「系统设置」(`#settings`) 一级菜单与网络二级卡片看板。
+- **实施计划 (`implement.md`)**：分为后端底层与 Provider、看门狗与服务编排、REST API 与 CLI 救援、前端界面与交互、全链路验证 5 个阶段。
+- **上下文配置**：建立并通过 `implement.jsonl` (8 条规范) 与 `check.jsonl` (3 条质量规范) 上下文核验。
 
 ### Status
 
@@ -441,3 +442,34 @@ Session summary was not supplied.
 
 
 
+
+
+
+## Session 10: 前端 UI 交互增强与监控渲染性能优化收尾
+<!-- trellis-session: v=2 fp=876c9713d3e19736 -->
+
+**Date**: 2026-10-06
+**Task**: 前端 UI 交互增强与监控渲染性能优化收尾
+**Package**: frontend
+**Branch**: `dev`
+
+### Summary
+
+完成并归档前端 UI 优化任务，覆盖实时监控快捷操作与截图、摄像机筛选、控制台布局及仪表盘；补齐 PRD 验收状态。已有回归记录显示 lint、type-check、Vitest 与生产构建均通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8de89cd` | feat(web): implement LivePlayer, FrontendStreamPool, and 1/4/9 live dashboard |
+| `277f441` | feat(web): optimize live player controls, shortcuts, and camera list filters |
+| `a5bb031` | feat(web): redesign layout to professional management console and add dashboard |
+| `703d475` | refactor(web): move user nav and logout action from topbar to sidebar bottom |
+| `260c1a1` | refactor(web): remove obsolete mock footer text and streamline system info |
+| `8ec913f` | fix(web): enforce app viewport lock so topbar and sidebar stay fixed |
+| `99037f1` | refactor(web): remove fake status card and redundant tags from sidebar |
+| `c90e5b1` | fix(web): enforce standard 16:9 aspect-video ratio for live surveillance viewports |
+
+### Status
+
+[OK] **Completed**
