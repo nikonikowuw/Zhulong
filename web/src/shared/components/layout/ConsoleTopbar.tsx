@@ -1,7 +1,6 @@
 import { Globe, Maximize2, Menu, Minimize2, Moon, RefreshCw, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { UserNav } from "@/features/auth";
 import type { FC } from "react";
 import type { ActiveTab } from "./Sidebar";
 
@@ -170,11 +169,6 @@ export const ConsoleTopbar: FC<ConsoleTopbarProps> = ({
         >
           <ThemeIcon size={15} aria-hidden="true" />
         </button>
-
-        {/* User Nav */}
-        <div className="ml-1 pl-1 border-l border-[var(--border)]">
-          <UserNav />
-        </div>
       </div>
     </header>
   );
