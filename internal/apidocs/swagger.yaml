@@ -609,6 +609,22 @@ paths:
       summary: Manually diagnose camera connection
       tags:
       - camera
+  /cameras/{id}/streams/{role}/ws:
+    get:
+      parameters:
+      - description: 摄像机 ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 码流类型 (main 或 sub，默认 main)
+        in: path
+        name: role
+        type: string
+      responses: {}
+      summary: WebSocket 视频流实时预览
+      tags:
+      - camera
   /cameras/events:
     get:
       produces:

@@ -18,6 +18,7 @@ type applicationServices struct {
 	auth          auth.AuthService
 	cameraSvc     *camera.CameraService
 	cameraHub     *camera.EventHub
+	cameraStream  *camera.StreamHub
 	cameraHandler *camera.Handler
 	cameraMgr     *camera.LifecycleManager
 	logger        *zap.Logger
@@ -31,6 +32,7 @@ type servicesOut struct {
 	Auth            auth.AuthService
 	CameraSvc       *camera.CameraService
 	CameraHub       *camera.EventHub
+	CameraStream    *camera.StreamHub
 	CameraHandler   *camera.Handler
 	CameraMgr       *camera.LifecycleManager
 	Services        *applicationServices
@@ -69,16 +71,18 @@ func newServices(config Config, logger *zap.Logger) servicesOut {
 	hub := camera.NewEventHub(reg)
 
 	eng := engine.New()
+	engAdapter := camera.NewEngineMediaAdapter(eng)
+	streamHub := camera.NewStreamHub(engAdapter, camStore, lazyC, reg, logger)
 	prober := camera.NewProbeService(eng)
 	describeClient := camera.NewDescribeClient()
 	scheduler := camera.NewHealthScheduler(camStore, lazyC, reg, hub, describeClient, logger)
 	camSvc := camera.NewCameraService(camStore, lazyC, prober, reg, hub, scheduler, logger)
-	camHandler := camera.NewHandler(camSvc, hub, logger, func(token string) bool {
+	camHandler := camera.NewHandler(camSvc, hub, streamHub, logger, func(token string) bool {
 		_, ok := authSvc.ValidateSession(token)
 		return ok
 	})
 
-	camMgr := camera.NewLifecycleManager(camStore, keyMgr, lazyC, scheduler, hub)
+	camMgr := camera.NewLifecycleManager(camStore, keyMgr, lazyC, scheduler, hub, streamHub)
 
 	appServices := &applicationServices{
 		database:      dbStore,
@@ -86,6 +90,7 @@ func newServices(config Config, logger *zap.Logger) servicesOut {
 		auth:          authSvc,
 		cameraSvc:     camSvc,
 		cameraHub:     hub,
+		cameraStream:  streamHub,
 		cameraHandler: camHandler,
 		cameraMgr:     camMgr,
 		logger:        logger,
@@ -97,6 +102,7 @@ func newServices(config Config, logger *zap.Logger) servicesOut {
 		Auth:            authSvc,
 		CameraSvc:       camSvc,
 		CameraHub:       hub,
+		CameraStream:    streamHub,
 		CameraHandler:   camHandler,
 		CameraMgr:       camMgr,
 		Services:        appServices,

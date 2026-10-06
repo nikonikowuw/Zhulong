@@ -8,14 +8,16 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"go.uber.org/zap"
 )
 
-func setupTestCameraApp(t *testing.T) (*gin.Engine, *CameraService, *EventHub, func()) {
+func setupTestCameraApp(t *testing.T) (*gin.Engine, *CameraService, *EventHub, *mockMediaEngine, func()) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -24,7 +26,9 @@ func setupTestCameraApp(t *testing.T) (*gin.Engine, *CameraService, *EventHub, f
 	_ = dbStore.OpenAndMigrate(context.Background())
 
 	km := NewKeyManager(tempDir)
-	cipher, _ := km.InitOrLoadKey(false)
+	rawCipher, _ := km.InitOrLoadKey(false)
+	lazyCipher := NewLazyCipher()
+	lazyCipher.Set(rawCipher)
 	store := NewCameraStore(dbStore.DB)
 	registry := NewStateRegistry()
 	hub := NewEventHub(registry)
@@ -40,23 +44,26 @@ func setupTestCameraApp(t *testing.T) (*gin.Engine, *CameraService, *EventHub, f
 		},
 	}
 	probeService := NewProbeService(prober)
-	scheduler := NewHealthScheduler(store, cipher, registry, hub, nil, zap.NewNop())
-	service := NewCameraService(store, cipher, probeService, registry, hub, scheduler, zap.NewNop())
-	handler := NewHandler(service, hub, zap.NewNop())
+	scheduler := NewHealthScheduler(store, lazyCipher, registry, hub, nil, zap.NewNop())
+	service := NewCameraService(store, lazyCipher, probeService, registry, hub, scheduler, zap.NewNop())
+	mockEngine := newMockMediaEngine()
+	streamHub := NewStreamHub(mockEngine, store, lazyCipher, registry, zap.NewNop())
+	handler := NewHandler(service, hub, streamHub, zap.NewNop())
 
 	router := gin.New()
 	apiGroup := router.Group("/api/v1")
 	handler.RegisterRoutes(apiGroup)
 
 	cleanup := func() {
+		_ = streamHub.Close()
 		hub.Close()
 		_ = dbStore.Close()
 	}
-	return router, service, hub, cleanup
+	return router, service, hub, mockEngine, cleanup
 }
 
 func TestCameraHandlerCRUD(t *testing.T) {
-	router, _, _, cleanup := setupTestCameraApp(t)
+	router, _, _, _, cleanup := setupTestCameraApp(t)
 	defer cleanup()
 
 	// 1. Create Camera
@@ -192,7 +199,7 @@ func TestCameraHandlerCRUD(t *testing.T) {
 }
 
 func TestCameraSSEEventsRouteNoCollision(t *testing.T) {
-	router, _, _, cleanup := setupTestCameraApp(t)
+	router, _, _, _, cleanup := setupTestCameraApp(t)
 	defer cleanup()
 
 	// Ensure GET /api/v1/cameras/events is hit and initiates SSE without colliding with /:id
@@ -217,5 +224,94 @@ func TestCameraSSEEventsRouteNoCollision(t *testing.T) {
 	bodyStr := w.Body.String()
 	if !strings.Contains(bodyStr, "event: snapshot") {
 		t.Fatalf("expected snapshot event in SSE body, got: %s", bodyStr)
+	}
+}
+
+func TestCameraHandlerStreamWS(t *testing.T) {
+	router, _, _, mockEngine, cleanup := setupTestCameraApp(t)
+	defer cleanup()
+
+	// 1. 测试不存在的摄像机 -> HTTP 404
+	req404, _ := http.NewRequest(http.MethodGet, "/api/v1/cameras/cam_not_found/ws", nil)
+	w404 := httptest.NewRecorder()
+	router.ServeHTTP(w404, req404)
+	if w404.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for non-existent camera, got %d (body: %s)", w404.Code, w404.Body.String())
+	}
+	if !strings.Contains(w404.Body.String(), "CAMERA_NOT_FOUND") {
+		t.Fatalf("expected CAMERA_NOT_FOUND, got: %s", w404.Body.String())
+	}
+
+	// 2. 创建有效摄像机
+	createBody := `{
+		"id": "cam_ws_play",
+		"name": "WS Test Camera",
+		"mainStream": {
+			"rtspUrl": "rtsp://admin:pass@127.0.0.1:554/live/main",
+			"transport": "tcp"
+		}
+	}`
+	createReq, _ := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewBufferString(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	wCreate := httptest.NewRecorder()
+	router.ServeHTTP(wCreate, createReq)
+	if wCreate.Code != http.StatusCreated {
+		t.Fatalf("create camera failed: %d (body: %s)", wCreate.Code, wCreate.Body.String())
+	}
+
+	// 3. 启动 HTTP Server 并测试 WebSocket 实时推流
+	server := httptest.NewServer(router)
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/api/v1/cameras/cam_ws_play/ws"
+	wsConn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("ws dial failed: %v (resp status: %v)", err, resp)
+	}
+	defer wsConn.Close()
+
+	// 模拟 Native 产生一帧关键帧包
+	mockEngine.mu.Lock()
+	if len(mockEngine.streams) == 0 {
+		t.Fatalf("expected mock media stream created")
+	}
+	activeStream := mockEngine.streams[0]
+	mockEngine.mu.Unlock()
+
+	testPkt := engine.Packet{
+		Codec:    engine.CodecH264,
+		PTS:      90000,
+		DTS:      90000,
+		HasPTS:   true,
+		HasDTS:   true,
+		KeyFrame: true,
+		Data:     []byte{0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1f},
+	}
+	activeStream.source.packets <- testPkt
+
+	_ = wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	msgType, msgData, err := wsConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read ws message failed: %v", err)
+	}
+	if msgType != websocket.BinaryMessage {
+		t.Fatalf("expected binary message, got %d", msgType)
+	}
+
+	header, payload, err := UnpackPacket(msgData)
+	if err != nil {
+		t.Fatalf("unpack packet failed: %v", err)
+	}
+	if header.Codec != WireCodecH264 {
+		t.Fatalf("expected H264 codec, got %d", header.Codec)
+	}
+	if !header.IsKeyFrame() {
+		t.Fatalf("expected key frame flag")
+	}
+	if header.PTS != 90000 {
+		t.Fatalf("expected PTS 90000, got %d", header.PTS)
+	}
+	if !bytes.Equal(payload, testPkt.Data) {
+		t.Fatalf("payload mismatch")
 	}
 }

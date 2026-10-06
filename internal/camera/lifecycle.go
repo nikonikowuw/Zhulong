@@ -52,6 +52,7 @@ type LifecycleManager struct {
 	lazyCipher *LazyCipher
 	scheduler  *HealthScheduler
 	hub        *EventHub
+	streamHub  *StreamHub
 }
 
 // NewLifecycleManager creates a LifecycleManager.
@@ -61,6 +62,7 @@ func NewLifecycleManager(
 	lazyCipher *LazyCipher,
 	scheduler *HealthScheduler,
 	hub *EventHub,
+	streamHub *StreamHub,
 ) *LifecycleManager {
 	return &LifecycleManager{
 		store:      store,
@@ -68,6 +70,7 @@ func NewLifecycleManager(
 		lazyCipher: lazyCipher,
 		scheduler:  scheduler,
 		hub:        hub,
+		streamHub:  streamHub,
 	}
 }
 
@@ -90,8 +93,11 @@ func (m *LifecycleManager) Start(ctx context.Context) error {
 	return m.scheduler.Start(ctx)
 }
 
-// Stop cleanly terminates the event hub and scheduler.
+// Stop cleanly terminates the event hub, stream hub and scheduler.
 func (m *LifecycleManager) Stop() {
+	if m.streamHub != nil {
+		_ = m.streamHub.Close()
+	}
 	_ = m.hub.Close()
 	m.scheduler.Stop()
 }

@@ -608,6 +608,30 @@
                 }
             }
         },
+        "/cameras/{id}/streams/{role}/ws": {
+            "get": {
+                "tags": [
+                    "camera"
+                ],
+                "summary": "WebSocket 视频流实时预览",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "摄像机 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "码流类型 (main 或 sub，默认 main)",
+                        "name": "role",
+                        "in": "path"
+                    }
+                ],
+                "responses": {}
+            }
+        },
         "/health": {
             "get": {
                 "produces": [

@@ -9,21 +9,37 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
 )
 
-// Handler exposes REST API and SSE endpoints for camera management.
+var wsUpgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true // 受 auth.RequireAuth 保护
+	},
+	ReadBufferSize:  1024,
+	WriteBufferSize: 64 * 1024,
+}
+
+// Handler exposes REST API, SSE, and WebSocket endpoints for camera management.
 type Handler struct {
 	service    *CameraService
 	hub        *EventHub
+	streamHub  *StreamHub
 	sessionVal func(token string) bool
 	logger     *zap.Logger
 }
 
 // NewHandler creates a new Handler.
-func NewHandler(service *CameraService, hub *EventHub, logger *zap.Logger, sessionVal ...func(token string) bool) *Handler {
+func NewHandler(
+	service *CameraService,
+	hub *EventHub,
+	streamHub *StreamHub,
+	logger *zap.Logger,
+	sessionVal ...func(token string) bool,
+) *Handler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -34,6 +50,7 @@ func NewHandler(service *CameraService, hub *EventHub, logger *zap.Logger, sessi
 	return &Handler{
 		service:    service,
 		hub:        hub,
+		streamHub:  streamHub,
 		sessionVal: valFn,
 		logger:     logger.Named("camera.handler"),
 	}
@@ -53,6 +70,11 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.PUT("/:id", h.Update)
 		group.DELETE("/:id", h.Delete)
 		group.POST("/:id/diagnose", h.Diagnose)
+
+		// WebSocket video streaming endpoints
+		group.GET("/:id/ws", h.StreamWS)
+		group.GET("/:id/stream/ws", h.StreamWS)
+		group.GET("/:id/streams/:role/ws", h.StreamWS)
 	}
 }
 
@@ -288,6 +310,59 @@ func (h *Handler) Events(c *gin.Context) {
 			flusher.Flush()
 		}
 	}
+}
+
+// StreamWS godoc
+// @Summary      WebSocket 视频流实时预览
+// @Tags         camera
+// @Param        id   path   string  true  "摄像机 ID"
+// @Param        role path   string  false "码流类型 (main 或 sub，默认 main)"
+// @Router       /cameras/{id}/streams/{role}/ws [get]
+func (h *Handler) StreamWS(c *gin.Context) {
+	if h.streamHub == nil {
+		httputil.WriteError(c, apperr.New(apperr.KindInternal, "STREAM_HUB_NOT_INITIALIZED", "Stream hub not available", nil))
+		return
+	}
+
+	cameraID := c.Param("id")
+	role := c.Param("role")
+	if role == "" {
+		role = c.DefaultQuery("role", "main")
+	}
+
+	// 1. 获取或拉起流分发器（若相机不存在、被禁用或流不存在，返回对应语义错误）
+	disp, err := h.streamHub.GetOrCreateDispatcher(c.Request.Context(), cameraID, role)
+	if err != nil {
+		if errors.Is(err, ErrCameraNotFound) {
+			httputil.WriteError(c, apperr.New(apperr.KindNotFound, "CAMERA_NOT_FOUND", "Camera not found", err))
+			return
+		}
+		if errors.Is(err, ErrCameraDisabled) {
+			httputil.WriteError(c, apperr.New(apperr.KindPermissionDenied, "CAMERA_DISABLED", "Camera is disabled", err))
+			return
+		}
+		if errors.Is(err, ErrCameraStreamNotFound) {
+			httputil.WriteError(c, apperr.New(apperr.KindNotFound, "STREAM_NOT_FOUND", "Camera stream not found", err))
+			return
+		}
+		httputil.WriteError(c, apperr.New(apperr.KindInternal, "STREAM_ACQUIRE_FAILED", "Failed to acquire camera stream", err))
+		return
+	}
+
+	// 2. 协议升级至 WebSocket
+	conn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		h.logger.Debug("websocket upgrade failed", zap.Error(err))
+		return
+	}
+
+	// 3. 创建客户端会话并登记
+	client := NewStreamClient(conn, disp, h.logger)
+	disp.RegisterClient(client)
+
+	// 4. 运行写循环与读循环（阻塞当前 handler 协程直到客户端断开）
+	go client.WritePump()
+	client.ReadPump()
 }
 
 // Ensure interface compliance

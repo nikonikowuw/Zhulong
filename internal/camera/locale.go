@@ -66,5 +66,25 @@ func init() {
 			"zh-Hans": "不支持的视频协议，当前仅支持 RTSP",
 			"zh-Hant": "不支援的視訊協定，目前僅支援 RTSP",
 		},
+		"CAMERA_DISABLED": {
+			"en":      "Camera is disabled",
+			"zh-Hans": "摄像机已被停用，无法开启实时流预览",
+			"zh-Hant": "攝影機已被停用，無法開啟即時串流預覽",
+		},
+		"STREAM_NOT_FOUND": {
+			"en":      "Camera stream not found",
+			"zh-Hans": "指定的视频码流不存在",
+			"zh-Hant": "指定的視訊串流不存在",
+		},
+		"STREAM_ACQUIRE_FAILED": {
+			"en":      "Failed to acquire camera media stream",
+			"zh-Hans": "拉取摄像机视频流失败，底层资源不可用",
+			"zh-Hant": "拉取攝影機視訊串流失敗，底層資源不可用",
+		},
+		"STREAM_HUB_NOT_INITIALIZED": {
+			"en":      "Media streaming hub is not initialized",
+			"zh-Hans": "视频流转分发中心未就绪",
+			"zh-Hant": "視訊串流分發中心未就緒",
+		},
 	})
 }
