@@ -402,6 +402,7 @@ Session summary was not supplied.
 | `260c1a1` | refactor(web): remove obsolete mock footer text and streamline system info |
 | `8ec913f` | fix(web): enforce app viewport lock so topbar and sidebar stay fixed |
 | `99037f1` | refactor(web): remove fake status card and redundant tags from sidebar |
+| `c90e5b1` | fix(web): enforce standard 16:9 aspect-video ratio for live surveillance viewports |
 
 ### Testing
 
