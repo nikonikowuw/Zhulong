@@ -100,3 +100,18 @@ CREATE TABLE camera_streams (
 4. **背压与慢客户端淘汰**：
    - 每个客户端分配 64-slot 有界缓冲。拥塞时优先丢弃非关键帧；持续阻塞则主动断开连接（Close 1008 Policy Violation），保护服务端内存。
 
+---
+
+## 6. 前端摄像机配置与状态大盘规范
+
+1. **业务域分层架构 (`web/src/features/camera/`)**：
+   - `api/cameraApi.ts`：纯函数封装 REST API，由 Zod Schema 强类型约束出入参；
+   - `hooks/useCameras.ts`：TanStack Query 封装 CRUD 与诊断 Mutation；
+   - `hooks/useCameraEvents.ts`：基于 `EventSource` 订阅 `/api/v1/cameras/events`，通过 `snapshot` 全量初始化与 `change` 增量更新实现原地无感刷新，断网内置指数退避重连；
+   - `components/`：大盘卡片、设备卡片、新增/编辑弹窗、诊断报告对话框与删除二次确认；
+   - `utils/urlHelper.ts`：RTSP 密码掩码（`••••••••`）与跨环境安全剪贴板复制。
+2. **原子探测门禁交互**：提交新增/更新表单时，按钮进入 3～5 秒探测 Loading，禁用输入并展示进度微动；探测失败时保留表单输入并精准回显业务错误码与说明。
+3. **CAS Revision 乐观锁处理**：更新摄像机携带当前 `revision`；遇 409 冲突弹出防覆写提示并引导刷新。
+4. **全量国际化 (i18n)**：所有标签、状态徽标、表单校验与错误信息必须完整覆盖 `en` / `zh-Hans` / `zh-Hant`。
+
+
