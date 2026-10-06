@@ -47,5 +47,33 @@
   "footer": {
     "runtime": "Runtime foundation",
     "hardware": "No camera or accelerator SDK configured"
+  },
+  "console": {
+    "tag": "Console",
+    "collapse": "Collapse sidebar",
+    "expand": "Expand sidebar",
+    "fullscreen": "Fullscreen",
+    "exitFullscreen": "Exit fullscreen",
+    "refresh": "Refresh data",
+    "onlineStatus": "{{online}}/{{total}} Online",
+    "dashboard": {
+      "metricsTitle": "System KPIs",
+      "camerasCard": "Camera Assets",
+      "camerasDesc": "{{online}} Online / {{total}} Total",
+      "liveCard": "Live Video Streams",
+      "liveDesc": "Ready channels",
+      "engineCard": "Inference Engine",
+      "engineDesc": "Native pipeline ready",
+      "systemCard": "Host Services",
+      "systemDesc": "Core services operating",
+      "quickActions": "Quick Actions",
+      "gotoLive": "View Live Surveillance",
+      "gotoCameras": "Manage Cameras",
+      "systemInfo": "Host Environment",
+      "environmentLabel": "Environment",
+      "runtimeLabel": "Core Runtime",
+      "statusReady": "Ready",
+      "statusChecking": "Checking"
+    }
   }
 }

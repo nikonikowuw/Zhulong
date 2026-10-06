@@ -47,5 +47,33 @@
   "footer": {
     "runtime": "執行環境基礎框架",
     "hardware": "尚未設定攝影機或加速器 SDK"
+  },
+  "console": {
+    "tag": "管理控制台",
+    "collapse": "收起側邊欄",
+    "expand": "展開側邊欄",
+    "fullscreen": "全螢幕模式",
+    "exitFullscreen": "結束全螢幕",
+    "refresh": "重新整理資料",
+    "onlineStatus": "{{online}}/{{total}} 線上",
+    "dashboard": {
+      "metricsTitle": "核心運行指標",
+      "camerasCard": "攝影機資產",
+      "camerasDesc": "線上 {{online}} / 總計 {{total}}",
+      "liveCard": "實時監控串流",
+      "liveDesc": "就緒串流通道",
+      "engineCard": "AI 推理引擎",
+      "engineDesc": "原生加速管線就緒",
+      "systemCard": "主機服務狀態",
+      "systemDesc": "核心服務正常運行",
+      "quickActions": "快速操作",
+      "gotoLive": "檢視實時視訊監控",
+      "gotoCameras": "管理攝影機資產",
+      "systemInfo": "主機系統環境",
+      "environmentLabel": "運行環境",
+      "runtimeLabel": "服務核心",
+      "statusReady": "就緒",
+      "statusChecking": "檢查中"
+    }
   }
 }

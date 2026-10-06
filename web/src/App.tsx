@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Activity, Camera, Cpu, Globe, LayoutGrid, Moon, Sun } from "lucide-react";
-import { AuthGuard, AuthProvider, UserNav, useAuth } from "@/features/auth";
-import { CameraPage } from "@/features/camera";
+import { AuthGuard, AuthProvider, useAuth } from "@/features/auth";
+import { CameraPage, useCamerasQuery } from "@/features/camera";
 import { LivePage } from "@/features/live";
-import { HealthPanel } from "@/features/systemStatus";
+import { OverviewDashboard } from "@/features/systemStatus";
+import { ConsoleTopbar, Sidebar } from "@/shared/components/layout";
+import type { ActiveTab } from "@/shared/components/layout";
 import { currentLanguage } from "@/shared/i18n";
 import { useTheme } from "@/shared/theme/useTheme";
 
-type ActiveTab = "overview" | "live" | "cameras";
+const SIDEBAR_COLLAPSED_KEY = "zhulong.sidebar.collapsed.v1";
 
 function getTabFromHash(): ActiveTab {
   if (typeof window !== "undefined") {
@@ -18,17 +19,12 @@ function getTabFromHash(): ActiveTab {
   return "overview";
 }
 
-function SystemStatusContent() {
-  const { t } = useTranslation();
-  return (
-    <>
-      <section className="page-heading" aria-labelledby="page-title">
-        <h1 id="page-title">{t("overview.heading")}</h1>
-        <p className="page-description">{t("overview.description")}</p>
-      </section>
-      <HealthPanel />
-    </>
-  );
+function readSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+  } catch {
+    return false;
+  }
 }
 
 function SystemStatusPage() {
@@ -36,10 +32,18 @@ function SystemStatusPage() {
   const { theme, toggleTheme } = useTheme();
   const { phase } = useAuth();
   const [activeTab, setActiveTab] = useState<ActiveTab>(getTabFromHash);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(readSidebarCollapsed);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+
+  const isAuthenticated = phase === "authenticated";
+
+  // Only query cameras when authenticated or on cameras/overview tab
+  const { data: cameras, isFetching: isFetchingCameras, refetch: refetchCameras } = useCamerasQuery();
+  const totalCameras = cameras?.length ?? 0;
+  const onlineCameras = cameras?.filter((c) => c.enabled && c.health === "online").length ?? 0;
+
   const language = currentLanguage(i18n.resolvedLanguage ?? i18n.language);
   const themeLabel = theme === "dark" ? t("controls.themeToLight") : t("controls.themeToDark");
-  const ThemeIcon = theme === "dark" ? Sun : Moon;
-  const isAuthenticated = phase === "authenticated";
 
   useEffect(() => {
     function handleHashChange() {
@@ -58,6 +62,18 @@ function SystemStatusPage() {
     }
   }
 
+  function toggleSidebarCollapse() {
+    setIsSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
+      } catch {
+        // Ignored
+      }
+      return next;
+    });
+  }
+
   useEffect(() => {
     document.documentElement.lang = language;
     document.title = `${t("app.title")} · ${t("app.brand")}`;
@@ -72,124 +88,71 @@ function SystemStatusPage() {
   }, [theme]);
 
   return (
-    <div className="application flex min-h-dvh flex-col bg-background text-foreground">
-      <div className="ambient-background" aria-hidden="true">
-        <div className="ambient-orb ambient-orb-1" />
-        <div className="ambient-orb ambient-orb-2" />
-        <div className="ambient-orb ambient-orb-3" />
-        <div className="ambient-orb ambient-orb-4" />
-      </div>
+    <div className="application flex min-h-dvh flex-col bg-[var(--background)] text-[var(--foreground)]">
+      <div className="console-bg" aria-hidden="true" />
       <a className="skip-link" href="#main">{t("a11y.skipToContent")}</a>
-      <header className="topbar">
-        <a className="brand" href="/" aria-label={t("app.brand")}>
-          <span className="brand-mark">
-            <Cpu size={16} aria-hidden="true" />
-          </span>
-          <span className="brand-name">{t("app.brand")}</span>
-        </a>
 
+      <div className="flex min-h-dvh w-full overflow-hidden">
+        {/* Professional Management Sidebar */}
         {isAuthenticated && (
-          <nav className="header-nav flex items-center gap-1 bg-[var(--surface-muted)] p-1 rounded-xl border border-[var(--border)]" aria-label="Main Navigation">
-            <button
-              type="button"
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
-                activeTab === "overview"
-                  ? "bg-[var(--surface)] text-[var(--foreground)] shadow-xs"
-                  : "text-[var(--muted)] hover:text-[var(--foreground)]"
-              }`}
-              onClick={() => switchTab("overview")}
-            >
-              <Activity size={13} aria-hidden="true" />
-              <span>{t("nav.overview")}</span>
-            </button>
-            <button
-              type="button"
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
-                activeTab === "live"
-                  ? "bg-[var(--surface)] text-[var(--foreground)] shadow-xs"
-                  : "text-[var(--muted)] hover:text-[var(--foreground)]"
-              }`}
-              onClick={() => switchTab("live")}
-            >
-              <LayoutGrid size={13} aria-hidden="true" />
-              <span>{t("nav.live")}</span>
-            </button>
-            <button
-              type="button"
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
-                activeTab === "cameras"
-                  ? "bg-[var(--surface)] text-[var(--foreground)] shadow-xs"
-                  : "text-[var(--muted)] hover:text-[var(--foreground)]"
-              }`}
-              onClick={() => switchTab("cameras")}
-            >
-              <Camera size={13} aria-hidden="true" />
-              <span>{t("nav.cameras")}</span>
-            </button>
-          </nav>
+          <Sidebar
+            activeTab={activeTab}
+            onSwitchTab={switchTab}
+            isCollapsed={isSidebarCollapsed}
+            onToggleCollapse={toggleSidebarCollapse}
+            isMobileOpen={isMobileSidebarOpen}
+            onCloseMobile={() => setIsMobileSidebarOpen(false)}
+            onlineCameraCount={onlineCameras}
+            totalCameraCount={totalCameras}
+          />
         )}
 
-        <div className="header-controls">
-          <UserNav />
-          <div className="language-control relative flex items-center">
-            <label htmlFor="language" className="sr-only">
-              {t("controls.language")}
-            </label>
-            <span className="pointer-events-none absolute left-2.5 flex items-center text-[var(--muted)]">
-              <Globe size={12} aria-hidden="true" />
-            </span>
-            <select
-              id="language"
-              name="language"
-              value={language}
-              onChange={(event) => void i18n.changeLanguage(event.target.value)}
-              aria-label={t("controls.language")}
-            >
-              <option value="en">English</option>
-              <option value="zh-Hans">简体中文</option>
-              <option value="zh-Hant">繁體中文</option>
-            </select>
-          </div>
-          <button
-            className="icon-button theme-button"
-            type="button"
-            onClick={toggleTheme}
-            aria-label={themeLabel}
-            title={themeLabel}
-          >
-            <ThemeIcon size={15} aria-hidden="true" />
-          </button>
-        </div>
-      </header>
+        {/* Main Content Area with Console Topbar */}
+        <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
+          <ConsoleTopbar
+            activeTab={activeTab}
+            onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            themeLabel={themeLabel}
+            language={language}
+            onChangeLanguage={(lang) => void i18n.changeLanguage(lang)}
+            onlineCameraCount={isAuthenticated ? onlineCameras : undefined}
+            totalCameraCount={isAuthenticated ? totalCameras : undefined}
+            onRefresh={isAuthenticated ? () => void refetchCameras() : undefined}
+            isRefreshing={isFetchingCameras}
+          />
 
-      {isAuthenticated ? (
-        <main id="main" className="workspace flex-1" tabIndex={-1}>
-          <AuthGuard>
-            {activeTab === "cameras" ? (
-              <CameraPage />
-            ) : activeTab === "live" ? (
-              <LivePage />
-            ) : (
-              <SystemStatusContent />
-            )}
-          </AuthGuard>
-          <footer className="workspace-footer">
-            <span>{t("footer.runtime")}</span>
-            <span>{t("footer.hardware")}</span>
-          </footer>
-        </main>
-      ) : (
-        <main id="main" className="auth-canvas flex flex-1 flex-col items-center justify-center p-4" tabIndex={-1}>
-          <AuthGuard>
-            <SystemStatusContent />
-          </AuthGuard>
-          <footer className="mt-6 flex items-center gap-2 text-xs text-[var(--muted)] opacity-70">
-            <span>{t("app.brand")}</span>
-            <span>·</span>
-            <span>{t("footer.runtime")}</span>
-          </footer>
-        </main>
-      )}
+          {isAuthenticated ? (
+            <main id="main" className="workspace flex-1 flex flex-col min-w-0 overflow-y-auto" tabIndex={-1}>
+              <AuthGuard>
+                {activeTab === "cameras" ? (
+                  <CameraPage />
+                ) : activeTab === "live" ? (
+                  <LivePage />
+                ) : (
+                  <OverviewDashboard onNavigateTab={switchTab} />
+                )}
+              </AuthGuard>
+              <footer className="workspace-footer mt-auto pt-6 border-t border-[var(--border)]/40 flex justify-between text-xs text-[var(--muted)]">
+                <span>{t("footer.runtime")}</span>
+                <span>{t("footer.hardware")}</span>
+              </footer>
+            </main>
+          ) : (
+            <main id="main" className="auth-canvas flex flex-1 flex-col items-center justify-center p-4" tabIndex={-1}>
+              <AuthGuard>
+                <OverviewDashboard onNavigateTab={switchTab} />
+              </AuthGuard>
+              <footer className="mt-6 flex items-center gap-2 text-xs text-[var(--muted)] opacity-70">
+                <span>{t("app.brand")}</span>
+                <span>·</span>
+                <span>{t("footer.runtime")}</span>
+              </footer>
+            </main>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

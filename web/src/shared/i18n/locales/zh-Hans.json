@@ -47,5 +47,33 @@
   "footer": {
     "runtime": "运行时基础框架",
     "hardware": "尚未配置摄像机或加速器 SDK"
+  },
+  "console": {
+    "tag": "管理控制台",
+    "collapse": "收起侧边栏",
+    "expand": "展开侧边栏",
+    "fullscreen": "全屏模式",
+    "exitFullscreen": "退出全屏",
+    "refresh": "刷新数据",
+    "onlineStatus": "{{online}}/{{total}} 在线",
+    "dashboard": {
+      "metricsTitle": "核心运行指标",
+      "camerasCard": "摄像机资产",
+      "camerasDesc": "在线 {{online}} / 总计 {{total}}",
+      "liveCard": "实时监控流",
+      "liveDesc": "就绪流通道",
+      "engineCard": "AI 推理引擎",
+      "engineDesc": "原生加速管线就绪",
+      "systemCard": "主机服务状态",
+      "systemDesc": "核心服务正常运行",
+      "quickActions": "快速操作",
+      "gotoLive": "查看实时视频监控",
+      "gotoCameras": "管理摄像机资产",
+      "systemInfo": "主机系统环境",
+      "environmentLabel": "运行环境",
+      "runtimeLabel": "服务内核",
+      "statusReady": "就绪",
+      "statusChecking": "检查中"
+    }
   }
 }
