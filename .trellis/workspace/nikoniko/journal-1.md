@@ -243,3 +243,49 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: 实现摄像机配置管理与实时大盘前端 (10-06-camera-management-ui)
+<!-- trellis-session: v=2 fp=c18de453cf42f1e7 -->
+
+**Date**: 2026-10-06
+**Task**: 实现摄像机配置管理与实时大盘前端 (10-06-camera-management-ui)
+**Package**: frontend
+**Branch**: `dev`
+
+### Summary
+
+构建摄像机配置管理与状态大盘前端模块，实现顶栏视图导航、正交健康大盘卡片、RTSP 凭据掩码显隐与安全复制、3~5s 原子探测反馈表单与 SSE 实时状态同步。
+
+### Main Changes
+
+- 实现全局顶栏导航切换（系统概览 vs 摄像机管理），与 URL Hash 状态双向绑定
+- 封装 features/camera 业务域：Zod 强类型契约、REST API 客户端与 useCameras TanStack Query 钩子
+- 实现 useCameraEvents SSE 实时事件监听，支持快照初始化与单机增量无感刷新
+- 开发 CameraDashboard 指标大盘、CameraCard 设备卡片、CameraFormModal 探测表单、诊断与删除确认模态框
+- 实现 RTSP 密码掩码显示与 👁️ 显隐切换，以及跨浏览器兼容的一键安全复制完整明文地址
+- 完善 en、zh-Hans、zh-Hant 完整三语国际化词典，并通过全套 Vitest 单元测试
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `98182b0` | feat(web): implement camera management view, dashboard, and SSE real-time sync |
+| `0cef146` | docs(spec): document camera management frontend and real-time SSE specifications |
+| `71e7242` | docs(task): record task planning and implementation for 10-06-camera-management-ui |
+
+### Testing
+
+- [OK] npm run type-check: TypeScript 严格类型检查 0 错误
+- [OK] npm run lint: ESLint 代码风格检查 0 错误
+- [OK] npm test: 16 个测试套件 65 项单元测试 100% 通过
+- [OK] make check: 前端生产构建、Native C++ 测试、Go vet/test -race 全量门禁通过
+- [OK] make smoke: 单二进制生产交付冒烟测试通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推进 10-05-media-ingestion 的实时预览看板与播放器组件（10-06-live-player-grid 或 Step 3.1/3.3）
