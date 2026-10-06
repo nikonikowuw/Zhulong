@@ -335,3 +335,44 @@ Session summary was not supplied.
 ### Next Steps
 
 - 推进 10-05-media-ingestion 的端到端流转与物理流复用集成验收 (Step 4.1/4.2) 或 Native FFmpeg 接入 (10-05-native-ffmpeg-ingestion)
+
+---
+
+## 2026-10-06 摄像机流转管道与调度状态时序缺陷修复
+
+**Task**: `10-06-camera-stream-fixes`
+**Status**: Completed
+**Package**: `backend`
+**Branch**: `dev`
+
+### Summary
+
+针对 `internal/camera` 模块的 code review 结果，修复了四个关键并发与状态机时序缺陷：活跃流收包证据未上报导致的 4s 误判超时、StreamHub 并发拉流防击穿、Session 状态切换未向 SSE 广播、以及调度器停机时网络阻塞导致的慢退出。
+
+### Main Changes
+
+- **活跃流收包证据节流刷新 (`stream_dispatcher.go`)**：在 `RunPumpLoop` 消费到视频帧时，遇到关键帧或间隔 ≥1s 节流上报 `EvidencePacketActivity` 刷新 `LastCheckedAt`，彻底解决活跃流被误杀超时问题。
+- **并发 Singleflight 保护 (`stream_hub.go`)**：使用 `golang.org/x/sync/singleflight` 协同合并对同一路码流的并发拉流请求，杜绝多视口/多用户同时进入时对摄像机重复发起物理 RTSP 握手与 C++ 句柄开销。
+- **SessionState 实时 SSE 广播 (`stream_hub.go`, `stream_dispatcher.go`)**：StreamHub 注入 `EventHub`，流在 `running` 与 `idle` 切换时实时广播 `change` 事件，前端大盘推流徽标秒级同步。
+- **HealthScheduler 快速优雅停机 (`scheduler.go`, `rtsp_describe.go`)**：调度器引入全局级联取消 Context；并在 `DescribeClient.Describe` 中通过后台 watchdog 协程监听上下文取消打断阻塞的 socket，停机时延从 5s 降至 <100ms。
+- **装配与测试**：更新 `internal/app/app.go` 依赖注入，补充 Singleflight 并发测试、SSE 广播测试、节流收包测试与快速停机测试，通过全量 `-race` 竞态检测。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `385c990` | fix(camera): resolve packet timeout false alarm, add singleflight, and fix session broadcast |
+| `71af22d` | docs(spec): document packet activity throttling and singleflight streaming |
+| `9695458` | docs(task): record task planning and implementation for 10-06-camera-stream-fixes |
+
+### Testing
+
+- [OK] `go test -race -v -count=1 ./internal/camera/...`: 31 项测试 100% 通过，无数据竞态
+- [OK] `go test -race ./cmd/... ./internal/...`: 全量后端模块测试全部通过
+- [OK] `go vet ./cmd/... ./internal/...`: 静态分析 0 警告
+- [OK] `gofmt -l cmd internal`: 代码格式符合规范
+
+### Status
+
+[OK] **Completed**
+
