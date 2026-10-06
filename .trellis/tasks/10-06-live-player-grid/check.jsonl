@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/camera-guidelines.md", "reason": "验证前端 ZLM1 协议解包与 WebSocket 管道完全契合后端推流"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量门禁规范（type-check、lint、test、build）"}

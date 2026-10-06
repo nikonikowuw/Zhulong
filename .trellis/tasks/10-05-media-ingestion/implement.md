@@ -62,7 +62,7 @@
 
 ## 阶段三：前端功能解耦与全场景播放器 (Phase 3: Frontend Web)
 
-- [ ] **Step 3.1: 独立播放器组件 `LivePlayer.tsx` 与前端流池实现 (`web/src/features/live/`)**
+- [x] **Step 3.1: 独立播放器组件 `LivePlayer.tsx` 与前端流池实现 (`web/src/features/live/`)**
   - 实现前端单例流连接池 `FrontendStreamPool` 与 `useCameraStream` Hook（维护纯客户端 `refCount`，实现分屏视口复用）
   - 集成支持 H.264/H.265 的三级自适应播放方案（WebCodecs ➔ MSE ➔ WASM）
   - 实现断线重连动画、缓冲加载与延迟状态指示
@@ -75,7 +75,7 @@
   - 实现入库前 3~5s 异步探测 Loading 与结果回显
   - 接入 `useCamerasQuery` 与 `useCreateCameraMutation`
   - *验证命令*：`cd web && npm test`
-- [ ] **Step 3.3: 实时预览独立菜单与宫格看板 (`web/src/features/live/` ➔ `/live`)**
+- [x] **Step 3.3: 实时预览独立菜单与宫格看板 (`web/src/features/live/` ➔ `/live`)**
   - 实现 1/4/9 宫格自适应切换控制栏与全屏模式
   - 绑定摄像机 WebSocket 码流端点，支持多通道并行拉流与按需生命周期
   - 接入顶栏菜单导航路由拆分（`/cameras` vs `/live`），支持中/英/繁三语

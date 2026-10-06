@@ -23,7 +23,8 @@
     "10-05-go-cgo-media-bridge",
     "10-05-camera-lifecycle",
     "10-06-websocket-streaming",
-    "10-06-camera-management-ui"
+    "10-06-camera-management-ui",
+    "10-06-live-player-grid"
   ],
   "parent": null,
   "relatedFiles": [],

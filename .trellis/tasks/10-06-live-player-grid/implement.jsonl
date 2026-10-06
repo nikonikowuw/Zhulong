@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture.md", "reason": "Zhulong 系统前端架构与技术选型约定"}
+{"file": ".trellis/spec/backend/camera-guidelines.md", "reason": "ZLM1 二进制传输协议头与按需单例 WebSocket 规约"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "React 19、TanStack Query 与组件拆分开发铁律"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "Apple 风格主题与 i18n 多语言规范"}
