@@ -17,7 +17,8 @@
     "overview": "系統概覽",
     "live": "實時監控",
     "cameras": "攝影機管理",
-    "audit": "操作審計"
+    "audit": "操作審計",
+    "settings": "系統設定"
   },
   "overview": {
     "heading": "系統概覽",

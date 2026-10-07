@@ -4,6 +4,7 @@ import { AuditLogPage } from "@/features/audit";
 import { AuthGuard, AuthProvider, useAuth } from "@/features/auth";
 import { CameraPage, useCamerasQuery } from "@/features/camera";
 import { LivePage } from "@/features/live";
+import { SystemSettingsPage } from "@/features/systemSettings";
 import { OverviewDashboard } from "@/features/systemStatus";
 import { ConsoleTopbar, Sidebar } from "@/shared/components/layout";
 import type { ActiveTab } from "@/shared/components/layout";
@@ -13,13 +14,14 @@ import { useTheme } from "@/shared/theme/useTheme";
 const SIDEBAR_COLLAPSED_KEY = "zhulong.sidebar.collapsed.v1";
 
 function isKnownTab(tab: string): tab is ActiveTab {
-  return tab === "live" || tab === "cameras" || tab === "audit" || tab === "overview";
+  return tab === "live" || tab === "cameras" || tab === "audit" || tab === "overview" || tab === "settings";
 }
 
 function getTabFromHash(): ActiveTab {
   if (typeof window !== "undefined") {
-    const tab = window.location.hash.replace(/^#/, "");
-    if (isKnownTab(tab)) {
+    const raw = window.location.hash.replace(/^#/, "");
+    const [tab] = raw.split("?");
+    if (tab && isKnownTab(tab)) {
       return tab;
     }
   }
@@ -75,6 +77,8 @@ function SystemStatusPage() {
         return <LivePage />;
       case "audit":
         return <AuditLogPage />;
+      case "settings":
+        return <SystemSettingsPage />;
       case "overview":
       default:
         return <OverviewDashboard onNavigateTab={switchTab} />;
@@ -147,6 +151,10 @@ function SystemStatusPage() {
               <AuthGuard>
                 {renderActiveView()}
               </AuthGuard>
+            </main>
+          ) : activeTab === "settings" ? (
+            <main id="main" className="workspace flex-1 flex flex-col min-w-0 overflow-y-auto" tabIndex={-1}>
+              <SystemSettingsPage />
             </main>
           ) : (
             <main id="main" className="auth-canvas flex flex-1 flex-col items-center justify-center p-4 overflow-y-auto" tabIndex={-1}>

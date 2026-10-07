@@ -16,6 +16,7 @@ internal/
   audit/                      # 操作与安全审计日志模块 (model.go, store.go, service.go, handler.go)
   auth/                       # 单用户认证与会话管理 (handler.go, store.go, limiter.go)
   camera/                     # 相机管理业务模块 (camera.go, handler.go, store.go, *_test.go)
+  network/                    # 异构宿主网络配置与两阶段回滚看门狗模块 (model.go, provider*.go, watchdog.go, service.go, handler.go)
   recording/                  # 视频录像与切片存储管理模块
   inference/                  # AI 分析任务配置与检测规则管理模块
   engine/                     # Go 侧 CGO 驱动桥接包 (隔离 C ABI，无业务逻辑)

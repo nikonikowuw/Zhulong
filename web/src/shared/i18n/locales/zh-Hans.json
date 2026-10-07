@@ -17,7 +17,8 @@
     "overview": "系统概览",
     "live": "实时监控",
     "cameras": "摄像机管理",
-    "audit": "操作审计"
+    "audit": "操作审计",
+    "settings": "系统设置"
   },
   "overview": {
     "heading": "系统概览",

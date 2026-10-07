@@ -5,6 +5,7 @@ import { authLocales } from "@/features/auth/locales";
 import { auditLocales } from "@/features/audit/locales";
 import { cameraLocales } from "@/features/camera/locales";
 import { liveLocales } from "@/features/live/locales";
+import { systemSettingsLocales } from "@/features/systemSettings/locales";
 import en from "./locales/en.json";
 import zhHans from "./locales/zh-Hans.json";
 import zhHant from "./locales/zh-Hant.json";
@@ -28,6 +29,7 @@ const resources = {
       audit: auditLocales.en,
       camera: cameraLocales.en,
       live: liveLocales.en,
+      systemSettings: systemSettingsLocales.en,
     },
   },
   "zh-Hans": {
@@ -37,6 +39,7 @@ const resources = {
       audit: auditLocales["zh-Hans"],
       camera: cameraLocales["zh-Hans"],
       live: liveLocales["zh-Hans"],
+      systemSettings: systemSettingsLocales["zh-Hans"],
     },
   },
   "zh-Hant": {
@@ -46,6 +49,7 @@ const resources = {
       audit: auditLocales["zh-Hant"],
       camera: cameraLocales["zh-Hant"],
       live: liveLocales["zh-Hant"],
+      systemSettings: systemSettingsLocales["zh-Hant"],
     },
   },
 };

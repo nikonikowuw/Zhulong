@@ -10,9 +10,10 @@ import (
 
 // Config contains host-level settings supplied before Fx constructs the application.
 type Config struct {
-	HTTPAddress string
-	DataDir     string
-	Development bool
+	HTTPAddress  string
+	DataDir      string
+	Development  bool
+	CustomScript string
 }
 
 func validateHTTPAddress(address string) error {

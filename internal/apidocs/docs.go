@@ -687,6 +687,322 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/system/network/confirm": {
+            "post": {
+                "description": "Solidifies current trial configuration and disarms the watchdog timer. Accepts session authentication or one-time confirmation token.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "network"
+                ],
+                "summary": "Confirm network trial configuration",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Confirmation token",
+                        "name": "token",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Confirmation token payload",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/network.ConfirmRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/network/interfaces": {
+            "get": {
+                "description": "Queries physical network interfaces on the host, tagging current session interface and default gateway",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "network"
+                ],
+                "summary": "List physical network interfaces",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/network.InterfaceInfo"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/network/interfaces/{name}/apply": {
+            "post": {
+                "description": "Arms a two-phase watchdog transaction, returns a confirmation token and starts delayed reconfiguration",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "network"
+                ],
+                "summary": "Apply interface configuration",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Interface identifier, e.g. eth0",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Configuration payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/network.InterfaceConfig"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/network.ApplyResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/network/ping": {
+            "post": {
+                "description": "Performs lightweight ICMP/TCP ping probe against gateway or IP address",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "network"
+                ],
+                "summary": "Probe network target connectivity",
+                "parameters": [
+                    {
+                        "description": "Ping request payload",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/network.PingRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/network.PingResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/network/rollback": {
+            "post": {
+                "description": "Immediately cancels trial configuration and restores previous safe state. Accepts session authentication or one-time confirmation token.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "network"
+                ],
+                "summary": "Rollback network trial configuration",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Confirmation token",
+                        "name": "token",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Rollback payload",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/network.RollbackRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/network/status": {
+            "get": {
+                "description": "Returns active watchdog transaction state if a network trial is currently running",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "network"
+                ],
+                "summary": "Get active network transaction status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/network.TransactionState"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -1100,6 +1416,176 @@ const docTemplate = `{
                     }
                 },
                 "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "network.ApplyResponse": {
+            "type": "object",
+            "properties": {
+                "confirmToken": {
+                    "type": "string"
+                },
+                "targetUrl": {
+                    "type": "string"
+                },
+                "timeoutSec": {
+                    "type": "integer"
+                },
+                "transactionId": {
+                    "type": "string"
+                }
+            }
+        },
+        "network.ConfirmRequest": {
+            "type": "object",
+            "properties": {
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "network.InterfaceConfig": {
+            "type": "object",
+            "required": [
+                "mode"
+            ],
+            "properties": {
+                "dns": {
+                    "description": "DNS servers list",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "gateway": {
+                    "description": "Optional gateway address, e.g. \"192.168.1.1\"",
+                    "type": "string"
+                },
+                "ipAddress": {
+                    "description": "Required when mode is \"static\", e.g. \"192.168.1.100\"",
+                    "type": "string"
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": [
+                        "dhcp",
+                        "static"
+                    ]
+                },
+                "setDefault": {
+                    "description": "Designate this interface as default gateway",
+                    "type": "boolean"
+                },
+                "subnetMask": {
+                    "description": "Required when mode is \"static\", e.g. \"255.255.255.0\"",
+                    "type": "string"
+                }
+            }
+        },
+        "network.InterfaceInfo": {
+            "type": "object",
+            "properties": {
+                "dns": {
+                    "description": "Configured DNS servers",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "gateway": {
+                    "description": "Configured gateway address, or empty",
+                    "type": "string"
+                },
+                "ipAddresses": {
+                    "description": "Assigned IPv4 addresses with CIDR prefix, e.g. [\"192.168.1.100/24\"]",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "isCurrent": {
+                    "description": "True if current HTTP connection was routed through this interface",
+                    "type": "boolean"
+                },
+                "isDefaultGw": {
+                    "description": "True if interface hosts default route (0.0.0.0/0)",
+                    "type": "boolean"
+                },
+                "linkUp": {
+                    "description": "Carrier status (cable plugged in)",
+                    "type": "boolean"
+                },
+                "mac": {
+                    "description": "Physical MAC address, e.g. \"52:54:00:12:34:56\"",
+                    "type": "string"
+                },
+                "mode": {
+                    "description": "\"dhcp\" or \"static\"",
+                    "type": "string"
+                },
+                "name": {
+                    "description": "Interface identifier, e.g. \"eth0\"",
+                    "type": "string"
+                }
+            }
+        },
+        "network.PingRequest": {
+            "type": "object",
+            "required": [
+                "target"
+            ],
+            "properties": {
+                "target": {
+                    "type": "string"
+                }
+            }
+        },
+        "network.PingResponse": {
+            "type": "object",
+            "properties": {
+                "reachable": {
+                    "type": "boolean"
+                },
+                "rttMs": {
+                    "type": "number"
+                }
+            }
+        },
+        "network.RollbackRequest": {
+            "type": "object",
+            "properties": {
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "network.TransactionState": {
+            "type": "object",
+            "properties": {
+                "confirmToken": {
+                    "type": "string"
+                },
+                "expiresAt": {
+                    "type": "string"
+                },
+                "interfaceName": {
+                    "type": "string"
+                },
+                "rollbackConfig": {
+                    "$ref": "#/definitions/network.InterfaceConfig"
+                },
+                "status": {
+                    "description": "\"idle\", \"pending_confirm\", \"rolling_back\"",
+                    "type": "string"
+                },
+                "targetUrl": {
+                    "type": "string"
+                },
+                "timeoutSec": {
+                    "type": "integer"
+                },
+                "transactionId": {
                     "type": "string"
                 }
             }

@@ -24,6 +24,13 @@ web/
         api/                          # 强类型 REST 调用与 DTO
         types.ts                      # 模块私有类型
         index.ts                      # ⚠️ 对外公共导出入口 (Public Barrel)
+      systemSettings/                 # 系统设置切片 (网络配置、两阶段回滚看门狗)
+        components/                   # 网卡看板、编辑弹窗、迁移倒计时模态框
+        hooks/                        # useNetworkInterfacesQuery, useNetworkStatusQuery 等
+        api/                          # 强类型 REST 客户端 (networkApi.ts)
+        types.ts                      # Zod 与 TypeScript 契约
+        locales/                      # 三语国际化字典
+        index.ts                      # 公共导出入口 (Public Barrel)
       playback/                       # 视频回放切片
       detection/                      # 实时 AI 检测事件与规则配置切片
     shared/                           # 跨业务模块共享的基础构件

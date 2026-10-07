@@ -12,6 +12,8 @@
 ### 2. Signatures
 
 - Configuration: `config.toml` 配置 `http.address` (默认 `127.0.0.1:8080`), `data.directory` (默认 `./data`), 和 `logging.development`。
+- CLI Flags: `Zhulong --reset-network` 紧急救援模式，在不启动主 Web 服务的情况下执行硬件主网口重置（`eth0` 强制重置为 `192.168.1.168/24` 维护 IP，其余物理网卡恢复 DHCP）并以状态码 0 退出。
+- Network Watchdog Lifecycle: 在 `lifecycleRuntime.Start` 中触发网络开机自检；若发现磁盘残留未确认的 `network_transaction.json`，无条件自动回滚至上一版本已知安全网络，防现场异常掉电变砖。
 - Health: `GET /api/v1/health`; ready data is `{ "status": "ready", "components": { "database": "ready", "engine": "ready" } }`.
 - Database: `database.New(dataDirectory string, logger *zap.Logger) *Store`, then `(*Store).OpenAndMigrate(ctx) error`, `Ready() bool`, and `Close() error`.
 - Go native wrapper: `engine.New() *Engine`, `Start() error`, `Stop() error`, `Ready() bool`, and idempotent `Close() error`.

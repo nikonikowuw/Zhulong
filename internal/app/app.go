@@ -8,6 +8,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
+	"github.com/nikonikowuw/Zhulong/internal/network"
 	"github.com/nikonikowuw/Zhulong/internal/webui"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -177,6 +178,37 @@ var cameraModule = fx.Module("camera",
 	fx.Provide(provideCamera),
 )
 
+// --- Network Module ---
+
+type networkOut struct {
+	fx.Out
+
+	Provider        network.NetworkProvider
+	Watchdog        *network.WatchdogManager
+	Service         *network.NetworkService
+	Handler         *network.Handler
+	Lifecycle       networkLifecycle
+	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+	PublicRoutes    RouteRegistrar `group:"public_routes"`
+}
+
+func provideNetwork(config Config, logger *zap.Logger) networkOut {
+	comp := network.NewNetworkComponents(config.DataDir, config.CustomScript, logger)
+	return networkOut{
+		Provider:        comp.Provider,
+		Watchdog:        comp.Watchdog,
+		Service:         comp.Service,
+		Handler:         comp.Handler,
+		Lifecycle:       comp.Lifecycle,
+		ProtectedRoutes: comp.ProtectedRoutes,
+		PublicRoutes:    comp.PublicRoutes,
+	}
+}
+
+var networkModule = fx.Module("network",
+	fx.Provide(provideNetwork),
+)
+
 // --- HTTP Module ---
 
 var httpModule = fx.Module("http",
@@ -202,6 +234,7 @@ var Module = fx.Options(
 	auditModule,
 	authModule,
 	cameraModule,
+	networkModule,
 	httpModule,
 	runtimeModule,
 )

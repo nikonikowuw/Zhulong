@@ -17,7 +17,8 @@
     "overview": "Overview",
     "live": "Live",
     "cameras": "Cameras",
-    "audit": "Audit Logs"
+    "audit": "Audit Logs",
+    "settings": "Settings"
   },
   "overview": {
     "heading": "System Overview",

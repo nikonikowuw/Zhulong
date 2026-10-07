@@ -1,0 +1,73 @@
+{
+  "title": "系統設定",
+  "tabs": {
+    "network": "網路設定"
+  },
+  "network": {
+    "heading": "實體網卡配置",
+    "description": "管理實體乙太網卡、IP 位址、預設閘道及防失聯兩階段安全保護。",
+    "currentInterface": "目前管理網口",
+    "currentInterfaceHint": "目前 Web 主控台正在透過此網口進行通訊。",
+    "defaultGateway": "預設閘道",
+    "status": {
+      "linkUp": "已連線",
+      "linkDown": "未插網路線",
+      "modeDhcp": "動態取得 (DHCP)",
+      "modeStatic": "靜態位址 (Static)"
+    },
+    "fields": {
+      "name": "網卡名稱",
+      "mac": "MAC 位址",
+      "ipAddress": "IP 位址",
+      "subnetMask": "子網路遮罩",
+      "gateway": "預設閘道",
+      "dns": "DNS 伺服器",
+      "setDefaultGateway": "指定為系統預設閘道 (0.0.0.0/0)"
+    },
+    "actions": {
+      "configure": "配置",
+      "ping": "測試連線能力",
+      "pinging": "探測中...",
+      "apply": "套用新配置",
+      "cancel": "取消",
+      "confirm": "立即固化新配置",
+      "rollback": "立刻還原",
+      "copyMac": "複製 MAC 位址",
+      "copyUrl": "複製訪問 URL"
+    },
+    "form": {
+      "modeLabel": "{{name}} 模式",
+      "commaSeparated": "（逗號分隔）"
+    },
+    "permissionWarning": "網路管理需要 CAP_NET_ADMIN 權能或 root 權限。目前處於唯讀模式。",
+    "ping": {
+      "title": "閘道與目標連線能力探測",
+      "placeholder": "例如 192.168.1.1 或 8.8.8.8",
+      "reachable": "連線正常 (往返時延: {{rtt}} ms)",
+      "unreachable": "目標不可達或探測逾時",
+      "error": "連線能力測試失敗"
+    },
+    "validation": {
+      "invalidIp": "IP 位址格式不合法",
+      "invalidSubnet": "子網路遮罩格式不合法 (例如 255.255.255.0)",
+      "invalidGateway": "閘道位址格式不合法",
+      "invalidDns": "DNS 伺服器 IP 格式不合法",
+      "gatewayRequired": "勾選預設閘道時必須填寫有效的閘道位址",
+      "gatewayConflict": "已有其他實體網卡配置為預設閘道。全域僅允許一個預設閘道。"
+    },
+    "watchdog": {
+      "bannerTitle": "網路試執行中",
+      "bannerMessage": "網口 {{iface}} 正在試執行新配置，剩餘 {{seconds}} 秒自動回復。請在確認網路可達後固化配置。",
+      "migrationModalTitle": "網路正在試執行",
+      "migrationWarning": "修改目前管理網口 IP 會導致目前頁面連線中斷。請在倒數結束前造訪新位址完成確認。",
+      "targetUrl": "新管理存取位址",
+      "jumpNow": "立即前往新位址",
+      "countdown": "剩餘 {{seconds}} 秒自動回復舊配置",
+      "confirmSuccess": "網路配置已永久固化生效。",
+      "rollbackSuccess": "已成功回復至上一版本安全配置。",
+      "statusPending": "試執行中 (等待確認)"
+    },
+    "empty": "未偵測到可管理的實體網路介面。",
+    "loadError": "取得網路介面列表失敗。"
+  }
+}

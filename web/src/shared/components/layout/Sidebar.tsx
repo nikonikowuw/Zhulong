@@ -1,9 +1,9 @@
-import { Activity, Camera, ChevronLeft, ChevronRight, Cpu, LayoutGrid, ScrollText } from "lucide-react";
+import { Activity, Camera, ChevronLeft, ChevronRight, Cpu, LayoutGrid, ScrollText, Sliders } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { UserNav } from "@/features/auth";
 import type { FC } from "react";
 
-export type ActiveTab = "overview" | "live" | "cameras" | "audit";
+export type ActiveTab = "overview" | "live" | "cameras" | "audit" | "settings";
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -62,6 +62,12 @@ export const Sidebar: FC<SidebarProps> = ({
       id: "audit" as const,
       label: t("nav.audit"),
       icon: ScrollText,
+      badge: null,
+    },
+    {
+      id: "settings" as const,
+      label: t("nav.settings"),
+      icon: Sliders,
       badge: null,
     },
   ];

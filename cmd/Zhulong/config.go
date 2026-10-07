@@ -17,6 +17,9 @@ type fileConfig struct {
 	Logging struct {
 		Development bool `mapstructure:"development"`
 	} `mapstructure:"logging"`
+	Network struct {
+		CustomScript string `mapstructure:"custom_script"`
+	} `mapstructure:"network"`
 }
 
 func loadConfig() (app.Config, error) {
@@ -41,8 +44,9 @@ func loadConfigFile(path string) (app.Config, error) {
 		return app.Config{}, fmt.Errorf("decode configuration %q: %w", path, err)
 	}
 	return app.Config{
-		HTTPAddress: values.HTTP.Address,
-		DataDir:     values.Data.Directory,
-		Development: values.Logging.Development,
+		HTTPAddress:  values.HTTP.Address,
+		DataDir:      values.Data.Directory,
+		Development:  values.Logging.Development,
+		CustomScript: values.Network.CustomScript,
 	}, nil
 }

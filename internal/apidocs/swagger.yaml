@@ -278,6 +278,122 @@ definitions:
     - data
     - message
     type: object
+  network.ApplyResponse:
+    properties:
+      confirmToken:
+        type: string
+      targetUrl:
+        type: string
+      timeoutSec:
+        type: integer
+      transactionId:
+        type: string
+    type: object
+  network.ConfirmRequest:
+    properties:
+      token:
+        type: string
+    type: object
+  network.InterfaceConfig:
+    properties:
+      dns:
+        description: DNS servers list
+        items:
+          type: string
+        type: array
+      gateway:
+        description: Optional gateway address, e.g. "192.168.1.1"
+        type: string
+      ipAddress:
+        description: Required when mode is "static", e.g. "192.168.1.100"
+        type: string
+      mode:
+        enum:
+        - dhcp
+        - static
+        type: string
+      setDefault:
+        description: Designate this interface as default gateway
+        type: boolean
+      subnetMask:
+        description: Required when mode is "static", e.g. "255.255.255.0"
+        type: string
+    required:
+    - mode
+    type: object
+  network.InterfaceInfo:
+    properties:
+      dns:
+        description: Configured DNS servers
+        items:
+          type: string
+        type: array
+      gateway:
+        description: Configured gateway address, or empty
+        type: string
+      ipAddresses:
+        description: Assigned IPv4 addresses with CIDR prefix, e.g. ["192.168.1.100/24"]
+        items:
+          type: string
+        type: array
+      isCurrent:
+        description: True if current HTTP connection was routed through this interface
+        type: boolean
+      isDefaultGw:
+        description: True if interface hosts default route (0.0.0.0/0)
+        type: boolean
+      linkUp:
+        description: Carrier status (cable plugged in)
+        type: boolean
+      mac:
+        description: Physical MAC address, e.g. "52:54:00:12:34:56"
+        type: string
+      mode:
+        description: '"dhcp" or "static"'
+        type: string
+      name:
+        description: Interface identifier, e.g. "eth0"
+        type: string
+    type: object
+  network.PingRequest:
+    properties:
+      target:
+        type: string
+    required:
+    - target
+    type: object
+  network.PingResponse:
+    properties:
+      reachable:
+        type: boolean
+      rttMs:
+        type: number
+    type: object
+  network.RollbackRequest:
+    properties:
+      token:
+        type: string
+    type: object
+  network.TransactionState:
+    properties:
+      confirmToken:
+        type: string
+      expiresAt:
+        type: string
+      interfaceName:
+        type: string
+      rollbackConfig:
+        $ref: '#/definitions/network.InterfaceConfig'
+      status:
+        description: '"idle", "pending_confirm", "rolling_back"'
+        type: string
+      targetUrl:
+        type: string
+      timeoutSec:
+        type: integer
+      transactionId:
+        type: string
+    type: object
 info:
   contact: {}
   description: Local API for the Zhulong edge operations host.
@@ -684,4 +800,205 @@ paths:
       summary: Get host health
       tags:
       - system
+  /system/network/confirm:
+    post:
+      consumes:
+      - application/json
+      description: Solidifies current trial configuration and disarms the watchdog
+        timer. Accepts session authentication or one-time confirmation token.
+      parameters:
+      - description: Confirmation token
+        in: query
+        name: token
+        type: string
+      - description: Confirmation token payload
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/network.ConfirmRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Confirm network trial configuration
+      tags:
+      - network
+  /system/network/interfaces:
+    get:
+      description: Queries physical network interfaces on the host, tagging current
+        session interface and default gateway
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/network.InterfaceInfo'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: List physical network interfaces
+      tags:
+      - network
+  /system/network/interfaces/{name}/apply:
+    post:
+      consumes:
+      - application/json
+      description: Arms a two-phase watchdog transaction, returns a confirmation token
+        and starts delayed reconfiguration
+      parameters:
+      - description: Interface identifier, e.g. eth0
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Configuration payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/network.InterfaceConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/network.ApplyResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Apply interface configuration
+      tags:
+      - network
+  /system/network/ping:
+    post:
+      consumes:
+      - application/json
+      description: Performs lightweight ICMP/TCP ping probe against gateway or IP
+        address
+      parameters:
+      - description: Ping request payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/network.PingRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/network.PingResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Probe network target connectivity
+      tags:
+      - network
+  /system/network/rollback:
+    post:
+      consumes:
+      - application/json
+      description: Immediately cancels trial configuration and restores previous safe
+        state. Accepts session authentication or one-time confirmation token.
+      parameters:
+      - description: Confirmation token
+        in: query
+        name: token
+        type: string
+      - description: Rollback payload
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/network.RollbackRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Rollback network trial configuration
+      tags:
+      - network
+  /system/network/status:
+    get:
+      description: Returns active watchdog transaction state if a network trial is
+        currently running
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/network.TransactionState'
+              type: object
+      summary: Get active network transaction status
+      tags:
+      - network
 swagger: "2.0"
