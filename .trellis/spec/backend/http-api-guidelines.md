@@ -47,7 +47,40 @@
 - 纯日期使用 `YYYY-MM-DD`，不附加时区，也不转换为时间戳；持续时间使用带明确单位的数值字段。
 - 数据库与 API 的详细存储/序列化约定见 [SQLite 与 GORM 数据库开发规范](./database-guidelines.md)；前端不得把本地化后的显示字符串回传为 API 时间值。
 
-## 3. 请求校验与 DTO 边界
+---
+
+## 3. 统一分页与列表查询规约 (Pagination & List Queries)
+
+为确保前后端在所有列表接口上的契约严格统一，禁止返回裸数组，所有分页接口遵循以下规约：
+
+### 请求参数标准（Query Parameters）
+- **`page`**：整数，页码，**从 1 开始**（默认 `1`）。若传入 `< 1`，后端强制归一化为 `1`。
+- **`pageSize`**：整数，每页条数（默认 `20`，**硬上限 `100`**）。若传入 `<= 0`，归一化为 `20`；若 `> 100`，截断为 `100`。
+- **兼容别名支持**：后端通过 `httputil.PaginationQuery` 统一解析，若请求提供了 `limit` / `offset`，自动换算为对应的 `page` 与 `pageSize`。
+
+### 响应载荷四元组（Data Envelope）
+所有分页接口的 `data` 必须返回固定四元组对象：
+```json
+{
+  "code": "OK",
+  "message": "success",
+  "data": {
+    "items": [ /* 数据项数组 */ ],
+    "total": 128,
+    "page": 1,
+    "pageSize": 20
+  }
+}
+```
+
+- **空数组铁律**：无数据时 `items` **必须返回空数组 `[]`，严禁返回 `null`**。
+- **后端统一实现**：后端 Handler 统一使用 `httputil.PaginatedSuccess(c, items, total, page, pageSize)` 输出；
+- **前端统一契约**：前端 API 定义统一使用 `@/shared/api/client` 导出的 `createPaginatedSchema(itemSchema)` 校验，严禁直接使用裸 `z.array(itemSchema)` 解析分页接口。
+- **不分页特例**：仅在数据项具备严格物理极小上限（如网卡列表 `interfaces` ≤ 8、固定枚举字典、明确 < 20 条的单例轻量配置）时允许不分页，且依然推荐返回 `{ items: [...] }` 保持结构一致。
+
+---
+
+## 4. 请求校验与 DTO 边界
 
 1. **强制 DTO**：禁止在 HTTP 接口直接接收或返回 GORM Model，防止凭据泄露或级联循环。
 2. **声明式 Binding 校验**：
@@ -64,7 +97,7 @@
 
 ---
 
-## 4. Swagger 2.0 注释与生成 (Swaggo)
+## 5. Swagger 2.0 注释与生成 (Swaggo)
 
 在每个公开 Handler 上标注标准注释：
 
@@ -83,7 +116,7 @@
 
 ---
 
-## 5. 前端 SPA 与 API 路由防击穿隔离
+## 6. 前端 SPA 与 API 路由防击穿隔离
 
 1. `/api/*` ➔ 业务 API。未命中（包含不支持的 HTTP method）必须返回 HTTP 404 JSON，遵循 `{ "code": "ROUTE_NOT_FOUND", "message": "Route not found", "data": null }`，**绝对禁止回退到前端 HTML**！
 2. `/swagger/*` ➔ API 调试文档。

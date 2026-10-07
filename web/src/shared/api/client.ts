@@ -63,7 +63,7 @@ function parseCallOptions(signalOrOptions?: AbortSignal | ApiCallOptions): ApiCa
 
 async function requestApiData<T>(
   path: string,
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T, z.ZodTypeDef, any>,
   options: RequestOptions,
 ): Promise<T> {
   const controller = new AbortController();
@@ -114,6 +114,9 @@ async function requestApiData<T>(
 
     const envelope = apiEnvelopeSchema.safeParse(body);
     if (!envelope.success) {
+      if (import.meta.env?.DEV) {
+        console.error(`[API] Invalid envelope structure for ${path}:`, envelope.error);
+      }
       throw new ApiError("Invalid server response", response.status, "INVALID_RESPONSE");
     }
     if (!response.ok || envelope.data.code !== "OK") {
@@ -122,6 +125,9 @@ async function requestApiData<T>(
 
     const data = schema.safeParse(envelope.data.data);
     if (!data.success) {
+      if (import.meta.env?.DEV) {
+        console.error(`[API] Schema validation failed for ${path}:`, data.error);
+      }
       throw new ApiError("Invalid server response", response.status, "INVALID_RESPONSE");
     }
     return data.data;
@@ -138,7 +144,7 @@ async function requestApiData<T>(
 
 export function getApiData<T>(
   path: string,
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T, z.ZodTypeDef, any>,
   language: SupportedLanguage,
   signalOrOptions?: AbortSignal | ApiCallOptions,
 ): Promise<T> {
@@ -154,7 +160,7 @@ export function getApiData<T>(
 export function postApiData<T>(
   path: string,
   bodyData: unknown,
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T, z.ZodTypeDef, any>,
   language: SupportedLanguage,
   signalOrOptions?: AbortSignal | ApiCallOptions,
 ): Promise<T> {
@@ -171,7 +177,7 @@ export function postApiData<T>(
 export function putApiData<T>(
   path: string,
   bodyData: unknown,
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T, z.ZodTypeDef, any>,
   language: SupportedLanguage,
   signalOrOptions?: AbortSignal | ApiCallOptions,
 ): Promise<T> {
@@ -187,7 +193,7 @@ export function putApiData<T>(
 
 export function deleteApiData<T>(
   path: string,
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T, z.ZodTypeDef, any>,
   language: SupportedLanguage,
   signalOrOptions?: AbortSignal | ApiCallOptions,
 ): Promise<T> {
@@ -199,4 +205,7 @@ export function deleteApiData<T>(
     notifyOnUnauthorized: opts.notifyOnUnauthorized,
   });
 }
+
+export { createPaginatedSchema, type PaginatedData } from "./pagination";
+
 

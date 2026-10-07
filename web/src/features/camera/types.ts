@@ -75,7 +75,15 @@ export const cameraResponseSchema = z.object({
 });
 export type CameraResponse = z.infer<typeof cameraResponseSchema>;
 
-export const cameraListSchema = z.array(cameraResponseSchema);
+export const cameraListSchema = z.preprocess(
+  (val) => {
+    if (val && typeof val === "object" && "items" in val && Array.isArray((val as { items: unknown }).items)) {
+      return (val as { items: unknown }).items;
+    }
+    return val;
+  },
+  z.array(cameraResponseSchema),
+);
 
 export const cameraCredentialsResponseSchema = z.object({
   cameraId: z.string(),

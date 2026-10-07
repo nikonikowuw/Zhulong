@@ -17,6 +17,7 @@
 9. **列表 Key 必须业务唯一**：循环渲染必须使用后端全局唯一 ID（`key={cam.id}`），**严禁使用数组索引 `index` 作为 key**。
 10. **语义化 HTML 与无障碍**：交互元素优先使用 `<button>`，严禁在无语义 `<div />` 上加 `onClick`；弹窗必须支持 `Esc` 退出与 Tab 循环。
 11. **异步交互必须处理三态**：API 交互必须完备处理并展示：**Loading（加载中）**、**Error（失败重试）** 与 **Empty（空数据引导）**。
+12. **列表分页强契约**：分页列表 API 必须使用 `@/shared/api/client` 导出的 `createPaginatedSchema` 或带解构的兼容 Schema 校验，**严禁假设后端返回裸数组**；带服务端分页的查询在 Query Key 中必须显式包含 `[page, pageSize]`。
 
 ---
 

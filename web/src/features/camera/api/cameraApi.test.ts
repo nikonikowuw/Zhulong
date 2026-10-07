@@ -43,13 +43,33 @@ describe("cameraApi", () => {
     updatedAt: "2026-10-06T00:00:00Z",
   };
 
-  it("lists cameras", async () => {
+  it("lists cameras with direct array response", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: true,
       json: async () => ({
         code: "OK",
         message: "success",
         data: [mockCamera],
+      }),
+    } as Response);
+
+    const result = await listCameras("zh-Hans");
+    expect(result).toHaveLength(1);
+    expect(result[0]?.name).toBe("Front Gate");
+  });
+
+  it("lists cameras with paginated object response (items, total)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        code: "OK",
+        message: "success",
+        data: {
+          items: [mockCamera],
+          total: 1,
+          limit: 20,
+          offset: 0,
+        },
       }),
     } as Response);
 

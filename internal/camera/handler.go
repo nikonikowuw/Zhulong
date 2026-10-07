@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"reflect"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -107,24 +106,16 @@ func (h *Handler) Create(c *gin.Context) {
 // @Summary      List cameras
 // @Tags         camera
 // @Produce      json
-// @Param        limit query int false "Pagination limit"
-// @Param        offset query int false "Pagination offset"
-// @Success      200  {object}  httputil.Response{data=object}
+// @Param        page query int false "Page number (1-based, default 1)"
+// @Param        pageSize query int false "Page size (default 20, max 100)"
+// @Param        limit query int false "Legacy pagination limit"
+// @Param        offset query int false "Legacy pagination offset"
+// @Success      200  {object}  httputil.Response{data=httputil.PaginatedData[CameraResponse]}
 // @Router       /cameras [get]
 func (h *Handler) List(c *gin.Context) {
-	limit := 20
-	offset := 0
-
-	if lStr := c.Query("limit"); lStr != "" {
-		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
-			limit = l
-		}
-	}
-	if oStr := c.Query("offset"); oStr != "" {
-		if o, err := strconv.Atoi(oStr); err == nil && o >= 0 {
-			offset = o
-		}
-	}
+	var query httputil.PaginationQuery
+	_ = c.ShouldBindQuery(&query)
+	page, pageSize, offset, limit := query.Normalize()
 
 	cameras, total, err := h.service.List(c.Request.Context(), limit, offset)
 	if err != nil {
@@ -132,12 +123,7 @@ func (h *Handler) List(c *gin.Context) {
 		return
 	}
 
-	httputil.Success(c, gin.H{
-		"items":  cameras,
-		"total":  total,
-		"limit":  limit,
-		"offset": offset,
-	})
+	httputil.PaginatedSuccess(c, cameras, total, page, pageSize)
 }
 
 // Get godoc
