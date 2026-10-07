@@ -3,7 +3,7 @@ import { AlertTriangle, LoaderCircle, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { CameraResponse } from "../types";
 
-interface DeleteConfirmModalProps {
+export interface DeleteConfirmModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: (id: string) => Promise<unknown>;
@@ -30,11 +30,7 @@ export function DeleteConfirmModal({
       await onConfirm(camera.id);
       onClose();
     } catch (err: unknown) {
-      if (err instanceof Error) {
-        setErrorMsg(err.message);
-      } else {
-        setErrorMsg(String(err));
-      }
+      setErrorMsg(err instanceof Error ? err.message : String(err));
     } finally {
       setIsDeleting(false);
     }

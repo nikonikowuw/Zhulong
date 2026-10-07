@@ -1,4 +1,9 @@
 import { useMemo, useState } from "react";
+import {
+  calculateCameraCounts,
+  isCameraAbnormal,
+  type CameraCounts,
+} from "../utils/statusHelper";
 import type { CameraResponse } from "../types";
 
 export type CameraHealthFilter = "all" | "online" | "offline" | "abnormal";
@@ -21,17 +26,12 @@ export interface UseCameraFilterResult {
   filteredCameras: CameraResponse[];
   hasActiveFilters: boolean;
   clearFilters: () => void;
-  counts: {
-    all: number;
-    online: number;
-    offline: number;
-    abnormal: number;
-  };
+  counts: CameraCounts;
 }
 
 function getHealthWeight(camera: CameraResponse): number {
   if (!camera.enabled) return 0;
-  if (camera.health === "error" || camera.degraded || camera.stale) return 3;
+  if (isCameraAbnormal(camera)) return 3;
   if (camera.health === "online") return 2;
   if (camera.health === "offline") return 1;
   return 0;
@@ -47,16 +47,7 @@ export function useCameraFilter({
   const [healthFilter, setHealthFilter] = useState<CameraHealthFilter>(initialHealthFilter);
   const [sortOption, setSortOption] = useState<CameraSortOption>(initialSortOption);
 
-  const counts = useMemo(() => {
-    return {
-      all: cameras.length,
-      online: cameras.filter((c) => c.enabled && c.health === "online").length,
-      offline: cameras.filter((c) => c.enabled && c.health === "offline").length,
-      abnormal: cameras.filter(
-        (c) => c.enabled && (c.health === "error" || c.degraded || c.stale),
-      ).length,
-    };
-  }, [cameras]);
+  const counts = useMemo(() => calculateCameraCounts(cameras), [cameras]);
 
   const filteredCameras = useMemo(() => {
     const trimmedKw = keyword.trim().toLowerCase();
@@ -79,7 +70,7 @@ export function useCameraFilter({
         return camera.enabled && camera.health === "offline";
       }
       if (healthFilter === "abnormal") {
-        return camera.enabled && (camera.health === "error" || camera.degraded || camera.stale);
+        return camera.enabled && isCameraAbnormal(camera);
       }
 
       return true;
@@ -109,10 +100,10 @@ export function useCameraFilter({
 
   const hasActiveFilters = keyword.trim().length > 0 || healthFilter !== "all";
 
-  const clearFilters = () => {
+  function clearFilters() {
     setKeyword("");
     setHealthFilter("all");
-  };
+  }
 
   return {
     keyword,

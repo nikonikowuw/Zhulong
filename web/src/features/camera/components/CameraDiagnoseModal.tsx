@@ -1,8 +1,8 @@
-import { CheckCircle2, AlertTriangle, LoaderCircle, Stethoscope, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, LoaderCircle, Stethoscope, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { CameraResponse, DiagnoseResponse } from "../types";
 
-interface CameraDiagnoseModalProps {
+export interface CameraDiagnoseModalProps {
   isOpen: boolean;
   onClose: () => void;
   camera: CameraResponse | null;
@@ -24,6 +24,7 @@ export function CameraDiagnoseModal({
   if (!isOpen || !camera) return null;
 
   const isSuccess = result?.state?.health === "online";
+  const streams = result?.state?.streams ? Object.entries(result.state.streams) : [];
 
   return (
     <div
@@ -61,34 +62,45 @@ export function CameraDiagnoseModal({
             </div>
           ) : result ? (
             <div className="space-y-4">
-              <div className={`flex items-start gap-3 rounded-xl p-3.5 border ${
-                isSuccess
-                  ? "border-[var(--positive)]/30 bg-[var(--positive)]/10 text-[var(--positive)]"
-                  : "border-[var(--danger)]/30 bg-[var(--danger-soft)] text-[var(--danger)]"
-              }`}>
+              <div
+                className={`flex items-start gap-3 rounded-xl p-3.5 border ${
+                  isSuccess
+                    ? "border-[var(--positive)]/30 bg-[var(--positive)]/10 text-[var(--positive)]"
+                    : "border-[var(--danger)]/30 bg-[var(--danger-soft)] text-[var(--danger)]"
+                }`}
+              >
                 {isSuccess ? (
                   <CheckCircle2 size={18} className="shrink-0 mt-0.5" />
                 ) : (
                   <AlertTriangle size={18} className="shrink-0 mt-0.5" />
                 )}
                 <div className="text-xs">
-                  <div className="font-semibold">{result.message || (isSuccess ? t("camera.diagnoseSuccess") : t("camera.health.error"))}</div>
+                  <div className="font-semibold">
+                    {result.message || (isSuccess ? t("camera.diagnoseSuccess") : t("camera.health.error"))}
+                  </div>
                   {result.state?.reason && (
                     <div className="mt-1 opacity-90">{result.state.reason}</div>
                   )}
                 </div>
               </div>
 
-              {result.state?.streams && Object.keys(result.state.streams).length > 0 && (
+              {streams.length > 0 && (
                 <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)] p-3">
                   <div className="text-xs font-semibold text-[var(--foreground)] mb-2">
                     {t("camera.probeResult")}
                   </div>
                   <div className="space-y-2">
-                    {Object.entries(result.state.streams).map(([role, s]) => (
-                      <div key={role} className="flex items-center justify-between text-xs py-1 border-b border-[var(--border)] last:border-b-0">
+                    {streams.map(([role, s]) => (
+                      <div
+                        key={role}
+                        className="flex items-center justify-between text-xs py-1 border-b border-[var(--border)] last:border-b-0"
+                      >
                         <span className="font-medium text-[var(--foreground)] capitalize">{role}</span>
-                        <span className={`font-mono text-[11px] ${s.health === "online" ? "text-[var(--positive)]" : "text-[var(--danger)]"}`}>
+                        <span
+                          className={`font-mono text-[11px] ${
+                            s.health === "online" ? "text-[var(--positive)]" : "text-[var(--danger)]"
+                          }`}
+                        >
                           {s.health} · {s.session}
                         </span>
                       </div>

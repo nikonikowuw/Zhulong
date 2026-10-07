@@ -1,4 +1,3 @@
-import React from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, RotateCcw, SearchX, Video } from "lucide-react";
 
@@ -8,11 +7,11 @@ export interface CameraEmptyStateProps {
   onAddCamera?: () => void;
 }
 
-export const CameraEmptyState: React.FC<CameraEmptyStateProps> = ({
+export function CameraEmptyState({
   isFiltered = false,
   onClearFilters,
   onAddCamera,
-}) => {
+}: CameraEmptyStateProps) {
   const { t } = useTranslation();
 
   if (isFiltered) {
@@ -70,4 +69,4 @@ export const CameraEmptyState: React.FC<CameraEmptyStateProps> = ({
       )}
     </div>
   );
-};
+}

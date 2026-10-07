@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { currentLanguage } from "@/shared/i18n";
+import { currentLanguage, type SupportedLanguage } from "@/shared/i18n";
 import {
   createCamera,
   deleteCamera,
@@ -14,9 +14,13 @@ import type { CameraResponse, CreateCameraInput, UpdateCameraInput } from "../ty
 
 export const CAMERAS_QUERY_KEY = ["cameras"] as const;
 
-export function useCamerasQuery() {
+function useCurrentLanguage(): SupportedLanguage {
   const { i18n } = useTranslation();
-  const language = currentLanguage(i18n.resolvedLanguage ?? i18n.language);
+  return currentLanguage(i18n.resolvedLanguage ?? i18n.language);
+}
+
+export function useCamerasQuery() {
+  const language = useCurrentLanguage();
 
   return useQuery({
     queryKey: [...CAMERAS_QUERY_KEY, language],
@@ -26,8 +30,7 @@ export function useCamerasQuery() {
 }
 
 export function useCameraDetailQuery(id: string | null) {
-  const { i18n } = useTranslation();
-  const language = currentLanguage(i18n.resolvedLanguage ?? i18n.language);
+  const language = useCurrentLanguage();
 
   return useQuery({
     queryKey: [...CAMERAS_QUERY_KEY, "detail", id, language],
@@ -37,8 +40,7 @@ export function useCameraDetailQuery(id: string | null) {
 }
 
 export function useCameraCredentialsQuery(id: string | null) {
-  const { i18n } = useTranslation();
-  const language = currentLanguage(i18n.resolvedLanguage ?? i18n.language);
+  const language = useCurrentLanguage();
 
   return useQuery({
     queryKey: [...CAMERAS_QUERY_KEY, "credentials", id, language],
@@ -49,8 +51,7 @@ export function useCameraCredentialsQuery(id: string | null) {
 
 export function useCreateCameraMutation() {
   const queryClient = useQueryClient();
-  const { i18n } = useTranslation();
-  const language = currentLanguage(i18n.resolvedLanguage ?? i18n.language);
+  const language = useCurrentLanguage();
 
   return useMutation({
     mutationFn: (input: CreateCameraInput) => createCamera(input, language),
@@ -62,13 +63,11 @@ export function useCreateCameraMutation() {
 
 export function useUpdateCameraMutation() {
   const queryClient = useQueryClient();
-  const { i18n } = useTranslation();
-  const language = currentLanguage(i18n.resolvedLanguage ?? i18n.language);
+  const language = useCurrentLanguage();
 
   return useMutation({
     mutationFn: ({ id, input }: { id: string; input: UpdateCameraInput }) => updateCamera(id, input, language),
     onSuccess: (updatedCamera) => {
-      // Optimistically update lists and invalidate queries
       queryClient.setQueriesData<CameraResponse[]>({ queryKey: CAMERAS_QUERY_KEY }, (old) => {
         if (!old) return [updatedCamera];
         return old.map((cam) => (cam.id === updatedCamera.id ? updatedCamera : cam));
@@ -80,8 +79,7 @@ export function useUpdateCameraMutation() {
 
 export function useDeleteCameraMutation() {
   const queryClient = useQueryClient();
-  const { i18n } = useTranslation();
-  const language = currentLanguage(i18n.resolvedLanguage ?? i18n.language);
+  const language = useCurrentLanguage();
 
   return useMutation({
     mutationFn: (id: string) => deleteCamera(id, language),
@@ -96,8 +94,7 @@ export function useDeleteCameraMutation() {
 }
 
 export function useDiagnoseCameraMutation() {
-  const { i18n } = useTranslation();
-  const language = currentLanguage(i18n.resolvedLanguage ?? i18n.language);
+  const language = useCurrentLanguage();
 
   return useMutation({
     mutationFn: (id: string) => diagnoseCamera(id, language),

@@ -10,13 +10,85 @@ import {
   Stethoscope,
   Trash2,
   Tv,
+  type LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { getHealthBadgeConfig, getSessionBadgeConfig } from "../utils/statusHelper";
 import { copyToClipboard, formatFps, formatResolution, maskRtspUrl } from "../utils/urlHelper";
 import type { CameraResponse, StreamResponse } from "../types";
 
-interface CameraCardProps {
+interface StreamItemProps {
+  stream: StreamResponse;
+  label: string;
+  icon: LucideIcon;
+}
+
+function StreamItem({ stream, label, icon: Icon }: StreamItemProps) {
+  const { t } = useTranslation();
+  const [isRevealed, setIsRevealed] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
+
+  async function handleCopy() {
+    const success = await copyToClipboard(stream.rtspUrl);
+    if (success) {
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    }
+  }
+
+  const toggleTitle = isRevealed ? t("camera.maskPassword") : t("camera.revealPassword");
+
+  return (
+    <div className="rounded-xl border border-[var(--border)]/70 bg-[var(--surface-muted)] p-3">
+      <div className="flex items-center justify-between text-xs font-medium mb-1.5">
+        <div className="flex items-center gap-1.5 text-[var(--foreground)]">
+          <Icon
+            size={14}
+            className={stream.role === "main" ? "text-[var(--accent)]" : "text-[var(--muted)]"}
+            aria-hidden="true"
+          />
+          <span>{label}</span>
+          <span className="rounded bg-[var(--surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--muted)] border border-[var(--border)]">
+            {stream.transport.toUpperCase()}
+          </span>
+        </div>
+        <div className="font-mono text-[11px] text-[var(--muted)]">
+          {formatResolution(stream.width, stream.height)} · {stream.codec} · {formatFps(stream.fps, stream.fpsString)}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs font-mono">
+        <span className="flex-1 truncate select-all text-[var(--muted)]">
+          {isRevealed ? stream.rtspUrl : maskRtspUrl(stream.rtspUrl)}
+        </span>
+        <button
+          type="button"
+          className="p-1 rounded text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--surface-hover)] transition-colors"
+          onClick={() => setIsRevealed((prev) => !prev)}
+          title={toggleTitle}
+          aria-label={toggleTitle}
+        >
+          {isRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
+        </button>
+        <button
+          type="button"
+          className="p-1 rounded text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--surface-hover)] transition-colors"
+          onClick={() => void handleCopy()}
+          title={isCopied ? t("camera.copied") : t("camera.copyUrl")}
+          aria-label={isCopied ? t("camera.copied") : t("camera.copyUrl")}
+        >
+          {isCopied ? (
+            <Check size={14} className="text-[var(--positive)]" />
+          ) : (
+            <Copy size={14} />
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export interface CameraCardProps {
   camera: CameraResponse;
   onEdit: (camera: CameraResponse) => void;
   onDelete: (camera: CameraResponse) => void;
@@ -34,28 +106,8 @@ export function CameraCard({
   isToggling = false,
 }: CameraCardProps) {
   const { t } = useTranslation();
-  const [revealedStreamIds, setRevealedStreamIds] = useState<Record<number, boolean>>({});
-  const [copiedStreamId, setCopiedStreamId] = useState<number | null>(null);
-
   const healthConfig = getHealthBadgeConfig(camera.health);
   const sessionConfig = getSessionBadgeConfig(camera.session);
-
-  function toggleReveal(streamId: number) {
-    setRevealedStreamIds((prev) => ({
-      ...prev,
-      [streamId]: !prev[streamId],
-    }));
-  }
-
-  async function handleCopy(stream: StreamResponse) {
-    const success = await copyToClipboard(stream.rtspUrl);
-    if (success) {
-      setCopiedStreamId(stream.id);
-      setTimeout(() => {
-        setCopiedStreamId((prev) => (prev === stream.id ? null : prev));
-      }, 2000);
-    }
-  }
 
   const mainStream = camera.streams.find((s) => s.role === "main");
   const subStream = camera.streams.find((s) => s.role === "sub");
@@ -65,7 +117,7 @@ export function CameraCard({
       className="camera-card flex flex-col rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-5 shadow-xs transition-shadow hover:shadow-md"
       aria-labelledby={`camera-title-${camera.id}`}
     >
-      {/* Header: Name, Switch, Actions */}
+      {/* Header: Name, Switch, Badges */}
       <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] pb-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -80,6 +132,7 @@ export function CameraCard({
               #{camera.id.slice(-6)}
             </span>
           </div>
+
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {/* Health status badge */}
             <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium border border-[var(--border)] bg-[var(--surface-muted)]">
@@ -131,99 +184,8 @@ export function CameraCard({
 
       {/* Streams list */}
       <div className="flex flex-col gap-3 py-4 flex-1">
-        {/* Main Stream */}
-        {mainStream ? (
-          <div className="rounded-xl border border-[var(--border)]/70 bg-[var(--surface-muted)] p-3">
-            <div className="flex items-center justify-between text-xs font-medium mb-1.5">
-              <div className="flex items-center gap-1.5 text-[var(--foreground)]">
-                <Tv size={14} className="text-[var(--accent)]" aria-hidden="true" />
-                <span>{t("camera.mainStream")}</span>
-                <span className="rounded bg-[var(--surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--muted)] border border-[var(--border)]">
-                  {mainStream.transport.toUpperCase()}
-                </span>
-              </div>
-              <div className="font-mono text-[11px] text-[var(--muted)]">
-                {formatResolution(mainStream.width, mainStream.height)} · {mainStream.codec} · {formatFps(mainStream.fps, mainStream.fpsString)}
-              </div>
-            </div>
-
-            {/* URL bar with Mask & Copy */}
-            <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs font-mono">
-              <span className="flex-1 truncate select-all text-[var(--muted)]">
-                {revealedStreamIds[mainStream.id] ? mainStream.rtspUrl : maskRtspUrl(mainStream.rtspUrl)}
-              </span>
-              <button
-                type="button"
-                className="p-1 rounded text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--surface-hover)] transition-colors"
-                onClick={() => toggleReveal(mainStream.id)}
-                title={revealedStreamIds[mainStream.id] ? t("camera.maskPassword") : t("camera.revealPassword")}
-                aria-label={revealedStreamIds[mainStream.id] ? t("camera.maskPassword") : t("camera.revealPassword")}
-              >
-                {revealedStreamIds[mainStream.id] ? <EyeOff size={14} /> : <Eye size={14} />}
-              </button>
-              <button
-                type="button"
-                className="p-1 rounded text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--surface-hover)] transition-colors"
-                onClick={() => void handleCopy(mainStream)}
-                title={copiedStreamId === mainStream.id ? t("camera.copied") : t("camera.copyUrl")}
-                aria-label={copiedStreamId === mainStream.id ? t("camera.copied") : t("camera.copyUrl")}
-              >
-                {copiedStreamId === mainStream.id ? (
-                  <Check size={14} className="text-[var(--positive)]" />
-                ) : (
-                  <Copy size={14} />
-                )}
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        {/* Sub Stream */}
-        {subStream ? (
-          <div className="rounded-xl border border-[var(--border)]/70 bg-[var(--surface-muted)] p-3">
-            <div className="flex items-center justify-between text-xs font-medium mb-1.5">
-              <div className="flex items-center gap-1.5 text-[var(--foreground)]">
-                <Film size={14} className="text-[var(--muted)]" aria-hidden="true" />
-                <span>{t("camera.subStream")}</span>
-                <span className="rounded bg-[var(--surface)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--muted)] border border-[var(--border)]">
-                  {subStream.transport.toUpperCase()}
-                </span>
-              </div>
-              <div className="font-mono text-[11px] text-[var(--muted)]">
-                {formatResolution(subStream.width, subStream.height)} · {subStream.codec} · {formatFps(subStream.fps, subStream.fpsString)}
-              </div>
-            </div>
-
-            {/* URL bar with Mask & Copy */}
-            <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1.5 text-xs font-mono">
-              <span className="flex-1 truncate select-all text-[var(--muted)]">
-                {revealedStreamIds[subStream.id] ? subStream.rtspUrl : maskRtspUrl(subStream.rtspUrl)}
-              </span>
-              <button
-                type="button"
-                className="p-1 rounded text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--surface-hover)] transition-colors"
-                onClick={() => toggleReveal(subStream.id)}
-                title={revealedStreamIds[subStream.id] ? t("camera.maskPassword") : t("camera.revealPassword")}
-                aria-label={revealedStreamIds[subStream.id] ? t("camera.maskPassword") : t("camera.revealPassword")}
-              >
-                {revealedStreamIds[subStream.id] ? <EyeOff size={14} /> : <Eye size={14} />}
-              </button>
-              <button
-                type="button"
-                className="p-1 rounded text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--surface-hover)] transition-colors"
-                onClick={() => void handleCopy(subStream)}
-                title={copiedStreamId === subStream.id ? t("camera.copied") : t("camera.copyUrl")}
-                aria-label={copiedStreamId === subStream.id ? t("camera.copied") : t("camera.copyUrl")}
-              >
-                {copiedStreamId === subStream.id ? (
-                  <Check size={14} className="text-[var(--positive)]" />
-                ) : (
-                  <Copy size={14} />
-                )}
-              </button>
-            </div>
-          </div>
-        ) : null}
+        {mainStream && <StreamItem stream={mainStream} label={t("camera.mainStream")} icon={Tv} />}
+        {subStream && <StreamItem stream={subStream} label={t("camera.subStream")} icon={Film} />}
       </div>
 
       {/* Card Footer Actions */}

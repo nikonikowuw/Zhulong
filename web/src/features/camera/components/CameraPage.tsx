@@ -1,10 +1,5 @@
 import { useState } from "react";
-import {
-  AlertTriangle,
-  LoaderCircle,
-  Plus,
-  RefreshCw,
-} from "lucide-react";
+import { AlertTriangle, LoaderCircle, Plus, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
   useCamerasQuery,
@@ -50,61 +45,48 @@ export function CameraPage() {
     counts,
   } = useCameraFilter({ cameras: cameras ?? [] });
 
-  // Modal States
-  const [isFormOpen, setIsFormOpen] = useState(false);
-  const [editingCamera, setEditingCamera] = useState<CameraResponse | null>(null);
+  // Consolidated Modal States
+  const [formState, setFormState] = useState<{
+    isOpen: boolean;
+    camera: CameraResponse | null;
+  }>({ isOpen: false, camera: null });
 
-  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [deletingCamera, setDeletingCamera] = useState<CameraResponse | null>(null);
 
-  const [isDiagnoseOpen, setIsDiagnoseOpen] = useState(false);
-  const [diagnosingCamera, setDiagnosingCamera] = useState<CameraResponse | null>(null);
-  const [diagnoseResult, setDiagnoseResult] = useState<DiagnoseResponse | null>(null);
-  const [isDiagnosing, setIsDiagnosing] = useState(false);
+  const [diagnoseState, setDiagnoseState] = useState<{
+    camera: CameraResponse | null;
+    result: DiagnoseResponse | null;
+    loading: boolean;
+  }>({ camera: null, result: null, loading: false });
 
   const [togglingCameraId, setTogglingCameraId] = useState<string | null>(null);
 
   function handleOpenCreate() {
-    setEditingCamera(null);
-    setIsFormOpen(true);
+    setFormState({ isOpen: true, camera: null });
   }
 
   function handleOpenEdit(camera: CameraResponse) {
-    setEditingCamera(camera);
-    setIsFormOpen(true);
+    setFormState({ isOpen: true, camera });
   }
 
-  function handleOpenDelete(camera: CameraResponse) {
-    setDeletingCamera(camera);
-    setIsDeleteOpen(true);
+  function handleCloseForm() {
+    setFormState({ isOpen: false, camera: null });
   }
 
-  async function handleOpenDiagnose(camera: CameraResponse) {
-    setDiagnosingCamera(camera);
-    setDiagnoseResult(null);
-    setIsDiagnoseOpen(true);
-    setIsDiagnosing(true);
+  async function runDiagnosis(camera: CameraResponse) {
+    setDiagnoseState({ camera, result: null, loading: true });
     try {
       const res = await diagnoseMutation.mutateAsync(camera.id);
-      setDiagnoseResult(res);
+      setDiagnoseState((prev) => ({ ...prev, result: res }));
     } catch {
       // Ignored: DiagnoseResponse will be null
     } finally {
-      setIsDiagnosing(false);
+      setDiagnoseState((prev) => ({ ...prev, loading: false }));
     }
   }
 
-  async function handleReDiagnose() {
-    if (!diagnosingCamera) return;
-    setIsDiagnosing(true);
-    try {
-      const res = await diagnoseMutation.mutateAsync(diagnosingCamera.id);
-      setDiagnoseResult(res);
-    } catch {
-      // Ignored
-    } finally {
-      setIsDiagnosing(false);
-    }
+  function handleCloseDiagnose() {
+    setDiagnoseState({ camera: null, result: null, loading: false });
   }
 
   async function handleToggleEnabled(camera: CameraResponse) {
@@ -159,7 +141,7 @@ export function CameraPage() {
       </section>
 
       {/* Metrics Dashboard */}
-      <CameraDashboard cameras={cameras ?? []} />
+      <CameraDashboard cameras={cameras ?? []} counts={counts} />
 
       {/* Content State Handling */}
       {isLoading ? (
@@ -207,8 +189,8 @@ export function CameraPage() {
                   key={camera.id}
                   camera={camera}
                   onEdit={handleOpenEdit}
-                  onDelete={handleOpenDelete}
-                  onDiagnose={handleOpenDiagnose}
+                  onDelete={(cam) => setDeletingCamera(cam)}
+                  onDiagnose={(cam) => void runDiagnosis(cam)}
                   onToggleEnabled={handleToggleEnabled}
                   isToggling={togglingCameraId === camera.id}
                 />
@@ -220,25 +202,27 @@ export function CameraPage() {
 
       {/* Modals */}
       <CameraFormModal
-        isOpen={isFormOpen}
-        onClose={() => setIsFormOpen(false)}
+        isOpen={formState.isOpen}
+        onClose={handleCloseForm}
         onSubmitCreate={(input: CreateCameraInput) => createMutation.mutateAsync(input)}
         onSubmitUpdate={(id: string, input: UpdateCameraInput) => updateMutation.mutateAsync({ id, input })}
-        editingCamera={editingCamera}
+        editingCamera={formState.camera}
       />
 
       <CameraDiagnoseModal
-        isOpen={isDiagnoseOpen}
-        onClose={() => setIsDiagnoseOpen(false)}
-        camera={diagnosingCamera}
-        result={diagnoseResult}
-        isLoading={isDiagnosing}
-        onReDiagnose={() => void handleReDiagnose()}
+        isOpen={Boolean(diagnoseState.camera)}
+        onClose={handleCloseDiagnose}
+        camera={diagnoseState.camera}
+        result={diagnoseState.result}
+        isLoading={diagnoseState.loading}
+        onReDiagnose={() => {
+          if (diagnoseState.camera) void runDiagnosis(diagnoseState.camera);
+        }}
       />
 
       <DeleteConfirmModal
-        isOpen={isDeleteOpen}
-        onClose={() => setIsDeleteOpen(false)}
+        isOpen={Boolean(deletingCamera)}
+        onClose={() => setDeletingCamera(null)}
         onConfirm={(id: string) => deleteMutation.mutateAsync(id)}
         camera={deletingCamera}
       />

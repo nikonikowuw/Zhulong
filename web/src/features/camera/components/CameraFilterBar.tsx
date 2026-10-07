@@ -1,4 +1,3 @@
-import React from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowUpDown, Search, X } from "lucide-react";
 import type { CameraHealthFilter, CameraSortOption } from "../hooks/useCameraFilter";
@@ -18,7 +17,15 @@ export interface CameraFilterBarProps {
   };
 }
 
-export const CameraFilterBar: React.FC<CameraFilterBarProps> = ({
+interface FilterItemConfig {
+  key: CameraHealthFilter;
+  labelKey: string;
+  defaultLabel: string;
+  count: number;
+  badgeColor?: string;
+}
+
+export function CameraFilterBar({
   keyword,
   onKeywordChange,
   healthFilter,
@@ -26,14 +33,14 @@ export const CameraFilterBar: React.FC<CameraFilterBarProps> = ({
   sortOption,
   onSortOptionChange,
   counts,
-}) => {
+}: CameraFilterBarProps) {
   const { t } = useTranslation();
 
-  const filterItems: { key: CameraHealthFilter; label: string; count: number; badgeColor?: string }[] = [
-    { key: "all", label: t("camera.filter.all", "全部"), count: counts.all },
-    { key: "online", label: t("camera.filter.online", "在线"), count: counts.online, badgeColor: "bg-[var(--positive)]" },
-    { key: "offline", label: t("camera.filter.offline", "离线"), count: counts.offline, badgeColor: "bg-[var(--muted)]" },
-    { key: "abnormal", label: t("camera.filter.abnormal", "异常"), count: counts.abnormal, badgeColor: "bg-[var(--danger)]" },
+  const filterItems: FilterItemConfig[] = [
+    { key: "all", labelKey: "camera.filter.all", defaultLabel: "全部", count: counts.all },
+    { key: "online", labelKey: "camera.filter.online", defaultLabel: "在线", count: counts.online, badgeColor: "bg-[var(--positive)]" },
+    { key: "offline", labelKey: "camera.filter.offline", defaultLabel: "离线", count: counts.offline, badgeColor: "bg-[var(--muted)]" },
+    { key: "abnormal", labelKey: "camera.filter.abnormal", defaultLabel: "异常", count: counts.abnormal, badgeColor: "bg-[var(--danger)]" },
   ];
 
   return (
@@ -97,7 +104,7 @@ export const CameraFilterBar: React.FC<CameraFilterBarProps> = ({
                     aria-hidden="true"
                   />
                 )}
-                <span>{item.label}</span>
+                <span>{t(item.labelKey, item.defaultLabel)}</span>
                 <span
                   className={`text-[10px] px-1 rounded-sm ${
                     isActive
@@ -133,4 +140,4 @@ export const CameraFilterBar: React.FC<CameraFilterBarProps> = ({
       </div>
     </div>
   );
-};
+}
