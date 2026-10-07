@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 11
+- **Total Sessions**: 12
 - **Last Active**: 2026-10-07
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~544 | Active |
+| `journal-1.md` | ~580 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 12 | 2026-10-07 | 全面重构 Uber Fx 依赖注入与生命周期治理架构 | `cdfc44f` | `dev` |
 | 11 | 2026-10-07 | 轻量级系统操作与安全审计日志模块全栈实现与代码规范精简 | `3a6a7ea`, `8923983` | `dev` |
 | 10 | 2026-10-06 | 前端 UI 交互增强与监控渲染性能优化收尾 | `8de89cd`, `277f441`, `a5bb031`, `703d475`, `260c1a1`, `8ec913f`, `99037f1`, `c90e5b1` | `dev` |
 | 9 | 2026-10-06 | 实现实时视频播放器组件与多路监控宫格看板 (10-06-live-player-grid) | `8de89cd`, `7fb247f`, `4163f03` | `dev` |

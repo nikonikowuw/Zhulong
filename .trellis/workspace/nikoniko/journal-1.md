@@ -542,3 +542,39 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 12: 全面重构 Uber Fx 依赖注入与生命周期治理架构
+<!-- trellis-session: v=2 fp=e8361872bee2617e -->
+
+**Date**: 2026-10-07
+**Task**: 全面重构 Uber Fx 依赖注入与生命周期治理架构
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+重构应用启动装配为模块化 Uber Fx 依赖图，统一 database.DBProvider 契约，解耦生命周期运行时状态机，完成代码规范精简与全量测试验证
+
+### Main Changes
+
+- 契约重构：定义 database.DBProvider 接口，改造 auth、camera、audit 模块 Store 构造函数，消灭松散的 func() *gorm.DB 闭包与运行时误调用风险
+- 模块化解耦：拆解 internal/app/app.go 巨石 newServices 函数，重构为独立命名 fx.Module（databaseModule, engineModule, auditModule, authModule, cameraModule, httpModule, runtimeModule）
+- 生命周期与回滚：lifecycleRuntime 采用 runtimeParams (fx.In) 解耦，保持严格启动顺序与逆序级联回滚机制
+- 规范精简：收敛 cameraOut 暴露面并增强 nil 保护，统一三模块 Store 单测的表驱动 unready/nil 断言
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cdfc44f` | refactor(app): modularize uber fx architecture and domain db provider |
+
+### Testing
+
+- [OK] make go-check (gofmt, go vet, -race 并发测试, C++ RTSP 集成测试全量通过)
+- [OK] npm run type-check --prefix web && npm test --prefix web (前端 124 单元测试全部通过)
+- [OK] python3 native/scripts/build.py go build ./cmd/Zhulong (链接构建成功)
+
+### Status
+
+[OK] **Completed**
