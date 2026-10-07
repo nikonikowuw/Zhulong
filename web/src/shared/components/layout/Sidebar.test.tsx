@@ -57,6 +57,7 @@ describe("Sidebar", () => {
     expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Live" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cameras 2/3" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Audit Logs" })).toBeInTheDocument();
 
     // User is displayed in sidebar footer
     expect(screen.getByText("admin")).toBeInTheDocument();
@@ -67,6 +68,9 @@ describe("Sidebar", () => {
 
     await user.click(screen.getByRole("button", { name: "Live" }));
     expect(onSwitchTab).toHaveBeenCalledWith("live");
+
+    await user.click(screen.getByRole("button", { name: "Audit Logs" }));
+    expect(onSwitchTab).toHaveBeenCalledWith("audit");
 
     const collapseBtn = screen.getByRole("button", { name: "Collapse sidebar" });
     await user.click(collapseBtn);

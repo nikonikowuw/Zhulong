@@ -1,0 +1,91 @@
+{
+  "title": "Audit Logs",
+  "subtitle": "Track administrative access, configuration changes, and security events.",
+  "dashboard": {
+    "totalRecords": "Total Logs",
+    "fifoRetention": "FIFO limit 5,000 logs",
+    "authEvents": "Auth & Security",
+    "authDesc": "Login / Logout / Init",
+    "deviceChanges": "Device Operations",
+    "deviceDesc": "Camera configs & toggles",
+    "failedAlerts": "Alerts & Failures",
+    "failedDesc": "Auth failed or exceptions",
+    "capacityTitle": "Storage Capacity (FIFO)",
+    "capacityNote": "Rolls over oldest records when hitting 5,000 limit to protect Flash/eMMC storage.",
+    "distributionTitle": "Event Distribution & Health",
+    "sampleSize": "active samples",
+    "authShort": "Auth",
+    "deviceShort": "Device",
+    "failedShort": "Failed"
+  },
+  "filter": {
+    "searchPlaceholder": "Search IP, operator, target, or action...",
+    "clearSearch": "Clear search",
+    "statusGroup": "Status Filter",
+    "resetFilters": "Reset Filters",
+    "action": "Action",
+    "allActions": "All Actions",
+    "status": "Status",
+    "allStatuses": "All Statuses",
+    "success": "Success",
+    "failed": "Failed",
+    "refresh": "Refresh",
+    "clearLogs": "Clear Logs"
+  },
+  "table": {
+    "loading": "Loading audit logs...",
+    "loadError": "Failed to load audit logs",
+    "retry": "Retry",
+    "time": "Time",
+    "operator": "Operator",
+    "ip": "IP Address",
+    "action": "Action",
+    "target": "Target",
+    "status": "Status",
+    "details": "Details",
+    "viewDetails": "View",
+    "empty": "No audit records found",
+    "emptyDesc": "System authentication, camera configurations, and security events will be automatically recorded here.",
+    "pagination": {
+      "pageInfo": "Page {{current}} of {{total}}",
+      "totalCount": "{{total}} records in total",
+      "prev": "Previous",
+      "next": "Next",
+      "pageSize": "{{size}} / page",
+      "pageSizeLabel": "Page Size"
+    }
+  },
+  "actions": {
+    "auth_init": "Admin Initialized",
+    "auth_login": "Admin Login",
+    "auth_logout": "Admin Logout",
+    "camera_create": "Add Camera",
+    "camera_update": "Update Camera",
+    "camera_delete": "Delete Camera",
+    "camera_toggle": "Toggle Camera"
+  },
+  "modal": {
+    "title": "Audit Log Details",
+    "logId": "Log ID",
+    "time": "Timestamp",
+    "ip": "Source IP",
+    "operator": "Operator",
+    "action": "Action",
+    "target": "Target Resource",
+    "status": "Status",
+    "errorMsg": "Error Message",
+    "detail": "Operation Parameters",
+    "noDetail": "No additional details",
+    "copyJson": "Copy JSON",
+    "copied": "Copied",
+    "close": "Close"
+  },
+  "clearModal": {
+    "title": "Clear All Audit Logs",
+    "confirm": "Are you sure you want to clear all audit logs? This action cannot be undone.",
+    "cancel": "Cancel",
+    "clearAction": "Clear All",
+    "clearing": "Clearing...",
+    "clearedSuccess": "Cleared {{count}} audit logs successfully"
+  }
+}

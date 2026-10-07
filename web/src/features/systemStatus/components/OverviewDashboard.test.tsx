@@ -70,7 +70,7 @@ describe("OverviewDashboard", () => {
       </QueryClientProvider>,
     );
 
-    expect(screen.getByRole("heading", { name: "Host status" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "System Overview" })).toBeInTheDocument();
     expect(screen.getByText("Camera Assets")).toBeInTheDocument();
     expect(screen.getByText("Live Video Streams")).toBeInTheDocument();
     expect(screen.getByText("Inference Engine")).toBeInTheDocument();

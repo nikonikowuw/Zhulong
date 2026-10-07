@@ -3,6 +3,7 @@ package app
 import (
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"github.com/nikonikowuw/Zhulong/internal/database"
@@ -16,6 +17,8 @@ type applicationServices struct {
 	database      *database.Store
 	native        *engine.Engine
 	auth          auth.AuthService
+	auditSvc      *audit.Service
+	auditHandler  *audit.Handler
 	cameraSvc     *camera.CameraService
 	cameraHub     *camera.EventHub
 	cameraStream  *camera.StreamHub
@@ -27,17 +30,20 @@ type applicationServices struct {
 type servicesOut struct {
 	fx.Out
 
-	Database        *database.Store
-	Native          *engine.Engine
-	Auth            auth.AuthService
-	CameraSvc       *camera.CameraService
-	CameraHub       *camera.EventHub
-	CameraStream    *camera.StreamHub
-	CameraHandler   *camera.Handler
-	CameraMgr       *camera.LifecycleManager
-	Services        *applicationServices
-	PublicRoutes    RouteRegistrar `group:"public_routes"`
-	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+	Database      *database.Store
+	Native        *engine.Engine
+	Auth          auth.AuthService
+	AuditSvc      *audit.Service
+	AuditHandler  *audit.Handler
+	CameraSvc     *camera.CameraService
+	CameraHub     *camera.EventHub
+	CameraStream  *camera.StreamHub
+	CameraHandler *camera.Handler
+	CameraMgr     *camera.LifecycleManager
+	Services      *applicationServices
+	PublicRoutes  RouteRegistrar `group:"public_routes"`
+	CameraRoutes  RouteRegistrar `group:"protected_routes"`
+	AuditRoutes   RouteRegistrar `group:"protected_routes"`
 }
 
 // Module contains the application's constructor graph and lifecycle registration.
@@ -84,10 +90,19 @@ func newServices(config Config, logger *zap.Logger) servicesOut {
 
 	camMgr := camera.NewLifecycleManager(camStore, keyMgr, lazyC, scheduler, hub, streamHub)
 
+	auditStore := audit.NewStore(dbStore.DB)
+	auditSvc := audit.NewService(auditStore, logger)
+	auditHandler := audit.NewHandler(auditSvc, logger)
+
+	authHandler := auth.NewHandler(authSvc, auditSvc)
+	camHandler.SetAuditor(auditSvc)
+
 	appServices := &applicationServices{
 		database:      dbStore,
 		native:        eng,
 		auth:          authSvc,
+		auditSvc:      auditSvc,
+		auditHandler:  auditHandler,
 		cameraSvc:     camSvc,
 		cameraHub:     hub,
 		cameraStream:  streamHub,
@@ -97,17 +112,20 @@ func newServices(config Config, logger *zap.Logger) servicesOut {
 	}
 
 	return servicesOut{
-		Database:        dbStore,
-		Native:          eng,
-		Auth:            authSvc,
-		CameraSvc:       camSvc,
-		CameraHub:       hub,
-		CameraStream:    streamHub,
-		CameraHandler:   camHandler,
-		CameraMgr:       camMgr,
-		Services:        appServices,
-		PublicRoutes:    auth.NewHandler(authSvc),
-		ProtectedRoutes: camHandler,
+		Database:      dbStore,
+		Native:        eng,
+		Auth:          authSvc,
+		AuditSvc:      auditSvc,
+		AuditHandler:  auditHandler,
+		CameraSvc:     camSvc,
+		CameraHub:     hub,
+		CameraStream:  streamHub,
+		CameraHandler: camHandler,
+		CameraMgr:     camMgr,
+		Services:      appServices,
+		PublicRoutes:  authHandler,
+		CameraRoutes:  camHandler,
+		AuditRoutes:   auditHandler,
 	}
 }
 

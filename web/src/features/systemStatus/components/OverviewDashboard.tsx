@@ -31,16 +31,16 @@ export const OverviewDashboard: FC<OverviewDashboardProps> = ({ onNavigateTab })
   return (
     <div className="flex flex-col gap-6 w-full animate-in fade-in duration-200">
       {/* Page Header */}
-      <section className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[var(--border)] pb-4" aria-labelledby="page-title">
+      <section className="page-heading flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6" aria-labelledby="page-title">
         <div>
-          <h1 id="page-title" className="text-xl font-bold tracking-tight text-[var(--foreground)]">
+          <h1 id="page-title" className="text-2xl font-bold tracking-tight text-[var(--foreground)]">
             {t("overview.heading")}
           </h1>
-          <p className="text-xs text-[var(--muted)] mt-1">
+          <p className="page-description text-xs text-[var(--muted)] mt-1">
             {t("overview.description")}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--positive)]/10 px-2.5 py-1 text-xs font-medium text-[var(--positive)]">
             <span className="h-1.5 w-1.5 rounded-full bg-[var(--positive)] animate-pulse" />
             {health?.status === "ready" ? t("console.dashboard.statusReady") : t("console.dashboard.statusChecking")}

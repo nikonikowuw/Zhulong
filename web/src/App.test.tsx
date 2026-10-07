@@ -80,7 +80,7 @@ describe("App", () => {
 
     await user.selectOptions(screen.getByRole("combobox", { name: "Language" }), "zh-Hans");
 
-    expect(await screen.findByRole("heading", { name: "主机状态" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "系统概览" })).toBeInTheDocument();
     expect(document.documentElement.lang).toBe("zh-Hans");
     expect(document.title).toBe("系统状态 · Zhulong");
     expect(document.querySelector('meta[name="description"]')).toHaveAttribute("content", "Zhulong 主机的运行就绪状态。");
@@ -103,7 +103,7 @@ describe("App", () => {
     const user = userEvent.setup();
     renderApp();
 
-    expect(await screen.findByRole("heading", { name: "Host status" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "System Overview" })).toBeInTheDocument();
 
     const liveNavBtn = screen.getByRole("button", { name: "Live" });
     await user.click(liveNavBtn);
@@ -120,7 +120,7 @@ describe("App", () => {
     const overviewNavBtn = screen.getByRole("button", { name: "Overview" });
     await user.click(overviewNavBtn);
 
-    expect(await screen.findByRole("heading", { name: "Host status" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "System Overview" })).toBeInTheDocument();
     expect(window.location.hash).toBe("#overview");
   });
 });

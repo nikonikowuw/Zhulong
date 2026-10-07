@@ -1,0 +1,91 @@
+{
+  "title": "操作審計",
+  "subtitle": "全鏈路追蹤系統維運配置變更、管理員存取及安全審計事件。",
+  "dashboard": {
+    "totalRecords": "全部審計記錄",
+    "fifoRetention": "FIFO 滾動上限 5,000 條",
+    "authEvents": "認證與安全",
+    "authDesc": "登入 / 登出 / 初始化",
+    "deviceChanges": "設備配置變更",
+    "deviceDesc": "攝影機增刪改與啟停",
+    "failedAlerts": "異常與失敗",
+    "failedDesc": "認證失敗或操作異常",
+    "capacityTitle": "存儲容量水位 (FIFO)",
+    "capacityNote": "達到 5,000 條上限後自動滾動淘汰最舊記錄，保障 Flash/eMMC 存儲壽命。",
+    "distributionTitle": "事件分布與健康度",
+    "sampleSize": "條當前樣本",
+    "authShort": "認證",
+    "deviceShort": "設備",
+    "failedShort": "失敗"
+  },
+  "filter": {
+    "searchPlaceholder": "搜尋 IP、操作人、目標或動作...",
+    "clearSearch": "清除搜尋",
+    "statusGroup": "狀態篩選",
+    "resetFilters": "重置篩選條件",
+    "action": "操作類型",
+    "allActions": "所有操作",
+    "status": "執行狀態",
+    "allStatuses": "所有狀態",
+    "success": "成功",
+    "failed": "失敗",
+    "refresh": "重新整理",
+    "clearLogs": "清空記錄"
+  },
+  "table": {
+    "loading": "正在載入審計記錄...",
+    "loadError": "載入審計記錄失敗",
+    "retry": "重試",
+    "time": "記錄時間",
+    "operator": "操作人",
+    "ip": "來源 IP",
+    "action": "操作動作",
+    "target": "目標對象",
+    "status": "狀態",
+    "details": "詳細資訊",
+    "viewDetails": "檢視",
+    "empty": "暫無審計記錄",
+    "emptyDesc": "當系統發生管理員認證、設備配置變更或異常事件時，將自動記錄並在此展示。",
+    "pagination": {
+      "pageInfo": "第 {{current}} / {{total}} 頁",
+      "totalCount": "共 {{total}} 條記錄",
+      "prev": "上一頁",
+      "next": "下一頁",
+      "pageSize": "{{size}} 條/頁",
+      "pageSizeLabel": "每页条数"
+    }
+  },
+  "actions": {
+    "auth_init": "初始化管理員",
+    "auth_login": "管理員登入",
+    "auth_logout": "管理員登出",
+    "camera_create": "新增攝影機",
+    "camera_update": "修改攝影機",
+    "camera_delete": "刪除攝影機",
+    "camera_toggle": "啟停攝影機"
+  },
+  "modal": {
+    "title": "審計記錄明細",
+    "logId": "記錄 ID",
+    "time": "時間戳",
+    "ip": "客戶端 IP",
+    "operator": "操作使用者",
+    "action": "動作標識",
+    "target": "目標資源",
+    "status": "執行狀態",
+    "errorMsg": "失敗原因",
+    "detail": "變更參數明細",
+    "noDetail": "無詳細參數",
+    "copyJson": "複製 JSON",
+    "copied": "已複製",
+    "close": "關閉"
+  },
+  "clearModal": {
+    "title": "清空所有操作審計記錄",
+    "confirm": "確定要清空全部操作審計記錄嗎？清空後歷史記錄將無法復原。",
+    "cancel": "取消",
+    "clearAction": "確認清空",
+    "clearing": "正在清理...",
+    "clearedSuccess": "成功清空 {{count}} 條審計記錄"
+  }
+}

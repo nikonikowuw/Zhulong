@@ -16,10 +16,11 @@
   "nav": {
     "overview": "系统概览",
     "live": "实时监控",
-    "cameras": "摄像机管理"
+    "cameras": "摄像机管理",
+    "audit": "操作审计"
   },
   "overview": {
-    "heading": "主机状态",
+    "heading": "系统概览",
     "description": "集中查看核心服务与本地运行状态。"
   },
   "health": {

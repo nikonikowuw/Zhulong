@@ -2,12 +2,17 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/golang-migrate/migrate/v4"
+	migratesqlite3 "github.com/golang-migrate/migrate/v4/database/sqlite3"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"go.uber.org/zap"
 )
 
@@ -58,6 +63,14 @@ func TestOpenAndMigrateCreatesVersionedSchema(t *testing.T) {
 	}
 	if streamsTable != "camera_streams" {
 		t.Fatalf("expected migrated camera_streams table, got %q", streamsTable)
+	}
+
+	var auditLogsTable string
+	if err := store.db.Raw("SELECT name FROM sqlite_master WHERE type = ? AND name = ?", "table", "audit_logs").Scan(&auditLogsTable).Error; err != nil {
+		t.Fatalf("query migrated table audit_logs: %v", err)
+	}
+	if auditLogsTable != "audit_logs" {
+		t.Fatalf("expected migrated audit_logs table, got %q", auditLogsTable)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -136,5 +149,88 @@ func TestOpenAndMigrateRejectsUnusableDataDirectory(t *testing.T) {
 	}
 	if store.Ready() {
 		t.Fatal("database must not be ready")
+	}
+}
+
+func TestAuditLogsMigrationUpAndDownSymmetry(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_migrate.db")
+	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// 1. Run all migrations Up
+	if err := migrator.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Up: %v", err)
+	}
+
+	// Verify audit_logs table and indexes exist
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'audit_logs'").Scan(&count); err != nil {
+		t.Fatalf("query audit_logs table: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected audit_logs table after Up, got count=%d", count)
+	}
+
+	var indexCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_audit_logs_%'").Scan(&indexCount); err != nil {
+		t.Fatalf("query audit_logs indexes: %v", err)
+	}
+	if indexCount != 3 {
+		t.Fatalf("expected 3 audit_logs indexes after Up, got %d", indexCount)
+	}
+
+	// 2. Rollback migration 4 (Down step 1)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator Steps(-1): %v", err)
+	}
+
+	// Verify audit_logs table and indexes are dropped
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'audit_logs'").Scan(&count); err != nil {
+		t.Fatalf("query audit_logs table after down: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected audit_logs table to be dropped after rollback, got count=%d", count)
+	}
+
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_audit_logs_%'").Scan(&indexCount); err != nil {
+		t.Fatalf("query audit_logs indexes after down: %v", err)
+	}
+	if indexCount != 0 {
+		t.Fatalf("expected 0 audit_logs indexes after rollback, got %d", indexCount)
+	}
+
+	// 3. Re-apply migration 4 (Up step 1)
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator Steps(1): %v", err)
+	}
+
+	// Verify audit_logs table exists again
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'audit_logs'").Scan(&count); err != nil {
+		t.Fatalf("query audit_logs table after re-up: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected audit_logs table after re-Up, got count=%d", count)
 	}
 }

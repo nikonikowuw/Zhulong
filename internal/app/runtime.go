@@ -27,10 +27,16 @@ type cameraLifecycle interface {
 	Stop()
 }
 
+type auditLifecycle interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
+
 type lifecycleRuntime struct {
 	database databaseLifecycle
 	native   engineLifecycle
 	camera   cameraLifecycle
+	audit    auditLifecycle
 	server   *http.Server
 	logger   *zap.Logger
 	listen   func(string, string) (net.Listener, error)
@@ -41,6 +47,7 @@ type lifecycleRuntime struct {
 	databaseReady bool
 	nativeReady   bool
 	cameraReady   bool
+	auditReady    bool
 	httpReady     bool
 	loggerSynced  bool
 }
@@ -50,6 +57,7 @@ func newLifecycleRuntime(services *applicationServices, server *http.Server) *li
 		database: services.database,
 		native:   services.native,
 		camera:   services.cameraMgr,
+		audit:    services.auditSvc,
 		server:   server,
 		logger:   services.logger,
 		listen:   net.Listen,
@@ -67,21 +75,29 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	}
 	r.databaseReady = true
 
+	if r.audit != nil {
+		if err := r.audit.Start(ctx); err != nil {
+			startupErr := fmt.Errorf("start audit service: %w", err)
+			return errors.Join(startupErr, r.closeDatabase(), r.syncLogger())
+		}
+		r.auditReady = true
+	}
+
 	if err := r.native.Start(); err != nil {
 		startupErr := fmt.Errorf("start native engine: %w", err)
-		return errors.Join(startupErr, r.closeNative(), r.closeDatabase(), r.syncLogger())
+		return errors.Join(startupErr, r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
 	}
 	r.nativeReady = true
 
 	if r.camera != nil {
 		if err := r.camera.InitCipher(ctx); err != nil {
 			startupErr := fmt.Errorf("initialize camera cipher: %w", err)
-			return errors.Join(startupErr, r.closeNative(), r.closeDatabase(), r.syncLogger())
+			return errors.Join(startupErr, r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
 		}
 		if err := r.camera.Start(ctx); err != nil {
 			startupErr := fmt.Errorf("start camera scheduler: %w", err)
 			r.camera.Stop()
-			return errors.Join(startupErr, r.closeNative(), r.closeDatabase(), r.syncLogger())
+			return errors.Join(startupErr, r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
 		}
 		r.cameraReady = true
 	}
@@ -89,7 +105,7 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	listener, err := r.listen("tcp", r.server.Addr)
 	if err != nil {
 		startupErr := fmt.Errorf("listen on %s: %w", r.server.Addr, err)
-		return errors.Join(startupErr, r.closeCamera(), r.closeNative(), r.closeDatabase(), r.syncLogger())
+		return errors.Join(startupErr, r.closeCamera(), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
 	}
 	r.listener = listener
 	r.serveDone = make(chan error, 1)
@@ -133,6 +149,9 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 	if err := r.closeCamera(); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
+	if err := r.closeAudit(ctx); err != nil {
+		stopErrors = append(stopErrors, err)
+	}
 	if err := r.closeNative(); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
@@ -152,6 +171,19 @@ func (r *lifecycleRuntime) closeCamera() error {
 	r.cameraReady = false
 	if r.camera != nil {
 		r.camera.Stop()
+	}
+	return nil
+}
+
+func (r *lifecycleRuntime) closeAudit(ctx context.Context) error {
+	if !r.auditReady {
+		return nil
+	}
+	r.auditReady = false
+	if r.audit != nil {
+		if err := r.audit.Stop(ctx); err != nil {
+			return fmt.Errorf("stop audit service: %w", err)
+		}
 	}
 	return nil
 }

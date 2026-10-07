@@ -6,17 +6,28 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
+
+// Auditor defines the interface for recording audit events.
+type Auditor interface {
+	Record(entry audit.Entry)
+}
 
 // Handler handles HTTP requests for authentication and identity.
 type Handler struct {
 	service AuthService
+	auditor Auditor
 }
 
 // NewHandler constructs an authentication HTTP Handler.
-func NewHandler(service AuthService) *Handler {
-	return &Handler{service: service}
+func NewHandler(service AuthService, auditor ...Auditor) *Handler {
+	var a Auditor
+	if len(auditor) > 0 {
+		a = auditor[0]
+	}
+	return &Handler{service: service, auditor: a}
 }
 
 // RegisterRoutes mounts auth endpoints onto the provided gin.RouterGroup.
@@ -51,6 +62,22 @@ func (h *Handler) statusHandler(c *gin.Context) (AuthStatusResponse, error) {
 
 // initHandler godoc
 // @Summary      Initialize administrator account
+func (h *Handler) recordAudit(c *gin.Context, username, action, target, status, errMsg string) {
+	if h.auditor == nil {
+		return
+	}
+	h.auditor.Record(audit.Entry{
+		IP:       c.ClientIP(),
+		Username: username,
+		Action:   action,
+		Target:   target,
+		Status:   status,
+		ErrorMsg: errMsg,
+	})
+}
+
+// initHandler godoc
+// @Summary      Initialize administrator account
 // @Tags         auth
 // @Accept       json
 // @Produce      json
@@ -63,8 +90,10 @@ func (h *Handler) statusHandler(c *gin.Context) (AuthStatusResponse, error) {
 func (h *Handler) initHandler(c *gin.Context, req InitAdminRequest) (UserResponse, error) {
 	user, token, err := h.service.InitAdmin(c.Request.Context(), req)
 	if err != nil {
+		h.recordAudit(c, req.Username, audit.ActionAuthInit, "system", audit.StatusFailed, err.Error())
 		return UserResponse{}, err
 	}
+	h.recordAudit(c, user.Username, audit.ActionAuthInit, "system", audit.StatusSuccess, "")
 	setSessionCookie(c, token, 7*24*3600)
 	return user, nil
 }
@@ -83,8 +112,10 @@ func (h *Handler) initHandler(c *gin.Context, req InitAdminRequest) (UserRespons
 func (h *Handler) loginHandler(c *gin.Context, req LoginRequest) (UserResponse, error) {
 	user, token, err := h.service.Login(c.Request.Context(), c.ClientIP(), req)
 	if err != nil {
+		h.recordAudit(c, req.Username, audit.ActionAuthLogin, "user:"+req.Username, audit.StatusFailed, err.Error())
 		return UserResponse{}, err
 	}
+	h.recordAudit(c, user.Username, audit.ActionAuthLogin, "user:"+user.Username, audit.StatusSuccess, "")
 	setSessionCookie(c, token, 7*24*3600)
 	return user, nil
 }
@@ -97,8 +128,22 @@ func (h *Handler) loginHandler(c *gin.Context, req LoginRequest) (UserResponse, 
 // @Failure      401  {object}  httputil.Response
 // @Router       /auth/logout [post]
 func (h *Handler) logoutHandler(c *gin.Context) {
-	h.service.Logout(GetSessionToken(c))
+	username := "admin"
+	if u, ok := GetCurrentUser(c); ok && u.Username != "" {
+		username = u.Username
+	}
+	token := GetSessionToken(c)
+	if token == "" {
+		token, _ = c.Cookie(SessionCookieName)
+	}
+	if token != "" {
+		if session, ok := h.service.ValidateSession(token); ok && session.Username != "" {
+			username = session.Username
+		}
+		h.service.Logout(token)
+	}
 	clearSessionCookie(c)
+	h.recordAudit(c, username, audit.ActionAuthLogout, "user:"+username, audit.StatusSuccess, "")
 	httputil.Success(c, gin.H{"loggedOut": true})
 }
 

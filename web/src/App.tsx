@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { AuditLogPage } from "@/features/audit";
 import { AuthGuard, AuthProvider, useAuth } from "@/features/auth";
 import { CameraPage, useCamerasQuery } from "@/features/camera";
 import { LivePage } from "@/features/live";
@@ -11,10 +12,16 @@ import { useTheme } from "@/shared/theme/useTheme";
 
 const SIDEBAR_COLLAPSED_KEY = "zhulong.sidebar.collapsed.v1";
 
+function isKnownTab(tab: string): tab is ActiveTab {
+  return tab === "live" || tab === "cameras" || tab === "audit" || tab === "overview";
+}
+
 function getTabFromHash(): ActiveTab {
   if (typeof window !== "undefined") {
-    if (window.location.hash === "#live") return "live";
-    if (window.location.hash === "#cameras") return "cameras";
+    const tab = window.location.hash.replace(/^#/, "");
+    if (isKnownTab(tab)) {
+      return tab;
+    }
   }
   return "overview";
 }
@@ -56,9 +63,21 @@ function SystemStatusPage() {
   function switchTab(tab: ActiveTab) {
     setActiveTab(tab);
     if (typeof window !== "undefined") {
-      if (tab === "live") window.location.hash = "#live";
-      else if (tab === "cameras") window.location.hash = "#cameras";
-      else window.location.hash = "#overview";
+      window.location.hash = `#${tab}`;
+    }
+  }
+
+  function renderActiveView() {
+    switch (activeTab) {
+      case "cameras":
+        return <CameraPage />;
+      case "live":
+        return <LivePage />;
+      case "audit":
+        return <AuditLogPage />;
+      case "overview":
+      default:
+        return <OverviewDashboard onNavigateTab={switchTab} />;
     }
   }
 
@@ -126,13 +145,7 @@ function SystemStatusPage() {
           {isAuthenticated ? (
             <main id="main" className="workspace flex-1 flex flex-col min-w-0 overflow-y-auto" tabIndex={-1}>
               <AuthGuard>
-                {activeTab === "cameras" ? (
-                  <CameraPage />
-                ) : activeTab === "live" ? (
-                  <LivePage />
-                ) : (
-                  <OverviewDashboard onNavigateTab={switchTab} />
-                )}
+                {renderActiveView()}
               </AuthGuard>
             </main>
           ) : (

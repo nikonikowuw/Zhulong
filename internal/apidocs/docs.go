@@ -258,13 +258,25 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "Pagination limit",
+                        "description": "Page number (1-based, default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 20, max 100)",
+                        "name": "pageSize",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Legacy pagination limit",
                         "name": "limit",
                         "in": "query"
                     },
                     {
                         "type": "integer",
-                        "description": "Pagination offset",
+                        "description": "Legacy pagination offset",
                         "name": "offset",
                         "in": "query"
                     }
@@ -281,7 +293,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/httputil.PaginatedData-camera_CameraResponse"
                                         }
                                     }
                                 }
@@ -1039,6 +1051,33 @@ const docTemplate = `{
                 },
                 "message": {
                     "type": "string"
+                }
+            }
+        },
+        "httputil.PaginatedData-camera_CameraResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/camera.CameraResponse"
+                    }
+                },
+                "limit": {
+                    "description": "Backwards compatibility fields for legacy clients expecting limit/offset",
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "pageSize": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         },

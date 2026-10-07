@@ -1,6 +1,7 @@
 package camera
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/audit"
+	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
 )
@@ -22,13 +25,24 @@ var wsUpgrader = websocket.Upgrader{
 	WriteBufferSize: 64 * 1024,
 }
 
+// Auditor defines the interface for recording audit events.
+type Auditor interface {
+	Record(entry audit.Entry)
+}
+
 // Handler exposes REST API, SSE, and WebSocket endpoints for camera management.
 type Handler struct {
 	service    *CameraService
 	hub        *EventHub
 	streamHub  *StreamHub
 	sessionVal func(token string) bool
+	auditor    Auditor
 	logger     *zap.Logger
+}
+
+// SetAuditor assigns an auditor to record camera management actions.
+func (h *Handler) SetAuditor(auditor Auditor) {
+	h.auditor = auditor
 }
 
 // NewHandler creates a new Handler.
@@ -94,11 +108,14 @@ func (h *Handler) Create(c *gin.Context) {
 		httputil.HandleBindError(c, err, reflect.TypeOf(req))
 		return
 	}
+	detail := createAuditDetail(req)
 	res, err := h.service.Create(c.Request.Context(), req)
 	if err != nil {
+		h.recordAudit(c, audit.ActionCameraCreate, "camera", audit.StatusFailed, err.Error(), detail)
 		httputil.WriteError(c, err)
 		return
 	}
+	h.recordAudit(c, audit.ActionCameraCreate, "camera:"+res.ID, audit.StatusSuccess, "", detail)
 	httputil.SuccessWithStatus(c, http.StatusCreated, res)
 }
 
@@ -183,11 +200,19 @@ func (h *Handler) Update(c *gin.Context) {
 		return
 	}
 
+	detail := updateAuditDetail(req)
+	action := audit.ActionCameraUpdate
+	if req.Enabled != nil && req.Name == nil && req.MainStream == nil && req.SubStream == nil {
+		action = audit.ActionCameraToggle
+	}
+
 	res, err := h.service.Update(c.Request.Context(), id, req)
 	if err != nil {
+		h.recordAudit(c, action, "camera:"+id, audit.StatusFailed, err.Error(), detail)
 		httputil.WriteError(c, err)
 		return
 	}
+	h.recordAudit(c, action, "camera:"+id, audit.StatusSuccess, "", detail)
 	httputil.Success(c, res)
 }
 
@@ -202,9 +227,11 @@ func (h *Handler) Update(c *gin.Context) {
 func (h *Handler) Delete(c *gin.Context) {
 	id := c.Param("id")
 	if err := h.service.Delete(c.Request.Context(), id); err != nil {
+		h.recordAudit(c, audit.ActionCameraDelete, "camera:"+id, audit.StatusFailed, err.Error(), "")
 		httputil.WriteError(c, err)
 		return
 	}
+	h.recordAudit(c, audit.ActionCameraDelete, "camera:"+id, audit.StatusSuccess, "", "")
 	httputil.Success(c, gin.H{"id": id, "deleted": true})
 }
 
@@ -356,4 +383,67 @@ var _ io.Closer = (*Handler)(nil)
 
 func (h *Handler) Close() error {
 	return h.hub.Close()
+}
+
+func streamAuditDetail(req *CreateStreamRequest) map[string]any {
+	if req == nil {
+		return nil
+	}
+	return map[string]any{
+		"protocol":  req.Protocol,
+		"transport": req.Transport,
+		"rtspUrl":   SanitizeURL(req.RTSPURL),
+	}
+}
+
+func createAuditDetail(req CreateCameraRequest) string {
+	detail := map[string]any{
+		"name":       req.Name,
+		"mainStream": streamAuditDetail(&req.MainStream),
+	}
+	if req.Enabled != nil {
+		detail["enabled"] = *req.Enabled
+	}
+	if req.SubStream != nil {
+		detail["subStream"] = streamAuditDetail(req.SubStream)
+	}
+	b, _ := json.Marshal(detail)
+	return string(b)
+}
+
+func updateAuditDetail(req UpdateCameraRequest) string {
+	detail := make(map[string]any)
+	if req.Name != nil {
+		detail["name"] = *req.Name
+	}
+	if req.Enabled != nil {
+		detail["enabled"] = *req.Enabled
+	}
+	if req.MainStream != nil {
+		detail["mainStream"] = streamAuditDetail(req.MainStream)
+	}
+	if req.SubStream != nil {
+		detail["subStream"] = streamAuditDetail(req.SubStream)
+	}
+	b, _ := json.Marshal(detail)
+	return string(b)
+}
+
+func (h *Handler) recordAudit(c *gin.Context, action, target, status, errMsg, detail string) {
+	if h.auditor == nil {
+		return
+	}
+	username := "admin"
+	if u, ok := auth.GetCurrentUser(c); ok && u.Username != "" {
+		username = u.Username
+	}
+	h.auditor.Record(audit.Entry{
+		IP:       c.ClientIP(),
+		Username: username,
+		Action:   action,
+		Target:   target,
+		Detail:   detail,
+		Status:   status,
+		ErrorMsg: errMsg,
+	})
 }

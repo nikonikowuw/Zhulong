@@ -13,6 +13,8 @@ cmd/
   Zhulong/main.go               # 极简启动入口 (调用 internal/app 启动)
 internal/
   app/                        # 应用全局装配与 Fx 生命周期 (app.go, lifecycle.go)
+  audit/                      # 操作与安全审计日志模块 (model.go, store.go, service.go, handler.go)
+  auth/                       # 单用户认证与会话管理 (handler.go, store.go, limiter.go)
   camera/                     # 相机管理业务模块 (camera.go, handler.go, store.go, *_test.go)
   recording/                  # 视频录像与切片存储管理模块
   inference/                  # AI 分析任务配置与检测规则管理模块

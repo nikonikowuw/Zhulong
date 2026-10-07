@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"go.uber.org/zap"
@@ -313,5 +314,133 @@ func TestCameraHandlerStreamWS(t *testing.T) {
 	}
 	if !bytes.Equal(payload, testPkt.Data) {
 		t.Fatalf("payload mismatch")
+	}
+}
+
+type testCameraAuditor struct {
+	entries []audit.Entry
+}
+
+func (m *testCameraAuditor) Record(entry audit.Entry) {
+	m.entries = append(m.entries, entry)
+}
+
+func TestCameraHandler_AuditLogging(t *testing.T) {
+	auditor := &testCameraAuditor{}
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	_ = dbStore.OpenAndMigrate(context.Background())
+	defer dbStore.Close()
+
+	km := NewKeyManager(tempDir)
+	rawCipher, _ := km.InitOrLoadKey(false)
+	lazyCipher := NewLazyCipher()
+	lazyCipher.Set(rawCipher)
+	store := NewCameraStore(dbStore.DB)
+	registry := NewStateRegistry()
+	hub := NewEventHub(registry)
+	defer hub.Close()
+
+	prober := &mockProber{
+		probeFunc: func(ctx context.Context, uri string, options engine.StreamOptions) (engine.VideoInfo, error) {
+			return engine.VideoInfo{
+				Codec:  engine.CodecH264,
+				Width:  1920,
+				Height: 1080,
+				FPS:    engine.Rational{Num: 25, Den: 1},
+			}, nil
+		},
+	}
+	probeService := NewProbeService(prober)
+	scheduler := NewHealthScheduler(store, lazyCipher, registry, hub, nil, zap.NewNop())
+	service := NewCameraService(store, lazyCipher, probeService, registry, hub, scheduler, zap.NewNop())
+	mockEngine := newMockMediaEngine()
+	streamHub := NewStreamHub(mockEngine, store, lazyCipher, registry, hub, zap.NewNop())
+	defer streamHub.Close()
+
+	handler := NewHandler(service, hub, streamHub, zap.NewNop())
+	handler.SetAuditor(auditor)
+
+	r := gin.New()
+	api := r.Group("/api/v1")
+	handler.RegisterRoutes(api)
+
+	// 1. Create camera with password in RTSP
+	createReq := CreateCameraRequest{
+		ID:   "cam_audit_1",
+		Name: "Front Gate",
+		MainStream: CreateStreamRequest{
+			Role:      "main",
+			Protocol:  "rtsp",
+			RTSPURL:   "rtsp://admin:secret123@192.168.1.100:554/h264",
+			Transport: "tcp",
+		},
+	}
+	body, _ := json.Marshal(createReq)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 2. Toggle camera enabled
+	disabled := false
+	toggleReq := UpdateCameraRequest{
+		Revision: 1,
+		Enabled:  &disabled,
+	}
+	body, _ = json.Marshal(toggleReq)
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest(http.MethodPut, "/api/v1/cameras/cam_audit_1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 3. Update camera name
+	newName := "Front Gate Updated"
+	updateReq := UpdateCameraRequest{
+		Revision: 2,
+		Name:     &newName,
+	}
+	body, _ = json.Marshal(updateReq)
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest(http.MethodPut, "/api/v1/cameras/cam_audit_1", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 4. Delete camera
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest(http.MethodDelete, "/api/v1/cameras/cam_audit_1", nil)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Assertions on recorded audits
+	if len(auditor.entries) != 4 {
+		t.Fatalf("expected 4 entries, got %d", len(auditor.entries))
+	}
+	if auditor.entries[0].Action != audit.ActionCameraCreate || auditor.entries[0].Status != audit.StatusSuccess {
+		t.Errorf("entry 0 mismatch: %+v", auditor.entries[0])
+	}
+	// Password must NOT be present in detail
+	if strings.Contains(auditor.entries[0].Detail, "secret123") {
+		t.Fatalf("plain password found in audit detail: %s", auditor.entries[0].Detail)
+	}
+	if auditor.entries[1].Action != audit.ActionCameraToggle || auditor.entries[1].Status != audit.StatusSuccess {
+		t.Errorf("entry 1 mismatch: %+v", auditor.entries[1])
+	}
+	if auditor.entries[2].Action != audit.ActionCameraUpdate || auditor.entries[2].Status != audit.StatusSuccess {
+		t.Errorf("entry 2 mismatch: %+v", auditor.entries[2])
+	}
+	if auditor.entries[3].Action != audit.ActionCameraDelete || auditor.entries[3].Status != audit.StatusSuccess {
+		t.Errorf("entry 3 mismatch: %+v", auditor.entries[3])
 	}
 }

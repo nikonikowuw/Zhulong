@@ -63,7 +63,7 @@ function parseCallOptions(signalOrOptions?: AbortSignal | ApiCallOptions): ApiCa
 
 async function requestApiData<T>(
   path: string,
-  schema: z.ZodType<T, z.ZodTypeDef, any>,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   options: RequestOptions,
 ): Promise<T> {
   const controller = new AbortController();
@@ -144,7 +144,7 @@ async function requestApiData<T>(
 
 export function getApiData<T>(
   path: string,
-  schema: z.ZodType<T, z.ZodTypeDef, any>,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   language: SupportedLanguage,
   signalOrOptions?: AbortSignal | ApiCallOptions,
 ): Promise<T> {
@@ -160,7 +160,7 @@ export function getApiData<T>(
 export function postApiData<T>(
   path: string,
   bodyData: unknown,
-  schema: z.ZodType<T, z.ZodTypeDef, any>,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   language: SupportedLanguage,
   signalOrOptions?: AbortSignal | ApiCallOptions,
 ): Promise<T> {
@@ -177,7 +177,7 @@ export function postApiData<T>(
 export function putApiData<T>(
   path: string,
   bodyData: unknown,
-  schema: z.ZodType<T, z.ZodTypeDef, any>,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   language: SupportedLanguage,
   signalOrOptions?: AbortSignal | ApiCallOptions,
 ): Promise<T> {
@@ -193,7 +193,7 @@ export function putApiData<T>(
 
 export function deleteApiData<T>(
   path: string,
-  schema: z.ZodType<T, z.ZodTypeDef, any>,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   language: SupportedLanguage,
   signalOrOptions?: AbortSignal | ApiCallOptions,
 ): Promise<T> {

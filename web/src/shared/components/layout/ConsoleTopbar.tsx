@@ -56,6 +56,8 @@ export const ConsoleTopbar: FC<ConsoleTopbarProps> = ({
         return t("nav.live");
       case "cameras":
         return t("nav.cameras");
+      case "audit":
+        return t("nav.audit");
       default:
         return t("nav.overview");
     }

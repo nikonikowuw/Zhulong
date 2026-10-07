@@ -1,9 +1,9 @@
-import { Activity, Camera, ChevronLeft, ChevronRight, Cpu, LayoutGrid } from "lucide-react";
+import { Activity, Camera, ChevronLeft, ChevronRight, Cpu, LayoutGrid, ScrollText } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { UserNav } from "@/features/auth";
 import type { FC } from "react";
 
-export type ActiveTab = "overview" | "live" | "cameras";
+export type ActiveTab = "overview" | "live" | "cameras" | "audit";
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -57,6 +57,12 @@ export const Sidebar: FC<SidebarProps> = ({
             {onlineCameraCount ?? 0}/{totalCameraCount}
           </span>
         ) : null,
+    },
+    {
+      id: "audit" as const,
+      label: t("nav.audit"),
+      icon: ScrollText,
+      badge: null,
     },
   ];
 

@@ -56,3 +56,18 @@ func NewLogger(isDev bool) (*zap.Logger, error) {
  return logger, nil
 }
 ```
+
+---
+
+## 4. 业务安全与操作审计日志 (Audit Logs)
+
+与面向开发者/运维排障的 Zap 运行日志不同，**操作与安全审计日志**面向管理员审计溯源，必须遵循以下规则：
+
+1. **持久化与独立建模**：存储于 SQLite `audit_logs` 表，支持结构化查询（按动作、状态、时间范围过滤与分页）和管理员界面直观呈现。
+2. **异步非阻塞管道**：业务关键路径调用 `audit.Service.Record(...)` 必须是非阻塞的（基于缓冲 Channel），缓冲区满时应降级记录警告并丢弃，绝不可阻塞主业务请求或导致写锁饥饿。
+3. **容量保护与防爆盘 (FIFO Rolling Retention)**：默认设置严格上限（如 `5,000` 条），在批量落盘后触发滚动清理最旧记录，防止嵌入式存储空间被撑爆。
+4. **凭据安全与脱敏**：
+   - 严禁将明文密码、会话 Token 写入审计 `detail` 或 `error_msg`；
+   - 包含流媒体凭证的 URL（如 RTSP）必须通过 `SanitizeURL` / `url.URL.Redacted()` 脱敏隐藏密码后再行记录。
+5. **停机排空 (Graceful Drain)**：在系统关机生命周期中，必须在 HTTP 端口停止监听并排空流量后、SQLite 关闭连接前执行 `audit.Stop(ctx)`，将剩余缓冲区日志全部批量落盘。
+

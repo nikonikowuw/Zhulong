@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
 )
@@ -239,5 +240,81 @@ func TestAuthHandler_InitAndLoginFlow(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 on login, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+type testAuditor struct {
+	entries []audit.Entry
+}
+
+func (m *testAuditor) Record(entry audit.Entry) {
+	m.entries = append(m.entries, entry)
+}
+
+func TestAuthHandler_AuditLogging(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dbStore := setupTestDB(t)
+	userStore := NewUserStore(dbStore.DB)
+	sessionStore := NewMemorySessionStore(1 * time.Hour)
+	svc := NewAuthService(userStore, sessionStore, nil, zap.NewNop())
+	auditor := &testAuditor{}
+	handler := NewHandler(svc, auditor)
+
+	router := gin.New()
+	api := router.Group("/api/v1")
+	handler.RegisterRoutes(api)
+
+	// 1. InitAdmin
+	initBody, _ := json.Marshal(InitAdminRequest{
+		Username:        "admin",
+		Password:        "password123",
+		ConfirmPassword: "password123",
+	})
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/auth/init", bytes.NewReader(initBody))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	// 2. Failed Login
+	badLogin, _ := json.Marshal(LoginRequest{Username: "admin", Password: "wrong"})
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(badLogin))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	// 3. Successful Login
+	goodLogin, _ := json.Marshal(LoginRequest{Username: "admin", Password: "password123"})
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(goodLogin))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+	cookies := w.Result().Cookies()
+
+	// 4. Logout
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	router.ServeHTTP(w, req)
+
+	// Verify entries
+	if len(auditor.entries) != 4 {
+		t.Fatalf("expected 4 audit entries, got %d", len(auditor.entries))
+	}
+	if auditor.entries[0].Action != audit.ActionAuthInit || auditor.entries[0].Status != audit.StatusSuccess {
+		t.Errorf("entry 0 mismatch: %+v", auditor.entries[0])
+	}
+	if auditor.entries[1].Action != audit.ActionAuthLogin || auditor.entries[1].Status != audit.StatusFailed {
+		t.Errorf("entry 1 mismatch: %+v", auditor.entries[1])
+	}
+	if auditor.entries[2].Action != audit.ActionAuthLogin || auditor.entries[2].Status != audit.StatusSuccess {
+		t.Errorf("entry 2 mismatch: %+v", auditor.entries[2])
+	}
+	if auditor.entries[3].Action != audit.ActionAuthLogout || auditor.entries[3].Status != audit.StatusSuccess {
+		t.Errorf("entry 3 mismatch: %+v", auditor.entries[3])
 	}
 }

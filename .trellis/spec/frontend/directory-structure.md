@@ -12,6 +12,12 @@
 web/
   src/
     features/
+      audit/                          # 操作与安全审计日志切片
+        components/                   # 内部私有子组件 (表格、明细弹窗、筛选栏)
+        hooks/                        # TanStack Query 钩子
+        api/                          # 强类型 REST 客户端
+        types.ts                      # Zod 与 TypeScript 契约
+        index.ts                      # 公共导出入口
       camera/                         # 相机管理切片
         components/                   # 内部私有子组件 (单一职责)
         hooks/                        # 封装业务逻辑与 TanStack Query

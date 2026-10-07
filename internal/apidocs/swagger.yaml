@@ -244,6 +244,24 @@ definitions:
     - field
     - message
     type: object
+  httputil.PaginatedData-camera_CameraResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/camera.CameraResponse'
+        type: array
+      limit:
+        description: Backwards compatibility fields for legacy clients expecting limit/offset
+        type: integer
+      offset:
+        type: integer
+      page:
+        type: integer
+      pageSize:
+        type: integer
+      total:
+        type: integer
+    type: object
   httputil.Response:
     properties:
       code:
@@ -404,11 +422,19 @@ paths:
   /cameras:
     get:
       parameters:
-      - description: Pagination limit
+      - description: Page number (1-based, default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Page size (default 20, max 100)
+        in: query
+        name: pageSize
+        type: integer
+      - description: Legacy pagination limit
         in: query
         name: limit
         type: integer
-      - description: Pagination offset
+      - description: Legacy pagination offset
         in: query
         name: offset
         type: integer
@@ -422,7 +448,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  type: object
+                  $ref: '#/definitions/httputil.PaginatedData-camera_CameraResponse'
               type: object
       summary: List cameras
       tags:

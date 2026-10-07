@@ -276,3 +276,51 @@ func TestCameraShutdownOrderAfterHTTPDrain(t *testing.T) {
 		t.Fatalf("unexpected shutdown order: got %v, want %v", got, want)
 	}
 }
+
+type auditStub struct {
+	events   *eventLog
+	startErr error
+	stopErr  error
+}
+
+func (a auditStub) Start(context.Context) error {
+	a.events.add("audit.start")
+	return a.startErr
+}
+
+func (a auditStub) Stop(context.Context) error {
+	a.events.add("audit.stop")
+	return a.stopErr
+}
+
+func TestAuditShutdownOrderAfterHTTPDrain(t *testing.T) {
+	events := &eventLog{}
+	serveDone := make(chan error, 1)
+	runtime := &lifecycleRuntime{
+		database:      databaseStub{events: events},
+		native:        engineStub{events: events},
+		camera:        cameraStub{events: events},
+		audit:         auditStub{events: events},
+		server:        &http.Server{Addr: "127.0.0.1:0"},
+		logger:        zap.NewNop(),
+		databaseReady: true,
+		nativeReady:   true,
+		cameraReady:   true,
+		auditReady:    true,
+		httpReady:     true,
+		serveDone:     serveDone,
+		shutdown: func(ctx context.Context) error {
+			events.add("http.shutdown")
+			serveDone <- http.ErrServerClosed
+			return nil
+		},
+	}
+
+	err := runtime.Stop(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected stop error: %v", err)
+	}
+	if got, want := events.snapshot(), []string{"http.shutdown", "camera.stop", "audit.stop", "engine.close", "database.close"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected shutdown order with audit: got %v, want %v", got, want)
+	}
+}

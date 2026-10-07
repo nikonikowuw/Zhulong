@@ -33,7 +33,7 @@ export function CameraEmptyState({
           <button
             type="button"
             onClick={onClearFilters}
-            className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-[var(--surface)] border border-[var(--border)] px-4 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--surface-hover)] active:scale-98 transition-all cursor-pointer shadow-xs"
+            className="mt-4 inline-flex items-center gap-1.5 rounded-xl border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--surface-hover)] transition-colors"
           >
             <RotateCcw size={13} aria-hidden="true" />
             <span>{t("camera.clearFilters", "清除筛选")}</span>
@@ -61,7 +61,7 @@ export function CameraEmptyState({
         <button
           type="button"
           onClick={onAddCamera}
-          className="mt-5 inline-flex items-center gap-1.5 rounded-full bg-[var(--accent)] text-white px-5 py-2 text-xs font-semibold hover:brightness-105 active:scale-98 transition-all cursor-pointer shadow-xs"
+          className="mt-5 inline-flex items-center gap-1.5 rounded-xl bg-[var(--button-background)] hover:bg-[var(--button-hover)] text-white px-5 py-2 text-xs font-medium shadow-xs transition-colors"
         >
           <Plus size={15} aria-hidden="true" />
           <span>{t("camera.addCamera", "添加摄像机")}</span>

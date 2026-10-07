@@ -16,10 +16,11 @@
   "nav": {
     "overview": "系統概覽",
     "live": "實時監控",
-    "cameras": "攝影機管理"
+    "cameras": "攝影機管理",
+    "audit": "操作審計"
   },
   "overview": {
-    "heading": "主機狀態",
+    "heading": "系統概覽",
     "description": "集中檢視核心服務與本機執行狀態。"
   },
   "health": {
