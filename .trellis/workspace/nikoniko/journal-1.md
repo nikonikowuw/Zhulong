@@ -473,3 +473,35 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+---
+
+## 2026-10-06 实时预览 UI 升级：媒体设备树与多分屏工作区
+
+**Task**: `10-06-live-device-tree-layout`
+**Status**: Completed
+**Package**: `frontend`
+**Branch**: `dev`
+
+### Summary
+
+完成实时监控页面交互升级为经典 VMS 架构：左侧固定全高媒体设备树（支持通道状态感知、模糊搜索与通道点播/拖拽）；右侧多分屏监控工作区。彻底移除了多余的模态弹窗、发光高亮边框和折叠按钮，支持纯粹的 HTML5 拖拽与单节点顺序填槽交互（满屏自动回绕至槽位 0），并在分屏模式切换时保持真实槽位编号。
+
+### Main Changes
+
+- **组件扩展**：新增 `LiveDeviceTreePanel`、`DeviceTreeNode`、`StreamTreeNode`，支持设备树渲染、实时在线统计与关键词搜索；
+- **拖拽与点击点播**：实现基于 `application/json` 的 HTML5 原生拖拽与视口 Drop Target，支持通道直接拖入任意视口；
+- **自顺延与槽位保持**：重构 `useLiveLayout`，支持单击通道自动顺延分配与满屏回绕至槽位 0，单屏模式保留当前聚焦槽位编号；
+- **纯粹监控体验**：彻底移除空视口加号/弹窗诱导，移除扎眼的发光高亮环与多余的折叠按钮；
+- **国际化与测试覆盖**：更新中英繁三语词条，编写并验证 28 个测试文件、108 个测试用例。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `612168a` | feat(web): implement live surveillance device tree with drag-and-drop and sequential loading |
+
+### Status
+
+[OK] **Completed**
+
