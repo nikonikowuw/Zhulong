@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "验证依赖图静态校验测试与无 Fx 侵入原则"}
+{"file": ".trellis/spec/backend/host-runtime-contract.md", "reason": "验证生命周期启动顺序与优雅停机回滚测试符合契约"}

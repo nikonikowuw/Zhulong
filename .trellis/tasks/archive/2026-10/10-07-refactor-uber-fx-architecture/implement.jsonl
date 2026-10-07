@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Uber Fx 依赖注入、生命周期钩子（OnStart/OnStop）编排及依赖图验证核心规范"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite 与 GORM 数据库连接池、构造函数无副作用及版本化自动迁移要求"}
+{"file": ".trellis/spec/backend/host-runtime-contract.md", "reason": "Host 运行时生命周期顺序与级联错误回滚时序约定"}
