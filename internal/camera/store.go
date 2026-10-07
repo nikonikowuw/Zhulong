@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/database"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -36,16 +37,19 @@ type CameraStore interface {
 }
 
 type gormCameraStore struct {
-	getDB func() *gorm.DB
+	dbProvider database.DBProvider
 }
 
 // NewCameraStore constructs a CameraStore backed by GORM.
-func NewCameraStore(getDB func() *gorm.DB) CameraStore {
-	return &gormCameraStore{getDB: getDB}
+func NewCameraStore(dbProvider database.DBProvider) CameraStore {
+	return &gormCameraStore{dbProvider: dbProvider}
 }
 
 func (s *gormCameraStore) db(ctx context.Context) (*gorm.DB, error) {
-	db := s.getDB()
+	if s.dbProvider == nil {
+		return nil, errors.New("database provider is nil")
+	}
+	db := s.dbProvider.DB()
 	if db == nil {
 		return nil, errors.New("database is not ready")
 	}

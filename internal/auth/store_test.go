@@ -6,6 +6,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 func setupTestDB(t *testing.T) *database.Store {
@@ -22,7 +23,7 @@ func setupTestDB(t *testing.T) *database.Store {
 
 func TestGORMUserStore_HasUserAndCreate(t *testing.T) {
 	dbStore := setupTestDB(t)
-	userStore := NewUserStore(dbStore.DB)
+	userStore := NewUserStore(dbStore)
 	ctx := context.Background()
 
 	hasUser, err := userStore.HasUser(ctx)
@@ -65,7 +66,7 @@ func TestGORMUserStore_HasUserAndCreate(t *testing.T) {
 
 func TestGORMUserStore_GetAndModify(t *testing.T) {
 	dbStore := setupTestDB(t)
-	userStore := NewUserStore(dbStore.DB)
+	userStore := NewUserStore(dbStore)
 	ctx := context.Background()
 
 	// Not found checks
@@ -100,5 +101,33 @@ func TestGORMUserStore_GetAndModify(t *testing.T) {
 	}
 	if fetchedByID.Username != "admin" {
 		t.Fatalf("unexpected username: %s", fetchedByID.Username)
+	}
+}
+
+type mockNilDBProvider struct{}
+
+func (mockNilDBProvider) DB() *gorm.DB { return nil }
+
+func TestGORMUserStore_UnreadyDatabase(t *testing.T) {
+	ctx := context.Background()
+
+	for name, store := range map[string]UserStore{
+		"unready": NewUserStore(mockNilDBProvider{}),
+		"nil":     NewUserStore(nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := store.HasUser(ctx); err == nil {
+				t.Errorf("%s: expected error on HasUser, got nil", name)
+			}
+			if _, err := store.GetByUsername(ctx, "admin"); err == nil {
+				t.Errorf("%s: expected error on GetByUsername, got nil", name)
+			}
+			if _, err := store.GetByID(ctx, 1); err == nil {
+				t.Errorf("%s: expected error on GetByID, got nil", name)
+			}
+			if err := store.Create(ctx, &User{Username: "test"}); err == nil {
+				t.Errorf("%s: expected error on Create, got nil", name)
+			}
+		})
 	}
 }

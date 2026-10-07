@@ -63,3 +63,15 @@ func TestAppDependencyGraph(t *testing.T) {
    - 受保护端点（如摄像机、录像、AI）：在装配中打标 `group:"protected_routes"`，自动挂载至受 `auth.RequireAuth` 保护的子路由组。
 3. **上帝路由器解耦**：`newRouter` 仅接收 `p.PublicRoutes` 与 `p.ProtectedRoutes` 切片并遍历挂载，不引用任何特定业务包（如 `internal/camera`），新增模块时 `router.go` 保持零修改。
 
+---
+
+## 6. 数据库连接提供者契约 (DBProvider) 与领域模块化 (Domain fx.Modules)
+
+1. **统一 `database.DBProvider` 契约**：
+   - 业务 Store（如 `auth`、`camera`、`audit`）禁止接收松散的裸闭包 `func() *gorm.DB`，统一依赖 `database.DBProvider` 接口（`DB() *gorm.DB`）。
+   - `*database.Store` 原生实现 `DBProvider`，在构造期仅做类型绑定，保证构造无副作用并在执行 SQL 时完成动态判空。
+2. **细粒度领域 `fx.Module` 组装**：
+   - `internal/app` 彻底摒弃单体上帝装配函数，按领域划分命名模块：`databaseModule`、`engineModule`、`auditModule`、`authModule`、`cameraModule`、`httpModule` 与 `runtimeModule`。
+   - `lifecycleRuntime` 使用 `runtimeParams (fx.In)` 声明依赖，实现与上层具体实现类的松耦合。
+
+

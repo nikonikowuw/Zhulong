@@ -18,7 +18,7 @@ func setupTestRouter(t *testing.T) (*gin.Engine, AuthService) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	dbStore := setupTestDB(t)
-	userStore := NewUserStore(dbStore.DB)
+	userStore := NewUserStore(dbStore)
 	sessionStore := NewMemorySessionStore(1 * time.Hour)
 	svc := NewAuthService(userStore, sessionStore, nil, zap.NewNop())
 	handler := NewHandler(svc)
@@ -254,7 +254,7 @@ func (m *testAuditor) Record(entry audit.Entry) {
 func TestAuthHandler_AuditLogging(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	dbStore := setupTestDB(t)
-	userStore := NewUserStore(dbStore.DB)
+	userStore := NewUserStore(dbStore)
 	sessionStore := NewMemorySessionStore(1 * time.Hour)
 	svc := NewAuthService(userStore, sessionStore, nil, zap.NewNop())
 	auditor := &testAuditor{}

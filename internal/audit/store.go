@@ -6,24 +6,25 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/database"
 	"gorm.io/gorm"
 )
 
 // Store provides persistence operations for audit logs.
 type Store struct {
-	getDB func() *gorm.DB
+	dbProvider database.DBProvider
 }
 
 // NewStore creates a new audit Store.
-func NewStore(getDB func() *gorm.DB) *Store {
-	return &Store{getDB: getDB}
+func NewStore(dbProvider database.DBProvider) *Store {
+	return &Store{dbProvider: dbProvider}
 }
 
 func (s *Store) db(ctx context.Context) (*gorm.DB, error) {
-	if s.getDB == nil {
+	if s.dbProvider == nil {
 		return nil, errors.New("database provider is nil")
 	}
-	db := s.getDB()
+	db := s.dbProvider.DB()
 	if db == nil {
 		return nil, errors.New("database is not ready")
 	}

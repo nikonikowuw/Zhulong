@@ -30,7 +30,7 @@ func setupTestCameraApp(t *testing.T) (*gin.Engine, *CameraService, *EventHub, *
 	rawCipher, _ := km.InitOrLoadKey(false)
 	lazyCipher := NewLazyCipher()
 	lazyCipher.Set(rawCipher)
-	store := NewCameraStore(dbStore.DB)
+	store := NewCameraStore(dbStore)
 	registry := NewStateRegistry()
 	hub := NewEventHub(registry)
 
@@ -336,7 +336,7 @@ func TestCameraHandler_AuditLogging(t *testing.T) {
 	rawCipher, _ := km.InitOrLoadKey(false)
 	lazyCipher := NewLazyCipher()
 	lazyCipher.Set(rawCipher)
-	store := NewCameraStore(dbStore.DB)
+	store := NewCameraStore(dbStore)
 	registry := NewStateRegistry()
 	hub := NewEventHub(registry)
 	defer hub.Close()

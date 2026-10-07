@@ -12,7 +12,7 @@ import (
 
 func TestAuthService_InitAndStatus(t *testing.T) {
 	dbStore := setupTestDB(t)
-	userStore := NewUserStore(dbStore.DB)
+	userStore := NewUserStore(dbStore)
 	sessionStore := NewMemorySessionStore(1 * time.Hour)
 	svc := NewAuthService(userStore, sessionStore, nil, zap.NewNop())
 	ctx := context.Background()
@@ -175,7 +175,7 @@ func TestAuthService_LoginPropagatesUserStoreFailures(t *testing.T) {
 
 func TestAuthService_LoginAndRateLimiter(t *testing.T) {
 	dbStore := setupTestDB(t)
-	userStore := NewUserStore(dbStore.DB)
+	userStore := NewUserStore(dbStore)
 	sessionStore := NewMemorySessionStore(1 * time.Hour)
 	limiter := NewRateLimiter(15*time.Minute, 3) // 3 attempts for test
 	svc := NewAuthService(userStore, sessionStore, limiter, zap.NewNop())

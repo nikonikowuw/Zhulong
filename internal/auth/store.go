@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/database"
 	"gorm.io/gorm"
 )
 
@@ -25,16 +26,19 @@ type UserStore interface {
 }
 
 type gormUserStore struct {
-	getDB func() *gorm.DB
+	dbProvider database.DBProvider
 }
 
 // NewUserStore constructs a UserStore backed by GORM.
-func NewUserStore(getDB func() *gorm.DB) UserStore {
-	return &gormUserStore{getDB: getDB}
+func NewUserStore(dbProvider database.DBProvider) UserStore {
+	return &gormUserStore{dbProvider: dbProvider}
 }
 
 func (s *gormUserStore) db(ctx context.Context) (*gorm.DB, error) {
-	db := s.getDB()
+	if s.dbProvider == nil {
+		return nil, errors.New("database provider is nil")
+	}
+	db := s.dbProvider.DB()
 	if db == nil {
 		return nil, errors.New("database is not ready")
 	}

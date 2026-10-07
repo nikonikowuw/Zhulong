@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"syscall"
 
+	"go.uber.org/fx"
 	"go.uber.org/zap"
 )
 
@@ -52,16 +53,31 @@ type lifecycleRuntime struct {
 	loggerSynced  bool
 }
 
-func newLifecycleRuntime(services *applicationServices, server *http.Server) *lifecycleRuntime {
+type runtimeParams struct {
+	fx.In
+
+	Database databaseLifecycle
+	Native   engineLifecycle
+	Camera   cameraLifecycle `optional:"true"`
+	Audit    auditLifecycle  `optional:"true"`
+	Server   *http.Server
+	Logger   *zap.Logger
+}
+
+func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
+	var shutdown func(context.Context) error
+	if p.Server != nil {
+		shutdown = p.Server.Shutdown
+	}
 	return &lifecycleRuntime{
-		database: services.database,
-		native:   services.native,
-		camera:   services.cameraMgr,
-		audit:    services.auditSvc,
-		server:   server,
-		logger:   services.logger,
+		database: p.Database,
+		native:   p.Native,
+		camera:   p.Camera,
+		audit:    p.Audit,
+		server:   p.Server,
+		logger:   p.Logger,
 		listen:   net.Listen,
-		shutdown: server.Shutdown,
+		shutdown: shutdown,
 	}
 }
 
@@ -215,6 +231,9 @@ func (r *lifecycleRuntime) syncLogger() error {
 		return nil
 	}
 	r.loggerSynced = true
+	if r.logger == nil {
+		return nil
+	}
 	if err := r.logger.Sync(); err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTTY) {
 		return fmt.Errorf("sync application logger: %w", err)
 	}

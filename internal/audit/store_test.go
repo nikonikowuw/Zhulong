@@ -19,7 +19,7 @@ func setupTestStore(t *testing.T) (*Store, func()) {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
 
-	store := NewStore(dbStore.DB)
+	store := NewStore(dbStore)
 	cleanup := func() {
 		_ = dbStore.Close()
 	}
@@ -256,28 +256,36 @@ func TestStoreClear(t *testing.T) {
 	}
 }
 
+type mockNilDBProvider struct{}
+
+func (mockNilDBProvider) DB() *gorm.DB { return nil }
+
 func TestStoreUnreadyDatabase(t *testing.T) {
-	// Provider returns nil, simulating constructor phase before OpenAndMigrate
-	store := NewStore(func() *gorm.DB { return nil })
 	ctx := context.Background()
 
-	if err := store.Create(ctx, &AuditLog{Action: "test"}); err == nil {
-		t.Fatalf("expected error when DB is unready, got nil")
-	}
-	if err := store.CreateBatch(ctx, []*AuditLog{{Action: "test"}}); err == nil {
-		t.Fatalf("expected error on CreateBatch when DB is unready, got nil")
-	}
-	if _, _, err := store.List(ctx, Filter{}); err == nil {
-		t.Fatalf("expected error on List when DB is unready, got nil")
-	}
-	if _, err := store.Count(ctx); err == nil {
-		t.Fatalf("expected error on Count when DB is unready, got nil")
-	}
-	if _, err := store.Prune(ctx, 10); err == nil {
-		t.Fatalf("expected error on Prune when DB is unready, got nil")
-	}
-	if _, err := store.Clear(ctx); err == nil {
-		t.Fatalf("expected error on Clear when DB is unready, got nil")
+	for name, store := range map[string]*Store{
+		"unready": NewStore(mockNilDBProvider{}),
+		"nil":     NewStore(nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := store.Create(ctx, &AuditLog{Action: "test"}); err == nil {
+				t.Errorf("%s: expected error on Create, got nil", name)
+			}
+			if err := store.CreateBatch(ctx, []*AuditLog{{Action: "test"}}); err == nil {
+				t.Errorf("%s: expected error on CreateBatch, got nil", name)
+			}
+			if _, _, err := store.List(ctx, Filter{}); err == nil {
+				t.Errorf("%s: expected error on List, got nil", name)
+			}
+			if _, err := store.Count(ctx); err == nil {
+				t.Errorf("%s: expected error on Count, got nil", name)
+			}
+			if _, err := store.Prune(ctx, 10); err == nil {
+				t.Errorf("%s: expected error on Prune, got nil", name)
+			}
+			if _, err := store.Clear(ctx); err == nil {
+				t.Errorf("%s: expected error on Clear, got nil", name)
+			}
+		})
 	}
 }
-

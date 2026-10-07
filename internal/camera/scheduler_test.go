@@ -20,7 +20,7 @@ func TestHealthSchedulerActivePacketTimeout(t *testing.T) {
 
 	km := NewKeyManager(tempDir)
 	cipher, _ := km.InitOrLoadKey(false)
-	store := NewCameraStore(dbStore.DB)
+	store := NewCameraStore(dbStore)
 	registry := NewStateRegistry()
 	hub := NewEventHub(registry)
 	defer hub.Close()
@@ -79,7 +79,7 @@ func TestHealthSchedulerTriggerCheck(t *testing.T) {
 
 	km := NewKeyManager(tempDir)
 	cipher, _ := km.InitOrLoadKey(false)
-	store := NewCameraStore(dbStore.DB)
+	store := NewCameraStore(dbStore)
 	registry := NewStateRegistry()
 	hub := NewEventHub(registry)
 	defer hub.Close()
@@ -128,7 +128,7 @@ func TestHealthSchedulerGracefulStopCancelsProbes(t *testing.T) {
 
 	km := NewKeyManager(tempDir)
 	cipher, _ := km.InitOrLoadKey(false)
-	store := NewCameraStore(dbStore.DB)
+	store := NewCameraStore(dbStore)
 	registry := NewStateRegistry()
 	hub := NewEventHub(registry)
 	defer hub.Close()

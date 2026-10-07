@@ -17,6 +17,11 @@ import (
 	gormlog "gorm.io/gorm/logger"
 )
 
+// DBProvider abstracts access to the underlying *gorm.DB.
+type DBProvider interface {
+	DB() *gorm.DB
+}
+
 // Store owns the GORM connection pool and applies versioned SQL migrations before use.
 type Store struct {
 	dataDirectory string
@@ -26,6 +31,8 @@ type Store struct {
 	mu sync.RWMutex
 	db *gorm.DB
 }
+
+var _ DBProvider = (*Store)(nil)
 
 // New creates a Store without opening files or database connections.
 func New(dataDirectory string, logger *zap.Logger) *Store {

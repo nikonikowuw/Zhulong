@@ -104,7 +104,7 @@ func setupTestStoreAndCipher(t *testing.T) (CameraStore, *LazyCipher, string, fu
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
 
-	store := NewCameraStore(dbStore.DB)
+	store := NewCameraStore(dbStore)
 	cleanup := func() {
 		_ = dbStore.Close()
 	}

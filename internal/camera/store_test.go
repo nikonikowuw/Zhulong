@@ -6,6 +6,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 func setupTestStore(t *testing.T) (CameraStore, func()) {
@@ -16,7 +17,7 @@ func setupTestStore(t *testing.T) (CameraStore, func()) {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
 
-	store := NewCameraStore(dbStore.DB)
+	store := NewCameraStore(dbStore)
 	cleanup := func() {
 		_ = dbStore.Close()
 	}
@@ -164,5 +165,39 @@ func TestCameraStoreCRUD(t *testing.T) {
 	hasEncrypted, err = store.HasAnyEncryptedStreams(ctx)
 	if err != nil || hasEncrypted {
 		t.Fatalf("expected no encrypted streams after deletion, got %v", hasEncrypted)
+	}
+}
+
+type mockNilDBProvider struct{}
+
+func (mockNilDBProvider) DB() *gorm.DB { return nil }
+
+func TestGORMCameraStore_UnreadyDatabase(t *testing.T) {
+	ctx := context.Background()
+
+	for name, store := range map[string]CameraStore{
+		"unready": NewCameraStore(mockNilDBProvider{}),
+		"nil":     NewCameraStore(nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := store.Create(ctx, &Camera{ID: "c1"}, nil); err == nil {
+				t.Errorf("%s: expected error on Create, got nil", name)
+			}
+			if _, err := store.GetByID(ctx, "c1"); err == nil {
+				t.Errorf("%s: expected error on GetByID, got nil", name)
+			}
+			if _, _, err := store.List(ctx, 10, 0); err == nil {
+				t.Errorf("%s: expected error on List, got nil", name)
+			}
+			if _, err := store.Update(ctx, UpdateCameraParams{ID: "c1"}); err == nil {
+				t.Errorf("%s: expected error on Update, got nil", name)
+			}
+			if err := store.Delete(ctx, "c1"); err == nil {
+				t.Errorf("%s: expected error on Delete, got nil", name)
+			}
+			if _, err := store.HasAnyEncryptedStreams(ctx); err == nil {
+				t.Errorf("%s: expected error on HasAnyEncryptedStreams, got nil", name)
+			}
+		})
 	}
 }
