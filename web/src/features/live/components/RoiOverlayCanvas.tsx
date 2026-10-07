@@ -7,11 +7,11 @@ interface RoiOverlayCanvasProps {
   className?: string;
 }
 
-export const RoiOverlayCanvas: React.FC<RoiOverlayCanvasProps> = ({
+export function RoiOverlayCanvas({
   boxes = [],
   config = {},
   className = '',
-}) => {
+}: RoiOverlayCanvasProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -21,13 +21,13 @@ export const RoiOverlayCanvas: React.FC<RoiOverlayCanvasProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // 清空画布
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
     if (boxes.length === 0) return;
 
     const width = canvas.width;
     const height = canvas.height;
+    const showLabels = config.showLabels ?? true;
+    const showScores = config.showScores ?? true;
 
     for (const box of boxes) {
       const x = box.x * width;
@@ -36,32 +36,24 @@ export const RoiOverlayCanvas: React.FC<RoiOverlayCanvasProps> = ({
       const h = box.height * height;
       const strokeColor = box.color || config.boxColor || '#0a84ff';
 
-      // 绘制矩形边框
       ctx.strokeStyle = strokeColor;
       ctx.lineWidth = 2;
       ctx.strokeRect(x, y, w, h);
 
-      // 绘制标签与置信度
-      const showLabels = config.showLabels ?? true;
-      const showScores = config.showScores ?? true;
-      const labelText = [
-        showLabels && box.label ? box.label : '',
-        showScores && box.score !== undefined ? `${Math.round(box.score * 100)}%` : '',
-      ]
-        .filter(Boolean)
-        .join(' ');
+      const labelParts: string[] = [];
+      if (showLabels && box.label) labelParts.push(box.label);
+      if (showScores && box.score !== undefined) labelParts.push(`${Math.round(box.score * 100)}%`);
 
+      const labelText = labelParts.join(' ');
       if (labelText) {
         ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
         const textMetrics = ctx.measureText(labelText);
         const textWidth = textMetrics.width;
         const textHeight = 14;
 
-        // 标签背景
         ctx.fillStyle = strokeColor;
         ctx.fillRect(x, Math.max(0, y - textHeight - 4), textWidth + 8, textHeight + 4);
 
-        // 标签文字
         ctx.fillStyle = '#ffffff';
         ctx.fillText(labelText, x + 4, Math.max(11, y - 4));
       }
@@ -76,4 +68,4 @@ export const RoiOverlayCanvas: React.FC<RoiOverlayCanvasProps> = ({
       height={1080}
     />
   );
-};
+}

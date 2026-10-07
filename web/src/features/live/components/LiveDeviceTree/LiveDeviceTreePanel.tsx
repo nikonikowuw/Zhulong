@@ -11,10 +11,10 @@ interface LiveDeviceTreePanelProps {
   onPlay: (binding: SlotBinding) => void;
 }
 
-export const LiveDeviceTreePanel: React.FC<LiveDeviceTreePanelProps> = ({
+export function LiveDeviceTreePanel({
   getPlayingSlot,
   onPlay,
-}) => {
+}: LiveDeviceTreePanelProps): React.JSX.Element {
   const { t } = useTranslation();
   const {
     data: cameras = [],
@@ -30,9 +30,65 @@ export const LiveDeviceTreePanel: React.FC<LiveDeviceTreePanelProps> = ({
     stats,
   } = useDeviceTreeFilter({ cameras });
 
+  const renderContent = (): React.JSX.Element => {
+    if (isLoading) {
+      return (
+        <div className="flex flex-col items-center justify-center h-48 gap-2 text-neutral-400">
+          <RefreshCw className="w-5 h-5 animate-spin text-blue-500" />
+          <span className="text-xs">
+            {t('live.connecting', '正在加载通道...')}
+          </span>
+        </div>
+      );
+    }
+
+    if (isError) {
+      return (
+        <div className="flex flex-col items-center justify-center h-48 gap-2 p-4 text-center">
+          <AlertCircle className="w-6 h-6 text-rose-500" />
+          <span className="text-xs text-neutral-600 dark:text-neutral-400">
+            {t('live.loadDevicesFailed', '获取设备列表失败')}
+          </span>
+          <button
+            type="button"
+            onClick={() => void refetch()}
+            className="mt-1 px-3 py-1 text-xs font-medium bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 rounded-lg text-neutral-700 dark:text-neutral-300 transition-colors cursor-pointer"
+          >
+            {t('common.retry', '重试')}
+          </button>
+        </div>
+      );
+    }
+
+    if (filteredCameras.length === 0) {
+      return (
+        <div className="flex flex-col items-center justify-center h-48 gap-1.5 text-neutral-400 dark:text-neutral-500 p-4 text-center">
+          <span className="text-xs font-medium">
+            {searchQuery
+              ? t('live.noMatchingDevices', '未找到匹配的设备或通道')
+              : t('live.noDevicesConfigured', '暂无已配置的摄像机设备')}
+          </span>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex flex-col">
+        {filteredCameras.map((camera) => (
+          <DeviceTreeNode
+            key={camera.id}
+            camera={camera}
+            getPlayingSlot={getPlayingSlot}
+            onPlay={onPlay}
+          />
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col h-full bg-white dark:bg-neutral-900 border border-neutral-200/80 dark:border-neutral-800 rounded-2xl shadow-xs overflow-hidden select-none">
-      {/* 头部标题与在线统计（纯净无折叠按钮） */}
+      {/* 头部标题与在线统计 */}
       <div className="flex items-center justify-between px-3.5 py-3 border-b border-neutral-100 dark:border-neutral-800/80">
         <div className="flex items-center gap-2 min-w-0">
           <Film className="w-4 h-4 text-blue-500 shrink-0" />
@@ -71,48 +127,8 @@ export const LiveDeviceTreePanel: React.FC<LiveDeviceTreePanelProps> = ({
 
       {/* 设备与通道列表主体 */}
       <div className="flex-1 overflow-y-auto p-2 min-h-0">
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center h-48 gap-2 text-neutral-400">
-            <RefreshCw className="w-5 h-5 animate-spin text-blue-500" />
-            <span className="text-xs">
-              {t('live.connecting', '正在加载通道...')}
-            </span>
-          </div>
-        ) : isError ? (
-          <div className="flex flex-col items-center justify-center h-48 gap-2 p-4 text-center">
-            <AlertCircle className="w-6 h-6 text-rose-500" />
-            <span className="text-xs text-neutral-600 dark:text-neutral-400">
-              {t('live.loadDevicesFailed', '获取设备列表失败')}
-            </span>
-            <button
-              type="button"
-              onClick={() => void refetch()}
-              className="mt-1 px-3 py-1 text-xs font-medium bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 rounded-lg text-neutral-700 dark:text-neutral-300 transition-colors cursor-pointer"
-            >
-              {t('common.retry', '重试')}
-            </button>
-          </div>
-        ) : filteredCameras.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 gap-1.5 text-neutral-400 dark:text-neutral-500 p-4 text-center">
-            <span className="text-xs font-medium">
-              {searchQuery
-                ? t('live.noMatchingDevices', '未找到匹配的设备或通道')
-                : t('live.noDevicesConfigured', '暂无已配置的摄像机设备')}
-            </span>
-          </div>
-        ) : (
-          <div className="flex flex-col">
-            {filteredCameras.map((camera) => (
-              <DeviceTreeNode
-                key={camera.id}
-                camera={camera}
-                getPlayingSlot={getPlayingSlot}
-                onPlay={onPlay}
-              />
-            ))}
-          </div>
-        )}
+        {renderContent()}
       </div>
     </div>
   );
-};
+}

@@ -9,38 +9,40 @@ const DEFAULT_STATE: LiveLayoutState = {
   selectedSlotIndex: 0,
 };
 
-export function useLiveLayout() {
-  const [layoutState, setLayoutState] = useState<LiveLayoutState>(() => {
-    if (typeof window === 'undefined') return DEFAULT_STATE;
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if ([1, 4, 9].includes(parsed.mode) && typeof parsed.slots === 'object') {
-          return {
-            mode: parsed.mode,
-            slots: parsed.slots,
-            selectedSlotIndex:
-              typeof parsed.selectedSlotIndex === 'number' &&
-              parsed.selectedSlotIndex >= 0
-                ? parsed.selectedSlotIndex
-                : 0,
-          } as LiveLayoutState;
-        }
-      }
-    } catch {
-      // fallback
-    }
-    return DEFAULT_STATE;
-  });
+function loadSavedLayout(): LiveLayoutState {
+  if (typeof window === 'undefined') return DEFAULT_STATE;
 
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved) return DEFAULT_STATE;
+
+    const parsed = JSON.parse(saved);
+    if ([1, 4, 9].includes(parsed.mode) && typeof parsed.slots === 'object') {
+      return {
+        mode: parsed.mode,
+        slots: parsed.slots || {},
+        selectedSlotIndex:
+          typeof parsed.selectedSlotIndex === 'number' && parsed.selectedSlotIndex >= 0
+            ? parsed.selectedSlotIndex
+            : 0,
+      };
+    }
+  } catch {
+    // Fall back to default state
+  }
+
+  return DEFAULT_STATE;
+}
+
+export function useLiveLayout() {
+  const [layoutState, setLayoutState] = useState<LiveLayoutState>(loadSavedLayout);
   const [fullscreenSlot, setFullscreenSlot] = useState<number | null>(null);
 
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(layoutState));
     } catch {
-      // ignore
+      // Storage quota or privacy mode error; ignored
     }
   }, [layoutState]);
 
@@ -51,10 +53,9 @@ export function useLiveLayout() {
       ? layoutState.selectedSlotIndex
       : 0;
 
-  const setMode = useCallback((mode: LayoutMode) => {
+  const setMode = useCallback((mode: LayoutMode): void => {
     setLayoutState((prev) => {
       let nextSelected = prev.selectedSlotIndex ?? 0;
-      // 多分屏模式且超出当前 mode 范围时，夹紧到当前模式最后一个槽位
       if (mode > 1 && nextSelected >= mode) {
         nextSelected = mode - 1;
       }
@@ -63,7 +64,7 @@ export function useLiveLayout() {
     setFullscreenSlot(null);
   }, []);
 
-  const selectSlot = useCallback((slotIndex: number) => {
+  const selectSlot = useCallback((slotIndex: number): void => {
     setLayoutState((prev) => {
       const maxIndex = prev.mode === 1 ? 8 : prev.mode - 1;
       const clamped = Math.max(0, Math.min(maxIndex, slotIndex));
@@ -71,18 +72,15 @@ export function useLiveLayout() {
     });
   }, []);
 
-  const assignSlot = useCallback((slotIndex: number, binding: SlotBinding) => {
+  const assignSlot = useCallback((slotIndex: number, binding: SlotBinding): void => {
     setLayoutState((prev) => ({
       ...prev,
-      slots: {
-        ...prev.slots,
-        [slotIndex]: binding,
-      },
+      slots: { ...prev.slots, [slotIndex]: binding },
       selectedSlotIndex: slotIndex,
     }));
   }, []);
 
-  const assignToSelected = useCallback((binding: SlotBinding) => {
+  const assignToSelected = useCallback((binding: SlotBinding): void => {
     setLayoutState((prev) => {
       const capacity = prev.mode;
       const currentSelected = Math.max(
@@ -92,10 +90,7 @@ export function useLiveLayout() {
           : Math.min(capacity - 1, prev.selectedSlotIndex ?? 0),
       );
       const targetSlot = currentSelected;
-      const updatedSlots = {
-        ...prev.slots,
-        [targetSlot]: binding,
-      };
+      const updatedSlots = { ...prev.slots, [targetSlot]: binding };
 
       // 1. 查找当前分屏容量下，下一个空闲槽位
       let nextEmptySlot: number | null = null;
@@ -109,23 +104,17 @@ export function useLiveLayout() {
 
       let nextSelected: number;
       if (nextEmptySlot !== null) {
-        // 还有空视口：自动顺延至下一个空视口
         nextSelected = nextEmptySlot;
       } else {
-        // 当前分屏已无空闲视口：
-        // 检查本次装载前是否还有空槽位（即本次操作是否刚好填满了整个分屏）
-        const hadEmptyBefore = Array.from(
-          { length: capacity },
-          (_, i) => i,
-        ).some((i) => i !== targetSlot && !prev.slots[i]);
-
-        if (hadEmptyBefore) {
-          // 满屏后，重新从 0 开始
-          nextSelected = 0;
-        } else {
-          // 已处于全满状态：顺延覆盖下一个视口 (0 -> 1 -> 2 ... -> 0)
-          nextSelected = (targetSlot + 1) % capacity;
+        // 当前已无空闲视口：判断本次装载前是否曾经有空位
+        let hadEmptyBefore = false;
+        for (let i = 0; i < capacity; i++) {
+          if (i !== targetSlot && !prev.slots[i]) {
+            hadEmptyBefore = true;
+            break;
+          }
         }
+        nextSelected = hadEmptyBefore ? 0 : (targetSlot + 1) % capacity;
       }
 
       return {
@@ -136,7 +125,7 @@ export function useLiveLayout() {
     });
   }, []);
 
-  const clearSlot = useCallback((slotIndex: number) => {
+  const clearSlot = useCallback((slotIndex: number): void => {
     setLayoutState((prev) => {
       const nextSlots = { ...prev.slots };
       delete nextSlots[slotIndex];
@@ -144,7 +133,7 @@ export function useLiveLayout() {
     });
   }, []);
 
-  const clearAllSlots = useCallback(() => {
+  const clearAllSlots = useCallback((): void => {
     setLayoutState((prev) => ({
       ...prev,
       slots: {},
@@ -153,7 +142,7 @@ export function useLiveLayout() {
     setFullscreenSlot(null);
   }, []);
 
-  const toggleRole = useCallback((slotIndex: number) => {
+  const toggleRole = useCallback((slotIndex: number): void => {
     setLayoutState((prev) => {
       const current = prev.slots[slotIndex];
       if (!current) return prev;
@@ -162,10 +151,7 @@ export function useLiveLayout() {
         ...prev,
         slots: {
           ...prev.slots,
-          [slotIndex]: {
-            ...current,
-            role: nextRole,
-          },
+          [slotIndex]: { ...current, role: nextRole },
         },
       };
     });
@@ -173,7 +159,6 @@ export function useLiveLayout() {
 
   const getPlayingSlot = useCallback(
     (cameraId: string, role?: 'main' | 'sub'): number | null => {
-      // 检查系统中所有已配置的槽位（最大 9 分屏），切换分屏后依然按原始 slot 号显示
       for (let i = 0; i < 9; i++) {
         const binding = layoutState.slots[i];
         if (binding && binding.cameraId === cameraId) {

@@ -6,16 +6,18 @@ interface LiveTelemetryHudProps {
   visible?: boolean;
 }
 
-export const LiveTelemetryHud: React.FC<LiveTelemetryHudProps> = ({
+export function LiveTelemetryHud({
   telemetry,
   visible = true,
-}) => {
+}: LiveTelemetryHudProps): React.JSX.Element | null {
   if (!visible) return null;
+
+  const codecLabel = telemetry.codec !== 'unknown' ? telemetry.codec : 'RAW';
 
   return (
     <div className="absolute bottom-2.5 right-2.5 z-10 flex items-center gap-2 px-2.5 py-1 rounded-full text-[11px] font-mono tracking-tight backdrop-blur-md bg-black/60 text-white/90 border border-white/10 shadow-sm pointer-events-none select-none">
       <span className="uppercase font-semibold text-emerald-400">
-        {telemetry.codec !== 'unknown' ? telemetry.codec : 'RAW'}
+        {codecLabel}
       </span>
       {telemetry.resolution && (
         <>
@@ -29,4 +31,4 @@ export const LiveTelemetryHud: React.FC<LiveTelemetryHudProps> = ({
       <span>{telemetry.bitrateKbps} kbps</span>
     </div>
   );
-};
+}

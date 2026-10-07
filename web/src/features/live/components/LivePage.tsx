@@ -3,7 +3,7 @@ import { useLiveLayout } from '../hooks/useLiveLayout';
 import { LiveDashboard } from './LiveDashboard';
 import { LiveDeviceTreePanel } from './LiveDeviceTree/LiveDeviceTreePanel';
 
-export const LivePage: React.FC = () => {
+export function LivePage(): React.JSX.Element {
   const layout = useLiveLayout();
 
   return (

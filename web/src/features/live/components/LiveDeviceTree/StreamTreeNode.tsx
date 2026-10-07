@@ -11,16 +11,16 @@ interface StreamTreeNodeProps {
   onPlay: (binding: SlotBinding) => void;
 }
 
-export const StreamTreeNode: React.FC<StreamTreeNodeProps> = ({
+export function StreamTreeNode({
   camera,
   stream,
   playingSlot,
   onPlay,
-}) => {
+}: StreamTreeNodeProps): React.JSX.Element {
   const { t } = useTranslation();
   const isPlaying = playingSlot !== null;
 
-  const handleClick = (e: React.MouseEvent) => {
+  const handleClick = (e: React.MouseEvent): void => {
     e.stopPropagation();
     onPlay({
       cameraId: camera.id,
@@ -29,15 +29,13 @@ export const StreamTreeNode: React.FC<StreamTreeNodeProps> = ({
     });
   };
 
-  const handleDragStart = (e: React.DragEvent) => {
-    e.dataTransfer.setData(
-      'application/json',
-      JSON.stringify({
-        cameraId: camera.id,
-        role: stream.role,
-        name: camera.name,
-      }),
-    );
+  const handleDragStart = (e: React.DragEvent): void => {
+    const payload: SlotBinding = {
+      cameraId: camera.id,
+      role: stream.role,
+      name: camera.name,
+    };
+    e.dataTransfer.setData('application/json', JSON.stringify(payload));
     e.dataTransfer.effectAllowed = 'copy';
   };
 
@@ -51,16 +49,21 @@ export const StreamTreeNode: React.FC<StreamTreeNodeProps> = ({
       ? `${stream.width}×${stream.height}`
       : null;
 
+  const roleBadgeClass =
+    stream.role === 'main'
+      ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300'
+      : 'bg-neutral-200/70 dark:bg-neutral-700/60 text-neutral-600 dark:text-neutral-400';
+
+  const containerClass = isPlaying
+    ? 'bg-blue-50/80 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 font-medium'
+    : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800/60 hover:text-neutral-900 dark:hover:text-neutral-200';
+
   return (
     <div
       draggable
       onDragStart={handleDragStart}
       onClick={handleClick}
-      className={`group/stream flex items-center justify-between pl-6 pr-2.5 py-1.5 rounded-lg text-xs transition-all cursor-grab active:cursor-grabbing select-none ${
-        isPlaying
-          ? 'bg-blue-50/80 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 font-medium'
-          : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800/60 hover:text-neutral-900 dark:hover:text-neutral-200'
-      }`}
+      className={`group/stream flex items-center justify-between pl-6 pr-2.5 py-1.5 rounded-lg text-xs transition-all cursor-grab active:cursor-grabbing select-none ${containerClass}`}
       title={t('live.treeStreamHint', '点击装载至聚焦视口，或拖拽至指定分屏')}
     >
       <div className="flex items-center gap-1.5 min-w-0">
@@ -72,13 +75,7 @@ export const StreamTreeNode: React.FC<StreamTreeNodeProps> = ({
         />
         <div className="flex items-center gap-1.5 truncate">
           <span className="truncate">{roleLabel}</span>
-          <span
-            className={`text-[10px] font-mono px-1 py-0.2 rounded uppercase ${
-              stream.role === 'main'
-                ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-300'
-                : 'bg-neutral-200/70 dark:bg-neutral-700/60 text-neutral-600 dark:text-neutral-400'
-            }`}
-          >
+          <span className={`text-[10px] font-mono px-1 py-0.2 rounded uppercase ${roleBadgeClass}`}>
             {stream.role}
           </span>
           {resolutionText && (
@@ -90,7 +87,7 @@ export const StreamTreeNode: React.FC<StreamTreeNodeProps> = ({
       </div>
 
       <div className="flex items-center gap-1.5 shrink-0 ml-2">
-        {isPlaying ? (
+        {isPlaying && (
           <span className="inline-flex items-center gap-1 text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-300/60 dark:border-emerald-800/40 shadow-2xs">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
             <span>
@@ -99,8 +96,8 @@ export const StreamTreeNode: React.FC<StreamTreeNodeProps> = ({
               })}
             </span>
           </span>
-        ) : null}
+        )}
       </div>
     </div>
   );
-};
+}

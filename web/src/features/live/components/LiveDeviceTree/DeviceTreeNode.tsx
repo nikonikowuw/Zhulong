@@ -11,11 +11,11 @@ interface DeviceTreeNodeProps {
   onPlay: (binding: SlotBinding) => void;
 }
 
-export const DeviceTreeNode: React.FC<DeviceTreeNodeProps> = ({
+export function DeviceTreeNode({
   camera,
   getPlayingSlot,
   onPlay,
-}) => {
+}: DeviceTreeNodeProps): React.JSX.Element {
   const { t } = useTranslation();
 
   const isOnline = camera.health === 'online';
@@ -26,8 +26,7 @@ export const DeviceTreeNode: React.FC<DeviceTreeNodeProps> = ({
   const targetStream =
     camera.streams.find((s) => s.role === 'main') || camera.streams[0];
 
-  // 单击设备节点时，直接点播主码流至聚焦视口
-  const handleClick = (e: React.MouseEvent) => {
+  const handleClick = (e: React.MouseEvent): void => {
     e.stopPropagation();
     if (targetStream) {
       onPlay({
@@ -38,26 +37,23 @@ export const DeviceTreeNode: React.FC<DeviceTreeNodeProps> = ({
     }
   };
 
-  // 支持将整个设备（默认主码流）拖拽到目标视口
-  const handleDragStart = (e: React.DragEvent) => {
+  const handleDragStart = (e: React.DragEvent): void => {
     if (targetStream) {
-      e.dataTransfer.setData(
-        'application/json',
-        JSON.stringify({
-          cameraId: camera.id,
-          role: targetStream.role,
-          name: camera.name,
-        }),
-      );
+      const payload: SlotBinding = {
+        cameraId: camera.id,
+        role: targetStream.role,
+        name: camera.name,
+      };
+      e.dataTransfer.setData('application/json', JSON.stringify(payload));
       e.dataTransfer.effectAllowed = 'copy';
     }
   };
 
-  const getStatusDotClass = () => {
-    if (isDegraded) return 'bg-amber-500';
-    if (isOnline) return 'bg-emerald-500';
-    return 'bg-neutral-400 dark:bg-neutral-600';
-  };
+  const statusDotClass = isDegraded
+    ? 'bg-amber-500'
+    : isOnline
+      ? 'bg-emerald-500'
+      : 'bg-neutral-400 dark:bg-neutral-600';
 
   return (
     <div className="flex flex-col mb-1.5 last:mb-0">
@@ -95,7 +91,7 @@ export const DeviceTreeNode: React.FC<DeviceTreeNodeProps> = ({
               }`}
             />
             <span
-              className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ring-1 ring-white dark:ring-neutral-900 ${getStatusDotClass()}`}
+              className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ring-1 ring-white dark:ring-neutral-900 ${statusDotClass}`}
             />
           </div>
 
@@ -116,7 +112,7 @@ export const DeviceTreeNode: React.FC<DeviceTreeNodeProps> = ({
         </div>
       </div>
 
-      {/* 码流通道平铺展示（无需任何折叠按钮） */}
+      {/* 码流通道平铺展示 */}
       <div className="flex flex-col gap-0.5 mt-0.5">
         {camera.streams.length > 0 ? (
           camera.streams.map((stream) => (
@@ -136,4 +132,4 @@ export const DeviceTreeNode: React.FC<DeviceTreeNodeProps> = ({
       </div>
     </div>
   );
-};
+}

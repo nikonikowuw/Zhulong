@@ -25,7 +25,7 @@ interface LiveViewportProps {
   onToggleFullscreen: () => void;
 }
 
-export const LiveViewport: React.FC<LiveViewportProps> = ({
+export function LiveViewport({
   slotIndex,
   binding,
   isFullscreen = false,
@@ -34,7 +34,7 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
   onClear,
   onToggleRole,
   onToggleFullscreen,
-}) => {
+}: LiveViewportProps): React.JSX.Element {
   const { t } = useTranslation();
   const [isSnapshotReady, setIsSnapshotReady] = useState(false);
   const [isSnapshotSaved, setIsSnapshotSaved] = useState(false);
@@ -42,7 +42,7 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
   const [isDragOver, setIsDragOver] = useState(false);
   const playerRef = useRef<LivePlayerHandle | null>(null);
 
-  const handleTakeSnapshot = async () => {
+  const handleTakeSnapshot = async (): Promise<void> => {
     if (!playerRef.current || !isSnapshotReady) return;
     const ok = await playerRef.current.takeSnapshot();
     if (ok) {
@@ -51,7 +51,7 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
     }
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
+  const handleDragOver = (e: React.DragEvent): void => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
     if (!isDragOver) {
@@ -59,26 +59,51 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
     }
   };
 
-  const handleDragLeave = (e: React.DragEvent) => {
+  const handleDragLeave = (e: React.DragEvent): void => {
     e.preventDefault();
     setIsDragOver(false);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = (e: React.DragEvent): void => {
     e.preventDefault();
     setIsDragOver(false);
+    const raw = e.dataTransfer.getData('application/json');
+    if (!raw) return;
+
     try {
-      const raw = e.dataTransfer.getData('application/json');
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as SlotBinding;
+      const parsed = JSON.parse(raw) as Partial<SlotBinding>;
       if (parsed.cameraId && parsed.role) {
-        onAssign(parsed);
+        onAssign(parsed as SlotBinding);
         onSelect?.(slotIndex);
       }
     } catch {
-      // ignore
+      // Ignore invalid drag payload
     }
   };
+
+  const containerClasses = isFullscreen
+    ? 'fixed inset-0 z-50 rounded-none border-none h-full bg-black flex items-center justify-center'
+    : 'aspect-video rounded-xl shadow-xs bg-neutral-900 border border-neutral-800/80 hover:border-neutral-700/80 transition-all duration-200 cursor-pointer';
+
+  const snapshotTitle = isSnapshotReady
+    ? t('live.snapshot', '截取画面快照')
+    : t('live.snapshotUnavailable', '等待首帧就绪后截图');
+
+  const snapshotButtonClass = isSnapshotReady
+    ? 'hover:bg-white/20 text-white/80 hover:text-white'
+    : 'opacity-40 cursor-not-allowed text-white/40';
+
+  const telemetryTitle = showTelemetry
+    ? t('live.hideTelemetry', '隐藏遥测指标')
+    : t('live.showTelemetry', '显示遥测指标');
+
+  const telemetryButtonClass = showTelemetry
+    ? 'text-blue-400 hover:bg-white/20'
+    : 'text-white/40 hover:bg-white/20';
+
+  const fullscreenTitle = isFullscreen
+    ? t('live.exitFullscreen', '退出全屏')
+    : t('live.fullscreen', '单视口全屏');
 
   return (
     <div
@@ -86,11 +111,7 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`relative w-full ${
-        isFullscreen
-          ? 'fixed inset-0 z-50 rounded-none border-none h-full bg-black flex items-center justify-center'
-          : 'aspect-video rounded-xl shadow-xs bg-neutral-900 border border-neutral-800/80 hover:border-neutral-700/80 transition-all duration-200 cursor-pointer'
-      } overflow-hidden flex flex-col group`}
+      className={`relative w-full ${containerClasses} overflow-hidden flex flex-col group`}
     >
       {/* 拖拽放置高亮遮罩 */}
       {isDragOver && (
@@ -144,16 +165,8 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
                   void handleTakeSnapshot();
                 }}
                 disabled={!isSnapshotReady}
-                title={
-                  isSnapshotReady
-                    ? t('live.snapshot', '截取画面快照')
-                    : t('live.snapshotUnavailable', '等待首帧就绪后截图')
-                }
-                className={`p-1 rounded-full transition-colors cursor-pointer ${
-                  isSnapshotReady
-                    ? 'hover:bg-white/20 text-white/80 hover:text-white'
-                    : 'opacity-40 cursor-not-allowed text-white/40'
-                }`}
+                title={snapshotTitle}
+                className={`p-1 rounded-full transition-colors cursor-pointer ${snapshotButtonClass}`}
               >
                 {isSnapshotSaved ? (
                   <Check className="w-3.5 h-3.5 text-emerald-400" />
@@ -167,16 +180,8 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
                   e.stopPropagation();
                   setShowTelemetry((prev) => !prev);
                 }}
-                title={
-                  showTelemetry
-                    ? t('live.hideTelemetry', '隐藏遥测指标')
-                    : t('live.showTelemetry', '显示遥测指标')
-                }
-                className={`p-1 rounded-full transition-colors cursor-pointer ${
-                  showTelemetry
-                    ? 'text-blue-400 hover:bg-white/20'
-                    : 'text-white/40 hover:bg-white/20'
-                }`}
+                title={telemetryTitle}
+                className={`p-1 rounded-full transition-colors cursor-pointer ${telemetryButtonClass}`}
               >
                 <Activity className="w-3.5 h-3.5" />
               </button>
@@ -186,11 +191,7 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
                   e.stopPropagation();
                   onToggleFullscreen();
                 }}
-                title={
-                  isFullscreen
-                    ? t('live.exitFullscreen', '退出全屏')
-                    : t('live.fullscreen', '单视口全屏')
-                }
+                title={fullscreenTitle}
                 className="p-1 rounded-full hover:bg-white/20 text-white/80 hover:text-white transition-colors cursor-pointer"
               >
                 {isFullscreen ? (
@@ -225,7 +226,6 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
       ) : (
         /* 空视口：纯净监控槽位展示，仅保留槽位号与拖拽接收 */
         <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-neutral-500 hover:text-neutral-400 transition-all p-4 select-none bg-neutral-900/60">
-          {/* 左上角常驻视口标号 */}
           <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 pointer-events-none">
             <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-md bg-white/10 text-white/50">
               {slotIndex + 1}
@@ -237,7 +237,6 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
             </span>
           </div>
 
-          {/* 中央纯净监视器就绪图标 */}
           <div className="w-11 h-11 rounded-2xl flex items-center justify-center bg-neutral-800/60 border border-neutral-700/40 text-neutral-500 transition-all">
             <Tv className="w-5 h-5" />
           </div>
@@ -254,4 +253,4 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
       )}
     </div>
   );
-};
+}

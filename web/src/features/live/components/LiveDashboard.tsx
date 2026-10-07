@@ -1,6 +1,7 @@
 import { Grid2x2, Grid3x3, LayoutGrid, Square, Trash2 } from 'lucide-react';
 import React, { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { LayoutMode } from '../core/types';
 import { useLiveLayout } from '../hooks/useLiveLayout';
 import { LiveViewport } from './LiveViewport';
 
@@ -8,9 +9,21 @@ interface LiveDashboardProps {
   layout?: ReturnType<typeof useLiveLayout>;
 }
 
-export const LiveDashboard: React.FC<LiveDashboardProps> = ({
+const GRID_CLASSES: Record<number, string> = {
+  1: 'grid-cols-1',
+  4: 'grid-cols-1 sm:grid-cols-2',
+  9: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3',
+};
+
+const GRID_SWITCHERS = [
+  { mode: 1 as LayoutMode, label: '1', titleKey: 'live.grid1', defaultTitle: '单视口 (1x1)', Icon: Square },
+  { mode: 4 as LayoutMode, label: '4', titleKey: 'live.grid4', defaultTitle: '四分屏 (2x2)', Icon: Grid2x2 },
+  { mode: 9 as LayoutMode, label: '9', titleKey: 'live.grid9', defaultTitle: '九分屏 (3x3)', Icon: Grid3x3 },
+];
+
+export function LiveDashboard({
   layout: externalLayout,
-}) => {
+}: LiveDashboardProps): React.JSX.Element {
   const { t } = useTranslation();
   const internalLayout = useLiveLayout();
   const layout = externalLayout ?? internalLayout;
@@ -31,49 +44,32 @@ export const LiveDashboard: React.FC<LiveDashboardProps> = ({
 
   // 键盘快捷键监听：Esc 退出单视口全屏，1/4/9 切换布局
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // 避免在输入框、文本域或选择框中误触快捷键
-      const isInputActive = ['INPUT', 'TEXTAREA', 'SELECT'].includes(
-        (document.activeElement?.tagName || '').toUpperCase(),
-      );
-      if (isInputActive) return;
+    function handleKeyDown(e: KeyboardEvent): void {
+      const activeTag = (document.activeElement?.tagName || '').toUpperCase();
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(activeTag)) return;
 
       if (e.key === 'Escape' && fullscreenSlot !== null) {
         setFullscreenSlot(null);
-      } else if (e.key === '1') {
-        setMode(1);
-      } else if (e.key === '4') {
-        setMode(4);
-      } else if (e.key === '9') {
-        setMode(9);
+        return;
       }
-    };
+
+      if (e.key === '1' || e.key === '4' || e.key === '9') {
+        setMode(Number(e.key) as LayoutMode);
+      }
+    }
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [fullscreenSlot, setFullscreenSlot, setMode]);
 
-  const slotCount = mode;
   // 切换为 1 分屏时，显示当前聚焦选中的 slot 视口，保持 slot 序号一致
   const slotIndices =
     mode === 1
       ? [selectedSlotIndex]
-      : Array.from({ length: slotCount }, (_, i) => i);
+      : Array.from({ length: mode }, (_, i) => i);
 
   const hasAnyBinding = Object.keys(slots).length > 0;
-
-  // 布局栅格类计算
-  const getGridClass = () => {
-    switch (mode) {
-      case 1:
-        return 'grid-cols-1';
-      case 4:
-        return 'grid-cols-1 sm:grid-cols-2';
-      case 9:
-        return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
-      default:
-        return 'grid-cols-2';
-    }
-  };
+  const gridClass = GRID_CLASSES[mode] || 'grid-cols-2';
 
   return (
     <div className="flex flex-col gap-3 w-full h-full">
@@ -104,57 +100,36 @@ export const LiveDashboard: React.FC<LiveDashboardProps> = ({
 
           {/* 宫格布局切换器 */}
           <div className="flex items-center gap-1.5 p-1 rounded-xl bg-neutral-100 dark:bg-neutral-800/80 border border-neutral-200/80 dark:border-neutral-700/60 shadow-inner">
-            <button
-              type="button"
-              onClick={() => setMode(1)}
-              title={t('live.grid1', '单视口 (1x1)')}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                mode === 1
-                  ? 'bg-white dark:bg-neutral-700 text-blue-600 dark:text-blue-400 shadow-sm'
-                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
-              }`}
-            >
-              <Square className="w-3.5 h-3.5" />
-              <span>1</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode(4)}
-              title={t('live.grid4', '四分屏 (2x2)')}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                mode === 4
-                  ? 'bg-white dark:bg-neutral-700 text-blue-600 dark:text-blue-400 shadow-sm'
-                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
-              }`}
-            >
-              <Grid2x2 className="w-3.5 h-3.5" />
-              <span>4</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode(9)}
-              title={t('live.grid9', '九分屏 (3x3)')}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                mode === 9
-                  ? 'bg-white dark:bg-neutral-700 text-blue-600 dark:text-blue-400 shadow-sm'
-                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
-              }`}
-            >
-              <Grid3x3 className="w-3.5 h-3.5" />
-              <span>9</span>
-            </button>
+            {GRID_SWITCHERS.map(({ mode: targetMode, label, titleKey, defaultTitle, Icon }) => {
+              const isActive = mode === targetMode;
+              return (
+                <button
+                  key={targetMode}
+                  type="button"
+                  onClick={() => setMode(targetMode)}
+                  title={t(titleKey, defaultTitle)}
+                  className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                    isActive
+                      ? 'bg-white dark:bg-neutral-700 text-blue-600 dark:text-blue-400 shadow-sm'
+                      : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  <span>{label}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
 
       {/* 监控宫格视口容器 */}
-      <div className={`grid ${getGridClass()} gap-3 w-full items-start`}>
+      <div className={`grid ${gridClass} gap-3 w-full items-start`}>
         {slotIndices.map((index) => {
           const binding = slots[index] || null;
           const isFullscreen = fullscreenSlot === index;
           const isSelected = selectedSlotIndex === index;
 
-          // 若有视口正处于独立全屏状态，只渲染该视口
           if (fullscreenSlot !== null && !isFullscreen) {
             return null;
           }
@@ -179,4 +154,4 @@ export const LiveDashboard: React.FC<LiveDashboardProps> = ({
       </div>
     </div>
   );
-};
+}

@@ -1,9 +1,16 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { CameraResponse } from '../../camera/types';
 
 export interface UseDeviceTreeFilterOptions {
   cameras: CameraResponse[];
   defaultExpanded?: boolean;
+}
+
+export interface DeviceTreeStats {
+  total: number;
+  online: number;
+  offline: number;
+  degraded: number;
 }
 
 export function useDeviceTreeFilter({
@@ -15,81 +22,68 @@ export function useDeviceTreeFilter({
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
 
-  // 1. 过滤匹配摄像机
   const filteredCameras = useMemo(() => {
     if (!normalizedQuery) return cameras;
 
     return cameras.filter((camera) => {
-      const nameMatch = camera.name.toLowerCase().includes(normalizedQuery);
-      const idMatch = camera.id.toLowerCase().includes(normalizedQuery);
-      const streamMatch = camera.streams.some(
+      const matchName = camera.name.toLowerCase().includes(normalizedQuery);
+      const matchId = camera.id.toLowerCase().includes(normalizedQuery);
+      const matchStream = camera.streams.some(
         (s) =>
           s.role.toLowerCase().includes(normalizedQuery) ||
           s.codec.toLowerCase().includes(normalizedQuery),
       );
-      return nameMatch || idMatch || streamMatch;
+      return matchName || matchId || matchStream;
     });
   }, [cameras, normalizedQuery]);
 
-  // 2. 派生展开节点集合
-  const isExpanded = (cameraId: string): boolean => {
-    // 搜索匹配时强制展开以展示通道
-    if (normalizedQuery) return true;
-    if (cameraId in manualExpanded) {
-      return !!manualExpanded[cameraId];
-    }
-    return defaultExpanded;
-  };
+  const isExpanded = useCallback(
+    (cameraId: string): boolean => {
+      if (normalizedQuery) return true;
+      return manualExpanded[cameraId] ?? defaultExpanded;
+    },
+    [defaultExpanded, manualExpanded, normalizedQuery],
+  );
 
-  const toggleExpand = (cameraId: string) => {
-    setManualExpanded((prev) => {
-      const current = cameraId in prev ? prev[cameraId] : defaultExpanded;
-      return {
+  const toggleExpand = useCallback(
+    (cameraId: string): void => {
+      setManualExpanded((prev) => ({
         ...prev,
-        [cameraId]: !current,
-      };
-    });
-  };
+        [cameraId]: !(prev[cameraId] ?? defaultExpanded),
+      }));
+    },
+    [defaultExpanded],
+  );
 
-  const expandAll = () => {
+  const expandAll = useCallback((): void => {
     const next: Record<string, boolean> = {};
     for (const c of cameras) {
       next[c.id] = true;
     }
     setManualExpanded(next);
-  };
+  }, [cameras]);
 
-  const collapseAll = () => {
+  const collapseAll = useCallback((): void => {
     const next: Record<string, boolean> = {};
     for (const c of cameras) {
       next[c.id] = false;
     }
     setManualExpanded(next);
-  };
+  }, [cameras]);
 
-  // 3. 资产健康统计指标派生
-  const stats = useMemo(() => {
+  const stats = useMemo<DeviceTreeStats>(() => {
     let online = 0;
     let offline = 0;
     let degraded = 0;
 
     for (const c of cameras) {
-      if (c.health === 'online') {
-        online++;
-      } else if (c.health === 'offline') {
-        offline++;
-      }
-      if (c.degraded || c.health === 'error') {
-        degraded++;
-      }
+      if (c.health === 'online') online++;
+      else if (c.health === 'offline') offline++;
+
+      if (c.degraded || c.health === 'error') degraded++;
     }
 
-    return {
-      total: cameras.length,
-      online,
-      offline,
-      degraded,
-    };
+    return { total: cameras.length, online, offline, degraded };
   }, [cameras]);
 
   return {
