@@ -1,14 +1,24 @@
-import { Activity, Camera, Check, Maximize2, Minimize2, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
+import {
+  Activity,
+  ArrowDownToLine,
+  Camera,
+  Check,
+  Maximize2,
+  Minimize2,
+  Trash2,
+  Tv,
+} from 'lucide-react';
 import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SlotBinding } from '../core/types';
-import { LiveAssignModal } from './LiveAssignModal';
 import { LivePlayer, type LivePlayerHandle } from './LivePlayer';
 
 interface LiveViewportProps {
   slotIndex: number;
   binding: SlotBinding | null;
+  isSelected?: boolean;
   isFullscreen?: boolean;
+  onSelect?: (slotIndex: number) => void;
   onAssign: (binding: SlotBinding) => void;
   onClear: () => void;
   onToggleRole: () => void;
@@ -19,16 +29,17 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
   slotIndex,
   binding,
   isFullscreen = false,
+  onSelect,
   onAssign,
   onClear,
   onToggleRole,
   onToggleFullscreen,
 }) => {
   const { t } = useTranslation();
-  const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSnapshotReady, setIsSnapshotReady] = useState(false);
   const [isSnapshotSaved, setIsSnapshotSaved] = useState(false);
   const [showTelemetry, setShowTelemetry] = useState(true);
+  const [isDragOver, setIsDragOver] = useState(false);
   const playerRef = useRef<LivePlayerHandle | null>(null);
 
   const handleTakeSnapshot = async () => {
@@ -40,27 +51,83 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
     }
   };
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!isDragOver) {
+      setIsDragOver(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    try {
+      const raw = e.dataTransfer.getData('application/json');
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as SlotBinding;
+      if (parsed.cameraId && parsed.role) {
+        onAssign(parsed);
+        onSelect?.(slotIndex);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <div
+      onClick={() => onSelect?.(slotIndex)}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       className={`relative w-full ${
         isFullscreen
           ? 'fixed inset-0 z-50 rounded-none border-none h-full bg-black flex items-center justify-center'
-          : 'aspect-video rounded-xl border border-neutral-800/80 shadow-xs bg-neutral-900'
-      } overflow-hidden flex flex-col group transition-all duration-300`}
+          : 'aspect-video rounded-xl shadow-xs bg-neutral-900 border border-neutral-800/80 hover:border-neutral-700/80 transition-all duration-200 cursor-pointer'
+      } overflow-hidden flex flex-col group`}
     >
+      {/* 拖拽放置高亮遮罩 */}
+      {isDragOver && (
+        <div className="absolute inset-0 z-50 bg-blue-600/30 border-2 border-dashed border-blue-400 backdrop-blur-xs flex flex-col items-center justify-center gap-2 text-white pointer-events-none animate-in fade-in duration-150">
+          <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center shadow-lg">
+            <ArrowDownToLine className="w-5 h-5 text-white animate-bounce" />
+          </div>
+          <span className="text-xs font-semibold tracking-wide drop-shadow-sm">
+            {t('live.dropToPlay', '释放以此视口播放')}
+          </span>
+        </div>
+      )}
+
       {binding ? (
         <>
           {/* 顶部悬浮控制栏 */}
           <div className="absolute top-2.5 inset-x-2.5 z-20 flex items-center justify-between pointer-events-none transition-opacity duration-200">
-            {/* 左侧：摄像机名称与主/子流切换 */}
-            <div className="flex items-center gap-2 pointer-events-auto backdrop-blur-md bg-black/60 border border-white/10 px-2.5 py-1 rounded-full shadow-sm">
+            {/* 左侧：视口编号、摄像机名称与主/子流切换 */}
+            <div className="flex items-center gap-1.5 pointer-events-auto backdrop-blur-md bg-black/60 border border-white/10 px-2 py-1 rounded-full shadow-sm">
+              <span
+                className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-md bg-white/20 text-white/90"
+                title={t('live.slotIndexTitle', '视口 {{index}}', {
+                  index: slotIndex + 1,
+                })}
+              >
+                {slotIndex + 1}
+              </span>
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-xs font-semibold text-white truncate max-w-[140px]">
+              <span className="text-xs font-semibold text-white truncate max-w-[130px]">
                 {binding.name || binding.cameraId}
               </span>
               <button
                 type="button"
-                onClick={onToggleRole}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleRole();
+                }}
                 title={t('live.toggleRole', '点击切换主/子流')}
                 className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded-md bg-white/15 hover:bg-white/25 text-white/90 transition-colors cursor-pointer"
               >
@@ -68,13 +135,20 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
               </button>
             </div>
 
-            {/* 右侧：截图、遥测、更换、单槽位全屏与关闭按钮 */}
+            {/* 右侧：截图、遥测、单槽位全屏与关闭按钮 */}
             <div className="flex items-center gap-1 pointer-events-auto backdrop-blur-md bg-black/60 border border-white/10 p-1 rounded-full shadow-sm">
               <button
                 type="button"
-                onClick={() => void handleTakeSnapshot()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleTakeSnapshot();
+                }}
                 disabled={!isSnapshotReady}
-                title={isSnapshotReady ? t('live.snapshot', '截取画面快照') : t('live.snapshotUnavailable', '等待首帧就绪后截图')}
+                title={
+                  isSnapshotReady
+                    ? t('live.snapshot', '截取画面快照')
+                    : t('live.snapshotUnavailable', '等待首帧就绪后截图')
+                }
                 className={`p-1 rounded-full transition-colors cursor-pointer ${
                   isSnapshotReady
                     ? 'hover:bg-white/20 text-white/80 hover:text-white'
@@ -89,26 +163,34 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setShowTelemetry((prev) => !prev)}
-                title={showTelemetry ? t('live.hideTelemetry', '隐藏遥测指标') : t('live.showTelemetry', '显示遥测指标')}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowTelemetry((prev) => !prev);
+                }}
+                title={
+                  showTelemetry
+                    ? t('live.hideTelemetry', '隐藏遥测指标')
+                    : t('live.showTelemetry', '显示遥测指标')
+                }
                 className={`p-1 rounded-full transition-colors cursor-pointer ${
-                  showTelemetry ? 'text-blue-400 hover:bg-white/20' : 'text-white/40 hover:bg-white/20'
+                  showTelemetry
+                    ? 'text-blue-400 hover:bg-white/20'
+                    : 'text-white/40 hover:bg-white/20'
                 }`}
               >
                 <Activity className="w-3.5 h-3.5" />
               </button>
               <button
                 type="button"
-                onClick={() => setIsModalOpen(true)}
-                title={t('live.changeCamera', '更换摄像机')}
-                className="p-1 rounded-full hover:bg-white/20 text-white/80 hover:text-white transition-colors cursor-pointer"
-              >
-                <SlidersHorizontal className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={onToggleFullscreen}
-                title={isFullscreen ? t('live.exitFullscreen', '退出全屏') : t('live.fullscreen', '单视口全屏')}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFullscreen();
+                }}
+                title={
+                  isFullscreen
+                    ? t('live.exitFullscreen', '退出全屏')
+                    : t('live.fullscreen', '单视口全屏')
+                }
                 className="p-1 rounded-full hover:bg-white/20 text-white/80 hover:text-white transition-colors cursor-pointer"
               >
                 {isFullscreen ? (
@@ -119,7 +201,10 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
               </button>
               <button
                 type="button"
-                onClick={onClear}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClear();
+                }}
                 title={t('live.removeSlot', '移除视口')}
                 className="p-1 rounded-full hover:bg-rose-500/30 text-rose-300 hover:text-rose-200 transition-colors cursor-pointer"
               >
@@ -138,35 +223,35 @@ export const LiveViewport: React.FC<LiveViewportProps> = ({
           />
         </>
       ) : (
-        /* 空视口引导占位 */
-        <button
-          type="button"
-          onClick={() => setIsModalOpen(true)}
-          className="w-full h-full flex flex-col items-center justify-center gap-3 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/40 transition-all cursor-pointer p-6"
-        >
-          <div className="w-12 h-12 rounded-2xl bg-neutral-800 border border-neutral-700/60 flex items-center justify-center text-neutral-400 group-hover:scale-105 group-hover:text-blue-400 group-hover:border-blue-500/40 transition-all shadow-inner">
-            <Plus className="w-6 h-6" />
+        /* 空视口：纯净监控槽位展示，仅保留槽位号与拖拽接收 */
+        <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-neutral-500 hover:text-neutral-400 transition-all p-4 select-none bg-neutral-900/60">
+          {/* 左上角常驻视口标号 */}
+          <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 pointer-events-none">
+            <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-md bg-white/10 text-white/50">
+              {slotIndex + 1}
+            </span>
+            <span className="text-xs font-medium text-neutral-400">
+              {t('live.emptySlot', '视口 {{index}}', {
+                index: slotIndex + 1,
+              })}
+            </span>
           </div>
-          <div className="flex flex-col items-center gap-0.5">
-            <span className="text-xs font-semibold tracking-wide">
-              {t('live.emptySlot', '视口 {{index}} - 点击分配', { index: slotIndex + 1 })}
+
+          {/* 中央纯净监视器就绪图标 */}
+          <div className="w-11 h-11 rounded-2xl flex items-center justify-center bg-neutral-800/60 border border-neutral-700/40 text-neutral-500 transition-all">
+            <Tv className="w-5 h-5" />
+          </div>
+
+          <div className="flex flex-col items-center gap-0.5 text-center">
+            <span className="text-xs font-medium tracking-wide text-neutral-400">
+              {t('live.slotVacant', '空闲视口')}
             </span>
             <span className="text-[11px] text-neutral-500">
-              {t('live.emptySlotHint', '分配 RTSP 实时码流')}
+              {t('live.emptySlotInstruction', '可从左侧直接拖入通道')}
             </span>
           </div>
-        </button>
+        </div>
       )}
-
-      {/* 分配/更换弹窗 */}
-      <LiveAssignModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        currentCameraId={binding?.cameraId}
-        onAssign={(cameraId, role, name) => {
-          onAssign({ cameraId, role, name });
-        }}
-      />
     </div>
   );
 };
