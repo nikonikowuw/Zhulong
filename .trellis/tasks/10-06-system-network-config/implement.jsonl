@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/architecture.md", "reason": "系统全局架构、单宿主二进制交付模型与跨层交互契约"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "Gin HTTP API 规范、统一响应信封与 Swaggo 2.0 注解"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Uber Fx 生命周期编排、OnStart/OnStop 钩子定义规范"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Go 领域错误处理、错误码定义与信封映射"}
+{"file": ".trellis/spec/backend/host-runtime-contract.md", "reason": "命令行参数 (CLI flags) 解析与主机运行时契约"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "React 18+、TypeScript 严格模式、TanStack Query 规范"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "react-i18next 国际化字典与 CSS 变量主题规范"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层协作思考指南，确保底层与界面契约严密"}

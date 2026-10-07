@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/host-runtime-contract.md", "reason": "Validate response envelope code/message/data and migration invariants"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "Validate API endpoints and Swagger 2.0 annotations"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Ensure test coverage and race condition detection pass"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Ensure component testing, linting, and build pass"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify clean isolation between Darwin mock stub and Linux syscalls"}

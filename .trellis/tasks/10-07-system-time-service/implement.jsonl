@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/host-runtime-contract.md", "reason": "Host runtime lifecycle, health/API envelopes, and SQLite migration rules"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "Standard RESTful JSON envelope, error handling, and Swaggo documentation"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite embedded migrations and WAL mode persistence practices"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Uber Fx module registration and lifecycle hooks (OnStart/OnStop)"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "React 18/19, TypeScript, TanStack Query, and component quality requirements"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "Trilingual internationalization (en, zh-Hans, zh-Hant) and responsive layout"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer coordination across Linux syscalls, Go runtime, and React UI"}
