@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -46,12 +44,8 @@ func validateHTTPAddress(address string) error {
 
 // DefaultConfig returns local-only defaults suitable for development and smoke tests.
 func DefaultConfig() Config {
-	configDirectory, err := os.UserConfigDir()
-	if err != nil {
-		configDirectory = "."
-	}
 	return Config{
 		HTTPAddress: "127.0.0.1:8080",
-		DataDir:     filepath.Join(configDirectory, "Zhulong"),
+		DataDir:     "./data",
 	}
 }

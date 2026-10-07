@@ -38,3 +38,16 @@ func TestNewHTTPServerRejectsInvalidAddress(t *testing.T) {
 		t.Fatal("expected an empty HTTP address to fail validation")
 	}
 }
+
+func TestDefaultConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.HTTPAddress != "127.0.0.1:8080" {
+		t.Fatalf("unexpected default HTTPAddress: %q", cfg.HTTPAddress)
+	}
+	if cfg.DataDir != "./data" {
+		t.Fatalf("unexpected default DataDir: %q", cfg.DataDir)
+	}
+	if cfg.Development {
+		t.Fatalf("expected Development to default to false, got true")
+	}
+}

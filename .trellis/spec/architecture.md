@@ -40,7 +40,7 @@
 2. **内嵌前端静态资源**：Vite 构建产物通过 `//go:embed` 打包至 `internal/webui`，由 Go 直接托管，零 Node.js 运行时依赖。
 3. **原生 C++ 内联链接**：当前仅交付无硬件生命周期 stub，通过 C ABI 静态链接进主程序；未来媒体流水线另行实现。
 4. **允许外部动态链接**：允许动态依赖宿主 Linux 的 C 运行时（glibc/musl）、线程库及未来选择的厂商驱动（非 all-static）。
-5. **外部持久化存储分离**：当前本机 host 将 SQLite 存于 `<data-dir>/zhulong.db`，默认目录为 `os.UserConfigDir()/Zhulong`，可由 `--data-dir` 覆盖；未来录像文件与模型权重另行放入配置的数据卷。
+5. **外部持久化存储分离**：当前本机 host 将 SQLite 存于 `<data-dir>/zhulong.db`，默认目录为 `./data`，可由 `config.toml` 中 `[data].directory` 覆盖；未来录像文件与模型权重另行放入配置的数据卷。
 
 ## 当前实现边界
 

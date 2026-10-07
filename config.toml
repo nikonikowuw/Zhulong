@@ -7,7 +7,8 @@ address = "127.0.0.1:8080"
 [logging]
 development = false
 
-# The data directory defaults to the operating system's user config directory.
-# Uncomment to choose a custom directory for the SQLite database:
-# [data]
-# directory = "./data"
+# Data directory for SQLite (zhulong.db) and persistent keys (camera.key).
+# Defaults to "./data" in the project directory.
+# For production edge Linux deployment (e.g. RK3588 / Atlas), change to a persistent path like "/var/lib/zhulong" or "/data".
+[data]
+directory = "./data"

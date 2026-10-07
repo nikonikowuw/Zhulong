@@ -11,7 +11,7 @@
 
 ### 2. Signatures
 
-- CLI: `cmd/Zhulong` exposes `--listen` (default `127.0.0.1:8080`), `--data-dir` (default `os.UserConfigDir()/Zhulong`, with `.` fallback), and `--development`.
+- Configuration: `config.toml` 配置 `http.address` (默认 `127.0.0.1:8080`), `data.directory` (默认 `./data`), 和 `logging.development`。
 - Health: `GET /api/v1/health`; ready data is `{ "status": "ready", "components": { "database": "ready", "engine": "ready" } }`.
 - Database: `database.New(dataDirectory string, logger *zap.Logger) *Store`, then `(*Store).OpenAndMigrate(ctx) error`, `Ready() bool`, and `Close() error`.
 - Go native wrapper: `engine.New() *Engine`, `Start() error`, `Stop() error`, `Ready() bool`, and idempotent `Close() error`.
