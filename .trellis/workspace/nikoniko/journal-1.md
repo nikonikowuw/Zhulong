@@ -578,3 +578,30 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 13: 边缘网络配置UI重构优化与Core目录忽略规则修复
+<!-- trellis-session: v=2 fp=70de8f56c384357d -->
+
+**Date**: 2026-10-08
+**Task**: 边缘网络配置UI重构优化与Core目录忽略规则修复
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+完成边缘网络配置全链路交付与UI体验深化优化：补齐深浅色设计系统语义Token，升级硬件状态灯卡片与多IP展开折叠，实现表单失焦即时校验与无障碍焦点管理，强化看门狗两阶段回滚紧迫度交互与骨架屏；同时排查修复.gitignore中误杀core源码目录的规则缺陷，恢复并跟踪live流处理核心模块。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9b35f7a` | feat(network): implement host network configuration with two-phase rollback watchdog |
+| `970edbf` | fix(network): ensure non-nil slice serialization for network interfaces and rollback state |
+| `609c4f9` | feat(web): enhance network settings UI with hardware card, inline validation, and skeleton loading |
+| `d3613f5` | fix(build): refine core dump gitignore pattern to avoid ignoring source core directories |
+| `206d18d` | feat(live): track live surveillance stream core modules and wire parser |
+
+### Status
+
+[OK] **Completed**
