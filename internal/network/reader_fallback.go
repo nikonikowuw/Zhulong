@@ -41,6 +41,10 @@ func readFallbackPhysicalInterfaces(ctx context.Context) ([]InterfaceInfo, error
 			}
 		}
 
+		if ipAddrs == nil {
+			ipAddrs = make([]string, 0)
+		}
+
 		// Only include interfaces that have MAC addresses
 		mac := strings.ToUpper(iface.HardwareAddr.String())
 		if mac == "" {
@@ -111,7 +115,7 @@ func fallbackMockInterfaces() []InterfaceInfo {
 			Mode:        "static",
 			IPAddresses: []string{"10.0.0.2/24"},
 			Gateway:     "",
-			DNS:         nil,
+			DNS:         []string{},
 			IsDefaultGW: false,
 			IsCurrent:   false,
 		},

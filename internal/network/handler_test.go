@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -65,9 +66,23 @@ func TestHandlerListInterfaces(t *testing.T) {
 		if iface.IsCurrent {
 			hasCurrent = true
 		}
+		if iface.DNS == nil {
+			t.Errorf("expected DNS to be non-nil empty array, got nil for %s", iface.Name)
+		}
+		if iface.IPAddresses == nil {
+			t.Errorf("expected IPAddresses to be non-nil empty array, got nil for %s", iface.Name)
+		}
 	}
 	if !hasCurrent {
 		t.Errorf("expected at least one interface to be marked current")
+	}
+
+	bodyStr := w.Body.String()
+	if strings.Contains(bodyStr, `"dns":null`) {
+		t.Errorf("response body should never contain '\"dns\":null'")
+	}
+	if strings.Contains(bodyStr, `"ipAddresses":null`) {
+		t.Errorf("response body should never contain '\"ipAddresses\":null'")
 	}
 }
 

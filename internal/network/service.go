@@ -112,6 +112,16 @@ func (s *NetworkService) ListInterfaces(ctx context.Context, localAddr, host, cl
 		}
 	}
 
+	// Guarantee non-nil slices so JSON serialization encodes [] instead of null
+	for i := range ifaces {
+		if ifaces[i].IPAddresses == nil {
+			ifaces[i].IPAddresses = make([]string, 0)
+		}
+		if ifaces[i].DNS == nil {
+			ifaces[i].DNS = make([]string, 0)
+		}
+	}
+
 	return ifaces, nil
 }
 
@@ -167,10 +177,14 @@ func (s *NetworkService) ApplyConfig(
 	}
 
 	// 4. Capture current state for rollback
+	rollbackDNS := currentTarget.DNS
+	if rollbackDNS == nil {
+		rollbackDNS = make([]string, 0)
+	}
 	rollbackCfg := InterfaceConfig{
 		Mode:       currentTarget.Mode,
 		Gateway:    currentTarget.Gateway,
-		DNS:        currentTarget.DNS,
+		DNS:        rollbackDNS,
 		SetDefault: currentTarget.IsDefaultGW,
 	}
 	if len(currentTarget.IPAddresses) > 0 {
@@ -324,7 +338,11 @@ func (s *NetworkService) OnBootCheck(ctx context.Context) error {
 
 // GetTransactionStatus returns active transaction state if any.
 func (s *NetworkService) GetTransactionStatus() *TransactionState {
-	return s.watchdog.GetActiveTransaction()
+	st := s.watchdog.GetActiveTransaction()
+	if st != nil && st.RollbackCfg.DNS == nil {
+		st.RollbackCfg.DNS = make([]string, 0)
+	}
+	return st
 }
 
 func validateStaticConfig(cfg InterfaceConfig) error {

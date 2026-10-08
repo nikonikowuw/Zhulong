@@ -47,9 +47,10 @@ func readLinuxPhysicalInterfaces(ctx context.Context) ([]InterfaceInfo, error) {
 		}
 
 		info := InterfaceInfo{
-			Name: name,
-			Mode: "dhcp", // default unless detected static
-			DNS:  dnsServers,
+			Name:        name,
+			Mode:        "dhcp", // default unless detected static
+			DNS:         dnsServers,
+			IPAddresses: make([]string, 0),
 		}
 
 		// MAC Address
@@ -162,7 +163,7 @@ func parseHexIP(hexStr string) string {
 
 // parseLinuxResolvDNS parses nameservers from /etc/resolv.conf.
 func parseLinuxResolvDNS() []string {
-	var dns []string
+	dns := make([]string, 0)
 	f, err := os.Open("/etc/resolv.conf")
 	if err != nil {
 		return dns

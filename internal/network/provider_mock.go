@@ -45,7 +45,7 @@ func NewMockProvider(logger *zap.Logger) *MockProvider {
 		Mode:        "static",
 		IPAddresses: []string{"10.0.0.2/24"},
 		Gateway:     "",
-		DNS:         nil,
+		DNS:         []string{},
 		IsDefaultGW: false,
 	}
 
@@ -97,7 +97,11 @@ func (p *MockProvider) ApplyInterfaceConfig(ctx context.Context, iface string, c
 		}
 		info.IPAddresses = []string{cidr}
 		info.Gateway = cfg.Gateway
-		info.DNS = cfg.DNS
+		if cfg.DNS != nil {
+			info.DNS = cfg.DNS
+		} else {
+			info.DNS = make([]string, 0)
+		}
 	} else {
 		// DHCP mode simulation
 		info.Gateway = ""
@@ -143,7 +147,7 @@ func (p *MockProvider) ResetInterfaceToMaintenance(ctx context.Context, iface st
 	target.Mode = "static"
 	target.IPAddresses = []string{"192.168.1.168/24"}
 	target.Gateway = ""
-	target.DNS = nil
+	target.DNS = []string{}
 	target.IsDefaultGW = false
 	p.interfaces[iface] = target
 

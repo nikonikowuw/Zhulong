@@ -63,6 +63,9 @@ func (w *WatchdogManager) BeginTransaction(state TransactionState) error {
 		state.TimeoutSec = DefaultTimeoutSec
 	}
 	state.ExpiresAt = time.Now().Add(time.Duration(state.TimeoutSec) * time.Second)
+	if state.RollbackCfg.DNS == nil {
+		state.RollbackCfg.DNS = make([]string, 0)
+	}
 
 	// Atomic write with fsync
 	if err := w.persistStateLocked(state); err != nil {
@@ -284,6 +287,9 @@ func (w *WatchdogManager) readDiskStateLocked() (*TransactionState, error) {
 	var state TransactionState
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("unmarshal transaction state: %w", err)
+	}
+	if state.RollbackCfg.DNS == nil {
+		state.RollbackCfg.DNS = make([]string, 0)
 	}
 	return &state, nil
 }
