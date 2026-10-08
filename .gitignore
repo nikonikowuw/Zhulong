@@ -43,12 +43,14 @@ cmake_install.cmake
 Makefile.cmake
 compile_commands.json
 
-# 调试转储与 Core Dump
-core
-core.*
+# 调试转储与 Core Dump (限制匹配，避免误伤前端或服务端的 core/ 目录及 core.ts/core.go 源码)
+/core
+/core.*
+core.[0-9]*
+vgcore.[0-9]*
 *.dSYM/
 *.gdb
-vgcore.*
+!**/core/
 
 # ------------------------------------------
 # 3. React 前端 WebUI
