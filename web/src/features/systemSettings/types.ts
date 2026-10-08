@@ -5,9 +5,9 @@ export const interfaceInfoSchema = z.object({
   mac: z.string(),
   linkUp: z.boolean(),
   mode: z.enum(["dhcp", "static"]),
-  ipAddresses: z.array(z.string()).default([]),
-  gateway: z.string().default(""),
-  dns: z.array(z.string()).default([]),
+  ipAddresses: z.array(z.string()).nullish().transform((val) => val ?? []),
+  gateway: z.string().nullish().transform((val) => val ?? ""),
+  dns: z.array(z.string()).nullish().transform((val) => val ?? []),
   isDefaultGw: z.boolean().default(false),
   isCurrent: z.boolean().default(false),
 });
@@ -16,10 +16,10 @@ export type InterfaceInfo = z.infer<typeof interfaceInfoSchema>;
 
 export const interfaceConfigSchema = z.object({
   mode: z.enum(["dhcp", "static"]),
-  ipAddress: z.string().default(""),
-  subnetMask: z.string().default(""),
-  gateway: z.string().default(""),
-  dns: z.array(z.string()).default([]),
+  ipAddress: z.string().nullish().transform((val) => val ?? ""),
+  subnetMask: z.string().nullish().transform((val) => val ?? ""),
+  gateway: z.string().nullish().transform((val) => val ?? ""),
+  dns: z.array(z.string()).nullish().transform((val) => val ?? []),
   setDefault: z.boolean().default(false),
 });
 

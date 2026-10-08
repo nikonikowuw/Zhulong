@@ -1,9 +1,18 @@
 {
   "title": "System Settings",
+  "description": "Configure host physical interfaces, network topology, and fail-safe watchdog rollback.",
+  "tabsLabel": "Settings tabs",
   "tabs": {
     "network": "Network Configuration"
   },
   "network": {
+    "metrics": {
+      "total": "Total Interfaces",
+      "linkUp": "Active Links",
+      "current": "Management NIC",
+      "gateway": "Default Gateway",
+      "interfacesCount": "interfaces"
+    },
     "heading": "Network Interfaces",
     "description": "Manage physical Ethernet interfaces, IP addresses, default gateways, and network failover safety.",
     "currentInterface": "Current Connection",
@@ -22,7 +31,11 @@
       "subnetMask": "Subnet Mask",
       "gateway": "Gateway",
       "dns": "DNS Servers",
-      "setDefaultGateway": "Set as Default Gateway (0.0.0.0/0)"
+      "setDefaultGateway": "Set as Default Gateway (0.0.0.0/0)",
+      "additionalIps": "+{{count}} more",
+      "noIps": "Unassigned",
+      "noGateway": "Not configured",
+      "noDns": "Not configured"
     },
     "actions": {
       "configure": "Configure",
@@ -32,6 +45,9 @@
       "cancel": "Cancel",
       "confirm": "Confirm & Save",
       "rollback": "Rollback Now",
+      "rollbackConfirm": "Confirm Rollback",
+      "rollbackConfirmPrompt": "Are you sure you want to rollback now? Connection will revert immediately.",
+      "openNewTab": "Open in New Tab",
       "copyMac": "Copy MAC",
       "copyUrl": "Copy URL"
     },
@@ -53,8 +69,12 @@
       "invalidGateway": "Invalid gateway address",
       "invalidDns": "Invalid DNS server IP format",
       "gatewayRequired": "Gateway is required when setting default gateway",
-      "gatewayConflict": "Another interface is already configured as the default gateway. Only one default gateway is permitted."
+      "gatewayConflict": "Another interface is already configured as the default gateway. Only one default gateway is permitted.",
+      "requiredField": "This field is required"
     },
+    "hardwareTag": "Physical Ethernet",
+    "skeletonLoading": "Detecting physical interfaces and link status...",
+    "diagnosticsTitle": "Connectivity Quick Diagnostics",
     "watchdog": {
       "bannerTitle": "Network Trial Active",
       "bannerMessage": "A temporary network configuration is running on {{iface}}. Disarms in {{seconds}}s. Click confirm to solidify.",

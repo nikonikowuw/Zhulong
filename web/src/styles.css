@@ -19,14 +19,22 @@
   --muted: #86868b;
   --border: #e5e5ea;
   --accent: #0071e3;
+  --accent-soft: rgba(0, 113, 227, 0.1);
   --button-background: #0071e3;
   --button-hover: #0077ed;
   --button-foreground: #ffffff;
   --danger: #ff3b30;
   --danger-soft: rgba(255, 59, 48, 0.08);
+  --negative: #ff3b30;
+  --negative-soft: rgba(255, 59, 48, 0.08);
+  --warning: #f59e0b;
+  --warning-soft: rgba(245, 158, 11, 0.12);
+  --warning-strong: #d97706;
   --focus: #0071e3;
   --focus-shadow: rgba(0, 113, 227, 0.25);
   --positive: #34c759;
+  --positive-soft: rgba(52, 199, 89, 0.12);
+  --border-subtle: rgba(0, 0, 0, 0.06);
   --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
   --control-height: 44px;
   background: var(--background);
@@ -43,14 +51,22 @@
   --muted: #a1a1a6;
   --border: #38383a;
   --accent: #0a84ff;
+  --accent-soft: rgba(10, 132, 255, 0.15);
   --button-background: #0071e3;
   --button-hover: #0077ed;
   --button-foreground: #ffffff;
   --danger: #ff453a;
   --danger-soft: rgba(255, 69, 58, 0.15);
+  --negative: #ff453a;
+  --negative-soft: rgba(255, 69, 58, 0.15);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.15);
+  --warning-strong: #f59e0b;
   --focus: #0a84ff;
   --focus-shadow: rgba(10, 132, 255, 0.3);
   --positive: #30d158;
+  --positive-soft: rgba(48, 209, 88, 0.15);
+  --border-subtle: rgba(255, 255, 255, 0.08);
   --card-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 

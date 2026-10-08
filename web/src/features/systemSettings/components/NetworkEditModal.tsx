@@ -1,6 +1,15 @@
-import { useEffect, useState, type FC, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FC, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, CheckCircle2, Loader2, Radio, Send, X } from "lucide-react";
+import {
+  Activity,
+  AlertCircle,
+  CheckCircle2,
+  HelpCircle,
+  Loader2,
+  Radio,
+  Send,
+  X,
+} from "lucide-react";
 import { usePingTargetMutation } from "../hooks/useNetwork";
 import type { InterfaceConfig, InterfaceInfo, PingResponse } from "../types";
 
@@ -29,14 +38,23 @@ export const NetworkEditModal: FC<NetworkEditModalProps> = ({
 }) => {
   const { t } = useTranslation();
   const pingMutation = usePingTargetMutation();
+  const modalRef = useRef<HTMLDivElement>(null);
+  const firstInputRef = useRef<HTMLInputElement>(null);
 
   const initialIp = iface.ipAddresses[0]?.split("/")[0] ?? "";
   const [mode, setMode] = useState<"dhcp" | "static">(iface.mode);
   const [ipAddress, setIpAddress] = useState(initialIp);
   const [subnetMask, setSubnetMask] = useState("255.255.255.0");
   const [gateway, setGateway] = useState(iface.gateway || "");
-  const [dnsInput, setDnsInput] = useState(iface.dns.join(", "));
+  const [dnsInput, setDnsInput] = useState(iface.dns?.join(", ") ?? "");
   const [setDefault, setSetDefault] = useState(iface.isDefaultGw);
+
+  const [fieldErrors, setFieldErrors] = useState<{
+    ipAddress?: string;
+    subnetMask?: string;
+    gateway?: string;
+    dns?: string;
+  }>({});
 
   const [pingTarget, setPingTarget] = useState(iface.gateway || "192.168.1.1");
   const [pingResult, setPingResult] = useState<PingResponse | null>(null);
@@ -53,11 +71,44 @@ export const NetworkEditModal: FC<NetworkEditModalProps> = ({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, onClose]);
 
+  useEffect(() => {
+    if (isOpen && mode === "static") {
+      firstInputRef.current?.focus();
+    }
+  }, [isOpen, mode]);
+
   if (!isOpen) return null;
 
   const otherDefaultGwIface = allInterfaces.find(
     (item) => item.name !== iface.name && item.isDefaultGw,
   );
+
+  function validateIp(val: string): string | undefined {
+    if (!val.trim()) return t("systemSettings.network.validation.requiredField");
+    if (!isValidIPv4(val)) return t("systemSettings.network.validation.invalidIp");
+    return undefined;
+  }
+
+  function validateSubnet(val: string): string | undefined {
+    if (!val.trim()) return t("systemSettings.network.validation.requiredField");
+    if (!isValidIPv4(val)) return t("systemSettings.network.validation.invalidSubnet");
+    return undefined;
+  }
+
+  function validateGw(val: string, isDef: boolean): string | undefined {
+    if (isDef && !val.trim()) return t("systemSettings.network.validation.gatewayRequired");
+    if (val.trim() && !isValidIPv4(val)) return t("systemSettings.network.validation.invalidGateway");
+    return undefined;
+  }
+
+  function validateDns(val: string): string | undefined {
+    if (!val.trim()) return undefined;
+    const parts = val.split(",").map((s) => s.trim()).filter(Boolean);
+    for (const p of parts) {
+      if (!isValidIPv4(p)) return t("systemSettings.network.validation.invalidDns");
+    }
+    return undefined;
+  }
 
   async function handlePing() {
     if (!pingTarget.trim() || !isValidIPv4(pingTarget.trim())) {
@@ -83,27 +134,25 @@ export const NetworkEditModal: FC<NetworkEditModalProps> = ({
       .filter(Boolean);
 
     if (mode === "static") {
-      if (!isValidIPv4(ipAddress)) {
-        setErrorMsg(t("systemSettings.network.validation.invalidIp"));
-        return;
-      }
-      if (!isValidIPv4(subnetMask)) {
-        setErrorMsg(t("systemSettings.network.validation.invalidSubnet"));
-        return;
-      }
-      if (gateway.trim() && !isValidIPv4(gateway.trim())) {
-        setErrorMsg(t("systemSettings.network.validation.invalidGateway"));
-        return;
-      }
-      if (setDefault && !gateway.trim()) {
-        setErrorMsg(t("systemSettings.network.validation.gatewayRequired"));
-        return;
-      }
-    }
+      const ipErr = validateIp(ipAddress);
+      const subnetErr = validateSubnet(subnetMask);
+      const gwErr = validateGw(gateway, setDefault);
+      const dnsErr = validateDns(dnsInput);
 
-    for (const d of dnsList) {
-      if (!isValidIPv4(d)) {
-        setErrorMsg(t("systemSettings.network.validation.invalidDns"));
+      setFieldErrors({
+        ipAddress: ipErr,
+        subnetMask: subnetErr,
+        gateway: gwErr,
+        dns: dnsErr,
+      });
+
+      if (ipErr || subnetErr || gwErr || dnsErr) {
+        return;
+      }
+    } else {
+      const dnsErr = validateDns(dnsInput);
+      if (dnsErr) {
+        setFieldErrors({ dns: dnsErr });
         return;
       }
     }
@@ -129,184 +178,316 @@ export const NetworkEditModal: FC<NetworkEditModalProps> = ({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in">
-      <div className="relative w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-xl ring-1 ring-black/5 dark:ring-white/10">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="network-edit-title"
+    >
+      <div
+        ref={modalRef}
+        className="relative w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-6 shadow-2xl ring-1 ring-black/5 dark:ring-white/10 max-h-[90vh] overflow-y-auto"
+      >
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-[var(--border)]">
           <div>
-            <h2 className="text-lg font-semibold text-[var(--foreground)]">
-              {t("systemSettings.network.actions.configure")}: {iface.name}
-            </h2>
-            <p className="text-xs text-[var(--muted)] font-mono mt-0.5">MAC: {iface.mac}</p>
+            <div className="flex items-center gap-2">
+              <h2 id="network-edit-title" className="text-lg font-bold tracking-tight text-[var(--foreground)]">
+                {t("systemSettings.network.actions.configure")}: {iface.name}
+              </h2>
+              {iface.isCurrent && (
+                <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-semibold text-[var(--accent)] border border-[var(--accent)]/30">
+                  {t("systemSettings.network.currentInterface")}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-[var(--muted)] font-mono mt-0.5">MAC: {iface.mac || "--:--:--:--:--:--"}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1.5 text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--foreground)] transition-colors"
+            aria-label={t("systemSettings.network.actions.cancel")}
+            className="rounded-lg p-1.5 text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--foreground)] transition-colors cursor-pointer"
           >
-            <X size={18} />
+            <X size={18} aria-hidden="true" />
           </button>
         </div>
 
-        {/* Error Alert */}
+        {/* Global Error Banner */}
         {errorMsg && (
-          <div className="mt-4 flex items-center gap-2 rounded-lg bg-[var(--negative-soft)] p-3 text-xs text-[var(--negative)] border border-[var(--negative)]/20">
-            <AlertCircle size={15} className="shrink-0" />
-            <span>{errorMsg}</span>
+          <div
+            role="alert"
+            tabIndex={-1}
+            className="mt-4 flex items-center gap-2 rounded-xl bg-[var(--negative-soft)] p-3 text-xs text-[var(--negative)] border border-[var(--negative)]/25 animate-in fade-in"
+          >
+            <AlertCircle size={15} className="shrink-0" aria-hidden="true" />
+            <span className="font-medium">{errorMsg}</span>
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           {/* Mode Switch (DHCP / Static) */}
           <div>
-            <label className="block text-xs font-medium text-[var(--foreground)] mb-2">
+            <label className="block text-xs font-semibold text-[var(--foreground)] mb-2">
               {t("systemSettings.network.form.modeLabel", { name: iface.name })}
             </label>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-3" aria-label="IP Assignment Mode">
               <button
                 type="button"
-                onClick={() => setMode("dhcp")}
-                className={`flex items-center justify-center gap-2 rounded-lg border py-2.5 text-xs font-medium transition-all ${
+                aria-pressed={mode === "dhcp"}
+                onClick={() => {
+                  setMode("dhcp");
+                  setFieldErrors({});
+                }}
+                className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 text-xs font-semibold transition-all cursor-pointer ${
                   mode === "dhcp"
-                    ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
-                    : "border-[var(--border)] bg-[var(--surface-muted)] text-[var(--muted)] hover:bg-[var(--surface-hover)]"
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)] shadow-2xs"
+                    : "border-[var(--border)] bg-[var(--surface-muted)] text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--foreground)]"
                 }`}
               >
-                <Radio size={14} />
-                {t("systemSettings.network.status.modeDhcp")}
+                <Radio size={14} aria-hidden="true" />
+                <span>{t("systemSettings.network.status.modeDhcp")}</span>
               </button>
               <button
                 type="button"
-                onClick={() => setMode("static")}
-                className={`flex items-center justify-center gap-2 rounded-lg border py-2.5 text-xs font-medium transition-all ${
+                aria-pressed={mode === "static"}
+                onClick={() => {
+                  setMode("static");
+                  setFieldErrors({});
+                }}
+                className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 text-xs font-semibold transition-all cursor-pointer ${
                   mode === "static"
-                    ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
-                    : "border-[var(--border)] bg-[var(--surface-muted)] text-[var(--muted)] hover:bg-[var(--surface-hover)]"
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)] shadow-2xs"
+                    : "border-[var(--border)] bg-[var(--surface-muted)] text-[var(--muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--foreground)]"
                 }`}
               >
-                <Radio size={14} />
-                {t("systemSettings.network.status.modeStatic")}
+                <Radio size={14} aria-hidden="true" />
+                <span>{t("systemSettings.network.status.modeStatic")}</span>
               </button>
             </div>
           </div>
 
-          {/* Static Fields */}
+          {/* Static Fields Box */}
           {mode === "static" && (
-            <div className="space-y-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-3.5">
+            <div className="space-y-3.5 rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-muted)]/80 p-4 transition-all">
+              {/* IP Address */}
               <div>
-                <label className="block text-xs font-medium text-[var(--foreground)] mb-1">
-                  {t("systemSettings.network.fields.ipAddress")} *
+                <label htmlFor="modal-ip-address" className="block text-xs font-medium text-[var(--foreground)] mb-1">
+                  {t("systemSettings.network.fields.ipAddress")} <span className="text-[var(--negative)]">*</span>
                 </label>
                 <input
+                  id="modal-ip-address"
+                  ref={firstInputRef}
                   type="text"
                   required
                   value={ipAddress}
-                  onChange={(e) => setIpAddress(e.target.value)}
+                  onChange={(e) => {
+                    setIpAddress(e.target.value);
+                    if (fieldErrors.ipAddress) {
+                      setFieldErrors((prev) => ({ ...prev, ipAddress: undefined }));
+                    }
+                  }}
+                  onBlur={() => {
+                    setFieldErrors((prev) => ({ ...prev, ipAddress: validateIp(ipAddress) }));
+                  }}
                   placeholder="192.168.1.100"
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 font-mono text-xs text-[var(--foreground)] focus:border-[var(--accent)] focus:outline-none"
+                  aria-invalid={Boolean(fieldErrors.ipAddress)}
+                  aria-describedby={fieldErrors.ipAddress ? "modal-ip-error" : undefined}
+                  className={`w-full rounded-lg border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--foreground)] transition-colors focus:outline-none ${
+                    fieldErrors.ipAddress
+                      ? "border-[var(--danger)] focus:border-[var(--danger)] ring-1 ring-[var(--danger)]/30"
+                      : "border-[var(--border)] focus:border-[var(--accent)]"
+                  }`}
                 />
+                {fieldErrors.ipAddress && (
+                  <p id="modal-ip-error" className="mt-1 text-[11px] text-[var(--danger)] flex items-center gap-1">
+                    <AlertCircle size={11} aria-hidden="true" />
+                    <span>{fieldErrors.ipAddress}</span>
+                  </p>
+                )}
               </div>
 
+              {/* Subnet Mask */}
               <div>
-                <label className="block text-xs font-medium text-[var(--foreground)] mb-1">
-                  {t("systemSettings.network.fields.subnetMask")} *
+                <label htmlFor="modal-subnet-mask" className="block text-xs font-medium text-[var(--foreground)] mb-1">
+                  {t("systemSettings.network.fields.subnetMask")} <span className="text-[var(--negative)]">*</span>
                 </label>
                 <input
+                  id="modal-subnet-mask"
                   type="text"
                   required
                   value={subnetMask}
-                  onChange={(e) => setSubnetMask(e.target.value)}
+                  onChange={(e) => {
+                    setSubnetMask(e.target.value);
+                    if (fieldErrors.subnetMask) {
+                      setFieldErrors((prev) => ({ ...prev, subnetMask: undefined }));
+                    }
+                  }}
+                  onBlur={() => {
+                    setFieldErrors((prev) => ({ ...prev, subnetMask: validateSubnet(subnetMask) }));
+                  }}
                   placeholder="255.255.255.0"
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 font-mono text-xs text-[var(--foreground)] focus:border-[var(--accent)] focus:outline-none"
+                  aria-invalid={Boolean(fieldErrors.subnetMask)}
+                  aria-describedby={fieldErrors.subnetMask ? "modal-subnet-error" : undefined}
+                  className={`w-full rounded-lg border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--foreground)] transition-colors focus:outline-none ${
+                    fieldErrors.subnetMask
+                      ? "border-[var(--danger)] focus:border-[var(--danger)] ring-1 ring-[var(--danger)]/30"
+                      : "border-[var(--border)] focus:border-[var(--accent)]"
+                  }`}
                 />
+                {fieldErrors.subnetMask && (
+                  <p id="modal-subnet-error" className="mt-1 text-[11px] text-[var(--danger)] flex items-center gap-1">
+                    <AlertCircle size={11} aria-hidden="true" />
+                    <span>{fieldErrors.subnetMask}</span>
+                  </p>
+                )}
               </div>
 
+              {/* Gateway */}
               <div>
-                <label className="block text-xs font-medium text-[var(--foreground)] mb-1">
+                <label htmlFor="modal-gateway" className="block text-xs font-medium text-[var(--foreground)] mb-1">
                   {t("systemSettings.network.fields.gateway")}
                 </label>
                 <input
+                  id="modal-gateway"
                   type="text"
                   value={gateway}
-                  onChange={(e) => setGateway(e.target.value)}
+                  onChange={(e) => {
+                    setGateway(e.target.value);
+                    if (fieldErrors.gateway) {
+                      setFieldErrors((prev) => ({ ...prev, gateway: undefined }));
+                    }
+                  }}
+                  onBlur={() => {
+                    setFieldErrors((prev) => ({ ...prev, gateway: validateGw(gateway, setDefault) }));
+                  }}
                   placeholder="192.168.1.1"
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 font-mono text-xs text-[var(--foreground)] focus:border-[var(--accent)] focus:outline-none"
+                  aria-invalid={Boolean(fieldErrors.gateway)}
+                  aria-describedby={fieldErrors.gateway ? "modal-gw-error" : undefined}
+                  className={`w-full rounded-lg border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--foreground)] transition-colors focus:outline-none ${
+                    fieldErrors.gateway
+                      ? "border-[var(--danger)] focus:border-[var(--danger)] ring-1 ring-[var(--danger)]/30"
+                      : "border-[var(--border)] focus:border-[var(--accent)]"
+                  }`}
                 />
+                {fieldErrors.gateway && (
+                  <p id="modal-gw-error" className="mt-1 text-[11px] text-[var(--danger)] flex items-center gap-1">
+                    <AlertCircle size={11} aria-hidden="true" />
+                    <span>{fieldErrors.gateway}</span>
+                  </p>
+                )}
               </div>
 
+              {/* DNS Servers */}
               <div>
-                <label className="block text-xs font-medium text-[var(--foreground)] mb-1">
+                <label htmlFor="modal-dns" className="block text-xs font-medium text-[var(--foreground)] mb-1">
                   {t("systemSettings.network.fields.dns")} {t("systemSettings.network.form.commaSeparated")}
                 </label>
                 <input
+                  id="modal-dns"
                   type="text"
                   value={dnsInput}
-                  onChange={(e) => setDnsInput(e.target.value)}
+                  onChange={(e) => {
+                    setDnsInput(e.target.value);
+                    if (fieldErrors.dns) {
+                      setFieldErrors((prev) => ({ ...prev, dns: undefined }));
+                    }
+                  }}
+                  onBlur={() => {
+                    setFieldErrors((prev) => ({ ...prev, dns: validateDns(dnsInput) }));
+                  }}
                   placeholder="223.5.5.5, 8.8.8.8"
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 font-mono text-xs text-[var(--foreground)] focus:border-[var(--accent)] focus:outline-none"
+                  aria-invalid={Boolean(fieldErrors.dns)}
+                  aria-describedby={fieldErrors.dns ? "modal-dns-error" : undefined}
+                  className={`w-full rounded-lg border bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--foreground)] transition-colors focus:outline-none ${
+                    fieldErrors.dns
+                      ? "border-[var(--danger)] focus:border-[var(--danger)] ring-1 ring-[var(--danger)]/30"
+                      : "border-[var(--border)] focus:border-[var(--accent)]"
+                  }`}
                 />
+                {fieldErrors.dns && (
+                  <p id="modal-dns-error" className="mt-1 text-[11px] text-[var(--danger)] flex items-center gap-1">
+                    <AlertCircle size={11} aria-hidden="true" />
+                    <span>{fieldErrors.dns}</span>
+                  </p>
+                )}
               </div>
 
-              {/* Default Gateway Checkbox */}
-              <div className="pt-1">
-                <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-[var(--foreground)]">
+              {/* Single Default Gateway Checkbox & Warning */}
+              <div className="pt-2 border-t border-[var(--border-subtle)]">
+                <label className="flex items-center gap-2.5 cursor-pointer text-xs font-semibold text-[var(--foreground)] select-none">
                   <input
                     type="checkbox"
                     checked={setDefault}
-                    onChange={(e) => setSetDefault(e.target.checked)}
-                    className="rounded border-[var(--border)] text-[var(--accent)] focus:ring-[var(--accent)]"
+                    onChange={(e) => {
+                      setSetDefault(e.target.checked);
+                      if (e.target.checked && fieldErrors.gateway) {
+                        setFieldErrors((prev) => ({ ...prev, gateway: validateGw(gateway, true) }));
+                      }
+                    }}
+                    className="h-4 w-4 rounded border-[var(--border)] text-[var(--accent)] focus:ring-[var(--accent)] cursor-pointer"
                   />
                   <span>{t("systemSettings.network.fields.setDefaultGateway")}</span>
                 </label>
                 {setDefault && otherDefaultGwIface && (
-                  <p className="mt-1 text-[11px] text-[var(--warning)] flex items-center gap-1">
-                    <AlertCircle size={12} />
-                    {t("systemSettings.network.validation.gatewayConflict")} ({otherDefaultGwIface.name})
-                  </p>
+                  <div className="mt-2 flex items-start gap-2 rounded-xl bg-[var(--warning-soft)] p-2.5 text-[11px] text-[var(--warning-strong)] border border-[var(--warning)]/20 animate-in fade-in">
+                    <HelpCircle size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
+                    <span>
+                      {t("systemSettings.network.validation.gatewayConflict")} ({otherDefaultGwIface.name})
+                    </span>
+                  </div>
                 )}
               </div>
             </div>
           )}
 
-          {/* Ping Connectivity Diagnostic */}
-          <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--surface-muted)] p-3">
-            <span className="block text-xs font-medium text-[var(--foreground)] mb-1.5">
-              {t("systemSettings.network.ping.title")}
-            </span>
+          {/* Dedicated Ping Diagnostics Tool */}
+          <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--surface-muted)]/70 p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Activity size={14} className="text-[var(--accent)]" aria-hidden="true" />
+              <span className="text-xs font-bold text-[var(--foreground)]">
+                {t("systemSettings.network.ping.title")}
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               <input
                 type="text"
                 value={pingTarget}
                 onChange={(e) => setPingTarget(e.target.value)}
                 placeholder={t("systemSettings.network.ping.placeholder")}
-                className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 font-mono text-xs text-[var(--foreground)] focus:border-[var(--accent)] focus:outline-none"
+                aria-label={t("systemSettings.network.ping.title")}
+                className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 font-mono text-xs text-[var(--foreground)] focus:border-[var(--accent)] focus:outline-none"
               />
               <button
                 type="button"
                 onClick={handlePing}
                 disabled={pingMutation.isPending}
-                className="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2 text-xs font-semibold text-[var(--foreground)] hover:bg-[var(--surface-hover)] disabled:opacity-50 transition-all cursor-pointer shadow-2xs"
               >
                 {pingMutation.isPending ? (
-                  <Loader2 size={12} className="animate-spin" />
+                  <Loader2 size={12} className="animate-spin" aria-hidden="true" />
                 ) : (
-                  <Send size={12} />
+                  <Send size={12} aria-hidden="true" />
                 )}
-                {pingMutation.isPending
-                  ? t("systemSettings.network.actions.pinging")
-                  : t("systemSettings.network.actions.ping")}
+                <span>
+                  {pingMutation.isPending
+                    ? t("systemSettings.network.actions.pinging")
+                    : t("systemSettings.network.actions.ping")}
+                </span>
               </button>
             </div>
             {pingResult && (
               <div
-                className={`mt-2 flex items-center gap-1.5 text-xs ${
-                  pingResult.reachable ? "text-[var(--positive)]" : "text-[var(--negative)]"
+                className={`mt-2.5 flex items-center gap-1.5 text-xs font-medium p-2 rounded-lg border ${
+                  pingResult.reachable
+                    ? "border-[var(--positive)]/20 bg-[var(--positive-soft)] text-[var(--positive)]"
+                    : "border-[var(--negative)]/20 bg-[var(--negative-soft)] text-[var(--negative)]"
                 }`}
               >
                 {pingResult.reachable ? (
-                  <CheckCircle2 size={13} />
+                  <CheckCircle2 size={14} aria-hidden="true" />
                 ) : (
-                  <AlertCircle size={13} />
+                  <AlertCircle size={14} aria-hidden="true" />
                 )}
                 <span>
                   {pingResult.reachable
@@ -317,23 +498,23 @@ export const NetworkEditModal: FC<NetworkEditModalProps> = ({
             )}
           </div>
 
-          {/* Form Actions */}
-          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[var(--border)]">
+          {/* Form Actions Footer */}
+          <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-[var(--border)]">
             <button
               type="button"
               onClick={onClose}
               disabled={isApplying}
-              className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--surface-hover)] transition-colors"
+              className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-4 py-2 text-xs font-semibold text-[var(--foreground)] hover:bg-[var(--surface-hover)] transition-colors cursor-pointer"
             >
               {t("systemSettings.network.actions.cancel")}
             </button>
             <button
               type="submit"
               disabled={isApplying}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-4 py-2 text-xs font-medium text-white shadow-sm hover:opacity-90 disabled:opacity-50 transition-opacity"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white shadow-sm hover:opacity-90 active:scale-[0.98] disabled:opacity-50 transition-all cursor-pointer"
             >
-              {isApplying && <Loader2 size={13} className="animate-spin" />}
-              {t("systemSettings.network.actions.apply")}
+              {isApplying && <Loader2 size={13} className="animate-spin" aria-hidden="true" />}
+              <span>{t("systemSettings.network.actions.apply")}</span>
             </button>
           </div>
         </form>

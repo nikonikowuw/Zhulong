@@ -86,4 +86,31 @@ describe("NetworkEditModal", () => {
     expect(screen.getByText(/Invalid IPv4 address format/i)).toBeInTheDocument();
     expect(handleApply).not.toHaveBeenCalled();
   });
+
+  it("validates invalid IP address on blur", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NetworkEditModal
+          iface={mockIface}
+          allInterfaces={[mockIface]}
+          isOpen={true}
+          onClose={vi.fn()}
+          onApply={vi.fn()}
+          isApplying={false}
+        />
+      </QueryClientProvider>,
+    );
+
+    const staticBtn = screen.getByRole("button", { name: /Static IP/i });
+    await user.click(staticBtn);
+
+    const ipInput = screen.getByPlaceholderText("192.168.1.100");
+    await user.clear(ipInput);
+    await user.type(ipInput, "192.168.abc.1");
+    await user.tab();
+
+    expect(screen.getByText(/Invalid IPv4 address format/i)).toBeInTheDocument();
+  });
 });

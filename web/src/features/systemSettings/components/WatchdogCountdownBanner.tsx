@@ -1,6 +1,6 @@
 import { useState, useEffect, type FC } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, CheckCircle, Loader2, RotateCcw } from "lucide-react";
+import { AlertTriangle, CheckCircle, Clock, Loader2, RotateCcw } from "lucide-react";
 import type { TransactionState } from "../types";
 
 interface WatchdogCountdownBannerProps {
@@ -48,44 +48,72 @@ export const WatchdogCountdownBanner: FC<WatchdogCountdownBannerProps> = ({
 
   if (secondsLeft <= 0) return null;
 
+  const isCritical = secondsLeft <= 15;
+
   return (
     <aside
+      role="alert"
+      aria-live="polite"
       aria-label={t("systemSettings.network.watchdog.bannerTitle")}
-      className="sticky top-0 z-40 flex items-center justify-between border-b border-[var(--warning)]/30 bg-[var(--warning-soft)] px-4 py-2.5 text-xs text-[var(--foreground)] shadow-sm backdrop-blur-sm animate-in slide-in-from-top"
+      className={`sticky top-0 z-40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-xs shadow-md backdrop-blur-md transition-all duration-300 animate-in slide-in-from-top ${
+        isCritical
+          ? "border-[var(--danger)]/50 bg-[var(--danger-soft)] text-[var(--danger)] ring-2 ring-[var(--danger)]/20"
+          : "border-[var(--warning)]/40 bg-[var(--warning-soft)] text-[var(--foreground)] ring-1 ring-[var(--warning)]/20"
+      }`}
     >
-      <div className="flex items-center gap-2.5">
-        <AlertCircle size={16} className="text-[var(--warning)] shrink-0 animate-pulse" />
+      <div className="flex items-center gap-3">
+        <div
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+            isCritical
+              ? "bg-[var(--danger)] text-white animate-bounce"
+              : "bg-[var(--warning)] text-black"
+          }`}
+        >
+          <AlertTriangle size={18} aria-hidden="true" />
+        </div>
         <div>
-          <span className="font-semibold text-[var(--warning-strong,var(--warning))] mr-1">
-            {t("systemSettings.network.watchdog.bannerTitle")}:
-          </span>
-          <span>
+          <div className="flex items-center gap-2">
+            <span className="font-bold tracking-tight text-[var(--foreground)]">
+              {t("systemSettings.network.watchdog.bannerTitle")}
+            </span>
+            <span
+              className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 font-mono text-[11px] font-bold ${
+                isCritical
+                  ? "bg-[var(--danger)] text-white animate-pulse"
+                  : "bg-[var(--surface)] text-[var(--foreground)] border border-[var(--border)]"
+              }`}
+            >
+              <Clock size={11} aria-hidden="true" />
+              <span>{secondsLeft}s</span>
+            </span>
+          </div>
+          <p className="text-xs text-[var(--muted)] mt-0.5">
             {t("systemSettings.network.watchdog.bannerMessage", {
               iface: transaction.interfaceName,
               seconds: secondsLeft,
             })}
-          </span>
+          </p>
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
         <button
           type="button"
           onClick={() => onConfirm(transaction.confirmToken)}
           disabled={isConfirming || isRollingBack}
-          className="inline-flex items-center gap-1 rounded-lg bg-[var(--accent)] px-3 py-1 text-xs font-medium text-white shadow-sm hover:opacity-90 disabled:opacity-50 transition-opacity"
+          className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--positive)] px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs hover:opacity-90 active:scale-[0.98] disabled:opacity-50 transition-all cursor-pointer"
         >
-          {isConfirming ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle size={12} />}
-          {t("systemSettings.network.actions.confirm")}
+          {isConfirming ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <CheckCircle size={13} aria-hidden="true" />}
+          <span>{t("systemSettings.network.actions.confirm")}</span>
         </button>
         <button
           type="button"
           onClick={() => onRollback(transaction.confirmToken)}
           disabled={isConfirming || isRollingBack}
-          className="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-1 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--surface-hover)] disabled:opacity-50 transition-colors"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3.5 py-1.5 text-xs font-semibold text-[var(--foreground)] hover:bg-[var(--surface-hover)] hover:border-[var(--danger)] hover:text-[var(--danger)] active:scale-[0.98] disabled:opacity-50 transition-all cursor-pointer shadow-2xs"
         >
-          {isRollingBack ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
-          {t("systemSettings.network.actions.rollback")}
+          {isRollingBack ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <RotateCcw size={13} aria-hidden="true" />}
+          <span>{t("systemSettings.network.actions.rollback")}</span>
         </button>
       </div>
     </aside>

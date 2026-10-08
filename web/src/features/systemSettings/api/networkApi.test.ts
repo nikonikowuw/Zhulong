@@ -44,6 +44,36 @@ describe("networkApi", () => {
     );
   });
 
+  it("fetches network interfaces with null or missing dns, gateway, and ipAddresses safely", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        code: "OK",
+        message: "success",
+        data: [
+          {
+            name: "eth1",
+            mac: "52:54:00:AB:CD:EF",
+            linkUp: false,
+            mode: "static",
+            ipAddresses: null,
+            gateway: null,
+            dns: null,
+            isDefaultGw: false,
+            isCurrent: false,
+          },
+        ],
+      }),
+    } as Response);
+
+    const result = await fetchNetworkInterfaces("en");
+    expect(result).toHaveLength(1);
+    expect(result[0]?.name).toBe("eth1");
+    expect(result[0]?.dns).toEqual([]);
+    expect(result[0]?.gateway).toBe("");
+    expect(result[0]?.ipAddresses).toEqual([]);
+  });
+
   it("fetches active network status", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: true,

@@ -1,52 +1,84 @@
 import { useState, type FC } from "react";
 import { useTranslation } from "react-i18next";
-import { Network, Settings } from "lucide-react";
+import { Network, RefreshCw } from "lucide-react";
 import { NetworkSettingsTab } from "./components/NetworkSettingsTab";
+import { useNetworkInterfacesQuery } from "./hooks/useNetwork";
 
 type SettingsTab = "network";
 
 export const SystemSettingsPage: FC = () => {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<SettingsTab>("network");
+  const { data: interfaces = [], isRefetching, refetch } = useNetworkInterfacesQuery();
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 md:p-8">
-      <div className="w-full space-y-6">
-        {/* Page Header */}
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--surface-muted)] text-[var(--accent)] border border-[var(--border)]">
-            <Settings size={20} />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-[var(--foreground)]">
+    <div className="system-settings-view flex flex-col gap-6 w-full animate-in fade-in duration-200">
+      {/* Page Header - Unified structure matching CameraPage, AuditLogPage, OverviewDashboard */}
+      <section
+        className="page-heading flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
+        aria-labelledby="system-settings-title"
+      >
+        <div>
+          <div className="flex items-center gap-2.5">
+            <h1 id="system-settings-title" className="text-2xl font-bold tracking-tight text-[var(--foreground)]">
               {t("systemSettings.title")}
             </h1>
-            <p className="text-xs text-[var(--muted)]">
-              {t("systemSettings.network.description")}
-            </p>
+            {interfaces.length > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-muted)] px-2.5 py-0.5 text-[11px] font-mono text-[var(--muted)]">
+                <Network size={11} aria-hidden="true" />
+                <span>
+                  {interfaces.length} {t("systemSettings.network.metrics.interfacesCount")}
+                </span>
+              </span>
+            )}
           </div>
+          <p className="page-description text-xs text-[var(--muted)] mt-1">
+            {t("systemSettings.description")}
+          </p>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="flex border-b border-[var(--border)] gap-6">
+        {/* Global Action Controls */}
+        <div className="flex items-center gap-2.5">
           <button
             type="button"
-            onClick={() => setActiveTab("network")}
-            className={`flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
-              activeTab === "network"
-                ? "border-[var(--accent)] text-[var(--accent)]"
-                : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
-            }`}
+            className="icon-button"
+            onClick={() => void refetch()}
+            disabled={isRefetching}
+            aria-label={t("systemSettings.network.actions.refresh")}
+            title={t("systemSettings.network.actions.refresh")}
           >
-            <Network size={15} />
-            <span>{t("systemSettings.tabs.network")}</span>
+            <RefreshCw className={isRefetching ? "animate-spin" : undefined} size={16} />
           </button>
         </div>
+      </section>
 
-        {/* Tab Content */}
-        <div>
-          {activeTab === "network" && <NetworkSettingsTab />}
-        </div>
+      {/* Sub-navigation Segmented Pills */}
+      <nav
+        className="inline-flex items-center gap-1 p-1 rounded-xl bg-[var(--surface-muted)] border border-[var(--border)] w-fit"
+        aria-label={t("systemSettings.tabsLabel")}
+      >
+        <button
+          type="button"
+          onClick={() => setActiveTab("network")}
+          className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs font-medium transition-all ${
+            activeTab === "network"
+              ? "bg-[var(--surface)] text-[var(--foreground)] shadow-xs font-semibold"
+              : "text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--surface-hover)]"
+          }`}
+        >
+          <Network size={14} className={activeTab === "network" ? "text-[var(--accent)]" : undefined} />
+          <span>{t("systemSettings.tabs.network")}</span>
+          {interfaces.length > 0 && (
+            <span className="rounded-full bg-[var(--surface-muted)] px-1.5 py-0.2 text-[10px] font-mono text-[var(--muted)]">
+              {interfaces.length}
+            </span>
+          )}
+        </button>
+      </nav>
+
+      {/* Tab Content Area */}
+      <div className="flex-1 w-full min-w-0">
+        {activeTab === "network" && <NetworkSettingsTab />}
       </div>
     </div>
   );

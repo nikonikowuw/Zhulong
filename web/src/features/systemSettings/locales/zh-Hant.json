@@ -1,9 +1,18 @@
 {
   "title": "系統設定",
+  "description": "管理邊緣設備系統網路、實體網卡拓撲與防斷電安全回滾看門狗。",
+  "tabsLabel": "系統設定選項卡",
   "tabs": {
     "network": "網路設定"
   },
   "network": {
+    "metrics": {
+      "total": "實體網卡總數",
+      "linkUp": "已連線網口",
+      "current": "目前管理網口",
+      "gateway": "預設閘道",
+      "interfacesCount": "個實體介面"
+    },
     "heading": "實體網卡配置",
     "description": "管理實體乙太網卡、IP 位址、預設閘道及防失聯兩階段安全保護。",
     "currentInterface": "目前管理網口",
@@ -22,7 +31,11 @@
       "subnetMask": "子網路遮罩",
       "gateway": "預設閘道",
       "dns": "DNS 伺服器",
-      "setDefaultGateway": "指定為系統預設閘道 (0.0.0.0/0)"
+      "setDefaultGateway": "指定為系統預設閘道 (0.0.0.0/0)",
+      "additionalIps": "+{{count}} 個額外 IP",
+      "noIps": "未分配 IP",
+      "noGateway": "未配置",
+      "noDns": "未配置"
     },
     "actions": {
       "configure": "配置",
@@ -32,6 +45,9 @@
       "cancel": "取消",
       "confirm": "立即固化新配置",
       "rollback": "立刻還原",
+      "rollbackConfirm": "確認回復",
+      "rollbackConfirmPrompt": "確定要立即回復嗎？將立刻恢復至上一個正常網路配置。",
+      "openNewTab": "在新分頁開啟",
       "copyMac": "複製 MAC 位址",
       "copyUrl": "複製訪問 URL"
     },
@@ -53,8 +69,12 @@
       "invalidGateway": "閘道位址格式不合法",
       "invalidDns": "DNS 伺服器 IP 格式不合法",
       "gatewayRequired": "勾選預設閘道時必須填寫有效的閘道位址",
-      "gatewayConflict": "已有其他實體網卡配置為預設閘道。全域僅允許一個預設閘道。"
+      "gatewayConflict": "已有其他實體網卡配置為預設閘道。全域僅允許一個預設閘道。",
+      "requiredField": "此欄位為必填項"
     },
+    "hardwareTag": "實體乙太網卡",
+    "skeletonLoading": "正在探測硬體網卡與鏈路狀態...",
+    "diagnosticsTitle": "連線能力快速診斷",
     "watchdog": {
       "bannerTitle": "網路試執行中",
       "bannerMessage": "網口 {{iface}} 正在試執行新配置，剩餘 {{seconds}} 秒自動回復。請在確認網路可達後固化配置。",

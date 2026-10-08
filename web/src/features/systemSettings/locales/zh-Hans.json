@@ -1,9 +1,18 @@
 {
   "title": "系统设置",
+  "description": "管理边缘设备系统网络、物理网卡拓扑与防掉电安全回滚看门狗。",
+  "tabsLabel": "系统设置选项卡",
   "tabs": {
-    "network": "网络设置"
+    "network": "网络配置"
   },
   "network": {
+    "metrics": {
+      "total": "物理网卡总数",
+      "linkUp": "已连通网口",
+      "current": "当前管理网口",
+      "gateway": "默认网关",
+      "interfacesCount": "个物理接口"
+    },
     "heading": "物理网卡配置",
     "description": "管理物理以太网卡、IP 地址、默认网关及防失联两阶段安全保护。",
     "currentInterface": "当前管理网口",
@@ -22,7 +31,11 @@
       "subnetMask": "子网掩码",
       "gateway": "默认网关",
       "dns": "DNS 服务器",
-      "setDefaultGateway": "指定为系统默认网关 (0.0.0.0/0)"
+      "setDefaultGateway": "指定为系统默认网关 (0.0.0.0/0)",
+      "additionalIps": "+{{count}} 个额外 IP",
+      "noIps": "未分配 IP",
+      "noGateway": "未配置",
+      "noDns": "未配置"
     },
     "actions": {
       "configure": "配置",
@@ -32,6 +45,9 @@
       "cancel": "取消",
       "confirm": "立即固化新配置",
       "rollback": "立刻还原",
+      "rollbackConfirm": "确认回滚",
+      "rollbackConfirmPrompt": "确定要立即回滚吗？将立刻恢复至上一个正常网络配置。",
+      "openNewTab": "新标签页打开",
       "copyMac": "复制 MAC 地址",
       "copyUrl": "复制访问 URL"
     },
@@ -53,8 +69,12 @@
       "invalidGateway": "网关地址格式不合法",
       "invalidDns": "DNS 服务器 IP 格式不合法",
       "gatewayRequired": "勾选默认网关时必须填写有效的网关地址",
-      "gatewayConflict": "已有其他物理网卡配置为默认网关。全局仅允许一个默认网关。"
+      "gatewayConflict": "已有其他物理网卡配置为默认网关。全局仅允许一个默认网关。",
+      "requiredField": "此字段为必填项"
     },
+    "hardwareTag": "物理以太网卡",
+    "skeletonLoading": "正在探测硬件网卡与链路状态...",
+    "diagnosticsTitle": "连通性快速诊断",
     "watchdog": {
       "bannerTitle": "网络试运行中",
       "bannerMessage": "网口 {{iface}} 正在试运行新配置，剩余 {{seconds}} 秒自动回滚。请在确认网络可达后固化配置。",
