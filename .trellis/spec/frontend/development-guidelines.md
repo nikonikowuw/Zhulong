@@ -76,7 +76,25 @@ export function CameraTable({ data, totalCount }: CameraTableProps) {
 }
 ```
 
-### 2.2 表单与 Zod 校验范式
+### 2.2 表格 Sticky 列与 Hover 透明穿透避坑规范
+
+在数据密集型表格中，右侧操作列通常需要固定悬浮（`sticky inset-e-0`）。当表格出现横向滚动时，必须严格遵守以下规则避免**线框与透明穿透 Bug**：
+1. **严禁在悬停时直接覆写背景色**：在 Tailwind 中，若使用 `bg-card group-hover:bg-muted/50`，hover 时的带半透明色类会直接覆盖冲掉底层的纯实色 `bg-card`，导致横向滑入底部的文字或组件穿透可见。
+2. **严禁硬编码垂直竖线**：非必要不要添加 `border-s`，避免打破 `shadcn-admin` 自然平滑的整体排版。
+3. **双层伪元素无缝悬浮最佳实践**：底层始终保持 100% 实心 `bg-card` 遮挡滚动物，上层通过绝对定位透明伪元素淡入高亮，并挂载 `before:pointer-events-none` 保证按钮点击事件穿透：
+
+```tsx
+meta: {
+  className: cn(
+    'sticky inset-e-0 z-10 w-12 text-end',
+    'bg-card relative',
+    'before:pointer-events-none before:absolute before:inset-0 before:bg-muted/50 before:opacity-0 before:transition-opacity',
+    'group-hover:before:opacity-100 group-data-[state=selected]:before:bg-muted group-data-[state=selected]:before:opacity-100'
+  ),
+}
+```
+
+### 2.3 表单与 Zod 校验范式
 
 ```typescript
 // features/camera/components/CameraCreateDialog.tsx

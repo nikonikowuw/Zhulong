@@ -670,3 +670,39 @@ Session summary was not supplied.
 ### Next Steps
 
 - 推进前端摄像头资产管理与状态大盘 (10-09-frontend-camera-management) 实现
+
+
+## Session 16: 前端摄像头资产管理与状态大盘实现
+<!-- trellis-session: v=2 fp=ca816999b1efd630 -->
+
+**Date**: 2026-10-09
+**Task**: 前端摄像头资产管理与状态大盘
+**Package**: frontend
+**Branch**: `dev`
+
+### Summary
+
+基于 satnaing/shadcn-admin 控制台规范实现高密度摄像机资产管理模块（`features/cameras`），挂载在 `/_authenticated/cameras` 强类型文件路由，包含 TanStack Table 数据大盘、URL 状态双向同步、新增/编辑/诊断/凭据查看弹窗集合、CAS revision 乐观锁、实时连通性探测等待遮罩、SSE 状态流就地局部更新与英/简/繁三语国际化支持。同时攻克了 Table 操作列在横向滚动时的双层伪元素无缝悬浮架构，彻底杜绝线框与 hover 透明穿透缺陷。
+
+### Main Changes
+
+- **契约与 API 基础设施**：编写 Zod Schema、REST API 客户端（CRUD/凭据/诊断）与 TanStack Query 钩子；挂载 `/api/v1/cameras/events` SSE 实时事件更新
+- **三语国际化与导航注册**：在 `cameras` 命名空间提取三语字典并在 `sidebar-data.ts` 与 `common.json` 挂载导航项
+- **高密度数据大盘与列定义**：按 `[选择] -> [设备 ID] -> [摄像机名称] -> [RTSP 流地址] -> [状态] -> [主流规格] -> [子流规格] -> [启用开关] -> [更新时间] -> [操作]` 排布；支持明文可用 RTSP 流一键复制
+- **工业级 Sticky 悬浮操作列**：采用底层 100% 实心 `bg-card` 垫底 + 绝对定位伪元素淡入叠色的双层背景架构，消灭垂直竖线，确保 hover 颜色与整行完全一致且 0 透明穿透
+- **对话框交互闭环与 shadcn-admin 原味重塑**：彻底剥离粗糙杂色嵌套卡片，按照 shadcn-admin 官方原味重塑创建/编辑与一键诊断弹窗；删除冗余的凭据查看弹窗；消除全量硬编码，补全三语翻译并修复 session 键名缺失
+- **复选批量操作菜单与高危删除对齐**：完全对齐 `shadcn-admin`（tasks/users）官方批量操作浮条规范，提供 DropdownMenu 状态批量变更下拉菜单、批量诊断探针、内聚型高危二次确认弹窗（输入 `DELETE` 校验 + 破坏性 Warning Alert）与勾选自动重置
+- **公共组件国际化脱敏（DataTableBulkActions & DataTableViewOptions）**：攻克底层通用批量操作栏中的硬编码英文 `' selected'` 与取消按钮硬编码文本，抽象并引入 `table` 与 `entities` 国际化字典体系；重构表格右上角 `View` 按钮与列显隐下拉菜单（`DataTableViewOptions`），实现按钮文案、菜单标头（Toggle columns）及各列选项标题的双重智能探测（显式 `columnLabels`、`meta.title` 与 i18n 候选键），彻底消灭列选项驼峰字段暴露与未翻译问题
+- **规范回流**：将 Table Sticky 操作列双层伪元素防穿透最佳实践沉淀进 `.trellis/spec/frontend/development-guidelines.md`
+
+### Testing
+
+- [OK] `pnpm format:check` 代码风格 100% 合规
+- [OK] `pnpm lint` 静态检查 0 报错，零 any
+- [OK] `pnpm test` 全站 39 个测试套件 196 个用例全部通过
+- [OK] `pnpm build` (tsc -b && vite build) 生产编译打包成功
+
+### Status
+
+[OK] **Completed**
+

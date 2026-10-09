@@ -25,6 +25,7 @@
     "Pages": "Pages",
     "Other": "Other",
     "Dashboard": "Dashboard",
+    "Cameras": "Cameras",
     "Live View": "Live View",
     "Tasks": "Tasks",
     "Apps": "Apps",
@@ -53,5 +54,20 @@
     "Help Center": "Help Center",
     "settingsTitle": "Settings",
     "settingsDesc": "Manage your account settings and set e-mail preferences."
+  },
+  "table": {
+    "view": "View",
+    "toggleColumns": "Toggle columns",
+    "reset": "Reset",
+    "selected": "selected",
+    "clearSelection": "Clear selection",
+    "clearSelectionShortcut": "Clear selection (Escape)",
+    "bulkActionsAria": "Bulk actions for {{count}} selected {{entityName}}",
+    "bulkActionsAnnouncement": "{{count}} {{entityName}} selected. Bulk actions toolbar is available."
+  },
+  "entities": {
+    "user": "user",
+    "task": "task",
+    "camera": "camera"
   }
 }

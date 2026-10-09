@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端开发规范总览与核心技术栈"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "前端 12 条编码铁律、状态管理契约与表单表格规范"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "目录拓扑与文件切片架构规范"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "OKLCH 语义主题与三语国际化契约"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "代码质量与测试构建门禁规范"}

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { type Table } from '@tanstack/react-table'
 import { X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -23,7 +24,7 @@ type DataTableBulkActionsProps<TData> = {
  * @template TData The type of data in the table.
  * @param {object} props The component props.
  * @param {Table<TData>} props.table The react-table instance.
- * @param {string} props.entityName The name of the entity being acted upon (e.g., "task", "user").
+ * @param {string} props.entityName The name of the entity being acted upon (e.g., "task", "user", "camera").
  * @param {React.ReactNode} props.children The action buttons to be rendered inside the toolbar.
  * @returns {React.ReactNode | null} The rendered component or null if no rows are selected.
  */
@@ -32,15 +33,28 @@ export function DataTableBulkActions<TData>({
   entityName,
   children,
 }: DataTableBulkActionsProps<TData>): React.ReactNode | null {
+  const { t, i18n } = useTranslation('common')
   const selectedRows = table.getFilteredSelectedRowModel().rows
   const selectedCount = selectedRows.length
   const toolbarRef = useRef<HTMLDivElement>(null)
   const [announcement, setAnnouncement] = useState('')
 
+  const isZh = i18n.language?.startsWith('zh')
+  const localizedEntity = t(`entities.${entityName}`, {
+    defaultValue: entityName,
+  })
+  const entityText = isZh
+    ? localizedEntity
+    : `${entityName}${selectedCount > 1 ? 's' : ''}`
+
   // Announce selection changes to screen readers
   useEffect(() => {
     if (selectedCount > 0) {
-      const message = `${selectedCount} ${entityName}${selectedCount > 1 ? 's' : ''} selected. Bulk actions toolbar is available.`
+      const message = t('table.bulkActionsAnnouncement', {
+        count: selectedCount,
+        entityName: entityText,
+        defaultValue: `${selectedCount} ${entityText} selected. Bulk actions toolbar is available.`,
+      })
 
       // Use queueMicrotask to defer state update and avoid cascading renders
       queueMicrotask(() => {
@@ -51,7 +65,7 @@ export function DataTableBulkActions<TData>({
       const timer = setTimeout(() => setAnnouncement(''), 3000)
       return () => clearTimeout(timer)
     }
-  }, [selectedCount, entityName])
+  }, [selectedCount, entityText, t])
 
   const handleClearSelection = () => {
     table.resetRowSelection()
@@ -138,7 +152,11 @@ export function DataTableBulkActions<TData>({
       <div
         ref={toolbarRef}
         role='toolbar'
-        aria-label={`Bulk actions for ${selectedCount} selected ${entityName}${selectedCount > 1 ? 's' : ''}`}
+        aria-label={t('table.bulkActionsAria', {
+          count: selectedCount,
+          entityName: entityText,
+          defaultValue: `Bulk actions for ${selectedCount} selected ${entityName}${selectedCount > 1 ? 's' : ''}`,
+        })}
         aria-describedby='bulk-actions-description'
         tabIndex={-1}
         onKeyDown={handleKeyDown}
@@ -163,15 +181,27 @@ export function DataTableBulkActions<TData>({
                 size='icon'
                 onClick={handleClearSelection}
                 className='size-6 rounded-full'
-                aria-label='Clear selection'
-                title='Clear selection (Escape)'
+                aria-label={t('table.clearSelection', {
+                  defaultValue: 'Clear selection',
+                })}
+                title={t('table.clearSelectionShortcut', {
+                  defaultValue: 'Clear selection (Escape)',
+                })}
               >
                 <X />
-                <span className='sr-only'>Clear selection</span>
+                <span className='sr-only'>
+                  {t('table.clearSelection', {
+                    defaultValue: 'Clear selection',
+                  })}
+                </span>
               </Button>
             </TooltipTrigger>
             <TooltipContent>
-              <p>Clear selection (Escape)</p>
+              <p>
+                {t('table.clearSelectionShortcut', {
+                  defaultValue: 'Clear selection (Escape)',
+                })}
+              </p>
             </TooltipContent>
           </Tooltip>
 
@@ -182,21 +212,41 @@ export function DataTableBulkActions<TData>({
           />
 
           <div
-            className='flex items-center gap-x-1 text-sm'
+            className='flex items-center gap-x-1.5 text-sm'
             id='bulk-actions-description'
           >
-            <Badge
-              variant='default'
-              className='min-w-8 rounded-lg'
-              aria-label={`${selectedCount} selected`}
-            >
-              {selectedCount}
-            </Badge>{' '}
-            <span className='hidden sm:inline'>
-              {entityName}
-              {selectedCount > 1 ? 's' : ''}
-            </span>{' '}
-            selected
+            {isZh ? (
+              <>
+                <span className='text-muted-foreground'>
+                  {t('table.selected', { defaultValue: '已选择' })}
+                </span>
+                <Badge
+                  variant='default'
+                  className='min-w-8 rounded-lg'
+                  aria-label={`${selectedCount} selected`}
+                >
+                  {selectedCount}
+                </Badge>
+                <span className='hidden font-medium sm:inline'>
+                  {localizedEntity}
+                </span>
+              </>
+            ) : (
+              <>
+                <Badge
+                  variant='default'
+                  className='min-w-8 rounded-lg'
+                  aria-label={`${selectedCount} selected`}
+                >
+                  {selectedCount}
+                </Badge>{' '}
+                <span className='hidden sm:inline'>
+                  {entityName}
+                  {selectedCount > 1 ? 's' : ''}
+                </span>{' '}
+                <span>{t('table.selected', { defaultValue: 'selected' })}</span>
+              </>
+            )}
           </div>
 
           <Separator

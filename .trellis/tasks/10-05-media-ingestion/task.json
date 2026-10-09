@@ -24,7 +24,9 @@
     "10-05-camera-lifecycle",
     "10-06-websocket-streaming",
     "10-06-camera-management-ui",
-    "10-06-live-player-grid"
+    "10-06-live-player-grid",
+    "10-09-frontend-live-preview",
+    "10-09-frontend-camera-management"
   ],
   "parent": null,
   "relatedFiles": [],

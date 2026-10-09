@@ -25,6 +25,7 @@
     "Pages": "頁面",
     "Other": "其他",
     "Dashboard": "儀表板",
+    "Cameras": "攝影機管理",
     "Live View": "即時預覽",
     "Tasks": "任務管理",
     "Apps": "應用市場",
@@ -53,5 +54,20 @@
     "Help Center": "說明中心",
     "settingsTitle": "系統設定",
     "settingsDesc": "管理系統各項服務參數、外觀偏好與網路介面。"
+  },
+  "table": {
+    "view": "欄位設定",
+    "toggleColumns": "切換顯示欄位",
+    "reset": "重設",
+    "selected": "已選擇",
+    "clearSelection": "取消選擇",
+    "clearSelectionShortcut": "取消選擇 (Escape)",
+    "bulkActionsAria": "已選擇 {{count}} 項的批量操作工具列",
+    "bulkActionsAnnouncement": "已選擇 {{count}} {{entityName}}。批量操作工具列可用。"
+  },
+  "entities": {
+    "user": "位使用者",
+    "task": "個任務",
+    "camera": "台攝影機"
   }
 }

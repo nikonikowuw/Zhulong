@@ -1,6 +1,7 @@
 import {
   Construction,
   LayoutDashboard,
+  Video,
   Monitor,
   Bug,
   ListTodo,
@@ -57,6 +58,11 @@ export const sidebarData: SidebarData = {
           title: 'Dashboard',
           url: '/',
           icon: LayoutDashboard,
+        },
+        {
+          title: 'Cameras',
+          url: '/cameras',
+          icon: Video,
         },
         {
           title: 'Live View',
