@@ -1,8 +1,8 @@
 import { type ReactElement } from 'react'
 import { useNavigate, useLocation } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/auth-store'
-import { authApi } from '@/features/auth/api/auth-api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { authApi } from '@/features/auth/api/auth-api'
 
 interface SignOutDialogProps {
   open: boolean

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { type TFunction } from 'i18next'
 
 const IPV4_REGEX =
   /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/
@@ -41,76 +42,111 @@ export function parseDnsString(dnsStr?: string): string[] {
     .filter((s) => s.length > 0)
 }
 
-export const interfaceFormSchema = z
-  .object({
-    mode: z.enum(['dhcp', 'static']),
-    ipAddress: z.string().optional(),
-    subnetMask: z.string().optional(),
-    gateway: z.string().optional(),
-    dns: z.string().optional(),
-    setDefault: z.boolean(),
-  })
-  .superRefine((data, ctx) => {
-    if (data.mode === 'static') {
-      const ip = data.ipAddress?.trim()
-      if (!ip) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: '静态模式下必须填写 IP 地址',
-          path: ['ipAddress'],
-        })
-      } else if (!isValidIPv4(ip)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: '请输入合法的 IPv4 地址 (例如: 192.168.1.100)',
-          path: ['ipAddress'],
-        })
-      }
+export function createInterfaceFormSchema(t?: TFunction) {
+  const msg = {
+    ipRequired: t
+      ? t('validation.ipRequired', { ns: 'network' })
+      : '静态模式下必须填写 IP 地址',
+    invalidIpv4: t
+      ? t('validation.invalidIpv4', { ns: 'network' })
+      : '请输入合法的 IPv4 地址 (例如: 192.168.1.100)',
+    maskRequired: t
+      ? t('validation.maskRequired', { ns: 'network' })
+      : '静态模式下必须填写子网掩码',
+    invalidMask: t
+      ? t('validation.invalidMask', { ns: 'network' })
+      : '请输入合法的连续子网掩码 (例如: 255.255.255.0)',
+    invalidGateway: t
+      ? t('validation.invalidGateway', { ns: 'network' })
+      : '请输入合法的网关 IPv4 地址',
+    invalidDns: (ip: string) =>
+      t
+        ? t('validation.invalidDns', { ns: 'network', ip })
+        : `无效的 DNS 服务器地址: ${ip}`,
+  }
 
-      const mask = data.subnetMask?.trim()
-      if (!mask) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: '静态模式下必须填写子网掩码',
-          path: ['subnetMask'],
-        })
-      } else if (!isValidSubnetMask(mask)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: '请输入合法的连续子网掩码 (例如: 255.255.255.0)',
-          path: ['subnetMask'],
-        })
-      }
-
-      const gw = data.gateway?.trim()
-      if (gw && !isValidIPv4(gw)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: '请输入合法的网关 IPv4 地址',
-          path: ['gateway'],
-        })
-      }
-    }
-
-    if (data.dns && data.dns.trim()) {
-      const list = parseDnsString(data.dns)
-      for (const item of list) {
-        if (!isValidIPv4(item)) {
+  return z
+    .object({
+      mode: z.enum(['dhcp', 'static']),
+      ipAddress: z.string().optional(),
+      subnetMask: z.string().optional(),
+      gateway: z.string().optional(),
+      dns: z.string().optional(),
+      setDefault: z.boolean(),
+    })
+    .superRefine((data, ctx) => {
+      if (data.mode === 'static') {
+        const ip = data.ipAddress?.trim()
+        if (!ip) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: `无效的 DNS 服务器地址: ${item}`,
-            path: ['dns'],
+            message: msg.ipRequired,
+            path: ['ipAddress'],
           })
-          break
+        } else if (!isValidIPv4(ip)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: msg.invalidIpv4,
+            path: ['ipAddress'],
+          })
+        }
+
+        const mask = data.subnetMask?.trim()
+        if (!mask) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: msg.maskRequired,
+            path: ['subnetMask'],
+          })
+        } else if (!isValidSubnetMask(mask)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: msg.invalidMask,
+            path: ['subnetMask'],
+          })
+        }
+
+        const gw = data.gateway?.trim()
+        if (gw && !isValidIPv4(gw)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: msg.invalidGateway,
+            path: ['gateway'],
+          })
         }
       }
-    }
-  })
 
+      if (data.dns && data.dns.trim()) {
+        const list = parseDnsString(data.dns)
+        for (const item of list) {
+          if (!isValidIPv4(item)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: msg.invalidDns(item),
+              path: ['dns'],
+            })
+            break
+          }
+        }
+      }
+    })
+}
+
+export const interfaceFormSchema = createInterfaceFormSchema()
 export type InterfaceFormValues = z.infer<typeof interfaceFormSchema>
 
-export const pingFormSchema = z.object({
-  target: z.string().min(1, '请输入探测目标 IP 地址或域名'),
-})
+export function createPingFormSchema(t?: TFunction) {
+  return z.object({
+    target: z
+      .string()
+      .min(
+        1,
+        t
+          ? t('validation.pingTargetRequired', { ns: 'network' })
+          : '请输入探测目标 IP 地址或域名'
+      ),
+  })
+}
 
+export const pingFormSchema = createPingFormSchema()
 export type PingFormValues = z.infer<typeof pingFormSchema>

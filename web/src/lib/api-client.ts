@@ -1,4 +1,5 @@
 import axios, { AxiosError, type AxiosResponse } from 'axios'
+import i18n from '@/lib/i18n'
 
 export interface ApiResponse<T = unknown> {
   code: string
@@ -19,6 +20,14 @@ export const apiClient = axios.create({
   },
 })
 
+// 请求拦截器：自动注入当前语言偏好 Accept-Language
+apiClient.interceptors.request.use((config) => {
+  if (i18n.language) {
+    config.headers['Accept-Language'] = i18n.language
+  }
+  return config
+})
+
 // 响应拦截器：自动解包信封与错误信息转换
 apiClient.interceptors.response.use(
   (response: AxiosResponse<ApiResponse>) => {
@@ -28,7 +37,10 @@ apiClient.interceptors.response.use(
   (error: unknown) => {
     if (error instanceof AxiosError) {
       const serverMessage = error.response?.data?.message
-      if (typeof serverMessage === 'string' && serverMessage.trim().length > 0) {
+      if (
+        typeof serverMessage === 'string' &&
+        serverMessage.trim().length > 0
+      ) {
         // 将后端返回的国际化错误消息覆写到 error.message，方便上层组件捕获展示
         error.message = serverMessage
       }

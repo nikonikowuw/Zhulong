@@ -38,7 +38,10 @@ export const authApi = {
    * 首次启动向导：初始化最高权限系统管理员
    */
   async initAdmin(payload: InitAdminPayload): Promise<AuthUser> {
-    const res = await apiClient.post<ApiResponse<AuthUser>>('/auth/init', payload)
+    const res = await apiClient.post<ApiResponse<AuthUser>>(
+      '/auth/init',
+      payload
+    )
     return res.data.data
   },
 
@@ -46,7 +49,10 @@ export const authApi = {
    * 管理员常规密码登录
    */
   async login(payload: LoginPayload): Promise<AuthUser> {
-    const res = await apiClient.post<ApiResponse<AuthUser>>('/auth/login', payload)
+    const res = await apiClient.post<ApiResponse<AuthUser>>(
+      '/auth/login',
+      payload
+    )
     return res.data.data
   },
 

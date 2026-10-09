@@ -71,7 +71,9 @@ describe('Auth Schemas', () => {
       })
       expect(result.success).toBe(false)
       if (!result.success) {
-        expect(result.error.issues[0]?.message).toBe('密码长度至少需要 8 个字符')
+        expect(result.error.issues[0]?.message).toBe(
+          '密码长度至少需要 8 个字符'
+        )
       }
     })
 

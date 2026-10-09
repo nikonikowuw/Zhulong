@@ -1,7 +1,8 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Activity, CheckCircle2, Loader2, XCircle } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -22,7 +23,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { pingFormSchema, type PingFormValues } from '../data/schema'
+import { createPingFormSchema, type PingFormValues } from '../data/schema'
 import { usePingMutation } from '../hooks/use-network'
 
 interface PingDialogProps {
@@ -36,10 +37,13 @@ export function PingDialog({
   onOpenChange,
   defaultTarget = '8.8.8.8',
 }: PingDialogProps) {
+  const { t } = useTranslation('network')
   const pingMutation = usePingMutation()
 
+  const schema = useMemo(() => createPingFormSchema(t), [t])
+
   const form = useForm<PingFormValues>({
-    resolver: zodResolver(pingFormSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       target: defaultTarget,
     },
@@ -64,12 +68,9 @@ export function PingDialog({
         <DialogHeader>
           <DialogTitle className='flex items-center gap-2'>
             <Activity className='h-5 w-5 text-primary' />
-            <span>网络连通性探测 (Ping)</span>
+            <span>{t('ping.dialogTitle')}</span>
           </DialogTitle>
-          <DialogDescription>
-            从宿主机边缘系统发起轻量 ICMP / Socket
-            连通性测试，验证网关或外网可达性。
-          </DialogDescription>
+          <DialogDescription>{t('ping.dialogDesc')}</DialogDescription>
         </DialogHeader>
 
         <Form {...form}>
@@ -79,16 +80,16 @@ export function PingDialog({
               name='target'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>目标 IP 或域名</FormLabel>
+                  <FormLabel>{t('ping.targetLabel')}</FormLabel>
                   <FormControl>
                     <Input
-                      placeholder='例如: 192.168.1.1 或 8.8.8.8'
+                      placeholder={t('ping.targetPlaceholder')}
                       className='font-mono'
                       {...field}
                     />
                   </FormControl>
                   <FormDescription className='text-xs'>
-                    建议优先测试当前配置的默认网关，再测试公共 DNS 服务器
+                    {t('ping.targetDesc')}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -98,7 +99,7 @@ export function PingDialog({
             {pingMutation.isPending && (
               <div className='flex items-center justify-center gap-2 rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground'>
                 <Loader2 className='h-4 w-4 animate-spin' />
-                <span>正在向目标地址发送探测报文...</span>
+                <span>{t('ping.probingMsg')}</span>
               </div>
             )}
 
@@ -118,14 +119,14 @@ export function PingDialog({
                   )}
                   <span className='font-medium'>
                     {pingMutation.data.reachable
-                      ? '目标可达'
-                      : '目标不可达 / 超时'}
+                      ? t('ping.success')
+                      : t('ping.failed')}
                   </span>
                 </div>
 
                 {pingMutation.data.reachable && (
                   <Badge variant='outline' className='font-mono text-xs'>
-                    RTT: {pingMutation.data.rttMs.toFixed(2)} ms
+                    {t('ping.rtt')}: {pingMutation.data.rttMs.toFixed(2)} ms
                   </Badge>
                 )}
               </div>
@@ -133,7 +134,7 @@ export function PingDialog({
 
             {pingMutation.isError && (
               <div className='rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive'>
-                探测执行异常: {pingMutation.error.message}
+                {t('ping.probeError', { msg: pingMutation.error.message })}
               </div>
             )}
 
@@ -143,13 +144,15 @@ export function PingDialog({
                 variant='outline'
                 onClick={() => onOpenChange(false)}
               >
-                关闭
+                {t('actions.close')}
               </Button>
               <Button type='submit' disabled={pingMutation.isPending}>
                 {pingMutation.isPending && (
                   <Loader2 className='mr-2 h-4 w-4 animate-spin' />
                 )}
-                开始探测
+                {pingMutation.isPending
+                  ? t('actions.probing')
+                  : t('actions.startPing')}
               </Button>
             </DialogFooter>
           </form>

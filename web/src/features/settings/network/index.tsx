@@ -6,6 +6,7 @@ import {
   RefreshCw,
   ShieldCheck,
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { ContentSection } from '../components/content-section'
@@ -20,6 +21,7 @@ import {
 import { useNetworkInterfaces, useNetworkStatus } from './hooks/use-network'
 
 export function SettingsNetwork() {
+  const { t } = useTranslation('network')
   const interfacesQuery = useNetworkInterfaces()
   const statusQuery = useNetworkStatus()
 
@@ -114,8 +116,8 @@ export function SettingsNetwork() {
 
   return (
     <ContentSection
-      title='网络配置'
-      desc='管理边缘系统的物理以太网卡与默认路由出口，支持两阶段看门狗安全试运行。'
+      title={t('title')}
+      desc={t('description')}
       className='max-w-4xl'
     >
       <div className='space-y-4'>
@@ -123,9 +125,7 @@ export function SettingsNetwork() {
         <div className='flex flex-wrap items-center justify-between gap-3'>
           <div className='flex items-center gap-2 text-xs text-muted-foreground'>
             <ShieldCheck className='h-4 w-4 text-emerald-600' />
-            <span>
-              已识别 {interfaceCount} 个物理以太网卡 · 支持防失联看门狗回滚
-            </span>
+            <span>{t('discoveredInterfaces', { count: interfaceCount })}</span>
           </div>
 
           <div className='flex items-center gap-2'>
@@ -136,7 +136,7 @@ export function SettingsNetwork() {
               className='gap-1.5'
             >
               <Activity className='h-3.5 w-3.5' />
-              连通性测试 (Ping)
+              {t('actions.ping')}
             </Button>
 
             <Button
@@ -151,7 +151,7 @@ export function SettingsNetwork() {
                   interfacesQuery.isFetching ? 'animate-spin' : ''
                 }`}
               />
-              刷新
+              {t('actions.refresh')}
             </Button>
           </div>
         </div>
@@ -161,7 +161,7 @@ export function SettingsNetwork() {
           <Alert className='border-amber-500/50 bg-amber-500/10 text-amber-900 dark:text-amber-300'>
             <AlertTriangle className='h-4 w-4 text-amber-600 dark:text-amber-400' />
             <AlertTitle className='flex items-center justify-between font-semibold'>
-              <span>网络配置正在试运行中 (未确认)</span>
+              <span>{t('watchdog.trialActiveTitle')}</span>
               <Button
                 size='sm'
                 variant='outline'
@@ -169,11 +169,11 @@ export function SettingsNetwork() {
                 className='h-7 gap-1 border-amber-500/50 bg-background text-xs font-medium text-amber-700 hover:bg-amber-500/10 dark:text-amber-300'
               >
                 <Clock className='h-3 w-3' />
-                打开确认面板
+                {t('actions.openConfirmPanel')}
               </Button>
             </AlertTitle>
             <AlertDescription className='text-xs'>
-              系统网卡当前处于防失联看门狗保护状态。请在倒计时内确认固化，超时后系统将自动回滚恢复原配置。
+              {t('watchdog.trialActiveDesc')}
             </AlertDescription>
           </Alert>
         )}

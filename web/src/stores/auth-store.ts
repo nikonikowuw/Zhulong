@@ -1,6 +1,6 @@
 import { create } from 'zustand'
-import { authApi, type AuthUser } from '@/features/auth/api/auth-api'
 import { getCookie, setCookie, removeCookie } from '@/lib/cookies'
+import { authApi, type AuthUser } from '@/features/auth/api/auth-api'
 
 const ACCESS_TOKEN_COOKIE = 'zhulong_access_token'
 const USER_LOCAL_STORAGE = 'zhulong_user'

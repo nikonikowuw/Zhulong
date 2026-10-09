@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
-import { LoginForm } from './login-form'
 import { authApi } from '../api/auth-api'
+import { LoginForm } from './login-form'
 
 const setUserMock = vi.fn()
 
@@ -24,7 +24,9 @@ describe('LoginForm', () => {
 
     await expect.element(getByPlaceholder('请输入用户名')).toBeInTheDocument()
     await expect.element(getByPlaceholder('请输入密码')).toBeInTheDocument()
-    await expect.element(getByRole('button', { name: /^登录$/i })).toBeInTheDocument()
+    await expect
+      .element(getByRole('button', { name: /^登录$/i }))
+      .toBeInTheDocument()
   })
 
   it('提交成功时调用 authApi.login 与 onSuccess 回调', async () => {

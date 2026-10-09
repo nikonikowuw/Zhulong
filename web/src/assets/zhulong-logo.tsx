@@ -26,12 +26,7 @@ export function ZhulongLogo({ className, ...props }: SVGProps<SVGSVGElement>) {
         className='stroke-primary'
         strokeWidth='2'
       />
-      <circle
-        cx='16'
-        cy='15'
-        r='2.5'
-        className='fill-primary'
-      />
+      <circle cx='16' cy='15' r='2.5' className='fill-primary' />
       {/* 聚焦准星刻度 */}
       <path
         d='M16 6V8M16 22V24M7 15H9M23 15H25'

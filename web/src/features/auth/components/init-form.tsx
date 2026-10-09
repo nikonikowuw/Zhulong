@@ -3,10 +3,9 @@ import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { ArrowRight, CheckCircle2, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { authApi, type AuthUser } from '../api/auth-api'
-import { initAdminSchema, type InitAdminFormValues } from '../data/schema'
 import { useAuthStore } from '@/stores/auth-store'
 import { handleServerError } from '@/lib/handle-server-error'
+import { Button } from '@/components/ui/button'
 import {
   Form,
   FormControl,
@@ -16,8 +15,9 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { Button } from '@/components/ui/button'
 import { PasswordInput } from '@/components/password-input'
+import { authApi, type AuthUser } from '../api/auth-api'
+import { initAdminSchema, type InitAdminFormValues } from '../data/schema'
 
 interface InitFormProps {
   onSuccess?: (user: AuthUser) => void
@@ -39,12 +39,24 @@ function getStrengthLevel(score: number): {
   barClass: string
 } {
   if (score <= 1) {
-    return { label: '弱', textClass: 'text-destructive', barClass: 'bg-destructive' }
+    return {
+      label: '弱',
+      textClass: 'text-destructive',
+      barClass: 'bg-destructive',
+    }
   }
   if (score === 2) {
-    return { label: '中', textClass: 'text-amber-500', barClass: 'bg-amber-500' }
+    return {
+      label: '中',
+      textClass: 'text-amber-500',
+      barClass: 'bg-amber-500',
+    }
   }
-  return { label: '强', textClass: 'text-emerald-500', barClass: 'bg-emerald-500' }
+  return {
+    label: '强',
+    textClass: 'text-emerald-500',
+    barClass: 'bg-emerald-500',
+  }
 }
 
 export function InitForm({ onSuccess }: InitFormProps): ReactElement {
@@ -70,8 +82,8 @@ export function InitForm({ onSuccess }: InitFormProps): ReactElement {
   const strength = getStrengthLevel(passwordStrength)
   const isPasswordsMatch = Boolean(
     confirmPasswordValue &&
-      passwordValue &&
-      passwordValue === confirmPasswordValue
+    passwordValue &&
+    passwordValue === confirmPasswordValue
   )
 
   async function onSubmit(values: InitAdminFormValues): Promise<void> {
@@ -162,7 +174,7 @@ export function InitForm({ onSuccess }: InitFormProps): ReactElement {
                   <span className='flex items-center gap-1 text-[11px]'>
                     {isPasswordsMatch ? (
                       <span className='flex items-center text-emerald-500'>
-                        <CheckCircle2 className='size-3 me-0.5' /> 密码一致
+                        <CheckCircle2 className='me-0.5 size-3' /> 密码一致
                       </span>
                     ) : (
                       <span className='text-destructive'>两次密码不一致</span>

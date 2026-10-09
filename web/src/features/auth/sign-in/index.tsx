@@ -2,10 +2,6 @@ import { type ReactElement, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { Lock, Shield } from 'lucide-react'
-import { authApi, type AuthUser } from '../api/auth-api'
-import { LoginForm } from '../components/login-form'
-import { InitForm } from '../components/init-form'
-import { AuthLayout } from '../auth-layout'
 import { useAuthStore } from '@/stores/auth-store'
 import {
   Card,
@@ -15,6 +11,10 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { authApi, type AuthUser } from '../api/auth-api'
+import { AuthLayout } from '../auth-layout'
+import { InitForm } from '../components/init-form'
+import { LoginForm } from '../components/login-form'
 
 export function SignIn(): ReactElement {
   const navigate = useNavigate()
@@ -59,7 +59,7 @@ export function SignIn(): ReactElement {
           <CardHeader className='space-y-2 pb-5'>
             <div className='flex items-center gap-2.5'>
               <Skeleton className='size-9 rounded-lg' />
-              <div className='space-y-1.5 flex-1'>
+              <div className='flex-1 space-y-1.5'>
                 <Skeleton className='h-5 w-28' />
                 <Skeleton className='h-3.5 w-48' />
               </div>

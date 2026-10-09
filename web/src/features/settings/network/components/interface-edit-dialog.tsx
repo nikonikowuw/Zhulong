@@ -1,7 +1,8 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { AlertTriangle, Loader2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -31,7 +32,7 @@ import {
   type InterfaceInfo,
 } from '../api/network-api'
 import {
-  interfaceFormSchema,
+  createInterfaceFormSchema,
   parseDnsString,
   type InterfaceFormValues,
 } from '../data/schema'
@@ -71,10 +72,13 @@ export function InterfaceEditDialog({
   iface,
   onSuccess,
 }: InterfaceEditDialogProps) {
+  const { t } = useTranslation('network')
   const applyMutation = useApplyConfigMutation()
 
+  const schema = useMemo(() => createInterfaceFormSchema(t), [t])
+
   const form = useForm<InterfaceFormValues>({
-    resolver: zodResolver(interfaceFormSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       mode: 'dhcp',
       ipAddress: '',
@@ -123,7 +127,7 @@ export function InterfaceEditDialog({
         name: iface.name,
         payload,
       })
-      toast.success(`网卡 ${iface.name} 配置已下发，进入两阶段试运行`)
+      toast.success(t('editDialog.applySuccess', { name: iface.name }))
       onOpenChange(false)
       onSuccess(res)
     } catch (err: unknown) {
@@ -139,14 +143,13 @@ export function InterfaceEditDialog({
       <DialogContent className='flex max-h-[90vh] flex-col gap-0 p-0 sm:max-w-lg'>
         <DialogHeader className='flex-none border-b px-6 py-4'>
           <DialogTitle className='flex items-center gap-2'>
-            <span>配置网卡：{iface.name}</span>
+            <span>{t('editDialog.title', { name: iface.name })}</span>
             <span className='font-mono text-xs text-muted-foreground'>
               ({iface.mac})
             </span>
           </DialogTitle>
           <DialogDescription className='text-xs'>
-            修改接口 IP
-            分配模式、静态地址及路由出口。两阶段看门狗将确保配置安全。
+            {t('editDialog.description')}
           </DialogDescription>
         </DialogHeader>
 
@@ -163,12 +166,10 @@ export function InterfaceEditDialog({
                 >
                   <AlertTriangle className='h-4 w-4 text-amber-600 dark:text-amber-400' />
                   <AlertTitle className='text-xs font-semibold'>
-                    高风险操作提示
+                    {t('editDialog.highRiskTitle')}
                   </AlertTitle>
                   <AlertDescription className='text-xs'>
-                    此接口为当前管理面板进站网卡。若修改了 IP
-                    地址，当前连接将立即重构，并在 60
-                    秒内等待您在新地址完成确认，否则系统将自动回滚恢复原网络！
+                    {t('editDialog.highRiskDesc')}
                   </AlertDescription>
                 </Alert>
               )}
@@ -178,7 +179,7 @@ export function InterfaceEditDialog({
                 name='mode'
                 render={({ field }) => (
                   <FormItem className='space-y-2'>
-                    <FormLabel>IP 获取方式</FormLabel>
+                    <FormLabel>{t('editDialog.ipMode')}</FormLabel>
                     <FormControl>
                       <RadioGroup
                         onValueChange={field.onChange}
@@ -196,10 +197,10 @@ export function InterfaceEditDialog({
                             className='flex cursor-pointer flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-2.5 peer-data-[state=checked]:border-primary hover:bg-accent hover:text-accent-foreground [&:has([data-state=checked])]:border-primary'
                           >
                             <span className='text-sm font-medium'>
-                              DHCP (自动获取)
+                              {t('editDialog.dhcpTitle')}
                             </span>
                             <span className='mt-0.5 text-xs text-muted-foreground'>
-                              由路由器动态指派
+                              {t('editDialog.dhcpDesc')}
                             </span>
                           </label>
                         </div>
@@ -215,10 +216,10 @@ export function InterfaceEditDialog({
                             className='flex cursor-pointer flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-2.5 peer-data-[state=checked]:border-primary hover:bg-accent hover:text-accent-foreground [&:has([data-state=checked])]:border-primary'
                           >
                             <span className='text-sm font-medium'>
-                              Static (静态 IP)
+                              {t('editDialog.staticTitle')}
                             </span>
                             <span className='mt-0.5 text-xs text-muted-foreground'>
-                              手动指定固定地址
+                              {t('editDialog.staticDesc')}
                             </span>
                           </label>
                         </div>
@@ -237,10 +238,12 @@ export function InterfaceEditDialog({
                       name='ipAddress'
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel className='text-xs'>IPv4 地址 *</FormLabel>
+                          <FormLabel className='text-xs'>
+                            {t('editDialog.ipv4Label')}
+                          </FormLabel>
                           <FormControl>
                             <Input
-                              placeholder='例如: 192.168.1.100'
+                              placeholder={t('editDialog.ipv4Placeholder')}
                               className='font-mono'
                               {...field}
                             />
@@ -255,10 +258,12 @@ export function InterfaceEditDialog({
                       name='subnetMask'
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel className='text-xs'>子网掩码 *</FormLabel>
+                          <FormLabel className='text-xs'>
+                            {t('editDialog.maskLabel')}
+                          </FormLabel>
                           <FormControl>
                             <Input
-                              placeholder='例如: 255.255.255.0'
+                              placeholder={t('editDialog.maskPlaceholder')}
                               className='font-mono'
                               {...field}
                             />
@@ -275,11 +280,11 @@ export function InterfaceEditDialog({
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel className='text-xs'>
-                          默认网关 (可选)
+                          {t('editDialog.gwLabel')}
                         </FormLabel>
                         <FormControl>
                           <Input
-                            placeholder='例如: 192.168.1.1'
+                            placeholder={t('editDialog.gwPlaceholder')}
                             className='font-mono'
                             {...field}
                           />
@@ -296,16 +301,16 @@ export function InterfaceEditDialog({
                 name='dns'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>DNS 服务器</FormLabel>
+                    <FormLabel>{t('editDialog.dnsLabel')}</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder='例如: 8.8.8.8, 114.114.114.114'
+                        placeholder={t('editDialog.dnsPlaceholder')}
                         className='font-mono'
                         {...field}
                       />
                     </FormControl>
                     <FormDescription className='text-xs'>
-                      多个 DNS 地址之间可用逗号或空格分隔
+                      {t('editDialog.dnsDesc')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -319,10 +324,10 @@ export function InterfaceEditDialog({
                   <FormItem className='flex flex-row items-center justify-between rounded-lg border p-3 shadow-xs'>
                     <div className='space-y-0.5'>
                       <FormLabel className='text-sm'>
-                        设为全局默认网关
+                        {t('editDialog.defaultGwLabel')}
                       </FormLabel>
                       <FormDescription className='text-xs'>
-                        系统所有未经指定的外网流量将由此网卡路由出口
+                        {t('editDialog.defaultGwDesc')}
                       </FormDescription>
                     </div>
                     <FormControl>
@@ -343,13 +348,15 @@ export function InterfaceEditDialog({
                 onClick={() => onOpenChange(false)}
                 disabled={applyMutation.isPending}
               >
-                取消
+                {t('actions.cancel')}
               </Button>
               <Button type='submit' disabled={applyMutation.isPending}>
                 {applyMutation.isPending && (
                   <Loader2 className='mr-2 h-4 w-4 animate-spin' />
                 )}
-                应用配置 (进入试运行)
+                {applyMutation.isPending
+                  ? t('actions.applying')
+                  : t('actions.apply')}
               </Button>
             </DialogFooter>
           </form>

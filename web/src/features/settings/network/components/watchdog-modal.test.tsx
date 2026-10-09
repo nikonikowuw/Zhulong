@@ -41,14 +41,14 @@ describe('WatchdogModal', () => {
     )
 
     await expect
-      .element(getByRole('heading', { name: /网络配置两阶段看门狗确认/i }))
+      .element(getByRole('heading', { name: /网络配置/i }))
       .toBeInTheDocument()
     await expect.element(getByText('60 秒')).toBeInTheDocument()
     await expect
-      .element(getByRole('button', { name: /确认网络正常/i }))
+      .element(getByRole('button', { name: /确认/i }))
       .toBeInTheDocument()
     await expect
-      .element(getByRole('button', { name: /放弃并立即回滚/i }))
+      .element(getByRole('button', { name: /放弃/i }))
       .toBeInTheDocument()
   })
 
@@ -66,7 +66,7 @@ describe('WatchdogModal', () => {
       />
     )
 
-    await userEvent.click(getByRole('button', { name: /确认网络正常/i }))
+    await userEvent.click(getByRole('button', { name: /确认/i }))
     await vi.waitFor(() => {
       expect(confirmMutateMock).toHaveBeenCalledWith('tok-safe')
       expect(onConfirmed).toHaveBeenCalledOnce()
@@ -87,7 +87,7 @@ describe('WatchdogModal', () => {
       />
     )
 
-    await userEvent.click(getByRole('button', { name: /放弃并立即回滚/i }))
+    await userEvent.click(getByRole('button', { name: /放弃/i }))
     await vi.waitFor(() => {
       expect(rollbackMutateMock).toHaveBeenCalledWith('tok-safe')
       expect(onRolledBack).toHaveBeenCalledOnce()

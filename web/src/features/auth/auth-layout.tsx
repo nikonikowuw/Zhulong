@@ -31,7 +31,7 @@ export function AuthLayout({ children }: AuthLayoutProps): ReactElement {
         <div className='flex items-center gap-2.5'>
           <ZhulongLogo className='size-7 text-primary transition-transform hover:scale-105' />
           <div className='flex flex-col'>
-            <span className='text-sm font-semibold tracking-wider uppercase text-foreground'>
+            <span className='text-sm font-semibold tracking-wider text-foreground uppercase'>
               烛龙 · Zhulong
             </span>
             <span className='text-[10px] tracking-tight text-muted-foreground'>

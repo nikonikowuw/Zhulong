@@ -7,6 +7,7 @@ import {
   Loader2,
   RotateCcw,
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -58,6 +59,7 @@ function WatchdogModalBody({
   onConfirmed,
   onRolledBack,
 }: WatchdogModalBodyProps) {
+  const { t } = useTranslation('network')
   const confirmMutation = useConfirmMutation()
   const rollbackMutation = useRollbackMutation()
 
@@ -110,7 +112,7 @@ function WatchdogModalBody({
   const handleConfirm = async () => {
     try {
       await confirmMutation.mutateAsync(transaction.confirmToken)
-      toast.success('网络配置已成功确认并永久固化！')
+      toast.success(t('watchdog.confirmSuccess'))
       onOpenChange(false)
       onConfirmed()
     } catch (err: unknown) {
@@ -122,7 +124,7 @@ function WatchdogModalBody({
   const handleRollback = async () => {
     try {
       await rollbackMutation.mutateAsync(transaction.confirmToken)
-      toast.info('网络配置已安全回滚至上一版本')
+      toast.info(t('watchdog.rollbackSuccess'))
       onOpenChange(false)
       onRolledBack()
     } catch (err: unknown) {
@@ -141,20 +143,18 @@ function WatchdogModalBody({
       <DialogHeader>
         <DialogTitle className='flex items-center gap-2'>
           <Clock className='h-5 w-5 text-amber-500' />
-          <span>网络配置两阶段看门狗确认</span>
+          <span>{t('watchdog.modalTitle')}</span>
         </DialogTitle>
-        <DialogDescription>
-          新配置已下发并在试运行中。系统处于防失联看门狗保护状态。
-        </DialogDescription>
+        <DialogDescription>{t('watchdog.modalDesc')}</DialogDescription>
       </DialogHeader>
 
       <div className='space-y-4 py-2'>
         {/* 倒计时看板 */}
         <div className='space-y-2 rounded-xl border bg-muted/40 p-4 text-center'>
           <div className='flex items-center justify-between text-xs text-muted-foreground'>
-            <span>看门狗自动回滚剩余时间</span>
+            <span>{t('watchdog.remainingTime')}</span>
             <span className='font-mono text-sm font-bold text-foreground'>
-              {timeLeft} 秒
+              {t('watchdog.seconds', { seconds: timeLeft })}
             </span>
           </div>
 
@@ -168,7 +168,7 @@ function WatchdogModalBody({
           </div>
 
           <div className='text-xs text-muted-foreground'>
-            若在倒计时结束前未完成确认，边缘宿主机将自动回滚恢复原网络配置以防失联。
+            {t('watchdog.notice')}
           </div>
         </div>
 
@@ -176,12 +176,11 @@ function WatchdogModalBody({
         {isMigrating && !isExpired && (
           <Alert className='border-blue-500/50 bg-blue-500/10 text-blue-900 dark:text-blue-300'>
             <AlertTriangle className='h-4 w-4 text-blue-600 dark:text-blue-400' />
-            <AlertTitle className='font-semibold'>管理地址已变更</AlertTitle>
+            <AlertTitle className='font-semibold'>
+              {t('watchdog.migrationTitle')}
+            </AlertTitle>
             <AlertDescription className='space-y-2 text-xs'>
-              <p>
-                当前访问网卡 IP
-                已调整，您在当前界面的网络连接可能会中断。请立即跳转至新地址访问系统并在新窗口完成确认：
-              </p>
+              <p>{t('watchdog.migrationAlert')}</p>
               <div className='flex items-center gap-2 pt-1'>
                 <a
                   href={migrationUrl}
@@ -189,7 +188,7 @@ function WatchdogModalBody({
                   rel='noopener noreferrer'
                   className='inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-xs hover:bg-blue-700'
                 >
-                  在新地址打开并确认
+                  {t('watchdog.openInNewAddress')}
                   <ExternalLink className='h-3.5 w-3.5' />
                 </a>
               </div>
@@ -200,9 +199,9 @@ function WatchdogModalBody({
         {isExpired && (
           <Alert variant='destructive'>
             <AlertTriangle className='h-4 w-4' />
-            <AlertTitle>试运行倒计时已超时</AlertTitle>
+            <AlertTitle>{t('watchdog.expiredTitle')}</AlertTitle>
             <AlertDescription className='text-xs'>
-              看门狗已自动触发回滚流程，宿主机网络正在恢复至旧配置。请稍后刷新或检查设备连接。
+              {t('watchdog.expiredDesc')}
             </AlertDescription>
           </Alert>
         )}
@@ -218,7 +217,7 @@ function WatchdogModalBody({
               onRolledBack()
             }}
           >
-            关闭并刷新网络状态
+            {t('watchdog.closeAndRefresh')}
           </Button>
         ) : (
           <>
@@ -233,7 +232,7 @@ function WatchdogModalBody({
               ) : (
                 <RotateCcw className='mr-1.5 h-4 w-4' />
               )}
-              放弃并立即回滚
+              {t('actions.discardRollback')}
             </Button>
 
             <Button
@@ -246,7 +245,7 @@ function WatchdogModalBody({
               ) : (
                 <CheckCircle2 className='mr-1.5 h-4 w-4' />
               )}
-              确认网络正常 (固化生效)
+              {t('actions.confirmPersist')}
             </Button>
           </>
         )}

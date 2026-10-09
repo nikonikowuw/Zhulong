@@ -92,7 +92,7 @@ describe('InterfaceTable', () => {
       />
     )
 
-    const pingBtns = getByRole('button', { name: /探测连通性/i })
+    const pingBtns = getByRole('button', { name: /连通性/i })
     await userEvent.click(pingBtns.first())
     expect(onPing).toHaveBeenCalledWith('192.168.1.1')
   })

@@ -3,10 +3,10 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { ArrowRight, Loader2, User } from 'lucide-react'
 import { toast } from 'sonner'
-import { authApi, type AuthUser } from '../api/auth-api'
-import { loginSchema, type LoginFormValues } from '../data/schema'
 import { useAuthStore } from '@/stores/auth-store'
 import { handleServerError } from '@/lib/handle-server-error'
+import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Form,
   FormControl,
@@ -16,9 +16,9 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Button } from '@/components/ui/button'
 import { PasswordInput } from '@/components/password-input'
+import { authApi, type AuthUser } from '../api/auth-api'
+import { loginSchema, type LoginFormValues } from '../data/schema'
 
 interface LoginFormProps {
   onSuccess?: (user: AuthUser) => void
@@ -106,7 +106,7 @@ export function LoginForm({ onSuccess }: LoginFormProps): ReactElement {
             control={form.control}
             name='rememberMe'
             render={({ field }) => (
-              <FormItem className='flex flex-row items-center space-x-2 space-y-0'>
+              <FormItem className='flex flex-row items-center space-y-0 space-x-2'>
                 <FormControl>
                   <Checkbox
                     checked={field.value}
@@ -114,7 +114,7 @@ export function LoginForm({ onSuccess }: LoginFormProps): ReactElement {
                     disabled={isPending}
                   />
                 </FormControl>
-                <FormLabel className='cursor-pointer text-muted-foreground font-normal select-none hover:text-foreground'>
+                <FormLabel className='cursor-pointer font-normal text-muted-foreground select-none hover:text-foreground'>
                   保持登录状态
                 </FormLabel>
               </FormItem>

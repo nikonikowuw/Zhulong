@@ -1,0 +1,23 @@
+{
+  "language": "繁體中文",
+  "languages": {
+    "zh-Hans": "简体中文",
+    "zh-Hant": "繁體中文",
+    "en": "English"
+  },
+  "theme": {
+    "light": "淺色模式",
+    "dark": "深色模式",
+    "system": "跟隨系統"
+  },
+  "actions": {
+    "confirm": "確定",
+    "cancel": "取消",
+    "save": "儲存",
+    "delete": "刪除",
+    "refresh": "重新整理",
+    "close": "關閉",
+    "search": "搜尋",
+    "retry": "重試"
+  }
+}

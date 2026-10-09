@@ -27,7 +27,7 @@ describe('PingDialog', () => {
     )
 
     await expect
-      .element(getByRole('heading', { name: /网络连通性探测/i }))
+      .element(getByRole('heading', { name: /网络连通性/i }))
       .toBeInTheDocument()
     await expect
       .element(getByPlaceholder(/例如: 192.168.1.1/i))
