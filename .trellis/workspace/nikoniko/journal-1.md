@@ -605,3 +605,26 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 14: 系统单用户登录与初始化向导实现
+<!-- trellis-session: v=2 fp=d6fb3c9d68477aa0 -->
+
+**Date**: 2026-10-09
+**Task**: 系统单用户登录与初始化向导实现
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+基于 shadcn-admin 与 Zhulong 后端单用户认证 API，完成首屏系统初始化探测、管理员初始化向导（InitForm）、常规密码登录（LoginForm）、路由鉴权守卫（_authenticated beforeLoad）及状态保持（auth-store）的全链路交付与精简重构；补充密码强度指示器、边缘暗夜机房设计语言与单元测试用例。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d6ab440` | feat(auth): implement single-user authentication and edge setup wizard |
+
+### Status
+
+[OK] **Completed**
