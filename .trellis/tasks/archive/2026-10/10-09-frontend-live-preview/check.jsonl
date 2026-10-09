@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量验证规范与 TypeScript/ESLint/Vite 构建要求"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "React 19, shadcn-admin, 实时视频监控与播放器工业级 UX 编码铁律"}

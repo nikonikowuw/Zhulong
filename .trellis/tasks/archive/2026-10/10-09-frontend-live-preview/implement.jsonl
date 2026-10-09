@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "React 19, shadcn-admin, TanStack Query, 实时视频监控与播放器工业级 UX 编码铁律"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "前端目录与模块组织规范及 features/live 切片要求"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量验证规范与 TypeScript/ESLint/Vite 构建要求"}
