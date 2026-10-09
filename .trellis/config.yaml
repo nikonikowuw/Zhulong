@@ -60,7 +60,7 @@ max_journal_lines: 2000
 #
 packages:
   frontend:
-    path: frontend
+    path: web
   backend:
     path: backend
   native:

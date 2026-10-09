@@ -1,52 +1,80 @@
-# 主题定制与三语国际化规范
+# 主题排版与多语言国际化契约
 
-> 深浅双色主题、英/简中/繁中全文国际化契约及用户偏好持久化策略。
-
----
-
-## 1. 深浅双色主题规范 (Light / Dark)
-
-- **语义设计 Token**：严禁硬编码随意颜色。统一使用 Tailwind CSS 语义 CSS 变量（`--background`, `--foreground`, `--border`, `--muted`, `--accent`, `--surface` 等）。
-- **Apple Style 视觉体系与红线**：
-  - **绝对禁止**：严禁渐变（`bg-gradient-*`）、重阴影（`shadow-2xl`）、粗边框（`border-2/4`）与杂乱高饱和多色装饰。
-  - **色彩基准**：浅色背景 Apple 灰 `#f5f5f7`、白底卡片 `#ffffff`；深色背景 `#1c1c1e`、卡片表面 `#2c2c2e`；强调色 Apple 蓝 `#0071e3`（深色 `#0a84ff`）、状态绿 `#34c759`、状态红 `#ff3b30`。
-  - **圆角与阴影**：卡片 `rounded-2xl`，输入框 `rounded-xl`，主操作按钮 `rounded-full` 胶囊；阴影统一使用克制微阴影 `shadow-[0_4px_12px_rgba(0,0,0,0.08)]`。
-  - **动效与触感**：全局统一使用减速缓动 `cubic-bezier(0.25, 0.1, 0.25, 1)`；所有交互按钮/卡片必须具备按压阻尼微缩放 `active:scale-[0.98]`。
-- **全要素覆盖**：主题必须覆盖所有弹出层（Dialog, Popover, Select）、图表线条与输入框 Focus 环。
+> 基于 Tailwind CSS v4 + OKLCH 语义色彩体系、多维 Context 驱动（Theme / Font / Direction）与三语国际化规范。
 
 ---
 
-## 2. 完整三语国际化规范 (English, 简体中文, 繁体中文)
+## 1. Tailwind CSS v4 + OKLCH 语义主题规范
 
-必须完整支持三大官方语言：**`en`**、**`zh-Hans`**、**`zh-Hant`**（繁体中文为正式必选）。
+系统采用现代化 **OKLCH 颜色空间**，在 `src/styles/theme.css` 中定义底层 CSS 变量，并通过 Tailwind CSS v4 的 `@theme inline` 注册为设计令牌（Design Tokens）。
 
-1. **100% 文本国际化**：标题、按钮、占位符、Zod 校验报错、Toast 提示、图例及 ARIA 标签全部包裹 `t(...)`，严禁 JSX 中出现硬编码文本。
-2. **用户自输入数据保留原样**：相机自定义名称、IP、密码等用户输入原文展示，仅翻译包裹它们的系统 Label。
-3. **后端错误直接展示 (后端翻译)**：前端 API 请求携带当前 `Accept-Language`；后端返回已本地化的安全 `message`，前端不重复翻译后端错误码。切换 UI 语言时同步更新 `<html lang>`，让辅助技术获得正确的文本语言。
-4. **时间本地化显示**：API 时间戳按 RFC3339Nano UTC 接收并解析；用 `Intl.DateTimeFormat(i18n.resolvedLanguage, ...)` 格式化展示，默认使用浏览器本地时区。若产品需要显示设备/站点时区，必须使用明确配置的 IANA 时区；不得依赖宿主本地时区或手工切割时间字符串。`YYYY-MM-DD` 纯日期不做时区转换，格式化后的显示文本不得回传 API。
-5. **特性切片共置 (Feature-Colocated i18n)**：严禁在 `shared/i18n/locales` 中维护单体超大 JSON。各业务模块文案独立共置于 `features/<feature>/locales/{en,zh-Hans,zh-Hant}.json`，并通过特性公共入口 `index.ts` 导出；`shared/i18n/locales` 仅保留全站通用的基础布局词条。各语言在 `shared/i18n/index.ts` 集中挂载，保持 `t("<feature>.<key>")` 调用形态。
+### 1.1 语义 Token 矩阵
+
+| 语义变量 | CSS 变量名 | 用途说明 |
+| :--- | :--- | :--- |
+| **画布背景** | `--background`, `--foreground` | 页面最底层背景与主文字颜色 |
+| **卡片/容器** | `--card`, `--card-foreground` | 业务卡片、面板容器背景与内容文字 |
+| **弹出浮层** | `--popover`, `--popover-foreground` | 下拉菜单、气泡提示、浮窗容器 |
+| **品牌主色** | `--primary`, `--primary-foreground` | 核心行动点按钮、高亮选中标签 |
+| **次要色** | `--secondary`, `--secondary-foreground` | 次级按钮、轻量辅助块 |
+| **弱化状态** | `--muted`, `--muted-foreground` | 次要说明文字、禁用背景、分隔装饰 |
+| **交互高亮** | `--accent`, `--accent-foreground` | 列表项 Hover 悬停背景、活动态指示 |
+| **破坏/危险** | `--destructive` | 删除、销毁、紧急停机等危险警示 |
+| **边框与控件** | `--border`, `--input`, `--ring` | 控件边框、输入框线框、键盘 Focus 焦点环 |
+| **侧边栏专用** | `--sidebar`, `--sidebar-border`, 等 | 侧边栏框架独立色彩 Token |
+
+### 1.2 编写红线与规范
+
+1. **绝对禁止硬编码绝对颜色**：
+   - ❌ 严禁出现 `bg-[#ffffff]`, `text-[#000]`, `border-[#e5e7eb]` 等任意 HEX/RGB 写法；
+   - ✅ 统一使用语义工具类：`bg-background`, `text-foreground`, `bg-card`, `border-border`, `text-muted-foreground`。
+2. **深浅双色切换机制**：
+   - 通过 `ThemeProvider` 动态向 `<html>` 注入或移除 `.dark` 类；
+   - 由 CSS 规则 `@custom-variant dark (&:is(.dark *));` 自动匹配激活深色变量，组件内无需手动编写冗余的深浅条件分支。
 
 ---
 
-## 3. 用户偏好持久化与首访行为规则
+## 2. 布局方向与 RTL 适配契约 (Direction & RTL)
 
-```txt
-首次访问:
-  主题: 自动匹配系统 (prefers-color-scheme)
-  语言: 自动匹配浏览器 (navigator.languages) ➔ 均不匹配则默认 fallback 为英文 (en)
-用户手动切换:
-  偏好显式持久化至 localStorage (拥有最高优先级，不再被系统偏好覆盖)
-```
+系统通过 `DirectionProvider`（位于 `src/context/direction-provider.tsx`）提供全站 **LTR（左至右）** 与 **RTL（右至左）** 双向支持。
+
+### ⚠️ RTL 编写铁律（逻辑属性优先）
+
+为了确保在阿拉伯语或从右至左语言环境下布局自然镜像翻转，**严禁使用物理方向工具类**，必须强制使用 Tailwind 逻辑属性类：
+
+| 物理属性 (❌ 严禁使用) | 逻辑属性 (✅ 必须使用) | 对应 CSS 效果 |
+| :--- | :--- | :--- |
+| `pl-*`, `pr-*` | `ps-*`, `pe-*` | `padding-inline-start`, `padding-inline-end` |
+| `ml-*`, `mr-*` | `ms-*`, `me-*` | `margin-inline-start`, `margin-inline-end` |
+| `left-*`, `right-*` | `start-*`, `end-*` | `inset-inline-start`, `inset-inline-end` |
+| `border-l-*`, `border-r-*` | `border-s-*`, `border-e-*` | `border-inline-start`, `border-inline-end` |
+| `text-left`, `text-right` | `text-start`, `text-end` | 文本沿排版起始/结束方向对齐 |
 
 ---
 
-## 4. 质量验证：六种组合全矩阵自检
+## 3. 完整三语国际化契约 (English, 简体中文, 繁体中文)
 
-必须在**六种组合（2 种主题 × 3 种语言）**下完整自检：
+系统必须完备支持三大官方语言：**`en`**、**`zh-Hans`**（简体中文）、**`zh-Hant`**（繁体中文）。
 
-1. `Light + en`：排版折行与文本截断检查。
-2. `Light + zh-Hans`：标准浅色中文。
-3. `Light + zh-Hant`：繁体字形与词汇习惯。
-4. `Dark + en`：深色对比度（WCAG 4.5:1）。
-5. `Dark + zh-Hans`：深色中文。
-6. `Dark + zh-Hant`：深色繁体。
+1. **100% 文本国际化抽取**：
+   - 页面标题、表格表头、表单 Label、Placeholder、Zod 校验错误、Toast 通知、操作菜单及 ARIA 无障碍标签全部包裹 `t(...)`；
+   - 严禁在 JSX 中直接裸写中文或英文硬编码字符串。
+2. **用户自输入数据保留原样**：
+   - 相机自定义名称、IP、流地址、设备型号等用户输入内容原样呈现，仅对系统字段标签与状态做本地化。
+3. **后端错误直接展示 (后端驱动 i18n)**：
+   - 前端 Axios/Fetch 请求头必须携带当前语言 `Accept-Language: <lang>`；
+   - 后端返回统一信封格式 `{ code, message, data }`，前端直接展示后端返回的已本地化安全 `message`，严禁在前端硬编码映射后端业务错误码。
+4. **时间与时区本地化展示**：
+   - 接口传输统一采用 RFC3339Nano UTC 格式；
+   - 前端通过 `Intl.DateTimeFormat(locale, ...)` 格式化为当前语言与浏览器本地时区的文本展示。
+
+---
+
+## 4. 全矩阵质量验证自检
+
+前端交付前，必须在以下组合下进行样式与排版验证：
+
+- [ ] **Light 模式**：对比度合格，边框清晰，无文字断裂；
+- [ ] **Dark 模式**：夜间对比度符合 WCAG AA 级标准（4.5:1），弹出层背景层级清晰；
+- [ ] **RTL 镜像验证**：切换至 `rtl` 时，侧边栏、表单图标、面包屑、表格列按预期自然翻转；
+- [ ] **三语字符长度容忍**：英文长单词在按钮、导航项中不溢出、不破坏布局高度。
