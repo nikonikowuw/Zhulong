@@ -136,194 +136,207 @@ export function InterfaceEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='sm:max-w-lg'>
-        <DialogHeader>
+      <DialogContent className='flex max-h-[90vh] flex-col gap-0 p-0 sm:max-w-lg'>
+        <DialogHeader className='flex-none border-b px-6 py-4'>
           <DialogTitle className='flex items-center gap-2'>
             <span>配置网卡：{iface.name}</span>
             <span className='font-mono text-xs text-muted-foreground'>
               ({iface.mac})
             </span>
           </DialogTitle>
-          <DialogDescription>
+          <DialogDescription className='text-xs'>
             修改接口 IP
             分配模式、静态地址及路由出口。两阶段看门狗将确保配置安全。
           </DialogDescription>
         </DialogHeader>
 
-        {iface.isCurrent && (
-          <Alert
-            variant='destructive'
-            className='border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300'
-          >
-            <AlertTriangle className='h-4 w-4 text-amber-600 dark:text-amber-400' />
-            <AlertTitle className='font-semibold'>高风险操作提示</AlertTitle>
-            <AlertDescription className='text-xs'>
-              此接口为当前管理面板进站网卡。若修改了 IP
-              地址，当前连接将立即重构，并在 60
-              秒内等待您在新地址完成确认，否则系统将自动回滚恢复原网络！
-            </AlertDescription>
-          </Alert>
-        )}
-
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-4'>
-            <FormField
-              control={form.control}
-              name='mode'
-              render={({ field }) => (
-                <FormItem className='space-y-2'>
-                  <FormLabel>IP 获取方式</FormLabel>
-                  <FormControl>
-                    <RadioGroup
-                      onValueChange={field.onChange}
-                      value={field.value}
-                      className='grid grid-cols-2 gap-4'
-                    >
-                      <div>
-                        <RadioGroupItem
-                          value='dhcp'
-                          id='mode-dhcp'
-                          className='peer sr-only'
-                        />
-                        <label
-                          htmlFor='mode-dhcp'
-                          className='flex cursor-pointer flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-3 peer-data-[state=checked]:border-primary hover:bg-accent hover:text-accent-foreground [&:has([data-state=checked])]:border-primary'
-                        >
-                          <span className='text-sm font-medium'>
-                            DHCP (自动获取)
-                          </span>
-                          <span className='mt-0.5 text-xs text-muted-foreground'>
-                            由路由器动态指派
-                          </span>
-                        </label>
-                      </div>
-
-                      <div>
-                        <RadioGroupItem
-                          value='static'
-                          id='mode-static'
-                          className='peer sr-only'
-                        />
-                        <label
-                          htmlFor='mode-static'
-                          className='flex cursor-pointer flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-3 peer-data-[state=checked]:border-primary hover:bg-accent hover:text-accent-foreground [&:has([data-state=checked])]:border-primary'
-                        >
-                          <span className='text-sm font-medium'>
-                            Static (静态 IP)
-                          </span>
-                          <span className='mt-0.5 text-xs text-muted-foreground'>
-                            手动指定固定地址
-                          </span>
-                        </label>
-                      </div>
-                    </RadioGroup>
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
+          <form
+            onSubmit={form.handleSubmit(onSubmit)}
+            className='flex min-h-0 flex-1 flex-col'
+          >
+            <div className='flex-1 space-y-4 overflow-y-auto px-6 py-4'>
+              {iface.isCurrent && (
+                <Alert
+                  variant='destructive'
+                  className='border-amber-500/50 bg-amber-500/10 px-3 py-2.5 text-amber-800 dark:text-amber-300'
+                >
+                  <AlertTriangle className='h-4 w-4 text-amber-600 dark:text-amber-400' />
+                  <AlertTitle className='text-xs font-semibold'>
+                    高风险操作提示
+                  </AlertTitle>
+                  <AlertDescription className='text-xs'>
+                    此接口为当前管理面板进站网卡。若修改了 IP
+                    地址，当前连接将立即重构，并在 60
+                    秒内等待您在新地址完成确认，否则系统将自动回滚恢复原网络！
+                  </AlertDescription>
+                </Alert>
               )}
-            />
 
-            {mode === 'static' && (
-              <div className='space-y-3.5 rounded-lg border bg-muted/20 p-3.5'>
-                <FormField
-                  control={form.control}
-                  name='ipAddress'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className='text-xs'>IPv4 地址 *</FormLabel>
-                      <FormControl>
-                        <Input
-                          placeholder='例如: 192.168.1.100'
-                          className='font-mono'
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+              <FormField
+                control={form.control}
+                name='mode'
+                render={({ field }) => (
+                  <FormItem className='space-y-2'>
+                    <FormLabel>IP 获取方式</FormLabel>
+                    <FormControl>
+                      <RadioGroup
+                        onValueChange={field.onChange}
+                        value={field.value}
+                        className='grid grid-cols-2 gap-4'
+                      >
+                        <div>
+                          <RadioGroupItem
+                            value='dhcp'
+                            id='mode-dhcp'
+                            className='peer sr-only'
+                          />
+                          <label
+                            htmlFor='mode-dhcp'
+                            className='flex cursor-pointer flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-2.5 peer-data-[state=checked]:border-primary hover:bg-accent hover:text-accent-foreground [&:has([data-state=checked])]:border-primary'
+                          >
+                            <span className='text-sm font-medium'>
+                              DHCP (自动获取)
+                            </span>
+                            <span className='mt-0.5 text-xs text-muted-foreground'>
+                              由路由器动态指派
+                            </span>
+                          </label>
+                        </div>
 
-                <FormField
-                  control={form.control}
-                  name='subnetMask'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className='text-xs'>子网掩码 *</FormLabel>
-                      <FormControl>
-                        <Input
-                          placeholder='例如: 255.255.255.0'
-                          className='font-mono'
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                        <div>
+                          <RadioGroupItem
+                            value='static'
+                            id='mode-static'
+                            className='peer sr-only'
+                          />
+                          <label
+                            htmlFor='mode-static'
+                            className='flex cursor-pointer flex-col items-center justify-between rounded-md border-2 border-muted bg-popover p-2.5 peer-data-[state=checked]:border-primary hover:bg-accent hover:text-accent-foreground [&:has([data-state=checked])]:border-primary'
+                          >
+                            <span className='text-sm font-medium'>
+                              Static (静态 IP)
+                            </span>
+                            <span className='mt-0.5 text-xs text-muted-foreground'>
+                              手动指定固定地址
+                            </span>
+                          </label>
+                        </div>
+                      </RadioGroup>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-                <FormField
-                  control={form.control}
-                  name='gateway'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className='text-xs'>默认网关 (可选)</FormLabel>
-                      <FormControl>
-                        <Input
-                          placeholder='例如: 192.168.1.1'
-                          className='font-mono'
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-            )}
-
-            <FormField
-              control={form.control}
-              name='dns'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>DNS 服务器</FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder='例如: 8.8.8.8, 114.114.114.114'
-                      className='font-mono'
-                      {...field}
+              {mode === 'static' && (
+                <div className='space-y-3 rounded-lg border bg-muted/20 p-3'>
+                  <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
+                    <FormField
+                      control={form.control}
+                      name='ipAddress'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className='text-xs'>IPv4 地址 *</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder='例如: 192.168.1.100'
+                              className='font-mono'
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
                     />
-                  </FormControl>
-                  <FormDescription className='text-xs'>
-                    多个 DNS 地址之间可用逗号或空格分隔
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
 
-            <FormField
-              control={form.control}
-              name='setDefault'
-              render={({ field }) => (
-                <FormItem className='flex flex-row items-center justify-between rounded-lg border p-3 shadow-xs'>
-                  <div className='space-y-0.5'>
-                    <FormLabel className='text-sm'>设为全局默认网关</FormLabel>
-                    <FormDescription className='text-xs'>
-                      系统所有未经指定的外网流量将由此网卡路由出口
-                    </FormDescription>
+                    <FormField
+                      control={form.control}
+                      name='subnetMask'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className='text-xs'>子网掩码 *</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder='例如: 255.255.255.0'
+                              className='font-mono'
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
                   </div>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </FormItem>
-              )}
-            />
 
-            <DialogFooter className='pt-2'>
+                  <FormField
+                    control={form.control}
+                    name='gateway'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className='text-xs'>
+                          默认网关 (可选)
+                        </FormLabel>
+                        <FormControl>
+                          <Input
+                            placeholder='例如: 192.168.1.1'
+                            className='font-mono'
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+              )}
+
+              <FormField
+                control={form.control}
+                name='dns'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>DNS 服务器</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder='例如: 8.8.8.8, 114.114.114.114'
+                        className='font-mono'
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormDescription className='text-xs'>
+                      多个 DNS 地址之间可用逗号或空格分隔
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='setDefault'
+                render={({ field }) => (
+                  <FormItem className='flex flex-row items-center justify-between rounded-lg border p-3 shadow-xs'>
+                    <div className='space-y-0.5'>
+                      <FormLabel className='text-sm'>
+                        设为全局默认网关
+                      </FormLabel>
+                      <FormDescription className='text-xs'>
+                        系统所有未经指定的外网流量将由此网卡路由出口
+                      </FormDescription>
+                    </div>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <DialogFooter className='flex-none gap-2 border-t bg-muted/20 px-6 py-3 sm:justify-end'>
               <Button
                 type='button'
                 variant='outline'

@@ -273,7 +273,7 @@ export function WatchdogModal({
       }}
     >
       <DialogContent
-        className='sm:max-w-md'
+        className='max-h-[90vh] overflow-y-auto sm:max-w-md'
         onPointerDownOutside={(e) => e.preventDefault()}
         onEscapeKeyDown={(e) => e.preventDefault()}
       >
