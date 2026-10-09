@@ -1,5 +1,7 @@
+import { useMemo } from 'react'
 import { Outlet } from '@tanstack/react-router'
 import { Monitor, Bell, Palette, Wrench, UserCog, Network } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Separator } from '@/components/ui/separator'
 import { ConfigDrawer } from '@/components/config-drawer'
 import { LanguageSwitch } from '@/components/language-switch'
@@ -10,40 +12,45 @@ import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { SidebarNav } from './components/sidebar-nav'
 
-const sidebarNavItems = [
-  {
-    title: 'Profile',
-    href: '/settings',
-    icon: <UserCog size={18} />,
-  },
-  {
-    title: 'Account',
-    href: '/settings/account',
-    icon: <Wrench size={18} />,
-  },
-  {
-    title: 'Appearance',
-    href: '/settings/appearance',
-    icon: <Palette size={18} />,
-  },
-  {
-    title: 'Notifications',
-    href: '/settings/notifications',
-    icon: <Bell size={18} />,
-  },
-  {
-    title: 'Display',
-    href: '/settings/display',
-    icon: <Monitor size={18} />,
-  },
-  {
-    title: 'Network',
-    href: '/settings/network',
-    icon: <Network size={18} />,
-  },
-]
-
 export function Settings() {
+  const { t } = useTranslation()
+
+  const sidebarNavItems = useMemo(
+    () => [
+      {
+        title: t('nav.Profile', { defaultValue: 'Profile' }),
+        href: '/settings',
+        icon: <UserCog size={18} />,
+      },
+      {
+        title: t('nav.Account', { defaultValue: 'Account' }),
+        href: '/settings/account',
+        icon: <Wrench size={18} />,
+      },
+      {
+        title: t('nav.Appearance', { defaultValue: 'Appearance' }),
+        href: '/settings/appearance',
+        icon: <Palette size={18} />,
+      },
+      {
+        title: t('nav.Notifications', { defaultValue: 'Notifications' }),
+        href: '/settings/notifications',
+        icon: <Bell size={18} />,
+      },
+      {
+        title: t('nav.Display', { defaultValue: 'Display' }),
+        href: '/settings/display',
+        icon: <Monitor size={18} />,
+      },
+      {
+        title: t('nav.Network', { defaultValue: 'Network' }),
+        href: '/settings/network',
+        icon: <Network size={18} />,
+      },
+    ],
+    [t]
+  )
+
   return (
     <>
       {/* ===== Top Heading ===== */}
@@ -58,10 +65,13 @@ export function Settings() {
       <Main fixed>
         <div className='space-y-0.5'>
           <h1 className='text-2xl font-bold tracking-tight md:text-3xl'>
-            Settings
+            {t('nav.settingsTitle', { defaultValue: 'Settings' })}
           </h1>
           <p className='text-muted-foreground'>
-            Manage your account settings and set e-mail preferences.
+            {t('nav.settingsDesc', {
+              defaultValue:
+                'Manage your account settings and set e-mail preferences.',
+            })}
           </p>
         </div>
         <Separator className='my-4 lg:my-6' />

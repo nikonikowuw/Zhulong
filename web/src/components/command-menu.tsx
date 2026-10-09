@@ -1,6 +1,7 @@
 import React from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { ArrowRight, ChevronRight, Laptop, Moon, Sun } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useSearch } from '@/context/search-provider'
 import { useTheme } from '@/context/theme-provider'
 import {
@@ -17,8 +18,12 @@ import { ScrollArea } from './ui/scroll-area'
 
 export function CommandMenu() {
   const navigate = useNavigate()
+  const { t } = useTranslation()
   const { setTheme } = useTheme()
   const { open, setOpen } = useSearch()
+
+  const translateTitle = (text: string) =>
+    t(`nav.${text}`, { defaultValue: text })
 
   const runCommand = React.useCallback(
     (command: () => unknown) => {
@@ -35,13 +40,17 @@ export function CommandMenu() {
         <ScrollArea type='hover' className='h-72 pe-1'>
           <CommandEmpty>No results found.</CommandEmpty>
           {sidebarData.navGroups.map((group) => (
-            <CommandGroup key={group.title} heading={group.title}>
+            <CommandGroup
+              key={group.title}
+              heading={translateTitle(group.title)}
+            >
               {group.items.map((navItem, i) => {
+                const navTitle = translateTitle(navItem.title)
                 if (navItem.url)
                   return (
                     <CommandItem
                       key={`${navItem.url}-${i}`}
-                      value={navItem.title}
+                      value={`${navTitle} ${navItem.title}`}
                       onSelect={() => {
                         runCommand(() => navigate({ to: navItem.url }))
                       }}
@@ -49,24 +58,27 @@ export function CommandMenu() {
                       <div className='flex size-4 items-center justify-center'>
                         <ArrowRight className='size-2 text-muted-foreground/80' />
                       </div>
-                      {navItem.title}
+                      {navTitle}
                     </CommandItem>
                   )
 
-                return navItem.items?.map((subItem, i) => (
-                  <CommandItem
-                    key={`${navItem.title}-${subItem.url}-${i}`}
-                    value={`${navItem.title}-${subItem.url}`}
-                    onSelect={() => {
-                      runCommand(() => navigate({ to: subItem.url }))
-                    }}
-                  >
-                    <div className='flex size-4 items-center justify-center'>
-                      <ArrowRight className='size-2 text-muted-foreground/80' />
-                    </div>
-                    {navItem.title} <ChevronRight /> {subItem.title}
-                  </CommandItem>
-                ))
+                return navItem.items?.map((subItem, i) => {
+                  const subTitle = translateTitle(subItem.title)
+                  return (
+                    <CommandItem
+                      key={`${navItem.title}-${subItem.url}-${i}`}
+                      value={`${navTitle} ${subTitle} ${navItem.title} ${subItem.title}`}
+                      onSelect={() => {
+                        runCommand(() => navigate({ to: subItem.url }))
+                      }}
+                    >
+                      <div className='flex size-4 items-center justify-center'>
+                        <ArrowRight className='size-2 text-muted-foreground/80' />
+                      </div>
+                      {navTitle} <ChevronRight /> {subTitle}
+                    </CommandItem>
+                  )
+                })
               })}
             </CommandGroup>
           ))}
