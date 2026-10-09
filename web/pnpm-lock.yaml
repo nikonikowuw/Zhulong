@@ -104,6 +104,9 @@ importers:
       input-otp:
         specifier: ^1.4.2
         version: 1.4.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      jessibuca-js:
+        specifier: ^1.0.2
+        version: 1.0.2
       lucide-react:
         specifier: ^1.8.0
         version: 1.8.0(react@19.2.5)
@@ -2695,6 +2698,9 @@ packages:
 
   javascript-natural-sort@0.7.1:
     resolution: {integrity: sha512-nO6jcEfZWQXDhOiBtG2KvKyEptz7RVbpGP4vTD2hLBdmNQSsCiicO2Ioinv6UI4y9ukqnBpy+XZ9H6uLNgJTlw==}
+
+  jessibuca-js@1.0.2:
+    resolution: {integrity: sha512-6s6LOj81dfdcXAGAJSFwRjk4LTy9CMb1WarX7T5jmrv05JVWHheMQoaDhURTBepg1DurGcxTPB0q+6voabRxRQ==}
 
   jiti@2.6.1:
     resolution: {integrity: sha512-ekilCSN1jwRvIbgeg/57YFh8qQDNbwDb9xT/qu2DAHbFFZUicIl4ygVaAvzveMhMVr3LnpSKTNnwt8PoOfmKhQ==}
@@ -5832,6 +5838,8 @@ snapshots:
       istanbul-lib-report: 3.0.1
 
   javascript-natural-sort@0.7.1: {}
+
+  jessibuca-js@1.0.2: {}
 
   jiti@2.6.1: {}
 

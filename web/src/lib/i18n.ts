@@ -4,6 +4,9 @@ import commonZhHant from '@/locales/zh-Hant/common.json'
 import i18n from 'i18next'
 import LanguageDetector from 'i18next-browser-languagedetector'
 import { initReactI18next } from 'react-i18next'
+import liveEn from '@/features/live/locales/en.json'
+import liveZhHans from '@/features/live/locales/zh-Hans.json'
+import liveZhHant from '@/features/live/locales/zh-Hant.json'
 import networkEn from '@/features/settings/network/locales/en.json'
 import networkZhHans from '@/features/settings/network/locales/zh-Hans.json'
 import networkZhHant from '@/features/settings/network/locales/zh-Hant.json'
@@ -15,14 +18,17 @@ export const resources = {
   'zh-Hans': {
     common: commonZhHans,
     network: networkZhHans,
+    live: liveZhHans,
   },
   'zh-Hant': {
     common: commonZhHant,
     network: networkZhHant,
+    live: liveZhHant,
   },
   en: {
     common: commonEn,
     network: networkEn,
+    live: liveEn,
   },
 } as const
 
