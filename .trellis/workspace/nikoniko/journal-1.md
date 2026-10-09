@@ -628,3 +628,45 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 15: 前端实时预览能力与多分屏播放器集成
+<!-- trellis-session: v=2 fp=8d27f271a9610588 -->
+
+**Date**: 2026-10-09
+**Task**: 前端实时预览能力与多分屏播放器集成
+**Package**: frontend
+**Branch**: `dev`
+
+### Summary
+
+基于 Jessibuca 与单例流连接池实现前端实时流预览大盘，支持 1/4/9/16 宫格自适应切换、全屏聚焦、离线测试图卡及快捷键防误触，并按照 simplify 规范完成代码精简重构；同时将 LanguageSwitch 多语言切换器挂载至全站主要功能页 Header。
+
+### Main Changes
+
+- 集成 Jessibuca 播放器与离线 SMPTE 彩条测试图卡，支持 WebCodecs/MSE/WASM 三级自适应解码
+- 实现客户端单例流连接池 StreamConnectionPool，保证多窗口同摄像机复用一条 WebSocket 连接与引用计数自愈
+- 实现 1/4/9/16 宫格布局与 useLiveGrid/useLiveShortcuts 状态机，支持单窗放大与表单态防误触
+- 挂载 /live 独立路由并在 sidebar-data 中注册导航与三语翻译
+- 基于 simplify 规范重构代码：消除深层嵌套三元运算符、提取静态常量表与统一 WebSocket URL 生成逻辑
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `385299a` | feat(i18n): add LanguageSwitch to header across dashboard, apps, chats, tasks and users pages |
+| `4e6b0f3` | feat(live): implement multi-cell live surveillance preview with jessibuca player and stream pool |
+
+### Testing
+
+- [OK] pnpm lint 静态检查 0 报错
+- [OK] pnpm build (tsc -b && vite build) 生产编译打包成功
+- [OK] pnpm vitest run src/features/live 全部 4 个测试套件 11 个用例全绿通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推进前端摄像头资产管理与状态大盘 (10-09-frontend-camera-management) 实现
