@@ -1,45 +1,44 @@
-import tailwindcss from "@tailwindcss/vite";
-import react from "@vitejs/plugin-react";
-import { writeFile } from "node:fs/promises";
-import { fileURLToPath, URL } from "node:url";
-import type { Plugin } from "vite";
-import { defineConfig } from "vitest/config";
+/// <reference types="vitest/config" />
+import path from 'path'
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+import { tanstackRouter } from '@tanstack/router-plugin/vite'
+import { playwright } from '@vitest/browser-playwright'
 
-const preserveGoEmbedTarget: Plugin = {
-  name: "preserve-go-embed-target",
-  apply: "build",
-  async closeBundle() {
-    const sentinel = fileURLToPath(new URL("../internal/webui/dist/.keep", import.meta.url));
-    await writeFile(sentinel, "This file keeps the Go embed target present before the first Vite build.\n");
-  },
-};
-
+// https://vite.dev/config/
 export default defineConfig({
-  base: "./",
-  plugins: [preserveGoEmbedTarget, react(), tailwindcss()],
+  plugins: [
+    tanstackRouter({
+      target: 'react',
+      autoCodeSplitting: true,
+    }),
+    react(),
+    tailwindcss(),
+  ],
   resolve: {
     alias: {
-      "@": fileURLToPath(new URL("./src", import.meta.url)),
-    },
-  },
-  build: {
-    outDir: "../internal/webui/dist",
-    emptyOutDir: true,
-    assetsDir: "assets",
-  },
-  server: {
-    proxy: {
-      "/api": {
-        target: "http://127.0.0.1:8080",
-        changeOrigin: true,
-        ws: true,
-      },
+      '@': path.resolve(__dirname, './src'),
     },
   },
   test: {
-    environment: "jsdom",
-    setupFiles: "./src/test/setup.ts",
-    clearMocks: true,
-    restoreMocks: true,
+    silent: 'passed-only',
+    unstubEnvs: true,
+    browser: {
+      enabled: true,
+      provider: playwright(),
+      instances: [{ browser: 'chromium' }],
+    },
+    coverage: {
+      // include: ['src/**/*.{js,jsx,ts,tsx}'], // Uncomment to expand the report to all src/**/* so untested modules appear as 0% coverage.
+      exclude: [
+        'src/components/ui/**',
+        'src/assets/**',
+        'src/tanstack-table.d.ts',
+        'src/routeTree.gen.ts',
+        'src/test-utils/**',
+        'src/routes/**',
+      ],
+    },
   },
-});
+})
