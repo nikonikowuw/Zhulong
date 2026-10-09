@@ -1,3 +1,4 @@
+import { type ReactElement } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
   BadgeCheck,
@@ -24,9 +25,10 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from '@/components/ui/sidebar'
+import { useAuthStore } from '@/stores/auth-store'
 import { SignOutDialog } from '@/components/sign-out-dialog'
 
-type NavUserProps = {
+interface NavUserProps {
   user: {
     name: string
     email: string
@@ -34,9 +36,41 @@ type NavUserProps = {
   }
 }
 
-export function NavUser({ user }: NavUserProps) {
+interface UserIdentityBlockProps {
+  avatar: string
+  name: string
+  role: string
+  fallback: string
+}
+
+function UserIdentityBlock({
+  avatar,
+  name,
+  role,
+  fallback,
+}: UserIdentityBlockProps): ReactElement {
+  return (
+    <>
+      <Avatar className='h-8 w-8 rounded-lg'>
+        <AvatarImage src={avatar} alt={name} />
+        <AvatarFallback className='rounded-lg'>{fallback}</AvatarFallback>
+      </Avatar>
+      <div className='grid flex-1 text-start text-sm leading-tight'>
+        <span className='truncate font-semibold'>{name}</span>
+        <span className='truncate text-xs text-muted-foreground'>{role}</span>
+      </div>
+    </>
+  )
+}
+
+export function NavUser({ user }: NavUserProps): ReactElement {
   const { isMobile } = useSidebar()
   const [open, setOpen] = useDialogState()
+  const { auth } = useAuthStore()
+
+  const displayName = auth.user?.username || user.name
+  const displayRole = auth.user ? '系统管理员' : user.email
+  const fallbackLetters = displayName.slice(0, 2).toUpperCase()
 
   return (
     <>
@@ -48,14 +82,12 @@ export function NavUser({ user }: NavUserProps) {
                 size='lg'
                 className='data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground'
               >
-                <Avatar className='h-8 w-8 rounded-lg'>
-                  <AvatarImage src={user.avatar} alt={user.name} />
-                  <AvatarFallback className='rounded-lg'>SN</AvatarFallback>
-                </Avatar>
-                <div className='grid flex-1 text-start text-sm leading-tight'>
-                  <span className='truncate font-semibold'>{user.name}</span>
-                  <span className='truncate text-xs'>{user.email}</span>
-                </div>
+                <UserIdentityBlock
+                  avatar={user.avatar}
+                  name={displayName}
+                  role={displayRole}
+                  fallback={fallbackLetters}
+                />
                 <ChevronsUpDown className='ms-auto size-4' />
               </SidebarMenuButton>
             </DropdownMenuTrigger>
@@ -67,14 +99,12 @@ export function NavUser({ user }: NavUserProps) {
             >
               <DropdownMenuLabel className='p-0 font-normal'>
                 <div className='flex items-center gap-2 px-1 py-1.5 text-start text-sm'>
-                  <Avatar className='h-8 w-8 rounded-lg'>
-                    <AvatarImage src={user.avatar} alt={user.name} />
-                    <AvatarFallback className='rounded-lg'>SN</AvatarFallback>
-                  </Avatar>
-                  <div className='grid flex-1 text-start text-sm leading-tight'>
-                    <span className='truncate font-semibold'>{user.name}</span>
-                    <span className='truncate text-xs'>{user.email}</span>
-                  </div>
+                  <UserIdentityBlock
+                    avatar={user.avatar}
+                    name={displayName}
+                    role={displayRole}
+                    fallback={fallbackLetters}
+                  />
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />

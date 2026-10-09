@@ -59,8 +59,11 @@ export function UserAuthForm({
       success: () => {
         setIsLoading(false)
 
-        // Mock successful authentication with expiry computed at success time
+        // Mock successful authentication with Zhulong AuthUser format
         const mockUser = {
+          id: 1,
+          username: data.email.split('@')[0] || 'admin',
+          createdAt: new Date().toISOString(),
           accountNo: 'ACC001',
           email: data.email,
           role: ['user'],

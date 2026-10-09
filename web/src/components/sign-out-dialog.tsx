@@ -1,5 +1,7 @@
+import { type ReactElement } from 'react'
 import { useNavigate, useLocation } from '@tanstack/react-router'
 import { useAuthStore } from '@/stores/auth-store'
+import { authApi } from '@/features/auth/api/auth-api'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 
 interface SignOutDialogProps {
@@ -7,12 +9,16 @@ interface SignOutDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
-export function SignOutDialog({ open, onOpenChange }: SignOutDialogProps) {
+export function SignOutDialog({
+  open,
+  onOpenChange,
+}: SignOutDialogProps): ReactElement {
   const navigate = useNavigate()
   const location = useLocation()
   const { auth } = useAuthStore()
 
-  const handleSignOut = () => {
+  function handleSignOut(): void {
+    authApi.logout().catch(() => {})
     auth.reset()
     // Preserve current location for redirect after sign-in
     const currentPath = location.href

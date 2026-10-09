@@ -2,7 +2,7 @@
 # The service reads this file from its working directory at startup.
 
 [http]
-address = "127.0.0.1:8080"
+address = "127.0.0.1:8000"
 
 [logging]
 development = false

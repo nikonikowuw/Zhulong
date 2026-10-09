@@ -52,10 +52,14 @@ const queryClient = new QueryClient({
     onError: (error) => {
       if (error instanceof AxiosError) {
         if (error.response?.status === 401) {
-          toast.error('Session expired!')
+          toast.error('会话已失效，请重新登录')
           useAuthStore.getState().auth.reset()
-          const redirect = `${router.history.location.href}`
-          router.navigate({ to: '/sign-in', search: { redirect } })
+          const currentPath = router.history.location.pathname
+          const isRoot = currentPath === '/' || currentPath === ''
+          router.navigate({
+            to: '/sign-in',
+            search: isRoot ? undefined : { redirect: currentPath },
+          })
         }
         if (error.response?.status === 500) {
           toast.error('Internal Server Error!')
