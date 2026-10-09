@@ -160,3 +160,5 @@ export function CameraCreateForm({ onSubmit, isPending }: Props) {
    - 为监控矩阵与设备拓扑保留完整的视口高度（支持 `has-data-[layout=fixed]:h-svh` 满高视口排布）。
 3. **快捷命令搜寻集成 (Command Menu)**：
    - 全局保留 `Ctrl+K`（或 `Cmd+K`）调起 `CommandMenu`，支持快速跳转至指定功能模块与摄像机频道。
+4. **设置子页面弹性视口适配 (`ContentSection`)**：
+   - 设置分区组件默认保持 `lg:max-w-xl` 单栏表单排版，对于卡片矩阵（如多网卡看板、存储挂载看板）可显式指定 `className='max-w-5xl'` 展开为宽幅响应式网格。
