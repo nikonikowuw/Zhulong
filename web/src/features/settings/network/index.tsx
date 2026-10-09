@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { ContentSection } from '../components/content-section'
 import { type ApplyResponse, type InterfaceInfo } from './api/network-api'
 import { InterfaceEditDialog } from './components/interface-edit-dialog'
-import { InterfaceList } from './components/interface-list'
+import { InterfaceTable } from './components/interface-table'
 import { PingDialog } from './components/ping-dialog'
 import {
   WatchdogModal,
@@ -110,19 +110,22 @@ export function SettingsNetwork() {
   }
 
   const isPendingConfirm = Boolean(serverTransaction || appliedTransaction)
+  const interfaceCount = interfacesQuery.data?.length ?? 0
 
   return (
     <ContentSection
       title='网络配置'
-      desc='管理边缘异构系统的物理以太网卡、IP 地址获取模式及默认网关出口，提供防失联看门狗安全回滚保障。'
-      className='max-w-5xl'
+      desc='管理边缘系统的物理以太网卡与默认路由出口，支持两阶段看门狗安全试运行。'
+      className='max-w-4xl'
     >
-      <div className='space-y-5'>
+      <div className='space-y-4'>
         {/* 工具栏与操作入口 */}
         <div className='flex flex-wrap items-center justify-between gap-3'>
           <div className='flex items-center gap-2 text-xs text-muted-foreground'>
             <ShieldCheck className='h-4 w-4 text-emerald-600' />
-            <span>支持两阶段看门狗防失联与 Netlink 实时状态嗅探</span>
+            <span>
+              已识别 {interfaceCount} 个物理以太网卡 · 支持防失联看门狗回滚
+            </span>
           </div>
 
           <div className='flex items-center gap-2'>
@@ -170,13 +173,13 @@ export function SettingsNetwork() {
               </Button>
             </AlertTitle>
             <AlertDescription className='text-xs'>
-              系统网卡当前处于防失联看门狗保护状态。如已验证网络正常，请及时确认固化，否则倒计时结束后将自动回滚恢复原配置。
+              系统网卡当前处于防失联看门狗保护状态。请在倒计时内确认固化，超时后系统将自动回滚恢复原配置。
             </AlertDescription>
           </Alert>
         )}
 
-        {/* 物理网卡看板列表 */}
-        <InterfaceList
+        {/* 物理网卡表格视图 */}
+        <InterfaceTable
           interfaces={interfacesQuery.data}
           isLoading={interfacesQuery.isLoading}
           isError={interfacesQuery.isError}
