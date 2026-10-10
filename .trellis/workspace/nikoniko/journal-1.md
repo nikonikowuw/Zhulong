@@ -832,3 +832,35 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 21: Native 节点化解码器接入与流水线架构重构
+<!-- trellis-session: v=2 fp=8e41bf162d057da1 -->
+
+**Date**: 2026-10-10
+**Task**: Native 节点化解码器接入与流水线架构重构
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+完成 Native 流水线架构解耦，实现通用 `BoundedQueue` 拥塞淘汰队列，抽象 `IDecodeNode` 并交付单流确定性 `FFmpegDecodeNode` 软解实现，完成 `Stream` 内按需激活异步解码线程与极浅帧队列流转，更新 Spec 规范并通过全项 CTest/ASan/TSan/Go-Bridge 测试验证。
+
+### Main Changes
+
+- **通用有界队列**：实现 `BoundedQueue<T>`，支持 `BLOCK` / `DROP_OLDEST` / `DROP_NEWEST` 淘汰策略、超时等待与协作式取消 `cancel()`
+- **流水线架构解耦**：将 `engine.cpp` 拆解为 `subscription`（回调排空与订阅通道）、`stream`（物理流拓扑、抓流与解码线程编排）以及精简的 `engine`（流池管理、Reaper 与探测）
+- **解码抽象与 FFmpeg 节点**：抽象 `IDecodeNode`，实现 `FFmpegDecodeNode` 单流确定性软解，输出装配 `release_fn` 的 `HardwareFrame`
+- **按需激活流转**：当接入 `Zhulong_CONSUMER_AI` 时动态拉起 `Stream::decode_loop`，无 AI 消费者时自动休眠并清空帧队列，避免 CPU/NPU 资源浪费
+- **测试与验证**：新增 `ZhulongDecoderTests` 覆盖 H.264 / H.265 真实 Annex B 关键帧与普通帧解码、有界队列丢弃测试，全项通过 CTest、ASan、TSan 以及 Go Bridge 回归
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d4d8773` | feat(native): decouple pipeline architecture and integrate IDecodeNode with FFmpeg backend |
+
+### Status
+
+[OK] **Completed**
+
