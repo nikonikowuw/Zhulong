@@ -32,6 +32,50 @@
    - 通过 `ThemeProvider` 动态向 `<html>` 注入或移除 `.dark` 类；
    - 由 CSS 规则 `@custom-variant dark (&:is(.dark *));` 自动匹配激活深色变量，组件内无需手动编写冗余的深浅条件分支。
 
+### 1.3 原汁原味 shadcn-admin 组件视觉规范 (严禁私造样式轮子)
+
+所有前端 UI 必须 100% 遵从 `satnaing/shadcn-admin` 官方视觉系统。严禁开发者或 AI 自行手拼基础组件或生造不合群的颜色样式。
+
+#### 1. 基础组件必须直接取自 `@/components/ui/*`
+- 严禁自行手写 HTML 基础元素加杂色拼凑 Badge、Button、Card、Modal、Switch 等控件；
+- 必须优先使用 `@/components/ui/` 中的标准组件及其原生 `variant` / `size`。
+
+#### 2. 状态徽章 (Status Badge) 统一标准范式：Dot-Indicator Outline 模式
+任何展示资源、设备、连接、任务状态的 Badge，**严禁使用粗暴的实心破坏色（如实心深红 `variant="destructive"`）与其他浅色半透明标签混排**，**严禁使用未适配暗色模式的裸 Tailwind 颜色（如 `text-emerald-600`、`border-emerald-500/30`）**。
+必须统一使用 **带微指示圆点的半透明微边框 Outline 徽章**：
+
+```tsx
+<Badge
+  variant='outline'
+  className={cn('gap-1.5 text-xs font-normal', badgeStatusStyle)}
+>
+  <span className={cn('inline-block h-1.5 w-1.5 rounded-full', dotColorStyle)} />
+  {label}
+</Badge>
+```
+
+#### 3. 经典四级状态语义调色板 (必须成对具备双模支持)
+
+| 语义级别 | 状态场景 | Badge 外框与底色类名 (必须含 dark:) | 内嵌指示圆点类名 |
+| :--- | :--- | :--- | :--- |
+| **活跃 / 就绪 / 正常** | Active, Online, Healthy, Synchronized | `border-teal-200 bg-teal-100/30 text-teal-900 dark:border-teal-800 dark:bg-teal-950/30 dark:text-teal-200` | `bg-emerald-500` |
+| **进行中 / 警告 / 缺失** | Syncing, Review, Missing, Warning | `border-amber-200 bg-amber-100/30 text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200` | `bg-amber-500`（同步中可加 `animate-pulse`） |
+| **失败 / 异常 / 破坏性** | Failed, Error, Suspended, Offline | `border-destructive/20 bg-destructive/10 text-destructive dark:border-destructive/40 dark:bg-destructive/20 dark:text-destructive` | `bg-destructive` |
+| **未激活 / 未同步 / 未知** | Inactive, Unsynced, Unknown | `border-neutral-300 bg-neutral-300/40 text-muted-foreground dark:border-neutral-700 dark:bg-neutral-800/40` | `bg-muted-foreground/60` |
+
+#### 4. 面板与容器统一标准 (Panels & Cards)
+- 仪表盘与配置面板背景统一使用 `bg-muted/30` 或 `bg-card`，边框统一使用 `border border-border`，圆角使用 `rounded-lg` 或 `rounded-xl`；
+- 严禁手写 `bg-gray-100`, `bg-slate-50`, `border-gray-300` 等非语义类。
+
+#### 5. 错误与正确实现对比 (Wrong vs Correct)
+
+| 场景 | ❌ 严禁出现（私造轮子 / 视觉割裂） | ✅ 必须规范（shadcn-admin 原汁原味） |
+| :--- | :--- | :--- |
+| **正常状态标签** | `<Badge className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30">`（无暗黑适配，暗色下极暗） | `<Badge variant="outline" className="border-teal-200 bg-teal-100/30 text-teal-900 dark:border-teal-800 dark:bg-teal-950/30 dark:text-teal-200 gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500"/>已同步</Badge>` |
+| **失败状态标签** | `<Badge variant="destructive">同步失败</Badge>`（突兀实心深红，与同排浅色标签割裂） | `<Badge variant="outline" className="border-destructive/20 bg-destructive/10 text-destructive dark:border-destructive/40 dark:bg-destructive/20 dark:text-destructive gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-destructive"/>同步失败</Badge>` |
+| **面板容器背景** | `<div className="bg-gray-50 border-gray-200 dark:bg-gray-900">` | `<div className="bg-muted/30 border border-border rounded-lg">` |
+| **表单单选卡片** | 手写 `onClick` 切换状态与自定义 `div` 边框高亮 | 使用 Radix `<RadioGroup>`，外层 Label 声明 `[&:has([data-state=checked])>div]:border-primary [&:has([data-state=checked])>div]:bg-primary/5` |
+
 ---
 
 ## 2. 布局方向与 RTL 适配契约 (Direction & RTL)
