@@ -61,7 +61,9 @@
     "cancel": "Cancel",
     "close": "Close",
     "saveChanges": "Save Changes",
-    "confirmAdd": "Add Camera"
+    "confirmAdd": "Add Camera",
+    "probing": "Probing...",
+    "saving": "Saving..."
   },
   "dialog": {
     "createTitle": "Add Camera Asset",

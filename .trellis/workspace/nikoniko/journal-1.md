@@ -693,6 +693,7 @@ Session summary was not supplied.
 - **对话框交互闭环与 shadcn-admin 原味重塑**：彻底剥离粗糙杂色嵌套卡片，按照 shadcn-admin 官方原味重塑创建/编辑与一键诊断弹窗；删除冗余的凭据查看弹窗；消除全量硬编码，补全三语翻译并修复 session 键名缺失
 - **复选批量操作菜单与高危删除对齐**：完全对齐 `shadcn-admin`（tasks/users）官方批量操作浮条规范，提供 DropdownMenu 状态批量变更下拉菜单、批量诊断探针、内聚型高危二次确认弹窗（输入 `DELETE` 校验 + 破坏性 Warning Alert）与勾选自动重置
 - **公共组件国际化脱敏（DataTableBulkActions & DataTableViewOptions）**：攻克底层通用批量操作栏中的硬编码英文 `' selected'` 与取消按钮硬编码文本，抽象并引入 `table` 与 `entities` 国际化字典体系；重构表格右上角 `View` 按钮与列显隐下拉菜单（`DataTableViewOptions`），实现按钮文案、菜单标头（Toggle columns）及各列选项标题的双重智能探测（显式 `columnLabels`、`meta.title` 与 i18n 候选键），彻底消灭列选项驼峰字段暴露与未翻译问题
+- **表单交互与弹窗尺寸稳定性加固（CamerasActionDialog）**：修复提交触发探测时输入框因全量注入 `disabled={isPending}` 导致的 50% opacity 半透明劣化问题；将底层按钮文本从 25 个字的超长提示（`正在连接摄像机并探测音视频流规格...`）解耦为简洁精悍的 `正在探测...`（`min-w-24`），并将长耗时探测说明剥离至 Footer 侧边指示区，锁定 `w-full sm:max-w-lg` 几何尺寸，彻底消除提交过程中的弹窗突变撑宽与输入框变形跳动
 - **规范回流**：将 Table Sticky 操作列双层伪元素防穿透最佳实践沉淀进 `.trellis/spec/frontend/development-guidelines.md`
 
 ### Testing

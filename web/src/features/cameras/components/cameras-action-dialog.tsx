@@ -93,6 +93,7 @@ export function CamerasActionDialog() {
   }, [isOpen, isEdit, currentRow, form])
 
   const onSubmit = async (values: CameraFormValues) => {
+    if (isPending) return
     setProbeError(null)
 
     const streamPayload = {
@@ -160,7 +161,7 @@ export function CamerasActionDialog() {
         }
       }}
     >
-      <DialogContent className='sm:max-w-lg'>
+      <DialogContent className='w-full sm:max-w-lg'>
         <DialogHeader className='text-start'>
           <DialogTitle>
             {isEdit ? t('dialog.editTitle') : t('dialog.createTitle')}
@@ -194,7 +195,6 @@ export function CamerasActionDialog() {
                     <FormControl>
                       <Input
                         placeholder={t('form.namePlaceholder')}
-                        disabled={isPending}
                         autoComplete='off'
                         {...field}
                       />
@@ -214,7 +214,6 @@ export function CamerasActionDialog() {
                     <FormControl>
                       <Input
                         placeholder={t('form.mainRtspPlaceholder')}
-                        disabled={isPending}
                         className='font-mono'
                         autoComplete='off'
                         {...field}
@@ -235,7 +234,6 @@ export function CamerasActionDialog() {
                     <Select
                       onValueChange={field.onChange}
                       defaultValue={field.value}
-                      disabled={isPending}
                     >
                       <FormControl>
                         <SelectTrigger className='w-full'>
@@ -274,7 +272,6 @@ export function CamerasActionDialog() {
                       <Switch
                         checked={field.value}
                         onCheckedChange={field.onChange}
-                        disabled={isPending}
                       />
                     </FormControl>
                   </FormItem>
@@ -292,7 +289,6 @@ export function CamerasActionDialog() {
                         <FormControl>
                           <Input
                             placeholder={t('form.subRtspPlaceholder')}
-                            disabled={isPending}
                             className='font-mono'
                             autoComplete='off'
                             {...field}
@@ -312,7 +308,6 @@ export function CamerasActionDialog() {
                         <Select
                           onValueChange={field.onChange}
                           defaultValue={field.value}
-                          disabled={isPending}
                         >
                           <FormControl>
                             <SelectTrigger className='w-full'>
@@ -348,7 +343,6 @@ export function CamerasActionDialog() {
                       <Switch
                         checked={field.value}
                         onCheckedChange={field.onChange}
-                        disabled={isPending}
                       />
                     </FormControl>
                   </FormItem>
@@ -358,20 +352,37 @@ export function CamerasActionDialog() {
           </Form>
         </div>
 
-        <DialogFooter className='gap-y-2 pt-2'>
-          <DialogClose asChild>
-            <Button variant='outline' disabled={isPending}>
-              {t('actions.cancel')}
+        <DialogFooter className='gap-y-2 pt-2 sm:items-center sm:justify-between'>
+          <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>
+            {isPending && (
+              <>
+                <Loader2 className='size-3.5 animate-spin text-primary' />
+                <span>{t('dialog.probingNotice')}</span>
+              </>
+            )}
+          </div>
+          <div className='flex items-center justify-end gap-2'>
+            <DialogClose asChild>
+              <Button variant='outline' disabled={isPending}>
+                {t('actions.cancel')}
+              </Button>
+            </DialogClose>
+            <Button
+              type='submit'
+              form='camera-action-form'
+              disabled={isPending}
+              className='min-w-24'
+            >
+              {isPending && <Loader2 className='me-1.5 size-4 animate-spin' />}
+              {isPending
+                ? isEdit
+                  ? t('actions.saving')
+                  : t('actions.probing')
+                : isEdit
+                  ? t('actions.saveChanges')
+                  : t('actions.confirmAdd')}
             </Button>
-          </DialogClose>
-          <Button type='submit' form='camera-action-form' disabled={isPending}>
-            {isPending && <Loader2 className='me-2 size-4 animate-spin' />}
-            {isPending
-              ? t('dialog.probingNotice')
-              : isEdit
-                ? t('actions.saveChanges')
-                : t('actions.confirmAdd')}
-          </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

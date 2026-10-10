@@ -61,7 +61,9 @@
     "cancel": "取消",
     "close": "關閉",
     "saveChanges": "儲存變更",
-    "confirmAdd": "確認添加"
+    "confirmAdd": "確認添加",
+    "probing": "正在探測...",
+    "saving": "正在儲存..."
   },
   "dialog": {
     "createTitle": "新增攝影機資產",
