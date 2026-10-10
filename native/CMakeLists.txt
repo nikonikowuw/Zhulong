@@ -170,6 +170,11 @@ if(BUILD_TESTING)
     add_executable(ZhulongRtspTests tests/rtsp_integration_test.cpp)
     target_link_libraries(ZhulongRtspTests PRIVATE ZhulongEngine)
 
+    # 硬件帧对象与多算法零拷贝生命周期单元测试
+    add_executable(ZhulongFrameTests tests/frame_test.cpp)
+    target_link_libraries(ZhulongFrameTests PRIVATE ZhulongEngine)
+    add_test(NAME ZhulongFrameLifecycle COMMAND ZhulongFrameTests)
+
     if(NOT CMAKE_CROSSCOMPILING)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
         add_test(NAME ZhulongRtspIntegration COMMAND ${Python3_EXECUTABLE}
@@ -182,5 +187,5 @@ if(BUILD_TESTING)
         set_tests_properties(ZhulongBuildContract PROPERTIES TIMEOUT 90)
     endif()
 
-    set_tests_properties(ZhulongEngineLifecycle ZhulongCAbiLifecycle ZhulongCaptureUnit PROPERTIES TIMEOUT 20)
+    set_tests_properties(ZhulongEngineLifecycle ZhulongCAbiLifecycle ZhulongCaptureUnit ZhulongFrameLifecycle PROPERTIES TIMEOUT 20)
 endif()

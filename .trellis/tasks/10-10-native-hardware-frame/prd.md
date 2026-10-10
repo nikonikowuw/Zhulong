@@ -44,7 +44,7 @@
 
 ## 4. 验收标准 (Acceptance Criteria)
 
-- [ ] **AC-1 (数据结构完备性)**：`HardwareFrame` 包含 `width`, `height`, `stride`, `vstride`, `format`, `dma_fd`, `dev_ptr`, `host_ptr`, `pts`, `release_fn`，各字段语义清晰且编译通过。
-- [ ] **AC-2 (1:N 并发安全与引用回收)**：模拟 1 解码 ➔ 3 算法并行前处理场景，各算法分别持有 `std::shared_ptr<HardwareFrame>`；验证最后一个算法释放引用时，底层 `release_fn` 精准触发且仅触发 1 次。
-- [ ] **AC-3 (UV 平面偏移计算准确性)**：编写测试用例验证 1080P（1920x1080, stride=1920, vstride=1088）的 NV12 UV 起始偏移计算（必须为 `stride * vstride` = 2,088,960 字节，而非 `1920 * 1080`），防止色度错位。
-- [ ] **AC-4 (单元测试与工程构建通过)**：Native 构建与测试套件（`make native-build` / `make native-test`）全项通过。
+- [x] **AC-1 (数据结构完备性)**：`HardwareFrame` 包含 `width`, `height`, `stride`, `vstride`, `format`, `dma_fd`, `dev_ptr`, `host_ptr`, `pts`, `release_fn`，各字段语义清晰且编译通过。
+- [x] **AC-2 (1:N 并发安全与引用回收)**：模拟 1 解码 ➔ 3 算法并行前处理场景，各算法分别持有 `std::shared_ptr<HardwareFrame>`；验证最后一个算法释放引用时，底层 `release_fn` 精准触发且仅触发 1 次。
+- [x] **AC-3 (UV 平面偏移计算准确性)**：编写测试用例验证 1080P（1920x1080, stride=1920, vstride=1088）的 NV12 UV 起始偏移计算（必须为 `stride * vstride` = 2,088,960 字节，而非 `1920 * 1080`），防止色度错位。
+- [x] **AC-4 (单元测试与工程构建通过)**：Native 构建与测试套件（`make native-build` / `make native-test`）全项通过。
