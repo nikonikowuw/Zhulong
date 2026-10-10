@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 18
+- **Total Sessions**: 20
 - **Last Active**: 2026-10-10
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~811 | Active |
+| `journal-1.md` | ~834 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-10-10 | 边缘异构系统媒体存储配置与动态生命周期管理全栈实现 | `38fe121` | `dev` |
 | 18 | 2026-10-10 | 实现统一异构硬件帧对象与多算法零拷贝管线设计 | `ffce0c8` | `dev` |
 | 17 | 2026-10-10 | 边缘对时全栈实现、代码精简与 shadcn 状态看板规范加固 | `725db8a`, `9b7199b` | `dev` |
 | 15 | 2026-10-09 | 前端实时预览能力与多分屏播放器集成 | `385299a`, `4e6b0f3` | `dev` |
