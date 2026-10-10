@@ -23,13 +23,13 @@
   "discoveredInterfaces": "已識別 {{count}} 個實體乙太網路卡 · 支援防失聯看門狗回滾",
   "table": {
     "interface": "網路介面",
-    "status": "物理狀態 / MAC",
+    "status": "連線狀態",
     "mode": "分配模式",
     "ipv4": "IPv4 位址",
     "gatewayDns": "預設閘道 / DNS",
     "operations": "操作",
-    "currentInbound": "當前管理連線",
-    "defaultGateway": "預設",
+    "currentAccess": "本次訪問",
+    "defaultGateway": "預設路由",
     "connected": "已連線",
     "disconnected": "未連線",
     "none": "無",
@@ -104,6 +104,10 @@
     "pingTargetRequired": "請輸入要測試的目標 IP 或網域名稱"
   },
   "errors": {
-    "loadFailed": "載入網路介面失敗"
+    "loadFailed": "載入網路介面失敗",
+    "connectionFailed": "無法連線至主機網路服務",
+    "applyFailed": "套用網路配置失敗",
+    "confirmFailed": "確認網路配置失敗",
+    "rollbackFailed": "回滾網路配置失敗"
   }
 }

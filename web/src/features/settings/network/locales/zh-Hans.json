@@ -23,13 +23,13 @@
   "discoveredInterfaces": "已识别 {{count}} 个物理以太网卡 · 支持防失联看门狗回滚",
   "table": {
     "interface": "网络接口",
-    "status": "物理状态 / MAC",
+    "status": "链路状态",
     "mode": "分配模式",
     "ipv4": "IPv4 地址",
     "gatewayDns": "默认网关 / DNS",
     "operations": "操作",
-    "currentInbound": "当前管理连接",
-    "defaultGateway": "默认",
+    "currentAccess": "本次访问",
+    "defaultGateway": "默认路由",
     "connected": "已连通",
     "disconnected": "未连接",
     "none": "无",
@@ -104,6 +104,10 @@
     "pingTargetRequired": "请输入要测试的目标 IP 或域名"
   },
   "errors": {
-    "loadFailed": "加载网络接口失败"
+    "loadFailed": "加载网络接口失败",
+    "connectionFailed": "无法连接至主机网络服务",
+    "applyFailed": "应用网络配置失败",
+    "confirmFailed": "确认网络配置失败",
+    "rollbackFailed": "回滚网络配置失败"
   }
 }

@@ -33,82 +33,35 @@ func NewNetworkService(provider NetworkProvider, watchdog *WatchdogManager, logg
 	}
 }
 
-// ListInterfaces queries physical network interfaces and tags the one matching clientIP or local connection as current.
+// ListInterfaces queries physical network interfaces and marks the current one only when it can be matched unambiguously.
 func (s *NetworkService) ListInterfaces(ctx context.Context, localAddr, host, clientIP string) ([]InterfaceInfo, error) {
 	ifaces, err := s.provider.ListPhysicalInterfaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list physical interfaces: %w", err)
 	}
 
-	taggedCurrent := false
-
-	// 1. Try matching incoming socket Local Address directly to interface IP
-	if cleanLocal := parseCleanIP(localAddr); cleanLocal != nil && !cleanLocal.IsLoopback() && !cleanLocal.IsUnspecified() {
-		for i := range ifaces {
-			for _, cidr := range ifaces[i].IPAddresses {
-				ip, _, err := net.ParseCIDR(cidr)
-				if err == nil && ip.Equal(cleanLocal) {
-					ifaces[i].IsCurrent = true
-					taggedCurrent = true
-					break
-				}
-			}
-			if taggedCurrent {
-				break
-			}
-		}
+	for i := range ifaces {
+		ifaces[i].IsCurrent = false
 	}
 
-	// 2. Try matching incoming Host header IP directly to interface IP
-	if !taggedCurrent {
-		if cleanHost := parseCleanIP(host); cleanHost != nil && !cleanHost.IsLoopback() && !cleanHost.IsUnspecified() {
-			for i := range ifaces {
-				for _, cidr := range ifaces[i].IPAddresses {
-					ip, _, err := net.ParseCIDR(cidr)
-					if err == nil && ip.Equal(cleanHost) {
-						ifaces[i].IsCurrent = true
-						taggedCurrent = true
-						break
-					}
-				}
-				if taggedCurrent {
-					break
-				}
-			}
-		}
+	candidates := []struct {
+		address  string
+		bySubnet bool
+	}{
+		{address: localAddr},
+		{address: host},
+		{address: clientIP, bySubnet: true},
 	}
 
-	// 3. Try matching clientIP by subnet
-	if !taggedCurrent {
-		if cleanClient := parseCleanIP(clientIP); cleanClient != nil && !cleanClient.IsLoopback() {
-			for i := range ifaces {
-				for _, cidr := range ifaces[i].IPAddresses {
-					_, ipnet, err := net.ParseCIDR(cidr)
-					if err == nil && ipnet.Contains(cleanClient) {
-						ifaces[i].IsCurrent = true
-						taggedCurrent = true
-						break
-					}
-				}
-				if taggedCurrent {
-					break
-				}
-			}
+	for _, candidate := range candidates {
+		ip := parseCleanIP(candidate.address)
+		if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+			continue
 		}
-	}
 
-	// 4. Fallback to default gateway interface or first interface
-	if !taggedCurrent && len(ifaces) > 0 {
-		foundDefault := false
-		for i := range ifaces {
-			if ifaces[i].IsDefaultGW {
-				ifaces[i].IsCurrent = true
-				foundDefault = true
-				break
-			}
-		}
-		if !foundDefault {
-			ifaces[0].IsCurrent = true
+		if index := findUniqueInterfaceIndex(ifaces, ip, candidate.bySubnet); index >= 0 {
+			ifaces[index].IsCurrent = true
+			break
 		}
 	}
 
@@ -123,6 +76,33 @@ func (s *NetworkService) ListInterfaces(ctx context.Context, localAddr, host, cl
 	}
 
 	return ifaces, nil
+}
+
+func findUniqueInterfaceIndex(ifaces []InterfaceInfo, address net.IP, bySubnet bool) int {
+	matchedIndex := -1
+	for index := range ifaces {
+		for _, cidr := range ifaces[index].IPAddresses {
+			ip, network, err := net.ParseCIDR(cidr)
+			if err != nil {
+				continue
+			}
+
+			matches := ip.Equal(address)
+			if bySubnet {
+				matches = network.Contains(address)
+			}
+			if !matches {
+				continue
+			}
+
+			if matchedIndex >= 0 && matchedIndex != index {
+				return -1
+			}
+			matchedIndex = index
+			break
+		}
+	}
+	return matchedIndex
 }
 
 // ApplyConfig validates parameters, creates a watchdog transaction, and starts delayed reconfiguration.

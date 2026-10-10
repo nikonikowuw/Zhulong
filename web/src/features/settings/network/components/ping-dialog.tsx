@@ -97,7 +97,7 @@ export function PingDialog({
             />
 
             {pingMutation.isPending && (
-              <div className='flex items-center justify-center gap-2 rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground'>
+              <div className='flex items-center justify-center gap-2 rounded-md border bg-muted/40 p-4 text-sm text-muted-foreground'>
                 <Loader2 className='h-4 w-4 animate-spin' />
                 <span>{t('ping.probingMsg')}</span>
               </div>
@@ -105,15 +105,15 @@ export function PingDialog({
 
             {pingMutation.data && (
               <div
-                className={`flex items-center justify-between rounded-lg border p-3.5 text-sm ${
+                className={`flex items-center justify-between rounded-md border p-3.5 text-sm ${
                   pingMutation.data.reachable
-                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300'
+                    ? 'border-teal-200 bg-teal-100/30 text-teal-900 dark:border-teal-800 dark:bg-teal-950/30 dark:text-teal-200'
                     : 'border-destructive/30 bg-destructive/10 text-destructive'
                 }`}
               >
                 <div className='flex items-center gap-2'>
                   {pingMutation.data.reachable ? (
-                    <CheckCircle2 className='h-4 w-4 text-emerald-600 dark:text-emerald-400' />
+                    <CheckCircle2 className='h-4 w-4 text-teal-600 dark:text-teal-400' />
                   ) : (
                     <XCircle className='h-4 w-4 text-destructive' />
                   )}
@@ -133,7 +133,7 @@ export function PingDialog({
             )}
 
             {pingMutation.isError && (
-              <div className='rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive'>
+              <div className='rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive'>
                 {t('ping.probeError', { msg: pingMutation.error.message })}
               </div>
             )}
@@ -148,7 +148,7 @@ export function PingDialog({
               </Button>
               <Button type='submit' disabled={pingMutation.isPending}>
                 {pingMutation.isPending && (
-                  <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+                  <Loader2 className='me-2 h-4 w-4 animate-spin' />
                 )}
                 {pingMutation.isPending
                   ? t('actions.probing')

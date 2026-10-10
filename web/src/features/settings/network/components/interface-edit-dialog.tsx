@@ -131,7 +131,7 @@ export function InterfaceEditDialog({
       onOpenChange(false)
       onSuccess(res)
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '配置应用失败'
+      const msg = err instanceof Error ? err.message : t('errors.applyFailed')
       toast.error(msg)
     }
   }
@@ -160,10 +160,7 @@ export function InterfaceEditDialog({
           >
             <div className='flex-1 space-y-4 overflow-y-auto px-6 py-4'>
               {iface.isCurrent && (
-                <Alert
-                  variant='destructive'
-                  className='border-amber-500/50 bg-amber-500/10 px-3 py-2.5 text-amber-800 dark:text-amber-300'
-                >
+                <Alert className='border-amber-500/50 bg-amber-500/10 px-3 py-2.5 text-amber-900 dark:text-amber-300'>
                   <AlertTriangle className='h-4 w-4 text-amber-600 dark:text-amber-400' />
                   <AlertTitle className='text-xs font-semibold'>
                     {t('editDialog.highRiskTitle')}
@@ -231,7 +228,7 @@ export function InterfaceEditDialog({
               />
 
               {mode === 'static' && (
-                <div className='space-y-3 rounded-lg border bg-muted/20 p-3'>
+                <div className='space-y-3 rounded-md border bg-muted/20 p-3'>
                   <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
                     <FormField
                       control={form.control}
@@ -321,7 +318,7 @@ export function InterfaceEditDialog({
                 control={form.control}
                 name='setDefault'
                 render={({ field }) => (
-                  <FormItem className='flex flex-row items-center justify-between rounded-lg border p-3 shadow-xs'>
+                  <FormItem className='flex flex-row items-center justify-between rounded-md border p-3 shadow-xs'>
                     <div className='space-y-0.5'>
                       <FormLabel className='text-sm'>
                         {t('editDialog.defaultGwLabel')}
@@ -352,7 +349,7 @@ export function InterfaceEditDialog({
               </Button>
               <Button type='submit' disabled={applyMutation.isPending}>
                 {applyMutation.isPending && (
-                  <Loader2 className='mr-2 h-4 w-4 animate-spin' />
+                  <Loader2 className='me-2 h-4 w-4 animate-spin' />
                 )}
                 {applyMutation.isPending
                   ? t('actions.applying')

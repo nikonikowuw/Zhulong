@@ -17,7 +17,7 @@ type InterfaceInfo struct {
 	Gateway     string   `json:"gateway"`     // Configured gateway address, or empty
 	DNS         []string `json:"dns"`         // Configured DNS servers
 	IsDefaultGW bool     `json:"isDefaultGw"` // True if interface hosts default route (0.0.0.0/0)
-	IsCurrent   bool     `json:"isCurrent"`   // True if current HTTP connection was routed through this interface
+	IsCurrent   bool     `json:"isCurrent"`   // True only when the current HTTP request maps unambiguously to this interface
 }
 
 // InterfaceConfig contains parameters to reconfigure a network interface.

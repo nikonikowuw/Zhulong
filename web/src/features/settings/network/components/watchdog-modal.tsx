@@ -116,7 +116,7 @@ function WatchdogModalBody({
       onOpenChange(false)
       onConfirmed()
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '确认配置失败'
+      const msg = err instanceof Error ? err.message : t('errors.confirmFailed')
       toast.error(msg)
     }
   }
@@ -128,7 +128,8 @@ function WatchdogModalBody({
       onOpenChange(false)
       onRolledBack()
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '执行回滚失败'
+      const msg =
+        err instanceof Error ? err.message : t('errors.rollbackFailed')
       toast.error(msg)
     }
   }
@@ -150,7 +151,7 @@ function WatchdogModalBody({
 
       <div className='space-y-4 py-2'>
         {/* 倒计时看板 */}
-        <div className='space-y-2 rounded-xl border bg-muted/40 p-4 text-center'>
+        <div className='space-y-2 rounded-md border bg-muted/40 p-4 text-center'>
           <div className='flex items-center justify-between text-xs text-muted-foreground'>
             <span>{t('watchdog.remainingTime')}</span>
             <span className='font-mono text-sm font-bold text-foreground'>
@@ -174,23 +175,24 @@ function WatchdogModalBody({
 
         {/* 迁移提示 */}
         {isMigrating && !isExpired && (
-          <Alert className='border-blue-500/50 bg-blue-500/10 text-blue-900 dark:text-blue-300'>
-            <AlertTriangle className='h-4 w-4 text-blue-600 dark:text-blue-400' />
+          <Alert className='border-sky-300 bg-sky-200/40 text-sky-900 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-100'>
+            <AlertTriangle className='h-4 w-4 text-sky-700 dark:text-sky-300' />
             <AlertTitle className='font-semibold'>
               {t('watchdog.migrationTitle')}
             </AlertTitle>
             <AlertDescription className='space-y-2 text-xs'>
               <p>{t('watchdog.migrationAlert')}</p>
               <div className='flex items-center gap-2 pt-1'>
-                <a
-                  href={migrationUrl}
-                  target='_blank'
-                  rel='noopener noreferrer'
-                  className='inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-xs hover:bg-blue-700'
-                >
-                  {t('watchdog.openInNewAddress')}
-                  <ExternalLink className='h-3.5 w-3.5' />
-                </a>
+                <Button asChild variant='outline' size='sm'>
+                  <a
+                    href={migrationUrl}
+                    target='_blank'
+                    rel='noopener noreferrer'
+                  >
+                    {t('watchdog.openInNewAddress')}
+                    <ExternalLink className='h-3.5 w-3.5' />
+                  </a>
+                </Button>
               </div>
             </AlertDescription>
           </Alert>
@@ -228,9 +230,9 @@ function WatchdogModalBody({
               className='text-destructive hover:bg-destructive/10'
             >
               {rollbackMutation.isPending ? (
-                <Loader2 className='mr-1.5 h-4 w-4 animate-spin' />
+                <Loader2 className='me-1.5 h-4 w-4 animate-spin' />
               ) : (
-                <RotateCcw className='mr-1.5 h-4 w-4' />
+                <RotateCcw className='me-1.5 h-4 w-4' />
               )}
               {t('actions.discardRollback')}
             </Button>
@@ -238,12 +240,11 @@ function WatchdogModalBody({
             <Button
               onClick={handleConfirm}
               disabled={confirmMutation.isPending || rollbackMutation.isPending}
-              className='bg-emerald-600 text-white hover:bg-emerald-700'
             >
               {confirmMutation.isPending ? (
-                <Loader2 className='mr-1.5 h-4 w-4 animate-spin' />
+                <Loader2 className='me-1.5 h-4 w-4 animate-spin' />
               ) : (
-                <CheckCircle2 className='mr-1.5 h-4 w-4' />
+                <CheckCircle2 className='me-1.5 h-4 w-4' />
               )}
               {t('actions.confirmPersist')}
             </Button>

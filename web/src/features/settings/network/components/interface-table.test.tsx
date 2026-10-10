@@ -48,10 +48,10 @@ describe('InterfaceTable', () => {
 
     await expect.element(getByText('eth0')).toBeInTheDocument()
     await expect.element(getByText('eth1')).toBeInTheDocument()
-    await expect.element(getByText('Link Up')).toBeInTheDocument()
-    await expect.element(getByText('Down')).toBeInTheDocument()
-    await expect.element(getByText('当前管理连接')).toBeInTheDocument()
-    await expect.element(getByText('默认', { exact: true })).toBeInTheDocument()
+    await expect.element(getByText('已连通')).toBeInTheDocument()
+    await expect.element(getByText('未连接')).toBeInTheDocument()
+    await expect.element(getByText('本次访问')).toBeInTheDocument()
+    await expect.element(getByText('默认路由')).toBeInTheDocument()
     await expect.element(getByText('192.168.1.100/24')).toBeInTheDocument()
   })
 

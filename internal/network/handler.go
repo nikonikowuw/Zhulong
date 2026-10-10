@@ -69,7 +69,7 @@ func (h *Handler) RegisterPublicRoutes(rg *gin.RouterGroup) {
 
 // ListInterfaces godoc
 // @Summary      List physical network interfaces
-// @Description  Queries physical network interfaces on the host, tagging current session interface and default gateway
+// @Description  Queries physical network interfaces, marking the current session interface only when it can be identified unambiguously.
 // @Tags         network
 // @Produce      json
 // @Success      200  {object}  httputil.Response{data=[]InterfaceInfo}

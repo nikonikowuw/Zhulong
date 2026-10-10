@@ -54,6 +54,47 @@ func TestServiceListInterfacesCurrent(t *testing.T) {
 			t.Errorf("expected eth0 to be current for local socket address 192.168.1.100:8080")
 		}
 	}
+	// 4. Host IP matching eth0 directly
+	hostMatched, err := svc.ListInterfaces(ctx, "", "192.168.1.100", "172.16.0.5")
+	if err != nil {
+		t.Fatalf("ListInterfaces failed: %v", err)
+	}
+	for _, iface := range hostMatched {
+		if iface.Name == "eth0" && !iface.IsCurrent {
+			t.Errorf("expected eth0 to be current for Host IP 192.168.1.100")
+		}
+	}
+
+	// 5. An unmatched or ambiguous client address must remain unmarked.
+	unmatched, err := svc.ListInterfaces(ctx, "", "", "172.16.0.5")
+	if err != nil {
+		t.Fatalf("ListInterfaces failed: %v", err)
+	}
+	for _, iface := range unmatched {
+		if iface.IsCurrent {
+			t.Errorf("expected no current interface without a unique match, got %q", iface.Name)
+		}
+	}
+}
+
+func TestServiceListInterfacesDoesNotGuessAmbiguousSubnet(t *testing.T) {
+	provider := NewMockProvider(zap.NewNop())
+	provider.mu.Lock()
+	eth1 := provider.interfaces["eth1"]
+	eth1.IPAddresses = append(eth1.IPAddresses, "192.168.1.200/24")
+	provider.interfaces["eth1"] = eth1
+	provider.mu.Unlock()
+
+	svc := NewNetworkService(provider, NewWatchdogManager(t.TempDir(), provider, zap.NewNop()), zap.NewNop())
+	ifaces, err := svc.ListInterfaces(context.Background(), "", "", "192.168.1.55")
+	if err != nil {
+		t.Fatalf("ListInterfaces failed: %v", err)
+	}
+	for _, iface := range ifaces {
+		if iface.IsCurrent {
+			t.Errorf("expected no current interface for an ambiguous subnet, got %q", iface.Name)
+		}
+	}
 }
 
 func TestServiceValidationAndGatewayConflict(t *testing.T) {

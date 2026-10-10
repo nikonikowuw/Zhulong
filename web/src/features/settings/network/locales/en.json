@@ -23,13 +23,13 @@
   "discoveredInterfaces": "{{count}} physical Ethernet interfaces detected · Safe rollback watchdog enabled",
   "table": {
     "interface": "Interface",
-    "status": "Physical / MAC",
+    "status": "Link status",
     "mode": "Mode",
     "ipv4": "IPv4 Address",
     "gatewayDns": "Gateway / DNS",
     "operations": "Actions",
-    "currentInbound": "Current Management",
-    "defaultGateway": "Default",
+    "currentAccess": "This session",
+    "defaultGateway": "Default route",
     "connected": "Connected",
     "disconnected": "Disconnected",
     "none": "None",
@@ -104,6 +104,10 @@
     "pingTargetRequired": "Please enter a target IP or hostname"
   },
   "errors": {
-    "loadFailed": "Failed to load network interfaces"
+    "loadFailed": "Failed to load network interfaces",
+    "connectionFailed": "Could not connect to the host network service",
+    "applyFailed": "Failed to apply network configuration",
+    "confirmFailed": "Failed to confirm network configuration",
+    "rollbackFailed": "Failed to roll back network configuration"
   }
 }

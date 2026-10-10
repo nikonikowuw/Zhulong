@@ -61,10 +61,9 @@ func TestHandlerListInterfaces(t *testing.T) {
 		t.Fatalf("expected at least 2 interfaces, got %d", len(ifaces))
 	}
 
-	hasCurrent := false
 	for _, iface := range ifaces {
 		if iface.IsCurrent {
-			hasCurrent = true
+			t.Errorf("expected no current interface when the request address cannot be identified, got %s", iface.Name)
 		}
 		if iface.DNS == nil {
 			t.Errorf("expected DNS to be non-nil empty array, got nil for %s", iface.Name)
@@ -73,10 +72,6 @@ func TestHandlerListInterfaces(t *testing.T) {
 			t.Errorf("expected IPAddresses to be non-nil empty array, got nil for %s", iface.Name)
 		}
 	}
-	if !hasCurrent {
-		t.Errorf("expected at least one interface to be marked current")
-	}
-
 	bodyStr := w.Body.String()
 	if strings.Contains(bodyStr, `"dns":null`) {
 		t.Errorf("response body should never contain '\"dns\":null'")

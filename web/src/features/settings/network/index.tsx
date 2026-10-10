@@ -118,13 +118,13 @@ export function SettingsNetwork() {
     <ContentSection
       title={t('title')}
       desc={t('description')}
-      className='max-w-4xl'
+      className='max-w-5xl'
     >
       <div className='space-y-4'>
         {/* 工具栏与操作入口 */}
         <div className='flex flex-wrap items-center justify-between gap-3'>
           <div className='flex items-center gap-2 text-xs text-muted-foreground'>
-            <ShieldCheck className='h-4 w-4 text-emerald-600' />
+            <ShieldCheck className='h-4 w-4 text-primary' />
             <span>{t('discoveredInterfaces', { count: interfaceCount })}</span>
           </div>
 
