@@ -6,7 +6,18 @@
 
 ## 1. 当前实现与规划目录
 
-当前实现：`src/abi/engine.cpp` 为异常/句柄边界，`src/pipeline/engine.*` 为流池、生命周期与回调 drain，`src/nodes/capture/rtsp_input.*` 为 FFmpeg 所有权、URI 与时钟契约；`scripts/build.py` 负责依赖/目标/最终 Go 链接，`tests/` 包含 Native、纯 C、真实 loopback RTSP 和构建回归。没有厂商 SDK 或 DecodeNode。
+当前实现：
+- `src/abi/engine.cpp`：C ABI 异常与句柄边界转换；
+- `src/pipeline/`：流水线核心组件解耦
+  - `bounded_queue.hpp`：支持 BLOCK / DROP_OLDEST / DROP_NEWEST 策略的线程安全有界队列；
+  - `subscription.hpp / .cpp`：数据包订阅上下文与同步排空 (Drain)；
+  - `stream.hpp / .cpp`：物理流拓扑、拉流 Worker 与按需异步解码流水线；
+  - `engine.hpp / .cpp`：顶层流池管理、Reaper 清理线程与 Probe。
+- `src/nodes/capture/rtsp_input.*`：FFmpeg 所有权、URI 与时钟契约；
+- `src/nodes/decode/`：
+  - `decoder.hpp`：统一解码节点抽象契约 (`IDecodeNode`)；
+  - `ffmpeg_decoder.hpp / .cpp`：单流确定性软解实现 (`FFmpegDecodeNode`)，产出带 RAII `release_fn` 的 `HardwareFrame`。
+- `scripts/build.py` 负责依赖/目标/最终 Go 链接，`tests/` 包含 Native、纯 C、真实 loopback RTSP、硬件帧生命周期与解码节点全项回归。没有厂商专有 SDK。
 
 以下仍是后续完整节点架构的规划，功能未开始前严禁创建空目录。
 

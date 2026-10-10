@@ -6,13 +6,17 @@
 
 ## 1. 核心链路与节点职责
 
-当前仅实现 `src/nodes/capture/rtsp_input.*` 与 `src/pipeline/engine.*` 的压缩包采集/复用，**没有 DecodeNode 或异步帧队列**。同步回调必须有界非阻塞；停止与所有权以 [接入合同](./ingestion-contract.md) 为准。下表是后续流水线设计方向，不得把解码前任意丢弃 B/P 包直接用于当前码流（可能破坏完整 GOP/参考关系）；该冲突须由后续解码任务设计恢复策略。
+当前已实现 `src/nodes/capture/rtsp_input.*` 视频采集、`src/nodes/decode/` 解码节点抽象与 FFmpeg 软解实现，以及 `src/pipeline/` 解耦后的流拓扑与有界队列流转。
 
 ```txt
 Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC) ➔ Inference Node (NPU/GPU)
          │                         │                          │                          │
     [Packet 队列]             [Frame 队列]               [Tensor 队列]              [Result 事件]
 ```
+
+- **按需激活解码 (On-Demand Activation)**：仅在存在 `Zhulong_CONSUMER_AI` 接入时拉起 `Stream::decode_loop` 与解码器实例；全 AI 消费者注销后自动休眠解码管线并清空帧队列，避免空转消耗 CPU/NPU 资源。
+- **单流确定性线程模型**：解码器采用 `codec_ctx_->thread_count = 1` 单线程解码，并发由多流模型（多 stream）承载，杜绝底层多线程竞争与线程爆炸。
+- **零拷贝帧封装**：通过 `HardwareFrame` 封装解码输出，`release_fn` 闭包安全回收底层 `AVFrame` 引用，由下游算法只读借用。
 
 ---
 

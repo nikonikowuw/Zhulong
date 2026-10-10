@@ -131,7 +131,10 @@ endif()
 add_library(ZhulongEngine STATIC
     src/abi/engine.cpp
     src/pipeline/engine.cpp
+    src/pipeline/stream.cpp
+    src/pipeline/subscription.cpp
     src/nodes/capture/rtsp_input.cpp
+    src/nodes/decode/ffmpeg_decoder.cpp
 )
 target_compile_features(ZhulongEngine PUBLIC cxx_std_17)
 target_include_directories(ZhulongEngine
@@ -175,6 +178,12 @@ if(BUILD_TESTING)
     target_link_libraries(ZhulongFrameTests PRIVATE ZhulongEngine)
     add_test(NAME ZhulongFrameLifecycle COMMAND ZhulongFrameTests)
 
+    # 解码节点与有界队列单元测试
+    add_executable(ZhulongDecoderTests tests/decoder_test.cpp)
+    target_include_directories(ZhulongDecoderTests PRIVATE src)
+    target_link_libraries(ZhulongDecoderTests PRIVATE ZhulongEngine)
+    add_test(NAME ZhulongDecoder COMMAND ZhulongDecoderTests)
+
     if(NOT CMAKE_CROSSCOMPILING)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
         add_test(NAME ZhulongRtspIntegration COMMAND ${Python3_EXECUTABLE}
@@ -187,5 +196,5 @@ if(BUILD_TESTING)
         set_tests_properties(ZhulongBuildContract PROPERTIES TIMEOUT 90)
     endif()
 
-    set_tests_properties(ZhulongEngineLifecycle ZhulongCAbiLifecycle ZhulongCaptureUnit ZhulongFrameLifecycle PROPERTIES TIMEOUT 20)
+    set_tests_properties(ZhulongEngineLifecycle ZhulongCAbiLifecycle ZhulongCaptureUnit ZhulongFrameLifecycle ZhulongDecoder PROPERTIES TIMEOUT 20)
 endif()

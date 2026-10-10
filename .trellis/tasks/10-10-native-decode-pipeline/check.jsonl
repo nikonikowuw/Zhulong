@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "构建校验与全项回归测试门禁"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "节点队列容量上限与优雅停机验证"}

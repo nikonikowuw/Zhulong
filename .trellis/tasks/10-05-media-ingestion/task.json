@@ -27,7 +27,8 @@
     "10-06-live-player-grid",
     "10-09-frontend-live-preview",
     "10-09-frontend-camera-management",
-    "10-10-native-hardware-frame"
+    "10-10-native-hardware-frame",
+    "10-10-native-decode-pipeline"
   ],
   "parent": null,
   "relatedFiles": [],

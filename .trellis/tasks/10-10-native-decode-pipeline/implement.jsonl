@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "节点流水线设计规范、有界队列背压容量与五步优雅停机时序"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "静态 FFmpeg 依赖校验、物理流复用与 Native 构建测试契约"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "纯 C ABI 隔离与原生内存生命周期安全"}

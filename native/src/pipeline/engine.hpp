@@ -1,26 +1,13 @@
 /**
  * @file engine.hpp
- * @brief Zhulong Native 引擎内部核心管道（Pipeline）与流管理器定义
- *
- * 核心架构与线程/锁模型（⚠️ 极其关键）：
- * 1. 锁层次划分（严格防死锁）：
- *    - Engine::lifecycle：仅用于串行化 start() 与 stop() 状态转换。拉流 Worker 线程与 Reaper 线程绝不访问此锁。
- *    - Engine::control：保护流池（streams 容器）、引用计数与全局流 ID 递增。
- *      ⚠️ 规则：任何长时间操作（如 join 线程、等待回调排空 drain）前必须释放 control 锁，绝不可在持有锁期间阻塞！
- *    - Stream::mutex：保护单个物理流内部的订阅者列表（subscriptions）与状态变更（status）。
- *    - Subscription::mutex：保护单个订阅通道的 enabled 与 active 状态。
- * 2. 回调安全与同步排空（Drain）：
- *    - Subscription::invoke 派发在独立于 control 锁的快照中进行；
- *    - Subscription::disable_and_drain 保证在返回后无任何回调在执行，便于 Go 侧安全释放 cgo.Handle。
- * 3. 宽限期回收机制（Reaper Thread）：
- *    - 当物理流的所有消费者释放时，流不会立即关闭，而是进入 8 秒宽限期；
- *    - 后台 Reaper 线程负责周期性回收超时的物理流并执行 join，防止资源泄漏或过早断开。
+ * @brief Zhulong Native 引擎核心控制器 (物理流池管理、Reaper 与 Probe)
  */
 
 #pragma once
 
-#include "nodes/capture/rtsp_input.hpp"
+#include "pipeline/stream.hpp"
 
+#include <atomic>
 #include <condition_variable>
 #include <map>
 #include <memory>
@@ -28,80 +15,6 @@
 #include <thread>
 
 namespace zhulong {
-
-/**
- * @brief 线程局部变量：标记当前线程是否正处于用户包回调调用链中
- * 用于 C ABI 边界防自死锁与非法重入检测。
- */
-extern thread_local bool in_callback;
-
-/**
- * @brief 数据包订阅通道上下文
- *
- * 维护用户注册的回调函数与状态，支持在单生产者模型下的安全调用与同步排空。
- */
-struct Subscription {
-    uint64_t consumer;                          /**< 关联的预览消费者 ID */
-    Zhulong_packet_callback callback;           /**< 用户提供的包回调函数指针 */
-    uintptr_t token;                            /**< 用户上下文令牌（不可保留为裸 Go 指针） */
-    std::mutex mutex;                           /**< 保护 enabled 与 active 状态 */
-    std::condition_variable drained;            /**< 当 active 变为 false 时发出的排空信号 */
-    bool enabled = true;                        /**< 订阅是否有效，置 false 即拒绝后续派发 */
-    bool active = false;                        /**< 当前是否有回调正在执行中（单流单生产者） */
-
-    Subscription(uint64_t consumer_id, Zhulong_packet_callback function, uintptr_t value)
-        : consumer(consumer_id), callback(function), token(value) {}
-
-    /**
-     * @brief 派发数据包给回调函数（在锁外调用，具备异常安全防护）
-     * @param packet 数据包视图借用指针
-     */
-    void invoke(const Zhulong_packet_view &packet);
-
-    /**
-     * @brief 禁用该订阅并阻塞等待所有正在执行的回调彻底排空
-     */
-    void disable_and_drain();
-};
-
-/**
- * @brief 物理 RTSP 输入流上下文
- *
- * 每个物理流对应一条真实的 RTSP 连接，可在多个消费者之间复用。
- */
-struct Stream {
-    const Zhulong_stream_id id;                 /**< 物理流全局唯一 ID */
-    const std::string url;                      /**< 规范化后的 RTSP URL */
-    const Options options;                      /**< 传输与超时配置 */
-
-    // consumers 容器与 expiry 时间点仅在持有 Engine::control 互斥锁时访问
-    std::map<uint64_t, int32_t> consumers;      /**< 当前复用该流的消费者映射 (consumer_id -> kind) */
-    Clock::time_point expiry = Clock::time_point::max(); /**< 宽限期到期时间点，默认不过期 */
-
-    Cancellation cancel;                        /**< 控制拉流 Worker 协作式取消状态 */
-    std::thread worker;                         /**< 负责 FFmpeg 阻塞读取与解包的 Worker 线程 */
-    std::mutex mutex;                           /**< 保护 subscriptions 与 status 的互斥锁 */
-    std::map<Zhulong_subscription_id, std::shared_ptr<Subscription>> subscriptions; /**< 订阅者列表 */
-    Zhulong_stream_status status{Zhulong_STREAM_STARTING, Zhulong_OK};              /**< 流当前运行状态 */
-
-    Stream(Zhulong_stream_id stream_id, std::string normalized_url, Options stream_options);
-    ~Stream();
-
-    /** @brief 启动流拉取后台 Worker 线程 */
-    void start();
-
-    /** @brief 请求停止流拉取（置 cancel 标志） */
-    void request_stop();
-
-    /** @brief 等待 Worker 线程完全退出 */
-    void join();
-
-    /** @brief Worker 线程入口函数，负责调用底层 FFmpeg 循环拉流 */
-    void capture() noexcept;
-
-    /** @brief 将解析出的数据包派发至该流的所有活跃订阅者 */
-    void dispatch(const Zhulong_packet_view &packet);
-};
 
 /**
  * @brief Native 引擎核心控制器
