@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端质量验证规范与测试检查"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "视觉风格、Dot-Indicator 徽章与三语契约自检"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "编码铁律合规检查"}
+{"file": ".trellis/spec/naming-guidelines.md", "reason": "复核 React 组件 PascalCase 文件命名"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "复核 actions 重复参数在 Go/Axios 边界的序列化"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "复核 audit Store 与 Handler 的 race/test 门禁"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "复核重复 actions 查询参数的兼容性与 API 文档"}

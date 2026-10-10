@@ -80,6 +80,60 @@
 
 ---
 
+### Scenario: 重复查询参数用于多值列表筛选
+
+#### 1. Scope / Trigger
+
+当列表筛选允许多选时，HTTP 查询参数必须保留多个相同 key 的值，且计数、排序和分页在后端同一查询中执行。该模式适用于审计日志 action 多选，不改变响应结构或数据库 schema。
+
+#### 2. Signatures
+
+- 兼容既有单值：`GET /api/v1/audit/logs?action=auth.login`
+- 多值查询：`GET /api/v1/audit/logs?actions=auth.login&actions=camera.delete`
+- Gin 请求字段：`Actions []string`，字段标签为 `form:"actions"`；前端 Axios 使用 `paramsSerializer: { indexes: null }` 生成重复 query key。
+
+#### 3. Contracts
+
+- 同一 `actions` 参数内按 OR 匹配；与 `status`、`startTime`、`endTime` 条件按 AND 组合。
+- `actions` 非空时优先于兼容字段 `action`；仅在没有 `actions` 值时才应用单值 `action`。
+- 后端先基于完整过滤条件计算 `total`，再按 `created_at DESC, id DESC` 排序并分页；响应仍使用 `{ items, total, page, pageSize }`。
+- 后端 `pageSize` 最大为 100；浏览器列表 URL 对超过 100 的值回退到 API 默认值 20。
+
+#### 4. Validation & Error Matrix
+
+| 输入 | 行为 |
+| --- | --- |
+| 多个非空 `actions` 值 | 按 OR 过滤，其他筛选按 AND 组合 |
+| 仅有旧版 `action` 值 | 保持精确单值过滤 |
+| 同时传 `action` 和非空 `actions` | 采用 `actions`，避免把两种语义意外叠加 |
+| 无效 RFC3339 时间 | API 返回 422；前端路由丢弃无效 URL 日期 |
+| `pageSize` 大于 100 | 后端归一化为 100；前端 URL 解析回退到 20 |
+
+#### 5. Good / Base / Bad Cases
+
+- **Good**：`?actions=auth.login&actions=camera.delete&status=success&pageSize=1` 返回两个动作中符合状态的总数，并只返回当前页的一项。
+- **Base**：旧客户端继续请求 `?action=auth.login`，得到原有精确匹配结果。
+- **Bad**：先取一页再在 React 中过滤，会漏掉其他页的匹配项，并使 `total` 与真实匹配数不一致。
+
+#### 6. Tests Required
+
+- Handler：断言重复 `actions` 与 `status` 组合、分页后的 item 数和未分页 total，并保留单值 `action` 回归覆盖。
+- Store：断言 `actions` OR、状态/时间 AND 与分页 offset 同时生效。
+- 前端：断言 Axios 把 action 数组序列化成重复 query key，路由对 `pageSize=100` 接受、对 `101` 回退。
+
+#### 7. Wrong vs Correct
+
+**Wrong**：在当前页 `data` 上筛选多选 action，或用默认 bracket 数组序列化后假定后端收到重复 key。
+
+**Correct**：
+
+```typescript
+apiClient.get('/audit/logs', {
+  params: { actions: ['auth.login', 'camera.delete'] },
+  paramsSerializer: { indexes: null },
+})
+```
+
 ## 4. 请求校验与 DTO 边界
 
 1. **强制 DTO**：禁止在 HTTP 接口直接接收或返回 GORM Model，防止凭据泄露或级联循环。

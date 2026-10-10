@@ -1,0 +1,104 @@
+{
+  "title": "Audit Logs",
+  "description": "Track administrator authentication, camera configuration modifications, and security events for incident triage.",
+  "table": {
+    "columns": {
+      "id": "Log ID",
+      "createdAt": "Timestamp",
+      "username": "Operator",
+      "action": "Action",
+      "target": "Target",
+      "ip": "Client IP",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "empty": "No audit logs found",
+    "emptyDesc": "No operational or security audit entries match your current search criteria.",
+    "error": "Failed to load audit logs",
+    "retry": "Retry"
+  },
+  "status": {
+    "all": "All Statuses",
+    "success": "Success",
+    "failed": "Failed"
+  },
+  "actionNames": {
+    "auth.init": "System Initialization",
+    "auth.login": "Admin Login",
+    "auth.logout": "Admin Logout",
+    "camera.create": "Add Camera",
+    "camera.update": "Update Camera",
+    "camera.delete": "Delete Camera",
+    "camera.toggle": "Toggle Camera",
+    "storage.update_config": "Update Storage Config",
+    "storage.manual_cleanup": "Manual Storage Cleanup",
+    "storage.path_test": "Storage Path Test",
+    "storage.emergency_stop": "Storage Emergency Stop",
+    "storage.emergency_resume": "Storage Emergency Resume",
+    "time.update_config": "Update Time Config",
+    "time.ntp_sync": "NTP Time Sync",
+    "time.manual_set": "Manual Set Time",
+    "time.rtc_heal": "RTC Hardware Heal"
+  },
+  "actions": {
+    "viewDetail": "View Details",
+    "clearLogs": "Clear Logs",
+    "refresh": "Refresh",
+    "copyJson": "Copy JSON",
+    "copied": "Copied to clipboard",
+    "openMenu": "Open actions menu",
+    "copyTarget": "Copy target",
+    "copyIp": "Copy IP"
+  },
+  "toolbar": {
+    "actionFilterPlaceholder": "Action Type",
+    "statusFilterPlaceholder": "Status",
+    "dateRangePlaceholder": "Time Range",
+    "quickPresets": "Quick Presets",
+    "customExactTime": "Custom Range",
+    "timeWindow": "Time Window",
+    "allDay": "All Day",
+    "now": "To Now",
+    "presetGroups": {
+      "recent": "Recent",
+      "period": "Period"
+    },
+    "presets": {
+      "15m": "Last 15m",
+      "30m": "Last 30m",
+      "1h": "Last 1h",
+      "6h": "Last 6h",
+      "24h": "Last 24h",
+      "today": "Today",
+      "7d": "Last 7d",
+      "30d": "Last 30d"
+    },
+    "clearDateRange": "Clear Range",
+    "cancel": "Cancel",
+    "apply": "Apply",
+    "reset": "Reset Filters"
+  },
+  "dialog": {
+    "detailTitle": "Audit Log Details",
+    "detailDesc": "Inspect full request context, modified parameters, and execution state.",
+    "clearTitle": "Clear Audit Logs",
+    "clearDesc": "This action permanently deletes historical audit logs within the selected scope from the database. This action cannot be undone.",
+    "clearRange": "Scope",
+    "clearAll": "Delete all audit logs",
+    "clearOlderThan7Days": "Delete logs older than 7 days",
+    "clearOlderThan30Days": "Delete logs older than 30 days",
+    "confirmClear": "Permanently Delete",
+    "cancel": "Cancel",
+    "errorMsgTitle": "Error Details",
+    "detailPayload": "Payload / Parameters (Detail)",
+    "noDetail": "No additional details available"
+  },
+  "toast": {
+    "clearSuccess": "Successfully cleared {{count}} audit log record(s)",
+    "clearFailed": "Failed to clear audit logs: {{error}}",
+    "copySuccess": "Detail copied to clipboard",
+    "copyFailed": "Failed to copy to clipboard",
+    "copyTargetSuccess": "Target copied to clipboard",
+    "copyIpSuccess": "IP address copied to clipboard"
+  }
+}

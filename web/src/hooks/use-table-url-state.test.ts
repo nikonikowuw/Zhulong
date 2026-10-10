@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { type Mock, describe, expect, it, vi } from 'vitest'
 import { renderHook } from 'vitest-browser-react'
 import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
@@ -232,6 +233,47 @@ describe('useTableUrlState', () => {
     expect(result.current.columnFilters).toEqual([
       { id: 'status', value: ['todo', 'done'] },
       { id: 'priority', value: ['high'] },
+    ])
+  })
+
+  it('updates filters and pagination when the router search changes externally', async () => {
+    const navigate = vi.fn() as Mock<NavigateFn>
+    const { result, act } = await renderHook(() => {
+      const [search, setSearch] = useState<Record<string, unknown>>({
+        page: 3,
+        action: ['camera.create'],
+        search: 'old',
+      })
+      const tableState = useTableUrlState({
+        search,
+        navigate,
+        pagination: { defaultPage: 1, defaultPageSize: 10 },
+        globalFilter: { enabled: true, key: 'search' },
+        columnFilters: [
+          { columnId: 'action', searchKey: 'action', type: 'array' },
+        ],
+      })
+      return { tableState, setSearch }
+    })
+
+    expect(result.current.tableState.pagination.pageIndex).toBe(2)
+    expect(result.current.tableState.globalFilter).toBe('old')
+    expect(result.current.tableState.columnFilters).toEqual([
+      { id: 'action', value: ['camera.create'] },
+    ])
+
+    await act(() => {
+      result.current.setSearch({
+        page: 1,
+        action: 'camera.delete',
+        search: 'new',
+      })
+    })
+
+    expect(result.current.tableState.pagination.pageIndex).toBe(0)
+    expect(result.current.tableState.globalFilter).toBe('new')
+    expect(result.current.tableState.columnFilters).toEqual([
+      { id: 'action', value: ['camera.delete'] },
     ])
   })
 

@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "React 前端开发规范总览与开发前检查清单"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "前端 12 条编码铁律、TanStack Query 服务端状态与 TanStack Table URL 状态驱动"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "features/ 业务切片与 routes/ TanStack Router 目录拓扑结构"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "Dot-Indicator Outline 状态徽章标准、OKLCH 语义色与三语国际化契约"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端测试、TypeScript 零 any 与打包构建质量门禁"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "向兼容 GET 查询参数增加重复 actions 并维护分页契约"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "审计 Handler/Store 查询扩展及竞态测试门禁"}
+{"file": ".trellis/spec/naming-guidelines.md", "reason": "审计 React 组件文件按 PascalCase 命名"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验证重复查询参数从 React 到 Go 的序列化契约"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用状态徽章并避免新增泛化抽象"}

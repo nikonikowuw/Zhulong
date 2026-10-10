@@ -31,6 +31,7 @@
     "Apps": "应用市场",
     "Chats": "消息会话",
     "Users": "用户管理",
+    "Audit Logs": "审计日志",
     "Secured by Clerk": "Clerk 认证",
     "Auth": "身份验证",
     "Sign In": "登录",
@@ -64,7 +65,21 @@
     "clearSelection": "取消选择",
     "clearSelectionShortcut": "取消选择 (Escape)",
     "bulkActionsAria": "已选择 {{count}} 项的批量操作工具栏",
-    "bulkActionsAnnouncement": "已选择 {{count}} {{entityName}}。批量操作工具栏可用。"
+    "bulkActionsAnnouncement": "已选择 {{count}} {{entityName}}。批量操作工具栏可用。",
+    "selectedCount": "已选择 {{count}} 项",
+    "pagination": {
+      "pageOf": "第 {{currentPage}} 页，共 {{totalPages}} 页",
+      "rowsPerPage": "每页行数",
+      "firstPage": "前往第一页",
+      "previousPage": "前往上一页",
+      "goToPage": "前往第 {{pageNumber}} 页",
+      "nextPage": "前往下一页",
+      "lastPage": "前往最后一页"
+    }
+  },
+  "filter": {
+    "noResults": "没有匹配结果",
+    "clearFilters": "清除筛选"
   },
   "entities": {
     "user": "位用户",

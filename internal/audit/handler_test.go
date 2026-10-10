@@ -114,6 +114,40 @@ func TestHandlerListLogsFilterAndValidationError(t *testing.T) {
 		t.Fatalf("unexpected item error msg: %s", resp.Data.Items[0].ErrorMsg)
 	}
 
+	// Repeated actions take precedence when both query forms are present.
+	precedenceReq, _ := http.NewRequest(http.MethodGet, "/api/v1/audit/logs?action=auth.login&actions=camera.delete&status=success", nil)
+	precedenceW := httptest.NewRecorder()
+	router.ServeHTTP(precedenceW, precedenceReq)
+	var precedenceResp struct {
+		Data httputil.PaginatedData[AuditLogDTO] `json:"data"`
+	}
+	if err := json.Unmarshal(precedenceW.Body.Bytes(), &precedenceResp); err != nil {
+		t.Fatalf("unmarshal action precedence response: %v", err)
+	}
+	if precedenceResp.Data.Total != 1 || len(precedenceResp.Data.Items) != 1 || precedenceResp.Data.Items[0].Action != ActionCameraDelete {
+		t.Fatalf("expected actions to override action, got total=%d items=%v", precedenceResp.Data.Total, precedenceResp.Data.Items)
+	}
+
+	// Multiple actions use OR semantics before pagination; status remains ANDed.
+	multiActionReq, _ := http.NewRequest(http.MethodGet, "/api/v1/audit/logs?actions=auth.login&actions=camera.delete&status=success&page=1&pageSize=1", nil)
+	multiActionW := httptest.NewRecorder()
+	router.ServeHTTP(multiActionW, multiActionReq)
+	if multiActionW.Code != http.StatusOK {
+		t.Fatalf("expected 200 for multiple actions, got %d: %s", multiActionW.Code, multiActionW.Body.String())
+	}
+	var multiActionResp struct {
+		Data httputil.PaginatedData[AuditLogDTO] `json:"data"`
+	}
+	if err := json.Unmarshal(multiActionW.Body.Bytes(), &multiActionResp); err != nil {
+		t.Fatalf("unmarshal multiple-action response: %v", err)
+	}
+	if multiActionResp.Data.Total != 2 || len(multiActionResp.Data.Items) != 1 || multiActionResp.Data.PageSize != 1 {
+		t.Fatalf("expected 2 matching rows and one paginated result, got total=%d items=%d pageSize=%d", multiActionResp.Data.Total, len(multiActionResp.Data.Items), multiActionResp.Data.PageSize)
+	}
+	if multiActionResp.Data.Items[0].Status != StatusSuccess {
+		t.Fatalf("expected status filter to be applied, got %s", multiActionResp.Data.Items[0].Status)
+	}
+
 	// Bad RFC3339 time
 	badReq, _ := http.NewRequest(http.MethodGet, "/api/v1/audit/logs?startTime=not-a-date", nil)
 	badW := httptest.NewRecorder()

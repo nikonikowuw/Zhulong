@@ -37,10 +37,11 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // ListLogsQuery defines query parameters for listing audit logs.
 type ListLogsQuery struct {
 	httputil.PaginationQuery
-	Action    string `form:"action"`
-	Status    string `form:"status"`
-	StartTime string `form:"startTime"`
-	EndTime   string `form:"endTime"`
+	Action    string   `form:"action"`
+	Actions   []string `form:"actions"`
+	Status    string   `form:"status"`
+	StartTime string   `form:"startTime"`
+	EndTime   string   `form:"endTime"`
 }
 
 // AuditLogDTO represents the external API presentation for an audit log record.
@@ -87,7 +88,8 @@ func toAuditLogDTOs(logs []AuditLog) []AuditLogDTO {
 // @Produce      json
 // @Param        page query int false "Page number (1-based, default 1)"
 // @Param        pageSize query int false "Page size (default 20, max 100)"
-// @Param        action query string false "Filter by action"
+// @Param        action query string false "Filter by one action (legacy parameter)"
+// @Param        actions query []string false "Filter by any matching action (repeat parameter for multiple values)" collectionFormat(multi)
 // @Param        status query string false "Filter by status (success/failed)"
 // @Param        startTime query string false "Start time (RFC3339)"
 // @Param        endTime query string false "End time (RFC3339)"
@@ -100,10 +102,11 @@ func (h *Handler) ListLogs(c *gin.Context) {
 	page, pageSize, offset, limit := q.Normalize()
 
 	filter := Filter{
-		Action: q.Action,
-		Status: q.Status,
-		Limit:  limit,
-		Offset: offset,
+		Action:  q.Action,
+		Actions: q.Actions,
+		Status:  q.Status,
+		Limit:   limit,
+		Offset:  offset,
 	}
 
 	if q.StartTime != "" {

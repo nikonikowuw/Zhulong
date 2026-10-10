@@ -1,0 +1,104 @@
+{
+  "title": "审计日志",
+  "description": "记录管理员认证、设备配置变更及关键系统安全事件，提供追溯与排障依据。",
+  "table": {
+    "columns": {
+      "id": "日志 ID",
+      "createdAt": "记录时间",
+      "username": "操作人",
+      "action": "操作动作",
+      "target": "操作目标",
+      "ip": "客户端 IP",
+      "status": "执行状态",
+      "actions": "操作"
+    },
+    "empty": "暂无审计日志记录",
+    "emptyDesc": "系统尚未产生符合当前筛选条件的操作审计数据。",
+    "error": "加载审计日志失败",
+    "retry": "重新加载"
+  },
+  "status": {
+    "all": "全部状态",
+    "success": "成功",
+    "failed": "失败"
+  },
+  "actionNames": {
+    "auth.init": "系统初始化",
+    "auth.login": "管理员登录",
+    "auth.logout": "管理员登出",
+    "camera.create": "添加摄像机",
+    "camera.update": "更新摄像机",
+    "camera.delete": "删除摄像机",
+    "camera.toggle": "启停摄像机",
+    "storage.update_config": "更新存储配置",
+    "storage.manual_cleanup": "手动清理存储",
+    "storage.path_test": "存储路径测试",
+    "storage.emergency_stop": "存储紧急停止",
+    "storage.emergency_resume": "存储恢复运行",
+    "time.update_config": "更新时间配置",
+    "time.ntp_sync": "NTP 对时同步",
+    "time.manual_set": "手动设置时间",
+    "time.rtc_heal": "RTC 硬件自愈"
+  },
+  "actions": {
+    "viewDetail": "查看明细",
+    "clearLogs": "清理日志",
+    "refresh": "刷新",
+    "copyJson": "复制 JSON",
+    "copied": "已复制到剪贴板",
+    "openMenu": "打开操作菜单",
+    "copyTarget": "复制目标",
+    "copyIp": "复制 IP"
+  },
+  "toolbar": {
+    "actionFilterPlaceholder": "动作类型",
+    "statusFilterPlaceholder": "状态筛选",
+    "dateRangePlaceholder": "时间范围",
+    "quickPresets": "快捷范围",
+    "customExactTime": "精准区间",
+    "timeWindow": "时分窗口",
+    "allDay": "全天",
+    "now": "至现在",
+    "presetGroups": {
+      "recent": "常用快查",
+      "period": "自然周期"
+    },
+    "presets": {
+      "15m": "近 15 分钟",
+      "30m": "近 30 分钟",
+      "1h": "近 1 小时",
+      "6h": "近 6 小时",
+      "24h": "近 24 小时",
+      "today": "今日全天",
+      "7d": "近 7 天",
+      "30d": "近 30 天"
+    },
+    "clearDateRange": "清空时间",
+    "cancel": "取消",
+    "apply": "应用",
+    "reset": "重置筛选"
+  },
+  "dialog": {
+    "detailTitle": "审计日志明细",
+    "detailDesc": "查看当前事件的完整请求上下文与变更明细。",
+    "clearTitle": "清理审计日志",
+    "clearDesc": "此操作将从数据库中永久移除选定范围内的历史审计记录，无法撤销。请谨慎操作。",
+    "clearRange": "清理范围",
+    "clearAll": "清空全部日志",
+    "clearOlderThan7Days": "清理 7 天前的历史日志",
+    "clearOlderThan30Days": "清理 30 天前的历史日志",
+    "confirmClear": "确认永久删除",
+    "cancel": "取消",
+    "errorMsgTitle": "执行失败异常摘要",
+    "detailPayload": "操作变更上下文 (Detail)",
+    "noDetail": "无额外明细数据"
+  },
+  "toast": {
+    "clearSuccess": "已成功清理 {{count}} 条历史审计记录",
+    "clearFailed": "清理审计日志失败: {{error}}",
+    "copySuccess": "详情内容已复制到剪贴板",
+    "copyFailed": "复制到剪贴板失败",
+    "copyTargetSuccess": "目标已复制到剪贴板",
+    "copyIpSuccess": "IP 地址已复制到剪贴板"
+  }
+}

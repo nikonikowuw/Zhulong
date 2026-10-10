@@ -31,6 +31,7 @@
     "Apps": "應用市場",
     "Chats": "訊息會話",
     "Users": "使用者管理",
+    "Audit Logs": "稽核日誌",
     "Secured by Clerk": "Clerk 認證",
     "Auth": "身份驗證",
     "Sign In": "登入",
@@ -64,7 +65,21 @@
     "clearSelection": "取消選擇",
     "clearSelectionShortcut": "取消選擇 (Escape)",
     "bulkActionsAria": "已選擇 {{count}} 項的批量操作工具列",
-    "bulkActionsAnnouncement": "已選擇 {{count}} {{entityName}}。批量操作工具列可用。"
+    "bulkActionsAnnouncement": "已選擇 {{count}} {{entityName}}。批量操作工具列可用。",
+    "selectedCount": "已選擇 {{count}} 項",
+    "pagination": {
+      "pageOf": "第 {{currentPage}} 頁，共 {{totalPages}} 頁",
+      "rowsPerPage": "每頁列數",
+      "firstPage": "前往第一頁",
+      "previousPage": "前往上一頁",
+      "goToPage": "前往第 {{pageNumber}} 頁",
+      "nextPage": "前往下一頁",
+      "lastPage": "前往最後一頁"
+    }
+  },
+  "filter": {
+    "noResults": "沒有符合的結果",
+    "clearFilters": "清除篩選"
   },
   "entities": {
     "user": "位使用者",

@@ -77,4 +77,31 @@ describe('NavGroup i18n', () => {
     await expect.element(getByText('Network')).toBeInTheDocument()
     await expect.element(getByText('Time & Clock')).toBeInTheDocument()
   })
+
+  it('translates Audit Logs in general navigation group', async () => {
+    const items = [
+      {
+        title: 'Audit Logs',
+        url: '/audit',
+      },
+    ]
+
+    await i18n.changeLanguage('zh-Hans')
+    const { getByText } = await render(
+      <SidebarProvider>
+        <NavGroup title='General' items={items} />
+      </SidebarProvider>
+    )
+
+    await expect.element(getByText('常规')).toBeInTheDocument()
+    await expect.element(getByText('审计日志')).toBeInTheDocument()
+
+    await i18n.changeLanguage('zh-Hant')
+    await expect.element(getByText('常規')).toBeInTheDocument()
+    await expect.element(getByText('稽核日誌')).toBeInTheDocument()
+
+    await i18n.changeLanguage('en')
+    await expect.element(getByText('General')).toBeInTheDocument()
+    await expect.element(getByText('Audit Logs')).toBeInTheDocument()
+  })
 })

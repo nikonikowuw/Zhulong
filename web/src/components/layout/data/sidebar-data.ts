@@ -20,6 +20,7 @@ import {
   MessagesSquare,
   Network,
   Clock,
+  ScrollText,
   ShieldCheck,
   AudioWaveform,
   Command,
@@ -90,6 +91,11 @@ export const sidebarData: SidebarData = {
           title: 'Users',
           url: '/users',
           icon: Users,
+        },
+        {
+          title: 'Audit Logs',
+          url: '/audit',
+          icon: ScrollText,
         },
         {
           title: 'Secured by Clerk',

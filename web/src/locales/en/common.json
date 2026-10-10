@@ -31,6 +31,7 @@
     "Apps": "Apps",
     "Chats": "Chats",
     "Users": "Users",
+    "Audit Logs": "Audit Logs",
     "Secured by Clerk": "Secured by Clerk",
     "Auth": "Auth",
     "Sign In": "Sign In",
@@ -64,7 +65,21 @@
     "clearSelection": "Clear selection",
     "clearSelectionShortcut": "Clear selection (Escape)",
     "bulkActionsAria": "Bulk actions for {{count}} selected {{entityName}}",
-    "bulkActionsAnnouncement": "{{count}} {{entityName}} selected. Bulk actions toolbar is available."
+    "bulkActionsAnnouncement": "{{count}} {{entityName}} selected. Bulk actions toolbar is available.",
+    "selectedCount": "{{count}} selected",
+    "pagination": {
+      "pageOf": "Page {{currentPage}} of {{totalPages}}",
+      "rowsPerPage": "Rows per page",
+      "firstPage": "Go to first page",
+      "previousPage": "Go to previous page",
+      "goToPage": "Go to page {{pageNumber}}",
+      "nextPage": "Go to next page",
+      "lastPage": "Go to last page"
+    }
+  },
+  "filter": {
+    "noResults": "No results found.",
+    "clearFilters": "Clear filters"
   },
   "entities": {
     "user": "user",

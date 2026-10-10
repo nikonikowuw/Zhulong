@@ -9,6 +9,27 @@ definitions:
       status:
         type: string
     type: object
+  audit.AuditLogDTO:
+    properties:
+      action:
+        type: string
+      createdAt:
+        type: string
+      detail:
+        type: string
+      errorMsg:
+        type: string
+      id:
+        type: integer
+      ip:
+        type: string
+      status:
+        type: string
+      target:
+        type: string
+      username:
+        type: string
+    type: object
   auth.AuthStatusResponse:
     properties:
       initialized:
@@ -243,6 +264,24 @@ definitions:
     - code
     - field
     - message
+    type: object
+  httputil.PaginatedData-audit_AuditLogDTO:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/audit.AuditLogDTO'
+        type: array
+      limit:
+        description: Backwards compatibility fields for legacy clients expecting limit/offset
+        type: integer
+      offset:
+        type: integer
+      page:
+        type: integer
+      pageSize:
+        type: integer
+      total:
+        type: integer
     type: object
   httputil.PaginatedData-camera_CameraResponse:
     properties:
@@ -681,6 +720,77 @@ info:
   title: Zhulong API
   version: "1.0"
 paths:
+  /audit/logs:
+    delete:
+      parameters:
+      - description: Clear logs older than this RFC3339 timestamp
+        in: query
+        name: before
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  type: object
+              type: object
+      summary: Clear audit logs
+      tags:
+      - audit
+    get:
+      parameters:
+      - description: Page number (1-based, default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Page size (default 20, max 100)
+        in: query
+        name: pageSize
+        type: integer
+      - description: Filter by one action (legacy parameter)
+        in: query
+        name: action
+        type: string
+      - collectionFormat: multi
+        description: Filter by any matching action (repeat parameter for multiple
+          values)
+        in: query
+        items:
+          type: string
+        name: actions
+        type: array
+      - description: Filter by status (success/failed)
+        in: query
+        name: status
+        type: string
+      - description: Start time (RFC3339)
+        in: query
+        name: startTime
+        type: string
+      - description: End time (RFC3339)
+        in: query
+        name: endTime
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/httputil.PaginatedData-audit_AuditLogDTO'
+              type: object
+      summary: List audit logs with filtering and pagination
+      tags:
+      - audit
   /auth/init:
     post:
       consumes:

@@ -1,0 +1,104 @@
+{
+  "title": "稽核日誌",
+  "description": "記錄管理員驗證、設備設定變更及關鍵系統安全事件，提供追溯與排障依據。",
+  "table": {
+    "columns": {
+      "id": "日誌 ID",
+      "createdAt": "記錄時間",
+      "username": "操作人",
+      "action": "操作動作",
+      "target": "操作目標",
+      "ip": "客戶端 IP",
+      "status": "執行狀態",
+      "actions": "操作"
+    },
+    "empty": "暫無稽核日誌記錄",
+    "emptyDesc": "系統尚未產生符合當前篩選條件的操作稽核數據。",
+    "error": "載入稽核日誌失敗",
+    "retry": "重新載入"
+  },
+  "status": {
+    "all": "全部狀態",
+    "success": "成功",
+    "failed": "失敗"
+  },
+  "actionNames": {
+    "auth.init": "系統初始化",
+    "auth.login": "管理員登入",
+    "auth.logout": "管理員登出",
+    "camera.create": "新增攝影機",
+    "camera.update": "更新攝影機",
+    "camera.delete": "刪除攝影機",
+    "camera.toggle": "啟停攝影機",
+    "storage.update_config": "更新儲存設定",
+    "storage.manual_cleanup": "手動清理儲存",
+    "storage.path_test": "儲存路徑測試",
+    "storage.emergency_stop": "儲存緊急停止",
+    "storage.emergency_resume": "儲存恢復運行",
+    "time.update_config": "更新時間設定",
+    "time.ntp_sync": "NTP 對時同步",
+    "time.manual_set": "手動設定時間",
+    "time.rtc_heal": "RTC 硬體自癒"
+  },
+  "actions": {
+    "viewDetail": "查看明細",
+    "clearLogs": "清理日誌",
+    "refresh": "重新整理",
+    "copyJson": "複製 JSON",
+    "copied": "已複製到剪貼簿",
+    "openMenu": "開啟操作選單",
+    "copyTarget": "複製目標",
+    "copyIp": "複製 IP"
+  },
+  "toolbar": {
+    "actionFilterPlaceholder": "動作類型",
+    "statusFilterPlaceholder": "狀態篩選",
+    "dateRangePlaceholder": "時間範圍",
+    "quickPresets": "快捷範圍",
+    "customExactTime": "精準區間",
+    "timeWindow": "時分視窗",
+    "allDay": "全天",
+    "now": "至現在",
+    "presetGroups": {
+      "recent": "常用快查",
+      "period": "自然週期"
+    },
+    "presets": {
+      "15m": "近 15 分鐘",
+      "30m": "近 30 分鐘",
+      "1h": "近 1 小時",
+      "6h": "近 6 小時",
+      "24h": "近 24 小時",
+      "today": "今日全天",
+      "7d": "近 7 天",
+      "30d": "近 30 天"
+    },
+    "clearDateRange": "清空時間",
+    "cancel": "取消",
+    "apply": "套用",
+    "reset": "重設篩選"
+  },
+  "dialog": {
+    "detailTitle": "稽核日誌明細",
+    "detailDesc": "查看當前事件的完整請求上下文與變更明細。",
+    "clearTitle": "清理稽核日誌",
+    "clearDesc": "此操作將從資料庫中永久移除選定範圍內的歷史稽核記錄，無法撤銷。請謹慎操作。",
+    "clearRange": "清理範圍",
+    "clearAll": "清空全部日誌",
+    "clearOlderThan7Days": "清理 7 天前的歷史日誌",
+    "clearOlderThan30Days": "清理 30 天前的歷史日誌",
+    "confirmClear": "確認永久刪除",
+    "cancel": "取消",
+    "errorMsgTitle": "執行失敗異常摘要",
+    "detailPayload": "操作變更上下文 (Detail)",
+    "noDetail": "無額外明細數據"
+  },
+  "toast": {
+    "clearSuccess": "已成功清理 {{count}} 條歷史稽核記錄",
+    "clearFailed": "清理稽核日誌失敗: {{error}}",
+    "copySuccess": "明細內容已複製到剪貼簿",
+    "copyFailed": "複製到剪貼簿失敗",
+    "copyTargetSuccess": "目標已複製到剪貼簿",
+    "copyIpSuccess": "IP 位址已複製到剪貼簿"
+  }
+}

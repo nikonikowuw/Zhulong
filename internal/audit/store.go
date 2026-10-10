@@ -76,7 +76,9 @@ func (s *Store) List(ctx context.Context, filter Filter) ([]AuditLog, int64, err
 	}
 	query := db.Model(&AuditLog{})
 
-	if filter.Action != "" {
+	if len(filter.Actions) > 0 {
+		query = query.Where("action IN ?", filter.Actions)
+	} else if filter.Action != "" {
 		query = query.Where("action = ?", filter.Action)
 	}
 	if filter.Status != "" {

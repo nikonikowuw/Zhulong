@@ -58,6 +58,7 @@ type Entry struct {
 // Filter defines parameters for querying audit logs.
 type Filter struct {
 	Action    string
+	Actions   []string
 	Status    string
 	StartTime *time.Time
 	EndTime   *time.Time

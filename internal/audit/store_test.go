@@ -142,6 +142,44 @@ func TestStoreFilterByActionStatusAndDate(t *testing.T) {
 	}
 }
 
+func TestStoreFilterByMultipleActionsStatusAndDate(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	baseTime := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	logs := []*AuditLog{
+		{CreatedAt: baseTime.Add(time.Minute), Action: ActionAuthLogin, Status: StatusSuccess},
+		{CreatedAt: baseTime.Add(2 * time.Minute), Action: ActionCameraDelete, Status: StatusSuccess},
+		{CreatedAt: baseTime.Add(3 * time.Minute), Action: ActionAuthLogin, Status: StatusFailed},
+		{CreatedAt: baseTime.Add(2 * time.Minute), Action: ActionCameraCreate, Status: StatusSuccess},
+		{CreatedAt: baseTime.Add(4 * time.Minute), Action: ActionCameraDelete, Status: StatusSuccess},
+	}
+	if err := store.CreateBatch(ctx, logs); err != nil {
+		t.Fatalf("CreateBatch failed: %v", err)
+	}
+
+	startTime := baseTime.Add(time.Minute)
+	endTime := baseTime.Add(3 * time.Minute)
+	items, total, err := store.List(ctx, Filter{
+		Actions:   []string{ActionAuthLogin, ActionCameraDelete},
+		Status:    StatusSuccess,
+		StartTime: &startTime,
+		EndTime:   &endTime,
+		Limit:     1,
+		Offset:    1,
+	})
+	if err != nil {
+		t.Fatalf("List with multiple action filters failed: %v", err)
+	}
+	if total != 2 || len(items) != 1 {
+		t.Fatalf("expected 2 filtered rows and 1 paginated item, got total=%d items=%d", total, len(items))
+	}
+	if items[0].Action != ActionAuthLogin {
+		t.Fatalf("expected second matching row after pagination to be auth.login, got %s", items[0].Action)
+	}
+}
+
 func TestStorePruneFIFO(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()

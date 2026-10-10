@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type {
   ColumnFiltersState,
   OnChangeFn,
@@ -85,30 +85,30 @@ export function useTableUrlState(
   const globalFilterEnabled = globalFilterCfg?.enabled ?? true
   const trimGlobal = globalFilterCfg?.trim ?? true
 
-  // Build initial column filters from the current search params
-  const initialColumnFilters: ColumnFiltersState = useMemo(() => {
+  const columnFilters: ColumnFiltersState = useMemo(() => {
     const collected: ColumnFiltersState = []
     for (const cfg of columnFiltersCfg) {
       const raw = (search as SearchRecord)[cfg.searchKey]
       const deserialize = cfg.deserialize ?? ((v: unknown) => v)
       if (cfg.type === 'string') {
-        const value = (deserialize(raw) as string) ?? ''
+        const value = deserialize(raw)
         if (typeof value === 'string' && value.trim() !== '') {
           collected.push({ id: cfg.columnId, value })
         }
       } else {
-        // default to array type
-        const value = (deserialize(raw) as unknown[]) ?? []
-        if (Array.isArray(value) && value.length > 0) {
-          collected.push({ id: cfg.columnId, value })
+        const deserialized = deserialize(raw)
+        const values = Array.isArray(deserialized)
+          ? deserialized
+          : typeof deserialized === 'string'
+            ? [deserialized]
+            : []
+        if (values.length > 0) {
+          collected.push({ id: cfg.columnId, value: values })
         }
       }
     }
     return collected
   }, [columnFiltersCfg, search])
-
-  const [columnFilters, setColumnFilters] =
-    useState<ColumnFiltersState>(initialColumnFilters)
 
   const pagination: PaginationState = useMemo(() => {
     const rawPage = (search as SearchRecord)[pageKey]
@@ -133,11 +133,11 @@ export function useTableUrlState(
     })
   }
 
-  const [globalFilter, setGlobalFilter] = useState<string | undefined>(() => {
+  const globalFilter = (() => {
     if (!globalFilterEnabled) return undefined
     const raw = (search as SearchRecord)[globalFilterKey]
     return typeof raw === 'string' ? raw : ''
-  })
+  })()
 
   const onGlobalFilterChange: OnChangeFn<string> | undefined =
     globalFilterEnabled
@@ -147,7 +147,6 @@ export function useTableUrlState(
               ? updater(globalFilter ?? '')
               : updater
           const value = trimGlobal ? next.trim() : next
-          setGlobalFilter(value)
           navigate({
             search: (prev) => ({
               ...(prev as SearchRecord),
@@ -161,7 +160,6 @@ export function useTableUrlState(
   const onColumnFiltersChange: OnChangeFn<ColumnFiltersState> = (updater) => {
     const next =
       typeof updater === 'function' ? updater(columnFilters) : updater
-    setColumnFilters(next)
 
     const patch: Record<string, unknown> = {}
 
@@ -208,7 +206,7 @@ export function useTableUrlState(
   }
 
   return {
-    globalFilter: globalFilterEnabled ? (globalFilter ?? '') : undefined,
+    globalFilter: globalFilterEnabled ? globalFilter : undefined,
     onGlobalFilterChange,
     columnFilters,
     onColumnFiltersChange,
