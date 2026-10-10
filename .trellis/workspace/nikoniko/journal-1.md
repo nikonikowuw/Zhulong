@@ -786,3 +786,26 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 18: 实现统一异构硬件帧对象与多算法零拷贝管线设计
+<!-- trellis-session: v=2 fp=f900018f14e505c1 -->
+
+**Date**: 2026-10-10
+**Task**: 实现统一异构硬件帧对象与多算法零拷贝管线设计
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+完成了跨异构芯片（Rockchip/Ascend/Jetson/CPU）统一 HardwareFrame 帧对象抽象，支持有效几何与垂直步长计算，实现 1:N 多算法并发只读零拷贝共享与 RAII 缓冲池防死锁回收机制，全项通过 CTest/ASan/TSan 测试与 Spec 归档
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ffce0c8` | feat(native): implement unified HardwareFrame abstraction and 1:N zero-copy lifecycle |
+
+### Status
+
+[OK] **Completed**
