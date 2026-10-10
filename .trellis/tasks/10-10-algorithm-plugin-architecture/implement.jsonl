@@ -1,0 +1,14 @@
+{"file": ".trellis/spec/native/index.md", "reason": "Native 开发与验证基线"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "SDK、Go C ABI、runner 与厂商适配的单向依赖边界"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "不透明句柄、跨语言所有权与排空合同"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "有界帧队列、不可变共享与停机约束；结合任务设计区分已实现和目标"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "保留既有 FFmpeg、订阅、构建和 host/cross 验收合同"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Go 业务模块与 engine 封装边界"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Fx 装配、应用根 context 和失败回滚"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "版本化 SQL、短事务和安装/升级状态持久化"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "状态分类与 SDK/进程错误脱敏"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "IPC/CGO 数据流和所有权交叉核对"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "公共库按实际消费点提取，避免复制实现与过度抽象"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/research/repository-baseline.md", "reason": "仓库已有能力、参考设备与文档时效性"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/research/process-thread-model.md", "reason": "进程/线程、资源分层和产品运维决策证据"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/research/rockchip-context-sharing.md", "reason": "固定官方 RKNN 源码证据与板端未验证限制"}
