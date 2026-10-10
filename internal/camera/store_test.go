@@ -198,6 +198,70 @@ func TestGORMCameraStore_UnreadyDatabase(t *testing.T) {
 			if _, err := store.HasAnyEncryptedStreams(ctx); err == nil {
 				t.Errorf("%s: expected error on HasAnyEncryptedStreams, got nil", name)
 			}
+			if _, err := store.GetNextNumericID(ctx); err == nil {
+				t.Errorf("%s: expected error on GetNextNumericID, got nil", name)
+			}
 		})
+	}
+}
+
+func TestCameraStore_GetNextNumericID(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// 1. Empty database should return "1"
+	nextID, err := store.GetNextNumericID(ctx)
+	if err != nil {
+		t.Fatalf("expected no error on empty db, got %v", err)
+	}
+	if nextID != "1" {
+		t.Fatalf("expected next ID to be '1', got %q", nextID)
+	}
+
+	// 2. Create camera with numeric ID "1"
+	cam1 := &Camera{ID: "1", Name: "Cam 1", Enabled: true, Revision: 1}
+	if err := store.Create(ctx, cam1, nil); err != nil {
+		t.Fatalf("failed to create camera 1: %v", err)
+	}
+
+	// Next ID should be "2"
+	nextID, err = store.GetNextNumericID(ctx)
+	if err != nil {
+		t.Fatalf("expected no error after cam 1, got %v", err)
+	}
+	if nextID != "2" {
+		t.Fatalf("expected next ID to be '2', got %q", nextID)
+	}
+
+	// 3. Create camera with custom non-numeric ID "cam_gate" and "test_999"
+	camCustom := &Camera{ID: "cam_gate", Name: "Gate", Enabled: true, Revision: 1}
+	if err := store.Create(ctx, camCustom, nil); err != nil {
+		t.Fatalf("failed to create custom camera: %v", err)
+	}
+
+	// Next ID should STILL be "2", ignoring "cam_gate"
+	nextID, err = store.GetNextNumericID(ctx)
+	if err != nil {
+		t.Fatalf("expected no error after custom cam, got %v", err)
+	}
+	if nextID != "2" {
+		t.Fatalf("expected next ID to remain '2', got %q", nextID)
+	}
+
+	// 4. Create camera with numeric ID "2"
+	cam2 := &Camera{ID: "2", Name: "Cam 2", Enabled: true, Revision: 1}
+	if err := store.Create(ctx, cam2, nil); err != nil {
+		t.Fatalf("failed to create camera 2: %v", err)
+	}
+
+	// Next ID should be "3"
+	nextID, err = store.GetNextNumericID(ctx)
+	if err != nil {
+		t.Fatalf("expected no error after cam 2, got %v", err)
+	}
+	if nextID != "3" {
+		t.Fatalf("expected next ID to be '3', got %q", nextID)
 	}
 }

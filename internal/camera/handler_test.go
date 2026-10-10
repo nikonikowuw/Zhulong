@@ -444,3 +444,67 @@ func TestCameraHandler_AuditLogging(t *testing.T) {
 		t.Errorf("entry 3 mismatch: %+v", auditor.entries[3])
 	}
 }
+
+func TestCameraHandlerCreate_AutoIncrementID(t *testing.T) {
+	router, _, _, _, cleanup := setupTestCameraApp(t)
+	defer cleanup()
+
+	// 1. Create first camera without ID field
+	createBody1 := `{
+		"name": "Auto Camera 1",
+		"mainStream": {
+			"rtspUrl": "rtsp://admin:pass123@192.168.1.11:554/live/main",
+			"transport": "tcp"
+		}
+	}`
+
+	req1, _ := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewBufferString(createBody1))
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	router.ServeHTTP(w1, req1)
+
+	if w1.Code != http.StatusCreated {
+		t.Fatalf("Create camera 1 failed: status=%d body=%s", w1.Code, w1.Body.String())
+	}
+
+	var resp1 struct {
+		Code string          `json:"code"`
+		Data *CameraResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w1.Body.Bytes(), &resp1); err != nil {
+		t.Fatalf("Unmarshal response failed: %v", err)
+	}
+	if resp1.Data == nil || resp1.Data.ID != "1" {
+		t.Fatalf("expected camera 1 to have ID '1', got %+v", resp1.Data)
+	}
+
+	// 2. Create second camera with empty string ID
+	createBody2 := `{
+		"id": "",
+		"name": "Auto Camera 2",
+		"mainStream": {
+			"rtspUrl": "rtsp://admin:pass123@192.168.1.12:554/live/main",
+			"transport": "tcp"
+		}
+	}`
+
+	req2, _ := http.NewRequest(http.MethodPost, "/api/v1/cameras", bytes.NewBufferString(createBody2))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("Create camera 2 failed: status=%d body=%s", w2.Code, w2.Body.String())
+	}
+
+	var resp2 struct {
+		Code string          `json:"code"`
+		Data *CameraResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("Unmarshal response failed: %v", err)
+	}
+	if resp2.Data == nil || resp2.Data.ID != "2" {
+		t.Fatalf("expected camera 2 to have ID '2', got %+v", resp2.Data)
+	}
+}

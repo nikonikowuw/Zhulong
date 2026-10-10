@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
@@ -34,6 +35,7 @@ type CameraStore interface {
 	Update(ctx context.Context, params UpdateCameraParams) (*Camera, error)
 	Delete(ctx context.Context, id string) error
 	HasAnyEncryptedStreams(ctx context.Context) (bool, error)
+	GetNextNumericID(ctx context.Context) (string, error)
 }
 
 type gormCameraStore struct {
@@ -253,4 +255,19 @@ func (s *gormCameraStore) HasAnyEncryptedStreams(ctx context.Context) (bool, err
 		return false, fmt.Errorf("count encrypted streams: %w", err)
 	}
 	return count > 0, nil
+}
+
+func (s *gormCameraStore) GetNextNumericID(ctx context.Context) (string, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	var nextID int64
+	err = db.Raw("SELECT COALESCE(MAX(CAST(id AS INTEGER)), 0) + 1 FROM cameras WHERE id NOT GLOB '*[^0-9]*' AND id != ''").Scan(&nextID).Error
+	if err != nil {
+		return "", fmt.Errorf("query next numeric id: %w", err)
+	}
+
+	return strconv.FormatInt(nextID, 10), nil
 }

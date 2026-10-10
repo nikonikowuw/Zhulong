@@ -2,11 +2,10 @@ package camera
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
@@ -26,6 +25,7 @@ type CameraService struct {
 	hub       *EventHub
 	scheduler *HealthScheduler
 	logger    *zap.Logger
+	createMu  sync.Mutex
 }
 
 // NewCameraService creates a new CameraService.
@@ -97,7 +97,14 @@ func (s *CameraService) Create(ctx context.Context, req CreateCameraRequest) (*C
 	// 5. Generate Camera ID if absent
 	camID := strings.TrimSpace(req.ID)
 	if camID == "" {
-		camID = generateCameraID()
+		s.createMu.Lock()
+		defer s.createMu.Unlock()
+
+		nextID, err := s.store.GetNextNumericID(ctx)
+		if err != nil {
+			return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to allocate camera ID", err)
+		}
+		camID = nextID
 	}
 
 	// 6. Encrypt Stream Credentials with AES-GCM and AAD
@@ -470,10 +477,4 @@ func validateStreamProtocol(proto string) (string, error) {
 		return "", apperr.New(apperr.KindInvalid, "CAMERA_PROTOCOL_UNSUPPORTED", "Only RTSP protocol is supported", nil)
 	}
 	return p, nil
-}
-
-func generateCameraID() string {
-	b := make([]byte, 4)
-	_, _ = rand.Read(b)
-	return fmt.Sprintf("cam_%d_%s", time.Now().Unix(), hex.EncodeToString(b))
 }
