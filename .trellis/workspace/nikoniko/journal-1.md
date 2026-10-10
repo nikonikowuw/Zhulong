@@ -864,3 +864,26 @@ Session summary was not supplied.
 
 [OK] **Completed**
 
+
+
+## Session 22: 完成审计日志视图与审查修复
+<!-- trellis-session: v=2 fp=b07ebd00f8e96215 -->
+
+**Date**: 2026-10-10
+**Task**: 完成审计日志视图与审查修复
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+完成审计日志筛选与审核修复：新增服务端重复 actions 多选及旧 action 兼容、URL 状态回退同步、API/Zod 与日期/分页边界校验、国际化和组件规范修正；补齐 JSON 高亮、清理确认、行 ID 与跨层回归测试，更新 Swagger/API spec。前端 52 文件 241 测试、lint/build、make go-check、审计 Go race 测试通过；全仓 Prettier 仍有 11 个未修改 settings 文件未通过。工作提交 ca040df，审计任务已归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ca040df` | feat(audit): add filtered audit log view |
+
+### Status
+
+[OK] **Completed**
