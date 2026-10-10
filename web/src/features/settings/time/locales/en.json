@@ -1,0 +1,68 @@
+{
+  "page": {
+    "title": "System Time & Clock Service",
+    "desc": "Manage host time synchronization policies, supporting RFC 4330 SNTP automatic network sync, two-stage safe slew/step, and one-click browser time alignment."
+  },
+  "dashboard": {
+    "title": "Live Clock & Synchronization Dashboard",
+    "desc": "Real-time kernel clock, two-stage safety state machine, and hardware RTC status for edge Linux hosts.",
+    "refresh": "Refresh",
+    "permissionWarningTitle": "System Permissions Restricted",
+    "permissionWarningDesc": "The process lacks CAP_SYS_TIME or root privileges. Clock adjustments or RTC writes may be rejected by the kernel.",
+    "liveClock": "Device Kernel Time",
+    "syncState": "Sync Status",
+    "stateSynchronized": "Synchronized",
+    "stateSyncing": "Syncing...",
+    "statePanicReview": "Panic Review",
+    "stateFailed": "Sync Failed",
+    "stateUnsynced": "Unsynced",
+    "rtcStatus": "Hardware RTC Chip",
+    "rtcNormal": "RTC Ready",
+    "rtcMissing": "No RTC Detected",
+    "rtcError": "RTC Error"
+  },
+  "form": {
+    "mode": {
+      "label": "Synchronization Mode",
+      "ntpDesc": "Smoothly synchronize with candidate NTP servers",
+      "manualDesc": "Align with client browser time or set manually"
+    },
+    "timezone": {
+      "desc": "Atomically links host /etc/localtime and refreshes runtime timezone cache."
+    },
+    "submit": "Save Time Settings"
+  },
+  "tabs": {
+    "ntp": "NTP Network Sync",
+    "manual": "Manual / Browser Sync"
+  },
+  "ntp": {
+    "title": "NTP Network Synchronization",
+    "desc": "Configure 1-3 candidate public or private NTP servers. The background service periodically slews the clock.",
+    "timezoneLabel": "System Timezone",
+    "intervalLabel": "Polling Interval",
+    "serversLabel": "Candidate NTP Server Pool (Fallback Order)",
+    "addServer": "Add Server",
+    "syncNow": "Sync Now",
+    "saveConfig": "Save & Enable NTP Mode",
+    "maxServersWarning": "Maximum 5 NTP servers allowed",
+    "minServersWarning": "At least 1 NTP server is required",
+    "noServersError": "Please provide at least one valid NTP server",
+    "saveSuccess": "NTP time configuration saved successfully",
+    "syncSuccess": "Successfully synchronized clock with upstream NTP server"
+  },
+  "manual": {
+    "title": "Manual Time & Offline Quick Sync",
+    "desc": "Quickly align device clock with your browser or manually input accurate timestamp in isolated offline environments.",
+    "browserSyncTitle": "One-Click Browser Time Sync (Recommended Offline)",
+    "browserSyncDesc": "When directly connected to the edge device via laptop, align device time with client time instantaneously.",
+    "syncBrowserBtn": "Sync Browser Time",
+    "timezoneLabel": "Physical Timezone",
+    "customTimeLabel": "Manual Date & Time",
+    "applyCustomBtn": "Apply Custom Time",
+    "browserSyncSuccess": "System time aligned with browser time and committed to hardware RTC!",
+    "emptyTimeWarning": "Please select a target time first",
+    "invalidTimeFormat": "Invalid date/time format",
+    "applySuccess": "Manual time set successfully and committed to hardware RTC"
+  }
+}

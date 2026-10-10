@@ -51,6 +51,7 @@
     "Notifications": "通知設定",
     "Display": "顯示設定",
     "Network": "網路配置",
+    "Time": "系統對時",
     "Help Center": "說明中心",
     "settingsTitle": "系統設定",
     "settingsDesc": "管理系統各項服務參數、外觀偏好與網路介面。"

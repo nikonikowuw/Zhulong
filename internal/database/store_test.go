@@ -179,9 +179,9 @@ func TestAuditLogsMigrationUpAndDownSymmetry(t *testing.T) {
 	}
 	defer migrator.Close()
 
-	// 1. Run all migrations Up
-	if err := migrator.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		t.Fatalf("migrator Up: %v", err)
+	// 1. Run migrations up to 4
+	if err := migrator.Migrate(4); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(4): %v", err)
 	}
 
 	// Verify audit_logs table and indexes exist
@@ -232,5 +232,72 @@ func TestAuditLogsMigrationUpAndDownSymmetry(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected audit_logs table after re-Up, got count=%d", count)
+	}
+}
+
+func TestSystemTimeConfigsMigrationUpAndDownSymmetry(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "migration_symmetry_5.db")
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", dbPath)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// 1. Run all migrations Up (including 5)
+	if err := migrator.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Up: %v", err)
+	}
+
+	// Verify system_time_configs table exists
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'system_time_configs'").Scan(&count); err != nil {
+		t.Fatalf("query system_time_configs table: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected system_time_configs table after Up, got count=%d", count)
+	}
+
+	// 2. Rollback migration 5 (Down step 1)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator Steps(-1): %v", err)
+	}
+
+	// Verify system_time_configs table is dropped
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'system_time_configs'").Scan(&count); err != nil {
+		t.Fatalf("query system_time_configs table after down: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected system_time_configs table to be dropped after rollback, got count=%d", count)
+	}
+
+	// 3. Re-apply migration 5 (Up step 1)
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator Steps(1): %v", err)
+	}
+
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'system_time_configs'").Scan(&count); err != nil {
+		t.Fatalf("query system_time_configs table after re-up: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected system_time_configs table after re-Up, got count=%d", count)
 	}
 }

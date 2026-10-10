@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Outlet } from '@tanstack/react-router'
-import { Monitor, Bell, Palette, Wrench, UserCog, Network } from 'lucide-react'
+import { Monitor, Bell, Palette, Wrench, UserCog, Network, Clock } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Separator } from '@/components/ui/separator'
 import { ConfigDrawer } from '@/components/config-drawer'
@@ -46,6 +46,11 @@ export function Settings() {
         title: t('nav.Network', { defaultValue: 'Network' }),
         href: '/settings/network',
         icon: <Network size={18} />,
+      },
+      {
+        title: t('nav.Time', { defaultValue: 'Time & Clock' }),
+        href: '/settings/time',
+        icon: <Clock size={18} />,
       },
     ],
     [t]

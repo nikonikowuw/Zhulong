@@ -1,0 +1,18 @@
+export const POPULAR_TIMEZONES = [
+  { value: 'Asia/Shanghai', label: 'Asia/Shanghai (中国标准时间 UTC+8)' },
+  { value: 'Asia/Hong_Kong', label: 'Asia/Hong_Kong (香港时间 UTC+8)' },
+  { value: 'Asia/Taipei', label: 'Asia/Taipei (台北时间 UTC+8)' },
+  { value: 'Asia/Tokyo', label: 'Asia/Tokyo (日本标准时间 UTC+9)' },
+  { value: 'Asia/Seoul', label: 'Asia/Seoul (首尔时间 UTC+9)' },
+  { value: 'Asia/Singapore', label: 'Asia/Singapore (新加坡时间 UTC+8)' },
+  { value: 'Asia/Bangkok', label: 'Asia/Bangkok (中南半岛时间 UTC+7)' },
+  { value: 'UTC', label: 'UTC (协调世界时 UTC+0)' },
+  { value: 'Europe/London', label: 'Europe/London (格林威治/伦敦 UTC+0/+1)' },
+  { value: 'Europe/Berlin', label: 'Europe/Berlin (柏林/中欧时间 UTC+1/+2)' },
+  { value: 'Europe/Paris', label: 'Europe/Paris (巴黎时间 UTC+1/+2)' },
+  { value: 'America/New_York', label: 'America/New_York (美东时间 UTC-5/-4)' },
+  { value: 'America/Chicago', label: 'America/Chicago (美中时间 UTC-6/-5)' },
+  { value: 'America/Denver', label: 'America/Denver (山地时间 UTC-7/-6)' },
+  { value: 'America/Los_Angeles', label: 'America/Los_Angeles (太平洋时间 UTC-8/-7)' },
+  { value: 'Australia/Sydney', label: 'Australia/Sydney (悉尼时间 UTC+10/+11)' },
+]

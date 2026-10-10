@@ -13,6 +13,9 @@ import liveZhHant from '@/features/live/locales/zh-Hant.json'
 import networkEn from '@/features/settings/network/locales/en.json'
 import networkZhHans from '@/features/settings/network/locales/zh-Hans.json'
 import networkZhHant from '@/features/settings/network/locales/zh-Hant.json'
+import timeEn from '@/features/settings/time/locales/en.json'
+import timeZhHans from '@/features/settings/time/locales/zh-Hans.json'
+import timeZhHant from '@/features/settings/time/locales/zh-Hant.json'
 
 export const SUPPORTED_LANGUAGES = ['zh-Hans', 'zh-Hant', 'en'] as const
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number]
@@ -21,18 +24,21 @@ export const resources = {
   'zh-Hans': {
     common: commonZhHans,
     network: networkZhHans,
+    time: timeZhHans,
     live: liveZhHans,
     cameras: camerasZhHans,
   },
   'zh-Hant': {
     common: commonZhHant,
     network: networkZhHant,
+    time: timeZhHant,
     live: liveZhHant,
     cameras: camerasZhHant,
   },
   en: {
     common: commonEn,
     network: networkEn,
+    time: timeEn,
     live: liveEn,
     cameras: camerasEn,
   },

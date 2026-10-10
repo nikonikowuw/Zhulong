@@ -38,38 +38,46 @@ type networkLifecycle interface {
 	Stop(context.Context) error
 }
 
-type lifecycleRuntime struct {
-	database databaseLifecycle
-	native   engineLifecycle
-	camera   cameraLifecycle
-	audit    auditLifecycle
-	network  networkLifecycle
-	server   *http.Server
-	logger   *zap.Logger
-	listen   func(string, string) (net.Listener, error)
-	shutdown func(context.Context) error
+type systemTimeLifecycle interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
 
-	listener      net.Listener
-	serveDone     chan error
-	databaseReady bool
-	nativeReady   bool
-	cameraReady   bool
-	auditReady    bool
-	networkReady  bool
-	httpReady     bool
-	loggerSynced  bool
+type lifecycleRuntime struct {
+	database   databaseLifecycle
+	native     engineLifecycle
+	camera     cameraLifecycle
+	audit      auditLifecycle
+	network    networkLifecycle
+	systemTime systemTimeLifecycle
+	server     *http.Server
+	logger     *zap.Logger
+	listen     func(string, string) (net.Listener, error)
+	shutdown   func(context.Context) error
+
+	listener        net.Listener
+	serveDone       chan error
+	databaseReady   bool
+	nativeReady     bool
+	cameraReady     bool
+	auditReady      bool
+	networkReady    bool
+	systemTimeReady bool
+	httpReady       bool
+	loggerSynced    bool
 }
 
 type runtimeParams struct {
 	fx.In
 
-	Database databaseLifecycle
-	Native   engineLifecycle
-	Camera   cameraLifecycle  `optional:"true"`
-	Audit    auditLifecycle   `optional:"true"`
-	Network  networkLifecycle `optional:"true"`
-	Server   *http.Server
-	Logger   *zap.Logger
+	Database   databaseLifecycle
+	Native     engineLifecycle
+	Camera     cameraLifecycle     `optional:"true"`
+	Audit      auditLifecycle      `optional:"true"`
+	Network    networkLifecycle    `optional:"true"`
+	SystemTime systemTimeLifecycle `optional:"true"`
+	Server     *http.Server
+	Logger     *zap.Logger
 }
 
 func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
@@ -78,15 +86,16 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		shutdown = p.Server.Shutdown
 	}
 	return &lifecycleRuntime{
-		database: p.Database,
-		native:   p.Native,
-		camera:   p.Camera,
-		audit:    p.Audit,
-		network:  p.Network,
-		server:   p.Server,
-		logger:   p.Logger,
-		listen:   net.Listen,
-		shutdown: shutdown,
+		database:   p.Database,
+		native:     p.Native,
+		camera:     p.Camera,
+		audit:      p.Audit,
+		network:    p.Network,
+		systemTime: p.SystemTime,
+		server:     p.Server,
+		logger:     p.Logger,
+		listen:     net.Listen,
+		shutdown:   shutdown,
 	}
 }
 
@@ -115,9 +124,16 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.networkReady = true
 	}
 
+	if r.systemTime != nil {
+		if err := r.systemTime.Start(ctx); err != nil {
+			r.logger.Warn("system time start warning", zap.Error(err))
+		}
+		r.systemTimeReady = true
+	}
+
 	if err := r.native.Start(); err != nil {
 		startupErr := fmt.Errorf("start native engine: %w", err)
-		return errors.Join(startupErr, r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
+		return errors.Join(startupErr, r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
 	}
 	r.nativeReady = true
 
@@ -137,7 +153,7 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	listener, err := r.listen("tcp", r.server.Addr)
 	if err != nil {
 		startupErr := fmt.Errorf("listen on %s: %w", r.server.Addr, err)
-		return errors.Join(startupErr, r.closeCamera(), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
+		return errors.Join(startupErr, r.closeCamera(), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
 	}
 	r.listener = listener
 	r.serveDone = make(chan error, 1)
@@ -181,6 +197,9 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 	if err := r.closeCamera(); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
+	if err := r.closeSystemTime(ctx); err != nil {
+		stopErrors = append(stopErrors, err)
+	}
 	if err := r.closeNetwork(ctx); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
@@ -218,6 +237,19 @@ func (r *lifecycleRuntime) closeNetwork(ctx context.Context) error {
 	if r.network != nil {
 		if err := r.network.Stop(ctx); err != nil {
 			return fmt.Errorf("stop network service: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *lifecycleRuntime) closeSystemTime(ctx context.Context) error {
+	if !r.systemTimeReady {
+		return nil
+	}
+	r.systemTimeReady = false
+	if r.systemTime != nil {
+		if err := r.systemTime.Stop(ctx); err != nil {
+			return fmt.Errorf("stop system time service: %w", err)
 		}
 	}
 	return nil

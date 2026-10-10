@@ -1,0 +1,68 @@
+{
+  "page": {
+    "title": "系统对时与时钟服务",
+    "desc": "管理边缘宿主机时钟同步策略，支持 RFC 4330 SNTP 自动网络校时、两阶段平滑微调以及现场一键同步浏览器时间。"
+  },
+  "dashboard": {
+    "title": "设备实时时钟与状态看板",
+    "desc": "面向边缘 Linux 宿主机的实时内核时钟、两阶段对时状态机与硬件 RTC 状态。",
+    "refresh": "刷新",
+    "permissionWarningTitle": "系统权限受限",
+    "permissionWarningDesc": "当前应用进程缺失 CAP_SYS_TIME 或 root 权限，修改系统时间与 RTC 回写可能被内核拒绝。",
+    "liveClock": "设备实时内核时钟",
+    "syncState": "时钟同步状态",
+    "stateSynchronized": "已同步",
+    "stateSyncing": "探测对时中",
+    "statePanicReview": "暴冲复核中",
+    "stateFailed": "同步失败",
+    "stateUnsynced": "未同步",
+    "rtcStatus": "硬件 RTC 芯片",
+    "rtcNormal": "RTC 就绪",
+    "rtcMissing": "未检测到 RTC",
+    "rtcError": "RTC 异常"
+  },
+  "form": {
+    "mode": {
+      "label": "对时模式",
+      "ntpDesc": "通过上游 NTP 候选服务器平滑自动校准",
+      "manualDesc": "现场一键同步客户端时间或手动设定"
+    },
+    "timezone": {
+      "desc": "物理联动修改宿主机 /etc/localtime 软链接，并热刷新 Go/C 运行时时区缓存。"
+    },
+    "submit": "保存对时配置"
+  },
+  "tabs": {
+    "ntp": "NTP 自动网络对时",
+    "manual": "手动 / 浏览器对时"
+  },
+  "ntp": {
+    "title": "NTP 自动网络对时",
+    "desc": "配置 1~3 个候选公共或私有 NTP 服务器，后台服务将以指定周期自动微调时钟。",
+    "timezoneLabel": "系统生效时区 (Timezone)",
+    "intervalLabel": "自动同步轮询周期",
+    "serversLabel": "NTP 服务器候选池 (按序降级探测)",
+    "addServer": "添加服务器",
+    "syncNow": "立即对时",
+    "saveConfig": "保存并启用 NTP 模式",
+    "maxServersWarning": "最多配置 5 个 NTP 服务器",
+    "minServersWarning": "至少保留 1 个 NTP 服务器",
+    "noServersError": "请填写至少一个有效的 NTP 服务器地址",
+    "saveSuccess": "NTP 对时配置已更新",
+    "syncSuccess": "已成功向上游 NTP 服务器同步时间"
+  },
+  "manual": {
+    "title": "手动对时与离线快速同步",
+    "desc": "在无外网环境或局网隔离现场，直接一键对齐调试电脑浏览器时间，或手动输入准确时间。",
+    "browserSyncTitle": "一键同步浏览器时间 (离线推荐)",
+    "browserSyncDesc": "工程人员笔记本网线直连边缘设备时，瞬间以毫秒级精度同步当前客户端时间。",
+    "syncBrowserBtn": "同步浏览器时间",
+    "timezoneLabel": "设备物理时区",
+    "customTimeLabel": "手动输入指定日期时间",
+    "applyCustomBtn": "应用指定时间",
+    "browserSyncSuccess": "已成功将设备时间与当前浏览器时间精准对齐并写入 RTC！",
+    "emptyTimeWarning": "请先选择需要设置的目标时间",
+    "invalidTimeFormat": "时间格式无效",
+    "applySuccess": "手动时钟设置成功，已固化至板载 RTC"
+  }
+}

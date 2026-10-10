@@ -741,7 +741,7 @@ const docTemplate = `{
         },
         "/system/network/interfaces": {
             "get": {
-                "description": "Queries physical network interfaces on the host, tagging current session interface and default gateway",
+                "description": "Queries physical network interfaces, marking the current session interface only when it can be identified unambiguously.",
                 "produces": [
                     "application/json"
                 ],
@@ -999,6 +999,222 @@ const docTemplate = `{
                                     }
                                 }
                             ]
+                        }
+                    }
+                }
+            }
+        },
+        "/system/time": {
+            "get": {
+                "description": "Retrieves current kernel time, active timezone, NTP candidate servers, synchronization state, and hardware RTC status.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Get system time status and clock health",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/systemtime.SystemTimeStatus"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/time/config": {
+            "put": {
+                "description": "Updates synchronization mode (ntp/manual), NTP server pool, polling interval, and system IANA timezone.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Update system time configuration",
+                "parameters": [
+                    {
+                        "description": "Time configuration parameters",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/systemtime.UpdateConfigRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/systemtime.SystemTimeStatus"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/time/manual": {
+            "post": {
+                "description": "Explicitly sets kernel CLOCK_REALTIME and commits new time to hardware RTC chip.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Manually set system clock or synchronize browser time",
+                "parameters": [
+                    {
+                        "description": "Target ISO-8601 or RFC3339 timestamp",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/systemtime.ManualTimeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/systemtime.SystemTimeStatus"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/time/sync": {
+            "post": {
+                "description": "Forces an immediate NTP query and clock alignment attempt against configured NTP server pool.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Trigger immediate NTP synchronization",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/systemtime.SystemTimeStatus"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
                         }
                     }
                 }
@@ -1505,7 +1721,7 @@ const docTemplate = `{
                     }
                 },
                 "isCurrent": {
-                    "description": "True if current HTTP connection was routed through this interface",
+                    "description": "True only when the current HTTP request maps unambiguously to this interface",
                     "type": "boolean"
                 },
                 "isDefaultGw": {
@@ -1586,6 +1802,119 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "transactionId": {
+                    "type": "string"
+                }
+            }
+        },
+        "systemtime.ManualTimeRequest": {
+            "type": "object",
+            "required": [
+                "targetTime"
+            ],
+            "properties": {
+                "targetTime": {
+                    "type": "string"
+                }
+            }
+        },
+        "systemtime.RtcStatus": {
+            "type": "string",
+            "enum": [
+                "normal",
+                "missing",
+                "error"
+            ],
+            "x-enum-varnames": [
+                "RtcStatusNormal",
+                "RtcStatusMissing",
+                "RtcStatusError"
+            ]
+        },
+        "systemtime.SyncStatus": {
+            "type": "object",
+            "properties": {
+                "errorMessage": {
+                    "type": "string"
+                },
+                "lastSyncServer": {
+                    "type": "string"
+                },
+                "lastSyncTime": {
+                    "type": "string"
+                },
+                "offsetMs": {
+                    "type": "number"
+                },
+                "rttMs": {
+                    "type": "number"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "systemtime.SystemTimeStatus": {
+            "type": "object",
+            "properties": {
+                "currentTime": {
+                    "type": "string"
+                },
+                "hasPermission": {
+                    "type": "boolean"
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "ntpServers": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "rtcStatus": {
+                    "$ref": "#/definitions/systemtime.RtcStatus"
+                },
+                "syncIntervalSeconds": {
+                    "type": "integer"
+                },
+                "syncStatus": {
+                    "$ref": "#/definitions/systemtime.SyncStatus"
+                },
+                "timezone": {
+                    "type": "string"
+                }
+            }
+        },
+        "systemtime.UpdateConfigRequest": {
+            "type": "object",
+            "required": [
+                "mode",
+                "ntpServers",
+                "syncIntervalSeconds",
+                "timezone"
+            ],
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": [
+                        "ntp",
+                        "manual"
+                    ]
+                },
+                "ntpServers": {
+                    "type": "array",
+                    "maxItems": 5,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "syncIntervalSeconds": {
+                    "type": "integer",
+                    "maximum": 86400,
+                    "minimum": 60
+                },
+                "timezone": {
                     "type": "string"
                 }
             }

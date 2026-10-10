@@ -53,7 +53,7 @@ native-cross-build:
 	$(NATIVE_BUILD) --profile "$(CROSS_PROFILE)" go build -ldflags=-linkmode=external -o "$(CROSS_OUTPUT)" ./cmd/Zhulong
 
 api-docs:
-	$(GO) run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init --dir cmd/Zhulong,internal/app,internal/httputil,internal/auth,internal/camera,internal/network --generalInfo main.go --output internal/apidocs --parseInternal
+	$(GO) run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init --dir cmd/Zhulong,internal/app,internal/httputil,internal/auth,internal/camera,internal/network,internal/systemtime --generalInfo main.go --output internal/apidocs --parseInternal
 
 go-check: native-build
 	test -z "$$(gofmt -l cmd internal)"

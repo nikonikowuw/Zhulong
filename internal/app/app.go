@@ -9,6 +9,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/network"
+	"github.com/nikonikowuw/Zhulong/internal/systemtime"
 	"github.com/nikonikowuw/Zhulong/internal/webui"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -209,6 +210,35 @@ var networkModule = fx.Module("network",
 	fx.Provide(provideNetwork),
 )
 
+// --- System Time Module ---
+
+type systemTimeOut struct {
+	fx.Out
+
+	Driver          systemtime.ClockDriver
+	Repository      systemtime.Repository
+	Service         *systemtime.TimeService
+	Handler         *systemtime.Handler
+	Lifecycle       systemTimeLifecycle
+	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+}
+
+func provideSystemTime(dbProvider database.DBProvider, auditSvc *audit.Service, logger *zap.Logger) systemTimeOut {
+	comp := systemtime.NewTimeComponents(dbProvider, auditSvc, logger)
+	return systemTimeOut{
+		Driver:          comp.Driver,
+		Repository:      comp.Repository,
+		Service:         comp.Service,
+		Handler:         comp.Handler,
+		Lifecycle:       comp.Lifecycle,
+		ProtectedRoutes: comp.ProtectedRoutes,
+	}
+}
+
+var systemTimeModule = fx.Module("systemtime",
+	fx.Provide(provideSystemTime),
+)
+
 // --- HTTP Module ---
 
 var httpModule = fx.Module("http",
@@ -235,6 +265,7 @@ var Module = fx.Options(
 	authModule,
 	cameraModule,
 	networkModule,
+	systemTimeModule,
 	httpModule,
 	runtimeModule,
 )

@@ -337,7 +337,8 @@ definitions:
           type: string
         type: array
       isCurrent:
-        description: True if current HTTP connection was routed through this interface
+        description: True only when the current HTTP request maps unambiguously to
+          this interface
         type: boolean
       isDefaultGw:
         description: True if interface hosts default route (0.0.0.0/0)
@@ -393,6 +394,84 @@ definitions:
         type: integer
       transactionId:
         type: string
+    type: object
+  systemtime.ManualTimeRequest:
+    properties:
+      targetTime:
+        type: string
+    required:
+    - targetTime
+    type: object
+  systemtime.RtcStatus:
+    enum:
+    - normal
+    - missing
+    - error
+    type: string
+    x-enum-varnames:
+    - RtcStatusNormal
+    - RtcStatusMissing
+    - RtcStatusError
+  systemtime.SyncStatus:
+    properties:
+      errorMessage:
+        type: string
+      lastSyncServer:
+        type: string
+      lastSyncTime:
+        type: string
+      offsetMs:
+        type: number
+      rttMs:
+        type: number
+      state:
+        type: string
+    type: object
+  systemtime.SystemTimeStatus:
+    properties:
+      currentTime:
+        type: string
+      hasPermission:
+        type: boolean
+      mode:
+        type: string
+      ntpServers:
+        items:
+          type: string
+        type: array
+      rtcStatus:
+        $ref: '#/definitions/systemtime.RtcStatus'
+      syncIntervalSeconds:
+        type: integer
+      syncStatus:
+        $ref: '#/definitions/systemtime.SyncStatus'
+      timezone:
+        type: string
+    type: object
+  systemtime.UpdateConfigRequest:
+    properties:
+      mode:
+        enum:
+        - ntp
+        - manual
+        type: string
+      ntpServers:
+        items:
+          type: string
+        maxItems: 5
+        minItems: 1
+        type: array
+      syncIntervalSeconds:
+        maximum: 86400
+        minimum: 60
+        type: integer
+      timezone:
+        type: string
+    required:
+    - mode
+    - ntpServers
+    - syncIntervalSeconds
+    - timezone
     type: object
 info:
   contact: {}
@@ -836,8 +915,8 @@ paths:
       - network
   /system/network/interfaces:
     get:
-      description: Queries physical network interfaces on the host, tagging current
-        session interface and default gateway
+      description: Queries physical network interfaces, marking the current session
+        interface only when it can be identified unambiguously.
       produces:
       - application/json
       responses:
@@ -1001,4 +1080,138 @@ paths:
       summary: Get active network transaction status
       tags:
       - network
+  /system/time:
+    get:
+      description: Retrieves current kernel time, active timezone, NTP candidate servers,
+        synchronization state, and hardware RTC status.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/systemtime.SystemTimeStatus'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get system time status and clock health
+      tags:
+      - system
+  /system/time/config:
+    put:
+      consumes:
+      - application/json
+      description: Updates synchronization mode (ntp/manual), NTP server pool, polling
+        interval, and system IANA timezone.
+      parameters:
+      - description: Time configuration parameters
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/systemtime.UpdateConfigRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/systemtime.SystemTimeStatus'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Update system time configuration
+      tags:
+      - system
+  /system/time/manual:
+    post:
+      consumes:
+      - application/json
+      description: Explicitly sets kernel CLOCK_REALTIME and commits new time to hardware
+        RTC chip.
+      parameters:
+      - description: Target ISO-8601 or RFC3339 timestamp
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/systemtime.ManualTimeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/systemtime.SystemTimeStatus'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Manually set system clock or synchronize browser time
+      tags:
+      - system
+  /system/time/sync:
+    post:
+      description: Forces an immediate NTP query and clock alignment attempt against
+        configured NTP server pool.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/systemtime.SystemTimeStatus'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Trigger immediate NTP synchronization
+      tags:
+      - system
 swagger: "2.0"

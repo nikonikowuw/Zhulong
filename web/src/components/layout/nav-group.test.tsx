@@ -1,4 +1,4 @@
-import { Network, Settings } from 'lucide-react'
+import { Clock, Network, Settings } from 'lucide-react'
 import { describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import i18n from '@/lib/i18n'
@@ -41,6 +41,11 @@ describe('NavGroup i18n', () => {
             url: '/settings/network',
             icon: Network,
           },
+          {
+            title: 'Time',
+            url: '/settings/time',
+            icon: Clock,
+          },
         ],
       },
     ]
@@ -56,17 +61,20 @@ describe('NavGroup i18n', () => {
     await expect.element(getByText('其他')).toBeInTheDocument()
     await expect.element(getByText('系统设置')).toBeInTheDocument()
     await expect.element(getByText('网络配置')).toBeInTheDocument()
+    await expect.element(getByText('系统对时')).toBeInTheDocument()
 
     // 2. zh-Hant
     await i18n.changeLanguage('zh-Hant')
     await expect.element(getByText('其他')).toBeInTheDocument()
     await expect.element(getByText('系統設定')).toBeInTheDocument()
     await expect.element(getByText('網路配置')).toBeInTheDocument()
+    await expect.element(getByText('系統對時')).toBeInTheDocument()
 
     // 3. en
     await i18n.changeLanguage('en')
     await expect.element(getByText('Other')).toBeInTheDocument()
     await expect.element(getByText('Settings')).toBeInTheDocument()
     await expect.element(getByText('Network')).toBeInTheDocument()
+    await expect.element(getByText('Time & Clock')).toBeInTheDocument()
   })
 })

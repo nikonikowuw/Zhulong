@@ -707,3 +707,43 @@ Session summary was not supplied.
 
 [OK] **Completed**
 
+## [2026-10-10 10:45] 边缘异构系统对时服务与硬件时钟同步 (10-07-system-time-service)
+
+为面向极端边缘异构 Linux 设备（RK3588、NVIDIA Jetson、华为昇腾及工控机）提供工业级全链路系统对时与硬件 RTC 时钟同步能力。
+
+### Main Changes
+
+- **跨平台驱动抽象 (`ClockDriver`)**：
+  - Linux 环境下通过系统调用 `clock_settime`（阶跃 Step）、`adjtimex`（频率平滑追赶 Slew，保护流媒体 PTS/DTS 单调性）、`/dev/rtc*` ioctl（读写 UTC RTC 硬件芯片）与原子软链接 `/etc/localtime` 驱动系统时区热重载；
+  - 非 Linux / 开发机（macOS / CI）提供纯 Go 内存桩驱动 `StubClockDriver`，实现 100% 编译与单元测试解耦。
+- **Go 原生 SNTP 客户端引擎 (`sntp.go`)**：
+  - 纯 Go 实现 RFC 4330 SNTPv4 报文解析与收发，精确计算 RTT 与 ClockOffset（微秒级精度）；
+  - 支持多上游服务器顺序降级探测与指数退避机制。
+- **两阶段时钟安全状态机 (`statemachine.go`)**：
+  - 冷启动状态：解除 Panic 门限，允许任意大偏差无条件 Step 恢复；
+  - 稳态阶段：$|Offset| < 500\text{ms}$ 严格走 `adjtimex` 线性平滑追赶，绝不倒拨系统时钟；$|Offset| \ge 10\text{min}$ 触发连续 3 次探测采样复核，防止假时钟源暴冲。
+- **断电开机自愈与数据持久化**：
+  - SQLite 数据库版本化迁移脚本 `000005_create_system_time_configs`；
+  - 集成 Uber Fx 生命周期：`OnStart` 阶段自检系统时间，当系统时钟落后于 `2026-01-01` 且硬件 RTC 有效时，自动从板载 RTC 同步并拉齐系统时钟，同时联动记录安全审计日志；`OnStop` 优雅停止轮询协程。
+- **RESTful API 与 Swaggo 2.0 文档**：
+  - 提供 `GET /api/v1/system/time`、`PUT /api/v1/system/time/config`、`POST /api/v1/system/time/sync`、`POST /api/v1/system/time/manual` 接口，严格遵循 `{code: "OK", message, data}` 信封规范并生成 Swagger 文档。
+- **React 控制台前端 (`features/settings/time`)**：
+  - 挂载于系统设置二级菜单「系统对时」（`/_authenticated/settings/time`）；
+  - 提供毫秒级走秒时钟、NTP 对时状态指示灯、硬件 RTC 状态灯以及 `CAP_SYS_TIME` 权限预警横幅；
+  - 双模式表单：NTP 自动网络对时（动态服务器池增删与轮询周期）与手动对时（**「一键同步浏览器时间」高亮快捷按钮**与本地时间选择器）；
+  - 全量 IANA 时区选择器与英/简/繁三语国际化支持。
+
+### Testing
+
+- [OK] `go test -v -race ./internal/systemtime/...`：21 个单元测试 100% 通过，竞态检测通过
+- [OK] `python3 native/scripts/build.py go test -race ./cmd/... ./internal/...`：全量后端测试通过
+- [OK] `make api-docs`：Swagger 文档成功同步
+- [OK] `npm test --prefix web -- --run`：前端 44 个测试套件 213 个用例全部通过
+- [OK] `npm run lint --prefix web`：ESLint 0 错误
+- [OK] `npm run build --prefix web`：生产构建打包成功
+- [OK] `make go-check` & `make native-test`：静态检查与 Native C++ RTSP 桥接测试全绿
+
+### Status
+
+[OK] **Completed**
+
