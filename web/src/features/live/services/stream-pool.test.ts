@@ -58,8 +58,8 @@ describe('StreamConnectionPool', () => {
     unsub2()
     expect(pool.getStreamRefCount(cameraId, 'main')).toBe(0)
 
-    // 快进 5 秒 (Grace Period 防抖)
-    vi.advanceTimersByTime(5000)
+    // 快进 3 秒 (Grace Period 3s 防抖)
+    vi.advanceTimersByTime(3000)
     expect(pool.getStreamRefCount(cameraId, 'main')).toBe(0)
   })
 })

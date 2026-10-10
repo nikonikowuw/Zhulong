@@ -131,6 +131,3 @@ export function Live(): React.JSX.Element {
     </>
   )
 }
-
-export { Live as LivePage }
-export default Live

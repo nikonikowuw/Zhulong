@@ -36,6 +36,22 @@ export type StreamStatus =
   | 'error'
   | 'closed'
 
+export type CodecType = 'h264' | 'h265' | 'unknown'
+
+export interface ParsedPacket {
+  codec: CodecType
+  codecByte: number
+  flags: number
+  isKeyFrame: boolean
+  hasPts: boolean
+  hasDts: boolean
+  pts: bigint
+  dts: bigint
+  ptsMs: number
+  dtsMs: number
+  payload: Uint8Array
+}
+
 export interface StreamStats {
   fps: number
   resolution: string
@@ -49,6 +65,7 @@ export interface StreamSubscriber {
   onStatusChange: (status: StreamStatus, errorMsg?: string) => void
   onStatsUpdate: (stats: StreamStats) => void
   onFrame?: (frame: Uint8Array) => void
+  onPacket?: (packet: ParsedPacket) => void
 }
 
 export interface ManagedStream {
@@ -60,6 +77,9 @@ export interface ManagedStream {
   status: StreamStatus
   lastError?: string
   stats: StreamStats
+  statsFrameCount: number
+  statsByteCount: number
+  lastStatsTime: number
   ws: WebSocket | null
   reconnectAttempts: number
   reconnectTimer: ReturnType<typeof setTimeout> | null

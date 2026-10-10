@@ -1,12 +1,18 @@
 import { useEffect, useId, useState, useCallback } from 'react'
 import { StreamConnectionPool } from '../services/stream-pool'
-import { type StreamStats, type StreamStatus, type StreamType } from '../types'
+import {
+  type ParsedPacket,
+  type StreamStats,
+  type StreamStatus,
+  type StreamType,
+} from '../types'
 
 interface UseStreamConnectionOptions {
   cameraId: string | null
   streamType?: StreamType
   enabled?: boolean
   onFrame?: (frame: Uint8Array) => void
+  onPacket?: (packet: ParsedPacket) => void
 }
 
 export interface UseStreamConnectionReturn {
@@ -21,6 +27,7 @@ export function useStreamConnection({
   streamType = 'main',
   enabled = true,
   onFrame,
+  onPacket,
 }: UseStreamConnectionOptions): UseStreamConnectionReturn {
   const subscriberId = useId()
   const [status, setStatus] = useState<StreamStatus>('idle')
@@ -48,12 +55,13 @@ export function useStreamConnection({
         setStats(newStats)
       },
       onFrame,
+      onPacket,
     })
 
     return () => {
       unsubscribe()
     }
-  }, [cameraId, streamType, enabled, subscriberId, onFrame])
+  }, [cameraId, streamType, enabled, subscriberId, onFrame, onPacket])
 
   const retry = useCallback(() => {
     if (cameraId) {

@@ -1,11 +1,14 @@
 import { getCameraStreamWsUrl } from '../api/live-camera-api'
 import {
   type ManagedStream,
+  type ParsedPacket,
   type StreamStats,
   type StreamStatus,
   type StreamSubscriber,
   type StreamType,
 } from '../types'
+import { isWebCodecsSupported } from './webcodecs-decoder'
+import { parseZlm1Packet } from './wire-parser'
 
 /**
  * 前端单例流连接池管理器 (StreamConnectionPool)
@@ -14,7 +17,7 @@ import {
 export class StreamConnectionPool {
   private static instance: StreamConnectionPool | null = null
   private streams = new Map<string, ManagedStream>()
-  private readonly gracePeriodMs = 5000
+  private readonly gracePeriodMs = 3000
   private readonly maxReconnectAttempts = 5
 
   private constructor() {}
@@ -100,8 +103,11 @@ export class StreamConnectionPool {
         fps: 0,
         resolution: '1920x1080',
         bitrateKbps: 0,
-        decoderMode: 'WebCodecs',
+        decoderMode: isWebCodecsSupported() ? 'WebCodecs' : 'WASM',
       },
+      statsFrameCount: 0,
+      statsByteCount: 0,
+      lastStatsTime: Date.now(),
       ws: null,
       reconnectAttempts: 0,
       reconnectTimer: null,
@@ -126,10 +132,46 @@ export class StreamConnectionPool {
 
       ws.onmessage = (event) => {
         if (event.data instanceof ArrayBuffer) {
-          const uint8 = new Uint8Array(event.data)
+          const buffer = event.data
+          const now = Date.now()
+          const elapsed = (now - stream.lastStatsTime) / 1000
+
+          stream.statsFrameCount++
+          stream.statsByteCount += buffer.byteLength
+
+          if (elapsed >= 1.0) {
+            const fps = Math.round(stream.statsFrameCount / elapsed)
+            const bitrateKbps = Math.round(
+              (stream.statsByteCount * 8) / elapsed / 1000
+            )
+            stream.stats = {
+              ...stream.stats,
+              fps,
+              bitrateKbps,
+            }
+            stream.statsFrameCount = 0
+            stream.statsByteCount = 0
+            stream.lastStatsTime = now
+            stream.subscribers.forEach((sub) => sub.onStatsUpdate(stream.stats))
+          }
+
+          let parsedPacket: ParsedPacket | null = null
+          try {
+            parsedPacket = parseZlm1Packet(buffer)
+          } catch {
+            // 忽略非 ZLM1 格式或损坏数据包
+          }
+
+          const rawBytes = parsedPacket
+            ? parsedPacket.payload
+            : new Uint8Array(buffer)
+
           // 广播帧数据给所有订阅窗口
           stream.subscribers.forEach((sub) => {
-            sub.onFrame?.(uint8)
+            if (parsedPacket) {
+              sub.onPacket?.(parsedPacket)
+            }
+            sub.onFrame?.(rawBytes)
           })
         }
       }

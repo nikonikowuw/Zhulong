@@ -26,6 +26,12 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
+        ws: true,
+        configure: (proxy) => {
+          proxy.on('error', () => {
+            // 静默忽略本地开发/测试期间后端未启动时的连接异常
+          })
+        },
       },
     },
   },
