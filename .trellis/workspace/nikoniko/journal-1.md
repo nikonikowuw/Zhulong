@@ -747,3 +747,42 @@ Session summary was not supplied.
 
 [OK] **Completed**
 
+
+
+## Session 17: 边缘对时全栈实现、代码精简与 shadcn 状态看板规范加固
+<!-- trellis-session: v=2 fp=b78ac15df6826b00 -->
+
+**Date**: 2026-10-10
+**Task**: 边缘对时全栈实现、代码精简与 shadcn 状态看板规范加固
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+为边缘 Linux 异构系统实现 Go 原生 SNTP 客户端、两阶段时钟安全状态机、跨平台 ClockDriver 与 RTC 自愈服务；挂载主侧边栏菜单并重构为纯正 shadcn-admin 状态徽标与一键浏览器同步看板。
+
+### Main Changes
+
+- 实现 Go 原生 RFC 4330 SNTPv4 客户端与微秒级 RTT/Offset 计算，支持顺序降级
+- 设计两阶段时钟安全状态机：冷启动 Step、稳态 Slew（adjtimex）、防暴冲复核机制
+- Linux ClockDriver 跨平台驱动抽象（系统调用、ioctl /dev/rtc*、/etc/localtime 软链接）与 macOS/CI 内存桩
+- 集成 Uber Fx 生命周期：开机 RTC 自动回溯拉齐、时区联动与审计日志
+- 在主侧边栏与 Cmd+K 搜索挂载系统对时入口，重构状态 Badge 对齐 shadcn-admin 原生设计规范
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `725db8a` | feat(time): implement edge system time service, rtc sync, and settings dashboard |
+| `9b7199b` | chore(task): plan 10-10-native-hardware-frame pipeline design |
+
+### Testing
+
+- [OK] go test -v -race ./internal/systemtime/... 21 个单元测试与竞态检测全绿
+- [OK] npm test --prefix web 前端 44 个套件 213 个测试全量通过
+- [OK] make go-check && make native-test CTest 与 Go RTSP 桥接测试全绿
+- [OK] npm run lint && npm run build 生产打包成功，0 报错 0 警告
+
+### Status
+
+[OK] **Completed**

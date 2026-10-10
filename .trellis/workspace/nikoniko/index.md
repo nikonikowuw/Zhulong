@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 15
-- **Last Active**: 2026-10-09
+- **Total Sessions**: 17
+- **Last Active**: 2026-10-10
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~672 | Active |
+| `journal-1.md` | ~788 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 17 | 2026-10-10 | 边缘对时全栈实现、代码精简与 shadcn 状态看板规范加固 | `725db8a`, `9b7199b` | `dev` |
 | 15 | 2026-10-09 | 前端实时预览能力与多分屏播放器集成 | `385299a`, `4e6b0f3` | `dev` |
 | 14 | 2026-10-09 | 系统单用户登录与初始化向导实现 | `d6ab440` | `dev` |
 | 13 | 2026-10-08 | 边缘网络配置UI重构优化与Core目录忽略规则修复 | `9b35f7a`, `970edbf`, `609c4f9`, `d3613f5`, `206d18d` | `dev` |
