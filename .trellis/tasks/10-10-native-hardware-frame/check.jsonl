@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "Native 构建契约与静态测试验证规范"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "跨语言指针与内存安全验证"}

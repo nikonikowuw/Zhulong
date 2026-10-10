@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "节点流水线背压、零拷贝缓冲传递与帧队列规范"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "CGO 边界隔离与原生内存生命周期管理"}
+{"file": ".trellis/spec/architecture.md", "reason": "Zhulong 总体架构分层与跨层责任边界"}
