@@ -1,0 +1,80 @@
+{
+  "page": {
+    "title": "Storage & Lifecycle",
+    "desc": "Configure edge media mount paths, statfs watermark monitoring, dismount fallthrough protection, and hysteresis automated cleanup."
+  },
+  "overview": {
+    "title": "Storage Capacity & Health Overview",
+    "total": "Total Capacity",
+    "used": "Used Space",
+    "free": "Available Free",
+    "mountPoint": "Mount Point & FS",
+    "dedicated_mount": "Dedicated External Disk",
+    "root_fs": "Root Filesystem",
+    "write_ok": "Write Permitted",
+    "write_blocked": "Write Suspended",
+    "refreshing": "Refreshing metrics..."
+  },
+  "status": {
+    "healthy": "Normal",
+    "warning": "Watermark Warning",
+    "cleaning": "Pruning / Yielding",
+    "emergency_stopped": "Emergency Write Stopped",
+    "error": "Device Fault / Dismounted",
+    "unknown": "Unknown"
+  },
+  "breakdown": {
+    "recordings": "Recordings",
+    "snapshots": "AI Snapshots",
+    "exports": "Exports",
+    "other": "Other Files"
+  },
+  "form": {
+    "title": "Media Storage Path & Retention Policies",
+    "media_directory": "Media Root Directory Path",
+    "media_directory_desc": "Root path for video streams, snapshots, and exports. When changed, new recordings write to the new location while historical recordings remain playable.",
+    "btn_test_path": "Test Path",
+    "empty_path": "Please specify a directory path first",
+    "test_success": "Path validation passed with full read/write capabilities!",
+    "test_failed": "Directory does not exist or lacks write permissions",
+    "path_valid": "Directory valid with active read/write permissions",
+    "path_invalid": "Path inspection failed",
+    "recordings_days": "Recordings Retention (Days)",
+    "recordings_days_desc": "Regular video recordings retention period (Default: 15 days)",
+    "snapshots_days": "AI Snapshots Retention (Days)",
+    "snapshots_days_desc": "AI alarm snapshot retention period (Default: 90 days)",
+    "exports_hours": "Exports Retention (Hours)",
+    "exports_hours_desc": "Exported clips TTL survival time (Default: 48 hours)",
+    "btn_reset": "Reset Changes",
+    "btn_save": "Save Configuration",
+    "save_success": "Storage configuration updated successfully!"
+  },
+  "advanced": {
+    "title": "Advanced Watermark & Emergency Stop Policies",
+    "high_watermark": "High Watermark Trigger (%)",
+    "high_watermark_desc": "Pruning activates when disk usage reaches this percentage (Default: 90%)",
+    "low_watermark": "Low Watermark Sleep Target (%)",
+    "low_watermark_desc": "Pruning stops and cleaner sleeps when usage falls below this level (Default: 80%)",
+    "emergency_percent": "Emergency Write-Stop Line (%)",
+    "emergency_percent_desc": "Forcibly stops new video recordings to protect SQLite and OS integrity (Default: 95%)",
+    "emergency_mb": "Emergency Write-Stop Free Space (MB)",
+    "emergency_mb_desc": "Writing suspended when available space falls below this margin (Default: 2048 MB)"
+  },
+  "dialog": {
+    "title": "Trigger Storage Prune Cycle",
+    "desc1": "The system will immediately initiate the hysteresis cleaner to prune expired exports and oldest unpreserved recordings until below low watermark.",
+    "desc2": "Recordings and snapshots marked with AI alarms or locked by users will never be deleted prematurely. Throttled sleep ensures 0 dropped frames.",
+    "cancel": "Cancel",
+    "confirm": "Execute Prune",
+    "cleaning": "Pruning in progress...",
+    "success_title": "Cleanup Completed",
+    "deleted_files": "Deleted files",
+    "freed_space": "Freed space",
+    "duration": "Duration",
+    "close": "Done"
+  },
+  "actions": {
+    "refresh": "Refresh",
+    "manual_cleanup": "Prune Now"
+  }
+}

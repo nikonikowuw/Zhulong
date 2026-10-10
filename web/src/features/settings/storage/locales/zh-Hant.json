@@ -1,0 +1,80 @@
+{
+  "page": {
+    "title": "儲存與生命週期",
+    "desc": "配置邊緣媒體儲存掛載路徑、statfs 水位感知監控、外掛碟掉線防穿透保護以及雙水位回差自動清理策略。"
+  },
+  "overview": {
+    "title": "儲存容量與健康大盤",
+    "total": "總容量",
+    "used": "已用空間",
+    "free": "可用剩餘",
+    "mountPoint": "掛載點與檔案系統",
+    "dedicated_mount": "獨立外掛碟",
+    "root_fs": "系統根分割區",
+    "write_ok": "允許寫碟",
+    "write_blocked": "禁止寫入",
+    "refreshing": "遙測重新整理中..."
+  },
+  "status": {
+    "healthy": "運作正常",
+    "warning": "高水位預警",
+    "cleaning": "清理讓渡中",
+    "emergency_stopped": "停錄熔斷",
+    "error": "設備異常/掉線",
+    "unknown": "未知狀態"
+  },
+  "breakdown": {
+    "recordings": "視訊錄影",
+    "snapshots": "AI抓拍",
+    "exports": "臨時匯出",
+    "other": "其它佔用"
+  },
+  "form": {
+    "title": "媒體儲存路徑與保留策略配置",
+    "media_directory": "媒體根目錄絕對路徑",
+    "media_directory_desc": "錄影、抓拍與臨時匯出檔案的落盤根路徑。若修改路徑，新檔案立即寫入新目錄，舊目錄歷史視訊仍可點播並優先淘汰。",
+    "btn_test_path": "檢測路徑",
+    "empty_path": "請先輸入目錄路徑",
+    "test_success": "路徑檢測通過，具備讀寫權能！",
+    "test_failed": "該目錄不存在或無寫入權限",
+    "path_valid": "目錄合法且讀寫正常",
+    "path_invalid": "路徑檢測未通過",
+    "recordings_days": "視訊錄影保留天數",
+    "recordings_days_desc": "常規錄影最大留存（預設 15 天）",
+    "snapshots_days": "AI抓拍保留天数",
+    "snapshots_days_desc": "告警事件圖最大留存（預設 90 天）",
+    "exports_hours": "臨時匯出保留小時",
+    "exports_hours_desc": "匯出剪輯保留生存期（預設 48 小時）",
+    "btn_reset": "重設變更",
+    "btn_save": "儲存配置",
+    "save_success": "儲存策略配置已儲存並生效！"
+  },
+  "advanced": {
+    "title": "高級雙水位與緊急熔斷策略",
+    "high_watermark": "高水位清理啟用閾值 (%)",
+    "high_watermark_desc": "觸碰該使用率時後台協程自動喚醒清理（預設 90%）",
+    "low_watermark": "低水位清理休眠閾值 (%)",
+    "low_watermark_desc": "容量回落到該百分比後停止清理進入休眠（預設 80%）",
+    "emergency_percent": "緊急停錄使用率紅線 (%)",
+    "emergency_percent_desc": "達到該極高使用率時強制熔斷停錄，保全資料庫（預設 95%）",
+    "emergency_mb": "緊急停錄最小剩餘空間 (MB)",
+    "emergency_mb_desc": "可用空間不足此容量時觸發停錄保護（預設 2048 MB）"
+  },
+  "dialog": {
+    "title": "觸發磁碟空間清理",
+    "desc1": "系統將立即啟動雙水位回差引擎，依照階梯優先級清理過期臨時匯出和最早的未加鎖常規錄影，直到磁碟使用率回落至低水位線以下。",
+    "desc2": "所有帶有 AI 告警事件標記或被手動加鎖保護的錄影與抓拍絕不會被提前清除。清理過程採用毫秒級批次讓渡，不會造成前台錄影掉幀。",
+    "cancel": "取消",
+    "confirm": "確認執行",
+    "cleaning": "正在清理...",
+    "success_title": "清理完成",
+    "deleted_files": "刪除檔案數",
+    "freed_space": "釋放空間",
+    "duration": "耗時",
+    "close": "完成"
+  },
+  "actions": {
+    "refresh": "重新整理狀態",
+    "manual_cleanup": "立即清理"
+  }
+}

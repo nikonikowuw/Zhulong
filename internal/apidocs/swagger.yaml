@@ -395,6 +395,208 @@ definitions:
       transactionId:
         type: string
     type: object
+  storage.CleanupSummary:
+    properties:
+      deletedFiles:
+        type: integer
+      durationMs:
+        type: integer
+      finishedAt:
+        type: string
+      freedBytes:
+        type: integer
+      targetStatus:
+        type: string
+      triggerReason:
+        description: '"watermark", "scheduled", "manual"'
+        type: string
+    type: object
+  storage.PathTestRequest:
+    properties:
+      path:
+        type: string
+    required:
+    - path
+    type: object
+  storage.PathTestResponse:
+    properties:
+      deviceId:
+        type: integer
+      errorReason:
+        type: string
+      exists:
+        type: boolean
+      freeBytes:
+        type: integer
+      fsType:
+        type: string
+      isExternal:
+        type: boolean
+      isMount:
+        type: boolean
+      mountPoint:
+        type: string
+      path:
+        type: string
+      totalBytes:
+        type: integer
+      writable:
+        type: boolean
+    type: object
+  storage.StorageConfig:
+    properties:
+      emergencyStopMinMb:
+        description: Emergency minimum free space in megabytes (100..102400)
+        type: integer
+      emergencyStopPercent:
+        description: Emergency write-stop percentage (90..99)
+        type: integer
+      exportsRetentionHours:
+        description: Exported clips retention in hours (1..168)
+        type: integer
+      highWatermarkPercent:
+        description: High watermark percentage triggering cleaner (50..95)
+        type: integer
+      lowWatermarkPercent:
+        description: Low watermark percentage where cleaner sleeps (40..85)
+        type: integer
+      mediaDirectory:
+        description: Root media path, e.g. "/mnt/storage/media"
+        type: string
+      recordingsRetentionDays:
+        description: Video recordings retention in days (1..365)
+        type: integer
+      snapshotsRetentionDays:
+        description: Snapshot captures retention in days (1..730)
+        type: integer
+    type: object
+  storage.StorageHealthStatus:
+    enum:
+    - healthy
+    - warning
+    - cleaning
+    - emergency_stopped
+    - error
+    type: string
+    x-enum-comments:
+      StatusCleaning: Background cleaner is actively pruning expired/stale files
+      StatusEmergencyStopped: Storage touched critical emergency line; writes suspended
+      StatusError: Path missing, read-only, or external disk unmounted/fallen through
+      StatusHealthy: Storage has plenty of space and read/write is normal
+      StatusWarning: Storage usage touched high watermark threshold
+    x-enum-descriptions:
+    - Storage has plenty of space and read/write is normal
+    - Storage usage touched high watermark threshold
+    - Background cleaner is actively pruning expired/stale files
+    - Storage touched critical emergency line; writes suspended
+    - Path missing, read-only, or external disk unmounted/fallen through
+    x-enum-varnames:
+    - StatusHealthy
+    - StatusWarning
+    - StatusCleaning
+    - StatusEmergencyStopped
+    - StatusError
+  storage.StorageStatus:
+    properties:
+      breakdown:
+        allOf:
+        - $ref: '#/definitions/storage.StorageUsageBreakdown'
+        description: Categorized usage breakdown
+      canWrite:
+        description: True if storage is currently accepting new writes
+        type: boolean
+      deviceId:
+        description: Associated filesystem device ID (st_dev)
+        type: integer
+      freeBytes:
+        description: Available capacity for non-root users in bytes
+        type: integer
+      fsType:
+        description: Filesystem type, e.g. "ext4", "xfs", "btrfs"
+        type: string
+      isExternal:
+        description: True if mounted on dedicated volume outside rootfs (/)
+        type: boolean
+      mediaDirectory:
+        description: Currently active media directory
+        type: string
+      mountPoint:
+        description: Mount point where the media directory lives
+        type: string
+      status:
+        allOf:
+        - $ref: '#/definitions/storage.StorageHealthStatus'
+        description: Current health status
+      totalBytes:
+        description: Total capacity in bytes
+        type: integer
+      updatedAt:
+        description: Metric collection timestamp (UTC)
+        type: string
+      usagePercent:
+        description: Volume usage percentage (0..100)
+        type: integer
+      usedBytes:
+        description: Used capacity in bytes
+        type: integer
+    type: object
+  storage.StorageUsageBreakdown:
+    properties:
+      exportsBytes:
+        description: Total size of temporary exported files in bytes
+        type: integer
+      otherBytes:
+        description: Other files residing on the same filesystem/volume
+        type: integer
+      recordingsBytes:
+        description: Total size of video recordings in bytes
+        type: integer
+      snapshotsBytes:
+        description: Total size of AI snapshots in bytes
+        type: integer
+    type: object
+  storage.UpdateConfigRequest:
+    properties:
+      emergencyStopMinMb:
+        maximum: 102400
+        minimum: 100
+        type: integer
+      emergencyStopPercent:
+        maximum: 99
+        minimum: 90
+        type: integer
+      exportsRetentionHours:
+        maximum: 168
+        minimum: 1
+        type: integer
+      highWatermarkPercent:
+        maximum: 95
+        minimum: 50
+        type: integer
+      lowWatermarkPercent:
+        maximum: 85
+        minimum: 40
+        type: integer
+      mediaDirectory:
+        type: string
+      recordingsRetentionDays:
+        maximum: 365
+        minimum: 1
+        type: integer
+      snapshotsRetentionDays:
+        maximum: 730
+        minimum: 1
+        type: integer
+    required:
+    - emergencyStopMinMb
+    - emergencyStopPercent
+    - exportsRetentionHours
+    - highWatermarkPercent
+    - lowWatermarkPercent
+    - mediaDirectory
+    - recordingsRetentionDays
+    - snapshotsRetentionDays
+    type: object
   systemtime.ManualTimeRequest:
     properties:
       targetTime:
@@ -1080,6 +1282,158 @@ paths:
       summary: Get active network transaction status
       tags:
       - network
+  /system/storage/cleanup:
+    post:
+      description: Forces an immediate pruning cycle across expired exports and recordings
+        according to lifecycle policy.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/storage.CleanupSummary'
+              type: object
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Manually trigger storage prune cycle
+      tags:
+      - system
+  /system/storage/config:
+    get:
+      description: Retrieves current media root directory, retention periods, and
+        watermark thresholds.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/storage.StorageConfig'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get media storage lifecycle configuration
+      tags:
+      - system
+    put:
+      consumes:
+      - application/json
+      description: Validates and updates media root directory, retention policies,
+        and high/low watermarks with live hot switching.
+      parameters:
+      - description: Storage configuration parameters
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/storage.UpdateConfigRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/storage.StorageStatus'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Update media storage lifecycle configuration
+      tags:
+      - system
+  /system/storage/status:
+    get:
+      description: Retrieves disk capacity metrics, categorized usage breakdown, mount
+        point, and current health status.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/storage.StorageStatus'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get media storage status and volume telemetry
+      tags:
+      - system
+  /system/storage/test:
+    post:
+      consumes:
+      - application/json
+      description: Performs write probe, filesystem detection, and external volume
+        identity verification on candidate path.
+      parameters:
+      - description: Target directory path to test
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/storage.PathTestRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/storage.PathTestResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Test candidate storage directory
+      tags:
+      - system
   /system/time:
     get:
       description: Retrieves current kernel time, active timezone, NTP candidate servers,

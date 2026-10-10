@@ -809,3 +809,48 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 19: 边缘异构系统媒体存储配置与动态生命周期管理
+<!-- trellis-session: v=2 fp=8a7c2b4e9f123d56 -->
+
+**Date**: 2026-10-10
+**Task**: 边缘异构系统媒体存储配置与动态生命周期管理 (`10-07-system-storage-config`)
+**Package**: backend, frontend
+**Branch**: `dev`
+
+### Summary
+
+为面向极端边缘异构 Linux 设备的烛龙系统，完整实现了工业级媒体存储配置管理与文件生命周期保护：
+1. Go 存储核心（`internal/storage`）：实现基于 Linux `unix.Statfs` / `unix.Stat` 的毫秒级容量遥测探针，挂载设备号 `st_dev` 绑定与外挂盘掉线防穿透写入保护锁；
+2. 双水位滞后回差清理引擎（`CleanerEngine`）：高水位 90% 激活、低水位 80% 停止休眠，阶梯淘汰（过期临时 exports -> 过期录像 -> FIFO 未加锁录像），严格保护 AI 告警证据；批次删除毫秒级主动让渡休眠，释放 ext4/jbd2 日志锁，杜绝视频掉帧；
+3. 极限容量熔断断尾保护（`EmergencyGate`）：剩余空间 < 2GB 或使用率 > 95% 时触发主动停录熔断（`CanWrite() == false`），保护 SQLite 数据库和系统关键进程免遭 `ENOSPC` 崩溃；
+4. 路径热切流：支持运行时免迁移热切流与历史存量数据平滑只读淘汰；
+5. Gin REST API 挂载与 Uber Fx 生命周期装配，Swaggo 2.0 文档同步；
+6. React 前端 WebUI：在「系统设置」挂载「存储与生命周期」模块，提供多色分段容量与健康徽标大盘、路径实时探针检测、核心留存表单与高级折叠阈值调节，支持手动触发清理弹窗与三语国际化。
+
+### Main Changes
+
+- `internal/storage/model.go`: 存储健康状态、持久化配置、遥测 DTO、路径测试及清理报告领域模型定义
+- `internal/storage/store.go`: 基于 SQLite `system_metadata` 的持久化仓储与领域约束校验
+- `internal/storage/inspector.go`, `inspector_linux.go`, `inspector_fallback.go`: 跨平台 Linux VFS 探针与外挂盘设备号绑定
+- `internal/storage/gate.go`: `EmergencyGate` 极限容量熔断器与原子 `CanWrite()` 判决
+- `internal/storage/cleaner.go`: `CleanerEngine` 双水位滞后回差、阶梯淘汰与批次步进流控
+- `internal/storage/service.go`: 业务编排、路径热切流与审计事件联动
+- `internal/storage/handler.go`, `module.go`: Gin 路由处理、Swagger 注解与 Uber Fx 生命周期绑定
+- `web/src/features/settings/storage/`: 容量进度条大盘、渐进式配置表单、路径实时检测、手动清理确认弹窗与三语字典
+- `web/src/routes/_authenticated/settings/storage.tsx`: TanStack Router 文件路由接入与侧边栏导航挂载
+- `.trellis/spec/backend/storage-guidelines.md`: 归档边缘存储防穿透、双水位回差与熔断保护设计规范
+
+### Testing
+
+- [OK] `go test -v -race ./internal/storage/...`: 探针、持久化、双水位、流控、熔断与 HTTP API 单元测试全项通过
+- [OK] `python3 native/scripts/build.py go test -race ./cmd/... ./internal/...`: 全量后端测试通过
+- [OK] `npm test --prefix web`: 前端 46 个测试套件 221 项测试全绿
+- [OK] `npm run lint --prefix web`: ESLint 0 报错 0 警告
+- [OK] `npm run build --prefix web`: 前端生产打包 742ms 构建成功
+- [OK] `make api-docs`: Swagger 2.0 文档自动更新同步
+
+### Status
+
+[OK] **Completed**

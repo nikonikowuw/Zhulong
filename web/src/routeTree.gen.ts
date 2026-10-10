@@ -37,6 +37,7 @@ import { Route as ClerkAuthenticatedUserManagementRouteImport } from './routes/c
 import { Route as ClerkauthSignUpRouteImport } from './routes/clerk/(auth)/sign-up'
 import { Route as ClerkauthSignInRouteImport } from './routes/clerk/(auth)/sign-in'
 import { Route as AuthenticatedSettingsTimeRouteImport } from './routes/_authenticated/settings/time'
+import { Route as AuthenticatedSettingsStorageRouteImport } from './routes/_authenticated/settings/storage'
 import { Route as AuthenticatedSettingsNotificationsRouteImport } from './routes/_authenticated/settings/notifications'
 import { Route as AuthenticatedSettingsNetworkRouteImport } from './routes/_authenticated/settings/network'
 import { Route as AuthenticatedSettingsDisplayRouteImport } from './routes/_authenticated/settings/display'
@@ -187,6 +188,12 @@ const AuthenticatedSettingsTimeRoute =
     path: '/time',
     getParentRoute: () => AuthenticatedSettingsRouteRoute,
   } as any)
+const AuthenticatedSettingsStorageRoute =
+  AuthenticatedSettingsStorageRouteImport.update({
+    id: '/storage',
+    path: '/storage',
+    getParentRoute: () => AuthenticatedSettingsRouteRoute,
+  } as any)
 const AuthenticatedSettingsNotificationsRoute =
   AuthenticatedSettingsNotificationsRouteImport.update({
     id: '/notifications',
@@ -244,6 +251,7 @@ export interface FileRoutesByFullPath {
   '/settings/display': typeof AuthenticatedSettingsDisplayRoute
   '/settings/network': typeof AuthenticatedSettingsNetworkRoute
   '/settings/notifications': typeof AuthenticatedSettingsNotificationsRoute
+  '/settings/storage': typeof AuthenticatedSettingsStorageRoute
   '/settings/time': typeof AuthenticatedSettingsTimeRoute
   '/clerk/sign-in': typeof ClerkauthSignInRoute
   '/clerk/sign-up': typeof ClerkauthSignUpRoute
@@ -276,6 +284,7 @@ export interface FileRoutesByTo {
   '/settings/display': typeof AuthenticatedSettingsDisplayRoute
   '/settings/network': typeof AuthenticatedSettingsNetworkRoute
   '/settings/notifications': typeof AuthenticatedSettingsNotificationsRoute
+  '/settings/storage': typeof AuthenticatedSettingsStorageRoute
   '/settings/time': typeof AuthenticatedSettingsTimeRoute
   '/clerk/sign-in': typeof ClerkauthSignInRoute
   '/clerk/sign-up': typeof ClerkauthSignUpRoute
@@ -313,6 +322,7 @@ export interface FileRoutesById {
   '/_authenticated/settings/display': typeof AuthenticatedSettingsDisplayRoute
   '/_authenticated/settings/network': typeof AuthenticatedSettingsNetworkRoute
   '/_authenticated/settings/notifications': typeof AuthenticatedSettingsNotificationsRoute
+  '/_authenticated/settings/storage': typeof AuthenticatedSettingsStorageRoute
   '/_authenticated/settings/time': typeof AuthenticatedSettingsTimeRoute
   '/clerk/(auth)/sign-in': typeof ClerkauthSignInRoute
   '/clerk/(auth)/sign-up': typeof ClerkauthSignUpRoute
@@ -348,6 +358,7 @@ export interface FileRouteTypes {
     | '/settings/display'
     | '/settings/network'
     | '/settings/notifications'
+    | '/settings/storage'
     | '/settings/time'
     | '/clerk/sign-in'
     | '/clerk/sign-up'
@@ -380,6 +391,7 @@ export interface FileRouteTypes {
     | '/settings/display'
     | '/settings/network'
     | '/settings/notifications'
+    | '/settings/storage'
     | '/settings/time'
     | '/clerk/sign-in'
     | '/clerk/sign-up'
@@ -416,6 +428,7 @@ export interface FileRouteTypes {
     | '/_authenticated/settings/display'
     | '/_authenticated/settings/network'
     | '/_authenticated/settings/notifications'
+    | '/_authenticated/settings/storage'
     | '/_authenticated/settings/time'
     | '/clerk/(auth)/sign-in'
     | '/clerk/(auth)/sign-up'
@@ -643,6 +656,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsTimeRouteImport
       parentRoute: typeof AuthenticatedSettingsRouteRoute
     }
+    '/_authenticated/settings/storage': {
+      id: '/_authenticated/settings/storage'
+      path: '/storage'
+      fullPath: '/settings/storage'
+      preLoaderRoute: typeof AuthenticatedSettingsStorageRouteImport
+      parentRoute: typeof AuthenticatedSettingsRouteRoute
+    }
     '/_authenticated/settings/notifications': {
       id: '/_authenticated/settings/notifications'
       path: '/notifications'
@@ -694,6 +714,7 @@ interface AuthenticatedSettingsRouteRouteChildren {
   AuthenticatedSettingsDisplayRoute: typeof AuthenticatedSettingsDisplayRoute
   AuthenticatedSettingsNetworkRoute: typeof AuthenticatedSettingsNetworkRoute
   AuthenticatedSettingsNotificationsRoute: typeof AuthenticatedSettingsNotificationsRoute
+  AuthenticatedSettingsStorageRoute: typeof AuthenticatedSettingsStorageRoute
   AuthenticatedSettingsTimeRoute: typeof AuthenticatedSettingsTimeRoute
   AuthenticatedSettingsIndexRoute: typeof AuthenticatedSettingsIndexRoute
 }
@@ -706,6 +727,7 @@ const AuthenticatedSettingsRouteRouteChildren: AuthenticatedSettingsRouteRouteCh
     AuthenticatedSettingsNetworkRoute: AuthenticatedSettingsNetworkRoute,
     AuthenticatedSettingsNotificationsRoute:
       AuthenticatedSettingsNotificationsRoute,
+    AuthenticatedSettingsStorageRoute: AuthenticatedSettingsStorageRoute,
     AuthenticatedSettingsTimeRoute: AuthenticatedSettingsTimeRoute,
     AuthenticatedSettingsIndexRoute: AuthenticatedSettingsIndexRoute,
   }

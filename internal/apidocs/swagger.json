@@ -997,6 +997,252 @@
                 }
             }
         },
+        "/system/storage/cleanup": {
+            "post": {
+                "description": "Forces an immediate pruning cycle across expired exports and recordings according to lifecycle policy.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Manually trigger storage prune cycle",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/storage.CleanupSummary"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/storage/config": {
+            "get": {
+                "description": "Retrieves current media root directory, retention periods, and watermark thresholds.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Get media storage lifecycle configuration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/storage.StorageConfig"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Validates and updates media root directory, retention policies, and high/low watermarks with live hot switching.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Update media storage lifecycle configuration",
+                "parameters": [
+                    {
+                        "description": "Storage configuration parameters",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/storage.UpdateConfigRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/storage.StorageStatus"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/storage/status": {
+            "get": {
+                "description": "Retrieves disk capacity metrics, categorized usage breakdown, mount point, and current health status.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Get media storage status and volume telemetry",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/storage.StorageStatus"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/storage/test": {
+            "post": {
+                "description": "Performs write probe, filesystem detection, and external volume identity verification on candidate path.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Test candidate storage directory",
+                "parameters": [
+                    {
+                        "description": "Target directory path to test",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/storage.PathTestRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/storage.PathTestResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/system/time": {
             "get": {
                 "description": "Retrieves current kernel time, active timezone, NTP candidate servers, synchronization state, and hardware RTC status.",
@@ -1796,6 +2042,286 @@
                 },
                 "transactionId": {
                     "type": "string"
+                }
+            }
+        },
+        "storage.CleanupSummary": {
+            "type": "object",
+            "properties": {
+                "deletedFiles": {
+                    "type": "integer"
+                },
+                "durationMs": {
+                    "type": "integer"
+                },
+                "finishedAt": {
+                    "type": "string"
+                },
+                "freedBytes": {
+                    "type": "integer"
+                },
+                "targetStatus": {
+                    "type": "string"
+                },
+                "triggerReason": {
+                    "description": "\"watermark\", \"scheduled\", \"manual\"",
+                    "type": "string"
+                }
+            }
+        },
+        "storage.PathTestRequest": {
+            "type": "object",
+            "required": [
+                "path"
+            ],
+            "properties": {
+                "path": {
+                    "type": "string"
+                }
+            }
+        },
+        "storage.PathTestResponse": {
+            "type": "object",
+            "properties": {
+                "deviceId": {
+                    "type": "integer"
+                },
+                "errorReason": {
+                    "type": "string"
+                },
+                "exists": {
+                    "type": "boolean"
+                },
+                "freeBytes": {
+                    "type": "integer"
+                },
+                "fsType": {
+                    "type": "string"
+                },
+                "isExternal": {
+                    "type": "boolean"
+                },
+                "isMount": {
+                    "type": "boolean"
+                },
+                "mountPoint": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "totalBytes": {
+                    "type": "integer"
+                },
+                "writable": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "storage.StorageConfig": {
+            "type": "object",
+            "properties": {
+                "emergencyStopMinMb": {
+                    "description": "Emergency minimum free space in megabytes (100..102400)",
+                    "type": "integer"
+                },
+                "emergencyStopPercent": {
+                    "description": "Emergency write-stop percentage (90..99)",
+                    "type": "integer"
+                },
+                "exportsRetentionHours": {
+                    "description": "Exported clips retention in hours (1..168)",
+                    "type": "integer"
+                },
+                "highWatermarkPercent": {
+                    "description": "High watermark percentage triggering cleaner (50..95)",
+                    "type": "integer"
+                },
+                "lowWatermarkPercent": {
+                    "description": "Low watermark percentage where cleaner sleeps (40..85)",
+                    "type": "integer"
+                },
+                "mediaDirectory": {
+                    "description": "Root media path, e.g. \"/mnt/storage/media\"",
+                    "type": "string"
+                },
+                "recordingsRetentionDays": {
+                    "description": "Video recordings retention in days (1..365)",
+                    "type": "integer"
+                },
+                "snapshotsRetentionDays": {
+                    "description": "Snapshot captures retention in days (1..730)",
+                    "type": "integer"
+                }
+            }
+        },
+        "storage.StorageHealthStatus": {
+            "type": "string",
+            "enum": [
+                "healthy",
+                "warning",
+                "cleaning",
+                "emergency_stopped",
+                "error"
+            ],
+            "x-enum-comments": {
+                "StatusCleaning": "Background cleaner is actively pruning expired/stale files",
+                "StatusEmergencyStopped": "Storage touched critical emergency line; writes suspended",
+                "StatusError": "Path missing, read-only, or external disk unmounted/fallen through",
+                "StatusHealthy": "Storage has plenty of space and read/write is normal",
+                "StatusWarning": "Storage usage touched high watermark threshold"
+            },
+            "x-enum-descriptions": [
+                "Storage has plenty of space and read/write is normal",
+                "Storage usage touched high watermark threshold",
+                "Background cleaner is actively pruning expired/stale files",
+                "Storage touched critical emergency line; writes suspended",
+                "Path missing, read-only, or external disk unmounted/fallen through"
+            ],
+            "x-enum-varnames": [
+                "StatusHealthy",
+                "StatusWarning",
+                "StatusCleaning",
+                "StatusEmergencyStopped",
+                "StatusError"
+            ]
+        },
+        "storage.StorageStatus": {
+            "type": "object",
+            "properties": {
+                "breakdown": {
+                    "description": "Categorized usage breakdown",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/storage.StorageUsageBreakdown"
+                        }
+                    ]
+                },
+                "canWrite": {
+                    "description": "True if storage is currently accepting new writes",
+                    "type": "boolean"
+                },
+                "deviceId": {
+                    "description": "Associated filesystem device ID (st_dev)",
+                    "type": "integer"
+                },
+                "freeBytes": {
+                    "description": "Available capacity for non-root users in bytes",
+                    "type": "integer"
+                },
+                "fsType": {
+                    "description": "Filesystem type, e.g. \"ext4\", \"xfs\", \"btrfs\"",
+                    "type": "string"
+                },
+                "isExternal": {
+                    "description": "True if mounted on dedicated volume outside rootfs (/)",
+                    "type": "boolean"
+                },
+                "mediaDirectory": {
+                    "description": "Currently active media directory",
+                    "type": "string"
+                },
+                "mountPoint": {
+                    "description": "Mount point where the media directory lives",
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Current health status",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/storage.StorageHealthStatus"
+                        }
+                    ]
+                },
+                "totalBytes": {
+                    "description": "Total capacity in bytes",
+                    "type": "integer"
+                },
+                "updatedAt": {
+                    "description": "Metric collection timestamp (UTC)",
+                    "type": "string"
+                },
+                "usagePercent": {
+                    "description": "Volume usage percentage (0..100)",
+                    "type": "integer"
+                },
+                "usedBytes": {
+                    "description": "Used capacity in bytes",
+                    "type": "integer"
+                }
+            }
+        },
+        "storage.StorageUsageBreakdown": {
+            "type": "object",
+            "properties": {
+                "exportsBytes": {
+                    "description": "Total size of temporary exported files in bytes",
+                    "type": "integer"
+                },
+                "otherBytes": {
+                    "description": "Other files residing on the same filesystem/volume",
+                    "type": "integer"
+                },
+                "recordingsBytes": {
+                    "description": "Total size of video recordings in bytes",
+                    "type": "integer"
+                },
+                "snapshotsBytes": {
+                    "description": "Total size of AI snapshots in bytes",
+                    "type": "integer"
+                }
+            }
+        },
+        "storage.UpdateConfigRequest": {
+            "type": "object",
+            "required": [
+                "emergencyStopMinMb",
+                "emergencyStopPercent",
+                "exportsRetentionHours",
+                "highWatermarkPercent",
+                "lowWatermarkPercent",
+                "mediaDirectory",
+                "recordingsRetentionDays",
+                "snapshotsRetentionDays"
+            ],
+            "properties": {
+                "emergencyStopMinMb": {
+                    "type": "integer",
+                    "maximum": 102400,
+                    "minimum": 100
+                },
+                "emergencyStopPercent": {
+                    "type": "integer",
+                    "maximum": 99,
+                    "minimum": 90
+                },
+                "exportsRetentionHours": {
+                    "type": "integer",
+                    "maximum": 168,
+                    "minimum": 1
+                },
+                "highWatermarkPercent": {
+                    "type": "integer",
+                    "maximum": 95,
+                    "minimum": 50
+                },
+                "lowWatermarkPercent": {
+                    "type": "integer",
+                    "maximum": 85,
+                    "minimum": 40
+                },
+                "mediaDirectory": {
+                    "type": "string"
+                },
+                "recordingsRetentionDays": {
+                    "type": "integer",
+                    "maximum": 365,
+                    "minimum": 1
+                },
+                "snapshotsRetentionDays": {
+                    "type": "integer",
+                    "maximum": 730,
+                    "minimum": 1
                 }
             }
         },

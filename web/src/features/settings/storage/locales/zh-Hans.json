@@ -1,0 +1,80 @@
+{
+  "page": {
+    "title": "存储与生命周期",
+    "desc": "配置边缘媒体存储挂载路径、statfs 水位感知监控、外挂盘掉线防穿透保护以及双水位回差自动清理策略。"
+  },
+  "overview": {
+    "title": "存储容量与健康大盘",
+    "total": "总容量",
+    "used": "已用空间",
+    "free": "可用剩余",
+    "mountPoint": "挂载点与文件系统",
+    "dedicated_mount": "独立外挂盘",
+    "root_fs": "系统根分区",
+    "write_ok": "允许写盘",
+    "write_blocked": "禁止写入",
+    "refreshing": "遥测刷新中..."
+  },
+  "status": {
+    "healthy": "运行正常",
+    "warning": "高水位预警",
+    "cleaning": "清理让渡中",
+    "emergency_stopped": "停录熔断",
+    "error": "设备异常/掉盘",
+    "unknown": "未知状态"
+  },
+  "breakdown": {
+    "recordings": "视频录像",
+    "snapshots": "AI抓拍",
+    "exports": "临时导出",
+    "other": "其它占用"
+  },
+  "form": {
+    "title": "媒体存储路径与保留策略配置",
+    "media_directory": "媒体根目录绝对路径",
+    "media_directory_desc": "录像、抓拍与临时导出文件的落盘根路径。若修改路径，新文件立即写入新目录，旧目录历史视频仍可点播并优先淘汰。",
+    "btn_test_path": "检测路径",
+    "empty_path": "请先输入目录路径",
+    "test_success": "路径检测通过，具备读写权能！",
+    "test_failed": "该目录不存在或无写权限",
+    "path_valid": "目录合法且读写正常",
+    "path_invalid": "路径检测未通过",
+    "recordings_days": "视频录像保留天数",
+    "recordings_days_desc": "常规录像最大留存（默认 15 天）",
+    "snapshots_days": "AI抓拍保留天数",
+    "snapshots_days_desc": "告警事件图最大留存（默认 90 天）",
+    "exports_hours": "临时导出保留小时",
+    "exports_hours_desc": "导出剪辑保留生存期（默认 48 小时）",
+    "btn_reset": "重置更改",
+    "btn_save": "保存配置",
+    "save_success": "存储策略配置已保存并生效！"
+  },
+  "advanced": {
+    "title": "高级双水位与紧急熔断策略",
+    "high_watermark": "高水位清理激活阈值 (%)",
+    "high_watermark_desc": "触碰该使用率时后台协程自动唤醒清理（默认 90%）",
+    "low_watermark": "低水位清理休眠阈值 (%)",
+    "low_watermark_desc": "容量回落到该百分比后停止清理进入休眠（默认 80%）",
+    "emergency_percent": "紧急停录使用率红线 (%)",
+    "emergency_percent_desc": "达到该极高使用率时强制熔断停录，保全数据库（默认 95%）",
+    "emergency_mb": "紧急停录最小剩余空间 (MB)",
+    "emergency_mb_desc": "可用空间不足此容量时触发停录保护（默认 2048 MB）"
+  },
+  "dialog": {
+    "title": "触发磁盘空间清理",
+    "desc1": "系统将立即启动双水位回差引擎，依照阶梯优先级清理过期临时导出和最早的未加锁常规录像，直到磁盘使用率回落至低水位线以下。",
+    "desc2": "所有带有 AI 告警事件标记或被手动加锁保护的录像与抓拍绝不会被提前清除。清理过程采用毫秒级批次让渡，不会造成前台录像掉帧。",
+    "cancel": "取消",
+    "confirm": "确认执行",
+    "cleaning": "正在清理...",
+    "success_title": "清理完成",
+    "deleted_files": "删除文件数",
+    "freed_space": "释放空间",
+    "duration": "耗时",
+    "close": "完成"
+  },
+  "actions": {
+    "refresh": "刷新状态",
+    "manual_cleanup": "立即清理"
+  }
+}

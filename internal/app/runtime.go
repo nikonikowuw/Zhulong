@@ -43,6 +43,11 @@ type systemTimeLifecycle interface {
 	Stop(context.Context) error
 }
 
+type storageLifecycle interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
+
 type lifecycleRuntime struct {
 	database   databaseLifecycle
 	native     engineLifecycle
@@ -50,6 +55,7 @@ type lifecycleRuntime struct {
 	audit      auditLifecycle
 	network    networkLifecycle
 	systemTime systemTimeLifecycle
+	storage    storageLifecycle
 	server     *http.Server
 	logger     *zap.Logger
 	listen     func(string, string) (net.Listener, error)
@@ -63,6 +69,7 @@ type lifecycleRuntime struct {
 	auditReady      bool
 	networkReady    bool
 	systemTimeReady bool
+	storageReady    bool
 	httpReady       bool
 	loggerSynced    bool
 }
@@ -76,6 +83,7 @@ type runtimeParams struct {
 	Audit      auditLifecycle      `optional:"true"`
 	Network    networkLifecycle    `optional:"true"`
 	SystemTime systemTimeLifecycle `optional:"true"`
+	Storage    storageLifecycle    `optional:"true"`
 	Server     *http.Server
 	Logger     *zap.Logger
 }
@@ -92,6 +100,7 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		audit:      p.Audit,
 		network:    p.Network,
 		systemTime: p.SystemTime,
+		storage:    p.Storage,
 		server:     p.Server,
 		logger:     p.Logger,
 		listen:     net.Listen,
@@ -131,9 +140,16 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.systemTimeReady = true
 	}
 
+	if r.storage != nil {
+		if err := r.storage.Start(ctx); err != nil {
+			r.logger.Warn("storage start warning", zap.Error(err))
+		}
+		r.storageReady = true
+	}
+
 	if err := r.native.Start(); err != nil {
 		startupErr := fmt.Errorf("start native engine: %w", err)
-		return errors.Join(startupErr, r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
+		return errors.Join(startupErr, r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
 	}
 	r.nativeReady = true
 
@@ -153,7 +169,7 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	listener, err := r.listen("tcp", r.server.Addr)
 	if err != nil {
 		startupErr := fmt.Errorf("listen on %s: %w", r.server.Addr, err)
-		return errors.Join(startupErr, r.closeCamera(), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
+		return errors.Join(startupErr, r.closeCamera(), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
 	}
 	r.listener = listener
 	r.serveDone = make(chan error, 1)
@@ -197,6 +213,9 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 	if err := r.closeCamera(); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
+	if err := r.closeStorage(ctx); err != nil {
+		stopErrors = append(stopErrors, err)
+	}
 	if err := r.closeSystemTime(ctx); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
@@ -237,6 +256,19 @@ func (r *lifecycleRuntime) closeNetwork(ctx context.Context) error {
 	if r.network != nil {
 		if err := r.network.Stop(ctx); err != nil {
 			return fmt.Errorf("stop network service: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *lifecycleRuntime) closeStorage(ctx context.Context) error {
+	if !r.storageReady {
+		return nil
+	}
+	r.storageReady = false
+	if r.storage != nil {
+		if err := r.storage.Stop(ctx); err != nil {
+			return fmt.Errorf("stop storage service: %w", err)
 		}
 	}
 	return nil

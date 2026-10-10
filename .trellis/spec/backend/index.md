@@ -15,6 +15,7 @@
 | [HTTP 中间件开发与编排](./middleware-guidelines.md) | 中间件分层隔离、流水线时序、Request ID、Access Log、CORS 与类型安全 |
 | [数据库与版本化迁移](./database-guidelines.md) | GORM+SQLite、WAL/Pragma 配置、启动自动迁移、事务约束 |
 | [依赖注入与生命周期](./dependency-injection.md) | Uber Fx 装配、启动失败回滚、HTTP 排空、native/数据库关闭顺序 |
+| [边缘媒体存储与动态生命周期](./storage-guidelines.md) | 存储路径规范、statfs 水位感知、外挂盘防穿透、双水位回差清理与熔断 |
 | [摄像机业务与生命周期](./camera-guidelines.md) | 主子流建模、AES-GCM 凭据加密、双流原子门禁、正交状态机与探活调度 |
 | [宿主启动与构建合同](./host-runtime-contract.md) | CLI、health/SPA/Swagger、迁移、CGO 静态链接与跨层验证合同 |
 | [错误处理与统一契约](./error-handling.md) | `AppError` 结构、必需三字段与可选字段级 `details`、后端 i18n 错误翻译、Zap 日志脱敏 |

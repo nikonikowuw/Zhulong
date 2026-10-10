@@ -9,6 +9,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/network"
+	"github.com/nikonikowuw/Zhulong/internal/storage"
 	"github.com/nikonikowuw/Zhulong/internal/systemtime"
 	"github.com/nikonikowuw/Zhulong/internal/webui"
 	"go.uber.org/fx"
@@ -239,6 +240,39 @@ var systemTimeModule = fx.Module("systemtime",
 	fx.Provide(provideSystemTime),
 )
 
+// --- Storage Module ---
+
+type storageOut struct {
+	fx.Out
+
+	Repository      storage.Repository
+	Inspector       storage.PathInspector
+	Gate            *storage.EmergencyGate
+	Cleaner         *storage.CleanerEngine
+	Service         *storage.Service
+	Handler         *storage.Handler
+	Lifecycle       storageLifecycle
+	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+}
+
+func provideStorage(dbProvider database.DBProvider, auditSvc *audit.Service, logger *zap.Logger) storageOut {
+	comp := storage.NewStorageComponents(dbProvider, auditSvc, logger)
+	return storageOut{
+		Repository:      comp.Repository,
+		Inspector:       comp.Inspector,
+		Gate:            comp.Gate,
+		Cleaner:         comp.Cleaner,
+		Service:         comp.Service,
+		Handler:         comp.Handler,
+		Lifecycle:       comp.Lifecycle,
+		ProtectedRoutes: comp.ProtectedRoutes,
+	}
+}
+
+var storageModule = fx.Module("storage",
+	fx.Provide(provideStorage),
+)
+
 // --- HTTP Module ---
 
 var httpModule = fx.Module("http",
@@ -266,6 +300,7 @@ var Module = fx.Options(
 	cameraModule,
 	networkModule,
 	systemTimeModule,
+	storageModule,
 	httpModule,
 	runtimeModule,
 )

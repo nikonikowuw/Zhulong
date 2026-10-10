@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Outlet } from '@tanstack/react-router'
-import { Monitor, Bell, Palette, Wrench, UserCog, Network, Clock } from 'lucide-react'
+import { Monitor, Bell, Palette, Wrench, UserCog, Network, Clock, HardDrive } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Separator } from '@/components/ui/separator'
 import { ConfigDrawer } from '@/components/config-drawer'
@@ -51,6 +51,11 @@ export function Settings() {
         title: t('nav.Time', { defaultValue: 'Time & Clock' }),
         href: '/settings/time',
         icon: <Clock size={18} />,
+      },
+      {
+        title: t('nav.Storage', { defaultValue: 'Storage & Lifecycle' }),
+        href: '/settings/storage',
+        icon: <HardDrive size={18} />,
       },
     ],
     [t]
