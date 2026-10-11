@@ -71,12 +71,25 @@ public:
 private:
     void decode_loop() noexcept;
 
+    /** @brief 取得至少 size 字节容量的复用缓冲 (避免每包堆分配) */
+    std::vector<uint8_t> acquire_buffer(size_t size);
+
+    /** @brief 归还包缓冲供后续复用 */
+    void recycle_buffer(std::vector<uint8_t> &&buffer);
+
     const uint64_t stream_id_{0};
     mutable std::mutex meta_mutex_;
     Video video_meta_;
+    std::atomic<int32_t> time_base_num_{0};     /**< 元数据时间基缓存，供生产者热路径免锁读取 */
+    std::atomic<int32_t> time_base_den_{0};
+    std::atomic<uint64_t> meta_generation_{0};  /**< 编码/extradata 变化时自增，驱动解码器重建 */
 
     std::atomic<bool> active_{true};
-    std::atomic<bool> waiting_keyframe_{false};
+    /** 初始即等待关键帧：会话可能在 GOP 中途创建，禁止把孤立 P 帧喂入解码器 */
+    std::atomic<bool> waiting_keyframe_{true};
+
+    std::mutex pool_mutex_;
+    std::vector<std::vector<uint8_t>> buffer_pool_;
 
     BoundedQueue<QueuedPacket> packet_queue_{60, OverflowStrategy::DROP_NEWEST};
     BoundedQueue<HardwareFrame::ConstPtr> frame_queue_{3, OverflowStrategy::DROP_OLDEST};
@@ -99,6 +112,8 @@ struct Stream {
     std::thread worker;                         /**< 负责 FFmpeg 阻塞读取与解包的 Worker 线程 */
     mutable std::mutex mutex;                   /**< 保护 subscriptions, status 与 decode_session_ 的互斥锁 */
     std::map<Zhulong_subscription_id, std::shared_ptr<Subscription>> subscriptions; /**< 订阅者列表 */
+    using SubscriberList = std::vector<std::shared_ptr<Subscription>>;
+    std::shared_ptr<const SubscriberList> subscriber_snapshot_{std::make_shared<const SubscriberList>()}; /**< 不可变快照，随 subscriptions 变更重建 (持有 mutex 时写) */
     Zhulong_stream_status status{Zhulong_STREAM_STARTING, Zhulong_OK};              /**< 流当前运行状态 */
 
     Video video_meta_{};                        /**< 缓存的 RTSP 视频流元数据 */
@@ -121,6 +136,9 @@ struct Stream {
 
     /** @brief 流就绪时回调，接收视频元数据 */
     void on_ready(const Video &video);
+
+    /** @brief 将 subscriptions 重新发布为不可变快照 (调用方必须持有 mutex) */
+    void rebuild_subscribers();
 
     /** @brief 将解析出的数据包派发至该流的所有活跃订阅者及解码队列 */
     void dispatch(const Zhulong_packet_view &packet);

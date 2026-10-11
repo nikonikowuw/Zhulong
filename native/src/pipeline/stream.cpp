@@ -10,6 +10,7 @@ extern "C" {
 #include <libavutil/error.h>
 }
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <utility>
@@ -20,9 +21,39 @@ namespace zhulong {
 //                               DecodeSession 实现
 // ============================================================================
 
+namespace {
+/** 缓冲池最多保留的缓冲数量与单个缓冲容量上限 (防止异常大包长期占用内存) */
+constexpr size_t kMaxPooledBuffers = 16;
+constexpr size_t kMaxPooledCapacity = 4u * 1024u * 1024u;
+}
+
 DecodeSession::DecodeSession(uint64_t stream_id, Video video_meta)
     : stream_id_(stream_id), video_meta_(std::move(video_meta)) {
+    time_base_num_.store(video_meta_.view.time_base_num, std::memory_order_relaxed);
+    time_base_den_.store(video_meta_.view.time_base_den, std::memory_order_relaxed);
     worker_ = std::thread(&DecodeSession::decode_loop, this);
+}
+
+std::vector<uint8_t> DecodeSession::acquire_buffer(size_t size) {
+    std::vector<uint8_t> buffer;
+    {
+        std::lock_guard<std::mutex> lock(pool_mutex_);
+        if (!buffer_pool_.empty()) {
+            buffer = std::move(buffer_pool_.back());
+            buffer_pool_.pop_back();
+        }
+    }
+    buffer.reserve(size);
+    return buffer;
+}
+
+void DecodeSession::recycle_buffer(std::vector<uint8_t> &&buffer) {
+    if (buffer.capacity() == 0 || buffer.capacity() > kMaxPooledCapacity) return;
+    buffer.clear();
+    std::lock_guard<std::mutex> lock(pool_mutex_);
+    if (buffer_pool_.size() < kMaxPooledBuffers) {
+        buffer_pool_.push_back(std::move(buffer));
+    }
 }
 
 DecodeSession::~DecodeSession() {
@@ -55,30 +86,31 @@ bool DecodeSession::push_packet(const Zhulong_packet_view &packet) {
             return false;
         }
         waiting_keyframe_.store(false, std::memory_order_relaxed);
-        // 新的关键帧到达：清空此前积压的旧包队列，让解码器从全新关键帧起解
-        packet_queue_.reset();
+        // 新的关键帧到达：清空此前积压的旧包队列 (仅清元素，不触碰取消标记)
+        packet_queue_.clear();
     }
 
     QueuedPacket qp;
-    // 预留 AV_INPUT_BUFFER_PADDING_SIZE 零填充空间，防止底层优化解码器读越界
+    // 预留 AV_INPUT_BUFFER_PADDING_SIZE 零填充空间，防止底层优化解码器读越界；
+    // 缓冲来自复用池，先拷贝有效载荷，再仅对尾部 padding 清零，避免整块重复写入
+    qp.data = acquire_buffer(packet.size + AV_INPUT_BUFFER_PADDING_SIZE);
+    qp.data.assign(packet.data, packet.data + packet.size);
     qp.data.resize(packet.size + AV_INPUT_BUFFER_PADDING_SIZE, 0);
-    std::memcpy(qp.data.data(), packet.data, packet.size);
     qp.pts = packet.has_pts ? packet.pts : 0;
     qp.dts = packet.has_dts ? packet.dts : 0;
     qp.has_pts = (packet.has_pts != 0);
     qp.has_dts = (packet.has_dts != 0);
 
-    {
-        std::lock_guard<std::mutex> lock(meta_mutex_);
-        qp.time_base_num = packet.time_base_num > 0 ? packet.time_base_num : video_meta_.view.time_base_num;
-        qp.time_base_den = packet.time_base_den > 0 ? packet.time_base_den : video_meta_.view.time_base_den;
-    }
+    qp.time_base_num = packet.time_base_num > 0 ? packet.time_base_num : time_base_num_.load(std::memory_order_relaxed);
+    qp.time_base_den = packet.time_base_den > 0 ? packet.time_base_den : time_base_den_.load(std::memory_order_relaxed);
     qp.codec = packet.codec;
     qp.key_frame = is_key;
 
     if (!packet_queue_.push(std::move(qp))) {
-        // 队列已满溢出：开启等待下一个关键帧进行自愈重同步，避免损坏的参考链喂入解码器
+        // 队列已满溢出：立即丢弃全部积压并等待下一个关键帧重同步。
+        // 否则 AI 将长期消费一条落后约一个队列深度 (60 包) 的陈旧画面，延迟无法自愈。
         waiting_keyframe_.store(true, std::memory_order_relaxed);
+        packet_queue_.clear();
         return false;
     }
     return true;
@@ -90,7 +122,15 @@ bool DecodeSession::pop_frame(HardwareFrame::ConstPtr &out_frame, std::chrono::m
 
 void DecodeSession::update_metadata(const Video &video_meta) {
     std::lock_guard<std::mutex> lock(meta_mutex_);
+    // 仅当编码类型或参数集真正变化时才触发解码器重建，避免就绪回调的重复通知打断解码
+    const bool decoder_relevant_change =
+        video_meta_.view.codec != video_meta.view.codec || video_meta_.extradata != video_meta.extradata;
     video_meta_ = video_meta;
+    time_base_num_.store(video_meta_.view.time_base_num, std::memory_order_relaxed);
+    time_base_den_.store(video_meta_.view.time_base_den, std::memory_order_relaxed);
+    if (decoder_relevant_change) {
+        meta_generation_.fetch_add(1, std::memory_order_release);
+    }
 }
 
 size_t DecodeSession::frame_queue_size() const {
@@ -106,14 +146,28 @@ bool DecodeSession::is_active() const {
 }
 
 void DecodeSession::decode_loop() noexcept {
+    using SteadyClock = std::chrono::steady_clock;
+    constexpr auto kInitialRetryDelay = std::chrono::milliseconds(250);
+    constexpr auto kMaxRetryDelay = std::chrono::milliseconds(5000);
+
     IDecodeNode::Ptr decoder;
+    uint64_t decoder_generation = 0;
+    // 解码线程侧的关键帧门控：启动、解码出错、解码器重建之后，
+    // 必须等到关键帧才能继续送入解码器，避免孤立的 P 帧产生报错与花屏帧
+    bool need_keyframe = true;
+    // 解码器创建失败退避：硬件/软件解码器初始化昂贵，失败时不能每包重试
+    auto next_create_attempt = SteadyClock::time_point::min();
+    auto retry_delay = kInitialRetryDelay;
 
     auto create_or_get_decoder = [&](int32_t codec_hint, int32_t tb_num, int32_t tb_den) -> IDecodeNode * {
         if (decoder) return decoder.get();
+        if (SteadyClock::now() < next_create_attempt) return nullptr;
         try {
             Video meta;
+            uint64_t generation = 0;
             {
                 std::lock_guard<std::mutex> lock(meta_mutex_);
+                generation = meta_generation_.load(std::memory_order_acquire);
                 meta = video_meta_;
             }
             const int32_t selected_codec = meta.view.codec > 0 ? meta.view.codec : codec_hint;
@@ -128,9 +182,19 @@ void DecodeSession::decode_loop() noexcept {
                     final_tb_num,
                     final_tb_den
                 );
+                if (decoder) {
+                    decoder_generation = generation;
+                    retry_delay = kInitialRetryDelay;
+                    need_keyframe = true;
+                } else {
+                    next_create_attempt = SteadyClock::now() + retry_delay;
+                    retry_delay = std::min(retry_delay * 2, kMaxRetryDelay);
+                }
             }
         } catch (...) {
             decoder.reset();
+            next_create_attempt = SteadyClock::now() + retry_delay;
+            retry_delay = std::min(retry_delay * 2, kMaxRetryDelay);
         }
         return decoder.get();
     };
@@ -157,9 +221,27 @@ void DecodeSession::decode_loop() noexcept {
             break;
         }
 
+        // 编码类型或参数集变化：旧解码器不再适用，丢弃并按新元数据重建
+        if (decoder && decoder_generation != meta_generation_.load(std::memory_order_acquire)) {
+            decoder.reset();
+            need_keyframe = true;
+        }
+
+        if (need_keyframe && !pkt.key_frame) {
+            recycle_buffer(std::move(pkt.data));
+            continue;
+        }
+
         try {
             auto *dec = create_or_get_decoder(pkt.codec, pkt.time_base_num, pkt.time_base_den);
             if (dec) {
+                // 解码器可能刚在上面被重建 (need_keyframe 被重置)，非关键帧此时仍须丢弃
+                if (need_keyframe && !pkt.key_frame) {
+                    recycle_buffer(std::move(pkt.data));
+                    continue;
+                }
+                need_keyframe = false;
+
                 const size_t actual_size = pkt.data.size() >= AV_INPUT_BUFFER_PADDING_SIZE
                                                ? pkt.data.size() - AV_INPUT_BUFFER_PADDING_SIZE
                                                : pkt.data.size();
@@ -177,8 +259,10 @@ void DecodeSession::decode_loop() noexcept {
                 if (ret >= 0) {
                     drain_frames(dec);
                 } else if (ret != AVERROR_EOF && ret != AVERROR(EAGAIN)) {
-                    // 解码单包遇到错误（如弱网残损包），执行 flush 清空 DPB，避免参考错误持续污染后续画面
+                    // 解码单包遇到错误（如弱网残损包），执行 flush 清空 DPB，
+                    // 并等待下一个关键帧，避免参考错误持续污染后续画面
                     dec->flush();
+                    need_keyframe = true;
                 }
             }
         } catch (...) {
@@ -187,7 +271,9 @@ void DecodeSession::decode_loop() noexcept {
                     decoder->flush();
                 } catch (...) {}
             }
+            need_keyframe = true;
         }
+        recycle_buffer(std::move(pkt.data));
     }
 
     // 退出前排空残留帧
@@ -317,29 +403,32 @@ void Stream::on_ready(const Video &video) {
     }
 }
 
-void Stream::dispatch(const Zhulong_packet_view &packet) {
-    // 1. 优先推送至 AI 解码队列 (先于 Preview 回调，避免慢回调延迟 AI 处理)
-    if (!cancel.stopped.load()) {
-        std::shared_ptr<DecodeSession> session;
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            session = decode_session_;
-        }
-        if (session) {
-            session->push_packet(packet);
-        }
+void Stream::rebuild_subscribers() {
+    auto list = std::make_shared<SubscriberList>();
+    list->reserve(subscriptions.size());
+    for (const auto &entry : subscriptions) {
+        list->push_back(entry.second);
     }
+    subscriber_snapshot_ = std::move(list);
+}
 
-    // 2. 快照机制：在锁保护下复制当前的订阅者指针列表，在锁外逐个调用
-    std::vector<std::shared_ptr<Subscription>> snapshot;
+void Stream::dispatch(const Zhulong_packet_view &packet) {
+    // 单次加锁同时取得解码会话与订阅者快照 (仅拷贝 shared_ptr，热路径无堆分配)
+    std::shared_ptr<DecodeSession> session;
+    std::shared_ptr<const SubscriberList> subscribers;
     {
         std::lock_guard<std::mutex> lock(mutex);
-        for (const auto &entry : subscriptions) {
-            snapshot.push_back(entry.second);
-        }
+        session = decode_session_;
+        subscribers = subscriber_snapshot_;
     }
 
-    for (const auto &subscription : snapshot) {
+    // 1. 优先推送至 AI 解码队列 (先于 Preview 回调，避免慢回调延迟 AI 处理)
+    if (session && !cancel.stopped.load()) {
+        session->push_packet(packet);
+    }
+
+    // 2. 在锁外逐个调用订阅回调
+    for (const auto &subscription : *subscribers) {
         if (cancel.stopped.load()) break;
         subscription->invoke(packet);
     }

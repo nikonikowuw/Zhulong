@@ -135,6 +135,19 @@ public:
         not_full_.notify_all();
     }
 
+    /**
+     * @brief 仅清空残余元素，不改变取消标记（拥塞重同步使用，停机竞态下不会“复活”已取消队列）
+     */
+    void clear() {
+        std::deque<T> discarded;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            discarded = std::move(queue_);
+            queue_.clear();
+        }
+        not_full_.notify_all();
+    }
+
     /** @brief 检查队列是否已被取消 */
     bool is_cancelled() const {
         std::lock_guard<std::mutex> lock(mutex_);

@@ -39,8 +39,9 @@ struct Engine {
 
     std::thread reaper;                         /**< 定期回收宽限期到期流的清理线程 */
     std::atomic<bool> reaper_stop{true};        /**< 清理线程停止控制信号 */
-    std::mutex timer_mutex;                     /**< Reaper 定时唤醒互斥锁 */
+    std::mutex timer_mutex;                     /**< Reaper 定时唤醒互斥锁 (同时保护 wake_epoch) */
     std::condition_variable timer_wakeup;       /**< Reaper 定时唤醒条件变量 */
+    uint64_t wake_epoch = 0;                    /**< 唤醒纪元：任何可能改变最近到期时间的操作都会递增，防止丢失唤醒 */
 
     std::mutex probe_mutex;                     /**< 探测任务列表互斥锁 */
     std::condition_variable probes_drained;     /**< 探测任务全部排空信号 */
@@ -54,8 +55,11 @@ struct Engine {
     /** @brief 停止引擎，取消所有拉流与探测，等待全部线程 join */
     void stop();
 
-    /** @brief 后台清理线程函数：周期性扫描并释放已过期的物理流 */
+    /** @brief 后台清理线程函数：休眠至最近的流到期时间，回收已过期的物理流 */
     void reap() noexcept;
+
+    /** @brief 唤醒清理线程重新计算最近到期时间 (可在持有 control 时调用，不会反向加锁) */
+    void wake_reaper();
 
     /** @brief 根据流 ID 查找物理流对象（必须在 running 为 true 时调用） */
     std::shared_ptr<Stream> find_stream(Zhulong_stream_id id);

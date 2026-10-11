@@ -95,6 +95,21 @@ int main() {
             CHECK(!q.pop(val));  // 取消后 pop 立即返回 false
         }
 
+        // clear() 只清空元素，不改变取消标记，且不会“复活”已取消队列
+        {
+            BoundedQueue<int> q(4, OverflowStrategy::DROP_NEWEST);
+            CHECK(q.push(1));
+            CHECK(q.push(2));
+            q.clear();
+            CHECK(q.empty());
+            CHECK(!q.is_cancelled());
+            CHECK(q.push(3));
+            q.cancel();
+            q.clear();
+            CHECK(q.is_cancelled());
+            CHECK(!q.push(4));
+        }
+
         // ====================================================================
         // 2. FFmpegDecodeNode 真实 H.264 关键帧端到端解码测试
         // ====================================================================
@@ -360,6 +375,10 @@ int main() {
 
             Zhulong_packet_view pkt_non_key = pkt_key;
             pkt_non_key.key_frame = 0;
+
+            // 新建会话必须先等待关键帧：GOP 中途接入时的孤立非关键帧一律拒绝
+            CHECK(!session.push_packet(pkt_non_key));
+            CHECK(session.packet_queue_size() == 0);
 
             // 模拟大量非关键帧将队列喂满（60容量）
             int pushed_count = 0;

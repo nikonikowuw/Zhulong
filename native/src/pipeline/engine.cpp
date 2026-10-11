@@ -5,7 +5,9 @@
 
 #include "pipeline/engine.hpp"
 
+#include <algorithm>
 #include <utility>
+#include <vector>
 
 namespace zhulong {
 
@@ -39,7 +41,7 @@ void Engine::stop() {
         }
     }
 
-    timer_wakeup.notify_all();
+    wake_reaper();
     stream_retired.notify_all();
 
     {
@@ -66,39 +68,64 @@ void Engine::stop() {
     probes_drained.wait(lock, [this] { return probes.empty(); });
 }
 
-void Engine::reap() noexcept {
-    while (!reaper_stop.load()) {
-        {
-            std::unique_lock<std::mutex> timer(timer_mutex);
-            timer_wakeup.wait_for(timer, std::chrono::milliseconds(50), [this] {
-                return reaper_stop.load();
-            });
-        }
-        if (reaper_stop.load()) break;
+void Engine::wake_reaper() {
+    {
+        std::lock_guard<std::mutex> timer(timer_mutex);
+        ++wake_epoch;
+    }
+    timer_wakeup.notify_all();
+}
 
-        for (;;) {
-            std::shared_ptr<Stream> expired;
-            {
-                std::lock_guard<std::mutex> lock(control);
-                if (reaper_stop.load()) break;
-                for (const auto &entry : streams) {
-                    if (entry.second->consumers.empty() && Clock::now() >= entry.second->expiry) {
-                        expired = entry.second;
-                        break;
-                    }
+void Engine::reap() noexcept {
+    // 兜底唤醒上限：即使出现未预期的状态变化，最迟 1 秒内重新扫描
+    constexpr auto kMaxSleep = std::chrono::seconds(1);
+
+    while (!reaper_stop.load()) {
+        // 先记录唤醒纪元再扫描：扫描之后发生的任何变更都会让下面的等待立即返回
+        uint64_t seen_epoch = 0;
+        {
+            std::lock_guard<std::mutex> timer(timer_mutex);
+            seen_epoch = wake_epoch;
+        }
+
+        std::vector<std::shared_ptr<Stream>> expired;
+        auto earliest = Clock::time_point::max();
+        {
+            std::lock_guard<std::mutex> lock(control);
+            if (reaper_stop.load()) break;
+            const auto now = Clock::now();
+            for (const auto &entry : streams) {
+                const auto &stream = entry.second;
+                if (!stream->consumers.empty()) continue;
+                if (now >= stream->expiry) {
+                    expired.push_back(stream);
+                } else {
+                    earliest = std::min(earliest, stream->expiry);
                 }
             }
-            if (!expired) break;
-
-            expired->request_stop();
-            expired->join();
-
-            {
-                std::lock_guard<std::mutex> lock(control);
-                streams.erase(expired->id);
-            }
-            stream_retired.notify_all();
         }
+
+        if (!expired.empty()) {
+            // 先统一发出停止信号，再逐个汇合：某一路 FFmpeg 取消较慢时不会延后其它流的停止
+            for (const auto &stream : expired) stream->request_stop();
+            for (const auto &stream : expired) {
+                stream->join();
+                {
+                    std::lock_guard<std::mutex> lock(control);
+                    streams.erase(stream->id);
+                }
+                stream_retired.notify_all();
+            }
+            continue;
+        }
+
+        const auto now = Clock::now();
+        const auto deadline = earliest == Clock::time_point::max() ? now + kMaxSleep
+                                                                   : std::min(earliest, now + kMaxSleep);
+        std::unique_lock<std::mutex> timer(timer_mutex);
+        timer_wakeup.wait_until(timer, deadline, [this, seen_epoch] {
+            return reaper_stop.load() || wake_epoch != seen_epoch;
+        });
     }
 }
 
@@ -186,6 +213,7 @@ void Engine::release(Zhulong_stream_id id, uint64_t consumer) {
 
         if (stream->consumers.empty()) {
             stream->expiry = Clock::now() + stream_grace_period;
+            wake_reaper();
         }
     }
     // 锁外执行解码线程的停止与汇合，消除跨流死锁与阻塞
@@ -193,8 +221,12 @@ void Engine::release(Zhulong_stream_id id, uint64_t consumer) {
 }
 
 Zhulong_stream_status Engine::status(Zhulong_stream_id id) {
-    std::lock_guard<std::mutex> operation(control);
-    auto stream = find_stream(id);
+    std::shared_ptr<Stream> stream;
+    {
+        std::lock_guard<std::mutex> operation(control);
+        stream = find_stream(id);
+    }
+    // 状态轮询只需流自身的锁，不再与 acquire/release 争用 control
     std::lock_guard<std::mutex> lock(stream->mutex);
     return stream->status;
 }
@@ -219,6 +251,7 @@ Zhulong_subscription_id Engine::subscribe(Zhulong_stream_id id, uint64_t consume
     if (!next_subscription) throw Failure{Zhulong_ERR_INTERNAL};
     const auto subscription = next_subscription++;
     stream->subscriptions.emplace(subscription, std::make_shared<Subscription>(consumer, callback, token));
+    stream->rebuild_subscribers();
     return subscription;
 }
 
@@ -233,6 +266,7 @@ void Engine::unsubscribe(Zhulong_stream_id id, Zhulong_subscription_id subscript
         if (found == stream->subscriptions.end()) throw Failure{Zhulong_ERR_NOT_FOUND};
         removed = found->second;
         stream->subscriptions.erase(found);
+        stream->rebuild_subscribers();
     }
 
     operation.unlock();
