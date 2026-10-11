@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "节点流水线设计、有界队列背压、零拷贝与5步优雅停机时序规范"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "RTSP 接入合同、时钟/超时、FFmpeg 交互与取消机制"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "CGO 内存契约、句柄安全与异常隔离"}
+{"file": ".trellis/tasks/10-11-native-pipeline-stability/research/baseline.md", "reason": "本次稳定性分析复现事实与上下文约束"}
