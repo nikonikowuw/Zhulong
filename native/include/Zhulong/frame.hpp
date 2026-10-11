@@ -18,6 +18,11 @@
 
 namespace zhulong {
 
+// 常用像素格式常量 (DRM / FourCC 兼容)
+constexpr uint32_t FRAME_FORMAT_UNKNOWN = 0;
+constexpr uint32_t FRAME_FORMAT_YUV420P = 0x32315559; // 'YU12' / I420 (标准平面 YUV420P)
+constexpr uint32_t FRAME_FORMAT_NV12    = 0x3231564E; // 'NV12' (两平面 Y/UV 交错)
+
 /**
  * @brief 专为异构多算法推理管线设计的统一硬件帧对象
  */
@@ -30,7 +35,7 @@ struct HardwareFrame {
     uint32_t height{0};         // 图像有效显示高度 (像素)
     uint32_t stride{0};         // 水平行跨度 (字节数, Width Stride / Pitch)
     uint32_t vstride{0};        // 垂直对齐步长 (行数, Height Stride, 关键: 用于准确定位 NV12 UV 偏移)
-    uint32_t format{0};         // 像素格式 (如 DRM_FORMAT_NV12)
+    uint32_t format{FRAME_FORMAT_UNKNOWN}; // 像素格式 (如 FRAME_FORMAT_YUV420P / FRAME_FORMAT_NV12)
 
     // 2. 异构物理内存句柄 (视具体平台驱动填充)
     int      dma_fd{-1};        // DMA-BUF 文件描述符 (Rockchip MPP / Jetson / V4L2)
@@ -39,6 +44,9 @@ struct HardwareFrame {
 
     // 3. 关联事件与时序
     int64_t  pts{0};            // 原生时间戳 (回传推理结果事件时保持对齐)
+    bool     has_pts{false};    // 是否存在有效 PTS
+    int32_t  time_base_num{1};  // 来源流时间基分子
+    int32_t  time_base_den{90000}; // 来源流时间基分母
     uint64_t stream_id{0};      // 所属物理流 ID
 
     // 4. 专属回收回调 (帧完全释放后归还解码器缓冲池)
@@ -77,6 +85,9 @@ struct HardwareFrame {
           dev_ptr(other.dev_ptr),
           host_ptr(other.host_ptr),
           pts(other.pts),
+          has_pts(other.has_pts),
+          time_base_num(other.time_base_num),
+          time_base_den(other.time_base_den),
           stream_id(other.stream_id),
           release_fn(std::move(other.release_fn)) {
         other.release_fn = nullptr;
@@ -103,6 +114,9 @@ struct HardwareFrame {
             dev_ptr = other.dev_ptr;
             host_ptr = other.host_ptr;
             pts = other.pts;
+            has_pts = other.has_pts;
+            time_base_num = other.time_base_num;
+            time_base_den = other.time_base_den;
             stream_id = other.stream_id;
             release_fn = std::move(other.release_fn);
 

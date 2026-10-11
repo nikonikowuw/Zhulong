@@ -11,12 +11,16 @@
 namespace zhulong {
 
 IDecodeNode::Ptr IDecodeNode::create(int32_t codec, const uint8_t *extradata, size_t extradata_size,
+                                     int32_t time_base_num, int32_t time_base_den,
                                      DecoderBackend backend) {
     (void)backend;
-    return std::make_unique<FFmpegDecodeNode>(codec, extradata, extradata_size);
+    return std::make_unique<FFmpegDecodeNode>(codec, extradata, extradata_size, time_base_num, time_base_den);
 }
 
-FFmpegDecodeNode::FFmpegDecodeNode(int32_t codec, const uint8_t *extradata, size_t extradata_size) {
+FFmpegDecodeNode::FFmpegDecodeNode(int32_t codec, const uint8_t *extradata, size_t extradata_size,
+                                   int32_t time_base_num, int32_t time_base_den)
+    : time_base_num_(time_base_num > 0 ? time_base_num : 1),
+      time_base_den_(time_base_den > 0 ? time_base_den : 90000) {
     AVCodecID codec_id = AV_CODEC_ID_NONE;
     if (codec == Zhulong_CODEC_H264) {
         codec_id = AV_CODEC_ID_H264;
@@ -116,8 +120,18 @@ int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
     frame->height = static_cast<uint32_t>(av_frame->height);
     frame->stride = static_cast<uint32_t>(av_frame->linesize[0]);
     frame->vstride = static_cast<uint32_t>(av_frame->height);
+    if (av_frame->format == AV_PIX_FMT_YUV420P) {
+        frame->format = FRAME_FORMAT_YUV420P;
+    } else if (av_frame->format == AV_PIX_FMT_NV12) {
+        frame->format = FRAME_FORMAT_NV12;
+    } else {
+        frame->format = FRAME_FORMAT_UNKNOWN;
+    }
     frame->host_ptr = av_frame->data[0];
-    frame->pts = av_frame->pts;
+    frame->has_pts = (av_frame->pts != AV_NOPTS_VALUE);
+    frame->pts = frame->has_pts ? av_frame->pts : 0;
+    frame->time_base_num = time_base_num_;
+    frame->time_base_den = time_base_den_;
 
     // 绑定专属 release_fn：当所有持有方析构时安全归还底层 AVFrame 缓冲
     frame->release_fn = [av_frame](HardwareFrame *) {

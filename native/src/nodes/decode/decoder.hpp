@@ -54,6 +54,7 @@ public:
      * @brief 创建解码节点实例
      */
     static Ptr create(int32_t codec, const uint8_t *extradata = nullptr, size_t extradata_size = 0,
+                      int32_t time_base_num = 1, int32_t time_base_den = 90000,
                       DecoderBackend backend = DecoderBackend::AUTO);
 };
 

@@ -14,51 +14,69 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
     [Packet 队列]             [Frame 队列]               [Tensor 队列]              [Result 事件]
 ```
 
-- **按需激活解码 (On-Demand Activation)**：仅在存在 `Zhulong_CONSUMER_AI` 接入时拉起 `Stream::decode_loop` 与解码器实例；全 AI 消费者注销后自动休眠解码管线并清空帧队列，避免空转消耗 CPU/NPU 资源。
-- **单流确定性线程模型**：解码器采用 `codec_ctx_->thread_count = 1` 单线程解码，并发由多流模型（多 stream）承载，杜绝底层多线程竞争与线程爆炸。
-- **零拷贝帧封装**：通过 `HardwareFrame` 封装解码输出，`release_fn` 闭包安全回收底层 `AVFrame` 引用，由下游算法只读借用。
+- **按需激活解码会话 (`DecodeSession`)**：
+  - 仅在存在 `Zhulong_CONSUMER_AI` 接入时动态拉起独立的 `DecodeSession`；全 AI 消费者注销后将该会话优雅停止并置空，彻底解耦解码工作线程与流生命周期。
+  - **防止取消状态残留**：流生命周期内若经历“AI 接入 ➔ 注销 ➔ 再次接入”，每次均创建全新的 `DecodeSession`，其内部 `packet_queue_` 与 `frame_queue_` 拥有初始干净的非取消状态，杜绝已取消队列引发的 100% CPU 空转与产帧中断。
+- **原生 C++ 帧消费通道**：
+  - `Stream::acquire_frame(HardwareFrame::ConstPtr &out_frame, timeout)` 提供线程安全的原生帧借用通道，下游模块以只读共享所有权并发消费，由底层闭包安全保活。
+- **单流确定性线程模型**：
+  - 解码器采用 `codec_ctx_->thread_count = 1` 单线程解码，并发由多流模型（多 stream）承载，杜绝底层多线程竞争与线程爆炸。
+- **零拷贝帧封装**：
+  - 通过 `HardwareFrame` 封装解码输出，`release_fn` 闭包安全回收底层 `AVFrame` 引用，由下游算法只读借用。
 
 ---
 
-## 2. 有界队列容量与背压策略 (Bounded Queue)
+## 2. 有界队列容量与背压自愈策略 (Bounded Queue)
 
 严禁无界队列，避免网络爆流或推理拥塞导致 OOM：
 
 | 传输路径 | 目标场景 | 容量上限 | 拥塞溢出策略 |
 | --- | --- | --- | --- |
-| **Capture ➔ Decode** | 原始压缩码流包 (H.264/H.265) | 30~60 包 | **丢弃非关键帧 (B/P 帧)**；优先保障 I 帧连续性 |
-| **Decode ➔ Storage (录像)** | 录像切片持久化 | 60~120 帧 | **背压阻塞唤醒**；保障录像完整，不随意丢弃 |
-| **Decode ➔ Inference (AI)** | 实时视觉检测分析 | **极小 (2~3 帧)** | **直接丢弃旧帧 (Drop Oldest)**！保障视觉分析始终针对最新画面 |
+| **Capture ➔ Decode** | 原始压缩码流包 (H.264/H.265) | 30~60 包 | **关键帧自愈重同步 (Keyframe Resync)**：满载丢包后进入等待关键帧状态；新关键帧到达时自动清空残存损坏包队列并恢复解码 |
+| **Decode ➔ Storage (录像)** | 录像切片持久化 | 60~120 帧 | **背压阻塞唤醒**：保障录像完整，不随意丢弃 |
+| **Decode ➔ Inference (AI)** | 实时视觉检测分析 | **极小 (2~3 帧)** | **直接丢弃旧帧 (Drop Oldest)**：保障视觉分析始终针对最新画面 |
+
+### 关键帧自愈状态机 (Keyframe Resync)
+1. 压缩包队列满载时，丢弃无法入队的包并置位 `waiting_keyframe_ = true`；
+2. 在等待关键帧期间，所有新到达的 P/B 帧均被立即丢弃，避免损坏的参考帧喂入解码器造成花屏；
+3. 当收到完整关键帧（IDR）时，重置标志位并清空旧包队列（`packet_queue_.reset()`），确保解码器从完整关键帧开始干净解算；
+4. 解码器遇到单包解码错误时，调用 `dec->flush()` 清空 DPB 状态。
 
 ---
 
-## 3. 零拷贝与内存所有权 (HardwareFrame)
+## 3. 零拷贝与硬件帧契约 (HardwareFrame)
 
 统一硬件帧定义位于 `native/include/Zhulong/frame.hpp` (`zhulong::HardwareFrame`)：
 
-1. **不可变帧与多算法只读共享**：节点间传递使用 `std::shared_ptr<const HardwareFrame>`，解码后底层物理内存（`dma_fd`、`dev_ptr`、`host_ptr`）只读，下游 N 个算法并发只读借用，严禁就地修改原像素。
-2. **硬件级零拷贝 (DMA-BUF / Device Ptr)**：
-   - Rockchip / Jetson: 通过传递 `dma_fd` 由 RGA / CUDA 直接完成 CSC/缩放并写入算法私有 Tensor 缓冲区；
-   - 华为昇腾: 通过传递 `dev_ptr` 由 DVPP VPC 硬件完成切图缩放并绑定至 ACL 输入；
+1. **不可变帧与多算法只读共享**：
+   - 节点间传递使用 `std::shared_ptr<const HardwareFrame>`（或 `HardwareFrame::ConstPtr`），解码后底层物理内存（`dma_fd`、`dev_ptr`、`host_ptr`）只读，下游 N 个算法并发只读借用，严禁就地修改原像素。
+2. **硬件级零拷贝与格式/时间戳保真**：
+   - 包含标准格式常量（`FRAME_FORMAT_YUV420P`、`FRAME_FORMAT_NV12` 等），与 Linux DRM / V4L2 FourCC 语义对齐；
+   - 包含显式 `has_pts` 标志与 `time_base_num / time_base_den`，真实反映上游流时间基；
    - 严格包含 `stride` 与 `vstride`（垂直对齐步长），NV12 UV 平面偏移计算必须遵循 `y_plane_size() = stride * (vstride > 0 ? vstride : height)`，防止色度错位。
 3. **安全 Deleter 守护与生命周期解耦**：
-   - 帧对象 RAII 析构时触发 `release_fn` 归还底层解码器缓冲池；
+   - 帧对象 RAII 析构时触发 `release_fn` 归还底层解码器缓冲池；移动构造与移动赋值均正确转移所有权并置空原指针，防止 Double-Free；
+   - 队列淘汰（Drop Oldest）或取消/重置时，丢弃对象的析构必须在**队列互斥锁外**执行，防止触发外部闭包时形成潜在死锁；
    - ⚠️ **防慢算法拖垮解码器准则**：各算法必须在**硬件预处理任务派发/完成后立即 drop 掉 `HardwareFrame` 引用**，严禁将原帧持有至 NPU 推理阶段，确保解码缓冲池在毫秒级内回归。
 
 ---
 
-## 4. 五步优雅停机时序 (Graceful Shutdown)
+## 4. 无锁汇合与五步优雅停机时序 (Graceful Shutdown)
+
+为消除跨流锁争用与死锁，所有工作线程的 `join()` 必须遵循**无锁汇合原则（Lock-free Join）**：
 
 ```txt
-1. 发出停止信号 (stop_requested = true)
+1. 持锁提取待停止对象指针，并将其从流/引擎主结构中解绑移出
    │
-2. 唤醒并取消所有队列 (queue.cancel() 解除所有读写条件变量阻塞)
+2. 退出流与引擎全局互斥锁 (释放 Stream::mutex 与 Engine::control)
    │
-3. 停止上游采集源 (关闭 RTSP Socket / V4L2 设备)
+3. 锁外发起停止信号 (request_stop()，唤醒并取消队列)
    │
-4. 汇合工作线程 (调用 worker_thread.join()，等待工作循环跳出)
+4. 锁外汇合工作线程 (调用 worker_thread.join()，等待工作循环跳出)
    │
-5. 析构底层硬件资源 (释放 NPU 上下文、关闭解码器、销毁引擎)
+5. 锁外析构底层资源 (释放解码器与硬件上下文)
 ```
 
-⚠️ **禁令**：严禁在持有队列互斥锁时调用耗时操作；严禁在工作线程尚未 `join()` 时销毁其正在访问的资源。
+⚠️ **禁令**：
+- 严禁在持有 `Engine::control` 或 `Stream::mutex` 期间调用任何 `thread.join()`；
+- 严禁在工作线程尚未 `join()` 时销毁其正在访问的内存资源。

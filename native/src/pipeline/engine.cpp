@@ -140,7 +140,12 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
 
         existing->expiry = Clock::time_point::max();
         // 动态同步解码节点状态 (若新加入 AI 消费者则拉起解码器)
-        existing->sync_decode_pipeline();
+        try {
+            existing->sync_decode_pipeline();
+        } catch (...) {
+            existing->consumers.erase(consumer);
+            throw;
+        }
         return existing->id;
     }
 
@@ -159,27 +164,32 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
 }
 
 void Engine::release(Zhulong_stream_id id, uint64_t consumer) {
-    std::lock_guard<std::mutex> operation(control);
-    auto stream = find_stream(id);
-
-    if (!stream->consumers.count(consumer)) throw Failure{Zhulong_ERR_NOT_FOUND};
-
+    std::shared_ptr<DecodeSession> session_to_stop;
     {
-        std::lock_guard<std::mutex> lock(stream->mutex);
-        for (const auto &entry : stream->subscriptions) {
-            if (entry.second->consumer == consumer) {
-                throw Failure{Zhulong_ERR_BUSY};
+        std::lock_guard<std::mutex> operation(control);
+        auto stream = find_stream(id);
+
+        if (!stream->consumers.count(consumer)) throw Failure{Zhulong_ERR_NOT_FOUND};
+
+        {
+            std::lock_guard<std::mutex> lock(stream->mutex);
+            for (const auto &entry : stream->subscriptions) {
+                if (entry.second->consumer == consumer) {
+                    throw Failure{Zhulong_ERR_BUSY};
+                }
             }
         }
-    }
 
-    stream->consumers.erase(consumer);
-    // 动态同步解码节点状态 (若已无 AI 消费者则休眠解码器)
-    stream->sync_decode_pipeline();
+        stream->consumers.erase(consumer);
+        // 动态同步解码节点状态 (获取需停止的会话指针，在锁外 join)
+        session_to_stop = stream->sync_decode_pipeline();
 
-    if (stream->consumers.empty()) {
-        stream->expiry = Clock::now() + stream_grace_period;
+        if (stream->consumers.empty()) {
+            stream->expiry = Clock::now() + stream_grace_period;
+        }
     }
+    // 锁外执行解码线程的停止与汇合，消除跨流死锁与阻塞
+    Stream::stop_decode_session(std::move(session_to_stop));
 }
 
 Zhulong_stream_status Engine::status(Zhulong_stream_id id) {

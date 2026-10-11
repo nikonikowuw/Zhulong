@@ -1,10 +1,13 @@
 # Native RTSP ingestion
 
 This component is C++17 + pinned static FFmpeg behind the sole public C header,
-`include/Zhulong/engine.h`. It probes and captures compressed H.264/H.265 packets.
-It does **not** implement a decoding pipeline, Go camera/subscription API, recording,
-preview transport, MPP/RGA/RKNN, or hardware acceleration. The Go host still uses
-only engine lifecycle calls; health readiness does not imply a connected camera.
+`include/Zhulong/engine.h`. It probes and captures compressed H.264/H.265 packets,
+and provides an on-demand CPU decoding pipeline (FFmpeg SW decoder) producing
+`HardwareFrame` representations for native AI consumption while strictly preserving
+100% C ABI backward compatibility behind `include/Zhulong/engine.h`. It does **not**
+implement Go camera/subscription API, recording, preview transport, MPP/RGA/RKNN,
+or hardware acceleration. The Go host still uses only engine lifecycle calls; health
+readiness does not imply a connected camera.
 
 ## Host builds
 

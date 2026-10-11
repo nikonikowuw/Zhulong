@@ -4,7 +4,9 @@
  */
 
 #include "nodes/decode/decoder.hpp"
+#include "nodes/capture/rtsp_input.hpp"
 #include "pipeline/bounded_queue.hpp"
+#include "pipeline/stream.hpp"
 #include "Zhulong/frame.hpp"
 
 #include <atomic>
@@ -183,6 +185,251 @@ int main() {
             CHECK(frame->width == 64);
             CHECK(frame->height == 48);
             CHECK(frame->pts == 2000);
+        }
+
+        // ====================================================================
+        // 4. 纯 SDP Extradata 初始化与解码测试 (切片内无 SPS/PPS)
+        // ====================================================================
+        {
+            std::vector<std::string> h264_extra_nalus = {
+                "Z0LACtxHsBEAAAMAAQAAAwAyjxIngA==", // SPS
+                "aM4PyA=="                          // PPS
+            };
+            std::vector<uint8_t> extradata;
+            for (const auto &b64 : h264_extra_nalus) {
+                auto nalu = base64_decode(b64);
+                extradata.push_back(0x00);
+                extradata.push_back(0x00);
+                extradata.push_back(0x00);
+                extradata.push_back(0x01);
+                extradata.insert(extradata.end(), nalu.begin(), nalu.end());
+            }
+
+            auto slice_nalu = base64_decode("ZYiEOiYoAAkCycnJ111111114A=="); // IDR slice
+            std::vector<uint8_t> slice_packet;
+            slice_packet.push_back(0x00);
+            slice_packet.push_back(0x00);
+            slice_packet.push_back(0x00);
+            slice_packet.push_back(0x01);
+            slice_packet.insert(slice_packet.end(), slice_nalu.begin(), slice_nalu.end());
+
+            auto decoder = IDecodeNode::create(
+                Zhulong_CODEC_H264,
+                extradata.data(), extradata.size(),
+                1, 90000
+            );
+            CHECK(decoder != nullptr);
+
+            int ret = decoder->send_packet(slice_packet.data(), slice_packet.size(), 5000, 5000);
+            CHECK(ret >= 0);
+            decoder->send_packet(nullptr, 0, 0, 0);
+
+            HardwareFrame::Ptr frame;
+            int recv_ret = decoder->receive_frame(frame);
+            CHECK(recv_ret == 0);
+            CHECK(frame != nullptr);
+            CHECK(frame->width == 64 && frame->height == 48);
+            CHECK(frame->format == zhulong::FRAME_FORMAT_YUV420P);
+            CHECK(frame->has_pts);
+            CHECK(frame->pts == 5000);
+            CHECK(frame->time_base_num == 1 && frame->time_base_den == 90000);
+        }
+
+        // ====================================================================
+        // 5. Stream 按需解码会话生命周期与多次恢复产帧测试
+        // ====================================================================
+        {
+            zhulong::initialize_ffmpeg();
+
+            // 构造包含完整 SPS/PPS/IDR 的数据包
+            std::vector<std::string> h264_nalus = {
+                "Z0LACtxHsBEAAAMAAQAAAwAyjxIngA==",
+                "aM4PyA==",
+                "ZYiEOiYoAAkCycnJ111111114A=="
+            };
+            std::vector<uint8_t> key_pkt;
+            for (const auto &b64 : h264_nalus) {
+                auto nalu = base64_decode(b64);
+                key_pkt.push_back(0x00);
+                key_pkt.push_back(0x00);
+                key_pkt.push_back(0x00);
+                key_pkt.push_back(0x01);
+                key_pkt.insert(key_pkt.end(), nalu.begin(), nalu.end());
+            }
+
+            zhulong::Stream stream(1001, "rtsp://127.0.0.1/test-session", {});
+
+            // 首次接入 AI 消费者
+            stream.consumers.emplace(1, Zhulong_CONSUMER_AI);
+            auto retired = stream.sync_decode_pipeline();
+            CHECK(!retired);
+            CHECK(stream.has_active_decoder());
+
+            Zhulong_packet_view packet{};
+            packet.data = key_pkt.data();
+            packet.size = key_pkt.size();
+            packet.codec = Zhulong_CODEC_H264;
+            packet.key_frame = 1;
+            packet.has_pts = 1;
+            packet.pts = 1000;
+            packet.time_base_num = 1;
+            packet.time_base_den = 90000;
+
+            // 喂包
+            stream.dispatch(packet);
+
+            // 等待产帧
+            HardwareFrame::ConstPtr frame1;
+            bool got_frame = false;
+            for (int i = 0; i < 20; ++i) {
+                if (stream.acquire_frame(frame1, 50ms)) {
+                    got_frame = true;
+                    break;
+                }
+            }
+            CHECK(got_frame && frame1 != nullptr);
+            CHECK(frame1->pts == 1000);
+            CHECK(frame1->stream_id == 1001);
+
+            // 释放首个 AI 消费者 -> 休眠解码会话
+            stream.consumers.erase(1);
+            retired = stream.sync_decode_pipeline();
+            CHECK(retired != nullptr);
+            zhulong::Stream::stop_decode_session(std::move(retired));
+            CHECK(!stream.has_active_decoder());
+
+            // 再次接入新 AI 消费者 -> 重新激活会话
+            stream.consumers.emplace(2, Zhulong_CONSUMER_AI);
+            retired = stream.sync_decode_pipeline();
+            CHECK(!retired);
+            CHECK(stream.has_active_decoder());
+
+            // 再次喂包
+            packet.pts = 2000;
+            stream.dispatch(packet);
+
+            HardwareFrame::ConstPtr frame2;
+            got_frame = false;
+            for (int i = 0; i < 20; ++i) {
+                if (stream.acquire_frame(frame2, 50ms)) {
+                    got_frame = true;
+                    break;
+                }
+            }
+            CHECK(got_frame && frame2 != nullptr);
+            CHECK(frame2->pts == 2000);
+
+            // 清理停机
+            stream.request_stop();
+            stream.join();
+        }
+
+        // ====================================================================
+        // 6. 压缩包满载拥塞与关键帧自愈重同步测试
+        // ====================================================================
+        {
+            std::vector<std::string> h264_nalus = {
+                "Z0LACtxHsBEAAAMAAQAAAwAyjxIngA==",
+                "aM4PyA==",
+                "ZYiEOiYoAAkCycnJ111111114A=="
+            };
+            std::vector<uint8_t> key_pkt;
+            for (const auto &b64 : h264_nalus) {
+                auto nalu = base64_decode(b64);
+                key_pkt.push_back(0x00);
+                key_pkt.push_back(0x00);
+                key_pkt.push_back(0x00);
+                key_pkt.push_back(0x01);
+                key_pkt.insert(key_pkt.end(), nalu.begin(), nalu.end());
+            }
+
+            zhulong::Video meta;
+            meta.view.codec = Zhulong_CODEC_H264;
+            meta.view.time_base_num = 1;
+            meta.view.time_base_den = 90000;
+
+            zhulong::DecodeSession session(2002, meta);
+
+            Zhulong_packet_view pkt_key{};
+            pkt_key.data = key_pkt.data();
+            pkt_key.size = key_pkt.size();
+            pkt_key.codec = Zhulong_CODEC_H264;
+            pkt_key.key_frame = 1;
+            pkt_key.has_pts = 1;
+            pkt_key.pts = 1000;
+
+            Zhulong_packet_view pkt_non_key = pkt_key;
+            pkt_non_key.key_frame = 0;
+
+            // 模拟大量非关键帧将队列喂满（60容量）
+            int pushed_count = 0;
+            for (int i = 0; i < 80; ++i) {
+                pkt_non_key.pts = 1000 + i * 40;
+                if (session.push_packet(pkt_non_key)) {
+                    pushed_count++;
+                }
+            }
+            CHECK(pushed_count <= 60);
+
+            // 在等待关键帧状态下，再喂入非关键帧必须被直接拦截拒绝
+            CHECK(!session.push_packet(pkt_non_key));
+
+            // 当新的关键帧到达时，必须能成功入队并恢复自愈
+            pkt_key.pts = 9000;
+            CHECK(session.push_packet(pkt_key));
+
+            session.request_stop();
+            session.join();
+        }
+
+        // ====================================================================
+        // 7. 异常与损坏码流隔离测试 (异常数据不终止解码循环)
+        // ====================================================================
+        {
+            zhulong::Video meta;
+            meta.view.codec = Zhulong_CODEC_H264;
+            zhulong::DecodeSession session(3003, meta);
+
+            // 喂入损坏的垃圾数据包
+            std::vector<uint8_t> corrupted_data = {0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03};
+            Zhulong_packet_view bad_pkt{};
+            bad_pkt.data = corrupted_data.data();
+            bad_pkt.size = corrupted_data.size();
+            bad_pkt.codec = Zhulong_CODEC_H264;
+            bad_pkt.key_frame = 1;
+
+            CHECK(session.push_packet(bad_pkt));
+
+            // 等待一段时间，解码器内部应安全 flush 并保持线程运行，无崩溃
+            std::this_thread::sleep_for(100ms);
+            CHECK(session.is_active());
+
+            session.request_stop();
+            session.join();
+        }
+
+        // ====================================================================
+        // 8. 多消费者并发 acquire_frame 只读借用与延迟释放测试
+        // ====================================================================
+        {
+            auto frame = std::make_shared<HardwareFrame>();
+            frame->width = 64;
+            frame->height = 48;
+            frame->pts = 12345;
+            std::atomic<int> release_count{0};
+            frame->release_fn = [&](HardwareFrame *) {
+                release_count.fetch_add(1);
+            };
+
+            HardwareFrame::ConstPtr consumer1 = frame;
+            HardwareFrame::ConstPtr consumer2 = frame;
+            frame.reset();
+
+            CHECK(release_count.load() == 0);
+            consumer1.reset();
+            CHECK(release_count.load() == 0);
+            consumer2.reset();
+            CHECK(release_count.load() == 1);
         }
 
         std::cout << "All Decoder & BoundedQueue tests passed successfully!" << std::endl;

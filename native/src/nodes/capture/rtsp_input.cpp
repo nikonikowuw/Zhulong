@@ -285,7 +285,7 @@ void initialize_ffmpeg() {
 
 Video read_rtsp(const std::string &url, const Options &options, Cancellation &cancel,
                 const std::function<void(const Zhulong_packet_view &)> &consume,
-                const std::function<void()> &ready) {
+                const std::function<void(const Video &)> &ready) {
     // 设置建连超时
     cancel.expire_after(options.open_timeout_ms);
     check(0, cancel);
@@ -340,8 +340,8 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
     // 若无消费回调，说明仅执行探测（Probe），直接返回元数据
     if (!consume) return video;
 
-    // 通知外部调用方流已就绪（状态变更为 RUNNING）
-    if (ready) ready();
+    // 通知外部调用方流已就绪（状态变更为 RUNNING），并传递元数据
+    if (ready) ready(video);
 
     std::unique_ptr<AVPacket, PacketDeleter> packet(av_packet_alloc());
     if (!packet) throw std::bad_alloc();

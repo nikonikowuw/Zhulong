@@ -128,7 +128,7 @@ struct Video {
  */
 Video read_rtsp(const std::string &url, const Options &options, Cancellation &cancel,
                 const std::function<void(const Zhulong_packet_view &)> &consume = {},
-                const std::function<void()> &ready = {});
+                const std::function<void(const Video &)> &ready = {});
 
 /**
  * @brief 全局初始化 FFmpeg 库环境（网络模块与静默日志配置，具备进程全局单次执行保证）

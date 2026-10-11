@@ -16,7 +16,8 @@ namespace zhulong {
 
 class FFmpegDecodeNode final : public IDecodeNode {
 public:
-    FFmpegDecodeNode(int32_t codec, const uint8_t *extradata, size_t extradata_size);
+    FFmpegDecodeNode(int32_t codec, const uint8_t *extradata, size_t extradata_size,
+                     int32_t time_base_num = 1, int32_t time_base_den = 90000);
     ~FFmpegDecodeNode() override;
 
     int send_packet(const uint8_t *data, size_t size, int64_t pts, int64_t dts) override;
@@ -26,6 +27,8 @@ public:
 private:
     AVCodecContext *codec_ctx_{nullptr};
     AVPacket *packet_{nullptr};
+    int32_t time_base_num_{1};
+    int32_t time_base_den_{90000};
 };
 
 } // namespace zhulong

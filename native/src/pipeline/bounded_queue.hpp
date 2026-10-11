@@ -37,25 +37,29 @@ public:
      * @return true 成功入队; false 已被取消或被 DROP_NEWEST 丢弃
      */
     bool push(T item) {
-        std::unique_lock<std::mutex> lock(mutex_);
-        if (cancelled_) return false;
+        T discarded;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            if (cancelled_) return false;
 
-        if (queue_.size() >= capacity_) {
-            if (strategy_ == OverflowStrategy::DROP_OLDEST) {
-                // 弹出并销毁最旧元素 (若为 Frame::Ptr 将自动触发析构回收)
-                queue_.pop_front();
-            } else if (strategy_ == OverflowStrategy::DROP_NEWEST) {
-                return false;
-            } else { // BLOCK
-                not_full_.wait(lock, [this] {
-                    return cancelled_ || queue_.size() < capacity_;
-                });
-                if (cancelled_) return false;
+            if (queue_.size() >= capacity_) {
+                if (strategy_ == OverflowStrategy::DROP_OLDEST) {
+                    // 移出最旧元素并在锁外析构，避免持锁执行潜在复杂的回调
+                    discarded = std::move(queue_.front());
+                    queue_.pop_front();
+                } else if (strategy_ == OverflowStrategy::DROP_NEWEST) {
+                    return false;
+                } else { // BLOCK
+                    not_full_.wait(lock, [this] {
+                        return cancelled_ || queue_.size() < capacity_;
+                    });
+                    if (cancelled_) return false;
+                }
             }
-        }
 
-        queue_.push_back(std::move(item));
-        not_empty_.notify_one();
+            queue_.push_back(std::move(item));
+            not_empty_.notify_one();
+        }
         return true;
     }
 
@@ -107,10 +111,25 @@ public:
      * @brief 协作式取消队列，唤醒所有阻塞等待的生产者与消费者
      */
     void cancel() {
+        std::deque<T> discarded;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             cancelled_ = true;
-            queue_.clear();
+            discarded = std::move(queue_);
+        }
+        not_empty_.notify_all();
+        not_full_.notify_all();
+    }
+
+    /**
+     * @brief 重置队列状态（清空取消标记并清空残余元素，供会话重启使用）
+     */
+    void reset() {
+        std::deque<T> discarded;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            cancelled_ = false;
+            discarded = std::move(queue_);
         }
         not_empty_.notify_all();
         not_full_.notify_all();
