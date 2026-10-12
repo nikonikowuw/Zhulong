@@ -12,7 +12,6 @@ extern "C" {
 
 #include <algorithm>
 #include <chrono>
-#include <cstring>
 #include <utility>
 
 namespace zhulong {
@@ -83,6 +82,7 @@ bool DecodeSession::push_packet(const Zhulong_packet_view &packet) {
     // 拥塞重同步机制：若正处于等待关键帧状态，丢弃一切非关键帧直至收到完整 IDR/关键帧
     if (waiting_keyframe_.load(std::memory_order_relaxed)) {
         if (!is_key) {
+            keyframe_gate_drops_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
         waiting_keyframe_.store(false, std::memory_order_relaxed);
@@ -111,6 +111,10 @@ bool DecodeSession::push_packet(const Zhulong_packet_view &packet) {
         // 否则 AI 将长期消费一条落后约一个队列深度 (60 包) 的陈旧画面，延迟无法自愈。
         waiting_keyframe_.store(true, std::memory_order_relaxed);
         packet_queue_.clear();
+        // 仅在队列未被取消时计数：停机竞态下的 push 失败不是拥塞，不污染统计
+        if (!packet_queue_.is_cancelled()) {
+            congestion_resyncs_.fetch_add(1, std::memory_order_relaxed);
+        }
         return false;
     }
     return true;
@@ -139,6 +143,14 @@ size_t DecodeSession::frame_queue_size() const {
 
 size_t DecodeSession::packet_queue_size() const {
     return packet_queue_.size();
+}
+
+DecodeCounters DecodeSession::counters() const {
+    DecodeCounters snapshot;
+    snapshot.decoder_unavailable_drops = decoder_unavailable_drops_.load(std::memory_order_relaxed);
+    snapshot.keyframe_gate_drops = keyframe_gate_drops_.load(std::memory_order_relaxed);
+    snapshot.congestion_resyncs = congestion_resyncs_.load(std::memory_order_relaxed);
+    return snapshot;
 }
 
 bool DecodeSession::is_active() const {
@@ -228,6 +240,7 @@ void DecodeSession::decode_loop() noexcept {
         }
 
         if (need_keyframe && !pkt.key_frame) {
+            keyframe_gate_drops_.fetch_add(1, std::memory_order_relaxed);
             recycle_buffer(std::move(pkt.data));
             continue;
         }
@@ -237,6 +250,7 @@ void DecodeSession::decode_loop() noexcept {
             if (dec) {
                 // 解码器可能刚在上面被重建 (need_keyframe 被重置)，非关键帧此时仍须丢弃
                 if (need_keyframe && !pkt.key_frame) {
+                    keyframe_gate_drops_.fetch_add(1, std::memory_order_relaxed);
                     recycle_buffer(std::move(pkt.data));
                     continue;
                 }
@@ -264,6 +278,9 @@ void DecodeSession::decode_loop() noexcept {
                     dec->flush();
                     need_keyframe = true;
                 }
+            } else {
+                // 解码器不可用 (codec 无效 / 创建退避窗口内 / 创建失败)：本包被丢弃
+                decoder_unavailable_drops_.fetch_add(1, std::memory_order_relaxed);
             }
         } catch (...) {
             if (decoder) {
@@ -390,6 +407,10 @@ bool Stream::has_active_decoder() const {
     return session && session->is_active();
 }
 
+uint64_t Stream::callback_exception_count() const {
+    return callback_exceptions_.load(std::memory_order_relaxed);
+}
+
 void Stream::on_ready(const Video &video) {
     std::shared_ptr<DecodeSession> session;
     {
@@ -428,9 +449,16 @@ void Stream::dispatch(const Zhulong_packet_view &packet) {
     }
 
     // 2. 在锁外逐个调用订阅回调
+    //    逐订阅者隔离异常：抛异常是调用方违约 (engine.h)，不得中断同流其他订阅者的数据供给
     for (const auto &subscription : *subscribers) {
         if (cancel.stopped.load()) break;
-        subscription->invoke(packet);
+        try {
+            subscription->invoke(packet);
+        } catch (...) {
+            // invoke 已在抛出前恢复 in_callback 并置 enabled=false，此处仅计数：
+            // 违约订阅者静默失效，流状态保持 RUNNING，其他订阅者不受影响
+            callback_exceptions_.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 }
 

@@ -122,20 +122,6 @@ public:
     }
 
     /**
-     * @brief 重置队列状态（清空取消标记并清空残余元素，供会话重启使用）
-     */
-    void reset() {
-        std::deque<T> discarded;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            cancelled_ = false;
-            discarded = std::move(queue_);
-        }
-        not_empty_.notify_all();
-        not_full_.notify_all();
-    }
-
-    /**
      * @brief 仅清空残余元素，不改变取消标记（拥塞重同步使用，停机竞态下不会“复活”已取消队列）
      */
     void clear() {

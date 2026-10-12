@@ -22,6 +22,13 @@
 
 namespace zhulong {
 
+/** @brief 解码会话累计丢包与重同步计数快照 (仅供测试与运维观测，不跨越 C ABI) */
+struct DecodeCounters {
+    uint64_t decoder_unavailable_drops{0}; /**< 解码器不可用（退避窗口内 / codec 无效 / 创建失败）导致的丢包数 */
+    uint64_t keyframe_gate_drops{0};       /**< 关键帧门控拒绝的包数（生产者侧 + 解码线程侧） */
+    uint64_t congestion_resyncs{0};        /**< 队列溢出触发的关键帧重同步次数 */
+};
+
 /** @brief 解码队列数据包缓存 */
 struct QueuedPacket {
     std::vector<uint8_t> data;
@@ -65,6 +72,9 @@ public:
     /** @brief 获取当前包队列中的元素个数 */
     size_t packet_queue_size() const;
 
+    /** @brief 获取累计丢包与重同步计数快照 (无锁，relaxed 读取) */
+    DecodeCounters counters() const;
+
     /** @brief 检查当前会话是否处于活跃状态 */
     bool is_active() const;
 
@@ -90,6 +100,11 @@ private:
 
     std::mutex pool_mutex_;
     std::vector<std::vector<uint8_t>> buffer_pool_;
+
+    // 累计观测计数 (仅统计用途，relaxed 原子，无同步依赖)
+    std::atomic<uint64_t> decoder_unavailable_drops_{0};
+    std::atomic<uint64_t> keyframe_gate_drops_{0};
+    std::atomic<uint64_t> congestion_resyncs_{0};
 
     BoundedQueue<QueuedPacket> packet_queue_{60, OverflowStrategy::DROP_NEWEST};
     BoundedQueue<HardwareFrame::ConstPtr> frame_queue_{3, OverflowStrategy::DROP_OLDEST};
@@ -118,6 +133,9 @@ struct Stream {
 
     Video video_meta_{};                        /**< 缓存的 RTSP 视频流元数据 */
     std::shared_ptr<DecodeSession> decode_session_{nullptr}; /**< 动态解码会话 (按需激活) */
+
+    // 被逐订阅者隔离的回调异常累计次数 (仅统计用途，relaxed 原子)
+    std::atomic<uint64_t> callback_exceptions_{0};
 
     Stream(Zhulong_stream_id stream_id, std::string normalized_url, Options stream_options);
     ~Stream();
@@ -164,6 +182,9 @@ struct Stream {
 
     /** @brief 检查当前是否存在活跃的解码会话 */
     bool has_active_decoder() const;
+
+    /** @brief 获取被隔离的订阅者回调异常累计次数 (无锁，relaxed 读取) */
+    uint64_t callback_exception_count() const;
 };
 
 } // namespace zhulong

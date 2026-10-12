@@ -379,6 +379,8 @@ int main() {
             // 新建会话必须先等待关键帧：GOP 中途接入时的孤立非关键帧一律拒绝
             CHECK(!session.push_packet(pkt_non_key));
             CHECK(session.packet_queue_size() == 0);
+            // 该拒绝由生产者侧关键帧门控拦截，必须被计数
+            CHECK(session.counters().keyframe_gate_drops == 1);
 
             // 模拟大量非关键帧将队列喂满（60容量）
             int pushed_count = 0;
@@ -392,10 +394,17 @@ int main() {
 
             // 在等待关键帧状态下，再喂入非关键帧必须被直接拦截拒绝
             CHECK(!session.push_packet(pkt_non_key));
+            // 上述 81 次非关键帧均在等待关键帧状态下被生产者门控拦截
+            CHECK(session.counters().keyframe_gate_drops == 82);
+            // 队列从未被填满，不应发生拥塞重同步
+            CHECK(session.counters().congestion_resyncs == 0);
 
             // 当新的关键帧到达时，必须能成功入队并恢复自愈
             pkt_key.pts = 9000;
             CHECK(session.push_packet(pkt_key));
+
+            // 解码器创建未失败，不应有解码器不可用丢包
+            CHECK(session.counters().decoder_unavailable_drops == 0);
 
             session.request_stop();
             session.join();

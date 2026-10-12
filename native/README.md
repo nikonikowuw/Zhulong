@@ -140,7 +140,9 @@ See `engine.h` for exact signatures, structs, units and status constants.
   or stop/start the whole engine. Later business-layer retry policy is out of scope.
 - Packet payload/view pointers are valid **only during the synchronous callback**.
   Copy if retaining them. The `uintptr_t` token is an integer (future `cgo.Handle`),
-  not a retained Go pointer. There is no async packet queue or pre-decode dropping.
+  not a retained Go pointer. There is no async packet queue or pre-decode dropping
+  exposed across the C ABI; internally the C++ decode session keeps a bounded
+  packet queue (60, drop-newest) and drops until the next keyframe on overflow.
 - Callbacks must be bounded/nonblocking. All status-returning ABI calls reject
   callback reentry with `CALLBACK_CONTEXT`. Never call either destroy function
   from a callback (defensively ignored); the external owner must serialize destroy
@@ -166,8 +168,10 @@ Packet PTS/DTS are original stream ticks with actual `time_base`; missing timest
 have explicit flags and zero values. Negative timestamps are not coerced to zero.
 No wall-clock normalization, guessed FPS, stream synchronization or automatic
 Annex-B conversion is performed. Unknown FPS is `0/1`; dimensions/codec must be
-valid for probe success. Software H.264/HEVC decoders are compiled for stream-info,
-not exposed as a continuous decode pipeline.
+valid for probe success. Software H.264/HEVC decoders are compiled for stream-info
+and for an on-demand continuous decode pipeline inside C++ (`DecodeSession`), which
+is activated by `CONSUMER_AI` consumers. Decoded frames are not exposed across the
+C ABI; no frame-fetch symbol exists in `engine.h`.
 
 ## Regression tests
 
@@ -196,8 +200,8 @@ Sanitizers instrument Engine/test code; the cached FFmpeg libraries are not rebu
 with sanitizer instrumentation. UBSan is non-recovering so diagnostics fail CTest
 instead of printing a warning and returning success. Allocator interception helps detect leaks, but
 these runs do not certify all FFmpeg internals. The 30-second continuous decode
-check from the streaming guide is inapplicable to a capture-only pipeline; this
-project does not claim decode/playback correctness based on probe alone.
+check from the streaming guide is not performed here; this project does not claim
+decode/playback correctness on real cameras or boards based on probe alone.
 
 ## Source, licensing and distribution
 

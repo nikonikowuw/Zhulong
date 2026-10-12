@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "质检：逐订阅者隔离后扇出循环仍满足锁外调用与背压自愈契约"}
+{"file": ".trellis/spec/native/index.md", "reason": "质检：原生引擎开发前检查清单（异常防爆门、队列有界背压、停机汇合）"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "质检：确认改动未越出 C++ 内部层（无 ABI/Go 侧波及）"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "质检：确认计数器未重复既有查询接口模式、未过度抽象"}
+{"file": ".trellis/spec/naming-guidelines.md", "reason": "质检：新增类型/成员/接口命名合规"}

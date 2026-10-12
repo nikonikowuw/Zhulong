@@ -23,6 +23,13 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
   - 解码器采用 `codec_ctx_->thread_count = 1` 单线程解码，并发由多流模型（多 stream）承载，杜绝底层多线程竞争与线程爆炸。
 - **零拷贝帧封装**：
   - 通过 `HardwareFrame` 封装解码输出，`release_fn` 闭包安全回收底层 `AVFrame` 引用，由下游算法只读借用。
+- **订阅通道逐订阅者异常隔离**：
+  - `Stream::dispatch` 的扇出循环必须对每个 `subscription->invoke()` 单独 `try/catch`。回调抛 C++ 异常是调用方违约（`engine.h` 明文禁止），**不得**中断同流其他订阅者的数据供给，**也不得**将流置为 `FAILED`。
+  - `Subscription::invoke` 在重抛前已恢复 `in_callback` 并置 `enabled=false`，故违约订阅者自动静默失效（后续 `invoke` 首行直接返回），无需从快照移除。
+  - ⚠️ 不得改为在 `Subscription::invoke` 内吞掉异常：`native/tests/capture_unit_test.cpp` 依赖其重抛语义来验证 `in_callback` TLS 恢复。
+- **解码丢包与重同步可观测性**：
+  - `DecodeSession::counters()` 返回 `DecodeCounters` 快照（`decoder_unavailable_drops` / `keyframe_gate_drops` / `congestion_resyncs`），`Stream::callback_exception_count()` 返回被隔离的回调异常数。
+  - 全部为 `memory_order_relaxed` 原子自增，无锁、无同步依赖；仅供测试与运维观测，**不跨越 C ABI**（`engine.h` 无对应符号）。
 
 ---
 
@@ -33,13 +40,13 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
 | 传输路径 | 目标场景 | 容量上限 | 拥塞溢出策略 |
 | --- | --- | --- | --- |
 | **Capture ➔ Decode** | 原始压缩码流包 (H.264/H.265) | 30~60 包 | **关键帧自愈重同步 (Keyframe Resync)**：满载丢包后进入等待关键帧状态；新关键帧到达时自动清空残存损坏包队列并恢复解码 |
-| **Decode ➔ Storage (录像)** | 录像切片持久化 | 60~120 帧 | **背压阻塞唤醒**：保障录像完整，不随意丢弃 |
+| **Decode ➔ Storage (录像)** | 录像切片持久化（规划中，未实现） | 60~120 帧 | **背压阻塞唤醒**：保障录像完整，不随意丢弃 |
 | **Decode ➔ Inference (AI)** | 实时视觉检测分析 | **极小 (2~3 帧)** | **直接丢弃旧帧 (Drop Oldest)**：保障视觉分析始终针对最新画面 |
 
 ### 关键帧自愈状态机 (Keyframe Resync)
 1. 压缩包队列满载时，丢弃无法入队的包并置位 `waiting_keyframe_ = true`；
 2. 在等待关键帧期间，所有新到达的 P/B 帧均被立即丢弃，避免损坏的参考帧喂入解码器造成花屏；
-3. 当收到完整关键帧（IDR）时，重置标志位并清空旧包队列（`packet_queue_.reset()`），确保解码器从完整关键帧开始干净解算；
+3. 当收到完整关键帧（IDR）时，重置标志位并清空旧包队列（`packet_queue_.clear()`，仅清元素、不触碰取消标记），确保解码器从完整关键帧开始干净解算；
 4. 解码器遇到单包解码错误时，调用 `dec->flush()` 清空 DPB 状态。
 
 ---

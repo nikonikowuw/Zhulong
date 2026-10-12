@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "节点流水线契约：关键帧自愈状态机、有界队列背压、零拷贝帧、5 步优雅停机时序（本任务 R1/R2 直接相关）"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "CGO 异常隔离与内存契约：确认回调异常不得穿越边界、Go recover 兜底位置"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "单向依赖铁律：确认 pipeline 层可依赖 nodes 契约、不得反向（R2 计数器归属判断）"}
+{"file": ".trellis/spec/naming-guidelines.md", "reason": "C++ 命名规范：成员 lower_snake_case、原子计数器命名与布尔正向命名（R2 新增成员）"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "RTSP 接入合同与回调 drain 语义：确认 unsubscribe 同步排空保证（Step 4 测试顺序依赖）"}

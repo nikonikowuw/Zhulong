@@ -123,8 +123,10 @@ silence, one physical connection, actual grace cancellation/expiry, duplicate an
 conflict handling, concurrent consumers, callback reentry rejection, unsubscribe/
 stop drain, open/info/read interruption and cancelled probe cleanup. Include
 unregistering the second callback from a real worker snapshot blocked in the first,
-a throwing C++ callback followed by successful drain, and probe-view data surviving
-engine destruction. Credential assertions inspect both stdout and stderr.
+a throwing C++ callback isolated per subscriber (offender silently disabled, the
+other subscriber keeps receiving packets, stream stays RUNNING) plus successful
+drain, and probe-view data surviving engine destruction. Credential assertions
+inspect both stdout and stderr.
 
 Run Engine ASan/UBSan and TSan in separate directories. UBSan compilation must
 include `-fno-sanitize-recover=undefined` so a diagnostic cannot exit zero and be

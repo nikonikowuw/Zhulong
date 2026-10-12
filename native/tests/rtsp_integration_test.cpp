@@ -386,27 +386,59 @@ void snapshot_drain_case(Zhulong_engine_h engine, const std::string &base) {
     CHECK(Zhulong_stream_release(engine, stream, 2) == Zhulong_OK);
 }
 
-/** @brief 测试用户回调抛出异常时的异常封闭与流状态转移 */
+/**
+ * @brief 测试用户回调异常被逐订阅者隔离
+ *
+ * 同一物理流上两个 PREVIEW 订阅者：consumer 1 的回调抛 C++ 异常，consumer 2 正常计数。
+ * 断言违约者静默失效、consumer 2 持续收包、流状态保持 RUNNING 而非 FAILED。
+ */
 void throwing_callback_case(Zhulong_engine_h engine, const std::string &base) {
     Zhulong_stream_id stream = 0;
-    CHECK(Zhulong_stream_acquire(engine, (base + "/throwing-callback").c_str(), nullptr, 1,
-                                Zhulong_CONSUMER_PREVIEW, &stream) == Zhulong_OK);
-    Zhulong_subscription_id subscription = 0;
-    CHECK(Zhulong_stream_subscribe(engine, stream, 1, [](uintptr_t, const Zhulong_packet_view *) {
-        throw std::runtime_error("consumer exception must stay inside the worker");
-    }, 0, &subscription) == Zhulong_OK);
+    const auto url = base + "/throwing-callback";
 
-    // 流应安全转移至 FAILED 状态，且错误码为 ERR_INTERNAL，绝不导致进程崩溃
-    wait_until([&] {
-        Zhulong_stream_status status{};
-        CHECK(Zhulong_stream_get_status(engine, stream, &status) == Zhulong_OK);
-        if (status.state != Zhulong_STREAM_FAILED) return false;
-        CHECK(status.error == Zhulong_ERR_INTERNAL);
-        return true;
-    });
+    // 1. 同一物理流上注册两个 PREVIEW 消费者（同一 URL 复用同一物理流）
+    CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 1, Zhulong_CONSUMER_PREVIEW, &stream) == Zhulong_OK);
+    Zhulong_stream_id second = 0;
+    CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 2, Zhulong_CONSUMER_PREVIEW, &second) == Zhulong_OK);
+    CHECK(second == stream);
 
-    CHECK(Zhulong_stream_unsubscribe(engine, stream, subscription) == Zhulong_OK);
+    // 2. consumer 1 订阅违约回调（抛 C++ 异常）；consumer 2 订阅正常计数回调
+    std::atomic<int> offender_invocations{0};
+    Zhulong_subscription_id offender = 0;
+    CHECK(Zhulong_stream_subscribe(engine, stream, 1,
+        [](uintptr_t token, const Zhulong_packet_view *) {
+            reinterpret_cast<std::atomic<int> *>(token)->fetch_add(1);
+            throw std::runtime_error("consumer exception must be isolated per subscriber");
+        },
+        reinterpret_cast<uintptr_t>(&offender_invocations), &offender) == Zhulong_OK);
+
+    CallbackState state;
+    state.engine = engine;
+    Zhulong_subscription_id healthy = 0;
+    CHECK(Zhulong_stream_subscribe(engine, stream, 2, callback,
+        reinterpret_cast<uintptr_t>(&state), &healthy) == Zhulong_OK);
+
+    // 3. 违约者已被调用过至少一次，且健康订阅者持续收到数据包（流未被终止）
+    wait_until([&] { return offender_invocations.load() >= 1; });
+    wait_until([&] { return state.count.load() >= 20; });
+    CHECK(!state.invalid.load());
+
+    // 4. 流状态必须保持 RUNNING 且无错误（决策 D1：违约不构成流的故障）
+    Zhulong_stream_status status{};
+    CHECK(Zhulong_stream_get_status(engine, stream, &status) == Zhulong_OK);
+    CHECK(status.state == Zhulong_STREAM_RUNNING);
+    CHECK(status.error == Zhulong_OK);
+
+    // 5. 违约者只被调用一次：invoke 已在抛出前置 enabled=false，后续派发直接返回
+    const int offender_calls = offender_invocations.load();
+    std::this_thread::sleep_for(200ms);
+    CHECK(offender_invocations.load() == offender_calls);
+
+    // 6. 正常收尾：unsubscribe 先于 release（有活跃订阅时 release 返回 BUSY）
+    CHECK(Zhulong_stream_unsubscribe(engine, stream, offender) == Zhulong_OK);
+    CHECK(Zhulong_stream_unsubscribe(engine, stream, healthy) == Zhulong_OK);
     CHECK(Zhulong_stream_release(engine, stream, 1) == Zhulong_OK);
+    CHECK(Zhulong_stream_release(engine, stream, 2) == Zhulong_OK);
 }
 
 /** @brief 测试协作式取消与超时快速响应 */
