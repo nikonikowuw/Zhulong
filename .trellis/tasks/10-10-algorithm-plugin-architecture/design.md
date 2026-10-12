@@ -4,7 +4,9 @@
 
 **不用要求所有算法跨动态库继承同一个 C++ 基类。** 对外定义版本化 C ABI，内部允许 C++ 继承/组合；独立 `.so` 由通用原生 runner 在独立进程中加载，并调用公共算法运行库复用模型/执行资源管理。每个包进程共享兼容的模型资源组，每个 Worker 独占执行上下文和可变内存。
 
-本文落实 `prd.md` R1–R12。用户已选择公共库同时统一推理资源管理，并明确开发期单文件、单次推理的黑盒验包不评判算法精度；接口名称、目录、协议及初始参数仍是技术建议，不是已存在 API；当前不新增产品文件。板端 SDK 与模型证据未齐，设计就绪不表示 RKNN 共享、零拷贝或性能已验证。
+公共算法运行库（`libzhulong_algo_runtime.so`）向上提供类似 PyTorch、OpenCV 体验的高层 C++17 接口（`zhulong::Model`, `zhulong::Session`, `zhulong::Tensor`, `zhulong::ops`），向下建立统一的多平台硬件抽象层（HAL），将异构硬件加速（首期 Rockchip RKNN/RGA，后续可插拔支持华为昇腾 CANN/DVPP、NVIDIA TensorRT/CUDA 及 CPU Fallback）和显存权重共享（如 `rknn_dup_context`）封装在底层，实现“业务算法代码一次编写，多硬件平台无感加速”。
+
+本文落实 `prd.md` R1–R13。用户已选择公共库同时统一推理资源管理与高层 SDK，并明确开发期单文件、单次推理的黑盒验包不评判算法精度；接口名称、目录、协议及初始参数仍是技术建议，不是已存在 API；当前不新增产品文件。板端 SDK 与模型证据未齐，设计就绪不表示 RKNN 共享、零拷贝或性能已验证。
 
 技术收口建议：一台设备上，一个包 ID 同时只运行一个活动版本/进程；同包的多个摄像机任务共享该进程，任务状态彼此隔离。一个包可含多个模型，但只在同一模型内容、设备和兼容执行配置内共享权重；不同模型不能混用资源。版本目录可保留 current/previous/pending，但不同时运行新旧进程。多设备部署仍是每台设备独立运行，不引入跨设备共享模型服务。
 
@@ -39,8 +41,11 @@ Go 宿主
 | `native/src/algorithm/` | runner 装载、线程池、IPC 适配与示例宿主，不含具体感知逻辑 |
 | `native/src/algorithm/runtime/` | 公共库的中立实现，按实际复用点添加，不另建调度线程池 |
 | `native/src/pipeline/` | 帧广播/有界投递与 lease 生命周期，对具体算法和 SDK 保持中立 |
-| `native/src/backends/rknn/` | Rockchip 适配代码，链接进公共运行库目标，不把 RKNN 带进 Go 主宿主 |
-| `native/sdk/` | 可单独分发的插件/公共库纯 C 头文件、C++17 可选薄封装与独立构建样例 |
+| `native/src/backends/rknn/` | Rockchip 适配代码 (RKNN 推理 + RGA 硬件前处理)，链接进公共运行库 |
+| `native/src/backends/ascend/` | 华为昇腾适配预留 (AscendCL CANN 推理 + DVPP/AIPP 硬件前处理) |
+| `native/src/backends/tensorrt/` | NVIDIA 适配预留 (TensorRT 推理 + CUDA/VPI 硬件前处理) |
+| `native/src/backends/cpu/` | 通用 CPU 适配与测试桩 (OpenCV/libyuv/SIMD 兜底，支撑脱机自测) |
+| `native/sdk/` | 可单独分发的插件/公共库纯 C 头文件、高层 C++17 封装 (`zhulong/algo.hpp`) 与独立构建样例 |
 
 `include/Zhulong/engine.h` 仍是 Go/CGO 唯一原生入口。插件 SDK 是 runner 与外部开发者的另一份接口，不能拿现有 C++ `frame.hpp` 作为插件二进制合同，也不向宿主暴露厂商头文件。各算法工程不链接宿主私有 `ZhulongEngine` 类实现。
 
@@ -118,6 +123,94 @@ R12 将开发者独立运行的最小范围收敛为：指定一份有效测试�
 报告区分包/ABI/初始化/入口调用/输出协议等检查项，并明确未做精度评估。纯黑盒成功返回不能证明内部执行了指定模型或全部算子都在 NPU 上运行；在公共运行库可提供本次请求关联的后端完成证据时记录该证据，否则只报告入口调用完成，不能冒称硬件已验证。首期仍限可信团队插件，不新增针对恶意插件的执行证明机制。
 
 这项单次烟测不替代 AC5 的后端工程正确性、权重共享、并发与长期稳定性验证，也不证明算法精度。离线测试通过不替代正式进程当前代次的 READY；启动/升级若复用这条检查路径，仍按 §7 在正确代次及安全停旧顺序内执行，不提前并存新旧模型。目标平台、SDK/驱动、模型/量化证据门继续有效。
+
+### 2.4 现代 C++ SDK (类 PyTorch/OpenCV 体验) 与多平台硬件抽象层 (HAL)
+
+为了让算法团队能够高效、标准地交付插件，公共运行库（`libzhulong_algo_runtime.so`）与配套 SDK 采用“统一高层前端 + 可插拔异构硬件后端（HAL）”的架构设计。
+
+#### 1. 统一前端 SDK：类 PyTorch / OpenCV 的极简开发体验
+
+在 SDK 头文件 `native/sdk/include/zhulong/algo.hpp` 中，提供纯现代 C++17 的易用门面。插件作者无需直接操作 C ABI 句柄或底层 NPU/RGA 指针：
+
+```cpp
+#include <zhulong/algo.hpp>
+
+class YoloDetectorPlugin {
+public:
+    void init(const std::string& model_path) {
+        // 1. 模型只读载入 (类似 ort::Session 或 torch::jit::load)
+        model_ = zhulong::Model::load(model_path);
+        // 2. 派生当前 Worker 独立执行会话 (底层自动执行权重共享，如 rknn_dup_context)
+        session_ = model_.create_session();
+    }
+
+    std::vector<zhulong::Detection> process(const zhulong::Image& frame) {
+        // 3. 硬件加速前处理 (内部自动走 RGA/DVPP 2D 硬件缩放与颜色转换，零拷贝 Letterbox)
+        zhulong::Tensor input_tensor = zhulong::ops::letterbox(
+            frame, {640, 640}, zhulong::ColorFormat::RGB);
+
+        // 4. 类 PyTorch 的同步推理调用
+        auto outputs = session_.forward({input_tensor});
+
+        // 5. 高性能向量化后处理工具箱 (SIMD 加速 NMS)
+        return zhulong::ops::nms(outputs[0], /*conf_thresh=*/0.5f, /*iou_thresh=*/0.45f);
+    }
+
+private:
+    zhulong::Model model_;
+    zhulong::Session session_;
+};
+```
+
+- **内软外硬防爆门**：SDK 在插件内部通过 RAII、智能指针和运算符重载提供最高级开发体验；同时在 `zhulong/algo.hpp` 内部通过静态内联薄封装自动转换为 `extern "C"` 的版本化 C ABI 函数表导出，隔绝 C++ 编译器版本与标准库符号差异。
+
+#### 2. 公共库内部硬件抽象层 (HAL / SPI)
+
+公共运行库内部将硬件能力抽象为两个核心接口，将厂商私有驱动与算法逻辑彻底解耦：
+
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                   统一 C++ SDK 头文件 (zhulong/algo.hpp)               │
+│     zhulong::Model  │  zhulong::Session  │  zhulong::ops::letterbox    │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │ 纯 C ABI 稳定防爆门
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                  libzhulong_algo_runtime.so 核心框架                   │
+│                                                                        │
+│   ┌──────────────────────────────────┐ ┌───────────────────────────┐   │
+│   │   IInferenceBackend (推理后端)   │ │  IVisionBackend (视觉前处理)│   │
+│   │   - load_model()                 │ │  - resize()               │   │
+│   │   - create_session() (权重共享)  │ │  - cvt_color()            │   │
+│   │   - forward()                    │ │  - letterbox()            │   │
+│   └─────────────────┬────────────────┘ └─────────────┬─────────────┘   │
+└─────────────────────┼────────────────────────────────┼─────────────────┘
+                      │ 硬件驱动分流适配器 (HAL)       │
+         ┌────────────┼────────────┐      ┌────────────┼────────────┐
+         ▼            ▼            ▼      ▼            ▼            ▼
+   【Rockchip】   【昇腾 CANN】 【NVIDIA】 【Rockchip】  【昇腾】   【CPU 通用】
+      RKNN NPU      AscendCL    TensorRT   RGA 2D 加速  DVPP / AIPP  NEON / SIMD
+   (dup_context)  (多Stream共享) (ExecutionContext)                         (透明兜底)
+```
+
+- **推理硬件抽象 (`IInferenceBackend`)**：负责模型只读权重组装、基于厂商特性的多 Worker 显存权重共享派生、输入输出 Tensor 物理绑定与同步推理执行；
+- **视觉硬件加速抽象 (`IVisionBackend`)**：负责图像缩放、色彩转换（CSC）及 Letterbox 补边。优先使用 2D 硬件芯片（如 RGA/DVPP），遇到对齐异常或无硬件支持时透明 fallback 到 CPU NEON 分支，保证 100% 可用性。
+
+#### 3. 异构加速平台矩阵与实现映射
+
+| 平台硬件 | 推理加速器 (NPU/GPU) | 前处理加速器 (Vision) | 权重共享实现机制 | 零拷贝内存纽带 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Rockchip** (RK3568 / RK3588) | **RKNN Runtime** (`.rknn`) | **RGA 2D 加速器** (librga) | `rknn_dup_context` 派生独立上下文共享权重 | **DMA-BUF** (V4L2/MPP ➔ RGA ➔ RKNN) |
+| **华为昇腾** (Atlas 200I / 500 / 310B) | **AscendCL CANN** (`.om`) | **DVPP 视频硬件** 或 **AIPP 算子** (硬件直出) | 单个 `aclmdlModelId` 对应多个 `aclrtStream` 并发执行 | **ACL Device Memory** (DVPP 直通 NPU) |
+| **NVIDIA** (Jetson Nano / Orin) | **TensorRT** (`.engine`) | **CUDA Core** 或 **VPI** | 单个 `ICudaEngine` 共享权重，多 `IExecutionContext` | **CUDA Unified Memory** / DMA-BUF |
+| **开发机 / CPU** (x86_64 / 通用 ARM) | **ONNX Runtime** / **MNN** / **CPU 桩** | **libyuv** / **OpenCV + NEON** | 进程内只读映射共享内存 buffer | 普通 Host 内存深拷贝 |
+
+#### 4. 构建隔离与 Target Profile
+
+避免将所有厂商 SDK 揉进同一个庞大代码库导致交叉编译依赖冲突：
+- 采用 **Target Profile（如 `native/profiles/rk3568.json`）编译期隔离**；
+- 各平台独立生成对应优化裁剪的 `libzhulong_algo_runtime.so`（如针对 RK3568 仅链接 `librknn_api.so` 与 `librga.so`）；
+- 外部插件开发者所面对的头文件 `zhulong/algo.hpp` 与纯 C 符号接口在各平台保持 100% 统一，更换目标平台只需交叉编译一次，无需改动任何业务算法源码。
 
 ## 3. 插件包与兼容性
 
