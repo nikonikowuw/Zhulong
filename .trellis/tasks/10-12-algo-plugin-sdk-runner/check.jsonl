@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/native/index.md", "reason": "原生引擎质量检验基线"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "ABI 异常拦截与内存所有权安全"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/design.md", "reason": "算法插件架构技术设计验收基准"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/prd.md", "reason": "算法插件架构总体需求与验收标准"}

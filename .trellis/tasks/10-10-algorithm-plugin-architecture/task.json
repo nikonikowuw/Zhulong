@@ -18,7 +18,9 @@
   "commit": null,
   "pr_url": null,
   "subtasks": [],
-  "children": [],
+  "children": [
+    "10-12-algo-plugin-sdk-runner"
+  ],
   "parent": null,
   "relatedFiles": [],
   "notes": "",
