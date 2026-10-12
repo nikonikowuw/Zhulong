@@ -922,3 +922,46 @@ Session summary was not supplied.
 ### Next Steps
 
 - 等待用户对 10-10-algorithm-plugin-architecture 技术设计文档做最终审阅，另行明确授权后方可进入实现
+
+
+## Session 24: Native pipeline 稳定性修复与验收归档
+<!-- trellis-session: v=2 fp=f4d5286c586302ab -->
+
+**Date**: 2026-10-12
+**Task**: Native pipeline 稳定性修复与验收归档
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+完成 Native 解码流水线生命周期重建、流元数据透传、关键帧拥塞自愈重同步、无锁汇合与异常防爆；完善硬件帧时间戳契约与内部 C++ 只读借用通道，同步更新规范与文档，并通过全量 Native CTest 与 Go 桥接回归测试。
+
+### Main Changes
+
+- native/pipeline/stream: 抽象独立 DecodeSession 会话，消除取消队列无法复活与忙循环；实现拥塞丢包关键帧自愈重同步与 EAGAIN drain 重试
+- native/pipeline/engine: 消除持锁 join，解耦解码会话停机时序与全局 control 互斥锁；reaper 采用事件驱动并并发停止超时流
+- native/include/Zhulong/frame.hpp: HardwareFrame 增加明确时间基、has_pts 标志与格式契约，提供 release_fn 安全闭包
+- spec & tests: 补充 6 组 CTest 单元/集成测试用例，更新 pipeline-guidelines.md 规范与 README 文档
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `674c9ce` | fix(native): enhance decode pipeline stability, lifecycle and congestion recovery |
+| `a45ba41` | docs(task): record planning and baseline artifacts for native pipeline stability |
+| `71f01f0` | perf(native): optimize pipeline decode gating, latency and dispatch hot path |
+| `a315753` | docs(task): mark native pipeline stability acceptance criteria completed |
+
+### Testing
+
+- [OK] make native-test: 7/7 CTest 全部通过 (含 RTSP 回环压测 31.2s)
+- [OK] make go-check: go vet、go test -race 及 Go bridge 集成测试 (TCP/UDP/背压) 100% 通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 归档 10-11-native-pipeline-stability 任务
+- 推进 10-10-algorithm-plugin-architecture 插件架构设计最终评审
