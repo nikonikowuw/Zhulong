@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法插件系统契约、IPC 协议与跨进程共享内存租赁规范"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "Native 流水线并发设计与硬件帧规范"}

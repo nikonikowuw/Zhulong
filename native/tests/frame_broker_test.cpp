@@ -3,6 +3,9 @@
 #include "../src/algorithm/ipc/unix_socket.hpp"
 #include "../src/algorithm/ipc/frame_broker.hpp"
 #include <Zhulong/frame.hpp>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 #include <cassert>
 #include <iostream>
 #include <vector>
@@ -391,6 +394,294 @@ void test_runner_subprocess_e2e(const char* runner_bin, const char* plugin_so) {
     std::cout << "[PASS] test_runner_subprocess_e2e" << std::endl;
 }
 
+// =============================================================================
+// Test 6: 半包超时拒绝与流脱节防御
+// =============================================================================
+void test_partial_packet_desync_defense() {
+    uint64_t stream_id = 1005;
+    FrameBroker broker;
+    BrokerOptions opt;
+    assert(broker.start(stream_id, "/tmp", opt));
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path()));
+    HandshakeReq req{};
+    req.api_version = 1;
+    std::strncpy(req.client_name, "partial_client", sizeof(req.client_name) - 1);
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> p;
+    assert(client.recv_msg(resp_hdr, p, 1000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    assert(broker.client_count() == 1);
+
+    // 仅写入 4 字节魔数半包 (远小于 16 字节 IpcHeader)
+    uint32_t partial_magic = IPC_MAGIC;
+    assert(client.send_msg(MSG_UNKNOWN, nullptr, 0)); // 发送合法空包，重置
+    // 通过底层 socket 直接发送 4 字节半包
+    // UnixSocketClient 没有暴露 raw fd，但可以通过 ::send 模拟
+    // 或者用新 socket 也可以
+    // 这里我们直接测试一个发送了握手后的客户端发送半包
+    struct sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, broker.socket_path().c_str(), sizeof(addr.sun_path) - 1);
+    int raw_sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    assert(raw_sock >= 0);
+    assert(::connect(raw_sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0);
+
+    // 发送握手使 raw_sock 注册进 broker
+    IpcHeader h{};
+    h.magic = IPC_MAGIC;
+    h.msg_type = MSG_HANDSHAKE_REQ;
+    h.version = IPC_VERSION;
+    h.payload_size = sizeof(HandshakeReq);
+    HandshakeReq raw_req{};
+    raw_req.api_version = 1;
+    std::strncpy(raw_req.client_name, "raw_client", sizeof(raw_req.client_name) - 1);
+    assert(::send(raw_sock, &h, sizeof(h), 0) == sizeof(h));
+    assert(::send(raw_sock, &raw_req, sizeof(raw_req), 0) == sizeof(raw_req));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    assert(broker.client_count() == 2);
+
+    // raw_sock 仅发送 4 字节半包
+    assert(::send(raw_sock, &partial_magic, sizeof(partial_magic), 0) == sizeof(partial_magic));
+
+    // 等待服务端 100ms 超时检测与 DESYNC 断开回收
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+    // raw_sock 因半包超时被服务端主动切断回收，broker.client_count() 恢复为 1 (仅剩 client)
+    assert(broker.client_count() == 1);
+
+    ::close(raw_sock);
+    client.disconnect();
+    broker.stop();
+    std::cout << "[PASS] test_partial_packet_desync_defense" << std::endl;
+}
+
+// =============================================================================
+// Test 7: 畸变超大 Payload 熔断拒绝
+// =============================================================================
+void test_oversized_payload_rejection() {
+    uint64_t stream_id = 1006;
+    FrameBroker broker;
+    BrokerOptions opt;
+    assert(broker.start(stream_id, "/tmp", opt));
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path()));
+    HandshakeReq req{};
+    req.api_version = 1;
+    std::strncpy(req.client_name, "evil_client", sizeof(req.client_name) - 1);
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> p;
+    assert(client.recv_msg(resp_hdr, p, 1000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    assert(broker.client_count() == 1);
+
+    // 发送带有 1MB 超大畸变 payload_size 的头部
+    IpcHeader evil_hdr{};
+    evil_hdr.magic = IPC_MAGIC;
+    evil_hdr.msg_type = MSG_FRAME_ACK;
+    evil_hdr.version = IPC_VERSION;
+    evil_hdr.payload_size = 1024 * 1024; // 1MB > 64KB 上限
+    // 通过 client 发送恶意头部
+    struct sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, broker.socket_path().c_str(), sizeof(addr.sun_path) - 1);
+    int raw_sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    assert(raw_sock >= 0);
+    assert(::connect(raw_sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0);
+
+    // raw_sock 发送握手
+    IpcHeader h{};
+    h.magic = IPC_MAGIC;
+    h.msg_type = MSG_HANDSHAKE_REQ;
+    h.version = IPC_VERSION;
+    h.payload_size = sizeof(HandshakeReq);
+    HandshakeReq raw_req{};
+    raw_req.api_version = 1;
+    std::strncpy(raw_req.client_name, "raw_evil", sizeof(raw_req.client_name) - 1);
+    assert(::send(raw_sock, &h, sizeof(h), 0) == sizeof(h));
+    assert(::send(raw_sock, &raw_req, sizeof(raw_req), 0) == sizeof(raw_req));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    assert(broker.client_count() == 2);
+
+    // raw_sock 发送超大畸变包
+    assert(::send(raw_sock, &evil_hdr, sizeof(evil_hdr), 0) == sizeof(evil_hdr));
+
+    // 等待服务端熔断处理
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    // raw_sock 应已被熔断断开且未发生 crash
+    assert(broker.client_count() == 1);
+
+    ::close(raw_sock);
+    client.disconnect();
+    broker.stop();
+    std::cout << "[PASS] test_oversized_payload_rejection" << std::endl;
+}
+
+// =============================================================================
+// Test 8: 独立多平面 YUV420P 安全分平面拷贝
+// =============================================================================
+void test_multi_planar_yuv420p_copy() {
+    uint64_t stream_id = 1007;
+    FrameBroker broker;
+    BrokerOptions opt;
+    opt.slot_count = 4;
+    opt.slot_size = 2 * 1024 * 1024;
+    assert(broker.start(stream_id, "/tmp", opt));
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path()));
+    HandshakeReq req{};
+    req.api_version = 1;
+    std::strncpy(req.client_name, "yuv_client", sizeof(req.client_name) - 1);
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> p;
+    assert(client.recv_msg(resp_hdr, p, 1000));
+    HandshakeResp resp{};
+    std::memcpy(&resp, p.data(), sizeof(resp));
+
+    ShmPool shm_client;
+    assert(shm_client.init(resp.shm_name, ShmMode::OPEN_READ_ONLY));
+
+    // 构造三块独立的 Plane 内存 (非连续物理地址)
+    uint32_t width = 320;
+    uint32_t height = 240;
+    uint32_t stride = 320;
+    uint32_t u_stride = 160;
+    uint32_t uv_h = 120;
+
+    std::vector<uint8_t> plane_y(stride * height, 0x11);
+    std::vector<uint8_t> plane_u(u_stride * uv_h, 0x22);
+    std::vector<uint8_t> plane_v(u_stride * uv_h, 0x33);
+
+    HardwareFrame frame;
+    frame.width = width;
+    frame.height = height;
+    frame.stride = stride;
+    frame.format = FRAME_FORMAT_YUV420P;
+    frame.pts = 12345;
+    frame.host_planes[0] = plane_y.data();
+    frame.host_planes[1] = plane_u.data();
+    frame.host_planes[2] = plane_v.data();
+    frame.plane_strides[0] = stride;
+    frame.plane_strides[1] = u_stride;
+    frame.plane_strides[2] = u_stride;
+
+    assert(broker.publish_frame(frame));
+
+    IpcHeader d_hdr{};
+    std::vector<uint8_t> d_payload;
+    assert(client.recv_msg(d_hdr, d_payload, 1000));
+    FrameDispatchMsg dispatch{};
+    std::memcpy(&dispatch, d_payload.data(), sizeof(dispatch));
+
+    const uint8_t* slot_base = shm_client.slot_read_ptr(dispatch.slot_index);
+    assert(slot_base != nullptr);
+
+    // 校验 Y, U, V 分平面拷贝的数据准确性
+    const uint8_t* y_data = slot_base + dispatch.offsets[0];
+    const uint8_t* u_data = slot_base + dispatch.offsets[1];
+    const uint8_t* v_data = slot_base + dispatch.offsets[2];
+
+    assert(y_data[0] == 0x11);
+    assert(y_data[stride * height - 1] == 0x11);
+    assert(u_data[0] == 0x22);
+    assert(u_data[u_stride * uv_h - 1] == 0x22);
+    assert(v_data[0] == 0x33);
+    assert(v_data[u_stride * uv_h - 1] == 0x33);
+
+    // 发送 ACK
+    FrameAckMsg ack{};
+    ack.stream_id = stream_id;
+    ack.frame_id = dispatch.frame_id;
+    ack.slot_index = dispatch.slot_index;
+    ack.generation = dispatch.generation;
+    ack.client_id = resp.client_id;
+    assert(client.send_msg(MSG_FRAME_ACK, &ack, sizeof(ack)));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    client.disconnect();
+    broker.stop();
+    std::cout << "[PASS] test_multi_planar_yuv420p_copy" << std::endl;
+}
+
+// =============================================================================
+// Test 9: 协议结构体 8 字节自然对齐与编译/运行时断言
+// =============================================================================
+void test_protocol_alignment_assertions() {
+    assert(sizeof(IpcHeader) == 16);
+    assert(sizeof(HandshakeReq) == 40);
+    assert(sizeof(HandshakeResp) == 80);
+    assert(sizeof(FrameDispatchMsg) == 88);
+    assert(sizeof(FrameAckMsg) == 32);
+
+    assert(offsetof(FrameDispatchMsg, stream_id) % 8 == 0);
+    assert(offsetof(FrameDispatchMsg, frame_id) % 8 == 0);
+    assert(offsetof(FrameDispatchMsg, generation) % 8 == 0);
+    assert(offsetof(FrameDispatchMsg, pts) % 8 == 0);
+
+    assert(offsetof(FrameAckMsg, stream_id) % 8 == 0);
+    assert(offsetof(FrameAckMsg, frame_id) % 8 == 0);
+    assert(offsetof(FrameAckMsg, generation) % 8 == 0);
+
+    std::cout << "[PASS] test_protocol_alignment_assertions" << std::endl;
+}
+
+// =============================================================================
+// Test 10: 发送失败租约即时回收与在途状态回滚
+// =============================================================================
+void test_send_failure_rollback() {
+    uint64_t stream_id = 1008;
+    FrameBroker broker;
+    BrokerOptions opt;
+    opt.slot_count = 2; // 仅 2 个槽位
+    assert(broker.start(stream_id, "/tmp", opt));
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path()));
+    HandshakeReq req{};
+    req.api_version = 1;
+    std::strncpy(req.client_name, "rollback_client", sizeof(req.client_name) - 1);
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> p;
+    assert(client.recv_msg(resp_hdr, p, 1000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // 客户端直接 disconnect 关闭其 socket
+    client.disconnect();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    std::vector<uint8_t> dummy(640 * 480 * 3, 0);
+    HardwareFrame frame;
+    frame.width = 640;
+    frame.height = 480;
+    frame.stride = 640 * 3;
+    frame.format = FRAME_FORMAT_UNKNOWN;
+    frame.host_ptr = dummy.data();
+
+    // 发布帧，断连/发送失败不会使槽位死锁在 LEASED 状态
+    broker.publish_frame(frame);
+    broker.publish_frame(frame);
+
+    // 再次推帧必须依然能正常获取 FREE 槽位
+    assert(broker.publish_frame(frame));
+
+    broker.stop();
+    std::cout << "[PASS] test_send_failure_rollback" << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     const char* runner_bin = (argc > 1) ? argv[1] : nullptr;
     const char* plugin_so = (argc > 2) ? argv[2] : nullptr;
@@ -399,6 +690,11 @@ int main(int argc, char* argv[]) {
     test_frame_broker_dispatch_and_leasing();
     test_frame_broker_backpressure_isolation();
     test_frame_broker_crash_reclaim();
+    test_partial_packet_desync_defense();
+    test_oversized_payload_rejection();
+    test_multi_planar_yuv420p_copy();
+    test_protocol_alignment_assertions();
+    test_send_failure_rollback();
     if (runner_bin && plugin_so) {
         test_runner_subprocess_e2e(runner_bin, plugin_so);
     }

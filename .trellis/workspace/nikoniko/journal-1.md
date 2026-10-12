@@ -1200,4 +1200,35 @@ Session summary was not supplied.
 - 提请用户确认阶段二交付成果，准备归档与提交变更
 - 启动阶段三规划（Go 包生命周期管理、进程看门狗自愈与版本回滚）
 
+## 2026-03-31: FrameBroker 共享内存与 IPC 协议并发与内存安全加固 (10-12-algo-framebroker-hardening)
+
+### Context
+
+在审查 commit 8ef1177 时，识别出 FrameBroker 与 IPC 协议存在的 6 项关键并发、内存安全与对齐缺陷：
+1. 结构体 64 位字段非 8 字节自然对齐，在 ARM64 存在未对齐访问性能损耗与编译告警
+2. UDS Socket read_all 错误把半包接收处理为超时重试，导致字节流脱节与粘包乱序
+3. IPC 缺少 payload 上限门禁且工作线程缺乏异常防爆门
+4. 阻塞写 socket 存在阻塞主媒体流水线的风险
+5. publish_frame 异常路径在途配额泄漏
+6. 多平面 YUV420P 帧按单缓冲连续 memcpy 导致内存越界读
+
+### Changes
+
+- native/src/algorithm/ipc/ipc_protocol.hpp: 调整 FrameDispatchMsg 与 FrameAckMsg 字段布局，64 位整型（generation、stream_id、frame_id、pts）前置并 8 字节对齐，尾部填充 padding；增加 MAX_IPC_PAYLOAD_SIZE (64KB)；增加 offsetof 和 sizeof 编译期断言
+- native/src/algorithm/ipc/unix_socket.hpp / .cpp: 重构 read_all 实现 ReadStatus 四态状态机（SUCCESS/IDLE_TIMEOUT/CLOSED/DESYNC_ERROR）；客户端套接字配置 50ms SO_SNDTIMEO；工作线程包裹 try...catch 防爆门；ClientChannel.fd 改为 atomic<int>，stop() 采用 shutdown -> 等待 worker 退出 -> close 序列，彻底消除 TSan 报出的数据竞争
+- native/include/Zhulong/frame.hpp: HardwareFrame 增加 host_planes[4] 与 plane_strides[4] 数组及安全移动语义
+- native/src/nodes/decode/ffmpeg_decoder.cpp: 解码 YUV420P 时填充 host_planes[0..2] 与 plane_strides[0..2]
+- native/src/algorithm/ipc/frame_broker.cpp: 在 slot 获取失败与 socket 发送失败路径上原子回滚 in_flight_count 与统计指标；实现 YUV420P / NV12 分平面逐行安全拷贝
+- native/src/algorithm/runner/runner.cpp: 同步更新 FrameDispatchMsg 对齐字段与 payload 尺寸门禁
+- native/tests/frame_broker_test.cpp: 新增 5 项专项回归测试（半包脱节防御、超大 Payload 拒绝、多平面 YUV420P 拷贝验证、协议对齐断言、发送失败配额回滚）
+- .trellis/spec/native/algo-plugin-contract.md: 增补第 6.4 节 IPC 协议自然对齐与 Socket 鲁棒性规约
+
+### Testing
+
+- [OK] make native-test: 15/15 全部通过（含 ZhulongFrameBroker 10 大场景全绿）
+- [OK] ASan / UBSan: 15/15 全部通过，零内存泄漏、零越界、零未定义行为
+- [OK] TSan: 15/15 全部通过，并发与网络 I/O 零数据竞争（Data Race Free）
+- [OK] make go-check: Go vet、Go test -race 及 Go Bridge 真实 RTSP 回环压测 100% 通过
+
+
 

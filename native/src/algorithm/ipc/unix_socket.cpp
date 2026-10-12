@@ -12,6 +12,13 @@ namespace zhulong::ipc {
 
 namespace {
 
+enum class ReadStatus {
+    SUCCESS,        // 完整读入请求的所有字节
+    IDLE_TIMEOUT,   // 在读取 0 字节时发生 poll 超时 (安全空闲等待)
+    CLOSED,         // 在读取 0 字节时对端正常关闭 (EOF, recv == 0)
+    DESYNC_ERROR    // 已读部分字节后发生超时、对端关闭或错误 (流脱节，不可恢复)
+};
+
 bool write_all(int fd, const void* data, size_t size) {
     const uint8_t* ptr = static_cast<const uint8_t*>(data);
     size_t remaining = size;
@@ -29,9 +36,10 @@ bool write_all(int fd, const void* data, size_t size) {
     return true;
 }
 
-bool read_all(int fd, void* data, size_t size, int timeout_ms) {
+ReadStatus read_all(int fd, void* data, size_t size, int timeout_ms) {
     uint8_t* ptr = static_cast<uint8_t*>(data);
     size_t remaining = size;
+    size_t bytes_read = 0;
 
     while (remaining > 0) {
         if (timeout_ms >= 0) {
@@ -39,22 +47,38 @@ bool read_all(int fd, void* data, size_t size, int timeout_ms) {
             pfd.fd = fd;
             pfd.events = POLLIN;
             int ret = poll(&pfd, 1, timeout_ms);
-            if (ret <= 0) {
-                return false;
+            if (ret == 0) {
+                // 超时：若尚未读取任何字节，则为空闲超时；否则为半包流脱节
+                return (bytes_read == 0) ? ReadStatus::IDLE_TIMEOUT : ReadStatus::DESYNC_ERROR;
+            }
+            if (ret < 0) {
+                if (errno == EINTR) continue;
+                return (bytes_read == 0) ? ReadStatus::CLOSED : ReadStatus::DESYNC_ERROR;
+            }
+            if (pfd.revents & (POLLERR | POLLNVAL)) {
+                return ReadStatus::DESYNC_ERROR;
             }
         }
 
         ssize_t n = recv(fd, ptr, remaining, 0);
-        if (n <= 0) {
-            if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
-                continue;
-            }
-            return false;
+        if (n == 0) {
+            // 对端关闭 (EOF)
+            return (bytes_read == 0) ? ReadStatus::CLOSED : ReadStatus::DESYNC_ERROR;
         }
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (timeout_ms < 0) continue;
+                return (bytes_read == 0) ? ReadStatus::IDLE_TIMEOUT : ReadStatus::DESYNC_ERROR;
+            }
+            return ReadStatus::DESYNC_ERROR;
+        }
+
         ptr += n;
         remaining -= n;
+        bytes_read += static_cast<size_t>(n);
     }
-    return true;
+    return ReadStatus::SUCCESS;
 }
 
 } // namespace
@@ -118,16 +142,16 @@ void UnixSocketServer::stop() {
         accept_thread_.join();
     }
 
-    // 唤醒并关闭所有客户端
+    // 唤醒所有客户端读取线程：仅发送 shutdown，不提前 close，防止与工作线程的 recv() 产生竞态
+    std::vector<std::shared_ptr<ClientChannel>> to_close;
     {
         std::lock_guard<std::mutex> lock(clients_mutex_);
         for (auto& [cid, ch] : client_channels_) {
-            std::lock_guard<std::mutex> send_lock(ch->send_mutex);
-            if (ch->fd >= 0) {
-                ::shutdown(ch->fd, SHUT_RDWR);
-                ::close(ch->fd);
-                ch->fd = -1;
+            int cfd = ch->fd.load();
+            if (cfd >= 0) {
+                ::shutdown(cfd, SHUT_RDWR);
             }
+            to_close.push_back(ch);
         }
         client_channels_.clear();
     }
@@ -135,6 +159,15 @@ void UnixSocketServer::stop() {
     // 等待所有读取工作线程完全退出
     while (active_workers_.load() > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    // 此时所有工作线程均已安全退出，安全关闭剩余套接字
+    for (auto& ch : to_close) {
+        std::lock_guard<std::mutex> send_lock(ch->send_mutex);
+        int old_fd = ch->fd.exchange(-1);
+        if (old_fd >= 0) {
+            ::close(old_fd);
+        }
     }
 
     if (!socket_path_.empty()) {
@@ -161,6 +194,12 @@ void UnixSocketServer::listen_loop() {
             continue;
         }
 
+        // 配置发送超时 (50ms)，防止慢/死锁 Worker 拖死主媒体推帧线程
+        struct timeval tv{};
+        tv.tv_sec = 0;
+        tv.tv_usec = 50000;
+        setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
         uint32_t cid = next_client_id_.fetch_add(1);
         auto channel = std::make_shared<ClientChannel>();
         channel->fd = client_fd;
@@ -181,36 +220,45 @@ void UnixSocketServer::listen_loop() {
 void UnixSocketServer::client_read_loop(uint32_t client_id, std::shared_ptr<ClientChannel> channel) {
     active_workers_.fetch_add(1);
 
-    while (running_.load()) {
-        int cfd = channel->fd;
-        if (cfd < 0) break;
+    try {
+        while (running_.load()) {
+            int cfd = channel->fd.load();
+            if (cfd < 0) break;
 
-        IpcHeader header{};
-        if (!read_all(cfd, &header, sizeof(header), 100)) {
-            if (!running_.load()) break;
-            struct pollfd pfd{};
-            pfd.fd = cfd;
-            pfd.events = POLLIN | POLLHUP | POLLERR;
-            if (poll(&pfd, 1, 0) > 0 && (pfd.revents & (POLLHUP | POLLERR))) {
+            IpcHeader header{};
+            ReadStatus st = read_all(cfd, &header, sizeof(header), 100);
+            if (st == ReadStatus::IDLE_TIMEOUT) {
+                continue;
+            }
+            if (st != ReadStatus::SUCCESS) {
+                // CLOSED 或 DESYNC_ERROR，断开清理连接
                 break;
             }
-            continue;
-        }
 
-        if (header.magic != IPC_MAGIC) {
-            break;
-        }
-
-        std::vector<uint8_t> payload(header.payload_size);
-        if (header.payload_size > 0) {
-            if (!read_all(cfd, payload.data(), header.payload_size, 1000)) {
+            if (header.magic != IPC_MAGIC) {
                 break;
             }
-        }
 
-        if (on_message_) {
-            on_message_(client_id, header, payload.empty() ? nullptr : payload.data());
+            if (header.payload_size > MAX_IPC_PAYLOAD_SIZE) {
+                break; // 拒绝异常畸变超大包
+            }
+
+            std::vector<uint8_t> payload(header.payload_size);
+            if (header.payload_size > 0) {
+                ReadStatus pst = read_all(cfd, payload.data(), header.payload_size, 1000);
+                if (pst != ReadStatus::SUCCESS) {
+                    break;
+                }
+            }
+
+            if (on_message_) {
+                on_message_(client_id, header, payload.empty() ? nullptr : payload.data());
+            }
         }
+    } catch (const std::exception& e) {
+        std::cerr << "[UnixSocketServer] Worker exception for client " << client_id << ": " << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "[UnixSocketServer] Unknown exception for client " << client_id << std::endl;
     }
 
     remove_client(client_id);
@@ -231,10 +279,10 @@ void UnixSocketServer::remove_client(uint32_t client_id) {
     if (channel) {
         {
             std::lock_guard<std::mutex> send_lock(channel->send_mutex);
-            if (channel->fd >= 0) {
-                ::shutdown(channel->fd, SHUT_RDWR);
-                ::close(channel->fd);
-                channel->fd = -1;
+            int old_fd = channel->fd.exchange(-1);
+            if (old_fd >= 0) {
+                ::shutdown(old_fd, SHUT_RDWR);
+                ::close(old_fd);
             }
         }
 
@@ -256,7 +304,8 @@ bool UnixSocketServer::send_msg(uint32_t client_id, uint16_t msg_type, const voi
     if (!channel) return false;
 
     std::lock_guard<std::mutex> send_lock(channel->send_mutex);
-    if (channel->fd < 0) return false;
+    int cfd = channel->fd.load();
+    if (cfd < 0) return false;
 
     IpcHeader header{};
     header.magic = IPC_MAGIC;
@@ -264,11 +313,11 @@ bool UnixSocketServer::send_msg(uint32_t client_id, uint16_t msg_type, const voi
     header.version = IPC_VERSION;
     header.payload_size = static_cast<uint32_t>(payload_size);
 
-    if (!write_all(channel->fd, &header, sizeof(header))) {
+    if (!write_all(cfd, &header, sizeof(header))) {
         return false;
     }
     if (payload && payload_size > 0) {
-        return write_all(channel->fd, payload, payload_size);
+        return write_all(cfd, payload, payload_size);
     }
     return true;
 }
@@ -371,16 +420,17 @@ bool UnixSocketClient::recv_msg(IpcHeader& out_header, std::vector<uint8_t>& out
     sock = fd_.load();
     if (sock < 0) return false;
 
-    if (!read_all(sock, &out_header, sizeof(out_header), timeout_ms)) {
+    ReadStatus st = read_all(sock, &out_header, sizeof(out_header), timeout_ms);
+    if (st != ReadStatus::SUCCESS) {
         return false;
     }
-    if (out_header.magic != IPC_MAGIC) {
+    if (out_header.magic != IPC_MAGIC || out_header.payload_size > MAX_IPC_PAYLOAD_SIZE) {
         return false;
     }
 
     out_payload.resize(out_header.payload_size);
     if (out_header.payload_size > 0) {
-        if (!read_all(sock, out_payload.data(), out_header.payload_size, timeout_ms)) {
+        if (read_all(sock, out_payload.data(), out_header.payload_size, timeout_ms) != ReadStatus::SUCCESS) {
             return false;
         }
     }

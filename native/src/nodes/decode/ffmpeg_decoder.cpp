@@ -128,6 +128,12 @@ int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
         frame->format = FRAME_FORMAT_UNKNOWN;
     }
     frame->host_ptr = av_frame->data[0];
+    for (int i = 0; i < 4; ++i) {
+        if (av_frame->data[i]) {
+            frame->host_planes[i] = av_frame->data[i];
+            frame->plane_strides[i] = static_cast<uint32_t>(av_frame->linesize[i]);
+        }
+    }
     frame->has_pts = (av_frame->pts != AV_NOPTS_VALUE);
     frame->pts = frame->has_pts ? av_frame->pts : 0;
     frame->time_base_num = time_base_num_;

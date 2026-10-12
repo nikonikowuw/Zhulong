@@ -126,3 +126,11 @@ zhulong_algo_runner --verify-plugin <path_to_plugin.so> --sample <test_image_or_
 - **慢消费者隔离 (Drop Latest)**：Broker 跟踪各客户端在途处理帧数（`in_flight_count`，上限默认为 2）。当达到上限时，Broker 直接对该客户端丢弃最新帧，绝不阻塞主视频流或其他高速算法包；
 - **子进程崩溃自愈**：当检测到客户端 Socket 断开或收到 `POLLHUP` 时，Broker 立即扫描并回收该客户端在所有槽位上的未归还租约，槽位引用清零后自动恢复为 `FREE`，彻底杜绝槽位死锁与泄漏。
 
+### 6.4 IPC 协议自然对齐与 Socket 鲁棒性规约 (IPC Alignment & Socket Hardening)
+- **严格 8 字节自然对齐**：IPC 二进制包（如 `FrameDispatchMsg`、`FrameAckMsg`）中 64 位字段（`generation`、`stream_id`、`frame_id`、`pts`）必须排布在 8 字节自然对齐偏移上；结构体总尺寸必须为 8 的倍数并包含尾部对齐填充；必须有编译期 `static_assert(offsetof(...) % 8 == 0)` 与总大小校验，彻底杜绝 ARM64/嵌入式体系下非对齐访问与 `-Waddress-of-packed-member` 警告。
+- **四态 Socket 状态机与半包熔断**：流读取使用四态机制（`SUCCESS`、`IDLE_TIMEOUT`、`CLOSED`、`DESYNC_ERROR`）。空闲轮询超时允许平滑重试，但若在已收到部分字节后发生超时或错误，必须标记为 `DESYNC_ERROR` 并立即主动断开连接，禁止在错位的字节流上继续读取。
+- **发送超时隔离与最大 Payload 门禁**：服务端套接字必须配置 50ms `SO_SNDTIMEO` 发送超时，防止卡死/失联子进程反向阻塞主媒体捕获与解码流水线；IPC 消息必须强制执行 `MAX_IPC_PAYLOAD_SIZE = 64KB` 尺寸检查与线程级 `try ... catch` 异常防爆门，隔离异常子进程。
+- **在途配额原子回滚**：`publish_frame` 在共享内存槽位写入异常或客户端 Socket 发送失败时，必须原子回退预分配的 `in_flight_count`、`delivered_frames`，并记入 `dropped_frames`，防止在途配额死锁导致后续视频帧被永久丢弃。
+- **多平面 (Multi-planar) 逐行安全复制**：解码器传递多平面帧（如 `YUV420P`、`NV12`）时必须携带完整的 `host_planes[4]` 与 `plane_strides[4]`；FrameBroker 写入共享内存时必须根据格式分平面逐行拷贝，严禁将 `data[0]` 假定为单一连续缓冲区进行越界 `memcpy`。
+
+

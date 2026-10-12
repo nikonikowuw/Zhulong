@@ -13,7 +13,7 @@
 namespace zhulong::ipc {
 
 struct ClientChannel {
-    int fd{-1};
+    std::atomic<int> fd{-1};
     std::mutex send_mutex;
 };
 

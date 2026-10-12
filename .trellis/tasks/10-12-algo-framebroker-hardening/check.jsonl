@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "验证跨进程 IPC 协议与 SHM 租赁规范符合度"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "验证流水线并发安全与硬件帧内存生命周期规范"}

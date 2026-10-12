@@ -41,6 +41,8 @@ struct HardwareFrame {
     int      dma_fd{-1};        // DMA-BUF 文件描述符 (Rockchip MPP / Jetson / V4L2)
     void*    dev_ptr{nullptr};  // 异构设备显存指针 (华为昇腾 DVPP acldvppMalloc / CUDA)
     uint8_t* host_ptr{nullptr}; // CPU 虚拟地址 (仅软解/调试回退有效)
+    uint8_t* host_planes[4]{nullptr, nullptr, nullptr, nullptr}; // 各平面独立 CPU 虚拟地址
+    uint32_t plane_strides[4]{0, 0, 0, 0};                       // 各平面独立行跨度 (字节)
 
     // 3. 关联事件与时序
     int64_t  pts{0};            // 原生时间戳 (回传推理结果事件时保持对齐)
@@ -84,6 +86,8 @@ struct HardwareFrame {
           dma_fd(other.dma_fd),
           dev_ptr(other.dev_ptr),
           host_ptr(other.host_ptr),
+          host_planes{other.host_planes[0], other.host_planes[1], other.host_planes[2], other.host_planes[3]},
+          plane_strides{other.plane_strides[0], other.plane_strides[1], other.plane_strides[2], other.plane_strides[3]},
           pts(other.pts),
           has_pts(other.has_pts),
           time_base_num(other.time_base_num),
@@ -94,6 +98,10 @@ struct HardwareFrame {
         other.dma_fd = -1;
         other.dev_ptr = nullptr;
         other.host_ptr = nullptr;
+        for (int i = 0; i < 4; ++i) {
+            other.host_planes[i] = nullptr;
+            other.plane_strides[i] = 0;
+        }
     }
 
     // 移动赋值运算符
@@ -113,6 +121,12 @@ struct HardwareFrame {
             dma_fd = other.dma_fd;
             dev_ptr = other.dev_ptr;
             host_ptr = other.host_ptr;
+            for (int i = 0; i < 4; ++i) {
+                host_planes[i] = other.host_planes[i];
+                plane_strides[i] = other.plane_strides[i];
+                other.host_planes[i] = nullptr;
+                other.plane_strides[i] = 0;
+            }
             pts = other.pts;
             has_pts = other.has_pts;
             time_base_num = other.time_base_num;

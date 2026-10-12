@@ -244,7 +244,7 @@ int run_ipc_worker(const std::string& so_path, const std::string& broker_sock, c
             std::memcpy(&dispatch, payload.data(), sizeof(dispatch));
 
             const uint8_t* slot_base = shm.slot_read_ptr(dispatch.slot_index);
-            if (slot_base) {
+            if (slot_base && dispatch.offsets[0] < shm.slot_size()) {
                 zhulong_frame_view view{};
                 view.frame_id = dispatch.frame_id;
                 view.pts = static_cast<uint64_t>(dispatch.pts);
@@ -254,11 +254,11 @@ int run_ipc_worker(const std::string& so_path, const std::string& broker_sock, c
                 view.strides[0] = dispatch.strides[0];
                 view.planes[0] = slot_base + dispatch.offsets[0];
 
-                if (dispatch.offsets[1] > 0) {
+                if (dispatch.offsets[1] > 0 && dispatch.offsets[1] < shm.slot_size()) {
                     view.strides[1] = dispatch.strides[1];
                     view.planes[1] = slot_base + dispatch.offsets[1];
                 }
-                if (dispatch.offsets[2] > 0) {
+                if (dispatch.offsets[2] > 0 && dispatch.offsets[2] < shm.slot_size()) {
                     view.strides[2] = dispatch.strides[2];
                     view.planes[2] = slot_base + dispatch.offsets[2];
                 }
