@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 26
+- **Total Sessions**: 27
 - **Last Active**: 2026-10-12
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1046 | Active |
+| `journal-1.md` | ~1084 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 27 | 2026-10-12 | 更新算法插件架构规划：高层易用SDK与多平台硬件加速HAL | `61672cf` | `dev` |
 | 26 | 2026-10-12 | 媒体接入与流转管道大父任务全量验收与闭环 | `bbc6538` | `dev` |
 | 25 | 2026-10-12 | 完成 RK3568 交叉编译工具链配置与真机全量运行验收 | `55097ed` | `dev` |
 | 24 | 2026-10-12 | Native pipeline 稳定性修复与验收归档 | `674c9ce`, `a45ba41`, `71f01f0`, `a315753` | `dev` |

@@ -1044,3 +1044,41 @@ Session summary was not supplied.
 
 - 归档 10-05-media-ingestion 任务
 - 推进 10-10-algorithm-plugin-architecture 算法插件架构设计任务实施
+
+
+## Session 27: 更新算法插件架构规划：高层易用SDK与多平台硬件加速HAL
+<!-- trellis-session: v=2 fp=d618940d67ce7da9 -->
+
+**Date**: 2026-10-12
+**Task**: 更新算法插件架构规划：高层易用SDK与多平台硬件加速HAL
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+全面更新 10-10-algorithm-plugin-architecture 任务规划文档 (prd.md, design.md, implement.md)。明确 libzhulong_algo_runtime.so 对外提供类似 PyTorch/OpenCV 体验的现代 C++17 SDK (zhulong/algo.hpp)，内部建立多平台异构硬件加速 HAL (IInferenceBackend 与 IVisionBackend)，支持 Rockchip (rknn_dup_context/RGA)、华为昇腾 (CANN/DVPP/AIPP)、NVIDIA (TensorRT/CUDA) 与通用 CPU fallback，并通过 Target Profile 隔离跨平台编译依赖。
+
+### Main Changes
+
+- prd.md: 扩充 R5/R11/R13 需求与 AC14/AC15 验收标准，覆盖类 PyTorch/OpenCV 高层 SDK 与多平台硬件抽象层
+- design.md: 补充 §2.4 现代 C++ SDK 与多平台 HAL 架构设计，给出 YoloDetectorPlugin 示例代码、HAL 接口设计、平台落地矩阵与 Target Profile 编译隔离方案
+- implement.md: 在规划门禁与阶段一、阶段四实施清单中引入 zhulong/algo.hpp 高层门面与多平台 HAL 适配
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `61672cf` | docs(task): update algorithm plugin architecture with high-level sdk and multi-platform hal |
+
+### Testing
+
+- [OK] [OK] python3 ./.trellis/scripts/task.py validate .trellis/tasks/10-10-algorithm-plugin-architecture 通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 用户最终审阅更新后的架构文档
+- 确认后执行 task.py start 10-10-algorithm-plugin-architecture 正式进入阶段一实施
