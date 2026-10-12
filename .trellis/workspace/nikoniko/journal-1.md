@@ -1006,3 +1006,41 @@ Session summary was not supplied.
 
 - 归档 10-05-native-ffmpeg-ingestion 任务
 - 推进父任务 10-05-media-ingestion 下一阶段 10-05-camera-lifecycle
+
+
+## Session 26: 媒体接入与流转管道大父任务全量验收与闭环
+<!-- trellis-session: v=2 fp=a1fe119f973fea8e -->
+
+**Date**: 2026-10-12
+**Task**: 媒体接入与流转管道大父任务全量验收与闭环
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+全量闭环媒体接入与流转管道 (10-05-media-ingestion) 父任务。10个子任务全部达成并通过 Native 静态 FFmpeg、CGO 桥接、四态自愈、WebSocket 广播、前端播放器三级自适应与硬件帧解码全链路验收。
+
+### Main Changes
+
+- 10-05-media-ingestion/prd.md: AC-1 至 AC-7 全部标记完成并核对全链路行为
+- 10-05-media-ingestion/implement.md: 阶段一至阶段四实施清单全部闭环
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bbc6538` | docs(task): mark media ingestion parent task acceptance criteria completed |
+
+### Testing
+
+- [OK] [OK] 全部 10 个子任务已独立完成并归档至 archive/2026-10/
+- [OK] [OK] 全链路真机 (RK3568) 与宿主回归测试 100% 通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 归档 10-05-media-ingestion 任务
+- 推进 10-10-algorithm-plugin-architecture 算法插件架构设计任务实施
