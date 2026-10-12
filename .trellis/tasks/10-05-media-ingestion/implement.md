@@ -7,21 +7,21 @@
 
 ## 阶段一：Native C++ 原生底座与 C ABI 门面 (Phase 1: Native & ABI)
 
-- [ ] **Step 1.1: CMake 依赖配置与裁剪版 FFmpeg 静态集成**
+- [x] **Step 1.1: CMake 依赖配置与裁剪版 FFmpeg 静态集成**
   - 在 `native/CMakeLists.txt` 中配置静态链接 `libavformat.a`, `libavcodec.a`, `libavutil.a` (或通过 `find_package(PkgConfig)` / `pkg_check_modules` 优先使用静态归档)
   - 编写最小 demo 测试链接与符号可见性
   - *验证命令*：`make native-build && make native-test`
-- [ ] **Step 1.2: C ABI 扩展与头文件声明**
+- [x] **Step 1.2: C ABI 扩展与头文件声明**
   - 在 `native/include/Zhulong/engine.h` 中扩展探测、流会话管理、订阅回调及元数据结构体
   - 编写 `native/tests/engine_abi_test.c` 验证纯 C 编译器兼容性
   - *验证命令*：`ctest --test-dir build/native -R ZhulongCAbiTests`
-- [ ] **Step 1.3: `StreamSourcePool` 物理流连接池与引用计数实现**
+- [x] **Step 1.3: `StreamSourcePool` 物理流连接池与引用计数实现**
   - 实现 URL 标准化工具函数 `NormalizeRtspUrl`
   - 实现 `PhysicalStreamSession` 与 `StreamSourcePool`，封装 `AVIOInterruptCB` 超时中断机制
   - 实现 8 秒 Grace Period 延时休眠定时器
   - 编写 C++ 单元测试 `tests/stream_pool_test.cpp` 覆盖多订阅者接入、计数递减与倒计时取消/触发
   - *验证命令*：`ctest --test-dir build/native -R StreamPool`
-- [ ] **Step 1.4: 独立探测器 `Zhulong_stream_probe` 实现**
+- [x] **Step 1.4: 独立探测器 `Zhulong_stream_probe` 实现**
   - 实现带独立超时时间窗的单次拉流探测器，解析宽、高、FPS 与 H.264/H.265 Codec
   - 编写异常流（错误端口、不可达 IP）边界测试
   - *验证命令*：`make native-test`
@@ -85,10 +85,10 @@
 
 ## 阶段四：全链路联调与验收门禁 (Phase 4: Verification & Integration)
 
-- [ ] **Step 4.1: 端到端功能与物理流复用验收**
+- [x] **Step 4.1: 端到端功能与物理流复用验收**
   - 搭建本地 RTSP 模拟源（包含 H.264 与 H.265 码流）
   - 验证多媒体对象复用同一流、无用户查看时延迟休眠、断网指数退避重连
   - *验证命令*：`make run` 配合测试用例执行
-- [ ] **Step 4.2: 内存泄漏与竞态全面体检**
+- [x] **Step 4.2: 内存泄漏与竞态全面体检**
   - 执行 `go test -race ./...` 与 ASan/Valgrind 原生内存检查
   - *验证命令*：`make check`
