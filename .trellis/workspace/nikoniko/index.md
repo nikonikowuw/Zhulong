@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 27
+- **Total Sessions**: 28
 - **Last Active**: 2026-10-12
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1084 | Active |
+| `journal-1.md` | ~1122 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 28 | 2026-10-12 | 拆分算法插件大任务：建立父子任务树并立项子任务一 | `b0204bb` | `dev` |
 | 27 | 2026-10-12 | 更新算法插件架构规划：高层易用SDK与多平台硬件加速HAL | `61672cf` | `dev` |
 | 26 | 2026-10-12 | 媒体接入与流转管道大父任务全量验收与闭环 | `bbc6538` | `dev` |
 | 25 | 2026-10-12 | 完成 RK3568 交叉编译工具链配置与真机全量运行验收 | `55097ed` | `dev` |

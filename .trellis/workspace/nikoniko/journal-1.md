@@ -1082,3 +1082,41 @@ Session summary was not supplied.
 
 - 用户最终审阅更新后的架构文档
 - 确认后执行 task.py start 10-10-algorithm-plugin-architecture 正式进入阶段一实施
+
+
+## Session 28: 拆分算法插件大任务：建立父子任务树并立项子任务一
+<!-- trellis-session: v=2 fp=5991dfd57f7442f0 -->
+
+**Date**: 2026-10-12
+**Task**: 拆分算法插件大任务：建立父子任务树并立项子任务一
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+将庞大的 10-10-algorithm-plugin-architecture 定位为架构父任务，正式拆分为 4 个分阶段交付的子任务。创建并立项子任务一 10-12-algo-plugin-sdk-runner（算法插件 SDK、公共运行库与通用 Runner），完成 PRD、技术设计、实施计划与上下文清单编排。
+
+### Main Changes
+
+- 10-10-algorithm-plugin-architecture/prd.md: 补充 4 阶段子任务拆分大纲与交付计划
+- 10-10-algorithm-plugin-architecture/task.json: 建立 children 关联并挂载 10-12-algo-plugin-sdk-runner
+- 10-12-algo-plugin-sdk-runner: 完成 prd.md、design.md、implement.md、implement.jsonl 与 check.jsonl 编排，定义纯 C ABI、类 PyTorch 现代 C++17 SDK、通用 Runner 与 CPU HAL 优化桩
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b0204bb` | feat(task): split algorithm plugin architecture and seed child task 10-12-algo-plugin-sdk-runner |
+
+### Testing
+
+- [OK] [OK] python3 ./.trellis/scripts/task.py validate .trellis/tasks/10-12-algo-plugin-sdk-runner 校验通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 用户审阅子任务一 10-12-algo-plugin-sdk-runner 规划
+- 确认后执行 task.py start 10-12-algo-plugin-sdk-runner 正式开始编码实施
