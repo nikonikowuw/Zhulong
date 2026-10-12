@@ -3,7 +3,7 @@
 #include <vector>
 #include <cstdint>
 #include <cstddef>
-#include <numeric>
+#include <limits>
 #include <stdexcept>
 
 namespace zhulong {
@@ -34,17 +34,26 @@ public:
     Tensor(std::vector<int64_t> dims, DataType dtype)
         : dims_(std::move(dims)), dtype_(dtype) {
         size_t total_elements = element_count();
-        data_.resize(total_elements * data_type_size(dtype_));
+        const size_t element_size = data_type_size(dtype_);
+        if (element_size != 0 && total_elements > std::numeric_limits<size_t>::max() / element_size) {
+            throw std::length_error("tensor byte size overflows size_t");
+        }
+        data_.resize(total_elements * element_size);
     }
 
     const std::vector<int64_t>& shape() const noexcept { return dims_; }
     DataType dtype() const noexcept { return dtype_; }
 
-    size_t element_count() const noexcept {
+    size_t element_count() const {
         if (dims_.empty()) return 0;
         size_t count = 1;
         for (auto d : dims_) {
-            if (d > 0) count *= static_cast<size_t>(d);
+            if (d <= 0) throw std::invalid_argument("tensor dimensions must be positive");
+            const size_t dimension = static_cast<size_t>(d);
+            if (count > std::numeric_limits<size_t>::max() / dimension) {
+                throw std::length_error("tensor element count overflows size_t");
+            }
+            count *= dimension;
         }
         return count;
     }

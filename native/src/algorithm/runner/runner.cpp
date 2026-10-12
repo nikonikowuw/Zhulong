@@ -1,4 +1,5 @@
 #include <zhulong/plugin.h>
+#include "json.hpp"
 #include <dlfcn.h>
 #include <iostream>
 #include <string>
@@ -66,18 +67,21 @@ private:
 };
 
 int run_verify_plugin(const std::string& so_path, const std::string& sample_path) {
-    std::cout << "{\"step\":\"start\",\"plugin\":\"" << so_path << "\"}" << std::endl;
+    std::cout << "{\"step\":\"start\",\"plugin\":" << runner::json_quote(so_path) << "}" << std::endl;
 
     PluginLoader loader;
     std::string err;
     if (!loader.load(so_path, err)) {
-        std::cerr << "{\"status\":\"failed\",\"stage\":\"dlopen\",\"error\":\"" << err << "\"}" << std::endl;
+        std::cerr << "{\"status\":\"failed\",\"stage\":\"dlopen\",\"error\":"
+                  << runner::json_quote(err) << "}" << std::endl;
         return 1;
     }
 
     const auto& api = loader.api();
-    std::cout << "{\"step\":\"abi_verified\",\"name\":\"" << (api.plugin_name ? api.plugin_name : "")
-              << "\",\"version\":\"" << (api.plugin_version ? api.plugin_version : "") << "\"}" << std::endl;
+    std::cout << "{\"step\":\"abi_verified\",\"name\":"
+              << runner::json_quote(api.plugin_name ? api.plugin_name : "")
+              << ",\"version\":" << runner::json_quote(api.plugin_version ? api.plugin_version : "")
+              << "}" << std::endl;
 
     // 1. 创建模型
     zhulong_model_group_h model = nullptr;
@@ -145,8 +149,8 @@ int run_verify_plugin(const std::string& so_path, const std::string& sample_path
     api.worker_destroy(worker);
     api.model_destroy(model);
 
-    std::cout << "{\"status\":\"passed\",\"sample\":\"" << sample_path
-              << "\",\"result_type\":" << res_type
+    std::cout << "{\"status\":\"passed\",\"sample\":" << runner::json_quote(sample_path)
+              << ",\"result_type\":" << res_type
               << ",\"count\":" << count << "}" << std::endl;
     return 0;
 }

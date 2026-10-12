@@ -15,7 +15,7 @@ public:
         return model_.create_session(worker_id);
     }
 
-    std::vector<zhulong::Detection> detect(zhulong::Session& session, const zhulong::Image& image) {
+    std::vector<zhulong::Classification> classify(zhulong::Session& session, const zhulong::Image& image) {
         zhulong::Tensor input_tensor;
         zhulong::LetterboxParams params;
         params.target_width = 224;
@@ -30,20 +30,15 @@ public:
             return {};
         }
 
-        zhulong::Detection cls_det;
-        cls_det.x = 0.0f;
-        cls_det.y = 0.0f;
-        cls_det.w = static_cast<float>(image.width());
-        cls_det.h = static_cast<float>(image.height());
-        cls_det.confidence = 0.98f;
-        cls_det.class_id = 7;
-        cls_det.label = "helmet_detected";
-
-        return {cls_det};
+        zhulong::Classification result;
+        result.class_id = 7;
+        result.confidence = 0.98f;
+        result.label = "helmet_detected";
+        return {result};
     }
 
 private:
     zhulong::Model model_;
 };
 
-ZHULONG_REGISTER_DETECTOR_PLUGIN(MockClassifierPlugin, "MockClassifier", "1.0.0")
+ZHULONG_REGISTER_CLASSIFIER_PLUGIN(MockClassifierPlugin, "MockClassifier", "1.0.0")

@@ -180,13 +180,23 @@ target_link_libraries(zhulong_algo_runner PRIVATE ${CMAKE_DL_LIBS})
 # ==============================================================================
 add_library(MockDetector SHARED tests/plugins/mock_detector/mock_detector.cpp)
 target_compile_features(MockDetector PUBLIC cxx_std_17)
+target_compile_definitions(MockDetector PRIVATE ZHULONG_PLUGIN_BUILD)
 target_include_directories(MockDetector PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(MockDetector PRIVATE ZhulongAlgoRuntime)
+set_target_properties(MockDetector PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 
 add_library(MockClassifier SHARED tests/plugins/mock_classifier/mock_classifier.cpp)
 target_compile_features(MockClassifier PUBLIC cxx_std_17)
+target_compile_definitions(MockClassifier PRIVATE ZHULONG_PLUGIN_BUILD)
 target_include_directories(MockClassifier PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(MockClassifier PRIVATE ZhulongAlgoRuntime)
+set_target_properties(MockClassifier PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(PLUGIN_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/cmake/plugin-exports.map")
+    target_link_options(MockDetector PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
+    target_link_options(MockClassifier PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
+endif()
 
 # ==============================================================================
 #                      5. 单元测试与集成测试构建（BUILD_TESTING）
@@ -225,6 +235,14 @@ if(BUILD_TESTING)
     add_test(NAME ZhulongAlgoRunner COMMAND ZhulongAlgoRunnerTests $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier>)
     set_tests_properties(ZhulongAlgoRunner PROPERTIES TIMEOUT 10)
 
+    add_executable(ZhulongAlgoJsonTests tests/algo_json_test.cpp)
+    target_compile_features(ZhulongAlgoJsonTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongAlgoJsonTests PRIVATE src/algorithm/runner)
+
+    foreach(TEST_TARGET ZhulongAlgoRuntimeTests ZhulongAlgoRunnerTests ZhulongAlgoJsonTests)
+        target_compile_options(${TEST_TARGET} PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
+    endforeach()
+
     # 独立黑盒验包 CLI 工具测试
     add_test(NAME ZhulongAlgoVerifyCli COMMAND zhulong_algo_runner --verify-plugin $<TARGET_FILE:MockDetector> --sample mock_sample.jpg)
     set_tests_properties(ZhulongAlgoVerifyCli PROPERTIES TIMEOUT 10)
@@ -252,6 +270,16 @@ if(BUILD_TESTING)
 
     if(NOT CMAKE_CROSSCOMPILING)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        add_test(NAME ZhulongAlgoJsonRoundTrip COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/algo_json_roundtrip_test.py $<TARGET_FILE:ZhulongAlgoJsonTests>)
+        add_test(NAME ZhulongAlgoRunnerJson COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/algo_runner_json_test.py
+            $<TARGET_FILE:zhulong_algo_runner> $<TARGET_FILE:MockDetector>)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            add_test(NAME ZhulongPluginSymbolVisibility COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_plugin_symbols.py ${CMAKE_NM}
+                $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier>)
+        endif()
         add_test(NAME ZhulongRtspIntegration COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/rtsp_fixture.py $<TARGET_FILE:ZhulongRtspTests>)
         set_tests_properties(ZhulongRtspIntegration PROPERTIES TIMEOUT 90)

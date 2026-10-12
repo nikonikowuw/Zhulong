@@ -1,0 +1,4 @@
+{
+    global: zhulong_plugin_get_api;
+    local: *;
+};

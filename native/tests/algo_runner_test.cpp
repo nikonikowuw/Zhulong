@@ -134,9 +134,12 @@ int main(int argc, char* argv[]) {
     rc = api2.process(task_c, &frame, &res_c);
     assert(rc == ZHULONG_PLUGIN_OK && res_c != nullptr);
     assert(res_c->count == 1);
+    assert(res_c->result_type == ZHULONG_RESULT_TYPE_CLASSIFICATION);
 
-    zhulong_bbox* bc = static_cast<zhulong_bbox*>(res_c->data);
-    assert(std::strcmp(bc[0].label, "helmet_detected") == 0);
+    auto* classification = static_cast<zhulong_classification_item*>(res_c->data);
+    assert(classification[0].class_id == 7);
+    assert(classification[0].confidence == 0.98f);
+    assert(std::strcmp(classification[0].label, "helmet_detected") == 0);
 
     api2.result_release(res_c);
     api2.task_close(task_c);

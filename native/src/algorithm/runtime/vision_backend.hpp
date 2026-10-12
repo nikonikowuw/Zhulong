@@ -25,12 +25,13 @@ public:
                                        Tensor& dst,
                                        LetterboxParams& inout_params) = 0;
 
-    // 双线性插值图像缩放
-    virtual zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int channels,
-                                    uint8_t* dst, int dst_w, int dst_h) = 0;
+    // 双线性插值图像缩放；仅支持 packed RGB24/BGR24。
+    virtual zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride,
+                                    zhulong_pixel_format_t src_format, uint8_t* dst, int dst_stride,
+                                    int dst_w, int dst_h, zhulong_pixel_format_t dst_format) = 0;
 };
 
-// 通用高性能向量化非极大值抑制 (NMS)
+// 排序后逐框抑制的标量 NMS，最坏复杂度 O(n^2)。
 std::vector<zhulong_bbox> nms(const std::vector<zhulong_bbox>& boxes, float iou_threshold);
 
 } // namespace zhulong

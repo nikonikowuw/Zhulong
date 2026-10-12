@@ -117,7 +117,19 @@ typedef struct zhulong_plugin_api_v1 {
 /* 插件动态库必须导出的唯一主符号 */
 #define ZHULONG_PLUGIN_ENTRY_POINT "zhulong_plugin_get_api"
 
-zhulong_status_t zhulong_plugin_get_api(
+#if defined(_WIN32)
+#  if defined(ZHULONG_PLUGIN_BUILD)
+#    define ZHULONG_PLUGIN_EXPORT __declspec(dllexport)
+#  else
+#    define ZHULONG_PLUGIN_EXPORT __declspec(dllimport)
+#  endif
+#elif defined(__GNUC__) || defined(__clang__)
+#  define ZHULONG_PLUGIN_EXPORT __attribute__((visibility("default")))
+#else
+#  define ZHULONG_PLUGIN_EXPORT
+#endif
+
+ZHULONG_PLUGIN_EXPORT zhulong_status_t zhulong_plugin_get_api(
     uint32_t requested_version,
     void* out_api_table,
     size_t table_size

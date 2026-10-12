@@ -142,155 +142,214 @@ inline std::vector<Detection> nms(const std::vector<Detection>& detections, floa
 } // namespace zhulong
 
 // ==============================================================================
-// 导出胶水宏：将用户 C++ 类自动包装为纯 C ABI 导出入口
+// Plugin C ABI adapters
 // ==============================================================================
 
-#define ZHULONG_REGISTER_DETECTOR_PLUGIN(PluginClass, PluginNameStr, PluginVersionStr) \
-extern "C" { \
-\
-struct zhulong_model_group_t { \
-    std::unique_ptr<PluginClass> plugin; \
-}; \
-\
-struct zhulong_worker_ctx_t { \
-    zhulong_model_group_t* model_grp{nullptr}; \
-    zhulong::Session session; \
-}; \
-\
-struct zhulong_task_ctx_t { \
-    zhulong_worker_ctx_t* worker{nullptr}; \
-    uint64_t task_id{0}; \
-}; \
-\
-static zhulong_status_t plugin_model_create(const char* config_json, zhulong_model_group_h* out_model) { \
-    if (!out_model) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT; \
-    try { \
-        auto mg = std::make_unique<zhulong_model_group_t>(); \
-        mg->plugin = std::make_unique<PluginClass>(); \
-        zhulong_status_t rc = mg->plugin->init(config_json ? config_json : ""); \
-        if (rc != ZHULONG_PLUGIN_OK) return rc; \
-        *out_model = reinterpret_cast<zhulong_model_group_h>(mg.release()); \
-        return ZHULONG_PLUGIN_OK; \
-    } catch (...) { \
-        return ZHULONG_PLUGIN_ERR_INTERNAL; \
-    } \
-} \
-\
-static void plugin_model_destroy(zhulong_model_group_h model) { \
-    try { \
-        delete reinterpret_cast<zhulong_model_group_t*>(model); \
-    } catch (...) {} \
-} \
-\
-static zhulong_status_t plugin_worker_create(zhulong_model_group_h model, uint32_t worker_id, zhulong_worker_ctx_h* out_worker) { \
-    if (!model || !out_worker) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT; \
-    try { \
-        auto mg = reinterpret_cast<zhulong_model_group_t*>(model); \
-        auto w = std::make_unique<zhulong_worker_ctx_t>(); \
-        w->model_grp = mg; \
-        w->session = mg->plugin->create_session(worker_id); \
-        *out_worker = reinterpret_cast<zhulong_worker_ctx_h>(w.release()); \
-        return ZHULONG_PLUGIN_OK; \
-    } catch (...) { \
-        return ZHULONG_PLUGIN_ERR_INTERNAL; \
-    } \
-} \
-\
-static void plugin_worker_destroy(zhulong_worker_ctx_h worker) { \
-    try { \
-        delete reinterpret_cast<zhulong_worker_ctx_t*>(worker); \
-    } catch (...) {} \
-} \
-\
-static zhulong_status_t plugin_task_open(zhulong_worker_ctx_h worker, uint64_t task_id, zhulong_task_ctx_h* out_task) { \
-    if (!worker || !out_task) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT; \
-    try { \
-        auto t = std::make_unique<zhulong_task_ctx_t>(); \
-        t->worker = reinterpret_cast<zhulong_worker_ctx_t*>(worker); \
-        t->task_id = task_id; \
-        *out_task = reinterpret_cast<zhulong_task_ctx_h>(t.release()); \
-        return ZHULONG_PLUGIN_OK; \
-    } catch (...) { \
-        return ZHULONG_PLUGIN_ERR_INTERNAL; \
-    } \
-} \
-\
-static void plugin_task_close(zhulong_task_ctx_h task) { \
-    try { \
-        delete reinterpret_cast<zhulong_task_ctx_t*>(task); \
-    } catch (...) {} \
-} \
-\
-static zhulong_status_t plugin_process(zhulong_task_ctx_h task, const zhulong_frame_view* frame, zhulong_inference_result** out_result) { \
-    if (!task || !frame || !out_result) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT; \
-    try { \
-        auto t = reinterpret_cast<zhulong_task_ctx_t*>(task); \
-        zhulong::Image img(*frame); \
-        std::vector<zhulong::Detection> dets = t->worker->model_grp->plugin->detect(t->worker->session, img); \
-        \
-        auto res = new zhulong_inference_result(); \
-        res->frame_id = frame->frame_id; \
-        res->task_id = t->task_id; \
-        res->result_type = ZHULONG_RESULT_TYPE_DETECTION; \
-        res->count = static_cast<uint32_t>(dets.size()); \
-        if (!dets.empty()) { \
-            auto boxes = new zhulong_bbox[dets.size()]; \
-            for (size_t i = 0; i < dets.size(); ++i) { \
-                boxes[i].x = dets[i].x; \
-                boxes[i].y = dets[i].y; \
-                boxes[i].width = dets[i].w; \
-                boxes[i].height = dets[i].h; \
-                boxes[i].confidence = dets[i].confidence; \
-                boxes[i].class_id = dets[i].class_id; \
-                std::strncpy(boxes[i].label, dets[i].label.c_str(), sizeof(boxes[i].label) - 1); \
-                boxes[i].label[sizeof(boxes[i].label) - 1] = '\0'; \
-            } \
-            res->data = boxes; \
-            res->internal_token = boxes; \
-        } else { \
-            res->data = nullptr; \
-            res->internal_token = nullptr; \
-        } \
-        *out_result = res; \
-        return ZHULONG_PLUGIN_OK; \
-    } catch (...) { \
-        return ZHULONG_PLUGIN_ERR_INTERNAL; \
-    } \
-} \
-\
-static void plugin_result_release(zhulong_inference_result* result) { \
-    if (!result) return; \
-    try { \
-        if (result->internal_token) { \
-            delete[] reinterpret_cast<zhulong_bbox*>(result->internal_token); \
-        } \
-        delete result; \
-    } catch (...) {} \
-} \
-\
-zhulong_status_t zhulong_plugin_get_api(uint32_t requested_version, void* out_api_table, size_t table_size) { \
-    if (requested_version != 1) return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED; \
-    if (!out_api_table || table_size < sizeof(zhulong_plugin_api_v1)) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT; \
-    try { \
-        auto api = reinterpret_cast<zhulong_plugin_api_v1*>(out_api_table); \
-        std::memset(api, 0, sizeof(*api)); \
-        api->struct_size = static_cast<uint32_t>(sizeof(zhulong_plugin_api_v1)); \
-        api->api_version = 1; \
-        api->plugin_name = PluginNameStr; \
-        api->plugin_version = PluginVersionStr; \
-        api->model_create = plugin_model_create; \
-        api->model_destroy = plugin_model_destroy; \
-        api->worker_create = plugin_worker_create; \
-        api->worker_destroy = plugin_worker_destroy; \
-        api->task_open = plugin_task_open; \
-        api->task_close = plugin_task_close; \
-        api->process = plugin_process; \
-        api->result_release = plugin_result_release; \
-        return ZHULONG_PLUGIN_OK; \
-    } catch (...) { \
-        return ZHULONG_PLUGIN_ERR_INTERNAL; \
-    } \
-} \
+namespace zhulong {
+namespace detail {
+
+struct DetectionResultAdapter {
+    using item_type = zhulong_bbox;
+    static constexpr zhulong_result_type_t result_type = ZHULONG_RESULT_TYPE_DETECTION;
+
+    template<typename PluginClass>
+    static std::vector<Detection> infer(PluginClass& plugin, Session& session, const Image& image) {
+        return plugin.detect(session, image);
+    }
+
+    static void serialize(const Detection& source, item_type& destination) {
+        destination = {};
+        destination.x = source.x;
+        destination.y = source.y;
+        destination.width = source.w;
+        destination.height = source.h;
+        destination.confidence = source.confidence;
+        destination.class_id = source.class_id;
+        std::strncpy(destination.label, source.label.c_str(), sizeof(destination.label) - 1);
+    }
+};
+
+struct ClassificationResultAdapter {
+    using item_type = zhulong_classification_item;
+    static constexpr zhulong_result_type_t result_type = ZHULONG_RESULT_TYPE_CLASSIFICATION;
+
+    template<typename PluginClass>
+    static std::vector<Classification> infer(PluginClass& plugin, Session& session, const Image& image) {
+        return plugin.classify(session, image);
+    }
+
+    static void serialize(const Classification& source, item_type& destination) {
+        destination = {};
+        destination.class_id = source.class_id;
+        destination.confidence = source.confidence;
+        std::strncpy(destination.label, source.label.c_str(), sizeof(destination.label) - 1);
+    }
+};
+
+template<typename PluginClass, typename ResultAdapter>
+struct PluginApi {
+    struct ModelGroup {
+        std::unique_ptr<PluginClass> plugin;
+    };
+
+    struct WorkerContext {
+        ModelGroup* model_group{nullptr};
+        Session session;
+    };
+
+    struct TaskContext {
+        WorkerContext* worker{nullptr};
+        uint64_t task_id{0};
+    };
+
+    static zhulong_status_t model_create(const char* config_json, zhulong_model_group_h* out_model) {
+        if (!out_model) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+        *out_model = nullptr;
+        try {
+            auto model_group = std::make_unique<ModelGroup>();
+            model_group->plugin = std::make_unique<PluginClass>();
+            zhulong_status_t rc = model_group->plugin->init(config_json ? config_json : "");
+            if (rc != ZHULONG_PLUGIN_OK) return rc;
+            *out_model = reinterpret_cast<zhulong_model_group_h>(model_group.release());
+            return ZHULONG_PLUGIN_OK;
+        } catch (...) {
+            return ZHULONG_PLUGIN_ERR_INTERNAL;
+        }
+    }
+
+    static void model_destroy(zhulong_model_group_h model) {
+        try {
+            delete reinterpret_cast<ModelGroup*>(model);
+        } catch (...) {}
+    }
+
+    static zhulong_status_t worker_create(zhulong_model_group_h model, uint32_t worker_id,
+                                          zhulong_worker_ctx_h* out_worker) {
+        if (!model || !out_worker) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+        *out_worker = nullptr;
+        try {
+            auto* model_group = reinterpret_cast<ModelGroup*>(model);
+            auto worker = std::make_unique<WorkerContext>();
+            worker->model_group = model_group;
+            worker->session = model_group->plugin->create_session(worker_id);
+            *out_worker = reinterpret_cast<zhulong_worker_ctx_h>(worker.release());
+            return ZHULONG_PLUGIN_OK;
+        } catch (...) {
+            return ZHULONG_PLUGIN_ERR_INTERNAL;
+        }
+    }
+
+    static void worker_destroy(zhulong_worker_ctx_h worker) {
+        try {
+            delete reinterpret_cast<WorkerContext*>(worker);
+        } catch (...) {}
+    }
+
+    static zhulong_status_t task_open(zhulong_worker_ctx_h worker, uint64_t task_id,
+                                      zhulong_task_ctx_h* out_task) {
+        if (!worker || !out_task) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+        *out_task = nullptr;
+        try {
+            auto task = std::make_unique<TaskContext>();
+            task->worker = reinterpret_cast<WorkerContext*>(worker);
+            task->task_id = task_id;
+            *out_task = reinterpret_cast<zhulong_task_ctx_h>(task.release());
+            return ZHULONG_PLUGIN_OK;
+        } catch (...) {
+            return ZHULONG_PLUGIN_ERR_INTERNAL;
+        }
+    }
+
+    static void task_close(zhulong_task_ctx_h task) {
+        try {
+            delete reinterpret_cast<TaskContext*>(task);
+        } catch (...) {}
+    }
+
+    static zhulong_status_t process(zhulong_task_ctx_h task, const zhulong_frame_view* frame,
+                                    zhulong_inference_result** out_result) {
+        if (!task || !frame || !out_result) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+        *out_result = nullptr;
+        try {
+            auto* task_context = reinterpret_cast<TaskContext*>(task);
+            Image image(*frame);
+            auto values = ResultAdapter::infer(*task_context->worker->model_group->plugin,
+                                               task_context->worker->session, image);
+            auto result = std::make_unique<zhulong_inference_result>();
+            result->frame_id = frame->frame_id;
+            result->task_id = task_context->task_id;
+            result->result_type = ResultAdapter::result_type;
+            result->count = static_cast<uint32_t>(values.size());
+
+            std::unique_ptr<typename ResultAdapter::item_type[]> items;
+            if (!values.empty()) {
+                items = std::make_unique<typename ResultAdapter::item_type[]>(values.size());
+                for (size_t i = 0; i < values.size(); ++i) {
+                    ResultAdapter::serialize(values[i], items[i]);
+                }
+            }
+            result->data = items.get();
+            result->internal_token = items.get();
+            *out_result = result.release();
+            items.release();
+            return ZHULONG_PLUGIN_OK;
+        } catch (...) {
+            return ZHULONG_PLUGIN_ERR_INTERNAL;
+        }
+    }
+
+    static void result_release(zhulong_inference_result* result) {
+        if (!result) return;
+        try {
+            delete[] static_cast<typename ResultAdapter::item_type*>(result->internal_token);
+            delete result;
+        } catch (...) {}
+    }
+
+    static zhulong_status_t get_api(uint32_t requested_version, void* out_api_table, size_t table_size,
+                                    const char* plugin_name, const char* plugin_version) {
+        if (requested_version != 1) return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
+        if (!out_api_table || table_size < sizeof(zhulong_plugin_api_v1)) {
+            return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+        }
+        try {
+            auto* api = reinterpret_cast<zhulong_plugin_api_v1*>(out_api_table);
+            std::memset(api, 0, sizeof(*api));
+            api->struct_size = static_cast<uint32_t>(sizeof(zhulong_plugin_api_v1));
+            api->api_version = 1;
+            api->plugin_name = plugin_name;
+            api->plugin_version = plugin_version;
+            api->model_create = model_create;
+            api->model_destroy = model_destroy;
+            api->worker_create = worker_create;
+            api->worker_destroy = worker_destroy;
+            api->task_open = task_open;
+            api->task_close = task_close;
+            api->process = process;
+            api->result_release = result_release;
+            return ZHULONG_PLUGIN_OK;
+        } catch (...) {
+            return ZHULONG_PLUGIN_ERR_INTERNAL;
+        }
+    }
+};
+
+} // namespace detail
+} // namespace zhulong
+
+#define ZHULONG_REGISTER_PLUGIN_WITH_ADAPTER(PluginClass, PluginNameStr, PluginVersionStr, Adapter) \
+extern "C" ZHULONG_PLUGIN_EXPORT zhulong_status_t zhulong_plugin_get_api( \
+    uint32_t requested_version, void* out_api_table, size_t table_size) { \
+    return ::zhulong::detail::PluginApi<PluginClass, Adapter>::get_api( \
+        requested_version, out_api_table, table_size, PluginNameStr, PluginVersionStr); \
 }
+
+#define ZHULONG_REGISTER_DETECTOR_PLUGIN(PluginClass, PluginNameStr, PluginVersionStr) \
+    ZHULONG_REGISTER_PLUGIN_WITH_ADAPTER(PluginClass, PluginNameStr, PluginVersionStr, \
+                                         ::zhulong::detail::DetectionResultAdapter)
+
+#define ZHULONG_REGISTER_CLASSIFIER_PLUGIN(PluginClass, PluginNameStr, PluginVersionStr) \
+    ZHULONG_REGISTER_PLUGIN_WITH_ADAPTER(PluginClass, PluginNameStr, PluginVersionStr, \
+                                         ::zhulong::detail::ClassificationResultAdapter)
 
 #endif /* ZHULONG_ALGO_HPP */
