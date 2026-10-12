@@ -136,8 +136,13 @@ an ABI marker, checks it enters/exits the actual Go binary, and verifies unchang
 FFmpeg hashes/mtimes and unaffected object files. Do not run it with another writer.
 
 Inspect final executable ELF/NEEDED/version-info and archive member architecture.
-Cross build, target ELF inspection and board runtime remain pending without SDK/
-board; simulated cross rejection tests are not cross compilation acceptance.
+Target profile for RK3568 is verified in `native/profiles/rk3568.json` (Debian 11 bullseye,
+GLIBC 2.31, GCC 10 sysroot with host GCC 14 cross-toolchain): uses `-nostdinc` with sysroot
+GCC 10 C/C++ headers to prevent host GLIBC 2.34+ symbol leakage, sysroot library search paths,
+and `-Wl,-u,__cxa_call_terminate -lsupc++` for noexcept exception termination resolution.
+Verified on live board via SSH: dynamic dependencies completely resolved (0 missing), smoke
+test pass, native test suite (including loopback RTSP integration) pass, and Go bridge
+integration tests pass.
 See `native/README.md` for source/licensing preservation and distribution limits.
 
 ## 7. Wrong vs Correct

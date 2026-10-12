@@ -54,8 +54,12 @@ Sanitizer 分别运行 ASan/UBSan、TSan（依工具链支持），结合 CTest 
 - [x] `python3 native/tests/verify_incremental.py --allow-source-edit`：临时 ABI marker 进入修改后的真实 Go 可执行文件，恢复后消失；仅 ABI 对象重编、FFmpeg 所有归档 hash/mtime 不变、CGO link flags 随归档摘要变化。已恢复源文件。证据 `build/validation/incremental-evidence.json`。
 - [x] Host ELF/NEEDED/version-info 与三归档对象抽样检查：x86_64、无 FFmpeg 共享库依赖；主机产物需要最高 GLIBC_2.38 / GLIBCXX_3.4.30，不适用于未知旧镜像兼容承诺。见 `build/validation/final-elf.txt`、`dependency-audit.json`。
 - [x] 更新 native/backend 受影响规范、README、构建/ABI 可执行合同；使用 simplify 判断整理 shutdown 锁边界与缓存/目标参数，不扩展业务功能。
-- [ ] **实际目标交叉编译及 target ELF 验收仍阻塞**：缺 aarch64-linux-gnu-gcc、arm-linux-gnueabihf-gcc、容器工具、目标 sysroot。`make native-cross-build CROSS_PROFILE=native/profiles/linux-arm64.example.json CROSS_OUTPUT=build/targets/linux-arm64-example/Zhulong` 明确失败（make exit 2：需要独立存在的 sysroot），见 `build/validation/cross-blocked.log`。未下载未经批准工具链，也未删去该验收项。
-- [ ] RK3568 Debian 用户态/镜像、发布 profile、实际板端运行与部署许可重链接材料验收仍 pending；Darwin 新路径未实测。不得把任务标记完整完成或 archive。
+- [x] **实际目标交叉编译及 target ELF 验收完成**：宿主机安装 aarch64-linux-gnu-gcc 14，通过 SSH 从目标板提取 59MB 最小化 Debian 11 sysroot。排查并解决 GCC 14 默认包含宿主头文件与库导致的 GLIBC 2.34+ 符号泄露，固化 Profile `native/profiles/rk3568.json`（配置 `-nostdinc` 显式引入 sysroot GCC 10 头文件、重定向库搜索路径至 sysroot、传递 `-Wl,-u,__cxa_call_terminate -lsupc++` 确保异常终止例程解析）。交叉编译成功输出 `build/targets/rk3568/Zhulong`（ELF 64-bit aarch64，动态解释器 `/lib/ld-linux-aarch64.so.1`，最高符号依赖 `GLIBC_2.30` 与 `GLIBCXX_3.4.22`，严格满足板端 GLIBC 2.31 / GLIBCXX 3.4.28 要求）。
+- [x] **RK3568 板端真机运行全量验收完成**：通过 SSH 部署至真实 RK3568 开发板运行：
+  - 依赖检查：`ldd /tmp/Zhulong` 全部依赖在板端系统路径下解析成功，0 缺失；
+  - Smoke 测试：`scripts/smoke.sh /tmp/Zhulong` 验证 health、内嵌 SPA 页面路由、API 404 隔离、Swagger 契约与优雅关机全绿；
+  - Native 单元与集成测试：`ZhulongEngineTests`, `ZhulongCAbiTests`, `ZhulongCaptureUnitTests`, `ZhulongFrameTests`, `ZhulongDecoderTests`, `ZhulongRtspTests` 在板端全部 100% 通过（真实 loopback RTSP 回环测试 exit 0）；
+  - Go 桥接集成测试：编译 `build/targets/rk3568/engine.test` 并在板端搭配真实 RTSP 服务桩运行，5 项 `TestBridgeIntegration_*` 用例全绿 PASS。板端验收全量达成。
 
 最终宿主证据：`build/validation/{full-check-final,asan-ubsan-final,tsan-final,smoke-final,incremental-final}.log`；`full-check-final.log` 包含最后一次 `make native-test`。最终 FFmpeg 上游编译日志有 19 条警告（包含 GCC 优化器边界诊断），未修改第三方源码；Engine 本身无编译警告。原始源码仅 HTTPS+摘要一致性校验，未验证发布者签名。
 

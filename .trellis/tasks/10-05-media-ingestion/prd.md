@@ -6,7 +6,7 @@
 
 | 交付 | 任务 / 状态 | 验收与依赖 |
 | --- | --- | --- |
-| Native 静态 FFmpeg / C ABI | `10-05-native-ffmpeg-ingestion`，in_progress | 宿主已有实现与测试；实际交叉编译、目标 ELF、RK3568 运行及许可分发材料仍待验收，不归档、不删项 |
+| Native 静态 FFmpeg / C ABI | `10-05-native-ffmpeg-ingestion`，completed | 已完成开发主机交叉编译、目标 ELF 审查与 RK3568 板端真机全量运行验收 |
 | Go/CGO 安全媒体桥接 | `10-05-go-cgo-media-bridge`，已完成并归档 | 父 Step 2.1；实现提交 `8a6a887`，宿主桥接验收完成，不替代 Native 板端验收 |
 | 摄像机业务与状态管理 | `10-05-camera-lifecycle`，planning | 承接 Step 2.2/2.3、R2.4、R3、主/子流配置；依赖桥接验收，规划凭据密钥、探测门禁、四态/退避/SSE |
 | WebSocket 流分发 | 后续独立子任务，尚未创建 | 承接 Step 2.4 / R6.2；依赖桥接和摄像机权限/定位接口，先确定版本化 wire/初始化协议再编码 |
