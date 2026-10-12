@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/native/index.md", "reason": "Use the native quality baseline and make native-test validation target."}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "Review ABI compatibility, result payload type, plugin export, and preprocessing behavior against the algorithm contract."}
+{"file": ".trellis/tasks/10-12-algorithm-runtime-correctness/research/source-audit.md", "reason": "Cross-check changed behavior against the original static findings."}

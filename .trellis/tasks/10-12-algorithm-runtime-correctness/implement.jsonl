@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "Preserve the v1 C ABI and plugin registration/result contract while adding classifier result traits."}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "Keep the implementation within the native SDK/runtime/runner and tests boundaries."}
+{"file": ".trellis/tasks/10-12-algorithm-runtime-correctness/research/source-audit.md", "reason": "Use the verified source findings and line anchors as implementation scope."}
