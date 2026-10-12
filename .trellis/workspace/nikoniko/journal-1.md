@@ -965,3 +965,44 @@ Session summary was not supplied.
 
 - 归档 10-11-native-pipeline-stability 任务
 - 推进 10-10-algorithm-plugin-architecture 插件架构设计最终评审
+
+
+## Session 25: 完成 RK3568 交叉编译工具链配置与真机全量运行验收
+<!-- trellis-session: v=2 fp=7950368cc1d3a0b9 -->
+
+**Date**: 2026-10-12
+**Task**: 完成 RK3568 交叉编译工具链配置与真机全量运行验收
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+在宿主机完成目标架构 ARM64 (RK3568 Debian 11) 的静态 FFmpeg、C++ Engine 与 Go/CGO 全链路交叉编译，解决高版本宿主 GCC 14 符号泄露与异常终止符号解析，并在物理开发板实测通过全部 Smoke 测试、C++ 原生测试与 Go 桥接集成测试。
+
+### Main Changes
+
+- native/profiles/rk3568.json: 固化目标板交叉编译 Profile，通过 -nostdinc 显式注入 sysroot GCC 10 头文件并隔离宿主 GLIBC 2.34+ 符号，注入 -Wl,-u,__cxa_call_terminate -lsupc++ 解决析构异常处理符号解析
+- sysroot: 从板端提取 59MB 最小化精炼 Debian 11 sysroot 至 build/sysroots/rk3568，处理绝对软链接为相对链接确保 tree_digest 内容指纹校验通过
+- spec & prd: 更新 ingestion-contract.md 规范与 10-05-native-ffmpeg-ingestion prd/implement 记录，验收标准全量标记完成
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `55097ed` | feat(native): configure rk3568 cross-compilation profile and complete board validation |
+
+### Testing
+
+- [OK] [OK] make native-cross-build: 产出 build/targets/rk3568/Zhulong，readelf 确认 aarch64，GLIBC <= 2.30，GLIBCXX <= 3.4.22，无 FFmpeg shared NEEDED
+- [OK] [OK] 板端真机 Smoke 测试: scripts/smoke.sh /tmp/Zhulong 验证 health/SPA/API404/Swagger/优雅停机全绿通过
+- [OK] [OK] 板端真机 Native 测试: ZhulongEngineTests, ZhulongCAbiTests, ZhulongCaptureUnitTests, ZhulongFrameTests, ZhulongDecoderTests, ZhulongRtspTests 全部 100% 通过
+- [OK] [OK] 板端真机 Go-CGO 桥接测试: build/targets/rk3568/engine.test 搭配真实 RTSP 回环服务桩运行 5 项用例全绿 PASS
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 归档 10-05-native-ffmpeg-ingestion 任务
+- 推进父任务 10-05-media-ingestion 下一阶段 10-05-camera-lifecycle
