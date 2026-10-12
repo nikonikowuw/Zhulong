@@ -13,6 +13,7 @@
 | [CGO 交互与内存契约](./cgo-contract.md) | 内存所有权、不透明句柄、Go 指针规则、异常隔离与线程绑定 |
 | [RTSP 接入与静态构建合同](./ingestion-contract.md) | 已实现 ABI、回调 drain、时钟/超时、FFmpeg 缓存与 host/cross/CGO 链接 |
 | [节点流水线设计](./pipeline-guidelines.md) | 节点职责、有界队列背压、零拷贝缓冲传递、5 步优雅停机 |
+| [算法插件系统与 SDK 规范](./algo-plugin-contract.md) | 纯 C ABI 隔离、现代 C++17 SDK、公共运行库 HAL 与独立验包 CLI |
 
 ---
 

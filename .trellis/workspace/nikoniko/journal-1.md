@@ -1120,3 +1120,43 @@ Session summary was not supplied.
 
 - 用户审阅子任务一 10-12-algo-plugin-sdk-runner 规划
 - 确认后执行 task.py start 10-12-algo-plugin-sdk-runner 正式开始编码实施
+
+
+## Session 29: 交付算法插件系统阶段一：纯 C ABI、现代 C++17 SDK、公共运行库 HAL 与通用 Runner
+<!-- trellis-session: v=2 fp=6a7b8c9d0e1f2a3b -->
+
+**Date**: 2026-10-12
+**Task**: 交付算法插件系统阶段一：纯 C ABI、现代 C++17 SDK、公共运行库 HAL 与通用 Runner
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+完成算法插件系统阶段一（10-12-algo-plugin-sdk-runner）全部核心交付物：实现纯 C ABI 导出规范 (v1)、现代 C++17 Header-only SDK 门面、公共算法运行库 HAL 与 CPU 优化桩、通用 Native Runner 与独立黑盒验包 CLI，以及脱机示例插件。通过 C11 纯 C 兼容、多 Worker 并发、ASan/UBSan、TSan 等全量测试。
+
+### Main Changes
+
+- native/sdk/include/zhulong/plugin.h: 定义纯 C ABI 导出规范 (v1)，使用定宽整数与不透明句柄，隔离底层 C++ 异常与专有符号
+- native/sdk/include/zhulong/algo.hpp: 面向插件开发者的类 PyTorch/OpenCV 现代 C++17 Header-only SDK，封装 Model、Session、Tensor、Letterbox、NMS 与防爆门导出宏
+- native/src/algorithm/runtime/: 实现统一 HAL 接口 (IInferenceBackend / IVisionBackend) 与 CPU 优化桩，产出 libzhulong_algo_runtime.so
+- native/src/algorithm/runner/runner.cpp: 通用 Native Runner 宿主进程与独立单次黑盒验包 CLI 工具 (--verify-plugin <so> --sample <file>)
+- native/tests/: 新增纯 C ABI 测试 (plugin_c_abi_test.c)、HAL 单元测试 (algo_runtime_test.cpp)、多 Worker 并发与插件生命周期测试 (algo_runner_test.cpp) 以及 MockDetector、MockClassifier 示例插件
+- native/CMakeLists.txt: 接入全部新增目标，增加 ZhulongPluginCAbi、ZhulongAlgoRuntime、ZhulongAlgoRunner、ZhulongAlgoVerifyCli 测试
+- .trellis/spec/native/: 新增 algo-plugin-contract.md，并更新 directory-structure.md 与 index.md
+
+### Testing
+
+- [OK] make native-test: 11/11 测试全部通过 (含纯 C ABI、HAL、多 Worker 调度、验包 CLI 及原有 RTSP/解码测试)
+- [OK] ASan / UBSan: 11/11 测试通过，零内存泄漏与未定义行为
+- [OK] TSan: 11/11 测试通过，零数据竞争
+- [OK] make go-check: Go vet、Go test -race 及 Go bridge 集成测试 100% 通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 提请用户确认阶段一验收成果，准备提交变更
+- 启动阶段二规划（跨进程 FrameBroker 与共享内存租赁通信）
+

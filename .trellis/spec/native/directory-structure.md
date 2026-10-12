@@ -25,8 +25,15 @@
 native/
   include/
     Zhulong/engine.h            # 唯一公开纯 C ABI 头文件 (提供给 Go/CGO 引用)
+  sdk/
+    include/zhulong/
+      plugin.h                # 插件纯 C ABI 导出规范 (v1)
+      algo.hpp                # 面向开发者的现代化 C++17 Header-only SDK
   src/
     abi/engine.cpp            # C ABI 包装实现 (句柄转换、全异常拦截)
+    algorithm/                # 算法插件系统
+      runtime/                # 公共运行库 HAL (IInferenceBackend, IVisionBackend, CPU桩)
+      runner/                 # 独立算法 Runner 宿主与独立黑盒验包 CLI
     pipeline/                 # 节点基类、流水线编排、中立契约与有界队列
       node.hpp, pipeline.hpp, packet.hpp, frame.hpp, result.hpp, bounded_queue.hpp
     nodes/                    # 具体处理节点 (单向通过有界队列传递)

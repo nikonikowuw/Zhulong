@@ -148,6 +148,47 @@ target_compile_options(ZhulongEngine PRIVATE
 )
 
 # ==============================================================================
+#                      4.1 构建公共算法运行库 (libzhulong_algo_runtime.so)
+# ==============================================================================
+add_library(ZhulongAlgoRuntime SHARED
+    src/algorithm/runtime/cpu_inference_backend.cpp
+    src/algorithm/runtime/cpu_vision_backend.cpp
+    src/algorithm/runtime/runtime_factory.cpp
+)
+target_compile_features(ZhulongAlgoRuntime PUBLIC cxx_std_17)
+target_include_directories(ZhulongAlgoRuntime
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_options(ZhulongAlgoRuntime PRIVATE
+    $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wall;-Wextra;-Wpedantic>
+)
+
+# ==============================================================================
+#                      4.2 构建通用算法 Runner 进程 (zhulong_algo_runner)
+# ==============================================================================
+add_executable(zhulong_algo_runner
+    src/algorithm/runner/runner.cpp
+)
+target_compile_features(zhulong_algo_runner PUBLIC cxx_std_17)
+target_include_directories(zhulong_algo_runner
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
+)
+target_link_libraries(zhulong_algo_runner PRIVATE ${CMAKE_DL_LIBS})
+
+# ==============================================================================
+#                      4.3 构建示例脱机插件 (.so)
+# ==============================================================================
+add_library(MockDetector SHARED tests/plugins/mock_detector/mock_detector.cpp)
+target_compile_features(MockDetector PUBLIC cxx_std_17)
+target_include_directories(MockDetector PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MockDetector PRIVATE ZhulongAlgoRuntime)
+
+add_library(MockClassifier SHARED tests/plugins/mock_classifier/mock_classifier.cpp)
+target_compile_features(MockClassifier PUBLIC cxx_std_17)
+target_include_directories(MockClassifier PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MockClassifier PRIVATE ZhulongAlgoRuntime)
+
+# ==============================================================================
 #                      5. 单元测试与集成测试构建（BUILD_TESTING）
 # ==============================================================================
 if(BUILD_TESTING)
@@ -162,6 +203,31 @@ if(BUILD_TESTING)
     target_link_libraries(ZhulongCAbiTests PRIVATE ZhulongEngine)
     set_target_properties(ZhulongCAbiTests PROPERTIES LINKER_LANGUAGE CXX)
     add_test(NAME ZhulongCAbiLifecycle COMMAND ZhulongCAbiTests)
+
+    # 插件纯 C ABI 契约测试
+    add_executable(ZhulongPluginCAbiTests tests/plugin_c_abi_test.c)
+    target_compile_features(ZhulongPluginCAbiTests PRIVATE c_std_11)
+    target_include_directories(ZhulongPluginCAbiTests PRIVATE sdk/include)
+    add_test(NAME ZhulongPluginCAbi COMMAND ZhulongPluginCAbiTests)
+    set_tests_properties(ZhulongPluginCAbi PROPERTIES TIMEOUT 10)
+
+    # 算法公共运行库与 HAL 单元测试
+    add_executable(ZhulongAlgoRuntimeTests tests/algo_runtime_test.cpp)
+    target_link_libraries(ZhulongAlgoRuntimeTests PRIVATE ZhulongAlgoRuntime)
+    add_test(NAME ZhulongAlgoRuntime COMMAND ZhulongAlgoRuntimeTests)
+    set_tests_properties(ZhulongAlgoRuntime PROPERTIES TIMEOUT 10)
+
+    # 算法 Runner 与示例插件集成测试
+    add_executable(ZhulongAlgoRunnerTests tests/algo_runner_test.cpp)
+    target_compile_features(ZhulongAlgoRunnerTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongAlgoRunnerTests PRIVATE sdk/include)
+    target_link_libraries(ZhulongAlgoRunnerTests PRIVATE ${CMAKE_DL_LIBS})
+    add_test(NAME ZhulongAlgoRunner COMMAND ZhulongAlgoRunnerTests $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier>)
+    set_tests_properties(ZhulongAlgoRunner PROPERTIES TIMEOUT 10)
+
+    # 独立黑盒验包 CLI 工具测试
+    add_test(NAME ZhulongAlgoVerifyCli COMMAND zhulong_algo_runner --verify-plugin $<TARGET_FILE:MockDetector> --sample mock_sample.jpg)
+    set_tests_properties(ZhulongAlgoVerifyCli PROPERTIES TIMEOUT 10)
 
     # RTSP 采集节点单元测试（URL 规范化、选项、排空）
     add_executable(ZhulongCaptureUnitTests tests/capture_unit_test.cpp)
