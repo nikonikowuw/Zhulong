@@ -19,7 +19,8 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "10-12-algo-plugin-sdk-runner"
+    "10-12-algo-plugin-sdk-runner",
+    "10-12-algo-framebroker-shm"
   ],
   "parent": null,
   "relatedFiles": [],

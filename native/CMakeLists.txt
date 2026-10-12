@@ -164,19 +164,36 @@ target_compile_options(ZhulongAlgoRuntime PRIVATE
 )
 
 # ==============================================================================
-#                      4.2 构建通用算法 Runner 进程 (zhulong_algo_runner)
+#                      4.2 构建跨进程 IPC 与 FrameBroker 库 (ZhulongAlgoIpc)
+# ==============================================================================
+add_library(ZhulongAlgoIpc STATIC
+    src/algorithm/ipc/shm_pool.cpp
+    src/algorithm/ipc/unix_socket.cpp
+    src/algorithm/ipc/frame_broker.cpp
+)
+target_compile_features(ZhulongAlgoIpc PUBLIC cxx_std_17)
+target_include_directories(ZhulongAlgoIpc
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(ZhulongAlgoIpc PUBLIC Threads::Threads)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(ZhulongAlgoIpc PUBLIC rt)
+endif()
+
+# ==============================================================================
+#                      4.3 构建通用算法 Runner 进程 (zhulong_algo_runner)
 # ==============================================================================
 add_executable(zhulong_algo_runner
     src/algorithm/runner/runner.cpp
 )
 target_compile_features(zhulong_algo_runner PUBLIC cxx_std_17)
 target_include_directories(zhulong_algo_runner
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(zhulong_algo_runner PRIVATE ${CMAKE_DL_LIBS})
+target_link_libraries(zhulong_algo_runner PRIVATE ZhulongAlgoIpc ${CMAKE_DL_LIBS})
 
 # ==============================================================================
-#                      4.3 构建示例脱机插件 (.so)
+#                      4.4 构建示例脱机插件 (.so)
 # ==============================================================================
 add_library(MockDetector SHARED tests/plugins/mock_detector/mock_detector.cpp)
 target_compile_features(MockDetector PUBLIC cxx_std_17)
@@ -235,11 +252,19 @@ if(BUILD_TESTING)
     add_test(NAME ZhulongAlgoRunner COMMAND ZhulongAlgoRunnerTests $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier>)
     set_tests_properties(ZhulongAlgoRunner PROPERTIES TIMEOUT 10)
 
+    # FrameBroker 跨进程共享内存与租约集成测试
+    add_executable(ZhulongFrameBrokerTests tests/frame_broker_test.cpp)
+    target_compile_features(ZhulongFrameBrokerTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongFrameBrokerTests PRIVATE sdk/include include src)
+    target_link_libraries(ZhulongFrameBrokerTests PRIVATE ZhulongAlgoIpc)
+    add_test(NAME ZhulongFrameBroker COMMAND ZhulongFrameBrokerTests $<TARGET_FILE:zhulong_algo_runner> $<TARGET_FILE:MockDetector>)
+    set_tests_properties(ZhulongFrameBroker PROPERTIES TIMEOUT 15)
+
     add_executable(ZhulongAlgoJsonTests tests/algo_json_test.cpp)
     target_compile_features(ZhulongAlgoJsonTests PRIVATE cxx_std_17)
     target_include_directories(ZhulongAlgoJsonTests PRIVATE src/algorithm/runner)
 
-    foreach(TEST_TARGET ZhulongAlgoRuntimeTests ZhulongAlgoRunnerTests ZhulongAlgoJsonTests)
+    foreach(TEST_TARGET ZhulongAlgoRuntimeTests ZhulongAlgoRunnerTests ZhulongAlgoJsonTests ZhulongFrameBrokerTests)
         target_compile_options(${TEST_TARGET} PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
     endforeach()
 

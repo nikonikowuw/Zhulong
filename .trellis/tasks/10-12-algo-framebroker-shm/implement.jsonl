@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/native/index.md", "reason": "原生引擎与流水线规范总览"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "C++ 目录架构与单向依赖规范"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "HardwareFrame 帧契约、有界队列背压与优雅停机规范"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法插件架构与纯 C ABI 导出规范"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/research/process-thread-model.md", "reason": "一包一进程、共享内存与跨进程通信调研"}

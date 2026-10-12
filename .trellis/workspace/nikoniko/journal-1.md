@@ -1160,3 +1160,44 @@ Session summary was not supplied.
 - 提请用户确认阶段一验收成果，准备提交变更
 - 启动阶段二规划（跨进程 FrameBroker 与共享内存租赁通信）
 
+
+## Session 30: 实现算法插件系统阶段二：跨进程 FrameBroker 与共享内存帧租赁分发
+<!-- trellis-session: v=2 fp=8b9c0d1e2f3a4b5c -->
+
+**Date**: 2026-10-12
+**Task**: 实现算法插件系统阶段二：跨进程 FrameBroker 与共享内存帧租赁分发
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+完成算法插件系统阶段二（10-12-algo-framebroker-shm）全部核心交付物：实现定长二进制 IPC 控制协议（ipc_protocol.hpp）、POSIX 共享内存环形槽位池（ShmPool）、带代次保护与慢包丢帧背压的 FrameBroker 调度器、高并发线程安全的 Unix Domain Socket 通信层（UnixSocketServer / UnixSocketClient），并在通用 Runner 中集成 --plugin 与 --broker 工作模式。测试覆盖多客户端并发、过时 ACK 防 ABA、慢客户端丢帧隔离、客户端崩溃（SIGKILL）租约瞬间自愈回收，以及真实独立子进程 exec 全链路推理。
+
+### Main Changes
+
+- native/src/algorithm/ipc/ipc_protocol.hpp: 定义定长 16 字节头部与定长载荷控制协议（IpcHeader / HandshakeReq / HandshakeResp / FrameDispatchMsg / FrameAckMsg），提供静态断言大小对齐校验
+- native/src/algorithm/ipc/shm_layout.hpp: 定义 POSIX 共享内存池 64 字节头部与 4MB 槽位布局
+- native/src/algorithm/ipc/shm_pool.hpp / .cpp: 封装 POSIX 共享内存池，主进程独占读写，子进程只读映射（PROT_READ）物理防篡改
+- native/src/algorithm/ipc/unix_socket.hpp / .cpp: 封装基于 UDS 的线程安全 IPC 服务端与客户端，通过 per-channel 发送锁与 atomic listen fd 消除并发数据竞争
+- native/src/algorithm/ipc/frame_broker.hpp / .cpp: 核心帧调度器，实现槽位代次单调自增（generation）、活跃租约管理（active_leases）、慢消费者丢帧背压（max_in_flight 阈值限制）与子进程断连自愈回收
+- native/src/algorithm/runner/runner.cpp: 扩展主程序支持 --plugin 与 --broker 参数，实现独立子进程通过 UDS 握手、只读映射 SHM 槽位、驱动插件推理并回传 ACK
+- native/tests/frame_broker_test.cpp: 编写 5 大集成测试场景（SHM 基础读写、多端分发与代次保护、慢客户端背压隔离、客户端崩溃自愈回收、真实子进程 exec 推理）
+- native/CMakeLists.txt: 构建静态库 ZhulongAlgoIpc 并接入全量 CTest
+
+### Testing
+
+- [OK] make native-test: 15/15 测试全部通过（含 ZhulongFrameBroker 0.56s 跑完 5 大集成场景）
+- [OK] ASan / UBSan: 15/15 测试通过，零内存泄漏、零越界、零未定义行为
+- [OK] TSan: 15/15 测试通过，多线程并发与 IPC I/O 零数据竞争（Data Race Free）
+- [OK] make go-check: Go vet、Go test -race 及 Go Bridge 真实 RTSP 回环压测 100% 正常通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 提请用户确认阶段二交付成果，准备归档与提交变更
+- 启动阶段三规划（Go 包生命周期管理、进程看门狗自愈与版本回滚）
+
+
