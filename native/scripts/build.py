@@ -33,6 +33,11 @@ SHA256 = "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f"
 ARCHIVE = ROOT / "build/deps/sources" / f"ffmpeg-{VERSION}.tar.xz"
 
 # FFmpeg 最小化安全裁剪参数（纯静态、位置无关代码 PIC、仅开启 RTSP 与 H264/H265 解码所需组件）
+#
+# 许可证警示：切勿加入 --enable-gpl / --enable-nonfree / --enable-version3。
+# 当前配置产出 LGPL 2.1 or later，这是 Zhulong 以 GPL-3.0 分发（静态链接）得以成立的前提。
+# 一旦启用 --enable-gpl（引入 x264/x265 等 GPL 编码器），整包即变为 GPL，
+# 合规判断随之失效。详见 THIRD-PARTY.md。
 FLAGS = [
     "--disable-autodetect", "--disable-everything", "--disable-programs",
     "--disable-doc", "--disable-avdevice", "--disable-avfilter", "--disable-swscale",
