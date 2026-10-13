@@ -5,6 +5,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
+	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"github.com/nikonikowuw/Zhulong/internal/database"
@@ -69,7 +70,7 @@ type auditOut struct {
 
 	Store       *audit.Store
 	Service     *audit.Service
-	Handler     *audit.Handler
+	Handler     *audithttp.Handler
 	Lifecycle   auditLifecycle
 	AuditRoutes RouteRegistrar `group:"protected_routes"`
 }
@@ -77,7 +78,7 @@ type auditOut struct {
 func provideAudit(dbProvider database.DBProvider, logger *zap.Logger) auditOut {
 	store := audit.NewStore(dbProvider)
 	svc := audit.NewService(store, logger)
-	handler := audit.NewHandler(svc, logger)
+	handler := audithttp.NewHandler(svc, logger)
 	return auditOut{
 		Store:       store,
 		Service:     svc,
@@ -103,11 +104,11 @@ type authOut struct {
 	PublicRoutes RouteRegistrar `group:"public_routes"`
 }
 
-func provideAuth(dbProvider database.DBProvider, auditSvc *audit.Service, logger *zap.Logger) authOut {
+func provideAuth(dbProvider database.DBProvider, logger *zap.Logger) authOut {
 	userStore := auth.NewUserStore(dbProvider)
 	sessionStore := auth.NewMemorySessionStore(7 * 24 * time.Hour)
 	authSvc := auth.NewAuthService(userStore, sessionStore, nil, logger)
-	handler := auth.NewHandler(authSvc, auditSvc)
+	handler := auth.NewHandler(authSvc)
 	return authOut{
 		UserStore:    userStore,
 		SessionStore: sessionStore,
@@ -162,9 +163,6 @@ func provideCamera(
 		}
 	}
 	camHandler := camera.NewHandler(camSvc, hub, streamHub, logger, validateSession)
-	if auditSvc != nil {
-		camHandler.SetAuditor(auditSvc)
-	}
 
 	camMgr := camera.NewLifecycleManager(camStore, keyMgr, lazyC, scheduler, hub, streamHub)
 
@@ -290,8 +288,8 @@ type algorithmOut struct {
 	UploadRoutes    RouteRegistrar `group:"upload_routes"`
 }
 
-func provideAlgorithm(dbProvider database.DBProvider, auditSvc *audit.Service, config Config, logger *zap.Logger) algorithmOut {
-	comp := algorithm.NewAlgorithmComponents(dbProvider, auditSvc, config.DataDir, config.AlgorithmTarget, logger)
+func provideAlgorithm(dbProvider database.DBProvider, config Config, logger *zap.Logger) algorithmOut {
+	comp := algorithm.NewAlgorithmComponents(dbProvider, config.DataDir, config.AlgorithmTarget, logger)
 	return algorithmOut{
 		Store:           comp.Store,
 		Verifier:        comp.Verifier,
@@ -320,8 +318,8 @@ type personOut struct {
 	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
 }
 
-func providePerson(dbProvider database.DBProvider, auditSvc *audit.Service, logger *zap.Logger) personOut {
-	comp := person.NewPersonComponents(dbProvider, auditSvc, logger)
+func providePerson(dbProvider database.DBProvider, logger *zap.Logger) personOut {
+	comp := person.NewPersonComponents(dbProvider, logger)
 	return personOut{
 		Store:           comp.Store,
 		Service:         comp.Service,

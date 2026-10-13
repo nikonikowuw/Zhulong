@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "Gin HTTP 中间件隔离、执行序与洋葱模型规范"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "日志脱敏、结构化字段与 Uber Zap 规范"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "Gin HTTP 统一响应与错误格式规范"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "审计核心包与 Gin 适配子包的依赖方向、禁循环与目录树同步"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite 事务、Prune 删除语义与 WAL 并发写约束"}

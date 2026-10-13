@@ -45,11 +45,10 @@ type RouteRegistrar interface {
 // NewPersonComponents constructs all person domain singletons.
 func NewPersonComponents(
 	dbProvider database.DBProvider,
-	auditor Auditor,
 	logger *zap.Logger,
 ) *PersonComponents {
 	store := NewStore(dbProvider)
-	service := NewService(store, auditor, logger)
+	service := NewService(store, logger)
 	handler := NewHandler(service, logger)
 
 	return &PersonComponents{

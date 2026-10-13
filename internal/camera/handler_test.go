@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
+	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"go.uber.org/zap"
@@ -317,16 +318,7 @@ func TestCameraHandlerStreamWS(t *testing.T) {
 	}
 }
 
-type testCameraAuditor struct {
-	entries []audit.Entry
-}
-
-func (m *testCameraAuditor) Record(entry audit.Entry) {
-	m.entries = append(m.entries, entry)
-}
-
 func TestCameraHandler_AuditLogging(t *testing.T) {
-	auditor := &testCameraAuditor{}
 	tempDir := t.TempDir()
 	dbStore := database.New(tempDir, zap.NewNop())
 	_ = dbStore.OpenAndMigrate(context.Background())
@@ -359,10 +351,18 @@ func TestCameraHandler_AuditLogging(t *testing.T) {
 	defer streamHub.Close()
 
 	handler := NewHandler(service, hub, streamHub, zap.NewNop())
-	handler.SetAuditor(auditor)
+
+	// Wire the real audit middleware: the handler no longer records directly.
+	auditSvc := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
+		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
+	})
+	if err := auditSvc.Start(context.Background()); err != nil {
+		t.Fatalf("start audit service: %v", err)
+	}
 
 	r := gin.New()
 	api := r.Group("/api/v1")
+	api.Use(audithttp.Middleware(auditSvc))
 	handler.RegisterRoutes(api)
 
 	// 1. Create camera with password in RTSP
@@ -423,25 +423,44 @@ func TestCameraHandler_AuditLogging(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Assertions on recorded audits
-	if len(auditor.entries) != 4 {
-		t.Fatalf("expected 4 entries, got %d", len(auditor.entries))
+	// Drain the asynchronous queue, then assert on the persisted trail.
+	stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := auditSvc.Stop(stopCtx); err != nil {
+		t.Fatalf("drain audit service: %v", err)
 	}
-	if auditor.entries[0].Action != audit.ActionCameraCreate || auditor.entries[0].Status != audit.StatusSuccess {
-		t.Errorf("entry 0 mismatch: %+v", auditor.entries[0])
+	entries, total, err := auditSvc.List(context.Background(), audit.Filter{Limit: 20})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
 	}
-	// Password must NOT be present in detail
-	if strings.Contains(auditor.entries[0].Detail, "secret123") {
-		t.Fatalf("plain password found in audit detail: %s", auditor.entries[0].Detail)
+	if total != 4 {
+		t.Fatalf("expected 4 entries, got %d", total)
 	}
-	if auditor.entries[1].Action != audit.ActionCameraToggle || auditor.entries[1].Status != audit.StatusSuccess {
-		t.Errorf("entry 1 mismatch: %+v", auditor.entries[1])
+
+	// Entries come back newest first; index by action so the assertions do not
+	// depend on ordering. Toggle and update share one route, so a missing
+	// TagAction override would collapse them into a single action.
+	byAction := make(map[string]audit.AuditLog, len(entries))
+	for _, e := range entries {
+		byAction[e.Action] = e
 	}
-	if auditor.entries[2].Action != audit.ActionCameraUpdate || auditor.entries[2].Status != audit.StatusSuccess {
-		t.Errorf("entry 2 mismatch: %+v", auditor.entries[2])
+
+	createEntry, ok := byAction[audit.ActionCameraCreate]
+	if !ok || createEntry.Status != audit.StatusSuccess {
+		t.Errorf("camera.create mismatch: %+v", createEntry)
 	}
-	if auditor.entries[3].Action != audit.ActionCameraDelete || auditor.entries[3].Status != audit.StatusSuccess {
-		t.Errorf("entry 3 mismatch: %+v", auditor.entries[3])
+	// The RTSP credential must never appear in the audit detail.
+	if strings.Contains(createEntry.Detail, "secret123") {
+		t.Fatalf("plain password found in audit detail: %s", createEntry.Detail)
+	}
+	if _, ok := byAction[audit.ActionCameraToggle]; !ok {
+		t.Errorf("expected a distinct camera.toggle entry; got %+v", entries)
+	}
+	if _, ok := byAction[audit.ActionCameraUpdate]; !ok {
+		t.Errorf("expected a distinct camera.update entry; got %+v", entries)
+	}
+	if deleteEntry, ok := byAction[audit.ActionCameraDelete]; !ok || deleteEntry.Status != audit.StatusSuccess {
+		t.Errorf("camera.delete mismatch: %+v", deleteEntry)
 	}
 }
 

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
+	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
 )
@@ -243,25 +245,30 @@ func TestAuthHandler_InitAndLoginFlow(t *testing.T) {
 	}
 }
 
-type testAuditor struct {
-	entries []audit.Entry
-}
-
-func (m *testAuditor) Record(entry audit.Entry) {
-	m.entries = append(m.entries, entry)
-}
-
 func TestAuthHandler_AuditLogging(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	dbStore := setupTestDB(t)
 	userStore := NewUserStore(dbStore)
 	sessionStore := NewMemorySessionStore(1 * time.Hour)
 	svc := NewAuthService(userStore, sessionStore, nil, zap.NewNop())
-	auditor := &testAuditor{}
-	handler := NewHandler(svc, auditor)
+	handler := NewHandler(svc)
+
+	// Wire the real audit middleware so the assertions cover the actual
+	// declarative path rather than a test double.
+	auditSvc := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
+		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
+	})
+	if err := auditSvc.Start(context.Background()); err != nil {
+		t.Fatalf("start audit service: %v", err)
+	}
+	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
 
 	router := gin.New()
+	if err := router.SetTrustedProxies(nil); err != nil {
+		t.Fatalf("SetTrustedProxies: %v", err)
+	}
 	api := router.Group("/api/v1")
+	api.Use(audithttp.Middleware(auditSvc))
 	handler.RegisterRoutes(api)
 
 	// 1. InitAdmin
@@ -270,9 +277,14 @@ func TestAuthHandler_AuditLogging(t *testing.T) {
 		Password:        "password123",
 		ConfirmPassword: "password123",
 	})
+	// A real connection always carries a remote address; the audit IP comes from
+	// it, so the test sets one explicitly.
+	const clientAddr = "192.168.7.7:5555"
+
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/auth/init", bytes.NewReader(initBody))
 	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = clientAddr
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -283,6 +295,7 @@ func TestAuthHandler_AuditLogging(t *testing.T) {
 	w = httptest.NewRecorder()
 	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(badLogin))
 	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = clientAddr
 	router.ServeHTTP(w, req)
 
 	// 3. Successful Login
@@ -290,31 +303,74 @@ func TestAuthHandler_AuditLogging(t *testing.T) {
 	w = httptest.NewRecorder()
 	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(goodLogin))
 	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = clientAddr
 	router.ServeHTTP(w, req)
 	cookies := w.Result().Cookies()
 
 	// 4. Logout
 	w = httptest.NewRecorder()
 	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.RemoteAddr = clientAddr
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
 	router.ServeHTTP(w, req)
 
-	// Verify entries
-	if len(auditor.entries) != 4 {
-		t.Fatalf("expected 4 audit entries, got %d", len(auditor.entries))
+	// Drain the asynchronous queue before asserting.
+	stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := auditSvc.Stop(stopCtx); err != nil {
+		t.Fatalf("drain audit service: %v", err)
 	}
-	if auditor.entries[0].Action != audit.ActionAuthInit || auditor.entries[0].Status != audit.StatusSuccess {
-		t.Errorf("entry 0 mismatch: %+v", auditor.entries[0])
+
+	entries, total, err := auditSvc.List(context.Background(), audit.Filter{Limit: 20})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
 	}
-	if auditor.entries[1].Action != audit.ActionAuthLogin || auditor.entries[1].Status != audit.StatusFailed {
-		t.Errorf("entry 1 mismatch: %+v", auditor.entries[1])
+	if total != 4 {
+		t.Fatalf("expected 4 audit entries, got %d", total)
 	}
-	if auditor.entries[2].Action != audit.ActionAuthLogin || auditor.entries[2].Status != audit.StatusSuccess {
-		t.Errorf("entry 2 mismatch: %+v", auditor.entries[2])
+
+	// Entries are returned newest first, so compare by action.
+	byAction := make(map[string]audit.AuditLog, len(entries))
+	for _, e := range entries {
+		byAction[e.Action] = e
 	}
-	if auditor.entries[3].Action != audit.ActionAuthLogout || auditor.entries[3].Status != audit.StatusSuccess {
-		t.Errorf("entry 3 mismatch: %+v", auditor.entries[3])
+
+	initEntry, ok := byAction[audit.ActionAuthInit]
+	if !ok || initEntry.Status != audit.StatusSuccess {
+		t.Errorf("auth.init mismatch: %+v", initEntry)
+	}
+	if initEntry.Username != "admin" {
+		t.Errorf("expected the configured account name, got %q", initEntry.Username)
+	}
+	if initEntry.IP != "192.168.7.7" {
+		t.Errorf("expected the connection source IP, got %q", initEntry.IP)
+	}
+
+	// The failed login is overwritten by the successful one in the map, so
+	// assert both explicitly.
+	var failedLogin, okLogin bool
+	for _, e := range entries {
+		switch {
+		case e.Action == audit.ActionAuthLogin && e.Status == audit.StatusFailed:
+			failedLogin = true
+			if e.Username != audit.UsernameAnonymous {
+				t.Errorf("failed login must stay anonymous, got %q", e.Username)
+			}
+		case e.Action == audit.ActionAuthLogin && e.Status == audit.StatusSuccess:
+			okLogin = true
+		}
+	}
+	if !failedLogin {
+		t.Error("expected a failed auth.login entry")
+	}
+	if !okLogin {
+		t.Error("expected a successful auth.login entry")
+	}
+
+	logoutEntry, ok := byAction[audit.ActionAuthLogout]
+	if !ok || logoutEntry.Status != audit.StatusSuccess {
+		t.Errorf("auth.logout mismatch: %+v", logoutEntry)
 	}
 }

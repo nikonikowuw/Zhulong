@@ -89,7 +89,7 @@ func setupServiceTest(t *testing.T) (*algorithm.AlgorithmComponents, string) {
 			t.Errorf("close database: %v", err)
 		}
 	})
-	return algorithm.NewAlgorithmComponents(dbStore, nil, tempDir, "cpu", zap.NewNop()), tempDir
+	return algorithm.NewAlgorithmComponents(dbStore, tempDir, "cpu", zap.NewNop()), tempDir
 }
 
 func TestServiceCreateTaskValidatesConfigSchema(t *testing.T) {
@@ -186,7 +186,7 @@ func TestServiceCreateTaskEnforcesComputeBudgetAtomically(t *testing.T) {
 
 func TestNewAlgorithmComponentsDoesNotCreateInstallDirectory(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "not-created-yet")
-	if comp := algorithm.NewAlgorithmComponents(nil, nil, dataDir, "rknn", zap.NewNop()); comp.Verifier.HostTarget != "rknn" {
+	if comp := algorithm.NewAlgorithmComponents(nil, dataDir, "rknn", zap.NewNop()); comp.Verifier.HostTarget != "rknn" {
 		t.Fatalf("expected configured host target to reach verifier, got %q", comp.Verifier.HostTarget)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "algorithms")); !os.IsNotExist(err) {

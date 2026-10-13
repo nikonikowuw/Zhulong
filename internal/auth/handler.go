@@ -7,35 +7,30 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
+	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
-
-// Auditor defines the interface for recording audit events.
-type Auditor interface {
-	Record(entry audit.Entry)
-}
 
 // Handler handles HTTP requests for authentication and identity.
 type Handler struct {
 	service AuthService
-	auditor Auditor
 }
 
 // NewHandler constructs an authentication HTTP Handler.
-func NewHandler(service AuthService, auditor ...Auditor) *Handler {
-	var a Auditor
-	if len(auditor) > 0 {
-		a = auditor[0]
-	}
-	return &Handler{service: service, auditor: a}
+func NewHandler(service AuthService) *Handler {
+	return &Handler{service: service}
 }
 
 // RegisterRoutes mounts auth endpoints onto the provided gin.RouterGroup.
+//
+// init and login declare their audit intent before HandleJSON binds the body, so
+// a malformed or rejected payload still leaves a record. logout is tagged
+// directly because it has no request body.
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	authGroup := rg.Group("/auth")
 	authGroup.GET("/status", httputil.Handle(h.statusHandler))
-	authGroup.POST("/init", httputil.HandleJSON(h.initHandler))
-	authGroup.POST("/login", httputil.HandleJSON(h.loginHandler))
+	authGroup.POST("/init", audithttp.TagMiddleware(audit.ActionAuthInit, "system", "Initialize administrator"), httputil.HandleJSON(h.initHandler))
+	authGroup.POST("/login", audithttp.TagMiddleware(audit.ActionAuthLogin, "user:", "Login"), httputil.HandleJSON(h.loginHandler))
 	authGroup.POST("/logout", RequireAuth(h.service), h.logoutHandler)
 	authGroup.GET("/me", RequireAuth(h.service), httputil.Handle(h.meHandler))
 }
@@ -62,22 +57,6 @@ func (h *Handler) statusHandler(c *gin.Context) (AuthStatusResponse, error) {
 
 // initHandler godoc
 // @Summary      Initialize administrator account
-func (h *Handler) recordAudit(c *gin.Context, username, action, target, status, errMsg string) {
-	if h.auditor == nil {
-		return
-	}
-	h.auditor.Record(audit.Entry{
-		IP:       c.ClientIP(),
-		Username: username,
-		Action:   action,
-		Target:   target,
-		Status:   status,
-		ErrorMsg: errMsg,
-	})
-}
-
-// initHandler godoc
-// @Summary      Initialize administrator account
 // @Tags         auth
 // @Accept       json
 // @Produce      json
@@ -88,12 +67,16 @@ func (h *Handler) recordAudit(c *gin.Context, username, action, target, status, 
 // @Failure      413  {object}  httputil.Response
 // @Router       /auth/init [post]
 func (h *Handler) initHandler(c *gin.Context, req InitAdminRequest) (UserResponse, error) {
+	// The attempted username is only a target hint; the audit actor stays
+	// anonymous until initialization actually succeeds.
+	audithttp.TagTarget(c, "user:"+req.Username)
+
 	user, token, err := h.service.InitAdmin(c.Request.Context(), req)
 	if err != nil {
-		h.recordAudit(c, req.Username, audit.ActionAuthInit, "system", audit.StatusFailed, err.Error())
 		return UserResponse{}, err
 	}
-	h.recordAudit(c, user.Username, audit.ActionAuthInit, "system", audit.StatusSuccess, "")
+	audithttp.TagActor(c, user.Username)
+	audithttp.TagTarget(c, "user:"+user.Username)
 	setSessionCookie(c, token, 7*24*3600)
 	return user, nil
 }
@@ -110,12 +93,16 @@ func (h *Handler) initHandler(c *gin.Context, req InitAdminRequest) (UserRespons
 // @Failure      413  {object}  httputil.Response
 // @Router       /auth/login [post]
 func (h *Handler) loginHandler(c *gin.Context, req LoginRequest) (UserResponse, error) {
+	// A failed login keeps the anonymous actor; the attempted username is only
+	// a target hint and never an authenticated identity.
+	audithttp.TagTarget(c, "user:"+req.Username)
+
 	user, token, err := h.service.Login(c.Request.Context(), c.ClientIP(), req)
 	if err != nil {
-		h.recordAudit(c, req.Username, audit.ActionAuthLogin, "user:"+req.Username, audit.StatusFailed, err.Error())
 		return UserResponse{}, err
 	}
-	h.recordAudit(c, user.Username, audit.ActionAuthLogin, "user:"+user.Username, audit.StatusSuccess, "")
+	audithttp.TagActor(c, user.Username)
+	audithttp.TagTarget(c, "user:"+user.Username)
 	setSessionCookie(c, token, 7*24*3600)
 	return user, nil
 }
@@ -128,7 +115,9 @@ func (h *Handler) loginHandler(c *gin.Context, req LoginRequest) (UserResponse, 
 // @Failure      401  {object}  httputil.Response
 // @Router       /auth/logout [post]
 func (h *Handler) logoutHandler(c *gin.Context) {
-	username := "admin"
+	// Resolve the account name for the audit target and actor without ever
+	// defaulting to a hardcoded admin.
+	username := ""
 	if u, ok := GetCurrentUser(c); ok && u.Username != "" {
 		username = u.Username
 	}
@@ -142,8 +131,17 @@ func (h *Handler) logoutHandler(c *gin.Context) {
 		}
 		h.service.Logout(token)
 	}
+
+	target := "user:"
+	if username != "" {
+		target = "user:" + username
+	}
+	audithttp.Tag(c, audit.ActionAuthLogout, target, "Logout")
+	if username != "" {
+		audithttp.TagActor(c, username)
+	}
+
 	clearSessionCookie(c)
-	h.recordAudit(c, username, audit.ActionAuthLogout, "user:"+username, audit.StatusSuccess, "")
 	httputil.Success(c, gin.H{"loggedOut": true})
 }
 

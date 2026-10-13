@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"go.uber.org/zap"
 )
 
@@ -25,7 +24,7 @@ type TimeService struct {
 	sntpClient SNTPClient
 	sm         *TimeStateMachine
 	logger     *zap.Logger
-	auditor    *audit.Service
+	recorder   SystemEventRecorder
 
 	workerMu sync.Mutex
 	cancel   context.CancelFunc
@@ -63,9 +62,16 @@ func NewTimeService(
 	}
 }
 
-// SetAuditor binds the audit logging service.
-func (s *TimeService) SetAuditor(auditor *audit.Service) {
-	s.auditor = auditor
+// SystemEventRecorder records background system events. It is deliberately
+// narrow: this service never records user-requested operations, which are
+// audited by the HTTP handler instead.
+type SystemEventRecorder interface {
+	RecordSystem(action, target, detail string, opErr error)
+}
+
+// SetSystemEventRecorder binds the recorder used for background events.
+func (s *TimeService) SetSystemEventRecorder(recorder SystemEventRecorder) {
+	s.recorder = recorder
 }
 
 // GetStatus returns the complete system time and hardware status.
@@ -115,17 +121,7 @@ func (s *TimeService) UpdateConfig(ctx context.Context, req UpdateConfigRequest)
 		return nil, fmt.Errorf("update time config: %w", err)
 	}
 
-	// Record audit event
-	if s.auditor != nil {
-		s.auditor.Record(audit.Entry{
-			Action: ActionTimeUpdateConfig,
-			Target: "system_time",
-			Detail: fmt.Sprintf("mode=%s, servers=%v, interval=%ds, tz=%s",
-				req.Mode, req.NTPServers, req.SyncIntervalSeconds, req.Timezone),
-			Status: audit.StatusSuccess,
-		})
-	}
-
+	// The user-requested configuration change is audited by the HTTP handler.
 	// Wake worker to apply new schedule or perform probe
 	s.wakeWorker()
 
@@ -158,31 +154,14 @@ func (s *TimeService) SyncNow(ctx context.Context) (*SystemTimeStatus, error) {
 	if err != nil {
 		s.sm.ProcessSyncError(err)
 		s.logger.Warn("Manual NTP sync failed", zap.Error(err))
-
-		if s.auditor != nil {
-			s.auditor.Record(audit.Entry{
-				Action:   ActionTimeNTPSync,
-				Target:   "system_time",
-				Detail:   fmt.Sprintf("servers=%v", servers),
-				Status:   audit.StatusFailed,
-				ErrorMsg: err.Error(),
-			})
-		}
+		// The caller reports the domain outcome through the audit middleware,
+		// which keeps a single record per request and can mark a 200 response
+		// as failed when the sync state says so.
 		return s.GetStatus(ctx)
 	}
 
 	if err := s.sm.ProcessNTPResult(res); err != nil && !errors.Is(err, ErrPanicReview) {
 		s.logger.Warn("Failed to apply NTP result in state machine", zap.Error(err))
-	}
-
-	if s.auditor != nil {
-		s.auditor.Record(audit.Entry{
-			Action: ActionTimeNTPSync,
-			Target: "system_time",
-			Detail: fmt.Sprintf("server=%s, offset=%v, rtt=%v, stratum=%d",
-				res.Server, res.Offset, res.RTT, res.Stratum),
-			Status: audit.StatusSuccess,
-		})
 	}
 
 	return s.GetStatus(ctx)
@@ -191,25 +170,7 @@ func (s *TimeService) SyncNow(ctx context.Context) (*SystemTimeStatus, error) {
 // SetManualTime manually forces system clock and RTC synchronization.
 func (s *TimeService) SetManualTime(ctx context.Context, targetTime time.Time) (*SystemTimeStatus, error) {
 	if err := s.sm.ProcessManualTime(targetTime); err != nil {
-		if s.auditor != nil {
-			s.auditor.Record(audit.Entry{
-				Action:   ActionTimeManualSet,
-				Target:   "system_time",
-				Detail:   fmt.Sprintf("target=%s", targetTime.Format(time.RFC3339Nano)),
-				Status:   audit.StatusFailed,
-				ErrorMsg: err.Error(),
-			})
-		}
 		return nil, fmt.Errorf("process manual time: %w", err)
-	}
-
-	if s.auditor != nil {
-		s.auditor.Record(audit.Entry{
-			Action: ActionTimeManualSet,
-			Target: "system_time",
-			Detail: fmt.Sprintf("target=%s", targetTime.Format(time.RFC3339Nano)),
-			Status: audit.StatusSuccess,
-		})
 	}
 
 	return s.GetStatus(ctx)
@@ -237,13 +198,9 @@ func (s *TimeService) OnBootCheck(ctx context.Context) error {
 				s.logger.Error("Failed to heal system time from RTC", zap.Error(setErr))
 			} else {
 				s.logger.Info("Successfully restored system clock from RTC")
-				if s.auditor != nil {
-					s.auditor.Record(audit.Entry{
-						Action: ActionTimeRTCHeal,
-						Target: "system_time",
-						Detail: fmt.Sprintf("restored system time to %s from RTC", rtcTime.Format(time.RFC3339)),
-						Status: audit.StatusSuccess,
-					})
+				if s.recorder != nil {
+					s.recorder.RecordSystem(ActionTimeRTCHeal, "system_time",
+						fmt.Sprintf("restored system time to %s from RTC", rtcTime.Format(time.RFC3339)), nil)
 				}
 			}
 		} else {
@@ -388,12 +345,25 @@ func (s *TimeService) probeOnce(ctx context.Context) bool {
 	if err != nil {
 		s.sm.ProcessSyncError(err)
 		s.logger.Warn("Periodic NTP sync failed", zap.Error(err))
+		if s.recorder != nil {
+			s.recorder.RecordSystem(ActionTimeNTPSync, "system_time",
+				fmt.Sprintf("servers=%v", servers), err)
+		}
 		return false
 	}
 
 	if err := s.sm.ProcessNTPResult(res); err != nil && !errors.Is(err, ErrPanicReview) {
 		s.logger.Warn("Failed to process periodic NTP result", zap.Error(err))
+		if s.recorder != nil {
+			s.recorder.RecordSystem(ActionTimeNTPSync, "system_time",
+				fmt.Sprintf("server=%s", res.Server), err)
+		}
 		return false
+	}
+	if s.recorder != nil {
+		s.recorder.RecordSystem(ActionTimeNTPSync, "system_time",
+			fmt.Sprintf("server=%s, offset=%v, rtt=%v, stratum=%d",
+				res.Server, res.Offset, res.RTT, res.Stratum), nil)
 	}
 	return true
 }

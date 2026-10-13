@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
 )
@@ -51,7 +50,7 @@ type TimeComponents struct {
 // NewTimeComponents instantiates and wires system time components.
 func NewTimeComponents(
 	dbProvider database.DBProvider,
-	auditor *audit.Service,
+	recorder SystemEventRecorder,
 	logger *zap.Logger,
 ) TimeComponents {
 	if logger == nil {
@@ -62,8 +61,8 @@ func NewTimeComponents(
 	repo := NewRepository(dbProvider)
 	sntpClient := NewSNTPClient()
 	svc := NewTimeService(repo, driver, sntpClient, logger)
-	if auditor != nil {
-		svc.SetAuditor(auditor)
+	if recorder != nil {
+		svc.SetSystemEventRecorder(recorder)
 	}
 
 	handler := NewHandler(svc, logger)

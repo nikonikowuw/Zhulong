@@ -17,6 +17,9 @@ const (
 	ActionCameraUpdate = "camera.update"
 	ActionCameraDelete = "camera.delete"
 	ActionCameraToggle = "camera.toggle"
+	// ActionAuditClear is the self-audit record written when audit logs are
+	// cleared. It is exempt from Prune so the clearing history survives.
+	ActionAuditClear = "audit.clear"
 )
 
 // Default limits

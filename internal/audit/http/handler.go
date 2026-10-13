@@ -1,21 +1,22 @@
-package audit
+package audithttp
 
 import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
 )
 
 // Handler provides HTTP endpoints for audit log inspection and maintenance.
 type Handler struct {
-	service *Service
+	service *audit.Service
 	logger  *zap.Logger
 }
 
 // NewHandler constructs an audit HTTP Handler.
-func NewHandler(service *Service, logger *zap.Logger) *Handler {
+func NewHandler(service *audit.Service, logger *zap.Logger) *Handler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -57,7 +58,7 @@ type AuditLogDTO struct {
 	ErrorMsg  string    `json:"errorMsg"`
 }
 
-func toAuditLogDTO(l AuditLog) AuditLogDTO {
+func toAuditLogDTO(l audit.AuditLog) AuditLogDTO {
 	return AuditLogDTO{
 		ID:        l.ID,
 		CreatedAt: l.CreatedAt.UTC(),
@@ -71,7 +72,7 @@ func toAuditLogDTO(l AuditLog) AuditLogDTO {
 	}
 }
 
-func toAuditLogDTOs(logs []AuditLog) []AuditLogDTO {
+func toAuditLogDTOs(logs []audit.AuditLog) []AuditLogDTO {
 	if len(logs) == 0 {
 		return []AuditLogDTO{}
 	}
@@ -101,7 +102,7 @@ func (h *Handler) ListLogs(c *gin.Context) {
 
 	page, pageSize, offset, limit := q.Normalize()
 
-	filter := Filter{
+	filter := audit.Filter{
 		Action:  q.Action,
 		Actions: q.Actions,
 		Status:  q.Status,
@@ -153,6 +154,11 @@ type ClearLogsQuery struct {
 // @Param        before query string false "Clear logs older than this RFC3339 timestamp"
 // @Success      200 {object} httputil.Response{data=object}
 // @Router       /audit/logs [delete]
+//
+// Clearing writes its own audit.clear record in the same transaction as the
+// delete, so a successful response always has a matching record. The audit
+// middleware is not involved: this endpoint must not depend on the droppable
+// asynchronous queue for its own evidence.
 func (h *Handler) ClearLogs(c *gin.Context) {
 	var q ClearLogsQuery
 	_ = c.ShouldBindQuery(&q)
@@ -169,7 +175,7 @@ func (h *Handler) ClearLogs(c *gin.Context) {
 		beforeTime = append(beforeTime, t)
 	}
 
-	cleared, err := h.service.Clear(c.Request.Context(), beforeTime...)
+	cleared, err := h.service.ClearWithAudit(c.Request.Context(), "audit_logs", beforeTime...)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return

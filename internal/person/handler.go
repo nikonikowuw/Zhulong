@@ -5,6 +5,7 @@ import (
 	"reflect"
 
 	"github.com/gin-gonic/gin"
+	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
 )
@@ -80,6 +81,9 @@ func (h *Handler) List(c *gin.Context) {
 // @Failure      500  {object}  httputil.Response
 // @Router       /persons [post]
 func (h *Handler) Create(c *gin.Context) {
+	// Declared before binding so a rejected payload is still attributable.
+	audithttp.Tag(c, ActionPersonCreate, "person:", "Create person")
+
 	var req CreatePersonRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.HandleBindError(c, err, reflect.TypeOf(req))
@@ -92,6 +96,8 @@ func (h *Handler) Create(c *gin.Context) {
 		return
 	}
 
+	audithttp.TagTarget(c, "person:"+p.ID)
+	audithttp.TagDetail(c, "Create person "+p.Name)
 	httputil.SuccessWithStatus(c, http.StatusCreated, p)
 }
 
@@ -129,6 +135,8 @@ func (h *Handler) Get(c *gin.Context) {
 // @Router       /persons/{id} [put]
 func (h *Handler) Update(c *gin.Context) {
 	id := c.Param("id")
+	audithttp.Tag(c, ActionPersonUpdate, "person:"+id, "Update person "+id)
+
 	var req UpdatePersonRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.HandleBindError(c, err, reflect.TypeOf(req))
@@ -140,6 +148,7 @@ func (h *Handler) Update(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
+	audithttp.TagDetail(c, "Update person "+p.Name)
 	httputil.Success(c, p)
 }
 
@@ -154,6 +163,8 @@ func (h *Handler) Update(c *gin.Context) {
 // @Router       /persons/{id} [delete]
 func (h *Handler) Delete(c *gin.Context) {
 	id := c.Param("id")
+	audithttp.Tag(c, ActionPersonDelete, "person:"+id, "Delete person "+id)
+
 	if err := h.service.DeletePerson(c.Request.Context(), id); err != nil {
 		httputil.WriteError(c, err)
 		return
@@ -198,6 +209,10 @@ func (h *Handler) ListFaces(c *gin.Context) {
 // TODO(api/storage): 待重构为 multipart/form-data 文件流上传，解耦浏览器与服务端文件路径。
 func (h *Handler) AddFace(c *gin.Context) {
 	personID := c.Param("id")
+	// The enrollment photo path and features are deliberately excluded from the
+	// detail: only the owning person is named until the face row exists.
+	audithttp.Tag(c, ActionPersonFaceAdd, "person:"+personID, "Add face for person "+personID)
+
 	var req AddFaceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.HandleBindError(c, err, reflect.TypeOf(req))
@@ -210,6 +225,7 @@ func (h *Handler) AddFace(c *gin.Context) {
 		return
 	}
 
+	audithttp.TagTarget(c, "face:"+face.ID)
 	httputil.SuccessWithStatus(c, http.StatusCreated, face)
 }
 
@@ -226,6 +242,8 @@ func (h *Handler) AddFace(c *gin.Context) {
 func (h *Handler) DeleteFace(c *gin.Context) {
 	personID := c.Param("id")
 	faceID := c.Param("face_id")
+	audithttp.Tag(c, ActionPersonFaceDelete, "face:"+faceID, "Delete face "+faceID)
+
 	if err := h.service.DeleteFace(c.Request.Context(), personID, faceID); err != nil {
 		httputil.WriteError(c, err)
 		return

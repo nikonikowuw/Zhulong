@@ -84,7 +84,7 @@ definitions:
       status:
         type: string
     type: object
-  audit.AuditLogDTO:
+  audithttp.AuditLogDTO:
     properties:
       action:
         type: string
@@ -340,11 +340,11 @@ definitions:
     - field
     - message
     type: object
-  httputil.PaginatedData-audit_AuditLogDTO:
+  httputil.PaginatedData-audithttp_AuditLogDTO:
     properties:
       items:
         items:
-          $ref: '#/definitions/audit.AuditLogDTO'
+          $ref: '#/definitions/audithttp.AuditLogDTO'
         type: array
       limit:
         description: Backwards compatibility fields for legacy clients expecting limit/offset
@@ -1291,7 +1291,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/httputil.PaginatedData-audit_AuditLogDTO'
+                  $ref: '#/definitions/httputil.PaginatedData-audithttp_AuditLogDTO'
               type: object
       summary: List audit logs with filtering and pagination
       tags:

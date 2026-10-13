@@ -615,7 +615,7 @@
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/httputil.PaginatedData-audit_AuditLogDTO"
+                                            "$ref": "#/definitions/httputil.PaginatedData-audithttp_AuditLogDTO"
                                         }
                                     }
                                 }
@@ -2719,7 +2719,7 @@
                 }
             }
         },
-        "audit.AuditLogDTO": {
+        "audithttp.AuditLogDTO": {
             "type": "object",
             "properties": {
                 "action": {
@@ -3101,13 +3101,13 @@
                 }
             }
         },
-        "httputil.PaginatedData-audit_AuditLogDTO": {
+        "httputil.PaginatedData-audithttp_AuditLogDTO": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/audit.AuditLogDTO"
+                        "$ref": "#/definitions/audithttp.AuditLogDTO"
                     }
                 },
                 "limit": {

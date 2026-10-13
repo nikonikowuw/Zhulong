@@ -70,7 +70,6 @@ type AlgorithmComponents struct {
 // NewAlgorithmComponents instantiates and wires algorithm components.
 func NewAlgorithmComponents(
 	dbProvider database.DBProvider,
-	auditor Auditor,
 	dataDir string,
 	hostTarget string,
 	logger *zap.Logger,
@@ -106,7 +105,7 @@ func NewAlgorithmComponents(
 	verifier := NewVerifier(runnerPath, hostTarget)
 	supervisor := NewSupervisor(store, installDir, runnerPath, brokerSock, DefaultRecoveryOptions(), logger)
 	service := NewService(store, verifier, supervisor, installDir, logger)
-	handler := NewHandler(service, auditor, logger)
+	handler := NewHandler(service, logger)
 
 	return &AlgorithmComponents{
 		Store:           store,

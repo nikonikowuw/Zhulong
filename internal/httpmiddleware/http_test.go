@@ -148,3 +148,123 @@ func TestMaxBodyLimitWithLimit(t *testing.T) {
 		t.Fatalf("expected 413 for payload exceeding custom limit, got %d", rec2.Code)
 	}
 }
+
+// TestPanicSkipsOuterMiddlewareContinuation documents why the audit layer cannot
+// observe panics from its own c.Next() continuation.
+//
+// A panicking handler never advances gin's handler index, so the outer
+// middleware's post-Next code is skipped entirely: its c.Next() unwinds by
+// panic, Recovery resets the index to zero, and the resumed loop finds itself
+// at handlers[0] and stops immediately.
+func TestPanicSkipsOuterMiddlewareContinuation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var (
+		continuationRan bool
+		observedStatus  = -1
+	)
+
+	router := gin.New()
+	router.Use(Recovery(zap.NewNop()))
+	router.Use(func(c *gin.Context) {
+		c.Next()
+		// This must not run for a panicking handler.
+		continuationRan = true
+		observedStatus = c.Writer.Status()
+	})
+	router.POST("/boom", func(c *gin.Context) { panic("boom") })
+
+	req := httptest.NewRequest(http.MethodPost, "/boom", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("expected the client to receive 500, got %d", recorder.Code)
+	}
+	if continuationRan {
+		t.Fatalf("continuation unexpectedly ran with status %d; the documented gin behaviour changed", observedStatus)
+	}
+}
+
+// TestPanicDeferredReadSeesDefaultStatus documents the second trap: reading the
+// status from a deferred function does run, but reports the default 200 because
+// no response header has been written when the panic unwinds. Recording that
+// value would mark a crashed request as successful, which is worse than
+// omitting it.
+func TestPanicDeferredReadSeesDefaultStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	observedStatus := -1
+	router := gin.New()
+	router.Use(Recovery(zap.NewNop()))
+	router.Use(func(c *gin.Context) {
+		defer func() { observedStatus = c.Writer.Status() }()
+		c.Next()
+	})
+	router.POST("/boom", func(c *gin.Context) { panic("boom") })
+
+	req := httptest.NewRequest(http.MethodPost, "/boom", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("expected the client to receive 500, got %d", recorder.Code)
+	}
+	if observedStatus != http.StatusOK {
+		t.Fatalf("expected the deferred read to observe the default 200, got %d", observedStatus)
+	}
+}
+
+// TestRecoveryNotifiesPanicObserver asserts the supported mechanism: the
+// observer runs after the 500 response is written and therefore sees the real
+// status code.
+func TestRecoveryNotifiesPanicObserver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	observer := &recordingObserver{}
+	router := gin.New()
+	router.Use(Recovery(zap.NewNop(), observer))
+	router.POST("/boom", func(c *gin.Context) { panic("boom") })
+
+	req := httptest.NewRequest(http.MethodPost, "/boom", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if !observer.called {
+		t.Fatal("expected the panic observer to be notified")
+	}
+	if observer.status != http.StatusInternalServerError {
+		t.Fatalf("expected the observer to see 500, got %d", observer.status)
+	}
+}
+
+// TestRecoveryWithoutObserverStillRecovers keeps the optional-observer contract
+// explicit: existing single-argument call sites continue to work.
+func TestRecoveryWithoutObserverStillRecovers(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	router := gin.New()
+	router.Use(Recovery(zap.NewNop()))
+	router.POST("/boom", func(c *gin.Context) { panic("boom") })
+
+	req := httptest.NewRequest(http.MethodPost, "/boom", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"INTERNAL_ERROR"`) {
+		t.Fatalf("expected a sanitized INTERNAL_ERROR response, got %s", recorder.Body.String())
+	}
+}
+
+type recordingObserver struct {
+	called bool
+	status int
+}
+
+func (o *recordingObserver) OnPanic(c *gin.Context) {
+	o.called = true
+	o.status = c.Writer.Status()
+}

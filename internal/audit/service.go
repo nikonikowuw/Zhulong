@@ -114,6 +114,10 @@ func (s *Service) isStopped() bool {
 }
 
 // entryToLog converts an external Entry to an internal AuditLog with defaults.
+// An empty username becomes "unknown" rather than "admin": the system has a
+// single configurable account, and defaulting to a fixed name silently
+// misattributes unattributed events. The persisted column keeps its own SQL
+// default, so an explicit value is always written here.
 func entryToLog(entry Entry) *AuditLog {
 	log := &AuditLog{
 		CreatedAt: entry.CreatedAt,
@@ -131,12 +135,67 @@ func entryToLog(entry Entry) *AuditLog {
 		log.CreatedAt = log.CreatedAt.UTC()
 	}
 	if log.Username == "" {
-		log.Username = "admin"
+		log.Username = UsernameUnknown
 	}
 	if log.Status == "" {
 		log.Status = StatusSuccess
 	}
 	return log
+}
+
+// RecordEvent queues an audit entry derived from the request context and the
+// supplied operation description. When the context carries no Actor the event
+// is attributed to "unknown" with an empty IP; it is never promoted to a
+// system event. Recording is non-blocking.
+func (s *Service) RecordEvent(ctx context.Context, action, target, detail string, opErr error) {
+	s.Record(eventEntry(ctx, action, target, detail, opErr))
+}
+
+// RecordSystem queues an explicit system event. Background work has no client
+// origin, so the IP is left empty and the username is "system"; the source
+// address is never faked as a loopback address.
+func (s *Service) RecordSystem(action, target, detail string, opErr error) {
+	s.Record(systemEntry(action, target, detail, opErr))
+}
+
+// eventEntry builds an Entry for a human-initiated operation from ctx.
+func eventEntry(ctx context.Context, action, target, detail string, opErr error) Entry {
+	actor, ok := FromContext(ctx)
+	if !ok {
+		actor = Actor{Username: UsernameUnknown}
+	} else if actor.Username == "" {
+		actor.Username = UsernameUnknown
+	}
+	entry := Entry{
+		IP:       actor.IP,
+		Username: actor.Username,
+		Action:   action,
+		Target:   target,
+		Detail:   detail,
+		Status:   StatusSuccess,
+	}
+	if opErr != nil {
+		entry.Status = StatusFailed
+		entry.ErrorMsg = opErr.Error()
+	}
+	return entry
+}
+
+// systemEntry builds an Entry for an explicitly recorded system event.
+func systemEntry(action, target, detail string, opErr error) Entry {
+	entry := Entry{
+		IP:       "",
+		Username: UsernameSystem,
+		Action:   action,
+		Target:   target,
+		Detail:   detail,
+		Status:   StatusSuccess,
+	}
+	if opErr != nil {
+		entry.Status = StatusFailed
+		entry.ErrorMsg = opErr.Error()
+	}
+	return entry
 }
 
 // Record queues an audit entry asynchronously without blocking the caller.
@@ -175,8 +234,38 @@ func (s *Service) List(ctx context.Context, filter Filter) ([]AuditLog, int64, e
 }
 
 // Clear deletes all audit records or those older than the specified time.
+// It is intended for internal callers; the public DELETE endpoint must use
+// ClearWithAudit so the clearing operation leaves its own record.
 func (s *Service) Clear(ctx context.Context, before ...time.Time) (int64, error) {
 	return s.store.Clear(ctx, before...)
+}
+
+// ClearWithAudit deletes matching records and persists the audit.clear
+// self-audit entry in one transaction, then returns the deleted count.
+//
+// The actor is resolved from ctx exactly like RecordEvent: an unattributed
+// caller is recorded as unknown with an empty IP, never as a system event.
+func (s *Service) ClearWithAudit(ctx context.Context, target string, before ...time.Time) (int64, error) {
+	actor, ok := FromContext(ctx)
+	if !ok {
+		actor = Actor{Username: UsernameUnknown}
+	} else if actor.Username == "" {
+		actor.Username = UsernameUnknown
+	}
+
+	entry := entryToLog(Entry{
+		IP:       actor.IP,
+		Username: actor.Username,
+		Action:   ActionAuditClear,
+		Target:   target,
+		Status:   StatusSuccess,
+	})
+
+	cleared, err := s.store.ClearWithAudit(ctx, entry, before...)
+	if err != nil {
+		return 0, err
+	}
+	return cleared, nil
 }
 
 // Count returns total number of audit logs.

@@ -22,11 +22,33 @@ const MaxAPIRequestBodyBytes int64 = 1 << 20
 
 var fallbackRequestIDCounter atomic.Uint64
 
+// PanicObserver is notified after Recovery has handled a handler panic and the
+// sanitized 500 response has been written. Implementations must not panic and
+// must not write to the response.
+//
+// The interface lives here, in the middleware layer, so this package keeps no
+// dependency on any business module; the application wires in a concrete
+// observer.
+type PanicObserver interface {
+	OnPanic(c *gin.Context)
+}
+
 // Recovery converts panics from HTTP handlers into a sanitized API response.
-func Recovery(logger *zap.Logger) gin.HandlerFunc {
+//
+// Observers are notified after the 500 response is written, which is the only
+// point where c.Writer.Status() reliably reports 500. An audit layer cannot
+// observe panics from its own c.Next() continuation: a panicking handler never
+// advances gin's handler index, so the continuation is skipped entirely, and a
+// deferred read would still see the default 200 status.
+func Recovery(logger *zap.Logger, observers ...PanicObserver) gin.HandlerFunc {
 	return gin.CustomRecovery(func(c *gin.Context, recovered any) {
 		logger.Error("HTTP handler panic", zap.Any("panic", recovered), zap.Stack("stack"))
 		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", nil))
+		for _, observer := range observers {
+			if observer != nil {
+				observer.OnPanic(c)
+			}
+		}
 	})
 }
 

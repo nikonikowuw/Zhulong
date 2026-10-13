@@ -129,5 +129,10 @@ func WriteError(c *gin.Context, err error) {
 		)
 	}
 
+	// Expose only the sanitized code and outward message to other HTTP layers.
+	// Downstream consumers such as the audit adapter must never see the raw
+	// internal cause, which stays confined to the server-side log above.
+	setSafeError(c, appError.Code, msg)
+
 	c.AbortWithStatusJSON(status, response)
 }

@@ -12,7 +12,6 @@ import (
 	"unsafe"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
-	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
 )
@@ -165,7 +164,7 @@ func TestGetGallerySyncData(t *testing.T) {
 	defer dbStore.Close()
 
 	store := NewStore(dbStore)
-	svc := NewService(store, nil, zap.NewNop())
+	svc := NewService(store, zap.NewNop())
 	ctx := context.Background()
 
 	p := &Person{
@@ -211,26 +210,7 @@ func TestGetGallerySyncData(t *testing.T) {
 	}
 }
 
-// recordingAuditor captures audit entries so tests can assert on the trail the service
-// produces, including entries for refused operations.
-type recordingAuditor struct {
-	mu      sync.Mutex
-	entries []audit.Entry
-}
-
-func (r *recordingAuditor) Record(entry audit.Entry) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.entries = append(r.entries, entry)
-}
-
-func (r *recordingAuditor) snapshot() []audit.Entry {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]audit.Entry(nil), r.entries...)
-}
-
-func newTestServiceWithAuditor(t *testing.T) (*Service, *recordingAuditor) {
+func newTestService(t *testing.T) *Service {
 	t.Helper()
 	dbStore := database.New(t.TempDir(), zap.NewNop())
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
@@ -238,14 +218,7 @@ func newTestServiceWithAuditor(t *testing.T) (*Service, *recordingAuditor) {
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	auditor := &recordingAuditor{}
-	return NewService(NewStore(dbStore), auditor, zap.NewNop()), auditor
-}
-
-func newTestService(t *testing.T) *Service {
-	t.Helper()
-	svc, _ := newTestServiceWithAuditor(t)
-	return svc
+	return NewService(NewStore(dbStore), zap.NewNop())
 }
 
 func requireDomainError(t *testing.T, err error, kind apperr.Kind, code string) {
@@ -459,13 +432,10 @@ func TestListFaces_MissingPersonReturnsNotFound(t *testing.T) {
 	requireDomainError(t, err, apperr.KindNotFound, "PERSON_NOT_FOUND")
 }
 
-// TestAudit_NamespacedActionsAndFailures pins both halves of the audit contract: actions
-// carry the <domain>.<resource>.<verb> namespace used across the codebase, and refused
-// operations are recorded as failures instead of being dropped.
-func TestAudit_NamespacedActionsAndFailures(t *testing.T) {
-	svc, auditor := newTestServiceWithAuditor(t)
-	ctx := context.Background()
-
+// TestAuditActionNamespaces keeps the <domain>.<resource>.<verb> naming contract that
+// the audit query relies on. The audit trail itself is produced by the HTTP handler, so
+// the recording assertions live in the handler tests.
+func TestAuditActionNamespaces(t *testing.T) {
 	for _, action := range []string{
 		ActionPersonCreate, ActionPersonUpdate, ActionPersonDelete,
 		ActionPersonFaceAdd, ActionPersonFaceDelete,
@@ -474,36 +444,23 @@ func TestAudit_NamespacedActionsAndFailures(t *testing.T) {
 			t.Errorf("audit action %q must be namespaced under person.", action)
 		}
 	}
+}
+
+// TestServiceDoesNotDependOnAudit pins the layering rule: the person service has no
+// audit dependency, so user-operation auditing cannot drift back into the service layer.
+func TestServiceDoesNotDependOnAudit(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
 
 	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "EMP_1", Name: "张三"})
 	if err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
-	entries := auditor.snapshot()
-	if len(entries) != 1 {
-		t.Fatalf("expected exactly one audit entry per create, got %d", len(entries))
-	}
-	if entries[0].Action != ActionPersonCreate || entries[0].Status != audit.StatusSuccess {
-		t.Errorf("expected %s/success, got %s/%s", ActionPersonCreate, entries[0].Action, entries[0].Status)
-	}
 
-	// A refused immutable-key reassignment must leave a failed entry behind.
+	// A refused immutable-key reassignment must still return a domain error; it
+	// simply no longer writes an audit record from this layer.
 	other := "EMP_OTHER"
 	if _, err := svc.UpdatePerson(ctx, created.ID, UpdatePersonRequest{PersonID: &other}); err == nil {
 		t.Fatal("expected the personId reassignment to be rejected")
-	}
-	entries = auditor.snapshot()
-	if len(entries) != 2 {
-		t.Fatalf("expected a failed entry for the refused update, got %d entries", len(entries))
-	}
-	refused := entries[1]
-	if refused.Action != ActionPersonUpdate {
-		t.Errorf("expected action %q, got %q", ActionPersonUpdate, refused.Action)
-	}
-	if refused.Status != audit.StatusFailed {
-		t.Errorf("expected failed status, got %q", refused.Status)
-	}
-	if refused.ErrorMsg == "" {
-		t.Error("a failed audit entry must carry the cause in ErrorMsg")
 	}
 }

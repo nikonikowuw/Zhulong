@@ -128,6 +128,11 @@ func (s *Store) Count(ctx context.Context) (int64, error) {
 
 // Prune deletes the oldest audit records if the total count exceeds maxEntries.
 // Returns the number of deleted records.
+//
+// Records with ActionAuditClear are exempt: they are the audit trail's own
+// proof of clearing, so capacity trimming must never remove them. Without the
+// exemption the "previous clear records survive" guarantee fails as soon as
+// the table grows past maxEntries.
 func (s *Store) Prune(ctx context.Context, maxEntries int) (int64, error) {
 	if maxEntries <= 0 {
 		return 0, nil
@@ -148,7 +153,8 @@ func (s *Store) Prune(ctx context.Context, maxEntries int) (int64, error) {
 		return 0, err
 	}
 	res := db.Exec(
-		"DELETE FROM audit_logs WHERE id IN (SELECT id FROM audit_logs ORDER BY created_at ASC, id ASC LIMIT ?)",
+		"DELETE FROM audit_logs WHERE id IN (SELECT id FROM audit_logs WHERE action != ? ORDER BY created_at ASC, id ASC LIMIT ?)",
+		ActionAuditClear,
 		excess,
 	)
 	if res.Error != nil {
@@ -159,17 +165,62 @@ func (s *Store) Prune(ctx context.Context, maxEntries int) (int64, error) {
 }
 
 // Clear removes all audit logs or those created before a specified time.
+// It does not write a self-audit record; the public DELETE endpoint must use
+// ClearWithAudit instead. ActionAuditClear rows are preserved so the clearing
+// history survives both explicit clearing and capacity trimming.
 func (s *Store) Clear(ctx context.Context, before ...time.Time) (int64, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return 0, err
 	}
-	query := db
+	query := db.Where("action != ?", ActionAuditClear)
 	if len(before) > 0 && !before[0].IsZero() {
 		res := query.Where("created_at < ?", before[0].UTC()).Delete(&AuditLog{})
 		return res.RowsAffected, res.Error
 	}
 
-	res := query.Exec("DELETE FROM audit_logs")
+	res := query.Delete(&AuditLog{})
 	return res.RowsAffected, res.Error
+}
+
+// ClearWithAudit removes matching non-audit.clear records and persists the
+// clearing event itself in a single transaction.
+//
+// This is the only strong-guarantee audit path: the asynchronous queue may drop
+// entries under pressure, but a completed clear must always leave its own
+// record behind. The transaction commits before success is reported, so a
+// failure surfaces to the caller instead of being silently lost.
+//
+// entry supplies the already-resolved actor identity, action, and target. Its
+// Detail is overwritten with the deleted count, which is only known after the
+// delete statement runs inside this transaction.
+func (s *Store) ClearWithAudit(ctx context.Context, entry *AuditLog, before ...time.Time) (int64, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	var cleared int64
+	err = db.Transaction(func(tx *gorm.DB) error {
+		query := tx.Where("action != ?", ActionAuditClear)
+		if len(before) > 0 && !before[0].IsZero() {
+			query = query.Where("created_at < ?", before[0].UTC())
+		}
+		res := query.Delete(&AuditLog{})
+		if res.Error != nil {
+			return fmt.Errorf("clear audit logs: %w", res.Error)
+		}
+		cleared = res.RowsAffected
+
+		if entry == nil {
+			return nil
+		}
+		entry.Detail = fmt.Sprintf("deleted=%d", cleared)
+		return tx.Create(entry).Error
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return cleared, nil
 }

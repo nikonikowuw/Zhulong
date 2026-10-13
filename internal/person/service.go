@@ -11,31 +11,23 @@ import (
 	"unsafe"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
-	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"go.uber.org/zap"
 )
 
-// Auditor records user operations.
-type Auditor interface {
-	Record(entry audit.Entry)
-}
-
 // Service provides high-level business logic for personnel and face gallery.
 type Service struct {
-	store   *Store
-	auditor Auditor
-	logger  *zap.Logger
+	store  *Store
+	logger *zap.Logger
 }
 
 // NewService creates a Service instance.
-func NewService(store *Store, auditor Auditor, logger *zap.Logger) *Service {
+func NewService(store *Store, logger *zap.Logger) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &Service{
-		store:   store,
-		auditor: auditor,
-		logger:  logger.Named("person_service"),
+		store:  store,
+		logger: logger.Named("person_service"),
 	}
 }
 
@@ -73,39 +65,10 @@ func validateImagePath(p string) error {
 	return nil
 }
 
-// recordAudit writes one audit entry for a person-domain operation. A nil opErr records a
-// success; otherwise the entry is recorded as failed with the cause attached, so the audit
-// trail captures refused attempts (a rejected person_id reassignment, a missing person)
-// and not only the operations that went through.
-func (s *Service) recordAudit(action, target, detail string, opErr error) {
-	if s.auditor == nil {
-		return
-	}
-	entry := audit.Entry{
-		Action: action,
-		Target: target,
-		Detail: detail,
-		Status: audit.StatusSuccess,
-	}
-	if opErr != nil {
-		entry.Status = audit.StatusFailed
-		entry.ErrorMsg = opErr.Error()
-	}
-	s.auditor.Record(entry)
-}
-
-// failAudit records a failed operation and returns opErr unchanged, keeping error paths a
-// single expression: `return nil, s.failAudit(action, target, detail, err)`.
-func (s *Service) failAudit(action, target, detail string, opErr error) error {
-	s.recordAudit(action, target, detail, opErr)
-	return opErr
-}
-
 // CreatePerson creates a new person profile.
 func (s *Service) CreatePerson(ctx context.Context, req CreatePersonRequest) (*Person, error) {
 	if req.Name == "" {
-		return nil, s.failAudit(ActionPersonCreate, "person:", "Create person",
-			apperr.Invalid("NAME_REQUIRED", "Name is required", nil))
+		return nil, apperr.Invalid("NAME_REQUIRED", "Name is required", nil)
 	}
 
 	id := newID()
@@ -119,23 +82,17 @@ func (s *Service) CreatePerson(ctx context.Context, req CreatePersonRequest) (*P
 		PersonID: personID,
 		Name:     req.Name,
 	}
-	target := "person:" + p.ID
-	detail := "Create person " + p.Name
 
 	if err := s.store.CreatePerson(ctx, p); err != nil {
 		if errors.Is(err, ErrDuplicateID) {
-			return nil, s.failAudit(ActionPersonCreate, target, detail,
-				apperr.Conflict("PERSON_ALREADY_EXISTS", "Person already exists", err))
+			return nil, apperr.Conflict("PERSON_ALREADY_EXISTS", "Person already exists", err)
 		}
 		if errors.Is(err, ErrDuplicatePersonID) {
-			return nil, s.failAudit(ActionPersonCreate, target, detail,
-				apperr.Conflict("PERSON_ID_ALREADY_EXISTS", "Person with this personId already exists", err))
+			return nil, apperr.Conflict("PERSON_ID_ALREADY_EXISTS", "Person with this personId already exists", err)
 		}
-		return nil, s.failAudit(ActionPersonCreate, target, detail,
-			apperr.New(apperr.KindInternal, "PERSON_CREATE_FAILED", "Failed to create person", err))
+		return nil, apperr.New(apperr.KindInternal, "PERSON_CREATE_FAILED", "Failed to create person", err)
 	}
 
-	s.recordAudit(ActionPersonCreate, target, detail, nil)
 	return p, nil
 }
 
@@ -161,66 +118,50 @@ func (s *Service) ListPersons(ctx context.Context, limit, offset int) ([]Person,
 
 // UpdatePerson updates an existing person's metadata.
 func (s *Service) UpdatePerson(ctx context.Context, id string, req UpdatePersonRequest) (*Person, error) {
-	target := "person:" + id
-	detail := "Update person " + id
 
 	p, err := s.store.GetPersonMeta(ctx, id)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return nil, s.failAudit(ActionPersonUpdate, target, detail,
-				apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err))
+			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
 		}
-		return nil, s.failAudit(ActionPersonUpdate, target, detail,
-			apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to get person", err))
+		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to get person", err)
 	}
-	detail = "Update person " + p.Name
 
 	// person_id is the business key external systems correlate on, so it is immutable:
 	// an attempt to change it fails loudly rather than being silently dropped. The field
 	// is kept in the DTO precisely so this rejection is reachable.
 	if req.PersonID != nil && *req.PersonID != p.PersonID {
-		return nil, s.failAudit(ActionPersonUpdate, target, detail,
-			apperr.Conflict("PERSON_ID_IMMUTABLE", "personId cannot be changed", nil))
+		return nil, apperr.Conflict("PERSON_ID_IMMUTABLE", "personId cannot be changed", nil)
 	}
 	if req.Name != nil {
 		if *req.Name == "" {
-			return nil, s.failAudit(ActionPersonUpdate, target, detail,
-				apperr.Invalid("NAME_REQUIRED", "Name is required", nil))
+			return nil, apperr.Invalid("NAME_REQUIRED", "Name is required", nil)
 		}
 		p.Name = *req.Name
-		detail = "Update person " + p.Name
 	}
 
 	if err := s.store.UpdatePerson(ctx, p); err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return nil, s.failAudit(ActionPersonUpdate, target, detail,
-				apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err))
+			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
 		}
-		return nil, s.failAudit(ActionPersonUpdate, target, detail,
-			apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to update person", err))
+		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to update person", err)
 	}
 
-	s.recordAudit(ActionPersonUpdate, target, detail, nil)
 	return p, nil
 }
 
 // DeletePerson deletes a person and their faces.
 func (s *Service) DeletePerson(ctx context.Context, id string) error {
-	target := "person:" + id
-	detail := "Delete person " + id
 
 	if err := s.store.DeletePerson(ctx, id); err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return s.failAudit(ActionPersonDelete, target, detail,
-				apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err))
+			return apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
 		}
-		return s.failAudit(ActionPersonDelete, target, detail,
-			apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to delete person", err))
+		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to delete person", err)
 	}
 
 	// TODO: 同步删除Engine中的人脸特征向量
 
-	s.recordAudit(ActionPersonDelete, target, detail, nil)
 	return nil
 }
 
@@ -229,21 +170,17 @@ func (s *Service) DeletePerson(ctx context.Context, id string) error {
 // TODO(api/storage): 待改造成文件流接收 (multipart/form-data) 并落盘，当前接收 ImagePath 为临时占位。
 func (s *Service) AddFace(ctx context.Context, personID string, req AddFaceRequest) (*Face, error) {
 	// Until the face row exists the only resource we can name is the owning person.
-	target := "person:" + personID
-	detail := "Add face for person " + personID
 
 	if err := validateImagePath(req.ImagePath); err != nil {
-		return nil, s.failAudit(ActionPersonFaceAdd, target, detail, err)
+		return nil, err
 	}
 
 	// Verify the person exists without preloading their faces: this path needs the row only.
 	if _, err := s.store.GetPersonMeta(ctx, personID); err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return nil, s.failAudit(ActionPersonFaceAdd, target, detail,
-				apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err))
+			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
 		}
-		return nil, s.failAudit(ActionPersonFaceAdd, target, detail,
-			apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err))
+		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
 	}
 
 	// TODO(algo): 接入算法包/NPU 视觉推理流水线提取特征向量 (Face Detection -> Alignment -> Feature Extraction).
@@ -256,36 +193,28 @@ func (s *Service) AddFace(ctx context.Context, personID string, req AddFaceReque
 		ImagePath:     req.ImagePath,
 		FeatureVector: feat,
 	}
-	target = "face:" + face.ID
 
 	if err := s.store.AddFace(ctx, face); err != nil {
-		return nil, s.failAudit(ActionPersonFaceAdd, target, detail,
-			apperr.New(apperr.KindInternal, "FACE_ADD_FAILED", "Failed to add face template", err))
+		return nil, apperr.New(apperr.KindInternal, "FACE_ADD_FAILED", "Failed to add face template", err)
 	}
 
 	// TODO: 同步添加的人脸到Engine中
 
-	s.recordAudit(ActionPersonFaceAdd, target, detail, nil)
 	return face, nil
 }
 
 // DeleteFace deletes a specific face template belonging to the given person.
 func (s *Service) DeleteFace(ctx context.Context, personID, faceID string) error {
-	target := "face:" + faceID
-	detail := "Delete face " + faceID
 
 	if err := s.store.DeleteFace(ctx, personID, faceID); err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return s.failAudit(ActionPersonFaceDelete, target, detail,
-				apperr.NotFound("FACE_NOT_FOUND", "Face not found", err))
+			return apperr.NotFound("FACE_NOT_FOUND", "Face not found", err)
 		}
-		return s.failAudit(ActionPersonFaceDelete, target, detail,
-			apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to delete face", err))
+		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to delete face", err)
 	}
 
 	// TODO: 同步删除Engine中的人脸特征
 
-	s.recordAudit(ActionPersonFaceDelete, target, detail, nil)
 	return nil
 }
 

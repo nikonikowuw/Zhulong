@@ -327,3 +327,202 @@ func TestStoreUnreadyDatabase(t *testing.T) {
 		})
 	}
 }
+
+func TestPruneExemptsAuditClear(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	base := time.Now().UTC()
+	// One older-than-everything clear record that must survive pruning.
+	if err := store.Create(ctx, &AuditLog{
+		CreatedAt: base.Add(-time.Hour),
+		Action:    ActionAuditClear,
+		Username:  UsernameUnknown,
+		Target:    "audit_logs",
+		Status:    StatusSuccess,
+	}); err != nil {
+		t.Fatalf("seed audit.clear failed: %v", err)
+	}
+
+	// More ordinary records than the retention limit allows.
+	const maxEntries = 5
+	for i := 0; i < 12; i++ {
+		if err := store.Create(ctx, &AuditLog{
+			CreatedAt: base.Add(time.Duration(i) * time.Millisecond),
+			Action:    ActionCameraUpdate,
+			Target:    fmt.Sprintf("camera:%d", i),
+			Username:  UsernameUnknown,
+			Status:    StatusSuccess,
+		}); err != nil {
+			t.Fatalf("seed ordinary record %d failed: %v", i, err)
+		}
+	}
+
+	if _, err := store.Prune(ctx, maxEntries); err != nil {
+		t.Fatalf("Prune failed: %v", err)
+	}
+
+	clears, total, err := store.List(ctx, Filter{Action: ActionAuditClear})
+	if err != nil {
+		t.Fatalf("List audit.clear failed: %v", err)
+	}
+	if len(clears) != 1 {
+		t.Fatalf("expected audit.clear to survive pruning, got %d of %d total", len(clears), total)
+	}
+	if clears[0].Target != "audit_logs" {
+		t.Fatalf("unexpected surviving audit.clear target: %q", clears[0].Target)
+	}
+}
+
+func TestClearWithAuditPersistsSelfAudit(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		if err := store.Create(ctx, &AuditLog{
+			Action:   ActionCameraDelete,
+			Target:   fmt.Sprintf("camera:%d", i),
+			Username: UsernameUnknown,
+			Status:   StatusSuccess,
+		}); err != nil {
+			t.Fatalf("seed failed: %v", err)
+		}
+	}
+
+	entry := &AuditLog{
+		Action:   ActionAuditClear,
+		Target:   "audit_logs",
+		IP:       "10.0.0.4",
+		Username: "operator",
+		Status:   StatusSuccess,
+	}
+	cleared, err := store.ClearWithAudit(ctx, entry)
+	if err != nil {
+		t.Fatalf("ClearWithAudit failed: %v", err)
+	}
+	if cleared != 3 {
+		t.Fatalf("expected 3 cleared, got %d", cleared)
+	}
+
+	clears, total, err := store.List(ctx, Filter{Action: ActionAuditClear})
+	if err != nil {
+		t.Fatalf("List audit.clear failed: %v", err)
+	}
+	if total != 1 || len(clears) != 1 {
+		t.Fatalf("expected exactly one audit.clear record, got total=%d len=%d", total, len(clears))
+	}
+	if clears[0].IP != "10.0.0.4" {
+		t.Fatalf("expected request IP to be persisted, got %q", clears[0].IP)
+	}
+	if clears[0].Detail != "deleted=3" {
+		t.Fatalf("expected deleted count in detail, got %q", clears[0].Detail)
+	}
+}
+
+func TestClearWithAuditKeepsPreviousClearRecords(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if err := store.Create(ctx, &AuditLog{
+		Action:   ActionAuditClear,
+		Target:   "audit_logs",
+		Username: "first-operator",
+		Status:   StatusSuccess,
+	}); err != nil {
+		t.Fatalf("seed first clear failed: %v", err)
+	}
+	if err := store.Create(ctx, &AuditLog{
+		Action:   ActionCameraCreate,
+		Target:   "camera:1",
+		Username: UsernameUnknown,
+		Status:   StatusSuccess,
+	}); err != nil {
+		t.Fatalf("seed ordinary record failed: %v", err)
+	}
+
+	// Second clear: only the ordinary record may be deleted.
+	cleared, err := store.ClearWithAudit(ctx, &AuditLog{
+		Action:   ActionAuditClear,
+		Target:   "audit_logs",
+		Username: "second-operator",
+		Status:   StatusSuccess,
+	})
+	if err != nil {
+		t.Fatalf("ClearWithAudit failed: %v", err)
+	}
+	if cleared != 1 {
+		t.Fatalf("expected only the ordinary record to be cleared, got %d", cleared)
+	}
+
+	clears, total, err := store.List(ctx, Filter{Action: ActionAuditClear})
+	if err != nil {
+		t.Fatalf("List audit.clear failed: %v", err)
+	}
+	if total != 2 || len(clears) != 2 {
+		t.Fatalf("expected both clear records to survive, got total=%d len=%d", total, len(clears))
+	}
+
+	remaining, err := store.Count(ctx)
+	if err != nil {
+		t.Fatalf("Count failed: %v", err)
+	}
+	if remaining != 2 {
+		t.Fatalf("expected only clear records to remain, got %d", remaining)
+	}
+}
+
+func TestClearWithAuditRespectsBeforeFilter(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	base := time.Now().UTC()
+	old := &AuditLog{CreatedAt: base.Add(-2 * time.Hour), Action: ActionCameraDelete, Status: StatusSuccess}
+	recent := &AuditLog{CreatedAt: base, Action: ActionCameraDelete, Status: StatusSuccess}
+	if err := store.CreateBatch(ctx, []*AuditLog{old, recent}); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+
+	cleared, err := store.ClearWithAudit(ctx, &AuditLog{
+		Action: ActionAuditClear,
+		Target: "audit_logs",
+		Status: StatusSuccess,
+	}, base.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("ClearWithAudit failed: %v", err)
+	}
+	if cleared != 1 {
+		t.Fatalf("expected only the old record to be cleared, got %d", cleared)
+	}
+
+	// The recent ordinary record plus the new self-audit record remain.
+	total, err := store.Count(ctx)
+	if err != nil {
+		t.Fatalf("Count failed: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected 2 remaining records, got %d", total)
+	}
+}
+
+func TestClearWithAuditFailsWhenDatabaseUnavailable(t *testing.T) {
+	ctx := context.Background()
+
+	for name, store := range map[string]*Store{
+		"unready": NewStore(mockNilDBProvider{}),
+		"nil":     NewStore(nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			cleared, err := store.ClearWithAudit(ctx, &AuditLog{Action: ActionAuditClear})
+			if err == nil {
+				t.Fatalf("%s: expected an error so the caller cannot report success", name)
+			}
+			if cleared != 0 {
+				t.Fatalf("%s: expected zero cleared on failure, got %d", name, cleared)
+			}
+		})
+	}
+}

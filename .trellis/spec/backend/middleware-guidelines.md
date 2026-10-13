@@ -25,6 +25,8 @@ Response 桃 [1. Recovery 捕获] 桃 ------------------- 桃 [4. AccessLog 耗�
 ```
 
 * **Recovery 最外层**：确保接住下游所有 panic，防止边缘单进程崩溃。
+  * ⚠️ handler panic 时，外层中间件 `c.Next()` 之后的代码**不会执行**（gin 的 handler 索引在 panic 时不推进）；`defer` 中读取 `c.Writer.Status()` 只会得到默认 `200`。需要感知 panic 的下游能力（如审计）必须通过 `Recovery(logger, observers...)` 的 `PanicObserver` 回调，而不是自行在 `c.Next()` 后收口。
+  * `PanicObserver` 接口定义在 `internal/httpmiddleware`（不导入业务包），具体实现由 `internal/app` 注入，保持单向依赖。
 * **RequestID 先于 AccessLog**：保证结构化日志能直接打印 `requestId`。
 * **CORS 优先短路**：`OPTIONS` 预检请求必须在进入鉴权/耗时逻辑前立即 `204 Abort`。
 
@@ -43,6 +45,7 @@ Response 桃 [1. Recovery 捕获] 桃 ------------------- 桃 [4. AccessLog 耗�
 * 对外一律脱敏返回统一 500 JSON：`{ "code": "INTERNAL_ERROR", "message": "...", "data": null }`。
 
 * **MaxBodyLimit 防击穿**：边缘端非文件接口强制限制 Body 上限（如 1~2MB），超限直接截断并返 413，防 OOM。
+  * `ContentLength` 预检在路由 Handler 之前拒绝请求；无 `Content-Length` 的 chunked 请求会穿透预检，改由 `http.MaxBytesReader` 在绑定阶段拒绝。两者对审计的含义不同：前者无审计意图，后者属于「已声明意图的绑定失败」，需要留痕。
 
 ---
 

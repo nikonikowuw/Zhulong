@@ -14,7 +14,8 @@ cmd/
 internal/
   app/                        # 应用全局装配与 Fx 生命周期 (app.go, router.go, runtime.go)
   apidocs/                    # swag 生成的 Swagger 产物 (由 make api-docs 覆盖，禁止手改)
-  audit/                      # 操作与安全审计日志模块 (model.go, store.go, service.go, handler.go)
+  audit/                      # 操作与安全审计日志模块 (model.go, actor.go, store.go, service.go)
+  audit/http/                 # 审计的 Gin 适配层 (package audithttp: handler.go, scope.go, panic.go)
   auth/                       # 单用户认证与会话管理 (handler.go, store.go, limiter.go, middleware.go)
   camera/                     # 相机管理业务模块 (主子流建模、凭据加密、探活调度)
   person/                     # 人员与人脸底库域 (persons / person_faces 一人多照 CRUD)
@@ -42,6 +43,7 @@ internal/
 ```txt
 cmd/Zhulong ➔ internal/app ➔ internal/{auth, camera, person, algorithm, storage, network, systemtime, audit} ➔ internal/{engine, database, httputil}
                              internal/app ➔ internal/httpmiddleware ➔ internal/httputil
+                             internal/app ➔ internal/audit/http ➔ internal/audit
 ```
 
 1. **禁止反向依赖**：业务模块严禁导入 `internal/app`。
@@ -50,3 +52,5 @@ cmd/Zhulong ➔ internal/app ➔ internal/{auth, camera, person, algorithm, stor
 4. **底层基础无业务偏见**：`engine`, `database`, `httputil` 严禁反向导入任何上层业务模块。
 5. **禁止根公共库 `pkg/`**：单机程序私有实现收敛在 `internal/`，不暴露外部库。
 6. **C++ 类型不出 engine 包**：`internal/engine` 必须将所有 C 类型（`C.int`, `unsafe.Pointer`）转为 Go 原生类型，业务模块严禁 `import "C"`。
+7. **审计核心无 HTTP 偏见**：`internal/audit` 不得导入 Gin 或 `httputil`；Gin 中间件、Tag API 与审计 Handler 全部位于 `internal/audit/http`（包名 `audithttp`）。`audit/http` 不得导入 `internal/auth` 等业务包，避免 `auth ➔ audit/http ➔ auth` 环路。
+8. **审计 API 仅 Handler 层调用**：Service 层不得持有 `*gin.Context`、不得导入审计包。用户操作的审计声明归属 HTTP Handler；后台事件仅可通过只含 `RecordSystem` 的窄接口记录（如 `systemtime.SystemEventRecorder`）。

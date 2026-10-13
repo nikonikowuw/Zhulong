@@ -3,6 +3,7 @@ package auth
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
 
@@ -49,6 +50,11 @@ func writeUnauthorized(c *gin.Context) {
 }
 
 // RequireAuth middleware verifies the session cookie and injects CurrentUser into context.
+//
+// It also attaches the authenticated actor to the standard request context, so
+// downstream audit records resolve the configured account name. The request IP
+// set by the audit middleware is preserved: authentication refines the
+// identity but never replaces the connection source.
 func RequireAuth(service AuthService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token, err := c.Cookie(SessionCookieName)
@@ -68,6 +74,15 @@ func RequireAuth(service AuthService) gin.HandlerFunc {
 			ID:       sessionItem.UserID,
 			Username: sessionItem.Username,
 		})
+
+		actor, found := audit.FromContext(c.Request.Context())
+		if !found {
+			actor = audit.Actor{IP: c.ClientIP(), Source: audit.SourceWeb}
+		}
+		if sessionItem.Username != "" {
+			actor.Username = sessionItem.Username
+		}
+		c.Request = c.Request.WithContext(audit.WithActor(c.Request.Context(), actor))
 
 		c.Next()
 	}

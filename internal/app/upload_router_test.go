@@ -155,7 +155,7 @@ func TestUploadRouteEndToEndRealRouter(t *testing.T) {
 		}
 	})
 
-	comp := algorithm.NewAlgorithmComponents(dbStore, nil, dataDir, "cpu", zap.NewNop())
+	comp := algorithm.NewAlgorithmComponents(dbStore, dataDir, "cpu", zap.NewNop())
 	comp.Supervisor = algorithm.NewSupervisor(comp.Store, dataDir, "sleep", "", algorithm.DefaultRecoveryOptions(), zap.NewNop())
 	comp.Verifier.RunnerPath = "" // bypass dynamic runner check in test
 

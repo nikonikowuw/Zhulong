@@ -8,15 +8,25 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/audit"
+	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/person"
 	"go.uber.org/zap"
 )
 
+// setupTestRouter wires the real audit middleware so handler tests assert the
+// declarative audit path rather than a test double.
 func setupTestRouter(t *testing.T) (*gin.Engine, *person.Service) {
+	router, service, _ := setupTestRouterWithAudit(t)
+	return router, service
+}
+
+func setupTestRouterWithAudit(t *testing.T) (*gin.Engine, *person.Service, *audit.Service) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	tempDir := t.TempDir()
@@ -27,13 +37,37 @@ func setupTestRouter(t *testing.T) (*gin.Engine, *person.Service) {
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	comp := person.NewPersonComponents(dbStore, nil, zap.NewNop())
+	auditSvc := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
+		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
+	})
+	if err := auditSvc.Start(context.Background()); err != nil {
+		t.Fatalf("start audit service: %v", err)
+	}
+	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
+
+	comp := person.NewPersonComponents(dbStore, zap.NewNop())
 
 	r := gin.New()
 	api := r.Group("/api/v1")
+	api.Use(audithttp.Middleware(auditSvc))
 	comp.Handler.RegisterRoutes(api)
 
-	return r, comp.Service
+	return r, comp.Service, auditSvc
+}
+
+// drainAudit stops the service so queued entries are persisted, then lists them.
+func drainAudit(t *testing.T, svc *audit.Service) []audit.AuditLog {
+	t.Helper()
+	stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := svc.Stop(stopCtx); err != nil {
+		t.Fatalf("drain audit service: %v", err)
+	}
+	items, _, err := svc.List(context.Background(), audit.Filter{Limit: 50})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+	return items
 }
 
 func TestHandlerPersonAndFaces(t *testing.T) {
@@ -496,5 +530,174 @@ func TestHandlerAddFaceRejectsUncleanImagePath(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("a clean absolute imagePath must be accepted, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandlerAuditCoverage exercises every audited person write operation
+// through the real router and asserts the resulting records.
+func TestHandlerAuditCoverage(t *testing.T) {
+	router, _, auditSvc := setupTestRouterWithAudit(t)
+
+	createBody := bytes.NewReader([]byte(`{"personId":"EMP_AUDIT","name":"审计"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/persons", createBody)
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.168.9.9:1111"
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create failed: %d %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		Data person.Person `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal create response: %v", err)
+	}
+	id := created.Data.ID
+
+	// Add a face, then delete it.
+	faceBody := bytes.NewReader([]byte(`{"imagePath":"/tmp/enroll.jpg"}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/persons/"+id+"/faces", faceBody)
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.168.9.9:1111"
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("add face failed: %d %s", w.Code, w.Body.String())
+	}
+	var faceResp struct {
+		Data person.Face `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &faceResp); err != nil {
+		t.Fatalf("unmarshal face response: %v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/persons/"+id+"/faces/"+faceResp.Data.ID, nil)
+	req.RemoteAddr = "192.168.9.9:1111"
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete face failed: %d %s", w.Code, w.Body.String())
+	}
+
+	// Update, then delete the person.
+	updateBody := bytes.NewReader([]byte(`{"name":"审计-改"}`))
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/persons/"+id, updateBody)
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.168.9.9:1111"
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update failed: %d %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/persons/"+id, nil)
+	req.RemoteAddr = "192.168.9.9:1111"
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete failed: %d %s", w.Code, w.Body.String())
+	}
+
+	entries := drainAudit(t, auditSvc)
+	want := []string{
+		person.ActionPersonCreate,
+		person.ActionPersonFaceAdd,
+		person.ActionPersonFaceDelete,
+		person.ActionPersonUpdate,
+		person.ActionPersonDelete,
+	}
+	if len(entries) != len(want) {
+		t.Fatalf("expected %d audit entries, got %d: %+v", len(want), len(entries), entries)
+	}
+
+	seen := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		seen[e.Action] = true
+		if e.Status != audit.StatusSuccess {
+			t.Errorf("expected success for %s, got %q (%s)", e.Action, e.Status, e.ErrorMsg)
+		}
+		if e.IP != "192.168.9.9" {
+			t.Errorf("expected the request IP on %s, got %q", e.Action, e.IP)
+		}
+	}
+	for _, action := range want {
+		if !seen[action] {
+			t.Errorf("missing audit entry for %s", action)
+		}
+	}
+}
+
+// TestHandlerAuditDetailExcludesSensitiveFaceData asserts the enrollment photo
+// path and the feature vector never reach the audit trail.
+func TestHandlerAuditDetailExcludesSensitiveFaceData(t *testing.T) {
+	router, _, auditSvc := setupTestRouterWithAudit(t)
+
+	createBody := bytes.NewReader([]byte(`{"personId":"EMP_SEC","name":"机密"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/persons", createBody)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var created struct {
+		Data person.Person `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &created)
+
+	faceBody := bytes.NewReader([]byte(`{"imagePath":"/tmp/secret-face.jpg"}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/persons/"+created.Data.ID+"/faces", faceBody)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("add face failed: %d %s", w.Code, w.Body.String())
+	}
+
+	entries := drainAudit(t, auditSvc)
+	for _, e := range entries {
+		if strings.Contains(e.Detail, "secret-face") {
+			t.Errorf("enrollment photo path leaked into audit detail: %q", e.Detail)
+		}
+		if strings.Contains(e.Detail, "feature") {
+			t.Errorf("feature data leaked into audit detail: %q", e.Detail)
+		}
+	}
+}
+
+// TestHandlerAuditRecordsRefusedUpdate asserts a rejected immutable-key change
+// still produces a failed record instead of disappearing from the trail.
+func TestHandlerAuditRecordsRefusedUpdate(t *testing.T) {
+	router, _, auditSvc := setupTestRouterWithAudit(t)
+
+	createBody := bytes.NewReader([]byte(`{"personId":"EMP_IMM","name":"不可变"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/persons", createBody)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var created struct {
+		Data person.Person `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &created)
+
+	badUpdate := bytes.NewReader([]byte(`{"personId":"EMP_CHANGED"}`))
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/persons/"+created.Data.ID, badUpdate)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	entries := drainAudit(t, auditSvc)
+	var found bool
+	for _, e := range entries {
+		if e.Action == person.ActionPersonUpdate && e.Status == audit.StatusFailed {
+			found = true
+			if !strings.Contains(e.ErrorMsg, "PERSON_ID_IMMUTABLE") {
+				t.Errorf("expected the stable error code, got %q", e.ErrorMsg)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a failed person.update record, got %+v", entries)
 	}
 }

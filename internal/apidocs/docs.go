@@ -622,7 +622,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/httputil.PaginatedData-audit_AuditLogDTO"
+                                            "$ref": "#/definitions/httputil.PaginatedData-audithttp_AuditLogDTO"
                                         }
                                     }
                                 }
@@ -2726,7 +2726,7 @@ const docTemplate = `{
                 }
             }
         },
-        "audit.AuditLogDTO": {
+        "audithttp.AuditLogDTO": {
             "type": "object",
             "properties": {
                 "action": {
@@ -3108,13 +3108,13 @@ const docTemplate = `{
                 }
             }
         },
-        "httputil.PaginatedData-audit_AuditLogDTO": {
+        "httputil.PaginatedData-audithttp_AuditLogDTO": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/audit.AuditLogDTO"
+                        "$ref": "#/definitions/audithttp.AuditLogDTO"
                     }
                 },
                 "limit": {

@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "验证中间件执行序与上下文错误提取"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端单元测试、竞态检测与质量红线"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "验收核心包无 Gin 依赖、无 import cycle 与目录树一致性"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验收 ClearWithAudit 事务与 Prune 豁免 audit.clear 的持久化语义"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验收 panic/错误的安全摘要与 error_msg 脱敏边界"}

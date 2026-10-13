@@ -2,11 +2,13 @@ package systemtime
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
 )
@@ -69,6 +71,8 @@ func (h *Handler) GetTime(c *gin.Context) {
 // @Failure      500  {object}  httputil.Response
 // @Router       /system/time/config [put]
 func (h *Handler) UpdateConfig(c *gin.Context) {
+	audithttp.Tag(c, ActionTimeUpdateConfig, "system_time", "Update time configuration")
+
 	var req UpdateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.HandleBindError(c, err, reflect.TypeOf(req))
@@ -80,6 +84,9 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_TIME_CONFIG", err.Error(), err))
 		return
 	}
+	// Whitelisted summary: the request fields are non-sensitive configuration.
+	audithttp.TagDetail(c, fmt.Sprintf("mode=%s, servers=%v, interval=%ds, tz=%s",
+		req.Mode, req.NTPServers, req.SyncIntervalSeconds, req.Timezone))
 	httputil.Success(c, status)
 }
 
@@ -94,6 +101,8 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 // @Failure      500  {object}  httputil.Response
 // @Router       /system/time/sync [post]
 func (h *Handler) SyncNow(c *gin.Context) {
+	audithttp.Tag(c, ActionTimeNTPSync, "system_time", "Manual NTP sync")
+
 	status, err := h.service.SyncNow(c.Request.Context())
 	if err != nil {
 		if errors.Is(err, ErrSyncInProgress) {
@@ -106,6 +115,12 @@ func (h *Handler) SyncNow(c *gin.Context) {
 		}
 		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "NTP_SYNC_FAILED", err.Error(), err))
 		return
+	}
+	// The endpoint keeps its 200 contract even when the probe failed, so the
+	// domain outcome is reported explicitly: without this the audit record would
+	// claim success for a sync that never happened.
+	if status != nil && status.SyncStatus.State == SyncStateFailed {
+		audithttp.TagError(c, "NTP_SYNC_FAILED", "NTP synchronization failed")
 	}
 	httputil.Success(c, status)
 }
@@ -123,6 +138,8 @@ func (h *Handler) SyncNow(c *gin.Context) {
 // @Failure      500  {object}  httputil.Response
 // @Router       /system/time/manual [post]
 func (h *Handler) ManualSet(c *gin.Context) {
+	audithttp.Tag(c, ActionTimeManualSet, "system_time", "Set system time manually")
+
 	var req ManualTimeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.HandleBindError(c, err, reflect.TypeOf(req))
@@ -140,6 +157,7 @@ func (h *Handler) ManualSet(c *gin.Context) {
 		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "SET_TIME_FAILED", err.Error(), err))
 		return
 	}
+	audithttp.TagDetail(c, "target="+targetTime.Format(time.RFC3339Nano))
 	httputil.Success(c, status)
 }
 

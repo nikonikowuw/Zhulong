@@ -7,32 +7,25 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/audit"
+	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
 )
 
-// Auditor defines the interface for recording audit events.
-type Auditor interface {
-	Record(entry audit.Entry)
-}
-
 // Handler provides HTTP endpoints for algorithm packages, analysis tasks, and face galleries.
 type Handler struct {
 	service        *Service
-	auditor        Auditor
 	logger         *zap.Logger
 	maxUploadLimit int64
 }
 
 // NewHandler creates a new Handler instance.
-func NewHandler(service *Service, auditor Auditor, logger *zap.Logger) *Handler {
+func NewHandler(service *Service, logger *zap.Logger) *Handler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &Handler{
 		service:        service,
-		auditor:        auditor,
 		logger:         logger.Named("algorithm_handler"),
 		maxUploadLimit: MaxUploadSize,
 	}
@@ -94,6 +87,10 @@ func (h *Handler) UploadRouteRegistrar() RouteRegistrar {
 // @Failure      500  {object}  httputil.Response
 // @Router       /algorithms/install [post]
 func (h *Handler) Install(c *gin.Context) {
+	// Declared before the multipart stream is read so a rejected archive is
+	// still attributable. The target is refined once the algorithm is known.
+	audithttp.Tag(c, ActionAlgorithmInstall, "algorithm:", "Install algorithm")
+
 	reader, err := c.Request.MultipartReader()
 	if err != nil {
 		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_FILE", "Missing upload file", err))
@@ -178,14 +175,8 @@ func (h *Handler) Install(c *gin.Context) {
 		return
 	}
 
-	if h.auditor != nil {
-		h.auditor.Record(audit.Entry{
-			Action: "algorithm.install",
-			Target: algo.ID,
-			Detail: algo.Name,
-			Status: audit.StatusSuccess,
-		})
-	}
+	audithttp.TagTarget(c, "algorithm:"+algo.ID)
+	audithttp.TagDetail(c, algo.Name)
 
 	c.JSON(http.StatusCreated, httputil.Response{
 		Code:    "OK",
@@ -247,6 +238,8 @@ func (h *Handler) Get(c *gin.Context) {
 // @Router       /algorithms/{id}/enable [post]
 func (h *Handler) Enable(c *gin.Context) {
 	id := c.Param("id")
+	audithttp.Tag(c, ActionAlgorithmEnable, "algorithm:"+id, "Enable algorithm "+id)
+
 	if err := h.service.EnableAlgorithm(c.Request.Context(), id); err != nil {
 		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to enable algorithm", err))
 		return
@@ -265,6 +258,8 @@ func (h *Handler) Enable(c *gin.Context) {
 // @Router       /algorithms/{id}/disable [post]
 func (h *Handler) Disable(c *gin.Context) {
 	id := c.Param("id")
+	audithttp.Tag(c, ActionAlgorithmDisable, "algorithm:"+id, "Disable algorithm "+id)
+
 	if err := h.service.DisableAlgorithm(c.Request.Context(), id); err != nil {
 		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to disable algorithm", err))
 		return
@@ -284,6 +279,8 @@ func (h *Handler) Disable(c *gin.Context) {
 // @Router       /algorithms/{id}/reset [post]
 func (h *Handler) Reset(c *gin.Context) {
 	id := c.Param("id")
+	audithttp.Tag(c, ActionAlgorithmReset, "algorithm:"+id, "Reset algorithm "+id)
+
 	if err := h.service.ResetAlgorithm(c.Request.Context(), id); err != nil {
 		if errors.Is(err, ErrAlgorithmNotInCrashLoop) {
 			httputil.WriteError(c, httputil.NewError(http.StatusConflict, "ALGORITHM_NOT_IN_CRASH_LOOP", "Algorithm is not in CRASH_LOOP", err))
@@ -308,6 +305,8 @@ func (h *Handler) Reset(c *gin.Context) {
 // @Router       /algorithms/{id} [delete]
 func (h *Handler) Delete(c *gin.Context) {
 	id := c.Param("id")
+	audithttp.Tag(c, ActionAlgorithmDelete, "algorithm:"+id, "Delete algorithm "+id)
+
 	if err := h.service.DeleteAlgorithm(c.Request.Context(), id); err != nil {
 		if errors.Is(err, ErrAlgorithmActive) {
 			httputil.WriteError(c, httputil.NewError(http.StatusConflict, "ALGORITHM_IS_ACTIVE", "Algorithm is active", err))
@@ -377,6 +376,8 @@ type CreateTaskRequest struct {
 // @Failure      500  {object}  httputil.Response
 // @Router       /algorithms/tasks [post]
 func (h *Handler) CreateTask(c *gin.Context) {
+	audithttp.Tag(c, ActionAlgorithmTaskCreate, "algorithm.task:", "Create analysis task")
+
 	var req CreateTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_REQUEST", "Invalid analysis task payload", err))
@@ -459,6 +460,8 @@ func (h *Handler) CreateTask(c *gin.Context) {
 // @Router       /algorithms/tasks/{id} [delete]
 func (h *Handler) DeleteTask(c *gin.Context) {
 	id := c.Param("id")
+	audithttp.Tag(c, ActionAlgorithmTaskDelete, "algorithm.task:"+id, "Delete analysis task "+id)
+
 	if err := h.service.DeleteTask(c.Request.Context(), id); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			httputil.WriteError(c, httputil.NewError(http.StatusNotFound, "TASK_NOT_FOUND", "Analysis task not found", err))

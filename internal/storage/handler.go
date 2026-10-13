@@ -6,6 +6,7 @@ import (
 	"reflect"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
 )
@@ -37,6 +38,26 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.POST("/test", h.TestPath)
 		group.POST("/cleanup", h.TriggerCleanup)
 	}
+}
+
+// currentActor resolves the identity to attribute a user-initiated storage
+// operation to.
+//
+// The authenticated actor is read from the standard request context, where
+// auth.RequireAuth stores it. Reading it here rather than importing internal/auth
+// keeps this module free of a dependency on the auth package.
+//
+// The username must never fall back to a fixed "admin": the system has one
+// configurable account, so a hardcoded name would fabricate an identity on every
+// record. An unauthenticated caller is reported as anonymous instead, and the
+// connection source IP remains the primary attribution field.
+func (h *Handler) currentActor(c *gin.Context) (username, ip string) {
+	ip = c.ClientIP()
+	actor, ok := audit.FromContext(c.Request.Context())
+	if !ok || actor.Username == "" {
+		return audit.UsernameAnonymous, ip
+	}
+	return actor.Username, ip
 }
 
 // GetStatus godoc
@@ -103,11 +124,7 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 		EmergencyStopMinMB:      req.EmergencyStopMinMB,
 	}
 
-	username := c.GetString("username")
-	if username == "" {
-		username = "admin"
-	}
-	clientIP := c.ClientIP()
+	username, clientIP := h.currentActor(c)
 
 	status, err := h.service.UpdateConfig(c.Request.Context(), cfg, username, clientIP)
 	if err != nil {
@@ -136,11 +153,7 @@ func (h *Handler) TestPath(c *gin.Context) {
 		return
 	}
 
-	username := c.GetString("username")
-	if username == "" {
-		username = "admin"
-	}
-	clientIP := c.ClientIP()
+	username, clientIP := h.currentActor(c)
 
 	res, err := h.service.TestPath(c.Request.Context(), req.Path, username, clientIP)
 	if err != nil {
@@ -160,11 +173,7 @@ func (h *Handler) TestPath(c *gin.Context) {
 // @Failure      500  {object}  httputil.Response
 // @Router       /system/storage/cleanup [post]
 func (h *Handler) TriggerCleanup(c *gin.Context) {
-	username := c.GetString("username")
-	if username == "" {
-		username = "admin"
-	}
-	clientIP := c.ClientIP()
+	username, clientIP := h.currentActor(c)
 
 	summary, err := h.service.TriggerManualCleanup(c.Request.Context(), username, clientIP)
 	if err != nil {

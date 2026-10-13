@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -65,22 +66,16 @@ func NewService(
 	gate.SetCallbacks(
 		func(reason string) {
 			if s.auditor != nil {
-				s.auditor.Record(audit.Entry{
-					Action: ActionStorageEmergencyStop,
-					Target: "media_storage",
-					Detail: reason,
-					Status: audit.StatusFailed,
-				})
+				// Background event: no client origin, so it is recorded with an
+				// empty IP rather than a faked loopback address.
+				s.auditor.RecordSystem(ActionStorageEmergencyStop, "media_storage", reason,
+					errEmergencyStop)
 			}
 		},
 		func() {
 			if s.auditor != nil {
-				s.auditor.Record(audit.Entry{
-					Action: ActionStorageEmergencyResume,
-					Target: "media_storage",
-					Detail: "storage capacity recovered to safe levels",
-					Status: audit.StatusSuccess,
-				})
+				s.auditor.RecordSystem(ActionStorageEmergencyResume, "media_storage",
+					"storage capacity recovered to safe levels", nil)
 			}
 		},
 	)
@@ -89,11 +84,19 @@ func NewService(
 }
 
 // SetAuditor configures the system audit log service.
+//
+// User-initiated storage operations keep their existing audit path and are out
+// of scope for this refactor; only the circuit-breaker callbacks below were
+// changed to record as system events.
 func (s *Service) SetAuditor(auditor *audit.Service) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.auditor = auditor
 }
+
+// errEmergencyStop is the safe summary recorded when the storage circuit
+// breaker trips. The detailed reason travels in the detail field.
+var errEmergencyStop = errors.New("storage emergency stop engaged")
 
 // CanWrite returns whether storage currently allows writing new files.
 func (s *Service) CanWrite() bool {

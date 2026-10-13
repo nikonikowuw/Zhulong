@@ -10,6 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	_ "github.com/nikonikowuw/Zhulong/internal/apidocs"
+	"github.com/nikonikowuw/Zhulong/internal/audit"
+	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
@@ -49,6 +51,7 @@ type RouterParams struct {
 	DatabaseReady   ServiceReadiness `optional:"true" name:"db_ready"`
 	NativeReady     ServiceReadiness `optional:"true" name:"native_ready"`
 	AuthService     auth.AuthService `optional:"true"`
+	AuditService    *audit.Service   `optional:"true"`
 	Assets          http.FileSystem
 	PublicRoutes    []RouteRegistrar `group:"public_routes"`
 	ProtectedRoutes []RouteRegistrar `group:"protected_routes"`
@@ -57,10 +60,28 @@ type RouterParams struct {
 
 func newRouter(p RouterParams) *gin.Engine {
 	router := gin.New()
-	router.Use(httpmiddleware.Recovery(p.Logger), httpmiddleware.RequestID())
+
+	// This deployment has no reverse proxy in front of the edge device, so the
+	// client IP must come from the TCP connection source. Gin's default trusts
+	// forwarding headers from 0.0.0.0/0 and ::/0, which would let any caller
+	// forge the address that audit records attribute an operation to.
+	if err := router.SetTrustedProxies(nil); err != nil {
+		p.Logger.Warn("failed to disable trusted proxies", zap.Error(err))
+	}
+
+	// Recovery stays outermost per the middleware guidelines. The audit
+	// observer is notified after the sanitized 500 response is written, which
+	// is the only point where a panicking request can be recorded as failed.
+	router.Use(httpmiddleware.Recovery(p.Logger, audithttp.NewPanicObserver(p.AuditService)), httpmiddleware.RequestID())
 
 	api := router.Group("/api/v1")
 	api.Use(httpmiddleware.AccessLog(p.Logger), httpmiddleware.MaxBodyLimit())
+	// Mounted after the body limit so a request rejected before the handler runs
+	// is not audited, and before authentication so unauthenticated init/login
+	// attempts are still covered. Requests that declare no action are skipped.
+	if p.AuditService != nil {
+		api.Use(audithttp.Middleware(p.AuditService))
+	}
 
 	var dbReady ServiceReadiness
 	if p.Database != nil {
@@ -95,6 +116,11 @@ func newRouter(p RouterParams) *gin.Engine {
 	upload := router.Group("/api/v1")
 	upload.Use(httpmiddleware.AccessLog(p.Logger),
 		httpmiddleware.MaxBodyLimitWithLimitAndCode(algorithm.MaxUploadRequestBodySize, "FILE_TOO_LARGE"))
+	// The upload group is mounted separately, so it needs its own audit
+	// middleware to cover algorithm installation.
+	if p.AuditService != nil {
+		upload.Use(audithttp.Middleware(p.AuditService))
+	}
 	if p.AuthService != nil {
 		upload.Use(auth.RequireAuth(p.AuthService))
 	}

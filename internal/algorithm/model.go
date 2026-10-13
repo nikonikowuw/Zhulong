@@ -16,6 +16,19 @@ const (
 	StatusRollingBack = "ROLLING_BACK"
 )
 
+// Audit actions for algorithm-domain operations. Namespaced as
+// <domain>.<resource>.<verb> to match the other modules: audit queries match on
+// the exact action string, so a bare literal cannot be grouped or filtered.
+const (
+	ActionAlgorithmInstall    = "algorithm.install"
+	ActionAlgorithmEnable     = "algorithm.enable"
+	ActionAlgorithmDisable    = "algorithm.disable"
+	ActionAlgorithmReset      = "algorithm.reset"
+	ActionAlgorithmDelete     = "algorithm.delete"
+	ActionAlgorithmTaskCreate = "algorithm.task.create"
+	ActionAlgorithmTaskDelete = "algorithm.task.delete"
+)
+
 // Task type enum
 const (
 	TaskTypeDetection       = "detection"
