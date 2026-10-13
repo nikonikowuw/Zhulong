@@ -1342,6 +1342,180 @@ const docTemplate = `{
                 }
             }
         },
+        "/media/content/{path}": {
+            "get": {
+                "description": "Streams the raw bytes of a media file with full RFC 7233 range support. The server performs byte transfer only: no decoding, demuxing, remuxing, transcoding or slicing. The successful response body is a raw byte stream, not the JSON envelope; error responses follow the standard envelope except for 416, which net/http writes as plain text.",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "media"
+                ],
+                "summary": "Stream media file bytes",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Media path relative to the media root",
+                        "name": "path",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Byte range, e.g. bytes=0-1023",
+                        "name": "Range",
+                        "in": "header"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "206": {
+                        "description": "Partial Content",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "416": {
+                        "description": "Invalid range",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/media/entries/{path}": {
+            "get": {
+                "description": "Returns size and modification time for a single media file addressed by its path relative to the media root. The path must start with recordings, snapshots or exports. Absolute paths are rejected with 422 MEDIA_PATH_INVALID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "media"
+                ],
+                "summary": "Get media entry metadata",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Media path relative to the media root, e.g. snapshots/cam-01/2026-10-13/evt-1.jpg",
+                        "name": "path",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/mediafile.MediaEntry"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/media/roots": {
+            "get": {
+                "description": "Reports media root availability, device identity, mount point and which media subdirectories exist.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "media"
+                ],
+                "summary": "Get media root status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/mediafile.MediaRootInfo"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/persons": {
             "get": {
                 "produces": [
@@ -3209,6 +3383,73 @@ const docTemplate = `{
                 },
                 "message": {
                     "type": "string"
+                }
+            }
+        },
+        "mediafile.MediaDirectories": {
+            "type": "object",
+            "properties": {
+                "exports": {
+                    "type": "boolean"
+                },
+                "recordings": {
+                    "type": "boolean"
+                },
+                "snapshots": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "mediafile.MediaEntry": {
+            "type": "object",
+            "properties": {
+                "modifiedAt": {
+                    "description": "ModifiedAt is the file modification time in UTC (RFC3339Nano).",
+                    "type": "string"
+                },
+                "name": {
+                    "description": "Name is the final path element.",
+                    "type": "string"
+                },
+                "path": {
+                    "description": "Path is the relative path inside the media root, using forward slashes\nand no leading slash. This is the same value persisted by the event\ndomain, so it can round-trip back into the content endpoint.",
+                    "type": "string"
+                },
+                "sizeBytes": {
+                    "description": "SizeBytes is the file length in bytes.",
+                    "type": "integer"
+                }
+            }
+        },
+        "mediafile.MediaRootInfo": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "deviceId": {
+                    "type": "integer"
+                },
+                "directories": {
+                    "$ref": "#/definitions/mediafile.MediaDirectories"
+                },
+                "fsType": {
+                    "type": "string"
+                },
+                "isExternal": {
+                    "type": "boolean"
+                },
+                "isReadOnly": {
+                    "type": "boolean"
+                },
+                "mediaRoot": {
+                    "type": "string"
+                },
+                "mountPoint": {
+                    "type": "string"
+                },
+                "rootDeviceId": {
+                    "type": "integer"
                 }
             }
         },

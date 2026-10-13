@@ -168,7 +168,7 @@ jpegd 硬件解码原图（贵的那步） → RGA 硬件缩放 → CPU 编码�
 
 #### 实测环境
 
-`go version go1.27.1 linux/amd64`。测试根为 `/tmp/roottest/media`，预置：正常嵌套文件、指向 `/etc` 的绝对符号链接、相对逃逸符号链接、根内合法符号链接。
+`go version go1.27.1`（另在 `darwin/arm64` 与 `linux/amd64` 上复核）。测试根为 `/tmp/roottest/media`，预置：正常嵌套文件、指向 `/etc` 的绝对目标符号链接、相对逃逸符号链接、**相对目标**的根内文件链接与目录链接、链接链、以及**绝对目标但落在根内**的链接。
 
 #### 实测结果
 
@@ -178,20 +178,32 @@ jpegd 硬件解码原图（贵的那步） → RGA 硬件缩放 → CPU 编码�
 | `../etc/passwd` | 拒绝 | ✅ `path escapes from parent` |
 | `evil-link/passwd`（符号链接指向 `/etc`） | 拒绝 | ✅ `path escapes from parent` |
 | `recordings/evil-rel/passwd`（相对路径逃逸） | 拒绝 | ✅ `path escapes from parent` |
-| `recordings/inlink/ok.txt`（根内合法符号链接） | 放行 | ✅ `ALLOW` |
+| `recordings/rel-in.mp4`（**相对**目标、根内文件链接） | 放行 | ✅ `ALLOW` |
+| `recordings/chain.mp4`（链接 → 链接 → 根内） | 放行 | ✅ `ALLOW` |
+| `dirlink/a.mp4`（**相对**目标、根内目录链接） | 放行 | ✅ `ALLOW` |
+| `recordings/inlink/ok.txt`（**相对**目标、根内合法符号链接） | 放行 | ✅ `ALLOW` |
+| `abs-in.mp4`（**绝对**目标，即使落在根内） | 拒绝 | ✅ `path escapes from parent` |
 | `..` | 拒绝 | ✅ `path escapes from parent` |
 | `recordings/cam-01/2026-10-13/../../../etc/passwd` | 拒绝 | ✅ 拒绝（`no such file or directory`） |
+| `snapshots/up/etc/passwd`（`up` → `..`） | 拒绝 | ✅ 拒绝（`no such file or directory`） |
+
+⚠️ **上表后两行是重要发现**：「拒绝」不总是以 `path escapes from parent` 呈现。当逃逸序列经过 `..` 组件时，标准库报的是 `ENOENT`（`no such file or directory`），**仍然是拒绝**，但错误形态不同。这直接影响 §5 错误契约与 AC12 的断言方式（见 `design.md` §3.3）。
+
+⚠️ **「根内」不等于「放行」**：`abs-in.mp4` 的最终目标确实在媒体根内，但因为是**绝对目标**，`os.Root` 一律拒绝。因此「运维软链部署」的可用形态被收窄为：**目标必须以相对路径书写**。
 
 #### 能力验证
 
 | 能力 | 实测结果 |
 | --- | --- |
-| `Root.Stat(".")` 取根 `st_dev` | ✅ `st_dev = 37` |
+| `Root.Stat(".")` 取根 `st_dev` | ✅ 可用（⚠️ 只比 `Dev` 字段；`Stat_t` 结构体整体 `==` 实测为 `false`） |
 | `Root.Stat(name)` 取子文件元信息 | ✅ 可用 |
 | `Root.Open(name)` 返回 `*os.File` | ✅ **支持 `Seek()`**，可直接喂 `http.ServeContent` |
-| `Root.Open(dir)` + `ReadDir()` / `Readdirnames()` | ✅ 可列举 |
+| `Root.Open(dir)` + `ReadDir()` / `Readdirnames()` | ✅ 可列举（⚠️ 本服务**不使用**，R0 禁止目录列举） |
 | 根路径**本身是符号链接** | ✅ `OpenRoot` 可用，`Name()` 返回原路径 |
-| 逃逸错误可识别性 | ✅ `errors.As(err, *os.PathError)`，`Op = "openat"`，`Err` 文本 `path escapes from parent` |
+| 逃逸错误可识别性（`EXDEV` 型） | ✅ `errors.As(err, *os.PathError)`，`Op = "openat"`，`Err` 文本 `path escapes from parent` |
+| 逃逸错误可识别性（`ENOENT` 型） | ⚠️ `Op = "openat"`，`Err` 文本 `no such file or directory` —— **与普通文件不存在无法区分** |
+| 子文件 fd 在 `Root.Close()` 之后 | ✅ 仍可读（已打开 fd 不随根句柄关闭而失效）—— 热切换方案（R8）依赖此行为 |
+| `Root.Open()` 打开的是目录 | ✅ **成功返回**，需调用方用 `Stat().IsDir()` 自行判定（→ `MEDIA_NOT_A_FILE`） |
 
 #### 机制说明（已核实标准库实现）
 
@@ -208,6 +220,16 @@ GOROOT 全量检索确认 `os` 包**未调用 `openat2`**（仅 `cmd/vendor` 下
 | 逃逸错误识别 | 自定义 errno 映射 | `errors.As(*os.PathError)` |
 
 **已知边界（标准库文档明示）**：`os.Root` **不阻止**跨越挂载点、Linux bind mount、`/proc` 特殊文件与 Unix 设备文件。这不削弱本任务安全性——掉盘穿透防护由独立的 `st_dev` 校验承担（复用 `PathInspector`），属于另一层。
+
+**已知边界 2（符号链接形态）**：`os.Root` 在遍历中对每个组件施加 `O_NOFOLLOW` + `checkSymlink`。结论是：
+
+| 符号链接形态 | 结果 |
+| --- | --- |
+| 相对目标，最终落在根内（文件 / 目录 / 链接链） | ✅ 放行 |
+| 绝对目标（即使最终落在根内） | ❌ 拒绝 |
+| 相对目标，逃逸出根 | ❌ 拒绝 |
+
+⚠️ **运维约束（必须写入部署文档）**：`mediaDir` 下若使用软链部署，**目标必须写成相对路径**。绝对目标软链会被本服务拒绝。
 
 **附带确认的语义**：`mediaDir` 根路径**允许**是符号链接（运维常把挂载点做软链），`os.OpenRoot` 对符号链接根路径实测可用。
 
@@ -331,6 +353,7 @@ DB 记录中的 `path` 必须是 **`mediaDir` 内的相对路径**（如 `record
 - 返回：相对路径、名称、字节大小、修改时间（UTC RFC3339Nano）。
 - ⚠️ **不返回**时长、分辨率、编码等需解析容器的字段（会违反 D8）。
 - 目标不存在 → `404`；目标是目录 → `422 MEDIA_NOT_A_FILE`。
+- ⚠️ 空路径（`GET /media/entries/`）→ `422 MEDIA_PATH_INVALID`（必须由 resolver 拦截，不能依赖路由）。
 
 ### R2 按路径取字节（`GET /api/v1/media/content/*path`）
 
@@ -339,6 +362,8 @@ DB 记录中的 `path` 必须是 **`mediaDir` 内的相对路径**（如 `record
 - ⚠️ **不添加** `Content-Disposition: attachment`（会阻止内联预览）。
 - 服务端**只搬运字节**：不解码、不 demux、不转封装、不转码、不切片、不生成缩略图。
 - 目标不存在 → `404`（⚠️ **这是正常语义**，`exports/` 48h TTL 会真实发生）。
+- ⚠️ **成功响应是裸字节流；错误响应不是**：`416` 由 `net/http` 直接写出纯文本（`invalid range`），鉴权与领域错误是 JSON 信封。前端不得假定成功与失败同构（详见 `design.md` §4.3）。
+- ⚠️ **Range 边界**（实测，必须固定）：`bytes=-0` → `206` 且零字节体（不报错）；`bytes=0-16`（超出文件长度 16）→ `206` 截断为 `bytes 0-15/16`；`bytes=16-` → `416`。
 
 ### R3 媒体根状态（`GET /api/v1/media/roots`）
 
@@ -347,15 +372,31 @@ DB 记录中的 `path` 必须是 **`mediaDir` 内的相对路径**（如 `record
 
 ### R4 路径安全（四层防护）
 
-1. **标识符形态校验**：顶层子目录白名单；路径段字符集校验；日期严格 `YYYY-MM-DD`；拒绝 NUL 字节。
+1. **标识符形态校验**：顶层子目录白名单；路径段字符集校验（显式拒绝 `.` 与 `..` 段）；拒绝 NUL 字节；拒绝空路径（⚠️ 纯字节层不解析或校验 `YYYY-MM-DD` 等目录层级语义，层级与日期由事件域 DB 记录承担，见 D4c/D5）。
 2. **`os.Root` 内核级约束**：拒绝一切逃逸出媒体根的路径，无 TOCTOU 窗口。
-3. **`st_dev` 掉盘穿透校验**：媒体根设备号与预期不符时拒绝服务。
+3. **`st_dev` 掉盘穿透校验**：媒体根设备号与**建句柄时自采快照**不符时拒绝服务（⚠️ 不在请求热路径上执行，见 R5）。
 4. **顶层目录白名单**：只允许 `recordings`/`snapshots`/`exports`。
+
+⚠️ **符号链接的放行口径（已收窄）**：只有「**相对目标且落在根内**」的链接被放行。绝对目标链接即使指向根内也会被拒。这是 `os.Root` 的既定行为，不是可配置项；必须写入部署文档（见下）。
+
+⚠️ **部署约束（必须写入运维文档）**：`mediaDir` 下使用软链部署时，**链接目标必须写成相对路径**。
 
 ### R5 掉盘与熔断的区分
 
 ⚠️ **空间熔断（`CanWrite=false`）时读取仍必须放行**——用户正是要审核旧证据。
 只有**掉盘穿透**（`st_dev` 变为根设备号）才拒绝读取。
+
+**掉盘穿透的判定口径（已修正）**：不得复用 `storage.Service` 的私有状态，也不得写成 `stats.DeviceID != expectedDeviceID`。正确口径是**与媒体根自身的历史快照比对**：
+
+```
+建/换句柄时记录媒体根当时的 st_dev 为 selfDev
+请求期校验：若 InspectFS 当前 DeviceID == 根文件系统 st_dev 且 selfDev != 根文件系统 st_dev → 拒绝
+媒体根本来就位于根文件系统（selfDev == 根设备）→ 不做掉盘判定，读取放行
+```
+
+⚠️ 这是关键修正。原表述（`DeviceID != expectedDeviceID`）在默认配置下（`MediaDirectory = "data/media"`，即根文件系统）会把**每一次读取都判为掉盘**，导致全盘误拒。详见 `design.md` §3.4。
+
+⚠️ **校验时机**：`st_dev` 校验**只在建/换句柄时执行**，不在请求热路径上。理由：媒体根设备号只会在挂载/卸载事件中变化，而 Range 传输会产生数十至数百次请求（见 D6 的同一推理）。详见 `design.md` §3.4。
 
 ### R6 不引入 CGO
 
@@ -378,6 +419,9 @@ DB 记录中的 `path` 必须是 **`mediaDir` 内的相对路径**（如 `record
 | **目录列表 / 筛选 / 分页 / 排序** | **事件证据域**（后续任务） | SQL 天然 `O(page)`，且列表语义属于事件域 |
 | **事件表 + `path` 绑定** | **事件证据域**（后续任务） | 需要生产者（算法推理结果落库 / 抓拍落盘） |
 | **孤儿文件对账（扫描）** | **后续运维工具任务** | ⚠️ 扫描的**唯一正当用途**。DB 与文件系统无原子性（产品 PRD `prd-v1.0.md:196`），文件可能落盘而 DB 写记录失败 |
+| **事件表 + 生产者 + 列表 SQL + 孤儿对账 + 前端证据中心** | **后续父任务（建议新建）** | 上表四项是本服务的**下游语义层**，它们共同依赖本任务钉死的「相对路径」契约。建议建一个父任务（如 `10-13-evidence-domain`）承载这组源需求，本任务作为其唯一先行子任务 |
+
+⚠️ **任务树现状（待挂接）**：本任务当前 `parent: null`，而 R9 列出的四项后续任务**没有任何任务承载**，只存在于本文档的散文里。建议在进入实现前完成挂接，否则契约的消费方会再次丢失上下文。
 
 #### ⚠️ 一致性缺口（本任务无法解决，需明确告知）
 
@@ -393,27 +437,37 @@ DB 记录中的 `path` 必须是 **`mediaDir` 内的相对路径**（如 `record
 | AC1 | R0 | **无目录列表端点**；路由表仅含 `roots` / `entries/*path` / `content/*path` |
 | AC2 | R0 | `roots` 返回媒体根可用性、设备信息、三个子目录存在性 |
 | AC3 | R1 | 按相对路径返回元信息：相对路径/名称/大小/修改时间（UTC RFC3339Nano） |
-| AC4 | R1 | 目标不存在 → `404`；目标是目录 → `422 MEDIA_NOT_A_FILE` |
-| AC5 | R2 | Range 全语义：无 Range→200；`bytes=0-9`→206；`bytes=5-`→206；`bytes=-4`→206；`bytes=999-`→416；**`bytes=abc`→416**（实测）；`If-Range` 匹配/不匹配；HEAD 无体 |
+| AC4 | R1 | 目标不存在 → `404`；目标是目录 → `422 MEDIA_NOT_A_FILE`（⚠️ `Root.Open` 对目录**会成功**，必须用 `Stat().IsDir()` 显式判定） |
+| AC5 | R2 | Range 全语义：无 Range→200；`bytes=0-9`→206；`bytes=5-`→206；`bytes=-4`→206；`bytes=999-`→416；**`bytes=abc`→416**（实测）；**`bytes=-0`→206 且零字节体**（实测，边界）；**`bytes=0-16`（上界越界）→206 截断到 `bytes 0-15/16`**；`bytes=16-`→416；`If-Range` 匹配→206 / 不匹配→200；HEAD 无体且有 `Content-Length` |
 | AC6 | R2 | `Content-Type` 按扩展名确定；无 `Content-Disposition: attachment` |
 | AC7 | R2 | 服务端零解码：不 import 任何编解码库 |
 | AC8 | R4 | 路径穿越全部拒绝：`../`、绝对路径、**`%2F` 编码逃逸**、已解码的 `recordings/../..`、NUL 字节 |
-| AC9 | R4 | **根内合法符号链接必须放行**（不误伤运维软链部署） |
+| AC9 | R4 | ⚠️ **「根内符号链接」的判定收窄为「相对目标且落在根内」**：相对目标文件链接 / 相对目标目录链接 / 链接链**必须放行**（不误伤运维软链部署）；⚠️ **绝对目标链接（即使最终落在根内）必须拒绝** |
 | AC10 | R4 | 媒体根本身为符号链接时正常工作 |
 | AC11 | R4 | 非白名单顶层名（如 `evil`）被拒绝 |
-| AC12 | R4 | 逃逸判定 **fail-closed**；Go 版本升级导致错误文案变化时测试立即失败 |
-| AC13 | R5 | `st_dev` 变为根设备号 → 503 拒绝；`InspectFS` 报错 → 503 拒绝 |
+| AC12 | R4 | 逃逸判定 **fail-closed**；⚠️ 断言口径为「**绝不 2xx**」，且区分两种错误形态：`path escapes from parent` 型 → `422 MEDIA_PATH_ESCAPE`；`ENOENT` 型（`..` 组件导致）→ `404 MEDIA_ENTRY_NOT_FOUND` **可接受**（信息不泄露优先）。Go 版本升级导致 `path escapes` 文案变化时测试立即失败 |
+| AC13 | R5 | ⚠️ **掉盘判定用媒体根自采快照 `selfDev`**（非 `storage` 的私有 `expectedDeviceID`）：`selfDev != 根设备` 且当前 `DeviceID == 根设备` → 503 拒绝；`InspectFS` 报错 → 503 拒绝；⚠️ **媒体根本就位于根文件系统（`selfDev == 根设备`）→ 不触发掉盘判定，读取放行**（防默认配置全盘误拒） |
 | AC14 | R5 | ⚠️ **空间熔断（`CanWrite=false`，`st_dev` 正常）→ 读取仍放行** |
 | AC15 | R6 | `go list -deps ./internal/mediafile` 不含 `internal/engine` 与 `internal/camera` |
 | AC16 | R6 | 可裸跑 `go test -race ./internal/mediafile/...`（不经 native wrapper） |
 | AC17 | R7 | 无新增数据库迁移；`internal/database/migrations/` 文件数不变 |
-| AC18 | R7 | 挂真实审计中间件后访问传输端点，`audit.Service.List` 不产生记录 |
+| AC18 | R7 | ⚠️ **挂真实路由链**（复用 `internal/app` 的 `newRouter` 范式）后访问传输端点，排空后 `audit.Service.List` 不产生记录；⚠️ 同一测试必须先经一个**已声明 action 的写端点**产生对照记录，证明链路有效（否则「无记录」无法区分「未审计」与「中间件没挂上」） |
 | AC19 | R8 | 并发 `Open` + 配置热切换，`-race` 无报告 |
-| AC20 | — | 新增错误码三语文案（`en`/`zh-Hans`/`zh-Hant`）齐全 |
-| AC21 | — | `make api-docs` 后 Swagger 与实现一致；`content` 端点标注返回裸字节流 |
+| AC20 | — | 新增错误码三语文案（`en`/`zh-Hans`/`zh-Hant`）齐全，且每个码都有可达路径（不得注册死码） |
+| AC21 | — | ⚠️ `Makefile` 的 `api-docs` 目标**新增 `internal/mediafile` 到 `--dir`**（否则零 diff 是假绿）；`make api-docs` 后 `internal/apidocs/swagger.json` 中出现 `/media/roots`、`/media/entries/{path}`、`/media/content/{path}`，且 `content` 标注返回裸字节流、错误响应不是 JSON 信封 |
 | AC22 | — | `gofmt -l cmd internal` 无输出；`make go-check` 通过 |
 | AC23 | R9 | ⚠️ **文件被删后 `content` 返回 404**（模拟 `exports/` TTL 清理）——这是正常语义，不是 bug |
 | AC24 | R0 | ⚠️ **本服务只接受相对路径**：绝对路径（`/etc/passwd`、`/data/media/...`）被 `422 MEDIA_PATH_INVALID` 拒绝 |
+| AC25 | R4 | ⚠️ **空路径可达 handler**：`GET /media/content/` 的 `c.Param("path")` 为 `/`，剥前导 `/` 后为空串 → 必须 `422 MEDIA_PATH_INVALID`（不能依赖路由拦截，也不能 500）；`GET /media/entries`（无尾斜杠）的 301 重定向到 `/entries/` 属可接受行为 |
+| AC26 | R2 | ⚠️ **端点受会话鉴权保护**：无 `zhulong_session` cookie → 401。⚠️ `content` 的**成功**响应是裸字节流，**错误**响应（含 401/404/416）仍是 JSON 信封或标准库纯文本 —— 前端不得假定成功与失败同构 |
+| AC27 | R0 | ⚠️ **代码中不得出现目录扫描**：`ReadDir` / `Readdirnames` / `os.ReadDir` 在 `internal/mediafile/` 零命中（架构约束，不只是路由表） |
+| AC28 | R5 | ⚠️ **`st_dev` 校验不在请求热路径**：连续多次 `content` 请求不触发 `/proc/mounts` 读取（`InspectFS` 只在建/换句柄时调用） |
+| AC29 | R2 | ⚠️ **HEAD 必须显式注册**：Gin **不会**为 GET 路由派生 HEAD（实现期实测：HEAD 落到 `NoMethod` 返回 **404**）。`HEAD /media/content/*path` → 200 + 空体 + `Content-Length` + `Accept-Ranges: bytes` |
+| AC30 | — | ⚠️ **503 不得靠 Kind 推导**：`KindToHTTPStatus` 无 `ServiceUnavailable` 分支，`KindInternal` → **500**（实现期实测）。`MEDIA_ROOT_UNAVAILABLE` 必须显式构造为 **503** |
+| AC31 | R4 | ⚠️ **穿过普通文件（`ENOTDIR`）归 404**，不得归 500（实现期实测：曾误归 `MEDIA_ENTRY_UNREADABLE`）：`.../10-00-00.mp4/nested.mp4` → `404 MEDIA_ENTRY_NOT_FOUND` |
+| AC32 | R5 | ⚠️ **非 Linux 宿主必须跳过掉盘判定**：`storage` 的非 Linux inspector 返回**合成常量**（device=1 / fstype=simulated），与真实 `st_dev` 相比会产生**假掉盘**并拒绝一切读取（实现期实测：macOS 上返回 503）。用编译期常量门控，并把判定抽成纯函数以便各平台测试 |
+| AC33 | R0 | ⚠️ **`os.Root.Open` 对目录会成功返回**：「目标是目录」必须用 `info.IsDir()` **显式**判定（不能指望 `Open` 报错） |
+| AC34 | R4 | ⚠️ **媒体根下的顶层符号链接被第 4 层拒绝**（首段不在白名单）：要测第 2 层的内核级逃逸拒绝，夹具必须把链接放在白名单目录**内部** |
 
 ### 关于「DB 存相对路径」契约的验收归属
 

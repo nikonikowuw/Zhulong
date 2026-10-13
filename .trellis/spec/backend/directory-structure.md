@@ -21,6 +21,7 @@ internal/
   person/                     # 人员与人脸底库域 (persons / person_faces 一人多照 CRUD)
   algorithm/                  # 算法包生命周期、验包门禁、Runner 进程监督与自愈回滚
   storage/                    # 边缘媒体存储与动态生命周期 (路径规范、statfs 水位感知)
+  mediafile/                  # 媒体文件只读字节层 (按相对路径取元信息与 Range 传输，无列表)
   network/                    # 异构宿主网络配置与两阶段回滚看门狗模块
   systemtime/                 # 时间同步 (NTP) 与系统时区配置模块
   engine/                     # Go 侧 CGO 驱动桥接包 (隔离 C ABI，无业务逻辑)
@@ -41,9 +42,10 @@ internal/
 ## 2. 依赖方向与单向流转铁律
 
 ```txt
-cmd/Zhulong ➔ internal/app ➔ internal/{auth, camera, person, algorithm, storage, network, systemtime, audit} ➔ internal/{engine, database, httputil}
+cmd/Zhulong ➔ internal/app ➔ internal/{auth, camera, person, algorithm, storage, mediafile, network, systemtime, audit} ➔ internal/{engine, database, httputil}
                              internal/app ➔ internal/httpmiddleware ➔ internal/httputil
                              internal/app ➔ internal/audit/http ➔ internal/audit
+                             internal/mediafile ➔ internal/{storage, httputil, apperr}   # 禁止反向；严禁 import internal/camera（间接拖入 CGO engine）
 ```
 
 1. **禁止反向依赖**：业务模块严禁导入 `internal/app`。
@@ -54,3 +56,4 @@ cmd/Zhulong ➔ internal/app ➔ internal/{auth, camera, person, algorithm, stor
 6. **C++ 类型不出 engine 包**：`internal/engine` 必须将所有 C 类型（`C.int`, `unsafe.Pointer`）转为 Go 原生类型，业务模块严禁 `import "C"`。
 7. **审计核心无 HTTP 偏见**：`internal/audit` 不得导入 Gin 或 `httputil`；Gin 中间件、Tag API 与审计 Handler 全部位于 `internal/audit/http`（包名 `audithttp`）。`audit/http` 不得导入 `internal/auth` 等业务包，避免 `auth ➔ audit/http ➔ auth` 环路。
 8. **审计 API 仅 Handler 层调用**：Service 层不得持有 `*gin.Context`、不得导入审计包。用户操作的审计声明归属 HTTP Handler；后台事件仅可通过只含 `RecordSystem` 的窄接口记录（如 `systemtime.SystemEventRecorder`）。
+9. **`internal/mediafile` 禁止 import `internal/camera`**：`camera` 间接依赖 `internal/engine`（CGO），一旦引入，该包及其测试将被迫走 native wrapper。它只依赖 `internal/storage`（取媒体根配置与文件系统遥测）、`httputil`、`apperr`，因此可裸跑 `go test -race`。

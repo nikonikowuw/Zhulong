@@ -1298,3 +1298,51 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 32: 实现媒体文件服务（只读字节层）并沉淀路径防护规范
+<!-- trellis-session: v=2 fp=3b447969c4f63c62 -->
+
+**Date**: 2026-10-13
+**Task**: 实现媒体文件服务（只读字节层）并沉淀路径防护规范
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+新增 internal/mediafile：按媒体根相对路径取元信息与 RFC 7233 Range 字节传输；四条路径防护（形态校验 / os.Root / st_dev 掉盘 / 顶层白名单）；修正规划中会把每次读取都判为掉盘的 st_dev 判定式；新增只读字节层 spec 并补齐 storage/http-api 规范的读侧与裸字节例外
+
+### Main Changes
+
+- internal/mediafile/：新增只读媒体字节层（三条路由 + HEAD；os.Root 四层防护；st_dev 用媒体根自采快照且只在建/换句柄时校验；RWMutex 热切换）
+- internal/app/app.go：新增 mediaFileModule，媒体根与遥测经窄接口从 storage 注入
+- internal/app/media_router_test.go：新增。挂真实路由链断言传输端点不审计，带写端点对照组并在断言前排空异步队列
+- Makefile：api-docs 的 --dir 白名单补入 internal/mediafile；internal/apidocs 重新生成
+- .trellis/spec/backend/mediafile-guidelines.md：新增只读字节层规范（定位边界、四层防护、裸字节契约、热切换、CGO 约束、审计边界、陷阱速查）
+- .trellis/spec/backend/storage-guidelines.md：新增 §5 读侧掉盘穿透校验，明确与写侧熔断不可互相复用
+- .trellis/spec/backend/http-api-guidelines.md：新增 §7 数据面裸字节例外（错误形态矩阵、Range 边界实测表、HEAD/503 陷阱、Swagger --dir 白名单）
+- directory-structure.md / index.md / README.md：同步模块清单与依赖方向（禁止引入 internal/camera）
+
+### Git Commits
+
+(No commits - planning session)
+
+### Testing
+
+- [OK] go test -race ./internal/mediafile/... 裸跑通过（108 条断言）
+- [OK] gofmt -l cmd internal 无输出；go vet ./internal/mediafile/ 通过
+- [OK] go list -deps 确认不含 internal/engine 与 internal/camera
+- [OK] 生产代码无 ReadDir/Readdirnames；无新增数据库迁移
+- [OK] make api-docs 幂等，swagger.json 含三条 /media/* 路径
+- [OK] GOOS=linux GOARCH=arm64 go test -c ./internal/mediafile/ 通过
+- [OK] internal/app 测试经 native wrapper 实跑通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 单开任务修复 internal/algorithm/verifier.go 的 darwin 构建（unix.Renameat2 无 darwin 实现，阻塞 make go-check）
+- 后续：事件证据域（事件表 + path 绑定 + 生产者 + 列表 SQL）、孤儿对账工具、前端 mp4 demux、证据中心页面、缩略图
+- 部署确认：mediaDir 下软链部署时链接目标必须写成相对路径

@@ -177,3 +177,59 @@ apiClient.get('/audit/logs', {
 1. `/api/*` ➔ 业务 API。未命中（包含不支持的 HTTP method）必须返回 HTTP 404 JSON，遵循 `{ "code": "ROUTE_NOT_FOUND", "message": "Route not found", "data": null }`，**绝对禁止回退到前端 HTML**！
 2. `/swagger/*` ➔ API 调试文档。
 3. `/*` ➔ 前端 SPA 路由，未匹配静态资源一律回退至 `internal/webui` 内嵌的 `index.html`。
+
+---
+
+## 7. 数据面端点的裸字节例外（binary / Range 传输）
+
+> 适用于返回**文件字节流**而非 JSON 载荷的端点（当前为 `internal/mediafile` 的 `/media/content/*path`）。
+
+### 7.1 例外范围必须最小且显式
+
+- 信封铁律（§2）**仅**对 JSON 端点成立。字节流端点返回裸 body，属**有意例外**，必须在 Swagger 注释中写明「成功响应不是信封」。
+- 例外只覆盖**成功响应**。该端点的失败响应仍遵循 §2 的信封，**唯一例外是 416**。
+
+### 7.2 错误响应形态矩阵（前端必须按 Content-Type 分支）
+
+| 情形 | 状态 | body |
+| --- | --- | --- |
+| 成功（全量） | 200 | 裸字节流 |
+| 成功（Range） | 206 | 裸字节流 |
+| Range 语法/范围非法 | 416 | **`text/plain`**（`net/http` 直接写出） |
+| 未鉴权 | 401 | JSON 信封 |
+| 路径非法 / 目录 | 422 | JSON 信封 |
+| 文件不存在 | 404 | JSON 信封 |
+| 媒体根不可用 | 503 | JSON 信封 |
+
+⚠️ **禁止假定成功与失败同构**。`http.ServeContent` 在 416 时写的是纯文本 `invalid range`，且**不回写** `Accept-Ranges`。
+
+### 7.3 错误必须先于 `ServeContent` 判定完毕
+
+`ServeContent` 一旦开始写就接管了状态行与 `Content-Length`。因此顺序必须是：**参数校验 → 打开 → 类型判定（`IsDir`）→ 全部通过后才调用 `ServeContent`**。否则会把 JSON 写进一个已定长的响应。
+
+### 7.4 使用 `ServeContent`，禁止 `c.File()`
+
+`c.File()` 接受**路径字符串**并自行 `os.Open`，会绕过基于 `os.Root` 的内核级约束。`ServeContent` 接受 `io.ReadSeeker`，可吃 `*os.File` 并完整实现 RFC 7233。
+
+### 7.5 Range 边界行为（标准库实测，与常见预期不同）
+
+| Range | 状态 | 说明 |
+| --- | --- | --- |
+| `bytes=abc`（语法错） | **416** | **不是**忽略 Range 返回 200 |
+| `bytes=-0` | **206** + 零字节体 | 不是 416；前端循环必须容忍 |
+| `bytes=0-16`（上界越界 1） | **206** + 截断为 `bytes 0-15/16` | 上界越界**静默截断** |
+| `bytes=16-`（起始 == 长度） | **416** | 起始越界才 416 |
+| 多 Range | 206 | `multipart/byteranges`，**不走 sendfile** |
+| `If-Range` 不匹配 | **200** | 降级为全量，**不是 412** |
+
+### 7.6 HEAD 必须显式注册
+
+**Gin 不会为 GET 路由自动派生 HEAD**：未显式注册时，HEAD 请求会落到 `NoMethod` 返回 **404**。浏览器与媒体客户端会用 HEAD 探测大小与 Range 支持，缺失该路由会让它们误判文件不存在。显式注册 `group.HEAD(...)` 即可，`ServeContent` 会自动抑制 body 并保留 `Content-Length`。
+
+### 7.7 503 必须显式构造
+
+`httputil.KindToHTTPStatus` **没有 `ServiceUnavailable` 分支**，`apperr.KindInternal` 会映射为 **500**。需要 503 时必须用 `httputil.NewError(http.StatusServiceUnavailable, ...)` 显式构造（可参考 `internal/mediafile` 的 `writeMediaError`）。
+
+### 7.8 Swagger 的 `--dir` 是显式白名单
+
+`make api-docs` 的 `--dir` 是**目录白名单**。新增业务包若未加入，其端点**根本不会被扫描**，`internal/apidocs` 零 diff 会被误读为「文档与实现一致」。**新增模块必须同步 `Makefile` 的 `--dir`**，并断言 `swagger.json` 中出现新路径。

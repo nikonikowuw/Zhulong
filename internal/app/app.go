@@ -10,6 +10,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
+	"github.com/nikonikowuw/Zhulong/internal/mediafile"
 	"github.com/nikonikowuw/Zhulong/internal/network"
 	"github.com/nikonikowuw/Zhulong/internal/person"
 	"github.com/nikonikowuw/Zhulong/internal/storage"
@@ -273,6 +274,36 @@ var storageModule = fx.Module("storage",
 	fx.Provide(provideStorage),
 )
 
+// --- Media File Module ---
+
+type mediaFileOut struct {
+	fx.Out
+
+	Service         *mediafile.Service
+	Handler         *mediafile.Handler
+	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+}
+
+// provideMediaFile wires the read-only media file service onto the storage
+// service, which owns the media root configuration and the filesystem
+// telemetry used for fallthrough detection.
+func provideMediaFile(storageSvc *storage.Service, inspector storage.PathInspector, logger *zap.Logger) mediaFileOut {
+	comp := mediafile.NewMediaFileComponents(
+		mediafile.NewMediaRootProvider(storageSvc),
+		mediafile.NewDeviceInspector(inspector),
+		logger,
+	)
+	return mediaFileOut{
+		Service:         comp.Service,
+		Handler:         comp.Handler,
+		ProtectedRoutes: comp.ProtectedRoutes,
+	}
+}
+
+var mediaFileModule = fx.Module("mediafile",
+	fx.Provide(provideMediaFile),
+)
+
 // --- Algorithm Module ---
 
 type algorithmOut struct {
@@ -361,6 +392,7 @@ var Module = fx.Options(
 	networkModule,
 	systemTimeModule,
 	storageModule,
+	mediaFileModule,
 	algorithmModule,
 	personModule,
 	httpModule,

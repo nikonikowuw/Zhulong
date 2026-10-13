@@ -41,6 +41,7 @@ Zhulong（烛龙）把四件事编译进**同一个二进制**：
 - **摄像头全生命周期** —— 主子流建模、AES-GCM 凭据加密落盘、正交状态机与探活调度
 - **网络配置** —— 两阶段提交 + 看门狗回滚；`-reset-network` 提供带外紧急恢复
 - **存储水位感知** —— `statfs` 探测外挂盘、双水位回差清理，防止写满边缘盘
+- **媒体文件只读服务** —— 按相对路径取元信息与 RFC 7233 Range 字节传输；`os.Root` 内核级路径防护，服务端零解码（浏览器消费 CPU）
 - **时间同步**与**操作审计** —— 审计由统一中间件记录，敏感信息仅在服务端日志留痕
 - **单用户凭据认证** —— SQLite 凭据 + 内存会话 + Cookie
 
@@ -169,7 +170,7 @@ cmd/Zhulong/          入口：加载 config.toml，装配并运行
 internal/
   app/                组合根：Fx 模块、路由挂载、启动/关闭顺序
   auth/ camera/ person/ algorithm/
-  storage/ network/ systemtime/ audit/
+  storage/ network/ systemtime/ audit/ mediafile/
                       各业务域，每个暴露一个 New*Components + RouteRegistrar
   database/           GORM + SQLite，内嵌版本化迁移
   engine/             唯一的 cgo 包，C ABI ↔ 原生 Go 类型转换
@@ -196,19 +197,20 @@ make go-check        # gofmt + vet + go test -race ./cmd/... ./internal/...
 make native-test     # CTest 套件（无需摄像头/网络，使用合成 fixture）
 ```
 
-两个容易踩的坑：
+三个容易踩的坑：
 
 - 任何（间接）依赖 `internal/engine` 的包**不能**直接跑裸 `go build`/`go test`/`go vet`，
   必须经 native wrapper（`make` 或 `python3 native/scripts/build.py go ...`）。wrapper 提供
   显式的静态 FFmpeg 库与**内容寻址**的 Engine 归档，避免 Go 的外部归档缓存掩盖原生改动。
 - 改完 C++ 必须 `make native-build` —— Air 只监听 Go/TOML。
+- **媒体目录软链部署约束**：若在 `mediaDir` 下使用符号链接部署，**链接目标必须使用相对路径**（`os.Root` 会严格拒绝绝对路径目标的符号链接，即使绝对路径最终落在根内亦会被拦截并返回 `422 MEDIA_PATH_ESCAPE`）。
 
 工作用 Trellis 任务跟踪，详见 [`.trellis/workflow.md`](.trellis/workflow.md)（英文）。
 
 ## 路线图
 
 **已实现**：`cmd/Zhulong`、`internal/app`、`database`、`engine`、`httputil`、`webui`、
-`auth`、`camera`、`person`、`algorithm`、`storage`、`network`、`systemtime`、`audit`，
+`auth`、`camera`、`person`、`algorithm`、`storage`、`network`、`systemtime`、`audit`、`mediafile`，
 均有实现与单元测试。
 
 **尚未交付，也不作任何承诺**：

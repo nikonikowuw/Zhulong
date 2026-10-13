@@ -82,3 +82,48 @@
 - Linux 生产环境依赖 `golang.org/x/sys/unix`（`unix.Statfs` 与 `unix.Stat`），使用 `//go:build linux` 严格隔离；
 - 非 Linux 宿主（macOS / Windows）提供 `inspector_fallback.go`（`//go:build !linux`），支持开发者离线编写代码与执行测试；
 - 核心算法（`gate.go`, `cleaner.go`, `service.go`）依赖 `PathInspector` 接口，必须配合 Mock 探针进行 100% 确定性的并发与水位边界测试。
+
+---
+
+## 5. 媒体读取路径的掉盘穿透校验（读侧，与写侧熔断严格区分）
+
+> 适用于 `internal/mediafile` 这类**只读**消费媒体根的服务。写侧的 `CanWrite()` 熔断规则见 §3，两者**不可互相复用**。
+
+### 5.1 读侧必须放行的场景（易错点）
+
+`CanWrite() == false` **不代表**读取应当被拒绝。以下场景读取必须放行：
+
+- **空间不足熔断**：用户正是要审核旧证据，读被拒等于把设备上的数据锁死；
+- **只读挂载**：只读传输本来就不写；
+- **媒体根位于系统根文件系统**（默认配置 `MediaDirectory = "data/media"`）。
+
+### 5.2 掉盘穿透判定：与「媒体根自采快照」比对
+
+**禁止**写成 `stats.DeviceID != expectedDeviceID`。`storage.Service` 的 `expectedDeviceID` 是**未导出**字段，且**只在外挂盘场景才被赋值**（根文件系统时保持 `0`），因此该判定在默认配置下**恒真**，会把每一次读取都判为掉盘。
+
+正确口径是服务自己采集快照：
+
+```text
+建/换句柄时：selfDev = 媒体根当时的 st_dev
+请求期（仅建句柄时）：
+    selfDev != rootDev 且 stats.DeviceID == rootDev  → 拒绝（外挂盘掉线，裸退到根分区）
+    否则                                              → 放行
+```
+
+即：只有「原本不在根设备上，现在解析到了根设备」才是穿透。媒体根本来就在根设备上时**不做掉盘判定**。
+
+⚠️ 该规则与 `service.go` 的 `RefreshStatus` dismount 判定**同构**，但**不得读取其私有状态**。
+
+### 5.3 校验时机：只在建/换句柄时，不在请求热路径
+
+`DefaultPathInspector.InspectFS` 会做 `MkdirAll` + `Stat` + `Statfs`，并经 `findMountInfoLinux` **每次 `os.Open("/proc/mounts")` 全行扫描**。一次视频预览会产生数十至数百次 Range 请求，把该校验放在热路径上是纯浪费（边缘设备 CPU 敏感）。
+
+挂载/卸载必然使已持有的目录 fd 失效，因此「句柄仍可用」本身就是「设备未变」的强证据，建句柄时校验一次即可。
+
+### 5.4 非 Linux 宿主必须跳过该校验
+
+`storage` 仅在 Linux 实现真实遥测；非 Linux 是 `inspector_fallback.go` 的**合成常量**（device = 1、fstype = "simulated"）。若把合成设备号与 `os.Root.Stat` 返回的**真实** `st_dev` 相比，会在开发机上产生**假掉盘**并拒绝一切读取。用编译期常量（如 `deviceTelemetryIsReal`）门控，并把判定本身抽成纯函数以便在任意平台测试。
+
+### 5.5 `st_dev` 比较只能用 `Dev` 字段
+
+`syscall.Stat_t` 含嵌套数组（含时间戳纳秒字段），结构体 `==` 会**比较全部字段**，同一目录两次 `Stat` 结果为 `false`。必须只比 `Dev`。

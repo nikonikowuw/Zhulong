@@ -8,6 +8,6 @@
 {"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Zap 结构化日志与脱敏要求；错误内部原因只进日志，不得返回根路径给客户端"}
 {"file": ".trellis/spec/naming-guidelines.md", "reason": "跨语言命名规范；新增 Go 标识符、文件名与领域术语必须自然清晰且与既有术语一致"}
 {"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流排查清单与单一真实源原则；媒体根路径的真源是 storage 配置，不得在 mediafile 内另立配置"}
-{"file": ".trellis/tasks/10-13-media-file-service/prd.md", "reason": "本任务需求与验收标准：D1-D9 决策、R0-R9 需求、AC1-AC24 验收项，含 R0 的「DB 存相对路径不存 URL」契约及其验收归属说明"}
+{"file": ".trellis/tasks/10-13-media-file-service/prd.md", "reason": "本任务需求与验收标准：D1-D9 决策、R0-R9 需求、AC1-AC34 验收项，含 R0 的「DB 存相对路径不存 URL」契约及其验收归属说明"}
 {"file": ".trellis/tasks/10-13-media-file-service/design.md", "reason": "技术设计：包边界、路由形态、四层路径防护、os.Root 实测证据、Range 实测结果、错误契约、性能取舍、测试策略"}
-{"file": ".trellis/tasks/10-13-media-file-service/implement.md", "reason": "执行计划：7 个步骤、每步验证命令、AC1-AC24 验收清单、5 个回滚点、明确实施边界"}
+{"file": ".trellis/tasks/10-13-media-file-service/implement.md", "reason": "执行计划：7 个步骤（已调整顺序：resolver 先行）、每步验证命令、AC1-AC34 验收清单、6 个回滚点、明确实施边界"}
