@@ -1346,3 +1346,41 @@ Session summary was not supplied.
 - 单开任务修复 internal/algorithm/verifier.go 的 darwin 构建（unix.Renameat2 无 darwin 实现，阻塞 make go-check）
 - 后续：事件证据域（事件表 + path 绑定 + 生产者 + 列表 SQL）、孤儿对账工具、前端 mp4 demux、证据中心页面、缩略图
 - 部署确认：mediaDir 下软链部署时链接目标必须写成相对路径
+
+
+## Session 33: 媒体文件服务落地与双轴代码审查
+<!-- trellis-session: v=2 fp=e7e6d5183caa3eca -->
+
+**Date**: 2026-10-13
+**Task**: 媒体文件服务落地与双轴代码审查
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+完成 internal/mediafile 模块实现，提供基于 os.Root 的四层路径安全只读媒体流传输；通过双轴代码审查修复跨平台回退与坏味道；测试全通并归档任务。
+
+### Main Changes
+
+- 实现 internal/mediafile：基于 os.Root 句柄隔离、四层路径防穿越、st_dev 外挂盘掉线检测与 RFC 7233 Range 字节流传输
+- 装配至 internal/app 的 Fx protected_routes 组，并通过集成测试验证零审计记录污染
+- 完成双轴 Review 并修复非 Unix 平台 deviceIDOf 降级、Swagger 503 声明及 resolver 冗余字段
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0ba2024` | feat(mediafile): implement read-only media file service |
+
+### Testing
+
+- [OK] go test -race ./internal/mediafile/... 全量 104 条断言通过（1.4s）
+- [OK] GOOS=windows/linux/darwin go vet 交叉静态检查全通
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推进 10-10-algorithm-plugin-architecture 规划与各硬件后端接入任务
