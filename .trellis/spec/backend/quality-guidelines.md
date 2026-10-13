@@ -32,3 +32,41 @@ make go-check
 | **在 Struct 字段中保存 `Context`** | 破坏上下文传递树与生命周期 | 始终作为函数的首个参数显式传入 `ctx` |
 | **在热路径中反复开闭 DB 连接** | 耗尽文件描述符并加剧锁冲突 | 全局复用 `*gorm.DB` 连接池 |
 | **全局变量持有业务状态** | 并发竞争与单测交叉污染 | 通过构造函数显式注入依赖 |
+
+---
+
+## 4. 测试接线约定
+
+### 4.1 审计 Handler 测试必须挂真实中间件
+
+审计断言不得用测试替身：声明式 Tag API 与中间件收口是一体的，替身会同时绕过「绑定失败仍留痕」「HTTP ≥400 标失败」等被验证的行为。
+
+```go
+router := gin.New()
+api := router.Group("/api/v1")
+api.Use(audithttp.Middleware(auditSvc)) // 真实中间件 + 真实 Service
+comp.Handler.RegisterRoutes(api)
+```
+
+⚠️ 断言前必须先排空异步队列：`Record` 是非阻塞投递，响应写出时条目可能仍在队列中，直接 `List` 会随机漏项。统一用 `auditSvc.Stop(ctx)` 排空后再查询（见 `internal/{person,camera,algorithm,systemtime}` 的 `drainAudit` 辅助函数）。
+
+### 4.2 `NewAlgorithmComponents` 在构造时捕获 Supervisor
+
+**Symptom**：测试里写 `comp.Supervisor = algorithm.NewSupervisor(...)` 后调用 enable/disable，得到 `fork/exec build/native/host/zhulong_algo_runner: no such file or directory`。
+
+**Cause**：`Service` 持有的是构造时传入的 supervisor 实例，事后替换 `comp.Supervisor` 字段只改了组件包的引用，`Service` 仍指向原实例。
+
+**Fix**：在构造**之前**用 `t.Setenv("ZHULONG_ALGO_RUNNER", stubPath)` 注入 runner，让 `NewAlgorithmComponents` 自行取到桩。
+
+```go
+// ❌ 无效：Service 已经捕获了原 supervisor
+t.Setenv("ZHULONG_ALGO_RUNNER", stub)
+comp := algorithm.NewAlgorithmComponents(db, dir, "cpu", logger)
+comp.Supervisor = algorithm.NewSupervisor(comp.Store, dir, stub, "", opts, logger)
+
+// ✅ 正确：构造前注入，字段无需替换
+t.Setenv("ZHULONG_ALGO_RUNNER", stub)
+comp := algorithm.NewAlgorithmComponents(db, dir, "cpu", logger)
+```
+
+**Prevention**：任何在构造期捕获依赖的组件包（`*Components`）都不支持事后替换字段；需要替换就先改环境变量/参数再构造。runner 桩用 `trap 'exit 0' TERM INT; while true; do sleep 1; done`，保证收到 SIGTERM 即退出且不留孤儿进程。

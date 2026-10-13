@@ -21,7 +21,7 @@
 | [宿主启动与构建合同](./host-runtime-contract.md) | CLI、health/SPA/Swagger、迁移、CGO 静态链接与跨层验证合同 |
 | [错误处理与统一契约](./error-handling.md) | `AppError` 结构、必需三字段与可选字段级 `details`、后端 i18n 错误翻译、Zap 日志脱敏 |
 | [结构化日志规范](./logging-guidelines.md) | Uber Zap 规约、强类型字段、等级划分、敏感信息脱敏 |
-| [质量检查与测试门禁](./quality-guidelines.md) | 格式化、`-race` 竞态检测、空仓库基线守则 |
+| [质量检查与测试门禁](./quality-guidelines.md) | 格式化、`-race` 竞态检测、审计测试接线与组件包构造期捕获约定 |
 
 ---
 
