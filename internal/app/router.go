@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	_ "github.com/nikonikowuw/Zhulong/internal/apidocs"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/database"
@@ -51,6 +52,7 @@ type RouterParams struct {
 	Assets          http.FileSystem
 	PublicRoutes    []RouteRegistrar `group:"public_routes"`
 	ProtectedRoutes []RouteRegistrar `group:"protected_routes"`
+	UploadRoutes    []RouteRegistrar `group:"upload_routes"`
 }
 
 func newRouter(p RouterParams) *gin.Engine {
@@ -87,6 +89,17 @@ func newRouter(p RouterParams) *gin.Engine {
 	}
 	for _, r := range p.ProtectedRoutes {
 		r.RegisterRoutes(protected)
+	}
+
+	// Mount upload routes with the archive size plus bounded multipart framing overhead.
+	upload := router.Group("/api/v1")
+	upload.Use(httpmiddleware.AccessLog(p.Logger),
+		httpmiddleware.MaxBodyLimitWithLimitAndCode(algorithm.MaxUploadRequestBodySize, "FILE_TOO_LARGE"))
+	if p.AuthService != nil {
+		upload.Use(auth.RequireAuth(p.AuthService))
+	}
+	for _, r := range p.UploadRoutes {
+		r.RegisterRoutes(upload)
 	}
 
 	swaggerHandler := ginSwagger.WrapHandler(swaggerFiles.Handler)

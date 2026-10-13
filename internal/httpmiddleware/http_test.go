@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -98,5 +99,52 @@ func TestRecoveryWritesSanitizedInternalError(t *testing.T) {
 	}
 	if body := recorder.Body.String(); regexp.MustCompile(`private panic detail`).MatchString(body) {
 		t.Fatalf("panic detail leaked to response: %s", body)
+	}
+}
+
+func TestMaxBodyLimitWithLimitAndCode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const testLimit int64 = 64
+
+	router := gin.New()
+	router.Use(MaxBodyLimitWithLimitAndCode(testLimit, "FILE_TOO_LARGE"))
+	router.POST("/upload", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	req := httptest.NewRequest(http.MethodPost, "/upload", nil)
+	req.ContentLength = testLimit + 1
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for oversized upload, got %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"FILE_TOO_LARGE"`) {
+		t.Fatalf("expected FILE_TOO_LARGE response code, got %s", recorder.Body.String())
+	}
+}
+
+func TestMaxBodyLimitWithLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const testLimit int64 = 64
+
+	router := gin.New()
+	router.Use(MaxBodyLimitWithLimit(testLimit))
+	router.POST("/test", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	req1 := httptest.NewRequest(http.MethodPost, "/test", httptest.NewRequest(http.MethodPost, "/", nil).Body)
+	req1.ContentLength = 32
+	rec1 := httptest.NewRecorder()
+	router.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected 200 for payload within custom limit, got %d", rec1.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/test", nil)
+	req2.ContentLength = testLimit + 1
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for payload exceeding custom limit, got %d", rec2.Code)
 	}
 }

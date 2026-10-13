@@ -70,4 +70,6 @@ func NewLogger(isDev bool) (*zap.Logger, error) {
    - 严禁将明文密码、会话 Token 写入审计 `detail` 或 `error_msg`；
    - 包含流媒体凭证的 URL（如 RTSP）必须通过 `SanitizeURL` / `url.URL.Redacted()` 脱敏隐藏密码后再行记录。
 5. **停机排空 (Graceful Drain)**：在系统关机生命周期中，必须在 HTTP 端口停止监听并排空流量后、SQLite 关闭连接前执行 `audit.Stop(ctx)`，将剩余缓冲区日志全部批量落盘。
+6. **动作命名空间与常量**：`action` 必须是 `<domain>.<resource>.<verb>` 形式（如 `person.face.add`、`camera.create`、`auth.login`），并在模块的 `model.go` 中声明为导出常量，禁止在调用点写裸字符串。审计日志按 `action` 精确匹配查询，裸动词（`"CREATE"`）既无法按业务域归组，也无法与其它域的动作一并筛选。
+7. **成功与失败成对记录**：一次写操作要么成功要么失败，两者都必须在审计中留痕——只记成功会让被拒绝的操作（越权尝试、不可变字段改写、并发冲突）在审计里完全消失。失败条目必须填 `Status: audit.StatusFailed` 与 `ErrorMsg`。服务层直接审计时拿不到 `IP` 与真实 `Username`（无 `*gin.Context`），需要这两项的操作应在 Handler 层经统一的 `recordAudit(c, ...)` 记录。
 

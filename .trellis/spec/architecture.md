@@ -15,7 +15,7 @@
                                     │ HTTP (Gin) / SSE (推理事件) / WebSocket
 ┌───────────────────────────────────▼────────────────────────────────────┐
 │                        Go 业务应用宿主 (Host)                           │
-│  业务模块分包 (cmd/Zhulong, internal/{camera,recording,inference,...})    │
+│  业务模块分包 (cmd/Zhulong, internal/{camera,person,algorithm,...})       │
 │  Uber Fx 生命周期编排 (OnStart/OnStop), GORM + SQLite, Swaggo 2.0      │
 │  统一响应信封: { code: "OK", message, data, details? }                │
 └───────────────────────────────────▲────────────────────────────────────┘
@@ -44,7 +44,9 @@
 
 ## 当前实现边界
 
-本仓库已完成 `cmd/Zhulong`、`internal/app`、`database`、`engine`、`httputil`、`webui`、`auth` 单用户凭据会话以及 `camera` 全生命周期管理。录像、推理模块以及 C++ 解码/预处理流水线仍属后续目标，不得把架构目标图解读为已全量交付。当前 native 组件已支持宿主 C ABI、流探测、按需包借用与订阅生命周期。
+本仓库已完成 `cmd/Zhulong`、`internal/app`、`database`（`000001`–`000007` 版本化迁移）、`engine`、`httputil`、`webui`、`auth` 单用户凭据会话、`camera` 全生命周期管理、`person` 人员与人脸底库域、`algorithm` 算法包生命周期与 Runner 进程监督、`storage` 存储水位感知、`network` 网络配置两阶段回滚看门狗、`systemtime` 时间同步与 `audit` 操作审计。
+
+**尚未交付**：人员底库经 UDS 下发至 Runner 的热更新链路、算法推理结果的落库与事件派发、录像模块，以及 C++ 解码/预处理流水线——不得把架构目标图解读为已全量交付。当前 native 组件已支持宿主 C ABI、流探测、按需包借用与订阅生命周期。
 
 ---
 

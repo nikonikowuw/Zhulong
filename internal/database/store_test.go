@@ -262,9 +262,9 @@ func TestSystemTimeConfigsMigrationUpAndDownSymmetry(t *testing.T) {
 	}
 	defer migrator.Close()
 
-	// 1. Run all migrations Up (including 5)
-	if err := migrator.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		t.Fatalf("migrator Up: %v", err)
+	// 1. Run migrations up to 5
+	if err := migrator.Migrate(5); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(5): %v", err)
 	}
 
 	// Verify system_time_configs table exists
@@ -299,5 +299,157 @@ func TestSystemTimeConfigsMigrationUpAndDownSymmetry(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected system_time_configs table after re-Up, got count=%d", count)
+	}
+}
+
+func TestAlgorithmTablesMigrationUpAndDownSymmetry(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "migration_symmetry_7.db")
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", dbPath)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// 1. Run migrations up to 7 (algorithm tables live in 000007)
+	if err := migrator.Migrate(7); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(7): %v", err)
+	}
+
+	// Verify algorithm tables exist
+	tables := []string{"algorithms", "analysis_tasks"}
+	for _, tbl := range tables {
+		var count int
+		if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '%s'", tbl)).Scan(&count); err != nil {
+			t.Fatalf("query table %s: %v", tbl, err)
+		}
+		if count != 1 {
+			t.Fatalf("expected table %s after Up, got count=%d", tbl, count)
+		}
+	}
+
+	// 2. Rollback migration 7 (Down step 1)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator Steps(-1): %v", err)
+	}
+
+	// Verify algorithm tables are dropped
+	for _, tbl := range tables {
+		var count int
+		if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '%s'", tbl)).Scan(&count); err != nil {
+			t.Fatalf("query table %s after down: %v", tbl, err)
+		}
+		if count != 0 {
+			t.Fatalf("expected table %s to be dropped after rollback, got count=%d", tbl, count)
+		}
+	}
+
+	// 3. Re-apply migration 6 (Up step 1)
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator Steps(1): %v", err)
+	}
+
+	for _, tbl := range tables {
+		var count int
+		if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '%s'", tbl)).Scan(&count); err != nil {
+			t.Fatalf("query table %s after re-up: %v", tbl, err)
+		}
+		if count != 1 {
+			t.Fatalf("expected table %s after re-Up, got count=%d", tbl, count)
+		}
+	}
+}
+
+func TestPersonsTablesMigrationUpAndDownSymmetry(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "migration_symmetry_6.db")
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", dbPath)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// 1. Run migrations up to 6 (persons tables live in 000006)
+	if err := migrator.Migrate(6); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(6): %v", err)
+	}
+
+	// Verify person tables exist
+	tables := []string{"persons", "person_faces"}
+	for _, tbl := range tables {
+		var count int
+		if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '%s'", tbl)).Scan(&count); err != nil {
+			t.Fatalf("query table %s: %v", tbl, err)
+		}
+		if count != 1 {
+			t.Fatalf("expected table %s after Up, got count=%d", tbl, count)
+		}
+	}
+
+	// 2. Rollback migration 6 (Down step 1)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator Steps(-1): %v", err)
+	}
+
+	// Verify person tables are dropped
+	for _, tbl := range tables {
+		var count int
+		if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '%s'", tbl)).Scan(&count); err != nil {
+			t.Fatalf("query table %s after down: %v", tbl, err)
+		}
+		if count != 0 {
+			t.Fatalf("expected table %s to be dropped after rollback, got count=%d", tbl, count)
+		}
+	}
+
+	// 3. Re-apply migration 7 (Up step 1)
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator Steps(1): %v", err)
+	}
+
+	for _, tbl := range tables {
+		var count int
+		if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '%s'", tbl)).Scan(&count); err != nil {
+			t.Fatalf("query table %s after re-up: %v", tbl, err)
+		}
+		if count != 1 {
+			t.Fatalf("expected table %s after re-Up, got count=%d", tbl, count)
+		}
 	}
 }

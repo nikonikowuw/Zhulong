@@ -10,10 +10,11 @@ import (
 
 // Config contains host-level settings supplied before Fx constructs the application.
 type Config struct {
-	HTTPAddress  string
-	DataDir      string
-	Development  bool
-	CustomScript string
+	HTTPAddress     string
+	DataDir         string
+	AlgorithmTarget string
+	Development     bool
+	CustomScript    string
 }
 
 func validateHTTPAddress(address string) error {
@@ -46,7 +47,8 @@ func validateHTTPAddress(address string) error {
 // DefaultConfig returns local-only defaults suitable for development and smoke tests.
 func DefaultConfig() Config {
 	return Config{
-		HTTPAddress: "127.0.0.1:8080",
-		DataDir:     "./data",
+		HTTPAddress:     "127.0.0.1:8080",
+		DataDir:         "./data",
+		AlgorithmTarget: "cpu",
 	}
 }

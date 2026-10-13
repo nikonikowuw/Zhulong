@@ -20,7 +20,9 @@
   "subtasks": [],
   "children": [
     "10-12-algo-plugin-sdk-runner",
-    "10-12-algo-framebroker-shm"
+    "10-12-algo-framebroker-shm",
+    "10-12-algo-package-lifecycle",
+    "10-12-algo-lifecycle-remediation"
   ],
   "parent": null,
   "relatedFiles": [],

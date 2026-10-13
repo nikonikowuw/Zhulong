@@ -91,12 +91,22 @@ func AccessLog(logger *zap.Logger) gin.HandlerFunc {
 
 // MaxBodyLimit rejects oversized API requests and caps bodies without a known length.
 func MaxBodyLimit() gin.HandlerFunc {
+	return MaxBodyLimitWithLimit(MaxAPIRequestBodyBytes)
+}
+
+// MaxBodyLimitWithLimit rejects oversized API requests and caps bodies at limit.
+func MaxBodyLimitWithLimit(limit int64) gin.HandlerFunc {
+	return MaxBodyLimitWithLimitAndCode(limit, "PAYLOAD_TOO_LARGE")
+}
+
+// MaxBodyLimitWithLimitAndCode applies a body limit with a caller-selected API error code.
+func MaxBodyLimitWithLimitAndCode(limit int64, errorCode string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if c.Request.ContentLength > MaxAPIRequestBodyBytes {
-			httputil.WritePayloadTooLarge(c)
+		if c.Request.ContentLength > limit {
+			httputil.WriteError(c, httputil.NewError(http.StatusRequestEntityTooLarge, errorCode, "Request body too large", nil))
 			return
 		}
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, MaxAPIRequestBodyBytes)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
 		c.Next()
 	}
 }

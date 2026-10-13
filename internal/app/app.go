@@ -3,12 +3,14 @@ package app
 import (
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/network"
+	"github.com/nikonikowuw/Zhulong/internal/person"
 	"github.com/nikonikowuw/Zhulong/internal/storage"
 	"github.com/nikonikowuw/Zhulong/internal/systemtime"
 	"github.com/nikonikowuw/Zhulong/internal/webui"
@@ -273,6 +275,66 @@ var storageModule = fx.Module("storage",
 	fx.Provide(provideStorage),
 )
 
+// --- Algorithm Module ---
+
+type algorithmOut struct {
+	fx.Out
+
+	Store           *algorithm.Store
+	Verifier        *algorithm.Verifier
+	Supervisor      *algorithm.Supervisor
+	Service         *algorithm.Service
+	Handler         *algorithm.Handler
+	Lifecycle       algorithmLifecycle
+	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+	UploadRoutes    RouteRegistrar `group:"upload_routes"`
+}
+
+func provideAlgorithm(dbProvider database.DBProvider, auditSvc *audit.Service, config Config, logger *zap.Logger) algorithmOut {
+	comp := algorithm.NewAlgorithmComponents(dbProvider, auditSvc, config.DataDir, config.AlgorithmTarget, logger)
+	return algorithmOut{
+		Store:           comp.Store,
+		Verifier:        comp.Verifier,
+		Supervisor:      comp.Supervisor,
+		Service:         comp.Service,
+		Handler:         comp.Handler,
+		Lifecycle:       comp.Lifecycle,
+		ProtectedRoutes: comp.ProtectedRoutes,
+		UploadRoutes:    comp.UploadRoutes,
+	}
+}
+
+var algorithmModule = fx.Module("algorithm",
+	fx.Provide(provideAlgorithm),
+)
+
+// --- Person Module ---
+
+type personOut struct {
+	fx.Out
+
+	Store           *person.Store
+	Service         *person.Service
+	Handler         *person.Handler
+	Lifecycle       personLifecycle
+	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+}
+
+func providePerson(dbProvider database.DBProvider, auditSvc *audit.Service, logger *zap.Logger) personOut {
+	comp := person.NewPersonComponents(dbProvider, auditSvc, logger)
+	return personOut{
+		Store:           comp.Store,
+		Service:         comp.Service,
+		Handler:         comp.Handler,
+		Lifecycle:       comp.Lifecycle,
+		ProtectedRoutes: comp.ProtectedRoutes,
+	}
+}
+
+var personModule = fx.Module("person",
+	fx.Provide(providePerson),
+)
+
 // --- HTTP Module ---
 
 var httpModule = fx.Module("http",
@@ -301,6 +363,8 @@ var Module = fx.Options(
 	networkModule,
 	systemTimeModule,
 	storageModule,
+	algorithmModule,
+	personModule,
 	httpModule,
 	runtimeModule,
 )

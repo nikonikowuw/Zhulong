@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Go 后端服务规范索引与开发检查清单"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Go 模块目录划分与单向依赖铁律"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Fx 依赖注入生命周期规范"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Go 错误处理与领域错误规范"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite 迁移与仓储规范"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法插件 C ABI 规范与 zhulong_algo_runner 验包/IPC 命令契约"}

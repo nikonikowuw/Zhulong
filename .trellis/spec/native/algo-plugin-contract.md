@@ -108,6 +108,65 @@ zhulong_algo_runner --verify-plugin <path_to_plugin.so> --sample <test_image_or_
 ```
 退出码：`0` 表示 ABI、模型加载、Worker 创建、Task 打开、单次推理与内存释放全部符合规范。
 
+### 5.1 Runner 命令契约：`--broker` 参数语义
+
+`zhulong_algo_runner --plugin <plugin.so> --broker <base_dir> [--name <client_name>] [--max-frames <N>]`
+
+⚠️ **`--broker` 的语义是「目录」，不是 socket 文件路径。** native 侧 `FrameBroker::start(stream_id, base_dir)`
+（`native/src/algorithm/ipc/frame_broker.cpp:20`）会按下列规则派生实际 socket 路径：
+
+```cpp
+socket_path_ = base_dir + "/zhulong_broker_" + std::to_string(stream_id_) + ".sock";
+```
+
+即 `<base_dir>/zhulong_broker_<stream_id>.sock`。Go 侧必须传递**目录**（默认 `/tmp`，可由环境变量
+`ZHULONG_FRAME_BROKER_SOCK` 覆写；变量名历史原因保留 `SOCK` 后缀，但其值语义为目录）。
+
+⚠️ **实测发现的语义不对称（如实记录）**：上述派生规则只存在于 **FrameBroker 服务端**的
+`FrameBroker::start(stream_id, base_dir)` 方法中。**runner 客户端**（`runner.cpp:190` 的
+`client.connect(broker_sock, ...)`）把 `--broker` 的值当作**字面 socket 路径**直接 `connect()`，**不做**任何
+目录派生。两者的桥梁在 `native/tests/frame_broker_test.cpp:356`：它先把服务端已派生好的
+`broker.socket_path()` 传给 runner 的 `--broker`。
+
+因此当前代码下：
+
+- 若 Go 传**目录**（如 `/tmp`），runner 会尝试 `connect("/tmp")` → `ECONNREFUSED` → exit 5；
+- 若 Go 传**字面 socket 路径**（如 `/tmp/zhulong_broker_<sid>.sock`），runner 的 `connect()` 语义正确，
+  但该路径仍无人监听（宿主未实现）。
+
+两种情况下 runner 均以 exit 5 退出（已验证）。真正的定案需要与 broker 宿主归属一并解决：若宿主实现为
+「一 stream 一 socket 文件」并由 Go 派生，则 Go 应传**字面路径**；若宿主的启动接口就是「目录」，则
+runner 客户端必须同步改为按目录 + stream_id 派生。该决策随 `10-10-algorithm-plugin-architecture` 做出。
+本任务仅保证「宿主缺失」可观测（§5.3）。
+
+### 5.2 Runner 退出码表
+
+`runner.cpp` 的 `run_ipc_worker` 路径在各类失败时返回固定退出码，运维与 Go 看门狗依赖该表区分故障类型：
+
+| 退出码 | 含义 | 出处 |
+| --- | --- | --- |
+| `0` | 正常退出 | `runner.cpp:158,289,329` |
+| `1` | `dlopen` 插件动态库失败 | `runner.cpp:78-80,165-166` |
+| `2` | `model_create` 失败 | `runner.cpp:93-94,172` |
+| `3` | `worker_create` 失败 | `runner.cpp:102-103,178` |
+| `4` | `task_open` 失败 | `runner.cpp:112-113,186` |
+| `5` | **broker 连接失败**（宿主未监听） | `runner.cpp:190-196` |
+
+⚠️ 退出码 `5` 同时伴随 stderr 输出 `{"status":"failed","stage":"connect","error":"..."}`。Go 侧以 stderr
+标记为主通道、退出码为备通道识别「broker 宿主缺失」（见 §5.3）。
+
+### 5.3 ⚠️ 未实现登记：FrameBroker 宿主与帧发布通路
+
+**FrameBroker 宿主进程与帧发布通路当前未实现。** 全仓库范围内：
+
+- `FrameBroker` 类**仅在** `native/tests/frame_broker_test.cpp` 中被实例化，生产代码零构造点；
+- `native/CMakeLists.txt` 没有 broker 宿主可执行目标（只有客户端角色 `zhulong_algo_runner`）；
+- Go 侧没有任何帧发布（`publish`）通路，C ABI（`native/include/Zhulong/*.h`）也未暴露 broker/帧分发入口。
+
+后果：runner 即使按 §5.1 传对目录，也会连上一个**无人监听的 socket**，并以退出码 `5` 静默 crash loop。
+该缺口**不属于**本契约文档的修复范围，已移交父任务 `10-10-algorithm-plugin-architecture`（规划中）承接 broker 宿主
+归属与帧发布通路的架构决策。
+
 ---
 
 ## 6. 跨进程 FrameBroker 与共享内存租赁契约 (FrameBroker & SHM Leasing)
@@ -129,8 +188,71 @@ zhulong_algo_runner --verify-plugin <path_to_plugin.so> --sample <test_image_or_
 ### 6.4 IPC 协议自然对齐与 Socket 鲁棒性规约 (IPC Alignment & Socket Hardening)
 - **严格 8 字节自然对齐**：IPC 二进制包（如 `FrameDispatchMsg`、`FrameAckMsg`）中 64 位字段（`generation`、`stream_id`、`frame_id`、`pts`）必须排布在 8 字节自然对齐偏移上；结构体总尺寸必须为 8 的倍数并包含尾部对齐填充；必须有编译期 `static_assert(offsetof(...) % 8 == 0)` 与总大小校验，彻底杜绝 ARM64/嵌入式体系下非对齐访问与 `-Waddress-of-packed-member` 警告。
 - **四态 Socket 状态机与半包熔断**：流读取使用四态机制（`SUCCESS`、`IDLE_TIMEOUT`、`CLOSED`、`DESYNC_ERROR`）。空闲轮询超时允许平滑重试，但若在已收到部分字节后发生超时或错误，必须标记为 `DESYNC_ERROR` 并立即主动断开连接，禁止在错位的字节流上继续读取。
-- **发送超时隔离与最大 Payload 门禁**：服务端套接字必须配置 50ms `SO_SNDTIMEO` 发送超时，防止卡死/失联子进程反向阻塞主媒体捕获与解码流水线；IPC 消息必须强制执行 `MAX_IPC_PAYLOAD_SIZE = 64KB` 尺寸检查与线程级 `try ... catch` 异常防爆门，隔离异常子进程。
+- **发送超时隔离与最大 Payload 门禁**：服务端套接字必须配置 50ms `SO_SNDTIMEO` 发送超时，防止卡死/失联子进程反向阻塞主媒体捕获与解码流水线；IPC 消息必须强制执行 `MAX_IPC_PAYLOAD_SIZE = 64KB` 尺寸检查与线程级 `try ... catch` 异常防爆门，隔离异常子进程。**Go 侧同样受此门禁约束**：`internal/algorithm/process.go` 的 `EncodeIpcMessage`（发送侧）与 `DecodeIpcHeader`（接收侧）必须对 `PayloadSize > MaxIpcPayloadSize` 返回错误，两侧常量必须与 native `ipc_protocol.hpp:11` 的 `MAX_IPC_PAYLOAD_SIZE` 保持一致（由 `internal/algorithm/ipc_contract_test.go` 跨语言比对）。
 - **在途配额原子回滚**：`publish_frame` 在共享内存槽位写入异常或客户端 Socket 发送失败时，必须原子回退预分配的 `in_flight_count`、`delivered_frames`，并记入 `dropped_frames`，防止在途配额死锁导致后续视频帧被永久丢弃。
 - **多平面 (Multi-planar) 逐行安全复制**：解码器传递多平面帧（如 `YUV420P`、`NV12`）时必须携带完整的 `host_planes[4]` 与 `plane_strides[4]`；FrameBroker 写入共享内存时必须根据格式分平面逐行拷贝，严禁将 `data[0]` 假定为单一连续缓冲区进行越界 `memcpy`。
 
 
+
+---
+
+## 7. `manifest.json` 字段约束与安装路径安全
+
+### 7.1 标识字段约束（仅 id/version 为路径承载字段）
+
+`manifest.json` 的 **`id` / `version`** 会被 Go 侧用于拼装安装路径
+`<installDir>/<id>/<version>`。若允许路径分隔符或 `..` 点段，`filepath.Join` 会被逃逸出 `installDir`（已实测确认：
+`filepath.Join("/data/algorithms", "../../../tmp/pwned", "1.0.0")` → `/tmp/pwned/1.0.0`）。
+
+因此 **`id` 与 `version`** 必须满足以下白名单正则（Go 侧 `internal/algorithm/verifier.go` 强制）：
+
+```
+^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$
+```
+
+约束含义：
+
+- 首字符必须为字母或数字，杜绝以 `.` / `-` / `/` 开头；
+- 允许字符集仅 `A-Za-z0-9._-`，禁止路径分隔符 `/`、`\`、空格、Unicode；
+- 总长度 1–64 字符。
+
+校验失败返回领域错误码 `INVALID_MANIFEST_TOKEN`。除字符集白名单外，Go 侧在拼装 `targetDir` 后还会执行一次
+绝对路径前缀断言，确保结果始终被约束在 `installDir` 之内（纵深防御）。
+
+#### `name` 字段：不做字符集限制，但有字节上限
+
+⚠️ **`name` 不是路径承载字段**，**不受**上述白名单约束。它是人类可读的展示名（如 `安全帽佩戴检测算法`），
+若施加该白名单会拒绝所有非 ASCII 名称。
+
+但 `name` 会作为 `--name` 传给 runner，并被拷入定长缓冲 `HandshakeReq.client_name[32]`
+（`ipc_protocol.hpp:37`，拷贝处 `runner.cpp:201`）。`strncpy` 会**静默截断**，导致两个算法包共享同一 client name。
+因此 `name` 必须满足：
+
+- **非空**；
+- **UTF-8 字节长度 ≤ 32**（超过则返回 `INVALID_MANIFEST_TOKEN`，而非静默截断）。
+
+Go 侧对应常量：`manifestNameMaxBytes = 32`。
+
+### 7.2 底库热更新载荷字段名映射
+
+Go 侧 `internal/algorithm/process.go` 的 `GallerySyncItem.Features`（JSON `features`）是 IPC 载荷的权威字段名，
+语义为可变 $D$ 维 `float32` 特征向量（具体维度由当前算法包元数据 `manifest.json` 或模型输出形状定义，常见如 128、256、512、768、1024 维，当前默认人脸模型以 512 维为例）。
+人员领域 DTO `internal/person/model.go` 的 `GallerySyncItem.Features`（JSON `features`）已与之一并对齐统一（消除早期 `feature_vector` 命名漂移）。
+IPC 载荷序列化时统一使用 `features`。
+（注：`Face` 数据库实体由于映射 SQLite 动态 BLOB 列，依然使用 `FeatureVector []byte`，天然支持任意维度存储）。
+
+### 7.3 底库热更新链路澄清（未实现，登记供后续任务）
+
+`MSG_GALLERY_SYNC` / `MSG_GALLERY_UPSERT` / `MSG_GALLERY_DELETE` 的 Go 侧构造函数与
+`person.GetGallerySyncData` 均为**未被调用的死代码**，native 侧也**没有**对应消息类型。以下为澄清结论，
+供实现该链路的任务使用（当前归属见 `10-12-algo-lifecycle-remediation` R6）：
+
+| 维度 | 结论 |
+| --- | --- |
+| **触发时机** | 人员/人脸 CRUD 成功后（`person.Service` 的 Create/Update/Delete/AddFace/DeleteFace）；冷启动时在 runner 就绪握手后全量同步 |
+| **传输通道** | **待定** —— 依赖 FrameBroker 宿主归属（见 §5.3）。若宿主在 native engine 内，gallery 通道宜与 broker 复用同一 socket（多路复用消息类型）；若宿主在 Go 内，Go 可直接作服务端。该决策随 `10-10-algorithm-plugin-architecture` 一并做出 |
+| **消息序列** | 全量 `SYNC`（冷启动）→ 增量 `UPSERT`/`DELETE`（运行期）；`SYNC` 后须有 `ACK`，增量可异步 |
+| **ACK 语义** | 复用既有 `MSG_FRAME_ACK` 的序号机制，或新增 `MSG_GALLERY_ACK`（待宿主定案） |
+| **单条上限与分片** | 受 §6.4 的 64KB 门禁约束。全量同步在人员规模增长后必然超限，**分片是必须的**——但分片协议需 native 侧支持（分片序号、总片数），随该链路实现 |
+| **消息类型对齐** | native `ipc_protocol.hpp:14-20` 目前止于 `MSG_DISCONNECT=6`，Go 侧预留的 10/11/12 **尚未定义**。实现前必须先在 native 头文件补齐 |
+| **身份字段** | 载荷 `person_id` 恒取 `persons.person_id`（对外业务键）**原值**——该键必填、唯一、不可变，因此**不存在回退到内部主键 `persons.id` 的分支**。注意 `person_faces.person_id` 是内部行 ID 外键、与载荷 `person_id` 同名但语义不同，二者严禁混用，否则 native 侧会同时收到两套标识符空间 |

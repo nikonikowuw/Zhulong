@@ -20,6 +20,9 @@ type fileConfig struct {
 	Network struct {
 		CustomScript string `mapstructure:"custom_script"`
 	} `mapstructure:"network"`
+	Algorithm struct {
+		Target string `mapstructure:"target"`
+	} `mapstructure:"algorithm"`
 }
 
 func loadConfig() (app.Config, error) {
@@ -34,6 +37,7 @@ func loadConfigFile(path string) (app.Config, error) {
 	settings.SetDefault("http.address", defaults.HTTPAddress)
 	settings.SetDefault("data.directory", defaults.DataDir)
 	settings.SetDefault("logging.development", defaults.Development)
+	settings.SetDefault("algorithm.target", defaults.AlgorithmTarget)
 
 	if err := settings.ReadInConfig(); err != nil {
 		return app.Config{}, fmt.Errorf("read configuration %q: %w", path, err)
@@ -44,9 +48,10 @@ func loadConfigFile(path string) (app.Config, error) {
 		return app.Config{}, fmt.Errorf("decode configuration %q: %w", path, err)
 	}
 	return app.Config{
-		HTTPAddress:  values.HTTP.Address,
-		DataDir:      values.Data.Directory,
-		Development:  values.Logging.Development,
-		CustomScript: values.Network.CustomScript,
+		HTTPAddress:     values.HTTP.Address,
+		DataDir:         values.Data.Directory,
+		AlgorithmTarget: values.Algorithm.Target,
+		Development:     values.Logging.Development,
+		CustomScript:    values.Network.CustomScript,
 	}, nil
 }

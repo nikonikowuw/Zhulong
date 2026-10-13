@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Go 后端服务规范索引与开发检查清单"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Go 模块目录划分与单向依赖铁律（R1 需在 app 导入 algorithm 常量）"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Fx value group 双 group 装配模式与 fx.ValidateApp 校验（R1 上传路由组）"}
+{"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "MaxBodyLimit 仅适用于非文件接口，以及中间件挂载隔离三原则（R1 核心依据）"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "统一响应信封、路由组织与中间件挂载位置（R1/R2 契约）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "领域错误码定义与 locale.go 注册规范（R3 新错误码）"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "禁止 _ = fn()、禁止循环内 time.After、-race 强制（全阶段门禁）"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法插件 C ABI、zhulong_algo_runner 命令契约、IPC 64KB 门禁与 8 字节对齐（R2/R3/R4/R6 权威依据）"}
+{"file": ".trellis/spec/naming-guidelines.md", "reason": "跨语言统一命名规范与领域术语"}

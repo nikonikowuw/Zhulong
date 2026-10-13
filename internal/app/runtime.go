@@ -48,6 +48,16 @@ type storageLifecycle interface {
 	Stop(context.Context) error
 }
 
+type algorithmLifecycle interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
+
+type personLifecycle interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
+
 type lifecycleRuntime struct {
 	database   databaseLifecycle
 	native     engineLifecycle
@@ -56,6 +66,8 @@ type lifecycleRuntime struct {
 	network    networkLifecycle
 	systemTime systemTimeLifecycle
 	storage    storageLifecycle
+	algorithm  algorithmLifecycle
+	person     personLifecycle
 	server     *http.Server
 	logger     *zap.Logger
 	listen     func(string, string) (net.Listener, error)
@@ -70,6 +82,8 @@ type lifecycleRuntime struct {
 	networkReady    bool
 	systemTimeReady bool
 	storageReady    bool
+	algorithmReady  bool
+	personReady     bool
 	httpReady       bool
 	loggerSynced    bool
 }
@@ -84,6 +98,8 @@ type runtimeParams struct {
 	Network    networkLifecycle    `optional:"true"`
 	SystemTime systemTimeLifecycle `optional:"true"`
 	Storage    storageLifecycle    `optional:"true"`
+	Algorithm  algorithmLifecycle  `optional:"true"`
+	Person     personLifecycle     `optional:"true"`
 	Server     *http.Server
 	Logger     *zap.Logger
 }
@@ -101,6 +117,8 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		network:    p.Network,
 		systemTime: p.SystemTime,
 		storage:    p.Storage,
+		algorithm:  p.Algorithm,
+		person:     p.Person,
 		server:     p.Server,
 		logger:     p.Logger,
 		listen:     net.Listen,
@@ -147,21 +165,34 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.storageReady = true
 	}
 
+	if r.algorithm != nil {
+		if err := r.algorithm.Start(ctx); err != nil {
+			r.logger.Warn("algorithm start warning", zap.Error(err))
+		}
+		r.algorithmReady = true
+	}
+
+	if r.person != nil {
+		if err := r.person.Start(ctx); err != nil {
+			r.logger.Warn("person start warning", zap.Error(err))
+		}
+		r.personReady = true
+	}
+
 	if err := r.native.Start(); err != nil {
 		startupErr := fmt.Errorf("start native engine: %w", err)
-		return errors.Join(startupErr, r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
+		return errors.Join(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
 	}
 	r.nativeReady = true
 
 	if r.camera != nil {
 		if err := r.camera.InitCipher(ctx); err != nil {
 			startupErr := fmt.Errorf("initialize camera cipher: %w", err)
-			return errors.Join(startupErr, r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
+			return errors.Join(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
 		}
 		if err := r.camera.Start(ctx); err != nil {
 			startupErr := fmt.Errorf("start camera scheduler: %w", err)
-			r.camera.Stop()
-			return errors.Join(startupErr, r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
+			return errors.Join(startupErr, r.closeCamera(), r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
 		}
 		r.cameraReady = true
 	}
@@ -169,7 +200,7 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	listener, err := r.listen("tcp", r.server.Addr)
 	if err != nil {
 		startupErr := fmt.Errorf("listen on %s: %w", r.server.Addr, err)
-		return errors.Join(startupErr, r.closeCamera(), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
+		return errors.Join(startupErr, r.closeCamera(), r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
 	}
 	r.listener = listener
 	r.serveDone = make(chan error, 1)
@@ -211,6 +242,12 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 	}
 
 	if err := r.closeCamera(); err != nil {
+		stopErrors = append(stopErrors, err)
+	}
+	if err := r.closeAlgorithm(ctx); err != nil {
+		stopErrors = append(stopErrors, err)
+	}
+	if err := r.closePerson(ctx); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
 	if err := r.closeStorage(ctx); err != nil {
@@ -269,6 +306,32 @@ func (r *lifecycleRuntime) closeStorage(ctx context.Context) error {
 	if r.storage != nil {
 		if err := r.storage.Stop(ctx); err != nil {
 			return fmt.Errorf("stop storage service: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *lifecycleRuntime) closeAlgorithm(ctx context.Context) error {
+	if !r.algorithmReady {
+		return nil
+	}
+	r.algorithmReady = false
+	if r.algorithm != nil {
+		if err := r.algorithm.Stop(ctx); err != nil {
+			return fmt.Errorf("stop algorithm service: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *lifecycleRuntime) closePerson(ctx context.Context) error {
+	if !r.personReady {
+		return nil
+	}
+	r.personReady = false
+	if r.person != nil {
+		if err := r.person.Stop(ctx); err != nil {
+			return fmt.Errorf("stop person service: %w", err)
 		}
 	}
 	return nil

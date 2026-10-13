@@ -20,7 +20,7 @@
 ## 2. 全局核心铁律
 
 1. **方案 A 单主程序交付**：前端构建产物 `//go:embed` 内嵌至 Go 二进制；C++ 引擎内联链接；允许依赖宿主 Linux 动态库（glibc/NPU 驱动）；SQLite 与录像外置。
-2. **Go 业务能力分包**：按业务域划分（`internal/camera`, `internal/recording`, `internal/inference`），严禁横向技术分层与循环依赖。
+2. **Go 业务能力分包**：按业务域划分（`internal/{auth, camera, person, algorithm, storage, network, systemtime, audit}`），严禁横向技术分层与循环依赖。
 3. **Fx 显式生命周期编排**：构造函数保持纯粹，由 Fx 统一装配；**启动时必须先自动执行版本化 SQLite 迁移**，成功后方可放行 HTTP 流量与启动 Pipeline。
 4. **统一响应信封与后端 i18n**：所有 JSON 响应必含 `{ code, message, data }`，HTTP 422 字段校验错误可附加 `details`；错误时 `data: null`。后端按 `Accept-Language` 翻译顶层与字段级消息；底层细节在服务端 Zap 日志中严格脱敏。
 5. **C ABI 绝对隔离**：CGO 仅通过 `include/Zhulong/engine.h` 交互（不透明句柄）；C++ 异常绝对禁止穿越 C ABI；内存遵循“谁分配谁释放”。
@@ -31,5 +31,6 @@
 
 ## 3. 仓库现状与规划约定区别
 
-- **仓库客观事实**：`go.mod` 声明模块 `github.com/nikonikowuw/Zhulong`。当前为全新绿地仓库，尚无业务代码或迁移文件。
-- **本规范定位**：所有目录树与代码示例均为**规划契约**，用于指导渐进式实现，切勿在开发具体功能前预先创建空目录或占位文件。
+- **仓库客观事实**：`go.mod` 声明模块 `github.com/nikonikowuw/Zhulong`。仓库已非绿地：`cmd/Zhulong`、`internal/app`、`database`（含 `000001`–`000007` 版本化迁移）、`engine`、`httputil`、`webui`、`auth`、`camera`、`person`、`algorithm`、`storage`、`network`、`systemtime`、`audit` 均已有实现与单元测试。
+- **本规范定位**：目录树与代码示例是**契约**，但**已实现的部分必须与代码保持一致**——发现文档落后于实现（模块清单、迁移编号、表结构、契约字段）时应即时修正文档，而不是让文档保持"看起来已实现"或"尚未开始"的错误状态。
+- **禁止空目录占位**：切勿在开发具体功能前预先创建空目录或占位文件。

@@ -10,13 +10,13 @@ import (
 )
 
 func TestLoadConfigUsesTOMLAndDefaults(t *testing.T) {
-	path := writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n[data]\ndirectory = '/srv/zhulong'\n[logging]\ndevelopment = true\n")
+	path := writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n[data]\ndirectory = '/srv/zhulong'\n[algorithm]\ntarget = 'rk3588'\n[logging]\ndevelopment = true\n")
 
 	got, err := loadConfigFile(path)
 	if err != nil {
 		t.Fatalf("loadConfigFile: %v", err)
 	}
-	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != "/srv/zhulong" || !got.Development {
+	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != "/srv/zhulong" || got.AlgorithmTarget != "rk3588" || !got.Development {
 		t.Fatalf("unexpected config: %+v", got)
 	}
 }
@@ -29,7 +29,7 @@ func TestLoadConfigKeepsDefaultsForOmittedValues(t *testing.T) {
 		t.Fatalf("loadConfigFile: %v", err)
 	}
 	defaults := app.DefaultConfig()
-	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != defaults.DataDir || got.Development {
+	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != defaults.DataDir || got.AlgorithmTarget != defaults.AlgorithmTarget || got.Development {
 		t.Fatalf("unexpected config: %+v", got)
 	}
 }

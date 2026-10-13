@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Go 后端服务规范索引与检查清单"}
+{"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "校验 MaxBodyLimit 挂载层级是否正确隔离（R1 回归风险点）"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "校验 Fx 依赖图与路由装配未被破坏"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "校验新错误码已注册且本地化完整"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "校验未新增 _ = fn() 反模式，-race 通过"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "校验实现与契约文档一致（broker 目录语义、退出码表、manifest 字符集、64KB 门禁）"}

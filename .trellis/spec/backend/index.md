@@ -17,6 +17,7 @@
 | [依赖注入与生命周期](./dependency-injection.md) | Uber Fx 装配、启动失败回滚、HTTP 排空、native/数据库关闭顺序 |
 | [边缘媒体存储与动态生命周期](./storage-guidelines.md) | 存储路径规范、statfs 水位感知、外挂盘防穿透、双水位回差清理与熔断 |
 | [摄像机业务与生命周期](./camera-guidelines.md) | 主子流建模、AES-GCM 凭据加密、双流原子门禁、正交状态机与探活调度 |
+| [算法包开发与交付规范](./algorithm-guidelines.md) | 算法包物理拓扑、manifest 元数据、C ABI/SDK 契约、结果规范与验包门禁 |
 | [宿主启动与构建合同](./host-runtime-contract.md) | CLI、health/SPA/Swagger、迁移、CGO 静态链接与跨层验证合同 |
 | [错误处理与统一契约](./error-handling.md) | `AppError` 结构、必需三字段与可选字段级 `details`、后端 i18n 错误翻译、Zap 日志脱敏 |
 | [结构化日志规范](./logging-guidelines.md) | Uber Zap 规约、强类型字段、等级划分、敏感信息脱敏 |
@@ -35,7 +36,9 @@
 - [ ] **中间件执行时序**：中间件流水线是否遵循 Recovery ➔ RequestID ➔ CORS ➔ AccessLog ➔ Handler？
 - [ ] **Context 存取类型安全**：Gin 上下文数据是否使用私有 key 与导出 Accessor 包装，未直接使用裸字符串 `c.Set/c.Get`？
 - [ ] **底层错误脱敏**：SQLite/CGO 底层真实错误是否封装在内部打日志，未裸抛给前端？
-- [ ] **严禁 AutoMigrate**：表变动是否以严格递增的 SQL 脚本置于 `migrations/`？
+- [ ] **严禁 AutoMigrate**：表变动是否以严格递增的 SQL 脚本置于 `migrations/`？是否**只改动尚未交付的迁移**——已应用的迁移必须追加新版本而非改正文（见 [database-guidelines.md](./database-guidelines.md)）？
+- [ ] **对外业务键契约**：新增的对外业务键是否满足**非空 + 唯一 + 不可变**，且与内部代理主键严格分离？
+- [ ] **文档与实现同步**：本次改动是否同步更新了 `prd.md` / `design.md` 里的建表语句、迁移编号与模块清单？
 
 ---
 

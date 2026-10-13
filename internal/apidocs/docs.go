@@ -15,6 +15,544 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/algorithms": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "algorithm"
+                ],
+                "summary": "List registered algorithms",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/algorithm.Algorithm"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/algorithms/install": {
+            "post": {
+                "description": "Streams a multipart archive to a temporary file, then verifies platform target, resource budget, sample inference and config schema before registering the algorithm. Rejects platform mismatch, unsupported archive formats, zip-slip paths, decompression bombs, invalid manifest tokens and already installed versions.",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "algorithm"
+                ],
+                "summary": "Install an algorithm package",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Algorithm package archive (at most 500 MB)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/algorithm.Algorithm"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/algorithms/tasks": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "algorithm"
+                ],
+                "summary": "List analysis tasks",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by camera ID",
+                        "name": "camera_id",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/algorithm.AnalysisTask"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Binds a camera to an algorithm with a sampling rate and a config JSON document. Both camelCase and snake_case request keys are accepted; the snake_case alias is used only when the camelCase key is absent. Missing id, cameraId or algorithmId is rejected with 422 VALIDATION_FAILED. Returns 409 COMPUTE_BUDGET_EXCEEDED when the accumulated compute cost of enabled tasks exceeds the host budget.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "algorithm"
+                ],
+                "summary": "Create an analysis task",
+                "parameters": [
+                    {
+                        "description": "Analysis task payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/algorithm.CreateTaskRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/algorithm.AnalysisTask"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/algorithms/tasks/{id}": {
+            "delete": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "algorithm"
+                ],
+                "summary": "Delete an analysis task",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Analysis task ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/algorithms/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "algorithm"
+                ],
+                "summary": "Get algorithm details by ID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Algorithm ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/algorithm.Algorithm"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Removes the algorithm registration and its installed files. Deleting an algorithm that is currently ACTIVE returns 409 ALGORITHM_IS_ACTIVE; disable it first.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "algorithm"
+                ],
+                "summary": "Delete an algorithm",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Algorithm ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/algorithms/{id}/disable": {
+            "post": {
+                "description": "Stops the supervised runner subprocess and sets the algorithm status to DISABLED.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "algorithm"
+                ],
+                "summary": "Disable an algorithm and stop its runner process",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Algorithm ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/algorithms/{id}/enable": {
+            "post": {
+                "description": "Starts the supervised runner subprocess and sets the algorithm status to ACTIVE. The runner is monitored and restarted according to the recovery policy until the crash-loop threshold is reached.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "algorithm"
+                ],
+                "summary": "Enable an algorithm and start its runner process",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Algorithm ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/algorithms/{id}/reset": {
+            "post": {
+                "description": "Clears the crash-loop circuit breaker and returns the algorithm to DISABLED so it can be enabled again. Returns 409 ALGORITHM_NOT_IN_CRASH_LOOP when the algorithm is not currently in CRASH_LOOP.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "algorithm"
+                ],
+                "summary": "Reset an algorithm stuck in CRASH_LOOP",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Algorithm ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "object"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/audit/logs": {
             "get": {
                 "produces": [
@@ -2060,6 +2598,120 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "algorithm.Algorithm": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "computeCost": {
+                    "type": "integer"
+                },
+                "configSchemaJson": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "manifestJson": {
+                    "type": "string"
+                },
+                "memoryMb": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "previousVersion": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "targetArch": {
+                    "type": "string"
+                },
+                "targetDevice": {
+                    "type": "string"
+                },
+                "taskType": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "algorithm.AnalysisTask": {
+            "type": "object",
+            "properties": {
+                "algorithmId": {
+                    "type": "string"
+                },
+                "cameraId": {
+                    "type": "string"
+                },
+                "configJson": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "sampleFps": {
+                    "type": "integer"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "algorithm.CreateTaskRequest": {
+            "type": "object",
+            "properties": {
+                "algorithmId": {
+                    "type": "string"
+                },
+                "algorithm_id": {
+                    "type": "string"
+                },
+                "cameraId": {
+                    "type": "string"
+                },
+                "camera_id": {
+                    "type": "string"
+                },
+                "configJson": {
+                    "type": "string"
+                },
+                "config_json": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "sampleFps": {
+                    "type": "integer"
+                },
+                "sample_fps": {
+                    "type": "integer"
+                }
+            }
+        },
         "app.HealthData": {
             "type": "object",
             "properties": {
