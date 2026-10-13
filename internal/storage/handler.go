@@ -3,7 +3,6 @@ package storage
 import (
 	"errors"
 	"net/http"
-	"reflect"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
@@ -109,7 +108,7 @@ func (h *Handler) GetConfig(c *gin.Context) {
 func (h *Handler) UpdateConfig(c *gin.Context) {
 	var req UpdateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.HandleBindError(c, err, reflect.TypeOf(req))
+		httputil.HandleBindError(c, err)
 		return
 	}
 
@@ -149,7 +148,7 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 func (h *Handler) TestPath(c *gin.Context) {
 	var req PathTestRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.HandleBindError(c, err, reflect.TypeOf(req))
+		httputil.HandleBindError(c, err)
 		return
 	}
 

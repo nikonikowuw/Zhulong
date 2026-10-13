@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"reflect"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -75,7 +74,7 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 
 	var req UpdateConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.HandleBindError(c, err, reflect.TypeOf(req))
+		httputil.HandleBindError(c, err)
 		return
 	}
 
@@ -142,7 +141,7 @@ func (h *Handler) ManualSet(c *gin.Context) {
 
 	var req ManualTimeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.HandleBindError(c, err, reflect.TypeOf(req))
+		httputil.HandleBindError(c, err)
 		return
 	}
 

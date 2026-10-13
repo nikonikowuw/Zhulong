@@ -2,7 +2,6 @@ package person
 
 import (
 	"net/http"
-	"reflect"
 
 	"github.com/gin-gonic/gin"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
@@ -86,7 +85,7 @@ func (h *Handler) Create(c *gin.Context) {
 
 	var req CreatePersonRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.HandleBindError(c, err, reflect.TypeOf(req))
+		httputil.HandleBindError(c, err)
 		return
 	}
 
@@ -139,7 +138,7 @@ func (h *Handler) Update(c *gin.Context) {
 
 	var req UpdatePersonRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.HandleBindError(c, err, reflect.TypeOf(req))
+		httputil.HandleBindError(c, err)
 		return
 	}
 
@@ -215,7 +214,7 @@ func (h *Handler) AddFace(c *gin.Context) {
 
 	var req AddFaceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.HandleBindError(c, err, reflect.TypeOf(req))
+		httputil.HandleBindError(c, err)
 		return
 	}
 

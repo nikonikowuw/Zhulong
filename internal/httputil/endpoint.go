@@ -1,8 +1,6 @@
 package httputil
 
 import (
-	"reflect"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -10,11 +8,10 @@ import (
 func HandleJSON[Req any, Resp any](
 	fn func(c *gin.Context, req Req) (Resp, error),
 ) gin.HandlerFunc {
-	reqType := reflect.TypeOf((*Req)(nil)).Elem()
 	return func(c *gin.Context) {
 		var req Req
 		if err := c.ShouldBindJSON(&req); err != nil {
-			HandleBindError(c, err, reqType)
+			HandleBindError(c, err)
 			return
 		}
 

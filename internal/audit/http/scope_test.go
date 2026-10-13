@@ -182,7 +182,7 @@ func TestMiddlewareRecordsJSONBindFailure(t *testing.T) {
 				Username string `json:"username" binding:"required"`
 			}
 			if err := c.ShouldBindJSON(&body); err != nil {
-				httputil.HandleBindError(c, err, nil)
+				httputil.HandleBindError(c, err)
 				return
 			}
 			httputil.Success(c, gin.H{"ok": true})
@@ -243,7 +243,7 @@ func TestTagActionOverridesDeclaredAction(t *testing.T) {
 				Enabled *bool `json:"enabled"`
 			}
 			if err := c.ShouldBindJSON(&body); err != nil {
-				httputil.HandleBindError(c, err, nil)
+				httputil.HandleBindError(c, err)
 				return
 			}
 			TagTarget(c, "camera:"+c.Param("id"))
@@ -449,7 +449,7 @@ func TestChunkedBodyOverflowIsAudited(t *testing.T) {
 	api.POST("/auth/login", TagMiddleware(audit.ActionAuthLogin, "user:", ""), func(c *gin.Context) {
 		var body map[string]any
 		if err := c.ShouldBindJSON(&body); err != nil {
-			httputil.HandleBindError(c, err, nil)
+			httputil.HandleBindError(c, err)
 			return
 		}
 		httputil.Success(c, gin.H{"ok": true})
@@ -511,7 +511,7 @@ func TestChunkedBodyOverflowWithoutTagIsSkipped(t *testing.T) {
 	api.POST("/untagged", func(c *gin.Context) {
 		var body map[string]any
 		if err := c.ShouldBindJSON(&body); err != nil {
-			httputil.HandleBindError(c, err, nil)
+			httputil.HandleBindError(c, err)
 			return
 		}
 		httputil.Success(c, gin.H{"ok": true})

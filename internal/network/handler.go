@@ -3,7 +3,6 @@ package network
 import (
 	"net"
 	"net/http"
-	"reflect"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -111,7 +110,7 @@ func (h *Handler) ApplyConfig(c *gin.Context) {
 	iface := c.Param("name")
 	var req InterfaceConfig
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.HandleBindError(c, err, reflect.TypeOf(req))
+		httputil.HandleBindError(c, err)
 		return
 	}
 
@@ -224,7 +223,7 @@ func (h *Handler) GetStatus(c *gin.Context) {
 func (h *Handler) Ping(c *gin.Context) {
 	var req PingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.HandleBindError(c, err, reflect.TypeOf(req))
+		httputil.HandleBindError(c, err)
 		return
 	}
 

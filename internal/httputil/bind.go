@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"github.com/go-playground/validator/v10"
 )
 
@@ -16,6 +17,29 @@ var (
 	validationMappersMu sync.RWMutex
 	validationMappers   []func(validator.FieldError) string
 )
+
+// init installs the JSON field-name resolver on gin's default validator, so
+// FieldDetail.Field always carries the name the client actually sent.
+//
+// It must run before any validation: RegisterTagNameFunc is documented as
+// "not thread-safe, intended to be registered prior to any validation", and
+// validation happens inside c.ShouldBindJSON, which is earlier than any
+// HandleBindError call. Registering lazily from HandleBindError would miss the
+// first failure and silently fall back to Go field names. gin builds its
+// validator lazily, so Engine() is called here to force it into existence.
+func init() {
+	engine, ok := binding.Validator.Engine().(*validator.Validate)
+	if !ok {
+		return
+	}
+	engine.RegisterTagNameFunc(func(field reflect.StructField) string {
+		name := strings.SplitN(field.Tag.Get("json"), ",", 2)[0]
+		if name == "" || name == "-" {
+			return toLowerCamel(field.Name)
+		}
+		return name
+	})
+}
 
 // RegisterValidationMapper registers a domain-specific validation error code mapper.
 // If a mapper returns a non-empty string, that code is used for the field validation detail.
@@ -29,7 +53,7 @@ func RegisterValidationMapper(mapper func(validator.FieldError) string) {
 }
 
 // HandleBindError formats binding and validation errors according to the API contract.
-func HandleBindError(c *gin.Context, err error, reqType reflect.Type) {
+func HandleBindError(c *gin.Context, err error) {
 	var maxBytesError *http.MaxBytesError
 	if errors.As(err, &maxBytesError) {
 		WritePayloadTooLarge(c)
@@ -40,14 +64,9 @@ func HandleBindError(c *gin.Context, err error, reqType reflect.Type) {
 	if errors.As(err, &validationErrors) {
 		details := make([]FieldDetail, 0, len(validationErrors))
 		for _, fieldError := range validationErrors {
-			fieldName := fieldError.StructField()
-			if reqType != nil {
-				fieldName = findJSONFieldName(reqType, fieldName)
-			} else {
-				fieldName = toLowerCamel(fieldName)
-			}
+			// Field() is resolved by the tag name function installed in init.
 			details = append(details, FieldDetail{
-				Field: fieldName,
+				Field: fieldError.Field(),
 				Code:  validationCode(fieldError),
 			})
 		}
@@ -56,26 +75,6 @@ func HandleBindError(c *gin.Context, err error, reqType reflect.Type) {
 	}
 
 	WriteError(c, NewError(http.StatusBadRequest, "INVALID_FORMAT", "Invalid request format", err))
-}
-
-func findJSONFieldName(t reflect.Type, structFieldName string) string {
-	if t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Struct {
-		return toLowerCamel(structFieldName)
-	}
-
-	if field, ok := t.FieldByName(structFieldName); ok {
-		jsonTag := field.Tag.Get("json")
-		if jsonTag != "" && jsonTag != "-" {
-			parts := strings.Split(jsonTag, ",")
-			if parts[0] != "" {
-				return parts[0]
-			}
-		}
-	}
-	return toLowerCamel(structFieldName)
 }
 
 func toLowerCamel(s string) string {

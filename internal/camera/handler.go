@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"reflect"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -97,7 +96,7 @@ func (h *Handler) Create(c *gin.Context) {
 
 	var req CreateCameraRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.HandleBindError(c, err, reflect.TypeOf(req))
+		httputil.HandleBindError(c, err)
 		return
 	}
 	res, err := h.service.Create(c.Request.Context(), req)
@@ -192,7 +191,7 @@ func (h *Handler) Update(c *gin.Context) {
 
 	var req UpdateCameraRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.HandleBindError(c, err, nil)
+		httputil.HandleBindError(c, err)
 		return
 	}
 
