@@ -59,18 +59,18 @@
 
 ## Acceptance Criteria
 
-- [ ] 审计核心包不依赖 Gin；Gin Handler、中间件和 Tag API 位于独立 HTTP 适配包。
-- [ ] `WithActor`/`FromContext` 可用于普通 Go 调用；缺失 Actor 记录为 `unknown`，显式系统事件记录为 `system`，不发生默认 `admin` 误归因。
-- [ ] 所有表格列出的写操作均通过真实应用路由生成审计记录；公共 Auth、受保护路由和独立上传路由均覆盖；未打 Tag 的请求不记录。
-- [ ] 所有纳入范围的人为 HTTP 写操作都记录正确的客户端 IP（取自 TCP 连接来源，伪造 `X-Forwarded-For` / `X-Real-IP` 不生效）；认证成功时用户名为系统唯一配置账号名（若可取得），未认证请求使用 `anonymous`，不得硬编码或误归因为 `admin`。
-- [ ] 已有认证上下文可传递到 `Request.Context()`；登录失败不伪造已认证用户名，也不丢失请求 IP。
-- [ ] HTTP 错误记录安全且可判别；业务错误、校验错误、NTP 领域失败与被捕获的 panic 均被正确标为 failed，不将原始内部错误或 panic 堆栈写入 `error_msg`。
-- [ ] 审计详情测试证明密码、确认密码、Cookie/令牌、人脸原始数据与摄像机凭据密文不会落库（验证未引入自动 diff）。
-- [ ] Camera 的 update 与 toggle 能被区分记录（运行时改写 action）。
-- [ ] 后台 Storage、周期 NTP 和 RTC 校时记录为系统 Actor；SystemTime 的用户操作不再由 Service 重复记录。
-- [ ] 生产代码中不存在 `admin` 硬编码身份：任何归属不明的请求记录为 `anonymous` 或 `unknown`，Storage 用户操作记录真实认证账号名。
-- [ ] 成功清空后立即能查询到 `audit.clear`；再次清空仍保留此前及本次 `audit.clear` 记录，且容量裁剪不会删除 `audit.clear` 记录。
-- [ ] 数据库 Schema 与 API DTO 不变；全量后端测试通过。
+- [x] 审计核心包不依赖 Gin；Gin Handler、中间件和 Tag API 位于独立 HTTP 适配包。
+- [x] `WithActor`/`FromContext` 可用于普通 Go 调用；缺失 Actor 记录为 `unknown`，显式系统事件记录为 `system`，不发生默认 `admin` 误归因。
+- [x] 所有表格列出的写操作均通过真实应用路由生成审计记录；公共 Auth、受保护路由和独立上传路由均覆盖；未打 Tag 的请求不记录。
+- [x] 所有纳入范围的人为 HTTP 写操作都记录正确的客户端 IP（取自 TCP 连接来源，伪造 `X-Forwarded-For` / `X-Real-IP` 不生效）；认证成功时用户名为系统唯一配置账号名（若可取得），未认证请求使用 `anonymous`，不得硬编码或误归因为 `admin`。
+- [x] 已有认证上下文可传递到 `Request.Context()`；登录失败不伪造已认证用户名，也不丢失请求 IP。
+- [x] HTTP 错误记录安全且可判别；业务错误、校验错误、NTP 领域失败与被捕获的 panic 均被正确标为 failed，不将原始内部错误或 panic 堆栈写入 `error_msg`。
+- [x] 审计详情测试证明密码、确认密码、Cookie/令牌、人脸原始数据与摄像机凭据密文不会落库（验证未引入自动 diff）。
+- [x] Camera 的 update 与 toggle 能被区分记录（运行时改写 action）。
+- [x] 后台 Storage、周期 NTP 和 RTC 校时记录为系统 Actor；SystemTime 的用户操作不再由 Service 重复记录。
+- [x] 生产代码中不存在 `admin` 硬编码身份：任何归属不明的请求记录为 `anonymous` 或 `unknown`，Storage 用户操作记录真实认证账号名。
+- [x] 成功清空后立即能查询到 `audit.clear`；再次清空仍保留此前及本次 `audit.clear` 记录，且容量裁剪不会删除 `audit.clear` 记录。
+- [x] 数据库 Schema 与 API DTO 不变；全量后端测试通过。
 
 ## Out of Scope
 
