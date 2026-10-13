@@ -15,9 +15,11 @@ import (
 	"path/filepath"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
@@ -269,5 +271,74 @@ func TestUploadRouteEndToEndRealRouter(t *testing.T) {
 		if respJSON.Code != "PAYLOAD_TOO_LARGE" {
 			t.Fatalf("expected code PAYLOAD_TOO_LARGE on standard route, got %s", respJSON.Code)
 		}
+	}
+}
+
+// TestUploadRouteProducesAuditRecord pins the audit coverage of the separate
+// upload route group: algorithm installation is mounted on its own group, so it
+// needs its own middleware wiring to produce a record.
+func TestUploadRouteProducesAuditRecord(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dataDir := t.TempDir()
+
+	dbStore := database.New(dataDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("database migration failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	auditSvc := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
+		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
+	})
+	if err := auditSvc.Start(context.Background()); err != nil {
+		t.Fatalf("start audit service: %v", err)
+	}
+	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
+
+	comp := algorithm.NewAlgorithmComponents(dbStore, dataDir, "cpu", zap.NewNop())
+	comp.Supervisor = algorithm.NewSupervisor(comp.Store, dataDir, "sleep", "", algorithm.DefaultRecoveryOptions(), zap.NewNop())
+	comp.Verifier.RunnerPath = "" // bypass dynamic runner check in test
+
+	assets := http.FS(fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("shell")},
+	})
+
+	router := newRouter(RouterParams{
+		Logger:          zap.NewNop(),
+		DatabaseReady:   readinessStub(true),
+		NativeReady:     readinessStub(true),
+		AuditService:    auditSvc,
+		UploadRoutes:    []RouteRegistrar{comp.UploadRoutes},
+		ProtectedRoutes: []RouteRegistrar{comp.ProtectedRoutes},
+		Assets:          assets,
+	})
+
+	archivePath := createUncompressedTestTarGz(t, 0)
+	defer os.Remove(archivePath)
+
+	req, _ := buildMultipartRequest(t, archivePath)
+	req.RemoteAddr = "192.168.12.12:9999"
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", w.Code, w.Body.String())
+	}
+
+	entries := drainAuditRouter(t, auditSvc)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 audit record for the upload route, got %d: %+v", len(entries), entries)
+	}
+	entry := entries[0]
+	if entry.Action != algorithm.ActionAlgorithmInstall {
+		t.Errorf("expected the install action, got %q", entry.Action)
+	}
+	if entry.Status != audit.StatusSuccess {
+		t.Errorf("expected a success status, got %q", entry.Status)
+	}
+	if entry.IP != "192.168.12.12" {
+		t.Errorf("expected the connection source IP, got %q", entry.IP)
+	}
+	if entry.Target != "algorithm:e2e_large_pkg" {
+		t.Errorf("expected the refined install target, got %q", entry.Target)
 	}
 }
