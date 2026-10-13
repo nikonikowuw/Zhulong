@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "检查项：-race 是否开启、是否有禁止的反模式（panic/吞错/Context 存字段/全局状态）、测试接线是否用真实中间件"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "检查项：响应是否统一信封、分页是否四元组且 items 不为 null、Swagger 是否同步、时间字段是否 UTC RFC3339Nano"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查项：错误是否用 apperr 稳定机器码、是否走 httputil.WriteError、三语文案是否齐全、底层原因是否脱敏"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "检查项：依赖方向是否单向无环、是否误引入 internal/app、是否违反 C++ 类型不出 engine 包"}
+{"file": ".trellis/spec/backend/storage-guidelines.md", "reason": "检查项：路径防护是否达到 §1.4 的纵深防御标准、是否违反 §1.3 禁止跨盘拷贝"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "检查项：Fx 构造函数是否纯粹（不打开文件、不分配原生状态）、生命周期钩子是否正确"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查项：跨层数据流是否完整、媒体根路径是否保持单一真实源"}
+{"file": ".trellis/tasks/10-13-media-file-service/prd.md", "reason": "验收基准：逐条核对 AC1-AC24 是否达成，特别是 AC8-AC14 的安全项、AC15-AC18 的边界项与 AC24 的相对路径入参约束"}
+{"file": ".trellis/tasks/10-13-media-file-service/design.md", "reason": "设计符合性核对：四层防护是否全部实现、Range 行为是否与实测表一致、错误契约是否照设计落地"}
+{"file": ".trellis/tasks/10-13-media-file-service/implement.md", "reason": "检查项：7 个步骤是否全部完成、每步验证命令是否真实执行过、明确实施边界是否被遵守（无 DB 迁移、无前端改动、无审计）"}

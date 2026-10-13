@@ -1,0 +1,13 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "包边界与单向依赖铁律；本任务新增 internal/mediafile 必须遵守分包方向、禁止反向依赖 internal/app、禁止 C++ 类型出 engine 包"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "Gin 路由组织、统一响应信封 {code,message,data}、分页四元组契约、Swagger 2.0 注解与 SPA 路由隔离；content 端点的裸字节例外需在此规范下说明"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "apperr.Error 的 Kind 与稳定机器码、httputil.WriteError 的状态码映射与三语 i18n 文案注册；本任务新增 6 个错误码必须遵循"}
+{"file": ".trellis/spec/backend/storage-guidelines.md", "reason": "媒体根目录约定（recordings/snapshots/exports 的命名与层级）、§1.3 热切换禁止跨盘拷贝、§1.4 客户端路径形态收敛与前缀断言的既有要求"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "-race 强制、禁止 panic、禁止 _ = fn() 吞错、禁止 Context 存结构体字段、禁止全局可变业务状态；测试接线约定"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Uber Fx 装配规则与构造函数纯粹性要求；NewMediaFileComponents 不得在构造期打开文件或建立 os.Root 句柄"}
+{"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "中间件分层与挂载位置；确认现有中间件链不包装 ResponseWriter，以保 sendfile 快路径可用"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Zap 结构化日志与脱敏要求；错误内部原因只进日志，不得返回根路径给客户端"}
+{"file": ".trellis/spec/naming-guidelines.md", "reason": "跨语言命名规范；新增 Go 标识符、文件名与领域术语必须自然清晰且与既有术语一致"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流排查清单与单一真实源原则；媒体根路径的真源是 storage 配置，不得在 mediafile 内另立配置"}
+{"file": ".trellis/tasks/10-13-media-file-service/prd.md", "reason": "本任务需求与验收标准：D1-D9 决策、R0-R9 需求、AC1-AC24 验收项，含 R0 的「DB 存相对路径不存 URL」契约及其验收归属说明"}
+{"file": ".trellis/tasks/10-13-media-file-service/design.md", "reason": "技术设计：包边界、路由形态、四层路径防护、os.Root 实测证据、Range 实测结果、错误契约、性能取舍、测试策略"}
+{"file": ".trellis/tasks/10-13-media-file-service/implement.md", "reason": "执行计划：7 个步骤、每步验证命令、AC1-AC24 验收清单、5 个回滚点、明确实施边界"}
