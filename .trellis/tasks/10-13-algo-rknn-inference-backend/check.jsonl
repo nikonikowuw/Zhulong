@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "核对后端实现未破坏插件 ABI 与异常防爆门"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "核对厂商头文件隔离与单向依赖"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "核对 host/cross 构建与宿主链接依赖未被污染"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "核对资源所有权与 C ABI 边界"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层所有权与数据流核对"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "核对 platform.target 枚举与 manifest 平台校验口径"}
+{"file": ".trellis/tasks/10-13-algo-rknn-inference-backend/prd.md", "reason": "逐项核对 AC1-AC7"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/prd.md", "reason": "父任务 AC5/AC6/AC14 的上位验收要求"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/research/rk3568-board-evidence.md", "reason": "核对 AC3/AC6 的真机版本与 SHA-256 证据是否被如实引用"}

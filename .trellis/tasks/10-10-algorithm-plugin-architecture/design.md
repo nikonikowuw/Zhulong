@@ -262,7 +262,11 @@ private:
 
 机制验证先用 Native 创建的有界共享内存帧槽，逐 plane 正确复制 CPU 解码帧，再释放原解码帧引用。这样 runner 的同步处理即使持有 IPC 帧到推理完成，也不会一直占用解码池。它是有拷贝的参考路径，不声称生产零拷贝已完成。
 
-**现有接入缺口：** `native/src/nodes/decode/ffmpeg_decoder.cpp:113-126` 当前仅导出 `data[0]`、`linesize[0]` 等信息，未完整导出像素格式和所有 plane。不能据此假定 NV12 连续布局并直接复制 `width*height*3/2`。真实帧接入前需在 Native 内建立有明确 format、plane pointer/stride/长度、时间基准和来源的视图，引用寿命覆盖复制；不将厂商/FFmpeg 对象泄露进公共插件 SDK。无法证明布局时拒绝该格式，不读越界。
+**现有接入缺口：** ⚠️ **2026-10-13 更新——本段原始描述已过时。** 原文称 `native/src/nodes/decode/ffmpeg_decoder.cpp:113-126` 「仅导出 `data[0]`、`linesize[0]`，未完整导出像素格式和所有 plane」。实测确认该缺口**已于 `216c30f`（framebroker-hardening）补齐**：当前代码已导出 `format`（`FRAME_FORMAT_YUV420P`/`FRAME_FORMAT_NV12`/`UNKNOWN`）、全部 `host_planes[4]` 与 `plane_strides[4]`，并带 `has_pts` 与 `time_base_num/den`。
+
+仍然有效的要求（未变）：不能据此假定 NV12 连续布局并直接复制 `width*height*3/2`；真实帧接入需逐 plane 按 `plane_strides` 复制；引用寿命覆盖复制；不将厂商/FFmpeg 对象泄露进公共插件 SDK。无法证明布局时拒绝该格式，不读越界。
+
+⚠️ 另需注意：帧传输的**宿主实例化与发布通路仍未实现**（`FrameBroker` 类完整但生产代码零构造点），已登记为 `.trellis/spec/native/algo-plugin-contract.md` §5.3，并由子任务 `10-13-algo-broker-host` 承接。
 
 IPC 帧槽以帧 ID、slot ID、slot generation、进程/任务代次和有界 plane 描述传递。共享区偏移/长度必须溢出检查并落在映射范围内；`host_ptr`、`dev_ptr`、`shared_ptr` 不能跨进程直接解引用。
 

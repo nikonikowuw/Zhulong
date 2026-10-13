@@ -1,0 +1,16 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "核对 §5.1/§5.3 是否已更新为定案结论、§5.2 退出码数值是否未被擅自改动、IPC 对齐与 64KB 门禁是否被遵守"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "核对停机顺序、帧引用及时释放、有界队列未被绕过、发布侧节流与「AI 消费不走 Subscribe」是否被记录"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "核对 C ABI 追加式扩展与异常防爆门"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "核对 Go 侧未接收像素、句柄与所有权正确"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "核对 host/cross 构建与归档内容寻址未被破坏（两归档各自独立哈希子目录）"}
+{"file": ".trellis/spec/architecture.md", "reason": "核对「像素不绕 Go」与跨层防爆门；核对「尚未交付」清单已更新"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "核对窄接口注入与构造函数纯粹性；核对 Go 层停机顺序约束（camera → algorithm → native）已记录"}
+{"file": ".trellis/spec/backend/host-runtime-contract.md", "reason": "核对 Fx 生命周期钩子未被新增的 broker 依赖破坏"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "核对 runner 契约（--broker 多值、client_name 上限）与算法包交付规范一致"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流核对"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "核对未重复实现既有 broker/解码逻辑"}
+{"file": ".trellis/tasks/10-13-algo-broker-host/prd.md", "reason": "逐项核对 AC1-AC11"}
+{"file": ".trellis/tasks/10-13-algo-broker-host/design.md", "reason": "核对实现与设计的链接方向、域间接口、节流、变更触发与预算结论一致"}
+{"file": ".trellis/tasks/10-13-algo-broker-host/implement.md", "reason": "核对阶段 A-H 清单与回退点；核对「不要为前向引用重排 CMake 目标顺序」是否被遵守"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/prd.md", "reason": "父任务 AC6/AC7 的上位验收要求（帧所有权、慢包不阻塞）"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/design.md", "reason": "父任务 §5.1/§5.2 的帧槽所有权与「宿主先排空 broker 再关 Native engine」顺序要求"}

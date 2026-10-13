@@ -1,0 +1,17 @@
+{"file": ".trellis/spec/native/index.md", "reason": "Native 开发与验证基线、开发前检查清单"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "FrameBroker/SHM 租赁契约、IPC 协议、§5.1 socket 语义不对称与 §5.2 退出码、§5.3 未实现登记"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "有界队列、按需 DecodeSession、防慢算法拖垮解码器、五步优雅停机"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "C ABI 边界、异常防爆门、厂商隔离与单向依赖"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "不透明句柄、跨语言所有权、指针规则"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "host/cross 构建合同、归档内容寻址、交叉只编译不执行"}
+{"file": ".trellis/spec/architecture.md", "reason": "跨层防爆门契约与当前实现边界"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Fx 装配、构造函数纯粹性、接口注入边界、native/数据库关闭顺序"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Go 业务模块与 engine 封装边界"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "算法包交付契约与 runner 命令规范（--broker 多值会影响此处）"}
+{"file": ".trellis/spec/backend/camera-guidelines.md", "reason": "StreamHub/StreamDispatcher 按需拉流语义与 per-camera role 拓扑（AI 消费接入点）"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流与所有权核验"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用既有 FrameBroker/DecodeSession/StreamHub，避免重复实现与过早抽象"}
+{"file": ".trellis/tasks/10-13-algo-broker-host/prd.md", "reason": "本任务需求、决策 D1-D8 与验收标准 AC1-AC11"}
+{"file": ".trellis/tasks/10-13-algo-broker-host/design.md", "reason": "broker 池、发布节流、链接方向修正、域间接口、任务变更触发与停机顺序"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/design.md", "reason": "父任务 IPC/帧分发/所有权契约与「像素不绕 Go」约束"}
+{"file": ".trellis/tasks/archive/2026-10/10-12-algo-framebroker-shm/design.md", "reason": "FrameBroker 与 SHM 池的原始设计依据"}

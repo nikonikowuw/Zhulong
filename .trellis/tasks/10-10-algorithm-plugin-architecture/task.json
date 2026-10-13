@@ -22,7 +22,10 @@
     "10-12-algo-plugin-sdk-runner",
     "10-12-algo-framebroker-shm",
     "10-12-algo-package-lifecycle",
-    "10-12-algo-lifecycle-remediation"
+    "10-12-algo-lifecycle-remediation",
+    "10-13-algo-rknn-inference-backend",
+    "10-13-algo-rga-vision-backend",
+    "10-13-algo-broker-host"
   ],
   "parent": null,
   "relatedFiles": [],

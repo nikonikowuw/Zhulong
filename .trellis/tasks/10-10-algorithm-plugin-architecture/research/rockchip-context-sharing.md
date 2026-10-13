@@ -1,15 +1,19 @@
 # Rockchip 首期后端：上下文与权重共享证据
 
-状态：仅做源码/API 研究与架构规划。未进行板端推理、兼容性、内存或性能验证，未修改产品代码。
+状态：源码/API 研究与架构规划。未进行板端推理、内存或性能验证，未修改产品代码。
+
+> **2026-10-13 更新**：目标板 RK3568 已通过 `ssh rk3568` 只读探查，实测结果见 [`rk3568-board-evidence.md`](./rk3568-board-evidence.md)。本文 §1 中「SDK/运行库未实测」的表述已被实测取代；§2 的官方头文件快照 SHA-256 与板端 `/opt/rknn-toolkit2/rknpu2/include/rknn_api.h` **逐字节相同**，故 §2 的源码事实现已确认适用于目标板头文件。
+>
+> ⚠️ 但本文的核心保留意见**不变**：头文件声明存在 ≠ 运行期行为可用。`rknn_dup_context` 在 `librknnrt.so` 2.3.2 + RKNPU 驱动 v0.9.8 下的权重共享效果、销毁次序与并发安全性仍**未验证**。
 
 ## 1. 平台与证据边界
 
-- 用户本轮确认首期平台为 Rockchip。
-- `.trellis/tasks/10-05-native-ffmpeg-ingestion/prd.md:47-50` 已记录首个目标为 RK3568，用户记忆中镜像是 Debian，板卡暂不在手边，具体架构、内核和运行库未实测；该任务没有接入 RKNN SDK。
-- 当前仓库没有 `.agents/context/rknn-context/` 或 `.agents/rknn-model-context.md`；在排除 `.git`、构建目录和前端依赖的源码扫描中未发现 `rknn_api.h` 或 `librknnrt.so`。
-- 架构讨论沿用既有 RK3568 参考约束；不将其提升为板端认证结果，不推定用户态是 arm64，也不套用 RK3588 三核分配方案。
-- Runtime、Toolkit2、RKNPU 驱动版本和模型量化类型均未知。
-- Model Conversion Evidence Gate：`not-applicable`，本轮只讨论上下文/API/进程调度，不决定模型预处理、tensor layout、量化后处理或生产零拷贝参数。此状态不等于转换证据已齐备。
+- 用户确认首期平台为 Rockchip。
+- `.trellis/tasks/10-05-native-ffmpeg-ingestion/prd.md:47-50` 记录首个目标为 RK3568；**2026-10-13 实测确认**：内核 `5.10.226`、Debian 11 (bullseye) **arm64**、RKNPU 驱动 **v0.9.8**、`librknnrt.so` **2.3.2**。板卡经 `ssh rk3568` 可用。
+- 仓库内仍无 `rknn_api.h` / `librknnrt.so`；头文件与库位于板端 `/opt/rknn-toolkit2/rknpu2/`。
+- 不套用 RK3588 三核策略：RK3568 为单 NPU 核。
+- Runtime、Toolkit2 版本已实测（2.3.2 / 0.9.8）；**模型量化类型仍未知**。
+- Model Conversion Evidence Gate：`not-applicable`，本文只讨论上下文/API/进程调度，不决定模型预处理、tensor layout、量化后处理或生产零拷贝参数。此状态不等于转换证据已齐备。
 
 ## 2. 官方源码证据
 
@@ -20,6 +24,8 @@
 - 路径：`rknpu2/runtime/Linux/librknn_api/include/rknn_api.h`
 - SHA-256：`c48e11a6f41b451a5fd1e4ad774ea60252d3d94f78bee9b21ea3d21b21deba9a`
 - 来源：https://github.com/airockchip/rknn-toolkit2/blob/59a913d172e7f5ff03c9076e2ec7b1b1288ffd08/rknpu2/runtime/Linux/librknn_api/include/rknn_api.h
+
+> **2026-10-13 校验**：上述 SHA-256 与板端 `/opt/rknn-toolkit2/rknpu2/include/rknn_api.h` **完全一致**。下表所有行号与源码事实现可视为适用于目标板头文件。
 
 | 官方头文件位置 | 源码事实 | 不可推定的内容 |
 | --- | --- | --- |

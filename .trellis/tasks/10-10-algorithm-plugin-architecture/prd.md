@@ -8,24 +8,41 @@
 
 ### 1.1 子任务拆分与交付计划
 
-为保证架构可靠落地，遵循小步快跑、分层验收原则，本架构父任务拆分为以下 4 个独立交付的子任务：
+为保证架构可靠落地，遵循小步快跑、分层验收原则，本架构父任务拆分为以下独立交付的子任务（阶段一至三已归档，阶段四于 2026-10-13 新建）：
 
 | 交付阶段 | 子任务目录 / 状态 | 交付核心内容与验收边界 |
 | --- | --- | --- |
-| **阶段一：插件 SDK 与通用 Runner** | `10-12-algo-plugin-sdk-runner` (planning) | 纯 C ABI、类 PyTorch/OpenCV 现代 C++17 SDK (`zhulong/algo.hpp`)、通用 Runner 进程、HAL 接口与 CPU 优化桩、独立单次黑盒验包 CLI、2 个脱机示例插件。Host 脱机 `make native-test` 验收。 |
-| **阶段二：跨进程 FrameBroker 与共享内存** | 后续子任务 (待创建) | Native 引擎内实现 FrameBroker 有界队列与帧租约机制、共享内存图像数据通道、Go ↔ Runner Unix Socket 控制协议。 |
-| **阶段三：Go 进程生命周期与运维** | 后续子任务 (待创建) | Go 包管理目录结构与持久化、工作进程监控与有界指数退避自愈状态机、升级排空与单次受控回滚。 |
-| **阶段四：Rockchip NPU 与 RGA 硬件实测** | 后续子任务 (待创建) | 接入 librknn 与 librga，实现 `rknn_dup_context` 显存权重共享与硬件 Letterbox，RK3568 板端真机全量运行验证。 |
+| **阶段一：插件 SDK 与通用 Runner** | `10-12-algo-plugin-sdk-runner` (archived) | 纯 C ABI、类 PyTorch/OpenCV 现代 C++17 SDK (`zhulong/algo.hpp`)、通用 Runner 进程、HAL 接口与 CPU 优化桩、独立单次黑盒验包 CLI、2 个脱机示例插件。Host 脱机 `make native-test` 验收。 |
+| **阶段二：跨进程 FrameBroker 与共享内存** | `10-12-algo-framebroker-shm` (archived)、`10-12-algo-framebroker-hardening` (archived)、**`10-13-algo-broker-host` (planning)** | Native 引擎内实现 FrameBroker 有界队列与帧租约机制、共享内存图像数据通道、Go ↔ Runner Unix Socket 控制协议。⚠️ **前两个任务交付的是 broker 库本身；宿主实例化与帧发布通路当时未实现**（登记于 `algo-plugin-contract.md` §5.3），由 `10-13-algo-broker-host` 补齐。 |
+| **阶段三：Go 进程生命周期与运维** | `10-12-algo-package-lifecycle` (archived)、`10-12-algo-lifecycle-remediation` (archived)、`10-12-algorithm-runtime-correctness` (archived) | Go 包管理目录结构与持久化、工作进程监控与有界指数退避自愈状态机、升级排空与单次受控回滚。 |
+| **阶段四：Rockchip NPU 与 RGA 硬件实测** | `10-13-algo-rknn-inference-backend` (planning)、`10-13-algo-rga-vision-backend` (planning) | 接入 `librknnrt` 与 `librga`，实现 `rknn_dup_context` 显存权重共享与硬件 Letterbox，RK3568 板端真机全量运行验证。两个子任务串行执行（RKNN 先，RGA 后）。 |
+
+**执行顺序（2026-10-13 确定）**：`10-13-algo-broker-host`（阶段二遗留缺口）→ `10-13-algo-rknn-inference-backend` → `10-13-algo-rga-vision-backend`。
+
+理由：broker 宿主缺失时，RKNN 后端只能靠 `--verify-plugin` 单次验包验证，无法跑真链路（摄像机 → 解码 → broker → runner → NPU）。故阶段四的 AC4（多 worker 真机并发）依赖阶段二缺口先补齐。
+
+⚠️ 三个任务**共享构建文件**：`10-13-algo-broker-host` 改 `engine.h`/`pipeline`/`ipc`/Go 侧接线 + `native/CMakeLists.txt`/`build.py`；阶段四两个任务改 `backends/` + 同一对 `native/CMakeLists.txt`/`build.py`（后端开关）+ `runtime_factory.cpp`。因此**三者必须串行，不可并行编辑**；顺序即上方执行顺序。
+
+### 1.2 阶段四真机证据（2026-10-13 新增）
+
+目标板 RK3568 已通过 `ssh rk3568` 只读探查，实测结果见 `research/rk3568-board-evidence.md`。关键结论：
+
+- `librknnrt.so` **2.3.2**、RKNPU 驱动 **v0.9.8**、`librga.so` API **1.10.1_[10]**、RGA 驱动 **v1.3.4**、内核 **5.10.226** / Debian 11 arm64。
+- 板端 `/opt/rknn-toolkit2/rknpu2/include/rknn_api.h` 的 SHA-256（`c48e11a6…`）与 `research/rockchip-context-sharing.md` 记录的官方固定快照**逐字节相同**——该研究中 `rknn_dup_context`、`RKNN_FLAG_SHARE_WEIGHT_MEM`、`rknn_set_weight_mem` 的声明从「官方快照」升级为「与目标板头文件一致」。
+- ⚠️ 该升级**只证明声明存在**。2.3.2 runtime + 0.9.8 驱动下的运行期行为、内存收益与销毁次序仍未验证，`rknn_dup_context` 仍是待验证候选，R6/AC5 的实测要求不变。
+- ⚠️ 发现 `/usr/lib/librknn_api.so`(**1.5.2**) 与 `librknnrt.so`(**2.3.2**) 并存，`rknn_` 导出符号数 25 vs 39，链接目标必须明确为 `librknnrt.so`。
+- ⚠️ 板端根分区已用 **90%**，可用 2.9G，构成构建与部署约束。
+- 阶段四的两个子任务会修改同一批文件（`native/CMakeLists.txt`、`native/scripts/build.py`、`runtime_factory.cpp`），**必须串行**。
 
 ## 2. 背景与仓库事实
 
 - Go 宿主通过纯 C ABI 调用 Native 引擎。项目声明 Go `1.27.1`、C++17、固定 FFmpeg `7.1.5`；不是本任务对已安装工具链的实测结果。
 - Native 已有 `HardwareFrame` 与原生资源回收机制。提交 `d4d8773` 引入 `IDecodeNode`、FFmpeg 软解与有界帧队列，`91ebc4a` 归档解码任务；本轮参考 HEAD 为 `55927a4`，未重跑其测试。
-- 当前检查的 Native/Go 引擎代码没有算法插件加载器、算法工作进程或厂商推理后端；源码中未发现本地 RKNN 头文件/运行库。`HardwareFrame` 是进程内 C++ 对象，不是跨进程协议。
+- 当前检查的 Native/Go 引擎代码有 HAL 抽象（`IInferenceBackend` / `IVisionBackend`）与 CPU 实现，但**无厂商推理/视觉后端实现**，`runtime_factory.cpp` 硬编码 CPU。`HardwareFrame` 是进程内 C++ 对象，不是跨进程协议。
 - 产品 PRD `docs/prd/prd-v1.0.md` §4.4–4.5 描述算法包、分析任务、跟踪与事件目标，不代表均已实现。
-- `.trellis/tasks/10-05-native-ffmpeg-ingestion/prd.md:47-50` 已记录首板为 RK3568、板卡暂不在手边、镜像/SDK 未实测。本任务沿用此参考约束，不套用 RK3588 的三核策略，不推定已安装用户态为 arm64。
-- 官方 RKNN 固定头文件快照含上下文复制和显式权重共享相关声明，不证明目标 Runtime 支持或实际节省内存。来源、固定 ref、SHA-256 和行号见 `research/rockchip-context-sharing.md`。
-- 仓库证据与历史时效性说明见 `research/repository-baseline.md`；进程、线程和所有权分析见 `research/process-thread-model.md`。
+- `.trellis/tasks/10-05-native-ffmpeg-ingestion/prd.md:47-50` 记录首板为 RK3568。**2026-10-13 实测更新**：内核 `5.10.226`、Debian 11 arm64、RKNPU 驱动 v0.9.8、`librknnrt.so` 2.3.2，板卡经 `ssh rk3568` 可用。不套用 RK3588 的三核策略（RK3568 单 NPU 核）。详见 `research/rk3568-board-evidence.md`。
+- 官方 RKNN 固定头文件快照含上下文复制和显式权重共享相关声明，不证明目标 Runtime 支持或实际节省内存。**该快照 SHA-256 已与板端头文件核对一致**，但声明存在仍不等于运行期可用。来源、固定 ref、SHA-256 和行号见 `research/rockchip-context-sharing.md`。
+- 仓库证据与历史时效性说明见 `research/repository-baseline.md`；进程、线程和所有权分析见 `research/process-thread-model.md`；目标板实测证据见 `research/rk3568-board-evidence.md`。
 
 ## 3. 已确认需求
 
@@ -90,13 +107,16 @@
 
 ## 7. 已延后但不可删除的技术验证
 
-- 板端镜像/用户态架构、内核、Runtime/驱动/Toolkit2 版本与许可分发合同，须在目标构建与发布前补齐。
+- ✅ **已实测（2026-10-13）**：板端镜像（Debian 11 bullseye）、用户态架构（arm64）、内核（5.10.226）、Runtime（`librknnrt.so` 2.3.2）、驱动（RKNPU v0.9.8 / RGA v1.3.4）、Toolkit2（`/opt/rknn-toolkit2/rknpu2`）均已记录，见 `research/rk3568-board-evidence.md`。
+- ⚠️ **仍未补齐**：许可分发合同（`librknnrt.so` / `librga.so` 的再分发条款）须在目标构建与发布前确认；该库当前只存在于板端，不在仓库内。
 - ONNX/转换脚本、校准与量化证据、`.rknn` 身份、tensor 属性、前处理一致性，在模型相关实现前补齐；本轮模型证据门状态为 `not-applicable`（只做架构/API 研究），不等于通过模型验收。
-- 上下文复制或显式权重共享、线程安全和销毁次序须按匹配 SDK 文档并实测；若不满足 R6，后端标为不支持/阻塞，另行讨论产品取舍，不自动改成多份权重。
+- 上下文复制或显式权重共享、线程安全和销毁次序须按匹配 SDK 文档并实测；若不满足 R6，后端标为不支持/阻塞，另行讨论产品取舍，不自动改成多份权重。**头文件 SHA-256 已核对一致，但运行期行为仍未验证。**
 - DMA-BUF/RGA/RKNN 的导入、格式/stride、同步和进程崩溃清理需独立闭环；先用可观测的硬件无关传输验证机制不等于放弃或完成生产优化。
 
 ## 8. 审阅状态
 
 产品范围已收敛，不再重复询问已确认的选择。公共库的 ABI、依赖版本、回退集合及单次黑盒验包建议见 `design.md` §2.1–2.3；具体接口布局与参数仍需整体审阅，不冒充用户逐项批准的事实。
 
-状态仍为 `planning`。三份文档提交最终审阅，只有随后另行明确授权实现才能进入执行。目标硬件相关证据仍按 §7 阻止相应后端/发布验收，不因范围确认而删除门禁。
+阶段一至三已交付并归档。阶段四拆为 `10-13-algo-rknn-inference-backend` 与 `10-13-algo-rga-vision-backend` 两个子任务（均 `planning`），真机证据已补齐至 `research/rk3568-board-evidence.md`。
+
+状态仍为 `planning`。三份文档提交最终审阅，只有随后另行明确授权实现才能进入执行。硬件相关证据门已大幅前移（板卡可用、SDK/驱动/库版本已实测），但权重共享行为、许可分发与模型转换证据仍阻止相应发布验收。

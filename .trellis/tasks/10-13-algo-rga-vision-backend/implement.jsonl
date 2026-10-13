@@ -1,0 +1,13 @@
+{"file": ".trellis/spec/native/index.md", "reason": "Native 开发与验证基线、开发前检查清单"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "CPU 视觉前处理的既有格式/stride/插值合同与错误矩阵"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "backends/ 目录为厂商 SDK 专有头文件唯一允许位置"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "不透明句柄、跨语言所有权、宿主不得新增厂商链接依赖"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "host/cross 构建合同、工具链与 sysroot 约束"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "帧缓冲生命周期与安全停机约束"}
+{"file": ".trellis/spec/architecture.md", "reason": "跨层边界与 Native/Go 契约总览"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "C ABI 边界的数据流与所有权交叉核对"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用既有 IVisionBackend 与 CPU 实现，避免重复实现回退路径"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/design.md", "reason": "父任务 HAL 与 RGA/DVPP 前处理加速设计依据"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/research/rockchip-context-sharing.md", "reason": "Rockchip 平台约束与 DMA-BUF 后续边界"}
+{"file": ".trellis/tasks/10-13-algo-rga-vision-backend/prd.md", "reason": "本任务需求与真机实测证据"}
+{"file": ".trellis/tasks/10-10-algorithm-plugin-architecture/research/rk3568-board-evidence.md", "reason": "RK3568 真机实测：RGA 库/驱动版本、头文件 SHA-256、im2d API 清单与磁盘约束"}
