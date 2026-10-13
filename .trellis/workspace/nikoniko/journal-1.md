@@ -1232,3 +1232,69 @@ Session summary was not supplied.
 
 
 
+
+
+## Session 31: 补齐审计重构的测试证据并收尾 10-13-audit-middleware-refactor
+<!-- trellis-session: v=2 fp=0bb99c139c748105 -->
+
+**Date**: 2026-10-13
+**Task**: 补齐审计重构的测试证据并收尾 10-13-audit-middleware-refactor
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+补上审计重构遗留的三处测试空洞（algorithm/systemtime Handler 覆盖、audit/http 的 ListLogs/ClearLogs），沉淀组件构造期捕获与异步排空两条 spec，勾选全部验收项并归档任务。
+
+### Main Changes
+
+### Context
+
+审计日志重构任务（10-13-audit-middleware-refactor）的主体实现已在先前提交 `e205a1c` 落地，但任务仍停留在 `in_progress`：active task pointer 丢失、`implement.md` 41 项清单未勾选，且验收矩阵中 algorithm / systemtime 两个模块的 Handler 审计覆盖**完全没有测试证据**（Step 5.7 空洞），`internal/audit/http` 的 ListLogs/ClearLogs 覆盖也在拆包时随 `internal/audit/handler_test.go` 一并丢失。
+
+### Changes
+
+- internal/algorithm/audit_test.go: 新增。通过真实路由覆盖 install / enable / reset / disable / task create / task delete / delete 七个写操作，含 upload 路由与两条 archive 拒绝路径（缺文件、平台不匹配）；断言 IP 归因、`anonymous` 身份、细化后的 target/detail，以及失败记录的稳定错误码（`ALGORITHM_NOT_IN_CRASH_LOOP` / `ALGORITHM_NOT_FOUND`）不含原始 DB 错误。
+- internal/systemtime/audit_test.go: 新增。覆盖 config update / manual set / NTP sync 与校验失败；核心用例 `TestSyncNowDomainFailureIsAuditedAsFailed` 固定「HTTP 200 但领域失败」规则，断言 `TagError` 通道生效、原始探测错误（`unreachable`）不落 `error_msg`；另有断言无 Service 侧重复记账。
+- internal/audit/http/handler_test.go: 新增。恢复拆包时丢失的 ListLogs 分页 / 单值 action / 重复 actions 优先 / 状态 AND / 非法时间 422 覆盖；`ClearLogs` 两个用例固定强留存契约（单次清空留下 `deleted=N` 自审计记录、连续清空保留全部 `audit.clear`）。
+- internal/app/upload_router_test.go: 扩展。新增 `TestUploadRouteProducesAuditRecord`，断言独立挂载的 upload 组产生自己的 install 记录（含连接来源 IP 与细化 target）。
+- .trellis/spec/backend/quality-guidelines.md: 新增第 4 节「测试接线约定」——审计 Handler 测试必须挂真实中间件并先排空异步队列；`NewAlgorithmComponents` 构造期捕获 supervisor，需通过 `ZHULONG_ALGO_RUNNER` 在构造前注入。
+- .trellis/spec/backend/index.md: 同步质量规范索引描述。
+- .trellis/tasks/10-13-audit-middleware-refactor/{prd,implement}.md: 勾选 12 项验收标准与 41 项执行清单。
+
+### Testing
+
+- [OK] `go test -race ./cmd/... ./internal/...` 全通过
+- [OK] `go vet ./cmd/... ./internal/...` 与 `gofmt -l cmd internal` 干净
+- [OK] `go build -o /dev/null ./cmd/Zhulong` 成功
+- [OK] `make api-docs` 幂等（`internal/apidocs/` 无 diff），`/audit/logs` 路由与 DTO 定义保留
+- [OK] `make go-check` 全绿（含 Go bridge 真实 RTSP 回环压测）
+- [OK] 硬约束核验：`go list` 确认 `internal/audit` 无 Gin/httputil 导入；Service 层无 `internal/audit` / `*gin.Context`
+- [OK] 三项设计决策落地：`SetTrustedProxies(nil)`、`Prune` 豁免 `audit.clear`、包名 `audithttp`
+
+### 关键坑（已写入 spec）
+
+1. **组件包构造期捕获依赖**：`NewAlgorithmComponents` 在构造时把 supervisor 传给 Service，事后替换 `comp.Supervisor` 字段对 Service 无效，enable 会去 fork 默认 runner 路径并报 ENOENT。正确做法是构造前 `t.Setenv("ZHULONG_ALGO_RUNNER", stub)`。
+2. **异步审计必须先排空再断言**：`Record` 是非阻塞投递，响应写出时条目可能仍在队列，直接 `List` 会随机漏项；统一 `Stop(ctx)` 排空后再查询。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 遗留（本任务范围外，已在 prd.md 记录）：Storage 用户操作审计仍由 Service 内记录且动作名保持 `system.storage.*` 前缀，重命名需配套历史数据与前端筛选兼容策略，应单开子任务。
+- 部署确认项：若设备仍仅绑定 `127.0.0.1`，IP 归因的区分能力受限，属部署配置问题需单独确认。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a99e63f` | test(audit): cover algorithm, systemtime and audit handler paths |
+| `51d2940` | docs(spec): record audit test wiring and component construction rules |
+| `c907bb4` | chore(task): check off audit middleware refactor acceptance items |
+
+### Status
+
+[OK] **Completed**
