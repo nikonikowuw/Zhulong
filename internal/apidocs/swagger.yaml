@@ -301,6 +301,24 @@ definitions:
       total:
         type: integer
     type: object
+  httputil.PaginatedData-person_Person:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/person.Person'
+        type: array
+      limit:
+        description: Backwards compatibility fields for legacy clients expecting limit/offset
+        type: integer
+      offset:
+        type: integer
+      page:
+        type: integer
+      pageSize:
+        type: integer
+      total:
+        type: integer
+    type: object
   httputil.Response:
     properties:
       code:
@@ -432,6 +450,78 @@ definitions:
       timeoutSec:
         type: integer
       transactionId:
+        type: string
+    type: object
+  person.AddFaceRequest:
+    properties:
+      imagePath:
+        maxLength: 512
+        type: string
+    required:
+    - imagePath
+    type: object
+  person.CreatePersonRequest:
+    properties:
+      name:
+        type: string
+      personId:
+        description: |-
+          PersonID is the external business key. It is optional: if omitted or empty,
+          the service defaults it to the system-generated primary key ID.
+        type: string
+    required:
+    - name
+    type: object
+  person.Face:
+    properties:
+      createdAt:
+        type: string
+      id:
+        type: string
+      imagePath:
+        type: string
+      ownerRowId:
+        description: |-
+          OwnerRowID is the internal persons.id of the owning record. It deliberately does
+          NOT serialize as "personId": Person.PersonID already owns that JSON name and means
+          the external business key, so sharing it made the two identifiers indistinguishable
+          to API clients. The owning person is already implied by the enclosing resource.
+        type: string
+    type: object
+  person.Person:
+    properties:
+      createdAt:
+        type: string
+      faces:
+        description: |-
+          Faces is a read-only projection populated by Preload. Write paths MUST go
+          through AddFace / DeleteFace; never persist a Person with a populated
+          Faces slice (see Store.UpdatePerson). The CASCADE below is declarative
+          only — the effective constraint lives in the persons_tables migration.
+        items:
+          $ref: '#/definitions/person.Face'
+        type: array
+      id:
+        type: string
+      name:
+        type: string
+      personId:
+        description: |-
+          PersonID is the external business key consumed by third-party systems. It is
+          mandatory, unique and immutable — see Store.CreatePerson / Store.UpdatePerson.
+        type: string
+      updatedAt:
+        type: string
+    type: object
+  person.UpdatePersonRequest:
+    properties:
+      name:
+        type: string
+      personId:
+        description: |-
+          PersonID is accepted only so that an attempt to change it fails loudly instead
+          of being silently dropped by the JSON decoder. Supplying a different value is
+          rejected with PERSON_ID_IMMUTABLE.
         type: string
     type: object
   storage.CleanupSummary:
@@ -1191,6 +1281,295 @@ paths:
       summary: Get host health
       tags:
       - system
+  /persons:
+    get:
+      parameters:
+      - description: Page number (1-based, default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Page size (default 20, max 100)
+        in: query
+        name: pageSize
+        type: integer
+      - description: Legacy pagination limit
+        in: query
+        name: limit
+        type: integer
+      - description: Legacy pagination offset
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/httputil.PaginatedData-person_Person'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: List enrolled persons
+      tags:
+      - person
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Person creation payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/person.CreatePersonRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/person.Person'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Create a new person profile
+      tags:
+      - person
+  /persons/{id}:
+    delete:
+      parameters:
+      - description: Person ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  type: object
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Delete person profile and face templates
+      tags:
+      - person
+    get:
+      parameters:
+      - description: Person ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/person.Person'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get person profile by ID
+      tags:
+      - person
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Person ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Person update payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/person.UpdatePersonRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/person.Person'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Update person profile metadata
+      tags:
+      - person
+  /persons/{id}/faces:
+    get:
+      parameters:
+      - description: Person ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/person.Face'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: List face templates for a person
+      tags:
+      - person
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Person ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Face enrollment payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/person.AddFaceRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/person.Face'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Enroll a new face template for a person
+      tags:
+      - person
+  /persons/{id}/faces/{face_id}:
+    delete:
+      parameters:
+      - description: Person ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Face template ID
+        in: path
+        name: face_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  type: object
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Delete a face template
+      tags:
+      - person
   /system/network/confirm:
     post:
       consumes:
