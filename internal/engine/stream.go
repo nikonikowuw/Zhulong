@@ -22,10 +22,11 @@ type Stream struct {
 	url        string
 	generation uint64
 
-	mu        sync.Mutex
-	closed    bool
-	activeSub *Subscription
-	closeOnce sync.Once
+	mu          sync.Mutex
+	closed      bool
+	activeSub   *Subscription
+	activeAISub *AIResultSubscription
+	closeOnce   sync.Once
 }
 
 // BrokerPath 查询当前物理流关联的 FrameBroker Unix Domain Socket 路径。
@@ -148,6 +149,9 @@ func (s *Stream) Close() error {
 		if sub != nil {
 			_ = sub.Close()
 		}
+		if aiSub := s.activeAISub; aiSub != nil {
+			_ = aiSub.Close()
+		}
 
 		closeErr = s.engine.releaseStream(s.generation, s.id, s.consumerID)
 		s.engine.onStreamClosed(s)
@@ -161,4 +165,54 @@ func (s *Stream) onSubClosed(sub *Subscription) {
 	if s.activeSub == sub {
 		s.activeSub = nil
 	}
+}
+
+func (s *Stream) onAISubClosed(sub *AIResultSubscription) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeAISub == sub {
+		s.activeAISub = nil
+	}
+}
+
+// SubscribeAIResults 订阅当前物理流关联的 AI 推理结果事件流。
+func (s *Stream) SubscribeAIResults(ctx context.Context) (*AIResultSubscription, error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, ErrClosed
+	}
+	if s.activeAISub != nil {
+		s.mu.Unlock()
+		return nil, ErrDuplicate
+	}
+
+	streamID := s.id
+	gen := s.generation
+	eng := s.engine
+
+	ctrlCtx, cancelCtrl := context.WithCancel(ctx)
+	sub := newAIResultSubscription(s, streamID, gen, 32)
+	sub.cancelControl = cancelCtrl
+
+	subID, token, err := eng.subscribeAIResults(gen, streamID, sub)
+	if err != nil {
+		cancelCtrl()
+		s.mu.Unlock()
+		return nil, err
+	}
+
+	sub.init(subID, token)
+	s.activeAISub = sub
+	s.mu.Unlock()
+
+	go func() {
+		select {
+		case <-ctrlCtx.Done():
+			_ = sub.Close()
+		case <-sub.Done():
+		}
+	}()
+
+	return sub, nil
 }

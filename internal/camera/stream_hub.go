@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
@@ -41,6 +42,8 @@ type StreamHub struct {
 // 其生命周期由 aiSubscribers 的订阅者集合驱动：任一订阅者存在则保活，全部撤销后才释放。
 type aiStreamRef struct {
 	stream MediaStream
+	aiSub  *engine.AIResultSubscription
+	cancel context.CancelFunc
 }
 
 // NewStreamHub 构造全局流分发中心。
@@ -368,16 +371,33 @@ func (h *StreamHub) ResolveAIStreamBrokerPath(ctx context.Context, cameraID stri
 			return "", err
 		}
 
+		aiSub, err := mediaStream.SubscribeAIResults(context.Background())
+		var cancel context.CancelFunc
+		if err == nil && aiSub != nil {
+			var ctx context.Context
+			ctx, cancel = context.WithCancel(context.Background())
+			go h.consumeAIResults(ctx, cameraID, aiSub)
+		} else if err != nil {
+			h.logger.Warn("subscribe AI results for camera failed",
+				zap.String("camera_id", cameraID), zap.Error(err))
+		}
+
 		h.mu.Lock()
 		if h.closed {
 			h.mu.Unlock()
+			if cancel != nil {
+				cancel()
+			}
+			if aiSub != nil {
+				_ = aiSub.Close()
+			}
 			if closeErr := mediaStream.Close(); closeErr != nil {
 				h.logger.Warn("close AI stream after hub shutdown",
 					zap.String("camera_id", cameraID), zap.Error(closeErr))
 			}
 			return "", ErrStreamHubClosed
 		}
-		h.aiStreams[cameraID] = &aiStreamRef{stream: mediaStream}
+		h.aiStreams[cameraID] = &aiStreamRef{stream: mediaStream, aiSub: aiSub, cancel: cancel}
 		h.mu.Unlock()
 
 		return path, nil
@@ -418,6 +438,12 @@ func (h *StreamHub) ReleaseAIStreamSubscriber(cameraID, subscriberID string) {
 			if ref, ok := h.aiStreams[cameraID]; ok {
 				delete(h.aiStreams, cameraID)
 				toClose = ref.stream
+				if ref.cancel != nil {
+					ref.cancel()
+				}
+				if ref.aiSub != nil {
+					_ = ref.aiSub.Close()
+				}
 			}
 		}
 	}
@@ -459,9 +485,9 @@ func (h *StreamHub) Close() error {
 	}
 	h.dispatchers = make(map[string]*StreamDispatcher)
 
-	aiList := make([]MediaStream, 0, len(h.aiStreams))
+	aiList := make([]*aiStreamRef, 0, len(h.aiStreams))
 	for _, ref := range h.aiStreams {
-		aiList = append(aiList, ref.stream)
+		aiList = append(aiList, ref)
 	}
 	h.aiStreams = make(map[string]*aiStreamRef)
 	h.aiSubscribers = make(map[string]map[string]struct{})
@@ -470,12 +496,45 @@ func (h *StreamHub) Close() error {
 	for _, d := range list {
 		d.Close()
 	}
-	for _, s := range aiList {
-		if err := s.Close(); err != nil {
+	for _, ref := range aiList {
+		if ref.cancel != nil {
+			ref.cancel()
+		}
+		if ref.aiSub != nil {
+			_ = ref.aiSub.Close()
+		}
+		if err := ref.stream.Close(); err != nil {
 			h.logger.Warn("close AI stream on hub shutdown", zap.Error(err))
 		}
 	}
 
 	h.logger.Info("stream hub stopped, all dispatchers closed")
 	return nil
+}
+
+func (h *StreamHub) consumeAIResults(ctx context.Context, cameraID string, sub *engine.AIResultSubscription) {
+	defer sub.Close()
+	for {
+		data, err := sub.Next(ctx)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, engine.ErrClosed) {
+				h.logger.Debug("ai results consumer exiting",
+					zap.String("camera_id", cameraID), zap.Error(err))
+			}
+			return
+		}
+
+		res, err := algorithm.ParseInferenceResult(cameraID, "", data)
+		if err != nil {
+			h.logger.Warn("parse ai result failed",
+				zap.String("camera_id", cameraID),
+				zap.Error(err),
+				zap.Int("payload_len", len(data)))
+			continue
+		}
+
+		if h.eventHub != nil {
+			h.eventHub.BroadcastAIResult(res)
+		}
+	}
 }

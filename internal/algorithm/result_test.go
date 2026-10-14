@@ -88,3 +88,49 @@ func TestPersonStructureResultWithTopK(t *testing.T) {
 		t.Errorf("unexpected candidates list: %+v", face.Candidates)
 	}
 }
+
+func TestParseInferenceResult(t *testing.T) {
+	// 1. Detection
+	detJSON := []byte(`{"stream_id":1,"pts":1000,"cost_ms":12,"task_type":"detection","detections":[{"box":[0.1,0.2,0.3,0.4],"label":"person","score":0.95}],"classifications":[],"persons":[]}`)
+	detRes, err := algorithm.ParseInferenceResult("cam_1", "algo_det", detJSON)
+	if err != nil {
+		t.Fatalf("ParseInferenceResult detection failed: %v", err)
+	}
+	if detRes.TaskType != algorithm.TaskTypeDetection || len(detRes.Detections) != 1 {
+		t.Fatalf("unexpected detection result: %+v", detRes)
+	}
+	if detRes.Detections[0].Label != "person" || detRes.Detections[0].Score != 0.95 {
+		t.Errorf("unexpected detection item: %+v", detRes.Detections[0])
+	}
+
+	// 2. Classification
+	clsJSON := []byte(`{"stream_id":1,"pts":2000,"cost_ms":8,"task_type":"classification","detections":[],"classifications":[{"label":"cat","score":0.88}],"persons":[]}`)
+	clsRes, err := algorithm.ParseInferenceResult("cam_1", "algo_cls", clsJSON)
+	if err != nil {
+		t.Fatalf("ParseInferenceResult classification failed: %v", err)
+	}
+	if clsRes.TaskType != algorithm.TaskTypeClassification || len(clsRes.Classifications) != 1 {
+		t.Fatalf("unexpected classification result: %+v", clsRes)
+	}
+
+	// 3. Person structure
+	psJSON := []byte(`{"stream_id":1,"pts":3000,"cost_ms":25,"task_type":"person_structure","detections":[],"classifications":[],"persons":[{"track_id":10,"body_box":[0.1,0.1,0.5,0.8],"body_score":0.9,"faces":[{"box":[0.2,0.2,0.3,0.3],"quality":0.95,"landmarks":[[0.22,0.25],[0.28,0.25],[0.25,0.27],[0.23,0.29],[0.27,0.29]],"matched":true,"similarity":0.91,"person_id":"user_1","person_name":"Bob","candidates":[]}]}]}`)
+	psRes, err := algorithm.ParseInferenceResult("cam_1", "algo_face", psJSON)
+	if err != nil {
+		t.Fatalf("ParseInferenceResult person structure failed: %v", err)
+	}
+	if psRes.TaskType != algorithm.TaskTypePersonStructure || len(psRes.Persons) != 1 {
+		t.Fatalf("unexpected person structure result: %+v", psRes)
+	}
+	if psRes.Persons[0].TrackID != 10 || len(psRes.Persons[0].Faces) != 1 || psRes.Persons[0].Faces[0].PersonID != "user_1" {
+		t.Errorf("unexpected person content: %+v", psRes.Persons[0])
+	}
+
+	// 4. Invalid or empty
+	if _, err := algorithm.ParseInferenceResult("cam_1", "algo", nil); err == nil {
+		t.Errorf("expected error for nil payload")
+	}
+	if _, err := algorithm.ParseInferenceResult("cam_1", "algo", []byte(`{invalid}`)); err == nil {
+		t.Errorf("expected error for invalid json")
+	}
+}

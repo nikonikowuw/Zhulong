@@ -12,6 +12,8 @@
 #include <memory>
 #include <cstring>
 #include <fstream>
+#include <sstream>
+#include <chrono>
 
 namespace zhulong
 {
@@ -48,6 +50,107 @@ namespace zhulong
             value = value * 10 + static_cast<uint64_t>(c - '0');
         }
         return value;
+    }
+
+    static std::string serialize_inference_result(uint64_t stream_id,
+                                                  int64_t pts,
+                                                  int64_t cost_ms,
+                                                  const zhulong_inference_result* result)
+    {
+        std::ostringstream ss;
+        ss << "{\"stream_id\":" << stream_id
+           << ",\"pts\":" << pts
+           << ",\"cost_ms\":" << cost_ms;
+
+        if (!result || result->count == 0)
+        {
+            ss << ",\"task_type\":\"\""
+               << ",\"detections\":[]"
+               << ",\"classifications\":[]"
+               << ",\"persons\":[]}";
+            return ss.str();
+        }
+
+        if (result->result_type == ZHULONG_RESULT_TYPE_DETECTION)
+        {
+            ss << ",\"task_type\":\"detection\""
+               << ",\"detections\":[";
+            const auto* boxes = static_cast<const zhulong_bbox*>(result->data);
+            for (uint32_t i = 0; i < result->count; ++i)
+            {
+                if (i > 0) ss << ",";
+                ss << "{\"box\":[" << boxes[i].box[0] << "," << boxes[i].box[1] << ","
+                   << boxes[i].box[2] << "," << boxes[i].box[3] << "]"
+                   << ",\"label\":" << runner::json_quote(boxes[i].label)
+                   << ",\"score\":" << boxes[i].confidence << "}";
+            }
+            ss << "],\"classifications\":[],\"persons\":[]}";
+        }
+        else if (result->result_type == ZHULONG_RESULT_TYPE_CLASSIFICATION)
+        {
+            ss << ",\"task_type\":\"classification\""
+               << ",\"detections\":[],\"classifications\":[";
+            const auto* items = static_cast<const zhulong_classification_item*>(result->data);
+            for (uint32_t i = 0; i < result->count; ++i)
+            {
+                if (i > 0) ss << ",";
+                ss << "{\"label\":" << runner::json_quote(items[i].label)
+                   << ",\"score\":" << items[i].confidence << "}";
+            }
+            ss << "],\"persons\":[]}";
+        }
+        else if (result->result_type == ZHULONG_RESULT_TYPE_PERSON_STRUCTURE)
+        {
+            ss << ",\"task_type\":\"person_structure\""
+               << ",\"detections\":[],\"classifications\":[],\"persons\":[";
+            const auto* persons = static_cast<const zhulong_person_item*>(result->data);
+            for (uint32_t i = 0; i < result->count; ++i)
+            {
+                if (i > 0) ss << ",";
+                const auto& p = persons[i];
+                ss << "{\"track_id\":" << p.track_id
+                   << ",\"body_box\":[" << p.body_box[0] << "," << p.body_box[1] << ","
+                   << p.body_box[2] << "," << p.body_box[3] << "]"
+                   << ",\"body_score\":" << p.body_score
+                   << ",\"faces\":[";
+                for (uint32_t j = 0; j < p.face_count; ++j)
+                {
+                    if (j > 0) ss << ",";
+                    const auto& f = p.faces[j];
+                    ss << "{\"box\":[" << f.box[0] << "," << f.box[1] << ","
+                       << f.box[2] << "," << f.box[3] << "]"
+                       << ",\"quality\":" << f.quality
+                       << ",\"landmarks\":[";
+                    for (size_t k = 0; k < ZHULONG_FACE_LANDMARK_COUNT; ++k)
+                    {
+                        if (k > 0) ss << ",";
+                        ss << "[" << f.landmarks[k][0] << "," << f.landmarks[k][1] << "]";
+                    }
+                    ss << "],\"matched\":" << (f.matched ? "true" : "false")
+                       << ",\"similarity\":" << f.similarity
+                       << ",\"person_id\":" << runner::json_quote(f.person_id)
+                       << ",\"person_name\":" << runner::json_quote(f.person_name)
+                       << ",\"candidates\":[";
+                    for (uint32_t k = 0; k < f.candidate_count; ++k)
+                    {
+                        if (k > 0) ss << ",";
+                        const auto& c = f.candidates[k];
+                        ss << "{\"person_id\":" << runner::json_quote(c.person_id)
+                           << ",\"person_name\":" << runner::json_quote(c.person_name)
+                           << ",\"similarity\":" << c.similarity << "}";
+                    }
+                    ss << "]}";
+                }
+                ss << "]}";
+            }
+            ss << "]}";
+        }
+        else
+        {
+            ss << ",\"task_type\":\"custom\",\"detections\":[],\"classifications\":[],\"persons\":[]}";
+        }
+
+        return ss.str();
     }
 
     class PluginLoader
@@ -344,6 +447,7 @@ namespace zhulong
             }
 
             int frames_processed = 0;
+            bool last_had_targets = false;
             while (!stop_all.load(std::memory_order_relaxed) && (max_frames < 0 || frames_processed < max_frames))
             {
                 ipc::IpcHeader hdr{};
@@ -384,7 +488,21 @@ namespace zhulong
                         }
 
                         zhulong_inference_result *result = nullptr;
+                        auto t0 = std::chrono::steady_clock::now();
                         rc = api.process(task, &view, &result);
+                        auto t1 = std::chrono::steady_clock::now();
+                        int64_t cost_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+
+                        uint32_t count = (result != nullptr && rc == ZHULONG_PLUGIN_OK) ? result->count : 0;
+                        bool has_targets = (count > 0);
+
+                        if (has_targets || last_had_targets)
+                        {
+                            std::string payload = serialize_inference_result(dispatch.stream_id, dispatch.pts, cost_ms, result);
+                            client.send_msg(ipc::MSG_RESULT, payload.data(), payload.size());
+                        }
+                        last_had_targets = has_targets;
+
                         if (result)
                         {
                             api.result_release(result);

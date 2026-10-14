@@ -2,7 +2,10 @@ package engine
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -364,12 +367,91 @@ func TestBridgeIntegration_AIConsumerAndBrokerPath(t *testing.T) {
 		t.Fatalf("stat broker socket failed: %v", err)
 	}
 
-	// 5. 释放流后验证 Broker 资源清理
+	// 5. 订阅 AI 推理结果流
+	aiSub, err := s.SubscribeAIResults(ctx)
+	if err != nil {
+		_ = s.Close()
+		t.Fatalf("SubscribeAIResults failed: %v", err)
+	}
+
+	// 连接到 Broker UDS 并发送一条 MSG_RESULT
+	conn, err := net.Dial("unix", brokerPath)
+	if err != nil {
+		_ = aiSub.Close()
+		_ = s.Close()
+		t.Fatalf("dial broker socket failed: %v", err)
+	}
+
+	// 发送握手请求 (msg_type = 1)
+	handshakePayload := make([]byte, 40)
+	binary.LittleEndian.PutUint32(handshakePayload[0:4], 0)
+	binary.LittleEndian.PutUint32(handshakePayload[4:8], 1)
+	copy(handshakePayload[8:], "test_client")
+
+	reqMsg := make([]byte, 16+len(handshakePayload))
+	binary.LittleEndian.PutUint32(reqMsg[0:4], 0x5A484C47)
+	binary.LittleEndian.PutUint16(reqMsg[4:6], 1) // MSG_HANDSHAKE_REQ
+	binary.LittleEndian.PutUint16(reqMsg[6:8], 1)
+	binary.LittleEndian.PutUint32(reqMsg[8:12], uint32(len(handshakePayload)))
+	binary.LittleEndian.PutUint32(reqMsg[12:16], 1)
+	copy(reqMsg[16:], handshakePayload)
+	if _, err := conn.Write(reqMsg); err != nil {
+		_ = conn.Close()
+		_ = aiSub.Close()
+		_ = s.Close()
+		t.Fatalf("send handshake failed: %v", err)
+	}
+
+	// 读取握手响应 (16字节头 + 80字节体)
+	respBuf := make([]byte, 96)
+	if _, err := io.ReadFull(conn, respBuf); err != nil {
+		_ = conn.Close()
+		_ = aiSub.Close()
+		_ = s.Close()
+		t.Fatalf("read handshake resp failed: %v", err)
+	}
+
+	// 发送 MSG_RESULT (msg_type = 7)
+	testResultJSON := []byte(`{"stream_id":1,"pts":123,"cost_ms":10,"task_type":"detection"}`)
+	resultMsg := make([]byte, 16+len(testResultJSON))
+	binary.LittleEndian.PutUint32(resultMsg[0:4], 0x5A484C47)
+	binary.LittleEndian.PutUint16(resultMsg[4:6], 7) // MSG_RESULT
+	binary.LittleEndian.PutUint16(resultMsg[6:8], 1)
+	binary.LittleEndian.PutUint32(resultMsg[8:12], uint32(len(testResultJSON)))
+	binary.LittleEndian.PutUint32(resultMsg[12:16], 2)
+	copy(resultMsg[16:], testResultJSON)
+	if _, err := conn.Write(resultMsg); err != nil {
+		_ = conn.Close()
+		_ = aiSub.Close()
+		_ = s.Close()
+		t.Fatalf("send result failed: %v", err)
+	}
+	_ = conn.Close()
+
+	// 验证 AIResultSubscription 成功收到该结果
+	recvResult, err := aiSub.Next(ctx)
+	if err != nil {
+		_ = aiSub.Close()
+		_ = s.Close()
+		t.Fatalf("aiSub.Next failed: %v", err)
+	}
+	if string(recvResult) != string(testResultJSON) {
+		_ = aiSub.Close()
+		_ = s.Close()
+		t.Fatalf("expected result %s, got %s", testResultJSON, recvResult)
+	}
+
+	if err := aiSub.Close(); err != nil {
+		_ = s.Close()
+		t.Fatalf("aiSub.Close failed: %v", err)
+	}
+
+	// 6. 释放流后验证 Broker 资源清理
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close stream failed: %v", err)
 	}
 
-	// 6. 验证已关闭流调用 BrokerPath 返回 ErrClosed
+	// 7. 验证已关闭流调用 BrokerPath 返回 ErrClosed
 	if _, err := s.BrokerPath(ctx); !errors.Is(err, ErrClosed) {
 		t.Fatalf("expected ErrClosed after stream closed, got %v", err)
 	}

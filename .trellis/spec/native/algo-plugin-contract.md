@@ -493,3 +493,45 @@ RGA 硬件双线性插值单元与 CPU 软件基于中心对齐的浮点双线�
 - ⚠️ **不得声称零拷贝**：当前 RGA 后端走 `wrapbuffer_virtualaddr` 虚拟地址映射，存在用户态到 DMA 映射开销，未引入 DMA-BUF / dma_fence。
 - 20 次连续调用真机实测 VmRSS 净增长为 0 KB（`delta=0 kb`），无句柄与内存泄漏。
 
+---
+
+## 10. 推理结果跨进程上报契约 (Inference Result Egress Contract)
+
+打通算法推理结果由 **Runner 子进程 ➔ FrameBroker (UDS) ➔ ZhulongEngine (C ABI) ➔ Go 宿主 ➔ 业务消费** 的完整上行回路。
+
+### 10.1 传输拓扑与通道复用
+- **通道复用**：Runner 通过与 FrameBroker 已建立的 Unix Domain Socket 发送 `MSG_RESULT = 7` 消息，复用既有连接与握手流程。
+- **全双工时序**：Broker 负责向 Runner 派发帧（`MSG_FRAME_DISPATCH`）；Runner 推理完成后先上报 `MSG_RESULT`，随后发送 `MSG_FRAME_ACK`。
+
+### 10.2 载荷格式与坐标契约
+- 载荷采用自描述 JSON 字符串编码，包含 `stream_id`、`pts`、`cost_ms`、`task_type` 以及多态结果数组（`detections`、`classifications`、`persons`）。
+- **坐标恒定归一化**：所有检测框与人体/人脸位置恒定采用 `[x1, y1, x2, y2] ∈ [0.0, 1.0]` 浮点数，与前端/Go 领域模型严格对齐。
+
+### 10.3 状态机过滤规则（防洪峰策略）
+Runner 维持两态机进行自适应节流，避免连续空画面产生无效 IPC 与 CGO 开销：
+1. **连续空目标帧完全静默**：若当前帧与上一帧检出目标数均为 0，不产生任何 IPC 消息；
+2. **目标消失退出信标（Exit Beacon）**：从「检出目标数 > 0」转为「检出目标数 == 0」的第一帧，发送一帧目标列表为空的信标结果，通知前端清空滞留画框（杜绝 250ms 幽灵框）；
+3. **有目标帧实时上报**：检出目标数 > 0 时，每帧如实上报。
+
+### 10.4 内存所有权与生命周期
+- **Native 侧生命周期**：
+  ```cpp
+  rc = api.process(task, &view, &result);
+  if (result) {
+      if (should_send) {
+          std::string payload = serialize_result(result);
+          send_ipc_message(MSG_RESULT, payload);
+      }
+      api.result_release(result); // 严禁持有 result 指针跨越到异步队列，严防 use-after-free
+  }
+  ```
+- **CGO 边界契约**：
+  - C ABI 回调 `Zhulong_ai_result_callback` 传递只读借用指针：`const char *json_payload, size_t payload_len`；
+  - Go 侧在回调同步执行期间完成深拷贝（`C.GoBytes`），回调返回后 Native 内存失效；
+  - 回调令牌使用 `cgo.Handle` 传递安全整数，严禁向 Native 传递 Go 指针。
+
+### 10.5 慢消费背压与丢弃策略
+- **丢最旧（Drop Oldest）**：Go 侧 `AIResultSubscription` 采用固定容量环形队列（默认容量 32）。
+- 当队列满且慢消费者未及时取走时：丢弃最旧一帧、原子递增 `DroppedResults` 计数、新帧推入队列，绝不阻塞 Native 引擎与 FrameBroker 回调线程。
+
+

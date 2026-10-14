@@ -1,6 +1,11 @@
 package algorithm
 
-import "time"
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+)
 
 // ResultType corresponds to native zhulong_result_type_t in zhulong/plugin.h.
 type ResultType int32
@@ -111,4 +116,68 @@ func NewPersonStructureResult(cameraID, algorithmID string, pts, costMs int64) I
 		Classifications: make([]ClassificationItem, 0),
 		Persons:         make([]PersonItem, 0),
 	}
+}
+
+// RawInferencePayload models the JSON payload serialized by zhulong_algo_runner.
+type RawInferencePayload struct {
+	StreamID        uint64               `json:"stream_id"`
+	PTS             int64                `json:"pts"`
+	CostMs          int64                `json:"cost_ms"`
+	TaskType        string               `json:"task_type"`
+	Detections      []DetectionItem      `json:"detections"`
+	Classifications []ClassificationItem `json:"classifications"`
+	Persons         []PersonItem         `json:"persons"`
+}
+
+// ParseInferenceResult parses runner serialized JSON into a domain InferenceResult.
+func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceResult, error) {
+	if len(data) == 0 {
+		return InferenceResult{}, errors.New("empty inference payload")
+	}
+
+	var payload RawInferencePayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return InferenceResult{}, fmt.Errorf("unmarshal inference result: %w", err)
+	}
+
+	var res InferenceResult
+	switch payload.TaskType {
+	case TaskTypeDetection:
+		res = NewDetectionResult(cameraID, algorithmID, payload.PTS, payload.CostMs)
+		if len(payload.Detections) > 0 {
+			res.Detections = payload.Detections
+		}
+	case TaskTypeClassification:
+		res = NewClassificationResult(cameraID, algorithmID, payload.PTS, payload.CostMs)
+		if len(payload.Classifications) > 0 {
+			res.Classifications = payload.Classifications
+		}
+	case TaskTypePersonStructure:
+		res = NewPersonStructureResult(cameraID, algorithmID, payload.PTS, payload.CostMs)
+		if len(payload.Persons) > 0 {
+			res.Persons = payload.Persons
+		}
+	default:
+		res = InferenceResult{
+			CameraID:        cameraID,
+			AlgorithmID:     algorithmID,
+			PTS:             payload.PTS,
+			Timestamp:       time.Now().UTC(),
+			TaskType:        payload.TaskType,
+			CostMs:          payload.CostMs,
+			Detections:      payload.Detections,
+			Classifications: payload.Classifications,
+			Persons:         payload.Persons,
+		}
+		if res.Detections == nil {
+			res.Detections = make([]DetectionItem, 0)
+		}
+		if res.Classifications == nil {
+			res.Classifications = make([]ClassificationItem, 0)
+		}
+		if res.Persons == nil {
+			res.Persons = make([]PersonItem, 0)
+		}
+	}
+	return res, nil
 }

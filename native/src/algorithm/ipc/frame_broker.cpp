@@ -312,6 +312,15 @@ void FrameBroker::handle_client_message(uint32_t client_id, const IpcHeader& hea
         FrameAckMsg ack{};
         std::memcpy(&ack, payload, sizeof(ack));
         handle_ack(client_id, ack);
+    } else if (header.msg_type == MSG_RESULT && payload && header.payload_size > 0) {
+        ResultCallback cb;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            cb = on_result_;
+        }
+        if (cb) {
+            cb(stream_id_, client_id, payload, header.payload_size);
+        }
     }
 }
 

@@ -4,6 +4,7 @@
 #include "shm_pool.hpp"
 #include "unix_socket.hpp"
 #include <Zhulong/frame.hpp>
+#include <functional>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -72,6 +73,11 @@ public:
     // 获取客户端统计信息
     bool get_client_info(uint32_t client_id, ClientInfo& out_info) const;
 
+    using ResultCallback = std::function<void(uint64_t stream_id, uint32_t client_id, const uint8_t* payload, size_t size)>;
+    void set_on_result(ResultCallback cb) {
+        on_result_ = std::move(cb);
+    }
+
 private:
     void handle_client_message(uint32_t client_id, const IpcHeader& header, const uint8_t* payload);
     void handle_client_disconnect(uint32_t client_id);
@@ -96,6 +102,7 @@ private:
     mutable std::mutex mutex_;
     std::vector<SlotTracker> slots_;
     std::unordered_map<uint32_t, ClientInfo> clients_;
+    ResultCallback on_result_;
 };
 
 } // namespace zhulong::ipc

@@ -26,6 +26,7 @@ const (
 	EventTypeSnapshot  EventType = "snapshot"
 	EventTypeChange    EventType = "change"
 	EventTypeHeartbeat EventType = "heartbeat"
+	EventTypeAIResult  EventType = "ai_result"
 )
 
 // EventMessage represents a message pushed over SSE.
@@ -155,6 +156,35 @@ func (h *EventHub) BroadcastChange(state *CameraStateInfo) {
 	h.mu.RUnlock()
 
 	// Evict slow clients outside read lock
+	for _, slow := range slowClients {
+		h.Unsubscribe(slow)
+	}
+}
+
+// BroadcastAIResult emits real-time AI inference results to connected clients.
+func (h *EventHub) BroadcastAIResult(result any) {
+	if result == nil || h.stopped.Load() {
+		return
+	}
+
+	seq := h.sequence.Add(1)
+	msg := &EventMessage{
+		Event:    EventTypeAIResult,
+		Sequence: seq,
+		Data:     result,
+	}
+
+	h.mu.RLock()
+	var slowClients []*ClientSubscription
+	for _, sub := range h.clients {
+		select {
+		case sub.ch <- msg:
+		default:
+			slowClients = append(slowClients, sub)
+		}
+	}
+	h.mu.RUnlock()
+
 	for _, slow := range slowClients {
 		h.Unsubscribe(slow)
 	}

@@ -179,6 +179,24 @@ extern "C" Zhulong_status_t Zhulong_stream_unsubscribe(Zhulong_engine_h engine, 
     });
 }
 
+extern "C" Zhulong_status_t Zhulong_stream_subscribe_ai_results(Zhulong_engine_h engine,
+    Zhulong_stream_id stream, Zhulong_ai_result_callback callback, uintptr_t token,
+    Zhulong_subscription_id *out_subscription) {
+    if (out_subscription) *out_subscription = 0;
+    return boundary([&] {
+        require(engine && stream && callback && out_subscription);
+        *out_subscription = engine->implementation.subscribe_ai_results(stream, callback, token);
+    });
+}
+
+extern "C" Zhulong_status_t Zhulong_stream_unsubscribe_ai_results(Zhulong_engine_h engine,
+    Zhulong_stream_id stream, Zhulong_subscription_id subscription) {
+    return boundary([&] {
+        require(engine && stream && subscription);
+        engine->implementation.unsubscribe_ai_results(stream, subscription);
+    });
+}
+
 // ============================================================================
 //                               流探测（Probe） API
 // ============================================================================

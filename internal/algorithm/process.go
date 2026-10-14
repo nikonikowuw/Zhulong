@@ -43,6 +43,9 @@ const (
 	// is the more robust primary signal.
 	runnerExitBrokerUnavailable = 5
 
+	// MsgResult is the inference result egress message type (Runner -> Broker/Go).
+	MsgResult uint16 = 7
+
 	// Gallery IPC Message Types.
 	//
 	// ⚠️ NOT ALIGNED: native ipc_protocol.hpp:14-20 currently stops at

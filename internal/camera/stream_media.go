@@ -15,6 +15,7 @@ type PacketSource interface {
 // MediaStream 抽象单个消费者对物理流的引用。
 type MediaStream interface {
 	Subscribe(ctx context.Context, options engine.SubscriptionOptions) (PacketSource, error)
+	SubscribeAIResults(ctx context.Context) (*engine.AIResultSubscription, error)
 	BrokerPath(ctx context.Context) (string, error)
 	SetPublishRate(ctx context.Context, fps uint32) error
 	Close() error
@@ -58,6 +59,10 @@ type streamAdapter struct {
 
 func (s *streamAdapter) Subscribe(ctx context.Context, options engine.SubscriptionOptions) (PacketSource, error) {
 	return s.stream.Subscribe(ctx, options)
+}
+
+func (s *streamAdapter) SubscribeAIResults(ctx context.Context) (*engine.AIResultSubscription, error) {
+	return s.stream.SubscribeAIResults(ctx)
 }
 
 func (s *streamAdapter) BrokerPath(ctx context.Context) (string, error) {

@@ -19,6 +19,7 @@ package engine
 #include <Zhulong/engine.h>
 
 void zhulongPacketCallbackBridge(uintptr_t token, const Zhulong_packet_view *packet);
+void zhulongAIResultCallbackBridge(uintptr_t token, Zhulong_stream_id stream, const char *json_payload, size_t payload_len);
 */
 import "C"
 
@@ -442,6 +443,56 @@ func (e *Engine) unsubscribe(gen uint64, streamID C.Zhulong_stream_id, subID C.Z
 
 	if st != C.Zhulong_OK {
 		return mapNativeStatus("unsubscribe", int32(st))
+	}
+	return nil
+}
+
+func (e *Engine) subscribeAIResults(gen uint64, streamID C.Zhulong_stream_id, sub *AIResultSubscription) (C.Zhulong_subscription_id, uintptr, error) {
+	e.mu.Lock()
+	if e.handle == nil || !e.running || e.stopping || e.generation != gen {
+		e.mu.Unlock()
+		return 0, 0, ErrNotRunning
+	}
+	handle := e.handle
+	e.mu.Unlock()
+
+	h := cgo.NewHandle(sub)
+	token := uintptr(h)
+
+	var subID C.Zhulong_subscription_id
+	st := C.Zhulong_stream_subscribe_ai_results(
+		handle,
+		streamID,
+		C.Zhulong_ai_result_callback(C.zhulongAIResultCallbackBridge),
+		C.uintptr_t(token),
+		&subID,
+	)
+
+	if st != C.Zhulong_OK {
+		h.Delete()
+		return 0, 0, mapNativeStatus("subscribe_ai_results", int32(st))
+	}
+
+	return subID, token, nil
+}
+
+func (e *Engine) unsubscribeAIResults(gen uint64, streamID C.Zhulong_stream_id, subID C.Zhulong_subscription_id, deleteToken func()) error {
+	e.mu.Lock()
+	if e.handle == nil || e.generation != gen {
+		e.mu.Unlock()
+		deleteToken()
+		return ErrStaleResource
+	}
+	handle := e.handle
+	e.mu.Unlock()
+
+	st := C.Zhulong_stream_unsubscribe_ai_results(handle, streamID, subID)
+	if st == C.Zhulong_OK || st == C.Zhulong_ERR_NOT_RUNNING || st == C.Zhulong_ERR_NOT_FOUND {
+		deleteToken()
+	}
+
+	if st != C.Zhulong_OK {
+		return mapNativeStatus("unsubscribe_ai_results", int32(st))
 	}
 	return nil
 }

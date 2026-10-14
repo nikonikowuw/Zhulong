@@ -996,6 +996,52 @@ void test_runner_broker_connect_failure_d6(const char* runner_bin, const char* p
     std::cout << "[PASS] test_runner_broker_connect_failure_d6" << std::endl;
 }
 
+void test_frame_broker_result_egress() {
+    uint64_t stream_id = 999;
+    FrameBroker broker;
+    std::string err;
+    assert(broker.start(stream_id, "/tmp", {}, &err));
+
+    std::atomic<bool> received{false};
+    std::string received_payload;
+    uint64_t received_stream_id = 0;
+
+    broker.set_on_result([&](uint64_t s_id, uint32_t /*client_id*/, const uint8_t* payload, size_t size) {
+        received_stream_id = s_id;
+        received_payload = std::string(reinterpret_cast<const char*>(payload), size);
+        received.store(true);
+    });
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path()));
+
+    HandshakeReq req{};
+    req.api_version = 1;
+    std::strncpy(req.client_name, "result_client", sizeof(req.client_name) - 1);
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader hdr{};
+    std::vector<uint8_t> resp_payload;
+    assert(client.recv_msg(hdr, resp_payload, 500));
+    assert(hdr.msg_type == MSG_HANDSHAKE_RESP);
+
+    std::string sample_result = "{\"stream_id\":999,\"task_type\":\"detection\",\"detections\":[]}";
+    assert(client.send_msg(MSG_RESULT, sample_result.data(), sample_result.size()));
+
+    // Wait for callback
+    for (int i = 0; i < 50; ++i) {
+        if (received.load()) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    assert(received.load());
+    assert(received_stream_id == stream_id);
+    assert(received_payload == sample_result);
+
+    client.disconnect();
+    broker.stop();
+    std::cout << "[PASS] test_frame_broker_result_egress" << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     const char* runner_bin = (argc > 1) ? argv[1] : nullptr;
     const char* plugin_so = (argc > 2) ? argv[2] : nullptr;
@@ -1011,6 +1057,7 @@ int main(int argc, char* argv[]) {
     test_send_failure_rollback();
     test_multi_broker_asymmetric_isolation();
     test_broker_host_crash_then_restart();
+    test_frame_broker_result_egress();
     if (runner_bin && plugin_so) {
         test_runner_subprocess_e2e(runner_bin, plugin_so);
         test_runner_multi_broker_e2e(runner_bin, plugin_so);

@@ -67,6 +67,18 @@ void Engine::stop() {
     }
     brokers_to_stop.clear();
 
+    std::vector<std::shared_ptr<AISubscription>> ai_subs_to_drain;
+    {
+        std::lock_guard<std::mutex> lock(ai_sub_mutex);
+        for (auto &entry : ai_subscriptions) {
+            ai_subs_to_drain.push_back(entry.second);
+        }
+        ai_subscriptions.clear();
+    }
+    for (auto &sub : ai_subs_to_drain) {
+        sub->disable_and_drain();
+    }
+
     {
         std::lock_guard<std::mutex> lock(probe_mutex);
         for (const auto &entry : probes) {
@@ -242,6 +254,10 @@ bool Engine::ensure_frame_broker(const std::shared_ptr<Stream> &stream, int32_t 
         return false;
     }
 
+    broker->set_on_result([this](uint64_t stream_id, uint32_t /*client_id*/, const uint8_t* payload, size_t size) {
+        this->dispatch_ai_result(stream_id, reinterpret_cast<const char*>(payload), size);
+    });
+
     // ⚠️ publisher 持有 broker 的裸指针，因此必须在 broker 入池之后再启动，
     // 且两者在 release()/stop() 中按 publisher → broker 的顺序停止。
     auto publisher = std::make_unique<FramePublisher>(stream, broker.get());
@@ -354,6 +370,53 @@ void Engine::unsubscribe(Zhulong_stream_id id, Zhulong_subscription_id subscript
 
     operation.unlock();
     removed->disable_and_drain();
+}
+
+Zhulong_subscription_id Engine::subscribe_ai_results(Zhulong_stream_id id,
+                                                    Zhulong_ai_result_callback callback,
+                                                    uintptr_t token) {
+    if (!callback) throw Failure{Zhulong_ERR_INVALID_ARGUMENT};
+    std::lock_guard<std::mutex> operation(control);
+    if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
+    auto stream = find_stream(id);
+
+    std::lock_guard<std::mutex> lock(ai_sub_mutex);
+    if (!next_subscription) throw Failure{Zhulong_ERR_INTERNAL};
+    const auto subscription = next_subscription++;
+    ai_subscriptions.emplace(subscription, std::make_shared<AISubscription>(id, callback, token));
+    return subscription;
+}
+
+void Engine::unsubscribe_ai_results(Zhulong_stream_id id, Zhulong_subscription_id subscription) {
+    std::shared_ptr<AISubscription> removed;
+    {
+        std::lock_guard<std::mutex> lock(ai_sub_mutex);
+        const auto found = ai_subscriptions.find(subscription);
+        if (found == ai_subscriptions.end() || found->second->stream_id != id) {
+            throw Failure{Zhulong_ERR_NOT_FOUND};
+        }
+        removed = found->second;
+        ai_subscriptions.erase(found);
+    }
+    if (removed) {
+        removed->disable_and_drain();
+    }
+}
+
+void Engine::dispatch_ai_result(Zhulong_stream_id stream_id, const char* payload, size_t size) {
+    if (!payload || size == 0) return;
+    std::vector<std::shared_ptr<AISubscription>> targets;
+    {
+        std::lock_guard<std::mutex> lock(ai_sub_mutex);
+        for (const auto& entry : ai_subscriptions) {
+            if (entry.second->stream_id == stream_id) {
+                targets.push_back(entry.second);
+            }
+        }
+    }
+    for (const auto& sub : targets) {
+        sub->invoke(stream_id, payload, size);
+    }
 }
 
 Video Engine::probe(const std::string &url, const Options &options) {

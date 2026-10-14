@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"go.uber.org/zap"
@@ -45,6 +46,7 @@ func (s *mockPacketSource) Close() error {
 
 type mockMediaStream struct {
 	source    *mockPacketSource
+	aiSub     *engine.AIResultSubscription
 	closeOnce sync.Once
 	closed    bool
 	mu        sync.Mutex
@@ -52,6 +54,12 @@ type mockMediaStream struct {
 
 func (s *mockMediaStream) Subscribe(ctx context.Context, options engine.SubscriptionOptions) (PacketSource, error) {
 	return s.source, nil
+}
+
+func (s *mockMediaStream) SubscribeAIResults(ctx context.Context) (*engine.AIResultSubscription, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.aiSub, nil
 }
 
 func (s *mockMediaStream) BrokerPath(ctx context.Context) (string, error) {
@@ -76,6 +84,7 @@ type mockMediaEngine struct {
 	mu           sync.Mutex
 	acquireCount int
 	streams      []*mockMediaStream
+	nextStream   *mockMediaStream
 }
 
 func newMockMediaEngine() *mockMediaEngine {
@@ -92,6 +101,13 @@ func (e *mockMediaEngine) AcquireStream(
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.acquireCount++
+
+	if e.nextStream != nil {
+		s := e.nextStream
+		e.streams = append(e.streams, s)
+		e.nextStream = nil
+		return s, nil
+	}
 
 	stream := &mockMediaStream{source: newMockPacketSource(16)}
 	e.streams = append(e.streams, stream)
@@ -686,4 +702,59 @@ func TestStreamHubAICameraIDs(t *testing.T) {
 	if len(ids) != 1 || ids[0] != camID {
 		t.Fatalf("expected [%s], got %v", camID, ids)
 	}
+}
+
+func TestStreamHub_ConsumeAIResultsAndBroadcast(t *testing.T) {
+	store, lazyCipher, camID, cleanup := setupTestStoreAndCipher(t)
+	defer cleanup()
+
+	mockEngine := newMockMediaEngine()
+	eventHub := NewEventHub(NewStateRegistry())
+	defer eventHub.Close()
+
+	eventSub, _, err := eventHub.Subscribe()
+	if err != nil {
+		t.Fatalf("subscribe to event hub: %v", err)
+	}
+	defer eventHub.Unsubscribe(eventSub)
+
+	hub := NewStreamHub(mockEngine, store, lazyCipher, nil, eventHub, zap.NewNop())
+	defer hub.Close()
+
+	aiSub, feed := engine.NewAIResultSubscriptionForTest(16)
+	ctx := context.Background()
+
+	// 提前塞入 mock stream 供 Resolve 获取
+	mockStream := &mockMediaStream{source: newMockPacketSource(16), aiSub: aiSub}
+	mockEngine.nextStream = mockStream
+
+	if _, err := hub.ResolveAIStreamBrokerPath(ctx, camID); err != nil {
+		t.Fatalf("resolve AI stream failed: %v", err)
+	}
+	hub.AttachAIStreamSubscriber(camID, "test_algo")
+
+	// 模拟 Runner 上报一条检测结果
+	feed([]byte(`{"stream_id":1,"pts":12345,"cost_ms":10,"task_type":"detection","detections":[{"box":[0.1,0.2,0.3,0.4],"label":"helmet","score":0.95}],"classifications":[],"persons":[]}`))
+
+	// SSE 客户端应当收到广播事件
+	select {
+	case msg := <-eventSub.Channel():
+		if msg.Event != EventTypeAIResult {
+			t.Fatalf("expected EventTypeAIResult, got: %s", msg.Event)
+		}
+		res, ok := msg.Data.(algorithm.InferenceResult)
+		if !ok {
+			t.Fatalf("expected algorithm.InferenceResult, got: %T", msg.Data)
+		}
+		if res.CameraID != camID || res.TaskType != algorithm.TaskTypeDetection || len(res.Detections) != 1 {
+			t.Fatalf("unexpected result payload: %+v", res)
+		}
+		if res.Detections[0].Label != "helmet" || res.Detections[0].Score != 0.95 {
+			t.Errorf("unexpected detection: %+v", res.Detections[0])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for AI result SSE event")
+	}
+
+	hub.ReleaseAIStreamSubscriber(camID, "test_algo")
 }

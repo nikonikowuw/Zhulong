@@ -114,6 +114,7 @@ func TestIpcContractMatchesNativeHeader(t *testing.T) {
 	checkUint32Const(t, content, "IPC_MAGIC", uint64(algorithm.IpcMagic))
 	checkUint32Const(t, content, "IPC_VERSION", uint64(algorithm.IpcVersion))
 	checkUint32Const(t, content, "MAX_IPC_PAYLOAD_SIZE", uint64(algorithm.MaxIpcPayloadSize))
+	checkEnumConst(t, content, "MSG_RESULT", uint64(algorithm.MsgResult))
 }
 
 // checkUint32Const extracts `constexpr uint32_t NAME = <expr>;` (or uint16_t)

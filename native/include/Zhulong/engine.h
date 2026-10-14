@@ -168,6 +168,17 @@ typedef struct {
  */
 typedef void (*Zhulong_packet_callback)(uintptr_t token, const Zhulong_packet_view *packet);
 
+/**
+ * @brief AI 推理结果事件到达时的回调函数指针
+ *
+ * @param token 注册订阅时传入的用户上下文标识（如 cgo.Handle）
+ * @param stream 物理流 ID
+ * @param json_payload JSON 格式的推理结果借用数据指针（回调返回后失效，外部若需保留必须深拷贝）
+ * @param payload_len 载荷字节长度
+ */
+typedef void (*Zhulong_ai_result_callback)(uintptr_t token, Zhulong_stream_id stream,
+    const char *json_payload, size_t payload_len);
+
 /* ========================================================================== */
 /*                             引擎生命周期管理接口                              */
 /* ========================================================================== */
@@ -328,6 +339,31 @@ Zhulong_status_t Zhulong_stream_subscribe(Zhulong_engine_h engine, Zhulong_strea
  */
 Zhulong_status_t Zhulong_stream_unsubscribe(Zhulong_engine_h engine, Zhulong_stream_id stream,
     Zhulong_subscription_id subscription);
+
+/**
+ * @brief 订阅物理流的 AI 推理结果事件派发
+ *
+ * @param engine 引擎句柄
+ * @param stream 流 ID
+ * @param callback 结果到达时的回调函数指针
+ * @param token 传递给回调函数的上下文令牌
+ * @param[out] out_subscription 输出订阅 ID
+ * @return Zhulong_status_t 操作状态码
+ */
+Zhulong_status_t Zhulong_stream_subscribe_ai_results(Zhulong_engine_h engine,
+    Zhulong_stream_id stream, Zhulong_ai_result_callback callback, uintptr_t token,
+    Zhulong_subscription_id *out_subscription);
+
+/**
+ * @brief 取消 AI 推理结果事件订阅（同步排空语义）
+ *
+ * @param engine 引擎句柄
+ * @param stream 流 ID
+ * @param subscription 待取消的订阅 ID
+ * @return Zhulong_status_t 操作状态码
+ */
+Zhulong_status_t Zhulong_stream_unsubscribe_ai_results(Zhulong_engine_h engine,
+    Zhulong_stream_id stream, Zhulong_subscription_id subscription);
 
 /* ========================================================================== */
 /*                             流元数据探测接口                                */

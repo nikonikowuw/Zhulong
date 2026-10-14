@@ -17,7 +17,8 @@ enum MessageType : uint16_t {
     MSG_FRAME_DISPATCH  = 3,
     MSG_FRAME_ACK       = 4,
     MSG_HEARTBEAT       = 5,
-    MSG_DISCONNECT      = 6
+    MSG_DISCONNECT      = 6,
+    MSG_RESULT          = 7
 };
 
 #pragma pack(push, 1)

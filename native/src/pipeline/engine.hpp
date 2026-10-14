@@ -7,6 +7,7 @@
 
 #include "pipeline/stream.hpp"
 #include "pipeline/frame_publisher.hpp"
+#include "pipeline/ai_subscription.hpp"
 #include "algorithm/ipc/frame_broker.hpp"
 
 #include <atomic>
@@ -44,6 +45,9 @@ struct Engine {
     std::map<Zhulong_stream_id, std::unique_ptr<ipc::FrameBroker>> brokers; /**< AI 帧分发 Broker 实例池 */
     std::map<Zhulong_stream_id, std::unique_ptr<FramePublisher>> publishers; /**< AI 帧发布线程池 */
     std::string broker_base_dir{"/tmp"};        /**< Broker socket 存放目录 (读取环境变量覆写) */
+
+    std::mutex ai_sub_mutex;                    /**< 保护 AI 结果订阅池 */
+    std::map<Zhulong_subscription_id, std::shared_ptr<AISubscription>> ai_subscriptions; /**< AI 结果订阅池 */
 
     std::thread reaper;                         /**< 定期回收宽限期到期流的清理线程 */
     std::atomic<bool> reaper_stop{true};        /**< 清理线程停止控制信号 */
@@ -86,6 +90,15 @@ struct Engine {
 
     /** @brief 取消数据包订阅（执行同步排空） */
     void unsubscribe(Zhulong_stream_id id, Zhulong_subscription_id subscription);
+
+    /** @brief 注册 AI 推理结果事件订阅 */
+    Zhulong_subscription_id subscribe_ai_results(Zhulong_stream_id id, Zhulong_ai_result_callback callback, uintptr_t token);
+
+    /** @brief 取消 AI 推理结果事件订阅（执行同步排空） */
+    void unsubscribe_ai_results(Zhulong_stream_id id, Zhulong_subscription_id subscription);
+
+    /** @brief 分发 AI 推理结果至已注册的回调 */
+    void dispatch_ai_result(Zhulong_stream_id stream_id, const char* payload, size_t size);
 
     /** @brief 独立同步探测指定 RTSP 流的视频元数据 */
     Video probe(const std::string &url, const Options &options);
