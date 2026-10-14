@@ -1,0 +1,33 @@
+{
+  "id": "face-recognition-e2e",
+  "name": "face-recognition-e2e",
+  "title": "人脸识别端到端接入",
+  "description": "打通人脸识别从底库到结果的全链路：结构化结果 ABI 扩展、底库热更新通道、推理结果出口、特征提取闭环、人脸算法包与前端叠加。当前链路在 native→Go 的结果回传与底库下行两处断开，且人脸特征为全零占位。",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": "backend",
+  "priority": "P1",
+  "creator": "nikoniko",
+  "assignee": "nikoniko",
+  "createdAt": "2026-10-14",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "10-14-algo-structure-abi",
+    "10-14-gallery-hot-sync",
+    "10-14-inference-result-egress",
+    "10-14-face-feature-extraction",
+    "10-14-face-algo-package",
+    "10-14-face-result-frontend"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

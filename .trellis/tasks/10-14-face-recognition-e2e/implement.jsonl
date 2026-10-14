@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture.md", "reason": "跨层拓扑与防爆门契约：CGO 边界、身份空间、就绪语义"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "插件 ABI、IPC 协议、底库载荷字段名与身份字段的权威依据（§7.2/§7.3）"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "CGO 指针规则、内存所有权与回调 token 约束"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "算法包 manifest 契约、task_type 枚举与验包门禁"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量门禁与测试要求（-race 强制）"}
