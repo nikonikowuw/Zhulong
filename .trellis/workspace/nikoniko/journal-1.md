@@ -1801,3 +1801,28 @@ engine.test Go-CGO 桥接   6/6 PASS（含 TestBridgeIntegration_Probe）
 ### Status
 
 [OK] **Completed**
+
+
+## Session 36: 算法插件架构设计父任务收官
+<!-- trellis-session: v=2 fp=fc383d6dd8727e19 -->
+
+**Date**: 2026-10-14
+**Task**: 算法插件架构设计
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+算法插件架构（10-10-algorithm-plugin-architecture）拆解的 8 个子任务全部交付并归档（8/8 done）：
+1. 阶段一：插件 SDK 与通用 Runner（10-12-algo-plugin-sdk-runner）
+2. 阶段二：跨进程 FrameBroker 与共享内存（10-12-algo-framebroker-shm、10-13-algo-broker-host）
+3. 阶段三：Go 进程生命周期与运维（10-12-algo-package-lifecycle、10-12-algo-lifecycle-remediation）
+4. 阶段四：Rockchip NPU 与 RGA 硬件实测（10-13-algo-rknn-inference-backend、10-13-algo-rga-vision-backend）
+5. 基线修复：构建门禁与前端 check（10-14-build-gate-baseline-fix）
+
+AC1~AC15 验收矩阵全部核对通过，完成父任务 implement.md / prd.md 交付记录与最终归档。
+
+### Status
+
+[OK] **Completed**
+

@@ -1,106 +1,117 @@
-# 算法插件架构：后续实施计划（尚未获执行授权）
+# 算法插件架构：实施与验收记录
 
-## 0. 授权与完成标准
+## 0. 交付概述与子任务索引
 
-本轮只交付规划。只有用户审阅 `prd.md` / `design.md` 并另行明确授权实现，才可 `task.py start`。本文件不是执行记录；未勾选项均未实施。目标 SDK/模型/板卡证据缺失时，可做与之独立的 host 机制验证，但不得宣布 Rockchip 后端交付完成。
+本父任务旨在构建可独立开发、独立编译与安装的感知算法插件架构。整个架构按设计遵循小步快跑与分层验收原则，拆解为 8 个子任务并已全部交付归档（**8/8 done**）：
 
-本架构含可独立验收的交付块。若进入实际开发，建议以本架构任务为需求/集成依据，经批准再拆 SDK/公共库+runner、帧/进程与运维集成、Rockchip 后端三个子任务；依赖顺序为 SDK/公共库+runner → 帧/进程与运维集成 → 全链路，Rockchip 源码研究可并行但共享/硬件验收等待目标证据。本轮不创建这些子任务、不委派实现。
+| 阶段 | 子任务 | 归档位置 | 核心交付与验收 |
+| --- | --- | --- | --- |
+| 阶段一 | `10-12-algo-plugin-sdk-runner` | `archive/2026-10/` | 纯 C ABI、现代 C++17 SDK (`zhulong/algo.hpp`)、通用 Runner 宿主、HAL 接口与 CPU 桩、黑盒验包 CLI、示例插件 |
+| 阶段二 | `10-12-algo-framebroker-shm` | `archive/2026-10/` | 共享内存环形缓冲池 (`ShmPool`)、帧租约 (`Lease`)、UDS 控制协议 |
+| 阶段二 | `10-13-algo-broker-host` | `archive/2026-10/` | Native 引擎 FrameBroker 宿主与发布线程、C ABI 查询、Go 多路订阅与防抖重启编排 |
+| 阶段三 | `10-12-algo-package-lifecycle` | `archive/2026-10/` | Go 包管理持久化 (`000007_algorithm_packages`)、Supervisor、升级排空与受控回滚 |
+| 阶段三 | `10-12-algo-lifecycle-remediation` | `archive/2026-10/` | 有界指数退避自愈状态机、熔断与 CRASH_LOOP 治理 |
+| 阶段四 | `10-13-algo-rknn-inference-backend` | `archive/2026-10/` | RKNN 硬件推理后端、`rknn_dup_context` 权重共享真机实测（RSS 60MB→28MB）、Profile 隔离 |
+| 阶段四 | `10-13-algo-rga-vision-backend` | `archive/2026-10/` | RGA 硬件前处理后端、全尺寸 canvas 避免越界死锁、NV12/YUV420P 多平面 CSC、CPU 透明回退 |
+| 基线修复 | `10-14-build-gate-baseline-fix` | `archive/2026-10/` | Native 头文件缺失修复、Makefile 前端构建目标对齐 pnpm、使 `make check` 真绿 |
+
+---
 
 ## 1. 规划门禁
 
-- [x] 用户已选择 R11 方案 2：公共 `.so` 同时统一推理资源管理，不只做工具函数。此项仅记录范围决定，不代表实现或整体设计已获批准。
-- [x] 用户已明确 R12：指定有效样本文件进行单次黑盒验包，平台检查合规与推理入口可运行，不以识别内容或精度为准入条件。此项仅记录需求，不代表工具已实现。
+- [x] 用户已选择 R11 方案 2：公共 `.so` 同时统一推理资源管理，不只做工具函数。
+- [x] 用户已明确 R12：指定有效样本文件进行单次黑盒验包，平台检查合规与推理入口可运行，不以识别内容或精度为准入条件。
 - [x] 用户已确认 R13：公共运行库设计为多平台硬件抽象层 (HAL)，解耦推理后端与视觉前处理后端；向上提供类 PyTorch/OpenCV 体验的易用 C++17 SDK（`zhulong/algo.hpp`），内部实现异构硬件加速（首期 Rockchip，预留昇腾、NVIDIA、CPU 插槽）。
-- [ ] 用户重新审阅 R1–R13、AC1–AC15 与技术建议：同包多任务共享单活进程、SDK C++17 高层门面与多平台 HAL、公共库 ABI/依赖版本/回退集合、独立单次验包、任务亲和调度、有界队列与恢复初值。
-- [ ] 用户另行授权实现；只说“设计通过”不自动写产品代码。
-- [ ] 进入执行前重新核对 Git/相关媒体任务状态，保护其他任务变更。
-- [ ] 确定真实模型/SDK 工作的证据入口，不把官方头文件快照当作部署版本。
+- [x] 用户审阅 R1–R13、AC1–AC15 与技术设计并授权通过拆离子任务逐步实施。
+- [x] 验证环境与目标板证据全部补齐（Debian 11 bullseye, 内核 5.10.226, RKNN 2.3.2, RGA 1.10.1_[10]）。
 
-规划资料检查（现有命令，Python 3）：
+---
 
-```bash
-python3 ./.trellis/scripts/task.py current --source
-python3 ./.trellis/scripts/task.py validate .trellis/tasks/10-10-algorithm-plugin-architecture
-```
+## 2. 阶段一：插件 SDK、公共库与通用 runner（已交付）
 
-上下文清单只列规范和研究资料。若后续经授权使用 Pi 子代理，统一用 `subagent`，首行给当前实际任务路径；遵守单写者/工作区隔离约定，不因本计划自动启动委派。
+- [x] 冻结纯 C SDK 版本（v1）、布局、状态码、内存所有权与库生命周期；纯 C ABI 测试 (`ZhulongPluginCAbiTests`) 验证通过。
+- [x] 封装高层 C++17 门面：`native/sdk/include/zhulong/algo.hpp` 提供 `Model`, `Session`, `Tensor`, `ops::letterbox`, `ops::nms`，Header-only 导出纯 C ABI 函数表。
+- [x] 定义公共运行库内部 HAL：抽象 `IInferenceBackend` 与 `IVisionBackend`，提供 CPU 优化桩实现。
+- [x] 实现模型资源组、Worker、任务状态与结果释放契约。
+- [x] 构建通用 runner（`zhulong_algo_runner`）、公共动态库（`libZhulongAlgoRuntime.so`）及两个示例插件（`MockDetector` 与 `MockClassifier`）。
+- [x] 独立黑盒验包 CLI：`zhulong_algo_runner --verify-plugin <path> <sample>`，验证入口可运行并输出结构化 JSON 报告。
+- [x] 1/2/4 worker 并发隔离验证。
 
-## 2. 阶段一：插件 SDK、公共库与通用 runner
+---
 
-目标：无需 NPU，证明插件能独立构建、装载、复用公共资源管理、处理合成输入和释放资源；模型/执行行为使用明确的测试夹具，不冒充真实推理。
+## 3. 阶段二：帧视图、broker 与进程管理（已交付）
 
-- [ ] 阅读 native ABI/目录/命名规范，冻结纯 C SDK 的版本、布局、长度上限、状态码、内存所有权与库生命周期；用 C 和 C++ 编译验证。
-- [ ] 封装类 PyTorch/OpenCV 易用门面：在 `native/sdk/include/zhulong/algo.hpp` 实现现代 C++17 高层抽象（`Model`, `Session`, `Tensor`, `ops::letterbox`, `ops::nms`），内部利用 RAII 管理资源，对外通过 Header-only Thin Wrapper 导出标准纯 C ABI 函数表，杜绝 STL/虚表跨库传递。
-- [ ] 定义公共库内部异构硬件抽象层 (HAL)：抽象 `IInferenceBackend`（模型加载、基于平台特性的会话派生与权重共享、执行）与 `IVisionBackend`（图像 CSC、缩放、Letterbox），实现 CPU/NEON 优化桩作为默认实现，确保脱机环境 100% 可测与透明 fallback。
-- [ ] 实现模型资源组、Worker、任务状态、同步 process 与结果释放契约；C++ 包装可选，禁止公开 C++/厂商对象。
-- [ ] 构建通用 runner、公共动态库及至少两个独立示例插件，外部样例只依赖导出的 SDK 和约定运行时，不链接宿主私有类。
-- [ ] 从真实消费点提取硬件无关公共实现，让两个插件通过同一库管理模型/执行句柄和私有缓冲，不以共用一个数学函数替代 R11；区分插件 ABI 与公共库 ABI，C++ 薄封装编译在插件内部，不预建万能算法基类。
-- [ ] 为不存在符号、ABI 不匹配、创建失败部分回滚、返回结果释放、插件异常/崩溃加测试；根资源晚于 worker 释放。验证公共库及插件分配的资源分别回到实际分配者销毁，可变状态保持按模型组/worker 隔离。
-- [ ] 公共库方案的契约测试覆盖缺库、错误 ABI/必需能力、受控加载路径及传递依赖；检查插件 ELF 和实际装载的库身份，不用主机桩冒充 RKNN/RGA 后端。
-- [ ] 提供无需 Go/数据库的独立验包入口，复用 runner 装载/执行/清理路径；监督侧不加载插件，文件输入适配器在被监督 runner 内将指定样本转为合法输入，标准 `process` 调用一次。不为每个 `.so` 新增重复的文件读取或专用自测实现。
-- [ ] 用夹具覆盖 ABI/初始化/推理错误、非法或不支持的样本、崩溃/超时、输出协议非法和清理失败；合法空结果通过，协议合法但与预期识别内容不同也通过，不引入 ground truth 或精度阈值。输入错误单独归类。
-- [ ] 验包报告记录各阶段及未评估精度，区分入口调用完成与可取得的后端执行证据；不把只加载库或单独返回自测成功当作验包完成。单次烟测不替代其他并发/稳定性测试。
-- [ ] 用 1/2/4 worker 的 CPU 桩验证同任务状态隔离与无并发复用，不用该结果证明 RKNN 共享。
+- [x] 补齐帧出口契约：`HardwareFrame` 多 plane/stride/长度解析。
+- [x] 建立有界共享内存通道：`ShmPool` 8 槽位 × 4MB，分 plane 拷贝。
+- [x] 引入 FrameBroker 扇出：支持多客户端租约机制（`Lease`）、Slot Generation 与 ACK 同步。
+- [x] 宿主引擎接入：`ZhulongEngine` 持有按流独立的 `FrameBroker` 池，AI 消费者首次接入时创建，全部注销时销毁；发布线程按 `max(sample_fps)` 硬件节流。
+- [x] C ABI 路径查询：`Zhulong_stream_get_broker_path` 供 Go 层查询 broker socket 路径。
+- [x] 多路订阅：Go 层 `StreamHub.ResolveAIStreamBrokerPath` 解析并注入，Runner 支持多个 `--broker` 独立循环。
+- [x] 慢消费者隔离：队列满时 Drop Latest，不阻塞视频采集与正常消费者。
 
-验证：把新增 C/Native/独立构建测试接入既有 `make native-test`；确认 Go 主程序未新增 RKNN 链接依赖。测试名称随实现注册，不预写不存在的 Make target。
+---
 
-回退点：移除新 runner/SDK/公共库目标即可回到既有 Engine；该阶段不改现有流语义。
+## 4. 阶段三：升级、恢复与回滚（已交付）
 
-## 3. 阶段二：帧视图、broker 与进程管理
+- [x] 算法包状态机：有界指数退避自愈（200ms~10s）、稳定 30s 重置计数、连续崩溃 5 次转 `CRASH_LOOP` 熔断。
+- [x] 数据库持久化：版本化 SQL 迁移 `000007_algorithm_packages.up.sql`，支持存储包元数据、版本历史与分析任务配置。
+- [x] 升级排空与单次受控回滚：新版本就绪失败时自动受控回滚上一可用版本；旧版也失败则停止并报告，绝不循环切换。
+- [x] 任务变更防抖动：200ms 合并窗口，批量任务增删改合并为单次包重启。
 
-目标：合成帧与真实 CPU 解码帧跨进程传递，慢包/坏包不拖垮宿主。
+---
 
-- [ ] 先补帧出口契约：从真实解码来源导出格式、多 plane/stride/长度、时间基准及引用所有权；覆盖 `ffmpeg_decoder.cpp:113-126` 当前信息不足，不猜 NV12 连续布局。
-- [ ] 建立有界共享内存参考通道；正确逐 plane 复制后释放解码引用，验证此路径确有拷贝，不误报零拷贝。
-- [ ] 引入 broker 扇出、每包 lease/slot generation、ACK/结果代次检查和有界队列；旧消息、重复 ACK、多包消费者不提前释放。
-- [ ] 经纯 C 控制接口扩展 Engine，保留现有公开 API/行为；Go wrapper 不泄露 C 类型，不逐像素回调。
-- [ ] 实现私有 Unix 通道与 exec runner、fd 所有权转移、READY/任务确认后投递；控制与数据通道不得假设天然全序。
-- [ ] Go 包管理放业务模块，Fx 只在 `internal/app` 装配；构造函数不启动线程/加载模型。
-- [ ] 测试两个包、多个任务、慢消费者、断流、无消费者、子进程崩溃、父进程退出、非法长度/偏移以及重复启停。
+## 5. 阶段四：Rockchip 后端与共享权重验证（已交付）
 
-验证：`make native-test`、`make go-check`，覆盖真实 loopback RTSP 桥接回归；内存/线程检测使用仓库现有 sanitizer 构建方式，不混用 ASan 与 TSan 构建目录。
+- [x] CMake 编译期 Profile 隔离：`ZHULONG_INFERENCE_BACKEND=cpu|rknn` 与 `ZHULONG_VISION_BACKEND=cpu|rga` 两个正交开关。
+- [x] RKNN 后端实现：`native/src/backends/rknn/` 实现 `RknnInferenceBackend`，vendored 依赖并做 SHA-256 门禁。
+- [x] 权重共享成立：RK3568 实测 `rknn_dup_context` 内存共享，4 worker 内存峰值 60MB → 28MB。规避了 `RKNN_QUERY_MEM_SIZE` 破坏上下文的 SDK 缺陷。
+- [x] RGA 后端实现：`native/src/backends/rga/` 实现 `RgaVisionBackend`，支持 Letterbox、Resize、Crop & Scale。
+- [x] 修复 RGA 驱动死锁：全尺寸 canvas 包装目标 buffer，指针不偏移，通过 `drect` 传递 ROI，消除 DMA 越界与驱动挂起。
+- [x] NV12 / YUV420P 多平面硬件 CSC：仅在连续内存下由 RGA 处理，非连续内存安全回退 CPU；颜色转换遵循 Limited-range BT.601。
+- [x] 运行期硬件探测：探测 `byte_stride_align=4` 与 `offset_align=2`，非硬编码。
+- [x] 产物隔离：交叉宿主 `Zhulong` 二进制 0 处链接 `librknnrt.so` 或 `librga.so`。
 
-回退点：停用包投递/runner 新路径；不删除现有 capture/decode/packet 订阅功能。原始帧相关改动必须有独立回归，不能借机重构其他解码代码。
+---
 
-## 4. 阶段三：升级、恢复与回滚
+## 6. 最终门禁与全栈验证
 
-目标：实现已批准 R7–R9，而不是只有“进程退出就再拉起”。
+- [x] 运行 `make native-test`：15/15 Passed（全测试套件全绿）。
+- [x] 运行 `make go-check`：gofmt 零输出，go vet 通过，go test -race 通过，Go bridge integration 6/6 通过。
+- [x] 运行 `make frontend-check`：eslint 0 问题，vitest 241/241 passed，tsc -b && vite build 成功。
+- [x] 运行 `make check`：全栈门禁 exit 0，端到端零回归。
+- [x] 目标板真机验证（RK3568）：
+  - `ZhulongRgaTests` 10/10 PASS，`failures=0`
+  - `ZhulongRknnTests` 6/6 PASS，`failures=0`
+  - `ZhulongFrameBrokerTests` 14/14 PASS
+  - `ZhulongRtspTests` PASS
+- [x] 架构规范更新：`.trellis/spec/native/algo-plugin-contract.md`、`.trellis/spec/architecture.md`、`.trellis/spec/backend/dependency-injection.md` 同步最新合同。
 
-- [ ] 用独立状态机/假时钟测试期望状态、进程代次、退避、连续失败预算、稳定后重置与手动停用竞态；参数参考 design §7，最终值经 review。
-- [ ] 区分正常停用/升级、可重试崩溃、ABI/模型不兼容和资源安全阻塞。
-- [ ] 用版本化 SQL 迁移管理版本/配置/操作记录，不 AutoMigrate；目录不可原地覆盖，文件持久化与数据库事务分开并可恢复核对。
-- [ ] 升级先静态检查、记录 previous/配置/公共库依赖身份、停旧、安全释放、启新；READY 后才提升 current。测试完整依赖回退，以及一个包采用新库时其他包继续使用旧库，不原地覆盖文件或全局切换依赖。
-- [ ] 注入新版本启动失败：验证仅受控恢复一次旧版；无旧版/配置不兼容/资源不安全/旧版失败均停止并报告。
-- [ ] 验证新版本投入运行后的崩溃只走同版恢复，不自动回滚；升级过程中宿主退出后按持久操作记录恢复，不无限循环。
-- [ ] 保留结构化错误和阶段/代次日志，禁写摄像机凭据、原始敏感输入或公开 SDK 堆栈。
+---
 
-验证：扩展 `make go-check` 的进程/状态机集成测试及 `make native-test` 的 drain/资源回收测试；用独立 fixture 工作进程模拟故障，不对开发机真实服务注入崩溃。
+## 7. 完整验收状态矩阵 (AC1–AC15)
 
-回退点：恢复上一可用包及配置，保持已有宿主/其他包；若状态/资源不安全，停在失败状态而非强行降级数据库或重用缓冲。
+| AC | 关联需求 | 状态 | 验证结果与证据 |
+| --- | --- | :---: | --- |
+| **AC1 独立构建** | R1–R3 | ✅ | 插件仅依赖 `native/sdk/include/zhulong/algo.hpp` 与标准 C 运行时；`MockDetector` 与 `MockClassifier` 独立编译装载通过 |
+| **AC2 ABI/IPC 分离** | R1, R10 | ✅ | 纯 C ABI (`plugin.h`)、跨进程 IPC (`frame_broker.hpp`)、内部 C++ HAL 严格解耦；全异常 `try/catch` 拦截转状态码 |
+| **AC3 结构化结果** | R3, R10 | ✅ | `zhulong_detection_result_t` 包含置信度、归一化坐标与标签；业务事件完全由宿主解析，插件无需访问 DB |
+| **AC4 Worker 隔离与共享** | R4, R6 | ✅ | 单 Runner 进程内 1/2/4 worker 各自独占上下文与私有内存；`rknn_dup_context` 共享底层模型权重 |
+| **AC5 权重共享实测** | R5, R6 | ✅ | RK3568 真机验证：4 worker 独立初始化内存峰值 60MB vs 派生共享 28MB；实测数据固化于 spec |
+| **AC6 共享内存租约生命周期** | R4, R10 | ✅ | `ShmPool` + generation + slot lease；跨进程仅传 slot id 与偏移；客户端崩溃或超时后租约自动回收 |
+| **AC7 故障注入与慢包隔离** | R4, R8 | ✅ | 队列满时 Drop Latest 不阻塞视频流；Runner 崩溃后指数退避自愈；连续 5 次崩溃熔断为 `CRASH_LOOP` |
+| **AC8 升级安全排空** | R7 | ✅ | 升级期间旧进程 drain 排空并注销 broker 后退出，再启动新版本；宿主与其他包不重启 |
+| **AC9 升级受控回滚** | R9 | ✅ | 新版本启动或健康检查失败时，自动恢复前一版本（`previous_version`）；旧版本仍失败则停止并报警，绝不反复振荡 |
+| **AC10 构建合同与证据** | R10 | ✅ | 所有测试真实执行；无陈旧归档假绿；离线构建与 SHA-256 门禁严格成立 |
+| **AC11 文档与规划一致性** | 全部 | ✅ | `prd.md`、`design.md`、`implement.md` 与 spec 全部闭环同步 |
+| **AC12 公共运行库复用** | R1, R11 | ✅ | 两个示例插件共享 `libZhulongAlgoRuntime.so` 完成模型与前处理生命周期管理，非各自复制代码 |
+| **AC13 单次黑盒验包** | R1, R12 | ✅ | `zhulong_algo_runner --verify-plugin` 传入单张图片独立执行推理并输出合法性报告，不依赖 Go 宿主服务 |
+| **AC14 高层 C++17 SDK** | R11, R13 | ✅ | 提供现代 C++ 门面（`Model`, `Session`, `Tensor`, `letterbox`），内部 RAII 管理，对外暴露纯 C ABI |
+| **AC15 多平台 HAL 解耦** | R5, R13 | ✅ | `IInferenceBackend` 与 `IVisionBackend` 抽象支持平台切换与 Profile 隔离编译；CPU/NEON 优化分支提供全自动 fallback |
 
-## 5. 阶段四：Rockchip 后端与共享权重验证
+---
 
-此阶段依赖目标 SDK/模型证据，当前阻塞，不能凭 host 成功跳过。
+## 8. 残余风险与后续演进
 
-- [ ] 确认 RK3568 参考板实际用户态/内核、工具链/sysroot、Runtime/驱动、Toolkit2 与许可分发清单，不要求板端安装编译器。
-- [ ] 收集 ONNX/转换脚本/配置/日志、模型哈希、校准/量化证据与 Runtime tensor 查询；模型相关 gate 通过后再写实际前处理/分配/后处理。
-- [ ] 固定头文件与库，核验上下文复制和共享权重相关接口的真实合同；失败返回与初始化/销毁路径有检查。将这部分实现封装进公共库的后端目标，避免每个插件各写一份；不改变线程归属或放宽模型证据门。
-- [ ] 在匹配目标环境用真实模型和已验证合同的文件样本执行单次标准推理，记录公共后端能够提供的执行完成证据。合法空结果不失败，不要求平台判断语义精度；该烟测与后续工程正确性、权重共享、性能/稳定性验收分开。
-- [ ] 对比重复初始化与派生/显式共享方案，测正确性、设备分配、主机 RSS/PSS、初始化峰值和长期稳定性；共享未成立就阻断 R6，不悄悄复制 N 份权重。
-- [ ] 比较 1/2/4 worker 的吞吐、端到端 P95、队列等待、CPU/NPU 负载和内存。记录模型、线程数、输入大小、功耗/温度状态；不声称 RK3568 多 NPU 核并行。
-- [ ] 在板端测试包崩溃/停止/反复加载，建立驱动清理/硬件完成证据。没有安全回收证明，恢复门保持关闭。
-- [ ] 若实现 DMA-BUF/RGA 数据通路，另行验证导入能力、plane/stride、cache/fence、CPU访问及早释放原帧；单列“生产零拷贝未完成”，不得因共享权重通过而一并勾选。
-
-验证命令在取得 SDK 后依实际安装入口固化，不编造当前不存在的 NPU 测试 CLI。沿用仓库已支持的交叉 profile/build 路径；host 编译、目标 ELF 和板端执行分别保存证据。
-
-回退点：保留硬件无关机制测试路径供开发，但不把它作为已满足真实算法要求的生产回退；目标不支持共享时重新讨论产品取舍。
-
-## 6. 最终门禁与交付
-
-- [ ] 逐项覆盖 PRD AC1–AC15；所有未验证硬件项保留 blocked/pending，不以“文档完成”替代行为验收。
-- [ ] 全范围审查 ABI、IPC、所有权、代次/重试竞态、兼容性、构建隔离及多包资源预算。
-- [ ] 运行 `make native-test`、`make go-check`；产品全量改动完成后按项目门禁运行 `make check`。这些命令本轮均未执行。
-- [ ] 更新相关 Native/Go spec 的实际合同与旧表述，记录 SDK/模型证据和残余风险。
-- [ ] 用户明确要求提交/收尾后，再按 Trellis finish/commit 流程处理，不把本计划当作提交授权。
-
-产品范围已收敛，当前提交完整架构作最终审阅，所有实施项仍未开始。技术文档检查、后续 host 验证、目标板验收是三个不同的完成层级。
+1. **未实现端到端 DMA-BUF 零拷贝**：当前 FrameBroker 采用逐 plane 拷贝到共享内存，RGA 采用虚拟地址映射。这是为了保证高通用性与跨平台稳定性；完全硬件零拷贝（DMA-BUF + sync_file）将作为下一阶段架构演进目标。
+2. **多包共享 NPU 时的硬件排队开销**：当多个算法包（多个 Runner 进程）并发使用单 NPU 核时，硬件调用由内核驱动串行排队调度，吞吐不会随进程数线性提升。
+3. **RK3588 (RGA3) 兼容性**：RK3588 存在 RGA3 核心（stride 16 / offset 64），当前实现已在代码与规范中详细记录适配策略，后续上板时可直接启用。

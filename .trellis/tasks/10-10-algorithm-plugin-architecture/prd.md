@@ -113,10 +113,13 @@
 - 上下文复制或显式权重共享、线程安全和销毁次序须按匹配 SDK 文档并实测；若不满足 R6，后端标为不支持/阻塞，另行讨论产品取舍，不自动改成多份权重。**头文件 SHA-256 已核对一致，但运行期行为仍未验证。**
 - DMA-BUF/RGA/RKNN 的导入、格式/stride、同步和进程崩溃清理需独立闭环；先用可观测的硬件无关传输验证机制不等于放弃或完成生产优化。
 
-## 8. 审阅状态
+## 8. 交付与验收状态（全量子任务已交付）
 
-产品范围已收敛，不再重复询问已确认的选择。公共库的 ABI、依赖版本、回退集合及单次黑盒验包建议见 `design.md` §2.1–2.3；具体接口布局与参数仍需整体审阅，不冒充用户逐项批准的事实。
+产品范围收敛，8 个子任务均已全部交付、验证并归档（8/8 done）：
+- 阶段一：插件 SDK、公共运行库与通用 Runner（`10-12-algo-plugin-sdk-runner`）
+- 阶段二：FrameBroker 共享内存通路与宿主接入（`10-12-algo-framebroker-shm`、`10-13-algo-broker-host`）
+- 阶段三：Go 算法包生命周期与进程监督看门狗（`10-12-algo-package-lifecycle`、`10-12-algo-lifecycle-remediation`）
+- 阶段四：Rockchip 异构硬件后端（`10-13-algo-rknn-inference-backend`、`10-13-algo-rga-vision-backend`）
+- 构建门禁基线修复（`10-14-build-gate-baseline-fix`）
 
-阶段一至三已交付并归档。阶段四拆为 `10-13-algo-rknn-inference-backend` 与 `10-13-algo-rga-vision-backend` 两个子任务（均 `planning`），真机证据已补齐至 `research/rk3568-board-evidence.md`。
-
-状态仍为 `planning`。三份文档提交最终审阅，只有随后另行明确授权实现才能进入执行。硬件相关证据门已大幅前移（板卡可用、SDK/驱动/库版本已实测），但权重共享行为、许可分发与模型转换证据仍阻止相应发布验收。
+AC1 至 AC15 全部达成，并在开发机与 RK3568 目标板完成全栈门禁验证。父任务进入最终审阅与归档收官。
