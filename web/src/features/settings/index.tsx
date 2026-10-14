@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Outlet } from '@tanstack/react-router'
-import { Monitor, Bell, Palette, Wrench, UserCog, Network, Clock, HardDrive } from 'lucide-react'
+import { Palette, Network, Clock, HardDrive } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Separator } from '@/components/ui/separator'
 import { ConfigDrawer } from '@/components/config-drawer'
@@ -18,29 +18,9 @@ export function Settings() {
   const sidebarNavItems = useMemo(
     () => [
       {
-        title: t('nav.Profile', { defaultValue: 'Profile' }),
-        href: '/settings',
-        icon: <UserCog size={18} />,
-      },
-      {
-        title: t('nav.Account', { defaultValue: 'Account' }),
-        href: '/settings/account',
-        icon: <Wrench size={18} />,
-      },
-      {
         title: t('nav.Appearance', { defaultValue: 'Appearance' }),
         href: '/settings/appearance',
         icon: <Palette size={18} />,
-      },
-      {
-        title: t('nav.Notifications', { defaultValue: 'Notifications' }),
-        href: '/settings/notifications',
-        icon: <Bell size={18} />,
-      },
-      {
-        title: t('nav.Display', { defaultValue: 'Display' }),
-        href: '/settings/display',
-        icon: <Monitor size={18} />,
       },
       {
         title: t('nav.Network', { defaultValue: 'Network' }),
@@ -80,7 +60,7 @@ export function Settings() {
           <p className='text-muted-foreground'>
             {t('nav.settingsDesc', {
               defaultValue:
-                'Manage your account settings and set e-mail preferences.',
+                'Configure system appearance, network interfaces, clock, and storage lifecycle.',
             })}
           </p>
         </div>

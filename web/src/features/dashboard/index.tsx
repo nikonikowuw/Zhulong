@@ -1,3 +1,19 @@
+import { Link } from '@tanstack/react-router'
+import {
+  ArrowRight,
+  Clock,
+  HardDrive,
+  Monitor,
+  Network,
+  Palette,
+  ScrollText,
+  Server,
+  ShieldCheck,
+  UserCheck,
+  Video,
+} from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -6,26 +22,90 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfigDrawer } from '@/components/config-drawer'
 import { LanguageSwitch } from '@/components/language-switch'
 import { Header } from '@/components/layout/header'
 import { Main } from '@/components/layout/main'
-import { TopNav } from '@/components/layout/top-nav'
 import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
-import { Analytics } from './components/analytics'
-import { Overview } from './components/overview'
-import { RecentSales } from './components/recent-sales'
 
 export function Dashboard() {
+  const { t } = useTranslation()
+
+  const quickModules = [
+    {
+      title: t('nav.Cameras', { defaultValue: 'Cameras' }),
+      description: t('dashboard.camerasDesc', {
+        defaultValue: 'RTSP 摄像机流媒体接入、探活与通道管理',
+      }),
+      href: '/cameras',
+      icon: Video,
+      badge: '视频接入',
+    },
+    {
+      title: t('nav.LiveView', { defaultValue: 'Live View' }),
+      description: t('dashboard.liveDesc', {
+        defaultValue: '多路低延迟实时视频网格与 WebCodecs 流媒体监看',
+      }),
+      href: '/live',
+      icon: Monitor,
+      badge: '实时画面',
+    },
+    {
+      title: t('nav.Persons', { defaultValue: 'Persons' }),
+      description: t('dashboard.personsDesc', {
+        defaultValue: '人员底库管理、人脸图像导入与布控特征库维护',
+      }),
+      href: '/persons',
+      icon: UserCheck,
+      badge: '特征底库',
+    },
+    {
+      title: t('nav.AuditLogs', { defaultValue: 'Audit Logs' }),
+      description: t('dashboard.auditDesc', {
+        defaultValue: '系统级安全行为与关键运维操作全生命周期审计',
+      }),
+      href: '/audit',
+      icon: ScrollText,
+      badge: '运维安全',
+    },
+  ]
+
+  const systemSettings = [
+    {
+      title: t('nav.Network', { defaultValue: 'Network' }),
+      desc: t('dashboard.networkDesc', { defaultValue: '网卡配置与看门狗' }),
+      href: '/settings/network',
+      icon: Network,
+    },
+    {
+      title: t('nav.Storage', { defaultValue: 'Storage' }),
+      desc: t('dashboard.storageDesc', { defaultValue: '分区容量与自动清理' }),
+      href: '/settings/storage',
+      icon: HardDrive,
+    },
+    {
+      title: t('nav.Time', { defaultValue: 'Time & Clock' }),
+      desc: t('dashboard.timeDesc', { defaultValue: 'NTP 校时与时区维护' }),
+      href: '/settings/time',
+      icon: Clock,
+    },
+    {
+      title: t('nav.Appearance', { defaultValue: 'Appearance' }),
+      desc: t('dashboard.appearanceDesc', {
+        defaultValue: '深浅主题与视觉风格',
+      }),
+      href: '/settings/appearance',
+      icon: Palette,
+    },
+  ]
+
   return (
     <>
       {/* ===== Top Heading ===== */}
       <Header>
-        <TopNav links={topNav} className='me-auto' />
-        <Search />
+        <Search className='me-auto' />
         <LanguageSwitch />
         <ThemeSwitch />
         <ConfigDrawer />
@@ -34,187 +114,135 @@ export function Dashboard() {
 
       {/* ===== Main ===== */}
       <Main>
-        <div className='mb-2 flex items-center justify-between space-y-2'>
-          <h1 className='text-2xl font-bold tracking-tight'>Dashboard</h1>
-          <div className='flex items-center space-x-2'>
-            <Button>Download</Button>
+        <div className='mb-6 space-y-1'>
+          <div className='flex items-center gap-2'>
+            <h1 className='text-2xl font-bold tracking-tight md:text-3xl'>
+              {t('nav.Dashboard', { defaultValue: 'Dashboard' })}
+            </h1>
+            <Badge
+              variant='outline'
+              className='gap-1 border-primary/30 text-primary'
+            >
+              <ShieldCheck className='size-3.5' />
+              <span>Zhulong Edge</span>
+            </Badge>
           </div>
+          <p className='text-sm text-muted-foreground'>
+            {t('dashboard.subtitle', {
+              defaultValue:
+                '边缘智能运维管理控制台 — 本地优先、实时流媒体与算力加速宿主',
+            })}
+          </p>
         </div>
-        <Tabs
-          orientation='vertical'
-          defaultValue='overview'
-          className='space-y-4'
-        >
-          <div className='w-full overflow-x-auto pb-2'>
-            <TabsList>
-              <TabsTrigger value='overview'>Overview</TabsTrigger>
-              <TabsTrigger value='analytics'>Analytics</TabsTrigger>
-              <TabsTrigger value='reports' disabled>
-                Reports
-              </TabsTrigger>
-              <TabsTrigger value='notifications' disabled>
-                Notifications
-              </TabsTrigger>
-            </TabsList>
-          </div>
-          <TabsContent value='overview' className='space-y-4'>
-            <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-4'>
-              <Card>
-                <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
-                  <CardTitle className='text-sm font-medium'>
-                    Total Revenue
-                  </CardTitle>
-                  <svg
-                    xmlns='http://www.w3.org/2000/svg'
-                    viewBox='0 0 24 24'
-                    fill='none'
-                    stroke='currentColor'
-                    strokeLinecap='round'
-                    strokeLinejoin='round'
-                    strokeWidth='2'
-                    className='h-4 w-4 text-muted-foreground'
+
+        {/* 核心业务快速导航卡片 */}
+        <div className='grid gap-4 sm:grid-cols-2 lg:grid-cols-4'>
+          {quickModules.map((item) => (
+            <Card
+              key={item.href}
+              className='group relative flex flex-col justify-between overflow-hidden border-border/70 transition-all hover:border-primary/50 hover:shadow-md'
+            >
+              <CardHeader className='pb-3'>
+                <div className='flex items-center justify-between'>
+                  <div className='flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary'>
+                    <item.icon className='size-5' />
+                  </div>
+                  <Badge variant='secondary' className='text-xs font-normal'>
+                    {item.badge}
+                  </Badge>
+                </div>
+                <CardTitle className='pt-2 text-lg font-semibold group-hover:text-primary'>
+                  {item.title}
+                </CardTitle>
+                <CardDescription className='line-clamp-2 text-xs'>
+                  {item.description}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className='pt-0'>
+                <Button
+                  variant='ghost'
+                  size='sm'
+                  className='w-full justify-between px-2 text-xs'
+                  asChild
+                >
+                  <Link to={item.href}>
+                    <span>立即进入</span>
+                    <ArrowRight className='size-3.5 transition-transform group-hover:translate-x-1' />
+                  </Link>
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {/* 系统概况与快速设置 */}
+        <div className='mt-6 grid gap-6 md:grid-cols-2 lg:grid-cols-3'>
+          <Card className='md:col-span-2'>
+            <CardHeader>
+              <div className='flex items-center gap-2'>
+                <Server className='size-5 text-primary' />
+                <CardTitle className='text-base font-semibold'>
+                  系统快速配置
+                </CardTitle>
+              </div>
+              <CardDescription>
+                管理边缘网关的基础网络、存储配额、系统授时与界面外观
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className='grid gap-3 sm:grid-cols-2'>
+                {systemSettings.map((setting) => (
+                  <Link
+                    key={setting.href}
+                    to={setting.href}
+                    className='flex items-center gap-3 rounded-lg border border-border/60 p-3 transition-colors hover:border-border hover:bg-muted/50'
                   >
-                    <path d='M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6' />
-                  </svg>
-                </CardHeader>
-                <CardContent>
-                  <div className='text-2xl font-bold'>$45,231.89</div>
-                  <p className='text-xs text-muted-foreground'>
-                    +20.1% from last month
-                  </p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
-                  <CardTitle className='text-sm font-medium'>
-                    Subscriptions
-                  </CardTitle>
-                  <svg
-                    xmlns='http://www.w3.org/2000/svg'
-                    viewBox='0 0 24 24'
-                    fill='none'
-                    stroke='currentColor'
-                    strokeLinecap='round'
-                    strokeLinejoin='round'
-                    strokeWidth='2'
-                    className='h-4 w-4 text-muted-foreground'
-                  >
-                    <path d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2' />
-                    <circle cx='9' cy='7' r='4' />
-                    <path d='M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75' />
-                  </svg>
-                </CardHeader>
-                <CardContent>
-                  <div className='text-2xl font-bold'>+2350</div>
-                  <p className='text-xs text-muted-foreground'>
-                    +180.1% from last month
-                  </p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
-                  <CardTitle className='text-sm font-medium'>Sales</CardTitle>
-                  <svg
-                    xmlns='http://www.w3.org/2000/svg'
-                    viewBox='0 0 24 24'
-                    fill='none'
-                    stroke='currentColor'
-                    strokeLinecap='round'
-                    strokeLinejoin='round'
-                    strokeWidth='2'
-                    className='h-4 w-4 text-muted-foreground'
-                  >
-                    <rect width='20' height='14' x='2' y='5' rx='2' />
-                    <path d='M2 10h20' />
-                  </svg>
-                </CardHeader>
-                <CardContent>
-                  <div className='text-2xl font-bold'>+12,234</div>
-                  <p className='text-xs text-muted-foreground'>
-                    +19% from last month
-                  </p>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
-                  <CardTitle className='text-sm font-medium'>
-                    Active Now
-                  </CardTitle>
-                  <svg
-                    xmlns='http://www.w3.org/2000/svg'
-                    viewBox='0 0 24 24'
-                    fill='none'
-                    stroke='currentColor'
-                    strokeLinecap='round'
-                    strokeLinejoin='round'
-                    strokeWidth='2'
-                    className='h-4 w-4 text-muted-foreground'
-                  >
-                    <path d='M22 12h-4l-3 9L9 3l-3 9H2' />
-                  </svg>
-                </CardHeader>
-                <CardContent>
-                  <div className='text-2xl font-bold'>+573</div>
-                  <p className='text-xs text-muted-foreground'>
-                    +201 since last hour
-                  </p>
-                </CardContent>
-              </Card>
-            </div>
-            <div className='grid grid-cols-1 gap-4 lg:grid-cols-7'>
-              <Card className='col-span-1 lg:col-span-4'>
-                <CardHeader>
-                  <CardTitle>Overview</CardTitle>
-                </CardHeader>
-                <CardContent className='ps-2'>
-                  <Overview />
-                </CardContent>
-              </Card>
-              <Card className='col-span-1 lg:col-span-3'>
-                <CardHeader>
-                  <CardTitle>Recent Sales</CardTitle>
-                  <CardDescription>
-                    You made 265 sales this month.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <RecentSales />
-                </CardContent>
-              </Card>
-            </div>
-          </TabsContent>
-          <TabsContent value='analytics' className='space-y-4'>
-            <Analytics />
-          </TabsContent>
-        </Tabs>
+                    <div className='flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-foreground'>
+                      <setting.icon className='size-4' />
+                    </div>
+                    <div className='min-w-0 flex-1'>
+                      <div className='text-sm leading-none font-medium'>
+                        {setting.title}
+                      </div>
+                      <div className='mt-1 truncate text-xs text-muted-foreground'>
+                        {setting.desc}
+                      </div>
+                    </div>
+                    <ArrowRight className='size-4 text-muted-foreground' />
+                  </Link>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className='text-base font-semibold'>
+                宿主运行特性
+              </CardTitle>
+              <CardDescription>Zhulong 边缘架构规格</CardDescription>
+            </CardHeader>
+            <CardContent className='space-y-3 text-xs'>
+              <div className='flex items-center justify-between border-b pb-2'>
+                <span className='text-muted-foreground'>架构设计</span>
+                <span className='font-medium'>本地优先 (Local-First)</span>
+              </div>
+              <div className='flex items-center justify-between border-b pb-2'>
+                <span className='text-muted-foreground'>运行时环境</span>
+                <span className='font-medium'>Go + CGO 原生引擎</span>
+              </div>
+              <div className='flex items-center justify-between border-b pb-2'>
+                <span className='text-muted-foreground'>媒体处理</span>
+                <span className='font-medium'>硬件加速 + WebCodecs</span>
+              </div>
+              <div className='flex items-center justify-between'>
+                <span className='text-muted-foreground'>运维模式</span>
+                <span className='font-medium'>单机嵌入式运维</span>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </Main>
     </>
   )
 }
-
-const topNav = [
-  {
-    title: 'Overview',
-    href: 'dashboard/overview',
-    isActive: true,
-    disabled: false,
-  },
-  {
-    title: 'Customers',
-    href: 'dashboard/customers',
-    isActive: false,
-    disabled: true,
-  },
-  {
-    title: 'Products',
-    href: 'dashboard/products',
-    isActive: false,
-    disabled: true,
-  },
-  {
-    title: 'Settings',
-    href: 'dashboard/settings',
-    isActive: false,
-    disabled: true,
-  },
-]
