@@ -13,12 +13,19 @@ export const personSchema = z.object({
   id: z.string(),
   personId: z.string(),
   name: z.string(),
+  primaryFaceId: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   faces: z.array(faceSchema).optional().default([]),
 })
 
 export type Person = z.infer<typeof personSchema>
+
+export const setPrimaryFaceSchema = z.object({
+  faceId: z.string().min(1, 'validation.faceIdRequired'),
+})
+
+export type SetPrimaryFaceDto = z.infer<typeof setPrimaryFaceSchema>
 
 export const personListResponseSchema = z.object({
   items: z.array(personSchema),

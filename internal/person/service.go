@@ -134,6 +134,23 @@ func (s *Service) UpdatePerson(ctx context.Context, id string, req UpdatePersonR
 	return p, nil
 }
 
+// SetPrimaryFace updates a person's primary face pointer.
+func (s *Service) SetPrimaryFace(ctx context.Context, id, faceID string) (*Person, error) {
+	faceID = strings.TrimSpace(faceID)
+	if faceID == "" {
+		return nil, apperr.Invalid("FACE_ID_REQUIRED", "Face ID is required", nil)
+	}
+
+	if err := s.store.SetPrimaryFace(ctx, id, &faceID); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, apperr.NotFound("PERSON_OR_FACE_NOT_FOUND", "Person or face not found", err)
+		}
+		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to set primary face", err)
+	}
+
+	return s.store.GetPerson(ctx, id)
+}
+
 // DeletePerson deletes a person and their faces.
 func (s *Service) DeletePerson(ctx context.Context, id string) error {
 	faces, err := s.store.ListFacesByPerson(ctx, id)

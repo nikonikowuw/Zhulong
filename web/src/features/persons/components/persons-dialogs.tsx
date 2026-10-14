@@ -1,6 +1,7 @@
 import { PersonsActionDialog } from './persons-action-dialog'
 import { PersonsDeleteDialog } from './persons-delete-dialog'
 import { PersonsFacesDialog } from './persons-faces-dialog'
+import { PersonsImagePreviewDialog } from './persons-image-preview-dialog'
 
 export function PersonsDialogs() {
   return (
@@ -8,6 +9,7 @@ export function PersonsDialogs() {
       <PersonsActionDialog />
       <PersonsFacesDialog />
       <PersonsDeleteDialog />
+      <PersonsImagePreviewDialog />
     </>
   )
 }

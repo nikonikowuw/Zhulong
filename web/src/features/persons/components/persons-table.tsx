@@ -27,6 +27,7 @@ import {
 import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
 import { type Person } from '../data/schema'
 import { personsColumns as columns } from './persons-columns'
+import { PersonsDataTableBulkActions } from './persons-data-table-bulk-actions'
 import { usePersonsContext } from './persons-provider'
 
 interface PersonsTableProps {
@@ -252,6 +253,8 @@ export function PersonsTable({
       </div>
 
       <DataTablePagination table={table} />
+
+      <PersonsDataTableBulkActions table={table} />
     </div>
   )
 }

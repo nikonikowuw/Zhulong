@@ -147,3 +147,29 @@ export function useDeleteFace() {
     },
   })
 }
+
+/**
+ * 设置主人脸 Mutation
+ */
+export function useSetPrimaryFace() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({
+      personId,
+      faceId,
+    }: {
+      personId: string
+      faceId: string
+    }) => personsApi.setPrimaryFace(personId, faceId),
+    onSuccess: (_data, variables) => {
+      void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
+      void queryClient.invalidateQueries({
+        queryKey: [...PERSONS_QUERY_KEY, variables.personId, 'faces'],
+      })
+      void queryClient.invalidateQueries({
+        queryKey: [...PERSONS_QUERY_KEY, 'detail', variables.personId],
+      })
+    },
+  })
+}

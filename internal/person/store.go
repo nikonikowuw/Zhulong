@@ -219,7 +219,8 @@ func (s *Store) DeletePerson(ctx context.Context, id string) error {
 	return nil
 }
 
-// AddFace inserts a new Face template for a person.
+// AddFace inserts a new Face template for a person. If the person has no primary
+// face assigned, the new face is automatically designated as primary.
 func (s *Store) AddFace(ctx context.Context, face *Face) error {
 	if face == nil {
 		return errors.New("face is nil")
@@ -233,10 +234,28 @@ func (s *Store) AddFace(ctx context.Context, face *Face) error {
 	} else {
 		face.CreatedAt = face.CreatedAt.UTC()
 	}
-	if err := db.Create(face).Error; err != nil {
-		return fmt.Errorf("create face template: %w", err)
-	}
-	return nil
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(face).Error; err != nil {
+			return fmt.Errorf("create face template: %w", err)
+		}
+
+		// Proactively assign as primary face if person currently has none.
+		var p Person
+		if err := tx.Where("id = ?", face.OwnerRowID).First(&p).Error; err != nil {
+			return err
+		}
+		if p.PrimaryFaceID == nil || *p.PrimaryFaceID == "" {
+			now := time.Now().UTC()
+			if err := tx.Model(&Person{}).Where("id = ?", face.OwnerRowID).Updates(map[string]any{
+				"primary_face_id": face.ID,
+				"updated_at":      now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // GetFace fetches a face template by ID.
@@ -283,17 +302,98 @@ func (s *Store) ListAllFaces(ctx context.Context) ([]Face, error) {
 
 // DeleteFace deletes a specific face template, scoped to its owning person so
 // that a face cannot be removed through another person's path segment.
+// If the deleted face was the person's primary face, the earliest remaining
+// face is automatically promoted to primary, or primary_face_id is cleared if none remain.
 func (s *Store) DeleteFace(ctx context.Context, personID, id string) error {
 	db, err := s.db(ctx)
 	if err != nil {
 		return err
 	}
-	res := db.Where("id = ? AND person_id = ?", id, personID).Delete(&Face{})
-	if res.Error != nil {
-		return res.Error
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		var p Person
+		if err := tx.Where("id = ?", personID).First(&p).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		res := tx.Where("id = ? AND person_id = ?", id, personID).Delete(&Face{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrNotFound
+		}
+
+		// If the deleted face was the primary face, promote the next available or clear it.
+		if p.PrimaryFaceID != nil && *p.PrimaryFaceID == id {
+			var nextFace Face
+			now := time.Now().UTC()
+			err := tx.Where("person_id = ?", personID).Order("created_at ASC, id ASC").First(&nextFace).Error
+			if err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					// No more faces remain
+					if err := tx.Model(&Person{}).Where("id = ?", personID).Updates(map[string]any{
+						"primary_face_id": nil,
+						"updated_at":      now,
+					}).Error; err != nil {
+						return err
+					}
+				} else {
+					return err
+				}
+			} else {
+				// Promote earliest remaining face
+				if err := tx.Model(&Person{}).Where("id = ?", personID).Updates(map[string]any{
+					"primary_face_id": nextFace.ID,
+					"updated_at":      now,
+				}).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+// SetPrimaryFace updates a person's primary face pointer.
+// If faceID is non-nil and non-empty, it verifies that the face exists and belongs to personID.
+// If faceID is nil or empty, it clears the primary face pointer.
+func (s *Store) SetPrimaryFace(ctx context.Context, personID string, faceID *string) error {
+	db, err := s.db(ctx)
+	if err != nil {
+		return err
 	}
-	if res.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		var p Person
+		if err := tx.Where("id = ?", personID).First(&p).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		now := time.Now().UTC()
+		if faceID != nil && *faceID != "" {
+			var count int64
+			if err := tx.Model(&Face{}).Where("id = ? AND person_id = ?", *faceID, personID).Count(&count).Error; err != nil {
+				return err
+			}
+			if count == 0 {
+				return ErrNotFound
+			}
+			return tx.Model(&Person{}).Where("id = ?", personID).Updates(map[string]any{
+				"primary_face_id": *faceID,
+				"updated_at":      now,
+			}).Error
+		}
+
+		return tx.Model(&Person{}).Where("id = ?", personID).Updates(map[string]any{
+			"primary_face_id": nil,
+			"updated_at":      now,
+		}).Error
+	})
 }

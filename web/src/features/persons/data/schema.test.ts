@@ -3,6 +3,7 @@ import {
   createPersonSchema,
   personListResponseSchema,
   personSchema,
+  setPrimaryFaceSchema,
   updatePersonSchema,
 } from './schema'
 
@@ -20,7 +21,21 @@ describe('person schema validation', () => {
       expect(parsed.id).toBe('p-01')
       expect(parsed.personId).toBe('EMP001')
       expect(parsed.name).toBe('Alice')
+      expect(parsed.primaryFaceId).toBeUndefined()
       expect(parsed.faces).toEqual([])
+    })
+
+    it('parses person with primaryFaceId', () => {
+      const raw = {
+        id: 'p-01',
+        personId: 'EMP001',
+        name: 'Alice',
+        primaryFaceId: 'f-01',
+        createdAt: '2026-10-14T00:00:00Z',
+        updatedAt: '2026-10-14T00:00:00Z',
+      }
+      const parsed = personSchema.parse(raw)
+      expect(parsed.primaryFaceId).toBe('f-01')
     })
 
     it('parses person with populated faces', () => {
@@ -105,6 +120,18 @@ describe('person schema validation', () => {
       const res = updatePersonSchema.safeParse({
         name: '',
       })
+      expect(res.success).toBe(false)
+    })
+  })
+
+  describe('setPrimaryFaceSchema', () => {
+    it('accepts non-empty faceId', () => {
+      const res = setPrimaryFaceSchema.safeParse({ faceId: 'face_123' })
+      expect(res.success).toBe(true)
+    })
+
+    it('rejects empty faceId', () => {
+      const res = setPrimaryFaceSchema.safeParse({ faceId: '' })
       expect(res.success).toBe(false)
     })
   })

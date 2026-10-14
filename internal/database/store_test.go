@@ -453,3 +453,79 @@ func TestPersonsTablesMigrationUpAndDownSymmetry(t *testing.T) {
 		}
 	}
 }
+
+func TestPrimaryFaceIDMigrationUpAndDownSymmetry(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "migration_symmetry_8.db")
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", dbPath)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// 1. Run migrations up to 8
+	if err := migrator.Migrate(8); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(8): %v", err)
+	}
+
+	hasColumn := func() bool {
+		rows, err := db.Query("PRAGMA table_info(persons)")
+		if err != nil {
+			t.Fatalf("query table_info(persons): %v", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notnull, pk int
+			var dfltValue sql.NullString
+			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+				t.Fatalf("scan pragma row: %v", err)
+			}
+			if name == "primary_face_id" {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !hasColumn() {
+		t.Fatalf("expected primary_face_id column in persons table after Up(8)")
+	}
+
+	// 2. Rollback migration 8 (Down step 1)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator Steps(-1): %v", err)
+	}
+
+	if hasColumn() {
+		t.Fatalf("expected primary_face_id column to be removed after Steps(-1)")
+	}
+
+	// 3. Re-apply migration 8 (Up step 1)
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator Steps(1): %v", err)
+	}
+
+	if !hasColumn() {
+		t.Fatalf("expected primary_face_id column to be restored after re-Up(1)")
+	}
+}

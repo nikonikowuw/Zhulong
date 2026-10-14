@@ -1,12 +1,62 @@
 import { type ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
+import { Checkbox } from '@/components/ui/checkbox'
 import { DataTableColumnHeader } from '@/components/data-table'
 import { type Person } from '../data/schema'
-import { PersonsFacesCell } from './persons-columns-cells'
+import {
+  PersonAvatarCell,
+  PersonNameCell,
+  PersonsFacesCell,
+} from './persons-columns-cells'
 import { PersonsDataTableRowActions } from './persons-data-table-row-actions'
 
 export const personsColumns: ColumnDef<Person>[] = [
+  {
+    id: 'select',
+    header: ({ table }) => (
+      <Checkbox
+        checked={
+          table.getIsAllPageRowsSelected() ||
+          (table.getIsSomePageRowsSelected() && 'indeterminate')
+        }
+        onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
+        aria-label='Select all'
+        className='translate-y-0.5'
+      />
+    ),
+    meta: {
+      className: cn('inset-s-0 z-10 rounded-tl-[inherit] max-md:sticky w-10 text-center'),
+    },
+    cell: ({ row }) => (
+      <Checkbox
+        checked={row.getIsSelected()}
+        onCheckedChange={(value) => row.toggleSelected(!!value)}
+        aria-label='Select row'
+        className='translate-y-0.5'
+      />
+    ),
+    enableSorting: false,
+    enableHiding: false,
+  },
+  {
+    id: 'avatar',
+    header: ({ column }) => {
+      // eslint-disable-next-line react-hooks/rules-of-hooks
+      const { t } = useTranslation('persons')
+      return (
+        <DataTableColumnHeader
+          column={column}
+          title={t('table.columns.avatar')}
+        />
+      )
+    },
+    cell: ({ row }) => <PersonAvatarCell person={row.original} />,
+    enableSorting: false,
+    meta: {
+      className: 'w-16 text-center',
+    },
+  },
   {
     accessorKey: 'name',
     header: ({ column }) => {
@@ -19,16 +69,7 @@ export const personsColumns: ColumnDef<Person>[] = [
         />
       )
     },
-    cell: ({ row }) => {
-      return (
-        <div className='flex flex-col'>
-          <span className='font-medium text-foreground'>{row.original.name}</span>
-          <span className='font-mono text-[11px] text-muted-foreground'>
-            {row.original.id}
-          </span>
-        </div>
-      )
-    },
+    cell: ({ row }) => <PersonNameCell person={row.original} />,
     enableSorting: false,
   },
   {

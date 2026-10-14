@@ -865,3 +865,95 @@ func TestHandlerListPersonsSearch(t *testing.T) {
 		t.Fatalf("expected 0 results, got total=%d", respNone.Data.Total)
 	}
 }
+
+func TestHandler_SetPrimaryFace(t *testing.T) {
+	router, service, auditSvc := setupTestRouterWithAudit(t)
+	ctx := context.Background()
+
+	p, err := service.CreatePerson(ctx, person.CreatePersonRequest{Name: "Primary Tester"})
+	if err != nil {
+		t.Fatalf("create person: %v", err)
+	}
+
+	// Upload face 1 (auto becomes primary)
+	req1 := makeMultipartFaceRequest("/api/v1/persons/"+p.ID+"/faces", "face1.jpg", testJPEGBytes)
+	w1 := httptest.NewRecorder()
+	router.ServeHTTP(w1, req1)
+	if w1.Code != http.StatusCreated {
+		t.Fatalf("add face 1 failed: %d", w1.Code)
+	}
+	var resp1 struct {
+		Data person.Face `json:"data"`
+	}
+	_ = json.Unmarshal(w1.Body.Bytes(), &resp1)
+	face1ID := resp1.Data.ID
+
+	// Upload face 2
+	req2 := makeMultipartFaceRequest("/api/v1/persons/"+p.ID+"/faces", "face2.png", testPNGBytes)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusCreated {
+		t.Fatalf("add face 2 failed: %d", w2.Code)
+	}
+	var resp2 struct {
+		Data person.Face `json:"data"`
+	}
+	_ = json.Unmarshal(w2.Body.Bytes(), &resp2)
+	face2ID := resp2.Data.ID
+
+	// 1. Success: switch primary face to face 2
+	bodyJSON, _ := json.Marshal(person.SetPrimaryFaceRequest{FaceID: face2ID})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/persons/"+p.ID+"/primary-face", bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("set primary face failed with %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Data person.Person `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if resp.Data.PrimaryFaceID == nil || *resp.Data.PrimaryFaceID != face2ID {
+		t.Fatalf("expected PrimaryFaceID %q, got %v", face2ID, resp.Data.PrimaryFaceID)
+	}
+
+	// 2. Failure: non-existent face returns 404
+	fakeBody, _ := json.Marshal(person.SetPrimaryFaceRequest{FaceID: "non_existent"})
+	reqFake := httptest.NewRequest(http.MethodPut, "/api/v1/persons/"+p.ID+"/primary-face", bytes.NewReader(fakeBody))
+	reqFake.Header.Set("Content-Type", "application/json")
+	wFake := httptest.NewRecorder()
+	router.ServeHTTP(wFake, reqFake)
+	if wFake.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for non-existent face, got %d", wFake.Code)
+	}
+
+	// 3. Validation failure: missing faceId returns 422
+	emptyBody := []byte(`{}`)
+	reqEmpty := httptest.NewRequest(http.MethodPut, "/api/v1/persons/"+p.ID+"/primary-face", bytes.NewReader(emptyBody))
+	reqEmpty.Header.Set("Content-Type", "application/json")
+	wEmpty := httptest.NewRecorder()
+	router.ServeHTTP(wEmpty, reqEmpty)
+	if wEmpty.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for missing faceId, got %d", wEmpty.Code)
+	}
+
+	// 4. Verify audit log entry
+	entries := drainAudit(t, auditSvc)
+	var found bool
+	for _, e := range entries {
+		if e.Action == person.ActionPersonPrimaryFaceSet {
+			found = true
+			if e.Target != "person:"+p.ID {
+				t.Errorf("expected target 'person:%s', got %q", p.ID, e.Target)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected audit log for %s, got none in %+v", person.ActionPersonPrimaryFaceSet, entries)
+	}
+	_ = face1ID
+}

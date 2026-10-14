@@ -5,6 +5,7 @@
     "searchPlaceholder": "搜索人员姓名或工号...",
     "loadFailed": "加载人员档案失败，请检查网络或后端服务",
     "columns": {
+      "avatar": "人脸照片",
       "name": "姓名",
       "personId": "工号 / 唯一标识",
       "faceCount": "人脸底库",
@@ -28,8 +29,10 @@
     "deleteFace": "删除人脸",
     "cancel": "取消",
     "confirm": "确定",
+    "batchDelete": "批量删除",
     "saving": "保存中...",
-    "deleting": "删除中..."
+    "deleting": "删除中...",
+    "setPrimary": "设为主人脸"
   },
   "dialogs": {
     "createTitle": "新增人员档案",
@@ -43,7 +46,10 @@
     "addFaceTitle": "上传新人脸照片",
     "addFaceDesc": "选择或拖拽本地人脸清晰照片直接上传，系统将自动落盘并提取特征向量。",
     "deleteFaceTitle": "确认删除此人脸底库？",
-    "deleteFaceDesc": "此操作将从特征库中移除该张底库图片，不可恢复。"
+    "deleteFaceDesc": "此操作将从特征库中移除该张底库图片，不可恢复。",
+    "batchDeleteTitle": "确认批量删除 {{count}} 位人员？",
+    "batchDeleteDesc": "此操作将永久删除选中的 {{count}} 位人员档案，并级联清除其全部人脸底库与特征数据，不可恢复！",
+    "confirmDeletePrompt": "请输入「{{word}}」以确认高危操作："
   },
   "fields": {
     "name": "姓名",
@@ -57,6 +63,7 @@
     "removeSelected": "移除选中的照片",
     "uploadAndEnroll": "上传并录入人脸",
     "faceCountUnit": "{{count}} 张",
+    "primaryFace": "主人脸",
     "createdAt": "录入时间"
   },
   "status": {
@@ -67,13 +74,17 @@
     "createSuccess": "人员「{{name}}」创建成功",
     "updateSuccess": "人员「{{name}}」资料已更新",
     "deleteSuccess": "人员档案已删除",
+    "batchDeleteSuccess": "成功删除选中的 {{count}} 位人员档案",
+    "batchDeleteError": "批量删除失败",
     "addFaceSuccess": "人脸底库录入成功",
-    "deleteFaceSuccess": "人脸底库已移除"
+    "deleteFaceSuccess": "人脸底库已移除",
+    "setPrimarySuccess": "主人脸设置成功"
   },
   "validation": {
     "nameRequired": "请输入人员姓名",
     "fileRequired": "请选择要上传的人脸照片",
     "fileTooLarge": "图片大小超过 10MB 限制",
-    "invalidFileType": "只允许上传 JPG、PNG 或 WebP 格式图片"
+    "invalidFileType": "只允许上传 JPG、PNG 或 WebP 格式图片",
+    "faceIdRequired": "请指定人脸 ID"
   }
 }

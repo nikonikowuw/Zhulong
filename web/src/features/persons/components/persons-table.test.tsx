@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { type Person } from '../data/schema'
+import { PersonsDialogs } from './persons-dialogs'
 import { PersonsProvider } from './persons-provider'
 import { PersonsTable } from './persons-table'
 
@@ -22,6 +23,7 @@ const mockPersons: Person[] = [
     id: 'p_test_01',
     personId: 'EMP-001',
     name: 'Alice Cooper',
+    primaryFaceId: 'f_test_01',
     faces: [
       {
         id: 'f_test_01',
@@ -56,8 +58,69 @@ describe('PersonsTable', () => {
     )
 
     await expect.element(getByRole('table')).toBeInTheDocument()
+    await expect.element(getByRole('checkbox', { name: /Select all/i })).toBeInTheDocument()
+    await expect.element(getByText(/人脸照片/i)).toBeInTheDocument()
     await expect.element(getByText('Alice Cooper')).toBeInTheDocument()
     await expect.element(getByText('EMP-001')).toBeInTheDocument()
-    await expect.element(getByText('p_test_01')).toBeInTheDocument()
+  })
+
+  it('clicking face avatar triggers full-size image preview dialog', async () => {
+    const queryClient = new QueryClient()
+
+    const { getByRole, getByTitle } = await render(
+      <QueryClientProvider client={queryClient}>
+        <PersonsProvider>
+          <PersonsTable
+            data={mockPersons}
+            total={1}
+            isLoading={false}
+            isError={false}
+            onRetry={vi.fn()}
+            search={{}}
+            navigate={vi.fn()}
+          />
+          <PersonsDialogs />
+        </PersonsProvider>
+      </QueryClientProvider>
+    )
+
+    // 点击头像按钮
+    const avatarBtn = getByTitle('Alice Cooper')
+    await avatarBtn.click()
+
+    // 弹出大图预览弹窗，展示大图标题
+    await expect
+      .element(getByRole('heading', { name: 'Alice Cooper (f_test_01)' }))
+      .toBeInTheDocument()
+
+    // 此时人脸底库管理弹窗不应该被打开
+    expect(document.body.textContent).not.toContain('人脸底库管理')
+  })
+
+  it('selecting rows shows bulk actions toolbar with batch delete button', async () => {
+    const queryClient = new QueryClient()
+
+    const { getByRole } = await render(
+      <QueryClientProvider client={queryClient}>
+        <PersonsProvider>
+          <PersonsTable
+            data={mockPersons}
+            total={1}
+            isLoading={false}
+            isError={false}
+            onRetry={vi.fn()}
+            search={{}}
+            navigate={vi.fn()}
+          />
+        </PersonsProvider>
+      </QueryClientProvider>
+    )
+
+    const selectAllCheckbox = getByRole('checkbox', { name: /Select all/i })
+    await selectAllCheckbox.click()
+
+    // 批量操作栏出现，带有批量删除按钮
+    const batchDeleteBtn = getByRole('button', { name: /批量删除/i })
+    await expect.element(batchDeleteBtn).toBeInTheDocument()
   })
 })

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite 迁移与外键级联规范"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "后端 HTTP 响应信封与错误映射规范"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "前端特性切片与 React Query 状态管理规范"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "前端国际化字典与文案组织规范"}

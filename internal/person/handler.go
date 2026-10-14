@@ -36,6 +36,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.POST("", h.Create)
 		group.GET("/:id", h.Get)
 		group.PUT("/:id", h.Update)
+		group.PUT("/:id/primary-face", h.SetPrimaryFace)
 		group.DELETE("/:id", h.Delete)
 
 		// Face template sub-resources (一人多照)
@@ -300,4 +301,36 @@ func (h *Handler) DeleteFace(c *gin.Context) {
 		return
 	}
 	httputil.Success(c, gin.H{"deleted": true})
+}
+
+// SetPrimaryFace godoc
+// @Summary      Set primary face for a person
+// @Tags         person
+// @Accept       json
+// @Produce      json
+// @Param        id path string true "Person ID"
+// @Param        request body SetPrimaryFaceRequest true "Primary face payload"
+// @Success      200  {object}  httputil.Response{data=Person}
+// @Failure      400  {object}  httputil.Response
+// @Failure      404  {object}  httputil.Response
+// @Failure      422  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/{id}/primary-face [put]
+func (h *Handler) SetPrimaryFace(c *gin.Context) {
+	personID := c.Param("id")
+	audithttp.Tag(c, ActionPersonPrimaryFaceSet, "person:"+personID, "Set primary face for person "+personID)
+
+	var req SetPrimaryFaceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httputil.HandleBindError(c, err)
+		return
+	}
+
+	p, err := h.service.SetPrimaryFace(c.Request.Context(), personID, req.FaceID)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+
+	httputil.Success(c, p)
 }

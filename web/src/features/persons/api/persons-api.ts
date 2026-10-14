@@ -119,4 +119,15 @@ export const personsApi = {
       `/persons/${personId}/faces/${faceId}`
     )
   },
+
+  /**
+   * 设置指定人脸为主人脸
+   */
+  async setPrimaryFace(personId: string, faceId: string): Promise<Person> {
+    const resp = await apiClient.put<ApiResponse<Person>>(
+      `/persons/${personId}/primary-face`,
+      { faceId }
+    )
+    return resp.data.data
+  },
 }

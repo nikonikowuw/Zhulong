@@ -5,6 +5,7 @@
     "searchPlaceholder": "Search by name or personnel ID...",
     "loadFailed": "Failed to load personnel data. Please check connection.",
     "columns": {
+      "avatar": "Photo",
       "name": "Name",
       "personId": "Personnel ID",
       "faceCount": "Faces Enrolled",
@@ -28,8 +29,10 @@
     "deleteFace": "Delete Face",
     "cancel": "Cancel",
     "confirm": "Confirm",
+    "batchDelete": "Batch Delete",
     "saving": "Saving...",
-    "deleting": "Deleting..."
+    "deleting": "Deleting...",
+    "setPrimary": "Set Primary"
   },
   "dialogs": {
     "createTitle": "Add Personnel Profile",
@@ -43,7 +46,10 @@
     "addFaceTitle": "Upload Face Photo",
     "addFaceDesc": "Choose or drag-and-drop a clear face photo. The server will store it and extract features.",
     "deleteFaceTitle": "Delete Face Template?",
-    "deleteFaceDesc": "This template photo and its feature vector will be permanently removed."
+    "deleteFaceDesc": "This template photo and its feature vector will be permanently removed.",
+    "batchDeleteTitle": "Delete {{count}} Personnel?",
+    "batchDeleteDesc": "This action will permanently delete {{count}} personnel records and all associated face data. This cannot be undone.",
+    "confirmDeletePrompt": "Type '{{word}}' to confirm this destructive action:"
   },
   "fields": {
     "name": "Name",
@@ -57,6 +63,7 @@
     "removeSelected": "Remove Selected Photo",
     "uploadAndEnroll": "Upload and Enroll",
     "faceCountUnit": "{{count}} photo(s)",
+    "primaryFace": "Primary Face",
     "createdAt": "Enrolled At"
   },
   "status": {
@@ -67,13 +74,17 @@
     "createSuccess": "Person '{{name}}' created successfully",
     "updateSuccess": "Person '{{name}}' updated successfully",
     "deleteSuccess": "Person profile deleted",
+    "batchDeleteSuccess": "Successfully deleted {{count}} personnel",
+    "batchDeleteError": "Batch delete failed",
     "addFaceSuccess": "Face template enrolled successfully",
-    "deleteFaceSuccess": "Face template removed"
+    "deleteFaceSuccess": "Face template removed",
+    "setPrimarySuccess": "Primary face updated successfully"
   },
   "validation": {
     "nameRequired": "Name is required",
     "fileRequired": "Please select a photo to upload",
     "fileTooLarge": "File exceeds the 10MB limit",
-    "invalidFileType": "Only JPG, PNG or WebP images are allowed"
+    "invalidFileType": "Only JPG, PNG or WebP images are allowed",
+    "faceIdRequired": "Please specify a face ID"
   }
 }

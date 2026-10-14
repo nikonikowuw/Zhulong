@@ -35,6 +35,10 @@ vi.mock('../hooks/use-persons', () => ({
     mutateAsync: vi.fn(),
     isPending: false,
   }),
+  useSetPrimaryFace: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
 }))
 
 function TestComponent() {
@@ -78,8 +82,31 @@ describe('PersonsFacesDialog', () => {
       .element(getByText('alice_01.jpg'))
       .toBeInTheDocument()
 
+    // 默认首张人脸标记为主图
+    await expect
+      .element(getByText(/主人脸/i))
+      .toBeInTheDocument()
+
     await expect
       .element(getByText(/点击选择或将人脸照片拖拽至此处/i))
       .toBeInTheDocument()
+  })
+
+  it('renders face card with title and preview properly', async () => {
+    const queryClient = new QueryClient()
+
+    const { getByRole, getByTestId } = await render(
+      <QueryClientProvider client={queryClient}>
+        <PersonsProvider>
+          <TestComponent />
+        </PersonsProvider>
+      </QueryClientProvider>
+    )
+
+    const openBtn = getByRole('button', { name: /Open Faces/i })
+    await openBtn.click()
+
+    const cardElem = getByTestId('face-card')
+    await expect.element(cardElem).toBeInTheDocument()
   })
 })

@@ -378,3 +378,76 @@ func TestGetPersonMeta_SkipsFacePreload(t *testing.T) {
 		t.Errorf("expected ErrNotFound for an unknown id, got %v", err)
 	}
 }
+
+func TestStore_PrimaryFaceAutoPromotionAndFallback(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	p := &person.Person{ID: "p_primary", PersonID: "EMP_PRIMARY", Name: "王五"}
+	if err := store.CreatePerson(ctx, p); err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+
+	got, err := store.GetPerson(ctx, "p_primary")
+	if err != nil {
+		t.Fatalf("GetPerson failed: %v", err)
+	}
+	if got.PrimaryFaceID != nil {
+		t.Fatalf("expected nil PrimaryFaceID initially, got %v", *got.PrimaryFaceID)
+	}
+
+	// 1. Add first face: automatically promoted to primary
+	f1 := &person.Face{ID: "face_auto_1", OwnerRowID: "p_primary", FeatureVector: make([]byte, 2048)}
+	if err := store.AddFace(ctx, f1); err != nil {
+		t.Fatalf("AddFace 1 failed: %v", err)
+	}
+	got, _ = store.GetPerson(ctx, "p_primary")
+	if got.PrimaryFaceID == nil || *got.PrimaryFaceID != "face_auto_1" {
+		t.Fatalf("expected PrimaryFaceID 'face_auto_1', got %v", got.PrimaryFaceID)
+	}
+
+	// 2. Add second face: primary face remains unchanged
+	f2 := &person.Face{ID: "face_auto_2", OwnerRowID: "p_primary", FeatureVector: make([]byte, 2048)}
+	if err := store.AddFace(ctx, f2); err != nil {
+		t.Fatalf("AddFace 2 failed: %v", err)
+	}
+	got, _ = store.GetPerson(ctx, "p_primary")
+	if got.PrimaryFaceID == nil || *got.PrimaryFaceID != "face_auto_1" {
+		t.Fatalf("expected PrimaryFaceID to remain 'face_auto_1', got %v", got.PrimaryFaceID)
+	}
+
+	// 3. Explicitly switch primary face to face_auto_2
+	face2ID := "face_auto_2"
+	if err := store.SetPrimaryFace(ctx, "p_primary", &face2ID); err != nil {
+		t.Fatalf("SetPrimaryFace to face_auto_2 failed: %v", err)
+	}
+	got, _ = store.GetPerson(ctx, "p_primary")
+	if got.PrimaryFaceID == nil || *got.PrimaryFaceID != "face_auto_2" {
+		t.Fatalf("expected PrimaryFaceID to be 'face_auto_2', got %v", got.PrimaryFaceID)
+	}
+
+	// 4. Invalid faceID returns ErrNotFound
+	fakeID := "non_existent_face"
+	if err := store.SetPrimaryFace(ctx, "p_primary", &fakeID); !errors.Is(err, person.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for non existent face, got %v", err)
+	}
+
+	// 5. Delete face_auto_2 (the primary face): fallback to earliest face_auto_1
+	if err := store.DeleteFace(ctx, "p_primary", "face_auto_2"); err != nil {
+		t.Fatalf("DeleteFace failed: %v", err)
+	}
+	got, _ = store.GetPerson(ctx, "p_primary")
+	if got.PrimaryFaceID == nil || *got.PrimaryFaceID != "face_auto_1" {
+		t.Fatalf("expected fallback PrimaryFaceID to 'face_auto_1', got %v", got.PrimaryFaceID)
+	}
+
+	// 6. Delete remaining face: primary face cleared to nil
+	if err := store.DeleteFace(ctx, "p_primary", "face_auto_1"); err != nil {
+		t.Fatalf("DeleteFace 1 failed: %v", err)
+	}
+	got, _ = store.GetPerson(ctx, "p_primary")
+	if got.PrimaryFaceID != nil {
+		t.Fatalf("expected PrimaryFaceID to be nil when no faces remain, got %v", *got.PrimaryFaceID)
+	}
+}

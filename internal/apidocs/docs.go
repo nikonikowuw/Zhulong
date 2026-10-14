@@ -2045,6 +2045,82 @@ const docTemplate = `{
                 }
             }
         },
+        "/persons/{id}/primary-face": {
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "person"
+                ],
+                "summary": "Set primary face for a person",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Person ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Primary face payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/person.SetPrimaryFaceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/person.Person"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/system/network/confirm": {
             "post": {
                 "description": "Solidifies current trial configuration and disarms the watchdog timer. Accepts session authentication or one-time confirmation token.",
@@ -3732,7 +3808,21 @@ const docTemplate = `{
                     "description": "PersonID is the external business key consumed by third-party systems. It is\nmandatory, unique and immutable — see Store.CreatePerson / Store.UpdatePerson.",
                     "type": "string"
                 },
+                "primaryFaceId": {
+                    "type": "string"
+                },
                 "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "person.SetPrimaryFaceRequest": {
+            "type": "object",
+            "required": [
+                "faceId"
+            ],
+            "properties": {
+                "faceId": {
                     "type": "string"
                 }
             }

@@ -10,11 +10,12 @@ import (
 // queried by exact action string, so bare verbs like "CREATE" cannot be grouped or
 // filtered alongside the other domains.
 const (
-	ActionPersonCreate     = "person.create"
-	ActionPersonUpdate     = "person.update"
-	ActionPersonDelete     = "person.delete"
-	ActionPersonFaceAdd    = "person.face.add"
-	ActionPersonFaceDelete = "person.face.delete"
+	ActionPersonCreate         = "person.create"
+	ActionPersonUpdate         = "person.update"
+	ActionPersonDelete         = "person.delete"
+	ActionPersonFaceAdd        = "person.face.add"
+	ActionPersonFaceDelete     = "person.face.delete"
+	ActionPersonPrimaryFaceSet = "person.primary_face.set"
 )
 
 // Person represents a personnel profile entity in the personnel database.
@@ -22,10 +23,11 @@ type Person struct {
 	ID string `gorm:"primaryKey;column:id" json:"id"`
 	// PersonID is the external business key consumed by third-party systems. It is
 	// mandatory, unique and immutable — see Store.CreatePerson / Store.UpdatePerson.
-	PersonID  string    `gorm:"column:person_id;not null" json:"personId"`
-	Name      string    `gorm:"column:name;not null" json:"name"`
-	CreatedAt time.Time `gorm:"column:created_at;not null" json:"createdAt"`
-	UpdatedAt time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
+	PersonID      string    `gorm:"column:person_id;not null" json:"personId"`
+	Name          string    `gorm:"column:name;not null" json:"name"`
+	PrimaryFaceID *string   `gorm:"column:primary_face_id" json:"primaryFaceId,omitempty"`
+	CreatedAt     time.Time `gorm:"column:created_at;not null" json:"createdAt"`
+	UpdatedAt     time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
 	// Faces is a read-only projection populated by Preload. Write paths MUST go
 	// through AddFace / DeleteFace; never persist a Person with a populated
 	// Faces slice (see Store.UpdatePerson). The CASCADE below is declarative
@@ -76,6 +78,11 @@ type UpdatePersonRequest struct {
 // AddFaceRequest represents the multipart form payload to enroll a face template.
 type AddFaceRequest struct {
 	File *multipart.FileHeader `form:"file" binding:"required"`
+}
+
+// SetPrimaryFaceRequest represents the payload to set the primary face for a person.
+type SetPrimaryFaceRequest struct {
+	FaceID string `json:"faceId" binding:"required"`
 }
 
 // GallerySyncItem represents a serialized face embedding item for algorithm runner IPC.

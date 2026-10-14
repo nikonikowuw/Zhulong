@@ -156,4 +156,22 @@ describe('personsApi', () => {
     await personsApi.deleteFace('p-01', 'f-01')
     expect(spy).toHaveBeenCalledWith('/persons/p-01/faces/f-01')
   })
+
+  it('setPrimaryFace calls PUT /persons/:id/primary-face', async () => {
+    const updated = {
+      id: 'p-01',
+      personId: 'EMP001',
+      name: 'Alice',
+      primaryFaceId: 'f-02',
+      createdAt: '2026-10-14T00:00:00Z',
+      updatedAt: '2026-10-14T01:00:00Z',
+      faces: [],
+    }
+
+    const spy = vi.spyOn(apiClient, 'put').mockResolvedValueOnce(mockResponse(updated))
+
+    const res = await personsApi.setPrimaryFace('p-01', 'f-02')
+    expect(res).toEqual(updated)
+    expect(spy).toHaveBeenCalledWith('/persons/p-01/primary-face', { faceId: 'f-02' })
+  })
 })
