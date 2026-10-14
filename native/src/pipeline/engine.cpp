@@ -6,6 +6,7 @@
 #include "pipeline/engine.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <utility>
 #include <vector>
 

@@ -116,8 +116,10 @@ Exact C-compatible types/signatures live in the sole public header `engine.h`:
 
 ## 6. Tests Required
 
-`make native-test` runs 5 CTests: lifecycle, pure C ABI, capture units, loopback
-RTSP/RTP integration, build contract (12 Python cases). Assert H.264/H.265 metadata/
+`make native-test` runs 15 CTests: lifecycle, pure C ABI, plugin C ABI, algorithm
+runtime, algorithm runner, FrameBroker, verify CLI, capture units, frame lifecycle,
+decoder, JSON round-trip, runner JSON, plugin symbol visibility, loopback RTSP/RTP
+integration, and build contract (13 Python cases). Assert H.264/H.265 metadata/
 packet codec, TCP and UDP, time-base/PTS step, extradata >512 bytes, credential
 silence, one physical connection, actual grace cancellation/expiry, duplicate and
 conflict handling, concurrent consumers, callback reentry rejection, unsubscribe/
@@ -136,6 +138,31 @@ race; `make smoke` builds/runs the real host. The opt-in, exclusive-writer
 `python3 native/tests/verify_incremental.py --allow-source-edit` inserts and restores
 an ABI marker, checks it enters/exits the actual Go binary, and verifies unchanged
 FFmpeg hashes/mtimes and unaffected object files. Do not run it with another writer.
+
+### Stale-artifact false green (mandatory evidence)
+
+A passing `make native-test` is **not** evidence that newly added ABI or Engine code
+was compiled. CMake only rebuilds sources whose timestamps changed, so a pre-existing
+`build/native/host` can satisfy the test suite while the archive still lacks the new
+symbols. This actually happened: a commit claimed "`make native-test` 14/14" while
+`nm build/native/host/libZhulongEngine.a | grep -c Zhulong_stream_get_broker_path`
+returned **0**, because the archive and every test binary dated from the previous day.
+
+When a change touches `native/src/**` (especially `abi/engine.cpp`, the archive, or the
+C ABI), the verification must include **all three**:
+
+1. A clean rebuild: `rm -rf build/native/host` before `make native-test`.
+2. The CTest summary line (`100% tests passed, 0 tests failed out of N`).
+3. Archive symbol proof that the new code is actually linked:
+   ```bash
+   nm build/native/host/libZhulongEngine.a | grep -c '<new_symbol>'
+   ```
+   A count of `0` for a symbol the change introduced means the run was stale — the
+   suite passed without executing the new code. `T` (defined) plus a `.cold` (exception
+   path) entry is the expected shape for an exported C ABI function.
+
+Corollary: never treat `make native-build` as a substitute for `make native-test` —
+it compiles without running the suite, which is exactly the stale-green pattern.
 
 Inspect final executable ELF/NEEDED/version-info and archive member architecture.
 Target profile for RK3568 is verified in `native/profiles/rk3568.json` (Debian 11 bullseye,

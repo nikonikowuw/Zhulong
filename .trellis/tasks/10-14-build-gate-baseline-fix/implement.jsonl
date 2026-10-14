@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/native/index.md", "reason": "native 开发与验证基线、开发前检查清单（ABI 纯净性、异常防爆门、停机汇合）"}
+{"file": ".trellis/tasks/10-14-build-gate-baseline-fix/prd.md", "reason": "本任务需求 R1-R5 与验收标准 AC1-AC5"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "host/cross 构建合同、归档内容寻址、交叉只编译不执行、make native-test 基线"}
+{"file": ".trellis/tasks/10-14-build-gate-baseline-fix/implement.md", "reason": "阶段 A-C 清单、干净重建与符号证据要求"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "C ABI 边界、异常防爆门、单向依赖（include 修复不得越界）"}
+{"file": ".trellis/tasks/10-13-algo-broker-host/implement.md", "reason": "被阻塞的下游任务：其 AC 补齐依赖本任务的基线修复"}

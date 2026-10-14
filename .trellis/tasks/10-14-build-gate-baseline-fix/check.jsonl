@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "核对 host/cross 构建合同未被破坏、归档内容寻址仍各自独立"}
+{"file": ".trellis/spec/native/index.md", "reason": "核对开发前检查清单与 make native-test 基线"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "核对只补 include、未改动 C ABI 边界逻辑"}
+{"file": ".trellis/tasks/10-14-build-gate-baseline-fix/prd.md", "reason": "逐项核对 AC1-AC5，特别是「必须附符号证据证明非陈旧复用」"}
+{"file": ".trellis/tasks/10-14-build-gate-baseline-fix/implement.md", "reason": "核对阶段 A-C 清单与回退点；核对未顺手改 shm_pool.cpp 既有警告"}

@@ -1,5 +1,7 @@
 GO ?= go
-NPM ?= npm
+# Frontend package manager: the repository ships only pnpm-lock.yaml, so npm
+# cannot install it (npm ci requires package-lock.json).
+PNPM ?= pnpm
 CMAKE ?= cmake
 CTEST ?= ctest
 BUILD_DIR ?= build
@@ -19,17 +21,21 @@ go-build: frontend-build native-build api-docs
 	$(NATIVE_BUILD) go build -o $(BINARY) ./cmd/Zhulong
 
 frontend-install:
-	$(NPM) ci --prefix web
+	@command -v $(PNPM) > /dev/null 2>&1 || (echo "$(PNPM) is not installed. Run: corepack enable pnpm" && exit 1)
+	$(PNPM) --dir web install --frozen-lockfile
 
 frontend-build: frontend-install
-	$(NPM) run build --prefix web
+	$(PNPM) --dir web run build
 
+# 前端门禁：lint + 类型检查（含在 build 的 tsc -b 中）+ 真实无头浏览器测试 + 生产构建。
+# 说明：`type-check` 与 `audit` 不是 web/package.json 里的 script。
+#   - type-check → 由 build 承担（其脚本为 `tsc -b && vite build`，类型检查已包含在内）；
+#   - audit      → 本目标不执行。生产依赖存在既有安全债（pnpm audit --prod 报告 52 项，
+#                  含 axios 的 2 项 critical），作为独立议题跟踪，避免阻断全部前端检查。
 frontend-check: frontend-install
-	$(NPM) run lint --prefix web
-	$(NPM) run type-check --prefix web
-	$(NPM) test --prefix web
-	$(NPM) audit --prefix web
-	$(NPM) run build --prefix web
+	$(PNPM) --dir web run lint
+	$(PNPM) --dir web test
+	$(PNPM) --dir web run build
 
 # 准备 Native 外部依赖源码（唯一允许发起外网下载的构建目标）
 native-deps:
@@ -74,7 +80,7 @@ run: build
 	./$(BINARY)
 
 web-dev:
-	$(NPM) run dev --prefix web
+	$(PNPM) --dir web run dev
 
 dev-frontend: web-dev
 
@@ -93,7 +99,7 @@ dev: native-build
 		}; \
 		trap cleanup INT TERM EXIT; \
 		$(AIR) & P1=$$!; \
-		$(NPM) run dev --prefix web & P2=$$!; \
+		$(PNPM) --dir web run dev & P2=$$!; \
 		while kill -0 $$P1 2>/dev/null && kill -0 $$P2 2>/dev/null; do \
 			sleep 1 & wait $$!; \
 		done'

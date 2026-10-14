@@ -15,6 +15,7 @@
 #include "Zhulong/engine.h"
 #include "pipeline/engine.hpp"
 
+#include <cstring>
 #include <memory>
 #include <new>
 #include <utility>

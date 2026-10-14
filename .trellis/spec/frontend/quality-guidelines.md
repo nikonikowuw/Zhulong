@@ -16,6 +16,28 @@ pnpm build           # tsc -b 强类型编译 + Vite 生产打包
 pnpm test            # Vitest 浏览器无头模式测试 (--browser.headless via Playwright)
 ```
 
+### 1.1 与 `make frontend-check` 的对应关系
+
+仓库根 `Makefile` 的前端目标固定使用 **pnpm**（仓库只提供 `pnpm-lock.yaml`，`npm ci` 因缺
+`package-lock.json` 必然失败）。目标与上表的映射：
+
+| Makefile 目标 | 实际执行 | 说明 |
+| --- | --- | --- |
+| `make frontend-install` | `pnpm --dir web install --frozen-lockfile` | 先 `command -v pnpm` 显式探测，缺工具即失败（不静默跳过） |
+| `make frontend-build` | `pnpm --dir web run build` | 同上表的 `pnpm build` |
+| `make frontend-check` | `lint` + `test` + `build` | `type-check` **不是**独立 script：`build` 的 `tsc -b` 已含类型检查 |
+
+⚠️ **两条容易踩错的约束**：
+
+1. **`type-check` / `audit` 不是 `web/package.json` 的 script**。不要为了「对齐旧 Makefile」而新增空 script——
+   类型检查由 `build` 承担，`audit` 见下条。
+2. **`audit` 不在 `frontend-check` 内**。生产依赖存在既有安全债（`pnpm audit --prod` 曾报 52 项，
+   含 `axios` 的 critical），全量 `pnpm audit` 报 91 项。保留在门禁中会让整个前端检查永久变红，
+   从而掩盖 `lint`/`test`/`build` 的真实回归。安全审计作为独立议题跟踪，
+   **不得**把它当作「已通过」或「已接受」。
+
+⚠️ `pnpm` 的目录参数是 `--dir <DIR>`（或 `-C`），**不是** npm 的 `--prefix`。
+
 ---
 
 ## 2. 自动化测试规范 (Vitest + Playwright Browser Runner)
