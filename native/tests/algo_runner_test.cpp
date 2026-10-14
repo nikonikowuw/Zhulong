@@ -35,6 +35,7 @@ static zhulong_status_t load_plugin_table(const char* so_path, void** out_handle
 int main(int argc, char* argv[]) {
     const char* detector_so = (argc > 1) ? argv[1] : "./libMockDetector.so";
     const char* classifier_so = (argc > 2) ? argv[2] : "./libMockClassifier.so";
+    const char* person_structure_so = (argc > 3) ? argv[3] : "./libMockPersonStructure.so";
 
     // =========================================================================
     // 1. 验证目标检测插件 (MockDetector)
@@ -146,6 +147,80 @@ int main(int argc, char* argv[]) {
     api2.worker_destroy(worker_c);
     api2.model_destroy(model2);
     dlclose(handle2);
+
+    // =========================================================================
+    // 3. 验证结构化人体人脸插件 (MockPersonStructure)
+    // =========================================================================
+    void* handle3 = nullptr;
+    zhulong_plugin_api_v1 api3;
+    rc = load_plugin_table(person_structure_so, &handle3, &api3);
+    assert(rc == ZHULONG_PLUGIN_OK);
+    assert(api3.api_version == 1);
+    assert(std::strcmp(api3.plugin_name, "MockPersonStructure") == 0);
+
+    zhulong_model_group_h model3 = nullptr;
+    rc = api3.model_create("{}", &model3);
+    assert(rc == ZHULONG_PLUGIN_OK);
+
+    zhulong_worker_ctx_h worker_p = nullptr;
+    rc = api3.worker_create(model3, 0, &worker_p);
+    assert(rc == ZHULONG_PLUGIN_OK);
+
+    zhulong_task_ctx_h task_p = nullptr;
+    rc = api3.task_open(worker_p, 3001, &task_p);
+    assert(rc == ZHULONG_PLUGIN_OK);
+
+    zhulong_inference_result* res_p = nullptr;
+    rc = api3.process(task_p, &frame, &res_p);
+    assert(rc == ZHULONG_PLUGIN_OK && res_p != nullptr);
+    assert(res_p->result_type == ZHULONG_RESULT_TYPE_PERSON_STRUCTURE);
+    assert(res_p->count == 1);
+
+    auto* persons = static_cast<zhulong_person_item*>(res_p->data);
+    assert(persons[0].track_id == 1001);
+    assert(persons[0].body_box[0] == 0.10f);
+    assert(persons[0].body_box[1] == 0.15f);
+    assert(persons[0].body_box[2] == 0.50f);
+    assert(persons[0].body_box[3] == 0.85f);
+    assert(persons[0].body_score == 0.95f);
+    assert(persons[0].face_count == 1);
+    assert(persons[0].faces != nullptr);
+
+    const auto& face = persons[0].faces[0];
+    assert(face.box[0] == 0.15f);
+    assert(face.box[1] == 0.20f);
+    assert(face.box[2] == 0.35f);
+    assert(face.box[3] == 0.40f);
+    assert(face.quality == 0.88f);
+    assert(face.matched == 1);
+    assert(face.similarity == 0.92f);
+    assert(face.is_fused == 0);
+    assert(std::strcmp(face.person_id, "user_007") == 0);
+    assert(std::strcmp(face.person_name, "Alice") == 0);
+
+    // 验证 5 点 landmarks
+    assert(face.landmarks[0][0] == 0.20f && face.landmarks[0][1] == 0.25f);
+    assert(face.landmarks[1][0] == 0.30f && face.landmarks[1][1] == 0.25f);
+    assert(face.landmarks[2][0] == 0.25f && face.landmarks[2][1] == 0.30f);
+    assert(face.landmarks[3][0] == 0.22f && face.landmarks[3][1] == 0.35f);
+    assert(face.landmarks[4][0] == 0.28f && face.landmarks[4][1] == 0.35f);
+
+    // 验证 Top-K candidates
+    assert(face.candidate_count == 2);
+    assert(face.candidates != nullptr);
+    assert(std::strcmp(face.candidates[0].person_id, "user_007") == 0);
+    assert(std::strcmp(face.candidates[0].person_name, "Alice") == 0);
+    assert(face.candidates[0].similarity == 0.92f);
+    assert(std::strcmp(face.candidates[1].person_id, "user_008") == 0);
+    assert(std::strcmp(face.candidates[1].person_name, "Bob") == 0);
+    assert(face.candidates[1].similarity == 0.45f);
+
+    // 释放单块 Arena
+    api3.result_release(res_p);
+    api3.task_close(task_p);
+    api3.worker_destroy(worker_p);
+    api3.model_destroy(model3);
+    dlclose(handle3);
 
     std::cout << "All algorithm runner and sample plugin integration tests passed!" << std::endl;
     return 0;

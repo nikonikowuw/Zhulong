@@ -1,5 +1,6 @@
 #include <zhulong/plugin.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 
@@ -86,6 +87,21 @@ int main(void) {
     assert(sizeof(zhulong_inference_result) > 0);
     assert(sizeof(zhulong_plugin_api_v1) > 0);
 
+    /* 验证结构化结果常量与对齐 */
+    assert(ZHULONG_PERSON_ID_MAX_LEN == 64);
+    assert(ZHULONG_PERSON_NAME_MAX_LEN == 64);
+    assert(ZHULONG_FACE_LANDMARK_COUNT == 5);
+    assert(ZHULONG_RESULT_TYPE_PERSON_STRUCTURE == 3);
+
+    _Static_assert(sizeof(zhulong_face_candidate) == 136, "zhulong_face_candidate must be 136 bytes");
+    _Static_assert(sizeof(zhulong_face_candidate) % 8 == 0, "zhulong_face_candidate must be 8-byte aligned");
+
+    _Static_assert(sizeof(zhulong_face_item) == 216, "zhulong_face_item must be 216 bytes");
+    _Static_assert(sizeof(zhulong_face_item) % 8 == 0, "zhulong_face_item must be 8-byte aligned");
+
+    _Static_assert(sizeof(zhulong_person_item) == 40, "zhulong_person_item must be 40 bytes");
+    _Static_assert(sizeof(zhulong_person_item) % 8 == 0, "zhulong_person_item must be 8-byte aligned");
+
     /* 3. 验证 API 表填写与调用流程 */
     zhulong_plugin_api_v1 api;
     zhulong_status_t rc = mock_get_api(1, &api, sizeof(api));
@@ -128,6 +144,76 @@ int main(void) {
     api.task_close(task);
     api.worker_destroy(worker);
     api.model_destroy(model);
+
+    /* 4. 验证结构化结果在纯 C 边界下的单块 Arena 解构 */
+    {
+        /* 模拟分配 1 个人体 + 1 张人脸 + 1 个候选人的 Arena 连续内存块 */
+        size_t arena_size = sizeof(zhulong_person_item) + sizeof(zhulong_face_item) + sizeof(zhulong_face_candidate);
+        uint8_t* arena = (uint8_t*)malloc(arena_size);
+        assert(arena != NULL);
+        memset(arena, 0, arena_size);
+
+        zhulong_person_item* person = (zhulong_person_item*)arena;
+        zhulong_face_item* face = (zhulong_face_item*)(arena + sizeof(zhulong_person_item));
+        zhulong_face_candidate* candidate = (zhulong_face_candidate*)(arena + sizeof(zhulong_person_item) + sizeof(zhulong_face_item));
+
+        /* 填充候选人 */
+        strncpy(candidate->person_id, "user_001", sizeof(candidate->person_id) - 1);
+        strncpy(candidate->person_name, "Alice", sizeof(candidate->person_name) - 1);
+        candidate->similarity = 0.92f;
+
+        /* 填充人脸 */
+        face->box[0] = 0.1f;
+        face->box[1] = 0.2f;
+        face->box[2] = 0.4f;
+        face->box[3] = 0.5f;
+        face->quality = 0.88f;
+        face->landmarks[0][0] = 0.15f; face->landmarks[0][1] = 0.25f;
+        face->landmarks[1][0] = 0.35f; face->landmarks[1][1] = 0.25f;
+        face->landmarks[2][0] = 0.25f; face->landmarks[2][1] = 0.35f;
+        face->landmarks[3][0] = 0.18f; face->landmarks[3][1] = 0.45f;
+        face->landmarks[4][0] = 0.32f; face->landmarks[4][1] = 0.45f;
+        face->matched = 1;
+        face->similarity = 0.92f;
+        strncpy(face->person_id, "user_001", sizeof(face->person_id) - 1);
+        strncpy(face->person_name, "Alice", sizeof(face->person_name) - 1);
+        face->candidate_count = 1;
+        face->candidates = candidate;
+
+        /* 填充人体 (纯人脸退化模式) */
+        person->track_id = 0;
+        person->body_box[0] = face->box[0];
+        person->body_box[1] = face->box[1];
+        person->body_box[2] = face->box[2];
+        person->body_box[3] = face->box[3];
+        person->body_score = 1.0f;
+        person->face_count = 1;
+        person->faces = face;
+
+        /* 构造 zhulong_inference_result */
+        zhulong_inference_result res;
+        res.frame_id = 100;
+        res.task_id = 200;
+        res.result_type = ZHULONG_RESULT_TYPE_PERSON_STRUCTURE;
+        res.count = 1;
+        res.data = arena;
+        res.internal_token = arena;
+
+        /* 断言验证纯 C 读取 */
+        assert(res.result_type == ZHULONG_RESULT_TYPE_PERSON_STRUCTURE);
+        assert(res.count == 1);
+        const zhulong_person_item* p = (const zhulong_person_item*)res.data;
+        assert(p->face_count == 1);
+        assert(p->faces != NULL);
+        assert(p->faces[0].matched == 1);
+        assert(strcmp(p->faces[0].person_id, "user_001") == 0);
+        assert(strcmp(p->faces[0].person_name, "Alice") == 0);
+        assert(p->faces[0].candidate_count == 1);
+        assert(strcmp(p->faces[0].candidates[0].person_name, "Alice") == 0);
+
+        /* 单次 free 释放整个 Arena 树 */
+        free(res.internal_token);
+    }
 
     printf("Plugin C ABI tests passed successfully!\n");
     return 0;

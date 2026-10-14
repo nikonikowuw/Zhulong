@@ -293,10 +293,18 @@ target_include_directories(MockClassifier PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sd
 target_link_libraries(MockClassifier PRIVATE ZhulongAlgoRuntime)
 set_target_properties(MockClassifier PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 
+add_library(MockPersonStructure SHARED tests/plugins/mock_person_structure/mock_person_structure.cpp)
+target_compile_features(MockPersonStructure PUBLIC cxx_std_17)
+target_compile_definitions(MockPersonStructure PRIVATE ZHULONG_PLUGIN_BUILD)
+target_include_directories(MockPersonStructure PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MockPersonStructure PRIVATE ZhulongAlgoRuntime)
+set_target_properties(MockPersonStructure PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(PLUGIN_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/cmake/plugin-exports.map")
     target_link_options(MockDetector PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
     target_link_options(MockClassifier PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
+    target_link_options(MockPersonStructure PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
 endif()
 
 # ==============================================================================
@@ -333,7 +341,7 @@ if(BUILD_TESTING)
     target_compile_features(ZhulongAlgoRunnerTests PRIVATE cxx_std_17)
     target_include_directories(ZhulongAlgoRunnerTests PRIVATE sdk/include)
     target_link_libraries(ZhulongAlgoRunnerTests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
-    add_test(NAME ZhulongAlgoRunner COMMAND ZhulongAlgoRunnerTests $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier>)
+    add_test(NAME ZhulongAlgoRunner COMMAND ZhulongAlgoRunnerTests $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier> $<TARGET_FILE:MockPersonStructure>)
     set_tests_properties(ZhulongAlgoRunner PROPERTIES TIMEOUT 10)
 
     # FrameBroker 跨进程共享内存与租约集成测试
@@ -387,7 +395,7 @@ if(BUILD_TESTING)
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             add_test(NAME ZhulongPluginSymbolVisibility COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_plugin_symbols.py ${CMAKE_NM}
-                $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier>)
+                $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier> $<TARGET_FILE:MockPersonStructure>)
         endif()
         add_test(NAME ZhulongRtspIntegration COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/rtsp_fixture.py $<TARGET_FILE:ZhulongRtspTests>)

@@ -2,6 +2,17 @@ package algorithm
 
 import "time"
 
+// ResultType corresponds to native zhulong_result_type_t in zhulong/plugin.h.
+type ResultType int32
+
+const (
+	ResultTypeUnknown         ResultType = 0
+	ResultTypeDetection       ResultType = 1
+	ResultTypeClassification  ResultType = 2
+	ResultTypePersonStructure ResultType = 3
+	ResultTypeCustom          ResultType = 99
+)
+
 // DetectionItem represents a single detected object with normalized coordinates.
 // Box is [x1, y1, x2, y2] strictly normalized to [0.0, 1.0].
 type DetectionItem struct {

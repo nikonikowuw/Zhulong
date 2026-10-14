@@ -49,6 +49,24 @@ func findMockDetectorPlugin(t *testing.T) string {
 	return ""
 }
 
+func findMockPersonStructurePlugin(t *testing.T) string {
+	t.Helper()
+	candidates := []string{
+		"../../build/native/host/libMockPersonStructure.so",
+		"build/native/host/libMockPersonStructure.so",
+	}
+	for _, c := range candidates {
+		abs, err := filepath.Abs(c)
+		if err == nil {
+			if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
+				return abs
+			}
+		}
+	}
+	t.Skip("libMockPersonStructure.so not found, skipping dynamic runner test")
+	return ""
+}
+
 func TestVerifierMissingConventionFiles(t *testing.T) {
 	verifier := algorithm.NewVerifier("", "cpu")
 	ctx := context.Background()
@@ -336,7 +354,25 @@ func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
 		t.Errorf("expected ErrResultTypeMismatch, got: %v", err)
 	}
 
-	// 2. Matching manifest: detection!
+	// 2. Result type mismatch: detector plugin (result_type 1), but manifest says person_structure (expects 3)!
+	mismatchPersonManifest := algorithm.Manifest{
+		ID:        "mismatch_person_pkg",
+		Version:   "1.0.0",
+		Name:      "mismatch_person_package",
+		TaskType:  algorithm.TaskTypePersonStructure, // Mismatch with detector!
+		Category:  algorithm.CategorySafety,
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
+	}
+	mismatchPersonBytes, _ := json.Marshal(mismatchPersonManifest)
+	_ = os.WriteFile(filepath.Join(dir, "manifest.json"), mismatchPersonBytes, 0644)
+
+	_, _, _, err = verifier.VerifyDirectory(ctx, dir)
+	if !errors.Is(err, algorithm.ErrResultTypeMismatch) {
+		t.Errorf("expected ErrResultTypeMismatch for person_structure vs detector, got: %v", err)
+	}
+
+	// 3. Matching manifest: detection!
 	validManifest := algorithm.Manifest{
 		ID:        "valid_detector",
 		Version:   "1.0.0",
@@ -355,6 +391,37 @@ func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
 	}
 	if parsedManifest.ID != "valid_detector" {
 		t.Errorf("expected manifest ID valid_detector, got: %s", parsedManifest.ID)
+	}
+
+	// 4. Matching manifest: person_structure!
+	mockPersonPluginPath := findMockPersonStructurePlugin(t)
+	mockPersonPluginBytes, err := os.ReadFile(mockPersonPluginPath)
+	if err != nil {
+		t.Fatalf("read mock person plugin: %v", err)
+	}
+
+	personDir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(personDir, "plugin.so"), mockPersonPluginBytes, 0755)
+	_ = os.WriteFile(filepath.Join(personDir, "sample.jpg"), []byte("sample"), 0644)
+
+	validPersonManifest := algorithm.Manifest{
+		ID:        "valid_person_plugin",
+		Version:   "1.0.0",
+		Name:      "valid_person_plugin",
+		TaskType:  algorithm.TaskTypePersonStructure,
+		Category:  algorithm.CategorySafety,
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+		Resources: algorithm.ManifestResources{ComputeCost: 30, MemoryMB: 128},
+	}
+	validPersonBytes, _ := json.Marshal(validPersonManifest)
+	_ = os.WriteFile(filepath.Join(personDir, "manifest.json"), validPersonBytes, 0644)
+
+	parsedPersonManifest, _, _, err := verifier.VerifyDirectory(ctx, personDir)
+	if err != nil {
+		t.Fatalf("VerifyDirectory with real runner for person_structure failed: %v", err)
+	}
+	if parsedPersonManifest.ID != "valid_person_plugin" {
+		t.Errorf("expected manifest ID valid_person_plugin, got: %s", parsedPersonManifest.ID)
 	}
 }
 

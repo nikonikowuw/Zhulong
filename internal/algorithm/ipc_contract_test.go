@@ -14,6 +14,84 @@ import (
 // wire contract. The Go constants must stay aligned with it.
 const nativeIpcProtocolRelPath = "native/src/algorithm/ipc/ipc_protocol.hpp"
 
+// nativePluginHeaderRelPath is the native single source of truth for the Plugin C ABI.
+const nativePluginHeaderRelPath = "native/sdk/include/zhulong/plugin.h"
+
+// TestPluginContractMatchesNativeHeader cross-checks result_type enums and
+// string/dimension constraints between zhulong/plugin.h and Go ResultType.
+func TestPluginContractMatchesNativeHeader(t *testing.T) {
+	path := findNativeHeader(t, nativePluginHeaderRelPath)
+	if path == "" {
+		t.Skipf("%s not found, skipping cross-language Plugin contract test", nativePluginHeaderRelPath)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read native plugin header: %v", err)
+	}
+	content := string(raw)
+
+	checkDefineConst(t, content, "ZHULONG_PERSON_ID_MAX_LEN", 64)
+	checkDefineConst(t, content, "ZHULONG_PERSON_NAME_MAX_LEN", 64)
+	checkDefineConst(t, content, "ZHULONG_FACE_LANDMARK_COUNT", 5)
+
+	checkEnumConst(t, content, "ZHULONG_RESULT_TYPE_UNKNOWN", uint64(algorithm.ResultTypeUnknown))
+	checkEnumConst(t, content, "ZHULONG_RESULT_TYPE_DETECTION", uint64(algorithm.ResultTypeDetection))
+	checkEnumConst(t, content, "ZHULONG_RESULT_TYPE_CLASSIFICATION", uint64(algorithm.ResultTypeClassification))
+	checkEnumConst(t, content, "ZHULONG_RESULT_TYPE_PERSON_STRUCTURE", uint64(algorithm.ResultTypePersonStructure))
+	checkEnumConst(t, content, "ZHULONG_RESULT_TYPE_CUSTOM", uint64(algorithm.ResultTypeCustom))
+}
+
+func findNativeHeader(t *testing.T, relPath string) string {
+	t.Helper()
+	candidates := []string{
+		filepath.Join("..", "..", relPath),
+		relPath,
+	}
+	for _, c := range candidates {
+		abs, err := filepath.Abs(c)
+		if err != nil {
+			continue
+		}
+		if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
+			return abs
+		}
+	}
+	return ""
+}
+
+func checkDefineConst(t *testing.T, content, name string, want uint64) {
+	t.Helper()
+	re := regexp.MustCompile(`#define\s+` + regexp.QuoteMeta(name) + `\s+([0-9]+)`)
+	m := re.FindStringSubmatch(content)
+	if m == nil {
+		t.Fatalf("native header does not define %s", name)
+	}
+	got, err := strconv.ParseUint(m[1], 10, 64)
+	if err != nil {
+		t.Fatalf("cannot parse %s value %q: %v", name, m[1], err)
+	}
+	if got != want {
+		t.Errorf("%s drift: native=%d, Go=%d", name, got, want)
+	}
+}
+
+func checkEnumConst(t *testing.T, content, name string, want uint64) {
+	t.Helper()
+	re := regexp.MustCompile(regexp.QuoteMeta(name) + `\s*=\s*([0-9]+)`)
+	m := re.FindStringSubmatch(content)
+	if m == nil {
+		t.Fatalf("native header does not declare enum %s", name)
+	}
+	got, err := strconv.ParseUint(m[1], 10, 64)
+	if err != nil {
+		t.Fatalf("cannot parse enum %s value %q: %v", name, m[1], err)
+	}
+	if got != want {
+		t.Errorf("enum %s drift: native=%d, Go=%d", name, got, want)
+	}
+}
+
 // TestIpcContractMatchesNativeHeader parses the native header and cross-checks
 // IPC_MAGIC / IPC_VERSION / MAX_IPC_PAYLOAD_SIZE against the Go constants.
 // This is the cheap guardrail against the enum/constant drift that already
@@ -22,7 +100,7 @@ const nativeIpcProtocolRelPath = "native/src/algorithm/ipc/ipc_protocol.hpp"
 // The test skips when the native source tree is absent (e.g. cross-compiled or
 // source-stripped test environments) so it never becomes a brittle dependency.
 func TestIpcContractMatchesNativeHeader(t *testing.T) {
-	path := findNativeIpcHeader(t)
+	path := findNativeHeader(t, nativeIpcProtocolRelPath)
 	if path == "" {
 		t.Skipf("%s not found, skipping cross-language IPC contract test", nativeIpcProtocolRelPath)
 	}
@@ -36,24 +114,6 @@ func TestIpcContractMatchesNativeHeader(t *testing.T) {
 	checkUint32Const(t, content, "IPC_MAGIC", uint64(algorithm.IpcMagic))
 	checkUint32Const(t, content, "IPC_VERSION", uint64(algorithm.IpcVersion))
 	checkUint32Const(t, content, "MAX_IPC_PAYLOAD_SIZE", uint64(algorithm.MaxIpcPayloadSize))
-}
-
-func findNativeIpcHeader(t *testing.T) string {
-	t.Helper()
-	candidates := []string{
-		filepath.Join("..", "..", nativeIpcProtocolRelPath),
-		nativeIpcProtocolRelPath,
-	}
-	for _, c := range candidates {
-		abs, err := filepath.Abs(c)
-		if err != nil {
-			continue
-		}
-		if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
-			return abs
-		}
-	}
-	return ""
 }
 
 // checkUint32Const extracts `constexpr uint32_t NAME = <expr>;` (or uint16_t)

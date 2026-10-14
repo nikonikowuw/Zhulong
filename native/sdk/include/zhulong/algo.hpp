@@ -48,6 +48,40 @@ struct Classification {
     std::string label;
 };
 
+// 识别候选人
+struct FaceCandidate {
+    std::string person_id;
+    std::string person_name;
+    float similarity{0.0f};
+};
+
+// 关键点
+struct Landmark {
+    float x{0.0f};
+    float y{0.0f};
+};
+
+// 单张人脸项
+struct FaceItem {
+    float box[4]{0.0f, 0.0f, 0.0f, 0.0f}; /* [x1, y1, x2, y2] 归一化坐标 */
+    float quality{0.0f};
+    std::vector<Landmark> landmarks;      /* 5 点关键点 */
+    bool matched{false};
+    float similarity{0.0f};
+    bool is_fused{false};
+    std::string person_id;
+    std::string person_name;
+    std::vector<FaceCandidate> candidates;
+};
+
+// 结构化人体项
+struct PersonItem {
+    int64_t track_id{0};
+    float body_box[4]{0.0f, 0.0f, 0.0f, 0.0f}; /* [x1, y1, x2, y2] 归一化坐标 */
+    float body_score{0.0f};
+    std::vector<FaceItem> faces;
+};
+
 // 推理会话 (单 Worker 独占执行)
 class Session {
 public:
@@ -148,6 +182,13 @@ inline std::vector<Detection> nms(const std::vector<Detection>& detections, floa
 namespace zhulong {
 namespace detail {
 
+static_assert(sizeof(zhulong_face_candidate) == 136, "zhulong_face_candidate must be 136 bytes");
+static_assert(sizeof(zhulong_face_candidate) % 8 == 0, "zhulong_face_candidate must be 8-byte aligned");
+static_assert(sizeof(zhulong_face_item) == 216, "zhulong_face_item must be 216 bytes");
+static_assert(sizeof(zhulong_face_item) % 8 == 0, "zhulong_face_item must be 8-byte aligned");
+static_assert(sizeof(zhulong_person_item) == 40, "zhulong_person_item must be 40 bytes");
+static_assert(sizeof(zhulong_person_item) % 8 == 0, "zhulong_person_item must be 8-byte aligned");
+
 struct DetectionResultAdapter {
     using item_type = zhulong_bbox;
     static constexpr zhulong_result_type_t result_type = ZHULONG_RESULT_TYPE_DETECTION;
@@ -167,6 +208,28 @@ struct DetectionResultAdapter {
         destination.class_id = source.class_id;
         std::strncpy(destination.label, source.label.c_str(), sizeof(destination.label) - 1);
     }
+
+    template<typename PluginClass>
+    static void pack(PluginClass& plugin, Session& session, const Image& image,
+                     zhulong_inference_result& out) {
+        auto values = infer(plugin, session, image);
+        out.count = static_cast<uint32_t>(values.size());
+        if (values.empty()) {
+            out.data = nullptr;
+            out.internal_token = nullptr;
+            return;
+        }
+        auto items = std::make_unique<item_type[]>(values.size());
+        for (size_t i = 0; i < values.size(); ++i) {
+            serialize(values[i], items[i]);
+        }
+        out.data = items.get();
+        out.internal_token = items.release();
+    }
+
+    static void release(void* token) {
+        delete[] static_cast<item_type*>(token);
+    }
 };
 
 struct ClassificationResultAdapter {
@@ -183,6 +246,150 @@ struct ClassificationResultAdapter {
         destination.class_id = source.class_id;
         destination.confidence = source.confidence;
         std::strncpy(destination.label, source.label.c_str(), sizeof(destination.label) - 1);
+    }
+
+    template<typename PluginClass>
+    static void pack(PluginClass& plugin, Session& session, const Image& image,
+                     zhulong_inference_result& out) {
+        auto values = infer(plugin, session, image);
+        out.count = static_cast<uint32_t>(values.size());
+        if (values.empty()) {
+            out.data = nullptr;
+            out.internal_token = nullptr;
+            return;
+        }
+        auto items = std::make_unique<item_type[]>(values.size());
+        for (size_t i = 0; i < values.size(); ++i) {
+            serialize(values[i], items[i]);
+        }
+        out.data = items.get();
+        out.internal_token = items.release();
+    }
+
+    static void release(void* token) {
+        delete[] static_cast<item_type*>(token);
+    }
+};
+
+struct PersonStructureResultAdapter {
+    using item_type = zhulong_person_item;
+    static constexpr zhulong_result_type_t result_type = ZHULONG_RESULT_TYPE_PERSON_STRUCTURE;
+
+    template<typename PluginClass>
+    static std::vector<PersonItem> infer(PluginClass& plugin, Session& session, const Image& image) {
+        return plugin.detect_persons(session, image);
+    }
+
+    template<typename PluginClass>
+    static void pack(PluginClass& plugin, Session& session, const Image& image,
+                     zhulong_inference_result& out) {
+        auto persons = infer(plugin, session, image);
+        size_t n_persons = persons.size();
+        size_t n_faces = 0;
+        size_t n_candidates = 0;
+
+        for (const auto& p : persons) {
+            n_faces += p.faces.size();
+            for (const auto& f : p.faces) {
+                n_candidates += f.candidates.size();
+            }
+        }
+
+        if (n_persons == 0) {
+            out.count = 0;
+            out.data = nullptr;
+            out.internal_token = nullptr;
+            return;
+        }
+
+        size_t persons_bytes = n_persons * sizeof(zhulong_person_item);
+        size_t faces_bytes = n_faces * sizeof(zhulong_face_item);
+        size_t candidates_bytes = n_candidates * sizeof(zhulong_face_candidate);
+        size_t total_bytes = persons_bytes + faces_bytes + candidates_bytes;
+
+        uint8_t* arena = static_cast<uint8_t*>(std::malloc(total_bytes));
+        if (!arena) {
+            throw std::bad_alloc();
+        }
+        std::memset(arena, 0, total_bytes);
+
+        auto* out_persons = reinterpret_cast<zhulong_person_item*>(arena);
+        auto* out_faces = reinterpret_cast<zhulong_face_item*>(arena + persons_bytes);
+        auto* out_candidates = reinterpret_cast<zhulong_face_candidate*>(arena + persons_bytes + faces_bytes);
+
+        size_t face_idx = 0;
+        size_t cand_idx = 0;
+
+        for (size_t i = 0; i < n_persons; ++i) {
+            const auto& src_p = persons[i];
+            auto& dst_p = out_persons[i];
+
+            dst_p.track_id = src_p.track_id;
+            dst_p.body_box[0] = src_p.body_box[0];
+            dst_p.body_box[1] = src_p.body_box[1];
+            dst_p.body_box[2] = src_p.body_box[2];
+            dst_p.body_box[3] = src_p.body_box[3];
+            dst_p.body_score = src_p.body_score;
+            dst_p.face_count = static_cast<uint32_t>(src_p.faces.size());
+
+            if (dst_p.face_count > 0) {
+                dst_p.faces = &out_faces[face_idx];
+                for (size_t j = 0; j < src_p.faces.size(); ++j) {
+                    const auto& src_f = src_p.faces[j];
+                    auto& dst_f = out_faces[face_idx++];
+
+                    dst_f.box[0] = src_f.box[0];
+                    dst_f.box[1] = src_f.box[1];
+                    dst_f.box[2] = src_f.box[2];
+                    dst_f.box[3] = src_f.box[3];
+                    dst_f.quality = src_f.quality;
+
+                    size_t n_lm = std::min<size_t>(src_f.landmarks.size(), ZHULONG_FACE_LANDMARK_COUNT);
+                    for (size_t k = 0; k < n_lm; ++k) {
+                        dst_f.landmarks[k][0] = src_f.landmarks[k].x;
+                        dst_f.landmarks[k][1] = src_f.landmarks[k].y;
+                    }
+
+                    dst_f.matched = src_f.matched ? 1 : 0;
+                    dst_f.similarity = src_f.similarity;
+                    dst_f.is_fused = src_f.is_fused ? 1 : 0;
+
+                    std::strncpy(dst_f.person_id, src_f.person_id.c_str(), sizeof(dst_f.person_id) - 1);
+                    dst_f.person_id[sizeof(dst_f.person_id) - 1] = '\0';
+                    std::strncpy(dst_f.person_name, src_f.person_name.c_str(), sizeof(dst_f.person_name) - 1);
+                    dst_f.person_name[sizeof(dst_f.person_name) - 1] = '\0';
+
+                    dst_f.candidate_count = static_cast<uint32_t>(src_f.candidates.size());
+                    if (dst_f.candidate_count > 0) {
+                        dst_f.candidates = &out_candidates[cand_idx];
+                        for (size_t k = 0; k < src_f.candidates.size(); ++k) {
+                            const auto& src_c = src_f.candidates[k];
+                            auto& dst_c = out_candidates[cand_idx++];
+
+                            std::strncpy(dst_c.person_id, src_c.person_id.c_str(), sizeof(dst_c.person_id) - 1);
+                            dst_c.person_id[sizeof(dst_c.person_id) - 1] = '\0';
+                            std::strncpy(dst_c.person_name, src_c.person_name.c_str(), sizeof(dst_c.person_name) - 1);
+                            dst_c.person_name[sizeof(dst_c.person_name) - 1] = '\0';
+                            dst_c.similarity = src_c.similarity;
+                        }
+                    } else {
+                        dst_f.candidates = nullptr;
+                    }
+                }
+            } else {
+                dst_p.faces = nullptr;
+            }
+        }
+
+        out.count = static_cast<uint32_t>(n_persons);
+        out.data = out_persons;
+        out.internal_token = arena;
+    }
+
+    static void release(void* token) {
+        if (token) {
+            std::free(token);
+        }
     }
 };
 
@@ -273,25 +480,15 @@ struct PluginApi {
         try {
             auto* task_context = reinterpret_cast<TaskContext*>(task);
             Image image(*frame);
-            auto values = ResultAdapter::infer(*task_context->worker->model_group->plugin,
-                                               task_context->worker->session, image);
             auto result = std::make_unique<zhulong_inference_result>();
             result->frame_id = frame->frame_id;
             result->task_id = task_context->task_id;
             result->result_type = ResultAdapter::result_type;
-            result->count = static_cast<uint32_t>(values.size());
 
-            std::unique_ptr<typename ResultAdapter::item_type[]> items;
-            if (!values.empty()) {
-                items = std::make_unique<typename ResultAdapter::item_type[]>(values.size());
-                for (size_t i = 0; i < values.size(); ++i) {
-                    ResultAdapter::serialize(values[i], items[i]);
-                }
-            }
-            result->data = items.get();
-            result->internal_token = items.get();
+            ResultAdapter::pack(*task_context->worker->model_group->plugin,
+                                task_context->worker->session, image, *result);
+
             *out_result = result.release();
-            items.release();
             return ZHULONG_PLUGIN_OK;
         } catch (...) {
             return ZHULONG_PLUGIN_ERR_INTERNAL;
@@ -301,7 +498,7 @@ struct PluginApi {
     static void result_release(zhulong_inference_result* result) {
         if (!result) return;
         try {
-            delete[] static_cast<typename ResultAdapter::item_type*>(result->internal_token);
+            ResultAdapter::release(result->internal_token);
             delete result;
         } catch (...) {}
     }
@@ -351,5 +548,9 @@ extern "C" ZHULONG_PLUGIN_EXPORT zhulong_status_t zhulong_plugin_get_api( \
 #define ZHULONG_REGISTER_CLASSIFIER_PLUGIN(PluginClass, PluginNameStr, PluginVersionStr) \
     ZHULONG_REGISTER_PLUGIN_WITH_ADAPTER(PluginClass, PluginNameStr, PluginVersionStr, \
                                          ::zhulong::detail::ClassificationResultAdapter)
+
+#define ZHULONG_REGISTER_PERSON_STRUCTURE_PLUGIN(PluginClass, PluginNameStr, PluginVersionStr) \
+    ZHULONG_REGISTER_PLUGIN_WITH_ADAPTER(PluginClass, PluginNameStr, PluginVersionStr, \
+                                         ::zhulong::detail::PersonStructureResultAdapter)
 
 #endif /* ZHULONG_ALGO_HPP */

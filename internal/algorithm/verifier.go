@@ -243,16 +243,18 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, pluginPath, sampl
 	}
 
 	// Cross-check result_type against manifest task_type:
-	// result_type: 1 -> detection / person_structure
-	// result_type: 2 -> classification
 	switch taskType {
-	case TaskTypeDetection, TaskTypePersonStructure:
-		if report.ResultType != 1 {
-			return fmt.Errorf("%w: expected result_type 1 for %s, got %d", ErrResultTypeMismatch, taskType, report.ResultType)
+	case TaskTypeDetection:
+		if report.ResultType != int(ResultTypeDetection) {
+			return fmt.Errorf("%w: expected result_type %d for %s, got %d", ErrResultTypeMismatch, ResultTypeDetection, taskType, report.ResultType)
 		}
 	case TaskTypeClassification:
-		if report.ResultType != 2 {
-			return fmt.Errorf("%w: expected result_type 2 for %s, got %d", ErrResultTypeMismatch, taskType, report.ResultType)
+		if report.ResultType != int(ResultTypeClassification) {
+			return fmt.Errorf("%w: expected result_type %d for %s, got %d", ErrResultTypeMismatch, ResultTypeClassification, taskType, report.ResultType)
+		}
+	case TaskTypePersonStructure:
+		if report.ResultType != int(ResultTypePersonStructure) {
+			return fmt.Errorf("%w: expected result_type %d for %s, got %d", ErrResultTypeMismatch, ResultTypePersonStructure, taskType, report.ResultType)
 		}
 	}
 

@@ -60,13 +60,13 @@
 
 ## Acceptance Criteria
 
-- [ ] ABI 方案在 `design.md` 中定案并给出兼容性分析（旧插件在新 runner / 新插件在旧 runner 的行为）。
-- [ ] `plugin.h` 中的新结构有 `static_assert` 校验尺寸与对齐（沿用现有风格）。
-- [ ] `algo.hpp` 提供结构化适配器 + 注册宏，并有至少一个可编译的示例（可复用 mock 插件模式）。
-- [ ] 原生侧 CTest 覆盖：结构化结果能通过 C ABI 往返，字段完整、无内存泄漏（ASan 干净）。
-- [ ] `verifier.go` 不再把 `person_structure` 与 `detection` 混为一谈；映射有测试。
-- [ ] 旧 v1 路径**未被破坏**：既有 `mock_detector` / `mock_classifier` 测试仍通过。
-- [ ] `make native-test` 与 `make go-check` 通过。
+- [x] ABI 方案在 `design.md` 中定案并给出兼容性分析（旧插件在新 runner / 新插件在旧 runner 的行为）。
+- [x] `plugin.h` 中的新结构有 `static_assert` 校验尺寸与对齐（沿用现有风格）。
+- [x] `algo.hpp` 提供结构化适配器 + 注册宏，并有至少一个可编译的示例（可复用 mock 插件模式）。
+- [x] 原生侧 CTest 覆盖：结构化结果能通过 C ABI 往返，字段完整、无内存泄漏（ASan 干净）。
+- [x] `verifier.go` 不再把 `person_structure` 与 `detection` 混为一谈；映射有测试。
+- [x] 旧 v1 路径**未被破坏**：既有 `mock_detector` / `mock_classifier` 测试仍通过。
+- [x] `make native-test` 与 `make go-check` 通过。
 
 ## 范围外
 

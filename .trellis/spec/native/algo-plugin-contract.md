@@ -19,7 +19,15 @@
 
 ## 2. 纯 C ABI 规范 (`native/sdk/include/zhulong/plugin.h`)
 
-所有插件通过导出的 `zhulong_plugin_get_api` 填充 `zhulong_plugin_api_v1`。v1 API 布局包含 `struct_size`、`api_version`、插件元信息和模型/Worker/Task/process/result-release 回调。检测、分类结果分别使用 `ZHULONG_RESULT_TYPE_DETECTION` + `zhulong_bbox[]`、`ZHULONG_RESULT_TYPE_CLASSIFICATION` + `zhulong_classification_item[]`；结果内存由插件创建，并只能通过同一插件的 `result_release` 释放。添加分类能力不得改变 v1 函数表或 `zhulong_frame_view` 布局。
+所有插件通过导出的 `zhulong_plugin_get_api` 填充 `zhulong_plugin_api_v1`。v1 API 布局包含 `struct_size`、`api_version`、插件元信息和模型/Worker/Task/process/result-release 回调。
+支持三种结果载荷形态：
+1. **检测**：`ZHULONG_RESULT_TYPE_DETECTION` (1) + `zhulong_bbox[]`；
+2. **分类**：`ZHULONG_RESULT_TYPE_CLASSIFICATION` (2) + `zhulong_classification_item[]`；
+3. **结构化人体/人脸**：`ZHULONG_RESULT_TYPE_PERSON_STRUCTURE` (3) + `zhulong_person_item[]`（支持 1:N 嵌套人脸 `zhulong_face_item` 与 Top-K 候选人 `zhulong_face_candidate`）。
+
+结果内存由插件创建，并只能通过同一插件的 `result_release` 释放。添加分类与结构化能力保持 v1 函数表与 `zhulong_frame_view` 布局稳定（数据层多态）。
+结构化结果采用**单块连续 Arena 内存打包（Contiguous Arena Packing）**，所有嵌套子指针指向 Arena 内部偏移，`result->internal_token` 指向首地址，`result_release` 通过单次 `std::free` 彻底释放整棵树，杜绝内存碎片与嵌套泄漏。
+结构化坐标严格归一化到 `[0.0, 1.0]`，关键点（5 点）同样严格归一化。纯人脸检测场景下采用退化语义：每个检出人脸映射为一个 `zhulong_person_item`（`track_id=0`，`body_box=face_box`，`body_score=1.0`）。
 
 插件入口声明使用 `ZHULONG_PLUGIN_EXPORT`。启用 hidden default visibility 时，只显式导出 `zhulong_plugin_get_api`；Linux 示例插件还使用 GNU ld version script 将其他定义符号设为 local（仅靠编译器 visibility 可能在 sanitizer 构建暴露弱 RTTI 符号）。CMake 示例插件目标定义 `ZHULONG_PLUGIN_BUILD` 并设置 hidden C++ / inline visibility。
 
@@ -46,9 +54,17 @@ public:
     std::vector<zhulong::Classification> classify(zhulong::Session&, const zhulong::Image&);
 };
 ZHULONG_REGISTER_CLASSIFIER_PLUGIN(MyClassifier, "MyClassifier", "1.0.0")
+
+class MyPersonStructurePlugin {
+public:
+    zhulong_status_t init(const std::string& config_json);
+    zhulong::Session create_session(uint32_t worker_id);
+    std::vector<zhulong::PersonItem> detect_persons(zhulong::Session&, const zhulong::Image&);
+};
+ZHULONG_REGISTER_PERSON_STRUCTURE_PLUGIN(MyPersonStructurePlugin, "MyPersonStructure", "1.0.0")
 ```
 
-Detector 宏调用 `detect()` 并序列化 bbox；Classifier 宏调用 `classify()` 并序列化 classification item。两者共享 opaque handle lifecycle 和 exception boundary，但使用各自的 result type 与 payload。
+Detector 宏调用 `detect()` 并序列化 bbox；Classifier 宏调用 `classify()` 并序列化 classification item；PersonStructure 宏调用 `detect_persons()` 并将多级嵌套树打包为单块连续 Arena 内存。三者共享 opaque handle lifecycle 和 exception boundary，但使用各自的 result type 与 payload。
 
 ## 4. CPU 图像预处理与固定尺寸 Tensor 合同
 
