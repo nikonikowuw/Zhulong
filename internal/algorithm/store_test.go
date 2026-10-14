@@ -211,3 +211,29 @@ func TestStoreRollbackAlgorithmVersion(t *testing.T) {
 		t.Errorf("expected status 'ACTIVE', got '%s'", updated.Status)
 	}
 }
+
+// TestStoreCreateTaskPersistsDisabledEnabled guards the GORM default-tag trap:
+// a `default:true` tag makes GORM omit a zero-valued Enabled from the INSERT, so
+// an explicitly disabled task silently came back enabled. D5 makes enabled a
+// task-change trigger, so this must round-trip faithfully.
+func TestStoreCreateTaskPersistsDisabledEnabled(t *testing.T) {
+	ctx := context.Background()
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	task := &algorithm.AnalysisTask{
+		ID: "task_disabled", CameraID: "cam_disabled", AlgorithmID: "algo_disabled",
+		Enabled: false, SampleFPS: 5, ConfigJSON: "{}",
+	}
+	if err := store.CreateTask(ctx, task); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	stored, err := store.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if stored.Enabled {
+		t.Fatal("Enabled=false was coerced back to true on insert (GORM default tag trap)")
+	}
+}

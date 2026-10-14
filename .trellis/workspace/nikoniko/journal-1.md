@@ -1384,3 +1384,103 @@ Session summary was not supplied.
 ### Next Steps
 
 - 推进 10-10-algorithm-plugin-architecture 规划与各硬件后端接入任务
+
+---
+
+## Session 34: FrameBroker 宿主与多路帧分发通路落地
+<!-- trellis-session: v=2 fp=83a17e0b94c39121 -->
+
+**Date**: 2026-10-13
+**Task**: 10-13-algo-broker-host
+**Package**: native / backend
+**Branch**: `dev`
+
+### Summary
+
+完成 FrameBroker 宿主在原生 Engine 内部的托管与发布通路闭环：构建系统联合静态归档链接、FramePublisher 发布侧节流、C ABI 零拷贝查询、zhulong_algo_runner 多路独立连接以及 Go 侧 StreamHub / Supervisor 生命周期与解析器串联。
+
+### Main Changes
+
+- **构建与链接链路**：`native/scripts/build.py` 与 `native/CMakeLists.txt` 扩展内容寻址哈希归档，将 `libZhulongAlgoIpc.a` 与 `libZhulongEngine.a` 联合链接进 Go；更新 `build_contract_test.py`。
+- **Native 帧发布与生命周期**：新增 `FramePublisher` 线程，拉取解码帧并基于 `max(sample_fps)` 进行发布侧节流，推入 `FrameBroker` SHM 槽位后立即 reset `HardwareFrame` 引用；`Engine` 在 `ConsumerAI` 接入时拉起 broker/publisher，全注销时五步优雅停机。
+- **C ABI 与 Go 桥接**：追加导出 `Zhulong_stream_get_broker_path` 与 `Zhulong_stream_set_publish_rate`；Go `engine.Stream` 暴露 `BrokerPath` 与 `SetPublishRate`；通过真实 RTSP loopback 集成测试。
+- **Runner 多路并发**：`zhulong_algo_runner` 支持重复 `--broker` 参数，每路启动独立 worker 线程与独立 lease/ACK 循环，任一路连接失败 exit 5 整体失败退出。
+- **Go 域解耦组装**：`camera.StreamHub` 增加独立 AI acquire/release/rate 接口；`algorithm.Supervisor` 固化 `brokerSocks` 保证崩溃重启不丢参数；`internal/app` 装配 `appBrokerPathResolver` 闭环。
+
+### Git Commits
+
+（待提交）
+
+### Testing
+
+- [OK] `make native-test`：14/14 CTest 全部通过（包括多 broker 独立连接与连接失败退出码 5 测试）。
+- [OK] `make go-check`：gofmt、go vet、全量 Go 包测试（`-race`）、RTSP 真链路桥接集成测试全通。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推进阶段四：Rockchip RKNN 推理后端接入 (`10-13-algo-rknn-inference-backend`) 与 RGA 视觉前处理后端接入 (`10-13-algo-rga-vision-backend`)。
+
+
+---
+
+## 双轴代码审查修复（10-13-algo-broker-host）
+
+对 `HEAD`(79b9afb) 工作区做 Standards + Spec 双轴审查，并逐项修复。
+
+### 修复的缺陷（按严重度）
+
+| # | 轴 | 缺陷 | 修复 |
+| --- | --- | --- | --- |
+| 1 | Spec | `ReleaseAIStream` 生产零调用 → AC9 删除面断裂、broker/publisher 永不销毁 | 改为**按算法包**的订阅者集合（`aiSubscribers`），`SyncBrokerSubscriptions` 一次完成解析 + 订阅同步；删除任务时 release |
+| 2 | Spec | `Service.UpdateTask` 不存在（`sample_fps`/`enabled` 变更无触发面） | 新增 `Service.UpdateTask` |
+| 3 | Spec | 无防抖动 → 批量建 N 个任务 = N 次重启 | `scheduleAlgorithmRestart` + 200ms 窗口合并；`FlushPendingRestarts` |
+| 4 | Spec | 跨包 `max(sample_fps)` 不可达（per-camera 后写覆盖） | `publishRateByCamera` 查全库 enabled 任务取 max |
+| 5 | Standards | `resolveBrokerSocksLocked` 吞掉解析错误 → 退化为「无 broker」→ exit 5 → CRASH_LOOP | 错误向上传播，`StartAlgorithm`/`UpgradeAlgorithm`/`rollbackToOldLocked` 全部处理 |
+| 6 | Standards | `RestartAlgorithm` 经 `StopAlgorithm` 把 DB 状态写成 DISABLED（任务变更静默停用该包） | 重启后写回 ACTIVE；失败也写回 |
+| 7 | Spec | `task_id` 固定为 `idx+1`，与 stream 无关联，task→worker 亲和不成立 | runner 从 `--broker` 路径反解 stream_id 作 `task_id`（`parse_stream_id_from_socket`） |
+| 8 | Spec | `ResolveBrokerPaths` 中途失败不回滚已 acquire 的流（泄漏） | 两阶段：先全部解析，再提交订阅 |
+| 9 | Standards | `SampleFPS int → uint32` 无校验转换 | `algorithm.ValidateSampleFPS` + `SampleFPSMax=1000` |
+| 10 | Standards | `_ = SetAIPublishRate(...)` 吞错 | 改为传播 |
+| 11 | **Bug** | `analysis_tasks.enabled` 的 `gorm:"default:true"` 让 GORM 省略零值 → 显式 `Enabled:false` 被静默翻回 `true` | 移除 default 标签（表级 `DEFAULT 1` 已在迁移中）；加回归测试（已验证无修复时失败） |
+| 12 | Standards | `Stream.ID()` 零调用点 | 删除 |
+| 13 | Standards | `ProcessConfig.BrokerSock` 单值残留、`Supervisor.brokerSock` 死 fallback | 一并删除（含 `NewSupervisor` 签名收窄） |
+| 14 | Standards | `process.go` 注释仍称「broker host 不存在」 | 更新为 `broker_unavailable`，日志改 `zap.Strings("broker_socks")` |
+| 15 | Standards | `build.py` 的 `-lrt` 绕过系统库白名单 | 显式 `ZHULONG_SYSTEM_LIBRARIES` 声明 |
+| 16 | Standards | `engine.cpp` broker 构造块重复两处 | 提取 `ensure_frame_broker` |
+| 17 | Spec | `design.md` 多处「未定」未回填；`implement.md` AC 被提前勾选 | 回填 design.md；implement.md 增「验收状态」表，未达成项标 ⚠️ |
+| 18 | Standards | `dependency-injection.md` 描述了一个代码里不存在的停机顺序 | 改为实际顺序 + 新增守护测试 `TestAIShutdownOrderPrecedesNativeClose` |
+
+### 新增测试
+
+- `TestStreamHubAIStreamSubscribeAndRelease` / `TestStreamHubReconcileReleasesDroppedSubscribers` / `TestStreamHubAICameraIDs`
+- `TestSupervisorStartFailsWhenBrokerResolutionFails` / `TestSupervisorRestartPreservesActiveStatus`
+- `TestServiceUpdateTaskPersistsAndTriggersRestart` / `TestServiceUpdateTaskRejectsNegativeSampleFPS` / `TestServiceTaskChangeDebouncesRestart`（断言 20 任务 → 1 次重启）
+- `TestStoreCreateTaskPersistsDisabledEnabled`（GORM default 陷阱回归）
+- `TestPublishRateUsesCrossPackageMax` / `TestSyncBrokerSubscriptions*`
+- `TestAIShutdownOrderPrecedesNativeClose`（跨层停机顺序守护）
+
+### 已知问题（**非本次引入**）
+
+- ⚠️ `TestStreamHubOnDemandAcquireAndRelease`（`internal/camera`）**偶发失败**：期望 `SessionStateIdle`，实际仍为 `running`。已用 `git stash` 在改动前的树上复现（`-count=30` 必现），确认为**既有竞态**，与本次 AI 流改动无关（该测试只走 dispatcher 路径）。建议单开任务修。
+- ⚠️ AC2/AC6/AC7/AC8/AC10/AC11 的真实链路验证（真实 RTSP、发布率统计、kill -9 重启）依赖 loopback/板端环境，本机未执行，已在 `implement.md` §5 显式标为部分达成。
+
+### 自我复审追加修正
+
+修完第一轮后复审自己的 diff，又清掉三处**自己引入**的问题：
+
+- `ReconcileAIStreamSubscribers` 只有测试在用 → **删除**（speculative generality）；对应测试改用生产实际调用的 `Attach`/`Release` 原语重写。
+- `analysis_tasks.enabled` 的说明性注释写成了 struct 字段文档注释，被 `make api-docs` 泄漏进 swagger → 移到类型级注释，重新生成后 `internal/apidocs/` 零 diff。
+- `TestRunnerProcessMultipleBrokersArgs` 的 2s 超时在全量 `-race` 并发下会 flake → 放宽到 15s。
+
+### 验证
+
+- `make native-test`：14/14 通过（`-Wall -Wextra -Wpedantic` 无警告；改 `engine.cpp` 后重编译验证）
+- `make go-check`：全通（gofmt + vet + 全量 `-race` + 真实 loopback RTSP 桥接，含新增 `TestBridgeIntegration_AIConsumerAndBrokerPath`）
+- `python3 native/tests/build_contract_test.py`：13 tests OK
+- `make api-docs`：无文档漂移
+- 前端：`pnpm run lint` / `pnpm run build`（含 `tsc -b`）通过
+- ⚠️ `make frontend-check` 目标本身**既有损坏**：`npm ci --prefix web` 对只有 `pnpm-lock.yaml` 的仓库失败，且引用不存在的 `type-check` script。与本次改动无关（diff 未触及 `web/`），但会阻塞 `make check`。

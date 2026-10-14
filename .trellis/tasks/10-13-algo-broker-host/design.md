@@ -216,7 +216,7 @@ void FramePublisher::run() {
 | 多个包订阅同一 stream | 发布率取 **`max(sample_fps)`**——一个 broker 只有一个发布率，无法对不同客户端按不同速率扇出 |
 | 单包 `sample_fps` 低于发布率 | 由 **runner 侧二次丢弃**（runner 已知自己的 `sample_fps`） |
 | 无 AI 任务时的流 | broker 本就不会创建（R1 绑定 `CONSUMER_AI`），无需处理 |
-| 频率如何送到 native | ⚠️ **未定**。选项：(a) 新增 C ABI `Zhulong_stream_set_publish_rate(engine, stream, fps)`；(b) 复用 `StreamOptions`（但它是 acquire 时参数，而 `sample_fps` 可运行期变更）；(c) `Engine` 启动时一次性快照。需在实施前定案——**建议 (a)**，与 R4 的追加式 ABI 风格一致。 |
+| 频率如何送到 native | **已定案并实现：方案 (a)**。新增追加式 C ABI `Zhulong_stream_set_publish_rate(engine, stream, max_sample_fps)`，与 R4 的追加式 ABI 风格一致；Go 侧封装为 `Stream.SetPublishRate`，经 `StreamHub.SetAIPublishRate` 下发。 |
 
 ⚠️ **不节流的后果**（为什么不把它当优化而是当需求）：解码 25fps、`sample_fps=5` → **5 倍无谓开销**：每次 `publish_frame` 都要做逐 plane `memcpy`（1080P NV12 约 3MB）、socket 通知与 runner 侧 `process` 调用。更重要的是它会把 AC6 的「慢包丢帧」变成默认行为（见 §1.1 末段）。
 
@@ -402,7 +402,7 @@ type BrokerPathResolver interface {
 | 动作 | 若该 `algorithm_id` 的包当前为 `ACTIVE`（`watchers` 中存在）→ `StopAlgorithm` → 重新解析 → `StartAlgorithm` |
 | 包未运行 | 不做任何事（下次 `EnableAlgorithm` 时自然解析） |
 | 分析中断 | **接受**。父任务 R7 已定「仅重启对应算法包，允许该包分析短暂中断」 |
-| 抖动防护 | 同一包的连续变更需**合并/串行化**（否则批量建 N 个任务 → N 次重启）。建议在 Service 层用短窗口合并（singleflight 或 debounce），**具体阈值待定** |
+| 抖动防护 | **已实现**：`Service.scheduleAlgorithmRestart` 用 `time.AfterFunc` 做短窗口合并（`defaultRestartDebounce = 200ms`），窗口内同一包的连续变更只触发一次重启；`FlushPendingRestarts` 供测试与停机前收敛。 |
 | 失败处理 | 重启失败不阻塞 HTTP 响应？⚠️ **需定案**：返回错误（事务语义）还是仅记录 + 状态转 `CRASH_LOOP`（最终一致）。建议后者，与既有 supervisor 行为一致 |
 
 ⚠️ 这与 `Supervisor.UpgradeAlgorithm`（`:146`）不是一回事：升级是换版本，这里是**同一版本换订阅集**。不要复用升级路径（它会写 `previous_version` 并触发回滚守卫）。
@@ -434,7 +434,7 @@ if (argv[i] == "--broker") broker_socks.push_back(argv[++i]);
 
 ⚠️ 相应地，`process.go` 的 `FailureStageBrokerConnect` 检测（`exitCode == 5` → stderr 主通道 + 退出码备通道，`process.go:37-41,89-92`）**不需要改**，这正是选 D6 的附带好处。
 
-### 8.2 多路时的 task 身份隔离（⚠️ 未定，实施前必须定案）
+### 8.2 多路时的 task 身份隔离（✅ 已定案：方案 A，task_id 含 stream_id）
 
 父任务 `design.md:242` 要求「固定 task→worker 亲和分派，同一任务在途最多一帧」。但现状 `runner.cpp:184` 对所有连接**只创建一次** `worker` 与 `task`（`task_id=1`），且 `run_ipc_worker` 只接受**单个** socket。多路时：
 
@@ -444,9 +444,14 @@ if (argv[i] == "--broker") broker_socks.push_back(argv[++i]);
 | **B. 单 worker + stream 作为 task 维度** | 一个 worker 内用 `task_id = stream_id` 开多个 task | ⚠️ 需确认插件 SDK 允许多 task 并发于同一 worker（`plugin.h` 未明示）；若不支持则不可行 |
 | **C. 一路一组 worker** | 按 `sample_fps` 或路数分组 | 最复杂，首期不建议 |
 
-**首期建议 A**，理由是它直接满足「task→worker 亲和」且实现最小；但必须**实测每 worker 的资源开销**（父任务 AC4 要求「验证线程数不等于硬件并发度」）。
+**已实现方案 A（一路一 worker）**：每路 `--broker` 各自 `worker_create` + `task_open`，各自独立的 lease/ACK 循环。
 
-⚠️ 无论选哪个，`task_id` 必须**包含 stream_id**（当前固定为 `1`，多路下会冲突）。
+✅ `task_id` 已**包含 stream_id**：runner 从 `--broker` 字面路径按
+`<base_dir>/zhulong_broker_<stream_id>.sock` 反解出 stream_id 作为 `task_id`
+（`runner.cpp` 的 `parse_stream_id_from_socket`），无需扩展 IPC 协议。
+⚠️ 反解失败（路径不符合派生规则）时 runner 以 exit 5 显式报错，不静默退化。
+
+⚠️ 仍未实测每 worker 的资源开销（父任务 AC4 要求「验证线程数不等于硬件并发度」）——列为本任务残余验证项。
 
 ## 9. socket 路径语义定案（R8）
 
@@ -518,11 +523,11 @@ runner --broker <字面路径>  →  UnixSocketClient::connect(path)   ✅ 语�
   ~~CMake 静态库互链声明顺序~~ → **已实测推翻，非风险**，见 §5.1。
 - ⚠️ **域间耦合**（§7.2）：`algorithm` 需知道 camera→stream 映射，方案 B 的接口边界需 review。
 - ⚠️ **任务变更触发**（§7.4）：新增「任务 CRUD → 重启包」的依赖边，需防抖动合并；错误语义需定案。
-- ⚠️ **多路 task 状态隔离**（§8.2）：**未定案**，一路一 worker 的资源开销需实测。
+- ⚠️ **多路 task 状态隔离**（§8.2）：已定案并实现（一路一 worker，task_id 含 stream_id）；**每 worker 的资源开销仍未实测**。
 - ⚠️ **共享内存预算**（§10）：多路时 32MB/路 可能过大。
 - ⚠️ **`engine.h` 无 ABI 版本协商**：新增函数只能追加，无法协商，既有状况。
-- ⚠️ **AI 消费的 role 未定**（§7.3）：`AnalysisTask` 无 role 字段，若不定会翻倍流数与 shm 预算。
-- ⚠️ **`sample_fps` 如何送到 native 未定**（§4.1）：建议新增追加式 ABI，但需定案。
-- ⚠️ **Go 层停机顺序无守护**（§3.1）：现状正确但无测试，改动不会失败。
+- ✅ **AI 消费的 role 已定案**（§7.3）：固定 `main`（`StreamRoleMain`），不会翻倍流数与 shm 预算。
+- ✅ **`sample_fps` 如何送到 native 已定案**（§4.1）：追加式 ABI `Zhulong_stream_set_publish_rate`。
+- ✅ **Go 层停机顺序已有守护**（§3.1）：`internal/app/runtime_test.go` 的 `TestAIShutdownOrderPrecedesNativeClose` 断言 camera → algorithm → native 的相对顺序。
 - ⚠️ 端到端验证依赖真实 RTSP 源（loopback 桥接已有，见 `ingestion-contract.md`）。
 - ⚠️ **与阶段四任务共享构建文件**（`native/CMakeLists.txt`、`native/scripts/build.py`），必须串行执行（本任务在前）。语义上也先于它们：`10-13-algo-rknn-inference-backend` 的 AC4（1/2/4 worker 真机并发）需要真实帧通路，本任务未完成时它只能降级为后端 API 级并发测试。

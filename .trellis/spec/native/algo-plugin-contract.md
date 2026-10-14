@@ -110,62 +110,41 @@ zhulong_algo_runner --verify-plugin <path_to_plugin.so> --sample <test_image_or_
 
 ### 5.1 Runner 命令契约：`--broker` 参数语义
 
-`zhulong_algo_runner --plugin <plugin.so> --broker <base_dir> [--name <client_name>] [--max-frames <N>]`
+`zhulong_algo_runner --plugin <plugin.so> --broker <socket_path> [--broker <socket_path_2> ...] [--name <client_name>] [--max-frames <N>]`
 
-⚠️ **`--broker` 的语义是「目录」，不是 socket 文件路径。** native 侧 `FrameBroker::start(stream_id, base_dir)`
-（`native/src/algorithm/ipc/frame_broker.cpp:20`）会按下列规则派生实际 socket 路径：
-
-```cpp
-socket_path_ = base_dir + "/zhulong_broker_" + std::to_string(stream_id_) + ".sock";
-```
-
-即 `<base_dir>/zhulong_broker_<stream_id>.sock`。Go 侧必须传递**目录**（默认 `/tmp`，可由环境变量
-`ZHULONG_FRAME_BROKER_SOCK` 覆写；变量名历史原因保留 `SOCK` 后缀，但其值语义为目录）。
-
-⚠️ **实测发现的语义不对称（如实记录）**：上述派生规则只存在于 **FrameBroker 服务端**的
-`FrameBroker::start(stream_id, base_dir)` 方法中。**runner 客户端**（`runner.cpp:190` 的
-`client.connect(broker_sock, ...)`）把 `--broker` 的值当作**字面 socket 路径**直接 `connect()`，**不做**任何
-目录派生。两者的桥梁在 `native/tests/frame_broker_test.cpp:356`：它先把服务端已派生好的
-`broker.socket_path()` 传给 runner 的 `--broker`。
-
-因此当前代码下：
-
-- 若 Go 传**目录**（如 `/tmp`），runner 会尝试 `connect("/tmp")` → `ECONNREFUSED` → exit 5；
-- 若 Go 传**字面 socket 路径**（如 `/tmp/zhulong_broker_<sid>.sock`），runner 的 `connect()` 语义正确，
-  但该路径仍无人监听（宿主未实现）。
-
-两种情况下 runner 均以 exit 5 退出（已验证）。真正的定案需要与 broker 宿主归属一并解决：若宿主实现为
-「一 stream 一 socket 文件」并由 Go 派生，则 Go 应传**字面路径**；若宿主的启动接口就是「目录」，则
-runner 客户端必须同步改为按目录 + stream_id 派生。该决策随 `10-10-algorithm-plugin-architecture` 做出。
-本任务仅保证「宿主缺失」可观测（§5.3）。
+- **`--broker` 的语义为字面 socket 路径**：客户端直接执行 `connect(path)`，不做目录派生。支持重复传入多个 `--broker` 参数以订阅多路相机流。
+- **Native Engine 作为 Broker 宿主**：当流具有 `ConsumerAI` 消费者时，Native `Engine` 自动实例化并启动 `ipc::FrameBroker`，生成的 socket 路径为 `<base_dir>/zhulong_broker_<stream_id>.sock`。
+- **`ZHULONG_FRAME_BROKER_SOCK` 环境变量**：仅在 Native 端作为 `base_dir` 读取（默认 `/tmp`），Go 侧不再读取该变量。
+- **路径解析与传递**：Go 侧通过 C ABI `Zhulong_stream_get_broker_path`（Go 封装为 `Stream.BrokerPath(ctx)`）获取各相机流的实际 socket 路径，并经 `BrokerSubscriptionResolver` 组装为 `--broker <socket_path>` 列表传给 runner。该接口在解析路径的**同时**同步订阅关系（哪一路 AI 流因哪个包而保活），因此命名刻意不用 `Resolve*`。
+- **⚠️ runner 从 socket 路径反解 stream_id**：runner 需要 `task_id` 来区分多路 task state，但 IPC 握手协议**没有**承载 stream_id。约定：runner 按 `<base_dir>/zhulong_broker_<stream_id>.sock` 从**字面 `--broker` 路径**反解 stream_id 并用作 `task_id`（`runner.cpp` 的 `parse_stream_id_from_socket`）。
+  - 因此 **`--broker` 传入的路径必须遵循宿主的派生规则**，否则 runner 以 exit 5 显式报错（`stage:"args"`），不会静默退化。
+  - 这是**唯一**允许 runner 依赖 socket 路径命名格式的地方；若将来需要更强的解耦，应改为在 `HandshakeReq` 中显式携带 stream_id（需 `ipc_protocol.hpp` 版本演进）。
 
 ### 5.2 Runner 退出码表
 
-`runner.cpp` 的 `run_ipc_worker` 路径在各类失败时返回固定退出码，运维与 Go 看门狗依赖该表区分故障类型：
+`runner.cpp` 的 `run_ipc_workers` 路径在各类失败时返回固定退出码，运维与 Go 看门狗依赖该表区分故障类型：
 
 | 退出码 | 含义 | 出处 |
 | --- | --- | --- |
-| `0` | 正常退出 | `runner.cpp:158,289,329` |
-| `1` | `dlopen` 插件动态库失败 | `runner.cpp:78-80,165-166` |
-| `2` | `model_create` 失败 | `runner.cpp:93-94,172` |
-| `3` | `worker_create` 失败 | `runner.cpp:102-103,178` |
-| `4` | `task_open` 失败 | `runner.cpp:112-113,186` |
-| `5` | **broker 连接失败**（宿主未监听） | `runner.cpp:190-196` |
+| `0` | 正常退出 | `runner.cpp` |
+| `1` | `dlopen` 插件动态库失败 / 客户端名称超长 | `runner.cpp` |
+| `2` | `model_create` 失败 | `runner.cpp` |
+| `3` | `worker_create` 失败 | `runner.cpp` |
+| `4` | `task_open` 失败 | `runner.cpp` |
+| `5` | **broker 连接失败 / 无法从 `--broker` 路径反解 stream_id / 未提供 `--broker`**（任一路失败即整体失败） | `runner.cpp` |
 
-⚠️ 退出码 `5` 同时伴随 stderr 输出 `{"status":"failed","stage":"connect","error":"..."}`。Go 侧以 stderr
-标记为主通道、退出码为备通道识别「broker 宿主缺失」（见 §5.3）。
+⚠️ 多路 `--broker` 下，任一路连接失败即整体失败，退出码严格保持为 `5`，且 stderr 输出伴随失败路索引与字面路径：`{"status":"failed","stage":"connect","index":N,"path":"...","error":"..."}`。
 
-### 5.3 ⚠️ 未实现登记：FrameBroker 宿主与帧发布通路
+⚠️ **D6 的实际语义强于「整体失败」**：任一路失败会置位 `stop_all`，**已连上的路也会被一并终止**（不会继续跑成半瘫）。因此不存在「部分连接成功」的中间态，Go 侧只需按 `exitCode == 5` / `stage:"connect"` 单一通道识别。
 
-**FrameBroker 宿主进程与帧发布通路当前未实现。** 全仓库范围内：
+⚠️ `1` 同时覆盖 `dlopen` 失败与 **client name 超长**（`HandshakeReq.client_name[32]`）：多路时命名会追加 `#<idx>` 后缀，加上后缀后超长即显式报错，绝不静默截断。
 
-- `FrameBroker` 类**仅在** `native/tests/frame_broker_test.cpp` 中被实例化，生产代码零构造点；
-- `native/CMakeLists.txt` 没有 broker 宿主可执行目标（只有客户端角色 `zhulong_algo_runner`）；
-- Go 侧没有任何帧发布（`publish`）通路，C ABI（`native/include/Zhulong/*.h`）也未暴露 broker/帧分发入口。
+### 5.3 FrameBroker 宿主与帧发布通路已实现说明
 
-后果：runner 即使按 §5.1 传对目录，也会连上一个**无人监听的 socket**，并以退出码 `5` 静默 crash loop。
-该缺口**不属于**本契约文档的修复范围，已移交父任务 `10-10-algorithm-plugin-architecture`（规划中）承接 broker 宿主
-归属与帧发布通路的架构决策。
+FrameBroker 宿主与帧发布通路已完整闭环（任务 `10-13-algo-broker-host`）：
+- 原生 `Engine` 托管 `FrameBroker` 与 `FramePublisher` 线程，当 `ConsumerAI` 挂载时拉起、卸载时销毁；
+- 解码后的帧在 Native 侧由 `FramePublisher` 线程基于 `max(sample_fps)` 进行发布侧节流并推入共享内存；
+- 零像素数据进入 Go GC 内存，Go 仅负责控制流与 socket 路径装配。
 
 ---
 

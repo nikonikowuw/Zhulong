@@ -59,6 +59,7 @@ enum {
     Zhulong_ERR_IO                = -11,  /**< 底层网络或 I/O 通信错误 */
     Zhulong_ERR_CANCELLED         = -12,  /**< 操作被显式取消或引擎停止 */
     Zhulong_ERR_EOF               = -13,  /**< 流遇到文件末尾或对端已关闭 */
+    Zhulong_ERR_BUFFER_TOO_SMALL  = -14,  /**< 提供的缓冲区容量不足 */
     Zhulong_ERR_INTERNAL          = -99   /**< 引擎内部未知未捕获错误 */
 };
 
@@ -262,6 +263,41 @@ Zhulong_status_t Zhulong_stream_release(Zhulong_engine_h engine, Zhulong_stream_
  */
 Zhulong_status_t Zhulong_stream_get_status(Zhulong_engine_h engine, Zhulong_stream_id stream,
     Zhulong_stream_status *out_status);
+
+/**
+ * @brief 查询指定流关联的 FrameBroker Unix Domain Socket 路径
+ *
+ * 调用前提：该流已通过 Zhulong_stream_acquire 以 Zhulong_CONSUMER_AI 获取，
+ * 且至少有一个 AI 消费者仍在借用该流。
+ *
+ * @param engine    引擎句柄
+ * @param stream    物理流 ID
+ * @param out_path  输出路径缓冲区（调用方分配）
+ * @param inout_len 输入为缓冲区容量；输出为实际写入的路径字符串长度（包含末尾 '\\0'）
+ * @return Zhulong_status_t 操作状态码：
+ *         Zhulong_OK 成功；
+ *         Zhulong_ERR_INVALID_ARGUMENT 参数非法（空指针、容量为 0）；
+ *         Zhulong_ERR_NOT_FOUND 流不存在或该流无 AI 消费者（未创建 FrameBroker）；
+ *         Zhulong_ERR_BUFFER_TOO_SMALL 缓冲不足（inout_len 回填所需大小）；
+ *         Zhulong_ERR_NOT_RUNNING 引擎未处于运行状态
+ */
+Zhulong_status_t Zhulong_stream_get_broker_path(Zhulong_engine_h engine,
+    Zhulong_stream_id stream, char *out_path, size_t *inout_len);
+
+/**
+ * @brief 动态设置指定流的帧发布节流帧率 (按 D7 准则由关联任务的 max(sample_fps) 驱动)
+ *
+ * @param engine         引擎句柄
+ * @param stream         物理流 ID
+ * @param max_sample_fps 最大采样率（0 表示不节流，按解码原帧率发布）
+ * @return Zhulong_status_t 操作状态码：
+ *         Zhulong_OK 成功；
+ *         Zhulong_ERR_INVALID_ARGUMENT 参数非法；
+ *         Zhulong_ERR_NOT_FOUND 流不存在或该流无 AI 消费者（未激活发布通道）；
+ *         Zhulong_ERR_NOT_RUNNING 引擎未处于运行状态
+ */
+Zhulong_status_t Zhulong_stream_set_publish_rate(Zhulong_engine_h engine,
+    Zhulong_stream_id stream, uint32_t max_sample_fps);
 
 /**
  * @brief 订阅物理流的实时数据包派发

@@ -145,13 +145,15 @@ class BuildContractTests(unittest.TestCase):
                 self.assertNotIn("SDKROOT", os.environ)
 
     def test_engine_archive_content_invalidates_cgo_link_flags(self):
-        """测试 Engine 静态归档内容变更会生成新的 CGO 链接路径（防止 Go CGO 缓存失效失灵）"""
+        """测试 Engine 与 AlgoIpc 静态归档内容变更会生成新的 CGO 链接路径（防止 Go CGO 缓存失效失灵）"""
         with tempfile.TemporaryDirectory() as directory:
             native = Path(directory) / "native"
             native.mkdir()
             prefix = Path(directory) / "ffmpeg"
             self.make_pc(prefix)
             archive = native / "libZhulongEngine.a"
+            ipc_archive = native / "libZhulongAlgoIpc.a"
+            ipc_archive.write_bytes(b"ipc initial archive")
             profile = dict(mode="host", target_os="linux", goarch="amd64", cc="cc", cxx="c++")
             with patch.object(build, "run") as run:
                 archive.write_bytes(b"archive version one")
@@ -162,7 +164,16 @@ class BuildContractTests(unittest.TestCase):
                 second = run.call_args.kwargs["env"]["CGO_LDFLAGS"]
             self.assertNotEqual(first, second)
             self.assertIn("-latomic", second)
+            self.assertIn("-lrt", second)
             self.assertEqual(len(list((native / "go-link").glob("*/libZhulongEngine.a"))), 2)
+            self.assertEqual(len(list((native / "go-link").glob("*/libZhulongAlgoIpc.a"))), 1)
+
+            with patch.object(build, "run") as run:
+                ipc_archive.write_bytes(b"ipc updated archive")
+                build.go(profile, native, prefix, ["build", "./cmd/Zhulong"])
+                third = run.call_args.kwargs["env"]["CGO_LDFLAGS"]
+            self.assertNotEqual(second, third)
+            self.assertEqual(len(list((native / "go-link").glob("*/libZhulongAlgoIpc.a"))), 2)
 
     def test_cross_flags_are_explicit_not_stale_cmake_initializers(self):
         """测试交叉编译标志通过 CMake Toolchain 显式注入而非继承残留配置"""

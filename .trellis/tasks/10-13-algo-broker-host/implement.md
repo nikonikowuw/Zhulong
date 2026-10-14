@@ -27,28 +27,28 @@
 
 ### 阶段 A：构建链接方向（先做）
 
-- [ ] 扩展 `native/scripts/build.py`：最终 Go 链接从「单个 `libZhulongEngine.a`」改为「`libZhulongEngine.a` + `libZhulongAlgoIpc.a`」。
+- [x] 扩展 `native/scripts/build.py`：最终 Go 链接从「单个 `libZhulongEngine.a`」改为「`libZhulongEngine.a` + `libZhulongAlgoIpc.a`」。
   - ⚠️ **顺序**：`ZhulongEngine` 依赖 `ZhulongAlgoIpc`，`-lZhulongEngine` 必须在 `-lZhulongAlgoIpc` **之前**（GNU ld 顺序敏感）。
   - ⚠️ **内容寻址各自独立**：两个归档各有自己的 `digest(archive)` → `go-link/<hash>/` 子目录，不共用。
   - 验证：`build/native/host/go-link.json` 的 `CGO_LDFLAGS` 含两个归档路径。
-- [ ] `native/CMakeLists.txt`：`target_link_libraries(ZhulongEngine PUBLIC ZhulongAlgoIpc)`。
+- [x] `native/CMakeLists.txt`：`target_link_libraries(ZhulongEngine PUBLIC ZhulongAlgoIpc)`。
   - ⚠️ **不需要调整声明顺序**。`design.md` §5.1 已实测：CMake 对未定义目标名做延迟解析，`ZhulongAlgoIpc` 定义在 `ZhulongEngine` 之后**可直接前向引用**（cmake 3.31.6 实测 configure + build 均通过）。
   - ⚠️ **不要为了「预防」而重排目标声明顺序**——那会产生与需求无关的 diff。仅当 CMake 实际报错时才动。
   - 验证：`cmake` 配置无循环依赖错误；`make native-test` 通过。
-- [ ] 确认 CPU/host 与 cross/rk3568 两条路径都能链接。
+- [x] 确认 CPU/host 与 cross/rk3568 两条路径都能链接。
   - ⚠️ **`-lrt` 位置**：`ZhulongAlgoIpc` 在 `UNIX AND NOT APPLE` 下链 `rt`（`CMakeLists.txt:178-180`）。交叉时 `-lrt` 必须排在两个归档**之后**（由 `build.py` 的 `ldflags` + `--sysroot` 解析；rk3568 sysroot 下 `librt.so`/`librt.a` 均存在）。
   - 验证：`make native-build` + `CROSS_PROFILE=native/profiles/rk3568.json CROSS_OUTPUT=build/targets/rk3568/Zhulong make native-build`（**只编译，不执行测试**）。
 
 ### 阶段 B：Engine 持有 broker 池
 
-- [ ] `Engine` 新增 `brokers` 池（`std::map<Zhulong_stream_id, std::unique_ptr<ipc::FrameBroker>>`）与 `broker_base_dir`，受既有 `control` 锁保护。
-- [ ] AI 消费者首次出现时创建 broker；最后一个 AI 消费者 release 时停止并移除。
+- [x] `Engine` 新增 `brokers` 池（`std::map<Zhulong_stream_id, std::unique_ptr<ipc::FrameBroker>>`）与 `broker_base_dir`，受既有 `control` 锁保护。
+- [x] AI 消费者首次出现时创建 broker；最后一个 AI 消费者 release 时停止并移除。
   - 复用既有 `has_ai_consumer()`（`stream.cpp:350`）的判定逻辑，不新增判定。
   - 验证：单元测试断言 acquire/release 时 broker 创建/销毁。
-- [ ] `Engine::stop()` 中停止所有 broker。
+- [x] `Engine::stop()` 中停止所有 broker。
   - ⚠️ **顺序**：broker 必须在 `Stream::worker` join **之前**停止（`pipeline-guidelines.md` §4 五步停机）；放在既有「锁外停止」阶段。
   - 验证：停机无 use-after-free（ASan）。
-- [ ] `broker_base_dir` 由 **native 自己** `getenv("ZHULONG_FRAME_BROKER_SOCK")` 读取（默认 `/tmp`）。
+- [x] `broker_base_dir` 由 **native 自己** `getenv("ZHULONG_FRAME_BROKER_SOCK")` 读取（默认 `/tmp`）。
   - ⚠️ **D8 定案**：Go 侧**不再**读取该变量、**不再**传给 runner。
   - 验证：清空该变量时 broker 落 `/tmp`；设为目标目录时落到该目录；Go 侧不再出现对该变量的读取。
 
@@ -56,82 +56,88 @@
 
 ⚠️ **前置**：D7 的「`sample_fps` 如何送到 native」必须先定案（`design.md` §4.1，建议新增追加式 ABI `Zhulong_stream_set_publish_rate`）。未定案不要开工。
 
-- [ ] 新增 `FramePublisher`（每 AI 流一个线程）：循环 `stream_->acquire_frame(frame, 50ms)` → **按 `max(sample_fps)` 节流** → `broker_->publish_frame(*frame)`。
+- [x] 新增 `FramePublisher`（每 AI 流一个线程）：循环 `stream_->acquire_frame(frame, 50ms)` → **按 `max(sample_fps)` 节流** → `broker_->publish_frame(*frame)`。
   - ⚠️ **节流在发布侧，不是消费侧**：未到期的帧直接 `frame.reset()` 丢弃，**不进 `publish_frame`**（否则 shm 拷贝与 socket 通知的开销照旧）。
   - ⚠️ **发布后立即 `frame.reset()`**，不持有到推理完成（`pipeline-guidelines.md` §3「防慢算法拖垮解码器准则」）。
   - ⚠️ 发布路径不得在 capture/decode 回调或队列锁内（父任务 `design.md` §5）。
   - ⚠️ 不阻塞：`publish_frame` 的 socket 发送已有 `SO_SNDTIMEO` 50ms（`unix_socket.cpp:201`）。
   - 验证：AC2（帧到达 runner）+ AC10（`sample_fps=5` 时 25fps 流的 `publish_frame` 调用率约 5fps；改为 25 后随之上升）。
-- [ ] 线程生命周期与 `DecodeSession` 绑定（AI 消费者消失时随会话一起停）。
+- [x] 线程生命周期与 `DecodeSession` 绑定（AI 消费者消失时随会话一起停）。
   - 验证：AI 消费者增删循环无线程泄漏。
 
 ### 阶段 D：C ABI 查询
 
-- [ ] `engine.h` 追加 `Zhulong_stream_get_broker_path`（**追加式**，不改既有签名与结构体布局）。
+- [x] `engine.h` 追加 `Zhulong_stream_get_broker_path`（**追加式**，不改既有签名与结构体布局）。
   - 参数：`engine`、`stream`、`char *out_path`、`size_t *inout_len`（双向）。
   - 错误：`INVALID_ARGUMENT` / `NOT_FOUND`（无 AI 消费者 → broker 未创建）/ `BUFFER_TOO_SMALL`（回填所需大小）。
   - ⚠️ 路径长度上限定义（建议 256）。
   - ⚠️ `engine.h` 无 ABI 版本协商机制（既有状况），如实记录，不引入版本机制。
-- [ ] `src/abi/engine.cpp` 实现，全异常 `try/catch(...)` 包裹（`directory-structure.md` §2 铁律 2）。
+- [x] `src/abi/engine.cpp` 实现，全异常 `try/catch(...)` 包裹（`directory-structure.md` §2 铁律 2）。
   - 验证：C 编译测试 + `readelf -d` 确认既有 ABI 未破坏。
-- [ ] Go `internal/engine` 暴露 `Stream.BrokerPath(ctx) (string, error)`。
+- [x] Go `internal/engine` 暴露 `Stream.BrokerPath(ctx) (string, error)`。
   - 验证：Go 单元测试（真实 loopback RTSP）。
 
 ### 阶段 E：Go 多路订阅
 
-- [ ] `ProcessConfig.BrokerSock string` → `BrokerSocks []string`；`process.go:200-201` 循环追加 `--broker`。
+- [x] `ProcessConfig.BrokerSock string` → `BrokerSocks []string`；`process.go:200-201` 循环追加 `--broker`。
   - 验证：单元测试断言 N 个 `--broker` 参数。
-- [ ] `internal/algorithm` 定义窄接口 `BrokerPathResolver`（`ResolveBrokerPaths(ctx, algorithmID) ([]string, error)`）。
+- [x] `internal/algorithm` 定义窄接口 `BrokerPathResolver`（`ResolveBrokerPaths(ctx, algorithmID) ([]string, error)`）。
   - ⚠️ **不直接依赖 camera 域**（当前 `internal/algorithm` 对 camera 零依赖）。
   - 实现放 `internal/app` 或 camera 域 adapter，符合 Fx 装配约定（`dependency-injection.md`）。
-- [ ] **`workerWatcher` 新增 `brokerSocks []string`**，在 3 个有 ctx 的构造点（`supervisor.go:99,182,225`）解析并**固化**。
+- [x] **`workerWatcher` 新增 `brokerSocks []string`**，在 3 个有 ctx 的构造点（`supervisor.go:99,182,225`）解析并**固化**。
   - ⚠️ **这是本阶段最关键的一步**。`supervisor.go:478`（`superviseLoop` 崩溃重启）**无 `ctx`、无解析时机**，必须直接复用 `w.brokerSocks`。
   - ⚠️ 若漏了这一步：broker 宿主跑起来后，任何一次 runner 崩溃重启都会因缺 `--broker` 而 exit 5 → 退避 → 熔断 `CRASH_LOOP`（即「能启动但不能恢复」）。
   - 验证：AC11——`kill -9` runner，自动重启仍带完整 `--broker` 列表。
-- [ ] `Supervisor` 从构造时全局单值改为**按算法包解析**（`supervisor.go:19,99,182,225,478` 全部涉及）。
+- [x] `Supervisor` 从构造时全局单值改为**按算法包解析**（`supervisor.go:19,99,182,225,478` 全部涉及）。
   - 验证：一个算法包关联 2 个 task 时得到 2 个路径。
-- [ ] `module.go:82-101` 的注释与默认值**一并删除**（D8）：Go 侧不再读取 `ZHULONG_FRAME_BROKER_SOCK`、不再传值。
+- [x] `module.go:82-101` 的注释与默认值**一并删除**（D8）：Go 侧不再读取 `ZHULONG_FRAME_BROKER_SOCK`、不再传值。
   - ⚠️ 保留「Go 无 stream_id」这一事实说明（它仍未变），但结论从「传一个占位值」变为「不传」。
   - 验证：`grep -rn ZHULONG_FRAME_BROKER_SOCK internal/` 无命中。
 
 ### 阶段 F：AI 消费接入与任务变更触发
 
-- [ ] camera 域在「该相机有 enabled AI 分析任务」时以 `ConsumerAI` acquire 流。
+- [x] camera 域在「该相机有 enabled AI 分析任务」时以 `ConsumerAI` acquire 流（`StreamHub.ResolveAIStreamBrokerPath`，固定 `main` 角色）。
   - ⚠️ `ConsumerAI` 当前**零调用**（`types.go:33` 定义、`validation.go:48` 允许）。
   - ⚠️ **acquire 粒度是 `(camera, role)`，不是 camera**：现有入口是 `ensureDispatcher(cameraID, role)`（`stream_hub.go:174`），而 `AnalysisTask` **只有 `camera_id`、无 role**。首期必须固定一个 role（建议 `main`），否则会翻倍流数与 shm 预算。
   - ⚠️ **不要复用 `StreamDispatcher`**：dispatcher 的存在语义是「有 WebSocket 观众才拉流」，与「有 AI 任务就拉流」相反。需定义**独立的 AI acquire 入口**（可共享 `StreamHub` 的 consumerID 分配与生命周期，但不依赖 dispatcher 存在）。
   - ⚠️ **AI 消费者不得 `Subscribe`**：`Stream.Subscribe` 硬校验 `kind == ConsumerPreview`（`internal/engine/stream.go:44-46`）。AI 消费走 `acquire_frame` 帧队列，不走 packet 回调——这是正确的，不要顺手复刻订阅步骤。
-- [ ] 最后一个 AI 任务删除时 release。
-  - 验证：AC5——`DecodeSession` 按需拉起/销毁可观测。
-- [ ] 消费者 ID 分配与引用计数（复用既有 `consumerID` 机制，不新造）。
-- [ ] **任务变更触发（D5，本阶段的核心缺口）**：`Service.CreateTask`/`DeleteTask`/`UpdateTask` 中，若该 `algorithm_id` 的包处于 `ACTIVE` → `StopAlgorithm` → 重新解析 → `StartAlgorithm`。
+- [x] 最后一个 AI 任务删除时 release（`StreamHub.ReleaseAIStreamSubscriber`；订阅者集合清空即释放流与 broker）。
+  - 验证：AC5/AC9——`DecodeSession` 按需拉起/销毁可观测；`TestStreamHubAIStreamSubscribeAndRelease`、`TestStreamHubReconcileReleasesDroppedSubscribers`。
+  - ⚠️ **保活语义由订阅者集合（per 算法包）决定，不是引用计数**：只「解析路径」不登记订阅的写法会让流在下一轮同步时被回收，这是本阶段最初的实现缺陷。
+- [x] 消费者 ID 分配与引用计数（复用既有 `consumerID` 机制，不新造）。
+- [x] **任务变更触发（D5，本阶段的核心缺口）**：`Service.CreateTask`/`DeleteTask`/`UpdateTask` 触发重新解析 + 重启该算法包。
+  - ✅ 已新增 `Service.UpdateTask`（此前只有 `Store.UpdateTask`，`sample_fps`/`enabled` 变更无任何触发面）。
+  - ✅ 已实现防抖动合并：`scheduleAlgorithmRestart` 用 200ms 窗口合并同一包的连续变更；`FlushPendingRestarts` 供测试与停机前收敛。
+  - ✅ 已定案失败语义：重启失败仅记 `Warn` 日志（不阻塞 HTTP 响应，最终一致）；**但解析失败向上传播**，`StartAlgorithm` 直接失败。
+  - ✅ 已修复：`StopAlgorithm` 会把 DB 状态写成 `DISABLED`，`RestartAlgorithm` 现在会写回 `ACTIVE`，否则一次任务变更会静默停用该包。
   - ⚠️ 当前 `Service` **没有** `UpdateTask` 方法（只有 `Store.UpdateTask`），需新增。
   - ⚠️ **不要复用 `UpgradeAlgorithm`**（`:146`）：它会写 `previous_version` 并触发回滚守卫，而这里只是「同版本换订阅集」。
   - ⚠️ 需**防抖动合并**（批量建 N 个任务 → N 次重启），建议 Service 层短窗口合并；阈值待定。
   - ⚠️ 需定案**重启失败的响应语义**（返回 HTTP 错误 vs 仅记录 + 转 `CRASH_LOOP`），建议后者。
-  - 验证：AC9——运行期新建 `AnalysisTask(camera2, A)` → A 的 runner 以 2 个 `--broker` 重启；删除 → 回到 1 路。
+  - 验证：AC9——`TestServiceUpdateTaskPersistsAndTriggersRestart`、`TestServiceTaskChangeDebouncesRestart`（20 个任务合并为 1 次重启）、`TestPublishRateUsesCrossPackageMax`。
+  - ⚠️ **仍未端到端实测**：真实 RTSP 下「新建 `AnalysisTask(camera2, A)` → runner 实际以 2 个 `--broker` 重启」需要板端/loopback 环境，本机单测只覆盖到解析与重启编排层。
 
 ### 阶段 G：runner 多连接
 
-- [ ] `runner.cpp` 支持 `--broker` 重复（`std::vector<std::string>`），每路独立连接 + 独立 lease/ACK 循环。
+- [x] `runner.cpp` 支持 `--broker` 重复（`std::vector<std::string>`），每路独立连接 + 独立 lease/ACK 循环。
   - ⚠️ **`HandshakeReq.client_name[32]` 定长**：多路命名需区分且总长 ≤32 字节；超长**显式报错**，不静默截断（`algo-plugin-contract.md` §7.1）。
   - ⚠️ **任一路连接失败即整体失败**（D6），退出码保持 `5`，stderr 带上失败路径。**不要**定义新的「部分失败」退出码——那会让 `process.go` 的 `exitCode == 5` 检测失效。
-  - ⚠️ **task 身份隔离（§8.2，实施前必须定案）**：现状 `runner.cpp:184` 对所有连接只创建一次 `worker`/`task`（`task_id=1`），多路下会冲突。首期建议**一路一 worker**，`task_id` 必须含 `stream_id`。
+  - ✅ **task 身份隔离已定案并实现（§8.2）**：一路一 worker；`task_id` 由 runner 从 `--broker` 字面路径反解出的 `stream_id` 提供（`parse_stream_id_from_socket`），不再固定为 `1`。反解失败以 exit 5 显式报错。
   - 验证：AC4——2 路 broker 独立投递、独立 lease/ACK。
-- [ ] `algo-plugin-contract.md` §5.2 退出码表**保持 5 的语义不变**（D6 定案），仅补充「多路时任一路失败即整体失败」的说明。
+- [x] `algo-plugin-contract.md` §5.2 退出码表**保持 5 的语义不变**（D6 定案），仅补充「多路时任一路失败即整体失败」的说明。
 
 ### 阶段 H：spec 更新与验收
 
-- [ ] 更新 `.trellis/spec/native/algo-plugin-contract.md`：
+- [x] 更新 `.trellis/spec/native/algo-plugin-contract.md`：
   - §5.1 「语义不对称」→ 定案为字面路径；`ZHULONG_FRAME_BROKER_SOCK` 明确为 **native 的 base_dir**（D8）
   - §5.2 退出码表 → 补充「多路任一路失败即整体失败」，**数值不变**
   - §5.3 「未实现登记」→ 移除或改写为已实现
-- [ ] 更新 `.trellis/spec/architecture.md`「尚未交付」清单（移除 FrameBroker 宿主相关项，若在其中）。
-- [ ] 更新 `.trellis/spec/backend/dependency-injection.md`：记录 **Go 层停机顺序约束**（camera → algorithm → native），说明其存在理由是「broker 先于 native 停止」。
-- [ ] 更新 `.trellis/spec/native/pipeline-guidelines.md`（若适用）：记录发布侧节流与「AI 消费不走 Subscribe」两条约束。
-- [ ] AC1–AC11 逐项核对。
-- [ ] 共享内存预算核算（8 槽位 × 4MB = 32MB/路，按最坏情况估算）并记录结论。
-- [ ] 记录残余风险。
+- [x] 更新 `.trellis/spec/architecture.md`「尚未交付」清单（移除 FrameBroker 宿主相关项，若在其中）。
+- [x] 更新 `.trellis/spec/backend/dependency-injection.md`：记录 **Go 层停机顺序约束**（camera → algorithm → native），说明其存在理由是「broker 先于 native 停止」。
+- [x] 更新 `.trellis/spec/native/pipeline-guidelines.md`（若适用）：记录发布侧节流与「AI 消费不走 Subscribe」两条约束。
+- [x] AC1–AC11 逐项核对（结果见下方「验收状态」）。
+- [x] 共享内存预算核算（8 槽位 × 4MB = 32MB/路，按最坏情况估算）并记录结论。
+- [x] 记录残余风险。
 
 ## 2. 验证命令
 
@@ -198,3 +204,23 @@ make check
 - ⚠️ **停机顺序**——broker 必须在流 worker join 前停止。
 - ⚠️ 端到端依赖真实 RTSP（loopback 桥接已有）。
 - ⚠️ **gallery 热更新链路**（`algo-plugin-contract.md` §7.3）依赖本任务的宿主归属，但属独立交付，不在本任务范围。
+
+---
+
+## 5. 验收状态（实施后核对）
+
+| AC | 状态 | 证据 / 缺口 |
+| --- | --- | --- |
+| AC1 broker 随 acquire/release 创建销毁 | ✅ | `Engine::acquire`/`release` 的 broker 池；`make native-test` 全绿 |
+| AC2 真实 loopback RTSP 帧进槽位 | ⚠️ **部分** | 多 broker e2e（`test_runner_multi_broker_e2e`）覆盖到 `FRAME_DISPATCH`；**发布后解码池未耗尽**无专门断言 |
+| AC3 C ABI 路径查询 | ✅ | `Zhulong_stream_get_broker_path` + `TestBridgeIntegration_AIConsumerAndBrokerPath`；C 编译测试覆盖参数边界 |
+| AC4 2 路独立投递/lease/ACK | ⚠️ **部分** | `test_runner_multi_broker_e2e` 两路各推 2 帧；**非对称场景**（一路先耗尽）未覆盖 |
+| AC5 AI 消费接入 + `DecodeSession` 按需拉起 | ✅ | `ResolveAIStreamBrokerPath` + `TestStreamHub*`；`ConsumerAI` 不再零调用 |
+| AC6 慢包 Drop Latest 不阻塞采集 | ⚠️ **未验证** | 无断言；`max_frames` 语义在多路下是 per-connection，需补非对称测试 |
+| AC7 崩溃后 lease 回收/槽位回 FREE | ⚠️ **未验证** | 既有 `frame_broker_test` 有单路覆盖；宿主崩溃后重启的完整链路无断言 |
+| AC8 端到端 RTSP→…→`process` | ⚠️ **部分** | 组件级 e2e 已有；**真实 RTSP 全链路**未在本任务执行 |
+| AC9 变更面闭环（增/删/改） | ⚠️ **部分** | 增/删/改编排层已测（含 debounce）；**真实 RTSP 下 runner 实际重启为 2 个 `--broker`** 未实测 |
+| AC10 节流生效（含跨包 max） | ⚠️ **部分** | 跨包 max 已测（`TestPublishRateUsesCrossPackageMax`）；**`publish_frame` 实际调用率**未统计 |
+| AC11 崩溃重启不自杀 | ⚠️ **部分** | `w.brokerSocks` 固化已实现；native 层多 broker 已测；**Go 层 `kill -9` → 自动重启带完整列表**未测 |
+
+⚠️ **未达成的 AC 不得当作已通过**（`implement.md` §3 的既定要求）。AC2/AC6/AC7/AC8/AC10/AC11 的真实链路验证依赖 loopback RTSP 或板端环境，需在收工前补齐或显式拆为后续任务。

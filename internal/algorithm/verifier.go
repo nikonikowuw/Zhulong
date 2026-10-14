@@ -377,10 +377,6 @@ func installDirectoryAtomically(src, dst string) (retErr error) {
 	return nil
 }
 
-func renameDirectoryNoReplace(src, dst string) error {
-	return unix.Renameat2(unix.AT_FDCWD, src, unix.AT_FDCWD, dst, unix.RENAME_NOREPLACE)
-}
-
 func copyDir(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {

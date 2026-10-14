@@ -31,13 +31,16 @@ const (
 	MaxIpcPayloadSize = 64 * 1024
 
 	// FailureStageBrokerConnect marks a runner that exited because it could not
-	// connect to the frame broker socket. The runner emits this on stderr as
-	// {"status":"failed","stage":"connect",...} (runner.cpp:190-196).
+	// connect to at least one frame broker socket. The runner emits this on
+	// stderr as {"status":"failed","stage":"connect","index":N,"path":...,"error":...}
+	// and exits with code 5 (see .trellis/spec/native/algo-plugin-contract.md §5.2).
+	// Under multiple --broker arguments, any single path failing fails the whole
+	// runner (D6), so this stage still means "the broker path list is not usable".
 	FailureStageBrokerConnect = "connect"
 
 	// runnerExitBrokerUnavailable is the runner's exit code for a failed broker
-	// connect (runner.cpp:195). Used as the secondary detection channel because
-	// the stderr marker is the more robust primary signal.
+	// connect. Used as the secondary detection channel because the stderr marker
+	// is the more robust primary signal.
 	runnerExitBrokerUnavailable = 5
 
 	// Gallery IPC Message Types.
@@ -146,7 +149,7 @@ type ProcessConfig struct {
 	AlgorithmName string
 	RunnerPath    string
 	PluginPath    string
-	BrokerSock    string
+	BrokerSocks   []string
 	EnvFile       string
 	ExtraEnv      map[string]string
 	Logger        *zap.Logger
@@ -197,8 +200,12 @@ func (p *RunnerProcess) Start() error {
 	args := []string{
 		"--plugin", p.config.PluginPath,
 	}
-	if p.config.BrokerSock != "" {
-		args = append(args, "--broker", p.config.BrokerSock)
+	if len(p.config.BrokerSocks) > 0 {
+		for _, sock := range p.config.BrokerSocks {
+			if sock != "" {
+				args = append(args, "--broker", sock)
+			}
+		}
 	}
 	if p.config.AlgorithmName != "" {
 		args = append(args, "--name", p.config.AlgorithmName)
@@ -300,13 +307,13 @@ func (p *RunnerProcess) watchExit(cmd *exec.Cmd) {
 		p.state = StatusCrashed
 
 		if p.failureStage == FailureStageBrokerConnect {
-			// The frame broker host process does not exist yet; this is a
-			// distinguishable signal, NOT an ordinary plugin crash. We do not
-			// fake success or change watchdog restart/circuit-breaker behaviour.
-			p.logger.Error("runner exited because the frame broker host is not running",
+			// The runner could not connect to every broker socket it was given.
+			// This is a distinguishable signal, NOT an ordinary plugin crash. We do
+			// not fake success or change watchdog restart/circuit-breaker behaviour.
+			p.logger.Error("runner exited because it could not connect to its frame broker sockets",
 				zap.Int("exit_code", p.exitCode),
-				zap.String("broker_dir", p.config.BrokerSock),
-				zap.String("reason", "broker_host_unavailable"),
+				zap.Strings("broker_socks", p.config.BrokerSocks),
+				zap.String("reason", "broker_unavailable"),
 				zap.String("algorithm", p.config.AlgorithmID),
 			)
 		} else {

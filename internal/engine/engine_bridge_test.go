@@ -186,3 +186,45 @@ func TestEngineUnsubscribeNotFoundDeletesToken(t *testing.T) {
 		t.Fatal("expected deleteToken to be called even when unsubscribe returns NOT_FOUND")
 	}
 }
+
+func TestEngineBrokerPathAndPublishRateValidation(t *testing.T) {
+	e := New()
+	if err := e.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer e.Close()
+
+	ctx := context.Background()
+
+	// 1. 已关闭的 Stream 调用返回 ErrClosed
+	sClosed := &Stream{
+		engine:     e,
+		id:         1,
+		consumerID: 101,
+		kind:       ConsumerAI,
+		closed:     true,
+		generation: e.generation,
+	}
+	if _, err := sClosed.BrokerPath(ctx); !errors.Is(err, ErrClosed) {
+		t.Fatalf("expected ErrClosed on closed stream BrokerPath, got %v", err)
+	}
+	if err := sClosed.SetPublishRate(ctx, 10); !errors.Is(err, ErrClosed) {
+		t.Fatalf("expected ErrClosed on closed stream SetPublishRate, got %v", err)
+	}
+
+	// 2. 针对不存在的 stream ID 调用返回 ErrNotFound
+	sNonExistent := &Stream{
+		engine:     e,
+		id:         99999,
+		consumerID: 102,
+		kind:       ConsumerAI,
+		closed:     false,
+		generation: e.generation,
+	}
+	if _, err := sNonExistent.BrokerPath(ctx); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for non-existent stream, got %v", err)
+	}
+	if err := sNonExistent.SetPublishRate(ctx, 10); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for non-existent stream, got %v", err)
+	}
+}

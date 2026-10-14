@@ -17,7 +17,14 @@
 | 阶段 | 严格顺序 |
 | --- | --- |
 | **启动 (`lifecycleRuntime.Start`)** | 1. 打开 GORM/SQLite 并执行嵌入式版本化迁移 (失败则阻断) ➔ 2. 创建并启动 Native C++ Engine ➔ 3. 校验/初始化相机 AES-256-GCM 密钥（已有密文而密钥缺失则阻断）➔ 4. 启动 Camera HealthScheduler ➔ 5. 绑定 TCP listener 并启动 Gin HTTP Serve |
-| **停止 (`lifecycleRuntime.Stop`)** | 1. 优雅关闭 HTTP 并等待 Serve 退出 ➔ 2. 关闭 SSE Hub 与停止 Camera HealthScheduler ➔ 3. 停止并销毁 C++ opaque handle ➔ 4. 关闭 SQLite pool ➔ 5. Sync Zap |
+| **停止 (`lifecycleRuntime.Stop`)** | 1. 优雅关闭 HTTP 并等待 Serve 退出 ➔ 2. 关闭 SSE Hub 与停止 Camera HealthScheduler（含 StreamHub 分发器与 AI 流） ➔ 3. 停止 Algorithm Supervisor 所有运行中的子进程 ➔ 4. 停止并销毁 C++ opaque handle ➔ 5. 关闭 SQLite pool ➔ 6. Sync Zap |
+
+⚠️ **停机顺序是硬约束，不得静默调整**：`camera.Stop` 必须先于 `algorithm.Stop`，`algorithm.Stop` 又必须先于 `native.Close`（即 `engine.close`）。理由是 native `Engine` 持有 per-stream 的 `FrameBroker`，而 runner 子进程是它的 IPC 客户端：
+
+- 若 `native.Close` 先于 `algorithm.Stop`，runner 仍持有 shm 映射而 broker 已随引擎析构；
+- 若 `algorithm.Stop` 先于 `camera.Stop`，AI 消费者会先消失、broker 先被销毁，而 runner 仍在收帧。
+
+该顺序由 `internal/app/runtime_test.go` 的 `TestAIShutdownOrderPrecedesNativeClose` 守护：被改坏时测试会失败，而不是静默产生 use-after-free。
 
 启动的后续步骤失败时，`lifecycleRuntime.Start` 在返回错误前按逆序清理已打开资源，因为 Fx 不会对失败的 `OnStart` 自动调用该 hook 的 `OnStop`。正常停机时先排空 HTTP 请求，再释放 native 与数据库资源。当前 native stub 不创建 worker thread、媒体流水线或 NPU context；未来增加后台线程时，必须先停止、唤醒并 Join 后才能销毁句柄。
 

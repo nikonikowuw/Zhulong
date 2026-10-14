@@ -282,6 +282,13 @@ def dependency(p):
 
 ALLOWED_FRAMEWORKS = {"CoreFoundation", "CoreVideo", "CoreMedia", "AudioToolbox", "VideoToolbox", "Security"}
 
+# Zhulong 自有静态归档（不经 FFmpeg .pc）在 Linux 下需要的系统库。
+# 它们不属于 FFmpeg 的依赖，因此不能走 system_libraries() 的白名单审计，
+# 但必须同样显式声明，避免「直接 append 一个 -l 标志」绕过审计边界。
+ZHULONG_SYSTEM_LIBRARIES = {
+    "linux": ["-lrt"],  # ZhulongAlgoIpc 的 POSIX 共享内存/信号量 (CMakeLists: UNIX AND NOT APPLE)
+}
+
 
 def system_libraries(prefix):
     """解析已安装 FFmpeg 目标产物 .pc 文件中声明的系统库，实施白名单安全审计"""
@@ -355,13 +362,19 @@ def go(p, build, prefix, args):
     """执行 Go 构建命令（动态注入内容寻址的 CGO 链接参数）
 
     ⚠️ 解决 Go 构建缓存不感知外部 .a 变化的根本方法：
-      为 libZhulongEngine.a 计算内容哈希，复制到独立的哈希子目录下进行链接。
+      为 libZhulongEngine.a 与 libZhulongAlgoIpc.a 分别计算内容哈希，复制到独立的哈希子目录下进行链接。
     """
-    archive = build / "libZhulongEngine.a"
-    link = build / "go-link" / digest(archive) / archive.name
-    if not link.exists():
-        link.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(archive, link)
+    engine_archive = build / "libZhulongEngine.a"
+    engine_link = build / "go-link" / digest(engine_archive) / engine_archive.name
+    if not engine_link.exists():
+        engine_link.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(engine_archive, engine_link)
+
+    ipc_archive = build / "libZhulongAlgoIpc.a"
+    ipc_link = build / "go-link" / digest(ipc_archive) / ipc_archive.name
+    if not ipc_link.exists():
+        ipc_link.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ipc_archive, ipc_link)
 
     cgo_sys_libs = []
     for flag in system_libraries(prefix):
@@ -370,11 +383,16 @@ def go(p, build, prefix, args):
         else:
             cgo_sys_libs.append(flag)
 
-    libraries = [link] + [prefix / "lib" / f"lib{lib}.a" for lib in ("avformat", "avcodec", "avutil")]
+    libraries = [engine_link, ipc_link] + [prefix / "lib" / f"lib{lib}.a" for lib in ("avformat", "avcodec", "avutil")]
     flags = list(map(str, libraries)) + [
         "-lc++" if p["target_os"] == "darwin" else "-lstdc++",
         *cgo_sys_libs, "-pthread"
     ]
+    # Zhulong 自有归档的系统库依赖，按目标 OS 显式追加（见 ZHULONG_SYSTEM_LIBRARIES）。
+    # ⚠️ 必须排在两个归档之后：GNU ld 对静态库与 -l 的顺序敏感。
+    for lib in ZHULONG_SYSTEM_LIBRARIES.get(p["target_os"], []):
+        if lib not in flags:
+            flags.append(lib)
 
     env = os.environ.copy()
     env.update(CGO_ENABLED="1", GOOS=p["target_os"], GOARCH=p["goarch"], CC=p["cc"], CXX=p["cxx"])

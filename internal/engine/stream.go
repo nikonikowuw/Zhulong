@@ -28,6 +28,31 @@ type Stream struct {
 	closeOnce sync.Once
 }
 
+// BrokerPath 查询当前物理流关联的 FrameBroker Unix Domain Socket 路径。
+// 必须在 ConsumerAI 类型流上调用（且当前流仍有活跃 AI 消费者）。
+func (s *Stream) BrokerPath(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return "", ErrClosed
+	}
+	s.mu.Unlock()
+
+	return s.engine.getBrokerPath(s.generation, s.id)
+}
+
+// SetPublishRate 动态设置帧发布最大采样帧率（由关联任务的 max(sample_fps) 驱动，0 表示不节流）。
+func (s *Stream) SetPublishRate(ctx context.Context, fps uint32) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrClosed
+	}
+	s.mu.Unlock()
+
+	return s.engine.setPublishRate(s.generation, s.id, fps)
+}
+
 // Status 查询物理流当前运行状态与底层错误码。
 func (s *Stream) Status(ctx context.Context) (StreamStatus, error) {
 	s.mu.Lock()

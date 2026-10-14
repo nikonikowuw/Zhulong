@@ -81,6 +81,78 @@ func (c cameraStub) Stop() {
 	c.events.add("camera.stop")
 }
 
+// algorithmStub records the algorithm supervisor stop in the shutdown sequence.
+type algorithmStub struct {
+	events   *eventLog
+	startErr error
+	stopErr  error
+}
+
+func (a algorithmStub) Start(context.Context) error {
+	a.events.add("algorithm.start")
+	return a.startErr
+}
+
+func (a algorithmStub) Stop(context.Context) error {
+	a.events.add("algorithm.stop")
+	return a.stopErr
+}
+
+// TestAIShutdownOrderPrecedesNativeClose 守护跨层停机顺序：
+// camera（AI 消费者与 StreamHub）→ algorithm（runner 子进程）→ native（broker 宿主）。
+// 该顺序是「broker 先于 native 停止」的载体（见 dependency-injection.md §2 与 design.md §3.1）：
+// 顺序被改坏时必须在这里失败，而不是在真实板端产生 use-after-free。
+func TestAIShutdownOrderPrecedesNativeClose(t *testing.T) {
+	events := &eventLog{}
+	serveDone := make(chan error, 1)
+	runtime := &lifecycleRuntime{
+		database:       databaseStub{events: events},
+		native:         engineStub{events: events},
+		camera:         cameraStub{events: events},
+		algorithm:      algorithmStub{events: events},
+		server:         &http.Server{Addr: "127.0.0.1:0"},
+		logger:         zap.NewNop(),
+		databaseReady:  true,
+		nativeReady:    true,
+		cameraReady:    true,
+		algorithmReady: true,
+		httpReady:      true,
+		serveDone:      serveDone,
+		shutdown: func(ctx context.Context) error {
+			events.add("http.shutdown")
+			serveDone <- http.ErrServerClosed
+			return nil
+		},
+	}
+
+	if err := runtime.Stop(context.Background()); err != nil {
+		t.Fatalf("unexpected stop error: %v", err)
+	}
+
+	order := events.snapshot()
+	want := []string{"http.shutdown", "camera.stop", "algorithm.stop", "engine.close", "database.close"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("unexpected AI shutdown order: got %v, want %v", order, want)
+	}
+
+	// 显式断言三条相对顺序，让失败信息直接指向被破坏的约束。
+	index := func(event string) int {
+		for i, got := range order {
+			if got == event {
+				return i
+			}
+		}
+		t.Fatalf("event %q missing from shutdown order %v", event, order)
+		return -1
+	}
+	if index("camera.stop") > index("algorithm.stop") {
+		t.Fatal("camera must stop before algorithm: AI consumers must disappear before runner subprocesses")
+	}
+	if index("algorithm.stop") > index("engine.close") {
+		t.Fatal("algorithm must stop before engine.close: runner clients must be drained before the broker host is destroyed")
+	}
+}
+
 func TestMigrationFailurePreventsHTTPListener(t *testing.T) {
 	events := &eventLog{}
 	migrationErr := errors.New("migration rejected")

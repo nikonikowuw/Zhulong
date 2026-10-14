@@ -30,8 +30,9 @@ func setupTestRouter(t *testing.T) (*gin.Engine, *algorithm.Service) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	comp := algorithm.NewAlgorithmComponents(dbStore, tempDir, "cpu", zap.NewNop())
+	comp.Verifier.HostArch = "x86_64"
 	// Use sleep as stub runner in unit tests
-	comp.Supervisor = algorithm.NewSupervisor(comp.Store, tempDir, "sleep", "", algorithm.DefaultRecoveryOptions(), zap.NewNop())
+	comp.Supervisor = algorithm.NewSupervisor(comp.Store, tempDir, "sleep", algorithm.DefaultRecoveryOptions(), zap.NewNop())
 	comp.Verifier.RunnerPath = "" // bypass dynamic runner in router unit test
 
 	r := gin.New()

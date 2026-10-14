@@ -134,6 +134,31 @@ extern "C" Zhulong_status_t Zhulong_stream_get_status(Zhulong_engine_h engine, Z
     });
 }
 
+extern "C" Zhulong_status_t Zhulong_stream_get_broker_path(Zhulong_engine_h engine,
+    Zhulong_stream_id stream, char *out_path, size_t *inout_len) {
+    return boundary([&] {
+        require(engine && stream && out_path && inout_len);
+        require(*inout_len > 0);
+
+        std::string path = engine->implementation.get_broker_path(stream);
+        size_t needed = path.size() + 1;
+        if (*inout_len < needed) {
+            *inout_len = needed;
+            throw zhulong::Failure{Zhulong_ERR_BUFFER_TOO_SMALL};
+        }
+        std::memcpy(out_path, path.c_str(), needed);
+        *inout_len = needed;
+    });
+}
+
+extern "C" Zhulong_status_t Zhulong_stream_set_publish_rate(Zhulong_engine_h engine,
+    Zhulong_stream_id stream, uint32_t max_sample_fps) {
+    return boundary([&] {
+        require(engine && stream);
+        engine->implementation.set_publish_rate(stream, max_sample_fps);
+    });
+}
+
 extern "C" Zhulong_status_t Zhulong_stream_subscribe(Zhulong_engine_h engine, Zhulong_stream_id stream,
     uint64_t preview_consumer_id, Zhulong_packet_callback callback, uintptr_t token,
     Zhulong_subscription_id *out_subscription) {

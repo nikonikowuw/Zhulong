@@ -158,7 +158,8 @@ func TestUploadRouteEndToEndRealRouter(t *testing.T) {
 	})
 
 	comp := algorithm.NewAlgorithmComponents(dbStore, dataDir, "cpu", zap.NewNop())
-	comp.Supervisor = algorithm.NewSupervisor(comp.Store, dataDir, "sleep", "", algorithm.DefaultRecoveryOptions(), zap.NewNop())
+	comp.Supervisor = algorithm.NewSupervisor(comp.Store, dataDir, "sleep", algorithm.DefaultRecoveryOptions(), zap.NewNop())
+	comp.Verifier.HostArch = "x86_64"
 	comp.Verifier.RunnerPath = "" // bypass dynamic runner check in test
 
 	assets := http.FS(fstest.MapFS{
@@ -296,7 +297,8 @@ func TestUploadRouteProducesAuditRecord(t *testing.T) {
 	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
 
 	comp := algorithm.NewAlgorithmComponents(dbStore, dataDir, "cpu", zap.NewNop())
-	comp.Supervisor = algorithm.NewSupervisor(comp.Store, dataDir, "sleep", "", algorithm.DefaultRecoveryOptions(), zap.NewNop())
+	comp.Supervisor = algorithm.NewSupervisor(comp.Store, dataDir, "sleep", algorithm.DefaultRecoveryOptions(), zap.NewNop())
+	comp.Verifier.HostArch = "x86_64"
 	comp.Verifier.RunnerPath = "" // bypass dynamic runner check in test
 
 	assets := http.FS(fstest.MapFS{

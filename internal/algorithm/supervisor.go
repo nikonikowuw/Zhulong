@@ -10,13 +10,22 @@ import (
 	"go.uber.org/zap"
 )
 
+// BrokerSubscriptionResolver 解析指定算法包当前应当订阅的 Broker Socket 路径列表，
+// 并把订阅关系（哪一路 AI 流因哪个包而保活）同步到该算法包的最新任务集合。
+//
+// ⚠️ 命名刻意不用 Resolve*：它不只是查询，还会在实现侧建立/撤销订阅关系。
+// 实现方必须是幂等的，并保证失败时不留下半提交的订阅。
+type BrokerSubscriptionResolver interface {
+	SyncBrokerSubscriptions(ctx context.Context, algorithmID string) ([]string, error)
+}
+
 // Supervisor oversees all algorithm runner subprocesses, watching for crashes,
 // managing exponential backoffs, circuit breakers, and automatic rollbacks.
 type Supervisor struct {
 	store      *Store
 	algoDir    string
 	runnerPath string
-	brokerSock string
+	resolver   BrokerSubscriptionResolver
 	logger     *zap.Logger
 	mu         sync.RWMutex
 	watchers   map[string]*workerWatcher
@@ -24,17 +33,18 @@ type Supervisor struct {
 }
 
 type workerWatcher struct {
-	supervisor *Supervisor
-	algo       Algorithm
-	process    *RunnerProcess
-	sm         *RecoveryStateMachine
-	guard      *RollbackGuard
-	stopCh     chan struct{}
-	doneCh     chan struct{}
-	mu         sync.Mutex
-	stopMu     sync.Mutex
-	stopOnce   sync.Once
-	status     string
+	supervisor  *Supervisor
+	algo        Algorithm
+	process     *RunnerProcess
+	sm          *RecoveryStateMachine
+	guard       *RollbackGuard
+	stopCh      chan struct{}
+	doneCh      chan struct{}
+	brokerSocks []string
+	mu          sync.Mutex
+	stopMu      sync.Mutex
+	stopOnce    sync.Once
+	status      string
 }
 
 var ErrAlgorithmNotInCrashLoop = errors.New("algorithm is not in CRASH_LOOP")
@@ -58,7 +68,12 @@ func (w *workerWatcher) stopProcess(timeout time.Duration) error {
 }
 
 // NewSupervisor creates a Supervisor instance.
-func NewSupervisor(store *Store, algoDir, runnerPath, brokerSock string, opts RecoveryOptions, logger *zap.Logger) *Supervisor {
+//
+// Broker socket paths are resolved per algorithm package through
+// SetBrokerSubscriptionResolver: the broker host lives in the native engine and derives
+// one socket per physical stream, so there is no process-wide default to fall
+// back to.
+func NewSupervisor(store *Store, algoDir, runnerPath string, opts RecoveryOptions, logger *zap.Logger) *Supervisor {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -66,11 +81,36 @@ func NewSupervisor(store *Store, algoDir, runnerPath, brokerSock string, opts Re
 		store:      store,
 		algoDir:    algoDir,
 		runnerPath: runnerPath,
-		brokerSock: brokerSock,
 		logger:     logger.Named("algorithm_supervisor"),
 		watchers:   make(map[string]*workerWatcher),
 		opts:       opts,
 	}
+}
+
+// SetBrokerSubscriptionResolver sets the resolver for multi-stream broker subscriptions.
+func (s *Supervisor) SetBrokerSubscriptionResolver(resolver BrokerSubscriptionResolver) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resolver = resolver
+}
+
+// resolveBrokerSocksLocked 解析算法包应当订阅的 broker socket 路径列表，
+// 并驱动实现侧同步订阅关系。
+//
+// 解析失败必须向上传播：退化为「没有 broker」会让 runner 拿不到 --broker 而 exit 5，
+// 进而触发退避重启与 CRASH_LOOP 熔断（design.md §7.2 的冷路径陷阱），
+// 且失败原因会被完全掩盖。
+//
+// 调用方必须持有 s.mu。
+func (s *Supervisor) resolveBrokerSocksLocked(ctx context.Context, algoID string) ([]string, error) {
+	if s.resolver != nil {
+		socks, err := s.resolver.SyncBrokerSubscriptions(ctx, algoID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve broker paths for %s: %w", algoID, err)
+		}
+		return socks, nil
+	}
+	return nil, nil
 }
 
 // StartAlgorithm spawns and watches a runner subprocess for an algorithm.
@@ -82,13 +122,19 @@ func (s *Supervisor) StartAlgorithm(ctx context.Context, algo Algorithm) error {
 		return errors.New("algorithm worker is already running or supervised")
 	}
 
+	brokerSocks, err := s.resolveBrokerSocksLocked(ctx, algo.ID)
+	if err != nil {
+		return err
+	}
+
 	w := &workerWatcher{
-		supervisor: s,
-		algo:       algo,
-		sm:         NewRecoveryStateMachine(s.opts),
-		stopCh:     make(chan struct{}),
-		doneCh:     make(chan struct{}),
-		status:     StatusStarting,
+		supervisor:  s,
+		algo:        algo,
+		sm:          NewRecoveryStateMachine(s.opts),
+		stopCh:      make(chan struct{}),
+		doneCh:      make(chan struct{}),
+		status:      StatusStarting,
+		brokerSocks: brokerSocks,
 	}
 
 	cfg := ProcessConfig{
@@ -96,7 +142,7 @@ func (s *Supervisor) StartAlgorithm(ctx context.Context, algo Algorithm) error {
 		AlgorithmName: algo.Name,
 		RunnerPath:    s.runnerPath,
 		PluginPath:    algo.EntryPath(s.algoDir),
-		BrokerSock:    s.brokerSock,
+		BrokerSocks:   w.brokerSocks,
 		EnvFile:       algo.EnvPath(s.algoDir),
 		Logger:        s.logger,
 	}
@@ -142,6 +188,49 @@ func (s *Supervisor) StopAlgorithm(ctx context.Context, algoID string) error {
 	return err
 }
 
+// RestartAlgorithm stops the running algorithm instance (if active) and restarts it,
+// re-resolving broker paths for newly added or removed tasks.
+//
+// ⚠️ 重启是「同版本换订阅集」，不是停用：DB 中的状态必须保持 ACTIVE。
+// StopAlgorithm 会把状态写成 DISABLED，因此这里在重新拉起后要写回 ACTIVE；
+// 重启失败时同样要写回，否则一次失败的任务变更会静默停用该算法包。
+func (s *Supervisor) RestartAlgorithm(ctx context.Context, algoID string) error {
+	status := s.GetStatus(algoID)
+	wasActive := status == StatusRunning || status == StatusStarting
+	if wasActive {
+		if err := s.StopAlgorithm(ctx, algoID); err != nil {
+			return fmt.Errorf("stop algorithm for restart: %w", err)
+		}
+	}
+	if s.store == nil {
+		return errors.New("no store configured to load algorithm for restart")
+	}
+	algo, err := s.store.GetAlgorithm(ctx, algoID)
+	if err != nil {
+		return fmt.Errorf("get algorithm for restart: %w", err)
+	}
+
+	if startErr := s.StartAlgorithm(ctx, *algo); startErr != nil {
+		if wasActive && s.store != nil {
+			if updateErr := s.store.UpdateAlgorithmStatus(ctx, algoID, StatusActive); updateErr != nil {
+				s.logger.Error("failed to restore algorithm status after failed restart",
+					zap.String("id", algoID),
+					zap.Error(updateErr),
+				)
+			}
+		}
+		return startErr
+	}
+
+	// StartAlgorithm 成功，但 StopAlgorithm 已把 DB 状态置为 DISABLED，需恢复为 ACTIVE。
+	if wasActive {
+		if err := s.store.UpdateAlgorithmStatus(ctx, algoID, StatusActive); err != nil {
+			return fmt.Errorf("restore algorithm status after restart: %w", err)
+		}
+	}
+	return nil
+}
+
 // UpgradeAlgorithm gracefully transitions from an old version to a new version with rollback observation.
 func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo Algorithm, oldAlgo Algorithm) error {
 	s.mu.Lock()
@@ -158,6 +247,16 @@ func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo Algorithm, ol
 	}
 
 	// 2. Set up new worker with RollbackGuard
+	brokerSocks, err := s.resolveBrokerSocksLocked(ctx, newAlgo.ID)
+	if err != nil {
+		// 解析失败时不启动新版本，直接回滚到旧版本（旧版本仍在运行中）。
+		s.logger.Warn("failed to resolve broker paths for new version, attempting immediate rollback",
+			zap.String("algorithm", newAlgo.ID),
+			zap.Error(err),
+		)
+		return s.rollbackToOldLocked(ctx, oldAlgo)
+	}
+
 	w := &workerWatcher{
 		supervisor: s,
 		algo:       newAlgo,
@@ -169,9 +268,10 @@ func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo Algorithm, ol
 			s.opts.RollbackGuardWindow,
 			s.logger,
 		),
-		stopCh: make(chan struct{}),
-		doneCh: make(chan struct{}),
-		status: StatusStarting,
+		stopCh:      make(chan struct{}),
+		doneCh:      make(chan struct{}),
+		status:      StatusStarting,
+		brokerSocks: brokerSocks,
 	}
 
 	cfg := ProcessConfig{
@@ -179,7 +279,7 @@ func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo Algorithm, ol
 		AlgorithmName: newAlgo.Name,
 		RunnerPath:    s.runnerPath,
 		PluginPath:    newAlgo.EntryPath(s.algoDir),
-		BrokerSock:    s.brokerSock,
+		BrokerSocks:   w.brokerSocks,
 		EnvFile:       newAlgo.EnvPath(s.algoDir),
 		Logger:        s.logger,
 	}
@@ -208,13 +308,20 @@ func (s *Supervisor) rollbackToOld(ctx context.Context, oldAlgo Algorithm) error
 }
 
 func (s *Supervisor) rollbackToOldLocked(ctx context.Context, oldAlgo Algorithm) error {
+	brokerSocks, err := s.resolveBrokerSocksLocked(ctx, oldAlgo.ID)
+	if err != nil {
+		// 回滚目标同样解析不出 broker 路径：不启动半瘫的回滚进程，向上报错。
+		return fmt.Errorf("resolve broker paths for rollback target %s: %w", oldAlgo.ID, err)
+	}
+
 	w := &workerWatcher{
-		supervisor: s,
-		algo:       oldAlgo,
-		sm:         NewRecoveryStateMachine(s.opts),
-		stopCh:     make(chan struct{}),
-		doneCh:     make(chan struct{}),
-		status:     StatusRollingBack,
+		supervisor:  s,
+		algo:        oldAlgo,
+		sm:          NewRecoveryStateMachine(s.opts),
+		stopCh:      make(chan struct{}),
+		doneCh:      make(chan struct{}),
+		status:      StatusRollingBack,
+		brokerSocks: brokerSocks,
 	}
 
 	cfg := ProcessConfig{
@@ -222,7 +329,7 @@ func (s *Supervisor) rollbackToOldLocked(ctx context.Context, oldAlgo Algorithm)
 		AlgorithmName: oldAlgo.Name,
 		RunnerPath:    s.runnerPath,
 		PluginPath:    oldAlgo.EntryPath(s.algoDir),
-		BrokerSock:    s.brokerSock,
+		BrokerSocks:   w.brokerSocks,
 		EnvFile:       oldAlgo.EnvPath(s.algoDir),
 		Logger:        s.logger,
 	}
@@ -475,7 +582,7 @@ func (w *workerWatcher) superviseLoop() {
 				AlgorithmName: w.algo.Name,
 				RunnerPath:    w.supervisor.runnerPath,
 				PluginPath:    w.algo.EntryPath(w.supervisor.algoDir),
-				BrokerSock:    w.supervisor.brokerSock,
+				BrokerSocks:   w.brokerSocks, // ⚠️ 固化复用：崩溃重启路径无 ctx，复用此前解析的 brokerSocks 防 exit 5
 				EnvFile:       w.algo.EnvPath(w.supervisor.algoDir),
 				Logger:        w.supervisor.logger,
 			}

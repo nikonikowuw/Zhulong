@@ -46,7 +46,7 @@
 
 本仓库已完成 `cmd/Zhulong`、`internal/app`、`database`（`000001`–`000007` 版本化迁移）、`engine`、`httputil`、`webui`、`auth` 单用户凭据会话、`camera` 全生命周期管理、`person` 人员与人脸底库域、`algorithm` 算法包生命周期与 Runner 进程监督、`storage` 存储水位感知、`network` 网络配置两阶段回滚看门狗、`systemtime` 时间同步与 `audit` 操作审计。
 
-**尚未交付**：人员底库经 UDS 下发至 Runner 的热更新链路、算法推理结果的落库与事件派发、录像模块，以及 C++ 解码/预处理流水线——不得把架构目标图解读为已全量交付。当前 native 组件已支持宿主 C ABI、流探测、按需包借用与订阅生命周期。
+**尚未交付**：人员底库经 UDS 下发至 Runner 的热更新链路、算法推理结果的落库与事件派发、录像模块——不得把架构目标图解读为已全量交付。当前 native 组件已支持宿主 C ABI、流探测、按需包借用与订阅生命周期，以及 FrameBroker 共享内存帧分发宿主（每路 AI 流一个 broker，发布侧按 `max(sample_fps)` 节流，socket 路径经 C ABI 交给 Go）与 runner 多路 `--broker` 连接。⚠️ 该通路走的是**逐 plane 拷贝到共享内存**的参考路径，**不是** DMA-BUF 零拷贝；帧数据不经过 Go，但「零拷贝」不能据此宣称已交付。
 
 ---
 

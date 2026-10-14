@@ -162,16 +162,18 @@ func findRealRunnerBinary(t *testing.T) string {
 	return ""
 }
 
-// TestRunnerProcessDetectsBrokerHostUnavailable drives the REAL runner binary
-// against a broker directory with no listening host. The runner must exit with
+// TestRunnerProcessDetectsBrokerUnavailable drives the REAL runner binary
+// against a broker socket path with no listening host. The runner must exit with
 // code 5 / stage=connect, which must surface as a distinguishable
-// broker_host_unavailable signal rather than an ordinary crash.
+// broker_unavailable signal rather than an ordinary crash.
 func TestRunnerProcessDetectsBrokerHostUnavailable(t *testing.T) {
 	runnerPath := findRealRunnerBinary(t)
 	pluginPath := findMockDetectorPlugin(t)
 
-	// Point --broker at a directory that has no broker host listening.
-	emptyBrokerDir := t.TempDir()
+	// Point --broker at a literal socket path with no listening host. The path
+	// must match the host's derivation rule (<base_dir>/zhulong_broker_<sid>.sock)
+	// because the runner now derives its task identity from it.
+	missingSock := filepath.Join(t.TempDir(), "zhulong_broker_4242.sock")
 
 	core, observed := observer.New(zapcore.DebugLevel)
 	logger := zap.New(core)
@@ -181,7 +183,7 @@ func TestRunnerProcessDetectsBrokerHostUnavailable(t *testing.T) {
 		AlgorithmName: "broker_probe_pkg",
 		RunnerPath:    runnerPath,
 		PluginPath:    pluginPath,
-		BrokerSock:    emptyBrokerDir,
+		BrokerSocks:   []string{missingSock},
 		Logger:        logger,
 	}
 
@@ -203,7 +205,7 @@ func TestRunnerProcessDetectsBrokerHostUnavailable(t *testing.T) {
 		if fields == nil {
 			continue
 		}
-		if fields["reason"] == "broker_host_unavailable" {
+		if fields["reason"] == "broker_unavailable" {
 			foundReason = true
 			if code, ok := fields["exit_code"].(int64); ok && code == 5 {
 				foundExit5 = true
@@ -212,10 +214,10 @@ func TestRunnerProcessDetectsBrokerHostUnavailable(t *testing.T) {
 	}
 
 	if !foundReason {
-		t.Errorf("expected a broker_host_unavailable log entry")
+		t.Errorf("expected a broker_unavailable log entry")
 	}
 	if !foundExit5 {
-		t.Errorf("expected exit_code=5 in the broker_host_unavailable log entry")
+		t.Errorf("expected exit_code=5 in the broker_unavailable log entry")
 	}
 }
 
@@ -397,5 +399,50 @@ sleep 10
 
 	if elapsed < 90*time.Millisecond || elapsed > 1*time.Second {
 		t.Logf("SIGKILL applied after: %v", elapsed)
+	}
+}
+
+func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "echo_args.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"ARGS: $@\"\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	core, observed := observer.New(zapcore.DebugLevel)
+	logger := zap.New(core)
+
+	cfg := algorithm.ProcessConfig{
+		AlgorithmID:   "multi_broker_pkg",
+		AlgorithmName: "multi_broker_pkg",
+		RunnerPath:    script,
+		PluginPath:    "plugin.so",
+		BrokerSocks:   []string{"/tmp/sock1.sock", "/tmp/sock2.sock"},
+		Logger:        logger,
+	}
+
+	proc := algorithm.NewRunnerProcess(cfg)
+	if err := proc.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer proc.Stop(2 * time.Second)
+
+	select {
+	case <-proc.Done():
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for script to finish")
+	}
+
+	found := false
+	for _, entry := range observed.All() {
+		for _, f := range entry.Context {
+			if strings.Contains(f.String, "--broker /tmp/sock1.sock --broker /tmp/sock2.sock") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected command line to contain multiple --broker flags, got logs: %+v", observed.All())
 	}
 }

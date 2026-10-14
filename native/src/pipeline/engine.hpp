@@ -6,8 +6,11 @@
 #pragma once
 
 #include "pipeline/stream.hpp"
+#include "pipeline/frame_publisher.hpp"
+#include "algorithm/ipc/frame_broker.hpp"
 
 #include <atomic>
+#include <functional>
 #include <condition_variable>
 #include <map>
 #include <memory>
@@ -36,6 +39,11 @@ struct Engine {
     uint64_t next_stream = 1;                   /**< 物理流 ID 生成器 */
     uint64_t next_subscription = 1;             /**< 订阅 ID 生成器 */
     std::map<Zhulong_stream_id, std::shared_ptr<Stream>> streams; /**< 物理流池 (ID -> Stream) */
+
+    // per-stream FrameBroker 与 FramePublisher 池 (受 control 互斥锁保护)
+    std::map<Zhulong_stream_id, std::unique_ptr<ipc::FrameBroker>> brokers; /**< AI 帧分发 Broker 实例池 */
+    std::map<Zhulong_stream_id, std::unique_ptr<FramePublisher>> publishers; /**< AI 帧发布线程池 */
+    std::string broker_base_dir{"/tmp"};        /**< Broker socket 存放目录 (读取环境变量覆写) */
 
     std::thread reaper;                         /**< 定期回收宽限期到期流的清理线程 */
     std::atomic<bool> reaper_stop{true};        /**< 清理线程停止控制信号 */
@@ -81,6 +89,23 @@ struct Engine {
 
     /** @brief 独立同步探测指定 RTSP 流的视频元数据 */
     Video probe(const std::string &url, const Options &options);
+
+    /**
+     * @brief 为该流按需创建 FrameBroker 与 FramePublisher
+     *
+     * 仅在 kind == Zhulong_CONSUMER_AI 且该流尚无 broker 时生效。
+     * @param rollback broker 启动失败时由调用方执行的补偿动作（回滚消费者注册等）
+     * @return 创建成功返回 true；失败时已执行 rollback 并返回 false
+     *
+     * ⚠️ 必须在持有 control 锁时调用；失败时本函数不改变 brokers/publishers。
+     */
+    bool ensure_frame_broker(const std::shared_ptr<Stream> &stream, int32_t kind, const std::function<void()> &rollback);
+
+    /** @brief 获取指定流关联的 FrameBroker socket 绝对路径 */
+    std::string get_broker_path(Zhulong_stream_id id);
+
+    /** @brief 动态设置指定流的帧发布采样帧率 */
+    void set_publish_rate(Zhulong_stream_id id, uint32_t max_sample_fps);
 };
 
 } // namespace zhulong

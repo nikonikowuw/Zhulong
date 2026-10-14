@@ -320,3 +320,57 @@ func TestBridgeIntegration_ProbeDoesNotAffectActiveStream(t *testing.T) {
 		t.Fatal("received empty packet after probe cancellation")
 	}
 }
+
+// TestBridgeIntegration_AIConsumerAndBrokerPath 验证以 ConsumerAI 获取流时 FrameBroker 自动创建、
+// Socket 路径可查询、可动态设置节流率，且在释放后 Socket 文件被清理。
+func TestBridgeIntegration_AIConsumerAndBrokerPath(t *testing.T) {
+	baseURL := getTestRTSPBaseURL(t)
+
+	e := New()
+	if err := e.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer e.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 1. 获取 AI 消费者流
+	s, err := e.Acquire(ctx, baseURL+"/live", 5001, ConsumerAI, StreamOptions{Transport: TransportTCP})
+	if err != nil {
+		t.Fatalf("Acquire AI consumer failed: %v", err)
+	}
+
+	// 2. 查询 Broker Socket 路径
+	brokerPath, err := s.BrokerPath(ctx)
+	if err != nil {
+		_ = s.Close()
+		t.Fatalf("BrokerPath failed: %v", err)
+	}
+	if brokerPath == "" {
+		_ = s.Close()
+		t.Fatal("expected non-empty broker path")
+	}
+
+	// 3. 动态设置发布节流率
+	if err := s.SetPublishRate(ctx, 10); err != nil {
+		_ = s.Close()
+		t.Fatalf("SetPublishRate failed: %v", err)
+	}
+
+	// 4. 验证 Socket 文件存在
+	if _, err := os.Stat(brokerPath); err != nil {
+		_ = s.Close()
+		t.Fatalf("stat broker socket failed: %v", err)
+	}
+
+	// 5. 释放流后验证 Broker 资源清理
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close stream failed: %v", err)
+	}
+
+	// 6. 验证已关闭流调用 BrokerPath 返回 ErrClosed
+	if _, err := s.BrokerPath(ctx); !errors.Is(err, ErrClosed) {
+		t.Fatalf("expected ErrClosed after stream closed, got %v", err)
+	}
+}

@@ -29,7 +29,17 @@ type Service struct {
 	installDir string
 	logger     *zap.Logger
 	mu         sync.Mutex
+
+	// restartDebounce 合并同一算法包在短窗口内的连续任务变更，
+	// 避免批量建 N 个任务触发 N 次进程重启（design.md §7.4）。
+	restartMu       sync.Mutex
+	restartTimers   map[string]*time.Timer
+	restartPending  map[string]struct{}
+	restartDebounce time.Duration
 }
+
+// defaultRestartDebounce 是任务变更触发算法包重启的默认合并窗口。
+const defaultRestartDebounce = 200 * time.Millisecond
 
 // NewService creates a new Service instance.
 func NewService(store *Store, verifier *Verifier, supervisor *Supervisor, installDir string, logger *zap.Logger) *Service {
@@ -37,11 +47,14 @@ func NewService(store *Store, verifier *Verifier, supervisor *Supervisor, instal
 		logger = zap.NewNop()
 	}
 	return &Service{
-		store:      store,
-		verifier:   verifier,
-		supervisor: supervisor,
-		installDir: installDir,
-		logger:     logger.Named("algorithm_service"),
+		store:           store,
+		verifier:        verifier,
+		supervisor:      supervisor,
+		installDir:      installDir,
+		logger:          logger.Named("algorithm_service"),
+		restartTimers:   make(map[string]*time.Timer),
+		restartPending:  make(map[string]struct{}),
+		restartDebounce: defaultRestartDebounce,
 	}
 }
 
@@ -209,12 +222,125 @@ func (s *Service) CreateTask(ctx context.Context, t *AnalysisTask) error {
 		return err
 	}
 
-	return s.store.CreateTaskWithinBudget(ctx, t, MaxComputePoints)
+	if err := s.store.CreateTaskWithinBudget(ctx, t, MaxComputePoints); err != nil {
+		return err
+	}
+
+	// D5：任务增删改需要让该算法包重新解析 --broker 列表。
+	s.scheduleAlgorithmRestart(t.AlgorithmID)
+	return nil
 }
 
-// DeleteTask removes an analysis task.
+// UpdateTask persists an analysis task change and refreshes the owning algorithm's
+// broker subscriptions (D5).
+func (s *Service) UpdateTask(ctx context.Context, t *AnalysisTask) error {
+	if t == nil {
+		return fmt.Errorf("%w: task is nil", ErrInvalidTaskConfig)
+	}
+	if _, err := ValidateSampleFPS(t.SampleFPS); err != nil {
+		return err
+	}
+	algo, err := s.store.GetAlgorithm(ctx, t.AlgorithmID)
+	if err != nil {
+		return fmt.Errorf("algorithm %q: %w", t.AlgorithmID, err)
+	}
+	if err := validateTaskConfig(algo.ConfigSchemaJSON, t.ConfigJSON); err != nil {
+		return err
+	}
+	if err := s.store.UpdateTask(ctx, t); err != nil {
+		return err
+	}
+	s.scheduleAlgorithmRestart(t.AlgorithmID)
+	return nil
+}
+
+// DeleteTask removes an analysis task and refreshes the owning algorithm's
+// broker subscriptions (D5).
 func (s *Service) DeleteTask(ctx context.Context, id string) error {
-	return s.store.DeleteTask(ctx, id)
+	task, err := s.store.GetTask(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	if err := s.store.DeleteTask(ctx, id); err != nil {
+		return err
+	}
+
+	s.scheduleAlgorithmRestart(task.AlgorithmID)
+	return nil
+}
+
+// scheduleAlgorithmRestart 合并短窗口内的连续任务变更，然后对该算法包执行
+// StopAlgorithm + 重新解析 + StartAlgorithm。
+//
+// ⚠️ 重启失败不阻塞 HTTP 响应：与既有 supervisor 的「有界恢复」语义一致，
+// 仅记录告警（含原因），由 supervisor 的状态机自行退避与熔断。
+func (s *Service) scheduleAlgorithmRestart(algorithmID string) {
+	if s.supervisor == nil || algorithmID == "" {
+		return
+	}
+
+	s.restartMu.Lock()
+	s.restartPending[algorithmID] = struct{}{}
+	if s.restartTimers == nil {
+		s.restartTimers = make(map[string]*time.Timer)
+	}
+	if timer, ok := s.restartTimers[algorithmID]; ok {
+		timer.Stop()
+	}
+	window := s.restartDebounce
+	if window <= 0 {
+		window = defaultRestartDebounce
+	}
+	s.restartTimers[algorithmID] = time.AfterFunc(window, func() {
+		s.restartMu.Lock()
+		delete(s.restartTimers, algorithmID)
+		_, pending := s.restartPending[algorithmID]
+		delete(s.restartPending, algorithmID)
+		s.restartMu.Unlock()
+		if !pending {
+			return
+		}
+		s.restartAlgorithmNow(algorithmID)
+	})
+	s.restartMu.Unlock()
+}
+
+// FlushPendingRestarts 立即执行所有待处理的算法包重启。
+// 供测试与停机前收敛使用，避免 debounce 窗口内的变更被丢弃。
+func (s *Service) FlushPendingRestarts() {
+	if s.supervisor == nil {
+		return
+	}
+
+	s.restartMu.Lock()
+	pending := make([]string, 0, len(s.restartPending))
+	for id := range s.restartPending {
+		pending = append(pending, id)
+		if timer, ok := s.restartTimers[id]; ok {
+			timer.Stop()
+		}
+		delete(s.restartTimers, id)
+	}
+	s.restartPending = make(map[string]struct{})
+	s.restartMu.Unlock()
+
+	for _, id := range pending {
+		s.restartAlgorithmNow(id)
+	}
+}
+
+func (s *Service) restartAlgorithmNow(algorithmID string) {
+	if s.supervisor.GetStatus(algorithmID) != StatusRunning {
+		// 包未运行：下次 EnableAlgorithm 时自然解析，无需重启。
+		return
+	}
+	if err := s.supervisor.RestartAlgorithm(context.Background(), algorithmID); err != nil {
+		s.logger.Warn("failed to restart algorithm after task change",
+			zap.String("algorithm_id", algorithmID),
+			zap.Error(err),
+		)
+	}
 }
 
 // ListTasks returns analysis tasks for a given camera or all tasks if cameraID is empty.

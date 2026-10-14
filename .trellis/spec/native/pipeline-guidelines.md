@@ -87,3 +87,26 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
 ⚠️ **禁令**：
 - 严禁在持有 `Engine::control` 或 `Stream::mutex` 期间调用任何 `thread.join()`；
 - 严禁在工作线程尚未 `join()` 时销毁其正在访问的内存资源。
+
+---
+
+## 5. AI 分析帧通道与 FramePublisher 契约
+
+1. **AI 消费不走 Subscribe 铁律**：
+   - `Zhulong_CONSUMER_PREVIEW` 走 Packet 订阅与回调通道；`Zhulong_CONSUMER_AI` 接入激活 `DecodeSession`，帧数据仅通过 `Stream::acquire_frame` 内部帧队列消费。
+   - `Stream::Subscribe` 严禁被 AI 消费者调用（硬校验 `kind == ConsumerPreview`）。
+2. **发布侧节流与共享内存投递**：
+   - 每路 AI 流由独占的 `FramePublisher` 线程拉取解码帧，并依据 `max(sample_fps)`（由 Go 经 C ABI `Zhulong_stream_set_publish_rate` 动态设置）执行发布侧节流；
+   - 未到发布周期的帧就地丢弃释放，杜绝无意义的共享内存拷贝与 socket 通知；
+   - 推送至 `FrameBroker` 后立即 reset `HardwareFrame` 句柄，杜绝慢算法跨进程反压卡死上游解码会话。
+3. **宿主生命周期绑定与资源隔离**：
+   - `FrameBroker` 与 `FramePublisher` 由 `Engine` 按需生命周期管理，当首个 `ConsumerAI` 接入时拉起，最后一个 `ConsumerAI` 注销时销毁；
+   - 停机时遵循第 4 节无锁汇合与五步优雅停机，先于工作线程 join 前完成停机与资源解绑。
+4. **AI 流保活由订阅者集合决定，不由「谁先 acquire」决定**：
+   - `Engine` 侧只认 `ConsumerAI` 计数（首个接入建 broker、最后一个注销销毁）；Go 侧另有一层**按算法包**的订阅者集合（`StreamHub` 的 `aiSubscribers`），用于回答「这一路 AI 流现在还该不该活着」。
+   - 解析路径与同步订阅必须是**同一次操作**（`BrokerSubscriptionResolver.SyncBrokerSubscriptions`）：只解析不登记，下一轮同步就会把该流回收；只登记不解析，则会留下无 broker 的孤儿流。
+   - ⚠️ **解析失败不得提交订阅变更**，也不得遗留已 acquire 的流：实现必须先完成全部路径解析，再进入提交阶段。
+   - ⚠️ **发布率跨包取 max**：一个 broker 只有一个发布率，因此该 stream 上的发布率是其**所有** enabled 分析任务 `max(sample_fps)`，而不是单个算法包内的 max。
+5. **跨层停机顺序**（Go 侧，硬约束）：
+   - `camera.Stop` → `algorithm.Stop` → `native.Close`。理由：AI 消费者与 StreamHub 先撤，runner 子进程再排空，最后才销毁 broker 宿主。
+   - 该顺序由 `internal/app/runtime_test.go` 的 `TestAIShutdownOrderPrecedesNativeClose` 守护；改坏顺序会让测试失败，而不是静默产生 use-after-free。

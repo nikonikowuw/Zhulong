@@ -682,6 +682,89 @@ void test_send_failure_rollback() {
     std::cout << "[PASS] test_send_failure_rollback" << std::endl;
 }
 
+void test_runner_multi_broker_e2e(const char* runner_bin, const char* plugin_so) {
+    if (!runner_bin || !plugin_so) return;
+
+    uint64_t stream1 = 2001;
+    uint64_t stream2 = 2002;
+    FrameBroker broker1, broker2;
+    BrokerOptions opt;
+    opt.slot_count = 4;
+    opt.slot_size = 1024 * 1024;
+    assert(broker1.start(stream1, "/tmp", opt));
+    assert(broker2.start(stream2, "/tmp", opt));
+
+    // 启动多 broker 连接的独立 Runner 子进程
+    pid_t pid = fork();
+    if (pid == 0) {
+        execl(runner_bin, runner_bin,
+              "--plugin", plugin_so,
+              "--broker", broker1.socket_path().c_str(),
+              "--broker", broker2.socket_path().c_str(),
+              "--name", "multi_worker",
+              "--max-frames", "2",
+              nullptr);
+        _exit(127);
+    }
+
+    assert(pid > 0);
+
+    // 等待两路 Broker 均建立客户端连接
+    for (int i = 0; i < 50; ++i) {
+        if (broker1.client_count() == 1 && broker2.client_count() == 1) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    assert(broker1.client_count() == 1);
+    assert(broker2.client_count() == 1);
+
+    // 向两路分别推送 2 帧
+    std::vector<uint8_t> dummy(640 * 480 * 3, 100);
+    HardwareFrame frame;
+    frame.width = 640;
+    frame.height = 480;
+    frame.stride = 640 * 3;
+    frame.format = FRAME_FORMAT_UNKNOWN;
+    frame.host_ptr = dummy.data();
+
+    for (int i = 0; i < 2; ++i) {
+        frame.pts = 1000 + i;
+        assert(broker1.publish_frame(frame));
+        frame.pts = 2000 + i;
+        assert(broker2.publish_frame(frame));
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    }
+
+    int status = 0;
+    pid_t w = waitpid(pid, &status, 0);
+    assert(w == pid);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+    broker1.stop();
+    broker2.stop();
+    std::cout << "[PASS] test_runner_multi_broker_e2e" << std::endl;
+}
+
+void test_runner_broker_connect_failure_d6(const char* runner_bin, const char* plugin_so) {
+    if (!runner_bin || !plugin_so) return;
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        execl(runner_bin, runner_bin,
+              "--plugin", plugin_so,
+              "--broker", "/tmp/zhulong_definitely_nonexistent_broker.sock",
+              "--name", "fail_worker",
+              nullptr);
+        _exit(127);
+    }
+
+    assert(pid > 0);
+    int status = 0;
+    pid_t w = waitpid(pid, &status, 0);
+    assert(w == pid);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 5);
+    std::cout << "[PASS] test_runner_broker_connect_failure_d6" << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     const char* runner_bin = (argc > 1) ? argv[1] : nullptr;
     const char* plugin_so = (argc > 2) ? argv[2] : nullptr;
@@ -697,6 +780,8 @@ int main(int argc, char* argv[]) {
     test_send_failure_rollback();
     if (runner_bin && plugin_so) {
         test_runner_subprocess_e2e(runner_bin, plugin_so);
+        test_runner_multi_broker_e2e(runner_bin, plugin_so);
+        test_runner_broker_connect_failure_d6(runner_bin, plugin_so);
     }
     std::cout << "All FrameBroker SHM and IPC integration tests passed successfully!" << std::endl;
     return 0;

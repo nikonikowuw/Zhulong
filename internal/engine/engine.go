@@ -457,6 +457,40 @@ func (e *Engine) releaseStream(gen uint64, streamID C.Zhulong_stream_id, consume
 	return nil
 }
 
+func (e *Engine) getBrokerPath(gen uint64, streamID C.Zhulong_stream_id) (string, error) {
+	e.mu.Lock()
+	if e.handle == nil || !e.running || e.stopping || e.generation != gen {
+		e.mu.Unlock()
+		return "", ErrNotRunning
+	}
+	handle := e.handle
+	e.mu.Unlock()
+
+	var buf [256]C.char
+	inoutLen := C.size_t(len(buf))
+	st := C.Zhulong_stream_get_broker_path(handle, streamID, &buf[0], &inoutLen)
+	if st != C.Zhulong_OK {
+		return "", mapNativeStatus("get_broker_path", int32(st))
+	}
+	return C.GoString(&buf[0]), nil
+}
+
+func (e *Engine) setPublishRate(gen uint64, streamID C.Zhulong_stream_id, fps uint32) error {
+	e.mu.Lock()
+	if e.handle == nil || !e.running || e.stopping || e.generation != gen {
+		e.mu.Unlock()
+		return ErrNotRunning
+	}
+	handle := e.handle
+	e.mu.Unlock()
+
+	st := C.Zhulong_stream_set_publish_rate(handle, streamID, C.uint32_t(fps))
+	if st != C.Zhulong_OK {
+		return mapNativeStatus("set_publish_rate", int32(st))
+	}
+	return nil
+}
+
 func (e *Engine) onStreamClosed(s *Stream) {
 	e.streamsMu.Lock()
 	delete(e.activeStreams, s)

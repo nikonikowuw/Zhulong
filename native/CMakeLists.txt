@@ -133,6 +133,7 @@ add_library(ZhulongEngine STATIC
     src/pipeline/engine.cpp
     src/pipeline/stream.cpp
     src/pipeline/subscription.cpp
+    src/pipeline/frame_publisher.cpp
     src/nodes/capture/rtsp_input.cpp
     src/nodes/decode/ffmpeg_decoder.cpp
 )
@@ -141,7 +142,7 @@ target_include_directories(ZhulongEngine
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${FFMPEG_ROOT}/include
 )
-target_link_libraries(ZhulongEngine PUBLIC ${FFMPEG_LIBRARIES} Threads::Threads ${FFMPEG_SYSTEM_LIBRARIES})
+target_link_libraries(ZhulongEngine PUBLIC ZhulongAlgoIpc ${FFMPEG_LIBRARIES} Threads::Threads ${FFMPEG_SYSTEM_LIBRARIES})
 set_target_properties(ZhulongEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(ZhulongEngine PRIVATE
     $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wall;-Wextra;-Wpedantic>
@@ -179,6 +180,7 @@ target_link_libraries(ZhulongAlgoIpc PUBLIC Threads::Threads)
 if(UNIX AND NOT APPLE)
     target_link_libraries(ZhulongAlgoIpc PUBLIC rt)
 endif()
+set_target_properties(ZhulongAlgoIpc PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ==============================================================================
 #                      4.3 构建通用算法 Runner 进程 (zhulong_algo_runner)

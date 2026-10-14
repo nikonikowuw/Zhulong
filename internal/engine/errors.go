@@ -23,6 +23,7 @@ const (
 	StatusIO              StatusCode = -11
 	StatusCancelled       StatusCode = -12
 	StatusEOF             StatusCode = -13
+	StatusBufferTooSmall  StatusCode = -14
 	StatusInternal        StatusCode = -99
 
 	// Go 桥接特有状态码
@@ -74,6 +75,7 @@ var (
 	ErrUnsupported       = &NativeError{Code: StatusUnsupported, Message: "unsupported codec or format"}
 	ErrIO                = &NativeError{Code: StatusIO, Message: "native I/O failure"}
 	ErrOutOfMemory       = &NativeError{Code: StatusOutOfMemory, Message: "out of memory"}
+	ErrBufferTooSmall    = &NativeError{Code: StatusBufferTooSmall, Message: "buffer too small"}
 	ErrInternal          = &NativeError{Code: StatusInternal, Message: "internal engine error"}
 )
 
@@ -108,6 +110,8 @@ func mapNativeStatus(op string, raw int32) error {
 		return &NativeError{Op: op, Code: code, Raw: raw, Message: "operation cancelled"}
 	case StatusEOF:
 		return &NativeError{Op: op, Code: code, Raw: raw, Message: "end of stream"}
+	case StatusBufferTooSmall:
+		return &NativeError{Op: op, Code: code, Raw: raw, Message: "buffer too small"}
 	case StatusInternal:
 		return &NativeError{Op: op, Code: code, Raw: raw, Message: "internal error"}
 	default:

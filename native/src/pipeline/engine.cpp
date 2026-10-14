@@ -20,6 +20,13 @@ void Engine::start() {
     std::lock_guard<std::mutex> lock(control);
     if (running) return;
 
+    const char* env_sock = std::getenv("ZHULONG_FRAME_BROKER_SOCK");
+    if (env_sock && *env_sock != '\0') {
+        broker_base_dir = env_sock;
+    } else {
+        broker_base_dir = "/tmp";
+    }
+
     reaper_stop.store(false);
     try {
         reaper = std::thread(&Engine::reap, this);
@@ -32,6 +39,8 @@ void Engine::start() {
 
 void Engine::stop() {
     std::lock_guard<std::mutex> transition(lifecycle);
+    std::map<Zhulong_stream_id, std::unique_ptr<FramePublisher>> publishers_to_stop;
+    std::map<Zhulong_stream_id, std::unique_ptr<ipc::FrameBroker>> brokers_to_stop;
     {
         std::lock_guard<std::mutex> lock(control);
         running = false;
@@ -39,10 +48,23 @@ void Engine::stop() {
         for (const auto &entry : streams) {
             entry.second->request_stop();
         }
+        publishers_to_stop.swap(publishers);
+        brokers_to_stop.swap(brokers);
     }
 
     wake_reaper();
     stream_retired.notify_all();
+
+    // 锁外停止 publisher 和 broker（在 join stream 之前，严格符合五步停机顺序）
+    for (auto &entry : publishers_to_stop) {
+        entry.second->stop();
+    }
+    publishers_to_stop.clear();
+
+    for (auto &entry : brokers_to_stop) {
+        entry.second->stop();
+    }
+    brokers_to_stop.clear();
 
     {
         std::lock_guard<std::mutex> lock(probe_mutex);
@@ -173,6 +195,15 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
             existing->consumers.erase(consumer);
             throw;
         }
+
+        // 若当前流包含 AI 消费且尚未创建 FrameBroker，则按需实例化并启动发布线程
+        if (!ensure_frame_broker(existing, kind, [&] {
+                existing->consumers.erase(consumer);
+                existing->sync_decode_pipeline();
+            })) {
+            throw Failure{Zhulong_ERR_IO};
+        }
+
         return existing->id;
     }
 
@@ -187,11 +218,42 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
         streams.erase(stream->id);
         throw;
     }
+
+    if (!ensure_frame_broker(stream, kind, [&] {
+            stream->request_stop();
+            streams.erase(stream->id);
+        })) {
+        throw Failure{Zhulong_ERR_IO};
+    }
+
     return stream->id;
+}
+
+bool Engine::ensure_frame_broker(const std::shared_ptr<Stream> &stream, int32_t kind,
+                                 const std::function<void()> &rollback) {
+    if (kind != Zhulong_CONSUMER_AI) return true;
+    if (brokers.count(stream->id)) return true;
+
+    auto broker = std::make_unique<ipc::FrameBroker>();
+    std::string err;
+    if (!broker->start(stream->id, broker_base_dir, {}, &err)) {
+        if (rollback) rollback();
+        return false;
+    }
+
+    // ⚠️ publisher 持有 broker 的裸指针，因此必须在 broker 入池之后再启动，
+    // 且两者在 release()/stop() 中按 publisher → broker 的顺序停止。
+    auto publisher = std::make_unique<FramePublisher>(stream, broker.get());
+    publisher->start();
+    brokers.emplace(stream->id, std::move(broker));
+    publishers.emplace(stream->id, std::move(publisher));
+    return true;
 }
 
 void Engine::release(Zhulong_stream_id id, uint64_t consumer) {
     std::shared_ptr<DecodeSession> session_to_stop;
+    std::unique_ptr<FramePublisher> publisher_to_stop;
+    std::unique_ptr<ipc::FrameBroker> broker_to_stop;
     {
         std::lock_guard<std::mutex> operation(control);
         auto stream = find_stream(id);
@@ -211,12 +273,32 @@ void Engine::release(Zhulong_stream_id id, uint64_t consumer) {
         // 动态同步解码节点状态 (获取需停止的会话指针，在锁外 join)
         session_to_stop = stream->sync_decode_pipeline();
 
+        // 当该流的全部 AI 消费者均已注销时，销毁其 FramePublisher 与 FrameBroker
+        if (!stream->has_ai_consumer()) {
+            auto pub_it = publishers.find(id);
+            if (pub_it != publishers.end()) {
+                publisher_to_stop = std::move(pub_it->second);
+                publishers.erase(pub_it);
+            }
+            auto brk_it = brokers.find(id);
+            if (brk_it != brokers.end()) {
+                broker_to_stop = std::move(brk_it->second);
+                brokers.erase(brk_it);
+            }
+        }
+
         if (stream->consumers.empty()) {
             stream->expiry = Clock::now() + stream_grace_period;
             wake_reaper();
         }
     }
-    // 锁外执行解码线程的停止与汇合，消除跨流死锁与阻塞
+    // 锁外执行发布线程与 broker 的停止及汇合，随后停止解码会话
+    if (publisher_to_stop) {
+        publisher_to_stop->stop();
+    }
+    if (broker_to_stop) {
+        broker_to_stop->stop();
+    }
     Stream::stop_decode_session(std::move(session_to_stop));
 }
 
@@ -293,6 +375,26 @@ Video Engine::probe(const std::string &url, const Options &options) {
     } registration{*this, cancellation.get()};
 
     return read_rtsp(url, options, *cancellation);
+}
+
+std::string Engine::get_broker_path(Zhulong_stream_id id) {
+    std::lock_guard<std::mutex> lock(control);
+    if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
+    auto it = brokers.find(id);
+    if (it == brokers.end() || !it->second || !it->second->is_running()) {
+        throw Failure{Zhulong_ERR_NOT_FOUND};
+    }
+    return it->second->socket_path();
+}
+
+void Engine::set_publish_rate(Zhulong_stream_id id, uint32_t max_sample_fps) {
+    std::lock_guard<std::mutex> lock(control);
+    if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
+    auto it = publishers.find(id);
+    if (it == publishers.end() || !it->second) {
+        throw Failure{Zhulong_ERR_NOT_FOUND};
+    }
+    it->second->set_max_sample_fps(max_sample_fps);
 }
 
 } // namespace zhulong

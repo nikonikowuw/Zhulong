@@ -54,6 +54,14 @@ func (s *mockMediaStream) Subscribe(ctx context.Context, options engine.Subscrip
 	return s.source, nil
 }
 
+func (s *mockMediaStream) BrokerPath(ctx context.Context) (string, error) {
+	return "/tmp/zhulong_broker_test.sock", nil
+}
+
+func (s *mockMediaStream) SetPublishRate(ctx context.Context, fps uint32) error {
+	return nil
+}
+
 func (s *mockMediaStream) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
@@ -564,5 +572,118 @@ func TestStreamDispatcherPacketActivityThrottledReporting(t *testing.T) {
 	}
 	if mainStream.LastCheckedAt == nil {
 		t.Fatal("expected non-nil LastCheckedAt")
+	}
+}
+
+func TestStreamHubAIStreamSubscribeAndRelease(t *testing.T) {
+	store, lazyCipher, camID, cleanup := setupTestStoreAndCipher(t)
+	defer cleanup()
+
+	mockEngine := newMockMediaEngine()
+	hub := NewStreamHub(mockEngine, store, lazyCipher, nil, nil, zap.NewNop())
+	defer hub.Close()
+
+	ctx := context.Background()
+
+	// 1. 解析 AI 流路径（此时仅拉起物理拉流，尚未建立订阅关系）
+	path1, err := hub.ResolveAIStreamBrokerPath(ctx, camID)
+	if err != nil {
+		t.Fatalf("first ResolveAIStreamBrokerPath failed: %v", err)
+	}
+	if path1 != "/tmp/zhulong_broker_test.sock" {
+		t.Fatalf("unexpected broker path: %s", path1)
+	}
+	if mockEngine.getAcquireCount() != 1 {
+		t.Fatalf("expected 1 acquire on engine, got %d", mockEngine.getAcquireCount())
+	}
+
+	// 2. 重复解析复用同一物理拉流
+	path2, err := hub.ResolveAIStreamBrokerPath(ctx, camID)
+	if err != nil {
+		t.Fatalf("second ResolveAIStreamBrokerPath failed: %v", err)
+	}
+	if path2 != path1 {
+		t.Fatalf("paths do not match: %s vs %s", path1, path2)
+	}
+	if mockEngine.getAcquireCount() != 1 {
+		t.Fatalf("expected still 1 acquire on engine, got %d", mockEngine.getAcquireCount())
+	}
+
+	// 3. 两个订阅者共同保活
+	hub.AttachAIStreamSubscriber(camID, "algo_a")
+	hub.AttachAIStreamSubscriber(camID, "algo_b")
+
+	// 4. 注销第一个订阅者：流仍然存活
+	hub.ReleaseAIStreamSubscriber(camID, "algo_a")
+	if mockEngine.streams[0].closed {
+		t.Fatal("stream closed prematurely while another subscriber remains")
+	}
+
+	// 5. 设置发布速率
+	if err := hub.SetAIPublishRate(ctx, camID, 15); err != nil {
+		t.Fatalf("SetAIPublishRate failed: %v", err)
+	}
+
+	// 6. 注销最后一个订阅者：流被释放
+	hub.ReleaseAIStreamSubscriber(camID, "algo_b")
+	if !mockEngine.streams[0].closed {
+		t.Fatal("expected stream to be closed after final subscriber left")
+	}
+}
+
+func TestStreamHubReleaseReleasesStreamWhenLastSubscriberLeaves(t *testing.T) {
+	store, lazyCipher, camID, cleanup := setupTestStoreAndCipher(t)
+	defer cleanup()
+
+	mockEngine := newMockMediaEngine()
+	hub := NewStreamHub(mockEngine, store, lazyCipher, nil, nil, zap.NewNop())
+	defer hub.Close()
+
+	ctx := context.Background()
+	if _, err := hub.ResolveAIStreamBrokerPath(ctx, camID); err != nil {
+		t.Fatalf("resolve AI stream failed: %v", err)
+	}
+
+	// Two packages subscribe to the same camera.
+	hub.AttachAIStreamSubscriber(camID, "algo_a")
+	hub.AttachAIStreamSubscriber(camID, "algo_b")
+
+	// algo_b is removed (its task was deleted): the stream must survive for algo_a.
+	hub.ReleaseAIStreamSubscriber(camID, "algo_b")
+	if mockEngine.streams[0].closed {
+		t.Fatal("stream closed while algo_a still subscribed")
+	}
+	if ids := hub.AICameraIDs(); len(ids) != 1 {
+		t.Fatalf("expected the camera to remain tracked, got %v", ids)
+	}
+
+	// algo_a leaves too: the stream and its broker are released.
+	hub.ReleaseAIStreamSubscriber(camID, "algo_a")
+	if !mockEngine.streams[0].closed {
+		t.Fatal("expected stream to be closed after the last subscriber left")
+	}
+	if ids := hub.AICameraIDs(); len(ids) != 0 {
+		t.Fatalf("expected no tracked AI cameras, got %v", ids)
+	}
+}
+
+func TestStreamHubAICameraIDs(t *testing.T) {
+	store, lazyCipher, camID, cleanup := setupTestStoreAndCipher(t)
+	defer cleanup()
+
+	mockEngine := newMockMediaEngine()
+	hub := NewStreamHub(mockEngine, store, lazyCipher, nil, nil, zap.NewNop())
+	defer hub.Close()
+
+	ctx := context.Background()
+	if ids := hub.AICameraIDs(); len(ids) != 0 {
+		t.Fatalf("expected no AI cameras initially, got %v", ids)
+	}
+	if _, err := hub.ResolveAIStreamBrokerPath(ctx, camID); err != nil {
+		t.Fatalf("resolve AI stream failed: %v", err)
+	}
+	ids := hub.AICameraIDs()
+	if len(ids) != 1 || ids[0] != camID {
+		t.Fatalf("expected [%s], got %v", camID, ids)
 	}
 }

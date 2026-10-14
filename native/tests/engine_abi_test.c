@@ -44,9 +44,19 @@ int main(void) {
         Zhulong_CONSUMER_PREVIEW, &stream) != Zhulong_ERR_INVALID_ARGUMENT) return 9;
 
     /* 7. 非法句柄调用校验 */
+    char broker_buf[256];
+    size_t broker_len = sizeof(broker_buf);
     if (Zhulong_stream_release(0, 1, 1) != Zhulong_ERR_INVALID_ARGUMENT) return 10;
     if (Zhulong_stream_unsubscribe(0, 1, 1) != Zhulong_ERR_INVALID_ARGUMENT) return 11;
     if (Zhulong_stream_get_status(0, 1, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 12;
+    if (Zhulong_stream_get_broker_path(0, 1, broker_buf, &broker_len) != Zhulong_ERR_INVALID_ARGUMENT) return 13;
+    if (Zhulong_stream_get_broker_path(engine, 1, 0, &broker_len) != Zhulong_ERR_INVALID_ARGUMENT) return 14;
+    if (Zhulong_stream_get_broker_path(engine, 1, broker_buf, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 15;
+    size_t zero_len = 0;
+    if (Zhulong_stream_get_broker_path(engine, 1, broker_buf, &zero_len) != Zhulong_ERR_INVALID_ARGUMENT) return 16;
+    if (Zhulong_stream_set_publish_rate(0, 1, 10) != Zhulong_ERR_INVALID_ARGUMENT) return 17;
+    if (Zhulong_stream_get_broker_path(engine, 1, broker_buf, &broker_len) != Zhulong_ERR_NOT_RUNNING) return 18;
+    if (Zhulong_stream_set_publish_rate(engine, 1, 10) != Zhulong_ERR_NOT_RUNNING) return 19;
 
     /* 8. 销毁安全测试：传入 NULL 指针必须保证安全无崩溃 */
     Zhulong_probe_result_destroy(0);
