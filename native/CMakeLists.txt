@@ -159,7 +159,7 @@ set_property(CACHE ZHULONG_INFERENCE_BACKEND PROPERTY STRINGS cpu rknn)
 set(ZHULONG_VISION_BACKEND "cpu" CACHE STRING "算法运行库视觉前处理后端: cpu | rga")
 set_property(CACHE ZHULONG_VISION_BACKEND PROPERTY STRINGS cpu rga)
 set(ZHULONG_RKNN_ROOT "" CACHE PATH "RKNN 前缀（include/rknn_api.h + lib/librknnrt.so）；仅 ZHULONG_INFERENCE_BACKEND=rknn 需要")
-set(ZHULONG_RGA_ROOT "" CACHE PATH "RGA 前缀；仅 ZHULONG_VISION_BACKEND=rga 需要（尚未实现）")
+set(ZHULONG_RGA_ROOT "" CACHE PATH "RGA 前缀（include/rga/im2d.h + lib/librga.so*）；仅 ZHULONG_VISION_BACKEND=rga 需要")
 
 if(NOT ZHULONG_INFERENCE_BACKEND MATCHES "^(cpu|rknn)$")
     message(FATAL_ERROR "ZHULONG_INFERENCE_BACKEND 取值非法: ${ZHULONG_INFERENCE_BACKEND}（期望 cpu 或 rknn）")
@@ -167,8 +167,21 @@ endif()
 if(NOT ZHULONG_VISION_BACKEND MATCHES "^(cpu|rga)$")
     message(FATAL_ERROR "ZHULONG_VISION_BACKEND 取值非法: ${ZHULONG_VISION_BACKEND}（期望 cpu 或 rga）")
 endif()
+
+# RGA 视觉前处理后端：与 RKNN 同理，include 目录 PRIVATE、库以绝对文件路径链接。
+# ⚠️ librga.so 的 SONAME 是 librga.so.2（不是 librga.so），NEEDED 会显示 librga.so.2。
 if(ZHULONG_VISION_BACKEND STREQUAL "rga")
-    message(FATAL_ERROR "视觉后端 rga 尚未实现，见任务 10-13-algo-rga-vision-backend")
+    if(NOT ZHULONG_RGA_ROOT)
+        message(FATAL_ERROR "ZHULONG_VISION_BACKEND=rga 需要 -DZHULONG_RGA_ROOT=<rga 前缀>")
+    endif()
+    if(NOT EXISTS "${ZHULONG_RGA_ROOT}/include/rga/im2d.h")
+        message(FATAL_ERROR "RGA 前缀缺少 include/rga/im2d.h: ${ZHULONG_RGA_ROOT}")
+    endif()
+    if(NOT EXISTS "${ZHULONG_RGA_ROOT}/lib/librga.so.2")
+        message(FATAL_ERROR "RGA 前缀缺少 lib/librga.so.2: ${ZHULONG_RGA_ROOT}")
+    endif()
+    # 与 RKNN 同理：下游目标链接 ZhulongAlgoRuntime 时需解析其传递依赖 librga.so.2 的符号。
+    add_link_options(-Wl,-rpath-link,${ZHULONG_RGA_ROOT}/lib)
 endif()
 
 # RKNN 推理后端：include 目录 PRIVATE（AC1），库以绝对文件路径链接。
@@ -198,6 +211,7 @@ endif()
 add_library(ZhulongAlgoRuntime SHARED
     src/algorithm/runtime/cpu_inference_backend.cpp
     src/algorithm/runtime/cpu_vision_backend.cpp
+    src/algorithm/runtime/letterbox_geometry.cpp
     src/algorithm/runtime/runtime_factory.cpp
 )
 target_compile_features(ZhulongAlgoRuntime PUBLIC cxx_std_17)
@@ -222,8 +236,18 @@ if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
     set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")
 endif()
 
-# ==============================================================================
-#                      4.2 构建跨进程 IPC 与 FrameBroker 库 (ZhulongAlgoIpc)
+# RGA 视觉后端：同样只链接进 ZhulongAlgoRuntime（.so），宿主绝不链接。
+# ⚠️ letterbox_geometry.cpp 是 CPU/RGA **共用**的几何计算，已在上面基础目标中，不在此重复。
+if(ZHULONG_VISION_BACKEND STREQUAL "rga")
+    target_sources(ZhulongAlgoRuntime PRIVATE
+        src/backends/rga/rga_vision_backend.cpp
+    )
+    target_include_directories(ZhulongAlgoRuntime PRIVATE ${ZHULONG_RGA_ROOT}/include)
+    target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_RGA_ROOT}/lib/librga.so.2 Threads::Threads)
+    target_compile_definitions(ZhulongAlgoRuntime PRIVATE ZHULONG_VISION_RGA=1)
+    # 产物卫生：清空 BUILD_RPATH，理由同 RKNN 分支。
+    set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")
+endif()
 # ==============================================================================
 add_library(ZhulongAlgoIpc STATIC
     src/algorithm/ipc/shm_pool.cpp
@@ -387,6 +411,18 @@ if(BUILD_TESTING)
         if(NOT CMAKE_CROSSCOMPILING)
             add_test(NAME ZhulongRknnBackend COMMAND ZhulongRknnTests)
             set_tests_properties(ZhulongRknnBackend PROPERTIES TIMEOUT 120)
+        endif()
+    endif()
+
+    # RGA 视觉后端测试：仅在视觉后端为 rga 时构建（同 RKNN：交叉只编译不注册）。
+    if(ZHULONG_VISION_BACKEND STREQUAL "rga")
+        add_executable(ZhulongRgaTests tests/rga_vision_test.cpp)
+        target_compile_features(ZhulongRgaTests PRIVATE cxx_std_17)
+        target_include_directories(ZhulongRgaTests PRIVATE src ${ZHULONG_RGA_ROOT}/include)
+        target_link_libraries(ZhulongRgaTests PRIVATE ZhulongAlgoRuntime Threads::Threads)
+        if(NOT CMAKE_CROSSCOMPILING)
+            add_test(NAME ZhulongRgaBackend COMMAND ZhulongRgaTests)
+            set_tests_properties(ZhulongRgaBackend PROPERTIES TIMEOUT 120)
         endif()
     endif()
 endif()

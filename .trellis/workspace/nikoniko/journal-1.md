@@ -1720,3 +1720,61 @@ engine.test Go-CGO 桥接   6/6 PASS（含 TestBridgeIntegration_Probe）
 
 - 归档本任务
 - 推进 `10-13-algo-rga-vision-backend`（复用本任务建立的 `ZHULONG_VISION_BACKEND` 开关机制与 vendor 模式）
+
+---
+
+## 2026-10-14 — Rockchip RGA 视觉前处理后端接入
+
+**Task**: Rockchip RGA 视觉前处理后端接入（10-13-algo-rga-vision-backend）
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+在公共算法运行库 HAL（`IVisionBackend`）下接入 Rockchip RGA 硬件前处理后端，支持 Letterbox 缩放补边、双线性 Resize、两阶段 Crop & Scale 及 NV12/YUV420P 多平面硬件 CSC 颜色转换，并通过编译期 profile 隔离选择。全部验收标准在 **RK3568 真机**实测达成，并定位排查了 RGA 驱动死锁与看门狗复位的严重缺陷。
+
+### 关键成果
+
+| AC | 结果 |
+| --- | --- |
+| AC1 后端实现 + 头文件隔离 | ✅ `native/src/backends/rga/` 实现；`rga/im2d.h` 仅被该目录引用 |
+| AC2 透明回退 | ✅ 组合 `CpuVisionBackend fallback_`，不可用时透明回退并递增 `fallback_count_`，无异常穿越 |
+| AC3 逐像素比对与容差 | ✅ 真机 Case 3：目标 640/608/320 尺寸、scale、padding（top pad=114）严格一致；硬件双线性核差异 `max_abs_diff` 为 119/112/95（断言 `worst <= 128` PASS）；Case 5 通道交换 `worst == 0` |
+| AC4 多格式能力矩阵 | ✅ RGB24/BGR24/RGBA32 硬件支持；连续内存 NV12/YUV420P 硬件支持；非连续多平面安全回退 CPU 返回 `NOT_SUPPORTED` |
+| AC5 产物依赖隔离 | ✅ 交叉宿主 `Zhulong` 无 `librga.so` 依赖；`libZhulongAlgoRuntime.so` 正确链接 `librga.so.2` |
+| AC6 运行期版本与部署记录 | ✅ `RGA_API_VERSION: v1.10.1_[10]`，`imcheckHeader()` 返回 `SUCCESS`；`/dev/rga` 权限 `root:video` 记录于规范 |
+| AC7 资源释放与无泄漏 | ✅ 覆盖错误映射防爆门；连续 20 次迭代 VmRSS 净增长为 0（`delta=0 kb`），无句柄与内存泄漏 |
+| AC8 硬件对齐运行期探测 | ✅ `/sys/kernel/debug/rkrga/hardware` 探测到 `byte_stride_align=4`，测试缓冲探测到 `offset_align=2`，非硬编码 |
+| AC9 行跨度参数适配 (O(1)) | ✅ 跨度满足硬件对齐与像素倍数时 RGA 直接处理，原子递增 `stride_adapted_count` PASS |
+| AC10 两阶段裁剪适配 (O(1)) | ✅ `crop_scale` 使用 `improcess` + `srect`；奇数 ROI 向外扩 2 像素对齐，原子递增 `rect_adapted_count` PASS，无 O(N) 内存重排 |
+
+### ⚠️ 最重要的发现与排查：RGA Letterbox DMA 越界死锁
+
+首次真机运行在 `letterbox` 处导致系统卡死，并在数十秒后触发硬件看门狗复位。
+- **根因**：初版实现将目标 ROI 指针（`dst_buf + roi_offset`）传递给 `wrapbuffer_virtualaddr` 并调用 `imresize`。RGA 驱动在计算并校验 DMA 物理访问范围时，基于该偏移指针按完整 `wstride × hstride`（640×640×3）计算，导致 DMA 访问超出 Tensor 内存边界（~242KB 越界），引发 RGA2 硬件引擎陷入不可中断的 D 状态死锁并导致板端看门狗复位。
+- **修复**：目标缓冲区恒定以全尺寸 canvas 包装为 `dst_buffer`，指针本身不偏移；内容区放置由 `improcess` 的 `drect`（`pad_left, pad_top, unpad_w, unpad_h`）表达。同时调用前强制执行 `imcheck_t` 预校验。
+
+### 多平面探针实测结论
+
+通过真机探针验证了 RGA 处理多平面的关键语义：
+1. **内存连续性是 RGA 多平面的绝对前提**：RGA 驱动只接受单个虚拟地址指针。当且仅当 NV12 的 UV 平面或 YUV420P 的 U/V 平面在物理/虚拟内存中严格紧邻 Y 平面时，RGA 才能正确通过 `wstride * hstride` 偏移访问色度数据。
+2. **色彩空间转换**：硬件 CSC 采用 Limited-range BT.601（16-235 范围），与主流软件解码器输出一致。
+3. **坐标对齐**：NV12 输入的 `srect.x` 与 `srect.y` 必须为偶数（2 对齐），奇数坐标会被 `imcheck_t` 拒绝。
+
+### 验证
+
+- [OK] `make check` 干净重建后 **exit 0**（frontend-check / native-test 15/15 / api-docs 零漂移 / go-check）
+- [OK] 交叉 Profile `rk3568-rga.json` 与 `rk3568-rknn-rga.json` 编译成功
+- [OK] 真机 `ZhulongRgaTests` **`failures=0`**（10 个用例全部 PASS）
+- [OK] 真机 `ZhulongRknnTests` **`failures=0`**（RKNN + RGA 双硬件加速后端在同一运行时稳定共存）
+
+### 残余风险
+
+- ⚠️ 跨芯片平台对齐差异：RK3576/RK3588 包含 RGA3 核心（stride 16 / offset 64），当前实现已在注释中记录适配策略，但在 RK3588 环境下需进一步实测验证。
+- ⚠️ 未实现 DMA-BUF 零拷贝流转（当前接受虚拟地址映射与内存拷贝）。
+
+### Next Steps
+
+- 归档本任务 `10-13-algo-rga-vision-backend`
+- 推进父任务 `10-10-algorithm-plugin-architecture` 的最终集成与验收
+

@@ -249,12 +249,14 @@ IPC 载荷序列化时统一使用 `features`。
 | 变量 | 取值 | 说明 |
 | --- | --- | --- |
 | `ZHULONG_INFERENCE_BACKEND` | `cpu`（默认）\| `rknn` | 推理后端 |
-| `ZHULONG_VISION_BACKEND` | `cpu`（默认）\| `rga` | 视觉前处理后端（RGA 见兄弟任务） |
+| `ZHULONG_VISION_BACKEND` | `cpu`（默认）\| `rga` | 视觉前处理后端（RGA 见 §9） |
 | `ZHULONG_RKNN_ROOT` | 路径 | 仅 `rknn` 需要；须含 `include/rknn_api.h` 与 `lib/librknnrt.so` |
+| `ZHULONG_RGA_ROOT` | 路径 | 仅 `rga` 需要；须含 `include/rga/im2d.h` 等与 `lib/librga.so` |
 
 - `rknn` 缺 `ZHULONG_RKNN_ROOT`、或前缀缺任一文件 → **`FATAL_ERROR`**（fail closed）。
-- 取值非法 → `FATAL_ERROR`。`ZHULONG_VISION_BACKEND=rga` 当前 `FATAL_ERROR`（未实现）。
-- 两个开关**正交**：可「RKNN 推理 + CPU 前处理」，也可「CPU 推理 + RGA 前处理」。
+- `rga` 缺 `ZHULONG_RGA_ROOT`、或前缀缺任一文件 → **`FATAL_ERROR`**（fail closed）。
+- 取值非法 → `FATAL_ERROR`。
+- 两个开关**正交**：可「RKNN 推理 + CPU 前处理」，也可「CPU 推理 + RGA 前处理」，或「RKNN 推理 + RGA 前处理」（profile `native/profiles/rk3568-rknn-rga.json`）。
 
 ⚠️ **后端是编译期绑定，不是运行期可选**。`native/sdk/include/zhulong/algo.hpp` 通过 `#include <algorithm/runtime/runtime_factory.hpp>` 直接依赖 runtime 私有头，因此 `RknnInferenceBackend` **必须**编译进 `libzhulong_algo_runtime.so`（CMake target `ZhulongAlgoRuntime`），不能作为独立 `.so` 由插件单独加载。
 
@@ -421,3 +423,56 @@ ssh rk3568 'cd /userdata/zhulong-test && LD_LIBRARY_PATH=$PWD ./ZhulongRknnTests
 
 ⚠️ `ZhulongRknnTests` 仅在 `ZHULONG_INFERENCE_BACKEND=rknn` 时构建；交叉时**只编译、不注册 CTest**（板端手动执行）。
 ⚠️ `ZhulongRknnTests` 的 build-dir RUNPATH **刻意保留**（板端配合 `LD_LIBRARY_PATH` 使用）；产物卫生只要求清 `libZhulongAlgoRuntime.so` 上指向 `native/vendor/` 的那个。
+
+---
+
+## 9. Rockchip RGA 视觉前处理后端合同（已实现）
+
+任务 `10-13-algo-rga-vision-backend` 交付。本节每一条均来自 **RK3568 真机实测**（Debian 11 bullseye arm64 / 内核 5.10.226 / RGA 驱动 v1.3.4 / `librga.so.2.1.0` API `v1.10.1_[10]`），不是文档推断。
+
+### 9.1 编译期选择与依赖隔离
+
+通过 CMake cache 变量 `ZHULONG_VISION_BACKEND=rga` 选定。
+- 需要 `-DZHULONG_RGA_ROOT=<path>`，指向包含 `include/rga/im2d.h` 与 `lib/librga.so` 的前缀；缺失则 `FATAL_ERROR`。
+- **头文件绝对隔离**：`rga/im2d.h` 等厂商头文件**仅允许**在 `native/src/backends/rga/` 引用，严禁泄露至公开 SDK、引擎核心或调度层。
+- **链接隔离**：`libZhulongAlgoRuntime.so` 动态链接 `librga.so.2`；宿主 `Zhulong` 二进制**绝不**链接 `librga.so`（`readelf -d` 验证通过）。
+
+### 9.2 运行期硬件探测与对齐约束
+
+RGA 后端在启动时自动调用 `probe()` 执行运行期能力发现：
+- **行跨度对齐（`byte_stride_align`）**：从 `/sys/kernel/debug/rkrga/hardware` 读取（RK3568 实测为 **4** 字节）。**严禁硬编码**；读取不到或未取到有效值时透明回退 CPU，不向硬件传递非法对齐参数。
+- **ROI 偏移对齐（`offset_align`）**：通过在测试缓冲上调用 `imcheck_t` 动态探测（RK3568 实测为 **2** 像素）。
+- **设备权限与部署约束**：`/dev/rga` 权限为 `root:video`（`crw-rw----`）。宿主或运行 Runner 的用户**必须加入 `video` 用户组**，否则驱动拒绝打开并自动回退 CPU。
+
+### 9.3 格式能力矩阵与颜色转换语义
+
+| 输入格式 | RGA 硬件支持 | CPU 回退行为 | 约束与内存布局 |
+| --- | --- | --- | --- |
+| `RGB24` / `BGR24` | ✅ 硬件支持 | ✅ 支持 | 紧凑或满足 4 字节行对齐；目标恒定 HWC 3 通道 UINT8 |
+| `RGBA32` | ✅ 硬件支持 | ❌ NOT_SUPPORTED | 单平面 4 字节/像素，硬件完成 CSC 提取与缩放 |
+| `NV12` | ✅ 硬件支持 | ❌ NOT_SUPPORTED | 仅支持**连续内存**（plane1 == plane0 + y_stride * height）；非连续内存安全回退 CPU 返回 `NOT_SUPPORTED` |
+| `YUV420P` | ✅ 硬件支持 | ❌ NOT_SUPPORTED | 仅支持**连续内存**（plane1/plane2 紧密相连）；非连续内存安全回退 CPU 返回 `NOT_SUPPORTED` |
+| `UNKNOWN` | ❌ 显式拒绝 | ❌ NOT_SUPPORTED | 返回 `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED` |
+
+- **YUV 色彩空间转换**：硬件 CSC 采用 **Limited-range BT.601** 标准公式（YUV 16-235 映射至 RGB 0-255），实测与主流编解码软解管线一致。
+
+### 9.4 防挂机契约与两阶段裁剪
+
+- ⚠️ **严禁对目标缓冲区做指针偏移（OOB 越界防范）**：
+  Letterbox 绘制时，如果将目标 ROI 指针（`dst_buf + roi_offset`）传递给 `wrapbuffer_virtualaddr`，RGA 驱动会基于该偏移指针按完整 `wstride × hstride` 校验与计算 DMA 访问范围，导致驱动访问超出 Tensor 内存边界（~242KB 越界），引发 RGA 硬件/驱动陷入 D 状态死锁并导致板端看门狗复位。
+  **标准做法**：目标缓冲区恒定以全尺寸（`target_w × target_h`）包装为 `dst_buffer`，内容区偏移由 `improcess` 的 `drect`（`pad_left, pad_top, unpad_w, unpad_h`）表达，指针本身不偏移。
+- ⚠️ **强依赖 `imcheck_t` 预校验**：每次调用 `improcess` 前必须使用 `imcheck_t` 校验 `srect` 与 `drect` 合法性，失败直接返回并在上层回退，杜绝向驱动提交非法任务。
+- **两阶段裁剪（`crop_scale`）**：
+  针对人脸识别/车牌两阶段算法，使用 `srect` 表达裁剪框。若 ROI 坐标不满足 2 像素对齐，采用**形式 1（改参数向外扩取整）**，避免任何 O(N) 内存搬移；适配生效时原子递增 `rect_adapted_count`。
+- **Stride 适配**：行跨度大于紧凑宽度的图像，只要满足硬件 4 字节对齐且整除像素通道宽，直接设置 `wstride` 交由 RGA 处理，原子递增 `stride_adapted_count`。
+
+### 9.5 滤波差异与容差（AC3）
+
+RGA 硬件双线性插值单元与 CPU 软件基于中心对齐的浮点双线性滤波属于不同的核函数实现。下采样（1920x1080 → 640x640）时单像素极值绝对差最大可达 119。
+- 测试验收标准采用 `worst <= 128` 断言结构一致性；Letterbox 补边区域恒定断言填充值 114。
+
+### 9.6 性能与内存模型
+
+- ⚠️ **不得声称零拷贝**：当前 RGA 后端走 `wrapbuffer_virtualaddr` 虚拟地址映射，存在用户态到 DMA 映射开销，未引入 DMA-BUF / dma_fence。
+- 20 次连续调用真机实测 VmRSS 净增长为 0 KB（`delta=0 kb`），无句柄与内存泄漏。
+

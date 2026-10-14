@@ -39,6 +39,15 @@ RKNN_SHA256 = {
     "lib/librknnrt.so":   "d31fc19c85b85f6091b2bd0f6af9d962d5264a4e410bfb536402ec92bac738e8",
 }
 
+# Vendored RGA 供应商前缀（离线）。仅 RGA 视觉前处理后端构建使用。
+# 版本三元组：库 API 1.10.1_[10] / 内核驱动 v1.3.4 / byte_stride_align 4（RK3568 实测）。
+RGA_VENDOR = ROOT / "native/vendor/rga"
+RGA_SHA256 = {
+    "include/rga/im2d.h": "5ee06891775451c56e6264f5d53db0a4e948e1830287f3a5db4f75c30ac0ff11",
+    "include/rga/rga.h":  "f50214c9196cfdb1a66301d71d53cd335ed4bc8b8cdf5a56fdcce5965db2c6b9",
+    "lib/librga.so.2.1.0": "ba8744397f126c87dc2d637ddea35cca562aa8f323631bb4b9883816b3dcb714",
+}
+
 # FFmpeg 最小化安全裁剪参数（纯静态、位置无关代码 PIC、仅开启 RTSP 与 H264/H265 解码所需组件）
 #
 # 许可证警示：切勿加入 --enable-gpl / --enable-nonfree / --enable-version3。
@@ -224,6 +233,22 @@ def rknn_prefix():
     return RKNN_VENDOR
 
 
+def rga_prefix():
+    """校验 vendored RGA 前缀（离线，不联网）
+
+    逐个校验 RGA_SHA256 里的文件存在且 digest 匹配；不匹配抛 ValueError。
+    返回 RGA_VENDOR。
+    """
+    for relative, expected in RGA_SHA256.items():
+        candidate = RGA_VENDOR / relative
+        if not candidate.is_file():
+            raise ValueError(f"vendored RGA prefix missing {relative}; expected under {RGA_VENDOR}")
+        actual = digest(candidate)
+        if actual != expected:
+            raise ValueError(f"vendored RGA {relative} checksum mismatch: {actual} != {expected}")
+    return RGA_VENDOR
+
+
 def prepare(local, download):
     """校验或下载固定的 FFmpeg 源码压缩包"""
     ARCHIVE.parent.mkdir(parents=True, exist_ok=True)
@@ -380,6 +405,9 @@ def configure(p, sanitizer):
     # 使用绝对文件路径链接，不把 RKNN 前缀塞进 CMAKE_FIND_ROOT_PATH。
     if p.get("inference_backend", "cpu") == "rknn":
         args.append(f"-DZHULONG_RKNN_ROOT={rknn_prefix()}")
+    # 同理，只有 rga 才校验 RGA 前缀。
+    if p.get("vision_backend", "cpu") == "rga":
+        args.append(f"-DZHULONG_RGA_ROOT={rga_prefix()}")
 
     if p["mode"] != "host":
         def quote(value):

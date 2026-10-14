@@ -5,6 +5,9 @@
 #ifdef ZHULONG_INFERENCE_RKNN
 #include <backends/rknn/rknn_inference_backend.hpp>
 #endif
+#ifdef ZHULONG_VISION_RGA
+#include <backends/rga/rga_vision_backend.hpp>
+#endif
 
 namespace zhulong {
 
@@ -18,7 +21,11 @@ std::shared_ptr<IInferenceBackend> get_default_inference_backend() {
 }
 
 std::shared_ptr<IVisionBackend> get_default_vision_backend() {
+#ifdef ZHULONG_VISION_RGA
+    static auto backend = std::make_shared<RgaVisionBackend>();
+#else
     static auto backend = std::make_shared<CpuVisionBackend>();
+#endif
     return backend;
 }
 

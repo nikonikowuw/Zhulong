@@ -1,4 +1,5 @@
 #include "cpu_vision_backend.hpp"
+#include "letterbox_geometry.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -92,21 +93,14 @@ zhulong_status_t CpuVisionBackend::letterbox(const zhulong_frame_view& src,
         return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
 
-    float r = std::min(static_cast<float>(target_w) / static_cast<float>(src.width),
-                       static_cast<float>(target_h) / static_cast<float>(src.height));
+    // 几何计算提取到 compute_letterbox_geometry()，与 RGA 后端共用同一套语义。
+    const LetterboxGeometry geometry = compute_letterbox_geometry(src.width, src.height, target_w, target_h);
+    const int unpad_w = geometry.unpad_w;
+    const int unpad_h = geometry.unpad_h;
+    const int pad_left = geometry.pad_left;
+    const int pad_top = geometry.pad_top;
 
-    int unpad_w = static_cast<int>(std::clamp(std::llround(static_cast<double>(src.width) * r),
-                                              1LL, static_cast<long long>(target_w)));
-    int unpad_h = static_cast<int>(std::clamp(std::llround(static_cast<double>(src.height) * r),
-                                              1LL, static_cast<long long>(target_h)));
-
-    int dw = target_w - unpad_w;
-    int dh = target_h - unpad_h;
-
-    int pad_left = dw / 2;
-    int pad_top = dh / 2;
-
-    inout_params.scale = r;
+    inout_params.scale = geometry.scale;
     inout_params.pad_left = pad_left;
     inout_params.pad_top = pad_top;
 

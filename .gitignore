@@ -12,8 +12,9 @@
 *.dll
 *.so
 *.dylib
-# 受控的 RKNN 供应商运行库（vendored，与板端逐字节一致，允许提交）
+# 受控的 RKNN 与 RGA 供应商运行库（vendored，与板端逐字节一致，允许提交）
 !native/vendor/rknpu2/lib/librknnrt.so
+!native/vendor/rga/lib/librga.so*
 .vscode
 # 测试与性能分析文件 (pprof / trace)
 *.test

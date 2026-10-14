@@ -1,0 +1,39 @@
+{
+  "name": "rk3568-rknn-rga",
+  "cc": "/usr/bin/aarch64-linux-gnu-gcc",
+  "cxx": "/usr/bin/aarch64-linux-gnu-g++",
+  "ar": "/usr/bin/aarch64-linux-gnu-ar",
+  "ranlib": "/usr/bin/aarch64-linux-gnu-ranlib",
+  "sysroot": "/home/niko/dev/Go/Zhulong/build/sysroots/rk3568",
+  "arch": "aarch64",
+  "goarch": "arm64",
+  "target_os": "linux",
+  "inference_backend": "rknn",
+  "vision_backend": "rga",
+  "cflags": [
+    "-nostdinc",
+    "-isystem",
+    "/home/niko/dev/Go/Zhulong/build/sysroots/rk3568/usr/include/c++/10",
+    "-isystem",
+    "/home/niko/dev/Go/Zhulong/build/sysroots/rk3568/usr/include/aarch64-linux-gnu/c++/10",
+    "-isystem",
+    "/home/niko/dev/Go/Zhulong/build/sysroots/rk3568/usr/include/c++/10/backward",
+    "-isystem",
+    "/usr/lib/gcc-cross/aarch64-linux-gnu/14/include",
+    "-isystem",
+    "/home/niko/dev/Go/Zhulong/build/sysroots/rk3568/usr/include/aarch64-linux-gnu",
+    "-isystem",
+    "/home/niko/dev/Go/Zhulong/build/sysroots/rk3568/usr/include",
+    "-B/home/niko/dev/Go/Zhulong/build/sysroots/rk3568/usr/lib/gcc/aarch64-linux-gnu/10",
+    "-B/home/niko/dev/Go/Zhulong/build/sysroots/rk3568/usr/lib/aarch64-linux-gnu"
+  ],
+  "ldflags": [
+    "-B/home/niko/dev/Go/Zhulong/build/sysroots/rk3568/usr/lib/gcc/aarch64-linux-gnu/10",
+    "-B/home/niko/dev/Go/Zhulong/build/sysroots/rk3568/usr/lib/aarch64-linux-gnu",
+    "-L/home/niko/dev/Go/Zhulong/build/sysroots/rk3568/usr/lib/gcc/aarch64-linux-gnu/10",
+    "-L/home/niko/dev/Go/Zhulong/build/sysroots/rk3568/usr/lib/aarch64-linux-gnu",
+    "-L/home/niko/dev/Go/Zhulong/build/sysroots/rk3568/lib/aarch64-linux-gnu",
+    "-Wl,-u,__cxa_call_terminate",
+    "-lsupc++"
+  ]
+}
