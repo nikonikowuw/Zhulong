@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 33
-- **Last Active**: 2026-10-13
+- **Total Sessions**: 35
+- **Last Active**: 2026-10-14
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1386 | Active |
+| `journal-1.md` | ~1803 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 35 | 2026-10-14 | Rockchip RGA 视觉前处理后端接入 | `6b0fdfe` | `dev` |
 | 33 | 2026-10-13 | 媒体文件服务落地与双轴代码审查 | `0ba2024` | `dev` |
 | 32 | 2026-10-13 | 实现媒体文件服务（只读字节层）并沉淀路径防护规范 | - | `dev` |
 | 31 | 2026-10-13 | 补齐审计重构的测试证据并收尾 10-13-audit-middleware-refactor | `a99e63f`, `51d2940`, `c907bb4` | `dev` |

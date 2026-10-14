@@ -1778,3 +1778,26 @@ engine.test Go-CGO 桥接   6/6 PASS（含 TestBridgeIntegration_Probe）
 - 归档本任务 `10-13-algo-rga-vision-backend`
 - 推进父任务 `10-10-algorithm-plugin-architecture` 的最终集成与验收
 
+
+
+## Session 35: Rockchip RGA 视觉前处理后端接入
+<!-- trellis-session: v=2 fp=fc383d6dd8727e18 -->
+
+**Date**: 2026-10-14
+**Task**: Rockchip RGA 视觉前处理后端接入
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+在公共算法运行库 HAL（IVisionBackend）下接入 Rockchip RGA 硬件前处理后端，支持 Letterbox、Resize、两阶段 Crop & Scale 及 NV12/YUV420P 多平面硬件 CSC 颜色转换，通过编译期 profile 隔离选择。定位排查了 RGA 驱动死锁与看门狗复位问题。全部验收标准在 RK3568 真机与主机实测通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6b0fdfe` | feat(native): implement Rockchip RGA hardware vision backend |
+
+### Status
+
+[OK] **Completed**
