@@ -1484,3 +1484,77 @@ Session summary was not supplied.
 - `make api-docs`：无文档漂移
 - 前端：`pnpm run lint` / `pnpm run build`（含 `tsc -b`）通过
 - ⚠️ `make frontend-check` 目标本身**既有损坏**：`npm ci --prefix web` 对只有 `pnpm-lock.yaml` 的仓库失败，且引用不存在的 `type-check` script。与本次改动无关（diff 未触及 `web/`），但会阻塞 `make check`。
+
+---
+
+## Session 27: 构建门禁基线修复（native 头文件 + 前端 check 目标）
+<!-- trellis-session: v=2 fp=6a1c9f4b7d2e8305 -->
+
+**Date**: 2026-10-14
+**Task**: 构建门禁基线修复：native 头文件与前端 check 目标
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+准备为 `10-13-algo-broker-host` 补齐 AC2/AC6/AC7/AC8/AC10/AC11 时，发现**基线本身不可运行**：`make native-test` 在干净树上直接编译失败，`make frontend-check` 因引用不存在的 npm script 无法执行。本任务只做解阻塞，零产品行为变更。
+
+### 关键发现：提交声称的验证未真正执行
+
+`c442044` 的 commit message 声称「make native-test 14/14」，但**无法在当前树上复现**：
+
+| 证据 | 值 |
+| --- | --- |
+| `build/native/host/libZhulongEngine.a` 时间戳 | 2026-10-13 12:03 |
+| `c442044` 提交时间 | 2026-10-14 08:51 |
+| `nm libZhulongEngine.a \| grep -c Zhulong_stream_get_broker_path` | **0** |
+
+归档与全部测试二进制都来自前一天，**不含本次新增的 C ABI 符号** → 当时的「14/14」跑的是陈旧二进制，`engine_abi_test.c` 中针对新 ABI 的断言并未执行。
+
+**根因**：`native/src/abi/engine.cpp` 新增的 `Zhulong_stream_get_broker_path` 用了 `std::memcpy` 却没有 `#include <cstring>`（该文件只有 `<memory> <new> <utility>`）。CMake 因 `.o` 存在而跳过重编译，掩盖了编译错误。
+
+### Main Changes
+
+- `native/src/abi/engine.cpp`: 补 `#include <cstring>`（`std::memcpy`）
+- `native/src/pipeline/engine.cpp`: 补 `#include <cstdlib>`（`std::getenv`，此前靠传递包含侥幸通过）
+- `Makefile`: `NPM ?= npm` → `PNPM ?= pnpm`；`npm ci --prefix web` → `pnpm --dir web install --frozen-lockfile`；删除不存在的 `type-check`/`audit` 调用；`frontend-install` 增加 `command -v` 显式工具探测
+- `.trellis/spec/native/ingestion-contract.md`: 新增「Stale-artifact false green (mandatory evidence)」小节；修正测试数量漂移（5 CTests/12 Python cases → 15/13）
+- `.trellis/spec/frontend/quality-guidelines.md`: 新增 §1.1「与 `make frontend-check` 的对应关系」表 + 两条易踩约束
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `830d6c2` | fix(build): unbreak the native compile and the frontend check target |
+
+### Testing
+
+- [OK] `rm -rf build/native/host` + `make native-test` → **15/15 Passed**（真干净重建）
+- [OK] 符号证据：`Zhulong_stream_get_broker_path` **0 → 2**、`Zhulong_stream_set_publish_rate` **0 → 2**
+- [OK] 反向验证：重新删除 `<cstring>` → 精确复现原始错误（`abi/engine.cpp:149`，exit 2）→ 证明断言非空
+- [OK] `make frontend-check` → exit 0（eslint 0 问题 + vitest 241 passed + build 892ms）
+- [OK] `make check` → **exit 0**（frontend-check ✅ / native-test 15/15 ✅ / api-docs 零漂移 ✅ / go-check：gofmt 空 + vet + 17 包 ok + Go 桥接 6/6）
+- [OK] 全量语法预检 `native/src/**/*.cpp`：0 error
+
+### 取舍记录
+
+| 原步骤 | 处置 | 理由 |
+| --- | --- | --- |
+| `type-check` | 删除，由 `build` 承担 | 该 script 不存在；`build` 为 `tsc -b && vite build`，类型检查已含 |
+| `audit` | 移出 `frontend-check` | ⚠️ **既有安全债**：`pnpm audit --prod` 52 项（含 axios 2 项 critical），全量 91 项（5 critical）。保留会让整个前端门禁永久红，掩盖真实回归 |
+| `NPM` 变量名 | 改名 `PNPM` | 名字与值一致，消除第二个真实源 |
+
+### 遗留（建议单开任务）
+
+- ⚠️ 生产依赖安全债：`pnpm audit --prod` 52 项（2 critical，`axios`）
+- ⚠️ 前端格式债：`pnpm run format:check` 报 11 个文件不符合 prettier（`src/features/settings/time/**` 等）
+- ⚠️ `shm_pool.cpp:86` 的 `-Wclass-memaccess` 警告（既有，按「精准修改」未动）
+- ⚠️ `internal/camera` 的 `TestStreamHubOnDemandAcquireAndRelease` 既有竞态（journal 上轮已用 `git stash` 确认）
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 回到 `10-13-algo-broker-host` 补齐 AC2/AC6/AC7/AC8/AC10/AC11（本机 native 层 + RK3568 板端）
