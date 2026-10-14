@@ -36,7 +36,7 @@
 
 **禁止把客户端路径原样入库**：任何将来"按该路径打开或返回文件"的消费者都会继承路径穿越面。若某模块确实需要把文件限定在某个根目录内，还必须在规范化之后追加**前缀断言**（`strings.HasPrefix(cleanPath, cleanRoot)`），与 native 侧 Zip-Slip 防御保持同样的纵深防御标准。
 
-> 人员底库登记照（`faces/{person_id}/{face_id}.jpg`）目前**没有上传端点**，`imagePath` 是外部路径引用，因此只做上述形态收敛，不做根路径断言。
+> 人员底库登记照已全面改造为 `multipart/form-data` 文件直传上传端点（`POST /api/v1/persons/{id}/faces`），图片流经格式校验后由服务端自动保存至底库目录（由 `config.toml` 中 `[person] faces_directory` 配置；留空则默认继承 `<data.directory>/faces`）。数据库持久化保存相对文件名（`{person_id}_{face_id}.ext`），动态拼装解析，彻底消除了客户端路径引用带来的路径穿越、信息嗅探以及环境迁移坏死风险。
 
 ---
 

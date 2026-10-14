@@ -104,4 +104,31 @@ describe('NavGroup i18n', () => {
     await expect.element(getByText('General')).toBeInTheDocument()
     await expect.element(getByText('Audit Logs')).toBeInTheDocument()
   })
+
+  it('translates Persons in general navigation group', async () => {
+    const items = [
+      {
+        title: 'Persons',
+        url: '/persons',
+      },
+    ]
+
+    await i18n.changeLanguage('zh-Hans')
+    const { getByText } = await render(
+      <SidebarProvider>
+        <NavGroup title='General' items={items} />
+      </SidebarProvider>
+    )
+
+    await expect.element(getByText('常规')).toBeInTheDocument()
+    await expect.element(getByText('人员管理')).toBeInTheDocument()
+
+    await i18n.changeLanguage('zh-Hant')
+    await expect.element(getByText('常規')).toBeInTheDocument()
+    await expect.element(getByText('人員管理')).toBeInTheDocument()
+
+    await i18n.changeLanguage('en')
+    await expect.element(getByText('General')).toBeInTheDocument()
+    await expect.element(getByText('Persons')).toBeInTheDocument()
+  })
 })

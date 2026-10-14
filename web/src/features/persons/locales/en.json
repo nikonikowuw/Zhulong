@@ -1,0 +1,79 @@
+{
+  "title": "Personnel Management",
+  "description": "Maintain personnel profiles and enroll face templates for visual inference algorithms.",
+  "table": {
+    "searchPlaceholder": "Search by name or personnel ID...",
+    "loadFailed": "Failed to load personnel data. Please check connection.",
+    "columns": {
+      "name": "Name",
+      "personId": "Personnel ID",
+      "faceCount": "Faces Enrolled",
+      "createdAt": "Enrolled At",
+      "actions": "Actions"
+    },
+    "empty": "No personnel records",
+    "emptyDesc": "Click '+ Add Person' to register your first profile",
+    "filterEmpty": "No matching personnel found",
+    "filterEmptyDesc": "Try adjusting your search criteria",
+    "resetFilter": "Reset Filters"
+  },
+  "actions": {
+    "retry": "Retry",
+    "refresh": "Refresh",
+    "create": "Add Person",
+    "edit": "Edit Person",
+    "delete": "Delete Person",
+    "manageFaces": "Manage Faces",
+    "addFace": "Enroll Face",
+    "deleteFace": "Delete Face",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "saving": "Saving...",
+    "deleting": "Deleting..."
+  },
+  "dialogs": {
+    "createTitle": "Add Personnel Profile",
+    "createDesc": "Register a new person. If ID is omitted, the system will generate a unique key.",
+    "editTitle": "Edit Personnel Profile",
+    "editDesc": "Update profile name. The personnel ID is immutable once created.",
+    "deleteTitle": "Delete Person?",
+    "deleteDesc": "This action cannot be undone. Deleting '{{name}}' will cascade and remove all enrolled face templates!",
+    "facesTitle": "Face Templates - {{name}}",
+    "facesDesc": "Manage 1:N face templates for feature extraction and recognition.",
+    "addFaceTitle": "Upload Face Photo",
+    "addFaceDesc": "Choose or drag-and-drop a clear face photo. The server will store it and extract features.",
+    "deleteFaceTitle": "Delete Face Template?",
+    "deleteFaceDesc": "This template photo and its feature vector will be permanently removed."
+  },
+  "fields": {
+    "name": "Name",
+    "namePlaceholder": "e.g. Alice Smith",
+    "personId": "Personnel ID",
+    "personIdPlaceholder": "Optional, e.g. EMP-1001",
+    "personIdDisabledTip": "Personnel ID is immutable and cannot be changed",
+    "dragDropTip": "Click to select or drag photo here",
+    "dragDropDesc": "Supports JPG, PNG, WebP (max 10MB)",
+    "changePhoto": "Change Photo",
+    "removeSelected": "Remove Selected Photo",
+    "uploadAndEnroll": "Upload and Enroll",
+    "faceCountUnit": "{{count}} photo(s)",
+    "createdAt": "Enrolled At"
+  },
+  "status": {
+    "emptyFaces": "No face templates enrolled",
+    "emptyFacesDesc": "Select or drag photos below to enroll faces."
+  },
+  "notifications": {
+    "createSuccess": "Person '{{name}}' created successfully",
+    "updateSuccess": "Person '{{name}}' updated successfully",
+    "deleteSuccess": "Person profile deleted",
+    "addFaceSuccess": "Face template enrolled successfully",
+    "deleteFaceSuccess": "Face template removed"
+  },
+  "validation": {
+    "nameRequired": "Name is required",
+    "fileRequired": "Please select a photo to upload",
+    "fileTooLarge": "File exceeds the 10MB limit",
+    "invalidFileType": "Only JPG, PNG or WebP images are allowed"
+  }
+}

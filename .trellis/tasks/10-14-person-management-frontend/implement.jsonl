@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端架构规范总览与开发前检查清单"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "前端12条编码铁律、TanStack Query/Table状态管理契约"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "三语国际化契约与主题语义规范"}

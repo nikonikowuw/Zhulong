@@ -1,11 +1,14 @@
 package person
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -164,7 +167,7 @@ func TestGetGallerySyncData(t *testing.T) {
 	defer dbStore.Close()
 
 	store := NewStore(dbStore)
-	svc := NewService(store, zap.NewNop())
+	svc := NewService(store, tempDir, zap.NewNop())
 	ctx := context.Background()
 
 	p := &Person{
@@ -210,15 +213,22 @@ func TestGetGallerySyncData(t *testing.T) {
 	}
 }
 
+var (
+	testJPEGBytes = []byte("\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xff\xdb\x00C\x00mock-jpeg-data")
+	testPNGBytes  = []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06mock-png-data")
+	testWebPBytes = []byte("RIFF\x1a\x00\x00\x00WEBPVP8 \x0e\x00\x00\x00mock-webp-data")
+)
+
 func newTestService(t *testing.T) *Service {
 	t.Helper()
-	dbStore := database.New(t.TempDir(), zap.NewNop())
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
 	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	return NewService(NewStore(dbStore), zap.NewNop())
+	return NewService(NewStore(dbStore), tempDir, zap.NewNop())
 }
 
 func requireDomainError(t *testing.T, err error, kind apperr.Kind, code string) {
@@ -358,7 +368,7 @@ func TestAddFace_IDsAreUniqueUnderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			face, err := svc.AddFace(ctx, created.ID, AddFaceRequest{ImagePath: "/data/faces/enroll.jpg"})
+			face, err := svc.AddFaceWithReader(ctx, created.ID, fmt.Sprintf("enroll_%d.jpg", i), bytes.NewReader(testJPEGBytes))
 			if err != nil {
 				errs[i] = err
 				return
@@ -380,10 +390,8 @@ func TestAddFace_IDsAreUniqueUnderConcurrency(t *testing.T) {
 	}
 }
 
-// TestAddFace_RejectsUncleanImagePath covers the containment rule on the client-supplied
-// enrollment-photo reference. The module has no upload endpoint, so the value is a path
-// reference that a future consumer would open — a traversal segment must never be stored.
-func TestAddFace_RejectsUncleanImagePath(t *testing.T) {
+// TestAddFace_RejectsInvalidFileType verifies that only supported image types are accepted.
+func TestAddFace_RejectsInvalidFileType(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
@@ -393,22 +401,27 @@ func TestAddFace_RejectsUncleanImagePath(t *testing.T) {
 	}
 
 	rejected := []string{
-		"../../etc/shadow",
-		"/data/faces/../../etc/shadow",
-		"faces/relative.jpg",
-		"/data/faces/",
-		"/data/faces//face.jpg",
-		"/data/faces/./face.jpg",
-		"/data/faces/\x00.jpg",
+		"script.sh",
+		"binary.exe",
+		"document.pdf",
+		"face.txt",
+		"archive.zip",
 	}
-	for _, path := range rejected {
-		_, err := svc.AddFace(ctx, created.ID, AddFaceRequest{ImagePath: path})
+	for _, filename := range rejected {
+		_, err := svc.AddFaceWithReader(ctx, created.ID, filename, bytes.NewReader([]byte("some-data")))
 		if err == nil {
-			t.Errorf("imagePath %q must be rejected", path)
+			t.Errorf("filename %q must be rejected", filename)
 			continue
 		}
-		requireDomainError(t, err, apperr.KindInvalid, "INVALID_IMAGE_PATH")
+		requireDomainError(t, err, apperr.KindInvalid, "INVALID_FILE_TYPE")
 	}
+
+	// Rejection when file has valid extension but invalid content
+	_, err = svc.AddFaceWithReader(ctx, created.ID, "fake.jpg", bytes.NewReader([]byte("not an image")))
+	if err == nil {
+		t.Errorf("fake.jpg with non-image content must be rejected")
+	}
+	requireDomainError(t, err, apperr.KindInvalid, "INVALID_FILE_TYPE")
 
 	faces, err := svc.ListFaces(ctx, created.ID)
 	if err != nil {
@@ -418,9 +431,13 @@ func TestAddFace_RejectsUncleanImagePath(t *testing.T) {
 		t.Errorf("rejected enrolments must not persist, got %d faces", len(faces))
 	}
 
-	if _, err := svc.AddFace(ctx, created.ID, AddFaceRequest{ImagePath: "/data/faces/face_01.jpg"}); err != nil {
-		t.Fatalf("a clean absolute imagePath must be accepted, got %v", err)
+	if _, err := svc.AddFaceWithReader(ctx, created.ID, "face_01.jpg", bytes.NewReader(testJPEGBytes)); err != nil {
+		t.Fatalf("a valid jpg must be accepted, got %v", err)
 	}
+
+	// Nil file header must be rejected with FILE_REQUIRED
+	_, err = svc.AddFace(ctx, created.ID, nil)
+	requireDomainError(t, err, apperr.KindInvalid, "FILE_REQUIRED")
 }
 
 // TestListFaces_MissingPersonReturnsNotFound keeps GET .../faces consistent with the rest of
@@ -462,5 +479,67 @@ func TestServiceDoesNotDependOnAudit(t *testing.T) {
 	other := "EMP_OTHER"
 	if _, err := svc.UpdatePerson(ctx, created.ID, UpdatePersonRequest{PersonID: &other}); err == nil {
 		t.Fatal("expected the personId reassignment to be rejected")
+	}
+}
+
+func TestGetFaceImagePath_RelativeAndAbsoluteResolution(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	p, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "PathTest"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+
+	face, err := svc.AddFaceWithReader(ctx, p.ID, "avatar.png", bytes.NewReader(testPNGBytes))
+	if err != nil {
+		t.Fatalf("AddFaceWithReader failed: %v", err)
+	}
+
+	// 1. Verify stored path is relative
+	if filepath.IsAbs(face.ImagePath) {
+		t.Errorf("expected ImagePath in memory/DB to be relative, got: %s", face.ImagePath)
+	}
+
+	// 2. Verify GetFaceImagePath resolves to absolute path on disk
+	resolved, err := svc.GetFaceImagePath(ctx, p.ID, face.ID)
+	if err != nil {
+		t.Fatalf("GetFaceImagePath failed: %v", err)
+	}
+	expected := filepath.Join(svc.facesDir, face.ImagePath)
+	if resolved != expected {
+		t.Errorf("expected resolved path %s, got %s", expected, resolved)
+	}
+
+	// 3. Test backward compatibility: legacy absolute path within facesDir resolves correctly
+	legacyFace := &Face{
+		ID:            "legacy_face_id",
+		OwnerRowID:    p.ID,
+		ImagePath:     filepath.Join(svc.facesDir, "legacy_photo.jpg"),
+		FeatureVector: make([]byte, 2048),
+	}
+	if err := svc.store.AddFace(ctx, legacyFace); err != nil {
+		t.Fatalf("AddFace legacy failed: %v", err)
+	}
+	resolvedLegacy, err := svc.GetFaceImagePath(ctx, p.ID, legacyFace.ID)
+	if err != nil {
+		t.Fatalf("GetFaceImagePath for legacy failed: %v", err)
+	}
+	if resolvedLegacy != legacyFace.ImagePath {
+		t.Errorf("expected %s, got %s", legacyFace.ImagePath, resolvedLegacy)
+	}
+
+	// 4. Test path traversal rejection: absolute path outside facesDir must be rejected
+	escapingFace := &Face{
+		ID:            "escape_face_id",
+		OwnerRowID:    p.ID,
+		ImagePath:     "/etc/shadow",
+		FeatureVector: make([]byte, 2048),
+	}
+	if err := svc.store.AddFace(ctx, escapingFace); err != nil {
+		t.Fatalf("AddFace escaping failed: %v", err)
+	}
+	if _, err := svc.GetFaceImagePath(ctx, p.ID, escapingFace.ID); err == nil {
+		t.Errorf("expected GetFaceImagePath to reject escaping path /etc/shadow")
 	}
 }

@@ -575,14 +575,6 @@ definitions:
       transactionId:
         type: string
     type: object
-  person.AddFaceRequest:
-    properties:
-      imagePath:
-        maxLength: 512
-        type: string
-    required:
-    - imagePath
-    type: object
   person.CreatePersonRequest:
     properties:
       name:
@@ -1879,6 +1871,10 @@ paths:
         in: query
         name: offset
         type: integer
+      - description: Search keyword for name or personId
+        in: query
+        name: search
+        type: string
       produces:
       - application/json
       responses:
@@ -2073,19 +2069,18 @@ paths:
       - person
     post:
       consumes:
-      - application/json
+      - multipart/form-data
       parameters:
       - description: Person ID
         in: path
         name: id
         required: true
         type: string
-      - description: Face enrollment payload
-        in: body
-        name: request
+      - description: Face photo image file (JPG, PNG, WebP)
+        in: formData
+        name: file
         required: true
-        schema:
-          $ref: '#/definitions/person.AddFaceRequest'
+        type: file
       produces:
       - application/json
       responses:
@@ -2147,6 +2142,39 @@ paths:
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Delete a face template
+      tags:
+      - person
+  /persons/{id}/faces/{face_id}/image:
+    get:
+      parameters:
+      - description: Person ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Face template ID
+        in: path
+        name: face_id
+        required: true
+        type: string
+      produces:
+      - image/jpeg
+      - image/png
+      - image/webp
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get face photo image file
       tags:
       - person
   /system/network/confirm:

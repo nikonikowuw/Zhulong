@@ -2,8 +2,10 @@ package person
 
 import (
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
@@ -38,9 +40,32 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 
 		// Face template sub-resources (一人多照)
 		group.GET("/:id/faces", h.ListFaces)
-		group.POST("/:id/faces", h.AddFace)
 		group.DELETE("/:id/faces/:face_id", h.DeleteFace)
+		group.GET("/:id/faces/:face_id/image", h.GetFaceImage)
 	}
+}
+
+// RegisterUploadRoutes registers large-body upload endpoints on the upload router group.
+func (h *Handler) RegisterUploadRoutes(rg *gin.RouterGroup) {
+	rg.POST("/persons/:id/faces", h.AddFace)
+}
+
+type uploadRouteRegistrar struct {
+	handler *Handler
+}
+
+func (r *uploadRouteRegistrar) RegisterRoutes(rg *gin.RouterGroup) {
+	r.handler.RegisterUploadRoutes(rg)
+}
+
+// UploadRouteRegistrar returns a RouteRegistrar adapter for upload endpoints.
+func (h *Handler) UploadRouteRegistrar() RouteRegistrar {
+	return &uploadRouteRegistrar{handler: h}
+}
+
+type listPersonsQuery struct {
+	httputil.PaginationQuery
+	Search string `form:"search"`
 }
 
 // List godoc
@@ -51,15 +76,16 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Param        pageSize query int false "Page size (default 20, max 100)"
 // @Param        limit query int false "Legacy pagination limit"
 // @Param        offset query int false "Legacy pagination offset"
+// @Param        search query string false "Search keyword for name or personId"
 // @Success      200  {object}  httputil.Response{data=httputil.PaginatedData[Person]}
 // @Failure      500  {object}  httputil.Response
 // @Router       /persons [get]
 func (h *Handler) List(c *gin.Context) {
-	var query httputil.PaginationQuery
+	var query listPersonsQuery
 	_ = c.ShouldBindQuery(&query)
 	page, pageSize, offset, limit := query.Normalize()
 
-	persons, total, err := h.service.ListPersons(c.Request.Context(), limit, offset)
+	persons, total, err := h.service.ListPersons(c.Request.Context(), limit, offset, query.Search)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
@@ -195,17 +221,15 @@ func (h *Handler) ListFaces(c *gin.Context) {
 // AddFace godoc
 // @Summary      Enroll a new face template for a person
 // @Tags         person
-// @Accept       json
+// @Accept       multipart/form-data
 // @Produce      json
 // @Param        id path string true "Person ID"
-// @Param        request body AddFaceRequest true "Face enrollment payload"
+// @Param        file formData file true "Face photo image file (JPG, PNG, WebP)"
 // @Success      201  {object}  httputil.Response{data=Face}
 // @Failure      400  {object}  httputil.Response
 // @Failure      404  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /persons/{id}/faces [post]
-//
-// TODO(api/storage): 待重构为 multipart/form-data 文件流上传，解耦浏览器与服务端文件路径。
 func (h *Handler) AddFace(c *gin.Context) {
 	personID := c.Param("id")
 	// The enrollment photo path and features are deliberately excluded from the
@@ -213,12 +237,12 @@ func (h *Handler) AddFace(c *gin.Context) {
 	audithttp.Tag(c, ActionPersonFaceAdd, "person:"+personID, "Add face for person "+personID)
 
 	var req AddFaceRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBind(&req); err != nil {
 		httputil.HandleBindError(c, err)
 		return
 	}
 
-	face, err := h.service.AddFace(c.Request.Context(), personID, req)
+	face, err := h.service.AddFace(c.Request.Context(), personID, req.File)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
@@ -226,6 +250,34 @@ func (h *Handler) AddFace(c *gin.Context) {
 
 	audithttp.TagTarget(c, "face:"+face.ID)
 	httputil.SuccessWithStatus(c, http.StatusCreated, face)
+}
+
+// GetFaceImage godoc
+// @Summary      Get face photo image file
+// @Tags         person
+// @Produce      image/jpeg,image/png,image/webp
+// @Param        id path string true "Person ID"
+// @Param        face_id path string true "Face template ID"
+// @Success      200  {file}    binary
+// @Failure      404  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/{id}/faces/{face_id}/image [get]
+func (h *Handler) GetFaceImage(c *gin.Context) {
+	personID := c.Param("id")
+	faceID := c.Param("face_id")
+
+	imgPath, err := h.service.GetFaceImagePath(c.Request.Context(), personID, faceID)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+
+	if _, err := os.Stat(imgPath); err != nil {
+		httputil.WriteError(c, apperr.NotFound("IMAGE_NOT_FOUND", "image file not found on disk", err))
+		return
+	}
+
+	c.File(imgPath)
 }
 
 // DeleteFace godoc

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
@@ -120,15 +121,22 @@ func (s *Store) GetPersonMeta(ctx context.Context, id string) (*Person, error) {
 	return &p, nil
 }
 
-// ListPersons returns paginated persons with associated Face templates, along with total record count.
-func (s *Store) ListPersons(ctx context.Context, limit, offset int) ([]Person, int64, error) {
+// ListPersons returns paginated persons with associated Face templates, optionally filtered by keyword.
+func (s *Store) ListPersons(ctx context.Context, limit, offset int, search string) ([]Person, int64, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
 
+	query := db.Model(&Person{})
+	search = strings.TrimSpace(search)
+	if search != "" {
+		likePattern := "%" + search + "%"
+		query = query.Where("name LIKE ? OR person_id LIKE ?", likePattern, likePattern)
+	}
+
 	var total int64
-	if err := db.Model(&Person{}).Count(&total).Error; err != nil {
+	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("count persons: %w", err)
 	}
 
@@ -142,7 +150,7 @@ func (s *Store) ListPersons(ctx context.Context, limit, offset int) ([]Person, i
 	}
 
 	var list []Person
-	if err := db.Preload("Faces").Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
+	if err := query.Preload("Faces").Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
 		return nil, 0, err
 	}
 	return list, total, nil

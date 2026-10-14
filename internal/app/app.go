@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
@@ -455,16 +456,22 @@ type personOut struct {
 	Handler         *person.Handler
 	Lifecycle       personLifecycle
 	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+	UploadRoutes    RouteRegistrar `group:"upload_routes"`
 }
 
-func providePerson(dbProvider database.DBProvider, logger *zap.Logger) personOut {
-	comp := person.NewPersonComponents(dbProvider, logger)
+func providePerson(dbProvider database.DBProvider, config Config, logger *zap.Logger) personOut {
+	facesDir := config.FacesDir
+	if facesDir == "" {
+		facesDir = filepath.Join(config.DataDir, "faces")
+	}
+	comp := person.NewPersonComponents(dbProvider, facesDir, logger)
 	return personOut{
 		Store:           comp.Store,
 		Service:         comp.Service,
 		Handler:         comp.Handler,
 		Lifecycle:       comp.Lifecycle,
 		ProtectedRoutes: comp.ProtectedRoutes,
+		UploadRoutes:    comp.UploadRoutes,
 	}
 }
 

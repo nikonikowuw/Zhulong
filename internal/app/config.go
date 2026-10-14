@@ -12,6 +12,7 @@ import (
 type Config struct {
 	HTTPAddress     string
 	DataDir         string
+	FacesDir        string
 	AlgorithmTarget string
 	Development     bool
 	CustomScript    string
@@ -49,6 +50,7 @@ func DefaultConfig() Config {
 	return Config{
 		HTTPAddress:     "127.0.0.1:8080",
 		DataDir:         "./data",
+		FacesDir:        "",
 		AlgorithmTarget: "cpu",
 	}
 }

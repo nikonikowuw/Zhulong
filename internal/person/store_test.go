@@ -84,7 +84,7 @@ func TestStorePersonMultiFaceCRUD(t *testing.T) {
 	}
 
 	// 4.1 Test ListPersons (paginated) and ListAllPersons
-	pList, total, err := store.ListPersons(ctx, 10, 0)
+	pList, total, err := store.ListPersons(ctx, 10, 0, "")
 	if err != nil {
 		t.Fatalf("ListPersons failed: %v", err)
 	}

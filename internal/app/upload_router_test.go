@@ -23,6 +23,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
+	"github.com/nikonikowuw/Zhulong/internal/person"
 	"go.uber.org/zap"
 )
 
@@ -342,5 +343,70 @@ func TestUploadRouteProducesAuditRecord(t *testing.T) {
 	}
 	if entry.Target != "algorithm:e2e_large_pkg" {
 		t.Errorf("expected the refined install target, got %q", entry.Target)
+	}
+}
+
+// TestPersonFaceUploadRouterAllowsLargeImage verifies that face uploads exceeding
+// MaxAPIRequestBodyBytes (1 MiB) succeed through the upload router group.
+func TestPersonFaceUploadRouterAllowsLargeImage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	dataDir := t.TempDir()
+
+	dbStore := database.New(dataDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("database migration failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	personComp := person.NewPersonComponents(dbStore, filepath.Join(dataDir, "faces"), zap.NewNop())
+
+	assets := http.FS(fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("shell")},
+	})
+
+	router := newRouter(RouterParams{
+		Logger:          zap.NewNop(),
+		DatabaseReady:   readinessStub(true),
+		NativeReady:     readinessStub(true),
+		ProtectedRoutes: []RouteRegistrar{personComp.ProtectedRoutes},
+		UploadRoutes:    []RouteRegistrar{personComp.UploadRoutes},
+		Assets:          assets,
+	})
+
+	// Create person profile
+	createBody := bytes.NewReader([]byte(`{"name":"Large Photo Tester"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/persons", createBody)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create person failed: %d, body: %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		Data person.Person `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &created)
+	personID := created.Data.ID
+
+	// Create 2.5 MiB image payload (> 1 MiB MaxAPIRequestBodyBytes)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "large_face.jpg")
+	if err != nil {
+		t.Fatalf("create form file failed: %v", err)
+	}
+	// JPEG magic header + 2.5MB payload
+	_, _ = part.Write([]byte("\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xff\xdb\x00C\x00"))
+	largePayload := make([]byte, int(2.5*1024*1024))
+	_, _ = part.Write(largePayload)
+	_ = writer.Close()
+
+	uploadReq := httptest.NewRequest(http.MethodPost, "/api/v1/persons/"+personID+"/faces", &body)
+	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
+	uploadW := httptest.NewRecorder()
+	router.ServeHTTP(uploadW, uploadReq)
+
+	if uploadW.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created for 2.5MB face image, got %d: %s", uploadW.Code, uploadW.Body.String())
 	}
 }

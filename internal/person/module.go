@@ -15,6 +15,7 @@ type PersonComponents struct {
 	Handler         *Handler
 	Lifecycle       PersonLifecycle
 	ProtectedRoutes RouteRegistrar
+	UploadRoutes    RouteRegistrar
 }
 
 // PersonLifecycle defines lifecycle hooks for person domain.
@@ -45,10 +46,11 @@ type RouteRegistrar interface {
 // NewPersonComponents constructs all person domain singletons.
 func NewPersonComponents(
 	dbProvider database.DBProvider,
+	facesDir string,
 	logger *zap.Logger,
 ) *PersonComponents {
 	store := NewStore(dbProvider)
-	service := NewService(store, logger)
+	service := NewService(store, facesDir, logger)
 	handler := NewHandler(service, logger)
 
 	return &PersonComponents{
@@ -57,5 +59,6 @@ func NewPersonComponents(
 		Handler:         handler,
 		Lifecycle:       &personLifecycleImpl{logger: logger},
 		ProtectedRoutes: handler,
+		UploadRoutes:    handler.UploadRouteRegistrar(),
 	}
 }

@@ -1,0 +1,79 @@
+{
+  "title": "人员管理",
+  "description": "维护系统人员档案库，管理人脸底库照片以支持视觉算法特征比对。",
+  "table": {
+    "searchPlaceholder": "搜索人员姓名或工号...",
+    "loadFailed": "加载人员档案失败，请检查网络或后端服务",
+    "columns": {
+      "name": "姓名",
+      "personId": "工号 / 唯一标识",
+      "faceCount": "人脸底库",
+      "createdAt": "录入时间",
+      "actions": "操作"
+    },
+    "empty": "暂无人员档案",
+    "emptyDesc": "点击右上角「+ 新增人员」添加第一位人员",
+    "filterEmpty": "未找到匹配的人员",
+    "filterEmptyDesc": "请尝试调整搜索关键词",
+    "resetFilter": "重置筛选"
+  },
+  "actions": {
+    "retry": "重试",
+    "refresh": "刷新",
+    "create": "新增人员",
+    "edit": "编辑人员",
+    "delete": "删除人员",
+    "manageFaces": "人脸管理",
+    "addFace": "录入人脸",
+    "deleteFace": "删除人脸",
+    "cancel": "取消",
+    "confirm": "确定",
+    "saving": "保存中...",
+    "deleting": "删除中..."
+  },
+  "dialogs": {
+    "createTitle": "新增人员档案",
+    "createDesc": "添加基础人员身份信息。工号如留空，系统将自动分配全局唯一标识。",
+    "editTitle": "编辑人员档案",
+    "editDesc": "修改人员的基础展示姓名。工号属于唯一业务标识，创建后不可更改。",
+    "deleteTitle": "确认删除人员？",
+    "deleteDesc": "此操作无法撤销。删除人员「{{name}}」将同时级联清空其所有已录入的人脸底库和特征数据！",
+    "facesTitle": "人脸底库管理 - {{name}}",
+    "facesDesc": "一人多照底库维护。系统比对时将基于所有已录入的人脸特征进行综合识别。",
+    "addFaceTitle": "上传新人脸照片",
+    "addFaceDesc": "选择或拖拽本地人脸清晰照片直接上传，系统将自动落盘并提取特征向量。",
+    "deleteFaceTitle": "确认删除此人脸底库？",
+    "deleteFaceDesc": "此操作将从特征库中移除该张底库图片，不可恢复。"
+  },
+  "fields": {
+    "name": "姓名",
+    "namePlaceholder": "请输入人员姓名，如：张三",
+    "personId": "工号 / 外部唯一标识",
+    "personIdPlaceholder": "选填，如：EMP-1001",
+    "personIdDisabledTip": "工号为不可变业务主键，不可修改",
+    "dragDropTip": "点击选择或将人脸照片拖拽至此处",
+    "dragDropDesc": "支持 JPG、PNG、WebP 格式（最大 10MB）",
+    "changePhoto": "更换照片",
+    "removeSelected": "移除选中的照片",
+    "uploadAndEnroll": "上传并录入人脸",
+    "faceCountUnit": "{{count}} 张",
+    "createdAt": "录入时间"
+  },
+  "status": {
+    "emptyFaces": "暂无人脸底库照片",
+    "emptyFacesDesc": "请在下方区域选择或拖拽图片进行录入。"
+  },
+  "notifications": {
+    "createSuccess": "人员「{{name}}」创建成功",
+    "updateSuccess": "人员「{{name}}」资料已更新",
+    "deleteSuccess": "人员档案已删除",
+    "addFaceSuccess": "人脸底库录入成功",
+    "deleteFaceSuccess": "人脸底库已移除"
+  },
+  "validation": {
+    "nameRequired": "请输入人员姓名",
+    "fileRequired": "请选择要上传的人脸照片",
+    "fileTooLarge": "图片大小超过 10MB 限制",
+    "invalidFileType": "只允许上传 JPG、PNG 或 WebP 格式图片"
+  }
+}

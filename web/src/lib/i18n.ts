@@ -13,6 +13,9 @@ import camerasZhHant from '@/features/cameras/locales/zh-Hant.json'
 import liveEn from '@/features/live/locales/en.json'
 import liveZhHans from '@/features/live/locales/zh-Hans.json'
 import liveZhHant from '@/features/live/locales/zh-Hant.json'
+import personsEn from '@/features/persons/locales/en.json'
+import personsZhHans from '@/features/persons/locales/zh-Hans.json'
+import personsZhHant from '@/features/persons/locales/zh-Hant.json'
 import networkEn from '@/features/settings/network/locales/en.json'
 import networkZhHans from '@/features/settings/network/locales/zh-Hans.json'
 import networkZhHant from '@/features/settings/network/locales/zh-Hant.json'
@@ -35,6 +38,7 @@ export const resources = {
     live: liveZhHans,
     cameras: camerasZhHans,
     audit: auditZhHans,
+    persons: personsZhHans,
   },
   'zh-Hant': {
     common: commonZhHant,
@@ -44,6 +48,7 @@ export const resources = {
     live: liveZhHant,
     cameras: camerasZhHant,
     audit: auditZhHant,
+    persons: personsZhHant,
   },
   en: {
     common: commonEn,
@@ -53,6 +58,7 @@ export const resources = {
     live: liveEn,
     cameras: camerasEn,
     audit: auditEn,
+    persons: personsEn,
   },
 } as const
 

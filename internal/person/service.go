@@ -1,11 +1,17 @@
 package person
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"io"
 	"math"
+	"mime/multipart"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"unsafe"
@@ -16,23 +22,22 @@ import (
 
 // Service provides high-level business logic for personnel and face gallery.
 type Service struct {
-	store  *Store
-	logger *zap.Logger
+	store    *Store
+	facesDir string
+	logger   *zap.Logger
 }
 
 // NewService creates a Service instance.
-func NewService(store *Store, logger *zap.Logger) *Service {
+func NewService(store *Store, facesDir string, logger *zap.Logger) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &Service{
-		store:  store,
-		logger: logger.Named("person_service"),
+		store:    store,
+		facesDir: facesDir,
+		logger:   logger.Named("person_service"),
 	}
 }
-
-// maxImagePathLength caps the stored enrollment-photo reference length.
-const maxImagePathLength = 512
 
 // newID returns a random identifier for a person or face row.
 //
@@ -42,27 +47,6 @@ const maxImagePathLength = 512
 // rand.Text() draws from the OS entropy source instead and never fails.
 func newID() string {
 	return rand.Text()
-}
-
-// validateImagePath enforces that a client-supplied enrollment-photo reference is a clean
-// absolute path.
-//
-// This module has no upload endpoint yet, so the value is a reference to a file managed
-// elsewhere. What we can and must guarantee is that it cannot smuggle a traversal sequence
-// ("../../etc/shadow") or a relative path into storage, where any future consumer that
-// opens or serves it would inherit the escape. Requiring filepath.Clean to be a no-op also
-// rejects "./", "//" and trailing separators.
-func validateImagePath(p string) error {
-	if p == "" || len(p) > maxImagePathLength {
-		return apperr.Invalid("INVALID_IMAGE_PATH", "imagePath must be a non-empty path of at most 512 bytes", nil)
-	}
-	if strings.ContainsRune(p, '\x00') {
-		return apperr.Invalid("INVALID_IMAGE_PATH", "imagePath must not contain NUL bytes", nil)
-	}
-	if !filepath.IsAbs(p) || filepath.Clean(p) != p {
-		return apperr.Invalid("INVALID_IMAGE_PATH", "imagePath must be a clean absolute path", nil)
-	}
-	return nil
 }
 
 // CreatePerson creates a new person profile.
@@ -108,8 +92,8 @@ func (s *Service) GetPerson(ctx context.Context, id string) (*Person, error) {
 	return p, nil
 }
 
-func (s *Service) ListPersons(ctx context.Context, limit, offset int) ([]Person, int64, error) {
-	list, total, err := s.store.ListPersons(ctx, limit, offset)
+func (s *Service) ListPersons(ctx context.Context, limit, offset int, search string) ([]Person, int64, error) {
+	list, total, err := s.store.ListPersons(ctx, limit, offset, search)
 	if err != nil {
 		return nil, 0, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to list persons", err)
 	}
@@ -152,6 +136,10 @@ func (s *Service) UpdatePerson(ctx context.Context, id string, req UpdatePersonR
 
 // DeletePerson deletes a person and their faces.
 func (s *Service) DeletePerson(ctx context.Context, id string) error {
+	faces, err := s.store.ListFacesByPerson(ctx, id)
+	if err != nil {
+		s.logger.Warn("failed to list faces before person delete", zap.String("personId", id), zap.Error(err))
+	}
 
 	if err := s.store.DeletePerson(ctx, id); err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -160,22 +148,76 @@ func (s *Service) DeletePerson(ctx context.Context, id string) error {
 		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to delete person", err)
 	}
 
+	for _, f := range faces {
+		if f.ImagePath != "" {
+			if safePath, err := s.resolveFaceFilePath(f.ImagePath); err == nil {
+				_ = os.Remove(safePath)
+			} else {
+				s.logger.Warn("skipped deletion of face file outside faces directory", zap.String("path", f.ImagePath), zap.Error(err))
+			}
+		}
+	}
+
 	// TODO: 同步删除Engine中的人脸特征向量
 
 	return nil
 }
 
-// AddFace adds a face template to a person profile.
-//
-// TODO(api/storage): 待改造成文件流接收 (multipart/form-data) 并落盘，当前接收 ImagePath 为临时占位。
-func (s *Service) AddFace(ctx context.Context, personID string, req AddFaceRequest) (*Face, error) {
-	// Until the face row exists the only resource we can name is the owning person.
-
-	if err := validateImagePath(req.ImagePath); err != nil {
-		return nil, err
+// resolveFaceFilePath safely verifies that imagePath resolves to a file within s.facesDir.
+func (s *Service) resolveFaceFilePath(imagePath string) (string, error) {
+	if imagePath == "" {
+		return "", apperr.NotFound("IMAGE_NOT_FOUND", "image path is empty", nil)
 	}
+	cleanDir := filepath.Clean(s.facesDir)
+	var target string
+	if filepath.IsAbs(imagePath) {
+		target = filepath.Clean(imagePath)
+	} else {
+		target = filepath.Clean(filepath.Join(cleanDir, imagePath))
+	}
+	rel, err := filepath.Rel(cleanDir, target)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", apperr.Invalid("INVALID_IMAGE_PATH", "image path escapes allowed storage directory", nil)
+	}
+	return target, nil
+}
 
-	// Verify the person exists without preloading their faces: this path needs the row only.
+// isSupportedImageContent checks whether data starts with known JPEG, PNG, or WebP magic bytes,
+// or is recognized as such by http.DetectContentType.
+func isSupportedImageContent(data []byte) bool {
+	if len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff {
+		return true // JPEG
+	}
+	if len(data) >= 8 && bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n")) {
+		return true // PNG
+	}
+	if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
+		return true // WebP
+	}
+	sniffed := http.DetectContentType(data)
+	return sniffed == "image/jpeg" || sniffed == "image/png" || sniffed == "image/webp"
+}
+
+// AddFace validates and enrolls a face template from an uploaded multipart file header.
+func (s *Service) AddFace(ctx context.Context, personID string, file *multipart.FileHeader) (*Face, error) {
+	if file == nil {
+		return nil, apperr.Invalid("FILE_REQUIRED", "file is required", nil)
+	}
+	const maxFileSize = 10 * 1024 * 1024 // 10MB
+	if file.Size > maxFileSize {
+		return nil, apperr.Invalid("FILE_TOO_LARGE", "file size exceeds 10MB limit", nil)
+	}
+	src, err := file.Open()
+	if err != nil {
+		return nil, apperr.Invalid("FILE_READ_FAILED", "Failed to open uploaded file", err)
+	}
+	defer src.Close()
+
+	return s.AddFaceWithReader(ctx, personID, file.Filename, src)
+}
+
+// AddFaceWithReader saves uploaded image file into data directory and enrolls face template.
+func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filename string, r io.Reader) (*Face, error) {
 	if _, err := s.store.GetPersonMeta(ctx, personID); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
@@ -183,34 +225,108 @@ func (s *Service) AddFace(ctx context.Context, personID string, req AddFaceReque
 		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
 	}
 
-	// TODO(algo): 接入算法包/NPU 视觉推理流水线提取特征向量 (Face Detection -> Alignment -> Feature Extraction).
-	// 当前算法插件底库特征提取通道尚未就绪，暂使用 2048 字节占位向量（以常见 512 维 float32 为例），待算法包生命周期完善后替换为真实推理结果。
-	feat := make([]byte, 2048)
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".webp":
+	default:
+		return nil, apperr.Invalid("INVALID_FILE_TYPE", "only jpg, jpeg, png and webp images are allowed", nil)
+	}
 
+	headerBuf := make([]byte, 512)
+	nHeader, err := io.ReadFull(r, headerBuf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return nil, apperr.Invalid("FILE_READ_FAILED", "Failed to read file content", err)
+	}
+	if nHeader == 0 {
+		return nil, apperr.Invalid("FILE_REQUIRED", "file is required", nil)
+	}
+	if !isSupportedImageContent(headerBuf[:nHeader]) {
+		return nil, apperr.Invalid("INVALID_FILE_TYPE", "only jpg, jpeg, png and webp images are allowed", nil)
+	}
+
+	faceID := newID()
+	if err := os.MkdirAll(s.facesDir, 0755); err != nil {
+		return nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to create faces directory", err)
+	}
+
+	fileName := fmt.Sprintf("%s_%s%s", personID, faceID, ext)
+	savePath := filepath.Join(s.facesDir, fileName)
+	f, err := os.OpenFile(savePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to create face image file", err)
+	}
+
+	combinedReader := io.MultiReader(bytes.NewReader(headerBuf[:nHeader]), r)
+	const maxFileSize = 10 * 1024 * 1024 // 10MB
+	lr := io.LimitReader(combinedReader, maxFileSize+1)
+	n, err := io.Copy(f, lr)
+	_ = f.Close()
+	if err != nil {
+		_ = os.Remove(savePath)
+		return nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to save face image", err)
+	}
+	if n > maxFileSize {
+		_ = os.Remove(savePath)
+		return nil, apperr.Invalid("FILE_TOO_LARGE", "file size exceeds 10MB limit", nil)
+	}
+
+	feat := make([]byte, 2048)
 	face := &Face{
-		ID:            newID(),
+		ID:            faceID,
 		OwnerRowID:    personID,
-		ImagePath:     req.ImagePath,
+		ImagePath:     fileName,
 		FeatureVector: feat,
 	}
 
 	if err := s.store.AddFace(ctx, face); err != nil {
+		_ = os.Remove(savePath)
 		return nil, apperr.New(apperr.KindInternal, "FACE_ADD_FAILED", "Failed to add face template", err)
 	}
-
-	// TODO: 同步添加的人脸到Engine中
 
 	return face, nil
 }
 
+// GetFaceImagePath returns the disk path of the requested face template.
+func (s *Service) GetFaceImagePath(ctx context.Context, personID, faceID string) (string, error) {
+	faces, err := s.store.ListFacesByPerson(ctx, personID)
+	if err != nil {
+		return "", apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to list faces", err)
+	}
+	for _, f := range faces {
+		if f.ID == faceID {
+			return s.resolveFaceFilePath(f.ImagePath)
+		}
+	}
+	return "", apperr.NotFound("FACE_NOT_FOUND", "Face not found", nil)
+}
+
 // DeleteFace deletes a specific face template belonging to the given person.
 func (s *Service) DeleteFace(ctx context.Context, personID, faceID string) error {
+	faces, err := s.store.ListFacesByPerson(ctx, personID)
+	if err != nil {
+		s.logger.Warn("failed to list faces before face delete", zap.String("personId", personID), zap.Error(err))
+	}
+	var targetPath string
+	for _, f := range faces {
+		if f.ID == faceID {
+			targetPath = f.ImagePath
+			break
+		}
+	}
 
 	if err := s.store.DeleteFace(ctx, personID, faceID); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return apperr.NotFound("FACE_NOT_FOUND", "Face not found", err)
 		}
 		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to delete face", err)
+	}
+
+	if targetPath != "" {
+		if safePath, err := s.resolveFaceFilePath(targetPath); err == nil {
+			_ = os.Remove(safePath)
+		} else {
+			s.logger.Warn("skipped deletion of face file outside faces directory", zap.String("path", targetPath), zap.Error(err))
+		}
 	}
 
 	// TODO: 同步删除Engine中的人脸特征

@@ -1549,6 +1549,12 @@ const docTemplate = `{
                         "description": "Legacy pagination offset",
                         "name": "offset",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Search keyword for name or personId",
+                        "name": "search",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1866,7 +1872,7 @@ const docTemplate = `{
             },
             "post": {
                 "consumes": [
-                    "application/json"
+                    "multipart/form-data"
                 ],
                 "produces": [
                     "application/json"
@@ -1884,13 +1890,11 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Face enrollment payload",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/person.AddFaceRequest"
-                        }
+                        "type": "file",
+                        "description": "Face photo image file (JPG, PNG, WebP)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
                     }
                 ],
                 "responses": {
@@ -1975,6 +1979,55 @@ const docTemplate = `{
                                     }
                                 }
                             ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/persons/{id}/faces/{face_id}/image": {
+            "get": {
+                "produces": [
+                    "image/jpeg",
+                    "image/png",
+                    "image/webp"
+                ],
+                "tags": [
+                    "person"
+                ],
+                "summary": "Get face photo image file",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Person ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Face template ID",
+                        "name": "face_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
                         }
                     },
                     "404": {
@@ -3620,18 +3673,6 @@ const docTemplate = `{
                 },
                 "transactionId": {
                     "type": "string"
-                }
-            }
-        },
-        "person.AddFaceRequest": {
-            "type": "object",
-            "required": [
-                "imagePath"
-            ],
-            "properties": {
-                "imagePath": {
-                    "type": "string",
-                    "maxLength": 512
                 }
             }
         },

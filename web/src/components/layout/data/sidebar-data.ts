@@ -22,6 +22,7 @@ import {
   Clock,
   ScrollText,
   ShieldCheck,
+  UserCheck,
   AudioWaveform,
   Command,
   GalleryVerticalEnd,
@@ -65,6 +66,11 @@ export const sidebarData: SidebarData = {
           title: 'Cameras',
           url: '/cameras',
           icon: Video,
+        },
+        {
+          title: 'Persons',
+          url: '/persons',
+          icon: UserCheck,
         },
         {
           title: 'Live View',

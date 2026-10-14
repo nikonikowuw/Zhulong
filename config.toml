@@ -7,11 +7,17 @@ address = "127.0.0.1:8000"
 [logging]
 development = false
 
-# Data directory for SQLite (zhulong.db) and persistent keys (camera.key).
+# Data directory for SQLite (zhulong.db), persistent keys (camera.key), and algorithms.
 # Defaults to "./data" in the project directory.
 # For production edge Linux deployment (e.g. RK3588 / Atlas), change to a persistent path like "/var/lib/zhulong" or "/data".
 [data]
 directory = "./data"
+
+# Personnel management and face gallery configuration.
+[person]
+# Directory for enrolled face template photos.
+# Defaults to "<data.directory>/faces" if omitted or left empty.
+faces_directory = ""
 
 # Must match manifest.json platform.target for algorithm packages.
 [algorithm]

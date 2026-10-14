@@ -1826,3 +1826,49 @@ AC1~AC15 验收矩阵全部核对通过，完成父任务 implement.md / prd.md 
 
 [OK] **Completed**
 
+---
+
+## 2026-10-14 17:00
+
+**Task**: 实现人员管理前端界面 (10-14-person-management-frontend)
+**Package**: frontend
+**Branch**: `dev`
+
+### Summary
+
+完成「人员管理（Persons）」业务切片端到端前端实现：
+1. **数据与契约**：定义 `schema.ts`（Person、Face、Create/Update/Face DTO 及 Zod 解析），编写 `schema.test.ts`；
+2. **API 与状态**：封装 `persons-api.ts` 对接后端 `/persons` 体系（含 1:N 人脸子资源），编写 `persons-api.test.ts`；封装 TanStack Query `use-persons.ts` 钩子；
+3. **三语国际化**：在 `locales/` 提供 `zh-Hans.json`、`zh-Hant.json`、`en.json`，并注册至 `web/src/lib/i18n.ts`；
+4. **组件交互**：实现 `PersonsTable`、`PersonsProvider`、`PersonsActionDialog`（工号不可变支持）、`PersonsFacesDialog`（一人多照底库管理与服务端绝对路径录入提示）、`PersonsDeleteDialog`，并编写交互测试；
+5. **路由与导航**：挂载 TanStack Router `_authenticated/persons/index.tsx` 并注入侧边栏 `sidebarData`（`UserCheck` 图标）；
+6. **门禁验证**：`pnpm lint` 零告警、`pnpm test` 57 文件 263 测试全绿、`pnpm build` 生产打包成功、`make check` 全系统门禁全绿。
+
+### Status
+
+[OK] **Completed**
+
+---
+
+## 2026-10-14 18:40
+
+**Task**: 人员管理前端与后端集成 Code Review 缺陷修复 (10-14-person-management-frontend)
+**Package**: frontend / backend
+**Branch**: `dev`
+
+### Summary
+
+1. **中间件请求体限额修复**：`POST /persons/:id/faces` 抽离至 `UploadRoutes`，解除受保护路由默认 1MiB 限制，确保 10MB 人脸照片直传；
+2. **底库物理文件沙箱断言**：新增 `resolveFaceFilePath`，严格前缀断言禁止跨越 `facesDir`；
+3. **MIME 嗅探与校验**：新增魔数及 Content-Type 探测，防止伪装文件进入底库；
+4. **前端表格重置文案与搜索联动**：修复重置按钮文案，启用 `manualFiltering` 并打通全库分页模糊检索；
+5. **表单 i18n 与内存管理**：表单错误信息支持动态多语言，修复 ObjectURL 严格模式内存泄漏；
+6. **门禁验证**：`make check`、`make api-docs`、Vitest 263 测试全量通过。
+
+### Status
+
+[OK] **Completed**
+
+
+
+

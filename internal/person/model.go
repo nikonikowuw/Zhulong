@@ -1,6 +1,9 @@
 package person
 
-import "time"
+import (
+	"mime/multipart"
+	"time"
+)
 
 // Audit actions for person-domain operations. Namespaced as <domain>.<resource>.<verb> to
 // match the rest of the codebase (audit/model.go, systemtime, storage): the audit log is
@@ -70,15 +73,9 @@ type UpdatePersonRequest struct {
 	Name     *string `json:"name,omitempty"`
 }
 
-// AddFaceRequest represents request payload to enroll a face template.
-//
-// TODO(api/storage): 【前后端协议待重构】当前接收服务端绝对路径 ImagePath 仅为阶段性测试桩实现。
-// 浏览器沙箱无法且不应获取客户端绝对路径（C:\fakepath），存在严重协议割裂。
-// 后续演进计划：
-// 1. 方案 A（推荐）：接口改为接收 multipart/form-data 文件流，由服务端落盘并提取特征；
-// 2. 方案 B：由统一上传接口生成服务端 storageKey / URL 后再通过本接口绑定。
+// AddFaceRequest represents the multipart form payload to enroll a face template.
 type AddFaceRequest struct {
-	ImagePath string `json:"imagePath" binding:"required,max=512"`
+	File *multipart.FileHeader `form:"file" binding:"required"`
 }
 
 // GallerySyncItem represents a serialized face embedding item for algorithm runner IPC.

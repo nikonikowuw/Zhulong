@@ -10,14 +10,26 @@ import (
 )
 
 func TestLoadConfigUsesTOMLAndDefaults(t *testing.T) {
-	path := writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n[data]\ndirectory = '/srv/zhulong'\n[algorithm]\ntarget = 'rk3588'\n[logging]\ndevelopment = true\n")
+	path := writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n[data]\ndirectory = '/srv/zhulong'\n[person]\nfaces_directory = '/srv/custom_faces'\n[algorithm]\ntarget = 'rk3588'\n[logging]\ndevelopment = true\n")
 
 	got, err := loadConfigFile(path)
 	if err != nil {
 		t.Fatalf("loadConfigFile: %v", err)
 	}
-	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != "/srv/zhulong" || got.AlgorithmTarget != "rk3588" || !got.Development {
+	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != "/srv/zhulong" || got.FacesDir != "/srv/custom_faces" || got.AlgorithmTarget != "rk3588" || !got.Development {
 		t.Fatalf("unexpected config: %+v", got)
+	}
+}
+
+func TestLoadConfigInheritsFacesDirFromDataDir(t *testing.T) {
+	path := writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n[data]\ndirectory = '/custom/data'\n")
+
+	got, err := loadConfigFile(path)
+	if err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+	if got.FacesDir != "/custom/data/faces" {
+		t.Fatalf("expected FacesDir to be /custom/data/faces, got %s", got.FacesDir)
 	}
 }
 
@@ -29,7 +41,8 @@ func TestLoadConfigKeepsDefaultsForOmittedValues(t *testing.T) {
 		t.Fatalf("loadConfigFile: %v", err)
 	}
 	defaults := app.DefaultConfig()
-	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != defaults.DataDir || got.AlgorithmTarget != defaults.AlgorithmTarget || got.Development {
+	expectedFacesDir := filepath.Join(defaults.DataDir, "faces")
+	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != defaults.DataDir || got.FacesDir != expectedFacesDir || got.AlgorithmTarget != defaults.AlgorithmTarget || got.Development {
 		t.Fatalf("unexpected config: %+v", got)
 	}
 }

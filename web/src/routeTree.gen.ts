@@ -28,6 +28,7 @@ import { Route as AuthenticatedSettingsRouteRouteImport } from './routes/_authen
 import { Route as AuthenticatedUsersIndexRouteImport } from './routes/_authenticated/users/index'
 import { Route as AuthenticatedTasksIndexRouteImport } from './routes/_authenticated/tasks/index'
 import { Route as AuthenticatedSettingsIndexRouteImport } from './routes/_authenticated/settings/index'
+import { Route as AuthenticatedPersonsIndexRouteImport } from './routes/_authenticated/persons/index'
 import { Route as AuthenticatedLiveIndexRouteImport } from './routes/_authenticated/live/index'
 import { Route as AuthenticatedHelpCenterIndexRouteImport } from './routes/_authenticated/help-center/index'
 import { Route as AuthenticatedChatsIndexRouteImport } from './routes/_authenticated/chats/index'
@@ -139,6 +140,12 @@ const AuthenticatedSettingsIndexRoute =
     id: '/',
     path: '/',
     getParentRoute: () => AuthenticatedSettingsRouteRoute,
+  } as any)
+const AuthenticatedPersonsIndexRoute =
+  AuthenticatedPersonsIndexRouteImport.update({
+    id: '/persons/',
+    path: '/persons/',
+    getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedLiveIndexRoute = AuthenticatedLiveIndexRouteImport.update({
   id: '/live/',
@@ -268,6 +275,7 @@ export interface FileRoutesByFullPath {
   '/chats/': typeof AuthenticatedChatsIndexRoute
   '/help-center/': typeof AuthenticatedHelpCenterIndexRoute
   '/live/': typeof AuthenticatedLiveIndexRoute
+  '/persons/': typeof AuthenticatedPersonsIndexRoute
   '/settings/': typeof AuthenticatedSettingsIndexRoute
   '/tasks/': typeof AuthenticatedTasksIndexRoute
   '/users/': typeof AuthenticatedUsersIndexRoute
@@ -302,6 +310,7 @@ export interface FileRoutesByTo {
   '/chats': typeof AuthenticatedChatsIndexRoute
   '/help-center': typeof AuthenticatedHelpCenterIndexRoute
   '/live': typeof AuthenticatedLiveIndexRoute
+  '/persons': typeof AuthenticatedPersonsIndexRoute
   '/settings': typeof AuthenticatedSettingsIndexRoute
   '/tasks': typeof AuthenticatedTasksIndexRoute
   '/users': typeof AuthenticatedUsersIndexRoute
@@ -341,6 +350,7 @@ export interface FileRoutesById {
   '/_authenticated/chats/': typeof AuthenticatedChatsIndexRoute
   '/_authenticated/help-center/': typeof AuthenticatedHelpCenterIndexRoute
   '/_authenticated/live/': typeof AuthenticatedLiveIndexRoute
+  '/_authenticated/persons/': typeof AuthenticatedPersonsIndexRoute
   '/_authenticated/settings/': typeof AuthenticatedSettingsIndexRoute
   '/_authenticated/tasks/': typeof AuthenticatedTasksIndexRoute
   '/_authenticated/users/': typeof AuthenticatedUsersIndexRoute
@@ -378,6 +388,7 @@ export interface FileRouteTypes {
     | '/chats/'
     | '/help-center/'
     | '/live/'
+    | '/persons/'
     | '/settings/'
     | '/tasks/'
     | '/users/'
@@ -412,6 +423,7 @@ export interface FileRouteTypes {
     | '/chats'
     | '/help-center'
     | '/live'
+    | '/persons'
     | '/settings'
     | '/tasks'
     | '/users'
@@ -450,6 +462,7 @@ export interface FileRouteTypes {
     | '/_authenticated/chats/'
     | '/_authenticated/help-center/'
     | '/_authenticated/live/'
+    | '/_authenticated/persons/'
     | '/_authenticated/settings/'
     | '/_authenticated/tasks/'
     | '/_authenticated/users/'
@@ -604,6 +617,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/settings/'
       preLoaderRoute: typeof AuthenticatedSettingsIndexRouteImport
       parentRoute: typeof AuthenticatedSettingsRouteRoute
+    }
+    '/_authenticated/persons/': {
+      id: '/_authenticated/persons/'
+      path: '/persons'
+      fullPath: '/persons/'
+      preLoaderRoute: typeof AuthenticatedPersonsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/live/': {
       id: '/_authenticated/live/'
@@ -766,6 +786,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedChatsIndexRoute: typeof AuthenticatedChatsIndexRoute
   AuthenticatedHelpCenterIndexRoute: typeof AuthenticatedHelpCenterIndexRoute
   AuthenticatedLiveIndexRoute: typeof AuthenticatedLiveIndexRoute
+  AuthenticatedPersonsIndexRoute: typeof AuthenticatedPersonsIndexRoute
   AuthenticatedTasksIndexRoute: typeof AuthenticatedTasksIndexRoute
   AuthenticatedUsersIndexRoute: typeof AuthenticatedUsersIndexRoute
 }
@@ -780,6 +801,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedChatsIndexRoute: AuthenticatedChatsIndexRoute,
   AuthenticatedHelpCenterIndexRoute: AuthenticatedHelpCenterIndexRoute,
   AuthenticatedLiveIndexRoute: AuthenticatedLiveIndexRoute,
+  AuthenticatedPersonsIndexRoute: AuthenticatedPersonsIndexRoute,
   AuthenticatedTasksIndexRoute: AuthenticatedTasksIndexRoute,
   AuthenticatedUsersIndexRoute: AuthenticatedUsersIndexRoute,
 }
