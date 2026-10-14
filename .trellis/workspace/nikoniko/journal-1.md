@@ -1872,3 +1872,27 @@ AC1~AC15 验收矩阵全部核对通过，完成父任务 implement.md / prd.md 
 
 
 
+
+
+## Session 37: 清理未实现功能的Mock前端页面并精简导航
+<!-- trellis-session: v=2 fp=abef0df0f050e84e -->
+
+**Date**: 2026-10-14
+**Task**: 清理未实现功能的Mock前端页面并精简导航
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+彻底删除无后端对应的 Mock 业务（Tasks、Apps、Chats、Users、Help Center、Clerk）及认证衍生页，精简侧边栏与设置项收敛至真实后端功能，改造 Dashboard 首页为边缘网关概览，完成路由树与测试适配。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0fe0742` | refactor(web): 清理未实现功能的Mock前端页面并精简全局导航 |
+| `26518e8` | docs(spec): 更新前端目录结构规范以剔除历史Mock路由 |
+
+### Status
+
+[OK] **Completed**

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 35
+- **Total Sessions**: 37
 - **Last Active**: 2026-10-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1803 | Active |
+| `journal-1.md` | ~1898 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 37 | 2026-10-14 | 清理未实现功能的Mock前端页面并精简导航 | `0fe0742`, `26518e8` | `dev` |
 | 35 | 2026-10-14 | Rockchip RGA 视觉前处理后端接入 | `6b0fdfe` | `dev` |
 | 33 | 2026-10-13 | 媒体文件服务落地与双轴代码审查 | `0ba2024` | `dev` |
 | 32 | 2026-10-13 | 实现媒体文件服务（只读字节层）并沉淀路径防护规范 | - | `dev` |
