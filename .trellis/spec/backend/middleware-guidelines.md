@@ -2,7 +2,7 @@
 
 ---
 
-## 1. 挂载隔离三原则
+## 1. 挂载隔离三原则（四层级）
 
 严禁在全局 `engine.Use()` 滥挂业务中间件，按路由严格隔离：
 
@@ -10,7 +10,25 @@
 | --- | --- | --- | --- |
 | **全局引擎** | `/*` 通用 | `Recovery`、`RequestID` | 严禁挂业务鉴权、AccessLog、CORS |
 | **API 业务组** | `/api/v1/*` | `CORS`、`AccessLog`、`MaxBodyLimit`、`Auth` | 错误必须返统一 JSON，禁止 Fallback 静态页 |
+| **上传业务组** | `/api/v1/*`（独立 `Group`） | `AccessLog`、**放宽的** `MaxBodyLimitWithLimitAndCode`、`Auth` | 严禁复用默认 `MaxBodyLimit()`（1 MiB 会直接毙掉合法上传） |
 | **静态与文档** | `/swagger/*`, `SPA` | 仅专用 Handler | 严禁挂日志、鉴权、限流，保障流式并发 |
+
+> ⚠️ **上传端点必须另起一个 Group，而不是挂在 API 业务组下面。** Gin 中间件在 `Group()` 调用时即被求值，无法在事后「放宽」已挂载的 `MaxBodyLimit()`；因此在受保护组下声明的上传路由会**永久继承 1 MiB 的 `MaxAPIRequestBodyBytes`**，体积合法的上传被 413 直接拒绝。
+>
+> 正确做法是在 `internal/app/router.go` 里单独建一个同前缀的组，只挂上传端点，并对其单独施加放宽的限额（当前 `algorithm.MaxUploadRequestBodySize` = 500 MiB 归档 + 1 MiB multipart 框架开销）、独立的 `AccessLog` 与 `Audit`（该组不会继承 API 业务组的中间件）、以及 `RequireAuth`：
+>
+> ```go
+> upload := router.Group("/api/v1")
+> upload.Use(httpmiddleware.AccessLog(p.Logger),
+>     httpmiddleware.MaxBodyLimitWithLimitAndCode(algorithm.MaxUploadRequestBodySize, "FILE_TOO_LARGE"))
+> if p.AuditService != nil { upload.Use(audithttp.Middleware(p.AuditService)) }
+> if p.AuthService != nil { upload.Use(auth.RequireAuth(p.AuthService)) }
+> for _, r := range p.UploadRoutes { r.RegisterRoutes(upload) }
+> ```
+>
+> 回归护栏：`internal/app/upload_router_test.go` 会走**真实 router** 上传一份 > 1 MiB 的归档并断言 `201 Created` 而非 413；只测 handler 的单元测试永远发现不了这个坑。
+>
+> 当前挂载在 `upload_routes` 组的端点：`POST /api/v1/persons/{id}/faces`（10 MiB 登记照）、算法包安装归档。
 
 ---
 
@@ -46,6 +64,9 @@ Response 桃 [1. Recovery 捕获] 桃 ------------------- 桃 [4. AccessLog 耗�
 
 * **MaxBodyLimit 防击穿**：边缘端非文件接口强制限制 Body 上限（如 1~2MB），超限直接截断并返 413，防 OOM。
   * `ContentLength` 预检在路由 Handler 之前拒绝请求；无 `Content-Length` 的 chunked 请求会穿透预检，改由 `http.MaxBytesReader` 在绑定阶段拒绝。两者对审计的含义不同：前者无审计意图，后者属于「已声明意图的绑定失败」，需要留痕。
+  * **该中间件按组求值，无法在组内「放宽」**：需要更大限额的端点必须挂到独立的上传组，详见 [§1 挂载隔离三原则（四层级）](#1-挂载隔离三原则四层级) 的上传业务组行。
+
+* **413 错误码归属**：`MaxBodyLimitWithLimitAndCode` 的 `errorCode` 在**整组**生效。上传组统一用 `FILE_TOO_LARGE`，而 person 域 `Service.AddFace` 对「文件本身超过 10 MiB」也返回 `FILE_TOO_LARGE`——两者虽然同为 413 + 同码，但语义分层不同（中间件层 = 请求体超限；领域层 = 文件超限）。前端若要区分，只能依据 `details` 或文案，**不要**依赖 `code` 去判断是哪一层拒绝的。
 
 ---
 

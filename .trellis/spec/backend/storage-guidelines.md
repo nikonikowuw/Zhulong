@@ -27,7 +27,11 @@
 
 ### 1.4 客户端提供的路径引用必须做形态收敛
 
-当 API 接受客户端提供的媒体路径时（如 `POST /api/v1/persons/{id}/faces` 的 `imagePath`），**即使该文件的落盘位置由别处管理，也必须校验路径形态**：
+> **历史条目（形态收敛规则本身仍然有效）**：本节描述的是 API 直接接受客户端路径字符串时的校验要求。
+> `POST /api/v1/persons/{id}/faces` 已**不再接受任何客户端路径**，见下方「人员底库登记照」条目；
+> 但该模块保留的 `resolveFaceFilePath` 仍会对库内既有的绝对路径记录做同等的形态校验与根目录前缀断言。
+
+当 API 接受客户端提供的媒体路径时，**即使该文件的落盘位置由别处管理，也必须校验路径形态**：
 
 - **必须是绝对路径**（`filepath.IsAbs`）；
 - **必须是已规范化路径**（`filepath.Clean(p) == p`）——这一条同时排除 `../` 穿越、`./`、`//` 与结尾分隔符；
@@ -36,7 +40,11 @@
 
 **禁止把客户端路径原样入库**：任何将来"按该路径打开或返回文件"的消费者都会继承路径穿越面。若某模块确实需要把文件限定在某个根目录内，还必须在规范化之后追加**前缀断言**（`strings.HasPrefix(cleanPath, cleanRoot)`），与 native 侧 Zip-Slip 防御保持同样的纵深防御标准。
 
-> 人员底库登记照已全面改造为 `multipart/form-data` 文件直传上传端点（`POST /api/v1/persons/{id}/faces`），图片流经格式校验后由服务端自动保存至底库目录（由 `config.toml` 中 `[person] faces_directory` 配置；留空则默认继承 `<data.directory>/faces`）。数据库持久化保存相对文件名（`{person_id}_{face_id}.ext`），动态拼装解析，彻底消除了客户端路径引用带来的路径穿越、信息嗅探以及环境迁移坏死风险。
+> **人员底库登记照：服务端绝对路径输入已彻底移除。** 该端点已改造为 `multipart/form-data` 文件直传（`POST /api/v1/persons/{id}/faces`），请求中**不存在** `imagePath` 字段。图片流经魔数 / `http.DetectContentType` 嗅探校验后由服务端写入底库目录（`config.toml` 的 `[person] faces_directory`，留空默认继承 `<data.directory>/faces`），数据库只持久化服务端生成的**相对文件名** `{person_id}_{face_id}.ext`，读取时动态拼装。
+>
+> ⚠️ **只读响应仍会回传该相对文件名**（`Face.imagePath`），前端不得把它当作可回传的输入；任何未来重新引入「客户端提供路径」的改动都必须回到本节规则。
+>
+> ⚠️ 遗留的 `INVALID_IMAGE_PATH` 错误码与 `imagePath must be a clean absolute path...` 文案描述的是**旧契约**：代码中 `resolveFaceFilePath` 现仅用于解析**服务端自己写入**的库内记录，其「必须绝对路径」分支已不可达（非法记录一律落入 `INVALID_IMAGE_PATH` 的逃逸分支）。修改该文案时不要照抄本节旧措辞。
 
 ---
 

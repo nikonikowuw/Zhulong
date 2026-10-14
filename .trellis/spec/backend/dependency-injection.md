@@ -65,10 +65,12 @@ func TestAppDependencyGraph(t *testing.T) {
 为避免每次新增业务模块都修改全局 `router.go`，采用 Uber Fx 值组（Value Groups / Multibindings）进行解耦：
 
 1. **统一注册接口**：在 `internal/app/router.go` 定义 `RouteRegistrar` 接口（`RegisterRoutes(rg *gin.RouterGroup)`）。业务 Handler 直接实现该接口（如 `camera.Handler`、`auth.Handler`）。
-2. **公开与保护路由分流**：
+2. **公开、保护与上传路由分流**：
    - 公开端点（如初始化、登录）：在装配中作为 `RouteRegistrar` 打标 `group:"public_routes"`，挂载至 `/api/v1` 根组。
    - 受保护端点（如摄像机、录像、AI）：在装配中打标 `group:"protected_routes"`，自动挂载至受 `auth.RequireAuth` 保护的子路由组。
-3. **上帝路由器解耦**：`newRouter` 仅接收 `p.PublicRoutes` 与 `p.ProtectedRoutes` 切片并遍历挂载，不引用任何特定业务包（如 `internal/camera`），新增模块时 `router.go` 保持零修改。
+   - **大体积上传端点**：打标 `group:"upload_routes"`，挂载至**另一个** `/api/v1` 组，该组单独施加上传限额与独立的 `AccessLog` / `Audit` / `RequireAuth`。受保护组继承的 1 MiB `MaxBodyLimit()` 会毙掉合法上传，且**无法事后放宽**（Gin 在 `Group()` 时即求值中间件）。判定标准、代码示例与回归护栏见 [中间件规范 §1](./middleware-guidelines.md)。
+   - 一个 Handler **可以同时**注册到多个组（如 `person.Handler` 同时提供 `ProtectedRoutes` 与 `UploadRoutes`），此时需要为上传端点单独写一个 `RegisterUploadRoutes` + `RouteRegistrar` 适配器，避免把大体积端点误挂到受保护组。
+3. **上帝路由器解耦**：`newRouter` 仅接收 `p.PublicRoutes`、`p.ProtectedRoutes` 与 `p.UploadRoutes` 切片并遍历挂载，不引用任何特定业务包（如 `internal/camera`），新增模块时 `router.go` 保持零修改。
 
 ---
 

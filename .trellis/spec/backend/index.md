@@ -14,7 +14,7 @@
 | [单用户认证](./authentication-guidelines.md) | SQLite 单用户凭据、内存 Session、Cookie、限流及前后端认证态契约 |
 | [HTTP 中间件开发与编排](./middleware-guidelines.md) | 中间件分层隔离、流水线时序、Request ID、Access Log、CORS 与类型安全 |
 | [数据库与版本化迁移](./database-guidelines.md) | GORM+SQLite、WAL/Pragma 配置、启动自动迁移、事务约束 |
-| [依赖注入与生命周期](./dependency-injection.md) | Uber Fx 装配、启动失败回滚、HTTP 排空、native/数据库关闭顺序 |
+| [依赖注入与生命周期](./dependency-injection.md) | Uber Fx 装配、启动失败回滚、HTTP 排空、native/数据库关闭顺序、public/protected/**upload** 三路路由值组 |
 | [边缘媒体存储与动态生命周期](./storage-guidelines.md) | 存储路径规范、statfs 水位感知、外挂盘防穿透（写侧熔断 + 读侧穿透）、双水位回差清理与熔断 |
 | [媒体文件服务（只读字节层）](./mediafile-guidelines.md) | 按相对路径取元信息与 Range 传输、`os.Root` 四层路径防护、无列表边界、裸字节端点与 HEAD/503 陷阱 |
 | [摄像机业务与生命周期](./camera-guidelines.md) | 主子流建模、AES-GCM 凭据加密、双流原子门禁、正交状态机与探活调度 |
@@ -34,6 +34,7 @@
 - [ ] **Fx 纯粹性**：业务构造函数是否保持普通纯函数（无 `fx.App` 侵入业务包）？
 - [ ] **统一响应体**：Handler 是否遵循 `{ code, message, data }`，且仅 422 字段校验错误可附带 `details`？
 - [ ] **中间件分层隔离**：API 中间件（日志/鉴权/CORS）是否仅挂载在 `/api/` 路由组，未污染 SPA 静态资源与 Swagger？
+- [ ] **大体积上传端点归组**：上传端点是否打标 `group:"upload_routes"` 而非混在 `protected_routes`？（受保护组的 1 MiB `MaxBodyLimit()` 会毙掉合法上传，且**无法事后放宽**——见 [middleware-guidelines.md](./middleware-guidelines.md)）
 - [ ] **中间件执行时序**：中间件流水线是否遵循 Recovery ➔ RequestID ➔ CORS ➔ AccessLog ➔ Handler？
 - [ ] **Context 存取类型安全**：Gin 上下文数据是否使用私有 key 与导出 Accessor 包装，未直接使用裸字符串 `c.Set/c.Get`？
 - [ ] **底层错误脱敏**：SQLite/CGO 底层真实错误是否封装在内部打日志，未裸抛给前端？
