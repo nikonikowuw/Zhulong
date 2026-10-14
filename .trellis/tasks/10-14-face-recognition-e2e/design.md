@@ -114,32 +114,35 @@ RTSP ─→ 解码 ─→ FrameBroker ─→ SHM ─→ Runner ─→ api.proces
 
 `ready` 只代表数据库**与**引擎就绪，与摄像头无关（`AGENTS.md`）。人脸链路不得改变此语义，也不得把「底库已同步」塞进 readiness。
 
-## 3. ABI 扩展策略（`algo-structure-abi` 的核心决策）
+## 3. ABI 扩展策略（`algo-structure-abi` 的核心决策 G2：已定案）
 
-### 3.1 问题
+### 3.1 问题与勘测事实
 
 `native/sdk/include/zhulong/plugin.h` 的 `zhulong_bbox` 字段为
 `{x, y, width, height, confidence, class_id, label[64]}` —— **扁平、单层**。
-而 `result.go` 的 `PersonItem` 需要 `track_id` + `body_box` + 嵌套 `faces[]`，`FaceSubItem` 又需要 `landmarks` / `matched` / `candidates[]`。
+而 `result.go` 的 `PersonItem` 需要 `track_id` + `body_box` + 嵌套 `faces[]`，`FaceSubItem` 又需要 `landmarks` / `matched` / `candidates[]`。现有 `DetectionResultAdapter` 无法表达。
 
-**没有落脚点。** 现有 `DetectionResultAdapter` 无法表达。
+在实地探测代码基线后，确认了两个关键事实：
+1. **`struct_size` 是死字段**：Runner 仅做 `api.api_version != 1` 判定，从未读取 `struct_size`，原先设想的「依赖 `struct_size` 进行自动字段偏移协商」不存在。
+2. **`zhulong_inference_result` 天生多态**：载荷包含 `result_type`、`void* data`、`count`、`internal_token`，且 `api.process` 签名完全通用。无需新建 v2 函数表，也无需在 v1 尾部追加函数指针。
 
-### 3.2 候选方案
+### 3.2 方案裁定：采纳方案 D（数据层多态扩展 + 连续 Arena 打包）
 
-| 方案 | 做法 | 优点 | 缺点 |
-| --- | --- | --- | --- |
-| A. 原地扩展 v1 | 往 `zhulong_plugin_api_v1` 加 `process_structured` 函数指针 | 改动小 | ⚠️ 旧插件在旧 runner 上会读出未初始化内存；`struct_size` 协商失效 |
-| B. 新增 v2 表 | 新增 `zhulong_plugin_api_v2`，含独立结构化结果 item 与独立导出函数 | 前向兼容清晰；v1 插件继续可用 | 需同时维护两套 adapter；runner 需按 `api_version` 分派 |
-| C. 结果改 JSON 字符串 | `process` 返回 JSON 文本 | 无 ABI 版本问题；扩展灵活 | ⚠️ 每帧序列化开销；放弃零拷贝；类型安全丢失 |
+| 方案 | 做法 | 优点 | 缺点 | 结论 |
+| --- | --- | --- | --- | --- |
+| A. 原地扩展 v1 | 往 `zhulong_plugin_api_v1` 加 `process_structured` 函数指针 | 改动小 | ⚠️ 破坏 ABI 稳定性，无显式协商保护 | 否决 |
+| B. 新增 v2 表 | 新增 `zhulong_plugin_api_v2`，含独立导出函数 | 前向兼容清晰 | 需维护两套分派与加载逻辑，过度设计 | 否决（推翻早期倾向） |
+| C. 结果改 JSON 字符串 | `process` 返回 JSON 文本 | 无 ABI 版本问题；扩展灵活 | ⚠️ 每帧序列化开销巨大；丢失零拷贝 | 否决 |
+| **D. 扩充数据层（定案）** | **保持 v1 函数表不变，仅扩充枚举 `result_type=3` 与 POD 结构体，Adapter 采用单块 Arena 扁平打包** | **零函数表改动、零版本分派负担、单次 `free` 释放整树无泄漏、天然兼容老插件** | 需在 `algo.hpp` 中实现单块打包工具 | **正式采纳** |
 
-**倾向 B**：`struct_size` 字段的存在意义就是版本协商，原地扩展（A）是对该设计的破坏。C 在边缘设备的高帧率场景下序列化开销不可接受。
+### 3.3 核心定案规则（详见 `10-14-algo-structure-abi/design.md`）
 
-### 3.3 若采纳 B，需要定案的点
-
-- v2 表是否复用 v1 的 `model_create` / `worker_create` / `task_open` 语义（建议复用，仅结果部分分叉）。
-- 结构化 item 的内存布局与释放责任（沿用现有 `internal_token` + `result_release` 模式）。
-- `verifier.go:249` 的 `result_type` 映射如何更新，以及**旧包**（`result_type == 1` 的 person_structure）是否需要迁移期兼容。
-- `algo.hpp` 的 adapter 模板如何泛化以同时支持 v1/v2 注册宏。
+- **数据类型**：定义 `zhulong_face_candidate`、`zhulong_face_item`、`zhulong_person_item`。
+- **内存所有权**：插件在 `process` 时一次性 `malloc` 连续 Arena 空间打包整棵树，`internal_token` 指向首地址；Runner 调用 `result_release` 时由插件一次性 `free(result->internal_token)`，零碎片无泄漏。
+- **坐标规范**：严格归一化 `[x1, y1, x2, y2]`（`0.0 <= x1 < x2 <= 1.0`），5 点关键点严格归一化。
+- **退化语义**：纯人脸切片时生成单个 `zhulong_person_item`（`track_id=0`，`body_box=face_box`，`body_score=1.0`）。
+- **门禁对齐**：`verifier.go` 将 `TaskTypePersonStructure` 的期望值从临时 `1` 改为 `3`。
+- **跨语言护栏**：在 `internal/algorithm/ipc_contract_test.go` 中加入对 `ZHULONG_RESULT_TYPE_PERSON_STRUCTURE == 3` 的静态断言。
 
 ## 4. 风险
 

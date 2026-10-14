@@ -5,9 +5,9 @@
 
 ## 前置门禁（阻塞一切实现）
 
-- [ ] **G1** 回答父 `prd.md`「待决问题」三条（平台 / 人脸能力来源 / 特征提取归属）。
+- [x] **G1** 回答父 `prd.md`「待决问题」三条（平台 / 人脸能力来源 / 特征提取归属）。
       验证：答案写入本文件下方「决策记录」并被相关子任务 `design.md` 引用。
-- [ ] **G2** `algo-structure-abi` 的 ABI 方案（v1 原地扩展 / v2 新表 / JSON）定案。
+- [x] **G2** `algo-structure-abi` 的 ABI 方案（v1 原地扩展 / v2 新表 / JSON）定案。
       验证：方案写入该子任务 `design.md`，且 `face-algo-package` 的 `prd.md` 引用同一方案。
 - [ ] **G3** 确认 FrameBroker 宿主归属结论仍成立（native engine 内）。
       验证：`native/src/pipeline/engine.cpp` 的 `ensure_frame_broker` 未被迁移；若已迁移，D1/D2 需重新评审。
@@ -107,13 +107,15 @@ grep -rn "NOT WIRED" internal/ native/
 - ✅ 载荷只传 `image_path` 不传向量 → **`gallery-hot-sync` 的 64KB 分片风险降级**。
 - 代价：`person_faces.feature_vector` 列语义需重新定义；冷启动需重新提取（可加磁盘缓存）。
 
-### G2 ABI 方案：（待 `10-14-algo-structure-abi` 定案）
+### G2 ABI 方案：**方案 D（数据层多态扩展 + 连续 Arena 打包，已定案）**
 
-已确认的**输入约束**（来自实测，非推测）：
-
-- 结构化结果必须能承载 **5 点 landmarks**（det_500m 的 kps 输出 10 维 = 5×2）。
-- 既有 `zhulong_bbox` 为扁平单层结构，**无法承载** `PersonItem` 的嵌套 `faces[]`。
-- 父 `design.md` §3 倾向 **v2 新表 + `struct_size` 协商**。
+- **不动函数表**：保持 `zhulong_plugin_api_v1` 不变，`api_version` 恒为 1。`process` 函数签名天然通用。
+- **扩展载荷与枚举**：在 `plugin.h` 增加 `ZHULONG_RESULT_TYPE_PERSON_STRUCTURE = 3`，以及 `zhulong_person_item`、`zhulong_face_item`、`zhulong_face_candidate`。
+- **必须承载 5 点 landmarks**：`landmarks[5][2]` 严格归一化 `[0.0, 1.0]`。
+- **坐标严格归一化**：`[x1, y1, x2, y2]` 满足 `0.0 <= x1 < x2 <= 1.0`。
+- **单块连续 Arena 打包**：插件一次性申请单块内存挂载整棵结果树，`result_release` 时插件单次 `free(result->internal_token)`，零碎片无泄漏。
+- **退化语义**：纯人脸识别切片时，每个脸映射一个 `zhulong_person_item`（`track_id=0`，`body_box=face_box`，`body_score=1.0`）。
+- **详见**：`.trellis/tasks/10-14-algo-structure-abi/design.md` 与 `implement.md`。
 
 ### G3 FrameBroker 宿主归属：**确认仍成立**
 
@@ -127,7 +129,7 @@ D1 / D2（gallery 与结果通道复用同一 UDS）的前提有效。
 | G1-1 平台 | ✅ 已答 | 开发机 ONNX 基准产出 |
 | G1-2 模型来源 | ⚠️ 技术可用，**许可待法务** | 实测 rank-1 98.7% |
 | G1-3 特征归属 | ✅ 已答（插件内） | 架构铁律约束 |
-| G2 ABI 方案 | ⏳ 待 `algo-structure-abi` | 输入约束已明确 |
+| G2 ABI 方案 | ✅ 已定案 | 方案 D（数据层多态 + 连续 Arena 打包）|
 | G3 broker 归属 | ✅ 确认 | `engine.cpp:233` |
 
 ⚠️ **G1-2 的许可问题不阻塞开发，但阻塞交付。** 建议并行推进法务确认。

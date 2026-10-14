@@ -1,0 +1,4 @@
+{"file": "native/sdk/include/zhulong/plugin.h", "reason": "C ABI 头文件：扩展 result_type 与结构化 POD 结构体"}
+{"file": "native/sdk/include/zhulong/algo.hpp", "reason": "SDK 适配器层：提供 PersonStructureResultAdapter 与注册宏"}
+{"file": "internal/algorithm/verifier.go", "reason": "Go 验包门禁：将 person_structure 的 result_type 映射更新为 3"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "插件规范：同步 ABI 契约与生命周期规范"}

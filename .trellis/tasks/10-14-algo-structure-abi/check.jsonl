@@ -1,0 +1,3 @@
+{"file": "internal/algorithm/ipc_contract_test.go", "reason": "跨语言契约测试：确保 Go 与 Native 常量同步"}
+{"file": "native/tests/plugin_c_abi_test.c", "reason": "原生 C ABI 测试：验证纯 C 边界下的结构化解构"}
+{"file": "native/tests/algo_runner_test.cpp", "reason": "原生 Runner 测试：端到端加载与释放验证"}
