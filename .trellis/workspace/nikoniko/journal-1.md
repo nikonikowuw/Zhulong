@@ -1558,3 +1558,79 @@ Session summary was not supplied.
 ### Next Steps
 
 - 回到 `10-13-algo-broker-host` 补齐 AC2/AC6/AC7/AC8/AC10/AC11（本机 native 层 + RK3568 板端）
+
+---
+
+## Session 28: 补齐 broker-host 全部验收（AC2/AC4/AC6/AC7/AC8/AC9/AC10/AC11）
+<!-- trellis-session: v=2 fp=8d2b5e1f4a7c9063 -->
+
+**Date**: 2026-10-14
+**Task**: FrameBroker 宿主与多路帧分发通路（10-13-algo-broker-host）
+**Package**: native, backend
+**Branch**: `dev`
+
+### Summary
+
+在上个会话修好构建门禁基线后，补齐了 `10-13-algo-broker-host` 剩余的 8 个验收标准。全部在**本机 + RK3568 板端**双环境实测通过，并对每条新断言做了反向验证。
+
+### 新增测试与实测数据
+
+| AC | 测试 | 实测 |
+| --- | --- | --- |
+| AC4 | `test_multi_broker_asymmetric_isolation` | 卡死路 delivered=2/dropped=3/in_flight=2；健康路 delivered=5/dropped=0/in_flight=0 |
+| AC7 | `test_broker_host_crash_then_restart` | 子进程 SIGKILL 后 socket 残留 → 同 stream_id 重启成功、无残留租约、stop 后清理 |
+| AC2/AC10 | `ai_publish_throttle_case` | **26.7fps → rate=5 时 5.7fps → rate=25 时 26fps**（本机与板端一致） |
+| AC6 | `ai_slow_consumer_isolation_case` | 慢包 2 帧 / 健康包 63 帧 / PREVIEW 64 包 |
+| AC9 | `TestServiceTaskChangeRestartsPackageWithNewBrokerSet` | runner 实际 `--broker` 数量 1 → 2 → 1 |
+| AC11 | `TestSupervisorCrashRestartKeepsBrokerList` | `kill -9` 后自动重启仍带完整 2 个 broker |
+
+### 板端真机证据（RK3568 / Debian 11 / 内核 5.10.226）
+
+```txt
+ZhulongFrameBrokerTests  14/14 PASS（含 test_runner_subprocess_e2e 真子进程推理）
+ZhulongRtspTests         PASS（throttle / slow-consumer 数据与本机一致）
+engine.test Go-CGO 桥接   6/6 PASS（含 TestBridgeIntegration_Probe）
+基础测试 5 项            PASS
+```
+
+### 顺带修复的三个既有缺陷（都是 AC 验证的前置阻塞）
+
+| # | 缺陷 | 根因 | 修复 |
+| --- | --- | --- | --- |
+| 1 | `make native-cross-build` 失败 | `ZhulongAlgoRunnerTests` 缺 `Threads::Threads`。Host glibc 2.34+ 把 pthread 并入 libc 所以隐式通过；Debian 11 的 glibc 2.31 pthread 独立即炸。**这解释了为何历史板端测试清单从不含该目标** | `native/CMakeLists.txt` 一行 |
+| 2 | `TestSupervisorRestartPreservesActiveStatus` 偶发失败（原始树 1/8） | runner 用裸 `"sleep"`，无参数立即 exit 1 → 与断言竞态 | 改用既有 `writeIdleRunner`；10/10 稳定 |
+| 3 | `TestBridgeIntegration_Probe` 高负载失败 4/15 | `validation.go` 把 ctx deadline **毫秒截断**后传 native（199.7→199ms），native 超时**先于** ctx 到期，此时 `ctx.Err()` 仍为 nil → 返回引擎 TIMEOUT 而非 `DeadlineExceeded` | `resolveTimeoutMs` 增 `clampToContext`：异步可取消的 `Probe` 传 false（ctx 是唯一权威），同步阻塞的 `Acquire` 传 true。**4/15 → 0/15** |
+
+### 反向验证（证明断言非空）
+
+| 断言 | 反向操作 | 结果 |
+| --- | --- | --- |
+| AC11 | `BrokerSocks: w.brokerSocks` → `nil` | `restart broker flags = []` → FAIL |
+| AC9 | `resolveBrokerSocksLocked` 结果置空 | `first start broker flags = []` → FAIL |
+| AC8 取消语义 | `Probe` 的 clamp 改回 `true` | 高负载 4/15 失败（原竞态复现） |
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4d9d810` | test(algorithm): verify the remaining broker-host acceptance criteria |
+
+### Testing
+
+- [OK] `make check` 连续 **5 次** exit 0（frontend-check / native-test 15/15 / api-docs 零漂移 / go-check）
+- [OK] `make native-cross-build` exit 0
+- [OK] Go 桥接高负载压测：修复前 4/15 失败 → 修复后 0/15
+- [OK] 板端 4 类测试全绿
+
+### 新发现的板端约束（已写入 spec）
+
+⚠️ RK3568 实测 `/dev/shm` 总容量仅 **976MB**，而 broker 默认 32MB/路（8 槽位 × 4MB，`start` 时一次性分配）→ **约 30 路 AI 流即打满**。`frame_queue_` 只有 3 帧，8 槽位偏保守；扩容需通过 `BrokerOptions` 调小 `slot_count`。
+
+### Status
+
+[OK] **Completed**（AC1–AC11 全部达成）
+
+### Next Steps
+
+- 归档 `10-13-algo-broker-host`
+- 推进阶段四：`10-13-algo-rknn-inference-backend` → `10-13-algo-rga-vision-backend`（两者共享 `CMakeLists.txt`/`build.py`，必须串行）
