@@ -11,8 +11,12 @@
 | D2 | 结果上报**复用同一条 UDS**，方向为 runner → broker 宿主 | 同上；避免为结果流再建一条连接 | 建议采纳 |
 | D3 | 结构化结果走**独立 result_type**，不再复用 `result_type == 1` | 现有 `verifier.go:249` 的复用是临时约定，`zhulong_bbox` 无法承载嵌套结构 | 待 `algo-structure-abi` 定案 |
 | D4 | ABI 扩展采用**新增 `zhulong_plugin_api_v2` + `struct_size` 协商**，而非原地修改 v1 | v1 的 `struct_size` 字段已为前向兼容预留；原地加字段会让旧插件在旧 runner 上读出未初始化内存 | 待 `algo-structure-abi` 定案 |
-| D5 | 特征向量维度**由算法包 manifest 声明**，不硬编码 | 当前 `service.go` 硬编码 2048 字节（=512 float32）是占位，跨模型不可移植 | 建议采纳 |
+| D5 | 特征向量维度**由算法包 manifest 声明**，不硬编码 | 当前 `service.go` 硬编码 2048 字节（=512 float32）是占位，跨模型不可移植 | ✅ 实测确认为 512 维 |
 | D6 | 分片是**必须的**，不是优化 | 单条 IPC 上限 64KB（`MAX_IPC_PAYLOAD_SIZE`）。512 维 float32 ≈ 2KB/人，全量 SYNC 在 ~30 人时即触顶 | 待 `gallery-hot-sync` 定案 |
+| **D7** | **开发机 ONNX 为「主开发与回归环境」，板端 RKNN 退化为「性能与最终精度验收环境」** | 既有 `cpu_inference_backend.cpp` 是 mock（`weights.resize(1MB, 0x5A)`），无法验证任何精度；开发机已有真实 ONNX Runtime（1.21 / 1.23.2） | ✅ 已定（G1-1） |
+| **D8** | **特征提取在插件内**，登记与运行时共用同一份代码与后端 | 消除跨后端特征空间漂移；不打破「`internal/engine` 是唯一 CGO 包」；特征不落 SQLite 明文 | ✅ 已定（G1-3） |
+| **D9** | **RK3568 上 facelivtv2-l 必须用 fp16，禁用 int8** | 上游实测 int8 cosine 仅 ~0.86（识别级灾难）；且 48 个算子固定在 CPU | ✅ 已定 |
+| **D10** | **登记照不得直接送检测器**，需显式降级策略 | 实测：人脸占满全帧的裁剪照检测 score 仅 0.1066（分布外输入），加边距后 0.8457 | ✅ 已定 |
 
 ## 1. 端到端数据流
 
@@ -54,6 +58,32 @@ RTSP ─→ 解码 ─→ FrameBroker ─→ SHM ─→ Runner ─→ api.proces
 ```
 
 ## 2. 跨层契约（所有子任务必须遵守）
+
+### 2.0 人脸模型契约（实测，非推测）
+
+> 完整证据与复现方法见 `research/face-model-baseline.md`。
+
+**模型选择**：`det_500m.onnx`（SCRFD 检测）+ `facelivtv2-l.onnx`（512 维特征）。
+
+**预处理契约**（由上游公布数值**逐位反证**）：
+
+| 项 | 值 |
+| --- | --- |
+| 特征模型通道序 | **RGB**（BGR 全部不匹配） |
+| 特征归一化 | `(x − 127.5) / 127.5` |
+| 检测归一化 | `(x − 127.5) / 128.0` |
+| 检测输入 | 640×640，stride 8/16/32，每点 2 anchor |
+| ⚠️ 检测 score | **图内已含 Sigmoid，消费方不要再加** |
+| 对齐 | ArcFace 5 点模板，**相似变换（4 DoF）**，不要用单应 |
+
+**精度事实**：
+
+- rank-1 98.7%（人脸 ~64px）；人脸 <25px 时降至 54.7% —— **精度是分辨率的函数**。
+- ⚠️ 上游 README 的 `0.50` 阈值实测 **FRR = 64.23%**，**必须自行标定**。
+- ⚠️ RK3568 上 int8 量化 cosine 仅 ~0.86，**必须 fp16**。
+
+**板端验收判据**：对每个 identity 计算 `cosine(板端特征, golden_reference.npz)`。
+期望 fp16 > 0.999。明显偏低 = 预处理或量化漂移。
 
 ### 2.1 身份字段空间
 

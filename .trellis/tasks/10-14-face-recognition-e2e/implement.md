@@ -74,11 +74,63 @@ grep -rn "NOT WIRED" internal/ native/
 ## 决策记录
 
 > G1 / G2 的答案记录于此，供子任务引用。
+> 证据来源：`research/face-model-baseline.md`（2026-10-14 开发机实测）。
 
-- **G1-1 目标平台**：（待填）
-- **G1-2 人脸能力来源**：（待填）
-- **G1-3 特征提取归属**：（待填）
-- **G2 ABI 方案**：（待填）
+### G1-1 目标平台：**ONNX（开发机主环境）+ RKNN（板端验收）**
+
+- 开发机装的是**真实** ONNX Runtime（`libonnxruntime.so.1.21` + venv 内 onnxruntime 1.23.2），
+  可跑真实模型、真实特征。
+- ⚠️ 既有 `cpu_inference_backend.cpp` **是 mock**（`weights.resize(1MB, 0x5A)`，
+  forward 返回常量张量），**不能用于任何精度验证**。
+- 分工：管道 / 特征正确性 / 前端 → 开发机 ONNX 闭环；性能 / 功耗 / 最终精度 → 板端 RKNN。
+- 需新增 `ZHULONG_INFERENCE_BACKEND=onnx` 开关，且必须**同步改** `native/CMakeLists.txt`
+  与 `native/scripts/build.py:212` 的校验元组，否则 profile 校验 `FATAL_ERROR`。
+- ⚠️ 需装 `libonnxruntime-dev`（头文件）。这是**开发者环境前置**，不是构建期下载，
+  不破坏「`make native-deps` 是唯一联网步骤」的约定 —— 须写入 README 前置依赖。
+- ⚠️ `verifier.go:181` 要求 `manifest.platform.target` 与 `config.toml [algorithm].target`
+  **完全一致**，故开发机与板端需不同 target 值（如 `onnx` / `rk3568-rknn`）。
+
+### G1-2 人脸能力来源：`det_500m.onnx` + `facelivtv2-l.onnx`
+
+- 检测：`rknn_model_zoo/examples/insightface/buffalo_s/det_500m.onnx`（SCRFD，0.5M）
+- 特征：`rknn_model_zoo/examples/facelivt/facelivtv2_l/model/facelivtv2-l.onnx`（512 维）
+- ✅ **选 `facelivtv2-l` 替代 `w600k_r50` 绕开了 InsightFace 的商用雷区**。
+- ⚠️ **但许可仍未完全干净**：`det_500m` 权重仍是 InsightFace 出品（非商业研究），
+  `facelivtv2-l` 上游标注 CC-BY-SA-4.0（传染性）。**交付前须法务确认**，
+  否则需替换模型。这是**唯一剩下的非技术阻塞项**。
+
+### G1-3 特征提取归属：**插件内提取**
+
+- 登记与运行时使用**同一份提取代码、同一后端**，消除特征空间漂移。
+- ✅ 不打破「`internal/engine` 是唯一可 `import "C"` 的包」这条架构铁律。
+- ✅ 特征（生物识别信息）不落 SQLite 明文，符合 `docs/prd/prd-v1.0.md:190` 的合规方向。
+- ✅ 载荷只传 `image_path` 不传向量 → **`gallery-hot-sync` 的 64KB 分片风险降级**。
+- 代价：`person_faces.feature_vector` 列语义需重新定义；冷启动需重新提取（可加磁盘缓存）。
+
+### G2 ABI 方案：（待 `10-14-algo-structure-abi` 定案）
+
+已确认的**输入约束**（来自实测，非推测）：
+
+- 结构化结果必须能承载 **5 点 landmarks**（det_500m 的 kps 输出 10 维 = 5×2）。
+- 既有 `zhulong_bbox` 为扁平单层结构，**无法承载** `PersonItem` 的嵌套 `faces[]`。
+- 父 `design.md` §3 倾向 **v2 新表 + `struct_size` 协商**。
+
+### G3 FrameBroker 宿主归属：**确认仍成立**
+
+`native/src/pipeline/engine.cpp:233` 的 `ensure_frame_broker` 未被迁移；
+D1 / D2（gallery 与结果通道复用同一 UDS）的前提有效。
+
+## 已解决的阻塞
+
+| 门禁 | 状态 | 证据 |
+| --- | --- | --- |
+| G1-1 平台 | ✅ 已答 | 开发机 ONNX 基准产出 |
+| G1-2 模型来源 | ⚠️ 技术可用，**许可待法务** | 实测 rank-1 98.7% |
+| G1-3 特征归属 | ✅ 已答（插件内） | 架构铁律约束 |
+| G2 ABI 方案 | ⏳ 待 `algo-structure-abi` | 输入约束已明确 |
+| G3 broker 归属 | ✅ 确认 | `engine.cpp:233` |
+
+⚠️ **G1-2 的许可问题不阻塞开发，但阻塞交付。** 建议并行推进法务确认。
 
 ## 回滚点
 

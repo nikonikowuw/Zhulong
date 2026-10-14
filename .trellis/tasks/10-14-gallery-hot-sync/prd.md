@@ -38,11 +38,18 @@
 - **R6 分片（必须，非优化）**：单条 IPC 上限 64KB（`MAX_IPC_PAYLOAD_SIZE`）。
   512 维 float32 ≈ 2KB/人，全量同步约 30 人即触顶。**分片协议必须在一期实现**
   （分片序号、总片数、重组语义、超时丢弃）。
+  ⚠️ **范围可能降级**：若 `10-14-face-feature-extraction` 采用插件内提取
+  （即 Go 只下发 `image_path` 而非特征向量），单条载荷将大幅缩小，
+  分片压力显著缓解。但**仍需实现分片**，因为人员规模无上界，且路径本身也有长度。
+  分片粒度与阈值需在 `design.md` 中基于实际载荷尺寸计算。
 - **R7 ACK 语义**：`SYNC` 后须有 ACK；增量可异步。复用既有 `MSG_FRAME_ACK` 序号机制或新增
   `MSG_GALLERY_ACK`（定案写入 `design.md`）。
 - **R8 身份字段**：载荷 `person_id` 恒取 `persons.person_id`（对外业务键）**原值**；
   ⚠️ 严禁混用 `person_faces.person_id`（内部行 ID 外键）。
 - **R9 载荷字段名**：统一使用 `features`（float32 数组），见父 `design.md` §2.2。
+  ⚠️ **若采用插件内提取（D8）**，载荷可能只需 `image_path` 而非 `features`。
+  两种形态的取舍需在 `design.md` 中定案，并相应更新
+  `.trellis/spec/native/algo-plugin-contract.md` §7.2 的字段名契约。
 - **R10 契约文档**：更新 `.trellis/spec/native/algo-plugin-contract.md` §7.3，
   将状态从「未实现，登记供后续任务」改为已实现，并记录分片协议。
 - **R11 消除死代码状态**：四个 `⚠️ NOT WIRED` 注释必须因**接线完成**而移除，不得仅删注释。

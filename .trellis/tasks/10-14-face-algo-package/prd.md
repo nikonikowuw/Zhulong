@@ -17,6 +17,27 @@
 - `10-14-inference-result-egress` —— 没有出口就无法验证结果正确性。
 - `10-14-face-feature-extraction` 的**归属决策** —— 决定特征提取写在本包内还是宿主内。
 
+### ✅ 已解冻（G1 已答）——模型与契约已确定
+
+| 项 | 已定值 | 证据 |
+| --- | --- | --- |
+| 检测模型 | `det_500m.onnx`（SCRFD） | 实测可用 |
+| 特征模型 | `facelivtv2-l.onnx`（512 维） | 实测 rank-1 98.7% |
+| 特征归属 | **本包内**（插件内提取） | D8 |
+| 通道序 | **RGB** | 逐位反证 |
+| 归一化 | 特征 `(x−127.5)/127.5`；检测 `(x−127.5)/128.0` | 同上 |
+| ⚠️ 检测 score | 图内**已含 Sigmoid**，不要再加 | ONNX 图内 3 个 Sigmoid 节点 |
+| 对齐 | ArcFace 5 点模板，**相似变换 4 DoF** | 两 README 逐位相同 |
+| 阈值 | ⚠️ **不得用 README 的 0.50**（实测 FRR 64.23%） | 自标定 EER ≈ 1.42% @ 0.15 |
+| 板端量化 | ⚠️ **RK3568 必须 fp16**，int8 cosine 仅 ~0.86 | 上游实测 |
+| 登记照 | ⚠️ 裁剪照直接送检测器 score 仅 0.1066，需降级策略 | D10 |
+
+> 完整契约与复现脚本见父任务 `research/face-model-baseline.md` 与 `research/scripts/`。
+> **板端验收判据**：`cosine(本包特征, golden_reference.npz)` 期望 fp16 > 0.999。
+
+⚠️ **许可未决**：`det_500m` 权重为 InsightFace 出品（非商业研究），
+`facelivtv2-l` 上游标注 CC-BY-SA-4.0。**交付前须法务确认**。
+
 ## Requirements
 
 - **R1 包结构**：遵循 `.trellis/spec/backend/algorithm-guidelines.md` 的 manifest 契约与
@@ -30,6 +51,12 @@
 - **R5 身份字段**：输出的 `person_id` 必须是底库载荷中的**业务键原值**（`persons.person_id`）。
 - **R6 时序融合**：多帧特征融合与轨迹平滑（`is_fused` 标记），阈值可配置。
 - **R7 阈值可配置**：识别阈值随包声明或经 config schema 传入，不硬编码在代码里。
+  ⚠️ **实测要求**：不得采用上游 README 的 `0.50` 默认值（实测 FRR = 64.23%）。
+  必须按自身数据标定；SCface 距离 3 的参考工作点为 EER ≈ 1.42% @ cosine ≈ 0.15。
+- **R13 登记照降级策略**：底库登记照是裁剪好的人脸特写，直接送检测器会失败
+  （实测 score 0.1066）。必须实现「先检测，失败则按已裁剪处理」的降级。
+- **R14 板端量化约束**：RK3568 上**必须用 fp16**。int8 实测 cosine 仅 ~0.86，
+  属识别级灾难。若使用 int8，必须有量化前后特征 cosine 的实测证据并明确报阻塞。
 - **R8 验包门禁**：通过 `verifier.go` 的自测样本验证，包含坐标与置信度的越界检查
   （`10-12-algo-package-lifecycle/design.md` 要求：数值越界即验包失败）。
 - **R9 推理后端**：目标平台按父任务「待决问题 1」的答案（CPU / RKNN）。
