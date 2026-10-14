@@ -19,14 +19,14 @@ export function PersonsImagePreviewDialog() {
   const containerRef = useRef<HTMLDivElement>(null)
 
   const [scale, setScale] = useState(1)
+  const [prevImage, setPrevImage] = useState(previewImage)
   const [isFullscreen, setIsFullscreen] = useState(false)
 
-  // 当预览图片切换或打开时，重置缩放和全屏状态
-  useEffect(() => {
-    if (previewImage) {
-      setScale(1)
-    }
-  }, [previewImage])
+  // 当预览图片切换或打开时，在渲染阶段重置缩放比例
+  if (previewImage !== prevImage) {
+    setPrevImage(previewImage)
+    setScale(1)
+  }
 
   // 监听原生全屏状态变化
   useEffect(() => {
