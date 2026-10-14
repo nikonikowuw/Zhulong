@@ -99,6 +99,12 @@ int main(int argc, char* argv[]) {
 
     zhulong_bbox* b1 = static_cast<zhulong_bbox*>(res1->data);
     assert(std::strcmp(b1[0].label, "person") == 0);
+    assert(b1[0].box[0] == 0.15f);
+    assert(b1[0].box[1] == 0.20f);
+    assert(b1[0].box[2] == 0.35f);
+    assert(b1[0].box[3] == 0.40f);
+    assert(b1[0].confidence == 0.92f);
+    assert(b1[0].class_id == 1);
 
     api1.result_release(res1);
     api1.result_release(res2);

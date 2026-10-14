@@ -65,10 +65,7 @@ typedef struct zhulong_frame_view {
 
 /* 目标检测边界框 */
 typedef struct zhulong_bbox {
-    float x;          /* 归一化或像素坐标 x (左上) */
-    float y;          /* 归一化或像素坐标 y (左上) */
-    float width;      /* 宽度 */
-    float height;     /* 高度 */
+    float box[4];     /* [x1, y1, x2, y2] 严格归一化坐标 [0.0, 1.0] */
     float confidence; /* 置信度 (0.0 ~ 1.0) */
     int32_t class_id; /* 类别 ID */
     char label[64];   /* 类别名称 */

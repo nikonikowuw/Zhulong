@@ -82,7 +82,8 @@ int main(void) {
     assert(ZHULONG_PLUGIN_ERR_INTERNAL == -99);
 
     /* 2. 验证数据结构与对齐 */
-    assert(sizeof(zhulong_bbox) >= 64 + 5 * sizeof(float) + sizeof(int32_t));
+    _Static_assert(sizeof(zhulong_bbox) == 88, "zhulong_bbox must be 88 bytes");
+    _Static_assert(sizeof(zhulong_bbox) % 8 == 0, "zhulong_bbox must be 8-byte aligned");
     assert(sizeof(zhulong_frame_view) > 0);
     assert(sizeof(zhulong_inference_result) > 0);
     assert(sizeof(zhulong_plugin_api_v1) > 0);

@@ -30,12 +30,12 @@ public:
             return {};
         }
 
-        // 构造检测结果
+        // 构造检测结果 (归一化 [x1, y1, x2, y2])
         zhulong::Detection det;
-        det.x = 100.0f;
-        det.y = 120.0f;
-        det.w = 50.0f;
-        det.h = 80.0f;
+        det.box[0] = 0.15f;
+        det.box[1] = 0.20f;
+        det.box[2] = 0.35f;
+        det.box[3] = 0.40f;
         det.confidence = 0.92f;
         det.class_id = 1;
         det.label = "person";

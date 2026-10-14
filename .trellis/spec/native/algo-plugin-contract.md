@@ -21,10 +21,11 @@
 
 所有插件通过导出的 `zhulong_plugin_get_api` 填充 `zhulong_plugin_api_v1`。v1 API 布局包含 `struct_size`、`api_version`、插件元信息和模型/Worker/Task/process/result-release 回调。
 支持三种结果载荷形态：
-1. **检测**：`ZHULONG_RESULT_TYPE_DETECTION` (1) + `zhulong_bbox[]`；
+1. **检测**：`ZHULONG_RESULT_TYPE_DETECTION` (1) + `zhulong_bbox[]`（`box[4]` 严格归一化 `[x1, y1, x2, y2] ∈ [0.0, 1.0]`，总尺寸 88 字节，8 字节自然对齐）；
 2. **分类**：`ZHULONG_RESULT_TYPE_CLASSIFICATION` (2) + `zhulong_classification_item[]`；
 3. **结构化人体/人脸**：`ZHULONG_RESULT_TYPE_PERSON_STRUCTURE` (3) + `zhulong_person_item[]`（支持 1:N 嵌套人脸 `zhulong_face_item` 与 Top-K 候选人 `zhulong_face_candidate`）。
 
+全系统（通用目标检测、人体/人脸结构化、IPC 消息、Go 宿主领域模型与前端渲染）统一采用 `[x1, y1, x2, y2] ∈ [0.0, 1.0]` 严格归一化两点坐标，全面废弃 `(x, y, w, h)` 语义。
 结果内存由插件创建，并只能通过同一插件的 `result_release` 释放。添加分类与结构化能力保持 v1 函数表与 `zhulong_frame_view` 布局稳定（数据层多态）。
 结构化结果采用**单块连续 Arena 内存打包（Contiguous Arena Packing）**，所有嵌套子指针指向 Arena 内部偏移，`result->internal_token` 指向首地址，`result_release` 通过单次 `std::free` 彻底释放整棵树，杜绝内存碎片与嵌套泄漏。
 结构化坐标严格归一化到 `[0.0, 1.0]`，关键点（5 点）同样严格归一化。纯人脸检测场景下采用退化语义：每个检出人脸映射为一个 `zhulong_person_item`（`track_id=0`，`body_box=face_box`，`body_score=1.0`）。

@@ -32,10 +32,7 @@ private:
 
 // 目标检测框
 struct Detection {
-    float x{0.0f};
-    float y{0.0f};
-    float w{0.0f};
-    float h{0.0f};
+    float box[4]{0.0f, 0.0f, 0.0f, 0.0f}; /* [x1, y1, x2, y2] 严格归一化坐标 [0.0, 1.0] */
     float confidence{0.0f};
     int32_t class_id{0};
     std::string label;
@@ -147,10 +144,10 @@ inline std::vector<Detection> nms(const std::vector<Detection>& detections, floa
     if (detections.empty()) return {};
     std::vector<zhulong_bbox> c_boxes(detections.size());
     for (size_t i = 0; i < detections.size(); ++i) {
-        c_boxes[i].x = detections[i].x;
-        c_boxes[i].y = detections[i].y;
-        c_boxes[i].width = detections[i].w;
-        c_boxes[i].height = detections[i].h;
+        c_boxes[i].box[0] = detections[i].box[0];
+        c_boxes[i].box[1] = detections[i].box[1];
+        c_boxes[i].box[2] = detections[i].box[2];
+        c_boxes[i].box[3] = detections[i].box[3];
         c_boxes[i].confidence = detections[i].confidence;
         c_boxes[i].class_id = detections[i].class_id;
         std::strncpy(c_boxes[i].label, detections[i].label.c_str(), sizeof(c_boxes[i].label) - 1);
@@ -160,10 +157,10 @@ inline std::vector<Detection> nms(const std::vector<Detection>& detections, floa
     auto kept = zhulong::nms(c_boxes, iou_threshold);
     std::vector<Detection> result(kept.size());
     for (size_t i = 0; i < kept.size(); ++i) {
-        result[i].x = kept[i].x;
-        result[i].y = kept[i].y;
-        result[i].w = kept[i].width;
-        result[i].h = kept[i].height;
+        result[i].box[0] = kept[i].box[0];
+        result[i].box[1] = kept[i].box[1];
+        result[i].box[2] = kept[i].box[2];
+        result[i].box[3] = kept[i].box[3];
         result[i].confidence = kept[i].confidence;
         result[i].class_id = kept[i].class_id;
         result[i].label = kept[i].label;
@@ -182,6 +179,8 @@ inline std::vector<Detection> nms(const std::vector<Detection>& detections, floa
 namespace zhulong {
 namespace detail {
 
+static_assert(sizeof(zhulong_bbox) == 88, "zhulong_bbox must be 88 bytes");
+static_assert(sizeof(zhulong_bbox) % 8 == 0, "zhulong_bbox must be 8-byte aligned");
 static_assert(sizeof(zhulong_face_candidate) == 136, "zhulong_face_candidate must be 136 bytes");
 static_assert(sizeof(zhulong_face_candidate) % 8 == 0, "zhulong_face_candidate must be 8-byte aligned");
 static_assert(sizeof(zhulong_face_item) == 216, "zhulong_face_item must be 216 bytes");
@@ -200,13 +199,14 @@ struct DetectionResultAdapter {
 
     static void serialize(const Detection& source, item_type& destination) {
         destination = {};
-        destination.x = source.x;
-        destination.y = source.y;
-        destination.width = source.w;
-        destination.height = source.h;
+        destination.box[0] = source.box[0];
+        destination.box[1] = source.box[1];
+        destination.box[2] = source.box[2];
+        destination.box[3] = source.box[3];
         destination.confidence = source.confidence;
         destination.class_id = source.class_id;
         std::strncpy(destination.label, source.label.c_str(), sizeof(destination.label) - 1);
+        destination.label[sizeof(destination.label) - 1] = '\0';
     }
 
     template<typename PluginClass>

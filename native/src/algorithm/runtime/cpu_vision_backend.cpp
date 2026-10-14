@@ -115,17 +115,17 @@ zhulong_status_t CpuVisionBackend::letterbox(const zhulong_frame_view& src,
 }
 
 static float calc_iou(const zhulong_bbox& a, const zhulong_bbox& b) {
-    float x1 = std::max(a.x, b.x);
-    float y1 = std::max(a.y, b.y);
-    float x2 = std::min(a.x + a.width, b.x + b.width);
-    float y2 = std::min(a.y + a.height, b.y + b.height);
+    float x1 = std::max(a.box[0], b.box[0]);
+    float y1 = std::max(a.box[1], b.box[1]);
+    float x2 = std::min(a.box[2], b.box[2]);
+    float y2 = std::min(a.box[3], b.box[3]);
 
     float inter_w = std::max(0.0f, x2 - x1);
     float inter_h = std::max(0.0f, y2 - y1);
     float inter_area = inter_w * inter_h;
 
-    float area_a = a.width * a.height;
-    float area_b = b.width * b.height;
+    float area_a = std::max(0.0f, a.box[2] - a.box[0]) * std::max(0.0f, a.box[3] - a.box[1]);
+    float area_b = std::max(0.0f, b.box[2] - b.box[0]) * std::max(0.0f, b.box[3] - b.box[1]);
     float union_area = area_a + area_b - inter_area;
 
     if (union_area <= 0.0f) return 0.0f;

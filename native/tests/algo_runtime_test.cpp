@@ -159,9 +159,9 @@ int main() {
 
     // 4. Test NMS.
     std::vector<zhulong_bbox> boxes(3);
-    boxes[0].x = 10; boxes[0].y = 10; boxes[0].width = 100; boxes[0].height = 100; boxes[0].confidence = 0.9f;
-    boxes[1].x = 12; boxes[1].y = 12; boxes[1].width = 98;  boxes[1].height = 98;  boxes[1].confidence = 0.8f;
-    boxes[2].x = 300; boxes[2].y = 300; boxes[2].width = 50; boxes[2].height = 50; boxes[2].confidence = 0.7f;
+    boxes[0].box[0] = 0.10f; boxes[0].box[1] = 0.10f; boxes[0].box[2] = 0.30f; boxes[0].box[3] = 0.30f; boxes[0].confidence = 0.9f;
+    boxes[1].box[0] = 0.11f; boxes[1].box[1] = 0.11f; boxes[1].box[2] = 0.31f; boxes[1].box[3] = 0.31f; boxes[1].confidence = 0.8f;
+    boxes[2].box[0] = 0.60f; boxes[2].box[1] = 0.60f; boxes[2].box[2] = 0.80f; boxes[2].box[3] = 0.80f; boxes[2].confidence = 0.7f;
 
     auto kept_boxes = zhulong::nms(boxes, 0.45f);
     assert(kept_boxes.size() == 2);
