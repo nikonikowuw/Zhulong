@@ -1634,3 +1634,89 @@ engine.test Go-CGO 桥接   6/6 PASS（含 TestBridgeIntegration_Probe）
 
 - 归档 `10-13-algo-broker-host`
 - 推进阶段四：`10-13-algo-rknn-inference-backend` → `10-13-algo-rga-vision-backend`（两者共享 `CMakeLists.txt`/`build.py`，必须串行）
+
+---
+
+## 2026-10-14 — Rockchip RKNN 推理后端接入
+
+**Task**: Rockchip RKNN 推理后端接入（10-13-algo-rknn-inference-backend）
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+在公共算法运行库 HAL（`IInferenceBackend`）下接入 Rockchip RKNN 推理后端，并通过**编译期 profile 隔离**选择后端。全部验收标准在 **RK3568 真机**实测达成，并发现并规避了一个 `librknnrt.so` 2.3.2 的真实缺陷。
+
+### 关键成果
+
+| AC | 结果 |
+| --- | --- |
+| AC1 后端实现 + 头文件隔离 | ✅ `native/src/backends/rknn/` 实现三方法；`rknn_api.h` 只被该目录 3 个文件引用 |
+| AC2 CPU 路径不回归 + 宿主无 RKNN | ✅ host `make native-test` 15/15；**cpu 与 rknn 交叉宿主 `Zhulong` 均无 rknn 引用** |
+| AC3 SDK 版本 + 权重共享 | ✅ `api=2.3.2 / drv=0.9.8`；**共享成立**：4×init RSS 峰值 60024KB vs 1×init+4×dup 28340KB（3.5×） |
+| AC4 1/2/4 worker | ✅ 输出全一致；FD 8→8；耗时 316.8/374.1/588.7ms（**不声称线性扩展**） |
+| AC5 故障注入 + 资源回收 | ✅ 8 条故障路径全对；14 个返回码全覆盖；重复启停 5 轮 RSS/FD 完全不变 |
+| AC6 版本固定 + 产物依赖 | ✅ 只有 `librknnrt.so`，无 `librknn_api.so`；SHA-256 反向验证会失败；产物无宿主机路径 |
+| AC7 真实模型推理 | ✅ `facelivtv2_s_rk3568_fp.rknn` 输出 512 维有限值；tensor 属性全部 Runtime 查询 |
+
+### ⚠️ 最重要的发现：`RKNN_QUERY_MEM_SIZE` 会破坏上下文
+
+首次真机运行在 `create_session` 处 **SIGSEGV**，崩在 `librknnrt.so` 内部。用**最小 C 程序**（绕过全部本项目代码）二分定位：
+
+| 上下文上执行过的查询 | `rknn_dup_context` |
+| --- | --- |
+| 无 / `SDK_VERSION` / `IN_OUT_NUM` / `ATTR` | ✅ `ret=0` |
+| **`MEM_SIZE`** | ❌ **SIGSEGV** |
+
+`MEM_SIZE` 之后 `inputs_set`/`run`/`outputs_get` 全部正常 → 该污染**只影响 `rknn_dup_context`**。
+
+**规避**：`MEM_SIZE` 改用**独立的一次性上下文**查询后销毁，主 root 绝不调用它。这样 R3（dup 共享）与 R6（记录 MEM_SIZE）**可以同时满足**。
+
+代价：`load_model` 期间峰值多一份权重（约 9MB，仅加载期）。
+
+### 附带修复的 4 个问题
+
+| # | 问题 | 处置 |
+| --- | --- | --- |
+| 1 | 交叉产物携带 BUILD_RPATH，把开发机绝对路径烧进要 scp 的 `.so` | `SKIP_BUILD_RPATH TRUE BUILD_RPATH ""`；受控实验证明 `-rpath-link` 与 BUILD_RPATH **不冗余** |
+| 2 | `-Wl,-rpath-link` 缺失（实测去掉后 `undefined reference to rknn_init` 等 8 符号） | 显式补上 |
+| 3 | `*.so` 规则忽略 vendored `librknnrt.so` | `.gitignore` 加否定规则 |
+| 4 | 测试比对不处理非有限值 + FP16 输入填随机字节 → 输出全 `-inf`（假 FAIL） | `floats_close` 处理 NaN/Inf；新增 `float_to_half` + `fill_deterministic_for` |
+
+### 反向验证（证明断言非空）
+
+| 断言 | 反向操作 | 结果 |
+| --- | --- | --- |
+| SHA-256 门禁 | 改 vendored `.so` 一字节 | `checksum mismatch` 退出 1 |
+| 头文件隔离 | 往 `runtime/` 注入 `rknn_api.h` | grep 立即命中 `runtime/`（证明 grep 有效） |
+| `floats_close` 非有限值 | 换回朴素 `fabs(a-b) <= tol` | `-inf vs -inf` 判 false（真机假 FAIL 根因复现）、`-inf vs +inf` 判 true（漏报） |
+| `float_to_half` | 独立参照实现（long double 路径） | 往返 63490 个 half 值 0 失配；200 万随机 float 0 失配 |
+| AC2 宿主隔离 | 同一 grep 对 rknn `.so` | =1（证明 0 是真实结果） |
+
+### 关键设计决策
+
+1. **不改 `native/profiles/rk3568.json`**，另建 `rk3568-rknn.json`。理由：板端 `MockDetector` 走 `Model::load("mock_detector.weights")`，rknn 后端下 `model_create` 会失败 → runner exit 2，会让 broker-host 刚验完的板端基线整体回退。cpu 产物继续服务 mock/broker 回归，rknn 产物专供 RKNN 验证。
+2. **RKNN 前缀 vendored 进仓库**（`native/vendor/rknpu2/`，7.4MB `.so`）。理由：`build.py` 是构建唯一权威源，不能依赖仓库外路径；两个 SHA-256 本就钉死。
+3. **不动 `CMAKE_FIND_ROOT_PATH`**：实测绝对路径链接在 `MODE_LIBRARY ONLY` 下可行，sysroot 保持干净（`tree_digest` 语义不被污染）。
+4. `rknn_error_map` 改为 header-only inline（相对 design.md §2 的偏差，便于测试直接 include）。
+5. `MALLOC_FAIL` → `OUT_OF_MEMORY`、`TIMEOUT` → `TIMEOUT`（design.md §9 草图映射为 `INTERNAL`，但 `plugin.h` 有更准确的码）；`DEVICE_UNMATCH`/`TARGET_PLATFORM_UNMATCH`/`INCOMPATILE_*` → `NOT_SUPPORTED`（环境不匹配而非代码 bug）。
+
+### 验证
+
+- [OK] `make check` 干净重建后 **exit 0**（frontend-check / native-test 15/15 / api-docs 零漂移 / go-check）
+- [OK] 两个交叉 profile 均构建成功（cpu + rknn）
+- [OK] 真机 `ZhulongRknnTests` **`failures=0`**（6 个 case）
+- [OK] 非陈旧证据：host `.so` `CpuInferenceBackend`=20 / `RknnInferenceBackend`=0；rknn `.so` `RknnInferenceBackend`=20
+
+### 残余风险
+
+- ⚠️ `RKNN_QUERY_MEM_SIZE` 缺陷的官方性质未定（只做行为层复现与规避，不臆造官方结论）
+- ⚠️ 未验证真实视频帧端到端链路（真机输入是合成张量，不是经 broker 从 RTSP 解码的帧）
+- ⚠️ 未验证多进程/多包共享同一 NPU 的设备级排队；未验证长时间稳定性/功耗/温度
+- ⚠️ 编译器代差仍在（宿主 14.2.0 / sysroot libstdc++ 10 / 板端 10.2.1），真机未暴露 ABI 问题但未穷尽验证
+- ⚠️ 板端 `/usr/lib/librknn_api.so`(1.5.2) 仍存在（产物只引用 `librknnrt.so` 已验，清理属运维决定）
+
+### Next Steps
+
+- 归档本任务
+- 推进 `10-13-algo-rga-vision-backend`（复用本任务建立的 `ZHULONG_VISION_BACKEND` 开关机制与 vendor 模式）

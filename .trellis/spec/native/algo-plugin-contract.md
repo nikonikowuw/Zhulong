@@ -235,3 +235,189 @@ IPC 载荷序列化时统一使用 `features`。
 | **单条上限与分片** | 受 §6.4 的 64KB 门禁约束。全量同步在人员规模增长后必然超限，**分片是必须的**——但分片协议需 native 侧支持（分片序号、总片数），随该链路实现 |
 | **消息类型对齐** | native `ipc_protocol.hpp:14-20` 目前止于 `MSG_DISCONNECT=6`，Go 侧预留的 10/11/12 **尚未定义**。实现前必须先在 native 头文件补齐 |
 | **身份字段** | 载荷 `person_id` 恒取 `persons.person_id`（对外业务键）**原值**——该键必填、唯一、不可变，因此**不存在回退到内部主键 `persons.id` 的分支**。注意 `person_faces.person_id` 是内部行 ID 外键、与载荷 `person_id` 同名但语义不同，二者严禁混用，否则 native 侧会同时收到两套标识符空间 |
+
+---
+
+## 8. RKNN 推理后端合同（Rockchip，已实现）
+
+任务 `10-13-algo-rknn-inference-backend` 交付。本节的每一条都来自 **RK3568 真机实测**（Debian 11 arm64 / 内核 5.10.226 / `librknnrt.so` **2.3.2** / RKNPU 驱动 **0.9.8**），不是文档推断。
+
+### 8.1 编译期后端选择（两个正交开关）
+
+后端在**编译期**由 CMake cache 变量选定，不引入运行期 `dlopen` 后端分流：
+
+| 变量 | 取值 | 说明 |
+| --- | --- | --- |
+| `ZHULONG_INFERENCE_BACKEND` | `cpu`（默认）\| `rknn` | 推理后端 |
+| `ZHULONG_VISION_BACKEND` | `cpu`（默认）\| `rga` | 视觉前处理后端（RGA 见兄弟任务） |
+| `ZHULONG_RKNN_ROOT` | 路径 | 仅 `rknn` 需要；须含 `include/rknn_api.h` 与 `lib/librknnrt.so` |
+
+- `rknn` 缺 `ZHULONG_RKNN_ROOT`、或前缀缺任一文件 → **`FATAL_ERROR`**（fail closed）。
+- 取值非法 → `FATAL_ERROR`。`ZHULONG_VISION_BACKEND=rga` 当前 `FATAL_ERROR`（未实现）。
+- 两个开关**正交**：可「RKNN 推理 + CPU 前处理」，也可「CPU 推理 + RGA 前处理」。
+
+⚠️ **后端是编译期绑定，不是运行期可选**。`native/sdk/include/zhulong/algo.hpp` 通过 `#include <algorithm/runtime/runtime_factory.hpp>` 直接依赖 runtime 私有头，因此 `RknnInferenceBackend` **必须**编译进 `libzhulong_algo_runtime.so`（CMake target `ZhulongAlgoRuntime`），不能作为独立 `.so` 由插件单独加载。
+
+⚠️ **`cpu` 与 `rknn` 必须用两个不同的交叉 profile**（`native/profiles/rk3568.json` / `rk3568-rknn.json`）。原因：板端示例插件走 `zhulong::Model::load("mock_detector.weights")`，在 rknn 后端下会 `rknn_init` 一个不存在的文件 → `model_create` 失败 → runner **exit 2**。故 **cpu 产物继续服务 mock/broker 板端回归，rknn 产物专供 RKNN 验证**。
+
+### 8.2 目录与依赖隔离
+
+`rknn_api.h` 只允许出现在 `native/src/backends/rknn/`（`directory-structure.md` §2 铁律 4）。当前 3 处引用：`rknn_types.hpp`、`rknn_error_map.hpp`、`rknn_inference_backend.cpp`。
+
+CMake 中该目录的 `target_include_directories` 必须 `PRIVATE`。验收：
+
+```bash
+grep -rn '#include.*rknn_api.h' native/src/ native/sdk/ native/include/
+# 只应命中 native/src/backends/rknn/
+```
+
+### 8.3 链接与产物依赖（AC2 / AC6）
+
+| 产物 | 允许的 `NEEDED` |
+| --- | --- |
+| `libZhulongAlgoRuntime.so`（rknn 构建） | **必须**含 `librknnrt.so`；**绝不**含 `librknn_api.so` |
+| 宿主 `Zhulong`（cpu **与** rknn 构建） | **绝不**含 `librknnrt.so`（宿主只静态链 `ZhulongEngine`，不碰 runtime `.so`） |
+| 任意交叉产物 | **绝不**含开发机绝对路径（RUNPATH/RPATH） |
+
+⚠️ **`librknn_api.so` 是陈旧残留，严禁链接**。板端 `/usr/lib` 同时存在 `librknn_api.so`（**1.5.2**，25 个 `rknn_` 符号）与 `librknnrt.so`（**2.3.2**，39 个）。误链接会在运行期出现难查的符号缺失。链接目标必须是 `librknnrt.so`（SONAME 就是 `librknnrt.so`，非 `.so.2`）。
+
+⚠️ **`-Wl,-rpath-link,<rknn>/lib` 是必需的**（实测：去掉后链接报 `undefined reference to rknn_init` 等 8 个符号）。下游目标（`ZhulongRknnTests`、插件）链接 `libZhulongAlgoRuntime.so` 时，GNU ld 必须解析其传递依赖符号，而 `-L` 目录**不**参与 rpath-link 搜索。该选项只影响链接期解析，**不会**把 `librknnrt.so` 加进下游 `NEEDED`。
+
+⚠️ **必须清空 `BUILD_RPATH`**：CMake 会为「构建树之外的链接库」自动加 BUILD_RPATH，把开发机绝对路径烧进要部署的 `.so`：
+
+```cmake
+set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")
+```
+
+⚠️ BUILD_RPATH 与 `-rpath-link` **不冗余**（已用受控实验证明）：清空 BUILD_RPATH 后 ld 失去唯一的传递依赖解析途径，必须显式 `-rpath-link` 补上。
+
+### 8.4 版本固定与 SHA-256 门禁
+
+`native/scripts/build.py` 对 vendored 前缀（`native/vendor/rknpu2/`）做离线校验，不匹配即构建失败：
+
+| 文件 | SHA-256 |
+| --- | --- |
+| `include/rknn_api.h` | `c48e11a6f41b451a5fd1e4ad774ea60252d3d94f78bee9b21ea3d21b21deba9a` |
+| `lib/librknnrt.so` | `d31fc19c85b85f6091b2bd0f6af9d962d5264a4e410bfb536402ec92bac738e8` |
+
+版本三元组（真机实测，必须一并记录）：
+
+```txt
+librknnrt.so  = 2.3.2 (429f97ae6b@2025-04-09T09:09:27)
+RKNPU 驱动     = 0.9.8
+内核          = 5.10.226 / Debian 11 arm64
+```
+
+⚠️ `native/vendor/rknpu2/lib/librknnrt.so` 被 `.gitignore` 的 `*.so` 规则忽略，需显式否定规则 `!native/vendor/rknpu2/lib/librknnrt.so` 才可提交。
+
+### 8.5 ⚠️ `RKNN_QUERY_MEM_SIZE` 会破坏上下文（2.3.2 实测缺陷）
+
+**这是本后端最重要的一条约束。**
+
+**现象**：查过 `RKNN_QUERY_MEM_SIZE` 的上下文，其**首次** `rknn_dup_context` 必定 **SIGSEGV**（崩在 `librknnrt.so` 内部）。
+
+最小 C 复现（绕过全部本项目代码，直接 `-lrknnrt`）：
+
+| 上下文上执行过的查询 | `rknn_dup_context` |
+| --- | --- |
+| 无 | ✅ `ret=0` |
+| `SDK_VERSION` | ✅ `ret=0` |
+| `IN_OUT_NUM` / 输入输出 `ATTR` | ✅ `ret=0` |
+| **`MEM_SIZE`** | ❌ **SIGSEGV** |
+| `SDK_VERSION` + `MEM_SIZE` | ❌ **SIGSEGV** |
+
+`MEM_SIZE` 之后 `rknn_inputs_set` / `rknn_run` / `rknn_outputs_get` **全部正常** —— 该污染**只影响 `rknn_dup_context`**。
+
+**强制约束**：**主 root 上下文绝不调用 `RKNN_QUERY_MEM_SIZE`**。需要该数据时用**独立的一次性上下文**查询后立即销毁：
+
+```cpp
+rknn_context probe = 0;
+if (rknn_init(&probe, path, 0, 0, nullptr) == RKNN_SUCC) {
+    rknn_query(probe, RKNN_QUERY_MEM_SIZE, &asset->mem_size, sizeof(asset->mem_size));
+    rknn_destroy(probe);
+}
+```
+
+代价：`load_model` 期间峰值多一份权重（实测约 9MB，仅加载期）。这是为同时满足「记录 MEM_SIZE 证据」与「dup 共享」付出的必要代价。
+
+⚠️ 本缺陷的**官方性质未定**（可能是 2.3.2 已知缺陷，也可能是未文档化的调用约束）。**不臆造官方结论**；升级 RKNN Runtime 后应重测该组合。
+
+### 8.6 权重共享（`rknn_dup_context`）实测结论
+
+**共享成立**（RK3568 真机，同一模型 4 个上下文）：
+
+| 组 | 做法 | RSS 峰值 | 增量 |
+| --- | --- | --- | --- |
+| 基线 | 4 × 独立 `rknn_init` | 60024 KB | **+50.4 MB** |
+| 候选 | 1 × `rknn_init` + 4 × `rknn_dup_context` | 28340 KB | **+14.3 MB** |
+
+内存收益约 **3.5×**；两组输出逐元素一致。
+
+⚠️ **`RKNN_QUERY_MEM_SIZE` 的逻辑值不能当物理占用**：两组的 `total_weight_size` 均为 `9348096`（逐 worker 相同）。真实物理差异只能由 RSS/PSS 体现。
+
+⚠️ **`rknn_dup_context` 的派生必须串行化**（`dup_mutex`）：不假定该接口可并发调用。
+
+### 8.7 资源模型与生命周期（R5）
+
+```text
+RknnModelAsset : ModelAsset          ← 每模型一个，进程内共享
+  ├─ rknn_context root_ctx + bool root_valid
+  ├─ std::mutex dup_mutex            ← 串行化 dup
+  ├─ input_attrs / output_attrs      ← 从 Runtime 查询，不猜
+  └─ mem_size / sdk_version          ← 证据记录
+
+RknnSessionContext : SessionContext  ← 每 worker 一个，独占
+  ├─ rknn_context ctx                ← rknn_dup_context 派生
+  └─ std::shared_ptr<RknnModelAsset> model   ← 保证 session 早于 root 销毁
+```
+
+- 根上下文**保守保留**至所有派生实例回收完成。
+- ⚠️ **失败路径不得 double-destroy**：`root_valid` 只在全部查询成功后置 `true`；所有提前返回点的 `rknn_destroy(root)` 都在此之前，故局部 asset 析构时 `root_valid == false`，不会二次销毁。
+- 创建中途失败必须回滚已分配资源。
+
+### 8.8 错误映射（14 个返回码全覆盖）
+
+`RKNN_SUCC=0` → `OK`；`PARAM_INVALID`/`MODEL_INVALID`/`CTX_INVALID`/`INPUT_INVALID`/`OUTPUT_INVALID` → `INVALID_ARGUMENT`；`DEVICE_UNAVAILABLE`/`DEVICE_UNMATCH`/`TARGET_PLATFORM_UNMATCH`/`INCOMPATILE_*` → `NOT_SUPPORTED`（环境不匹配而非代码 bug）；`MALLOC_FAIL` → `OUT_OF_MEMORY`；`TIMEOUT` → `TIMEOUT`；`FAIL` 与未知值 → `INTERNAL`。
+
+⚠️ 设备不可用映射为 `NOT_SUPPORTED` 而非 `INTERNAL`，便于上层区分「环境问题」与「代码 bug」。
+
+### 8.9 Tensor 桥接（本任务接受拷贝）
+
+⚠️ **不得声称本任务实现了零拷贝。**
+
+- `rknn_input` **没有 stride 字段** → 传入 buffer 必须 packed（`Tensor` 的 `std::vector<uint8_t>` 天然 packed）。padded buffer 会**静默算错**（不是报错，是错结果）。
+- 输出经 `want_float=1` 由 runtime 统一转 float32（避免手工反量化、不猜 `zp`/`scale`），再**拷贝**进 `Tensor`。
+- 输出 shape 取 `output_attrs[i].dims[0..n_dims)` **原样**，不跳 batch 维。
+- `rknn_outputs_release` 必须由 RAII guard 保证所有路径（含异常）恰好执行一次。
+- 零拷贝的正确做法是 DMA-BUF（后续任务），不是让 `Tensor` 承担生命周期责任。
+
+### 8.10 多 Worker 与设备并发
+
+RK3568 是**单 NPU 核**。真机实测 1/2/4 worker 各 20 次推理：耗时 316.8ms / 374.1ms / 588.7ms —— **未随 worker 数线性提升**。
+
+⚠️ **不得声称吞吐线性扩展**。收益方向是 CPU 前处理/后处理与 NPU 执行的**重叠**，不是 NPU 并行。**不启用** `RKNN_FLAG_ASYNC_MASK`。
+
+### 8.11 测试与验证
+
+```bash
+# CPU profile 回归（不依赖板卡）
+make native-test                                    # 期望 15/15
+
+# 头文件隔离
+grep -rn '#include.*rknn_api.h' native/src/ native/sdk/ native/include/
+
+# 产物依赖矩阵（AC2/AC6）
+readelf -d build/native/cross-rk3568-rknn/libZhulongAlgoRuntime.so | grep -E 'NEEDED|RUNPATH'
+readelf -d build/targets/rk3568-rknn/Zhulong | grep NEEDED      # 不得含 rknn
+
+# rknn 交叉构建
+python3 native/scripts/build.py --profile native/profiles/rk3568-rknn.json build
+
+# 真机（交叉只编译不执行；板端手动跑）
+scp build/native/cross-rk3568-rknn/{ZhulongRknnTests,libZhulongAlgoRuntime.so} rk3568:/userdata/zhulong-test/
+ssh rk3568 'cd /userdata/zhulong-test && LD_LIBRARY_PATH=$PWD ./ZhulongRknnTests <model.rknn>'
+# 期望：=== failures=0 ===
+```
+
+⚠️ `ZhulongRknnTests` 仅在 `ZHULONG_INFERENCE_BACKEND=rknn` 时构建；交叉时**只编译、不注册 CTest**（板端手动执行）。
+⚠️ `ZhulongRknnTests` 的 build-dir RUNPATH **刻意保留**（板端配合 `LD_LIBRARY_PATH` 使用）；产物卫生只要求清 `libZhulongAlgoRuntime.so` 上指向 `native/vendor/` 的那个。

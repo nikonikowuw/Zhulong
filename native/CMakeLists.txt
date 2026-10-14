@@ -149,6 +149,50 @@ target_compile_options(ZhulongEngine PRIVATE
 )
 
 # ==============================================================================
+#          4.0 后端选择：推理 / 视觉前处理（编译期 profile 隔离）
+# ==============================================================================
+# 推理后端与视觉前处理后端是两个正交开关：可「RKNN 推理 + CPU 前处理」，也可
+# 「CPU 推理 + RGA 前处理」。默认均为 cpu，保持既有 CPU 路径零回归。
+# 视觉后端 rga 由兄弟任务 10-13-algo-rga-vision-backend 实现，本任务只声明变量。
+set(ZHULONG_INFERENCE_BACKEND "cpu" CACHE STRING "算法运行库推理后端: cpu | rknn")
+set_property(CACHE ZHULONG_INFERENCE_BACKEND PROPERTY STRINGS cpu rknn)
+set(ZHULONG_VISION_BACKEND "cpu" CACHE STRING "算法运行库视觉前处理后端: cpu | rga")
+set_property(CACHE ZHULONG_VISION_BACKEND PROPERTY STRINGS cpu rga)
+set(ZHULONG_RKNN_ROOT "" CACHE PATH "RKNN 前缀（include/rknn_api.h + lib/librknnrt.so）；仅 ZHULONG_INFERENCE_BACKEND=rknn 需要")
+set(ZHULONG_RGA_ROOT "" CACHE PATH "RGA 前缀；仅 ZHULONG_VISION_BACKEND=rga 需要（尚未实现）")
+
+if(NOT ZHULONG_INFERENCE_BACKEND MATCHES "^(cpu|rknn)$")
+    message(FATAL_ERROR "ZHULONG_INFERENCE_BACKEND 取值非法: ${ZHULONG_INFERENCE_BACKEND}（期望 cpu 或 rknn）")
+endif()
+if(NOT ZHULONG_VISION_BACKEND MATCHES "^(cpu|rga)$")
+    message(FATAL_ERROR "ZHULONG_VISION_BACKEND 取值非法: ${ZHULONG_VISION_BACKEND}（期望 cpu 或 rga）")
+endif()
+if(ZHULONG_VISION_BACKEND STREQUAL "rga")
+    message(FATAL_ERROR "视觉后端 rga 尚未实现，见任务 10-13-algo-rga-vision-backend")
+endif()
+
+# RKNN 推理后端：include 目录 PRIVATE（AC1），库以绝对文件路径链接。
+# ⚠️ -rpath-link 是必须的：下游可执行/插件链接 ZhulongAlgoRuntime 时，GNU ld 需要
+# 解析其传递依赖 librknnrt.so 的符号，而 ld **不**使用 -L 目录做 rpath-link 搜索。
+# 它只影响链接期解析，不会把 librknnrt.so 加进下游的 NEEDED（AC2）。
+if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
+    if(NOT ZHULONG_RKNN_ROOT)
+        message(FATAL_ERROR "ZHULONG_INFERENCE_BACKEND=rknn 需要 -DZHULONG_RKNN_ROOT=<rknpu2 前缀>")
+    endif()
+    if(NOT EXISTS "${ZHULONG_RKNN_ROOT}/include/rknn_api.h")
+        message(FATAL_ERROR "RKNN 前缀缺少 include/rknn_api.h: ${ZHULONG_RKNN_ROOT}")
+    endif()
+    if(NOT EXISTS "${ZHULONG_RKNN_ROOT}/lib/librknnrt.so")
+        message(FATAL_ERROR "RKNN 前缀缺少 lib/librknnrt.so: ${ZHULONG_RKNN_ROOT}")
+    endif()
+    # ⚠️ -rpath-link 是必须的：下游目标（ZhulongRknnTests / 插件）链接 ZhulongAlgoRuntime
+    # 时，GNU ld 必须解析其传递依赖 librknnrt.so 的符号，而 ld **不**用 -L 目录做
+    # rpath-link 搜索。实测：去掉本行后链接报 `undefined reference to rknn_init` 等 8 个符号。
+    # 它只影响链接期符号解析，不会把 librknnrt.so 写进下游的 NEEDED（AC2）。
+    add_link_options(-Wl,-rpath-link,${ZHULONG_RKNN_ROOT}/lib)
+endif()
+
+# ==============================================================================
 #                      4.1 构建公共算法运行库 (libzhulong_algo_runtime.so)
 # ==============================================================================
 add_library(ZhulongAlgoRuntime SHARED
@@ -163,6 +207,20 @@ target_include_directories(ZhulongAlgoRuntime
 target_compile_options(ZhulongAlgoRuntime PRIVATE
     $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wall;-Wextra;-Wpedantic>
 )
+
+# RKNN 推理后端：仅链接进 ZhulongAlgoRuntime（.so），宿主 ZhulongEngine 绝不链接。
+# 绝对路径 include（PRIVATE）与绝对文件路径链接，避免污染 sysroot 与 CMAKE_FIND_ROOT_PATH。
+if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
+    target_sources(ZhulongAlgoRuntime PRIVATE src/backends/rknn/rknn_inference_backend.cpp)
+    target_include_directories(ZhulongAlgoRuntime PRIVATE ${ZHULONG_RKNN_ROOT}/include)
+    target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_RKNN_ROOT}/lib/librknnrt.so Threads::Threads)
+    target_compile_definitions(ZhulongAlgoRuntime PRIVATE ZHULONG_INFERENCE_RKNN=1)
+    # ⚠️ 产物卫生（AC6）：CMake 会为「构建树之外的链接库」自动加 BUILD_RPATH，把开发机
+    # 绝对路径烧进 .so（实测为 /home/niko/dev/Go/Zhulong/native/vendor/rknpu2/lib）。
+    # 该 .so 要 scp 到 RK3568，不应携带宿主机路径。清空 BUILD_RPATH；
+    # 下游目标的符号解析由上面的 add_link_options(-Wl,-rpath-link,…) 保证。
+    set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")
+endif()
 
 # ==============================================================================
 #                      4.2 构建跨进程 IPC 与 FrameBroker 库 (ZhulongAlgoIpc)
@@ -318,4 +376,17 @@ if(BUILD_TESTING)
     endif()
 
     set_tests_properties(ZhulongEngineLifecycle ZhulongCAbiLifecycle ZhulongCaptureUnit ZhulongFrameLifecycle ZhulongDecoder PROPERTIES TIMEOUT 20)
+
+    # RKNN 后端测试：仅在推理后端为 rknn 时构建。
+    # 交叉时只编译不注册 CTest（板端手动执行）；host/rknn 时注册。
+    if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
+        add_executable(ZhulongRknnTests tests/rknn_backend_test.cpp)
+        target_compile_features(ZhulongRknnTests PRIVATE cxx_std_17)
+        target_include_directories(ZhulongRknnTests PRIVATE src ${ZHULONG_RKNN_ROOT}/include)
+        target_link_libraries(ZhulongRknnTests PRIVATE ZhulongAlgoRuntime Threads::Threads)
+        if(NOT CMAKE_CROSSCOMPILING)
+            add_test(NAME ZhulongRknnBackend COMMAND ZhulongRknnTests)
+            set_tests_properties(ZhulongRknnBackend PROPERTIES TIMEOUT 120)
+        endif()
+    endif()
 endif()

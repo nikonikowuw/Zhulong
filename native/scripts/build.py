@@ -32,6 +32,13 @@ VERSION = "7.1.5"
 SHA256 = "de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f"
 ARCHIVE = ROOT / "build/deps/sources" / f"ffmpeg-{VERSION}.tar.xz"
 
+# Vendored RKNN 供应商前缀（离线，不联网）。仅 RKNN 推理后端构建使用。
+RKNN_VENDOR = ROOT / "native/vendor/rknpu2"
+RKNN_SHA256 = {
+    "include/rknn_api.h": "c48e11a6f41b451a5fd1e4ad774ea60252d3d94f78bee9b21ea3d21b21deba9a",
+    "lib/librknnrt.so":   "d31fc19c85b85f6091b2bd0f6af9d962d5264a4e410bfb536402ec92bac738e8",
+}
+
 # FFmpeg 最小化安全裁剪参数（纯静态、位置无关代码 PIC、仅开启 RTSP 与 H264/H265 解码所需组件）
 #
 # 许可证警示：切勿加入 --enable-gpl / --enable-nonfree / --enable-version3。
@@ -190,7 +197,31 @@ def profile(path):
 
     p.setdefault("cflags", [])
     p.setdefault("ldflags", [])
+
+    # 后端选择（编译期 profile 开关）：推理与视觉前处理两个正交维度。
+    # 不往 identity 里叠加无意义的失效（见 dependency()），也不默认写入未声明的键。
+    for key, allowed in (("inference_backend", ("cpu", "rknn")), ("vision_backend", ("cpu", "rga"))):
+        value = p.get(key, "cpu")
+        if value not in allowed:
+            raise ValueError(f"invalid {key}: {value!r}; expected one of {allowed}")
+        p[key] = value
     return p
+
+
+def rknn_prefix():
+    """校验 vendored RKNN 前缀（离线，不联网）
+
+    逐个校验 RKNN_SHA256 里的文件存在且 digest 匹配；不匹配抛 ValueError。
+    返回 RKNN_VENDOR。
+    """
+    for relative, expected in RKNN_SHA256.items():
+        candidate = RKNN_VENDOR / relative
+        if not candidate.is_file():
+            raise ValueError(f"vendored RKNN prefix missing {relative}; expected under {RKNN_VENDOR}")
+        actual = digest(candidate)
+        if actual != expected:
+            raise ValueError(f"vendored RKNN {relative} checksum mismatch: {actual} != {expected}")
+    return RKNN_VENDOR
 
 
 def prepare(local, download):
@@ -226,7 +257,9 @@ def dependency(p):
         flags.append("--disable-x86asm")
 
     identity = dict(
-        source_sha256=SHA256, version=VERSION, flags=flags, profile=p,
+        source_sha256=SHA256, version=VERSION, flags=flags,
+        # 后端选择键不影响 FFmpeg 配置，过滤掉以避免无谓的缓存失效。
+        profile={k: v for k, v in p.items() if k not in ("inference_backend", "vision_backend")},
         recipe_sha256=digest(__file__), package_resolver_sha256=digest(PACKAGE_RESOLVER), patches=[]
     )
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]
@@ -338,8 +371,15 @@ def configure(p, sanitizer):
         f"-DCMAKE_AR={p['ar']}", f"-DCMAKE_RANLIB={p['ranlib']}",
         f"-DCMAKE_C_FLAGS={shlex.join(p['cflags'])}", f"-DCMAKE_CXX_FLAGS={shlex.join(p['cflags'])}",
         f"-DCMAKE_EXE_LINKER_FLAGS={shlex.join(p['ldflags'])}",
-        f"-DZHULONG_SANITIZER={sanitizer or ''}", "-DBUILD_TESTING=ON"
+        f"-DZHULONG_SANITIZER={sanitizer or ''}", "-DBUILD_TESTING=ON",
+        # 用 .get() 兼容直接调用 configure() 的单元测试（它们绕过 profile() 构造最小 profile）。
+        f"-DZHULONG_INFERENCE_BACKEND={p.get('inference_backend', 'cpu')}",
+        f"-DZHULONG_VISION_BACKEND={p.get('vision_backend', 'cpu')}"
     ]
+    # 只有 rknn 才调 rknn_prefix()：cpu 构建不能因为缺 vendor 目录而失败。
+    # 使用绝对文件路径链接，不把 RKNN 前缀塞进 CMAKE_FIND_ROOT_PATH。
+    if p.get("inference_backend", "cpu") == "rknn":
+        args.append(f"-DZHULONG_RKNN_ROOT={rknn_prefix()}")
 
     if p["mode"] != "host":
         def quote(value):
