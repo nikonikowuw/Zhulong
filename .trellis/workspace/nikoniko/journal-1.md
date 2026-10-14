@@ -1896,3 +1896,85 @@ AC1~AC15 验收矩阵全部核对通过，完成父任务 implement.md / prd.md 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 38: 人员管理前端任务收尾、并发写者隔离与 spec 漂移修复
+<!-- trellis-session: v=2 fp=376e27e64020c5b2 -->
+
+**Date**: 2026-10-14
+**Task**: 人员管理前端任务收尾、并发写者隔离与 spec 漂移修复
+**Package**: frontend
+**Branch**: `dev`
+
+### Summary
+
+Session summary was not supplied.
+
+### Main Changes
+
+### Summary
+
+本会话不含新功能实现，核心是**收尾既有任务**与**并发写者隔离**，并顺手把发现的 spec 漂移沉淀入库。
+
+#### 1. 独立提交遗留的前端改动
+工作区遗留一处未提交改动 `web/src/features/errors/general-error.tsx`（mtime 21:11，产生于上一轮「清理 Mock 前端页面」期间，不属于 persons 任务）。先 `prettier --write` 修掉末尾多余空行，再独立提交为 `ab20779`：
+- `console.error` 输出捕获到的真实异常，避免路由失败被误判为后端 HTTP 500；
+- DEV 模式内联渲染 error trace；
+- 新增 `Try Again` 按钮接 TanStack Router 的 `reset`，无 `reset` 时 fallback 到 `window.location.reload()`；
+- 导航回首页前先 `reset?.()`，清除 error 状态。
+
+#### 2. 发现并处置并发 writer（关键风险）
+收尾过程中发现**另一个 Pi session（`pi_01a139de`）正在同一 working tree、同一 `dev` 分支上实时写文件**：它把 `10-14-algo-structure-abi` 从 planning 切为 in_progress，并连续写入 `native/sdk/include/zhulong/plugin.h`、`native/tests/plugin_c_abi_test.c` 等。
+
+这是「one writer per cwd」红线。处置方式：
+- **拒绝使用 `git add -A` / `git commit -a`**，全程显式指定路径；
+- 提交前逐次核对暂存区文件清单与工作区剩余清单；
+- 验证有效：就在 `git add` 完成、`git commit` 执行之间的数十秒内，对方**又新增了 `native/sdk/include/zhulong/algo.hpp`**。若用 `-A` 会把对方半成品卷入提交。
+
+#### 3. Phase 3.3 spec 审查：修复两处真实漂移
+审查判定「有需要沉淀的新知识」，产出 `891f63e`：
+
+- **`middleware-guidelines.md` 缺失「上传业务组」层级**：Gin 在 `Group()` 调用时即求值中间件，**无法事后放宽**。挂在 `protected_routes` 下的上传端点会永久继承 1 MiB 的 `MaxAPIRequestBodyBytes`，体积合法的上传被 413 拒绝——这正是 `fd90c1d` 之前 10 MiB 人脸照上传失败的根因。补齐第四层级行 + router.go 正确写法 + 回归护栏指向（`upload_router_test.go` 走真实 router 断言 201 而非 413）+ 413 `FILE_TOO_LARGE` 的双层语义说明（中间件层=请求体超限 / 领域层=文件超限，前端不可依赖 `code` 判别）。
+- **`storage-guidelines.md` §1.4 契约自相矛盾**：该节要求客户端传**绝对路径** `imagePath`，与紧随其后的 blockquote（已改造为 multipart 直传、持久化**相对文件名**）及实际实现相互冲突。标记为历史条目并指向现行契约；明确标注 `INVALID_IMAGE_PATH` 及其中文文案「必须是绝对路径」描述的是**旧契约**，且 `resolveFaceFilePath` 的 `filepath.IsAbs` 分支已不可达（库内只会是相对名）。
+- **`dependency-injection.md`**：补 `upload_routes` 值组，与 public/protected 并列为三路分流；记录「一 Handler 同时注册到多组」的 `RegisterUploadRoutes` + `RouteRegistrar` 适配器模式。
+- **`backend/index.md`**：开发前检查清单新增「大体积上传端点归组」条目；索引表补 upload。
+
+#### 4. 归档 `10-14-person-management-frontend`
+- **完成度复核**：`implement.md` 27/27 步骤全勾，`prd.md` 8/8 AC 全勾，无遗留项；
+- **代码入库确认**：切片已由 `fd90c1d` 入库，21 个文件齐全，`web/src/features/persons/`、路由、侧边栏、i18n 注册均无未提交改动；
+- **门禁复验**：`npx tsc --noEmit` ✅、`pnpm lint` ✅、`pnpm build` ✅、persons 切片 `vitest` 5 文件 / 21 测试全绿 ✅、零 `any` 扫描干净 ✅、三语 key 完全对齐（61/61/61）✅；
+- 以 `--skip-branch-validation` 归档（`branch == base_branch == dev`，与仓库既有 36 个归档任务的惯例一致），产出 `abdf5b7`，`status: completed`。
+
+#### 5. 其余 6 个任务无归档条件
+`10-14-face-algo-package`、`10-14-face-feature-extraction`、`10-14-face-result-frontend`、`10-14-gallery-hot-sync`、`10-14-inference-result-egress` 均为 planning 且 `implement.md` 无勾选项；父任务 `10-14-face-recognition-e2e` 为 planning（2 done / 9 open）。全部保持不动。
+
+### Testing
+
+| 检查 | 命令 | 结果 |
+| --- | --- | --- |
+| 类型检查 | `cd web && npx tsc --noEmit` | ✅ 通过 |
+| 前端 lint | `cd web && pnpm lint` | ✅ 零告警 |
+| 生产构建 | `cd web && pnpm build` | ✅ 成功 |
+| persons 切片测试 | `npx vitest run --browser.headless src/features/persons/` | ✅ 5 文件 / 21 测试全绿 |
+| 三语 key 对齐 | 键树 diff（en / zh-Hans / zh-Hant） | ✅ 61/61/61 完全一致 |
+| 零 any 扫描 | `grep -rn ': any\|as any\|<any>' src/features/persons/` | ✅ 干净 |
+| 提交隔离 | `git diff --cached --name-only` 前后对照 | ✅ 4 个 spec 文件精确，零污染 |
+
+⚠️ **已知环境问题（非本次改动引起）**：全量 `pnpm test` 在本机间歇性失败，症状为 browser-mode Vitest（Playwright/chromium）报 `Cannot connect to the iframe` / `Failed to fetch dynamically imported module`，失败用例每次随机（persons 的 `schema.test`、live 的 `shortcuts`/`player` 轮换）。已做严格对照：`git stash` 掉 `general-error.tsx` 后全量测试**照样失败**，确认与本次改动无关，疑为并发资源争抢（机器上同时存在多个 Vite 进程 + 占用 8000 端口的 Zhulong 进程）。该问题会使 `make check` 的 `frontend-check` 间歇性变红，建议后续单独开任务排查。
+
+### Next Steps
+
+- 全量 `pnpm test` 的间歇性失败需单独排查，以恢复 `make check` 绿灯的可信度；
+- 父任务 `10-14-face-recognition-e2e` 剩余 5 个子任务待推进（`10-14-algo-structure-abi` 已由并行 session 完成并归档）。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ab20779` | fix(web): surface the real exception from the router error boundary |
+| `891f63e` | docs(spec): document the upload route group and retire the stale imagePath contract |
+
+### Status
+
+[OK] **Completed**

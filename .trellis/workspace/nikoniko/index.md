@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 37
+- **Total Sessions**: 38
 - **Last Active**: 2026-10-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1898 | Active |
+| `journal-1.md` | ~1980 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 38 | 2026-10-14 | 人员管理前端任务收尾、并发写者隔离与 spec 漂移修复 | `ab20779`, `891f63e` | `dev` |
 | 37 | 2026-10-14 | 清理未实现功能的Mock前端页面并精简导航 | `0fe0742`, `26518e8` | `dev` |
 | 35 | 2026-10-14 | Rockchip RGA 视觉前处理后端接入 | `6b0fdfe` | `dev` |
 | 33 | 2026-10-13 | 媒体文件服务落地与双轴代码审查 | `0ba2024` | `dev` |
