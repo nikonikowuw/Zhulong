@@ -211,7 +211,10 @@ func (e *Engine) Probe(ctx context.Context, uri string, options StreamOptions) (
 	if err := validateRTSPURI(uri); err != nil {
 		return VideoInfo{}, err
 	}
-	cOptions, err := convertStreamOptions(options, ctx)
+	// Probe 是异步可取消的（下面 select 监听 ctx.Done()），因此**不**把 ctx deadline
+	// 收敛进 native open timeout：收敛会被毫秒截断，让 native 超时先于 ctx 到期，
+	// 使取消语义退化为调度时序竞态（返回 TIMEOUT 而非 DeadlineExceeded）。
+	cOptions, err := convertStreamOptions(options, ctx, false)
 	if err != nil {
 		return VideoInfo{}, err
 	}
@@ -318,7 +321,9 @@ func (e *Engine) Acquire(ctx context.Context, uri string, consumerID uint64, kin
 	if err := validateConsumer(consumerID, kind); err != nil {
 		return nil, err
 	}
-	cOptions, err := convertStreamOptions(options, ctx)
+	// Acquire 是同步、不可异步取消的 CGO 调用，必须把 ctx deadline 收敛进
+	// native open timeout，否则底层阻塞会超出调用方给定的 ctx 预算。
+	cOptions, err := convertStreamOptions(options, ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -497,17 +502,21 @@ func (e *Engine) onStreamClosed(s *Stream) {
 	e.streamsMu.Unlock()
 }
 
-func convertStreamOptions(options StreamOptions, ctx context.Context) (C.Zhulong_stream_options, error) {
+// convertStreamOptions 把 StreamOptions 转为 C 层选项。
+//
+// clampToContext 语义见 resolveTimeoutMs：异步可取消的调用（Probe）传 false，
+// 同步阻塞的调用（Acquire）传 true。
+func convertStreamOptions(options StreamOptions, ctx context.Context, clampToContext bool) (C.Zhulong_stream_options, error) {
 	if options.Transport != TransportTCP && options.Transport != TransportUDP {
 		return C.Zhulong_stream_options{}, fmt.Errorf("%w: invalid transport %d", ErrInvalidArgument, options.Transport)
 	}
 
-	openTimeoutMs, err := resolveTimeoutMs(options.OpenTimeout, ctx)
+	openTimeoutMs, err := resolveTimeoutMs(options.OpenTimeout, ctx, clampToContext)
 	if err != nil {
 		return C.Zhulong_stream_options{}, err
 	}
 
-	idleTimeoutMs, err := resolveTimeoutMs(options.IdleTimeout, nil)
+	idleTimeoutMs, err := resolveTimeoutMs(options.IdleTimeout, nil, false)
 	if err != nil {
 		return C.Zhulong_stream_options{}, err
 	}

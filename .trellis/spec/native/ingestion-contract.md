@@ -31,6 +31,22 @@ Exact C-compatible types/signatures live in the sole public header `engine.h`:
   Open and stream-info share one monotonic deadline; idle resets only on selected
   video packets. Even successful stream-info returns must be checked for expired
   deadline/cancellation (FFmpeg can return partial metadata after interruption).
+- **Go-side ctx cancellation must not be clamped into the native timeout for
+  async-cancellable calls.** `internal/engine` distinguishes two shapes:
+  - `Probe` is async-cancellable (it selects on `ctx.Done()`), so the ctx deadline
+    is **not** folded into the native open timeout. Folding it in truncates to
+    milliseconds (199.7ms -> 199ms), which lets the native timeout fire *before*
+    the ctx deadline while `ctx.Err()` is still nil. The call then returns the
+    engine `TIMEOUT` instead of `context.DeadlineExceeded`, degrading cancellation
+    into a scheduler-timing race (measured 4/15 failures under load). With the
+    clamp removed, ctx cancellation is the sole authority and the native timeout
+    is only a backstop.
+  - `Acquire` is a synchronous, non-cancellable CGO call, so it **does** clamp to
+    the ctx deadline; otherwise the underlying blocking call would overshoot the
+    caller's budget.
+  An already-expired deadline fails fast in both modes. Regression coverage lives in
+  `internal/engine/validation_test.go` (`TestResolveTimeoutMs`) and
+  `internal/engine/integration_test.go` (`TestBridgeIntegration_Probe`).
 - Only the input-owning thread accesses/closes AVFormatContext. Cancel **before**
   close even for a successful synchronous probe: TEARDOWN may stop responding.
   Stop signals all workers/probes, joins the timer/workers, and drains callbacks.
@@ -81,6 +97,15 @@ Exact C-compatible types/signatures live in the sole public header `engine.h`:
 - C++17 feature/link checks, not an artificial GCC minimum. Cross tests compile
   but never execute on the host. Missing SDK fails closed. Source toolchain support,
   target linking and board runtime compatibility are separate acceptance layers.
+- **Every test target that uses `std::thread` must link `Threads::Threads` explicitly.**
+  The host toolchain (glibc 2.34+) merged pthread into libc, so a missing link
+  dependency is satisfied implicitly and the host build stays green. The RK3568
+  target is Debian 11 / glibc 2.31, where pthread is still a separate library, so
+  the same target fails at link time with `undefined reference to pthread_create`.
+  This is why the cross build is the first place a missing `Threads::Threads`
+  surfaces; `make native-cross-build` must be run before claiming a new test target
+  is portable. `ZhulongAlgoRunnerTests` had this gap and was therefore absent from
+  every historical board-side test run.
 
 ## 4. Validation & Error Matrix
 

@@ -110,3 +110,7 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
 5. **跨层停机顺序**（Go 侧，硬约束）：
    - `camera.Stop` → `algorithm.Stop` → `native.Close`。理由：AI 消费者与 StreamHub 先撤，runner 子进程再排空，最后才销毁 broker 宿主。
    - 该顺序由 `internal/app/runtime_test.go` 的 `TestAIShutdownOrderPrecedesNativeClose` 守护；改坏顺序会让测试失败，而不是静默产生 use-after-free。
+6. **共享内存预算（板端实测）**：
+   - 每路 AI 流一份 broker 共享内存：`DEFAULT_SLOT_COUNT=8` × `DEFAULT_SLOT_SIZE=4MB` = **32MB/路**，且槽位在 `start` 时**一次性分配**（发布侧节流不改变静态预算）。
+   - ⚠️ RK3568 实测 `/dev/shm` 总容量仅 **976MB**，因此默认参数下约 **30 路** AI 流即打满。若需提高路数上限，应通过 `BrokerOptions` 调小 `slot_count`（`frame_queue_` 只有 3 帧，8 槽位偏保守）。
+   - 预算核算请按**最坏情况**（`slot_count` 全部在途）而非稳态估算。

@@ -60,35 +60,53 @@ func TestValidateConsumer(t *testing.T) {
 
 func TestResolveTimeoutMs(t *testing.T) {
 	// 默认 5000ms
-	ms, err := resolveTimeoutMs(0, nil)
+	ms, err := resolveTimeoutMs(0, nil, false)
 	if err != nil || ms != 5000 {
 		t.Fatalf("expected default 5000ms, got %d (err: %v)", ms, err)
 	}
 
 	// 指定正数
-	ms, err = resolveTimeoutMs(3*time.Second, nil)
+	ms, err = resolveTimeoutMs(3*time.Second, nil, false)
 	if err != nil || ms != 3000 {
 		t.Fatalf("expected 3000ms, got %d", ms)
 	}
 
 	// 负数
-	_, err = resolveTimeoutMs(-1*time.Second, nil)
+	_, err = resolveTimeoutMs(-1*time.Second, nil, false)
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for negative duration, got %v", err)
 	}
 
 	// 超过 24h
-	_, err = resolveTimeoutMs(25*time.Hour, nil)
+	_, err = resolveTimeoutMs(25*time.Hour, nil, false)
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for >24h, got %v", err)
 	}
 
-	// Context Deadline 比设置更短
+	// clampToContext=true（同步阻塞调用）：Context Deadline 比设置更短时收敛
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	ms, err = resolveTimeoutMs(5*time.Second, ctx)
+	ms, err = resolveTimeoutMs(5*time.Second, ctx, true)
 	if err != nil || ms > 250 {
 		t.Fatalf("expected clamped timeout <= 250ms, got %d", ms)
+	}
+
+	// clampToContext=false（异步可取消调用）：超时必须保持原值，否则 native 自身超时会
+	// 先于 ctx deadline 到期，把取消语义变成调度时序竞态。
+	ms, err = resolveTimeoutMs(5*time.Second, ctx, false)
+	if err != nil || ms != 5000 {
+		t.Fatalf("expected unclamped 5000ms for async-cancellable call, got %d (err: %v)", ms, err)
+	}
+
+	// 两种模式下，已过期的 deadline 都必须立即报错
+	expired, cancelExpired := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancelExpired()
+	time.Sleep(time.Millisecond)
+	if _, err = resolveTimeoutMs(5*time.Second, expired, false); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded for expired ctx (unclamped), got %v", err)
+	}
+	if _, err = resolveTimeoutMs(5*time.Second, expired, true); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded for expired ctx (clamped), got %v", err)
 	}
 }
 

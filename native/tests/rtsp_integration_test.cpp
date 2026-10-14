@@ -19,10 +19,13 @@
  */
 
 #include "Zhulong/engine.h"
+#include "../src/algorithm/ipc/ipc_protocol.hpp"
+#include "../src/algorithm/ipc/unix_socket.hpp"
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <future>
 #include <iostream>
 #include <mutex>
@@ -497,6 +500,219 @@ void cancellation_cases(Zhulong_engine_h engine, const std::string &base) {
     }
 }
 
+/**
+ * @brief 连接到指定 AI 流的 FrameBroker，在窗口内统计帧派发数（逐帧 ACK）
+ *
+ * ⚠️ 必须逐帧 ACK：broker 的 max_in_flight_per_client=2，不 ACK 会在第 3 帧起触发
+ * 背压丢帧，测到的就不是发布侧节流率而是背压上限。
+ */
+struct BrokerProbe {
+    zhulong::ipc::UnixSocketClient client;
+    zhulong::ipc::HandshakeResp resp{};
+
+    bool attach(Zhulong_engine_h engine, Zhulong_stream_id stream, const char *name) {
+        char path_buf[256];
+        size_t path_len = sizeof(path_buf);
+        if (Zhulong_stream_get_broker_path(engine, stream, path_buf, &path_len) != Zhulong_OK) return false;
+        if (!client.connect(path_buf)) return false;
+
+        zhulong::ipc::HandshakeReq req{};
+        std::strncpy(req.client_name, name, sizeof(req.client_name) - 1);
+        if (!client.send_msg(zhulong::ipc::MSG_HANDSHAKE_REQ, &req, sizeof(req))) return false;
+
+        zhulong::ipc::IpcHeader hdr{};
+        std::vector<uint8_t> payload;
+        if (!client.recv_msg(hdr, payload, 2000)) return false;
+        if (payload.size() < sizeof(resp)) return false;
+        std::memcpy(&resp, payload.data(), sizeof(resp));
+        return true;
+    }
+
+    /** @brief 在给定窗口内统计并 ACK 所有 FRAME_DISPATCH，返回派发帧数 */
+    size_t count_over(std::chrono::milliseconds window) {
+        size_t dispatched = 0;
+        const auto deadline = Clock::now() + window;
+        while (Clock::now() < deadline) {
+            zhulong::ipc::IpcHeader fh{};
+            std::vector<uint8_t> fp;
+            if (!client.recv_msg(fh, fp, 100)) continue;
+            if (fh.msg_type != zhulong::ipc::MSG_FRAME_DISPATCH) continue;
+            if (fp.size() < sizeof(zhulong::ipc::FrameDispatchMsg)) continue;
+
+            zhulong::ipc::FrameDispatchMsg dispatch{};
+            std::memcpy(&dispatch, fp.data(), sizeof(dispatch));
+            zhulong::ipc::FrameAckMsg ack{};
+            ack.stream_id = dispatch.stream_id;
+            ack.frame_id = dispatch.frame_id;
+            ack.slot_index = dispatch.slot_index;
+            ack.generation = dispatch.generation;
+            ack.client_id = resp.client_id;
+            client.send_msg(zhulong::ipc::MSG_FRAME_ACK, &ack, sizeof(ack));
+            ++dispatched;
+        }
+        return dispatched;
+    }
+};
+
+/**
+ * @brief AC10 发布侧节流生效验证（真实 loopback RTSP 解码通路）
+ *
+ * 测试桩以 25fps 推流，逐段测量 broker 实际派发帧数：
+ *   1. 不节流（rate=0）基线 —— 证明解码通路确实在出帧（AC2 前提）；
+ *   2. rate=5  —— 派发率必须显著低于基线；
+ *   3. rate=25 —— 派发率必须随之回升。
+ * 全程持续出帧即证明发布后帧引用被立即释放（若被持有，解码池会枯竭导致派发停滞）。
+ */
+void ai_publish_throttle_case(Zhulong_engine_h engine, const std::string &base) {
+    // 前序 cancellation_cases 结束时引擎处于 stopped 状态，必须重新 start
+    CHECK(Zhulong_engine_start(engine) == Zhulong_OK);
+
+    const auto url = base + "/ai-throttle";
+    Zhulong_stream_id stream = 0;
+    CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 1, Zhulong_CONSUMER_AI, &stream) == Zhulong_OK);
+
+    wait_until([&] {
+        Zhulong_stream_status status{};
+        CHECK(Zhulong_stream_get_status(engine, stream, &status) == Zhulong_OK);
+        CHECK(status.state != Zhulong_STREAM_FAILED);
+        return status.state == Zhulong_STREAM_RUNNING;
+    });
+    std::this_thread::sleep_for(500ms); // 等待解码器预热并产出首批帧
+
+    BrokerProbe probe;
+    CHECK(probe.attach(engine, stream, "throttle_probe"));
+
+    // 阶段 1：不节流基线（rate=0 表示按解码原帧率发布）
+    CHECK(Zhulong_stream_set_publish_rate(engine, stream, 0) == Zhulong_OK);
+    std::this_thread::sleep_for(200ms);
+    const size_t baseline = probe.count_over(1500ms);
+
+    // 阶段 2：节流到 5fps
+    CHECK(Zhulong_stream_set_publish_rate(engine, stream, 5) == Zhulong_OK);
+    std::this_thread::sleep_for(400ms); // 让节流基准点稳定
+    const size_t slow = probe.count_over(3000ms);
+
+    // 阶段 3：放宽到 25fps
+    CHECK(Zhulong_stream_set_publish_rate(engine, stream, 25) == Zhulong_OK);
+    std::this_thread::sleep_for(400ms);
+    const size_t fast = probe.count_over(3000ms);
+
+    std::cout << "  throttle counts: baseline(1.5s)=" << baseline
+              << " slow(3s,5fps)=" << slow << " fast(3s,25fps)=" << fast << '\n';
+
+    // AC2 前提：解码通路真的在出帧（未节流时 1.5s 至少 10 帧）
+    CHECK(baseline >= 10);
+
+    // AC10：5fps 下 3s 派发量必须远低于 25fps 的 75 帧
+    CHECK(slow <= 25);
+
+    // AC10：放宽速率后派发量必须显著回升（响应式，不是固定值）
+    CHECK(fast >= 2 * slow);
+    CHECK(fast >= 40);
+
+    // AC2：全程持续出帧且流未故障 —— 若发布后帧引用被持有，解码池会枯竭而停滞
+    Zhulong_stream_status final_status{};
+    CHECK(Zhulong_stream_get_status(engine, stream, &final_status) == Zhulong_OK);
+    CHECK(final_status.state == Zhulong_STREAM_RUNNING);
+
+    probe.client.disconnect();
+    CHECK(Zhulong_stream_release(engine, stream, 1) == Zhulong_OK);
+    CHECK(Zhulong_engine_stop(engine) == Zhulong_OK);
+}
+
+/**
+ * @brief AC6 慢算法包隔离（真实 RTSP 链路）
+ *
+ * 同一路流上同时挂：一个从不 ACK 的慢包、一个逐帧 ACK 的健康包，并订阅 PREVIEW 回调。
+ * 断言三件事同时成立：
+ *   1. 慢包被显著丢帧（Drop Latest 生效）；
+ *   2. 健康包持续收帧（其他包不受拖累）；
+ *   3. PREVIEW 包数持续增长且流保持 RUNNING（采集/解码未被阻塞）。
+ */
+void ai_slow_consumer_isolation_case(Zhulong_engine_h engine, const std::string &base) {
+    CHECK(Zhulong_engine_start(engine) == Zhulong_OK);
+
+    const auto url = base + "/ai-slow";
+    Zhulong_stream_id ai_stream = 0, preview_stream = 0;
+    CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 1, Zhulong_CONSUMER_AI, &ai_stream) == Zhulong_OK);
+    CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 2, Zhulong_CONSUMER_PREVIEW, &preview_stream) == Zhulong_OK);
+    CHECK(ai_stream == preview_stream);
+
+    // PREVIEW 订阅：作为「采集/解码链路仍在推进」的独立观测面
+    CallbackState state;
+    state.engine = engine;
+    Zhulong_subscription_id subscription = 0;
+    CHECK(Zhulong_stream_subscribe(engine, preview_stream, 2, callback, reinterpret_cast<uintptr_t>(&state), &subscription) == Zhulong_OK);
+
+    wait_until([&] {
+        Zhulong_stream_status status{};
+        CHECK(Zhulong_stream_get_status(engine, ai_stream, &status) == Zhulong_OK);
+        return status.state == Zhulong_STREAM_RUNNING;
+    });
+    std::this_thread::sleep_for(500ms);
+
+    const int packets_before = state.count.load();
+    CHECK(packets_before > 0);
+
+    char path_buf[256];
+    size_t path_len = sizeof(path_buf);
+    CHECK(Zhulong_stream_get_broker_path(engine, ai_stream, path_buf, &path_len) == Zhulong_OK);
+
+    // 慢包：连上后从不 ACK
+    zhulong::ipc::UnixSocketClient slow;
+    CHECK(slow.connect(path_buf));
+    zhulong::ipc::HandshakeReq slow_req{};
+    std::strncpy(slow_req.client_name, "slow_pkg", sizeof(slow_req.client_name) - 1);
+    CHECK(slow.send_msg(zhulong::ipc::MSG_HANDSHAKE_REQ, &slow_req, sizeof(slow_req)));
+    zhulong::ipc::IpcHeader slow_hdr{};
+    std::vector<uint8_t> slow_payload;
+    CHECK(slow.recv_msg(slow_hdr, slow_payload, 2000));
+
+    // 健康包：逐帧 ACK
+    BrokerProbe healthy;
+    CHECK(healthy.attach(engine, ai_stream, "healthy_pkg"));
+
+    // 慢包在后台持续读走 socket 缓冲但从不 ACK，统计它实际被派发了多少帧
+    std::atomic<size_t> slow_received{0};
+    std::atomic<bool> slow_stop{false};
+    std::thread slow_reader([&] {
+        while (!slow_stop.load()) {
+            zhulong::ipc::IpcHeader fh{};
+            std::vector<uint8_t> fp;
+            if (!slow.recv_msg(fh, fp, 100)) continue;
+            if (fh.msg_type == zhulong::ipc::MSG_FRAME_DISPATCH) slow_received.fetch_add(1);
+        }
+    });
+
+    const size_t healthy_received = healthy.count_over(2500ms);
+    slow_stop.store(true);
+    slow_reader.join();
+
+    const int packets_after = state.count.load();
+
+    std::cout << "  slow-consumer isolation: slow=" << slow_received.load()
+              << " healthy=" << healthy_received
+              << " preview_packets=" << (packets_after - packets_before) << '\n';
+
+    // 1. Drop Latest 生效：慢包被显著丢帧
+    CHECK(slow_received.load() * 2 < healthy_received);
+    // 2. 其他包不受拖累
+    CHECK(healthy_received >= 20);
+    // 3. 采集/解码未被阻塞：PREVIEW 包持续增长
+    CHECK(packets_after > packets_before + 20);
+
+    Zhulong_stream_status status{};
+    CHECK(Zhulong_stream_get_status(engine, ai_stream, &status) == Zhulong_OK);
+    CHECK(status.state == Zhulong_STREAM_RUNNING);
+
+    slow.disconnect();
+    healthy.client.disconnect();
+    CHECK(Zhulong_stream_unsubscribe(engine, preview_stream, subscription) == Zhulong_OK);
+    CHECK(Zhulong_stream_release(engine, preview_stream, 2) == Zhulong_OK);
+    CHECK(Zhulong_stream_release(engine, ai_stream, 1) == Zhulong_OK);
+    CHECK(Zhulong_engine_stop(engine) == Zhulong_OK);
+}
+
 int main(int argc, char **argv) {
     try {
         CHECK(argc == 2);
@@ -512,8 +728,10 @@ int main(int argc, char **argv) {
         drain_case(owner.engine, base, false);
         drain_case(owner.engine, base, true);
         cancellation_cases(owner.engine, base);
+        ai_publish_throttle_case(owner.engine, base);
+        ai_slow_consumer_isolation_case(owner.engine, base);
 
-        std::cout << "probe, pool, packet clock, callback drain, cancellation and stress passed\n";
+        std::cout << "probe, pool, packet clock, callback drain, cancellation, throttle and stress passed\n";
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';
         return 1;

@@ -12,6 +12,7 @@
 #include <thread>
 #include <chrono>
 #include <cstring>
+#include <csignal>
 #include <atomic>
 
 using namespace zhulong;
@@ -682,6 +683,236 @@ void test_send_failure_rollback() {
     std::cout << "[PASS] test_send_failure_rollback" << std::endl;
 }
 
+// =============================================================================
+// Test 11: AC4 多路 Broker 的独立 lease/ACK 与非对称隔离
+//   两路 broker 各接一个客户端：一路从不 ACK（在途打满后被丢帧），另一路正常 ACK。
+//   断言两路的 delivered/dropped/in_flight 计数互不影响——
+//   即“一路先耗尽”不会拖垮另一路的投递与租约。
+// =============================================================================
+void test_multi_broker_asymmetric_isolation() {
+    const uint64_t stream_stalled = 3001;
+    const uint64_t stream_healthy = 3002;
+
+    BrokerOptions opt;
+    // ⚠️ 槽位必须 ≥ 帧数：否则第 3 帧会因**槽位耗尽**而非客户端背压返回 false，
+    // 测不出“卡死路在途打满后平滑丢帧、健康路不受影响”这一语义。
+    opt.slot_count = 6;
+    opt.slot_size = 1024 * 1024;
+    opt.max_in_flight_per_client = 2;
+    // 长租约：确保两路计数差异只可能来自背压，而非超时驱逐
+    opt.lease_timeout = std::chrono::milliseconds(10000);
+
+    FrameBroker stalled_broker, healthy_broker;
+    assert(stalled_broker.start(stream_stalled, "/tmp", opt));
+    assert(healthy_broker.start(stream_healthy, "/tmp", opt));
+
+    IpcHeader hdr{};
+    std::vector<uint8_t> payload;
+
+    // 客户端 A：连上后从不 ACK
+    UnixSocketClient stalled_client;
+    assert(stalled_client.connect(stalled_broker.socket_path()));
+    HandshakeReq stalled_req{};
+    std::strncpy(stalled_req.client_name, "stalled", sizeof(stalled_req.client_name) - 1);
+    stalled_client.send_msg(MSG_HANDSHAKE_REQ, &stalled_req, sizeof(stalled_req));
+    HandshakeResp stalled_resp{};
+    assert(stalled_client.recv_msg(hdr, payload, 1000));
+    std::memcpy(&stalled_resp, payload.data(), sizeof(stalled_resp));
+
+    // 客户端 B：每帧立即 ACK
+    UnixSocketClient healthy_client;
+    assert(healthy_client.connect(healthy_broker.socket_path()));
+    HandshakeReq healthy_req{};
+    std::strncpy(healthy_req.client_name, "healthy", sizeof(healthy_req.client_name) - 1);
+    healthy_client.send_msg(MSG_HANDSHAKE_REQ, &healthy_req, sizeof(healthy_req));
+    HandshakeResp healthy_resp{};
+    assert(healthy_client.recv_msg(hdr, payload, 1000));
+    std::memcpy(&healthy_resp, payload.data(), sizeof(healthy_resp));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    assert(stalled_broker.client_count() == 1);
+    assert(healthy_broker.client_count() == 1);
+
+    std::vector<uint8_t> dummy(640 * 480 * 3, 0);
+    HardwareFrame frame;
+    frame.width = 640;
+    frame.height = 480;
+    frame.stride = 640 * 3;
+    frame.format = FRAME_FORMAT_UNKNOWN;
+    frame.host_ptr = dummy.data();
+
+    const int frames = 5;
+    for (int i = 0; i < frames; ++i) {
+        // 两路各自推送，槽位与客户端集合完全独立
+        frame.pts = 5000 + i;
+        assert(stalled_broker.publish_frame(frame));
+        assert(healthy_broker.publish_frame(frame));
+
+        // 健康客户端收到即 ACK，保持在途为 0
+        IpcHeader fh{};
+        std::vector<uint8_t> fp;
+        if (healthy_client.recv_msg(fh, fp, 500)) {
+            FrameDispatchMsg dispatch{};
+            std::memcpy(&dispatch, fp.data(), sizeof(dispatch));
+            FrameAckMsg ack{};
+            ack.stream_id = stream_healthy;
+            ack.frame_id = dispatch.frame_id;
+            ack.slot_index = dispatch.slot_index;
+            ack.generation = dispatch.generation;
+            ack.client_id = healthy_resp.client_id;
+            healthy_client.send_msg(MSG_FRAME_ACK, &ack, sizeof(ack));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    ClientInfo stalled_info{}, healthy_info{};
+    assert(stalled_broker.get_client_info(stalled_resp.client_id, stalled_info));
+    assert(healthy_broker.get_client_info(healthy_resp.client_id, healthy_info));
+
+    // 健康路：全部交付、零丢帧，不受另一路耗尽影响
+    assert(healthy_info.delivered_frames == static_cast<uint64_t>(frames));
+    assert(healthy_info.dropped_frames == 0);
+
+    // 卡死路：在途打满（=2）后剩余帧全部丢弃。
+    // 卡死客户端从不 ACK，其 2 个槽位在长租约下持续 LEASED，
+    // 后续帧改投新槽位——槽位充足，因此 publish 仍返回 true，但该客户端被计入 dropped。
+    assert(stalled_info.delivered_frames == 2);
+    assert(stalled_info.dropped_frames == static_cast<uint64_t>(frames - 2));
+
+    // 两路的租约与客户端计数互不串扰
+    assert(stalled_info.in_flight_count == 2);
+    assert(healthy_info.in_flight_count == 0);
+    assert(stalled_broker.client_count() == 1);
+    assert(healthy_broker.client_count() == 1);
+
+    stalled_client.disconnect();
+    healthy_client.disconnect();
+    stalled_broker.stop();
+    healthy_broker.stop();
+    std::cout << "[PASS] test_multi_broker_asymmetric_isolation" << std::endl;
+}
+
+// =============================================================================
+// Test 12: AC7 宿主崩溃后用同一 stream_id 重启
+//   子进程创建 broker 并映射共享内存后不清理即被 SIGKILL（模拟宿主崩溃）。
+//   父进程随后以同一 stream_id 重新 start：必须成功，且槽位与租约是干净的。
+// =============================================================================
+void test_broker_host_crash_then_restart() {
+    const uint64_t stream_id = 3003;
+    const std::string base_dir = "/tmp";
+
+    int ready_pipe[2];
+    assert(pipe(ready_pipe) == 0);
+
+    pid_t pid = fork();
+    assert(pid >= 0);
+
+    if (pid == 0) {
+        // 子进程：创建 broker、接入客户端、推入帧，然后阻塞等待被杀死
+        close(ready_pipe[0]);
+
+        FrameBroker broker;
+        BrokerOptions opt;
+        opt.slot_count = 2;
+        opt.slot_size = 1024 * 1024;
+        opt.max_in_flight_per_client = 2;
+        opt.lease_timeout = std::chrono::milliseconds(10000);
+        if (!broker.start(stream_id, base_dir, opt)) _exit(10);
+
+        UnixSocketClient client;
+        if (!client.connect(broker.socket_path())) _exit(11);
+        HandshakeReq req{};
+        std::strncpy(req.client_name, "crash_host", sizeof(req.client_name) - 1);
+        if (!client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req))) _exit(12);
+        IpcHeader hdr{};
+        std::vector<uint8_t> payload;
+        if (!client.recv_msg(hdr, payload, 1000)) _exit(13);
+
+        std::vector<uint8_t> dummy(640 * 480 * 3, 0);
+        HardwareFrame frame;
+        frame.width = 640;
+        frame.height = 480;
+        frame.stride = 640 * 3;
+        frame.format = FRAME_FORMAT_UNKNOWN;
+        frame.host_ptr = dummy.data();
+        frame.pts = 1;
+        if (!broker.publish_frame(frame)) _exit(14);
+
+        const char ready = 'R';
+        if (write(ready_pipe[1], &ready, 1) != 1) _exit(15);
+        close(ready_pipe[1]);
+
+        // 刻意不调用 broker.stop()：模拟宿主被强制杀死，shm 与 socket 残留
+        for (;;) pause();
+    }
+
+    // 父进程：等子进程就绪后 SIGKILL，不做任何清理
+    close(ready_pipe[1]);
+    char ready = 0;
+    assert(read(ready_pipe[0], &ready, 1) == 1);
+    assert(ready == 'R');
+    close(ready_pipe[0]);
+
+    assert(kill(pid, SIGKILL) == 0);
+    int status = 0;
+    assert(waitpid(pid, &status, 0) == pid);
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL);
+
+    const std::string expected_socket =
+        base_dir + "/zhulong_broker_" + std::to_string(stream_id) + ".sock";
+    // 崩溃残留证据：socket 文件未被 unlink
+    assert(access(expected_socket.c_str(), F_OK) == 0);
+
+    // 以同一 stream_id 重新 start：预防性 unlink 必须清掉残留并成功重建
+    FrameBroker revived;
+    BrokerOptions opt;
+    opt.slot_count = 2;
+    opt.slot_size = 1024 * 1024;
+    opt.max_in_flight_per_client = 2;
+    std::string err;
+    assert(revived.start(stream_id, base_dir, opt, &err));
+    assert(revived.socket_path() == expected_socket);
+
+    std::vector<uint8_t> dummy(640 * 480 * 3, 0);
+    HardwareFrame frame;
+    frame.width = 640;
+    frame.height = 480;
+    frame.stride = 640 * 3;
+    frame.format = FRAME_FORMAT_UNKNOWN;
+    frame.host_ptr = dummy.data();
+
+    // 崩溃客户端的租约不得残留：无客户端时两次 publish 都应成功
+    frame.pts = 100;
+    assert(revived.publish_frame(frame));
+    frame.pts = 101;
+    assert(revived.publish_frame(frame));
+
+    // 新客户端接入后仍能正常投递，证明槽位与租约状态是干净的
+    UnixSocketClient fresh_client;
+    assert(fresh_client.connect(revived.socket_path()));
+    HandshakeReq fresh_req{};
+    std::strncpy(fresh_req.client_name, "fresh", sizeof(fresh_req.client_name) - 1);
+    fresh_client.send_msg(MSG_HANDSHAKE_REQ, &fresh_req, sizeof(fresh_req));
+    IpcHeader fh{};
+    std::vector<uint8_t> fp;
+    assert(fresh_client.recv_msg(fh, fp, 1000));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    frame.pts = 102;
+    assert(revived.publish_frame(frame));
+    assert(fresh_client.recv_msg(fh, fp, 1000));
+    assert(fh.msg_type == MSG_FRAME_DISPATCH);
+
+    fresh_client.disconnect();
+    revived.stop();
+
+    // 正常 stop 后 socket 文件必须被清理
+    assert(access(expected_socket.c_str(), F_OK) != 0);
+    std::cout << "[PASS] test_broker_host_crash_then_restart" << std::endl;
+}
+
 void test_runner_multi_broker_e2e(const char* runner_bin, const char* plugin_so) {
     if (!runner_bin || !plugin_so) return;
 
@@ -778,6 +1009,8 @@ int main(int argc, char* argv[]) {
     test_multi_planar_yuv420p_copy();
     test_protocol_alignment_assertions();
     test_send_failure_rollback();
+    test_multi_broker_asymmetric_isolation();
+    test_broker_host_crash_then_restart();
     if (runner_bin && plugin_so) {
         test_runner_subprocess_e2e(runner_bin, plugin_so);
         test_runner_multi_broker_e2e(runner_bin, plugin_so);

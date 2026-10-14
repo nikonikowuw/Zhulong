@@ -56,8 +56,18 @@ const (
 	maxAllowedTimeout = 24 * time.Hour
 )
 
-// resolveTimeoutMs 计算毫秒超时值，结合 context deadline 进行收敛。
-func resolveTimeoutMs(d time.Duration, ctx context.Context) (uint32, error) {
+// resolveTimeoutMs 计算毫秒超时值。
+//
+// clampToContext 为 true 时，若 ctx 带有更早的 Deadline，则把超时收敛到该 Deadline
+// （至少 1ms）。这适用于**同步、不可异步取消**的调用（如 Acquire 的阻塞式 CGO 调用），
+// 避免底层阻塞超出调用方给定的 ctx 预算。
+//
+// ⚠️ **异步可取消的调用（如 Probe，已 select ctx.Done()）必须传 false**：
+// 若对其做收敛，毫秒截断会让 native 自身的超时**先于** ctx deadline 到期
+// （例：剩余 199.7ms 被截断为 199ms），此时 ctx.Err() 仍为 nil，调用返回的是
+// 引擎的 TIMEOUT 而非 context.DeadlineExceeded —— 取消语义退化为调度时序竞态。
+// 不收敛时 ctx 取消是唯一权威，native 超时只作为兜底。
+func resolveTimeoutMs(d time.Duration, ctx context.Context, clampToContext bool) (uint32, error) {
 	if d < 0 {
 		return 0, fmt.Errorf("%w: timeout cannot be negative", ErrInvalidArgument)
 	}
@@ -73,22 +83,28 @@ func resolveTimeoutMs(d time.Duration, ctx context.Context) (uint32, error) {
 		}
 	}
 
-	// 若 context 存在更早的 Deadline，收敛超时时间，避免超时时间过长
-	if ctx != nil {
-		if deadline, ok := ctx.Deadline(); ok {
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
-				return 0, context.DeadlineExceeded
-			}
-			remMs := uint32(remaining.Milliseconds())
-			if remMs == 0 {
-				remMs = 1 // 保证至少为 1ms，不能为 0（0 会回退到底层默认 5000ms）
-			}
-			if remMs < timeoutMs {
-				timeoutMs = remMs
-			}
-		}
+	if ctx == nil {
+		return timeoutMs, nil
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return timeoutMs, nil
 	}
 
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0, context.DeadlineExceeded
+	}
+	if !clampToContext {
+		return timeoutMs, nil
+	}
+
+	remMs := uint32(remaining.Milliseconds())
+	if remMs == 0 {
+		remMs = 1 // 保证至少为 1ms，不能为 0（0 会回退到底层默认 5000ms）
+	}
+	if remMs < timeoutMs {
+		timeoutMs = remMs
+	}
 	return timeoutMs, nil
 }

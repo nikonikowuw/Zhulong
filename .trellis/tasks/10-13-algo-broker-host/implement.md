@@ -209,18 +209,57 @@ make check
 
 ## 5. 验收状态（实施后核对）
 
-| AC | 状态 | 证据 / 缺口 |
+### 5.1 AC 核对表（2026-10-14 补齐后）
+
+| AC | 状态 | 证据 |
 | --- | --- | --- |
 | AC1 broker 随 acquire/release 创建销毁 | ✅ | `Engine::acquire`/`release` 的 broker 池；`make native-test` 全绿 |
-| AC2 真实 loopback RTSP 帧进槽位 | ⚠️ **部分** | 多 broker e2e（`test_runner_multi_broker_e2e`）覆盖到 `FRAME_DISPATCH`；**发布后解码池未耗尽**无专门断言 |
+| AC2 真实 loopback RTSP 帧进槽位 | ✅ | `ai_publish_throttle_case`：不节流时 1.5s 派发 40 帧（~26.7fps），全程流保持 RUNNING——若发布后帧引用被持有，解码池会枯竭而停滞。**本机 + RK3568 板端均通过** |
 | AC3 C ABI 路径查询 | ✅ | `Zhulong_stream_get_broker_path` + `TestBridgeIntegration_AIConsumerAndBrokerPath`；C 编译测试覆盖参数边界 |
-| AC4 2 路独立投递/lease/ACK | ⚠️ **部分** | `test_runner_multi_broker_e2e` 两路各推 2 帧；**非对称场景**（一路先耗尽）未覆盖 |
+| AC4 2 路独立投递/lease/ACK | ✅ | `test_multi_broker_asymmetric_isolation`：卡死路 delivered=2/dropped=3/in_flight=2，健康路 delivered=5/dropped=0/in_flight=0，两路客户端计数互不串扰。**本机 + 板端均通过** |
 | AC5 AI 消费接入 + `DecodeSession` 按需拉起 | ✅ | `ResolveAIStreamBrokerPath` + `TestStreamHub*`；`ConsumerAI` 不再零调用 |
-| AC6 慢包 Drop Latest 不阻塞采集 | ⚠️ **未验证** | 无断言；`max_frames` 语义在多路下是 per-connection，需补非对称测试 |
-| AC7 崩溃后 lease 回收/槽位回 FREE | ⚠️ **未验证** | 既有 `frame_broker_test` 有单路覆盖；宿主崩溃后重启的完整链路无断言 |
-| AC8 端到端 RTSP→…→`process` | ⚠️ **部分** | 组件级 e2e 已有；**真实 RTSP 全链路**未在本任务执行 |
-| AC9 变更面闭环（增/删/改） | ⚠️ **部分** | 增/删/改编排层已测（含 debounce）；**真实 RTSP 下 runner 实际重启为 2 个 `--broker`** 未实测 |
-| AC10 节流生效（含跨包 max） | ⚠️ **部分** | 跨包 max 已测（`TestPublishRateUsesCrossPackageMax`）；**`publish_frame` 实际调用率**未统计 |
-| AC11 崩溃重启不自杀 | ⚠️ **部分** | `w.brokerSocks` 固化已实现；native 层多 broker 已测；**Go 层 `kill -9` → 自动重启带完整列表**未测 |
+| AC6 慢包 Drop Latest 不阻塞采集 | ✅ | `ai_slow_consumer_isolation_case`：慢包 2 帧 / 健康包 63 帧 / PREVIEW 包增量 64，流保持 RUNNING。**本机 + 板端均通过** |
+| AC7 崩溃后 lease 回收/槽位回 FREE | ✅ | `test_broker_host_crash_then_restart`：子进程建 broker+客户端后被 SIGKILL，残留 socket 存在 → 同 stream_id 重新 `start` 成功、无残留租约、新客户端正常收帧、`stop` 后 socket 被清理。**本机 + 板端均通过** |
+| AC8 端到端 RTSP→…→`process` | ✅ | 板端真机 `ZhulongFrameBrokerTests` 14/14（含 `test_runner_subprocess_e2e` 真子进程收帧推理）+ 板端 Go-CGO 桥接 6/6 + `make check` exit 0 |
+| AC9 变更面闭环（增/删/改） | ✅ | `TestServiceTaskChangeRestartsPackageWithNewBrokerSet`：真实 runner 实际收到 `--broker` 数量随任务增删变化（1 → 2 → 1）。**含反向验证** |
+| AC10 节流生效（含跨包 max） | ✅ | `ai_publish_throttle_case` 实测：基线 26.7fps → `rate=5` 时 **5.7fps** → `rate=25` 时 **26fps**（本机与板端数据一致）。跨包 max 由 `TestPublishRateUsesCrossPackageMax` 覆盖 |
+| AC11 崩溃重启不自杀 | ✅ | `TestSupervisorCrashRestartKeepsBrokerList`：`kill -9` runner → 自动重启仍带完整 2 个 `--broker`，未进入 CRASH_LOOP。**含反向验证** |
 
-⚠️ **未达成的 AC 不得当作已通过**（`implement.md` §3 的既定要求）。AC2/AC6/AC7/AC8/AC10/AC11 的真实链路验证依赖 loopback RTSP 或板端环境，需在收工前补齐或显式拆为后续任务。
+### 5.2 关键实测数据
+
+```txt
+# AC10 发布侧节流（本机与 RK3568 一致）
+throttle counts: baseline(1.5s)=40  slow(3s,5fps)=17  fast(3s,25fps)=78
+                 → ~26.7fps         → ~5.7fps          → ~26fps
+
+# AC6 慢包隔离
+slow-consumer isolation: slow=2  healthy=63  preview_packets=64
+
+# 板端产物
+ZhulongFrameBrokerTests 14/14 PASS（含 test_runner_subprocess_e2e / multi_broker / crash_restart）
+ZhulongRtspTests           PASS（含 throttle / slow-consumer 新增用例）
+engine.test Go-CGO 桥接   6/6 PASS
+```
+
+### 5.3 顺带修复的既有缺陷（均为阻塞 AC 验证的前置）
+
+| # | 缺陷 | 根因 | 修复 |
+| --- | --- | --- | --- |
+| 1 | `make native-cross-build` 失败（`undefined reference to pthread_create`） | `ZhulongAlgoRunnerTests` 的 `target_link_libraries` 缺 `Threads::Threads`。Host 上 glibc 2.34+ 已把 pthread 并入 libc 所以隐式通过；交叉到 Debian 11（glibc 2.31）pthread 是独立库即炸。这解释了为何历史板端测试清单从不包含该目标 | `native/CMakeLists.txt` 补 `Threads::Threads`（一行） |
+| 2 | `TestSupervisorRestartPreservesActiveStatus` 偶发失败（原始树复现率 1/8） | runner 用裸 `"sleep"`，无参数时立即 `exit 1`，supervisor 随即判定崩溃，与 `StatusRunning` 断言竞态 | 改用既有的 `writeIdleRunner` helper（常驻且响应 TERM/INT）；改后 10/10 稳定 |
+| 3 | `TestBridgeIntegration_Probe` 偶发失败（高负载下 4/15） | `validation.go` 把 ctx deadline **毫秒截断**后传给 native（199.7ms → 199ms），使 native 自身超时**先于** ctx deadline 到期，此时 `ctx.Err()` 仍为 nil → 返回引擎 `TIMEOUT` 而非 `context.DeadlineExceeded`。取消语义退化为调度时序竞态 | `resolveTimeoutMs` 增加 `clampToContext` 参数：**异步可取消**的 `Probe` 传 `false`（ctx 取消是唯一权威，native 超时仅兜底），**同步阻塞**的 `Acquire` 传 `true`（必须收敛，否则底层阻塞超出 ctx 预算）。高负载下 4/15 → **0/15** |
+
+### 5.4 反向验证（证明断言非空）
+
+| 断言 | 反向操作 | 结果 |
+| --- | --- | --- |
+| AC11 崩溃重启带完整 broker 列表 | 把 `superviseLoop` 的 `BrokerSocks: w.brokerSocks` 改为 `nil` | `restart broker flags = [], want [2 socks]` → FAIL |
+| AC9 重启后 broker 数量变化 | 把 `resolveBrokerSocksLocked` 结果置空 | `first start broker flags = [], want 1 sock for camera1` → FAIL |
+| AC8 取消语义 | `Probe` 的 `clampToContext` 改回 `true` | 高负载下 4/15 失败（恢复为原竞态） |
+
+### 5.5 残余风险
+
+- ⚠️ **共享内存预算未调优**：默认 8 槽位 × 4MB = **32MB/路**。板端实测 `/dev/shm` 总容量仅 **976MB**，因此最多约 30 路 AI 流。`frame_queue_` 只有 3 帧，8 槽位偏保守；若需扩容应通过 `BrokerOptions` 调小 `slot_count`。本任务按默认值交付，未改动。
+- ⚠️ **多路 task 的每 worker 资源开销未实测**：design §8.2 定案「一路一 worker」，板端只验到 2 路。路数进一步增长时的线程与执行上下文开销未量化。
+- ⚠️ **`engine.h` 无 ABI 版本协商**：本任务两个新函数只能追加式扩展，无法依赖容量协商（既有状况）。
+- ⚠️ **端到端依赖真实 RTSP 源**：本任务的「端到端」用的是 loopback 测试桩（真实 socket 交互、真实 FFmpeg 解码），**不是**真实 IP 摄像机。真实摄像机/ONVIF 接入仍未验证。

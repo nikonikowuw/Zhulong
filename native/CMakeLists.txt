@@ -250,7 +250,7 @@ if(BUILD_TESTING)
     add_executable(ZhulongAlgoRunnerTests tests/algo_runner_test.cpp)
     target_compile_features(ZhulongAlgoRunnerTests PRIVATE cxx_std_17)
     target_include_directories(ZhulongAlgoRunnerTests PRIVATE sdk/include)
-    target_link_libraries(ZhulongAlgoRunnerTests PRIVATE ${CMAKE_DL_LIBS})
+    target_link_libraries(ZhulongAlgoRunnerTests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
     add_test(NAME ZhulongAlgoRunner COMMAND ZhulongAlgoRunnerTests $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier>)
     set_tests_properties(ZhulongAlgoRunner PROPERTIES TIMEOUT 10)
 
