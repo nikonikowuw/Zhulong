@@ -36,7 +36,7 @@ web/
       _authenticated/                 # 鉴权路由组 (挂载 AuthenticatedLayout 框架)
         route.tsx                     # 鉴权布局注入点
         index.tsx                     # 控制台仪表盘首页 (/)
-        <feature>/                    # 业务路由入口 (如 tasks/index.tsx, users/index.tsx)
+        <feature>/                    # 业务路由入口 (如 cameras/index.tsx, persons/index.tsx, live/index.tsx, audit/index.tsx)
       (auth)/                         # 认证独立路由组 (sign-in.tsx, sign-up.tsx, otp.tsx 等)
       (errors)/                       # 错误页面路由组 (401.tsx, 404.tsx, 500.tsx 等)
     stores/                           # Zustand 客户端状态 (auth-store.ts 等)
