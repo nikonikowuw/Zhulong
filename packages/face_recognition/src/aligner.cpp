@@ -1,4 +1,5 @@
 #include "aligner.hpp"
+#include <algorithm>
 #include <cmath>
 
 namespace zhulong::face {
@@ -78,6 +79,94 @@ bool Aligner::estimate_similarity_transform(
 
     out_mat = {a, b, tx, c, d, ty};
     return true;
+}
+
+std::vector<uint8_t> Aligner::crop_and_align(
+    const zhulong::Image& image,
+    const std::array<float, 6>& affine_mat,
+    int dst_w,
+    int dst_h
+) {
+    if (dst_w <= 0 || dst_h <= 0) {
+        return {};
+    }
+
+    std::vector<uint8_t> dst_patch(static_cast<size_t>(dst_w) * dst_h * 3, 0);
+
+    const auto& raw = image.raw_view();
+    if (raw.planes[0] == nullptr || raw.width <= 0 || raw.height <= 0) {
+        return dst_patch;
+    }
+
+    const uint8_t* src_data = raw.planes[0];
+    const int src_w = raw.width;
+    const int src_h = raw.height;
+    const int src_stride = raw.strides[0] > 0 ? raw.strides[0] : src_w * 3;
+
+    // 求解 2x3 相似变换的逆矩阵
+    // M = [m0 m1 m2; m3 m4 m5]
+    // det = m0*m4 - m1*m3
+    const float m0 = affine_mat[0];
+    const float m1 = affine_mat[1];
+    const float m2 = affine_mat[2];
+    const float m3 = affine_mat[3];
+    const float m4 = affine_mat[4];
+    const float m5 = affine_mat[5];
+
+    const float det = m0 * m4 - m1 * m3;
+    if (std::abs(det) < 1e-7f) {
+        return dst_patch;
+    }
+
+    const float inv_det = 1.0f / det;
+    const float im0 = m4 * inv_det;
+    const float im1 = -m1 * inv_det;
+    const float im3 = -m3 * inv_det;
+    const float im4 = m0 * inv_det;
+
+    for (int dy = 0; dy < dst_h; ++dy) {
+        uint8_t* dst_row = dst_patch.data() + static_cast<size_t>(dy) * dst_w * 3;
+        for (int dx = 0; dx < dst_w; ++dx) {
+            float ox = static_cast<float>(dx) - m2;
+            float oy = static_cast<float>(dy) - m5;
+
+            float sx = im0 * ox + im1 * oy;
+            float sy = im3 * ox + im4 * oy;
+
+            if (sx >= 0.0f && sx < static_cast<float>(src_w - 1) &&
+                sy >= 0.0f && sy < static_cast<float>(src_h - 1)) {
+                int x0 = static_cast<int>(sx);
+                int y0 = static_cast<int>(sy);
+                int x1 = x0 + 1;
+                int y1 = y0 + 1;
+
+                float wx = sx - static_cast<float>(x0);
+                float wy = sy - static_cast<float>(y0);
+
+                const uint8_t* p00 = src_data + static_cast<size_t>(y0) * src_stride + x0 * 3;
+                const uint8_t* p10 = src_data + static_cast<size_t>(y0) * src_stride + x1 * 3;
+                const uint8_t* p01 = src_data + static_cast<size_t>(y1) * src_stride + x0 * 3;
+                const uint8_t* p11 = src_data + static_cast<size_t>(y1) * src_stride + x1 * 3;
+
+                for (int c = 0; c < 3; ++c) {
+                    float v = (1.0f - wx) * (1.0f - wy) * p00[c] +
+                              wx * (1.0f - wy) * p10[c] +
+                              (1.0f - wx) * wy * p01[c] +
+                              wx * wy * p11[c];
+                    dst_row[dx * 3 + c] = static_cast<uint8_t>(std::clamp(v, 0.0f, 255.0f));
+                }
+            } else {
+                int cx = std::clamp(static_cast<int>(sx), 0, src_w - 1);
+                int cy = std::clamp(static_cast<int>(sy), 0, src_h - 1);
+                const uint8_t* p = src_data + static_cast<size_t>(cy) * src_stride + cx * 3;
+                dst_row[dx * 3] = p[0];
+                dst_row[dx * 3 + 1] = p[1];
+                dst_row[dx * 3 + 2] = p[2];
+            }
+        }
+    }
+
+    return dst_patch;
 }
 
 } // namespace zhulong::face

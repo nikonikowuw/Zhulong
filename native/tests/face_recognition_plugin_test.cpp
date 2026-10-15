@@ -1,5 +1,8 @@
 #include <zhulong/plugin.h>
 #include <algorithm/runtime/gallery_registry.hpp>
+#include "detector.hpp"
+#include "aligner.hpp"
+#include "extractor.hpp"
 #include <dlfcn.h>
 #include <cassert>
 #include <cmath>
@@ -94,8 +97,9 @@ int main(int argc, char* argv[]) {
     assert(persons[0].faces != nullptr);
 
     const auto& face0 = persons[0].faces[0];
-    assert(face0.box[0] == 0.20f && face0.box[1] == 0.15f);
-    assert(face0.landmarks[0][0] == 0.32f && face0.landmarks[0][1] == 0.32f);
+    assert(face0.box[0] >= 0.0f && face0.box[2] <= 1.0f && face0.box[0] < face0.box[2]);
+    assert(face0.box[1] >= 0.0f && face0.box[3] <= 1.0f && face0.box[1] < face0.box[3]);
+    assert(face0.landmarks[0][0] >= 0.0f && face0.landmarks[0][1] >= 0.0f);
     assert(face0.matched == 0);
     assert(face0.similarity == 0.0f);
     assert(std::strlen(face0.person_id) == 0);
@@ -105,19 +109,24 @@ int main(int argc, char* argv[]) {
     // =========================================================================
     // 2. 命中测试（底库已录入该特征）
     // =========================================================================
-    // 计算期望同构特征向量
-    std::vector<float> expected_features(512, 0.0f);
-    float norm_sq = 0.0f;
-    for (uint32_t i = 0; i < 512; ++i) {
-        float val = std::sin(static_cast<float>(pixel_sum % 10007 + i * 37 + 1)) * 0.5f +
-                    std::cos(static_cast<float>(100 * 31 + 100 * 17 + i)) * 0.5f;
-        expected_features[i] = val;
-        norm_sq += val * val;
+    zhulong::face::FaceDetector detector;
+    zhulong::Image img_view(frame);
+    auto dets = detector.detect(img_view);
+    assert(!dets.empty());
+
+    std::array<zhulong::face::Point2f, 5> src_pixels;
+    for (size_t i = 0; i < 5; ++i) {
+        src_pixels[i].x = dets[0].landmarks[i].x * 100.0f;
+        src_pixels[i].y = dets[0].landmarks[i].y * 100.0f;
     }
-    float norm = std::sqrt(norm_sq);
-    for (uint32_t i = 0; i < 512; ++i) {
-        expected_features[i] /= norm;
-    }
+
+    std::array<float, 6> affine_mat{};
+    bool ok = zhulong::face::Aligner::estimate_similarity_transform(src_pixels, affine_mat);
+    assert(ok);
+
+    auto patch = zhulong::face::Aligner::crop_and_align(img_view, affine_mat, 112, 112);
+    zhulong::face::FaceFeatureExtractor extractor;
+    auto expected_features = extractor.extract(patch.data(), 112, 112, dets[0].face_box);
 
     gallery.upsert({
         "face_test_01",

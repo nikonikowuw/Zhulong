@@ -41,6 +41,21 @@ public:
         const std::array<Point2f, 5>& src_points,
         std::array<float, 6>& out_mat
     );
+
+    /**
+     * @brief 基于 2x3 仿射矩阵对原图执行双线性插值采样与重对齐
+     * @param image 原图只读视图
+     * @param affine_mat 2x3 相似变换仿射矩阵 (src -> dst)
+     * @param dst_w 输出宽度 (默认 112)
+     * @param dst_h 输出高度 (默认 112)
+     * @return 连续排布的 RGB24 像素 buffer (dst_w * dst_h * 3 字节)
+     */
+    static std::vector<uint8_t> crop_and_align(
+        const zhulong::Image& image,
+        const std::array<float, 6>& affine_mat,
+        int dst_w = 112,
+        int dst_h = 112
+    );
 };
 
 } // namespace zhulong::face

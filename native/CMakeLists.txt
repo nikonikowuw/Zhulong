@@ -308,6 +308,8 @@ add_library(FaceRecognitionPlugin SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/face_recognition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/matcher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/aligner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/detector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/extractor.cpp
 )
 target_compile_features(FaceRecognitionPlugin PUBLIC cxx_std_17)
 target_compile_definitions(FaceRecognitionPlugin PRIVATE ZHULONG_PLUGIN_BUILD)
@@ -384,9 +386,18 @@ if(BUILD_TESTING)
     set_tests_properties(ZhulongAlgoRunnerGallery PROPERTIES TIMEOUT 10)
 
     # 人脸识别脱机插件单元测试
-    add_executable(ZhulongFaceRecognitionPluginTests tests/face_recognition_plugin_test.cpp)
+    add_executable(ZhulongFaceRecognitionPluginTests
+        tests/face_recognition_plugin_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/detector.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/aligner.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/extractor.cpp
+    )
     target_compile_features(ZhulongFaceRecognitionPluginTests PRIVATE cxx_std_17)
-    target_include_directories(ZhulongFaceRecognitionPluginTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_include_directories(ZhulongFaceRecognitionPluginTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src
+    )
     target_link_libraries(ZhulongFaceRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
     add_test(NAME ZhulongFaceRecognitionPlugin COMMAND ZhulongFaceRecognitionPluginTests $<TARGET_FILE:FaceRecognitionPlugin>)
     set_tests_properties(ZhulongFaceRecognitionPlugin PROPERTIES TIMEOUT 10)
