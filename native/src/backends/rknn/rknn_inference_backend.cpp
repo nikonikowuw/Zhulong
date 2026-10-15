@@ -1,3 +1,13 @@
+/**
+ * @file rknn_inference_backend.cpp
+ * @brief RKNN 推理后端实现（模型加载、上下文派生、Tensor 桥接）
+ *
+ * ⚠️ 本文件是允许 include <rknn_api.h> 的第三处（另两处为 rknn_types.hpp / rknn_error_map.hpp）。
+ *
+ * ⚠️ 不得声称零拷贝（R13）：rknn_input 无 stride 字段 → 传入 buffer 必须 packed；
+ * 输出经 want_float=1 转 float32 后**拷贝**进 Tensor。零拷贝的正确做法是 DMA-BUF（后续任务）。
+ */
+
 #include "rknn_inference_backend.hpp"
 
 #include "rknn_error_map.hpp"
@@ -13,7 +23,9 @@
 namespace zhulong {
 namespace {
 
-// 取文件基名作为 model_id（不引入 <filesystem>，保持交叉工具链最小依赖）。
+/**
+ * @brief 取文件基名作为 model_id（不引入 <filesystem>，保持交叉工具链最小依赖）
+ */
 std::string file_basename(const std::string& path) {
     const auto slash = path.find_last_of("/\\");
     return slash == std::string::npos ? path : path.substr(slash + 1);
@@ -51,6 +63,16 @@ struct ContextGuard {
 
 } // namespace
 
+/**
+ * @brief 加载 RKNN 模型并构建根上下文资产
+ *
+ * ⚠️ 主 root 上下文绝不调用 RKNN_QUERY_MEM_SIZE（R10：会污染上下文使首次
+ * rknn_dup_context SIGSEGV，2.3.2 实测缺陷，官方性质未定）；该数据用独立的一次性
+ * 上下文查询后立即销毁。
+ *
+ * @param model_path_or_config 模型文件路径
+ * @return std::shared_ptr<ModelAsset> 模型资产；失败返回 nullptr（不抛异常）
+ */
 std::shared_ptr<ModelAsset> RknnInferenceBackend::load_model(const std::string& model_path_or_config) {
     try {
         if (model_path_or_config.empty()) {
@@ -104,7 +126,6 @@ std::shared_ptr<ModelAsset> RknnInferenceBackend::load_model(const std::string& 
 
         // SDK 版本查询是安全的（真机实测：查过 SDK_VERSION 后 dup 仍 ret=0）。
         rknn_query(root, RKNN_QUERY_SDK_VERSION, &asset->sdk_version, sizeof(asset->sdk_version));
-
         // ⚠️ 关键缺陷规避（RK3568 真机实测，2026-10-14，librknnrt.so 2.3.2 + RKNPU 驱动 0.9.8）：
         // RKNN_QUERY_MEM_SIZE 会**污染上下文** —— 查过 MEM_SIZE 的上下文，其首次
         // rknn_dup_context 必定 SIGSEGV（崩在 librknnrt.so 内部）；未查过的上下文连续 3 次
@@ -130,6 +151,13 @@ std::shared_ptr<ModelAsset> RknnInferenceBackend::load_model(const std::string& 
     }
 }
 
+/**
+ * @brief 派生 Worker 独占执行会话（rknn_dup_context，经 dup_mutex 串行化）
+ *
+ * @param model 共享的根上下文资产
+ * @param worker_id Worker 唯一标识
+ * @return std::unique_ptr<SessionContext> 独占会话；失败返回 nullptr
+ */
 std::unique_ptr<SessionContext> RknnInferenceBackend::create_session(std::shared_ptr<ModelAsset> model,
                                                                      uint32_t worker_id) {
     auto asset = std::dynamic_pointer_cast<RknnModelAsset>(model);
@@ -159,6 +187,17 @@ std::unique_ptr<SessionContext> RknnInferenceBackend::create_session(std::shared
     }
 }
 
+/**
+ * @brief 执行 RKNN 硬件推理（输入 packed 设置 → 同步运行 → 输出拷贝回 Tensor）
+ *
+ * ⚠️ 本实现接受拷贝，不得声称零拷贝：rknn_input 无 stride 字段，传入 buffer 必须 packed；
+ * 输出经 want_float=1 转 float32 后 memcpy 进 Tensor。
+ *
+ * @param session 该 Worker 的独占执行会话
+ * @param inputs 输入张量列表（必须 packed，数量与模型输入数一致）
+ * @param[out] outputs 输出张量列表（失败时被清空）
+ * @return zhulong_status_t ZHULONG_PLUGIN_OK 成功；其余为映射后的错误码
+ */
 zhulong_status_t RknnInferenceBackend::forward(SessionContext* session,
                                                const std::vector<Tensor>& inputs,
                                                std::vector<Tensor>& outputs) {

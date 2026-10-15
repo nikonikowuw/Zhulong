@@ -1,12 +1,15 @@
-#pragma once
+/**
+ * @file rga_error_map.hpp
+ * @brief RGA 私有错误映射：IM_STATUS → zhulong_status_t
+ *
+ * ⚠️ 本文件是唯一允许 include RGA 头文件的头之一（另一个是 rga_types.hpp）。
+ * 它只被 native/src/backends/rga/ 内的实现引用，不得泄漏到 runtime/ 或 sdk/include/。
+ *
+ * ⚠️ 头文件包含顺序：RGA 的 im2d_single.h 使用了 NULL 但未包含 <cstddef>，
+ * 必须先包含 <cstddef>，否则交叉编译报 `'NULL' was not declared in this scope`。
+ */
 
-// RGA 私有错误映射：IM_STATUS → zhulong_status_t。
-//
-// ⚠️ 本文件是唯一允许 include RGA 头文件的头之一（另一个是 rga_types.hpp）。
-// 它只被 native/src/backends/rga/ 内的实现引用，不得泄漏到 runtime/ 或 sdk/include/。
-//
-// ⚠️ 头文件包含顺序：RGA 的 im2d_single.h 使用了 NULL 但未包含 <cstddef>，
-// 必须先包含 <cstddef>，否则交叉编译报 `'NULL' was not declared in this scope`。
+#pragma once
 
 #include <cstddef>
 
@@ -25,6 +28,15 @@ namespace zhulong {
 //   IM_STATUS_ILLEGAL_PARAM = -4
 //   IM_STATUS_ERROR_VERSION = -5
 //   IM_STATUS_FAILED        =  0
+/**
+ * @brief 将 RGA 的 IM_STATUS 映射为统一状态码
+ *
+ * ⚠️ 版本不匹配（ERROR_VERSION）与不支持（NOT_SUPPORTED）统一映射为 NOT_SUPPORTED，
+ * 以便上层触发 CPU 回退，而不是归为 INTERNAL 代码 bug。
+ *
+ * @param status RGA 返回状态（IM_STATUS）
+ * @return zhulong_status_t 统一状态码（未知值归为 INTERNAL）
+ */
 inline zhulong_status_t map_rga_status(IM_STATUS status) {
     switch (status) {
         case IM_STATUS_SUCCESS:

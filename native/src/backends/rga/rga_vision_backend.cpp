@@ -1,3 +1,19 @@
+/**
+ * @file rga_vision_backend.cpp
+ * @brief RGA 视觉前处理后端实现（运行期能力探测、O(1) 参数适配与 CPU 透明回退）
+ *
+ * ⚠️ R12（最重要）：目标缓冲区指针**绝不偏移** —— 内容区偏移必须由 `improcess`
+ * 的 `drect` 表达。若把 dst 指针直接偏移到内容区起点，驱动会按完整 `wstride × hstride`
+ * 校验，访问超出 Tensor 边界（实测约 242KB 越界），引发 RGA 陷入 D 状态死锁
+ * 并触发看门狗复位（整机重启，`uptime -s` 可对照）。
+ *
+ * ⚠️ 不得声称零拷贝：当前走 wrapbuffer_virtualaddr 虚拟地址映射，
+ * 存在用户态到 DMA 映射开销（DMA-BUF 属后续任务）。
+ *
+ * ⚠️ 滤波差异：与 CPU 软解的核函数不同，下采样时单像素极差可达 119，
+ * 因此测试容差为 worst <= 128。
+ */
+
 #include "rga_vision_backend.hpp"
 
 #include "rga_error_map.hpp"
@@ -27,13 +43,22 @@ namespace {
 //   RGBA32  → RK_FORMAT_RGBA_8888 (0x0 << 8)
 //   NV12    → RK_FORMAT_YCbCr_420_SP (0xa << 8) （2 plane: Y + 交错 Cb:Cr，Cb 在低字节）
 //   YUV420P → RK_FORMAT_YCbCr_420_P  (0xb << 8) （3 plane: Y + Cb + Cr）
+/**
+ * @brief 源像素格式到 RGA 格式描述符的映射结果
+ */
 struct SourceFormatSpec {
-    int rga_format{0};
-    int plane0_bpp{0};
-    int plane_count{1};
-    bool valid{false};
+    int rga_format{0};    /**< 对应的 RK_FORMAT_* 值 */
+    int plane0_bpp{0};    /**< 平面 0 的每像素字节数（用于推导 wstride） */
+    int plane_count{1};   /**< 平面数量（1 = 单平面，2 = NV12，3 = YUV420P） */
+    bool valid{false};    /**< 是否为 RGA 支持的格式 */
 };
 
+/**
+ * @brief 将 zhulong 像素格式映射为 RGA 格式描述符
+ *
+ * @param format zhulong 像素格式
+ * @return SourceFormatSpec 描述符（不支持的格式 valid == false）
+ */
 SourceFormatSpec describe_source_format(zhulong_pixel_format_t format) {
     switch (format) {
         case ZHULONG_PIXEL_FORMAT_RGB24:
@@ -51,7 +76,12 @@ SourceFormatSpec describe_source_format(zhulong_pixel_format_t format) {
     }
 }
 
-// 目标侧 Tensor 依据合同恒定为 HWC 3 通道 UINT8，因此目标格式只支持 packed 24bit。
+/**
+ * @brief 目标侧 Tensor 依据合同恒定为 HWC 3 通道 UINT8，因此目标格式只支持 packed 24bit。
+ *
+ * @param format 目标像素格式
+ * @return int 对应的 RK_FORMAT_*；不支持时返回 0
+ */
 int rga_format_for_target_24bit(zhulong_pixel_format_t format) {
     switch (format) {
         case ZHULONG_PIXEL_FORMAT_RGB24:
@@ -63,22 +93,41 @@ int rga_format_for_target_24bit(zhulong_pixel_format_t format) {
     }
 }
 
+/**
+ * @brief 判断 imcheck_t 返回状态是否为「通过」
+ */
 bool imcheck_is_ok(IM_STATUS status) {
     return status == IM_STATUS_NOERROR || status == IM_STATUS_SUCCESS;
 }
 
+/**
+ * @brief 判断矩形是否完全落在 w × h 范围内（越界防御，避免驱动陷入死锁）
+ */
 bool rect_within(const im_rect& r, int w, int h) {
     return r.x >= 0 && r.y >= 0 && r.width > 0 && r.height > 0 &&
            r.x + r.width <= w && r.y + r.height <= h;
 }
 
 // 统一的源侧 buffer 解析与连续性校验
+/**
+ * @brief 源侧 buffer 解析结果
+ */
 struct ResolvedSource {
-    rga_buffer_t buffer{};
-    bool is_stride_adapted{false};
-    bool valid{false};
+    rga_buffer_t buffer{};          /**< 包装后的 RGA 源缓冲区 */
+    bool is_stride_adapted{false};  /**< 是否使用了非紧密（实际 linesize）行跨度 */
+    bool valid{false};              /**< 是否解析成功（false 表示应回退 CPU） */
 };
 
+/**
+ * @brief 解析源帧视图并校验多平面连续性与硬件对齐要求
+ *
+ * ⚠️ 多平面格式（NV12 / YUV420P）要求 plane 在内存中**严格连续**（偏移由 y_stride
+ * 与 height 推导）；不连续时返回 valid == false，由调用方回退 CPU（重排是 O(N)，不做）。
+ *
+ * @param src 源帧视图（借用）
+ * @param stride_align 运行期探测到的行跨度字节对齐值（0 表示未取到）
+ * @return ResolvedSource 解析结果
+ */
 ResolvedSource resolve_source(const zhulong_frame_view& src, uint32_t stride_align) {
     ResolvedSource res{};
     if (!src.planes[0] || src.width <= 0 || src.height <= 0) {
@@ -154,6 +203,7 @@ ResolvedSource resolve_source(const zhulong_frame_view& src, uint32_t stride_ali
         return res;
     }
 
+    // 实际 linesize 与紧密排列不一致时，走「非紧密 stride 适配」路径（AC9 计数）
     res.is_stride_adapted = (y_stride != min_stride);
     res.valid = true;
     return res;
@@ -165,6 +215,14 @@ RgaVisionBackend::RgaVisionBackend() {
     probe();
 }
 
+/**
+ * @brief 探测 RGA 可用性与硬件能力参数
+ *
+ * ⚠️ 对齐值严禁硬编码：byte_stride_align 从 /sys/kernel/debug/rkrga/hardware 读取
+ * （RK3568 实测 4）；offset_align 通过 imcheck_t 在合成缓冲上动态探测（实测 2）。
+ * 任一探测失败（取不到 stride_align 或 /dev/rga 不可访问）即置 rga_usable_ = false，
+ * 由上层透明回退 CPU。
+ */
 void RgaVisionBackend::probe() {
     rga_usable_ = false;
     stride_align_ = 0;
@@ -248,6 +306,13 @@ void RgaVisionBackend::probe() {
     rga_usable_ = true;
 }
 
+/**
+ * @brief 尝试走 RGA 路径完成 Letterbox；返回 false 表示应回退 CPU
+ *
+ * ⚠️ R12：目标 buffer 描述的是**完整 Tensor**（含 padding），内容区 ROI 仅通过
+ * `drect` 表达。切勿将 dst_buf 指针偏移到内容区起点 —— 那会让驱动按完整
+ * wstride × hstride 校验并越界（实测约 242KB），引发 RGA D 状态死锁与看门狗复位。
+ */
 bool RgaVisionBackend::try_rga_letterbox(const zhulong_frame_view& src, Tensor& dst,
                                          LetterboxParams& inout_params) {
     const int dst_format = rga_format_for_target_24bit(inout_params.target_format);
@@ -278,7 +343,8 @@ bool RgaVisionBackend::try_rga_letterbox(const zhulong_frame_view& src, Tensor& 
     uint8_t* dst_buf = dst.data<uint8_t>();
     std::memset(dst_buf, 114, dst.byte_size());
 
-    // 描述完整的 dst buffer（含 padding），通过 drect 传递内容区 ROI。
+    // ⚠️ 描述完整的 dst buffer（含 padding）；内容区偏移只能通过 drect 传递，
+    // 绝不可把 dst_buf 指针偏移到内容区起点（R12）。
     rga_buffer_t src_buffer = resolved.buffer;
     rga_buffer_t dst_buffer = wrapbuffer_virtualaddr(
         dst_buf, target_w, target_h, dst_format, target_w, target_h);
@@ -316,6 +382,12 @@ bool RgaVisionBackend::try_rga_letterbox(const zhulong_frame_view& src, Tensor& 
     return true;
 }
 
+/**
+ * @brief 尝试走 RGA 路径完成缩放；返回 false 表示应回退 CPU
+ *
+ * ⚠️ resize 接口使用平坦指针，只支持单平面格式（RGB24 / BGR24 / RGBA32）；
+ * NV12 / YUV420P 等非连续内存格式安全回退 CPU 并返回 NOT_SUPPORTED。
+ */
 bool RgaVisionBackend::try_rga_resize(const uint8_t* src, int src_w, int src_h, int src_stride,
                                       zhulong_pixel_format_t src_format, uint8_t* dst, int dst_stride,
                                       int dst_w, int dst_h, zhulong_pixel_format_t dst_format) {
@@ -382,6 +454,12 @@ bool RgaVisionBackend::try_rga_resize(const uint8_t* src, int src_w, int src_h, 
     return true;
 }
 
+/**
+ * @brief 尝试走 RGA 路径完成「裁剪 + 缩放 + CSC」；返回 false 表示应回退 CPU
+ *
+ * ⚠️ 两阶段裁剪（形式 1）：ROI 坐标不满足 2 像素对齐时，**只改参数向外扩取整**
+ * （srect 是参数，不是内存），避免 O(N) 内存搬移。
+ */
 bool RgaVisionBackend::try_rga_crop_scale(const zhulong_frame_view& src, const CropRect& roi,
                                           uint8_t* dst, int dst_stride, int dst_w, int dst_h,
                                           zhulong_pixel_format_t dst_format) {
@@ -450,6 +528,9 @@ bool RgaVisionBackend::try_rga_crop_scale(const zhulong_frame_view& src, const C
     return true;
 }
 
+/**
+ * @brief 「裁剪 + 缩放 + CSC」公开入口：RGA 可用则走硬件，否则透明回退 CPU
+ */
 zhulong_status_t RgaVisionBackend::crop_scale(const zhulong_frame_view& src, const CropRect& roi,
                                               uint8_t* dst, int dst_stride, int dst_w, int dst_h,
                                               zhulong_pixel_format_t dst_format) {
@@ -486,6 +567,9 @@ zhulong_status_t RgaVisionBackend::crop_scale(const zhulong_frame_view& src, con
     return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
 }
 
+/**
+ * @brief Letterbox 公开入口：RGA 可用则走硬件，否则透明回退 CPU
+ */
 zhulong_status_t RgaVisionBackend::letterbox(const zhulong_frame_view& src,
                                              Tensor& dst,
                                              LetterboxParams& inout_params) {
@@ -503,6 +587,9 @@ zhulong_status_t RgaVisionBackend::letterbox(const zhulong_frame_view& src,
     return fallback_.letterbox(src, dst, inout_params);
 }
 
+/**
+ * @brief 缩放公开入口：RGA 可用则走硬件，否则透明回退 CPU
+ */
 zhulong_status_t RgaVisionBackend::resize(const uint8_t* src, int src_w, int src_h, int src_stride,
                                           zhulong_pixel_format_t src_format, uint8_t* dst, int dst_stride,
                                           int dst_w, int dst_h, zhulong_pixel_format_t dst_format) {
