@@ -219,3 +219,63 @@
 - 推进人脸识别端到端子任务（10-14-face-feature-extraction 等）
 
 
+## Session 44: 完成人脸特征提取闭环 (10-14-face-feature-extraction)
+<!-- trellis-session: v=2 fp=8a29e4d1f03c5b1e -->
+
+**Date**: 2026-10-15
+**Task**: 实现人脸特征提取闭环（10-14-face-feature-extraction）
+**Package**: backend, native
+**Branch**: `dev`
+
+### Summary
+
+基于「方案 2（Engine 独立提取与底库持久化）」完成了人脸照片录入的一站式特征提取、格式验证与向量持久化闭环。新增 Native Engine C ABI 单次提取接口 `Zhulong_engine_extract_face_feature`，在 Go `internal/engine` 中安全封装 CGO 调用（严格遵从 `runtime.KeepAlive` 与零拷贝/浅视图规约），并在 `internal/person` 中通过接口 `FaceFeatureExtractor` 依赖注入，将原来 2048 字节全零占位符替换为真实 512 维 float32 特征向量持久化至 SQLite `person_faces.feature_vector`，同时在 `GetGallerySyncData` 中向下游下发真实特征与图片路径，支持 Runner 毫秒级瞬时冷启。
+
+### Main Changes
+
+- **Native C ABI (`native/`)**：
+  - 在 `native/include/Zhulong/engine.h` 声明 `Zhulong_engine_extract_face_feature`，支持 RGB24/BGR24 格式入参校验、全黑/零像素人脸检测判断（返回 `Zhulong_ERR_NOT_FOUND`）、并写入 512 维 L2 归一化特征向量。
+  - 在 `native/src/abi/engine.cpp` 实现提取逻辑，全局 `try/catch` 隔离所有 C++ 异常，杜绝异常穿越 ABI。
+  - 新增 Native 单元测试 `native/tests/face_feature_extract_test.cpp` 并集成至 CMake CTest。
+- **Go Engine 桥接 (`internal/engine/`)**：
+  - 扩展 `(*Engine).ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]float32, error)`，内置标准 `image/jpeg` 与 `image/png` 解码并打包为连续 packed RGB24 内存，通过 CGO 传参并使用 `runtime.KeepAlive` 保证调用期不被 GC 回收。
+  - 新增 `internal/engine/engine_face_test.go` 针对提取 API 开展竞态与功能测试。
+- **错误码与多语言 (`internal/httputil/`)**：
+  - 在 `locale.go` 注册 `NO_FACE_DETECTED`（未检测到有效人脸）与 `FEATURE_EXTRACT_FAILED`（特征提取失败）的三语本地化文案。
+- **Person 领域与底库持久化 (`internal/person/`)**：
+  - 抽象 `FaceFeatureExtractor` 接口，解耦 CGO 依赖，通过 Uber Fx 在 `internal/app` 将 `*engine.Engine` 注入 `person.Service`。
+  - 改造 `AddFaceWithReader`：提取特征成功后才落盘图片与持久化 2048 字节 Little-Endian 向量至 SQLite；提取失败立即返回 `NO_FACE_DETECTED` 且不残留磁盘文件与数据库脏记录。
+  - 实现 `float32ToBytes` 工具函数，并让 `GetGallerySyncData` 下发完整的 `ImagePath` 与真实特征切片。
+  - 扩充 `internal/person/service_test.go`，全面覆盖提取成功、未检测到人脸、维度不符等测试用例。
+- **契约规范与任务归档**：
+  - 更新 `.trellis/spec/native/cgo-contract.md` 补全单次离线特征提取 C ABI 与 CGO 安全规范；
+  - 顺利通过 `make check`（前端全部测试 + Native 16/16 CTest + api-docs + Go vet & race & RTSP bridge 测试）；
+  - 归档子任务 `10-14-face-feature-extraction`。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1ce8766` | feat(person): implement one-shot face feature extraction and persistence |
+| `0e47087` | chore(task): archive 10-14-face-feature-extraction |
+
+### Testing
+
+- [OK] `make native-test`：16/16 CTest 全绿通过
+- [OK] `python3 native/scripts/build.py go test -race ./internal/engine -run TestExtractFaceFeature`：通过
+- [OK] `go test -race ./internal/person/...`：通过
+- [OK] `make go-check`：gofmt、go vet、全包 -race 测试以及 RTSP 真实桥接集成测试全绿通过
+- [OK] `make check`：全栈验证全量通过
+
+### Status
+
+[OK] **Completed**（子任务已归档）
+
+### Next Steps
+
+- 推进人脸识别端到端其余子任务：
+  - `10-14-gallery-hot-sync`（底库热更新通道）
+  - `10-14-face-algo-package`（人脸识别算法包构建）
+  - `10-14-face-result-frontend`（前端叠加与记录）
+
+
