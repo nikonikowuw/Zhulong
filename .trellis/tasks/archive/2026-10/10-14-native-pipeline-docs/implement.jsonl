@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/10-14-native-core-code-docs/design.md", "reason": "风格基线与统一术语表单一来源"}
+{"file": ".trellis/tasks/10-14-native-core-code-docs/implement.md", "reason": "执行循环、注释剥离不变性校验命令与审查门禁"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "C ABI 边界、异常防爆门与不透明句柄规范"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "物理流复用、宽限期与订阅排空契约"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "流水线有界队列背压与停机规约"}
+{"file": ".trellis/tasks/archive/2026-10/10-11-native-pipeline-stability/design.md", "reason": "流水线稳定性设计、锁外汇合、有界重同步及异常隔离决策"}

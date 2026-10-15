@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/10-14-native-core-code-docs/design.md", "reason": "术语表与禁用别名校验"}
+{"file": ".trellis/tasks/10-14-native-core-code-docs/implement.md", "reason": "注释剥离不变性检查全量门禁与测试标准"}
+{"file": ".trellis/tasks/10-14-native-pipeline-docs/prd.md", "reason": "引擎与流水线层注释补齐验收标准与重点清单"}
+{"file": ".trellis/tasks/archive/2026-10/10-11-native-pipeline-stability/design.md", "reason": "核实意图一致性，防止反推失真"}
