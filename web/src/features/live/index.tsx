@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ConfigDrawer } from '@/components/config-drawer'
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -10,6 +10,7 @@ import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { LiveCameraSidebar } from './components/live-camera-sidebar'
 import { LiveGrid } from './components/live-grid'
+import { LiveRecognitionFeed } from './components/live-recognition-feed'
 import { LiveToolbar } from './components/live-toolbar'
 import { useLiveCameras } from './hooks/use-live-cameras'
 import { useLiveGrid } from './hooks/use-live-grid'
@@ -19,8 +20,18 @@ export function Live(): React.JSX.Element {
   const { t } = useTranslation('live')
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false)
+  const [showAIOverlay, setShowAIOverlay] = useState(true)
+  const [isFeedOpen, setIsFeedOpen] = useState(false)
 
   const { data: cameras = [], isLoading, error, refetch } = useLiveCameras()
+
+  const cameraNames = useMemo(() => {
+    const map: Record<string, string> = {}
+    cameras.forEach((cam) => {
+      map[cam.id] = cam.name
+    })
+    return map
+  }, [cameras])
 
   const {
     layout,
@@ -80,6 +91,10 @@ export function Live(): React.JSX.Element {
             onMuteAll={muteAll}
             onClearAll={() => setIsClearConfirmOpen(true)}
             activeStreamsCount={activeStreamsCount}
+            showAIOverlay={showAIOverlay}
+            onToggleAIOverlay={() => setShowAIOverlay(!showAIOverlay)}
+            isFeedOpen={isFeedOpen}
+            onToggleFeed={() => setIsFeedOpen(!isFeedOpen)}
           />
         </div>
 
@@ -104,6 +119,7 @@ export function Live(): React.JSX.Element {
               activeCellId={activeCellId}
               maximizedCellId={maximizedCellId}
               cells={cells}
+              showAIOverlay={showAIOverlay}
               onSelectCell={setActiveCellId}
               onClearCell={clearCell}
               onToggleMaximizeCell={toggleMaximizeCell}
@@ -115,6 +131,13 @@ export function Live(): React.JSX.Element {
               }}
             />
           </div>
+
+          {/* 实时抓拍流侧边栏 */}
+          <LiveRecognitionFeed
+            isOpen={isFeedOpen}
+            onClose={() => setIsFeedOpen(false)}
+            cameraNames={cameraNames}
+          />
         </div>
       </Main>
 
@@ -131,3 +154,6 @@ export function Live(): React.JSX.Element {
     </>
   )
 }
+
+export { LiveFaceOverlay } from './components/live-face-overlay'
+export { LiveRecognitionFeed } from './components/live-recognition-feed'

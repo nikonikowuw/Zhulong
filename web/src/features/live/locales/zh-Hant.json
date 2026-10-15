@@ -47,5 +47,19 @@
   "closeStream": "關閉視訊",
   "toggleMockStream": "切換測試彩條/真實串流",
   "cameraFallback": "攝影機 {{id}}",
-  "networkError": "網路連線異常"
+  "networkError": "網路連線異常",
+  "unrecognizedFace": "未登記",
+  "enableAIOverlay": "開啟人臉框疊加",
+  "disableAIOverlay": "關閉人臉框疊加",
+  "showRecognitionFeed": "顯示即時識別流",
+  "hideRecognitionFeed": "隱藏即時識別流",
+  "recognitionFeedTitle": "即時識別流",
+  "clearRecords": "清空記錄",
+  "searchPersonPlaceholder": "搜尋姓名或人員 ID...",
+  "filterAll": "全部",
+  "filterMatched": "已識別",
+  "filterUnmatched": "未登記",
+  "noRecords": "暫無識別記錄",
+  "noRecordsDesc": "視訊偵測到目標人臉時將即時在此展示",
+  "unregisteredPerson": "未登記目標"
 }

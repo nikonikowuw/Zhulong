@@ -373,6 +373,41 @@
 - 推进前端识别结果展示子任务：
   - `10-14-face-result-frontend`（实现识别结果前端叠加与记录）
 
+---
+
+## 2026-10-15: 10-14-face-result-frontend 实现识别结果前端叠加与记录
+
+### Context
+
+推进人脸识别端到端链路中前端层面的感知事件消费：在低延迟实时视频播放器（WebCodecs + Canvas 2D）上高保真叠加人脸框、置信度标牌、关键点，并提供侧边栏实时抓拍识别流记录面板。
+
+### Technical Implementation
+
+1. **Zod 数据契约与不可信输入校验**：
+   - 在 `web/src/features/live/types/ai-result.ts` 中定义 `faceSubItemSchema`、`personItemSchema`、`aiResultEventSchema`；
+   - 导出 `AIResultEvent` 与输入类型 `AIResultEventInput`，提供安全解析函数 `parseAIResultEvent` 与测试辅助函数 `createMockFace`；
+   - 增加 Schema 单元测试覆盖。
+2. **AI 感知事件流单例服务与 Hook**：
+   - 在 `web/src/features/live/services/ai-result-service.ts` 实现单例 `AIResultService`，统一管理 `/api/v1/cameras/events` SSE 连接，按 `camera_id` 分发感知事件；
+   - 引入 3 秒冷却防抖与最近 100 条环形缓冲区，生成实时抓拍卡片流；
+   - 实现 `useAIResults` 与 `useRecognitionRecords` 两个领域 Hook，支持 350ms 自动消退与关键词/命中状态筛选。
+3. **Canvas 2D 零 React 重渲染叠加层**：
+   - 在 `web/src/features/live/services/face-overlay-renderer.ts` 实现 `drawFaceOverlay`：归一化自适应坐标映射 $[0, 1] \to [W, H]$，命中底库显示翡翠绿实线框与姓名标牌，未登记显示琥珀黄虚线框与未知标牌，绘制 5 点关键点微点；
+   - 在 `LivePlayer` 中原生集成叠加 Canvas，实现 WebCodecs 解码帧与 AI 感知叠加 100% 像素级对齐，快照截图自动合成画面与 AI 标牌；
+   - 实现独立叠加组件 `LiveFaceOverlay`，支持通用嵌入与 ResizeObserver 尺寸自适应。
+4. **实时抓拍流侧边栏与监控工具栏联动**：
+   - 在 `web/src/features/live/components/live-recognition-feed.tsx` 实现抽屉式抓拍流面板（姓名、时间、相似度、摄像机名、空态引导、清空历史）；
+   - 在 `LiveToolbar` 中增加「AI 框叠加」一键切换按钮（`ScanFace`）与「实时抓拍流」抽屉呼出按钮（`Sparkles`）；
+   - 全面覆盖英、简、繁三语国际化字典（`en.json`、`zh-Hans.json`、`zh-Hant.json`）。
+
+### Testing & Verification
+
+- `pnpm --dir web lint`：通过（0 errors, 0 warnings）
+- `pnpm --dir web prettier --check "src/features/live/**"`：通过
+- `pnpm --dir web test`：53 test files, 234 tests 全部在真实无头 Chromium 浏览器中通过（新增 20 项测试）
+- `pnpm --dir web build`：TypeScript 严格类型检查 + Vite 打包通过
+- `make check`：前端门禁、Native CTest（18/18）、API 文档生成、Go vet、Go -race 与真实 RTSP 桥接测试 100% 全绿
+
 
 
 

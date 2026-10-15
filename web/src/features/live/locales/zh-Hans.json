@@ -47,5 +47,19 @@
   "closeStream": "关闭视频",
   "toggleMockStream": "切换测试彩条/真实流",
   "cameraFallback": "摄像机 {{id}}",
-  "networkError": "网络连接异常"
+  "networkError": "网络连接异常",
+  "unrecognizedFace": "未登记",
+  "enableAIOverlay": "开启人脸框叠加",
+  "disableAIOverlay": "关闭人脸框叠加",
+  "showRecognitionFeed": "显示实时识别流",
+  "hideRecognitionFeed": "隐藏实时识别流",
+  "recognitionFeedTitle": "实时识别流",
+  "clearRecords": "清空记录",
+  "searchPersonPlaceholder": "搜索姓名或人员 ID...",
+  "filterAll": "全部",
+  "filterMatched": "已识别",
+  "filterUnmatched": "未登记",
+  "noRecords": "暂无识别记录",
+  "noRecordsDesc": "视频检测到目标人脸时将实时在此展示",
+  "unregisteredPerson": "未登记目标"
 }

@@ -47,5 +47,19 @@
   "closeStream": "Close stream",
   "toggleMockStream": "Toggle SMPTE / Live Stream",
   "cameraFallback": "Camera {{id}}",
-  "networkError": "Network connection error"
+  "networkError": "Network connection error",
+  "unrecognizedFace": "Unregistered",
+  "enableAIOverlay": "Enable Face AI Overlay",
+  "disableAIOverlay": "Disable Face AI Overlay",
+  "showRecognitionFeed": "Show Recognition Feed",
+  "hideRecognitionFeed": "Hide Recognition Feed",
+  "recognitionFeedTitle": "Recognition Feed",
+  "clearRecords": "Clear Records",
+  "searchPersonPlaceholder": "Search name or person ID...",
+  "filterAll": "All",
+  "filterMatched": "Matched",
+  "filterUnmatched": "Unregistered",
+  "noRecords": "No recognition records",
+  "noRecordsDesc": "Live detected faces will appear here in real time",
+  "unregisteredPerson": "Unregistered target"
 }

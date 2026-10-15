@@ -8,6 +8,8 @@ import {
   Minimize,
   VolumeX,
   Trash2,
+  ScanFace,
+  Sparkles,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
@@ -27,6 +29,10 @@ interface LiveToolbarProps {
   onMuteAll: () => void
   onClearAll: () => void
   activeStreamsCount: number
+  showAIOverlay?: boolean
+  onToggleAIOverlay?: () => void
+  isFeedOpen?: boolean
+  onToggleFeed?: () => void
 }
 
 const LAYOUT_OPTIONS: Array<{
@@ -46,6 +52,10 @@ export function LiveToolbar({
   onMuteAll,
   onClearAll,
   activeStreamsCount,
+  showAIOverlay = true,
+  onToggleAIOverlay,
+  isFeedOpen = false,
+  onToggleFeed,
 }: LiveToolbarProps): React.JSX.Element {
   const { t } = useTranslation('live')
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -106,6 +116,55 @@ export function LiveToolbar({
         </div>
 
         <Separator orientation='vertical' className='mx-1 h-5' />
+
+        {/* AI 特性控制组 */}
+        {onToggleAIOverlay && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={showAIOverlay ? 'secondary' : 'outline'}
+                size='icon'
+                className={`h-8 w-8 transition-colors ${
+                  showAIOverlay
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                    : 'text-muted-foreground'
+                }`}
+                onClick={onToggleAIOverlay}
+              >
+                <ScanFace className='h-4 w-4' />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side='bottom'>
+              {showAIOverlay
+                ? t('disableAIOverlay', '关闭人脸框叠加')
+                : t('enableAIOverlay', '开启人脸框叠加')}
+            </TooltipContent>
+          </Tooltip>
+        )}
+
+        {onToggleFeed && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={isFeedOpen ? 'secondary' : 'outline'}
+                size='icon'
+                className={`h-8 w-8 transition-colors ${
+                  isFeedOpen
+                    ? 'border-primary/40 bg-primary/10 text-primary'
+                    : 'text-muted-foreground'
+                }`}
+                onClick={onToggleFeed}
+              >
+                <Sparkles className='h-4 w-4' />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side='bottom'>
+              {isFeedOpen
+                ? t('hideRecognitionFeed', '隐藏实时识别流')
+                : t('showRecognitionFeed', '显示实时识别流')}
+            </TooltipContent>
+          </Tooltip>
+        )}
 
         {/* 全局辅助操作组 */}
         <div className='flex items-center gap-1'>

@@ -11,6 +11,7 @@ import {
   type ParsedPacket,
   type StreamType,
 } from '../types'
+import { LiveFaceOverlay } from './live-face-overlay'
 import { LivePlayer, type LivePlayerRef } from './live-player'
 import { LivePlayerCellFooter } from './live-player-cell-footer'
 import { LivePlayerCellHeader } from './live-player-cell-header'
@@ -25,6 +26,7 @@ interface LivePlayerCellProps {
   layout?: GridLayout
   isActive: boolean
   isMaximized: boolean
+  showAIOverlay?: boolean
   onSelect: () => void
   onClear: () => void
   onToggleMaximize: () => void
@@ -48,6 +50,7 @@ export function LivePlayerCell({
   layout = 4,
   isActive,
   isMaximized,
+  showAIOverlay = true,
   onSelect,
   onClear,
   onToggleMaximize,
@@ -173,14 +176,24 @@ export function LivePlayerCell({
       {/* 视频画面主体 */}
       <div className='relative h-full w-full'>
         {useMockCanvas ? (
-          <MockStreamCanvas
-            ref={mockCanvasRef}
-            cameraName={cell.cameraName}
-            streamType={cell.streamType}
-          />
+          <>
+            <MockStreamCanvas
+              ref={mockCanvasRef}
+              cameraName={cell.cameraName}
+              streamType={cell.streamType}
+            />
+            {showAIOverlay && cell.cameraId && (
+              <LiveFaceOverlay
+                cameraId={cell.cameraId}
+                enabled={showAIOverlay}
+              />
+            )}
+          </>
         ) : (
           <LivePlayer
             ref={playerRef}
+            cameraId={cell.cameraId}
+            showAIOverlay={showAIOverlay}
             isMuted={cell.isMuted}
             onStatsChange={handlePlayerStatsChange}
           />

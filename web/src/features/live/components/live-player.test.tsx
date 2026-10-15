@@ -28,4 +28,18 @@ describe('LivePlayer', () => {
     playerRef.current?.setMute(true)
     playerRef.current?.reset()
   })
+
+  it('renders overlay canvas when showAIOverlay is true and omits it when false', async () => {
+    const { container: c1 } = await render(
+      <LivePlayer cameraId='cam-01' showAIOverlay={true} />
+    )
+    const canvases1 = c1.querySelectorAll('canvas')
+    expect(canvases1.length).toBe(2)
+
+    const { container: c2 } = await render(
+      <LivePlayer cameraId='cam-01' showAIOverlay={false} />
+    )
+    const canvases2 = c2.querySelectorAll('canvas')
+    expect(canvases2.length).toBe(1)
+  })
 })

@@ -166,6 +166,11 @@ export function CameraCreateForm({ onSubmit, isPending }: Props) {
    - 必须明确区分两类空状态：
      - **资产空状态（Initial Empty）**：系统尚未添加任何设备，展示插画与「添加第一台设备」主行动点；
      - **筛选空状态（Filter Empty）**：当前搜索关键词无匹配项，展示「未找到匹配项」并提供「重置筛选」按钮。
+4. **AI 视觉与感知叠加层渲染铁律 (AI Perception Overlay)**：
+   - **坐标恒定归一化**：所有检测框与关键点坐标均假定为 $[0.0, 1.0]$，绘制时必须根据宿主 Canvas 实际物理分辨率自适应放大，严禁硬编码像素坐标；
+   - **零 React 重渲染**：视频叠加层绘制必须依托 `requestAnimationFrame` 或原生 Canvas 2D 循环，通过 mutable `ref`（如 `facesRef`）承载高频目标数据，严禁逐帧调用 `setState`；
+   - **自动防残留消退**：感知事件流设置合理的 TTL（如 350ms），当无新事件到达时立即清理 Canvas 绘图上下文，避免画面静止或目标离开视线时残留幽灵框；
+   - **抓拍流防抖节流**：全局实时识别流（Recognition Feed）需引入防抖冷却机制（如同一人 3s 冷却），避免同一目标在同一摄像头前触发无意义刷屏。
 
 ---
 

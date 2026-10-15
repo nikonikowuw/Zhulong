@@ -4,12 +4,15 @@ import {
   useImperativeHandle,
   forwardRef,
   useState,
+  useCallback,
 } from 'react'
+import { AIResultService } from '../services/ai-result-service'
+import { drawFaceOverlay } from '../services/face-overlay-renderer'
 import {
   isWebCodecsSupported,
   StreamDecoder,
 } from '../services/webcodecs-decoder'
-import { type ParsedPacket, type StreamStats } from '../types'
+import { type FaceSubItem, type ParsedPacket, type StreamStats } from '../types'
 
 export interface LivePlayerRef {
   decode: (packet: ParsedPacket) => void
@@ -23,6 +26,8 @@ export interface LivePlayerProps {
   onStatsChange?: (stats: Partial<StreamStats>) => void
   onError?: (error: string) => void
   className?: string
+  cameraId?: string | null
+  showAIOverlay?: boolean
 }
 
 /**
@@ -31,21 +36,100 @@ export interface LivePlayerProps {
  */
 export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
   function LivePlayer(
-    { isMuted: _isMuted = true, onStatsChange, onError, className = '' },
+    {
+      isMuted: _isMuted = true,
+      onStatsChange,
+      onError,
+      className = '',
+      cameraId,
+      showAIOverlay = true,
+    },
     ref
   ): React.JSX.Element {
     const canvasRef = useRef<HTMLCanvasElement | null>(null)
+    const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null)
     const pendingFrameRef = useRef<VideoFrame | null>(null)
     const rafIdRef = useRef<number | null>(null)
     const decoderRef = useRef<StreamDecoder | null>(null)
     const lastResolutionRef = useRef<string | null>(null)
     const [isSupported] = useState(() => isWebCodecsSupported())
 
+    const facesRef = useRef<FaceSubItem[]>([])
+    const lastEventTimeRef = useRef<number>(0)
+    const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
     // 维持最新的回调引用，避免 effect 闭包过期
     const onStatsChangeRef = useRef(onStatsChange)
     onStatsChangeRef.current = onStatsChange
     const onErrorRef = useRef(onError)
     onErrorRef.current = onError
+
+    const redrawOverlay = useCallback(() => {
+      if (!showAIOverlay) return
+      const overlay = overlayCanvasRef.current
+      if (!overlay || overlay.width === 0 || overlay.height === 0) return
+      const ctx = overlay.getContext('2d')
+      if (!ctx) return
+
+      const isExpired = Date.now() - lastEventTimeRef.current > 350
+      drawFaceOverlay({
+        ctx,
+        width: overlay.width,
+        height: overlay.height,
+        faces: isExpired ? [] : facesRef.current,
+      })
+    }, [showAIOverlay])
+
+    // 订阅 AI 推理结果事件流（零 React 重渲染，直接驱动 Canvas 2D）
+    useEffect(() => {
+      const overlayCanvas = overlayCanvasRef.current
+      if (!showAIOverlay || !cameraId) {
+        facesRef.current = []
+        if (overlayCanvas) {
+          const ctx = overlayCanvas.getContext('2d')
+          ctx?.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height)
+        }
+        return
+      }
+
+      const service = AIResultService.getInstance()
+      const unsubscribe = service.subscribeCamera(cameraId, (event) => {
+        const extractedFaces: FaceSubItem[] = []
+        if (event.persons) {
+          for (const p of event.persons) {
+            if (p.faces && p.faces.length > 0) {
+              extractedFaces.push(...p.faces)
+            }
+          }
+        }
+
+        facesRef.current = extractedFaces
+        lastEventTimeRef.current = Date.now()
+        redrawOverlay()
+
+        if (fadeTimerRef.current) {
+          clearTimeout(fadeTimerRef.current)
+        }
+        fadeTimerRef.current = setTimeout(() => {
+          facesRef.current = []
+          redrawOverlay()
+          fadeTimerRef.current = null
+        }, 350)
+      })
+
+      return () => {
+        if (fadeTimerRef.current) {
+          clearTimeout(fadeTimerRef.current)
+          fadeTimerRef.current = null
+        }
+        unsubscribe()
+        facesRef.current = []
+        if (overlayCanvas) {
+          const ctx = overlayCanvas.getContext('2d')
+          ctx?.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height)
+        }
+      }
+    }, [cameraId, showAIOverlay, redrawOverlay])
 
     useImperativeHandle(
       ref,
@@ -56,9 +140,31 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
         },
         screenshot: (filename?: string) => {
           const canvas = canvasRef.current
+          const overlayCanvas = overlayCanvasRef.current
           if (!canvas || canvas.width === 0 || canvas.height === 0) return
           try {
-            const dataUrl = canvas.toDataURL('image/png')
+            let dataUrl: string
+            if (
+              showAIOverlay &&
+              overlayCanvas &&
+              overlayCanvas.width > 0 &&
+              facesRef.current.length > 0
+            ) {
+              const offscreen = document.createElement('canvas')
+              offscreen.width = canvas.width
+              offscreen.height = canvas.height
+              const oCtx = offscreen.getContext('2d')
+              if (oCtx) {
+                oCtx.drawImage(canvas, 0, 0)
+                oCtx.drawImage(overlayCanvas, 0, 0)
+                dataUrl = offscreen.toDataURL('image/png')
+              } else {
+                dataUrl = canvas.toDataURL('image/png')
+              }
+            } else {
+              dataUrl = canvas.toDataURL('image/png')
+            }
+
             const a = document.createElement('a')
             a.href = dataUrl
             a.download = `${filename || `snapshot-${Date.now()}`}.png`
@@ -85,7 +191,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
           lastResolutionRef.current = null
         },
       }),
-      []
+      [showAIOverlay]
     )
 
     useEffect(() => {
@@ -102,23 +208,51 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
 
         if (frame && canvasRef.current) {
           const canvas = canvasRef.current
+          const overlayCanvas = overlayCanvasRef.current
+
           if (
             canvas.width !== frame.displayWidth ||
             canvas.height !== frame.displayHeight
           ) {
             canvas.width = frame.displayWidth
             canvas.height = frame.displayHeight
+            if (overlayCanvas) {
+              overlayCanvas.width = frame.displayWidth
+              overlayCanvas.height = frame.displayHeight
+            }
             const resStr = `${frame.displayWidth}x${frame.displayHeight}`
             if (lastResolutionRef.current !== resStr) {
               lastResolutionRef.current = resStr
               onStatsChangeRef.current?.({ resolution: resStr })
             }
+          } else if (
+            overlayCanvas &&
+            (overlayCanvas.width !== canvas.width ||
+              overlayCanvas.height !== canvas.height)
+          ) {
+            overlayCanvas.width = canvas.width
+            overlayCanvas.height = canvas.height
           }
 
           const ctx = canvas.getContext('2d')
           if (ctx) {
             ctx.drawImage(frame, 0, 0, canvas.width, canvas.height)
           }
+
+          // 同步绘制人脸叠加层
+          if (showAIOverlay && overlayCanvas) {
+            const oCtx = overlayCanvas.getContext('2d')
+            if (oCtx) {
+              const isExpired = Date.now() - lastEventTimeRef.current > 350
+              drawFaceOverlay({
+                ctx: oCtx,
+                width: overlayCanvas.width,
+                height: overlayCanvas.height,
+                faces: isExpired ? [] : facesRef.current,
+              })
+            }
+          }
+
           frame.close()
         }
       }
@@ -154,7 +288,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
         decoder.close()
         decoderRef.current = null
       }
-    }, [isSupported])
+    }, [isSupported, showAIOverlay])
 
     if (!isSupported) {
       return (
@@ -174,10 +308,18 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
       <div
         className={`relative flex h-full w-full items-center justify-center overflow-hidden bg-black ${className}`}
       >
-        <canvas
-          ref={canvasRef}
-          className='pointer-events-none max-h-full max-w-full object-contain'
-        />
+        <div className='relative flex max-h-full max-w-full items-center justify-center'>
+          <canvas
+            ref={canvasRef}
+            className='pointer-events-none max-h-full max-w-full object-contain'
+          />
+          {showAIOverlay && (
+            <canvas
+              ref={overlayCanvasRef}
+              className='pointer-events-none absolute inset-0 h-full w-full'
+            />
+          )}
+        </div>
       </div>
     )
   }

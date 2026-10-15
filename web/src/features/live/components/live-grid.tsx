@@ -18,6 +18,7 @@ interface LiveGridProps {
   activeCellId: number
   maximizedCellId: number | null
   cells: LiveCellState[]
+  showAIOverlay?: boolean
   onSelectCell: (cellId: number) => void
   onClearCell: (cellId: number) => void
   onToggleMaximizeCell: (cellId: number) => void
@@ -31,6 +32,7 @@ export function LiveGrid({
   activeCellId,
   maximizedCellId,
   cells,
+  showAIOverlay = true,
   onSelectCell,
   onClearCell,
   onToggleMaximizeCell,
@@ -48,6 +50,7 @@ export function LiveGrid({
           layout={1}
           isActive={true}
           isMaximized={true}
+          showAIOverlay={showAIOverlay}
           onSelect={() => onSelectCell(cell.cellId)}
           onClear={() => onClearCell(cell.cellId)}
           onToggleMaximize={() => onToggleMaximizeCell(cell.cellId)}
@@ -74,6 +77,7 @@ export function LiveGrid({
               layout={layout}
               isActive={cell.cellId === activeCellId}
               isMaximized={false}
+              showAIOverlay={showAIOverlay}
               onSelect={() => onSelectCell(cell.cellId)}
               onClear={() => onClearCell(cell.cellId)}
               onToggleMaximize={() => onToggleMaximizeCell(cell.cellId)}
