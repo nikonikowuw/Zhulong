@@ -67,6 +67,9 @@ public:
     /** @brief 获取源流显示时间戳 (PTS) */
     uint64_t pts() const noexcept { return view_.pts; }
 
+    /** @brief 获取底层硬件 DMA-BUF 文件描述符（>=0 有效，<0 表示普通虚拟内存） */
+    int dma_buf_fd() const noexcept { return view_.dma_buf_fd; }
+
     /** @brief 获取底层的原始只读帧视图引用 */
     const zhulong_frame_view& raw_view() const noexcept { return view_; }
 

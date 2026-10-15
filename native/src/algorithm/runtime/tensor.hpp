@@ -76,6 +76,40 @@ public:
     }
 
     /**
+     * @brief 绑定外部 DMA-BUF 构造零拷贝张量
+     *
+     * @param fd DMA-BUF 文件描述符 (>= 0)
+     * @param dims 形状维度列表
+     * @param dtype 元素数据类型
+     * @param va 外部映射的虚拟内存首地址（可选，若提供则 raw_data() 指向 va）
+     */
+    static Tensor from_dma_buf(int fd, std::vector<int64_t> dims, DataType dtype, void* va = nullptr) {
+        Tensor t;
+        t.dims_ = std::move(dims);
+        t.dtype_ = dtype;
+        t.dma_buf_fd_ = fd;
+        t.is_external_ = true;
+        t.external_va_ = va;
+        size_t total_elements = t.element_count();
+        size_t element_size = data_type_size(t.dtype_);
+        if (element_size != 0 && total_elements > std::numeric_limits<size_t>::max() / element_size) {
+            throw std::length_error("tensor byte size overflows size_t");
+        }
+        t.external_size_ = total_elements * element_size;
+        return t;
+    }
+
+    /**
+     * @brief 获取底层 DMA-BUF 文件描述符（>=0 有效，<0 表示普通内存）
+     */
+    [[nodiscard]] int dma_buf_fd() const noexcept { return dma_buf_fd_; }
+
+    /**
+     * @brief 是否为外部绑定缓冲区（非 Tensor 自身管理的 vector 内存）
+     */
+    [[nodiscard]] bool is_external() const noexcept { return is_external_; }
+
+    /**
      * @brief 获取张量形状
      */
     const std::vector<int64_t>& shape() const noexcept { return dims_; }
@@ -112,25 +146,25 @@ public:
      * @brief 获取张量数据区字节大小
      */
     size_t byte_size() const noexcept {
-        return data_.size();
+        return is_external_ ? external_size_ : data_.size();
     }
 
     /**
      * @brief 获取可写原始数据首地址
      */
-    void* raw_data() noexcept { return data_.data(); }
+    void* raw_data() noexcept { return is_external_ ? external_va_ : data_.data(); }
 
     /**
      * @brief 获取只读原始数据首地址
      */
-    const void* raw_data() const noexcept { return data_.data(); }
+    const void* raw_data() const noexcept { return is_external_ ? external_va_ : data_.data(); }
 
     /**
      * @brief 按指定类型重解释数据区首地址（不校验 T 与 dtype_ 是否一致）
      */
     template<typename T>
     T* data() noexcept {
-        return reinterpret_cast<T*>(data_.data());
+        return reinterpret_cast<T*>(raw_data());
     }
 
     /**
@@ -138,13 +172,17 @@ public:
      */
     template<typename T>
     const T* data() const noexcept {
-        return reinterpret_cast<const T*>(data_.data());
+        return reinterpret_cast<const T*>(raw_data());
     }
 
 private:
     std::vector<int64_t> dims_;          /**< 形状维度列表 */
     DataType dtype_{DataType::FLOAT32};  /**< 元素数据类型 */
     std::vector<uint8_t> data_;          /**< packed 连续数据区 */
+    int dma_buf_fd_{-1};                 /**< 外部绑定的 DMA-BUF 文件描述符 */
+    bool is_external_{false};            /**< 是否为外部缓冲区 */
+    void* external_va_{nullptr};         /**< 外部虚拟地址指针 */
+    size_t external_size_{0};            /**< 外部缓冲区字节大小 */
 };
 
 } // namespace zhulong

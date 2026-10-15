@@ -196,9 +196,15 @@ ResolvedSource resolve_source(const zhulong_frame_view& src, uint32_t stride_ali
         }
     }
 
-    res.buffer = wrapbuffer_virtualaddr(
-        const_cast<uint8_t*>(src.planes[0]), src.width, src.height, spec.rga_format,
-        wstride_px, hstride);
+    if (src.dma_buf_fd >= 0) {
+        res.buffer = wrapbuffer_fd(
+            src.dma_buf_fd, src.width, src.height, spec.rga_format,
+            wstride_px, hstride);
+    } else {
+        res.buffer = wrapbuffer_virtualaddr(
+            const_cast<uint8_t*>(src.planes[0]), src.width, src.height, spec.rga_format,
+            wstride_px, hstride);
+    }
     if (res.buffer.width <= 0) {
         return res;
     }
@@ -338,16 +344,26 @@ bool RgaVisionBackend::try_rga_letterbox(const zhulong_frame_view& src, Tensor& 
     const LetterboxGeometry geometry =
         compute_letterbox_geometry(src.width, src.height, target_w, target_h);
 
-    // 分配目标并填充补边值 114（与 CPU 语义完全一致）。
-    dst = Tensor({target_h, target_w, 3}, DataType::UINT8);
+    // 若目标 Tensor 具备外部 DMA-BUF 且尺寸匹配，直接原地复用；否则分配普通 Tensor
+    if (dst.dma_buf_fd() < 0 || dst.byte_size() < static_cast<size_t>(target_h * target_w * 3)) {
+        dst = Tensor({target_h, target_w, 3}, DataType::UINT8);
+    }
     uint8_t* dst_buf = dst.data<uint8_t>();
-    std::memset(dst_buf, 114, dst.byte_size());
+    if (dst_buf) {
+        std::memset(dst_buf, 114, target_h * target_w * 3);
+    }
 
     // ⚠️ 描述完整的 dst buffer（含 padding）；内容区偏移只能通过 drect 传递，
     // 绝不可把 dst_buf 指针偏移到内容区起点（R12）。
     rga_buffer_t src_buffer = resolved.buffer;
-    rga_buffer_t dst_buffer = wrapbuffer_virtualaddr(
-        dst_buf, target_w, target_h, dst_format, target_w, target_h);
+    rga_buffer_t dst_buffer;
+    if (dst.dma_buf_fd() >= 0) {
+        dst_buffer = wrapbuffer_fd(
+            dst.dma_buf_fd(), target_w, target_h, dst_format, target_w, target_h);
+    } else {
+        dst_buffer = wrapbuffer_virtualaddr(
+            dst_buf, target_w, target_h, dst_format, target_w, target_h);
+    }
 
     if (dst_buffer.width <= 0) {
         return false;

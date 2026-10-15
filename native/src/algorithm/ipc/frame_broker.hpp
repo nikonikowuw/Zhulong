@@ -17,6 +17,7 @@
 #include "ipc_protocol.hpp"
 #include "shm_pool.hpp"
 #include "unix_socket.hpp"
+#include <platform/dmabuf/dmabuf_allocator.hpp>
 #include <Zhulong/frame.hpp>
 #include <functional>
 #include <string>
@@ -111,6 +112,11 @@ public:
     [[nodiscard]] bool is_running() const noexcept { return running_.load(); }
 
     /**
+     * @brief 检查当前槽位池是否由物理连续 DMA-BUF 支撑（硬件零拷贝）
+     */
+    [[nodiscard]] bool has_dma_slots() const noexcept { return has_dma_slots_; }
+
+    /**
      * @brief 获取当前在线的客户端数量
      */
     [[nodiscard]] size_t client_count() const;
@@ -178,6 +184,8 @@ private:
 
     ShmPool shm_pool_;
     UnixSocketServer server_;
+    bool has_dma_slots_{false};
+    std::vector<std::unique_ptr<zhulong::platform::DmaBuffer>> dma_slots_;
 
     mutable std::mutex mutex_;
     std::vector<SlotTracker> slots_;

@@ -84,7 +84,12 @@ int main(void) {
     /* 2. 验证数据结构与对齐 */
     _Static_assert(sizeof(zhulong_bbox) == 88, "zhulong_bbox must be 88 bytes");
     _Static_assert(sizeof(zhulong_bbox) % 8 == 0, "zhulong_bbox must be 8-byte aligned");
-    assert(sizeof(zhulong_frame_view) > 0);
+    _Static_assert(sizeof(zhulong_frame_view) == 88, "zhulong_frame_view must be 88 bytes");
+    _Static_assert(sizeof(zhulong_frame_view) % 8 == 0, "zhulong_frame_view must be 8-byte aligned");
+    _Static_assert(offsetof(zhulong_frame_view, dma_buf_fd) == 28, "dma_buf_fd offset mismatch");
+    _Static_assert(offsetof(zhulong_frame_view, planes) == 32, "planes offset mismatch");
+    _Static_assert(offsetof(zhulong_frame_view, strides) == 64, "strides offset mismatch");
+    _Static_assert(offsetof(zhulong_frame_view, timestamp_us) == 80, "timestamp_us offset mismatch");
     assert(sizeof(zhulong_inference_result) > 0);
     assert(sizeof(zhulong_plugin_api_v1) > 0);
 

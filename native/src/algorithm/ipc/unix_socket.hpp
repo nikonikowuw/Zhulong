@@ -77,6 +77,18 @@ public:
     void set_on_disconnect(DisconnectCallback cb) { on_disconnect_ = std::move(cb); }
 
     /**
+     * @brief 向指定客户端发送类型化 IPC 报文（可选携带文件描述符通过 SCM_RIGHTS 传输）
+     *
+     * @param client_id 目标客户端唯一 ID
+     * @param msg_type 消息类型枚举（MessageType）
+     * @param payload 负载数据指针（可为空）
+     * @param payload_size 负载字节数（<= MAX_IPC_PAYLOAD_SIZE）
+     * @param fd_to_send 需附带传递的文件描述符（<0 表示不附带）
+     * @return true 发送成功；false 发送失败或对端已断开
+     */
+    bool send_msg_with_fd(uint32_t client_id, uint16_t msg_type, const void* payload, size_t payload_size, int fd_to_send);
+
+    /**
      * @brief 向指定客户端发送类型化 IPC 报文
      *
      * @param client_id 目标客户端唯一 ID
@@ -85,7 +97,9 @@ public:
      * @param payload_size 负载字节数（<= MAX_IPC_PAYLOAD_SIZE）
      * @return true 发送成功；false 发送失败或对端已断开
      */
-    bool send_msg(uint32_t client_id, uint16_t msg_type, const void* payload = nullptr, size_t payload_size = 0);
+    bool send_msg(uint32_t client_id, uint16_t msg_type, const void* payload = nullptr, size_t payload_size = 0) {
+        return send_msg_with_fd(client_id, msg_type, payload, payload_size, -1);
+    }
 
     /**
      * @brief 向所有当前在线的客户端广播同一种 IPC 消息
@@ -154,12 +168,30 @@ public:
     void disconnect();
 
     /**
-     * @brief 向服务端发送单条类型化 IPC 消息
+     * @brief 向服务端发送单条类型化 IPC 消息（可选携带文件描述符通过 SCM_RIGHTS 传输）
      */
-    bool send_msg(uint16_t msg_type, const void* payload = nullptr, size_t payload_size = 0);
+    bool send_msg_with_fd(uint16_t msg_type, const void* payload, size_t payload_size, int fd_to_send);
 
     /**
-     * @brief 同步/超时接收一条完整的 IPC 消息
+     * @brief 向服务端发送单条类型化 IPC 消息
+     */
+    bool send_msg(uint16_t msg_type, const void* payload = nullptr, size_t payload_size = 0) {
+        return send_msg_with_fd(msg_type, payload, payload_size, -1);
+    }
+
+    /**
+     * @brief 同步/超时接收一条完整的 IPC 消息并提取可选的 SCM_RIGHTS 文件描述符
+     *
+     * @param[out] out_header 解析出的 16 字节报文头部
+     * @param[out] out_payload 自动扩容并装载的负载数据
+     * @param[out] out_fd 接收到的文件描述符（若对端未携带则为 -1；若 >= 0 调用方负责关闭）
+     * @param timeout_ms 超时毫秒数（<0 表示无限等待，0 表示非阻塞，>0 表示带超时）
+     * @return true 成功收到完整报文；false 超时、半包熔断或连接已断开
+     */
+    bool recv_msg_with_fd(IpcHeader& out_header, std::vector<uint8_t>& out_payload, int& out_fd, int timeout_ms = -1);
+
+    /**
+     * @brief 同步/超时接收一条完整的 IPC 消息（忽略或关闭任何附带的 fd）
      *
      * @param[out] out_header 解析出的 16 字节报文头部
      * @param[out] out_payload 自动扩容并装载的负载数据

@@ -224,34 +224,101 @@ zhulong_status_t RknnInferenceBackend::forward(SessionContext* session,
     try {
         RknnModelAsset& asset = *state->model;
 
+        // 校验输入数量与模型要求一致
         if (inputs.size() != asset.io_num.n_input) {
             return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
         }
 
-        std::vector<rknn_input> rknn_inputs(asset.io_num.n_input);
+        // 统一校验输入元素数与模型期望一致（支持不同精度输入如 UINT8 -> FP16 由 Runtime 自动转换）
         for (uint32_t i = 0; i < asset.io_num.n_input; ++i) {
-            const rknn_tensor_attr& attr = asset.input_attrs[i];
-            // 校验输入元素数与模型期望一致（支持不同精度输入如 UINT8 -> FP16 由 Runtime 自动转换）
-            if (inputs[i].element_count() != attr.n_elems) {
+            if (inputs[i].element_count() != asset.input_attrs[i].n_elems) {
                 return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
             }
-            rknn_input& in = rknn_inputs[i];
-            in = {};
-            in.index = i;
-            in.buf = const_cast<void*>(inputs[i].raw_data());
-            in.size = static_cast<uint32_t>(inputs[i].byte_size());
-            in.pass_through = 0;
-            in.type = to_rknn_tensor_type(inputs[i].dtype());
-            in.fmt = attr.fmt;
         }
 
-        int ret = rknn_inputs_set(state->ctx, asset.io_num.n_input, rknn_inputs.data());
-        if (ret != RKNN_SUCC) {
-            return map_rknn_error(ret);
+        // 检查是否具备外部 DMA-BUF 零拷贝输入
+        bool has_dma_input = false;
+        for (const auto& in_tensor : inputs) {
+            if (in_tensor.dma_buf_fd() >= 0) {
+                has_dma_input = true;
+                break;
+            }
+        }
+
+        if (has_dma_input) {
+            if (state->cached_input_mems.size() != asset.io_num.n_input) {
+                state->cached_input_mems.resize(asset.io_num.n_input);
+            }
+
+            for (uint32_t i = 0; i < asset.io_num.n_input; ++i) {
+                const rknn_tensor_attr& attr = asset.input_attrs[i];
+
+                if (inputs[i].dma_buf_fd() >= 0) {
+                    auto& cached = state->cached_input_mems[i];
+                    if (cached.mem == nullptr || cached.fd != inputs[i].dma_buf_fd() ||
+                        cached.va != inputs[i].raw_data() || cached.size != inputs[i].byte_size()) {
+                        if (cached.mem != nullptr) {
+                            rknn_destroy_mem(state->ctx, cached.mem);
+                            cached.mem = nullptr;
+                        }
+                        cached.mem = rknn_create_mem_from_fd(
+                            state->ctx,
+                            inputs[i].dma_buf_fd(),
+                            const_cast<void*>(inputs[i].raw_data()),
+                            static_cast<uint32_t>(inputs[i].byte_size()),
+                            0
+                        );
+                        if (!cached.mem) {
+                            return ZHULONG_PLUGIN_ERR_INTERNAL;
+                        }
+                        cached.fd = inputs[i].dma_buf_fd();
+                        cached.va = const_cast<void*>(inputs[i].raw_data());
+                        cached.size = inputs[i].byte_size();
+
+                        rknn_tensor_attr io_attr = attr;
+                        io_attr.type = to_rknn_tensor_type(inputs[i].dtype());
+                        io_attr.index = i;
+                        int set_ret = rknn_set_io_mem(state->ctx, cached.mem, &io_attr);
+                        if (set_ret != RKNN_SUCC) {
+                            return map_rknn_error(set_ret);
+                        }
+                    }
+                } else {
+                    rknn_input in{};
+                    in.index = i;
+                    in.buf = const_cast<void*>(inputs[i].raw_data());
+                    in.size = static_cast<uint32_t>(inputs[i].byte_size());
+                    in.pass_through = 0;
+                    in.type = to_rknn_tensor_type(inputs[i].dtype());
+                    in.fmt = attr.fmt;
+                    int in_ret = rknn_inputs_set(state->ctx, 1, &in);
+                    if (in_ret != RKNN_SUCC) {
+                        return map_rknn_error(in_ret);
+                    }
+                }
+            }
+        } else {
+            std::vector<rknn_input> rknn_inputs(asset.io_num.n_input);
+            for (uint32_t i = 0; i < asset.io_num.n_input; ++i) {
+                const rknn_tensor_attr& attr = asset.input_attrs[i];
+                rknn_input& in = rknn_inputs[i];
+                in = {};
+                in.index = i;
+                in.buf = const_cast<void*>(inputs[i].raw_data());
+                in.size = static_cast<uint32_t>(inputs[i].byte_size());
+                in.pass_through = 0;
+                in.type = to_rknn_tensor_type(inputs[i].dtype());
+                in.fmt = attr.fmt;
+            }
+
+            int set_ret = rknn_inputs_set(state->ctx, asset.io_num.n_input, rknn_inputs.data());
+            if (set_ret != RKNN_SUCC) {
+                return map_rknn_error(set_ret);
+            }
         }
 
         // 同步阻塞：extend=nullptr → non_block=0，返回时设备已不再使用输入。
-        ret = rknn_run(state->ctx, nullptr);
+        int ret = rknn_run(state->ctx, nullptr);
         if (ret != RKNN_SUCC) {
             return map_rknn_error(ret);
         }

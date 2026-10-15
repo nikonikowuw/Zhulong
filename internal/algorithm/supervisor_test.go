@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -273,9 +275,35 @@ func waitForRecordedInvocations(t *testing.T, path string, want int) {
 	t.Fatalf("runner invocations did not reach %d; got %d", want, len(readRecordedRunnerInvocations(t, path)))
 }
 
-// findRunnerPID 在 /proc 中按命令行查找当前 runner 子进程的 PID。
+// findRunnerPID 在 /proc（Linux）或 ps（macOS/其他）中按命令行查找当前 runner 子进程的 PID。
 func findRunnerPID(t *testing.T, marker string) int {
 	t.Helper()
+	if runtime.GOOS != "linux" {
+		out, err := exec.Command("ps", "-eo", "pid,command").Output()
+		if err != nil {
+			t.Fatalf("ps: %v", err)
+		}
+		self := os.Getpid()
+		lines := strings.Split(string(out), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				continue
+			}
+			pid, convErr := strconv.Atoi(fields[0])
+			if convErr != nil || pid == self {
+				continue
+			}
+			if strings.Contains(line, "recording_runner.sh") && strings.Contains(line, marker) {
+				return pid
+			}
+		}
+		return 0
+	}
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		t.Fatalf("read /proc: %v", err)

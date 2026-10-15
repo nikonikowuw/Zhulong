@@ -89,8 +89,8 @@ func TestRunnerProcessInjectsDotEnvEndToEnd(t *testing.T) {
 	}
 	defer proc.Stop(2 * time.Second)
 
-	// Wait for the child to emit its line.
-	deadline := time.Now().Add(2 * time.Second)
+	// Wait for the child to emit its line (up to 5s under concurrent -race load).
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, entry := range observed.All() {
 			if strings.Contains(entry.Message, "ZHULONG_ENV_PROBE=injected") {

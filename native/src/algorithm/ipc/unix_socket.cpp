@@ -54,6 +54,79 @@ bool write_all(int fd, const void* data, size_t size) {
 }
 
 /**
+ * @brief 结构化报文写函数（可选携带 SCM_RIGHTS 文件描述符）
+ */
+bool write_msg_with_fd(int fd, const IpcHeader& header, const void* payload, size_t payload_size, int fd_to_send) {
+    struct msghdr msg{};
+    struct iovec iov[2];
+    iov[0].iov_base = const_cast<void*>(static_cast<const void*>(&header));
+    iov[0].iov_len = sizeof(header);
+    int iovcnt = 1;
+    if (payload && payload_size > 0) {
+        iov[1].iov_base = const_cast<void*>(payload);
+        iov[1].iov_len = payload_size;
+        iovcnt = 2;
+    }
+    msg.msg_iov = iov;
+    msg.msg_iovlen = iovcnt;
+
+    union {
+        struct cmsghdr cm;
+        char control[CMSG_SPACE(sizeof(int))];
+    } control_un;
+
+    if (fd_to_send >= 0) {
+        std::memset(control_un.control, 0, sizeof(control_un.control));
+        msg.msg_control = control_un.control;
+        msg.msg_controllen = sizeof(control_un.control);
+        struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type = SCM_RIGHTS;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+        std::memcpy(CMSG_DATA(cmsg), &fd_to_send, sizeof(int));
+    }
+
+    size_t total_size = sizeof(header) + payload_size;
+    ssize_t n = 0;
+    while (true) {
+        n = sendmsg(fd, &msg, MSG_NOSIGNAL);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                struct pollfd pfd{};
+                pfd.fd = fd;
+                pfd.events = POLLOUT;
+                int pret = poll(&pfd, 1, 50);
+                if (pret > 0 && (pfd.revents & POLLOUT)) continue;
+            }
+            return false;
+        }
+        break;
+    }
+
+    if (static_cast<size_t>(n) == total_size) {
+        return true;
+    }
+
+    // 处理局部写入：描述符已随首字节递交，剩余数据通过普通流写补齐
+    size_t written = static_cast<size_t>(n);
+    if (written < sizeof(header)) {
+        const uint8_t* hdr_rem = reinterpret_cast<const uint8_t*>(&header) + written;
+        if (!write_all(fd, hdr_rem, sizeof(header) - written)) {
+            return false;
+        }
+        if (payload && payload_size > 0) {
+            return write_all(fd, payload, payload_size);
+        }
+    } else {
+        size_t payload_written = written - sizeof(header);
+        const uint8_t* pay_rem = static_cast<const uint8_t*>(payload) + payload_written;
+        return write_all(fd, pay_rem, payload_size - payload_written);
+    }
+    return true;
+}
+
+/**
  * @brief 带超时与半包流脱节检测的定长流读取函数
  */
 ReadStatus read_all(int fd, void* data, size_t size, int timeout_ms) {
@@ -315,7 +388,7 @@ void UnixSocketServer::remove_client(uint32_t client_id) {
     }
 }
 
-bool UnixSocketServer::send_msg(uint32_t client_id, uint16_t msg_type, const void* payload, size_t payload_size) {
+bool UnixSocketServer::send_msg_with_fd(uint32_t client_id, uint16_t msg_type, const void* payload, size_t payload_size, int fd_to_send) {
     std::shared_ptr<ClientChannel> channel;
     {
         std::lock_guard<std::mutex> lock(clients_mutex_);
@@ -336,13 +409,7 @@ bool UnixSocketServer::send_msg(uint32_t client_id, uint16_t msg_type, const voi
     header.version = IPC_VERSION;
     header.payload_size = static_cast<uint32_t>(payload_size);
 
-    if (!write_all(cfd, &header, sizeof(header))) {
-        return false;
-    }
-    if (payload && payload_size > 0) {
-        return write_all(cfd, payload, payload_size);
-    }
-    return true;
+    return write_msg_with_fd(cfd, header, payload, payload_size, fd_to_send);
 }
 
 size_t UnixSocketServer::broadcast(uint16_t msg_type, const void* payload, size_t payload_size) {
@@ -411,7 +478,7 @@ void UnixSocketClient::disconnect() {
     }
 }
 
-bool UnixSocketClient::send_msg(uint16_t msg_type, const void* payload, size_t payload_size) {
+bool UnixSocketClient::send_msg_with_fd(uint16_t msg_type, const void* payload, size_t payload_size, int fd_to_send) {
     int sock = fd_.load();
     if (sock < 0) return false;
     std::lock_guard<std::mutex> lock(send_mutex_);
@@ -426,16 +493,11 @@ bool UnixSocketClient::send_msg(uint16_t msg_type, const void* payload, size_t p
     header.version = IPC_VERSION;
     header.payload_size = static_cast<uint32_t>(payload_size);
 
-    if (!write_all(sock, &header, sizeof(header))) {
-        return false;
-    }
-    if (payload && payload_size > 0) {
-        return write_all(sock, payload, payload_size);
-    }
-    return true;
+    return write_msg_with_fd(sock, header, payload, payload_size, fd_to_send);
 }
 
-bool UnixSocketClient::recv_msg(IpcHeader& out_header, std::vector<uint8_t>& out_payload, int timeout_ms) {
+bool UnixSocketClient::recv_msg_with_fd(IpcHeader& out_header, std::vector<uint8_t>& out_payload, int& out_fd, int timeout_ms) {
+    out_fd = -1;
     int sock = fd_.load();
     if (sock < 0) return false;
     std::lock_guard<std::mutex> lock(recv_mutex_);
@@ -443,21 +505,98 @@ bool UnixSocketClient::recv_msg(IpcHeader& out_header, std::vector<uint8_t>& out
     sock = fd_.load();
     if (sock < 0) return false;
 
-    ReadStatus st = read_all(sock, &out_header, sizeof(out_header), timeout_ms);
-    if (st != ReadStatus::SUCCESS) {
+    if (timeout_ms >= 0) {
+        struct pollfd pfd{};
+        pfd.fd = sock;
+        pfd.events = POLLIN;
+        int ret = poll(&pfd, 1, timeout_ms);
+        if (ret == 0) return false;
+        if (ret < 0) return false;
+        if (pfd.revents & (POLLERR | POLLNVAL)) return false;
+        if ((pfd.revents & POLLHUP) && !(pfd.revents & POLLIN)) return false;
+    }
+
+    struct msghdr msg{};
+    struct iovec iov{};
+    iov.iov_base = &out_header;
+    iov.iov_len = sizeof(out_header);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+
+    union {
+        struct cmsghdr cm;
+        char control[CMSG_SPACE(sizeof(int)) * 2];
+    } control_un;
+    std::memset(control_un.control, 0, sizeof(control_un.control));
+    msg.msg_control = control_un.control;
+    msg.msg_controllen = sizeof(control_un.control);
+
+    ssize_t n = 0;
+    while (true) {
+        n = recvmsg(sock, &msg, 0);
+        if (n < 0 && (errno == EINTR)) continue;
+        break;
+    }
+    if (n <= 0) {
         return false;
     }
+
+    for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg); cmsg != nullptr; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+        if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+            size_t num_fds = (cmsg->cmsg_len >= CMSG_LEN(sizeof(int))) ?
+                ((cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int)) : 0;
+            const int* fds = reinterpret_cast<const int*>(CMSG_DATA(cmsg));
+            for (size_t i = 0; i < num_fds; ++i) {
+                int received_fd = fds[i];
+                if (received_fd >= 0) {
+                    if (out_fd < 0) {
+                        int flags = fcntl(received_fd, F_GETFD);
+                        if (flags != -1) {
+                            fcntl(received_fd, F_SETFD, flags | FD_CLOEXEC);
+                        }
+                        out_fd = received_fd;
+                    } else {
+                        // 已经提取过主描述符，多余的描述符立即关闭，杜绝句柄泄漏
+                        ::close(received_fd);
+                    }
+                }
+            }
+        }
+    }
+
+    if (static_cast<size_t>(n) < sizeof(out_header)) {
+        uint8_t* ptr = reinterpret_cast<uint8_t*>(&out_header) + n;
+        size_t rem = sizeof(out_header) - n;
+        ReadStatus st = read_all(sock, ptr, rem, 1000);
+        if (st != ReadStatus::SUCCESS) {
+            if (out_fd >= 0) { ::close(out_fd); out_fd = -1; }
+            return false;
+        }
+    }
+
     if (out_header.magic != IPC_MAGIC || out_header.payload_size > MAX_IPC_PAYLOAD_SIZE) {
+        if (out_fd >= 0) { ::close(out_fd); out_fd = -1; }
         return false;
     }
 
     out_payload.resize(out_header.payload_size);
     if (out_header.payload_size > 0) {
-        if (read_all(sock, out_payload.data(), out_header.payload_size, timeout_ms) != ReadStatus::SUCCESS) {
+        ReadStatus pst = read_all(sock, out_payload.data(), out_header.payload_size, 1000);
+        if (pst != ReadStatus::SUCCESS) {
+            if (out_fd >= 0) { ::close(out_fd); out_fd = -1; }
             return false;
         }
     }
     return true;
+}
+
+bool UnixSocketClient::recv_msg(IpcHeader& out_header, std::vector<uint8_t>& out_payload, int timeout_ms) {
+    int received_fd = -1;
+    bool ok = recv_msg_with_fd(out_header, out_payload, received_fd, timeout_ms);
+    if (received_fd >= 0) {
+        ::close(received_fd);
+    }
+    return ok;
 }
 
 } // namespace zhulong::ipc

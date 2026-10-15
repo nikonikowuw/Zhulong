@@ -20,6 +20,22 @@
 #include "../ipc/shm_pool.hpp"
 #include "../ipc/unix_socket.hpp"
 #include <dlfcn.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#if defined(__linux__)
+#include <sys/ioctl.h>
+#ifndef DMA_BUF_SYNC_READ
+struct dma_buf_sync {
+    uint64_t flags;
+};
+#define DMA_BUF_SYNC_READ (1 << 0)
+#define DMA_BUF_SYNC_WRITE (2 << 0)
+#define DMA_BUF_SYNC_START (0 << 2)
+#define DMA_BUF_SYNC_END (1 << 2)
+#define DMA_BUF_BASE 'b'
+#define DMA_BUF_IOCTL_SYNC _IOW(DMA_BUF_BASE, 0, struct dma_buf_sync)
+#endif
+#endif
 #include <iostream>
 #include <string>
 #include <vector>
@@ -538,7 +554,8 @@ namespace zhulong
             {
                 ipc::IpcHeader hdr{};
                 std::vector<uint8_t> payload;
-                if (!client.recv_msg(hdr, payload, 500))
+                int received_fd = -1;
+                if (!client.recv_msg_with_fd(hdr, payload, received_fd, 500))
                 {
                     if (!client.is_connected())
                         break;
@@ -550,7 +567,27 @@ namespace zhulong
                     ipc::FrameDispatchMsg dispatch{};
                     std::memcpy(&dispatch, payload.data(), sizeof(dispatch));
 
-                    const uint8_t *slot_base = shm.slot_read_ptr(dispatch.slot_index);
+                    int active_dma_fd = (received_fd >= 0) ? received_fd : dispatch.reserved_fd;
+                    void* dma_mmap = nullptr;
+                    if (active_dma_fd >= 0 && shm.slot_size() > 0)
+                    {
+                        dma_mmap = ::mmap(nullptr, shm.slot_size(), PROT_READ, MAP_SHARED, active_dma_fd, 0);
+                        if (dma_mmap == MAP_FAILED)
+                        {
+                            dma_mmap = nullptr;
+                        }
+#if defined(__linux__)
+                        if (dma_mmap != nullptr)
+                        {
+                            struct dma_buf_sync sync{DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ};
+                            ioctl(active_dma_fd, DMA_BUF_IOCTL_SYNC, &sync);
+                        }
+#endif
+                    }
+
+                    const uint8_t *slot_base = (dma_mmap != nullptr)
+                        ? static_cast<const uint8_t*>(dma_mmap)
+                        : shm.slot_read_ptr(dispatch.slot_index);
                     if (slot_base && dispatch.offsets[0] < shm.slot_size())
                     {
                         zhulong_frame_view view{};
@@ -559,6 +596,7 @@ namespace zhulong
                         view.width = dispatch.width;
                         view.height = dispatch.height;
                         view.format = dispatch.format;
+                        view.dma_buf_fd = active_dma_fd;
                         view.strides[0] = dispatch.strides[0];
                         view.planes[0] = slot_base + dispatch.offsets[0];
 
@@ -596,6 +634,23 @@ namespace zhulong
                         {
                             api.result_release(result);
                         }
+                    }
+
+                    if (dma_mmap != nullptr)
+                    {
+#if defined(__linux__)
+                        struct dma_buf_sync sync{DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ};
+                        ioctl(active_dma_fd, DMA_BUF_IOCTL_SYNC, &sync);
+#endif
+                        ::munmap(dma_mmap, shm.slot_size());
+                        dma_mmap = nullptr;
+                    }
+
+                    // 及时释放本进程通过 SCM_RIGHTS 接收到的描述符副本，杜绝文件句柄泄漏
+                    if (received_fd >= 0)
+                    {
+                        ::close(received_fd);
+                        received_fd = -1;
                     }
 
                     // 发送 ACK
@@ -648,6 +703,12 @@ namespace zhulong
                 {
                     ParsedDelete del = parse_delete_payload(payload.data(), payload.size());
                     gallery_index.remove(del.face_id, del.person_id);
+                }
+
+                if (received_fd >= 0)
+                {
+                    ::close(received_fd);
+                    received_fd = -1;
                 }
             }
 

@@ -7,7 +7,9 @@
 
 #include "aligner.hpp"
 #include <zhulong/algo.hpp>
+#include <platform/dmabuf/dmabuf_allocator.hpp>
 #include <array>
+#include <memory>
 #include <vector>
 #include <cstdint>
 
@@ -58,6 +60,10 @@ private:
 
     float score_threshold_{0.50f};
     float nms_threshold_{0.40f};
+
+    std::unique_ptr<zhulong::platform::DmaBuffer> dma_input_buf_;
+    int cached_w_{0};
+    int cached_h_{0};
 };
 
 } // namespace zhulong::face

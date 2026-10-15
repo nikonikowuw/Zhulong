@@ -36,6 +36,15 @@ int main() {
     assert(fixed_tensor.element_count() == 6);
     assert(fixed_tensor.byte_size() == 6);
 
+    // 1.1 Tensor DMA-BUF binding
+    uint8_t dummy_dma_mem[32] = {0};
+    zhulong::Tensor dma_tensor = zhulong::Tensor::from_dma_buf(42, {2, 4}, zhulong::DataType::UINT8, dummy_dma_mem);
+    assert(dma_tensor.dma_buf_fd() == 42);
+    assert(dma_tensor.is_external());
+    assert(dma_tensor.element_count() == 8);
+    assert(dma_tensor.byte_size() == 8);
+    assert(dma_tensor.raw_data() == dummy_dma_mem);
+
     for (const std::vector<int64_t>& dims : {std::vector<int64_t>{1, 0, 3},
                                              std::vector<int64_t>{1, -1, 3}}) {
         bool rejected = false;

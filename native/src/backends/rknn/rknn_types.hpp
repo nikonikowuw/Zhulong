@@ -63,6 +63,14 @@ struct RknnModelAsset : public ModelAsset {
     }
 };
 
+// 缓存已注册的外部 DMA-BUF 内存映射，避免热路径每帧调用 rknn_create_mem_from_fd
+struct CachedDmaMem {
+    int fd{-1};
+    void* va{nullptr};
+    size_t size{0};
+    rknn_tensor_mem* mem{nullptr};
+};
+
 // 每 worker 一个，独占；上下文由 rknn_dup_context(&root, &ctx) 派生。
 //
 // ⚠️ 单 NPU 核（RK3568）：不得声称吞吐随 worker 数线性扩展。真机实测 1/2/4 worker
@@ -75,7 +83,16 @@ struct RknnSessionContext : public SessionContext {
     // ⚠️ 持有 asset 的 shared_ptr，保证 session 一定早于 root 销毁（R5 的关键）。
     std::shared_ptr<RknnModelAsset> model;
 
+    std::vector<CachedDmaMem> cached_input_mems;
+
     ~RknnSessionContext() override {
+        for (auto& item : cached_input_mems) {
+            if (item.mem && valid) {
+                rknn_destroy_mem(ctx, item.mem);
+                item.mem = nullptr;
+            }
+        }
+        cached_input_mems.clear();
         if (valid) {
             rknn_destroy(ctx);
             valid = false;

@@ -1,4 +1,5 @@
 #include "detector.hpp"
+#include <platform/dmabuf/dmabuf_allocator.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -61,7 +62,28 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
     const int unpad_w = std::min(model_w, static_cast<int>(std::round(static_cast<float>(orig_w) * det_scale)));
     const int unpad_h = std::min(model_h, static_cast<int>(std::round(static_cast<float>(orig_h) * det_scale)));
 
-    zhulong::Tensor input_tensor({1, model_h, model_w, 3}, zhulong::DataType::UINT8);
+    // 支持通过 DMA-BUF 持久缓存分配零拷贝输入张量（避免热路径单帧分配/释放抖动）
+    if (image.dma_buf_fd() >= 0 && zhulong::platform::DmaBufAllocator::instance().is_supported()) {
+        if (!dma_input_buf_ || cached_w_ != model_w || cached_h_ != model_h) {
+            dma_input_buf_ = zhulong::platform::DmaBufAllocator::instance().allocate(model_w * model_h * 3);
+            cached_w_ = model_w;
+            cached_h_ = model_h;
+        }
+    } else {
+        dma_input_buf_.reset();
+        cached_w_ = 0;
+        cached_h_ = 0;
+    }
+
+    zhulong::Tensor input_tensor;
+    if (dma_input_buf_) {
+        input_tensor = zhulong::Tensor::from_dma_buf(
+            dma_input_buf_->fd(), {1, model_h, model_w, 3}, zhulong::DataType::UINT8, dma_input_buf_->mmap_addr());
+        dma_input_buf_->sync_start(zhulong::platform::DMA_SYNC_WRITE);
+    } else {
+        input_tensor = zhulong::Tensor({1, model_h, model_w, 3}, zhulong::DataType::UINT8);
+    }
+
     uint8_t* dst_data = input_tensor.data<uint8_t>();
     std::memset(dst_data, 0, input_tensor.byte_size());
 
@@ -81,6 +103,10 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
             dst_row[dx * 3 + 1] = p[c_g];
             dst_row[dx * 3 + 2] = p[c_b];
         }
+    }
+
+    if (dma_input_buf_) {
+        dma_input_buf_->sync_end(zhulong::platform::DMA_SYNC_WRITE);
     }
 
     // 2. NPU / 后端前向推理

@@ -209,6 +209,7 @@ endif()
 #                      4.1 构建公共算法运行库 (libzhulong_algo_runtime.so)
 # ==============================================================================
 add_library(ZhulongAlgoRuntime SHARED
+    src/platform/dmabuf/dmabuf_allocator.cpp
     src/algorithm/runtime/cpu_inference_backend.cpp
     src/algorithm/runtime/cpu_vision_backend.cpp
     src/algorithm/runtime/gallery_registry.cpp
@@ -251,6 +252,7 @@ if(ZHULONG_VISION_BACKEND STREQUAL "rga")
 endif()
 # ==============================================================================
 add_library(ZhulongAlgoIpc STATIC
+    src/platform/dmabuf/dmabuf_allocator.cpp
     src/algorithm/ipc/shm_pool.cpp
     src/algorithm/ipc/unix_socket.cpp
     src/algorithm/ipc/frame_broker.cpp
@@ -351,6 +353,22 @@ if(BUILD_TESTING)
     target_include_directories(ZhulongPluginCAbiTests PRIVATE sdk/include)
     add_test(NAME ZhulongPluginCAbi COMMAND ZhulongPluginCAbiTests)
     set_tests_properties(ZhulongPluginCAbi PROPERTIES TIMEOUT 10)
+
+    # DMA-BUF 物理分配器单元测试
+    add_executable(ZhulongDmaBufAllocatorTests tests/dmabuf_allocator_test.cpp)
+    target_compile_features(ZhulongDmaBufAllocatorTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongDmaBufAllocatorTests PRIVATE src)
+    target_link_libraries(ZhulongDmaBufAllocatorTests PRIVATE ZhulongAlgoIpc)
+    add_test(NAME ZhulongDmaBufAllocator COMMAND ZhulongDmaBufAllocatorTests)
+    set_tests_properties(ZhulongDmaBufAllocator PROPERTIES TIMEOUT 10)
+
+    # IPC 套接字 SCM_RIGHTS 描述符透传单元测试
+    add_executable(ZhulongIpcSocketFdTests tests/ipc_socket_fd_test.cpp)
+    target_compile_features(ZhulongIpcSocketFdTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongIpcSocketFdTests PRIVATE sdk/include include src)
+    target_link_libraries(ZhulongIpcSocketFdTests PRIVATE ZhulongAlgoIpc)
+    add_test(NAME ZhulongIpcSocketFd COMMAND ZhulongIpcSocketFdTests)
+    set_tests_properties(ZhulongIpcSocketFd PROPERTIES TIMEOUT 10)
 
     # 算法公共运行库与 HAL 单元测试
     add_executable(ZhulongAlgoRuntimeTests tests/algo_runtime_test.cpp)

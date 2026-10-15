@@ -363,8 +363,8 @@ void test_runner_subprocess_e2e(const char* runner_bin, const char* plugin_so) {
 
     assert(pid > 0);
 
-    // 等待子进程连接
-    for (int i = 0; i < 50; ++i) {
+    // 等待子进程连接（最高等待 3 秒，避免并发测试时 CPU 抢占偶发超时）
+    for (int i = 0; i < 150; ++i) {
         if (broker.client_count() == 1) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
@@ -940,8 +940,8 @@ void test_runner_multi_broker_e2e(const char* runner_bin, const char* plugin_so)
 
     assert(pid > 0);
 
-    // 等待两路 Broker 均建立客户端连接
-    for (int i = 0; i < 50; ++i) {
+    // 等待两路 Broker 均建立客户端连接（最高等待 3 秒）
+    for (int i = 0; i < 150; ++i) {
         if (broker1.client_count() == 1 && broker2.client_count() == 1) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }

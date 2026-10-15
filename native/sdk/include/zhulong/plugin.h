@@ -90,6 +90,7 @@ typedef struct zhulong_frame_view {
     int32_t width;                 /**< 图像有效像素宽度 */
     int32_t height;                /**< 图像有效像素高度 */
     zhulong_pixel_format_t format; /**< 图像像素色彩格式 */
+    int32_t dma_buf_fd;            /**< 底层硬件 DMA-BUF 文件描述符（>=0 表示有效，<0 表示虚拟内存） */
     const uint8_t* planes[4];      /**< 各平面图像数据首地址借用指针数组 */
     int32_t strides[4];            /**< 各平面水平行跨度（字节数，含硬件对齐 padding）；strides[0]==0 表示紧凑排列 */
     int64_t timestamp_us;          /**< 采集单调时钟时间戳（微秒） */

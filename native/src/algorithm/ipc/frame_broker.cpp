@@ -29,6 +29,27 @@ bool FrameBroker::start(uint64_t stream_id, const std::string& base_dir,
         return false;
     }
 
+    // 1.1 尝试探测并初始化硬件 DMA-BUF 槽位池
+    dma_slots_.clear();
+    has_dma_slots_ = false;
+    if (zhulong::platform::DmaBufAllocator::instance().is_supported()) {
+        bool dma_ok = true;
+        for (size_t i = 0; i < options_.slot_count; ++i) {
+            auto buf = zhulong::platform::DmaBufAllocator::instance().allocate(options_.slot_size);
+            if (!buf) {
+                dma_ok = false;
+                break;
+            }
+            dma_slots_.push_back(std::move(buf));
+        }
+        if (dma_ok && dma_slots_.size() == options_.slot_count) {
+            has_dma_slots_ = true;
+        } else {
+            dma_slots_.clear();
+            has_dma_slots_ = false;
+        }
+    }
+
     // 2. 初始化槽位状态
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -71,6 +92,8 @@ void FrameBroker::stop() {
     std::lock_guard<std::mutex> lock(mutex_);
     slots_.clear();
     clients_.clear();
+    dma_slots_.clear();
+    has_dma_slots_ = false;
 }
 
 int FrameBroker::find_or_evict_free_slot(std::unique_lock<std::mutex>& /*lock*/) {
@@ -158,10 +181,20 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
         return true;
     }
 
-    // 写入数据到共享内存槽位
-    uint8_t* slot_data = shm_pool_.slot_write_ptr(slot_idx);
+    // 写入数据到共享内存槽位或硬件 DMA-BUF 槽位
+    uint8_t* slot_data = nullptr;
+    int dma_fd_to_send = -1;
+    if (has_dma_slots_) {
+        slot_data = static_cast<uint8_t*>(dma_slots_[slot_idx]->mmap_addr());
+        dma_fd_to_send = dma_slots_[slot_idx]->fd();
+        dma_slots_[slot_idx]->sync_start(zhulong::platform::DMA_SYNC_WRITE);
+    } else {
+        slot_data = shm_pool_.slot_write_ptr(slot_idx);
+        dma_fd_to_send = frame.dma_fd;
+    }
+
     if (!slot_data) {
-        // 共享内存槽位获取失败：原子回退在途配额
+        // 槽位获取失败：原子回退在途配额
         std::lock_guard<std::mutex> lock(mutex_);
         for (uint32_t cid : target_clients) {
             auto it = clients_.find(cid);
@@ -186,7 +219,7 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
     msg.width = static_cast<int32_t>(frame.width);
     msg.height = static_cast<int32_t>(frame.height);
     msg.strides[0] = static_cast<int32_t>(frame.stride);
-    msg.reserved_fd = frame.dma_fd;
+    msg.reserved_fd = dma_fd_to_send;
 
     if (frame.format == FRAME_FORMAT_NV12) {
         msg.format = ZHULONG_PIXEL_FORMAT_NV12;
@@ -283,6 +316,11 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
         }
     }
 
+    // 若使用 DMA 槽位，写完后执行 Cache 刷出
+    if (has_dma_slots_) {
+        dma_slots_[slot_idx]->sync_end(zhulong::platform::DMA_SYNC_WRITE);
+    }
+
     // 切换槽位状态为 LEASED
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -291,7 +329,7 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
 
     // 向各合格客户端下发帧通知 (若发送失败立即清算租约)
     for (uint32_t cid : target_clients) {
-        if (!server_.send_msg(cid, MSG_FRAME_DISPATCH, &msg, sizeof(msg))) {
+        if (!server_.send_msg_with_fd(cid, MSG_FRAME_DISPATCH, &msg, sizeof(msg), dma_fd_to_send)) {
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = clients_.find(cid);
             if (it != clients_.end() && it->second.in_flight_count > 0) {
