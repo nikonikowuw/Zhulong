@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Database primary key and surrogate key persistence conventions"}
+{"file": ".trellis/spec/backend/camera-guidelines.md", "reason": "Camera domain entity and service conventions"}
+{"file": ".trellis/spec/backend/storage-guidelines.md", "reason": "Person and face storage naming contracts"}
+{"file": ".trellis/spec/architecture.md", "reason": "System architecture and module boundaries"}
