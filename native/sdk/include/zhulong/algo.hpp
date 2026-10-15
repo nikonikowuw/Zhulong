@@ -645,7 +645,7 @@ struct PluginApi {
         } catch (...) {}
     }
 
-    /** @brief 打开单路摄像机时序任务上下文 */
+    /** @brief 打开单路摄像机时序任务状态 */
     static zhulong_status_t task_open(zhulong_worker_ctx_h worker, uint64_t task_id,
                                       zhulong_task_ctx_h* out_task) {
         if (!worker || !out_task) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
@@ -661,7 +661,7 @@ struct PluginApi {
         }
     }
 
-    /** @brief 关闭摄像机任务上下文 */
+    /** @brief 关闭摄像机任务状态 */
     static void task_close(zhulong_task_ctx_h task) {
         try {
             delete reinterpret_cast<TaskContext*>(task);

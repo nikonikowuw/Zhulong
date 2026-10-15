@@ -244,19 +244,19 @@ typedef struct zhulong_plugin_api_v1 {
     void             (*worker_destroy)(zhulong_worker_ctx_h worker);
 
     /**
-     * @brief 3. 任务状态绑定：为特定摄像机打开时序任务上下文 (如初始化目标跟踪器)
+     * @brief 3. 任务状态绑定：为特定摄像机打开时序任务状态 (如初始化目标跟踪器)
      *
      * @param worker Worker 执行上下文句柄
      * @param task_id 摄像机/流任务唯一编号
-     * @param[out] out_task 输出创建成功的任务上下文句柄
+     * @param[out] out_task 输出创建成功的任务状态句柄
      * @return zhulong_status_t 操作状态码
      */
     zhulong_status_t (*task_open)(zhulong_worker_ctx_h worker, uint64_t task_id, zhulong_task_ctx_h* out_task);
 
     /**
-     * @brief 关闭特定摄像机的任务上下文并释放时序跟踪状态
+     * @brief 关闭特定摄像机的任务状态并释放时序跟踪状态
      *
-     * @param task 待关闭的任务上下文句柄
+     * @param task 待关闭的任务状态句柄
      */
     void             (*task_close)(zhulong_task_ctx_h task);
 
@@ -267,7 +267,7 @@ typedef struct zhulong_plugin_api_v1 {
      *   - 函数内部必须以 try-catch 拦截所有 C++ 异常，失败时返回错误码并将 *out_result 置为 nullptr；
      *   - 成功时分配 zhulong_inference_result 结构体，外部使用后必须调用 result_release 归还。
      *
-     * @param task 任务上下文句柄
+     * @param task 任务状态句柄
      * @param frame 输入图像帧的只读借用视图
      * @param[out] out_result 输出分配的推理结果指针
      * @return zhulong_status_t 操作状态码
