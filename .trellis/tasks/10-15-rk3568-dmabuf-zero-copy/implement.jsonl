@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法插件纯 C ABI、zhulong_frame_view 布局与 IPC 传输契约"}
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "RKNN 与 RGA 硬件加速器接口规范与 DMA-BUF 零拷贝合同"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "媒体接入与 FrameBroker 共享内存/DMA 槽位生命周期契约"}

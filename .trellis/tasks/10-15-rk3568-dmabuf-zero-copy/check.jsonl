@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "验证 C ABI 结构体对齐、异常防爆门与跨进程内存释放无泄漏"}
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "验证 RKNN 与 RGA 在真机上的 DMA-BUF 绑定正确性与无崩溃保证"}
