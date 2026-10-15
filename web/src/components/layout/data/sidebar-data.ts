@@ -10,6 +10,7 @@ import {
   UserCheck,
   HardDrive,
   Server,
+  Cpu,
 } from 'lucide-react'
 import { type SidebarData } from '../types'
 
@@ -44,6 +45,11 @@ export const sidebarData: SidebarData = {
           title: 'Persons',
           url: '/persons',
           icon: UserCheck,
+        },
+        {
+          title: 'Algorithms',
+          url: '/algorithms',
+          icon: Cpu,
         },
         {
           title: 'Live View',

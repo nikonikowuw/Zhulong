@@ -23,6 +23,7 @@ import { Route as AuthenticatedPersonsIndexRouteImport } from './routes/_authent
 import { Route as AuthenticatedLiveIndexRouteImport } from './routes/_authenticated/live/index'
 import { Route as AuthenticatedCamerasIndexRouteImport } from './routes/_authenticated/cameras/index'
 import { Route as AuthenticatedAuditIndexRouteImport } from './routes/_authenticated/audit/index'
+import { Route as AuthenticatedAlgorithmsIndexRouteImport } from './routes/_authenticated/algorithms/index'
 import { Route as AuthenticatedSettingsTimeRouteImport } from './routes/_authenticated/settings/time'
 import { Route as AuthenticatedSettingsStorageRouteImport } from './routes/_authenticated/settings/storage'
 import { Route as AuthenticatedSettingsNetworkRouteImport } from './routes/_authenticated/settings/network'
@@ -102,6 +103,12 @@ const AuthenticatedAuditIndexRoute = AuthenticatedAuditIndexRouteImport.update({
   path: '/audit/',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedAlgorithmsIndexRoute =
+  AuthenticatedAlgorithmsIndexRouteImport.update({
+    id: '/algorithms/',
+    path: '/algorithms/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedSettingsTimeRoute =
   AuthenticatedSettingsTimeRouteImport.update({
     id: '/time',
@@ -147,6 +154,7 @@ export interface FileRoutesByFullPath {
   '/settings/network': typeof AuthenticatedSettingsNetworkRoute
   '/settings/storage': typeof AuthenticatedSettingsStorageRoute
   '/settings/time': typeof AuthenticatedSettingsTimeRoute
+  '/algorithms/': typeof AuthenticatedAlgorithmsIndexRoute
   '/audit/': typeof AuthenticatedAuditIndexRoute
   '/cameras/': typeof AuthenticatedCamerasIndexRoute
   '/live/': typeof AuthenticatedLiveIndexRoute
@@ -166,6 +174,7 @@ export interface FileRoutesByTo {
   '/settings/network': typeof AuthenticatedSettingsNetworkRoute
   '/settings/storage': typeof AuthenticatedSettingsStorageRoute
   '/settings/time': typeof AuthenticatedSettingsTimeRoute
+  '/algorithms': typeof AuthenticatedAlgorithmsIndexRoute
   '/audit': typeof AuthenticatedAuditIndexRoute
   '/cameras': typeof AuthenticatedCamerasIndexRoute
   '/live': typeof AuthenticatedLiveIndexRoute
@@ -188,6 +197,7 @@ export interface FileRoutesById {
   '/_authenticated/settings/network': typeof AuthenticatedSettingsNetworkRoute
   '/_authenticated/settings/storage': typeof AuthenticatedSettingsStorageRoute
   '/_authenticated/settings/time': typeof AuthenticatedSettingsTimeRoute
+  '/_authenticated/algorithms/': typeof AuthenticatedAlgorithmsIndexRoute
   '/_authenticated/audit/': typeof AuthenticatedAuditIndexRoute
   '/_authenticated/cameras/': typeof AuthenticatedCamerasIndexRoute
   '/_authenticated/live/': typeof AuthenticatedLiveIndexRoute
@@ -210,6 +220,7 @@ export interface FileRouteTypes {
     | '/settings/network'
     | '/settings/storage'
     | '/settings/time'
+    | '/algorithms/'
     | '/audit/'
     | '/cameras/'
     | '/live/'
@@ -229,6 +240,7 @@ export interface FileRouteTypes {
     | '/settings/network'
     | '/settings/storage'
     | '/settings/time'
+    | '/algorithms'
     | '/audit'
     | '/cameras'
     | '/live'
@@ -250,6 +262,7 @@ export interface FileRouteTypes {
     | '/_authenticated/settings/network'
     | '/_authenticated/settings/storage'
     | '/_authenticated/settings/time'
+    | '/_authenticated/algorithms/'
     | '/_authenticated/audit/'
     | '/_authenticated/cameras/'
     | '/_authenticated/live/'
@@ -367,6 +380,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAuditIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/algorithms/': {
+      id: '/_authenticated/algorithms/'
+      path: '/algorithms'
+      fullPath: '/algorithms/'
+      preLoaderRoute: typeof AuthenticatedAlgorithmsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/settings/time': {
       id: '/_authenticated/settings/time'
       path: '/time'
@@ -431,6 +451,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedSettingsRouteRoute: typeof AuthenticatedSettingsRouteRouteWithChildren
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedErrorsErrorRoute: typeof AuthenticatedErrorsErrorRoute
+  AuthenticatedAlgorithmsIndexRoute: typeof AuthenticatedAlgorithmsIndexRoute
   AuthenticatedAuditIndexRoute: typeof AuthenticatedAuditIndexRoute
   AuthenticatedCamerasIndexRoute: typeof AuthenticatedCamerasIndexRoute
   AuthenticatedLiveIndexRoute: typeof AuthenticatedLiveIndexRoute
@@ -441,6 +462,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedSettingsRouteRoute: AuthenticatedSettingsRouteRouteWithChildren,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedErrorsErrorRoute: AuthenticatedErrorsErrorRoute,
+  AuthenticatedAlgorithmsIndexRoute: AuthenticatedAlgorithmsIndexRoute,
   AuthenticatedAuditIndexRoute: AuthenticatedAuditIndexRoute,
   AuthenticatedCamerasIndexRoute: AuthenticatedCamerasIndexRoute,
   AuthenticatedLiveIndexRoute: AuthenticatedLiveIndexRoute,

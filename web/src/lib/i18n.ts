@@ -7,6 +7,9 @@ import { initReactI18next } from 'react-i18next'
 import auditEn from '@/features/audit/locales/en.json'
 import auditZhHans from '@/features/audit/locales/zh-Hans.json'
 import auditZhHant from '@/features/audit/locales/zh-Hant.json'
+import algorithmsEn from '@/features/algorithms/locales/en.json'
+import algorithmsZhHans from '@/features/algorithms/locales/zh-Hans.json'
+import algorithmsZhHant from '@/features/algorithms/locales/zh-Hant.json'
 import camerasEn from '@/features/cameras/locales/en.json'
 import camerasZhHans from '@/features/cameras/locales/zh-Hans.json'
 import camerasZhHant from '@/features/cameras/locales/zh-Hant.json'
@@ -39,6 +42,7 @@ export const resources = {
     cameras: camerasZhHans,
     audit: auditZhHans,
     persons: personsZhHans,
+    algorithms: algorithmsZhHans,
   },
   'zh-Hant': {
     common: commonZhHant,
@@ -49,6 +53,7 @@ export const resources = {
     cameras: camerasZhHant,
     audit: auditZhHant,
     persons: personsZhHant,
+    algorithms: algorithmsZhHant,
   },
   en: {
     common: commonEn,
@@ -59,6 +64,7 @@ export const resources = {
     cameras: camerasEn,
     audit: auditEn,
     persons: personsEn,
+    algorithms: algorithmsEn,
   },
 } as const
 
