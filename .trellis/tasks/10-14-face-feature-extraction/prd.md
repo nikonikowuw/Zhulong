@@ -1,8 +1,8 @@
-# 实现人脸特征提取闭环
+# 实现人脸特征提取闭环（方案 2：Engine 独立提取与底库持久化）
 
 ## Goal
 
-替换底库中**全零占位**的人脸特征向量，接入真实特征提取，使 `person_faces.feature_vector` 携带可用于 1:N 比对的向量；并补齐删除人脸时特征向量的同步清理。
+在 `internal/engine` 的 C ABI 中接入单次人脸特征提取能力，彻底替换 `internal/person` 中的 2048 字节全零假占位（`make([]byte, 2048)`）；实现上传登记照时即时提取真实 512 维特征并持久化到 SQLite `person_faces.feature_vector`；使 `GetGallerySyncData` 下发真实向量，保证算法 Runner 零秒冷启动，且登记过程完全不干扰运行中的视频流推理。
 
 ## 父任务
 
@@ -10,77 +10,58 @@
 
 ## 依赖
 
-- **前置**：父任务「待决问题 2/3」已回答（人脸能力来源、特征提取归属）。
-  - ⚠️ 若归属为**插件内提取**，则本任务的范围收缩为「底库侧不再生成占位特征 + 维度协商」，
-    真正的提取逻辑移入 `10-14-face-algo-package`，需重新评审本任务范围。
-- **可并行**：与 `10-14-gallery-hot-sync`、`10-14-inference-result-egress` 并行。
+- **前置**：结构化 ABI 与常量契约已就绪（`10-14-algo-structure-abi` 已归档）。
+- **后继**：`10-14-gallery-hot-sync`（底库下行通道）将直接搬运本任务持久化的真实 512 维向量。
+- **关联**：`internal/engine` 是唯一允许 `import "C"` 的包。`internal/person` 通过依赖注入的 Go 接口解耦。
 
-### ✅ 已解冻（G1 已答）——本任务范围**大幅收缩**
+## 核心设计决策（方案 2：Engine 独立单次提取）
 
-父任务决策：**特征提取在插件内**（D8）。因此本任务**不再实现特征提取算法**，
-而是转为以下四项：
-
-1. **底库语义改造**：`person_faces.feature_vector` 列不再存特征向量。
-   具体语义（存空 / 存登记标记 / 删列）需在 `design.md` 定案，并给出迁移。
-2. **路径下发契约**：Go 侧下发 `face_id` + `person_id` + `person_name` + `image_path`，
-   由插件自行读取图像并提取特征。需定义路径解析规则（相对 `faces_directory`）与读取权限。
-3. **维度协商**：维度由算法包 manifest 声明（实测已确认 512），**不硬编码 2048**。
-4. **删除同步**：`DeleteFace` 的 TODO 改为通知插件从索引中移除该 face。
-
-⚠️ **新增约束（实测发现，D10）**：登记照是**裁剪好的人脸特写**，
-直接送检测器 score 仅 0.1066（分布外输入）。插件侧必须实现
-「先尝试检测，失败则按已裁剪处理」的降级策略。本任务需在契约中明确这一约定。
-
-> 完整模型契约见父任务 `design.md` §2.0 与 `research/face-model-baseline.md`。
+1. **业务与推理隔离**：登记照单次特征提取由 `internal/engine` 提供独立能力，不把大图灌给正在处理实时视频流的 Runner，杜绝推理卡顿与丢帧风险；
+2. **即时校验反馈**：用户在 Web 端上传照片时即时提取特征。未检出人脸或多脸时，立即返回 `400 Bad Request` 报错拦截，杜绝脏数据入库；
+3. **底库强持久化**：提取出的 512 维 `float32` 向量（2048 字节）直接持久化进 SQLite `person_faces.feature_vector`；
+4. **开机零开销秒启动**：冷启动时 Go 直接从 SQLite 读取已持久化的向量下发，Native 算法进程直接 `memcpy` 载入内存矩阵，无需开机重跑大批量 NPU 提取。
 
 ## 问题证据
 
 ```go
-// internal/person/service.go:217
-feat := make([]byte, 2048)   // ← 全零，未经任何特征提取
+// internal/person/service.go:297
+feat := make([]byte, 2048)   // ← 全零伪造切片，从未经过真实特征提取
+face := &Face{
+    ID:            faceID,
+    OwnerRowID:    personID,
+    ImagePath:     fileName,
+    FeatureVector: feat,
+}
 ```
-
-```go
-// internal/person/service.go:154
-// TODO: 同步删除Engine中的人脸特征向量
-```
-
-⚠️ **底库表里有记录，特征是 2048 个 0**。即使 gallery 通道与结果出口全部打通，1:N 也匹配不出任何人。
 
 ## Requirements
 
-- **R1 归属定案**：在 `design.md` 中定案特征提取归属（插件内 / 宿主内），
-  并说明该选择对架构约定的影响。
-  ⚠️ 若选宿主内：会打破「`internal/engine` 是唯一可 `import "C"` 的包」这条约定，必须明确论证与替代方案。
-- **R2 真实特征写入**：`AddFaceWithReader` 写入真实特征向量，替换占位。
-  ⚠️ **已修正（D8）**：因归属改为插件内提取，本项改为「不再写入占位特征」——
-  即底库不再假装持有特征向量。
-- **R3 维度协商**：特征维度**由算法包 manifest 声明**（父 `design.md` D5），**不硬编码 2048**。
-  维度不符时**显式失败**（而非静默写入长度错误的 BLOB）。
-- **R4 失败路径**：图片中**检测不到人脸**时的行为必须明确（拒绝登记 + 明确错误码 vs 登记但标记无特征），
-  并在 `design.md` 中论证。禁止静默写入零向量。
-- **R5 质量门槛**：是否设置人脸质量下限（模糊/侧脸/过小拒绝）需定案；
-  若设置，阈值必须可配置且**记录在案**。
-- **R6 删除同步**：补齐 `DeleteFace` 中特征向量的同步清理 TODO。
-- **R7 存储契约**：`Face.FeatureVector []byte` 是 DB 实体字段（映射 SQLite 动态 BLOB），
-  支持任意维度，**不强制改名**；序列化为 IPC 载荷时才映射为 `features`。
-  ⚠️ 维度与字节序约定须写入 `.trellis/spec/backend/storage-guidelines.md`。
-- **R8 兼容既有数据**：已存在的全零特征记录如何处理（迁移 / 标记为无效 / 忽略）需定案。
-- **R9 错误码与 i18n**：新增错误码遵循 `internal/httputil/locale.go` 的三语契约。
+- **R1 Engine C ABI 扩展**：
+  在 `native/include/Zhulong/engine.h` 增加 `Zhulong_engine_extract_face_feature` 接口，支持输入图片二进制字节，输出 512 维 `float32` 数组与特征维度，定义 `Zhulong_ERR_NOT_FOUND`（未检出人脸）等规范状态码。
+- **R2 Go CGO 封装与抽象接口**：
+  在 `internal/engine` 封装 `ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]float32, error)`；
+  在 `internal/person` 定义消费者接口 `FaceFeatureExtractor`，通过 Uber Fx 进行依赖注入，严守架构边界。
+- **R3 真实特征写入与即时校验**：
+  改造 `internal/person/service.go` 的 `AddFaceWithReader`：
+  - 调用 `FaceFeatureExtractor` 提取特征；
+  - 提取失败时返回清晰的业务错误码（如 `NO_FACE_DETECTED`，三语本地化）；
+  - 提取成功后将 512 维 float32 编码为 2048 字节 Little-Endian BLOB，存入 `person_faces.feature_vector`。
+- **R4 底库数据准备下发（GetGallerySyncData）**：
+  `GetGallerySyncData` 读取持久化的 `FeatureVector`，通过 `bytesToFloat32` 转换为真实浮点数组，输出给下游 IPC 下发；同时携带相对安全的 `image_path`。
+- **R5 删除同步与物理清理**：
+  `DeleteFace` 与 `DeletePerson` 保持安全的物理图片文件删除，并清除关联的数据库特征记录。
 
 ## Acceptance Criteria
 
-- [ ] `AddFaceWithReader` 写入的特征向量**非常量**，长度等于所选模型的维度。
-- [ ] **同人不同照**的 cosine 相似度高于阈值；**不同人**低于阈值。此测试必须有真实数据支撑。
-- [ ] 维度不匹配是**显式错误**，有测试覆盖。
-- [ ] 检测不到人脸时的行为有测试，且**不会写入零向量**。
-- [ ] `DeleteFace` 后特征同步清理（若归属在宿主）；否则 TODO 有明确说明与指向。
-- [ ] 既有底库数据（全零特征）的处理有明确策略与测试。
-- [ ] 维度与字节序约定写入 `.trellis/spec/backend/storage-guidelines.md`。
-- [ ] `make go-check` 通过（含 `-race`）。
+- [ ] `Zhulong_engine_extract_face_feature` C ABI 编译通过且在 Native 单元测试中验证正确性。
+- [ ] `internal/engine` 正确封装并导出 `ExtractFaceFeature` 方法。
+- [ ] `AddFaceWithReader` 写入数据库的 `FeatureVector` 长度恒为 2048 字节且**非常量全零**。
+- [ ] 上传无脸图片时，`AddFaceWithReader` 显式失败并返回预期错误码，不写入数据库与磁盘。
+- [ ] `GetGallerySyncData` 吐出的 `GallerySyncItem` 携带非空、非零的 `Features` 切片（长度为 512）。
+- [ ] `DeleteFace` 正常清理磁盘物理图片。
+- [ ] `make native-test` 与 `make go-check`（含 `-race`）全绿。
 
 ## 范围外
 
-- 特征提取模型的训练/转换/量化流程（若归属插件内，属 `10-14-face-algo-package`）。
-- 1:N 检索算法本身（在算法侧）。
-- 底库加密与合规审查。
+- UDS 消息协议 `MSG_GALLERY_*` 的传输与分片（属 `10-14-gallery-hot-sync`）。
+- 运行时多路视频流的 1:N 检索与检测（属 `10-14-face-algo-package`）。

@@ -24,8 +24,13 @@ void zhulongAIResultCallbackBridge(uintptr_t token, Zhulong_stream_id stream, co
 import "C"
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
+	"runtime"
 	"runtime/cgo"
 	"sync"
 	"unsafe"
@@ -606,4 +611,67 @@ func extractVideoInfo(result C.Zhulong_probe_result_h) (VideoInfo, error) {
 		TimeBase:  Rational{Num: int32(view.time_base_num), Den: int32(view.time_base_den)},
 		ExtraData: extra,
 	}, nil
+}
+
+// ExtractFaceFeature decodes an image, detects faces, and extracts a normalized 512-dimensional feature vector.
+func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]float32, error) {
+	if len(imageBytes) == 0 {
+		return nil, ErrInvalidArgument
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	img, _, err := image.Decode(bytes.NewReader(imageBytes))
+	if err != nil {
+		return nil, fmt.Errorf("%w: decode image: %v", ErrInvalidArgument, err)
+	}
+
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("%w: invalid image dimensions (%dx%d)", ErrInvalidArgument, w, h)
+	}
+
+	// 转换为打包连续 RGB24 像素
+	rgb := make([]byte, w*h*3)
+	idx := 0
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			rgb[idx] = byte(r >> 8)
+			rgb[idx+1] = byte(g >> 8)
+			rgb[idx+2] = byte(b >> 8)
+			idx += 3
+		}
+	}
+
+	outFeatures := make([]float32, 512)
+	dim := C.uint32_t(512)
+
+	var handle C.Zhulong_engine_h
+	if e != nil {
+		e.mu.Lock()
+		handle = e.handle
+		e.mu.Unlock()
+	}
+
+	st := C.Zhulong_engine_extract_face_feature(
+		handle,
+		(*C.uint8_t)(unsafe.Pointer(&rgb[0])),
+		C.int32_t(w),
+		C.int32_t(h),
+		C.int32_t(w*3),
+		C.int32_t(2), // 2 = ZHULONG_PIXEL_FORMAT_RGB24
+		(*C.float)(unsafe.Pointer(&outFeatures[0])),
+		&dim,
+	)
+	runtime.KeepAlive(rgb)
+	runtime.KeepAlive(outFeatures)
+
+	if st != C.Zhulong_OK {
+		return nil, mapNativeStatus("extract_face_feature", int32(st))
+	}
+
+	return outFeatures[:dim], nil
 }

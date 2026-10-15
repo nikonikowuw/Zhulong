@@ -459,12 +459,12 @@ type personOut struct {
 	UploadRoutes    RouteRegistrar `group:"upload_routes"`
 }
 
-func providePerson(dbProvider database.DBProvider, config Config, logger *zap.Logger) personOut {
+func providePerson(dbProvider database.DBProvider, config Config, eng *engine.Engine, logger *zap.Logger) personOut {
 	facesDir := config.FacesDir
 	if facesDir == "" {
 		facesDir = filepath.Join(config.DataDir, "faces")
 	}
-	comp := person.NewPersonComponents(dbProvider, facesDir, logger)
+	comp := person.NewPersonComponents(dbProvider, facesDir, eng, logger)
 	return personOut{
 		Store:           comp.Store,
 		Service:         comp.Service,

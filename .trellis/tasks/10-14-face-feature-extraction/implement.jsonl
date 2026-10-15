@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite persistence and storage rules for feature_vector BLOB"}
+{"file": ".trellis/spec/backend/storage-guidelines.md", "reason": "Disk storage path safety and image file lifecycle guidelines"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "Algorithm IPC message formats and GallerySyncItem payload conventions"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "CGO pointer safety, memory ownership, and C ABI boundaries"}

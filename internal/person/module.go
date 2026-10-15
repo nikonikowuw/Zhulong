@@ -47,10 +47,11 @@ type RouteRegistrar interface {
 func NewPersonComponents(
 	dbProvider database.DBProvider,
 	facesDir string,
+	extractor FaceFeatureExtractor,
 	logger *zap.Logger,
 ) *PersonComponents {
 	store := NewStore(dbProvider)
-	service := NewService(store, facesDir, logger)
+	service := NewService(store, facesDir, extractor, logger)
 	handler := NewHandler(service, logger)
 
 	return &PersonComponents{

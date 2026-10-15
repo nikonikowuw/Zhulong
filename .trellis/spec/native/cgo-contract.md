@@ -87,6 +87,8 @@ func (s *Subscription) Next(ctx context.Context) (Packet, error)
 func (s *Subscription) Done() <-chan struct{}
 func (s *Subscription) Err() error
 func (s *Subscription) Close() error
+
+func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]float32, error)
 ```
 
 `Start` 在持锁下创建 C-owned handle 并启动；启动失败时销毁 handle。`Stop` 不销毁句柄；幂等 `Close` 停止并销毁。Go 只保存不透明句柄值，不向 C 侧暴露可逃逸的 Go 指针。C++ 静态库由 `make native-build` 构建到 `build/native/host/libZhulongEngine.a`。Go 命令必须通过 `native/scripts/build.py go ...` 或 Make：脚本传递 Engine 内容摘要路径、FFmpeg 三个静态归档及目标系统库，避免 Go 外部归档缓存过期。交叉产物使用独立目录，不覆盖 host。
@@ -107,3 +109,12 @@ func (s *Subscription) Close() error
 - 包只在同步回调期间借用，入队前深拷贝至 Go 内存；probe-result view 仅在 result destroy 前有效。注销须 drain 在途回调后才允许 Go 侧 `cgo.Handle.Delete()`。
 - stop 取消输入和 probe、join worker/reaper，之后才释放资源。回调内控制 API 返回 CALLBACK_CONTEXT，destroy 由外部所有者串行调用。
 - Linux host 与 Native sanitizer 检查不证明真实摄像机、解码、板端或旧系统兼容；具体命令/断言/残余限制见 [接入合同](./ingestion-contract.md)。
+
+---
+
+## 6. 单次人脸特征提取（离线录入通道）
+
+- **C ABI**：`Zhulong_engine_extract_face_feature` 接收紧凑图像像素内存（RGB24/BGR24），输出 512 维 `float32` 归一化特征向量。
+- **内存规则**：Go 侧在调用期间将连续图像切片首地址转为 `*C.uint8_t`，通过 `runtime.KeepAlive` 保证调用期间不被 GC 回收；输出由 Go 分配 512 维切片，C 侧原地写入，禁止跨调用缓存 Go 指针。
+- **业务解耦**：上层业务包（如 `internal/person`）禁止 `import "C"`，必须通过 `FaceFeatureExtractor` 接口解耦，由 Uber Fx 注入 `*engine.Engine`。
+

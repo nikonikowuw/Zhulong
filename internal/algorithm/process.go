@@ -423,6 +423,7 @@ type GallerySyncItem struct {
 	FaceID     string    `json:"face_id"`
 	PersonID   string    `json:"person_id"`
 	PersonName string    `json:"person_name"`
+	ImagePath  string    `json:"image_path,omitempty"`
 	Features   []float32 `json:"features,omitempty"`
 }
 
@@ -431,7 +432,8 @@ type GalleryUpsertPayload struct {
 	FaceID     string    `json:"face_id"`
 	PersonID   string    `json:"person_id"`
 	PersonName string    `json:"person_name"`
-	Features   []float32 `json:"features"`
+	ImagePath  string    `json:"image_path,omitempty"`
+	Features   []float32 `json:"features,omitempty"`
 }
 
 // GalleryDeletePayload represents MSG_GALLERY_DELETE.

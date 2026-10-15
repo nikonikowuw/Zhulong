@@ -97,6 +97,16 @@ var (
 			"zh-Hans": "输入值无效",
 			"zh-Hant": "輸入值無效",
 		},
+		"NO_FACE_DETECTED": {
+			"en":      "No detectable face found in the uploaded photo",
+			"zh-Hans": "上传的照片中未检测到清晰人脸",
+			"zh-Hant": "上傳的照片中未檢測到清晰人臉",
+		},
+		"FEATURE_EXTRACT_FAILED": {
+			"en":      "Failed to extract facial features",
+			"zh-Hans": "人脸特征提取失败",
+			"zh-Hant": "人臉特徵提取失敗",
+		},
 	}
 )
 

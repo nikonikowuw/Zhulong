@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -167,7 +168,7 @@ func TestGetGallerySyncData(t *testing.T) {
 	defer dbStore.Close()
 
 	store := NewStore(dbStore)
-	svc := NewService(store, tempDir, zap.NewNop())
+	svc := NewService(store, tempDir, nil, zap.NewNop())
 	ctx := context.Background()
 
 	p := &Person{
@@ -228,7 +229,7 @@ func newTestService(t *testing.T) *Service {
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	return NewService(NewStore(dbStore), tempDir, zap.NewNop())
+	return NewService(NewStore(dbStore), tempDir, nil, zap.NewNop())
 }
 
 func requireDomainError(t *testing.T, err error, kind apperr.Kind, code string) {
@@ -542,4 +543,148 @@ func TestGetFaceImagePath_RelativeAndAbsoluteResolution(t *testing.T) {
 	if _, err := svc.GetFaceImagePath(ctx, p.ID, escapingFace.ID); err == nil {
 		t.Errorf("expected GetFaceImagePath to reject escaping path /etc/shadow")
 	}
+}
+
+type mockExtractor struct {
+	features []float32
+	err      error
+}
+
+func (m *mockExtractor) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]float32, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.features, nil
+}
+
+func TestAddFace_WithExtractor_Success(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	expectedFeats := make([]float32, 512)
+	for i := range expectedFeats {
+		expectedFeats[i] = float32(i) * 0.001
+	}
+
+	extractor := &mockExtractor{features: expectedFeats}
+	svc := NewService(NewStore(dbStore), tempDir, extractor, zap.NewNop())
+	ctx := context.Background()
+
+	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "P_EXTRACT_1", Name: "特征提取测试员"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+
+	// 构造简单合法 JPEG 头部与内容
+	fakeJPEG := append([]byte{0xff, 0xd8, 0xff, 0xe0}, bytes.Repeat([]byte{0xaa}, 100)...)
+	face, err := svc.AddFaceWithReader(ctx, p.ID, "photo.jpg", bytes.NewReader(fakeJPEG))
+	if err != nil {
+		t.Fatalf("AddFaceWithReader failed: %v", err)
+	}
+
+	if len(face.FeatureVector) != 2048 {
+		t.Fatalf("expected 2048 bytes feature vector, got %d", len(face.FeatureVector))
+	}
+
+	decodedFloats := bytesToFloat32(face.FeatureVector)
+	if len(decodedFloats) != 512 {
+		t.Fatalf("expected 512 decoded floats, got %d", len(decodedFloats))
+	}
+	if math.Abs(float64(decodedFloats[10]-expectedFeats[10])) > 1e-6 {
+		t.Errorf("expected float %f, got %f", expectedFeats[10], decodedFloats[10])
+	}
+
+	// 验证磁盘物理文件切实存在
+	fullPath := filepath.Join(tempDir, face.ImagePath)
+	if _, err := os.Stat(fullPath); err != nil {
+		t.Fatalf("expected saved image on disk at %s: %v", fullPath, err)
+	}
+
+	// 验证 GetGallerySyncData 包含真实特征与 ImagePath
+	items, err := svc.GetGallerySyncData(ctx)
+	if err != nil {
+		t.Fatalf("GetGallerySyncData failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].ImagePath != face.ImagePath {
+		t.Errorf("expected image_path %s, got %s", face.ImagePath, items[0].ImagePath)
+	}
+	if len(items[0].Features) != 512 {
+		t.Fatalf("expected 512 features, got %d", len(items[0].Features))
+	}
+}
+
+func TestAddFace_WithExtractor_NoFaceDetected(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	extractor := &mockExtractor{err: errors.New("no face found")}
+	svc := NewService(NewStore(dbStore), tempDir, extractor, zap.NewNop())
+	ctx := context.Background()
+
+	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "P_EXTRACT_2", Name: "失败测试员"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+
+	fakeJPEG := append([]byte{0xff, 0xd8, 0xff, 0xe0}, bytes.Repeat([]byte{0xbb}, 100)...)
+	_, err = svc.AddFaceWithReader(ctx, p.ID, "photo.jpg", bytes.NewReader(fakeJPEG))
+	if err == nil {
+		t.Fatal("expected error when no face is detected")
+	}
+
+	requireDomainError(t, err, apperr.KindInvalid, "NO_FACE_DETECTED")
+
+	// 验证磁盘上不得残留任何图片文件
+	entries, _ := os.ReadDir(tempDir)
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".jpg") {
+			t.Errorf("unexpected image file found on disk after failed extraction: %s", entry.Name())
+		}
+	}
+
+	// 验证数据库中不得存在该人脸
+	faces, err := svc.ListFaces(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("ListFaces failed: %v", err)
+	}
+	if len(faces) != 0 {
+		t.Fatalf("expected 0 faces, got %d", len(faces))
+	}
+}
+
+func TestAddFace_WithExtractor_DimMismatch(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	extractor := &mockExtractor{features: make([]float32, 256)} // 维度不符
+	svc := NewService(NewStore(dbStore), tempDir, extractor, zap.NewNop())
+	ctx := context.Background()
+
+	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "P_EXTRACT_3", Name: "维度测试员"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+
+	fakeJPEG := append([]byte{0xff, 0xd8, 0xff, 0xe0}, bytes.Repeat([]byte{0xcc}, 100)...)
+	_, err = svc.AddFaceWithReader(ctx, p.ID, "photo.jpg", bytes.NewReader(fakeJPEG))
+	if err == nil {
+		t.Fatal("expected error on dimension mismatch")
+	}
+
+	requireDomainError(t, err, apperr.KindInternal, "FEATURE_EXTRACT_FAILED")
 }

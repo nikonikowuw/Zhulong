@@ -385,6 +385,12 @@ if(BUILD_TESTING)
     target_link_libraries(ZhulongDecoderTests PRIVATE ZhulongEngine)
     add_test(NAME ZhulongDecoder COMMAND ZhulongDecoderTests)
 
+    # 人脸特征提取单次 C ABI 单元测试
+    add_executable(ZhulongFaceFeatureExtractTests tests/face_feature_extract_test.cpp)
+    target_link_libraries(ZhulongFaceFeatureExtractTests PRIVATE ZhulongEngine)
+    add_test(NAME ZhulongFaceFeatureExtract COMMAND ZhulongFaceFeatureExtractTests)
+    set_tests_properties(ZhulongFaceFeatureExtract PROPERTIES TIMEOUT 10)
+
     if(NOT CMAKE_CROSSCOMPILING)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
         add_test(NAME ZhulongAlgoJsonRoundTrip COMMAND ${Python3_EXECUTABLE}

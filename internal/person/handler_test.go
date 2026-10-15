@@ -63,7 +63,7 @@ func setupTestRouterWithAudit(t *testing.T) (*gin.Engine, *person.Service, *audi
 	}
 	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
 
-	comp := person.NewPersonComponents(dbStore, tempDir, zap.NewNop())
+	comp := person.NewPersonComponents(dbStore, tempDir, nil, zap.NewNop())
 
 	r := gin.New()
 	api := r.Group("/api/v1")

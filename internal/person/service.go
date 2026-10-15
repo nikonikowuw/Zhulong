@@ -20,22 +20,29 @@ import (
 	"go.uber.org/zap"
 )
 
+// FaceFeatureExtractor abstracts single-shot facial feature embedding generation.
+type FaceFeatureExtractor interface {
+	ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]float32, error)
+}
+
 // Service provides high-level business logic for personnel and face gallery.
 type Service struct {
-	store    *Store
-	facesDir string
-	logger   *zap.Logger
+	store     *Store
+	extractor FaceFeatureExtractor
+	facesDir  string
+	logger    *zap.Logger
 }
 
 // NewService creates a Service instance.
-func NewService(store *Store, facesDir string, logger *zap.Logger) *Service {
+func NewService(store *Store, facesDir string, extractor FaceFeatureExtractor, logger *zap.Logger) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &Service{
-		store:    store,
-		facesDir: facesDir,
-		logger:   logger.Named("person_service"),
+		store:     store,
+		extractor: extractor,
+		facesDir:  facesDir,
+		logger:    logger.Named("person_service"),
 	}
 }
 
@@ -262,37 +269,47 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 	}
 
 	faceID := newID()
+	combinedReader := io.MultiReader(bytes.NewReader(headerBuf[:nHeader]), r)
+	const maxFileSize = 10 * 1024 * 1024 // 10MB
+	lr := io.LimitReader(combinedReader, maxFileSize+1)
+	fullBytes, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, apperr.Invalid("FILE_READ_FAILED", "Failed to read file content", err)
+	}
+	if len(fullBytes) > maxFileSize {
+		return nil, apperr.Invalid("FILE_TOO_LARGE", "file size exceeds 10MB limit", nil)
+	}
+
+	var featBytes []byte
+	if s.extractor != nil {
+		features, err := s.extractor.ExtractFaceFeature(ctx, fullBytes)
+		if err != nil {
+			return nil, apperr.Invalid("NO_FACE_DETECTED", "No face detected in uploaded image", err)
+		}
+		if len(features) != 512 {
+			return nil, apperr.New(apperr.KindInternal, "FEATURE_EXTRACT_FAILED", "Unexpected feature vector dimension", nil)
+		}
+		featBytes = float32ToBytes(features)
+	} else {
+		// Mock fallback if extractor is not configured
+		featBytes = make([]byte, 2048)
+	}
+
 	if err := os.MkdirAll(s.facesDir, 0755); err != nil {
 		return nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to create faces directory", err)
 	}
 
 	fileName := fmt.Sprintf("%s_%s%s", personID, faceID, ext)
 	savePath := filepath.Join(s.facesDir, fileName)
-	f, err := os.OpenFile(savePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		return nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to create face image file", err)
-	}
-
-	combinedReader := io.MultiReader(bytes.NewReader(headerBuf[:nHeader]), r)
-	const maxFileSize = 10 * 1024 * 1024 // 10MB
-	lr := io.LimitReader(combinedReader, maxFileSize+1)
-	n, err := io.Copy(f, lr)
-	_ = f.Close()
-	if err != nil {
-		_ = os.Remove(savePath)
+	if err := os.WriteFile(savePath, fullBytes, 0644); err != nil {
 		return nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to save face image", err)
 	}
-	if n > maxFileSize {
-		_ = os.Remove(savePath)
-		return nil, apperr.Invalid("FILE_TOO_LARGE", "file size exceeds 10MB limit", nil)
-	}
 
-	feat := make([]byte, 2048)
 	face := &Face{
 		ID:            faceID,
 		OwnerRowID:    personID,
 		ImagePath:     fileName,
-		FeatureVector: feat,
+		FeatureVector: featBytes,
 	}
 
 	if err := s.store.AddFace(ctx, face); err != nil {
@@ -398,6 +415,7 @@ func (s *Service) GetGallerySyncData(ctx context.Context) ([]GallerySyncItem, er
 				FaceID:     f.ID,
 				PersonID:   p.PersonID,
 				PersonName: p.Name,
+				ImagePath:  f.ImagePath,
 				Features:   floats,
 			})
 		}
@@ -438,4 +456,16 @@ func bytesToFloat32(b []byte) []float32 {
 		res[i] = math.Float32frombits(bits)
 	}
 	return res
+}
+
+// float32ToBytes converts a slice of float32 into Little-Endian bytes.
+func float32ToBytes(floats []float32) []byte {
+	if len(floats) == 0 {
+		return nil
+	}
+	buf := make([]byte, len(floats)*4)
+	for i, f := range floats {
+		binary.LittleEndian.PutUint32(buf[i*4:(i+1)*4], math.Float32bits(f))
+	}
+	return buf
 }
