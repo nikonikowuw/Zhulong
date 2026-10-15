@@ -173,3 +173,49 @@
 
 - 推进 native 算法子系统注释补齐 (10-14-native-algorithm-docs)
 
+
+## Session 43: 完成 native 算法子系统注释补齐与父任务收尾
+<!-- trellis-session: v=2 fp=3c9e5a71d84b620f -->
+
+**Date**: 2026-10-15
+**Task**: 完成 native 算法子系统注释补齐与父任务收尾
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+为 native/src/algorithm/{ipc,runner,runtime} 与 native/src/backends/{rknn,rga} 共 28 个文件补齐中文 Doxygen 注释，覆盖 IPC 字节级对齐、SHM 租约状态机与代次防 ABA、Runner 退出码表、RKNN SDK 缺陷规避与 RGA 驱动级禁令。随后完成父任务 10-14-native-core-code-docs 的跨层术语一致性终审与全栈门禁。
+
+### Main Changes
+
+- IPC（8 文件）：补齐 `ShmHeader` 64 字节布局、IPC 报文 8 字节自然对齐与 static_assert 意图、64KB payload 跨语言门禁、四态 socket 状态机与半包熔断、槽位 `FREE→WRITING→LEASED→FREE` 状态机、代次防 ABA 静默丢弃、慢消费者 Drop-Latest 与崩溃自愈、多平面逐行安全复制
+- Runner（2 文件）：补齐退出码表（0~8）与看门狗依赖说明、`parse_stream_id_from_socket` 唯一路径依赖约定、多路 `--broker` 的 D6 语义、json_quote 控制字符转义规约
+- Runtime（11 文件）：补齐 Tensor 形状/溢出异常语义、`IInferenceBackend`/`IVisionBackend` 抽象边界、LetterboxParams 的 in-out 语义、编译期后端选择后果、CpuVisionBackend stride 契约与补边值 114、letterbox 几何单源共用
+- Backends（7 文件）：补齐 RKNN `RKNN_QUERY_MEM_SIZE` 上下文污染缺陷规避（R10）、`dup_mutex` 串行化与失败路径防 double-destroy（R11）、`rknn_input` 无 stride 且**不得声称零拷贝**（R13）、`librknnrt.so` 链接约束（R14）、RGA 目标指针绝不偏移及越界死锁症状（R12）、运行期对齐值探测严禁硬编码
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `03ece54` | docs(algo-ipc): add Doxygen comments for IPC protocol, SHM pool, and frame broker |
+| `93ee8ac` | docs(algo-runtime): add Doxygen comments for runner and runtime HAL |
+| `19526ea` | docs(algo-backends): add Doxygen comments for RKNN and RGA vendor backends |
+| `98e9595` | docs(sdk): correct TaskContext terminology to 任务状态 per glossary |
+
+### Testing
+
+- [OK] 通过 norm() 预处理代码剥离不变性比对，确保 28 个文件零代码变更（过程中捕获并修正 3 处误伤：尾逗号与两处换行合并）
+- [OK] make native-test 全绿 (15/15)；rm -rf build/native/host 后全新构建验证
+- [OK] make check 全栈门禁全绿（前端 + native 15/15 + api-docs + go-check）
+- [OK] 跨层术语终审：发现并修正 C1 遗留 7 处「任务上下文」别名，复查零命中
+- [OK] R1~R20 风险点终审：20/20 全部有落点
+
+### Status
+
+[OK] **Completed**（子任务与父任务均已归档）
+
+### Next Steps
+
+- 推进人脸识别端到端子任务（10-14-face-feature-extraction 等）
+
+
