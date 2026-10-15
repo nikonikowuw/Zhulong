@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/10-14-native-core-code-docs/design.md", "reason": "核对术语表无禁用别名、注释剥离不变性检查全 OK"}
+{"file": ".trellis/tasks/10-14-native-public-contract-docs/prd.md", "reason": "逐项核对 AC-D1~D5 与 AC-C1/AC-C1-a~d"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "核对 algo.hpp/plugin.h 注释与 §2/§3 口径一致，无漂移"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "核对公开头文件注释未泄露私有实现细节"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "核对 R4/R18 的所有权与回调约束描述准确"}
+{"file": ".trellis/spec/index.md", "reason": "铁律 7：判定是否存在逐行复述型注释"}

@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/10-14-native-core-code-docs/design.md", "reason": "风格基线 §3 与术语表 §4：本子任务所有注释必须逐字使用该术语表用词"}
+{"file": ".trellis/tasks/10-14-native-core-code-docs/implement.md", "reason": "统一执行循环 §2、注释剥离不变性检查命令 §3、审查门禁 §4"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "插件 C ABI（§2）、SDK 门面与注册宏（§3）、Arena 打包与 internal_token 释放、异常防爆门 —— algo.hpp/plugin.h 注释的权威口径"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "不透明句柄、跨语言内存所有权、Go 指针规则与回调 token 整数约定（R4/R18）"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "单向依赖边界：公开头文件注释不得泄露 backends/ 与厂商 SDK 细节"}
+{"file": ".trellis/spec/index.md", "reason": "铁律 7：注释只写代码表达不出的意图与约束，禁止逐行复述"}
+{"file": ".trellis/tasks/archive/2026-10/10-14-unify-bbox-coordinates/prd.md", "reason": "归一化 [x1,y1,x2,y2] ∈ [0,1] 的决策依据（R5）"}
