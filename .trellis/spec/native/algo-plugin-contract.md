@@ -67,6 +67,16 @@ ZHULONG_REGISTER_PERSON_STRUCTURE_PLUGIN(MyPersonStructurePlugin, "MyPersonStruc
 
 Detector 宏调用 `detect()` 并序列化 bbox；Classifier 宏调用 `classify()` 并序列化 classification item；PersonStructure 宏调用 `detect_persons()` 并将多级嵌套树打包为单块连续 Arena 内存。三者共享 opaque handle lifecycle 和 exception boundary，但使用各自的 result type 与 payload。
 
+### 3.1 多模型级联与 Session 协同机制 (Multi-Model Session Pairing)
+
+当算法包需要组合多个模型（如「人脸检测 det_500m + 特征提取 facelivtv2-l」双模型流水线）时：
+- 插件内部持有多个 `zhulong::Model` 实例（如 `det_model_` 与 `rec_model_`）；
+- `zhulong::Session` 暴露 `uint32_t worker_id() const noexcept` 访问器；
+- 在 `create_session(worker_id)` 中为各模型分别创建对应 `worker_id` 的会话，由插件容器维护映射（如 `rec_sessions_[worker_id]`）；
+- 主入口返回检测会话作为主句柄；在 `detect_persons` 推理热路径中通过 `session.worker_id()` 索引对应的级联识别会话，保障多 Worker 并发安全；
+- 仿射对齐推荐采用单阶段直写模式（如 `Aligner::crop_and_align_direct` 基于 Umeyama 逆矩阵直接将原帧采样写入特征输入 Tensor），消除中间裁剪过渡堆内存分配。
+
+
 ## 4. CPU 图像预处理与固定尺寸 Tensor 合同
 
 `CpuVisionBackend` 仅支持 packed `RGB24` / `BGR24` 输入和目标格式，输出 Tensor 为 HWC、3 通道、`UINT8`。`resize` 的内部运行时签名为：
@@ -412,6 +422,8 @@ RknnSessionContext : SessionContext  ← 每 worker 一个，独占
 ⚠️ **不得声称本任务实现了零拷贝。**
 
 - `rknn_input` **没有 stride 字段** → 传入 buffer 必须 packed（`Tensor` 的 `std::vector<uint8_t>` 天然 packed）。padded buffer 会**静默算错**（不是报错，是错结果）。
+- `rknn_input.type` 根据输入 `Tensor::dtype()` 动态匹配（支持 UINT8 图像由驱动内部自动完成至 FP16 模型的类型转换）；
+- 输入校验使用元素数量 `inputs[i].element_count() == attr.n_elems`，兼容精度转换下的尺寸差异（如 UINT8 112×112×3 字节数为 37632，而模型内 FP16 占用 75264 字节）。
 - 输出经 `want_float=1` 由 runtime 统一转 float32（避免手工反量化、不猜 `zp`/`scale`），再**拷贝**进 `Tensor`。
 - 输出 shape 取 `output_attrs[i].dims[0..n_dims)` **原样**，不跳 batch 维。
 - `rknn_outputs_release` 必须由 RAII guard 保证所有路径（含异常）恰好执行一次。

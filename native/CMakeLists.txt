@@ -381,7 +381,7 @@ if(BUILD_TESTING)
     add_executable(ZhulongAlgoRunnerGalleryTests tests/algo_runner_gallery_test.cpp)
     target_compile_features(ZhulongAlgoRunnerGalleryTests PRIVATE cxx_std_17)
     target_include_directories(ZhulongAlgoRunnerGalleryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src/algorithm/runner)
-    target_link_libraries(ZhulongAlgoRunnerGalleryTests PRIVATE ZhulongAlgoRuntime)
+    target_link_libraries(ZhulongAlgoRunnerGalleryTests PRIVATE ZhulongAlgoRuntime Threads::Threads)
     add_test(NAME ZhulongAlgoRunnerGallery COMMAND ZhulongAlgoRunnerGalleryTests)
     set_tests_properties(ZhulongAlgoRunnerGallery PROPERTIES TIMEOUT 10)
 

@@ -198,6 +198,17 @@ std::unique_ptr<SessionContext> RknnInferenceBackend::create_session(std::shared
  * @param[out] outputs 输出张量列表（失败时被清空）
  * @return zhulong_status_t ZHULONG_PLUGIN_OK 成功；其余为映射后的错误码
  */
+static rknn_tensor_type to_rknn_tensor_type(DataType dt) {
+    switch (dt) {
+        case DataType::FLOAT32: return RKNN_TENSOR_FLOAT32;
+        case DataType::UINT8:   return RKNN_TENSOR_UINT8;
+        case DataType::INT8:    return RKNN_TENSOR_INT8;
+        case DataType::INT32:   return RKNN_TENSOR_INT32;
+        case DataType::INT64:   return RKNN_TENSOR_INT64;
+        default:                return RKNN_TENSOR_UINT8;
+    }
+}
+
 zhulong_status_t RknnInferenceBackend::forward(SessionContext* session,
                                                const std::vector<Tensor>& inputs,
                                                std::vector<Tensor>& outputs) {
@@ -220,17 +231,17 @@ zhulong_status_t RknnInferenceBackend::forward(SessionContext* session,
         std::vector<rknn_input> rknn_inputs(asset.io_num.n_input);
         for (uint32_t i = 0; i < asset.io_num.n_input; ++i) {
             const rknn_tensor_attr& attr = asset.input_attrs[i];
-            // Tensor 的 std::vector<uint8_t> 天然 packed；rknn_input 无 stride 字段。
-            if (inputs[i].byte_size() < attr.size) {
+            // 校验输入元素数与模型期望一致（支持不同精度输入如 UINT8 -> FP16 由 Runtime 自动转换）
+            if (inputs[i].element_count() != attr.n_elems) {
                 return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
             }
             rknn_input& in = rknn_inputs[i];
             in = {};
             in.index = i;
             in.buf = const_cast<void*>(inputs[i].raw_data());
-            in.size = attr.size;
+            in.size = static_cast<uint32_t>(inputs[i].byte_size());
             in.pass_through = 0;
-            in.type = attr.type;
+            in.type = to_rknn_tensor_type(inputs[i].dtype());
             in.fmt = attr.fmt;
         }
 

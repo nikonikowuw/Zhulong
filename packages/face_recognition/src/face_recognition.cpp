@@ -8,13 +8,36 @@
 #include "extractor.hpp"
 #include "matcher.hpp"
 #include <zhulong/algo.hpp>
+#include <dlfcn.h>
 #include <cmath>
 #include <cstdint>
-#include <vector>
-#include <string>
+#include <fstream>
 #include <iostream>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace zhulong::face {
+
+static std::string resolve_model_path(const std::string& rel_path) {
+    if (std::ifstream(rel_path).good()) {
+        return rel_path;
+    }
+    Dl_info info;
+    if (dladdr(reinterpret_cast<void*>(&resolve_model_path), &info) && info.dli_fname) {
+        std::string so_path = info.dli_fname;
+        auto pos = so_path.find_last_of('/');
+        if (pos != std::string::npos) {
+            std::string dir = so_path.substr(0, pos);
+            std::string candidate = dir + "/" + rel_path;
+            if (std::ifstream(candidate).good()) {
+                return candidate;
+            }
+        }
+    }
+    return rel_path;
+}
 
 class FaceRecognitionPlugin {
 public:
@@ -23,14 +46,27 @@ public:
     zhulong_status_t init(const std::string& config_json) {
         parse_config(config_json);
 
-        // 加载芯片推理模型资产（CPU 后端载入 Mock 资产，RKNN 后端载入 NPU 资产）
-        model_ = zhulong::Model::load("models/facelivtv2-l.onnx");
-        if (!model_.valid()) {
-            // 容错处理：若指定路径未找到，载入基础桩资产保证验包基准正常
-            model_ = zhulong::Model::load("face_recognition.weights");
+        // 1. 加载人脸检测模型 (SCRFD det_500m)
+        std::string det_path = resolve_model_path("models/det_500m.rknn");
+        det_model_ = zhulong::Model::load(det_path);
+        if (!det_model_.valid()) {
+            det_model_ = zhulong::Model::load("models/det_500m.onnx");
+        }
+        if (!det_model_.valid()) {
+            det_model_ = zhulong::Model::load("det_500m.weights");
         }
 
-        if (!model_.valid()) {
+        // 2. 加载人脸特征提取模型 (FaceLiVTv2-L)
+        std::string rec_path = resolve_model_path("models/facelivtv2-l.rknn");
+        rec_model_ = zhulong::Model::load(rec_path);
+        if (!rec_model_.valid()) {
+            rec_model_ = zhulong::Model::load("models/facelivtv2-l.onnx");
+        }
+        if (!rec_model_.valid()) {
+            rec_model_ = zhulong::Model::load("facelivtv2-l.weights");
+        }
+
+        if (!det_model_.valid() || !rec_model_.valid()) {
             return ZHULONG_PLUGIN_ERR_INTERNAL;
         }
 
@@ -38,15 +74,28 @@ public:
     }
 
     zhulong::Session create_session(uint32_t worker_id) {
-        return model_.create_session(worker_id);
+        auto det_session = det_model_.create_session(worker_id);
+        auto rec_session = rec_model_.create_session(worker_id);
+        {
+            std::lock_guard<std::mutex> lock(sessions_mu_);
+            rec_sessions_[worker_id] = std::move(rec_session);
+        }
+        return det_session;
     }
 
     std::vector<zhulong::PersonItem> detect_persons(zhulong::Session& session, const zhulong::Image& image) {
-        // 1. 驱动 Session 工作
-        (void)session.forward({});
+        uint32_t worker_id = session.worker_id();
+        zhulong::Session* rec_session = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(sessions_mu_);
+            auto it = rec_sessions_.find(worker_id);
+            if (it != rec_sessions_.end()) {
+                rec_session = &it->second;
+            }
+        }
 
-        // 2. 真实目标检测与 5 点关键点定位
-        auto detections = detector_.detect(image);
+        // 1. 真实目标检测与 5 点关键点定位 (SCRFD on RKNN / CPU fallback)
+        auto detections = detector_.detect(session, image);
         if (detections.empty()) {
             return {};
         }
@@ -57,29 +106,40 @@ public:
         auto gallery_snapshot = zhulong::GalleryRegistry::instance().snapshot();
 
         for (auto& det : detections) {
-            // 3. 将归一化关键点反算为原图像素坐标，用于仿射对齐
+            // 2. 优先使用原帧高清像素坐标反算关键点进行仿射对齐
             std::array<Point2f, 5> src_pixels;
-            for (size_t i = 0; i < 5; ++i) {
-                src_pixels[i].x = det.landmarks[i].x * static_cast<float>(image.width());
-                src_pixels[i].y = det.landmarks[i].y * static_cast<float>(image.height());
+            if (det.landmarks_pixels[0].x > 0.0f || det.landmarks_pixels[0].y > 0.0f) {
+                src_pixels = det.landmarks_pixels;
+            } else {
+                for (size_t i = 0; i < 5; ++i) {
+                    src_pixels[i].x = det.landmarks[i].x * static_cast<float>(image.width());
+                    src_pixels[i].y = det.landmarks[i].y * static_cast<float>(image.height());
+                }
             }
 
-            // 4. Umeyama 仿射对齐与 112x112 重采样
+            // 3. Umeyama 仿射对齐与 112x112 重采样 (单阶段直写特征输入 Tensor)
             std::array<float, 6> affine_mat{};
             std::vector<float> probe_features;
 
             if (Aligner::estimate_similarity_transform(src_pixels, affine_mat)) {
-                auto aligned_patch = Aligner::crop_and_align(image, affine_mat, 112, 112);
-                probe_features = extractor_.extract(aligned_patch.data(), 112, 112, det.face_box);
-            } else {
-                // 仿射退化兜底：提取原人脸区域特征
-                probe_features.resize(512, 0.0f);
+                zhulong::Tensor rec_input({1, 112, 112, 3}, zhulong::DataType::UINT8);
+                if (Aligner::crop_and_align_direct(image, affine_mat, rec_input.data<uint8_t>(), 112, 112)) {
+                    if (rec_session && rec_session->valid()) {
+                        probe_features = extractor_.extract(*rec_session, rec_input);
+                    } else {
+                        probe_features = extractor_.extract(rec_input.data<uint8_t>(), 112, 112, det.face_box);
+                    }
+                }
             }
 
-            // 5. 1:N 底库比对与 Top-K 检索
+            if (probe_features.size() != 512) {
+                probe_features.assign(512, 0.0f);
+            }
+
+            // 4. 1:N 底库比对与 Top-K 检索
             MatchResult match_res = matcher_.match(probe_features.data(), 512, *gallery_snapshot);
 
-            // 6. 构造人脸项
+            // 5. 构造人脸项
             zhulong::FaceItem face;
             face.box[0] = det.face_box[0];
             face.box[1] = det.face_box[1];
@@ -100,7 +160,7 @@ public:
             face.candidates = std::move(match_res.candidates);
             face.is_fused = false;
 
-            // 7. 构造人脸关联人体项 (PersonItem)
+            // 6. 构造人脸关联人体项 (PersonItem)
             zhulong::PersonItem person;
             person.track_id = det.track_id;
             person.body_box[0] = det.body_box[0];
@@ -132,12 +192,17 @@ private:
         }
     }
 
-    zhulong::Model model_;
+    zhulong::Model det_model_;
+    zhulong::Model rec_model_;
+    std::mutex sessions_mu_;
+    std::unordered_map<uint32_t, zhulong::Session> rec_sessions_;
+
     FaceDetector detector_;
     Aligner aligner_;
     FaceFeatureExtractor extractor_;
     Matcher matcher_{0.40f, 3};
 };
+
 
 } // namespace zhulong::face
 

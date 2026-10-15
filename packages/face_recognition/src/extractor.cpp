@@ -1,7 +1,39 @@
 #include "extractor.hpp"
 #include <cmath>
+#include <cstring>
 
 namespace zhulong::face {
+
+std::vector<float> FaceFeatureExtractor::extract(
+    zhulong::Session& session,
+    const zhulong::Tensor& patch_tensor
+) const {
+    if (session.valid() && patch_tensor.element_count() == 112 * 112 * 3) {
+        auto outputs = session.forward({patch_tensor});
+        if (outputs.size() == 1 && outputs[0].element_count() == 512) {
+            std::vector<float> features(512);
+            const float* src = outputs[0].data<float>();
+            if (src) {
+                std::memcpy(features.data(), src, 512 * sizeof(float));
+
+                // 严格执行原地 (In-Place) 单位 L2 范数归一化
+                float norm_sq = 0.0f;
+                for (int i = 0; i < 512; ++i) {
+                    norm_sq += features[i] * features[i];
+                }
+                float norm = std::sqrt(norm_sq);
+                if (norm < 1e-6f) norm = 1.0f;
+                for (int i = 0; i < 512; ++i) {
+                    features[i] /= norm;
+                }
+                return features;
+            }
+        }
+    }
+
+    // CPU 降级/单测桩路径
+    return extract(patch_tensor.data<uint8_t>(), 112, 112);
+}
 
 std::vector<float> FaceFeatureExtractor::extract(
     const uint8_t* patch_data,
@@ -47,3 +79,4 @@ std::vector<float> FaceFeatureExtractor::extract(
 }
 
 } // namespace zhulong::face
+

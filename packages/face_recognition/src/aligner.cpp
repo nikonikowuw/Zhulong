@@ -81,27 +81,30 @@ bool Aligner::estimate_similarity_transform(
     return true;
 }
 
-std::vector<uint8_t> Aligner::crop_and_align(
+bool Aligner::crop_and_align_direct(
     const zhulong::Image& image,
     const std::array<float, 6>& affine_mat,
+    uint8_t* dst_buf,
     int dst_w,
     int dst_h
 ) {
-    if (dst_w <= 0 || dst_h <= 0) {
-        return {};
+    if (!dst_buf || dst_w <= 0 || dst_h <= 0) {
+        return false;
     }
-
-    std::vector<uint8_t> dst_patch(static_cast<size_t>(dst_w) * dst_h * 3, 0);
 
     const auto& raw = image.raw_view();
     if (raw.planes[0] == nullptr || raw.width <= 0 || raw.height <= 0) {
-        return dst_patch;
+        return false;
     }
 
     const uint8_t* src_data = raw.planes[0];
     const int src_w = raw.width;
     const int src_h = raw.height;
     const int src_stride = raw.strides[0] > 0 ? raw.strides[0] : src_w * 3;
+    const bool is_bgr = (raw.format == ZHULONG_PIXEL_FORMAT_BGR24);
+    const int c_r = is_bgr ? 2 : 0;
+    const int c_g = 1;
+    const int c_b = is_bgr ? 0 : 2;
 
     // 求解 2x3 相似变换的逆矩阵
     // M = [m0 m1 m2; m3 m4 m5]
@@ -115,7 +118,7 @@ std::vector<uint8_t> Aligner::crop_and_align(
 
     const float det = m0 * m4 - m1 * m3;
     if (std::abs(det) < 1e-7f) {
-        return dst_patch;
+        return false;
     }
 
     const float inv_det = 1.0f / det;
@@ -124,8 +127,10 @@ std::vector<uint8_t> Aligner::crop_and_align(
     const float im3 = -m3 * inv_det;
     const float im4 = m0 * inv_det;
 
+    const int channel_map[3] = {c_r, c_g, c_b};
+
     for (int dy = 0; dy < dst_h; ++dy) {
-        uint8_t* dst_row = dst_patch.data() + static_cast<size_t>(dy) * dst_w * 3;
+        uint8_t* dst_row = dst_buf + static_cast<size_t>(dy) * dst_w * 3;
         for (int dx = 0; dx < dst_w; ++dx) {
             float ox = static_cast<float>(dx) - m2;
             float oy = static_cast<float>(dy) - m5;
@@ -149,24 +154,43 @@ std::vector<uint8_t> Aligner::crop_and_align(
                 const uint8_t* p11 = src_data + static_cast<size_t>(y1) * src_stride + x1 * 3;
 
                 for (int c = 0; c < 3; ++c) {
-                    float v = (1.0f - wx) * (1.0f - wy) * p00[c] +
-                              wx * (1.0f - wy) * p10[c] +
-                              (1.0f - wx) * wy * p01[c] +
-                              wx * wy * p11[c];
+                    int src_c = channel_map[c];
+                    float v = (1.0f - wx) * (1.0f - wy) * p00[src_c] +
+                              wx * (1.0f - wy) * p10[src_c] +
+                              (1.0f - wx) * wy * p01[src_c] +
+                              wx * wy * p11[src_c];
                     dst_row[dx * 3 + c] = static_cast<uint8_t>(std::clamp(v, 0.0f, 255.0f));
                 }
             } else {
                 int cx = std::clamp(static_cast<int>(sx), 0, src_w - 1);
                 int cy = std::clamp(static_cast<int>(sy), 0, src_h - 1);
                 const uint8_t* p = src_data + static_cast<size_t>(cy) * src_stride + cx * 3;
-                dst_row[dx * 3] = p[0];
-                dst_row[dx * 3 + 1] = p[1];
-                dst_row[dx * 3 + 2] = p[2];
+                dst_row[dx * 3 + 0] = p[c_r];
+                dst_row[dx * 3 + 1] = p[c_g];
+                dst_row[dx * 3 + 2] = p[c_b];
             }
         }
     }
 
+    return true;
+}
+
+std::vector<uint8_t> Aligner::crop_and_align(
+    const zhulong::Image& image,
+    const std::array<float, 6>& affine_mat,
+    int dst_w,
+    int dst_h
+) {
+    if (dst_w <= 0 || dst_h <= 0) {
+        return {};
+    }
+
+    std::vector<uint8_t> dst_patch(static_cast<size_t>(dst_w) * dst_h * 3, 0);
+    if (!crop_and_align_direct(image, affine_mat, dst_patch.data(), dst_w, dst_h)) {
+        return dst_patch;
+    }
     return dst_patch;
 }
+
 
 } // namespace zhulong::face

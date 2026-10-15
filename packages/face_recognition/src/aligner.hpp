@@ -43,6 +43,23 @@ public:
     );
 
     /**
+     * @brief 基于 2x3 仿射矩阵对原图执行双线性插值采样与重对齐，直接写入目标缓冲区（零堆分配）
+     * @param image 原图只读视图
+     * @param affine_mat 2x3 相似变换仿射矩阵 (src -> dst)
+     * @param dst_buf 目标缓冲区指针 (容量需至少为 dst_w * dst_h * 3 字节)
+     * @param dst_w 输出宽度 (默认 112)
+     * @param dst_h 输出高度 (默认 112)
+     * @return true 采样成功，false 原图或矩阵非法
+     */
+    static bool crop_and_align_direct(
+        const zhulong::Image& image,
+        const std::array<float, 6>& affine_mat,
+        uint8_t* dst_buf,
+        int dst_w = 112,
+        int dst_h = 112
+    );
+
+    /**
      * @brief 基于 2x3 仿射矩阵对原图执行双线性插值采样与重对齐
      * @param image 原图只读视图
      * @param affine_mat 2x3 相似变换仿射矩阵 (src -> dst)

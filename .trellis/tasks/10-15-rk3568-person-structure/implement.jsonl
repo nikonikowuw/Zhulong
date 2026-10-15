@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "纯 C ABI (v1)、person_structure 结构体嵌套内存布局、单块 Arena 内存与所有权规范"}
+{"file": ".trellis/tasks/archive/2026-10/10-14-face-recognition-e2e/research/face-model-baseline.md", "reason": "det_500m (SCRFD) 与 facelivtv2-l 真实模型预处理契约、输出 Tensor 布局、Sigmoid 规则、Umeyama 5点模板标定"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "算法包目录结构规范、manifest.json 格式、runner 验包与多平台生命周期契约"}
+{"file": ".trellis/spec/architecture.md", "reason": "从原生引擎、CGO 边界、Go 领域事件到前端的端到端调用关系与数据契约"}

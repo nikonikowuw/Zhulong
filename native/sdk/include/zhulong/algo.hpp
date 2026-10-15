@@ -171,6 +171,9 @@ public:
     /** @brief 检查当前会话是否已成功初始化且可用 */
     bool valid() const noexcept { return backend_ && ctx_; }
 
+    /** @brief 获取绑定该会话的 Worker 唯一标识 */
+    uint32_t worker_id() const noexcept { return ctx_ ? ctx_->worker_id : 0; }
+
     /**
      * @brief 同步执行模型前向推理
      *

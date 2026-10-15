@@ -44,6 +44,17 @@ def main():
 
     # 寻找编译出的插件动态库
     build_dir = repo_root / args.build_dir
+    if args.build_dir == "build/native/host" and args.target != "cpu":
+        cross_candidates = [
+            repo_root / "build" / "native" / f"cross-{args.target}-rknn-rga",
+            repo_root / "build" / "native" / f"cross-{args.target}-rknn",
+            repo_root / "build" / "native" / f"cross-{args.target}",
+        ]
+        for cd in cross_candidates:
+            if (cd / "libFaceRecognitionPlugin.so").exists():
+                build_dir = cd
+                break
+
     possible_so = [
         build_dir / "libFaceRecognitionPlugin.so",
         build_dir / "FaceRecognitionPlugin.so",
