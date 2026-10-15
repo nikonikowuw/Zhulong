@@ -88,3 +88,44 @@
 ### Next Steps
 
 - 推进 10-14-face-recognition-e2e 后续子任务（10-14-face-feature-extraction、10-14-gallery-hot-sync、10-14-face-result-frontend）
+
+
+## Session 41: 完成 native 公开契约层 Doxygen 注释补齐
+<!-- trellis-session: v=2 fp=6f2687b558e04820 -->
+
+**Date**: 2026-10-15
+**Task**: 完成 native 公开契约层 Doxygen 注释补齐
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+为 native/include/Zhulong/engine.h、frame.hpp 与 native/sdk/include/zhulong/plugin.h、algo.hpp 补齐详尽中文 Doxygen 注释，确立风格基线与术语规范，并通过 norm 预处理剥离检查确保零代码/行为变更。
+
+### Main Changes
+
+- 为 engine.h 补齐错误码、流选项、生命周期及幂等性约束说明
+- 为 frame.hpp 补齐 HardwareFrame 各字段语义、NV12 规范与 RAII release_fn 转移契约
+- 为 plugin.h 补齐 C ABI 物理隔离要求、帧视图、人脸/人体结构体及 Arena 内存释放约定
+- 为 algo.hpp 补齐 C++ SDK 门面、Image 借用生命周期、Session/Model 线程独占语义及单块连续 Arena 内存打包适配器
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2c1eb24` | docs(native): add Doxygen comments for engine C ABI and hardware frame |
+| `cfa4cbb` | docs(sdk): add Doxygen comments for plugin C ABI and C++ SDK facade |
+
+### Testing
+
+- [OK] 通过 norm() 预处理代码剥离不变性比对，确保 4 个文件零代码变更
+- [OK] make native-build 与 make native-test 全绿 (15/15 通过)
+- [OK] make go-check (vet + race + RTSP loopback 集成测试) 全绿通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推进 native 引擎与流水线层注释补齐 (10-14-native-pipeline-docs)

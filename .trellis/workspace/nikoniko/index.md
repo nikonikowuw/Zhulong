@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 39
+- **Total Sessions**: 41
 - **Last Active**: 2026-10-15
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~46 | Active |
+| `journal-2.md` | ~131 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 41 | 2026-10-15 | 完成 native 公开契约层 Doxygen 注释补齐 | `2c1eb24`, `cfa4cbb` | `dev` |
 | 39 | 2026-10-15 | 支持人员主人脸设置、相册画廊与全屏预览 (10-14-person-primary-face) | `166be4a` | `dev` |
 | 38 | 2026-10-14 | 人员管理前端任务收尾、并发写者隔离与 spec 漂移修复 | `ab20779`, `891f63e` | `dev` |
 | 37 | 2026-10-14 | 清理未实现功能的Mock前端页面并精简导航 | `0fe0742`, `26518e8` | `dev` |
