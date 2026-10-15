@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 42
+- **Total Sessions**: 46
 - **Last Active**: 2026-10-15
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~82 | Active |
+| `journal-2.md` | ~203 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 46 | 2026-10-15 | End-to-end DMA-BUF zero-copy pipeline and hardware acceleration on RK3568 | `defd060`, `76dab04` | `dev` |
 | 42 | 2026-10-15 | Decouple external person_id from internal row id | `0e1ed28` | `dev` |
 | 41 | 2026-10-15 | 完成 native 公开契约层 Doxygen 注释补齐 | `2c1eb24`, `cfa4cbb` | `dev` |
 | 39 | 2026-10-15 | 支持人员主人脸设置、相册画廊与全屏预览 (10-14-person-primary-face) | `166be4a` | `dev` |

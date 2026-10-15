@@ -177,3 +177,27 @@ Replaced heuristic mock code in `packages/face_recognition` with full real deep-
 [OK] **Completed**
 
 
+
+
+## Session 46: End-to-end DMA-BUF zero-copy pipeline and hardware acceleration on RK3568
+<!-- trellis-session: v=2 fp=8123c51656b91f0c -->
+
+**Date**: 2026-10-15
+**Task**: End-to-end DMA-BUF zero-copy pipeline and hardware acceleration on RK3568
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+Implemented end-to-end hardware zero-copy DMA-BUF pipeline across the entire video processing stack on RK3568. Built DmaBufAllocator with CMA/system heap/DRM fallback and symmetric CPU cache bracket synchronization (DMA_BUF_IOCTL_SYNC). Enhanced IPC Unix Domain Sockets with SCM_RIGHTS file descriptor passing and FD_CLOEXEC RAII lifecycle cleanup to prevent descriptor leaks. Extended C ABI zhulong_frame_view.dma_buf_fd (maintaining 88-byte alignment) and zhulong::Image. Upgraded RgaVisionBackend to use wrapbuffer_fd for zero-copy hardware CSC/resizing, and RknnInferenceBackend to use rknn_create_mem_from_fd and rknn_set_io_mem with session-level memory caching to eliminate kernel/driver memory copies and IOMMU re-mapping thrashing. Cached input DMA-BUF buffers in FaceDetector to avoid hot-path CMA allocation churn. Resolved Playwright Node.js 24 headless shell extraction deadlock and passed full test suite via make check (frontend headless browser tests, 19 native unit/integration tests, Go race checks, and Go bridge integration tests).
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `defd060` | feat(native): implement end-to-end DMA-BUF zero-copy pipeline on RK3568 |
+| `76dab04` | docs(spec): document DMA-BUF zero-copy pipeline and update task plan |
+
+### Status
+
+[OK] **Completed**
