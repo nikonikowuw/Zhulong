@@ -129,3 +129,47 @@
 ### Next Steps
 
 - 推进 native 引擎与流水线层注释补齐 (10-14-native-pipeline-docs)
+
+
+## Session 42: 完成 native 引擎与流水线层 Doxygen 注释补齐
+<!-- trellis-session: v=2 fp=8a7c2d9e1f3b4c50 -->
+
+**Date**: 2026-10-15
+**Task**: 完成 native 引擎与流水线层 Doxygen 注释补齐
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+为 native/src/abi、native/src/pipeline、native/src/nodes 15 个 C++ 源文件与头文件补齐详尽中文 Doxygen 注释，覆盖五步优雅停机时序、锁外汇合禁令、按需解码会话生命周期、有界队列关键帧自愈重同步、时间戳保真以及异常防爆门机制，并通过 norm 预处理剥离检查确保零代码/行为变更。
+
+### Main Changes
+
+- 为 native/src/abi/engine.cpp 补齐 C ABI 异常防爆门、句柄转换所有权、同步排空及回调上下文控制拒绝语义
+- 为 native/src/nodes/capture/rtsp_input.{hpp,cpp} 补齐 RTSP 异步建连/超时策略、视频元数据透传及 extradata 借用生命周期
+- 为 native/src/nodes/decode/{decoder.hpp,ffmpeg_decoder.{hpp,cpp}} 补齐 IDecodeNode 契约、EAGAIN 排空重试循环、解码异常防爆门及硬件帧 release_fn 闭包回收
+- 为 native/src/pipeline/bounded_queue.hpp 补齐三种溢出策略、取消状态不可复用约束及锁外执行回调原则
+- 为 native/src/pipeline/{subscription,frame_publisher}.{hpp,cpp} 补齐订阅异常逐订阅者隔离、同步排空语义以及发布侧节流口径
+- 为 native/src/pipeline/{stream,engine}.{hpp,cpp} 补齐按需 DecodeSession 三态生命周期、有界关键帧重同步、五步优雅停机及锁外 join 禁令
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8f5beb7` | docs(nodes): add Doxygen comments for capture nodes, decode nodes, and ABI boundary |
+| `ff463d3` | docs(pipeline): add Doxygen comments for engine orchestration, stream pipeline, and bounded queues |
+
+### Testing
+
+- [OK] 通过 norm() 预处理代码剥离不变性比对，确保 15 个文件零代码变更
+- [OK] make native-build 与 make native-test 全绿 (15/15 通过)
+- [OK] make go-check (vet + race + RTSP loopback 集成测试) 全绿通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推进 native 算法子系统注释补齐 (10-14-native-algorithm-docs)
+
