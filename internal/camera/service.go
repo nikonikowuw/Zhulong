@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
 
@@ -25,7 +25,6 @@ type CameraService struct {
 	hub       *EventHub
 	scheduler *HealthScheduler
 	logger    *zap.Logger
-	createMu  sync.Mutex
 }
 
 // NewCameraService creates a new CameraService.
@@ -97,14 +96,7 @@ func (s *CameraService) Create(ctx context.Context, req CreateCameraRequest) (*C
 	// 5. Generate Camera ID if absent
 	camID := strings.TrimSpace(req.ID)
 	if camID == "" {
-		s.createMu.Lock()
-		defer s.createMu.Unlock()
-
-		nextID, err := s.store.GetNextNumericID(ctx)
-		if err != nil {
-			return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to allocate camera ID", err)
-		}
-		camID = nextID
+		camID = idutil.New()
 	}
 
 	// 6. Encrypt Stream Credentials with AES-GCM and AAD

@@ -65,3 +65,9 @@ sqlDB.SetMaxIdleConns(1)
    - **条件唯一**：建条件 `UNIQUE` 索引（`WHERE col IS NOT NULL`），允许多行未配置外部键，已配置的确保全局唯一；
    - **一次性补录与不可变保护**：未绑定时允许补录绑定（从 NULL 写入值）；一旦赋值，则不得擅自改写，对非法变更返回显式冲突错误（如 409 `PERSON_ID_IMMUTABLE`）；
    - **与内部主键分离**：内部代理主键（`id`）负责系统内部实体关系（如外键关联与级联删除）与硬件底库原子索引，对外业务键仅作为业务对账元数据，二者不得互相混淆顶替。跨系统传输或底库同步时，未设置则使用空值或空串，**绝不得回退**到内部主键。
+5. **实体代理主键统一 ULID 铁律**：
+   - 凡声明为 `TEXT PRIMARY KEY` 的动态业务实体（如 `persons.id`、`person_faces.id`、`cameras.id`、`analysis_tasks.id`），在服务端未收到显式自定义主键时，**一律统一使用 `internal/idutil.New()` 生成纯 ULID**（26 字符 Crockford's Base32，48 位时间戳毫秒单调递增 + 80 位加密安全熵源）；
+   - **严禁使用完全无序随机串**（如 `crypto/rand.Text()` 或 UUIDv4）：SQLite 表基于 B-Tree 组织，完全无序的字符串主键插入会导致高频叶子节点页分裂（Page Split）与磁盘随机写 I/O 放大；ULID 确保新记录始终追加在 B-Tree 最右侧叶子；
+   - **严禁全表扫描伪自增**：严禁通过 `SELECT MAX(CAST(...))` 计算下一自增数字并持有应用层互斥锁；
+   - **严禁伪语义拼接复合主键**：代理主键必须保持纯粹、不透明；实体间的约束与关联（如 `UNIQUE(camera_id, algorithm_id)`）交由唯一索引与外键保证，人类可读信息通过查询联合展示，严禁拼接形如 `task_{cam}_{algo}` 的超长混合串；
+   - **内部高频追加表例外**：如 `audit_logs`、`camera_streams` 等纯内部流式追加表，继续使用 SQLite 原生 `INTEGER PRIMARY KEY AUTOINCREMENT`。

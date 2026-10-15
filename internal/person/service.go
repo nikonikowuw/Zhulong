@@ -3,7 +3,6 @@ package person
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -17,6 +16,7 @@ import (
 	"unsafe"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
 
@@ -58,14 +58,11 @@ func (s *Service) SetGalleryNotifier(notifier GalleryNotifier) {
 	s.galleryNotifier = notifier
 }
 
-// newID returns a random identifier for a person or face row.
-//
-// Row ids used to be derived from time.Now().UnixNano(), which is not collision-free:
-// concurrent callers, or two cores reading the same clock tick, can obtain an identical
-// value and produce a duplicate primary key, surfacing as a 500 on the second request.
-// rand.Text() draws from the OS entropy source instead and never fails.
+// newID returns a unique monotonic identifier for a person or face row using ULID.
+// ULIDs provide 128-bit collision resistance, millisecond-level chronological sorting,
+// and 26-character Crockford Base32 formatting.
 func newID() string {
-	return rand.Text()
+	return idutil.New()
 }
 
 // CreatePerson creates a new person profile.

@@ -16,6 +16,7 @@ import (
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
+	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
 
@@ -464,7 +465,7 @@ func TestCameraHandler_AuditLogging(t *testing.T) {
 	}
 }
 
-func TestCameraHandlerCreate_AutoIncrementID(t *testing.T) {
+func TestCameraHandlerCreate_GeneratedULID(t *testing.T) {
 	router, _, _, _, cleanup := setupTestCameraApp(t)
 	defer cleanup()
 
@@ -493,8 +494,8 @@ func TestCameraHandlerCreate_AutoIncrementID(t *testing.T) {
 	if err := json.Unmarshal(w1.Body.Bytes(), &resp1); err != nil {
 		t.Fatalf("Unmarshal response failed: %v", err)
 	}
-	if resp1.Data == nil || resp1.Data.ID != "1" {
-		t.Fatalf("expected camera 1 to have ID '1', got %+v", resp1.Data)
+	if resp1.Data == nil || !idutil.IsValid(resp1.Data.ID) {
+		t.Fatalf("expected camera 1 to have valid ULID, got %+v", resp1.Data)
 	}
 
 	// 2. Create second camera with empty string ID
@@ -523,7 +524,14 @@ func TestCameraHandlerCreate_AutoIncrementID(t *testing.T) {
 	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
 		t.Fatalf("Unmarshal response failed: %v", err)
 	}
-	if resp2.Data == nil || resp2.Data.ID != "2" {
-		t.Fatalf("expected camera 2 to have ID '2', got %+v", resp2.Data)
+	if resp2.Data == nil || !idutil.IsValid(resp2.Data.ID) {
+		t.Fatalf("expected camera 2 to have valid ULID, got %+v", resp2.Data)
+	}
+
+	if resp1.Data.ID == resp2.Data.ID {
+		t.Fatalf("expected unique camera IDs, but got duplicates: %s", resp1.Data.ID)
+	}
+	if resp1.Data.ID >= resp2.Data.ID {
+		t.Fatalf("expected camera IDs to be monotonic (%s < %s)", resp1.Data.ID, resp2.Data.ID)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
+	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
 
@@ -132,6 +133,18 @@ func TestHandlerAnalysisTasks(t *testing.T) {
 		t.Fatalf("expected 201 Created, got: %d, body: %s", w.Code, w.Body.String())
 	}
 
+	var createResp struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("unmarshal create task response: %v", err)
+	}
+	if !idutil.IsValid(createResp.Data.ID) {
+		t.Fatalf("expected valid ULID task ID, got %q", createResp.Data.ID)
+	}
+
 	// 2. List tasks via /tasks
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/algorithms/tasks?camera_id=cam_01", nil)
 	w = httptest.NewRecorder()
@@ -141,7 +154,7 @@ func TestHandlerAnalysisTasks(t *testing.T) {
 	}
 
 	// 3. Delete Task
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/algorithms/tasks/task_cam_01_algo_cam", nil)
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/algorithms/tasks/"+createResp.Data.ID, nil)
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {

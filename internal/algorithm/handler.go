@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
+	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
 
@@ -423,7 +424,7 @@ func (h *Handler) CreateTask(c *gin.Context) {
 		ConfigJSON:  cfgJSON,
 	}
 	if task.ID == "" {
-		task.ID = "task_" + task.CameraID + "_" + task.AlgorithmID
+		task.ID = idutil.New()
 	}
 
 	if err := h.service.CreateTask(c.Request.Context(), &task); err != nil {

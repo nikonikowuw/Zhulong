@@ -189,13 +189,22 @@ func TestHandlerAuditCoverage(t *testing.T) {
 	}
 
 	// 5. Create analysis task
-	if w := do(http.MethodPost, "/api/v1/algorithms/tasks",
-		`{"camera_id":"cam_audit","algorithm_id":"`+algoID+`","sample_fps":5}`, clientAddr); w.Code != http.StatusCreated {
-		t.Fatalf("create task failed: %d %s", w.Code, w.Body.String())
+	wTask := do(http.MethodPost, "/api/v1/algorithms/tasks",
+		`{"camera_id":"cam_audit","algorithm_id":"`+algoID+`","sample_fps":5}`, clientAddr)
+	if wTask.Code != http.StatusCreated {
+		t.Fatalf("create task failed: %d %s", wTask.Code, wTask.Body.String())
+	}
+	var taskResp struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(wTask.Body.Bytes(), &taskResp); err != nil {
+		t.Fatalf("unmarshal task response: %v", err)
 	}
 
 	// 6. Delete analysis task
-	const taskID = "task_cam_audit_" + algoID
+	taskID := taskResp.Data.ID
 	if w := do(http.MethodDelete, "/api/v1/algorithms/tasks/"+taskID, "", clientAddr); w.Code != http.StatusOK {
 		t.Fatalf("delete task failed: %d %s", w.Code, w.Body.String())
 	}
