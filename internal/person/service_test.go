@@ -173,7 +173,7 @@ func TestGetGallerySyncData(t *testing.T) {
 
 	p := &Person{
 		ID:       "p_test",
-		PersonID: "EMP_001",
+		PersonID: strPtr("EMP_001"),
 		Name:     "李四",
 	}
 	if err := store.CreatePerson(ctx, p); err != nil {
@@ -257,9 +257,9 @@ func TestCreatePerson_DuplicatePersonIDIsConflict(t *testing.T) {
 	requireDomainError(t, err, apperr.KindConflict, "PERSON_ID_ALREADY_EXISTS")
 }
 
-// TestCreatePerson_DefaultsPersonIDToID verifies that omitting personId defaults it to
-// the generated primary key id, and that the primary key has no "person_" prefix.
-func TestCreatePerson_DefaultsPersonIDToID(t *testing.T) {
+// TestCreatePerson_DefaultsPersonIDToNil verifies that omitting personId leaves it nil
+// without falling back to the primary key id.
+func TestCreatePerson_DefaultsPersonIDToNil(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
@@ -273,8 +273,8 @@ func TestCreatePerson_DefaultsPersonIDToID(t *testing.T) {
 	if strings.HasPrefix(p.ID, "person_") {
 		t.Fatalf("primary key id %q must not have person_ prefix", p.ID)
 	}
-	if p.PersonID != p.ID {
-		t.Fatalf("expected personId %q to match id %q when omitted", p.PersonID, p.ID)
+	if p.PersonID != nil {
+		t.Fatalf("expected personId to be nil when omitted, got %q", *p.PersonID)
 	}
 }
 
@@ -298,8 +298,8 @@ func TestUpdatePerson_RejectsPersonIDChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPerson failed: %v", err)
 	}
-	if got.PersonID != "EMP_1" {
-		t.Errorf("person_id must survive a rejected reassignment, got %q", got.PersonID)
+	if got.PersonID == nil || *got.PersonID != "EMP_1" {
+		t.Errorf("person_id must survive a rejected reassignment, got %v", got.PersonID)
 	}
 
 	// Re-sending the identical value is a no-op rather than a conflict.
@@ -307,6 +307,33 @@ func TestUpdatePerson_RejectsPersonIDChange(t *testing.T) {
 	if _, err := svc.UpdatePerson(ctx, created.ID, UpdatePersonRequest{PersonID: &same}); err != nil {
 		t.Fatalf("idempotent personId resend must succeed, got %v", err)
 	}
+}
+
+func TestUpdatePerson_AllowsBindingWhenEmpty(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	created, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "无工号员工"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+	if created.PersonID != nil {
+		t.Fatalf("expected initial personId to be nil, got %v", created.PersonID)
+	}
+
+	bound := "EMP_BIND_1"
+	updated, err := svc.UpdatePerson(ctx, created.ID, UpdatePersonRequest{PersonID: &bound})
+	if err != nil {
+		t.Fatalf("UpdatePerson binding failed: %v", err)
+	}
+	if updated.PersonID == nil || *updated.PersonID != bound {
+		t.Fatalf("expected updated personId %q, got %v", bound, updated.PersonID)
+	}
+
+	// Once bound, changing it must fail
+	other := "EMP_BIND_2"
+	_, err = svc.UpdatePerson(ctx, created.ID, UpdatePersonRequest{PersonID: &other})
+	requireDomainError(t, err, apperr.KindConflict, "PERSON_ID_IMMUTABLE")
 }
 
 // TestUpdatePerson_RejectsBlankName replaces the previous silent ignore: a blank name used
@@ -687,6 +714,10 @@ func TestAddFace_WithExtractor_DimMismatch(t *testing.T) {
 	}
 
 	requireDomainError(t, err, apperr.KindInternal, "FEATURE_EXTRACT_FAILED")
+}
+
+func strPtr(s string) *string {
+	return &s
 }
 
 type mockGalleryNotifier struct {

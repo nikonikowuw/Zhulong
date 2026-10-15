@@ -26,6 +26,32 @@ function TestComponent() {
   )
 }
 
+function EditTestComponent({
+  person,
+}: {
+  person: { id: string; name: string; personId?: string | null }
+}) {
+  const { setOpen, setCurrentRow } = usePersonsContext()
+  return (
+    <div>
+      <Button
+        onClick={() => {
+          setCurrentRow({
+            ...person,
+            createdAt: '2026-10-14T00:00:00Z',
+            updatedAt: '2026-10-14T00:00:00Z',
+            faces: [],
+          })
+          setOpen('edit')
+        }}
+      >
+        Open Edit Person
+      </Button>
+      <PersonsActionDialog />
+    </div>
+  )
+}
+
 describe('PersonsActionDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -78,5 +104,51 @@ describe('PersonsActionDialog', () => {
     await expect
       .element(getByText(/请输入人员姓名/i))
       .toBeInTheDocument()
+  })
+
+  it('enables personId input when editing a person without assigned personId', async () => {
+    const queryClient = new QueryClient()
+
+    const { getByRole, getByPlaceholder } = await render(
+      <QueryClientProvider client={queryClient}>
+        <PersonsProvider>
+          <EditTestComponent
+            person={{ id: 'p_unbound', name: '无工号员工', personId: null }}
+          />
+        </PersonsProvider>
+      </QueryClientProvider>
+    )
+
+    const openBtn = getByRole('button', { name: /Open Edit Person/i })
+    await openBtn.click()
+
+    await expect
+      .element(getByRole('heading', { name: /编辑人员档案/i }))
+      .toBeInTheDocument()
+
+    const personIdInput = getByPlaceholder(/选填，如：EMP-1001/i)
+    await expect.element(personIdInput).toBeInTheDocument()
+    await expect.element(personIdInput).not.toBeDisabled()
+  })
+
+  it('disables personId input when editing a person with assigned personId', async () => {
+    const queryClient = new QueryClient()
+
+    const { getByRole, getByPlaceholder } = await render(
+      <QueryClientProvider client={queryClient}>
+        <PersonsProvider>
+          <EditTestComponent
+            person={{ id: 'p_bound', name: '已有工号员工', personId: 'EMP-001' }}
+          />
+        </PersonsProvider>
+      </QueryClientProvider>
+    )
+
+    const openBtn = getByRole('button', { name: /Open Edit Person/i })
+    await openBtn.click()
+
+    const personIdInput = getByPlaceholder(/选填，如：EMP-1001/i)
+    await expect.element(personIdInput).toBeInTheDocument()
+    await expect.element(personIdInput).toBeDisabled()
   })
 })

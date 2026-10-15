@@ -75,9 +75,10 @@ func (s *Service) CreatePerson(ctx context.Context, req CreatePersonRequest) (*P
 	}
 
 	id := newID()
-	personID := strings.TrimSpace(req.PersonID)
-	if personID == "" {
-		personID = id
+	var personID *string
+	trimmed := strings.TrimSpace(req.PersonID)
+	if trimmed != "" {
+		personID = &trimmed
 	}
 
 	p := &Person{
@@ -130,11 +131,17 @@ func (s *Service) UpdatePerson(ctx context.Context, id string, req UpdatePersonR
 		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to get person", err)
 	}
 
-	// person_id is the business key external systems correlate on, so it is immutable:
-	// an attempt to change it fails loudly rather than being silently dropped. The field
-	// is kept in the DTO precisely so this rejection is reachable.
-	if req.PersonID != nil && *req.PersonID != p.PersonID {
-		return nil, apperr.Conflict("PERSON_ID_IMMUTABLE", "personId cannot be changed", nil)
+	// person_id is the business key external systems correlate on. If not yet assigned (nil or empty),
+	// it can be bound. Once assigned, attempts to change it are rejected with PERSON_ID_IMMUTABLE.
+	if req.PersonID != nil {
+		trimmed := strings.TrimSpace(*req.PersonID)
+		if p.PersonID == nil || *p.PersonID == "" {
+			if trimmed != "" {
+				p.PersonID = &trimmed
+			}
+		} else if trimmed != *p.PersonID {
+			return nil, apperr.Conflict("PERSON_ID_IMMUTABLE", "personId cannot be changed", nil)
+		}
 	}
 	if req.Name != nil {
 		if *req.Name == "" {
@@ -150,13 +157,17 @@ func (s *Service) UpdatePerson(ctx context.Context, id string, req UpdatePersonR
 		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to update person", err)
 	}
 
-	if req.Name != nil && s.galleryNotifier != nil {
+	if (req.Name != nil || req.PersonID != nil) && s.galleryNotifier != nil {
 		faces, err := s.store.ListFacesByPerson(ctx, id)
 		if err == nil {
+			var pid string
+			if p.PersonID != nil {
+				pid = *p.PersonID
+			}
 			for _, f := range faces {
 				_ = s.galleryNotifier.BroadcastUpsert(ctx, GalleryUpsertPayload{
 					FaceID:     f.ID,
-					PersonID:   p.PersonID,
+					PersonID:   pid,
 					PersonName: p.Name,
 					ImagePath:  f.ImagePath,
 					Features:   bytesToFloat32(f.FeatureVector),
@@ -218,7 +229,12 @@ func (s *Service) DeletePerson(ctx context.Context, id string) error {
 	}
 
 	if s.galleryNotifier != nil && p != nil {
-		_ = s.galleryNotifier.BroadcastDelete(ctx, "", p.PersonID)
+		for _, f := range faces {
+			_ = s.galleryNotifier.BroadcastDelete(ctx, f.ID, "")
+		}
+		if p.PersonID != nil && *p.PersonID != "" {
+			_ = s.galleryNotifier.BroadcastDelete(ctx, "", *p.PersonID)
+		}
 	}
 
 	return nil
@@ -360,9 +376,13 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 		if len(featBytes) > 0 {
 			floats = bytesToFloat32(featBytes)
 		}
+		var pid string
+		if personMeta.PersonID != nil {
+			pid = *personMeta.PersonID
+		}
 		if err := s.galleryNotifier.BroadcastUpsert(ctx, GalleryUpsertPayload{
 			FaceID:     faceID,
-			PersonID:   personMeta.PersonID,
+			PersonID:   pid,
 			PersonName: personMeta.Name,
 			ImagePath:  fileName,
 			Features:   floats,
@@ -420,7 +440,11 @@ func (s *Service) DeleteFace(ctx context.Context, personID, faceID string) error
 	}
 
 	if s.galleryNotifier != nil && targetPerson != nil {
-		_ = s.galleryNotifier.BroadcastDelete(ctx, faceID, targetPerson.PersonID)
+		var pid string
+		if targetPerson.PersonID != nil {
+			pid = *targetPerson.PersonID
+		}
+		_ = s.galleryNotifier.BroadcastDelete(ctx, faceID, pid)
 	}
 
 	return nil
@@ -455,15 +479,15 @@ func (s *Service) GetGallerySyncData(ctx context.Context) ([]GallerySyncItem, er
 
 	var syncItems []GallerySyncItem
 	for _, p := range persons {
-		// PersonID is the gallery identity verbatim: it is mandatory and unique, so
-		// there is no fallback to the internal row id — mixing the two identifier
-		// spaces here would hand algorithm runners identities the external systems
-		// cannot resolve.
+		var pid string
+		if p.PersonID != nil {
+			pid = *p.PersonID
+		}
 		for _, f := range p.Faces {
 			floats := bytesToFloat32(f.FeatureVector)
 			syncItems = append(syncItems, GallerySyncItem{
 				FaceID:     f.ID,
-				PersonID:   p.PersonID,
+				PersonID:   pid,
 				PersonName: p.Name,
 				ImagePath:  f.ImagePath,
 				Features:   floats,

@@ -529,3 +529,109 @@ func TestPrimaryFaceIDMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("expected primary_face_id column to be restored after re-Up(1)")
 	}
 }
+
+func TestMigration000009_DecouplePersonID(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_migrate_09.db")
+
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", dbPath)
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// 1. Run migrations up to 8
+	if err := migrator.Migrate(8); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(8): %v", err)
+	}
+
+	// Insert test data: one person where person_id == id (dummy), one where person_id == "EMP_001"
+	if _, err := db.Exec(`INSERT INTO persons (id, person_id, name) VALUES ('p_dummy', 'p_dummy', 'Dummy');`); err != nil {
+		t.Fatalf("insert dummy person: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO persons (id, person_id, name) VALUES ('p_real', 'EMP_001', 'Real');`); err != nil {
+		t.Fatalf("insert real person: %v", err)
+	}
+	// Insert face for p_dummy to verify CASCADE did not delete faces
+	if _, err := db.Exec(`INSERT INTO person_faces (id, person_id, feature_vector) VALUES ('f_1', 'p_dummy', x'0001');`); err != nil {
+		t.Fatalf("insert face: %v", err)
+	}
+
+	// 2. Apply migration 9
+	if err := migrator.Migrate(9); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(9): %v", err)
+	}
+
+	// Verify p_dummy now has NULL person_id
+	var dummyPersonID sql.NullString
+	if err := db.QueryRow(`SELECT person_id FROM persons WHERE id = 'p_dummy'`).Scan(&dummyPersonID); err != nil {
+		t.Fatalf("query dummy person_id: %v", err)
+	}
+	if dummyPersonID.Valid {
+		t.Fatalf("expected p_dummy person_id to be NULL, got %q", dummyPersonID.String)
+	}
+
+	// Verify p_real preserved "EMP_001"
+	var realPersonID sql.NullString
+	if err := db.QueryRow(`SELECT person_id FROM persons WHERE id = 'p_real'`).Scan(&realPersonID); err != nil {
+		t.Fatalf("query real person_id: %v", err)
+	}
+	if !realPersonID.Valid || realPersonID.String != "EMP_001" {
+		t.Fatalf("expected p_real person_id 'EMP_001', got %v", realPersonID)
+	}
+
+	// Verify f_1 was preserved in person_faces
+	var faceCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM person_faces WHERE id = 'f_1'`).Scan(&faceCount); err != nil {
+		t.Fatalf("query face count: %v", err)
+	}
+	if faceCount != 1 {
+		t.Fatalf("expected face f_1 to be preserved, got count %d", faceCount)
+	}
+
+	// Verify multiple NULL person_ids do not conflict
+	if _, err := db.Exec(`INSERT INTO persons (id, person_id, name) VALUES ('p_null_2', NULL, 'Null2');`); err != nil {
+		t.Fatalf("insert second null person_id failed: %v", err)
+	}
+
+	// Verify duplicate non-null person_id conflicts
+	if _, err := db.Exec(`INSERT INTO persons (id, person_id, name) VALUES ('p_dup', 'EMP_001', 'Dup');`); err == nil {
+		t.Fatalf("expected duplicate EMP_001 to fail UNIQUE constraint, but succeeded")
+	}
+
+	// 3. Rollback migration 9 (Down step 1)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator Steps(-1): %v", err)
+	}
+
+	// In migration 8 schema, NULL person_ids should have fallen back to COALESCE(person_id, id)
+	var rolledBackID sql.NullString
+	if err := db.QueryRow(`SELECT person_id FROM persons WHERE id = 'p_dummy'`).Scan(&rolledBackID); err != nil {
+		t.Fatalf("query rolled back person_id: %v", err)
+	}
+	if !rolledBackID.Valid || rolledBackID.String != "p_dummy" {
+		t.Fatalf("expected rolled back person_id 'p_dummy', got %v", rolledBackID)
+	}
+
+	// 4. Re-apply migration 9 (Up step 1)
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator Steps(1): %v", err)
+	}
+}

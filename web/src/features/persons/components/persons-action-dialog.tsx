@@ -41,6 +41,9 @@ export function PersonsActionDialog() {
   const { open, setOpen, currentRow } = usePersonsContext()
 
   const isEdit = open === 'edit' && Boolean(currentRow)
+  const isPersonIdBound = Boolean(
+    isEdit && currentRow?.personId && currentRow.personId.trim()
+  )
   const isOpen = open === 'create' || open === 'edit'
 
   const createMutation = useCreatePerson()
@@ -62,7 +65,7 @@ export function PersonsActionDialog() {
       if (isEdit && currentRow) {
         form.reset({
           name: currentRow.name,
-          personId: currentRow.personId,
+          personId: currentRow.personId || '',
         })
       } else {
         form.reset({
@@ -76,9 +79,15 @@ export function PersonsActionDialog() {
   const onSubmit = async (values: PersonFormValues) => {
     try {
       if (isEdit && currentRow) {
+        const updatePayload: { name: string; personId?: string } = {
+          name: values.name,
+        }
+        if (!isPersonIdBound && values.personId && values.personId.trim()) {
+          updatePayload.personId = values.personId.trim()
+        }
         await updateMutation.mutateAsync({
           id: currentRow.id,
-          data: { name: values.name },
+          data: updatePayload,
         })
         toast.success(t('notifications.updateSuccess', { name: values.name }))
       } else {
@@ -147,11 +156,11 @@ export function PersonsActionDialog() {
                   <FormControl>
                     <Input
                       placeholder={t('fields.personIdPlaceholder')}
-                      disabled={isEdit}
+                      disabled={isPersonIdBound}
                       {...field}
                     />
                   </FormControl>
-                  {isEdit ? (
+                  {isPersonIdBound ? (
                     <FormDescription className='text-xs text-muted-foreground'>
                       {t('fields.personIdDisabledTip')}
                     </FormDescription>

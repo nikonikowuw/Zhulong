@@ -132,7 +132,7 @@ func (s *Store) ListPersons(ctx context.Context, limit, offset int, search strin
 	search = strings.TrimSpace(search)
 	if search != "" {
 		likePattern := "%" + search + "%"
-		query = query.Where("name LIKE ? OR person_id LIKE ?", likePattern, likePattern)
+		query = query.Where("name LIKE ? OR (person_id IS NOT NULL AND person_id LIKE ?)", likePattern, likePattern)
 	}
 
 	var total int64
@@ -189,11 +189,18 @@ func (s *Store) UpdatePerson(ctx context.Context, p *Person) error {
 		return err
 	}
 	now := time.Now().UTC()
-	res := db.Model(&Person{}).Where("id = ?", p.ID).Updates(map[string]any{
+	updates := map[string]any{
 		"name":       p.Name,
 		"updated_at": now,
-	})
+	}
+	if p.PersonID != nil && *p.PersonID != "" {
+		updates["person_id"] = gorm.Expr("CASE WHEN person_id IS NULL OR person_id = '' THEN ? ELSE person_id END", *p.PersonID)
+	}
+	res := db.Model(&Person{}).Where("id = ?", p.ID).Updates(updates)
 	if res.Error != nil {
+		if strings.Contains(res.Error.Error(), "UNIQUE constraint failed: persons.person_id") {
+			return ErrDuplicatePersonID
+		}
 		return res.Error
 	}
 	if res.RowsAffected == 0 {

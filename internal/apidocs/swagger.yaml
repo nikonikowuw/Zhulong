@@ -582,7 +582,7 @@ definitions:
       personId:
         description: |-
           PersonID is the external business key. It is optional: if omitted or empty,
-          the service defaults it to the system-generated primary key ID.
+          it is left unset (NULL) without falling back to the internal primary key.
         type: string
     required:
     - name
@@ -623,7 +623,7 @@ definitions:
       personId:
         description: |-
           PersonID is the external business key consumed by third-party systems. It is
-          mandatory, unique and immutable — see Store.CreatePerson / Store.UpdatePerson.
+          optional, unique when assigned, and immutable once set.
         type: string
       primaryFaceId:
         type: string

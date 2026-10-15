@@ -3762,7 +3762,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "personId": {
-                    "description": "PersonID is the external business key. It is optional: if omitted or empty,\nthe service defaults it to the system-generated primary key ID.",
+                    "description": "PersonID is the external business key. It is optional: if omitted or empty,\nit is left unset (NULL) without falling back to the internal primary key.",
                     "type": "string"
                 }
             }
@@ -3805,7 +3805,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "personId": {
-                    "description": "PersonID is the external business key consumed by third-party systems. It is\nmandatory, unique and immutable — see Store.CreatePerson / Store.UpdatePerson.",
+                    "description": "PersonID is the external business key consumed by third-party systems. It is\noptional, unique when assigned, and immutable once set.",
                     "type": "string"
                 },
                 "primaryFaceId": {

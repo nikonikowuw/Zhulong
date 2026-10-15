@@ -175,8 +175,8 @@ func TestHandlerPersonAndFaces(t *testing.T) {
 	if resp.Data.Name != "张三" {
 		t.Errorf("expected name '张三', got '%s'", resp.Data.Name)
 	}
-	if resp.Data.PersonID != "EMP_9527" {
-		t.Errorf("expected personId 'EMP_9527', got '%s'", resp.Data.PersonID)
+	if resp.Data.PersonID == nil || *resp.Data.PersonID != "EMP_9527" {
+		t.Errorf("expected personId 'EMP_9527', got '%v'", resp.Data.PersonID)
 	}
 	if len(resp.Data.Faces) != 2 {
 		t.Errorf("expected 2 faces registered, got %d", len(resp.Data.Faces))
@@ -324,8 +324,8 @@ func TestHandlerValidationErrors(t *testing.T) {
 	if strings.HasPrefix(createdWithDefault.Data.ID, "person_") {
 		t.Fatalf("id must not have person_ prefix: %q", createdWithDefault.Data.ID)
 	}
-	if createdWithDefault.Data.PersonID != createdWithDefault.Data.ID {
-		t.Fatalf("expected personId %q to match id %q", createdWithDefault.Data.PersonID, createdWithDefault.Data.ID)
+	if createdWithDefault.Data.PersonID != nil {
+		t.Fatalf("expected personId to be nil when omitted, got %v", createdWithDefault.Data.PersonID)
 	}
 }
 
@@ -843,7 +843,7 @@ func TestHandlerListPersonsSearch(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &respBob); err != nil {
 		t.Fatalf("unmarshal search Bob response: %v", err)
 	}
-	if respBob.Data.Total != 1 || len(respBob.Data.Items) != 1 || respBob.Data.Items[0].PersonID != "EMP_SEARCH_2" {
+	if respBob.Data.Total != 1 || len(respBob.Data.Items) != 1 || respBob.Data.Items[0].PersonID == nil || *respBob.Data.Items[0].PersonID != "EMP_SEARCH_2" {
 		t.Fatalf("expected 1 result for EMP_SEARCH_2, got total=%d items=%+v", respBob.Data.Total, respBob.Data.Items)
 	}
 
@@ -863,6 +863,58 @@ func TestHandlerListPersonsSearch(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &respNone)
 	if respNone.Data.Total != 0 || len(respNone.Data.Items) != 0 {
 		t.Fatalf("expected 0 results, got total=%d", respNone.Data.Total)
+	}
+}
+
+func TestHandlerBindPersonIDWhenEmpty(t *testing.T) {
+	router, _ := setupTestRouter(t)
+
+	// 1. Create person without personId
+	noPersonIDBody := bytes.NewReader([]byte(`{"name":"未绑定员工"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/persons", noPersonIDBody)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got: %d", w.Code)
+	}
+	var created struct {
+		Data person.Person `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal created response: %v", err)
+	}
+	if created.Data.PersonID != nil {
+		t.Fatalf("expected nil personId, got %v", created.Data.PersonID)
+	}
+
+	// 2. Bind personId via PATCH
+	bindBody := bytes.NewReader([]byte(`{"personId":"EMP_NEWLY_BOUND"}`))
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/persons/"+created.Data.ID, bindBody)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on binding personId, got %d: %s", w.Code, w.Body.String())
+	}
+	var updated struct {
+		Data person.Person `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("unmarshal updated response: %v", err)
+	}
+	if updated.Data.PersonID == nil || *updated.Data.PersonID != "EMP_NEWLY_BOUND" {
+		t.Fatalf("expected personId 'EMP_NEWLY_BOUND', got %v", updated.Data.PersonID)
+	}
+
+	// 3. Modifying it again must fail with 409 PERSON_ID_IMMUTABLE
+	rebindBody := bytes.NewReader([]byte(`{"personId":"EMP_CHANGED"}`))
+	req = httptest.NewRequest(http.MethodPatch, "/api/v1/persons/"+created.Data.ID, rebindBody)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict on personId change, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

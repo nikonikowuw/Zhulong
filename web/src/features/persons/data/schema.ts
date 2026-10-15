@@ -11,7 +11,7 @@ export type Face = z.infer<typeof faceSchema>
 
 export const personSchema = z.object({
   id: z.string(),
-  personId: z.string(),
+  personId: z.string().nullable().optional(),
   name: z.string(),
   primaryFaceId: z.string().nullable().optional(),
   createdAt: z.string(),
@@ -50,6 +50,12 @@ export type CreatePersonDto = z.infer<typeof createPersonSchema>
 
 export const updatePersonSchema = z.object({
   name: z.string().trim().min(1, 'validation.nameRequired').max(64),
+  personId: z
+    .string()
+    .trim()
+    .max(64)
+    .optional()
+    .or(z.literal('')),
 })
 
 export type UpdatePersonDto = z.infer<typeof updatePersonSchema>

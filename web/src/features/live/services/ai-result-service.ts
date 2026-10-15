@@ -134,7 +134,7 @@ export class AIResultService {
     const now = Date.now()
     for (const person of event.persons) {
       for (const face of person.faces) {
-        const dedupeKey = `${event.camera_id}:${face.person_id || 'unknown'}`
+        const dedupeKey = `${event.camera_id}:${face.person_id || face.person_name || 'unknown'}`
         const lastTime = this.recordCooldowns.get(dedupeKey) || 0
 
         // 3秒内同一人/未识别目标不重复刷屏

@@ -22,8 +22,8 @@ const (
 type Person struct {
 	ID string `gorm:"primaryKey;column:id" json:"id"`
 	// PersonID is the external business key consumed by third-party systems. It is
-	// mandatory, unique and immutable — see Store.CreatePerson / Store.UpdatePerson.
-	PersonID      string    `gorm:"column:person_id;not null" json:"personId"`
+	// optional, unique when assigned, and immutable once set.
+	PersonID      *string   `gorm:"column:person_id" json:"personId"`
 	Name          string    `gorm:"column:name;not null" json:"name"`
 	PrimaryFaceID *string   `gorm:"column:primary_face_id" json:"primaryFaceId,omitempty"`
 	CreatedAt     time.Time `gorm:"column:created_at;not null" json:"createdAt"`
@@ -61,7 +61,7 @@ func (Face) TableName() string {
 // CreatePersonRequest represents request payload to create a new person.
 type CreatePersonRequest struct {
 	// PersonID is the external business key. It is optional: if omitted or empty,
-	// the service defaults it to the system-generated primary key ID.
+	// it is left unset (NULL) without falling back to the internal primary key.
 	PersonID string `json:"personId"`
 	Name     string `json:"name" binding:"required"`
 }

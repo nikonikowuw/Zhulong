@@ -26,6 +26,10 @@ func setupTestStore(t *testing.T) (*person.Store, func()) {
 	return store, cleanup
 }
 
+func strPtr(s string) *string {
+	return &s
+}
+
 func TestStorePersonMultiFaceCRUD(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()
@@ -33,7 +37,7 @@ func TestStorePersonMultiFaceCRUD(t *testing.T) {
 
 	p := &person.Person{
 		ID:       "emp_9527",
-		PersonID: "EMP_9527",
+		PersonID: strPtr("EMP_9527"),
 		Name:     "张三",
 	}
 
@@ -76,8 +80,8 @@ func TestStorePersonMultiFaceCRUD(t *testing.T) {
 	if foundPerson.Name != "张三" {
 		t.Errorf("expected name '张三', got '%s'", foundPerson.Name)
 	}
-	if foundPerson.PersonID != "EMP_9527" {
-		t.Errorf("expected personID 'EMP_9527', got '%s'", foundPerson.PersonID)
+	if foundPerson.PersonID == nil || *foundPerson.PersonID != "EMP_9527" {
+		t.Errorf("expected personID 'EMP_9527', got '%v'", foundPerson.PersonID)
 	}
 	if len(foundPerson.Faces) != 2 {
 		t.Fatalf("expected 2 registered faces for person, got %d", len(foundPerson.Faces))
@@ -146,7 +150,7 @@ func TestUpdatePerson_DoesNotTouchFaces(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: "E1", Name: "张三"}); err != nil {
+	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: strPtr("E1"), Name: "张三"}); err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
 	for _, id := range []string{"f1", "f2"} {
@@ -199,7 +203,7 @@ func TestUpdatePerson_MissingIDReturnsNotFound(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	err := store.UpdatePerson(ctx, &person.Person{ID: "ghost", PersonID: "E9", Name: "nobody"})
+	err := store.UpdatePerson(ctx, &person.Person{ID: "ghost", PersonID: strPtr("E9"), Name: "nobody"})
 	if !errors.Is(err, person.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
@@ -215,10 +219,10 @@ func TestUpdatePerson_IdempotentUpdateNotMisreportedAsNotFound(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: "E1", Name: "张三"}); err != nil {
+	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: strPtr("E1"), Name: "张三"}); err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
-	if err := store.UpdatePerson(ctx, &person.Person{ID: "p1", PersonID: "E1", Name: "张三"}); err != nil {
+	if err := store.UpdatePerson(ctx, &person.Person{ID: "p1", PersonID: strPtr("E1"), Name: "张三"}); err != nil {
 		t.Fatalf("idempotent UpdatePerson must succeed, got %v", err)
 	}
 }
@@ -230,10 +234,10 @@ func TestCreatePerson_DuplicateIDReturnsErrDuplicateID(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: "E1", Name: "张三"}); err != nil {
+	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: strPtr("E1"), Name: "张三"}); err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
-	err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: "E2", Name: "李四"})
+	err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: strPtr("E2"), Name: "李四"})
 	if !errors.Is(err, person.ErrDuplicateID) {
 		t.Fatalf("expected ErrDuplicateID, got %v", err)
 	}
@@ -256,7 +260,7 @@ func TestDeleteFace_ScopedToOwningPerson(t *testing.T) {
 	ctx := context.Background()
 
 	for _, p := range []struct{ id, personID, name string }{{"p1", "E1", "张三"}, {"p2", "E2", "李四"}} {
-		if err := store.CreatePerson(ctx, &person.Person{ID: p.id, PersonID: p.personID, Name: p.name}); err != nil {
+		if err := store.CreatePerson(ctx, &person.Person{ID: p.id, PersonID: strPtr(p.personID), Name: p.name}); err != nil {
 			t.Fatalf("CreatePerson %s failed: %v", p.id, err)
 		}
 	}
@@ -287,12 +291,12 @@ func TestCreatePerson_DuplicatePersonIDReturnsErrDuplicatePersonID(t *testing.T)
 	defer cleanup()
 	ctx := context.Background()
 
-	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: "EMP_1", Name: "张三"}); err != nil {
+	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: strPtr("EMP_1"), Name: "张三"}); err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
 
 	// Different row id, same business key: the conflict is on person_id only.
-	err := store.CreatePerson(ctx, &person.Person{ID: "p2", PersonID: "EMP_1", Name: "李四"})
+	err := store.CreatePerson(ctx, &person.Person{ID: "p2", PersonID: strPtr("EMP_1"), Name: "李四"})
 	if !errors.Is(err, person.ErrDuplicatePersonID) {
 		t.Fatalf("expected ErrDuplicatePersonID, got %v", err)
 	}
@@ -301,19 +305,22 @@ func TestCreatePerson_DuplicatePersonIDReturnsErrDuplicatePersonID(t *testing.T)
 	}
 }
 
-// TestCreatePerson_EmptyPersonIDRejected guards the CHECK constraint behind the API
-// layer's required-field validation: a person without a business key is not addressable
-// outside this service, so the store must not accept one either.
-func TestCreatePerson_EmptyPersonIDRejected(t *testing.T) {
+// TestCreatePerson_NilPersonIDAllowed verifies that a person without an external business
+// key is accepted and stored with a NULL person_id.
+func TestCreatePerson_NilPersonIDAllowed(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", Name: "张三"}); err == nil {
-		t.Fatal("expected CreatePerson to reject an empty person_id")
+	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", Name: "张三"}); err != nil {
+		t.Fatalf("expected CreatePerson to accept nil person_id, got %v", err)
 	}
-	if _, err := store.GetPerson(ctx, "p1"); !errors.Is(err, person.ErrNotFound) {
-		t.Fatalf("rejected insert must not leave a row behind; GetPerson returned %v", err)
+	got, err := store.GetPerson(ctx, "p1")
+	if err != nil {
+		t.Fatalf("GetPerson returned %v", err)
+	}
+	if got.PersonID != nil {
+		t.Fatalf("expected nil person_id, got %q", *got.PersonID)
 	}
 }
 
@@ -324,11 +331,11 @@ func TestUpdatePerson_DoesNotRewritePersonID(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: "EMP_1", Name: "张三"}); err != nil {
+	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: strPtr("EMP_1"), Name: "张三"}); err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
 
-	if err := store.UpdatePerson(ctx, &person.Person{ID: "p1", PersonID: "EMP_HIJACK", Name: "张三"}); err != nil {
+	if err := store.UpdatePerson(ctx, &person.Person{ID: "p1", PersonID: strPtr("EMP_HIJACK"), Name: "张三"}); err != nil {
 		t.Fatalf("UpdatePerson failed: %v", err)
 	}
 
@@ -336,8 +343,8 @@ func TestUpdatePerson_DoesNotRewritePersonID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPerson failed: %v", err)
 	}
-	if got.PersonID != "EMP_1" {
-		t.Errorf("person_id is immutable, but UpdatePerson rewrote it to %q", got.PersonID)
+	if got.PersonID == nil || *got.PersonID != "EMP_1" {
+		t.Errorf("person_id is immutable, but UpdatePerson rewrote it to %v", got.PersonID)
 	}
 }
 
@@ -348,7 +355,7 @@ func TestGetPersonMeta_SkipsFacePreload(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: "EMP_1", Name: "张三"}); err != nil {
+	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: strPtr("EMP_1"), Name: "张三"}); err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
 	if err := store.AddFace(ctx, &person.Face{ID: "f1", OwnerRowID: "p1", FeatureVector: make([]byte, 2048)}); err != nil {
@@ -370,7 +377,7 @@ func TestGetPersonMeta_SkipsFacePreload(t *testing.T) {
 	if len(meta.Faces) != 0 {
 		t.Errorf("GetPersonMeta must not preload faces, got %d", len(meta.Faces))
 	}
-	if meta.Name != "张三" || meta.PersonID != "EMP_1" {
+	if meta.Name != "张三" || meta.PersonID == nil || *meta.PersonID != "EMP_1" {
 		t.Errorf("GetPersonMeta returned the wrong row: %+v", meta)
 	}
 
@@ -384,7 +391,7 @@ func TestStore_PrimaryFaceAutoPromotionAndFallback(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	p := &person.Person{ID: "p_primary", PersonID: "EMP_PRIMARY", Name: "王五"}
+	p := &person.Person{ID: "p_primary", PersonID: strPtr("EMP_PRIMARY"), Name: "王五"}
 	if err := store.CreatePerson(ctx, p); err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}

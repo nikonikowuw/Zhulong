@@ -36,6 +36,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.POST("", h.Create)
 		group.GET("/:id", h.Get)
 		group.PUT("/:id", h.Update)
+		group.PATCH("/:id", h.Update)
 		group.PUT("/:id/primary-face", h.SetPrimaryFace)
 		group.DELETE("/:id", h.Delete)
 

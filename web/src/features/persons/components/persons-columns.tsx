@@ -85,9 +85,10 @@ export const personsColumns: ColumnDef<Person>[] = [
       )
     },
     cell: ({ row }) => {
+      const pid = row.original.personId
       return (
         <span className='font-mono text-sm text-foreground'>
-          {row.original.personId || '-'}
+          {pid && pid.trim() ? pid : '-'}
         </span>
       )
     },

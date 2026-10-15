@@ -25,6 +25,18 @@ describe('person schema validation', () => {
       expect(parsed.faces).toEqual([])
     })
 
+    it('parses person with null personId', () => {
+      const raw = {
+        id: 'p-01',
+        personId: null,
+        name: 'Alice',
+        createdAt: '2026-10-14T00:00:00Z',
+        updatedAt: '2026-10-14T00:00:00Z',
+      }
+      const parsed = personSchema.parse(raw)
+      expect(parsed.personId).toBeNull()
+    })
+
     it('parses person with primaryFaceId', () => {
       const raw = {
         id: 'p-01',
@@ -112,6 +124,14 @@ describe('person schema validation', () => {
     it('accepts valid updated name', () => {
       const res = updatePersonSchema.safeParse({
         name: 'Alice Cooper',
+      })
+      expect(res.success).toBe(true)
+    })
+
+    it('accepts valid personId for binding', () => {
+      const res = updatePersonSchema.safeParse({
+        name: 'Alice Cooper',
+        personId: 'EMP_BOUND',
       })
       expect(res.success).toBe(true)
     })

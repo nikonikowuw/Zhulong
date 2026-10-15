@@ -123,4 +123,37 @@ describe('PersonsTable', () => {
     const batchDeleteBtn = getByRole('button', { name: /批量删除/i })
     await expect.element(batchDeleteBtn).toBeInTheDocument()
   })
+
+  it('renders "-" when personId is null or empty', async () => {
+    const queryClient = new QueryClient()
+    const unboundPerson: Person[] = [
+      {
+        id: 'p_unbound',
+        personId: null,
+        name: 'Bob Unbound',
+        createdAt: '2026-10-14T08:00:00Z',
+        updatedAt: '2026-10-14T08:00:00Z',
+        faces: [],
+      },
+    ]
+
+    const { getByText } = await render(
+      <QueryClientProvider client={queryClient}>
+        <PersonsProvider>
+          <PersonsTable
+            data={unboundPerson}
+            total={1}
+            isLoading={false}
+            isError={false}
+            onRetry={vi.fn()}
+            search={{}}
+            navigate={vi.fn()}
+          />
+        </PersonsProvider>
+      </QueryClientProvider>
+    )
+
+    await expect.element(getByText('Bob Unbound')).toBeInTheDocument()
+    await expect.element(getByText('-')).toBeInTheDocument()
+  })
 })
