@@ -360,6 +360,7 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
             // 每收到一个目标视频数据包，刷新空闲超时倒计时
             cancel.expire_after(options.idle_timeout_ms);
 
+            // ⚠️ 时间戳保真透传：保留原流时间戳有效性标记，禁止将缺失时间戳默认视为 0
             Zhulong_packet_view view{};
             view.codec = video.view.codec;
             view.has_pts = packet->pts != AV_NOPTS_VALUE;
@@ -372,7 +373,7 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
             view.data = packet->data;
             view.size = static_cast<size_t>(packet->size);
 
-            // 零拷贝借用派发给消费回调
+            // 以借用指针封装为视图结构体派发给同步消费回调（回调执行期间有效）
             consume(view);
         }
         av_packet_unref(packet.get());

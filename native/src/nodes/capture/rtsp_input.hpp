@@ -103,7 +103,7 @@ struct Video {
     std::vector<uint8_t> extradata;   /**< 内部持久化的参数集（SPS/PPS/VPS）二进制数据 */
 
     /**
-     * @brief 生成供外部借用的视图，其中的 extradata 指针指向内部 vector
+     * @brief 生成供外部借用的视图结构体，其中的 extradata 为指向内部 vector 的借用指针
      */
     Zhulong_video_view borrowed_view() const;
 };
