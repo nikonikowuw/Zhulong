@@ -154,3 +154,26 @@ Normalized audit action constants across `internal/systemtime` (`ActionTime*`) a
 
 [OK] **Completed**
 
+## Session 45: Real SCRFD face detection and FaceLiVTv2 feature extraction on RK3568 NPU
+<!-- trellis-session: v=2 fp=9bcde9c208a8125b -->
+
+**Date**: 2026-10-15
+**Task**: RK3568 真实人体结构化算法接入
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+Replaced heuristic mock code in `packages/face_recognition` with full real deep-learning neural network pipelines. Integrated SCRFD `det_500m` (INT8) across strides 8, 16, 32 with 9-head anchor decoding, letterbox back-projection, and IoU NMS. Implemented single-stage Umeyama affine alignment direct-write from original frame to 112×112 input tensor, eliminating intermediate crop buffers. Integrated FaceLiVTv2-L (FP16, 512D) feature extraction with in-place L2 normalization and 1:N GalleryRegistry cosine matching. Discovered and fixed RKNPU2 backend bridge issue where UINT8 input tensors were rejected by FP16 model attribute size checks, adding dynamic tensor type bridging. Tracked `.rknn` model files via Git LFS. Tested on real RK3568 hardware (Debian 11, kernel 5.10.226, RKNPU v0.9.8, librknnrt 2.3.2) achieving 0.9240 same-person cosine similarity matching official float baseline and ~28ms per-face latency. Passed full `make check` suite.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9bcde9c` | feat(algo): integrate real SCRFD and FaceLiVTv2 models on RK3568 NPU |
+
+### Status
+
+[OK] **Completed**
+
+
