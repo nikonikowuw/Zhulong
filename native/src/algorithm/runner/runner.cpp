@@ -14,6 +14,8 @@
 
 #include <zhulong/plugin.h>
 #include "json.hpp"
+#include "gallery_index.hpp"
+#include "gallery_parser.hpp"
 #include "../ipc/ipc_protocol.hpp"
 #include "../ipc/shm_pool.hpp"
 #include "../ipc/unix_socket.hpp"
@@ -31,6 +33,8 @@
 
 namespace zhulong
 {
+    using namespace zhulong::runner;
+
     /**
      * @brief 从 FrameBroker socket 路径中解析 stream_id。
      *
@@ -413,6 +417,7 @@ namespace zhulong
 
         std::atomic<bool> stop_all{false};
         std::atomic<int> exit_code{0};
+        GalleryIndex gallery_index;
 
         auto run_single_worker = [&](size_t idx, const std::string &broker_sock)
         {
@@ -528,6 +533,7 @@ namespace zhulong
 
             int frames_processed = 0;
             bool last_had_targets = false;
+            ShardedSyncContext sync_ctx;
             while (!stop_all.load(std::memory_order_relaxed) && (max_frames < 0 || frames_processed < max_frames))
             {
                 ipc::IpcHeader hdr{};
@@ -602,6 +608,46 @@ namespace zhulong
                     client.send_msg(ipc::MSG_FRAME_ACK, &ack, sizeof(ack));
 
                     frames_processed++;
+                }
+                else if (hdr.msg_type == ipc::MSG_GALLERY_SYNC && !payload.empty())
+                {
+                    ParsedSyncShard shard = parse_sync_shard_payload(payload.data(), payload.size());
+                    if (shard.shard_total > 0)
+                    {
+                        if (sync_ctx.sync_id != shard.sync_id || sync_ctx.is_expired())
+                        {
+                            sync_ctx.start_sync(shard.sync_id, shard.shard_total);
+                        }
+                        sync_ctx.received_shards.insert(shard.shard_index);
+                        for (auto& item : shard.items)
+                        {
+                            sync_ctx.collected_items.push_back(std::move(item));
+                        }
+
+                        if (sync_ctx.is_complete())
+                        {
+                            size_t total_count = sync_ctx.collected_items.size();
+                            gallery_index.reset(std::move(sync_ctx.collected_items));
+
+                            // 发送 MSG_GALLERY_ACK
+                            std::string ack_json = "{\"sync_id\":" + runner::json_quote(sync_ctx.sync_id) +
+                                                   ",\"success\":true,\"total_faces\":" + std::to_string(total_count) + "}";
+                            client.send_msg(ipc::MSG_GALLERY_ACK, ack_json.data(), ack_json.size());
+                        }
+                    }
+                }
+                else if (hdr.msg_type == ipc::MSG_GALLERY_UPSERT && !payload.empty())
+                {
+                    FaceTemplate item = parse_upsert_payload(payload.data(), payload.size());
+                    if (!item.face_id.empty())
+                    {
+                        gallery_index.upsert(std::move(item));
+                    }
+                }
+                else if (hdr.msg_type == ipc::MSG_GALLERY_DELETE && !payload.empty())
+                {
+                    ParsedDelete del = parse_delete_payload(payload.data(), payload.size());
+                    gallery_index.remove(del.face_id, del.person_id);
                 }
             }
 

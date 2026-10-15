@@ -401,6 +401,28 @@ Zhulong_status_t Zhulong_stream_subscribe_ai_results(Zhulong_engine_h engine,
 Zhulong_status_t Zhulong_stream_unsubscribe_ai_results(Zhulong_engine_h engine,
     Zhulong_stream_id stream, Zhulong_subscription_id subscription);
 
+/**
+ * @brief 向指定流或所有活跃流的 AI FrameBroker 广播下行控制报文（如底库热更新）
+ *
+ * @param engine 引擎句柄
+ * @param stream 目标流 ID（传 0 表示广播至所有包含活跃 FrameBroker 的物理流）
+ * @param msg_type 消息类型枚举（如 MSG_GALLERY_SYNC=10, MSG_GALLERY_UPSERT=11, MSG_GALLERY_DELETE=12）
+ * @param payload 报文负载指针（可为 NULL）
+ * @param payload_size 报文负载大小（不得超过 64KB）
+ * @return Zhulong_status_t 状态码：
+ *         Zhulong_OK 成功；
+ *         Zhulong_ERR_INVALID_ARGUMENT 参数非法（如 payload_size > 64KB）；
+ *         Zhulong_ERR_NOT_FOUND 指定流不存在或无运行中的 Broker；
+ *         Zhulong_ERR_NOT_RUNNING 引擎未启动
+ */
+Zhulong_status_t Zhulong_engine_broadcast_ai_message(
+    Zhulong_engine_h engine,
+    Zhulong_stream_id stream,
+    uint16_t msg_type,
+    const void *payload,
+    size_t payload_size
+);
+
 /* ========================================================================== */
 /*                             流元数据探测接口                                */
 /* ========================================================================== */

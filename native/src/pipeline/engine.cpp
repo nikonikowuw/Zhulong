@@ -471,4 +471,26 @@ void Engine::set_publish_rate(Zhulong_stream_id id, uint32_t max_sample_fps) {
     it->second->set_max_sample_fps(max_sample_fps);
 }
 
+Zhulong_status_t Engine::broadcast_ai_message(Zhulong_stream_id stream_id, uint16_t msg_type, const void* payload, size_t payload_size) {
+    std::lock_guard<std::mutex> lock(control);
+    if (!running) return Zhulong_ERR_NOT_RUNNING;
+
+    if (stream_id != 0) {
+        auto it = brokers.find(stream_id);
+        if (it == brokers.end() || !it->second || !it->second->is_running()) {
+            return Zhulong_ERR_NOT_FOUND;
+        }
+        it->second->broadcast_message(msg_type, payload, payload_size);
+        return Zhulong_OK;
+    }
+
+    // stream_id == 0: 广播给所有活跃流的 Broker
+    for (auto& [id, broker] : brokers) {
+        if (broker && broker->is_running()) {
+            broker->broadcast_message(msg_type, payload, payload_size);
+        }
+    }
+    return Zhulong_OK;
+}
+
 } // namespace zhulong

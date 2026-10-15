@@ -149,6 +149,15 @@ public:
         on_result_ = std::move(cb);
     }
 
+    /**
+     * @brief 向所有已连接的 Runner 客户端广播控制消息（如底库同步/增量消息）
+     * @param msg_type 消息类型枚举（如 MSG_GALLERY_SYNC / MSG_GALLERY_UPSERT）
+     * @param payload 负载指针
+     * @param size 负载字节大小（<= MAX_IPC_PAYLOAD_SIZE）
+     * @return 成功写入发送缓冲的客户端总数
+     */
+    size_t broadcast_message(uint16_t msg_type, const void* payload = nullptr, size_t size = 0);
+
 private:
     void handle_client_message(uint32_t client_id, const IpcHeader& header, const uint8_t* payload);
     void handle_client_disconnect(uint32_t client_id);

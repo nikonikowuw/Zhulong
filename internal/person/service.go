@@ -25,12 +25,19 @@ type FaceFeatureExtractor interface {
 	ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]float32, error)
 }
 
+// GalleryNotifier notifies running algorithm runners of face gallery changes.
+type GalleryNotifier interface {
+	BroadcastUpsert(ctx context.Context, item GalleryUpsertPayload) error
+	BroadcastDelete(ctx context.Context, faceID, personID string) error
+}
+
 // Service provides high-level business logic for personnel and face gallery.
 type Service struct {
-	store     *Store
-	extractor FaceFeatureExtractor
-	facesDir  string
-	logger    *zap.Logger
+	store           *Store
+	extractor       FaceFeatureExtractor
+	galleryNotifier GalleryNotifier
+	facesDir        string
+	logger          *zap.Logger
 }
 
 // NewService creates a Service instance.
@@ -44,6 +51,11 @@ func NewService(store *Store, facesDir string, extractor FaceFeatureExtractor, l
 		facesDir:  facesDir,
 		logger:    logger.Named("person_service"),
 	}
+}
+
+// SetGalleryNotifier binds a gallery hot-update broadcaster to this service.
+func (s *Service) SetGalleryNotifier(notifier GalleryNotifier) {
+	s.galleryNotifier = notifier
 }
 
 // newID returns a random identifier for a person or face row.
@@ -138,6 +150,21 @@ func (s *Service) UpdatePerson(ctx context.Context, id string, req UpdatePersonR
 		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to update person", err)
 	}
 
+	if req.Name != nil && s.galleryNotifier != nil {
+		faces, err := s.store.ListFacesByPerson(ctx, id)
+		if err == nil {
+			for _, f := range faces {
+				_ = s.galleryNotifier.BroadcastUpsert(ctx, GalleryUpsertPayload{
+					FaceID:     f.ID,
+					PersonID:   p.PersonID,
+					PersonName: p.Name,
+					ImagePath:  f.ImagePath,
+					Features:   bytesToFloat32(f.FeatureVector),
+				})
+			}
+		}
+	}
+
 	return p, nil
 }
 
@@ -160,6 +187,14 @@ func (s *Service) SetPrimaryFace(ctx context.Context, id, faceID string) (*Perso
 
 // DeletePerson deletes a person and their faces.
 func (s *Service) DeletePerson(ctx context.Context, id string) error {
+	p, err := s.store.GetPerson(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
+		}
+		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+	}
+
 	faces, err := s.store.ListFacesByPerson(ctx, id)
 	if err != nil {
 		s.logger.Warn("failed to list faces before person delete", zap.String("personId", id), zap.Error(err))
@@ -182,7 +217,9 @@ func (s *Service) DeletePerson(ctx context.Context, id string) error {
 		}
 	}
 
-	// TODO: 同步删除Engine中的人脸特征向量
+	if s.galleryNotifier != nil && p != nil {
+		_ = s.galleryNotifier.BroadcastDelete(ctx, "", p.PersonID)
+	}
 
 	return nil
 }
@@ -242,7 +279,8 @@ func (s *Service) AddFace(ctx context.Context, personID string, file *multipart.
 
 // AddFaceWithReader saves uploaded image file into data directory and enrolls face template.
 func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filename string, r io.Reader) (*Face, error) {
-	if _, err := s.store.GetPersonMeta(ctx, personID); err != nil {
+	personMeta, err := s.store.GetPersonMeta(ctx, personID)
+	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
 		}
@@ -317,6 +355,22 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 		return nil, apperr.New(apperr.KindInternal, "FACE_ADD_FAILED", "Failed to add face template", err)
 	}
 
+	if s.galleryNotifier != nil {
+		var floats []float32
+		if len(featBytes) > 0 {
+			floats = bytesToFloat32(featBytes)
+		}
+		if err := s.galleryNotifier.BroadcastUpsert(ctx, GalleryUpsertPayload{
+			FaceID:     faceID,
+			PersonID:   personMeta.PersonID,
+			PersonName: personMeta.Name,
+			ImagePath:  fileName,
+			Features:   floats,
+		}); err != nil {
+			s.logger.Warn("failed to broadcast face upsert", zap.String("face_id", faceID), zap.Error(err))
+		}
+	}
+
 	return face, nil
 }
 
@@ -348,6 +402,8 @@ func (s *Service) DeleteFace(ctx context.Context, personID, faceID string) error
 		}
 	}
 
+	targetPerson, _ := s.store.GetPerson(ctx, personID)
+
 	if err := s.store.DeleteFace(ctx, personID, faceID); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return apperr.NotFound("FACE_NOT_FOUND", "Face not found", err)
@@ -363,7 +419,9 @@ func (s *Service) DeleteFace(ctx context.Context, personID, faceID string) error
 		}
 	}
 
-	// TODO: 同步删除Engine中的人脸特征
+	if s.galleryNotifier != nil && targetPerson != nil {
+		_ = s.galleryNotifier.BroadcastDelete(ctx, faceID, targetPerson.PersonID)
+	}
 
 	return nil
 }
@@ -389,14 +447,6 @@ func (s *Service) ListFaces(ctx context.Context, personID string) ([]Face, error
 }
 
 // GetGallerySyncData prepares all enrolled face templates for IPC downlinking to algorithm runners.
-//
-// ⚠️ NOT WIRED: no caller exists. The gallery hot-update channel (transport,
-// ACK semantics, and sharding) is not implemented — see
-// .trellis/tasks/10-12-algo-lifecycle-remediation/prd.md R6. The person-domain
-// field Features (JSON features) matches the IPC payload field
-// "features" used by algorithm/process.go.
-
-// TODO: 死代码， 预留实现，占位用的
 func (s *Service) GetGallerySyncData(ctx context.Context) ([]GallerySyncItem, error) {
 	persons, err := s.store.ListAllPersons(ctx)
 	if err != nil {

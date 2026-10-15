@@ -688,3 +688,93 @@ func TestAddFace_WithExtractor_DimMismatch(t *testing.T) {
 
 	requireDomainError(t, err, apperr.KindInternal, "FEATURE_EXTRACT_FAILED")
 }
+
+type mockGalleryNotifier struct {
+	upserts []GalleryUpsertPayload
+	deletes []struct {
+		faceID   string
+		personID string
+	}
+}
+
+func (m *mockGalleryNotifier) BroadcastUpsert(ctx context.Context, item GalleryUpsertPayload) error {
+	m.upserts = append(m.upserts, item)
+	return nil
+}
+
+func (m *mockGalleryNotifier) BroadcastDelete(ctx context.Context, faceID, personID string) error {
+	m.deletes = append(m.deletes, struct {
+		faceID   string
+		personID string
+	}{faceID: faceID, personID: personID})
+	return nil
+}
+
+func TestGalleryNotifier_AddUpdateDelete(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	notifier := &mockGalleryNotifier{}
+	svc := NewService(NewStore(dbStore), tempDir, nil, zap.NewNop())
+	svc.SetGalleryNotifier(notifier)
+	ctx := context.Background()
+
+	// 1. Create Person
+	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "NOTIFY_P1", Name: "通知测试员"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+
+	// 2. Add Face
+	fakeJPEG := append([]byte{0xff, 0xd8, 0xff, 0xe0}, bytes.Repeat([]byte{0xdd}, 50)...)
+	face, err := svc.AddFaceWithReader(ctx, p.ID, "face.jpg", bytes.NewReader(fakeJPEG))
+	if err != nil {
+		t.Fatalf("AddFaceWithReader failed: %v", err)
+	}
+
+	if len(notifier.upserts) != 1 {
+		t.Fatalf("expected 1 upsert notification, got %d", len(notifier.upserts))
+	}
+	if notifier.upserts[0].FaceID != face.ID || notifier.upserts[0].PersonID != "NOTIFY_P1" {
+		t.Errorf("upsert mismatch: %+v", notifier.upserts[0])
+	}
+
+	// 3. Update Person Name
+	newName := "新名字"
+	_, err = svc.UpdatePerson(ctx, p.ID, UpdatePersonRequest{Name: &newName})
+	if err != nil {
+		t.Fatalf("UpdatePerson failed: %v", err)
+	}
+	if len(notifier.upserts) != 2 {
+		t.Fatalf("expected 2 upserts after name update, got %d", len(notifier.upserts))
+	}
+	if notifier.upserts[1].PersonName != newName {
+		t.Errorf("expected updated name %s, got %s", newName, notifier.upserts[1].PersonName)
+	}
+
+	// 4. Delete Face
+	if err := svc.DeleteFace(ctx, p.ID, face.ID); err != nil {
+		t.Fatalf("DeleteFace failed: %v", err)
+	}
+	if len(notifier.deletes) != 1 {
+		t.Fatalf("expected 1 delete notification, got %d", len(notifier.deletes))
+	}
+	if notifier.deletes[0].faceID != face.ID || notifier.deletes[0].personID != "NOTIFY_P1" {
+		t.Errorf("delete mismatch: %+v", notifier.deletes[0])
+	}
+
+	// 5. Delete Person
+	if err := svc.DeletePerson(ctx, p.ID); err != nil {
+		t.Fatalf("DeletePerson failed: %v", err)
+	}
+	if len(notifier.deletes) != 2 {
+		t.Fatalf("expected 2 delete notifications, got %d", len(notifier.deletes))
+	}
+	if notifier.deletes[1].faceID != "" || notifier.deletes[1].personID != "NOTIFY_P1" {
+		t.Errorf("person delete mismatch: %+v", notifier.deletes[1])
+	}
+}

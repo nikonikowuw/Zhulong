@@ -312,14 +312,15 @@ var mediaFileModule = fx.Module("mediafile",
 type algorithmOut struct {
 	fx.Out
 
-	Store           *algorithm.Store
-	Verifier        *algorithm.Verifier
-	Supervisor      *algorithm.Supervisor
-	Service         *algorithm.Service
-	Handler         *algorithm.Handler
-	Lifecycle       algorithmLifecycle
-	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
-	UploadRoutes    RouteRegistrar `group:"upload_routes"`
+	Store              *algorithm.Store
+	Verifier           *algorithm.Verifier
+	Supervisor         *algorithm.Supervisor
+	Service            *algorithm.Service
+	Handler            *algorithm.Handler
+	Lifecycle          algorithmLifecycle
+	GalleryBroadcaster *algorithm.GalleryBroadcaster
+	ProtectedRoutes    RouteRegistrar `group:"protected_routes"`
+	UploadRoutes       RouteRegistrar `group:"upload_routes"`
 }
 
 type appBrokerPathResolver struct {
@@ -422,7 +423,56 @@ func (r *appBrokerPathResolver) publishRateByCamera(ctx context.Context) (map[st
 	return rates, nil
 }
 
-func provideAlgorithm(dbProvider database.DBProvider, streamHub *camera.StreamHub, config Config, logger *zap.Logger) algorithmOut {
+type personGalleryAdapter struct {
+	broadcaster *algorithm.GalleryBroadcaster
+}
+
+func (a *personGalleryAdapter) BroadcastUpsert(ctx context.Context, item person.GalleryUpsertPayload) error {
+	if a.broadcaster == nil {
+		return nil
+	}
+	return a.broadcaster.BroadcastUpsert(ctx, algorithm.GalleryUpsertPayload{
+		FaceID:     item.FaceID,
+		PersonID:   item.PersonID,
+		PersonName: item.PersonName,
+		ImagePath:  item.ImagePath,
+		Features:   item.Features,
+	})
+}
+
+func (a *personGalleryAdapter) BroadcastDelete(ctx context.Context, faceID, personID string) error {
+	if a.broadcaster == nil {
+		return nil
+	}
+	return a.broadcaster.BroadcastDelete(ctx, faceID, personID)
+}
+
+type supervisorGallerySyncAdapter struct {
+	service *person.Service
+}
+
+func (a *supervisorGallerySyncAdapter) GetGallerySyncData(ctx context.Context) ([]algorithm.GallerySyncItem, error) {
+	if a.service == nil {
+		return nil, nil
+	}
+	items, err := a.service.GetGallerySyncData(ctx)
+	if err != nil {
+		return nil, err
+	}
+	algoItems := make([]algorithm.GallerySyncItem, len(items))
+	for i, item := range items {
+		algoItems[i] = algorithm.GallerySyncItem{
+			FaceID:     item.FaceID,
+			PersonID:   item.PersonID,
+			PersonName: item.PersonName,
+			ImagePath:  item.ImagePath,
+			Features:   item.Features,
+		}
+	}
+	return algoItems, nil
+}
+
+func provideAlgorithm(dbProvider database.DBProvider, streamHub *camera.StreamHub, eng *engine.Engine, config Config, logger *zap.Logger) algorithmOut {
 	comp := algorithm.NewAlgorithmComponents(dbProvider, config.DataDir, config.AlgorithmTarget, logger)
 	if streamHub != nil {
 		comp.Supervisor.SetBrokerSubscriptionResolver(&appBrokerPathResolver{
@@ -430,15 +480,17 @@ func provideAlgorithm(dbProvider database.DBProvider, streamHub *camera.StreamHu
 			streamHub: streamHub,
 		})
 	}
+	galleryBroadcaster := algorithm.NewGalleryBroadcaster(eng, logger)
 	return algorithmOut{
-		Store:           comp.Store,
-		Verifier:        comp.Verifier,
-		Supervisor:      comp.Supervisor,
-		Service:         comp.Service,
-		Handler:         comp.Handler,
-		Lifecycle:       comp.Lifecycle,
-		ProtectedRoutes: comp.ProtectedRoutes,
-		UploadRoutes:    comp.UploadRoutes,
+		Store:              comp.Store,
+		Verifier:           comp.Verifier,
+		Supervisor:         comp.Supervisor,
+		Service:            comp.Service,
+		Handler:            comp.Handler,
+		Lifecycle:          comp.Lifecycle,
+		GalleryBroadcaster: galleryBroadcaster,
+		ProtectedRoutes:    comp.ProtectedRoutes,
+		UploadRoutes:       comp.UploadRoutes,
 	}
 }
 
@@ -459,12 +511,25 @@ type personOut struct {
 	UploadRoutes    RouteRegistrar `group:"upload_routes"`
 }
 
-func providePerson(dbProvider database.DBProvider, config Config, eng *engine.Engine, logger *zap.Logger) personOut {
+func providePerson(
+	dbProvider database.DBProvider,
+	config Config,
+	eng *engine.Engine,
+	broadcaster *algorithm.GalleryBroadcaster,
+	supervisor *algorithm.Supervisor,
+	logger *zap.Logger,
+) personOut {
 	facesDir := config.FacesDir
 	if facesDir == "" {
 		facesDir = filepath.Join(config.DataDir, "faces")
 	}
 	comp := person.NewPersonComponents(dbProvider, facesDir, eng, logger)
+	if broadcaster != nil {
+		comp.Service.SetGalleryNotifier(&personGalleryAdapter{broadcaster: broadcaster})
+	}
+	if supervisor != nil && broadcaster != nil {
+		supervisor.SetGallerySync(&supervisorGallerySyncAdapter{service: comp.Service}, broadcaster)
+	}
 	return personOut{
 		Store:           comp.Store,
 		Service:         comp.Service,

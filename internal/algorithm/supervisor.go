@@ -19,17 +19,24 @@ type BrokerSubscriptionResolver interface {
 	SyncBrokerSubscriptions(ctx context.Context, algorithmID string) ([]string, error)
 }
 
+// GallerySyncProvider supplies all enrolled face templates for runner cold-start synchronization.
+type GallerySyncProvider interface {
+	GetGallerySyncData(ctx context.Context) ([]GallerySyncItem, error)
+}
+
 // Supervisor oversees all algorithm runner subprocesses, watching for crashes,
 // managing exponential backoffs, circuit breakers, and automatic rollbacks.
 type Supervisor struct {
-	store      *Store
-	algoDir    string
-	runnerPath string
-	resolver   BrokerSubscriptionResolver
-	logger     *zap.Logger
-	mu         sync.RWMutex
-	watchers   map[string]*workerWatcher
-	opts       RecoveryOptions
+	store               *Store
+	algoDir             string
+	runnerPath          string
+	resolver            BrokerSubscriptionResolver
+	gallerySyncProvider GallerySyncProvider
+	galleryBroadcaster  *GalleryBroadcaster
+	logger              *zap.Logger
+	mu                  sync.RWMutex
+	watchers            map[string]*workerWatcher
+	opts                RecoveryOptions
 }
 
 type workerWatcher struct {
@@ -94,6 +101,50 @@ func (s *Supervisor) SetBrokerSubscriptionResolver(resolver BrokerSubscriptionRe
 	s.resolver = resolver
 }
 
+// SetGallerySync sets the gallery sync provider and broadcaster for runner cold starts.
+func (s *Supervisor) SetGallerySync(provider GallerySyncProvider, broadcaster *GalleryBroadcaster) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gallerySyncProvider = provider
+	s.galleryBroadcaster = broadcaster
+}
+
+func (s *Supervisor) triggerGallerySyncAsyncLocked() {
+	s.dispatchGallerySync(s.gallerySyncProvider, s.galleryBroadcaster)
+}
+
+func (s *Supervisor) triggerGallerySyncAsync() {
+	s.mu.RLock()
+	provider := s.gallerySyncProvider
+	broadcaster := s.galleryBroadcaster
+	s.mu.RUnlock()
+	s.dispatchGallerySync(provider, broadcaster)
+}
+
+func (s *Supervisor) dispatchGallerySync(provider GallerySyncProvider, broadcaster *GalleryBroadcaster) {
+	if provider == nil || broadcaster == nil {
+		return
+	}
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		items, err := provider.GetGallerySyncData(ctx)
+		if err != nil {
+			s.logger.Warn("failed to fetch gallery sync data for cold-start", zap.Error(err))
+			return
+		}
+		syncID := fmt.Sprintf("sync_%d", time.Now().UnixNano())
+		if err := broadcaster.BroadcastSync(ctx, syncID, items); err != nil {
+			s.logger.Warn("failed to broadcast cold-start gallery sync", zap.String("sync_id", syncID), zap.Error(err))
+		} else {
+			s.logger.Info("cold-start gallery sync broadcast completed", zap.String("sync_id", syncID), zap.Int("items_count", len(items)))
+		}
+	}()
+}
+
 // resolveBrokerSocksLocked 解析算法包应当订阅的 broker socket 路径列表，
 // 并驱动实现侧同步订阅关系。
 //
@@ -154,6 +205,8 @@ func (s *Supervisor) StartAlgorithm(ctx context.Context, algo Algorithm) error {
 
 	w.status = StatusRunning
 	s.watchers[algo.ID] = w
+
+	s.triggerGallerySyncAsyncLocked()
 
 	// Start background watcher loop
 	go w.superviseLoop()
@@ -599,6 +652,7 @@ func (w *workerWatcher) superviseLoop() {
 
 			w.status = StatusRunning
 			w.mu.Unlock()
+			w.supervisor.triggerGallerySyncAsync()
 		}
 	}
 }

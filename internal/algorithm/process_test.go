@@ -1,9 +1,11 @@
 package algorithm_test
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -444,5 +446,124 @@ func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected command line to contain multiple --broker flags, got logs: %+v", observed.All())
+	}
+}
+
+type mockBroadcaster struct {
+	messages []struct {
+		streamID uint64
+		msgType  uint16
+		payload  []byte
+	}
+	err error
+}
+
+func (m *mockBroadcaster) BroadcastAIMessage(ctx context.Context, streamID uint64, msgType uint16, payload []byte) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.messages = append(m.messages, struct {
+		streamID uint64
+		msgType  uint16
+		payload  []byte
+	}{streamID: streamID, msgType: msgType, payload: payload})
+	return nil
+}
+
+func TestCreateGallerySyncShards_Empty(t *testing.T) {
+	shards, err := algorithm.CreateGallerySyncShards("sync_empty", nil)
+	if err != nil {
+		t.Fatalf("CreateGallerySyncShards failed: %v", err)
+	}
+	if len(shards) != 1 {
+		t.Fatalf("expected 1 shard, got %d", len(shards))
+	}
+	var p algorithm.GallerySyncShardPayload
+	if err := json.Unmarshal(shards[0], &p); err != nil {
+		t.Fatalf("unmarshal shard payload: %v", err)
+	}
+	if p.SyncID != "sync_empty" || p.ShardIndex != 0 || p.ShardTotal != 1 || len(p.Items) != 0 {
+		t.Fatalf("unexpected shard payload: %+v", p)
+	}
+}
+
+func TestCreateGallerySyncShards_MultiShardUnder64KB(t *testing.T) {
+	// 构造 25 个人脸项（应切分为 3 个 shard：10 + 10 + 5）
+	items := make([]algorithm.GallerySyncItem, 25)
+	for i := range items {
+		feats := make([]float32, 512)
+		for j := range feats {
+			feats[j] = float32(i*1000 + j)
+		}
+		items[i] = algorithm.GallerySyncItem{
+			FaceID:     fmt.Sprintf("f_%d", i),
+			PersonID:   fmt.Sprintf("p_%d", i),
+			PersonName: fmt.Sprintf("人员%d", i),
+			ImagePath:  fmt.Sprintf("img_%d.jpg", i),
+			Features:   feats,
+		}
+	}
+
+	shards, err := algorithm.CreateGallerySyncShards("sync_multi", items)
+	if err != nil {
+		t.Fatalf("CreateGallerySyncShards failed: %v", err)
+	}
+	if len(shards) != 3 {
+		t.Fatalf("expected 3 shards for 25 items, got %d", len(shards))
+	}
+
+	for i, s := range shards {
+		if len(s) > int(algorithm.MaxIpcPayloadSize) {
+			t.Errorf("shard %d exceeds 64KB: %d bytes", i, len(s))
+		}
+		var p algorithm.GallerySyncShardPayload
+		if err := json.Unmarshal(s, &p); err != nil {
+			t.Fatalf("unmarshal shard %d: %v", i, err)
+		}
+		if p.ShardIndex != i || p.ShardTotal != 3 {
+			t.Errorf("shard %d metadata mismatch: index=%d, total=%d", i, p.ShardIndex, p.ShardTotal)
+		}
+		if i < 2 && len(p.Items) != 10 {
+			t.Errorf("shard %d expected 10 items, got %d", i, len(p.Items))
+		}
+		if i == 2 && len(p.Items) != 5 {
+			t.Errorf("shard 2 expected 5 items, got %d", len(p.Items))
+		}
+	}
+}
+
+func TestGalleryBroadcaster_SyncUpsertDelete(t *testing.T) {
+	mock := &mockBroadcaster{}
+	broadcaster := algorithm.NewGalleryBroadcaster(mock, zap.NewNop())
+	ctx := context.Background()
+
+	// 1. Sync
+	items := []algorithm.GallerySyncItem{{FaceID: "f1", PersonID: "p1", PersonName: "张三"}}
+	if err := broadcaster.BroadcastSync(ctx, "sync_test", items); err != nil {
+		t.Fatalf("BroadcastSync failed: %v", err)
+	}
+
+	// 2. Upsert
+	upsertItem := algorithm.GalleryUpsertPayload{FaceID: "f2", PersonID: "p2", PersonName: "李四"}
+	if err := broadcaster.BroadcastUpsert(ctx, upsertItem); err != nil {
+		t.Fatalf("BroadcastUpsert failed: %v", err)
+	}
+
+	// 3. Delete
+	if err := broadcaster.BroadcastDelete(ctx, "f2", "p2"); err != nil {
+		t.Fatalf("BroadcastDelete failed: %v", err)
+	}
+
+	if len(mock.messages) != 3 {
+		t.Fatalf("expected 3 broadcast messages, got %d", len(mock.messages))
+	}
+	if mock.messages[0].msgType != algorithm.MsgGallerySync {
+		t.Errorf("expected MsgGallerySync (10), got %d", mock.messages[0].msgType)
+	}
+	if mock.messages[1].msgType != algorithm.MsgGalleryUpsert {
+		t.Errorf("expected MsgGalleryUpsert (11), got %d", mock.messages[1].msgType)
+	}
+	if mock.messages[2].msgType != algorithm.MsgGalleryDelete {
+		t.Errorf("expected MsgGalleryDelete (12), got %d", mock.messages[2].msgType)
 	}
 }

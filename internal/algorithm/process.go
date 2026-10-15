@@ -2,6 +2,7 @@ package algorithm
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -46,16 +47,11 @@ const (
 	// MsgResult is the inference result egress message type (Runner -> Broker/Go).
 	MsgResult uint16 = 7
 
-	// Gallery IPC Message Types.
-	//
-	// ⚠️ NOT ALIGNED: native ipc_protocol.hpp:14-20 currently stops at
-	// MSG_DISCONNECT=6 and does NOT define 10/11/12. These values are a Go-side
-	// reservation only. Any task implementing the gallery hot-update channel
-	// (R6) MUST first add matching MSG_GALLERY_* entries to the native header.
-	// The numeric values are intentionally kept stable.
+	// Gallery IPC Message Types (synchronized with native MessageType in ipc_protocol.hpp).
 	MsgGallerySync   uint16 = 10
 	MsgGalleryUpsert uint16 = 11
 	MsgGalleryDelete uint16 = 12
+	MsgGalleryAck    uint16 = 13
 )
 
 // ErrIpcPayloadTooLarge is returned when a payload exceeds MaxIpcPayloadSize.
@@ -413,9 +409,25 @@ func (p *RunnerProcess) RunningDuration() time.Duration {
 	return 0
 }
 
-// GallerySyncPayload represents the data payload for MSG_GALLERY_SYNC.
+// GallerySyncPayload represents the legacy data payload for MSG_GALLERY_SYNC.
 type GallerySyncPayload struct {
 	Items []GallerySyncItem `json:"items"`
+}
+
+// GallerySyncShardPayload represents a sharded MSG_GALLERY_SYNC payload safely bounded within 64KB.
+type GallerySyncShardPayload struct {
+	SyncID     string            `json:"sync_id"`
+	ShardIndex int               `json:"shard_index"`
+	ShardTotal int               `json:"shard_total"`
+	Items      []GallerySyncItem `json:"items"`
+}
+
+// GalleryAckPayload represents MSG_GALLERY_ACK.
+type GalleryAckPayload struct {
+	SyncID     string `json:"sync_id"`
+	Success    bool   `json:"success"`
+	TotalFaces int    `json:"total_faces"`
+	ErrorMsg   string `json:"error_msg,omitempty"`
 }
 
 // GallerySyncItem represents one registered face item in MSG_GALLERY_SYNC.
@@ -442,12 +454,50 @@ type GalleryDeletePayload struct {
 	PersonID string `json:"person_id,omitempty"`
 }
 
+// CreateGallerySyncShards fragments gallery items into a sequence of JSON payloads, each strictly under 64KB.
+// Each shard contains at most 10 items (approx 40~50KB JSON for 512-dim embeddings).
+func CreateGallerySyncShards(syncID string, items []GallerySyncItem) ([][]byte, error) {
+	const itemsPerShard = 10
+	if len(items) == 0 {
+		payload, err := json.Marshal(GallerySyncShardPayload{
+			SyncID:     syncID,
+			ShardIndex: 0,
+			ShardTotal: 1,
+			Items:      []GallerySyncItem{},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("marshal empty gallery sync shard: %w", err)
+		}
+		return [][]byte{payload}, nil
+	}
+
+	shardTotal := (len(items) + itemsPerShard - 1) / itemsPerShard
+	shards := make([][]byte, 0, shardTotal)
+	for i := 0; i < shardTotal; i++ {
+		start := i * itemsPerShard
+		end := start + itemsPerShard
+		if end > len(items) {
+			end = len(items)
+		}
+		chunk := items[start:end]
+		payload, err := json.Marshal(GallerySyncShardPayload{
+			SyncID:     syncID,
+			ShardIndex: i,
+			ShardTotal: shardTotal,
+			Items:      chunk,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("marshal gallery sync shard %d/%d: %w", i, shardTotal, err)
+		}
+		if len(payload) > int(MaxIpcPayloadSize) {
+			return nil, fmt.Errorf("gallery sync shard %d exceeds 64KB (%d bytes)", i, len(payload))
+		}
+		shards = append(shards, payload)
+	}
+	return shards, nil
+}
+
 // CreateGallerySyncMsg serializes a full gallery sync message into framed IPC bytes.
-//
-// ⚠️ NOT WIRED: no caller exists. The gallery hot-update channel (transport,
-// ACK semantics, and sharding) is not implemented — see
-// .trellis/tasks/10-12-algo-lifecycle-remediation/prd.md R6. Native has no
-// MSG_GALLERY_* message types yet (ipc_protocol.hpp).
 func CreateGallerySyncMsg(seq uint32, items []GallerySyncItem) ([]byte, error) {
 	payload, err := json.Marshal(GallerySyncPayload{Items: items})
 	if err != nil {
@@ -457,11 +507,6 @@ func CreateGallerySyncMsg(seq uint32, items []GallerySyncItem) ([]byte, error) {
 }
 
 // CreateGalleryUpsertMsg serializes an incremental face enrollment update into framed IPC bytes.
-//
-// ⚠️ NOT WIRED: no caller exists. The gallery hot-update channel (transport,
-// ACK semantics, and sharding) is not implemented — see
-// .trellis/tasks/10-12-algo-lifecycle-remediation/prd.md R6. Native has no
-// MSG_GALLERY_* message types yet (ipc_protocol.hpp).
 func CreateGalleryUpsertMsg(seq uint32, item GalleryUpsertPayload) ([]byte, error) {
 	payload, err := json.Marshal(item)
 	if err != nil {
@@ -471,15 +516,73 @@ func CreateGalleryUpsertMsg(seq uint32, item GalleryUpsertPayload) ([]byte, erro
 }
 
 // CreateGalleryDeleteMsg serializes a delete face/person update into framed IPC bytes.
-//
-// ⚠️ NOT WIRED: no caller exists. The gallery hot-update channel (transport,
-// ACK semantics, and sharding) is not implemented — see
-// .trellis/tasks/10-12-algo-lifecycle-remediation/prd.md R6. Native has no
-// MSG_GALLERY_* message types yet (ipc_protocol.hpp).
 func CreateGalleryDeleteMsg(seq uint32, faceID, personID string) ([]byte, error) {
 	payload, err := json.Marshal(GalleryDeletePayload{FaceID: faceID, PersonID: personID})
 	if err != nil {
 		return nil, fmt.Errorf("marshal gallery delete payload: %w", err)
 	}
 	return EncodeIpcMessage(MsgGalleryDelete, seq, payload)
+}
+
+// AIMessageBroadcaster sends down-link control messages to runner subprocesses via Native Engine FrameBroker.
+type AIMessageBroadcaster interface {
+	BroadcastAIMessage(ctx context.Context, streamID uint64, msgType uint16, payload []byte) error
+}
+
+// GalleryBroadcaster distributes full and incremental gallery updates to running algorithm processes.
+type GalleryBroadcaster struct {
+	broadcaster AIMessageBroadcaster
+	logger      *zap.Logger
+}
+
+// NewGalleryBroadcaster creates a GalleryBroadcaster instance.
+func NewGalleryBroadcaster(broadcaster AIMessageBroadcaster, logger *zap.Logger) *GalleryBroadcaster {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &GalleryBroadcaster{
+		broadcaster: broadcaster,
+		logger:      logger.Named("gallery_broadcaster"),
+	}
+}
+
+// BroadcastSync performs cold-start or full synchronization of the face gallery to all active runners.
+func (b *GalleryBroadcaster) BroadcastSync(ctx context.Context, syncID string, items []GallerySyncItem) error {
+	if b.broadcaster == nil {
+		return nil
+	}
+	shards, err := CreateGallerySyncShards(syncID, items)
+	if err != nil {
+		return fmt.Errorf("create gallery sync shards: %w", err)
+	}
+	for i, shard := range shards {
+		if err := b.broadcaster.BroadcastAIMessage(ctx, 0, MsgGallerySync, shard); err != nil {
+			return fmt.Errorf("broadcast sync shard %d/%d: %w", i, len(shards), err)
+		}
+	}
+	return nil
+}
+
+// BroadcastUpsert broadcasts an incremental face template enrollment or update.
+func (b *GalleryBroadcaster) BroadcastUpsert(ctx context.Context, item GalleryUpsertPayload) error {
+	if b.broadcaster == nil {
+		return nil
+	}
+	payload, err := json.Marshal(item)
+	if err != nil {
+		return fmt.Errorf("marshal gallery upsert: %w", err)
+	}
+	return b.broadcaster.BroadcastAIMessage(ctx, 0, MsgGalleryUpsert, payload)
+}
+
+// BroadcastDelete broadcasts face or person deletion.
+func (b *GalleryBroadcaster) BroadcastDelete(ctx context.Context, faceID, personID string) error {
+	if b.broadcaster == nil {
+		return nil
+	}
+	payload, err := json.Marshal(GalleryDeletePayload{FaceID: faceID, PersonID: personID})
+	if err != nil {
+		return fmt.Errorf("marshal gallery delete: %w", err)
+	}
+	return b.broadcaster.BroadcastAIMessage(ctx, 0, MsgGalleryDelete, payload)
 }

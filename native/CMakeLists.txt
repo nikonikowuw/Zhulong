@@ -356,7 +356,13 @@ if(BUILD_TESTING)
     target_compile_features(ZhulongAlgoJsonTests PRIVATE cxx_std_17)
     target_include_directories(ZhulongAlgoJsonTests PRIVATE src/algorithm/runner)
 
-    foreach(TEST_TARGET ZhulongAlgoRuntimeTests ZhulongAlgoRunnerTests ZhulongAlgoJsonTests ZhulongFrameBrokerTests)
+    add_executable(ZhulongAlgoRunnerGalleryTests tests/algo_runner_gallery_test.cpp)
+    target_compile_features(ZhulongAlgoRunnerGalleryTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongAlgoRunnerGalleryTests PRIVATE src/algorithm/runner)
+    add_test(NAME ZhulongAlgoRunnerGallery COMMAND ZhulongAlgoRunnerGalleryTests)
+    set_tests_properties(ZhulongAlgoRunnerGallery PROPERTIES TIMEOUT 10)
+
+    foreach(TEST_TARGET ZhulongAlgoRuntimeTests ZhulongAlgoRunnerTests ZhulongAlgoJsonTests ZhulongFrameBrokerTests ZhulongAlgoRunnerGalleryTests)
         target_compile_options(${TEST_TARGET} PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
     endforeach()
 

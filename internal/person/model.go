@@ -93,3 +93,12 @@ type GallerySyncItem struct {
 	ImagePath  string    `json:"image_path,omitempty"`
 	Features   []float32 `json:"features,omitempty"`
 }
+
+// GalleryUpsertPayload represents an incremental enrollment update for algorithm runner IPC.
+type GalleryUpsertPayload struct {
+	FaceID     string    `json:"face_id"`
+	PersonID   string    `json:"person_id"`
+	PersonName string    `json:"person_name"`
+	ImagePath  string    `json:"image_path,omitempty"`
+	Features   []float32 `json:"features,omitempty"`
+}

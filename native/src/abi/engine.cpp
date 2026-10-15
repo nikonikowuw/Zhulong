@@ -331,6 +331,32 @@ extern "C" Zhulong_status_t Zhulong_stream_unsubscribe_ai_results(Zhulong_engine
     });
 }
 
+/**
+ * @brief 向指定流或所有活跃流的 AI FrameBroker 广播下行控制报文
+ * @param engine 引擎句柄
+ * @param stream 目标流 ID（为 0 表示广播给所有活跃流）
+ * @param msg_type 消息类型枚举
+ * @param payload 报文负载指针
+ * @param payload_size 负载大小（不得超过 64KB）
+ * @return Zhulong_status_t 执行状态码
+ */
+extern "C" Zhulong_status_t Zhulong_engine_broadcast_ai_message(Zhulong_engine_h engine,
+    Zhulong_stream_id stream, uint16_t msg_type, const void *payload, size_t payload_size) {
+    return boundary([&] {
+        require(engine);
+        if (payload_size > zhulong::ipc::MAX_IPC_PAYLOAD_SIZE) {
+            throw zhulong::Failure{Zhulong_ERR_INVALID_ARGUMENT};
+        }
+        if (payload_size > 0 && !payload) {
+            throw zhulong::Failure{Zhulong_ERR_INVALID_ARGUMENT};
+        }
+        Zhulong_status_t st = engine->implementation.broadcast_ai_message(stream, msg_type, payload, payload_size);
+        if (st != Zhulong_OK) {
+            throw zhulong::Failure{st};
+        }
+    });
+}
+
 // ============================================================================
 //                               流探测（Probe） API
 // ============================================================================

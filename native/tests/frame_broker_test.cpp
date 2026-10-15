@@ -1042,6 +1042,49 @@ void test_frame_broker_result_egress() {
     std::cout << "[PASS] test_frame_broker_result_egress" << std::endl;
 }
 
+// =============================================================================
+// Test 13: FrameBroker 下行控制消息广播验证 (MSG_GALLERY_*)
+// =============================================================================
+void test_frame_broker_control_broadcast() {
+    uint64_t stream_id = 9002;
+    BrokerOptions opts;
+    opts.slot_count = 2;
+    opts.slot_size = 1024 * 1024;
+    FrameBroker broker;
+    std::string err;
+    assert(broker.start(stream_id, "/tmp", opts, &err));
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path()));
+
+    HandshakeReq req{};
+    req.client_id = 1;
+    req.api_version = 1;
+    std::strncpy(req.client_name, "broadcast_test_client", sizeof(req.client_name) - 1);
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> resp_payload;
+    assert(client.recv_msg(resp_hdr, resp_payload, 2000));
+    assert(resp_hdr.msg_type == MSG_HANDSHAKE_RESP);
+
+    // FrameBroker 广播下行控制消息
+    std::string gallery_json = R"({"face_id":"f1","person_id":"p1"})";
+    size_t sent_count = broker.broadcast_message(MSG_GALLERY_UPSERT, gallery_json.data(), gallery_json.size());
+    assert(sent_count == 1);
+
+    // 客户端应立即接收到 MSG_GALLERY_UPSERT 消息
+    IpcHeader gallery_hdr{};
+    std::vector<uint8_t> gallery_payload;
+    assert(client.recv_msg(gallery_hdr, gallery_payload, 2000));
+    assert(gallery_hdr.msg_type == MSG_GALLERY_UPSERT);
+    assert(std::string(gallery_payload.begin(), gallery_payload.end()) == gallery_json);
+
+    client.disconnect();
+    broker.stop();
+    std::cout << "[PASS] test_frame_broker_control_broadcast" << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     const char* runner_bin = (argc > 1) ? argv[1] : nullptr;
     const char* plugin_so = (argc > 2) ? argv[2] : nullptr;
@@ -1058,6 +1101,7 @@ int main(int argc, char* argv[]) {
     test_multi_broker_asymmetric_isolation();
     test_broker_host_crash_then_restart();
     test_frame_broker_result_egress();
+    test_frame_broker_control_broadcast();
     if (runner_bin && plugin_so) {
         test_runner_subprocess_e2e(runner_bin, plugin_so);
         test_runner_multi_broker_e2e(runner_bin, plugin_so);

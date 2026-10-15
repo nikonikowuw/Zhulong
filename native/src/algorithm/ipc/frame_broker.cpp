@@ -408,5 +408,12 @@ bool FrameBroker::get_client_info(uint32_t client_id, ClientInfo& out_info) cons
     return false;
 }
 
+size_t FrameBroker::broadcast_message(uint16_t msg_type, const void* payload, size_t size) {
+    if (!running_.load(std::memory_order_relaxed)) {
+        return 0;
+    }
+    return server_.broadcast(msg_type, payload, size);
+}
+
 } // namespace zhulong::ipc
 

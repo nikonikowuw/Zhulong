@@ -237,21 +237,19 @@ Go 侧 `internal/algorithm/process.go` 的 `GallerySyncItem.Features`（JSON `fe
 IPC 载荷序列化时统一使用 `features`。
 （注：`Face` 数据库实体由于映射 SQLite 动态 BLOB 列，依然使用 `FeatureVector []byte`，天然支持任意维度存储）。
 
-### 7.3 底库热更新链路澄清（未实现，登记供后续任务）
+### 7.3 底库热更新链路规范（已实现）
 
-`MSG_GALLERY_SYNC` / `MSG_GALLERY_UPSERT` / `MSG_GALLERY_DELETE` 的 Go 侧构造函数与
-`person.GetGallerySyncData` 均为**未被调用的死代码**，native 侧也**没有**对应消息类型。以下为澄清结论，
-供实现该链路的任务使用（当前归属见 `10-12-algo-lifecycle-remediation` R6）：
+底库热更新链路已由任务 `10-14-gallery-hot-sync` 完整实现与闭环：
 
-| 维度 | 结论 |
+| 维度 | 规范与实现 |
 | --- | --- |
-| **触发时机** | 人员/人脸 CRUD 成功后（`person.Service` 的 Create/Update/Delete/AddFace/DeleteFace）；冷启动时在 runner 就绪握手后全量同步 |
-| **传输通道** | **待定** —— 依赖 FrameBroker 宿主归属（见 §5.3）。若宿主在 native engine 内，gallery 通道宜与 broker 复用同一 socket（多路复用消息类型）；若宿主在 Go 内，Go 可直接作服务端。该决策随 `10-10-algorithm-plugin-architecture` 一并做出 |
-| **消息序列** | 全量 `SYNC`（冷启动）→ 增量 `UPSERT`/`DELETE`（运行期）；`SYNC` 后须有 `ACK`，增量可异步 |
-| **ACK 语义** | 复用既有 `MSG_FRAME_ACK` 的序号机制，或新增 `MSG_GALLERY_ACK`（待宿主定案） |
-| **单条上限与分片** | 受 §6.4 的 64KB 门禁约束。全量同步在人员规模增长后必然超限，**分片是必须的**——但分片协议需 native 侧支持（分片序号、总片数），随该链路实现 |
-| **消息类型对齐** | native `ipc_protocol.hpp:14-20` 目前止于 `MSG_DISCONNECT=6`，Go 侧预留的 10/11/12 **尚未定义**。实现前必须先在 native 头文件补齐 |
-| **身份字段** | 载荷 `person_id` 恒取 `persons.person_id`（对外业务键）**原值**——该键必填、唯一、不可变，因此**不存在回退到内部主键 `persons.id` 的分支**。注意 `person_faces.person_id` 是内部行 ID 外键、与载荷 `person_id` 同名但语义不同，二者严禁混用，否则 native 侧会同时收到两套标识符空间 |
+| **触发时机** | 人员/人脸 CRUD 成功后（`person.Service` 的 Create/Update/Delete/AddFace/DeleteFace）；冷启动时由 `algorithm.Supervisor` 异步触发全量同步 |
+| **传输通道** | 复用 `FrameBroker` 点对点 Unix Domain Socket 连接（架构决策 D1），经 `Engine::broadcast_ai_message` / `FrameBroker::broadcast_message` 下行广播 |
+| **消息类型** | `MSG_GALLERY_SYNC` (10)、`MSG_GALLERY_UPSERT` (11)、`MSG_GALLERY_DELETE` (12)、`MSG_GALLERY_ACK` (13) |
+| **ACK 语义** | 全量 `MSG_GALLERY_SYNC` 分片组装完成后，Runner 必须回复 `MSG_GALLERY_ACK`（含 `sync_id`、`success`、`total_faces`、`error_msg`）；增量同步无需 ACK |
+| **单条上限与分片** | 单条 IPC 载荷上限 64KB（`MAX_IPC_PAYLOAD_SIZE`）。Go 侧按 10 项/片切分分片（每片 ~40-50KB JSON），Runner 维持 5 秒组装窗口，所有分片收齐后原子应用并清空旧底库；超时或中途乱序则显式丢弃并报错 |
+| **身份字段** | 载荷 `person_id` 恒取 `persons.person_id`（对外业务键）**原值**，严禁混用 `person_faces.person_id`（内部行 ID 外键） |
+| **本地索引** | Runner 进程内通过 `GalleryIndex` 维护 `face_id -> FaceTemplate` 映射，写操作（`reset`/`upsert`/`remove`）受互斥锁保护，推理读取通过 `snapshot()` 获取不可变只读视图 |
 
 ---
 

@@ -44,7 +44,11 @@ enum MessageType : uint16_t {
     MSG_FRAME_ACK       = 4, /**< 帧处理确认包（Client -> Broker）：归还槽位租约，附带 generation 防 ABA */
     MSG_HEARTBEAT       = 5, /**< 双向心跳包：用于检测失联或卡死进程 */
     MSG_DISCONNECT      = 6, /**< 优雅断开通知包：通知对端即将关闭通信通道 */
-    MSG_RESULT          = 7  /**< 推理结果载荷包（Client -> Broker）：回传由 Runner 序列化的推理输出 */
+    MSG_RESULT          = 7, /**< 推理结果载荷包（Client -> Broker）：回传由 Runner 序列化的推理输出 */
+    MSG_GALLERY_SYNC    = 10, /**< 底库全量同步通知包（Broker -> Client）：下发人员特征底库分片 */
+    MSG_GALLERY_UPSERT  = 11, /**< 底库增量注册包（Broker -> Client）：下发单张新增/更新人脸特征 */
+    MSG_GALLERY_DELETE  = 12, /**< 底库增量删除包（Broker -> Client）：通知删除指定人脸或人员特征 */
+    MSG_GALLERY_ACK     = 13  /**< 底库同步确认包（Client -> Broker）：全量底库分片聚合完成确认 */
 };
 
 #pragma pack(push, 1)

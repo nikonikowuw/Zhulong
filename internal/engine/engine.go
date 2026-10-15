@@ -675,3 +675,43 @@ func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]f
 
 	return outFeatures[:dim], nil
 }
+
+// BroadcastAIMessage sends a typed control payload (e.g. MSG_GALLERY_*) to the FrameBroker of
+// the specified stream (or all active streams if streamID is 0) to reach connected algorithm runners.
+func (e *Engine) BroadcastAIMessage(ctx context.Context, streamID uint64, msgType uint16, payload []byte) error {
+	if len(payload) > 64*1024 {
+		return fmt.Errorf("%w: payload exceeds 64KB limit (%d bytes)", ErrInvalidArgument, len(payload))
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+
+	e.mu.Lock()
+	if e.handle == nil || !e.running || e.stopping {
+		e.mu.Unlock()
+		return ErrNotRunning
+	}
+	handle := e.handle
+	e.mu.Unlock()
+
+	var ptr unsafe.Pointer
+	if len(payload) > 0 {
+		ptr = unsafe.Pointer(&payload[0])
+	}
+
+	st := C.Zhulong_engine_broadcast_ai_message(
+		handle,
+		C.Zhulong_stream_id(streamID),
+		C.uint16_t(msgType),
+		ptr,
+		C.size_t(len(payload)),
+	)
+	runtime.KeepAlive(payload)
+
+	if st != C.Zhulong_OK {
+		return mapNativeStatus("broadcast_ai_message", int32(st))
+	}
+	return nil
+}

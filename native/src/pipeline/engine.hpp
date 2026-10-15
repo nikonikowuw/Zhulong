@@ -135,6 +135,16 @@ struct Engine {
 
     /** @brief 动态设置指定流的帧发布采样帧率 */
     void set_publish_rate(Zhulong_stream_id id, uint32_t max_sample_fps);
+
+    /**
+     * @brief 向指定流（或所有活跃流）关联的 FrameBroker 广播下行控制消息
+     * @param stream_id 目标流 ID（为 0 表示向所有包含 Broker 的活跃流广播）
+     * @param msg_type 消息类型（如 MSG_GALLERY_*）
+     * @param payload 负载数据
+     * @param payload_size 负载大小
+     * @return 状态码
+     */
+    Zhulong_status_t broadcast_ai_message(Zhulong_stream_id stream_id, uint16_t msg_type, const void* payload, size_t payload_size);
 };
 
 } // namespace zhulong
