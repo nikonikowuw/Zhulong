@@ -408,6 +408,29 @@
 - `pnpm --dir web build`：TypeScript 严格类型检查 + Vite 打包通过
 - `make check`：前端门禁、Native CTest（18/18）、API 文档生成、Go vet、Go -race 与真实 RTSP 桥接测试 100% 全绿
 
+---
+
+## 2026-10-15: 10-14-face-recognition-e2e 人脸识别端到端接入（父任务总成）
+
+### Summary & Retrospective
+
+成功打通人脸识别异构全栈端到端业务闭环，涵盖 6 大核心子任务交付：
+1. `10-14-algo-structure-abi`：扩展 C ABI 支持 `person_structure`（`zhulong_person_item`、`zhulong_face_item`、Top-K 候选、5点关键点）；
+2. `10-14-gallery-hot-sync`：实现底库下行热更新通道（64KB 分片同步、增量 Upsert/Delete、Runner GalleryIndex 组装与 GalleryRegistry 共享单例）；
+3. `10-14-inference-result-egress`：打通 Runner ➔ FrameBroker ➔ ZhulongEngine ➔ Go StreamHub ➔ EventHub SSE 实时感知出口；
+4. `10-14-face-feature-extraction`：实现底库人脸图片特征提取闭环（Umeyama 对齐 + 512 维特征向量持久化至 SQLite）；
+5. `10-14-face-algo-package`：实现生产级人脸识别算法插件（ArcFace 对齐 + 512 维余弦相似度 1:N 匹配 + 降级人体结构体语义输出），通过黑盒校验 CLI 与 Go 离线验证门禁；
+6. `10-14-face-result-frontend`：实现前端 WebCodecs 画布低延迟 Canvas 2D 零 React 重渲染人脸叠加层，并提供可搜索筛选的实时抓拍识别流抽屉面板。
+
+### Verification Status
+
+- [OK] 前端 53 个测试套件，234 项测试全部在真实无头 Chromium 浏览器通过；
+- [OK] 原生 CTest 18/18 全绿（包含 IPC 通信、算法验证 CLI、插件 ABI、内存安全与 RTSP 真实集成测试）；
+- [OK] Go 全包 `-race` 数据竞争检验与真实 RTSP 桥接端到端测试 100% 通过；
+- [OK] `make check` 全栈门禁绿灯；
+- [OK] 全部 6 项子任务均已完成交付并归档。
+
+
 
 
 
