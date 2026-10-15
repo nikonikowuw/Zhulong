@@ -1,6 +1,12 @@
 /**
  * @file frame_publisher.cpp
  * @brief AI 消费流帧发布线程实现
+ *
+ * 核心机制：
+ * 1. 50ms 轮询响应：拉取硬件帧时采用 50ms 超时，确保在物理流停机时 stop 信号能在 50ms 内响应并优雅汇合；
+ * 2. 发布侧基准对齐节流：若当前时间早于 next_due，直接 drop 丢弃未到期帧；
+ *    若发生解码严重停顿或长间隔，重置基准点（next_due = now + interval），严防恢复后连发补帧冲击下游；
+ * 3. 及时释放：帧写入共享内存槽位后立即 reset() 释放只读借用引用，使解码器底层缓冲区得以迅速回收。
  */
 
 #include "pipeline/frame_publisher.hpp"
@@ -59,7 +65,7 @@ void FramePublisher::publish_loop() noexcept {
             );
 
             if (now < next_due) {
-                // D7 节流：未到期帧立即在发布侧丢弃，规避无谓的 shm 拷贝与 socket 通知
+                // 发布侧节流：未到期帧立即在发布侧丢弃，规避无谓的 shm 拷贝与 socket 广播通知
                 frame.reset();
                 continue;
             }
@@ -76,8 +82,8 @@ void FramePublisher::publish_loop() noexcept {
             broker_->publish_frame(*frame);
         }
 
-        // ⚠️ R3 / 防慢算法拖垮解码器准则：
-        // 帧复制进 shm（或无客户端丢弃）后立即 reset drop 掉物理帧引用，绝不将 HardwareFrame 持有至推理阶段
+        // ⚠️ 防慢算法拖垮解码器准则：
+        // 帧复制进共享内存（或无客户端丢弃）后立即 reset 释放物理帧借用引用，绝不将 HardwareFrame 持有至推理阶段
         frame.reset();
     }
 }

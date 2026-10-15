@@ -1,6 +1,21 @@
 /**
  * @file stream.cpp
  * @brief 物理流上下文与节点处理流水线实现
+ *
+ * 核心机制实现说明：
+ * 1. 独立解码会话生命周期与锁外汇合：
+ *    - 当物理流首个 AI 消费者注册时，动态实例化 DecodeSession，拉起独立解码线程；
+ *    - 当最后一个 AI 消费者释放时，sync_decode_pipeline 在锁内转移出 session 指针，
+ *      交由调用方在锁外调用 stop_decode_session 执行 request_stop() 与 join()，杜绝持锁汇合阻塞全局流控制；
+ * 2. 拥塞重同步与关键帧门控（R16）：
+ *    - 面对网络抖动或丢包，当 packet_queue_ 满载时触发 waiting_keyframe_=true 并清空积压旧包；
+ *    - 拒绝一切非关键帧，直到完整关键帧到达并清空旧队列后才恢复解码，解码器调用 flush() 清空 DPB；
+ * 3. EAGAIN 完整排空（R19）：
+ *    - 当 send_packet 返回 AVERROR(EAGAIN) 时，立即循环 receive_frame 排空当前就绪帧，
+ *      随后再次重试送入该包，杜绝静默吞包丢帧；
+ * 4. 优先级分发与逐订阅者异常隔离：
+ *    - 数据包优先拷入 AI 解码队列，确保分析低延迟；
+ *    - 锁外通过不可变快照遍历 Preview 订阅者，单个订阅者回调抛错不影响其他订阅者与主采集流程。
  */
 
 #include "pipeline/stream.hpp"
@@ -86,7 +101,7 @@ bool DecodeSession::push_packet(const Zhulong_packet_view &packet) {
             return false;
         }
         waiting_keyframe_.store(false, std::memory_order_relaxed);
-        // 新的关键帧到达：清空此前积压的旧包队列 (仅清元素，不触碰取消标记)
+        // 新的关键帧到达：清空此前积压的旧包队列 (仅清空元素，不改变取消标记)
         packet_queue_.clear();
     }
 
@@ -96,6 +111,7 @@ bool DecodeSession::push_packet(const Zhulong_packet_view &packet) {
     qp.data = acquire_buffer(packet.size + AV_INPUT_BUFFER_PADDING_SIZE);
     qp.data.assign(packet.data, packet.data + packet.size);
     qp.data.resize(packet.size + AV_INPUT_BUFFER_PADDING_SIZE, 0);
+    // ⚠️ 时间戳保真透传：严格根据 has_pts / has_dts 记录有效性，禁止把缺失时间戳当作有效 0
     qp.pts = packet.has_pts ? packet.pts : 0;
     qp.dts = packet.has_dts ? packet.dts : 0;
     qp.has_pts = (packet.has_pts != 0);
@@ -264,7 +280,7 @@ void DecodeSession::decode_loop() noexcept {
 
                 int ret = dec->send_packet(pkt.data.data(), actual_size, pts, dts);
 
-                // 若底层缓冲已满导致 EAGAIN，先排空帧输出，再重试当前包
+                // ⚠️ 若底层缓冲已满导致 EAGAIN，先排空已解码帧，再重新发送当前包，严防静默吞包
                 if (ret == AVERROR(EAGAIN)) {
                     drain_frames(dec);
                     ret = dec->send_packet(pkt.data.data(), actual_size, pts, dts);
@@ -273,7 +289,7 @@ void DecodeSession::decode_loop() noexcept {
                 if (ret >= 0) {
                     drain_frames(dec);
                 } else if (ret != AVERROR_EOF && ret != AVERROR(EAGAIN)) {
-                    // 解码单包遇到错误（如弱网残损包），执行 flush 清空 DPB，
+                    // 解码单包遇到错误（如弱网残损包），执行冲刷清空 DPB，
                     // 并等待下一个关键帧，避免参考错误持续污染后续画面
                     dec->flush();
                     need_keyframe = true;

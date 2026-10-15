@@ -1,6 +1,22 @@
 /**
  * @file engine.hpp
  * @brief Zhulong Native 引擎核心控制器 (物理流池管理、Reaper 与 Probe)
+ *
+ * 核心机制与架构契约：
+ * 1. 锁分层与锁外汇合禁令（R15）：
+ *    - lifecycle 锁仅串行化 start() / stop() 状态流转；
+ *    - control 锁保护物理流池容器、FrameBroker 与消费者映射的快速修改；
+ *    - ⚠️ 严禁在持有 control 互斥锁时调用 thread::join() 或同步排空（drain），
+ *      以防单路流的阻塞等待引起 status、acquire 等全局控制操作死锁；
+ * 2. 8 秒宽限期机制（Grace Period）：
+ *    - 当物理流的所有消费者释放后，流进入 8 秒宽限期；
+ *    - 宽限期内新消费者接入可直接零等待复用已有 RTSP 连接，超时后由后台 Reaper 线程回收；
+ * 3. 5 步优雅停机顺序（5-Step Graceful Shutdown）：
+ *    - 第一步：置位 running=false，向所有流发出 request_stop() 停止拉流；
+ *    - 第二步：唤醒并等待 Reaper 线程安全汇合；
+ *    - 第三步：停止发布线程与 FrameBroker；
+ *    - 第四步：同步排空所有 AI 结果订阅（AISubscription）；
+ *    - 第五步：汇合所有物理流工作线程并排空在途 Probe 探测任务。
  */
 
 #pragma once

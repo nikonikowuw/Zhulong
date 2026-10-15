@@ -1,6 +1,14 @@
 /**
  * @file subscription.cpp
  * @brief 数据包订阅通道实现
+ *
+ * 核心实现说明：
+ * 1. 锁外调用（Lock-free Callback Invocation）：
+ *    - 快速持有 mutex 将 active 标记为 true 后立即释放锁，在锁外执行用户的 callback 函数，
+ *      彻底杜绝用户回调耗时阻塞媒体分发循环；
+ * 2. 异常隔离与排空保障（Exception-safe Drain Notification）：
+ *    - 在 try-catch 块中保护回调调用；若用户回调抛出异常，无论如何均重置 active=false，
+ *      并将 enabled 置为 false 防止故障蔓延，最后必定通过 notify_all() 唤醒等待排空的线程。
  */
 
 #include "pipeline/subscription.hpp"

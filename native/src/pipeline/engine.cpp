@@ -1,6 +1,16 @@
 /**
  * @file engine.cpp
  * @brief Zhulong Native 引擎核心控制器实现
+ *
+ * 核心实现说明：
+ * 1. 锁外汇合与状态分离（R15）：
+ *    - 在 release() 与 stop() 路径中，先在 control 锁内将退役的 session、publisher、broker 与 stream
+ *      移动至外部临时容器，退出临界区后再执行 stop() 与 join()，杜绝锁内汇合导致全局流管理死锁；
+ * 2. 唤醒纪元（wake_epoch）：
+ *    - 维护 wake_epoch 单调递增计数器。每当有消费者释放并启动宽限期时递增并广播 timer_wakeup，
+ *      配合 1 秒兜底超时，确保 Reaper 线程绝不会因条件变量时序丢失唤醒；
+ * 3. 严格五步停机编排：
+ *    - 生产者停止 ➔ 唤醒 Reaper ➔ 停止发布与 Broker ➔ 同步排空 AI 订阅 ➔ 汇合拉流线程与探测排空。
  */
 
 #include "pipeline/engine.hpp"
