@@ -1,3 +1,8 @@
+/**
+ * @file cpu_inference_backend.cpp
+ * @brief CPU 推理后端桩实现（确定性 Mock 输出）
+ */
+
 #include "cpu_inference_backend.hpp"
 #include <cmath>
 #include <cstring>
@@ -32,7 +37,7 @@ zhulong_status_t CpuInferenceBackend::forward(SessionContext* session,
     outputs.clear();
     Tensor out_tensor({1, 6}, DataType::FLOAT32);
     float* data = out_tensor.data<float>();
-    
+
     // 基于输入张量第 0 个元素的均值计算确定性检测框
     float seed = 0.5f;
     if (inputs[0].element_count() > 0) {
@@ -55,3 +60,4 @@ zhulong_status_t CpuInferenceBackend::forward(SessionContext* session,
 }
 
 } // namespace zhulong
+

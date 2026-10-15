@@ -1,3 +1,8 @@
+/**
+ * @file letterbox_geometry.cpp
+ * @brief Letterbox 几何计算实现（精度敏感，不得改动舍入方式）
+ */
+
 #include "letterbox_geometry.hpp"
 
 #include <algorithm>

@@ -1,3 +1,17 @@
+/**
+ * @file runner.cpp
+ * @brief 独立算法 Runner（验包/执行器）宿主与黑盒验包 CLI
+ *
+ * 核心设计原则：
+ * 1. 一包一进程：每个算法包在独立 Runner 子进程中运行，故障隔离，崩溃不拖垮主媒体与 Go 服务。
+ * 2. 双工作模式：`--verify-plugin` 为单次黑盒验包（ABI/模型/Worker/Task/推理/释放全链路），
+ *    `--plugin --broker` 为 IPC 长驻消费模式（订阅共享内存帧流）。
+ * 3. ⚠️ 退出码表是运维与 Go 看门狗的唯一故障分类通道（见 run_ipc_workers 注释）。
+ * 4. ⚠️ 所有诊断输出为严格单行 JSON，字符串字段必须经 runner::json_quote 转义。
+ * 5. ⚠️ R1/R2：插件调用遵循「谁创建谁释放」—— process 产出的 result 必须由同一插件的
+ *    result_release 释放（native 不持有其内存所有权）；本进程自身不跨越 C ABI。
+ */
+
 #include <zhulong/plugin.h>
 #include "json.hpp"
 #include "../ipc/ipc_protocol.hpp"
@@ -52,6 +66,19 @@ namespace zhulong
         return value;
     }
 
+    /**
+     * @brief 将插件返回的推理结果序列化为单行 JSON 字符串
+     *
+     * 按 result_type 分派为三种载荷形态（detection / classification / person_structure），
+     * 其余类型归为 custom 空载荷。所有字符串字段（标签、person_id、person_name）均经
+     * runner::json_quote 转义，保证输出可被标准 JSON parser 解析。
+     *
+     * @param stream_id 来源物理流 ID
+     * @param pts 帧呈现时间戳（原样透传，不做单位换算）
+     * @param cost_ms 本次推理耗时（毫秒，仅诊断用）
+     * @param result 插件产出的结果句柄（可为空，表示无输出）
+     * @return std::string 单行 JSON 文本（不含换行符）
+     */
     static std::string serialize_inference_result(uint64_t stream_id,
                                                   int64_t pts,
                                                   int64_t cost_ms,
@@ -153,6 +180,11 @@ namespace zhulong
         return ss.str();
     }
 
+    /**
+     * @brief 插件动态库加载器（RAII 封装 dlopen/dlsym/dlclose 与 ABI 握手）
+     *
+     * 析构自动 unload；load 失败时保证已获得的句柄被释放，不泄漏 dlopen 引用。
+     */
     class PluginLoader
     {
     public:
@@ -161,6 +193,17 @@ namespace zhulong
             unload();
         }
 
+        /**
+         * @brief 加载插件动态库并完成 v1 ABI 握手
+         *
+         * 以 RTLD_NOW | RTLD_LOCAL 加载（立即解析符号且不污染全局符号表），
+         * 查找 ZHULONG_PLUGIN_ENTRY_POINT 并填充 zhulong_plugin_api_v1；
+         * 要求 api_version == 1，否则视为不兼容并卸载。
+         *
+         * @param so_path 插件 .so 文件路径
+         * @param[out] error_msg 失败时输出错误原因
+         * @return true 加载并握手成功；false 失败（已回滚句柄）
+         */
         bool load(const std::string &so_path, std::string &error_msg)
         {
             unload();
@@ -214,6 +257,17 @@ namespace zhulong
         std::string so_path_;
     };
 
+    /**
+     * @brief 单次黑盒验包路径：加载插件并执行一次完整推理生命周期
+     *
+     * 依次执行 model_create -> worker_create -> task_open -> process -> result_release，
+     * 任一步失败即输出对应 stage 的 JSON 诊断并提前返回。退出码 0~5 对应
+     * dlopen / model_create / worker_create / task_open / process 各阶段失败。
+     *
+     * @param so_path 待验证的插件动态库路径
+     * @param sample_path 样本标识（仅用于输出回显；无样本时使用合成测试帧）
+     * @return int 0 全链路通过；非 0 为失败阶段序号
+     */
     int run_verify_plugin(const std::string &so_path, const std::string &sample_path)
     {
         std::cout << "{\"step\":\"start\",\"plugin\":" << runner::json_quote(so_path) << "}" << std::endl;
@@ -310,6 +364,31 @@ namespace zhulong
         return 0;
     }
 
+    /**
+     * @brief IPC 长驻消费路径：连接一个或多个 FrameBroker 并持续消费共享内存帧
+     *
+     * ⚠️ 退出码表（运维与 Go 看门狗依赖此表区分故障类型）：
+     * | 码 | 含义 |
+     * | -- | ---- |
+     * | 0  | 正常退出（收到停止信号或达到 --max-frames） |
+     * | 1  | dlopen 失败，或 client name 超长（HandshakeReq.client_name[32]） |
+     * | 2  | model_create 失败 |
+     * | 3  | worker_create 失败 |
+     * | 4  | task_open 失败 |
+     * | 5  | broker 连接失败 / 无法从 --broker 路径反解 stream_id / 未提供 --broker |
+     * | 6  | 握手请求发送失败 |
+     * | 7  | 握手应答接收失败或类型不符 |
+     * | 8  | 共享内存只读映射失败 |
+     *
+     * ⚠️ 多路 `--broker` 的 D6 语义：任一路失败即置位 `stop_all`，已连上的路也会被一并终止，
+     * 不存在「部分连接成功」的中间态。
+     *
+     * @param so_path 插件动态库路径
+     * @param broker_socks 各物理流的 broker socket 字面路径列表
+     * @param client_name 客户端基础名称（多路时自动追加 #<idx> 后缀）
+     * @param max_frames 最大处理帧数（<0 表示不限）
+     * @return int 退出码（见上表）
+     */
     int run_ipc_workers(const std::string &so_path, const std::vector<std::string> &broker_socks, const std::string &client_name, int max_frames = -1)
     {
         if (broker_socks.empty())
@@ -337,8 +416,9 @@ namespace zhulong
 
         auto run_single_worker = [&](size_t idx, const std::string &broker_sock)
         {
-            // task 身份必须包含 stream_id：一个算法包可同时订阅多路流，
+            // ⚠️ task 身份必须包含 stream_id：一个算法包可同时订阅多路流，
             // 固定 task_id 会让多路共用一个 task state（父任务 design.md:242 要求 task→worker 亲和）。
+            // 这是 runner 唯一允许依赖 socket 路径命名格式的地方。
             const uint64_t stream_id = parse_stream_id_from_socket(broker_sock);
             if (stream_id == 0)
             {
@@ -496,6 +576,7 @@ namespace zhulong
                         uint32_t count = (result != nullptr && rc == ZHULONG_PLUGIN_OK) ? result->count : 0;
                         bool has_targets = (count > 0);
 
+                        // 仅在本次或上次有目标时才上报结果，避免连续空帧刷屏（去噪）
                         if (has_targets || last_had_targets)
                         {
                             std::string payload = serialize_inference_result(dispatch.stream_id, dispatch.pts, cost_ms, result);
@@ -503,6 +584,8 @@ namespace zhulong
                         }
                         last_had_targets = has_targets;
 
+                        // ⚠️ R2：结果内存由插件创建，只能由同一插件的 result_release 释放。
+                        // 无论 process 是否成功，只要 result 非空就必须释放，不得泄漏。
                         if (result)
                         {
                             api.result_release(result);
@@ -558,6 +641,11 @@ namespace zhulong
 
 } // namespace zhulong
 
+/**
+ * @brief Runner CLI 入口：解析命令行参数并分派到验包或 IPC 消费路径
+ *
+ * 无有效参数时打印用法说明并返回 0（不是错误，避免被看门狗误判为崩溃）。
+ */
 int main(int argc, char *argv[])
 {
     std::string verify_plugin_path;

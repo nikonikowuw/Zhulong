@@ -1,3 +1,10 @@
+/**
+ * @file letterbox_geometry.hpp
+ * @brief Letterbox（等比缩放 + 居中补边）纯几何计算（后端无关）
+ *
+ * 核心设计原则：只做算术，不触碰像素、不分配内存、不依赖任何后端。
+ */
+
 #pragma once
 
 namespace zhulong {
@@ -8,11 +15,11 @@ namespace zhulong {
 // 输入在两个后端下会得到不同的 scale/padding，破坏「后端可替换」的前提。
 // 本函数只做算术，不触碰像素、不分配内存、不依赖任何后端。
 struct LetterboxGeometry {
-    float scale{1.0f};   // 等比缩放系数（源 → 目标）
-    int unpad_w{0};      // 缩放后内容宽度（未补边）
-    int unpad_h{0};      // 缩放后内容高度（未补边）
-    int pad_left{0};     // 左侧补边像素
-    int pad_top{0};      // 顶部补边像素
+    float scale{1.0f};   /**< 等比缩放系数（源 → 目标） */
+    int unpad_w{0};      /**< 缩放后内容宽度（未补边） */
+    int unpad_h{0};      /**< 缩放后内容高度（未补边） */
+    int pad_left{0};     /**< 左侧补边像素 */
+    int pad_top{0};      /**< 顶部补边像素 */
 };
 
 // 计算 letterbox 几何。src_w/src_h/target_w/target_h 必须为正。
@@ -22,3 +29,4 @@ struct LetterboxGeometry {
 LetterboxGeometry compute_letterbox_geometry(int src_w, int src_h, int target_w, int target_h);
 
 } // namespace zhulong
+

@@ -1,3 +1,8 @@
+/**
+ * @file cpu_vision_backend.cpp
+ * @brief CPU 视觉前处理后端实现（stride 契约、双线性缩放与 Letterbox）
+ */
+
 #include "cpu_vision_backend.hpp"
 #include "letterbox_geometry.hpp"
 #include <algorithm>
@@ -8,6 +13,9 @@
 namespace zhulong {
 namespace {
 
+/**
+ * @brief 判断像素格式是否为 packed 24 位 RGB/BGR
+ */
 bool is_packed_24bit(zhulong_pixel_format_t format) {
     return format == ZHULONG_PIXEL_FORMAT_RGB24 || format == ZHULONG_PIXEL_FORMAT_BGR24;
 }
@@ -20,6 +28,7 @@ zhulong_status_t CpuVisionBackend::resize(const uint8_t* src, int src_w, int src
     if (!src || !dst || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) {
         return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
+    // ⚠️ 未实现的格式必须在读取源像素之前拒绝，不得把 NV12 plane0 当三通道 RGB 读取
     if (!is_packed_24bit(src_format) || !is_packed_24bit(dst_format)) {
         return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
@@ -29,13 +38,16 @@ zhulong_status_t CpuVisionBackend::resize(const uint8_t* src, int src_w, int src
     if (min_src_stride > std::numeric_limits<int>::max() || min_dst_stride > std::numeric_limits<int>::max()) {
         return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
+    // stride 契约：0 表示 packed（按 width*3 兼容处理）；正 stride 必须至少为 width*3
     if (src_stride == 0) src_stride = static_cast<int>(min_src_stride);
     if (dst_stride == 0) dst_stride = static_cast<int>(min_dst_stride);
     if (src_stride < min_src_stride || dst_stride < min_dst_stride) {
         return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
 
+    // RGB/BGR 目标顺序不一致时必须交换 R/B 通道
     const bool swap_channels = src_format != dst_format;
+    // 逐行以 src + y*stride 定位，严禁假定 src 为 packed 连续缓冲
     for (int y = 0; y < dst_h; ++y) {
         float source_y = (static_cast<float>(y) + 0.5f) * src_h / dst_h - 0.5f;
         source_y = std::clamp(source_y, 0.0f, static_cast<float>(src_h - 1));
@@ -47,6 +59,7 @@ zhulong_status_t CpuVisionBackend::resize(const uint8_t* src, int src_w, int src
         uint8_t* dst_row = dst + static_cast<size_t>(y) * dst_stride;
 
         for (int x = 0; x < dst_w; ++x) {
+            // 像素中心坐标映射 + 边界 clamp，避免边缘越界采样
             float source_x = (static_cast<float>(x) + 0.5f) * src_w / dst_w - 0.5f;
             source_x = std::clamp(source_x, 0.0f, static_cast<float>(src_w - 1));
             const int x0 = static_cast<int>(std::floor(source_x));
@@ -100,20 +113,28 @@ zhulong_status_t CpuVisionBackend::letterbox(const zhulong_frame_view& src,
     const int pad_left = geometry.pad_left;
     const int pad_top = geometry.pad_top;
 
+    // ⚠️ 几何回填：后处理必须使用这些值将归一化坐标反算回原图
     inout_params.scale = geometry.scale;
     inout_params.pad_left = pad_left;
     inout_params.pad_top = pad_top;
 
     dst = Tensor({target_h, target_w, 3}, DataType::UINT8);
     uint8_t* dst_buf = dst.data<uint8_t>();
+    // Letterbox 补边值为 114（非 0），与训练预处理保持一致
     std::memset(dst_buf, 114, dst.byte_size());
 
+    // 缩放直接写到最终 Tensor ROI（内容区），不分配中间 resized_temp
     const int target_stride = target_w * 3;
     uint8_t* resized_region = dst_buf + (static_cast<size_t>(pad_top) * target_w + pad_left) * 3;
     return resize(src.planes[0], src.width, src.height, src_stride, src.format,
                   resized_region, target_stride, unpad_w, unpad_h, inout_params.target_format);
 }
 
+/**
+ * @brief 基于归一化两点坐标 [x1,y1,x2,y2] 计算交并比（IoU）
+ *
+ * 使用 std::max(0.0f, ...) 防御越界或坐标倒置导致的负面积。
+ */
 static float calc_iou(const zhulong_bbox& a, const zhulong_bbox& b) {
     float x1 = std::max(a.box[0], b.box[0]);
     float y1 = std::max(a.box[1], b.box[1]);
@@ -132,6 +153,11 @@ static float calc_iou(const zhulong_bbox& a, const zhulong_bbox& b) {
     return inter_area / union_area;
 }
 
+/**
+ * @brief 按置信度降序排序后逐框抑制的标量 NMS（非极大值抑制），最坏复杂度 O(n^2)
+ *
+ * ⚠️ 输入框必须为已归一化坐标 [x1, y1, x2, y2] ∈ [0.0, 1.0]。
+ */
 std::vector<zhulong_bbox> nms(const std::vector<zhulong_bbox>& boxes, float iou_threshold) {
     if (boxes.empty()) return {};
 
