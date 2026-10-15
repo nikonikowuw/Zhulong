@@ -131,3 +131,26 @@ Unified dynamic entity surrogate primary keys (persons.id, person_faces.id, came
 ### Status
 
 [OK] **Completed**
+
+## Session 44: Normalize systemtime and storage audit actions to domain namespace
+<!-- trellis-session: v=2 fp=056b93081e7d2c3b -->
+
+**Date**: 2026-10-15
+**Task**: 统一审计动作命名空间并迁移历史记录
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+Normalized audit action constants across `internal/systemtime` (`ActionTime*`) and `internal/storage` (`ActionStorage*`) to eliminate redundant `system.` prefixes, aligning strictly with standard domain namespacing `<domain>.<verb>` (`time.*`, `storage.*`). Created migration `000010_normalize_audit_actions` (`up.sql`/`down.sql`) to safely rewrite historical SQLite audit logs and verified bidirectional rollback in `store_test.go`. Aligned frontend i18n dictionaries (`zh-Hans.json`, `en.json`, `zh-Hant.json`), `AuditTable.tsx` filter options, and updated `.trellis/spec/backend/logging-guidelines.md`. Passed full `make check` suite.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `056b930` | feat(audit): normalize systemtime and storage action names to domain namespace |
+
+### Status
+
+[OK] **Completed**
+
