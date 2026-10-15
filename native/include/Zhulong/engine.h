@@ -148,6 +148,12 @@ typedef struct {
 
 /**
  * @brief 流状态信息结构体
+ *
+ * 字段说明：
+ *   - state: 物理流当前运行状态，取值为 Zhulong_STREAM_STARTING（建连与格式解析中）、
+ *     Zhulong_STREAM_RUNNING（正常运行持续拉流）或 Zhulong_STREAM_FAILED（遇到不可恢复错误已终止）。
+ *   - error: 错误码。当 state 为 Zhulong_STREAM_FAILED 时记录导致失败的具体错误码
+ *     （如 Zhulong_ERR_IO、Zhulong_ERR_TIMEOUT 等）；流正常运行或处于启动中状态时为 Zhulong_OK。
  */
 typedef struct {
     int32_t state;               /**< 流当前运行状态（Zhulong_STREAM_STARTING / RUNNING / FAILED） */
@@ -194,8 +200,11 @@ Zhulong_status_t Zhulong_engine_create(Zhulong_engine_h *out_engine);
 /**
  * @brief 启动 Native 引擎及内部清理/调度线程
  *
+ * 具备幂等性：重复对运行中的引擎调用 start 直接返回 Zhulong_OK。
+ * 若引擎此前曾被 stop 停止，再次调用 start 将以全新空的流池重新启动运行。
+ *
  * @param engine 引擎句柄
- * @return Zhulong_status_t Zhulong_OK 成功；具备幂等性（重复调用返回成功）
+ * @return Zhulong_status_t Zhulong_OK 成功；Zhulong_ERR_INVALID_ARGUMENT 句柄为空
  */
 Zhulong_status_t Zhulong_engine_start(Zhulong_engine_h engine);
 
@@ -203,10 +212,13 @@ Zhulong_status_t Zhulong_engine_start(Zhulong_engine_h engine);
  * @brief 停止 Native 引擎
  *
  * 取消所有活跃拉流和探测、回收 Worker 线程、排空回调，并使所有流 ID 与订阅 ID 失效。
- * 具备幂等性；停止后若再次调用 start，将以全新空的流池重新运行。
+ * 具备幂等性：重复对已停止或未启动的引擎调用 stop 直接返回 Zhulong_OK。
+ * 停止后若再次调用 start，将以全新空的流池重新运行。
+ *
+ * ⚠️ 严禁在任何 Native 数据包回调或 AI 结果回调内部调用此接口（防自死锁）。
  *
  * @param engine 引擎句柄
- * @return Zhulong_status_t Zhulong_OK 成功
+ * @return Zhulong_status_t Zhulong_OK 成功；Zhulong_ERR_INVALID_ARGUMENT 句柄为空
  */
 Zhulong_status_t Zhulong_engine_stop(Zhulong_engine_h engine);
 
@@ -242,7 +254,13 @@ void Zhulong_engine_destroy(Zhulong_engine_h engine);
  * @param consumer_id 消费者业务 ID
  * @param consumer_kind 消费者类型（Zhulong_CONSUMER_PREVIEW / RECORDING / AI）
  * @param[out] out_stream 输出分配或复用的流 ID
- * @return Zhulong_status_t 操作状态码
+ * @return Zhulong_status_t 操作状态码：
+ *         Zhulong_OK 成功；
+ *         Zhulong_ERR_INVALID_ARGUMENT 参数非法（engine/url/out_stream 为空指针、URL 格式非法、consumer_id 为 0）；
+ *         Zhulong_ERR_DUPLICATE consumer_id 在当前流中已存在（重复注册）；
+ *         Zhulong_ERR_CONFIG_CONFLICT 请求的 URL 与已存在的流相同但拉流选项冲突（如 transport 不一致）；
+ *         Zhulong_ERR_NOT_RUNNING 引擎处于停止或未启动状态；
+ *         Zhulong_ERR_OUT_OF_MEMORY 内存不足
  */
 Zhulong_status_t Zhulong_stream_acquire(Zhulong_engine_h engine, const char *url,
     const Zhulong_stream_options *options, uint64_t consumer_id, int32_t consumer_kind,
@@ -343,12 +361,22 @@ Zhulong_status_t Zhulong_stream_unsubscribe(Zhulong_engine_h engine, Zhulong_str
 /**
  * @brief 订阅物理流的 AI 推理结果事件派发
  *
+ * 约定与安全要求：
+ *   - 本回调由 Native 推理结果转发线程异步触发。
+ *   - 回调操作必须是快速、有界且非阻塞的，严禁抛出 C++ 异常。
+ *   - 严禁在回调内部调用引擎的任何控制接口（如 acquire/release/probe/stop/destroy）。
+ *   - token 为调用方注册的不透明整数，在 Go 中配合 cgo.Handle 使用，严禁直接传递裸 Go 指针。
+ *
  * @param engine 引擎句柄
  * @param stream 流 ID
  * @param callback 结果到达时的回调函数指针
  * @param token 传递给回调函数的上下文令牌
  * @param[out] out_subscription 输出订阅 ID
- * @return Zhulong_status_t 操作状态码
+ * @return Zhulong_status_t 操作状态码：
+ *         Zhulong_OK 成功；
+ *         Zhulong_ERR_INVALID_ARGUMENT 参数非法（空指针、非法流 ID）；
+ *         Zhulong_ERR_NOT_FOUND 流不存在；
+ *         Zhulong_ERR_NOT_RUNNING 引擎未启动
  */
 Zhulong_status_t Zhulong_stream_subscribe_ai_results(Zhulong_engine_h engine,
     Zhulong_stream_id stream, Zhulong_ai_result_callback callback, uintptr_t token,
@@ -357,10 +385,18 @@ Zhulong_status_t Zhulong_stream_subscribe_ai_results(Zhulong_engine_h engine,
 /**
  * @brief 取消 AI 推理结果事件订阅（同步排空语义）
  *
+ * 同步排空保证：
+ *   - 本函数成功返回后，保证所有正在执行此 token 的回调已彻底返回，且未来绝不会再触发。
+ *   - Go 侧在调用本接口成功后，即可安全回收或解除关联的 cgo.Handle。
+ *
  * @param engine 引擎句柄
  * @param stream 流 ID
  * @param subscription 待取消的订阅 ID
- * @return Zhulong_status_t 操作状态码
+ * @return Zhulong_status_t 操作状态码：
+ *         Zhulong_OK 成功；
+ *         Zhulong_ERR_INVALID_ARGUMENT 参数非法；
+ *         Zhulong_ERR_NOT_FOUND 流或订阅不存在；
+ *         Zhulong_ERR_NOT_RUNNING 引擎未启动
  */
 Zhulong_status_t Zhulong_stream_unsubscribe_ai_results(Zhulong_engine_h engine,
     Zhulong_stream_id stream, Zhulong_subscription_id subscription);
