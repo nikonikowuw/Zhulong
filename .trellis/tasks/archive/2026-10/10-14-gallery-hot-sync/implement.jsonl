@@ -1,0 +1,6 @@
+{"type":"spec","path":".trellis/spec/native/cgo-contract.md","role":"CGO contract and memory rules"}
+{"type":"spec","path":".trellis/spec/native/algo-plugin-contract.md","role":"Plugin and runner IPC contract"}
+{"type":"spec","path":".trellis/spec/backend/index.md","role":"Backend domain service and error handling rules"}
+{"type":"file","path":"native/src/algorithm/ipc/ipc_protocol.hpp","role":"IPC header and message types"}
+{"type":"file","path":"internal/algorithm/process.go","role":"Go IPC framing and gallery payload types"}
+{"type":"file","path":"internal/person/service.go","role":"Person service CRUD and gallery notifications"}

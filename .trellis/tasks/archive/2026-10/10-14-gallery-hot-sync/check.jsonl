@@ -1,0 +1,3 @@
+{"type":"spec","path":".trellis/spec/native/cgo-contract.md","role":"Verify CGO ABI safety"}
+{"type":"spec","path":".trellis/spec/native/algo-plugin-contract.md","role":"Verify runner IPC types"}
+{"type":"file","path":"internal/algorithm/ipc_contract_test.go","role":"Verify cross-language constant guard"}
