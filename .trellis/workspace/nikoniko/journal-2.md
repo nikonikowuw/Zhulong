@@ -278,4 +278,54 @@
   - `10-14-face-algo-package`（人脸识别算法包构建）
   - `10-14-face-result-frontend`（前端叠加与记录）
 
+---
+
+## 2026-10-15: 实现底库热更新通道 (10-14-gallery-hot-sync)
+
+### Task Information
+
+- **Task**: 10-14-gallery-hot-sync (实现底库热更新通道)
+- **Parent**: 10-14-face-recognition-e2e
+- **Package**: backend, native
+- **Type**: feature / native IPC & go integration
+
+### Implementation Details
+
+- **Native IPC 协议与下行广播通路**：
+  - 在 `native/src/algorithm/ipc/ipc_protocol.hpp` 中新增 `MSG_GALLERY_SYNC` (10), `MSG_GALLERY_UPSERT` (11), `MSG_GALLERY_DELETE` (12), `MSG_GALLERY_ACK` (13)；
+  - 在 `FrameBroker` 与 `Engine` 中实现 `broadcast_message` / `broadcast_ai_message`，通过复用既有 `/tmp/zhulong_broker_<stream_id>.sock` 下发下行控制指令，导出 C ABI `Zhulong_engine_broadcast_ai_message`；
+- **Go Engine 与分片广播机制**：
+  - 在 `internal/engine` 中封装 `BroadcastAIMessage`，支持向各流的 FrameBroker 安全广播报文；
+  - 在 `internal/algorithm/process.go` 中实现 `CreateGallerySyncShards`（基于 10 项/片切分，严格控制单片在 40~50KB，规避 64KB 单包 IPC 上限）；
+  - 实现 `GalleryBroadcaster` 统一提供 `BroadcastSync`、`BroadcastUpsert`、`BroadcastDelete`；
+  - 修复 `Supervisor.StartAlgorithm` 中在持有 `s.mu.Lock()` 时调用 `triggerGallerySyncAsync()` 导致的 `sync.RWMutex` 自重入死锁问题；
+- **Runner 进程内底库索引与解析**：
+  - 编写 `GalleryIndex` 线程安全本地索引，支持快照隔离 `snapshot()`；
+  - 在 `runner.cpp` 中接入 `MSG_GALLERY_SYNC`（分片收集与超时窗口组装）、`MSG_GALLERY_UPSERT` 与 `MSG_GALLERY_DELETE`，组装完成后回传 `MSG_GALLERY_ACK`；
+- **Person 领域与 App 接线**：
+  - 在 `internal/person/service.go` 中接入 `GalleryNotifier`，在人脸增删与人员修改时即时增量下发更新；
+  - 在 `internal/app` 中完成 Uber Fx 绑定与生命周期闭环；
+- **契约规范与全量门禁**：
+  - 更新 `.trellis/spec/native/algo-plugin-contract.md` §7.3，登记底库热更新链路已实现与分片规约；
+  - `make check`（前端全部测试 + Native 17/17 CTest + api-docs + Go vet & race & RTSP bridge 测试）全量通过。
+
+### Testing
+
+- [OK] `make native-test`：17/17 CTest 全绿通过
+- [OK] `python3 native/scripts/build.py go test -race ./internal/algorithm`：通过
+- [OK] `python3 native/scripts/build.py go test -race ./internal/person`：通过
+- [OK] `make go-check`：全包 -race、vet、gofmt 与 RTSP 真实桥接测试全绿通过
+- [OK] `make check`：全栈测试通过
+
+### Status
+
+[OK] **Completed**（等待归档）
+
+### Next Steps
+
+- 推进人脸识别端到端后继子任务：
+  - `10-14-face-algo-package`（实现人脸识别算法包构建与 1:N 检索）
+  - `10-14-face-result-frontend`（前端叠加与记录展示）
+
+
 
