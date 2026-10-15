@@ -113,7 +113,45 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 
 ---
 
-## 4. 验证命令
+## 4. 全链路 DMA-BUF 硬件零拷贝流转契约 (Zero-Copy Pipeline)
+
+*覆盖链路：解码 ➔ FrameBroker ➔ SCM_RIGHTS ➔ RGA 视觉前处理 ➔ RKNPU2 零拷贝绑定。*
+
+### 4.1 底层物理分配器 (`DmaBufAllocator`)
+
+- **分配优先级探测**：
+  1. `/dev/dma_heap/cma`：优先分配连续物理内存块，满足硬件硬性物理连续要求；
+  2. `/dev/dma_heap/system`：系统级 DMA-Heap 分配；
+  3. `/dev/dri/card0` (DRM Dumb Buffer)：通过 DRM ioctl 创建并导出 DMA-BUF（`DRM_IOCTL_PRIME_HANDLE_TO_FD`）；
+  4. 宿主测试环境/非 Linux 平台自动回退为不可用（`is_supported() == false`）。
+- **CPU Cache 同步括号 (Cache Synchronization Bracket)**：
+  - CPU 读写前：调用 `sync_start(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE)` 触发 `DMA_BUF_IOCTL_SYNC`；
+  - 硬件外设介入前：调用 `sync_end(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE)` 刷回 Cache Line；
+  - 针对 `EINTR` 信号中断提供带退避的自动重试机制。
+
+### 4.2 RGA 硬件加速与 `wrapbuffer_fd`
+
+- 当输入源帧具备有效 `dma_buf_fd >= 0` 时，RGA 视觉后端优先调用 `wrapbuffer_fd`：
+  ```cpp
+  rga_buffer_t src_buf = wrapbuffer_fd(src.dma_buf_fd, src.width, src.height, rga_fmt, src.strides[0], src.height);
+  ```
+- 目标输出 `Tensor` 同理支持通过 `tensor.dma_buf_fd()` 直接进行 `wrapbuffer_fd`。
+- **混合模式保护**：当 `dma_buf_fd < 0` 时，透明安全回退至已有的 `wrapbuffer_virtualaddr` 虚拟地址通路。
+
+### 4.3 RKNPU2 零拷贝张量绑定 (`rknn_create_mem_from_fd`)
+
+- **零内存拷贝输入导入**：
+  当输入张量是由有效 DMA-BUF 派生时（`tensor.dma_buf_fd() >= 0`），使用 `rknn_create_mem_from_fd` 将 DMA-BUF fd 注册为 NPU 内存对象，并调用 `rknn_set_io_mem` 完成直绑：
+  ```cpp
+  rknn_tensor_mem* mem = rknn_create_mem_from_fd(ctx, tensor.dma_buf_fd(), tensor.data(), tensor.byte_size(), 0);
+  rknn_set_io_mem(ctx, mem, &attr);
+  ```
+- **资源生命周期 Guard**：绑定生成的 `rknn_tensor_mem` 在执行 `rknn_run` 完毕后及时通过 `rknn_destroy_mem` 释放 NPU IO 映射，避免 NPU 内存上下文泄露。
+- **软硬件自动降级**：当输入张量为常规 CPU 虚拟内存时，后端自动采用标准的 `rknn_inputs_set` 内存拷贝流程。
+
+---
+
+## 5. 验证命令
 
 ```bash
 # 1. 检查头文件依赖隔离（仅允许在 native/src/backends/rknn/ 引用）
@@ -123,6 +161,9 @@ grep -rn '#include.*rknn_api.h' native/src/ native/sdk/ native/include/
 readelf -d build/native/cross-rk3568-rknn/libZhulongAlgoRuntime.so | grep -E 'NEEDED|RUNPATH'
 readelf -d build/targets/rk3568-rknn/Zhulong | grep NEEDED
 
-# 3. 交叉构建
+# 3. 运行本地 DMA-BUF 分配器与 IPC SCM_RIGHTS 传输单元测试
+python3 native/scripts/build.py test
+
+# 4. 交叉构建
 python3 native/scripts/build.py --profile native/profiles/rk3568-rknn.json build
 ```

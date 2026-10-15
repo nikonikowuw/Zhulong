@@ -27,7 +27,8 @@
 3. **结构化人体/人脸**：`ZHULONG_RESULT_TYPE_PERSON_STRUCTURE` (3) + `zhulong_person_item[]`（支持 1:N 嵌套人脸 `zhulong_face_item` 与 Top-K 候选人 `zhulong_face_candidate`）。
 
 全系统（通用目标检测、人体/人脸结构化、IPC 消息、Go 宿主领域模型与前端渲染）统一采用 `[x1, y1, x2, y2] ∈ [0.0, 1.0]` 严格归一化两点坐标，全面废弃 `(x, y, w, h)` 语义。
-结果内存由插件创建，并只能通过同一插件的 `result_release` 释放。添加分类与结构化能力保持 v1 函数表与 `zhulong_frame_view` 布局稳定（数据层多态）。
+结果内存由插件创建，并只能通过同一插件的 `result_release` 释放。添加分类与结构化能力保持 v1 函数表布局稳定（数据层多态）。
+`zhulong_frame_view` 包含 `int32_t dma_buf_fd` 字段（硬件 DMA-BUF 句柄，有效时 `>= 0`；POSIX SHM 虚拟内存降级时为 `-1`），利用原 4 字节自然填充缝隙安置，严格维持 8 字节自然对齐与 88 字节总尺寸不变。C++ SDK `zhulong::Image` 提供 `int dma_buf_fd() const noexcept` 便捷访问器。
 结构化结果采用**单块连续 Arena 内存打包（Contiguous Arena Packing）**，所有嵌套子指针指向 Arena 内部偏移，`result->internal_token` 指向首地址，`result_release` 通过单次 `std::free` 彻底释放整棵树，杜绝内存碎片与嵌套泄漏。
 结构化坐标严格归一化到 `[0.0, 1.0]`，关键点（5 点）同样严格归一化。纯人脸检测场景下采用退化语义：每个检出人脸映射为一个 `zhulong_person_item`（`track_id=0`，`body_box=face_box`，`body_score=1.0`）。
 
@@ -176,7 +177,15 @@ zhulong_algo_runner --verify-plugin <path_to_plugin.so> --sample <test_image_or_
 - **四态 Socket 状态机与半包熔断**：流读取使用四态机制（`SUCCESS`、`IDLE_TIMEOUT`、`CLOSED`、`DESYNC_ERROR`）。半包超时或错位直接置为 `DESYNC_ERROR` 并主动断开连接。
 - **发送超时隔离与最大 Payload 门禁**：服务端套接字配置 50ms `SO_SNDTIMEO` 发送超时；IPC 消息强制执行 `MAX_IPC_PAYLOAD_SIZE = 64KB` 尺寸检查与线程级 `try ... catch` 异常防爆门。两侧常量与 Go 侧 `MaxIpcPayloadSize` 保持一致。
 - **在途配额原子回滚**：槽位写入异常或 Socket 发送失败时，原子回退预分配的 `in_flight_count`、`delivered_frames`，并记入 `dropped_frames`。
-- **多平面逐行安全复制**：多平面帧（`YUV420P`、`NV12`）写入共享内存时分平面逐行拷贝，严禁将 `data[0]` 假定为连续缓冲区进行越界 `memcpy`。
+### 6.5 DMA-BUF 硬件零拷贝与 SCM_RIGHTS 传输契约
+
+- **跨进程句柄透传**：在支持 DMA-BUF 的边缘平台（如 RK3568），宿主 `FrameBroker` 在槽位分配时通过 `DmaBufAllocator` 预分配物理连续内存（CMA/System Heap）。通过 Unix Domain Socket 发送 `MSG_FRAME_DISPATCH` 时，利用 `SCM_RIGHTS` 辅助数据（`sendmsg`/`recvmsg`）将底层 DMA-BUF 引用文件描述符安全复制到 Runner 进程。
+- **FD 接收与安全闭环**：
+  - Runner 进程利用 `recvmsg` 提取 `SCM_RIGHTS` fd，并自动标记 `FD_CLOEXEC`（`recv_msg_with_fd`）；
+  - 提取的 fd 赋值入 `zhulong_frame_view.dma_buf_fd` 暴露给插件；
+  - ⚠️ **严禁句柄泄漏**：Runner 进程在完成单帧推理并发出 `MSG_FRAME_ACK` 后，**必须立刻 close 接收到的局部复制 fd**。FrameBroker 端负责物理 slot 的持有与释放，两侧生命周期解耦。
+- **CPU Cache 同步守则**：DMA-BUF 在 CPU 软件访问前必须执行 `DMA_BUF_IOCTL_SYNC` 带 `DMA_BUF_SYNC_START`；硬件外设（RGA/NPU）读取前执行 `DMA_BUF_SYNC_END` 刷写脏缓存行，确保外设读取到最新像素。
+- **透明优雅降级**：非 Linux 环境或无 `/dev/dma_heap` 支持时，`dma_buf_fd` 恒为 `-1`，系统透明降级至纯 POSIX 共享内存与 CPU 软处理，上层无感。
 
 ---
 
