@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "Plugin ABI, task_type, runner CLI, and gallery contract"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "Algorithm package layout, manifest.json schema, and verification gates"}
+{"file": ".trellis/tasks/10-14-face-recognition-e2e/research/face-model-baseline.md", "reason": "Face model baseline: preprocessing, alignment, feature dimensions, thresholds"}

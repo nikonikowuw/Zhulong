@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "Verify result_type, ABI memory ownership, and exit codes"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "Verify package topology, verifier gates, and compute budget"}

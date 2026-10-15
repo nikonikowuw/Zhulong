@@ -319,13 +319,60 @@
 
 ### Status
 
-[OK] **Completed**（等待归档）
+[OK] **Completed**（已归档）
 
 ### Next Steps
 
 - 推进人脸识别端到端后继子任务：
   - `10-14-face-algo-package`（实现人脸识别算法包构建与 1:N 检索）
   - `10-14-face-result-frontend`（前端叠加与记录展示）
+
+---
+
+## 2026-10-15: 实现人脸识别算法包 (10-14-face-algo-package)
+
+### Task Information
+
+- **Task**: 10-14-face-algo-package (实现人脸识别算法包)
+- **Parent**: 10-14-face-recognition-e2e
+- **Package**: native, backend
+- **Type**: feature / algorithm package & plugin
+
+### Implementation Details
+
+- **进程内跨库底库共享注册表 (`GalleryRegistry`)**：
+  - 在 `native/src/algorithm/runtime/gallery_registry.{hpp,cpp}` 中实现进程内跨库单例，集成至 `ZhulongAlgoRuntime`；
+  - 采用写时复制读写隔离（`reset`, `upsert`, `remove` 原子重构 `snapshot_`），推理热路径通过 `snapshot()` 获取不可变智能指针，零锁争用；
+  - 联动 `native/src/algorithm/runner/gallery_index.hpp`，下行 `MSG_GALLERY_*` 消息自动同步至全局 `GalleryRegistry` 单例；
+- **人脸识别插件 (`FaceRecognitionPlugin`)**：
+  - 在 `packages/face_recognition/src/` 中实现：
+    - `matcher.{hpp,cpp}`：512 维特征向量余弦相似度计算与 Top-K 堆排序；
+    - `aligner.{hpp,cpp}`：ArcFace 5 点参考模板几何对齐（Umeyama 相似变换矩阵求解）；
+    - `face_recognition.cpp`：实现纯 C ABI 导出插件，支持通过 `init(config_json)` 动态配置 `threshold` 与 `top_k`；输出退化结构化人体项（`track_id = 0`, `body_score = 1.0f`, `body_box = face_box`）；
+- **算法包源码工程与目标芯片物理隔离**：
+  - 建立 `packages/face_recognition/` 结构，按 `targets/cpu/` 与 `targets/rk3568/` 严格隔离芯片专属 `manifest.json` 与权重模型；
+  - 编写 `packages/face_recognition/scripts/build_package.py` 自动化组装与黑盒校验脚本，一键生成单一目标扁平 `.tar.gz` 算法包；
+- **测试与验证门禁**：
+  - `native/tests/face_recognition_plugin_test.cpp`：覆盖空底库验包、正样本命中（>0.999）、负样本阈值拒绝与全黑图像无脸负样本测试；挂载入 CTest（18/18 全绿）；
+  - `internal/algorithm/face_recognition_pkg_test.go`：验证打出的算法包通过 Go 侧 `verifier.StageAndVerify` 静态校验与动态 Runner 执行门禁；
+  - 更新 `.trellis/spec/native/algo-plugin-contract.md` §7.4 登记 `GalleryRegistry` 规约。
+
+### Testing
+
+- [OK] `make native-test`：18/18 CTest 全绿通过
+- [OK] `go test -race ./internal/algorithm -run TestFaceRecognitionPackageVerification`：通过
+- [OK] `make go-check`：全包 -race、vet、gofmt 与 RTSP 真实桥接测试全绿通过
+- [OK] `make check`：全栈测试通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推进前端识别结果展示子任务：
+  - `10-14-face-result-frontend`（实现识别结果前端叠加与记录）
+
 
 
 
