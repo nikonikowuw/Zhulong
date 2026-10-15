@@ -13,7 +13,8 @@
 | [CGO 交互与内存契约](./cgo-contract.md) | 内存所有权、不透明句柄、Go 指针规则、异常隔离与线程绑定 |
 | [RTSP 接入与静态构建合同](./ingestion-contract.md) | 已实现 ABI、回调 drain、时钟/超时、FFmpeg 缓存与 host/cross/CGO 链接 |
 | [节点流水线设计](./pipeline-guidelines.md) | 节点职责、有界队列背压、零拷贝缓冲传递、5 步优雅停机 |
-| [算法插件系统与 SDK 规范](./algo-plugin-contract.md) | 纯 C ABI 隔离、现代 C++17 SDK、公共运行库 HAL、独立验包 CLI、RKNN 推理后端合同 |
+| [算法插件系统与 SDK 规范](./algo-plugin-contract.md) | 纯 C ABI 隔离、现代 C++17 SDK、公共运行库 HAL、独立验包 CLI、FrameBroker 共享内存 IPC |
+| [硬件加速后端规范 (RKNN / RGA)](./hardware-backends.md) | RKNN 推理与 RGA 视觉前处理编译期配置、依赖隔离、对齐门禁与实测避坑规约 |
 
 ---
 
@@ -37,4 +38,4 @@ make native-test
 
 该 target 离线构建 C++17 Engine 与固定 FFmpeg 7.1.5 静态依赖，运行生命周期、纯 C ABI、capture 单元、真实 loopback RTSP/RTP 和构建合同测试。首次显式执行 `make native-deps` 或导入本地固定源码包。`make check` 是全栈门禁；ASan/UBSan 与 TSan 使用独立目录，见 [接入合同](./ingestion-contract.md)。Linux 主机验证不等于跨编译或 RK3568 运行验证。
 
-⚠️ **两个交叉 profile 各司其职**：`native/profiles/rk3568.json`（cpu 后端，服务 mock/broker 板端回归）与 `rk3568-rknn.json`（rknn 推理后端，专供 `ZhulongRknnTests`）。二者不可互相替代 —— 详见 [算法插件合同 §8.1](./algo-plugin-contract.md)。
+⚠️ **两个交叉 profile 各司其职**：`native/profiles/rk3568.json`（cpu 后端，服务 mock/broker 板端回归）与 `rk3568-rknn.json`（rknn 推理后端，专供 `ZhulongRknnTests`）。二者不可互相替代 —— 详见 [硬件加速后端规范](./hardware-backends.md)。

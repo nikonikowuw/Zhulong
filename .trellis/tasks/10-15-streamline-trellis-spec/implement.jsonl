@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "算法包发布与 Supervisor 进程模型规范"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法插件 C ABI、C++ SDK 与 IPC 契约"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "HTTP API 路由、分页与 Swagger 规范"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "HTTP 统一响应信封与 AppError 规范"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "流摄取与 CGO 跨层交互契约"}
+{"file": ".trellis/spec/backend/storage-guidelines.md", "reason": "存储安全与媒体路径契约"}

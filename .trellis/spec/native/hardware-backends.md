@@ -1,0 +1,128 @@
+# 原生硬件加速后端规范 (Hardware Backends: RKNN & RGA)
+
+> 异构芯片（Rockchip NPU/RGA）加速后端编译期接入、链接隔离、运行时对齐约束与硬核避坑规约。
+
+---
+
+## 1. 编译期后端配置与正交开关
+
+硬件加速后端由公共运行库 `libzhulong_algo_runtime.so` 实现，在**编译期**通过 CMake cache 变量静态绑定，不引入运行期 `dlopen` 分流：
+
+| 变量 | 取值 | 说明 |
+| :--- | :--- | :--- |
+| `ZHULONG_INFERENCE_BACKEND` | `cpu`（默认）\| `rknn` | 推理后端选择 |
+| `ZHULONG_VISION_BACKEND` | `cpu`（默认）\| `rga` | 视觉前处理后端选择 |
+| `ZHULONG_RKNN_ROOT` | 路径 | 仅 `rknn` 需要；须含 `include/rknn_api.h` 与 `lib/librknnrt.so` |
+| `ZHULONG_RGA_ROOT` | 路径 | 仅 `rga` 需要；须含 `include/rga/im2d.h` 与 `lib/librga.so` |
+
+- **编译防御**：`rknn` 缺 `ZHULONG_RKNN_ROOT` 或 `rga` 缺 `ZHULONG_RGA_ROOT` 时，CMake 触发 `FATAL_ERROR`（fail closed）。
+- **正交性**：两个开关完全解耦，支持任意组合（如「RKNN 推理 + CPU 前处理」、「RKNN 推理 + RGA 前处理」等）。
+- **目标产物归属**：后端实现直接编译进 `libzhulong_algo_runtime.so`。宿主二进制 `Zhulong` 仅静态链接 `libZhulongEngine.a`，**严禁向宿主引入任何厂商 SDK 动态库依赖**。
+- **Profile 分流**：`cpu` 与 `rknn` 采用不同的交叉 profile（`native/profiles/rk3568.json` 与 `rk3568-rknn.json`），避免 mock 插件在 rknn profile 下因缺少真实模型而启动失败。
+
+---
+
+## 2. Rockchip RKNN 推理后端契约 (NPU)
+
+*硬件基线：RK3568（Debian 11 arm64 / 内核 5.10.226 / `librknnrt.so` 2.3.2 / RKNPU 驱动 0.9.8）。*
+
+### 2.1 依赖隔离与符号管理
+
+1. **头文件绝对隔离**：`rknn_api.h` 仅允许在 `native/src/backends/rknn/` 内包含，严禁外溢至公开 SDK 头文件。
+2. **正确链接目标**：
+   - 必须动态链接 `librknnrt.so`（SONAME 即 `librknnrt.so`）。
+   - ⚠️ **严禁链接陈旧的 `librknn_api.so`**（板端历史残留 1.5.2 版本，会导致运行期符号缺失）。
+3. **RPATH 与链接选项**：
+   - 必须显式添加 `-Wl,-rpath-link,<rknn>/lib` 供 GNU ld 解析传递依赖符号；
+   - 必须清空产物 `BUILD_RPATH`（`set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")`），杜绝开发机绝对路径烧入 `.so`。
+
+### 2.2 ⚠️ `RKNN_QUERY_MEM_SIZE` 破坏上下文规避（2.3.2 缺陷）
+
+- **故障现象**：执行过 `RKNN_QUERY_MEM_SIZE` 的 `rknn_context`，后续执行 `rknn_dup_context` 时必定发生 **SIGSEGV** 崩溃在 `librknnrt.so` 内部。
+- **强制规避契约**：**主 root 上下文严禁调用 `RKNN_QUERY_MEM_SIZE`**。若需获取内存大小用于审计/遥测，必须通过独立临时上下文查询后立即销毁：
+
+```cpp
+rknn_context probe = 0;
+if (rknn_init(&probe, path, 0, 0, nullptr) == RKNN_SUCC) {
+    rknn_query(probe, RKNN_QUERY_MEM_SIZE, &asset->mem_size, sizeof(asset->mem_size));
+    rknn_destroy(probe);
+}
+```
+
+### 2.3 权重共享与会话派生 (`rknn_dup_context`)
+
+- **实测收益**：RK3568 真机验证，同一模型 4 个 Worker 会话，1 次 `rknn_init` + 4 次 `rknn_dup_context` 相比 4 次独立 init，常驻内存增量从 50.4MB 骤降至 14.3MB（**节省约 3.5× 物理内存**）。
+- **串行化派生**：`rknn_dup_context` 的派生调用必须受互斥锁（`dup_mutex`）保护，不可并发调用。
+- **生命周期所有权**：
+  - `RknnModelAsset` 持有根上下文与 `dup_mutex`，进程内多 Worker 共享；
+  - `RknnSessionContext` 持有派生上下文与所属 ModelAsset 的 `shared_ptr`，确保根上下文晚于所有 Worker 会话销毁。
+  - 创建过程失败时必须严格回滚资源，杜绝 double-destroy。
+
+### 2.4 错误码映射表 (14 码覆盖)
+
+| RKNN 状态码 | 统一映射状态 | 语义说明 |
+| :--- | :--- | :--- |
+| `RKNN_SUCC` (0) | `ZHULONG_STATUS_OK` | 成功 |
+| `PARAM_INVALID`, `MODEL_INVALID`, `CTX_INVALID`, `INPUT_INVALID`, `OUTPUT_INVALID` | `ZHULONG_STATUS_INVALID_ARGUMENT` | 参数或模型格式非法 |
+| `DEVICE_UNAVAILABLE`, `DEVICE_UNMATCH`, `TARGET_PLATFORM_UNMATCH`, `INCOMPATIBLE_*` | `ZHULONG_STATUS_NOT_SUPPORTED` | 运行环境或平台不匹配（非代码缺陷） |
+| `MALLOC_FAIL` | `ZHULONG_STATUS_OUT_OF_MEMORY` | 内存不足 |
+| `TIMEOUT` | `ZHULONG_STATUS_TIMEOUT` | 超时 |
+| `FAIL` 及其他未知码 | `ZHULONG_STATUS_INTERNAL` | 底层内部错误 |
+
+### 2.5 数据传输与并发约束
+
+1. **输入缓冲要求 Packed**：`rknn_input` 无 stride 字段，传入内存必须紧凑排布。输入校验按元素总数 `inputs[i].element_count() == attr.n_elems` 比对，适配 UINT8 图像到 FP16 模型的内部自动转换。
+2. **输出 Float32 自动归一**：设置 `want_float = 1` 由 runtime 统一写出 float32，避免手写反量化公式。
+3. **输出资源释放 Guard**：`rknn_outputs_release` 必须由 RAII guard 管理，保证异常路径亦被释放。
+4. **单核 NPU 特性**：RK3568 为单核 NPU，增加 Worker 数仅能重叠前后处理时间，不能提升纯 NPU 推理并行度；严禁开启未经充分验证的 `RKNN_FLAG_ASYNC_MASK`。
+
+---
+
+## 3. Rockchip RGA 视觉前处理后端契约 (2D Rasterizer)
+
+*硬件基线：RK3568（Debian 11 bullseye arm64 / 内核 5.10.226 / RGA 驱动 v1.3.4 / `librga.so.2.1.0` API `v1.10.1_[10]`）。*
+
+### 3.1 运行期硬件探测与对齐门禁
+
+RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码对齐参数**：
+
+- **行跨度对齐 (`byte_stride_align`)**：从 `/sys/kernel/debug/rkrga/hardware` 读取（RK3568 实测为 **4** 字节）。未读取到有效值时自动回退 CPU。
+- **ROI 偏移对齐 (`offset_align`)**：在测试缓冲调用 `imcheck_t` 动态探测（RK3568 实测为 **2** 像素）。
+- **设备权限约束**：`/dev/rga` 设备节点属组为 `root:video`。运行 Runner 的系统用户**必须加入 `video` 组**，否则驱动打开失败自动退化为 CPU。
+
+### 3.2 格式能力矩阵与颜色转换语义
+
+| 输入格式 | RGA 硬件加速 | CPU 回退行为 | 约束与内存布局 |
+| :--- | :---: | :---: | :--- |
+| `RGB24` / `BGR24` | ✅ | ✅ | 紧凑排布或满足 4 字节行对齐；目标输出为 HWC UINT8 |
+| `RGBA32` | ✅ | ❌ | 单平面 4 字节/像素，硬件完成 CSC 提取与缩放 |
+| `NV12` | ✅ | ❌ | **仅支持连续内存**（plane1 == plane0 + y_stride * height）；非连续内存返回 `NOT_SUPPORTED` |
+| `YUV420P` | ✅ | ❌ | **仅支持连续内存**（plane1/plane2 紧密相连）；非连续内存返回 `NOT_SUPPORTED` |
+| `UNKNOWN` | ❌ | ❌ | 显式返回 `ZHULONG_STATUS_NOT_SUPPORTED` |
+
+- **色彩空间转换**：硬件 CSC 采用 **Limited-range BT.601** 标准公式（YUV 16-235 映射至 RGB 0-255）。
+
+### 3.3 防挂死契约与两阶段裁剪 (Anti-Hang Rules)
+
+1. ⚠️ **严禁对目标缓冲区做指针偏移（防 DMA OOB 越界死锁）**：
+   - **致命陷阱**：在 Letterbox 计算中，若将目标 ROI 指针（`dst_buf + roi_offset`）直接传给 `wrapbuffer_virtualaddr`，驱动会基于该偏移指针按完整 `wstride × hstride` 计算 DMA 地址，导致访问越出 Tensor 物理边界，引发 RGA 硬件陷入 D 状态死锁并导致板端看门狗复位！
+   - **正确做法**：目标缓冲恒定以全尺寸（`target_w × target_h`）包装为 `dst_buffer`，指针本身不偏移；偏移量完全通过 `improcess` 的 `drect`（`pad_left, pad_top, unpad_w, unpad_h`）传递。
+2. ⚠️ **强依赖 `imcheck_t` 预校验**：每次调用 `improcess` 前必须使用 `imcheck_t` 预校验 `srect` 与 `drect` 合法性，失败直接在软件层拦截并回退 CPU。
+3. **两阶段裁剪对齐适配 (`crop_scale`)**：当裁剪 ROI 坐标不满足 2 像素对齐时，采用**参数向外扩取整**适配，杜绝原地内存搬运。
+4. **滤波差异验收容差**：RGA 硬件双线性插值与 CPU 浮点中心双线性滤波核函数不同，下采样（如 1080P → 640x640）单像素极值差可达 119。测试断言采用 `worst <= 128` 判定一致性。
+
+---
+
+## 4. 验证命令
+
+```bash
+# 1. 检查头文件依赖隔离（仅允许在 native/src/backends/rknn/ 引用）
+grep -rn '#include.*rknn_api.h' native/src/ native/sdk/ native/include/
+
+# 2. 检查宿主与动态库依赖（宿主绝对不链接厂商 SDK）
+readelf -d build/native/cross-rk3568-rknn/libZhulongAlgoRuntime.so | grep -E 'NEEDED|RUNPATH'
+readelf -d build/targets/rk3568-rknn/Zhulong | grep NEEDED
+
+# 3. 交叉构建
+python3 native/scripts/build.py --profile native/profiles/rk3568-rknn.json build
+```

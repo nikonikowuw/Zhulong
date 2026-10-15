@@ -147,9 +147,9 @@ f, err := root.Open(relPath)         // 返回 *os.File，支持 Seek，可直�
 
 ⚠️ **错误信息不泄露根路径**：文案中不插值 `mediaDir`，内部原因只进 Zap。
 
-### 3.3 裸字节例外与 Range 行为
+### 3.3 裸字节例外与 Range 行为契约
 
-⚠️ **完整规范见 [http-api-guidelines.md §7](./http-api-guidelines.md)**。要点：
+本服务作为裸字节数据面端点，遵循以下 Range 传输规范：
 
 - 成功体是裸字节，**失败体不是**；**416 是 `text/plain`**（`net/http` 直接写），且不回写 `Accept-Ranges`。前端**不得假定成功与失败同构**；
 - **错误必须先于 `ServeContent` 判定完毕**（它一旦开始写就接管状态行与 `Content-Length`）；

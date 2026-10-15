@@ -12,34 +12,12 @@
 
 ---
 
-## 2. 统一 API 响应信封与后端 i18n 契约
+## 2. 统一 API 响应信封与时间契约
 
 所有 JSON 响应必须包含 `code`、`message`、`data` 三个字段；仅 HTTP 422 字段校验错误可额外包含 `details`。所有错误响应的 `data` 固定为 `null`。
 
-- **`code`**：稳定的机器可读业务状态码。成功固定为 `"OK"`；错误码采用大写蛇形（如 `CAMERA_NOT_FOUND`、`VALIDATION_FAILED`）。
-- **`message`**：后端根据请求头 `Accept-Language`（`en` / `zh-Hans` / `zh-Hant`）本地化。前端可直接展示，不需再次翻译业务错误码。
-- **`data`**：成功时为业务载荷；错误时必须为 `null`，不得省略。
-- **`details`**：仅用于 HTTP 422 字段校验错误，可选数组。每项包含请求 JSON 字段路径、稳定字段错误码和按 `Accept-Language` 本地化的消息。不得包含被拒绝的原始输入或内部错误。
-
-```json
-// 成功 (HTTP 200/201)
-{ "code": "OK", "message": "success", "data": { "id": "cam_01", "name": "Gate-4K" } }
-
-// 一般错误 (HTTP 404)
-{ "code": "CAMERA_NOT_FOUND", "message": "指定的摄像机不存在", "data": null }
-
-// 字段校验错误 (HTTP 422)
-{
-  "code": "VALIDATION_FAILED",
-  "message": "请求参数校验失败",
-  "data": null,
-  "details": [
-    { "field": "fps", "code": "MIN_VALUE", "message": "帧率不能小于 1" }
-  ]
-}
-```
-
----
+- **单一真实源**：完整信封结构体定义、`AppError` 错误传播、HTTP 状态码映射与基于 `Accept-Language` 的多语言错误翻译契约，统一以 [错误处理与统一响应契约规范](./error-handling.md) 为准。
+- **严禁裸写**：业务 Handler 必须通过 `httputil.Success(c, data)` 或 `httputil.WriteError(c, err)` 写回响应，严禁直接手写裸 `c.JSON(...)`。
 
 ### 时间字段格式与时区
 
@@ -54,12 +32,15 @@
 为确保前后端在所有列表接口上的契约严格统一，禁止返回裸数组，所有分页接口遵循以下规约：
 
 ### 请求参数标准（Query Parameters）
+
 - **`page`**：整数，页码，**从 1 开始**（默认 `1`）。若传入 `< 1`，后端强制归一化为 `1`。
 - **`pageSize`**：整数，每页条数（默认 `20`，**硬上限 `100`**）。若传入 `<= 0`，归一化为 `20`；若 `> 100`，截断为 `100`。
 - **兼容别名支持**：后端通过 `httputil.PaginationQuery` 统一解析，若请求提供了 `limit` / `offset`，自动换算为对应的 `page` 与 `pageSize`。
 
 ### 响应载荷四元组（Data Envelope）
+
 所有分页接口的 `data` 必须返回固定四元组对象：
+
 ```json
 {
   "code": "OK",
@@ -180,56 +161,14 @@ apiClient.get('/audit/logs', {
 
 ---
 
-## 7. 数据面端点的裸字节例外（binary / Range 传输）
+## 7. 裸字节数据面端点与 Swagger 白名单契约
 
-> 适用于返回**文件字节流**而非 JSON 载荷的端点（当前为 `internal/mediafile` 的 `/media/content/*path`）。
+### 7.1 二进制裸字节传输例外
 
-### 7.1 例外范围必须最小且显式
+- 统一响应信封（§2）**仅对 JSON 业务端点强制生效**。对于返回原始文件字节流的数据面端点（如 `internal/mediafile` 的 `/media/content/*path`），成功时允许直接返回裸 body（HTTP 200/206 Range 传输）。
+- 该例外仅覆盖成功响应；除 416 Range Not Satisfiable（由标准库直接写纯文本）外，其余所有错误响应（401/404/422/503）仍必须返回统一 JSON 错误信封。
+- 具体 Range 处理、416 文本、HEAD 显式注册与内核级 `os.Root` 防护详见单一真实源：👉 [媒体文件服务规范](./mediafile-guidelines.md)。
 
-- 信封铁律（§2）**仅**对 JSON 端点成立。字节流端点返回裸 body，属**有意例外**，必须在 Swagger 注释中写明「成功响应不是信封」。
-- 例外只覆盖**成功响应**。该端点的失败响应仍遵循 §2 的信封，**唯一例外是 416**。
+### 7.2 Swagger 生成的 `--dir` 显式白名单
 
-### 7.2 错误响应形态矩阵（前端必须按 Content-Type 分支）
-
-| 情形 | 状态 | body |
-| --- | --- | --- |
-| 成功（全量） | 200 | 裸字节流 |
-| 成功（Range） | 206 | 裸字节流 |
-| Range 语法/范围非法 | 416 | **`text/plain`**（`net/http` 直接写出） |
-| 未鉴权 | 401 | JSON 信封 |
-| 路径非法 / 目录 | 422 | JSON 信封 |
-| 文件不存在 | 404 | JSON 信封 |
-| 媒体根不可用 | 503 | JSON 信封 |
-
-⚠️ **禁止假定成功与失败同构**。`http.ServeContent` 在 416 时写的是纯文本 `invalid range`，且**不回写** `Accept-Ranges`。
-
-### 7.3 错误必须先于 `ServeContent` 判定完毕
-
-`ServeContent` 一旦开始写就接管了状态行与 `Content-Length`。因此顺序必须是：**参数校验 → 打开 → 类型判定（`IsDir`）→ 全部通过后才调用 `ServeContent`**。否则会把 JSON 写进一个已定长的响应。
-
-### 7.4 使用 `ServeContent`，禁止 `c.File()`
-
-`c.File()` 接受**路径字符串**并自行 `os.Open`，会绕过基于 `os.Root` 的内核级约束。`ServeContent` 接受 `io.ReadSeeker`，可吃 `*os.File` 并完整实现 RFC 7233。
-
-### 7.5 Range 边界行为（标准库实测，与常见预期不同）
-
-| Range | 状态 | 说明 |
-| --- | --- | --- |
-| `bytes=abc`（语法错） | **416** | **不是**忽略 Range 返回 200 |
-| `bytes=-0` | **206** + 零字节体 | 不是 416；前端循环必须容忍 |
-| `bytes=0-16`（上界越界 1） | **206** + 截断为 `bytes 0-15/16` | 上界越界**静默截断** |
-| `bytes=16-`（起始 == 长度） | **416** | 起始越界才 416 |
-| 多 Range | 206 | `multipart/byteranges`，**不走 sendfile** |
-| `If-Range` 不匹配 | **200** | 降级为全量，**不是 412** |
-
-### 7.6 HEAD 必须显式注册
-
-**Gin 不会为 GET 路由自动派生 HEAD**：未显式注册时，HEAD 请求会落到 `NoMethod` 返回 **404**。浏览器与媒体客户端会用 HEAD 探测大小与 Range 支持，缺失该路由会让它们误判文件不存在。显式注册 `group.HEAD(...)` 即可，`ServeContent` 会自动抑制 body 并保留 `Content-Length`。
-
-### 7.7 503 必须显式构造
-
-`httputil.KindToHTTPStatus` **没有 `ServiceUnavailable` 分支**，`apperr.KindInternal` 会映射为 **500**。需要 503 时必须用 `httputil.NewError(http.StatusServiceUnavailable, ...)` 显式构造（可参考 `internal/mediafile` 的 `writeMediaError`）。
-
-### 7.8 Swagger 的 `--dir` 是显式白名单
-
-`make api-docs` 的 `--dir` 是**目录白名单**。新增业务包若未加入，其端点**根本不会被扫描**，`internal/apidocs` 零 diff 会被误读为「文档与实现一致」。**新增模块必须同步 `Makefile` 的 `--dir`**，并断言 `swagger.json` 中出现新路径。
+`Makefile` 中 `make api-docs` 命令的 `--dir` 参数采用**显式目录白名单**。若新增了业务模块且包含 Swagger 注释端点，**必须同步在 `Makefile` 的 `api-docs` target 中追加该目录**；否则新端点不会被扫描，导致 Swagger 文档静默遗漏。

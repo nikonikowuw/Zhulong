@@ -1,219 +1,97 @@
-# Native ingestion and static build contract
+# 原生视频接入与静态构建合同 (Ingestion Contract)
 
-## 1. Scope / Trigger
+> `include/Zhulong/engine.h` C ABI 门面、RTSP 接入生命周期、CGO 超时解耦、静态 FFmpeg 归档与跨平台构建契约。
+> 当修改引擎 ABI、拉流生命周期、静态 FFmpeg 版本、CMake 构建脚本、CGO 链接配置或交叉编译 Profile 时执行本合同。
 
-Changes to `native/include/Zhulong/engine.h`, RTSP capture/lifecycle, static
-FFmpeg dependency selection, CMake, CGO linking, or cross-target selection require
-these regression checks. Go camera business logic, decoding, recording,
-VPU/NPU and board support are outside the current implementation.
+---
 
-## 2. Signatures
+## 1. 导出 C ABI 签名概览 (`engine.h`)
 
-Exact C-compatible types/signatures live in the sole public header `engine.h`:
+所有符号均在唯一公开头文件 `native/include/Zhulong/engine.h` 中以纯 C 导出：
 
-- Existing: `Zhulong_engine_create/start/stop/destroy` (old statuses preserved).
-- `Zhulong_engine_probe(engine, url, options, out_result)`;
-  `Zhulong_probe_result_view(result, out_view)`; `Zhulong_probe_result_destroy(result)`.
-- `Zhulong_stream_acquire(engine, url, options, consumer_id, consumer_kind, out_stream)`;
-  `Zhulong_stream_release(engine, stream, consumer_id)`;
-  `Zhulong_stream_get_status(engine, stream, out_status)`.
-- `Zhulong_stream_subscribe(engine, stream, preview_consumer_id, callback, uintptr_t_token, out_subscription)`;
-  `Zhulong_stream_unsubscribe(engine, stream, subscription)`.
-- Build: `make native-deps` (explicit network); `make native-build/native-test/go-check`;
-  `python3 native/scripts/build.py go build|test|vet ...`.
-- Cross: `make native-cross-build CROSS_PROFILE=... CROSS_OUTPUT=build/targets/NAME/Zhulong`.
-  Profile fields: `name`, `cc`, `cxx`, `ar`, `ranlib`, `sysroot`, `arch`, `goarch`,
-  `target_os: linux`, optional `cflags`/`ldflags` arrays; 32-bit ARM requires `goarm`.
+- **引擎生命周期**：`Zhulong_engine_create`、`start`、`stop`、`destroy`
+- **流探测 (Probe)**：`Zhulong_engine_probe`、`Zhulong_probe_result_view`、`Zhulong_probe_result_destroy`
+- **流会话生命周期**：`Zhulong_stream_acquire`、`release`、`get_status`
+- **帧包订阅通道**：`Zhulong_stream_subscribe`、`unsubscribe`
+- **构建入口**：`make native-deps`（联网拉取固定依赖）、`make native-build`、`make native-test`、`make go-check`
+- **交叉编译**：`make native-cross-build CROSS_PROFILE=... CROSS_OUTPUT=build/targets/NAME/Zhulong`
 
-## 3. Contracts
+---
 
-- `options == NULL` or zero timeout fields select TCP / 5000ms open / 5000ms idle.
-  Open and stream-info share one monotonic deadline; idle resets only on selected
-  video packets. Even successful stream-info returns must be checked for expired
-  deadline/cancellation (FFmpeg can return partial metadata after interruption).
-- **Go-side ctx cancellation must not be clamped into the native timeout for
-  async-cancellable calls.** `internal/engine` distinguishes two shapes:
-  - `Probe` is async-cancellable (it selects on `ctx.Done()`), so the ctx deadline
-    is **not** folded into the native open timeout. Folding it in truncates to
-    milliseconds (199.7ms -> 199ms), which lets the native timeout fire *before*
-    the ctx deadline while `ctx.Err()` is still nil. The call then returns the
-    engine `TIMEOUT` instead of `context.DeadlineExceeded`, degrading cancellation
-    into a scheduler-timing race (measured 4/15 failures under load). With the
-    clamp removed, ctx cancellation is the sole authority and the native timeout
-    is only a backstop.
-  - `Acquire` is a synchronous, non-cancellable CGO call, so it **does** clamp to
-    the ctx deadline; otherwise the underlying blocking call would overshoot the
-    caller's budget.
-  An already-expired deadline fails fast in both modes. Regression coverage lives in
-  `internal/engine/validation_test.go` (`TestResolveTimeoutMs`) and
-  `internal/engine/integration_test.go` (`TestBridgeIntegration_Probe`).
-- Only the input-owning thread accesses/closes AVFormatContext. Cancel **before**
-  close even for a successful synchronous probe: TEARDOWN may stop responding.
-  Stop signals all workers/probes, joins the timer/workers, and drains callbacks.
-  System DNS and arbitrary blocking user callbacks are not hard-interruptible.
-- Destroy is externally serialized with every other operation, including probe.
-  No control/probe/destroy API from callbacks; status functions reject callback
-  context before taking control locks. Void destroy defensively ignores callback
-  invocation, which is forbidden and must be corrected by the owner.
-- A stream is deduplicated by normalized valid RTSP URI. Only protocol/host/default
-  port/outer whitespace change. Credentials/path/query preserve semantics. Duplicate
-  consumer IDs never increment references; transport/timeouts must match.
-- Preview subscription needs an acquired Preview consumer; it adds no reference.
-  One subscription per consumer. Unsubscribe prevents new callback admission and
-  drains any in-flight invocation, including a worker's earlier snapshot.
-  Release requires unsubscribe first. Zero consumers start an 8-second grace;
-  reacquire cancels expiry. Stop invalidates IDs. Failed streams do not reconnect;
-  reacquire during grace keeps their failed state until all references expire.
-- Native owns result and packet buffers. Probe-result view lasts until result
-  destroy, independent of engine lifetime. Packet view lasts only during callback.
-  A retained packet needs a consumer copy. Integer callback tokens are not Go
-  pointers; future Go code deletes `cgo.Handle` only **after** successful drain.
-- PTS/DTS retain original ticks/time_base, with explicit absence flags and zero
-  value when absent. Do not convert missing timestamps into valid zero timestamps.
-  Unknown FPS is 0/1; dimensions/codec must be valid. Extradata is dynamic, may be
-  missing, is never truncated and does not imply Annex B. No decode/GOP dropping.
-- Raw FFmpeg logging is disabled process-wide by engine initialization because it
-  can disclose URLs/credentials. Only controlled error codes leave capture.
-- FFmpeg 7.1.5 SHA-256 is
-  `de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f`.
-  Native configure/build never fetches; explicit preparation accepts HTTPS or a
-  local archive. No shared FFmpeg fallback. Only avformat/avcodec/avutil archives
-  plus system dependencies from their target `.pc` files reach the final Go link.
-- Cache identity includes version/source/recipe/resolver, target, flags, compiler
-  binaries/version/backend/runtime inputs and sysroot content. Sysroot symlinks
-  escaping that tree are rejected rather than reading untracked host SDK inputs.
-  Host/cross trees never overwrite each other. Ambient compiler search paths
-  (`CPATH`, `C*_INCLUDE_PATH`, `LIBRARY_PATH`, `COMPILER_PATH`, `GCC_EXEC_PREFIX`),
-  SDK/deployment overrides and CGO/compiler flags are rejected before tool discovery:
-  CMake root-path rules alone do not isolate compiler-driver search paths.
-  CMake receives the profile's `ar` and `ranlib` explicitly, not just its compilers.
-  Explicit CMake flags (not merely `*_FLAGS_INIT`) prevent stale ABI flags when a
-  profile changes in an existing build directory. Cross Go commands require one
-  checked `-o`/`-o=...` and, for test compilation, one enabled `-c`; repeated flags
-  must not override the checked output or turn compilation into test execution.
-- Go does not hash external archives: link an immutable archive snapshot named by
-  its content digest, so changed Native code changes CGO_LDFLAGS and cache identity.
-  Bare Go commands no longer select a default Native archive. Make/Air use wrapper.
-- C++17 feature/link checks, not an artificial GCC minimum. Cross tests compile
-  but never execute on the host. Missing SDK fails closed. Source toolchain support,
-  target linking and board runtime compatibility are separate acceptance layers.
-- **Every test target that uses `std::thread` must link `Threads::Threads` explicitly.**
-  The host toolchain (glibc 2.34+) merged pthread into libc, so a missing link
-  dependency is satisfied implicitly and the host build stays green. The RK3568
-  target is Debian 11 / glibc 2.31, where pthread is still a separate library, so
-  the same target fails at link time with `undefined reference to pthread_create`.
-  This is why the cross build is the first place a missing `Threads::Threads`
-  surfaces; `make native-cross-build` must be run before claiming a new test target
-  is portable. `ZhulongAlgoRunnerTests` had this gap and was therefore absent from
-  every historical board-side test run.
+## 2. 核心契约与安全铁律
 
-## 4. Validation & Error Matrix
+### 3.1 默认参数与超时基准
 
-| Condition | Expected |
-| --- | --- |
-| Null engine/output, invalid transport/consumer/URI | INVALID_ARGUMENT; output ID/result cleared |
-| Engine not started/stopped | NOT_RUNNING |
-| Duplicate consumer/subscription | DUPLICATE; no added reference/registration |
-| Same URI, different transport/timeouts | CONFIG_CONFLICT |
-| Release with subscription | BUSY; unsubscribe then retry |
-| Missing consumer/stream/subscription | NOT_FOUND (or NOT_RUNNING after stop) |
-| Non-Preview subscription | INVALID_ARGUMENT |
-| Unsupported codec/no valid dimensions | UNSUPPORTED; no probe result |
-| Open/info/read deadline | TIMEOUT; safe error code, no raw URL text |
-| Stop during registered probe | CANCELLED; stop waits for probe cleanup |
-| Callback tries status-returning ABI | CALLBACK_CONTEXT; no self-wait |
-| Last consumer released then acquired before 8s | Same ID/connection, no extra physical open |
-| Last reference expired | Timer cancels/joins before pool erasure; new ID on new acquire |
-| Missing/corrupt source/static prefix | Build error; no download/shared fallback |
-| Host libraries passed to cross CMake | Configuration failure |
-| Cross Go execution or host output path | Rejected before building |
-| ABI source changed | Only affected object(s), archive, Native tests and Go final link rebuild; unchanged FFmpeg reused |
+- `options == NULL` 或超时填 0 时：默认使用 TCP 传输、5000ms 打开超时、5000ms 空闲超时。
+- 打开流与读取媒体信息共享单调递增的绝对截止时间。即使 FFmpeg 成功返回元信息，也必须二次检查截止时间与取消标记，防止中断后返回残缺元数据。
 
-## 5. Good / Base / Bad Cases
+### 3.2 ⚠️ Go Context 取消与 Native 超时解耦（防时序竞争）
 
-- Good: prepare once; use wrapper for Native and Go; acquire → subscribe → bounded
-  callback copying borrowed data → unsubscribe/drain → release → stop → destroy.
-- Base: Start/Stop/Close remain idempotent for the current Go lifecycle bridge.
-  No subscriptions means no packet callbacks; result ownership is independent.
-- Bad: `-Lbuild/native -lZhulongEngine` forever, host `.pc` lookup during cross,
-  treating a static CMake target as a merged FFmpeg archive, deleting callback
-  token before drain, guessing timestamps/FPS, or claiming host tests certify RK3568.
+在 Go 侧 `internal/engine` 中，根据调用形态对超时执行差异化处理：
 
-## 6. Tests Required
+1. **`Probe`（异步可取消）**：
+   - 依赖 `select { case <-ctx.Done(): ... }` 进行异步取消，**严禁将 `ctx` 截止时间折叠进原生 open timeout**；
+   - 折叠会导致浮点毫秒截断（如 199.7ms 截为 199ms），使原生底层先于 Go ctx 超时报错，返回原生 `TIMEOUT` 错误码而非 `context.DeadlineExceeded`，引发调度竞争故障；
+   - 原生 timeout 仅作为最底层的后备防爆兜底，`ctx` 拥有绝对取消权威。
+2. **`Acquire`（同步阻塞 CGO 调用）**：
+   - 属于同步调用，**必须将 `ctx` 截止时间折叠进原生超时**，防止底层阻塞调用超出调用方的生命周期预算。
 
-`make native-test` runs 15 CTests: lifecycle, pure C ABI, plugin C ABI, algorithm
-runtime, algorithm runner, FrameBroker, verify CLI, capture units, frame lifecycle,
-decoder, JSON round-trip, runner JSON, plugin symbol visibility, loopback RTSP/RTP
-integration, and build contract (13 Python cases). Assert H.264/H.265 metadata/
-packet codec, TCP and UDP, time-base/PTS step, extradata >512 bytes, credential
-silence, one physical connection, actual grace cancellation/expiry, duplicate and
-conflict handling, concurrent consumers, callback reentry rejection, unsubscribe/
-stop drain, open/info/read interruption and cancelled probe cleanup. Include
-unregistering the second callback from a real worker snapshot blocked in the first,
-a throwing C++ callback isolated per subscriber (offender silently disabled, the
-other subscriber keeps receiving packets, stream stays RUNNING) plus successful
-drain, and probe-view data surviving engine destruction. Credential assertions
-inspect both stdout and stderr.
+### 3.3 线程归属与销毁时序
 
-Run Engine ASan/UBSan and TSan in separate directories. UBSan compilation must
-include `-fno-sanitize-recover=undefined` so a diagnostic cannot exit zero and be
-mistaken for a passing CTest. FFmpeg archives themselves
-are not sanitizer-instrumented. `make check` includes frontend checks and Go vet/
-race; `make smoke` builds/runs the real host. The opt-in, exclusive-writer
-`python3 native/tests/verify_incremental.py --allow-source-edit` inserts and restores
-an ABI marker, checks it enters/exits the actual Go binary, and verifies unchanged
-FFmpeg hashes/mtimes and unaffected object files. Do not run it with another writer.
+- **上下文线程亲和**：仅持有 input 所有权的 Worker 线程允许访问与关闭 `AVFormatContext`。在关闭句柄前必须先触发取消（防止 RTSP TEARDOWN 挂死）。
+- **销毁外部串行化**：`Zhulong_engine_destroy` 必须与所有其他 API 外部串行化；严禁在订阅包回调内部调用任何控制、探测或销毁接口。
+- **异常隔离与自愈**：订阅通道回调中抛出 C++ 异常时，引擎必须逐订阅者捕获隔离，仅将违约订阅者置为静默失效，绝不中断同流其他订阅者，也不得将流标记为 FAILED。
 
-### Stale-artifact false green (mandatory evidence)
+### 3.4 流去重与 8 秒宽限期
 
-A passing `make native-test` is **not** evidence that newly added ABI or Engine code
-was compiled. CMake only rebuilds sources whose timestamps changed, so a pre-existing
-`build/native/host` can satisfy the test suite while the archive still lacks the new
-symbols. This actually happened: a commit claimed "`make native-test` 14/14" while
-`nm build/native/host/libZhulongEngine.a | grep -c Zhulong_stream_get_broker_path`
-returned **0**, because the archive and every test binary dated from the previous day.
+- **URI 规范化去重**：按规范化 RTSP URI 执行流去重，相同 URI 复用同一底层流；重复的消费者 ID 不增加引用计数。
+- **8 秒退出宽限期**：当某流所有消费者全部 release（引用归零）后，启动 8 秒宽限期定时器；若 8 秒内有新请求重新 acquire，立即取消定时器并无缝复用物理连接；宽限期满后才真正关闭网络流与释放连接。
 
-When a change touches `native/src/**` (especially `abi/engine.cpp`, the archive, or the
-C ABI), the verification must include **all three**:
+### 3.5 内存所有权与 CGO 指针合规
 
-1. A clean rebuild: `rm -rf build/native/host` before `make native-test`.
-2. The CTest summary line (`100% tests passed, 0 tests failed out of N`).
-3. Archive symbol proof that the new code is actually linked:
+- **包视图即时有效**：回调传递的 `Zhulong_packet_view` 仅在回调同步执行期间有效，下游需要保留数据必须深拷贝；
+- **禁止传递 Go 指针**：回调令牌 `token` 必须通过 `uintptr_t`（`cgo.Handle` 转换的整数）传递，严禁向 C 暴露 Go 堆指针；Go 侧必须在 `unsubscribe` 彻底排空（drain）并确认无在途回调后，方可注销句柄。
+
+### 3.6 静态构建与跨平台链接门禁
+
+- **FFmpeg 静态绑定**：全仓使用固定的 FFmpeg 7.1.5（SHA-256: `de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f`），构建期严禁动态联网下载，绝不回退到系统共享库。
+- **内容寻址归档**：使用基于内容摘要命名引擎静态归档，使 C++ 源码改动能准确使 Go 侧 CGO 缓存失效，杜绝陈旧库静默复用。
+- **⚠️ 交叉编译强制链接 `Threads::Threads`**：宿主（glibc ≥ 2.34）已将 pthread 合并至 libc，容易掩盖缺失依赖；而目标板（如 RK3568 Debian 11 / glibc 2.31）仍为独立 `libpthread`。所有使用 `std::thread` 的测试或库必须显式链接 `Threads::Threads`，否则交叉编译报 `undefined reference to pthread_create`。
+
+---
+
+## 3. 常见状态与校验矩阵
+
+| 条件 | 预期行为 / 返回码 |
+| :--- | :--- |
+| 空句柄、非法 URI 或无效参数 | `Zhulong_ERR_INVALID_ARGUMENT`；清空输出句柄 |
+| 引擎尚未启动或已停止 | `Zhulong_ERR_NOT_RUNNING` |
+| 重复添加相同消费者或订阅者 | `Zhulong_ERR_DUPLICATE`；不增加引用计数 |
+| 相同 URI 传入不同传输协议或超时参数 | `Zhulong_ERR_CONFIG_CONFLICT` |
+| 存在活跃订阅时直接调用流释放 | `Zhulong_ERR_BUSY`；必须先 unsubscribe 后再 release |
+| 未命中消费者、流或订阅句柄 | `Zhulong_ERR_NOT_FOUND` |
+| 打开、读取或流信息解析超时 | `Zhulong_ERR_TIMEOUT`；仅暴露脱敏错误码，禁止外泄 URL 凭据 |
+| 回调内部尝试重入调用控制类 ABI | `Zhulong_ERR_CALLBACK_CONTEXT`；阻断重入死锁 |
+
+---
+
+## 4. 质量验证与陈旧产物防范
+
+```bash
+# 执行完整 15 项 Native CTest 回归
+make native-test
+```
+
+### ⚠️ 防范陈旧产物伪绿 (Stale-artifact False Green)
+
+CMake 仅根据修改时间增量编译。当改动 `native/src/**`（尤其是 `src/abi/engine.cpp`、公开头文件或 C ABI 函数）时，为杜绝旧 `.a` 伪绿，必须执行完整的三步验证：
+
+1. **彻底清理旧构建**：`rm -rf build/native/host`；
+2. **运行全量测试**：`make native-test`（断言 100% 测试通过）；
+3. **符号存在性核验**：
+
    ```bash
-   nm build/native/host/libZhulongEngine.a | grep -c '<new_symbol>'
+   nm build/native/host/libZhulongEngine.a | grep -c '<新增的导出符号>'
    ```
-   A count of `0` for a symbol the change introduced means the run was stale — the
-   suite passed without executing the new code. `T` (defined) plus a `.cold` (exception
-   path) entry is the expected shape for an exported C ABI function.
 
-Corollary: never treat `make native-build` as a substitute for `make native-test` —
-it compiles without running the suite, which is exactly the stale-green pattern.
-
-Inspect final executable ELF/NEEDED/version-info and archive member architecture.
-Target profile for RK3568 is verified in `native/profiles/rk3568.json` (Debian 11 bullseye,
-GLIBC 2.31, GCC 10 sysroot with host GCC 14 cross-toolchain): uses `-nostdinc` with sysroot
-GCC 10 C/C++ headers to prevent host GLIBC 2.34+ symbol leakage, sysroot library search paths,
-and `-Wl,-u,__cxa_call_terminate -lsupc++` for noexcept exception termination resolution.
-Verified on live board via SSH: dynamic dependencies completely resolved (0 missing), smoke
-test pass, native test suite (including loopback RTSP integration) pass, and Go bridge
-integration tests pass.
-See `native/README.md` for source/licensing preservation and distribution limits.
-
-## 7. Wrong vs Correct
-
-Wrong:
-```cpp
-subscriptions.erase(id); // worker snapshot may still invoke the removed token
-// caller deletes cgo.Handle here -> use-after-free
-```
-Correct:
-```cpp
-// Remove under stream lock; release that lock before callback drain.
-removed->disable_and_drain(); // prevents new entry, waits for active invocation
-// Only now may the caller delete its token.
-```
-
-Wrong: reset the probe timeout after `avformat_open_input`, close context from the
-stop thread, or accept partial stream-info success after the deadline.
-Correct: one absolute open/info deadline; stop only sets cancellation; owning
-worker checks deadline and closes its context after cancellation.
+   若输出为 `0` 说明代码未打入静态库，属于陈旧产物伪绿！导出的 C ABI 函数应具备 `T`（定义）与 `.cold`（异常分支）条目。
