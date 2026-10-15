@@ -1,0 +1,30 @@
+{
+  "id": "native-core-code-docs",
+  "name": "native-core-code-docs",
+  "title": "native 核心代码注释补齐",
+  "description": "为 native/ 一手代码（排除 vendor/ 与 tests/）补齐 Doxygen 中文注释：公开契约层、引擎流水线层、算法子系统层。纯注释变更，零行为改动。",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": "native",
+  "priority": "P2",
+  "creator": "nikoniko",
+  "assignee": "nikoniko",
+  "createdAt": "2026-10-14",
+  "completedAt": "2026-10-15",
+  "branch": "dev",
+  "base_branch": "dev",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "10-14-native-public-contract-docs",
+    "10-14-native-pipeline-docs",
+    "10-14-native-algorithm-docs"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/index.md", "reason": "全局铁律：必要注释原则（铁律 7）与 C ABI 隔离（铁律 5），注释口径的顶层依据"}
+{"file": ".trellis/spec/native/index.md", "reason": "Native 开发前检查清单与质量检验基线（native-build / native-test）"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "插件 C ABI、Arena 打包与 internal_token 释放、IPC 对齐与半包熔断、SHM 代次、RKNN/RGA 全部真机约束（R1/R2/R6-R14 权威来源）"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "不透明句柄、跨语言所有权、Go 指针规则与回调 token 约定（R4/R18）"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "已实现 C ABI、回调 drain 语义、时钟与超时口径、FFmpeg 链接约束"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "节点职责、有界队列背压、零拷贝传递与 5 步优雅停机（R15-R19）"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "公开头文件与私有目录的单向依赖边界，注释不得跨越该边界描述内部实现"}
+{"file": ".trellis/spec/naming-guidelines.md", "reason": "跨语言命名规范：注释中引用标识符时的大小写与语义一致性"}
+{"file": ".trellis/tasks/archive/2026-10/10-11-native-pipeline-stability/prd.md", "reason": "按需解码会话生命周期、有界重同步、锁外 join、PTS 有效性等 R15-R17 的需求原文"}
+{"file": ".trellis/tasks/archive/2026-10/10-11-native-pipeline-stability/design.md", "reason": "DecodeSession 会话模型与并发时序设计，pipeline 注释不得凭实现反推意图"}
+{"file": ".trellis/tasks/archive/2026-10/10-14-unify-bbox-coordinates/prd.md", "reason": "归一化 [x1,y1,x2,y2] 统一口径的决策依据（R5）"}

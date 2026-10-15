@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/index.md", "reason": "铁律 7（必要注释）是注释质量与「禁止逐行复述」的判定依据"}
+{"file": ".trellis/spec/native/index.md", "reason": "质量检验基线：make native-test 全绿；engine 相关构建必须走 build.py wrapper"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "逐条核对 R1/R2/R6-R14 的注释落点与 spec 数字（88/136/216/40 字节、64KB、114、worst<=128）是否一致"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "核对 R15-R19 注释未歪曲背压、停机与队列取消语义"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "核对 R4/R18 的所有权与回调约束描述准确"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "核对未把私有实现细节写进公开头文件注释（单向依赖边界）"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "核对注释未臆造新抽象、未暗示重构"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流与所有权核对：注释中的借用/持有描述是否与 Go 侧实际用法一致"}
+{"file": ".trellis/tasks/10-14-native-core-code-docs/prd.md", "reason": "逐项核对 AC-D1~D5 与 AC-C1~C3，以及 R1~R20 风险点清单"}
+{"file": ".trellis/tasks/10-14-native-core-code-docs/design.md", "reason": "核对术语表 §4 无禁用别名、注释剥离不变性检查 §2 已全部 OK"}
