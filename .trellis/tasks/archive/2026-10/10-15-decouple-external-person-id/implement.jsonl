@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture.md", "reason": "Cross-layer contract between frontend, Go backend, and native algorithm runtime"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Database migration requirements and GORM store conventions"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "HTTP response envelopes and error code conventions"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "React feature slice and Zod schema conventions"}
