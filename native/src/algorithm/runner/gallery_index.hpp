@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "algorithm/runtime/gallery_registry.hpp"
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -21,16 +22,7 @@
 
 namespace zhulong::runner {
 
-/**
- * @brief 单张人脸底库模板
- */
-struct FaceTemplate {
-    std::string face_id;
-    std::string person_id;
-    std::string person_name;
-    std::string image_path;
-    std::vector<float> features; // 512 维特征
-};
+using FaceTemplate = zhulong::runtime::FaceTemplate;
 
 /**
  * @brief Runner 进程内并发安全人脸底库索引表
@@ -38,34 +30,43 @@ struct FaceTemplate {
 class GalleryIndex {
 public:
     void reset(std::vector<FaceTemplate> items) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        faces_.clear();
-        for (auto& item : items) {
-            faces_[item.face_id] = std::move(item);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            faces_.clear();
+            for (auto& item : items) {
+                faces_[item.face_id] = item;
+            }
+            rebuild_snapshot_locked();
         }
-        rebuild_snapshot_locked();
+        zhulong::runtime::GalleryRegistry::instance().reset(std::move(items));
     }
 
     void upsert(FaceTemplate item) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        faces_[item.face_id] = std::move(item);
-        rebuild_snapshot_locked();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            faces_[item.face_id] = item;
+            rebuild_snapshot_locked();
+        }
+        zhulong::runtime::GalleryRegistry::instance().upsert(std::move(item));
     }
 
     void remove(const std::string& face_id, const std::string& person_id) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!face_id.empty()) {
-            faces_.erase(face_id);
-        } else if (!person_id.empty()) {
-            for (auto it = faces_.begin(); it != faces_.end();) {
-                if (it->second.person_id == person_id) {
-                    it = faces_.erase(it);
-                } else {
-                    ++it;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!face_id.empty()) {
+                faces_.erase(face_id);
+            } else if (!person_id.empty()) {
+                for (auto it = faces_.begin(); it != faces_.end();) {
+                    if (it->second.person_id == person_id) {
+                        it = faces_.erase(it);
+                    } else {
+                        ++it;
+                    }
                 }
             }
+            rebuild_snapshot_locked();
         }
-        rebuild_snapshot_locked();
+        zhulong::runtime::GalleryRegistry::instance().remove(face_id, person_id);
     }
 
     [[nodiscard]] size_t size() const {

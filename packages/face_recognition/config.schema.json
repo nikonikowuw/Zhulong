@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "threshold": {
+      "type": "number",
+      "description": "人脸比对余弦相似度命中阈值",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.40
+    },
+    "top_k": {
+      "type": "integer",
+      "description": "候选人返回上限",
+      "minimum": 1,
+      "maximum": 20,
+      "default": 3
+    }
+  },
+  "additionalProperties": false
+}

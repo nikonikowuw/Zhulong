@@ -211,6 +211,7 @@ endif()
 add_library(ZhulongAlgoRuntime SHARED
     src/algorithm/runtime/cpu_inference_backend.cpp
     src/algorithm/runtime/cpu_vision_backend.cpp
+    src/algorithm/runtime/gallery_registry.cpp
     src/algorithm/runtime/letterbox_geometry.cpp
     src/algorithm/runtime/runtime_factory.cpp
 )
@@ -274,7 +275,7 @@ target_compile_features(zhulong_algo_runner PUBLIC cxx_std_17)
 target_include_directories(zhulong_algo_runner
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(zhulong_algo_runner PRIVATE ZhulongAlgoIpc ${CMAKE_DL_LIBS})
+target_link_libraries(zhulong_algo_runner PRIVATE ZhulongAlgoIpc ZhulongAlgoRuntime ${CMAKE_DL_LIBS})
 
 # ==============================================================================
 #                      4.4 构建示例脱机插件 (.so)
@@ -300,11 +301,30 @@ target_include_directories(MockPersonStructure PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 target_link_libraries(MockPersonStructure PRIVATE ZhulongAlgoRuntime)
 set_target_properties(MockPersonStructure PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 
+# ==============================================================================
+#                      4.5 构建人脸识别算法插件 (FaceRecognitionPlugin)
+# ==============================================================================
+add_library(FaceRecognitionPlugin SHARED
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/face_recognition.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/matcher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/aligner.cpp
+)
+target_compile_features(FaceRecognitionPlugin PUBLIC cxx_std_17)
+target_compile_definitions(FaceRecognitionPlugin PRIVATE ZHULONG_PLUGIN_BUILD)
+target_include_directories(FaceRecognitionPlugin PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src
+)
+target_link_libraries(FaceRecognitionPlugin PRIVATE ZhulongAlgoRuntime)
+set_target_properties(FaceRecognitionPlugin PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(PLUGIN_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/cmake/plugin-exports.map")
     target_link_options(MockDetector PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
     target_link_options(MockClassifier PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
     target_link_options(MockPersonStructure PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
+    target_link_options(FaceRecognitionPlugin PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
 endif()
 
 # ==============================================================================
@@ -358,11 +378,20 @@ if(BUILD_TESTING)
 
     add_executable(ZhulongAlgoRunnerGalleryTests tests/algo_runner_gallery_test.cpp)
     target_compile_features(ZhulongAlgoRunnerGalleryTests PRIVATE cxx_std_17)
-    target_include_directories(ZhulongAlgoRunnerGalleryTests PRIVATE src/algorithm/runner)
+    target_include_directories(ZhulongAlgoRunnerGalleryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src/algorithm/runner)
+    target_link_libraries(ZhulongAlgoRunnerGalleryTests PRIVATE ZhulongAlgoRuntime)
     add_test(NAME ZhulongAlgoRunnerGallery COMMAND ZhulongAlgoRunnerGalleryTests)
     set_tests_properties(ZhulongAlgoRunnerGallery PROPERTIES TIMEOUT 10)
 
-    foreach(TEST_TARGET ZhulongAlgoRuntimeTests ZhulongAlgoRunnerTests ZhulongAlgoJsonTests ZhulongFrameBrokerTests ZhulongAlgoRunnerGalleryTests)
+    # 人脸识别脱机插件单元测试
+    add_executable(ZhulongFaceRecognitionPluginTests tests/face_recognition_plugin_test.cpp)
+    target_compile_features(ZhulongFaceRecognitionPluginTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongFaceRecognitionPluginTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(ZhulongFaceRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
+    add_test(NAME ZhulongFaceRecognitionPlugin COMMAND ZhulongFaceRecognitionPluginTests $<TARGET_FILE:FaceRecognitionPlugin>)
+    set_tests_properties(ZhulongFaceRecognitionPlugin PROPERTIES TIMEOUT 10)
+
+    foreach(TEST_TARGET ZhulongAlgoRuntimeTests ZhulongAlgoRunnerTests ZhulongAlgoJsonTests ZhulongFrameBrokerTests ZhulongAlgoRunnerGalleryTests ZhulongFaceRecognitionPluginTests)
         target_compile_options(${TEST_TARGET} PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
     endforeach()
 

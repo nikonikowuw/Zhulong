@@ -1,0 +1,16 @@
+{
+  "id": "face_recognition",
+  "name": "人脸识别算法",
+  "version": "1.0.0",
+  "description": "基于 512 维特征向量与毫秒级 1:N 检索的高性能人脸识别算法包",
+  "task_type": "person_structure",
+  "category": "safety",
+  "platform": {
+    "arch": "x86_64",
+    "target": "cpu"
+  },
+  "resources": {
+    "compute_cost": 25,
+    "memory_mb": 128
+  }
+}

@@ -21,6 +21,7 @@
 #include <algorithm/runtime/runtime_factory.hpp>
 #include <algorithm/runtime/vision_backend.hpp>
 #include <algorithm/runtime/tensor.hpp>
+#include <algorithm/runtime/gallery_registry.hpp>
 
 #include <string>
 #include <vector>
@@ -29,6 +30,9 @@
 #include <iostream>
 
 namespace zhulong {
+
+using GalleryRegistry = zhulong::runtime::GalleryRegistry;
+using FaceTemplate = zhulong::runtime::FaceTemplate;
 
 /**
  * @brief 图像只读借用视图包装类

@@ -3,6 +3,7 @@
 #include <cassert>
 #include <iostream>
 #include <thread>
+#include <atomic>
 #include <chrono>
 
 using namespace zhulong::runner;
@@ -116,10 +117,65 @@ void test_sharded_sync_context() {
     std::cout << "[PASS] test_sharded_sync_context" << std::endl;
 }
 
+void test_gallery_registry_concurrency() {
+    auto& reg = zhulong::runtime::GalleryRegistry::instance();
+    reg.clear();
+    assert(reg.size() == 0);
+
+    std::atomic<bool> stop{false};
+    std::atomic<int> read_count{0};
+
+    // 启动 4 个并发读线程（模拟推理任务调用 snapshot）
+    std::vector<std::thread> readers;
+    for (int i = 0; i < 4; ++i) {
+        readers.emplace_back([&]() {
+            while (!stop.load()) {
+                auto snap = reg.snapshot();
+                assert(snap != nullptr);
+                for (const auto& item : *snap) {
+                    assert(!item.face_id.empty());
+                }
+                read_count.fetch_add(1);
+            }
+        });
+    }
+
+    // 主线程执行并发写入（reset / upsert / remove）
+    for (int i = 1; i <= 200; ++i) {
+        FaceTemplate item{
+            "f_" + std::to_string(i),
+            "p_" + std::to_string(i % 10),
+            "Name_" + std::to_string(i),
+            "path.jpg",
+            {static_cast<float>(i), 1.0f}
+        };
+        reg.upsert(item);
+        if (i % 50 == 0) {
+            reg.remove("f_" + std::to_string(i - 1), "");
+        }
+    }
+
+    stop.store(true);
+    for (auto& t : readers) {
+        t.join();
+    }
+
+    assert(read_count.load() > 0);
+    assert(reg.size() > 0);
+
+    // 清空验证
+    reg.clear();
+    assert(reg.size() == 0);
+    assert(reg.snapshot()->empty());
+
+    std::cout << "[PASS] test_gallery_registry_concurrency (reads: " << read_count.load() << ")" << std::endl;
+}
+
 int main() {
     test_gallery_index_basic();
     test_gallery_parser();
     test_sharded_sync_context();
+    test_gallery_registry_concurrency();
     std::cout << "All runner gallery tests passed successfully!" << std::endl;
     return 0;
 }

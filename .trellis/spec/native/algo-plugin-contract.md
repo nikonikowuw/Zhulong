@@ -251,6 +251,15 @@ IPC 载荷序列化时统一使用 `features`。
 | **身份字段** | 载荷 `person_id` 恒取 `persons.person_id`（对外业务键）**原值**，严禁混用 `person_faces.person_id`（内部行 ID 外键） |
 | **本地索引** | Runner 进程内通过 `GalleryIndex` 维护 `face_id -> FaceTemplate` 映射，写操作（`reset`/`upsert`/`remove`）受互斥锁保护，推理读取通过 `snapshot()` 获取不可变只读视图 |
 
+### 7.4 进程内跨库底库共享注册表 (`GalleryRegistry`)
+
+由公共算法运行库 `libZhulongAlgoRuntime.so` 导出的全局单例 `zhulong::runtime::GalleryRegistry`，为同一进程空间内的 Runner 宿主与脱机插件提供无锁读写隔离的底库模板快照访问：
+
+- **单例拓扑**：Runner 进程与插件动态库均动态链接 `libZhulongAlgoRuntime.so`，共享唯一注册表实例；
+- **读写隔离**：Runner 进程接收到下行 `MSG_GALLERY_*` 消息后，在写锁保护下更新底库并原子重构 `std::shared_ptr<const std::vector<FaceTemplate>> snapshot_`；
+- **插件借用**：插件在 `detect_persons` 推理热路径中通过 `zhulong::GalleryRegistry::instance().snapshot()` 获取只读视图，零锁争用；
+- **1:N 特征比对**：插件计算检出人脸 512 维特征与快照条目的余弦相似度（点积），按降序排序提取 Top-K 候选人；当 Top-1 相似度 $\ge \text{threshold}$ 时判定命中并装填业务键 `person_id`。
+
 ---
 
 ## 8. RKNN 推理后端合同（Rockchip，已实现）
