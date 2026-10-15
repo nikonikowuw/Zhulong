@@ -15,11 +15,11 @@ const (
 
 // Audit actions for storage lifecycle events.
 const (
-	ActionStorageUpdateConfig    = "system.storage.update_config"
-	ActionStorageManualCleanup   = "system.storage.manual_cleanup"
-	ActionStoragePathTest        = "system.storage.test_path"
-	ActionStorageEmergencyStop   = "system.storage.emergency_stop"
-	ActionStorageEmergencyResume = "system.storage.emergency_resume"
+	ActionStorageUpdateConfig    = "storage.update_config"
+	ActionStorageManualCleanup   = "storage.manual_cleanup"
+	ActionStoragePathTest        = "storage.test_path"
+	ActionStorageEmergencyStop   = "storage.emergency_stop"
+	ActionStorageEmergencyResume = "storage.emergency_resume"
 )
 
 // StorageConfig holds the persistent media storage lifecycle and watermark configuration.

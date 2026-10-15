@@ -635,3 +635,101 @@ func TestMigration000009_DecouplePersonID(t *testing.T) {
 		t.Fatalf("migrator Steps(1): %v", err)
 	}
 }
+
+func TestMigration000010NormalizeAuditActions(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test_migration_10.db")
+	db, err := sql.Open("sqlite3", fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000", dbPath))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite driver: %v", err)
+	}
+
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// 1. Run migrations up to 9
+	if err := migrator.Migrate(9); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(9): %v", err)
+	}
+
+	// Insert legacy audit log actions
+	legacyRecords := []string{
+		"system.time.update_config",
+		"system.time.ntp_sync",
+		"system.time.manual_set",
+		"system.time.rtc_heal",
+		"system.storage.update_config",
+		"system.storage.manual_cleanup",
+		"system.storage.test_path",
+		"system.storage.path_test",
+		"system.storage.emergency_stop",
+		"system.storage.emergency_resume",
+		"camera.create", // should remain untouched
+	}
+	for i, action := range legacyRecords {
+		if _, err := db.Exec(`INSERT INTO audit_logs (id, action, target, detail, status) VALUES (?, ?, 'target', '', 'success')`, i+1, action); err != nil {
+			t.Fatalf("insert legacy audit log %q: %v", action, err)
+		}
+	}
+
+	// 2. Apply migration 10
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator Steps(1): %v", err)
+	}
+
+	// Verify actions are normalized
+	expectedNormalized := map[int]string{
+		1:  "time.update_config",
+		2:  "time.ntp_sync",
+		3:  "time.manual_set",
+		4:  "time.rtc_heal",
+		5:  "storage.update_config",
+		6:  "storage.manual_cleanup",
+		7:  "storage.test_path",
+		8:  "storage.test_path",
+		9:  "storage.emergency_stop",
+		10: "storage.emergency_resume",
+		11: "camera.create",
+	}
+	for id, expectedAction := range expectedNormalized {
+		var action string
+		if err := db.QueryRow(`SELECT action FROM audit_logs WHERE id = ?`, id).Scan(&action); err != nil {
+			t.Fatalf("query normalized action for id %d: %v", id, err)
+		}
+		if action != expectedAction {
+			t.Errorf("id %d: expected action %q, got %q", id, expectedAction, action)
+		}
+	}
+
+	// 3. Rollback migration 10
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator Steps(-1): %v", err)
+	}
+
+	// Verify rollback restored legacy prefix
+	var rolledBackAction string
+	if err := db.QueryRow(`SELECT action FROM audit_logs WHERE id = 2`).Scan(&rolledBackAction); err != nil {
+		t.Fatalf("query rolled back action: %v", err)
+	}
+	if rolledBackAction != "system.time.ntp_sync" {
+		t.Errorf("expected rolled back action 'system.time.ntp_sync', got %q", rolledBackAction)
+	}
+
+	// 4. Re-apply migration 10
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator Steps(1): %v", err)
+	}
+}

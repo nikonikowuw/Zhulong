@@ -86,7 +86,7 @@ func TestEventEntryFailureStatus(t *testing.T) {
 func TestSystemEntryHasNoClientOrigin(t *testing.T) {
 	// Action names are owned by their business modules (storage/systemtime);
 	// the audit core must not import them, so the test uses the literal value.
-	entry := systemEntry("system.storage.emergency_stop", "media_storage", "watermark breach", nil)
+	entry := systemEntry("storage.emergency_stop", "media_storage", "watermark breach", nil)
 
 	if entry.Username != UsernameSystem {
 		t.Fatalf("expected username %q, got %q", UsernameSystem, entry.Username)
@@ -100,7 +100,7 @@ func TestSystemEntryHasNoClientOrigin(t *testing.T) {
 }
 
 func TestSystemEntryFailureStatus(t *testing.T) {
-	entry := systemEntry("system.time.ntp_sync", "system_time", "", errSentinel)
+	entry := systemEntry("time.ntp_sync", "system_time", "", errSentinel)
 
 	if entry.Status != StatusFailed {
 		t.Fatalf("expected failed status, got %q", entry.Status)

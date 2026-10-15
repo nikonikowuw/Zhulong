@@ -32,13 +32,14 @@
     "camera.toggle": "啟停攝影機",
     "storage.update_config": "更新儲存設定",
     "storage.manual_cleanup": "手動清理儲存",
-    "storage.path_test": "儲存路徑測試",
+    "storage.test_path": "儲存路徑測試",
     "storage.emergency_stop": "儲存緊急停止",
     "storage.emergency_resume": "儲存恢復運行",
     "time.update_config": "更新時間設定",
     "time.ntp_sync": "NTP 對時同步",
     "time.manual_set": "手動設定時間",
-    "time.rtc_heal": "RTC 硬體自癒"
+    "time.rtc_heal": "RTC 硬體自癒",
+    "audit.clear": "清理日誌"
   },
   "actions": {
     "viewDetail": "查看明細",

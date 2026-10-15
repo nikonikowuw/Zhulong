@@ -32,13 +32,14 @@
     "camera.toggle": "Toggle Camera",
     "storage.update_config": "Update Storage Config",
     "storage.manual_cleanup": "Manual Storage Cleanup",
-    "storage.path_test": "Storage Path Test",
+    "storage.test_path": "Storage Path Test",
     "storage.emergency_stop": "Storage Emergency Stop",
     "storage.emergency_resume": "Storage Emergency Resume",
     "time.update_config": "Update Time Config",
     "time.ntp_sync": "NTP Time Sync",
     "time.manual_set": "Manual Set Time",
-    "time.rtc_heal": "RTC Hardware Heal"
+    "time.rtc_heal": "RTC Hardware Heal",
+    "audit.clear": "Clear Audit Logs"
   },
   "actions": {
     "viewDetail": "View Details",

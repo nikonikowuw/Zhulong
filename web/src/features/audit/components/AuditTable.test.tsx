@@ -126,4 +126,52 @@ describe('AuditTable', () => {
 
     await expect.element(getByText('近 1 小时')).toBeInTheDocument()
   })
+
+  it('renders translated action names for time.ntp_sync and storage.update_config', async () => {
+    const queryClient = new QueryClient()
+    const systemLogs: AuditLog[] = [
+      {
+        id: 103,
+        createdAt: '2026-10-15T16:54:59Z',
+        ip: '-',
+        username: 'system',
+        action: 'time.ntp_sync',
+        target: 'system_time',
+        detail: 'server=ntp.aliyun.com',
+        status: 'failed',
+        errorMsg: 'step adjustment failed: operation not permitted',
+      },
+      {
+        id: 104,
+        createdAt: '2026-10-15T17:00:00Z',
+        ip: '192.168.1.55',
+        username: 'admin',
+        action: 'storage.update_config',
+        target: 'storage',
+        detail: '',
+        status: 'success',
+        errorMsg: '',
+      },
+    ]
+
+    const { getByText } = await render(
+      <QueryClientProvider client={queryClient}>
+        <AuditProvider>
+          <AuditTable
+            data={systemLogs}
+            total={2}
+            isLoading={false}
+            isError={false}
+            onRetry={vi.fn()}
+            search={{}}
+            navigate={vi.fn()}
+            onDateRangeChange={vi.fn()}
+          />
+        </AuditProvider>
+      </QueryClientProvider>
+    )
+
+    await expect.element(getByText('NTP 对时同步')).toBeInTheDocument()
+    await expect.element(getByText('更新存储配置')).toBeInTheDocument()
+  })
 })

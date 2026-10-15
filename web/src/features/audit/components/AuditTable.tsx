@@ -135,8 +135,8 @@ export function AuditTable({
       value: 'storage.manual_cleanup',
     },
     {
-      label: t('actionNames.storage.path_test'),
-      value: 'storage.path_test',
+      label: t('actionNames.storage.test_path'),
+      value: 'storage.test_path',
     },
     {
       label: t('actionNames.storage.emergency_stop'),
@@ -150,9 +150,22 @@ export function AuditTable({
       label: t('actionNames.time.update_config'),
       value: 'time.update_config',
     },
-    { label: t('actionNames.time.ntp_sync'), value: 'time.ntp_sync' },
-    { label: t('actionNames.time.manual_set'), value: 'time.manual_set' },
-    { label: t('actionNames.time.rtc_heal'), value: 'time.rtc_heal' },
+    {
+      label: t('actionNames.time.ntp_sync'),
+      value: 'time.ntp_sync',
+    },
+    {
+      label: t('actionNames.time.manual_set'),
+      value: 'time.manual_set',
+    },
+    {
+      label: t('actionNames.time.rtc_heal'),
+      value: 'time.rtc_heal',
+    },
+    {
+      label: t('actionNames.audit.clear'),
+      value: 'audit.clear',
+    },
   ]
 
   const statusOptions = [

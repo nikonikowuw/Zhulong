@@ -211,7 +211,7 @@ func TestMiddlewareRecordsJSONBindFailure(t *testing.T) {
 func TestMiddlewareRecordsDomainFailureOn2xx(t *testing.T) {
 	h := newHarness(t, func(api *gin.RouterGroup, _ *audit.Service) {
 		api.POST("/system/time/sync", func(c *gin.Context) {
-			Tag(c, "system.time.ntp_sync", "system_time", "")
+			Tag(c, "time.ntp_sync", "system_time", "")
 			// The response stays 200, but the domain operation failed.
 			TagError(c, "NTP_SYNC_FAILED", "NTP synchronization failed")
 			httputil.Success(c, gin.H{"syncStatus": gin.H{"state": "failed"}})

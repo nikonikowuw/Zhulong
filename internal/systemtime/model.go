@@ -28,10 +28,10 @@ const (
 
 // Audit actions
 const (
-	ActionTimeUpdateConfig = "system.time.update_config"
-	ActionTimeManualSet    = "system.time.manual_set"
-	ActionTimeNTPSync      = "system.time.ntp_sync"
-	ActionTimeRTCHeal      = "system.time.rtc_heal"
+	ActionTimeUpdateConfig = "time.update_config"
+	ActionTimeManualSet    = "time.manual_set"
+	ActionTimeNTPSync      = "time.ntp_sync"
+	ActionTimeRTCHeal      = "time.rtc_heal"
 )
 
 // SystemTimeConfig represents the persisted time configuration.

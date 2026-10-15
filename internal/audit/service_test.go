@@ -153,7 +153,7 @@ func TestServiceRecordEventResolvesActorFromContext(t *testing.T) {
 	svc.RecordEvent(authed, ActionCameraCreate, "camera:1", "created", nil)
 	svc.RecordEvent(authed, ActionCameraDelete, "camera:2", "", errSentinel)
 	svc.RecordEvent(ctx, ActionAuthLogout, "user:someone", "", nil)
-	svc.RecordSystem("system.time.rtc_heal", "system_time", "restored", nil)
+	svc.RecordSystem("time.rtc_heal", "system_time", "restored", nil)
 
 	stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -199,7 +199,7 @@ func TestServiceRecordEventResolvesActorFromContext(t *testing.T) {
 		t.Fatalf("expected empty IP, got %q", unattributed.IP)
 	}
 
-	system := byAction["system.time.rtc_heal"]
+	system := byAction["time.rtc_heal"]
 	if system.Username != UsernameSystem {
 		t.Fatalf("expected system username, got %q", system.Username)
 	}
