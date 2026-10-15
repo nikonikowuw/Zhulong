@@ -80,3 +80,54 @@ Decoupled external business key person_id from internal row id across SQLite sch
 ### Status
 
 [OK] **Completed**
+
+---
+
+## 2026-10-15: 10-15-unify-primary-key-ulid 统一实体主键为 ULID
+
+### Summary & Retrospective
+
+在零 DDL Schema 变更的前提下，将系统核心动态业务实体的代理主键（`persons.id`、`person_faces.id`、`cameras.id`、`analysis_tasks.id`）统一采用纯 ULID（26 字符 Crockford's Base32）：
+1. **公共工具库 (`internal/idutil`)**：
+   - 引入 `github.com/oklog/ulid/v2`，封装线程安全且毫秒单调的 `New()`、严格校验的 `IsValid()` 与时间反解 `Time()`；
+   - 单元测试覆盖高频单调性、`-race` 竞态安全、格式合法性边界与时间解析。
+2. **人员与人脸域 (`internal/person`)**：
+   - `newID()` 替换为 `idutil.New()`，内部行主键获得时间单调递增性与 B-Tree 插入局部性；
+   - 严格守卫 `person_id`（外部业务键）可选可空且不被代理键回填的解耦契约；
+   - 保持 `{owner_row_id}_{face_id}.ext` 磁盘相对路径与特征向量存储契约。
+3. **摄像头域 (`internal/camera`)**：
+   - 缺省 ID 改为直接生成 ULID，删除 `GetNextNumericID` 全表扫描及对应的应用层互斥锁 `createMu`；
+   - 消除并发创建阻塞与数字字典序排序隐患；客户端自定义 ID 依然兼容支持。
+4. **算法分析任务域 (`internal/algorithm`)**：
+   - 缺省任务 ID 改为直接生成 ULID，彻底废弃 `task_{cam}_{algo}` 冗长伪语义拼接。
+5. **规约与全量验证**：
+   - 更新 `.trellis/spec/backend/database-guidelines.md` 确立主键规约；
+   - `make check`（前端 59 套件 255 测试、Native 18/18、Go vet/test -race 与 RTSP 桥接测试）100% 绿灯。
+
+### Verification Status
+
+- [OK] `go test -race ./internal/idutil/...` 单测与并发安全通过；
+- [OK] `internal/person`、`internal/camera`、`internal/algorithm` 关联测试通过；
+- [OK] `make check` 全量流水线检查全绿通过。
+
+## Session 43: Unify entity primary key generation with ULID
+<!-- trellis-session: v=2 fp=04d1e2f3a5b6c7d8 -->
+
+**Date**: 2026-10-15
+**Task**: Unify entity primary key generation with ULID
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+Unified dynamic entity surrogate primary keys (persons.id, person_faces.id, cameras.id, analysis_tasks.id) to pure monotonic ULIDs using internal/idutil wrapping oklog/ulid/v2. Eliminated table-scanning GetNextNumericID and Go mutex lock contention in camera.Service. Maintained external business key persons.person_id optional/nullable decoupling and preserved {owner_row_id}_{face_id}.ext file naming convention.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fe14451` | feat(core): unify entity primary key generation with ULID |
+
+### Status
+
+[OK] **Completed**
