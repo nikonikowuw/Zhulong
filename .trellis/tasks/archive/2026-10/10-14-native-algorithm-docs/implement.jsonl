@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/10-14-native-core-code-docs/design.md", "reason": "风格基线与统一术语表单一来源"}
+{"file": ".trellis/tasks/10-14-native-core-code-docs/implement.md", "reason": "执行循环、注释剥离不变性校验命令与审查门禁"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法插件系统契约、IPC对齐、SHM租赁、RKNN与RGA后端规范权威来源"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "目录依赖单向铁律与厂商SDK头文件隔离"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "C ABI 异常防爆门与内存所有权契约"}
