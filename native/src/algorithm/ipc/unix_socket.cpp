@@ -1,3 +1,8 @@
+/**
+ * @file unix_socket.cpp
+ * @brief Unix Domain Socket 通信层四态状态机与收发循环实现
+ */
+
 #include "unix_socket.hpp"
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -12,6 +17,15 @@ namespace zhulong::ipc {
 
 namespace {
 
+/**
+ * @brief 四态流读取状态机
+ *
+ * 用于区分可重试的空闲轮询超时与不可恢复的半包截断错误：
+ * - SUCCESS: 完整读取期望的所有字节；
+ * - IDLE_TIMEOUT: 尚读入 0 字节时的 poll 超时，允许上层安全重试；
+ * - CLOSED: 尚读入 0 字节时收到对端 EOF，正常安全断开；
+ * - DESYNC_ERROR: ⚠️ 已读入部分字节后发生超时、对端关闭或错误，流已脱节，必须立即熔断关闭。
+ */
 enum class ReadStatus {
     SUCCESS,        // 完整读入请求的所有字节
     IDLE_TIMEOUT,   // 在读取 0 字节时发生 poll 超时 (安全空闲等待)
@@ -19,6 +33,9 @@ enum class ReadStatus {
     DESYNC_ERROR    // 已读部分字节后发生超时、对端关闭或错误 (流脱节，不可恢复)
 };
 
+/**
+ * @brief 阻塞发送所有指定字节，忽略 SIGPIPE 信号
+ */
 bool write_all(int fd, const void* data, size_t size) {
     const uint8_t* ptr = static_cast<const uint8_t*>(data);
     size_t remaining = size;
@@ -36,6 +53,9 @@ bool write_all(int fd, const void* data, size_t size) {
     return true;
 }
 
+/**
+ * @brief 带超时与半包流脱节检测的定长流读取函数
+ */
 ReadStatus read_all(int fd, void* data, size_t size, int timeout_ms) {
     uint8_t* ptr = static_cast<uint8_t*>(data);
     size_t remaining = size;
@@ -220,6 +240,9 @@ void UnixSocketServer::listen_loop() {
 void UnixSocketServer::client_read_loop(uint32_t client_id, std::shared_ptr<ClientChannel> channel) {
     active_workers_.fetch_add(1);
 
+    // ⚠️ R1 异常防爆门：本线程为 detach 的后台线程，未捕获的异常会直接
+    // 触发 std::terminate() 终止整个进程。因此必须捕获全部异常（含未知异常），
+    // 仅记录诊断后断开该客户端，绝不允许异常逃出线程入口。
     try {
         while (running_.load()) {
             int cfd = channel->fd.load();
@@ -438,3 +461,4 @@ bool UnixSocketClient::recv_msg(IpcHeader& out_header, std::vector<uint8_t>& out
 }
 
 } // namespace zhulong::ipc
+

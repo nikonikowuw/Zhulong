@@ -1,3 +1,8 @@
+/**
+ * @file frame_broker.cpp
+ * @brief 共享内存帧分发宿主实现、多平面安全复制与代次防 ABA 租约回收
+ */
+
 #include "frame_broker.hpp"
 #include <cstring>
 #include <iostream>
@@ -94,7 +99,7 @@ int FrameBroker::find_or_evict_free_slot(std::unique_lock<std::mutex>& /*lock*/)
     }
 
     if (oldest_idx >= 0) {
-        // 强制回收超时槽位
+        // 强制回收超时槽位：扣减在途计数并自增代次，使迟到的历史 ACK 失效
         auto& slot = slots_[oldest_idx];
         for (uint32_t cid : slot.active_leases) {
             auto it = clients_.find(cid);
@@ -132,7 +137,7 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
         generation = slot.generation;
         slot.dispatch_time = std::chrono::steady_clock::now();
 
-        // 挑选接收该帧的合格客户端（背压过滤）
+        // 挑选接收该帧的合格客户端（慢消费者背压隔离：在途达上限则直接丢弃最新帧）
         for (auto& [cid, client] : clients_) {
             if (client.in_flight_count < options_.max_in_flight_per_client) {
                 target_clients.push_back(cid);
@@ -156,6 +161,7 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
     // 写入数据到共享内存槽位
     uint8_t* slot_data = shm_pool_.slot_write_ptr(slot_idx);
     if (!slot_data) {
+        // 共享内存槽位获取失败：原子回退在途配额
         std::lock_guard<std::mutex> lock(mutex_);
         for (uint32_t cid : target_clients) {
             auto it = clients_.find(cid);
@@ -191,6 +197,7 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
         size_t total_bytes = frame.y_plane_size() + static_cast<size_t>(frame.stride) * ((frame.height + 1) / 2);
         if (total_bytes <= options_.slot_size) {
             if (frame.host_planes[0] && frame.host_planes[1]) {
+                // 安全分平面逐行独立拷贝（杜绝把 data[0] 当作单一连续缓冲引发越界）
                 size_t uv_lines = (frame.height + 1) / 2;
                 uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
                 uint32_t src_uv_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : frame.stride;
@@ -375,7 +382,7 @@ void FrameBroker::handle_ack(uint32_t client_id, const FrameAckMsg& ack) {
 void FrameBroker::handle_client_disconnect(uint32_t client_id) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // 回收该客户端在所有槽位中的租约
+    // 回收该客户端在所有槽位中的租约（子进程崩溃自愈，防止槽位悬挂泄漏）
     for (auto& slot : slots_) {
         slot.active_leases.erase(client_id);
         if (slot.active_leases.empty() && slot.state == SlotState::LEASED) {
@@ -402,3 +409,4 @@ bool FrameBroker::get_client_info(uint32_t client_id, ClientInfo& out_info) cons
 }
 
 } // namespace zhulong::ipc
+
