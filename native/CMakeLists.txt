@@ -136,13 +136,15 @@ add_library(ZhulongEngine STATIC
     src/pipeline/frame_publisher.cpp
     src/nodes/capture/rtsp_input.cpp
     src/nodes/decode/ffmpeg_decoder.cpp
+    src/nodes/decode/mpp_loader.cpp
+    src/nodes/decode/mpp_decoder.cpp
 )
 target_compile_features(ZhulongEngine PUBLIC cxx_std_17)
 target_include_directories(ZhulongEngine
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${FFMPEG_ROOT}/include
 )
-target_link_libraries(ZhulongEngine PUBLIC ZhulongAlgoIpc ${FFMPEG_LIBRARIES} Threads::Threads ${FFMPEG_SYSTEM_LIBRARIES})
+target_link_libraries(ZhulongEngine PUBLIC ZhulongAlgoIpc ${FFMPEG_LIBRARIES} Threads::Threads ${CMAKE_DL_LIBS} ${FFMPEG_SYSTEM_LIBRARIES})
 set_target_properties(ZhulongEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(ZhulongEngine PRIVATE
     $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wall;-Wextra;-Wpedantic>

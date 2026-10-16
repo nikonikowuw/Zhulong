@@ -242,6 +242,9 @@ void DecodeSession::decode_loop() noexcept {
     while (active_.load(std::memory_order_relaxed) && !packet_queue_.is_cancelled()) {
         QueuedPacket pkt;
         if (!packet_queue_.pop(pkt, std::chrono::milliseconds(50))) {
+            if (decoder) {
+                drain_frames(decoder.get());
+            }
             continue;
         }
 

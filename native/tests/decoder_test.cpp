@@ -4,6 +4,7 @@
  */
 
 #include "nodes/decode/decoder.hpp"
+#include "nodes/decode/mpp_decoder.hpp"
 #include "nodes/capture/rtsp_input.hpp"
 #include "pipeline/bounded_queue.hpp"
 #include "pipeline/stream.hpp"
@@ -114,7 +115,7 @@ int main() {
         // 2. FFmpegDecodeNode 真实 H.264 关键帧端到端解码测试
         // ====================================================================
         {
-            auto decoder = IDecodeNode::create(Zhulong_CODEC_H264);
+            auto decoder = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, zhulong::DecoderBackend::FFMPEG_SW);
             CHECK(decoder != nullptr);
 
             // 来自 tests/fixtures/rtp_frames.json 的真实 64x48 合成帧 NALU
@@ -169,7 +170,7 @@ int main() {
         // 3. FFmpegDecodeNode 真实 H.265 (HEVC) 解码测试
         // ====================================================================
         {
-            auto decoder = IDecodeNode::create(Zhulong_CODEC_H265);
+            auto decoder = IDecodeNode::create(Zhulong_CODEC_H265, nullptr, 0, 1, 90000, zhulong::DecoderBackend::FFMPEG_SW);
             CHECK(decoder != nullptr);
 
             std::vector<std::string> h265_nalus = {
@@ -231,7 +232,8 @@ int main() {
             auto decoder = IDecodeNode::create(
                 Zhulong_CODEC_H264,
                 extradata.data(), extradata.size(),
-                1, 90000
+                1, 90000,
+                zhulong::DecoderBackend::FFMPEG_SW
             );
             CHECK(decoder != nullptr);
 
@@ -290,13 +292,15 @@ int main() {
             packet.time_base_num = 1;
             packet.time_base_den = 90000;
 
-            // 喂包
+            // 喂包 (在流式硬件解码器中，首帧在后续包到达或流推进时输出)
+            stream.dispatch(packet);
+            packet.pts = 1040;
             stream.dispatch(packet);
 
             // 等待产帧
             HardwareFrame::ConstPtr frame1;
             bool got_frame = false;
-            for (int i = 0; i < 20; ++i) {
+            for (int i = 0; i < 40; ++i) {
                 if (stream.acquire_frame(frame1, 50ms)) {
                     got_frame = true;
                     break;
@@ -322,10 +326,12 @@ int main() {
             // 再次喂包
             packet.pts = 2000;
             stream.dispatch(packet);
+            packet.pts = 2040;
+            stream.dispatch(packet);
 
             HardwareFrame::ConstPtr frame2;
             got_frame = false;
-            for (int i = 0; i < 20; ++i) {
+            for (int i = 0; i < 40; ++i) {
                 if (stream.acquire_frame(frame2, 50ms)) {
                     got_frame = true;
                     break;
@@ -458,6 +464,133 @@ int main() {
             CHECK(release_count.load() == 0);
             consumer2.reset();
             CHECK(release_count.load() == 1);
+        }
+
+        // ====================================================================
+        // 9. 解码器后端工厂与自动降级测试 (DecoderBackend::AUTO / FFMPEG_SW / MPP_HW)
+        // ====================================================================
+        {
+            using zhulong::DecoderBackend;
+            // 9.1 AUTO 模式：在非 RK 硬件上平滑回退至 FFmpeg 软解
+            auto auto_dec = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, DecoderBackend::AUTO);
+            CHECK(auto_dec != nullptr);
+
+            // 9.2 FFMPEG_SW 模式：显式创建 FFmpeg 软解
+            auto sw_dec = IDecodeNode::create(Zhulong_CODEC_H265, nullptr, 0, 1, 90000, DecoderBackend::FFMPEG_SW);
+            CHECK(sw_dec != nullptr);
+
+            // 9.3 MPP_HW 模式：若当前环境不支持 MPP，应显式抛出异常
+            if (!zhulong::MppDecodeNode::is_supported()) {
+                bool threw = false;
+                try {
+                    auto mpp_dec = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, DecoderBackend::MPP_HW);
+                    (void)mpp_dec;
+                } catch (const std::runtime_error &) {
+                    threw = true;
+                }
+                CHECK(threw);
+            } else {
+                auto mpp_dec = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, DecoderBackend::MPP_HW);
+                CHECK(mpp_dec != nullptr);
+            }
+        }
+
+        // ====================================================================
+        // 10. MppDecodeNode 真实硬件端到端解码测试 (H.264 & H.265 on Rockchip VPU)
+        // ====================================================================
+        if (zhulong::MppDecodeNode::is_supported()) {
+            std::cout << "Testing MppDecodeNode on hardware accelerator..." << std::endl;
+            // 10.1 真实 H.264 硬解测试
+            {
+                auto decoder = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, zhulong::DecoderBackend::MPP_HW);
+                CHECK(decoder != nullptr);
+
+                std::vector<std::string> h264_nalus = {
+                    "Z0LACtxHsBEAAAMAAQAAAwAyjxIngA==",
+                    "aM4PyA==",
+                    "ZYiEOiYoAAkCycnJ111111114A=="
+                };
+                std::vector<uint8_t> annex_b;
+                for (const auto &b64 : h264_nalus) {
+                    auto nalu = base64_decode(b64);
+                    annex_b.push_back(0x00);
+                    annex_b.push_back(0x00);
+                    annex_b.push_back(0x00);
+                    annex_b.push_back(0x01);
+                    annex_b.insert(annex_b.end(), nalu.begin(), nalu.end());
+                }
+
+                int ret = decoder->send_packet(annex_b.data(), annex_b.size(), 1000, 1000);
+                CHECK(ret >= 0);
+                decoder->send_packet(nullptr, 0, 0, 0);
+
+                HardwareFrame::Ptr frame;
+                int recv_ret = 1;
+                for (int i = 0; i < 50; ++i) {
+                    recv_ret = decoder->receive_frame(frame);
+                    if (recv_ret == 0) {
+                        break;
+                    }
+                    std::this_thread::sleep_for(5ms);
+                }
+                CHECK(recv_ret == 0);
+                CHECK(frame != nullptr);
+                CHECK(frame->width == 64);
+                CHECK(frame->height == 48);
+                CHECK(frame->stride >= 64);
+                CHECK(frame->vstride >= 48);
+                CHECK(frame->format == zhulong::FRAME_FORMAT_NV12);
+                CHECK(frame->dma_fd >= 0); // 必须导出有效内核 DMA-BUF 描述符！
+                CHECK(frame->pts == 1000);
+                CHECK(frame->release_fn != nullptr);
+
+                // 测试释放闭包安全归还显存
+                frame.reset();
+                CHECK(frame == nullptr);
+            }
+
+            // 10.2 真实 H.265 (HEVC) 硬解测试
+            {
+                auto decoder = IDecodeNode::create(Zhulong_CODEC_H265, nullptr, 0, 1, 90000, zhulong::DecoderBackend::MPP_HW);
+                CHECK(decoder != nullptr);
+
+                std::vector<std::string> h265_nalus = {
+                    "QAEMAf//BAgAAAMAn6gAAAMAAB66AkA=",
+                    "QgEBBAgAAAMAn6gAAAMAAB6gIIMWW6SkwvAWgIAAAAMAgAAADIQ=",
+                    "RAHAcYES",
+                    "KAGt4NEX/9ORgYfYydg="
+                };
+                std::vector<uint8_t> annex_b;
+                for (const auto &b64 : h265_nalus) {
+                    auto nalu = base64_decode(b64);
+                    annex_b.push_back(0x00);
+                    annex_b.push_back(0x00);
+                    annex_b.push_back(0x00);
+                    annex_b.push_back(0x01);
+                    annex_b.insert(annex_b.end(), nalu.begin(), nalu.end());
+                }
+
+                int ret = decoder->send_packet(annex_b.data(), annex_b.size(), 2000, 2000);
+                CHECK(ret >= 0);
+                decoder->send_packet(nullptr, 0, 0, 0);
+
+                HardwareFrame::Ptr frame;
+                int recv_ret = 1;
+                for (int i = 0; i < 50; ++i) {
+                    recv_ret = decoder->receive_frame(frame);
+                    if (recv_ret == 0) {
+                        break;
+                    }
+                    std::this_thread::sleep_for(5ms);
+                }
+                CHECK(recv_ret == 0);
+                CHECK(frame != nullptr);
+                CHECK(frame->width == 64);
+                CHECK(frame->height == 48);
+                CHECK(frame->format == zhulong::FRAME_FORMAT_NV12);
+                CHECK(frame->dma_fd >= 0);
+                CHECK(frame->pts == 2000);
+            }
         }
 
         std::cout << "All Decoder & BoundedQueue tests passed successfully!" << std::endl;

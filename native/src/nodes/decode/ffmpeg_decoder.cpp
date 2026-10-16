@@ -10,6 +10,7 @@
  */
 
 #include "nodes/decode/ffmpeg_decoder.hpp"
+#include "nodes/decode/mpp_decoder.hpp"
 
 #include <cstring>
 #include <stdexcept>
@@ -19,7 +20,19 @@ namespace zhulong {
 IDecodeNode::Ptr IDecodeNode::create(int32_t codec, const uint8_t *extradata, size_t extradata_size,
                                      int32_t time_base_num, int32_t time_base_den,
                                      DecoderBackend backend) {
-    (void)backend;
+    if (backend == DecoderBackend::AUTO || backend == DecoderBackend::MPP_HW) {
+        if (MppDecodeNode::is_supported()) {
+            try {
+                return std::make_unique<MppDecodeNode>(codec, extradata, extradata_size, time_base_num, time_base_den);
+            } catch (...) {
+                if (backend == DecoderBackend::MPP_HW) {
+                    throw;
+                }
+            }
+        } else if (backend == DecoderBackend::MPP_HW) {
+            throw std::runtime_error("MPP hardware decoder requested but not supported on this host");
+        }
+    }
     return std::make_unique<FFmpegDecodeNode>(codec, extradata, extradata_size, time_base_num, time_base_den);
 }
 

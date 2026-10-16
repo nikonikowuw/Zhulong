@@ -21,6 +21,7 @@ namespace zhulong {
 enum class DecoderBackend {
     AUTO = 0,       /**< 自动选择后端 (优先硬件加速，无硬件时回退软解) */
     FFMPEG_SW = 1,  /**< 静态 FFmpeg 软解 (通用 CPU 保底) */
+    MPP_HW = 2,     /**< Rockchip MPP 硬件解码器 (RK3568/RK3588 专用) */
 };
 
 /**
