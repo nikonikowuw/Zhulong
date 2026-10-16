@@ -407,3 +407,26 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+## Session 54: 设计与实现前端感知记录模块与动态类型筛选
+<!-- trellis-session: v=2 fp=4156dee1073ae8fe -->
+
+**Date**: 2026-10-17
+**Task**: 设计与实现前端感知记录模块与动态类型筛选
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+在 web/src/features/records 下完整实现感知记录模块（识别、告警、抓拍），支持 Table 与 Grid 双视图切换及 Bounding Box 详情弹窗研判；后端 internal/record 暴露 dynamic distinct target-types/alarm-types 接口实现零硬编码下拉筛选；三语国际化与全套自动化测试通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3f8d830` | feat(records): implement perception records module and dynamic type filtering |
+
+### Status
+
+[OK] **Completed**
