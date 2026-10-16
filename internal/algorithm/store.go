@@ -3,10 +3,10 @@ package algorithm
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
+	"github.com/nikonikowuw/Zhulong/internal/task"
 	"gorm.io/gorm"
 )
 
@@ -168,208 +168,60 @@ func (s *Store) DeleteAlgorithm(ctx context.Context, id string) error {
 	return nil
 }
 
-// --- Analysis Task Operations ---
+// --- Analysis Task Operations (Delegated to internal/task/Store for backward compatibility) ---
 
 func (s *Store) CreateTask(ctx context.Context, t *AnalysisTask) error {
-	if t == nil {
-		return errors.New("task is nil")
-	}
-	db, err := s.db(ctx)
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	if t.CreatedAt.IsZero() {
-		t.CreatedAt = now
-	} else {
-		t.CreatedAt = t.CreatedAt.UTC()
-	}
-	if t.UpdatedAt.IsZero() {
-		t.UpdatedAt = now
-	} else {
-		t.UpdatedAt = t.UpdatedAt.UTC()
-	}
-	return db.Create(t).Error
+	return task.NewStore(s.dbProvider).CreateTask(ctx, t)
 }
 
-func (s *Store) CreateTaskWithinBudget(ctx context.Context, task *AnalysisTask, maxPoints int64) error {
-	if task == nil {
-		return errors.New("task is nil")
-	}
-	db, err := s.db(ctx)
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	if task.CreatedAt.IsZero() {
-		task.CreatedAt = now
-	} else {
-		task.CreatedAt = task.CreatedAt.UTC()
-	}
-	if task.UpdatedAt.IsZero() {
-		task.UpdatedAt = now
-	} else {
-		task.UpdatedAt = task.UpdatedAt.UTC()
-	}
-
-	return db.Transaction(func(tx *gorm.DB) error {
-		var algorithm Algorithm
-		if err := tx.Select("id", "compute_cost").Where("id = ?", task.AlgorithmID).First(&algorithm).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrNotFound
-			}
-			return err
-		}
-
-		var allocations []struct {
-			TaskID      string `gorm:"column:task_id"`
-			SampleFPS   int    `gorm:"column:sample_fps"`
-			ComputeCost *int   `gorm:"column:compute_cost"`
-		}
-		if err := tx.Table("analysis_tasks").
-			Select("analysis_tasks.id AS task_id, analysis_tasks.sample_fps, algorithms.compute_cost").
-			Joins("LEFT JOIN algorithms ON algorithms.id = analysis_tasks.algorithm_id").
-			Where("analysis_tasks.enabled = ?", true).
-			Scan(&allocations).Error; err != nil {
-			return err
-		}
-
-		var total int64
-		for _, allocation := range allocations {
-			if allocation.ComputeCost == nil {
-				return fmt.Errorf("enabled analysis task %q references a missing algorithm", allocation.TaskID)
-			}
-			total, err = addComputePoints(total, *allocation.ComputeCost, allocation.SampleFPS, maxPoints)
-			if err != nil {
-				return err
-			}
-		}
-		if task.Enabled {
-			if total, err = addComputePoints(total, algorithm.ComputeCost, task.SampleFPS, maxPoints); err != nil {
-				return err
-			}
-		}
-		return tx.Create(task).Error
-	})
-}
-
-func addComputePoints(total int64, computeCost, sampleFPS int, maxPoints int64) (int64, error) {
-	if total < 0 || total > maxPoints || computeCost < 0 || sampleFPS < 0 {
-		return 0, fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
-	}
-	cost := int64(computeCost)
-	fps := int64(sampleFPS)
-	if fps > 0 && cost > (maxPoints-total)/fps {
-		return 0, fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
-	}
-	return total + cost*fps, nil
+func (s *Store) CreateTaskWithinBudget(ctx context.Context, t *AnalysisTask, maxPoints int64) error {
+	return task.NewStore(s.dbProvider).CreateTaskWithinBudget(ctx, t, maxPoints)
 }
 
 func (s *Store) GetTask(ctx context.Context, id string) (*AnalysisTask, error) {
-	db, err := s.db(ctx)
-	if err != nil {
-		return nil, err
+	t, err := task.NewStore(s.dbProvider).GetTask(ctx, id)
+	if errors.Is(err, task.ErrNotFound) {
+		return nil, ErrNotFound
 	}
-	var t AnalysisTask
-	if err := db.Where("id = ?", id).First(&t).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	return &t, nil
+	return t, err
 }
 
 func (s *Store) GetTaskByCameraAndAlgorithm(ctx context.Context, cameraID, algorithmID string) (*AnalysisTask, error) {
-	db, err := s.db(ctx)
-	if err != nil {
-		return nil, err
+	t, err := task.NewStore(s.dbProvider).GetTaskByCameraAndAlgorithm(ctx, cameraID, algorithmID)
+	if errors.Is(err, task.ErrNotFound) {
+		return nil, ErrNotFound
 	}
-	var t AnalysisTask
-	if err := db.Where("camera_id = ? AND algorithm_id = ?", cameraID, algorithmID).First(&t).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	return &t, nil
+	return t, err
 }
 
 func (s *Store) ListTasks(ctx context.Context) ([]AnalysisTask, error) {
-	db, err := s.db(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var list []AnalysisTask
-	if err := db.Order("created_at ASC").Find(&list).Error; err != nil {
-		return nil, err
-	}
-	return list, nil
+	return task.NewStore(s.dbProvider).ListTasks(ctx)
 }
 
 func (s *Store) ListTasksByCamera(ctx context.Context, cameraID string) ([]AnalysisTask, error) {
-	db, err := s.db(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var list []AnalysisTask
-	if err := db.Where("camera_id = ?", cameraID).Order("created_at ASC").Find(&list).Error; err != nil {
-		return nil, err
-	}
-	return list, nil
+	return task.NewStore(s.dbProvider).ListTasksByCamera(ctx, cameraID)
 }
 
 func (s *Store) ListTasksByAlgorithm(ctx context.Context, algorithmID string) ([]AnalysisTask, error) {
-	db, err := s.db(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var list []AnalysisTask
-	if err := db.Where("algorithm_id = ?", algorithmID).Order("created_at ASC").Find(&list).Error; err != nil {
-		return nil, err
-	}
-	return list, nil
+	return task.NewStore(s.dbProvider).ListTasksByAlgorithm(ctx, algorithmID)
 }
 
 func (s *Store) UpdateTask(ctx context.Context, t *AnalysisTask) error {
-	if t == nil {
-		return errors.New("task is nil")
-	}
-	db, err := s.db(ctx)
-	if err != nil {
-		return err
-	}
-	t.UpdatedAt = time.Now().UTC()
-	return db.Save(t).Error
+	return task.NewStore(s.dbProvider).UpdateTask(ctx, t)
 }
 
 func (s *Store) DeleteTask(ctx context.Context, id string) error {
-	db, err := s.db(ctx)
-	if err != nil {
-		return err
-	}
-	res := db.Where("id = ?", id).Delete(&AnalysisTask{})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
+	err := task.NewStore(s.dbProvider).DeleteTask(ctx, id)
+	if errors.Is(err, task.ErrNotFound) {
 		return ErrNotFound
 	}
-	return nil
+	return err
 }
 
 func (s *Store) DeleteTasksByCamera(ctx context.Context, cameraID string) error {
-	db, err := s.db(ctx)
-	if err != nil {
-		return err
-	}
-	return db.Where("camera_id = ?", cameraID).Delete(&AnalysisTask{}).Error
+	return task.NewStore(s.dbProvider).DeleteTasksByCamera(ctx, cameraID)
 }
 
 func (s *Store) DeleteTasksByAlgorithm(ctx context.Context, algorithmID string) error {
-	db, err := s.db(ctx)
-	if err != nil {
-		return err
-	}
-	return db.Where("algorithm_id = ?", algorithmID).Delete(&AnalysisTask{}).Error
+	return task.NewStore(s.dbProvider).DeleteTasksByAlgorithm(ctx, algorithmID)
 }

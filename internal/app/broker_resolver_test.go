@@ -7,6 +7,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"github.com/nikonikowuw/Zhulong/internal/database"
+	"github.com/nikonikowuw/Zhulong/internal/task"
 	"go.uber.org/zap"
 )
 
@@ -38,9 +39,9 @@ func TestSyncBrokerSubscriptionsPropagatesTaskLookupFailure(t *testing.T) {
 	}
 
 	// A closed database makes ListTasksByAlgorithm fail.
-	store := algorithm.NewStore(dbStore)
+	taskStore := task.NewStore(dbStore)
 	hub := camera.NewStreamHub(nil, nil, nil, nil, nil, zap.NewNop())
-	resolver := &appBrokerPathResolver{store: store, streamHub: hub}
+	resolver := &appBrokerPathResolver{taskStore: taskStore, streamHub: hub}
 
 	if _, err := resolver.SyncBrokerSubscriptions(context.Background(), "algo_a"); err == nil {
 		t.Fatal("expected SyncBrokerSubscriptions to fail when the task lookup fails")
@@ -59,7 +60,8 @@ func TestPublishRateUsesCrossPackageMax(t *testing.T) {
 	defer func() { _ = dbStore.Close() }()
 
 	store := algorithm.NewStore(dbStore)
-	resolver := &appBrokerPathResolver{store: store, streamHub: nil}
+	taskStore := task.NewStore(dbStore)
+	resolver := &appBrokerPathResolver{taskStore: taskStore, streamHub: nil}
 	ctx := context.Background()
 
 	for _, id := range []string{"algo_fast", "algo_slow"} {

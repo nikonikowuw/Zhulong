@@ -1,9 +1,10 @@
 package algorithm
 
 import (
-	"fmt"
 	"path/filepath"
 	"time"
+
+	"github.com/nikonikowuw/Zhulong/internal/task"
 )
 
 // Algorithm status enum
@@ -117,40 +118,16 @@ func (a *Algorithm) PreviousEntryPath(algoDir string) string {
 	return filepath.Join(a.PreviousInstallDir(algoDir), "plugin.so")
 }
 
-// AnalysisTask represents a video analysis task associated with a camera and algorithm.
-//
-// ⚠️ Enabled 不得带 `gorm:"default:true"` 标签：GORM 对带 default 标签的零值字段会
-// 从 INSERT 中省略该列，导致显式写入的 Enabled=false 被数据库默认值静默翻回 true。
-// 表级 DEFAULT 1 已在迁移中声明，插入语义由调用方显式给出。
-// 回归测试见 store_test.go 的 TestStoreCreateTaskPersistsDisabledEnabled。
-type AnalysisTask struct {
-	ID          string    `gorm:"primaryKey;column:id" json:"id"`
-	CameraID    string    `gorm:"column:camera_id;not null;index" json:"cameraId"`
-	AlgorithmID string    `gorm:"column:algorithm_id;not null;index" json:"algorithmId"`
-	Enabled     bool      `gorm:"column:enabled;not null" json:"enabled"`
-	SampleFPS   int       `gorm:"column:sample_fps;not null;default:5" json:"sampleFps"`
-	ConfigJSON  string    `gorm:"column:config_json;not null;default:'{}'" json:"configJson"`
-	CreatedAt   time.Time `gorm:"column:created_at;not null" json:"createdAt"`
-	UpdatedAt   time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
-}
-
-// TableName overrides the default table name for AnalysisTask.
-func (AnalysisTask) TableName() string {
-	return "analysis_tasks"
-}
+// AnalysisTask is an alias to task.Task for backward compatibility.
+// Deprecated: use task.Task from github.com/nikonikowuw/Zhulong/internal/task instead.
+type AnalysisTask = task.Task
 
 // SampleFPSMax 是单路分析任务的采样帧率上限。
-// 它同时是「int → uint32」转换与「异常帧率打满发布侧」两道防护的边界：
-// AnalysisTask.SampleFPS 是 int，且 Store.UpdateTask 不做校验，
-// 因此所有写路径都必须经过 ValidateSampleFPS。
-const SampleFPSMax = 1000
+const SampleFPSMax = task.SampleFPSMax
 
 // ValidateSampleFPS 校验并收敛分析任务的采样帧率。
 func ValidateSampleFPS(raw int) (uint32, error) {
-	if raw < 0 || raw > SampleFPSMax {
-		return 0, fmt.Errorf("%w: sample_fps %d out of range [0, %d]", ErrInvalidTaskConfig, raw, SampleFPSMax)
-	}
-	return uint32(raw), nil
+	return task.ValidateSampleFPS(raw)
 }
 
 // ManifestPlatform describes the target hardware requirement in manifest.json.

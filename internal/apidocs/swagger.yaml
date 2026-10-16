@@ -1101,6 +1101,61 @@ definitions:
     - syncIntervalSeconds
     - timezone
     type: object
+  task.CreateTaskRequest:
+    properties:
+      algorithm_id:
+        type: string
+      algorithmId:
+        type: string
+      camera_id:
+        type: string
+      cameraId:
+        type: string
+      config_json:
+        type: string
+      configJson:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      sample_fps:
+        type: integer
+      sampleFps:
+        type: integer
+    type: object
+  task.Task:
+    properties:
+      algorithmId:
+        type: string
+      cameraId:
+        type: string
+      configJson:
+        type: string
+      createdAt:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      sampleFps:
+        type: integer
+      updatedAt:
+        type: string
+    type: object
+  task.UpdateTaskRequest:
+    properties:
+      config_json:
+        type: string
+      configJson:
+        type: string
+      enabled:
+        type: boolean
+      sample_fps:
+        type: integer
+      sampleFps:
+        type: integer
+    type: object
 info:
   contact: {}
   description: Local API for the Zhulong edge operations host.
@@ -3104,4 +3159,193 @@ paths:
       summary: Trigger immediate NTP synchronization
       tags:
       - system
+  /tasks:
+    get:
+      description: Returns tasks filtered optionally by camera_id or algorithm_id.
+      parameters:
+      - description: Filter by camera ID
+        in: query
+        name: camera_id
+        type: string
+      - description: Filter by algorithm ID
+        in: query
+        name: algorithm_id
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/task.Task'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: List analysis tasks
+      tags:
+      - tasks
+    post:
+      consumes:
+      - application/json
+      description: Binds a camera to an algorithm with a sampling rate and a config
+        JSON document.
+      parameters:
+      - description: Analysis task payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/task.CreateTaskRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/task.Task'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Create an analysis task
+      tags:
+      - tasks
+  /tasks/{id}:
+    delete:
+      parameters:
+      - description: Analysis task ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  type: object
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Delete an analysis task
+      tags:
+      - tasks
+    get:
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/task.Task'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get single analysis task
+      tags:
+      - tasks
+    put:
+      consumes:
+      - application/json
+      description: Updates sampling rate, enabled state, or config JSON of an existing
+        task.
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Update payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/task.UpdateTaskRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/task.Task'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Update an analysis task
+      tags:
+      - tasks
 swagger: "2.0"

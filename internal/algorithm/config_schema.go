@@ -2,13 +2,13 @@ package algorithm
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/nikonikowuw/Zhulong/internal/task"
 )
 
-var ErrInvalidTaskConfig = errors.New("analysis task config does not match algorithm schema")
+var ErrInvalidTaskConfig = task.ErrInvalidTaskConfig
 
 func compileConfigSchema(schemaJSON string) (*jsonschema.Resolved, error) {
 	var schema jsonschema.Schema

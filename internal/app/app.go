@@ -19,6 +19,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/record"
 	"github.com/nikonikowuw/Zhulong/internal/storage"
 	"github.com/nikonikowuw/Zhulong/internal/systemtime"
+	"github.com/nikonikowuw/Zhulong/internal/task"
 	"github.com/nikonikowuw/Zhulong/internal/webui"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -325,7 +326,7 @@ type algorithmOut struct {
 }
 
 type appBrokerPathResolver struct {
-	store     *algorithm.Store
+	taskStore *task.Store
 	streamHub *camera.StreamHub
 }
 
@@ -340,10 +341,10 @@ type appBrokerPathResolver struct {
 // ⚠️ 解析失败时不提交任何订阅变更，也不会遗留已 acquire 的流：
 // 所有路径解析完毕后才进入提交阶段。
 func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, algorithmID string) ([]string, error) {
-	if r.store == nil || r.streamHub == nil {
+	if r.taskStore == nil || r.streamHub == nil {
 		return nil, nil
 	}
-	tasks, err := r.store.ListTasksByAlgorithm(ctx, algorithmID)
+	tasks, err := r.taskStore.ListTasksByAlgorithm(ctx, algorithmID)
 	if err != nil {
 		return nil, fmt.Errorf("list tasks for algorithm %s: %w", algorithmID, err)
 	}
@@ -351,18 +352,18 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 	// 该包要求订阅的相机及其本包内的最大采样率；order 保持 DB 的稳定顺序。
 	wanted := make(map[string]struct{}, len(tasks))
 	order := make([]string, 0, len(tasks))
-	for _, task := range tasks {
-		if !task.Enabled {
+	for _, tsk := range tasks {
+		if !tsk.Enabled {
 			continue
 		}
-		if _, err := algorithm.ValidateSampleFPS(task.SampleFPS); err != nil {
-			return nil, fmt.Errorf("task %s: %w", task.ID, err)
+		if _, err := task.ValidateSampleFPS(tsk.SampleFPS); err != nil {
+			return nil, fmt.Errorf("task %s: %w", tsk.ID, err)
 		}
-		if _, ok := wanted[task.CameraID]; ok {
+		if _, ok := wanted[tsk.CameraID]; ok {
 			continue
 		}
-		wanted[task.CameraID] = struct{}{}
-		order = append(order, task.CameraID)
+		wanted[tsk.CameraID] = struct{}{}
+		order = append(order, tsk.CameraID)
 	}
 
 	// 阶段 1：解析全部路径。任一路失败则整体失败，不触碰订阅关系。
@@ -404,21 +405,21 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 
 // publishRateByCamera 返回每个相机上所有 enabled 分析任务的最大采样帧率。
 func (r *appBrokerPathResolver) publishRateByCamera(ctx context.Context) (map[string]uint32, error) {
-	tasks, err := r.store.ListTasks(ctx)
+	tasks, err := r.taskStore.ListTasks(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list analysis tasks for publish rate: %w", err)
 	}
 	rates := make(map[string]uint32)
-	for _, task := range tasks {
-		if !task.Enabled {
+	for _, tsk := range tasks {
+		if !tsk.Enabled {
 			continue
 		}
-		fps, err := algorithm.ValidateSampleFPS(task.SampleFPS)
+		fps, err := task.ValidateSampleFPS(tsk.SampleFPS)
 		if err != nil {
-			return nil, fmt.Errorf("task %s: %w", task.ID, err)
+			return nil, fmt.Errorf("task %s: %w", tsk.ID, err)
 		}
-		if fps > rates[task.CameraID] {
-			rates[task.CameraID] = fps
+		if fps > rates[tsk.CameraID] {
+			rates[tsk.CameraID] = fps
 		}
 	}
 	return rates, nil
@@ -473,11 +474,18 @@ func (a *supervisorGallerySyncAdapter) GetGallerySyncData(ctx context.Context) (
 	return algoItems, nil
 }
 
-func provideAlgorithm(dbProvider database.DBProvider, streamHub *camera.StreamHub, eng *engine.Engine, config Config, logger *zap.Logger) algorithmOut {
+func provideAlgorithm(
+	dbProvider database.DBProvider,
+	streamHub *camera.StreamHub,
+	eng *engine.Engine,
+	config Config,
+	taskStore *task.Store,
+	logger *zap.Logger,
+) algorithmOut {
 	comp := algorithm.NewAlgorithmComponents(dbProvider, config.DataDir, config.AlgorithmTarget, logger)
 	if streamHub != nil {
 		comp.Supervisor.SetBrokerSubscriptionResolver(&appBrokerPathResolver{
-			store:     comp.Store,
+			taskStore: taskStore,
 			streamHub: streamHub,
 		})
 	}
@@ -497,6 +505,41 @@ func provideAlgorithm(dbProvider database.DBProvider, streamHub *camera.StreamHu
 
 var algorithmModule = fx.Module("algorithm",
 	fx.Provide(provideAlgorithm),
+)
+
+// --- Task Module ---
+
+type taskOut struct {
+	fx.Out
+
+	Service         *task.Service
+	Handler         *task.Handler
+	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+}
+
+func provideTaskStore(dbProvider database.DBProvider) *task.Store {
+	return task.NewStore(dbProvider)
+}
+
+func provideTaskComponents(
+	store *task.Store,
+	algoService *algorithm.Service,
+	logger *zap.Logger,
+) taskOut {
+	service := task.NewService(store, algoService, algoService, logger)
+	handler := task.NewHandler(service, logger)
+	return taskOut{
+		Service:         service,
+		Handler:         handler,
+		ProtectedRoutes: handler,
+	}
+}
+
+var taskModule = fx.Module("task",
+	fx.Provide(
+		provideTaskStore,
+		provideTaskComponents,
+	),
 )
 
 // --- Person Module ---
@@ -609,6 +652,7 @@ var Module = fx.Options(
 	storageModule,
 	mediaFileModule,
 	algorithmModule,
+	taskModule,
 	personModule,
 	recordModule,
 	httpModule,

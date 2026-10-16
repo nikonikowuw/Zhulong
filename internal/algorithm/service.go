@@ -14,6 +14,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
+	"github.com/nikonikowuw/Zhulong/internal/task"
 	"go.uber.org/zap"
 )
 
@@ -21,7 +22,7 @@ const MaxComputePoints int64 = 1000
 
 var (
 	ErrAlgorithmActive          = errors.New("algorithm is currently active and cannot be deleted")
-	ErrComputeBudgetExceeded    = errors.New("total compute cost exceeds 1000 points budget")
+	ErrComputeBudgetExceeded    = task.ErrComputeBudgetExceeded
 	ErrCameraAlreadyBound       = errors.New("camera already bound to this algorithm")
 	ErrAlgorithmAlreadyExisting = errors.New("algorithm with this name already exists")
 )
@@ -392,6 +393,35 @@ func (s *Service) DeleteTask(ctx context.Context, id string) error {
 
 	s.scheduleAlgorithmRestart(task.AlgorithmID)
 	return nil
+}
+
+// ScheduleAlgorithmRestart schedules a debounced restart for the algorithm runner.
+func (s *Service) ScheduleAlgorithmRestart(algorithmID string) {
+	s.scheduleAlgorithmRestart(algorithmID)
+}
+
+// OnTaskChanged implements task.TaskChangeListener.
+func (s *Service) OnTaskChanged(ctx context.Context, algorithmID string) {
+	s.ScheduleAlgorithmRestart(algorithmID)
+}
+
+// GetAlgorithmSpec implements task.AlgorithmSpecProvider.
+func (s *Service) GetAlgorithmSpec(ctx context.Context, idOrName string) (*task.AlgorithmSpec, error) {
+	algo, err := s.store.GetAlgorithm(ctx, idOrName)
+	if err != nil {
+		if algoByName, errName := s.store.GetAlgorithmByName(ctx, idOrName); errName == nil {
+			algo = algoByName
+		} else {
+			return nil, err
+		}
+	}
+	return &task.AlgorithmSpec{
+		ID:               algo.ID,
+		Name:             algo.Name,
+		ConfigSchemaJSON: algo.ConfigSchemaJSON,
+		ComputeCost:      algo.ComputeCost,
+		Status:           algo.Status,
+	}, nil
 }
 
 // scheduleAlgorithmRestart 合并短窗口内的连续任务变更，然后对该算法包执行
