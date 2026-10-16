@@ -122,8 +122,11 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 - **分配优先级探测**：
   1. `/dev/dma_heap/cma`：优先分配连续物理内存块，满足硬件硬性物理连续要求；
   2. `/dev/dma_heap/system`：系统级 DMA-Heap 分配；
-  3. `/dev/dri/card0` (DRM Dumb Buffer)：通过 DRM ioctl 创建并导出 DMA-BUF（`DRM_IOCTL_PRIME_HANDLE_TO_FD`）；
+  3. `/dev/dri/card0` (DRM Dumb Buffer)：通过 DRM ioctl 创建并导出 DMA-BUF（`DRM_IOCTL_PRIME_HANDLE_TO_FD`）。⚠️ **KMS 限制**：Dumb Buffer 属于显示管理功能，仅允许在主节点 `/dev/dri/card*` 创建，严禁在渲染节点 `/dev/dri/renderD*` 创建（内核会拒绝并返回 `EACCES`）；且探测时必须发起最小 `CREATE_DUMB` 真实探针校验，防止部分驱动开放 card 节点却不支持 dumb 造成的不可用假阳性；
   4. 宿主测试环境/非 Linux 平台自动回退为不可用（`is_supported() == false`）。
+- **FrameBroker 双轨分发与零拷贝穿透**：
+  - 当上游硬件帧具备有效 `HardwareFrame::dma_fd >= 0` 时，`publish_frame` 直接分发该文件描述符，**完全杜绝任何 CPU `std::memcpy` 与 Cache 刷新**；
+  - 当为 CPU 软解帧时（`dma_fd < 0`），写入 POSIX 共享内存池（`shm_pool_`）以兼容标准 SHM 客户端；若硬件环境激活了 `dma_slots_`，则同步写入 DMA-BUF 槽位并刷出 Cache，供下游加速插件直绑。
 - **CPU Cache 同步括号 (Cache Synchronization Bracket)**：
   - CPU 读写前：调用 `sync_start(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE)` 触发 `DMA_BUF_IOCTL_SYNC`；
   - 硬件外设介入前：调用 `sync_end(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE)` 刷回 Cache Line；
