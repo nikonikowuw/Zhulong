@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "Check HTTP response envelopes and error writing conventions"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Check apperr.Error usage and status code mappings"}
