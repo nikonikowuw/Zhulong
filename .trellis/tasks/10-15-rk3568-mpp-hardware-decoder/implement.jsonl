@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "Hardware backends and zero-copy DMA-BUF flow"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "Node pipeline, HardwareFrame contract, and decode lifecycle"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "Video ingestion and native C ABI boundaries"}

@@ -19,10 +19,13 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
   - **防止取消状态残留**：流生命周期内若经历“AI 接入 ➔ 注销 ➔ 再次接入”，每次均创建全新的 `DecodeSession`，其内部 `packet_queue_` 与 `frame_queue_` 拥有初始干净的非取消状态，杜绝已取消队列引发的 100% CPU 空转与产帧中断。
 - **原生 C++ 帧消费通道**：
   - `Stream::acquire_frame(HardwareFrame::ConstPtr &out_frame, timeout)` 提供线程安全的原生帧借用通道，下游模块以只读共享所有权并发消费，由底层闭包安全保活。
-- **单流确定性线程模型**：
-  - 解码器采用 `codec_ctx_->thread_count = 1` 单线程解码，并发由多流模型（多 stream）承载，杜绝底层多线程竞争与线程爆炸。
+- **单流确定性线程模型与双后端自适应路由**：
+  - 解码节点通过 `IDecodeNode::create` 统一抽象，提供 `DecoderBackend::AUTO`、`DecoderBackend::FFMPEG_SW` 与 `DecoderBackend::MPP_HW` 三种分流策略。
+  - 在 `AUTO` 模式下，系统动态探测硬件加速能力（`MppDecodeNode::is_supported()`），若支持且码流为 H.264/H.265 则自动启用 MPP 硬件解码并直出 DMA-BUF；环境不支持或解码异常时透明回退至 FFmpeg 软解。
+  - 解码器单实例单线程运行，并发由多流模型（多 stream）承载，杜绝底层多线程竞争与线程爆炸。
+  - 解码会话工作循环 (`DecodeSession::decode_loop`) 在待解包队列为空发生超时（idle timeout 50ms）时，主动执行 `drain_frames(dec)` 排空解码器内部已就绪帧，防止低帧率或测试单包场景下画面在底层 DPB 发生不必要滞留。
 - **零拷贝帧封装**：
-  - 通过 `HardwareFrame` 封装解码输出，`release_fn` 闭包安全回收底层 `AVFrame` 引用，由下游算法只读借用。
+  - 通过 `HardwareFrame` 封装解码输出，软解由 `release_fn` 闭包安全回收底层 `AVFrame` 引用，硬解由 `release_fn` 闭包调用 `mpp_buffer_put` 释放 VPU 缓冲区并关闭 `dup` 出的独立 `dma_fd`，由下游算法只读借用。
 - **订阅通道逐订阅者异常隔离**：
   - `Stream::dispatch` 的扇出循环必须对每个 `subscription->invoke()` 单独 `try/catch`。回调抛 C++ 异常是调用方违约（`engine.h` 明文禁止），**不得**中断同流其他订阅者的数据供给，**也不得**将流置为 `FAILED`。
   - `Subscription::invoke` 在重抛前已恢复 `in_callback` 并置 `enabled=false`，故违约订阅者自动静默失效（后续 `invoke` 首行直接返回），无需从快照移除。

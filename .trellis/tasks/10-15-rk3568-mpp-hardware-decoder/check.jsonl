@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "Zero-copy DMA-BUF and RGA/RKNN integration validation"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "HardwareFrame lifecycle and bounded queue verification"}

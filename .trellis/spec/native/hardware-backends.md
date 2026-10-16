@@ -154,19 +154,70 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 
 ---
 
-## 5. 验证命令
+## 5. Rockchip MPP 硬件视频解码后端契约 (VPU)
+
+*硬件基线：RK3568（Debian 11 bullseye arm64 / 内核 5.10.226 / `librockchip_mpp.so.1` 1.5.0-1 / VPU 驱动 `/dev/mpp_service`）。*
+
+### 5.1 动态加载与跨平台编译隔离
+
+- **杜绝编译期链接**：宿主引擎二进制 `libZhulongEngine.a` 及测试套件**严禁静态或动态链接 `librockchip_mpp.so`**。在非 RK 硬件（macOS、x86_64 Linux CI 开发机）上编译时，必须零链接错误且无需安装 MPP 库文件。
+- **动态符号加载 (`MppLoader`)**：
+  - 采用单例懒加载模式，运行时优先探测内核字符设备 `/dev/mpp_service` 是否存在且具备读写权限；
+  - 探测成功后通过 `dlopen` 按顺序探测 `librockchip_mpp.so.1` 和 `librockchip_mpp.so`，并通过 `dlsym` 绑定核心 API 函数表（`mpp_create`, `mpp_init`, `mpp_destroy`, `mpp_packet_*`, `mpp_frame_*`, `mpp_buffer_*` 等）；
+  - 若任一关键符号缺失或 `dlopen` 失败，`MppLoader::is_supported()` 返回 `false`，解码工厂透明回退至 `FFmpegDecodeNode` 软解。
+
+### 5.2 状态机配置与防死锁时序
+
+1. ⚠️ **Parser 命令字前置配置契约 (Need to setup before init)**：
+   - Rockchip MPP 内部的流切分器与快速解析模式**必须在 `mpp_init` 调用前配置完成**：
+     ```cpp
+     uint32_t split_mode = 1;
+     mpi->control(ctx, MPP_DEC_SET_PARSER_SPLIT_MODE, &split_mode);
+     uint32_t fast_mode = 1;
+     mpi->control(ctx, MPP_DEC_SET_PARSER_FAST_MODE, &fast_mode);
+     mpp_init(ctx, MPP_CTX_DEC, coding);
+     ```
+   - 若在 `mpp_init` 后调用，切分器无法生效，导致单包输入时无法识别 Access Unit 边界并产生首帧滞留。
+2. **两阶段非阻塞拉取与 `info_change` 处理**：
+   - 解码器配置超时为 0（`MPP_SET_INPUT_TIMEOUT` 与 `MPP_SET_OUTPUT_TIMEOUT` 为 0）；
+   - 当 `mpp_frame_get_info_change(frame)` 为真时，读取实际画面尺寸与步长，创建或复用外部缓冲组 `buf_group`，并立即下发 `MPP_DEC_SET_EXT_BUF_GROUP` 与 `MPP_DEC_SET_INFO_CHANGE_READY`；
+   - ⚠️ `info_change` 帧不包含图像有效载荷，**必须立即调用 `mpp_frame_deinit(&frame)` 销毁**，严禁将其当作有效画面送出。
+3. **即时回放与快速输出**：
+   - 启用 `MPP_DEC_SET_ENABLE_FAST_PLAY` 与 `MPP_DEC_SET_IMMEDIATE_OUT`，确保首个 IDR 关键帧无需积攒后续 P 帧即可立即解算输出。
+
+### 5.3 底层 DMA-BUF 提取与 RAII 租借生命周期
+
+1. **独立文件描述符所有权 (`dup`)**：
+   - 从 `mpp_frame_get_buffer(frame)` 提取底层 `MppBuffer`；
+   - 驱动返回的 `mpp_buffer_get_fd(buf)` 在 MPP 内部受生命周期管理。为避免下游异步消费与解码器内部复用产生竞态，必须通过 `int owned_fd = ::dup(raw_fd)` 获取独立文件描述符回填至 `HardwareFrame::dma_fd`。
+2. ⚠️ **帧池防死锁关键时序 (Ref Increment & Immediate Deinit)**：
+   - 取得 `MppBuffer` 后，必须调用 `mpp_buffer_inc_ref(buf)` 显式增加底层物理缓冲区的引用计数；
+   - 紧接着**立即调用 `mpp_frame_deinit(&frame)` 释放外层 `MppFrame` 描述符容器**！若持有 `MppFrame` 直至下游消费完毕，MPP 内部的固定槽位（通常为 16~24 槽位）将在几帧后耗尽，导致硬件解码器永久挂起陷入死锁；
+   - 将 `mpp_buffer_put(buf)` 绑定在 `HardwareFrame::release_fn` RAII 析构闭包中，并由 `close(owned_fd)` 释放独立描述符。当下游算法或 `FrameBroker` 消费完毕时，自动归还底层 VPU 缓冲池。
+3. **硬件步长对齐与格式保真**：
+   - 导出的图像格式恒定标记为 `FRAME_FORMAT_NV12`；
+   - 水平步长 `hor_stride` 遵循 16 字节对齐，垂直步长 `ver_stride` 遵循 16 行对齐；
+   - `HardwareFrame` 的 `stride` 与 `vstride` 严格填入实际物理跨度，确保下游 RGA 与 RKNN 能够以真实的物理行宽进行零拷贝直绑与 Letterbox 转换。
+
+---
+
+## 6. 验证命令
 
 ```bash
 # 1. 检查头文件依赖隔离（仅允许在 native/src/backends/rknn/ 引用）
 grep -rn '#include.*rknn_api.h' native/src/ native/sdk/ native/include/
 
 # 2. 检查宿主与动态库依赖（宿主绝对不链接厂商 SDK）
-readelf -d build/native/cross-rk3568-rknn/libZhulongAlgoRuntime.so | grep -E 'NEEDED|RUNPATH'
-readelf -d build/targets/rk3568-rknn/Zhulong | grep NEEDED
+readelf -d build/native/cross-rk3568-rknn-rga/libZhulongAlgoRuntime.so | grep -E 'NEEDED|RUNPATH'
+readelf -d build/targets/rk3568-rknn-rga/Zhulong | grep NEEDED
 
 # 3. 运行本地 DMA-BUF 分配器与 IPC SCM_RIGHTS 传输单元测试
 python3 native/scripts/build.py test
 
-# 4. 交叉构建
+# 4. 交叉构建并在 RK3568 板端验证硬件解码与全链路零拷贝
+python3 native/scripts/build.py --profile native/profiles/rk3568-rknn-rga.json build
+scp build/native/cross-rk3568-rknn-rga/ZhulongDecoderTests rk3568:/tmp/
+ssh rk3568 "/tmp/ZhulongDecoderTests"
+```
 python3 native/scripts/build.py --profile native/profiles/rk3568-rknn.json build
 ```
