@@ -20,6 +20,8 @@ internal/
   camera/                     # 相机管理业务模块 (主子流建模、凭据加密、探活调度)
   person/                     # 人员与人脸底库域 (persons / person_faces 一人多照 CRUD)
   algorithm/                  # 算法包生命周期、验包门禁、Runner 进程监督与自愈回滚
+  task/                       # 视频分析任务管理域 (Camera 与 Algorithm 动态绑定、配置与帧率调度)
+  record/                     # 感知记录与结构化报警持久化域
   storage/                    # 边缘媒体存储与动态生命周期 (路径规范、statfs 水位感知)
   mediafile/                  # 媒体文件只读字节层 (按相对路径取元信息与 Range 传输，无列表)
   network/                    # 异构宿主网络配置与两阶段回滚看门狗模块
@@ -42,7 +44,7 @@ internal/
 ## 2. 依赖方向与单向流转铁律
 
 ```txt
-cmd/Zhulong ➔ internal/app ➔ internal/{auth, camera, person, algorithm, storage, mediafile, network, systemtime, audit} ➔ internal/{engine, database, httputil}
+cmd/Zhulong ➔ internal/app ➔ internal/{auth, camera, person, algorithm, task, record, storage, mediafile, network, systemtime, audit} ➔ internal/{engine, database, httputil}
                              internal/app ➔ internal/httpmiddleware ➔ internal/httputil
                              internal/app ➔ internal/audit/http ➔ internal/audit
                              internal/mediafile ➔ internal/{storage, httputil, apperr}   # 禁止反向；严禁 import internal/camera（间接拖入 CGO engine）
