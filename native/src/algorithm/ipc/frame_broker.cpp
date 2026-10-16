@@ -182,18 +182,24 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
     }
 
     // 写入数据到共享内存槽位或硬件 DMA-BUF 槽位
+    const bool is_zero_copy_frame = (frame.dma_fd >= 0);
     uint8_t* slot_data = nullptr;
+    uint8_t* dma_slot_data = nullptr;
     int dma_fd_to_send = -1;
-    if (has_dma_slots_) {
-        slot_data = static_cast<uint8_t*>(dma_slots_[slot_idx]->mmap_addr());
-        dma_fd_to_send = dma_slots_[slot_idx]->fd();
-        dma_slots_[slot_idx]->sync_start(zhulong::platform::DMA_SYNC_WRITE);
+
+    if (is_zero_copy_frame) {
+        // 硬件帧零拷贝直通：直接复用源帧的 DMA-BUF 文件描述符，绕过 memcpy 与槽位 CPU 映射
+        dma_fd_to_send = frame.dma_fd;
     } else {
         slot_data = shm_pool_.slot_write_ptr(slot_idx);
-        dma_fd_to_send = frame.dma_fd;
+        if (has_dma_slots_) {
+            dma_slot_data = static_cast<uint8_t*>(dma_slots_[slot_idx]->mmap_addr());
+            dma_fd_to_send = dma_slots_[slot_idx]->fd();
+            dma_slots_[slot_idx]->sync_start(zhulong::platform::DMA_SYNC_WRITE);
+        }
     }
 
-    if (!slot_data) {
+    if (!is_zero_copy_frame && !slot_data) {
         // 槽位获取失败：原子回退在途配额
         std::lock_guard<std::mutex> lock(mutex_);
         for (uint32_t cid : target_clients) {
@@ -227,32 +233,34 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
         msg.offsets[0] = 0;
         msg.offsets[1] = static_cast<uint32_t>(frame.y_plane_size());
 
-        size_t total_bytes = frame.y_plane_size() + static_cast<size_t>(frame.stride) * ((frame.height + 1) / 2);
-        if (total_bytes <= options_.slot_size) {
-            if (frame.host_planes[0] && frame.host_planes[1]) {
-                // 安全分平面逐行独立拷贝（杜绝把 data[0] 当作单一连续缓冲引发越界）
-                size_t uv_lines = (frame.height + 1) / 2;
-                uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
-                uint32_t src_uv_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : frame.stride;
+        if (!is_zero_copy_frame) {
+            size_t total_bytes = frame.y_plane_size() + static_cast<size_t>(frame.stride) * ((frame.height + 1) / 2);
+            if (total_bytes <= options_.slot_size) {
+                if (frame.host_planes[0] && frame.host_planes[1]) {
+                    // 安全分平面逐行独立拷贝（杜绝把 data[0] 当作单一连续缓冲引发越界）
+                    size_t uv_lines = (frame.height + 1) / 2;
+                    uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
+                    uint32_t src_uv_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : frame.stride;
 
-                if (src_y_stride == frame.stride) {
-                    std::memcpy(slot_data, frame.host_planes[0], frame.stride * frame.height);
-                } else {
-                    for (size_t r = 0; r < frame.height; ++r) {
-                        std::memcpy(slot_data + r * frame.stride, frame.host_planes[0] + r * src_y_stride, frame.width);
+                    if (src_y_stride == frame.stride) {
+                        std::memcpy(slot_data, frame.host_planes[0], frame.stride * frame.height);
+                    } else {
+                        for (size_t r = 0; r < frame.height; ++r) {
+                            std::memcpy(slot_data + r * frame.stride, frame.host_planes[0] + r * src_y_stride, frame.width);
+                        }
                     }
-                }
 
-                uint8_t* uv_dst = slot_data + msg.offsets[1];
-                if (src_uv_stride == frame.stride) {
-                    std::memcpy(uv_dst, frame.host_planes[1], frame.stride * uv_lines);
-                } else {
-                    for (size_t r = 0; r < uv_lines; ++r) {
-                        std::memcpy(uv_dst + r * frame.stride, frame.host_planes[1] + r * src_uv_stride, frame.width);
+                    uint8_t* uv_dst = slot_data + msg.offsets[1];
+                    if (src_uv_stride == frame.stride) {
+                        std::memcpy(uv_dst, frame.host_planes[1], frame.stride * uv_lines);
+                    } else {
+                        for (size_t r = 0; r < uv_lines; ++r) {
+                            std::memcpy(uv_dst + r * frame.stride, frame.host_planes[1] + r * src_uv_stride, frame.width);
+                        }
                     }
+                } else if (frame.host_ptr) {
+                    std::memcpy(slot_data, frame.host_ptr, total_bytes);
                 }
-            } else if (frame.host_ptr) {
-                std::memcpy(slot_data, frame.host_ptr, total_bytes);
             }
         }
     } else if (frame.format == FRAME_FORMAT_YUV420P) {
@@ -267,57 +275,75 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
         msg.offsets[1] = static_cast<uint32_t>(y_size);
         msg.offsets[2] = static_cast<uint32_t>(y_size + u_size);
 
-        size_t total_bytes = y_size + u_size * 2;
-        if (total_bytes <= options_.slot_size) {
-            if (frame.host_planes[0] && frame.host_planes[1] && frame.host_planes[2]) {
-                // 安全分平面独立拷贝 (杜绝假定 data[0] 物理连续造成的读越界)
-                uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
-                uint32_t src_u_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : static_cast<uint32_t>(u_stride);
-                uint32_t src_v_stride = frame.plane_strides[2] > 0 ? frame.plane_strides[2] : static_cast<uint32_t>(u_stride);
+        if (!is_zero_copy_frame) {
+            size_t total_bytes = y_size + u_size * 2;
+            if (total_bytes <= options_.slot_size) {
+                if (frame.host_planes[0] && frame.host_planes[1] && frame.host_planes[2]) {
+                    // 安全分平面独立拷贝 (杜绝假定 data[0] 物理连续造成的读越界)
+                    uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
+                    uint32_t src_u_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : static_cast<uint32_t>(u_stride);
+                    uint32_t src_v_stride = frame.plane_strides[2] > 0 ? frame.plane_strides[2] : static_cast<uint32_t>(u_stride);
 
-                size_t uv_h = (frame.height + 1) / 2;
-                size_t uv_w = (frame.width + 1) / 2;
+                    size_t uv_h = (frame.height + 1) / 2;
+                    size_t uv_w = (frame.width + 1) / 2;
 
-                if (src_y_stride == frame.stride) {
-                    std::memcpy(slot_data, frame.host_planes[0], y_size);
-                } else {
-                    for (size_t r = 0; r < frame.height; ++r) {
-                        std::memcpy(slot_data + r * frame.stride, frame.host_planes[0] + r * src_y_stride, frame.width);
+                    if (src_y_stride == frame.stride) {
+                        std::memcpy(slot_data, frame.host_planes[0], y_size);
+                    } else {
+                        for (size_t r = 0; r < frame.height; ++r) {
+                            std::memcpy(slot_data + r * frame.stride, frame.host_planes[0] + r * src_y_stride, frame.width);
+                        }
                     }
-                }
 
-                uint8_t* u_dst = slot_data + msg.offsets[1];
-                if (src_u_stride == u_stride) {
-                    std::memcpy(u_dst, frame.host_planes[1], u_size);
-                } else {
-                    for (size_t r = 0; r < uv_h; ++r) {
-                        std::memcpy(u_dst + r * u_stride, frame.host_planes[1] + r * src_u_stride, uv_w);
+                    uint8_t* u_dst = slot_data + msg.offsets[1];
+                    if (src_u_stride == u_stride) {
+                        std::memcpy(u_dst, frame.host_planes[1], u_size);
+                    } else {
+                        for (size_t r = 0; r < uv_h; ++r) {
+                            std::memcpy(u_dst + r * u_stride, frame.host_planes[1] + r * src_u_stride, uv_w);
+                        }
                     }
-                }
 
-                uint8_t* v_dst = slot_data + msg.offsets[2];
-                if (src_v_stride == u_stride) {
-                    std::memcpy(v_dst, frame.host_planes[2], u_size);
-                } else {
-                    for (size_t r = 0; r < uv_h; ++r) {
-                        std::memcpy(v_dst + r * u_stride, frame.host_planes[2] + r * src_v_stride, uv_w);
+                    uint8_t* v_dst = slot_data + msg.offsets[2];
+                    if (src_v_stride == u_stride) {
+                        std::memcpy(v_dst, frame.host_planes[2], u_size);
+                    } else {
+                        for (size_t r = 0; r < uv_h; ++r) {
+                            std::memcpy(v_dst + r * u_stride, frame.host_planes[2] + r * src_v_stride, uv_w);
+                        }
                     }
+                } else if (frame.host_ptr) {
+                    std::memcpy(slot_data, frame.host_ptr, total_bytes);
                 }
-            } else if (frame.host_ptr) {
-                std::memcpy(slot_data, frame.host_ptr, total_bytes);
             }
         }
     } else {
         msg.format = ZHULONG_PIXEL_FORMAT_BGR24;
         msg.offsets[0] = 0;
-        size_t total_bytes = static_cast<size_t>(frame.stride) * frame.height;
-        if (total_bytes <= options_.slot_size && frame.host_ptr) {
-            std::memcpy(slot_data, frame.host_ptr, total_bytes);
+        if (!is_zero_copy_frame) {
+            size_t total_bytes = static_cast<size_t>(frame.stride) * frame.height;
+            if (total_bytes <= options_.slot_size && frame.host_ptr) {
+                std::memcpy(slot_data, frame.host_ptr, total_bytes);
+            }
         }
     }
 
-    // 若使用 DMA 槽位，写完后执行 Cache 刷出
-    if (has_dma_slots_) {
+    // 若非零拷贝直通且使用 DMA 槽位，同步拷入 DMA-BUF 并刷出 CPU Cache
+    if (!is_zero_copy_frame && dma_slot_data) {
+        size_t total_payload_bytes = 0;
+        if (frame.format == FRAME_FORMAT_NV12) {
+            total_payload_bytes = frame.y_plane_size() + static_cast<size_t>(frame.stride) * ((frame.height + 1) / 2);
+        } else if (frame.format == FRAME_FORMAT_YUV420P) {
+            size_t y_size = static_cast<size_t>(frame.stride) * frame.height;
+            size_t u_stride = (frame.stride + 1) / 2;
+            total_payload_bytes = y_size + u_stride * ((frame.height + 1) / 2) * 2;
+        } else {
+            total_payload_bytes = static_cast<size_t>(frame.stride) * frame.height;
+        }
+
+        if (total_payload_bytes <= options_.slot_size) {
+            std::memcpy(dma_slot_data, slot_data, total_payload_bytes);
+        }
         dma_slots_[slot_idx]->sync_end(zhulong::platform::DMA_SYNC_WRITE);
     }
 

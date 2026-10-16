@@ -48,19 +48,9 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
 
     const int orig_w = raw.width;
     const int orig_h = raw.height;
-    const int src_stride = raw.strides[0] > 0 ? raw.strides[0] : orig_w * 3;
-    const bool is_bgr = (raw.format == ZHULONG_PIXEL_FORMAT_BGR24);
-    const int c_r = is_bgr ? 2 : 0;
-    const int c_g = 1;
-    const int c_b = is_bgr ? 0 : 2;
-
-    // 1. 前处理：SCRFD Letterbox 等比例缩放并靠左上放置 (保持宽高比)，黑边补 0
+    // 1. 前处理：通过 zhulong::ops::letterbox 执行硬件加速/CPU 降级视觉预处理
     constexpr int model_w = 640;
     constexpr int model_h = 640;
-    const float det_scale = std::min(static_cast<float>(model_w) / static_cast<float>(orig_w),
-                                     static_cast<float>(model_h) / static_cast<float>(orig_h));
-    const int unpad_w = std::min(model_w, static_cast<int>(std::round(static_cast<float>(orig_w) * det_scale)));
-    const int unpad_h = std::min(model_h, static_cast<int>(std::round(static_cast<float>(orig_h) * det_scale)));
 
     // 支持通过 DMA-BUF 持久缓存分配零拷贝输入张量（避免热路径单帧分配/释放抖动）
     if (image.dma_buf_fd() >= 0 && zhulong::platform::DmaBufAllocator::instance().is_supported()) {
@@ -84,29 +74,18 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
         input_tensor = zhulong::Tensor({1, model_h, model_w, 3}, zhulong::DataType::UINT8);
     }
 
-    uint8_t* dst_data = input_tensor.data<uint8_t>();
-    std::memset(dst_data, 0, input_tensor.byte_size());
+    zhulong::LetterboxParams params;
+    params.target_width = model_w;
+    params.target_height = model_h;
+    params.target_format = ZHULONG_PIXEL_FORMAT_RGB24;
 
-    // 双线性/近邻采样至 640x640 画布左上角，并完成 BGR24 -> RGB888 通道重排
-    const uint8_t* src_data = raw.planes[0];
-    const float scale_x = static_cast<float>(orig_w) / static_cast<float>(unpad_w);
-    const float scale_y = static_cast<float>(orig_h) / static_cast<float>(unpad_h);
-
-    for (int dy = 0; dy < unpad_h; ++dy) {
-        uint8_t* dst_row = dst_data + static_cast<size_t>(dy) * model_w * 3;
-        int sy = std::clamp(static_cast<int>(dy * scale_y), 0, orig_h - 1);
-        const uint8_t* src_row = src_data + static_cast<size_t>(sy) * src_stride;
-        for (int dx = 0; dx < unpad_w; ++dx) {
-            int sx = std::clamp(static_cast<int>(dx * scale_x), 0, orig_w - 1);
-            const uint8_t* p = src_row + sx * 3;
-            dst_row[dx * 3 + 0] = p[c_r];
-            dst_row[dx * 3 + 1] = p[c_g];
-            dst_row[dx * 3 + 2] = p[c_b];
-        }
-    }
-
+    zhulong_status_t status = zhulong::ops::letterbox(image, input_tensor, params);
     if (dma_input_buf_) {
         dma_input_buf_->sync_end(zhulong::platform::DMA_SYNC_WRITE);
+    }
+
+    if (status != ZHULONG_PLUGIN_OK) {
+        return detect_cpu_fallback(image);
     }
 
     // 2. NPU / 后端前向推理
@@ -114,7 +93,7 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
 
     // 3. 检查是否为真实 SCRFD 9 头输出；若非 9 头（如 CPU Mock 桩），平滑回退
     if (outputs.size() == 9) {
-        return decode_scrfd(outputs, orig_w, orig_h, det_scale);
+        return decode_scrfd(outputs, orig_w, orig_h, params.scale, params.pad_left, params.pad_top);
     }
 
     return detect_cpu_fallback(image);
@@ -122,7 +101,8 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
 
 std::vector<FaceDetection> FaceDetector::decode_scrfd(
     const std::vector<zhulong::Tensor>& outputs,
-    int orig_w, int orig_h, float det_scale
+    int orig_w, int orig_h, float det_scale,
+    int pad_left, int pad_top
 ) {
     if (outputs.size() != 9 || det_scale <= 0.0f) {
         return {};
@@ -157,10 +137,11 @@ std::vector<FaceDetection> FaceDetector::decode_scrfd(
                     const float cy = static_cast<float>(h * stride);
 
                     // 还原并扣除 Letterbox 缩放比，映射回原帧像素坐标
-                    float px1 = (cx - bboxes[index * 4 + 0] * stride) / det_scale;
-                    float py1 = (cy - bboxes[index * 4 + 1] * stride) / det_scale;
-                    float px2 = (cx + bboxes[index * 4 + 2] * stride) / det_scale;
-                    float py2 = (cy + bboxes[index * 4 + 3] * stride) / det_scale;
+                    // 还原并扣除 Letterbox 居中补边与缩放比，映射回原帧像素坐标
+                    float px1 = (cx - bboxes[index * 4 + 0] * stride - static_cast<float>(pad_left)) / det_scale;
+                    float py1 = (cy - bboxes[index * 4 + 1] * stride - static_cast<float>(pad_top)) / det_scale;
+                    float px2 = (cx + bboxes[index * 4 + 2] * stride - static_cast<float>(pad_left)) / det_scale;
+                    float py2 = (cy + bboxes[index * 4 + 3] * stride - static_cast<float>(pad_top)) / det_scale;
 
                     px1 = std::clamp(px1, 0.0f, static_cast<float>(orig_w));
                     py1 = std::clamp(py1, 0.0f, static_cast<float>(orig_h));
@@ -179,8 +160,8 @@ std::vector<FaceDetection> FaceDetector::decode_scrfd(
                     cand.score = score;
 
                     for (int k = 0; k < 5; ++k) {
-                        float kx = (cx + kpss[index * 10 + k * 2 + 0] * stride) / det_scale;
-                        float ky = (cy + kpss[index * 10 + k * 2 + 1] * stride) / det_scale;
+                        float kx = (cx + kpss[index * 10 + k * 2 + 0] * stride - static_cast<float>(pad_left)) / det_scale;
+                        float ky = (cy + kpss[index * 10 + k * 2 + 1] * stride - static_cast<float>(pad_top)) / det_scale;
                         cand.kps[k].x = std::clamp(kx, 0.0f, static_cast<float>(orig_w));
                         cand.kps[k].y = std::clamp(ky, 0.0f, static_cast<float>(orig_h));
                     }

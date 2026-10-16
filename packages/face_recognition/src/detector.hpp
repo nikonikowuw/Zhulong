@@ -55,7 +55,8 @@ private:
     std::vector<FaceDetection> detect_cpu_fallback(const zhulong::Image& image);
     std::vector<FaceDetection> decode_scrfd(
         const std::vector<zhulong::Tensor>& outputs,
-        int orig_w, int orig_h, float det_scale
+        int orig_w, int orig_h, float det_scale,
+        int pad_left = 0, int pad_top = 0
     );
 
     float score_threshold_{0.50f};

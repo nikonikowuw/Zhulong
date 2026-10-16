@@ -29,8 +29,8 @@
 
 ## Acceptance Criteria
 
-- [ ] `FaceDetector::detect` 在硬件加速环境下使用 `zhulong::ops::letterbox` 完成缩放与通道重排，彻底消除 CPU 双重逐像素采样循环。
-- [ ] `decode_scrfd` 在居中 Letterbox 几何参数下正确还原原图坐标，人脸检测框与 5 点关键点位置与基准对齐。
-- [ ] 当 `HardwareFrame::dma_fd >= 0` 时，`FrameBroker::publish_frame` 走零拷贝穿透路径，`std::memcpy` 调用次数降为 0。
-- [ ] 本地开发机测试命令 `python3 native/scripts/build.py test` 100% 通过；`make go-check` 100% 正常。
-- [ ] 算法插件打包脚本 `build_package.py` 可正常构建出包含新前处理逻辑的算法包。
+- [x] `FaceDetector::detect` 在硬件加速环境下使用 `zhulong::ops::letterbox` 完成缩放与通道重排，彻底消除 CPU 双重逐像素采样循环。
+- [x] `decode_scrfd` 在居中 Letterbox 几何参数下正确还原原图坐标，人脸检测框与 5 点关键点位置与基准对齐。
+- [x] 当 `HardwareFrame::dma_fd >= 0` 时，`FrameBroker::publish_frame` 走零拷贝穿透路径，`std::memcpy` 调用次数降为 0。
+- [x] 本地开发机测试命令 `python3 native/scripts/build.py test` 100% 通过；`make go-check` 100% 正常。
+- [x] 算法插件打包脚本 `build_package.py` 可正常构建出包含新前处理逻辑的算法包。

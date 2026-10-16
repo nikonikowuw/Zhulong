@@ -216,20 +216,24 @@ void DmaBufAllocator::probe() {
         return;
     }
 
-    // 3. 备选 DRM Dumb Buffer PRIME FD
-    drm_fd_ = ::open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
-    if (drm_fd_ < 0) {
-        drm_fd_ = ::open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
-        if (drm_fd_ >= 0) {
-            device_path_ = "/dev/dri/card0";
-        }
-    } else {
-        device_path_ = "/dev/dri/renderD128";
-    }
-
+    // 3. 备选 DRM Dumb Buffer PRIME FD (⚠️ KMS Dumb Buffer 属于显示管理 ioctl，仅允许在主节点 card* 创建)
+    drm_fd_ = ::open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
     if (drm_fd_ >= 0) {
-        type_ = DmaAllocatorType::DRM_DUMB;
-        return;
+        // 动态探针校验：真实测试驱动是否支持 CREATE_DUMB，防止不可用设备假阳性
+        struct drm_mode_create_dumb test_req{};
+        test_req.width = 64;
+        test_req.height = 1;
+        test_req.bpp = 8;
+        if (ioctl(drm_fd_, DRM_IOCTL_MODE_CREATE_DUMB, &test_req) == 0) {
+            struct drm_mode_destroy_dumb destroy_req{};
+            destroy_req.handle = test_req.handle;
+            ioctl(drm_fd_, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_req);
+            type_ = DmaAllocatorType::DRM_DUMB;
+            device_path_ = "/dev/dri/card0";
+            return;
+        }
+        ::close(drm_fd_);
+        drm_fd_ = -1;
     }
 #endif
 }
