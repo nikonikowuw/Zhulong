@@ -2180,7 +2180,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/httputil.PaginatedData-record_AlarmDTO"
+                                            "$ref": "#/definitions/httputil.PaginatedData-record_AlarmResponse"
                                         }
                                     }
                                 }
@@ -2220,7 +2220,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/record.AlarmDTO"
+                                            "$ref": "#/definitions/record.AlarmResponse"
                                         }
                                     }
                                 }
@@ -2295,7 +2295,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/httputil.PaginatedData-record_CaptureDTO"
+                                            "$ref": "#/definitions/httputil.PaginatedData-record_CaptureResponse"
                                         }
                                     }
                                 }
@@ -2335,7 +2335,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/record.CaptureDTO"
+                                            "$ref": "#/definitions/record.CaptureResponse"
                                         }
                                     }
                                 }
@@ -2416,7 +2416,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/httputil.PaginatedData-record_RecognitionDTO"
+                                            "$ref": "#/definitions/httputil.PaginatedData-record_RecognitionResponse"
                                         }
                                     }
                                 }
@@ -2456,7 +2456,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/record.RecognitionDTO"
+                                            "$ref": "#/definitions/record.RecognitionResponse"
                                         }
                                     }
                                 }
@@ -4166,13 +4166,13 @@ const docTemplate = `{
                 }
             }
         },
-        "httputil.PaginatedData-record_AlarmDTO": {
+        "httputil.PaginatedData-record_AlarmResponse": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/record.AlarmDTO"
+                        "$ref": "#/definitions/record.AlarmResponse"
                     }
                 },
                 "limit": {
@@ -4193,13 +4193,13 @@ const docTemplate = `{
                 }
             }
         },
-        "httputil.PaginatedData-record_CaptureDTO": {
+        "httputil.PaginatedData-record_CaptureResponse": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/record.CaptureDTO"
+                        "$ref": "#/definitions/record.CaptureResponse"
                     }
                 },
                 "limit": {
@@ -4220,13 +4220,13 @@ const docTemplate = `{
                 }
             }
         },
-        "httputil.PaginatedData-record_RecognitionDTO": {
+        "httputil.PaginatedData-record_RecognitionResponse": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/record.RecognitionDTO"
+                        "$ref": "#/definitions/record.RecognitionResponse"
                     }
                 },
                 "limit": {
@@ -4594,7 +4594,7 @@ const docTemplate = `{
                 }
             }
         },
-        "record.AlarmDTO": {
+        "record.AlarmResponse": {
             "type": "object",
             "properties": {
                 "alarmType": {
@@ -4639,7 +4639,7 @@ const docTemplate = `{
                 }
             }
         },
-        "record.CaptureDTO": {
+        "record.CaptureResponse": {
             "type": "object",
             "properties": {
                 "attributes": {
@@ -4684,7 +4684,7 @@ const docTemplate = `{
                 }
             }
         },
-        "record.RecognitionDTO": {
+        "record.RecognitionResponse": {
             "type": "object",
             "properties": {
                 "algorithmId": {

@@ -313,22 +313,22 @@ func isSceneWideAlarm(label string) bool {
 // Query APIs
 // =========================================================================
 
-// ListRecognitions returns filtered and paginated RecognitionDTO items.
-func (s *Service) ListRecognitions(ctx context.Context, filter RecognitionFilter) ([]RecognitionDTO, int64, error) {
+// ListRecognitions returns filtered and paginated RecognitionResponse items.
+func (s *Service) ListRecognitions(ctx context.Context, filter RecognitionFilter) ([]RecognitionResponse, int64, error) {
 	items, total, err := s.store.ListRecognitions(ctx, filter)
 	if err != nil {
 		s.logger.Error("failed to list recognitions", zap.Error(err))
 		return nil, 0, apperr.Internal("INTERNAL_ERROR", "failed to list recognitions", err)
 	}
-	dtos := make([]RecognitionDTO, len(items))
+	responses := make([]RecognitionResponse, len(items))
 	for i := range items {
-		dtos[i] = items[i].ToDTO()
+		responses[i] = items[i].ToResponse()
 	}
-	return dtos, total, nil
+	return responses, total, nil
 }
 
-// GetRecognition returns a single RecognitionDTO by ID.
-func (s *Service) GetRecognition(ctx context.Context, id string) (*RecognitionDTO, error) {
+// GetRecognition returns a single RecognitionResponse by ID.
+func (s *Service) GetRecognition(ctx context.Context, id string) (*RecognitionResponse, error) {
 	item, err := s.store.GetRecognitionByID(ctx, id)
 	if err != nil {
 		s.logger.Error("failed to get recognition", zap.String("id", id), zap.Error(err))
@@ -337,26 +337,26 @@ func (s *Service) GetRecognition(ctx context.Context, id string) (*RecognitionDT
 	if item == nil {
 		return nil, apperr.NotFound("RECOGNITION_NOT_FOUND", "recognition not found", nil)
 	}
-	dto := item.ToDTO()
-	return &dto, nil
+	resp := item.ToResponse()
+	return &resp, nil
 }
 
-// ListAlarms returns filtered and paginated AlarmDTO items.
-func (s *Service) ListAlarms(ctx context.Context, filter AlarmFilter) ([]AlarmDTO, int64, error) {
+// ListAlarms returns filtered and paginated AlarmResponse items.
+func (s *Service) ListAlarms(ctx context.Context, filter AlarmFilter) ([]AlarmResponse, int64, error) {
 	items, total, err := s.store.ListAlarms(ctx, filter)
 	if err != nil {
 		s.logger.Error("failed to list alarms", zap.Error(err))
 		return nil, 0, apperr.Internal("INTERNAL_ERROR", "failed to list alarms", err)
 	}
-	dtos := make([]AlarmDTO, len(items))
+	responses := make([]AlarmResponse, len(items))
 	for i := range items {
-		dtos[i] = items[i].ToDTO()
+		responses[i] = items[i].ToResponse()
 	}
-	return dtos, total, nil
+	return responses, total, nil
 }
 
-// GetAlarm returns a single AlarmDTO by ID.
-func (s *Service) GetAlarm(ctx context.Context, id string) (*AlarmDTO, error) {
+// GetAlarm returns a single AlarmResponse by ID.
+func (s *Service) GetAlarm(ctx context.Context, id string) (*AlarmResponse, error) {
 	item, err := s.store.GetAlarmByID(ctx, id)
 	if err != nil {
 		s.logger.Error("failed to get alarm", zap.String("id", id), zap.Error(err))
@@ -365,26 +365,26 @@ func (s *Service) GetAlarm(ctx context.Context, id string) (*AlarmDTO, error) {
 	if item == nil {
 		return nil, apperr.NotFound("ALARM_NOT_FOUND", "alarm not found", nil)
 	}
-	dto := item.ToDTO()
-	return &dto, nil
+	resp := item.ToResponse()
+	return &resp, nil
 }
 
-// ListCaptures returns filtered and paginated CaptureDTO items.
-func (s *Service) ListCaptures(ctx context.Context, filter CaptureFilter) ([]CaptureDTO, int64, error) {
+// ListCaptures returns filtered and paginated CaptureResponse items.
+func (s *Service) ListCaptures(ctx context.Context, filter CaptureFilter) ([]CaptureResponse, int64, error) {
 	items, total, err := s.store.ListCaptures(ctx, filter)
 	if err != nil {
 		s.logger.Error("failed to list captures", zap.Error(err))
 		return nil, 0, apperr.Internal("INTERNAL_ERROR", "failed to list captures", err)
 	}
-	dtos := make([]CaptureDTO, len(items))
+	responses := make([]CaptureResponse, len(items))
 	for i := range items {
-		dtos[i] = items[i].ToDTO()
+		responses[i] = items[i].ToResponse()
 	}
-	return dtos, total, nil
+	return responses, total, nil
 }
 
-// GetCapture returns a single CaptureDTO by ID.
-func (s *Service) GetCapture(ctx context.Context, id string) (*CaptureDTO, error) {
+// GetCapture returns a single CaptureResponse by ID.
+func (s *Service) GetCapture(ctx context.Context, id string) (*CaptureResponse, error) {
 	item, err := s.store.GetCaptureByID(ctx, id)
 	if err != nil {
 		s.logger.Error("failed to get capture", zap.String("id", id), zap.Error(err))
@@ -393,6 +393,6 @@ func (s *Service) GetCapture(ctx context.Context, id string) (*CaptureDTO, error
 	if item == nil {
 		return nil, apperr.NotFound("CAPTURE_NOT_FOUND", "capture not found", nil)
 	}
-	dto := item.ToDTO()
-	return &dto, nil
+	resp := item.ToResponse()
+	return &resp, nil
 }

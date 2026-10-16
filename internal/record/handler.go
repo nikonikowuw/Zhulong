@@ -1,8 +1,6 @@
 package record
 
 import (
-	"time"
-
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
@@ -38,38 +36,6 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	}
 }
 
-// ListRecognitionsQuery defines query parameters for listing recognitions.
-type ListRecognitionsQuery struct {
-	httputil.PaginationQuery
-	CameraID  string `form:"cameraId"`
-	PersonID  string `form:"personId"`
-	Matched   *bool  `form:"matched"`
-	StartTime string `form:"startTime"`
-	EndTime   string `form:"endTime"`
-}
-
-// ToFilter converts query parameters into a validated RecognitionFilter.
-func (q *ListRecognitionsQuery) ToFilter() (RecognitionFilter, error) {
-	page, pageSize, _, _ := q.Normalize()
-	start, err := parseTime(q.StartTime, "startTime")
-	if err != nil {
-		return RecognitionFilter{}, err
-	}
-	end, err := parseTime(q.EndTime, "endTime")
-	if err != nil {
-		return RecognitionFilter{}, err
-	}
-	return RecognitionFilter{
-		CameraID:  q.CameraID,
-		PersonID:  q.PersonID,
-		Matched:   q.Matched,
-		StartTime: start,
-		EndTime:   end,
-		Page:      page,
-		PageSize:  pageSize,
-	}, nil
-}
-
 // ListRecognitions godoc
 // @Summary      List face recognitions with filtering and pagination
 // @Tags         records
@@ -81,7 +47,7 @@ func (q *ListRecognitionsQuery) ToFilter() (RecognitionFilter, error) {
 // @Param        matched query bool false "Filter by match status"
 // @Param        startTime query string false "Start time (RFC3339)"
 // @Param        endTime query string false "End time (RFC3339)"
-// @Success      200 {object} httputil.Response{data=httputil.PaginatedData[RecognitionDTO]}
+// @Success      200 {object} httputil.Response{data=httputil.PaginatedData[RecognitionResponse]}
 // @Router       /records/recognitions [get]
 func (h *Handler) ListRecognitions(c *gin.Context) {
 	var q ListRecognitionsQuery
@@ -107,7 +73,7 @@ func (h *Handler) ListRecognitions(c *gin.Context) {
 // @Tags         records
 // @Produce      json
 // @Param        id path string true "Recognition record ID"
-// @Success      200 {object} httputil.Response{data=RecognitionDTO}
+// @Success      200 {object} httputil.Response{data=RecognitionResponse}
 // @Failure      404 {object} httputil.Response
 // @Router       /records/recognitions/{id} [get]
 func (h *Handler) GetRecognition(c *gin.Context) {
@@ -117,36 +83,6 @@ func (h *Handler) GetRecognition(c *gin.Context) {
 		return
 	}
 	httputil.Success(c, item)
-}
-
-// ListAlarmsQuery defines query parameters for listing alarms.
-type ListAlarmsQuery struct {
-	httputil.PaginationQuery
-	CameraID  string `form:"cameraId"`
-	AlarmType string `form:"alarmType"`
-	StartTime string `form:"startTime"`
-	EndTime   string `form:"endTime"`
-}
-
-// ToFilter converts query parameters into a validated AlarmFilter.
-func (q *ListAlarmsQuery) ToFilter() (AlarmFilter, error) {
-	page, pageSize, _, _ := q.Normalize()
-	start, err := parseTime(q.StartTime, "startTime")
-	if err != nil {
-		return AlarmFilter{}, err
-	}
-	end, err := parseTime(q.EndTime, "endTime")
-	if err != nil {
-		return AlarmFilter{}, err
-	}
-	return AlarmFilter{
-		CameraID:  q.CameraID,
-		AlarmType: q.AlarmType,
-		StartTime: start,
-		EndTime:   end,
-		Page:      page,
-		PageSize:  pageSize,
-	}, nil
 }
 
 // ListAlarms godoc
@@ -159,7 +95,7 @@ func (q *ListAlarmsQuery) ToFilter() (AlarmFilter, error) {
 // @Param        alarmType query string false "Filter by alarm type"
 // @Param        startTime query string false "Start time (RFC3339)"
 // @Param        endTime query string false "End time (RFC3339)"
-// @Success      200 {object} httputil.Response{data=httputil.PaginatedData[AlarmDTO]}
+// @Success      200 {object} httputil.Response{data=httputil.PaginatedData[AlarmResponse]}
 // @Router       /records/alarms [get]
 func (h *Handler) ListAlarms(c *gin.Context) {
 	var q ListAlarmsQuery
@@ -185,7 +121,7 @@ func (h *Handler) ListAlarms(c *gin.Context) {
 // @Tags         records
 // @Produce      json
 // @Param        id path string true "Alarm record ID"
-// @Success      200 {object} httputil.Response{data=AlarmDTO}
+// @Success      200 {object} httputil.Response{data=AlarmResponse}
 // @Failure      404 {object} httputil.Response
 // @Router       /records/alarms/{id} [get]
 func (h *Handler) GetAlarm(c *gin.Context) {
@@ -195,36 +131,6 @@ func (h *Handler) GetAlarm(c *gin.Context) {
 		return
 	}
 	httputil.Success(c, item)
-}
-
-// ListCapturesQuery defines query parameters for listing captures.
-type ListCapturesQuery struct {
-	httputil.PaginationQuery
-	CameraID   string `form:"cameraId"`
-	TargetType string `form:"targetType"`
-	StartTime  string `form:"startTime"`
-	EndTime    string `form:"endTime"`
-}
-
-// ToFilter converts query parameters into a validated CaptureFilter.
-func (q *ListCapturesQuery) ToFilter() (CaptureFilter, error) {
-	page, pageSize, _, _ := q.Normalize()
-	start, err := parseTime(q.StartTime, "startTime")
-	if err != nil {
-		return CaptureFilter{}, err
-	}
-	end, err := parseTime(q.EndTime, "endTime")
-	if err != nil {
-		return CaptureFilter{}, err
-	}
-	return CaptureFilter{
-		CameraID:   q.CameraID,
-		TargetType: q.TargetType,
-		StartTime:  start,
-		EndTime:    end,
-		Page:       page,
-		PageSize:   pageSize,
-	}, nil
 }
 
 // ListCaptures godoc
@@ -237,7 +143,7 @@ func (q *ListCapturesQuery) ToFilter() (CaptureFilter, error) {
 // @Param        targetType query string false "Filter by target type"
 // @Param        startTime query string false "Start time (RFC3339)"
 // @Param        endTime query string false "End time (RFC3339)"
-// @Success      200 {object} httputil.Response{data=httputil.PaginatedData[CaptureDTO]}
+// @Success      200 {object} httputil.Response{data=httputil.PaginatedData[CaptureResponse]}
 // @Router       /records/captures [get]
 func (h *Handler) ListCaptures(c *gin.Context) {
 	var q ListCapturesQuery
@@ -263,7 +169,7 @@ func (h *Handler) ListCaptures(c *gin.Context) {
 // @Tags         records
 // @Produce      json
 // @Param        id path string true "Capture record ID"
-// @Success      200 {object} httputil.Response{data=CaptureDTO}
+// @Success      200 {object} httputil.Response{data=CaptureResponse}
 // @Failure      404 {object} httputil.Response
 // @Router       /records/captures/{id} [get]
 func (h *Handler) GetCapture(c *gin.Context) {
@@ -273,18 +179,4 @@ func (h *Handler) GetCapture(c *gin.Context) {
 		return
 	}
 	httputil.Success(c, item)
-}
-
-func parseTime(raw, fieldName string) (*time.Time, error) {
-	if raw == "" {
-		return nil, nil
-	}
-	t, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		return nil, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-			{Field: fieldName, Code: "INVALID_TIME_FORMAT", Message: fieldName + " must be in RFC3339 format"},
-		})
-	}
-	utc := t.UTC()
-	return &utc, nil
 }

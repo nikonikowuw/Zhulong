@@ -130,12 +130,12 @@ func TestStoreRecognitionCRUDAndFilters(t *testing.T) {
 	if got.PersonName != "Alice" || got.MatchedFaceID != "face_alice_01" || !got.Matched {
 		t.Errorf("unexpected got recognition: %+v", got)
 	}
-	dto := got.ToDTO()
-	if len(dto.Candidates) != 1 || dto.Candidates[0].FaceID != "face_alice_01" {
-		t.Errorf("unexpected candidates in DTO: %+v", dto.Candidates)
+	resp := got.ToResponse()
+	if len(resp.Candidates) != 1 || resp.Candidates[0].FaceID != "face_alice_01" {
+		t.Errorf("unexpected candidates in response: %+v", resp.Candidates)
 	}
-	if dto.Attributes["gender"] != "female" {
-		t.Errorf("unexpected attributes in DTO: %+v", dto.Attributes)
+	if resp.Attributes["gender"] != "female" {
+		t.Errorf("unexpected attributes in response: %+v", resp.Attributes)
 	}
 
 	// 2. Batch create
@@ -231,12 +231,12 @@ func TestStoreAlarmCRUDAndFilters(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("GetAlarmByID failed: %v", err)
 	}
-	dto := got.ToDTO()
-	if dto.AlarmType != "no_helmet" || dto.CropPath != "snapshots/cam_01/2026-10-16/a1_crop.jpg" {
-		t.Errorf("unexpected alarm DTO: %+v", dto)
+	resp := got.ToResponse()
+	if resp.AlarmType != "no_helmet" || resp.CropPath != "snapshots/cam_01/2026-10-16/a1_crop.jpg" {
+		t.Errorf("unexpected alarm response: %+v", resp)
 	}
-	if dto.Extra["helmet_color"] != "none" {
-		t.Errorf("unexpected extra in alarm DTO: %+v", dto.Extra)
+	if resp.Extra["helmet_color"] != "none" {
+		t.Errorf("unexpected extra in alarm response: %+v", resp.Extra)
 	}
 
 	// Filter by AlarmType
@@ -296,12 +296,12 @@ func TestStoreCaptureCRUDAndFilters(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("GetCaptureByID failed: %v", err)
 	}
-	dto := got.ToDTO()
-	if dto.TargetType != "person" || dto.TrackID != 1001 {
-		t.Errorf("unexpected capture DTO: %+v", dto)
+	resp := got.ToResponse()
+	if resp.TargetType != "person" || resp.TrackID != 1001 {
+		t.Errorf("unexpected capture response: %+v", resp)
 	}
-	if dto.Attributes["upper_color"] != "black" {
-		t.Errorf("unexpected capture attributes: %+v", dto.Attributes)
+	if resp.Attributes["upper_color"] != "black" {
+		t.Errorf("unexpected capture attributes: %+v", resp.Attributes)
 	}
 
 	// Filter by TargetType

@@ -405,11 +405,11 @@ definitions:
       total:
         type: integer
     type: object
-  httputil.PaginatedData-record_AlarmDTO:
+  httputil.PaginatedData-record_AlarmResponse:
     properties:
       items:
         items:
-          $ref: '#/definitions/record.AlarmDTO'
+          $ref: '#/definitions/record.AlarmResponse'
         type: array
       limit:
         description: Backwards compatibility fields for legacy clients expecting limit/offset
@@ -423,11 +423,11 @@ definitions:
       total:
         type: integer
     type: object
-  httputil.PaginatedData-record_CaptureDTO:
+  httputil.PaginatedData-record_CaptureResponse:
     properties:
       items:
         items:
-          $ref: '#/definitions/record.CaptureDTO'
+          $ref: '#/definitions/record.CaptureResponse'
         type: array
       limit:
         description: Backwards compatibility fields for legacy clients expecting limit/offset
@@ -441,11 +441,11 @@ definitions:
       total:
         type: integer
     type: object
-  httputil.PaginatedData-record_RecognitionDTO:
+  httputil.PaginatedData-record_RecognitionResponse:
     properties:
       items:
         items:
-          $ref: '#/definitions/record.RecognitionDTO'
+          $ref: '#/definitions/record.RecognitionResponse'
         type: array
       limit:
         description: Backwards compatibility fields for legacy clients expecting limit/offset
@@ -713,7 +713,7 @@ definitions:
           rejected with PERSON_ID_IMMUTABLE.
         type: string
     type: object
-  record.AlarmDTO:
+  record.AlarmResponse:
     properties:
       alarmType:
         type: string
@@ -743,7 +743,7 @@ definitions:
       score:
         type: number
     type: object
-  record.CaptureDTO:
+  record.CaptureResponse:
     properties:
       attributes:
         additionalProperties: {}
@@ -773,7 +773,7 @@ definitions:
       trackId:
         type: integer
     type: object
-  record.RecognitionDTO:
+  record.RecognitionResponse:
     properties:
       algorithmId:
         type: string
@@ -2498,7 +2498,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/httputil.PaginatedData-record_AlarmDTO'
+                  $ref: '#/definitions/httputil.PaginatedData-record_AlarmResponse'
               type: object
       summary: List perception alarms with filtering and pagination
       tags:
@@ -2521,7 +2521,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/record.AlarmDTO'
+                  $ref: '#/definitions/record.AlarmResponse'
               type: object
         "404":
           description: Not Found
@@ -2567,7 +2567,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/httputil.PaginatedData-record_CaptureDTO'
+                  $ref: '#/definitions/httputil.PaginatedData-record_CaptureResponse'
               type: object
       summary: List captures with filtering and pagination
       tags:
@@ -2590,7 +2590,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/record.CaptureDTO'
+                  $ref: '#/definitions/record.CaptureResponse'
               type: object
         "404":
           description: Not Found
@@ -2640,7 +2640,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/httputil.PaginatedData-record_RecognitionDTO'
+                  $ref: '#/definitions/httputil.PaginatedData-record_RecognitionResponse'
               type: object
       summary: List face recognitions with filtering and pagination
       tags:
@@ -2663,7 +2663,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/record.RecognitionDTO'
+                  $ref: '#/definitions/record.RecognitionResponse'
               type: object
         "404":
           description: Not Found
