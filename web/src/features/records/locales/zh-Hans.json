@@ -1,0 +1,106 @@
+{
+  "title": "感知记录",
+  "description": "边缘 AI 感知流产生的目标识别、安全告警与抓拍记录审阅研判中心。",
+  "tabs": {
+    "recognitions": "识别记录",
+    "alarms": "告警记录",
+    "captures": "抓拍记录"
+  },
+  "views": {
+    "grid": "画廊卡片",
+    "table": "密集表格"
+  },
+  "filters": {
+    "allCameras": "全部摄像机",
+    "cameraPlaceholder": "选择摄像机",
+    "timeRange": "时间范围",
+    "matched": {
+      "all": "全部人员",
+      "true": "已识别目标",
+      "false": "未匹配陌生人"
+    },
+    "alarmType": "告警类型",
+    "allAlarmTypes": "全部告警类型",
+    "alarmTypePlaceholder": "选择告警类型",
+    "targetType": "目标类型",
+    "allTargetTypes": "全部目标类型",
+    "targetTypePlaceholder": "选择目标类型",
+    "personId": "人员 ID",
+    "personIdPlaceholder": "输入人员 ID 搜索",
+    "reset": "重置筛选",
+    "refresh": "刷新"
+  },
+  "table": {
+    "thumbnail": "抓拍快照",
+    "time": "抓拍时间",
+    "camera": "摄像机",
+    "target": "目标识别",
+    "type": "类型",
+    "score": "置信度 / 相似度",
+    "trackId": "跟踪 ID",
+    "algorithmId": "算法包",
+    "pts": "PTS 帧时间戳",
+    "actions": "操作",
+    "empty": "暂无感知记录",
+    "emptyDesc": "当前筛选条件下未检索到任何记录数据。",
+    "loading": "正在检索记录...",
+    "error": "加载记录失败",
+    "retry": "重新加载"
+  },
+  "card": {
+    "matched": "已命中",
+    "stranger": "陌生人",
+    "similarity": "相似度",
+    "confidence": "置信度",
+    "trackId": "跟踪 #",
+    "viewDetail": "查看研判详情"
+  },
+  "detail": {
+    "title": "记录审阅研判",
+    "recognitionTitle": "人脸识别研判详情",
+    "alarmTitle": "事件告警研判详情",
+    "captureTitle": "目标抓拍研判详情",
+    "fullImage": "全景原图与标注目标框",
+    "comparison": "底库对标照片与现场切片",
+    "snapshot": "现场切片",
+    "gallery": "底库照片",
+    "noGallery": "未关联底库照片",
+    "candidates": "Top-N 候选人比对",
+    "noCandidates": "暂无备选候选人数据",
+    "attributes": "结构化感知属性",
+    "extra": "告警扩展参数",
+    "emptyAttributes": "无附加属性",
+    "meta": "元数据信息",
+    "cameraId": "摄像机",
+    "algorithmId": "算法包",
+    "pts": "PTS 帧时间戳",
+    "capturedAt": "抓拍时间",
+    "close": "关闭"
+  },
+  "toolbar": {
+    "dateRangePlaceholder": "选择时间区间",
+    "quickPresets": "快捷范围",
+    "customExactTime": "精准区间",
+    "timeWindow": "时分窗口",
+    "allDay": "全天",
+    "now": "至现在",
+    "presetGroups": {
+      "recent": "常用快查",
+      "period": "自然周期"
+    },
+    "presets": {
+      "15m": "近 15 分钟",
+      "30m": "近 30 分钟",
+      "1h": "近 1 小时",
+      "6h": "近 6 小时",
+      "24h": "近 24 小时",
+      "today": "今日全天",
+      "7d": "近 7 天",
+      "30d": "近 30 天"
+    },
+    "clearDateRange": "清空时间",
+    "cancel": "取消",
+    "apply": "应用",
+    "reset": "重置筛选"
+  }
+}

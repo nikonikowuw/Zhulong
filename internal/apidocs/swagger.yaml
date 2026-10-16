@@ -1,5 +1,16 @@
 basePath: /api/v1
 definitions:
+  aitypes.FaceCandidate:
+    properties:
+      face_id:
+        type: string
+      person_id:
+        type: string
+      person_name:
+        type: string
+      similarity:
+        type: number
+    type: object
   algorithm.Algorithm:
     properties:
       category:
@@ -34,57 +45,6 @@ definitions:
         type: string
       version:
         type: string
-    type: object
-  algorithm.AnalysisTask:
-    properties:
-      algorithmId:
-        type: string
-      cameraId:
-        type: string
-      configJson:
-        type: string
-      createdAt:
-        type: string
-      enabled:
-        type: boolean
-      id:
-        type: string
-      sampleFps:
-        type: integer
-      updatedAt:
-        type: string
-    type: object
-  algorithm.CreateTaskRequest:
-    properties:
-      algorithm_id:
-        type: string
-      algorithmId:
-        type: string
-      camera_id:
-        type: string
-      cameraId:
-        type: string
-      config_json:
-        type: string
-      configJson:
-        type: string
-      id:
-        type: string
-      sample_fps:
-        type: integer
-      sampleFps:
-        type: integer
-    type: object
-  algorithm.FaceCandidate:
-    properties:
-      face_id:
-        type: string
-      person_id:
-        type: string
-      person_name:
-        type: string
-      similarity:
-        type: number
     type: object
   app.HealthData:
     properties:
@@ -792,7 +752,7 @@ definitions:
         type: string
       candidates:
         items:
-          $ref: '#/definitions/algorithm.FaceCandidate'
+          $ref: '#/definitions/aitypes.FaceCandidate'
         type: array
       capturedAt:
         type: string
@@ -1394,112 +1354,6 @@ paths:
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Install an algorithm package
-      tags:
-      - algorithm
-  /algorithms/tasks:
-    get:
-      parameters:
-      - description: Filter by camera ID
-        in: query
-        name: camera_id
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/httputil.Response'
-            - properties:
-                data:
-                  items:
-                    $ref: '#/definitions/algorithm.AnalysisTask'
-                  type: array
-              type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/httputil.Response'
-      summary: List analysis tasks
-      tags:
-      - algorithm
-    post:
-      consumes:
-      - application/json
-      description: Binds a camera to an algorithm with a sampling rate and a config
-        JSON document. Both camelCase and snake_case request keys are accepted; the
-        snake_case alias is used only when the camelCase key is absent. Missing id,
-        cameraId or algorithmId is rejected with 422 VALIDATION_FAILED. Returns 409
-        COMPUTE_BUDGET_EXCEEDED when the accumulated compute cost of enabled tasks
-        exceeds the host budget.
-      parameters:
-      - description: Analysis task payload
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/algorithm.CreateTaskRequest'
-      produces:
-      - application/json
-      responses:
-        "201":
-          description: Created
-          schema:
-            allOf:
-            - $ref: '#/definitions/httputil.Response'
-            - properties:
-                data:
-                  $ref: '#/definitions/algorithm.AnalysisTask'
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "409":
-          description: Conflict
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "422":
-          description: Unprocessable Entity
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/httputil.Response'
-      summary: Create an analysis task
-      tags:
-      - algorithm
-  /algorithms/tasks/{id}:
-    delete:
-      parameters:
-      - description: Analysis task ID
-        in: path
-        name: id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/httputil.Response'
-            - properties:
-                data:
-                  type: object
-              type: object
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/httputil.Response'
-      summary: Delete an analysis task
       tags:
       - algorithm
   /audit/logs:
@@ -2530,6 +2384,25 @@ paths:
       summary: Get a single alarm record by ID
       tags:
       - records
+  /records/alarms/alarm-types:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  items:
+                    type: string
+                  type: array
+              type: object
+      summary: List all distinct alarm types present in records
+      tags:
+      - records
   /records/captures:
     get:
       parameters:
@@ -2597,6 +2470,25 @@ paths:
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Get a single capture record by ID
+      tags:
+      - records
+  /records/captures/target-types:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  items:
+                    type: string
+                  type: array
+              type: object
+      summary: List all distinct capture target types present in records
       tags:
       - records
   /records/recognitions:

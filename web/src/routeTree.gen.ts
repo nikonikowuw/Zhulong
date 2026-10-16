@@ -19,6 +19,7 @@ import { Route as errors401RouteImport } from './routes/(errors)/401'
 import { Route as authSignInRouteImport } from './routes/(auth)/sign-in'
 import { Route as AuthenticatedSettingsRouteRouteImport } from './routes/_authenticated/settings/route'
 import { Route as AuthenticatedSettingsIndexRouteImport } from './routes/_authenticated/settings/index'
+import { Route as AuthenticatedRecordsIndexRouteImport } from './routes/_authenticated/records/index'
 import { Route as AuthenticatedPersonsIndexRouteImport } from './routes/_authenticated/persons/index'
 import { Route as AuthenticatedLiveIndexRouteImport } from './routes/_authenticated/live/index'
 import { Route as AuthenticatedCamerasIndexRouteImport } from './routes/_authenticated/cameras/index'
@@ -80,6 +81,12 @@ const AuthenticatedSettingsIndexRoute =
     id: '/',
     path: '/',
     getParentRoute: () => AuthenticatedSettingsRouteRoute,
+  } as any)
+const AuthenticatedRecordsIndexRoute =
+  AuthenticatedRecordsIndexRouteImport.update({
+    id: '/records/',
+    path: '/records/',
+    getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedPersonsIndexRoute =
   AuthenticatedPersonsIndexRouteImport.update({
@@ -159,6 +166,7 @@ export interface FileRoutesByFullPath {
   '/cameras/': typeof AuthenticatedCamerasIndexRoute
   '/live/': typeof AuthenticatedLiveIndexRoute
   '/persons/': typeof AuthenticatedPersonsIndexRoute
+  '/records/': typeof AuthenticatedRecordsIndexRoute
   '/settings/': typeof AuthenticatedSettingsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -179,6 +187,7 @@ export interface FileRoutesByTo {
   '/cameras': typeof AuthenticatedCamerasIndexRoute
   '/live': typeof AuthenticatedLiveIndexRoute
   '/persons': typeof AuthenticatedPersonsIndexRoute
+  '/records': typeof AuthenticatedRecordsIndexRoute
   '/settings': typeof AuthenticatedSettingsIndexRoute
 }
 export interface FileRoutesById {
@@ -202,6 +211,7 @@ export interface FileRoutesById {
   '/_authenticated/cameras/': typeof AuthenticatedCamerasIndexRoute
   '/_authenticated/live/': typeof AuthenticatedLiveIndexRoute
   '/_authenticated/persons/': typeof AuthenticatedPersonsIndexRoute
+  '/_authenticated/records/': typeof AuthenticatedRecordsIndexRoute
   '/_authenticated/settings/': typeof AuthenticatedSettingsIndexRoute
 }
 export interface FileRouteTypes {
@@ -225,6 +235,7 @@ export interface FileRouteTypes {
     | '/cameras/'
     | '/live/'
     | '/persons/'
+    | '/records/'
     | '/settings/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -245,6 +256,7 @@ export interface FileRouteTypes {
     | '/cameras'
     | '/live'
     | '/persons'
+    | '/records'
     | '/settings'
   id:
     | '__root__'
@@ -267,6 +279,7 @@ export interface FileRouteTypes {
     | '/_authenticated/cameras/'
     | '/_authenticated/live/'
     | '/_authenticated/persons/'
+    | '/_authenticated/records/'
     | '/_authenticated/settings/'
   fileRoutesById: FileRoutesById
 }
@@ -351,6 +364,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/settings/'
       preLoaderRoute: typeof AuthenticatedSettingsIndexRouteImport
       parentRoute: typeof AuthenticatedSettingsRouteRoute
+    }
+    '/_authenticated/records/': {
+      id: '/_authenticated/records/'
+      path: '/records'
+      fullPath: '/records/'
+      preLoaderRoute: typeof AuthenticatedRecordsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/persons/': {
       id: '/_authenticated/persons/'
@@ -456,6 +476,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedCamerasIndexRoute: typeof AuthenticatedCamerasIndexRoute
   AuthenticatedLiveIndexRoute: typeof AuthenticatedLiveIndexRoute
   AuthenticatedPersonsIndexRoute: typeof AuthenticatedPersonsIndexRoute
+  AuthenticatedRecordsIndexRoute: typeof AuthenticatedRecordsIndexRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
@@ -467,6 +488,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedCamerasIndexRoute: AuthenticatedCamerasIndexRoute,
   AuthenticatedLiveIndexRoute: AuthenticatedLiveIndexRoute,
   AuthenticatedPersonsIndexRoute: AuthenticatedPersonsIndexRoute,
+  AuthenticatedRecordsIndexRoute: AuthenticatedRecordsIndexRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =

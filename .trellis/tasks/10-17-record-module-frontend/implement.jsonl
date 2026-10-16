@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端开发规范总览与开发前检查清单"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "TanStack Table URL 状态机、TanStack Query 服务端状态管理及表单与弹窗契约"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "features/ 业务切片与 routes/ 组织规范"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "OKLCH 语义主题与中英三语国际化规范"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Vitest 真实浏览器测试与代码质量门禁"}
+{"file": ".trellis/spec/backend/mediafile-guidelines.md", "reason": "媒体资源 /media/content/ 访问契约与边界"}

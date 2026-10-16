@@ -357,3 +357,35 @@ func (s *Store) GetCaptureByID(ctx context.Context, id string) (*Capture, error)
 	}
 	return &cap, nil
 }
+
+// ListDistinctAlarmTypes returns all unique non-empty alarm types sorted alphabetically.
+func (s *Store) ListDistinctAlarmTypes(ctx context.Context) ([]string, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var types []string
+	if err := db.Model(&Alarm{}).Where("alarm_type != ''").Distinct("alarm_type").Order("alarm_type ASC").Pluck("alarm_type", &types).Error; err != nil {
+		return nil, err
+	}
+	if types == nil {
+		types = make([]string, 0)
+	}
+	return types, nil
+}
+
+// ListDistinctTargetTypes returns all unique non-empty capture target types sorted alphabetically.
+func (s *Store) ListDistinctTargetTypes(ctx context.Context) ([]string, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var types []string
+	if err := db.Model(&Capture{}).Where("target_type != ''").Distinct("target_type").Order("target_type ASC").Pluck("target_type", &types).Error; err != nil {
+		return nil, err
+	}
+	if types == nil {
+		types = make([]string, 0)
+	}
+	return types, nil
+}

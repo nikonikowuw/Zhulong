@@ -30,8 +30,10 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.GET("/recognitions", h.ListRecognitions)
 		group.GET("/recognitions/:id", h.GetRecognition)
 		group.GET("/alarms", h.ListAlarms)
+		group.GET("/alarms/alarm-types", h.ListAlarmTypes)
 		group.GET("/alarms/:id", h.GetAlarm)
 		group.GET("/captures", h.ListCaptures)
+		group.GET("/captures/target-types", h.ListCaptureTargetTypes)
 		group.GET("/captures/:id", h.GetCapture)
 	}
 }
@@ -179,4 +181,34 @@ func (h *Handler) GetCapture(c *gin.Context) {
 		return
 	}
 	httputil.Success(c, item)
+}
+
+// ListAlarmTypes godoc
+// @Summary      List all distinct alarm types present in records
+// @Tags         records
+// @Produce      json
+// @Success      200 {object} httputil.Response{data=[]string}
+// @Router       /records/alarms/alarm-types [get]
+func (h *Handler) ListAlarmTypes(c *gin.Context) {
+	types, err := h.service.ListAlarmTypes(c.Request.Context())
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	httputil.Success(c, types)
+}
+
+// ListCaptureTargetTypes godoc
+// @Summary      List all distinct capture target types present in records
+// @Tags         records
+// @Produce      json
+// @Success      200 {object} httputil.Response{data=[]string}
+// @Router       /records/captures/target-types [get]
+func (h *Handler) ListCaptureTargetTypes(c *gin.Context) {
+	types, err := h.service.ListTargetTypes(c.Request.Context())
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	httputil.Success(c, types)
 }

@@ -247,6 +247,15 @@ func TestStoreAlarmCRUDAndFilters(t *testing.T) {
 	if list[0].CropPath != "" {
 		t.Errorf("expected empty crop_path for smoke alarm, got %s", list[0].CropPath)
 	}
+
+	// Distinct Alarm Types
+	alarmTypes, err := store.ListDistinctAlarmTypes(ctx)
+	if err != nil {
+		t.Fatalf("ListDistinctAlarmTypes failed: %v", err)
+	}
+	if len(alarmTypes) != 2 || alarmTypes[0] != "no_helmet" || alarmTypes[1] != "smoke_detection" {
+		t.Errorf("unexpected alarm types: %v", alarmTypes)
+	}
 }
 
 func TestStoreCaptureCRUDAndFilters(t *testing.T) {
@@ -311,5 +320,14 @@ func TestStoreCaptureCRUDAndFilters(t *testing.T) {
 	}
 	if list[0].TrackID != 1002 {
 		t.Errorf("unexpected vehicle track ID: %d", list[0].TrackID)
+	}
+
+	// Distinct Target Types
+	targetTypes, err := store.ListDistinctTargetTypes(ctx)
+	if err != nil {
+		t.Fatalf("ListDistinctTargetTypes failed: %v", err)
+	}
+	if len(targetTypes) != 2 || targetTypes[0] != "person" || targetTypes[1] != "vehicle" {
+		t.Errorf("unexpected target types: %v", targetTypes)
 	}
 }

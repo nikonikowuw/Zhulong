@@ -69,4 +69,13 @@ t.Setenv("ZHULONG_ALGO_RUNNER", stub)
 comp := algorithm.NewAlgorithmComponents(db, dir, "cpu", logger)
 ```
 
+### 4.3 Swagger 文档生成（`make api-docs`）跨包类型解析
+
+**Symptom**: `make api-docs` 报错 `cannot find type definition: <pkg>.<Type>`。
+
+**Cause**: 当响应结构体（例如 `record.RecognitionResponse`）直接引用其他包的公开类型（例如 `aitypes.FaceCandidate`）时，Swag CLI 必须通过 `--dir` 显式扫描该被引用的包目录，否则无法构建完整的 OpenAPI Schema。
+
+**Fix**: 在 `Makefile` 的 `api-docs` 目标的 `--dir` 列表中追加被引用的包路径（如 `internal/aitypes`）。
+
+
 **Prevention**：任何在构造期捕获依赖的组件包（`*Components`）都不支持事后替换字段；需要替换就先改环境变量/参数再构造。runner 桩用 `trap 'exit 0' TERM INT; while true; do sleep 1; done`，保证收到 SIGTERM 即退出且不留孤儿进程。

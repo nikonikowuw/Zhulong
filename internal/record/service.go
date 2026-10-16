@@ -396,3 +396,23 @@ func (s *Service) GetCapture(ctx context.Context, id string) (*CaptureResponse, 
 	resp := item.ToResponse()
 	return &resp, nil
 }
+
+// ListAlarmTypes returns all unique alarm types present in the record store.
+func (s *Service) ListAlarmTypes(ctx context.Context) ([]string, error) {
+	types, err := s.store.ListDistinctAlarmTypes(ctx)
+	if err != nil {
+		s.logger.Error("failed to list alarm types", zap.Error(err))
+		return nil, apperr.Internal("INTERNAL_ERROR", "failed to list alarm types", err)
+	}
+	return types, nil
+}
+
+// ListTargetTypes returns all unique capture target types present in the record store.
+func (s *Service) ListTargetTypes(ctx context.Context) ([]string, error) {
+	types, err := s.store.ListDistinctTargetTypes(ctx)
+	if err != nil {
+		s.logger.Error("failed to list target types", zap.Error(err))
+		return nil, apperr.Internal("INTERNAL_ERROR", "failed to list target types", err)
+	}
+	return types, nil
+}

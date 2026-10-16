@@ -163,4 +163,20 @@ func TestHandlerListAndGetCaptures(t *testing.T) {
 	if wNotFound.Code != http.StatusNotFound {
 		t.Errorf("expected 404 for non-existent capture, got %d", wNotFound.Code)
 	}
+
+	// Test alarm-types endpoint
+	wAlarmTypes := httptest.NewRecorder()
+	reqAlarmTypes, _ := http.NewRequest("GET", "/api/v1/records/alarms/alarm-types", nil)
+	router.ServeHTTP(wAlarmTypes, reqAlarmTypes)
+	if wAlarmTypes.Code != http.StatusOK {
+		t.Errorf("expected 200 for alarm-types, got %d", wAlarmTypes.Code)
+	}
+
+	// Test target-types endpoint
+	wTargetTypes := httptest.NewRecorder()
+	reqTargetTypes, _ := http.NewRequest("GET", "/api/v1/records/captures/target-types", nil)
+	router.ServeHTTP(wTargetTypes, reqTargetTypes)
+	if wTargetTypes.Code != http.StatusOK {
+		t.Errorf("expected 200 for target-types, got %d", wTargetTypes.Code)
+	}
 }
