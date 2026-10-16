@@ -133,3 +133,47 @@ func TestHandlerTaskValidationErrors(t *testing.T) {
 		t.Fatalf("expected 400 BadRequest, got %d", w.Code)
 	}
 }
+
+func TestHandlerLegacyAlgorithmTaskEndpoints(t *testing.T) {
+	r, _, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	// 1. Create Task via /api/v1/algorithms/tasks
+	payload := []byte(`{
+		"cameraId": "cam_legacy_1",
+		"algorithmId": "algo_helmet",
+		"sampleFps": 5,
+		"configJson": "{\"threshold\": 0.6}"
+	}`)
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/algorithms/tasks", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created on legacy endpoint, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var createResp httputil.Response
+	if err := json.Unmarshal(w.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("unmarshal response failed: %v", err)
+	}
+	dataMap := createResp.Data.(map[string]any)
+	taskID := dataMap["id"].(string)
+
+	// 2. List Tasks via /api/v1/algorithms/tasks
+	req, _ = http.NewRequest(http.MethodGet, "/api/v1/algorithms/tasks?camera_id=cam_legacy_1", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on legacy list, got %d", w.Code)
+	}
+
+	// 3. Delete Task via /api/v1/algorithms/tasks/:id
+	req, _ = http.NewRequest(http.MethodDelete, "/api/v1/algorithms/tasks/"+taskID, nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on legacy delete, got %d", w.Code)
+	}
+}

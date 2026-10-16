@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"go.uber.org/zap"
@@ -742,11 +742,11 @@ func TestStreamHub_ConsumeAIResultsAndBroadcast(t *testing.T) {
 		if msg.Event != EventTypeAIResult {
 			t.Fatalf("expected EventTypeAIResult, got: %s", msg.Event)
 		}
-		res, ok := msg.Data.(algorithm.InferenceResult)
+		res, ok := msg.Data.(aitypes.InferenceResult)
 		if !ok {
-			t.Fatalf("expected algorithm.InferenceResult, got: %T", msg.Data)
+			t.Fatalf("expected aitypes.InferenceResult, got: %T", msg.Data)
 		}
-		if res.CameraID != camID || res.TaskType != algorithm.TaskTypeDetection || len(res.Detections) != 1 {
+		if res.CameraID != camID || res.TaskType != aitypes.TaskTypeDetection || len(res.Detections) != 1 {
 			t.Fatalf("unexpected result payload: %+v", res)
 		}
 		if res.Detections[0].Label != "helmet" || res.Detections[0].Score != 0.95 {

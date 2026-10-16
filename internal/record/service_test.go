@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/record"
 	"go.uber.org/zap"
 )
@@ -26,19 +26,19 @@ func TestServiceProcessPersonStructureAndCooldown(t *testing.T) {
 
 	captureTime := time.Date(2026, 10, 16, 15, 30, 0, 123000000, time.UTC)
 
-	res := algorithm.InferenceResult{
+	res := aitypes.InferenceResult{
 		CameraID:    "cam_01",
 		AlgorithmID: "algo_01",
 		PTS:         123456,
 		Timestamp:   captureTime,
-		TaskType:    algorithm.TaskTypePersonStructure,
+		TaskType:    aitypes.TaskTypePersonStructure,
 		CostMs:      45,
-		Persons: []algorithm.PersonItem{
+		Persons: []aitypes.PersonItem{
 			{
 				TrackID:   1001,
 				BodyBox:   [4]float64{0.1, 0.2, 0.4, 0.9},
 				BodyScore: 0.95,
-				Faces: []algorithm.FaceSubItem{
+				Faces: []aitypes.FaceSubItem{
 					{
 						Box:           [4]float64{0.15, 0.22, 0.35, 0.45},
 						Quality:       0.91,
@@ -47,7 +47,7 @@ func TestServiceProcessPersonStructureAndCooldown(t *testing.T) {
 						PersonName:    "Alice",
 						MatchedFaceID: "face_alice_01",
 						Similarity:    0.96,
-						Candidates: []algorithm.FaceCandidate{
+						Candidates: []aitypes.FaceCandidate{
 							{
 								PersonID:   "person_alice",
 								PersonName: "Alice",
@@ -131,13 +131,13 @@ func TestServiceProcessDetectionsAlarmsAndCaptures(t *testing.T) {
 	svc := record.NewService(store, dbStore, zap.NewNop())
 	t0 := time.Date(2026, 10, 16, 16, 0, 0, 0, time.UTC)
 
-	res := algorithm.InferenceResult{
+	res := aitypes.InferenceResult{
 		CameraID:    "cam_01",
 		AlgorithmID: "algo_01",
 		PTS:         55555,
 		Timestamp:   t0,
-		TaskType:    algorithm.TaskTypeDetection,
-		Detections: []algorithm.DetectionItem{
+		TaskType:    aitypes.TaskTypeDetection,
+		Detections: []aitypes.DetectionItem{
 			{
 				Box:   [4]float64{0.2, 0.2, 0.4, 0.4},
 				Label: "no_helmet_alarm",

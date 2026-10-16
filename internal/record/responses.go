@@ -4,35 +4,35 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 )
 
 // RecognitionResponse represents the public API representation of a Recognition.
 type RecognitionResponse struct {
-	ID               string                    `json:"id"`
-	CameraID         string                    `json:"cameraId"`
-	AlgorithmID      string                    `json:"algorithmId"`
-	PTS              int64                     `json:"pts"`
-	TrackID          int64                     `json:"trackId"`
-	PersonID         *string                   `json:"personId"`
-	PersonName       string                    `json:"personName"`
-	MatchedFaceID    string                    `json:"matchedFaceId"`
-	Matched          bool                      `json:"matched"`
-	Similarity       float64                   `json:"similarity"`
-	Candidates       []algorithm.FaceCandidate `json:"candidates"`
-	FaceImagePath    string                    `json:"faceImagePath"`
-	GalleryImagePath string                    `json:"galleryImagePath"`
-	ImagePath        string                    `json:"imagePath"`
-	Box              [4]float64                `json:"box"`
-	BodyBox          [4]float64                `json:"bodyBox"`
-	Attributes       map[string]any            `json:"attributes"`
-	CapturedAt       time.Time                 `json:"capturedAt"`
-	CreatedAt        time.Time                 `json:"createdAt"`
+	ID               string                  `json:"id"`
+	CameraID         string                  `json:"cameraId"`
+	AlgorithmID      string                  `json:"algorithmId"`
+	PTS              int64                   `json:"pts"`
+	TrackID          int64                   `json:"trackId"`
+	PersonID         *string                 `json:"personId"`
+	PersonName       string                  `json:"personName"`
+	MatchedFaceID    string                  `json:"matchedFaceId"`
+	Matched          bool                    `json:"matched"`
+	Similarity       float64                 `json:"similarity"`
+	Candidates       []aitypes.FaceCandidate `json:"candidates"`
+	FaceImagePath    string                  `json:"faceImagePath"`
+	GalleryImagePath string                  `json:"galleryImagePath"`
+	ImagePath        string                  `json:"imagePath"`
+	Box              [4]float64              `json:"box"`
+	BodyBox          [4]float64              `json:"bodyBox"`
+	Attributes       map[string]any          `json:"attributes"`
+	CapturedAt       time.Time               `json:"capturedAt"`
+	CreatedAt        time.Time               `json:"createdAt"`
 }
 
 // ToResponse converts a Recognition GORM model to RecognitionResponse.
 func (r *Recognition) ToResponse() RecognitionResponse {
-	candidates := make([]algorithm.FaceCandidate, 0)
+	candidates := make([]aitypes.FaceCandidate, 0)
 	if r.CandidatesJSON != "" {
 		_ = json.Unmarshal([]byte(r.CandidatesJSON), &candidates)
 	}

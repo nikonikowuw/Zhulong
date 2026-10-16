@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
@@ -42,7 +42,7 @@ func (s *Service) SetCooldownWindow(d time.Duration) {
 
 // ProcessInferenceResult consumes an inference result from StreamHub, applies
 // tracking cooldowns, resolves enrolled face gallery images, and persists records.
-func (s *Service) ProcessInferenceResult(ctx context.Context, res algorithm.InferenceResult) error {
+func (s *Service) ProcessInferenceResult(ctx context.Context, res aitypes.InferenceResult) error {
 	if res.CameraID == "" {
 		return nil
 	}
@@ -51,18 +51,18 @@ func (s *Service) ProcessInferenceResult(ctx context.Context, res algorithm.Infe
 	dateStr := capturedAt.Format("2006-01-02")
 
 	switch res.TaskType {
-	case algorithm.TaskTypePersonStructure:
+	case aitypes.TaskTypePersonStructure:
 		return s.processPersonStructure(ctx, res, capturedAt, dateStr)
-	case algorithm.TaskTypeDetection:
+	case aitypes.TaskTypeDetection:
 		return s.processDetection(ctx, res, capturedAt, dateStr)
-	case algorithm.TaskTypeClassification:
+	case aitypes.TaskTypeClassification:
 		return s.processClassification(ctx, res, capturedAt, dateStr)
 	default:
 		return nil
 	}
 }
 
-func (s *Service) processPersonStructure(ctx context.Context, res algorithm.InferenceResult, capturedAt time.Time, dateStr string) error {
+func (s *Service) processPersonStructure(ctx context.Context, res aitypes.InferenceResult, capturedAt time.Time, dateStr string) error {
 	var recognitions []*Recognition
 	var captures []*Capture
 
@@ -164,7 +164,7 @@ func (s *Service) processPersonStructure(ctx context.Context, res algorithm.Infe
 	return nil
 }
 
-func (s *Service) processDetection(ctx context.Context, res algorithm.InferenceResult, capturedAt time.Time, dateStr string) error {
+func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceResult, capturedAt time.Time, dateStr string) error {
 	var alarms []*Alarm
 	var captures []*Capture
 
@@ -241,7 +241,7 @@ func (s *Service) processDetection(ctx context.Context, res algorithm.InferenceR
 	return nil
 }
 
-func (s *Service) processClassification(ctx context.Context, res algorithm.InferenceResult, capturedAt time.Time, dateStr string) error {
+func (s *Service) processClassification(ctx context.Context, res aitypes.InferenceResult, capturedAt time.Time, dateStr string) error {
 	var alarms []*Alarm
 	for _, c := range res.Classifications {
 		if isAlarmLabel(c.Label) {

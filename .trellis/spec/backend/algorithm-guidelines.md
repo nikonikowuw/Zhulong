@@ -127,9 +127,15 @@ zhulong_algo_runner --verify-plugin plugin.so --sample sample.jpg
 
 ---
 
-## 6. 控制面分层与错误处理规约 (Control Plane & Service Layer)
+## 6. 控制面分层与模块单一职责 (Module Boundaries & Responsibilities)
 
-1. **职责分离**：`Handler` 仅负责 HTTP 传输适配（解析 DTO、调用 `req.ToTask()`、审计打标、调用 `Service` 并通过 `httputil.Success` / `httputil.SuccessWithStatus` 写回），严禁在 Handler 层直接生成实体 ID 或赋初值默认参数，严禁裸写 `c.JSON`。
-2. **默认值与领域初始化**：分析任务的参数默认值（如 `SampleFPS = 5`、`ConfigJSON = "{}"`）、必填校验与全局唯一 ID（`idutil.New()`）由 `Service.CreateTask` 统一负责，保证非 HTTP 通道（如内部事件总线、CLI 调度）完全复用领域规则。
-3. **错误处理与 apperr 闭环**：`Service` 统一使用 `apperr.Error` 分类暴露错误（`KindInvalid` 对应 422 校验失败，`KindConflict` 对应 409 算力预算超限或活跃冲突，`KindNotFound` 对应 404），由 `httputil.WriteError(c, err)` 统一写回并自动完成多语言翻译，避免在 Handler 内堆砌哨兵错误大 `switch` 匹配。
+1. **核心单一职责**：`internal/algorithm` 专注且仅负责：
+   - **算法包制品资产管理**（解压、Zip-Slip 与炸弹防御、元数据解析、黑盒验包准入门禁、持久化）；
+   - **Runner 外部沙箱子进程监督**（环境变量注入、拉起与保活、指数退避、CrashLoop 熔断及版本自动回滚）。
+2. **分析任务解耦**：分析任务（CRUD、配置校验、算力预算检查与调度）完全归属 `internal/task` 模块。`algorithm` 仅实现 `task.AlgorithmSpecProvider`（供任务校验算法规格）与 `task.TaskChangeListener`（接收任务变更通知以触发防抖热重启）。兼容路由 `/api/v1/algorithms/tasks` 由 `task.Handler` 统一委托承载。
+3. **推理数据与协议下沉**：
+   - 通用 AI 推理模型（`InferenceResult`、`DetectionItem`、`PersonItem` 等）收敛于 `internal/aitypes`，解耦 `camera` 与 `record` 对 `algorithm` 的依赖；
+   - 16 字节定长二进制帧头编解码与协议常量收敛于 `internal/algoipc`。
+4. **错误处理与 apperr 闭环**：`Service` 统一使用 `apperr.Error` 分类暴露错误（`KindInvalid` 对应 422 校验失败，`KindConflict` 对应 409 活跃冲突，`KindNotFound` 对应 404），由 `httputil.WriteError(c, err)` 统一写回并自动完成多语言翻译。
+
 

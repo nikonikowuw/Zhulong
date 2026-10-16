@@ -8,7 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
@@ -49,7 +49,7 @@ type aiStreamRef struct {
 
 // AIResultConsumer consumes parsed AI inference results for persistence or business rules.
 type AIResultConsumer interface {
-	ProcessInferenceResult(ctx context.Context, res algorithm.InferenceResult) error
+	ProcessInferenceResult(ctx context.Context, res aitypes.InferenceResult) error
 }
 
 // SetAIConsumer registers an optional consumer for AI inference results.
@@ -537,7 +537,7 @@ func (h *StreamHub) consumeAIResults(ctx context.Context, cameraID string, sub *
 			return
 		}
 
-		res, err := algorithm.ParseInferenceResult(cameraID, "", data)
+		res, err := aitypes.ParseInferenceResult(cameraID, "", data)
 		if err != nil {
 			h.logger.Warn("parse ai result failed",
 				zap.String("camera_id", cameraID),

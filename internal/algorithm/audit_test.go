@@ -188,40 +188,19 @@ func TestHandlerAuditCoverage(t *testing.T) {
 		t.Fatalf("disable failed: %d %s", w.Code, w.Body.String())
 	}
 
-	// 5. Create analysis task
-	wTask := do(http.MethodPost, "/api/v1/algorithms/tasks",
-		`{"camera_id":"cam_audit","algorithm_id":"`+algoID+`","sample_fps":5}`, clientAddr)
-	if wTask.Code != http.StatusCreated {
-		t.Fatalf("create task failed: %d %s", wTask.Code, wTask.Body.String())
-	}
-	var taskResp struct {
-		Data struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(wTask.Body.Bytes(), &taskResp); err != nil {
-		t.Fatalf("unmarshal task response: %v", err)
-	}
-
-	// 6. Delete analysis task
-	taskID := taskResp.Data.ID
-	if w := do(http.MethodDelete, "/api/v1/algorithms/tasks/"+taskID, "", clientAddr); w.Code != http.StatusOK {
-		t.Fatalf("delete task failed: %d %s", w.Code, w.Body.String())
-	}
-
-	// 7. Delete algorithm
+	// 5. Delete algorithm
 	if w := do(http.MethodDelete, "/api/v1/algorithms/"+algoID, "", clientAddr); w.Code != http.StatusOK {
 		t.Fatalf("delete algorithm failed: %d %s", w.Code, w.Body.String())
 	}
 
-	// 8. Delete again: a failure path must still be recorded.
+	// 6. Delete again: a failure path must still be recorded.
 	if w := do(http.MethodDelete, "/api/v1/algorithms/"+algoID, "", clientAddr); w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for a second delete, got %d %s", w.Code, w.Body.String())
 	}
 
 	entries := drainAlgorithmAudit(t, auditSvc)
-	if len(entries) != 8 {
-		t.Fatalf("expected 8 audit entries, got %d: %+v", len(entries), entries)
+	if len(entries) != 6 {
+		t.Fatalf("expected 6 audit entries, got %d: %+v", len(entries), entries)
 	}
 
 	type want struct {
@@ -233,8 +212,6 @@ func TestHandlerAuditCoverage(t *testing.T) {
 		{algorithm.ActionAlgorithmEnable, audit.StatusSuccess},
 		{algorithm.ActionAlgorithmReset, audit.StatusFailed},
 		{algorithm.ActionAlgorithmDisable, audit.StatusSuccess},
-		{algorithm.ActionAlgorithmTaskCreate, audit.StatusSuccess},
-		{algorithm.ActionAlgorithmTaskDelete, audit.StatusSuccess},
 		{algorithm.ActionAlgorithmDelete, audit.StatusSuccess},
 		{algorithm.ActionAlgorithmDelete, audit.StatusFailed},
 	}

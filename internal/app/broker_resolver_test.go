@@ -83,9 +83,9 @@ func TestPublishRateUsesCrossPackageMax(t *testing.T) {
 		// A disabled task on a distinct camera must not influence any rate.
 		{ID: "t_disabled", CameraID: "cam_2", AlgorithmID: "algo_slow", Enabled: false, SampleFPS: 100, ConfigJSON: "{}"},
 	}
-	for _, task := range tasks {
-		if err := store.CreateTask(ctx, task); err != nil {
-			t.Fatalf("create task %s: %v", task.ID, err)
+	for _, tItem := range tasks {
+		if err := taskStore.CreateTask(ctx, tItem); err != nil {
+			t.Fatalf("create task %s: %v", tItem.ID, err)
 		}
 	}
 

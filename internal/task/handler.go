@@ -36,6 +36,13 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.PUT("/:id", h.UpdateTask)
 		group.DELETE("/:id", h.DeleteTask)
 	}
+
+	legacyGroup := rg.Group("/algorithms/tasks")
+	{
+		legacyGroup.GET("", h.ListTasks)
+		legacyGroup.POST("", h.CreateTask)
+		legacyGroup.DELETE("/:id", h.DeleteTask)
+	}
 }
 
 // ListTasks godoc

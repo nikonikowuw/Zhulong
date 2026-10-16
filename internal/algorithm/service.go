@@ -13,17 +13,12 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"github.com/nikonikowuw/Zhulong/internal/task"
 	"go.uber.org/zap"
 )
 
-const MaxComputePoints int64 = 1000
-
 var (
 	ErrAlgorithmActive          = errors.New("algorithm is currently active and cannot be deleted")
-	ErrComputeBudgetExceeded    = task.ErrComputeBudgetExceeded
-	ErrCameraAlreadyBound       = errors.New("camera already bound to this algorithm")
 	ErrAlgorithmAlreadyExisting = errors.New("algorithm with this name already exists")
 )
 
@@ -295,106 +290,6 @@ func (s *Service) DeleteAlgorithm(ctx context.Context, id string) error {
 	return nil
 }
 
-// CreateTask registers an analysis task on a camera stream, validating compute budget and schema.
-func (s *Service) CreateTask(ctx context.Context, t *AnalysisTask) error {
-	if t == nil {
-		return apperr.Invalid("VALIDATION_FAILED", "task cannot be nil", nil)
-	}
-	if t.CameraID == "" || t.AlgorithmID == "" {
-		return apperr.Invalid("VALIDATION_FAILED", "CameraID and AlgorithmID are required", nil)
-	}
-	if t.SampleFPS <= 0 {
-		t.SampleFPS = 5
-	}
-	if t.ConfigJSON == "" {
-		t.ConfigJSON = "{}"
-	}
-	t.Enabled = true
-	if t.ID == "" {
-		t.ID = idutil.New()
-	}
-
-	algo, err := s.store.GetAlgorithm(ctx, t.AlgorithmID)
-	if err != nil {
-		// Fallback to name lookup if caller provided name instead of ID
-		if algoByName, errName := s.store.GetAlgorithmByName(ctx, t.AlgorithmID); errName == nil {
-			algo = algoByName
-			t.AlgorithmID = algo.ID
-		} else {
-			if errors.Is(err, ErrNotFound) {
-				return apperr.NotFound("ALGORITHM_NOT_FOUND", fmt.Sprintf("algorithm %q: %v", t.AlgorithmID, err), err)
-			}
-			return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("algorithm %q: %v", t.AlgorithmID, err), err)
-		}
-	}
-
-	if err := validateTaskConfig(algo.ConfigSchemaJSON, t.ConfigJSON); err != nil {
-		if errors.Is(err, ErrInvalidConfigSchema) {
-			return apperr.Internal("INTERNAL_ERROR", "Algorithm config schema is invalid", err)
-		}
-		if errors.Is(err, ErrInvalidTaskConfig) {
-			return apperr.Invalid("VALIDATION_FAILED", "Analysis task config is invalid", err)
-		}
-		return apperr.Invalid("VALIDATION_FAILED", err.Error(), err)
-	}
-
-	if err := s.store.CreateTaskWithinBudget(ctx, t, MaxComputePoints); err != nil {
-		if errors.Is(err, ErrComputeBudgetExceeded) {
-			return apperr.Conflict("COMPUTE_BUDGET_EXCEEDED", err.Error(), err)
-		}
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("create task within budget: %v", err), err)
-	}
-
-	// D5：任务增删改需要让该算法包重新解析 --broker 列表。
-	s.scheduleAlgorithmRestart(t.AlgorithmID)
-	return nil
-}
-
-// UpdateTask persists an analysis task change and refreshes the owning algorithm's
-// broker subscriptions (D5).
-func (s *Service) UpdateTask(ctx context.Context, t *AnalysisTask) error {
-	if t == nil {
-		return fmt.Errorf("%w: task is nil", ErrInvalidTaskConfig)
-	}
-	if _, err := ValidateSampleFPS(t.SampleFPS); err != nil {
-		return err
-	}
-	algo, err := s.store.GetAlgorithm(ctx, t.AlgorithmID)
-	if err != nil {
-		return fmt.Errorf("algorithm %q: %w", t.AlgorithmID, err)
-	}
-	if err := validateTaskConfig(algo.ConfigSchemaJSON, t.ConfigJSON); err != nil {
-		return err
-	}
-	if err := s.store.UpdateTask(ctx, t); err != nil {
-		return err
-	}
-	s.scheduleAlgorithmRestart(t.AlgorithmID)
-	return nil
-}
-
-// DeleteTask removes an analysis task and refreshes the owning algorithm's
-// broker subscriptions (D5).
-func (s *Service) DeleteTask(ctx context.Context, id string) error {
-	task, err := s.store.GetTask(ctx, id)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("TASK_NOT_FOUND", "Analysis task not found", err)
-		}
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("get task: %v", err), err)
-	}
-
-	if err := s.store.DeleteTask(ctx, id); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("TASK_NOT_FOUND", "Analysis task not found", err)
-		}
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("delete task: %v", err), err)
-	}
-
-	s.scheduleAlgorithmRestart(task.AlgorithmID)
-	return nil
-}
-
 // ScheduleAlgorithmRestart schedules a debounced restart for the algorithm runner.
 func (s *Service) ScheduleAlgorithmRestart(algorithmID string) {
 	s.scheduleAlgorithmRestart(algorithmID)
@@ -495,21 +390,6 @@ func (s *Service) restartAlgorithmNow(algorithmID string) {
 			zap.Error(err),
 		)
 	}
-}
-
-// ListTasks returns analysis tasks for a given camera or all tasks if cameraID is empty.
-func (s *Service) ListTasks(ctx context.Context, cameraID string) ([]AnalysisTask, error) {
-	var tasks []AnalysisTask
-	var err error
-	if cameraID != "" {
-		tasks, err = s.store.ListTasksByCamera(ctx, cameraID)
-	} else {
-		tasks, err = s.store.ListTasks(ctx)
-	}
-	if err != nil {
-		return nil, apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("list tasks: %v", err), err)
-	}
-	return tasks, nil
 }
 
 // StopAll stops all active subprocesses.

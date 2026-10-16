@@ -20,6 +20,8 @@ internal/
   camera/                     # 相机管理业务模块 (主子流建模、凭据加密、探活调度)
   person/                     # 人员与人脸底库域 (persons / person_faces 一人多照 CRUD)
   algorithm/                  # 算法包生命周期、验包门禁、Runner 进程监督与自愈回滚
+  algoipc/                    # 算法 Runner 子进程间二进制 IPC 编解码与定长帧头协议
+  aitypes/                    # 纯数据契约包 (InferenceResult, DetectionItem, 任务与分类模型)
   task/                       # 视频分析任务管理域 (Camera 与 Algorithm 动态绑定、配置与帧率调度)
   record/                     # 感知记录与结构化报警持久化域
   storage/                    # 边缘媒体存储与动态生命周期 (路径规范、statfs 水位感知)

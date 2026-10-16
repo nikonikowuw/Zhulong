@@ -43,11 +43,6 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.POST("/:id/disable", h.Disable)
 		group.POST("/:id/reset", h.Reset)
 		group.DELETE("/:id", h.Delete)
-
-		// Analysis Tasks
-		group.GET("/tasks", h.ListTasks)
-		group.POST("/tasks", h.CreateTask)
-		group.DELETE("/tasks/:id", h.DeleteTask)
 	}
 }
 
@@ -222,80 +217,6 @@ func (h *Handler) Delete(c *gin.Context) {
 	audithttp.Tag(c, ActionAlgorithmDelete, "algorithm:"+id, "Delete algorithm "+id)
 
 	if err := h.service.DeleteAlgorithm(c.Request.Context(), id); err != nil {
-		httputil.WriteError(c, err)
-		return
-	}
-	httputil.Success(c, gin.H{"deleted": true})
-}
-
-// --- Analysis Tasks Handlers ---
-
-// ListTasks godoc
-// @Summary      List analysis tasks
-// @Tags         algorithm
-// @Produce      json
-// @Param        camera_id query string false "Filter by camera ID"
-// @Success      200  {object}  httputil.Response{data=[]AnalysisTask}
-// @Failure      500  {object}  httputil.Response
-// @Router       /algorithms/tasks [get]
-func (h *Handler) ListTasks(c *gin.Context) {
-	cameraID := c.Query("camera_id")
-	tasks, err := h.service.ListTasks(c.Request.Context(), cameraID)
-	if err != nil {
-		httputil.WriteError(c, err)
-		return
-	}
-	if tasks == nil {
-		tasks = make([]AnalysisTask, 0)
-	}
-	httputil.Success(c, tasks)
-}
-
-// CreateTask godoc
-// @Summary      Create an analysis task
-// @Description  Binds a camera to an algorithm with a sampling rate and a config JSON document. Both camelCase and snake_case request keys are accepted; the snake_case alias is used only when the camelCase key is absent. Missing id, cameraId or algorithmId is rejected with 422 VALIDATION_FAILED. Returns 409 COMPUTE_BUDGET_EXCEEDED when the accumulated compute cost of enabled tasks exceeds the host budget.
-// @Tags         algorithm
-// @Accept       json
-// @Produce      json
-// @Param        request body CreateTaskRequest true "Analysis task payload"
-// @Success      201  {object}  httputil.Response{data=AnalysisTask}
-// @Failure      400  {object}  httputil.Response
-// @Failure      409  {object}  httputil.Response
-// @Failure      422  {object}  httputil.Response
-// @Failure      500  {object}  httputil.Response
-// @Router       /algorithms/tasks [post]
-func (h *Handler) CreateTask(c *gin.Context) {
-	audithttp.Tag(c, ActionAlgorithmTaskCreate, "algorithm.task:", "Create analysis task")
-
-	var req CreateTaskRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_REQUEST", "Invalid analysis task payload", err))
-		return
-	}
-
-	task := req.ToTask()
-	if err := h.service.CreateTask(c.Request.Context(), task); err != nil {
-		httputil.WriteError(c, err)
-		return
-	}
-
-	httputil.SuccessWithStatus(c, http.StatusCreated, task)
-}
-
-// DeleteTask godoc
-// @Summary      Delete an analysis task
-// @Tags         algorithm
-// @Produce      json
-// @Param        id path string true "Analysis task ID"
-// @Success      200  {object}  httputil.Response{data=object}
-// @Failure      404  {object}  httputil.Response
-// @Failure      500  {object}  httputil.Response
-// @Router       /algorithms/tasks/{id} [delete]
-func (h *Handler) DeleteTask(c *gin.Context) {
-	id := c.Param("id")
-	audithttp.Tag(c, ActionAlgorithmTaskDelete, "algorithm.task:"+id, "Delete analysis task "+id)
-
-	if err := h.service.DeleteTask(c.Request.Context(), id); err != nil {
 		httputil.WriteError(c, err)
 		return
 	}

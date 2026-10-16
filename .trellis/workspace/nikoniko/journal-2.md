@@ -373,3 +373,37 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+## Session 53: internal/algorithm 模块瘦身与能力解耦
+<!-- trellis-session: v=2 fp=c000d24f7736669d -->
+
+**Date**: 2026-10-17
+**Task**: internal/algorithm 模块瘦身与能力解耦
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+重构 internal/algorithm 模块，剥离残留的分析任务代码，提取 aitypes 与 algoipc 独立下沉包，解除 camera/record 跨域依赖，验证通过全量测试
+
+### Main Changes
+
+- 创建 internal/aitypes 下沉推理契约模型，解除 camera 与 record 的依赖
+- 创建 internal/algoipc 下沉 16 字节 IPC 二进制协议帧与报文编解码
+- 从 internal/algorithm 剥离 Task 代理 CRUD、DTO 及 HTTP 端点，由 internal/task 挂载兼容路由
+
+### Git Commits
+
+| Commit | Description |
+|---|---|
+| `f923991` | refactor(algorithm): decouple algorithm module, extract aitypes and algoipc, drop legacy task logic |
+
+### Testing
+
+- [OK] make go-check 全量通过（含 go vet、-race、Go Bridge 集成测试）
+- [OK] make native-test 全量通过（20/20 CTest 通过）
+
+### Status
+
+[OK] **Completed**

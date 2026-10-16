@@ -15,7 +15,6 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
 
@@ -108,64 +107,5 @@ func TestHandlerListAndInstall(t *testing.T) {
 	router.ServeHTTP(getW, getReq)
 	if getW.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK, got: %d", getW.Code)
-	}
-}
-
-func TestHandlerAnalysisTasks(t *testing.T) {
-	router, svc := setupTestRouter(t)
-	ctx := context.Background()
-
-	// Pre-create algorithm
-	_, _ = svc.InstallAlgorithm(ctx, createTestTarGz(t, map[string][]byte{
-		"manifest.json": []byte(`{"id":"algo_cam","name":"cam_detector","version":"1.0.0","task_type":"detection","category":"safety","platform":{"arch":"x86_64","target":"cpu"},"resources":{"compute_cost":20,"memory_mb":64}}`),
-		"plugin.so":     []byte("elf"),
-		"sample.jpg":    []byte("jpg"),
-	}))
-
-	// 1. Create Analysis Task via /tasks with algorithm_id
-	tBody := bytes.NewReader([]byte(`{"camera_id":"cam_01","algorithm_id":"algo_cam","sample_fps":5}`))
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/algorithms/tasks", tBody)
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201 Created, got: %d, body: %s", w.Code, w.Body.String())
-	}
-
-	var createResp struct {
-		Data struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &createResp); err != nil {
-		t.Fatalf("unmarshal create task response: %v", err)
-	}
-	if !idutil.IsValid(createResp.Data.ID) {
-		t.Fatalf("expected valid ULID task ID, got %q", createResp.Data.ID)
-	}
-
-	// 2. List tasks via /tasks
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/algorithms/tasks?camera_id=cam_01", nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK, got: %d", w.Code)
-	}
-
-	// 3. Delete Task
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/algorithms/tasks/"+createResp.Data.ID, nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK on delete task, got: %d", w.Code)
-	}
-
-	// 4. Delete Non-existent Task returns 404
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/algorithms/tasks/not_found_task_id", nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 Not Found on deleting non-existent task, got: %d", w.Code)
 	}
 }

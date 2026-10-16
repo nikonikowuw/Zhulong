@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "算法包生命周期与服务契约规范"}
+{"file": ".trellis/spec/backend/task-guidelines.md", "reason": "分析任务解耦契约与算力预算规范"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "后端目录架构与单向依赖铁律"}

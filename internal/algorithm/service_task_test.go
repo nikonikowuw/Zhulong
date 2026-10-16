@@ -2,11 +2,9 @@ package algorithm_test
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,9 +16,9 @@ import (
 )
 
 // newTaskService builds a Service backed by a real migrated DB and a supervisor
-// whose runner is `sleep`, so package restarts are observable without a native
+// whose runner is a stub shell script, so package restarts are observable without a native
 // runner binary.
-func newTaskService(t *testing.T) (*algorithm.Service, *algorithm.Supervisor, *algorithm.Store, func()) {
+func newTaskService(t *testing.T) (*algorithm.Service, *algorithm.Supervisor, *algorithm.Store, *database.Store, func()) {
 	t.Helper()
 	dataDir := t.TempDir()
 	dbStore := database.New(dataDir, zap.NewNop())
@@ -28,8 +26,6 @@ func newTaskService(t *testing.T) (*algorithm.Service, *algorithm.Supervisor, *a
 		t.Fatalf("open database: %v", err)
 	}
 	store := algorithm.NewStore(dbStore)
-	// A long-lived stub runner: `sleep` with no argument exits immediately, which
-	// would let the package crash out from under the debounce assertions.
 	runnerPath := filepath.Join(dataDir, "stub_runner.sh")
 	if err := os.WriteFile(runnerPath, []byte("#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile true; do sleep 1; done\n"), 0o755); err != nil {
 		t.Fatalf("write stub runner: %v", err)
@@ -42,7 +38,7 @@ func newTaskService(t *testing.T) (*algorithm.Service, *algorithm.Supervisor, *a
 		supervisor.StopAll(time.Second)
 		_ = dbStore.Close()
 	}
-	return service, supervisor, store, cleanup
+	return service, supervisor, store, dbStore, cleanup
 }
 
 func seedTaskAlgorithm(t *testing.T, store *algorithm.Store) *algorithm.Algorithm {
@@ -59,68 +55,6 @@ func seedTaskAlgorithm(t *testing.T, store *algorithm.Store) *algorithm.Algorith
 	return algo
 }
 
-// TestServiceUpdateTaskPersistsAndTriggersRestart covers the Service.UpdateTask
-// path that the task-change trigger (D5) requires: it did not exist before, so
-// sample_fps / enabled edits had no way to reach the running package.
-func TestServiceUpdateTaskPersistsAndTriggersRestart(t *testing.T) {
-	service, supervisor, store, cleanup := newTaskService(t)
-	defer cleanup()
-	algo := seedTaskAlgorithm(t, store)
-
-	ctx := context.Background()
-	task := &algorithm.AnalysisTask{
-		ID: "task_1", CameraID: "cam_1", AlgorithmID: algo.ID,
-		Enabled: true, SampleFPS: 5, ConfigJSON: "{}",
-	}
-	if err := service.CreateTask(ctx, task); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	if err := supervisor.StartAlgorithm(ctx, *algo); err != nil {
-		t.Fatalf("start algorithm: %v", err)
-	}
-
-	task.SampleFPS = 20
-	if err := service.UpdateTask(ctx, task); err != nil {
-		t.Fatalf("update task: %v", err)
-	}
-	service.FlushPendingRestarts()
-
-	stored, err := store.GetTask(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("reload task: %v", err)
-	}
-	if stored.SampleFPS != 20 {
-		t.Fatalf("expected persisted sample_fps 20, got %d", stored.SampleFPS)
-	}
-	if got := supervisor.GetStatus(algo.ID); got != algorithm.StatusRunning {
-		t.Fatalf("expected package running after task update, got %s", got)
-	}
-}
-
-// TestServiceUpdateTaskRejectsNegativeSampleFPS guards the int -> uint32
-// conversion: Store.UpdateTask does no validation, so a negative sample_fps
-// would otherwise become ~4.29e9 fps at the publish throttle.
-func TestServiceUpdateTaskRejectsNegativeSampleFPS(t *testing.T) {
-	service, _, store, cleanup := newTaskService(t)
-	defer cleanup()
-	algo := seedTaskAlgorithm(t, store)
-
-	ctx := context.Background()
-	task := &algorithm.AnalysisTask{
-		ID: "task_neg", CameraID: "cam_1", AlgorithmID: algo.ID,
-		Enabled: true, SampleFPS: 5, ConfigJSON: "{}",
-	}
-	if err := service.CreateTask(ctx, task); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-
-	task.SampleFPS = -1
-	err := service.UpdateTask(ctx, task)
-	if !errors.Is(err, algorithm.ErrInvalidTaskConfig) {
-		t.Fatalf("expected ErrInvalidTaskConfig for negative sample_fps, got %v", err)
-	}
-}
-
 // countingBrokerPathResolver counts how many times the supervisor resolved
 // broker paths, which is once per StartAlgorithm (i.e. once per restart).
 type countingBrokerPathResolver struct {
@@ -135,7 +69,7 @@ func (m *countingBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context
 // TestServiceTaskChangeDebouncesRestart guards design.md §7.4: a burst of task
 // changes on one package must collapse into a single restart, not N restarts.
 func TestServiceTaskChangeDebouncesRestart(t *testing.T) {
-	service, supervisor, store, cleanup := newTaskService(t)
+	service, supervisor, store, _, cleanup := newTaskService(t)
 	defer cleanup()
 	algo := seedTaskAlgorithm(t, store)
 
@@ -148,17 +82,11 @@ func TestServiceTaskChangeDebouncesRestart(t *testing.T) {
 	}
 	afterInitialStart := resolver.calls.Load()
 
-	// 20 rapid task changes on distinct cameras must not restart the package 20
+	// 20 rapid task change notifications must not restart the package 20
 	// times. Without the debounce this loop would thrash
 	// StopAlgorithm/StartAlgorithm once per task.
 	for i := 0; i < 20; i++ {
-		task := &algorithm.AnalysisTask{
-			ID: "burst_" + strconv.Itoa(i), CameraID: "cam_" + strconv.Itoa(i),
-			AlgorithmID: algo.ID, Enabled: true, SampleFPS: 5, ConfigJSON: "{}",
-		}
-		if err := service.CreateTask(ctx, task); err != nil {
-			t.Fatalf("create task %d: %v", i, err)
-		}
+		service.OnTaskChanged(ctx, algo.ID)
 	}
 
 	service.FlushPendingRestarts()
@@ -173,7 +101,6 @@ func TestServiceTaskChangeDebouncesRestart(t *testing.T) {
 }
 
 // brokerRecordingRunner 写入一个把每次启动的完整参数追加到 $RUN_ARG_FILE 的真实 runner。
-// 与 supervisor_test.go 的记录格式一致：每个参数一行，以字面量 "start" 行分界。
 func brokerRecordingRunner(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "broker_recording_runner.sh")
@@ -184,7 +111,6 @@ func brokerRecordingRunner(t *testing.T, dir string) string {
 	return path
 }
 
-// readRunnerBrokerFlags 读出 runner 每次启动的 --broker 路径列表（按启动顺序）。
 func readRunnerBrokerFlags(t *testing.T, path string) [][]string {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -221,6 +147,39 @@ func readRunnerBrokerFlags(t *testing.T, path string) [][]string {
 	return flags
 }
 
+// storeBackedBrokerResolver 按库中 enabled 的任务派生每台相机的 broker 路径，
+// 模拟真实 camera 域的 SyncBrokerSubscriptions 行为。
+type storeBackedBrokerResolver struct {
+	dbStore *database.Store
+}
+
+func (r *storeBackedBrokerResolver) SyncBrokerSubscriptions(ctx context.Context, algorithmID string) ([]string, error) {
+	var cameraIDs []string
+	err := r.dbStore.DB().WithContext(ctx).Table("analysis_tasks").
+		Where("algorithm_id = ? AND enabled = 1", algorithmID).
+		Pluck("DISTINCT camera_id", &cameraIDs).Error
+	if err != nil {
+		return nil, err
+	}
+	var socks []string
+	for _, camID := range cameraIDs {
+		socks = append(socks, "/tmp/zhulong_broker_"+camID+".sock")
+	}
+	return socks, nil
+}
+
+func waitForBrokerInvocations(t *testing.T, path string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(readRunnerBrokerFlags(t, path)) >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("runner invocations did not reach %d; got %d", want, len(readRunnerBrokerFlags(t, path)))
+}
+
 // TestServiceTaskChangeRestartsPackageWithNewBrokerSet covers AC9's end-to-end
 // half that the resolver-level tests do not: creating an AnalysisTask on a second
 // camera must make the owning package restart and actually receive BOTH broker
@@ -238,8 +197,7 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	t.Setenv("RUN_ARG_FILE", argFile)
 
 	supervisor := algorithm.NewSupervisor(store, dataDir, brokerRecordingRunner(t, dataDir), algorithm.DefaultRecoveryOptions(), zap.NewNop())
-	// resolver 模拟 camera 域：按当前已落库的 enabled 任务派生出每台相机的 broker 路径。
-	resolver := &storeBackedBrokerResolver{store: store}
+	resolver := &storeBackedBrokerResolver{dbStore: dbStore}
 	supervisor.SetBrokerSubscriptionResolver(resolver)
 	service := algorithm.NewService(store, algorithm.NewVerifier("", "cpu"), supervisor, dataDir, zap.NewNop())
 
@@ -250,12 +208,11 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	})
 
 	// 先建 camera1 的任务，再启动包 → 首轮应为 1 个 --broker
-	if err := service.CreateTask(ctx, &algorithm.AnalysisTask{
-		ID: "task_cam1", CameraID: "camera1", AlgorithmID: algo.ID,
-		Enabled: true, SampleFPS: 5, ConfigJSON: "{}",
-	}); err != nil {
-		t.Fatalf("create task for camera1: %v", err)
+	if err := dbStore.DB().Exec(`INSERT INTO analysis_tasks (id, camera_id, algorithm_id, enabled, sample_fps, config_json, created_at, updated_at) VALUES 
+		('task_cam1', 'camera1', ?, 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, algo.ID).Error; err != nil {
+		t.Fatalf("insert task for camera1: %v", err)
 	}
+	service.OnTaskChanged(ctx, algo.ID)
 	service.FlushPendingRestarts()
 
 	if err := supervisor.StartAlgorithm(ctx, *algo); err != nil {
@@ -268,12 +225,11 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	}
 
 	// 运行期新建 camera2 的任务 → 该包必须重启并实际带上 2 个 --broker
-	if err := service.CreateTask(ctx, &algorithm.AnalysisTask{
-		ID: "task_cam2", CameraID: "camera2", AlgorithmID: algo.ID,
-		Enabled: true, SampleFPS: 5, ConfigJSON: "{}",
-	}); err != nil {
-		t.Fatalf("create task for camera2: %v", err)
+	if err := dbStore.DB().Exec(`INSERT INTO analysis_tasks (id, camera_id, algorithm_id, enabled, sample_fps, config_json, created_at, updated_at) VALUES 
+		('task_cam2', 'camera2', ?, 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, algo.ID).Error; err != nil {
+		t.Fatalf("insert task for camera2: %v", err)
 	}
+	service.OnTaskChanged(ctx, algo.ID)
 	service.FlushPendingRestarts()
 
 	waitForBrokerInvocations(t, argFile, 2)
@@ -287,9 +243,10 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	}
 
 	// 删除 camera2 的任务 → 回到 1 路
-	if err := service.DeleteTask(ctx, "task_cam2"); err != nil {
+	if err := dbStore.DB().Exec("DELETE FROM analysis_tasks WHERE id = 'task_cam2'").Error; err != nil {
 		t.Fatalf("delete task for camera2: %v", err)
 	}
+	service.OnTaskChanged(ctx, algo.ID)
 	service.FlushPendingRestarts()
 
 	waitForBrokerInvocations(t, argFile, 3)
@@ -297,40 +254,4 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	if got := third[2]; !reflect.DeepEqual(got, []string{"/tmp/zhulong_broker_camera1.sock"}) {
 		t.Fatalf("restart after deleting camera2 broker flags = %v, want 1 sock for camera1", got)
 	}
-}
-
-// storeBackedBrokerResolver 按库中 enabled 的 AnalysisTask 派生每台相机的 broker 路径，
-// 模拟真实 camera 域的 SyncBrokerSubscriptions 行为（同一台相机只产出一个路径）。
-type storeBackedBrokerResolver struct {
-	store *algorithm.Store
-}
-
-func (r *storeBackedBrokerResolver) SyncBrokerSubscriptions(ctx context.Context, algorithmID string) ([]string, error) {
-	tasks, err := r.store.ListTasksByAlgorithm(ctx, algorithmID)
-	if err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{}
-	var socks []string
-	for _, task := range tasks {
-		if !task.Enabled || seen[task.CameraID] {
-			continue
-		}
-		seen[task.CameraID] = true
-		socks = append(socks, "/tmp/zhulong_broker_"+task.CameraID+".sock")
-	}
-	return socks, nil
-}
-
-// waitForBrokerInvocations 等待 runner 参数文件累计到 want 次启动记录。
-func waitForBrokerInvocations(t *testing.T, path string, want int) {
-	t.Helper()
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(readRunnerBrokerFlags(t, path)) >= want {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("runner invocations did not reach %d; got %d", want, len(readRunnerBrokerFlags(t, path)))
 }

@@ -104,71 +104,6 @@ func TestStoreAlgorithmCRUD(t *testing.T) {
 	}
 }
 
-func TestStoreAnalysisTaskCRUD(t *testing.T) {
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
-	ctx := context.Background()
-
-	task := &algorithm.AnalysisTask{
-		ID:          "task_01",
-		CameraID:    "cam_01",
-		AlgorithmID: "algo_test_detector",
-		Enabled:     true,
-		SampleFPS:   5,
-		ConfigJSON:  `{"threshold": 0.5}`,
-	}
-
-	// 1. Create
-	if err := store.CreateTask(ctx, task); err != nil {
-		t.Fatalf("CreateTask failed: %v", err)
-	}
-
-	// 2. Get
-	found, err := store.GetTask(ctx, "task_01")
-	if err != nil {
-		t.Fatalf("GetTask failed: %v", err)
-	}
-	if found.CameraID != "cam_01" {
-		t.Errorf("expected camera ID 'cam_01', got '%s'", found.CameraID)
-	}
-	if found.AlgorithmID != "algo_test_detector" {
-		t.Errorf("expected algorithm ID 'algo_test_detector', got '%s'", found.AlgorithmID)
-	}
-	if found.SampleFPS != 5 {
-		t.Errorf("expected sample FPS 5, got %d", found.SampleFPS)
-	}
-
-	// 3. Get by camera and algorithm
-	foundByCam, err := store.GetTaskByCameraAndAlgorithm(ctx, "cam_01", "algo_test_detector")
-	if err != nil {
-		t.Fatalf("GetTaskByCameraAndAlgorithm failed: %v", err)
-	}
-	if foundByCam.ID != "task_01" {
-		t.Errorf("expected task ID 'task_01', got '%s'", foundByCam.ID)
-	}
-
-	// 4. List by camera
-	camList, err := store.ListTasksByCamera(ctx, "cam_01")
-	if err != nil {
-		t.Fatalf("ListTasksByCamera failed: %v", err)
-	}
-	if len(camList) != 1 {
-		t.Errorf("expected 1 task, got %d", len(camList))
-	}
-
-	// 5. Delete by camera
-	if err := store.DeleteTasksByCamera(ctx, "cam_01"); err != nil {
-		t.Fatalf("DeleteTasksByCamera failed: %v", err)
-	}
-	camList, err = store.ListTasksByCamera(ctx, "cam_01")
-	if err != nil {
-		t.Fatalf("ListTasksByCamera after delete failed: %v", err)
-	}
-	if len(camList) != 0 {
-		t.Errorf("expected 0 tasks, got %d", len(camList))
-	}
-}
-
 func TestStoreRollbackAlgorithmVersion(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()
@@ -209,31 +144,5 @@ func TestStoreRollbackAlgorithmVersion(t *testing.T) {
 	}
 	if updated.Status != algorithm.StatusActive {
 		t.Errorf("expected status 'ACTIVE', got '%s'", updated.Status)
-	}
-}
-
-// TestStoreCreateTaskPersistsDisabledEnabled guards the GORM default-tag trap:
-// a `default:true` tag makes GORM omit a zero-valued Enabled from the INSERT, so
-// an explicitly disabled task silently came back enabled. D5 makes enabled a
-// task-change trigger, so this must round-trip faithfully.
-func TestStoreCreateTaskPersistsDisabledEnabled(t *testing.T) {
-	ctx := context.Background()
-	store, cleanup := setupTestStore(t)
-	defer cleanup()
-
-	task := &algorithm.AnalysisTask{
-		ID: "task_disabled", CameraID: "cam_disabled", AlgorithmID: "algo_disabled",
-		Enabled: false, SampleFPS: 5, ConfigJSON: "{}",
-	}
-	if err := store.CreateTask(ctx, task); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-
-	stored, err := store.GetTask(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("get task: %v", err)
-	}
-	if stored.Enabled {
-		t.Fatal("Enabled=false was coerced back to true on insert (GORM default tag trap)")
 	}
 }

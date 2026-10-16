@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
-	"github.com/nikonikowuw/Zhulong/internal/task"
 	"gorm.io/gorm"
 )
 
@@ -168,60 +167,11 @@ func (s *Store) DeleteAlgorithm(ctx context.Context, id string) error {
 	return nil
 }
 
-// --- Analysis Task Operations (Delegated to internal/task/Store for backward compatibility) ---
-
-func (s *Store) CreateTask(ctx context.Context, t *AnalysisTask) error {
-	return task.NewStore(s.dbProvider).CreateTask(ctx, t)
-}
-
-func (s *Store) CreateTaskWithinBudget(ctx context.Context, t *AnalysisTask, maxPoints int64) error {
-	return task.NewStore(s.dbProvider).CreateTaskWithinBudget(ctx, t, maxPoints)
-}
-
-func (s *Store) GetTask(ctx context.Context, id string) (*AnalysisTask, error) {
-	t, err := task.NewStore(s.dbProvider).GetTask(ctx, id)
-	if errors.Is(err, task.ErrNotFound) {
-		return nil, ErrNotFound
-	}
-	return t, err
-}
-
-func (s *Store) GetTaskByCameraAndAlgorithm(ctx context.Context, cameraID, algorithmID string) (*AnalysisTask, error) {
-	t, err := task.NewStore(s.dbProvider).GetTaskByCameraAndAlgorithm(ctx, cameraID, algorithmID)
-	if errors.Is(err, task.ErrNotFound) {
-		return nil, ErrNotFound
-	}
-	return t, err
-}
-
-func (s *Store) ListTasks(ctx context.Context) ([]AnalysisTask, error) {
-	return task.NewStore(s.dbProvider).ListTasks(ctx)
-}
-
-func (s *Store) ListTasksByCamera(ctx context.Context, cameraID string) ([]AnalysisTask, error) {
-	return task.NewStore(s.dbProvider).ListTasksByCamera(ctx, cameraID)
-}
-
-func (s *Store) ListTasksByAlgorithm(ctx context.Context, algorithmID string) ([]AnalysisTask, error) {
-	return task.NewStore(s.dbProvider).ListTasksByAlgorithm(ctx, algorithmID)
-}
-
-func (s *Store) UpdateTask(ctx context.Context, t *AnalysisTask) error {
-	return task.NewStore(s.dbProvider).UpdateTask(ctx, t)
-}
-
-func (s *Store) DeleteTask(ctx context.Context, id string) error {
-	err := task.NewStore(s.dbProvider).DeleteTask(ctx, id)
-	if errors.Is(err, task.ErrNotFound) {
-		return ErrNotFound
-	}
-	return err
-}
-
-func (s *Store) DeleteTasksByCamera(ctx context.Context, cameraID string) error {
-	return task.NewStore(s.dbProvider).DeleteTasksByCamera(ctx, cameraID)
-}
-
+// DeleteTasksByAlgorithm removes tasks associated with an algorithm upon uninstallation.
 func (s *Store) DeleteTasksByAlgorithm(ctx context.Context, algorithmID string) error {
-	return task.NewStore(s.dbProvider).DeleteTasksByAlgorithm(ctx, algorithmID)
+	db, err := s.db(ctx)
+	if err != nil {
+		return err
+	}
+	return db.Exec("DELETE FROM analysis_tasks WHERE algorithm_id = ?", algorithmID).Error
 }
