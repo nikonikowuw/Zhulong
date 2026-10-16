@@ -124,3 +124,12 @@ zhulong_algo_runner --verify-plugin plugin.so --sample sample.jpg
 | `ALGO_PLATFORM_MISMATCH` | `platform.arch`/`target` 与运行宿主配置不符 | 核验交叉编译工具链与 `manifest.json` 平台声明 |
 | `INVALID_MANIFEST_TOKEN` | `id` / `version` 包含非法字符，或 `name` 超过 32 字节 | 匹配正则 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` 并缩短 `name` |
 | `ALGO_VERIFICATION_FAILED` | `zhulong_algo_runner` 验包退出码非 0 | 使用 `sample.jpg` 在本地复现排查崩溃与内存问题 |
+
+---
+
+## 6. 控制面分层与错误处理规约 (Control Plane & Service Layer)
+
+1. **职责分离**：`Handler` 仅负责 HTTP 传输适配（解析 DTO、调用 `req.ToTask()`、审计打标、调用 `Service` 并通过 `httputil.Success` / `httputil.SuccessWithStatus` 写回），严禁在 Handler 层直接生成实体 ID 或赋初值默认参数，严禁裸写 `c.JSON`。
+2. **默认值与领域初始化**：分析任务的参数默认值（如 `SampleFPS = 5`、`ConfigJSON = "{}"`）、必填校验与全局唯一 ID（`idutil.New()`）由 `Service.CreateTask` 统一负责，保证非 HTTP 通道（如内部事件总线、CLI 调度）完全复用领域规则。
+3. **错误处理与 apperr 闭环**：`Service` 统一使用 `apperr.Error` 分类暴露错误（`KindInvalid` 对应 422 校验失败，`KindConflict` 对应 409 算力预算超限或活跃冲突，`KindNotFound` 对应 404），由 `httputil.WriteError(c, err)` 统一写回并自动完成多语言翻译，避免在 Handler 内堆砌哨兵错误大 `switch` 匹配。
+
