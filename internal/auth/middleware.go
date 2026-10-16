@@ -1,6 +1,10 @@
 package auth
 
 import (
+	"net/http"
+	"strings"
+	"time"
+
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
@@ -56,6 +60,14 @@ func writeUnauthorized(c *gin.Context) {
 // set by the audit middleware is preserved: authentication refines the
 // identity but never replaces the connection source.
 func RequireAuth(service AuthService) gin.HandlerFunc {
+	maxAge := DefaultSessionCookieMaxAge
+	if service != nil {
+		ttl := service.SessionTTL()
+		if ttl > 0 {
+			maxAge = int(ttl / time.Second)
+		}
+	}
+
 	return func(c *gin.Context) {
 		token, err := c.Cookie(SessionCookieName)
 		if err != nil || token == "" {
@@ -83,6 +95,10 @@ func RequireAuth(service AuthService) gin.HandlerFunc {
 			actor.Username = sessionItem.Username
 		}
 		c.Request = c.Request.WithContext(audit.WithActor(c.Request.Context(), actor))
+
+		if c.Request.Method != http.MethodPost || !strings.HasSuffix(c.Request.URL.Path, "/logout") {
+			setSessionCookie(c, token, maxAge)
+		}
 
 		c.Next()
 	}

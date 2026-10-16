@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
@@ -38,6 +39,16 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 func setSessionCookie(c *gin.Context, token string, maxAge int) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(SessionCookieName, token, maxAge, "/", "", false, true)
+}
+
+func (h *Handler) sessionCookieMaxAge() int {
+	if h.service != nil {
+		ttl := h.service.SessionTTL()
+		if ttl > 0 {
+			return int(ttl / time.Second)
+		}
+	}
+	return DefaultSessionCookieMaxAge
 }
 
 func clearSessionCookie(c *gin.Context) {
@@ -77,7 +88,7 @@ func (h *Handler) initHandler(c *gin.Context, req InitAdminRequest) (UserRespons
 	}
 	audithttp.TagActor(c, user.Username)
 	audithttp.TagTarget(c, "user:"+user.Username)
-	setSessionCookie(c, token, 7*24*3600)
+	setSessionCookie(c, token, h.sessionCookieMaxAge())
 	return user, nil
 }
 
@@ -103,7 +114,7 @@ func (h *Handler) loginHandler(c *gin.Context, req LoginRequest) (UserResponse, 
 	}
 	audithttp.TagActor(c, user.Username)
 	audithttp.TagTarget(c, "user:"+user.Username)
-	setSessionCookie(c, token, 7*24*3600)
+	setSessionCookie(c, token, h.sessionCookieMaxAge())
 	return user, nil
 }
 

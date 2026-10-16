@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config contains host-level settings supplied before Fx constructs the application.
@@ -16,6 +17,7 @@ type Config struct {
 	AlgorithmTarget string
 	Development     bool
 	CustomScript    string
+	SessionTTL      time.Duration
 }
 
 func validateHTTPAddress(address string) error {
@@ -45,6 +47,32 @@ func validateHTTPAddress(address string) error {
 	return nil
 }
 
+// ParseSessionTTL parses a duration string supporting standard Go durations and day suffix "d".
+func ParseSessionTTL(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, errors.New("session_ttl must not be empty")
+	}
+
+	if strings.HasSuffix(raw, "d") {
+		daysStr := strings.TrimSuffix(raw, "d")
+		days, err := strconv.ParseFloat(daysStr, 64)
+		if err != nil || days <= 0 {
+			return 0, fmt.Errorf("invalid session_ttl %q: must be a positive duration", raw)
+		}
+		return time.Duration(days * 24 * float64(time.Hour)), nil
+	}
+
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid session_ttl %q: %w", raw, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("session_ttl must be positive: %v", d)
+	}
+	return d, nil
+}
+
 // DefaultConfig returns local-only defaults suitable for development and smoke tests.
 func DefaultConfig() Config {
 	return Config{
@@ -52,5 +80,6 @@ func DefaultConfig() Config {
 		DataDir:         "./data",
 		FacesDir:        "",
 		AlgorithmTarget: "cpu",
+		SessionTTL:      24 * time.Hour,
 	}
 }

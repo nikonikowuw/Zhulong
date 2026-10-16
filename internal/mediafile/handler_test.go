@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
@@ -634,6 +635,9 @@ func (stubAuthService) GetCurrentUser(context.Context, int64) (auth.UserResponse
 }
 func (stubAuthService) ValidateSession(string) (auth.SessionItem, bool) {
 	return auth.SessionItem{}, false
+}
+func (stubAuthService) SessionTTL() time.Duration {
+	return time.Hour
 }
 
 // TestHandler_RequiresSessionCookie verifies the media endpoints are mounted on

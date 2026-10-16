@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/app"
 )
@@ -42,8 +43,36 @@ func TestLoadConfigKeepsDefaultsForOmittedValues(t *testing.T) {
 	}
 	defaults := app.DefaultConfig()
 	expectedFacesDir := filepath.Join(defaults.DataDir, "faces")
-	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != defaults.DataDir || got.FacesDir != expectedFacesDir || got.AlgorithmTarget != defaults.AlgorithmTarget || got.Development {
+	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != defaults.DataDir || got.FacesDir != expectedFacesDir || got.AlgorithmTarget != defaults.AlgorithmTarget || got.Development || got.SessionTTL != defaults.SessionTTL {
 		t.Fatalf("unexpected config: %+v", got)
+	}
+}
+
+func TestLoadConfigParsesAuthSessionTTL(t *testing.T) {
+	path := writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n[auth]\nsession_ttl = '12h'\n")
+	got, err := loadConfigFile(path)
+	if err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+	if got.SessionTTL != 12*time.Hour {
+		t.Fatalf("expected SessionTTL 12h, got %v", got.SessionTTL)
+	}
+
+	// Test day format
+	path = writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n[auth]\nsession_ttl = '7d'\n")
+	got, err = loadConfigFile(path)
+	if err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+	if got.SessionTTL != 7*24*time.Hour {
+		t.Fatalf("expected SessionTTL 7d, got %v", got.SessionTTL)
+	}
+
+	// Test invalid format rejected
+	path = writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n[auth]\nsession_ttl = 'bad-ttl'\n")
+	_, err = loadConfigFile(path)
+	if err == nil {
+		t.Fatal("expected invalid session_ttl to fail")
 	}
 }
 

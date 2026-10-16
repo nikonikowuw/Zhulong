@@ -29,6 +29,7 @@ type AuthService interface {
 	Logout(token string)
 	GetCurrentUser(ctx context.Context, userID int64) (UserResponse, error)
 	ValidateSession(token string) (SessionItem, bool)
+	SessionTTL() time.Duration
 }
 
 // RateLimiter tracks failed authentication attempts by client IP.
@@ -289,4 +290,11 @@ func (s *authService) GetCurrentUser(ctx context.Context, userID int64) (UserRes
 
 func (s *authService) ValidateSession(token string) (SessionItem, bool) {
 	return s.sessionStore.Get(token)
+}
+
+func (s *authService) SessionTTL() time.Duration {
+	if s.sessionStore != nil {
+		return s.sessionStore.TTL()
+	}
+	return DefaultSessionTTL
 }

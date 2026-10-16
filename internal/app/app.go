@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
@@ -110,9 +109,9 @@ type authOut struct {
 	PublicRoutes RouteRegistrar `group:"public_routes"`
 }
 
-func provideAuth(dbProvider database.DBProvider, logger *zap.Logger) authOut {
+func provideAuth(config Config, dbProvider database.DBProvider, logger *zap.Logger) authOut {
 	userStore := auth.NewUserStore(dbProvider)
-	sessionStore := auth.NewMemorySessionStore(7 * 24 * time.Hour)
+	sessionStore := auth.NewMemorySessionStore(config.SessionTTL)
 	authSvc := auth.NewAuthService(userStore, sessionStore, nil, logger)
 	handler := auth.NewHandler(authSvc)
 	return authOut{

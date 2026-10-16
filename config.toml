@@ -22,3 +22,11 @@ faces_directory = ""
 # Must match manifest.json platform.target for algorithm packages.
 [algorithm]
 target = "cpu"
+
+# Authentication and session security configuration.
+[auth]
+# Session idle timeout duration. Supports Go duration syntax (e.g. "30m", "12h", "24h", "7d").
+# Automatically extended on user activity (sliding expiration).
+# Defaults to "24h".
+session_ttl = "24h"
+

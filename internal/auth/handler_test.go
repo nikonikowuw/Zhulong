@@ -119,7 +119,7 @@ func TestAuthHandler_ValidationDetailsUseJSONFieldsAndLocalizedCodes(t *testing.
 }
 
 func TestAuthHandler_InitAndLoginFlow(t *testing.T) {
-	router, _ := setupTestRouter(t)
+	router, svc := setupTestRouter(t)
 
 	// 1. Protected endpoint returns 401 without cookie
 	w := httptest.NewRecorder()
@@ -193,6 +193,16 @@ func TestAuthHandler_InitAndLoginFlow(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 on protected endpoint, got %d", w.Code)
+	}
+	var refreshedCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == SessionCookieName {
+			refreshedCookie = c
+			break
+		}
+	}
+	if refreshedCookie == nil || refreshedCookie.Value != sessionCookie.Value || refreshedCookie.MaxAge != int(svc.SessionTTL().Seconds()) {
+		t.Fatalf("expected session cookie renewal on protected endpoint: %+v", refreshedCookie)
 	}
 
 	// 6. Test /me endpoint with session cookie

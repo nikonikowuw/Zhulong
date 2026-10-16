@@ -58,6 +58,48 @@ func TestMemorySessionStore_Expiration(t *testing.T) {
 	}
 }
 
+func TestMemorySessionStore_SlidingExpiration(t *testing.T) {
+	fakeNow := time.Now().UTC()
+	store := NewMemorySessionStore(10 * time.Minute)
+	store.nowFunc = func() time.Time { return fakeNow }
+
+	token, err := store.Create(1, "admin")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Advance time past half of TTL (e.g. +6m, initial expiration is at +10m)
+	fakeNow = fakeNow.Add(6 * time.Minute)
+
+	// Access session: this should refresh expiration to fakeNow + 10m (+16m from start)
+	item, ok := store.Get(token)
+	if !ok {
+		t.Fatal("expected session to be valid and refreshed")
+	}
+	expectedExpiry := fakeNow.Add(10 * time.Minute)
+	if !item.ExpiresAt.Equal(expectedExpiry) {
+		t.Fatalf("expected ExpiresAt to be %v, got %v", expectedExpiry, item.ExpiresAt)
+	}
+
+	// Advance time to +12m from start (past the initial 10m TTL, but before new 16m expiration)
+	fakeNow = fakeNow.Add(6 * time.Minute)
+
+	// Should still be valid because of sliding expiration
+	item, ok = store.Get(token)
+	if !ok {
+		t.Fatal("expected session to remain valid due to sliding expiration")
+	}
+
+	// Advance time past the new expiration (+11m, now at +23m from start)
+	fakeNow = fakeNow.Add(11 * time.Minute)
+
+	// Now it should be expired
+	_, ok = store.Get(token)
+	if ok {
+		t.Fatal("expected session to be expired after inactivity")
+	}
+}
+
 func TestMemorySessionStore_Concurrency(t *testing.T) {
 	store := NewMemorySessionStore(1 * time.Hour)
 	var wg sync.WaitGroup

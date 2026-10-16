@@ -1,6 +1,9 @@
 package app
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestValidateHTTPAddress(t *testing.T) {
 	tests := []struct {
@@ -52,5 +55,41 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.Development {
 		t.Fatalf("expected Development to default to false, got true")
+	}
+	if cfg.SessionTTL != 24*time.Hour {
+		t.Fatalf("unexpected default SessionTTL: %v", cfg.SessionTTL)
+	}
+}
+
+func TestParseSessionTTL(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "empty", raw: "", wantErr: true},
+		{name: "whitespace", raw: "  ", wantErr: true},
+		{name: "invalid syntax", raw: "abc", wantErr: true},
+		{name: "negative duration", raw: "-1h", wantErr: true},
+		{name: "zero duration", raw: "0s", wantErr: true},
+		{name: "hours", raw: "24h", want: 24 * time.Hour},
+		{name: "minutes", raw: "30m", want: 30 * time.Minute},
+		{name: "days integer", raw: "7d", want: 7 * 24 * time.Hour},
+		{name: "days float", raw: "0.5d", want: 12 * time.Hour},
+		{name: "days invalid", raw: "abcd", wantErr: true},
+		{name: "days negative", raw: "-2d", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseSessionTTL(tc.raw)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ParseSessionTTL(%q) error = %v, wantErr = %v", tc.raw, err, tc.wantErr)
+			}
+			if !tc.wantErr && got != tc.want {
+				t.Fatalf("ParseSessionTTL(%q) = %v, want %v", tc.raw, got, tc.want)
+			}
+		})
 	}
 }

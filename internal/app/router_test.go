@@ -118,6 +118,10 @@ func (a authStubService) GetStatus(ctx context.Context) (auth.AuthStatusResponse
 	return auth.AuthStatusResponse{Initialized: false}, nil
 }
 
+func (a authStubService) SessionTTL() time.Duration {
+	return time.Hour
+}
+
 func TestRouterMountsAuthEndpoints(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	authStub := authStubService{}
