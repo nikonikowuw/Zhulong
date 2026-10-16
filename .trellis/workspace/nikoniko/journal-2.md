@@ -278,6 +278,13 @@ Integrated zhulong::ops::letterbox in face_recognition detector to eliminate man
 
 Implemented `MppDecodeNode` and `MppLoader` using Rockchip MPP (`librockchip_mpp.so`) with dynamic `dlopen` symbol loading and `/dev/mpp_service` probing. Exported kernel DMA-BUF descriptors via `dup(mpp_buffer_get_fd(buf))` into `HardwareFrame::dma_fd` with NV12 format and 16-byte/16-line stride alignment. Enforced anti-deadlock RAII lifecycle with `mpp_buffer_inc_ref`, immediate `mpp_frame_deinit`, and `release_fn` calling `mpp_buffer_put`. Configured stream parser split mode and fast mode before `mpp_init` and active drain in `DecodeSession::decode_loop` on idle queue pop timeouts. Verified 100% test pass rate on RK3568 target board (H.264 & H.265 hardware decoding) and full test suite passing on host via `make check`.
 
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a036b64` | feat(native): implement Rockchip MPP hardware decoder node and DMA-BUF export |
+| `ee46c01` | docs(spec): document MPP hardware decoder contract and update task artifacts |
+
 ### Status
 
 [OK] **Completed**
