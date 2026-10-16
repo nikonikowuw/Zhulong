@@ -201,3 +201,42 @@ Implemented end-to-end hardware zero-copy DMA-BUF pipeline across the entire vid
 ### Status
 
 [OK] **Completed**
+
+
+## Session 47: Spec 精简任务收尾归档与 SSOT 一致性校验
+<!-- trellis-session: v=2 fp=5812a5a8ad4c876b -->
+
+**Date**: 2026-10-16
+**Task**: Spec 精简任务收尾归档与 SSOT 一致性校验
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+收尾归档 10-15-streamline-trellis-spec（.trellis/spec 去重与精简）。该任务的工作提交 b004189 此前从未写入 journal，本次一并补录。核对全部 5 项验收标准：任务代号残留为零、Markdown 相对链接 0 死链、manifest.json 与响应信封 SSOT 均成立（完整定义各仅 1 处）。归档时 task.py 的 branch/base_branch 自引用校验拦截了 archive，经比对历史上全部已归档任务（branch=dev、base=dev、pr_url=None）确认本项目为单分支直提流程、从未 PR-backed，按既有约定以 --skip-branch-validation 归档。
+
+### Main Changes
+
+- 归档 10-15-streamline-trellis-spec 至 .trellis/tasks/archive/2026-10/
+- 补录工作提交 b004189（docs(spec): streamline and deduplicate engineering specifications across layers，15 files changed, +589/-839）
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b004189` | docs(spec): streamline and deduplicate engineering specifications across layers |
+
+### Testing
+
+- [OK] grep -rn '任务 10-' .trellis/spec/ → 无残留 [PASS]
+- [OK] Python 相对链接校验脚本遍历 .trellis/spec/**/*.md → All internal links verified! [PASS]
+- [OK] grep 核查 manifest.json 完整定义仅存于 backend/algorithm-guidelines.md，algo-plugin-contract.md:194 仅为引用链接 [PASS]
+- [OK] git status --porcelain → 工作区干净，无本任务未提交代码
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 10-15-rk3568-true-zero-copy-pipeline 父任务及其两个子任务（MPP 硬解、RGA 前处理）仍为 planning，属真实待办，未归档
