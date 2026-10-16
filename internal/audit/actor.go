@@ -17,7 +17,7 @@ type Actor struct {
 	// substitutes for IP and must not be hardcoded to "admin".
 	Username string
 	// Source is request-scoped context (for example "web" or "system").
-	// It is not persisted and does not appear in the API DTO.
+	// It is not persisted and does not appear in the API response.
 	Source string
 }
 

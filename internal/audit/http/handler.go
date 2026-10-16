@@ -1,8 +1,6 @@
 package audithttp
 
 import (
-	"time"
-
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
@@ -35,54 +33,6 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	}
 }
 
-// ListLogsQuery defines query parameters for listing audit logs.
-type ListLogsQuery struct {
-	httputil.PaginationQuery
-	Action    string   `form:"action"`
-	Actions   []string `form:"actions"`
-	Status    string   `form:"status"`
-	StartTime string   `form:"startTime"`
-	EndTime   string   `form:"endTime"`
-}
-
-// AuditLogDTO represents the external API presentation for an audit log record.
-type AuditLogDTO struct {
-	ID        int64     `json:"id"`
-	CreatedAt time.Time `json:"createdAt"`
-	IP        string    `json:"ip"`
-	Username  string    `json:"username"`
-	Action    string    `json:"action"`
-	Target    string    `json:"target"`
-	Detail    string    `json:"detail"`
-	Status    string    `json:"status"`
-	ErrorMsg  string    `json:"errorMsg"`
-}
-
-func toAuditLogDTO(l audit.AuditLog) AuditLogDTO {
-	return AuditLogDTO{
-		ID:        l.ID,
-		CreatedAt: l.CreatedAt.UTC(),
-		IP:        l.IP,
-		Username:  l.Username,
-		Action:    l.Action,
-		Target:    l.Target,
-		Detail:    l.Detail,
-		Status:    l.Status,
-		ErrorMsg:  l.ErrorMsg,
-	}
-}
-
-func toAuditLogDTOs(logs []audit.AuditLog) []AuditLogDTO {
-	if len(logs) == 0 {
-		return []AuditLogDTO{}
-	}
-	dtos := make([]AuditLogDTO, len(logs))
-	for i, l := range logs {
-		dtos[i] = toAuditLogDTO(l)
-	}
-	return dtos
-}
-
 // ListLogs godoc
 // @Summary      List audit logs with filtering and pagination
 // @Tags         audit
@@ -94,42 +44,16 @@ func toAuditLogDTOs(logs []audit.AuditLog) []AuditLogDTO {
 // @Param        status query string false "Filter by status (success/failed)"
 // @Param        startTime query string false "Start time (RFC3339)"
 // @Param        endTime query string false "End time (RFC3339)"
-// @Success      200 {object} httputil.Response{data=httputil.PaginatedData[AuditLogDTO]}
+// @Success      200 {object} httputil.Response{data=httputil.PaginatedData[AuditLogResponse]}
 // @Router       /audit/logs [get]
 func (h *Handler) ListLogs(c *gin.Context) {
 	var q ListLogsQuery
 	_ = c.ShouldBindQuery(&q)
 
-	page, pageSize, offset, limit := q.Normalize()
-
-	filter := audit.Filter{
-		Action:  q.Action,
-		Actions: q.Actions,
-		Status:  q.Status,
-		Limit:   limit,
-		Offset:  offset,
-	}
-
-	if q.StartTime != "" {
-		t, err := time.Parse(time.RFC3339, q.StartTime)
-		if err != nil {
-			httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-				{Field: "startTime", Code: "INVALID_FORMAT", Message: "startTime must be in RFC3339 format"},
-			}))
-			return
-		}
-		filter.StartTime = &t
-	}
-
-	if q.EndTime != "" {
-		t, err := time.Parse(time.RFC3339, q.EndTime)
-		if err != nil {
-			httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-				{Field: "endTime", Code: "INVALID_FORMAT", Message: "endTime must be in RFC3339 format"},
-			}))
-			return
-		}
-		filter.EndTime = &t
+	filter, page, pageSize, err := q.ToFilter()
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
 	}
 
 	items, total, err := h.service.List(c.Request.Context(), filter)
@@ -138,13 +62,8 @@ func (h *Handler) ListLogs(c *gin.Context) {
 		return
 	}
 
-	dtos := toAuditLogDTOs(items)
-	httputil.PaginatedSuccess(c, dtos, total, page, pageSize)
-}
-
-// ClearLogsQuery defines query parameters for deleting audit logs.
-type ClearLogsQuery struct {
-	Before string `form:"before"`
+	responses := toAuditLogResponses(items)
+	httputil.PaginatedSuccess(c, responses, total, page, pageSize)
 }
 
 // ClearLogs godoc
@@ -163,16 +82,10 @@ func (h *Handler) ClearLogs(c *gin.Context) {
 	var q ClearLogsQuery
 	_ = c.ShouldBindQuery(&q)
 
-	var beforeTime []time.Time
-	if q.Before != "" {
-		t, err := time.Parse(time.RFC3339, q.Before)
-		if err != nil {
-			httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-				{Field: "before", Code: "INVALID_FORMAT", Message: "before must be in RFC3339 format"},
-			}))
-			return
-		}
-		beforeTime = append(beforeTime, t)
+	beforeTime, err := q.ParseBefore()
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
 	}
 
 	cleared, err := h.service.ClearWithAudit(c.Request.Context(), "audit_logs", beforeTime...)

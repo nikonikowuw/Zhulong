@@ -67,7 +67,7 @@ func TestHandlerListLogsPagination(t *testing.T) {
 	}
 
 	var resp struct {
-		Data httputil.PaginatedData[AuditLogDTO] `json:"data"`
+		Data httputil.PaginatedData[AuditLogResponse] `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
@@ -107,7 +107,7 @@ func TestHandlerListLogsFilterAndValidationError(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	var resp struct {
-		Data httputil.PaginatedData[AuditLogDTO] `json:"data"`
+		Data httputil.PaginatedData[AuditLogResponse] `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
@@ -125,7 +125,7 @@ func TestHandlerListLogsFilterAndValidationError(t *testing.T) {
 	precedenceW := httptest.NewRecorder()
 	router.ServeHTTP(precedenceW, precedenceReq)
 	var precedenceResp struct {
-		Data httputil.PaginatedData[AuditLogDTO] `json:"data"`
+		Data httputil.PaginatedData[AuditLogResponse] `json:"data"`
 	}
 	if err := json.Unmarshal(precedenceW.Body.Bytes(), &precedenceResp); err != nil {
 		t.Fatalf("unmarshal precedence response: %v", err)
@@ -147,7 +147,7 @@ func TestHandlerListLogsFilterAndValidationError(t *testing.T) {
 		t.Fatalf("expected 200 for multiple actions, got %d: %s", multiW.Code, multiW.Body.String())
 	}
 	var multiResp struct {
-		Data httputil.PaginatedData[AuditLogDTO] `json:"data"`
+		Data httputil.PaginatedData[AuditLogResponse] `json:"data"`
 	}
 	if err := json.Unmarshal(multiW.Body.Bytes(), &multiResp); err != nil {
 		t.Fatalf("unmarshal multi-action response: %v", err)
