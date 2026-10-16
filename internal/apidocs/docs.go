@@ -2121,6 +2121,357 @@ const docTemplate = `{
                 }
             }
         },
+        "/records/alarms": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "records"
+                ],
+                "summary": "List perception alarms with filtering and pagination",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page number (1-based, default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 20, max 100)",
+                        "name": "pageSize",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by camera ID",
+                        "name": "cameraId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by alarm type",
+                        "name": "alarmType",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Start time (RFC3339)",
+                        "name": "startTime",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "End time (RFC3339)",
+                        "name": "endTime",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/httputil.PaginatedData-record_AlarmDTO"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/records/alarms/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "records"
+                ],
+                "summary": "Get a single alarm record by ID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Alarm record ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/record.AlarmDTO"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/records/captures": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "records"
+                ],
+                "summary": "List captures with filtering and pagination",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page number (1-based, default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 20, max 100)",
+                        "name": "pageSize",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by camera ID",
+                        "name": "cameraId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by target type",
+                        "name": "targetType",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Start time (RFC3339)",
+                        "name": "startTime",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "End time (RFC3339)",
+                        "name": "endTime",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/httputil.PaginatedData-record_CaptureDTO"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/records/captures/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "records"
+                ],
+                "summary": "Get a single capture record by ID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Capture record ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/record.CaptureDTO"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/records/recognitions": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "records"
+                ],
+                "summary": "List face recognitions with filtering and pagination",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Page number (1-based, default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 20, max 100)",
+                        "name": "pageSize",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by camera ID",
+                        "name": "cameraId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by person ID",
+                        "name": "personId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Filter by match status",
+                        "name": "matched",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Start time (RFC3339)",
+                        "name": "startTime",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "End time (RFC3339)",
+                        "name": "endTime",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/httputil.PaginatedData-record_RecognitionDTO"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/records/recognitions/{id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "records"
+                ],
+                "summary": "Get a single recognition record by ID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Recognition record ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/record.RecognitionDTO"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/system/network/confirm": {
             "post": {
                 "description": "Solidifies current trial configuration and disarms the watchdog timer. Accepts session authentication or one-time confirmation token.",
@@ -3015,6 +3366,23 @@ const docTemplate = `{
                 }
             }
         },
+        "algorithm.FaceCandidate": {
+            "type": "object",
+            "properties": {
+                "face_id": {
+                    "type": "string"
+                },
+                "person_id": {
+                    "type": "string"
+                },
+                "person_name": {
+                    "type": "string"
+                },
+                "similarity": {
+                    "type": "number"
+                }
+            }
+        },
         "app.HealthData": {
             "type": "object",
             "properties": {
@@ -3492,6 +3860,87 @@ const docTemplate = `{
                 }
             }
         },
+        "httputil.PaginatedData-record_AlarmDTO": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/record.AlarmDTO"
+                    }
+                },
+                "limit": {
+                    "description": "Backwards compatibility fields for legacy clients expecting limit/offset",
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "pageSize": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "httputil.PaginatedData-record_CaptureDTO": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/record.CaptureDTO"
+                    }
+                },
+                "limit": {
+                    "description": "Backwards compatibility fields for legacy clients expecting limit/offset",
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "pageSize": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "httputil.PaginatedData-record_RecognitionDTO": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/record.RecognitionDTO"
+                    }
+                },
+                "limit": {
+                    "description": "Backwards compatibility fields for legacy clients expecting limit/offset",
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "pageSize": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "httputil.Response": {
             "type": "object",
             "required": [
@@ -3836,6 +4285,168 @@ const docTemplate = `{
                 "personId": {
                     "description": "PersonID is accepted only so that an attempt to change it fails loudly instead\nof being silently dropped by the JSON decoder. Supplying a different value is\nrejected with PERSON_ID_IMMUTABLE.",
                     "type": "string"
+                }
+            }
+        },
+        "record.AlarmDTO": {
+            "type": "object",
+            "properties": {
+                "alarmType": {
+                    "type": "string"
+                },
+                "algorithmId": {
+                    "type": "string"
+                },
+                "box": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "cameraId": {
+                    "type": "string"
+                },
+                "capturedAt": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "cropPath": {
+                    "type": "string"
+                },
+                "extra": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "id": {
+                    "type": "string"
+                },
+                "imagePath": {
+                    "type": "string"
+                },
+                "pts": {
+                    "type": "integer"
+                },
+                "score": {
+                    "type": "number"
+                }
+            }
+        },
+        "record.CaptureDTO": {
+            "type": "object",
+            "properties": {
+                "attributes": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "box": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "cameraId": {
+                    "type": "string"
+                },
+                "capturedAt": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "cropPath": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "imagePath": {
+                    "type": "string"
+                },
+                "pts": {
+                    "type": "integer"
+                },
+                "score": {
+                    "type": "number"
+                },
+                "targetType": {
+                    "type": "string"
+                },
+                "trackId": {
+                    "type": "integer"
+                }
+            }
+        },
+        "record.RecognitionDTO": {
+            "type": "object",
+            "properties": {
+                "algorithmId": {
+                    "type": "string"
+                },
+                "attributes": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "bodyBox": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "box": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "cameraId": {
+                    "type": "string"
+                },
+                "candidates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/algorithm.FaceCandidate"
+                    }
+                },
+                "capturedAt": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "faceImagePath": {
+                    "type": "string"
+                },
+                "galleryImagePath": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "imagePath": {
+                    "type": "string"
+                },
+                "matched": {
+                    "type": "boolean"
+                },
+                "matchedFaceId": {
+                    "type": "string"
+                },
+                "personId": {
+                    "type": "string"
+                },
+                "personName": {
+                    "type": "string"
+                },
+                "pts": {
+                    "type": "integer"
+                },
+                "similarity": {
+                    "type": "number"
+                },
+                "trackId": {
+                    "type": "integer"
                 }
             }
         },

@@ -33,6 +33,7 @@ func TestPluginContractMatchesNativeHeader(t *testing.T) {
 
 	checkDefineConst(t, content, "ZHULONG_PERSON_ID_MAX_LEN", 64)
 	checkDefineConst(t, content, "ZHULONG_PERSON_NAME_MAX_LEN", 64)
+	checkDefineConst(t, content, "ZHULONG_FACE_ID_MAX_LEN", 64)
 	checkDefineConst(t, content, "ZHULONG_FACE_LANDMARK_COUNT", 5)
 
 	checkEnumConst(t, content, "ZHULONG_RESULT_TYPE_UNKNOWN", uint64(algorithm.ResultTypeUnknown))

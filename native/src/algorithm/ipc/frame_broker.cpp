@@ -220,6 +220,8 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
     msg.stream_id = stream_id_;
     msg.frame_id = frame_seq_.fetch_add(1);
     msg.pts = frame.pts;
+    msg.capture_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
     msg.slot_index = static_cast<uint32_t>(slot_idx);
     msg.generation = generation;
     msg.width = static_cast<int32_t>(frame.width);

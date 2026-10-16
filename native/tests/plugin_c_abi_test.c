@@ -96,13 +96,14 @@ int main(void) {
     /* 验证结构化结果常量与对齐 */
     assert(ZHULONG_PERSON_ID_MAX_LEN == 64);
     assert(ZHULONG_PERSON_NAME_MAX_LEN == 64);
+    assert(ZHULONG_FACE_ID_MAX_LEN == 64);
     assert(ZHULONG_FACE_LANDMARK_COUNT == 5);
     assert(ZHULONG_RESULT_TYPE_PERSON_STRUCTURE == 3);
 
-    _Static_assert(sizeof(zhulong_face_candidate) == 136, "zhulong_face_candidate must be 136 bytes");
+    _Static_assert(sizeof(zhulong_face_candidate) == 200, "zhulong_face_candidate must be 200 bytes");
     _Static_assert(sizeof(zhulong_face_candidate) % 8 == 0, "zhulong_face_candidate must be 8-byte aligned");
 
-    _Static_assert(sizeof(zhulong_face_item) == 216, "zhulong_face_item must be 216 bytes");
+    _Static_assert(sizeof(zhulong_face_item) == 280, "zhulong_face_item must be 280 bytes");
     _Static_assert(sizeof(zhulong_face_item) % 8 == 0, "zhulong_face_item must be 8-byte aligned");
 
     _Static_assert(sizeof(zhulong_person_item) == 40, "zhulong_person_item must be 40 bytes");
@@ -214,8 +215,10 @@ int main(void) {
         assert(p->faces[0].matched == 1);
         assert(strcmp(p->faces[0].person_id, "user_001") == 0);
         assert(strcmp(p->faces[0].person_name, "Alice") == 0);
+        assert(strcmp(p->faces[0].matched_face_id, "face_001") == 0);
         assert(p->faces[0].candidate_count == 1);
         assert(strcmp(p->faces[0].candidates[0].person_name, "Alice") == 0);
+        assert(strcmp(p->faces[0].candidates[0].face_id, "face_001") == 0);
 
         /* 单次 free 释放整个 Arena 树 */
         free(res.internal_token);

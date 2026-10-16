@@ -203,6 +203,7 @@ int main(int argc, char* argv[]) {
     assert(face.is_fused == 0);
     assert(std::strcmp(face.person_id, "user_007") == 0);
     assert(std::strcmp(face.person_name, "Alice") == 0);
+    assert(std::strcmp(face.matched_face_id, "face_007") == 0);
 
     // 验证 5 点 landmarks
     assert(face.landmarks[0][0] == 0.20f && face.landmarks[0][1] == 0.25f);
@@ -216,9 +217,11 @@ int main(int argc, char* argv[]) {
     assert(face.candidates != nullptr);
     assert(std::strcmp(face.candidates[0].person_id, "user_007") == 0);
     assert(std::strcmp(face.candidates[0].person_name, "Alice") == 0);
+    assert(std::strcmp(face.candidates[0].face_id, "face_007") == 0);
     assert(face.candidates[0].similarity == 0.92f);
     assert(std::strcmp(face.candidates[1].person_id, "user_008") == 0);
     assert(std::strcmp(face.candidates[1].person_name, "Bob") == 0);
+    assert(std::strcmp(face.candidates[1].face_id, "face_008") == 0);
     assert(face.candidates[1].similarity == 0.45f);
 
     // 释放单块 Arena

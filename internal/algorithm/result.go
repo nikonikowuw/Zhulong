@@ -21,9 +21,10 @@ const (
 // DetectionItem represents a single detected object with normalized coordinates.
 // Box is [x1, y1, x2, y2] strictly normalized to [0.0, 1.0].
 type DetectionItem struct {
-	Box   [4]float64 `json:"box"`
-	Label string     `json:"label"`
-	Score float64    `json:"score"`
+	Box        [4]float64     `json:"box"`
+	Label      string         `json:"label"`
+	Score      float64        `json:"score"`
+	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
 // ClassificationItem represents a classification output.
@@ -36,28 +37,31 @@ type ClassificationItem struct {
 type FaceCandidate struct {
 	PersonID   string  `json:"person_id"`
 	PersonName string  `json:"person_name"`
+	FaceID     string  `json:"face_id"`
 	Similarity float64 `json:"similarity"`
 }
 
 // FaceSubItem represents a face sub-target mounted onto a person entity.
 type FaceSubItem struct {
-	Box        [4]float64      `json:"box"`
-	Quality    float64         `json:"quality"`
-	Landmarks  [][2]float64    `json:"landmarks"`
-	Matched    bool            `json:"matched"`
-	PersonID   string          `json:"person_id"`
-	PersonName string          `json:"person_name"`
-	Similarity float64         `json:"similarity"`
-	IsFused    bool            `json:"is_fused"`
-	Candidates []FaceCandidate `json:"candidates"`
+	Box           [4]float64      `json:"box"`
+	Quality       float64         `json:"quality"`
+	Landmarks     [][2]float64    `json:"landmarks"`
+	Matched       bool            `json:"matched"`
+	PersonID      string          `json:"person_id"`
+	PersonName    string          `json:"person_name"`
+	MatchedFaceID string          `json:"matched_face_id"`
+	Similarity    float64         `json:"similarity"`
+	IsFused       bool            `json:"is_fused"`
+	Candidates    []FaceCandidate `json:"candidates"`
 }
 
 // PersonItem represents a detected person with body box and mounted face items (1:N).
 type PersonItem struct {
-	TrackID   int64         `json:"track_id"`
-	BodyBox   [4]float64    `json:"body_box"`
-	BodyScore float64       `json:"body_score"`
-	Faces     []FaceSubItem `json:"faces"`
+	TrackID    int64          `json:"track_id"`
+	BodyBox    [4]float64     `json:"body_box"`
+	BodyScore  float64        `json:"body_score"`
+	Faces      []FaceSubItem  `json:"faces"`
+	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
 // InferenceResult is the unified inference output event payload.
@@ -122,6 +126,7 @@ func NewPersonStructureResult(cameraID, algorithmID string, pts, costMs int64) I
 type RawInferencePayload struct {
 	StreamID        uint64               `json:"stream_id"`
 	PTS             int64                `json:"pts"`
+	CaptureTimeMs   int64                `json:"capture_time_ms"`
 	CostMs          int64                `json:"cost_ms"`
 	TaskType        string               `json:"task_type"`
 	Detections      []DetectionItem      `json:"detections"`
@@ -140,20 +145,28 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 		return InferenceResult{}, fmt.Errorf("unmarshal inference result: %w", err)
 	}
 
+	captureTime := time.Now().UTC()
+	if payload.CaptureTimeMs > 0 {
+		captureTime = time.UnixMilli(payload.CaptureTimeMs).UTC()
+	}
+
 	var res InferenceResult
 	switch payload.TaskType {
 	case TaskTypeDetection:
 		res = NewDetectionResult(cameraID, algorithmID, payload.PTS, payload.CostMs)
+		res.Timestamp = captureTime
 		if len(payload.Detections) > 0 {
 			res.Detections = payload.Detections
 		}
 	case TaskTypeClassification:
 		res = NewClassificationResult(cameraID, algorithmID, payload.PTS, payload.CostMs)
+		res.Timestamp = captureTime
 		if len(payload.Classifications) > 0 {
 			res.Classifications = payload.Classifications
 		}
 	case TaskTypePersonStructure:
 		res = NewPersonStructureResult(cameraID, algorithmID, payload.PTS, payload.CostMs)
+		res.Timestamp = captureTime
 		if len(payload.Persons) > 0 {
 			res.Persons = payload.Persons
 		}
@@ -162,7 +175,7 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 			CameraID:        cameraID,
 			AlgorithmID:     algorithmID,
 			PTS:             payload.PTS,
-			Timestamp:       time.Now().UTC(),
+			Timestamp:       captureTime,
 			TaskType:        payload.TaskType,
 			CostMs:          payload.CostMs,
 			Detections:      payload.Detections,

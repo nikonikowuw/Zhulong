@@ -75,6 +75,17 @@ definitions:
       sampleFps:
         type: integer
     type: object
+  algorithm.FaceCandidate:
+    properties:
+      face_id:
+        type: string
+      person_id:
+        type: string
+      person_name:
+        type: string
+      similarity:
+        type: number
+    type: object
   app.HealthData:
     properties:
       components:
@@ -394,6 +405,60 @@ definitions:
       total:
         type: integer
     type: object
+  httputil.PaginatedData-record_AlarmDTO:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/record.AlarmDTO'
+        type: array
+      limit:
+        description: Backwards compatibility fields for legacy clients expecting limit/offset
+        type: integer
+      offset:
+        type: integer
+      page:
+        type: integer
+      pageSize:
+        type: integer
+      total:
+        type: integer
+    type: object
+  httputil.PaginatedData-record_CaptureDTO:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/record.CaptureDTO'
+        type: array
+      limit:
+        description: Backwards compatibility fields for legacy clients expecting limit/offset
+        type: integer
+      offset:
+        type: integer
+      page:
+        type: integer
+      pageSize:
+        type: integer
+      total:
+        type: integer
+    type: object
+  httputil.PaginatedData-record_RecognitionDTO:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/record.RecognitionDTO'
+        type: array
+      limit:
+        description: Backwards compatibility fields for legacy clients expecting limit/offset
+        type: integer
+      offset:
+        type: integer
+      page:
+        type: integer
+      pageSize:
+        type: integer
+      total:
+        type: integer
+    type: object
   httputil.Response:
     properties:
       code:
@@ -647,6 +712,114 @@ definitions:
           of being silently dropped by the JSON decoder. Supplying a different value is
           rejected with PERSON_ID_IMMUTABLE.
         type: string
+    type: object
+  record.AlarmDTO:
+    properties:
+      alarmType:
+        type: string
+      algorithmId:
+        type: string
+      box:
+        items:
+          type: number
+        type: array
+      cameraId:
+        type: string
+      capturedAt:
+        type: string
+      createdAt:
+        type: string
+      cropPath:
+        type: string
+      extra:
+        additionalProperties: {}
+        type: object
+      id:
+        type: string
+      imagePath:
+        type: string
+      pts:
+        type: integer
+      score:
+        type: number
+    type: object
+  record.CaptureDTO:
+    properties:
+      attributes:
+        additionalProperties: {}
+        type: object
+      box:
+        items:
+          type: number
+        type: array
+      cameraId:
+        type: string
+      capturedAt:
+        type: string
+      createdAt:
+        type: string
+      cropPath:
+        type: string
+      id:
+        type: string
+      imagePath:
+        type: string
+      pts:
+        type: integer
+      score:
+        type: number
+      targetType:
+        type: string
+      trackId:
+        type: integer
+    type: object
+  record.RecognitionDTO:
+    properties:
+      algorithmId:
+        type: string
+      attributes:
+        additionalProperties: {}
+        type: object
+      bodyBox:
+        items:
+          type: number
+        type: array
+      box:
+        items:
+          type: number
+        type: array
+      cameraId:
+        type: string
+      candidates:
+        items:
+          $ref: '#/definitions/algorithm.FaceCandidate'
+        type: array
+      capturedAt:
+        type: string
+      createdAt:
+        type: string
+      faceImagePath:
+        type: string
+      galleryImagePath:
+        type: string
+      id:
+        type: string
+      imagePath:
+        type: string
+      matched:
+        type: boolean
+      matchedFaceId:
+        type: string
+      personId:
+        type: string
+      personName:
+        type: string
+      pts:
+        type: integer
+      similarity:
+        type: number
+      trackId:
+        type: integer
     type: object
   storage.CleanupSummary:
     properties:
@@ -2233,6 +2406,217 @@ paths:
       summary: Set primary face for a person
       tags:
       - person
+  /records/alarms:
+    get:
+      parameters:
+      - description: Page number (1-based, default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Page size (default 20, max 100)
+        in: query
+        name: pageSize
+        type: integer
+      - description: Filter by camera ID
+        in: query
+        name: cameraId
+        type: string
+      - description: Filter by alarm type
+        in: query
+        name: alarmType
+        type: string
+      - description: Start time (RFC3339)
+        in: query
+        name: startTime
+        type: string
+      - description: End time (RFC3339)
+        in: query
+        name: endTime
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/httputil.PaginatedData-record_AlarmDTO'
+              type: object
+      summary: List perception alarms with filtering and pagination
+      tags:
+      - records
+  /records/alarms/{id}:
+    get:
+      parameters:
+      - description: Alarm record ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/record.AlarmDTO'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get a single alarm record by ID
+      tags:
+      - records
+  /records/captures:
+    get:
+      parameters:
+      - description: Page number (1-based, default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Page size (default 20, max 100)
+        in: query
+        name: pageSize
+        type: integer
+      - description: Filter by camera ID
+        in: query
+        name: cameraId
+        type: string
+      - description: Filter by target type
+        in: query
+        name: targetType
+        type: string
+      - description: Start time (RFC3339)
+        in: query
+        name: startTime
+        type: string
+      - description: End time (RFC3339)
+        in: query
+        name: endTime
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/httputil.PaginatedData-record_CaptureDTO'
+              type: object
+      summary: List captures with filtering and pagination
+      tags:
+      - records
+  /records/captures/{id}:
+    get:
+      parameters:
+      - description: Capture record ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/record.CaptureDTO'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get a single capture record by ID
+      tags:
+      - records
+  /records/recognitions:
+    get:
+      parameters:
+      - description: Page number (1-based, default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Page size (default 20, max 100)
+        in: query
+        name: pageSize
+        type: integer
+      - description: Filter by camera ID
+        in: query
+        name: cameraId
+        type: string
+      - description: Filter by person ID
+        in: query
+        name: personId
+        type: string
+      - description: Filter by match status
+        in: query
+        name: matched
+        type: boolean
+      - description: Start time (RFC3339)
+        in: query
+        name: startTime
+        type: string
+      - description: End time (RFC3339)
+        in: query
+        name: endTime
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/httputil.PaginatedData-record_RecognitionDTO'
+              type: object
+      summary: List face recognitions with filtering and pagination
+      tags:
+      - records
+  /records/recognitions/{id}:
+    get:
+      parameters:
+      - description: Recognition record ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/record.RecognitionDTO'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get a single recognition record by ID
+      tags:
+      - records
   /system/network/confirm:
     post:
       consumes:

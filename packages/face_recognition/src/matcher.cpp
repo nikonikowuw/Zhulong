@@ -20,6 +20,7 @@ MatchResult Matcher::match(
     struct ScoredCandidate {
         std::string person_id;
         std::string person_name;
+        std::string face_id;
         float similarity{0.0f};
     };
 
@@ -39,7 +40,7 @@ MatchResult Matcher::match(
 
         // 截断至 [0.0, 1.0]
         float sim = std::max(0.0f, std::min(1.0f, dot));
-        scored.push_back({item.person_id, item.person_name, sim});
+        scored.push_back({item.person_id, item.person_name, item.face_id, sim});
     }
 
     if (scored.empty()) {
@@ -58,6 +59,7 @@ MatchResult Matcher::match(
         FaceCandidate cand;
         cand.person_id = scored[i].person_id;
         cand.person_name = scored[i].person_name;
+        cand.face_id = scored[i].face_id;
         cand.similarity = scored[i].similarity;
         result.candidates.push_back(std::move(cand));
     }
@@ -70,10 +72,12 @@ MatchResult Matcher::match(
         result.matched = true;
         result.person_id = best.person_id;
         result.person_name = best.person_name;
+        result.matched_face_id = best.face_id;
     } else {
         result.matched = false;
         result.person_id = "";
         result.person_name = "";
+        result.matched_face_id = "";
     }
 
     return result;

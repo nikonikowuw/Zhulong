@@ -60,6 +60,7 @@ enum {
 /* 长度与维度约束常量 */
 #define ZHULONG_PERSON_ID_MAX_LEN    64 /**< 底库人员唯一标识符最大字节长度（含末尾 '\\0'） */
 #define ZHULONG_PERSON_NAME_MAX_LEN  64 /**< 底库人员显示姓名最大字节长度（含末尾 '\\0'） */
+#define ZHULONG_FACE_ID_MAX_LEN      64 /**< 底库单张人脸照片唯一标识符最大字节长度（含末尾 '\\0'） */
 #define ZHULONG_FACE_LANDMARK_COUNT  5  /**< 人脸关键点标准数量（5 点：左眼、右眼、鼻尖、左嘴角、右嘴角） */
 
 /**
@@ -123,11 +124,12 @@ typedef struct zhulong_classification_item {
 /**
  * @brief 人脸识别 Top-K 候选人
  *
- * 结构体总尺寸为 136 字节，通过 reserved_ 显式尾随对齐，满足 8 字节整除。
+ * 结构体总尺寸为 200 字节，通过 reserved_ 显式尾随对齐，满足 8 字节整除。
  */
 typedef struct zhulong_face_candidate {
     char  person_id[ZHULONG_PERSON_ID_MAX_LEN];     /* 底库人员唯一标识符 */
     char  person_name[ZHULONG_PERSON_NAME_MAX_LEN]; /* 人员姓名 */
+    char  face_id[ZHULONG_FACE_ID_MAX_LEN];         /* 底库单张人脸照片唯一标识符 (方案 B) */
     float similarity;                               /* 置信度分值 (0.0 ~ 1.0) */
     uint32_t reserved_;                             /* 显式填充对齐 (8 字节整除) */
 } zhulong_face_candidate;
@@ -138,7 +140,7 @@ typedef struct zhulong_face_candidate {
  * 内存与指针约定：
  *   - landmarks 为 5 点归一化关键点坐标 [x, y] ∈ [0.0, 1.0]；
  *   - candidates 指针指向同一 Arena 内存块内的候选人数组，禁止对其单独执行 free；
- *   - 结构体总尺寸为 216 字节，满足 8 字节整除。
+ *   - 结构体总尺寸为 280 字节，满足 8 字节整除。
  */
 typedef struct zhulong_face_item {
     float  box[4];                                   /* [x1, y1, x2, y2] 严格归一化坐标 [0.0, 1.0] */
@@ -149,6 +151,7 @@ typedef struct zhulong_face_item {
     int32_t is_fused;                                /* 是否多帧融合结果 (预留) */
     char   person_id[ZHULONG_PERSON_ID_MAX_LEN];      /* Top-1 人员 ID (未命中时为空字符串) */
     char   person_name[ZHULONG_PERSON_NAME_MAX_LEN];  /* Top-1 人员姓名 (未命中时为空字符串) */
+    char   matched_face_id[ZHULONG_FACE_ID_MAX_LEN];  /* Top-1 命中的底照 ID (未命中时为空字符串) */
     uint32_t candidate_count;                        /* candidates 数组元素数 */
     uint32_t reserved_;                              /* 64位指针前置填充对齐 (8 字节对齐) */
     const zhulong_face_candidate* candidates;        /* 指向候选人数组 (只读，指向同一 Arena) */

@@ -157,6 +157,7 @@ public:
             face.similarity = match_res.similarity;
             face.person_id = match_res.person_id;
             face.person_name = match_res.person_name;
+            face.matched_face_id = match_res.matched_face_id;
             face.candidates = std::move(match_res.candidates);
             face.is_fused = false;
 

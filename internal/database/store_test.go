@@ -733,3 +733,70 @@ func TestMigration000010NormalizeAuditActions(t *testing.T) {
 		t.Fatalf("migrator Steps(1): %v", err)
 	}
 }
+
+func TestPerceptionAndAlarmTablesMigrationUpAndDownSymmetry(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "migration_symmetry_11.db")
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", dbPath)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// 1. Run migrations up to 11
+	if err := migrator.Migrate(11); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(11): %v", err)
+	}
+
+	tableExists := func(tableName string) bool {
+		var name string
+		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&name)
+		return err == nil && name == tableName
+	}
+
+	for _, tbl := range []string{"recognitions", "alarms", "captures"} {
+		if !tableExists(tbl) {
+			t.Errorf("expected table %s to exist after migration 11 up", tbl)
+		}
+	}
+
+	// 2. Roll back migration 11
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator rollback (-1): %v", err)
+	}
+
+	for _, tbl := range []string{"recognitions", "alarms", "captures"} {
+		if tableExists(tbl) {
+			t.Errorf("expected table %s to be dropped after migration 11 down", tbl)
+		}
+	}
+
+	// 3. Re-apply migration 11
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator re-apply (1): %v", err)
+	}
+
+	for _, tbl := range []string{"recognitions", "alarms", "captures"} {
+		if !tableExists(tbl) {
+			t.Errorf("expected table %s to exist after re-applying migration 11 up", tbl)
+		}
+	}
+}

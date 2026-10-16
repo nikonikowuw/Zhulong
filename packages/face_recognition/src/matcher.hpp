@@ -16,6 +16,7 @@ struct MatchResult {
     float similarity{0.0f};
     std::string person_id;
     std::string person_name;
+    std::string matched_face_id;
     std::vector<FaceCandidate> candidates;
 };
 

@@ -101,12 +101,14 @@ namespace zhulong
      */
     static std::string serialize_inference_result(uint64_t stream_id,
                                                   int64_t pts,
+                                                  int64_t capture_time_ms,
                                                   int64_t cost_ms,
                                                   const zhulong_inference_result* result)
     {
         std::ostringstream ss;
         ss << "{\"stream_id\":" << stream_id
            << ",\"pts\":" << pts
+           << ",\"capture_time_ms\":" << capture_time_ms
            << ",\"cost_ms\":" << cost_ms;
 
         if (!result || result->count == 0)
@@ -177,6 +179,7 @@ namespace zhulong
                        << ",\"similarity\":" << f.similarity
                        << ",\"person_id\":" << runner::json_quote(f.person_id)
                        << ",\"person_name\":" << runner::json_quote(f.person_name)
+                       << ",\"matched_face_id\":" << runner::json_quote(f.matched_face_id)
                        << ",\"candidates\":[";
                     for (uint32_t k = 0; k < f.candidate_count; ++k)
                     {
@@ -184,6 +187,7 @@ namespace zhulong
                         const auto& c = f.candidates[k];
                         ss << "{\"person_id\":" << runner::json_quote(c.person_id)
                            << ",\"person_name\":" << runner::json_quote(c.person_name)
+                           << ",\"face_id\":" << runner::json_quote(c.face_id)
                            << ",\"similarity\":" << c.similarity << "}";
                     }
                     ss << "]}";
@@ -623,7 +627,7 @@ namespace zhulong
                         // 仅在本次或上次有目标时才上报结果，避免连续空帧刷屏（去噪）
                         if (has_targets || last_had_targets)
                         {
-                            std::string payload = serialize_inference_result(dispatch.stream_id, dispatch.pts, cost_ms, result);
+                            std::string payload = serialize_inference_result(dispatch.stream_id, dispatch.pts, dispatch.capture_time_ms, cost_ms, result);
                             client.send_msg(ipc::MSG_RESULT, payload.data(), payload.size());
                         }
                         last_had_targets = has_targets;

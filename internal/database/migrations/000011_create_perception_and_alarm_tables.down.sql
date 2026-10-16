@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS captures;
+DROP TABLE IF EXISTS alarms;
+DROP TABLE IF EXISTS recognitions;

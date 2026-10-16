@@ -29,6 +29,7 @@ type StreamHub struct {
 	eventHub *EventHub
 	logger   *zap.Logger
 
+	aiConsumer     AIResultConsumer
 	mu             sync.Mutex
 	dispatchers    map[string]*StreamDispatcher
 	aiStreams      map[string]*aiStreamRef
@@ -44,6 +45,18 @@ type aiStreamRef struct {
 	stream MediaStream
 	aiSub  *engine.AIResultSubscription
 	cancel context.CancelFunc
+}
+
+// AIResultConsumer consumes parsed AI inference results for persistence or business rules.
+type AIResultConsumer interface {
+	ProcessInferenceResult(ctx context.Context, res algorithm.InferenceResult) error
+}
+
+// SetAIConsumer registers an optional consumer for AI inference results.
+func (h *StreamHub) SetAIConsumer(consumer AIResultConsumer) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.aiConsumer = consumer
 }
 
 // NewStreamHub 构造全局流分发中心。
@@ -531,6 +544,18 @@ func (h *StreamHub) consumeAIResults(ctx context.Context, cameraID string, sub *
 				zap.Error(err),
 				zap.Int("payload_len", len(data)))
 			continue
+		}
+
+		h.mu.Lock()
+		consumer := h.aiConsumer
+		h.mu.Unlock()
+
+		if consumer != nil {
+			if err := consumer.ProcessInferenceResult(ctx, res); err != nil {
+				h.logger.Warn("process ai result by consumer failed",
+					zap.String("camera_id", cameraID),
+					zap.Error(err))
+			}
 		}
 
 		if h.eventHub != nil {

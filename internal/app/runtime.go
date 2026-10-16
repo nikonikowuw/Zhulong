@@ -58,6 +58,11 @@ type personLifecycle interface {
 	Stop(context.Context) error
 }
 
+type recordLifecycle interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
+
 type lifecycleRuntime struct {
 	database   databaseLifecycle
 	native     engineLifecycle
@@ -68,6 +73,7 @@ type lifecycleRuntime struct {
 	storage    storageLifecycle
 	algorithm  algorithmLifecycle
 	person     personLifecycle
+	record     recordLifecycle
 	server     *http.Server
 	logger     *zap.Logger
 	listen     func(string, string) (net.Listener, error)
@@ -84,6 +90,7 @@ type lifecycleRuntime struct {
 	storageReady    bool
 	algorithmReady  bool
 	personReady     bool
+	recordReady     bool
 	httpReady       bool
 	loggerSynced    bool
 }
@@ -100,6 +107,7 @@ type runtimeParams struct {
 	Storage    storageLifecycle    `optional:"true"`
 	Algorithm  algorithmLifecycle  `optional:"true"`
 	Person     personLifecycle     `optional:"true"`
+	Record     recordLifecycle     `optional:"true"`
 	Server     *http.Server
 	Logger     *zap.Logger
 }
@@ -119,6 +127,7 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		storage:    p.Storage,
 		algorithm:  p.Algorithm,
 		person:     p.Person,
+		record:     p.Record,
 		server:     p.Server,
 		logger:     p.Logger,
 		listen:     net.Listen,
@@ -177,6 +186,13 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 			r.logger.Warn("person start warning", zap.Error(err))
 		}
 		r.personReady = true
+	}
+
+	if r.record != nil {
+		if err := r.record.Start(ctx); err != nil {
+			r.logger.Warn("record start warning", zap.Error(err))
+		}
+		r.recordReady = true
 	}
 
 	if err := r.native.Start(); err != nil {
@@ -248,6 +264,9 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 		stopErrors = append(stopErrors, err)
 	}
 	if err := r.closePerson(ctx); err != nil {
+		stopErrors = append(stopErrors, err)
+	}
+	if err := r.closeRecord(ctx); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
 	if err := r.closeStorage(ctx); err != nil {
@@ -332,6 +351,19 @@ func (r *lifecycleRuntime) closePerson(ctx context.Context) error {
 	if r.person != nil {
 		if err := r.person.Stop(ctx); err != nil {
 			return fmt.Errorf("stop person service: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *lifecycleRuntime) closeRecord(ctx context.Context) error {
+	if !r.recordReady {
+		return nil
+	}
+	r.recordReady = false
+	if r.record != nil {
+		if err := r.record.Stop(ctx); err != nil {
+			return fmt.Errorf("stop record service: %w", err)
 		}
 	}
 	return nil

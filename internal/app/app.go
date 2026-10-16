@@ -16,6 +16,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
 	"github.com/nikonikowuw/Zhulong/internal/network"
 	"github.com/nikonikowuw/Zhulong/internal/person"
+	"github.com/nikonikowuw/Zhulong/internal/record"
 	"github.com/nikonikowuw/Zhulong/internal/storage"
 	"github.com/nikonikowuw/Zhulong/internal/systemtime"
 	"github.com/nikonikowuw/Zhulong/internal/webui"
@@ -544,6 +545,40 @@ var personModule = fx.Module("person",
 	fx.Provide(providePerson),
 )
 
+// --- Record Module ---
+
+type recordOut struct {
+	fx.Out
+
+	Store           *record.Store
+	Service         *record.Service
+	Handler         *record.Handler
+	Lifecycle       recordLifecycle
+	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+}
+
+func provideRecord(
+	dbProvider database.DBProvider,
+	streamHub *camera.StreamHub,
+	logger *zap.Logger,
+) recordOut {
+	comp := record.NewRecordComponents(dbProvider, logger)
+	if streamHub != nil {
+		streamHub.SetAIConsumer(comp.Service)
+	}
+	return recordOut{
+		Store:           comp.Store,
+		Service:         comp.Service,
+		Handler:         comp.Handler,
+		Lifecycle:       comp.Lifecycle,
+		ProtectedRoutes: comp.ProtectedRoutes,
+	}
+}
+
+var recordModule = fx.Module("record",
+	fx.Provide(provideRecord),
+)
+
 // --- HTTP Module ---
 
 var httpModule = fx.Module("http",
@@ -575,6 +610,7 @@ var Module = fx.Options(
 	mediaFileModule,
 	algorithmModule,
 	personModule,
+	recordModule,
 	httpModule,
 	runtimeModule,
 )

@@ -104,6 +104,7 @@ struct Classification {
 struct FaceCandidate {
     std::string person_id;                /**< 底库人员唯一标识符 */
     std::string person_name;              /**< 底库人员姓名 */
+    std::string face_id;                  /**< 底库人脸照片唯一标识符 */
     float similarity{0.0f};               /**< 匹配置信度分值 / 相似度 (0.0 ~ 1.0) */
 };
 
@@ -129,6 +130,7 @@ struct FaceItem {
     bool is_fused{false};                  /**< 是否多帧融合结果 (预留字段) */
     std::string person_id;                 /**< Top-1 人员唯一标识符 (未命中时为空字符串) */
     std::string person_name;               /**< Top-1 人员姓名 (未命中时为空字符串) */
+    std::string matched_face_id;           /**< Top-1 命中的底照 ID (未命中时为空字符串) */
     std::vector<FaceCandidate> candidates; /**< Top-K 候选人列表，按相似度降序排列 */
 };
 
@@ -333,9 +335,9 @@ namespace detail {
 // 静态断言：强制校验 C ABI 跨边界结构体的尺寸与 8 字节自然对齐契约
 static_assert(sizeof(zhulong_bbox) == 88, "zhulong_bbox must be 88 bytes");
 static_assert(sizeof(zhulong_bbox) % 8 == 0, "zhulong_bbox must be 8-byte aligned");
-static_assert(sizeof(zhulong_face_candidate) == 136, "zhulong_face_candidate must be 136 bytes");
+static_assert(sizeof(zhulong_face_candidate) == 200, "zhulong_face_candidate must be 200 bytes");
 static_assert(sizeof(zhulong_face_candidate) % 8 == 0, "zhulong_face_candidate must be 8-byte aligned");
-static_assert(sizeof(zhulong_face_item) == 216, "zhulong_face_item must be 216 bytes");
+static_assert(sizeof(zhulong_face_item) == 280, "zhulong_face_item must be 280 bytes");
 static_assert(sizeof(zhulong_face_item) % 8 == 0, "zhulong_face_item must be 8-byte aligned");
 static_assert(sizeof(zhulong_person_item) == 40, "zhulong_person_item must be 40 bytes");
 static_assert(sizeof(zhulong_person_item) % 8 == 0, "zhulong_person_item must be 8-byte aligned");
@@ -544,6 +546,8 @@ struct PersonStructureResultAdapter {
                     dst_f.person_id[sizeof(dst_f.person_id) - 1] = '\0';
                     std::strncpy(dst_f.person_name, src_f.person_name.c_str(), sizeof(dst_f.person_name) - 1);
                     dst_f.person_name[sizeof(dst_f.person_name) - 1] = '\0';
+                    std::strncpy(dst_f.matched_face_id, src_f.matched_face_id.c_str(), sizeof(dst_f.matched_face_id) - 1);
+                    dst_f.matched_face_id[sizeof(dst_f.matched_face_id) - 1] = '\0';
 
                     dst_f.candidate_count = static_cast<uint32_t>(src_f.candidates.size());
                     if (dst_f.candidate_count > 0) {
@@ -556,6 +560,8 @@ struct PersonStructureResultAdapter {
                             dst_c.person_id[sizeof(dst_c.person_id) - 1] = '\0';
                             std::strncpy(dst_c.person_name, src_c.person_name.c_str(), sizeof(dst_c.person_name) - 1);
                             dst_c.person_name[sizeof(dst_c.person_name) - 1] = '\0';
+                            std::strncpy(dst_c.face_id, src_c.face_id.c_str(), sizeof(dst_c.face_id) - 1);
+                            dst_c.face_id[sizeof(dst_c.face_id) - 1] = '\0';
                             dst_c.similarity = src_c.similarity;
                         }
                     } else {

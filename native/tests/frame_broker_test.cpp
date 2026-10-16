@@ -623,13 +623,14 @@ void test_protocol_alignment_assertions() {
     assert(sizeof(IpcHeader) == 16);
     assert(sizeof(HandshakeReq) == 40);
     assert(sizeof(HandshakeResp) == 80);
-    assert(sizeof(FrameDispatchMsg) == 88);
+    assert(sizeof(FrameDispatchMsg) == 96);
     assert(sizeof(FrameAckMsg) == 32);
 
     assert(offsetof(FrameDispatchMsg, stream_id) % 8 == 0);
     assert(offsetof(FrameDispatchMsg, frame_id) % 8 == 0);
     assert(offsetof(FrameDispatchMsg, generation) % 8 == 0);
     assert(offsetof(FrameDispatchMsg, pts) % 8 == 0);
+    assert(offsetof(FrameDispatchMsg, capture_time_ms) % 8 == 0);
 
     assert(offsetof(FrameAckMsg, stream_id) % 8 == 0);
     assert(offsetof(FrameAckMsg, frame_id) % 8 == 0);

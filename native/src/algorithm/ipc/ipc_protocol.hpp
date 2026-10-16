@@ -97,6 +97,7 @@ struct FrameDispatchMsg {
     uint64_t frame_id{0};        /**< 视频帧全局单调自增序号 */
     uint64_t generation{0};      /**< 槽位写入代次：前置确保 8 字节自然对齐，归还租约时必须原样带回 */
     int64_t  pts{0};             /**< 帧呈现时间戳（遵循源流时间基） */
+    int64_t  capture_time_ms{0}; /**< 帧物理采集/抓拍时刻的绝对 UTC 毫秒时间戳 */
     uint32_t slot_index{0};      /**< 帧数据所在的共享内存槽位索引（0 ~ slot_count-1） */
     int32_t  width{0};           /**< 画面像素宽度 */
     int32_t  height{0};          /**< 画面像素高度 */
@@ -104,7 +105,7 @@ struct FrameDispatchMsg {
     int32_t  strides[4]{0};      /**< 各平面的行扫描步长（字节） */
     uint32_t offsets[4]{0};      /**< 各平面相对于对应槽位起始物理地址的偏移量（字节） */
     int32_t  reserved_fd{-1};    /**< 预留底层硬件 dma_fd（>=0 表示有效，用于后续 DMA 零拷贝） */
-    uint32_t reserved_pad{0};    /**< 结构体尾部对齐填充字段，确保总大小为 8 的倍数（88 字节） */
+    uint32_t reserved_pad{0};    /**< 结构体尾部对齐填充字段，确保总大小为 8 的倍数（96 字节） */
 };
 
 /**
@@ -133,13 +134,14 @@ struct HeartbeatMsg {
 static_assert(sizeof(IpcHeader) == 16, "IpcHeader must be 16 bytes");
 static_assert(sizeof(HandshakeReq) == 40, "HandshakeReq size mismatch");
 static_assert(sizeof(HandshakeResp) == 80, "HandshakeResp size mismatch");
-static_assert(sizeof(FrameDispatchMsg) == 88, "FrameDispatchMsg size mismatch");
+static_assert(sizeof(FrameDispatchMsg) == 96, "FrameDispatchMsg size mismatch");
 static_assert(sizeof(FrameAckMsg) == 32, "FrameAckMsg size mismatch");
 
 static_assert(offsetof(FrameDispatchMsg, stream_id) % 8 == 0, "stream_id unaligned");
 static_assert(offsetof(FrameDispatchMsg, frame_id) % 8 == 0, "frame_id unaligned");
 static_assert(offsetof(FrameDispatchMsg, generation) % 8 == 0, "generation unaligned");
 static_assert(offsetof(FrameDispatchMsg, pts) % 8 == 0, "pts unaligned");
+static_assert(offsetof(FrameDispatchMsg, capture_time_ms) % 8 == 0, "capture_time_ms unaligned");
 
 static_assert(offsetof(FrameAckMsg, stream_id) % 8 == 0, "stream_id unaligned");
 static_assert(offsetof(FrameAckMsg, frame_id) % 8 == 0, "frame_id unaligned");

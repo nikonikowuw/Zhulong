@@ -147,8 +147,10 @@ int main(int argc, char* argv[]) {
     assert(face_hit.similarity > 0.999f);
     assert(std::strcmp(face_hit.person_id, "P_USER_999") == 0);
     assert(std::strcmp(face_hit.person_name, "测试员Alice") == 0);
+    assert(std::strcmp(face_hit.matched_face_id, "face_test_01") == 0);
     assert(face_hit.candidate_count == 1);
     assert(std::strcmp(face_hit.candidates[0].person_id, "P_USER_999") == 0);
+    assert(std::strcmp(face_hit.candidates[0].face_id, "face_test_01") == 0);
     api.result_release(res);
 
     // =========================================================================

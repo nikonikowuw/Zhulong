@@ -38,6 +38,7 @@ public:
         face.is_fused = false;
         face.person_id = "user_007";
         face.person_name = "Alice";
+        face.matched_face_id = "face_007";
 
         face.landmarks = {
             {0.20f, 0.25f},
@@ -50,11 +51,13 @@ public:
         zhulong::FaceCandidate cand1;
         cand1.person_id = "user_007";
         cand1.person_name = "Alice";
+        cand1.face_id = "face_007";
         cand1.similarity = 0.92f;
 
         zhulong::FaceCandidate cand2;
         cand2.person_id = "user_008";
         cand2.person_name = "Bob";
+        cand2.face_id = "face_008";
         cand2.similarity = 0.45f;
 
         face.candidates = {cand1, cand2};
