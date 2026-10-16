@@ -240,3 +240,27 @@ Implemented end-to-end hardware zero-copy DMA-BUF pipeline across the entire vid
 ### Next Steps
 
 - 10-15-rk3568-true-zero-copy-pipeline 父任务及其两个子任务（MPP 硬解、RGA 前处理）仍为 planning，属真实待办，未归档
+
+
+## Session 48: RGA letterbox hardware acceleration and FrameBroker zero-copy pass-through
+<!-- trellis-session: v=2 fp=ede95ec487ced26c -->
+
+**Date**: 2026-10-16
+**Task**: RGA letterbox hardware acceleration and FrameBroker zero-copy pass-through
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+Integrated zhulong::ops::letterbox in face_recognition detector to eliminate manual CPU loops and leverage RGA hardware acceleration with center-padded geometry restoration. Refactored FrameBroker to pass through DMA-BUF descriptors without memcpy for hardware frames, while maintaining dual-track fallback for software frames. Fixed DmaBufAllocator DRM dumb buffer probe KMS constraints and passed full make check test suite.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `87d9942` | feat(algo): integrate RGA letterbox and FrameBroker zero-copy pass-through |
+| `7cfeb15` | docs(spec): document DRM dumb buffer KMS constraints and FrameBroker dual-track dispatch |
+
+### Status
+
+[OK] **Completed**
