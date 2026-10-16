@@ -32,8 +32,8 @@
 
 ## Cross-Child Acceptance Criteria
 
-- [ ] **算法前处理无 CPU 循环**：在 RK3568 上，人脸检测与对齐前处理 100% 由 RGA 硬件单元完成，消除 CPU 密集采样。
-- [ ] **分发链路无内存复制**：输入硬件解码帧时，`FrameBroker::publish_frame` 不调用 `std::memcpy`，仅靠内核 fd 传递与生命周期借用流转。
-- [ ] **硬解生产连续物理页**：MPP 解码节点解出帧直接由 `MppBuffer` 导出有效 `dma_buf_fd`。
-- [ ] **精度与一致性保真**：端到端推理结果置信度与坐标框同 CPU baseline 保持一致（允许 RGA 双线性滤波极值容差）。
-- [ ] **全平台保底与优雅降级**：非 Linux/RK 平台或软解场景自动安全降级，现有单测与 `make check` 100% 通过。
+- [x] **算法前处理无 CPU 循环**：在 RK3568 上，人脸检测与对齐前处理 100% 由 RGA 硬件单元完成，消除 CPU 密集采样。
+- [x] **分发链路无内存复制**：输入硬件解码帧时，`FrameBroker::publish_frame` 不调用 `std::memcpy`，仅靠内核 fd 传递与生命周期借用流转。
+- [x] **硬解生产连续物理页**：MPP 解码节点解出帧直接由 `MppBuffer` 导出有效 `dma_buf_fd`。
+- [x] **精度与一致性保真**：端到端推理结果置信度与坐标框同 CPU baseline 保持一致（允许 RGA 双线性滤波极值容差）。
+- [x] **全平台保底与优雅降级**：非 Linux/RK 平台或软解场景自动安全降级，现有单测与 `make check` 100% 通过。
