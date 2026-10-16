@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"SQLite schema 000011 迁移、GORM 映射、ULID 主键与 UTC 毫秒时间规范"}
+{"file":".trellis/spec/backend/storage-guidelines.md","reason":"snapshots/ 相对路径契约与双水位清理免杀保护规则"}
+{"file":".trellis/spec/backend/http-api-guidelines.md","reason":"httputil 响应信封、通用分页与 i18n 错误处理规范"}
+{"file":".trellis/spec/backend/dependency-injection.md","reason":"Uber Fx 模块装配与 protected_routes 路由挂载规范"}
+{"file":".trellis/spec/native/algo-plugin-contract.md","reason":"Native C ABI 8 字节对齐与人脸结果契约"}

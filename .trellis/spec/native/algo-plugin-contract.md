@@ -25,6 +25,7 @@
 1. **检测**：`ZHULONG_RESULT_TYPE_DETECTION` (1) + `zhulong_bbox[]`（`box[4]` 严格归一化 `[x1, y1, x2, y2] ∈ [0.0, 1.0]`，总尺寸 88 字节，8 字节自然对齐）；
 2. **分类**：`ZHULONG_RESULT_TYPE_CLASSIFICATION` (2) + `zhulong_classification_item[]`；
 3. **结构化人体/人脸**：`ZHULONG_RESULT_TYPE_PERSON_STRUCTURE` (3) + `zhulong_person_item[]`（支持 1:N 嵌套人脸 `zhulong_face_item` 与 Top-K 候选人 `zhulong_face_candidate`）。
+   - **方案 B 底库对账契约**：`zhulong_face_candidate` 包含 `char face_id[ZHULONG_FACE_ID_MAX_LEN]`（200 字节，8 字节整除自然对齐），精确记录候选人对应的单张登记照唯一标识；`zhulong_face_item` 包含 `char matched_face_id[ZHULONG_FACE_ID_MAX_LEN]`（280 字节，8 字节整除自然对齐），记录 Top-1 胜出底照 ID，支持宿主直接进行 1:1 双图（抓拍人脸 vs 底库登记照）核验。
 
 全系统（通用目标检测、人体/人脸结构化、IPC 消息、Go 宿主领域模型与前端渲染）统一采用 `[x1, y1, x2, y2] ∈ [0.0, 1.0]` 严格归一化两点坐标，全面废弃 `(x, y, w, h)` 语义。
 结果内存由插件创建，并只能通过同一插件的 `result_release` 释放。添加分类与结构化能力保持 v1 函数表布局稳定（数据层多态）。
@@ -173,7 +174,7 @@ zhulong_algo_runner --verify-plugin <path_to_plugin.so> --sample <test_image_or_
 
 ### 6.4 IPC 协议自然对齐与 Socket 鲁棒性规约
 
-- **严格 8 字节自然对齐**：IPC 二进制包中 64 位字段（`generation`、`stream_id`、`frame_id`、`pts`）必须排布在 8 字节自然对齐偏移上；编译期 `static_assert(offsetof(...) % 8 == 0)` 与总大小校验，杜绝嵌入式体系下非对齐访问。
+- **严格 8 字节自然对齐**：IPC 二进制包中 64 位字段（`generation`、`stream_id`、`frame_id`、`pts`、`capture_time_ms`）必须排布在 8 字节自然对齐偏移上；`FrameDispatchMsg` 包含 `int64_t capture_time_ms`（帧物理采样绝对 UTC 毫秒时间戳），总尺寸 96 字节，编译期 `static_assert(offsetof(...) % 8 == 0)` 与总大小校验，杜绝嵌入式体系下非对齐访问与时钟时序漂移。
 - **四态 Socket 状态机与半包熔断**：流读取使用四态机制（`SUCCESS`、`IDLE_TIMEOUT`、`CLOSED`、`DESYNC_ERROR`）。半包超时或错位直接置为 `DESYNC_ERROR` 并主动断开连接。
 - **发送超时隔离与最大 Payload 门禁**：服务端套接字配置 50ms `SO_SNDTIMEO` 发送超时；IPC 消息强制执行 `MAX_IPC_PAYLOAD_SIZE = 64KB` 尺寸检查与线程级 `try ... catch` 异常防爆门。两侧常量与 Go 侧 `MaxIpcPayloadSize` 保持一致。
 - **在途配额原子回滚**：槽位写入异常或 Socket 发送失败时，原子回退预分配的 `in_flight_count`、`delivered_frames`，并记入 `dropped_frames`。
@@ -244,7 +245,8 @@ Go 侧与 Runner 进程之间 IPC 载荷统一使用 `features` 字段，表示�
 
 ### 9.2 载荷格式与坐标契约
 
-- 载荷采用自描述 JSON 字符串编码，包含 `stream_id`、`pts`、`cost_ms`、`task_type` 以及多态结果数组（`detections`、`classifications`、`persons`）。
+- 载荷采用自描述 JSON 字符串编码，包含 `stream_id`、`pts`、`capture_time_ms`（帧抓拍绝对物理毫秒时间戳）、`cost_ms`、`task_type` 以及多态结果数组（`detections`、`classifications`、`persons`）。
+- **人脸识别方案 B 扩展字段**：当检出人脸并命中底库时，根层或人脸子项如实携带 `matched_face_id`（Top-1 胜出人脸底照 ID）及 `candidates[].face_id`，为宿主落盘 `gallery_image_path` 与持久化提供唯一确凿的底照证据溯源。
 - **坐标恒定归一化**：所有检测框与人体/人脸位置恒定采用 `[x1, y1, x2, y2] ∈ [0.0, 1.0]` 浮点数，与前端/Go 领域模型严格对齐。
 
 ### 9.3 状态机过滤规则（防洪峰策略）

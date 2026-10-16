@@ -289,3 +289,27 @@ Implemented `MppDecodeNode` and `MppLoader` using Rockchip MPP (`librockchip_mpp
 
 [OK] **Completed**
 
+
+## Session 50: Implement perception records and alarms persistence
+<!-- trellis-session: v=2 fp=83bf92a014d791ec -->
+
+**Date**: 2026-10-16
+**Task**: Perception records and alarms persistence
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+Implemented persistent storage for AI perception records (`recognitions`, `alarms`, `captures`) with 3-second tracking cooldown deduplication and physical frame-capture timestamp alignment (`captured_at`). Upgraded C ABI (`zhulong/plugin.h`) with Option B `face_id` and `matched_face_id` (8-byte aligned), and extended IPC `FrameDispatchMsg` with `capture_time_ms` (96 bytes, 8-byte aligned). Created SQLite versioned migration 000011 with ULID primary keys, weak foreign keys (`ON DELETE SET NULL`), and indices on `(camera_id, captured_at DESC)`. Implemented `internal/record` store, service, cooldown engine, thin HTTP handlers, and Uber Fx wiring. Refactored HTTP handlers to remove redundant business logic and time parsing into thin controller adapters. Updated Swagger documentation and specs.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d85aed0` | feat(record): implement perception records and alarms persistence |
+
+### Status
+
+[OK] **Completed**
+
+

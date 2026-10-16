@@ -55,6 +55,14 @@ sqlDB.SetMaxIdleConns(1)
 - SQLite 的 `DATETIME` 列按 UTC 解释。SQLite `CURRENT_TIMESTAMP` 也是 UTC，但只有秒精度且不带时区后缀；需要亚秒精度时使用 GORM 写入的 UTC `time.Time`，不要依赖该默认值。
 - 纯日期使用 `DATE` / `YYYY-MM-DD`，不做时区转换；持续时间使用带明确单位的数值字段（如 `duration_ms`），不要当作时间点存储。
 
+### 感知记录与告警事件的时序主键契约 (Perception & Alarm Temporal Contract)
+
+- **物理抓拍时间戳铁律 (`captured_at`)**：对于 `recognitions`、`alarms`、`captures` 等流式高频机器视觉感知事件，**业务主时间戳强制采用 `captured_at DATETIME NOT NULL`**，严格取自视频帧物理抓拍瞬间的绝对 UTC 时间戳（`InferenceResult.Timestamp` / `capture_time_ms`），坚决禁止使用推理完成或数据插入时的宿主墙上时间，彻底杜绝排队延迟导致的时序漂移；
+- **时序索引设计**：所有基于相机的时间范围查询、降序列表与事件回放，核心索引统一建立为 `(camera_id, captured_at DESC)`；
+- **内部记账分离**：`created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP` 仅用于 SQLite 底层插入时间记账，不得用于业务回溯或前后端事件时间对账；
+- **弱外键与快照冗余保护**：感知事件中的实体引用（如 `recognitions.person_id`）采用弱外键设计（`REFERENCES persons(id) ON DELETE SET NULL`），并强行冗余快照不可变字段（`person_name`、`gallery_image_path`），确保底库人员注销或底照变更后，已发生的历史证据链完好无损；
+- **相对路径存储**：图片统一存储相对路径且首段必须为 `snapshots/...`，绝不在数据库中存储绝对物理路径或裸 URL。
+
 ## 4. 持久化规约与防爆边界
 
 1. **业务自管 Store**：数据操作收敛在各模块 `internal/<module>/store.go`，禁止跨模块大表模型。

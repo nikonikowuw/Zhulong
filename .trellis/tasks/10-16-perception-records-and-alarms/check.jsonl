@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"验证数据库迁移无 AutoMigrate、主键为 ULID、弱外键不误杀"}
+{"file":".trellis/spec/backend/storage-guidelines.md","reason":"验证快照路径为安全相对路径，无目录穿越"}
+{"file":".trellis/spec/backend/http-api-guidelines.md","reason":"验证响应信封格式与错误码本地化"}
+{"file":".trellis/spec/native/algo-plugin-contract.md","reason":"验证 C ABI 内存对齐无破坏、无内存越界"}
