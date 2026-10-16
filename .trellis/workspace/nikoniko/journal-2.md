@@ -313,3 +313,39 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 [OK] **Completed**
 
 
+
+
+## Session 51: 重构 internal/algorithm 控制面分层与 apperr 错误收拢
+<!-- trellis-session: v=2 fp=ff2307a174fc2b43 -->
+
+**Date**: 2026-10-16
+**Task**: 重构 internal/algorithm 控制面分层与 apperr 错误收拢
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+解答 internal/algorithm 控制面历史架构异味疑问，重构 Handler 与 Service 边界：消除实体组装/ID生成/默认值与文件流生命周期的越权，统一收拢至 Service 并接入 apperr 语义错误体系
+
+### Main Changes
+
+- 提取 CreateTaskRequest.ToTask 归一化 DTO，下沉实体默认值与 ID 生成至 Service.CreateTask
+- 提取 ExtractMultipartFile，下沉流式安装落盘与临时文件生命周期至 Service.InstallAlgorithmFromStream
+- 消除 Handler 内所有 sentinel error 大 switch 匹配与裸写 c.JSON，统一接入 apperr 与 httputil.SuccessWithStatus
+- 在 .trellis/spec/backend/algorithm-guidelines.md 中补充控制面分层与错误处理规约
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3d09129` | refactor(algorithm): decouple handler control plane and integrate apperr |
+| `7acc4d0` | docs(spec): document algorithm control plane and apperr conventions |
+
+### Testing
+
+- [OK] go test -race ./internal/algorithm/...
+- [OK] make check 全量通过 (前端 lint/test/type-check, C++ 引擎测试, api-docs, go-check)
+
+### Status
+
+[OK] **Completed**
