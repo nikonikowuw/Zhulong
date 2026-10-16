@@ -4,11 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/httputil"
+	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
 
@@ -58,6 +63,56 @@ func NewService(store *Store, verifier *Verifier, supervisor *Supervisor, instal
 	}
 }
 
+// normalizeInstallError translates package verification and extraction errors into standard API errors.
+func normalizeInstallError(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, ErrPlatformMismatch):
+		return httputil.NewError(http.StatusBadRequest, "ALGO_PLATFORM_MISMATCH", "Platform mismatch", err)
+	case errors.Is(err, ErrUnsupportedArchive):
+		return httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_ARCHIVE_FORMAT", "Unsupported archive format", err)
+	case errors.Is(err, ErrZipSlip):
+		return httputil.NewError(http.StatusBadRequest, "ZIP_SLIP_ATTACK_DETECTED", "Zip-slip attack detected", err)
+	case errors.Is(err, ErrDecompressionBombSize), errors.Is(err, ErrDecompressionBombFile):
+		return httputil.NewError(http.StatusBadRequest, "DECOMPRESSION_BOMB_DETECTED", "Decompression bomb detected", err)
+	case errors.Is(err, ErrVerificationFailed), errors.Is(err, ErrResultTypeMismatch):
+		return apperr.Invalid("ALGO_VERIFICATION_FAILED", "Verification failed", err)
+	case errors.Is(err, ErrInvalidManifestToken):
+		return httputil.NewError(http.StatusBadRequest, "INVALID_MANIFEST_TOKEN", err.Error(), err)
+	case errors.Is(err, ErrVersionAlreadyInstalled):
+		return apperr.Conflict("ALGORITHM_VERSION_EXISTS", "Algorithm version is already installed", err)
+	case errors.Is(err, ErrInvalidConfigSchema):
+		return apperr.Invalid("ALGO_VERIFICATION_FAILED", "Invalid algorithm configuration schema", err)
+	default:
+		return httputil.NewError(http.StatusBadRequest, "ALGO_INSTALL_FAILED", err.Error(), err)
+	}
+}
+
+// InstallAlgorithmFromStream streams an uploaded package archive into a managed temporary file,
+// verifies and stages it, registers it in the database, and guarantees temporary file cleanup.
+func (s *Service) InstallAlgorithmFromStream(ctx context.Context, r io.Reader, limit int64) (*Algorithm, error) {
+	if limit <= 0 {
+		limit = MaxUploadSize
+	}
+	tmpPath, err := SaveUploadStreamWithLimit(r, "", limit)
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.Is(err, ErrFileTooLarge) || errors.As(err, &maxBytesErr) {
+			return nil, httputil.NewError(http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "Uploaded file exceeds 500MB", err)
+		}
+		return nil, apperr.Internal("INTERNAL_ERROR", "Failed to save upload", err)
+	}
+	defer func() {
+		if rmErr := os.Remove(tmpPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			s.logger.Warn("failed to remove temporary upload file", zap.String("path", tmpPath), zap.Error(rmErr))
+		}
+	}()
+
+	return s.InstallAlgorithm(ctx, tmpPath)
+}
+
 // InstallAlgorithm handles archive extraction, static/dynamic verification, and DB registration.
 func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Algorithm, error) {
 	s.mu.Lock()
@@ -65,7 +120,7 @@ func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Al
 
 	algo, err := s.verifier.StageAndVerify(ctx, archivePath, s.installDir)
 	if err != nil {
-		return nil, fmt.Errorf("verify and stage algorithm: %w", err)
+		return nil, normalizeInstallError(fmt.Errorf("verify and stage algorithm: %w", err))
 	}
 	discardStagedVersion := func() {
 		if removeErr := os.RemoveAll(algo.InstallDir(s.installDir)); removeErr != nil {
@@ -79,7 +134,7 @@ func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Al
 		algo.PreviousVersion = existing.Version
 		if err := s.store.UpdateAlgorithm(ctx, algo); err != nil {
 			discardStagedVersion()
-			return nil, fmt.Errorf("update existing algorithm: %w", err)
+			return nil, normalizeInstallError(fmt.Errorf("update existing algorithm: %w", err))
 		}
 		s.logger.Info("upgraded existing algorithm",
 			zap.String("id", algo.ID),
@@ -102,12 +157,12 @@ func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Al
 	}
 	if !errors.Is(err, ErrNotFound) {
 		discardStagedVersion()
-		return nil, fmt.Errorf("check existing algorithm: %w", err)
+		return nil, normalizeInstallError(fmt.Errorf("check existing algorithm: %w", err))
 	}
 
 	if err := s.store.CreateAlgorithm(ctx, algo); err != nil {
 		discardStagedVersion()
-		return nil, fmt.Errorf("save algorithm to database: %w", err)
+		return nil, normalizeInstallError(fmt.Errorf("save algorithm to database: %w", err))
 	}
 
 	s.logger.Info("installed new algorithm",
@@ -123,7 +178,7 @@ func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Al
 func (s *Service) ListAlgorithms(ctx context.Context) ([]Algorithm, error) {
 	algos, err := s.store.ListAlgorithms(ctx)
 	if err != nil {
-		return nil, err
+		return nil, apperr.Internal("INTERNAL_ERROR", "Failed to list algorithms", err)
 	}
 	// Enrich with live supervisor status
 	for i := range algos {
@@ -139,7 +194,10 @@ func (s *Service) ListAlgorithms(ctx context.Context) ([]Algorithm, error) {
 func (s *Service) GetAlgorithm(ctx context.Context, id string) (*Algorithm, error) {
 	algo, err := s.store.GetAlgorithm(ctx, id)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, ErrNotFound) {
+			return nil, apperr.NotFound("ALGORITHM_NOT_FOUND", "Algorithm not found", err)
+		}
+		return nil, apperr.Internal("INTERNAL_ERROR", "Failed to get algorithm", err)
 	}
 	liveStatus := s.supervisor.GetStatus(algo.ID)
 	if liveStatus != StatusDisabled {
@@ -152,43 +210,68 @@ func (s *Service) GetAlgorithm(ctx context.Context, id string) (*Algorithm, erro
 func (s *Service) EnableAlgorithm(ctx context.Context, id string) error {
 	algo, err := s.store.GetAlgorithm(ctx, id)
 	if err != nil {
-		return err
+		if errors.Is(err, ErrNotFound) {
+			return apperr.NotFound("ALGORITHM_NOT_FOUND", "Algorithm not found", err)
+		}
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("get algorithm: %v", err), err)
 	}
 
 	if err := s.supervisor.StartAlgorithm(ctx, *algo); err != nil {
-		return fmt.Errorf("start runner supervisor: %w", err)
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("start runner supervisor: %v", err), err)
 	}
 
-	return s.store.UpdateAlgorithmStatus(ctx, id, StatusActive)
+	if err := s.store.UpdateAlgorithmStatus(ctx, id, StatusActive); err != nil {
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("update algorithm status: %v", err), err)
+	}
+	return nil
 }
 
 // DisableAlgorithm stops the runner subprocess and updates DB status to DISABLED.
 func (s *Service) DisableAlgorithm(ctx context.Context, id string) error {
-	if err := s.supervisor.StopAlgorithm(ctx, id); err != nil {
-		return fmt.Errorf("stop runner supervisor: %w", err)
+	if _, err := s.store.GetAlgorithm(ctx, id); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return apperr.NotFound("ALGORITHM_NOT_FOUND", "Algorithm not found", err)
+		}
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("get algorithm: %v", err), err)
 	}
-	return s.store.UpdateAlgorithmStatus(ctx, id, StatusDisabled)
+
+	if err := s.supervisor.StopAlgorithm(ctx, id); err != nil {
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("stop runner supervisor: %v", err), err)
+	}
+	if err := s.store.UpdateAlgorithmStatus(ctx, id, StatusDisabled); err != nil {
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("update algorithm status: %v", err), err)
+	}
+	return nil
 }
 
 // ResetAlgorithm resets an algorithm from CRASH_LOOP back to DISABLED so it can be re-enabled.
 func (s *Service) ResetAlgorithm(ctx context.Context, id string) error {
-	return s.supervisor.ResetAlgorithm(ctx, id)
+	if err := s.supervisor.ResetAlgorithm(ctx, id); err != nil {
+		if errors.Is(err, ErrAlgorithmNotInCrashLoop) {
+			return apperr.Conflict("ALGORITHM_NOT_IN_CRASH_LOOP", "Algorithm is not in CRASH_LOOP", err)
+		}
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("reset algorithm: %v", err), err)
+	}
+	return nil
 }
 
 // DeleteAlgorithm stops and uninstalls an algorithm from disk and database.
 func (s *Service) DeleteAlgorithm(ctx context.Context, id string) error {
 	algo, err := s.store.GetAlgorithm(ctx, id)
 	if err != nil {
-		return err
+		if errors.Is(err, ErrNotFound) {
+			return apperr.NotFound("ALGORITHM_NOT_FOUND", "Algorithm not found", err)
+		}
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("get algorithm: %v", err), err)
 	}
 
 	status := s.supervisor.GetStatus(id)
 	switch status {
 	case StatusRunning, StatusStarting, StatusRollingBack:
-		return ErrAlgorithmActive
+		return apperr.Conflict("ALGORITHM_IS_ACTIVE", "Algorithm is active", ErrAlgorithmActive)
 	}
 	if err := s.supervisor.StopAlgorithm(ctx, id); err != nil {
-		return fmt.Errorf("stop algorithm before deletion: %w", err)
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("stop algorithm before deletion: %v", err), err)
 	}
 
 	// Delete associated analysis tasks
@@ -202,11 +285,34 @@ func (s *Service) DeleteAlgorithm(ctx context.Context, id string) error {
 		s.logger.Warn("failed to remove algorithm directory on disk", zap.String("path", algoBaseDir), zap.Error(err))
 	}
 
-	return s.store.DeleteAlgorithm(ctx, id)
+	if err := s.store.DeleteAlgorithm(ctx, id); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return apperr.NotFound("ALGORITHM_NOT_FOUND", "Algorithm not found", err)
+		}
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("delete algorithm from db: %v", err), err)
+	}
+	return nil
 }
 
 // CreateTask registers an analysis task on a camera stream, validating compute budget and schema.
 func (s *Service) CreateTask(ctx context.Context, t *AnalysisTask) error {
+	if t == nil {
+		return apperr.Invalid("VALIDATION_FAILED", "task cannot be nil", nil)
+	}
+	if t.CameraID == "" || t.AlgorithmID == "" {
+		return apperr.Invalid("VALIDATION_FAILED", "CameraID and AlgorithmID are required", nil)
+	}
+	if t.SampleFPS <= 0 {
+		t.SampleFPS = 5
+	}
+	if t.ConfigJSON == "" {
+		t.ConfigJSON = "{}"
+	}
+	t.Enabled = true
+	if t.ID == "" {
+		t.ID = idutil.New()
+	}
+
 	algo, err := s.store.GetAlgorithm(ctx, t.AlgorithmID)
 	if err != nil {
 		// Fallback to name lookup if caller provided name instead of ID
@@ -214,16 +320,28 @@ func (s *Service) CreateTask(ctx context.Context, t *AnalysisTask) error {
 			algo = algoByName
 			t.AlgorithmID = algo.ID
 		} else {
-			return fmt.Errorf("algorithm %q: %w", t.AlgorithmID, err)
+			if errors.Is(err, ErrNotFound) {
+				return apperr.NotFound("ALGORITHM_NOT_FOUND", fmt.Sprintf("algorithm %q: %v", t.AlgorithmID, err), err)
+			}
+			return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("algorithm %q: %v", t.AlgorithmID, err), err)
 		}
 	}
 
 	if err := validateTaskConfig(algo.ConfigSchemaJSON, t.ConfigJSON); err != nil {
-		return err
+		if errors.Is(err, ErrInvalidConfigSchema) {
+			return apperr.Internal("INTERNAL_ERROR", "Algorithm config schema is invalid", err)
+		}
+		if errors.Is(err, ErrInvalidTaskConfig) {
+			return apperr.Invalid("VALIDATION_FAILED", "Analysis task config is invalid", err)
+		}
+		return apperr.Invalid("VALIDATION_FAILED", err.Error(), err)
 	}
 
 	if err := s.store.CreateTaskWithinBudget(ctx, t, MaxComputePoints); err != nil {
-		return err
+		if errors.Is(err, ErrComputeBudgetExceeded) {
+			return apperr.Conflict("COMPUTE_BUDGET_EXCEEDED", err.Error(), err)
+		}
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("create task within budget: %v", err), err)
 	}
 
 	// D5：任务增删改需要让该算法包重新解析 --broker 列表。
@@ -259,11 +377,17 @@ func (s *Service) UpdateTask(ctx context.Context, t *AnalysisTask) error {
 func (s *Service) DeleteTask(ctx context.Context, id string) error {
 	task, err := s.store.GetTask(ctx, id)
 	if err != nil {
-		return err
+		if errors.Is(err, ErrNotFound) {
+			return apperr.NotFound("TASK_NOT_FOUND", "Analysis task not found", err)
+		}
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("get task: %v", err), err)
 	}
 
 	if err := s.store.DeleteTask(ctx, id); err != nil {
-		return err
+		if errors.Is(err, ErrNotFound) {
+			return apperr.NotFound("TASK_NOT_FOUND", "Analysis task not found", err)
+		}
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("delete task: %v", err), err)
 	}
 
 	s.scheduleAlgorithmRestart(task.AlgorithmID)
@@ -345,10 +469,17 @@ func (s *Service) restartAlgorithmNow(algorithmID string) {
 
 // ListTasks returns analysis tasks for a given camera or all tasks if cameraID is empty.
 func (s *Service) ListTasks(ctx context.Context, cameraID string) ([]AnalysisTask, error) {
+	var tasks []AnalysisTask
+	var err error
 	if cameraID != "" {
-		return s.store.ListTasksByCamera(ctx, cameraID)
+		tasks, err = s.store.ListTasksByCamera(ctx, cameraID)
+	} else {
+		tasks, err = s.store.ListTasks(ctx)
 	}
-	return s.store.ListTasks(ctx)
+	if err != nil {
+		return nil, apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("list tasks: %v", err), err)
+	}
+	return tasks, nil
 }
 
 // StopAll stops all active subprocesses.

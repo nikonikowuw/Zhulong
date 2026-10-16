@@ -1,15 +1,11 @@
 package algorithm
 
 import (
-	"errors"
-	"io"
 	"net/http"
-	"os"
 
 	"github.com/gin-gonic/gin"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
 
@@ -92,98 +88,23 @@ func (h *Handler) Install(c *gin.Context) {
 	// still attributable. The target is refined once the algorithm is known.
 	audithttp.Tag(c, ActionAlgorithmInstall, "algorithm:", "Install algorithm")
 
-	reader, err := c.Request.MultipartReader()
+	filePart, cleanup, err := ExtractMultipartFile(c.Request, "file")
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_FILE", "Missing upload file", err))
+		httputil.WriteError(c, err)
 		return
 	}
+	defer cleanup()
 
-	uploadLimit := h.maxUploadLimit
-	if uploadLimit <= 0 {
-		uploadLimit = MaxUploadSize
-	}
-
-	var tmpPath string
-	for {
-		part, err := reader.NextPart()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
-				httputil.WriteError(c, httputil.NewError(http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "Uploaded file exceeds size limit", err))
-				return
-			}
-			httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_FILE", "Failed to read multipart stream", err))
-			return
-		}
-		if part.FormName() != "file" {
-			if closeErr := part.Close(); closeErr != nil {
-				h.logger.Debug("failed to close unused multipart part", zap.Error(closeErr))
-			}
-			continue
-		}
-
-		tmpPath, err = SaveUploadStreamWithLimit(part, "", uploadLimit)
-		if closeErr := part.Close(); closeErr != nil {
-			h.logger.Debug("failed to close multipart part", zap.Error(closeErr))
-		}
-		if err != nil {
-			var maxBytesErr *http.MaxBytesError
-			if errors.Is(err, ErrFileTooLarge) || errors.As(err, &maxBytesErr) {
-				httputil.WriteError(c, httputil.NewError(http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "Uploaded file exceeds 500MB", err))
-				return
-			}
-			httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to save upload", err))
-			return
-		}
-		break
-	}
-
-	if tmpPath == "" {
-		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_FILE", "Missing upload file", nil))
-		return
-	}
-	defer func() {
-		if rmErr := os.Remove(tmpPath); rmErr != nil && !os.IsNotExist(rmErr) {
-			h.logger.Warn("failed to remove temporary upload file", zap.String("path", tmpPath), zap.Error(rmErr))
-		}
-	}()
-
-	algo, err := h.service.InstallAlgorithm(c.Request.Context(), tmpPath)
+	algo, err := h.service.InstallAlgorithmFromStream(c.Request.Context(), filePart, h.maxUploadLimit)
 	if err != nil {
-		switch {
-		case errors.Is(err, ErrPlatformMismatch):
-			httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "ALGO_PLATFORM_MISMATCH", "Platform mismatch", err))
-		case errors.Is(err, ErrUnsupportedArchive):
-			httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_ARCHIVE_FORMAT", "Unsupported archive format", err))
-		case errors.Is(err, ErrZipSlip):
-			httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "ZIP_SLIP_ATTACK_DETECTED", "Zip-slip attack detected", err))
-		case errors.Is(err, ErrDecompressionBombSize), errors.Is(err, ErrDecompressionBombFile):
-			httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "DECOMPRESSION_BOMB_DETECTED", "Decompression bomb detected", err))
-		case errors.Is(err, ErrVerificationFailed), errors.Is(err, ErrResultTypeMismatch):
-			httputil.WriteError(c, httputil.NewError(http.StatusUnprocessableEntity, "ALGO_VERIFICATION_FAILED", "Verification failed", err))
-		case errors.Is(err, ErrInvalidManifestToken):
-			httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_MANIFEST_TOKEN", err.Error(), err))
-		case errors.Is(err, ErrVersionAlreadyInstalled):
-			httputil.WriteError(c, httputil.NewError(http.StatusConflict, "ALGORITHM_VERSION_EXISTS", "Algorithm version is already installed", err))
-		case errors.Is(err, ErrInvalidConfigSchema):
-			httputil.WriteError(c, httputil.NewError(http.StatusUnprocessableEntity, "ALGO_VERIFICATION_FAILED", "Invalid algorithm configuration schema", err))
-		default:
-			httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "ALGO_INSTALL_FAILED", err.Error(), err))
-		}
+		httputil.WriteError(c, err)
 		return
 	}
 
 	audithttp.TagTarget(c, "algorithm:"+algo.ID)
 	audithttp.TagDetail(c, algo.Name)
 
-	c.JSON(http.StatusCreated, httputil.Response{
-		Code:    "OK",
-		Message: "Algorithm installed successfully",
-		Data:    algo,
-	})
+	httputil.SuccessWithStatus(c, http.StatusCreated, algo)
 }
 
 // List godoc
@@ -196,7 +117,7 @@ func (h *Handler) Install(c *gin.Context) {
 func (h *Handler) List(c *gin.Context) {
 	algos, err := h.service.ListAlgorithms(c.Request.Context())
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list algorithms", err))
+		httputil.WriteError(c, err)
 		return
 	}
 	if algos == nil {
@@ -218,11 +139,7 @@ func (h *Handler) Get(c *gin.Context) {
 	id := c.Param("id")
 	algo, err := h.service.GetAlgorithm(c.Request.Context(), id)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			httputil.WriteError(c, httputil.NewError(http.StatusNotFound, "ALGORITHM_NOT_FOUND", "Algorithm not found", err))
-			return
-		}
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to get algorithm", err))
+		httputil.WriteError(c, err)
 		return
 	}
 	httputil.Success(c, algo)
@@ -242,7 +159,7 @@ func (h *Handler) Enable(c *gin.Context) {
 	audithttp.Tag(c, ActionAlgorithmEnable, "algorithm:"+id, "Enable algorithm "+id)
 
 	if err := h.service.EnableAlgorithm(c.Request.Context(), id); err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to enable algorithm", err))
+		httputil.WriteError(c, err)
 		return
 	}
 	httputil.Success(c, gin.H{"status": StatusActive})
@@ -262,7 +179,7 @@ func (h *Handler) Disable(c *gin.Context) {
 	audithttp.Tag(c, ActionAlgorithmDisable, "algorithm:"+id, "Disable algorithm "+id)
 
 	if err := h.service.DisableAlgorithm(c.Request.Context(), id); err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to disable algorithm", err))
+		httputil.WriteError(c, err)
 		return
 	}
 	httputil.Success(c, gin.H{"status": StatusDisabled})
@@ -283,11 +200,7 @@ func (h *Handler) Reset(c *gin.Context) {
 	audithttp.Tag(c, ActionAlgorithmReset, "algorithm:"+id, "Reset algorithm "+id)
 
 	if err := h.service.ResetAlgorithm(c.Request.Context(), id); err != nil {
-		if errors.Is(err, ErrAlgorithmNotInCrashLoop) {
-			httputil.WriteError(c, httputil.NewError(http.StatusConflict, "ALGORITHM_NOT_IN_CRASH_LOOP", "Algorithm is not in CRASH_LOOP", err))
-			return
-		}
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to reset algorithm", err))
+		httputil.WriteError(c, err)
 		return
 	}
 	httputil.Success(c, gin.H{"status": StatusDisabled})
@@ -309,15 +222,7 @@ func (h *Handler) Delete(c *gin.Context) {
 	audithttp.Tag(c, ActionAlgorithmDelete, "algorithm:"+id, "Delete algorithm "+id)
 
 	if err := h.service.DeleteAlgorithm(c.Request.Context(), id); err != nil {
-		if errors.Is(err, ErrAlgorithmActive) {
-			httputil.WriteError(c, httputil.NewError(http.StatusConflict, "ALGORITHM_IS_ACTIVE", "Algorithm is active", err))
-			return
-		}
-		if errors.Is(err, ErrNotFound) {
-			httputil.WriteError(c, httputil.NewError(http.StatusNotFound, "ALGORITHM_NOT_FOUND", "Algorithm not found", err))
-			return
-		}
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to delete algorithm", err))
+		httputil.WriteError(c, err)
 		return
 	}
 	httputil.Success(c, gin.H{"deleted": true})
@@ -337,7 +242,7 @@ func (h *Handler) ListTasks(c *gin.Context) {
 	cameraID := c.Query("camera_id")
 	tasks, err := h.service.ListTasks(c.Request.Context(), cameraID)
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list analysis tasks", err))
+		httputil.WriteError(c, err)
 		return
 	}
 	if tasks == nil {
@@ -363,6 +268,35 @@ type CreateTaskRequest struct {
 	ConfigJSONAlt  string `json:"config_json"`
 }
 
+// ToTask converts CreateTaskRequest into an AnalysisTask entity skeleton,
+// resolving camelCase and snake_case alias fields.
+func (req *CreateTaskRequest) ToTask() *AnalysisTask {
+	camID := req.CameraID
+	if camID == "" {
+		camID = req.CameraIDAlt
+	}
+	algoID := req.AlgorithmID
+	if algoID == "" {
+		algoID = req.AlgorithmIDAlt
+	}
+	fps := req.SampleFPS
+	if fps <= 0 {
+		fps = req.SampleFPSAlt
+	}
+	cfgJSON := req.ConfigJSON
+	if cfgJSON == "" {
+		cfgJSON = req.ConfigJSONAlt
+	}
+
+	return &AnalysisTask{
+		ID:          req.ID,
+		CameraID:    camID,
+		AlgorithmID: algoID,
+		SampleFPS:   fps,
+		ConfigJSON:  cfgJSON,
+	}
+}
+
 // CreateTask godoc
 // @Summary      Create an analysis task
 // @Description  Binds a camera to an algorithm with a sampling rate and a config JSON document. Both camelCase and snake_case request keys are accepted; the snake_case alias is used only when the camelCase key is absent. Missing id, cameraId or algorithmId is rejected with 422 VALIDATION_FAILED. Returns 409 COMPUTE_BUDGET_EXCEEDED when the accumulated compute cost of enabled tasks exceeds the host budget.
@@ -385,69 +319,13 @@ func (h *Handler) CreateTask(c *gin.Context) {
 		return
 	}
 
-	camID := req.CameraID
-	if camID == "" {
-		camID = req.CameraIDAlt
-	}
-	algoID := req.AlgorithmID
-	if algoID == "" {
-		algoID = req.AlgorithmIDAlt
-	}
-
-	if camID == "" || algoID == "" {
-		httputil.WriteError(c, httputil.NewError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "CameraID and AlgorithmID are required", nil))
+	task := req.ToTask()
+	if err := h.service.CreateTask(c.Request.Context(), task); err != nil {
+		httputil.WriteError(c, err)
 		return
 	}
 
-	fps := req.SampleFPS
-	if fps <= 0 {
-		fps = req.SampleFPSAlt
-	}
-	if fps <= 0 {
-		fps = 5
-	}
-
-	cfgJSON := req.ConfigJSON
-	if cfgJSON == "" {
-		cfgJSON = req.ConfigJSONAlt
-	}
-	if cfgJSON == "" {
-		cfgJSON = "{}"
-	}
-
-	task := AnalysisTask{
-		ID:          req.ID,
-		CameraID:    camID,
-		AlgorithmID: algoID,
-		Enabled:     true,
-		SampleFPS:   fps,
-		ConfigJSON:  cfgJSON,
-	}
-	if task.ID == "" {
-		task.ID = idutil.New()
-	}
-
-	if err := h.service.CreateTask(c.Request.Context(), &task); err != nil {
-		if errors.Is(err, ErrComputeBudgetExceeded) {
-			httputil.WriteError(c, httputil.NewError(http.StatusConflict, "COMPUTE_BUDGET_EXCEEDED", err.Error(), err))
-			return
-		}
-		if errors.Is(err, ErrInvalidTaskConfig) {
-			httputil.WriteError(c, httputil.NewError(http.StatusUnprocessableEntity, "VALIDATION_FAILED", "Analysis task config is invalid", err))
-			return
-		}
-		if errors.Is(err, ErrInvalidConfigSchema) {
-			httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Algorithm config schema is invalid", err))
-			return
-		}
-		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "TASK_CREATE_FAILED", err.Error(), err))
-		return
-	}
-	c.JSON(http.StatusCreated, httputil.Response{
-		Code:    "OK",
-		Message: "Analysis task created successfully",
-		Data:    task,
-	})
+	httputil.SuccessWithStatus(c, http.StatusCreated, task)
 }
 
 // DeleteTask godoc
@@ -464,11 +342,7 @@ func (h *Handler) DeleteTask(c *gin.Context) {
 	audithttp.Tag(c, ActionAlgorithmTaskDelete, "algorithm.task:"+id, "Delete analysis task "+id)
 
 	if err := h.service.DeleteTask(c.Request.Context(), id); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			httputil.WriteError(c, httputil.NewError(http.StatusNotFound, "TASK_NOT_FOUND", "Analysis task not found", err))
-			return
-		}
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to delete analysis task", err))
+		httputil.WriteError(c, err)
 		return
 	}
 	httputil.Success(c, gin.H{"deleted": true})

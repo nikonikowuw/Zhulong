@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
 
 const (
@@ -295,4 +298,36 @@ func extractZip(r io.ReaderAt, size int64, cleanDestDir string) error {
 	}
 
 	return nil
+}
+
+// ExtractMultipartFile extracts a specific form file part from an incoming multipart HTTP request.
+// It returns the part ReadCloser and a cleanup closure to close the part.
+func ExtractMultipartFile(r *http.Request, fieldName string) (io.ReadCloser, func(), error) {
+	reader, err := r.MultipartReader()
+	if err != nil {
+		return nil, nil, httputil.NewError(http.StatusBadRequest, "INVALID_FILE", "Missing upload file", err)
+	}
+
+	for {
+		part, err := reader.NextPart()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				return nil, nil, httputil.NewError(http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "Uploaded file exceeds size limit", err)
+			}
+			return nil, nil, httputil.NewError(http.StatusBadRequest, "INVALID_FILE", "Failed to read multipart stream", err)
+		}
+
+		if part.FormName() != fieldName {
+			_ = part.Close()
+			continue
+		}
+
+		return part, func() { _ = part.Close() }, nil
+	}
+
+	return nil, nil, httputil.NewError(http.StatusBadRequest, "INVALID_FILE", "Missing upload file", nil)
 }
