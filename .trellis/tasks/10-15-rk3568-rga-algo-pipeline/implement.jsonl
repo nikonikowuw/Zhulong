@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "RGA 硬件前处理、wrapbuffer_fd 与 DMA-BUF 零拷贝流转规范与防挂死契约"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法插件接口契约与 Tensor / Image 视图规范"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "HardwareFrame 与 FrameBroker 槽位分发与生命周期规范"}

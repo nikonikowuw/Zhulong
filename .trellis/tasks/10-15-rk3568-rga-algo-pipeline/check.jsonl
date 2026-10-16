@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "硬件零拷贝流水线与 RGA 验证规范"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法插件集成与错误处理规范"}
