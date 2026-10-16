@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Go 包组织与分层架构标准"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Uber Fx 依赖注入与组件生命周期规范"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "RESTful 路由、信封响应与 Handler 规约"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "apperr 错误分类与统一错误处理规约"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "GORM 与 DBProvider 持久化规约"}

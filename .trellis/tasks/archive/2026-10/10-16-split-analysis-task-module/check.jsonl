@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端代码质量与测试覆盖率门禁"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "统一响应与错误码规范校验"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "RESTful 接口契约与 HTTP 信封格式检查"}
