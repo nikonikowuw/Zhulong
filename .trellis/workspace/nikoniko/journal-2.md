@@ -349,3 +349,27 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+## Session 52: 拆分 analysis_task 为独立 internal/task 模块
+<!-- trellis-session: v=2 fp=38d9111e03603e94 -->
+
+**Date**: 2026-10-17
+**Task**: 拆分 analysis_task 为独立 internal/task 模块
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+将视频分析任务从 internal/algorithm 剥离为独立的 internal/task 领域包；通过 AlgorithmSpecProvider 与 TaskChangeListener 接口反转彻底消除双向代码依赖；实现完整任务 CRUD（补齐 PUT /tasks/:id）、算力预算控制与单元测试；完成 internal/app Uber Fx 编排与 brokerSubscriptionResolver 适配；更新 Makefile、Swagger API 文档与 Trellis 规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `afe8d61` | feat(task): split analysis task into standalone domain and decouple from algorithm |
+| `f3b9c61` | docs(spec): document task guidelines and update backend directory structure |
+
+### Status
+
+[OK] **Completed**

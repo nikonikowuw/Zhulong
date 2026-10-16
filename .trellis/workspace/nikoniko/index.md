@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 51
-- **Last Active**: 2026-10-16
+- **Total Sessions**: 52
+- **Last Active**: 2026-10-17
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~351 | Active |
+| `journal-2.md` | ~375 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 52 | 2026-10-17 | 拆分 analysis_task 为独立 internal/task 模块 | `afe8d61`, `f3b9c61` | `dev` |
 | 51 | 2026-10-16 | 重构 internal/algorithm 控制面分层与 apperr 错误收拢 | `3d09129`, `7acc4d0` | `dev` |
 | 48 | 2026-10-16 | RGA letterbox hardware acceleration and FrameBroker zero-copy pass-through | `87d9942`, `7cfeb15` | `dev` |
 | 47 | 2026-10-16 | Spec 精简任务收尾归档与 SSOT 一致性校验 | `b004189` | `dev` |
