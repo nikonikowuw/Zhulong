@@ -67,4 +67,11 @@ func TestExtractFaceFeature_ValidationAndSuccess(t *testing.T) {
 	if math.Abs(norm-1.0) > 1e-3 {
 		t.Errorf("expected unit L2 norm, got %f", norm)
 	}
+
+	// 5. 超出最大允许尺寸 (单边 > 4096) 应返回 ErrInvalidArgument
+	oversizedPNG := createTestPNG(4097, 1, color.White)
+	_, err = eng.ExtractFaceFeature(ctx, oversizedPNG)
+	if err == nil {
+		t.Fatal("expected error on oversized image dimension")
+	}
 }

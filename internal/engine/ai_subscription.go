@@ -12,6 +12,7 @@ import (
 	"runtime/cgo"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // AIResultSubscription 封装对物理流 AI 推理结果事件流的订阅。
@@ -152,6 +153,13 @@ func (s *AIResultSubscription) Err() error {
 	return s.err
 }
 
+func (s *AIResultSubscription) signal() {
+	select {
+	case s.notify <- struct{}{}:
+	default:
+	}
+}
+
 // Close 幂等注销该 AI 结果订阅并排空回收 cgo.Handle。
 func (s *AIResultSubscription) Close() error {
 	var err error
@@ -164,6 +172,7 @@ func (s *AIResultSubscription) Close() error {
 		s.closed = true
 		s.mu.Unlock()
 		close(s.done)
+		s.signal()
 
 		if s.stream != nil && s.stream.engine != nil && s.id > 0 {
 			err = s.stream.engine.unsubscribeAIResults(s.generation, s.streamID, s.id, s.deleteToken)
@@ -176,4 +185,59 @@ func (s *AIResultSubscription) Close() error {
 		}
 	})
 	return err
+}
+
+// runControlLoop 监控订阅生命周期与底层物理流状态（每 250ms 轮询）。
+func (s *AIResultSubscription) runControlLoop(ctx context.Context) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.mu.Lock()
+			if !s.closed && s.err == nil {
+				s.err = ctx.Err()
+			}
+			s.mu.Unlock()
+			_ = s.Close()
+			return
+		case <-s.done:
+			_ = s.Close()
+			return
+		case <-ticker.C:
+			if s.stream == nil {
+				continue
+			}
+			status, err := s.stream.Status(ctx)
+			if err != nil {
+				s.mu.Lock()
+				if !s.closed {
+					s.err = err
+					s.closed = true
+					close(s.done)
+				}
+				s.mu.Unlock()
+				s.signal()
+				_ = s.Close()
+				return
+			}
+			if status.State == StreamFailed {
+				s.mu.Lock()
+				if !s.closed {
+					if status.Error != nil {
+						s.err = status.Error
+					} else {
+						s.err = ErrIO
+					}
+					s.closed = true
+					close(s.done)
+				}
+				s.mu.Unlock()
+				s.signal()
+				_ = s.Close()
+				return
+			}
+		}
+	}
 }

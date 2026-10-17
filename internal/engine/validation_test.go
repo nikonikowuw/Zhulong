@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nikonikowuw/Zhulong/internal/algoipc"
 )
 
 func TestValidateRTSPURI(t *testing.T) {
@@ -136,5 +138,57 @@ func TestErrorSanitization(t *testing.T) {
 
 	if !errors.Is(err, ErrIO) {
 		t.Fatalf("expected ErrIO, got %v", err)
+	}
+}
+
+func TestSentinelErrorsMatching(t *testing.T) {
+	cases := []struct {
+		code   StatusCode
+		target error
+	}{
+		{StatusInvalidArgument, ErrInvalidArgument},
+		{StatusOutOfMemory, ErrOutOfMemory},
+		{StatusUnsupported, ErrUnsupported},
+		{StatusNotFound, ErrNotFound},
+		{StatusDuplicate, ErrDuplicate},
+		{StatusConfigConflict, ErrConfigConflict},
+		{StatusTimeout, ErrTimeout},
+		{StatusNotRunning, ErrNotRunning},
+		{StatusBusy, ErrBusy},
+		{StatusIO, ErrIO},
+		{StatusCancelled, ErrCancelled},
+		{StatusBufferTooSmall, ErrBufferTooSmall},
+		{StatusInternal, ErrInternal},
+		{StatusClosed, ErrClosed},
+		{StatusBackpressure, ErrBackpressure},
+		{StatusPacketTooLarge, ErrPacketTooLarge},
+		{StatusStaleResource, ErrStaleResource},
+		{StatusResourceExhausted, ErrResourceExhausted},
+	}
+
+	for _, c := range cases {
+		err := mapNativeStatus("test", int32(c.code))
+		if !errors.Is(err, c.target) {
+			t.Errorf("expected mapNativeStatus code %d to match sentinel %v, got %v", c.code, c.target, err)
+		}
+	}
+}
+
+func TestBroadcastAIMessageValidation(t *testing.T) {
+	e := New()
+	ctx := context.Background()
+
+	// 1. 超限载荷 (> algoipc.MaxIpcPayloadSize) 必须返回 ErrInvalidArgument
+	tooLargePayload := make([]byte, algoipc.MaxIpcPayloadSize+1)
+	err := e.BroadcastAIMessage(ctx, 1, 10, tooLargePayload)
+	if !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("expected ErrInvalidArgument for payload exceeding limit, got %v", err)
+	}
+
+	// 2. 引擎未启动时返回 ErrNotRunning
+	validPayload := make([]byte, algoipc.MaxIpcPayloadSize)
+	err = e.BroadcastAIMessage(ctx, 1, 10, validPayload)
+	if !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("expected ErrNotRunning for unstarted engine, got %v", err)
 	}
 }

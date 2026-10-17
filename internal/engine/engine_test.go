@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"sync"
 	"testing"
 )
@@ -69,5 +70,71 @@ func TestEngineConcurrentLifecycleCalls(t *testing.T) {
 
 	if err := engine.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestEngineConcurrentCloseWithOperations(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		engine := New()
+		if err := engine.Start(); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+
+		ctx := context.Background()
+		var wg sync.WaitGroup
+		wg.Add(3)
+
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				_ = engine.BroadcastAIMessage(ctx, 1, 10, []byte("payload"))
+			}
+		}()
+
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				_ = engine.setPublishRate(engine.generation, 1, 30)
+			}
+		}()
+
+		go func() {
+			defer wg.Done()
+			_ = engine.Close()
+		}()
+
+		wg.Wait()
+		_ = engine.Close()
+	}
+}
+
+func TestUnsubscribeDeferredOnNotRunning(t *testing.T) {
+	e := New()
+	if err := e.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	tokenDeleted := false
+	deleteToken := func() {
+		tokenDeleted = true
+	}
+
+	// 停机后底层返回 ERR_NOT_RUNNING，应当暂存 token 避免立即与在途 worker 竞争
+	if err := e.Stop(); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+
+	_ = e.unsubscribe(e.generation, 1, 1, deleteToken)
+	if tokenDeleted {
+		t.Fatal("expected deleteToken to be deferred during ERR_NOT_RUNNING")
+	}
+
+	// 最终 Close 会排空并执行 pendingTokens
+	if err := e.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	if !tokenDeleted {
+		t.Fatal("expected deleteToken to be executed after engine stop/close")
 	}
 }

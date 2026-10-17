@@ -144,12 +144,15 @@ func (s *Stream) Close() error {
 		s.mu.Lock()
 		s.closed = true
 		sub := s.activeSub
+		aiSub := s.activeAISub
+		s.activeSub = nil
+		s.activeAISub = nil
 		s.mu.Unlock()
 
 		if sub != nil {
 			_ = sub.Close()
 		}
-		if aiSub := s.activeAISub; aiSub != nil {
+		if aiSub != nil {
 			_ = aiSub.Close()
 		}
 
@@ -206,13 +209,7 @@ func (s *Stream) SubscribeAIResults(ctx context.Context) (*AIResultSubscription,
 	s.activeAISub = sub
 	s.mu.Unlock()
 
-	go func() {
-		select {
-		case <-ctrlCtx.Done():
-			_ = sub.Close()
-		case <-sub.Done():
-		}
-	}()
+	go sub.runControlLoop(ctrlCtx)
 
 	return sub, nil
 }

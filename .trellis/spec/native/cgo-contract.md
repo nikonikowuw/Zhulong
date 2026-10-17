@@ -93,6 +93,10 @@ func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]f
 
 `Start` 在持锁下创建 C-owned handle 并启动；启动失败时销毁 handle。`Stop` 不销毁句柄；幂等 `Close` 停止并销毁。Go 只保存不透明句柄值，不向 C 侧暴露可逃逸的 Go 指针。C++ 静态库由 `make native-build` 构建到 `build/native/host/libZhulongEngine.a`。Go 命令必须通过 `native/scripts/build.py go ...` 或 Make：脚本传递 Engine 内容摘要路径、FFmpeg 三个静态归档及目标系统库，避免 Go 外部归档缓存过期。交叉产物使用独立目录，不覆盖 host。
 
+句柄生命周期防护与并发控制：
+- **句柄操作读写锁隔离 (`handleMu sync.RWMutex`)**：所有跨 CGO 访问底层 `handle` 的调用均在读锁保护下执行（`handleMu.RLock()` / `handleMu.RUnlock()`）；`Close()` 销毁 `handle` 前必须获取写锁（`handleMu.Lock()`）彻底排空在途调用，消除野指针与 Use-After-Free 隐患。
+- **停机注销延迟排空**：若退订发生在底层引擎停机期间（返回 `Zhulong_ERR_NOT_RUNNING`），严禁立即调用 `deleteToken()`，必须暂存并在底层工作线程全部 `join()` 汇合完成后（`stopInternal` 之后）统一释放，防止残余回调在注销后访问非法 `cgo.Handle`。
+
 ---
 
 ## 4. 线程绑定与异步回调守则

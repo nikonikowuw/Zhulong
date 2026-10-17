@@ -154,4 +154,5 @@ const (
 	DefaultMaxBufferedBytes   = 16 * 1024 * 1024
 	HardLimitMaxBufferedBytes = 64 * 1024 * 1024
 	MaxExtraDataBytes         = 1024 * 1024 // 1 MiB 上限
+	MaxFaceImageDimension     = 4096        // 4096 像素单边上限，防止解压炸弹 OOM
 )

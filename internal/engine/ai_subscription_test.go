@@ -59,3 +59,16 @@ func TestAIResultSubscription_ContextCancel(t *testing.T) {
 		t.Errorf("expected DeadlineExceeded, got: %v", err)
 	}
 }
+
+func TestAIResultSubscription_ControlLoopCancel(t *testing.T) {
+	sub := newAIResultSubscription(nil, 1, 1, 3)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	sub.runControlLoop(ctx)
+
+	if sub.Err() != context.Canceled {
+		t.Errorf("expected context.Canceled in sub.Err(), got %v", sub.Err())
+	}
+}

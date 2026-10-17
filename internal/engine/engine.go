@@ -34,6 +34,8 @@ import (
 	"runtime/cgo"
 	"sync"
 	"unsafe"
+
+	"github.com/nikonikowuw/Zhulong/internal/algoipc"
 )
 
 type probeContext struct {
@@ -44,11 +46,14 @@ type probeContext struct {
 type Engine struct {
 	lifecycleMu sync.Mutex // 串行化 Start, Stop, Close 等长时生命周期切换
 
-	mu         sync.Mutex // 保护运行态、句柄及代次状态
-	handle     C.Zhulong_engine_h
-	running    bool
-	stopping   bool
-	generation uint64
+	handleMu sync.RWMutex // 读写保护底层 handle 的 CGO 调用与销毁
+
+	mu            sync.Mutex // 保护运行态、句柄及代次状态
+	handle        C.Zhulong_engine_h
+	running       bool
+	stopping      bool
+	generation    uint64
+	pendingTokens []func()
 
 	probeTokens  chan struct{}
 	probesMu     sync.Mutex
@@ -170,7 +175,13 @@ func (e *Engine) stopInternal() error {
 
 	e.mu.Lock()
 	e.stopping = false
+	tokensToDrain := e.pendingTokens
+	e.pendingTokens = nil
 	e.mu.Unlock()
+
+	for _, fn := range tokensToDrain {
+		fn()
+	}
 
 	if status != C.Zhulong_OK {
 		return mapNativeStatus("stop", int32(status))
@@ -199,6 +210,7 @@ func (e *Engine) Close() error {
 
 	stopErr := e.stopInternal()
 
+	e.handleMu.Lock()
 	e.mu.Lock()
 	if e.handle != nil {
 		C.Zhulong_engine_destroy(e.handle)
@@ -207,6 +219,7 @@ func (e *Engine) Close() error {
 	e.running = false
 	e.stopping = false
 	e.mu.Unlock()
+	e.handleMu.Unlock()
 
 	return stopErr
 }
@@ -334,6 +347,9 @@ func (e *Engine) Acquire(ctx context.Context, uri string, consumerID uint64, kin
 		return nil, err
 	}
 
+	e.handleMu.RLock()
+	defer e.handleMu.RUnlock()
+
 	e.mu.Lock()
 	if !e.running || e.stopping || e.handle == nil {
 		e.mu.Unlock()
@@ -376,6 +392,9 @@ func (e *Engine) Acquire(ctx context.Context, uri string, consumerID uint64, kin
 }
 
 func (e *Engine) getStreamStatus(gen uint64, streamID C.Zhulong_stream_id) (StreamStatus, error) {
+	e.handleMu.RLock()
+	defer e.handleMu.RUnlock()
+
 	e.mu.Lock()
 	if e.handle == nil || e.generation != gen {
 		e.mu.Unlock()
@@ -402,6 +421,9 @@ func (e *Engine) getStreamStatus(gen uint64, streamID C.Zhulong_stream_id) (Stre
 }
 
 func (e *Engine) subscribe(gen uint64, streamID C.Zhulong_stream_id, consumerID uint64, sub *Subscription) (C.Zhulong_subscription_id, uintptr, error) {
+	e.handleMu.RLock()
+	defer e.handleMu.RUnlock()
+
 	e.mu.Lock()
 	if e.handle == nil || !e.running || e.stopping || e.generation != gen {
 		e.mu.Unlock()
@@ -432,6 +454,9 @@ func (e *Engine) subscribe(gen uint64, streamID C.Zhulong_stream_id, consumerID 
 }
 
 func (e *Engine) unsubscribe(gen uint64, streamID C.Zhulong_stream_id, subID C.Zhulong_subscription_id, deleteToken func()) error {
+	e.handleMu.RLock()
+	defer e.handleMu.RUnlock()
+
 	e.mu.Lock()
 	if e.handle == nil || e.generation != gen {
 		e.mu.Unlock()
@@ -442,8 +467,12 @@ func (e *Engine) unsubscribe(gen uint64, streamID C.Zhulong_stream_id, subID C.Z
 	e.mu.Unlock()
 
 	st := C.Zhulong_stream_unsubscribe(handle, streamID, subID)
-	if st == C.Zhulong_OK || st == C.Zhulong_ERR_NOT_RUNNING || st == C.Zhulong_ERR_NOT_FOUND {
+	if st == C.Zhulong_OK || st == C.Zhulong_ERR_NOT_FOUND {
 		deleteToken()
+	} else if st == C.Zhulong_ERR_NOT_RUNNING {
+		e.mu.Lock()
+		e.pendingTokens = append(e.pendingTokens, deleteToken)
+		e.mu.Unlock()
 	}
 
 	if st != C.Zhulong_OK {
@@ -453,6 +482,9 @@ func (e *Engine) unsubscribe(gen uint64, streamID C.Zhulong_stream_id, subID C.Z
 }
 
 func (e *Engine) subscribeAIResults(gen uint64, streamID C.Zhulong_stream_id, sub *AIResultSubscription) (C.Zhulong_subscription_id, uintptr, error) {
+	e.handleMu.RLock()
+	defer e.handleMu.RUnlock()
+
 	e.mu.Lock()
 	if e.handle == nil || !e.running || e.stopping || e.generation != gen {
 		e.mu.Unlock()
@@ -482,6 +514,9 @@ func (e *Engine) subscribeAIResults(gen uint64, streamID C.Zhulong_stream_id, su
 }
 
 func (e *Engine) unsubscribeAIResults(gen uint64, streamID C.Zhulong_stream_id, subID C.Zhulong_subscription_id, deleteToken func()) error {
+	e.handleMu.RLock()
+	defer e.handleMu.RUnlock()
+
 	e.mu.Lock()
 	if e.handle == nil || e.generation != gen {
 		e.mu.Unlock()
@@ -492,8 +527,12 @@ func (e *Engine) unsubscribeAIResults(gen uint64, streamID C.Zhulong_stream_id, 
 	e.mu.Unlock()
 
 	st := C.Zhulong_stream_unsubscribe_ai_results(handle, streamID, subID)
-	if st == C.Zhulong_OK || st == C.Zhulong_ERR_NOT_RUNNING || st == C.Zhulong_ERR_NOT_FOUND {
+	if st == C.Zhulong_OK || st == C.Zhulong_ERR_NOT_FOUND {
 		deleteToken()
+	} else if st == C.Zhulong_ERR_NOT_RUNNING {
+		e.mu.Lock()
+		e.pendingTokens = append(e.pendingTokens, deleteToken)
+		e.mu.Unlock()
 	}
 
 	if st != C.Zhulong_OK {
@@ -503,6 +542,9 @@ func (e *Engine) unsubscribeAIResults(gen uint64, streamID C.Zhulong_stream_id, 
 }
 
 func (e *Engine) releaseStream(gen uint64, streamID C.Zhulong_stream_id, consumerID uint64) error {
+	e.handleMu.RLock()
+	defer e.handleMu.RUnlock()
+
 	e.mu.Lock()
 	if e.handle == nil || e.generation != gen {
 		e.mu.Unlock()
@@ -519,6 +561,9 @@ func (e *Engine) releaseStream(gen uint64, streamID C.Zhulong_stream_id, consume
 }
 
 func (e *Engine) getBrokerPath(gen uint64, streamID C.Zhulong_stream_id) (string, error) {
+	e.handleMu.RLock()
+	defer e.handleMu.RUnlock()
+
 	e.mu.Lock()
 	if e.handle == nil || !e.running || e.stopping || e.generation != gen {
 		e.mu.Unlock()
@@ -537,6 +582,9 @@ func (e *Engine) getBrokerPath(gen uint64, streamID C.Zhulong_stream_id) (string
 }
 
 func (e *Engine) setPublishRate(gen uint64, streamID C.Zhulong_stream_id, fps uint32) error {
+	e.handleMu.RLock()
+	defer e.handleMu.RUnlock()
+
 	e.mu.Lock()
 	if e.handle == nil || !e.running || e.stopping || e.generation != gen {
 		e.mu.Unlock()
@@ -632,6 +680,9 @@ func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]f
 	if w <= 0 || h <= 0 {
 		return nil, fmt.Errorf("%w: invalid image dimensions (%dx%d)", ErrInvalidArgument, w, h)
 	}
+	if w > MaxFaceImageDimension || h > MaxFaceImageDimension {
+		return nil, fmt.Errorf("%w: image dimensions %dx%d exceed maximum allowed %d", ErrInvalidArgument, w, h, MaxFaceImageDimension)
+	}
 
 	// 转换为打包连续 RGB24 像素
 	rgb := make([]byte, w*h*3)
@@ -651,6 +702,9 @@ func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]f
 
 	var handle C.Zhulong_engine_h
 	if e != nil {
+		e.handleMu.RLock()
+		defer e.handleMu.RUnlock()
+
 		e.mu.Lock()
 		handle = e.handle
 		e.mu.Unlock()
@@ -679,14 +733,17 @@ func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]f
 // BroadcastAIMessage sends a typed control payload (e.g. MSG_GALLERY_*) to the FrameBroker of
 // the specified stream (or all active streams if streamID is 0) to reach connected algorithm runners.
 func (e *Engine) BroadcastAIMessage(ctx context.Context, streamID uint64, msgType uint16, payload []byte) error {
-	if len(payload) > 64*1024 {
-		return fmt.Errorf("%w: payload exceeds 64KB limit (%d bytes)", ErrInvalidArgument, len(payload))
+	if len(payload) > algoipc.MaxIpcPayloadSize {
+		return fmt.Errorf("%w: payload exceeds %d limit (%d bytes)", ErrInvalidArgument, algoipc.MaxIpcPayloadSize, len(payload))
 	}
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 	}
+
+	e.handleMu.RLock()
+	defer e.handleMu.RUnlock()
 
 	e.mu.Lock()
 	if e.handle == nil || !e.running || e.stopping {
