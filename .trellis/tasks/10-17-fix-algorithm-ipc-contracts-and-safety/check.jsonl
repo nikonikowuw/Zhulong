@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "验证 IPC 线格式未漂移、租约状态机语义不变、64KB 门禁两侧对称"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "验证发布失败为显式失败而非静默丢帧，且停机汇合顺序未被破坏"}
+{"file": ".trellis/spec/native/index.md", "reason": "验证异常安全、无未定义行为（数据竞争为阻塞级）、内存所有权明确"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "验证代码质量、错误处理规范与测试覆盖要求"}

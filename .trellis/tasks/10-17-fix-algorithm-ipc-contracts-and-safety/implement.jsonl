@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "定义 FrameBroker 槽位租约状态机、代次防 ABA、IPC 自然对齐、SCM_RIGHTS 透传与 64KB payload 门禁 —— 本任务全部改动的契约基准"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "定义 FramePublisher 发布侧节流、有界队列背压、五步优雅停机与 AI 帧通道契约"}
+{"file": ".trellis/spec/native/index.md", "reason": "原生层开发前检查清单：异常防爆门、内存所有权、队列有界背压、停机汇合"}
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "DMA-BUF 双轨分发、CPU Cache 同步括号与 SCM_RIGHTS 传输契约"}
