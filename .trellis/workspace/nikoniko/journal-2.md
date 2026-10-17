@@ -747,3 +747,31 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+
+## Session 63: 开发通道多算法分析任务管理前端模块
+<!-- trellis-session: v=2 fp=tasks-frontend-01 -->
+
+**Date**: 2026-10-17
+**Task**: 开发分析任务管理前端模块 (Analysis Tasks Frontend)
+**Package**: frontend
+**Branch**: `dev`
+
+### Summary
+
+构建并交付了 web/src/features/tasks 独立分析任务管理前端模块，对齐旷视、英特灵达等成熟商业边缘计算产品的「通道级多算法聚合」心智模型：
+1. 模型与 API：在 web/src/features/tasks/data/schema.ts 与 api/tasks-api.ts 中完整接入后端 /api/v1/tasks RESTful 契约，以 Zod 实现 100% 运行时类型解析；
+2. 状态管理与派生：封装 useTasks、useTaskComputeBudget（实时核算全局 1,000 点 NPU 算力池消耗与阈值预警）、useChannelTasks（纯函数渲染期聚合 Camera ⇄ 多 Algorithm）以及 useSyncChannelAlgorithms（多算法批量差量同步，实现原子 POST/PUT/DELETE）；
+3. 商业 UI 体系：
+   - TasksComputeBudgetCard：动态三段式渐变进度条与活跃指标矩阵；
+   - ChannelTasksView：商业级通道卡片视图，展示每路相机的在线状态、已绑算法徽标与通道算力；
+   - TasksTable：运维排查扁平明细表格，支持搜索/筛选、复制 ULID、以及行内 Switch 实时启停与防穿透 Sticky 操作列；
+   - ChannelTaskDialog：通道多算法复选矩阵，支持按需展开 FPS 滑块、高级 JSON 参数格式化、以及全平台总算力超限前置阻断；
+   - TaskDeleteDialog：破坏性操作二次确认；
+4. 路由与多语言：挂载 /tasks 路由至 TanStack Router 并自动更新 routeTree.gen.ts，在侧边栏 General 分组注册入口，补齐 zh-Hans、zh-Hant、en 三语字典；
+5. 门禁验证：编写 5 个单元与组件测试文件（14 个测试全通），通过 eslint 静态检查，通过 pnpm run build，且通过项目级 make check（含 native 20 个 CTest、Go 单元测试与端到端桥接测试）。
+
+### Status
+
+[OK] **Completed**

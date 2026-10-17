@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "13 Core Rules, Table & Form patterns, URL state sync"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "Feature slice layout conventions and route bindings"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "Tailwind OKLCH tokens, Dot-Indicator badge patterns, and trilingual i18n"}
+{"file": ".trellis/spec/backend/task-guidelines.md", "reason": "Backend Task model, RESTful endpoints, and compute points budget contract"}

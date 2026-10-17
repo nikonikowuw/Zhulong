@@ -18,6 +18,7 @@ import { Route as errors403RouteImport } from './routes/(errors)/403'
 import { Route as errors401RouteImport } from './routes/(errors)/401'
 import { Route as authSignInRouteImport } from './routes/(auth)/sign-in'
 import { Route as AuthenticatedSettingsRouteRouteImport } from './routes/_authenticated/settings/route'
+import { Route as AuthenticatedTasksIndexRouteImport } from './routes/_authenticated/tasks/index'
 import { Route as AuthenticatedSettingsIndexRouteImport } from './routes/_authenticated/settings/index'
 import { Route as AuthenticatedRecordsIndexRouteImport } from './routes/_authenticated/records/index'
 import { Route as AuthenticatedPersonsIndexRouteImport } from './routes/_authenticated/persons/index'
@@ -76,6 +77,11 @@ const AuthenticatedSettingsRouteRoute =
     path: '/settings',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedTasksIndexRoute = AuthenticatedTasksIndexRouteImport.update({
+  id: '/tasks/',
+  path: '/tasks/',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedSettingsIndexRoute =
   AuthenticatedSettingsIndexRouteImport.update({
     id: '/',
@@ -168,6 +174,7 @@ export interface FileRoutesByFullPath {
   '/persons/': typeof AuthenticatedPersonsIndexRoute
   '/records/': typeof AuthenticatedRecordsIndexRoute
   '/settings/': typeof AuthenticatedSettingsIndexRoute
+  '/tasks/': typeof AuthenticatedTasksIndexRoute
 }
 export interface FileRoutesByTo {
   '/sign-in': typeof authSignInRoute
@@ -189,6 +196,7 @@ export interface FileRoutesByTo {
   '/persons': typeof AuthenticatedPersonsIndexRoute
   '/records': typeof AuthenticatedRecordsIndexRoute
   '/settings': typeof AuthenticatedSettingsIndexRoute
+  '/tasks': typeof AuthenticatedTasksIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -213,6 +221,7 @@ export interface FileRoutesById {
   '/_authenticated/persons/': typeof AuthenticatedPersonsIndexRoute
   '/_authenticated/records/': typeof AuthenticatedRecordsIndexRoute
   '/_authenticated/settings/': typeof AuthenticatedSettingsIndexRoute
+  '/_authenticated/tasks/': typeof AuthenticatedTasksIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -237,6 +246,7 @@ export interface FileRouteTypes {
     | '/persons/'
     | '/records/'
     | '/settings/'
+    | '/tasks/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/sign-in'
@@ -258,6 +268,7 @@ export interface FileRouteTypes {
     | '/persons'
     | '/records'
     | '/settings'
+    | '/tasks'
   id:
     | '__root__'
     | '/_authenticated'
@@ -281,6 +292,7 @@ export interface FileRouteTypes {
     | '/_authenticated/persons/'
     | '/_authenticated/records/'
     | '/_authenticated/settings/'
+    | '/_authenticated/tasks/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -356,6 +368,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof AuthenticatedSettingsRouteRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/tasks/': {
+      id: '/_authenticated/tasks/'
+      path: '/tasks'
+      fullPath: '/tasks/'
+      preLoaderRoute: typeof AuthenticatedTasksIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/settings/': {
@@ -477,6 +496,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedLiveIndexRoute: typeof AuthenticatedLiveIndexRoute
   AuthenticatedPersonsIndexRoute: typeof AuthenticatedPersonsIndexRoute
   AuthenticatedRecordsIndexRoute: typeof AuthenticatedRecordsIndexRoute
+  AuthenticatedTasksIndexRoute: typeof AuthenticatedTasksIndexRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
@@ -489,6 +509,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedLiveIndexRoute: AuthenticatedLiveIndexRoute,
   AuthenticatedPersonsIndexRoute: AuthenticatedPersonsIndexRoute,
   AuthenticatedRecordsIndexRoute: AuthenticatedRecordsIndexRoute,
+  AuthenticatedTasksIndexRoute: AuthenticatedTasksIndexRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =

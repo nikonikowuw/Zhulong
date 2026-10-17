@@ -12,6 +12,7 @@ import {
   Server,
   Cpu,
   Images,
+  Workflow,
 } from 'lucide-react'
 import { type SidebarData } from '../types'
 
@@ -51,6 +52,11 @@ export const sidebarData: SidebarData = {
           title: 'Algorithms',
           url: '/algorithms',
           icon: Cpu,
+        },
+        {
+          title: 'Tasks',
+          url: '/tasks',
+          icon: Workflow,
         },
         {
           title: 'Live View',

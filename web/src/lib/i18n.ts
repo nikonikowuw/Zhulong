@@ -31,6 +31,9 @@ import storageZhHant from '@/features/settings/storage/locales/zh-Hant.json'
 import timeEn from '@/features/settings/time/locales/en.json'
 import timeZhHans from '@/features/settings/time/locales/zh-Hans.json'
 import timeZhHant from '@/features/settings/time/locales/zh-Hant.json'
+import tasksEn from '@/features/tasks/locales/en.json'
+import tasksZhHans from '@/features/tasks/locales/zh-Hans.json'
+import tasksZhHant from '@/features/tasks/locales/zh-Hant.json'
 
 export const SUPPORTED_LANGUAGES = ['zh-Hans', 'zh-Hant', 'en'] as const
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number]
@@ -47,6 +50,7 @@ export const resources = {
     persons: personsZhHans,
     records: recordsZhHans,
     algorithms: algorithmsZhHans,
+    tasks: tasksZhHans,
   },
   'zh-Hant': {
     common: commonZhHant,
@@ -59,6 +63,7 @@ export const resources = {
     persons: personsZhHant,
     records: recordsZhHant,
     algorithms: algorithmsZhHant,
+    tasks: tasksZhHant,
   },
   en: {
     common: commonEn,
@@ -71,6 +76,7 @@ export const resources = {
     persons: personsEn,
     records: recordsEn,
     algorithms: algorithmsEn,
+    tasks: tasksEn,
   },
 } as const
 
