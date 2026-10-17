@@ -250,14 +250,6 @@ func (s *Supervisor) RestartAlgorithm(ctx context.Context, algoID string) error 
 	}
 
 	if startErr := s.StartAlgorithm(ctx, algo); startErr != nil {
-		if wasActive && s.store != nil {
-			if updateErr := s.store.UpdateAlgorithmStatus(ctx, algoID, StatusActive); updateErr != nil {
-				s.logger.Error("failed to restore algorithm status after failed restart",
-					zap.String("id", algoID),
-					zap.Error(updateErr),
-				)
-			}
-		}
 		return startErr
 	}
 
@@ -273,17 +265,22 @@ func (s *Supervisor) RestartAlgorithm(ctx context.Context, algoID string) error 
 // UpgradeAlgorithm gracefully transitions from an old version to a new version with rollback observation.
 func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo PackageMeta, oldAlgo PackageMeta) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// 1. Stop old worker if running
-	if oldWatcher, exists := s.watchers[oldAlgo.ID]; exists {
+	oldWatcher, exists := s.watchers[oldAlgo.ID]
+	if exists {
 		delete(s.watchers, oldAlgo.ID)
-		close(oldWatcher.stopCh)
-		if stopErr := oldWatcher.process.Stop(3 * time.Second); stopErr != nil {
+	}
+	s.mu.Unlock()
+
+	// 1. Stop old worker if running outside of s.mu to prevent deadlock with superviseLoop
+	if exists {
+		if stopErr := oldWatcher.stopProcess(3 * time.Second); stopErr != nil {
 			s.logger.Warn("failed to stop old algorithm process during upgrade", zap.String("id", oldAlgo.ID), zap.Error(stopErr))
 		}
 		<-oldWatcher.doneCh
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	// 2. Set up new worker with RollbackGuard
 	brokerSocks, err := s.resolveBrokerSocksLocked(ctx, newAlgo.ID)
@@ -412,20 +409,25 @@ func (s *Supervisor) ResetAlgorithm(ctx context.Context, algoID string) error {
 			s.mu.Unlock()
 			return ErrAlgorithmNotInCrashLoop
 		}
+		s.mu.Unlock()
+
 		select {
 		case <-w.doneCh:
 		case <-ctx.Done():
-			s.mu.Unlock()
 			return ctx.Err()
 		}
+
+		s.mu.Lock()
+		if s.watchers[algoID] == w {
+			delete(s.watchers, algoID)
+		}
+		s.mu.Unlock()
+
 		if s.store != nil {
 			if err := s.store.UpdateAlgorithmStatus(ctx, algoID, StatusDisabled); err != nil {
-				s.mu.Unlock()
 				return err
 			}
 		}
-		delete(s.watchers, algoID)
-		s.mu.Unlock()
 		return nil
 	}
 	s.mu.Unlock()

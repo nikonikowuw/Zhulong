@@ -17,6 +17,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest"
 )
 
 type mockLifecycleStore struct {
@@ -50,15 +51,16 @@ func (m *mockLifecycleStore) UpdateAlgorithmStatus(ctx context.Context, id strin
 	return nil
 }
 
-func (m *mockLifecycleStore) RollbackAlgorithmVersion(ctx context.Context, id string, version, previousVersion string) error {
+func (m *mockLifecycleStore) RollbackAlgorithmVersion(ctx context.Context, id string, targetVersion, failedVersion string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	pkg, ok := m.packages[id]
 	if !ok {
 		return errors.New("package not found")
 	}
-	pkg.Version = previousVersion
-	pkg.PreviousVersion = ""
+	pkg.Version = targetVersion
+	pkg.PreviousVersion = failedVersion
+	pkg.Status = algorunner.StatusActive
 	m.packages[id] = pkg
 	return nil
 }
@@ -403,4 +405,99 @@ func TestSupervisorRestartPreservesActiveStatus(t *testing.T) {
 	if got := supervisor.GetStatus(algo.ID); got != algorunner.StatusRunning {
 		t.Fatalf("expected running status after restart, got %s", got)
 	}
+}
+
+func TestSupervisorUpgradeAlgorithmSuccess(t *testing.T) {
+	store := newMockLifecycleStore()
+	algoV1 := supervisorTestPackage()
+	store.packages[algoV1.ID] = algoV1
+
+	supervisor := algorunner.NewSupervisor(store, t.TempDir(), writeIdleRunner(t), algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	t.Cleanup(func() {
+		supervisor.StopAll(time.Second)
+	})
+
+	ctx := context.Background()
+	if err := supervisor.StartAlgorithm(ctx, algoV1); err != nil {
+		t.Fatalf("start v1 algorithm: %v", err)
+	}
+	waitForSupervisorStatus(t, supervisor, algoV1.ID, algorunner.StatusRunning)
+
+	algoV2 := algoV1
+	algoV2.Version = "2.0.0"
+	algoV2.PreviousVersion = algoV1.Version
+
+	if err := supervisor.UpgradeAlgorithm(ctx, algoV2, algoV1); err != nil {
+		t.Fatalf("upgrade algorithm: %v", err)
+	}
+	if got := supervisor.GetStatus(algoV1.ID); got != algorunner.StatusRunning {
+		t.Fatalf("expected status running after upgrade, got %s", got)
+	}
+	if err := supervisor.StopAlgorithm(ctx, algoV1.ID); err != nil {
+		t.Fatalf("stop upgraded algorithm: %v", err)
+	}
+}
+
+func TestSupervisorUpgradeAlgorithmRollbackOnCrash(t *testing.T) {
+	store := newMockLifecycleStore()
+	algoV1 := supervisorTestPackage()
+	algoV1.Version = "1.0.0"
+	store.packages[algoV1.ID] = algoV1
+
+	// Script that crashes immediately when receiving 2.0.0 in args, but stays alive for 1.0.0
+	runnerScript := filepath.Join(t.TempDir(), "version_sensitive_runner.sh")
+	scriptContent := `#!/bin/sh
+for a in "$@"; do
+	case "$a" in
+		*2.0.0*)
+			exit 1
+			;;
+	esac
+done
+trap 'exit 0' TERM INT
+while true; do sleep 0.1; done
+`
+	if err := os.WriteFile(runnerScript, []byte(scriptContent), 0o755); err != nil {
+		t.Fatalf("write version sensitive runner: %v", err)
+	}
+
+	options := algorunner.DefaultRecoveryOptions()
+	options.RollbackGuardWindow = 2 * time.Second
+	supervisor := algorunner.NewSupervisor(store, t.TempDir(), runnerScript, options, zaptest.NewLogger(t))
+	t.Cleanup(func() {
+		supervisor.StopAll(time.Second)
+	})
+
+	ctx := context.Background()
+	if err := supervisor.StartAlgorithm(ctx, algoV1); err != nil {
+		t.Fatalf("start v1 algorithm: %v", err)
+	}
+	waitForSupervisorStatus(t, supervisor, algoV1.ID, algorunner.StatusRunning)
+
+	algoV2 := algoV1
+	algoV2.Version = "2.0.0"
+	algoV2.PreviousVersion = algoV1.Version
+	store.packages[algoV2.ID] = algoV2
+
+	if err := supervisor.UpgradeAlgorithm(ctx, algoV2, algoV1); err != nil {
+		t.Fatalf("upgrade algorithm: %v", err)
+	}
+
+	// Wait for automatic rollback to restore version 1.0.0 in store
+	deadline := time.Now().Add(5 * time.Second)
+	rolledBack := false
+	for time.Now().Before(deadline) {
+		pkg, err := store.GetAlgorithmPackage(ctx, algoV1.ID)
+		if err == nil && pkg.Version == "1.0.0" {
+			rolledBack = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !rolledBack {
+		pkg, _ := store.GetAlgorithmPackage(ctx, algoV1.ID)
+		t.Fatalf("expected version to be rolled back to 1.0.0, got %s", pkg.Version)
+	}
+
+	waitForSupervisorStatus(t, supervisor, algoV1.ID, algorunner.StatusRunning)
 }

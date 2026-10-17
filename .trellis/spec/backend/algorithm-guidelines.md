@@ -132,6 +132,8 @@ zhulong_algo_runner --verify-plugin plugin.so --sample sample.jpg
 1. **核心单一职责**：
    - `internal/algorithm`：专注且仅负责**算法包制品资产管理**（解压、Zip-Slip 与炸弹防御、元数据解析、黑盒验包准入门禁、持久化与 HTTP 控制面 API）。
    - `internal/algorunner`：专注**动态沙箱子进程看护与自愈容灾**（环境变量注入、拉起与优雅停止、指数退避、CrashLoopBackoff 熔断、RollbackGuard 自动回滚守卫及底库广播）。
+     - **管道同步契约**：`RunnerProcess` 负责标准输出与标准错误流的完全 Drain 与 `failureStage` 探测，必须保证日志写完后才向外关闭 `doneCh`；
+     - **锁隔离铁律**：`Supervisor` 的升级（`UpgradeAlgorithm`）与重置（`ResetAlgorithm`）等涉及等待子进程停机与 Channel 退出的操作，**必须释放 `s.mu` 后再阻塞等待 `<-w.doneCh`**，严禁持全局大锁等待子进程或协程，杜绝与后台自愈或自动回滚产生互锁死锁。
 2. **分析任务解耦**：分析任务（CRUD、配置校验、算力预算检查与调度）完全归属 `internal/task` 模块。`algorithm` 仅实现 `task.AlgorithmSpecProvider`（供任务校验算法规格）与 `task.TaskChangeListener`（接收任务变更通知以触发防抖热重启）。兼容路由 `/api/v1/algorithms/tasks` 由 `task.Handler` 统一委托承载。
 3. **推理数据与协议下沉**：
    - 通用 AI 推理模型（`InferenceResult`、`DetectionItem`、`PersonItem` 等）收敛于 `internal/aitypes`，解耦 `camera` 与 `record` 对 `algorithm` 的依赖；

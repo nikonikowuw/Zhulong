@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -161,44 +160,63 @@ func (p *RunnerProcess) Start() error {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 	}
 
-	// Capture stdout
-	stdoutPipe, err := cmd.StdoutPipe()
+	// Create pipes manually so cmd.Wait() does not close them prematurely while scanning.
+	stdoutR, stdoutW, err := os.Pipe()
 	if err != nil {
 		p.state = StatusDisabled
 		close(p.doneCh)
 		return fmt.Errorf("create stdout pipe: %w", err)
 	}
-
-	// Capture stderr
-	stderrPipe, err := cmd.StderrPipe()
+	stderrR, stderrW, err := os.Pipe()
 	if err != nil {
+		stdoutR.Close()
+		stdoutW.Close()
 		p.state = StatusDisabled
 		close(p.doneCh)
 		return fmt.Errorf("create stderr pipe: %w", err)
 	}
 
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
+
 	if err := cmd.Start(); err != nil {
+		stdoutR.Close()
+		stdoutW.Close()
+		stderrR.Close()
+		stderrW.Close()
 		p.state = StatusDisabled
 		close(p.doneCh)
 		return fmt.Errorf("start runner process: %w", err)
 	}
 
+	// Close parent's write ends immediately so EOF propagates when child terminates
+	stdoutW.Close()
+	stderrW.Close()
+
 	p.cmd = cmd
 	p.startTime = time.Now()
 	p.state = StatusRunning
 
-	// Drain stdout asynchronously
-	go p.streamLogs(stdoutPipe, zap.DebugLevel, false)
-	// Drain stderr asynchronously (source of the broker-connect marker)
-	go p.streamLogs(stderrPipe, zap.WarnLevel, true)
+	var logWg sync.WaitGroup
+	logWg.Add(2)
+	go func() {
+		defer logWg.Done()
+		p.streamLogs(stdoutR, zap.DebugLevel, false)
+		stdoutR.Close()
+	}()
+	go func() {
+		defer logWg.Done()
+		p.streamLogs(stderrR, zap.WarnLevel, true)
+		stderrR.Close()
+	}()
 
 	// Watcher goroutine
-	go p.watchExit(cmd)
+	go p.watchExit(cmd, stdoutR, stderrR, &logWg)
 
 	return nil
 }
 
-func (p *RunnerProcess) streamLogs(r io.Reader, level zapcore.Level, isStderr bool) {
+func (p *RunnerProcess) streamLogs(r *os.File, level zapcore.Level, isStderr bool) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		text := scanner.Text()
@@ -213,8 +231,24 @@ func (p *RunnerProcess) streamLogs(r io.Reader, level zapcore.Level, isStderr bo
 	}
 }
 
-func (p *RunnerProcess) watchExit(cmd *exec.Cmd) {
+func (p *RunnerProcess) watchExit(cmd *exec.Cmd, stdoutR, stderrR *os.File, logWg *sync.WaitGroup) {
 	err := cmd.Wait()
+
+	// Wait for pipe readers to consume all remaining buffered logs.
+	// If an orphaned child process keeps the write pipe open, unblock after 100ms.
+	logDone := make(chan struct{})
+	go func() {
+		logWg.Wait()
+		close(logDone)
+	}()
+
+	select {
+	case <-logDone:
+	case <-time.After(100 * time.Millisecond):
+		stdoutR.Close()
+		stderrR.Close()
+		<-logDone
+	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()

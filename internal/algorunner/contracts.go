@@ -40,27 +40,11 @@ func (p PackageMeta) EnvPath(algoDir string) string {
 	return filepath.Join(p.InstallDir(algoDir), ".env")
 }
 
-// PreviousInstallDir returns the directory of the previous version if available.
-func (p PackageMeta) PreviousInstallDir(algoDir string) string {
-	if p.PreviousVersion == "" {
-		return ""
-	}
-	return filepath.Join(algoDir, p.ID, p.PreviousVersion)
-}
-
-// PreviousEntryPath returns the entry path of the previous version if available.
-func (p PackageMeta) PreviousEntryPath(algoDir string) string {
-	if p.PreviousVersion == "" {
-		return ""
-	}
-	return filepath.Join(p.PreviousInstallDir(algoDir), "plugin.so")
-}
-
 // LifecycleStore provides package lookup and status updates for the supervisor.
 type LifecycleStore interface {
 	GetAlgorithmPackage(ctx context.Context, id string) (PackageMeta, error)
 	UpdateAlgorithmStatus(ctx context.Context, id string, status string) error
-	RollbackAlgorithmVersion(ctx context.Context, id string, version, previousVersion string) error
+	RollbackAlgorithmVersion(ctx context.Context, id string, targetVersion, failedVersion string) error
 }
 
 // BrokerSubscriptionResolver 解析指定算法包当前应当订阅的 Broker Socket 路径列表，
