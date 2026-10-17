@@ -878,3 +878,65 @@ while true; do sleep 0.1; done
 
 	waitForSupervisorStatus(t, supervisor, algoV1.ID, algorunner.StatusRunning)
 }
+
+func TestSupervisorStartFailsWithNoBrokerSocketsWhenResolverConfigured(t *testing.T) {
+	store := newMockLifecycleStore()
+	algo := supervisorTestPackage()
+	store.packages[algo.ID] = algo
+
+	supervisor := algorunner.NewSupervisor(store, t.TempDir(), writeIdleRunner(t), algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor.SetBrokerSubscriptionResolver(&mockBrokerPathResolver{paths: []string{}})
+	t.Cleanup(func() {
+		supervisor.StopAll(time.Second)
+	})
+
+	err := supervisor.StartAlgorithm(context.Background(), algo)
+	if !errors.Is(err, algorunner.ErrNoBrokerSockets) {
+		t.Fatalf("expected ErrNoBrokerSockets, got %v", err)
+	}
+	if got := supervisor.GetStatus(algo.ID); got != algorunner.StatusDisabled {
+		t.Fatalf("expected no watcher to be registered, got %s", got)
+	}
+}
+
+func TestSupervisorRestartWithZeroBrokersRetiresRunnerToStandby(t *testing.T) {
+	store := newMockLifecycleStore()
+	algo := supervisorTestPackage()
+	store.packages[algo.ID] = algo
+
+	resolver := newMutableBrokerPathResolver([]string{"/tmp/stream1.sock"})
+	supervisor := algorunner.NewSupervisor(store, t.TempDir(), writeIdleRunner(t), algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor.SetBrokerSubscriptionResolver(resolver)
+	t.Cleanup(func() {
+		supervisor.StopAll(time.Second)
+	})
+
+	ctx := context.Background()
+	if err := store.UpdateAlgorithmStatus(ctx, algo.ID, algorunner.StatusActive); err != nil {
+		t.Fatalf("update status to active: %v", err)
+	}
+	if err := supervisor.StartAlgorithm(ctx, algo); err != nil {
+		t.Fatalf("start algorithm: %v", err)
+	}
+	waitForSupervisorStatus(t, supervisor, algo.ID, algorunner.StatusRunning)
+
+	// Now remove all tasks / broker sockets
+	resolver.Set([]string{})
+	if err := supervisor.RestartAlgorithm(ctx, algo.ID); err != nil {
+		t.Fatalf("restart algorithm with 0 brokers failed: %v", err)
+	}
+
+	// Runner should be gracefully retired, status in supervisor is DISABLED (standby)
+	if got := supervisor.GetStatus(algo.ID); got != algorunner.StatusDisabled {
+		t.Fatalf("expected supervisor status to be DISABLED (standby), got %s", got)
+	}
+
+	// Persisted status in DB must remain ACTIVE
+	pkg, err := store.GetAlgorithmPackage(ctx, algo.ID)
+	if err != nil {
+		t.Fatalf("get package: %v", err)
+	}
+	if pkg.Status != algorunner.StatusActive {
+		t.Fatalf("expected DB status to remain ACTIVE, got %s", pkg.Status)
+	}
+}

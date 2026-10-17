@@ -184,3 +184,119 @@ func TestServiceDeleteStopsRestartDuringCrashBackoff(t *testing.T) {
 		t.Fatalf("expected deleted algorithm not to restart, runner executed %d times", count)
 	}
 }
+
+type staticBrokerResolver struct {
+	paths []string
+}
+
+func (r *staticBrokerResolver) SyncBrokerSubscriptions(ctx context.Context, algorithmID string) ([]string, error) {
+	return r.paths, nil
+}
+
+func TestEnableAlgorithmWithZeroTasksEntersStandby(t *testing.T) {
+	comp, _, _ := setupServiceTest(t)
+	ctx := context.Background()
+
+	algo := &algorithm.Algorithm{
+		ID:           "algo_standby_01",
+		Name:         "standby_test",
+		Version:      "1.0.0",
+		TaskType:     algorithm.TaskTypeDetection,
+		Category:     algorithm.CategoryGeneral,
+		TargetArch:   "x86_64",
+		TargetDevice: "cpu",
+		ComputeCost:  10,
+		MemoryMB:     64,
+		Status:       algorithm.StatusDisabled,
+	}
+	if err := comp.Store.CreateAlgorithm(ctx, algo); err != nil {
+		t.Fatalf("create algorithm: %v", err)
+	}
+
+	comp.Supervisor.SetBrokerSubscriptionResolver(&staticBrokerResolver{paths: []string{}})
+
+	// 1. First enable with 0 tasks -> should succeed in standby (not error or crash)
+	if err := comp.Service.EnableAlgorithm(ctx, algo.ID); err != nil {
+		t.Fatalf("enable algorithm in standby failed: %v", err)
+	}
+
+	found, err := comp.Store.GetAlgorithm(ctx, algo.ID)
+	if err != nil {
+		t.Fatalf("get algorithm: %v", err)
+	}
+	if found.Status != algorithm.StatusActive {
+		t.Fatalf("expected DB status to be ACTIVE, got %s", found.Status)
+	}
+	if live := comp.Supervisor.GetStatus(algo.ID); live != algorithm.StatusDisabled {
+		t.Fatalf("expected supervisor to have no watcher (standby), got %s", live)
+	}
+
+	// 2. Calling Enable again should be idempotent
+	if err := comp.Service.EnableAlgorithm(ctx, algo.ID); err != nil {
+		t.Fatalf("idempotent enable failed: %v", err)
+	}
+}
+
+func TestEnableAlgorithmInCrashLoopReturnsConflict(t *testing.T) {
+	dataDir := t.TempDir()
+	dbStore := database.New(dataDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	store := algorithm.NewStore(dbStore)
+
+	algo := &algorithm.Algorithm{
+		ID: "algo_crash_loop", Name: "crash_loop_test", Version: "1.0.0",
+		TaskType: algorithm.TaskTypeDetection, Category: algorithm.CategoryGeneral,
+		TargetArch: "x86_64", TargetDevice: "cpu", ComputeCost: 10,
+		MemoryMB: 64, Status: algorithm.StatusDisabled,
+	}
+	if err := store.CreateAlgorithm(context.Background(), algo); err != nil {
+		t.Fatalf("create algorithm: %v", err)
+	}
+
+	runnerPath := filepath.Join(dataDir, "fail_runner.sh")
+	if err := os.WriteFile(runnerPath, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write fail runner: %v", err)
+	}
+
+	opts := algorithm.DefaultRecoveryOptions()
+	opts.MaxCrashes = 1
+	opts.InitialBackoff = 5 * time.Millisecond
+	opts.CrashWindow = time.Second
+	supervisor := algorithm.NewSupervisor(store, dataDir, runnerPath, opts, zap.NewNop())
+	service := algorithm.NewService(store, nil, supervisor, dataDir, zap.NewNop())
+	t.Cleanup(func() {
+		supervisor.StopAll(time.Second)
+		_ = dbStore.Close()
+	})
+
+	ctx := context.Background()
+	_ = supervisor.StartAlgorithm(ctx, algo.ToPackageMeta())
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if supervisor.GetStatus(algo.ID) == algorithm.StatusCrashLoop {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := supervisor.GetStatus(algo.ID); got != algorithm.StatusCrashLoop {
+		t.Fatalf("expected CRASH_LOOP, got %s", got)
+	}
+
+	err := service.EnableAlgorithm(ctx, algo.ID)
+	if err == nil {
+		t.Fatal("expected EnableAlgorithm on CRASH_LOOP to return error")
+	}
+	var appErr *apperr.Error
+	if !errors.As(err, &appErr) {
+		t.Fatalf("expected *apperr.Error, got %T (%v)", err, err)
+	}
+	if appErr.Code != "ALGORITHM_IN_CRASH_LOOP" {
+		t.Fatalf("expected code ALGORITHM_IN_CRASH_LOOP, got %s", appErr.Code)
+	}
+	if appErr.Kind != apperr.KindConflict {
+		t.Fatalf("expected KindConflict, got %v", appErr.Kind)
+	}
+}

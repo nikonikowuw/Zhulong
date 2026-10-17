@@ -63,7 +63,7 @@ type countingBrokerPathResolver struct {
 
 func (m *countingBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, algorithmID string) ([]string, error) {
 	m.calls.Add(1)
-	return nil, nil
+	return []string{"/tmp/dummy_debounce.sock"}, nil
 }
 
 // TestServiceTaskChangeDebouncesRestart guards design.md §7.4: a burst of task
@@ -212,8 +212,6 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 		('task_cam1', 'camera1', ?, 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, algo.ID).Error; err != nil {
 		t.Fatalf("insert task for camera1: %v", err)
 	}
-	service.OnTaskChanged(ctx, algo.ID)
-	service.FlushPendingRestarts()
 
 	if err := supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); err != nil {
 		t.Fatalf("start algorithm: %v", err)
@@ -253,5 +251,105 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	third := readRunnerBrokerFlags(t, argFile)
 	if got := third[2]; !reflect.DeepEqual(got, []string{"/tmp/zhulong_broker_camera1.sock"}) {
 		t.Fatalf("restart after deleting camera2 broker flags = %v, want 1 sock for camera1", got)
+	}
+}
+
+// TestTaskDrivenLazyStartupAndTeardownLifecycle verifies the complete lifecycle:
+// 1. Enabling an algorithm with 0 tasks enters standby (DB ACTIVE, supervisor DISABLED, 0 runner invocations).
+// 2. Creating a task dynamically wakes the algorithm and launches the runner.
+// 3. Deleting all tasks dynamically stops the runner and retires it back to standby (DB stays ACTIVE).
+func TestTaskDrivenLazyStartupAndTeardownLifecycle(t *testing.T) {
+	dataDir := t.TempDir()
+	dbStore := database.New(dataDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	store := algorithm.NewStore(dbStore)
+
+	algo := &algorithm.Algorithm{
+		ID: "algo_lazy_lifecycle", Name: "lazy_lifecycle", Version: "1.0.0",
+		TaskType: algorithm.TaskTypeDetection, Category: algorithm.CategorySecurity,
+		TargetArch: "x86_64", TargetDevice: "cpu", ComputeCost: 10,
+		MemoryMB: 64, Status: algorithm.StatusDisabled,
+	}
+	if err := store.CreateAlgorithm(context.Background(), algo); err != nil {
+		t.Fatalf("create algorithm: %v", err)
+	}
+
+	argFile := filepath.Join(t.TempDir(), "runner-args")
+	t.Setenv("RUN_ARG_FILE", argFile)
+
+	supervisor := algorithm.NewSupervisor(store, dataDir, brokerRecordingRunner(t, dataDir), algorithm.DefaultRecoveryOptions(), zap.NewNop())
+	resolver := &storeBackedBrokerResolver{dbStore: dbStore}
+	supervisor.SetBrokerSubscriptionResolver(resolver)
+	service := algorithm.NewService(store, algorithm.NewVerifier("", "cpu"), supervisor, dataDir, zap.NewNop())
+
+	ctx := context.Background()
+	t.Cleanup(func() {
+		supervisor.StopAll(2 * time.Second)
+		_ = dbStore.Close()
+	})
+
+	// Step 1: Enable algorithm when 0 tasks exist in DB -> Standby state
+	if err := service.EnableAlgorithm(ctx, algo.ID); err != nil {
+		t.Fatalf("enable algorithm: %v", err)
+	}
+	if got := supervisor.GetStatus(algo.ID); got != algorithm.StatusDisabled {
+		t.Fatalf("expected supervisor to have no watcher (standby), got %s", got)
+	}
+	loadedAlgo, err := store.GetAlgorithm(ctx, algo.ID)
+	if err != nil {
+		t.Fatalf("get algorithm: %v", err)
+	}
+	if loadedAlgo.Status != algorithm.StatusActive {
+		t.Fatalf("expected DB status to be ACTIVE, got %s", loadedAlgo.Status)
+	}
+	if flags := readRunnerBrokerFlags(t, argFile); len(flags) != 0 {
+		t.Fatalf("expected 0 runner invocations during standby, got %d", len(flags))
+	}
+
+	// Step 2: Dynamically add a task -> runner must auto-start
+	if err := dbStore.DB().Exec(`INSERT INTO analysis_tasks (id, camera_id, algorithm_id, enabled, sample_fps, config_json, created_at, updated_at) VALUES 
+		('task_lazy_1', 'camera_lazy_1', ?, 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, algo.ID).Error; err != nil {
+		t.Fatalf("insert task: %v", err)
+	}
+	service.OnTaskChanged(ctx, algo.ID)
+	service.FlushPendingRestarts()
+
+	waitForBrokerInvocations(t, argFile, 1)
+	if got := supervisor.GetStatus(algo.ID); got != algorithm.StatusRunning {
+		t.Fatalf("expected algorithm running after task added, got %s", got)
+	}
+	invocations := readRunnerBrokerFlags(t, argFile)
+	if got := invocations[0]; !reflect.DeepEqual(got, []string{"/tmp/zhulong_broker_camera_lazy_1.sock"}) {
+		t.Fatalf("first start broker flags = %v, want /tmp/zhulong_broker_camera_lazy_1.sock", got)
+	}
+
+	// Step 3: Dynamically remove all tasks -> runner must gracefully stop and return to standby
+	if err := dbStore.DB().Exec("DELETE FROM analysis_tasks WHERE id = 'task_lazy_1'").Error; err != nil {
+		t.Fatalf("delete task: %v", err)
+	}
+	service.OnTaskChanged(ctx, algo.ID)
+	service.FlushPendingRestarts()
+
+	// Wait for status to become DISABLED in supervisor
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if supervisor.GetStatus(algo.ID) == algorithm.StatusDisabled {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := supervisor.GetStatus(algo.ID); got != algorithm.StatusDisabled {
+		t.Fatalf("expected runner to be stopped (DISABLED in supervisor), got %s", got)
+	}
+
+	// DB status must still be ACTIVE
+	loadedAlgo, err = store.GetAlgorithm(ctx, algo.ID)
+	if err != nil {
+		t.Fatalf("get algorithm: %v", err)
+	}
+	if loadedAlgo.Status != algorithm.StatusActive {
+		t.Fatalf("expected DB status to remain ACTIVE, got %s", loadedAlgo.Status)
 	}
 }

@@ -144,5 +144,10 @@ zhulong_algo_runner --verify-plugin plugin.so --sample sample.jpg
    - 通用 AI 推理模型（`InferenceResult`、`DetectionItem`、`PersonItem` 等）收敛于 `internal/aitypes`，解耦 `camera` 与 `record` 对 `algorithm` 的依赖；
    - 16 字节定长二进制帧头编解码与协议常量收敛于 `internal/algoipc`。
 4. **错误处理与 apperr 闭环**：`Service` 统一使用 `apperr.Error` 分类暴露错误（`KindInvalid` 对应 422 校验失败，`KindConflict` 对应 409 活跃冲突，`KindNotFound` 对应 404），由 `httputil.WriteError(c, err)` 统一写回并自动完成多语言翻译。
+5. **任务驱动按需惰性启停与待命态 (Task-Driven Lazy Startup & Standby State)**：
+   - 算法的持久化状态 `ACTIVE` 仅代表管理员授权启用与调度准入，并不强行要求立即拉起底层 Runner 子进程；
+   - 当算法无已启用的分析任务（`len(brokerSocks) == 0`）时，`Supervisor.StartAlgorithm` 返回 `ErrNoBrokerSockets`，算法在 DB 保持 `ACTIVE` 并进入待命态（Standby，0 进程、0 内存与 NPU 占用，Supervisor 状态为 `DISABLED`），杜绝因缺少 `--broker` 导致的秒退与虚假熔断；
+   - 任务生命周期双向联动：新分析任务加入（`OnTaskChanged`）时，若算法处于待命态则自动唤醒并拉起 Runner 子进程；若全部任务被删除/停用，Runner 子进程优雅停止回收资源，算法在 DB 保持 `ACTIVE` 并平滑退回待命态；
+   - 接口幂等性：对已在运行中的算法调用 `EnableAlgorithm` 必须幂等返回 `200 OK`；对处于 `CRASH_LOOP` 熔断态的算法调用 `EnableAlgorithm` 返回 409 Conflict（机器码 `ALGORITHM_IN_CRASH_LOOP`），引导用户先重置。
 
 

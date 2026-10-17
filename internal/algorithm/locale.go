@@ -29,6 +29,11 @@ func init() {
 			"zh-Hans": "算法当前不处于 CRASH_LOOP 状态",
 			"zh-Hant": "演算法目前不處於 CRASH_LOOP 狀態",
 		},
+		"ALGORITHM_IN_CRASH_LOOP": {
+			"en":      "Algorithm is in CRASH_LOOP, please reset it before enabling",
+			"zh-Hans": "算法当前处于熔断状态 (CRASH_LOOP)，请先重置后再启用",
+			"zh-Hant": "演算法目前處於熔斷狀態 (CRASH_LOOP)，請先重置後再啟用",
+		},
 		"UNSUPPORTED_ARCHIVE_FORMAT": {
 			"en":      "Unsupported archive format, must be .tar.gz or .zip",
 			"zh-Hans": "不支持的归档格式，必须为 .tar.gz 或 .zip",

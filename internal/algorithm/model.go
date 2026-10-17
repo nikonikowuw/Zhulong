@@ -31,6 +31,8 @@ var (
 	NewSupervisor              = algorunner.NewSupervisor
 	NewGalleryBroadcaster      = algorunner.NewGalleryBroadcaster
 	ErrAlgorithmNotInCrashLoop = algorunner.ErrAlgorithmNotInCrashLoop
+	ErrAlgorithmAlreadyRunning = algorunner.ErrAlgorithmAlreadyRunning
+	ErrNoBrokerSockets         = algorunner.ErrNoBrokerSockets
 )
 
 // Algorithm status enum

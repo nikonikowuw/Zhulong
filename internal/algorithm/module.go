@@ -2,6 +2,7 @@ package algorithm
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"time"
@@ -31,10 +32,14 @@ func (l *algorithmLifecycleImpl) Start(ctx context.Context) error {
 			if algo.Status == StatusActive {
 				l.logger.Info("auto-starting active algorithm", zap.String("id", algo.ID))
 				if startErr := l.service.supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); startErr != nil {
-					l.logger.Error("failed to auto-start active algorithm",
-						zap.String("id", algo.ID),
-						zap.Error(startErr),
-					)
+					if errors.Is(startErr, ErrNoBrokerSockets) {
+						l.logger.Info("active algorithm held in standby state on host startup (no active tasks)", zap.String("id", algo.ID))
+					} else {
+						l.logger.Error("failed to auto-start active algorithm",
+							zap.String("id", algo.ID),
+							zap.Error(startErr),
+						)
+					}
 				}
 			}
 		}

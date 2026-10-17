@@ -40,7 +40,11 @@ type workerWatcher struct {
 	status      string
 }
 
-var ErrAlgorithmNotInCrashLoop = errors.New("algorithm is not in CRASH_LOOP")
+var (
+	ErrAlgorithmNotInCrashLoop = errors.New("algorithm is not in CRASH_LOOP")
+	ErrAlgorithmAlreadyRunning = errors.New("algorithm worker is already running or supervised")
+	ErrNoBrokerSockets         = errors.New("cannot start runner without broker sockets")
+)
 
 func (w *workerWatcher) requestStop() {
 	w.stopOnce.Do(func() { close(w.stopCh) })
@@ -169,7 +173,7 @@ func (s *Supervisor) StartAlgorithm(ctx context.Context, algo PackageMeta) error
 	resolver := s.resolver
 	s.mu.RUnlock()
 	if exists {
-		return errors.New("algorithm worker is already running or supervised")
+		return ErrAlgorithmAlreadyRunning
 	}
 
 	// 2. 锁外做 IO（DB 查询 + 订阅同步），避免阻塞 GetStatus。
@@ -177,12 +181,15 @@ func (s *Supervisor) StartAlgorithm(ctx context.Context, algo PackageMeta) error
 	if err != nil {
 		return err
 	}
+	if resolver != nil && len(brokerSocks) == 0 {
+		return ErrNoBrokerSockets
+	}
 
 	// 3. 锁内注册：二次校验兜底解析期间产生的并发注册。
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.watchers[algo.ID]; exists {
-		return errors.New("algorithm worker is already running or supervised")
+		return ErrAlgorithmAlreadyRunning
 	}
 
 	w := &workerWatcher{
@@ -284,6 +291,16 @@ func (s *Supervisor) RestartAlgorithm(ctx context.Context, algoID string) error 
 	}
 
 	if startErr := s.StartAlgorithm(ctx, algo); startErr != nil {
+		if errors.Is(startErr, ErrNoBrokerSockets) {
+			// 所有任务均被移除/禁用，平滑回退待命态
+			// 此时 StopAlgorithm 已将 DB 状态写为 DISABLED，需恢复为 ACTIVE
+			if wasActive {
+				if err := s.store.UpdateAlgorithmStatus(ctx, algoID, StatusActive); err != nil {
+					return fmt.Errorf("restore algorithm status after retiring tasks: %w", err)
+				}
+			}
+			return nil
+		}
 		return startErr
 	}
 
@@ -324,13 +341,17 @@ func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo PackageMeta, 
 		)
 		return s.rollbackToOld(ctx, oldAlgo)
 	}
+	if s.brokerResolver() != nil && len(brokerSocks) == 0 {
+		// 新版本无活跃任务，平滑进入待命态，无需拉起子进程
+		return nil
+	}
 
 	// 3. 锁内二次校验 + 构建 watcher + 启动进程 + 注册。
 	s.mu.Lock()
 	if _, exists := s.watchers[newAlgo.ID]; exists {
 		// 解析期间已有并发调用为同一 ID 注册了活跃 watcher：不覆盖它。
 		s.mu.Unlock()
-		return errors.New("algorithm worker is already running or supervised")
+		return ErrAlgorithmAlreadyRunning
 	}
 
 	w := &workerWatcher{

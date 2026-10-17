@@ -212,7 +212,34 @@ func (s *Service) EnableAlgorithm(ctx context.Context, id string) error {
 		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("get algorithm: %v", err), err)
 	}
 
+	liveStatus := s.supervisor.GetStatus(id)
+	if liveStatus == StatusCrashLoop {
+		return apperr.Conflict("ALGORITHM_IN_CRASH_LOOP", "Algorithm is in CRASH_LOOP, please reset it first", nil)
+	}
+	if liveStatus == StatusRunning || liveStatus == StatusStarting {
+		// 已经在运行中，幂等成功并确保 DB 为 ACTIVE
+		if algo.Status != StatusActive {
+			_ = s.store.UpdateAlgorithmStatus(ctx, id, StatusActive)
+		}
+		return nil
+	}
+
 	if err := s.supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); err != nil {
+		if errors.Is(err, ErrNoBrokerSockets) {
+			// 无活跃任务：平滑进入待命态 (Standby)，写 ACTIVE 到 DB
+			s.logger.Info("algorithm enabled in standby state (no active tasks)", zap.String("id", id))
+			if err := s.store.UpdateAlgorithmStatus(ctx, id, StatusActive); err != nil {
+				return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("update algorithm status: %v", err), err)
+			}
+			return nil
+		}
+		if errors.Is(err, ErrAlgorithmAlreadyRunning) {
+			// 并发注册竞争赢家已拉起，幂等成功
+			if algo.Status != StatusActive {
+				_ = s.store.UpdateAlgorithmStatus(ctx, id, StatusActive)
+			}
+			return nil
+		}
 		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("start runner supervisor: %v", err), err)
 	}
 
@@ -380,15 +407,31 @@ func (s *Service) FlushPendingRestarts() {
 }
 
 func (s *Service) restartAlgorithmNow(algorithmID string) {
-	if s.supervisor.GetStatus(algorithmID) != StatusRunning {
-		// 包未运行：下次 EnableAlgorithm 时自然解析，无需重启。
+	algo, err := s.store.GetAlgorithm(context.Background(), algorithmID)
+	if err != nil || algo.Status != StatusActive {
+		// 算法未启用或不存在：不拉起进程
 		return
 	}
-	if err := s.supervisor.RestartAlgorithm(context.Background(), algorithmID); err != nil {
-		s.logger.Warn("failed to restart algorithm after task change",
-			zap.String("algorithm_id", algorithmID),
-			zap.Error(err),
-		)
+
+	liveStatus := s.supervisor.GetStatus(algorithmID)
+	if liveStatus == StatusRunning || liveStatus == StatusStarting {
+		// 运行中：执行 RestartAlgorithm（若任务变为空，Supervisor.RestartAlgorithm 会优雅停止并恢复 ACTIVE）
+		if err := s.supervisor.RestartAlgorithm(context.Background(), algorithmID); err != nil {
+			s.logger.Warn("failed to restart algorithm after task change",
+				zap.String("algorithm_id", algorithmID),
+				zap.Error(err),
+			)
+		}
+	} else if liveStatus == StatusDisabled {
+		// 处于待命态（Standby）：新任务加入，尝试从待命态拉起 Runner
+		if err := s.supervisor.StartAlgorithm(context.Background(), algo.ToPackageMeta()); err != nil {
+			if !errors.Is(err, ErrNoBrokerSockets) && !errors.Is(err, ErrAlgorithmAlreadyRunning) {
+				s.logger.Warn("failed to start standby algorithm after task change",
+					zap.String("algorithm_id", algorithmID),
+					zap.Error(err),
+				)
+			}
+		}
 	}
 }
 
