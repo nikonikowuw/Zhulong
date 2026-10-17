@@ -429,22 +429,29 @@ if(BUILD_TESTING)
     add_test(NAME ZhulongAlgoRunnerGallery COMMAND ZhulongAlgoRunnerGalleryTests)
     set_tests_properties(ZhulongAlgoRunnerGallery PROPERTIES TIMEOUT 10)
 
-    # 人脸识别脱机插件单元测试
-    add_executable(ZhulongFaceRecognitionPluginTests
-        tests/face_recognition_plugin_test.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/detector.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/aligner.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/extractor.cpp
-    )
-    target_compile_features(ZhulongFaceRecognitionPluginTests PRIVATE cxx_std_17)
-    target_include_directories(ZhulongFaceRecognitionPluginTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src
-    )
-    target_link_libraries(ZhulongFaceRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
-    add_test(NAME ZhulongFaceRecognitionPlugin COMMAND ZhulongFaceRecognitionPluginTests $<TARGET_FILE:FaceRecognitionPlugin>)
-    set_tests_properties(ZhulongFaceRecognitionPlugin PROPERTIES TIMEOUT 10)
+    # 人脸识别脱机插件单元测试（CPU 桩后端验包自测）
+    #
+    # ⚠️ 该用例依赖 CPU 桩后端在合成噪点图上产生的确定性降级检出，并用 CPU 桩提取器为底库
+    #    播种同一特征，因此只在 CPU 推理后端下成立。真实 ONNX/RKNN 后端在合成噪点图上
+    #    不会检出人脸（这正是要求的闭环语义，见 native/src/abi/engine.cpp 的 Fail-Closed 契约），
+    #    其插件 C ABI 全链路由 ZhulongFaceRecognitionOnnx 使用真实人脸样本覆盖。
+    if(ZHULONG_INFERENCE_BACKEND STREQUAL "cpu")
+        add_executable(ZhulongFaceRecognitionPluginTests
+            tests/face_recognition_plugin_test.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/detector.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/aligner.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/extractor.cpp
+        )
+        target_compile_features(ZhulongFaceRecognitionPluginTests PRIVATE cxx_std_17)
+        target_include_directories(ZhulongFaceRecognitionPluginTests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src
+        )
+        target_link_libraries(ZhulongFaceRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
+        add_test(NAME ZhulongFaceRecognitionPlugin COMMAND ZhulongFaceRecognitionPluginTests $<TARGET_FILE:FaceRecognitionPlugin>)
+        set_tests_properties(ZhulongFaceRecognitionPlugin PROPERTIES TIMEOUT 10)
+    endif()
 
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongFaceRecognitionOnnxTests
@@ -473,10 +480,12 @@ if(BUILD_TESTING)
         ZhulongAlgoJsonTests
         ZhulongFrameBrokerTests
         ZhulongAlgoRunnerGalleryTests
-        ZhulongFaceRecognitionPluginTests
         ZhulongIpcSocketFdTests
         ZhulongDmaBufAllocatorTests
     )
+    if(TARGET ZhulongFaceRecognitionPluginTests)
+        list(APPEND ASSERT_TEST_TARGETS ZhulongFaceRecognitionPluginTests)
+    endif()
     if(TARGET ZhulongFaceRecognitionOnnxTests)
         list(APPEND ASSERT_TEST_TARGETS ZhulongFaceRecognitionOnnxTests)
     endif()
@@ -511,9 +520,26 @@ if(BUILD_TESTING)
 
     # 人脸特征提取单次 C ABI 单元测试
     add_executable(ZhulongFaceFeatureExtractTests tests/face_feature_extract_test.cpp)
-    target_link_libraries(ZhulongFaceFeatureExtractTests PRIVATE ZhulongEngine)
-    add_test(NAME ZhulongFaceFeatureExtract COMMAND ZhulongFaceFeatureExtractTests)
+    target_link_libraries(ZhulongFaceFeatureExtractTests PRIVATE ZhulongEngine ${CMAKE_DL_LIBS})
+    if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
+        # 只有 ONNX 后端才具备真实人脸能力；CPU 桩后端必须走 Fail-Closed 断言分支
+        target_compile_definitions(ZhulongFaceFeatureExtractTests PRIVATE ZHULONG_TEST_ONNX_INFERENCE=1)
+    endif()
+    add_test(NAME ZhulongFaceFeatureExtract COMMAND ZhulongFaceFeatureExtractTests $<TARGET_FILE:FaceRecognitionPlugin>)
     set_tests_properties(ZhulongFaceFeatureExtract PROPERTIES TIMEOUT 10)
+
+    # 宿主 FacePluginLoader 动态加载 / Fail-Closed / TTL 空闲卸载黑盒测试。
+    # 使用最小插件替身（不依赖 ONNX Runtime），因此 CPU 与 ONNX 后端均可覆盖宿主侧状态机。
+    add_library(MockFaceExtractPlugin SHARED tests/mock_face_plugin.cpp)
+    target_compile_features(MockFaceExtractPlugin PRIVATE cxx_std_17)
+    set_target_properties(MockFaceExtractPlugin PROPERTIES OUTPUT_NAME "MockFaceExtractPlugin")
+
+    add_executable(ZhulongFacePluginTtlTests tests/face_plugin_ttl_test.cpp)
+    target_compile_features(ZhulongFacePluginTtlTests PRIVATE cxx_std_17)
+    target_link_libraries(ZhulongFacePluginTtlTests PRIVATE ZhulongEngine)
+    add_test(NAME ZhulongFacePluginTtl COMMAND ZhulongFacePluginTtlTests
+        $<TARGET_FILE:MockFaceExtractPlugin> ${CMAKE_CURRENT_BINARY_DIR}/face_plugin_ttl)
+    set_tests_properties(ZhulongFacePluginTtl PROPERTIES TIMEOUT 30)
 
     if(NOT CMAKE_CROSSCOMPILING)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -523,9 +549,11 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/algo_runner_json_test.py
             $<TARGET_FILE:zhulong_algo_runner> $<TARGET_FILE:MockDetector>)
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            # 人脸识别插件除统一入口外，还必须导出宿主 dlopen 依赖的单次提取/释放 C ABI
             add_test(NAME ZhulongPluginSymbolVisibility COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_plugin_symbols.py ${CMAKE_NM}
-                $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier> $<TARGET_FILE:MockPersonStructure>)
+                $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier> $<TARGET_FILE:MockPersonStructure>
+                "$<TARGET_FILE:FaceRecognitionPlugin>=zhulong_plugin_get_api,zhulong_face_extract_feature,zhulong_face_extract_release")
         endif()
         add_test(NAME ZhulongRtspIntegration COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/rtsp_fixture.py $<TARGET_FILE:ZhulongRtspTests>)
