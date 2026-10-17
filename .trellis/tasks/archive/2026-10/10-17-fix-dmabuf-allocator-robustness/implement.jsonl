@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "定义 DmaBufAllocator 分配优先级、KMS 限制与 CPU 缓存同步契约"}
+{"file": ".trellis/spec/native/index.md", "reason": "定义原生模块代码规范、架构分层与构建约束"}

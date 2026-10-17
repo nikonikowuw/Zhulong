@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "验证 DmaBufAllocator 分配契约、Cache 同步与零拷贝规范对齐"}
+{"file": ".trellis/spec/native/index.md", "reason": "验证 C++ 异常安全、RAII 与内存所有权规则"}
