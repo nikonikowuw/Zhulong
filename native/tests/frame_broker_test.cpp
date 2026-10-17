@@ -135,6 +135,10 @@ void test_frame_broker_dispatch_and_leasing() {
     assert(slot_data[0] == 0x12);
     assert(slot_data[100] == 0x34);
 
+    // ⚠️ REQ-3：broker 实际产出的分发包中 reserved_fd 必须恒为 -1。
+    //    fd 是进程本地句柄，写入线格式会让接收端对无关资源执行 mmap/ioctl。
+    assert(dispatch.reserved_fd == -1);
+
     // 发送过期的错误 generation ACK (测试防 ABA / 过期 ACK)
     FrameAckMsg stale_ack{};
     stale_ack.stream_id = stream_id;
@@ -1086,6 +1090,178 @@ void test_frame_broker_control_broadcast() {
     std::cout << "[PASS] test_frame_broker_control_broadcast" << std::endl;
 }
 
+// =============================================================================
+// Test 13: REQ-1 槽位容量不足必须显式失败，禁止静默发旧帧
+//   构造 payload 超过 slot_size 的帧，断言：
+//   - publish_frame 返回 false；
+//   - 客户端**未收到任何** MSG_FRAME_DISPATCH（旧实现在此会发旧像素）；
+//   - total_dropped() 递增；
+//   - 该客户端在途配额被完整归还（in_flight_count == 0）；
+//   - 随后一个合法帧能正常发布并送达（证明槽位已回到 FREE，门禁不误伤）。
+// =============================================================================
+void test_frame_broker_slot_capacity_reject() {
+    const uint64_t stream_id = 1010;
+    FrameBroker broker;
+    BrokerOptions opt;
+    opt.slot_count = 2;
+    opt.slot_size = 256 * 1024; // 256KB，故意小于 640x480x3 = 900KB
+    assert(broker.start(stream_id, "/tmp", opt));
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path()));
+    HandshakeReq req{};
+    req.api_version = 1;
+    std::strncpy(req.client_name, "capacity_client", sizeof(req.client_name) - 1);
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> p;
+    assert(client.recv_msg(resp_hdr, p, 1000));
+    HandshakeResp resp{};
+    std::memcpy(&resp, p.data(), sizeof(resp));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    assert(broker.client_count() == 1);
+
+    const uint64_t dropped_before = broker.total_dropped();
+
+    // --- 超大帧：900KB > 256KB 槽位 ---
+    std::vector<uint8_t> oversize(640 * 480 * 3, 0x5A);
+    HardwareFrame big;
+    big.width = 640;
+    big.height = 480;
+    big.stride = 640 * 3;
+    big.format = FRAME_FORMAT_UNKNOWN; // BGR24 通路
+    big.pts = 1;
+    big.host_ptr = oversize.data();
+
+    assert(broker.publish_frame(big) == false);
+    assert(broker.total_dropped() == dropped_before + 1);
+
+    // ⚠️ 核心断言：客户端绝不能收到通知。旧实现在此会发出 MSG_FRAME_DISPATCH，
+    //    而槽位里是上一帧（首帧时是未初始化）像素。
+    IpcHeader no_hdr{};
+    std::vector<uint8_t> no_payload;
+    assert(client.recv_msg(no_hdr, no_payload, 300) == false);
+
+    // 配额必须已完整归还（否则该客户端会被静默饿死）
+    ClientInfo info{};
+    assert(broker.get_client_info(resp.client_id, info));
+    assert(info.in_flight_count == 0);
+    assert(info.delivered_frames == 0);
+    assert(info.dropped_frames == 1);
+
+    // --- 合法帧：必须能发布并送达，证明槽位已回到 FREE ---
+    const size_t legal_bytes = 200 * 1024; // 200KB < 256KB
+    std::vector<uint8_t> legal(legal_bytes, 0x11);
+    HardwareFrame small;
+    small.width = 320;
+    small.height = 213; // 320 * 213 * 3 ≈ 204KB 行跨度按 320*3 计算
+    small.stride = 320 * 3;
+    small.format = FRAME_FORMAT_UNKNOWN;
+    small.pts = 2;
+    small.host_ptr = legal.data();
+    // 保证 payload = stride * height <= slot_size
+    small.height = static_cast<uint32_t>(legal_bytes / (320 * 3));
+    assert(static_cast<size_t>(small.stride) * small.height <= opt.slot_size);
+
+    assert(broker.publish_frame(small) == true);
+
+    IpcHeader ok_hdr{};
+    std::vector<uint8_t> ok_payload;
+    assert(client.recv_msg(ok_hdr, ok_payload, 1000));
+    assert(ok_hdr.msg_type == MSG_FRAME_DISPATCH);
+    FrameDispatchMsg dispatch{};
+    std::memcpy(&dispatch, ok_payload.data(), sizeof(dispatch));
+    assert(dispatch.pts == 2);
+    // ⚠️ REQ-3：即使本次发布未携带 SCM_RIGHTS fd，reserved_fd 也必须恒为 -1。
+    assert(dispatch.reserved_fd == -1);
+
+    client.disconnect();
+    broker.stop();
+    std::cout << "[PASS] test_frame_broker_slot_capacity_reject" << std::endl;
+}
+
+// =============================================================================
+// Test 14: REQ-6 畸形 ACK 不得蚕食在途配额
+//   发送 slot_index 越界的 ACK，断言 in_flight_count 保持不变；
+//   随后发合法 ACK 仍能正常归还（证明槽位未被破坏）。
+// =============================================================================
+void test_frame_broker_malformed_ack_keeps_quota() {
+    const uint64_t stream_id = 1011;
+    FrameBroker broker;
+    BrokerOptions opt;
+    opt.slot_count = 2;
+    opt.slot_size = 1024 * 1024;
+    assert(broker.start(stream_id, "/tmp", opt));
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path()));
+    HandshakeReq req{};
+    req.api_version = 1;
+    std::strncpy(req.client_name, "malformed_client", sizeof(req.client_name) - 1);
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> p;
+    assert(client.recv_msg(resp_hdr, p, 1000));
+    HandshakeResp resp{};
+    std::memcpy(&resp, p.data(), sizeof(resp));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    std::vector<uint8_t> dummy(640 * 480 * 3, 0);
+    HardwareFrame frame;
+    frame.width = 640;
+    frame.height = 480;
+    frame.stride = 640 * 3;
+    frame.format = FRAME_FORMAT_UNKNOWN;
+    frame.pts = 7;
+    frame.host_ptr = dummy.data();
+    assert(broker.publish_frame(frame));
+
+    IpcHeader d_hdr{};
+    std::vector<uint8_t> d_payload;
+    assert(client.recv_msg(d_hdr, d_payload, 1000));
+    FrameDispatchMsg dispatch{};
+    std::memcpy(&dispatch, d_payload.data(), sizeof(dispatch));
+
+    ClientInfo before{};
+    assert(broker.get_client_info(resp.client_id, before));
+    assert(before.in_flight_count == 1);
+
+    // --- 畸形 ACK：slot_index 远超 slot_count ---
+    FrameAckMsg bad{};
+    bad.stream_id = stream_id;
+    bad.frame_id = dispatch.frame_id;
+    bad.slot_index = 0xFFFFFFFFu;
+    bad.generation = dispatch.generation;
+    bad.client_id = resp.client_id;
+    assert(client.send_msg(MSG_FRAME_ACK, &bad, sizeof(bad)));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // ⚠️ 核心断言：配额不得被扣（旧实现会扣掉且不还槽位）
+    ClientInfo after_bad{};
+    assert(broker.get_client_info(resp.client_id, after_bad));
+    assert(after_bad.in_flight_count == 1);
+
+    // --- 合法 ACK：仍能正常归还，证明槽位未被畸形 ACK 破坏 ---
+    FrameAckMsg good{};
+    good.stream_id = stream_id;
+    good.frame_id = dispatch.frame_id;
+    good.slot_index = dispatch.slot_index;
+    good.generation = dispatch.generation;
+    good.client_id = resp.client_id;
+    assert(client.send_msg(MSG_FRAME_ACK, &good, sizeof(good)));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    ClientInfo after_good{};
+    assert(broker.get_client_info(resp.client_id, after_good));
+    assert(after_good.in_flight_count == 0);
+
+    client.disconnect();
+    broker.stop();
+    std::cout << "[PASS] test_frame_broker_malformed_ack_keeps_quota" << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     const char* runner_bin = (argc > 1) ? argv[1] : nullptr;
     const char* plugin_so = (argc > 2) ? argv[2] : nullptr;
@@ -1101,6 +1277,8 @@ int main(int argc, char* argv[]) {
     test_send_failure_rollback();
     test_multi_broker_asymmetric_isolation();
     test_broker_host_crash_then_restart();
+    test_frame_broker_slot_capacity_reject();
+    test_frame_broker_malformed_ack_keeps_quota();
     test_frame_broker_result_egress();
     test_frame_broker_control_broadcast();
     if (runner_bin && plugin_so) {

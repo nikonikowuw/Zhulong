@@ -170,17 +170,25 @@ zhulong_algo_runner --verify-plugin <path_to_plugin.so> --sample <test_image_or_
 ### 6.3 慢算法丢帧背压与崩溃自愈
 
 - **慢消费者隔离 (Drop Latest)**：Broker 跟踪各客户端在途处理帧数（`in_flight_count`，上限默认为 2）。当达到上限时，Broker 直接对该客户端丢弃最新帧，绝不阻塞主视频流或其他高速算法包；
+- **槽位容量不足必须显式失败（严禁静默发旧帧）**：`publish_frame` 在写入前必须完成**统一的容量前置门禁**（`frame_payload_bytes(frame) <= slot_size`）。容量不足时走 `fail_publish()` 统一回滚：归还全部目标客户端的 `in_flight_count` / `delivered_frames`、递增其 `dropped_frames`、槽位置回 `FREE` 并清空 `active_leases`、`total_dropped_` 递增、返回 `false`。
+  ⚠️ **严禁**在容量不足时仍下发 `MSG_FRAME_DISPATCH` —— 那会让客户端收到「新 `frame_id` / 新 `pts` + **上一帧画面**」，且无任何错误信号（录像数据污染、前端幽灵框）。
+  ⚠️ 门禁必须在**任何 `memcpy` 之前**完成，杜绝部分写入。零拷贝帧（`frame.dma_fd >= 0`）不占槽位、不拷贝，不受此门禁约束。
 - **子进程崩溃自愈**：当检测到客户端 Socket 断开或收到 `POLLHUP` 时，Broker 立即扫描并回收该客户端在所有槽位上的未归还租约，槽位引用清零后自动恢复为 `FREE`，彻底杜绝槽位死锁与泄漏。
+- **畸形 ACK 不得蚕食配额**：`handle_ack` 必须**先校验 `slot_index` 越界再修改任何状态**。若先扣 `in_flight_count` 再校验，畸形 ACK 会「只扣不还」，使该客户端配额被永久蚕食并静默停止收帧。
 
 ### 6.4 IPC 协议自然对齐与 Socket 鲁棒性规约
 
 - **严格 8 字节自然对齐**：IPC 二进制包中 64 位字段（`generation`、`stream_id`、`frame_id`、`pts`、`capture_time_ms`）必须排布在 8 字节自然对齐偏移上；`FrameDispatchMsg` 包含 `int64_t capture_time_ms`（帧物理采样绝对 UTC 毫秒时间戳），总尺寸 96 字节，编译期 `static_assert(offsetof(...) % 8 == 0)` 与总大小校验，杜绝嵌入式体系下非对齐访问与时钟时序漂移。
 - **四态 Socket 状态机与半包熔断**：流读取使用四态机制（`SUCCESS`、`IDLE_TIMEOUT`、`CLOSED`、`DESYNC_ERROR`）。半包超时或错位直接置为 `DESYNC_ERROR` 并主动断开连接。
-- **发送超时隔离与最大 Payload 门禁**：服务端套接字配置 50ms `SO_SNDTIMEO` 发送超时；IPC 消息强制执行 `MAX_IPC_PAYLOAD_SIZE = 64KB` 尺寸检查与线程级 `try ... catch` 异常防爆门。两侧常量与 Go 侧 `MaxIpcPayloadSize` 保持一致。
-- **在途配额原子回滚**：槽位写入异常或 Socket 发送失败时，原子回退预分配的 `in_flight_count`、`delivered_frames`，并记入 `dropped_frames`。
+- **发送超时隔离与最大 Payload 门禁**：服务端套接字配置 50ms `SO_SNDTIMEO` 发送超时；IPC 消息在**发送侧与接收侧双向**强制执行 `MAX_IPC_PAYLOAD_SIZE = 64KB` 尺寸检查（`UnixSocketServer::send_msg_with_fd` / `UnixSocketClient::send_msg_with_fd` 超限直接返回 `false`，杜绝 `static_cast<uint32_t>` 对超范围 `size_t` 的静默截断），并有线程级 `try ... catch` 异常防爆门。两侧常量与 Go 侧 `MaxIpcPayloadSize` 保持一致。
+- ⚠️ **`write_all` 的 EAGAIN 必须有界等待（防控制面挂死）**：在阻塞 socket + `SO_SNDTIMEO(50ms)` 下，`EAGAIN` 语义是「**本次发送超时**」而非「稍后重试」。`write_all` 必须走 `poll(POLLOUT, timeout)` 有界等待，**绝不可 `continue` 自旋**。
+  调用链：`write_all` ← `write_msg_with_fd` ← `UnixSocketServer::send_msg_with_fd` ← `FrameBroker::publish_frame`（FramePublisher 线程）与 `FrameBroker::broadcast_message` ← `Engine::broadcast_ai_message`（**持 `Engine::control` 锁**）。无界自旋会把「对端不读」升级为「整个引擎控制面挂死，`stop()` 也拿不到锁」。有界化后最坏降级为 50ms 后返回 `false` 并走既有租约清算路径。
+- **在途配额原子回滚**：槽位写入异常、容量不足或 Socket 发送失败时，原子回退预分配的 `in_flight_count`、`delivered_frames`，并记入 `dropped_frames`。
 ### 6.5 DMA-BUF 硬件零拷贝与 SCM_RIGHTS 传输契约
 
 - **跨进程句柄透传**：在支持 DMA-BUF 的边缘平台（如 RK3568），宿主 `FrameBroker` 在槽位分配时通过 `DmaBufAllocator` 预分配物理连续内存（CMA/System Heap）。通过 Unix Domain Socket 发送 `MSG_FRAME_DISPATCH` 时，利用 `SCM_RIGHTS` 辅助数据（`sendmsg`/`recvmsg`）将底层 DMA-BUF 引用文件描述符安全复制到 Runner 进程。
+- ⚠️ **`FrameDispatchMsg.reserved_fd` 恒为 `-1`**：fd 号是**进程本地句柄**，跨进程传值无意义且危险 —— 宿主的 fd 号在 Runner 进程中可能指向任意无关资源，一旦被当作 DMA-BUF 执行 `mmap` + `DMA_BUF_IOCTL_SYNC`，轻则静默退化，重则**把无关内存当图像喂给插件**。该字段仅作 8 字节对齐占位（保持 `FrameDispatchMsg` 总尺寸 96 字节不变）。
+  真实 DMA-BUF 句柄**只经 `SCM_RIGHTS` 传递**；接收端**只认本地副本 fd**（`const int active_dma_fd = received_fd;`），**严禁**回退读取 `reserved_fd`。
 - **FD 接收与安全闭环**：
   - Runner 进程利用 `recvmsg` 提取 `SCM_RIGHTS` fd，并自动标记 `FD_CLOEXEC`（`recv_msg_with_fd`）；
   - 提取的 fd 赋值入 `zhulong_frame_view.dma_buf_fd` 暴露给插件；
@@ -212,6 +220,7 @@ Go 侧与 Runner 进程之间 IPC 载荷统一使用 `features` 字段，表示�
 | **消息类型** | `MSG_GALLERY_SYNC` (10)、`MSG_GALLERY_UPSERT` (11)、`MSG_GALLERY_DELETE` (12)、`MSG_GALLERY_ACK` (13) |
 | **ACK 语义** | 全量 `MSG_GALLERY_SYNC` 组装完成后回复 `MSG_GALLERY_ACK`；增量同步无需 ACK |
 | **单条上限与分片** | 单条上限 64KB。Go 侧按 10 项/片切分分片，Runner 维持 5 秒组装窗口，收齐后原子应用并清空旧底库；超时或乱序显式报错 |
+| **分片聚合幂等与范围门禁** | 聚合逻辑统一走 `accumulate_sync_shard(ctx, shard)`（`gallery_parser.hpp`），必须同时满足：① `shard_index ∈ [0, shard_total)`，越界/负值分片直接丢弃且**不改变 `ctx` 任何状态**；② 同一 `shard_index` 重复到达时**跳过 items 累加**。⚠️ `received_shards.insert()` 幂等但 `collected_items.push_back()` 不是 —— 只靠 `insert` 会让 `is_complete()` 判定不变而 `collected_items` 重复膨胀，最终经 `gallery_index.reset()` **永久污染底库** |
 | **身份字段** | 载荷 `person_id` 恒取 `persons.person_id`（对外业务键）**原值**，严禁混用内部行 ID |
 | **本地索引** | Runner 进程内通过 `GalleryIndex` 维护 `face_id -> FaceTemplate` 映射，写操作受互斥锁保护，推理读取通过 `snapshot()` 获取不可变只读视图 |
 

@@ -105,6 +105,8 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
    - 每路 AI 流由独占的 `FramePublisher` 线程拉取解码帧，并依据 `max(sample_fps)`（由 Go 经 C ABI `Zhulong_stream_set_publish_rate` 动态设置）执行发布侧节流；
    - 未到发布周期的帧就地丢弃释放，杜绝无意义的共享内存拷贝与 socket 通知；
    - 推送至 `FrameBroker` 后立即 reset `HardwareFrame` 句柄，杜绝慢算法跨进程反压卡死上游解码会话。
+   - ⚠️ **发布失败是显式失败，不是静默丢帧**：`publish_frame` 返回 `false` 时必须已完整回滚（配额归还、槽位置 `FREE`、`total_dropped_` 递增），且**绝不**发出 `MSG_FRAME_DISPATCH`。订阅方不得假设「没收到通知 = 帧被节流丢弃」与「收到通知 = 槽位内容就是该帧」以外还有第三种状态。
+   - ⚠️ **慢消费者导致发送超时后走租约清算**：`write_all` 在 `SO_SNDTIMEO` 下 `EAGAIN` 必须 `poll(POLLOUT)` 有界等待（详见 [算法插件契约 §6.4](./algo-plugin-contract.md)）。超时返回 `false` 后由 `publish_frame` 清算该客户端租约，**绝不**无界自旋 —— 否则发布线程与持 `Engine::control` 锁的广播路径会一并挂死。
 3. **宿主生命周期绑定与资源隔离**：
    - `FrameBroker` 与 `FramePublisher` 由 `Engine` 按需生命周期管理，当首个 `ConsumerAI` 接入时拉起，最后一个 `ConsumerAI` 注销时销毁；
    - 停机时遵循第 4 节无锁汇合与五步优雅停机，先于工作线程 join 前完成停机与资源解绑。

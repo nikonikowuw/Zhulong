@@ -35,20 +35,40 @@ enum class ReadStatus {
 
 /**
  * @brief 阻塞发送所有指定字节，忽略 SIGPIPE 信号
+ *
+ * ⚠️ EAGAIN 语义：服务端为客户端 socket 设置了 SO_SNDTIMEO(50ms)，因此阻塞 socket 上的
+ * EAGAIN 表示「本次 send 超时」而非「稍后重试」。此处必须走 poll(POLLOUT) 有界等待，
+ * 绝不可 continue 自旋 —— 调用链上游是 FramePublisher 线程与持 Engine::control 锁的
+ * broadcast_ai_message，无界自旋会把「对端不读」升级为「整个引擎控制面挂死」。
+ *
+ * 调用链：write_all ← write_msg_with_fd ← UnixSocketServer::send_msg_with_fd
+ *         ← FrameBroker::publish_frame / FrameBroker::broadcast_message
+ *         ← Engine::broadcast_ai_message（持 Engine::control 锁）。
+ *
+ * @param timeout_ms 单次 poll 等待上限；每次 EAGAIN 给一次有界 poll 机会（与
+ *                   write_msg_with_fd 的既有行为一致），超时或 poll 失败即返回 false。
+ * @return true 全部字节已写出；false 超时、对端关闭或出错。
  */
-bool write_all(int fd, const void* data, size_t size) {
+bool write_all(int fd, const void* data, size_t size, int timeout_ms = 50) {
     const uint8_t* ptr = static_cast<const uint8_t*>(data);
     size_t remaining = size;
     while (remaining > 0) {
         ssize_t n = send(fd, ptr, remaining, MSG_NOSIGNAL);
-        if (n <= 0) {
-            if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
-                continue;
-            }
-            return false;
+        if (n > 0) {
+            ptr += n;
+            remaining -= static_cast<size_t>(n);
+            continue;
         }
-        ptr += n;
-        remaining -= n;
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct pollfd pfd{};
+            pfd.fd = fd;
+            pfd.events = POLLOUT;
+            const int pret = poll(&pfd, 1, timeout_ms);
+            if (pret > 0 && (pfd.revents & POLLOUT)) continue;
+            return false; // 超时 / POLLERR / POLLHUP / POLLNVAL
+        }
+        return false; // 对端关闭或不可恢复错误
     }
     return true;
 }
@@ -389,6 +409,15 @@ void UnixSocketServer::remove_client(uint32_t client_id) {
 }
 
 bool UnixSocketServer::send_msg_with_fd(uint32_t client_id, uint16_t msg_type, const void* payload, size_t payload_size, int fd_to_send) {
+    // ⚠️ 发送侧 payload 门禁：与接收侧（client_read_loop）对称，杜绝
+    //    static_cast<uint32_t>(payload_size) 对超范围 size_t 的静默截断。
+    if (payload_size > MAX_IPC_PAYLOAD_SIZE) {
+        return false;
+    }
+    if (payload_size > 0 && payload == nullptr) {
+        return false;
+    }
+
     std::shared_ptr<ClientChannel> channel;
     {
         std::lock_guard<std::mutex> lock(clients_mutex_);
@@ -479,6 +508,15 @@ void UnixSocketClient::disconnect() {
 }
 
 bool UnixSocketClient::send_msg_with_fd(uint16_t msg_type, const void* payload, size_t payload_size, int fd_to_send) {
+    // ⚠️ 发送侧 payload 门禁：与接收侧（recv_msg_with_fd）对称，杜绝
+    //    static_cast<uint32_t>(payload_size) 对超范围 size_t 的静默截断。
+    if (payload_size > MAX_IPC_PAYLOAD_SIZE) {
+        return false;
+    }
+    if (payload_size > 0 && payload == nullptr) {
+        return false;
+    }
+
     int sock = fd_.load();
     if (sock < 0) return false;
     std::lock_guard<std::mutex> lock(send_mutex_);

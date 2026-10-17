@@ -172,6 +172,17 @@ private:
 
     int find_or_evict_free_slot(std::unique_lock<std::mutex>& lock);
 
+    /**
+     * @brief 发布失败的统一回滚：归还在途配额、释放槽位、记账，返回 false。
+     *
+     * 内部自行加 mutex_（publish_frame 的写入段刻意在锁外执行，避免长 memcpy 持锁）。
+     *
+     * @param slot_idx 已分配的槽位索引（< 0 表示未分配，跳过槽位处理）
+     * @param target_clients 已预分配配额的客户端列表
+     * @return 恒为 false（供调用方直接 return）
+     */
+    bool fail_publish(int slot_idx, const std::vector<uint32_t>& target_clients);
+
     uint64_t stream_id_{0};
     std::string shm_name_;
     std::string socket_path_;

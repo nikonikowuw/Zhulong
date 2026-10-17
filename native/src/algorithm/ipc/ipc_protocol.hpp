@@ -104,7 +104,10 @@ struct FrameDispatchMsg {
     int32_t  format{ZHULONG_PIXEL_FORMAT_UNKNOWN}; /**< 像素格式（如 NV12、YUV420P、BGR24） */
     int32_t  strides[4]{0};      /**< 各平面的行扫描步长（字节） */
     uint32_t offsets[4]{0};      /**< 各平面相对于对应槽位起始物理地址的偏移量（字节） */
-    int32_t  reserved_fd{-1};    /**< 预留底层硬件 dma_fd（>=0 表示有效，用于后续 DMA 零拷贝） */
+    int32_t  reserved_fd{-1};    /**< 对齐占位字段，恒为 -1。
+                              *   ⚠️ 严禁写入宿主进程的 dma_fd：fd 号是进程本地句柄，
+                              *   跨进程传值会让接收端对无关资源执行 mmap/ioctl。
+                              *   真实句柄只经 SCM_RIGHTS 传递。 */
     uint32_t reserved_pad{0};    /**< 结构体尾部对齐填充字段，确保总大小为 8 的倍数（96 字节） */
 };
 

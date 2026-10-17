@@ -72,6 +72,42 @@ int main() {
     assert(hdr.msg_type == MSG_HEARTBEAT);
     assert(no_fd == -1);
 
+    // 5. REQ-3: FrameDispatchMsg.reserved_fd 必须恒为 -1
+    //    fd 是进程本地句柄，宿主把 dma_fd 写进线格式会让接收端对无关资源
+    //    执行 mmap/ioctl。真实句柄只经 SCM_RIGHTS 传递。
+    FrameDispatchMsg dispatch{};
+    dispatch.stream_id = 42;
+    dispatch.frame_id = 7;
+    dispatch.slot_index = 0;
+    dispatch.generation = 1;
+    dispatch.reserved_fd = -1;
+    assert(server.send_msg(1, MSG_FRAME_DISPATCH, &dispatch, sizeof(dispatch)));
+
+    int dispatch_fd = -999;
+    assert(client.recv_msg_with_fd(hdr, payload, dispatch_fd, 2000));
+    assert(hdr.msg_type == MSG_FRAME_DISPATCH);
+    assert(dispatch_fd == -1); // 未携带 SCM_RIGHTS fd
+    assert(payload.size() == sizeof(FrameDispatchMsg));
+    FrameDispatchMsg received{};
+    std::memcpy(&received, payload.data(), sizeof(received));
+    assert(received.stream_id == 42);
+    assert(received.frame_id == 7);
+    assert(received.reserved_fd == -1);
+    assert(sizeof(FrameDispatchMsg) == 96); // 线格式未漂移
+
+    // 6. REQ-7: 发送侧必须对称拦截超大 payload（不得静默截断 size_t）
+    std::vector<uint8_t> too_large(MAX_IPC_PAYLOAD_SIZE + 1, 0);
+    assert(server.send_msg(1, MSG_RESULT, too_large.data(), too_large.size()) == false);
+    assert(client.send_msg(MSG_RESULT, too_large.data(), too_large.size()) == false);
+    // 恰好等于上限必须被接受
+    std::vector<uint8_t> exact(MAX_IPC_PAYLOAD_SIZE, 0);
+    assert(server.send_msg(1, MSG_RESULT, exact.data(), exact.size()) == true);
+    int exact_fd = -999;
+    assert(client.recv_msg_with_fd(hdr, payload, exact_fd, 2000));
+    assert(hdr.msg_type == MSG_RESULT);
+    assert(payload.size() == MAX_IPC_PAYLOAD_SIZE);
+    assert(exact_fd == -1);
+
     client.disconnect();
     server.stop();
     ::unlink(sock_path.c_str());

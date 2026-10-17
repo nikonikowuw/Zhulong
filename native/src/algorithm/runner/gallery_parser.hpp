@@ -209,8 +209,7 @@ inline ParsedSyncShard parse_sync_shard_payload(const uint8_t* data, size_t size
     return shard;
 }
 
-inline FaceTemplate parse_upsert_payload(const uint8_t* data, size_t size) {
-    if (!data || size == 0) return {};
+inline FaceTemplate parse_upsert_payload(const uint8_t* data, size_t size) {    if (!data || size == 0) return {};
     std::string_view sv(reinterpret_cast<const char*>(data), size);
     size_t i = 0;
     return parse_face_item(sv, i);
@@ -252,6 +251,46 @@ inline ParsedDelete parse_delete_payload(const uint8_t* data, size_t size) {
         if (i < sv.size() && sv[i] == ',') ++i;
     }
     return del;
+}
+
+/**
+ * @brief 将单个已解析的底库同步分片幂等地聚合进上下文。
+ *
+ * 提取自 runner.cpp 的 MSG_GALLERY_SYNC 处理分支，使该逻辑可被单元测试直接覆盖。
+ *
+ * ⚠️ 两条关键约束（缺一即会永久污染底库）：
+ *  1. **索引范围门禁**：shard_index 必须落在 [0, shard_total) 内。越界或负值分片
+ *     直接丢弃且不改变 ctx 任何状态 —— 否则 received_shards.size() 会被污染，
+ *     而 is_complete() 只看 size，可能提前判定完成。
+ *  2. **分片级幂等**：同一 shard_index 重复到达时，必须跳过 items 累加。
+ *     insert() 是幂等的但 push_back 不是，只靠 insert 会让 collected_items
+ *     重复膨胀，最终经 gallery_index.reset() 永久污染底库。
+ *
+ * @param ctx 分片聚合上下文（可能被本函数修改）
+ * @param shard 已解析的分片
+ * @return true 表示本分片被接受（首次到达）；false 表示被丢弃（越界）或重复
+ *
+ * ⚠️ 调用方必须**只在返回 true 且 is_complete() 为真时**才应用底库。
+ *    原因：收齐后 `received_shards` 保持满，`is_complete()` 会**恒为真**，
+ *    若对重复分片也触发 reset，会因 `collected_items` 已被 move 而**清空底库**。
+ */
+inline bool accumulate_sync_shard(ShardedSyncContext& ctx, const ParsedSyncShard& shard) {
+    if (shard.shard_total <= 0) {
+        return false;
+    }
+    if (shard.shard_index < 0 || shard.shard_index >= shard.shard_total) {
+        return false; // 越界分片：直接丢弃，不改变 ctx 任何状态
+    }
+    if (ctx.sync_id != shard.sync_id || ctx.is_expired()) {
+        ctx.start_sync(shard.sync_id, shard.shard_total);
+    }
+    if (!ctx.received_shards.insert(shard.shard_index).second) {
+        return false; // 重复分片：跳过 items 累加
+    }
+    for (const auto& item : shard.items) {
+        ctx.collected_items.push_back(item);
+    }
+    return true;
 }
 
 } // namespace zhulong::runner

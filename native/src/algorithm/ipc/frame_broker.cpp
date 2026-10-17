@@ -9,6 +9,38 @@
 
 namespace zhulong::ipc {
 
+namespace {
+
+/**
+ * @brief 计算给定帧写入单个共享内存槽位所需的字节数。
+ *
+ * 与 publish_frame 中各格式分支的 memcpy 布局严格一一对应：
+ *  - NV12    : Y 平面（stride × (vstride > 0 ? vstride : height)）+ UV 交错平面
+ *  - YUV420P : Y 平面 + U 平面 + V 平面（U/V 行跨度 = (stride + 1) / 2）
+ *  - 其他    : 单平面 stride × height（BGR24 等打包格式）
+ *
+ * ⚠️ NV12 用 y_plane_size()（含垂直对齐跨度）而 YUV420P 用 stride × height，
+ *    两者语义不同，**不可统一** —— 统一会改变既有测试固化的字节数。
+ *
+ * @return 所需字节数；0 表示尺寸无法表示（调用方必须据此拒绝发布）
+ */
+size_t frame_payload_bytes(const HardwareFrame& frame) {
+    switch (frame.format) {
+        case FRAME_FORMAT_NV12:
+            return frame.y_plane_size() +
+                   static_cast<size_t>(frame.stride) * ((frame.height + 1) / 2);
+        case FRAME_FORMAT_YUV420P: {
+            const size_t y_size = static_cast<size_t>(frame.stride) * frame.height;
+            const size_t u_stride = (static_cast<size_t>(frame.stride) + 1) / 2;
+            return y_size + u_stride * ((frame.height + 1) / 2) * 2;
+        }
+        default:
+            return static_cast<size_t>(frame.stride) * frame.height;
+    }
+}
+
+} // namespace
+
 FrameBroker::FrameBroker() = default;
 
 FrameBroker::~FrameBroker() {
@@ -199,20 +231,18 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
     }
 
     if (!is_zero_copy_frame && !slot_data) {
-        // 槽位获取失败：原子回退在途配额
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (uint32_t cid : target_clients) {
-            auto it = clients_.find(cid);
-            if (it != clients_.end() && it->second.in_flight_count > 0) {
-                it->second.in_flight_count--;
-                it->second.delivered_frames--;
-                it->second.dropped_frames++;
-            }
+        // 槽位获取失败：统一回滚在途配额与槽位状态
+        return fail_publish(slot_idx, target_clients);
+    }
+
+    // ⚠️ 容量前置门禁：必须在任何 memcpy 之前完成，杜绝「部分写入 + 静默发旧帧」。
+    //    超限时若继续走下发路径，客户端会收到「新 frame_id / 新 pts + 上一帧画面」。
+    //    零拷贝帧（frame.dma_fd >= 0）不占槽位、不拷贝，因此不受此门禁约束。
+    if (!is_zero_copy_frame) {
+        const size_t required = frame_payload_bytes(frame);
+        if (required == 0 || required > options_.slot_size) {
+            return fail_publish(slot_idx, target_clients);
         }
-        slots_[slot_idx].state = SlotState::FREE;
-        slots_[slot_idx].active_leases.clear();
-        total_dropped_.fetch_add(1);
-        return false;
     }
 
     FrameDispatchMsg msg{};
@@ -226,7 +256,9 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
     msg.width = static_cast<int32_t>(frame.width);
     msg.height = static_cast<int32_t>(frame.height);
     msg.strides[0] = static_cast<int32_t>(frame.stride);
-    msg.reserved_fd = dma_fd_to_send;
+    // ⚠️ 恒为 -1：fd 是进程本地句柄，跨进程传值无意义且危险（见 ipc_protocol.hpp 注释）。
+    //    真实的 DMA-BUF 句柄仅通过 SCM_RIGHTS 传递，接收端必须只认本地副本 fd。
+    msg.reserved_fd = -1;
 
     if (frame.format == FRAME_FORMAT_NV12) {
         msg.format = ZHULONG_PIXEL_FORMAT_NV12;
@@ -235,33 +267,31 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
         msg.offsets[1] = static_cast<uint32_t>(frame.y_plane_size());
 
         if (!is_zero_copy_frame) {
-            size_t total_bytes = frame.y_plane_size() + static_cast<size_t>(frame.stride) * ((frame.height + 1) / 2);
-            if (total_bytes <= options_.slot_size) {
-                if (frame.host_planes[0] && frame.host_planes[1]) {
-                    // 安全分平面逐行独立拷贝（杜绝把 data[0] 当作单一连续缓冲引发越界）
-                    size_t uv_lines = (frame.height + 1) / 2;
-                    uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
-                    uint32_t src_uv_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : frame.stride;
+            if (frame.host_planes[0] && frame.host_planes[1]) {
+                // 安全分平面逐行独立拷贝（杜绝把 data[0] 当作单一连续缓冲引发越界）
+                // 容量已由前置门禁保证，此处无需再判。
+                size_t uv_lines = (frame.height + 1) / 2;
+                uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
+                uint32_t src_uv_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : frame.stride;
 
-                    if (src_y_stride == frame.stride) {
-                        std::memcpy(slot_data, frame.host_planes[0], frame.stride * frame.height);
-                    } else {
-                        for (size_t r = 0; r < frame.height; ++r) {
-                            std::memcpy(slot_data + r * frame.stride, frame.host_planes[0] + r * src_y_stride, frame.width);
-                        }
+                if (src_y_stride == frame.stride) {
+                    std::memcpy(slot_data, frame.host_planes[0], frame.stride * frame.height);
+                } else {
+                    for (size_t r = 0; r < frame.height; ++r) {
+                        std::memcpy(slot_data + r * frame.stride, frame.host_planes[0] + r * src_y_stride, frame.width);
                     }
-
-                    uint8_t* uv_dst = slot_data + msg.offsets[1];
-                    if (src_uv_stride == frame.stride) {
-                        std::memcpy(uv_dst, frame.host_planes[1], frame.stride * uv_lines);
-                    } else {
-                        for (size_t r = 0; r < uv_lines; ++r) {
-                            std::memcpy(uv_dst + r * frame.stride, frame.host_planes[1] + r * src_uv_stride, frame.width);
-                        }
-                    }
-                } else if (frame.host_ptr) {
-                    std::memcpy(slot_data, frame.host_ptr, total_bytes);
                 }
+
+                uint8_t* uv_dst = slot_data + msg.offsets[1];
+                if (src_uv_stride == frame.stride) {
+                    std::memcpy(uv_dst, frame.host_planes[1], frame.stride * uv_lines);
+                } else {
+                    for (size_t r = 0; r < uv_lines; ++r) {
+                        std::memcpy(uv_dst + r * frame.stride, frame.host_planes[1] + r * src_uv_stride, frame.width);
+                    }
+                }
+            } else if (frame.host_ptr) {
+                std::memcpy(slot_data, frame.host_ptr, frame_payload_bytes(frame));
             }
         }
     } else if (frame.format == FRAME_FORMAT_YUV420P) {
@@ -277,75 +307,62 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
         msg.offsets[2] = static_cast<uint32_t>(y_size + u_size);
 
         if (!is_zero_copy_frame) {
-            size_t total_bytes = y_size + u_size * 2;
-            if (total_bytes <= options_.slot_size) {
-                if (frame.host_planes[0] && frame.host_planes[1] && frame.host_planes[2]) {
-                    // 安全分平面独立拷贝 (杜绝假定 data[0] 物理连续造成的读越界)
-                    uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
-                    uint32_t src_u_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : static_cast<uint32_t>(u_stride);
-                    uint32_t src_v_stride = frame.plane_strides[2] > 0 ? frame.plane_strides[2] : static_cast<uint32_t>(u_stride);
+            if (frame.host_planes[0] && frame.host_planes[1] && frame.host_planes[2]) {
+                // 安全分平面独立拷贝 (杜绝假定 data[0] 物理连续造成的读越界)
+                // 容量已由前置门禁保证，此处无需再判。
+                uint32_t src_y_stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
+                uint32_t src_u_stride = frame.plane_strides[1] > 0 ? frame.plane_strides[1] : static_cast<uint32_t>(u_stride);
+                uint32_t src_v_stride = frame.plane_strides[2] > 0 ? frame.plane_strides[2] : static_cast<uint32_t>(u_stride);
 
-                    size_t uv_h = (frame.height + 1) / 2;
-                    size_t uv_w = (frame.width + 1) / 2;
+                size_t uv_h = (frame.height + 1) / 2;
+                size_t uv_w = (frame.width + 1) / 2;
 
-                    if (src_y_stride == frame.stride) {
-                        std::memcpy(slot_data, frame.host_planes[0], y_size);
-                    } else {
-                        for (size_t r = 0; r < frame.height; ++r) {
-                            std::memcpy(slot_data + r * frame.stride, frame.host_planes[0] + r * src_y_stride, frame.width);
-                        }
+                if (src_y_stride == frame.stride) {
+                    std::memcpy(slot_data, frame.host_planes[0], y_size);
+                } else {
+                    for (size_t r = 0; r < frame.height; ++r) {
+                        std::memcpy(slot_data + r * frame.stride, frame.host_planes[0] + r * src_y_stride, frame.width);
                     }
-
-                    uint8_t* u_dst = slot_data + msg.offsets[1];
-                    if (src_u_stride == u_stride) {
-                        std::memcpy(u_dst, frame.host_planes[1], u_size);
-                    } else {
-                        for (size_t r = 0; r < uv_h; ++r) {
-                            std::memcpy(u_dst + r * u_stride, frame.host_planes[1] + r * src_u_stride, uv_w);
-                        }
-                    }
-
-                    uint8_t* v_dst = slot_data + msg.offsets[2];
-                    if (src_v_stride == u_stride) {
-                        std::memcpy(v_dst, frame.host_planes[2], u_size);
-                    } else {
-                        for (size_t r = 0; r < uv_h; ++r) {
-                            std::memcpy(v_dst + r * u_stride, frame.host_planes[2] + r * src_v_stride, uv_w);
-                        }
-                    }
-                } else if (frame.host_ptr) {
-                    std::memcpy(slot_data, frame.host_ptr, total_bytes);
                 }
+
+                uint8_t* u_dst = slot_data + msg.offsets[1];
+                if (src_u_stride == u_stride) {
+                    std::memcpy(u_dst, frame.host_planes[1], u_size);
+                } else {
+                    for (size_t r = 0; r < uv_h; ++r) {
+                        std::memcpy(u_dst + r * u_stride, frame.host_planes[1] + r * src_u_stride, uv_w);
+                    }
+                }
+
+                uint8_t* v_dst = slot_data + msg.offsets[2];
+                if (src_v_stride == u_stride) {
+                    std::memcpy(v_dst, frame.host_planes[2], u_size);
+                } else {
+                    for (size_t r = 0; r < uv_h; ++r) {
+                        std::memcpy(v_dst + r * u_stride, frame.host_planes[2] + r * src_v_stride, uv_w);
+                    }
+                }
+            } else if (frame.host_ptr) {
+                std::memcpy(slot_data, frame.host_ptr, frame_payload_bytes(frame));
             }
         }
     } else {
         msg.format = ZHULONG_PIXEL_FORMAT_BGR24;
         msg.offsets[0] = 0;
-        if (!is_zero_copy_frame) {
-            size_t total_bytes = static_cast<size_t>(frame.stride) * frame.height;
-            if (total_bytes <= options_.slot_size && frame.host_ptr) {
-                std::memcpy(slot_data, frame.host_ptr, total_bytes);
-            }
+        if (!is_zero_copy_frame && frame.host_ptr) {
+            // 容量已由前置门禁保证，此处无需再判。
+            std::memcpy(slot_data, frame.host_ptr, frame_payload_bytes(frame));
         }
     }
 
     // 若非零拷贝直通且使用 DMA 槽位，同步拷入 DMA-BUF 并刷出 CPU Cache (RAII 守卫保护)
     if (!is_zero_copy_frame && dma_slot_data) {
+        // ⚠️ 耦合前提：DMA 槽位与 SHM 槽位由 start() 用**同一个** options_.slot_size
+        //    分配（dma_slots_[i] = allocate(slot_size)；shm_pool_.init(..., slot_size)），
+        //    因此「通过上面的 SHM 前置门禁」⟹「DMA 槽位也够」。若未来把两者尺寸解耦，
+        //    此处必须先单独校验 DMA 槽位容量，否则越界。
         zhulong::platform::ScopedCpuSync dma_sync(*dma_slots_[slot_idx], zhulong::platform::DMA_SYNC_WRITE);
-        size_t total_payload_bytes = 0;
-        if (frame.format == FRAME_FORMAT_NV12) {
-            total_payload_bytes = frame.y_plane_size() + static_cast<size_t>(frame.stride) * ((frame.height + 1) / 2);
-        } else if (frame.format == FRAME_FORMAT_YUV420P) {
-            size_t y_size = static_cast<size_t>(frame.stride) * frame.height;
-            size_t u_stride = (frame.stride + 1) / 2;
-            total_payload_bytes = y_size + u_stride * ((frame.height + 1) / 2) * 2;
-        } else {
-            total_payload_bytes = static_cast<size_t>(frame.stride) * frame.height;
-        }
-
-        if (total_payload_bytes <= options_.slot_size) {
-            std::memcpy(dma_slot_data, slot_data, total_payload_bytes);
-        }
+        std::memcpy(dma_slot_data, slot_data, frame_payload_bytes(frame));
     }
 
     // 切换槽位状态为 LEASED
@@ -418,18 +435,37 @@ void FrameBroker::handle_handshake(uint32_t client_id, const HandshakeReq& req) 
     server_.send_msg(client_id, MSG_HANDSHAKE_RESP, &resp, sizeof(resp));
 }
 
+bool FrameBroker::fail_publish(int slot_idx, const std::vector<uint32_t>& target_clients) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (uint32_t cid : target_clients) {
+        auto it = clients_.find(cid);
+        if (it != clients_.end() && it->second.in_flight_count > 0) {
+            it->second.in_flight_count--;
+            it->second.delivered_frames--;
+            it->second.dropped_frames++;
+        }
+    }
+    if (slot_idx >= 0 && static_cast<size_t>(slot_idx) < slots_.size()) {
+        slots_[slot_idx].state = SlotState::FREE;
+        slots_[slot_idx].active_leases.clear();
+    }
+    total_dropped_.fetch_add(1);
+    return false;
+}
+
 void FrameBroker::handle_ack(uint32_t client_id, const FrameAckMsg& ack) {
     std::lock_guard<std::mutex> lock(mutex_);
+
+    // ⚠️ 校验必须先于任何状态修改：畸形 ACK（slot_index 越界）若先扣配额，
+    //    会「只扣不还」，使该客户端配额被永久蚕食并静默停止收帧。
+    if (ack.slot_index >= slots_.size()) {
+        return;
+    }
 
     // 递减客户端在途计数
     auto cit = clients_.find(client_id);
     if (cit != clients_.end() && cit->second.in_flight_count > 0) {
         cit->second.in_flight_count--;
-    }
-
-    // 校验槽位与代次
-    if (ack.slot_index >= slots_.size()) {
-        return;
     }
 
     auto& slot = slots_[ack.slot_index];

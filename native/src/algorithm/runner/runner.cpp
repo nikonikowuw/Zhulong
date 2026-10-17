@@ -431,8 +431,8 @@ namespace zhulong
 
         const auto &api = loader.api();
         zhulong_model_group_h model = nullptr;
-        zhulong_status_t rc = api.model_create("{}", &model);
-        if (rc != ZHULONG_PLUGIN_OK || !model)
+        zhulong_status_t model_rc = api.model_create("{}", &model);
+        if (model_rc != ZHULONG_PLUGIN_OK || !model)
             return 2;
 
         std::atomic<bool> stop_all{false};
@@ -441,6 +441,9 @@ namespace zhulong
 
         auto run_single_worker = [&](size_t idx, const std::string &broker_sock)
         {
+            // ⚠️ 必须是 lambda 局部变量：多路 --broker 时本 lambda 被多个线程并发执行，
+            //    共享外层变量构成数据竞争（-race 阻塞级）。
+            zhulong_status_t rc = ZHULONG_PLUGIN_OK;
             // ⚠️ task 身份必须包含 stream_id：一个算法包可同时订阅多路流，
             // 固定 task_id 会让多路共用一个 task state（父任务 design.md:242 要求 task→worker 亲和）。
             // 这是 runner 唯一允许依赖 socket 路径命名格式的地方。
@@ -571,7 +574,9 @@ namespace zhulong
                     ipc::FrameDispatchMsg dispatch{};
                     std::memcpy(&dispatch, payload.data(), sizeof(dispatch));
 
-                    int active_dma_fd = (received_fd >= 0) ? received_fd : dispatch.reserved_fd;
+                    // ⚠️ 只接受 SCM_RIGHTS 传来的本地副本 fd。绝不回退到 dispatch.reserved_fd：
+                    //    那是宿主进程的 fd 号，在本进程中可能指向任意无关资源。
+                    const int active_dma_fd = received_fd;
                     void* dma_mmap = nullptr;
                     if (active_dma_fd >= 0 && shm.slot_size() > 0)
                     {
@@ -671,28 +676,31 @@ namespace zhulong
                 else if (hdr.msg_type == ipc::MSG_GALLERY_SYNC && !payload.empty())
                 {
                     ParsedSyncShard shard = parse_sync_shard_payload(payload.data(), payload.size());
-                    if (shard.shard_total > 0)
+                    // ⚠️ 聚合逻辑提取到 accumulate_sync_shard（见 gallery_parser.hpp）：
+                    //    它内部完成「索引范围门禁 + 分片级幂等」，使该安全属性可被单测直接覆盖。
+                    const bool accepted = (shard.shard_total > 0) && accumulate_sync_shard(sync_ctx, shard);
+                    if (shard.shard_total > 0 && !accepted &&
+                        (shard.shard_index < 0 || shard.shard_index >= shard.shard_total))
                     {
-                        if (sync_ctx.sync_id != shard.sync_id || sync_ctx.is_expired())
-                        {
-                            sync_ctx.start_sync(shard.sync_id, shard.shard_total);
-                        }
-                        sync_ctx.received_shards.insert(shard.shard_index);
-                        for (auto& item : shard.items)
-                        {
-                            sync_ctx.collected_items.push_back(std::move(item));
-                        }
+                        std::cerr << "{\"status\":\"warning\",\"stage\":\"gallery_sync\","
+                                  << "\"error\":\"shard_index out of range\",\"shard_index\":"
+                                  << shard.shard_index << ",\"shard_total\":" << shard.shard_total << "}"
+                                  << std::endl;
+                    }
+                    // 重复分片无需告警（正常重传）
 
-                        if (sync_ctx.is_complete())
-                        {
-                            size_t total_count = sync_ctx.collected_items.size();
-                            gallery_index.reset(std::move(sync_ctx.collected_items));
+                    // ⚠️ 仅在「本分片是新到达的」且「已收齐」时才应用底库。
+                    //    若去掉 accepted 条件：收齐后 `is_complete()` 恒为真，
+                    //    重复分片会再次 reset，而 collected_items 已被 move → **清空底库**。
+                    if (accepted && sync_ctx.is_complete())
+                    {
+                        size_t total_count = sync_ctx.collected_items.size();
+                        gallery_index.reset(std::move(sync_ctx.collected_items));
 
-                            // 发送 MSG_GALLERY_ACK
-                            std::string ack_json = "{\"sync_id\":" + runner::json_quote(sync_ctx.sync_id) +
-                                                   ",\"success\":true,\"total_faces\":" + std::to_string(total_count) + "}";
-                            client.send_msg(ipc::MSG_GALLERY_ACK, ack_json.data(), ack_json.size());
-                        }
+                        // 发送 MSG_GALLERY_ACK
+                        std::string ack_json = "{\"sync_id\":" + runner::json_quote(sync_ctx.sync_id) +
+                                               ",\"success\":true,\"total_faces\":" + std::to_string(total_count) + "}";
+                        client.send_msg(ipc::MSG_GALLERY_ACK, ack_json.data(), ack_json.size());
                     }
                 }
                 else if (hdr.msg_type == ipc::MSG_GALLERY_UPSERT && !payload.empty())
