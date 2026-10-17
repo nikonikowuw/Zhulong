@@ -9,35 +9,32 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
 
 // Service coordinates perception records, alarms, cooldown deduplication, and persistence.
 type Service struct {
-	store      *Store
-	dbProvider database.DBProvider
-	cooldown   *CooldownManager
-	logger     *zap.Logger
+	store    *Store
+	cooldown *CooldownManager
+	logger   *zap.Logger
 }
 
 // NewService creates a new record Service.
-func NewService(store *Store, dbProvider database.DBProvider, logger *zap.Logger) *Service {
+func NewService(store *Store, logger *zap.Logger) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &Service{
-		store:      store,
-		dbProvider: dbProvider,
-		cooldown:   NewCooldownManager(DefaultCooldown),
-		logger:     logger,
+		store:    store,
+		cooldown: NewCooldownManager(DefaultCooldown),
+		logger:   logger,
 	}
 }
 
 // SetCooldownWindow sets the deduplication window for tracking cooldowns.
 func (s *Service) SetCooldownWindow(d time.Duration) {
-	s.cooldown = NewCooldownManager(d)
+	s.cooldown.SetCooldown(d)
 }
 
 // ProcessInferenceResult consumes an inference result from StreamHub, applies
@@ -48,6 +45,9 @@ func (s *Service) ProcessInferenceResult(ctx context.Context, res aitypes.Infere
 	}
 
 	capturedAt := res.Timestamp.UTC()
+	if res.Timestamp.IsZero() {
+		capturedAt = time.Now().UTC()
+	}
 	dateStr := capturedAt.Format("2006-01-02")
 
 	switch res.TaskType {
@@ -94,10 +94,10 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 						personIDPtr = &pid
 					}
 
-					candidatesBytes, _ := json.Marshal(face.Candidates)
+					candidatesJSON := marshalSliceOrDefault(face.Candidates)
 					boxBytes, _ := json.Marshal(face.Box)
 					bodyBoxBytes, _ := json.Marshal(p.BodyBox)
-					attrsBytes, _ := json.Marshal(p.Attributes)
+					attrsJSON := marshalMapOrDefault(p.Attributes)
 
 					rec := &Recognition{
 						ID:               recID,
@@ -110,13 +110,13 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 						MatchedFaceID:    face.MatchedFaceID,
 						Matched:          face.Matched,
 						Similarity:       face.Similarity,
-						CandidatesJSON:   string(candidatesBytes),
+						CandidatesJSON:   candidatesJSON,
 						FaceImagePath:    fmt.Sprintf("snapshots/%s/%s/%s_face.jpg", res.CameraID, dateStr, recID),
 						GalleryImagePath: galleryImagePath,
 						ImagePath:        fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, recID),
 						BoxJSON:          string(boxBytes),
 						BodyBoxJSON:      string(bodyBoxBytes),
-						AttributesJSON:   string(attrsBytes),
+						AttributesJSON:   attrsJSON,
 						CapturedAt:       capturedAt,
 						CreatedAt:        time.Now().UTC(),
 					}
@@ -130,7 +130,7 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 		if s.cooldown.Allow(capKey, capturedAt) {
 			capID := idutil.New()
 			bodyBoxBytes, _ := json.Marshal(p.BodyBox)
-			attrsBytes, _ := json.Marshal(p.Attributes)
+			attrsJSON := marshalMapOrDefault(p.Attributes)
 
 			cap := &Capture{
 				ID:             capID,
@@ -141,7 +141,7 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 				BoxJSON:        string(bodyBoxBytes),
 				CropPath:       fmt.Sprintf("snapshots/%s/%s/%s_crop.jpg", res.CameraID, dateStr, capID),
 				ImagePath:      fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, capID),
-				AttributesJSON: string(attrsBytes),
+				AttributesJSON: attrsJSON,
 				PTS:            res.PTS,
 				CapturedAt:     capturedAt,
 				CreatedAt:      time.Now().UTC(),
@@ -176,7 +176,7 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 			if s.cooldown.Allow(alarmKey, capturedAt) {
 				alarmID := idutil.New()
 				boxBytes, _ := json.Marshal(d.Box)
-				attrsBytes, _ := json.Marshal(d.Attributes)
+				attrsJSON := marshalMapOrDefault(d.Attributes)
 
 				var cropPath string
 				// Scene-wide alarms like smoke or fire do not have small target crops
@@ -193,7 +193,7 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 					BoxJSON:     string(boxBytes),
 					ImagePath:   fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, alarmID),
 					CropPath:    cropPath,
-					ExtraJSON:   string(attrsBytes),
+					ExtraJSON:   attrsJSON,
 					PTS:         res.PTS,
 					CapturedAt:  capturedAt,
 					CreatedAt:   time.Now().UTC(),
@@ -206,7 +206,7 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 			if s.cooldown.Allow(capKey, capturedAt) {
 				capID := idutil.New()
 				boxBytes, _ := json.Marshal(d.Box)
-				attrsBytes, _ := json.Marshal(d.Attributes)
+				attrsJSON := marshalMapOrDefault(d.Attributes)
 
 				cap := &Capture{
 					ID:             capID,
@@ -217,7 +217,7 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 					BoxJSON:        string(boxBytes),
 					CropPath:       fmt.Sprintf("snapshots/%s/%s/%s_crop.jpg", res.CameraID, dateStr, capID),
 					ImagePath:      fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, capID),
-					AttributesJSON: string(attrsBytes),
+					AttributesJSON: attrsJSON,
 					PTS:            res.PTS,
 					CapturedAt:     capturedAt,
 					CreatedAt:      time.Now().UTC(),
@@ -274,28 +274,38 @@ func (s *Service) processClassification(ctx context.Context, res aitypes.Inferen
 	return nil
 }
 
-// resolveGalleryImagePath queries person_faces for the image_path associated with the matched face ID.
+// resolveGalleryImagePath queries person_faces via Store for the image_path associated with the matched face ID.
 func (s *Service) resolveGalleryImagePath(ctx context.Context, faceID string) string {
-	if s.dbProvider == nil || faceID == "" {
+	if s.store == nil || faceID == "" {
 		return ""
 	}
-	db := s.dbProvider.DB()
-	if db == nil {
+	path, err := s.store.GetFaceImagePath(ctx, faceID)
+	if err != nil {
+		s.logger.Debug("failed to resolve gallery image path", zap.String("face_id", faceID), zap.Error(err))
 		return ""
 	}
+	return path
+}
 
-	var imagePath string
-	row := db.WithContext(ctx).Table("person_faces").Select("image_path").Where("id = ?", faceID).Row()
-	if err := row.Scan(&imagePath); err != nil {
-		return ""
-	}
-	return imagePath
+var nonAlarmSubstrings = []string{
+	"hydrant",
+	"extinguisher",
 }
 
 func isAlarmLabel(label string) bool {
 	l := strings.ToLower(label)
+	for _, sub := range nonAlarmSubstrings {
+		if strings.Contains(l, sub) {
+			return false
+		}
+	}
+	// Normal helmet detection should not trigger an alarm; only violations (e.g. no_helmet) or explicit alarms
+	if l == "helmet" || l == "safety_helmet" || l == "wearing_helmet" {
+		return false
+	}
 	return strings.Contains(l, "alarm") ||
-		strings.Contains(l, "helmet") ||
+		strings.Contains(l, "no_helmet") ||
+		strings.Contains(l, "without_helmet") ||
 		strings.Contains(l, "smoke") ||
 		strings.Contains(l, "fire") ||
 		strings.Contains(l, "flame") ||
@@ -306,7 +316,34 @@ func isAlarmLabel(label string) bool {
 
 func isSceneWideAlarm(label string) bool {
 	l := strings.ToLower(label)
+	for _, sub := range nonAlarmSubstrings {
+		if strings.Contains(l, sub) {
+			return false
+		}
+	}
 	return strings.Contains(l, "smoke") || strings.Contains(l, "fire") || strings.Contains(l, "flame")
+}
+
+func marshalSliceOrDefault[T any](items []T) string {
+	if len(items) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(items)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func marshalMapOrDefault(m map[string]any) string {
+	if len(m) == 0 {
+		return "{}"
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }
 
 // =========================================================================

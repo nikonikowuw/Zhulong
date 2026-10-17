@@ -78,8 +78,12 @@ func (s *Store) CreateRecognitionBatch(ctx context.Context, recs []*Recognition)
 	if err != nil {
 		return err
 	}
+	valid := make([]*Recognition, 0, len(recs))
 	now := time.Now().UTC()
 	for _, r := range recs {
+		if r == nil {
+			continue
+		}
 		if r.CapturedAt.IsZero() {
 			r.CapturedAt = now
 		} else {
@@ -90,8 +94,12 @@ func (s *Store) CreateRecognitionBatch(ctx context.Context, recs []*Recognition)
 		} else {
 			r.CreatedAt = r.CreatedAt.UTC()
 		}
+		valid = append(valid, r)
 	}
-	return db.CreateInBatches(recs, 100).Error
+	if len(valid) == 0 {
+		return nil
+	}
+	return db.CreateInBatches(valid, 100).Error
 }
 
 // ListRecognitions returns filtered and paginated recognition records.
@@ -185,8 +193,12 @@ func (s *Store) CreateAlarmBatch(ctx context.Context, alarms []*Alarm) error {
 	if err != nil {
 		return err
 	}
+	valid := make([]*Alarm, 0, len(alarms))
 	now := time.Now().UTC()
 	for _, a := range alarms {
+		if a == nil {
+			continue
+		}
 		if a.CapturedAt.IsZero() {
 			a.CapturedAt = now
 		} else {
@@ -197,8 +209,12 @@ func (s *Store) CreateAlarmBatch(ctx context.Context, alarms []*Alarm) error {
 		} else {
 			a.CreatedAt = a.CreatedAt.UTC()
 		}
+		valid = append(valid, a)
 	}
-	return db.CreateInBatches(alarms, 100).Error
+	if len(valid) == 0 {
+		return nil
+	}
+	return db.CreateInBatches(valid, 100).Error
 }
 
 // ListAlarms returns filtered and paginated alarm records.
@@ -289,8 +305,12 @@ func (s *Store) CreateCaptureBatch(ctx context.Context, caps []*Capture) error {
 	if err != nil {
 		return err
 	}
+	valid := make([]*Capture, 0, len(caps))
 	now := time.Now().UTC()
 	for _, c := range caps {
+		if c == nil {
+			continue
+		}
 		if c.CapturedAt.IsZero() {
 			c.CapturedAt = now
 		} else {
@@ -301,8 +321,12 @@ func (s *Store) CreateCaptureBatch(ctx context.Context, caps []*Capture) error {
 		} else {
 			c.CreatedAt = c.CreatedAt.UTC()
 		}
+		valid = append(valid, c)
 	}
-	return db.CreateInBatches(caps, 100).Error
+	if len(valid) == 0 {
+		return nil
+	}
+	return db.CreateInBatches(valid, 100).Error
 }
 
 // ListCaptures returns filtered and paginated capture records.
@@ -388,4 +412,24 @@ func (s *Store) ListDistinctTargetTypes(ctx context.Context) ([]string, error) {
 		types = make([]string, 0)
 	}
 	return types, nil
+}
+
+// GetFaceImagePath retrieves the image_path associated with the matched face ID from person_faces.
+func (s *Store) GetFaceImagePath(ctx context.Context, faceID string) (string, error) {
+	if faceID == "" {
+		return "", nil
+	}
+	db, err := s.db(ctx)
+	if err != nil {
+		return "", err
+	}
+	var imagePath string
+	row := db.Table("person_faces").Select("image_path").Where("id = ?", faceID).Row()
+	if err := row.Scan(&imagePath); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", nil
+		}
+		return "", err
+	}
+	return imagePath, nil
 }

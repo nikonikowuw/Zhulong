@@ -53,7 +53,10 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Router       /records/recognitions [get]
 func (h *Handler) ListRecognitions(c *gin.Context) {
 	var q ListRecognitionsQuery
-	_ = c.ShouldBindQuery(&q)
+	if err := c.ShouldBindQuery(&q); err != nil {
+		httputil.HandleBindError(c, err)
+		return
+	}
 
 	filter, err := q.ToFilter()
 	if err != nil {
@@ -101,7 +104,10 @@ func (h *Handler) GetRecognition(c *gin.Context) {
 // @Router       /records/alarms [get]
 func (h *Handler) ListAlarms(c *gin.Context) {
 	var q ListAlarmsQuery
-	_ = c.ShouldBindQuery(&q)
+	if err := c.ShouldBindQuery(&q); err != nil {
+		httputil.HandleBindError(c, err)
+		return
+	}
 
 	filter, err := q.ToFilter()
 	if err != nil {
@@ -149,7 +155,10 @@ func (h *Handler) GetAlarm(c *gin.Context) {
 // @Router       /records/captures [get]
 func (h *Handler) ListCaptures(c *gin.Context) {
 	var q ListCapturesQuery
-	_ = c.ShouldBindQuery(&q)
+	if err := c.ShouldBindQuery(&q); err != nil {
+		httputil.HandleBindError(c, err)
+		return
+	}
 
 	filter, err := q.ToFilter()
 	if err != nil {

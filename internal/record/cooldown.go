@@ -44,12 +44,24 @@ func (cm *CooldownManager) Allow(key string, now time.Time) bool {
 	}
 
 	lastTime, exists := cm.records[key]
-	if exists && now.Sub(lastTime) < cm.cooldown {
-		return false
+	if exists {
+		diff := now.Sub(lastTime)
+		if diff >= 0 && diff < cm.cooldown {
+			return false
+		}
 	}
 
 	cm.records[key] = now
 	return true
+}
+
+// SetCooldown updates the cooldown window in a thread-safe manner.
+func (cm *CooldownManager) SetCooldown(d time.Duration) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	if d > 0 {
+		cm.cooldown = d
+	}
 }
 
 // Reset clears all cooldown records.

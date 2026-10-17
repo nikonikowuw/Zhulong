@@ -36,6 +36,9 @@ func (r *Recognition) ToResponse() RecognitionResponse {
 	if r.CandidatesJSON != "" {
 		_ = json.Unmarshal([]byte(r.CandidatesJSON), &candidates)
 	}
+	if candidates == nil {
+		candidates = make([]aitypes.FaceCandidate, 0)
+	}
 
 	var box [4]float64
 	if r.BoxJSON != "" {
@@ -50,6 +53,9 @@ func (r *Recognition) ToResponse() RecognitionResponse {
 	attributes := make(map[string]any)
 	if r.AttributesJSON != "" {
 		_ = json.Unmarshal([]byte(r.AttributesJSON), &attributes)
+	}
+	if attributes == nil {
+		attributes = make(map[string]any)
 	}
 
 	return RecognitionResponse{
@@ -102,6 +108,9 @@ func (a *Alarm) ToResponse() AlarmResponse {
 	if a.ExtraJSON != "" {
 		_ = json.Unmarshal([]byte(a.ExtraJSON), &extra)
 	}
+	if extra == nil {
+		extra = make(map[string]any)
+	}
 
 	return AlarmResponse{
 		ID:          a.ID,
@@ -145,6 +154,9 @@ func (c *Capture) ToResponse() CaptureResponse {
 	attributes := make(map[string]any)
 	if c.AttributesJSON != "" {
 		_ = json.Unmarshal([]byte(c.AttributesJSON), &attributes)
+	}
+	if attributes == nil {
+		attributes = make(map[string]any)
 	}
 
 	return CaptureResponse{

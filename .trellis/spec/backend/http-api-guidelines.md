@@ -55,6 +55,7 @@
 ```
 
 - **空数组铁律**：无数据时 `items` **必须返回空数组 `[]`，严禁返回 `null`**。
+- **DTO 字段 Null-safety 铁律**：当 DTO 中包含反序列化 JSON 字段（如 `candidates`、`attributes`）时，严防 `json.Unmarshal([]byte("null"), &slice)` 将已初始化的空切片覆盖为 `nil`。在 `ToResponse()` 方法中反序列化后必须做显式兜底（`if slice == nil { slice = make(...) }`），确保输出到 API 时列表恒为 `[]`、字典恒为 `{}`，避免前端 Zod 校验因收到 `null` 抛错崩溃。
 - **后端统一实现**：后端 Handler 统一使用 `httputil.PaginatedSuccess(c, items, total, page, pageSize)` 输出；
 - **前端统一契约**：前端 API 定义统一使用 `@/shared/api/client` 导出的 `createPaginatedSchema(itemSchema)` 校验，严禁直接使用裸 `z.array(itemSchema)` 解析分页接口。
 - **不分页特例**：仅在数据项具备严格物理极小上限（如网卡列表 `interfaces` ≤ 8、固定枚举字典、明确 < 20 条的单例轻量配置）时允许不分页，且依然推荐返回 `{ items: [...] }` 保持结构一致。

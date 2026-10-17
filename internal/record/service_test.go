@@ -21,7 +21,7 @@ func TestServiceProcessPersonStructureAndCooldown(t *testing.T) {
 		t.Fatalf("insert dummy person_face: %v", err)
 	}
 
-	svc := record.NewService(store, dbStore, zap.NewNop())
+	svc := record.NewService(store, zap.NewNop())
 	svc.SetCooldownWindow(3 * time.Second)
 
 	captureTime := time.Date(2026, 10, 16, 15, 30, 0, 123000000, time.UTC)
@@ -124,11 +124,11 @@ func TestServiceProcessPersonStructureAndCooldown(t *testing.T) {
 }
 
 func TestServiceProcessDetectionsAlarmsAndCaptures(t *testing.T) {
-	store, dbStore, cleanup := setupTestStore(t)
+	store, _, cleanup := setupTestStore(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	svc := record.NewService(store, dbStore, zap.NewNop())
+	svc := record.NewService(store, zap.NewNop())
 	t0 := time.Date(2026, 10, 16, 16, 0, 0, 0, time.UTC)
 
 	res := aitypes.InferenceResult{
@@ -186,5 +186,57 @@ func TestServiceProcessDetectionsAlarmsAndCaptures(t *testing.T) {
 	}
 	if caps[0].TargetType != "car" {
 		t.Errorf("expected targetType 'car', got %q", caps[0].TargetType)
+	}
+}
+
+func TestServiceAlarmLabelDiscrimination(t *testing.T) {
+	store, _, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	svc := record.NewService(store, zap.NewNop())
+	t0 := time.Date(2026, 10, 16, 17, 0, 0, 0, time.UTC)
+
+	res := aitypes.InferenceResult{
+		CameraID:    "cam_01",
+		AlgorithmID: "algo_01",
+		PTS:         66666,
+		Timestamp:   t0,
+		TaskType:    aitypes.TaskTypeDetection,
+		Detections: []aitypes.DetectionItem{
+			{Box: [4]float64{0.1, 0.1, 0.2, 0.2}, Label: "helmet", Score: 0.9},
+			{Box: [4]float64{0.2, 0.2, 0.3, 0.3}, Label: "fire_hydrant", Score: 0.85},
+			{Box: [4]float64{0.3, 0.3, 0.4, 0.4}, Label: "fire_extinguisher", Score: 0.88},
+			{Box: [4]float64{0.4, 0.4, 0.5, 0.5}, Label: "no_helmet", Score: 0.95},
+			{Box: [4]float64{0.5, 0.5, 0.6, 0.6}, Label: "real_fire", Score: 0.99},
+		},
+	}
+
+	if err := svc.ProcessInferenceResult(ctx, res); err != nil {
+		t.Fatalf("ProcessInferenceResult failed: %v", err)
+	}
+
+	alarms, totalAlarms, err := svc.ListAlarms(ctx, record.AlarmFilter{CameraID: "cam_01"})
+	if err != nil {
+		t.Fatalf("ListAlarms failed: %v", err)
+	}
+	if totalAlarms != 2 {
+		t.Fatalf("expected 2 alarms (no_helmet, real_fire), got %d: %+v", totalAlarms, alarms)
+	}
+	alarmTypes := map[string]bool{}
+	for _, a := range alarms {
+		alarmTypes[a.AlarmType] = true
+	}
+	if !alarmTypes["no_helmet"] || !alarmTypes["real_fire"] {
+		t.Errorf("unexpected alarm types: %+v", alarmTypes)
+	}
+
+	// helmet, fire_hydrant, fire_extinguisher should be classified as captures
+	caps, totalCaps, err := svc.ListCaptures(ctx, record.CaptureFilter{CameraID: "cam_01"})
+	if err != nil {
+		t.Fatalf("ListCaptures failed: %v", err)
+	}
+	if totalCaps != 3 {
+		t.Fatalf("expected 3 captures (helmet, fire_hydrant, fire_extinguisher), got %d: %+v", totalCaps, caps)
 	}
 }

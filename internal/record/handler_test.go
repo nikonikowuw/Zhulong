@@ -16,7 +16,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func newRecordHandlerHarness(t *testing.T) (*gin.Engine, *record.Service, func()) {
+func newRecordHandlerHarness(t *testing.T) (*gin.Engine, *record.Service, *record.Store, func()) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -44,15 +44,15 @@ func newRecordHandlerHarness(t *testing.T) (*gin.Engine, *record.Service, func()
 	cleanup := func() {
 		_ = dbStore.Close()
 	}
-	return router, comps.Service, cleanup
+	return router, comps.Service, comps.Store, cleanup
 }
 
 func TestHandlerListAndGetRecognitions(t *testing.T) {
-	router, service, cleanup := newRecordHandlerHarness(t)
+	router, _, store, cleanup := newRecordHandlerHarness(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	// Seed recognitions
+	// Seed recognition record
 	recID := idutil.New()
 	rec := &record.Recognition{
 		ID:               recID,
@@ -68,17 +68,21 @@ func TestHandlerListAndGetRecognitions(t *testing.T) {
 		FaceImagePath:    "snapshots/cam_01/2026-10-16/rec_face.jpg",
 		GalleryImagePath: "faces/alice.jpg",
 		ImagePath:        "snapshots/cam_01/2026-10-16/rec.jpg",
-		CapturedAt:       time.Now().UTC(),
+		BoxJSON:          `[0.1,0.2,0.3,0.4]`,
+		BodyBoxJSON:      `[0.1,0.2,0.5,0.8]`,
+		AttributesJSON:   `{"gender":"female"}`,
+		CapturedAt:       time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC),
 	}
-	store := record.NewStore(nil)
-	_ = store // test through direct service or store
+	if err := store.CreateRecognition(ctx, rec); err != nil {
+		t.Fatalf("CreateRecognition failed: %v", err)
+	}
 
-	// Use store via reflect or test database insert
+	// 1. List recognitions
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/v1/records/recognitions", nil)
+	req, _ := http.NewRequest("GET", "/api/v1/records/recognitions?cameraId=cam_01", nil)
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var resp httputil.Response
@@ -89,7 +93,29 @@ func TestHandlerListAndGetRecognitions(t *testing.T) {
 		t.Errorf("expected code 'OK', got %q", resp.Code)
 	}
 
-	// Test 404 on non-existent recognition
+	// 2. Get single recognition by ID
+	wGet := httptest.NewRecorder()
+	reqGet, _ := http.NewRequest("GET", "/api/v1/records/recognitions/"+recID, nil)
+	router.ServeHTTP(wGet, reqGet)
+	if wGet.Code != http.StatusOK {
+		t.Fatalf("expected 200 for GetRecognition, got %d: %s", wGet.Code, wGet.Body.String())
+	}
+
+	var getResp struct {
+		Code string                     `json:"code"`
+		Data record.RecognitionResponse `json:"data"`
+	}
+	if err := json.Unmarshal(wGet.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("unmarshal get response: %v", err)
+	}
+	if getResp.Data.ID != recID || getResp.Data.PersonName != "Alice" {
+		t.Errorf("unexpected record data: %+v", getResp.Data)
+	}
+	if len(getResp.Data.Candidates) != 1 || getResp.Data.Candidates[0].FaceID != "face_01" {
+		t.Errorf("unexpected candidates: %+v", getResp.Data.Candidates)
+	}
+
+	// 3. Test 404 on non-existent recognition
 	wNotFound := httptest.NewRecorder()
 	reqNotFound, _ := http.NewRequest("GET", "/api/v1/records/recognitions/non_existent", nil)
 	router.ServeHTTP(wNotFound, reqNotFound)
@@ -97,35 +123,69 @@ func TestHandlerListAndGetRecognitions(t *testing.T) {
 		t.Errorf("expected 404 for non-existent recognition, got %d", wNotFound.Code)
 	}
 
-	// Test invalid time format returns 422
+	// 4. Test invalid time format returns 422
 	wInvalidTime := httptest.NewRecorder()
 	reqInvalidTime, _ := http.NewRequest("GET", "/api/v1/records/recognitions?startTime=invalid-date", nil)
 	router.ServeHTTP(wInvalidTime, reqInvalidTime)
 	if wInvalidTime.Code != http.StatusUnprocessableEntity {
 		t.Errorf("expected 422 for invalid time format, got %d", wInvalidTime.Code)
 	}
-	_ = rec
-	_ = service
-	_ = ctx
+
+	// 5. Test invalid query param binding returns 400
+	wInvalidQuery := httptest.NewRecorder()
+	reqInvalidQuery, _ := http.NewRequest("GET", "/api/v1/records/recognitions?page=abc", nil)
+	router.ServeHTTP(wInvalidQuery, reqInvalidQuery)
+	if wInvalidQuery.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid query int binding, got %d: %s", wInvalidQuery.Code, wInvalidQuery.Body.String())
+	}
 }
 
 func TestHandlerListAndGetAlarms(t *testing.T) {
-	router, _, cleanup := newRecordHandlerHarness(t)
+	router, _, store, cleanup := newRecordHandlerHarness(t)
 	defer cleanup()
+	ctx := context.Background()
+
+	alarmID := idutil.New()
+	alarm := &record.Alarm{
+		ID:          alarmID,
+		CameraID:    "cam_01",
+		AlgorithmID: "algo_01",
+		AlarmType:   "smoke_detection",
+		Score:       0.94,
+		BoxJSON:     `[0,0,1,1]`,
+		ImagePath:   "snapshots/cam_01/2026-10-16/a1.jpg",
+		CropPath:    "",
+		ExtraJSON:   `{"area":0.8}`,
+		PTS:         2000,
+		CapturedAt:  time.Date(2026, 10, 16, 11, 0, 0, 0, time.UTC),
+	}
+	if err := store.CreateAlarm(ctx, alarm); err != nil {
+		t.Fatalf("CreateAlarm failed: %v", err)
+	}
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/v1/records/alarms", nil)
+	req, _ := http.NewRequest("GET", "/api/v1/records/alarms?alarmType=smoke_detection", nil)
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp httputil.Response
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
+	wGet := httptest.NewRecorder()
+	reqGet, _ := http.NewRequest("GET", "/api/v1/records/alarms/"+alarmID, nil)
+	router.ServeHTTP(wGet, reqGet)
+	if wGet.Code != http.StatusOK {
+		t.Fatalf("expected 200 for GetAlarm, got %d: %s", wGet.Code, wGet.Body.String())
 	}
-	if resp.Code != "OK" {
-		t.Errorf("expected code 'OK', got %q", resp.Code)
+
+	var getResp struct {
+		Code string               `json:"code"`
+		Data record.AlarmResponse `json:"data"`
+	}
+	if err := json.Unmarshal(wGet.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("unmarshal alarm response: %v", err)
+	}
+	if getResp.Data.ID != alarmID || getResp.Data.AlarmType != "smoke_detection" {
+		t.Errorf("unexpected alarm data: %+v", getResp.Data)
 	}
 
 	// Test 404 on non-existent alarm
@@ -135,25 +195,62 @@ func TestHandlerListAndGetAlarms(t *testing.T) {
 	if wNotFound.Code != http.StatusNotFound {
 		t.Errorf("expected 404 for non-existent alarm, got %d", wNotFound.Code)
 	}
+
+	// Test alarm-types endpoint
+	wAlarmTypes := httptest.NewRecorder()
+	reqAlarmTypes, _ := http.NewRequest("GET", "/api/v1/records/alarms/alarm-types", nil)
+	router.ServeHTTP(wAlarmTypes, reqAlarmTypes)
+	if wAlarmTypes.Code != http.StatusOK {
+		t.Errorf("expected 200 for alarm-types, got %d", wAlarmTypes.Code)
+	}
 }
 
 func TestHandlerListAndGetCaptures(t *testing.T) {
-	router, _, cleanup := newRecordHandlerHarness(t)
+	router, _, store, cleanup := newRecordHandlerHarness(t)
 	defer cleanup()
+	ctx := context.Background()
+
+	capID := idutil.New()
+	capRecord := &record.Capture{
+		ID:             capID,
+		CameraID:       "cam_01",
+		TargetType:     "person",
+		TrackID:        123,
+		Score:          0.91,
+		BoxJSON:        `[0.1,0.2,0.3,0.4]`,
+		CropPath:       "snapshots/cam_01/2026-10-16/c1_crop.jpg",
+		ImagePath:      "snapshots/cam_01/2026-10-16/c1.jpg",
+		AttributesJSON: `{"color":"blue"}`,
+		PTS:            3000,
+		CapturedAt:     time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC),
+	}
+	if err := store.CreateCapture(ctx, capRecord); err != nil {
+		t.Fatalf("CreateCapture failed: %v", err)
+	}
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/v1/records/captures", nil)
+	req, _ := http.NewRequest("GET", "/api/v1/records/captures?targetType=person", nil)
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var resp httputil.Response
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
+	wGet := httptest.NewRecorder()
+	reqGet, _ := http.NewRequest("GET", "/api/v1/records/captures/"+capID, nil)
+	router.ServeHTTP(wGet, reqGet)
+	if wGet.Code != http.StatusOK {
+		t.Fatalf("expected 200 for GetCapture, got %d: %s", wGet.Code, wGet.Body.String())
 	}
-	if resp.Code != "OK" {
-		t.Errorf("expected code 'OK', got %q", resp.Code)
+
+	var getResp struct {
+		Code string                 `json:"code"`
+		Data record.CaptureResponse `json:"data"`
+	}
+	if err := json.Unmarshal(wGet.Body.Bytes(), &getResp); err != nil {
+		t.Fatalf("unmarshal capture response: %v", err)
+	}
+	if getResp.Data.ID != capID || getResp.Data.TargetType != "person" {
+		t.Errorf("unexpected capture data: %+v", getResp.Data)
 	}
 
 	// Test 404 on non-existent capture
@@ -162,14 +259,6 @@ func TestHandlerListAndGetCaptures(t *testing.T) {
 	router.ServeHTTP(wNotFound, reqNotFound)
 	if wNotFound.Code != http.StatusNotFound {
 		t.Errorf("expected 404 for non-existent capture, got %d", wNotFound.Code)
-	}
-
-	// Test alarm-types endpoint
-	wAlarmTypes := httptest.NewRecorder()
-	reqAlarmTypes, _ := http.NewRequest("GET", "/api/v1/records/alarms/alarm-types", nil)
-	router.ServeHTTP(wAlarmTypes, reqAlarmTypes)
-	if wAlarmTypes.Code != http.StatusOK {
-		t.Errorf("expected 200 for alarm-types, got %d", wAlarmTypes.Code)
 	}
 
 	// Test target-types endpoint

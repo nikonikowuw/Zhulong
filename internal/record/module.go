@@ -51,7 +51,7 @@ func NewRecordComponents(
 		logger = zap.NewNop()
 	}
 	store := NewStore(dbProvider)
-	service := NewService(store, dbProvider, logger)
+	service := NewService(store, logger)
 	handler := NewHandler(service, logger)
 
 	return RecordComponents{
