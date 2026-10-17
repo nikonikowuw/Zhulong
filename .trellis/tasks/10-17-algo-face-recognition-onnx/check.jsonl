@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "ONNX 依赖隔离与测试验证规范"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法插件质量与门禁规则"}

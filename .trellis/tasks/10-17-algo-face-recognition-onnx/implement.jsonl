@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "ONNX Runtime 推理后端架构、零拷贝输入与构建规范"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "人脸算法插件 C ABI、Arena 打包与归一化契约"}
+{"file": ".trellis/tasks/archive/2026-10/10-14-face-recognition-e2e/research/face-model-baseline.md", "reason": "SCRFD 与 FaceLiVTv2 ONNX 模型预处理、通道序与黄金基准"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "算法包 manifest 与生命周期规范"}

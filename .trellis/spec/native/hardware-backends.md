@@ -243,6 +243,14 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
    - `ORT_ENGINE_ERROR` / `ORT_RUNTIME_EXCEPTION` / `ORT_FAIL` 及未知码 ➔ `ZHULONG_PLUGIN_ERR_INTERNAL`
    - `std::bad_alloc` ➔ `ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY`
 
+### 6.4 跨后端算法包模型适配与单测 Mock 委派
+
+1. **多格式输入布局解耦（Dual Layout）**：
+   - 算法插件（如 `FaceRecognitionPlugin`）通过检测模型输入张量的形状与数据类型（`[1, 3, H, W]` Float32 vs `[1, H, W, 3]` UInt8），动态自适应采用 NCHW 归一化 Float32 张量（ONNX SCRFD: `(x - 127.5f)/128.0f`；ArcFace/FaceLiVTv2: `(x - 127.5f)/127.5f`）或 NHWC 裸字节张量（RKNN），使上层应用与推理引擎布局约束完全解耦。
+   - 特征提取输出 512 维向量在插件内原地执行 L2 归一化（Unit Norm），确保后续 1:N 余弦相似度比对稳定对齐黄金基准。
+2. **测试环境 Mock 委派规范**：
+   - 在启用 `ZHULONG_INFERENCE_BACKEND=onnx` 构建时，通用 Runner/Broker 单元测试可能加载 `mock.model` 或以 `.weights` 结尾的桩模型。`OnnxInferenceBackend` 对符合 Mock 规约的模型透明委派至 `CpuInferenceBackend`，而对于真实 `.onnx` 模型或非法/损毁文件则执行严格的 ONNX 格式校验与错误码映射，兼顾了通用测试桩复用与 ONNX 严苛错误边界。
+
 ---
 
 ## 7. 验证命令
@@ -262,8 +270,8 @@ cmake --build build/native/host --parallel 8 --target ZhulongOnnxTests
 ctest --test-dir build/native/host -R ZhulongOnnx -V
 
 python3 native/scripts/build.py configure --inference-backend onnx --sanitizer address
-cmake --build build/native/host-address --parallel 8 --target ZhulongOnnxTests
-ctest --test-dir build/native/host-address -R ZhulongOnnx -V
+cmake --build build/native/host-address --parallel 8 --target ZhulongOnnxTests ZhulongFaceRecognitionOnnxTests
+ctest --test-dir build/native/host-address -R "ZhulongOnnx|ZhulongFaceRecognitionOnnx" -V
 
 # 4. 运行本地默认 CPU 与 DMA-BUF / IPC SCM_RIGHTS 全量回归单元测试
 python3 native/scripts/build.py test

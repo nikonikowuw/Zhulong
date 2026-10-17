@@ -24,15 +24,46 @@ static std::string resolve_model_path(const std::string& rel_path) {
     if (std::ifstream(rel_path).good()) {
         return rel_path;
     }
+    const std::vector<std::string> cwd_candidates = {
+        "packages/face_recognition/targets/cpu/" + rel_path,
+        "packages/face_recognition/targets/rk3568/" + rel_path,
+        "../../../packages/face_recognition/targets/cpu/" + rel_path,
+        "../../../packages/face_recognition/targets/rk3568/" + rel_path,
+        "../../packages/face_recognition/targets/cpu/" + rel_path,
+        "../../packages/face_recognition/targets/rk3568/" + rel_path,
+    };
+    for (const auto& cand : cwd_candidates) {
+        if (std::ifstream(cand).good()) {
+            return cand;
+        }
+    }
+    const char* env_dir = std::getenv("ZHULONG_FACE_MODEL_DIR");
+    if (!env_dir) env_dir = std::getenv("ZHULONG_MODEL_DIR");
+    if (env_dir && env_dir[0] != '\0') {
+        std::string cand = std::string(env_dir) + "/" + rel_path;
+        if (std::ifstream(cand).good()) {
+            return cand;
+        }
+    }
     Dl_info info;
     if (dladdr(reinterpret_cast<void*>(&resolve_model_path), &info) && info.dli_fname) {
         std::string so_path = info.dli_fname;
         auto pos = so_path.find_last_of('/');
         if (pos != std::string::npos) {
             std::string dir = so_path.substr(0, pos);
-            std::string candidate = dir + "/" + rel_path;
-            if (std::ifstream(candidate).good()) {
-                return candidate;
+            const std::vector<std::string> so_candidates = {
+                dir + "/" + rel_path,
+                dir + "/../../../packages/face_recognition/targets/cpu/" + rel_path,
+                dir + "/../../../packages/face_recognition/targets/rk3568/" + rel_path,
+                dir + "/../../packages/face_recognition/targets/cpu/" + rel_path,
+                dir + "/../../packages/face_recognition/targets/rk3568/" + rel_path,
+                dir + "/../packages/face_recognition/targets/cpu/" + rel_path,
+                dir + "/../packages/face_recognition/targets/rk3568/" + rel_path,
+            };
+            for (const auto& cand : so_candidates) {
+                if (std::ifstream(cand).good()) {
+                    return cand;
+                }
             }
         }
     }
@@ -49,26 +80,35 @@ public:
         // 1. 加载人脸检测模型 (SCRFD det_500m)
         std::string det_path = resolve_model_path("models/det_500m.rknn");
         det_model_ = zhulong::Model::load(det_path);
+        bool det_is_onnx = false;
         if (!det_model_.valid()) {
-            det_model_ = zhulong::Model::load("models/det_500m.onnx");
+            det_path = resolve_model_path("models/det_500m.onnx");
+            det_model_ = zhulong::Model::load(det_path);
+            det_is_onnx = det_model_.valid();
         }
         if (!det_model_.valid()) {
-            det_model_ = zhulong::Model::load("det_500m.weights");
+            det_model_ = zhulong::Model::load(resolve_model_path("det_500m.weights"));
         }
 
         // 2. 加载人脸特征提取模型 (FaceLiVTv2-L)
         std::string rec_path = resolve_model_path("models/facelivtv2-l.rknn");
         rec_model_ = zhulong::Model::load(rec_path);
+        bool rec_is_onnx = false;
         if (!rec_model_.valid()) {
-            rec_model_ = zhulong::Model::load("models/facelivtv2-l.onnx");
+            rec_path = resolve_model_path("models/facelivtv2-l.onnx");
+            rec_model_ = zhulong::Model::load(rec_path);
+            rec_is_onnx = rec_model_.valid();
         }
         if (!rec_model_.valid()) {
-            rec_model_ = zhulong::Model::load("facelivtv2-l.weights");
+            rec_model_ = zhulong::Model::load(resolve_model_path("facelivtv2-l.weights"));
         }
 
         if (!det_model_.valid() || !rec_model_.valid()) {
             return ZHULONG_PLUGIN_ERR_INTERNAL;
         }
+
+        detector_.set_is_onnx(det_is_onnx);
+        extractor_.set_is_onnx(rec_is_onnx);
 
         return ZHULONG_PLUGIN_OK;
     }
@@ -124,7 +164,7 @@ public:
             if (Aligner::estimate_similarity_transform(src_pixels, affine_mat)) {
                 zhulong::Tensor rec_input({1, 112, 112, 3}, zhulong::DataType::UINT8);
                 if (Aligner::crop_and_align_direct(image, affine_mat, rec_input.data<uint8_t>(), 112, 112)) {
-                    if (rec_session && rec_session->valid()) {
+                    if (det.is_real_detection && rec_session && rec_session->valid()) {
                         probe_features = extractor_.extract(*rec_session, rec_input);
                     } else {
                         probe_features = extractor_.extract(rec_input.data<uint8_t>(), 112, 112, det.face_box);

@@ -846,3 +846,43 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+## Session 66: 接入 ONNX Runtime 人脸识别算法包与端到端测试
+<!-- trellis-session: v=2 fp=8a1b3f920c8e1d44 -->
+
+**Date**: 2026-10-17
+**Task**: 接入 ONNX 版本人脸识别算法包 (10-17-algo-face-recognition-onnx)
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+完成人脸识别算法包（SCRFD 人脸检测与 FaceLiVTv2-L 特征提取）在 ONNX Runtime 后端下的双布局（NCHW float32 与 NHWC uint8）端到端接入，实现原生单元测试套件、AddressSanitizer 内存安全审计与算法包组装校验。
+
+### Main Changes
+
+- 在 FaceDetector 中检测模型输入布局，支持 ONNX SCRFD NCHW Float32 预处理与 `(x - 127.5f)/128.0f` 归一化；跳过二次 Sigmoid 并确保人脸与关键点严格 `[0.0, 1.0]` 归一化
+- 在 FaceFeatureExtractor 中支持 NCHW Float32 预处理与 `(x - 127.5f)/127.5f` 归一化，512 维输出特征向量原地执行 L2 归一化
+- 在 FaceRecognitionPlugin 中区分 ONNX 与 RKNN 模型路径，支持 CPU / ONNX 模式下的真实检测与全流程推理
+- 在 OnnxInferenceBackend 中针对 mock 桩模型（`.weights` / `mock.model`）安全委派至 CpuInferenceBackend，兼顾测试桩兼容与 ONNX 严苛输入校验
+- 引入 PPM 纯 C++ 零依赖图像测试夹具，新增 native/tests/face_recognition_onnx_test.cpp 覆盖检测、特征比对、1:N 底库匹配与插件 C ABI
+- 同步更新原生硬件加速后端规范 .trellis/spec/native/hardware-backends.md
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2ee3e96` | feat(algo): integrate ONNX Runtime face recognition pipeline and native tests |
+
+### Testing
+
+- [OK] 运行 ctest -R "ZhulongOnnx|FaceRecognition" 100% 通过（ZhulongFaceRecognitionPlugin, ZhulongFaceRecognitionOnnx, ZhulongOnnxBackend）
+- [OK] 运行 python3 native/scripts/build.py test 默认 CPU 后端全量测试 20/20 通过
+- [OK] 运行 ASan 构建 (ZHULONG_SANITIZER=address) 下 22/22 单元测试 100% 通过，无内存越界与泄漏
+- [OK] 运行 build_package.py --target cpu 黑盒验包通过并成功打包 face_recognition-x86_64-cpu.tar.gz
+- [OK] 运行 make go-check 100% 绿灯（含 gofmt, go vet, Go -race 测试及 RTSP loopback 集成测试）
+
+### Status
+
+[OK] **Completed**

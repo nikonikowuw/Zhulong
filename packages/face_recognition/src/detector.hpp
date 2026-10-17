@@ -27,6 +27,7 @@ struct FaceDetection {
     uint64_t track_id{0};                                    /**< 跟踪目标 ID */
     std::array<float, 4> face_box_pixels{0.0f, 0.0f, 0.0f, 0.0f}; /**< 原帧像素坐标 [x1, y1, x2, y2] */
     std::array<Point2f, 5> landmarks_pixels{};              /**< 原帧像素坐标 5 点关键点 */
+    bool is_real_detection{false};                          /**< 是否来自真实神经网络模型检出（区分伪造降级桩） */
 };
 
 class FaceDetector {
@@ -50,6 +51,8 @@ public:
 
     void set_score_threshold(float th) noexcept { score_threshold_ = th; }
     void set_nms_threshold(float th) noexcept { nms_threshold_ = th; }
+    void set_is_onnx(bool v) noexcept { is_onnx_ = v; }
+    bool is_onnx() const noexcept { return is_onnx_; }
 
 private:
     std::vector<FaceDetection> detect_cpu_fallback(const zhulong::Image& image);
@@ -61,6 +64,7 @@ private:
 
     float score_threshold_{0.50f};
     float nms_threshold_{0.40f};
+    bool is_onnx_{false};
 
     std::unique_ptr<zhulong::platform::DmaBuffer> dma_input_buf_;
     int cached_w_{0};

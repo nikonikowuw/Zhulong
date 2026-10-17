@@ -16,6 +16,9 @@ class FaceFeatureExtractor {
 public:
     FaceFeatureExtractor() = default;
 
+    void set_is_onnx(bool v) noexcept { is_onnx_ = v; }
+    bool is_onnx() const noexcept { return is_onnx_; }
+
     /**
      * @brief 使用会话执行真实 NPU 特征提取 (FaceLiVTv2-L)
      * @param session 当前 Worker 的特征提取会话
@@ -41,6 +44,9 @@ public:
         int patch_h,
         const std::array<float, 4>& face_box = {0.0f, 0.0f, 0.0f, 0.0f}
     ) const;
+
+private:
+    bool is_onnx_{false};
 };
 
 } // namespace zhulong::face

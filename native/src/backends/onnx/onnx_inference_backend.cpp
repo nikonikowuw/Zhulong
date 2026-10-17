@@ -9,6 +9,7 @@
 
 #include "onnx_error_map.hpp"
 #include "onnx_types.hpp"
+#include <algorithm/runtime/cpu_inference_backend.hpp>
 
 #include <onnxruntime_cxx_api.h>
 
@@ -44,6 +45,18 @@ std::shared_ptr<Ort::Env> get_shared_ort_env() {
     return env;
 }
 
+std::shared_ptr<CpuInferenceBackend> get_cpu_fallback_backend() {
+    static auto backend = std::make_shared<CpuInferenceBackend>();
+    return backend;
+}
+
+bool is_mock_model_spec(const std::string& path) {
+    if (path.empty()) return false;
+    if (path.front() == '{' && path.find("mock.model") != std::string::npos) return true;
+    if (path.size() >= 8 && path.compare(path.size() - 8, 8, ".weights") == 0) return true;
+    return false;
+}
+
 } // namespace
 
 OnnxModelAsset::OnnxModelAsset()
@@ -56,6 +69,10 @@ OnnxSessionContext::OnnxSessionContext() : run_options() {}
 OnnxSessionContext::~OnnxSessionContext() = default;
 
 std::shared_ptr<ModelAsset> OnnxInferenceBackend::load_model(const std::string& model_path_or_config) {
+    if (is_mock_model_spec(model_path_or_config)) {
+        return get_cpu_fallback_backend()->load_model(model_path_or_config);
+    }
+
     try {
         const std::string basename = file_basename(model_path_or_config);
         if (model_path_or_config.empty() || basename.empty()) {
@@ -157,6 +174,10 @@ std::unique_ptr<SessionContext> OnnxInferenceBackend::create_session(std::shared
                                                                      uint32_t worker_id) {
     auto asset = std::dynamic_pointer_cast<OnnxModelAsset>(model);
     if (!asset || !asset->session || asset->inputs_meta.empty() || asset->outputs_meta.empty()) {
+        auto cpu_asset = std::dynamic_pointer_cast<CpuModelAsset>(model);
+        if (cpu_asset) {
+            return get_cpu_fallback_backend()->create_session(model, worker_id);
+        }
         return nullptr;
     }
 
@@ -178,6 +199,10 @@ zhulong_status_t OnnxInferenceBackend::forward(SessionContext* session,
     }
     auto* state = dynamic_cast<OnnxSessionContext*>(session);
     if (!state || !state->asset || !state->asset->session) {
+        auto* cpu_state = dynamic_cast<CpuSessionContext*>(session);
+        if (cpu_state) {
+            return get_cpu_fallback_backend()->forward(session, inputs, outputs);
+        }
         return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
 
