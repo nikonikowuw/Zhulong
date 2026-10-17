@@ -886,3 +886,26 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+## Session 67: 实现算法包任务驱动按需惰性启停与启用幂等性修复
+<!-- trellis-session: v=2 fp=c29dea626268ce44 -->
+
+**Date**: 2026-10-17
+**Task**: 实现算法包任务驱动按需惰性启停与启用幂等性修复
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+解决算法包无分析任务时调用启用接口导致缺少 --broker 触发崩溃与虚假熔断的问题。引入待命就绪（Standby）态，实现按需惰性拉起与任务联动双向伸缩，同时修复 Enable 接口的幂等性与 409 冲突错误码映射。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3bc5563` | feat(algo): implement task-driven lazy start and idempotent enable for algorithm runners |
+
+### Status
+
+[OK] **Completed**
