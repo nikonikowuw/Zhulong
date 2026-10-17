@@ -710,7 +710,7 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 
 | Hash | Message |
 |------|---------|
-| (pending) | fix(rknn): resolve DMA-BUF cache poisoning, enforce uniform input mode, and enable direct output writing |
+| `2b60e21` | fix(rknn): resolve DMA-BUF cache poisoning, enforce uniform input mode, and enable direct output writing |
 
 ### Testing
 
