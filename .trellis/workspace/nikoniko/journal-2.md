@@ -662,3 +662,26 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+## Session 60: 原生 DMA-BUF 分配器工业级重构与健壮性加固
+<!-- trellis-session: v=2 fp=85df2fdab31f61fb -->
+
+**Date**: 2026-10-17
+**Task**: 原生 DMA-BUF 分配器工业级重构与健壮性加固
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+修复 DRM Dumb 几何尺寸二维化（4096 步长）、DmaBuffer 独立 dup 所有权防 UAF、多 BSP /dev/dma_heap 动态遍历扫描、ScopedCpuSync RAII 守卫与 EAGAIN 忙等退避，并完善现场错误诊断日志与单元测试
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a21e869` | fix(dmabuf): resolve 2D dumb geometry, dynamic heap scanning, and RAII sync guard |
+
+### Status
+
+[OK] **Completed**
