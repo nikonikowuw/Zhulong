@@ -5,6 +5,11 @@
 
 #include "mpp_decoder.hpp"
 
+extern "C" {
+#include <libavutil/avutil.h>
+#include <libavutil/error.h>
+}
+
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -92,6 +97,9 @@ void MppDecodeNode::destroy_mpp() noexcept {
         mpi_ = nullptr;
     }
     if (buf_group_ && loader_.mpp_buffer_group_put) {
+        if (loader_.mpp_buffer_group_clear) {
+            loader_.mpp_buffer_group_clear(buf_group_);
+        }
         loader_.mpp_buffer_group_put(buf_group_);
         buf_group_ = nullptr;
     }
@@ -135,8 +143,9 @@ int MppDecodeNode::send_packet(const uint8_t *data, size_t size, int64_t pts, in
     if (put_ret == mpp::MPP_OK) {
         return 0;
     }
+    // ⚠️ 契约归一化：将硬件队列满或超时背压映射为 AVERROR(EAGAIN)，驱动调用方排空已解帧后重试，防止误判为损坏清空 DPB
     if (put_ret == mpp::MPP_ERR_BUFFER_FULL || put_ret == mpp::MPP_ERR_TIMEOUT) {
-        return put_ret;
+        return AVERROR(EAGAIN);
     }
     return put_ret;
 }
@@ -199,6 +208,24 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
         // 递增底层 MppBuffer 引用计数，保证跨线程流转期间显存不被复用
         loader_.buffer_inc_ref(mpp_buf);
 
+        // RAII 保护守卫：防止 make_shared 抛出 std::bad_alloc 或后续装配异常导致 owned_fd 与 buffer 引用计数泄露
+        struct ScopeGuard {
+            int fd{-1};
+            mpp::MppBuffer buf{nullptr};
+            mpp::MppLoader &ldr;
+            bool active{true};
+            ~ScopeGuard() {
+                if (active) {
+                    if (fd >= 0) {
+                        ::close(fd);
+                    }
+                    if (buf) {
+                        ldr.buffer_put(buf);
+                    }
+                }
+            }
+        } guard{owned_fd, mpp_buf, loader_, true};
+
         // 4. 组装硬件帧
         out_frame = std::make_shared<HardwareFrame>();
         out_frame->width = loader_.mpp_frame_get_width(frame);
@@ -207,8 +234,11 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
         out_frame->vstride = loader_.mpp_frame_get_ver_stride(frame);
         out_frame->format = FRAME_FORMAT_NV12;
         out_frame->dma_fd = owned_fd;
-        out_frame->pts = loader_.mpp_frame_get_pts(frame);
-        out_frame->has_pts = (out_frame->pts != 0);
+
+        // ⚠️ 时间戳保真透传：严格遵循 (raw_pts != AV_NOPTS_VALUE) 契约判定有效性
+        const int64_t raw_pts = loader_.mpp_frame_get_pts(frame);
+        out_frame->has_pts = (raw_pts != AV_NOPTS_VALUE);
+        out_frame->pts = out_frame->has_pts ? raw_pts : 0;
         out_frame->time_base_num = time_base_num_;
         out_frame->time_base_den = time_base_den_;
 
@@ -220,6 +250,9 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
             }
             loader_ref.buffer_put(mpp_buf);
         };
+
+        // 成功交接所有权给 HardwareFrame，解除栈上守卫
+        guard.active = false;
 
         // 立即归还外层 MppFrame 容器，防止解码器帧池耗尽
         loader_.mpp_frame_deinit(&frame);
@@ -253,6 +286,9 @@ int MppDecodeNode::handle_info_change(mpp::MppFrame frame) {
     }
 
     if (buf_group_) {
+        if (loader_.mpp_buffer_group_clear) {
+            loader_.mpp_buffer_group_clear(buf_group_);
+        }
         loader_.mpp_buffer_group_put(buf_group_);
         buf_group_ = nullptr;
     }

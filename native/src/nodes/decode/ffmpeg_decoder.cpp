@@ -133,14 +133,23 @@ int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
         return ret; // 解码器内部严重错误
     }
 
+    struct FrameGuard {
+        AVFrame *f;
+        ~FrameGuard() {
+            if (f) {
+                av_frame_free(&f);
+            }
+        }
+    } guard{av_frame};
+
     // 成功解出一帧，装配至跨层统一 HardwareFrame 对象
     auto frame = std::make_shared<HardwareFrame>();
     frame->width = static_cast<uint32_t>(av_frame->width);
     frame->height = static_cast<uint32_t>(av_frame->height);
     frame->stride = static_cast<uint32_t>(av_frame->linesize[0]);
     frame->vstride = static_cast<uint32_t>(av_frame->height);
-    // ⚠️ 明确标记多平面格式：软解输出标准为 YUV420P，严禁外部当作单平面连续 NV12 解析
-    if (av_frame->format == AV_PIX_FMT_YUV420P) {
+    // ⚠️ 明确标记多平面格式：软解输出标准为 YUV420P（含 Full Range YUVJ420P），严禁外部当作单平面连续 NV12 解析
+    if (av_frame->format == AV_PIX_FMT_YUV420P || av_frame->format == AV_PIX_FMT_YUVJ420P) {
         frame->format = FRAME_FORMAT_YUV420P;
     } else if (av_frame->format == AV_PIX_FMT_NV12) {
         frame->format = FRAME_FORMAT_NV12;
@@ -166,6 +175,7 @@ int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
         av_frame_free(&f);
     };
 
+    guard.f = nullptr; // 成功转移所有权给 release_fn
     out_frame = std::move(frame);
     return 0;
 }

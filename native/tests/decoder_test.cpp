@@ -10,6 +10,8 @@
 #include "pipeline/stream.hpp"
 #include "Zhulong/frame.hpp"
 
+constexpr int64_t kNoPts = INT64_MIN;
+
 #include <atomic>
 #include <chrono>
 #include <iostream>
@@ -250,6 +252,69 @@ int main() {
             CHECK(frame->has_pts);
             CHECK(frame->pts == 5000);
             CHECK(frame->time_base_num == 1 && frame->time_base_den == 90000);
+        }
+
+        // ====================================================================
+        // 4.1 FFmpegDecodeNode 时间戳保真测试 (PTS=0 与 缺失 PTS AV_NOPTS_VALUE)
+        // ====================================================================
+        {
+            std::vector<std::string> h264_extra_nalus = {
+                "Z0LACtxHsBEAAAMAAQAAAwAyjxIngA==",
+                "aM4PyA=="
+            };
+            std::vector<uint8_t> extradata;
+            for (const auto &b64 : h264_extra_nalus) {
+                auto nalu = base64_decode(b64);
+                extradata.push_back(0x00);
+                extradata.push_back(0x00);
+                extradata.push_back(0x00);
+                extradata.push_back(0x01);
+                extradata.insert(extradata.end(), nalu.begin(), nalu.end());
+            }
+
+            auto slice_nalu = base64_decode("ZYiEOiYoAAkCycnJ111111114A==");
+            std::vector<uint8_t> slice_packet;
+            slice_packet.push_back(0x00);
+            slice_packet.push_back(0x00);
+            slice_packet.push_back(0x00);
+            slice_packet.push_back(0x01);
+            slice_packet.insert(slice_packet.end(), slice_nalu.begin(), slice_nalu.end());
+
+            // 1) 测试 PTS = 0 场景（首帧）
+            {
+                auto dec = IDecodeNode::create(
+                    Zhulong_CODEC_H264,
+                    extradata.data(), extradata.size(),
+                    1, 90000,
+                    zhulong::DecoderBackend::FFMPEG_SW
+                );
+                CHECK(dec != nullptr);
+                CHECK(dec->send_packet(slice_packet.data(), slice_packet.size(), 0, 0) >= 0);
+                dec->send_packet(nullptr, 0, 0, 0);
+
+                HardwareFrame::Ptr frame;
+                CHECK(dec->receive_frame(frame) == 0 && frame != nullptr);
+                CHECK(frame->has_pts);
+                CHECK(frame->pts == 0);
+            }
+
+            // 2) 测试缺失 PTS 场景 (AV_NOPTS_VALUE)
+            {
+                auto dec = IDecodeNode::create(
+                    Zhulong_CODEC_H264,
+                    extradata.data(), extradata.size(),
+                    1, 90000,
+                    zhulong::DecoderBackend::FFMPEG_SW
+                );
+                CHECK(dec != nullptr);
+                CHECK(dec->send_packet(slice_packet.data(), slice_packet.size(), kNoPts, kNoPts) >= 0);
+                dec->send_packet(nullptr, 0, 0, 0);
+
+                HardwareFrame::Ptr frame;
+                CHECK(dec->receive_frame(frame) == 0 && frame != nullptr);
+                CHECK(!frame->has_pts);
+                CHECK(frame->pts == 0);
+            }
         }
 
         // ====================================================================
@@ -547,6 +612,40 @@ int main() {
                 // 测试释放闭包安全归还显存
                 frame.reset();
                 CHECK(frame == nullptr);
+
+                // 10.1.1 覆盖 MPP 硬件解码 PTS=0 (首帧) 契约保真
+                {
+                    auto dec_zero = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, zhulong::DecoderBackend::MPP_HW);
+                    CHECK(dec_zero != nullptr);
+                    CHECK(dec_zero->send_packet(annex_b.data(), annex_b.size(), 0, 0) >= 0);
+                    dec_zero->send_packet(nullptr, 0, 0, 0);
+
+                    HardwareFrame::Ptr frame_zero;
+                    for (int i = 0; i < 50; ++i) {
+                        if (dec_zero->receive_frame(frame_zero) == 0) break;
+                        std::this_thread::sleep_for(5ms);
+                    }
+                    CHECK(frame_zero != nullptr);
+                    CHECK(frame_zero->has_pts);
+                    CHECK(frame_zero->pts == 0);
+                }
+
+                // 10.1.2 覆盖 MPP 硬件解码缺失 PTS (AV_NOPTS_VALUE) 契约保真
+                {
+                    auto dec_nopts = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, zhulong::DecoderBackend::MPP_HW);
+                    CHECK(dec_nopts != nullptr);
+                    CHECK(dec_nopts->send_packet(annex_b.data(), annex_b.size(), kNoPts, kNoPts) >= 0);
+                    dec_nopts->send_packet(nullptr, 0, 0, 0);
+
+                    HardwareFrame::Ptr frame_nopts;
+                    for (int i = 0; i < 50; ++i) {
+                        if (dec_nopts->receive_frame(frame_nopts) == 0) break;
+                        std::this_thread::sleep_for(5ms);
+                    }
+                    CHECK(frame_nopts != nullptr);
+                    CHECK(!frame_nopts->has_pts);
+                    CHECK(frame_nopts->pts == 0);
+                }
             }
 
             // 10.2 真实 H.265 (HEVC) 硬解测试

@@ -40,8 +40,8 @@ static bool load_sym(void *handle, const char *name, T &out_fn) {
 void MppLoader::load_symbols() {
     is_supported_ = false;
 
-    // 1. 硬件节点探针：/dev/mpp_service 设备节点不存在则直接判定不支持
-    if (access("/dev/mpp_service", F_OK) != 0) {
+    // 1. 硬件节点探针：/dev/mpp_service 设备节点不存在或当前用户无读写权限则直接判定不支持
+    if (access("/dev/mpp_service", R_OK | W_OK) != 0) {
         return;
     }
 

@@ -43,11 +43,16 @@ public:
      * ⚠️ 排空（Drain）信号：
      *   - 当 data 为 nullptr 或 size 为 0 时，视为发送冲刷排空标记，通知底层解码器输出所有驻留帧。
      *
+     * ⚠️ 背压与错误码契约：
+     *   - 返回 0 表示成功入队；
+     *   - 返回 AVERROR(EAGAIN) 表示底层队列已满，调用方应排空已解码帧并重新重发当前包；
+     *   - 返回其他 <0 表示底层解码器严重错误，调用方应执行 flush() 并重同步关键帧。
+     *
      * @param data 压缩数据包借用指针
      * @param size 数据包字节长度
      * @param pts 源流显示时间戳
      * @param dts 源流解码时间戳
-     * @return int 0 成功入队；<0 底层解码器返回的错误码
+     * @return int 0 成功入队；AVERROR(EAGAIN) 缓冲已满需重试；<0 底层严重错误
      */
     virtual int send_packet(const uint8_t *data, size_t size, int64_t pts, int64_t dts) = 0;
 

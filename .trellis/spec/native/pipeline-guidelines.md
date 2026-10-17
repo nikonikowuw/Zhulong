@@ -24,8 +24,10 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
   - 在 `AUTO` 模式下，系统动态探测硬件加速能力（`MppDecodeNode::is_supported()`），若支持且码流为 H.264/H.265 则自动启用 MPP 硬件解码并直出 DMA-BUF；环境不支持或解码异常时透明回退至 FFmpeg 软解。
   - 解码器单实例单线程运行，并发由多流模型（多 stream）承载，杜绝底层多线程竞争与线程爆炸。
   - 解码会话工作循环 (`DecodeSession::decode_loop`) 在待解包队列为空发生超时（idle timeout 50ms）时，主动执行 `drain_frames(dec)` 排空解码器内部已就绪帧，防止低帧率或测试单包场景下画面在底层 DPB 发生不必要滞留。
-- **零拷贝帧封装**：
+- **零拷贝帧封装与异常安全守护**：
   - 通过 `HardwareFrame` 封装解码输出，软解由 `release_fn` 闭包安全回收底层 `AVFrame` 引用，硬解由 `release_fn` 闭包调用 `mpp_buffer_put` 释放 VPU 缓冲区并关闭 `dup` 出的独立 `dma_fd`，由下游算法只读借用。
+  - 硬件解码从显存池提取 `mpp_buf` 并 `::dup` 出 `dma_fd` 后，装配期间必须由栈上 RAII Guard 全程看护，确保即使抛出 `std::bad_alloc` 亦能自动安全回退释放，杜绝内核句柄与物理显存泄漏。
+  - 统一背压契约：底层硬件/软件解码器在待解包缓冲满时统一返回 `AVERROR(EAGAIN)`，驱动调用方排空已就绪帧后重发当前包，严禁将缓冲满误判为解码错误而调用 `flush()` 冲刷参考帧。
 - **订阅通道逐订阅者异常隔离**：
   - `Stream::dispatch` 的扇出循环必须对每个 `subscription->invoke()` 单独 `try/catch`。回调抛 C++ 异常是调用方违约（`engine.h` 明文禁止），**不得**中断同流其他订阅者的数据供给，**也不得**将流置为 `FAILED`。
   - `Subscription::invoke` 在重抛前已恢复 `in_callback` 并置 `enabled=false`，故违约订阅者自动静默失效（后续 `invoke` 首行直接返回），无需从快照移除。
@@ -62,7 +64,8 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
    - 节点间传递使用 `std::shared_ptr<const HardwareFrame>`（或 `HardwareFrame::ConstPtr`），解码后底层物理内存（`dma_fd`、`dev_ptr`、`host_ptr`）只读，下游 N 个算法并发只读借用，严禁就地修改原像素。
 2. **硬件级零拷贝与格式/时间戳保真**：
    - 包含标准格式常量（`FRAME_FORMAT_YUV420P`、`FRAME_FORMAT_NV12` 等），与 Linux DRM / V4L2 FourCC 语义对齐；
-   - 包含显式 `has_pts` 标志与 `time_base_num / time_base_den`，真实反映上游流时间基；
+   - 软解节点兼容 Full Range `AV_PIX_FMT_YUVJ420P` 并统一对齐为 `FRAME_FORMAT_YUV420P`；
+   - 时间戳有效性契约：严格以 `(raw_pts != AV_NOPTS_VALUE)` 判定 `has_pts`，首帧 `pts = 0` 必须标定为有效 `has_pts = true`，上游缺失 PTS（`AV_NOPTS_VALUE`）置 `has_pts = false` 并回退 `pts = 0`，杜绝时间戳极小负数畸变与首帧丢时间戳；
    - 严格包含 `stride` 与 `vstride`（垂直对齐步长），NV12 UV 平面偏移计算必须遵循 `y_plane_size() = stride * (vstride > 0 ? vstride : height)`，防止色度错位。
 3. **安全 Deleter 守护与生命周期解耦**：
    - 帧对象 RAII 析构时触发 `release_fn` 归还底层解码器缓冲池；移动构造与移动赋值均正确转移所有权并置空原指针，防止 Double-Free；
