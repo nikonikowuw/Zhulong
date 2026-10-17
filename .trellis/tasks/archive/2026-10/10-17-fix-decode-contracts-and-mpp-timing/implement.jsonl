@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "原生解码节点契约、有界队列背压与帧生命周期"}
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "Rockchip MPP/RGA/RKNN 硬件后端约束与 DMA-BUF 零拷贝流转规范"}
