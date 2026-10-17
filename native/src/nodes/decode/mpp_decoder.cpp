@@ -90,12 +90,7 @@ void MppDecodeNode::init_mpp(int32_t codec, const uint8_t *extradata, size_t ext
     initialized_ = true;
 }
 
-void MppDecodeNode::destroy_mpp() noexcept {
-    if (ctx_ && loader_.mpp_destroy) {
-        loader_.mpp_destroy(ctx_);
-        ctx_ = nullptr;
-        mpi_ = nullptr;
-    }
+void MppDecodeNode::reset_buffer_group() noexcept {
     if (buf_group_ && loader_.mpp_buffer_group_put) {
         if (loader_.mpp_buffer_group_clear) {
             loader_.mpp_buffer_group_clear(buf_group_);
@@ -103,6 +98,15 @@ void MppDecodeNode::destroy_mpp() noexcept {
         loader_.mpp_buffer_group_put(buf_group_);
         buf_group_ = nullptr;
     }
+}
+
+void MppDecodeNode::destroy_mpp() noexcept {
+    if (ctx_ && loader_.mpp_destroy) {
+        loader_.mpp_destroy(ctx_);
+        ctx_ = nullptr;
+        mpi_ = nullptr;
+    }
+    reset_buffer_group();
     initialized_ = false;
 }
 
@@ -166,10 +170,18 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
             return -1;
         }
 
+        // RAII 保护守卫：无论通过 continue 还是 return 离开当前轮次，均自动归还 MppFrame 容器
+        struct FrameGuard {
+            mpp::MppFrame f{nullptr};
+            mpp::MppLoader &ldr;
+            ~FrameGuard() {
+                if (f) ldr.mpp_frame_deinit(&f);
+            }
+        } frame_guard{frame, loader_};
+
         // 1. 处理 info_change 事件 (流参数更新或首次解析出 SPS/PPS)
         if (loader_.mpp_frame_get_info_change(frame)) {
             int info_ret = handle_info_change(frame);
-            loader_.mpp_frame_deinit(&frame);
             if (info_ret != 0) {
                 return info_ret;
             }
@@ -178,30 +190,24 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
         }
 
         // 2. 坏帧与丢弃帧过滤
-        uint32_t err = loader_.mpp_frame_get_errinfo(frame);
-        uint32_t discard = loader_.mpp_frame_get_discard(frame);
-        if (err != 0 || discard != 0) {
-            loader_.mpp_frame_deinit(&frame);
+        if (loader_.mpp_frame_get_errinfo(frame) != 0 || loader_.mpp_frame_get_discard(frame) != 0) {
             continue;
         }
 
         // 3. 提取底层物理 MppBuffer 与内核 DMA-BUF 文件描述符
         mpp::MppBuffer mpp_buf = loader_.mpp_frame_get_buffer(frame);
         if (!mpp_buf) {
-            loader_.mpp_frame_deinit(&frame);
             continue;
         }
 
         int raw_fd = loader_.buffer_get_fd(mpp_buf);
         if (raw_fd < 0) {
-            loader_.mpp_frame_deinit(&frame);
             return -1;
         }
 
         // dup 独立文件描述符以与 HardwareFrame 生命周期解耦
         int owned_fd = ::dup(raw_fd);
         if (owned_fd < 0) {
-            loader_.mpp_frame_deinit(&frame);
             return -1;
         }
 
@@ -253,9 +259,6 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
 
         // 成功交接所有权给 HardwareFrame，解除栈上守卫
         guard.active = false;
-
-        // 立即归还外层 MppFrame 容器，防止解码器帧池耗尽
-        loader_.mpp_frame_deinit(&frame);
         return 0;
     }
 }
@@ -285,13 +288,7 @@ int MppDecodeNode::handle_info_change(mpp::MppFrame frame) {
         count = 20;
     }
 
-    if (buf_group_) {
-        if (loader_.mpp_buffer_group_clear) {
-            loader_.mpp_buffer_group_clear(buf_group_);
-        }
-        loader_.mpp_buffer_group_put(buf_group_);
-        buf_group_ = nullptr;
-    }
+    reset_buffer_group();
 
     // 依次探测 DMA_HEAP -> DRM -> ION 分配器
     static const mpp::MppBufferType kTypes[] = {

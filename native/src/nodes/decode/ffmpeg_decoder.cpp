@@ -123,24 +123,22 @@ int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
     AVFrame *av_frame = av_frame_alloc();
     if (!av_frame) return -1;
 
-    int ret = avcodec_receive_frame(codec_ctx_, av_frame);
-    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-        av_frame_free(&av_frame);
-        return 1; // 暂无输出，需继续喂入下一个数据包
-    }
-    if (ret < 0) {
-        av_frame_free(&av_frame);
-        return ret; // 解码器内部严重错误
-    }
-
     struct FrameGuard {
-        AVFrame *f;
+        AVFrame *f{nullptr};
         ~FrameGuard() {
             if (f) {
                 av_frame_free(&f);
             }
         }
     } guard{av_frame};
+
+    int ret = avcodec_receive_frame(codec_ctx_, av_frame);
+    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+        return 1; // 暂无输出，需继续喂入下一个数据包
+    }
+    if (ret < 0) {
+        return ret; // 解码器内部严重错误
+    }
 
     // 成功解出一帧，装配至跨层统一 HardwareFrame 对象
     auto frame = std::make_shared<HardwareFrame>();

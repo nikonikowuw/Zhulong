@@ -30,6 +30,7 @@ public:
 private:
     void init_mpp(int32_t codec, const uint8_t *extradata, size_t extradata_size);
     void destroy_mpp() noexcept;
+    void reset_buffer_group() noexcept;
     int handle_info_change(mpp::MppFrame frame);
 
     mpp::MppLoader& loader_;

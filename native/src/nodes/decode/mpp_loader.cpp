@@ -66,42 +66,43 @@ void MppLoader::load_symbols() {
         return;
     }
 
-    // 3. 解析核心生命周期符号
+    // 3. 解析核心生命周期、数据包/帧处理以及缓冲池符号
     bool ok = true;
-    ok &= load_sym(lib_handle_, "mpp_create", mpp_create);
-    ok &= load_sym(lib_handle_, "mpp_init", mpp_init);
-    ok &= load_sym(lib_handle_, "mpp_destroy", mpp_destroy);
+#define LOAD_SYM(sym) ok = ok && load_sym(lib_handle_, #sym, sym)
 
-    // 4. 解析 Packet 与 Frame 操作符号
-    ok &= load_sym(lib_handle_, "mpp_packet_init", mpp_packet_init);
-    ok &= load_sym(lib_handle_, "mpp_packet_deinit", mpp_packet_deinit);
-    ok &= load_sym(lib_handle_, "mpp_packet_set_pts", mpp_packet_set_pts);
-    ok &= load_sym(lib_handle_, "mpp_packet_set_eos", mpp_packet_set_eos);
+    LOAD_SYM(mpp_create);
+    LOAD_SYM(mpp_init);
+    LOAD_SYM(mpp_destroy);
 
-    ok &= load_sym(lib_handle_, "mpp_frame_init", mpp_frame_init);
-    ok &= load_sym(lib_handle_, "mpp_frame_deinit", mpp_frame_deinit);
-    ok &= load_sym(lib_handle_, "mpp_frame_get_width", mpp_frame_get_width);
-    ok &= load_sym(lib_handle_, "mpp_frame_get_height", mpp_frame_get_height);
-    ok &= load_sym(lib_handle_, "mpp_frame_get_hor_stride", mpp_frame_get_hor_stride);
-    ok &= load_sym(lib_handle_, "mpp_frame_get_ver_stride", mpp_frame_get_ver_stride);
-    ok &= load_sym(lib_handle_, "mpp_frame_get_errinfo", mpp_frame_get_errinfo);
-    ok &= load_sym(lib_handle_, "mpp_frame_get_discard", mpp_frame_get_discard);
-    ok &= load_sym(lib_handle_, "mpp_frame_get_eos", mpp_frame_get_eos);
-    ok &= load_sym(lib_handle_, "mpp_frame_get_fmt", mpp_frame_get_fmt);
-    ok &= load_sym(lib_handle_, "mpp_frame_get_info_change", mpp_frame_get_info_change);
-    ok &= load_sym(lib_handle_, "mpp_frame_get_pts", mpp_frame_get_pts);
-    ok &= load_sym(lib_handle_, "mpp_frame_get_buffer", mpp_frame_get_buffer);
-    ok &= load_sym(lib_handle_, "mpp_frame_get_buf_size", mpp_frame_get_buf_size);
+    LOAD_SYM(mpp_packet_init);
+    LOAD_SYM(mpp_packet_deinit);
+    LOAD_SYM(mpp_packet_set_pts);
+    LOAD_SYM(mpp_packet_set_eos);
 
-    // 5. 解析 Buffer 与 BufferGroup 符号
-    ok &= load_sym(lib_handle_, "mpp_buffer_group_get", mpp_buffer_group_get);
-    ok &= load_sym(lib_handle_, "mpp_buffer_group_put", mpp_buffer_group_put);
-    ok &= load_sym(lib_handle_, "mpp_buffer_group_clear", mpp_buffer_group_clear);
-    ok &= load_sym(lib_handle_, "mpp_buffer_group_limit_config", mpp_buffer_group_limit_config);
+    LOAD_SYM(mpp_frame_init);
+    LOAD_SYM(mpp_frame_deinit);
+    LOAD_SYM(mpp_frame_get_width);
+    LOAD_SYM(mpp_frame_get_height);
+    LOAD_SYM(mpp_frame_get_hor_stride);
+    LOAD_SYM(mpp_frame_get_ver_stride);
+    LOAD_SYM(mpp_frame_get_errinfo);
+    LOAD_SYM(mpp_frame_get_discard);
+    LOAD_SYM(mpp_frame_get_eos);
+    LOAD_SYM(mpp_frame_get_fmt);
+    LOAD_SYM(mpp_frame_get_info_change);
+    LOAD_SYM(mpp_frame_get_pts);
+    LOAD_SYM(mpp_frame_get_buffer);
+    LOAD_SYM(mpp_frame_get_buf_size);
 
-    ok &= load_sym(lib_handle_, "mpp_buffer_inc_ref_with_caller", mpp_buffer_inc_ref_with_caller);
-    ok &= load_sym(lib_handle_, "mpp_buffer_put_with_caller", mpp_buffer_put_with_caller);
-    ok &= load_sym(lib_handle_, "mpp_buffer_get_fd_with_caller", mpp_buffer_get_fd_with_caller);
+    LOAD_SYM(mpp_buffer_group_get);
+    LOAD_SYM(mpp_buffer_group_put);
+    LOAD_SYM(mpp_buffer_group_clear);
+    LOAD_SYM(mpp_buffer_group_limit_config);
+
+    LOAD_SYM(mpp_buffer_inc_ref_with_caller);
+    LOAD_SYM(mpp_buffer_put_with_caller);
+    LOAD_SYM(mpp_buffer_get_fd_with_caller);
+#undef LOAD_SYM
 
     if (ok) {
         is_supported_ = true;
