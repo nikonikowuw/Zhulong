@@ -105,6 +105,13 @@ export const diagnoseResponseSchema = z.object({
 
 export type DiagnoseResponse = z.infer<typeof diagnoseResponseSchema>
 
+export const deleteCameraResponseSchema = z.object({
+  id: z.string(),
+  deleted: z.boolean(),
+})
+
+export type DeleteCameraResponse = z.infer<typeof deleteCameraResponseSchema>
+
 export const cameraFormSchema = z
   .object({
     name: z

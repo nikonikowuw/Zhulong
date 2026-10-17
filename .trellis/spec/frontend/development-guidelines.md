@@ -151,6 +151,13 @@ export function CameraCreateForm({ onSubmit, isPending }: Props) {
 }
 ```
 
+### 2.4 Radix 控件受控绑定与 React 19 最佳实践
+
+1. **Radix `<Select>` 受控绑定必须使用 `value`**：
+   在 `react-hook-form` 中，`<Select onValueChange={field.onChange} value={field.value}>` 必须使用 `value` 属性；严禁使用 `defaultValue={field.value}`。`defaultValue` 为非受控属性，当 `form.reset(...)` 或切换列表不同编辑项时，下拉触发器显示的文本无法更新。
+2. **表单监听推荐 `useWatch` 规避 Compiler 警告**：
+   在 React 19 / React Compiler 环境下，避免直接在组件体内调用 `form.watch(...)`，统一使用 `useWatch({ control: form.control, name: '...' })` 确保响应式粒度精确且不触发 ESLint 兼容性警告。
+
 ---
 
 ## 3. 实时视频监控与播放器工业级 UX (Live Surveillance & Media UX)

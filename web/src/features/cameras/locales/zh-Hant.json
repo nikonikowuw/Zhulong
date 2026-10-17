@@ -32,7 +32,9 @@
     "batchDiagnose": "批量診斷",
     "batchEnable": "批量啟用",
     "batchDisable": "批量停用",
-    "batchDelete": "批量刪除"
+    "batchDelete": "批量刪除",
+    "loadError": "加載攝影機數據失敗，請檢查網絡或後端服務",
+    "retry": "重試"
   },
   "status": {
     "sessionTitle": "串流會話",
@@ -52,7 +54,7 @@
   },
   "actions": {
     "create": "新增攝影機",
-    "refresh": "重新整理列表",
+    "refresh": "重新整理",
     "edit": "編輯配置",
     "diagnose": "一鍵診斷",
     "reDiagnose": "重新診斷",
@@ -108,7 +110,8 @@
     "fps": "檢測到幀率",
     "reason": "異常原因",
     "lastChecked": "最後探測時間",
-    "requestFailed": "診斷請求失敗"
+    "requestFailed": "診斷請求失敗",
+    "serviceUnavailable": "網絡錯誤或後端服務不可用"
   },
   "credentials": {
     "mainStream": "主流明文地址",
@@ -134,6 +137,10 @@
     "batchStatusUpdated": "已成功更新 {{count}} 台設備的狀態",
     "batchDiagnosing": "正在並發診斷選中的攝影機...",
     "batchDiagnoseSuccess": "已完成 {{count}} 台攝影機的連通性探測",
-    "probeFailed": "連通性探測失敗: {{reason}}"
+    "probeFailed": "連通性探測失敗: {{reason}}",
+    "batchStatusUpdateFailed": "批量更新設備狀態失敗",
+    "batchDiagnoseFailed": "批量診斷探測失敗",
+    "batchDeleteFailed": "批量刪除攝影機失敗",
+    "deleteFailed": "刪除攝影機失敗"
   }
 }

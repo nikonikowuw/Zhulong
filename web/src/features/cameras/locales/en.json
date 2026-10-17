@@ -32,7 +32,9 @@
     "batchDiagnose": "Diagnose selected",
     "batchEnable": "Enable Selected",
     "batchDisable": "Disable Selected",
-    "batchDelete": "Delete Selected"
+    "batchDelete": "Delete Selected",
+    "loadError": "Failed to load camera data. Please check network or service.",
+    "retry": "Retry"
   },
   "status": {
     "sessionTitle": "Session",
@@ -108,7 +110,8 @@
     "fps": "Framerate",
     "reason": "Error Reason",
     "lastChecked": "Last Probed At",
-    "requestFailed": "Diagnostic request failed"
+    "requestFailed": "Diagnostic request failed",
+    "serviceUnavailable": "Network error or service unavailable"
   },
   "credentials": {
     "mainStream": "Main Stream Plaintext URL",
@@ -134,6 +137,10 @@
     "batchStatusUpdated": "Successfully updated {{count}} cameras",
     "batchDiagnosing": "Diagnosing {{count}} cameras in parallel...",
     "batchDiagnoseSuccess": "Finished connectivity probes for {{count}} cameras",
-    "probeFailed": "Connection probe failed: {{reason}}"
+    "probeFailed": "Connection probe failed: {{reason}}",
+    "batchStatusUpdateFailed": "Failed to update camera statuses",
+    "batchDiagnoseFailed": "Failed to diagnose selected cameras",
+    "batchDeleteFailed": "Failed to delete selected cameras",
+    "deleteFailed": "Failed to delete camera"
   }
 }

@@ -32,7 +32,9 @@
     "batchDiagnose": "批量诊断",
     "batchEnable": "批量启用",
     "batchDisable": "批量停用",
-    "batchDelete": "批量删除"
+    "batchDelete": "批量删除",
+    "loadError": "加载摄像机数据失败，请检查网络或后端服务",
+    "retry": "重试"
   },
   "status": {
     "sessionTitle": "流会话",
@@ -52,7 +54,7 @@
   },
   "actions": {
     "create": "新增摄像机",
-    "refresh": "刷新列表",
+    "refresh": "刷新",
     "edit": "编辑配置",
     "diagnose": "一键诊断",
     "reDiagnose": "重新诊断",
@@ -108,7 +110,8 @@
     "fps": "检测到帧率",
     "reason": "异常原因",
     "lastChecked": "最后探测时间",
-    "requestFailed": "诊断请求失败"
+    "requestFailed": "诊断请求失败",
+    "serviceUnavailable": "网络错误或后端服务不可用"
   },
   "credentials": {
     "mainStream": "主流明文地址",
@@ -134,6 +137,10 @@
     "batchStatusUpdated": "已成功更新 {{count}} 台设备的状态",
     "batchDiagnosing": "正在并发诊断选中的摄像机...",
     "batchDiagnoseSuccess": "已完成 {{count}} 台摄像机的连通性探测",
-    "probeFailed": "连通性探测失败: {{reason}}"
+    "probeFailed": "连通性探测失败: {{reason}}",
+    "batchStatusUpdateFailed": "批量更新设备状态失败",
+    "batchDiagnoseFailed": "批量诊断探测失败",
+    "batchDeleteFailed": "批量删除摄像机失败",
+    "deleteFailed": "删除摄像机失败"
   }
 }

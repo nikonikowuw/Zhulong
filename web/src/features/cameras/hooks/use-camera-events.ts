@@ -1,17 +1,19 @@
 import { useEffect, useRef } from 'react'
+import { z } from 'zod'
 import { useQueryClient } from '@tanstack/react-query'
 import {
+  cameraStateInfoSchema,
   type Camera,
   type CameraListResponse,
   type CameraStateInfo,
 } from '../data/schema'
 import { CAMERAS_QUERY_KEY } from './use-cameras'
 
-interface SSEMessage<T = unknown> {
-  event: string
-  sequence?: number
-  data: T
-}
+const sseMessageSchema = z.object({
+  event: z.string(),
+  sequence: z.number().optional(),
+  data: cameraStateInfoSchema.optional(),
+})
 
 /**
  * 监听后端 /api/v1/cameras/events SSE 实时状态事件
@@ -44,8 +46,10 @@ export function useCameraEvents(enabled = true) {
         // 处理 initial snapshot 全量快照
         es.addEventListener('snapshot', (e: MessageEvent) => {
           try {
-            const rawData = JSON.parse(e.data) as CameraStateInfo[]
-            if (!Array.isArray(rawData)) return
+            const json = JSON.parse(e.data)
+            const parseResult = z.array(cameraStateInfoSchema).safeParse(json)
+            if (!parseResult.success) return
+            const rawData = parseResult.data
 
             const stateMap = new Map<string, CameraStateInfo>()
             rawData.forEach((item) => {
@@ -91,8 +95,10 @@ export function useCameraEvents(enabled = true) {
         // 处理增量 change 事件
         es.addEventListener('change', (e: MessageEvent) => {
           try {
-            const state = JSON.parse(e.data) as CameraStateInfo
-            if (!state?.cameraId) return
+            const json = JSON.parse(e.data)
+            const parseResult = cameraStateInfoSchema.safeParse(json)
+            if (!parseResult.success) return
+            const state = parseResult.data
 
             queryClient.setQueriesData<CameraListResponse>(
               { queryKey: CAMERAS_QUERY_KEY },
@@ -125,9 +131,14 @@ export function useCameraEvents(enabled = true) {
         // 统一消息回退监听
         es.onmessage = (e: MessageEvent) => {
           try {
-            const parsed = JSON.parse(e.data) as SSEMessage<CameraStateInfo>
-            if (parsed.event === 'change' && parsed.data?.cameraId) {
-              const state = parsed.data
+            const json = JSON.parse(e.data)
+            const parseResult = sseMessageSchema.safeParse(json)
+            if (
+              parseResult.success &&
+              parseResult.data.event === 'change' &&
+              parseResult.data.data?.cameraId
+            ) {
+              const state = parseResult.data.data
               queryClient.setQueriesData<CameraListResponse>(
                 { queryKey: CAMERAS_QUERY_KEY },
                 (old) => {

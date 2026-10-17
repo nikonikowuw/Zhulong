@@ -1,5 +1,3 @@
-'use client'
-
 import { useState } from 'react'
 import { type Table } from '@tanstack/react-table'
 import { AlertTriangle, Loader2 } from 'lucide-react'
@@ -41,15 +39,20 @@ export function CamerasMultiDeleteDialog({
 
     setIsDeleting(true)
     try {
-      await Promise.all(
+      const results = await Promise.allSettled(
         selectedCameras.map((cam) => deleteMutation.mutateAsync(cam.id))
       )
-      toast.success(t('toast.batchDeleteSuccess'))
-      setValue('')
-      table.resetRowSelection()
-      onOpenChange(false)
+      const fulfilled = results.filter((r) => r.status === 'fulfilled').length
+      if (fulfilled > 0) {
+        toast.success(t('toast.batchDeleteSuccess'))
+        setValue('')
+        table.resetRowSelection()
+        onOpenChange(false)
+      } else {
+        toast.error(t('toast.batchDeleteFailed'))
+      }
     } catch {
-      toast.error('Batch delete failed')
+      toast.error(t('toast.batchDeleteFailed'))
     } finally {
       setIsDeleting(false)
     }

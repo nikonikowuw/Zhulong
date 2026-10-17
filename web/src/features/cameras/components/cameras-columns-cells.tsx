@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { type Column } from '@tanstack/react-table'
 import { Check, Copy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -12,19 +13,51 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { DataTableColumnHeader } from '@/components/data-table'
 import { type Camera, type CameraHealth } from '../data/schema'
 import { useToggleCameraEnabled } from '../hooks/use-cameras'
 import { copyToClipboard } from '../utils/url-helper'
 
-const cameraHealthStatusTypes = new Map<CameraHealth, string>([
-  ['online', 'bg-teal-100/30 text-teal-900 dark:text-teal-200 border-teal-200'],
-  ['offline', 'bg-neutral-300/40 border-neutral-300 text-muted-foreground'],
-  ['unknown', 'bg-sky-200/40 text-sky-900 dark:text-sky-100 border-sky-300'],
-  [
-    'error',
-    'bg-destructive/10 dark:bg-destructive/50 text-destructive dark:text-primary border-destructive/10',
-  ],
-])
+export function CameraColumnHeader({
+  column,
+  titleKey,
+}: {
+  column: Column<Camera, unknown>
+  titleKey: string
+}) {
+  const { t } = useTranslation('cameras')
+  return <DataTableColumnHeader column={column} title={t(titleKey)} />
+}
+
+export function CameraActionsHeader() {
+  const { t } = useTranslation('cameras')
+  return <span className='sr-only'>{t('table.columns.actions')}</span>
+}
+
+const healthStatusConfig: Record<
+  CameraHealth,
+  { dotClass: string; badgeClass: string }
+> = {
+  online: {
+    dotClass: 'bg-emerald-500',
+    badgeClass:
+      'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
+  },
+  offline: {
+    dotClass: 'bg-zinc-400 dark:bg-zinc-500',
+    badgeClass:
+      'border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400',
+  },
+  error: {
+    dotClass: 'bg-destructive animate-pulse',
+    badgeClass: 'border-destructive/30 bg-destructive/10 text-destructive',
+  },
+  unknown: {
+    dotClass: 'bg-sky-400',
+    badgeClass:
+      'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300',
+  },
+}
 
 export function CameraSwitchCell({ camera }: { camera: Camera }) {
   const toggleMutation = useToggleCameraEnabled()
@@ -46,10 +79,7 @@ export function CameraSwitchCell({ camera }: { camera: Camera }) {
 
 export function CameraStatusBadge({ camera }: { camera: Camera }) {
   const { t } = useTranslation('cameras')
-
-  const badgeColor =
-    cameraHealthStatusTypes.get(camera.health) ||
-    'bg-neutral-300/40 border-neutral-300'
+  const config = healthStatusConfig[camera.health] ?? healthStatusConfig.unknown
 
   const tooltipDetails: string[] = []
 
@@ -77,19 +107,25 @@ export function CameraStatusBadge({ camera }: { camera: Camera }) {
     <div className='flex items-center gap-1.5'>
       <Badge
         variant='outline'
-        className={cn('text-xs font-normal capitalize', badgeColor)}
+        className={cn(
+          'inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-normal capitalize',
+          config.badgeClass
+        )}
       >
-        {t(`status.${camera.health}`, { defaultValue: camera.health })}
+        <span className={cn('size-1.5 rounded-full', config.dotClass)} />
+        <span>
+          {t(`status.${camera.health}`, { defaultValue: camera.health })}
+        </span>
       </Badge>
       {camera.degraded && (
         <span
-          className='h-1.5 w-1.5 rounded-full bg-amber-500'
+          className='size-1.5 rounded-full bg-amber-500'
           title={t('status.degraded')}
         />
       )}
       {camera.stale && (
         <span
-          className='h-1.5 w-1.5 rounded-full bg-muted-foreground/60'
+          className='size-1.5 rounded-full bg-muted-foreground/60'
           title={t('status.stale')}
         />
       )}
@@ -196,13 +232,13 @@ export function CameraRtspCell({ camera }: { camera: Camera }) {
       <Button
         variant='ghost'
         size='icon'
-        className='h-6 w-6 shrink-0 text-muted-foreground opacity-60 transition-opacity group-hover:opacity-100 hover:text-foreground'
+        className='size-6 shrink-0 text-muted-foreground opacity-60 transition-opacity group-hover:opacity-100 hover:text-foreground'
         onClick={handleCopy}
       >
         {copied ? (
-          <Check className='h-3.5 w-3.5 text-emerald-500' />
+          <Check className='size-3.5 text-emerald-500' />
         ) : (
-          <Copy className='h-3.5 w-3.5' />
+          <Copy className='size-3.5' />
         )}
         <span className='sr-only'>{t('actions.copyRtsp')}</span>
       </Button>

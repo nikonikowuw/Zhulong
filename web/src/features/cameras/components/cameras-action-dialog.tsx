@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AxiosError } from 'axios'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { AlertCircle, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -65,7 +65,6 @@ export function CamerasActionDialog() {
   // 当打开或 currentRow 变化时同步回填
   useEffect(() => {
     if (isOpen) {
-      setProbeError(null)
       if (isEdit && currentRow) {
         const main = currentRow.streams?.find((s) => s.role === 'main')
         const sub = currentRow.streams?.find((s) => s.role === 'sub')
@@ -112,7 +111,14 @@ export function CamerasActionDialog() {
             rtspUrl: values.subRtspUrl || '',
             transport: values.subTransport,
           }
-        : undefined,
+        : isEdit && currentRow?.streams?.some((s) => s.role === 'sub')
+          ? {
+              role: 'sub' as const,
+              protocol: 'rtsp',
+              rtspUrl: '',
+              transport: 'tcp' as const,
+            }
+          : undefined,
     }
 
     try {
@@ -129,6 +135,7 @@ export function CamerasActionDialog() {
         await createMutation.mutateAsync(streamPayload)
         toast.success(t('toast.createSuccess'))
       }
+      setProbeError(null)
       setOpen(null)
     } catch (err: unknown) {
       if (err instanceof AxiosError) {
@@ -149,14 +156,17 @@ export function CamerasActionDialog() {
     }
   }
 
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const hasSub = form.watch('hasSubStream')
+  const hasSub = useWatch({
+    control: form.control,
+    name: 'hasSubStream',
+  })
 
   return (
     <Dialog
       open={isOpen}
       onOpenChange={(val) => {
         if (!isPending && !val) {
+          setProbeError(null)
           setOpen(null)
         }
       }}
@@ -231,10 +241,7 @@ export function CamerasActionDialog() {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t('form.mainTransport')}</FormLabel>
-                    <Select
-                      onValueChange={field.onChange}
-                      defaultValue={field.value}
-                    >
+                    <Select onValueChange={field.onChange} value={field.value}>
                       <FormControl>
                         <SelectTrigger className='w-full'>
                           <SelectValue />
@@ -307,7 +314,7 @@ export function CamerasActionDialog() {
                         <FormLabel>{t('form.subTransport')}</FormLabel>
                         <Select
                           onValueChange={field.onChange}
-                          defaultValue={field.value}
+                          value={field.value}
                         >
                           <FormControl>
                             <SelectTrigger className='w-full'>

@@ -35,6 +35,7 @@ export function CamerasDiagnoseDialog() {
 
   useEffect(() => {
     if (isOpen && currentRow?.id) {
+      diagnoseMutation.reset()
       diagnoseMutation.mutate(currentRow.id)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -45,20 +46,27 @@ export function CamerasDiagnoseDialog() {
   const isPending = diagnoseMutation.isPending
 
   const mainStream = currentRow?.streams?.find((s) => s.role === 'main')
-  const codec = mainStream?.codec || 'H.264'
+  const codec = mainStream?.codec || '-'
   const resolution =
     mainStream?.width && mainStream?.height
       ? `${mainStream.width}x${mainStream.height}`
-      : '1920x1080'
+      : '-'
   const fps =
-    mainStream?.fpsString ||
-    (mainStream?.fps ? `${mainStream.fps} fps` : '25 fps')
+    mainStream?.fpsString || (mainStream?.fps ? `${mainStream.fps} fps` : '-')
   const checkedTime = state?.lastCheckedAt
     ? new Date(state.lastCheckedAt).toLocaleTimeString()
     : new Date().toLocaleTimeString()
 
   return (
-    <Dialog open={isOpen} onOpenChange={(val) => !val && setOpen(null)}>
+    <Dialog
+      open={isOpen}
+      onOpenChange={(val) => {
+        if (!val) {
+          diagnoseMutation.reset()
+          setOpen(null)
+        }
+      }}
+    >
       <DialogContent className='sm:max-w-md'>
         <DialogHeader className='text-start'>
           <DialogTitle className='flex items-center gap-2'>
@@ -83,7 +91,7 @@ export function CamerasDiagnoseDialog() {
                 <p className='font-semibold'>{t('diagnose.requestFailed')}</p>
                 <p className='leading-relaxed opacity-90'>
                   {diagnoseMutation.error?.message ||
-                    'Network error or service unavailable'}
+                    t('diagnose.serviceUnavailable')}
                 </p>
               </div>
             </div>
@@ -177,7 +185,14 @@ export function CamerasDiagnoseDialog() {
             />
             {t('actions.reDiagnose')}
           </Button>
-          <Button type='button' size='sm' onClick={() => setOpen(null)}>
+          <Button
+            type='button'
+            size='sm'
+            onClick={() => {
+              diagnoseMutation.reset()
+              setOpen(null)
+            }}
+          >
             {t('actions.close')}
           </Button>
         </DialogFooter>

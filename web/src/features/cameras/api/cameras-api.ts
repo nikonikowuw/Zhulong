@@ -1,8 +1,14 @@
 import { apiClient, type ApiResponse } from '@/lib/api-client'
 import {
+  cameraCredentialsResponseSchema,
+  cameraListResponseSchema,
+  cameraSchema,
+  deleteCameraResponseSchema,
+  diagnoseResponseSchema,
   type Camera,
   type CameraCredentialsResponse,
   type CameraListResponse,
+  type DeleteCameraResponse,
   type DiagnoseResponse,
 } from '../data/schema'
 
@@ -49,14 +55,13 @@ export const camerasApi = {
         },
       }
     )
-    return (
-      resp.data.data ?? {
-        items: [],
-        total: 0,
-        page: params?.page ?? 1,
-        pageSize: params?.pageSize ?? 10,
-      }
-    )
+    const raw = resp.data.data ?? {
+      items: [],
+      total: 0,
+      page: params?.page ?? 1,
+      pageSize: params?.pageSize ?? 10,
+    }
+    return cameraListResponseSchema.parse(raw)
   },
 
   /**
@@ -64,7 +69,7 @@ export const camerasApi = {
    */
   async getCamera(id: string): Promise<Camera> {
     const resp = await apiClient.get<ApiResponse<Camera>>(`/cameras/${id}`)
-    return resp.data.data
+    return cameraSchema.parse(resp.data.data)
   },
 
   /**
@@ -72,7 +77,7 @@ export const camerasApi = {
    */
   async createCamera(data: CreateCameraDto): Promise<Camera> {
     const resp = await apiClient.post<ApiResponse<Camera>>('/cameras', data)
-    return resp.data.data
+    return cameraSchema.parse(resp.data.data)
   },
 
   /**
@@ -83,17 +88,17 @@ export const camerasApi = {
       `/cameras/${id}`,
       data
     )
-    return resp.data.data
+    return cameraSchema.parse(resp.data.data)
   },
 
   /**
    * 删除摄像机
    */
-  async deleteCamera(id: string): Promise<{ id: string; deleted: boolean }> {
-    const resp = await apiClient.delete<
-      ApiResponse<{ id: string; deleted: boolean }>
-    >(`/cameras/${id}`)
-    return resp.data.data
+  async deleteCamera(id: string): Promise<DeleteCameraResponse> {
+    const resp = await apiClient.delete<ApiResponse<DeleteCameraResponse>>(
+      `/cameras/${id}`
+    )
+    return deleteCameraResponseSchema.parse(resp.data.data)
   },
 
   /**
@@ -103,7 +108,7 @@ export const camerasApi = {
     const resp = await apiClient.get<ApiResponse<CameraCredentialsResponse>>(
       `/cameras/${id}/credentials`
     )
-    return resp.data.data
+    return cameraCredentialsResponseSchema.parse(resp.data.data)
   },
 
   /**
@@ -113,6 +118,6 @@ export const camerasApi = {
     const resp = await apiClient.post<ApiResponse<DiagnoseResponse>>(
       `/cameras/${id}/diagnose`
     )
-    return resp.data.data
+    return diagnoseResponseSchema.parse(resp.data.data)
   },
 }

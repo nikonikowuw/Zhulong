@@ -1,11 +1,11 @@
 import { type ColumnDef } from '@tanstack/react-table'
-import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
-import { DataTableColumnHeader } from '@/components/data-table'
 import { LongText } from '@/components/long-text'
 import { type Camera } from '../data/schema'
 import {
+  CameraActionsHeader,
+  CameraColumnHeader,
   CameraRtspCell,
   CameraStatusBadge,
   CameraSwitchCell,
@@ -28,7 +28,7 @@ export const camerasColumns: ColumnDef<Camera>[] = [
       />
     ),
     meta: {
-      className: cn('inset-s-0 z-10 rounded-tl-[inherit] max-md:sticky'),
+      className: cn('inset-s-0 z-10 rounded-ss-[inherit] max-md:sticky'),
     },
     cell: ({ row }) => (
       <Checkbox
@@ -43,13 +43,9 @@ export const camerasColumns: ColumnDef<Camera>[] = [
   },
   {
     accessorKey: 'id',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('cameras')
-      return (
-        <DataTableColumnHeader column={column} title={t('table.columns.id')} />
-      )
-    },
+    header: ({ column }) => (
+      <CameraColumnHeader column={column} titleKey='table.columns.id' />
+    ),
     cell: ({ row }) => {
       return (
         <span className='font-mono text-xs text-muted-foreground'>
@@ -60,16 +56,9 @@ export const camerasColumns: ColumnDef<Camera>[] = [
   },
   {
     accessorKey: 'name',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('cameras')
-      return (
-        <DataTableColumnHeader
-          column={column}
-          title={t('table.columns.name')}
-        />
-      )
-    },
+    header: ({ column }) => (
+      <CameraColumnHeader column={column} titleKey='table.columns.name' />
+    ),
     cell: ({ row }) => {
       const camera = row.original
       return (
@@ -87,44 +76,23 @@ export const camerasColumns: ColumnDef<Camera>[] = [
   },
   {
     id: 'rtspUrl',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('cameras')
-      return (
-        <DataTableColumnHeader
-          column={column}
-          title={t('table.columns.rtspUrl')}
-        />
-      )
-    },
+    header: ({ column }) => (
+      <CameraColumnHeader column={column} titleKey='table.columns.rtspUrl' />
+    ),
     cell: ({ row }) => <CameraRtspCell camera={row.original} />,
   },
   {
     accessorKey: 'health',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('cameras')
-      return (
-        <DataTableColumnHeader
-          column={column}
-          title={t('table.columns.status')}
-        />
-      )
-    },
+    header: ({ column }) => (
+      <CameraColumnHeader column={column} titleKey='table.columns.status' />
+    ),
     cell: ({ row }) => <CameraStatusBadge camera={row.original} />,
   },
   {
     id: 'mainStream',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('cameras')
-      return (
-        <DataTableColumnHeader
-          column={column}
-          title={t('table.columns.mainStream')}
-        />
-      )
-    },
+    header: ({ column }) => (
+      <CameraColumnHeader column={column} titleKey='table.columns.mainStream' />
+    ),
     cell: ({ row }) => {
       const stream = row.original.streams?.find((s) => s.role === 'main')
       return <StreamSpecCell stream={stream} />
@@ -132,16 +100,9 @@ export const camerasColumns: ColumnDef<Camera>[] = [
   },
   {
     id: 'subStream',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('cameras')
-      return (
-        <DataTableColumnHeader
-          column={column}
-          title={t('table.columns.subStream')}
-        />
-      )
-    },
+    header: ({ column }) => (
+      <CameraColumnHeader column={column} titleKey='table.columns.subStream' />
+    ),
     cell: ({ row }) => {
       const stream = row.original.streams?.find((s) => s.role === 'sub')
       return <StreamSpecCell stream={stream} />
@@ -149,30 +110,16 @@ export const camerasColumns: ColumnDef<Camera>[] = [
   },
   {
     accessorKey: 'enabled',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('cameras')
-      return (
-        <DataTableColumnHeader
-          column={column}
-          title={t('table.columns.enabled')}
-        />
-      )
-    },
+    header: ({ column }) => (
+      <CameraColumnHeader column={column} titleKey='table.columns.enabled' />
+    ),
     cell: ({ row }) => <CameraSwitchCell camera={row.original} />,
   },
   {
     accessorKey: 'updatedAt',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('cameras')
-      return (
-        <DataTableColumnHeader
-          column={column}
-          title={t('table.columns.updatedAt')}
-        />
-      )
-    },
+    header: ({ column }) => (
+      <CameraColumnHeader column={column} titleKey='table.columns.updatedAt' />
+    ),
     cell: ({ row }) => {
       const raw = row.getValue('updatedAt') as string
       if (!raw) return <span className='text-xs text-muted-foreground'>-</span>
@@ -186,11 +133,11 @@ export const camerasColumns: ColumnDef<Camera>[] = [
   },
   {
     id: 'actions',
-    header: () => <span className='sr-only'>Actions</span>,
+    header: () => <CameraActionsHeader />,
     cell: ({ row }) => <CamerasDataTableRowActions row={row} />,
     meta: {
       className: cn(
-        'sticky end-0 right-0 z-20 w-12 text-end',
+        'sticky inset-e-0 z-20 w-12 text-end',
         'bg-card',
         'before:pointer-events-none before:absolute before:inset-0 before:bg-muted/50 before:opacity-0 before:transition-opacity',
         'group-hover:before:opacity-100 group-data-[state=selected]:before:bg-muted group-data-[state=selected]:before:opacity-100'

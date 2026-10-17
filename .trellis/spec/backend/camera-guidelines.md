@@ -54,6 +54,7 @@ CREATE TABLE camera_streams (
 ```
 
 - **Revision CAS 乐观并发控制**：更新摄像机（名称、开关、流配置）必须提供 `revision`。Store 更新时执行原子 CAS（`WHERE id = ? AND revision = ?` 并递增 `revision = revision + 1`），冲突时返回 `CAMERA_REVISION_CONFLICT`（HTTP 409）。
+- **更新流保留与清空契约**：`PUT /api/v1/cameras/:id` 接收更新请求时，若 `subStream` 为 `nil` / 未传递，后端将对称保留原有的子流不变；若需移除/清空既有子流，客户端必须显式传递 `subStream: { role: "sub", rtspUrl: "" }`（即空 URL），后端识别后跳过探测并将子流移出入库列表，实现平滑解绑。
 
 ---
 

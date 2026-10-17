@@ -50,7 +50,7 @@ export function CamerasDataTableBulkActions({
     setIsUpdating(true)
     const toastId = toast.loading(t('toast.batchStatusUpdating'))
     try {
-      await Promise.all(
+      const results = await Promise.allSettled(
         selectedCameras.map((camera) =>
           toggleMutation.mutateAsync({
             camera,
@@ -58,13 +58,17 @@ export function CamerasDataTableBulkActions({
           })
         )
       )
-      toast.success(
-        t('toast.batchStatusUpdated', { count: selectedCameras.length }),
-        { id: toastId }
-      )
-      table.resetRowSelection()
+      const fulfilled = results.filter((r) => r.status === 'fulfilled').length
+      if (fulfilled > 0) {
+        toast.success(t('toast.batchStatusUpdated', { count: fulfilled }), {
+          id: toastId,
+        })
+        table.resetRowSelection()
+      } else {
+        toast.error(t('toast.batchStatusUpdateFailed'), { id: toastId })
+      }
     } catch {
-      toast.error('Batch status update failed', { id: toastId })
+      toast.error(t('toast.batchStatusUpdateFailed'), { id: toastId })
     } finally {
       setIsUpdating(false)
     }
@@ -77,15 +81,19 @@ export function CamerasDataTableBulkActions({
       t('toast.batchDiagnosing', { count: selectedCameras.length })
     )
     try {
-      await Promise.all(
+      const results = await Promise.allSettled(
         selectedCameras.map((camera) => diagnoseMutation.mutateAsync(camera.id))
       )
-      toast.success(
-        t('toast.batchDiagnoseSuccess', { count: selectedCameras.length }),
-        { id: toastId }
-      )
+      const fulfilled = results.filter((r) => r.status === 'fulfilled').length
+      if (fulfilled > 0) {
+        toast.success(t('toast.batchDiagnoseSuccess', { count: fulfilled }), {
+          id: toastId,
+        })
+      } else {
+        toast.error(t('toast.batchDiagnoseFailed'), { id: toastId })
+      }
     } catch {
-      toast.error('Batch diagnose probe failed', { id: toastId })
+      toast.error(t('toast.batchDiagnoseFailed'), { id: toastId })
     } finally {
       setIsUpdating(false)
     }
@@ -123,14 +131,14 @@ export function CamerasDataTableBulkActions({
               onClick={() => void handleBulkStatusChange(true)}
               className='cursor-pointer'
             >
-              <CheckCircle2 className='mr-2 size-4 text-emerald-500' />
+              <CheckCircle2 className='me-2 size-4 text-emerald-500' />
               <span>{t('table.batchEnable')}</span>
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => void handleBulkStatusChange(false)}
               className='cursor-pointer'
             >
-              <XCircle className='mr-2 size-4 text-muted-foreground' />
+              <XCircle className='me-2 size-4 text-muted-foreground' />
               <span>{t('table.batchDisable')}</span>
             </DropdownMenuItem>
           </DropdownMenuContent>

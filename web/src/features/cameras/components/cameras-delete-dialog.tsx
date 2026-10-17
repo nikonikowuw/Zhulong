@@ -19,7 +19,7 @@ export function CamerasDeleteDialog() {
       toast.success(t('toast.deleteSuccess'))
       setOpen(null)
     } catch {
-      toast.error('Failed to delete camera')
+      toast.error(t('toast.deleteFailed'))
     }
   }
 
@@ -32,7 +32,7 @@ export function CamerasDeleteDialog() {
       destructive
       title={
         <span className='flex items-center gap-1.5 text-destructive'>
-          <AlertTriangle className='h-5 w-5 shrink-0' />
+          <AlertTriangle className='size-5 shrink-0' />
           {t('dialog.deleteTitle')}
         </span>
       }
@@ -47,7 +47,7 @@ export function CamerasDeleteDialog() {
         </div>
       }
       confirmText={t('actions.delete')}
-      cancelBtnText='取消'
+      cancelBtnText={t('actions.cancel')}
     />
   )
 }

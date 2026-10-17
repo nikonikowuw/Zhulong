@@ -19,12 +19,20 @@ export function maskRtspUrl(url: string): string {
  * 例如: rtsp://admin:123456@192.168.1.100:554/live -> 192.168.1.100
  */
 export function extractIpFromRtspUrl(url?: string): string {
-  if (!url) return '-'
-  const matchWithAuth = url.match(/@([^:/]+)/)
-  if (matchWithAuth) return matchWithAuth[1]
-  const matchWithoutAuth = url.match(/^rtsp:\/\/([^:/]+)/i)
-  if (matchWithoutAuth) return matchWithoutAuth[1]
-  return '-'
+  if (!url || !url.toLowerCase().startsWith('rtsp://')) return '-'
+  try {
+    const parsed = new URL(url)
+    return parsed.hostname.replace(/^\[|\]$/g, '') || '-'
+  } catch {
+    const matchWithAuth = url.match(/@(?:\[([a-fA-F0-9:]+)\]|([^:/]+))/)
+    if (matchWithAuth) return matchWithAuth[1] || matchWithAuth[2] || '-'
+    const matchWithoutAuth = url.match(
+      /^rtsp:\/\/(?:\[([a-fA-F0-9:]+)\]|([^:/]+))/i
+    )
+    if (matchWithoutAuth)
+      return matchWithoutAuth[1] || matchWithoutAuth[2] || '-'
+    return '-'
+  }
 }
 
 /**

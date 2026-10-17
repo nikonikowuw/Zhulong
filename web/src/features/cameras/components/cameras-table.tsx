@@ -194,8 +194,8 @@ export function CamerasTable({
                   <TableCell>
                     <Skeleton className='h-4 w-24' />
                   </TableCell>
-                  <TableCell className='sticky end-0 right-0 z-20 w-12 bg-card text-end'>
-                    <Skeleton className='h-8 w-8 rounded-md' />
+                  <TableCell className='sticky inset-e-0 z-20 w-12 bg-card text-end'>
+                    <Skeleton className='size-8 rounded-md' />
                   </TableCell>
                 </TableRow>
               ))
@@ -207,18 +207,16 @@ export function CamerasTable({
                   className='h-48 text-center'
                 >
                   <div className='flex flex-col items-center justify-center gap-2 text-destructive'>
-                    <AlertCircle className='h-8 w-8' />
-                    <span className='font-medium'>
-                      加载摄像机数据失败，请检查网络或后端服务
-                    </span>
+                    <AlertCircle className='size-8' />
+                    <span className='font-medium'>{t('table.loadError')}</span>
                     <Button
                       variant='outline'
                       size='sm'
                       onClick={onRetry}
                       className='mt-2'
                     >
-                      <RefreshCw className='me-1 h-4 w-4' />
-                      重试
+                      <RefreshCw className='me-1 size-4' />
+                      {t('table.retry')}
                     </Button>
                   </div>
                 </TableCell>
@@ -251,8 +249,8 @@ export function CamerasTable({
                   className='h-64 text-center'
                 >
                   <div className='flex flex-col items-center justify-center gap-2'>
-                    <div className='flex h-12 w-12 items-center justify-center rounded-full bg-muted'>
-                      <CameraIcon className='h-6 w-6 text-muted-foreground' />
+                    <div className='flex size-12 items-center justify-center rounded-full bg-muted'>
+                      <CameraIcon className='size-6 text-muted-foreground' />
                     </div>
                     <span className='text-base font-semibold text-foreground'>
                       {isFiltered ? t('table.filterEmpty') : t('table.empty')}

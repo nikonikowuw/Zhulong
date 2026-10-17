@@ -31,21 +31,21 @@ export function CamerasDataTableRowActions({ row }: DataTableRowActionsProps) {
       <DropdownMenuTrigger asChild>
         <Button
           variant='ghost'
-          className='flex h-8 w-8 p-0 data-[state=open]:bg-muted'
+          className='flex size-8 p-0 data-[state=open]:bg-muted'
           aria-label={t('table.columns.actions')}
         >
-          <MoreHorizontal className='h-4 w-4' />
+          <MoreHorizontal className='size-4' />
           <span className='sr-only'>{t('table.columns.actions')}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align='end' className='w-40'>
         <DropdownMenuItem onClick={() => handleAction('edit')}>
-          <Pencil className='me-2 h-4 w-4' />
+          <Pencil className='me-2 size-4' />
           {t('actions.edit')}
         </DropdownMenuItem>
 
         <DropdownMenuItem onClick={() => handleAction('diagnose')}>
-          <Activity className='me-2 h-4 w-4 text-primary' />
+          <Activity className='me-2 size-4 text-primary' />
           {t('actions.diagnose')}
         </DropdownMenuItem>
 
@@ -55,7 +55,7 @@ export function CamerasDataTableRowActions({ row }: DataTableRowActionsProps) {
           className='text-destructive focus:text-destructive'
           onClick={() => handleAction('delete')}
         >
-          <Trash2 className='me-2 h-4 w-4' />
+          <Trash2 className='me-2 size-4' />
           {t('actions.delete')}
         </DropdownMenuItem>
       </DropdownMenuContent>

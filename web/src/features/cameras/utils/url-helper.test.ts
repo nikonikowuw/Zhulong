@@ -31,6 +31,11 @@ describe('url-helper', () => {
       expect(extractIpFromRtspUrl(url)).toBe('10.0.0.55')
     })
 
+    it('extracts IPv6 address from url correctly', () => {
+      const url = 'rtsp://admin:passwd123@[fe80::1]:554/live'
+      expect(extractIpFromRtspUrl(url)).toBe('fe80::1')
+    })
+
     it('returns fallback dash for invalid or undefined input', () => {
       expect(extractIpFromRtspUrl(undefined)).toBe('-')
       expect(extractIpFromRtspUrl('')).toBe('-')

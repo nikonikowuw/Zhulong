@@ -28,12 +28,12 @@ export function CamerasPrimaryButtons() {
         onClick={handleRefresh}
         title={t('actions.refresh')}
       >
-        <RefreshCw className='me-1 h-4 w-4' />
+        <RefreshCw className='me-1 size-4' />
         <span className='hidden sm:inline'>{t('actions.refresh')}</span>
       </Button>
 
       <Button size='sm' className='h-8' onClick={handleCreate}>
-        <Plus className='me-1 h-4 w-4' />
+        <Plus className='me-1 size-4' />
         <span>{t('actions.create')}</span>
       </Button>
     </div>
