@@ -36,15 +36,8 @@ func (s *Store) db(ctx context.Context) (*gorm.DB, error) {
 	return db.WithContext(ctx), nil
 }
 
-// CreateTask persists a new task entity without budget check.
-func (s *Store) CreateTask(ctx context.Context, t *Task) error {
-	if t == nil {
-		return errors.New("task is nil")
-	}
-	db, err := s.db(ctx)
-	if err != nil {
-		return err
-	}
+// initTaskTimestamps ensures CreatedAt and UpdatedAt are set in UTC.
+func initTaskTimestamps(t *Task) {
 	now := time.Now().UTC()
 	if t.CreatedAt.IsZero() {
 		t.CreatedAt = now
@@ -56,6 +49,18 @@ func (s *Store) CreateTask(ctx context.Context, t *Task) error {
 	} else {
 		t.UpdatedAt = t.UpdatedAt.UTC()
 	}
+}
+
+// CreateTask persists a new task entity without budget check.
+func (s *Store) CreateTask(ctx context.Context, t *Task) error {
+	if t == nil {
+		return errors.New("task is nil")
+	}
+	db, err := s.db(ctx)
+	if err != nil {
+		return err
+	}
+	initTaskTimestamps(t)
 	return db.Create(t).Error
 }
 
@@ -68,57 +73,11 @@ func (s *Store) CreateTaskWithinBudget(ctx context.Context, task *Task, maxPoint
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-	if task.CreatedAt.IsZero() {
-		task.CreatedAt = now
-	} else {
-		task.CreatedAt = task.CreatedAt.UTC()
-	}
-	if task.UpdatedAt.IsZero() {
-		task.UpdatedAt = now
-	} else {
-		task.UpdatedAt = task.UpdatedAt.UTC()
-	}
+	initTaskTimestamps(task)
 
 	return db.Transaction(func(tx *gorm.DB) error {
-		var algorithm struct {
-			ID          string `gorm:"column:id"`
-			ComputeCost int    `gorm:"column:compute_cost"`
-		}
-		if err := tx.Table("algorithms").Select("id, compute_cost").Where("id = ?", task.AlgorithmID).First(&algorithm).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrNotFound
-			}
+		if err := validateComputeBudget(tx, task, "", maxPoints); err != nil {
 			return err
-		}
-
-		var allocations []struct {
-			TaskID      string `gorm:"column:task_id"`
-			SampleFPS   int    `gorm:"column:sample_fps"`
-			ComputeCost *int   `gorm:"column:compute_cost"`
-		}
-		if err := tx.Table("analysis_tasks").
-			Select("analysis_tasks.id AS task_id, analysis_tasks.sample_fps, algorithms.compute_cost").
-			Joins("LEFT JOIN algorithms ON algorithms.id = analysis_tasks.algorithm_id").
-			Where("analysis_tasks.enabled = ?", true).
-			Scan(&allocations).Error; err != nil {
-			return err
-		}
-
-		var total int64
-		for _, allocation := range allocations {
-			if allocation.ComputeCost == nil {
-				return fmt.Errorf("enabled analysis task %q references a missing algorithm", allocation.TaskID)
-			}
-			total, err = addComputePoints(total, *allocation.ComputeCost, allocation.SampleFPS, maxPoints)
-			if err != nil {
-				return err
-			}
-		}
-		if task.Enabled {
-			if total, err = addComputePoints(total, algorithm.ComputeCost, task.SampleFPS, maxPoints); err != nil {
-				return err
-			}
 		}
 		return tx.Create(task).Error
 	})
@@ -136,48 +95,61 @@ func (s *Store) UpdateTaskWithinBudget(ctx context.Context, task *Task, maxPoint
 	task.UpdatedAt = time.Now().UTC()
 
 	return db.Transaction(func(tx *gorm.DB) error {
-		var algorithm struct {
-			ID          string `gorm:"column:id"`
-			ComputeCost int    `gorm:"column:compute_cost"`
-		}
-		if err := tx.Table("algorithms").Select("id, compute_cost").Where("id = ?", task.AlgorithmID).First(&algorithm).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrNotFound
-			}
+		if err := validateComputeBudget(tx, task, task.ID, maxPoints); err != nil {
 			return err
-		}
-
-		var allocations []struct {
-			TaskID      string `gorm:"column:task_id"`
-			SampleFPS   int    `gorm:"column:sample_fps"`
-			ComputeCost *int   `gorm:"column:compute_cost"`
-		}
-		// Exclude current task from allocation sum
-		if err := tx.Table("analysis_tasks").
-			Select("analysis_tasks.id AS task_id, analysis_tasks.sample_fps, algorithms.compute_cost").
-			Joins("LEFT JOIN algorithms ON algorithms.id = analysis_tasks.algorithm_id").
-			Where("analysis_tasks.enabled = ? AND analysis_tasks.id != ?", true, task.ID).
-			Scan(&allocations).Error; err != nil {
-			return err
-		}
-
-		var total int64
-		for _, allocation := range allocations {
-			if allocation.ComputeCost == nil {
-				return fmt.Errorf("enabled analysis task %q references a missing algorithm", allocation.TaskID)
-			}
-			total, err = addComputePoints(total, *allocation.ComputeCost, allocation.SampleFPS, maxPoints)
-			if err != nil {
-				return err
-			}
-		}
-		if task.Enabled {
-			if total, err = addComputePoints(total, algorithm.ComputeCost, task.SampleFPS, maxPoints); err != nil {
-				return err
-			}
 		}
 		return tx.Save(task).Error
 	})
+}
+
+func validateComputeBudget(tx *gorm.DB, task *Task, excludeTaskID string, maxPoints int64) error {
+	var algorithm struct {
+		ID          string `gorm:"column:id"`
+		ComputeCost int    `gorm:"column:compute_cost"`
+	}
+	if err := tx.Table("algorithms").Select("id, compute_cost").Where("id = ?", task.AlgorithmID).First(&algorithm).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrNotFound
+		}
+		return err
+	}
+
+	query := tx.Table("analysis_tasks").
+		Select("analysis_tasks.id AS task_id, analysis_tasks.sample_fps, algorithms.compute_cost").
+		Joins("LEFT JOIN algorithms ON algorithms.id = analysis_tasks.algorithm_id").
+		Where("analysis_tasks.enabled = ?", true)
+
+	if excludeTaskID != "" {
+		query = query.Where("analysis_tasks.id != ?", excludeTaskID)
+	}
+
+	var allocations []struct {
+		TaskID      string `gorm:"column:task_id"`
+		SampleFPS   int    `gorm:"column:sample_fps"`
+		ComputeCost *int   `gorm:"column:compute_cost"`
+	}
+	if err := query.Scan(&allocations).Error; err != nil {
+		return err
+	}
+
+	var total int64
+	for _, allocation := range allocations {
+		if allocation.ComputeCost == nil {
+			return fmt.Errorf("enabled analysis task %q references a missing algorithm", allocation.TaskID)
+		}
+		var err error
+		total, err = addComputePoints(total, *allocation.ComputeCost, allocation.SampleFPS, maxPoints)
+		if err != nil {
+			return err
+		}
+	}
+	if task.Enabled {
+		var err error
+		if total, err = addComputePoints(total, algorithm.ComputeCost, task.SampleFPS, maxPoints); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func addComputePoints(total int64, computeCost, sampleFPS int, maxPoints int64) (int64, error) {

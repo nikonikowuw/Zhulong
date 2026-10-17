@@ -104,6 +104,8 @@ func (s *Service) CreateTask(ctx context.Context, t *Task) error {
 	// Guard against duplicate task for camera and algorithm
 	if existing, err := s.store.GetTaskByCameraAndAlgorithm(ctx, t.CameraID, t.AlgorithmID); err == nil && existing != nil {
 		return apperr.Conflict("TASK_ALREADY_EXISTS", "task already exists for camera and algorithm", nil)
+	} else if err != nil && !errors.Is(err, ErrNotFound) {
+		return apperr.Internal("INTERNAL_ERROR", "failed to check existing task", err)
 	}
 
 	if err := s.store.CreateTaskWithinBudget(ctx, t, MaxComputePoints); err != nil {
