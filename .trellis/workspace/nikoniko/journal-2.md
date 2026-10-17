@@ -430,3 +430,41 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+## Session 55: 拆分子进程看护与容灾自愈为独立 algorunner 模块
+<!-- trellis-session: v=2 fp=79b9075018792753 -->
+
+**Date**: 2026-10-17
+**Task**: 拆分子进程看护与容灾自愈为独立 algorunner 模块
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+将 internal/algorithm 中的 Supervisor 多进程看护、Recovery 退避状态机、Process 生命周期及 GalleryBroadcaster 底库广播完整剥离至 internal/algorunner。定义 LifecycleStore 抽象接口解除对 algorithm.Store 的反向依赖，并更新 internal/app Uber Fx 注入及后端规范文档
+
+### Main Changes
+
+- 新建 internal/algorunner 模块，迁移 recovery.go, process.go, supervisor.go 及其单元测试
+- 定义 PackageMeta 与 LifecycleStore 接口契约，实现 algorunner 与 algorithm 彻底单向依赖与解耦
+- 精简 internal/algorithm 模块 1500+ 行代码，使其收敛为纯粹静态算法制品资产管理中心
+- 更新 internal/app 中 Uber Fx 装配，注册 algorunner.Supervisor 与 GalleryBroadcaster
+- 更新 .trellis/spec/backend 架构目录规范与算法包开发规范
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `85267ed` | refactor(algorithm,algorunner): extract runner supervisor and recovery into algorunner package |
+
+### Testing
+
+- [OK] go test -race ./internal/algorunner/... (PASS)
+- [OK] python3 native/scripts/build.py go test -race ./internal/algorithm/... (PASS)
+- [OK] make native-test (20/20 CTest 100% PASS)
+- [OK] make check (前端+后端+原生+API文档 全量门禁 100% PASS)
+
+### Status
+
+[OK] **Completed**
