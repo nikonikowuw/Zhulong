@@ -504,3 +504,42 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+## Session 57: 修复 record 模块契约与并发缺陷
+<!-- trellis-session: v=2 fp=8b4c73f112e5a1b0 -->
+
+**Date**: 2026-10-17
+**Task**: 修复 record 模块契约与并发缺陷
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+修复 record 模块中 null 数组序列化破坏前端 Zod 校验、cooldown 负时间差事件抑制、告警标签误判以及分层越权等缺陷
+
+### Main Changes
+
+- responses: 在 ToResponse() 中增加 candidates 恒为 []、attributes 与 extra 恒为 {} 的非空防御，杜绝向前端输出 null 破坏 Zod 解析
+- cooldown: 修复 Allow() 在时间戳乱序或时钟微调回退时的负时间差缺陷，新增线程安全的 SetCooldown() 方法
+- service: 优化 isAlarmLabel 排除 fire_hydrant 与正常佩戴安全帽 helmet 的误判，新增 json 序列化零值防御，移除直接依赖的 dbProvider
+- store: 新增 GetFaceImagePath 收敛跨表查询，批量插入增加 nil item 防 panic 校验
+- handler: 消除 c.ShouldBindQuery 吞错，统一调用 httputil.HandleBindError；补全正向 200 查询与非法参数测试
+- spec: 更新 http-api-guidelines.md 记录 DTO 字段 Null-safety 防御铁律
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3e8a92c` | fix(record): resolve null serialization, cooldown negative drift, alarm label false-positives, and decouple service |
+
+### Testing
+
+- [OK] 运行 go test -v -race ./internal/record/... 全部通过 (13/13)
+- [OK] 运行 pnpm --dir web test 全部通过 (63 files, 284 tests)
+- [OK] 运行 make check (前端 lint/test/build + native-test 20/20 + api-docs + 全局 go-check -race) 全绿通过
+
+### Status
+
+[OK] **Completed**
+
