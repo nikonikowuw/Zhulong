@@ -195,7 +195,6 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
         if (has_dma_slots_) {
             dma_slot_data = static_cast<uint8_t*>(dma_slots_[slot_idx]->mmap_addr());
             dma_fd_to_send = dma_slots_[slot_idx]->fd();
-            dma_slots_[slot_idx]->sync_start(zhulong::platform::DMA_SYNC_WRITE);
         }
     }
 
@@ -330,8 +329,9 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
         }
     }
 
-    // 若非零拷贝直通且使用 DMA 槽位，同步拷入 DMA-BUF 并刷出 CPU Cache
+    // 若非零拷贝直通且使用 DMA 槽位，同步拷入 DMA-BUF 并刷出 CPU Cache (RAII 守卫保护)
     if (!is_zero_copy_frame && dma_slot_data) {
+        zhulong::platform::ScopedCpuSync dma_sync(*dma_slots_[slot_idx], zhulong::platform::DMA_SYNC_WRITE);
         size_t total_payload_bytes = 0;
         if (frame.format == FRAME_FORMAT_NV12) {
             total_payload_bytes = frame.y_plane_size() + static_cast<size_t>(frame.stride) * ((frame.height + 1) / 2);
@@ -346,7 +346,6 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
         if (total_payload_bytes <= options_.slot_size) {
             std::memcpy(dma_slot_data, slot_data, total_payload_bytes);
         }
-        dma_slots_[slot_idx]->sync_end(zhulong::platform::DMA_SYNC_WRITE);
     }
 
     // 切换槽位状态为 LEASED

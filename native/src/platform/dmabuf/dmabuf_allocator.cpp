@@ -11,11 +11,17 @@
 #include <cstring>
 #include <cerrno>
 #include <utility>
+#include <thread>
+#include <chrono>
+#include <vector>
+#include <algorithm>
+#include <cctype>
 
 #if defined(__linux__)
 #include <linux/types.h>
 #include <linux/ioctl.h>
 #include <sys/ioctl.h>
+#include <dirent.h>
 
 #ifndef DMA_HEAP_IOC_MAGIC
 #define DMA_HEAP_IOC_MAGIC 'H'
@@ -75,16 +81,69 @@ struct drm_prime_handle {
 
 namespace zhulong::platform {
 
+#if defined(__linux__)
+static void scan_dma_heaps(std::vector<std::string>& cma_candidates,
+                           std::vector<std::string>& sys_candidates) {
+    DIR* dir = ::opendir("/dev/dma_heap");
+    if (!dir) {
+        return;
+    }
+
+    struct dirent* entry = nullptr;
+    while ((entry = ::readdir(dir)) != nullptr) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+        std::string name = entry->d_name;
+        std::string lower_name = name;
+        std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        std::string full_path = std::string("/dev/dma_heap/") + name;
+        if (lower_name.find("cma") != std::string::npos) {
+            if (lower_name == "cma") {
+                cma_candidates.insert(cma_candidates.begin(), full_path);
+            } else {
+                cma_candidates.push_back(full_path);
+            }
+        } else if (lower_name.find("system") != std::string::npos ||
+                   lower_name.find("sys") != std::string::npos ||
+                   lower_name.find("uncached") != std::string::npos) {
+            if (lower_name == "system") {
+                sys_candidates.insert(sys_candidates.begin(), full_path);
+            } else {
+                sys_candidates.push_back(full_path);
+            }
+        } else {
+            sys_candidates.push_back(full_path);
+        }
+    }
+    ::closedir(dir);
+}
+#endif
+
 // =============================================================================
 // DmaBuffer Implementation
 // =============================================================================
 
-DmaBuffer::DmaBuffer(int fd, size_t size, void* mmap_addr, int drm_fd, uint32_t dumb_handle)
-    : fd_(fd), size_(size), mmap_addr_(mmap_addr), drm_fd_(drm_fd), dumb_handle_(dumb_handle) {}
+DmaBuffer::DmaBuffer(int fd, size_t size, void* mmap_addr, int drm_fd, uint32_t dumb_handle, size_t mmap_size)
+    : fd_(fd), size_(size), mmap_size_(mmap_size > 0 ? mmap_size : size),
+      mmap_addr_(mmap_addr), dumb_handle_(dumb_handle) {
+#if defined(__linux__)
+    if (drm_fd >= 0) {
+        drm_fd_ = ::dup(drm_fd);
+    } else {
+        drm_fd_ = -1;
+    }
+#else
+    (void)drm_fd;
+    drm_fd_ = -1;
+#endif
+}
 
 DmaBuffer::~DmaBuffer() {
     if (mmap_addr_ && mmap_addr_ != MAP_FAILED) {
-        ::munmap(mmap_addr_, size_);
+        ::munmap(mmap_addr_, mmap_size_);
         mmap_addr_ = nullptr;
     }
     if (fd_ >= 0) {
@@ -98,14 +157,19 @@ DmaBuffer::~DmaBuffer() {
         ioctl(drm_fd_, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_req);
         dumb_handle_ = 0;
     }
+    if (drm_fd_ >= 0) {
+        ::close(drm_fd_);
+        drm_fd_ = -1;
+    }
 #endif
 }
 
 DmaBuffer::DmaBuffer(DmaBuffer&& other) noexcept
-    : fd_(other.fd_), size_(other.size_), mmap_addr_(other.mmap_addr_),
-      drm_fd_(other.drm_fd_), dumb_handle_(other.dumb_handle_) {
+    : fd_(other.fd_), size_(other.size_), mmap_size_(other.mmap_size_),
+      mmap_addr_(other.mmap_addr_), drm_fd_(other.drm_fd_), dumb_handle_(other.dumb_handle_) {
     other.fd_ = -1;
     other.size_ = 0;
+    other.mmap_size_ = 0;
     other.mmap_addr_ = nullptr;
     other.drm_fd_ = -1;
     other.dumb_handle_ = 0;
@@ -114,7 +178,7 @@ DmaBuffer::DmaBuffer(DmaBuffer&& other) noexcept
 DmaBuffer& DmaBuffer::operator=(DmaBuffer&& other) noexcept {
     if (this != &other) {
         if (mmap_addr_ && mmap_addr_ != MAP_FAILED) {
-            ::munmap(mmap_addr_, size_);
+            ::munmap(mmap_addr_, mmap_size_);
         }
         if (fd_ >= 0) {
             ::close(fd_);
@@ -125,15 +189,20 @@ DmaBuffer& DmaBuffer::operator=(DmaBuffer&& other) noexcept {
             destroy_req.handle = dumb_handle_;
             ioctl(drm_fd_, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_req);
         }
+        if (drm_fd_ >= 0) {
+            ::close(drm_fd_);
+        }
 #endif
         fd_ = other.fd_;
         size_ = other.size_;
+        mmap_size_ = other.mmap_size_;
         mmap_addr_ = other.mmap_addr_;
         drm_fd_ = other.drm_fd_;
         dumb_handle_ = other.dumb_handle_;
 
         other.fd_ = -1;
         other.size_ = 0;
+        other.mmap_size_ = 0;
         other.mmap_addr_ = nullptr;
         other.drm_fd_ = -1;
         other.dumb_handle_ = 0;
@@ -147,8 +216,18 @@ bool DmaBuffer::sync_start(uint64_t flags) {
     struct dma_buf_sync sync{};
     sync.flags = DMA_BUF_SYNC_START | (flags & DMA_BUF_SYNC_RW);
     int ret = 0;
+    int retries = 0;
+    constexpr int MAX_RETRIES = 50;
+    constexpr auto BACKOFF_TIME = std::chrono::microseconds(100);
+
     do {
         ret = ioctl(fd_, DMA_BUF_IOCTL_SYNC, &sync);
+        if (ret == -1 && errno == EAGAIN) {
+            if (++retries > MAX_RETRIES) {
+                return false;
+            }
+            std::this_thread::sleep_for(BACKOFF_TIME);
+        }
     } while (ret == -1 && (errno == EINTR || errno == EAGAIN));
     return (ret == 0);
 #else
@@ -163,8 +242,18 @@ bool DmaBuffer::sync_end(uint64_t flags) {
     struct dma_buf_sync sync{};
     sync.flags = DMA_BUF_SYNC_END | (flags & DMA_BUF_SYNC_RW);
     int ret = 0;
+    int retries = 0;
+    constexpr int MAX_RETRIES = 50;
+    constexpr auto BACKOFF_TIME = std::chrono::microseconds(100);
+
     do {
         ret = ioctl(fd_, DMA_BUF_IOCTL_SYNC, &sync);
+        if (ret == -1 && errno == EAGAIN) {
+            if (++retries > MAX_RETRIES) {
+                return false;
+            }
+            std::this_thread::sleep_for(BACKOFF_TIME);
+        }
     } while (ret == -1 && (errno == EINTR || errno == EAGAIN));
     return (ret == 0);
 #else
@@ -197,31 +286,51 @@ DmaBufAllocator::~DmaBufAllocator() {
     }
 }
 
+void DmaBufAllocator::set_error(std::string err) {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_ = std::move(err);
+}
+
+std::string DmaBufAllocator::last_error() const {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    return last_error_;
+}
+
 void DmaBufAllocator::probe() {
     type_ = DmaAllocatorType::NONE;
+    device_path_.clear();
+
 #if defined(__linux__)
-    // 1. 首选连续物理内存堆 CMA
-    heap_fd_ = ::open("/dev/dma_heap/cma", O_RDWR | O_CLOEXEC);
-    if (heap_fd_ >= 0) {
-        type_ = DmaAllocatorType::DMA_HEAP_CMA;
-        device_path_ = "/dev/dma_heap/cma";
-        return;
+    std::vector<std::string> cma_candidates;
+    std::vector<std::string> sys_candidates;
+    scan_dma_heaps(cma_candidates, sys_candidates);
+
+    // 1. 优先尝试连续物理内存堆 CMA（满足 VPU/NPU 硬性约束）
+    for (const auto& path : cma_candidates) {
+        heap_fd_ = ::open(path.c_str(), O_RDWR | O_CLOEXEC);
+        if (heap_fd_ >= 0) {
+            type_ = DmaAllocatorType::DMA_HEAP_CMA;
+            device_path_ = path;
+            return;
+        }
     }
 
-    // 2. 次选散布内存堆 system
-    heap_fd_ = ::open("/dev/dma_heap/system", O_RDWR | O_CLOEXEC);
-    if (heap_fd_ >= 0) {
-        type_ = DmaAllocatorType::DMA_HEAP_SYS;
-        device_path_ = "/dev/dma_heap/system";
-        return;
+    // 2. 次选系统散布内存堆 system
+    for (const auto& path : sys_candidates) {
+        heap_fd_ = ::open(path.c_str(), O_RDWR | O_CLOEXEC);
+        if (heap_fd_ >= 0) {
+            type_ = DmaAllocatorType::DMA_HEAP_SYS;
+            device_path_ = path;
+            return;
+        }
     }
 
-    // 3. 备选 DRM Dumb Buffer PRIME FD (⚠️ KMS Dumb Buffer 属于显示管理 ioctl，仅允许在主节点 card* 创建)
+    // 3. 备选 DRM Dumb Buffer PRIME FD（使用 2D 几何步长真实探测）
     drm_fd_ = ::open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
     if (drm_fd_ >= 0) {
-        // 动态探针校验：真实测试驱动是否支持 CREATE_DUMB，防止不可用设备假阳性
+        // 动态探针校验：使用标准二维步长（4096 字节宽，1 行高）测试驱动真实支持情况
         struct drm_mode_create_dumb test_req{};
-        test_req.width = 64;
+        test_req.width = 4096;
         test_req.height = 1;
         test_req.bpp = 8;
         if (ioctl(drm_fd_, DRM_IOCTL_MODE_CREATE_DUMB, &test_req) == 0) {
@@ -261,12 +370,21 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
         alloc_data.heap_flags = 0;
 
         if (ioctl(heap_fd_, DMA_HEAP_IOCTL_ALLOC, &alloc_data) < 0) {
+            int err = errno;
+            if (err == ENOMEM) {
+                set_error("DMA_HEAP_IOCTL_ALLOC out of memory (CMA/system pool exhausted)");
+            } else if (err == EMFILE || err == ENFILE) {
+                set_error("DMA_HEAP_IOCTL_ALLOC fd table limit reached");
+            } else {
+                set_error("DMA_HEAP_IOCTL_ALLOC failed with errno " + std::to_string(err));
+            }
             return nullptr;
         }
 
         int dma_fd = static_cast<int>(alloc_data.fd);
         void* ptr = ::mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, dma_fd, 0);
         if (ptr == MAP_FAILED) {
+            set_error("mmap dma_buf fd failed: " + std::string(std::strerror(errno)));
             ::close(dma_fd);
             return nullptr;
         }
@@ -275,12 +393,21 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
     }
 
     if (type_ == DmaAllocatorType::DRM_DUMB) {
+        // 2D 尺寸二维化计算：固定 4096 步长宽度（对齐 4KB 页面与 max_width 约束），折算高度
+        constexpr __u32 DUMB_STRIDE_WIDTH = 4096;
+        __u32 calculated_height = static_cast<__u32>((size + DUMB_STRIDE_WIDTH - 1) / DUMB_STRIDE_WIDTH);
+        if (calculated_height == 0) {
+            calculated_height = 1;
+        }
+
         struct drm_mode_create_dumb create_req{};
-        create_req.width = static_cast<__u32>(size);
-        create_req.height = 1;
+        create_req.width = DUMB_STRIDE_WIDTH;
+        create_req.height = calculated_height;
         create_req.bpp = 8;
 
         if (ioctl(drm_fd_, DRM_IOCTL_MODE_CREATE_DUMB, &create_req) < 0) {
+            int err = errno;
+            set_error("DRM_IOCTL_MODE_CREATE_DUMB failed with errno " + std::to_string(err));
             return nullptr;
         }
 
@@ -290,14 +417,22 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
         prime_req.fd = -1;
 
         if (ioctl(drm_fd_, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime_req) < 0) {
+            int err = errno;
+            set_error("DRM_IOCTL_PRIME_HANDLE_TO_FD failed with errno " + std::to_string(err));
             struct drm_mode_destroy_dumb destroy_req{};
             destroy_req.handle = create_req.handle;
             ioctl(drm_fd_, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_req);
             return nullptr;
         }
 
-        void* ptr = ::mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, prime_req.fd, 0);
+        size_t actual_mmap_size = static_cast<size_t>(create_req.size);
+        if (actual_mmap_size < size) {
+            actual_mmap_size = size;
+        }
+
+        void* ptr = ::mmap(nullptr, actual_mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, prime_req.fd, 0);
         if (ptr == MAP_FAILED) {
+            set_error("mmap DRM dumb PRIME fd failed: " + std::string(std::strerror(errno)));
             ::close(prime_req.fd);
             struct drm_mode_destroy_dumb destroy_req{};
             destroy_req.handle = create_req.handle;
@@ -305,7 +440,7 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
             return nullptr;
         }
 
-        return std::make_unique<DmaBuffer>(prime_req.fd, size, ptr, drm_fd_, create_req.handle);
+        return std::make_unique<DmaBuffer>(prime_req.fd, size, ptr, drm_fd_, create_req.handle, actual_mmap_size);
     }
 #endif
 

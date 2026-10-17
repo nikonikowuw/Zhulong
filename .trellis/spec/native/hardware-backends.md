@@ -120,18 +120,21 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 
 ### 4.1 底层物理分配器 (`DmaBufAllocator`)
 
-- **分配优先级探测**：
-  1. `/dev/dma_heap/cma`：优先分配连续物理内存块，满足硬件硬性物理连续要求；
-  2. `/dev/dma_heap/system`：系统级 DMA-Heap 分配；
-  3. `/dev/dri/card0` (DRM Dumb Buffer)：通过 DRM ioctl 创建并导出 DMA-BUF（`DRM_IOCTL_PRIME_HANDLE_TO_FD`）。⚠️ **KMS 限制**：Dumb Buffer 属于显示管理功能，仅允许在主节点 `/dev/dri/card*` 创建，严禁在渲染节点 `/dev/dri/renderD*` 创建（内核会拒绝并返回 `EACCES`）；且探测时必须发起最小 `CREATE_DUMB` 真实探针校验，防止部分驱动开放 card 节点却不支持 dumb 造成的不可用假阳性；
+- **分配优先级探测与多 BSP 动态扫描**：
+  1. `/dev/dma_heap/` 动态遍历扫描：优先自适应匹配名称含 `cma` 的物理连续堆（如 `cma`、`rk-dma-heap-cma`、`linux,cma`），满足硬件硬性物理连续要求；
+  2. 系统散布堆：次选匹配名称含 `system`、`sys` 或 `uncached` 的系统级 DMA-Heap 节点；
+  3. `/dev/dri/card0` (DRM Dumb Buffer)：通过 DRM ioctl 创建并导出 DMA-BUF（`DRM_IOCTL_PRIME_HANDLE_TO_FD`）。
+     - ⚠️ **KMS 限制与二维化步长**：Dumb Buffer 仅允许在主节点 `/dev/dri/card*` 创建，严禁在渲染节点 `/dev/dri/renderD*` 创建（内核会拒绝并返回 `EACCES`）；为突破硬件 `max_width` 几何尺寸限制并支持 1080p/4K 大分辨率，分配时统一固定宽度为 4096 像素并折算高度，映射实际内核返回的 `create_req.size`；
+     - ⚠️ **FD 独立所有权**：关联 DRM Dumb 时由 `DmaBuffer` 内部通过 `::dup(drm_fd)` 持有独立文件描述符并于析构时自主关闭，杜绝依赖外部单例共享描述符产生的 UAF 与误伤复用描述符隐患；
   4. 宿主测试环境/非 Linux 平台自动回退为不可用（`is_supported() == false`）。
 - **FrameBroker 双轨分发与零拷贝穿透**：
   - 当上游硬件帧具备有效 `HardwareFrame::dma_fd >= 0` 时，`publish_frame` 直接分发该文件描述符，**完全杜绝任何 CPU `std::memcpy` 与 Cache 刷新**；
-  - 当为 CPU 软解帧时（`dma_fd < 0`），写入 POSIX 共享内存池（`shm_pool_`）以兼容标准 SHM 客户端；若硬件环境激活了 `dma_slots_`，则同步写入 DMA-BUF 槽位并刷出 Cache，供下游加速插件直绑。
-- **CPU Cache 同步括号 (Cache Synchronization Bracket)**：
+  - 当为 CPU 软解帧时（`dma_fd < 0`），写入 POSIX 共享内存池（`shm_pool_`）以兼容标准 SHM 客户端；若硬件环境激活了 `dma_slots_`，则同步写入 DMA-BUF 槽位并由 `ScopedCpuSync` RAII 守卫刷出 Cache，供下游加速插件直绑。
+- **CPU Cache 同步括号与 RAII 守卫 (ScopedCpuSync)**：
   - CPU 读写前：调用 `sync_start(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE)` 触发 `DMA_BUF_IOCTL_SYNC`；
   - 硬件外设介入前：调用 `sync_end(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE)` 刷回 Cache Line；
-  - 针对 `EINTR` 信号中断提供带退避的自动重试机制。
+  - 推荐优先使用 `ScopedCpuSync` RAII 守卫管理生命周期，杜绝异常退出或提前返回遗漏 Cache 写回；
+  - 针对 `EAGAIN` / `EINTR` 提供带 100 微秒自旋退避和 50 次重试上限的防护机制，杜绝 100% CPU 紧凑死循环。
 
 ### 4.2 RGA 硬件加速与 `wrapbuffer_fd`
 
