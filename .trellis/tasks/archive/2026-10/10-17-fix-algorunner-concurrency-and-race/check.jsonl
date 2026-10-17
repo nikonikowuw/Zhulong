@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "Algorithm module and process supervisor guidelines"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Go race testing and concurrency quality verification"}
