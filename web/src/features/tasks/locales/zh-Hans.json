@@ -46,6 +46,8 @@
     "channelPoints": "通道算力消耗",
     "cameraOffline": "离线",
     "cameraOnline": "在线",
+    "mainStream": "主码流",
+    "subStream": "子码流",
     "pointsSuffix": "点"
   },
   "dialog": {
@@ -63,6 +65,7 @@
     "channelPointsPreview": "本通道算力",
     "globalPointsPreview": "全平台预算占用",
     "budgetWarning": "⚠️ 当前配置将导致全平台算力超出 1,000 点总预算上限，请降低采样帧率或取消部分算法！",
+    "invalidJsonError": "算法「{{name}}」的高级参数不是合法的 JSON 格式，请修正后再保存",
     "cancel": "取消",
     "save": "保存并下发调度",
     "saving": "下发同步中...",

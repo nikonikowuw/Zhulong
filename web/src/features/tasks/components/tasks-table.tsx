@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useCallback, useMemo, useState } from 'react'
 import { Check, Copy, Pencil, Search, Trash2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
+import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -23,7 +25,6 @@ import {
 } from '@/components/ui/table'
 import { type Algorithm } from '@/features/algorithms/data/schema'
 import { type Camera } from '@/features/cameras/data/schema'
-import { cn } from '@/lib/utils'
 import { type Task } from '../data/schema'
 import { useUpdateTask } from '../hooks/use-tasks'
 import { TaskStatusBadge } from './task-status-badge'
@@ -33,6 +34,8 @@ interface TasksTableProps {
   cameras: Camera[]
   algorithms: Algorithm[]
   isLoading?: boolean
+  search?: Record<string, unknown>
+  navigate?: NavigateFn
   onEditTask: (task: Task) => void
   onDeleteTask: (task: Task) => void
 }
@@ -42,21 +45,52 @@ export function TasksTable({
   cameras,
   algorithms,
   isLoading,
+  search: searchProp,
+  navigate: navigateProp,
   onEditTask,
   onDeleteTask,
 }: TasksTableProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
 
-  const [search, setSearch] = useState('')
-  const [cameraFilter, setCameraFilter] = useState('all')
-  const [algoFilter, setAlgoFilter] = useState('all')
-  const [statusFilter, setStatusFilter] = useState('all')
+  const fallbackSearch = useMemo(() => ({}), [])
+  const fallbackNavigate: NavigateFn = useCallback(() => {}, [])
+
+  const {
+    globalFilter = '',
+    onGlobalFilterChange,
+    columnFilters,
+    onColumnFiltersChange,
+  } = useTableUrlState({
+    search: searchProp ?? fallbackSearch,
+    navigate: navigateProp ?? fallbackNavigate,
+    globalFilter: { enabled: true, key: 'search' },
+    columnFilters: [
+      { columnId: 'camera', searchKey: 'camera', type: 'string' },
+      { columnId: 'algorithm', searchKey: 'algorithm', type: 'string' },
+      { columnId: 'status', searchKey: 'status', type: 'string' },
+    ],
+  })
+
+  const cameraFilter =
+    (columnFilters.find((f) => f.id === 'camera')?.value as string) || 'all'
+  const algoFilter =
+    (columnFilters.find((f) => f.id === 'algorithm')?.value as string) || 'all'
+  const statusFilter =
+    (columnFilters.find((f) => f.id === 'status')?.value as string) || 'all'
+
+  const [togglingTaskId, setTogglingTaskId] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
   const updateMutation = useUpdateTask()
 
-  const cameraMap = useMemo(() => new Map(cameras.map((c) => [c.id, c])), [cameras])
-  const algoMap = useMemo(() => new Map(algorithms.map((a) => [a.id, a])), [algorithms])
+  const cameraMap = useMemo(
+    () => new Map(cameras.map((c) => [c.id, c])),
+    [cameras]
+  )
+  const algoMap = useMemo(
+    () => new Map(algorithms.map((a) => [a.id, a])),
+    [algorithms]
+  )
 
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
@@ -73,8 +107,8 @@ export function TasksTable({
         return false
       }
 
-      if (search.trim()) {
-        const q = search.trim().toLowerCase()
+      if (globalFilter.trim()) {
+        const q = globalFilter.trim().toLowerCase()
         const camName = cameraMap.get(task.cameraId)?.name.toLowerCase() || ''
         const algoName = algoMap.get(task.algorithmId)?.name.toLowerCase() || ''
         const matchesId = task.id.toLowerCase().includes(q)
@@ -85,7 +119,15 @@ export function TasksTable({
 
       return true
     })
-  }, [tasks, cameraFilter, algoFilter, statusFilter, search, cameraMap, algoMap])
+  }, [
+    tasks,
+    cameraFilter,
+    algoFilter,
+    statusFilter,
+    globalFilter,
+    cameraMap,
+    algoMap,
+  ])
 
   const handleCopyId = (id: string) => {
     void navigator.clipboard.writeText(id)
@@ -95,6 +137,7 @@ export function TasksTable({
   }
 
   const handleToggleTask = (task: Task) => {
+    setTogglingTaskId(task.id)
     updateMutation.mutate(
       {
         id: task.id,
@@ -107,8 +150,37 @@ export function TasksTable({
         onError: (err) => {
           toast.error(err.message || t('table.toggleError', '更新任务状态失败'))
         },
+        onSettled: () => {
+          setTogglingTaskId(null)
+        },
       }
     )
+  }
+
+  const handleCameraChange = (val: string) => {
+    onColumnFiltersChange?.((prev) => [
+      ...prev.filter((f) => f.id !== 'camera'),
+      ...(val !== 'all' ? [{ id: 'camera', value: val }] : []),
+    ])
+  }
+
+  const handleAlgoChange = (val: string) => {
+    onColumnFiltersChange?.((prev) => [
+      ...prev.filter((f) => f.id !== 'algorithm'),
+      ...(val !== 'all' ? [{ id: 'algorithm', value: val }] : []),
+    ])
+  }
+
+  const handleStatusChange = (val: string) => {
+    onColumnFiltersChange?.((prev) => [
+      ...prev.filter((f) => f.id !== 'status'),
+      ...(val !== 'all' ? [{ id: 'status', value: val }] : []),
+    ])
+  }
+
+  const handleResetFilters = () => {
+    onGlobalFilterChange?.('')
+    onColumnFiltersChange?.([])
   }
 
   return (
@@ -118,21 +190,26 @@ export function TasksTable({
         <div className='relative w-full max-w-sm'>
           <Search className='absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground' />
           <Input
-            placeholder={t('searchPlaceholder', '搜索任务 ID、摄像头或算法名称...')}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t(
+              'searchPlaceholder',
+              '搜索任务 ID、摄像头或算法名称...'
+            )}
+            value={globalFilter}
+            onChange={(e) => onGlobalFilterChange?.(e.target.value)}
             className='ps-9 text-xs'
           />
         </div>
 
         <div className='flex flex-wrap items-center gap-2'>
           {/* 相机筛选 */}
-          <Select value={cameraFilter} onValueChange={setCameraFilter}>
+          <Select value={cameraFilter} onValueChange={handleCameraChange}>
             <SelectTrigger className='h-8 w-[140px] text-xs'>
               <SelectValue placeholder={t('filterAllCameras', '全部摄像头')} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value='all'>{t('filterAllCameras', '全部摄像头')}</SelectItem>
+              <SelectItem value='all'>
+                {t('filterAllCameras', '全部摄像头')}
+              </SelectItem>
               {cameras.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
                   {c.name}
@@ -142,12 +219,14 @@ export function TasksTable({
           </Select>
 
           {/* 算法筛选 */}
-          <Select value={algoFilter} onValueChange={setAlgoFilter}>
+          <Select value={algoFilter} onValueChange={handleAlgoChange}>
             <SelectTrigger className='h-8 w-[140px] text-xs'>
               <SelectValue placeholder={t('filterAllAlgorithms', '全部算法')} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value='all'>{t('filterAllAlgorithms', '全部算法')}</SelectItem>
+              <SelectItem value='all'>
+                {t('filterAllAlgorithms', '全部算法')}
+              </SelectItem>
               {algorithms.map((a) => (
                 <SelectItem key={a.id} value={a.id}>
                   {a.name}
@@ -157,28 +236,32 @@ export function TasksTable({
           </Select>
 
           {/* 状态筛选 */}
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <Select value={statusFilter} onValueChange={handleStatusChange}>
             <SelectTrigger className='h-8 w-[110px] text-xs'>
               <SelectValue placeholder={t('filterAllStatus', '全部状态')} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value='all'>{t('filterAllStatus', '全部状态')}</SelectItem>
-              <SelectItem value='running'>{t('table.statusRunning', '运行中')}</SelectItem>
-              <SelectItem value='paused'>{t('table.statusPaused', '已暂停')}</SelectItem>
+              <SelectItem value='all'>
+                {t('filterAllStatus', '全部状态')}
+              </SelectItem>
+              <SelectItem value='running'>
+                {t('table.statusRunning', '运行中')}
+              </SelectItem>
+              <SelectItem value='paused'>
+                {t('table.statusPaused', '已暂停')}
+              </SelectItem>
             </SelectContent>
           </Select>
 
-          {(search || cameraFilter !== 'all' || algoFilter !== 'all' || statusFilter !== 'all') && (
+          {(globalFilter ||
+            cameraFilter !== 'all' ||
+            algoFilter !== 'all' ||
+            statusFilter !== 'all') && (
             <Button
               variant='ghost'
               size='sm'
               className='h-8 text-xs'
-              onClick={() => {
-                setSearch('')
-                setCameraFilter('all')
-                setAlgoFilter('all')
-                setStatusFilter('all')
-              }}
+              onClick={handleResetFilters}
             >
               {t('resetFilters', '重置筛选')}
             </Button>
@@ -191,34 +274,64 @@ export function TasksTable({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className='w-[130px]'>{t('table.id', '任务 ID')}</TableHead>
+              <TableHead className='w-[130px]'>
+                {t('table.id', '任务 ID')}
+              </TableHead>
               <TableHead>{t('table.camera', '关联摄像头')}</TableHead>
               <TableHead>{t('table.algorithm', '绑定算法包')}</TableHead>
-              <TableHead className='w-[110px]'>{t('table.fps', '采样帧率')}</TableHead>
-              <TableHead className='w-[100px]'>{t('table.computePoints', '算力开销')}</TableHead>
-              <TableHead className='w-[140px]'>{t('table.status', '运行状态')}</TableHead>
-              <TableHead className='w-[110px] text-end'>{t('table.actions', '操作')}</TableHead>
+              <TableHead className='w-[110px]'>
+                {t('table.fps', '采样帧率')}
+              </TableHead>
+              <TableHead className='w-[100px]'>
+                {t('table.computePoints', '算力开销')}
+              </TableHead>
+              <TableHead className='w-[140px]'>
+                {t('table.status', '运行状态')}
+              </TableHead>
+              <TableHead className='w-[110px] text-end'>
+                {t('table.actions', '操作')}
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               Array.from({ length: 4 }).map((_, i) => (
                 <TableRow key={i}>
-                  <TableCell><Skeleton className='h-4 w-20' /></TableCell>
-                  <TableCell><Skeleton className='h-4 w-32' /></TableCell>
-                  <TableCell><Skeleton className='h-4 w-28' /></TableCell>
-                  <TableCell><Skeleton className='h-4 w-12' /></TableCell>
-                  <TableCell><Skeleton className='h-4 w-12' /></TableCell>
-                  <TableCell><Skeleton className='h-4 w-20' /></TableCell>
-                  <TableCell><Skeleton className='h-4 w-16 ms-auto' /></TableCell>
+                  <TableCell>
+                    <Skeleton className='h-4 w-20' />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className='h-4 w-32' />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className='h-4 w-28' />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className='h-4 w-12' />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className='h-4 w-12' />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className='h-4 w-20' />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className='ms-auto h-4 w-16' />
+                  </TableCell>
                 </TableRow>
               ))
             ) : filteredTasks.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className='h-32 text-center text-xs text-muted-foreground'>
+                <TableCell
+                  colSpan={7}
+                  className='h-32 text-center text-xs text-muted-foreground'
+                >
                   {tasks.length === 0
                     ? t('table.empty', '暂无分析任务记录')
-                    : t('table.emptyFiltered', '未找到匹配的分析任务，请调整筛选条件')}
+                    : t(
+                        'table.emptyFiltered',
+                        '未找到匹配的分析任务，请调整筛选条件'
+                      )}
                 </TableCell>
               </TableRow>
             ) : (
@@ -237,7 +350,7 @@ export function TasksTable({
                         <Button
                           variant='ghost'
                           size='icon'
-                          className='h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity'
+                          className='h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100'
                           onClick={() => handleCopyId(task.id)}
                         >
                           {copiedId === task.id ? (
@@ -256,7 +369,9 @@ export function TasksTable({
 
                     {/* 算法 */}
                     <TableCell className='text-xs'>
-                      <div className='font-medium'>{algorithm?.name || task.algorithmId}</div>
+                      <div className='font-medium'>
+                        {algorithm?.name || task.algorithmId}
+                      </div>
                       <div className='text-[10px] text-muted-foreground'>
                         {cost} {t('dialog.costPerFrame', '点/帧')}
                       </div>
@@ -268,7 +383,7 @@ export function TasksTable({
                     </TableCell>
 
                     {/* 算力开销 */}
-                    <TableCell className='text-xs font-mono font-medium'>
+                    <TableCell className='font-mono text-xs font-medium'>
                       {points} {t('channelCard.pointsSuffix', '点')}
                     </TableCell>
 
@@ -277,7 +392,7 @@ export function TasksTable({
                       <div className='flex items-center gap-2'>
                         <Switch
                           checked={task.enabled}
-                          disabled={updateMutation.isPending}
+                          disabled={togglingTaskId === task.id}
                           onCheckedChange={() => handleToggleTask(task)}
                         />
                         <TaskStatusBadge enabled={task.enabled} />
@@ -288,7 +403,7 @@ export function TasksTable({
                     <TableCell
                       className={cn(
                         'sticky inset-e-0 z-10 w-24 text-end',
-                        'bg-card relative',
+                        'relative bg-card',
                         'before:pointer-events-none before:absolute before:inset-0 before:bg-muted/50 before:opacity-0 before:transition-opacity',
                         'group-hover:before:opacity-100 group-data-[state=selected]:before:bg-muted group-data-[state=selected]:before:opacity-100'
                       )}

@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import { AlertCircle, Loader2, Video } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -25,11 +26,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { type Algorithm } from '@/features/algorithms/data/schema'
 import { type Camera } from '@/features/cameras/data/schema'
-import { cn } from '@/lib/utils'
-import {
-  type AlgorithmConfigDraft,
-  type Task,
-} from '../data/schema'
+import { type AlgorithmConfigDraft, type Task } from '../data/schema'
 import { useSyncChannelAlgorithms } from '../hooks/use-sync-channel-algorithms'
 import { MAX_COMPUTE_POINTS } from '../hooks/use-task-compute-budget'
 
@@ -157,12 +154,19 @@ function ChannelTaskDialogContent({
     }))
   }
 
-  const handleUpdateFps = (algoId: string, fps: number) => {
-    const validFps = Math.max(1, Math.min(30, fps || 1))
+  const handleUpdateFps = (algoId: string, val: string) => {
+    const parsed = parseInt(val, 10)
+    const validFps = Number.isNaN(parsed)
+      ? 1
+      : Math.max(1, Math.min(30, parsed))
     setDrafts((prev) => ({
       ...prev,
       [algoId]: {
-        ...(prev[algoId] ?? { selected: true, enabled: true, configJson: '{}' }),
+        ...(prev[algoId] ?? {
+          selected: true,
+          enabled: true,
+          configJson: '{}',
+        }),
         sampleFps: validFps,
       },
     }))
@@ -202,6 +206,22 @@ function ChannelTaskDialogContent({
     const payloadDrafts: AlgorithmConfigDraft[] = []
     for (const [algoId, draft] of Object.entries(drafts)) {
       if (draft.selected) {
+        // 校验高级参数 JSON 语法合法性
+        if (draft.configJson && draft.configJson.trim() !== '') {
+          try {
+            JSON.parse(draft.configJson)
+          } catch {
+            const algoName = algoMap.get(algoId)?.name || algoId
+            toast.error(
+              t('dialog.invalidJsonError', {
+                name: algoName,
+                defaultValue: `算法「${algoName}」的高级参数不是合法的 JSON 格式，请修正后再保存`,
+              })
+            )
+            return
+          }
+        }
+
         payloadDrafts.push({
           algorithmId: algoId,
           sampleFps: draft.sampleFps,
@@ -232,7 +252,7 @@ function ChannelTaskDialogContent({
   }
 
   return (
-    <DialogContent className='max-h-[90vh] sm:max-w-2xl flex flex-col p-0'>
+    <DialogContent className='flex max-h-[90vh] flex-col p-0 sm:max-w-2xl'>
       <DialogHeader className='px-6 pt-6 pb-2'>
         <DialogTitle>{t('dialog.title', '配置通道算法任务')}</DialogTitle>
         <DialogDescription>
@@ -243,7 +263,7 @@ function ChannelTaskDialogContent({
         </DialogDescription>
       </DialogHeader>
 
-      <div className='flex-1 overflow-y-auto px-6 py-2 space-y-5'>
+      <div className='flex-1 space-y-5 overflow-y-auto px-6 py-2'>
         {/* 1. 目标摄像头选择 */}
         <div className='space-y-1.5'>
           <Label className='text-xs font-semibold'>
@@ -267,7 +287,11 @@ function ChannelTaskDialogContent({
               <SelectContent>
                 {cameras.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
-                    {c.name} ({c.health === 'online' ? '在线' : '离线'})
+                    {c.name} (
+                    {c.health === 'online'
+                      ? t('channelCard.cameraOnline', '在线')
+                      : t('channelCard.cameraOffline', '离线')}
+                    )
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -338,13 +362,16 @@ function ChannelTaskDialogContent({
                       </div>
 
                       <div className='flex items-center gap-2'>
-                        <Badge variant='outline' className='text-xs font-normal'>
+                        <Badge
+                          variant='outline'
+                          className='text-xs font-normal'
+                        >
                           {cost} {t('dialog.costPerFrame', '点/帧')}
                         </Badge>
                         {draft.selected && (
                           <Badge
                             variant='outline'
-                            className='border-teal-200 bg-teal-100/30 text-teal-900 dark:border-teal-800 dark:bg-teal-950/30 dark:text-teal-200 text-xs font-normal'
+                            className='border-teal-200 bg-teal-100/30 text-xs font-normal text-teal-900 dark:border-teal-800 dark:bg-teal-950/30 dark:text-teal-200'
                           >
                             {singleAlgoPoints}{' '}
                             {t('channelCard.pointsSuffix', '点')}
@@ -355,9 +382,9 @@ function ChannelTaskDialogContent({
 
                     {/* 展开的参数配置区 */}
                     {draft.selected && (
-                      <div className='mt-3 space-y-3 border-t border-border/50 pt-3 ps-7'>
+                      <div className='mt-3 space-y-3 border-t border-border/50 ps-7 pt-3'>
                         <div className='flex items-center gap-4'>
-                          <Label className='text-xs text-muted-foreground whitespace-nowrap'>
+                          <Label className='text-xs whitespace-nowrap text-muted-foreground'>
                             {t('dialog.fpsLabel', '采样帧率')}:
                           </Label>
                           <div className='flex items-center gap-2'>
@@ -367,10 +394,7 @@ function ChannelTaskDialogContent({
                               max={30}
                               value={draft.sampleFps}
                               onChange={(e) =>
-                                handleUpdateFps(
-                                  algo.id,
-                                  parseInt(e.target.value, 10)
-                                )
+                                handleUpdateFps(algo.id, e.target.value)
                               }
                               className='h-8 w-20 text-center text-xs'
                             />
@@ -416,7 +440,7 @@ function ChannelTaskDialogContent({
       </div>
 
       {/* 底部算力预测与操作按钮 */}
-      <DialogFooter className='border-t border-border bg-muted/20 px-6 py-3.5 sm:justify-between items-center gap-3'>
+      <DialogFooter className='items-center gap-3 border-t border-border bg-muted/20 px-6 py-3.5 sm:justify-between'>
         <div className='flex flex-col gap-1 text-start'>
           <div className='flex items-center gap-2 text-xs'>
             <span className='font-semibold'>
@@ -441,11 +465,7 @@ function ChannelTaskDialogContent({
         </div>
 
         <div className='flex items-center gap-2'>
-          <Button
-            type='button'
-            variant='outline'
-            onClick={onClose}
-          >
+          <Button type='button' variant='outline' onClick={onClose}>
             {t('dialog.cancel', '取消')}
           </Button>
           <Button

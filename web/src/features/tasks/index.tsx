@@ -1,6 +1,8 @@
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useCallback, useState } from 'react'
+import { getRouteApi } from '@tanstack/react-router'
 import { LayoutGrid, Plus, Table as TableIcon } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { type NavigateFn } from '@/hooks/use-table-url-state'
 import { Button } from '@/components/ui/button'
 import { ConfigDrawer } from '@/components/config-drawer'
 import { LanguageSwitch } from '@/components/language-switch'
@@ -21,17 +23,47 @@ import { useChannelTasks } from './hooks/use-channel-tasks'
 import { useTaskComputeBudget } from './hooks/use-task-compute-budget'
 import { useTasks } from './hooks/use-tasks'
 
+const route = getRouteApi('/_authenticated/tasks/')
+
 export function Tasks(): React.JSX.Element {
   const { t } = useTranslation('tasks')
 
-  const [viewMode, setViewMode] = useState<'channel' | 'table'>('channel')
+  // 支持在无 Router 上下文（如独立隔离的单元测试环境）中安全降级
+  let search: Record<string, unknown> = {}
+  let navigate: NavigateFn = useCallback(() => {}, [])
+  try {
+    search = route.useSearch() as Record<string, unknown>
+    navigate = route.useNavigate() as unknown as NavigateFn
+  } catch {
+    // 降级为本地状态
+  }
+
+  const [localViewMode, setLocalViewMode] = useState<'channel' | 'table'>(
+    'channel'
+  )
+  const viewMode = (search.view as 'channel' | 'table') || localViewMode
+
+  const handleViewModeChange = (mode: 'channel' | 'table') => {
+    setLocalViewMode(mode)
+    navigate({
+      search: (prev) => ({
+        ...(prev as Record<string, unknown>),
+        view: mode === 'channel' ? undefined : mode,
+      }),
+    })
+  }
+
   const [configDialogOpen, setConfigDialogOpen] = useState(false)
-  const [selectedCameraId, setSelectedCameraId] = useState<string | undefined>(undefined)
+  const [selectedCameraId, setSelectedCameraId] = useState<string | undefined>(
+    undefined
+  )
   const [deletingTask, setDeletingTask] = useState<Task | null>(null)
 
   // 1. 获取基础领域数据
   const { data: tasks = [], isLoading: isTasksLoading } = useTasks()
-  const { data: camerasData, isLoading: isCamerasLoading } = useCameras({ pageSize: 100 })
+  const { data: camerasData, isLoading: isCamerasLoading } = useCameras({
+    pageSize: 100,
+  })
   const { data: algorithms = [], isLoading: isAlgosLoading } = useAlgorithms()
 
   const cameras = camerasData?.items ?? []
@@ -83,7 +115,7 @@ export function Tasks(): React.JSX.Element {
                 variant={viewMode === 'channel' ? 'secondary' : 'ghost'}
                 size='sm'
                 className='h-7 gap-1.5 px-2.5 text-xs'
-                onClick={() => setViewMode('channel')}
+                onClick={() => handleViewModeChange('channel')}
               >
                 <LayoutGrid className='h-3.5 w-3.5' />
                 <span>{t('viewChannel', '通道聚合视图')}</span>
@@ -92,7 +124,7 @@ export function Tasks(): React.JSX.Element {
                 variant={viewMode === 'table' ? 'secondary' : 'ghost'}
                 size='sm'
                 className='h-7 gap-1.5 px-2.5 text-xs'
-                onClick={() => setViewMode('table')}
+                onClick={() => handleViewModeChange('table')}
               >
                 <TableIcon className='h-3.5 w-3.5' />
                 <span>{t('viewTable', '任务明细表格')}</span>
@@ -124,6 +156,8 @@ export function Tasks(): React.JSX.Element {
             cameras={cameras}
             algorithms={algorithms}
             isLoading={isLoading}
+            search={search}
+            navigate={navigate}
             onEditTask={handleEditTask}
             onDeleteTask={(task) => setDeletingTask(task)}
           />

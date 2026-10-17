@@ -1,8 +1,8 @@
-import { useTranslation } from 'react-i18next'
 import { Settings2, Video } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
 import { type ChannelTaskGroup } from '../data/schema'
 import { TaskStatusBadge } from './task-status-badge'
 
@@ -26,7 +26,7 @@ export function ChannelTasksView({
         <h3 className='mt-4 text-base font-semibold'>
           {t('table.empty', '暂无分析任务记录')}
         </h3>
-        <p className='mt-1 text-sm text-muted-foreground max-w-sm'>
+        <p className='mt-1 max-w-sm text-sm text-muted-foreground'>
           {t(
             'channelCard.noAlgorithms',
             '当前尚未向任何摄像头分配分析算法，点击上方“配置通道任务”即可开始。'
@@ -55,12 +55,16 @@ export function ChannelTasksView({
                     <Video className='h-4 w-4 text-primary' />
                   </div>
                   <div>
-                    <h4 className='font-semibold text-sm leading-tight text-foreground'>
+                    <h4 className='text-sm leading-tight font-semibold text-foreground'>
                       {group.camera.name}
                     </h4>
                     <span className='text-xs text-muted-foreground'>
-                      {group.camera.streams?.[0]?.protocol?.toUpperCase() || 'RTSP'} ·{' '}
-                      {group.camera.streams?.[0]?.role === 'main' ? '主码流' : '子码流'}
+                      {group.camera.streams?.[0]?.protocol?.toUpperCase() ||
+                        'RTSP'}{' '}
+                      ·{' '}
+                      {group.camera.streams?.[0]?.role === 'main'
+                        ? t('channelCard.mainStream', '主码流')
+                        : t('channelCard.subStream', '子码流')}
                     </span>
                   </div>
                 </div>
@@ -92,8 +96,9 @@ export function ChannelTasksView({
                   {t('channelCard.channelPoints', '通道算力消耗')}:
                 </span>
                 <span className='font-semibold text-foreground'>
-                  {group.totalChannelPoints} {t('channelCard.pointsSuffix', '点')} (
-                  {group.activeCount} / {group.totalCount})
+                  {group.totalChannelPoints}{' '}
+                  {t('channelCard.pointsSuffix', '点')} ({group.activeCount} /{' '}
+                  {group.totalCount})
                 </span>
               </div>
 
@@ -116,11 +121,12 @@ export function ChannelTasksView({
                         </span>
                       </div>
 
-                      <div className='flex items-center gap-1.5 text-muted-foreground shrink-0'>
+                      <div className='flex shrink-0 items-center gap-1.5 text-muted-foreground'>
                         <span>{item.task.sampleFps} FPS</span>
                         <span>·</span>
                         <span className='font-mono font-medium text-foreground'>
-                          {item.computePoints}点
+                          {item.computePoints}{' '}
+                          {t('channelCard.pointsSuffix', '点')}
                         </span>
                       </div>
                     </div>

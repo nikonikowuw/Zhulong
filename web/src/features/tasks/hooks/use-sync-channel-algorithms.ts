@@ -24,13 +24,23 @@ export function useSyncChannelAlgorithms() {
       const existingMap = new Map(existingTasks.map((t) => [t.algorithmId, t]))
       const draftMap = new Map(drafts.map((d) => [d.algorithmId, d]))
 
-      const promises: Promise<unknown>[] = []
+      // 阶段 1：先删除已取消勾选的任务，确保在后端立刻释放 NPU 算力配额，避免算力假阳性超限
+      const deletePromises: Promise<void>[] = []
+      for (const [algoId, existing] of existingMap.entries()) {
+        if (!draftMap.has(algoId)) {
+          deletePromises.push(tasksApi.deleteTask(existing.id))
+        }
+      }
+      if (deletePromises.length > 0) {
+        await Promise.all(deletePromises)
+      }
 
-      // 1. 查找新增与更新项
+      // 阶段 2：算力配额腾出后，再并行执行新增与参数更新
+      const upsertPromises: Promise<unknown>[] = []
       for (const [algoId, draft] of draftMap.entries()) {
         const existing = existingMap.get(algoId)
         if (!existing) {
-          promises.push(
+          upsertPromises.push(
             tasksApi.createTask({
               cameraId,
               algorithmId: algoId,
@@ -45,7 +55,7 @@ export function useSyncChannelAlgorithms() {
           const configChanged = existing.configJson !== draft.configJson
 
           if (fpsChanged || enabledChanged || configChanged) {
-            promises.push(
+            upsertPromises.push(
               tasksApi.updateTask(existing.id, {
                 sampleFps: draft.sampleFps,
                 enabled: draft.enabled,
@@ -55,17 +65,12 @@ export function useSyncChannelAlgorithms() {
           }
         }
       }
-
-      // 2. 查找已取消勾选需删除的项
-      for (const [algoId, existing] of existingMap.entries()) {
-        if (!draftMap.has(algoId)) {
-          promises.push(tasksApi.deleteTask(existing.id))
-        }
+      if (upsertPromises.length > 0) {
+        await Promise.all(upsertPromises)
       }
-
-      await Promise.all(promises)
     },
-    onSuccess: () => {
+    // 无论是成功还是发生错误中断，都必须失效缓存，杜绝前端 UI 与后端状态漂移
+    onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: TASKS_QUERY_KEY })
     },
   })
