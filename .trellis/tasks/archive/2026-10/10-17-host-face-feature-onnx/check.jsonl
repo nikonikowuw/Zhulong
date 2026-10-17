@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "验证链接卫生（宿主不直连 ORT）"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "验证 CGO 边界与特征向量内存对齐"}
