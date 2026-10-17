@@ -22,6 +22,8 @@
 #include <algorithm/runtime/letterbox_geometry.hpp>
 
 #include <cstddef>
+#include <fcntl.h>
+#include <unistd.h>
 #include <rga/im2d.h>
 
 #include <algorithm>
@@ -161,39 +163,58 @@ ResolvedSource resolve_source(const zhulong_frame_view& src, uint32_t stride_ali
     }
 
     const int wstride_px = y_stride / spec.plane0_bpp;
-    const int hstride = src.height;
+    int hstride = src.height;
 
     // 多平面连续性与对齐校验
     if (spec.plane_count == 2) {
-        // NV12: 要求 plane1 连续放置在 planes[0] + y_stride * height
+        // NV12: 要求 plane1 连续放置在 planes[0] + y_stride * (垂直步长 hstride)
         if (!src.planes[1]) {
             return res;
         }
         const uintptr_t p0 = reinterpret_cast<uintptr_t>(src.planes[0]);
         const uintptr_t p1 = reinterpret_cast<uintptr_t>(src.planes[1]);
-        const size_t expected_offset = static_cast<size_t>(y_stride) * src.height;
-        if (p1 != p0 + expected_offset) {
+        if (p1 <= p0) {
             return res;
         }
+        const size_t y_plane_bytes = p1 - p0;
+        if (y_plane_bytes % static_cast<size_t>(y_stride) != 0) {
+            return res;
+        }
+        const int detected_hstride = static_cast<int>(y_plane_bytes / y_stride);
+        if (detected_hstride < src.height) {
+            return res;
+        }
+        hstride = detected_hstride;
         if (src.strides[1] > 0 && src.strides[1] != y_stride) {
             return res;
         }
     } else if (spec.plane_count == 3) {
-        // YUV420P: 要求 plane1 在 planes[0] + y_stride * height,
-        // plane2 在 plane1 + (y_stride/2) * (height/2)
+        // YUV420P: 要求 plane1 在 planes[0] + y_stride * hstride,
+        // plane2 在 plane1 + (y_stride/2) * (hstride/2)
         if (!src.planes[1] || !src.planes[2] || src.width % 2 != 0 || src.height % 2 != 0 || y_stride % 2 != 0) {
             return res;
         }
         const uintptr_t p0 = reinterpret_cast<uintptr_t>(src.planes[0]);
         const uintptr_t p1 = reinterpret_cast<uintptr_t>(src.planes[1]);
         const uintptr_t p2 = reinterpret_cast<uintptr_t>(src.planes[2]);
-        const size_t expected_u_offset = static_cast<size_t>(y_stride) * src.height;
-        const size_t uv_w = static_cast<size_t>(y_stride) / 2;
-        const size_t uv_h = static_cast<size_t>(src.height) / 2;
-        const size_t expected_v_offset = expected_u_offset + uv_w * uv_h;
-        if (p1 != p0 + expected_u_offset || p2 != p0 + expected_v_offset) {
+        if (p1 <= p0 || p2 <= p1) {
             return res;
         }
+        const size_t y_plane_bytes = p1 - p0;
+        if (y_plane_bytes % static_cast<size_t>(y_stride) != 0) {
+            return res;
+        }
+        const int detected_hstride = static_cast<int>(y_plane_bytes / y_stride);
+        if (detected_hstride < src.height || detected_hstride % 2 != 0) {
+            return res;
+        }
+        const size_t uv_w = static_cast<size_t>(y_stride) / 2;
+        const size_t uv_h = static_cast<size_t>(detected_hstride) / 2;
+        const size_t expected_v_offset = uv_w * uv_h;
+        if (p2 != p1 + expected_v_offset) {
+            return res;
+        }
+        hstride = detected_hstride;
     }
 
     if (src.dma_buf_fd >= 0) {
@@ -209,8 +230,8 @@ ResolvedSource resolve_source(const zhulong_frame_view& src, uint32_t stride_ali
         return res;
     }
 
-    // 实际 linesize 与紧密排列不一致时，走「非紧密 stride 适配」路径（AC9 计数）
-    res.is_stride_adapted = (y_stride != min_stride);
+    // 实际 linesize 或垂直步长与紧密排列不一致时，走「非紧密 stride 适配」路径（AC9 计数）
+    res.is_stride_adapted = (y_stride != min_stride || hstride != src.height);
     res.valid = true;
     return res;
 }
@@ -264,7 +285,8 @@ void RgaVisionBackend::probe() {
     }
 
     if (stride_align_ == 0) {
-        return;
+        // debugfs 不可读时（如以非 root 用户 video 组运行），提供 RK 平台基准行对齐安全保底值（4 字节）
+        stride_align_ = 4;
     }
 
     // 4) 驱动版本（尽力而为，读不到不影响可用性）。
@@ -279,13 +301,13 @@ void RgaVisionBackend::probe() {
         }
     }
 
-    // 5) /dev/rga 可访问性：权限为 crw-rw---- root:video，进程须属 video 组。
+    // 5) /dev/rga 可访问性与真实读写权限校验：权限为 crw-rw---- root:video，进程须属 video 组。
     {
-        std::FILE* device = std::fopen("/dev/rga", "rb");
-        if (!device) {
+        int fd = ::open("/dev/rga", O_RDWR | O_CLOEXEC);
+        if (fd < 0) {
             return;
         }
-        std::fclose(device);
+        ::close(fd);
     }
 
     // 6) 运行期探测 srect/drect 偏移对齐 (offset_align_)：
@@ -344,13 +366,23 @@ bool RgaVisionBackend::try_rga_letterbox(const zhulong_frame_view& src, Tensor& 
     const LetterboxGeometry geometry =
         compute_letterbox_geometry(src.width, src.height, target_w, target_h);
 
-    // 若目标 Tensor 具备外部 DMA-BUF 且尺寸匹配，直接原地复用；否则分配普通 Tensor
-    if (dst.dma_buf_fd() < 0 || dst.byte_size() < static_cast<size_t>(target_h * target_w * 3)) {
-        dst = Tensor({target_h, target_w, 3}, DataType::UINT8);
+    const size_t required_bytes = static_cast<size_t>(target_h) * target_w * 3;
+    const std::vector<int64_t> target_shape{target_h, target_w, 3};
+
+    const bool dma_reusable = (dst.dma_buf_fd() >= 0 && dst.byte_size() >= required_bytes);
+    const bool cpu_reusable = (dst.dma_buf_fd() < 0 && dst.byte_size() >= required_bytes &&
+                               dst.dtype() == DataType::UINT8 && dst.shape() == target_shape);
+
+    if (dma_reusable) {
+        if (dst.shape() != target_shape) {
+            dst = Tensor::from_dma_buf(dst.dma_buf_fd(), target_shape, DataType::UINT8, dst.raw_data());
+        }
+    } else if (!cpu_reusable) {
+        dst = Tensor(target_shape, DataType::UINT8);
     }
     uint8_t* dst_buf = dst.data<uint8_t>();
     if (dst_buf) {
-        std::memset(dst_buf, 114, target_h * target_w * 3);
+        std::memset(dst_buf, 114, required_bytes);
     }
 
     // ⚠️ 描述完整的 dst buffer（含 padding）；内容区偏移只能通过 drect 传递，
@@ -384,7 +416,7 @@ bool RgaVisionBackend::try_rga_letterbox(const zhulong_frame_view& src, Tensor& 
     // improcess 执行缩放 + CSC
     const IM_STATUS status = improcess(src_buffer, dst_buffer, rga_buffer_t{},
                                        srect, drect, prect, -1, nullptr, nullptr, 0);
-    if (status != IM_STATUS_SUCCESS) {
+    if (!imcheck_is_ok(status)) {
         return false;
     }
 
@@ -460,7 +492,7 @@ bool RgaVisionBackend::try_rga_resize(const uint8_t* src, int src_w, int src_h, 
 
     const IM_STATUS status = improcess(src_buffer, dst_buffer, rga_buffer_t{},
                                        srect, drect, prect, -1, nullptr, nullptr, 0);
-    if (status != IM_STATUS_SUCCESS) {
+    if (!imcheck_is_ok(status)) {
         return false;
     }
 
@@ -531,7 +563,7 @@ bool RgaVisionBackend::try_rga_crop_scale(const zhulong_frame_view& src, const C
 
     const IM_STATUS status = improcess(src_buffer, dst_buffer, rga_buffer_t{},
                                        srect, drect, prect, -1, nullptr, nullptr, 0);
-    if (status != IM_STATUS_SUCCESS) {
+    if (!imcheck_is_ok(status)) {
         return false;
     }
 

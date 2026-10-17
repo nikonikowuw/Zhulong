@@ -118,10 +118,24 @@ zhulong_status_t CpuVisionBackend::letterbox(const zhulong_frame_view& src,
     inout_params.pad_left = pad_left;
     inout_params.pad_top = pad_top;
 
-    dst = Tensor({target_h, target_w, 3}, DataType::UINT8);
+    const size_t required_bytes = static_cast<size_t>(target_h) * target_w * 3;
+    const std::vector<int64_t> target_shape{target_h, target_w, 3};
+    const bool dma_reusable = (dst.dma_buf_fd() >= 0 && dst.byte_size() >= required_bytes);
+    const bool cpu_reusable = (dst.dma_buf_fd() < 0 && dst.byte_size() >= required_bytes &&
+                               dst.dtype() == DataType::UINT8 && dst.shape() == target_shape);
+
+    if (dma_reusable) {
+        if (dst.shape() != target_shape) {
+            dst = Tensor::from_dma_buf(dst.dma_buf_fd(), target_shape, DataType::UINT8, dst.raw_data());
+        }
+    } else if (!cpu_reusable) {
+        dst = Tensor(target_shape, DataType::UINT8);
+    }
     uint8_t* dst_buf = dst.data<uint8_t>();
     // Letterbox 补边值为 114（非 0），与训练预处理保持一致
-    std::memset(dst_buf, 114, dst.byte_size());
+    if (dst_buf) {
+        std::memset(dst_buf, 114, required_bytes);
+    }
 
     // 缩放直接写到最终 Tensor ROI（内容区），不分配中间 resized_temp
     const int target_stride = target_w * 3;

@@ -235,6 +235,26 @@ void case_formats() {
         rga_rc = rga.letterbox(frame, out, params);
         require(rga_rc == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED, "case4: rga rejects non-contiguous NV12");
         require(rga.fallback_count() > prev_fallback, "case4: non-contiguous NV12 increments fallback_count");
+
+        // NV12 含垂直对齐步长 (如 MPP 硬件解码 1080P height=1080, vstride=1088)
+        {
+            const int vstride = 80; // 80 > 64，对齐为 16 的倍数
+            std::vector<uint8_t> nv12_vpad(static_cast<size_t>(w) * vstride + w * (h / 2), 128);
+            zhulong_frame_view frame_vpad{};
+            frame_vpad.width = w;
+            frame_vpad.height = h;
+            frame_vpad.format = ZHULONG_PIXEL_FORMAT_NV12;
+            frame_vpad.planes[0] = nv12_vpad.data();
+            frame_vpad.planes[1] = nv12_vpad.data() + w * vstride;
+            frame_vpad.strides[0] = w;
+            frame_vpad.strides[1] = w;
+
+            zhulong::Tensor out_vpad;
+            zhulong_status_t rga_rc_vpad = rga.letterbox(frame_vpad, out_vpad, params);
+            if (rga.rga_usable()) {
+                require(rga_rc_vpad == ZHULONG_PLUGIN_OK, "case4: rga accepts NV12 with vertical stride alignment");
+            }
+        }
     }
 
     // 4) YUV420P 连续平面
@@ -479,6 +499,28 @@ void case_stride_adaptation() {
     }
 }
 
+// ── Case 11：热路径 CPU Tensor 原地复用 ────────────────────────────────────
+void case_tensor_reuse() {
+    zhulong::RgaVisionBackend rga;
+    const int w = 64, h = 64;
+    const std::vector<uint8_t> src = make_image(w, h, 3);
+    zhulong::Tensor out({32, 32, 3}, zhulong::DataType::UINT8);
+    const void* initial_ptr = out.raw_data();
+
+    zhulong_status_t rc1 = run_letterbox(rga, src.data(), w, h, w * 3,
+                                         ZHULONG_PIXEL_FORMAT_RGB24,
+                                         ZHULONG_PIXEL_FORMAT_RGB24, 32, 32, out);
+    require(rc1 == ZHULONG_PLUGIN_OK, "case11: first letterbox ok");
+    require(out.raw_data() == initial_ptr, "case11: CPU tensor buffer reused on first call");
+
+    const void* second_ptr = out.raw_data();
+    zhulong_status_t rc2 = run_letterbox(rga, src.data(), w, h, w * 3,
+                                         ZHULONG_PIXEL_FORMAT_RGB24,
+                                         ZHULONG_PIXEL_FORMAT_RGB24, 32, 32, out);
+    require(rc2 == ZHULONG_PLUGIN_OK, "case11: second letterbox ok");
+    require(out.raw_data() == second_ptr, "case11: CPU tensor buffer reused on second call");
+}
+
 } // namespace
 
 int main() {
@@ -494,6 +536,7 @@ int main() {
     case_repeated();
     case_crop_scale();
     case_stride_adaptation();
+    case_tensor_reuse();
 
     std::cout << "=== failures=" << g_failures << " ===" << std::endl;
     return g_failures == 0 ? 0 : 1;

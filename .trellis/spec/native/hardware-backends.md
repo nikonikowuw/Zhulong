@@ -86,9 +86,9 @@ if (rknn_init(&probe, path, 0, 0, nullptr) == RKNN_SUCC) {
 
 RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码对齐参数**：
 
-- **行跨度对齐 (`byte_stride_align`)**：从 `/sys/kernel/debug/rkrga/hardware` 读取（RK3568 实测为 **4** 字节）。未读取到有效值时自动回退 CPU。
+- **行跨度对齐 (`byte_stride_align`)**：优先从 `/sys/kernel/debug/rkrga/hardware` 读取（RK3568 实测为 **4** 字节）。在 debugfs 不可读的无特权容器环境下安全回退至平台基准对齐值（4 字节），杜绝静默瘫痪退化。
 - **ROI 偏移对齐 (`offset_align`)**：在测试缓冲调用 `imcheck_t` 动态探测（RK3568 实测为 **2** 像素）。
-- **设备权限约束**：`/dev/rga` 设备节点属组为 `root:video`。运行 Runner 的系统用户**必须加入 `video` 组**，否则驱动打开失败自动退化为 CPU。
+- **设备权限约束**：`/dev/rga` 设备节点属组为 `root:video`。启动探针必须使用 `open("/dev/rga", O_RDWR | O_CLOEXEC)` 校验读写权限，运行 Runner 的系统用户**必须加入 `video` 组**。
 
 ### 3.2 格式能力矩阵与颜色转换语义
 
@@ -96,8 +96,8 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 | :--- | :---: | :---: | :--- |
 | `RGB24` / `BGR24` | ✅ | ✅ | 紧凑排布或满足 4 字节行对齐；目标输出为 HWC UINT8 |
 | `RGBA32` | ✅ | ❌ | 单平面 4 字节/像素，硬件完成 CSC 提取与缩放 |
-| `NV12` | ✅ | ❌ | **仅支持连续内存**（plane1 == plane0 + y_stride * height）；非连续内存返回 `NOT_SUPPORTED` |
-| `YUV420P` | ✅ | ❌ | **仅支持连续内存**（plane1/plane2 紧密相连）；非连续内存返回 `NOT_SUPPORTED` |
+| `NV12` | ✅ | ❌ | **仅支持连续内存**；实际垂直步长通过 `(p1 - p0) / y_stride` 动态推导并传给 `hstride`（支持紧凑及 MPP 16 行对齐帧）；非连续内存返回 `NOT_SUPPORTED` |
+| `YUV420P` | ✅ | ❌ | **仅支持连续内存**（plane1/plane2 紧密相连并与推导的 hstride 匹配）；非连续内存返回 `NOT_SUPPORTED` |
 | `UNKNOWN` | ❌ | ❌ | 显式返回 `ZHULONG_STATUS_NOT_SUPPORTED` |
 
 - **色彩空间转换**：硬件 CSC 采用 **Limited-range BT.601** 标准公式（YUV 16-235 映射至 RGB 0-255）。
@@ -110,6 +110,7 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 2. ⚠️ **强依赖 `imcheck_t` 预校验**：每次调用 `improcess` 前必须使用 `imcheck_t` 预校验 `srect` 与 `drect` 合法性，失败直接在软件层拦截并回退 CPU。
 3. **两阶段裁剪对齐适配 (`crop_scale`)**：当裁剪 ROI 坐标不满足 2 像素对齐时，采用**参数向外扩取整**适配，杜绝原地内存搬运。
 4. **滤波差异验收容差**：RGA 硬件双线性插值与 CPU 浮点中心双线性滤波核函数不同，下采样（如 1080P → 640x640）单像素极值差可达 119。测试断言采用 `worst <= 128` 判定一致性。
+5. **热路径 Tensor 原地复用**：`try_rga_letterbox` 传入容量充足且形状匹配的 CPU Tensor 时原地复用内存，禁止每帧重新执行 `dst = Tensor(...)` 堆分配。
 
 ---
 
@@ -136,7 +137,7 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 
 - 当输入源帧具备有效 `dma_buf_fd >= 0` 时，RGA 视觉后端优先调用 `wrapbuffer_fd`：
   ```cpp
-  rga_buffer_t src_buf = wrapbuffer_fd(src.dma_buf_fd, src.width, src.height, rga_fmt, src.strides[0], src.height);
+  rga_buffer_t src_buf = wrapbuffer_fd(src.dma_buf_fd, src.width, src.height, rga_fmt, src.strides[0], hstride);
   ```
 - 目标输出 `Tensor` 同理支持通过 `tensor.dma_buf_fd()` 直接进行 `wrapbuffer_fd`。
 - **混合模式保护**：当 `dma_buf_fd < 0` 时，透明安全回退至已有的 `wrapbuffer_virtualaddr` 虚拟地址通路。
