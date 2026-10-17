@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "验证 CGO 边界无内存泄漏、无野指针、句柄所有权明确"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "验证 -race 无数据竞争、无未捕获 panic、无孤儿协程"}
