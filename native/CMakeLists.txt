@@ -422,7 +422,10 @@ if(BUILD_TESTING)
     add_test(NAME ZhulongFaceRecognitionPlugin COMMAND ZhulongFaceRecognitionPluginTests $<TARGET_FILE:FaceRecognitionPlugin>)
     set_tests_properties(ZhulongFaceRecognitionPlugin PROPERTIES TIMEOUT 10)
 
-    foreach(TEST_TARGET ZhulongAlgoRuntimeTests ZhulongAlgoRunnerTests ZhulongAlgoJsonTests ZhulongFrameBrokerTests ZhulongAlgoRunnerGalleryTests ZhulongFaceRecognitionPluginTests)
+    # ⚠️ 这些测试完全依赖 assert()，必须显式 -UNDEBUG：否则 RelWithDebInfo 构建下
+    #    NDEBUG 会把全部断言编译掉，测试会「假绿」——曾经 ZhulongIpcSocketFdTests
+    #    就不在本列表中，其断言从未真正执行过。
+    foreach(TEST_TARGET ZhulongAlgoRuntimeTests ZhulongAlgoRunnerTests ZhulongAlgoJsonTests ZhulongFrameBrokerTests ZhulongAlgoRunnerGalleryTests ZhulongFaceRecognitionPluginTests ZhulongIpcSocketFdTests ZhulongDmaBufAllocatorTests)
         target_compile_options(${TEST_TARGET} PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
     endforeach()
 
