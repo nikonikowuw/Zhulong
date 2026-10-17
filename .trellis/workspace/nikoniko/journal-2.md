@@ -468,3 +468,39 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+## Session 56: 修复 algorunner 管道 Drain 竞态与 Supervisor 锁死锁
+<!-- trellis-session: v=2 fp=f124f5fc7526be49 -->
+
+**Date**: 2026-10-17
+**Task**: 修复 algorunner 管道 Drain 竞态与 Supervisor 锁死锁
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+修复 RunnerProcess 管道 Drain 竞态，重构 UpgradeAlgorithm 与 ResetAlgorithm 消除互锁死锁，补齐平滑升级与崩溃自动回滚单测
+
+### Main Changes
+
+- RunnerProcess: 使用手动 os.Pipe 与 WaitGroup 确保 stdout/stderr 读完后再关 doneCh，增加 100ms 孤儿进程兜底
+- Supervisor: UpgradeAlgorithm 与 ResetAlgorithm 释放大锁后再执行通道等待与进程停机，防止互锁死锁与长时锁占用
+- Supervisor: RestartAlgorithm 启动失败时不再向 DB 覆写伪 ACTIVE 状态
+- contracts: 清理未引用的 PreviousInstallDir 与 PreviousEntryPath
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3982e86` | fix(algorunner): resolve pipe drain race, supervisor deadlocks, and add upgrade unit tests |
+
+### Testing
+
+- [OK] 运行 go test -race -count=50 ./internal/algorunner/... -run TestRunnerProcessMultipleBrokersArgs 验证零竞态
+- [OK] 运行 go test -race -v ./internal/algorunner/... -run TestSupervisorUpgradeAlgorithm 验证平滑升级与自动热回滚
+- [OK] 全量 make go-check 与 make native-test (20/20 CTest) 全部绿灯
+
+### Status
+
+[OK] **Completed**
