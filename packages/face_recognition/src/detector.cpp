@@ -114,16 +114,14 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
         outputs = session.forward({input_tensor});
     }
 
-    // 3. 检查是否为真实 SCRFD 9 头输出；若非 9 头（如 CPU Mock 桩），平滑回退
-    if (outputs.size() == 9) {
-        auto detections = decode_scrfd(outputs, orig_w, orig_h, params.scale, params.pad_left, params.pad_top);
-        if (detections.empty()) {
-            return detect_cpu_fallback(image);
-        }
-        return detections;
+    // 3. 检查是否为真实 SCRFD 9 头输出；若非 9 头（如 CPU Mock 桩），平滑回退到桩检测
+    if (outputs.size() != 9) {
+        return detect_cpu_fallback(image);
     }
 
-    return detect_cpu_fallback(image);
+    // 真实 SCRFD 输出：空结果就是「图中没有人脸」，严禁再用 CPU 桩伪造检出框，
+    // 否则会向底库写入与人脸无关的伪特征（静默退化）。
+    return decode_scrfd(outputs, orig_w, orig_h, params.scale, params.pad_left, params.pad_top);
 }
 
 std::vector<FaceDetection> FaceDetector::decode_scrfd(

@@ -15,11 +15,22 @@
 #include "Zhulong/engine.h"
 #include "pipeline/engine.hpp"
 
+#include <chrono>
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
+#include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
+#include <fstream>
+#include <iostream>
 #include <memory>
+#include <mutex>
 #include <new>
+#include <string>
+#include <thread>
 #include <utility>
+#include <vector>
 
 // 不透明结构体具体定义：持有底层 C++ 引擎与探测视频结果实例
 struct Zhulong_engine_t { zhulong::Engine implementation; };
@@ -67,6 +78,9 @@ void require(bool valid) {
 
 } // namespace
 
+void zhulong_face_plugin_engine_created();
+void zhulong_face_plugin_engine_destroyed();
+
 // ============================================================================
 //                               引擎生命周期 API
 // ============================================================================
@@ -88,6 +102,7 @@ extern "C" Zhulong_status_t Zhulong_engine_create(Zhulong_engine_h *out_engine) 
         // 全局只执行一次 FFmpeg 网络与日志环境初始化
         zhulong::initialize_ffmpeg();
         *out_engine = new Zhulong_engine_t;
+        zhulong_face_plugin_engine_created();
     });
 }
 
@@ -128,8 +143,11 @@ extern "C" Zhulong_status_t Zhulong_engine_stop(Zhulong_engine_h engine) {
 extern "C" void Zhulong_engine_destroy(Zhulong_engine_h engine) {
     // 严禁在回调上下文中自销毁（防止对当前正在执行的线程进行汇合导致死锁）
     if (zhulong::in_callback) return;
+    // 空句柄为无操作：绝不能递减引擎引用计数，否则会误卸载仍在使用中的插件与模型
+    if (engine == nullptr) return;
     try {
         delete engine;
+        zhulong_face_plugin_engine_destroyed();
     } catch (...) {}
 }
 
@@ -419,6 +437,224 @@ extern "C" void Zhulong_probe_result_destroy(Zhulong_probe_result_h result) {
 }
 
 /**
+ * @brief 人脸识别插件动态加载、Fail-Closed 报错与 TTL 空闲自动卸载管理器
+ *
+ * 核心设计：
+ * 1. 懒加载（Lazy dlopen）：首次提取请求才挂载 libFaceRecognitionPlugin.so 并启动后台 Reaper 线程；
+ * 2. 闭环报错（Fail-Closed）：插件缺失或符号缺失时显式返回 Zhulong_ERR_UNSUPPORTED，
+ *    绝不允许回退到数学模拟特征，防止向人员底库写入无效向量；
+ * 3. TTL 空闲回收：空闲超过 ZHULONG_FACE_PLUGIN_IDLE_TIMEOUT_SEC（默认 60 秒）后，
+ *    Reaper 调用插件的 zhulong_face_extract_release 并 dlclose，把模型常驻内存交还操作系统；
+ * 4. 生命周期汇合：最后一个引擎句柄销毁时同步停止 Reaper 并卸载，杜绝异步悬挂。
+ *
+ * 并发契约：extract() 全程持有 mu_，保证 Reaper 与 shutdown() 不会在推理执行途中
+ * dlclose 掉正在运行的代码段（Use-After-Unload）。
+ */
+class FacePluginLoader {
+public:
+    using ExtractFn = zhulong_status_t (*)(const uint8_t*, int32_t, int32_t, int32_t, int32_t, float*, uint32_t*);
+    using ReleaseFn = void (*)();
+
+    /** @brief 进程内唯一实例（有意泄漏，规避静态析构顺序问题） */
+    static FacePluginLoader& instance() {
+        static FacePluginLoader* inst = new FacePluginLoader();
+        return *inst;
+    }
+
+    void on_engine_created() {
+        engine_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void on_engine_destroyed() {
+        // 仅当最后一个引擎句柄被销毁时才真正卸载插件与模型资源
+        if (engine_count_.fetch_sub(1, std::memory_order_acq_rel) <= 1) {
+            engine_count_.store(0, std::memory_order_relaxed);
+            shutdown();
+        }
+    }
+
+    zhulong_status_t extract(
+        const uint8_t* pixel_data,
+        int32_t width,
+        int32_t height,
+        int32_t stride,
+        int32_t format,
+        float* out_features,
+        uint32_t* feature_dim
+    ) {
+        std::lock_guard<std::mutex> lock(mu_);
+        zhulong_status_t st = ensure_loaded_locked();
+        if (st != Zhulong_OK) {
+            return st;
+        }
+
+        last_active_ = std::chrono::steady_clock::now();
+        // 唤醒 Reaper 以最新活跃时间重算等待窗口（避免其按旧时间戳提前卸载）
+        cv_.notify_all();
+        return extract_fn_(pixel_data, width, height, stride, format, out_features, feature_dim);
+    }
+
+    void shutdown() {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            stop_reaper_ = true;
+            cv_.notify_all();
+            unload_locked();
+        }
+        if (reaper_thread_.joinable()) {
+            reaper_thread_.join();
+        }
+    }
+
+private:
+    FacePluginLoader() {
+        int timeout_sec = 60;
+        const char* env_timeout = std::getenv("ZHULONG_FACE_PLUGIN_IDLE_TIMEOUT_SEC");
+        if (env_timeout && env_timeout[0] != '\0') {
+            try {
+                int parsed = std::stoi(env_timeout);
+                if (parsed > 0) timeout_sec = parsed;
+            } catch (...) {}
+        }
+        idle_timeout_ = std::chrono::seconds(timeout_sec);
+    }
+
+    FacePluginLoader(const FacePluginLoader&) = delete;
+    FacePluginLoader& operator=(const FacePluginLoader&) = delete;
+
+    /**
+     * @brief 按优先级生成插件寻址候选列表
+     *
+     * ZHULONG_FACE_PLUGIN_PATH 为显式运维覆盖：一旦设置即为唯一候选，
+     * 不再静默回退到其它路径的同名插件，避免加载到非预期的实现。
+     */
+    std::vector<std::string> candidate_paths() const {
+        const char* env_path = std::getenv("ZHULONG_FACE_PLUGIN_PATH");
+        if (env_path && env_path[0] != '\0') {
+            return {std::string(env_path)};
+        }
+
+        std::vector<std::string> candidates;
+        const char* env_dir = std::getenv("ZHULONG_PLUGIN_DIR");
+        if (env_dir && env_dir[0] != '\0') {
+            candidates.push_back(std::string(env_dir) + "/libFaceRecognitionPlugin.so");
+            candidates.push_back(std::string(env_dir) + "/FaceRecognitionPlugin.so");
+            candidates.push_back(std::string(env_dir) + "/plugin.so");
+        }
+
+        const std::vector<std::string> rel_candidates = {
+            "build/native/host/libFaceRecognitionPlugin.so",
+            "build/native/host/FaceRecognitionPlugin.so",
+            "packages/face_recognition/targets/cpu/plugin.so",
+            "libFaceRecognitionPlugin.so",
+            "./libFaceRecognitionPlugin.so",
+            "../build/native/host/libFaceRecognitionPlugin.so",
+            "../../build/native/host/libFaceRecognitionPlugin.so",
+            "../../../build/native/host/libFaceRecognitionPlugin.so",
+        };
+        candidates.insert(candidates.end(), rel_candidates.begin(), rel_candidates.end());
+
+        Dl_info info;
+        if (dladdr(reinterpret_cast<void*>(&Zhulong_engine_extract_face_feature), &info) && info.dli_fname) {
+            std::string so_path = info.dli_fname;
+            auto pos = so_path.find_last_of('/');
+            if (pos != std::string::npos) {
+                std::string dir = so_path.substr(0, pos);
+                candidates.push_back(dir + "/libFaceRecognitionPlugin.so");
+                candidates.push_back(dir + "/FaceRecognitionPlugin.so");
+                candidates.push_back(dir + "/../build/native/host/libFaceRecognitionPlugin.so");
+            }
+        }
+        return candidates;
+    }
+
+    zhulong_status_t ensure_loaded_locked() {
+        if (handle_ && extract_fn_) {
+            return Zhulong_OK;
+        }
+
+        for (const auto& path : candidate_paths()) {
+            if (!std::ifstream(path).good()) {
+                continue;
+            }
+            void* h = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+            if (!h) {
+                continue;
+            }
+            auto extract_fn = reinterpret_cast<ExtractFn>(dlsym(h, "zhulong_face_extract_feature"));
+            if (!extract_fn) {
+                dlclose(h);
+                continue;
+            }
+
+            handle_ = h;
+            extract_fn_ = extract_fn;
+            release_fn_ = reinterpret_cast<ReleaseFn>(dlsym(h, "zhulong_face_extract_release"));
+            last_active_ = std::chrono::steady_clock::now();
+            if (!reaper_thread_.joinable()) {
+                stop_reaper_ = false;
+                reaper_thread_ = std::thread(&FacePluginLoader::reaper_loop, this);
+            }
+            cv_.notify_all();
+            return Zhulong_OK;
+        }
+
+        return Zhulong_ERR_UNSUPPORTED;
+    }
+
+    void unload_locked() {
+        if (!handle_) return;
+        if (release_fn_) {
+            try {
+                release_fn_();
+            } catch (...) {}
+        }
+        dlclose(handle_);
+        handle_ = nullptr;
+        extract_fn_ = nullptr;
+        release_fn_ = nullptr;
+    }
+
+    void reaper_loop() {
+        std::unique_lock<std::mutex> lock(mu_);
+        while (!stop_reaper_) {
+            if (handle_ == nullptr) {
+                cv_.wait(lock, [this] { return stop_reaper_ || handle_ != nullptr; });
+                continue;
+            }
+
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_active_);
+            if (elapsed >= idle_timeout_) {
+                unload_locked();
+            } else {
+                auto wait_time = idle_timeout_ - elapsed;
+                cv_.wait_for(lock, wait_time, [this] { return stop_reaper_ || handle_ == nullptr; });
+            }
+        }
+    }
+
+    std::mutex mu_;
+    std::condition_variable cv_;
+    void* handle_{nullptr};
+    ExtractFn extract_fn_{nullptr};
+    ReleaseFn release_fn_{nullptr};
+    std::chrono::steady_clock::time_point last_active_{};
+    std::chrono::seconds idle_timeout_{60};
+    bool stop_reaper_{false};
+    std::thread reaper_thread_;
+    std::atomic<int> engine_count_{0};
+};
+
+void zhulong_face_plugin_engine_created() {
+    FacePluginLoader::instance().on_engine_created();
+}
+
+void zhulong_face_plugin_engine_destroyed() {
+    FacePluginLoader::instance().on_engine_destroyed();
+}
+
+/**
  * @brief 从图像像素数据同步提取 512 维人脸特征向量
  */
 extern "C" Zhulong_status_t Zhulong_engine_extract_face_feature(
@@ -449,39 +685,11 @@ extern "C" Zhulong_status_t Zhulong_engine_extract_face_feature(
             throw zhulong::Failure{Zhulong_ERR_INVALID_ARGUMENT};
         }
 
-        // 像素校验：若全黑（全为 0），判定为未检测到人脸
-        bool all_zero = true;
-        uint64_t sum = 0;
-        for (int y = 0; y < height; ++y) {
-            const uint8_t *row = pixel_data + static_cast<size_t>(y) * effective_stride;
-            for (int x = 0; x < width * 3; ++x) {
-                if (row[x] != 0) {
-                    all_zero = false;
-                    sum += row[x];
-                }
-            }
+        zhulong_status_t rc = FacePluginLoader::instance().extract(
+            pixel_data, width, height, effective_stride, format, out_features, feature_dim
+        );
+        if (rc != Zhulong_OK) {
+            throw zhulong::Failure{rc};
         }
-        if (all_zero) {
-            throw zhulong::Failure{Zhulong_ERR_NOT_FOUND};
-        }
-
-        // 提取 512 维特征向量，并严格进行 L2 范数单位归一化
-        float norm_sq = 0.0f;
-        for (uint32_t i = 0; i < 512; ++i) {
-            float val = std::sin(static_cast<float>(sum % 10007 + i * 37 + 1)) * 0.5f +
-                        std::cos(static_cast<float>(width * 31 + height * 17 + i)) * 0.5f;
-            out_features[i] = val;
-            norm_sq += val * val;
-        }
-
-        float norm = std::sqrt(norm_sq);
-        if (norm < 1e-6f) norm = 1.0f;
-        for (uint32_t i = 0; i < 512; ++i) {
-            out_features[i] /= norm;
-        }
-
-        *feature_dim = 512;
     });
 }
-
-

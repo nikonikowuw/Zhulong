@@ -1,4 +1,7 @@
 {
-    global: zhulong_plugin_get_api;
+    global:
+        zhulong_plugin_get_api;
+        zhulong_face_extract_feature;
+        zhulong_face_extract_release;
     local: *;
 };
