@@ -625,3 +625,40 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+---
+
+## Session 59: 修复 RGA 视觉后端的垂直跨度与硬件探测缺陷
+
+**Date**: 2026-10-17
+**Task**: `10-17-fix-rga-backend-stride-and-stability`
+**Package**: `native`
+**Branch**: `dev`
+
+### Summary
+
+修复 RGA 视觉后端中 NV12/YUV420P 多平面垂直跨度硬编码、Letterbox 热路径重复堆分配、debugfs 依赖及 /dev/rga 权限探针问题，消除 1080P MPP 硬件解码帧误拒与色彩错位。
+
+### Main Changes
+
+- **垂直跨度动态推导**: 在 `resolve_source` 中依据 `(p1 - p0) / y_stride` 动态计算真实物理垂直跨度 `hstride` 并传给 RGA，完美支持 MPP 16 行对齐帧（如 1080P `height=1080, vstride=1088`），杜绝 UV 色彩错位与误回退。
+- **热路径 Tensor 原地复用**: 优化 `try_rga_letterbox` 与 `CpuVisionBackend::letterbox` 复用逻辑，对于容量与形状匹配的 CPU Tensor 原地复用内存，消除每帧堆内存重新分配。
+- **探测稳健性与权限精确性**: `/dev/rga` 探针采用 `open(O_RDWR | O_CLOEXEC)` 精确验证读写权限；debugfs 不可读时（非特权容器环境）安全保底为 4 字节，避免静默瘫痪退化。
+- **状态码校验统一**: 将 `improcess` 返回码检查统一为 `imcheck_is_ok(status)`，兼顾 `IM_STATUS_SUCCESS` 与 `IM_STATUS_NOERROR`。
+- **测试覆盖与规范更新**: 在 `rga_vision_test.cpp` 增加带垂直对齐的 NV12 格式与 Tensor 原地复用断言；在 `.trellis/spec/native/hardware-backends.md` 固化垂直步长推导与权限探针规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `97e052d` | fix(rga): resolve vertical stride alignment, tensor heap churn, and device probe robustness |
+
+### Testing
+
+- [OK] `python3 native/scripts/build.py test`: 20/20 原生单元测试全部通过
+- [OK] `python3 native/scripts/build.py --profile native/profiles/rk3568-rga.json build`: `ZhulongRgaTests` 与算法运行时跨平台交叉编译通过
+- [OK] `make check`: 前端测试 (285 passed)、原生测试 (20 passed)、Go 校验 (-race通过)、API 文档生成全绿通过
+
+### Status
+
+[OK] **Completed**
