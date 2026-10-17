@@ -35,6 +35,15 @@
 
 插件入口声明使用 `ZHULONG_PLUGIN_EXPORT`。启用 hidden default visibility 时，只显式导出 `zhulong_plugin_get_api`；Linux 示例插件还使用 GNU ld version script 将其他定义符号设为 local（仅靠编译器 visibility 可能在 sanitizer 构建暴露弱 RTTI 符号）。CMake 示例插件目标定义 `ZHULONG_PLUGIN_BUILD` 并设置 hidden C++ / inline visibility。
 
+**例外：宿主直连的专用 C ABI**。人脸识别插件额外导出宿主 `FacePluginLoader` 通过 `dlsym` 绑定的两个符号（见 [CGO 契约 §6](./cgo-contract.md)）：
+
+```c
+zhulong_status_t zhulong_face_extract_feature(const uint8_t*, int32_t, int32_t, int32_t, int32_t, float*, uint32_t*);
+void             zhulong_face_extract_release(void);
+```
+
+`native/cmake/plugin-exports.map` 的白名单必须与之一致。`ZhulongPluginSymbolVisibility` 用例通过 `native/tests/check_plugin_symbols.py` 逐插件断言「动态符号集合 == 白名单」（语法 `path=sym1,sym2`；省略 `=` 时默认只允许 `zhulong_plugin_get_api`），防止误导出内部符号或漏导出契约符号。
+
 ### 异常防爆门守则
 
 导出入口和 API callbacks 必须以 `try { ... } catch (...)` 阻止 C++ 异常穿越动态库边界；失败返回 `ZHULONG_PLUGIN_ERR_INTERNAL`，并在失败时将输出句柄/result 初始化为空。

@@ -122,3 +122,40 @@ func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]f
 - **内存规则**：Go 侧在调用期间将连续图像切片首地址转为 `*C.uint8_t`，通过 `runtime.KeepAlive` 保证调用期间不被 GC 回收；输出由 Go 分配 512 维切片，C 侧原地写入，禁止跨调用缓存 Go 指针。
 - **业务解耦**：上层业务包（如 `internal/person`）禁止 `import "C"`，必须通过 `FaceFeatureExtractor` 接口解耦，由 Uber Fx 注入 `*engine.Engine`。
 
+### 6.1 能力来源：算法插件动态加载（dlopen）而非静态链接
+
+真实推理（SCRFD 检测 → Umeyama 5 点对齐 → 512 维特征抽取）全部由算法插件 `libFaceRecognitionPlugin.so` 通过专用 C ABI 提供：
+
+```c
+zhulong_status_t zhulong_face_extract_feature(const uint8_t*, int32_t, int32_t, int32_t, int32_t, float*, uint32_t*);
+void             zhulong_face_extract_release(void);
+```
+
+- 宿主 `native/src/abi/engine.cpp` 的 `FacePluginLoader` 单例懒加载该插件：`libZhulongEngine.a` 与 `zhulong` 可执行文件**绝不**产生 `libonnxruntime.so` 的 `DT_NEEDED` 依赖，宿主在缺失 ORT 的机器上仍可启动并服务 Web/流媒体；
+- 寻址优先级：`ZHULONG_FACE_PLUGIN_PATH`（**显式覆盖，设置后即为唯一候选，不再静默回退**）→ `ZHULONG_PLUGIN_DIR` → 构建产物目录 → `dladdr` 同目录；
+- 底库录入与视频流识别必须使用同一份模型权重（`det_500m.onnx` + `facelivtv2-l.onnx`），保证两侧特征处于同一度量空间。
+
+### 6.2 Fail-Closed 闭环报错（严禁静默退化）
+
+| 场景 | 插件状态码 | Engine 状态码 | Go 侧错误 | HTTP |
+| :--- | :--- | :--- | :--- | :--- |
+| 成功 | `ZHULONG_PLUGIN_OK` | `Zhulong_OK` | `nil` | 200 |
+| 插件缺失 / 符号缺失 / 模型不可用 | *(dlopen 失败)* / `ERR_INTERNAL` | `Zhulong_ERR_UNSUPPORTED` / `ERR_INTERNAL` | `ErrUnsupported` / `ErrInternal` | 500 |
+| 检出结果来自 CPU 降级桩（`is_real_detection == false`） | `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED` | `Zhulong_ERR_UNSUPPORTED` | `ErrUnsupported` | 500 |
+| 真实推理但未检出人脸（含全黑图） | `ZHULONG_PLUGIN_ERR_NOT_FOUND` | `Zhulong_ERR_NOT_FOUND` | `ErrNotFound` | 400 `NO_FACE_DETECTED` |
+| 参数非法（空指针 / 尺寸 / stride / 容量 < 512） | `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT` | `Zhulong_ERR_INVALID_ARGUMENT` | `ErrInvalidArgument` | 400 |
+
+⚠️ **严禁回退到数学模拟特征**：任何一条失败路径都不允许写出向量，否则会向人员底库写入无效特征并让后续视频流识别永久失灵。检测器在真实 9 头 SCRFD 路径上**不得**再用 CPU 桩伪造检出框（`FaceDetector::detect` 的桩回退只允许出现在非 9 头输出，即 CPU/桩后端）。
+
+### 6.3 TTL 空闲回收与生命周期汇合
+
+- 首次请求懒加载并进入热态（单张推理 10~25ms）；空闲超过 `ZHULONG_FACE_PLUGIN_IDLE_TIMEOUT_SEC`（默认 60 秒）后，后台 Reaper 线程调用 `zhulong_face_extract_release` 再 `dlclose`，把约 80MB 模型常驻内存交还操作系统；下次请求自动重新唤醒加载。
+- **并发契约**：`FacePluginLoader::extract()` 全程持有互斥锁，Reaper 与 `shutdown()` 不可能在推理执行途中卸载代码段（Use-After-Unload）。
+- `Zhulong_engine_destroy` 在**最后一个**引擎句柄销毁时同步停止 Reaper 并卸载；`Zhulong_engine_destroy(NULL)` 是无操作，不得递减引擎引用计数（否则会误卸载仍在使用的插件）。
+
+### 6.4 验证边界
+
+- `ZhulongFaceFeatureExtract` 在 ONNX 后端断言真实人脸样本产出 512 维单位特征，在 CPU 桩后端断言 Fail-Closed（`UNSUPPORTED`）；两个分支由 CMake 宏 `ZHULONG_TEST_ONNX_INFERENCE` 区分。
+- `ZhulongFacePluginTtl` 使用最小插件替身（`native/tests/mock_face_plugin.cpp`）黑盒验证「TTL 卸载 → 抽走插件文件后报 `UNSUPPORTED` → 恢复文件后重新唤醒」。
+
+

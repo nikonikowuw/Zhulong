@@ -220,6 +220,10 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 2. **链接与 RPATH 卫生**：
    - 仅 `ZhulongAlgoRuntime` 以 `PRIVATE` 方式链接 `${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so`，宿主 `libZhulongEngine.a` 绝不链接；
    - 配置 `-Wl,-rpath-link,${ZHULONG_ONNX_ROOT}/lib` 与 `SKIP_BUILD_RPATH TRUE`、`BUILD_RPATH ""`，确保 `libZhulongAlgoRuntime.so` 不残留开发机绝对路径。
+3. **宿主复用 ONNX 能力的唯一通道是算法插件 + dlopen**：
+   - 宿主需要通用推理能力时（如离线人脸特征提取），必须通过算法插件导出的专用 C ABI 复用 `libzhulong_algo_runtime.so`，由宿主侧 `FacePluginLoader` 在运行期 `dlopen`（见 [CGO 契约 §6](./cgo-contract.md)）；
+   - 判据（必须为空）：`readelf -d build/targets/<name>/Zhulong | grep NEEDED` 不得出现 `libonnxruntime.so`；
+   - 插件缺失时必须显式返回 `Zhulong_ERR_UNSUPPORTED`（Fail-Closed），严禁静默退化到模拟特征。
 
 ### 6.2 资源模型、权重共享与并发约束
 
@@ -275,6 +279,12 @@ ctest --test-dir build/native/host-address -R "ZhulongOnnx|ZhulongFaceRecognitio
 
 # 4. 运行本地默认 CPU 与 DMA-BUF / IPC SCM_RIGHTS 全量回归单元测试
 python3 native/scripts/build.py test
+
+# 4.1 ⚠️ Go 测试缓存不感知运行期 dlopen 的算法插件
+#     `libFaceRecognitionPlugin.so` 既不在 Go 构建输入里，也不进 CGO_LDFLAGS 的内容哈希，
+#     因此切换推理后端（cpu ↔ onnx）后 `go test` 会直接复用上一次的缓存结果（含 SKIP 结论）。
+#     验证真实推理链路时必须显式 -count=1：
+python3 native/scripts/build.py --inference-backend onnx go test -race -count=1 ./internal/engine
 
 # 5. 交叉构建并在 RK3568 板端验证硬件解码与全链路零拷贝
 python3 native/scripts/build.py --profile native/profiles/rk3568-rknn-rga.json build
