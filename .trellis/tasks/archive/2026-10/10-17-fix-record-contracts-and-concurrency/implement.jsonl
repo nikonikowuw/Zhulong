@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "Pagination, empty slice contracts, and response envelope rules"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite conventions, captured_at rules, and store isolation"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Error handling, no swallowed errors, validation error details"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Fx component pure constructors and domain separation"}
