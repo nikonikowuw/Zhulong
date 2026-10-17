@@ -6,9 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -17,6 +22,73 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+// shardBudget mirrors the unexported algorunner.shardBudget. process_test.go is
+// an external (black-box) test package, so it cannot reference the constant
+// directly; it must still assert the same bound the implementation guarantees.
+const shardBudget = algorunner.MaxIpcPayloadSize * 9 / 10
+
+// testGalleryFeature builds a realistic 512-dim L2-normalized float32 embedding:
+// each component is drawn from N(0, 1/512) and the vector is then normalized.
+// Serialized to JSON such a component costs ~12.3 bytes (values like -0.044123),
+// which is what real face templates look like. The old test's float32(i*1000+j)
+// serialized ~2.5x smaller, which is exactly why the fixed-10-items-per-shard
+// overflow bug stayed hidden.
+func testGalleryFeature(rng *rand.Rand) []float32 {
+	feats := make([]float32, 512)
+	var sumSq float64
+	for i := range feats {
+		v := rng.NormFloat64() / math.Sqrt(512)
+		feats[i] = float32(v)
+		sumSq += float64(feats[i]) * float64(feats[i])
+	}
+	norm := math.Sqrt(sumSq)
+	for i := range feats {
+		feats[i] = float32(float64(feats[i]) / norm)
+	}
+	return feats
+}
+
+const testULIDAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+// testULIDLike returns a 26-character ULID-shaped identifier.
+func testULIDLike(rng *rand.Rand) string {
+	b := make([]byte, 26)
+	for i := range b {
+		b[i] = testULIDAlphabet[rng.Intn(len(testULIDAlphabet))]
+	}
+	return string(b)
+}
+
+var testCJKNames = []string{"张三", "李四", "王五", "赵六", "陈七", "刘八", "黄九", "周十"}
+
+// testRealisticGalleryItems builds n items that match the real production shape:
+// 512-dim L2-normalized features, 26-char ULID face/person IDs, a CJK name and
+// a realistic image path.
+func testRealisticGalleryItems(n int) []algorunner.GallerySyncItem {
+	rng := rand.New(rand.NewSource(20241017))
+	items := make([]algorunner.GallerySyncItem, n)
+	for i := range items {
+		faceID := testULIDLike(rng)
+		items[i] = algorunner.GallerySyncItem{
+			FaceID:     faceID,
+			PersonID:   testULIDLike(rng),
+			PersonName: testCJKNames[i%len(testCJKNames)],
+			ImagePath:  fmt.Sprintf("faces/2024/06/17/%s_112x112.jpg", faceID),
+			Features:   testGalleryFeature(rng),
+		}
+	}
+	return items
+}
+
+func decodeShard(t *testing.T, payload []byte) algorunner.GallerySyncShardPayload {
+	t.Helper()
+	var p algorunner.GallerySyncShardPayload
+	if err := json.Unmarshal(payload, &p); err != nil {
+		t.Fatalf("unmarshal shard payload: %v", err)
+	}
+	return p
+}
 
 func findMockDetectorPlugin(t *testing.T) string {
 	t.Helper()
@@ -241,6 +313,65 @@ func TestRunnerProcessDetectsBrokerHostUnavailable(t *testing.T) {
 	}
 }
 
+func TestRunnerProcessReportsDotEnvParseFailure(t *testing.T) {
+	// A .env whose single line exceeds bufio.Scanner's 64KB token limit makes
+	// LoadDotEnv return a real error (ErrTooLong). Before R5 that error was
+	// swallowed by `if loaded, err := LoadDotEnv(...); err == nil`, silently
+	// disabling the whole .env with no observability. The fix must log a Warn
+	// and still start the process (a broken .env must not block the runner).
+	dir := t.TempDir()
+	script := filepath.Join(dir, "runner.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 0.3\n"), 0755); err != nil {
+		t.Fatalf("write runner script: %v", err)
+	}
+
+	envFile := filepath.Join(dir, ".env")
+	oversizedLine := "ZHULONG_OVERSIZED=" + strings.Repeat("x", 70000)
+	if err := os.WriteFile(envFile, []byte(oversizedLine+"\n"), 0644); err != nil {
+		t.Fatalf("write oversized .env: %v", err)
+	}
+
+	// Sanity: the oversized line really is a parse error, not a silent no-op.
+	if _, err := algorunner.LoadDotEnv(envFile); err == nil {
+		t.Fatalf("expected LoadDotEnv to report an error for a >64KB line")
+	}
+
+	core, observed := observer.New(zapcore.WarnLevel)
+	logger := zap.New(core)
+
+	cfg := algorunner.ProcessConfig{
+		AlgorithmID:   "bad_env_pkg",
+		AlgorithmName: "bad_env_pkg",
+		RunnerPath:    script,
+		PluginPath:    "unused.so",
+		EnvFile:       envFile,
+		Logger:        logger,
+	}
+
+	proc := algorunner.NewRunnerProcess(cfg)
+	if err := proc.Start(); err != nil {
+		t.Fatalf("Start must succeed even when .env fails to parse, got: %v", err)
+	}
+	if err := proc.Stop(2 * time.Second); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+
+	foundWarn := false
+	for _, entry := range observed.All() {
+		if entry.Level == zapcore.WarnLevel && strings.Contains(entry.Message, "failed to load runner dotenv file") {
+			foundWarn = true
+			if fields := entry.ContextMap(); fields != nil {
+				if path, ok := fields["path"].(string); !ok || path != envFile {
+					t.Errorf("expected dotenv warn to carry path=%q, got %v", envFile, fields["path"])
+				}
+			}
+		}
+	}
+	if !foundWarn {
+		t.Fatalf("expected a Warn log about the failed dotenv load; observed: %+v", observed.All())
+	}
+}
+
 func TestLoadDotEnv(t *testing.T) {
 	tempDir := t.TempDir()
 	envPath := filepath.Join(tempDir, ".env")
@@ -376,6 +507,72 @@ func TestRunnerProcessLifecycleGracefulStop(t *testing.T) {
 	}
 }
 
+func TestRunnerProcessStopKillsProcessGroup(t *testing.T) {
+	// R7: the runner is started in its own process group and Stop must signal the
+	// whole group, so grandchildren the runner spawned cannot leak. The script
+	// backgrounds a long sleep (recording its pid) and then waits on it; after
+	// Stop returns the grandchild must be gone.
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+	script := filepath.Join(dir, "spawning_runner.sh")
+	scriptBody := "#!/bin/sh\nsleep 30 &\necho $! > \"$CHILD_PID_FILE\"\nwait\n"
+	if err := os.WriteFile(script, []byte(scriptBody), 0755); err != nil {
+		t.Fatalf("write spawning runner script: %v", err)
+	}
+
+	t.Setenv("CHILD_PID_FILE", pidFile)
+
+	cfg := algorunner.ProcessConfig{
+		AlgorithmID:   "pg_pkg",
+		AlgorithmName: "pg_pkg",
+		RunnerPath:    script,
+		PluginPath:    "unused.so",
+		Logger:        zap.NewNop(),
+	}
+
+	proc := algorunner.NewRunnerProcess(cfg)
+	if err := proc.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	// Wait for the grandchild pid to be recorded.
+	var childPID int
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(pidFile)
+		if err == nil {
+			if pid, convErr := strconv.Atoi(strings.TrimSpace(string(data))); convErr == nil && pid > 0 {
+				childPID = pid
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if childPID <= 0 {
+		t.Fatalf("grandchild pid was never recorded")
+	}
+
+	// Sanity: the grandchild is alive before Stop.
+	if err := syscall.Kill(childPID, 0); err != nil {
+		t.Fatalf("grandchild %d should be alive before Stop: %v", childPID, err)
+	}
+
+	if err := proc.Stop(2 * time.Second); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+
+	// After Stop the whole process group must be gone. Give the kernel a moment
+	// to reap, then require ESRCH.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(childPID, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("grandchild %d survived Stop; the runner process group was not killed", childPID)
+}
+
 func TestRunnerProcessForceKillOnTimeout(t *testing.T) {
 	// Run a shell script that traps SIGTERM and refuses to exit
 	trapScript := t.TempDir()
@@ -506,48 +703,116 @@ func TestCreateGallerySyncShards_Empty(t *testing.T) {
 }
 
 func TestCreateGallerySyncShards_MultiShardUnder64KB(t *testing.T) {
-	// 构造 25 个人脸项（应切分为 3 个 shard：10 + 10 + 5）
-	items := make([]algorunner.GallerySyncItem, 25)
-	for i := range items {
-		feats := make([]float32, 512)
-		for j := range feats {
-			feats[j] = float32(i*1000 + j)
-		}
-		items[i] = algorunner.GallerySyncItem{
-			FaceID:     fmt.Sprintf("f_%d", i),
-			PersonID:   fmt.Sprintf("p_%d", i),
-			PersonName: fmt.Sprintf("人员%d", i),
-			ImagePath:  fmt.Sprintf("img_%d.jpg", i),
-			Features:   feats,
-		}
-	}
+	// Realistic magnitude: 25 real-size items must pack into multiple shards,
+	// each strictly within shardBudget. The old fixed 10-items-per-shard packing
+	// produced ~64KB shards on this data (over budget), which this asserts.
+	items := testRealisticGalleryItems(25)
 
 	shards, err := algorunner.CreateGallerySyncShards("sync_multi", items)
 	if err != nil {
 		t.Fatalf("CreateGallerySyncShards failed: %v", err)
 	}
-	if len(shards) != 3 {
-		t.Fatalf("expected 3 shards for 25 items, got %d", len(shards))
+	if len(shards) < 2 {
+		t.Fatalf("expected multiple shards for 25 realistic items, got %d", len(shards))
 	}
 
 	for i, s := range shards {
-		if len(s) > int(algorunner.MaxIpcPayloadSize) {
-			t.Errorf("shard %d exceeds 64KB: %d bytes", i, len(s))
+		if len(s) > shardBudget {
+			t.Errorf("shard %d exceeds shardBudget (%d): %d bytes", i, shardBudget, len(s))
 		}
-		var p algorunner.GallerySyncShardPayload
-		if err := json.Unmarshal(s, &p); err != nil {
-			t.Fatalf("unmarshal shard %d: %v", i, err)
+		p := decodeShard(t, s)
+		if p.ShardIndex != i || p.ShardTotal != len(shards) {
+			t.Errorf("shard %d metadata mismatch: index=%d, total=%d, want total=%d", i, p.ShardIndex, p.ShardTotal, len(shards))
 		}
-		if p.ShardIndex != i || p.ShardTotal != 3 {
-			t.Errorf("shard %d metadata mismatch: index=%d, total=%d", i, p.ShardIndex, p.ShardTotal)
-		}
-		if i < 2 && len(p.Items) != 10 {
-			t.Errorf("shard %d expected 10 items, got %d", i, len(p.Items))
-		}
-		if i == 2 && len(p.Items) != 5 {
-			t.Errorf("shard 2 expected 5 items, got %d", len(p.Items))
+		if len(p.Items) == 0 {
+			t.Errorf("shard %d unexpectedly empty", i)
 		}
 	}
+}
+
+func TestCreateGallerySyncShards_SingleItemExceedsBudget(t *testing.T) {
+	// A single item larger than shardBudget cannot be sharded. The returned error
+	// must be locatable (contains the face_id) so operators can find the record.
+	item := testRealisticGalleryItems(1)[0]
+	item.PersonName = strings.Repeat("很", 20000) // ~60KB of UTF-8, well over budget on its own
+
+	_, err := algorunner.CreateGallerySyncShards("sync_oversized", []algorunner.GallerySyncItem{item})
+	if err == nil {
+		t.Fatalf("expected an error for a single item exceeding the shard budget")
+	}
+	if !strings.Contains(err.Error(), item.FaceID) {
+		t.Fatalf("expected the error to contain the face_id %q, got: %v", item.FaceID, err)
+	}
+}
+
+func TestCreateGallerySyncShards_RoundTripIntegrity(t *testing.T) {
+	// 137 is deliberately not a multiple of any packing size: assert the shard
+	// metadata and that concatenating the shards reproduces the input exactly
+	// (no loss, no duplication, no reordering).
+	items := testRealisticGalleryItems(137)
+
+	shards, err := algorunner.CreateGallerySyncShards("sync_roundtrip", items)
+	if err != nil {
+		t.Fatalf("CreateGallerySyncShards failed: %v", err)
+	}
+
+	var rebuilt []algorunner.GallerySyncItem
+	for i, s := range shards {
+		if len(s) > shardBudget {
+			t.Errorf("shard %d exceeds shardBudget: %d bytes", i, len(s))
+		}
+		p := decodeShard(t, s)
+		if p.SyncID != "sync_roundtrip" {
+			t.Errorf("shard %d sync_id = %q", i, p.SyncID)
+		}
+		if p.ShardIndex != i {
+			t.Errorf("shard %d shard_index = %d, want %d", i, p.ShardIndex, i)
+		}
+		if p.ShardTotal != len(shards) {
+			t.Errorf("shard %d shard_total = %d, want %d", i, p.ShardTotal, len(shards))
+		}
+		rebuilt = append(rebuilt, p.Items...)
+	}
+
+	if len(rebuilt) != len(items) {
+		t.Fatalf("rebuilt item count = %d, want %d", len(rebuilt), len(items))
+	}
+	for i := range items {
+		if !reflect.DeepEqual(rebuilt[i], items[i]) {
+			t.Errorf("item %d mismatch after round trip:\n got %+v\nwant %+v", i, rebuilt[i], items[i])
+		}
+	}
+}
+
+func TestCreateGallerySyncShards_ShardBudgetHoldsForRealisticGallery(t *testing.T) {
+	// Full-scale cold start: 200 real-size items. This MUST fail against the old
+	// fixed 10-items-per-shard implementation (each ~64KB > shardBudget).
+	items := testRealisticGalleryItems(200)
+
+	shards, err := algorunner.CreateGallerySyncShards("sync_full", items)
+	if err != nil {
+		t.Fatalf("CreateGallerySyncShards failed: %v", err)
+	}
+
+	maxSize := 0
+	total := 0
+	for i, s := range shards {
+		if len(s) > maxSize {
+			maxSize = len(s)
+		}
+		if len(s) > shardBudget {
+			t.Errorf("shard %d exceeds shardBudget (%d): %d bytes", i, shardBudget, len(s))
+		}
+		if len(s) > int(algorunner.MaxIpcPayloadSize) {
+			t.Errorf("shard %d exceeds the protocol limit: %d bytes", i, len(s))
+		}
+		p := decodeShard(t, s)
+		total += len(p.Items)
+	}
+	if total != len(items) {
+		t.Errorf("packed %d items across shards, want %d", total, len(items))
+	}
+	t.Logf("shardBudget=%d, shards=%d, maxShardSize=%d", shardBudget, len(shards), maxSize)
 }
 
 func TestGalleryBroadcaster_SyncUpsertDelete(t *testing.T) {

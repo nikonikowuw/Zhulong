@@ -134,6 +134,11 @@ zhulong_algo_runner --verify-plugin plugin.so --sample sample.jpg
    - `internal/algorunner`：专注**动态沙箱子进程看护与自愈容灾**（环境变量注入、拉起与优雅停止、指数退避、CrashLoopBackoff 熔断、RollbackGuard 自动回滚守卫及底库广播）。
      - **管道同步契约**：`RunnerProcess` 负责标准输出与标准错误流的完全 Drain 与 `failureStage` 探测，必须保证日志写完后才向外关闭 `doneCh`；
      - **锁隔离铁律**：`Supervisor` 的升级（`UpgradeAlgorithm`）与重置（`ResetAlgorithm`）等涉及等待子进程停机与 Channel 退出的操作，**必须释放 `s.mu` 后再阻塞等待 `<-w.doneCh`**，严禁持全局大锁等待子进程或协程，杜绝与后台自愈或自动回滚产生互锁死锁。
+     - **锁外 IO 铁律**：`s.mu` 是 `Supervisor` 的全局大锁，`GetStatus` 以 RLock 参与其中，而 `Service.ListAlgorithms` 会对每个算法调用一次 `GetStatus`。因此**任何会做 DB 查询或订阅同步的操作（`BrokerSubscriptionResolver.SyncBrokerSubscriptions`）都必须在锁外执行**：先在 RLock 内快照 `s.resolver`，解锁后解析，再在写锁内做「二次校验 + 注册」。二次校验失败说明解析期间已有并发注册，直接丢弃本地构建的 watcher 即可——订阅是幂等的集合语义，无需回滚。
+       - ⚠️ 由此产生的配套约束：`rollbackToOld` 必须是**不持锁的外层**（锁外解析 → `rollbackToOldLocked` 锁内注册），且 `UpgradeAlgorithm` 的两条回滚早退路径**不得依赖 `defer s.mu.Unlock()`**（否则自死锁），必须显式解锁后再调用。
+       - ⚠️ `workerWatcher.mu` 同样不得跨 resolver IO 持有：崩溃重启的重解析必须在取 `w.mu` 之前完成（`w.mu` 会被 `GetStatus`/`ResetAlgorithm`/`stopProcess` 获取）。
+     - **状态写入以 watcher 退役为条件**：`StopAlgorithm` 仅当 `retireWatcher(algoID, w)` 返回 `true`（确实移除了自己持有的 watcher）时才允许写 DB `DISABLED`。回滚/升级路径会在同一 `algoID` 下注册**新的活 watcher**，此时无条件写 `DISABLED` 会造成「进程在跑、DB 说已停用」的持久化漂移，且该包在下次宿主机启动时不会自动拉起。
+     - **运行器进程组**：runner 必须以独立进程组启动（`SysProcAttr{Setpgid: true}`），停止时对**进程组**发信号（`syscall.Kill(-pid, sig)`，`ESRCH` 视为成功），否则 runner 派生的孙进程会成为孤儿并继续持有 broker socket 与共享内存。
 2. **分析任务解耦**：分析任务（CRUD、配置校验、算力预算检查与调度）完全归属 `internal/task` 模块。`algorithm` 仅实现 `task.AlgorithmSpecProvider`（供任务校验算法规格）与 `task.TaskChangeListener`（接收任务变更通知以触发防抖热重启）。兼容路由 `/api/v1/algorithms/tasks` 由 `task.Handler` 统一委托承载。
 3. **推理数据与协议下沉**：
    - 通用 AI 推理模型（`InferenceResult`、`DetectionItem`、`PersonItem` 等）收敛于 `internal/aitypes`，解耦 `camera` 与 `record` 对 `algorithm` 的依赖；

@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门禁命令（gofmt / make go-check）与 -race 强制要求，用于校验本任务是否达标；同时用于核对是否引入被禁止的反模式"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查新增/修改的错误路径是否符合包装与传播约定，特别是 LoadDotEnv 与分片超预算错误"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "检查新增日志的等级与强类型字段是否符合规范"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "检查是否无意改动了算法包契约、线协议或验包门禁"}
+{"file": ".trellis/spec/architecture.md", "reason": "检查跨层契约是否被破坏：IPC 64KB 上限、消息类型编号、GallerySyncShardPayload JSON 字段名"}

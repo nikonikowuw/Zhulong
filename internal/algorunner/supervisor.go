@@ -76,7 +76,7 @@ func NewSupervisor(store LifecycleStore, algoDir, runnerPath string, opts Recove
 		runnerPath: runnerPath,
 		logger:     logger.Named("algorithm_supervisor"),
 		watchers:   make(map[string]*workerWatcher),
-		opts:       opts,
+		opts:       opts.normalize(),
 	}
 }
 
@@ -132,16 +132,27 @@ func (s *Supervisor) dispatchGallerySync(provider GallerySyncProvider, broadcast
 	}()
 }
 
-// resolveBrokerSocksLocked 解析算法包应当订阅的 broker socket 路径列表，
+// brokerResolver snapshots the configured broker subscription resolver under a
+// read lock so callers can invoke it without holding s.mu.
+func (s *Supervisor) brokerResolver() BrokerSubscriptionResolver {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.resolver
+}
+
+// resolveBrokerSocks 解析算法包应当订阅的 broker socket 路径列表，
 // 并驱动实现侧同步订阅关系。
 //
 // 解析失败必须向上传播：退化为「没有 broker」会让 runner 拿不到 --broker 而 exit 5，
 // 进而触发退避重启与 CRASH_LOOP 熔断，且失败原因会被完全掩盖。
 //
-// 调用方必须持有 s.mu。
-func (s *Supervisor) resolveBrokerSocksLocked(ctx context.Context, algoID string) ([]string, error) {
-	if s.resolver != nil {
-		socks, err := s.resolver.SyncBrokerSubscriptions(ctx, algoID)
+// ⚠️ 本函数会执行 IO（DB 查询 + 逐相机路径解析），因此**不得在持有 s.mu 时调用**：
+// 否则整个解析期间所有 GetStatus（RLock）都会被阻塞，而 Service.ListAlgorithms
+// 会对每个算法调用一次 GetStatus，导致列表接口出现随规模放大的延迟尖刺。
+// 调用方应先用 brokerResolver() 取 resolver 快照，再在锁外调用本函数。
+func (s *Supervisor) resolveBrokerSocks(ctx context.Context, resolver BrokerSubscriptionResolver, algoID string) ([]string, error) {
+	if resolver != nil {
+		socks, err := resolver.SyncBrokerSubscriptions(ctx, algoID)
 		if err != nil {
 			return nil, fmt.Errorf("resolve broker paths for %s: %w", algoID, err)
 		}
@@ -152,16 +163,26 @@ func (s *Supervisor) resolveBrokerSocksLocked(ctx context.Context, algoID string
 
 // StartAlgorithm spawns and watches a runner subprocess for an algorithm.
 func (s *Supervisor) StartAlgorithm(ctx context.Context, algo PackageMeta) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, exists := s.watchers[algo.ID]; exists {
+	// 1. 快路径：锁内只做存在性判断，并顺带取出 resolver 引用。
+	s.mu.RLock()
+	_, exists := s.watchers[algo.ID]
+	resolver := s.resolver
+	s.mu.RUnlock()
+	if exists {
 		return errors.New("algorithm worker is already running or supervised")
 	}
 
-	brokerSocks, err := s.resolveBrokerSocksLocked(ctx, algo.ID)
+	// 2. 锁外做 IO（DB 查询 + 订阅同步），避免阻塞 GetStatus。
+	brokerSocks, err := s.resolveBrokerSocks(ctx, resolver, algo.ID)
 	if err != nil {
 		return err
+	}
+
+	// 3. 锁内注册：二次校验兜底解析期间产生的并发注册。
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.watchers[algo.ID]; exists {
+		return errors.New("algorithm worker is already running or supervised")
 	}
 
 	w := &workerWatcher{
@@ -200,6 +221,22 @@ func (s *Supervisor) StartAlgorithm(ctx context.Context, algo PackageMeta) error
 	return nil
 }
 
+// retireWatcher removes w from the watcher registry if it is still the watcher
+// registered for algoID, reporting whether it actually removed w.
+//
+// The return value is the guard for status writes: when a rollback or upgrade has
+// already re-registered the same algorithm ID, the registered watcher is a
+// different (live) process, so this caller must not touch the persisted status.
+func (s *Supervisor) retireWatcher(algoID string, w *workerWatcher) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.watchers[algoID] != w {
+		return false
+	}
+	delete(s.watchers, algoID)
+	return true
+}
+
 // StopAlgorithm gracefully stops an algorithm runner and ceases supervision.
 func (s *Supervisor) StopAlgorithm(ctx context.Context, algoID string) error {
 	s.mu.Lock()
@@ -213,13 +250,10 @@ func (s *Supervisor) StopAlgorithm(ctx context.Context, algoID string) error {
 	err := w.stopProcess(3 * time.Second)
 	<-w.doneCh
 
-	s.mu.Lock()
-	if s.watchers[algoID] == w {
-		delete(s.watchers, algoID)
-	}
-	s.mu.Unlock()
-
-	if s.store != nil {
+	// Only persist DISABLED when this call actually retired its own watcher. If a
+	// rollback/upgrade re-registered a live watcher under the same ID, the DB
+	// must keep reflecting that running process.
+	if s.retireWatcher(algoID, w) && s.store != nil {
 		if err := s.store.UpdateAlgorithmStatus(ctx, algoID, StatusDisabled); err != nil {
 			s.logger.Error("failed to update algorithm status to disabled", zap.String("id", algoID), zap.Error(err))
 		}
@@ -264,6 +298,7 @@ func (s *Supervisor) RestartAlgorithm(ctx context.Context, algoID string) error 
 
 // UpgradeAlgorithm gracefully transitions from an old version to a new version with rollback observation.
 func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo PackageMeta, oldAlgo PackageMeta) error {
+	// 1. 锁内摘下旧 watcher，解锁后停止旧进程，避免与 superviseLoop 死锁。
 	s.mu.Lock()
 	oldWatcher, exists := s.watchers[oldAlgo.ID]
 	if exists {
@@ -271,7 +306,6 @@ func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo PackageMeta, 
 	}
 	s.mu.Unlock()
 
-	// 1. Stop old worker if running outside of s.mu to prevent deadlock with superviseLoop
 	if exists {
 		if stopErr := oldWatcher.stopProcess(3 * time.Second); stopErr != nil {
 			s.logger.Warn("failed to stop old algorithm process during upgrade", zap.String("id", oldAlgo.ID), zap.Error(stopErr))
@@ -279,18 +313,24 @@ func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo PackageMeta, 
 		<-oldWatcher.doneCh
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// 2. Set up new worker with RollbackGuard
-	brokerSocks, err := s.resolveBrokerSocksLocked(ctx, newAlgo.ID)
+	// 2. 锁外解析新版本的 broker 路径（resolver 会做 DB/订阅 IO）。
+	brokerSocks, err := s.resolveBrokerSocks(ctx, s.brokerResolver(), newAlgo.ID)
 	if err != nil {
 		// 解析失败时不启动新版本，直接回滚到旧版本。
+		// ⚠️ 此处不能持有 s.mu：rollbackToOld 自己会取锁。
 		s.logger.Warn("failed to resolve broker paths for new version, attempting immediate rollback",
 			zap.String("algorithm", newAlgo.ID),
 			zap.Error(err),
 		)
-		return s.rollbackToOldLocked(ctx, oldAlgo)
+		return s.rollbackToOld(ctx, oldAlgo)
+	}
+
+	// 3. 锁内二次校验 + 构建 watcher + 启动进程 + 注册。
+	s.mu.Lock()
+	if _, exists := s.watchers[newAlgo.ID]; exists {
+		// 解析期间已有并发调用为同一 ID 注册了活跃 watcher：不覆盖它。
+		s.mu.Unlock()
+		return errors.New("algorithm worker is already running or supervised")
 	}
 
 	w := &workerWatcher{
@@ -322,33 +362,41 @@ func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo PackageMeta, 
 	w.process = NewRunnerProcess(cfg)
 
 	if err := w.process.Start(); err != nil {
-		// New algorithm failed to start immediately: rollback right away
+		// 新版本启动即失败：立即回滚。
+		// ⚠️ 必须先解锁，rollbackToOld 自己会取锁，否则自死锁。
+		s.mu.Unlock()
 		s.logger.Warn("new algorithm failed to start, attempting immediate rollback",
 			zap.String("algorithm", newAlgo.ID),
 			zap.Error(err),
 		)
-		return s.rollbackToOldLocked(ctx, oldAlgo)
+		return s.rollbackToOld(ctx, oldAlgo)
 	}
 
 	w.status = StatusRunning
 	s.watchers[newAlgo.ID] = w
+	s.mu.Unlock()
 
 	go w.superviseLoop()
 	return nil
 }
 
+// rollbackToOld is the unlocked outer layer: it resolves the rollback target's
+// broker paths (IO) outside s.mu, then delegates registration to
+// rollbackToOldLocked.
 func (s *Supervisor) rollbackToOld(ctx context.Context, oldAlgo PackageMeta) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.rollbackToOldLocked(ctx, oldAlgo)
-}
-
-func (s *Supervisor) rollbackToOldLocked(ctx context.Context, oldAlgo PackageMeta) error {
-	brokerSocks, err := s.resolveBrokerSocksLocked(ctx, oldAlgo.ID)
+	brokerSocks, err := s.resolveBrokerSocks(ctx, s.brokerResolver(), oldAlgo.ID)
 	if err != nil {
 		// 回滚目标同样解析不出 broker 路径：不启动半瘫的回滚进程，向上报错。
 		return fmt.Errorf("resolve broker paths for rollback target %s: %w", oldAlgo.ID, err)
 	}
+	return s.rollbackToOldLocked(ctx, oldAlgo, brokerSocks)
+}
+
+// rollbackToOldLocked registers the rollback watcher under s.mu. It acquires the
+// write lock itself and must NOT be called while holding s.mu.
+func (s *Supervisor) rollbackToOldLocked(ctx context.Context, oldAlgo PackageMeta, brokerSocks []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	w := &workerWatcher{
 		supervisor:  s,
@@ -417,11 +465,7 @@ func (s *Supervisor) ResetAlgorithm(ctx context.Context, algoID string) error {
 			return ctx.Err()
 		}
 
-		s.mu.Lock()
-		if s.watchers[algoID] == w {
-			delete(s.watchers, algoID)
-		}
-		s.mu.Unlock()
+		s.retireWatcher(algoID, w)
 
 		if s.store != nil {
 			if err := s.store.UpdateAlgorithmStatus(ctx, algoID, StatusDisabled); err != nil {
@@ -608,6 +652,25 @@ func (w *workerWatcher) superviseLoop() {
 			case <-timer.C:
 			}
 
+			// Re-resolve the broker list on every restart: the task set may have
+			// changed since the runner was first started, so reusing the frozen
+			// list would leave the runner subscribed to stale streams. This runs
+			// OUTSIDE w.mu (and outside s.mu) because it performs DB / subscription
+			// IO; w.mu is held by GetStatus / ResetAlgorithm / stopProcess, so IO
+			// under it would reintroduce the very blocking R3 removed.
+			//
+			// On failure fall back to the cached list (never degrade into
+			// CRASH_LOOP just because re-resolution failed). w.brokerSocks has a
+			// single writer — this loop — so the assignment needs no extra lock.
+			if newSocks, resolveErr := w.supervisor.resolveBrokerSocks(context.Background(), w.supervisor.brokerResolver(), w.algo.ID); resolveErr != nil {
+				w.supervisor.logger.Warn("failed to re-resolve broker paths on crash restart, reusing cached list",
+					zap.String("algorithm", w.algo.ID),
+					zap.Error(resolveErr),
+				)
+			} else {
+				w.brokerSocks = newSocks
+			}
+
 			// Re-create process and start.
 			w.mu.Lock()
 			select {
@@ -623,7 +686,7 @@ func (w *workerWatcher) superviseLoop() {
 				AlgorithmName: w.algo.Name,
 				RunnerPath:    w.supervisor.runnerPath,
 				PluginPath:    w.algo.EntryPath(w.supervisor.algoDir),
-				BrokerSocks:   w.brokerSocks, // ⚠️ 固化复用：崩溃重启路径无 ctx，复用此前解析的 brokerSocks 防 exit 5
+				BrokerSocks:   w.brokerSocks,
 				EnvFile:       w.algo.EnvPath(w.supervisor.algoDir),
 				Logger:        w.supervisor.logger,
 			}

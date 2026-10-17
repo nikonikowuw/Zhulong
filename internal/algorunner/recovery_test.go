@@ -1,6 +1,7 @@
 package algorunner_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -116,6 +117,64 @@ func TestRecoveryStateMachineStableRunningReset(t *testing.T) {
 	restart, delay, broken := sm.RecordCrash(time.Now())
 	if !restart || broken || delay != 1*time.Second {
 		t.Errorf("expected clean 1s backoff after reset, got delay: %v", delay)
+	}
+}
+
+// TestRecoveryOptionsNormalize asserts that RecoveryOptions with unset or
+// non-positive fields cannot take the supervisor down: NewSupervisor must not
+// panic and a full StartAlgorithm/StopAlgorithm cycle must complete.
+//
+// StableRunningThreshold is fed straight into time.NewTicker, which panics
+// (not errors) on a non-positive interval. Before R4 the normalization only
+// happened inside NewRecoveryStateMachine, so a zero threshold reached the
+// ticker and crashed the process from a goroutine.
+func TestRecoveryOptionsNormalize(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*algorunner.RecoveryOptions)
+	}{
+		{"StableRunningThresholdZero", func(o *algorunner.RecoveryOptions) { o.StableRunningThreshold = 0 }},
+		{"StableRunningThresholdNegative", func(o *algorunner.RecoveryOptions) { o.StableRunningThreshold = -1 }},
+		{"RollbackGuardWindowZero", func(o *algorunner.RecoveryOptions) { o.RollbackGuardWindow = 0 }},
+		{"RollbackGuardWindowNegative", func(o *algorunner.RecoveryOptions) { o.RollbackGuardWindow = -1 }},
+		{"InitialBackoffZero", func(o *algorunner.RecoveryOptions) { o.InitialBackoff = 0 }},
+		{"InitialBackoffNegative", func(o *algorunner.RecoveryOptions) { o.InitialBackoff = -1 }},
+		{"MaxBackoffZero", func(o *algorunner.RecoveryOptions) { o.MaxBackoff = 0 }},
+		{"MaxBackoffNegative", func(o *algorunner.RecoveryOptions) { o.MaxBackoff = -1 }},
+		{"CrashWindowZero", func(o *algorunner.RecoveryOptions) { o.CrashWindow = 0 }},
+		{"CrashWindowNegative", func(o *algorunner.RecoveryOptions) { o.CrashWindow = -1 }},
+		{"MaxCrashesZero", func(o *algorunner.RecoveryOptions) { o.MaxCrashes = 0 }},
+		{"MaxCrashesNegative", func(o *algorunner.RecoveryOptions) { o.MaxCrashes = -1 }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newMockLifecycleStore()
+			algo := supervisorTestPackage()
+			store.packages[algo.ID] = algo
+
+			opts := algorunner.DefaultRecoveryOptions()
+			tc.mutate(&opts)
+
+			var supervisor *algorunner.Supervisor
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("NewSupervisor panicked for %s: %v", tc.name, r)
+					}
+				}()
+				supervisor = algorunner.NewSupervisor(store, t.TempDir(), writeIdleRunner(t), opts, zap.NewNop())
+			}()
+			t.Cleanup(func() { supervisor.StopAll(time.Second) })
+
+			ctx := context.Background()
+			if err := supervisor.StartAlgorithm(ctx, algo); err != nil {
+				t.Fatalf("StartAlgorithm failed for %s: %v", tc.name, err)
+			}
+			if err := supervisor.StopAlgorithm(ctx, algo.ID); err != nil {
+				t.Fatalf("StopAlgorithm failed for %s: %v", tc.name, err)
+			}
+		})
 	}
 }
 

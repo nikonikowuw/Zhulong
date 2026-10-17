@@ -49,26 +49,41 @@ type RecoveryStateMachine struct {
 	mu             sync.Mutex
 }
 
+// normalize fills in defaults for unset or non-positive fields.
+//
+// It is the single source of truth for recovery option defaults. NewSupervisor
+// stores the normalized value because superviseLoop feeds StableRunningThreshold
+// straight into time.NewTicker, which panics (not errors) on a non-positive
+// interval, and feeds RollbackGuardWindow into time.NewTimer, where a zero
+// window silently disables rollback observation.
+//
+// It uses a value receiver and returns a new value so that shared instances such
+// as DefaultRecoveryOptions() are never mutated in place.
+func (o RecoveryOptions) normalize() RecoveryOptions {
+	if o.InitialBackoff <= 0 {
+		o.InitialBackoff = DefaultBaseBackoff
+	}
+	if o.MaxBackoff <= 0 {
+		o.MaxBackoff = DefaultMaxBackoff
+	}
+	if o.CrashWindow <= 0 {
+		o.CrashWindow = DefaultCrashWindow
+	}
+	if o.MaxCrashes <= 0 {
+		o.MaxCrashes = DefaultMaxCrashesInWindow
+	}
+	if o.StableRunningThreshold <= 0 {
+		o.StableRunningThreshold = DefaultStableResetDuration
+	}
+	if o.RollbackGuardWindow <= 0 {
+		o.RollbackGuardWindow = DefaultRollbackGuardWindow
+	}
+	return o
+}
+
 // NewRecoveryStateMachine creates a state machine instance.
 func NewRecoveryStateMachine(opts RecoveryOptions) *RecoveryStateMachine {
-	if opts.InitialBackoff <= 0 {
-		opts.InitialBackoff = DefaultBaseBackoff
-	}
-	if opts.MaxBackoff <= 0 {
-		opts.MaxBackoff = DefaultMaxBackoff
-	}
-	if opts.CrashWindow <= 0 {
-		opts.CrashWindow = DefaultCrashWindow
-	}
-	if opts.MaxCrashes <= 0 {
-		opts.MaxCrashes = DefaultMaxCrashesInWindow
-	}
-	if opts.StableRunningThreshold <= 0 {
-		opts.StableRunningThreshold = DefaultStableResetDuration
-	}
-	if opts.RollbackGuardWindow <= 0 {
-		opts.RollbackGuardWindow = DefaultRollbackGuardWindow
-	}
+	opts = opts.normalize()
 
 	return &RecoveryStateMachine{
 		opts:         opts,

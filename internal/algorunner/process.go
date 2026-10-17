@@ -142,13 +142,25 @@ func (p *RunnerProcess) Start() error {
 
 	cmd := exec.Command(p.config.RunnerPath, args...)
 
-	// Load and inject .env variables
+	// Run the runner in its own process group. Stop signals the whole group, so
+	// grandchildren the runner spawns cannot leak while holding the broker socket
+	// or shared memory after the runner itself has exited.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// Load and inject .env variables. A missing file is optional (LoadDotEnv
+	// turns os.IsNotExist into an empty map + nil error), so any error here is a
+	// real parse failure (e.g. a line longer than bufio.Scanner's 64KB token
+	// limit). Do not swallow it: log a Warn and continue with the variables that
+	// were parsed, so a broken .env is observable without blocking the runner.
 	envMap := make(map[string]string)
 	if p.config.EnvFile != "" {
-		if loaded, err := LoadDotEnv(p.config.EnvFile); err == nil {
-			for k, v := range loaded {
-				envMap[k] = v
-			}
+		loaded, err := LoadDotEnv(p.config.EnvFile)
+		if err != nil {
+			p.logger.Warn("failed to load runner dotenv file",
+				zap.String("path", p.config.EnvFile), zap.Error(err))
+		}
+		for k, v := range loaded {
+			envMap[k] = v
 		}
 	}
 	for k, v := range p.config.ExtraEnv {
@@ -291,6 +303,26 @@ func (p *RunnerProcess) watchExit(cmd *exec.Cmd, stdoutR, stderrR *os.File, logW
 	close(p.doneCh)
 }
 
+// signalRunner sends sig to the runner's process group. The runner is started
+// with Setpgid (see Start), so its pgid equals its pid and the negative-pid
+// form reaches every descendant. If the process group is unavailable (for
+// example the process is already gone, reported as ESRCH), the call is treated
+// as a no-op; any other error falls back to signalling the process directly.
+//
+// cmd is passed in rather than read from p.cmd so callers keep using the same
+// lock-captured handle they already validated, instead of re-reading a field
+// that Start owns under p.mu.
+func (p *RunnerProcess) signalRunner(cmd *exec.Cmd, sig syscall.Signal) error {
+	pid := cmd.Process.Pid
+	if err := syscall.Kill(-pid, sig); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return cmd.Process.Signal(sig)
+	}
+	return nil
+}
+
 // Stop gracefully shuts down the process: SIGTERM -> wait up to timeout -> SIGKILL.
 func (p *RunnerProcess) Stop(timeout time.Duration) error {
 	p.mu.Lock()
@@ -308,8 +340,8 @@ func (p *RunnerProcess) Stop(timeout time.Duration) error {
 	p.state = StatusDisabled
 	p.mu.Unlock()
 
-	// 1. Send SIGTERM
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	// 1. Send SIGTERM to the whole process group.
+	if err := p.signalRunner(cmd, syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		p.logger.Debug("signal SIGTERM to runner process", zap.Error(err))
 	}
 
@@ -321,11 +353,11 @@ func (p *RunnerProcess) Stop(timeout time.Duration) error {
 		// Clean exit
 		return nil
 	case <-termTimer.C:
-		// 2. Timeout: Force kill with SIGKILL
+		// 2. Timeout: Force kill the whole process group with SIGKILL.
 		p.logger.Warn("runner process did not exit within timeout, killing with SIGKILL",
 			zap.Int("pid", cmd.Process.Pid),
 		)
-		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		if err := p.signalRunner(cmd, syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			p.logger.Warn("kill runner process with SIGKILL", zap.Error(err))
 		}
 		killTimer := time.NewTimer(timeout)
@@ -410,10 +442,24 @@ type GalleryDeletePayload struct {
 	PersonID string `json:"person_id,omitempty"`
 }
 
-// CreateGallerySyncShards fragments gallery items into a sequence of JSON payloads, each strictly under 64KB.
-// Each shard contains at most 10 items (approx 40~50KB JSON for 512-dim embeddings).
+// shardBudget caps a single gallery sync shard at 90% of the protocol limit so
+// the shard header and marshalling drift cannot push a payload past
+// MaxIpcPayloadSize. Measured sizes: a 512-dim L2-normalized float32 embedding
+// serializes to ~12.3 bytes per component (~6.3KB per item), so the old fixed
+// 10-items-per-shard packing left under 1% headroom on real data (10 items
+// measured at 64204~65373 bytes against the 65536 limit).
+const shardBudget = MaxIpcPayloadSize * 9 / 10
+
+// CreateGallerySyncShards fragments gallery items into a sequence of JSON
+// payloads, each strictly within shardBudget (and therefore well under the 64KB
+// IPC limit).
+//
+// Items are packed by measured byte size, not by a fixed count: a shard is
+// closed as soon as adding the next item would exceed the budget. An empty
+// input still yields exactly one shard with no items (preserved for existing
+// callers). If a single item cannot fit on its own, an error naming that item's
+// face_id is returned rather than silently dropping it.
 func CreateGallerySyncShards(syncID string, items []GallerySyncItem) ([][]byte, error) {
-	const itemsPerShard = 10
 	if len(items) == 0 {
 		payload, err := json.Marshal(GallerySyncShardPayload{
 			SyncID:     syncID,
@@ -427,24 +473,72 @@ func CreateGallerySyncShards(syncID string, items []GallerySyncItem) ([][]byte, 
 		return [][]byte{payload}, nil
 	}
 
-	shardTotal := (len(items) + itemsPerShard - 1) / itemsPerShard
-	shards := make([][]byte, 0, shardTotal)
-	for i := 0; i < shardTotal; i++ {
-		start := i * itemsPerShard
-		end := start + itemsPerShard
-		if end > len(items) {
-			end = len(items)
+	// Marshal each item exactly once. The JSON encoding of an item is identical
+	// whether it is serialized alone or inside a shard's items array, so these
+	// measured sizes can be summed arithmetically instead of re-marshalling the
+	// whole shard on every packing step (which would be O(n^2) on 10k faces).
+	itemSizes := make([]int, len(items))
+	for i, item := range items {
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return nil, fmt.Errorf("marshal gallery sync item %s: %w", item.FaceID, err)
 		}
-		chunk := items[start:end]
+		itemSizes[i] = len(encoded)
+	}
+
+	// Measure the per-shard overhead with the widest header we can produce
+	// (6-digit shard numbers for both index and total) so the budget stays valid
+	// for any shard count.
+	overheadPayload, err := json.Marshal(GallerySyncShardPayload{
+		SyncID:     syncID,
+		ShardIndex: 999999,
+		ShardTotal: 999999,
+		Items:      []GallerySyncItem{},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal gallery sync shard header: %w", err)
+	}
+	overhead := len(overheadPayload)
+
+	// Greedy packing: accumulate items while the projected shard size stays
+	// within budget. Each additional item costs its own bytes plus one comma.
+	type shardRange struct{ start, end int }
+	var ranges []shardRange
+	start := 0
+	used := 0
+	for i, size := range itemSizes {
+		if overhead+size > shardBudget {
+			return nil, fmt.Errorf("gallery sync item %s exceeds the shard budget (%d bytes > %d)",
+				items[i].FaceID, overhead+size, shardBudget)
+		}
+		additional := size
+		if i > start {
+			additional++ // comma separating this item from the previous one
+		}
+		if used+additional > shardBudget-overhead {
+			ranges = append(ranges, shardRange{start: start, end: i})
+			start = i
+			used = size
+			continue
+		}
+		used += additional
+	}
+	ranges = append(ranges, shardRange{start: start, end: len(items)})
+
+	shardTotal := len(ranges)
+	shards := make([][]byte, 0, shardTotal)
+	for i, r := range ranges {
 		payload, err := json.Marshal(GallerySyncShardPayload{
 			SyncID:     syncID,
 			ShardIndex: i,
 			ShardTotal: shardTotal,
-			Items:      chunk,
+			Items:      items[r.start:r.end],
 		})
 		if err != nil {
 			return nil, fmt.Errorf("marshal gallery sync shard %d/%d: %w", i, shardTotal, err)
 		}
+		// Defensive gate: the packing math above should make this unreachable, but
+		// it is the last line of defence before the 64KB protocol limit.
 		if len(payload) > int(MaxIpcPayloadSize) {
 			return nil, fmt.Errorf("gallery sync shard %d exceeds 64KB (%d bytes)", i, len(payload))
 		}

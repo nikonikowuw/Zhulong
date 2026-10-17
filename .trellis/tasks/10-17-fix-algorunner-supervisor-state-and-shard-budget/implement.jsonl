@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "并发安全铁律（-race 强制、goroutine 退出路径、禁止循环内 time.After）、禁止的反模式（panic/吞错/context 入结构体）、测试接线约定，直接约束本任务的 supervisor 锁重构与 RunnerProcess 改动"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "算法包物理拓扑、C ABI/SDK 契约、结果规范与验包门禁；本任务涉及 runner 子进程启动、plugin.so 路径与 broker socket 订阅语义"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误包装与传播约定；本任务的 LoadDotEnv 错误、resolver 错误、分片超预算错误都必须遵循不吞错、可定位的原则"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Zap 强类型字段与日志等级划分；本任务新增 dotenv 解析失败 Warn、broker 重解析回退 Warn 需符合规范"}
+{"file": ".trellis/spec/architecture.md", "reason": "跨层边界与 Go 宿主 / native 引擎契约；底库同步是 Go→broker→runner 的跨层数据流，分片预算受 64KB IPC 硬约束"}
+{"file": ".trellis/spec/guides/index.md", "reason": "共享思考指南，用于判断本任务各修复的边界与取舍"}
