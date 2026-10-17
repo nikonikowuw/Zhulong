@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
@@ -113,5 +115,72 @@ func TestServiceErrorApperrClassifications(t *testing.T) {
 	err = comp.Service.ResetAlgorithm(ctx, algo.ID)
 	if !errors.As(err, &appErr) || appErr.Kind != apperr.KindConflict || appErr.Code != "ALGORITHM_NOT_IN_CRASH_LOOP" {
 		t.Fatalf("expected ALGORITHM_NOT_IN_CRASH_LOOP apperr on ResetAlgorithm, got: %v", err)
+	}
+}
+
+func TestServiceDeleteStopsRestartDuringCrashBackoff(t *testing.T) {
+	dataDir := t.TempDir()
+	dbStore := database.New(dataDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	store := algorithm.NewStore(dbStore)
+	algo := &algorithm.Algorithm{
+		ID: "supervisor_test", Name: "supervisor_test", Version: "1.0.0",
+		TaskType: algorithm.TaskTypeDetection, Category: algorithm.CategorySafety,
+		TargetArch: "x86_64", TargetDevice: "cpu", ComputeCost: 1,
+		MemoryMB: 64, Status: algorithm.StatusDisabled,
+	}
+	if err := store.CreateAlgorithm(context.Background(), algo); err != nil {
+		t.Fatalf("create algorithm: %v", err)
+	}
+
+	counterPath := filepath.Join(t.TempDir(), "runner-count")
+	t.Setenv("RUN_COUNT_FILE", counterPath)
+	runnerPath := filepath.Join(t.TempDir(), "runner.sh")
+	script := "#!/bin/sh\nprintf 'run\\n' >> \"$RUN_COUNT_FILE\"\nexit 1\n"
+	if err := os.WriteFile(runnerPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake runner: %v", err)
+	}
+
+	options := algorithm.DefaultRecoveryOptions()
+	options.InitialBackoff = 250 * time.Millisecond
+	options.MaxBackoff = time.Second
+	supervisor := algorithm.NewSupervisor(store, filepath.Join(dataDir, "algorithms"), runnerPath, options, zap.NewNop())
+	service := algorithm.NewService(store, nil, supervisor, filepath.Join(dataDir, "algorithms"), zap.NewNop())
+	t.Cleanup(func() {
+		supervisor.StopAll(time.Second)
+		if err := dbStore.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
+	})
+
+	ctx := context.Background()
+	if err := supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); err != nil {
+		t.Fatalf("start algorithm: %v", err)
+	}
+	waitForStatus := func(id, want string) {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if supervisor.GetStatus(id) == want {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatalf("status did not reach %s; got %s", want, supervisor.GetStatus(id))
+	}
+	waitForStatus(algo.ID, algorithm.StatusCrashed)
+
+	if err := service.DeleteAlgorithm(ctx, algo.ID); err != nil {
+		t.Fatalf("delete crashed algorithm: %v", err)
+	}
+	time.Sleep(350 * time.Millisecond)
+
+	countBytes, err := os.ReadFile(counterPath)
+	if err != nil {
+		t.Fatalf("read runner count: %v", err)
+	}
+	if count := strings.Count(string(countBytes), "run\n"); count != 1 {
+		t.Fatalf("expected deleted algorithm not to restart, runner executed %d times", count)
 	}
 }

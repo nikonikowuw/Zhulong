@@ -1,4 +1,4 @@
-package algorithm_test
+package algorunner_test
 
 import (
 	"context"
@@ -12,44 +12,62 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
 
+func findMockDetectorPlugin(t *testing.T) string {
+	t.Helper()
+	candidates := []string{
+		"../../build/native/host/libMockDetector.so",
+		"build/native/host/libMockDetector.so",
+	}
+	for _, c := range candidates {
+		abs, err := filepath.Abs(c)
+		if err == nil {
+			if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
+				return abs
+			}
+		}
+	}
+	t.Skip("libMockDetector.so not found, skipping dynamic runner test")
+	return ""
+}
+
 func TestIpcPayloadSizeGate(t *testing.T) {
 	// Exactly at the limit must pass.
-	exact := make([]byte, algorithm.MaxIpcPayloadSize)
-	msgBytes, err := algorithm.EncodeIpcMessage(algorithm.MsgGallerySync, 1, exact)
+	exact := make([]byte, algorunner.MaxIpcPayloadSize)
+	msgBytes, err := algorunner.EncodeIpcMessage(algorunner.MsgGallerySync, 1, exact)
 	if err != nil {
 		t.Fatalf("payload of exactly MaxIpcPayloadSize must be accepted, got: %v", err)
 	}
-	if len(msgBytes) != 16+algorithm.MaxIpcPayloadSize {
+	if len(msgBytes) != 16+algorunner.MaxIpcPayloadSize {
 		t.Fatalf("unexpected framed length: %d", len(msgBytes))
 	}
-	hdr, err := algorithm.DecodeIpcHeader(msgBytes)
+	hdr, err := algorunner.DecodeIpcHeader(msgBytes)
 	if err != nil {
 		t.Fatalf("DecodeIpcHeader on boundary payload failed: %v", err)
 	}
-	if hdr.PayloadSize != uint32(algorithm.MaxIpcPayloadSize) {
-		t.Errorf("expected payload_size %d, got %d", algorithm.MaxIpcPayloadSize, hdr.PayloadSize)
+	if hdr.PayloadSize != uint32(algorunner.MaxIpcPayloadSize) {
+		t.Errorf("expected payload_size %d, got %d", algorunner.MaxIpcPayloadSize, hdr.PayloadSize)
 	}
 
 	// One byte over the limit must be rejected by the send path.
-	tooLarge := make([]byte, algorithm.MaxIpcPayloadSize+1)
-	if _, err := algorithm.EncodeIpcMessage(algorithm.MsgGallerySync, 1, tooLarge); !errors.Is(err, algorithm.ErrIpcPayloadTooLarge) {
+	tooLarge := make([]byte, algorunner.MaxIpcPayloadSize+1)
+	if _, err := algorunner.EncodeIpcMessage(algorunner.MsgGallerySync, 1, tooLarge); !errors.Is(err, algorunner.ErrIpcPayloadTooLarge) {
 		t.Errorf("expected ErrIpcPayloadTooLarge for 64KB+1, got: %v", err)
 	}
 
 	// The receive path must also reject a header declaring an oversized payload.
 	buf := make([]byte, 16)
-	binary.LittleEndian.PutUint32(buf[0:4], algorithm.IpcMagic)
-	binary.LittleEndian.PutUint16(buf[4:6], algorithm.MsgGallerySync)
-	binary.LittleEndian.PutUint16(buf[6:8], algorithm.IpcVersion)
-	binary.LittleEndian.PutUint32(buf[8:12], uint32(algorithm.MaxIpcPayloadSize+1))
+	binary.LittleEndian.PutUint32(buf[0:4], algorunner.IpcMagic)
+	binary.LittleEndian.PutUint16(buf[4:6], algorunner.MsgGallerySync)
+	binary.LittleEndian.PutUint16(buf[6:8], algorunner.IpcVersion)
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(algorunner.MaxIpcPayloadSize+1))
 	binary.LittleEndian.PutUint32(buf[12:16], 1)
-	if _, err := algorithm.DecodeIpcHeader(buf); !errors.Is(err, algorithm.ErrIpcPayloadTooLarge) {
+	if _, err := algorunner.DecodeIpcHeader(buf); !errors.Is(err, algorunner.ErrIpcPayloadTooLarge) {
 		t.Errorf("expected DecodeIpcHeader to reject oversized payload_size, got: %v", err)
 	}
 }
@@ -74,7 +92,7 @@ func TestRunnerProcessInjectsDotEnvEndToEnd(t *testing.T) {
 	core, observed := observer.New(zapcore.DebugLevel)
 	logger := zap.New(core)
 
-	cfg := algorithm.ProcessConfig{
+	cfg := algorunner.ProcessConfig{
 		AlgorithmID:   "env_pkg",
 		AlgorithmName: "env_pkg",
 		RunnerPath:    script,
@@ -83,7 +101,7 @@ func TestRunnerProcessInjectsDotEnvEndToEnd(t *testing.T) {
 		Logger:        logger,
 	}
 
-	proc := algorithm.NewRunnerProcess(cfg)
+	proc := algorunner.NewRunnerProcess(cfg)
 	if err := proc.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -113,14 +131,14 @@ func TestRunnerProcessInjectsDotEnvEndToEnd(t *testing.T) {
 }
 
 func TestRunnerProcessMissingDotEnvIsOptional(t *testing.T) {
-	// A missing .env file must not be an error: .env is optional per model.go.
+	// A missing .env file must not be an error: .env is optional.
 	dir := t.TempDir()
 	script := filepath.Join(dir, "runner.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 0.3\n"), 0755); err != nil {
 		t.Fatalf("write runner script: %v", err)
 	}
 
-	cfg := algorithm.ProcessConfig{
+	cfg := algorunner.ProcessConfig{
 		AlgorithmID:   "no_env_pkg",
 		AlgorithmName: "no_env_pkg",
 		RunnerPath:    script,
@@ -129,7 +147,7 @@ func TestRunnerProcessMissingDotEnvIsOptional(t *testing.T) {
 		Logger:        zap.NewNop(),
 	}
 
-	proc := algorithm.NewRunnerProcess(cfg)
+	proc := algorunner.NewRunnerProcess(cfg)
 	if err := proc.Start(); err != nil {
 		t.Fatalf("Start must succeed even when .env is missing, got: %v", err)
 	}
@@ -180,7 +198,7 @@ func TestRunnerProcessDetectsBrokerHostUnavailable(t *testing.T) {
 	core, observed := observer.New(zapcore.DebugLevel)
 	logger := zap.New(core)
 
-	cfg := algorithm.ProcessConfig{
+	cfg := algorunner.ProcessConfig{
 		AlgorithmID:   "broker_probe_pkg",
 		AlgorithmName: "broker_probe_pkg",
 		RunnerPath:    runnerPath,
@@ -189,7 +207,7 @@ func TestRunnerProcessDetectsBrokerHostUnavailable(t *testing.T) {
 		Logger:        logger,
 	}
 
-	proc := algorithm.NewRunnerProcess(cfg)
+	proc := algorunner.NewRunnerProcess(cfg)
 	if err := proc.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -239,7 +257,7 @@ QUOTED_VAL='hello world'
 		t.Fatalf("write .env: %v", err)
 	}
 
-	envMap, err := algorithm.LoadDotEnv(envPath)
+	envMap, err := algorunner.LoadDotEnv(envPath)
 	if err != nil {
 		t.Fatalf("LoadDotEnv failed: %v", err)
 	}
@@ -261,7 +279,7 @@ QUOTED_VAL='hello world'
 func TestIpcMessageFramingAndGalleryMessages(t *testing.T) {
 	// 1. Framing and header
 	payload := []byte("hello_ipc")
-	msgBytes, err := algorithm.EncodeIpcMessage(algorithm.MsgGalleryUpsert, 42, payload)
+	msgBytes, err := algorunner.EncodeIpcMessage(algorunner.MsgGalleryUpsert, 42, payload)
 	if err != nil {
 		t.Fatalf("EncodeIpcMessage failed: %v", err)
 	}
@@ -270,16 +288,16 @@ func TestIpcMessageFramingAndGalleryMessages(t *testing.T) {
 		t.Fatalf("expected length %d, got %d", 16+len(payload), len(msgBytes))
 	}
 
-	hdr, err := algorithm.DecodeIpcHeader(msgBytes)
+	hdr, err := algorunner.DecodeIpcHeader(msgBytes)
 	if err != nil {
 		t.Fatalf("DecodeIpcHeader failed: %v", err)
 	}
 
-	if hdr.Magic != algorithm.IpcMagic {
-		t.Errorf("expected magic 0x%X, got 0x%X", algorithm.IpcMagic, hdr.Magic)
+	if hdr.Magic != algorunner.IpcMagic {
+		t.Errorf("expected magic 0x%X, got 0x%X", algorunner.IpcMagic, hdr.Magic)
 	}
-	if hdr.MsgType != algorithm.MsgGalleryUpsert {
-		t.Errorf("expected msg_type %d, got %d", algorithm.MsgGalleryUpsert, hdr.MsgType)
+	if hdr.MsgType != algorunner.MsgGalleryUpsert {
+		t.Errorf("expected msg_type %d, got %d", algorunner.MsgGalleryUpsert, hdr.MsgType)
 	}
 	if hdr.Sequence != 42 {
 		t.Errorf("expected sequence 42, got %d", hdr.Sequence)
@@ -289,7 +307,7 @@ func TestIpcMessageFramingAndGalleryMessages(t *testing.T) {
 	}
 
 	// 2. Full Gallery Sync Message
-	syncItems := []algorithm.GallerySyncItem{
+	syncItems := []algorunner.GallerySyncItem{
 		{
 			FaceID:     "f_01",
 			PersonID:   "emp_9527",
@@ -297,19 +315,19 @@ func TestIpcMessageFramingAndGalleryMessages(t *testing.T) {
 			Features:   []float32{0.1, 0.2, 0.3},
 		},
 	}
-	syncBytes, err := algorithm.CreateGallerySyncMsg(1, syncItems)
+	syncBytes, err := algorunner.CreateGallerySyncMsg(1, syncItems)
 	if err != nil {
 		t.Fatalf("CreateGallerySyncMsg failed: %v", err)
 	}
-	syncHdr, err := algorithm.DecodeIpcHeader(syncBytes)
+	syncHdr, err := algorunner.DecodeIpcHeader(syncBytes)
 	if err != nil {
 		t.Fatalf("decode sync header failed: %v", err)
 	}
-	if syncHdr.MsgType != algorithm.MsgGallerySync {
+	if syncHdr.MsgType != algorunner.MsgGallerySync {
 		t.Errorf("expected MsgGallerySync type, got %d", syncHdr.MsgType)
 	}
 
-	var parsedSync algorithm.GallerySyncPayload
+	var parsedSync algorunner.GallerySyncPayload
 	if err := json.Unmarshal(syncBytes[16:], &parsedSync); err != nil {
 		t.Fatalf("unmarshal sync payload failed: %v", err)
 	}
@@ -320,7 +338,7 @@ func TestIpcMessageFramingAndGalleryMessages(t *testing.T) {
 
 func TestRunnerProcessLifecycleGracefulStop(t *testing.T) {
 	// Use sleep as a test runner process
-	cfg := algorithm.ProcessConfig{
+	cfg := algorunner.ProcessConfig{
 		AlgorithmID:   "test_pkg",
 		AlgorithmName: "test_pkg",
 		RunnerPath:    "sleep",
@@ -328,12 +346,12 @@ func TestRunnerProcessLifecycleGracefulStop(t *testing.T) {
 		Logger:        zap.NewNop(),
 	}
 
-	proc := algorithm.NewRunnerProcess(cfg)
+	proc := algorunner.NewRunnerProcess(cfg)
 	if err := proc.Start(); err != nil {
 		t.Fatalf("Start runner process failed: %v", err)
 	}
 
-	if proc.State() != algorithm.StatusRunning {
+	if proc.State() != algorunner.StatusRunning {
 		t.Errorf("expected StatusRunning, got: %s", proc.State())
 	}
 	if proc.PID() <= 0 {
@@ -353,7 +371,7 @@ func TestRunnerProcessLifecycleGracefulStop(t *testing.T) {
 		t.Fatal("process did not terminate after Stop()")
 	}
 
-	if proc.State() != algorithm.StatusDisabled {
+	if proc.State() != algorunner.StatusDisabled {
 		t.Errorf("expected StatusDisabled after stop, got: %s", proc.State())
 	}
 }
@@ -370,7 +388,7 @@ sleep 10
 		t.Fatalf("write trap script: %v", err)
 	}
 
-	cfg := algorithm.ProcessConfig{
+	cfg := algorunner.ProcessConfig{
 		AlgorithmID:   "stub_pkg",
 		AlgorithmName: "stub_pkg",
 		RunnerPath:    "/bin/sh",
@@ -378,7 +396,7 @@ sleep 10
 		Logger:        zap.NewNop(),
 	}
 
-	proc := algorithm.NewRunnerProcess(cfg)
+	proc := algorunner.NewRunnerProcess(cfg)
 	if err := proc.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -414,7 +432,7 @@ func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
 	core, observed := observer.New(zapcore.DebugLevel)
 	logger := zap.New(core)
 
-	cfg := algorithm.ProcessConfig{
+	cfg := algorunner.ProcessConfig{
 		AlgorithmID:   "multi_broker_pkg",
 		AlgorithmName: "multi_broker_pkg",
 		RunnerPath:    script,
@@ -423,7 +441,7 @@ func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
 		Logger:        logger,
 	}
 
-	proc := algorithm.NewRunnerProcess(cfg)
+	proc := algorunner.NewRunnerProcess(cfg)
 	if err := proc.Start(); err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -471,14 +489,14 @@ func (m *mockBroadcaster) BroadcastAIMessage(ctx context.Context, streamID uint6
 }
 
 func TestCreateGallerySyncShards_Empty(t *testing.T) {
-	shards, err := algorithm.CreateGallerySyncShards("sync_empty", nil)
+	shards, err := algorunner.CreateGallerySyncShards("sync_empty", nil)
 	if err != nil {
 		t.Fatalf("CreateGallerySyncShards failed: %v", err)
 	}
 	if len(shards) != 1 {
 		t.Fatalf("expected 1 shard, got %d", len(shards))
 	}
-	var p algorithm.GallerySyncShardPayload
+	var p algorunner.GallerySyncShardPayload
 	if err := json.Unmarshal(shards[0], &p); err != nil {
 		t.Fatalf("unmarshal shard payload: %v", err)
 	}
@@ -489,13 +507,13 @@ func TestCreateGallerySyncShards_Empty(t *testing.T) {
 
 func TestCreateGallerySyncShards_MultiShardUnder64KB(t *testing.T) {
 	// 构造 25 个人脸项（应切分为 3 个 shard：10 + 10 + 5）
-	items := make([]algorithm.GallerySyncItem, 25)
+	items := make([]algorunner.GallerySyncItem, 25)
 	for i := range items {
 		feats := make([]float32, 512)
 		for j := range feats {
 			feats[j] = float32(i*1000 + j)
 		}
-		items[i] = algorithm.GallerySyncItem{
+		items[i] = algorunner.GallerySyncItem{
 			FaceID:     fmt.Sprintf("f_%d", i),
 			PersonID:   fmt.Sprintf("p_%d", i),
 			PersonName: fmt.Sprintf("人员%d", i),
@@ -504,7 +522,7 @@ func TestCreateGallerySyncShards_MultiShardUnder64KB(t *testing.T) {
 		}
 	}
 
-	shards, err := algorithm.CreateGallerySyncShards("sync_multi", items)
+	shards, err := algorunner.CreateGallerySyncShards("sync_multi", items)
 	if err != nil {
 		t.Fatalf("CreateGallerySyncShards failed: %v", err)
 	}
@@ -513,10 +531,10 @@ func TestCreateGallerySyncShards_MultiShardUnder64KB(t *testing.T) {
 	}
 
 	for i, s := range shards {
-		if len(s) > int(algorithm.MaxIpcPayloadSize) {
+		if len(s) > int(algorunner.MaxIpcPayloadSize) {
 			t.Errorf("shard %d exceeds 64KB: %d bytes", i, len(s))
 		}
-		var p algorithm.GallerySyncShardPayload
+		var p algorunner.GallerySyncShardPayload
 		if err := json.Unmarshal(s, &p); err != nil {
 			t.Fatalf("unmarshal shard %d: %v", i, err)
 		}
@@ -534,17 +552,17 @@ func TestCreateGallerySyncShards_MultiShardUnder64KB(t *testing.T) {
 
 func TestGalleryBroadcaster_SyncUpsertDelete(t *testing.T) {
 	mock := &mockBroadcaster{}
-	broadcaster := algorithm.NewGalleryBroadcaster(mock, zap.NewNop())
+	broadcaster := algorunner.NewGalleryBroadcaster(mock, zap.NewNop())
 	ctx := context.Background()
 
 	// 1. Sync
-	items := []algorithm.GallerySyncItem{{FaceID: "f1", PersonID: "p1", PersonName: "张三"}}
+	items := []algorunner.GallerySyncItem{{FaceID: "f1", PersonID: "p1", PersonName: "张三"}}
 	if err := broadcaster.BroadcastSync(ctx, "sync_test", items); err != nil {
 		t.Fatalf("BroadcastSync failed: %v", err)
 	}
 
 	// 2. Upsert
-	upsertItem := algorithm.GalleryUpsertPayload{FaceID: "f2", PersonID: "p2", PersonName: "李四"}
+	upsertItem := algorunner.GalleryUpsertPayload{FaceID: "f2", PersonID: "p2", PersonName: "李四"}
 	if err := broadcaster.BroadcastUpsert(ctx, upsertItem); err != nil {
 		t.Fatalf("BroadcastUpsert failed: %v", err)
 	}
@@ -557,13 +575,13 @@ func TestGalleryBroadcaster_SyncUpsertDelete(t *testing.T) {
 	if len(mock.messages) != 3 {
 		t.Fatalf("expected 3 broadcast messages, got %d", len(mock.messages))
 	}
-	if mock.messages[0].msgType != algorithm.MsgGallerySync {
+	if mock.messages[0].msgType != algorunner.MsgGallerySync {
 		t.Errorf("expected MsgGallerySync (10), got %d", mock.messages[0].msgType)
 	}
-	if mock.messages[1].msgType != algorithm.MsgGalleryUpsert {
+	if mock.messages[1].msgType != algorunner.MsgGalleryUpsert {
 		t.Errorf("expected MsgGalleryUpsert (11), got %d", mock.messages[1].msgType)
 	}
-	if mock.messages[2].msgType != algorithm.MsgGalleryDelete {
+	if mock.messages[2].msgType != algorunner.MsgGalleryDelete {
 		t.Errorf("expected MsgGalleryDelete (12), got %d", mock.messages[2].msgType)
 	}
 }

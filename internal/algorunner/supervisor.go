@@ -1,4 +1,4 @@
-package algorithm
+package algorunner
 
 import (
 	"context"
@@ -10,24 +10,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// BrokerSubscriptionResolver 解析指定算法包当前应当订阅的 Broker Socket 路径列表，
-// 并把订阅关系（哪一路 AI 流因哪个包而保活）同步到该算法包的最新任务集合。
-//
-// ⚠️ 命名刻意不用 Resolve*：它不只是查询，还会在实现侧建立/撤销订阅关系。
-// 实现方必须是幂等的，并保证失败时不留下半提交的订阅。
-type BrokerSubscriptionResolver interface {
-	SyncBrokerSubscriptions(ctx context.Context, algorithmID string) ([]string, error)
-}
-
-// GallerySyncProvider supplies all enrolled face templates for runner cold-start synchronization.
-type GallerySyncProvider interface {
-	GetGallerySyncData(ctx context.Context) ([]GallerySyncItem, error)
-}
-
 // Supervisor oversees all algorithm runner subprocesses, watching for crashes,
 // managing exponential backoffs, circuit breakers, and automatic rollbacks.
 type Supervisor struct {
-	store               *Store
+	store               LifecycleStore
 	algoDir             string
 	runnerPath          string
 	resolver            BrokerSubscriptionResolver
@@ -41,7 +27,7 @@ type Supervisor struct {
 
 type workerWatcher struct {
 	supervisor  *Supervisor
-	algo        Algorithm
+	algo        PackageMeta
 	process     *RunnerProcess
 	sm          *RecoveryStateMachine
 	guard       *RollbackGuard
@@ -80,7 +66,7 @@ func (w *workerWatcher) stopProcess(timeout time.Duration) error {
 // SetBrokerSubscriptionResolver: the broker host lives in the native engine and derives
 // one socket per physical stream, so there is no process-wide default to fall
 // back to.
-func NewSupervisor(store *Store, algoDir, runnerPath string, opts RecoveryOptions, logger *zap.Logger) *Supervisor {
+func NewSupervisor(store LifecycleStore, algoDir, runnerPath string, opts RecoveryOptions, logger *zap.Logger) *Supervisor {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -118,6 +104,7 @@ func (s *Supervisor) triggerGallerySyncAsync() {
 	provider := s.gallerySyncProvider
 	broadcaster := s.galleryBroadcaster
 	s.mu.RUnlock()
+
 	s.dispatchGallerySync(provider, broadcaster)
 }
 
@@ -149,8 +136,7 @@ func (s *Supervisor) dispatchGallerySync(provider GallerySyncProvider, broadcast
 // 并驱动实现侧同步订阅关系。
 //
 // 解析失败必须向上传播：退化为「没有 broker」会让 runner 拿不到 --broker 而 exit 5，
-// 进而触发退避重启与 CRASH_LOOP 熔断（design.md §7.2 的冷路径陷阱），
-// 且失败原因会被完全掩盖。
+// 进而触发退避重启与 CRASH_LOOP 熔断，且失败原因会被完全掩盖。
 //
 // 调用方必须持有 s.mu。
 func (s *Supervisor) resolveBrokerSocksLocked(ctx context.Context, algoID string) ([]string, error) {
@@ -165,7 +151,7 @@ func (s *Supervisor) resolveBrokerSocksLocked(ctx context.Context, algoID string
 }
 
 // StartAlgorithm spawns and watches a runner subprocess for an algorithm.
-func (s *Supervisor) StartAlgorithm(ctx context.Context, algo Algorithm) error {
+func (s *Supervisor) StartAlgorithm(ctx context.Context, algo PackageMeta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -258,12 +244,12 @@ func (s *Supervisor) RestartAlgorithm(ctx context.Context, algoID string) error 
 	if s.store == nil {
 		return errors.New("no store configured to load algorithm for restart")
 	}
-	algo, err := s.store.GetAlgorithm(ctx, algoID)
+	algo, err := s.store.GetAlgorithmPackage(ctx, algoID)
 	if err != nil {
 		return fmt.Errorf("get algorithm for restart: %w", err)
 	}
 
-	if startErr := s.StartAlgorithm(ctx, *algo); startErr != nil {
+	if startErr := s.StartAlgorithm(ctx, algo); startErr != nil {
 		if wasActive && s.store != nil {
 			if updateErr := s.store.UpdateAlgorithmStatus(ctx, algoID, StatusActive); updateErr != nil {
 				s.logger.Error("failed to restore algorithm status after failed restart",
@@ -285,7 +271,7 @@ func (s *Supervisor) RestartAlgorithm(ctx context.Context, algoID string) error 
 }
 
 // UpgradeAlgorithm gracefully transitions from an old version to a new version with rollback observation.
-func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo Algorithm, oldAlgo Algorithm) error {
+func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo PackageMeta, oldAlgo PackageMeta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -302,7 +288,7 @@ func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo Algorithm, ol
 	// 2. Set up new worker with RollbackGuard
 	brokerSocks, err := s.resolveBrokerSocksLocked(ctx, newAlgo.ID)
 	if err != nil {
-		// 解析失败时不启动新版本，直接回滚到旧版本（旧版本仍在运行中）。
+		// 解析失败时不启动新版本，直接回滚到旧版本。
 		s.logger.Warn("failed to resolve broker paths for new version, attempting immediate rollback",
 			zap.String("algorithm", newAlgo.ID),
 			zap.Error(err),
@@ -354,13 +340,13 @@ func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo Algorithm, ol
 	return nil
 }
 
-func (s *Supervisor) rollbackToOld(ctx context.Context, oldAlgo Algorithm) error {
+func (s *Supervisor) rollbackToOld(ctx context.Context, oldAlgo PackageMeta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.rollbackToOldLocked(ctx, oldAlgo)
 }
 
-func (s *Supervisor) rollbackToOldLocked(ctx context.Context, oldAlgo Algorithm) error {
+func (s *Supervisor) rollbackToOldLocked(ctx context.Context, oldAlgo PackageMeta) error {
 	brokerSocks, err := s.resolveBrokerSocksLocked(ctx, oldAlgo.ID)
 	if err != nil {
 		// 回滚目标同样解析不出 broker 路径：不启动半瘫的回滚进程，向上报错。
@@ -447,7 +433,7 @@ func (s *Supervisor) ResetAlgorithm(ctx context.Context, algoID string) error {
 	if s.store == nil {
 		return nil
 	}
-	algo, err := s.store.GetAlgorithm(ctx, algoID)
+	algo, err := s.store.GetAlgorithmPackage(ctx, algoID)
 	if err != nil {
 		return err
 	}

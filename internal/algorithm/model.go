@@ -4,7 +4,33 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/task"
+)
+
+// Re-exports from algorunner for backward compatibility and clean cross-domain boundaries.
+type (
+	PackageMeta                = algorunner.PackageMeta
+	LifecycleStore             = algorunner.LifecycleStore
+	BrokerSubscriptionResolver = algorunner.BrokerSubscriptionResolver
+	GallerySyncProvider        = algorunner.GallerySyncProvider
+	GallerySyncItem            = algorunner.GallerySyncItem
+	GallerySyncPayload         = algorunner.GallerySyncPayload
+	GallerySyncShardPayload    = algorunner.GallerySyncShardPayload
+	GalleryAckPayload          = algorunner.GalleryAckPayload
+	GalleryUpsertPayload       = algorunner.GalleryUpsertPayload
+	GalleryDeletePayload       = algorunner.GalleryDeletePayload
+	GalleryBroadcaster         = algorunner.GalleryBroadcaster
+	Supervisor                 = algorunner.Supervisor
+	RecoveryOptions            = algorunner.RecoveryOptions
+)
+
+var (
+	NewRecoveryStateMachine    = algorunner.NewRecoveryStateMachine
+	DefaultRecoveryOptions     = algorunner.DefaultRecoveryOptions
+	NewSupervisor              = algorunner.NewSupervisor
+	NewGalleryBroadcaster      = algorunner.NewGalleryBroadcaster
+	ErrAlgorithmNotInCrashLoop = algorunner.ErrAlgorithmNotInCrashLoop
 )
 
 // Algorithm status enum
@@ -70,6 +96,20 @@ type Algorithm struct {
 	PreviousVersion  string    `gorm:"column:previous_version;not null;default:''" json:"previousVersion"`
 	CreatedAt        time.Time `gorm:"column:created_at;not null" json:"createdAt"`
 	UpdatedAt        time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
+}
+
+// ToPackageMeta converts an Algorithm domain model to a runner-facing PackageMeta.
+func (a *Algorithm) ToPackageMeta() algorunner.PackageMeta {
+	if a == nil {
+		return algorunner.PackageMeta{}
+	}
+	return algorunner.PackageMeta{
+		ID:              a.ID,
+		Name:            a.Name,
+		Version:         a.Version,
+		PreviousVersion: a.PreviousVersion,
+		Status:          a.Status,
+	}
 }
 
 // TableName overrides the default table name for Algorithm.

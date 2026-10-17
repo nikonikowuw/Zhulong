@@ -141,7 +141,7 @@ func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Al
 		// If the previous version is active or supervised, transition the worker process
 		// under the supervision of RollbackGuard.
 		if s.supervisor != nil && (s.supervisor.GetStatus(existing.ID) == StatusRunning || existing.Status == StatusActive) {
-			if upgradeErr := s.supervisor.UpgradeAlgorithm(ctx, *algo, *existing); upgradeErr != nil {
+			if upgradeErr := s.supervisor.UpgradeAlgorithm(ctx, algo.ToPackageMeta(), existing.ToPackageMeta()); upgradeErr != nil {
 				s.logger.Warn("failed to transition runner process to upgraded version",
 					zap.String("id", algo.ID),
 					zap.Error(upgradeErr),
@@ -212,7 +212,7 @@ func (s *Service) EnableAlgorithm(ctx context.Context, id string) error {
 		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("get algorithm: %v", err), err)
 	}
 
-	if err := s.supervisor.StartAlgorithm(ctx, *algo); err != nil {
+	if err := s.supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); err != nil {
 		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("start runner supervisor: %v", err), err)
 	}
 

@@ -1,4 +1,4 @@
-package algorithm
+package algorunner
 
 import (
 	"sync"

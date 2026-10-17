@@ -129,9 +129,9 @@ zhulong_algo_runner --verify-plugin plugin.so --sample sample.jpg
 
 ## 6. 控制面分层与模块单一职责 (Module Boundaries & Responsibilities)
 
-1. **核心单一职责**：`internal/algorithm` 专注且仅负责：
-   - **算法包制品资产管理**（解压、Zip-Slip 与炸弹防御、元数据解析、黑盒验包准入门禁、持久化）；
-   - **Runner 外部沙箱子进程监督**（环境变量注入、拉起与保活、指数退避、CrashLoop 熔断及版本自动回滚）。
+1. **核心单一职责**：
+   - `internal/algorithm`：专注且仅负责**算法包制品资产管理**（解压、Zip-Slip 与炸弹防御、元数据解析、黑盒验包准入门禁、持久化与 HTTP 控制面 API）。
+   - `internal/algorunner`：专注**动态沙箱子进程看护与自愈容灾**（环境变量注入、拉起与优雅停止、指数退避、CrashLoopBackoff 熔断、RollbackGuard 自动回滚守卫及底库广播）。
 2. **分析任务解耦**：分析任务（CRUD、配置校验、算力预算检查与调度）完全归属 `internal/task` 模块。`algorithm` 仅实现 `task.AlgorithmSpecProvider`（供任务校验算法规格）与 `task.TaskChangeListener`（接收任务变更通知以触发防抖热重启）。兼容路由 `/api/v1/algorithms/tasks` 由 `task.Handler` 统一委托承载。
 3. **推理数据与协议下沉**：
    - 通用 AI 推理模型（`InferenceResult`、`DetectionItem`、`PersonItem` 等）收敛于 `internal/aitypes`，解耦 `camera` 与 `record` 对 `algorithm` 的依赖；

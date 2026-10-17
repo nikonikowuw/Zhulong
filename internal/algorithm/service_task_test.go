@@ -77,7 +77,7 @@ func TestServiceTaskChangeDebouncesRestart(t *testing.T) {
 	supervisor.SetBrokerSubscriptionResolver(resolver)
 
 	ctx := context.Background()
-	if err := supervisor.StartAlgorithm(ctx, *algo); err != nil {
+	if err := supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); err != nil {
 		t.Fatalf("start algorithm: %v", err)
 	}
 	afterInitialStart := resolver.calls.Load()
@@ -215,7 +215,7 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	service.OnTaskChanged(ctx, algo.ID)
 	service.FlushPendingRestarts()
 
-	if err := supervisor.StartAlgorithm(ctx, *algo); err != nil {
+	if err := supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); err != nil {
 		t.Fatalf("start algorithm: %v", err)
 	}
 	waitForBrokerInvocations(t, argFile, 1)

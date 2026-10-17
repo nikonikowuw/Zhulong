@@ -5,9 +5,12 @@ import (
 	"errors"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"gorm.io/gorm"
 )
+
+var _ algorunner.LifecycleStore = (*Store)(nil)
 
 var (
 	ErrNotFound = errors.New("record not found")
@@ -71,6 +74,15 @@ func (s *Store) GetAlgorithm(ctx context.Context, id string) (*Algorithm, error)
 		return nil, err
 	}
 	return &algo, nil
+}
+
+// GetAlgorithmPackage implements algorunner.LifecycleStore.
+func (s *Store) GetAlgorithmPackage(ctx context.Context, id string) (algorunner.PackageMeta, error) {
+	algo, err := s.GetAlgorithm(ctx, id)
+	if err != nil {
+		return algorunner.PackageMeta{}, err
+	}
+	return algo.ToPackageMeta(), nil
 }
 
 func (s *Store) GetAlgorithmByName(ctx context.Context, name string) (*Algorithm, error) {

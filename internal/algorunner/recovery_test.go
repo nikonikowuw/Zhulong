@@ -1,22 +1,22 @@
-package algorithm_test
+package algorunner_test
 
 import (
 	"testing"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"go.uber.org/zap"
 )
 
 func TestRecoveryStateMachineExponentialBackoffAndCircuitBreaker(t *testing.T) {
-	opts := algorithm.RecoveryOptions{
+	opts := algorunner.RecoveryOptions{
 		MaxCrashes:             3,
 		CrashWindow:            5 * time.Minute,
 		InitialBackoff:         1 * time.Second,
 		MaxBackoff:             30 * time.Second,
 		StableRunningThreshold: 10 * time.Minute,
 	}
-	sm := algorithm.NewRecoveryStateMachine(opts)
+	sm := algorunner.NewRecoveryStateMachine(opts)
 	baseTime := time.Now()
 
 	// 1st crash: backoff should be 1s
@@ -63,14 +63,14 @@ func TestRecoveryStateMachineExponentialBackoffAndCircuitBreaker(t *testing.T) {
 }
 
 func TestRecoveryStateMachinePrunesOldCrashes(t *testing.T) {
-	opts := algorithm.RecoveryOptions{
+	opts := algorunner.RecoveryOptions{
 		MaxCrashes:             3,
 		CrashWindow:            5 * time.Minute,
 		InitialBackoff:         1 * time.Second,
 		MaxBackoff:             30 * time.Second,
 		StableRunningThreshold: 10 * time.Minute,
 	}
-	sm := algorithm.NewRecoveryStateMachine(opts)
+	sm := algorunner.NewRecoveryStateMachine(opts)
 	baseTime := time.Now()
 
 	// 1st crash 10 minutes ago (outside 5 min window)
@@ -91,14 +91,14 @@ func TestRecoveryStateMachinePrunesOldCrashes(t *testing.T) {
 }
 
 func TestRecoveryStateMachineStableRunningReset(t *testing.T) {
-	opts := algorithm.RecoveryOptions{
+	opts := algorunner.RecoveryOptions{
 		MaxCrashes:             3,
 		CrashWindow:            5 * time.Minute,
 		InitialBackoff:         1 * time.Second,
 		MaxBackoff:             30 * time.Second,
 		StableRunningThreshold: 10 * time.Minute,
 	}
-	sm := algorithm.NewRecoveryStateMachine(opts)
+	sm := algorunner.NewRecoveryStateMachine(opts)
 
 	sm.RecordCrash(time.Now())
 
@@ -121,7 +121,7 @@ func TestRecoveryStateMachineStableRunningReset(t *testing.T) {
 
 func TestRollbackGuardWindow(t *testing.T) {
 	guardWindow := 2 * time.Second
-	guard := algorithm.NewRollbackGuard("pkg_01", "2.0.0", "1.0.0", guardWindow, zap.NewNop())
+	guard := algorunner.NewRollbackGuard("pkg_01", "2.0.0", "1.0.0", guardWindow, zap.NewNop())
 
 	// Crash at 500ms (within 2s window) -> Should Rollback!
 	crashTime := time.Now().Add(500 * time.Millisecond)
@@ -135,14 +135,14 @@ func TestRollbackGuardWindow(t *testing.T) {
 	}
 
 	// New guard: crash outside guard window -> Should NOT rollback!
-	guard2 := algorithm.NewRollbackGuard("pkg_02", "2.0.0", "1.0.0", 100*time.Millisecond, zap.NewNop())
+	guard2 := algorunner.NewRollbackGuard("pkg_02", "2.0.0", "1.0.0", 100*time.Millisecond, zap.NewNop())
 	time.Sleep(150 * time.Millisecond)
 	if guard2.ShouldRollback(time.Now()) {
 		t.Errorf("expected ShouldRollback=false when crashing after guard window elapsed")
 	}
 
 	// Guard with no previous version -> Should NOT rollback
-	guard3 := algorithm.NewRollbackGuard("pkg_03", "1.0.0", "", guardWindow, zap.NewNop())
+	guard3 := algorunner.NewRollbackGuard("pkg_03", "1.0.0", "", guardWindow, zap.NewNop())
 	if guard3.ShouldRollback(time.Now()) {
 		t.Errorf("expected ShouldRollback=false when no previous version exists")
 	}

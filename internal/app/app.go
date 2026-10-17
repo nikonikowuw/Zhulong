@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
@@ -315,11 +316,11 @@ type algorithmOut struct {
 
 	Store              *algorithm.Store
 	Verifier           *algorithm.Verifier
-	Supervisor         *algorithm.Supervisor
+	Supervisor         *algorunner.Supervisor
 	Service            *algorithm.Service
 	Handler            *algorithm.Handler
 	Lifecycle          algorithmLifecycle
-	GalleryBroadcaster *algorithm.GalleryBroadcaster
+	GalleryBroadcaster *algorunner.GalleryBroadcaster
 	ProtectedRoutes    RouteRegistrar `group:"protected_routes"`
 	UploadRoutes       RouteRegistrar `group:"upload_routes"`
 }
@@ -425,14 +426,14 @@ func (r *appBrokerPathResolver) publishRateByCamera(ctx context.Context) (map[st
 }
 
 type personGalleryAdapter struct {
-	broadcaster *algorithm.GalleryBroadcaster
+	broadcaster *algorunner.GalleryBroadcaster
 }
 
 func (a *personGalleryAdapter) BroadcastUpsert(ctx context.Context, item person.GalleryUpsertPayload) error {
 	if a.broadcaster == nil {
 		return nil
 	}
-	return a.broadcaster.BroadcastUpsert(ctx, algorithm.GalleryUpsertPayload{
+	return a.broadcaster.BroadcastUpsert(ctx, algorunner.GalleryUpsertPayload{
 		FaceID:     item.FaceID,
 		PersonID:   item.PersonID,
 		PersonName: item.PersonName,
@@ -452,7 +453,7 @@ type supervisorGallerySyncAdapter struct {
 	service *person.Service
 }
 
-func (a *supervisorGallerySyncAdapter) GetGallerySyncData(ctx context.Context) ([]algorithm.GallerySyncItem, error) {
+func (a *supervisorGallerySyncAdapter) GetGallerySyncData(ctx context.Context) ([]algorunner.GallerySyncItem, error) {
 	if a.service == nil {
 		return nil, nil
 	}
@@ -460,9 +461,9 @@ func (a *supervisorGallerySyncAdapter) GetGallerySyncData(ctx context.Context) (
 	if err != nil {
 		return nil, err
 	}
-	algoItems := make([]algorithm.GallerySyncItem, len(items))
+	algoItems := make([]algorunner.GallerySyncItem, len(items))
 	for i, item := range items {
-		algoItems[i] = algorithm.GallerySyncItem{
+		algoItems[i] = algorunner.GallerySyncItem{
 			FaceID:     item.FaceID,
 			PersonID:   item.PersonID,
 			PersonName: item.PersonName,
@@ -488,7 +489,7 @@ func provideAlgorithm(
 			streamHub: streamHub,
 		})
 	}
-	galleryBroadcaster := algorithm.NewGalleryBroadcaster(eng, logger)
+	galleryBroadcaster := algorunner.NewGalleryBroadcaster(eng, logger)
 	return algorithmOut{
 		Store:              comp.Store,
 		Verifier:           comp.Verifier,
@@ -558,8 +559,8 @@ func providePerson(
 	dbProvider database.DBProvider,
 	config Config,
 	eng *engine.Engine,
-	broadcaster *algorithm.GalleryBroadcaster,
-	supervisor *algorithm.Supervisor,
+	broadcaster *algorunner.GalleryBroadcaster,
+	supervisor *algorunner.Supervisor,
 	logger *zap.Logger,
 ) personOut {
 	facesDir := config.FacesDir

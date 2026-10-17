@@ -30,7 +30,7 @@ func (l *algorithmLifecycleImpl) Start(ctx context.Context) error {
 		for _, algo := range algos {
 			if algo.Status == StatusActive {
 				l.logger.Info("auto-starting active algorithm", zap.String("id", algo.ID))
-				if startErr := l.service.supervisor.StartAlgorithm(ctx, algo); startErr != nil {
+				if startErr := l.service.supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); startErr != nil {
 					l.logger.Error("failed to auto-start active algorithm",
 						zap.String("id", algo.ID),
 						zap.Error(startErr),

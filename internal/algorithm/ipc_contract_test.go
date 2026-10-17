@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/nikonikowuw/Zhulong/internal/algoipc"
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 )
 
@@ -112,14 +113,14 @@ func TestIpcContractMatchesNativeHeader(t *testing.T) {
 	}
 	content := string(raw)
 
-	checkUint32Const(t, content, "IPC_MAGIC", uint64(algorithm.IpcMagic))
-	checkUint32Const(t, content, "IPC_VERSION", uint64(algorithm.IpcVersion))
-	checkUint32Const(t, content, "MAX_IPC_PAYLOAD_SIZE", uint64(algorithm.MaxIpcPayloadSize))
-	checkEnumConst(t, content, "MSG_RESULT", uint64(algorithm.MsgResult))
-	checkEnumConst(t, content, "MSG_GALLERY_SYNC", uint64(algorithm.MsgGallerySync))
-	checkEnumConst(t, content, "MSG_GALLERY_UPSERT", uint64(algorithm.MsgGalleryUpsert))
-	checkEnumConst(t, content, "MSG_GALLERY_DELETE", uint64(algorithm.MsgGalleryDelete))
-	checkEnumConst(t, content, "MSG_GALLERY_ACK", uint64(algorithm.MsgGalleryAck))
+	checkUint32Const(t, content, "IPC_MAGIC", uint64(algoipc.IpcMagic))
+	checkUint32Const(t, content, "IPC_VERSION", uint64(algoipc.IpcVersion))
+	checkUint32Const(t, content, "MAX_IPC_PAYLOAD_SIZE", uint64(algoipc.MaxIpcPayloadSize))
+	checkEnumConst(t, content, "MSG_RESULT", uint64(algoipc.MsgResult))
+	checkEnumConst(t, content, "MSG_GALLERY_SYNC", uint64(algoipc.MsgGallerySync))
+	checkEnumConst(t, content, "MSG_GALLERY_UPSERT", uint64(algoipc.MsgGalleryUpsert))
+	checkEnumConst(t, content, "MSG_GALLERY_DELETE", uint64(algoipc.MsgGalleryDelete))
+	checkEnumConst(t, content, "MSG_GALLERY_ACK", uint64(algoipc.MsgGalleryAck))
 }
 
 // checkUint32Const extracts `constexpr uint32_t NAME = <expr>;` (or uint16_t)

@@ -19,7 +19,8 @@ internal/
   auth/                       # 单用户认证与会话管理 (handler.go, store.go, limiter.go, middleware.go)
   camera/                     # 相机管理业务模块 (主子流建模、凭据加密、探活调度)
   person/                     # 人员与人脸底库域 (persons / person_faces 一人多照 CRUD)
-  algorithm/                  # 算法包生命周期、验包门禁、Runner 进程监督与自愈回滚
+  algorithm/                  # 算法包生命周期与静态资产管理中心 (验包解包、Manifest与版本元数据)
+  algorunner/                 # 算法子进程看护与自愈调度 (Supervisor 守护、退避熔断状态机、进程生命周期)
   algoipc/                    # 算法 Runner 子进程间二进制 IPC 编解码与定长帧头协议
   aitypes/                    # 纯数据契约包 (InferenceResult, DetectionItem, 任务与分类模型)
   task/                       # 视频分析任务管理域 (Camera 与 Algorithm 动态绑定、配置与帧率调度)
@@ -46,7 +47,8 @@ internal/
 ## 2. 依赖方向与单向流转铁律
 
 ```txt
-cmd/Zhulong ➔ internal/app ➔ internal/{auth, camera, person, algorithm, task, record, storage, mediafile, network, systemtime, audit} ➔ internal/{engine, database, httputil}
+cmd/Zhulong ➔ internal/app ➔ internal/{auth, camera, person, algorithm, algorunner, task, record, storage, mediafile, network, systemtime, audit} ➔ internal/{engine, database, httputil}
+                             internal/app ➔ internal/algorithm ➔ internal/algorunner ➔ internal/{algoipc, aitypes}
                              internal/app ➔ internal/httpmiddleware ➔ internal/httputil
                              internal/app ➔ internal/audit/http ➔ internal/audit
                              internal/mediafile ➔ internal/{storage, httputil, apperr}   # 禁止反向；严禁 import internal/camera（间接拖入 CGO engine）

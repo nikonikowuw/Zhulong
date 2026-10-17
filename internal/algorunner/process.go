@@ -1,4 +1,4 @@
-package algorithm
+package algorunner
 
 import (
 	"bufio"
@@ -361,15 +361,6 @@ type GalleryAckPayload struct {
 	ErrorMsg   string `json:"error_msg,omitempty"`
 }
 
-// GallerySyncItem represents one registered face item in MSG_GALLERY_SYNC.
-type GallerySyncItem struct {
-	FaceID     string    `json:"face_id"`
-	PersonID   string    `json:"person_id"`
-	PersonName string    `json:"person_name"`
-	ImagePath  string    `json:"image_path,omitempty"`
-	Features   []float32 `json:"features,omitempty"`
-}
-
 // GalleryUpsertPayload represents MSG_GALLERY_UPSERT.
 type GalleryUpsertPayload struct {
 	FaceID     string    `json:"face_id"`
@@ -453,11 +444,6 @@ func CreateGalleryDeleteMsg(seq uint32, faceID, personID string) ([]byte, error)
 		return nil, fmt.Errorf("marshal gallery delete payload: %w", err)
 	}
 	return EncodeIpcMessage(MsgGalleryDelete, seq, payload)
-}
-
-// AIMessageBroadcaster sends down-link control messages to runner subprocesses via Native Engine FrameBroker.
-type AIMessageBroadcaster interface {
-	BroadcastAIMessage(ctx context.Context, streamID uint64, msgType uint16, payload []byte) error
 }
 
 // GalleryBroadcaster distributes full and incremental gallery updates to running algorithm processes.
