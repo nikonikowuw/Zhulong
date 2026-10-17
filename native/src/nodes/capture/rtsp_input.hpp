@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <string>
 #include <vector>
@@ -31,8 +32,22 @@ using Clock = std::chrono::steady_clock;
 /** @brief 默认网络建连与空闲读取超时时间（5000ms） */
 constexpr uint32_t default_timeout_ms = 5000;
 
-/** @brief 最后一个消费者释放后的流宽限期（8 秒） */
+/** @brief 默认最后一个消费者释放后的流宽限期（8 秒） */
 constexpr auto stream_grace_period = std::chrono::seconds(8);
+
+/** @brief 获取流宽限期（默认 8 秒，可通过环境变量 ZHULONG_STREAM_GRACE_PERIOD_MS 覆写用于加速测试） */
+inline std::chrono::milliseconds get_stream_grace_period() {
+    static const auto period = [] {
+        if (const char *env = std::getenv("ZHULONG_STREAM_GRACE_PERIOD_MS")) {
+            try {
+                int val = std::stoi(env);
+                if (val >= 0) return std::chrono::milliseconds(val);
+            } catch (...) {}
+        }
+        return std::chrono::duration_cast<std::chrono::milliseconds>(stream_grace_period);
+    }();
+    return period;
+}
 
 /**
  * @brief 内部业务异常包装结构体

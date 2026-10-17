@@ -16,6 +16,7 @@
 import base64
 import collections
 import json
+import os
 from pathlib import Path
 import re
 import socket
@@ -166,12 +167,12 @@ class Handler(socketserver.BaseRequestHandler):
             self.reply(sequence)
 
     def send_frames(self):
-        """按 25fps（每帧 40ms）向客户端发送封装后的 RTP 视频数据包"""
+        """向客户端发送封装后的 RTP 视频数据包（前 25 帧极短间隔加速 FFmpeg 探测，随后 25fps 稳态推流）"""
         sequence = 1
         frame = 0
         try:
             while not self.done.is_set():
-                if "stall-info" in self.path or ("stall-read" in self.path and frame >= 55):
+                if "stall-info" in self.path or (self.path == "/stall-read" and frame >= 8):
                     self.done.wait(0.04)
                     continue
                 for index, nal in enumerate(self.nals):
@@ -187,7 +188,8 @@ class Handler(socketserver.BaseRequestHandler):
                             # TCP 交织模式：$ + channel (0) + 2字节长度 + RTP负载
                             self.request.sendall(b"$\x00" + struct.pack("!H", len(packet)) + packet)
                 frame += 1
-                self.done.wait(0.04)
+                interval = 0.001 if frame < 25 else 0.04
+                self.done.wait(interval)
         except (ConnectionError, OSError):
             pass
 
@@ -206,10 +208,12 @@ def main():
     server = Server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    env = os.environ.copy()
+    env.setdefault("ZHULONG_STREAM_GRACE_PERIOD_MS", "200")
     try:
         # 启动测试可执行程序并连接测试桩 RTSP 地址
         result = subprocess.run([sys.argv[1], f"rtsp://127.0.0.1:{server.server_address[1]}"],
-                                text=True, capture_output=True, timeout=80)
+                                text=True, capture_output=True, timeout=80, env=env)
         sys.stdout.write(result.stdout)
         sys.stderr.write(result.stderr)
         captured = result.stdout + result.stderr

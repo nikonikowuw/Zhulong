@@ -315,7 +315,7 @@ void Engine::release(Zhulong_stream_id id, uint64_t consumer) {
         }
 
         if (stream->consumers.empty()) {
-            stream->expiry = Clock::now() + stream_grace_period;
+            stream->expiry = Clock::now() + get_stream_grace_period();
             wake_reaper();
         }
     }

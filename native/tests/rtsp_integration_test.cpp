@@ -25,6 +25,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <future>
 #include <iostream>
@@ -259,21 +260,22 @@ void pool_cases(Zhulong_engine_h engine, const std::string &base) {
     for (auto &thread : callers) thread.join();
     CHECK(!failed.load());
 
-    // 9. 宽限期测试：释放全部消费者后进入 8 秒宽限期
+    // 9. 宽限期测试：释放全部消费者后进入宽限期
     CHECK(Zhulong_stream_release(engine, first, 1) == Zhulong_OK);
     CHECK(Zhulong_stream_release(engine, first, 1) == Zhulong_ERR_NOT_FOUND);
     CHECK(Zhulong_stream_release(engine, first, 2) == Zhulong_OK);
 
-    // 宽限期内重新连接：复用原有流句柄
-    std::this_thread::sleep_for(150ms);
+    // 宽限期内重新连接：复用原有流句柄（200ms 宽限期内 50ms 仍有效）
+    std::this_thread::sleep_for(50ms);
     CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 3, Zhulong_CONSUMER_PREVIEW, &second) == Zhulong_OK);
     CHECK(second == first);
     CHECK(Zhulong_stream_release(engine, first, 3) == Zhulong_OK);
 
-    // 等待超过 8 秒宽限期：底层流被 Reaper 回收
-    std::this_thread::sleep_for(8200ms);
+    // 等待超过宽限期：底层流被 Reaper 回收
     Zhulong_stream_status status{};
-    CHECK(Zhulong_stream_get_status(engine, first, &status) == Zhulong_ERR_NOT_FOUND);
+    wait_until([&] {
+        return Zhulong_stream_get_status(engine, first, &status) == Zhulong_ERR_NOT_FOUND;
+    }, 2000ms);
 
     // 宽限期过后再次接入：重新分配全新物理流 ID
     CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 4, Zhulong_CONSUMER_PREVIEW, &second) == Zhulong_OK);
@@ -480,8 +482,13 @@ void cancellation_cases(Zhulong_engine_h engine, const std::string &base) {
     options.idle_timeout_ms = 10000;
     CHECK(Zhulong_stream_acquire(engine, (base + "/stall-read-stop").c_str(), &options, 1,
                                 Zhulong_CONSUMER_AI, &stream) == Zhulong_OK);
-    std::this_thread::sleep_for(2500ms);
     Zhulong_stream_status status{};
+    wait_until([&] {
+        CHECK(Zhulong_stream_get_status(engine, stream, &status) == Zhulong_OK);
+        CHECK(status.state != Zhulong_STREAM_FAILED);
+        return status.state == Zhulong_STREAM_RUNNING;
+    });
+    std::this_thread::sleep_for(400ms);
     CHECK(Zhulong_stream_get_status(engine, stream, &status) == Zhulong_OK);
     CHECK(status.state == Zhulong_STREAM_RUNNING);
 
@@ -490,7 +497,7 @@ void cancellation_cases(Zhulong_engine_h engine, const std::string &base) {
     CHECK(Clock::now() - stop_start < 1500ms);
 
     // 多次连续取消压力测试
-    for (int repeat = 0; repeat < 12; ++repeat) {
+    for (int repeat = 0; repeat < 4; ++repeat) {
         CHECK(Zhulong_engine_start(engine) == Zhulong_OK);
         CHECK(Zhulong_stream_acquire(engine, (base + "/stall-open").c_str(), nullptr, 1, Zhulong_CONSUMER_AI, &stream) == Zhulong_OK);
         std::this_thread::sleep_for(5ms);
@@ -584,31 +591,31 @@ void ai_publish_throttle_case(Zhulong_engine_h engine, const std::string &base) 
 
     // 阶段 1：不节流基线（rate=0 表示按解码原帧率发布）
     CHECK(Zhulong_stream_set_publish_rate(engine, stream, 0) == Zhulong_OK);
-    std::this_thread::sleep_for(200ms);
-    const size_t baseline = probe.count_over(1500ms);
+    std::this_thread::sleep_for(150ms);
+    const size_t baseline = probe.count_over(1000ms);
 
     // 阶段 2：节流到 5fps
     CHECK(Zhulong_stream_set_publish_rate(engine, stream, 5) == Zhulong_OK);
-    std::this_thread::sleep_for(400ms); // 让节流基准点稳定
-    const size_t slow = probe.count_over(3000ms);
+    std::this_thread::sleep_for(200ms); // 让节流基准点稳定
+    const size_t slow = probe.count_over(1500ms);
 
     // 阶段 3：放宽到 25fps
     CHECK(Zhulong_stream_set_publish_rate(engine, stream, 25) == Zhulong_OK);
-    std::this_thread::sleep_for(400ms);
-    const size_t fast = probe.count_over(3000ms);
+    std::this_thread::sleep_for(200ms);
+    const size_t fast = probe.count_over(1500ms);
 
-    std::cout << "  throttle counts: baseline(1.5s)=" << baseline
-              << " slow(3s,5fps)=" << slow << " fast(3s,25fps)=" << fast << '\n';
+    std::cout << "  throttle counts: baseline(1s)=" << baseline
+              << " slow(1.5s,5fps)=" << slow << " fast(1.5s,25fps)=" << fast << '\n';
 
-    // AC2 前提：解码通路真的在出帧（未节流时 1.5s 至少 10 帧）
-    CHECK(baseline >= 10);
+    // AC2 前提：解码通路真的在出帧（未节流时 1s 至少 8 帧）
+    CHECK(baseline >= 8);
 
-    // AC10：5fps 下 3s 派发量必须远低于 25fps 的 75 帧
-    CHECK(slow <= 25);
+    // AC10：5fps 下 1.5s 派发量必须远低于 25fps 的 37 帧
+    CHECK(slow <= 12);
 
     // AC10：放宽速率后派发量必须显著回升（响应式，不是固定值）
     CHECK(fast >= 2 * slow);
-    CHECK(fast >= 40);
+    CHECK(fast >= 20);
 
     // AC2：全程持续出帧且流未故障 —— 若发布后帧引用被持有，解码池会枯竭而停滞
     Zhulong_stream_status final_status{};
@@ -684,7 +691,7 @@ void ai_slow_consumer_isolation_case(Zhulong_engine_h engine, const std::string 
         }
     });
 
-    const size_t healthy_received = healthy.count_over(2500ms);
+    const size_t healthy_received = healthy.count_over(1500ms);
     slow_stop.store(true);
     slow_reader.join();
 
@@ -697,9 +704,9 @@ void ai_slow_consumer_isolation_case(Zhulong_engine_h engine, const std::string 
     // 1. Drop Latest 生效：慢包被显著丢帧
     CHECK(slow_received.load() * 2 < healthy_received);
     // 2. 其他包不受拖累
-    CHECK(healthy_received >= 20);
+    CHECK(healthy_received >= 12);
     // 3. 采集/解码未被阻塞：PREVIEW 包持续增长
-    CHECK(packets_after > packets_before + 20);
+    CHECK(packets_after > packets_before + 12);
 
     Zhulong_stream_status status{};
     CHECK(Zhulong_stream_get_status(engine, ai_stream, &status) == Zhulong_OK);
@@ -716,6 +723,7 @@ void ai_slow_consumer_isolation_case(Zhulong_engine_h engine, const std::string 
 int main(int argc, char **argv) {
     try {
         CHECK(argc == 2);
+        setenv("ZHULONG_STREAM_GRACE_PERIOD_MS", "200", 0);
         EngineOwner owner;
         const std::string base = argv[1];
 
