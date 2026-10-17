@@ -811,3 +811,38 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+## Session 65: 实现 ONNX Runtime 推理后端与测试套件
+<!-- trellis-session: v=2 fp=7e3c4a66e5760a5e -->
+
+**Date**: 2026-10-17
+**Task**: 实现 ONNX Runtime 推理后端与测试套件
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+完成基于 ONNX Runtime C++ API 的 IInferenceBackend 推理后端实现，支持多 Worker 独占会话、输入张量零拷贝借用包装与异常防爆门安全映射，集成 CMake 与 native 测试套件
+
+### Main Changes
+
+- 在 native/src/backends/onnx 实现 OnnxInferenceBackend、OnnxModelAsset 与 OnnxSessionContext，严格隔离 ORT 头文件
+- 在 forward 中利用 Ort::Value::CreateTensor 实现输入张量零拷贝，安全深拷贝输出 Tensor
+- 全流程拦截 Ort::Exception 和标准异常并映射为 zhulong_status_t 统一状态码
+- CMakeLists.txt 扩展 ZHULONG_INFERENCE_BACKEND=onnx 支持与编译宏注入，清理 BUILD_RPATH
+- 编写 native/tests/onnx_backend_test.cpp 覆盖元数据解析、前向推理、多会话并发隔离与异常分支
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `12f110a` | feat(algo): implement ONNX Runtime inference backend and native test suite |
+
+### Testing
+
+- [OK] 运行 ZhulongOnnxTests 单元测试全部通过，ASan 内存审计无泄漏与未定义行为
+
+### Status
+
+[OK] **Completed**
