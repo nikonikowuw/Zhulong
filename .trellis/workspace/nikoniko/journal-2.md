@@ -543,3 +543,45 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 
 [OK] **Completed**
 
+---
+
+## 2026-10-17: 修复原生解码节点合约与 MPP 硬件时序缺陷
+
+### Task
+
+- Task: `10-17-fix-decode-contracts-and-mpp-timing`
+- Assignee: `@nikoniko`
+- Package: `native`
+
+### Objectives
+
+- 修复 MPP 硬件解码节点中 PTS 判定倒置逻辑（首帧 PTS=0 判为无时间戳，缺失 PTS 反而透传为极小负数）
+- 归一化跨层背压错误码契约，将 `MPP_ERR_BUFFER_FULL` 与 `MPP_ERR_TIMEOUT` 映射为 `AVERROR(EAGAIN)`，防止被上层误判为损坏而清空 DPB 参考帧
+- 为 `MppDecodeNode::receive_frame` 与 `FFmpegDecodeNode::receive_frame` 增加栈上 RAII Guard，杜绝 `std::bad_alloc` 异常下的 fd 与显存泄漏
+- 增强 `MppLoader` 硬件探测的 `R_OK | W_OK` 读写权限判定，防止非特权组或容器环境假阳性
+- 修复动态分辨率重构时 BufferGroup 未清空缓存块缺陷，并在软解增加 Full Range `AV_PIX_FMT_YUVJ420P` 兼容
+
+### Key Changes
+
+- `native/src/nodes/decode/mpp_decoder.cpp`: 修正 PTS 判定为 `raw_pts != AV_NOPTS_VALUE`；映射硬件背压码为 `AVERROR(EAGAIN)`；增加 ScopeGuard 看护 `owned_fd` 与显存引用计数；在重建和销毁 BufferGroup 前调用 `mpp_buffer_group_clear`
+- `native/src/nodes/decode/ffmpeg_decoder.cpp`: 增加 FrameGuard 防止内存异常泄漏；新增 `AV_PIX_FMT_YUVJ420P` 映射至 `FRAME_FORMAT_YUV420P`
+- `native/src/nodes/decode/mpp_loader.cpp`: 检查 `/dev/mpp_service` 权限为 `R_OK | W_OK`
+- `native/src/nodes/decode/decoder.hpp`: 更新 `send_packet` 错误码与背压契约注释规范
+- `native/tests/decoder_test.cpp`: 新增软硬件解码对首帧 PTS=0 与缺失 PTS（`kNoPts = INT64_MIN`）的精准保真断言
+- `.trellis/spec/native/pipeline-guidelines.md`: 固化时间戳契约、背压统一错误码与 RAII 异常安全规范
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `14b75db` | fix(decode): resolve MPP timestamp inversion, unify backpressure contract, and protect frame allocation |
+
+### Testing
+
+- [OK] `make native-test`: 20/20 原生单元测试全部通过（包含 `ZhulongDecoder` 与全量集成测试）
+- [OK] `make go-check`: 包含 `gofmt`、`go vet`、跨模块 `-race` 测试及 RTSP Fixture 回环测试全绿通过
+
+### Status
+
+[OK] **Completed**
+
