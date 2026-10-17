@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 67
+- **Total Sessions**: 68
 - **Last Active**: 2026-10-17
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~911 | Active |
+| `journal-2.md` | ~967 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 68 | 2026-10-17 | 宿主引擎人脸特征提取接入 ONNX 真实推理与 TTL 空闲自动卸载 (10-17-host-face-feature-onnx) | `b8b3188`, `dfcfff9`, `3b84797`, `43b3327` | `dev` |
 | 67 | 2026-10-17 | 实现算法包任务驱动按需惰性启停与启用幂等性修复 | `3bc5563` | `dev` |
 | 65 | 2026-10-17 | 实现 ONNX Runtime 推理后端与测试套件 | `12f110a` | `dev` |
 | 64 | 2026-10-17 | 修复原生引擎 CGO 桥接并发安全与生命周期缺陷 | `60e846f` | `dev` |

@@ -909,3 +909,59 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+## Session 68: 宿主引擎人脸特征提取接入 ONNX 真实推理与 TTL 空闲自动卸载 (10-17-host-face-feature-onnx)
+<!-- trellis-session: v=2 fp=b150948f1ba439d4 -->
+
+**Date**: 2026-10-17
+**Task**: 宿主引擎人脸特征提取接入 ONNX 真实推理与 TTL 空闲自动卸载 (10-17-host-face-feature-onnx)
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+将宿主 Zhulong_engine_extract_face_feature 从同构数学模拟桩升级为经由算法插件 dlopen 的真实 ONNX 推理（SCRFD 检测 + Umeyama 5 点对齐 + 512 维 L2 单位特征），并实现 Fail-Closed 报错与 TTL 空闲自动卸载；宿主 libZhulongEngine.a 与 Go 二进制均不产生对 libonnxruntime.so 的 DT_NEEDED 依赖。
+
+### Main Changes
+
+- 插件导出 zhulong_face_extract_feature / zhulong_face_extract_release 两个专用 C ABI，并纳入 plugin-exports.map 白名单
+- 重写 FacePluginLoader：多候选懒加载 dlopen、ZHULONG_FACE_PLUGIN_PATH 显式覆盖（设置后为唯一候选，不再静默回退）、TTL Reaper 线程与全程持锁推理以杜绝 Use-After-Unload
+- 修复 Zhulong_engine_destroy(NULL) 误递减引擎引用计数导致插件被提前卸载的缺陷
+- 统一检测/特征两条流水线的模型扩展名择优逻辑（x86 优先 onnx、ARM 优先 rknn），模型缺失由 NOT_FOUND 改为 INTERNAL 闭环报错
+- 移除真实 9 头 SCRFD 路径上的 CPU 桩伪造检出回退：无脸图现在正确返回 NOT_FOUND，桩后端返回 NOT_SUPPORTED，杜绝向底库写入伪特征
+- 清理插件与检测器中的 DEBUG_EXTRACT / DETECTOR_DEBUG 调试输出
+- 新增 native/tests/mock_face_plugin.cpp 最小插件替身与 ZhulongFacePluginTtl 黑盒用例，覆盖 TTL 卸载、插件抽走后报 UNSUPPORTED、恢复后重新唤醒
+- ZhulongFaceFeatureExtract 按后端能力区分断言，并新增宿主 ABI 与插件内部特征空间的交叉校验（余弦 >= 0.9999）
+- check_plugin_symbols.py 支持逐插件符号白名单，断言 FaceRecognitionPlugin 的精确导出符号集合
+- Go engine_face_test 在无真实推理能力时显式 Skip 并打印原因，保留空图/损坏图/超大图边界防御
+- 同步 .trellis/spec/native/ 三份规范：dlopen 通道、Fail-Closed 错误矩阵、TTL 并发契约，以及 Go 测试缓存不感知运行期插件的陷阱
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b8b3188` | feat(native): export single-shot face extraction ABI and host dlopen/TTL loader |
+| `dfcfff9` | test(native): cover fail-closed face extraction, symbol whitelist and TTL unload |
+| `3b84797` | test(engine): branch face feature assertions on inference backend capability |
+| `43b3327` | docs(spec): record plugin dlopen channel, fail-closed matrix and go test cache pitfall |
+
+### Testing
+
+- [OK] python3 native/scripts/build.py test --inference-backend onnx -> 22/22 通过
+- [OK] python3 native/scripts/build.py test（cpu 桩后端）-> 21/21 通过
+- [OK] python3 native/scripts/build.py test --inference-backend onnx --sanitizer address -> 22/22 通过，无泄漏
+- [OK] TSan 构建下 ZhulongFaceRecognitionPlugin / ZhulongFaceFeatureExtract / ZhulongFacePluginTtl -> 3/3 通过（含 Reaper 线程与 shutdown 汇合）
+- [OK] python3 native/scripts/build.py go test -race -count=1 ./internal/engine（cpu 与 onnx 两种构建）-> 均通过
+- [OK] make native-test / api-docs / go-check -> 全绿（gofmt、go vet、全部 Go 包与桥接测试）
+- [OK] 前端 lint + 真实无头浏览器测试 301 项 + 生产构建 -> 全绿
+- [OK] readelf -d build/Zhulong-onnx 无 libonnxruntime.so NEEDED；nm -uC libZhulongEngine.a 无任何 ORT 符号
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- internal/person 的 AddFaceWithReader 把所有提取失败一律映射为 400 NO_FACE_DETECTED，插件缺失时应为 500 FEATURE_EXTRACT_FAILED；需要跨包中立 sentinel 或适配层，属独立任务
+- make check 的 pnpm install 步骤在本次沙箱中因 pnpm store 只读而无法执行，其余门禁均已逐项跑通
