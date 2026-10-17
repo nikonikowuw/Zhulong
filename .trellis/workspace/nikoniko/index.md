@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 62
+- **Total Sessions**: 64
 - **Last Active**: 2026-10-17
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~749 | Active |
+| `journal-2.md` | ~813 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 64 | 2026-10-17 | 修复原生引擎 CGO 桥接并发安全与生命周期缺陷 | `60e846f` | `dev` |
 | 62 | 2026-10-17 | 算法 IPC 帧分发与 Runner 契约修复 | `0237dcc`, `ed69b5d`, `c6c5253` | `dev` |
 | 60 | 2026-10-17 | 原生 DMA-BUF 分配器工业级重构与健壮性加固 | `a21e869` | `dev` |
 | 58 | 2026-10-17 | 修复前端 cameras 模块缺陷与规范对齐 | `233e473` | `dev` |

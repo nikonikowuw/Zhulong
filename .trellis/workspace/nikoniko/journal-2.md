@@ -775,3 +775,39 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+## Session 64: 修复原生引擎 CGO 桥接并发安全与生命周期缺陷
+<!-- trellis-session: v=2 fp=0f2955524b398916 -->
+
+**Date**: 2026-10-17
+**Task**: 修复原生引擎 CGO 桥接并发安全与生命周期缺陷
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+全面审查 internal/engine 并修复 Stream.Close 数据竞争、Engine.Close 与并发 CGO 调用 UAF、停机期间提前释放 cgo.Handle panic、AI 结果流缺少断线感知等缺陷，补齐图像解压炸弹防御与协议契约同步。
+
+### Main Changes
+
+- 在 Stream.Close 中原子锁内读取并置空 activeSub 与 activeAISub，彻底消除并发数据竞争
+- 在 Engine 中引入 handleMu sync.RWMutex 读写保护底层 handle 的 CGO 执行与 Close() 销毁时序，根治野指针与 UAF 隐患
+- 实现退订令牌在 ERR_NOT_RUNNING 时的延迟排空机制，待 stopInternal() 中 Worker 线程完全 join 汇合后再统一回收
+- 为 AIResultSubscription 配备 250ms runControlLoop 监控物理流状态，当 StreamFailed 时及时透传错误并中断订阅
+- ExtractFaceFeature 增加 MaxFaceImageDimension = 4096 图像分辨率防护门限，BroadcastAIMessage 接入 algoipc.MaxIpcPayloadSize
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `60e846f` | fix(engine): resolve CGO lifecycle UAF, stream close race, deferred token drain, and subscription failure perception |
+
+### Testing
+
+- [OK] go test -race ./internal/engine/... 100% 通过（新增 Stream.Close 高并发竞态测试与 Engine 并发生命周期压测）
+- [OK] make go-check 100% 绿灯（含 gofmt, go vet, 全仓 -race 测试及本地 RTSP loopback 真实集成测试）
+
+### Status
+
+[OK] **Completed**
