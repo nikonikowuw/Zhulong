@@ -585,3 +585,43 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 
 [OK] **Completed**
 
+
+
+## Session 58: 修复前端 cameras 模块缺陷与规范对齐
+<!-- trellis-session: v=2 fp=baca80a279b254e1 -->
+
+**Date**: 2026-10-17
+**Task**: 修复前端 cameras 模块缺陷与规范对齐
+**Package**: frontend
+**Branch**: `dev`
+
+### Summary
+
+全面修复 cameras 模块中 Radix Select 受控绑定、子流清空跨层通信、诊断弹窗虚假数据兜底、Zod 运行时校验缺失、多处 i18n 硬编码及 RTL 样式规范问题
+
+### Main Changes
+
+- action-dialog: 修复 Select 误用 defaultValue 改为受控 value；使用 useWatch 替换 form.watch 消除 React 19 兼容性警告；实现子流清空显式空 URL 载荷
+- diagnose-dialog: 移除 1080P/H.264/25fps 虚假兜底回退为 '-'；增加弹窗关闭与切换相机的 mutation reset，杜绝脏状态闪烁
+- delete-dialog: 消除 cancelBtnText='取消' 硬编码，统一使用 t('actions.cancel')；Toast 增加本地化翻译
+- api-events: 接入 Zod 校验，在 camerasApi 响应与 useCameraEvents SSE 消息（snapshot/change/message）中调用 parse/safeParse 拦截非法数据
+- columns-cells: 重构 CameraStatusBadge 对齐项目 Dot-Indicator Outline 规范；抽离 CameraColumnHeader 彻底消除 7 处 rules-of-hooks disable
+- styling-rtl: 消除 mr-2、rounded-tl、end-0 right-0 等物理样式，全部改为 RTL 逻辑属性 me-2、rounded-ss、inset-e-0；批量操作优化为 Promise.allSettled
+- locales: 补全英/简/繁三语缺失 key，并将顶部操作栏刷新按钮名称与全站其他模块对齐为「刷新」
+- spec: 在 backend/camera-guidelines.md 记录子流清空空 URL 契约，在 frontend/development-guidelines.md 记录 Radix Select 受控绑定与 useWatch 规范
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `233e473` | fix(cameras): resolve select binding, substream removal contract, fake probe data, and i18n violations |
+
+### Testing
+
+- [OK] 运行 pnpm test -- run src/features/cameras 全部通过 (63 files, 285 tests)
+- [OK] 运行 pnpm lint 零错误零警告通过
+- [OK] 运行 pnpm build (tsc -b + vite build) 生产编译打包通过
+
+### Status
+
+[OK] **Completed**

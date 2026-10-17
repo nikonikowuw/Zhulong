@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 56
+- **Total Sessions**: 58
 - **Last Active**: 2026-10-17
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~506 | Active |
+| `journal-2.md` | ~627 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 58 | 2026-10-17 | 修复前端 cameras 模块缺陷与规范对齐 | `233e473` | `dev` |
 | 56 | 2026-10-17 | 修复 algorunner 管道 Drain 竞态与 Supervisor 锁死锁 | `3982e86` | `dev` |
 | 55 | 2026-10-17 | 拆分子进程看护与容灾自愈为独立 algorunner 模块 | `85267ed` | `dev` |
 | 54 | 2026-10-17 | 设计与实现前端感知记录模块与动态类型筛选 | `3f8d830` | `dev` |
