@@ -156,15 +156,16 @@ target_compile_options(ZhulongEngine PRIVATE
 # 推理后端与视觉前处理后端是两个正交开关：可「RKNN 推理 + CPU 前处理」，也可
 # 「CPU 推理 + RGA 前处理」。默认均为 cpu，保持既有 CPU 路径零回归。
 # 视觉后端 rga 由兄弟任务 10-13-algo-rga-vision-backend 实现，本任务只声明变量。
-set(ZHULONG_INFERENCE_BACKEND "cpu" CACHE STRING "算法运行库推理后端: cpu | rknn")
-set_property(CACHE ZHULONG_INFERENCE_BACKEND PROPERTY STRINGS cpu rknn)
+set(ZHULONG_INFERENCE_BACKEND "cpu" CACHE STRING "算法运行库推理后端: cpu | rknn | onnx")
+set_property(CACHE ZHULONG_INFERENCE_BACKEND PROPERTY STRINGS cpu rknn onnx)
 set(ZHULONG_VISION_BACKEND "cpu" CACHE STRING "算法运行库视觉前处理后端: cpu | rga")
 set_property(CACHE ZHULONG_VISION_BACKEND PROPERTY STRINGS cpu rga)
 set(ZHULONG_RKNN_ROOT "" CACHE PATH "RKNN 前缀（include/rknn_api.h + lib/librknnrt.so）；仅 ZHULONG_INFERENCE_BACKEND=rknn 需要")
+set(ZHULONG_ONNX_ROOT "" CACHE PATH "ONNX Runtime 前缀（include/onnxruntime_cxx_api.h + lib/libonnxruntime.so）；仅 ZHULONG_INFERENCE_BACKEND=onnx 需要")
 set(ZHULONG_RGA_ROOT "" CACHE PATH "RGA 前缀（include/rga/im2d.h + lib/librga.so*）；仅 ZHULONG_VISION_BACKEND=rga 需要")
 
-if(NOT ZHULONG_INFERENCE_BACKEND MATCHES "^(cpu|rknn)$")
-    message(FATAL_ERROR "ZHULONG_INFERENCE_BACKEND 取值非法: ${ZHULONG_INFERENCE_BACKEND}（期望 cpu 或 rknn）")
+if(NOT ZHULONG_INFERENCE_BACKEND MATCHES "^(cpu|rknn|onnx)$")
+    message(FATAL_ERROR "ZHULONG_INFERENCE_BACKEND 取值非法: ${ZHULONG_INFERENCE_BACKEND}（期望 cpu、rknn 或 onnx）")
 endif()
 if(NOT ZHULONG_VISION_BACKEND MATCHES "^(cpu|rga)$")
     message(FATAL_ERROR "ZHULONG_VISION_BACKEND 取值非法: ${ZHULONG_VISION_BACKEND}（期望 cpu 或 rga）")
@@ -207,6 +208,20 @@ if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
     add_link_options(-Wl,-rpath-link,${ZHULONG_RKNN_ROOT}/lib)
 endif()
 
+# ONNX Runtime 推理后端：include 目录 PRIVATE，库以绝对文件路径链接。
+if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
+    if(NOT ZHULONG_ONNX_ROOT)
+        message(FATAL_ERROR "ZHULONG_INFERENCE_BACKEND=onnx 需要 -DZHULONG_ONNX_ROOT=<onnxruntime 前缀>")
+    endif()
+    if(NOT EXISTS "${ZHULONG_ONNX_ROOT}/include/onnxruntime_cxx_api.h")
+        message(FATAL_ERROR "ONNX Runtime 前缀缺少 include/onnxruntime_cxx_api.h: ${ZHULONG_ONNX_ROOT}")
+    endif()
+    if(NOT EXISTS "${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so")
+        message(FATAL_ERROR "ONNX Runtime 前缀缺少 lib/libonnxruntime.so: ${ZHULONG_ONNX_ROOT}")
+    endif()
+    add_link_options(-Wl,-rpath-link,${ZHULONG_ONNX_ROOT}/lib)
+endif()
+
 # ==============================================================================
 #                      4.1 构建公共算法运行库 (libzhulong_algo_runtime.so)
 # ==============================================================================
@@ -237,6 +252,15 @@ if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
     # 绝对路径烧进 .so（实测为 /home/niko/dev/Go/Zhulong/native/vendor/rknpu2/lib）。
     # 该 .so 要 scp 到 RK3568，不应携带宿主机路径。清空 BUILD_RPATH；
     # 下游目标的符号解析由上面的 add_link_options(-Wl,-rpath-link,…) 保证。
+    set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")
+endif()
+
+# ONNX Runtime 推理后端：仅链接进 ZhulongAlgoRuntime（.so），宿主 ZhulongEngine 绝不链接。
+if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
+    target_sources(ZhulongAlgoRuntime PRIVATE src/backends/onnx/onnx_inference_backend.cpp)
+    target_include_directories(ZhulongAlgoRuntime SYSTEM PRIVATE ${ZHULONG_ONNX_ROOT}/include)
+    target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so Threads::Threads)
+    target_compile_definitions(ZhulongAlgoRuntime PRIVATE ZHULONG_INFERENCE_ONNX=1)
     set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")
 endif()
 
@@ -494,6 +518,26 @@ if(BUILD_TESTING)
         if(NOT CMAKE_CROSSCOMPILING)
             add_test(NAME ZhulongRknnBackend COMMAND ZhulongRknnTests)
             set_tests_properties(ZhulongRknnBackend PROPERTIES TIMEOUT 120)
+        endif()
+    endif()
+
+    # ONNX Runtime 后端测试：仅在推理后端为 onnx 时构建。
+    if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
+        add_executable(ZhulongOnnxTests tests/onnx_backend_test.cpp)
+        target_compile_features(ZhulongOnnxTests PRIVATE cxx_std_17)
+        target_include_directories(ZhulongOnnxTests SYSTEM PRIVATE ${ZHULONG_ONNX_ROOT}/include)
+        target_include_directories(ZhulongOnnxTests PRIVATE src)
+        target_compile_definitions(ZhulongOnnxTests PRIVATE
+            ZHULONG_ONNX_TEST_MODEL_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/onnx/add_const.onnx"
+        )
+        target_compile_options(ZhulongOnnxTests PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
+        target_link_libraries(ZhulongOnnxTests PRIVATE ZhulongAlgoRuntime ${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so Threads::Threads)
+        if(NOT CMAKE_CROSSCOMPILING)
+            add_test(NAME ZhulongOnnxBackend COMMAND ZhulongOnnxTests)
+            set_tests_properties(ZhulongOnnxBackend PROPERTIES
+                TIMEOUT 60
+                ENVIRONMENT "LD_LIBRARY_PATH=${ZHULONG_ONNX_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
+            )
         endif()
     endif()
 

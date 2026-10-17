@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "硬件加速后端编译期接入、链接隔离、符号管理与产物卫生规范"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法插件契约与张量/运行时交互规则"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "原生引擎与后端目录结构规划"}

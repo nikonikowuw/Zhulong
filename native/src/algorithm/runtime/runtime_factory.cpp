@@ -13,6 +13,8 @@
 
 #ifdef ZHULONG_INFERENCE_RKNN
 #include <backends/rknn/rknn_inference_backend.hpp>
+#elif defined(ZHULONG_INFERENCE_ONNX)
+#include <backends/onnx/onnx_inference_backend.hpp>
 #endif
 #ifdef ZHULONG_VISION_RGA
 #include <backends/rga/rga_vision_backend.hpp>
@@ -24,8 +26,10 @@ namespace zhulong {
  * @brief 返回当前编译配置选定的推理后端单例
  */
 std::shared_ptr<IInferenceBackend> get_default_inference_backend() {
-#ifdef ZHULONG_INFERENCE_RKNN
+#if defined(ZHULONG_INFERENCE_RKNN)
     static auto backend = std::make_shared<RknnInferenceBackend>();
+#elif defined(ZHULONG_INFERENCE_ONNX)
+    static auto backend = std::make_shared<OnnxInferenceBackend>();
 #else
     static auto backend = std::make_shared<CpuInferenceBackend>();
 #endif

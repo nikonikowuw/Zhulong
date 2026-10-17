@@ -1,6 +1,6 @@
-# 原生硬件加速后端规范 (Hardware Backends: RKNN & RGA)
+# 原生推理与硬件加速后端规范 (Hardware & Inference Backends: RKNN, ONNX & RGA)
 
-> 异构芯片（Rockchip NPU/RGA）加速后端编译期接入、链接隔离、运行时对齐约束与硬核避坑规约。
+> 异构芯片（Rockchip NPU/RGA）与通用跨平台推理引擎（ONNX Runtime）编译期接入、链接隔离、运行时对齐约束与硬核避坑规约。
 
 ---
 
@@ -10,12 +10,13 @@
 
 | 变量 | 取值 | 说明 |
 | :--- | :--- | :--- |
-| `ZHULONG_INFERENCE_BACKEND` | `cpu`（默认）\| `rknn` | 推理后端选择 |
+| `ZHULONG_INFERENCE_BACKEND` | `cpu`（默认）\| `rknn` \| `onnx` | 推理后端选择 |
 | `ZHULONG_VISION_BACKEND` | `cpu`（默认）\| `rga` | 视觉前处理后端选择 |
 | `ZHULONG_RKNN_ROOT` | 路径 | 仅 `rknn` 需要；须含 `include/rknn_api.h` 与 `lib/librknnrt.so` |
+| `ZHULONG_ONNX_ROOT` | 路径 | 仅 `onnx` 需要；须含 `include/onnxruntime_cxx_api.h` 与 `lib/libonnxruntime.so` |
 | `ZHULONG_RGA_ROOT` | 路径 | 仅 `rga` 需要；须含 `include/rga/im2d.h` 与 `lib/librga.so` |
 
-- **编译防御**：`rknn` 缺 `ZHULONG_RKNN_ROOT` 或 `rga` 缺 `ZHULONG_RGA_ROOT` 时，CMake 触发 `FATAL_ERROR`（fail closed）。
+- **编译防御**：`rknn` 缺 `ZHULONG_RKNN_ROOT`、`onnx` 缺 `ZHULONG_ONNX_ROOT` 或 `rga` 缺 `ZHULONG_RGA_ROOT` 时，CMake 触发 `FATAL_ERROR`（fail closed）。
 - **正交性**：两个开关完全解耦，支持任意组合（如「RKNN 推理 + CPU 前处理」、「RKNN 推理 + RGA 前处理」等）。
 - **目标产物归属**：后端实现直接编译进 `libzhulong_algo_runtime.so`。宿主二进制 `Zhulong` 仅静态链接 `libZhulongEngine.a`，**严禁向宿主引入任何厂商 SDK 动态库依赖**。
 - **Profile 分流**：`cpu` 与 `rknn` 采用不同的交叉 profile（`native/profiles/rk3568.json` 与 `rk3568-rknn.json`），避免 mock 插件在 rknn profile 下因缺少真实模型而启动失败。
@@ -207,23 +208,69 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 
 ---
 
-## 6. 验证命令
+## 6. ONNX Runtime 推理后端契约 (Cross-Platform Inference)
+
+*运行时基线：`libonnxruntime.so` (1.16+ / 1.21)，通过 `ZHULONG_INFERENCE_BACKEND=onnx` 与 `ZHULONG_ONNX_ROOT` 编译期激活。*
+
+### 6.1 依赖隔离与符号管理
+
+1. **头文件绝对隔离**：
+   - `<onnxruntime_cxx_api.h>` 与 `<onnxruntime_c_api.h>` 仅允许在 `native/src/backends/onnx/` 内部实现及对应白盒测试中包含，严禁外溢至 `native/sdk/include/`、`native/include/` 或 `native/src/algorithm/runtime/` 公共头文件。
+   - ⚠️ **`<onnxruntime_cxx_api.h>` 静态初始化器避坑**：C++ 头文件中的 `Ort::Global<void>::api_` 会在每个包含它的编译单元生成对 `OrtGetApiBase` 的符号引用；因此 `onnx_error_map.hpp` 仅包含纯 C 头 `<onnxruntime_c_api.h>`，且 `OnnxModelAsset` / `OnnxSessionContext` 的构造与析构函数在 `onnx_inference_backend.cpp` 中类外定义（锚定 vtable 与 ORT C++ 释放调用）。
+2. **链接与 RPATH 卫生**：
+   - 仅 `ZhulongAlgoRuntime` 以 `PRIVATE` 方式链接 `${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so`，宿主 `libZhulongEngine.a` 绝不链接；
+   - 配置 `-Wl,-rpath-link,${ZHULONG_ONNX_ROOT}/lib` 与 `SKIP_BUILD_RPATH TRUE`、`BUILD_RPATH ""`，确保 `libZhulongAlgoRuntime.so` 不残留开发机绝对路径。
+
+### 6.2 资源模型、权重共享与并发约束
+
+1. **进程级共享 `Ort::Env`**：ORT 内部维护全局单例 `LoggingManager`，后端通过进程级静态 `std::shared_ptr<Ort::Env>` 复用环境实例，避免多次加载/卸载模型引发全局日志管理器状态冲突。
+2. **不可变资产与 Worker 会话隔离 (`Rule of 5`)**：
+   - `OnnxModelAsset` 持有 `std::shared_ptr<Ort::Env>`、`std::unique_ptr<Ort::Session>`（`Ort::Session::Run` 线程安全）及預解析的输入/输出 `TensorMeta` 与连续 `const char*` 名称数组；
+   - `OnnxSessionContext` 持有 `std::shared_ptr<OnnxModelAsset>` 强引用与 Worker 独占的 `Ort::RunOptions`，確保模型权重生命周期始终长于所有派生会话；
+   - 两者均显式 `= delete` 拷贝与移动构造/赋值（Rule of 5）。
+3. **边缘并发线程收敛**：`Ort::SessionOptions` 强制设置 `SetIntraOpNumThreads(1)`、`SetInterOpNumThreads(1)` 与 `ORT_ENABLE_ALL`，防止 ORT 内部线程池与宿主多 Worker 发生超额订阅（Oversubscription）。
+
+### 6.3 零拷贝张量桥接与异常防爆门
+
+1. **输入零拷贝包装**：通过 `Ort::Value::CreateTensor(memory_info, const_cast<void*>(in_tensor.raw_data()), in_tensor.byte_size(), shape_ptr, shape_len, onnx_type)` 直接挂载调用方 `zhulong::Tensor` 连续内存，禁止输入侧冗余 `memcpy`。
+2. **静态维度强校验与动态维度放行**：`forward` 前置校验输入数量、元素类型、维度阶数（Rank）；对模型中 `expected_dim > 0` 的静态维度严格校验相等，对 `<= 0`（如动态 Batch `-1`）的维度校验实参 `> 0`。
+3. **异常全拦截与错误码映射 (`map_onnx_error`)**：`load_model`、`create_session`、`forward` 内部全量捕获 `const Ort::Exception&`、`const std::bad_alloc&`、`const std::exception&` 与 `...`：
+   - `ORT_OK` ➔ `ZHULONG_PLUGIN_OK`
+   - `ORT_INVALID_ARGUMENT` / `ORT_NO_MODEL` / `ORT_INVALID_PROTOBUF` / `ORT_INVALID_GRAPH` ➔ `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`
+   - `ORT_NO_SUCHFILE` ➔ `ZHULONG_PLUGIN_ERR_NOT_FOUND`
+   - `ORT_MODEL_LOADED` ➔ `ZHULONG_PLUGIN_ERR_ALREADY_EXISTS`
+   - `ORT_NOT_IMPLEMENTED` / `ORT_EP_FAIL` ➔ `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED`
+   - `ORT_ENGINE_ERROR` / `ORT_RUNTIME_EXCEPTION` / `ORT_FAIL` 及未知码 ➔ `ZHULONG_PLUGIN_ERR_INTERNAL`
+   - `std::bad_alloc` ➔ `ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY`
+
+---
+
+## 7. 验证命令
 
 ```bash
-# 1. 检查头文件依赖隔离（仅允许在 native/src/backends/rknn/ 引用）
+# 1. 检查头文件依赖隔离（仅允许在 native/src/backends/{rknn,onnx}/ 引用）
 grep -rn '#include.*rknn_api.h' native/src/ native/sdk/ native/include/
+grep -rn 'onnxruntime' native/src/ native/sdk/ native/include/
 
-# 2. 检查宿主与动态库依赖（宿主绝对不链接厂商 SDK）
+# 2. 检查宿主与动态库依赖（宿主绝对不链接厂商 SDK，RPATH 为空）
 readelf -d build/native/cross-rk3568-rknn-rga/libZhulongAlgoRuntime.so | grep -E 'NEEDED|RUNPATH'
 readelf -d build/targets/rk3568-rknn-rga/Zhulong | grep NEEDED
 
-# 3. 运行本地 DMA-BUF 分配器与 IPC SCM_RIGHTS 传输单元测试
+# 3. 运行 ONNX Runtime 后端单元测试与 ASan/UBSan 内存审计
+python3 native/scripts/build.py configure --inference-backend onnx
+cmake --build build/native/host --parallel 8 --target ZhulongOnnxTests
+ctest --test-dir build/native/host -R ZhulongOnnx -V
+
+python3 native/scripts/build.py configure --inference-backend onnx --sanitizer address
+cmake --build build/native/host-address --parallel 8 --target ZhulongOnnxTests
+ctest --test-dir build/native/host-address -R ZhulongOnnx -V
+
+# 4. 运行本地默认 CPU 与 DMA-BUF / IPC SCM_RIGHTS 全量回归单元测试
 python3 native/scripts/build.py test
 
-# 4. 交叉构建并在 RK3568 板端验证硬件解码与全链路零拷贝
+# 5. 交叉构建并在 RK3568 板端验证硬件解码与全链路零拷贝
 python3 native/scripts/build.py --profile native/profiles/rk3568-rknn-rga.json build
 scp build/native/cross-rk3568-rknn-rga/ZhulongDecoderTests rk3568:/tmp/
 ssh rk3568 "/tmp/ZhulongDecoderTests"
 ```
-python3 native/scripts/build.py --profile native/profiles/rk3568-rknn.json build
-```
+

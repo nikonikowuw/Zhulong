@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "验证链接隔离、RPATH 清空、头文件包含防御与后端无泄漏规范"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "验证异常防爆门与状态码映射契约"}

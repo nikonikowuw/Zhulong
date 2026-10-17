@@ -14,7 +14,7 @@
 | [RTSP 接入与静态构建合同](./ingestion-contract.md) | 已实现 ABI、回调 drain、时钟/超时、FFmpeg 缓存与 host/cross/CGO 链接 |
 | [节点流水线设计](./pipeline-guidelines.md) | 节点职责、有界队列背压、零拷贝缓冲传递、5 步优雅停机 |
 | [算法插件系统与 SDK 规范](./algo-plugin-contract.md) | 纯 C ABI 隔离、现代 C++17 SDK、公共运行库 HAL、独立验包 CLI、FrameBroker 共享内存 IPC |
-| [硬件加速后端规范 (RKNN / RGA)](./hardware-backends.md) | RKNN 推理与 RGA 视觉前处理编译期配置、依赖隔离、对齐门禁与实测避坑规约 |
+| [推理与硬件加速后端规范 (RKNN / ONNX / RGA)](./hardware-backends.md) | RKNN/ONNX 推理与 RGA 视觉前处理编译期配置、依赖隔离、对齐门禁与实测避坑规约 |
 
 ---
 

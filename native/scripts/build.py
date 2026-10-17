@@ -209,7 +209,7 @@ def profile(path):
 
     # 后端选择（编译期 profile 开关）：推理与视觉前处理两个正交维度。
     # 不往 identity 里叠加无意义的失效（见 dependency()），也不默认写入未声明的键。
-    for key, allowed in (("inference_backend", ("cpu", "rknn")), ("vision_backend", ("cpu", "rga"))):
+    for key, allowed in (("inference_backend", ("cpu", "rknn", "onnx")), ("vision_backend", ("cpu", "rga"))):
         value = p.get(key, "cpu")
         if value not in allowed:
             raise ValueError(f"invalid {key}: {value!r}; expected one of {allowed}")
@@ -231,6 +231,41 @@ def rknn_prefix():
         if actual != expected:
             raise ValueError(f"vendored RKNN {relative} checksum mismatch: {actual} != {expected}")
     return RKNN_VENDOR
+
+
+ONNX_VENDOR = ROOT / "native/vendor/onnxruntime"
+ONNX_DEPS = ROOT / "build/deps/onnxruntime"
+
+
+def onnx_prefix(explicit_root=None):
+    """解析并校验 ONNX Runtime 前缀目录（离线，不联网）
+
+    优先级：显式参数 (--onnx-root / profile.onnx_root) > 环境变量 ZHULONG_ONNX_ROOT >
+    native/vendor/onnxruntime > build/deps/onnxruntime。
+    校验 include/onnxruntime_cxx_api.h 与 lib/libonnxruntime.so 必须存在。
+    """
+    candidates = []
+    if explicit_root:
+        candidates.append(Path(explicit_root))
+    env_root = os.environ.get("ZHULONG_ONNX_ROOT")
+    if env_root:
+        candidates.append(Path(env_root))
+    if not candidates:
+        for default_dir in (ONNX_VENDOR, ONNX_DEPS):
+            if (default_dir / "include/onnxruntime_cxx_api.h").is_file() and (default_dir / "lib/libonnxruntime.so").is_file():
+                candidates.append(default_dir)
+                break
+    if not candidates:
+        raise ValueError("ONNX Runtime prefix not found; pass --onnx-root or set ZHULONG_ONNX_ROOT")
+
+    prefix = candidates[0].resolve()
+    header = prefix / "include/onnxruntime_cxx_api.h"
+    library = prefix / "lib/libonnxruntime.so"
+    if not header.is_file():
+        raise ValueError(f"ONNX Runtime prefix missing include/onnxruntime_cxx_api.h: {prefix}")
+    if not library.is_file():
+        raise ValueError(f"ONNX Runtime prefix missing lib/libonnxruntime.so: {prefix}")
+    return prefix
 
 
 def rga_prefix():
@@ -284,7 +319,7 @@ def dependency(p):
     identity = dict(
         source_sha256=SHA256, version=VERSION, flags=flags,
         # 后端选择键不影响 FFmpeg 配置，过滤掉以避免无谓的缓存失效。
-        profile={k: v for k, v in p.items() if k not in ("inference_backend", "vision_backend")},
+        profile={k: v for k, v in p.items() if k not in ("inference_backend", "vision_backend", "onnx_root")},
         recipe_sha256=digest(__file__), package_resolver_sha256=digest(PACKAGE_RESOLVER), patches=[]
     )
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]
@@ -405,6 +440,8 @@ def configure(p, sanitizer):
     # 使用绝对文件路径链接，不把 RKNN 前缀塞进 CMAKE_FIND_ROOT_PATH。
     if p.get("inference_backend", "cpu") == "rknn":
         args.append(f"-DZHULONG_RKNN_ROOT={rknn_prefix()}")
+    elif p.get("inference_backend", "cpu") == "onnx":
+        args.append(f"-DZHULONG_ONNX_ROOT={onnx_prefix(p.get('onnx_root'))}")
     # 同理，只有 rga 才校验 RGA 前缀。
     if p.get("vision_backend", "cpu") == "rga":
         args.append(f"-DZHULONG_RGA_ROOT={rga_prefix()}")
@@ -511,6 +548,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", help="显式交叉编译目标 JSON 配置；省略则表示编译为 Host 本地模式")
     parser.add_argument("--sanitizer", choices=("address", "thread"), help="开启 ASan 或 TSan 内存/线程检查")
+    parser.add_argument("--inference-backend", choices=("cpu", "rknn", "onnx"), help="算法运行库推理后端")
+    parser.add_argument("--onnx-root", help="ONNX Runtime 前缀路径（覆盖 ZHULONG_ONNX_ROOT）")
     sub = parser.add_subparsers(dest="command", required=True)
 
     prep = sub.add_parser("prepare", help="准备依赖源码压缩包")
@@ -518,7 +557,10 @@ def main():
     prep.add_argument("--download", action="store_true", help="允许联网下载固定版本的 FFmpeg 源码")
 
     for name in ("configure", "build", "test"):
-        sub.add_parser(name)
+        cmd_parser = sub.add_parser(name)
+        cmd_parser.add_argument("--sanitizer", dest="sub_sanitizer", choices=("address", "thread"), help="开启 ASan 或 TSan 内存/线程检查")
+        cmd_parser.add_argument("--inference-backend", dest="sub_inference_backend", choices=("cpu", "rknn", "onnx"), help="算法运行库推理后端")
+        cmd_parser.add_argument("--onnx-root", dest="sub_onnx_root", help="ONNX Runtime 前缀路径（覆盖 ZHULONG_ONNX_ROOT）")
 
     sub.add_parser("go", help="调用 Go 编译器（带 CGO 隔离参数）").add_argument("args", nargs=argparse.REMAINDER)
 
@@ -528,18 +570,26 @@ def main():
         prepare(args.archive, args.download)
         return
 
+    sanitizer = args.sanitizer or getattr(args, "sub_sanitizer", None)
+    inference_backend = args.inference_backend or getattr(args, "sub_inference_backend", None)
+    onnx_root = args.onnx_root or getattr(args, "sub_onnx_root", None)
+
     p = profile(args.profile)
+    if inference_backend:
+        p["inference_backend"] = inference_backend
+    if onnx_root:
+        p["onnx_root"] = onnx_root
 
     if p["mode"] != "host" and args.command == "test":
         raise ValueError("cross tests cannot run on the host; use build then inspect/deploy")
 
     if args.command == "go":
-        if args.sanitizer:
+        if sanitizer:
             raise ValueError("sanitizer builds are Native-only; Go race is a separate check")
         if p["mode"] != "host":
             validate_cross_go(p, args.args)
 
-    build, prefix = configure(p, args.sanitizer)
+    build, prefix = configure(p, sanitizer)
 
     if args.command != "configure":
         run(["cmake", "--build", build, "--parallel", str(min(os.cpu_count() or 2, 8))])
