@@ -722,3 +722,28 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 
 [OK] **Completed**
 
+
+
+## Session 62: 算法 IPC 帧分发与 Runner 契约修复
+<!-- trellis-session: v=2 fp=0d5361360969e1b0 -->
+
+**Date**: 2026-10-17
+**Task**: 算法 IPC 帧分发与 Runner 契约修复
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+审查 native/src/algorithm/ 后修复七条 IPC/Runner 层缺陷：FrameBroker 槽位容量不足时静默发旧帧（改为统一前置门禁 + fail_publish 回滚）、write_all 在 SO_SNDTIMEO 下对 EAGAIN 无界自旋可挂死 Engine::control（改走 poll(POLLOUT,50)）、FrameDispatchMsg.reserved_fd 跨进程透传宿主 fd 号（恒置 -1，Runner 只认 SCM_RIGHTS 本地 fd）、Runner 多路消费共享 rc 数据竞争（lambda 局部化）、MSG_GALLERY_SYNC 分片重复累加污染底库（accumulate_sync_shard 幂等 + 范围门禁）、handle_ack 先扣配额后校验索引（校验前置）、发送侧缺 MAX_IPC_PAYLOAD_SIZE 门禁（对称补齐）。额外发现并修复两处：收齐后 is_complete() 恒为真导致重复分片二次 reset 清空底库；ZhulongIpcSocketFd/DmaBufAllocator 测试不在 -UNDEBUG 列表致断言长期假绿。验证：host/ASan/TSan 各 20/20，make check 与 go-check EXIT=0；三条核心断言均做反向验证（禁用门禁段错误、退化为非幂等精确失败、回退 reserved_fd 精确失败）。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0237dcc` | fix(algo-ipc): reject silent stale-frame dispatch, bound send EAGAIN, and drop host fd from wire |
+| `ed69b5d` | fix(native-test): make IpcSocketFd and DmaBufAllocator asserts actually run |
+| `c6c5253` | chore(task): add algorithm IPC contracts and safety planning artifacts |
+
+### Status
+
+[OK] **Completed**
