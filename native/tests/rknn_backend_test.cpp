@@ -503,11 +503,19 @@ void case_concurrency(const std::string& model_path) {
 
 // Case 4：故障注入（AC5）。
 void case_faults(const std::string& model_path) {
+    // 编译期静态验证 Rule of 5 规范
+    static_assert(!std::is_copy_constructible<zhulong::RknnModelAsset>::value, "RknnModelAsset must not be copyable");
+    static_assert(!std::is_copy_assignable<zhulong::RknnModelAsset>::value, "RknnModelAsset must not be copy-assignable");
+    static_assert(!std::is_copy_constructible<zhulong::RknnSessionContext>::value, "RknnSessionContext must not be copyable");
+    static_assert(!std::is_copy_assignable<zhulong::RknnSessionContext>::value, "RknnSessionContext must not be copy-assignable");
+
     zhulong::RknnInferenceBackend backend;
 
     require(backend.load_model("") == nullptr, "case4: load_model(\"\") -> nullptr");
     require(backend.load_model("/nonexistent/definitely-not-a-model.rknn") == nullptr,
             "case4: load_model(nonexistent) -> nullptr");
+    require(backend.load_model("/nonexistent/definitely-not-a-model.rknn///") == nullptr,
+            "case4: load_model(trailing slash) -> nullptr");
 
     const std::string garbage_path = "/tmp/zhulong_rknn_garbage.rknn";
     {
@@ -548,6 +556,26 @@ void case_faults(const std::string& model_path) {
         require(backend.forward(session.get(), {small}, outputs) ==
                     ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT,
                 "case4: forward(undersized input) -> INVALID_ARGUMENT");
+
+        // 验证 DMA-BUF 输入故障与状态回滚
+        zhulong::Tensor invalid_dma = zhulong::Tensor::from_dma_buf(99999, input.shape(), input.dtype(), nullptr);
+        std::vector<zhulong::Tensor> dma_inputs(rknn_asset->io_num.n_input, invalid_dma);
+        require(backend.forward(session.get(), dma_inputs, outputs) != ZHULONG_PLUGIN_OK,
+                "case4: forward(invalid dma fd) fails safely");
+
+        // 验证失败后立即切换回常规 Host 内存，缓存清理后能正常运行
+        std::vector<zhulong::Tensor> valid_inputs(rknn_asset->io_num.n_input, input);
+        require(backend.forward(session.get(), valid_inputs, outputs) == ZHULONG_PLUGIN_OK,
+                "case4: forward(normal) after failed dma succeeds");
+
+        // 若为多输入模型，验证混合输入安全拦截
+        if (rknn_asset->io_num.n_input > 1) {
+            std::vector<zhulong::Tensor> mixed_inputs = valid_inputs;
+            mixed_inputs[0] = invalid_dma;
+            require(backend.forward(session.get(), mixed_inputs, outputs) ==
+                        ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT,
+                    "case4: forward(mixed dma and normal) -> INVALID_ARGUMENT");
+        }
 
         require(backend.create_session(nullptr, 0) == nullptr, "case4: create_session(nullptr) -> nullptr");
         auto plain = std::make_shared<zhulong::ModelAsset>();

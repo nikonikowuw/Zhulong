@@ -27,8 +27,15 @@ namespace {
  * @brief 取文件基名作为 model_id（不引入 <filesystem>，保持交叉工具链最小依赖）
  */
 std::string file_basename(const std::string& path) {
-    const auto slash = path.find_last_of("/\\");
-    return slash == std::string::npos ? path : path.substr(slash + 1);
+    if (path.empty()) {
+        return "";
+    }
+    const auto end = path.find_last_not_of("/\\");
+    if (end == std::string::npos) {
+        return "";
+    }
+    const auto slash = path.find_last_of("/\\", end);
+    return slash == std::string::npos ? path.substr(0, end + 1) : path.substr(slash + 1, end - slash);
 }
 
 // rknn_outputs_release 的 RAII 守卫：保证所有路径（含异常）恰好释放一次。
@@ -236,68 +243,83 @@ zhulong_status_t RknnInferenceBackend::forward(SessionContext* session,
             }
         }
 
-        // 检查是否具备外部 DMA-BUF 零拷贝输入
-        bool has_dma_input = false;
+        // 检查 DMA-BUF 输入分布：全量检查是否为混合输入
+        uint32_t dma_count = 0;
         for (const auto& in_tensor : inputs) {
             if (in_tensor.dma_buf_fd() >= 0) {
-                has_dma_input = true;
-                break;
+                ++dma_count;
             }
         }
 
-        if (has_dma_input) {
+        // ⚠️ 硬件契约：同 Context 严禁混用 rknn_set_io_mem 与 rknn_inputs_set
+        if (dma_count > 0 && dma_count != asset.io_num.n_input) {
+            return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+        }
+
+        if (dma_count == asset.io_num.n_input) {
+            // 全量 DMA-BUF 零拷贝输入路径
             if (state->cached_input_mems.size() != asset.io_num.n_input) {
                 state->cached_input_mems.resize(asset.io_num.n_input);
             }
 
             for (uint32_t i = 0; i < asset.io_num.n_input; ++i) {
                 const rknn_tensor_attr& attr = asset.input_attrs[i];
+                auto& cached = state->cached_input_mems[i];
+                const int in_fd = inputs[i].dma_buf_fd();
+                void* in_va = const_cast<void*>(inputs[i].raw_data());
+                const size_t in_size = inputs[i].byte_size();
 
-                if (inputs[i].dma_buf_fd() >= 0) {
-                    auto& cached = state->cached_input_mems[i];
-                    if (cached.mem == nullptr || cached.fd != inputs[i].dma_buf_fd() ||
-                        cached.va != inputs[i].raw_data() || cached.size != inputs[i].byte_size()) {
-                        if (cached.mem != nullptr) {
-                            rknn_destroy_mem(state->ctx, cached.mem);
-                            cached.mem = nullptr;
-                        }
-                        cached.mem = rknn_create_mem_from_fd(
-                            state->ctx,
-                            inputs[i].dma_buf_fd(),
-                            const_cast<void*>(inputs[i].raw_data()),
-                            static_cast<uint32_t>(inputs[i].byte_size()),
-                            0
-                        );
-                        if (!cached.mem) {
-                            return ZHULONG_PLUGIN_ERR_INTERNAL;
-                        }
-                        cached.fd = inputs[i].dma_buf_fd();
-                        cached.va = const_cast<void*>(inputs[i].raw_data());
-                        cached.size = inputs[i].byte_size();
+                if (cached.mem == nullptr || cached.fd != in_fd ||
+                    cached.va != in_va || cached.size != in_size) {
 
-                        rknn_tensor_attr io_attr = attr;
-                        io_attr.type = to_rknn_tensor_type(inputs[i].dtype());
-                        io_attr.index = i;
-                        int set_ret = rknn_set_io_mem(state->ctx, cached.mem, &io_attr);
-                        if (set_ret != RKNN_SUCC) {
-                            return map_rknn_error(set_ret);
-                        }
+                    // 准备阶段：释放旧映射
+                    cached.reset(state->ctx);
+
+                    // 校验输入尺寸是否满足模型要求
+                    if (in_size < attr.size) {
+                        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
                     }
-                } else {
-                    rknn_input in{};
-                    in.index = i;
-                    in.buf = const_cast<void*>(inputs[i].raw_data());
-                    in.size = static_cast<uint32_t>(inputs[i].byte_size());
-                    in.pass_through = 0;
-                    in.type = to_rknn_tensor_type(inputs[i].dtype());
-                    in.fmt = attr.fmt;
-                    int in_ret = rknn_inputs_set(state->ctx, 1, &in);
-                    if (in_ret != RKNN_SUCC) {
-                        return map_rknn_error(in_ret);
+
+                    rknn_tensor_mem* new_mem = rknn_create_mem_from_fd(
+                        state->ctx,
+                        in_fd,
+                        in_va,
+                        static_cast<uint32_t>(in_size),
+                        0
+                    );
+                    if (!new_mem) {
+                        return ZHULONG_PLUGIN_ERR_INTERNAL;
                     }
+
+                    rknn_tensor_attr io_attr = attr;
+                    io_attr.index = i;
+                    io_attr.type = to_rknn_tensor_type(inputs[i].dtype());
+                    // 如果数据类型已与模型期望类型一致，pass_through 设为 1 避免二次转换
+                    io_attr.pass_through = (io_attr.type == attr.type) ? 1 : 0;
+
+                    int set_ret = rknn_set_io_mem(state->ctx, new_mem, &io_attr);
+                    if (set_ret != RKNN_SUCC) {
+                        // 事务回滚：立即销毁新句柄，不修改 cached 元数据
+                        rknn_destroy_mem(state->ctx, new_mem);
+                        return map_rknn_error(set_ret);
+                    }
+
+                    // 事务提交：仅在 set_io_mem 成功后提交凭据
+                    cached.mem = new_mem;
+                    cached.fd = in_fd;
+                    cached.va = in_va;
+                    cached.size = in_size;
                 }
             }
         } else {
+            // 全量常规 Host 内存路径：若此前会话曾绑定过 DMA 内存，先清理以防上下文冲突
+            if (!state->cached_input_mems.empty()) {
+                for (auto& item : state->cached_input_mems) {
+                    item.reset(state->ctx);
+                }
+                state->cached_input_mems.clear();
+            }
+
             std::vector<rknn_input> rknn_inputs(asset.io_num.n_input);
             for (uint32_t i = 0; i < asset.io_num.n_input; ++i) {
                 const rknn_tensor_attr& attr = asset.input_attrs[i];
@@ -323,22 +345,8 @@ zhulong_status_t RknnInferenceBackend::forward(SessionContext* session,
             return map_rknn_error(ret);
         }
 
-        std::vector<rknn_output> rknn_outputs(asset.io_num.n_output);
-        for (uint32_t i = 0; i < asset.io_num.n_output; ++i) {
-            rknn_output& out = rknn_outputs[i];
-            out = {};
-            out.want_float = 1; // 统一转 float32，避免手工反量化（不猜 zp/scale）
-            out.is_prealloc = 0; // buf 由 runtime 分配，release 时释放
-            out.index = i;
-        }
-
-        ret = rknn_outputs_get(state->ctx, asset.io_num.n_output, rknn_outputs.data(), nullptr);
-        if (ret != RKNN_SUCC) {
-            return map_rknn_error(ret);
-        }
-
-        OutputsReleaseGuard guard{state->ctx, rknn_outputs, true};
-
+        // 提前构造输出 Tensor 并挂载到 outputs，实现 is_prealloc = 1 零拷贝直写
+        outputs.reserve(asset.io_num.n_output);
         for (uint32_t i = 0; i < asset.io_num.n_output; ++i) {
             const rknn_tensor_attr& attr = asset.output_attrs[i];
             if (attr.n_dims == 0 || attr.n_dims > RKNN_MAX_DIMS) {
@@ -354,16 +362,34 @@ zhulong_status_t RknnInferenceBackend::forward(SessionContext* session,
                 }
                 shape.push_back(static_cast<int64_t>(attr.dims[d]));
             }
+            outputs.emplace_back(std::move(shape), DataType::FLOAT32);
+        }
 
-            // 输出经 want_float=1 已统一为 FLOAT32。
-            Tensor tensor(std::move(shape), DataType::FLOAT32);
-            if (rknn_outputs[i].buf == nullptr || rknn_outputs[i].size < tensor.byte_size()) {
+        std::vector<rknn_output> rknn_outputs(asset.io_num.n_output);
+        for (uint32_t i = 0; i < asset.io_num.n_output; ++i) {
+            rknn_output& out = rknn_outputs[i];
+            out = {};
+            out.want_float = 1;  // 统一转 float32，避免手工反量化（不猜 zp/scale）
+            out.is_prealloc = 1; // 零拷贝直写预分配 Tensor，消除中间 malloc 与 memcpy
+            out.index = i;
+            out.buf = outputs[i].raw_data();
+            out.size = static_cast<uint32_t>(outputs[i].byte_size());
+        }
+
+        ret = rknn_outputs_get(state->ctx, asset.io_num.n_output, rknn_outputs.data(), nullptr);
+        if (ret != RKNN_SUCC) {
+            outputs.clear();
+            return map_rknn_error(ret);
+        }
+
+        OutputsReleaseGuard guard{state->ctx, rknn_outputs, true};
+
+        // 校验输出尺寸一致性，防范 Stride 截断错位
+        for (uint32_t i = 0; i < asset.io_num.n_output; ++i) {
+            if (rknn_outputs[i].size != outputs[i].byte_size()) {
                 outputs.clear();
                 return ZHULONG_PLUGIN_ERR_INTERNAL;
             }
-            std::memcpy(tensor.raw_data(), rknn_outputs[i].buf,
-                        std::min<size_t>(tensor.byte_size(), rknn_outputs[i].size));
-            outputs.push_back(std::move(tensor));
         }
 
         return ZHULONG_PLUGIN_OK;

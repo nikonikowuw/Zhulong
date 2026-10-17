@@ -685,3 +685,40 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 ### Status
 
 [OK] **Completed**
+
+
+## Session 61: 修复 RKNN 推理后端的 DMA-BUF 状态管理与输出直写优化
+
+**Date**: 2026-10-17
+**Task**: `10-17-fix-rknn-backend-dmabuf-and-perf`
+**Package**: `native`
+**Branch**: `dev`
+
+### Summary
+
+修复 RKNN 推理后端中 DMA-BUF 缓存脏状态、多输入混合类型约束、输出热路径高频分配与拷贝瓶颈，并补齐 Rule of 5 与边缘防御，确保 NPU 硬件推理的内存安全性与高性能。
+
+### Main Changes
+
+- **两阶段事务性 DMA-BUF 缓存与回滚**: 重构 `cached_input_mems` 状态流转，只有在 `rknn_set_io_mem` 成功返回后才提交凭据；绑定失败立即销毁新句柄并回滚，杜绝幽灵缓存命中跳过绑定。
+- **全量 DMA-BUF 门禁**: 严格遵循 RKNPU2 规范，拦截部分 DMA-BUF 与部分 Host 内存的混合输入并返回 `INVALID_ARGUMENT`；从 DMA 零拷贝切回常规 Host 模式时主动清理解绑旧句柄。
+- **输出 Float32 零拷贝直写 (`is_prealloc = 1`)**: 提前构造目标 `Tensor` 实例挂载至 `rknn_output.buf`，由底层 runtime 直接写出 float32，彻底消除每帧 malloc/free 抖动与全局 memcpy；严格校验输出尺寸防范 Stride 截断错位。
+- **C++ 规范与边界鲁棒性**: `RknnModelAsset` 与 `RknnSessionContext` 显式禁用拷贝（Rule of 5）；强化 `file_basename` 防御末尾斜杠。
+- **测试覆盖与规范更新**: 在 `tests/rknn_backend_test.cpp` 补充 static_assert 检查、尾部斜杠路径、无效 DMA 故障恢复与混合输入拦截测试；在 `.trellis/spec/native/hardware-backends.md` 固化相关契约。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| (pending) | fix(rknn): resolve DMA-BUF cache poisoning, enforce uniform input mode, and enable direct output writing |
+
+### Testing
+
+- [OK] `python3 native/scripts/build.py test`: 20/20 原生单元测试全部通过
+- [OK] `python3 native/scripts/build.py --profile native/profiles/rk3568-rknn.json build`: 算法运行时与 `ZhulongRknnTests` 交叉编译全绿通过
+- [OK] `make go-check`: go vet、跨模块 -race 及 RTSP Fixture 测试全项通过
+
+### Status
+
+[OK] **Completed**
+

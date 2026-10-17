@@ -55,6 +55,12 @@ struct RknnModelAsset : public ModelAsset {
     rknn_mem_size mem_size{};                      /**< ⚠️ 必须由独立的一次性上下文查询（见 .cpp 的 R10 说明） */
     rknn_sdk_version sdk_version{};                /**< 运行库版本（证据记录） */
 
+    RknnModelAsset() = default;
+    RknnModelAsset(const RknnModelAsset&) = delete;
+    RknnModelAsset& operator=(const RknnModelAsset&) = delete;
+    RknnModelAsset(RknnModelAsset&&) = delete;
+    RknnModelAsset& operator=(RknnModelAsset&&) = delete;
+
     ~RknnModelAsset() override {
         if (root_valid) {
             rknn_destroy(root_ctx);
@@ -69,6 +75,16 @@ struct CachedDmaMem {
     void* va{nullptr};
     size_t size{0};
     rknn_tensor_mem* mem{nullptr};
+
+    void reset(rknn_context context) {
+        if (mem != nullptr && context != 0) {
+            rknn_destroy_mem(context, mem);
+        }
+        mem = nullptr;
+        fd = -1;
+        va = nullptr;
+        size = 0;
+    }
 };
 
 // 每 worker 一个，独占；上下文由 rknn_dup_context(&root, &ctx) 派生。
@@ -85,15 +101,20 @@ struct RknnSessionContext : public SessionContext {
 
     std::vector<CachedDmaMem> cached_input_mems;
 
+    RknnSessionContext() = default;
+    RknnSessionContext(const RknnSessionContext&) = delete;
+    RknnSessionContext& operator=(const RknnSessionContext&) = delete;
+    RknnSessionContext(RknnSessionContext&&) = delete;
+    RknnSessionContext& operator=(RknnSessionContext&&) = delete;
+
     ~RknnSessionContext() override {
-        for (auto& item : cached_input_mems) {
-            if (item.mem && valid) {
-                rknn_destroy_mem(ctx, item.mem);
-                item.mem = nullptr;
+        if (valid && ctx != 0) {
+            for (auto& item : cached_input_mems) {
+                item.reset(ctx);
             }
         }
         cached_input_mems.clear();
-        if (valid) {
+        if (valid && ctx != 0) {
             rknn_destroy(ctx);
             valid = false;
         }

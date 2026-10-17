@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "RKNN 硬件后端编译、链接隔离、上下文生命周期与 Stride 对齐规范"}
+{"file": ".trellis/spec/native/index.md", "reason": "Native 原生层开发规范索引与检查清单"}

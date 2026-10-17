@@ -72,9 +72,10 @@ if (rknn_init(&probe, path, 0, 0, nullptr) == RKNN_SUCC) {
 ### 2.5 数据传输与并发约束
 
 1. **输入缓冲要求 Packed**：`rknn_input` 无 stride 字段，传入内存必须紧凑排布。输入校验按元素总数 `inputs[i].element_count() == attr.n_elems` 比对，适配 UINT8 图像到 FP16 模型的内部自动转换。
-2. **输出 Float32 自动归一**：设置 `want_float = 1` 由 runtime 统一写出 float32，避免手写反量化公式。
-3. **输出资源释放 Guard**：`rknn_outputs_release` 必须由 RAII guard 管理，保证异常路径亦被释放。
+2. **输出 Float32 零拷贝直写 (`is_prealloc = 1`)**：设置 `want_float = 1` 与 `is_prealloc = 1`，输出前预分配目标 `Tensor` 并将 `raw_data()` 挂载给 `rknn_output.buf`，由底层 runtime 直接写出 float32，彻底消除中间临时堆分配（malloc/free）与 `memcpy` 拷贝开销。校验 `rknn_outputs[i].size == tensor.byte_size()` 防范 Stride 截断错位。
+3. **输出资源释放 Guard**：`rknn_outputs_release` 必须由 RAII guard 管理；当 `is_prealloc = 1` 时只释放底层句柄，不释放外部 Tensor 缓冲区。
 4. **单核 NPU 特性**：RK3568 为单核 NPU，增加 Worker 数仅能重叠前后处理时间，不能提升纯 NPU 推理并行度；严禁开启未经充分验证的 `RKNN_FLAG_ASYNC_MASK`。
+5. **C++ 资源规范 (Rule of 5)**：`RknnModelAsset` 与 `RknnSessionContext` 显式禁用拷贝构造函数与拷贝赋值运算符，杜绝底层 `rknn_context` 双重释放。
 
 ---
 
@@ -147,14 +148,15 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 
 ### 4.3 RKNPU2 零拷贝张量绑定 (`rknn_create_mem_from_fd`)
 
-- **零内存拷贝输入导入**：
-  当输入张量是由有效 DMA-BUF 派生时（`tensor.dma_buf_fd() >= 0`），使用 `rknn_create_mem_from_fd` 将 DMA-BUF fd 注册为 NPU 内存对象，并调用 `rknn_set_io_mem` 完成直绑：
-  ```cpp
-  rknn_tensor_mem* mem = rknn_create_mem_from_fd(ctx, tensor.dma_buf_fd(), tensor.data(), tensor.byte_size(), 0);
-  rknn_set_io_mem(ctx, mem, &attr);
-  ```
-- **资源生命周期 Guard**：绑定生成的 `rknn_tensor_mem` 在执行 `rknn_run` 完毕后及时通过 `rknn_destroy_mem` 释放 NPU IO 映射，避免 NPU 内存上下文泄露。
-- **软硬件自动降级**：当输入张量为常规 CPU 虚拟内存时，后端自动采用标准的 `rknn_inputs_set` 内存拷贝流程。
+- **全量 DMA-BUF 门禁（防混用冲突）**：
+  Rockchip RKNPU2 底层驱动严禁同一 Context 混用常规拷贝 `rknn_inputs_set` 与零拷贝 `rknn_set_io_mem`。输入张量若存在部分提供 DMA-BUF 部分为 Host 内存，严格拦截并返回 `ZHULONG_STATUS_INVALID_ARGUMENT`；当从 DMA 模式切回 Host 模式时，主动清理会话缓存中残留的 `rknn_tensor_mem`。
+- **两阶段事务提交缓存机制**：
+  会话中缓存已注册的 `CachedDmaMem`。当检测到 fd/va/size 变动时：
+  1. 调用 `reset()` 释放旧 `rknn_tensor_mem`；
+  2. 调用 `rknn_create_mem_from_fd` 创建新句柄；
+  3. 配置 `io_attr`（类型一致时设置 `pass_through = 1`）并执行 `rknn_set_io_mem`；
+  4. ⚠️ **失败事务回滚**：若 `rknn_set_io_mem` 失败，立即销毁新句柄且不更新缓存元数据，杜绝下帧幽灵缓存命中跳过绑定；只有绑定成功才正式提交凭据。
+- **软硬件自动降级**：当所有输入张量均为常规 CPU 虚拟内存时，后端自动采用标准的 `rknn_inputs_set` 内存拷贝流程。
 
 ---
 

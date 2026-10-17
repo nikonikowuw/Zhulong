@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "验证 RKNN 后端错误码映射、内存所有权以及 Stride 约束合规性"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "验证代码质量、无未定义行为及错误处理规范"}
