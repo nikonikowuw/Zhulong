@@ -9,11 +9,11 @@ import {
   ScrollText,
   UserCheck,
   HardDrive,
-  Server,
   Cpu,
   Images,
   Workflow,
 } from 'lucide-react'
+import { ZhulongLogo } from '@/assets/zhulong-logo'
 import { type SidebarData } from '../types'
 
 export const sidebarData: SidebarData = {
@@ -25,7 +25,7 @@ export const sidebarData: SidebarData = {
   teams: [
     {
       name: 'Zhulong Edge',
-      logo: Server,
+      logo: ZhulongLogo,
       plan: '边缘智能宿主',
     },
   ],

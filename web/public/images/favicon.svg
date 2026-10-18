@@ -1,4 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:svgjs="http://svgjs.com/svgjs" width="24" height="24"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokewidth="2" strokelinecap="round" strokelinejoin="round">
-  <path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"></path>
-</svg><style>@media (prefers-color-scheme: light) { :root { filter: contrast(1) brightness(0.8); } }
-</style></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="zhulong-z-light" x1="10" y1="8" x2="54" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#f43f5e"/>
+      <stop offset="42%" stop-color="#ea580c"/>
+      <stop offset="100%" stop-color="#e11d48"/>
+    </linearGradient>
+  </defs>
+  <!-- 工业动力学 Z 标 (Zhulong Kinetic Monogram) -->
+  <path d="M 14 8 H 48 C 51.3 8 54 10.7 54 14 V 18 C 54 19.8 53.2 21.5 51.8 22.6 L 27.2 38 H 48 C 51.3 38 54 40.7 54 44 V 50 C 54 53.3 51.3 56 48 56 H 16 C 12.7 56 10 53.3 10 50 V 46 C 10 44.2 10.8 42.5 12.2 41.4 L 36.8 26 H 16 C 12.7 26 10 23.3 10 20 V 14 C 10 10.7 12.7 8 16 8 Z" 
+        fill="url(#zhulong-z-light)"/>
+</svg>

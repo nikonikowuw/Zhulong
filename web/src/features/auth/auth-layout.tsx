@@ -29,7 +29,7 @@ export function AuthLayout({ children }: AuthLayoutProps): ReactElement {
       {/* 顶部微工具栏 */}
       <header className='relative z-10 flex w-full items-center justify-between border-b border-border/20 px-6 py-4 backdrop-blur-xs'>
         <div className='flex items-center gap-2.5'>
-          <ZhulongLogo className='size-7 text-primary transition-transform hover:scale-105' />
+          <ZhulongLogo className='size-7 transition-transform hover:scale-105' useGradient />
           <div className='flex flex-col'>
             <span className='text-sm font-semibold tracking-wider text-foreground uppercase'>
               烛龙 · Zhulong

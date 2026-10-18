@@ -38,8 +38,8 @@ export function TeamSwitcher({ teams }: TeamSwitcherProps) {
             size='lg'
             className='hover:bg-transparent active:bg-transparent'
           >
-            <div className='flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground'>
-              <activeTeam.logo className='size-4' />
+            <div className='flex aspect-square size-8 items-center justify-center rounded-lg bg-gradient-to-br from-[#ff4757] via-[#ff793f] to-[#ff3366] text-white shadow-sm shadow-red-500/20'>
+              <activeTeam.logo className='size-4.5 text-white' />
             </div>
             <div className='grid flex-1 text-start text-sm leading-tight'>
               <span className='truncate font-semibold'>{activeTeam.name}</span>
@@ -62,8 +62,8 @@ export function TeamSwitcher({ teams }: TeamSwitcherProps) {
               size='lg'
               className='data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground'
             >
-              <div className='flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground'>
-                <activeTeam.logo className='size-4' />
+              <div className='flex aspect-square size-8 items-center justify-center rounded-lg bg-gradient-to-br from-[#ff4757] via-[#ff793f] to-[#ff3366] text-white shadow-sm shadow-red-500/20'>
+                <activeTeam.logo className='size-4.5 text-white' />
               </div>
               <div className='grid flex-1 text-start text-sm leading-tight'>
                 <span className='truncate font-semibold'>
@@ -89,8 +89,8 @@ export function TeamSwitcher({ teams }: TeamSwitcherProps) {
                 onClick={() => setActiveTeam(team)}
                 className='gap-2 p-2'
               >
-                <div className='flex size-6 items-center justify-center rounded-sm border'>
-                  <team.logo className='size-4 shrink-0' />
+                <div className='flex size-6 items-center justify-center rounded-sm bg-gradient-to-br from-[#ff4757] to-[#ff3366] text-white'>
+                  <team.logo className='size-3.5 text-white shrink-0' />
                 </div>
                 {team.name}
                 <DropdownMenuShortcut>⌘{index + 1}</DropdownMenuShortcut>
