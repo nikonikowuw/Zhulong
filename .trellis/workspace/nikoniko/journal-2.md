@@ -965,3 +965,26 @@ Implemented persistent storage for AI perception records (`recognitions`, `alarm
 
 - internal/person 的 AddFaceWithReader 把所有提取失败一律映射为 400 NO_FACE_DETECTED，插件缺失时应为 500 FEATURE_EXTRACT_FAILED；需要跨包中立 sentinel 或适配层，属独立任务
 - make check 的 pnpm install 步骤在本次沙箱中因 pnpm store 只读而无法执行，其余门禁均已逐项跑通
+
+
+## Session 69: Refactor algo config dynamic form to macOS/Linear streamlined list with high-contrast slider
+<!-- trellis-session: v=2 fp=e1f7c8b4b472b07e -->
+
+**Date**: 2026-10-18
+**Task**: Refactor algo config dynamic form to macOS/Linear streamlined list with high-contrast slider
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+Decompose channel-task-dialog and introduce AlgoConfigDynamicForm based on JSON Schema draft-07. Implement macOS/Linear streamlined list layout with high-contrast dual-layer slider track and progress fill, fix numeric value truncation, and support bidirectional sync with raw JSON editor.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8bd921e` | refactor(web/tasks): split the channel-task form into schema, hook and field components |
+
+### Status
+
+[OK] **Completed**
