@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -429,7 +430,7 @@ type personGalleryAdapter struct {
 	broadcaster *algorunner.GalleryBroadcaster
 }
 
-func (a *personGalleryAdapter) BroadcastUpsert(ctx context.Context, item person.GalleryUpsertPayload) error {
+func (a *personGalleryAdapter) BroadcastUpsert(ctx context.Context, item person.GalleryItem) error {
 	if a.broadcaster == nil {
 		return nil
 	}
@@ -472,6 +473,28 @@ func (a *supervisorGallerySyncAdapter) GetGallerySyncData(ctx context.Context) (
 		}
 	}
 	return algoItems, nil
+}
+
+// faceFeatureExtractorAdapter bridges *engine.Engine to person.FaceFeatureExtractor.
+//
+// The translation lives here rather than in internal/person so the domain package
+// keeps its "no dependency on internal/engine" boundary. It also maps the engine's
+// "no face found" status onto person.ErrNoFaceDetected, which lets the HTTP layer
+// answer 422 for an unusable photo while a genuine engine failure is still
+// reported as a server error instead of blaming the upload.
+type faceFeatureExtractorAdapter struct {
+	eng *engine.Engine
+}
+
+func (a *faceFeatureExtractorAdapter) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]float32, error) {
+	features, err := a.eng.ExtractFaceFeature(ctx, imageBytes)
+	if err != nil {
+		if errors.Is(err, engine.ErrNotFound) {
+			return nil, fmt.Errorf("%w: %v", person.ErrNoFaceDetected, err)
+		}
+		return nil, err
+	}
+	return features, nil
 }
 
 func provideAlgorithm(
@@ -567,10 +590,18 @@ func providePerson(
 	if facesDir == "" {
 		facesDir = filepath.Join(config.DataDir, "faces")
 	}
-	comp := person.NewPersonComponents(dbProvider, facesDir, eng, logger)
-	if broadcaster != nil {
-		comp.Service.SetGalleryNotifier(&personGalleryAdapter{broadcaster: broadcaster})
+	// Collaborators are resolved before construction: the person components capture
+	// their dependencies once and never swap them afterwards.
+	var extractor person.FaceFeatureExtractor
+	if eng != nil {
+		extractor = &faceFeatureExtractorAdapter{eng: eng}
 	}
+	var notifier person.GalleryNotifier
+	if broadcaster != nil {
+		notifier = &personGalleryAdapter{broadcaster: broadcaster}
+	}
+
+	comp := person.NewPersonComponents(dbProvider, facesDir, extractor, notifier, logger)
 	if supervisor != nil && broadcaster != nil {
 		supervisor.SetGallerySync(&supervisorGallerySyncAdapter{service: comp.Service}, broadcaster)
 	}

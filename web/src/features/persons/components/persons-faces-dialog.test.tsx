@@ -17,14 +17,19 @@ const mockPerson: Person = {
 
 vi.mock('../hooks/use-persons', () => ({
   usePersonFaces: () => ({
-    data: [
-      {
-        id: 'f-01',
-        ownerRowId: 'p-01',
-        imagePath: '/data/faces/alice_01.jpg',
-        createdAt: '2026-10-14T01:00:00Z',
-      },
-    ],
+    data: {
+      items: [
+        {
+          id: 'f-01',
+          ownerRowId: 'p-01',
+          imagePath: '/data/faces/alice_01.jpg',
+          createdAt: '2026-10-14T01:00:00Z',
+        },
+      ],
+      total: 1,
+      page: 1,
+      pageSize: 100,
+    },
     isLoading: false,
   }),
   useAddFace: () => ({

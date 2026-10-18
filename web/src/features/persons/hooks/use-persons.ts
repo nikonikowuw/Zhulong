@@ -10,7 +10,7 @@ import {
 } from '../api/persons-api'
 import {
   type CreatePersonDto,
-  type Face,
+  type FaceListResponse,
   type Person,
   type PersonListResponse,
   type UpdatePersonDto,
@@ -43,15 +43,17 @@ export function usePerson(id?: string): UseQueryResult<Person, Error> {
 }
 
 /**
- * 获取指定人员关联的人脸底库列表
+ * 获取指定人员关联的人脸底库列表（分页信封，total 为后端真实总数）
  */
 export function usePersonFaces(
   personId?: string
-): UseQueryResult<Face[], Error> {
+): UseQueryResult<FaceListResponse, Error> {
   return useQuery({
     queryKey: [...PERSONS_QUERY_KEY, personId, 'faces'],
     queryFn: () =>
-      personId ? personsApi.listFaces(personId) : Promise.reject('No personId'),
+      personId
+        ? personsApi.listFaces(personId, { pageSize: 100 })
+        : Promise.reject('No personId'),
     enabled: Boolean(personId),
   })
 }

@@ -27,6 +27,14 @@ import (
 	"go.uber.org/zap"
 )
 
+// stubPersonExtractor satisfies person.FaceFeatureExtractor so app-level route
+// tests can enroll faces without the native engine.
+type stubPersonExtractor struct{}
+
+func (stubPersonExtractor) ExtractFaceFeature(context.Context, []byte) ([]float32, error) {
+	return make([]float32, 512), nil
+}
+
 func createUncompressedTestTarGz(t *testing.T, payloadBytes int) string {
 	t.Helper()
 	tmpFile, err := os.CreateTemp("", "test_uncompressed_*.tar.gz")
@@ -358,7 +366,7 @@ func TestPersonFaceUploadRouterAllowsLargeImage(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	personComp := person.NewPersonComponents(dbStore, filepath.Join(dataDir, "faces"), nil, zap.NewNop())
+	personComp := person.NewPersonComponents(dbStore, filepath.Join(dataDir, "faces"), stubPersonExtractor{}, nil, zap.NewNop())
 
 	assets := http.FS(fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("shell")},
@@ -383,7 +391,7 @@ func TestPersonFaceUploadRouterAllowsLargeImage(t *testing.T) {
 		t.Fatalf("create person failed: %d, body: %s", w.Code, w.Body.String())
 	}
 	var created struct {
-		Data person.Person `json:"data"`
+		Data person.PersonResponse `json:"data"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &created)
 	personID := created.Data.ID

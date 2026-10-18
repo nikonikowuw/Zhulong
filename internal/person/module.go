@@ -44,14 +44,18 @@ type RouteRegistrar interface {
 }
 
 // NewPersonComponents constructs all person domain singletons.
+//
+// Every collaborator — including the optional gallery notifier — is captured here.
+// Nothing in this package supports swapping a dependency after construction.
 func NewPersonComponents(
 	dbProvider database.DBProvider,
 	facesDir string,
 	extractor FaceFeatureExtractor,
+	notifier GalleryNotifier,
 	logger *zap.Logger,
 ) *PersonComponents {
 	store := NewStore(dbProvider)
-	service := NewService(store, facesDir, extractor, logger)
+	service := NewService(store, facesDir, extractor, notifier, logger)
 	handler := NewHandler(service, logger)
 
 	return &PersonComponents{

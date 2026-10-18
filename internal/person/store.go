@@ -21,6 +21,34 @@ var (
 	ErrDuplicatePersonID = errors.New("person with this person_id already exists")
 )
 
+// Page bounds applied to every paginated query in this package. They mirror
+// httputil.PaginationQuery.Normalize and act as a second line of defence for
+// callers that reach the store without going through a handler.
+const (
+	defaultPageSize = 20
+	maxPageSize     = 100
+)
+
+// clampPagination applies the shared page bounds.
+func clampPagination(limit, offset int) (int, int) {
+	if limit <= 0 {
+		limit = defaultPageSize
+	} else if limit > maxPageSize {
+		limit = maxPageSize
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
+// selectFaceSummary loads only the columns a face list needs. It deliberately
+// omits feature_vector: every vector is faceFeatureDim*4 bytes, and list views
+// render thumbnails from image_path alone.
+func selectFaceSummary(db *gorm.DB) *gorm.DB {
+	return db.Select("id", "person_id", "image_path", "created_at")
+}
+
 // Store handles SQLite persistence for the personnel and face gallery domain.
 type Store struct {
 	dbProvider database.DBProvider
@@ -86,13 +114,17 @@ func (s *Store) CreatePerson(ctx context.Context, p *Person) error {
 }
 
 // GetPerson fetches a person by ID along with all associated Face templates.
+//
+// The preload is narrowed to the summary columns: no caller of GetPerson needs a
+// feature vector. The gallery paths that do (GetGallerySyncData, the re-publish
+// after a rename) read them through ListAllPersons / ListFacesByPerson.
 func (s *Store) GetPerson(ctx context.Context, id string) (*Person, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var p Person
-	if err := db.Preload("Faces").Where("id = ?", id).First(&p).Error; err != nil {
+	if err := db.Preload("Faces", selectFaceSummary).Where("id = ?", id).First(&p).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
 		}
@@ -104,7 +136,7 @@ func (s *Store) GetPerson(ctx context.Context, id string) (*Person, error) {
 // GetPersonMeta fetches a person's own row without preloading Faces.
 //
 // Use it on paths that need only the person's scalar columns — the update merge and the
-// existence checks behind AddFace / ListFaces — so they do not pay to load every 2048-byte
+// existence checks behind AddFace / ListFaces — so they do not pay to load every
 // feature vector belonging to that person.
 func (s *Store) GetPersonMeta(ctx context.Context, id string) (*Person, error) {
 	db, err := s.db(ctx)
@@ -140,17 +172,10 @@ func (s *Store) ListPersons(ctx context.Context, limit, offset int, search strin
 		return nil, 0, fmt.Errorf("count persons: %w", err)
 	}
 
-	if limit <= 0 {
-		limit = 20
-	} else if limit > 100 {
-		limit = 100
-	}
-	if offset < 0 {
-		offset = 0
-	}
+	limit, offset = clampPagination(limit, offset)
 
 	var list []Person
-	if err := query.Preload("Faces").Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
+	if err := query.Preload("Faces", selectFaceSummary).Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
 		return nil, 0, err
 	}
 	return list, total, nil
@@ -198,8 +223,18 @@ func (s *Store) UpdatePerson(ctx context.Context, p *Person) error {
 	}
 	res := db.Model(&Person{}).Where("id = ?", p.ID).Updates(updates)
 	if res.Error != nil {
-		if strings.Contains(res.Error.Error(), "UNIQUE constraint failed: persons.person_id") {
-			return ErrDuplicatePersonID
+		// Attribute a uniqueness violation by re-reading who owns the business key
+		// rather than by matching the driver's error text, which is not part of any
+		// stable contract. The CASE above only ever writes person_id when the row
+		// currently has none, so a conflicting owner can only mean a real collision.
+		if p.PersonID != nil && *p.PersonID != "" {
+			var owners int64
+			probeErr := db.Model(&Person{}).
+				Where("person_id = ? AND id <> ?", *p.PersonID, p.ID).
+				Count(&owners).Error
+			if probeErr == nil && owners > 0 {
+				return ErrDuplicatePersonID
+			}
 		}
 		return res.Error
 	}
@@ -249,12 +284,15 @@ func (s *Store) AddFace(ctx context.Context, face *Face) error {
 
 		// Proactively assign as primary face if person currently has none.
 		var p Person
-		if err := tx.Where("id = ?", face.OwnerRowID).First(&p).Error; err != nil {
+		if err := tx.Where("id = ?", face.PersonRowID).First(&p).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
 			return err
 		}
 		if p.PrimaryFaceID == nil || *p.PrimaryFaceID == "" {
 			now := time.Now().UTC()
-			if err := tx.Model(&Person{}).Where("id = ?", face.OwnerRowID).Updates(map[string]any{
+			if err := tx.Model(&Person{}).Where("id = ?", face.PersonRowID).Updates(map[string]any{
 				"primary_face_id": face.ID,
 				"updated_at":      now,
 			}).Error; err != nil {
@@ -288,23 +326,33 @@ func (s *Store) ListFacesByPerson(ctx context.Context, personID string) ([]Face,
 		return nil, err
 	}
 	var list []Face
-	if err := db.Where("person_id = ?", personID).Order("created_at ASC").Find(&list).Error; err != nil {
+	if err := db.Where("person_id = ?", personID).Order("created_at ASC, id ASC").Find(&list).Error; err != nil {
 		return nil, err
 	}
 	return list, nil
 }
 
-// ListAllFaces returns all face templates across all persons.
-func (s *Store) ListAllFaces(ctx context.Context) ([]Face, error) {
+// ListFacesByPersonPaged returns one page of a person's face templates together
+// with the total count.
+func (s *Store) ListFacesByPersonPaged(ctx context.Context, personID string, limit, offset int) ([]Face, int64, error) {
 	db, err := s.db(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
+
+	query := db.Model(&Face{}).Where("person_id = ?", personID)
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count faces: %w", err)
+	}
+
+	limit, offset = clampPagination(limit, offset)
+
 	var list []Face
-	if err := db.Order("created_at ASC").Find(&list).Error; err != nil {
-		return nil, err
+	if err := query.Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
+		return nil, 0, err
 	}
-	return list, nil
+	return list, total, nil
 }
 
 // DeleteFace deletes a specific face template, scoped to its owning person so
@@ -365,10 +413,14 @@ func (s *Store) DeleteFace(ctx context.Context, personID, id string) error {
 	})
 }
 
-// SetPrimaryFace updates a person's primary face pointer.
-// If faceID is non-nil and non-empty, it verifies that the face exists and belongs to personID.
-// If faceID is nil or empty, it clears the primary face pointer.
-func (s *Store) SetPrimaryFace(ctx context.Context, personID string, faceID *string) error {
+// SetPrimaryFace points a person's primary_face_id at one of their own faces.
+//
+// The face must exist and belong to personID; callers that need to tell "person
+// missing" apart from "face missing" resolve those separately first (see
+// Service.SetPrimaryFace). Clearing the pointer is not a supported transition:
+// the pointer is maintained by AddFace and DeleteFace as the person's face set
+// changes.
+func (s *Store) SetPrimaryFace(ctx context.Context, personID, faceID string) error {
 	db, err := s.db(ctx)
 	if err != nil {
 		return err
@@ -383,24 +435,17 @@ func (s *Store) SetPrimaryFace(ctx context.Context, personID string, faceID *str
 			return err
 		}
 
-		now := time.Now().UTC()
-		if faceID != nil && *faceID != "" {
-			var count int64
-			if err := tx.Model(&Face{}).Where("id = ? AND person_id = ?", *faceID, personID).Count(&count).Error; err != nil {
-				return err
-			}
-			if count == 0 {
-				return ErrNotFound
-			}
-			return tx.Model(&Person{}).Where("id = ?", personID).Updates(map[string]any{
-				"primary_face_id": *faceID,
-				"updated_at":      now,
-			}).Error
+		var count int64
+		if err := tx.Model(&Face{}).Where("id = ? AND person_id = ?", faceID, personID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return ErrNotFound
 		}
 
 		return tx.Model(&Person{}).Where("id = ?", personID).Updates(map[string]any{
-			"primary_face_id": nil,
-			"updated_at":      now,
+			"primary_face_id": faceID,
+			"updated_at":      time.Now().UTC(),
 		}).Error
 	})
 }

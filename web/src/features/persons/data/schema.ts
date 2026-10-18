@@ -36,6 +36,19 @@ export const personListResponseSchema = z.object({
 
 export type PersonListResponse = z.infer<typeof personListResponseSchema>
 
+/**
+ * 人脸底库列表响应。后端 GET /persons/{id}/faces 返回分页信封，
+ * 不再是裸数组，因此 items 与 total 都需要显式解析。
+ */
+export const faceListResponseSchema = z.object({
+  items: z.array(faceSchema),
+  total: z.number(),
+  page: z.number(),
+  pageSize: z.number(),
+})
+
+export type FaceListResponse = z.infer<typeof faceListResponseSchema>
+
 export const createPersonSchema = z.object({
   name: z.string().trim().min(1, 'validation.nameRequired').max(64),
   personId: z

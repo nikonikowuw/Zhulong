@@ -106,7 +106,7 @@ describe('personsApi', () => {
     expect(spy).toHaveBeenCalledWith('/persons/p-02')
   })
 
-  it('listFaces calls GET /persons/:id/faces', async () => {
+  it('listFaces calls GET /persons/:id/faces and unwraps the paginated envelope', async () => {
     const mockFaces = [
       {
         id: 'f-01',
@@ -116,11 +116,21 @@ describe('personsApi', () => {
       },
     ]
 
-    const spy = vi.spyOn(apiClient, 'get').mockResolvedValueOnce(mockResponse(mockFaces))
+    const spy = vi.spyOn(apiClient, 'get').mockResolvedValueOnce(
+      mockResponse({
+        items: mockFaces,
+        total: 1,
+        page: 1,
+        pageSize: 100,
+      })
+    )
 
     const res = await personsApi.listFaces('p-01')
-    expect(res).toEqual(mockFaces)
-    expect(spy).toHaveBeenCalledWith('/persons/p-01/faces')
+    expect(res.items).toEqual(mockFaces)
+    expect(res.total).toBe(1)
+    expect(spy).toHaveBeenCalledWith('/persons/p-01/faces', {
+      params: { page: 1, pageSize: 20 },
+    })
   })
 
   it('addFace uploads file with multipart/form-data', async () => {

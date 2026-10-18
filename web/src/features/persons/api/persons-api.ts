@@ -1,7 +1,12 @@
 import { apiClient, type ApiResponse } from '@/lib/api-client'
 import {
+  faceListResponseSchema,
+  faceSchema,
+  personListResponseSchema,
+  personSchema,
   type CreatePersonDto,
   type Face,
+  type FaceListResponse,
   type Person,
   type PersonListResponse,
   type UpdatePersonDto,
@@ -11,6 +16,11 @@ export interface GetPersonsParams {
   page?: number
   pageSize?: number
   search?: string
+}
+
+export interface GetFacesParams {
+  page?: number
+  pageSize?: number
 }
 
 export const personsApi = {
@@ -28,14 +38,13 @@ export const personsApi = {
         },
       }
     )
-    return (
-      resp.data.data ?? {
-        items: [],
-        total: 0,
-        page: params?.page ?? 1,
-        pageSize: params?.pageSize ?? 10,
-      }
-    )
+    const raw = resp.data.data ?? {
+      items: [],
+      total: 0,
+      page: params?.page ?? 1,
+      pageSize: params?.pageSize ?? 10,
+    }
+    return personListResponseSchema.parse(raw)
   },
 
   /**
@@ -43,7 +52,7 @@ export const personsApi = {
    */
   async getPerson(id: string): Promise<Person> {
     const resp = await apiClient.get<ApiResponse<Person>>(`/persons/${id}`)
-    return resp.data.data
+    return personSchema.parse(resp.data.data)
   },
 
   /**
@@ -51,7 +60,7 @@ export const personsApi = {
    */
   async createPerson(data: CreatePersonDto): Promise<Person> {
     const resp = await apiClient.post<ApiResponse<Person>>('/persons', data)
-    return resp.data.data
+    return personSchema.parse(resp.data.data)
   },
 
   /**
@@ -62,7 +71,7 @@ export const personsApi = {
       `/persons/${id}`,
       data
     )
-    return resp.data.data
+    return personSchema.parse(resp.data.data)
   },
 
   /**
@@ -73,22 +82,34 @@ export const personsApi = {
   },
 
   /**
-   * 获取人员关联的所有人脸底库
+   * 获取人员关联的人脸底库分页列表
    */
-  async listFaces(personId: string): Promise<Face[]> {
-    const resp = await apiClient.get<ApiResponse<Face[]>>(
-      `/persons/${personId}/faces`
+  async listFaces(
+    personId: string,
+    params?: GetFacesParams
+  ): Promise<FaceListResponse> {
+    const resp = await apiClient.get<ApiResponse<FaceListResponse>>(
+      `/persons/${personId}/faces`,
+      {
+        params: {
+          page: params?.page ?? 1,
+          pageSize: params?.pageSize ?? 20,
+        },
+      }
     )
-    return resp.data.data ?? []
+    const raw = resp.data.data ?? {
+      items: [],
+      total: 0,
+      page: params?.page ?? 1,
+      pageSize: params?.pageSize ?? 20,
+    }
+    return faceListResponseSchema.parse(raw)
   },
 
   /**
    * 录入新人脸底库（本地图片文件直传）
    */
-  async addFace(
-    personId: string,
-    data: File | FormData
-  ): Promise<Face> {
+  async addFace(personId: string, data: File | FormData): Promise<Face> {
     const formData = data instanceof FormData ? data : new FormData()
     if (data instanceof File) {
       formData.append('file', data)
@@ -101,7 +122,7 @@ export const personsApi = {
         headers: { 'Content-Type': 'multipart/form-data' },
       }
     )
-    return resp.data.data
+    return faceSchema.parse(resp.data.data)
   },
 
   /**
@@ -128,6 +149,6 @@ export const personsApi = {
       `/persons/${personId}/primary-face`,
       { faceId }
     )
-    return resp.data.data
+    return personSchema.parse(resp.data.data)
   },
 }

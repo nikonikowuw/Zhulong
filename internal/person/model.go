@@ -1,9 +1,6 @@
 package person
 
-import (
-	"mime/multipart"
-	"time"
-)
+import "time"
 
 // Audit actions for person-domain operations. Namespaced as <domain>.<resource>.<verb> to
 // match the rest of the codebase (audit/model.go, systemtime, storage): the audit log is
@@ -19,20 +16,25 @@ const (
 )
 
 // Person represents a personnel profile entity in the personnel database.
+//
+// Person is a persistence model, not an API contract: every field is tagged
+// `json:"-"` so a Person can never be serialized to a client by accident. The
+// HTTP projection lives in PersonResponse (responses.go) and the inbound
+// payloads in requests.go.
 type Person struct {
-	ID string `gorm:"primaryKey;column:id" json:"id"`
+	ID string `gorm:"primaryKey;column:id" json:"-"`
 	// PersonID is the external business key consumed by third-party systems. It is
 	// optional, unique when assigned, and immutable once set.
-	PersonID      *string   `gorm:"column:person_id" json:"personId"`
-	Name          string    `gorm:"column:name;not null" json:"name"`
-	PrimaryFaceID *string   `gorm:"column:primary_face_id" json:"primaryFaceId,omitempty"`
-	CreatedAt     time.Time `gorm:"column:created_at;not null" json:"createdAt"`
-	UpdatedAt     time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
+	PersonID      *string   `gorm:"column:person_id" json:"-"`
+	Name          string    `gorm:"column:name;not null" json:"-"`
+	PrimaryFaceID *string   `gorm:"column:primary_face_id" json:"-"`
+	CreatedAt     time.Time `gorm:"column:created_at;not null" json:"-"`
+	UpdatedAt     time.Time `gorm:"column:updated_at;not null" json:"-"`
 	// Faces is a read-only projection populated by Preload. Write paths MUST go
 	// through AddFace / DeleteFace; never persist a Person with a populated
 	// Faces slice (see Store.UpdatePerson). The CASCADE below is declarative
 	// only — the effective constraint lives in the persons_tables migration.
-	Faces []Face `gorm:"foreignKey:OwnerRowID;references:ID;constraint:OnDelete:CASCADE" json:"faces,omitempty"`
+	Faces []Face `gorm:"foreignKey:PersonRowID;references:ID;constraint:OnDelete:CASCADE" json:"-"`
 }
 
 // TableName sets the table name for Person.
@@ -41,16 +43,21 @@ func (Person) TableName() string {
 }
 
 // Face represents an enrolled facial template belonging to a Person (1:N model).
+//
+// Like Person, Face is a persistence model and never serialized directly; see
+// FaceResponse for the API projection.
 type Face struct {
-	ID string `gorm:"primaryKey;column:id" json:"id"`
-	// OwnerRowID is the internal persons.id of the owning record. It deliberately does
-	// NOT serialize as "personId": Person.PersonID already owns that JSON name and means
-	// the external business key, so sharing it made the two identifiers indistinguishable
-	// to API clients. The owning person is already implied by the enclosing resource.
-	OwnerRowID    string    `gorm:"column:person_id;not null;index" json:"ownerRowId"`
-	ImagePath     string    `gorm:"column:image_path;not null;default:''" json:"imagePath"`
+	ID string `gorm:"primaryKey;column:id" json:"-"`
+	// PersonRowID is the internal persons.id of the owning record, persisted in the
+	// person_faces.person_id column. It is deliberately named for the internal row
+	// id rather than reusing "PersonID": Person.PersonID already means the external
+	// business key, and sharing the name made the two identifiers
+	// indistinguishable. The owning person is also implied by the enclosing
+	// resource path, which is why the API exposes it only as ownerRowId.
+	PersonRowID   string    `gorm:"column:person_id;not null;index" json:"-"`
+	ImagePath     string    `gorm:"column:image_path;not null;default:''" json:"-"`
 	FeatureVector []byte    `gorm:"column:feature_vector;not null" json:"-"`
-	CreatedAt     time.Time `gorm:"column:created_at;not null" json:"createdAt"`
+	CreatedAt     time.Time `gorm:"column:created_at;not null" json:"-"`
 }
 
 // TableName sets the table name for Face.
@@ -58,44 +65,12 @@ func (Face) TableName() string {
 	return "person_faces"
 }
 
-// CreatePersonRequest represents request payload to create a new person.
-type CreatePersonRequest struct {
-	// PersonID is the external business key. It is optional: if omitted or empty,
-	// it is left unset (NULL) without falling back to the internal primary key.
-	PersonID string `json:"personId"`
-	Name     string `json:"name" binding:"required"`
-}
-
-// UpdatePersonRequest represents request payload to update person metadata.
-type UpdatePersonRequest struct {
-	// PersonID is accepted only so that an attempt to change it fails loudly instead
-	// of being silently dropped by the JSON decoder. Supplying a different value is
-	// rejected with PERSON_ID_IMMUTABLE.
-	PersonID *string `json:"personId,omitempty"`
-	Name     *string `json:"name,omitempty"`
-}
-
-// AddFaceRequest represents the multipart form payload to enroll a face template.
-type AddFaceRequest struct {
-	File *multipart.FileHeader `form:"file" binding:"required"`
-}
-
-// SetPrimaryFaceRequest represents the payload to set the primary face for a person.
-type SetPrimaryFaceRequest struct {
-	FaceID string `json:"faceId" binding:"required"`
-}
-
-// GallerySyncItem represents a serialized face embedding item for algorithm runner IPC.
-type GallerySyncItem struct {
-	FaceID     string    `json:"face_id"`
-	PersonID   string    `json:"person_id"`
-	PersonName string    `json:"person_name"`
-	ImagePath  string    `json:"image_path,omitempty"`
-	Features   []float32 `json:"features,omitempty"`
-}
-
-// GalleryUpsertPayload represents an incremental enrollment update for algorithm runner IPC.
-type GalleryUpsertPayload struct {
+// GalleryItem is one face-gallery entry as published to the algorithm runner over
+// IPC. The same shape carries both the cold-start snapshot (GetGallerySyncData)
+// and incremental changes (GalleryNotifier.BroadcastUpsert). Its snake_case JSON
+// names are the IPC wire contract and deliberately differ from the camelCase
+// names used by the HTTP API.
+type GalleryItem struct {
 	FaceID     string    `json:"face_id"`
 	PersonID   string    `json:"person_id"`
 	PersonName string    `json:"person_name"`

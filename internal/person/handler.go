@@ -36,6 +36,8 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.POST("", h.Create)
 		group.GET("/:id", h.Get)
 		group.PUT("/:id", h.Update)
+		// PATCH is registered alongside PUT because the personId back-fill contract
+		// (task 10-15-decouple-external-person-id, AC-4) is specified as PATCH.
 		group.PATCH("/:id", h.Update)
 		group.PUT("/:id/primary-face", h.SetPrimaryFace)
 		group.DELETE("/:id", h.Delete)
@@ -79,12 +81,16 @@ type listPersonsQuery struct {
 // @Param        limit query int false "Legacy pagination limit"
 // @Param        offset query int false "Legacy pagination offset"
 // @Param        search query string false "Search keyword for name or personId"
-// @Success      200  {object}  httputil.Response{data=httputil.PaginatedData[Person]}
+// @Success      200  {object}  httputil.Response{data=httputil.PaginatedData[PersonResponse]}
+// @Failure      422  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /persons [get]
 func (h *Handler) List(c *gin.Context) {
 	var query listPersonsQuery
-	_ = c.ShouldBindQuery(&query)
+	if err := c.ShouldBindQuery(&query); err != nil {
+		httputil.HandleBindError(c, err)
+		return
+	}
 	page, pageSize, offset, limit := query.Normalize()
 
 	persons, total, err := h.service.ListPersons(c.Request.Context(), limit, offset, query.Search)
@@ -93,7 +99,7 @@ func (h *Handler) List(c *gin.Context) {
 		return
 	}
 
-	httputil.PaginatedSuccess(c, persons, total, page, pageSize)
+	httputil.PaginatedSuccess(c, newPersonResponses(persons), total, page, pageSize)
 }
 
 // Create godoc
@@ -102,8 +108,9 @@ func (h *Handler) List(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Param        request body CreatePersonRequest true "Person creation payload"
-// @Success      201  {object}  httputil.Response{data=Person}
+// @Success      201  {object}  httputil.Response{data=PersonResponse}
 // @Failure      400  {object}  httputil.Response
+// @Failure      409  {object}  httputil.Response
 // @Failure      422  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /persons [post]
@@ -125,7 +132,7 @@ func (h *Handler) Create(c *gin.Context) {
 
 	audithttp.TagTarget(c, "person:"+p.ID)
 	audithttp.TagDetail(c, "Create person "+p.Name)
-	httputil.SuccessWithStatus(c, http.StatusCreated, p)
+	httputil.SuccessWithStatus(c, http.StatusCreated, newPersonResponse(p))
 }
 
 // Get godoc
@@ -133,7 +140,7 @@ func (h *Handler) Create(c *gin.Context) {
 // @Tags         person
 // @Produce      json
 // @Param        id path string true "Person ID"
-// @Success      200  {object}  httputil.Response{data=Person}
+// @Success      200  {object}  httputil.Response{data=PersonResponse}
 // @Failure      404  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /persons/{id} [get]
@@ -144,7 +151,7 @@ func (h *Handler) Get(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, p)
+	httputil.Success(c, newPersonResponse(p))
 }
 
 // Update godoc
@@ -154,9 +161,10 @@ func (h *Handler) Get(c *gin.Context) {
 // @Produce      json
 // @Param        id path string true "Person ID"
 // @Param        request body UpdatePersonRequest true "Person update payload"
-// @Success      200  {object}  httputil.Response{data=Person}
+// @Success      200  {object}  httputil.Response{data=PersonResponse}
 // @Failure      400  {object}  httputil.Response
 // @Failure      404  {object}  httputil.Response
+// @Failure      409  {object}  httputil.Response
 // @Failure      422  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /persons/{id} [put]
@@ -176,7 +184,7 @@ func (h *Handler) Update(c *gin.Context) {
 		return
 	}
 	audithttp.TagDetail(c, "Update person "+p.Name)
-	httputil.Success(c, p)
+	httputil.Success(c, newPersonResponse(p))
 }
 
 // Delete godoc
@@ -204,20 +212,32 @@ func (h *Handler) Delete(c *gin.Context) {
 // @Tags         person
 // @Produce      json
 // @Param        id path string true "Person ID"
-// @Success      200  {object}  httputil.Response{data=[]Face}
+// @Param        page query int false "Page number (1-based, default 1)"
+// @Param        pageSize query int false "Page size (default 20, max 100)"
+// @Param        limit query int false "Legacy pagination limit"
+// @Param        offset query int false "Legacy pagination offset"
+// @Success      200  {object}  httputil.Response{data=httputil.PaginatedData[FaceResponse]}
+// @Failure      404  {object}  httputil.Response
+// @Failure      422  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /persons/{id}/faces [get]
 func (h *Handler) ListFaces(c *gin.Context) {
 	personID := c.Param("id")
-	faces, err := h.service.ListFaces(c.Request.Context(), personID)
+
+	var query httputil.PaginationQuery
+	if err := c.ShouldBindQuery(&query); err != nil {
+		httputil.HandleBindError(c, err)
+		return
+	}
+	page, pageSize, offset, limit := query.Normalize()
+
+	faces, total, err := h.service.ListFaces(c.Request.Context(), personID, limit, offset)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
-	if faces == nil {
-		faces = make([]Face, 0)
-	}
-	httputil.Success(c, faces)
+
+	httputil.PaginatedSuccess(c, newFaceResponses(faces), total, page, pageSize)
 }
 
 // AddFace godoc
@@ -227,9 +247,10 @@ func (h *Handler) ListFaces(c *gin.Context) {
 // @Produce      json
 // @Param        id path string true "Person ID"
 // @Param        file formData file true "Face photo image file (JPG, PNG, WebP)"
-// @Success      201  {object}  httputil.Response{data=Face}
+// @Success      201  {object}  httputil.Response{data=FaceResponse}
 // @Failure      400  {object}  httputil.Response
 // @Failure      404  {object}  httputil.Response
+// @Failure      422  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /persons/{id}/faces [post]
 func (h *Handler) AddFace(c *gin.Context) {
@@ -251,7 +272,7 @@ func (h *Handler) AddFace(c *gin.Context) {
 	}
 
 	audithttp.TagTarget(c, "face:"+face.ID)
-	httputil.SuccessWithStatus(c, http.StatusCreated, face)
+	httputil.SuccessWithStatus(c, http.StatusCreated, newFaceResponse(*face))
 }
 
 // GetFaceImage godoc
@@ -311,7 +332,7 @@ func (h *Handler) DeleteFace(c *gin.Context) {
 // @Produce      json
 // @Param        id path string true "Person ID"
 // @Param        request body SetPrimaryFaceRequest true "Primary face payload"
-// @Success      200  {object}  httputil.Response{data=Person}
+// @Success      200  {object}  httputil.Response{data=PersonResponse}
 // @Failure      400  {object}  httputil.Response
 // @Failure      404  {object}  httputil.Response
 // @Failure      422  {object}  httputil.Response
@@ -333,5 +354,5 @@ func (h *Handler) SetPrimaryFace(c *gin.Context) {
 		return
 	}
 
-	httputil.Success(c, p)
+	httputil.Success(c, newPersonResponse(p))
 }

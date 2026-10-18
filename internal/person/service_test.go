@@ -17,6 +17,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/database"
+	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
 
@@ -133,8 +134,8 @@ func BenchmarkBytesToFloat32_UnalignedFallback(b *testing.B) {
 	}
 }
 
-func TestGallerySyncItem_JSONContract(t *testing.T) {
-	item := GallerySyncItem{
+func TestGalleryItem_JSONContract(t *testing.T) {
+	item := GalleryItem{
 		FaceID:     "face_123",
 		PersonID:   "emp_9527",
 		PersonName: "张三",
@@ -168,7 +169,7 @@ func TestGetGallerySyncData(t *testing.T) {
 	defer dbStore.Close()
 
 	store := NewStore(dbStore)
-	svc := NewService(store, tempDir, nil, zap.NewNop())
+	svc := NewService(store, tempDir, nil, nil, zap.NewNop())
 	ctx := context.Background()
 
 	p := &Person{
@@ -184,7 +185,7 @@ func TestGetGallerySyncData(t *testing.T) {
 	binary.LittleEndian.PutUint32(rawFeat[0:4], math.Float32bits(0.99))
 	face := &Face{
 		ID:            "face_test",
-		OwnerRowID:    "p_test",
+		PersonRowID:   "p_test",
 		ImagePath:     "/img.jpg",
 		FeatureVector: rawFeat,
 	}
@@ -220,6 +221,12 @@ var (
 	testWebPBytes = []byte("RIFF\x1a\x00\x00\x00WEBPVP8 \x0e\x00\x00\x00mock-webp-data")
 )
 
+// defaultTestExtractor returns a well-formed 512-dim embedding so tests that are
+// not about feature extraction can still enroll faces.
+func defaultTestExtractor() FaceFeatureExtractor {
+	return &mockExtractor{features: make([]float32, faceFeatureDim)}
+}
+
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	tempDir := t.TempDir()
@@ -229,7 +236,7 @@ func newTestService(t *testing.T) *Service {
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	return NewService(NewStore(dbStore), tempDir, nil, zap.NewNop())
+	return NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), nil, zap.NewNop())
 }
 
 func requireDomainError(t *testing.T, err error, kind apperr.Kind, code string) {
@@ -249,11 +256,11 @@ func TestCreatePerson_DuplicatePersonIDIsConflict(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
-	if _, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "EMP_1", Name: "张三"}); err != nil {
+	if _, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("EMP_1"), Name: "张三"}); err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
 
-	_, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "EMP_1", Name: "李四"})
+	_, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("EMP_1"), Name: "李四"})
 	requireDomainError(t, err, apperr.KindConflict, "PERSON_ID_ALREADY_EXISTS")
 }
 
@@ -285,7 +292,7 @@ func TestUpdatePerson_RejectsPersonIDChange(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
-	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "EMP_1", Name: "张三"})
+	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("EMP_1"), Name: "张三"})
 	if err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
@@ -342,7 +349,7 @@ func TestUpdatePerson_RejectsBlankName(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
-	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "EMP_1", Name: "张三"})
+	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("EMP_1"), Name: "张三"})
 	if err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
@@ -362,16 +369,18 @@ func TestUpdatePerson_RejectsBlankName(t *testing.T) {
 
 // TestNewID_IsUnique pins the replacement for the time.Now().UnixNano() row ids, which
 // could collide and surface as a duplicate-primary-key 500.
+// TestNewID_IsUnique pins the row-id generator used for every person and face
+// primary key: ids must be unique without coordination.
 func TestNewID_IsUnique(t *testing.T) {
 	const draws = 1000
 	seen := make(map[string]struct{}, draws)
 	for i := 0; i < draws; i++ {
-		id := newID()
+		id := idutil.New()
 		if id == "" {
-			t.Fatal("newID returned an empty id")
+			t.Fatal("idutil.New returned an empty id")
 		}
 		if _, dup := seen[id]; dup {
-			t.Fatalf("newID repeated %q after %d draws", id, i)
+			t.Fatalf("idutil.New repeated %q after %d draws", id, i)
 		}
 		seen[id] = struct{}{}
 	}
@@ -383,7 +392,7 @@ func TestAddFace_IDsAreUniqueUnderConcurrency(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
-	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "EMP_1", Name: "张三"})
+	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("EMP_1"), Name: "张三"})
 	if err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
@@ -423,7 +432,7 @@ func TestAddFace_RejectsInvalidFileType(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
-	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "EMP_1", Name: "张三"})
+	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("EMP_1"), Name: "张三"})
 	if err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
@@ -451,7 +460,7 @@ func TestAddFace_RejectsInvalidFileType(t *testing.T) {
 	}
 	requireDomainError(t, err, apperr.KindInvalid, "INVALID_FILE_TYPE")
 
-	faces, err := svc.ListFaces(ctx, created.ID)
+	faces, _, err := svc.ListFaces(ctx, created.ID, 0, 0)
 	if err != nil {
 		t.Fatalf("ListFaces failed: %v", err)
 	}
@@ -473,8 +482,89 @@ func TestAddFace_RejectsInvalidFileType(t *testing.T) {
 func TestListFaces_MissingPersonReturnsNotFound(t *testing.T) {
 	svc := newTestService(t)
 
-	_, err := svc.ListFaces(context.Background(), "ghost")
+	_, _, err := svc.ListFaces(context.Background(), "ghost", 0, 0)
 	requireDomainError(t, err, apperr.KindNotFound, "PERSON_NOT_FOUND")
+}
+
+// TestSetPrimaryFace_DistinguishesFailureModes pins the per-condition error codes:
+// a missing person, a missing face and a face owned by somebody else are three
+// different problems and must not collapse into one code.
+func TestSetPrimaryFace_DistinguishesFailureModes(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	owner, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "Owner"})
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	other, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "Other"})
+	if err != nil {
+		t.Fatalf("create other: %v", err)
+	}
+	face, err := svc.AddFaceWithReader(ctx, owner.ID, "owner.jpg", bytes.NewReader(testJPEGBytes))
+	if err != nil {
+		t.Fatalf("enroll face: %v", err)
+	}
+
+	t.Run("missing person", func(t *testing.T) {
+		_, err := svc.SetPrimaryFace(ctx, "ghost", face.ID)
+		requireDomainError(t, err, apperr.KindNotFound, "PERSON_NOT_FOUND")
+	})
+
+	t.Run("missing face", func(t *testing.T) {
+		_, err := svc.SetPrimaryFace(ctx, owner.ID, "ghost")
+		requireDomainError(t, err, apperr.KindNotFound, "FACE_NOT_FOUND")
+	})
+
+	t.Run("face owned by another person", func(t *testing.T) {
+		_, err := svc.SetPrimaryFace(ctx, other.ID, face.ID)
+		requireDomainError(t, err, apperr.KindInvalid, "INVALID_FACE_OWNER")
+	})
+
+	t.Run("blank face id", func(t *testing.T) {
+		_, err := svc.SetPrimaryFace(ctx, owner.ID, "   ")
+		requireDomainError(t, err, apperr.KindInvalid, "FACE_ID_REQUIRED")
+	})
+
+	t.Run("success", func(t *testing.T) {
+		updated, err := svc.SetPrimaryFace(ctx, owner.ID, face.ID)
+		if err != nil {
+			t.Fatalf("SetPrimaryFace failed: %v", err)
+		}
+		if updated.PrimaryFaceID == nil || *updated.PrimaryFaceID != face.ID {
+			t.Fatalf("expected primary face %q, got %v", face.ID, updated.PrimaryFaceID)
+		}
+	})
+}
+
+// TestFaceSubresourcesAreScopedToOwningPerson pins that a face cannot be reached
+// or removed through another person's path segment.
+func TestFaceSubresourcesAreScopedToOwningPerson(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	owner, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "Owner"})
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	other, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "Other"})
+	if err != nil {
+		t.Fatalf("create other: %v", err)
+	}
+	face, err := svc.AddFaceWithReader(ctx, owner.ID, "owner.jpg", bytes.NewReader(testJPEGBytes))
+	if err != nil {
+		t.Fatalf("enroll face: %v", err)
+	}
+
+	_, err = svc.GetFaceImagePath(ctx, other.ID, face.ID)
+	requireDomainError(t, err, apperr.KindNotFound, "FACE_NOT_FOUND")
+	requireDomainError(t, svc.DeleteFace(ctx, other.ID, face.ID), apperr.KindNotFound, "FACE_NOT_FOUND")
+
+	// The owner's own path still resolves, proving the rejection above was scoping
+	// and not a blanket failure.
+	if _, err := svc.GetFaceImagePath(ctx, owner.ID, face.ID); err != nil {
+		t.Fatalf("owner should resolve their own face: %v", err)
+	}
 }
 
 // TestAuditActionNamespaces keeps the <domain>.<resource>.<verb> naming contract that
@@ -497,7 +587,7 @@ func TestServiceDoesNotDependOnAudit(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
-	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "EMP_1", Name: "张三"})
+	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("EMP_1"), Name: "张三"})
 	if err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
@@ -542,7 +632,7 @@ func TestGetFaceImagePath_RelativeAndAbsoluteResolution(t *testing.T) {
 	// 3. Test backward compatibility: legacy absolute path within facesDir resolves correctly
 	legacyFace := &Face{
 		ID:            "legacy_face_id",
-		OwnerRowID:    p.ID,
+		PersonRowID:   p.ID,
 		ImagePath:     filepath.Join(svc.facesDir, "legacy_photo.jpg"),
 		FeatureVector: make([]byte, 2048),
 	}
@@ -560,7 +650,7 @@ func TestGetFaceImagePath_RelativeAndAbsoluteResolution(t *testing.T) {
 	// 4. Test path traversal rejection: absolute path outside facesDir must be rejected
 	escapingFace := &Face{
 		ID:            "escape_face_id",
-		OwnerRowID:    p.ID,
+		PersonRowID:   p.ID,
 		ImagePath:     "/etc/shadow",
 		FeatureVector: make([]byte, 2048),
 	}
@@ -598,10 +688,10 @@ func TestAddFace_WithExtractor_Success(t *testing.T) {
 	}
 
 	extractor := &mockExtractor{features: expectedFeats}
-	svc := NewService(NewStore(dbStore), tempDir, extractor, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, zap.NewNop())
 	ctx := context.Background()
 
-	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "P_EXTRACT_1", Name: "特征提取测试员"})
+	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("P_EXTRACT_1"), Name: "特征提取测试员"})
 	if err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
@@ -655,11 +745,11 @@ func TestAddFace_WithExtractor_NoFaceDetected(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	extractor := &mockExtractor{err: errors.New("no face found")}
-	svc := NewService(NewStore(dbStore), tempDir, extractor, zap.NewNop())
+	extractor := &mockExtractor{err: fmt.Errorf("%w: mock extractor", ErrNoFaceDetected)}
+	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, zap.NewNop())
 	ctx := context.Background()
 
-	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "P_EXTRACT_2", Name: "失败测试员"})
+	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("P_EXTRACT_2"), Name: "失败测试员"})
 	if err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
@@ -681,7 +771,7 @@ func TestAddFace_WithExtractor_NoFaceDetected(t *testing.T) {
 	}
 
 	// 验证数据库中不得存在该人脸
-	faces, err := svc.ListFaces(ctx, p.ID)
+	faces, _, err := svc.ListFaces(ctx, p.ID, 0, 0)
 	if err != nil {
 		t.Fatalf("ListFaces failed: %v", err)
 	}
@@ -699,10 +789,10 @@ func TestAddFace_WithExtractor_DimMismatch(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	extractor := &mockExtractor{features: make([]float32, 256)} // 维度不符
-	svc := NewService(NewStore(dbStore), tempDir, extractor, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, zap.NewNop())
 	ctx := context.Background()
 
-	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "P_EXTRACT_3", Name: "维度测试员"})
+	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("P_EXTRACT_3"), Name: "维度测试员"})
 	if err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
@@ -713,6 +803,60 @@ func TestAddFace_WithExtractor_DimMismatch(t *testing.T) {
 		t.Fatal("expected error on dimension mismatch")
 	}
 
+	requireDomainError(t, err, apperr.KindInternal, "FEATURE_DIM_MISMATCH")
+}
+
+// TestAddFace_WithoutExtractorFails pins the removal of the zero-vector
+// placeholder: an enrollment without a working extractor must fail loudly rather
+// than persist an all-zero embedding that is indistinguishable from a real one.
+func TestAddFace_WithoutExtractorFails(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	svc := NewService(NewStore(dbStore), tempDir, nil, nil, zap.NewNop())
+	ctx := context.Background()
+
+	p, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "无提取器"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+
+	_, err = svc.AddFaceWithReader(ctx, p.ID, "photo.jpg", bytes.NewReader(testJPEGBytes))
+	requireDomainError(t, err, apperr.KindInternal, "FEATURE_EXTRACTOR_UNAVAILABLE")
+
+	faces, total, err := svc.ListFaces(ctx, p.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("ListFaces failed: %v", err)
+	}
+	if total != 0 || len(faces) != 0 {
+		t.Fatalf("expected no face to be persisted, got total=%d len=%d", total, len(faces))
+	}
+}
+
+// TestAddFace_ExtractorFailureIsNotBlamedOnThePhoto keeps a genuine engine failure
+// distinct from an unusable upload: only ErrNoFaceDetected may answer 422.
+func TestAddFace_ExtractorFailureIsNotBlamedOnThePhoto(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	extractor := &mockExtractor{err: errors.New("engine crashed")}
+	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, zap.NewNop())
+	ctx := context.Background()
+
+	p, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "引擎故障"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+
+	_, err = svc.AddFaceWithReader(ctx, p.ID, "photo.jpg", bytes.NewReader(testJPEGBytes))
 	requireDomainError(t, err, apperr.KindInternal, "FEATURE_EXTRACT_FAILED")
 }
 
@@ -721,14 +865,14 @@ func strPtr(s string) *string {
 }
 
 type mockGalleryNotifier struct {
-	upserts []GalleryUpsertPayload
+	upserts []GalleryItem
 	deletes []struct {
 		faceID   string
 		personID string
 	}
 }
 
-func (m *mockGalleryNotifier) BroadcastUpsert(ctx context.Context, item GalleryUpsertPayload) error {
+func (m *mockGalleryNotifier) BroadcastUpsert(ctx context.Context, item GalleryItem) error {
 	m.upserts = append(m.upserts, item)
 	return nil
 }
@@ -750,12 +894,11 @@ func TestGalleryNotifier_AddUpdateDelete(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	notifier := &mockGalleryNotifier{}
-	svc := NewService(NewStore(dbStore), tempDir, nil, zap.NewNop())
-	svc.SetGalleryNotifier(notifier)
+	svc := NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), notifier, zap.NewNop())
 	ctx := context.Background()
 
 	// 1. Create Person
-	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: "NOTIFY_P1", Name: "通知测试员"})
+	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("NOTIFY_P1"), Name: "通知测试员"})
 	if err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}

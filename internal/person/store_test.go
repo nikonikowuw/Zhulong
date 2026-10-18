@@ -51,7 +51,7 @@ func TestStorePersonMultiFaceCRUD(t *testing.T) {
 	fakeVector1[0] = 0x01
 	face1 := &person.Face{
 		ID:            "face_01",
-		OwnerRowID:    "emp_9527",
+		PersonRowID:   "emp_9527",
 		ImagePath:     "/data/faces/face_01.jpg",
 		FeatureVector: fakeVector1,
 	}
@@ -64,7 +64,7 @@ func TestStorePersonMultiFaceCRUD(t *testing.T) {
 	fakeVector2[0] = 0x02
 	face2 := &person.Face{
 		ID:            "face_02",
-		OwnerRowID:    "emp_9527",
+		PersonRowID:   "emp_9527",
 		ImagePath:     "/data/faces/face_02.jpg",
 		FeatureVector: fakeVector2,
 	}
@@ -103,10 +103,10 @@ func TestStorePersonMultiFaceCRUD(t *testing.T) {
 		t.Fatalf("expected len 1 for ListAllPersons, got %d", len(allPersons))
 	}
 
-	// 5. List all faces
-	allFaces, err := store.ListAllFaces(ctx)
+	// 5. List this person's faces
+	allFaces, err := store.ListFacesByPerson(ctx, "emp_9527")
 	if err != nil {
-		t.Fatalf("ListAllFaces failed: %v", err)
+		t.Fatalf("ListFacesByPerson failed: %v", err)
 	}
 	if len(allFaces) != 2 {
 		t.Errorf("expected 2 faces total, got %d", len(allFaces))
@@ -133,12 +133,13 @@ func TestStorePersonMultiFaceCRUD(t *testing.T) {
 		t.Errorf("expected ErrNotFound for deleted person, got %v", err)
 	}
 
-	allFaces, err = store.ListAllFaces(ctx)
+	// The cascade must have removed the remaining face row as well.
+	remaining, err := store.ListFacesByPerson(ctx, "emp_9527")
 	if err != nil {
-		t.Fatalf("ListAllFaces after person delete failed: %v", err)
+		t.Fatalf("ListFacesByPerson after person delete failed: %v", err)
 	}
-	if len(allFaces) != 0 {
-		t.Errorf("expected 0 remaining faces after cascade delete, got %d", len(allFaces))
+	if len(remaining) != 0 {
+		t.Errorf("expected 0 remaining faces after cascade delete, got %d", len(remaining))
 	}
 }
 
@@ -154,7 +155,7 @@ func TestUpdatePerson_DoesNotTouchFaces(t *testing.T) {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
 	for _, id := range []string{"f1", "f2"} {
-		if err := store.AddFace(ctx, &person.Face{ID: id, OwnerRowID: "p1", FeatureVector: make([]byte, 2048)}); err != nil {
+		if err := store.AddFace(ctx, &person.Face{ID: id, PersonRowID: "p1", FeatureVector: make([]byte, 2048)}); err != nil {
 			t.Fatalf("AddFace %s failed: %v", id, err)
 		}
 	}
@@ -264,7 +265,7 @@ func TestDeleteFace_ScopedToOwningPerson(t *testing.T) {
 			t.Fatalf("CreatePerson %s failed: %v", p.id, err)
 		}
 	}
-	if err := store.AddFace(ctx, &person.Face{ID: "f2", OwnerRowID: "p2", FeatureVector: make([]byte, 2048)}); err != nil {
+	if err := store.AddFace(ctx, &person.Face{ID: "f2", PersonRowID: "p2", FeatureVector: make([]byte, 2048)}); err != nil {
 		t.Fatalf("AddFace failed: %v", err)
 	}
 
@@ -358,7 +359,7 @@ func TestGetPersonMeta_SkipsFacePreload(t *testing.T) {
 	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: strPtr("EMP_1"), Name: "张三"}); err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
-	if err := store.AddFace(ctx, &person.Face{ID: "f1", OwnerRowID: "p1", FeatureVector: make([]byte, 2048)}); err != nil {
+	if err := store.AddFace(ctx, &person.Face{ID: "f1", PersonRowID: "p1", FeatureVector: make([]byte, 2048)}); err != nil {
 		t.Fatalf("AddFace failed: %v", err)
 	}
 
@@ -405,7 +406,7 @@ func TestStore_PrimaryFaceAutoPromotionAndFallback(t *testing.T) {
 	}
 
 	// 1. Add first face: automatically promoted to primary
-	f1 := &person.Face{ID: "face_auto_1", OwnerRowID: "p_primary", FeatureVector: make([]byte, 2048)}
+	f1 := &person.Face{ID: "face_auto_1", PersonRowID: "p_primary", FeatureVector: make([]byte, 2048)}
 	if err := store.AddFace(ctx, f1); err != nil {
 		t.Fatalf("AddFace 1 failed: %v", err)
 	}
@@ -415,7 +416,7 @@ func TestStore_PrimaryFaceAutoPromotionAndFallback(t *testing.T) {
 	}
 
 	// 2. Add second face: primary face remains unchanged
-	f2 := &person.Face{ID: "face_auto_2", OwnerRowID: "p_primary", FeatureVector: make([]byte, 2048)}
+	f2 := &person.Face{ID: "face_auto_2", PersonRowID: "p_primary", FeatureVector: make([]byte, 2048)}
 	if err := store.AddFace(ctx, f2); err != nil {
 		t.Fatalf("AddFace 2 failed: %v", err)
 	}
@@ -426,7 +427,7 @@ func TestStore_PrimaryFaceAutoPromotionAndFallback(t *testing.T) {
 
 	// 3. Explicitly switch primary face to face_auto_2
 	face2ID := "face_auto_2"
-	if err := store.SetPrimaryFace(ctx, "p_primary", &face2ID); err != nil {
+	if err := store.SetPrimaryFace(ctx, "p_primary", face2ID); err != nil {
 		t.Fatalf("SetPrimaryFace to face_auto_2 failed: %v", err)
 	}
 	got, _ = store.GetPerson(ctx, "p_primary")
@@ -436,7 +437,7 @@ func TestStore_PrimaryFaceAutoPromotionAndFallback(t *testing.T) {
 
 	// 4. Invalid faceID returns ErrNotFound
 	fakeID := "non_existent_face"
-	if err := store.SetPrimaryFace(ctx, "p_primary", &fakeID); !errors.Is(err, person.ErrNotFound) {
+	if err := store.SetPrimaryFace(ctx, "p_primary", fakeID); !errors.Is(err, person.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for non existent face, got %v", err)
 	}
 

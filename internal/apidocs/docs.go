@@ -1401,11 +1401,17 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/httputil.PaginatedData-person_Person"
+                                            "$ref": "#/definitions/httputil.PaginatedData-person_PersonResponse"
                                         }
                                     }
                                 }
                             ]
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
                         }
                     },
                     "500": {
@@ -1450,7 +1456,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/person.Person"
+                                            "$ref": "#/definitions/person.PersonResponse"
                                         }
                                     }
                                 }
@@ -1459,6 +1465,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -1508,7 +1520,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/person.Person"
+                                            "$ref": "#/definitions/person.PersonResponse"
                                         }
                                     }
                                 }
@@ -1570,7 +1582,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/person.Person"
+                                            "$ref": "#/definitions/person.PersonResponse"
                                         }
                                     }
                                 }
@@ -1585,6 +1597,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -1670,6 +1688,30 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page number (1-based, default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (default 20, max 100)",
+                        "name": "pageSize",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Legacy pagination limit",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Legacy pagination offset",
+                        "name": "offset",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1684,14 +1726,23 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "array",
-                                            "items": {
-                                                "$ref": "#/definitions/person.Face"
-                                            }
+                                            "$ref": "#/definitions/httputil.PaginatedData-person_FaceResponse"
                                         }
                                     }
                                 }
                             ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
                         }
                     },
                     "500": {
@@ -1741,7 +1792,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/person.Face"
+                                            "$ref": "#/definitions/person.FaceResponse"
                                         }
                                     }
                                 }
@@ -1756,6 +1807,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -1919,7 +1976,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/person.Person"
+                                            "$ref": "#/definitions/person.PersonResponse"
                                         }
                                     }
                                 }
@@ -3978,13 +4035,40 @@ const docTemplate = `{
                 }
             }
         },
-        "httputil.PaginatedData-person_Person": {
+        "httputil.PaginatedData-person_FaceResponse": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/person.Person"
+                        "$ref": "#/definitions/person.FaceResponse"
+                    }
+                },
+                "limit": {
+                    "description": "Backwards compatibility fields for legacy clients expecting limit/offset",
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "pageSize": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "httputil.PaginatedData-person_PersonResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/person.PersonResponse"
                     }
                 },
                 "limit": {
@@ -4353,15 +4437,18 @@ const docTemplate = `{
             ],
             "properties": {
                 "name": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 1
                 },
                 "personId": {
                     "description": "PersonID is the external business key. It is optional: if omitted or empty,\nit is left unset (NULL) without falling back to the internal primary key.",
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64
                 }
             }
         },
-        "person.Face": {
+        "person.FaceResponse": {
             "type": "object",
             "properties": {
                 "createdAt": {
@@ -4374,22 +4461,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "ownerRowId": {
-                    "description": "OwnerRowID is the internal persons.id of the owning record. It deliberately does\nNOT serialize as \"personId\": Person.PersonID already owns that JSON name and means\nthe external business key, so sharing it made the two identifiers indistinguishable\nto API clients. The owning person is already implied by the enclosing resource.",
                     "type": "string"
                 }
             }
         },
-        "person.Person": {
+        "person.PersonResponse": {
             "type": "object",
             "properties": {
                 "createdAt": {
                     "type": "string"
                 },
                 "faces": {
-                    "description": "Faces is a read-only projection populated by Preload. Write paths MUST go\nthrough AddFace / DeleteFace; never persist a Person with a populated\nFaces slice (see Store.UpdatePerson). The CASCADE below is declarative\nonly — the effective constraint lives in the persons_tables migration.",
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/person.Face"
+                        "$ref": "#/definitions/person.FaceResponse"
                     }
                 },
                 "id": {
@@ -4399,7 +4484,6 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "personId": {
-                    "description": "PersonID is the external business key consumed by third-party systems. It is\noptional, unique when assigned, and immutable once set.",
                     "type": "string"
                 },
                 "primaryFaceId": {
@@ -4425,11 +4509,15 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "name": {
-                    "type": "string"
+                    "description": "Name is a pointer so that \"not provided\" (nil) stays distinguishable from\n\"provided\": an explicitly empty name must be rejected rather than ignored.",
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 1
                 },
                 "personId": {
                     "description": "PersonID is accepted only so that an attempt to change it fails loudly instead\nof being silently dropped by the JSON decoder. Supplying a different value is\nrejected with PERSON_ID_IMMUTABLE.",
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 64
                 }
             }
         },

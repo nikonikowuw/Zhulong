@@ -173,9 +173,11 @@ export function PersonsFacesDialog() {
   const isOpen = open === 'faces' && Boolean(currentRow)
   const personId = currentRow?.id
 
-  const { data: faces = [], isLoading: isLoadingFaces } = usePersonFaces(
+  const { data: facePage, isLoading: isLoadingFaces } = usePersonFaces(
     isOpen ? personId : undefined
   )
+  const faces = facePage?.items ?? []
+  const faceTotal = facePage?.total ?? 0
 
   const addFaceMutation = useAddFace()
   const deleteFaceMutation = useDeleteFace()
@@ -309,7 +311,7 @@ export function PersonsFacesDialog() {
             {/* 画廊相册网格 (Gallery Grid) */}
             <div className='flex items-center justify-between'>
               <h4 className='text-xs font-semibold uppercase tracking-wider text-muted-foreground'>
-                {t('table.columns.faceCount')} ({faces.length})
+                {t('table.columns.faceCount')} ({faceTotal})
               </h4>
               <span className='text-[11px] text-muted-foreground/80'>
                 {t('fields.dragDropDesc')}
