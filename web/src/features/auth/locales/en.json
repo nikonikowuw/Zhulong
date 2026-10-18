@@ -1,0 +1,47 @@
+{
+  "init": {
+    "cardTitle": "System Initialization",
+    "cardDescription": "First launch · Create the highest-privilege system administrator",
+    "usernameLabel": "Administrator username (3-32 characters)",
+    "usernamePlaceholder": "Enter a username (e.g. admin)",
+    "passwordLabel": "Set password (at least 8 characters)",
+    "passwordPlaceholder": "Enter password",
+    "strengthLabel": "Strength: ",
+    "strengthWeak": "Weak",
+    "strengthMedium": "Medium",
+    "strengthStrong": "Strong",
+    "confirmPasswordLabel": "Confirm password",
+    "confirmPasswordPlaceholder": "Enter the password again",
+    "passwordMatch": "Passwords match",
+    "passwordMismatch": "Passwords do not match",
+    "submitting": "Saving credentials...",
+    "submit": "Activate and enter console",
+    "success": "System administrator account initialized successfully!"
+  },
+  "login": {
+    "cardTitle": "Administrator Login",
+    "cardDescription": "Enter your credentials to access the console",
+    "usernameLabel": "Username",
+    "usernamePlaceholder": "Enter username",
+    "passwordLabel": "Password",
+    "passwordPlaceholder": "Enter password",
+    "rememberMe": "Keep me signed in",
+    "submitting": "Signing in...",
+    "submit": "Sign in",
+    "welcomeBack": "Welcome back, administrator {{username}}!"
+  },
+  "layout": {
+    "brand": "Zhulong",
+    "accelerationActive": "Linux ARM64 · NPU acceleration active"
+  },
+  "validation": {
+    "usernameRequired": "Please enter a username",
+    "passwordRequired": "Please enter a password",
+    "usernameMin": "Username must be at least 3 characters",
+    "usernameMax": "Username must not exceed 32 characters",
+    "passwordMin": "Password must be at least 8 characters",
+    "passwordMax": "Password must not exceed 64 characters",
+    "confirmPasswordRequired": "Please enter the initial password again",
+    "passwordMismatch": "The two passwords do not match"
+  }
+}

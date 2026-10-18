@@ -1,0 +1,47 @@
+{
+  "init": {
+    "cardTitle": "系統初始化",
+    "cardDescription": "首次啟動 · 請建立最高權限系統管理員",
+    "usernameLabel": "管理員使用者名稱 (3~32 位)",
+    "usernamePlaceholder": "請輸入使用者名稱（例如：admin）",
+    "passwordLabel": "設定密碼 (至少 8 位)",
+    "passwordPlaceholder": "請輸入密碼",
+    "strengthLabel": "強度：",
+    "strengthWeak": "弱",
+    "strengthMedium": "中",
+    "strengthStrong": "強",
+    "confirmPasswordLabel": "確認密碼",
+    "confirmPasswordPlaceholder": "請再次輸入密碼",
+    "passwordMatch": "密碼一致",
+    "passwordMismatch": "兩次密碼不一致",
+    "submitting": "儲存憑證中...",
+    "submit": "啟用並進入主控台",
+    "success": "系統管理員帳號初始化成功！"
+  },
+  "login": {
+    "cardTitle": "管理員登入",
+    "cardDescription": "請輸入憑證以存取主控台",
+    "usernameLabel": "使用者名稱",
+    "usernamePlaceholder": "請輸入使用者名稱",
+    "passwordLabel": "密碼",
+    "passwordPlaceholder": "請輸入密碼",
+    "rememberMe": "保持登入狀態",
+    "submitting": "登入中...",
+    "submit": "登入",
+    "welcomeBack": "歡迎回來，管理員 {{username}}！"
+  },
+  "layout": {
+    "brand": "燭龍 · Zhulong",
+    "accelerationActive": "Linux ARM64 · NPU 加速運作中"
+  },
+  "validation": {
+    "usernameRequired": "請輸入使用者名稱",
+    "passwordRequired": "請輸入密碼",
+    "usernameMin": "使用者名稱至少需要 3 個字元",
+    "usernameMax": "使用者名稱不能超過 32 個字元",
+    "passwordMin": "密碼長度至少需要 8 個字元",
+    "passwordMax": "密碼長度不能超過 64 個字元",
+    "confirmPasswordRequired": "請再次輸入初始密碼",
+    "passwordMismatch": "兩次輸入的密碼不一致"
+  }
+}

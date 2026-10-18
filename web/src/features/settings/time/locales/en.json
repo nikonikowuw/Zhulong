@@ -64,5 +64,29 @@
     "emptyTimeWarning": "Please select a target time first",
     "invalidTimeFormat": "Invalid date/time format",
     "applySuccess": "Manual time set successfully and committed to hardware RTC"
+  },
+  "interval": {
+    "placeholder": "Select polling interval",
+    "m5": "5 minutes (frequent)",
+    "m15": "15 minutes (recommended)",
+    "m30": "30 minutes",
+    "h1": "1 hour",
+    "h24": "24 hours (infrequent)"
+  },
+  "timezone": {
+    "placeholder": "Select timezone",
+    "groupAsia": "Asia & common timezones",
+    "groupIntl": "International & Western timezones"
+  },
+  "validation": {
+    "timezoneRequired": "Please select a timezone",
+    "ntpMin": "At least 1 NTP server is required",
+    "ntpMax": "At most 5 NTP servers can be configured"
+  },
+  "errors": {
+    "updateFailed": "Failed to update configuration",
+    "ntpSyncFailed": "NTP sync failed",
+    "browserSyncFailed": "Failed to sync browser time",
+    "manualSetFailed": "Failed to set manual time"
   }
 }

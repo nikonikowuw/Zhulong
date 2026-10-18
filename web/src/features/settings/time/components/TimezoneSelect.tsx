@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import {
   Select,
   SelectContent,
@@ -15,15 +16,21 @@ interface TimezoneSelectProps {
   disabled?: boolean
 }
 
-export function TimezoneSelect({ value, onChange, disabled }: TimezoneSelectProps) {
+export function TimezoneSelect({
+  value,
+  onChange,
+  disabled,
+}: TimezoneSelectProps) {
+  const { t } = useTranslation('time')
+
   return (
     <Select value={value} onValueChange={onChange} disabled={disabled}>
       <SelectTrigger className='w-full'>
-        <SelectValue placeholder='选择时区' />
+        <SelectValue placeholder={t('timezone.placeholder')} />
       </SelectTrigger>
       <SelectContent>
         <SelectGroup>
-          <SelectLabel>亚洲及常用时区</SelectLabel>
+          <SelectLabel>{t('timezone.groupAsia')}</SelectLabel>
           {POPULAR_TIMEZONES.slice(0, 7).map((tz) => (
             <SelectItem key={tz.value} value={tz.value}>
               {tz.label}
@@ -31,7 +38,7 @@ export function TimezoneSelect({ value, onChange, disabled }: TimezoneSelectProp
           ))}
         </SelectGroup>
         <SelectGroup>
-          <SelectLabel>国际标准与欧美时区</SelectLabel>
+          <SelectLabel>{t('timezone.groupIntl')}</SelectLabel>
           {POPULAR_TIMEZONES.slice(7).map((tz) => (
             <SelectItem key={tz.value} value={tz.value}>
               {tz.label}

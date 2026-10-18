@@ -10,6 +10,9 @@ import algorithmsZhHant from '@/features/algorithms/locales/zh-Hant.json'
 import auditEn from '@/features/audit/locales/en.json'
 import auditZhHans from '@/features/audit/locales/zh-Hans.json'
 import auditZhHant from '@/features/audit/locales/zh-Hant.json'
+import authEn from '@/features/auth/locales/en.json'
+import authZhHans from '@/features/auth/locales/zh-Hans.json'
+import authZhHant from '@/features/auth/locales/zh-Hant.json'
 import camerasEn from '@/features/cameras/locales/en.json'
 import camerasZhHans from '@/features/cameras/locales/zh-Hans.json'
 import camerasZhHant from '@/features/cameras/locales/zh-Hant.json'
@@ -41,6 +44,7 @@ export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number]
 export const resources = {
   'zh-Hans': {
     common: commonZhHans,
+    auth: authZhHans,
     network: networkZhHans,
     time: timeZhHans,
     storage: storageZhHans,
@@ -54,6 +58,7 @@ export const resources = {
   },
   'zh-Hant': {
     common: commonZhHant,
+    auth: authZhHant,
     network: networkZhHant,
     time: timeZhHant,
     storage: storageZhHant,
@@ -67,6 +72,7 @@ export const resources = {
   },
   en: {
     common: commonEn,
+    auth: authEn,
     network: networkEn,
     time: timeEn,
     storage: storageEn,

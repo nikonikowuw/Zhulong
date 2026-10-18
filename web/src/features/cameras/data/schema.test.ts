@@ -1,5 +1,6 @@
+import { type TFunction } from 'i18next'
 import { describe, expect, it } from 'vitest'
-import { cameraFormSchema, cameraSchema } from './schema'
+import { createCameraFormSchema, cameraSchema } from './schema'
 
 describe('camera schema validation', () => {
   describe('cameraSchema', () => {
@@ -36,7 +37,8 @@ describe('camera schema validation', () => {
     })
   })
 
-  describe('cameraFormSchema', () => {
+  describe('createCameraFormSchema', () => {
+    const schema = createCameraFormSchema()
     it('accepts valid camera form input with main stream only', () => {
       const input = {
         name: 'Gate Camera',
@@ -46,7 +48,7 @@ describe('camera schema validation', () => {
         hasSubStream: false,
         subTransport: 'tcp' as const,
       }
-      const result = cameraFormSchema.safeParse(input)
+      const result = schema.safeParse(input)
       expect(result.success).toBe(true)
     })
 
@@ -59,11 +61,11 @@ describe('camera schema validation', () => {
         hasSubStream: false,
         subTransport: 'tcp' as const,
       }
-      const result = cameraFormSchema.safeParse(input)
+      const result = schema.safeParse(input)
       expect(result.success).toBe(false)
       if (!result.success) {
         expect(result.error.issues[0].message).toBe(
-          'cameras.validation.rtspInvalid'
+          '流地址必须以 rtsp:// 开头且格式合法'
         )
       }
     })
@@ -78,11 +80,12 @@ describe('camera schema validation', () => {
         subRtspUrl: '',
         subTransport: 'tcp' as const,
       }
-      const result = cameraFormSchema.safeParse(input)
+      const result = schema.safeParse(input)
       expect(result.success).toBe(false)
       if (!result.success) {
         const hasIssue = result.error.issues.some(
-          (issue) => issue.message === 'cameras.validation.subRtspRequired'
+          (issue: { message: string }) =>
+            issue.message === '启用子流时必须填写子流 RTSP 地址'
         )
         expect(hasIssue).toBe(true)
       }
@@ -98,8 +101,37 @@ describe('camera schema validation', () => {
         subRtspUrl: 'rtsp://admin:pass@192.168.1.100:554/live/ch1',
         subTransport: 'udp' as const,
       }
-      const result = cameraFormSchema.safeParse(input)
+      const result = schema.safeParse(input)
       expect(result.success).toBe(true)
+    })
+
+    it('resolves validation text through i18n instead of leaking a raw key', () => {
+      const calls: string[] = []
+      const mockT = ((key: string) => {
+        calls.push(key)
+        return `translated:${key}`
+      }) as unknown as TFunction
+
+      const localized = createCameraFormSchema(mockT)
+      const result = localized.safeParse({
+        name: '',
+        enabled: true,
+        mainRtspUrl: '',
+        mainTransport: 'tcp',
+        hasSubStream: false,
+        subTransport: 'tcp',
+      })
+
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        for (const issue of result.error.issues) {
+          // 绝不能把裸 key 直接交给用户（此前 `FormMessage` 渲染的就是 key 本身）
+          expect(issue.message).toMatch(/^translated:/)
+          expect(issue.message).not.toMatch(/^cameras\./)
+        }
+      }
+      expect(calls).toContain('validation.nameRequired')
+      expect(calls).toContain('validation.mainRtspRequired')
     })
   })
 })

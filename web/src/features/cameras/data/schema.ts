@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { type TFunction } from 'i18next'
 
 const streamSchema = z.object({
   id: z.number(),
@@ -112,38 +113,60 @@ export const deleteCameraResponseSchema = z.object({
 
 export type DeleteCameraResponse = z.infer<typeof deleteCameraResponseSchema>
 
-export const cameraFormSchema = z
-  .object({
-    name: z
-      .string()
-      .min(1, 'cameras.validation.nameRequired')
-      .max(64, 'cameras.validation.nameMax'),
-    enabled: z.boolean(),
-    mainRtspUrl: z
-      .string()
-      .min(1, 'cameras.validation.mainRtspRequired')
-      .regex(/^rtsp:\/\//i, 'cameras.validation.rtspInvalid'),
-    mainTransport: z.enum(['tcp', 'udp']),
-    hasSubStream: z.boolean(),
-    subRtspUrl: z.string().optional(),
-    subTransport: z.enum(['tcp', 'udp']),
-  })
-  .superRefine((data, ctx) => {
-    if (data.hasSubStream) {
-      if (!data.subRtspUrl || data.subRtspUrl.trim().length === 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['subRtspUrl'],
-          message: 'cameras.validation.subRtspRequired',
-        })
-      } else if (!/^rtsp:\/\//i.test(data.subRtspUrl)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['subRtspUrl'],
-          message: 'cameras.validation.rtspInvalid',
-        })
-      }
-    }
-  })
+/**
+ * 摄像机表单校验 schema 工厂。
+ *
+ * 校验文案必须经 `t` 解析：zod 的 message 会原样进入 `FormMessage`（`String(error.message)`），
+ * 此前写成 `'cameras.validation.nameRequired'` 这类裸 key，用户看到的就是 key 本身。
+ * 传 `t` 时取 `cameras` 命名空间下的 `validation.*`（不要再加 `cameras.` 前缀，否则双重前缀查不到）。
+ */
+export function createCameraFormSchema(t?: TFunction) {
+  const msg = {
+    nameRequired: t ? t('validation.nameRequired') : '请输入摄像机名称',
+    nameMax: t ? t('validation.nameMax') : '名称长度不能超过 64 个字符',
+    mainRtspRequired: t
+      ? t('validation.mainRtspRequired')
+      : '请输入主流 RTSP 地址',
+    subRtspRequired: t
+      ? t('validation.subRtspRequired')
+      : '启用子流时必须填写子流 RTSP 地址',
+    rtspInvalid: t
+      ? t('validation.rtspInvalid')
+      : '流地址必须以 rtsp:// 开头且格式合法',
+  }
 
-export type CameraFormValues = z.infer<typeof cameraFormSchema>
+  return z
+    .object({
+      name: z.string().min(1, msg.nameRequired).max(64, msg.nameMax),
+      enabled: z.boolean(),
+      mainRtspUrl: z
+        .string()
+        .min(1, msg.mainRtspRequired)
+        .regex(/^rtsp:\/\//i, msg.rtspInvalid),
+      mainTransport: z.enum(['tcp', 'udp']),
+      hasSubStream: z.boolean(),
+      subRtspUrl: z.string().optional(),
+      subTransport: z.enum(['tcp', 'udp']),
+    })
+    .superRefine((data, ctx) => {
+      if (data.hasSubStream) {
+        if (!data.subRtspUrl || data.subRtspUrl.trim().length === 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['subRtspUrl'],
+            message: msg.subRtspRequired,
+          })
+        } else if (!/^rtsp:\/\//i.test(data.subRtspUrl)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['subRtspUrl'],
+            message: msg.rtspInvalid,
+          })
+        }
+      }
+    })
+}
+
+export type CameraFormValues = z.infer<
+  ReturnType<typeof createCameraFormSchema>
+>

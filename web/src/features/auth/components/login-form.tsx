@@ -1,7 +1,8 @@
-import { type ReactElement, useState } from 'react'
+import { type ReactElement, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { ArrowRight, Loader2, User } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { handleServerError } from '@/lib/handle-server-error'
@@ -18,7 +19,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { PasswordInput } from '@/components/password-input'
 import { authApi, type AuthUser } from '../api/auth-api'
-import { loginSchema, type LoginFormValues } from '../data/schema'
+import { createLoginSchema, type LoginFormValues } from '../data/schema'
 
 interface LoginFormProps {
   onSuccess?: (user: AuthUser) => void
@@ -26,10 +27,13 @@ interface LoginFormProps {
 
 export function LoginForm({ onSuccess }: LoginFormProps): ReactElement {
   const [isPending, setIsPending] = useState(false)
+  const { t } = useTranslation('auth')
   const { auth } = useAuthStore()
 
+  const formSchema = useMemo(() => createLoginSchema(t), [t])
+
   const form = useForm<LoginFormValues>({
-    resolver: zodResolver(loginSchema),
+    resolver: zodResolver(formSchema),
     defaultValues: {
       username: '',
       password: '',
@@ -45,7 +49,7 @@ export function LoginForm({ onSuccess }: LoginFormProps): ReactElement {
         password: values.password,
       })
       auth.setUser(user)
-      toast.success(`欢迎回来，管理员 ${user.username}！`)
+      toast.success(t('login.welcomeBack', { username: user.username }))
       onSuccess?.(user)
     } catch (error) {
       handleServerError(error)
@@ -62,14 +66,16 @@ export function LoginForm({ onSuccess }: LoginFormProps): ReactElement {
           name='username'
           render={({ field }) => (
             <FormItem className='space-y-2'>
-              <FormLabel className='text-xs font-medium'>用户名</FormLabel>
+              <FormLabel className='text-xs font-medium'>
+                {t('login.usernameLabel')}
+              </FormLabel>
               <FormControl>
                 <div className='relative'>
                   <User className='absolute start-3 top-2.5 size-4 text-muted-foreground' />
                   <Input
                     {...field}
                     type='text'
-                    placeholder='请输入用户名'
+                    placeholder={t('login.usernamePlaceholder')}
                     className='ps-9 text-sm'
                     autoComplete='username'
                     disabled={isPending}
@@ -86,11 +92,13 @@ export function LoginForm({ onSuccess }: LoginFormProps): ReactElement {
           name='password'
           render={({ field }) => (
             <FormItem className='space-y-2'>
-              <FormLabel className='text-xs font-medium'>密码</FormLabel>
+              <FormLabel className='text-xs font-medium'>
+                {t('login.passwordLabel')}
+              </FormLabel>
               <FormControl>
                 <PasswordInput
                   {...field}
-                  placeholder='请输入密码'
+                  placeholder={t('login.passwordPlaceholder')}
                   className='text-sm'
                   autoComplete='current-password'
                   disabled={isPending}
@@ -115,7 +123,7 @@ export function LoginForm({ onSuccess }: LoginFormProps): ReactElement {
                   />
                 </FormControl>
                 <FormLabel className='cursor-pointer font-normal text-muted-foreground select-none hover:text-foreground'>
-                  保持登录状态
+                  {t('login.rememberMe')}
                 </FormLabel>
               </FormItem>
             )}
@@ -130,11 +138,11 @@ export function LoginForm({ onSuccess }: LoginFormProps): ReactElement {
           {isPending ? (
             <>
               <Loader2 className='me-2 size-4 animate-spin' />
-              登录中...
+              {t('login.submitting')}
             </>
           ) : (
             <>
-              登录
+              {t('login.submit')}
               <ArrowRight className='ms-2 size-4' />
             </>
           )}

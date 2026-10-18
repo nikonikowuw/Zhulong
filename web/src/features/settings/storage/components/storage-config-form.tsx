@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { z } from 'zod'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { type TFunction } from 'i18next'
 import {
   FolderSearch,
   CheckCircle2,
@@ -14,9 +15,9 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Badge } from '@/components/ui/badge'
 import { statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -38,62 +39,85 @@ import {
   useTestStoragePath,
   useUpdateStorageConfig,
 } from '../hooks/use-storage'
-import { formatBytes } from '../utils/format'
 import {
   type PathTestResponse,
   type StorageConfig,
   type StorageStatus,
 } from '../types'
+import { formatBytes } from '../utils/format'
 
-const storageFormSchema = z
-  .object({
-    mediaDirectory: z.string().trim().min(1, '请输入有效的媒体存储路径'),
-    recordingsRetentionDays: z
-      .number()
-      .int()
-      .min(1, '保留天数至少为 1 天')
-      .max(365, '保留天数最多为 365 天'),
-    snapshotsRetentionDays: z
-      .number()
-      .int()
-      .min(1, '保留天数至少为 1 天')
-      .max(730, '保留天数最多为 730 天'),
-    exportsRetentionHours: z
-      .number()
-      .int()
-      .min(1, '保留小时至少为 1 小时')
-      .max(168, '保留小时最多为 168 小时'),
-    highWatermarkPercent: z
-      .number()
-      .int()
-      .min(50, '高水位至少为 50%')
-      .max(95, '高水位最多为 95%'),
-    lowWatermarkPercent: z
-      .number()
-      .int()
-      .min(40, '低水位至少为 40%')
-      .max(85, '低水位最多为 85%'),
-    emergencyStopPercent: z
-      .number()
-      .int()
-      .min(90, '紧急熔断阈值至少为 90%')
-      .max(99, '紧急熔断阈值最多为 99%'),
-    emergencyStopMinMb: z
-      .number()
-      .int()
-      .min(100, '紧急保留空间至少为 100 MB')
-      .max(102400, '紧急保留空间最多为 102400 MB'),
-  })
-  .refine((data) => data.lowWatermarkPercent < data.highWatermarkPercent, {
-    message: '低水位休眠线必须严格小于高水位清理线',
-    path: ['lowWatermarkPercent'],
-  })
-  .refine((data) => data.emergencyStopPercent >= data.highWatermarkPercent, {
-    message: '紧急熔断停录阈值不能低于高水位清理线',
-    path: ['emergencyStopPercent'],
-  })
+function createStorageFormSchema(t?: TFunction) {
+  const m = {
+    mediaDirectory: t
+      ? t('validation.mediaDirectoryRequired')
+      : '请输入有效的媒体存储路径',
+    daysMin: t ? t('validation.daysMin') : '保留天数至少为 1 天',
+    daysMax365: t ? t('validation.daysMax365') : '保留天数最多为 365 天',
+    daysMax730: t ? t('validation.daysMax730') : '保留天数最多为 730 天',
+    hoursMin: t ? t('validation.hoursMin') : '保留小时至少为 1 小时',
+    hoursMax168: t ? t('validation.hoursMax168') : '保留小时最多为 168 小时',
+    highMin: t ? t('validation.highMin') : '高水位至少为 50%',
+    highMax: t ? t('validation.highMax') : '高水位最多为 95%',
+    lowMin: t ? t('validation.lowMin') : '低水位至少为 40%',
+    lowMax: t ? t('validation.lowMax') : '低水位最多为 85%',
+    emergencyMin: t ? t('validation.emergencyMin') : '紧急熔断阈值至少为 90%',
+    emergencyMax: t ? t('validation.emergencyMax') : '紧急熔断阈值最多为 99%',
+    reserveMin: t ? t('validation.reserveMin') : '紧急保留空间至少为 100 MB',
+    reserveMax: t ? t('validation.reserveMax') : '紧急保留空间最多为 102400 MB',
+    lowBelowHigh: t
+      ? t('validation.lowBelowHigh')
+      : '低水位休眠线必须严格小于高水位清理线',
+    emergencyAboveHigh: t
+      ? t('validation.emergencyAboveHigh')
+      : '紧急熔断停录阈值不能低于高水位清理线',
+  }
 
-type StorageFormValues = z.infer<typeof storageFormSchema>
+  return z
+    .object({
+      mediaDirectory: z.string().trim().min(1, m.mediaDirectory),
+      recordingsRetentionDays: z
+        .number()
+        .int()
+        .min(1, m.daysMin)
+        .max(365, m.daysMax365),
+      snapshotsRetentionDays: z
+        .number()
+        .int()
+        .min(1, m.daysMin)
+        .max(730, m.daysMax730),
+      exportsRetentionHours: z
+        .number()
+        .int()
+        .min(1, m.hoursMin)
+        .max(168, m.hoursMax168),
+      highWatermarkPercent: z
+        .number()
+        .int()
+        .min(50, m.highMin)
+        .max(95, m.highMax),
+      lowWatermarkPercent: z.number().int().min(40, m.lowMin).max(85, m.lowMax),
+      emergencyStopPercent: z
+        .number()
+        .int()
+        .min(90, m.emergencyMin)
+        .max(99, m.emergencyMax),
+      emergencyStopMinMb: z
+        .number()
+        .int()
+        .min(100, m.reserveMin)
+        .max(102400, m.reserveMax),
+    })
+    .refine((data) => data.lowWatermarkPercent < data.highWatermarkPercent, {
+      message: m.lowBelowHigh,
+      path: ['lowWatermarkPercent'],
+    })
+    .refine((data) => data.emergencyStopPercent >= data.highWatermarkPercent, {
+      message: m.emergencyAboveHigh,
+      path: ['emergencyStopPercent'],
+    })
+}
+
+type StorageFormValues = z.infer<ReturnType<typeof createStorageFormSchema>>
 
 interface StorageConfigFormProps {
   initialConfig: StorageConfig
@@ -112,8 +136,10 @@ export function StorageConfigForm({
   const updateMutation = useUpdateStorageConfig()
   const testMutation = useTestStoragePath()
 
+  const schema = useMemo(() => createStorageFormSchema(t), [t])
+
   const form = useForm<StorageFormValues>({
-    resolver: zodResolver(storageFormSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       mediaDirectory: initialConfig.mediaDirectory,
       recordingsRetentionDays: initialConfig.recordingsRetentionDays,
@@ -154,9 +180,7 @@ export function StorageConfigForm({
         )
       }
     } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : 'Path inspection failed'
-      )
+      toast.error(err instanceof Error ? err.message : 'Path inspection failed')
     }
   }
 
@@ -171,7 +195,9 @@ export function StorageConfigForm({
       }
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : 'Failed to update storage configuration'
+        err instanceof Error
+          ? err.message
+          : 'Failed to update storage configuration'
       )
     }
   }
@@ -201,7 +227,7 @@ export function StorageConfigForm({
                     <div className='flex gap-2'>
                       <FormControl>
                         <Input
-                          placeholder='/mnt/storage/media 或 data/media'
+                          placeholder={t('form.mediaDirectoryPlaceholder')}
                           className='font-mono text-sm'
                           {...field}
                           onChange={(e) => {
@@ -272,7 +298,7 @@ export function StorageConfigForm({
                       {testResult.isExternal ? (
                         <Badge
                           variant='outline'
-                          className='bg-primary/10 text-primary border-primary/20'
+                          className='border-primary/20 bg-primary/10 text-primary'
                         >
                           {t('overview.dedicated_mount', {
                             defaultValue: '独立外挂盘',
@@ -281,9 +307,11 @@ export function StorageConfigForm({
                       ) : (
                         <Badge
                           variant='outline'
-                          className='text-amber-500 border-amber-500/30'
+                          className='border-amber-500/30 text-amber-500'
                         >
-                          {t('overview.root_fs', { defaultValue: '系统根分区' })}
+                          {t('overview.root_fs', {
+                            defaultValue: '系统根分区',
+                          })}
                         </Badge>
                       )}
                     </div>
@@ -305,7 +333,9 @@ export function StorageConfigForm({
                       </span>
                     </div>
                   ) : (
-                    <p className='text-xs font-mono'>{testResult.errorReason}</p>
+                    <p className='font-mono text-xs'>
+                      {testResult.errorReason}
+                    </p>
                   )}
                 </div>
               )}
@@ -319,7 +349,9 @@ export function StorageConfigForm({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>
-                      {t('form.recordings_days', { defaultValue: '视频录像保留天数' })}
+                      {t('form.recordings_days', {
+                        defaultValue: '视频录像保留天数',
+                      })}
                     </FormLabel>
                     <FormControl>
                       <Input
@@ -346,7 +378,9 @@ export function StorageConfigForm({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>
-                      {t('form.snapshots_days', { defaultValue: 'AI抓拍保留天数' })}
+                      {t('form.snapshots_days', {
+                        defaultValue: 'AI抓拍保留天数',
+                      })}
                     </FormLabel>
                     <FormControl>
                       <Input
@@ -373,7 +407,9 @@ export function StorageConfigForm({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>
-                      {t('form.exports_hours', { defaultValue: '临时导出保留小时' })}
+                      {t('form.exports_hours', {
+                        defaultValue: '临时导出保留小时',
+                      })}
                     </FormLabel>
                     <FormControl>
                       <Input
@@ -399,13 +435,15 @@ export function StorageConfigForm({
             <Collapsible
               open={advancedOpen}
               onOpenChange={setAdvancedOpen}
-              className='rounded-lg border border-border/60 bg-muted/20 p-4 space-y-4'
+              className='space-y-4 rounded-lg border border-border/60 bg-muted/20 p-4'
             >
               <div className='flex items-center justify-between'>
                 <div className='flex items-center gap-2'>
                   <Sliders className='size-4 text-muted-foreground' />
                   <span className='text-sm font-semibold'>
-                    {t('advanced.title', { defaultValue: '高级双水位与紧急熔断策略' })}
+                    {t('advanced.title', {
+                      defaultValue: '高级双水位与紧急熔断策略',
+                    })}
                   </span>
                 </div>
                 <CollapsibleTrigger asChild>
@@ -438,12 +476,15 @@ export function StorageConfigForm({
                             min={50}
                             max={95}
                             {...field}
-                            onChange={(e) => field.onChange(Number(e.target.value))}
+                            onChange={(e) =>
+                              field.onChange(Number(e.target.value))
+                            }
                           />
                         </FormControl>
                         <FormDescription>
                           {t('advanced.high_watermark_desc', {
-                            defaultValue: '触碰该使用率时后台协程自动唤醒清理（默认 90%）',
+                            defaultValue:
+                              '触碰该使用率时后台协程自动唤醒清理（默认 90%）',
                           })}
                         </FormDescription>
                         <FormMessage />
@@ -467,12 +508,15 @@ export function StorageConfigForm({
                             min={40}
                             max={85}
                             {...field}
-                            onChange={(e) => field.onChange(Number(e.target.value))}
+                            onChange={(e) =>
+                              field.onChange(Number(e.target.value))
+                            }
                           />
                         </FormControl>
                         <FormDescription>
                           {t('advanced.low_watermark_desc', {
-                            defaultValue: '容量回落到该百分比后停止清理进入休眠（默认 80%）',
+                            defaultValue:
+                              '容量回落到该百分比后停止清理进入休眠（默认 80%）',
                           })}
                         </FormDescription>
                         <FormMessage />
@@ -496,12 +540,15 @@ export function StorageConfigForm({
                             min={90}
                             max={99}
                             {...field}
-                            onChange={(e) => field.onChange(Number(e.target.value))}
+                            onChange={(e) =>
+                              field.onChange(Number(e.target.value))
+                            }
                           />
                         </FormControl>
                         <FormDescription>
                           {t('advanced.emergency_percent_desc', {
-                            defaultValue: '达到该极高使用率时强制熔断停录，保全数据库（默认 95%）',
+                            defaultValue:
+                              '达到该极高使用率时强制熔断停录，保全数据库（默认 95%）',
                           })}
                         </FormDescription>
                         <FormMessage />
@@ -525,12 +572,15 @@ export function StorageConfigForm({
                             min={100}
                             max={102400}
                             {...field}
-                            onChange={(e) => field.onChange(Number(e.target.value))}
+                            onChange={(e) =>
+                              field.onChange(Number(e.target.value))
+                            }
                           />
                         </FormControl>
                         <FormDescription>
                           {t('advanced.emergency_mb_desc', {
-                            defaultValue: '可用空间不足此容量时触发停录保护（默认 2048 MB）',
+                            defaultValue:
+                              '可用空间不足此容量时触发停录保护（默认 2048 MB）',
                           })}
                         </FormDescription>
                         <FormMessage />

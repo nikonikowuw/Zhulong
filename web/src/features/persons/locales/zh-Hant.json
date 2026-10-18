@@ -86,5 +86,15 @@
     "fileTooLarge": "圖片大小超過 10MB 限制",
     "invalidFileType": "只允許上傳 JPG、PNG 或 WebP 格式圖片",
     "faceIdRequired": "請指定人臉 ID"
+  },
+  "imagePreview": {
+    "zoomOut": "縮小 (-)",
+    "zoomReset": "1:1 還原",
+    "zoomIn": "放大 (+)",
+    "enterFullscreen": "全螢幕顯示",
+    "exitFullscreen": "退出全螢幕",
+    "openOriginal": "在新分頁中檢視原圖",
+    "close": "關閉 (Esc)",
+    "shortcutHint": "{{cancel}} (ESC) · 滾輪縮放 · 雙擊快速放大/還原"
   }
 }

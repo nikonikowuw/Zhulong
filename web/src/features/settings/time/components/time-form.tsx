@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { z } from 'zod'
 import { useFieldArray, useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { type TFunction } from 'i18next'
 import { Clock, Laptop, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -32,24 +33,29 @@ import {
   useUpdateConfig,
 } from '../hooks/use-system-time'
 import { type SystemTimeStatus } from '../types'
-import { TimeStatusBanner } from './time-status-banner'
 import { TimezoneSelect } from './TimezoneSelect'
+import { TimeStatusBanner } from './time-status-banner'
 
-const timeFormSchema = z.object({
-  mode: z.enum(['ntp', 'manual']),
-  timezone: z.string().min(1, '请选择时区'),
-  syncIntervalSeconds: z.number().min(60).max(86400),
-  ntpServers: z
-    .array(
-      z.object({
-        value: z.string(),
-      })
-    )
-    .min(1, '至少需要 1 个 NTP 服务器')
-    .max(5, '最多配置 5 个 NTP 服务器'),
-})
+/** 校验文案必须经 `t` 解析：zod message 会原样进入 `FormMessage`。 */
+function createTimeFormSchema(t?: TFunction) {
+  return z.object({
+    mode: z.enum(['ntp', 'manual']),
+    timezone: z
+      .string()
+      .min(1, t ? t('validation.timezoneRequired') : '请选择时区'),
+    syncIntervalSeconds: z.number().min(60).max(86400),
+    ntpServers: z
+      .array(
+        z.object({
+          value: z.string(),
+        })
+      )
+      .min(1, t ? t('validation.ntpMin') : '至少需要 1 个 NTP 服务器')
+      .max(5, t ? t('validation.ntpMax') : '最多配置 5 个 NTP 服务器'),
+  })
+}
 
-type TimeFormValues = z.infer<typeof timeFormSchema>
+type TimeFormValues = z.infer<ReturnType<typeof createTimeFormSchema>>
 
 interface TimeFormInnerProps {
   status: SystemTimeStatus
@@ -70,8 +76,10 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
       ? status.ntpServers.map((s) => ({ value: s }))
       : [{ value: 'ntp.aliyun.com' }, { value: 'cn.pool.ntp.org' }]
 
+  const schema = useMemo(() => createTimeFormSchema(t), [t])
+
   const form = useForm<TimeFormValues>({
-    resolver: zodResolver(timeFormSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       mode: status.mode ?? 'ntp',
       timezone: status.timezone ?? 'Asia/Shanghai',
@@ -120,12 +128,10 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
         syncIntervalSeconds: values.syncIntervalSeconds,
         ntpServers: servers.length > 0 ? servers : ['ntp.aliyun.com'],
       })
-      toast.success(
-        t('ntp.saveSuccess', { defaultValue: '对时配置已更新' })
-      )
+      toast.success(t('ntp.saveSuccess', { defaultValue: '对时配置已更新' }))
       onRefresh()
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '更新配置失败'
+      const msg = err instanceof Error ? err.message : t('errors.updateFailed')
       toast.error(msg)
     }
   }
@@ -140,7 +146,7 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
       )
       onRefresh()
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'NTP 同步失败'
+      const msg = err instanceof Error ? err.message : t('errors.ntpSyncFailed')
       toast.error(msg)
     }
   }
@@ -154,13 +160,13 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
 
       toast.success(
         t('manual.browserSyncSuccess', {
-          defaultValue:
-            '已成功将设备时间与当前浏览器时间精准对齐并写入 RTC！',
+          defaultValue: '已成功将设备时间与当前浏览器时间精准对齐并写入 RTC！',
         })
       )
       onRefresh()
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '同步浏览器时间失败'
+      const msg =
+        err instanceof Error ? err.message : t('errors.browserSyncFailed')
       toast.error(msg)
     } finally {
       setIsManualSyncing(false)
@@ -197,7 +203,8 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
       )
       onRefresh()
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '设置手动时间失败'
+      const msg =
+        err instanceof Error ? err.message : t('errors.manualSetFailed')
       toast.error(msg)
     } finally {
       setIsManualSyncing(false)
@@ -229,15 +236,15 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
                   <RadioGroup
                     onValueChange={field.onChange}
                     value={field.value}
-                    className='grid grid-cols-1 sm:grid-cols-2 gap-4'
+                    className='grid grid-cols-1 gap-4 sm:grid-cols-2'
                   >
                     <FormItem>
-                      <FormLabel className='[&:has([data-state=checked])>div]:border-primary [&:has([data-state=checked])>div]:bg-primary/5 cursor-pointer font-normal'>
+                      <FormLabel className='cursor-pointer font-normal [&:has([data-state=checked])>div]:border-primary [&:has([data-state=checked])>div]:bg-primary/5'>
                         <FormControl>
                           <RadioGroupItem value='ntp' className='sr-only' />
                         </FormControl>
-                        <div className='flex flex-col gap-1 rounded-lg border border-border p-3.5 hover:bg-muted/50 transition-colors'>
-                          <div className='flex items-center gap-2 font-medium text-sm'>
+                        <div className='flex flex-col gap-1 rounded-lg border border-border p-3.5 transition-colors hover:bg-muted/50'>
+                          <div className='flex items-center gap-2 text-sm font-medium'>
                             <Clock className='h-4 w-4 text-primary' />
                             {t('tabs.ntp', {
                               defaultValue: 'NTP 自动网络对时',
@@ -254,12 +261,12 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
                     </FormItem>
 
                     <FormItem>
-                      <FormLabel className='[&:has([data-state=checked])>div]:border-primary [&:has([data-state=checked])>div]:bg-primary/5 cursor-pointer font-normal'>
+                      <FormLabel className='cursor-pointer font-normal [&:has([data-state=checked])>div]:border-primary [&:has([data-state=checked])>div]:bg-primary/5'>
                         <FormControl>
                           <RadioGroupItem value='manual' className='sr-only' />
                         </FormControl>
-                        <div className='flex flex-col gap-1 rounded-lg border border-border p-3.5 hover:bg-muted/50 transition-colors'>
-                          <div className='flex items-center gap-2 font-medium text-sm'>
+                        <div className='flex flex-col gap-1 rounded-lg border border-border p-3.5 transition-colors hover:bg-muted/50'>
+                          <div className='flex items-center gap-2 text-sm font-medium'>
                             <Laptop className='h-4 w-4 text-primary' />
                             {t('tabs.manual', {
                               defaultValue: '手动 / 浏览器对时',
@@ -267,8 +274,7 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
                           </div>
                           <p className='text-xs text-muted-foreground'>
                             {t('form.mode.manualDesc', {
-                              defaultValue:
-                                '现场一键同步客户端时间或手动设定',
+                              defaultValue: '现场一键同步客户端时间或手动设定',
                             })}
                           </p>
                         </div>
@@ -329,24 +335,20 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
                     >
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder='选择轮询周期' />
+                          <SelectValue
+                            placeholder={t('interval.placeholder')}
+                          />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value='300'>
-                          5 分钟 (频繁探测)
-                        </SelectItem>
-                        <SelectItem value='900'>
-                          15 分钟 (推荐)
-                        </SelectItem>
+                        <SelectItem value='300'>{t('interval.m5')}</SelectItem>
+                        <SelectItem value='900'>{t('interval.m15')}</SelectItem>
                         <SelectItem value='1800'>
-                          30 分钟
+                          {t('interval.m30')}
                         </SelectItem>
-                        <SelectItem value='3600'>
-                          1 小时
-                        </SelectItem>
+                        <SelectItem value='3600'>{t('interval.h1')}</SelectItem>
                         <SelectItem value='86400'>
-                          24 小时 (低频)
+                          {t('interval.h24')}
                         </SelectItem>
                       </SelectContent>
                     </Select>
@@ -429,7 +431,7 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
           {selectedMode === 'manual' && (
             <div className='space-y-4 pt-2'>
               {/* 一键同步浏览器时间操作横幅 */}
-              <div className='flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 rounded-lg border border-primary/20 bg-primary/5 p-4'>
+              <div className='flex flex-col items-start justify-between gap-4 rounded-lg border border-primary/20 bg-primary/5 p-4 sm:flex-row sm:items-center'>
                 <div className='space-y-1'>
                   <div className='flex items-center gap-2 text-sm font-semibold text-primary'>
                     <Laptop className='h-4 w-4' />

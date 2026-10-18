@@ -64,5 +64,29 @@
     "emptyTimeWarning": "請先選擇需要設定的目標時間",
     "invalidTimeFormat": "時間格式無效",
     "applySuccess": "手動時鐘設定成功，已固化至板載 RTC"
+  },
+  "interval": {
+    "placeholder": "選擇輪詢週期",
+    "m5": "5 分鐘 (頻繁探測)",
+    "m15": "15 分鐘 (推薦)",
+    "m30": "30 分鐘",
+    "h1": "1 小時",
+    "h24": "24 小時 (低頻)"
+  },
+  "timezone": {
+    "placeholder": "選擇時區",
+    "groupAsia": "亞洲及常用時區",
+    "groupIntl": "國際標準與歐美時區"
+  },
+  "validation": {
+    "timezoneRequired": "請選擇時區",
+    "ntpMin": "至少需要 1 個 NTP 伺服器",
+    "ntpMax": "最多配置 5 個 NTP 伺服器"
+  },
+  "errors": {
+    "updateFailed": "更新配置失敗",
+    "ntpSyncFailed": "NTP 同步失敗",
+    "browserSyncFailed": "同步瀏覽器時間失敗",
+    "manualSetFailed": "設定手動時間失敗"
   }
 }

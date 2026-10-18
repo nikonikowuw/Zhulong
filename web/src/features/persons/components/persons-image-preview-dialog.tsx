@@ -60,8 +60,10 @@ export function PersonsImagePreviewDialog() {
     }
   }
 
-  const zoomIn = () => setScale((s) => Math.min(3, Math.round((s + 0.25) * 100) / 100))
-  const zoomOut = () => setScale((s) => Math.max(0.5, Math.round((s - 0.25) * 100) / 100))
+  const zoomIn = () =>
+    setScale((s) => Math.min(3, Math.round((s + 0.25) * 100) / 100))
+  const zoomOut = () =>
+    setScale((s) => Math.max(0.5, Math.round((s - 0.25) * 100) / 100))
   const resetZoom = () => setScale(1)
 
   // 鼠标滚轮缩放
@@ -83,7 +85,10 @@ export function PersonsImagePreviewDialog() {
   if (!previewImage) return null
 
   return (
-    <DialogPrimitive.Root open={Boolean(previewImage)} onOpenChange={(v) => !v && handleClose()}>
+    <DialogPrimitive.Root
+      open={Boolean(previewImage)}
+      onOpenChange={(v) => !v && handleClose()}
+    >
       <DialogPrimitive.Portal>
         {/* 全屏黑色遮罩 */}
         <DialogPrimitive.Overlay className='fixed inset-0 z-50 bg-black/95 backdrop-blur-md transition-opacity data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0' />
@@ -101,7 +106,7 @@ export function PersonsImagePreviewDialog() {
           {/* 顶部悬浮控制栏 */}
           <div className='z-10 flex items-center justify-between gap-3 bg-gradient-to-b from-black/85 via-black/50 to-transparent p-4 sm:px-6'>
             <div className='flex min-w-0 items-center gap-2'>
-              <span className='truncate font-mono text-xs sm:text-sm font-medium text-white/90 drop-shadow-xs'>
+              <span className='truncate font-mono text-xs font-medium text-white/90 drop-shadow-xs sm:text-sm'>
                 {previewImage.title}
               </span>
               <span className='rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70'>
@@ -110,14 +115,14 @@ export function PersonsImagePreviewDialog() {
             </div>
 
             {/* 操作按钮组 */}
-            <div className='flex shrink-0 items-center gap-1 sm:gap-2 rounded-full bg-white/10 p-1 backdrop-blur-md border border-white/15'>
+            <div className='flex shrink-0 items-center gap-1 rounded-full border border-white/15 bg-white/10 p-1 backdrop-blur-md sm:gap-2'>
               <Button
                 variant='ghost'
                 size='icon'
                 onClick={zoomOut}
                 disabled={scale <= 0.5}
                 className='h-8 w-8 text-white hover:bg-white/20 hover:text-white disabled:opacity-40'
-                title='缩小 (-)'
+                title={t('imagePreview.zoomOut')}
               >
                 <ZoomOut className='h-4 w-4' />
               </Button>
@@ -126,7 +131,7 @@ export function PersonsImagePreviewDialog() {
                 size='icon'
                 onClick={resetZoom}
                 className='h-8 w-8 text-white hover:bg-white/20 hover:text-white'
-                title='1:1 还原'
+                title={t('imagePreview.zoomReset')}
               >
                 <RotateCcw className='h-3.5 w-3.5' />
               </Button>
@@ -136,7 +141,7 @@ export function PersonsImagePreviewDialog() {
                 onClick={zoomIn}
                 disabled={scale >= 3}
                 className='h-8 w-8 text-white hover:bg-white/20 hover:text-white disabled:opacity-40'
-                title='放大 (+)'
+                title={t('imagePreview.zoomIn')}
               >
                 <ZoomIn className='h-4 w-4' />
               </Button>
@@ -148,7 +153,11 @@ export function PersonsImagePreviewDialog() {
                 size='icon'
                 onClick={toggleFullscreen}
                 className='h-8 w-8 text-white hover:bg-white/20 hover:text-white'
-                title={isFullscreen ? '退出全屏' : '全屏显示'}
+                title={t(
+                  isFullscreen
+                    ? 'imagePreview.exitFullscreen'
+                    : 'imagePreview.enterFullscreen'
+                )}
               >
                 {isFullscreen ? (
                   <Minimize2 className='h-4 w-4' />
@@ -162,9 +171,13 @@ export function PersonsImagePreviewDialog() {
                 size='icon'
                 asChild
                 className='h-8 w-8 text-white hover:bg-white/20 hover:text-white'
-                title='在新标签页中查看原图'
+                title={t('imagePreview.openOriginal')}
               >
-                <a href={previewImage.url} target='_blank' rel='noopener noreferrer'>
+                <a
+                  href={previewImage.url}
+                  target='_blank'
+                  rel='noopener noreferrer'
+                >
                   <ExternalLink className='h-4 w-4' />
                 </a>
               </Button>
@@ -176,8 +189,8 @@ export function PersonsImagePreviewDialog() {
                   variant='ghost'
                   size='icon'
                   onClick={handleClose}
-                  className='h-8 w-8 text-white hover:bg-destructive hover:text-destructive-foreground'
-                  title='关闭 (Esc)'
+                  className='hover:text-destructive-foreground h-8 w-8 text-white hover:bg-destructive'
+                  title={t('imagePreview.close')}
                 >
                   <X className='h-4 w-4' />
                 </Button>
@@ -189,7 +202,7 @@ export function PersonsImagePreviewDialog() {
           <div
             onClick={handleClose}
             onWheel={handleWheel}
-            className='relative flex flex-1 items-center justify-center overflow-hidden p-4 sm:p-8 cursor-zoom-out'
+            className='relative flex flex-1 cursor-zoom-out items-center justify-center overflow-hidden p-4 sm:p-8'
           >
             <img
               src={previewImage.url}
@@ -200,14 +213,14 @@ export function PersonsImagePreviewDialog() {
                 transform: `scale(${scale})`,
                 transition: 'transform 0.15s ease-out',
               }}
-              className='max-h-[85vh] max-w-[90vw] object-contain rounded-lg shadow-2xl drop-shadow-[0_15px_35px_rgba(0,0,0,0.85)] cursor-default'
+              className='max-h-[85vh] max-w-[90vw] cursor-default rounded-lg object-contain shadow-2xl drop-shadow-[0_15px_35px_rgba(0,0,0,0.85)]'
             />
           </div>
 
           {/* 底部操作快捷提示 */}
           <div className='z-10 flex items-center justify-center pb-4 text-center'>
             <p className='rounded-full bg-black/40 px-3 py-1 font-mono text-[11px] text-white/60 backdrop-blur-xs'>
-              {t('actions.cancel')} (ESC) · 滚轮缩放 · 双击快速放大/还原
+              {t('imagePreview.shortcutHint', { cancel: t('actions.cancel') })}
             </p>
           </div>
         </DialogPrimitive.Content>

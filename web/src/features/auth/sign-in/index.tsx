@@ -2,6 +2,7 @@ import { type ReactElement, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { Lock, Shield } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
 import {
   Card,
@@ -20,8 +21,9 @@ export function SignIn(): ReactElement {
   const navigate = useNavigate()
   const search = useSearch({ from: '/(auth)/sign-in' })
   const { auth } = useAuthStore()
+  const { t } = useTranslation('auth')
 
-  // 探测后端系统管理员初始化状态
+  // Probe the backend system-administrator initialization status
   const { data: status, isLoading: isStatusLoading } = useQuery({
     queryKey: ['auth', 'status'],
     queryFn: () => authApi.getStatus(),
@@ -31,7 +33,7 @@ export function SignIn(): ReactElement {
 
   const targetPath = search.redirect || '/'
 
-  // 如果已拥有登录态，直接跳转至重定向路径或首页
+  // If already authenticated, jump straight to the redirect target or home
   useEffect(() => {
     if (auth.user) {
       navigate({
@@ -48,12 +50,12 @@ export function SignIn(): ReactElement {
     })
   }
 
-  // 纯粹由后端状态驱动：未初始化时展示向导，已初始化时展示登录
+  // Driven purely by backend status: wizard when uninitialized, login otherwise
   const isSetupMode = Boolean(status && !status.initialized)
 
   function renderCard(): ReactElement {
     if (isStatusLoading) {
-      /* 骨架屏：首屏探测未决时展示，杜绝布局抖动 (CLS = 0) */
+      /* Skeleton: shown while the first status probe is pending, avoids CLS */
       return (
         <Card className='border-border/70 bg-card/90 shadow-2xl backdrop-blur-xl'>
           <CardHeader className='space-y-2 pb-5'>
@@ -85,7 +87,7 @@ export function SignIn(): ReactElement {
     }
 
     if (isSetupMode) {
-      /* 首次启动初始化向导卡片（仅当后端明确返回 initialized: false 时展示） */
+      /* First-launch setup wizard card (only when the backend returns initialized: false) */
       return (
         <Card className='border-emerald-500/30 bg-card/90 shadow-2xl backdrop-blur-xl'>
           <CardHeader className='space-y-1.5 pb-5'>
@@ -95,10 +97,10 @@ export function SignIn(): ReactElement {
               </div>
               <div>
                 <CardTitle className='text-lg font-bold tracking-tight'>
-                  系统初始化
+                  {t('init.cardTitle')}
                 </CardTitle>
                 <CardDescription className='text-xs'>
-                  首次启动 · 请创建最高权限系统管理员
+                  {t('init.cardDescription')}
                 </CardDescription>
               </div>
             </div>
@@ -110,7 +112,7 @@ export function SignIn(): ReactElement {
       )
     }
 
-    /* 常规管理员密码登录卡片 */
+    /* Regular administrator password login card */
     return (
       <Card className='border-border/70 bg-card/90 shadow-2xl backdrop-blur-xl'>
         <CardHeader className='space-y-1.5 pb-5'>
@@ -120,10 +122,10 @@ export function SignIn(): ReactElement {
             </div>
             <div>
               <CardTitle className='text-lg font-bold tracking-tight'>
-                管理员登录
+                {t('login.cardTitle')}
               </CardTitle>
               <CardDescription className='text-xs'>
-                请输入凭据以访问控制台
+                {t('login.cardDescription')}
               </CardDescription>
             </div>
           </div>

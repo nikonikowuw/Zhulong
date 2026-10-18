@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AxiosError } from 'axios'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -33,7 +33,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { cameraFormSchema, type CameraFormValues } from '../data/schema'
+import { createCameraFormSchema, type CameraFormValues } from '../data/schema'
 import { useCreateCamera, useUpdateCamera } from '../hooks/use-cameras'
 import { useCamerasContext } from './cameras-provider'
 
@@ -49,8 +49,10 @@ export function CamerasActionDialog() {
   const updateMutation = useUpdateCamera()
   const isPending = createMutation.isPending || updateMutation.isPending
 
+  const schema = useMemo(() => createCameraFormSchema(t), [t])
+
   const form = useForm<CameraFormValues>({
-    resolver: zodResolver(cameraFormSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       name: '',
       enabled: true,

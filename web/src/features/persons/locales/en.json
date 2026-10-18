@@ -86,5 +86,15 @@
     "fileTooLarge": "File exceeds the 10MB limit",
     "invalidFileType": "Only JPG, PNG or WebP images are allowed",
     "faceIdRequired": "Please specify a face ID"
+  },
+  "imagePreview": {
+    "zoomOut": "Zoom out (-)",
+    "zoomReset": "Reset to 1:1",
+    "zoomIn": "Zoom in (+)",
+    "enterFullscreen": "Enter fullscreen",
+    "exitFullscreen": "Exit fullscreen",
+    "openOriginal": "View original in a new tab",
+    "close": "Close (Esc)",
+    "shortcutHint": "{{cancel}} (ESC) · Scroll to zoom · Double-click to toggle"
   }
 }

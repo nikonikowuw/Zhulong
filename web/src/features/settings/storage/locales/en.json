@@ -47,7 +47,8 @@
     "exports_hours_desc": "Exported clips TTL survival time (Default: 48 hours)",
     "btn_reset": "Reset Changes",
     "btn_save": "Save Configuration",
-    "save_success": "Storage configuration updated successfully!"
+    "save_success": "Storage configuration updated successfully!",
+    "mediaDirectoryPlaceholder": "Absolute media root path, e.g. /mnt/storage/media or data/media"
   },
   "advanced": {
     "title": "Advanced Watermark & Emergency Stop Policies",
@@ -76,5 +77,23 @@
   "actions": {
     "refresh": "Refresh",
     "manual_cleanup": "Prune Now"
+  },
+  "validation": {
+    "mediaDirectoryRequired": "Please enter a valid media storage path",
+    "daysMin": "Retention must be at least 1 day",
+    "daysMax365": "Retention cannot exceed 365 days",
+    "daysMax730": "Retention cannot exceed 730 days",
+    "hoursMin": "Retention must be at least 1 hour",
+    "hoursMax168": "Retention cannot exceed 168 hours",
+    "highMin": "High watermark must be at least 50%",
+    "highMax": "High watermark cannot exceed 95%",
+    "lowMin": "Low watermark must be at least 40%",
+    "lowMax": "Low watermark cannot exceed 85%",
+    "emergencyMin": "Emergency stop threshold must be at least 90%",
+    "emergencyMax": "Emergency stop threshold cannot exceed 99%",
+    "reserveMin": "Emergency reserve must be at least 100 MB",
+    "reserveMax": "Emergency reserve cannot exceed 102400 MB",
+    "lowBelowHigh": "Low watermark must be strictly below the high watermark",
+    "emergencyAboveHigh": "Emergency stop threshold cannot be below the high watermark"
   }
 }

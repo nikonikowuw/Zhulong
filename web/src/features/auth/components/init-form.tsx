@@ -1,7 +1,9 @@
-import { type ReactElement, useState } from 'react'
+import { type ReactElement, useMemo, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { type TFunction } from 'i18next'
 import { ArrowRight, CheckCircle2, Loader2 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { handleServerError } from '@/lib/handle-server-error'
@@ -17,7 +19,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { PasswordInput } from '@/components/password-input'
 import { authApi, type AuthUser } from '../api/auth-api'
-import { initAdminSchema, type InitAdminFormValues } from '../data/schema'
+import { createInitAdminSchema, type InitAdminFormValues } from '../data/schema'
 
 interface InitFormProps {
   onSuccess?: (user: AuthUser) => void
@@ -33,27 +35,30 @@ function getPasswordStrength(pwd: string): number {
   return score
 }
 
-function getStrengthLevel(score: number): {
+function getStrengthLevel(
+  score: number,
+  t: TFunction
+): {
   label: string
   textClass: string
   barClass: string
 } {
   if (score <= 1) {
     return {
-      label: '弱',
+      label: t('init.strengthWeak', { ns: 'auth' }),
       textClass: 'text-destructive',
       barClass: 'bg-destructive',
     }
   }
   if (score === 2) {
     return {
-      label: '中',
+      label: t('init.strengthMedium', { ns: 'auth' }),
       textClass: 'text-amber-500',
       barClass: 'bg-amber-500',
     }
   }
   return {
-    label: '强',
+    label: t('init.strengthStrong', { ns: 'auth' }),
     textClass: 'text-emerald-500',
     barClass: 'bg-emerald-500',
   }
@@ -61,10 +66,13 @@ function getStrengthLevel(score: number): {
 
 export function InitForm({ onSuccess }: InitFormProps): ReactElement {
   const [isPending, setIsPending] = useState(false)
+  const { t } = useTranslation('auth')
   const { auth } = useAuthStore()
 
+  const formSchema = useMemo(() => createInitAdminSchema(t), [t])
+
   const form = useForm<InitAdminFormValues>({
-    resolver: zodResolver(initAdminSchema),
+    resolver: zodResolver(formSchema),
     defaultValues: {
       username: '',
       password: '',
@@ -79,7 +87,7 @@ export function InitForm({ onSuccess }: InitFormProps): ReactElement {
   })
 
   const passwordStrength = getPasswordStrength(passwordValue || '')
-  const strength = getStrengthLevel(passwordStrength)
+  const strength = getStrengthLevel(passwordStrength, t)
   const isPasswordsMatch = Boolean(
     confirmPasswordValue &&
     passwordValue &&
@@ -91,7 +99,7 @@ export function InitForm({ onSuccess }: InitFormProps): ReactElement {
       setIsPending(true)
       const user = await authApi.initAdmin(values)
       auth.setUser(user)
-      toast.success('系统管理员账号初始化成功！')
+      toast.success(t('init.success'))
       onSuccess?.(user)
     } catch (error) {
       handleServerError(error)
@@ -109,13 +117,13 @@ export function InitForm({ onSuccess }: InitFormProps): ReactElement {
           render={({ field }) => (
             <FormItem className='space-y-1.5'>
               <FormLabel className='text-xs font-medium'>
-                管理员用户名 (3~32 位)
+                {t('init.usernameLabel')}
               </FormLabel>
               <FormControl>
                 <Input
                   {...field}
                   type='text'
-                  placeholder='请输入用户名（例如：admin）'
+                  placeholder={t('init.usernamePlaceholder')}
                   className='text-sm'
                   disabled={isPending}
                 />
@@ -132,22 +140,22 @@ export function InitForm({ onSuccess }: InitFormProps): ReactElement {
             <FormItem className='space-y-1.5'>
               <div className='flex items-center justify-between'>
                 <FormLabel className='text-xs font-medium'>
-                  设置密码 (至少 8 位)
+                  {t('init.passwordLabel')}
                 </FormLabel>
                 <span className='text-[11px] text-muted-foreground'>
-                  强度：
+                  {t('init.strengthLabel')}
                   <span className={strength.textClass}>{strength.label}</span>
                 </span>
               </div>
               <FormControl>
                 <PasswordInput
                   {...field}
-                  placeholder='请输入密码'
+                  placeholder={t('init.passwordPlaceholder')}
                   className='text-sm'
                   disabled={isPending}
                 />
               </FormControl>
-              {/* 密码强度进度条 */}
+              {/* Password strength meter */}
               <div className='flex h-1 w-full gap-1 pt-1'>
                 {[1, 2, 3, 4].map((step) => (
                   <div
@@ -169,15 +177,20 @@ export function InitForm({ onSuccess }: InitFormProps): ReactElement {
           render={({ field }) => (
             <FormItem className='space-y-1.5'>
               <div className='flex items-center justify-between'>
-                <FormLabel className='text-xs font-medium'>确认密码</FormLabel>
+                <FormLabel className='text-xs font-medium'>
+                  {t('init.confirmPasswordLabel')}
+                </FormLabel>
                 {confirmPasswordValue && (
                   <span className='flex items-center gap-1 text-[11px]'>
                     {isPasswordsMatch ? (
                       <span className='flex items-center text-emerald-500'>
-                        <CheckCircle2 className='me-0.5 size-3' /> 密码一致
+                        <CheckCircle2 className='me-0.5 size-3' />{' '}
+                        {t('init.passwordMatch')}
                       </span>
                     ) : (
-                      <span className='text-destructive'>两次密码不一致</span>
+                      <span className='text-destructive'>
+                        {t('init.passwordMismatch')}
+                      </span>
                     )}
                   </span>
                 )}
@@ -185,7 +198,7 @@ export function InitForm({ onSuccess }: InitFormProps): ReactElement {
               <FormControl>
                 <PasswordInput
                   {...field}
-                  placeholder='请再次输入密码'
+                  placeholder={t('init.confirmPasswordPlaceholder')}
                   className='text-sm'
                   disabled={isPending}
                 />
@@ -203,11 +216,11 @@ export function InitForm({ onSuccess }: InitFormProps): ReactElement {
           {isPending ? (
             <>
               <Loader2 className='me-2 size-4 animate-spin' />
-              保存凭据中...
+              {t('init.submitting')}
             </>
           ) : (
             <>
-              激活并进入控制台
+              {t('init.submit')}
               <ArrowRight className='ms-2 size-4' />
             </>
           )}

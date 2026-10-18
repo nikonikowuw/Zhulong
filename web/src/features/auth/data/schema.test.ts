@@ -1,7 +1,17 @@
-import { describe, expect, it } from 'vitest'
-import { loginSchema, initAdminSchema } from './schema'
+import { beforeEach, describe, expect, it } from 'vitest'
+import i18n from '@/lib/i18n'
+import { createInitAdminSchema, createLoginSchema } from './schema'
 
 describe('Auth Schemas', () => {
+  let loginSchema: ReturnType<typeof createLoginSchema>
+  let initAdminSchema: ReturnType<typeof createInitAdminSchema>
+
+  beforeEach(() => {
+    const t = i18n.getFixedT(null, 'auth')
+    loginSchema = createLoginSchema(t)
+    initAdminSchema = createInitAdminSchema(t)
+  })
+
   describe('loginSchema', () => {
     it('应成功解析有效登录凭据', () => {
       const result = loginSchema.safeParse({

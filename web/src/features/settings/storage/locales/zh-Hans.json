@@ -47,7 +47,8 @@
     "exports_hours_desc": "导出剪辑保留生存期（默认 48 小时）",
     "btn_reset": "重置更改",
     "btn_save": "保存配置",
-    "save_success": "存储策略配置已保存并生效！"
+    "save_success": "存储策略配置已保存并生效！",
+    "mediaDirectoryPlaceholder": "媒体根目录绝对路径，例如 /mnt/storage/media 或 data/media"
   },
   "advanced": {
     "title": "高级双水位与紧急熔断策略",
@@ -76,5 +77,23 @@
   "actions": {
     "refresh": "刷新状态",
     "manual_cleanup": "立即清理"
+  },
+  "validation": {
+    "mediaDirectoryRequired": "请输入有效的媒体存储路径",
+    "daysMin": "保留天数至少为 1 天",
+    "daysMax365": "保留天数最多为 365 天",
+    "daysMax730": "保留天数最多为 730 天",
+    "hoursMin": "保留小时至少为 1 小时",
+    "hoursMax168": "保留小时最多为 168 小时",
+    "highMin": "高水位至少为 50%",
+    "highMax": "高水位最多为 95%",
+    "lowMin": "低水位至少为 40%",
+    "lowMax": "低水位最多为 85%",
+    "emergencyMin": "紧急熔断阈值至少为 90%",
+    "emergencyMax": "紧急熔断阈值最多为 99%",
+    "reserveMin": "紧急保留空间至少为 100 MB",
+    "reserveMax": "紧急保留空间最多为 102400 MB",
+    "lowBelowHigh": "低水位休眠线必须严格小于高水位清理线",
+    "emergencyAboveHigh": "紧急熔断停录阈值不能低于高水位清理线"
   }
 }
