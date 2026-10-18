@@ -1,3 +1,6 @@
+-- See the up migration for why persons.primary_face_id is inserted as NULL and
+-- re-pointed afterwards: persons and person_faces reference each other, and
+-- DROP TABLE persons cascades into person_faces.
 CREATE TABLE temp_persons AS SELECT * FROM persons;
 CREATE TABLE temp_person_faces AS SELECT * FROM person_faces;
 
@@ -17,13 +20,22 @@ SELECT
     id,
     COALESCE(person_id, id),
     name,
-    primary_face_id,
+    NULL,
     created_at,
     updated_at
 FROM temp_persons;
 
 INSERT OR IGNORE INTO person_faces (id, person_id, image_path, feature_vector, created_at)
 SELECT id, person_id, image_path, feature_vector, created_at FROM temp_person_faces;
+
+UPDATE persons
+SET primary_face_id = (
+    SELECT t.primary_face_id
+    FROM temp_persons t
+    WHERE t.id = persons.id
+      AND t.primary_face_id IS NOT NULL
+      AND EXISTS (SELECT 1 FROM person_faces f WHERE f.id = t.primary_face_id)
+);
 
 DROP TABLE temp_persons;
 DROP TABLE temp_person_faces;

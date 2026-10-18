@@ -238,7 +238,7 @@ func TestAuditLogsMigrationUpAndDownSymmetry(t *testing.T) {
 func TestSystemTimeConfigsMigrationUpAndDownSymmetry(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "migration_symmetry_5.db")
-	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", dbPath)
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
 
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
@@ -305,7 +305,7 @@ func TestSystemTimeConfigsMigrationUpAndDownSymmetry(t *testing.T) {
 func TestAlgorithmTablesMigrationUpAndDownSymmetry(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "migration_symmetry_7.db")
-	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", dbPath)
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
 
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
@@ -381,7 +381,7 @@ func TestAlgorithmTablesMigrationUpAndDownSymmetry(t *testing.T) {
 func TestPersonsTablesMigrationUpAndDownSymmetry(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "migration_symmetry_6.db")
-	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", dbPath)
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
 
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
@@ -457,7 +457,7 @@ func TestPersonsTablesMigrationUpAndDownSymmetry(t *testing.T) {
 func TestPrimaryFaceIDMigrationUpAndDownSymmetry(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "migration_symmetry_8.db")
-	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", dbPath)
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
 
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
@@ -534,7 +534,7 @@ func TestMigration000009_DecouplePersonID(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test_migrate_09.db")
 
-	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", dbPath)
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -573,6 +573,13 @@ func TestMigration000009_DecouplePersonID(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO person_faces (id, person_id, feature_vector) VALUES ('f_1', 'p_dummy', x'0001');`); err != nil {
 		t.Fatalf("insert face: %v", err)
 	}
+	// Enrolling a face auto-assigns it as the primary face, so a realistic
+	// pre-migration row carries a non-NULL primary_face_id. Migration 9 recreates
+	// persons while person_faces still references it, and with foreign keys ON
+	// this is exactly the state that used to make the upgrade fail.
+	if _, err := db.Exec(`UPDATE persons SET primary_face_id = 'f_1' WHERE id = 'p_dummy';`); err != nil {
+		t.Fatalf("assign primary face: %v", err)
+	}
 
 	// 2. Apply migration 9
 	if err := migrator.Migrate(9); err != nil && !errors.Is(err, migrate.ErrNoChange) {
@@ -606,6 +613,15 @@ func TestMigration000009_DecouplePersonID(t *testing.T) {
 		t.Fatalf("expected face f_1 to be preserved, got count %d", faceCount)
 	}
 
+	// Verify the primary face pointer survived the table recreation
+	var dummyPrimaryFace sql.NullString
+	if err := db.QueryRow(`SELECT primary_face_id FROM persons WHERE id = 'p_dummy'`).Scan(&dummyPrimaryFace); err != nil {
+		t.Fatalf("query dummy primary_face_id: %v", err)
+	}
+	if !dummyPrimaryFace.Valid || dummyPrimaryFace.String != "f_1" {
+		t.Fatalf("expected p_dummy primary_face_id 'f_1', got %v", dummyPrimaryFace)
+	}
+
 	// Verify multiple NULL person_ids do not conflict
 	if _, err := db.Exec(`INSERT INTO persons (id, person_id, name) VALUES ('p_null_2', NULL, 'Null2');`); err != nil {
 		t.Fatalf("insert second null person_id failed: %v", err)
@@ -630,9 +646,35 @@ func TestMigration000009_DecouplePersonID(t *testing.T) {
 		t.Fatalf("expected rolled back person_id 'p_dummy', got %v", rolledBackID)
 	}
 
+	// The down migration recreates persons too, so the primary face pointer and
+	// the enrolled face must both survive the round trip.
+	var rolledBackPrimaryFace sql.NullString
+	if err := db.QueryRow(`SELECT primary_face_id FROM persons WHERE id = 'p_dummy'`).Scan(&rolledBackPrimaryFace); err != nil {
+		t.Fatalf("query rolled back primary_face_id: %v", err)
+	}
+	if !rolledBackPrimaryFace.Valid || rolledBackPrimaryFace.String != "f_1" {
+		t.Fatalf("expected rolled back primary_face_id 'f_1', got %v", rolledBackPrimaryFace)
+	}
+	var rolledBackFaceCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM person_faces WHERE id = 'f_1'`).Scan(&rolledBackFaceCount); err != nil {
+		t.Fatalf("query rolled back face count: %v", err)
+	}
+	if rolledBackFaceCount != 1 {
+		t.Fatalf("expected face f_1 to survive the down migration, got count %d", rolledBackFaceCount)
+	}
+
 	// 4. Re-apply migration 9 (Up step 1)
 	if err := migrator.Steps(1); err != nil {
 		t.Fatalf("migrator Steps(1): %v", err)
+	}
+
+	// The re-applied up migration must preserve the pointer as well.
+	var reappliedPrimaryFace sql.NullString
+	if err := db.QueryRow(`SELECT primary_face_id FROM persons WHERE id = 'p_dummy'`).Scan(&reappliedPrimaryFace); err != nil {
+		t.Fatalf("query re-applied primary_face_id: %v", err)
+	}
+	if !reappliedPrimaryFace.Valid || reappliedPrimaryFace.String != "f_1" {
+		t.Fatalf("expected re-applied primary_face_id 'f_1', got %v", reappliedPrimaryFace)
 	}
 }
 
@@ -737,7 +779,7 @@ func TestMigration000010NormalizeAuditActions(t *testing.T) {
 func TestPerceptionAndAlarmTablesMigrationUpAndDownSymmetry(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "migration_symmetry_11.db")
-	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)", dbPath)
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
 
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
