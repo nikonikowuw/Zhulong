@@ -15,7 +15,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -24,12 +23,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Textarea } from '@/components/ui/textarea'
 import { type Algorithm } from '@/features/algorithms/data/schema'
 import { type Camera } from '@/features/cameras/data/schema'
+import { getDefaultConfigJson } from '../data/algo-config-schema'
 import { type AlgorithmConfigDraft, type Task } from '../data/schema'
 import { useSyncChannelAlgorithms } from '../hooks/use-sync-channel-algorithms'
 import { MAX_COMPUTE_POINTS } from '../hooks/use-task-compute-budget'
+import { AlgoConfigDynamicForm } from './algo-config-dynamic-form'
+import { FpsStepper } from './fps-stepper'
 
 interface ChannelTaskDialogProps {
   open: boolean
@@ -45,6 +46,22 @@ interface AlgoDraftItem {
   sampleFps: number
   enabled: boolean
   configJson: string
+}
+
+const EMPTY_CONFIG_JSON = '{}'
+const MIN_SAMPLE_FPS = 1
+const MAX_SAMPLE_FPS = 30
+
+/**
+ * 草稿配置解析：未配置（空串或 `{}`）时回落到算法包声明的默认值，
+ * 已配置过的算法保留用户输入。
+ */
+function resolveDraftConfigJson(
+  algo: Algorithm | undefined,
+  existing?: string
+): string {
+  if (existing && existing.trim() !== EMPTY_CONFIG_JSON) return existing
+  return getDefaultConfigJson(algo?.configSchemaJson)
 }
 
 function computeInitialDrafts(
@@ -63,14 +80,14 @@ function computeInitialDrafts(
         selected: true,
         sampleFps: existing.sampleFps,
         enabled: existing.enabled,
-        configJson: existing.configJson || '{}',
+        configJson: resolveDraftConfigJson(algo, existing.configJson),
       }
     } else {
       initialDrafts[algo.id] = {
         selected: false,
         sampleFps: 5,
         enabled: true,
-        configJson: '{}',
+        configJson: resolveDraftConfigJson(algo),
       }
     }
   }
@@ -146,29 +163,36 @@ function ChannelTaskDialogContent({
   )
 
   const handleToggleAlgo = (algoId: string, checked: boolean) => {
-    setDrafts((prev) => ({
-      ...prev,
-      [algoId]: {
-        ...(prev[algoId] ?? { sampleFps: 5, enabled: true, configJson: '{}' }),
-        selected: checked,
-      },
-    }))
+    setDrafts((prev) => {
+      const current = prev[algoId]
+      return {
+        ...prev,
+        [algoId]: {
+          ...(current ?? { sampleFps: 5, enabled: true }),
+          selected: checked,
+          configJson: resolveDraftConfigJson(
+            algoMap.get(algoId),
+            current?.configJson
+          ),
+        },
+      }
+    })
   }
 
-  const handleUpdateFps = (algoId: string, val: string) => {
-    const parsed = parseInt(val, 10)
-    const validFps = Number.isNaN(parsed)
-      ? 1
-      : Math.max(1, Math.min(30, parsed))
+  const handleUpdateFps = (algoId: string, value: number) => {
+    const sampleFps = Math.max(
+      MIN_SAMPLE_FPS,
+      Math.min(MAX_SAMPLE_FPS, Math.round(value))
+    )
     setDrafts((prev) => ({
       ...prev,
       [algoId]: {
         ...(prev[algoId] ?? {
           selected: true,
           enabled: true,
-          configJson: '{}',
+          configJson: EMPTY_CONFIG_JSON,
         }),
-        sampleFps: validFps,
+        sampleFps,
       },
     }))
   }
@@ -181,16 +205,6 @@ function ChannelTaskDialogContent({
         configJson: json,
       },
     }))
-  }
-
-  const handleFormatJson = (algoId: string) => {
-    const raw = drafts[algoId]?.configJson ?? '{}'
-    try {
-      const parsed = JSON.parse(raw)
-      handleUpdateConfigJson(algoId, JSON.stringify(parsed, null, 2))
-    } catch {
-      toast.error('JSON 语法错误，无法格式化')
-    }
   }
 
   const handleSave = () => {
@@ -386,53 +400,34 @@ function ChannelTaskDialogContent({
 
                     {/* 展开的参数配置区 */}
                     {draft.selected && (
-                      <div className='mt-3 space-y-3 border-t border-border/50 ps-7 pt-3'>
-                        <div className='flex items-center gap-4'>
-                          <Label className='text-xs whitespace-nowrap text-muted-foreground'>
-                            {t('dialog.fpsLabel', '采样帧率')}:
-                          </Label>
-                          <div className='flex items-center gap-2'>
-                            <Input
-                              type='number'
-                              min={1}
-                              max={30}
-                              value={draft.sampleFps}
-                              onChange={(e) =>
-                                handleUpdateFps(algo.id, e.target.value)
-                              }
-                              className='h-8 w-20 text-center text-xs'
-                            />
-                            <span className='text-xs text-muted-foreground'>
-                              FPS
+                      <div className='mt-3 space-y-3.5 border-t border-border/50 pt-3'>
+                        <div className='flex items-center justify-between rounded-lg border border-border bg-card/40 px-3 py-2'>
+                          <div className='flex items-center gap-1.5'>
+                            <Label className='text-xs font-medium text-foreground'>
+                              {t('dialog.fpsLabel', '采样帧率')}
+                            </Label>
+                            <span className='font-mono text-[10px] text-muted-foreground/70'>
+                              {t('dialog.fpsRange', {
+                                min: MIN_SAMPLE_FPS,
+                                max: MAX_SAMPLE_FPS,
+                              })}
                             </span>
                           </div>
-                        </div>
-
-                        <div className='space-y-1.5'>
-                          <div className='flex items-center justify-between'>
-                            <Label className='text-xs text-muted-foreground'>
-                              {t('dialog.configJsonLabel', '高级参数 (JSON)')}:
-                            </Label>
-                            <Button
-                              type='button'
-                              variant='ghost'
-                              size='sm'
-                              className='h-6 px-1.5 text-[10px]'
-                              onClick={() => handleFormatJson(algo.id)}
-                            >
-                              {t('dialog.formatJson', '格式化 JSON')}
-                            </Button>
-                          </div>
-                          <Textarea
-                            rows={2}
-                            value={draft.configJson}
-                            onChange={(e) =>
-                              handleUpdateConfigJson(algo.id, e.target.value)
-                            }
-                            placeholder='{}'
-                            className='font-mono text-xs'
+                          <FpsStepper
+                            value={draft.sampleFps}
+                            min={MIN_SAMPLE_FPS}
+                            max={MAX_SAMPLE_FPS}
+                            onChange={(next) => handleUpdateFps(algo.id, next)}
                           />
                         </div>
+
+                        <AlgoConfigDynamicForm
+                          schemaJson={algo.configSchemaJson}
+                          value={draft.configJson}
+                          onChange={(nextJson) =>
+                            handleUpdateConfigJson(algo.id, nextJson)
+                          }
+                        />
                       </div>
                     )}
                   </div>
