@@ -296,7 +296,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
           className={`flex h-full w-full flex-col items-center justify-center bg-black p-4 text-center text-xs text-muted-foreground ${className}`}
         >
           <p className='font-medium text-amber-400'>WebCodecs 硬件加速不可用</p>
-          <p className='mt-1 text-[11px] text-zinc-500'>
+          <p className='mt-1 text-[11px] text-muted-foreground/70'>
             请使用 Chromium / Safari 现代浏览器，并在 localhost 或 HTTPS
             安全上下文下访问。
           </p>

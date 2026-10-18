@@ -12,6 +12,8 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { statusDotClass, statusLevelClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -83,9 +85,17 @@ export function LiveToolbar({
         {/* 活跃流状态 Badge */}
         <Badge
           variant='outline'
-          className='hidden items-center gap-1.5 border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-600 sm:flex dark:text-emerald-400'
+          className={cn(
+            'hidden items-center gap-1.5 px-2.5 py-1 text-xs font-medium sm:flex',
+            statusLevelClass('active')
+          )}
         >
-          <span className='h-2 w-2 animate-pulse rounded-full bg-emerald-500' />
+          <span
+            className={cn(
+              'h-2 w-2 animate-pulse rounded-full',
+              statusDotClass('active')
+            )}
+          />
           <span>
             {activeStreamsCount} {t('activeStreams')}
           </span>
@@ -124,11 +134,12 @@ export function LiveToolbar({
               <Button
                 variant={showAIOverlay ? 'secondary' : 'outline'}
                 size='icon'
-                className={`h-8 w-8 transition-colors ${
+                className={cn(
+                  'h-8 w-8 transition-colors',
                   showAIOverlay
-                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                    ? statusLevelClass('active')
                     : 'text-muted-foreground'
-                }`}
+                )}
                 onClick={onToggleAIOverlay}
               >
                 <ScanFace className='h-4 w-4' />

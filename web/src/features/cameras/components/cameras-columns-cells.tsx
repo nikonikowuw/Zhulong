@@ -3,6 +3,7 @@ import { type Column } from '@tanstack/react-table'
 import { Check, Copy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -34,29 +35,27 @@ export function CameraActionsHeader() {
   return <span className='sr-only'>{t('table.columns.actions')}</span>
 }
 
+/**
+ * §1.3.3 经典四级状态语义调色板（必须成对具备双模支持）。
+ * 类名统一取自 `@/lib/status-palette`，禁止就地改色。
+ */
+const LEVEL_ACTIVE = STATUS_LEVEL_CLASS.active
+const LEVEL_DESTRUCTIVE = STATUS_LEVEL_CLASS.destructive
+const LEVEL_INACTIVE = STATUS_LEVEL_CLASS.inactive
+
+const DOT_ACTIVE = STATUS_DOT_CLASS.active
+const DOT_DESTRUCTIVE = STATUS_DOT_CLASS.destructive
+const DOT_INACTIVE = STATUS_DOT_CLASS.inactive
+
+/** online → 活跃；offline/error → 破坏性（规范将 Offline 归入该档）；unknown → 未激活 / 未知。 */
 const healthStatusConfig: Record<
   CameraHealth,
   { dotClass: string; badgeClass: string }
 > = {
-  online: {
-    dotClass: 'bg-emerald-500',
-    badgeClass:
-      'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
-  },
-  offline: {
-    dotClass: 'bg-zinc-400 dark:bg-zinc-500',
-    badgeClass:
-      'border-zinc-500/30 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400',
-  },
-  error: {
-    dotClass: 'bg-destructive animate-pulse',
-    badgeClass: 'border-destructive/30 bg-destructive/10 text-destructive',
-  },
-  unknown: {
-    dotClass: 'bg-sky-400',
-    badgeClass:
-      'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300',
-  },
+  online: { dotClass: DOT_ACTIVE, badgeClass: LEVEL_ACTIVE },
+  offline: { dotClass: DOT_DESTRUCTIVE, badgeClass: LEVEL_DESTRUCTIVE },
+  error: { dotClass: DOT_DESTRUCTIVE, badgeClass: LEVEL_DESTRUCTIVE },
+  unknown: { dotClass: DOT_INACTIVE, badgeClass: LEVEL_INACTIVE },
 }
 
 export function CameraSwitchCell({ camera }: { camera: Camera }) {
@@ -119,13 +118,13 @@ export function CameraStatusBadge({ camera }: { camera: Camera }) {
       </Badge>
       {camera.degraded && (
         <span
-          className='size-1.5 rounded-full bg-amber-500'
+          className={cn('size-1.5 rounded-full', STATUS_DOT_CLASS.warning)}
           title={t('status.degraded')}
         />
       )}
       {camera.stale && (
         <span
-          className='size-1.5 rounded-full bg-muted-foreground/60'
+          className={cn('size-1.5 rounded-full', STATUS_DOT_CLASS.inactive)}
           title={t('status.stale')}
         />
       )}

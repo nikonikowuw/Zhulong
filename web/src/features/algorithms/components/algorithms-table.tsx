@@ -1,5 +1,4 @@
 import { useState, useMemo } from 'react'
-import { useTranslation } from 'react-i18next'
 import {
   Cpu,
   Layers,
@@ -9,6 +8,9 @@ import {
   HardDrive,
   Activity,
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { categoryBadgeClass, type CategoryHue } from '@/lib/category-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -22,10 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import {
-  type Algorithm,
-  type AlgorithmTaskType,
-} from '../data/schema'
+import { type Algorithm, type AlgorithmTaskType } from '../data/schema'
 import {
   useAlgorithms,
   useEnableAlgorithm,
@@ -33,6 +32,16 @@ import {
 } from '../hooks/use-algorithms'
 import { AlgorithmDeleteDialog } from './algorithm-delete-dialog'
 import { AlgorithmStatusBadge } from './algorithm-status-badge'
+
+/** 任务类型 → §1.3.6 分类色板槽位（显式映射，避免新增分类时重排既有颜色）。 */
+const TASK_TYPE_BADGE: Record<
+  AlgorithmTaskType,
+  { labelKey: string; hue: CategoryHue }
+> = {
+  detection: { labelKey: 'taskDetection', hue: 'blue' },
+  classification: { labelKey: 'taskClassification', hue: 'violet' },
+  person_structure: { labelKey: 'taskPersonStructure', hue: 'emerald' },
+}
 
 interface AlgorithmsTableProps {
   onOpenUpload: () => void
@@ -82,31 +91,13 @@ export function AlgorithmsTable({
   }
 
   const getTaskTypeBadge = (taskType: AlgorithmTaskType) => {
-    const map: Record<AlgorithmTaskType, { labelKey: string; className: string }> =
-      {
-        detection: {
-          labelKey: 'taskDetection',
-          className:
-            'border-blue-500/30 bg-blue-500/10 text-blue-600 dark:text-blue-400',
-        },
-        classification: {
-          labelKey: 'taskClassification',
-          className:
-            'border-purple-500/30 bg-purple-500/10 text-purple-600 dark:text-purple-400',
-        },
-        person_structure: {
-          labelKey: 'taskPersonStructure',
-          className:
-            'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
-        },
-      }
-    const item = map[taskType] ?? {
-      labelKey: taskType,
-      className: 'border-zinc-500/30 text-zinc-500',
-    }
+    /** 任务类型是「分类标签」，走 §1.3.6 分类色板；未声明的类型串回落中性兜底。 */
+    const item = TASK_TYPE_BADGE[taskType]
+    const labelKey = item?.labelKey ?? taskType
+    const className = categoryBadgeClass(item?.hue)
     return (
-      <Badge variant='outline' className={`px-2 py-0.5 text-xs ${item.className}`}>
-        {t(item.labelKey, taskType)}
+      <Badge variant='outline' className={cn('px-2 py-0.5 text-xs', className)}>
+        {t(labelKey, taskType)}
       </Badge>
     )
   }
@@ -201,7 +192,7 @@ export function AlgorithmsTable({
                   onClick={() => setTaskTypeFilter(tab.key)}
                   className={`rounded-md px-2.5 py-1 transition-all ${
                     isActive
-                      ? 'bg-background text-foreground shadow-xs font-semibold'
+                      ? 'bg-background font-semibold text-foreground shadow-xs'
                       : 'text-muted-foreground hover:text-foreground'
                   }`}
                 >
@@ -239,7 +230,7 @@ export function AlgorithmsTable({
         </div>
       ) : (
         /* 算法包列表表格 */
-        <div className='rounded-xl border border-border bg-card shadow-xs overflow-hidden'>
+        <div className='overflow-hidden rounded-xl border border-border bg-card shadow-xs'>
           <Table>
             <TableHeader>
               <TableRow className='bg-muted/40 hover:bg-muted/40'>
@@ -249,7 +240,9 @@ export function AlgorithmsTable({
                 <TableHead>{t('thResources', '资源消耗')}</TableHead>
                 <TableHead>{t('thStatus', '运行状态')}</TableHead>
                 <TableHead>{t('thEnable', '调度开关')}</TableHead>
-                <TableHead className='text-end'>{t('thActions', '操作')}</TableHead>
+                <TableHead className='text-end'>
+                  {t('thActions', '操作')}
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -265,7 +258,7 @@ export function AlgorithmsTable({
                     <TableCell>
                       <div className='flex flex-col'>
                         <div className='flex items-center gap-1.5'>
-                          <span className='font-semibold text-foreground text-sm'>
+                          <span className='text-sm font-semibold text-foreground'>
                             {algo.name}
                           </span>
                           <span className='font-mono text-xs text-muted-foreground'>
@@ -276,7 +269,7 @@ export function AlgorithmsTable({
                           {algo.id}
                         </span>
                         {algo.description && (
-                          <span className='line-clamp-1 text-xs text-muted-foreground/80 mt-0.5'>
+                          <span className='mt-0.5 line-clamp-1 text-xs text-muted-foreground/80'>
                             {algo.description}
                           </span>
                         )}
@@ -292,7 +285,7 @@ export function AlgorithmsTable({
                         <Cpu className='h-3.5 w-3.5 text-muted-foreground' />
                         <span>{algo.targetArch}</span>
                         <span className='text-muted-foreground'>/</span>
-                        <span className='uppercase font-semibold text-primary'>
+                        <span className='font-semibold text-primary uppercase'>
                           {algo.targetDevice}
                         </span>
                       </div>
@@ -302,20 +295,20 @@ export function AlgorithmsTable({
                     <TableCell>
                       <div className='flex flex-col gap-0.5 text-xs text-muted-foreground'>
                         <div className='flex items-center gap-1'>
-                          <Activity className='h-3 w-3 text-amber-500' />
+                          <Activity className='h-3 w-3' />
                           <span>
                             {t('computeCostLabel', '算力:')}{' '}
-                            <strong className='font-mono text-foreground font-semibold'>
+                            <strong className='font-mono font-semibold text-foreground'>
                               {algo.computeCost}
                             </strong>{' '}
                             {t('points', '点')}
                           </span>
                         </div>
                         <div className='flex items-center gap-1'>
-                          <HardDrive className='h-3 w-3 text-sky-500' />
+                          <HardDrive className='h-3 w-3' />
                           <span>
                             {t('memoryLabel', '内存:')}{' '}
-                            <strong className='font-mono text-foreground font-semibold'>
+                            <strong className='font-mono font-semibold text-foreground'>
                               {algo.memoryMb}
                             </strong>{' '}
                             MB
@@ -348,11 +341,14 @@ export function AlgorithmsTable({
                       <Button
                         variant='ghost'
                         size='icon'
-                        className='h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10'
+                        className='h-8 w-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
                         disabled={isEnabled || isOperating}
                         title={
                           isEnabled
-                            ? t('disableBeforeDelete', '请先停用算法包后再执行卸载')
+                            ? t(
+                                'disableBeforeDelete',
+                                '请先停用算法包后再执行卸载'
+                              )
                             : t('deleteAlgorithm', '卸载算法包')
                         }
                         onClick={() => setDeletingAlgorithm(algo)}

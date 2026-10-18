@@ -1,9 +1,11 @@
 import { format } from 'date-fns'
 import { Camera, Eye } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { type Capture } from '../../data/schema'
+import { targetTypeBadgeClass } from '../../data/target-type'
 import { MediaImage } from '../common/media-image'
 
 interface CaptureCardProps {
@@ -36,7 +38,10 @@ export function CaptureCard({ item, onSelect }: CaptureCardProps) {
         <div className='absolute start-2 top-2'>
           <Badge
             variant='outline'
-            className='flex items-center gap-1 border-sky-500/50 bg-sky-500/10 font-medium text-sky-600 shadow-sm dark:text-sky-400'
+            className={cn(
+              'flex items-center gap-1 font-medium shadow-sm',
+              targetTypeBadgeClass(item.targetType)
+            )}
           >
             <Camera className='size-3' />
             {item.targetType}

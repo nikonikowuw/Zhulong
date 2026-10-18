@@ -7,6 +7,8 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { statusLevelClass, statusTextClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { ContentSection } from '../components/content-section'
@@ -158,15 +160,20 @@ export function SettingsNetwork() {
 
         {/* 未决事务全局警示横幅 */}
         {isPendingConfirm && (
-          <Alert className='border-amber-500/50 bg-amber-500/10 text-amber-900 dark:text-amber-300'>
-            <AlertTriangle className='h-4 w-4 text-amber-600 dark:text-amber-400' />
+          <Alert className={statusLevelClass('warning')}>
+            <AlertTriangle
+              className={cn('h-4 w-4', statusTextClass('warning'))}
+            />
             <AlertTitle className='flex items-center justify-between font-semibold'>
               <span>{t('watchdog.trialActiveTitle')}</span>
               <Button
                 size='sm'
                 variant='outline'
                 onClick={() => setIsWatchdogOpen(true)}
-                className='h-7 gap-1 border-amber-500/50 bg-background text-xs font-medium text-amber-700 hover:bg-amber-500/10 dark:text-amber-300'
+                className={cn(
+                  'h-7 gap-1 border-amber-500/50 bg-background text-xs font-medium hover:bg-amber-500/10',
+                  statusTextClass('warning')
+                )}
               >
                 <Clock className='h-3 w-3' />
                 {t('actions.openConfirmPanel')}

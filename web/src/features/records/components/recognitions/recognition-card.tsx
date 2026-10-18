@@ -1,6 +1,8 @@
 import { format } from 'date-fns'
 import { Eye, UserCheck, UserX } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { statusLevelClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { type Recognition } from '../../data/schema'
@@ -37,7 +39,7 @@ export function RecognitionCard({ item, onSelect }: RecognitionCardProps) {
           {item.matched ? (
             <Badge
               variant='outline'
-              className='border-emerald-500/50 bg-emerald-500/10 font-medium text-emerald-600 dark:text-emerald-400'
+              className={cn('font-medium', statusLevelClass('active'))}
             >
               <UserCheck className='me-1 size-3' />
               {t('card.matched')}
@@ -45,7 +47,7 @@ export function RecognitionCard({ item, onSelect }: RecognitionCardProps) {
           ) : (
             <Badge
               variant='outline'
-              className='border-amber-500/50 bg-amber-500/10 font-medium text-amber-600 dark:text-amber-400'
+              className={cn('font-medium', statusLevelClass('warning'))}
             >
               <UserX className='me-1 size-3' />
               {t('card.stranger')}

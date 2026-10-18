@@ -8,6 +8,8 @@ import {
   UserX,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { statusLevelClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -76,11 +78,10 @@ export function RecordDetailDialog({
                 {isRecognition && rec && (
                   <Badge
                     variant='outline'
-                    className={
-                      rec.matched
-                        ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                        : 'border-amber-500/50 bg-amber-500/10 text-amber-600 dark:text-amber-400'
-                    }
+                    className={cn(
+                      'font-medium',
+                      statusLevelClass(rec.matched ? 'active' : 'warning')
+                    )}
                   >
                     {rec.matched ? (
                       <UserCheck className='me-1 size-3' />

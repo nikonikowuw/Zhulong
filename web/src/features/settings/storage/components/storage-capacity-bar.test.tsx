@@ -67,4 +67,61 @@ describe('StorageCapacityBar', () => {
     await expect.element(getStoppedText('停录熔断')).toBeInTheDocument()
     await expect.element(getStoppedText('禁止写入')).toBeInTheDocument()
   })
+
+  it('keeps every legend dot on the same §1.3.6 slot as its bar segment', async () => {
+    const { getByText } = await render(
+      <StorageCapacityBar status={mockStatus} isLoading={false} />
+    )
+
+    const labels: Array<[string, string]> = [
+      ['视频录像', 'bg-blue-500'],
+      ['AI抓拍', 'bg-violet-500'],
+      ['临时导出', 'bg-emerald-500'],
+      ['其它占用', 'bg-muted-foreground/60'],
+    ]
+
+    for (const [label, expectedSolid] of labels) {
+      // 图例圆点：label 前一个兄弟节点
+      const dot = (getByText(label).element() as HTMLElement)
+        .previousElementSibling
+      expect(dot).not.toBeNull()
+      expect((dot as HTMLElement).className).toContain(expectedSolid)
+    }
+  })
+
+  it.each([
+    ['healthy', '运行正常', 'border-teal-200', 'dark:border-teal-800'],
+    ['warning', '高水位预警', 'border-amber-200', 'dark:border-amber-800'],
+    [
+      'emergency_stopped',
+      '停录熔断',
+      'border-destructive/20',
+      'dark:border-destructive/40',
+    ],
+  ] as const)(
+    'renders the %s health badge with the paired §1.3.3 level classes',
+    async (healthStatus, label, lightBorder, darkBorder) => {
+      const { getByText } = await render(
+        <StorageCapacityBar
+          status={{
+            ...mockStatus,
+            status: healthStatus,
+            canWrite: healthStatus !== 'emergency_stopped',
+          }}
+          isLoading={false}
+        />
+      )
+
+      const badge = (getByText(label).element() as HTMLElement).closest(
+        '[data-slot="badge"]'
+      )
+      expect(badge).not.toBeNull()
+      const classes = (badge as HTMLElement).className
+
+      expect(classes).toContain(lightBorder)
+      expect(classes).toContain(darkBorder)
+      // §1.3.5：严禁实心 destructive 徽章（与同排浅色标签割裂）
+      expect(classes).not.toContain('bg-destructive text-white')
+    }
+  )
 })

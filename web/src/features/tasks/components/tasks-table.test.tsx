@@ -78,11 +78,14 @@ describe('TasksTable', () => {
       />
     )
 
-    expect(getByText('南门枪机')).toBeDefined()
-    expect(getByText('烟火检测算法')).toBeDefined()
-    expect(getByText('5 FPS')).toBeDefined()
-    expect(getByText('75 点')).toBeDefined() // 15 cost * 5 fps
-    expect(getByText('运行中')).toBeDefined()
+    await expect.element(getByText('南门枪机')).toBeInTheDocument()
+    await expect.element(getByText('烟火检测算法')).toBeInTheDocument()
+    await expect.element(getByText('5 FPS')).toBeInTheDocument()
+    // 15 点/帧 × 5 FPS = 75 点
+    await expect
+      .element(getByText('75 点', { exact: true }))
+      .toBeInTheDocument()
+    await expect.element(getByText('运行中')).toBeInTheDocument()
   })
 
   it('renders empty message when tasks array is empty', async () => {
@@ -96,6 +99,6 @@ describe('TasksTable', () => {
       />
     )
 
-    expect(getByText('暂无分析任务记录')).toBeDefined()
+    await expect.element(getByText('暂无分析任务记录')).toBeInTheDocument()
   })
 })

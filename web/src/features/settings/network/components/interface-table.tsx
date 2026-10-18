@@ -6,6 +6,8 @@ import {
   SlidersHorizontal,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -164,18 +166,20 @@ export function InterfaceTable({
                   <TableCell>
                     <Badge
                       variant='outline'
-                      className={`gap-1.5 text-xs font-normal ${
+                      className={cn(
+                        'gap-1.5 text-xs font-normal',
                         iface.linkUp
-                          ? 'border-teal-200 bg-teal-100/30 text-teal-900 dark:border-teal-800 dark:bg-teal-950/30 dark:text-teal-200'
-                          : 'border-neutral-300 bg-neutral-300/40 text-muted-foreground dark:border-neutral-700 dark:bg-neutral-800/40'
-                      }`}
+                          ? STATUS_LEVEL_CLASS.active
+                          : STATUS_LEVEL_CLASS.inactive
+                      )}
                     >
                       <span
-                        className={`inline-block h-1.5 w-1.5 rounded-full ${
+                        className={cn(
+                          'inline-block h-1.5 w-1.5 rounded-full',
                           iface.linkUp
                             ? 'bg-teal-700 dark:bg-teal-200'
-                            : 'bg-muted-foreground/60'
-                        }`}
+                            : STATUS_DOT_CLASS.inactive
+                        )}
                       />
                       {iface.linkUp
                         ? t('table.connected')

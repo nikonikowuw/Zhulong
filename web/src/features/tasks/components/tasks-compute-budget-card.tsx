@@ -1,7 +1,8 @@
-import { useTranslation } from 'react-i18next'
 import { Activity, Cpu, Layers } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
+import { useTranslation } from 'react-i18next'
+import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 import { type TaskComputeBudget } from '../hooks/use-task-compute-budget'
 
 interface TasksComputeBudgetCardProps {
@@ -14,28 +15,25 @@ export function TasksComputeBudgetCard({
   const { t } = useTranslation('tasks')
 
   // 根据利用率判断状态徽标样式
-  let statusBadgeStyle =
-    'border-teal-200 bg-teal-100/30 text-teal-900 dark:border-teal-800 dark:bg-teal-950/30 dark:text-teal-200'
-  let dotColor = 'bg-emerald-500'
+  let statusBadgeStyle = STATUS_LEVEL_CLASS.active
+  let dotColor = STATUS_DOT_CLASS.active
   let statusText = t('budgetCard.statusHealthy', '算力充裕')
   let progressBarColor = 'bg-emerald-500'
 
   if (budget.isOverBudget) {
-    statusBadgeStyle =
-      'border-destructive/20 bg-destructive/10 text-destructive dark:border-destructive/40 dark:bg-destructive/20 dark:text-destructive'
-    dotColor = 'bg-destructive'
+    statusBadgeStyle = STATUS_LEVEL_CLASS.destructive
+    dotColor = STATUS_DOT_CLASS.destructive
     statusText = t('budgetCard.statusOverload', '算力超载')
     progressBarColor = 'bg-destructive'
   } else if (budget.isWarning) {
-    statusBadgeStyle =
-      'border-amber-200 bg-amber-100/30 text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200'
-    dotColor = 'bg-amber-500'
+    statusBadgeStyle = STATUS_LEVEL_CLASS.warning
+    dotColor = STATUS_DOT_CLASS.warning
     statusText = t('budgetCard.statusWarning', '高负荷警戒')
     progressBarColor = 'bg-amber-500'
   }
 
   return (
-    <div className='relative overflow-hidden rounded-xl border border-border bg-card p-4 sm:p-5 shadow-xs'>
+    <div className='relative overflow-hidden rounded-xl border border-border bg-card p-4 shadow-xs sm:p-5'>
       {/* 顶部标题与状态标签 */}
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div className='flex items-center gap-2.5'>
@@ -68,13 +66,17 @@ export function TasksComputeBudgetCard({
       <div className='mt-4 space-y-1.5'>
         <div className='flex items-center justify-between text-xs'>
           <span className='font-medium text-foreground'>
-            {budget.totalUsedPoints} / {budget.maxPoints} {t('channelCard.pointsSuffix', '点')}
+            {budget.totalUsedPoints} / {budget.maxPoints}{' '}
+            {t('channelCard.pointsSuffix', '点')}
           </span>
           <span className='text-muted-foreground'>{budget.percent}%</span>
         </div>
         <div className='h-2 w-full overflow-hidden rounded-full bg-muted/50'>
           <div
-            className={cn('h-full transition-all duration-300', progressBarColor)}
+            className={cn(
+              'h-full transition-all duration-300',
+              progressBarColor
+            )}
             style={{ width: `${Math.min(100, Math.max(0, budget.percent))}%` }}
           />
         </div>

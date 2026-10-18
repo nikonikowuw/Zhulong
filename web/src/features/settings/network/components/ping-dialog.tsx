@@ -3,6 +3,8 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Activity, CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { STATUS_LEVEL_CLASS, STATUS_TEXT_CLASS } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -105,17 +107,22 @@ export function PingDialog({
 
             {pingMutation.data && (
               <div
-                className={`flex items-center justify-between rounded-md border p-3.5 text-sm ${
+                className={cn(
+                  'flex items-center justify-between rounded-md border p-3.5 text-sm',
                   pingMutation.data.reachable
-                    ? 'border-teal-200 bg-teal-100/30 text-teal-900 dark:border-teal-800 dark:bg-teal-950/30 dark:text-teal-200'
+                    ? STATUS_LEVEL_CLASS.active
                     : 'border-destructive/30 bg-destructive/10 text-destructive'
-                }`}
+                )}
               >
                 <div className='flex items-center gap-2'>
                   {pingMutation.data.reachable ? (
-                    <CheckCircle2 className='h-4 w-4 text-teal-600 dark:text-teal-400' />
+                    <CheckCircle2
+                      className={cn('h-4 w-4', STATUS_TEXT_CLASS.active)}
+                    />
                   ) : (
-                    <XCircle className='h-4 w-4 text-destructive' />
+                    <XCircle
+                      className={cn('h-4 w-4', STATUS_TEXT_CLASS.destructive)}
+                    />
                   )}
                   <span className='font-medium'>
                     {pingMutation.data.reachable

@@ -15,6 +15,8 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
+import { statusLevelClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -237,11 +239,12 @@ export function StorageConfigForm({
               {/* Path Test Result Feedback Banner */}
               {testResult && (
                 <div
-                  className={`rounded-lg border p-3 text-xs space-y-1.5 ${
-                    testResult.writable
-                      ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                      : 'border-destructive/20 bg-destructive/10 text-destructive'
-                  }`}
+                  className={cn(
+                    'space-y-1.5 rounded-lg border p-3 text-xs',
+                    statusLevelClass(
+                      testResult.writable ? 'active' : 'destructive'
+                    )
+                  )}
                 >
                   <div className='flex items-center justify-between'>
                     <div className='flex items-center gap-1.5 font-semibold'>

@@ -6,12 +6,52 @@ import {
   AlertCircle,
   RefreshCw,
   FolderLock,
+  type LucideIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import {
+  CATEGORY_NEUTRAL_SOLID_CLASS,
+  CATEGORY_SOLID_CLASS,
+} from '@/lib/category-palette'
+import {
+  statusLevelClass,
+  statusTextClass,
+  type StatusLevel,
+} from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { formatBytes } from '../utils/format'
 import { type StorageHealthStatus, type StorageStatus } from '../types'
+import { formatBytes } from '../utils/format'
+
+/** 存储健康状态 → §1.3.3 四级状态语义 + 徽章图标（显式映射，未声明状态回落 inactive）。 */
+const HEALTH_BADGE: Record<
+  StorageHealthStatus,
+  { level: StatusLevel; labelKey: string; icon: LucideIcon; spin?: boolean }
+> = {
+  healthy: { level: 'active', labelKey: 'status.healthy', icon: CheckCircle2 },
+  warning: {
+    level: 'warning',
+    labelKey: 'status.warning',
+    icon: AlertTriangle,
+  },
+  cleaning: {
+    level: 'warning',
+    labelKey: 'status.cleaning',
+    icon: RefreshCw,
+    spin: true,
+  },
+  emergency_stopped: {
+    level: 'destructive',
+    labelKey: 'status.emergency_stopped',
+    icon: AlertCircle,
+  },
+  error: {
+    level: 'destructive',
+    labelKey: 'status.error',
+    icon: AlertCircle,
+  },
+}
 
 interface StorageCapacityBarProps {
   status: StorageStatus | null
@@ -45,58 +85,19 @@ export function StorageCapacityBar({
   }, [total, recordings, snapshots, exportsBytes, other])
 
   const renderStatusBadge = (healthStatus?: StorageHealthStatus) => {
-    switch (healthStatus) {
-      case 'healthy':
-        return (
-          <Badge
-            variant='outline'
-            className='border-emerald-500/30 bg-emerald-500/10 text-emerald-500 gap-1'
-          >
-            <CheckCircle2 className='size-3.5' />
-            {t('status.healthy', { defaultValue: '运行正常' })}
-          </Badge>
-        )
-      case 'warning':
-        return (
-          <Badge
-            variant='outline'
-            className='border-amber-500/30 bg-amber-500/10 text-amber-500 gap-1'
-          >
-            <AlertTriangle className='size-3.5' />
-            {t('status.warning', { defaultValue: '高水位预警' })}
-          </Badge>
-        )
-      case 'cleaning':
-        return (
-          <Badge
-            variant='outline'
-            className='border-blue-500/30 bg-blue-500/10 text-blue-500 gap-1'
-          >
-            <RefreshCw className='size-3.5 animate-spin' />
-            {t('status.cleaning', { defaultValue: '清理让渡中' })}
-          </Badge>
-        )
-      case 'emergency_stopped':
-        return (
-          <Badge variant='destructive' className='gap-1'>
-            <AlertCircle className='size-3.5' />
-            {t('status.emergency_stopped', { defaultValue: '停录熔断' })}
-          </Badge>
-        )
-      case 'error':
-        return (
-          <Badge variant='destructive' className='gap-1'>
-            <AlertCircle className='size-3.5' />
-            {t('status.error', { defaultValue: '设备异常/掉盘' })}
-          </Badge>
-        )
-      default:
-        return (
-          <Badge variant='secondary'>
-            {t('status.unknown', { defaultValue: '未知状态' })}
-          </Badge>
-        )
-    }
+    const item = healthStatus ? HEALTH_BADGE[healthStatus] : undefined
+    const Icon = item?.icon
+    return (
+      <Badge
+        variant='outline'
+        className={cn('gap-1.5', statusLevelClass(item?.level))}
+      >
+        {Icon && (
+          <Icon className={cn('size-3.5', item?.spin && 'animate-spin')} />
+        )}
+        {t(item?.labelKey ?? 'status.unknown')}
+      </Badge>
+    )
   }
 
   return (
@@ -118,10 +119,7 @@ export function StorageCapacityBar({
                 })}
               </Badge>
             ) : (
-              <Badge
-                variant='outline'
-                className='text-amber-500 border-amber-500/30'
-              >
+              <Badge variant='outline' className={statusLevelClass('warning')}>
                 {t('overview.root_fs', { defaultValue: '系统根分区' })}
               </Badge>
             )}
@@ -130,11 +128,15 @@ export function StorageCapacityBar({
               className='gap-1'
             >
               {status?.canWrite ? (
-                <span>{t('overview.write_ok', { defaultValue: '允许写盘' })}</span>
+                <span>
+                  {t('overview.write_ok', { defaultValue: '允许写盘' })}
+                </span>
               ) : (
                 <>
                   <FolderLock className='size-3' />
-                  <span>{t('overview.write_blocked', { defaultValue: '禁止写入' })}</span>
+                  <span>
+                    {t('overview.write_blocked', { defaultValue: '禁止写入' })}
+                  </span>
                 </>
               )}
             </Badge>
@@ -168,7 +170,12 @@ export function StorageCapacityBar({
             <span className='text-xs text-muted-foreground'>
               {t('overview.free', { defaultValue: '可用剩余' })}
             </span>
-            <p className='text-lg font-bold tracking-tight text-emerald-500'>
+            <p
+              className={cn(
+                'text-lg font-bold tracking-tight',
+                statusTextClass('active')
+              )}
+            >
               {formatBytes(free)}
             </p>
           </div>
@@ -176,7 +183,10 @@ export function StorageCapacityBar({
             <span className='text-xs text-muted-foreground'>
               {t('overview.mountPoint', { defaultValue: '挂载点与文件系统' })}
             </span>
-            <p className='truncate text-sm font-medium' title={status?.mountPoint}>
+            <p
+              className='truncate text-sm font-medium'
+              title={status?.mountPoint}
+            >
               {status?.mountPoint || '-'} ({status?.fsType || 'unknown'})
             </p>
           </div>
@@ -194,26 +204,26 @@ export function StorageCapacityBar({
             {/* Recordings */}
             <div
               style={{ width: `${percentages.recordings}%` }}
-              className='bg-blue-500 transition-all duration-300'
-              title={`录像: ${formatBytes(recordings)} (${percentages.recordings.toFixed(1)}%)`}
+              className={`${CATEGORY_SOLID_CLASS.blue} transition-all duration-300`}
+              title={`${t('breakdown.recordings', { defaultValue: '视频录像' })}: ${formatBytes(recordings)} (${percentages.recordings.toFixed(1)}%)`}
             />
             {/* Snapshots */}
             <div
               style={{ width: `${percentages.snapshots}%` }}
-              className='bg-purple-500 transition-all duration-300'
-              title={`抓拍: ${formatBytes(snapshots)} (${percentages.snapshots.toFixed(1)}%)`}
+              className={`${CATEGORY_SOLID_CLASS.violet} transition-all duration-300`}
+              title={`${t('breakdown.snapshots', { defaultValue: 'AI抓拍' })}: ${formatBytes(snapshots)} (${percentages.snapshots.toFixed(1)}%)`}
             />
             {/* Exports */}
             <div
               style={{ width: `${percentages.exports}%` }}
-              className='bg-amber-500 transition-all duration-300'
-              title={`导出: ${formatBytes(exportsBytes)} (${percentages.exports.toFixed(1)}%)`}
+              className={`${CATEGORY_SOLID_CLASS.emerald} transition-all duration-300`}
+              title={`${t('breakdown.exports', { defaultValue: '临时导出' })}: ${formatBytes(exportsBytes)} (${percentages.exports.toFixed(1)}%)`}
             />
             {/* Other System Files */}
             <div
               style={{ width: `${percentages.other}%` }}
-              className='bg-slate-400 dark:bg-slate-600 transition-all duration-300'
-              title={`系统其它: ${formatBytes(other)} (${percentages.other.toFixed(1)}%)`}
+              className={`${CATEGORY_NEUTRAL_SOLID_CLASS} transition-all duration-300`}
+              title={`${t('breakdown.other', { defaultValue: '其它占用' })}: ${formatBytes(other)} (${percentages.other.toFixed(1)}%)`}
             />
           </div>
 
@@ -221,31 +231,47 @@ export function StorageCapacityBar({
           <div className='flex flex-wrap items-center justify-between gap-y-1 text-xs text-muted-foreground'>
             <div className='flex flex-wrap items-center gap-4'>
               <div className='flex items-center gap-1.5'>
-                <span className='size-2.5 rounded-full bg-blue-500' />
+                <span
+                  className={`size-2.5 rounded-full ${CATEGORY_SOLID_CLASS.blue}`}
+                />
                 <span>
                   {t('breakdown.recordings', { defaultValue: '视频录像' })}:{' '}
-                  <strong className='text-foreground'>{formatBytes(recordings)}</strong>
+                  <strong className='text-foreground'>
+                    {formatBytes(recordings)}
+                  </strong>
                 </span>
               </div>
               <div className='flex items-center gap-1.5'>
-                <span className='size-2.5 rounded-full bg-purple-500' />
+                <span
+                  className={`size-2.5 rounded-full ${CATEGORY_SOLID_CLASS.violet}`}
+                />
                 <span>
                   {t('breakdown.snapshots', { defaultValue: 'AI抓拍' })}:{' '}
-                  <strong className='text-foreground'>{formatBytes(snapshots)}</strong>
+                  <strong className='text-foreground'>
+                    {formatBytes(snapshots)}
+                  </strong>
                 </span>
               </div>
               <div className='flex items-center gap-1.5'>
-                <span className='size-2.5 rounded-full bg-amber-500' />
+                <span
+                  className={`size-2.5 rounded-full ${CATEGORY_SOLID_CLASS.emerald}`}
+                />
                 <span>
                   {t('breakdown.exports', { defaultValue: '临时导出' })}:{' '}
-                  <strong className='text-foreground'>{formatBytes(exportsBytes)}</strong>
+                  <strong className='text-foreground'>
+                    {formatBytes(exportsBytes)}
+                  </strong>
                 </span>
               </div>
               <div className='flex items-center gap-1.5'>
-                <span className='size-2.5 rounded-full bg-slate-400 dark:bg-slate-600' />
+                <span
+                  className={`size-2.5 rounded-full ${CATEGORY_NEUTRAL_SOLID_CLASS}`}
+                />
                 <span>
                   {t('breakdown.other', { defaultValue: '其它占用' })}:{' '}
-                  <strong className='text-foreground'>{formatBytes(other)}</strong>
+                  <strong className='text-foreground'>
+                    {formatBytes(other)}
+                  </strong>
                 </span>
               </div>
             </div>

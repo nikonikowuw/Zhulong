@@ -4,6 +4,8 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { statusLevelClass, statusTextClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -160,8 +162,12 @@ export function InterfaceEditDialog({
           >
             <div className='flex-1 space-y-4 overflow-y-auto px-6 py-4'>
               {iface.isCurrent && (
-                <Alert className='border-amber-500/50 bg-amber-500/10 px-3 py-2.5 text-amber-900 dark:text-amber-300'>
-                  <AlertTriangle className='h-4 w-4 text-amber-600 dark:text-amber-400' />
+                <Alert
+                  className={cn('px-3 py-2.5', statusLevelClass('warning'))}
+                >
+                  <AlertTriangle
+                    className={cn('h-4 w-4', statusTextClass('warning'))}
+                  />
                   <AlertTitle className='text-xs font-semibold'>
                     {t('editDialog.highRiskTitle')}
                   </AlertTitle>

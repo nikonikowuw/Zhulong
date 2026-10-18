@@ -8,7 +8,7 @@ describe('ChannelTasksView', () => {
     const { getByText } = await render(
       <ChannelTasksView groups={[]} onConfigureCamera={vi.fn()} />
     )
-    expect(getByText('暂无分析任务记录')).toBeDefined()
+    await expect.element(getByText('暂无分析任务记录')).toBeInTheDocument()
   })
 
   it('renders camera cards and configured algorithm badges', async () => {
@@ -85,11 +85,14 @@ describe('ChannelTasksView', () => {
       <ChannelTasksView groups={mockGroups} onConfigureCamera={onConfig} />
     )
 
-    expect(getByText('东大门球机')).toBeDefined()
-    expect(getByText('在线')).toBeDefined()
-    expect(getByText('人脸结构化')).toBeDefined()
-    expect(getByText('10 FPS')).toBeDefined()
-    expect(getByText('200点')).toBeDefined()
+    await expect.element(getByText('东大门球机')).toBeInTheDocument()
+    await expect.element(getByText('在线')).toBeInTheDocument()
+    await expect.element(getByText('人脸结构化')).toBeInTheDocument()
+    await expect.element(getByText('10 FPS')).toBeInTheDocument()
+    // 通道汇总行与本条算法行都含「200 点」，需精确匹配到算法行
+    await expect
+      .element(getByText('200 点', { exact: true }))
+      .toBeInTheDocument()
 
     const configBtn = getByRole('button', { name: /配置算法/i })
     await configBtn.click()

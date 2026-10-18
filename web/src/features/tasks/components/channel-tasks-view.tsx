@@ -1,5 +1,6 @@
 import { Settings2, Video } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -74,14 +75,16 @@ export function ChannelTasksView({
                   className={cn(
                     'gap-1.5 text-xs font-normal',
                     isOnline
-                      ? 'border-teal-200 bg-teal-100/30 text-teal-900 dark:border-teal-800 dark:bg-teal-950/30 dark:text-teal-200'
-                      : 'border-neutral-300 bg-neutral-300/40 text-muted-foreground dark:border-neutral-700 dark:bg-neutral-800/40'
+                      ? STATUS_LEVEL_CLASS.active
+                      : STATUS_LEVEL_CLASS.inactive
                   )}
                 >
                   <span
                     className={cn(
                       'h-1.5 w-1.5 rounded-full',
-                      isOnline ? 'bg-emerald-500' : 'bg-muted-foreground/60'
+                      isOnline
+                        ? STATUS_DOT_CLASS.active
+                        : STATUS_DOT_CLASS.inactive
                     )}
                   />
                   {isOnline

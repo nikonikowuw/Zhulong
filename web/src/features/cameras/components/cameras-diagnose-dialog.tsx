@@ -7,6 +7,8 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { statusLevelClass, statusTextClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -99,17 +101,20 @@ export function CamerasDiagnoseDialog() {
             <div className='space-y-3.5'>
               {/* 核心结论横幅 */}
               <div
-                className={`flex items-center justify-between rounded-lg border p-3.5 text-sm ${
-                  isHealthy
-                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300'
-                    : 'border-destructive/30 bg-destructive/10 text-destructive'
-                }`}
+                className={cn(
+                  'flex items-center justify-between rounded-lg border p-3.5 text-sm',
+                  statusLevelClass(isHealthy ? 'active' : 'destructive')
+                )}
               >
                 <div className='flex items-center gap-2'>
                   {isHealthy ? (
-                    <CheckCircle2 className='size-4 text-emerald-600 dark:text-emerald-400' />
+                    <CheckCircle2
+                      className={cn('size-4', statusTextClass('active'))}
+                    />
                   ) : (
-                    <AlertCircle className='size-4 text-destructive' />
+                    <AlertCircle
+                      className={cn('size-4', statusTextClass('destructive'))}
+                    />
                   )}
                   <span className='font-medium'>
                     {isHealthy ? t('diagnose.healthy') : t('diagnose.failed')}

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { AlertCircle, Loader2, Video } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { STATUS_LEVEL_CLASS } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -371,7 +372,10 @@ function ChannelTaskDialogContent({
                         {draft.selected && (
                           <Badge
                             variant='outline'
-                            className='border-teal-200 bg-teal-100/30 text-xs font-normal text-teal-900 dark:border-teal-800 dark:bg-teal-950/30 dark:text-teal-200'
+                            className={cn(
+                              'text-xs font-normal',
+                              STATUS_LEVEL_CLASS.active
+                            )}
                           >
                             {singleAlgoPoints}{' '}
                             {t('channelCard.pointsSuffix', '点')}

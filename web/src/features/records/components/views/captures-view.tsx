@@ -1,15 +1,14 @@
 import { useMemo } from 'react'
+import { format } from 'date-fns'
 import {
   type ColumnDef,
   getCoreRowModel,
   useReactTable,
   flexRender,
 } from '@tanstack/react-table'
-import { format } from 'date-fns'
 import { AlertCircle, Camera, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { DataTableColumnHeader } from '@/components/data-table/column-header'
-import { DataTablePagination } from '@/components/data-table/pagination'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -21,7 +20,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { DataTableColumnHeader } from '@/components/data-table/column-header'
+import { DataTablePagination } from '@/components/data-table/pagination'
 import { type Capture } from '../../data/schema'
+import { targetTypeBadgeClass } from '../../data/target-type'
 import { CaptureCard } from '../captures/capture-card'
 import { MediaImage } from '../common/media-image'
 
@@ -59,10 +61,7 @@ export function CapturesView({
       {
         accessorKey: 'cropPath',
         header: ({ column }) => (
-          <DataTableColumnHeader
-            column={column}
-            title={t('table.thumbnail')}
-          />
+          <DataTableColumnHeader column={column} title={t('table.thumbnail')} />
         ),
         size: 90,
         enableSorting: false,
@@ -111,9 +110,12 @@ export function CapturesView({
         cell: ({ row }) => (
           <Badge
             variant='outline'
-            className='border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400 font-medium'
+            className={cn(
+              'font-medium',
+              targetTypeBadgeClass(row.original.targetType)
+            )}
           >
-            <Camera className='size-3 me-1' />
+            <Camera className='me-1 size-3' />
             {row.original.targetType}
           </Badge>
         ),
@@ -136,10 +138,7 @@ export function CapturesView({
       {
         accessorKey: 'trackId',
         header: ({ column }) => (
-          <DataTableColumnHeader
-            column={column}
-            title={t('table.trackId')}
-          />
+          <DataTableColumnHeader column={column} title={t('table.trackId')} />
         ),
         enableSorting: false,
         cell: ({ row }) => (

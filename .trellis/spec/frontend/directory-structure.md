@@ -31,6 +31,8 @@ web/
       errors/                         # 401, 403, 404, 500, 503 等标准错误视图
     hooks/                            # 通用自定义 Hooks (use-mobile, use-dialog-state, use-table-url-state)
     lib/                              # 基础通用工具库 (utils.ts, cookies.ts, handle-server-error.ts 等)
+                                      #   设计令牌唯一来源：status-palette.ts (§1.3.3 四级状态色板)
+                                      #                      category-palette.ts (§1.3.6 分类色板)
     routes/                           # TanStack Router 文件系统路由层
       __root.tsx                      # 根路由 (注入 QueryClient, Toaster, Devtools 等)
       _authenticated/                 # 鉴权路由组 (挂载 AuthenticatedLayout 框架)

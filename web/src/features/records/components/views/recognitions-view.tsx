@@ -1,15 +1,15 @@
 import { useMemo } from 'react'
+import { format } from 'date-fns'
 import {
   type ColumnDef,
   getCoreRowModel,
   useReactTable,
   flexRender,
 } from '@tanstack/react-table'
-import { format } from 'date-fns'
 import { AlertCircle, RefreshCw, UserCheck, UserX } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { DataTableColumnHeader } from '@/components/data-table/column-header'
-import { DataTablePagination } from '@/components/data-table/pagination'
+import { statusLevelClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -21,6 +21,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { DataTableColumnHeader } from '@/components/data-table/column-header'
+import { DataTablePagination } from '@/components/data-table/pagination'
 import { type Recognition } from '../../data/schema'
 import { MediaImage } from '../common/media-image'
 import { RecognitionCard } from '../recognitions/recognition-card'
@@ -59,10 +61,7 @@ export function RecognitionsView({
       {
         accessorKey: 'faceImagePath',
         header: ({ column }) => (
-          <DataTableColumnHeader
-            column={column}
-            title={t('table.thumbnail')}
-          />
+          <DataTableColumnHeader column={column} title={t('table.thumbnail')} />
         ),
         size: 90,
         enableSorting: false,
@@ -115,17 +114,17 @@ export function RecognitionsView({
               {matched ? (
                 <Badge
                   variant='outline'
-                  className='border-emerald-500/50 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium'
+                  className={cn('font-medium', statusLevelClass('active'))}
                 >
-                  <UserCheck className='size-3 me-1' />
+                  <UserCheck className='me-1 size-3' />
                   {personName || personId || t('card.matched')}
                 </Badge>
               ) : (
                 <Badge
                   variant='outline'
-                  className='border-amber-500/50 bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium'
+                  className={cn('font-medium', statusLevelClass('warning'))}
                 >
-                  <UserX className='size-3 me-1' />
+                  <UserX className='me-1 size-3' />
                   {t('card.stranger')}
                 </Badge>
               )}
@@ -154,10 +153,7 @@ export function RecognitionsView({
       {
         accessorKey: 'trackId',
         header: ({ column }) => (
-          <DataTableColumnHeader
-            column={column}
-            title={t('table.trackId')}
-          />
+          <DataTableColumnHeader column={column} title={t('table.trackId')} />
         ),
         enableSorting: false,
         cell: ({ row }) => (

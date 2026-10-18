@@ -9,6 +9,8 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { statusLevelClass, statusTextClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -145,19 +147,19 @@ export function LiveRecognitionFeed({
               return (
                 <div
                   key={item.id}
-                  className={`flex items-start gap-2.5 rounded-lg border p-2.5 transition-colors ${
-                    item.matched
-                      ? 'border-emerald-500/20 bg-emerald-500/5 hover:border-emerald-500/30'
-                      : 'border-amber-500/20 bg-amber-500/5 hover:border-amber-500/30'
-                  }`}
+                  className={cn(
+                    'flex items-start gap-2.5 rounded-lg border p-2.5 transition-colors',
+                    statusLevelClass(item.matched ? 'active' : 'warning')
+                  )}
                 >
                   {/* 头像/图标 */}
                   <div
-                    className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                    className={cn(
+                      'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
                       item.matched
-                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                        : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                    }`}
+                        ? statusTextClass('active')
+                        : statusTextClass('warning')
+                    )}
                   >
                     {item.matched ? (
                       <UserCheck className='h-4 w-4' />

@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Trash2, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { statusLevelClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,8 +16,8 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { storageApi } from '../api/storage-api'
-import { formatBytes } from '../utils/format'
 import { type CleanupSummary } from '../types'
+import { formatBytes } from '../utils/format'
 
 interface ManualCleanupDialogProps {
   onSuccess?: (summary: CleanupSummary) => void
@@ -71,7 +73,7 @@ export function ManualCleanupDialog({ onSuccess }: ManualCleanupDialogProps) {
             <AlertTriangle className='size-5 text-amber-500' />
             {t('dialog.title', { defaultValue: '触发磁盘空间清理' })}
           </AlertDialogTitle>
-          <AlertDialogDescription className='space-y-2 text-left pt-1'>
+          <AlertDialogDescription className='space-y-2 pt-1 text-left'>
             <p>
               {t('dialog.desc1', {
                 defaultValue:
@@ -89,7 +91,12 @@ export function ManualCleanupDialog({ onSuccess }: ManualCleanupDialogProps) {
         </AlertDialogHeader>
 
         {summary && (
-          <div className='rounded-md border border-emerald-500/20 bg-emerald-500/10 p-3 text-xs text-emerald-600 dark:text-emerald-400 space-y-1'>
+          <div
+            className={cn(
+              'space-y-1 rounded-md border p-3 text-xs',
+              statusLevelClass('active')
+            )}
+          >
             <div className='flex items-center gap-1.5 font-semibold'>
               <CheckCircle2 className='size-4' />
               {t('dialog.success_title', { defaultValue: '清理完成' })}
@@ -127,7 +134,7 @@ export function ManualCleanupDialog({ onSuccess }: ManualCleanupDialogProps) {
                   void handleTrigger()
                 }}
                 disabled={isLoading}
-                className='bg-destructive hover:bg-destructive/90 text-destructive-foreground'
+                className='text-destructive-foreground bg-destructive hover:bg-destructive/90'
               >
                 {isLoading ? (
                   <>

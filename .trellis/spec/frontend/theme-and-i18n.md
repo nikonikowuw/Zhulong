@@ -63,6 +63,32 @@
 | **失败 / 异常 / 破坏性** | Failed, Error, Suspended, Offline | `border-destructive/20 bg-destructive/10 text-destructive dark:border-destructive/40 dark:bg-destructive/20 dark:text-destructive` | `bg-destructive` |
 | **未激活 / 未同步 / 未知** | Inactive, Unsynced, Unknown | `border-neutral-300 bg-neutral-300/40 text-muted-foreground dark:border-neutral-700 dark:bg-neutral-800/40` | `bg-muted-foreground/60` |
 
+**必须通过 `@/lib/status-palette` 取类名，禁止在业务组件内就地手写色串。** 本会话已修复多起因复制粘贴导致的「只加 `dark:text-*` 而漏掉 `dark:border-*` / `dark:bg-*`」漂移（§1.3.5 的 ❌ 形态）。模块提供三种渲染形态：
+
+| 形态 | 导出 | 用途 |
+| :--- | :--- | :--- |
+| 徽章 / 状态面板 | `STATUS_LEVEL_CLASS` | 四元组 border+bg+text，徽章与诊断/提示面板共用同一级别类名 |
+| 指示圆点 | `STATUS_DOT_CLASS` | Dot-Indicator Outline 模式的内嵌圆点 |
+| 独立状态文字 | `STATUS_TEXT_CLASS` | 数值高亮等无底色的状态文字（如 FPS、占用率） |
+
+映射到级别时使用**显式** `{ 状态值 → StatusLevel }`，未声明的状态串统一回落 `inactive`（`statusLevelClass(undefined)`）。
+
+```tsx
+import { statusLevelClass, statusDotClass } from '@/lib/status-palette'
+
+const HEALTH_LEVEL: Record<HealthStatus, StatusLevel> = {
+  online: 'active',
+  offline: 'destructive',
+  error: 'destructive',
+  unknown: 'inactive',
+}
+
+<Badge variant='outline' className={cn('gap-1.5', statusLevelClass(HEALTH_LEVEL[status]))}>
+  <span className={cn('h-1.5 w-1.5 rounded-full', statusDotClass(HEALTH_LEVEL[status]))} />
+  {t(labelKey)}
+</Badge>
+```
+
 #### 4. 面板与容器统一标准 (Panels & Cards)
 - 仪表盘与配置面板背景统一使用 `bg-muted/30` 或 `bg-card`，边框统一使用 `border border-border`，圆角使用 `rounded-lg` 或 `rounded-xl`；
 - 严禁手写 `bg-gray-100`, `bg-slate-50`, `border-gray-300` 等非语义类。
@@ -75,6 +101,44 @@
 | **失败状态标签** | `<Badge variant="destructive">同步失败</Badge>`（突兀实心深红，与同排浅色标签割裂） | `<Badge variant="outline" className="border-destructive/20 bg-destructive/10 text-destructive dark:border-destructive/40 dark:bg-destructive/20 dark:text-destructive gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-destructive"/>同步失败</Badge>` |
 | **面板容器背景** | `<div className="bg-gray-50 border-gray-200 dark:bg-gray-900">` | `<div className="bg-muted/30 border border-border rounded-lg">` |
 | **表单单选卡片** | 手写 `onClick` 切换状态与自定义 `div` 边框高亮 | 使用 Radix `<RadioGroup>`，外层 Label 声明 `[&:has([data-state=checked])>div]:border-primary [&:has([data-state=checked])>div]:bg-primary/5` |
+
+#### 6. 分类色板 (Category Palette)
+
+**适用场景**：表达「**这是哪一类**」而非「**现在什么状态**」的标签 —— 任务类型（目标检测 / 图像分类 / 结构化人脸）、解码后端（WebCodecs / MSE / WASM / Mock）、存储构成（录像 / 抓拍 / 导出 / 其它）等。
+
+**与状态色板的边界（硬性）**：
+
+1. **严禁占用状态色相**：分类色相不得使用 `teal`、`amber`、`destructive`、`neutral` —— 那四者是 §1.3.3 状态语义的专属色。分类标签若染成 teal 会被误读为「正常/就绪」，染成 amber 会被误读为「告警」。
+2. **分类徽章不带状态圆点**：`<span className="h-1.5 w-1.5 rounded-full" />` 是 §1.3.3 状态徽章的专属标记。分类徽章不得携带，以此在视觉上区分两类标签。
+3. **色相必须取自有序槽位表**，按顺序取用，不得跳号或自造色相：
+
+| 槽位 | 色相 | 徽章类名（必须成对具备双模） |
+| :--- | :--- | :--- |
+| 1 | `blue` | `border-blue-500/30 bg-blue-500/10 text-blue-600 dark:border-blue-500/40 dark:bg-blue-500/20 dark:text-blue-400` |
+| 2 | `violet` | `border-violet-500/30 bg-violet-500/10 text-violet-600 dark:border-violet-500/40 dark:bg-violet-500/20 dark:text-violet-400` |
+| 3 | `emerald` | `border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:border-emerald-500/40 dark:bg-emerald-500/20 dark:text-emerald-400` |
+| 4 | `fuchsia` | `border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-600 dark:border-fuchsia-500/40 dark:bg-fuchsia-500/20 dark:text-fuchsia-400` |
+| 5 | `cyan` | `border-cyan-500/30 bg-cyan-500/10 text-cyan-600 dark:border-cyan-500/40 dark:bg-cyan-500/20 dark:text-cyan-400` |
+| 兜底 | 未分类 / 未知 | 复用 §1.3.3 未激活档：`border-neutral-300 bg-neutral-300/40 text-muted-foreground dark:border-neutral-700 dark:bg-neutral-800/40` |
+
+4. **暗色必须成对升级**：亮色 `border/30 + bg/10 + text-600` → 暗色 `dark:border/40 + dark:bg/20 + dark:text-400`。只加 `dark:text-*` 而不同步提升 border/bg 透明度，会导致 10% 底色在深色背景上几乎不可见（§1.3.5 的 ❌ 范例即此症）。
+5. **图表与图例的实心渲染**：堆叠条分段、图例圆点等不透明场景使用 `bg-<hue>-500`（双模一致，不加深浅分支）；图例圆点必须与对应分段**同色**，否则图例失效。中性兜底分段用 `bg-muted-foreground/60`。
+6. **必须通过 `@/lib/category-palette` 取类名**，禁止在业务组件内就地手写色串。该模块以**查表（完整字面量）**形式提供类名 —— Tailwind CSS v4 采用静态提取，`border-${hue}-500/30` 这类模板拼接不会被扫描生成，会静默丢样式。
+7. **映射需显式**：`{ 分类值 → 槽位 }` 必须显式声明，不得依赖数组下标 —— 否则新增分类会重排既有分类的颜色。
+
+```tsx
+import { CATEGORY_BADGE_CLASS, type CategoryHue } from '@/lib/category-palette'
+
+const TASK_TYPE_HUE: Record<TaskType, CategoryHue> = {
+  detection: 'blue',
+  classification: 'violet',
+  person_structure: 'emerald',
+}
+
+<Badge variant='outline' className={cn('px-2 py-0.5 text-xs', CATEGORY_BADGE_CLASS[TASK_TYPE_HUE[type]])}>
+  {t(labelKey)}
+</Badge>
+```
 
 ---
 

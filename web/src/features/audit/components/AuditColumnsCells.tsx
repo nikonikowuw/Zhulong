@@ -2,6 +2,8 @@ import { DotsHorizontalIcon } from '@radix-ui/react-icons'
 import { Copy, Eye } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -22,9 +24,11 @@ export function StatusBadge({ status }: { status: string }) {
     return (
       <Badge
         variant='outline'
-        className='gap-1.5 border-teal-200 bg-teal-100/30 text-xs font-normal text-teal-900 dark:border-teal-800 dark:bg-teal-950/30 dark:text-teal-200'
+        className={cn('gap-1.5 text-xs font-normal', STATUS_LEVEL_CLASS.active)}
       >
-        <span className='h-1.5 w-1.5 rounded-full bg-emerald-500' />
+        <span
+          className={cn('h-1.5 w-1.5 rounded-full', STATUS_DOT_CLASS.active)}
+        />
         {t('status.success')}
       </Badge>
     )
@@ -34,9 +38,17 @@ export function StatusBadge({ status }: { status: string }) {
     return (
       <Badge
         variant='outline'
-        className='gap-1.5 border-destructive/20 bg-destructive/10 text-xs font-normal text-destructive dark:border-destructive/40 dark:bg-destructive/20 dark:text-destructive'
+        className={cn(
+          'gap-1.5 text-xs font-normal',
+          STATUS_LEVEL_CLASS.destructive
+        )}
       >
-        <span className='h-1.5 w-1.5 rounded-full bg-destructive' />
+        <span
+          className={cn(
+            'h-1.5 w-1.5 rounded-full',
+            STATUS_DOT_CLASS.destructive
+          )}
+        />
         {t('status.failed')}
       </Badge>
     )
@@ -45,9 +57,11 @@ export function StatusBadge({ status }: { status: string }) {
   return (
     <Badge
       variant='outline'
-      className='gap-1.5 border-neutral-300 bg-neutral-300/40 text-xs font-normal text-muted-foreground dark:border-neutral-700 dark:bg-neutral-800/40'
+      className={cn('gap-1.5 text-xs font-normal', STATUS_LEVEL_CLASS.inactive)}
     >
-      <span className='h-1.5 w-1.5 rounded-full bg-muted-foreground/60' />
+      <span
+        className={cn('h-1.5 w-1.5 rounded-full', STATUS_DOT_CLASS.inactive)}
+      />
       {status || '-'}
     </Badge>
   )
