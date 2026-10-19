@@ -442,7 +442,10 @@ export function TasksTable({
                           disabled={togglingTaskId === row.id}
                           onCheckedChange={() => handleToggleTask(row)}
                         />
-                        <TaskStatusBadge enabled={row.enabled} />
+                        <TaskStatusBadge
+                          enabled={row.enabled}
+                          algorithmStatus={algorithm?.status}
+                        />
                       </div>
                     </TableCell>
 

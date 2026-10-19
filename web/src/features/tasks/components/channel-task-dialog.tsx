@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { AlertCircle, Loader2, Video, Sliders } from 'lucide-react'
+import { AlertCircle, AlertTriangle, Loader2, Video, Sliders } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { STATUS_LEVEL_CLASS } from '@/lib/status-palette'
@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { type Algorithm } from '@/features/algorithms/data/schema'
+import { useEnableAlgorithm } from '@/features/algorithms/hooks/use-algorithms'
 import { type Camera } from '@/features/cameras/data/schema'
 import { getDefaultConfigJson } from '../data/algo-config-schema'
 import { parseRegionConfig } from '../data/region-config'
@@ -146,8 +147,10 @@ function ChannelTaskDialogContent({
   const [regionModalAlgoId, setRegionModalAlgoId] = useState<string | null>(
     null
   )
+  const [autoEnableDisabled, setAutoEnableDisabled] = useState(true)
 
   const syncMutation = useSyncChannelAlgorithms()
+  const enableMutation = useEnableAlgorithm()
 
   const handleCameraChange = (newCamId: string) => {
     setCameraId(newCamId)
@@ -158,6 +161,15 @@ function ChannelTaskDialogContent({
     () => new Map(algorithms.map((a) => [a.id, a])),
     [algorithms]
   )
+
+  const selectedDisabledAlgos = useMemo(() => {
+    return Object.entries(drafts)
+      .filter(
+        ([algoId, draft]) =>
+          draft.selected && algoMap.get(algoId)?.status === 'DISABLED'
+      )
+      .map(([algoId]) => algoId)
+  }, [drafts, algoMap])
 
   // 计算除当前摄像头外，其他摄像头已占用的总算力点数
   const otherCamerasPoints = useMemo(() => {
@@ -296,7 +308,19 @@ function ChannelTaskDialogContent({
       },
       {
         onSuccess: () => {
-          toast.success(t('dialog.saveSuccess', '通道算法调度已成功更新'))
+          if (autoEnableDisabled && selectedDisabledAlgos.length > 0) {
+            for (const algoId of selectedDisabledAlgos) {
+              enableMutation.mutate(algoId)
+            }
+            toast.success(
+              t(
+                'dialog.saveSuccessWithEnable',
+                '通道算法调度已成功更新，已自动激活相关算法'
+              )
+            )
+          } else {
+            toast.success(t('dialog.saveSuccess', '通道算法调度已成功更新'))
+          }
           onClose()
         },
       }
@@ -414,6 +438,18 @@ function ChannelTaskDialogContent({
                       </div>
 
                       <div className='flex items-center gap-2'>
+                        {algo.status === 'DISABLED' && (
+                          <Badge
+                            variant='outline'
+                            className={cn(
+                              'gap-1 text-xs font-normal',
+                              STATUS_LEVEL_CLASS.warning
+                            )}
+                          >
+                            <AlertTriangle className='h-3 w-3' />
+                            {t('dialog.algoDisabledBadge', '未启用')}
+                          </Badge>
+                        )}
                         <Badge
                           variant='outline'
                           className='text-xs font-normal'
@@ -438,6 +474,24 @@ function ChannelTaskDialogContent({
                     {/* 展开的参数配置区 */}
                     {draft.selected && (
                       <div className='mt-3 space-y-3.5 border-t border-border/50 pt-3'>
+                        {algo.status === 'DISABLED' && (
+                          <div
+                            className={cn(
+                              'flex items-start gap-2 rounded-lg border p-2.5 text-xs',
+                              STATUS_LEVEL_CLASS.warning
+                            )}
+                          >
+                            <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' />
+                            <div className='flex-1'>
+                              <span>
+                                {t(
+                                  'dialog.algoDisabledAlert',
+                                  '该算法当前在算法管理中处于禁用状态，任务保存后将处于待命态。'
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                        )}
                         <div className='flex items-center justify-between rounded-lg border border-border bg-card/40 px-3 py-2'>
                           <div className='flex items-center gap-1.5'>
                             <Label className='text-xs font-medium text-foreground'>
@@ -542,6 +596,26 @@ function ChannelTaskDialogContent({
             <div className='flex items-center gap-1 text-xs text-destructive'>
               <AlertCircle className='h-3.5 w-3.5' />
               <span>{t('dialog.budgetWarning', '已超出总预算上限！')}</span>
+            </div>
+          )}
+          {selectedDisabledAlgos.length > 0 && (
+            <div className='flex items-center gap-2 pt-0.5'>
+              <Checkbox
+                id='auto-enable-chk'
+                checked={autoEnableDisabled}
+                onCheckedChange={(checked) =>
+                  setAutoEnableDisabled(Boolean(checked))
+                }
+              />
+              <Label
+                htmlFor='auto-enable-chk'
+                className='cursor-pointer text-xs font-normal text-muted-foreground'
+              >
+                {t(
+                  'dialog.autoEnableDisabledAlgos',
+                  '保存时自动激活所选算法（立即启动推理）'
+                )}
+              </Label>
             </div>
           )}
         </div>

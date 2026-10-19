@@ -122,6 +122,7 @@ export function ChannelTasksView({
                           enabled={
                             item.task.enabled && item.algorithmItem.enabled
                           }
+                          algorithmStatus={item.algorithm?.status}
                         />
                         <span className='truncate font-medium text-foreground'>
                           {item.algorithm?.name ||

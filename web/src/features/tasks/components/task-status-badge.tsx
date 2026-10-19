@@ -1,27 +1,47 @@
 import { useTranslation } from 'react-i18next'
-import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
+import {
+  STATUS_DOT_CLASS,
+  STATUS_LEVEL_CLASS,
+  type StatusLevel,
+} from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
+import { type AlgorithmStatus } from '@/features/algorithms/data/schema'
 
 interface TaskStatusBadgeProps {
   enabled: boolean
+  algorithmStatus?: AlgorithmStatus
   className?: string
 }
 
 export function TaskStatusBadge({
   enabled,
+  algorithmStatus,
   className = '',
 }: TaskStatusBadgeProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
 
-  const badgeClass = enabled
-    ? STATUS_LEVEL_CLASS.active
-    : STATUS_LEVEL_CLASS.inactive
+  let level: StatusLevel = 'inactive'
+  let label = t('table.statusPaused', '已暂停')
 
-  const dotClass = enabled ? STATUS_DOT_CLASS.active : STATUS_DOT_CLASS.inactive
-  const label = enabled
-    ? t('table.statusRunning', '运行中')
-    : t('table.statusPaused', '已暂停')
+  if (enabled) {
+    if (algorithmStatus === 'DISABLED') {
+      level = 'warning'
+      label = t('table.statusStandby', '待命 (未激活)')
+    } else if (
+      algorithmStatus === 'CRASH_LOOP' ||
+      algorithmStatus === 'CRASHED'
+    ) {
+      level = 'destructive'
+      label = t('table.statusError', '异常')
+    } else {
+      level = 'active'
+      label = t('table.statusRunning', '运行中')
+    }
+  }
+
+  const badgeClass = STATUS_LEVEL_CLASS[level]
+  const dotClass = STATUS_DOT_CLASS[level]
 
   return (
     <Badge
@@ -37,3 +57,4 @@ export function TaskStatusBadge({
     </Badge>
   )
 }
+

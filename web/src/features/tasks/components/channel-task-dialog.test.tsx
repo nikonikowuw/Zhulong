@@ -213,4 +213,24 @@ describe('ChannelTaskDialog', () => {
       .element(getByRole('button', { name: '降低采样帧率' }))
       .toBeDisabled()
   })
+
+  it('displays inactive badge and warning alert when algorithm is DISABLED', async () => {
+    const disabledAlgo = buildAlgorithm({ status: 'DISABLED' })
+    const { getByText } = await renderDialog({
+      algorithms: [disabledAlgo],
+      allTasks: [buildTask({ algorithmId: disabledAlgo.id })],
+    })
+
+    await expect.element(getByText('未启用')).toBeInTheDocument()
+    await expect
+      .element(
+        getByText(
+          '该算法当前在算法管理中处于禁用状态，任务保存后将处于待命态。'
+        )
+      )
+      .toBeInTheDocument()
+    await expect
+      .element(getByText('保存时自动激活所选算法（立即启动推理）'))
+      .toBeInTheDocument()
+  })
 })
