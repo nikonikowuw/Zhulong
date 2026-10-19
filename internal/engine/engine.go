@@ -24,12 +24,8 @@ void zhulongAIResultCallbackBridge(uintptr_t token, Zhulong_stream_id stream, co
 import "C"
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"image"
-	_ "image/jpeg"
-	_ "image/png"
 	"runtime"
 	"runtime/cgo"
 	"sync"
@@ -670,31 +666,11 @@ func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]f
 		return nil, err
 	}
 
-	img, _, err := image.Decode(bytes.NewReader(imageBytes))
+	// 解码、EXIF 方向归一化与 RGB24 打包都在 image_input.go：
+	// 输入格式问题（ErrUnsupportedImageFormat）与原生能力缺失（ErrUnsupported）必须分开。
+	rgb, w, h, err := decodeToRGB24(imageBytes, MaxFaceImageDimension)
 	if err != nil {
-		return nil, fmt.Errorf("%w: decode image: %v", ErrInvalidArgument, err)
-	}
-
-	bounds := img.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
-	if w <= 0 || h <= 0 {
-		return nil, fmt.Errorf("%w: invalid image dimensions (%dx%d)", ErrInvalidArgument, w, h)
-	}
-	if w > MaxFaceImageDimension || h > MaxFaceImageDimension {
-		return nil, fmt.Errorf("%w: image dimensions %dx%d exceed maximum allowed %d", ErrInvalidArgument, w, h, MaxFaceImageDimension)
-	}
-
-	// 转换为打包连续 RGB24 像素
-	rgb := make([]byte, w*h*3)
-	idx := 0
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			r, g, b, _ := img.At(x, y).RGBA()
-			rgb[idx] = byte(r >> 8)
-			rgb[idx+1] = byte(g >> 8)
-			rgb[idx+2] = byte(b >> 8)
-			idx += 3
-		}
+		return nil, err
 	}
 
 	outFeatures := make([]float32, 512)

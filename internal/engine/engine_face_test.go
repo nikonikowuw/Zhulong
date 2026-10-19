@@ -85,9 +85,10 @@ func TestExtractFaceFeature_ValidationAndSuccess(t *testing.T) {
 		t.Fatalf("expected ErrInvalidArgument on nil image data, got %v", err)
 	}
 
-	// 2. 损坏数据应返回解图错误
-	if _, err := eng.ExtractFaceFeature(ctx, []byte("not-an-image")); !errors.Is(err, engine.ErrInvalidArgument) {
-		t.Fatalf("expected ErrInvalidArgument on invalid image bytes, got %v", err)
+	// 2. 无法解码的数据应返回 ErrUnsupportedImageFormat（输入问题，上层回答 4xx）
+	//    而不是 ErrInvalidArgument，也不是 StatusUnsupported（服务端能力问题）。
+	if _, err := eng.ExtractFaceFeature(ctx, []byte("not-an-image")); !errors.Is(err, engine.ErrUnsupportedImageFormat) {
+		t.Fatalf("expected ErrUnsupportedImageFormat on invalid image bytes, got %v", err)
 	}
 
 	// 3. 超出最大允许尺寸 (单边 > 4096) 应返回 ErrInvalidArgument（Go 侧分辨率防护门限）
@@ -125,5 +126,31 @@ func TestExtractFaceFeature_ValidationAndSuccess(t *testing.T) {
 	blackPNG := createTestPNG(64, 64, color.Black)
 	if _, err := eng.ExtractFaceFeature(ctx, blackPNG); !errors.Is(err, engine.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound on black image, got %v", err)
+	}
+}
+
+// TestExtractFaceFeature_WebPInput 回归：上传白名单接受 WebP，引擎就必须能解码它。
+// 曾经这里返回「image: unknown format」，被上层误报成 500。
+func TestExtractFaceFeature_WebPInput(t *testing.T) {
+	webpBytes, err := os.ReadFile("testdata/face_sample.webp")
+	if err != nil {
+		t.Fatalf("read webp fixture: %v", err)
+	}
+
+	eng := engine.New()
+	features, err := eng.ExtractFaceFeature(context.Background(), webpBytes)
+
+	// 格式问题绝不允许出现在这条路径上：这是本用例存在的全部意义。
+	if errors.Is(err, engine.ErrUnsupportedImageFormat) {
+		t.Fatalf("WebP must be decodable, got %v", err)
+	}
+	if errors.Is(err, engine.ErrUnsupported) {
+		t.Skipf("native face inference unavailable in this build (stub backend or missing plugin): %v", err)
+	}
+	if err != nil {
+		t.Fatalf("ExtractFaceFeature on WebP failed: %v", err)
+	}
+	if len(features) != 512 {
+		t.Fatalf("expected 512 features, got %d", len(features))
 	}
 }

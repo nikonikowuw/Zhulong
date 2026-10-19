@@ -44,6 +44,15 @@ type NativeError struct {
 }
 
 func (e *NativeError) Error() string {
+	// Op 为空表示这是哨兵值被 fmt.Errorf 直接包装（如 `%w: detail`），
+	// 而不是某次原生调用的返回。此时不能输出空占位，否则日志里会出现
+	// 「native engine  failed:」这样的双空格。
+	if e.Op == "" {
+		if e.Message != "" {
+			return fmt.Sprintf("native engine failed: %s (code %d)", e.Message, e.Code)
+		}
+		return fmt.Sprintf("native engine failed with status %d", e.Code)
+	}
 	if e.Message != "" {
 		return fmt.Sprintf("native engine %s failed: %s (code %d)", e.Op, e.Message, e.Code)
 	}
@@ -78,6 +87,12 @@ var (
 	ErrBufferTooSmall    = &NativeError{Code: StatusBufferTooSmall, Message: "buffer too small"}
 	ErrInternal          = &NativeError{Code: StatusInternal, Message: "internal engine error"}
 )
+
+// ErrUnsupportedImageFormat 表示调用方提供的图片字节流无法被解码（格式不受支持或文件损坏）。
+//
+// ⚠️ 它与 StatusUnsupported（原生能力缺失，如 CPU 桩后端没有人脸识别能力）是**两类**问题：
+// 本错误归咎于上传的输入，HTTP 层应回答 4xx；StatusUnsupported 是服务端能力问题，仍是 5xx。
+var ErrUnsupportedImageFormat = errors.New("unsupported image format")
 
 func mapNativeStatus(op string, raw int32) error {
 	code := StatusCode(raw)
