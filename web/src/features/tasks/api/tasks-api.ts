@@ -16,12 +16,14 @@ export interface CreateTaskDto {
   sampleFps?: number
   enabled?: boolean
   configJson?: string
+  regionConfigJson?: string
 }
 
 export interface UpdateTaskDto {
   sampleFps?: number
   enabled?: boolean
   configJson?: string
+  regionConfigJson?: string
 }
 
 export const tasksApi = {
@@ -56,6 +58,7 @@ export const tasksApi = {
       sampleFps: dto.sampleFps,
       enabled: dto.enabled,
       configJson: dto.configJson,
+      regionConfigJson: dto.regionConfigJson,
     })
     return taskSchema.parse(resp.data.data)
   },
@@ -68,6 +71,7 @@ export const tasksApi = {
       sampleFps: dto.sampleFps,
       enabled: dto.enabled,
       configJson: dto.configJson,
+      regionConfigJson: dto.regionConfigJson,
     })
     return taskSchema.parse(resp.data.data)
   },

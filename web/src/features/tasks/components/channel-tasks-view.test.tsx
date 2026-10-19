@@ -50,6 +50,7 @@ describe('ChannelTasksView', () => {
               enabled: true,
               sampleFps: 10,
               configJson: '{}',
+              regionConfigJson: '{}',
               createdAt: '',
               updatedAt: '',
             },

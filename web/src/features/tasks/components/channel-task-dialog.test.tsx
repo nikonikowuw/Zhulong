@@ -83,6 +83,7 @@ function buildTask(overrides: Partial<Task> = {}): Task {
     enabled: true,
     sampleFps: 10,
     configJson: '{"threshold":0.6,"save_crop":false}',
+    regionConfigJson: '{}',
     createdAt: '',
     updatedAt: '',
     ...overrides,

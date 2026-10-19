@@ -157,3 +157,9 @@ export function Live(): React.JSX.Element {
 
 export { LiveFaceOverlay } from './components/live-face-overlay'
 export { LiveRecognitionFeed } from './components/live-recognition-feed'
+export {
+  CameraFrameSurface,
+  type CameraFrameSurfaceProps,
+  type FrameSurfaceState,
+  type ImageRect,
+} from './components/camera-frame-surface'

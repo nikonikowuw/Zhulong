@@ -47,19 +47,22 @@ export function useSyncChannelAlgorithms() {
               sampleFps: draft.sampleFps,
               enabled: draft.enabled,
               configJson: draft.configJson,
+              regionConfigJson: draft.regionConfigJson,
             })
           )
         } else {
           const fpsChanged = existing.sampleFps !== draft.sampleFps
           const enabledChanged = existing.enabled !== draft.enabled
           const configChanged = existing.configJson !== draft.configJson
+          const regionChanged = draft.regionConfigJson !== undefined && existing.regionConfigJson !== draft.regionConfigJson
 
-          if (fpsChanged || enabledChanged || configChanged) {
+          if (fpsChanged || enabledChanged || configChanged || regionChanged) {
             upsertPromises.push(
               tasksApi.updateTask(existing.id, {
                 sampleFps: draft.sampleFps,
                 enabled: draft.enabled,
                 configJson: draft.configJson,
+                regionConfigJson: draft.regionConfigJson,
               })
             )
           }

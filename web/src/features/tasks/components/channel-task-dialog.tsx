@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { AlertCircle, Loader2, Video } from 'lucide-react'
+import { AlertCircle, Loader2, Video, Sliders } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { STATUS_LEVEL_CLASS } from '@/lib/status-palette'
@@ -26,11 +26,13 @@ import {
 import { type Algorithm } from '@/features/algorithms/data/schema'
 import { type Camera } from '@/features/cameras/data/schema'
 import { getDefaultConfigJson } from '../data/algo-config-schema'
+import { parseRegionConfig } from '../data/region-config'
 import { type AlgorithmConfigDraft, type Task } from '../data/schema'
 import { useSyncChannelAlgorithms } from '../hooks/use-sync-channel-algorithms'
 import { MAX_COMPUTE_POINTS } from '../hooks/use-task-compute-budget'
 import { AlgoConfigDynamicForm } from './algo-config-dynamic-form'
 import { FpsStepper } from './fps-stepper'
+import { RegionEditorDialog } from './region-editor-dialog'
 
 interface ChannelTaskDialogProps {
   open: boolean
@@ -46,11 +48,30 @@ interface AlgoDraftItem {
   sampleFps: number
   enabled: boolean
   configJson: string
+  regionConfigJson: string
 }
 
 const EMPTY_CONFIG_JSON = '{}'
 const MIN_SAMPLE_FPS = 1
 const MAX_SAMPLE_FPS = 30
+
+/**
+ * 新建一条算法草稿项。
+ * 两个 JSON 字段都给出完整默认值——此前的两处内联字面量各自只写一个字段，
+ * 靠后续显式赋值补齐，形状不一致且容易漏字段。
+ */
+function createDraftItem(
+  overrides: Partial<AlgoDraftItem> = {}
+): AlgoDraftItem {
+  return {
+    selected: true,
+    sampleFps: 5,
+    enabled: true,
+    configJson: EMPTY_CONFIG_JSON,
+    regionConfigJson: EMPTY_CONFIG_JSON,
+    ...overrides,
+  }
+}
 
 /**
  * 草稿配置解析：未配置（空串或 `{}`）时回落到算法包声明的默认值，
@@ -81,6 +102,7 @@ function computeInitialDrafts(
         sampleFps: existing.sampleFps,
         enabled: existing.enabled,
         configJson: resolveDraftConfigJson(algo, existing.configJson),
+        regionConfigJson: existing.regionConfigJson || EMPTY_CONFIG_JSON,
       }
     } else {
       initialDrafts[algo.id] = {
@@ -88,6 +110,7 @@ function computeInitialDrafts(
         sampleFps: 5,
         enabled: true,
         configJson: resolveDraftConfigJson(algo),
+        regionConfigJson: EMPTY_CONFIG_JSON,
       }
     }
   }
@@ -117,6 +140,9 @@ function ChannelTaskDialogContent({
   const [cameraId, setCameraId] = useState<string>(defaultCamId)
   const [drafts, setDrafts] = useState<Record<string, AlgoDraftItem>>(() =>
     computeInitialDrafts(defaultCamId, allTasks, algorithms)
+  )
+  const [regionModalAlgoId, setRegionModalAlgoId] = useState<string | null>(
+    null
   )
 
   const syncMutation = useSyncChannelAlgorithms()
@@ -200,9 +226,16 @@ function ChannelTaskDialogContent({
   const handleUpdateConfigJson = (algoId: string, json: string) => {
     setDrafts((prev) => ({
       ...prev,
+      [algoId]: { ...(prev[algoId] ?? createDraftItem()), configJson: json },
+    }))
+  }
+
+  const handleUpdateRegionConfig = (algoId: string, regionJson: string) => {
+    setDrafts((prev) => ({
+      ...prev,
       [algoId]: {
-        ...(prev[algoId] ?? { selected: true, sampleFps: 5, enabled: true }),
-        configJson: json,
+        ...(prev[algoId] ?? createDraftItem()),
+        regionConfigJson: regionJson,
       },
     }))
   }
@@ -242,6 +275,7 @@ function ChannelTaskDialogContent({
           sampleFps: draft.sampleFps,
           enabled: draft.enabled,
           configJson: draft.configJson,
+          regionConfigJson: draft.regionConfigJson,
         })
       }
     }
@@ -428,6 +462,52 @@ function ChannelTaskDialogContent({
                             handleUpdateConfigJson(algo.id, nextJson)
                           }
                         />
+
+                        {/* 区域策略 (ROI/MASK) 配置入口 */}
+                        <div className='flex items-center justify-between rounded-lg border border-border bg-card/40 px-3 py-2'>
+                          <div className='flex flex-col gap-0.5'>
+                            <Label className='text-xs font-medium text-foreground'>
+                              {t(
+                                'region.entryLabel',
+                                '区域过滤策略 (ROI / MASK)'
+                              )}
+                            </Label>
+                            <span className='text-[10px] text-muted-foreground'>
+                              {(() => {
+                                const parsed = parseRegionConfig(
+                                  draft.regionConfigJson
+                                )
+                                if (
+                                  parsed.roi.length === 0 &&
+                                  parsed.mask.length === 0
+                                ) {
+                                  return t(
+                                    'region.notConfigured',
+                                    '全画面上报 (未配置区域)'
+                                  )
+                                }
+                                return t(
+                                  'region.configuredBadge',
+                                  'ROI: {{roi}} 个 | MASK: {{mask}} 个',
+                                  {
+                                    roi: parsed.roi.length,
+                                    mask: parsed.mask.length,
+                                  }
+                                )
+                              })()}
+                            </span>
+                          </div>
+                          <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            className='h-7 gap-1 text-xs'
+                            onClick={() => setRegionModalAlgoId(algo.id)}
+                          >
+                            <Sliders className='h-3 w-3' />
+                            {t('region.configButton', '绘制区域')}
+                          </Button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -480,6 +560,25 @@ function ChannelTaskDialogContent({
           </Button>
         </div>
       </DialogFooter>
+
+      {/* 区域策略编辑对话框 */}
+      {regionModalAlgoId && (
+        <RegionEditorDialog
+          open={Boolean(regionModalAlgoId)}
+          onOpenChange={(isOpen) => {
+            if (!isOpen) setRegionModalAlgoId(null)
+          }}
+          cameraId={cameraId}
+          cameraName={cameras.find((c) => c.id === cameraId)?.name}
+          algorithmName={algoMap.get(regionModalAlgoId)?.name}
+          value={
+            drafts[regionModalAlgoId]?.regionConfigJson || EMPTY_CONFIG_JSON
+          }
+          onSave={(nextRegionJson) =>
+            handleUpdateRegionConfig(regionModalAlgoId, nextRegionJson)
+          }
+        />
+      )}
     </DialogContent>
   )
 }

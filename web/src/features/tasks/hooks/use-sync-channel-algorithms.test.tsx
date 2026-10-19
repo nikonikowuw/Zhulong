@@ -45,6 +45,7 @@ describe('useSyncChannelAlgorithms', () => {
       enabled: true,
       sampleFps: 5,
       configJson: '{}',
+      regionConfigJson: '{}',
       createdAt: '2026-10-17T00:00:00Z',
       updatedAt: '2026-10-17T00:00:00Z',
     },
@@ -55,6 +56,7 @@ describe('useSyncChannelAlgorithms', () => {
       enabled: true,
       sampleFps: 10,
       configJson: '{"threshold":0.5}',
+      regionConfigJson: '{}',
       createdAt: '2026-10-17T00:00:00Z',
       updatedAt: '2026-10-17T00:00:00Z',
     },
@@ -76,6 +78,7 @@ describe('useSyncChannelAlgorithms', () => {
         enabled: dto.enabled ?? true,
         sampleFps: dto.sampleFps ?? 5,
         configJson: dto.configJson ?? '{}',
+        regionConfigJson: dto.regionConfigJson ?? '{}',
         createdAt: '',
         updatedAt: '',
       }
@@ -90,6 +93,7 @@ describe('useSyncChannelAlgorithms', () => {
         enabled: dto.enabled ?? true,
         sampleFps: dto.sampleFps ?? 5,
         configJson: dto.configJson ?? '{}',
+        regionConfigJson: dto.regionConfigJson ?? '{}',
         createdAt: '',
         updatedAt: '',
       }

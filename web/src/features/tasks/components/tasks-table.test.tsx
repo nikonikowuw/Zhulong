@@ -58,6 +58,7 @@ const mockTasks: Task[] = [
     enabled: true,
     sampleFps: 5,
     configJson: '{}',
+    regionConfigJson: '{}',
     createdAt: '',
     updatedAt: '',
   },

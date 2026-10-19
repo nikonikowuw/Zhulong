@@ -6,12 +6,10 @@ import {
   useState,
   useCallback,
 } from 'react'
+import { useWebCodecsRenderLoop } from '../hooks/use-webcodecs-render-loop'
 import { AIResultService } from '../services/ai-result-service'
 import { drawFaceOverlay } from '../services/face-overlay-renderer'
-import {
-  isWebCodecsSupported,
-  StreamDecoder,
-} from '../services/webcodecs-decoder'
+import { isWebCodecsSupported } from '../services/webcodecs-decoder'
 import { type FaceSubItem, type ParsedPacket, type StreamStats } from '../types'
 
 export interface LivePlayerRef {
@@ -48,9 +46,6 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
   ): React.JSX.Element {
     const canvasRef = useRef<HTMLCanvasElement | null>(null)
     const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null)
-    const pendingFrameRef = useRef<VideoFrame | null>(null)
-    const rafIdRef = useRef<number | null>(null)
-    const decoderRef = useRef<StreamDecoder | null>(null)
     const lastResolutionRef = useRef<string | null>(null)
     const [isSupported] = useState(() => isWebCodecsSupported())
 
@@ -79,6 +74,45 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
         faces: isExpired ? [] : facesRef.current,
       })
     }, [showAIOverlay])
+
+    /**
+     * 每帧后处理：上报分辨率变化、同步叠加层画布尺寸并重绘人脸框。
+     * 叠加层画布尺寸跟随主画布，赋值会清空内容，因此随后必须重绘。
+     */
+    const handleFrameDrawn = useCallback(
+      (frame: VideoFrame, canvas: HTMLCanvasElement) => {
+        const overlayCanvas = overlayCanvasRef.current
+        if (
+          overlayCanvas &&
+          (overlayCanvas.width !== canvas.width ||
+            overlayCanvas.height !== canvas.height)
+        ) {
+          overlayCanvas.width = canvas.width
+          overlayCanvas.height = canvas.height
+        }
+
+        const resStr = `${frame.displayWidth}x${frame.displayHeight}`
+        if (lastResolutionRef.current !== resStr) {
+          lastResolutionRef.current = resStr
+          onStatsChangeRef.current?.({ resolution: resStr })
+        }
+
+        redrawOverlay()
+      },
+      [redrawOverlay]
+    )
+
+    const { decoderRef, reset: resetRenderLoop } = useWebCodecsRenderLoop({
+      enabled: isSupported,
+      canvasRef,
+      onFrameDrawn: handleFrameDrawn,
+      onDecodeError: (error: unknown) => {
+        onErrorRef.current?.(
+          error instanceof Error ? error.message : 'WebCodecs 解码异常'
+        )
+      },
+      restartKey: String(showAIOverlay),
+    })
 
     // 订阅 AI 推理结果事件流（零 React 重渲染，直接驱动 Canvas 2D）
     useEffect(() => {
@@ -179,116 +213,12 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
           // 当前 ZLM1 视频流为纯图像流，预留音频轨道支持
         },
         reset: () => {
-          if (rafIdRef.current !== null) {
-            cancelAnimationFrame(rafIdRef.current)
-            rafIdRef.current = null
-          }
-          if (pendingFrameRef.current) {
-            pendingFrameRef.current.close()
-            pendingFrameRef.current = null
-          }
-          decoderRef.current?.reset()
+          resetRenderLoop()
           lastResolutionRef.current = null
         },
       }),
-      [showAIOverlay]
+      [showAIOverlay, resetRenderLoop, decoderRef]
     )
-
-    useEffect(() => {
-      if (!isSupported) {
-        return
-      }
-
-      lastResolutionRef.current = null
-
-      const renderLoop = () => {
-        const frame = pendingFrameRef.current
-        pendingFrameRef.current = null
-        rafIdRef.current = null
-
-        if (frame && canvasRef.current) {
-          const canvas = canvasRef.current
-          const overlayCanvas = overlayCanvasRef.current
-
-          if (
-            canvas.width !== frame.displayWidth ||
-            canvas.height !== frame.displayHeight
-          ) {
-            canvas.width = frame.displayWidth
-            canvas.height = frame.displayHeight
-            if (overlayCanvas) {
-              overlayCanvas.width = frame.displayWidth
-              overlayCanvas.height = frame.displayHeight
-            }
-            const resStr = `${frame.displayWidth}x${frame.displayHeight}`
-            if (lastResolutionRef.current !== resStr) {
-              lastResolutionRef.current = resStr
-              onStatsChangeRef.current?.({ resolution: resStr })
-            }
-          } else if (
-            overlayCanvas &&
-            (overlayCanvas.width !== canvas.width ||
-              overlayCanvas.height !== canvas.height)
-          ) {
-            overlayCanvas.width = canvas.width
-            overlayCanvas.height = canvas.height
-          }
-
-          const ctx = canvas.getContext('2d')
-          if (ctx) {
-            ctx.drawImage(frame, 0, 0, canvas.width, canvas.height)
-          }
-
-          // 同步绘制人脸叠加层
-          if (showAIOverlay && overlayCanvas) {
-            const oCtx = overlayCanvas.getContext('2d')
-            if (oCtx) {
-              const isExpired = Date.now() - lastEventTimeRef.current > 350
-              drawFaceOverlay({
-                ctx: oCtx,
-                width: overlayCanvas.width,
-                height: overlayCanvas.height,
-                faces: isExpired ? [] : facesRef.current,
-              })
-            }
-          }
-
-          frame.close()
-        }
-      }
-
-      // 初始化 WebCodecs 流解码器
-      const decoder = new StreamDecoder({
-        onFrame: (frame: VideoFrame) => {
-          if (pendingFrameRef.current) {
-            pendingFrameRef.current.close()
-          }
-          pendingFrameRef.current = frame
-          if (rafIdRef.current === null) {
-            rafIdRef.current = requestAnimationFrame(renderLoop)
-          }
-        },
-        onError: (err) => {
-          onErrorRef.current?.(
-            err instanceof Error ? err.message : 'WebCodecs 解码异常'
-          )
-        },
-      })
-      decoderRef.current = decoder
-
-      return () => {
-        if (rafIdRef.current !== null) {
-          cancelAnimationFrame(rafIdRef.current)
-          rafIdRef.current = null
-        }
-        if (pendingFrameRef.current) {
-          pendingFrameRef.current.close()
-          pendingFrameRef.current = null
-        }
-        decoder.close()
-        decoderRef.current = null
-      }
-    }, [isSupported, showAIOverlay])
 
     if (!isSupported) {
       return (

@@ -86,6 +86,7 @@ describe('useTaskComputeBudget', () => {
         enabled: true,
         sampleFps: 10, // 20 cost * 10 = 200 points
         configJson: '{}',
+        regionConfigJson: '{}',
         createdAt: '',
         updatedAt: '',
       },
@@ -96,6 +97,7 @@ describe('useTaskComputeBudget', () => {
         enabled: false, // disabled should not count towards budget
         sampleFps: 5,
         configJson: '{}',
+        regionConfigJson: '{}',
         createdAt: '',
         updatedAt: '',
       },
@@ -106,6 +108,7 @@ describe('useTaskComputeBudget', () => {
         enabled: true,
         sampleFps: 10, // 10 cost * 10 = 100 points
         configJson: '{}',
+        regionConfigJson: '{}',
         createdAt: '',
         updatedAt: '',
       },
@@ -133,11 +136,12 @@ describe('useTaskComputeBudget', () => {
         enabled: true,
         sampleFps: 45, // 20 * 45 = 900 points
         configJson: '{}',
+        regionConfigJson: '{}',
         createdAt: '',
         updatedAt: '',
       },
     ]
-
+ 
     const { result: warningResult } = await renderHook(() =>
       useTaskComputeBudget(tasks, mockAlgorithms)
     )
@@ -154,6 +158,7 @@ describe('useTaskComputeBudget', () => {
         enabled: true,
         sampleFps: 55, // 20 * 55 = 1100 points
         configJson: '{}',
+        regionConfigJson: '{}',
         createdAt: '',
         updatedAt: '',
       },
@@ -176,6 +181,7 @@ describe('useChannelTasks', () => {
         enabled: true,
         sampleFps: 5, // 20 * 5 = 100
         configJson: '{}',
+        regionConfigJson: '{}',
         createdAt: '',
         updatedAt: '',
       },
@@ -186,6 +192,7 @@ describe('useChannelTasks', () => {
         enabled: true,
         sampleFps: 10, // 10 * 10 = 100
         configJson: '{}',
+        regionConfigJson: '{}',
         createdAt: '',
         updatedAt: '',
       },

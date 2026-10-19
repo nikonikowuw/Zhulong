@@ -61,5 +61,13 @@
   "filterUnmatched": "未登記",
   "noRecords": "暫無識別記錄",
   "noRecordsDesc": "視訊偵測到目標人臉時將即時在此展示",
-  "unregisteredPerson": "未登記目標"
+  "unregisteredPerson": "未登記目標",
+  "frame": {
+    "waitingFirstFrame": "等待首幀渲染...",
+    "connecting": "連線視訊串流...",
+    "unsupported": "目前環境不支援硬體加速解碼 (WebCodecs)",
+    "streamUnavailable": "視訊串流無法連線",
+    "retry": "重試連線",
+    "noCamera": "未指定攝影機"
+  }
 }

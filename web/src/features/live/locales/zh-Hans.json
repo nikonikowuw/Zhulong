@@ -61,5 +61,13 @@
   "filterUnmatched": "未登记",
   "noRecords": "暂无识别记录",
   "noRecordsDesc": "视频检测到目标人脸时将实时在此展示",
-  "unregisteredPerson": "未登记目标"
+  "unregisteredPerson": "未登记目标",
+  "frame": {
+    "waitingFirstFrame": "等待首帧渲染...",
+    "connecting": "连接视频流...",
+    "unsupported": "当前环境不支持硬件加速解码 (WebCodecs)",
+    "streamUnavailable": "视频流无法连接",
+    "retry": "重试连接",
+    "noCamera": "未指定摄像机"
+  }
 }

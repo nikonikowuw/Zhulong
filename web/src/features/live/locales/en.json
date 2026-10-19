@@ -61,5 +61,13 @@
   "filterUnmatched": "Unregistered",
   "noRecords": "No recognition records",
   "noRecordsDesc": "Live detected faces will appear here in real time",
-  "unregisteredPerson": "Unregistered target"
+  "unregisteredPerson": "Unregistered target",
+  "frame": {
+    "waitingFirstFrame": "Waiting for the first frame...",
+    "connecting": "Connecting to the video stream...",
+    "unsupported": "Hardware-accelerated decoding (WebCodecs) is unavailable in this environment",
+    "streamUnavailable": "Unable to connect to the video stream",
+    "retry": "Reconnect",
+    "noCamera": "No camera selected"
+  }
 }
