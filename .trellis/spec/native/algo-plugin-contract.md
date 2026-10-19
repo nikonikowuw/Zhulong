@@ -31,7 +31,17 @@
 结果内存由插件创建，并只能通过同一插件的 `result_release` 释放。添加分类与结构化能力保持 v1 函数表布局稳定（数据层多态）。
 `zhulong_frame_view` 包含 `int32_t dma_buf_fd` 字段（硬件 DMA-BUF 句柄，有效时 `>= 0`；POSIX SHM 虚拟内存降级时为 `-1`），利用原 4 字节自然填充缝隙安置，严格维持 8 字节自然对齐与 88 字节总尺寸不变。C++ SDK `zhulong::Image` 提供 `int dma_buf_fd() const noexcept` 便捷访问器。
 结构化结果采用**单块连续 Arena 内存打包（Contiguous Arena Packing）**，所有嵌套子指针指向 Arena 内部偏移，`result->internal_token` 指向首地址，`result_release` 通过单次 `std::free` 彻底释放整棵树，杜绝内存碎片与嵌套泄漏。
-结构化坐标严格归一化到 `[0.0, 1.0]`，关键点（5 点）同样严格归一化。纯人脸检测场景下采用退化语义：每个检出人脸映射为一个 `zhulong_person_item`（`track_id=0`，`body_box=face_box`，`body_score=1.0`）。
+结构化坐标严格归一化到 `[0.0, 1.0]`，关键点（5 点）同样严格归一化。
+
+### 结构化双模型协同与空间几何挂载规范
+结构化插件支持内部多模型协同（如 SCRFD Person 2.5G 全身检测 + SCRFD 500M 人脸检测 + FaceLiVTv2-L 512 维特征提取）：
+1. **真实人体框保障**：优先使用人体检测模型预测出的真实全身框作为 `body_box`（禁止通过人脸宽高比外推“脑补”人体框，以防背身/低头/遮挡时整个人体漏检）；
+2. **空间挂载准则 (Spatial Association)**：
+   - 人脸中心落入人体框上半身（$y \le y_{top} + 0.45 \cdot h$）且人脸在人体内的交并覆盖比 $\text{IoF} \ge 0.50$ 时，该人脸挂载进对应人体的 `faces` 列表；
+3. **退化与兜底保全**：
+   - **背身/无正脸人体**：生成 `faces` 为空的 `zhulong_person_item`（保留真实 `body_box` 与置信度），供宿主生成人员抓拍记录与周界报警；
+   - **近景特写人脸**：未匹配到任何人体框的人脸，兜底生成 `body_box = face_box` 的 `zhulong_person_item`，保证人脸比对与底库检索结果不丢失；
+   - **脱机桩/纯人脸退化语义**：当无真实神经网络人体检出时（如 CPU 桩单测环境），每个检出人脸映射为一个 `zhulong_person_item`（`track_id=0`，`body_box=face_box`，`body_score=1.0`）。
 
 插件入口声明使用 `ZHULONG_PLUGIN_EXPORT`。启用 hidden default visibility 时，只显式导出 `zhulong_plugin_get_api`；Linux 示例插件还使用 GNU ld version script 将其他定义符号设为 local（仅靠编译器 visibility 可能在 sanitizer 构建暴露弱 RTTI 符号）。CMake 示例插件目标定义 `ZHULONG_PLUGIN_BUILD` 并设置 hidden C++ / inline visibility。
 
