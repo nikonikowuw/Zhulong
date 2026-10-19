@@ -5,7 +5,19 @@ PNPM ?= pnpm
 CMAKE ?= cmake
 CTEST ?= ctest
 BUILD_DIR ?= build
-NATIVE_BUILD := python3 native/scripts/build.py
+# 推理后端覆盖：cpu | rknn | onnx。留空时 Host 用 cpu、交叉编译沿用 profile JSON 内的
+# inference_backend（不要无条件注入，否则会覆盖 rk3568-rknn.json 的 rknn 选择）。
+# ⚠️ 必须走这个变量注入：每次 build.py 调用都会重新 configure CMake，而 CMake 缓存里的
+#    ZHULONG_INFERENCE_BACKEND 会被无参 configure 重置回 cpu。直接执行一次
+#    `build.py --inference-backend onnx build` 之后，任何 `make dev` / `make build` /
+#    `make check` 都会把它悄悄改回 cpu 并重链出桩后端。
+# ⚠️ Air（.air.toml 的 build cmd）也会独立调用 build.py，所以还要把选择导出成
+#    ZHULONG_INFERENCE_BACKEND 让它继承；环境变量是该开关的统一入口。
+INFERENCE_BACKEND ?= $(ZHULONG_INFERENCE_BACKEND)
+ifneq ($(INFERENCE_BACKEND),)
+export ZHULONG_INFERENCE_BACKEND := $(INFERENCE_BACKEND)
+endif
+NATIVE_BUILD := python3 native/scripts/build.py $(if $(INFERENCE_BACKEND),--inference-backend $(INFERENCE_BACKEND),)
 BINARY := $(BUILD_DIR)/Zhulong
 SWAG_VERSION := v1.16.6
 AIR ?= $(shell command -v air 2>/dev/null || (test -x "$$(go env GOPATH 2>/dev/null)/bin/air" && echo "$$(go env GOPATH)/bin/air") || echo air)

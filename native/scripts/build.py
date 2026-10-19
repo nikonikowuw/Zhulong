@@ -208,9 +208,16 @@ def profile(path):
     p.setdefault("ldflags", [])
 
     # 后端选择（编译期 profile 开关）：推理与视觉前处理两个正交维度。
+    # 优先级：profile JSON 显式值 → 环境变量 ZHULONG_<KEY> → cpu。
     # 不往 identity 里叠加无意义的失效（见 dependency()），也不默认写入未声明的键。
+    #
+    # ⚠️ 环境变量这一层是必需的：`make` 与 Air（.air.toml 的 build cmd）各自独立调用
+    #    build.py，而每次调用都会重新 configure CMake。只在命令行传
+    #    `--inference-backend onnx` 无法覆盖 Air 内部那次无参调用——它会把
+    #    ZHULONG_INFERENCE_BACKEND 重置回 cpu 并重链出桩后端。
     for key, allowed in (("inference_backend", ("cpu", "rknn", "onnx")), ("vision_backend", ("cpu", "rga"))):
-        value = p.get(key, "cpu")
+        env_key = "ZHULONG_" + key.upper()
+        value = p.get(key) or os.environ.get(env_key) or "cpu"
         if value not in allowed:
             raise ValueError(f"invalid {key}: {value!r}; expected one of {allowed}")
         p[key] = value

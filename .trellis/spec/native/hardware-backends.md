@@ -21,6 +21,23 @@
 - **目标产物归属**：后端实现直接编译进 `libzhulong_algo_runtime.so`。宿主二进制 `Zhulong` 仅静态链接 `libZhulongEngine.a`，**严禁向宿主引入任何厂商 SDK 动态库依赖**。
 - **Profile 分流**：`cpu` 与 `rknn` 采用不同的交叉 profile（`native/profiles/rk3568.json` 与 `rk3568-rknn.json`），避免 mock 插件在 rknn profile 下因缺少真实模型而启动失败。
 
+### 1.1 后端的运行期入口与优先级（环境变量是统一开关）
+
+每次 `native/scripts/build.py` 调用都会重新 configure CMake，而 CMake 缓存里的 `ZHULONG_INFERENCE_BACKEND` 会被无参 configure **静默重置回 `cpu`**。因此一次性的 `build.py --inference-backend onnx build` 会被随后的任何 `make dev` / `make build` / `make check` 改回 `cpu` 并重链出桩后端。
+
+`build.py` 的实际解析顺序（`vision_backend` 同理，对应 `ZHULONG_VISION_BACKEND`）：
+
+| 优先级 | 来源 | 说明 |
+| :--- | :--- | :--- |
+| 1 | `--inference-backend <v>`（CLI） | 写入 profile 字典，覆盖同名字段；仅对当次调用生效 |
+| 2 | profile JSON 的 `inference_backend` | 交叉 profile 的声明值（如 `rk3568-rknn.json` → `rknn`）**优先于环境变量** |
+| 3 | `ZHULONG_INFERENCE_BACKEND` 环境变量 | 仅在 profile 未声明该键时生效；Air（`.air.toml` 的 build cmd 独立调用 build.py）由此继承 |
+| 4 | `cpu` | 兜底默认 |
+
+- 实现为 `value = p.get(key) or os.environ.get(env_key) or "cpu"`，取值必须落在白名单内，否则 `ValueError`（fail closed）。
+- `Makefile` 暴露 `INFERENCE_BACKEND` 并将其 `export` 为 `ZHULONG_INFERENCE_BACKEND`，使 `make` 与 Air 看到同一选择：`make INFERENCE_BACKEND=onnx check`。由于 profile 优先级更高，该变量实际作用于未声明后端的 profile（Host），交叉构建仍沿用 profile 内的声明。
+- ⚠️ **不要无条件注入 `--inference-backend cpu`**：CLI 优先级最高，那会覆盖交叉 profile 的 `rknn` 选择。留空即「沿用 profile」。
+
 ---
 
 ## 2. Rockchip RKNN 推理后端契约 (NPU)
