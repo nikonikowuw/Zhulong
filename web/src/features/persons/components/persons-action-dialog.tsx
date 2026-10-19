@@ -5,6 +5,7 @@ import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { z } from 'zod'
+import { handleFormError } from '@/lib/form-error'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -100,8 +101,7 @@ export function PersonsActionDialog() {
       setOpen(null)
       form.reset()
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      toast.error(msg)
+      handleFormError(form, err)
     }
   }
 

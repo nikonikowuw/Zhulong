@@ -5,6 +5,7 @@ import { ArrowRight, Loader2, User } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
+import { handleFormError } from '@/lib/form-error'
 import { handleServerError } from '@/lib/handle-server-error'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -52,7 +53,12 @@ export function LoginForm({ onSuccess }: LoginFormProps): ReactElement {
       toast.success(t('login.welcomeBack', { username: user.username }))
       onSuccess?.(user)
     } catch (error) {
-      handleServerError(error)
+      const res = handleFormError(form, error, {
+        onUnhandled: () => handleServerError(error),
+      })
+      if (!res.hasFieldErrors && !res.isAxiosError) {
+        handleServerError(error)
+      }
     } finally {
       setIsPending(false)
     }

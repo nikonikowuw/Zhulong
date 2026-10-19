@@ -7,6 +7,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { statusLevelClass, statusTextClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -27,11 +28,24 @@ export function CamerasDiagnoseDialog() {
   const { open, setOpen, currentRow } = useCamerasContext()
   const isOpen = open === 'diagnose' && Boolean(currentRow)
 
-  const diagnoseMutation = useDiagnoseCamera()
+  const diagnoseMutation = useDiagnoseCamera({ suppressGlobalToast: true })
 
-  const runDiagnose = () => {
-    if (currentRow?.id) {
-      diagnoseMutation.mutate(currentRow.id)
+  const runDiagnose = async () => {
+    if (!currentRow?.id) return
+    try {
+      await toast.promise(diagnoseMutation.mutateAsync(currentRow.id), {
+        loading: t('toast.diagnosing', { defaultValue: '正在探测摄像头连通性...' }),
+        success: (res) =>
+          res.state?.health === 'online'
+            ? t('toast.diagnoseOnline', { defaultValue: '摄像头连通性正常，流已就绪' })
+            : t('toast.diagnoseOffline', { defaultValue: '诊断完成：摄像头当前处于离线/异常状态' }),
+        error: (err) =>
+          err instanceof Error
+            ? err.message
+            : t('toast.diagnoseFailed', { defaultValue: '诊断探针探测失败' }),
+      })
+    } catch {
+      // toast.promise 统一反馈
     }
   }
 

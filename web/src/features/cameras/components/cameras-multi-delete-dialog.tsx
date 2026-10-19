@@ -26,7 +26,7 @@ export function CamerasMultiDeleteDialog({
   const { t } = useTranslation('cameras')
   const [value, setValue] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
-  const deleteMutation = useDeleteCamera()
+  const deleteMutation = useDeleteCamera({ suppressGlobalToast: true })
 
   const selectedRows = table.getFilteredSelectedRowModel().rows
   const selectedCameras = selectedRows.map((row) => row.original)

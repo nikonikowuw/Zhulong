@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import {
   UploadCloud,
   FileArchive,
@@ -36,7 +37,7 @@ export function AlgorithmUploadDialog({
   const [isDragOver, setIsDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-  const installMutation = useInstallAlgorithm()
+  const installMutation = useInstallAlgorithm({ suppressGlobalToast: true })
 
   const handleFileSelect = (file: File) => {
     setErrorMessage(null)
@@ -82,6 +83,9 @@ export function AlgorithmUploadDialog({
         onSuccess: () => {
           setSelectedFile(null)
           setUploadProgress(null)
+          toast.success(
+            t('installSuccess', { defaultValue: '算法包安装成功并完成黑盒验证' })
+          )
           onOpenChange(false)
         },
         onError: (err) => {

@@ -299,9 +299,6 @@ function ChannelTaskDialogContent({
           toast.success(t('dialog.saveSuccess', '通道算法调度已成功更新'))
           onClose()
         },
-        onError: (err) => {
-          toast.error(err.message || t('dialog.saveError', '保存调度配置失败'))
-        },
       }
     )
   }

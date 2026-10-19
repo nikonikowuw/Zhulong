@@ -158,6 +158,34 @@ export function CameraCreateForm({ onSubmit, isPending }: Props) {
 2. **表单监听推荐 `useWatch` 规避 Compiler 警告**：
    在 React 19 / React Compiler 环境下，避免直接在组件体内调用 `form.watch(...)`，统一使用 `useWatch({ control: form.control, name: '...' })` 确保响应式粒度精确且不触发 ESLint 兼容性警告。
 
+### 2.5 工业级表单错误反馈与通知规范 (Industrial Error Feedback & Toast Patterns)
+
+1. **四级反馈分级铁律**：
+   - **字段级（Field-level）**：后端 422 校验失败（带 `details: [{ field, code, message }]`）强制映射到 React Hook Form 对应字段下方，光标自动聚焦，**严禁使用全局 Toast 遮挡表单**；
+   - **模态留存级（Modal-retained）**：409 CAS 冲突或探针失败时模态框必须保持打开，保留用户草稿，并在弹窗顶部渲染警告 Banner（带重试/刷新入口）；
+   - **状态变形通知（Morphing Toast）**：异步长耗时任务（如主动诊断、人脸特征提取、批量操作）统一使用 `toast.promise` 原地变形（Loading 旋转态 → Success/Error），杜绝手工叠弹窗；
+   - **全局兜底级（Global Fallback）**：401 会话失效重定向、500/断网全局弱感知提示（通过 `handleServerError` 注入消息 ID 实现自动去重）。
+2. **表单错误自适应处理范式 (`handleFormError`)**：
+   表单提交遭遇异常时，使用 `@/lib/form-error` 统一处理：
+   ```typescript
+   import { handleFormError } from '@/lib/form-error'
+
+   try {
+     await updateMutation.mutateAsync(payload)
+     toast.success(t('toast.success'))
+     setOpen(null)
+   } catch (err: unknown) {
+     handleFormError(form, err, {
+       fieldMap: { 'mainStream.rtspUrl': 'mainRtspUrl' },
+       onConflict: (_err, message) => setConflictError(message),
+       onUnhandled: (message) => setGenericError(message),
+     })
+   }
+   ```
+3. **全局 Toast 抑制契约 (`suppressGlobalToast`)**：
+   当组件自行为长任务绑定了 `toast.promise` 或批量聚合进度提示时，在 mutation 定义中显式声明 `meta: { suppressGlobalToast: true }`，防止全局 `MutationCache` 触发双重弹窗。
+
+
 ---
 
 ## 3. 实时视频监控与播放器工业级 UX (Live Surveillance & Media UX)

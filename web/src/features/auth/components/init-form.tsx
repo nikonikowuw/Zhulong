@@ -6,6 +6,7 @@ import { ArrowRight, CheckCircle2, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
+import { handleFormError } from '@/lib/form-error'
 import { handleServerError } from '@/lib/handle-server-error'
 import { Button } from '@/components/ui/button'
 import {
@@ -102,7 +103,12 @@ export function InitForm({ onSuccess }: InitFormProps): ReactElement {
       toast.success(t('init.success'))
       onSuccess?.(user)
     } catch (error) {
-      handleServerError(error)
+      const res = handleFormError(form, error, {
+        onUnhandled: () => handleServerError(error),
+      })
+      if (!res.hasFieldErrors && !res.isAxiosError) {
+        handleServerError(error)
+      }
     } finally {
       setIsPending(false)
     }

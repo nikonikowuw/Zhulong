@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "验证表单处理与 UI 规范是否符合铁律"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验证 details 解析与错误状态码处理是否对齐后端信封契约"}

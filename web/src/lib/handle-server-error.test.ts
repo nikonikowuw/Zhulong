@@ -18,13 +18,15 @@ describe('handleServerError', () => {
   it('shows a generic message when the error is not recognised', () => {
     handleServerError(new Error('network'))
 
-    expect(toastError).toHaveBeenCalledWith('Something went wrong!')
+    expect(toastError).toHaveBeenCalledWith('Something went wrong!', {
+      id: 'Something went wrong!',
+    })
   })
 
   it('maps a plain object with status 204 to the no-content message', () => {
     handleServerError({ status: 204 })
 
-    expect(toastError).toHaveBeenCalledWith('No content.')
+    expect(toastError).toHaveBeenCalledWith('No content.', { id: 'No content.' })
   })
 
   it('prefers the API title when the error is an Axios error with response data', () => {
@@ -36,7 +38,9 @@ describe('handleServerError', () => {
 
     handleServerError(error)
 
-    expect(toastError).toHaveBeenCalledWith('Validation failed')
+    expect(toastError).toHaveBeenCalledWith('Validation failed', {
+      id: 'Validation failed',
+    })
   })
 
   it('falls back to the generic message when Axios response has no data.title', () => {
@@ -48,7 +52,9 @@ describe('handleServerError', () => {
 
     handleServerError(error)
 
-    expect(toastError).toHaveBeenCalledWith('Something went wrong!')
+    expect(toastError).toHaveBeenCalledWith('Something went wrong!', {
+      id: 'Something went wrong!',
+    })
   })
 
   it('falls back to the generic message when Axios data.title is an empty string', () => {
@@ -60,7 +66,9 @@ describe('handleServerError', () => {
 
     handleServerError(error)
 
-    expect(toastError).toHaveBeenCalledWith('Something went wrong!')
+    expect(toastError).toHaveBeenCalledWith('Something went wrong!', {
+      id: 'Something went wrong!',
+    })
   })
 
   it('logs the error to the console in development', () => {

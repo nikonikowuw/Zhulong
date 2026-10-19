@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import ReactDOM from 'react-dom/client'
 import { AxiosError } from 'axios'
 import {
+  MutationCache,
   QueryCache,
   QueryClient,
   QueryClientProvider,
@@ -19,6 +20,14 @@ import './lib/i18n'
 import { routeTree } from './routeTree.gen'
 // Styles
 import './styles/index.css'
+
+declare module '@tanstack/react-query' {
+  interface Register {
+    mutationMeta: {
+      suppressGlobalToast?: boolean
+    }
+  }
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -38,18 +47,15 @@ const queryClient = new QueryClient({
       refetchOnWindowFocus: import.meta.env.PROD,
       staleTime: 10 * 1000, // 10s
     },
-    mutations: {
-      onError: (error) => {
-        handleServerError(error)
-
-        if (error instanceof AxiosError) {
-          if (error.response?.status === 304) {
-            toast.error('Content not modified!')
-          }
-        }
-      },
-    },
   },
+  mutationCache: new MutationCache({
+    onError: (error, _variables, _context, mutation) => {
+      if (mutation.meta?.suppressGlobalToast) {
+        return
+      }
+      handleServerError(error)
+    },
+  }),
   queryCache: new QueryCache({
     onError: (error) => {
       if (error instanceof AxiosError) {

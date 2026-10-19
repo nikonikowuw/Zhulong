@@ -179,7 +179,7 @@ export function PersonsFacesDialog() {
   const faces = facePage?.items ?? []
   const faceTotal = facePage?.total ?? 0
 
-  const addFaceMutation = useAddFace()
+  const addFaceMutation = useAddFace({ suppressGlobalToast: true })
   const deleteFaceMutation = useDeleteFace()
   const setPrimaryMutation = useSetPrimaryFace()
 
@@ -237,19 +237,32 @@ export function PersonsFacesDialog() {
 
   const handleUpload = async () => {
     if (!personId || !selectedFile) return
-    try {
-      const enrolled = await addFaceMutation.mutateAsync({
+    const uploadPromise = addFaceMutation
+      .mutateAsync({
         personId,
         data: selectedFile,
       })
-      if (faces.length === 0 && currentRow) {
-        setCurrentRow({ ...currentRow, primaryFaceId: enrolled.id })
-      }
-      toast.success(t('notifications.addFaceSuccess'))
-      clearSelection()
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      toast.error(msg)
+      .then((enrolled) => {
+        if (faces.length === 0 && currentRow) {
+          setCurrentRow({ ...currentRow, primaryFaceId: enrolled.id })
+        }
+        clearSelection()
+        return t('notifications.addFaceSuccess')
+      })
+
+    try {
+      await toast.promise(uploadPromise, {
+        loading: t('notifications.uploadingFace', {
+          defaultValue: '正在提取人脸特征并进行质量建模...',
+        }),
+        success: (msg) => msg,
+        error: (err) =>
+          err instanceof Error
+            ? err.message
+            : t('notifications.addFaceError', { defaultValue: '人脸录入失败' }),
+      })
+    } catch {
+      // toast.promise 已统一反馈
     }
   }
 
@@ -265,9 +278,8 @@ export function PersonsFacesDialog() {
         setCurrentRow({ ...currentRow, primaryFaceId: faceId })
       }
       toast.success(t('notifications.setPrimarySuccess'))
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      toast.error(msg)
+    } catch {
+      // 全局 mutationCache 已统一弹出服务端错误提示
     } finally {
       setSettingPrimaryId(null)
     }
@@ -282,9 +294,8 @@ export function PersonsFacesDialog() {
         faceId,
       })
       toast.success(t('notifications.deleteFaceSuccess'))
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      toast.error(msg)
+    } catch {
+      // 全局 mutationCache 已统一弹出服务端错误提示
     } finally {
       setDeletingId(null)
     }

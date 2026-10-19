@@ -197,9 +197,6 @@ export function TasksTable({
         onSuccess: () => {
           toast.success(t('table.toggleSuccess', '任务状态已更新'))
         },
-        onError: (err) => {
-          toast.error(err.message || t('table.toggleError', '更新任务状态失败'))
-        },
         onSettled: () => {
           setTogglingTaskId(null)
         },

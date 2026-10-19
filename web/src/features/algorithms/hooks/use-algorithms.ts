@@ -17,7 +17,9 @@ export function useAlgorithms() {
 /**
  * 安装/上传算法包 Mutation Hook
  */
-export function useInstallAlgorithm() {
+export function useInstallAlgorithm(options?: {
+  suppressGlobalToast?: boolean
+}) {
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -30,6 +32,9 @@ export function useInstallAlgorithm() {
     }) => algorithmsApi.installAlgorithm(file, onProgress),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ALGORITHMS_QUERY_KEY })
+    },
+    meta: {
+      suppressGlobalToast: options?.suppressGlobalToast,
     },
   })
 }

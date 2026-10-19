@@ -93,7 +93,7 @@ export function useUpdatePerson() {
 /**
  * 删除人员 Mutation
  */
-export function useDeletePerson() {
+export function useDeletePerson(options?: { suppressGlobalToast?: boolean }) {
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -101,13 +101,16 @@ export function useDeletePerson() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
     },
+    meta: {
+      suppressGlobalToast: options?.suppressGlobalToast,
+    },
   })
 }
 
 /**
  * 录入人脸 Mutation（图片文件直传）
  */
-export function useAddFace() {
+export function useAddFace(options?: { suppressGlobalToast?: boolean }) {
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -123,6 +126,9 @@ export function useAddFace() {
         queryKey: [...PERSONS_QUERY_KEY, variables.personId, 'faces'],
       })
       void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
+    },
+    meta: {
+      suppressGlobalToast: options?.suppressGlobalToast,
     },
   })
 }

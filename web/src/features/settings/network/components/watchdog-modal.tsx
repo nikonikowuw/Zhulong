@@ -115,9 +115,8 @@ function WatchdogModalBody({
       toast.success(t('watchdog.confirmSuccess'))
       onOpenChange(false)
       onConfirmed()
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : t('errors.confirmFailed')
-      toast.error(msg)
+    } catch {
+      // 全局 mutationCache 已统一弹出服务端错误提示
     }
   }
 
@@ -127,10 +126,8 @@ function WatchdogModalBody({
       toast.info(t('watchdog.rollbackSuccess'))
       onOpenChange(false)
       onRolledBack()
-    } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : t('errors.rollbackFailed')
-      toast.error(msg)
+    } catch {
+      // 全局 mutationCache 已统一弹出服务端错误提示
     }
   }
 

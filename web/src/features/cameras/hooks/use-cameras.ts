@@ -75,7 +75,9 @@ export function useUpdateCamera() {
 /**
  * 快捷启停摄像机 Mutation
  */
-export function useToggleCameraEnabled() {
+export function useToggleCameraEnabled(options?: {
+  suppressGlobalToast?: boolean
+}) {
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -87,19 +89,25 @@ export function useToggleCameraEnabled() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: CAMERAS_QUERY_KEY })
     },
+    meta: {
+      suppressGlobalToast: options?.suppressGlobalToast,
+    },
   })
 }
 
 /**
  * 删除摄像机 Mutation
  */
-export function useDeleteCamera() {
+export function useDeleteCamera(options?: { suppressGlobalToast?: boolean }) {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: (id: string) => camerasApi.deleteCamera(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: CAMERAS_QUERY_KEY })
+    },
+    meta: {
+      suppressGlobalToast: options?.suppressGlobalToast,
     },
   })
 }
@@ -121,8 +129,13 @@ export function useCameraCredentials(id: string | null, enabled = false) {
 /**
  * 手动主动诊断 Mutation
  */
-export function useDiagnoseCamera() {
+export function useDiagnoseCamera(options?: {
+  suppressGlobalToast?: boolean
+}) {
   return useMutation<DiagnoseResponse, Error, string>({
     mutationFn: (id: string) => camerasApi.diagnose(id),
+    meta: {
+      suppressGlobalToast: options?.suppressGlobalToast,
+    },
   })
 }

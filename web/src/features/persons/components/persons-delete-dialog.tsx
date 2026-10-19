@@ -18,9 +18,8 @@ export function PersonsDeleteDialog() {
       await deleteMutation.mutateAsync(currentRow.id)
       toast.success(t('notifications.deleteSuccess'))
       setOpen(null)
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      toast.error(msg)
+    } catch {
+      // 全局 mutationCache 已统一弹出服务端错误提示
     }
   }
 

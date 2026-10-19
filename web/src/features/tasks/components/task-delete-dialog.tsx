@@ -26,9 +26,6 @@ export function TaskDeleteDialog({
         toast.success(t('deleteDialog.success', '分析任务已成功删除'))
         onOpenChange(false)
       },
-      onError: (err) => {
-        toast.error(err.message || t('deleteDialog.error', '删除分析任务失败'))
-      },
     })
   }
 

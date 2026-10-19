@@ -42,9 +42,8 @@ export function AuditClearDialog() {
       const res = await clearMutation.mutateAsync({ before })
       toast.success(t('toast.clearSuccess', { count: res.cleared }))
       setIsClearOpen(false)
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err)
-      toast.error(t('toast.clearFailed', { error: errMsg }))
+    } catch {
+      // 全局 mutationCache 已统一弹出服务端错误提示
     }
   }
 

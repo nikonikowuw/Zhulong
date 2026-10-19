@@ -92,8 +92,11 @@ export function useRollbackMutation() {
 /**
  * 连通性测试 (Ping)
  */
-export function usePingMutation() {
+export function usePingMutation(options?: { suppressGlobalToast?: boolean }) {
   return useMutation<PingResult, Error, string>({
     mutationFn: (target: string) => networkApi.ping(target),
+    meta: {
+      suppressGlobalToast: options?.suppressGlobalToast,
+    },
   })
 }

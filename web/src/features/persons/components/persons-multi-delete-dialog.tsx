@@ -25,7 +25,7 @@ export function PersonsMultiDeleteDialog({
   const { t } = useTranslation('persons')
   const [value, setValue] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
-  const deleteMutation = useDeletePerson()
+  const deleteMutation = useDeletePerson({ suppressGlobalToast: true })
 
   const selectedRows = table.getFilteredSelectedRowModel().rows
   const selectedPersons = selectedRows.map((row) => row.original)

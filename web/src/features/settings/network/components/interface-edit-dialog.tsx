@@ -4,6 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { handleFormError } from '@/lib/form-error'
 import { statusLevelClass, statusTextClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -133,8 +134,7 @@ export function InterfaceEditDialog({
       onOpenChange(false)
       onSuccess(res)
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : t('errors.applyFailed')
-      toast.error(msg)
+      handleFormError(form, err)
     }
   }
 

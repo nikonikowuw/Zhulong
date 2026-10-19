@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { handleFormError } from '@/lib/form-error'
 import { statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -134,7 +135,7 @@ export function StorageConfigForm({
   const [testResult, setTestResult] = useState<PathTestResponse | null>(null)
 
   const updateMutation = useUpdateStorageConfig()
-  const testMutation = useTestStoragePath()
+  const testMutation = useTestStoragePath({ suppressGlobalToast: true })
 
   const schema = useMemo(() => createStorageFormSchema(t), [t])
 
@@ -162,25 +163,39 @@ export function StorageConfigForm({
       toast.error(t('form.empty_path', { defaultValue: '请先输入目录路径' }))
       return
     }
-    try {
-      const res = await testMutation.mutateAsync({ path: currentPath })
-      setTestResult(res)
-      if (res.writable) {
-        toast.success(
-          t('form.test_success', {
+
+    const testPromise = testMutation
+      .mutateAsync({ path: currentPath })
+      .then((res) => {
+        setTestResult(res)
+        if (res.writable) {
+          return t('form.test_success', {
             defaultValue: '路径检测通过，具备读写权能！',
           })
-        )
-      } else {
-        toast.error(
+        }
+        throw new Error(
           res.errorReason ||
             t('form.test_failed', {
               defaultValue: '该目录不存在或无写权限',
             })
         )
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Path inspection failed')
+      })
+
+    try {
+      await toast.promise(testPromise, {
+        loading: t('form.testing_path', {
+          defaultValue: '正在探测目录读写权限与可用空间...',
+        }),
+        success: (msg) => msg,
+        error: (err) =>
+          err instanceof Error
+            ? err.message
+            : t('form.test_failed', {
+                defaultValue: '该目录不存在或无写权限',
+              }),
+      })
+    } catch {
+      // toast.promise 已统一反馈
     }
   }
 
@@ -193,12 +208,8 @@ export function StorageConfigForm({
       if (onConfigUpdated) {
         onConfigUpdated()
       }
-    } catch (err) {
-      toast.error(
-        err instanceof Error
-          ? err.message
-          : 'Failed to update storage configuration'
-      )
+    } catch (err: unknown) {
+      handleFormError(form, err)
     }
   }
 

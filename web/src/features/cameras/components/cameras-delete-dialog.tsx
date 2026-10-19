@@ -19,7 +19,7 @@ export function CamerasDeleteDialog() {
       toast.success(t('toast.deleteSuccess'))
       setOpen(null)
     } catch {
-      toast.error(t('toast.deleteFailed'))
+      // 全局 mutationCache 已统一弹出服务端错误提示
     }
   }
 

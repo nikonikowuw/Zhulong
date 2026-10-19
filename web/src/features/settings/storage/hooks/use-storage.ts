@@ -31,8 +31,11 @@ export function useUpdateStorageConfig() {
   })
 }
 
-export function useTestStoragePath() {
+export function useTestStoragePath(options?: { suppressGlobalToast?: boolean }) {
   return useMutation({
     mutationFn: (payload: PathTestPayload) => storageApi.testPath(payload),
+    meta: {
+      suppressGlobalToast: options?.suppressGlobalToast,
+    },
   })
 }

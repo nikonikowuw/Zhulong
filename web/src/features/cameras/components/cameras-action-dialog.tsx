@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AxiosError } from 'axios'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { AlertCircle, Loader2 } from 'lucide-react'
@@ -33,6 +32,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { handleFormError } from '@/lib/form-error'
 import { createCameraFormSchema, type CameraFormValues } from '../data/schema'
 import { useCreateCamera, useUpdateCamera } from '../hooks/use-cameras'
 import { useCamerasContext } from './cameras-provider'
@@ -41,6 +41,7 @@ export function CamerasActionDialog() {
   const { t } = useTranslation('cameras')
   const { open, setOpen, currentRow } = useCamerasContext()
   const [probeError, setProbeError] = useState<string | null>(null)
+  const [conflictError, setConflictError] = useState<string | null>(null)
 
   const isEdit = open === 'edit' && Boolean(currentRow)
   const isOpen = open === 'create' || open === 'edit'
@@ -96,6 +97,7 @@ export function CamerasActionDialog() {
   const onSubmit = async (values: CameraFormValues) => {
     if (isPending) return
     setProbeError(null)
+    setConflictError(null)
 
     const streamPayload = {
       name: values.name,
@@ -138,23 +140,25 @@ export function CamerasActionDialog() {
         toast.success(t('toast.createSuccess'))
       }
       setProbeError(null)
+      setConflictError(null)
       setOpen(null)
     } catch (err: unknown) {
-      if (err instanceof AxiosError) {
-        if (err.response?.status === 409) {
-          toast.error(t('toast.casConflict'))
-          setOpen(null)
-          return
-        }
-        const message =
-          err.response?.data?.message || err.message || 'Probe or save failed'
-        setProbeError(message)
-        toast.error(t('toast.probeFailed', { reason: message }))
-      } else {
-        const errorText = String(err)
-        setProbeError(errorText)
-        toast.error(errorText)
-      }
+      handleFormError(form, err, {
+        fieldMap: {
+          'mainStream.rtspUrl': 'mainRtspUrl',
+          'subStream.rtspUrl': 'subRtspUrl',
+          'mainStream.transport': 'mainTransport',
+          'subStream.transport': 'subTransport',
+        },
+        onConflict: (_err, message) => {
+          setConflictError(
+            message || t('toast.casConflict', '配置已被更新，请核对后重试')
+          )
+        },
+        onUnhandled: (message) => {
+          setProbeError(message)
+        },
+      })
     }
   }
 
@@ -169,6 +173,7 @@ export function CamerasActionDialog() {
       onOpenChange={(val) => {
         if (!isPending && !val) {
           setProbeError(null)
+          setConflictError(null)
           setOpen(null)
         }
       }}
@@ -182,6 +187,13 @@ export function CamerasActionDialog() {
             {isEdit ? t('dialog.editDesc') : t('dialog.createDesc')}
           </DialogDescription>
         </DialogHeader>
+
+        {conflictError && (
+          <div className='flex items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-600 dark:text-amber-400'>
+            <AlertCircle className='mt-0.5 size-4 shrink-0' />
+            <div className='flex-1 leading-relaxed'>{conflictError}</div>
+          </div>
+        )}
 
         {probeError && (
           <div className='flex items-start gap-2.5 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive'>

@@ -19,14 +19,18 @@ export function handleServerError(error: unknown): void {
   }
 
   if (error instanceof AxiosError) {
-    const message = error.response?.data?.message
-    const title = error.response?.data?.title
-    if (typeof message === 'string' && message.length > 0) {
-      errMsg = message
-    } else if (typeof title === 'string' && title.length > 0) {
-      errMsg = title
+    if (error.response?.status === 304) {
+      errMsg = 'Content not modified!'
+    } else {
+      const message = error.response?.data?.message
+      const title = error.response?.data?.title
+      if (typeof message === 'string' && message.length > 0) {
+        errMsg = message
+      } else if (typeof title === 'string' && title.length > 0) {
+        errMsg = title
+      }
     }
   }
 
-  toast.error(errMsg)
+  toast.error(errMsg, { id: errMsg })
 }

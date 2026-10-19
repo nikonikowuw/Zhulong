@@ -3,6 +3,8 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Activity, CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import { handleFormError } from '@/lib/form-error'
 import { STATUS_LEVEL_CLASS, STATUS_TEXT_CLASS } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -40,7 +42,7 @@ export function PingDialog({
   defaultTarget = '8.8.8.8',
 }: PingDialogProps) {
   const { t } = useTranslation('network')
-  const pingMutation = usePingMutation()
+  const pingMutation = usePingMutation({ suppressGlobalToast: true })
 
   const schema = useMemo(() => createPingFormSchema(t), [t])
 
@@ -60,8 +62,26 @@ export function PingDialog({
     }
   }, [open, defaultTarget, form, resetPing])
 
-  const onSubmit = (values: PingFormValues) => {
-    pingMutation.mutate(values.target)
+  const onSubmit = async (values: PingFormValues) => {
+    try {
+      await toast.promise(pingMutation.mutateAsync(values.target), {
+        loading: t('ping.probingMsg', { defaultValue: '正在探测网络连通性...' }),
+        success: (res) =>
+          res.reachable
+            ? t('ping.successMsg', {
+                defaultValue: `网络连通正常 (RTT: ${res.rttMs?.toFixed(1) ?? '-'}ms)`,
+              })
+            : t('ping.unreachableMsg', {
+                defaultValue: '目标主机不可达或响应超时',
+              }),
+        error: (err) =>
+          err instanceof Error
+            ? err.message
+            : t('ping.errorMsg', { defaultValue: '探测执行异常' }),
+      })
+    } catch (err: unknown) {
+      handleFormError(form, err)
+    }
   }
 
   return (

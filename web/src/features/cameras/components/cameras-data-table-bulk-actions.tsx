@@ -37,8 +37,8 @@ export function CamerasDataTableBulkActions({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
 
-  const toggleMutation = useToggleCameraEnabled()
-  const diagnoseMutation = useDiagnoseCamera()
+  const toggleMutation = useToggleCameraEnabled({ suppressGlobalToast: true })
+  const diagnoseMutation = useDiagnoseCamera({ suppressGlobalToast: true })
 
   const selectedRows = table.getFilteredSelectedRowModel().rows
   const selectedCameras = selectedRows.map((row) => row.original)
@@ -48,27 +48,33 @@ export function CamerasDataTableBulkActions({
   // 批量切换启用/停用状态
   const handleBulkStatusChange = async (enabled: boolean) => {
     setIsUpdating(true)
-    const toastId = toast.loading(t('toast.batchStatusUpdating'))
-    try {
-      const results = await Promise.allSettled(
-        selectedCameras.map((camera) =>
-          toggleMutation.mutateAsync({
-            camera,
-            enabled,
-          })
-        )
+    const taskPromise = Promise.allSettled(
+      selectedCameras.map((camera) =>
+        toggleMutation.mutateAsync({
+          camera,
+          enabled,
+        })
       )
+    ).then((results) => {
       const fulfilled = results.filter((r) => r.status === 'fulfilled').length
       if (fulfilled > 0) {
-        toast.success(t('toast.batchStatusUpdated', { count: fulfilled }), {
-          id: toastId,
-        })
         table.resetRowSelection()
-      } else {
-        toast.error(t('toast.batchStatusUpdateFailed'), { id: toastId })
+        return t('toast.batchStatusUpdated', { count: fulfilled })
       }
+      throw new Error(t('toast.batchStatusUpdateFailed'))
+    })
+
+    try {
+      await toast.promise(taskPromise, {
+        loading: t('toast.batchStatusUpdating'),
+        success: (msg) => msg,
+        error: (err) =>
+          err instanceof Error
+            ? err.message
+            : t('toast.batchStatusUpdateFailed'),
+      })
     } catch {
-      toast.error(t('toast.batchStatusUpdateFailed'), { id: toastId })
+      // toast.promise 已统一展示失败反馈
     } finally {
       setIsUpdating(false)
     }
@@ -77,23 +83,27 @@ export function CamerasDataTableBulkActions({
   // 批量触发连通性探针诊断
   const handleBulkDiagnose = async () => {
     setIsUpdating(true)
-    const toastId = toast.loading(
-      t('toast.batchDiagnosing', { count: selectedCameras.length })
-    )
-    try {
-      const results = await Promise.allSettled(
-        selectedCameras.map((camera) => diagnoseMutation.mutateAsync(camera.id))
-      )
+    const taskPromise = Promise.allSettled(
+      selectedCameras.map((camera) => diagnoseMutation.mutateAsync(camera.id))
+    ).then((results) => {
       const fulfilled = results.filter((r) => r.status === 'fulfilled').length
       if (fulfilled > 0) {
-        toast.success(t('toast.batchDiagnoseSuccess', { count: fulfilled }), {
-          id: toastId,
-        })
-      } else {
-        toast.error(t('toast.batchDiagnoseFailed'), { id: toastId })
+        return t('toast.batchDiagnoseSuccess', { count: fulfilled })
       }
+      throw new Error(t('toast.batchDiagnoseFailed'))
+    })
+
+    try {
+      await toast.promise(taskPromise, {
+        loading: t('toast.batchDiagnosing', { count: selectedCameras.length }),
+        success: (msg) => msg,
+        error: (err) =>
+          err instanceof Error
+            ? err.message
+            : t('toast.batchDiagnoseFailed'),
+      })
     } catch {
-      toast.error(t('toast.batchDiagnoseFailed'), { id: toastId })
+      // toast.promise 已统一展示失败反馈
     } finally {
       setIsUpdating(false)
     }

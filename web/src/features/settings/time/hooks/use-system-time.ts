@@ -22,22 +22,28 @@ export function useUpdateConfig() {
   })
 }
 
-export function useSyncNow() {
+export function useSyncNow(options?: { suppressGlobalToast?: boolean }) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () => timeApi.syncNow(),
     onSuccess: (data) => {
       queryClient.setQueryData(SYSTEM_TIME_QUERY_KEY, data)
     },
+    meta: {
+      suppressGlobalToast: options?.suppressGlobalToast,
+    },
   })
 }
 
-export function useManualTime() {
+export function useManualTime(options?: { suppressGlobalToast?: boolean }) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (payload: ManualTimePayload) => timeApi.setManualTime(payload),
     onSuccess: (data) => {
       queryClient.setQueryData(SYSTEM_TIME_QUERY_KEY, data)
+    },
+    meta: {
+      suppressGlobalToast: options?.suppressGlobalToast,
     },
   })
 }

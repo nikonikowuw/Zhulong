@@ -6,6 +6,7 @@ import { type TFunction } from 'i18next'
 import { Clock, Laptop, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { handleFormError } from '@/lib/form-error'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -65,8 +66,8 @@ interface TimeFormInnerProps {
 function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
   const { t } = useTranslation('time')
   const updateConfig = useUpdateConfig()
-  const syncNow = useSyncNow()
-  const manualTime = useManualTime()
+  const syncNow = useSyncNow({ suppressGlobalToast: true })
+  const manualTime = useManualTime({ suppressGlobalToast: true })
 
   const [customTime, setCustomTime] = useState<string>('')
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false)
@@ -130,24 +131,30 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
       })
       toast.success(t('ntp.saveSuccess', { defaultValue: '对时配置已更新' }))
       onRefresh()
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : t('errors.updateFailed')
-      toast.error(msg)
+    } catch (err: unknown) {
+      handleFormError(form, err)
     }
   }
 
   async function handleSyncNow(): Promise<void> {
     try {
-      await syncNow.mutateAsync()
-      toast.success(
-        t('ntp.syncSuccess', {
+      await toast.promise(syncNow.mutateAsync(), {
+        loading: t('ntp.syncing', {
+          defaultValue: '正在向上游 NTP 服务器请求高精时间校对...',
+        }),
+        success: t('ntp.syncSuccess', {
           defaultValue: '已成功向上游 NTP 服务器同步时间',
-        })
-      )
+        }),
+        error: (err) =>
+          err instanceof Error
+            ? err.message
+            : t('errors.ntpSyncFailed', {
+                defaultValue: 'NTP 服务器校时请求失败',
+              }),
+      })
       onRefresh()
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : t('errors.ntpSyncFailed')
-      toast.error(msg)
+    } catch {
+      // toast.promise 已统一反馈
     }
   }
 
@@ -155,19 +162,29 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
     setIsManualSyncing(true)
     try {
       const browserNow = new Date().toISOString()
-      await manualTime.mutateAsync({ targetTime: browserNow })
-      await ensureManualMode()
-
-      toast.success(
-        t('manual.browserSyncSuccess', {
+      const syncPromise = (async () => {
+        await manualTime.mutateAsync({ targetTime: browserNow })
+        await ensureManualMode()
+        return t('manual.browserSyncSuccess', {
           defaultValue: '已成功将设备时间与当前浏览器时间精准对齐并写入 RTC！',
         })
-      )
+      })()
+
+      await toast.promise(syncPromise, {
+        loading: t('manual.syncingBrowser', {
+          defaultValue: '正在将浏览器本地基准写入设备 RTC...',
+        }),
+        success: (msg) => msg,
+        error: (err) =>
+          err instanceof Error
+            ? err.message
+            : t('errors.browserSyncFailed', {
+                defaultValue: '浏览器基准写入失败',
+              }),
+      })
       onRefresh()
-    } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : t('errors.browserSyncFailed')
-      toast.error(msg)
+    } catch {
+      // toast.promise 已统一反馈
     } finally {
       setIsManualSyncing(false)
     }
@@ -193,19 +210,29 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
 
     setIsManualSyncing(true)
     try {
-      await manualTime.mutateAsync({ targetTime: parsed.toISOString() })
-      await ensureManualMode()
-
-      toast.success(
-        t('manual.applySuccess', {
+      const applyPromise = (async () => {
+        await manualTime.mutateAsync({ targetTime: parsed.toISOString() })
+        await ensureManualMode()
+        return t('manual.applySuccess', {
           defaultValue: '手动时钟设置成功，已固化至板载 RTC',
         })
-      )
+      })()
+
+      await toast.promise(applyPromise, {
+        loading: t('manual.applyingCustom', {
+          defaultValue: '正在写入自定义时间至硬件时钟...',
+        }),
+        success: (msg) => msg,
+        error: (err) =>
+          err instanceof Error
+            ? err.message
+            : t('errors.manualSetFailed', {
+                defaultValue: '手动时间固化失败',
+              }),
+      })
       onRefresh()
-    } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : t('errors.manualSetFailed')
-      toast.error(msg)
+    } catch {
+      // toast.promise 已统一反馈
     } finally {
       setIsManualSyncing(false)
     }
