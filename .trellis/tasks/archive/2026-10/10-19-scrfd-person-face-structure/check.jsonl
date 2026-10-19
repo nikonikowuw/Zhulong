@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "验证算法插件 ABI 导出规范、内存生命周期与 Session 安全"}
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "验证跨平台模型加载与异构推理后处理正确性"}

@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "C ABI 算法插件接口、结构化人员结果适配器与 Session 线程契约"}
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "异构硬件后端（ONNX / RKNN）及 DMA-BUF 零拷贝输入规范"}
