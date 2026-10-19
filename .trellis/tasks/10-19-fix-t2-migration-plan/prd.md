@@ -21,7 +21,7 @@
 | F7 | 迁移 SQL 内**无法生成 ULID**（Crockford Base32 无对应 SQL 函数）；但旧表 `analysis_tasks.id` 本身就是 ULID | `internal/task/service.go:86` 用 `idutil.New()`；迁移文件里无任何 id 生成先例（`grep randomblob/hex/lower` 无结果） |
 | F8 | T2 的 `prd.md:32` 把子表 `region_config_json` 标为「**预留**」，且 `design.md §2.2` 的迁移步骤**未提及搬运该列** —— 而 T1 已交付真实数据 | T1 `internal/task/model.go:29` 的列已上线；`region_config.go:78` 有真实消费者 |
 | F9 | T2 规划**完全没提** `RegionConfigCache` 这个消费者 | `grep -rn "RegionConfigCache\|ConfigFor\|regionProvider" .trellis/tasks/10-18-channel-multi-algo-task/` 无输出 |
-| F10 | T1 的 `RegionConfigCache.Reload()` 依赖 `ListTasks()` 返回带 `CameraID` / `AlgorithmID` / `RegionConfigJSON` 三字段的 `Task` | `internal/task/region_config.go:62-95`；`internal/task/store.go:200-210` 目前是单表 `Find` |
+| F10 | T1 的 `RegionConfigCache.Reload()` 依赖 `ListTasks()` 返回带 `CameraID` / `AlgorithmID` / `RegionConfigJSON` 三字段的 `Task` | `internal/task/region_config.go:62-99`；`internal/task/store.go:200-210` 目前是单表 `Find` |
 | F11 | T1 的迁移测试 `TestRegionConfigMigrationUpAndDownSymmetry` 硬断言列在**主表**上 | `internal/database/store_test.go:846`，断言 `columnExists("analysis_tasks", "region_config_json")` 且 `Migrate(12)` |
 | F12 | 算法卸载清理逻辑写死主表 | `internal/algorithm/store.go:188`：`DELETE FROM analysis_tasks WHERE algorithm_id = ?`，T2 后该列不在主表 |
 
@@ -58,14 +58,17 @@ up 顺序：`备份 temp_old_tasks` → 建子表 + 新主表 → 迁移主表�
 
 ### R5. 登记 T1 侧交接点
 
-在 T2 的 `design.md`（或新建交接清单）中明确列出 T2 落地时**必须同步修改**的 T1 产物：
+在 T2 的 `design.md` 中新建交接清单（`§3.4`），列出 T2 落地时**必须同步修改**的调用点。PRD 初稿列了 4 个；实际交付时经全仓 `grep` 复核扩为 **7 个**（拆为 §3.4.1 T1 区域策略产物 3 项 + §3.4.2 本任务自身波及 4 项）：
 
 | 交接点 | 位置 | T2 需做的改动 |
 | :--- | :--- | :--- |
-| `RegionConfigCache.Reload` | `internal/task/region_config.go:62-95` | 改为从主+子表 JOIN 取 `(cameraID, algorithmID, regionConfigJSON)`，否则区域过滤静默失效 |
-| `ListTasks` 返回结构 | `internal/task/store.go:200-210` | 需带上 `Algorithms` 子项，或另提供扁平查询供缓存使用 |
+| `RegionConfigCache.Reload` | `internal/task/region_config.go:62-99` | 改为从主+子表 JOIN 取 `(cameraID, algorithmID, regionConfigJSON)`，否则区域过滤静默失效 |
+| `ListTasks` 返回结构 | `internal/task/store.go:200-210` | 需带上 `Algorithms` 子项，或另提供扁平查询。⚠️ 有**两个**消费者：`RegionConfigCache` 与 `appBrokerPathResolver.publishRateByCamera`（`internal/app/app.go:408-427`） |
 | 迁移测试断言 | `internal/database/store_test.go:846` | 断言列从主表移到子表；`Migrate(12)` 需改为 `Migrate(13)` |
-| 算法卸载清理 | `internal/algorithm/store.go:188` | 改删 `task_algorithms` 子表 |
+| `validateComputeBudget` | `internal/task/store.go:105,117-124` | 算力核算查询改查 `task_algorithms JOIN algorithms` |
+| `GetTaskByCameraAndAlgorithm` | `internal/task/store.go:184,190` | 改按 `camera_id` 取聚合根并预加载子项 |
+| `DeleteTasksByAlgorithm` | `internal/task/store.go:277,282` | 改删 `task_algorithms` 子表 |
+| 算法卸载清理 | `internal/algorithm/store.go:188` | 同上；与上一条是**两个不同包**的同类写死，不能只改一个 |
 
 ### R6. 复核 T2 的其它既有表述
 
@@ -75,13 +78,13 @@ up 顺序：`备份 temp_old_tasks` → 建子表 + 新主表 → 迁移主表�
 
 ## Acceptance Criteria
 
-- [ ] **AC1**：T2 三个文档（`prd.md` / `design.md` / `implement.md`）中的迁移编号全部为 `000013`，无残留 `000012_rebuild_channel_tasks`。
-- [ ] **AC2**：T2 `design.md §2.2` 的 up 步骤顺序与 F3/F4 的实测结论一致（子表 `INSERT` 在 `DROP`+`RENAME` 之后），且含「先备份旧表」步骤；down 步骤同样可执行。
-- [ ] **AC3**：`task_` || `camera_id` 的拼接写法已全部移除，替换为复用既有 ULID 的方案并附决策理由。
-- [ ] **AC4**：`region_config_json` 在 T2 文档中不再被称为「预留」，且 up/down 迁移步骤均含该列搬运，并有一条「既有 ROI/MASK 配置零丢失」的验收项。
-- [ ] **AC5**：R5 表格（四个交接点，含具体文件与行号）已写入 T2 文档。
-- [ ] **AC6**：本任务不修改任何业务代码（`git diff` 仅涉及 `.trellis/tasks/**`）。
-- [ ] **AC7**：`make check` 保持全绿（本任务不应引入任何代码回归）。
+- [x] **AC1**：T2 三个文档（`prd.md` / `design.md` / `implement.md`）中的迁移编号全部为 `000013`，无残留 `000012_rebuild_channel_tasks`。
+- [x] **AC2**：T2 `design.md §2.2` 的 up 步骤顺序与 F3/F4 的实测结论一致（子表 `INSERT` 在 `DROP`+`RENAME` 之后），且含「先备份旧表」步骤；down 步骤同样可执行（已在内存 SQLite 上实测 up/down 双向跑通）。
+- [x] **AC3**：`task_` || `camera_id` 的拼接写法已全部移除（仅作 ❌ 反面教材保留），替换为复用既有 ULID 的方案并附决策理由与前提缺口说明。
+- [x] **AC4**：`region_config_json` 在 T2 文档中不再被称为「预留」，且 up/down 迁移步骤均含该列搬运，并有一条「既有 ROI/MASK 配置零丢失」的验收项。
+- [x] **AC5**：交接点清单（7 项，含具体文件与行号）已写入 T2 `design.md §3.4`。
+- [x] **AC6**：本任务不修改任何业务代码（`git diff` 仅涉及 `.trellis/tasks/**`）。
+- [x] **AC7**：`make check` 保持全绿（461 前端用例 + native 21/21 + api-docs + go-check；提交前后各跑一次均 EXIT=0）。
 
 ---
 
