@@ -102,6 +102,11 @@ var (
 			"zh-Hans": "上传的照片中未检测到清晰人脸",
 			"zh-Hant": "上傳的照片中未檢測到清晰人臉",
 		},
+		"UNSUPPORTED_IMAGE_FORMAT": {
+			"en":      "The image file is unsupported or corrupted; use a static JPG, PNG or WebP",
+			"zh-Hans": "图片格式不受支持或文件已损坏，请上传静态的 JPG、PNG 或 WebP 图片",
+			"zh-Hant": "圖片格式不受支援或檔案已損壞，請上傳靜態的 JPG、PNG 或 WebP 圖片",
+		},
 		"FEATURE_EXTRACT_FAILED": {
 			"en":      "Failed to extract facial features",
 			"zh-Hans": "人脸特征提取失败",

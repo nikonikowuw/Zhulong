@@ -860,6 +860,37 @@ func TestAddFace_ExtractorFailureIsNotBlamedOnThePhoto(t *testing.T) {
 	requireDomainError(t, err, apperr.KindInternal, "FEATURE_EXTRACT_FAILED")
 }
 
+// TestAddFace_UndecodableImageIsAClientError 确认「图片解不开」被归咎于上传（400），
+// 而不是像引擎故障那样报 500：否则前端只能把用户输入错误当成服务端崩溃。
+func TestAddFace_UndecodableImageIsAClientError(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	extractor := &mockExtractor{err: fmt.Errorf("%w: image: unknown format", ErrUnsupportedImageFormat)}
+	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, zap.NewNop())
+	ctx := context.Background()
+
+	p, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "格式错误"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+
+	_, err = svc.AddFaceWithReader(ctx, p.ID, "photo.webp", bytes.NewReader(testJPEGBytes))
+	requireDomainError(t, err, apperr.KindInvalid, "UNSUPPORTED_IMAGE_FORMAT")
+
+	faces, total, err := svc.ListFaces(ctx, p.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("ListFaces failed: %v", err)
+	}
+	if total != 0 || len(faces) != 0 {
+		t.Fatalf("expected no face to be persisted, got total=%d len=%d", total, len(faces))
+	}
+}
+
 func strPtr(s string) *string {
 	return &s
 }

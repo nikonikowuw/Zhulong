@@ -43,6 +43,12 @@ var allowedFaceImageExts = map[string]struct{}{
 // can answer 422 instead of reporting an infrastructure failure as a bad photo.
 var ErrNoFaceDetected = errors.New("no face detected in image")
 
+// ErrUnsupportedImageFormat is the sentinel a FaceFeatureExtractor returns when the
+// image bytes cannot be decoded at all (unsupported format or corrupted file). It is
+// the caller's input that is at fault, so the service answers 400 rather than 500 —
+// unlike a genuine extractor failure, which must never be blamed on the upload.
+var ErrUnsupportedImageFormat = errors.New("unsupported image format")
+
 // FaceFeatureExtractor abstracts single-shot facial feature embedding generation.
 type FaceFeatureExtractor interface {
 	ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]float32, error)
@@ -468,6 +474,9 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 	if err != nil {
 		if errors.Is(err, ErrNoFaceDetected) {
 			return nil, apperr.Invalid("NO_FACE_DETECTED", "No detectable face found in the uploaded photo", err)
+		}
+		if errors.Is(err, ErrUnsupportedImageFormat) {
+			return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "The uploaded image could not be decoded", err)
 		}
 		return nil, apperr.New(apperr.KindInternal, "FEATURE_EXTRACT_FAILED", "Failed to extract facial features", err)
 	}

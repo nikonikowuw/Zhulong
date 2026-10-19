@@ -487,9 +487,9 @@ func (a *supervisorGallerySyncAdapter) GetGallerySyncData(ctx context.Context) (
 //
 // The translation lives here rather than in internal/person so the domain package
 // keeps its "no dependency on internal/engine" boundary. It also maps the engine's
-// "no face found" status onto person.ErrNoFaceDetected, which lets the HTTP layer
-// answer 422 for an unusable photo while a genuine engine failure is still
-// reported as a server error instead of blaming the upload.
+// "no face found" status onto person.ErrNoFaceDetected (→ 422), and a decode failure
+// onto person.ErrUnsupportedImageFormat (→ 400): an unusable upload must not be
+// reported as a server error, and a genuine engine failure must not be blamed on it.
 type faceFeatureExtractorAdapter struct {
 	eng *engine.Engine
 }
@@ -499,6 +499,9 @@ func (a *faceFeatureExtractorAdapter) ExtractFaceFeature(ctx context.Context, im
 	if err != nil {
 		if errors.Is(err, engine.ErrNotFound) {
 			return nil, fmt.Errorf("%w: %v", person.ErrNoFaceDetected, err)
+		}
+		if errors.Is(err, engine.ErrUnsupportedImageFormat) {
+			return nil, fmt.Errorf("%w: %v", person.ErrUnsupportedImageFormat, err)
 		}
 		return nil, err
 	}
