@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/task-guidelines.md", "reason": "验证算力预算控制与任务 API 契约一致性"}
+{"file": ".trellis/spec/architecture.md", "reason": "验证跨层事件与 FrameBroker 路径解析"}
+{"file": ".trellis/spec/backend/index.md", "reason": "验证后端代码风格与 -race 竞态要求"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "验证前端无头浏览器测试与 Zod 解析"}

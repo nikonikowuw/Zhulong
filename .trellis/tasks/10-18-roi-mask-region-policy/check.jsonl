@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "校验 Go 质量门禁：表驱动测试、-race 强制、无 panic、不吞错、不把 ctx 存结构体"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "校验前端质量门禁：真实无头浏览器测试、Zod 收口不可信输入、无类型断言"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "校验 native 侧改动是否符合管线与热路径约束"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "校验迁移成对性、只追加、down 可回滚、无 AutoMigrate"}
+{"file": ".trellis/spec/backend/host-runtime-contract.md", "reason": "校验 ready 语义与生命周期钩子未被破坏，构造函数保持纯粹"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "校验跨特性导入未穿透私有路径、无内部反向循环引用"}
+{"file": ".trellis/spec/architecture.md", "reason": "校验依赖方向无环、无跨层越界，消费者侧接口而非反向依赖"}
+{"file": ".trellis/tasks/10-18-roi-mask-region-policy/research/deepstream_nvdsanalytics.txt", "reason": "对照行业契约验收判定点与 ROI/MASK 语义是否一致"}
+{"file": ".trellis/tasks/10-18-roi-mask-region-policy/research/frigate_zones.txt", "reason": "对照行业契约验收「与重叠面积无关」这一关键行为"}
+{"file": ".trellis/tasks/10-18-roi-mask-region-policy/research/industry-practice.md", "reason": "对照行业契约验收判定点、exclude 优先于 include、以及与隐私掩码的术语区分"}

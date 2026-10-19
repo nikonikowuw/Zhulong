@@ -1,0 +1,94 @@
+NVIDIA Developer Forums 
+ Customizing object coordinate for ROI detection in NvDsAnalytics 
+ Accelerated Computing 
+ Intelligent Video Analytics 
+ DeepStream SDK 
+ deepstream 
+ yassinbalde.sorint 
+ April 17, 2025, 2:57pm
+ 1 
+ • Hardware Platform: GPU (NVIDIA L40S) 
+ • DeepStream Version: 7.1 
+ • CUDA Version: 12.6 
+ • NVIDIA GPU Driver Version: 535.183.06 
+ • Issue Type: Feature request / customization 
+ Hello, 
+According to the official DeepStream documentation for the nvdsanalytics plugin: 
+ “For all the analytics calculations, the bottom center coordinate of the bounding box of an object is being used. If the bounding box is defined as (x_left, y_top, width, height) , then the bottom center coordinate would be (x_left + width/2, y_top + height) .” 
+ This behavior applies to all analytics features — including ROI-based detections (like region entry/exit, counting, etc.). 
+ In our use case, we’d like the ability to customize the point used for these calculations. Specifically, we’d like to define a relative point in the bounding box. 
+ My questions: 
+ Is it currently possible to configure this directly within the nvdsanalytics plugin? 
+ If not, is the source code available so that this behavior could be modified manually? 
+ Thanks, 
+Yassin 
+ fanzh 
+ April 18, 2025, 2:32am
+ 3 
+ No, currently nvdsanalytics does not support customize the bottom center coordinate . 
+ nvdsanalytics plugin are opensource while the low-level implement is closedsource. you may replace the low level lib with your own algorithm lib. 
+ Related topics
+ Topic 
+ Replies 
+ Views 
+ Activity 
+ Deepstream ROI not working as expected 
+ DeepStream SDK 
+ deepstream 
+ 2 
+ 200 
+ September 26, 2024
+ About customizing the center point in NvDsAnalytics plugin 
+ DeepStream SDK 
+ gstreamer 
+ 1 
+ 464 
+ June 9, 2023
+ Nvdsanayltics ROI logic 
+ DeepStream SDK 
+ 10 
+ 966 
+ March 22, 2024
+ How I can use nvdsanalytics with a particular point of object ( like centriod, ) 
+ DeepStream SDK 
+ python 
+ 8 
+ 923 
+ November 24, 2023
+ Gst-nvdsanalytics roi filtering objects presence inconsistent 
+ DeepStream SDK 
+ deepstream 
+ 4 
+ 179 
+ September 17, 2025
+ Issue with ROI Counting in DeepStream's NVAnalytics 
+ DeepStream SDK 
+ deepstream 
+ 8 
+ 368 
+ January 17, 2025
+ Gst-nvdsanalytics roi filtering objects presence inconsistent 
+ DeepStream SDK 
+ nvbugs 
+ , 
+ deepstream 
+ , 
+ jetson-orin 
+ 15 
+ 704 
+ September 16, 2025
+ Nvdsanalytics query 
+ DeepStream SDK 
+ 9 
+ 578 
+ March 28, 2023
+ Problem with detection in the ROI using nvdsanalytics 
+ DeepStream SDK 
+ 1 
+ 1855 
+ October 7, 2021
+ [Question] Gst-nvdsanalytics custom plugin code 
+ DeepStream SDK 
+ 3 
+ 700 
+ May 11, 2021

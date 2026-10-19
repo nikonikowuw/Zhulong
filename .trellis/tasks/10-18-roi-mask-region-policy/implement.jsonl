@@ -1,0 +1,16 @@
+{"file": ".trellis/spec/architecture.md", "reason": "跨层拓扑与 Go/Native/前端契约边界：本任务横跨三层，需先确认归属与依赖方向"}
+{"file": ".trellis/spec/backend/task-guidelines.md", "reason": "分析任务领域模型、CRUD 与校验归属：区域配置作为任务级策略挂在此领域"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "版本化迁移与新增列的强制规则：新增 region_config_json 列必须走 000012 成对迁移"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "algorithm/algorunner 模块边界与 runner 启停契约：--algorithm-id 下发与结果归属改动的归属层"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "httputil 信封与 DTO 字段惯例：regionConfigJson 新增字段需符合 camelCase+snake_case 兼容约定"}
+{"file": ".trellis/spec/backend/host-runtime-contract.md", "reason": "宿主运行时装配与生命周期钩子契约：区域策略快照预热与扇出监听者的注入位置"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "MSG_RESULT 上报契约、坐标归一化 [x1,y1,x2,y2] 与空结果信标语义：过滤实现必须遵守"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "C ABI 边界与回调借用内存规则：结果载荷新增字段不得破坏既有边界约束"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "跨业务特性必须经 index.tsx 门面导出的铁律：实时画面组件需由 @/features/live 导出给 tasks 使用"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "特性切片结构与 Zustand/TanStack Query 使用规范：区域编辑器组件落位"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "三语字典与 RTL 逻辑属性要求：编辑器文案与布局需齐备"}
+{"file": ".trellis/tasks/10-18-roi-mask-region-policy/research/deepstream_nvdsanalytics.txt", "reason": "DeepStream 官方原文：底部中心判定且不可自定义，ROI 过滤与 inverse-roi 语义"}
+{"file": ".trellis/tasks/10-18-roi-mask-region-policy/research/frigate_zones.txt", "reason": "Frigate 官方原文：区域归属基于底部中心、与重叠面积无关，以及 zone inertia 的动机"}
+{"file": ".trellis/tasks/10-18-roi-mask-region-policy/research/industry-practice.md", "reason": "行业实践摘要：判定点、ROI/MASK 结构、术语陷阱与防抖动机，含全部来源引用"}
+{"file": ".trellis/tasks/10-18-roi-mask-region-policy/research/hik_intrusion.txt", "reason": "Hikvision 官方原文：虚拟区域数量、时间阈值与目标尺寸门限的行业做法"}
+{"file": ".trellis/tasks/10-18-roi-mask-region-policy/research/nv_forum_coord.txt", "reason": "NVIDIA 论坛原文：官方确认不支持自定义判定点，佐证底部中心是既定行业契约"}

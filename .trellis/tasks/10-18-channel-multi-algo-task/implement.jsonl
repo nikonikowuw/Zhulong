@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/task-guidelines.md", "reason": "分析任务管理规范与算力预算控制"}
+{"file": ".trellis/spec/architecture.md", "reason": "系统整体拓扑、跨层契约与 FrameBroker 调度原则"}
+{"file": ".trellis/spec/backend/index.md", "reason": "后端编码规范、Fx 依赖注入与数据库事务规范"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端组件设计、API 客户端与真实无头浏览器测试规范"}
