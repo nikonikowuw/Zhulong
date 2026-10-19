@@ -1111,3 +1111,65 @@ Close the two acceptance-criteria test gaps left by the ROI/MASK region-policy d
 ### Status
 
 [OK] **Completed**
+
+
+## Session 72: 修正 T2 通道多算法重构的迁移规划：编号对齐、迁移顺序、主键合规与消费者交接点
+<!-- trellis-session: v=2 fp=00d60515ab23fecd -->
+
+**Date**: 2026-10-19
+**Task**: 修正 T2 通道多算法重构的迁移规划：编号对齐、迁移顺序、主键合规与消费者交接点
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+Session summary was not supplied.
+
+### Main Changes
+
+### Summary
+
+Fix `10-18-channel-multi-algo-task`（T2）的规划，使其实施前可执行。范围严格限定为规划文档 —— 不写业务代码，因为 `region_config_json` 的 re-home 无法独立于 T2 主体完成。
+
+### Main Changes
+
+- 建独立任务 `10-19-fix-t2-migration-plan`（改的是另一个任务的规划，混进 T1 会让 diff 说不清），PRD 记录 5 个缺陷与实测证据。
+- **编号对齐**：T2 `prd.md` / `implement.md` 仍写 `000012_rebuild_channel_tasks`，与 T1 已落地的 `000012_add_region_config_to_analysis_tasks` 撞号。`golang-migrate` 的 iofs 源对重号返回 `source.ErrDuplicateMigration`（`iofs.go:69`）→ 启动即失败。三份文档统一为 `000013`，并在三处显式写入编号约束。
+- **迁移顺序修正（实测复现两个致命缺陷）**：原方案「建子表→插新主表→插子表→DROP→RENAME」直接报 `FOREIGN KEY constraint failed`（`task_id` 指向 `analysis_tasks_new`，FK 却声明指向 `analysis_tasks`）；改成先 DROP 再插，又被 `ON DELETE CASCADE` 清空（实测 5 行 → 0）。正确配方：备份 → 迁移 → DROP → RENAME → 再插子表 → 删备份。`PRAGMA foreign_keys = OFF` 无效（事务内被忽略，`000009` 已记录，本次二次确认）。
+- **主键合规**：`'task_' || camera_id` 违反 `database-guidelines.md §4.5` 的伪语义拼接禁令，且迁移内无法生成 ULID（无对应 SQL 函数）。改用 `MIN(id)` 复用既有 ULID —— 实测确认 ULID 字典序等价时间序（前 10 字符为大端 base32 时间戳）。补上前提缺口：客户端可自带 id（`service.go:85` 仅在空时生成），需前置校验或改用 `ORDER BY created_at, id LIMIT 1`。
+- **region 数据搬运**：T2 原把该列标为「预留」且迁移步骤未搬运，而 T1 已交付真实数据 —— 升级会静默清空用户配置。改为 up/down 双向搬运，并加「零丢失」验收项。
+- **交接点清单（`design.md §3.4`，两张表共 7 项）**：登记 T2 落地时必须同步修改的调用点。最关键的是 `RegionConfigCache.Reload` —— 它从 `ListTasks` 读 `CameraID`/`AlgorithmID`/`RegionConfigJSON` 三字段构建快照，漏改则**区域过滤静默失效（无报错无日志）**。另含 `ListTasks`（两个消费者：缓存 + `publishRateByCamera`）、`validateComputeBudget`、`GetTaskByCameraAndAlgorithm`、`DeleteTasksByAlgorithm`、`algorithm.Store.DeleteTasksByAlgorithm`、迁移测试断言。
+- 修正 T2 PRD F5 的错误断言（`captures` 只有 `camera_id`，无 `algorithm_id`）、「必须提前备份」的过强表述（`ALTER TABLE RENAME` 等价）、测试修复清单遗漏（`algorithm/service_test.go:33`、前端 `tasks-api.test.ts`）。
+
+### Testing
+
+- [OK] `make check` -> EXIT=0 全绿（461 前端用例 + native 21/21 + api-docs + go-check），提交前后各跑一次
+- [OK] 内存 SQLite 实测：修正后的 up（5 条旧记录 → 3 主 + 5 子，region 全保留，`foreign_key_check` 空）与 down（`enabled = t.enabled AND ta.enabled` 正确）均跑通
+- [OK] 三条约束反例全部实测成立（FK 报错 / CASCADE 清空 / PRAGMA 事务内无效）
+- [OK] 逐字提取 `design.md` 里的 SQL 代码块实际执行，语法与 FK 均通过
+- [OK] ULID 字典序 == 时间序 实测确认（`MIN(id)` 命中最早那条成立）
+- [OK] 独立 `trellis-check` 校验：钉住 md5 逐项核实行号/路径/函数名，实测反例，判定「可提交，无阻塞项」
+- [OK] AC1–AC7 全部达标；AC6 经 `git diff --stat` 确认仅改 `.trellis/tasks/**`
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- T2（`10-18-channel-multi-algo-task`）本身仍未实现，保持 `planning`。规划现已可执行，但它是全栈大重构（DB 迁移 + Go 聚合根 + 算力事务 + REST 契约 + 前端废除 diff），需单独立项开工。
+- T2 落地时务必先处理 `design.md §3.4` 的 7 个交接点，尤其 `RegionConfigCache` —— 漏改不会报错，只会让 ROI/MASK 过滤静默失效。
+- T1（`10-18-roi-mask-region-policy`）仍因 AC4/AC5/AC9 的真机真流验收保持 `in_progress`，未归档。
+- check 子代理建议的项已全部修完；无遗留。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `88a7b5f` | docs(task): plan the T2 migration-plan corrections |
+| `29d64a4` | docs(task): make the T2 multi-algo migration plan executable |
+
+### Status
+
+[OK] **Completed**
