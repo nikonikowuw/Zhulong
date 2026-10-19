@@ -988,3 +988,65 @@ Decompose channel-task-dialog and introduce AlgoConfigDynamicForm based on JSON 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 70: Fix all code-review findings on the ROI/MASK region policy changeset
+<!-- trellis-session: v=2 fp=48c1733d9c4ab924 -->
+
+**Date**: 2026-10-19
+**Task**: Fix all code-review findings on the ROI/MASK region policy changeset
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+Ran a two-axis review (Standards + Spec) over the uncommitted ROI/MASK region-policy changeset and fixed every finding across the Go host, the native runner and the React editor. Split the oversized modules, moved the editor's coordinate math out of the DOM so it is unit-testable, and corrected two rendering bugs the review had only inferred. Landed as six layer-scoped commits.
+
+### Main Changes
+
+- 后端命名收敛：RegionPolicyCache→RegionConfigCache、PolicyFor→ConfigFor、Config.Apply→Config.Filter；RegionConfigCache 直接实现 TaskChangeListener，删掉只为复用两个监听者而存在的 taskChangeFanout 适配器，Service 改为扇出 []TaskChangeListener
+- 修复 stream_hub 的 flaky 用例：SessionStateIdle 由 stream_dispatcher 异步写入，改为有界轮询而非固定等待
+- 前端 i18n 收口：camera-frame-surface 的 6 处硬编码中文迁入 live.frame.*，画布锚点标题迁入 tasks.region.bottomCenterAnchor，三语齐备；区域弹窗改用独立的 region.save/cancel，不再复用通道弹窗的「保存并下发调度」
+- 调色板收口：category-palette 新增画布图元/预览/独立文字三张分类色表，ROI→emerald、MASK→violet，并加回归断言锁住「不得占用状态色相」；锚点保留语义 bg-primary（amber 属状态色板）
+- 稳定 key：矩形 id 改由 use-region-editor 内的自增 ref 生成，替代数组下标（删除后下标会复用错位的 DOM），且不参与序列化
+- 按 300 行规则拆分：region-canvas 350→157、region-editor-dialog 319→201，抽出 use-region-drag(292)/region-drag-types/region-geometry/region-editor-toolbar/use-region-editor
+- 纯几何换算抽到 region-geometry 并单测（贴边回推、最小边长、越界钳制），拖拽状态机的坐标数学因此可脱离 DOM 验证
+- 补规格轴缺口：实现 paused 冻结（真正透传到 CameraFrameSurface）、撤销（一次操作一条快照，上限 50，连续拖拽只占一条）、imageRect 的 object-contain letterbox 映射
+- 抽出 use-webcodecs-render-loop 供 camera-frame-surface 与 live-player 共用：两份拷贝的清理顺序已经走偏，旧版 live-player 在 canvas 卸载时漏掉 frame.close()
+- 修掉两个原分析只推断出、实测才暴露的渲染 bug：canvas 作为 flex item 时 min-width:auto 使其被钉在画面内在宽度并被 overflow-hidden 裁掉；弹窗以 open=true 挂载时 Radix 不回调 onOpenChange，导致草稿永远为空
+- 消除逐帧 setState：仅在几何真变化时提交，叠加层不再随帧率重渲染；channel-task-dialog 两处内联草稿字面量合并为 createDraftItem
+- 文档同步：后端/原生 spec 补齐 region 包依赖边、启动预热顺序、--algorithm-id 与 algorithm_id 载荷；T1 交付文档记录三处刻意偏离；T2 迁移编号 000012→000013 并标注 region_config_json 的字段归属冲突（T2 本体未实现）
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b80519c` | build(native): select inference/vision backend from env with profile precedence |
+| `2b1e14d` | feat(region): filter inference results by per-task ROI/MASK regions |
+| `ba90724` | feat(web/region): add the ROI/MASK region editor to the channel task dialog |
+| `5ff6ed2` | docs(spec): record the region pipeline, listener fan-out and algorithm attribution |
+| `4a902bc` | docs(task): record the region-policy delivery and the multi-algo migration clash |
+| `6c63a86` | chore(trellis): refresh template hashes |
+
+### Testing
+
+- [OK] pnpm lint + tsc -b -> 全绿
+- [OK] pnpm test -> 83 文件 / 461 用例通过（改前 79/423）
+- [OK] pnpm run build -> 通过
+- [OK] make native-test -> 21/21 通过
+- [OK] make api-docs -> 通过，并补上变更集遗漏的 regionConfigJson 生成结果
+- [OK] make go-check -> 通过（gofmt、go vet、-race ./cmd/... ./internal/...、Go 桥接集成测试）
+- [OK] make check 无法端到端执行：frontend-install 的 pnpm install 在本沙箱因 pnpm store 操作锁只读而失败（--store-dir / --config.state-dir / PNPM_HOME / XDG_* 重定位均无效），故逐个执行其余全部门禁组件
+- [OK] gofmt 曾因 internal/app/runtime.go 结构体 tag 对齐过期失败一次，已修正并重跑通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- T1 (10-18-roi-mask-region-policy) 未归档、保持 in_progress：AC10 要求 make check 全绿但本沙箱跑不了端到端，AC4/AC5/AC9 需在真实码流上手工验收（叠加层/抓拍/告警是否真按区域过滤、是否免重启生效）
+- AC3 依赖真实 runner 产出 algorithm_id 载荷，建议连同真流验收一并确认
+- channel-task-dialog.tsx 已 607 行（HEAD 时即 508 行），超 300 行属既有问题且不在本次 review 条目内，未拆分
+- stream_hub 保留空算法 ID 是有意为之（AI 流按摄像头共享、无法归属到单一算法；猜值会在载荷缺字段时静默错配），勿按缺陷「修复」
+- 构建后端管道（Makefile/native/scripts/build.py 的 INFERENCE_BACKEND 优先级）按用户决定保留、不回退
