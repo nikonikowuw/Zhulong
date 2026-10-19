@@ -16,7 +16,7 @@
 
 | 阶段 | 严格顺序 |
 | --- | --- |
-| **启动 (`lifecycleRuntime.Start`)** | 1. 打开 GORM/SQLite 并执行嵌入式版本化迁移 (失败则阻断) ➔ 2. 创建并启动 Native C++ Engine ➔ 3. 校验/初始化相机 AES-256-GCM 密钥（已有密文而密钥缺失则阻断）➔ 4. 启动 Camera HealthScheduler ➔ 5. 绑定 TCP listener 并启动 Gin HTTP Serve |
+| **启动 (`lifecycleRuntime.Start`)** | 1. 打开 GORM/SQLite 并执行嵌入式版本化迁移 (失败则阻断) ➔ 2. 初始重载区域策略缓存 `RegionConfigCache.Reload`（失败仅告警不阻断）➔ 3. 创建并启动 Native C++ Engine ➔ 4. 校验/初始化相机 AES-256-GCM 密钥（已有密文而密钥缺失则阻断）➔ 5. 启动 Camera HealthScheduler ➔ 6. 绑定 TCP listener 并启动 Gin HTTP Serve |
 | **停止 (`lifecycleRuntime.Stop`)** | 1. 优雅关闭 HTTP 并等待 Serve 退出 ➔ 2. 关闭 SSE Hub 与停止 Camera HealthScheduler（含 StreamHub 分发器与 AI 流） ➔ 3. 停止 Algorithm Supervisor 所有运行中的子进程 ➔ 4. 停止并销毁 C++ opaque handle ➔ 5. 关闭 SQLite pool ➔ 6. Sync Zap |
 
 ⚠️ **停机顺序是硬约束，不得静默调整**：`camera.Stop` 必须先于 `algorithm.Stop`，`algorithm.Stop` 又必须先于 `native.Close`（即 `engine.close`）。理由是 native `Engine` 持有 per-stream 的 `FrameBroker`，而 runner 子进程是它的 IPC 客户端：

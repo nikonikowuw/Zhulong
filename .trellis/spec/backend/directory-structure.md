@@ -23,6 +23,7 @@ internal/
   algorunner/                 # 算法子进程看护与自愈调度 (Supervisor 守护、退避熔断状态机、进程生命周期)
   algoipc/                    # 算法 Runner 子进程间二进制 IPC 编解码与定长帧头协议
   aitypes/                    # 纯数据契约包 (InferenceResult, DetectionItem, 任务与分类模型)
+  region/                     # 区域策略纯逻辑包 (ROI/MASK 归一化矩形校验与推理结果过滤)
   task/                       # 视频分析任务管理域 (Camera 与 Algorithm 动态绑定、配置与帧率调度)
   record/                     # 感知记录与结构化报警持久化域
   storage/                    # 边缘媒体存储与动态生命周期 (路径规范、statfs 水位感知)
@@ -49,6 +50,7 @@ internal/
 ```txt
 cmd/Zhulong ➔ internal/app ➔ internal/{auth, camera, person, algorithm, algorunner, task, record, storage, mediafile, network, systemtime, audit} ➔ internal/{engine, database, httputil}
                              internal/app ➔ internal/algorithm ➔ internal/algorunner ➔ internal/{algoipc, aitypes}
+                             internal/{camera, task} ➔ internal/region ➔ internal/aitypes
                              internal/app ➔ internal/httpmiddleware ➔ internal/httputil
                              internal/app ➔ internal/audit/http ➔ internal/audit
                              internal/mediafile ➔ internal/{storage, httputil, apperr}   # 禁止反向；严禁 import internal/camera（间接拖入 CGO engine）

@@ -133,13 +133,14 @@ zhulong_algo_runner --verify-plugin <path_to_plugin.so> --sample <test_image_or_
 
 ### 5.1 Runner 命令契约：`--broker` 参数语义
 
-`zhulong_algo_runner --plugin <plugin.so> --broker <socket_path> [--broker <socket_path_2> ...] [--name <client_name>] [--max-frames <N>]`
+`zhulong_algo_runner --plugin <plugin.so> --broker <socket_path> [--broker <socket_path_2> ...] [--name <client_name>] [--algorithm-id <id>] [--max-frames <N>]`
 
 - **`--broker` 的语义为字面 socket 路径**：客户端直接执行 `connect(path)`，不做目录派生。支持重复传入多个 `--broker` 参数以订阅多路相机流。
 - **Native Engine 作为 Broker 宿主**：当流具有 `ConsumerAI` 消费者时，Native `Engine` 自动实例化并启动 `ipc::FrameBroker`，生成的 socket 路径为 `<base_dir>/zhulong_broker_<stream_id>.sock`。
 - **`ZHULONG_FRAME_BROKER_SOCK` 环境变量**：仅在 Native 端作为 `base_dir` 读取（默认 `/tmp`），Go 侧不再读取该变量。
 - **路径解析与传递**：Go 侧通过 C ABI `Zhulong_stream_get_broker_path`（Go 封装为 `Stream.BrokerPath(ctx)`）获取各相机流的实际 socket 路径，并经 `BrokerSubscriptionResolver` 组装为 `--broker <socket_path>` 列表传给 runner。
 - **runner 从 socket 路径反解 stream_id**：runner 按 `<base_dir>/zhulong_broker_<stream_id>.sock` 从**字面 `--broker` 路径**反解 stream_id 并用作 `task_id`（`runner.cpp` 的 `parse_stream_id_from_socket`）。因此 `--broker` 传入的路径必须遵循宿主的派生规则。
+- **`--algorithm-id <id>`**：声明本 runner 实例所属的算法 ID；该值随每次推理结果写入载荷的 `algorithm_id` 字段（见 §9.2）。未传入时为空字符串。
 
 ### 5.2 Runner 退出码表
 
@@ -263,7 +264,8 @@ Go 侧与 Runner 进程之间 IPC 载荷统一使用 `features` 字段，表示�
 
 ### 9.2 载荷格式与坐标契约
 
-- 载荷采用自描述 JSON 字符串编码，包含 `stream_id`、`pts`、`capture_time_ms`（帧抓拍绝对物理毫秒时间戳）、`cost_ms`、`task_type` 以及多态结果数组（`detections`、`classifications`、`persons`）。
+- 载荷采用自描述 JSON 字符串编码，包含 `stream_id`、`pts`、`capture_time_ms`（帧抓拍绝对物理毫秒时间戳）、`cost_ms`、`algorithm_id`、`task_type` 以及多态结果数组（`detections`、`classifications`、`persons`）。
+- **`algorithm_id` 结果归属**：标识该推理结果归属的算法（由 runner 的 `--algorithm-id` 参数透传）。宿主解析时优先采用载荷内的值；载荷缺省（`null`/`""`）时回退到宿主自身传入的算法参数。
 - **人脸识别方案 B 扩展字段**：当检出人脸并命中底库时，根层或人脸子项如实携带 `matched_face_id`（Top-1 胜出人脸底照 ID）及 `candidates[].face_id`，为宿主落盘 `gallery_image_path` 与持久化提供唯一确凿的底照证据溯源。
 - **坐标恒定归一化**：所有检测框与人体/人脸位置恒定采用 `[x1, y1, x2, y2] ∈ [0.0, 1.0]` 浮点数，与前端/Go 领域模型严格对齐。
 
