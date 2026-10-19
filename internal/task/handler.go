@@ -32,8 +32,10 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	{
 		group.GET("", h.ListTasks)
 		group.GET("/:id", h.GetTask)
+		group.GET("/camera/:cameraId", h.GetTaskByCamera)
 		group.POST("", h.CreateTask)
 		group.PUT("/:id", h.UpdateTask)
+		group.PUT("/camera/:cameraId", h.SaveTaskByCamera)
 		group.DELETE("/:id", h.DeleteTask)
 	}
 
@@ -95,9 +97,28 @@ func (h *Handler) GetTask(c *gin.Context) {
 	httputil.Success(c, task)
 }
 
+// GetTaskByCamera godoc
+// @Summary      Get channel analysis task by camera ID
+// @Tags         tasks
+// @Produce      json
+// @Param        cameraId path string true "Camera ID"
+// @Success      200  {object}  httputil.Response{data=Task}
+// @Failure      404  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /tasks/camera/{cameraId} [get]
+func (h *Handler) GetTaskByCamera(c *gin.Context) {
+	camID := c.Param("cameraId")
+	task, err := h.service.GetTaskByCamera(c.Request.Context(), camID)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	httputil.Success(c, task)
+}
+
 // CreateTask godoc
 // @Summary      Create an analysis task
-// @Description  Binds a camera to an algorithm with a sampling rate and a config JSON document.
+// @Description  Binds a camera to algorithms with sampling rates and configuration JSON documents.
 // @Tags         tasks
 // @Accept       json
 // @Produce      json
@@ -128,7 +149,7 @@ func (h *Handler) CreateTask(c *gin.Context) {
 
 // UpdateTask godoc
 // @Summary      Update an analysis task
-// @Description  Updates sampling rate, enabled state, or config JSON of an existing task.
+// @Description  Updates sampling rates, enabled state, or config JSON of an existing task.
 // @Tags         tasks
 // @Accept       json
 // @Produce      json
@@ -153,6 +174,39 @@ func (h *Handler) UpdateTask(c *gin.Context) {
 
 	task, err := h.service.UpdateTask(c.Request.Context(), id, &req)
 	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+
+	httputil.Success(c, task)
+}
+
+// SaveTaskByCamera godoc
+// @Summary      Save channel analysis task by camera ID (Upsert)
+// @Tags         tasks
+// @Accept       json
+// @Produce      json
+// @Param        cameraId path string true "Camera ID"
+// @Param        request body CreateTaskRequest true "Channel task payload"
+// @Success      200  {object}  httputil.Response{data=Task}
+// @Failure      400  {object}  httputil.Response
+// @Failure      409  {object}  httputil.Response
+// @Failure      422  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /tasks/camera/{cameraId} [put]
+func (h *Handler) SaveTaskByCamera(c *gin.Context) {
+	camID := c.Param("cameraId")
+	audithttp.Tag(c, ActionTaskUpdate, "camera:"+camID, "Save channel task for camera "+camID)
+
+	var req CreateTaskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_REQUEST", "Invalid analysis task payload", err))
+		return
+	}
+	req.CameraID = camID
+
+	task := req.ToTask()
+	if err := h.service.SaveTask(c.Request.Context(), task); err != nil {
 		httputil.WriteError(c, err)
 		return
 	}

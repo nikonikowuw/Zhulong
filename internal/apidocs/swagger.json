@@ -3255,7 +3255,7 @@
                 }
             },
             "post": {
-                "description": "Binds a camera to an algorithm with a sampling rate and a config JSON document.",
+                "description": "Binds a camera to algorithms with sampling rates and configuration JSON documents.",
                 "consumes": [
                     "application/json"
                 ],
@@ -3280,6 +3280,132 @@
                 "responses": {
                     "201": {
                         "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/task.Task"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/camera/{cameraId}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Get channel analysis task by camera ID",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Camera ID",
+                        "name": "cameraId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/task.Task"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tasks"
+                ],
+                "summary": "Save channel analysis task by camera ID (Upsert)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Camera ID",
+                        "name": "cameraId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Channel task payload",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/task.CreateTaskRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
                         "schema": {
                             "allOf": [
                                 {
@@ -3375,7 +3501,7 @@
                 }
             },
             "put": {
-                "description": "Updates sampling rate, enabled state, or config JSON of an existing task.",
+                "description": "Updates sampling rates, enabled state, or config JSON of an existing task.",
                 "consumes": [
                     "application/json"
                 ],
@@ -5073,15 +5199,121 @@
             "type": "object",
             "properties": {
                 "algorithmId": {
+                    "description": "Legacy single-algorithm fields for backward compatibility",
                     "type": "string"
                 },
                 "algorithm_id": {
                     "type": "string"
                 },
+                "algorithms": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/task.TaskAlgorithmItem"
+                    }
+                },
                 "cameraId": {
                     "type": "string"
                 },
                 "camera_id": {
+                    "type": "string"
+                },
+                "configJson": {
+                    "type": "string"
+                },
+                "config_json": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "regionConfigJson": {
+                    "type": "string"
+                },
+                "region_config_json": {
+                    "type": "string"
+                },
+                "sampleFps": {
+                    "type": "integer"
+                },
+                "sample_fps": {
+                    "type": "integer"
+                }
+            }
+        },
+        "task.Task": {
+            "type": "object",
+            "properties": {
+                "algorithms": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/task.TaskAlgorithm"
+                    }
+                },
+                "cameraId": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "task.TaskAlgorithm": {
+            "type": "object",
+            "properties": {
+                "algorithmId": {
+                    "type": "string"
+                },
+                "configJson": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "regionConfigJson": {
+                    "type": "string"
+                },
+                "sampleFps": {
+                    "type": "integer"
+                },
+                "taskId": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "task.TaskAlgorithmItem": {
+            "type": "object",
+            "properties": {
+                "algorithmId": {
+                    "type": "string"
+                },
+                "algorithm_id": {
                     "type": "string"
                 },
                 "configJson": {
@@ -5110,41 +5342,15 @@
                 }
             }
         },
-        "task.Task": {
-            "type": "object",
-            "properties": {
-                "algorithmId": {
-                    "type": "string"
-                },
-                "cameraId": {
-                    "type": "string"
-                },
-                "configJson": {
-                    "type": "string"
-                },
-                "createdAt": {
-                    "type": "string"
-                },
-                "enabled": {
-                    "type": "boolean"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "regionConfigJson": {
-                    "type": "string"
-                },
-                "sampleFps": {
-                    "type": "integer"
-                },
-                "updatedAt": {
-                    "type": "string"
-                }
-            }
-        },
         "task.UpdateTaskRequest": {
             "type": "object",
             "properties": {
+                "algorithms": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/task.TaskAlgorithmItem"
+                    }
+                },
                 "configJson": {
                     "type": "string"
                 },
@@ -5154,6 +5360,9 @@
                 "enabled": {
                     "type": "boolean"
                 },
+                "name": {
+                    "type": "string"
+                },
                 "regionConfigJson": {
                     "type": "string"
                 },
@@ -5161,6 +5370,7 @@
                     "type": "string"
                 },
                 "sampleFps": {
+                    "description": "Legacy single-algorithm update fields",
                     "type": "integer"
                 },
                 "sample_fps": {

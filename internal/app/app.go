@@ -357,14 +357,17 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 		if !tsk.Enabled {
 			continue
 		}
-		if _, err := task.ValidateSampleFPS(tsk.SampleFPS); err != nil {
-			return nil, fmt.Errorf("task %s: %w", tsk.ID, err)
+		for _, algo := range tsk.Algorithms {
+			if algo.AlgorithmID == algorithmID && algo.Enabled {
+				if _, err := task.ValidateSampleFPS(algo.SampleFPS); err != nil {
+					return nil, fmt.Errorf("task %s algo %s: %w", tsk.ID, algo.AlgorithmID, err)
+				}
+				if _, ok := wanted[tsk.CameraID]; !ok {
+					wanted[tsk.CameraID] = struct{}{}
+					order = append(order, tsk.CameraID)
+				}
+			}
 		}
-		if _, ok := wanted[tsk.CameraID]; ok {
-			continue
-		}
-		wanted[tsk.CameraID] = struct{}{}
-		order = append(order, tsk.CameraID)
 	}
 
 	// 阶段 1：解析全部路径。任一路失败则整体失败，不触碰订阅关系。
@@ -415,12 +418,17 @@ func (r *appBrokerPathResolver) publishRateByCamera(ctx context.Context) (map[st
 		if !tsk.Enabled {
 			continue
 		}
-		fps, err := task.ValidateSampleFPS(tsk.SampleFPS)
-		if err != nil {
-			return nil, fmt.Errorf("task %s: %w", tsk.ID, err)
-		}
-		if fps > rates[tsk.CameraID] {
-			rates[tsk.CameraID] = fps
+		for _, algo := range tsk.Algorithms {
+			if !algo.Enabled {
+				continue
+			}
+			fps, err := task.ValidateSampleFPS(algo.SampleFPS)
+			if err != nil {
+				return nil, fmt.Errorf("task %s algo %s: %w", tsk.ID, algo.AlgorithmID, err)
+			}
+			if fps > rates[tsk.CameraID] {
+				rates[tsk.CameraID] = fps
+			}
 		}
 	}
 	return rates, nil

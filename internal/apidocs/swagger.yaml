@@ -1080,7 +1080,12 @@ definitions:
       algorithm_id:
         type: string
       algorithmId:
+        description: Legacy single-algorithm fields for backward compatibility
         type: string
+      algorithms:
+        items:
+          $ref: '#/definitions/task.TaskAlgorithmItem'
+        type: array
       camera_id:
         type: string
       cameraId:
@@ -1093,6 +1098,8 @@ definitions:
         type: boolean
       id:
         type: string
+      name:
+        type: string
       region_config_json:
         type: string
       regionConfigJson:
@@ -1104,9 +1111,26 @@ definitions:
     type: object
   task.Task:
     properties:
-      algorithmId:
-        type: string
+      algorithms:
+        items:
+          $ref: '#/definitions/task.TaskAlgorithm'
+        type: array
       cameraId:
+        type: string
+      createdAt:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      name:
+        type: string
+      updatedAt:
+        type: string
+    type: object
+  task.TaskAlgorithm:
+    properties:
+      algorithmId:
         type: string
       configJson:
         type: string
@@ -1120,17 +1144,25 @@ definitions:
         type: string
       sampleFps:
         type: integer
+      taskId:
+        type: string
       updatedAt:
         type: string
     type: object
-  task.UpdateTaskRequest:
+  task.TaskAlgorithmItem:
     properties:
+      algorithm_id:
+        type: string
+      algorithmId:
+        type: string
       config_json:
         type: string
       configJson:
         type: string
       enabled:
         type: boolean
+      id:
+        type: string
       region_config_json:
         type: string
       regionConfigJson:
@@ -1138,6 +1170,30 @@ definitions:
       sample_fps:
         type: integer
       sampleFps:
+        type: integer
+    type: object
+  task.UpdateTaskRequest:
+    properties:
+      algorithms:
+        items:
+          $ref: '#/definitions/task.TaskAlgorithmItem'
+        type: array
+      config_json:
+        type: string
+      configJson:
+        type: string
+      enabled:
+        type: boolean
+      name:
+        type: string
+      region_config_json:
+        type: string
+      regionConfigJson:
+        type: string
+      sample_fps:
+        type: integer
+      sampleFps:
+        description: Legacy single-algorithm update fields
         type: integer
     type: object
 info:
@@ -3149,8 +3205,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: Binds a camera to an algorithm with a sampling rate and a config
-        JSON document.
+      description: Binds a camera to algorithms with sampling rates and configuration
+        JSON documents.
       parameters:
       - description: Analysis task payload
         in: body
@@ -3253,7 +3309,7 @@ paths:
     put:
       consumes:
       - application/json
-      description: Updates sampling rate, enabled state, or config JSON of an existing
+      description: Updates sampling rates, enabled state, or config JSON of an existing
         task.
       parameters:
       - description: Task ID
@@ -3300,6 +3356,83 @@ paths:
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Update an analysis task
+      tags:
+      - tasks
+  /tasks/camera/{cameraId}:
+    get:
+      parameters:
+      - description: Camera ID
+        in: path
+        name: cameraId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/task.Task'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get channel analysis task by camera ID
+      tags:
+      - tasks
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Camera ID
+        in: path
+        name: cameraId
+        required: true
+        type: string
+      - description: Channel task payload
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/task.CreateTaskRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/task.Task'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Save channel analysis task by camera ID (Upsert)
       tags:
       - tasks
 swagger: "2.0"

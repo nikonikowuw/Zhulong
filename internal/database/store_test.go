@@ -917,3 +917,145 @@ func TestRegionConfigMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Errorf("expected region_config_json column on analysis_tasks after re-applying migration 12 up")
 	}
 }
+
+func TestChannelMultiAlgoTaskMigrationSymmetry(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "migration_symmetry_13.db")
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// 1. Run migrations up to 12
+	if err := migrator.Migrate(12); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(12): %v", err)
+	}
+
+	// Insert parent algorithms
+	_, err = db.Exec(`
+		INSERT INTO algorithms (id, name, version, task_type, category, target_arch, target_device, compute_cost)
+		VALUES 
+			('algo_1', 'Algorithm 1', '1.0.0', 'detection', 'general', 'x86_64', 'cpu', 10),
+			('algo_2', 'Algorithm 2', '1.0.0', 'recognition', 'face', 'x86_64', 'cpu', 20)
+	`)
+	if err != nil {
+		t.Fatalf("insert algorithms: %v", err)
+	}
+
+	// Insert old flat analysis_tasks:
+	// cam_1 has 2 algorithms (algo_1 enabled, algo_2 disabled), algo_1 has region_config_json
+	// cam_2 has 1 algorithm (algo_1 enabled)
+	_, err = db.Exec(`
+		INSERT INTO analysis_tasks (id, camera_id, algorithm_id, enabled, sample_fps, config_json, region_config_json, created_at, updated_at)
+		VALUES 
+			('task_01ARZ3NDEKTSV4RRFFQ69G5FAV', 'cam_1', 'algo_1', 1, 10, '{"thresh":0.5}', '{"roi":[[0.1,0.1,0.9,0.9]]}', '2026-10-18 10:00:00', '2026-10-18 10:00:00'),
+			('task_01ARZ3NDEKTSV4RRFFQ69G5FAW', 'cam_1', 'algo_2', 0, 5, '{}', '{}', '2026-10-18 10:05:00', '2026-10-18 10:05:00'),
+			('task_01ARZ3NDEKTSV4RRFFQ69G5FAX', 'cam_2', 'algo_1', 1, 15, '{"thresh":0.8}', '{"mask":[[0.2,0.2,0.5,0.5]]}', '2026-10-18 11:00:00', '2026-10-18 11:00:00')
+	`)
+	if err != nil {
+		t.Fatalf("insert test tasks at v12: %v", err)
+	}
+
+	// 2. Run migration 13 up
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator step up (1) to 13: %v", err)
+	}
+
+	// Verify analysis_tasks has 2 rows (1 per camera)
+	var taskCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM analysis_tasks").Scan(&taskCount); err != nil {
+		t.Fatalf("count analysis_tasks: %v", err)
+	}
+	if taskCount != 2 {
+		t.Fatalf("expected 2 analysis_tasks (1 per camera), got %d", taskCount)
+	}
+
+	// Verify task_algorithms has 3 rows
+	var detailCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM task_algorithms").Scan(&detailCount); err != nil {
+		t.Fatalf("count task_algorithms: %v", err)
+	}
+	if detailCount != 3 {
+		t.Fatalf("expected 3 task_algorithms rows, got %d", detailCount)
+	}
+
+	// Verify cam_1's task id reuses MIN(id): 'task_01ARZ3NDEKTSV4RRFFQ69G5FAV'
+	var cam1TaskID string
+	var cam1Enabled bool
+	if err := db.QueryRow("SELECT id, enabled FROM analysis_tasks WHERE camera_id = 'cam_1'").Scan(&cam1TaskID, &cam1Enabled); err != nil {
+		t.Fatalf("query cam_1 task: %v", err)
+	}
+	if cam1TaskID != "task_01ARZ3NDEKTSV4RRFFQ69G5FAV" {
+		t.Errorf("expected cam_1 task id to be task_01ARZ3NDEKTSV4RRFFQ69G5FAV, got %s", cam1TaskID)
+	}
+	if !cam1Enabled {
+		t.Errorf("expected cam_1 master enabled to be true (MAX(enabled))")
+	}
+
+	// Verify region_config_json is preserved on task_algorithms
+	var algo1Region string
+	if err := db.QueryRow("SELECT region_config_json FROM task_algorithms WHERE id = 'task_01ARZ3NDEKTSV4RRFFQ69G5FAV'").Scan(&algo1Region); err != nil {
+		t.Fatalf("query algo1 region: %v", err)
+	}
+	if algo1Region != `{"roi":[[0.1,0.1,0.9,0.9]]}` {
+		t.Errorf("expected preserved region_config_json, got %s", algo1Region)
+	}
+
+	// Verify foreign key integrity
+	var fkCheck string
+	if err := db.QueryRow("PRAGMA foreign_key_check").Scan(&fkCheck); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("foreign_key_check failed: %v", err)
+	}
+
+	// 3. Roll back migration 13 (step down -1)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator step down (-1) from 13: %v", err)
+	}
+
+	// Verify analysis_tasks is restored to 3 rows
+	if err := db.QueryRow("SELECT COUNT(*) FROM analysis_tasks").Scan(&taskCount); err != nil {
+		t.Fatalf("count restored analysis_tasks: %v", err)
+	}
+	if taskCount != 3 {
+		t.Fatalf("expected 3 restored analysis_tasks, got %d", taskCount)
+	}
+
+	// Verify algo_2 for cam_1 still has enabled=0
+	var cam1Algo2Enabled bool
+	if err := db.QueryRow("SELECT enabled FROM analysis_tasks WHERE camera_id = 'cam_1' AND algorithm_id = 'algo_2'").Scan(&cam1Algo2Enabled); err != nil {
+		t.Fatalf("query restored cam_1 algo_2: %v", err)
+	}
+	if cam1Algo2Enabled {
+		t.Errorf("expected cam_1 algo_2 enabled to remain false after rollback")
+	}
+
+	// 4. Re-apply migration 13
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator re-apply (1) to 13: %v", err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM task_algorithms").Scan(&detailCount); err != nil {
+		t.Fatalf("count task_algorithms after re-apply: %v", err)
+	}
+	if detailCount != 3 {
+		t.Fatalf("expected 3 task_algorithms after re-apply, got %d", detailCount)
+	}
+}

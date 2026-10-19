@@ -48,12 +48,19 @@ func TestStoreTaskCRUD(t *testing.T) {
 	insertMockAlgorithm(t, db, "algo_01", "helmet_detector", 10)
 
 	tsk := &task.Task{
-		ID:          "task_01",
-		CameraID:    "cam_01",
-		AlgorithmID: "algo_01",
-		Enabled:     true,
-		SampleFPS:   5,
-		ConfigJSON:  `{"threshold": 0.5}`,
+		ID:       "task_01",
+		CameraID: "cam_01",
+		Enabled:  true,
+		Name:     "大门监控",
+		Algorithms: []task.TaskAlgorithm{
+			{
+				ID:          "sub_01",
+				AlgorithmID: "algo_01",
+				Enabled:     true,
+				SampleFPS:   5,
+				ConfigJSON:  `{"threshold": 0.5}`,
+			},
+		},
 	}
 
 	if err := store.CreateTask(ctx, tsk); err != nil {
@@ -64,7 +71,7 @@ func TestStoreTaskCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask failed: %v", err)
 	}
-	if found.CameraID != "cam_01" || found.SampleFPS != 5 {
+	if found.CameraID != "cam_01" || len(found.Algorithms) != 1 || found.Algorithms[0].SampleFPS != 5 {
 		t.Fatalf("unexpected found task: %+v", found)
 	}
 
@@ -86,18 +93,19 @@ func TestStoreTaskCRUD(t *testing.T) {
 		t.Fatalf("ListTasksByAlgorithm failed: %v, count=%d", err, len(algoList))
 	}
 
-	tsk.SampleFPS = 10
+	tsk.Algorithms[0].SampleFPS = 10
 	if err := store.UpdateTask(ctx, tsk); err != nil {
 		t.Fatalf("UpdateTask failed: %v", err)
 	}
 	updated, _ := store.GetTask(ctx, "task_01")
-	if updated.SampleFPS != 10 {
-		t.Fatalf("expected updated SampleFPS 10, got %d", updated.SampleFPS)
+	if len(updated.Algorithms) != 1 || updated.Algorithms[0].SampleFPS != 10 {
+		t.Fatalf("expected updated SampleFPS 10, got %d", updated.Algorithms[0].SampleFPS)
 	}
 
 	if err := store.DeleteTask(ctx, "task_01"); err != nil {
 		t.Fatalf("DeleteTask failed: %v", err)
 	}
+
 	if _, err := store.GetTask(ctx, "task_01"); err != task.ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
@@ -113,12 +121,18 @@ func TestStoreTaskBudget(t *testing.T) {
 
 	// 100 * 5 = 500 点，未超 1000
 	t1 := &task.Task{
-		ID:          "task_01",
-		CameraID:    "cam_01",
-		AlgorithmID: "heavy_algo",
-		Enabled:     true,
-		SampleFPS:   5,
-		ConfigJSON:  "{}",
+		ID:       "task_01",
+		CameraID: "cam_01",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{
+				ID:          "sub_01",
+				AlgorithmID: "heavy_algo",
+				Enabled:     true,
+				SampleFPS:   5,
+				ConfigJSON:  "{}",
+			},
+		},
 	}
 	if err := store.CreateTaskWithinBudget(ctx, t1, 1000); err != nil {
 		t.Fatalf("CreateTaskWithinBudget t1 failed: %v", err)
@@ -126,12 +140,18 @@ func TestStoreTaskBudget(t *testing.T) {
 
 	// 再次加入 100 * 6 = 600 点，500 + 600 = 1100 > 1000，应拒绝
 	t2 := &task.Task{
-		ID:          "task_02",
-		CameraID:    "cam_02",
-		AlgorithmID: "heavy_algo",
-		Enabled:     true,
-		SampleFPS:   6,
-		ConfigJSON:  "{}",
+		ID:       "task_02",
+		CameraID: "cam_02",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{
+				ID:          "sub_02",
+				AlgorithmID: "heavy_algo",
+				Enabled:     true,
+				SampleFPS:   6,
+				ConfigJSON:  "{}",
+			},
+		},
 	}
 	err := store.CreateTaskWithinBudget(ctx, t2, 1000)
 	if !errors.Is(err, task.ErrComputeBudgetExceeded) {
@@ -147,12 +167,18 @@ func TestStoreCreateTaskPersistsDisabledEnabled(t *testing.T) {
 	insertMockAlgorithm(t, db, "algo_02", "face_detector", 10)
 
 	tsk := &task.Task{
-		ID:          "task_disabled",
-		CameraID:    "cam_02",
-		AlgorithmID: "algo_02",
-		Enabled:     false,
-		SampleFPS:   5,
-		ConfigJSON:  "{}",
+		ID:       "task_disabled",
+		CameraID: "cam_02",
+		Enabled:  false,
+		Algorithms: []task.TaskAlgorithm{
+			{
+				ID:          "sub_disabled",
+				AlgorithmID: "algo_02",
+				Enabled:     false,
+				SampleFPS:   5,
+				ConfigJSON:  "{}",
+			},
+		},
 	}
 
 	if err := store.CreateTask(ctx, tsk); err != nil {
@@ -164,6 +190,94 @@ func TestStoreCreateTaskPersistsDisabledEnabled(t *testing.T) {
 		t.Fatalf("GetTask failed: %v", err)
 	}
 	if stored.Enabled != false {
-		t.Fatalf("expected Enabled=false to persist, got Enabled=%v", stored.Enabled)
+		t.Fatalf("expected parent Enabled=false to persist, got Enabled=%v", stored.Enabled)
+	}
+	if len(stored.Algorithms) != 1 || stored.Algorithms[0].Enabled != false {
+		t.Fatalf("expected child Enabled=false to persist, got %+v", stored.Algorithms)
+	}
+}
+
+func TestStoreSaveTaskSyncAlgorithms(t *testing.T) {
+	store, db, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	insertMockAlgorithm(t, db, "algo_a", "algo_a", 10)
+	insertMockAlgorithm(t, db, "algo_b", "algo_b", 20)
+	insertMockAlgorithm(t, db, "algo_c", "algo_c", 30)
+
+	tsk := &task.Task{
+		ID:       "task_sync",
+		CameraID: "cam_sync",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{
+				AlgorithmID: "algo_a",
+				Enabled:     true,
+				SampleFPS:   5,
+			},
+			{
+				AlgorithmID: "algo_b",
+				Enabled:     true,
+				SampleFPS:   5,
+			},
+		},
+	}
+
+	if err := store.SaveTaskWithinBudget(ctx, tsk, 1000); err != nil {
+		t.Fatalf("initial save: %v", err)
+	}
+
+	stored, err := store.GetTask(ctx, "task_sync")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if len(stored.Algorithms) != 2 {
+		t.Fatalf("expected 2 algorithms, got %d", len(stored.Algorithms))
+	}
+
+	// Update: remove algo_a, update algo_b sampleFPS to 10, add algo_c
+	tskUpdate := &task.Task{
+		ID:       "task_sync",
+		CameraID: "cam_sync",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{
+				AlgorithmID: "algo_b",
+				Enabled:     true,
+				SampleFPS:   10,
+			},
+			{
+				AlgorithmID: "algo_c",
+				Enabled:     true,
+				SampleFPS:   4,
+			},
+		},
+	}
+
+	if err := store.SaveTaskWithinBudget(ctx, tskUpdate, 1000); err != nil {
+		t.Fatalf("update save: %v", err)
+	}
+
+	updated, err := store.GetTask(ctx, "task_sync")
+	if err != nil {
+		t.Fatalf("get updated task: %v", err)
+	}
+	if len(updated.Algorithms) != 2 {
+		t.Fatalf("expected 2 algorithms after sync, got %d", len(updated.Algorithms))
+	}
+
+	algoMap := make(map[string]task.TaskAlgorithm)
+	for _, a := range updated.Algorithms {
+		algoMap[a.AlgorithmID] = a
+	}
+	if _, ok := algoMap["algo_a"]; ok {
+		t.Errorf("algo_a should have been removed")
+	}
+	if b, ok := algoMap["algo_b"]; !ok || b.SampleFPS != 10 {
+		t.Errorf("algo_b should be updated to sampleFPS 10, got %+v", b)
+	}
+	if c, ok := algoMap["algo_c"]; !ok || c.SampleFPS != 4 {
+		t.Errorf("algo_c should be added with sampleFPS 4, got %+v", c)
 	}
 }

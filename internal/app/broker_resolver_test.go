@@ -76,12 +76,26 @@ func TestPublishRateUsesCrossPackageMax(t *testing.T) {
 		}
 	}
 
-	// Two packages subscribe to cam_1 with different sample rates.
-	tasks := []*algorithm.AnalysisTask{
-		{ID: "t_slow", CameraID: "cam_1", AlgorithmID: "algo_slow", Enabled: true, SampleFPS: 5, ConfigJSON: "{}"},
-		{ID: "t_fast", CameraID: "cam_1", AlgorithmID: "algo_fast", Enabled: true, SampleFPS: 25, ConfigJSON: "{}"},
+	// Two algorithms configured on cam_1 with different sample rates.
+	tasks := []*task.Task{
+		{
+			ID:       "t_cam1",
+			CameraID: "cam_1",
+			Enabled:  true,
+			Algorithms: []task.TaskAlgorithm{
+				{ID: "sub_slow", AlgorithmID: "algo_slow", Enabled: true, SampleFPS: 5},
+				{ID: "sub_fast", AlgorithmID: "algo_fast", Enabled: true, SampleFPS: 25},
+			},
+		},
 		// A disabled task on a distinct camera must not influence any rate.
-		{ID: "t_disabled", CameraID: "cam_2", AlgorithmID: "algo_slow", Enabled: false, SampleFPS: 100, ConfigJSON: "{}"},
+		{
+			ID:       "t_cam2",
+			CameraID: "cam_2",
+			Enabled:  false,
+			Algorithms: []task.TaskAlgorithm{
+				{ID: "sub_disabled", AlgorithmID: "algo_slow", Enabled: true, SampleFPS: 100},
+			},
+		},
 	}
 	for _, tItem := range tasks {
 		if err := taskStore.CreateTask(ctx, tItem); err != nil {

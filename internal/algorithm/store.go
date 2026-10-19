@@ -185,5 +185,5 @@ func (s *Store) DeleteTasksByAlgorithm(ctx context.Context, algorithmID string) 
 	if err != nil {
 		return err
 	}
-	return db.Exec("DELETE FROM analysis_tasks WHERE algorithm_id = ?", algorithmID).Error
+	return db.Exec("DELETE FROM task_algorithms WHERE algorithm_id = ?", algorithmID).Error
 }

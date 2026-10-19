@@ -52,9 +52,14 @@ func TestServiceDeleteAlgorithmCleansUpTasks(t *testing.T) {
 	}
 
 	// 2. Create analysis tasks referencing this algorithm directly in DB
-	if err := dbStore.DB().Exec(`INSERT INTO analysis_tasks (id, camera_id, algorithm_id, enabled, sample_fps, config_json, created_at, updated_at) VALUES 
-		('task_cam1_fire', 'cam_01', 'algo_fire_01', 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-		('task_cam2_fire', 'cam_02', 'algo_fire_01', 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error; err != nil {
+	if err := dbStore.DB().Exec(`
+		INSERT INTO analysis_tasks (id, camera_id, enabled, created_at, updated_at) VALUES 
+			('task_cam1', 'cam_01', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+			('task_cam2', 'cam_02', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+		INSERT INTO task_algorithms (id, task_id, algorithm_id, enabled, sample_fps, config_json, created_at, updated_at) VALUES 
+			('sub_cam1_fire', 'task_cam1', 'algo_fire_01', 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+			('sub_cam2_fire', 'task_cam2', 'algo_fire_01', 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+	`).Error; err != nil {
 		t.Fatalf("insert test tasks failed: %v", err)
 	}
 
@@ -69,11 +74,11 @@ func TestServiceDeleteAlgorithmCleansUpTasks(t *testing.T) {
 		t.Fatal("expected algorithm to be deleted, but still found")
 	}
 
-	// 5. Verify analysis tasks for this algorithm are also gone
+	// 5. Verify task_algorithms for this algorithm are also gone
 	var count int64
-	dbStore.DB().Table("analysis_tasks").Where("algorithm_id = ?", "algo_fire_01").Count(&count)
+	dbStore.DB().Table("task_algorithms").Where("algorithm_id = ?", "algo_fire_01").Count(&count)
 	if count != 0 {
-		t.Errorf("expected 0 tasks remaining, got: %d", count)
+		t.Errorf("expected 0 task_algorithms remaining, got: %d", count)
 	}
 }
 

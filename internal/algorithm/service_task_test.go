@@ -155,9 +155,10 @@ type storeBackedBrokerResolver struct {
 
 func (r *storeBackedBrokerResolver) SyncBrokerSubscriptions(ctx context.Context, algorithmID string) ([]string, error) {
 	var cameraIDs []string
-	err := r.dbStore.DB().WithContext(ctx).Table("analysis_tasks").
-		Where("algorithm_id = ? AND enabled = 1", algorithmID).
-		Pluck("DISTINCT camera_id", &cameraIDs).Error
+	err := r.dbStore.DB().WithContext(ctx).Table("task_algorithms").
+		Joins("JOIN analysis_tasks ON analysis_tasks.id = task_algorithms.task_id").
+		Where("task_algorithms.algorithm_id = ? AND task_algorithms.enabled = 1 AND analysis_tasks.enabled = 1", algorithmID).
+		Pluck("DISTINCT analysis_tasks.camera_id", &cameraIDs).Error
 	if err != nil {
 		return nil, err
 	}
@@ -208,8 +209,10 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	})
 
 	// 先建 camera1 的任务，再启动包 → 首轮应为 1 个 --broker
-	if err := dbStore.DB().Exec(`INSERT INTO analysis_tasks (id, camera_id, algorithm_id, enabled, sample_fps, config_json, created_at, updated_at) VALUES 
-		('task_cam1', 'camera1', ?, 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, algo.ID).Error; err != nil {
+	if err := dbStore.DB().Exec(`
+		INSERT INTO analysis_tasks (id, camera_id, enabled, created_at, updated_at) VALUES ('task_cam1', 'camera1', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+		INSERT INTO task_algorithms (id, task_id, algorithm_id, enabled, sample_fps, config_json, created_at, updated_at) VALUES ('sub_cam1', 'task_cam1', ?, 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+	`, algo.ID).Error; err != nil {
 		t.Fatalf("insert task for camera1: %v", err)
 	}
 
@@ -223,8 +226,10 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	}
 
 	// 运行期新建 camera2 的任务 → 该包必须重启并实际带上 2 个 --broker
-	if err := dbStore.DB().Exec(`INSERT INTO analysis_tasks (id, camera_id, algorithm_id, enabled, sample_fps, config_json, created_at, updated_at) VALUES 
-		('task_cam2', 'camera2', ?, 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, algo.ID).Error; err != nil {
+	if err := dbStore.DB().Exec(`
+		INSERT INTO analysis_tasks (id, camera_id, enabled, created_at, updated_at) VALUES ('task_cam2', 'camera2', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+		INSERT INTO task_algorithms (id, task_id, algorithm_id, enabled, sample_fps, config_json, created_at, updated_at) VALUES ('sub_cam2', 'task_cam2', ?, 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+	`, algo.ID).Error; err != nil {
 		t.Fatalf("insert task for camera2: %v", err)
 	}
 	service.OnTaskChanged(ctx, algo.ID)
@@ -309,8 +314,10 @@ func TestTaskDrivenLazyStartupAndTeardownLifecycle(t *testing.T) {
 	}
 
 	// Step 2: Dynamically add a task -> runner must auto-start
-	if err := dbStore.DB().Exec(`INSERT INTO analysis_tasks (id, camera_id, algorithm_id, enabled, sample_fps, config_json, created_at, updated_at) VALUES 
-		('task_lazy_1', 'camera_lazy_1', ?, 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, algo.ID).Error; err != nil {
+	if err := dbStore.DB().Exec(`
+		INSERT INTO analysis_tasks (id, camera_id, enabled, created_at, updated_at) VALUES ('task_lazy_1', 'camera_lazy_1', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+		INSERT INTO task_algorithms (id, task_id, algorithm_id, enabled, sample_fps, config_json, created_at, updated_at) VALUES ('sub_lazy_1', 'task_lazy_1', ?, 1, 5, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+	`, algo.ID).Error; err != nil {
 		t.Fatalf("insert task: %v", err)
 	}
 	service.OnTaskChanged(ctx, algo.ID)

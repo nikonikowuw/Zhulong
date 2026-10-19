@@ -71,6 +71,65 @@ func (s *Service) notifyTaskChanged(ctx context.Context, algorithmID string) {
 	}
 }
 
+func (s *Service) notifyTasksChanged(ctx context.Context, algorithmIDs []string) {
+	seen := make(map[string]struct{}, len(algorithmIDs))
+	for _, id := range algorithmIDs {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		s.notifyTaskChanged(ctx, id)
+	}
+}
+
+func (s *Service) validateAlgorithms(ctx context.Context, algorithms []TaskAlgorithm) error {
+	seen := make(map[string]struct{}, len(algorithms))
+	for i := range algorithms {
+		sub := &algorithms[i]
+		if sub.AlgorithmID == "" {
+			return apperr.Invalid("VALIDATION_FAILED", "algorithmId is required for task algorithm item", nil)
+		}
+		if _, ok := seen[sub.AlgorithmID]; ok {
+			return apperr.Conflict("DUPLICATE_ALGORITHM", fmt.Sprintf("duplicate algorithm %q in task", sub.AlgorithmID), nil)
+		}
+		seen[sub.AlgorithmID] = struct{}{}
+
+		if sub.SampleFPS <= 0 {
+			sub.SampleFPS = DefaultSampleFPS
+		}
+		if _, err := ValidateSampleFPS(sub.SampleFPS); err != nil {
+			return err
+		}
+
+		if sub.ConfigJSON == "" {
+			sub.ConfigJSON = "{}"
+		}
+		if sub.RegionConfigJSON == "" {
+			sub.RegionConfigJSON = "{}"
+		}
+
+		if _, err := region.ParseConfig(sub.RegionConfigJSON); err != nil {
+			return apperr.Invalid("INVALID_REGION_CONFIG", fmt.Sprintf("invalid region config for %q: %v", sub.AlgorithmID, err), err)
+		}
+
+		if s.algoProvider != nil {
+			spec, err := s.algoProvider.GetAlgorithmSpec(ctx, sub.AlgorithmID)
+			if err != nil {
+				return apperr.NotFound("ALGORITHM_NOT_FOUND", fmt.Sprintf("algorithm %q not found", sub.AlgorithmID), err)
+			}
+			sub.AlgorithmID = spec.ID
+
+			if err := validateTaskConfig(spec.ConfigSchemaJSON, sub.ConfigJSON); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // CreateTask registers a new analysis task with budget and schema validation.
 func (s *Service) CreateTask(ctx context.Context, t *Task) error {
 	if t == nil {
@@ -79,45 +138,17 @@ func (s *Service) CreateTask(ctx context.Context, t *Task) error {
 	if t.CameraID == "" {
 		return apperr.Invalid("VALIDATION_FAILED", "cameraId is required", nil)
 	}
-	if t.AlgorithmID == "" {
-		return apperr.Invalid("VALIDATION_FAILED", "algorithmId is required", nil)
-	}
 	if t.ID == "" {
 		t.ID = idutil.New()
 	}
-	if t.SampleFPS <= 0 {
-		t.SampleFPS = DefaultSampleFPS
-	}
-	if _, err := ValidateSampleFPS(t.SampleFPS); err != nil {
+
+	if err := s.validateAlgorithms(ctx, t.Algorithms); err != nil {
 		return err
 	}
-	if t.ConfigJSON == "" {
-		t.ConfigJSON = "{}"
-	}
-	if t.RegionConfigJSON == "" {
-		t.RegionConfigJSON = "{}"
-	}
 
-	if _, err := region.ParseConfig(t.RegionConfigJSON); err != nil {
-		return apperr.Invalid("INVALID_REGION_CONFIG", fmt.Sprintf("invalid region config: %v", err), err)
-	}
-
-	// Validate algorithm existence and schema
-	if s.algoProvider != nil {
-		algo, err := s.algoProvider.GetAlgorithmSpec(ctx, t.AlgorithmID)
-		if err != nil {
-			return apperr.NotFound("ALGORITHM_NOT_FOUND", fmt.Sprintf("algorithm %q not found", t.AlgorithmID), err)
-		}
-		t.AlgorithmID = algo.ID
-
-		if err := validateTaskConfig(algo.ConfigSchemaJSON, t.ConfigJSON); err != nil {
-			return err
-		}
-	}
-
-	// Guard against duplicate task for camera and algorithm
-	if existing, err := s.store.GetTaskByCameraAndAlgorithm(ctx, t.CameraID, t.AlgorithmID); err == nil && existing != nil {
-		return apperr.Conflict("TASK_ALREADY_EXISTS", "task already exists for camera and algorithm", nil)
+	// Guard against duplicate task for camera (1 Camera : 1 Task)
+	if existing, err := s.store.GetTaskByCamera(ctx, t.CameraID); err == nil && existing != nil {
+		return apperr.Conflict("TASK_ALREADY_EXISTS", "task already exists for camera", nil)
 	} else if err != nil && !errors.Is(err, ErrNotFound) {
 		return apperr.Internal("INTERNAL_ERROR", "failed to check existing task", err)
 	}
@@ -135,11 +166,14 @@ func (s *Service) CreateTask(ctx context.Context, t *Task) error {
 	s.logger.Info("analysis task created",
 		zap.String("id", t.ID),
 		zap.String("camera_id", t.CameraID),
-		zap.String("algorithm_id", t.AlgorithmID),
-		zap.Int("sample_fps", t.SampleFPS),
+		zap.Int("algorithm_count", len(t.Algorithms)),
 	)
 
-	s.notifyTaskChanged(ctx, t.AlgorithmID)
+	var algoIDs []string
+	for _, sub := range t.Algorithms {
+		algoIDs = append(algoIDs, sub.AlgorithmID)
+	}
+	s.notifyTasksChanged(ctx, algoIDs)
 	return nil
 }
 
@@ -160,27 +194,15 @@ func (s *Service) UpdateTask(ctx context.Context, id string, req *UpdateTaskRequ
 		return nil, apperr.Internal("INTERNAL_ERROR", "failed to query task", err)
 	}
 
+	var oldAlgoIDs []string
+	for _, sub := range task.Algorithms {
+		oldAlgoIDs = append(oldAlgoIDs, sub.AlgorithmID)
+	}
+
 	req.ApplyTo(task)
 
-	if _, err := ValidateSampleFPS(task.SampleFPS); err != nil {
+	if err := s.validateAlgorithms(ctx, task.Algorithms); err != nil {
 		return nil, err
-	}
-
-	if task.RegionConfigJSON == "" {
-		task.RegionConfigJSON = "{}"
-	}
-	if _, err := region.ParseConfig(task.RegionConfigJSON); err != nil {
-		return nil, apperr.Invalid("INVALID_REGION_CONFIG", fmt.Sprintf("invalid region config: %v", err), err)
-	}
-
-	if s.algoProvider != nil {
-		algo, err := s.algoProvider.GetAlgorithmSpec(ctx, task.AlgorithmID)
-		if err != nil {
-			return nil, apperr.NotFound("ALGORITHM_NOT_FOUND", fmt.Sprintf("algorithm %q not found", task.AlgorithmID), err)
-		}
-		if err := validateTaskConfig(algo.ConfigSchemaJSON, task.ConfigJSON); err != nil {
-			return nil, err
-		}
 	}
 
 	if err := s.store.UpdateTaskWithinBudget(ctx, task, MaxComputePoints); err != nil {
@@ -193,14 +215,59 @@ func (s *Service) UpdateTask(ctx context.Context, id string, req *UpdateTaskRequ
 	s.logger.Info("analysis task updated",
 		zap.String("id", task.ID),
 		zap.Bool("enabled", task.Enabled),
-		zap.Int("sample_fps", task.SampleFPS),
+		zap.Int("algorithm_count", len(task.Algorithms)),
 	)
 
-	s.notifyTaskChanged(ctx, task.AlgorithmID)
+	allAlgoIDs := append(oldAlgoIDs, "")
+	for _, sub := range task.Algorithms {
+		allAlgoIDs = append(allAlgoIDs, sub.AlgorithmID)
+	}
+	s.notifyTasksChanged(ctx, allAlgoIDs)
 	return task, nil
 }
 
-// DeleteTask removes an analysis task and notifies the downstream listener.
+// SaveTask atomically creates or updates a channel task and its algorithms within budget.
+func (s *Service) SaveTask(ctx context.Context, t *Task) error {
+	if t == nil {
+		return apperr.Invalid("INVALID_TASK_CONFIG", "task payload is nil", nil)
+	}
+	if t.CameraID == "" {
+		return apperr.Invalid("VALIDATION_FAILED", "cameraId is required", nil)
+	}
+	if t.ID == "" {
+		t.ID = idutil.New()
+	}
+
+	if err := s.validateAlgorithms(ctx, t.Algorithms); err != nil {
+		return err
+	}
+
+	var oldAlgoIDs []string
+	if existing, err := s.store.GetTaskByCamera(ctx, t.CameraID); err == nil && existing != nil {
+		for _, sub := range existing.Algorithms {
+			oldAlgoIDs = append(oldAlgoIDs, sub.AlgorithmID)
+		}
+	}
+
+	if err := s.store.SaveTaskWithinBudget(ctx, t, MaxComputePoints); err != nil {
+		if errors.Is(err, ErrComputeBudgetExceeded) {
+			return apperr.Conflict("COMPUTE_BUDGET_EXCEEDED", "total compute budget exceeded", err)
+		}
+		if errors.Is(err, ErrNotFound) {
+			return apperr.NotFound("ALGORITHM_NOT_FOUND", "referenced algorithm not found", err)
+		}
+		return apperr.Internal("TASK_SAVE_FAILED", "failed to save analysis task", err)
+	}
+
+	allAlgoIDs := append(oldAlgoIDs, "")
+	for _, sub := range t.Algorithms {
+		allAlgoIDs = append(allAlgoIDs, sub.AlgorithmID)
+	}
+	s.notifyTasksChanged(ctx, allAlgoIDs)
+	return nil
+}
+
+// DeleteTask removes an analysis task and notifies downstream listeners.
 func (s *Service) DeleteTask(ctx context.Context, id string) error {
 	task, err := s.store.GetTask(ctx, id)
 	if err != nil {
@@ -214,14 +281,31 @@ func (s *Service) DeleteTask(ctx context.Context, id string) error {
 		return apperr.Internal("TASK_DELETE_FAILED", "failed to delete task", err)
 	}
 
-	s.logger.Info("analysis task deleted", zap.String("id", id), zap.String("algorithm_id", task.AlgorithmID))
-	s.notifyTaskChanged(ctx, task.AlgorithmID)
+	s.logger.Info("analysis task deleted", zap.String("id", id), zap.Int("algorithms", len(task.Algorithms)))
+
+	var algoIDs []string
+	for _, sub := range task.Algorithms {
+		algoIDs = append(algoIDs, sub.AlgorithmID)
+	}
+	s.notifyTasksChanged(ctx, algoIDs)
 	return nil
 }
 
 // GetTask returns a task by its ID.
 func (s *Service) GetTask(ctx context.Context, id string) (*Task, error) {
 	task, err := s.store.GetTask(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, apperr.NotFound("TASK_NOT_FOUND", "analysis task not found", err)
+		}
+		return nil, apperr.Internal("INTERNAL_ERROR", "failed to query task", err)
+	}
+	return task, nil
+}
+
+// GetTaskByCamera returns a task by its camera ID.
+func (s *Service) GetTaskByCamera(ctx context.Context, cameraID string) (*Task, error) {
+	task, err := s.store.GetTaskByCamera(ctx, cameraID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return nil, apperr.NotFound("TASK_NOT_FOUND", "analysis task not found", err)
@@ -240,32 +324,4 @@ func (s *Service) ListTasks(ctx context.Context, cameraID, algorithmID string) (
 		return s.store.ListTasksByAlgorithm(ctx, algorithmID)
 	}
 	return s.store.ListTasks(ctx)
-}
-
-// DeleteTasksByCamera cleans up tasks when a camera is removed.
-func (s *Service) DeleteTasksByCamera(ctx context.Context, cameraID string) error {
-	tasks, err := s.store.ListTasksByCamera(ctx, cameraID)
-	if err != nil {
-		return err
-	}
-	if err := s.store.DeleteTasksByCamera(ctx, cameraID); err != nil {
-		return err
-	}
-	visited := make(map[string]struct{})
-	for _, t := range tasks {
-		if _, ok := visited[t.AlgorithmID]; !ok {
-			visited[t.AlgorithmID] = struct{}{}
-			s.notifyTaskChanged(ctx, t.AlgorithmID)
-		}
-	}
-	return nil
-}
-
-// DeleteTasksByAlgorithm cleans up tasks when an algorithm is uninstalled.
-func (s *Service) DeleteTasksByAlgorithm(ctx context.Context, algorithmID string) error {
-	if err := s.store.DeleteTasksByAlgorithm(ctx, algorithmID); err != nil {
-		return err
-	}
-	s.notifyTaskChanged(ctx, algorithmID)
-	return nil
 }

@@ -75,21 +75,26 @@ func (c *RegionConfigCache) Reload(ctx context.Context) error {
 		if !t.Enabled {
 			continue
 		}
-		if t.RegionConfigJSON == "" || t.RegionConfigJSON == "{}" {
-			continue
-		}
-		cfg, err := region.ParseConfig(t.RegionConfigJSON)
-		if err != nil {
-			c.logger.Warn("skip invalid region config in cache reload",
-				zap.String("task_id", t.ID),
-				zap.String("camera_id", t.CameraID),
-				zap.String("algorithm_id", t.AlgorithmID),
-				zap.Error(err),
-			)
-			continue
-		}
-		if !cfg.IsEmpty() {
-			newMap[RegionKey{CameraID: t.CameraID, AlgorithmID: t.AlgorithmID}] = cfg
+		for _, algo := range t.Algorithms {
+			if !algo.Enabled {
+				continue
+			}
+			if algo.RegionConfigJSON == "" || algo.RegionConfigJSON == "{}" {
+				continue
+			}
+			cfg, err := region.ParseConfig(algo.RegionConfigJSON)
+			if err != nil {
+				c.logger.Warn("skip invalid region config in cache reload",
+					zap.String("task_id", t.ID),
+					zap.String("camera_id", t.CameraID),
+					zap.String("algorithm_id", algo.AlgorithmID),
+					zap.Error(err),
+				)
+				continue
+			}
+			if !cfg.IsEmpty() {
+				newMap[RegionKey{CameraID: t.CameraID, AlgorithmID: algo.AlgorithmID}] = cfg
+			}
 		}
 	}
 

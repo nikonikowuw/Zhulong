@@ -67,17 +67,23 @@ func TestServiceCreateTask(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Missing CameraID
-	err := svc.CreateTask(ctx, &task.Task{AlgorithmID: "algo_helmet"})
+	err := svc.CreateTask(ctx, &task.Task{
+		Algorithms: []task.TaskAlgorithm{{AlgorithmID: "algo_helmet"}},
+	})
 	if err == nil {
 		t.Fatal("expected error on missing CameraID")
 	}
 
 	// 2. Normal creation
 	tsk := &task.Task{
-		CameraID:    "cam_100",
-		AlgorithmID: "algo_helmet",
-		SampleFPS:   5,
-		ConfigJSON:  `{"threshold": 0.8}`,
+		CameraID: "cam_100",
+		Algorithms: []task.TaskAlgorithm{
+			{
+				AlgorithmID: "algo_helmet",
+				SampleFPS:   5,
+				ConfigJSON:  `{"threshold": 0.8}`,
+			},
+		},
 	}
 	if err := svc.CreateTask(ctx, tsk); err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
@@ -89,10 +95,12 @@ func TestServiceCreateTask(t *testing.T) {
 		t.Fatalf("expected 1 notification, got %d", listener.count())
 	}
 
-	// 3. Duplicate task for same camera and algorithm
+	// 3. Duplicate task for same camera
 	dup := &task.Task{
-		CameraID:    "cam_100",
-		AlgorithmID: "algo_helmet",
+		CameraID: "cam_100",
+		Algorithms: []task.TaskAlgorithm{
+			{AlgorithmID: "algo_helmet"},
+		},
 	}
 	err = svc.CreateTask(ctx, dup)
 	if err == nil {
@@ -109,9 +117,13 @@ func TestServiceCreateTask(t *testing.T) {
 
 	// 4. Invalid config schema
 	invalidCfg := &task.Task{
-		CameraID:    "cam_101",
-		AlgorithmID: "algo_helmet",
-		ConfigJSON:  `{"threshold": "not_a_number"}`,
+		CameraID: "cam_101",
+		Algorithms: []task.TaskAlgorithm{
+			{
+				AlgorithmID: "algo_helmet",
+				ConfigJSON:  `{"threshold": "not_a_number"}`,
+			},
+		},
 	}
 	err = svc.CreateTask(ctx, invalidCfg)
 	if err == nil {
@@ -120,9 +132,13 @@ func TestServiceCreateTask(t *testing.T) {
 
 	// 5. Invalid region config
 	invalidRegion := &task.Task{
-		CameraID:         "cam_102",
-		AlgorithmID:      "algo_helmet",
-		RegionConfigJSON: `{"roi": [[0.8, 0.2, 0.5, 0.9]]}`, // degenerate x1 >= x2
+		CameraID: "cam_102",
+		Algorithms: []task.TaskAlgorithm{
+			{
+				AlgorithmID:      "algo_helmet",
+				RegionConfigJSON: `{"roi": [[0.8, 0.2, 0.5, 0.9]]}`, // degenerate x1 >= x2
+			},
+		},
 	}
 	err = svc.CreateTask(ctx, invalidRegion)
 	if err == nil {
@@ -143,10 +159,14 @@ func TestServiceUpdateTask(t *testing.T) {
 	ctx := context.Background()
 
 	tsk := &task.Task{
-		CameraID:    "cam_200",
-		AlgorithmID: "algo_helmet",
-		SampleFPS:   5,
-		ConfigJSON:  `{"threshold": 0.5}`,
+		CameraID: "cam_200",
+		Algorithms: []task.TaskAlgorithm{
+			{
+				AlgorithmID: "algo_helmet",
+				SampleFPS:   5,
+				ConfigJSON:  `{"threshold": 0.5}`,
+			},
+		},
 	}
 	if err := svc.CreateTask(ctx, tsk); err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
@@ -155,13 +175,18 @@ func TestServiceUpdateTask(t *testing.T) {
 	fps := 15
 	cfg := `{"threshold": 0.9}`
 	updated, err := svc.UpdateTask(ctx, tsk.ID, &task.UpdateTaskRequest{
-		SampleFPS:  fps,
-		ConfigJSON: cfg,
+		Algorithms: &[]task.TaskAlgorithmItem{
+			{
+				AlgorithmID: "algo_helmet",
+				SampleFPS:   fps,
+				ConfigJSON:  cfg,
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("UpdateTask failed: %v", err)
 	}
-	if updated.SampleFPS != 15 || updated.ConfigJSON != cfg {
+	if len(updated.Algorithms) != 1 || updated.Algorithms[0].SampleFPS != 15 || updated.Algorithms[0].ConfigJSON != cfg {
 		t.Fatalf("unexpected updated fields: %+v", updated)
 	}
 	if listener.count() != 2 {
@@ -171,7 +196,12 @@ func TestServiceUpdateTask(t *testing.T) {
 	// Invalid region config on update
 	badRegion := `{"mask": [[-0.1, 0.1, 0.5, 0.5]]}`
 	_, err = svc.UpdateTask(ctx, tsk.ID, &task.UpdateTaskRequest{
-		RegionConfigJSON: badRegion,
+		Algorithms: &[]task.TaskAlgorithmItem{
+			{
+				AlgorithmID:      "algo_helmet",
+				RegionConfigJSON: badRegion,
+			},
+		},
 	})
 	if err == nil {
 		t.Fatal("expected region config validation failure on update")
@@ -192,9 +222,13 @@ func TestServiceDeleteTask(t *testing.T) {
 	ctx := context.Background()
 
 	tsk := &task.Task{
-		CameraID:    "cam_300",
-		AlgorithmID: "algo_helmet",
-		SampleFPS:   5,
+		CameraID: "cam_300",
+		Algorithms: []task.TaskAlgorithm{
+			{
+				AlgorithmID: "algo_helmet",
+				SampleFPS:   5,
+			},
+		},
 	}
 	if err := svc.CreateTask(ctx, tsk); err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
