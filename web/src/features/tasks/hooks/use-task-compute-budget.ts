@@ -27,13 +27,17 @@ export function useTaskComputeBudget(
 
     let totalUsedPoints = 0
     let enabledCount = 0
+    let totalAlgoCount = 0
 
     for (const t of tasks) {
-      if (t.enabled) {
-        enabledCount++
-        const algo = algoMap.get(t.algorithmId)
-        const cost = algo?.computeCost ?? 10
-        totalUsedPoints += cost * t.sampleFps
+      for (const sub of t.algorithms ?? []) {
+        totalAlgoCount++
+        if (t.enabled && sub.enabled) {
+          enabledCount++
+          const algo = algoMap.get(sub.algorithmId)
+          const cost = algo?.computeCost ?? 10
+          totalUsedPoints += cost * sub.sampleFps
+        }
       }
     }
 
@@ -50,7 +54,7 @@ export function useTaskComputeBudget(
       isOverBudget,
       isWarning,
       enabledCount,
-      totalCount: tasks.length,
+      totalCount: totalAlgoCount,
     }
   }, [tasks, algorithms])
 }

@@ -21,10 +21,21 @@ describe('tasksApi', () => {
       {
         id: 'task-01',
         cameraId: 'cam-01',
-        algorithmId: 'algo-01',
+        name: 'Cam 1 Task',
         enabled: true,
-        sampleFps: 5,
-        configJson: '{"thresh": 0.8}',
+        algorithms: [
+          {
+            id: 'sub-01',
+            taskId: 'task-01',
+            algorithmId: 'algo-01',
+            enabled: true,
+            sampleFps: 5,
+            configJson: '{"thresh": 0.8}',
+            regionConfigJson: '{}',
+            createdAt: '2026-10-17T00:00:00Z',
+            updatedAt: '2026-10-17T00:00:00Z',
+          },
+        ],
         createdAt: '2026-10-17T00:00:00Z',
         updatedAt: '2026-10-17T00:00:00Z',
       },
@@ -41,7 +52,7 @@ describe('tasksApi', () => {
 
     expect(result).toHaveLength(1)
     expect(result[0].id).toBe('task-01')
-    expect(result[0].sampleFps).toBe(5)
+    expect(result[0].algorithms[0].sampleFps).toBe(5)
     expect(apiClient.get).toHaveBeenCalledWith('/tasks', {
       params: {
         camera_id: 'cam-01',
@@ -54,10 +65,21 @@ describe('tasksApi', () => {
     const mockTask = {
       id: 'task-single',
       cameraId: 'cam-02',
-      algorithmId: 'algo-02',
+      name: '',
       enabled: false,
-      sampleFps: 10,
-      configJson: '{}',
+      algorithms: [
+        {
+          id: 'sub-02',
+          taskId: 'task-single',
+          algorithmId: 'algo-02',
+          enabled: false,
+          sampleFps: 10,
+          configJson: '{}',
+          regionConfigJson: '{}',
+          createdAt: '2026-10-17T00:00:00Z',
+          updatedAt: '2026-10-17T00:00:00Z',
+        },
+      ],
       createdAt: '2026-10-17T00:00:00Z',
       updatedAt: '2026-10-17T00:00:00Z',
     }
@@ -72,6 +94,56 @@ describe('tasksApi', () => {
     expect(apiClient.get).toHaveBeenCalledWith('/tasks/task-single')
   })
 
+  it('saveChannelTask puts payload to /tasks/camera/:cameraId', async () => {
+    const payload = {
+      cameraId: 'cam-channel-1',
+      name: 'Channel Task',
+      enabled: true,
+      algorithms: [
+        {
+          algorithmId: 'algo-01',
+          sampleFps: 10,
+          enabled: true,
+          configJson: '{}',
+        },
+      ],
+    }
+
+    const mockSaved = {
+      id: 'task-channel-1',
+      cameraId: 'cam-channel-1',
+      name: 'Channel Task',
+      enabled: true,
+      algorithms: [
+        {
+          id: 'sub-01',
+          taskId: 'task-channel-1',
+          algorithmId: 'algo-01',
+          sampleFps: 10,
+          enabled: true,
+          configJson: '{}',
+          regionConfigJson: '{}',
+          createdAt: '2026-10-17T00:00:00Z',
+          updatedAt: '2026-10-17T00:00:00Z',
+        },
+      ],
+      createdAt: '2026-10-17T00:00:00Z',
+      updatedAt: '2026-10-17T00:00:00Z',
+    }
+
+    vi.mocked(apiClient.put).mockResolvedValue({
+      data: { code: 'OK', message: 'success', data: mockSaved },
+    } as never)
+
+    const result = await tasksApi.saveChannelTask(payload)
+    expect(result.id).toBe('task-channel-1')
+    expect(result.algorithms[0].sampleFps).toBe(10)
+    expect(apiClient.put).toHaveBeenCalledWith(
+      '/tasks/camera/cam-channel-1',
+      payload
+    )
+  })
+
   it('createTask posts payload to /tasks', async () => {
     const payload = {
       cameraId: 'cam-new',
@@ -83,7 +155,22 @@ describe('tasksApi', () => {
 
     const mockCreated = {
       id: 'task-created',
-      ...payload,
+      cameraId: 'cam-new',
+      name: '',
+      enabled: true,
+      algorithms: [
+        {
+          id: 'sub-new',
+          taskId: 'task-created',
+          algorithmId: 'algo-new',
+          sampleFps: 15,
+          enabled: true,
+          configJson: '{"roi": [0,0,100,100]}',
+          regionConfigJson: '{}',
+          createdAt: '2026-10-17T00:00:00Z',
+          updatedAt: '2026-10-17T00:00:00Z',
+        },
+      ],
       createdAt: '2026-10-17T00:00:00Z',
       updatedAt: '2026-10-17T00:00:00Z',
     }
@@ -105,16 +192,29 @@ describe('tasksApi', () => {
 
   it('updateTask puts payload to /tasks/:id', async () => {
     const updatePayload = {
-      sampleFps: 20,
       enabled: false,
+      sampleFps: 20,
       configJson: '{"updated": true}',
     }
 
     const mockUpdated = {
       id: 'task-up',
       cameraId: 'cam-01',
-      algorithmId: 'algo-01',
-      ...updatePayload,
+      name: '',
+      enabled: false,
+      algorithms: [
+        {
+          id: 'sub-01',
+          taskId: 'task-up',
+          algorithmId: 'algo-01',
+          sampleFps: 20,
+          enabled: false,
+          configJson: '{"updated": true}',
+          regionConfigJson: '{}',
+          createdAt: '2026-10-17T00:00:00Z',
+          updatedAt: '2026-10-17T00:00:00Z',
+        },
+      ],
       createdAt: '2026-10-17T00:00:00Z',
       updatedAt: '2026-10-17T00:00:00Z',
     }
@@ -124,7 +224,7 @@ describe('tasksApi', () => {
     } as never)
 
     const result = await tasksApi.updateTask('task-up', updatePayload)
-    expect(result.sampleFps).toBe(20)
+    expect(result.algorithms[0].sampleFps).toBe(20)
     expect(result.enabled).toBe(false)
     expect(apiClient.put).toHaveBeenCalledWith('/tasks/task-up', {
       sampleFps: 20,

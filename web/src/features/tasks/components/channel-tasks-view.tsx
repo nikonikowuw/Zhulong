@@ -114,18 +114,23 @@ export function ChannelTasksView({
                 ) : (
                   group.items.map((item) => (
                     <div
-                      key={item.task.id}
+                      key={item.algorithmItem.id}
                       className='flex items-center justify-between rounded-lg border border-border/60 bg-muted/20 px-2.5 py-1.5 text-xs'
                     >
                       <div className='flex items-center gap-2 overflow-hidden'>
-                        <TaskStatusBadge enabled={item.task.enabled} />
+                        <TaskStatusBadge
+                          enabled={
+                            item.task.enabled && item.algorithmItem.enabled
+                          }
+                        />
                         <span className='truncate font-medium text-foreground'>
-                          {item.algorithm?.name || item.task.algorithmId}
+                          {item.algorithm?.name ||
+                            item.algorithmItem.algorithmId}
                         </span>
                       </div>
 
                       <div className='flex shrink-0 items-center gap-1.5 text-muted-foreground'>
-                        <span>{item.task.sampleFps} FPS</span>
+                        <span>{item.algorithmItem.sampleFps} FPS</span>
                         <span>·</span>
                         <span className='font-mono font-medium text-foreground'>
                           {item.computePoints}{' '}

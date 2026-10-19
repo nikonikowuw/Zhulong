@@ -82,33 +82,53 @@ describe('useTaskComputeBudget', () => {
       {
         id: 't-1',
         cameraId: 'cam-01',
-        algorithmId: 'algo-face',
+        name: 'Cam 1',
         enabled: true,
-        sampleFps: 10, // 20 cost * 10 = 200 points
-        configJson: '{}',
-        regionConfigJson: '{}',
+        algorithms: [
+          {
+            id: 'sub-1',
+            taskId: 't-1',
+            algorithmId: 'algo-face',
+            enabled: true,
+            sampleFps: 10, // 20 cost * 10 = 200 points
+            configJson: '{}',
+            regionConfigJson: '{}',
+            createdAt: '',
+            updatedAt: '',
+          },
+          {
+            id: 'sub-2',
+            taskId: 't-1',
+            algorithmId: 'algo-fire',
+            enabled: false, // disabled should not count towards budget
+            sampleFps: 5,
+            configJson: '{}',
+            regionConfigJson: '{}',
+            createdAt: '',
+            updatedAt: '',
+          },
+        ],
         createdAt: '',
         updatedAt: '',
       },
       {
         id: 't-2',
-        cameraId: 'cam-01',
-        algorithmId: 'algo-fire',
-        enabled: false, // disabled should not count towards budget
-        sampleFps: 5,
-        configJson: '{}',
-        regionConfigJson: '{}',
-        createdAt: '',
-        updatedAt: '',
-      },
-      {
-        id: 't-3',
         cameraId: 'cam-02',
-        algorithmId: 'algo-fire',
+        name: 'Cam 2',
         enabled: true,
-        sampleFps: 10, // 10 cost * 10 = 100 points
-        configJson: '{}',
-        regionConfigJson: '{}',
+        algorithms: [
+          {
+            id: 'sub-3',
+            taskId: 't-2',
+            algorithmId: 'algo-fire',
+            enabled: true,
+            sampleFps: 10, // 10 cost * 10 = 100 points
+            configJson: '{}',
+            regionConfigJson: '{}',
+            createdAt: '',
+            updatedAt: '',
+          },
+        ],
         createdAt: '',
         updatedAt: '',
       },
@@ -132,16 +152,26 @@ describe('useTaskComputeBudget', () => {
       {
         id: 't-heavy',
         cameraId: 'cam-01',
-        algorithmId: 'algo-face',
+        name: '',
         enabled: true,
-        sampleFps: 45, // 20 * 45 = 900 points
-        configJson: '{}',
-        regionConfigJson: '{}',
+        algorithms: [
+          {
+            id: 'sub-heavy',
+            taskId: 't-heavy',
+            algorithmId: 'algo-face',
+            enabled: true,
+            sampleFps: 45, // 20 * 45 = 900 points
+            configJson: '{}',
+            regionConfigJson: '{}',
+            createdAt: '',
+            updatedAt: '',
+          },
+        ],
         createdAt: '',
         updatedAt: '',
       },
     ]
- 
+
     const { result: warningResult } = await renderHook(() =>
       useTaskComputeBudget(tasks, mockAlgorithms)
     )
@@ -154,11 +184,21 @@ describe('useTaskComputeBudget', () => {
       {
         id: 't-over',
         cameraId: 'cam-01',
-        algorithmId: 'algo-face',
+        name: '',
         enabled: true,
-        sampleFps: 55, // 20 * 55 = 1100 points
-        configJson: '{}',
-        regionConfigJson: '{}',
+        algorithms: [
+          {
+            id: 'sub-over',
+            taskId: 't-over',
+            algorithmId: 'algo-face',
+            enabled: true,
+            sampleFps: 55, // 20 * 55 = 1100 points
+            configJson: '{}',
+            regionConfigJson: '{}',
+            createdAt: '',
+            updatedAt: '',
+          },
+        ],
         createdAt: '',
         updatedAt: '',
       },
@@ -177,22 +217,32 @@ describe('useChannelTasks', () => {
       {
         id: 't-1',
         cameraId: 'cam-01',
-        algorithmId: 'algo-face',
+        name: '',
         enabled: true,
-        sampleFps: 5, // 20 * 5 = 100
-        configJson: '{}',
-        regionConfigJson: '{}',
-        createdAt: '',
-        updatedAt: '',
-      },
-      {
-        id: 't-2',
-        cameraId: 'cam-01',
-        algorithmId: 'algo-fire',
-        enabled: true,
-        sampleFps: 10, // 10 * 10 = 100
-        configJson: '{}',
-        regionConfigJson: '{}',
+        algorithms: [
+          {
+            id: 'sub-1',
+            taskId: 't-1',
+            algorithmId: 'algo-face',
+            enabled: true,
+            sampleFps: 5, // 20 * 5 = 100
+            configJson: '{}',
+            regionConfigJson: '{}',
+            createdAt: '',
+            updatedAt: '',
+          },
+          {
+            id: 'sub-2',
+            taskId: 't-1',
+            algorithmId: 'algo-fire',
+            enabled: true,
+            sampleFps: 10, // 10 * 10 = 100
+            configJson: '{}',
+            regionConfigJson: '{}',
+            createdAt: '',
+            updatedAt: '',
+          },
+        ],
         createdAt: '',
         updatedAt: '',
       },

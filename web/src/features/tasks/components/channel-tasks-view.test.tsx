@@ -43,9 +43,19 @@ describe('ChannelTasksView', () => {
         },
         items: [
           {
+            taskId: 'task-1',
             task: {
               id: 'task-1',
               cameraId: 'cam-gate',
+              name: '',
+              enabled: true,
+              algorithms: [],
+              createdAt: '',
+              updatedAt: '',
+            },
+            algorithmItem: {
+              id: 'sub-1',
+              taskId: 'task-1',
               algorithmId: 'algo-face',
               enabled: true,
               sampleFps: 10,

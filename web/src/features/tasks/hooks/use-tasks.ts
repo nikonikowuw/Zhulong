@@ -8,6 +8,7 @@ import {
   tasksApi,
   type CreateTaskDto,
   type GetTasksParams,
+  type SaveChannelTaskDto,
   type UpdateTaskDto,
 } from '../api/tasks-api'
 import { type Task } from '../data/schema'
@@ -61,6 +62,20 @@ export function useUpdateTask() {
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: UpdateTaskDto }) =>
       tasksApi.updateTask(id, data),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: TASKS_QUERY_KEY })
+    },
+  })
+}
+
+/**
+ * 保存通道分析任务 Mutation (原子 Upsert)
+ */
+export function useSaveChannelTask() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: SaveChannelTaskDto) => tasksApi.saveChannelTask(data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: TASKS_QUERY_KEY })
     },

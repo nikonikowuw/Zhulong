@@ -92,26 +92,64 @@ export function TasksTable({
     [algorithms]
   )
 
+  const flatRows = useMemo(() => {
+    const rows: {
+      task: Task
+      sub: Task['algorithms'][number]
+      id: string
+      taskId: string
+      cameraId: string
+      algorithmId: string
+      sampleFps: number
+      enabled: boolean
+      isChannelEnabled: boolean
+      isAlgoEnabled: boolean
+      createdAt: string
+      updatedAt: string
+    }[] = []
+    for (const task of tasks) {
+      for (const sub of task.algorithms ?? []) {
+        rows.push({
+          task,
+          sub,
+          id: sub.id,
+          taskId: task.id,
+          cameraId: task.cameraId,
+          algorithmId: sub.algorithmId,
+          sampleFps: sub.sampleFps,
+          enabled: task.enabled && sub.enabled,
+          isChannelEnabled: task.enabled,
+          isAlgoEnabled: sub.enabled,
+          createdAt: sub.createdAt,
+          updatedAt: sub.updatedAt,
+        })
+      }
+    }
+    return rows
+  }, [tasks])
+
   const filteredTasks = useMemo(() => {
-    return tasks.filter((task) => {
-      if (cameraFilter !== 'all' && task.cameraId !== cameraFilter) {
+    return flatRows.filter((row) => {
+      if (cameraFilter !== 'all' && row.cameraId !== cameraFilter) {
         return false
       }
-      if (algoFilter !== 'all' && task.algorithmId !== algoFilter) {
+      if (algoFilter !== 'all' && row.algorithmId !== algoFilter) {
         return false
       }
-      if (statusFilter === 'running' && !task.enabled) {
+      if (statusFilter === 'running' && !row.enabled) {
         return false
       }
-      if (statusFilter === 'paused' && task.enabled) {
+      if (statusFilter === 'paused' && row.enabled) {
         return false
       }
 
       if (globalFilter.trim()) {
         const q = globalFilter.trim().toLowerCase()
-        const camName = cameraMap.get(task.cameraId)?.name.toLowerCase() || ''
-        const algoName = algoMap.get(task.algorithmId)?.name.toLowerCase() || ''
-        const matchesId = task.id.toLowerCase().includes(q)
+        const camName = cameraMap.get(row.cameraId)?.name.toLowerCase() || ''
+        const algoName = algoMap.get(row.algorithmId)?.name.toLowerCase() || ''
+        const matchesId =
+          row.taskId.toLowerCase().includes(q) ||
+          row.id.toLowerCase().includes(q)
         if (!matchesId && !camName.includes(q) && !algoName.includes(q)) {
           return false
         }
@@ -120,7 +158,7 @@ export function TasksTable({
       return true
     })
   }, [
-    tasks,
+    flatRows,
     cameraFilter,
     algoFilter,
     statusFilter,
@@ -136,12 +174,24 @@ export function TasksTable({
     setTimeout(() => setCopiedId(null), 2000)
   }
 
-  const handleToggleTask = (task: Task) => {
-    setTogglingTaskId(task.id)
+  const handleToggleTask = (row: (typeof flatRows)[number]) => {
+    setTogglingTaskId(row.id)
+    const updatedAlgos = row.task.algorithms.map((a) =>
+      a.id === row.id ? { ...a, enabled: !row.isAlgoEnabled } : a
+    )
     updateMutation.mutate(
       {
-        id: task.id,
-        data: { enabled: !task.enabled },
+        id: row.taskId,
+        data: {
+          algorithms: updatedAlgos.map((a) => ({
+            id: a.id,
+            algorithmId: a.algorithmId,
+            sampleFps: a.sampleFps,
+            enabled: a.enabled,
+            configJson: a.configJson,
+            regionConfigJson: a.regionConfigJson,
+          })),
+        },
       },
       {
         onSuccess: () => {
@@ -335,25 +385,25 @@ export function TasksTable({
                 </TableCell>
               </TableRow>
             ) : (
-              filteredTasks.map((task) => {
-                const camera = cameraMap.get(task.cameraId)
-                const algorithm = algoMap.get(task.algorithmId)
+              filteredTasks.map((row) => {
+                const camera = cameraMap.get(row.cameraId)
+                const algorithm = algoMap.get(row.algorithmId)
                 const cost = algorithm?.computeCost ?? 10
-                const points = cost * task.sampleFps
+                const points = cost * row.sampleFps
 
                 return (
-                  <TableRow key={task.id} className='group'>
+                  <TableRow key={row.id} className='group'>
                     {/* ID 列 */}
                     <TableCell className='font-mono text-xs'>
                       <div className='flex items-center gap-1.5'>
-                        <span>{task.id.slice(0, 8)}...</span>
+                        <span>{row.id.slice(0, 8)}...</span>
                         <Button
                           variant='ghost'
                           size='icon'
                           className='h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100'
-                          onClick={() => handleCopyId(task.id)}
+                          onClick={() => handleCopyId(row.id)}
                         >
-                          {copiedId === task.id ? (
+                          {copiedId === row.id ? (
                             <Check className='h-3 w-3 text-emerald-500' />
                           ) : (
                             <Copy className='h-3 w-3 text-muted-foreground' />
@@ -364,13 +414,13 @@ export function TasksTable({
 
                     {/* 摄像头 */}
                     <TableCell className='text-xs font-medium'>
-                      <div>{camera?.name || task.cameraId}</div>
+                      <div>{camera?.name || row.cameraId}</div>
                     </TableCell>
 
                     {/* 算法 */}
                     <TableCell className='text-xs'>
                       <div className='font-medium'>
-                        {algorithm?.name || task.algorithmId}
+                        {algorithm?.name || row.algorithmId}
                       </div>
                       <div className='text-[10px] text-muted-foreground'>
                         {cost} {t('dialog.costPerFrame', '点/帧')}
@@ -379,7 +429,7 @@ export function TasksTable({
 
                     {/* 采样帧率 */}
                     <TableCell className='text-xs font-medium'>
-                      {task.sampleFps} FPS
+                      {row.sampleFps} FPS
                     </TableCell>
 
                     {/* 算力开销 */}
@@ -391,11 +441,11 @@ export function TasksTable({
                     <TableCell className='text-xs'>
                       <div className='flex items-center gap-2'>
                         <Switch
-                          checked={task.enabled}
-                          disabled={togglingTaskId === task.id}
-                          onCheckedChange={() => handleToggleTask(task)}
+                          checked={row.enabled}
+                          disabled={togglingTaskId === row.id}
+                          onCheckedChange={() => handleToggleTask(row)}
                         />
-                        <TaskStatusBadge enabled={task.enabled} />
+                        <TaskStatusBadge enabled={row.enabled} />
                       </div>
                     </TableCell>
 
@@ -413,7 +463,7 @@ export function TasksTable({
                           variant='ghost'
                           size='icon'
                           className='h-7 w-7'
-                          onClick={() => onEditTask(task)}
+                          onClick={() => onEditTask(row.task)}
                         >
                           <Pencil className='h-3.5 w-3.5' />
                         </Button>
@@ -421,7 +471,7 @@ export function TasksTable({
                           variant='ghost'
                           size='icon'
                           className='h-7 w-7 text-destructive hover:text-destructive'
-                          onClick={() => onDeleteTask(task)}
+                          onClick={() => onDeleteTask(row.task)}
                         >
                           <Trash2 className='h-3.5 w-3.5' />
                         </Button>

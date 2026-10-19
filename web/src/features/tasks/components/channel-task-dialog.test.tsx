@@ -75,18 +75,43 @@ function buildAlgorithm(overrides: Partial<Algorithm> = {}): Algorithm {
   }
 }
 
-function buildTask(overrides: Partial<Task> = {}): Task {
+function buildTask(
+  overrides: Partial<Task> & {
+    configJson?: string
+    sampleFps?: number
+    algorithmId?: string
+    regionConfigJson?: string
+  } = {}
+): Task {
+  const {
+    configJson,
+    sampleFps,
+    algorithmId,
+    regionConfigJson,
+    ...taskOverrides
+  } = overrides
+
+  const subAlgo = {
+    id: 'sub-1',
+    taskId: taskOverrides.id ?? 'task-1',
+    algorithmId: algorithmId ?? 'algo-face',
+    enabled: true,
+    sampleFps: sampleFps ?? 10,
+    configJson: configJson ?? '{"threshold":0.6,"save_crop":false}',
+    regionConfigJson: regionConfigJson ?? '{}',
+    createdAt: '',
+    updatedAt: '',
+  }
+
   return {
     id: 'task-1',
     cameraId: 'cam-1',
-    algorithmId: 'algo-face',
+    name: '',
     enabled: true,
-    sampleFps: 10,
-    configJson: '{"threshold":0.6,"save_crop":false}',
-    regionConfigJson: '{}',
+    algorithms: [subAlgo],
     createdAt: '',
     updatedAt: '',
-    ...overrides,
+    ...taskOverrides,
   }
 }
 

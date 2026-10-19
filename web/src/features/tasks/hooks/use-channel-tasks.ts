@@ -17,36 +17,40 @@ export function useChannelTasks(
 ): ChannelTaskGroup[] {
   return useMemo(() => {
     const algoMap = new Map(algorithms.map((a) => [a.id, a]))
-    const tasksByCamera = new Map<string, Task[]>()
+    const taskByCamera = new Map<string, Task>()
 
     for (const t of tasks) {
-      const list = tasksByCamera.get(t.cameraId) ?? []
-      list.push(t)
-      tasksByCamera.set(t.cameraId, list)
+      taskByCamera.set(t.cameraId, t)
     }
 
     return cameras.map((camera) => {
-      const cameraTasks = tasksByCamera.get(camera.id) ?? []
+      const task = taskByCamera.get(camera.id)
       let totalChannelPoints = 0
       let activeCount = 0
 
-      const items: ChannelTaskItem[] = cameraTasks.map((task) => {
-        const algorithm = algoMap.get(task.algorithmId)
-        const cost = algorithm?.computeCost ?? 10
-        const points = cost * task.sampleFps
-        if (task.enabled) {
-          totalChannelPoints += points
-          activeCount++
+      const items: ChannelTaskItem[] = []
+      if (task) {
+        for (const sub of task.algorithms) {
+          const algorithm = algoMap.get(sub.algorithmId)
+          const cost = algorithm?.computeCost ?? 10
+          const points = cost * sub.sampleFps
+          if (task.enabled && sub.enabled) {
+            totalChannelPoints += points
+            activeCount++
+          }
+          items.push({
+            taskId: task.id,
+            task,
+            algorithmItem: sub,
+            algorithm,
+            computePoints: points,
+          })
         }
-        return {
-          task,
-          algorithm,
-          computePoints: points,
-        }
-      })
+      }
 
       return {
         camera,
+        task,
         items,
         totalChannelPoints,
         activeCount,

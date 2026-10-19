@@ -90,8 +90,10 @@ function computeInitialDrafts(
   allTasks: Task[],
   algorithms: Algorithm[]
 ): Record<string, AlgoDraftItem> {
-  const cameraTasks = allTasks.filter((t) => t.cameraId === targetCamId)
-  const taskMap = new Map(cameraTasks.map((t) => [t.algorithmId, t]))
+  const cameraTask = allTasks.find((t) => t.cameraId === targetCamId)
+  const taskMap = new Map(
+    (cameraTask?.algorithms ?? []).map((t) => [t.algorithmId, t])
+  )
 
   const initialDrafts: Record<string, AlgoDraftItem> = {}
   for (const algo of algorithms) {
@@ -162,8 +164,12 @@ function ChannelTaskDialogContent({
     let sum = 0
     for (const task of allTasks) {
       if (task.cameraId !== cameraId && task.enabled) {
-        const cost = algoMap.get(task.algorithmId)?.computeCost ?? 10
-        sum += cost * task.sampleFps
+        for (const sub of task.algorithms ?? []) {
+          if (sub.enabled) {
+            const cost = algoMap.get(sub.algorithmId)?.computeCost ?? 10
+            sum += cost * sub.sampleFps
+          }
+        }
       }
     }
     return sum
