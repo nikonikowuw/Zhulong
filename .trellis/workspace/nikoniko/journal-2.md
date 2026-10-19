@@ -1226,3 +1226,28 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 74: 完成通道多算法分析任务模型重构与全链路闭环
+<!-- trellis-session: v=2 fp=e837bf5c3e35f30b -->
+
+**Date**: 2026-10-19
+**Task**: 完成通道多算法分析任务模型重构与全链路闭环
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+重构分析任务模型为单通道多算法聚合根架构：落地 SQLite 000013 迁移无损搬迁存量数据与 region_config_json，在 internal/task 中实现单事务 1000 点算力池原子核算；适配 cross-domain 事件广播、FrameBroker 订阅与算法卸载清理；前端去除脆弱 diff 改为单次原子保存并完成 Vitest 无头浏览器测试；更新 task-guidelines 规范并通过 make check 全量门禁。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e5f5f1a` | refactor(database,task)!: rebuild analysis_tasks as channel aggregate root with task_algorithms |
+| `e0d6fdc` | refactor(web/tasks): adopt atomic channel task saving and multi-algorithm schema |
+| `7a4919f` | docs(spec): document channel aggregate root and atomic multi-algorithm task guidelines |
+
+### Status
+
+[OK] **Completed**
