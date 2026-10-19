@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 70
+- **Total Sessions**: 71
 - **Last Active**: 2026-10-19
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1052 | Active |
+| `journal-2.md` | ~1113 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 71 | 2026-10-19 | 补齐 ROI/MASK 区域策略的 AC3/AC4 测试覆盖并修复全量门禁暴露的 flaky 断言 | `2a17168`, `d7209ea` | `dev` |
 | 70 | 2026-10-19 | Fix all code-review findings on the ROI/MASK region policy changeset | `b80519c`, `2b1e14d`, `ba90724`, `5ff6ed2`, `4a902bc`, `6c63a86` | `dev` |
 | 69 | 2026-10-18 | Refactor algo config dynamic form to macOS/Linear streamlined list with high-contrast slider | `8bd921e` | `dev` |
 | 68 | 2026-10-17 | 宿主引擎人脸特征提取接入 ONNX 真实推理与 TTL 空闲自动卸载 (10-17-host-face-feature-onnx) | `b8b3188`, `dfcfff9`, `3b84797`, `43b3327` | `dev` |

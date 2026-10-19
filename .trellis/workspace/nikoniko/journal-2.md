@@ -1050,3 +1050,64 @@ Ran a two-axis review (Standards + Spec) over the uncommitted ROI/MASK region-po
 - channel-task-dialog.tsx 已 607 行（HEAD 时即 508 行），超 300 行属既有问题且不在本次 review 条目内，未拆分
 - stream_hub 保留空算法 ID 是有意为之（AI 流按摄像头共享、无法归属到单一算法；猜值会在载荷缺字段时静默错配），勿按缺陷「修复」
 - 构建后端管道（Makefile/native/scripts/build.py 的 INFERENCE_BACKEND 优先级）按用户决定保留、不回退
+
+
+## Session 71: 补齐 ROI/MASK 区域策略的 AC3/AC4 测试覆盖并修复全量门禁暴露的 flaky 断言
+<!-- trellis-session: v=2 fp=22c6152f7a52a641 -->
+
+**Date**: 2026-10-19
+**Task**: 补齐 ROI/MASK 区域策略的 AC3/AC4 测试覆盖并修复全量门禁暴露的 flaky 断言
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+Session summary was not supplied.
+
+### Main Changes
+
+### Summary
+
+Close the two acceptance-criteria test gaps left by the ROI/MASK region-policy delivery, and fix a flaky frontend assertion the full gate exposed. No production code changed — the whole changeset is test-only plus three spec notes.
+
+### Main Changes
+
+- native: `test_runner_result_algorithm_id_e2e` forks the real runner with `--algorithm-id e2e_algo` and asserts the field reaches the `MSG_RESULT` payload, closing AC3's native half (previously zero coverage: `grep -rn algorithm_id native/tests/` was empty). Polls with a bound because the callback runs on a detached read thread, so `waitpid` proves nothing.
+- native: moved `broker.stop()` before reading the captured payload. The case pushes 3 frames (up to 3 callbacks) into a non-atomic `std::string` from the reader thread; `UnixSocketServer::stop()` waits for `active_workers_ == 0`, so stopping first removes the race window that the pre-existing single-message egress test never had.
+- camera: registered a recording `AIResultConsumer` in `TestStreamHub_ConsumeAIResults_RegionFiltering`, so PRD R4's "persistence and broadcast see the same payload" is now asserted on both fan-out paths rather than only `eventHub`. Each path asserts the same hard-coded expectation, which fails loudly if either path skips the filter.
+- live: wrapped the `'live'` state assertion in `vi.waitFor`. The parent callback is flushed by `useEffect` after commit while the driving frame arrives outside `act()`, so the synchronous assertion flaked ~1 in 6 full-suite runs (0/10 single-file, load-dependent). Verified 8/8 full-suite green after the fix.
+- Verified both new assertions actually have teeth by mutation: blanking `algorithm_id` in `runner.cpp` aborts at `frame_broker_test.cpp:1075`; letting the consumer receive unfiltered results fails at `stream_hub_test.go:908` with "got 3".
+- Spec: recorded the three reusable lessons — native `algo-plugin-contract` §9.6 (egress test timing, `ASSERT_TEST_TARGETS -UNDEBUG` precondition, stream_id allocation), backend `quality-guidelines` §4.4 (N-way fan-out must be asserted per path, with the mutation check), frontend `quality-guidelines` §2.3 (`vi.waitFor` for effect-flushed state, plus the boundary that a wait must not paper over a render-derivation defect).
+
+### Testing
+
+- [OK] `make check` -> EXIT=0 全绿（frontend-check 461 用例 + native-test 21/21 + api-docs + go-check）
+- [OK] `make check` 复跑 3 轮确认稳定；前端全量套件修复前后对比：修复前 1/6 失败，修复后 8/8 全绿
+- [OK] `ZhulongFrameBrokerTests` 直跑 8/8 全过，含新用例
+- [OK] `python3 native/scripts/build.py go test -race -count=3 -run TestStreamHub_ConsumeAIResults_RegionFiltering ./internal/camera` -> ok
+- [OK] 变异测试验证鉴别力（临时改业务代码 -> 确认失败 -> 还原，工作区最终仅测试文件改动）
+- [OK] 独立 `trellis-check` 校验：无阻塞项，两个缺口均经实证具备鉴别力
+- [NOTE] `make check` 的 `pnpm install` 沙箱阻塞已消失（本次可端到端执行，与上次 journal 记录不同）
+
+### Status
+
+[OK] **Completed**（代码与测试层面；真流验收待办见 Next Steps）
+
+### Next Steps
+
+- T1 (10-18-roi-mask-region-policy) 仍保持 in_progress 未归档：AC4/AC5/AC9 需在真实码流上手工验收（ROI/MASK 是否真按底部中心过滤实时叠加、抓拍与告警，且免重启生效）。AC1/AC2/AC3/AC6/AC7/AC8/AC10 已由自动化测试覆盖。
+- T2 (10-18-channel-multi-algo-task) 会把 `region_config_json` 从主表 `analysis_tasks` re-home 到子表 `task_algorithms`；届时迁移 `000012` 的列归属会变，本任务的 `store_test.go` 相关断言需同步调整。
+- `channel-task-dialog.tsx` 已 607 行（超 300 行），属既有问题且不在本次 review 条目内，未拆分。
+- `stream_hub` 保留空算法 ID 是有意为之（AI 流按摄像头共享、无法归属到单一算法；猜值会在载荷缺字段时静默错配），勿按缺陷「修复」。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2a17168` | test(region): cover algorithm attribution egress and two-path filter parity |
+| `d7209ea` | docs(spec): record egress test timing and multi-path fan-out assertion rules |
+
+### Status
+
+[OK] **Completed**
