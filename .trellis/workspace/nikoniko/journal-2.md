@@ -1275,3 +1275,41 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 76: 工业级前端错误反馈与通知体系重构
+<!-- trellis-session: v=2 fp=5ee5f89cc9d9c2d1 -->
+
+**Date**: 2026-10-19
+**Task**: 工业级前端错误反馈与通知体系重构
+**Package**: frontend
+**Branch**: `dev`
+
+### Summary
+
+建立前端四级错误反馈架构，实现后端422 details自动映射表单输入框与自动聚焦、409 CAS版本冲突模态驻留消解，长耗时与批量任务全面升级toast.promise状态平滑变形，并由MutationCache与错误ID防抖解决全局双弹窗问题。
+
+### Main Changes
+
+- 新增 handleFormError 强类型适配器与单测，支持后端 details 解析与字段映射
+- 重构 main.tsx 中的 MutationCache，支持 meta.suppressGlobalToast 与错误 ID 去重
+- 升级 CamerasActionDialog 支持 422 字段标红与 409 CAS 冲突模态驻留
+- 升级主动诊断、批量启停/诊断、人脸上传、对时和存储测试长任务为 toast.promise 单例变形通知
+- 清理全站 15+ 个表单与弹窗组件中的冗余重复 toast.error
+- 在 frontend/development-guidelines.md 固化 2.5 节工业级表单与通知开发规范
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `57b1afd` | feat(web): implement industrial-grade error feedback and morphing toast system |
+
+### Testing
+
+- [OK] pnpm lint (ESLint 0 报错 0 警告)
+- [OK] pnpm build (tsc -b + vite 生产编译成功)
+- [OK] vitest 35 项核心 API、handleServerError 与 formError 单元测试全部通过
+
+### Status
+
+[OK] **Completed**
