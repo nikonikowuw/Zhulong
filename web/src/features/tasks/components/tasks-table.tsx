@@ -204,6 +204,37 @@ export function TasksTable({
     )
   }
 
+  const handleDeleteRow = (row: (typeof flatRows)[number]) => {
+    if ((row.task.algorithms?.length ?? 0) <= 1) {
+      onDeleteTask(row.task)
+    } else {
+      const remainingAlgos = row.task.algorithms.filter((a) => a.id !== row.id)
+      updateMutation.mutate(
+        {
+          id: row.taskId,
+          data: {
+            algorithms: remainingAlgos.map((a) => ({
+              id: a.id,
+              algorithmId: a.algorithmId,
+              sampleFps: a.sampleFps,
+              enabled: a.enabled,
+              configJson: a.configJson,
+              regionConfigJson: a.regionConfigJson,
+            })),
+          },
+        },
+        {
+          onSuccess: () => {
+            toast.success(t('table.removeAlgoSuccess', '已从通道中移除该算法'))
+          },
+          onError: () => {
+            toast.error(t('table.removeAlgoError', '移除算法失败'))
+          },
+        }
+      )
+    }
+  }
+
   const handleCameraChange = (val: string) => {
     onColumnFiltersChange?.((prev) => [
       ...prev.filter((f) => f.id !== 'camera'),
@@ -444,6 +475,7 @@ export function TasksTable({
                         />
                         <TaskStatusBadge
                           enabled={row.enabled}
+                          isChannelEnabled={row.isChannelEnabled}
                           algorithmStatus={algorithm?.status}
                         />
                       </div>
@@ -471,7 +503,12 @@ export function TasksTable({
                           variant='ghost'
                           size='icon'
                           className='h-7 w-7 text-destructive hover:text-destructive'
-                          onClick={() => onDeleteTask(row.task)}
+                          aria-label={
+                            (row.task.algorithms?.length ?? 0) <= 1
+                              ? t('deleteDialog.confirm', '删除任务')
+                              : t('table.removeAlgoSuccess', '移除算法')
+                          }
+                          onClick={() => handleDeleteRow(row)}
                         >
                           <Trash2 className='h-3.5 w-3.5' />
                         </Button>

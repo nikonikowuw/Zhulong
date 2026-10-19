@@ -109,4 +109,92 @@ describe('ChannelTasksView', () => {
     await configBtn.click()
     expect(onConfig).toHaveBeenCalledWith('cam-gate')
   })
+
+  it('triggers onToggleChannelTask and onDeleteChannelTask callbacks', async () => {
+    const mockGroups: ChannelTaskGroup[] = [
+      {
+        camera: {
+          id: 'cam-gate',
+          name: '东大门球机',
+          enabled: true,
+          revision: 1,
+          health: 'online',
+          session: 'running',
+          degraded: false,
+          stale: false,
+          reason: '',
+          streams: [],
+          createdAt: '',
+          updatedAt: '',
+        },
+        items: [
+          {
+            taskId: 'task-1',
+            task: {
+              id: 'task-1',
+              cameraId: 'cam-gate',
+              name: '',
+              enabled: true,
+              algorithms: [],
+              createdAt: '',
+              updatedAt: '',
+            },
+            algorithmItem: {
+              id: 'sub-1',
+              taskId: 'task-1',
+              algorithmId: 'algo-face',
+              enabled: true,
+              sampleFps: 10,
+              configJson: '{}',
+              regionConfigJson: '{}',
+              createdAt: '',
+              updatedAt: '',
+            },
+            algorithm: {
+              id: 'algo-face',
+              name: '人脸结构化',
+              version: '1.0.0',
+              taskType: 'detection',
+              category: 'security',
+              targetArch: 'aarch64',
+              targetDevice: 'rknn',
+              computeCost: 20,
+              memoryMb: 128,
+              description: '',
+              manifestJson: '{}',
+              configSchemaJson: '{}',
+              status: 'ACTIVE',
+              previousVersion: '',
+              createdAt: '',
+              updatedAt: '',
+            },
+            computePoints: 200,
+          },
+        ],
+        totalChannelPoints: 200,
+        activeCount: 1,
+        totalCount: 1,
+      },
+    ]
+
+    const onToggle = vi.fn()
+    const onDelete = vi.fn()
+
+    const { getByRole } = await render(
+      <ChannelTasksView
+        groups={mockGroups}
+        onConfigureCamera={vi.fn()}
+        onToggleChannelTask={onToggle}
+        onDeleteChannelTask={onDelete}
+      />
+    )
+
+    const switchBtn = getByRole('switch', { name: '切换通道分析状态' })
+    await switchBtn.click()
+    expect(onToggle).toHaveBeenCalledWith(mockGroups[0].items[0].task)
+
+    const deleteBtn = getByRole('button', { name: '删除通道任务' })
+    await deleteBtn.click()
+    expect(onDelete).toHaveBeenCalledWith(mockGroups[0].items[0].task)
+  })
 })

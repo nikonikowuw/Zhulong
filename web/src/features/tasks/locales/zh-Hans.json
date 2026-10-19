@@ -38,6 +38,11 @@
     "copyIdSuccess": "任务 ID 已复制到剪贴板",
     "toggleSuccess": "任务状态已更新",
     "toggleError": "更新任务状态失败",
+    "channelResumed": "通道分析任务已恢复运行",
+    "channelPaused": "通道分析任务已暂停",
+    "statusChannelPaused": "通道已暂停",
+    "removeAlgoSuccess": "已从通道中移除该算法",
+    "removeAlgoError": "移除算法失败",
     "empty": "暂无分析任务记录",
     "emptyFiltered": "未找到匹配的分析任务，请调整筛选条件"
   },
@@ -50,7 +55,11 @@
     "cameraOnline": "在线",
     "mainStream": "主码流",
     "subStream": "子码流",
-    "pointsSuffix": "点"
+    "pointsSuffix": "点",
+    "channelRunning": "通道已启用",
+    "channelPaused": "通道已暂停",
+    "toggleChannel": "切换通道分析状态",
+    "deleteButton": "删除通道任务"
   },
   "dialog": {
     "title": "配置通道算法任务",
@@ -79,7 +88,14 @@
     "saving": "下发同步中...",
     "saveSuccess": "通道算法调度已成功更新",
     "saveError": "保存调度配置失败",
-    "duplicateWarning": "同一摄像头只能与该算法绑定一次"
+    "duplicateWarning": "同一摄像头只能与该算法绑定一次",
+    "channelEnabledLabel": "通道分析总开关",
+    "channelEnabledDesc": "关闭后该摄像头下的所有算法均暂停订阅分析",
+    "deleteChannelButton": "删除此通道任务",
+    "deleteChannelConfirmTitle": "删除通道分析任务",
+    "deleteChannelConfirmDesc": "确定要删除该通道的全部算法分析任务吗？删除后将立即释放所占算力。",
+    "channelTaskCleared": "已清空并删除该通道的分析任务",
+    "noAlgoSelectedError": "请至少选择一个算法包，或直接删除该通道任务"
   },
   "deleteDialog": {
     "title": "删除分析任务",

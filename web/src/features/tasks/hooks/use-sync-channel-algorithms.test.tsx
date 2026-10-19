@@ -90,6 +90,34 @@ describe('useSyncChannelAlgorithms', () => {
     })
   })
 
+  it('saves channel task with explicit enabled=false', async () => {
+    vi.mocked(tasksApi.saveChannelTask).mockResolvedValue({
+      id: 'task-1',
+      cameraId: 'cam-01',
+      name: '',
+      enabled: false,
+      algorithms: [],
+      createdAt: '',
+      updatedAt: '',
+    })
+
+    const { result } = await renderHook(() => useSyncChannelAlgorithms(), {
+      wrapper: createWrapper(),
+    })
+
+    await result.current.mutateAsync({
+      cameraId: 'cam-01',
+      enabled: false,
+      drafts: [],
+    })
+
+    expect(tasksApi.saveChannelTask).toHaveBeenCalledWith({
+      cameraId: 'cam-01',
+      enabled: false,
+      algorithms: [],
+    })
+  })
+
   it('invalidates tasks cache on settlement even when an error occurs', async () => {
     vi.mocked(tasksApi.saveChannelTask).mockRejectedValue(
       new Error('Database lock error')

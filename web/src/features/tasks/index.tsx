@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { getRouteApi } from '@tanstack/react-router'
 import { LayoutGrid, Plus, Table as TableIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { type NavigateFn } from '@/hooks/use-table-url-state'
 import { Button } from '@/components/ui/button'
 import { ConfigDrawer } from '@/components/config-drawer'
@@ -21,7 +22,7 @@ import { TasksTable } from './components/tasks-table'
 import { type Task } from './data/schema'
 import { useChannelTasks } from './hooks/use-channel-tasks'
 import { useTaskComputeBudget } from './hooks/use-task-compute-budget'
-import { useTasks } from './hooks/use-tasks'
+import { useTasks, useUpdateTask } from './hooks/use-tasks'
 
 const route = getRouteApi('/_authenticated/tasks/')
 
@@ -69,6 +70,8 @@ export function Tasks(): React.JSX.Element {
   const cameras = camerasData?.items ?? []
   const isLoading = isTasksLoading || isCamerasLoading || isAlgosLoading
 
+  const updateMutation = useUpdateTask()
+
   // 2. 派生算力统计与通道聚合
   const budget = useTaskComputeBudget(tasks, algorithms)
   const channelGroups = useChannelTasks(cameras, algorithms, tasks)
@@ -81,6 +84,29 @@ export function Tasks(): React.JSX.Element {
   const handleEditTask = (task: Task) => {
     setSelectedCameraId(task.cameraId)
     setConfigDialogOpen(true)
+  }
+
+  const handleToggleChannelTask = (task: Task) => {
+    updateMutation.mutate(
+      {
+        id: task.id,
+        data: {
+          enabled: !task.enabled,
+        },
+      },
+      {
+        onSuccess: () => {
+          toast.success(
+            !task.enabled
+              ? t('table.channelResumed', '通道分析任务已恢复运行')
+              : t('table.channelPaused', '通道分析任务已暂停')
+          )
+        },
+        onError: () => {
+          toast.error(t('table.toggleError', '更新任务状态失败'))
+        },
+      }
+    )
   }
 
   return (
@@ -149,6 +175,8 @@ export function Tasks(): React.JSX.Element {
           <ChannelTasksView
             groups={channelGroups}
             onConfigureCamera={(camId) => handleOpenConfig(camId)}
+            onToggleChannelTask={handleToggleChannelTask}
+            onDeleteChannelTask={(task) => setDeletingTask(task)}
           />
         ) : (
           <TasksTable

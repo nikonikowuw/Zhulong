@@ -5,6 +5,7 @@ import { TASKS_QUERY_KEY } from './use-tasks'
 
 export interface SyncChannelAlgorithmsParams {
   cameraId: string
+  enabled?: boolean
   drafts: AlgorithmConfigDraft[]
   existingTasks?: Task[]
 }
@@ -16,10 +17,14 @@ export function useSyncChannelAlgorithms() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ cameraId, drafts }: SyncChannelAlgorithmsParams) => {
+    mutationFn: async ({
+      cameraId,
+      enabled = true,
+      drafts,
+    }: SyncChannelAlgorithmsParams) => {
       await tasksApi.saveChannelTask({
         cameraId,
-        enabled: true,
+        enabled,
         algorithms: drafts.map((d) => ({
           algorithmId: d.algorithmId,
           sampleFps: d.sampleFps,

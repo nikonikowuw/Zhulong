@@ -1,20 +1,25 @@
-import { Settings2, Video } from 'lucide-react'
+import { Settings2, Trash2, Video } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { type ChannelTaskGroup } from '../data/schema'
+import { Switch } from '@/components/ui/switch'
+import { type ChannelTaskGroup, type Task } from '../data/schema'
 import { TaskStatusBadge } from './task-status-badge'
 
 interface ChannelTasksViewProps {
   groups: ChannelTaskGroup[]
   onConfigureCamera: (cameraId: string) => void
+  onToggleChannelTask?: (task: Task) => void
+  onDeleteChannelTask?: (task: Task) => void
 }
 
 export function ChannelTasksView({
   groups,
   onConfigureCamera,
+  onToggleChannelTask,
+  onDeleteChannelTask,
 }: ChannelTasksViewProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
 
@@ -42,6 +47,7 @@ export function ChannelTasksView({
       {groups.map((group) => {
         const isOnline = group.camera.health === 'online'
         const hasTasks = group.items.length > 0
+        const primaryTask = group.items[0]?.task
 
         return (
           <div
@@ -93,16 +99,36 @@ export function ChannelTasksView({
                 </Badge>
               </div>
 
-              {/* 算力消耗概要 */}
+              {/* 算力消耗概要与通道主开关 */}
               <div className='mt-3 flex items-center justify-between border-y border-border/50 py-2 text-xs'>
-                <span className='text-muted-foreground'>
-                  {t('channelCard.channelPoints', '通道算力消耗')}:
-                </span>
-                <span className='font-semibold text-foreground'>
-                  {group.totalChannelPoints}{' '}
-                  {t('channelCard.pointsSuffix', '点')} ({group.activeCount} /{' '}
-                  {group.totalCount})
-                </span>
+                <div>
+                  <span className='text-muted-foreground'>
+                    {t('channelCard.channelPoints', '通道算力消耗')}:{' '}
+                  </span>
+                  <span className='font-semibold text-foreground'>
+                    {group.totalChannelPoints}{' '}
+                    {t('channelCard.pointsSuffix', '点')} ({group.activeCount} /{' '}
+                    {group.totalCount})
+                  </span>
+                </div>
+
+                {hasTasks && primaryTask && (
+                  <div className='flex items-center gap-1.5'>
+                    <span className='text-[11px] text-muted-foreground'>
+                      {primaryTask.enabled
+                        ? t('channelCard.channelRunning', '通道已启用')
+                        : t('channelCard.channelPaused', '通道已暂停')}
+                    </span>
+                    <Switch
+                      checked={primaryTask.enabled}
+                      onCheckedChange={() => onToggleChannelTask?.(primaryTask)}
+                      aria-label={t(
+                        'channelCard.toggleChannel',
+                        '切换通道分析状态'
+                      )}
+                    />
+                  </div>
+                )}
               </div>
 
               {/* 算法列表 */}
@@ -122,6 +148,7 @@ export function ChannelTasksView({
                           enabled={
                             item.task.enabled && item.algorithmItem.enabled
                           }
+                          isChannelEnabled={item.task.enabled}
                           algorithmStatus={item.algorithm?.status}
                         />
                         <span className='truncate font-medium text-foreground'>
@@ -145,16 +172,28 @@ export function ChannelTasksView({
             </div>
 
             {/* 卡片底部操作按钮 */}
-            <div className='mt-4 pt-2'>
+            <div className='mt-4 flex items-center gap-2 pt-2'>
               <Button
                 variant='outline'
                 size='sm'
-                className='w-full gap-2 text-xs'
+                className='flex-1 gap-2 text-xs'
                 onClick={() => onConfigureCamera(group.camera.id)}
               >
                 <Settings2 className='h-3.5 w-3.5' />
                 {t('channelCard.configButton', '配置算法')}
               </Button>
+              {hasTasks && primaryTask && (
+                <Button
+                  variant='ghost'
+                  size='icon'
+                  className='h-8 w-8 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive'
+                  title={t('channelCard.deleteButton', '删除通道任务')}
+                  aria-label={t('channelCard.deleteButton', '删除通道任务')}
+                  onClick={() => onDeleteChannelTask?.(primaryTask)}
+                >
+                  <Trash2 className='h-3.5 w-3.5' />
+                </Button>
+              )}
             </div>
           </div>
         )

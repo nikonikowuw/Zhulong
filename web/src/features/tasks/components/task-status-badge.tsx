@@ -10,21 +10,26 @@ import { type AlgorithmStatus } from '@/features/algorithms/data/schema'
 
 interface TaskStatusBadgeProps {
   enabled: boolean
+  isChannelEnabled?: boolean
   algorithmStatus?: AlgorithmStatus
   className?: string
 }
 
 export function TaskStatusBadge({
   enabled,
+  isChannelEnabled,
   algorithmStatus,
   className = '',
 }: TaskStatusBadgeProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
 
   let level: StatusLevel = 'inactive'
-  let label = t('table.statusPaused', '已暂停')
+  let label =
+    isChannelEnabled === false
+      ? t('table.statusChannelPaused', '通道已暂停')
+      : t('table.statusPaused', '已暂停')
 
-  if (enabled) {
+  if (enabled && isChannelEnabled !== false) {
     if (algorithmStatus === 'DISABLED') {
       level = 'warning'
       label = t('table.statusStandby', '待命 (未激活)')
@@ -57,4 +62,3 @@ export function TaskStatusBadge({
     </Badge>
   )
 }
-

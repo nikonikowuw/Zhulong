@@ -1,5 +1,12 @@
 import { useMemo, useState } from 'react'
-import { AlertCircle, AlertTriangle, Loader2, Video, Sliders } from 'lucide-react'
+import {
+  AlertCircle,
+  AlertTriangle,
+  Loader2,
+  Sliders,
+  Trash2,
+  Video,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { STATUS_LEVEL_CLASS } from '@/lib/status-palette'
@@ -23,6 +30,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { type Algorithm } from '@/features/algorithms/data/schema'
 import { useEnableAlgorithm } from '@/features/algorithms/hooks/use-algorithms'
 import { type Camera } from '@/features/cameras/data/schema'
@@ -31,6 +40,7 @@ import { parseRegionConfig } from '../data/region-config'
 import { type AlgorithmConfigDraft, type Task } from '../data/schema'
 import { useSyncChannelAlgorithms } from '../hooks/use-sync-channel-algorithms'
 import { MAX_COMPUTE_POINTS } from '../hooks/use-task-compute-budget'
+import { useDeleteTask } from '../hooks/use-tasks'
 import { AlgoConfigDynamicForm } from './algo-config-dynamic-form'
 import { FpsStepper } from './fps-stepper'
 import { RegionEditorDialog } from './region-editor-dialog'
@@ -140,7 +150,12 @@ function ChannelTaskDialogContent({
   const defaultCamId =
     initialCameraId || (cameras.length > 0 ? cameras[0].id : '')
 
+  const initialExistingTask = allTasks.find((t) => t.cameraId === defaultCamId)
+
   const [cameraId, setCameraId] = useState<string>(defaultCamId)
+  const [channelEnabled, setChannelEnabled] = useState<boolean>(
+    () => initialExistingTask?.enabled ?? true
+  )
   const [drafts, setDrafts] = useState<Record<string, AlgoDraftItem>>(() =>
     computeInitialDrafts(defaultCamId, allTasks, algorithms)
   )
@@ -148,13 +163,19 @@ function ChannelTaskDialogContent({
     null
   )
   const [autoEnableDisabled, setAutoEnableDisabled] = useState(true)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
 
   const syncMutation = useSyncChannelAlgorithms()
   const enableMutation = useEnableAlgorithm()
+  const deleteMutation = useDeleteTask()
+
+  const currentExistingTask = allTasks.find((t) => t.cameraId === cameraId)
 
   const handleCameraChange = (newCamId: string) => {
     setCameraId(newCamId)
     setDrafts(computeInitialDrafts(newCamId, allTasks, algorithms))
+    const task = allTasks.find((t) => t.cameraId === newCamId)
+    setChannelEnabled(task?.enabled ?? true)
   }
 
   const algoMap = useMemo(
@@ -300,9 +321,32 @@ function ChannelTaskDialogContent({
 
     const existingTasks = allTasks.filter((t) => t.cameraId === cameraId)
 
+    if (payloadDrafts.length === 0) {
+      if (currentExistingTask) {
+        deleteMutation.mutate(currentExistingTask.id, {
+          onSuccess: () => {
+            toast.success(
+              t('dialog.channelTaskCleared', '已清空并删除该通道的分析任务')
+            )
+            onClose()
+          },
+          onError: () => {
+            toast.error(t('deleteDialog.error', '删除分析任务失败'))
+          },
+        })
+        return
+      } else {
+        toast.error(
+          t('dialog.noAlgoSelectedError', '请至少选择一个算法包，或直接取消')
+        )
+        return
+      }
+    }
+
     syncMutation.mutate(
       {
         cameraId,
+        enabled: channelEnabled,
         drafts: payloadDrafts,
         existingTasks,
       },
@@ -373,6 +417,29 @@ function ChannelTaskDialogContent({
               </SelectContent>
             </Select>
           )}
+        </div>
+
+        {/* 通道分析总开关 */}
+        <div className='flex items-center justify-between rounded-lg border border-border bg-muted/20 px-3 py-2.5'>
+          <div className='space-y-0.5'>
+            <Label
+              htmlFor='channel-enabled-switch'
+              className='text-xs font-semibold'
+            >
+              {t('dialog.channelEnabledLabel', '通道分析总开关')}
+            </Label>
+            <p className='text-[11px] text-muted-foreground'>
+              {t(
+                'dialog.channelEnabledDesc',
+                '关闭后该摄像头下的所有算法均暂停订阅分析'
+              )}
+            </p>
+          </div>
+          <Switch
+            id='channel-enabled-switch'
+            checked={channelEnabled}
+            onCheckedChange={setChannelEnabled}
+          />
         </div>
 
         {/* 2. 算法矩阵多选 */}
@@ -621,12 +688,33 @@ function ChannelTaskDialogContent({
         </div>
 
         <div className='flex items-center gap-2'>
+          {currentExistingTask && (
+            <Button
+              type='button'
+              variant='ghost'
+              disabled={deleteMutation.isPending || syncMutation.isPending}
+              className='me-auto h-8 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive'
+              onClick={() => setDeleteConfirmOpen(true)}
+            >
+              {deleteMutation.isPending ? (
+                <Loader2 className='me-1 h-3.5 w-3.5 animate-spin' />
+              ) : (
+                <Trash2 className='me-1 h-3.5 w-3.5' />
+              )}
+              {t('dialog.deleteChannelButton', '删除此通道任务')}
+            </Button>
+          )}
           <Button type='button' variant='outline' onClick={onClose}>
             {t('dialog.cancel', '取消')}
           </Button>
           <Button
             type='button'
-            disabled={isOverBudget || syncMutation.isPending || !cameraId}
+            disabled={
+              isOverBudget ||
+              syncMutation.isPending ||
+              deleteMutation.isPending ||
+              !cameraId
+            }
             onClick={handleSave}
             className='gap-1.5'
           >
@@ -637,6 +725,35 @@ function ChannelTaskDialogContent({
           </Button>
         </div>
       </DialogFooter>
+
+      {/* 删除通道任务二次确认对话框 */}
+      {currentExistingTask && (
+        <ConfirmDialog
+          open={deleteConfirmOpen}
+          onOpenChange={setDeleteConfirmOpen}
+          title={t('dialog.deleteChannelConfirmTitle', '删除通道分析任务')}
+          desc={t(
+            'dialog.deleteChannelConfirmDesc',
+            '确定要删除该通道的全部算法分析任务吗？删除后将立即释放所占算力。'
+          )}
+          confirmText={t('deleteDialog.confirm', '确认删除')}
+          cancelBtnText={t('deleteDialog.cancel', '取消')}
+          destructive
+          isLoading={deleteMutation.isPending}
+          handleConfirm={() => {
+            deleteMutation.mutate(currentExistingTask.id, {
+              onSuccess: () => {
+                toast.success(t('deleteDialog.success', '分析任务已成功删除'))
+                setDeleteConfirmOpen(false)
+                onClose()
+              },
+              onError: () => {
+                toast.error(t('deleteDialog.error', '删除分析任务失败'))
+              },
+            })
+          }}
+        />
+      )}
 
       {/* 区域策略编辑对话框 */}
       {regionModalAlgoId && (

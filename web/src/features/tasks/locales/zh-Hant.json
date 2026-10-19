@@ -38,6 +38,11 @@
     "copyIdSuccess": "任務 ID 已複製到剪貼簿",
     "toggleSuccess": "任務狀態已更新",
     "toggleError": "更新任務狀態失敗",
+    "channelResumed": "通道分析任務已恢復運行",
+    "channelPaused": "通道分析任務已暫停",
+    "statusChannelPaused": "通道已暫停",
+    "removeAlgoSuccess": "已從通道中移除該演算法",
+    "removeAlgoError": "移除演算法失敗",
     "empty": "暫無分析任務記錄",
     "emptyFiltered": "未找到匹配的分析任務，請調整篩選條件"
   },
@@ -50,7 +55,11 @@
     "cameraOnline": "在線",
     "mainStream": "主碼流",
     "subStream": "子碼流",
-    "pointsSuffix": "點"
+    "pointsSuffix": "點",
+    "channelRunning": "通道已啟用",
+    "channelPaused": "通道已暫停",
+    "toggleChannel": "切換通道分析狀態",
+    "deleteButton": "刪除通道任務"
   },
   "dialog": {
     "title": "配置通道演算法任務",
@@ -79,7 +88,14 @@
     "saving": "下發同步中...",
     "saveSuccess": "通道演算法調度已成功更新",
     "saveError": "儲存調度配置失敗",
-    "duplicateWarning": "同一攝影機只能與該演算法綁定一次"
+    "duplicateWarning": "同一攝影機只能與該演算法綁定一次",
+    "channelEnabledLabel": "通道分析總開關",
+    "channelEnabledDesc": "關閉後該攝影機下的所有演算法均暫停訂閱分析",
+    "deleteChannelButton": "刪除此通道任務",
+    "deleteChannelConfirmTitle": "刪除通道分析任務",
+    "deleteChannelConfirmDesc": "確定要刪除該通道的全部演算法分析任務嗎？刪除後將立即釋放所佔算力。",
+    "channelTaskCleared": "已清空並刪除該通道的分析任務",
+    "noAlgoSelectedError": "請至少選擇一個演算法包，或直接刪除該通道任務"
   },
   "deleteDialog": {
     "title": "刪除分析任務",

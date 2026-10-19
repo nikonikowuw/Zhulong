@@ -112,4 +112,21 @@ describe('TasksTable', () => {
 
     await expect.element(getByText('暂无分析任务记录')).toBeInTheDocument()
   })
+
+  it('triggers onDeleteTask when single-algorithm task delete button is clicked', async () => {
+    const onDelete = vi.fn()
+    const { getByRole } = await render(
+      <TasksTable
+        tasks={mockTasks}
+        cameras={mockCameras}
+        algorithms={mockAlgorithms}
+        onEditTask={vi.fn()}
+        onDeleteTask={onDelete}
+      />
+    )
+
+    const trashBtn = getByRole('button', { name: /确认删除|删除任务/i })
+    await trashBtn.click()
+    expect(onDelete).toHaveBeenCalledWith(mockTasks[0])
+  })
 })

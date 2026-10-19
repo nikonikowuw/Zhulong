@@ -17,6 +17,15 @@ describe('TaskStatusBadge', () => {
     expect(getByText('运行中').query()).toBeNull()
   })
 
+  it('renders channel paused status when isChannelEnabled is false', async () => {
+    const { getByText } = await render(
+      <TaskStatusBadge enabled={true} isChannelEnabled={false} />
+    )
+
+    await expect.element(getByText('通道已暂停')).toBeInTheDocument()
+    expect(getByText('运行中').query()).toBeNull()
+  })
+
   it('renders standby status when enabled is true but algorithm is DISABLED', async () => {
     const { getByText } = await render(
       <TaskStatusBadge enabled={true} algorithmStatus='DISABLED' />

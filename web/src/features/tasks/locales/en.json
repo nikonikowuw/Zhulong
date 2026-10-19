@@ -38,6 +38,11 @@
     "copyIdSuccess": "Task ID copied to clipboard",
     "toggleSuccess": "Task status updated",
     "toggleError": "Failed to update task status",
+    "channelResumed": "Channel analysis task resumed",
+    "channelPaused": "Channel analysis task paused",
+    "statusChannelPaused": "Channel Paused",
+    "removeAlgoSuccess": "Algorithm removed from channel",
+    "removeAlgoError": "Failed to remove algorithm",
     "empty": "No analysis tasks configured",
     "emptyFiltered": "No tasks match the filter criteria"
   },
@@ -50,7 +55,11 @@
     "cameraOnline": "Online",
     "mainStream": "Main Stream",
     "subStream": "Sub Stream",
-    "pointsSuffix": "pts"
+    "pointsSuffix": "pts",
+    "channelRunning": "Channel Enabled",
+    "channelPaused": "Channel Paused",
+    "toggleChannel": "Toggle channel analysis status",
+    "deleteButton": "Delete channel task"
   },
   "dialog": {
     "title": "Configure Channel Algorithms",
@@ -79,7 +88,14 @@
     "saving": "Synchronizing...",
     "saveSuccess": "Channel algorithms updated successfully",
     "saveError": "Failed to save configuration",
-    "duplicateWarning": "Camera and algorithm can only be bound once"
+    "duplicateWarning": "Camera and algorithm can only be bound once",
+    "channelEnabledLabel": "Channel Analysis Master Switch",
+    "channelEnabledDesc": "When disabled, all algorithms for this camera are suspended from analysis",
+    "deleteChannelButton": "Delete Channel Task",
+    "deleteChannelConfirmTitle": "Delete Channel Analysis Task",
+    "deleteChannelConfirmDesc": "Are you sure you want to delete all algorithm analysis tasks for this channel? Compute points will be released immediately.",
+    "channelTaskCleared": "Cleared and deleted analysis tasks for this channel",
+    "noAlgoSelectedError": "Please select at least one algorithm package, or delete the channel task directly"
   },
   "deleteDialog": {
     "title": "Delete Analysis Task",
