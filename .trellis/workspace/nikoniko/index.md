@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 72
+- **Total Sessions**: 73
 - **Last Active**: 2026-10-19
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1175 | Active |
+| `journal-2.md` | ~1228 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 73 | 2026-10-19 | 收尾补记：对齐本任务 PRD 与 check 发现并归档 fix-t2-migration-plan | `484e966` | `dev` |
 | 72 | 2026-10-19 | 修正 T2 通道多算法重构的迁移规划：编号对齐、迁移顺序、主键合规与消费者交接点 | `88a7b5f`, `29d64a4` | `dev` |
 | 71 | 2026-10-19 | 补齐 ROI/MASK 区域策略的 AC3/AC4 测试覆盖并修复全量门禁暴露的 flaky 断言 | `2a17168`, `d7209ea` | `dev` |
 | 70 | 2026-10-19 | Fix all code-review findings on the ROI/MASK region policy changeset | `b80519c`, `2b1e14d`, `ba90724`, `5ff6ed2`, `4a902bc`, `6c63a86` | `dev` |

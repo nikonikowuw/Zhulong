@@ -1173,3 +1173,56 @@ Fix `10-18-channel-multi-algo-task`（T2）的规划，使其实施前可执行�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 73: 收尾补记：对齐本任务 PRD 与 check 发现并归档 fix-t2-migration-plan
+<!-- trellis-session: v=2 fp=8130767478471d60 -->
+
+**Date**: 2026-10-19
+**Task**: 收尾补记：对齐本任务 PRD 与 check 发现并归档 fix-t2-migration-plan
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+Session summary was not supplied.
+
+### Main Changes
+
+### Summary
+
+收尾补记：`/trellis-finish-work` 期间发现本任务自己的 PRD 还留着 check 子代理指出过的遗漏（改了对面文档、忘了自己那份），修正后归档任务。主体工作已记录在 Session 72。
+
+### Main Changes
+
+- `10-19-fix-t2-migration-plan` 的 `prd.md` 修正三处自身遗漏：
+  - F10 与 R5 表格里的 `internal/task/region_config.go:62-95` → `62-99`（line 95 是空行，99 才是闭合花括号）。这个错误在 T2 的 `design.md` 里已改，却漏改了自己这份 —— 正是 check 提醒过的「只改一处」模式，本次自己踩了一次。
+  - R5 表格仍写「四个交接点」，与实际交付的 7 项不符（`design.md §3.4` 拆为 §3.4.1 T1 产物 3 项 + §3.4.2 自身波及 4 项）。已补全，含 `appBrokerPathResolver.publishRateByCamera` 这个第二消费者。
+  - AC1–AC7 全部勾选，并标注 AC2/AC7 的实测方式（内存 SQLite 双向跑通 / 门禁 EXIT=0）。
+- 归档 `10-19-fix-t2-migration-plan` → `archive/2026-10/`。归档被 branch 校验拦下（`branch` 与 `base_branch` 都是 `dev`），核实该任务从未 PR-backed（`pr_url`/`worktree_path`/`commit` 均为 `None`，仓库历史 80+ 任务同样是 `dev`/`dev` 归档），故按脚本提示用 `--skip-branch-validation`。
+
+### Testing
+
+- [OK] 提交前确认工作区干净，`git diff` 仅涉及 `.trellis/tasks/**`（AC6）
+- [OK] `make check` 保持 EXIT=0（461 前端用例 + native 21/21 + api-docs + go-check）
+- [OK] 归档后 `task.py list` 不再列出该任务
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 活动任务剩两个，均未完成：T1（`10-18-roi-mask-region-policy`）待真机真流验收 AC4/AC5/AC9；T2（`10-18-channel-multi-algo-task`）规划已可执行、主体待单独立项。
+- T2 开工第一件事：处理 `design.md §3.4` 的 7 个交接点，尤其 `RegionConfigCache` —— 漏改不报错，只会让 ROI/MASK 过滤静默失效。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `484e966` | docs(task): align this task's own PRD with what the check pass found |
+
+### Status
+
+[OK] **Completed**
