@@ -23,11 +23,11 @@ type TaskComponents struct {
 func NewTaskComponents(
 	dbProvider database.DBProvider,
 	algoProvider AlgorithmSpecProvider,
-	listener TaskChangeListener,
+	listeners []TaskChangeListener,
 	logger *zap.Logger,
 ) *TaskComponents {
 	store := NewStore(dbProvider)
-	service := NewService(store, algoProvider, listener, logger)
+	service := NewService(store, algoProvider, listeners, logger)
 	handler := NewHandler(service, logger)
 
 	return &TaskComponents{

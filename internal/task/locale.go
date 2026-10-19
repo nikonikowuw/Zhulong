@@ -34,6 +34,11 @@ func init() {
 			"zh-Hans": "分析任务配置不符合算法参数规范",
 			"zh-Hant": "分析任務設定不符合演算法參數規範",
 		},
+		"INVALID_REGION_CONFIG": {
+			"en":      "Invalid region configuration",
+			"zh-Hans": "无效的区域策略配置",
+			"zh-Hant": "無效的區域策略設定",
+		},
 		"COMPUTE_BUDGET_EXCEEDED": {
 			"en":      "Total compute budget (1,000 points) exceeded",
 			"zh-Hans": "摄像头算法算力总配额超过 1000 点基准上限",

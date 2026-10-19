@@ -842,3 +842,78 @@ func TestPerceptionAndAlarmTablesMigrationUpAndDownSymmetry(t *testing.T) {
 		}
 	}
 }
+
+func TestRegionConfigMigrationUpAndDownSymmetry(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "migration_symmetry_12.db")
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// 1. Run migrations up to 12
+	if err := migrator.Migrate(12); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(12): %v", err)
+	}
+
+	columnExists := func(tableName, colName string) bool {
+		rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+		if err != nil {
+			return false
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var cid int
+			var name, colType string
+			var notnull, pk int
+			var dfltValue sql.NullString
+			if err := rows.Scan(&cid, &name, &colType, &notnull, &dfltValue, &pk); err == nil {
+				if name == colName {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	if !columnExists("analysis_tasks", "region_config_json") {
+		t.Errorf("expected region_config_json column on analysis_tasks after migration 12 up")
+	}
+
+	// 2. Roll back migration 12
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator rollback (-1): %v", err)
+	}
+
+	if columnExists("analysis_tasks", "region_config_json") {
+		t.Errorf("expected region_config_json column to be dropped after migration 12 down")
+	}
+
+	// 3. Re-apply migration 12
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator re-apply (1): %v", err)
+	}
+
+	if !columnExists("analysis_tasks", "region_config_json") {
+		t.Errorf("expected region_config_json column on analysis_tasks after re-applying migration 12 up")
+	}
+}

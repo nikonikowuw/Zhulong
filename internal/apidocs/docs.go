@@ -5103,6 +5103,12 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "regionConfigJson": {
+                    "type": "string"
+                },
+                "region_config_json": {
+                    "type": "string"
+                },
                 "sampleFps": {
                     "type": "integer"
                 },
@@ -5132,6 +5138,9 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
+                "regionConfigJson": {
+                    "type": "string"
+                },
                 "sampleFps": {
                     "type": "integer"
                 },
@@ -5151,6 +5160,12 @@ const docTemplate = `{
                 },
                 "enabled": {
                     "type": "boolean"
+                },
+                "regionConfigJson": {
+                    "type": "string"
+                },
+                "region_config_json": {
+                    "type": "string"
                 },
                 "sampleFps": {
                     "type": "integer"

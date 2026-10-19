@@ -136,6 +136,7 @@ type RawInferencePayload struct {
 	CaptureTimeMs   int64                `json:"capture_time_ms"`
 	CostMs          int64                `json:"cost_ms"`
 	TaskType        string               `json:"task_type"`
+	AlgorithmID     string               `json:"algorithm_id,omitempty"`
 	Detections      []DetectionItem      `json:"detections"`
 	Classifications []ClassificationItem `json:"classifications"`
 	Persons         []PersonItem         `json:"persons"`
@@ -152,6 +153,11 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 		return InferenceResult{}, fmt.Errorf("unmarshal inference result: %w", err)
 	}
 
+	effectiveAlgoID := algorithmID
+	if payload.AlgorithmID != "" {
+		effectiveAlgoID = payload.AlgorithmID
+	}
+
 	captureTime := time.Now().UTC()
 	if payload.CaptureTimeMs > 0 {
 		captureTime = time.UnixMilli(payload.CaptureTimeMs).UTC()
@@ -160,19 +166,19 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 	var res InferenceResult
 	switch payload.TaskType {
 	case TaskTypeDetection:
-		res = NewDetectionResult(cameraID, algorithmID, payload.PTS, payload.CostMs)
+		res = NewDetectionResult(cameraID, effectiveAlgoID, payload.PTS, payload.CostMs)
 		res.Timestamp = captureTime
 		if len(payload.Detections) > 0 {
 			res.Detections = payload.Detections
 		}
 	case TaskTypeClassification:
-		res = NewClassificationResult(cameraID, algorithmID, payload.PTS, payload.CostMs)
+		res = NewClassificationResult(cameraID, effectiveAlgoID, payload.PTS, payload.CostMs)
 		res.Timestamp = captureTime
 		if len(payload.Classifications) > 0 {
 			res.Classifications = payload.Classifications
 		}
 	case TaskTypePersonStructure:
-		res = NewPersonStructureResult(cameraID, algorithmID, payload.PTS, payload.CostMs)
+		res = NewPersonStructureResult(cameraID, effectiveAlgoID, payload.PTS, payload.CostMs)
 		res.Timestamp = captureTime
 		if len(payload.Persons) > 0 {
 			res.Persons = payload.Persons
@@ -180,7 +186,7 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 	default:
 		res = InferenceResult{
 			CameraID:        cameraID,
-			AlgorithmID:     algorithmID,
+			AlgorithmID:     effectiveAlgoID,
 			PTS:             payload.PTS,
 			Timestamp:       captureTime,
 			TaskType:        payload.TaskType,

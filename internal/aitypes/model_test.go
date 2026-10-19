@@ -143,7 +143,26 @@ func TestParseInferenceResult(t *testing.T) {
 		t.Errorf("unexpected candidates in parsed result: %+v", psRes.Persons[0].Faces[0].Candidates)
 	}
 
-	// 4. Invalid or empty
+	// 4. Algorithm ID resolution from payload or fallback
+	withAlgoIDJSON := []byte(`{"stream_id":1,"pts":1000,"task_type":"detection","algorithm_id":"algo_from_payload","detections":[]}`)
+	resWithAlgo, err := aitypes.ParseInferenceResult("cam_1", "fallback_algo", withAlgoIDJSON)
+	if err != nil {
+		t.Fatalf("ParseInferenceResult failed: %v", err)
+	}
+	if resWithAlgo.AlgorithmID != "algo_from_payload" {
+		t.Errorf("expected algorithm_id 'algo_from_payload', got %q", resWithAlgo.AlgorithmID)
+	}
+
+	withoutAlgoIDJSON := []byte(`{"stream_id":1,"pts":1000,"task_type":"detection","detections":[]}`)
+	resWithoutAlgo, err := aitypes.ParseInferenceResult("cam_1", "fallback_algo", withoutAlgoIDJSON)
+	if err != nil {
+		t.Fatalf("ParseInferenceResult failed: %v", err)
+	}
+	if resWithoutAlgo.AlgorithmID != "fallback_algo" {
+		t.Errorf("expected algorithm_id 'fallback_algo', got %q", resWithoutAlgo.AlgorithmID)
+	}
+
+	// 5. Invalid or empty
 	if _, err := aitypes.ParseInferenceResult("cam_1", "algo", nil); err == nil {
 		t.Errorf("expected error for nil payload")
 	}

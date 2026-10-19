@@ -56,7 +56,7 @@ func setupTestService(t *testing.T) (*task.Service, *mockTaskChangeListener, fun
 		},
 	}
 	listener := &mockTaskChangeListener{}
-	svc := task.NewService(store, provider, listener, zap.NewNop())
+	svc := task.NewService(store, provider, []task.TaskChangeListener{listener}, zap.NewNop())
 
 	return svc, listener, cleanup
 }
@@ -117,6 +117,24 @@ func TestServiceCreateTask(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected schema validation failure")
 	}
+
+	// 5. Invalid region config
+	invalidRegion := &task.Task{
+		CameraID:         "cam_102",
+		AlgorithmID:      "algo_helmet",
+		RegionConfigJSON: `{"roi": [[0.8, 0.2, 0.5, 0.9]]}`, // degenerate x1 >= x2
+	}
+	err = svc.CreateTask(ctx, invalidRegion)
+	if err == nil {
+		t.Fatal("expected region config validation failure")
+	}
+	if errors.As(err, &appErr) {
+		if appErr.Code != "INVALID_REGION_CONFIG" {
+			t.Fatalf("expected INVALID_REGION_CONFIG code, got %s", appErr.Code)
+		}
+	} else {
+		t.Fatalf("expected apperr.Error, got %T", err)
+	}
 }
 
 func TestServiceUpdateTask(t *testing.T) {
@@ -148,6 +166,23 @@ func TestServiceUpdateTask(t *testing.T) {
 	}
 	if listener.count() != 2 {
 		t.Fatalf("expected 2 notifications, got %d", listener.count())
+	}
+
+	// Invalid region config on update
+	badRegion := `{"mask": [[-0.1, 0.1, 0.5, 0.5]]}`
+	_, err = svc.UpdateTask(ctx, tsk.ID, &task.UpdateTaskRequest{
+		RegionConfigJSON: badRegion,
+	})
+	if err == nil {
+		t.Fatal("expected region config validation failure on update")
+	}
+	var appErr *apperr.Error
+	if errors.As(err, &appErr) {
+		if appErr.Code != "INVALID_REGION_CONFIG" {
+			t.Fatalf("expected INVALID_REGION_CONFIG code, got %s", appErr.Code)
+		}
+	} else {
+		t.Fatalf("expected apperr.Error, got %T", err)
 	}
 }
 

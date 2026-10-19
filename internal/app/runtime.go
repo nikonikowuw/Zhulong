@@ -8,9 +8,22 @@ import (
 	"net/http"
 	"syscall"
 
+	"github.com/nikonikowuw/Zhulong/internal/task"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 )
+
+// regionConfigReloader is the narrow view of the region config cache that the startup
+// sequence needs. Depending on the interface rather than the concrete cache keeps
+// lifecycleRuntime decoupled from the task domain's implementation.
+type regionConfigReloader interface {
+	Reload(ctx context.Context) error
+}
+
+// regionConfigReloaderProvider adapts the concrete cache to the narrow interface above.
+func regionConfigReloaderProvider(cache *task.RegionConfigCache) regionConfigReloader {
+	return cache
+}
 
 type databaseLifecycle interface {
 	OpenAndMigrate(context.Context) error
@@ -64,20 +77,21 @@ type recordLifecycle interface {
 }
 
 type lifecycleRuntime struct {
-	database   databaseLifecycle
-	native     engineLifecycle
-	camera     cameraLifecycle
-	audit      auditLifecycle
-	network    networkLifecycle
-	systemTime systemTimeLifecycle
-	storage    storageLifecycle
-	algorithm  algorithmLifecycle
-	person     personLifecycle
-	record     recordLifecycle
-	server     *http.Server
-	logger     *zap.Logger
-	listen     func(string, string) (net.Listener, error)
-	shutdown   func(context.Context) error
+	database    databaseLifecycle
+	native      engineLifecycle
+	camera      cameraLifecycle
+	audit       auditLifecycle
+	network     networkLifecycle
+	systemTime  systemTimeLifecycle
+	storage     storageLifecycle
+	algorithm   algorithmLifecycle
+	person      personLifecycle
+	record      recordLifecycle
+	configCache regionConfigReloader
+	server      *http.Server
+	logger      *zap.Logger
+	listen      func(string, string) (net.Listener, error)
+	shutdown    func(context.Context) error
 
 	listener        net.Listener
 	serveDone       chan error
@@ -98,18 +112,19 @@ type lifecycleRuntime struct {
 type runtimeParams struct {
 	fx.In
 
-	Database   databaseLifecycle
-	Native     engineLifecycle
-	Camera     cameraLifecycle     `optional:"true"`
-	Audit      auditLifecycle      `optional:"true"`
-	Network    networkLifecycle    `optional:"true"`
-	SystemTime systemTimeLifecycle `optional:"true"`
-	Storage    storageLifecycle    `optional:"true"`
-	Algorithm  algorithmLifecycle  `optional:"true"`
-	Person     personLifecycle     `optional:"true"`
-	Record     recordLifecycle     `optional:"true"`
-	Server     *http.Server
-	Logger     *zap.Logger
+	Database    databaseLifecycle
+	Native      engineLifecycle
+	Camera      cameraLifecycle      `optional:"true"`
+	Audit       auditLifecycle       `optional:"true"`
+	Network     networkLifecycle     `optional:"true"`
+	SystemTime  systemTimeLifecycle  `optional:"true"`
+	Storage     storageLifecycle     `optional:"true"`
+	Algorithm   algorithmLifecycle   `optional:"true"`
+	Person      personLifecycle      `optional:"true"`
+	Record      recordLifecycle      `optional:"true"`
+	ConfigCache regionConfigReloader `optional:"true"`
+	Server      *http.Server
+	Logger      *zap.Logger
 }
 
 func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
@@ -118,20 +133,21 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		shutdown = p.Server.Shutdown
 	}
 	return &lifecycleRuntime{
-		database:   p.Database,
-		native:     p.Native,
-		camera:     p.Camera,
-		audit:      p.Audit,
-		network:    p.Network,
-		systemTime: p.SystemTime,
-		storage:    p.Storage,
-		algorithm:  p.Algorithm,
-		person:     p.Person,
-		record:     p.Record,
-		server:     p.Server,
-		logger:     p.Logger,
-		listen:     net.Listen,
-		shutdown:   shutdown,
+		database:    p.Database,
+		native:      p.Native,
+		camera:      p.Camera,
+		audit:       p.Audit,
+		network:     p.Network,
+		systemTime:  p.SystemTime,
+		storage:     p.Storage,
+		algorithm:   p.Algorithm,
+		person:      p.Person,
+		record:      p.Record,
+		configCache: p.ConfigCache,
+		server:      p.Server,
+		logger:      p.Logger,
+		listen:      net.Listen,
+		shutdown:    shutdown,
 	}
 }
 
@@ -144,6 +160,12 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		return errors.Join(startupErr, r.database.Close(), r.syncLogger())
 	}
 	r.databaseReady = true
+
+	if r.configCache != nil {
+		if err := r.configCache.Reload(ctx); err != nil {
+			r.logger.Warn("initial region config cache reload warning", zap.Error(err))
+		}
+	}
 
 	if r.audit != nil {
 		if err := r.audit.Start(ctx); err != nil {

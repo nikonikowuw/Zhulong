@@ -11,6 +11,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
+	"github.com/nikonikowuw/Zhulong/internal/region"
 	"go.uber.org/zap"
 )
 
@@ -258,10 +259,20 @@ func TestStreamHubOnDemandAcquireAndRelease(t *testing.T) {
 		t.Fatalf("expected 0 active streams after all unsubscribed, got %d", hub.ActiveStreams())
 	}
 
-	// 验证状态机切为 idle
-	info, ok = registry.GetState(camID)
-	if !ok || info == nil || info.Streams["main"] == nil || info.Streams["main"].Session != SessionStateIdle {
-		t.Fatalf("expected SessionStateIdle, got %v", info)
+	// 验证状态机切为 idle。
+	// SessionStateIdle 由 StreamDispatcher 的收流协程异步写入（stream_dispatcher.go 中的
+	// UpdateSessionState 调用），可能晚于 UnregisterClient 返回，因此必须轮询等待而不能立即断言。
+	deadline := time.After(time.Second)
+	for {
+		info, ok = registry.GetState(camID)
+		if ok && info != nil && info.Streams["main"] != nil && info.Streams["main"].Session == SessionStateIdle {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timeout waiting for SessionStateIdle, got %v", info)
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 
@@ -751,6 +762,101 @@ func TestStreamHub_ConsumeAIResultsAndBroadcast(t *testing.T) {
 		}
 		if res.Detections[0].Label != "helmet" || res.Detections[0].Score != 0.95 {
 			t.Errorf("unexpected detection: %+v", res.Detections[0])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for AI result SSE event")
+	}
+
+	hub.ReleaseAIStreamSubscriber(camID, "test_algo")
+}
+
+type mockRegionConfigProvider struct {
+	configs map[string]map[string]region.Config
+}
+
+func (m *mockRegionConfigProvider) ConfigFor(cameraID, algorithmID string) (region.Config, bool) {
+	if algos, ok := m.configs[cameraID]; ok {
+		if cfg, ok := algos[algorithmID]; ok {
+			return cfg, true
+		}
+	}
+	return region.Config{}, false
+}
+
+func TestStreamHub_ConsumeAIResults_RegionFiltering(t *testing.T) {
+	store, lazyCipher, camID, cleanup := setupTestStoreAndCipher(t)
+	defer cleanup()
+
+	mockEngine := newMockMediaEngine()
+	eventHub := NewEventHub(NewStateRegistry())
+	defer eventHub.Close()
+
+	eventSub, _, err := eventHub.Subscribe()
+	if err != nil {
+		t.Fatalf("subscribe to event hub: %v", err)
+	}
+	defer eventHub.Unsubscribe(eventSub)
+
+	hub := NewStreamHub(mockEngine, store, lazyCipher, nil, eventHub, zap.NewNop())
+	defer hub.Close()
+
+	// Configure the region config provider:
+	// ROI: [0.0, 0.0, 0.5, 0.5], MASK: [0.1, 0.1, 0.3, 0.3]
+	provider := &mockRegionConfigProvider{
+		configs: map[string]map[string]region.Config{
+			camID: {
+				"test_algo": {
+					ROI:  []region.Rect{{0.0, 0.0, 0.5, 0.5}},
+					MASK: []region.Rect{{0.1, 0.1, 0.3, 0.3}},
+				},
+			},
+		},
+	}
+	hub.SetRegionConfigProvider(provider)
+
+	aiSub, feed := engine.NewAIResultSubscriptionForTest(16)
+	ctx := context.Background()
+
+	mockStream := &mockMediaStream{source: newMockPacketSource(16), aiSub: aiSub}
+	mockEngine.nextStream = mockStream
+
+	if _, err := hub.ResolveAIStreamBrokerPath(ctx, camID); err != nil {
+		t.Fatalf("resolve AI stream failed: %v", err)
+	}
+	hub.AttachAIStreamSubscriber(camID, "test_algo")
+
+	// Target 1: inside ROI and outside MASK -> bottom center (0.05, 0.2) -> KEEP
+	// Target 2: inside ROI but inside MASK -> bottom center (0.2, 0.25) -> FILTERED
+	// Target 3: outside ROI -> bottom center (0.75, 0.8) -> FILTERED
+	feed([]byte(`{
+		"stream_id":1,
+		"pts":12345,
+		"cost_ms":10,
+		"task_type":"detection",
+		"algorithm_id":"test_algo",
+		"detections":[
+			{"box":[0.0, 0.1, 0.1, 0.2],"label":"keep_me","score":0.95},
+			{"box":[0.15, 0.15, 0.25, 0.25],"label":"masked_out","score":0.90},
+			{"box":[0.7, 0.7, 0.8, 0.8],"label":"outside_roi","score":0.85}
+		],
+		"classifications":[],
+		"persons":[]
+	}`))
+
+	select {
+	case msg := <-eventSub.Channel():
+		if msg.Event != EventTypeAIResult {
+			t.Fatalf("expected EventTypeAIResult, got: %s", msg.Event)
+		}
+		res, ok := msg.Data.(aitypes.InferenceResult)
+		if !ok {
+			t.Fatalf("expected aitypes.InferenceResult, got: %T", msg.Data)
+		}
+		if len(res.Detections) != 1 {
+			t.Fatalf("expected exactly 1 detection after filtering, got %d", len(res.Detections))
+		}
+		if res.Detections[0].Label != "keep_me" {
+			t.Errorf("expected keep_me, got %s", res.Detections[0].Label)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for AI result SSE event")

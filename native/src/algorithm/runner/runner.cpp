@@ -103,13 +103,15 @@ namespace zhulong
                                                   int64_t pts,
                                                   int64_t capture_time_ms,
                                                   int64_t cost_ms,
-                                                  const zhulong_inference_result* result)
+                                                  const zhulong_inference_result* result,
+                                                  const std::string& algorithm_id = "")
     {
         std::ostringstream ss;
         ss << "{\"stream_id\":" << stream_id
            << ",\"pts\":" << pts
            << ",\"capture_time_ms\":" << capture_time_ms
-           << ",\"cost_ms\":" << cost_ms;
+           << ",\"cost_ms\":" << cost_ms
+           << ",\"algorithm_id\":" << runner::json_quote(algorithm_id);
 
         if (!result || result->count == 0)
         {
@@ -413,7 +415,7 @@ namespace zhulong
      * @param max_frames 最大处理帧数（<0 表示不限）
      * @return int 退出码（见上表）
      */
-    int run_ipc_workers(const std::string &so_path, const std::vector<std::string> &broker_socks, const std::string &client_name, int max_frames = -1)
+    int run_ipc_workers(const std::string &so_path, const std::vector<std::string> &broker_socks, const std::string &client_name, int max_frames = -1, const std::string &algorithm_id = "")
     {
         if (broker_socks.empty())
         {
@@ -632,7 +634,7 @@ namespace zhulong
                         // 仅在本次或上次有目标时才上报结果，避免连续空帧刷屏（去噪）
                         if (has_targets || last_had_targets)
                         {
-                            std::string payload = serialize_inference_result(dispatch.stream_id, dispatch.pts, dispatch.capture_time_ms, cost_ms, result);
+                            std::string payload = serialize_inference_result(dispatch.stream_id, dispatch.pts, dispatch.capture_time_ms, cost_ms, result, algorithm_id);
                             client.send_msg(ipc::MSG_RESULT, payload.data(), payload.size());
                         }
                         last_had_targets = has_targets;
@@ -753,9 +755,9 @@ namespace zhulong
         return exit_code.load();
     }
 
-    int run_ipc_worker(const std::string &so_path, const std::string &broker_sock, const std::string &client_name, int max_frames = -1)
+    int run_ipc_worker(const std::string &so_path, const std::string &broker_sock, const std::string &client_name, int max_frames = -1, const std::string &algorithm_id = "")
     {
-        return run_ipc_workers(so_path, {broker_sock}, client_name, max_frames);
+        return run_ipc_workers(so_path, {broker_sock}, client_name, max_frames, algorithm_id);
     }
 
 } // namespace zhulong
@@ -772,6 +774,7 @@ int main(int argc, char *argv[])
     std::vector<std::string> broker_socks;
     std::string plugin_path;
     std::string client_name = "algo_worker";
+    std::string algorithm_id;
     int max_frames = -1;
 
     for (int i = 1; i < argc; ++i)
@@ -796,6 +799,10 @@ int main(int argc, char *argv[])
         {
             client_name = argv[++i];
         }
+        else if (std::string(argv[i]) == "--algorithm-id" && i + 1 < argc)
+        {
+            algorithm_id = argv[++i];
+        }
         else if (std::string(argv[i]) == "--max-frames" && i + 1 < argc)
         {
             max_frames = std::stoi(argv[++i]);
@@ -809,11 +816,11 @@ int main(int argc, char *argv[])
 
     if (!plugin_path.empty() && !broker_socks.empty())
     {
-        return zhulong::run_ipc_workers(plugin_path, broker_socks, client_name, max_frames);
+        return zhulong::run_ipc_workers(plugin_path, broker_socks, client_name, max_frames, algorithm_id);
     }
 
     std::cout << "Zhulong Universal Native Algo Runner (v1.0)" << std::endl;
     std::cout << "Usage: zhulong_algo_runner --verify-plugin <plugin.so> [--sample <path>]" << std::endl;
-    std::cout << "   or: zhulong_algo_runner --plugin <plugin.so> --broker <sock_path> [--broker <sock_path_2> ...] [--name <name>] [--max-frames <N>]" << std::endl;
+    std::cout << "   or: zhulong_algo_runner --plugin <plugin.so> --broker <sock_path> [--broker <sock_path_2> ...] [--name <name>] [--algorithm-id <id>] [--max-frames <N>]" << std::endl;
     return 0;
 }

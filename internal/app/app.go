@@ -537,6 +537,7 @@ type taskOut struct {
 
 	Service         *task.Service
 	Handler         *task.Handler
+	ConfigCache     *task.RegionConfigCache
 	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
 }
 
@@ -547,13 +548,23 @@ func provideTaskStore(dbProvider database.DBProvider) *task.Store {
 func provideTaskComponents(
 	store *task.Store,
 	algoService *algorithm.Service,
+	streamHub *camera.StreamHub,
 	logger *zap.Logger,
 ) taskOut {
-	service := task.NewService(store, algoService, algoService, logger)
+	configCache := task.NewRegionConfigCache(store, logger)
+	streamHub.SetRegionConfigProvider(configCache)
+
+	// Both the algorithm supervisor and the region config cache must react to task changes.
+	// The cache owns its own error handling, so no adapter is needed here.
+	service := task.NewService(store, algoService, []task.TaskChangeListener{
+		algoService,
+		configCache,
+	}, logger)
 	handler := task.NewHandler(service, logger)
 	return taskOut{
 		Service:         service,
 		Handler:         handler,
+		ConfigCache:     configCache,
 		ProtectedRoutes: handler,
 	}
 }
@@ -562,6 +573,7 @@ var taskModule = fx.Module("task",
 	fx.Provide(
 		provideTaskStore,
 		provideTaskComponents,
+		regionConfigReloaderProvider,
 	),
 )
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
+	"github.com/nikonikowuw/Zhulong/internal/region"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
@@ -30,6 +31,7 @@ type StreamHub struct {
 	logger   *zap.Logger
 
 	aiConsumer     AIResultConsumer
+	regionProvider RegionConfigProvider
 	mu             sync.Mutex
 	dispatchers    map[string]*StreamDispatcher
 	aiStreams      map[string]*aiStreamRef
@@ -52,11 +54,23 @@ type AIResultConsumer interface {
 	ProcessInferenceResult(ctx context.Context, res aitypes.InferenceResult) error
 }
 
+// RegionConfigProvider provides read access to the compiled region configuration for a given camera and algorithm.
+type RegionConfigProvider interface {
+	ConfigFor(cameraID, algorithmID string) (region.Config, bool)
+}
+
 // SetAIConsumer registers an optional consumer for AI inference results.
 func (h *StreamHub) SetAIConsumer(consumer AIResultConsumer) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.aiConsumer = consumer
+}
+
+// SetRegionConfigProvider registers an optional provider for region configurations.
+func (h *StreamHub) SetRegionConfigProvider(provider RegionConfigProvider) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.regionProvider = provider
 }
 
 // NewStreamHub 构造全局流分发中心。
@@ -537,6 +551,12 @@ func (h *StreamHub) consumeAIResults(ctx context.Context, cameraID string, sub *
 			return
 		}
 
+		// The AI stream is per-camera and shared by every algorithm runner attached to that
+		// camera, so this hub cannot attribute a result to one algorithm. The runner is the
+		// only party that knows, and it stamps algorithm_id into the payload (passed to it via
+		// --algorithm-id); ParseInferenceResult prefers that payload value. The argument stays
+		// empty on purpose: a guessed non-empty value would silently mis-attribute results
+		// from other algorithms whenever the payload omits the field.
 		res, err := aitypes.ParseInferenceResult(cameraID, "", data)
 		if err != nil {
 			h.logger.Warn("parse ai result failed",
@@ -548,7 +568,14 @@ func (h *StreamHub) consumeAIResults(ctx context.Context, cameraID string, sub *
 
 		h.mu.Lock()
 		consumer := h.aiConsumer
+		regionProv := h.regionProvider
 		h.mu.Unlock()
+
+		if regionProv != nil && res.AlgorithmID != "" {
+			if cfg, ok := regionProv.ConfigFor(res.CameraID, res.AlgorithmID); ok && !cfg.IsEmpty() {
+				res = cfg.Filter(res)
+			}
+		}
 
 		if consumer != nil {
 			if err := consumer.ProcessInferenceResult(ctx, res); err != nil {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
+	"github.com/nikonikowuw/Zhulong/internal/region"
 	"go.uber.org/zap"
 )
 
@@ -36,15 +37,16 @@ type TaskChangeListener interface {
 type Service struct {
 	store        *Store
 	algoProvider AlgorithmSpecProvider
-	listener     TaskChangeListener
+	listeners    []TaskChangeListener
 	logger       *zap.Logger
 }
 
 // NewService instantiates a new Task Service.
+// Every listener is notified on task changes; nil entries are ignored.
 func NewService(
 	store *Store,
 	algoProvider AlgorithmSpecProvider,
-	listener TaskChangeListener,
+	listeners []TaskChangeListener,
 	logger *zap.Logger,
 ) *Service {
 	if logger == nil {
@@ -53,14 +55,19 @@ func NewService(
 	return &Service{
 		store:        store,
 		algoProvider: algoProvider,
-		listener:     listener,
+		listeners:    listeners,
 		logger:       logger,
 	}
 }
 
 func (s *Service) notifyTaskChanged(ctx context.Context, algorithmID string) {
-	if s.listener != nil && algorithmID != "" {
-		s.listener.OnTaskChanged(ctx, algorithmID)
+	if algorithmID == "" {
+		return
+	}
+	for _, listener := range s.listeners {
+		if listener != nil {
+			listener.OnTaskChanged(ctx, algorithmID)
+		}
 	}
 }
 
@@ -86,6 +93,13 @@ func (s *Service) CreateTask(ctx context.Context, t *Task) error {
 	}
 	if t.ConfigJSON == "" {
 		t.ConfigJSON = "{}"
+	}
+	if t.RegionConfigJSON == "" {
+		t.RegionConfigJSON = "{}"
+	}
+
+	if _, err := region.ParseConfig(t.RegionConfigJSON); err != nil {
+		return apperr.Invalid("INVALID_REGION_CONFIG", fmt.Sprintf("invalid region config: %v", err), err)
 	}
 
 	// Validate algorithm existence and schema
@@ -150,6 +164,13 @@ func (s *Service) UpdateTask(ctx context.Context, id string, req *UpdateTaskRequ
 
 	if _, err := ValidateSampleFPS(task.SampleFPS); err != nil {
 		return nil, err
+	}
+
+	if task.RegionConfigJSON == "" {
+		task.RegionConfigJSON = "{}"
+	}
+	if _, err := region.ParseConfig(task.RegionConfigJSON); err != nil {
+		return nil, apperr.Invalid("INVALID_REGION_CONFIG", fmt.Sprintf("invalid region config: %v", err), err)
 	}
 
 	if s.algoProvider != nil {

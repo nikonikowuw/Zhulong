@@ -139,6 +139,9 @@ func (p *RunnerProcess) Start() error {
 	if p.config.AlgorithmName != "" {
 		args = append(args, "--name", p.config.AlgorithmName)
 	}
+	if p.config.AlgorithmID != "" {
+		args = append(args, "--algorithm-id", p.config.AlgorithmID)
+	}
 
 	cmd := exec.Command(p.config.RunnerPath, args...)
 

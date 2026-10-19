@@ -1093,6 +1093,10 @@ definitions:
         type: boolean
       id:
         type: string
+      region_config_json:
+        type: string
+      regionConfigJson:
+        type: string
       sample_fps:
         type: integer
       sampleFps:
@@ -1112,6 +1116,8 @@ definitions:
         type: boolean
       id:
         type: string
+      regionConfigJson:
+        type: string
       sampleFps:
         type: integer
       updatedAt:
@@ -1125,6 +1131,10 @@ definitions:
         type: string
       enabled:
         type: boolean
+      region_config_json:
+        type: string
+      regionConfigJson:
+        type: string
       sample_fps:
         type: integer
       sampleFps:
