@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "验收迁移编号唯一性、up/down 成对性、主键 ULID 规范合规"}
+{"file": ".trellis/spec/backend/task-guidelines.md", "reason": "验收分析任务领域交接点（RegionConfigCache / ListTasks）是否登记完整"}
+{"file": ".trellis/tasks/10-18-channel-multi-algo-task/design.md", "reason": "被修正对象：验收 §2.2 迁移步骤与 §2.1 表结构是否已按实测结论更正"}
