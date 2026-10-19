@@ -1251,3 +1251,27 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 75: 人脸识别插件集成 SCRFD 人体检测双模型
+<!-- trellis-session: v=2 fp=e04f283d4e4b0cfd -->
+
+**Date**: 2026-10-19
+**Task**: 人脸识别插件集成 SCRFD 人体检测双模型
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+在 packages/face_recognition 算法插件中内嵌 InsightFace scrfd_person_2.5g 模型，与 det_500m 协同实现 15 头人体解码与空间几何关联，输出真实全身框与人脸特征结构化数据
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2f053fd` | feat(face_recognition): integrate scrfd_person_2.5g for dual-model body-face structuring |
+| `41fee2e` | docs(spec): document dual-model person structuring and spatial association contract |
+
+### Status
+
+[OK] **Completed**
