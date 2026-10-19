@@ -71,4 +71,55 @@ private:
     int cached_h_{0};
 };
 
+/**
+ * @brief 单个检出的人体全身与可视区域结构
+ */
+struct PersonBodyDetection {
+    std::array<float, 4> body_box{0.0f, 0.0f, 0.0f, 0.0f};          /**< 归一化全身预测框 [x1, y1, x2, y2] ∈ [0, 1] */
+    std::array<float, 4> visible_box{0.0f, 0.0f, 0.0f, 0.0f};       /**< 归一化可见身体框 [x1, y1, x2, y2] ∈ [0, 1] */
+    float score{0.0f};                                              /**< 人体置信度 */
+    std::array<float, 4> body_box_pixels{0.0f, 0.0f, 0.0f, 0.0f};   /**< 原帧像素坐标 [x1, y1, x2, y2] */
+    std::array<Point2f, 5> landmarks_pixels{};                      /**< 原帧可见身体 5 点角点 */
+    bool is_real_detection{false};                                  /**< 是否来自真实神经网络模型检出 */
+};
+
+class PersonDetector {
+public:
+    PersonDetector() = default;
+
+    /**
+     * @brief 基于推理会话执行真实 NPU/ONNX 人体检测 (SCRFD Person 2.5G)
+     * @param session 当前 Worker 的人体检测会话
+     * @param image 输入只读帧视图
+     * @return 检出的人体目标列表
+     */
+    std::vector<PersonBodyDetection> detect(zhulong::Session& session, const zhulong::Image& image);
+
+    /**
+     * @brief CPU 单测/降级桩方法
+     */
+    std::vector<PersonBodyDetection> detect(const zhulong::Image& image);
+
+    void set_score_threshold(float th) noexcept { score_threshold_ = th; }
+    void set_nms_threshold(float th) noexcept { nms_threshold_ = th; }
+    void set_is_onnx(bool v) noexcept { is_onnx_ = v; }
+    bool is_onnx() const noexcept { return is_onnx_; }
+
+private:
+    std::vector<PersonBodyDetection> detect_cpu_fallback(const zhulong::Image& image);
+    std::vector<PersonBodyDetection> decode_scrfd_person(
+        const std::vector<zhulong::Tensor>& outputs,
+        int orig_w, int orig_h, float det_scale,
+        int pad_left = 0, int pad_top = 0
+    );
+
+    float score_threshold_{0.50f};
+    float nms_threshold_{0.40f};
+    bool is_onnx_{false};
+
+    std::unique_ptr<zhulong::platform::DmaBuffer> dma_input_buf_;
+    int cached_w_{0};
+    int cached_h_{0};
+};
+
 } // namespace zhulong::face

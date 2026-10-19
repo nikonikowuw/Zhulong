@@ -88,11 +88,11 @@ func TestFaceRecognitionPackageVerification(t *testing.T) {
 	if installed.Category != algorithm.CategorySafety {
 		t.Errorf("expected Category %s, got: %s", algorithm.CategorySafety, installed.Category)
 	}
-	if installed.ComputeCost != 25 {
-		t.Errorf("expected ComputeCost 25, got: %d", installed.ComputeCost)
+	if installed.ComputeCost != 35 {
+		t.Errorf("expected ComputeCost 35, got: %d", installed.ComputeCost)
 	}
-	if installed.MemoryMB != 128 {
-		t.Errorf("expected MemoryMB 128, got: %d", installed.MemoryMB)
+	if installed.MemoryMB != 160 {
+		t.Errorf("expected MemoryMB 160, got: %d", installed.MemoryMB)
 	}
 	if installed.TargetArch != "x86_64" {
 		t.Errorf("expected TargetArch 'x86_64', got: %s", installed.TargetArch)

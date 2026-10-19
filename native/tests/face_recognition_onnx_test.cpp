@@ -169,6 +169,36 @@ int main(int argc, char* argv[]) {
     std::cout << "[2] SCRFD detection passed." << std::endl;
 
     // =========================================================================
+    // 2.5 验证 SCRFD Person 2.5G 人体检测与 15 头解码
+    // =========================================================================
+    std::cout << "[2.5] Testing SCRFD Person 2.5G detection on real image..." << std::endl;
+    std::string person_model_path = resolve_test_file(models_dir + "scrfd_person_2.5g.onnx");
+    auto person_model = zhulong::Model::load(person_model_path);
+    assert(person_model.valid());
+    auto person_session = person_model.create_session(0);
+    assert(person_session.valid());
+
+    zhulong::face::PersonDetector person_detector;
+    person_detector.set_is_onnx(true);
+    person_detector.set_score_threshold(0.50f);
+    person_detector.set_nms_threshold(0.40f);
+
+    auto person_dets = person_detector.detect(person_session, detect_img);
+    std::cout << "  Detected " << person_dets.size() << " persons." << std::endl;
+    for (const auto& p : person_dets) {
+        assert(p.is_real_detection && "SCRFD Person should mark is_real_detection=true");
+        assert(p.score >= 0.50f);
+        assert(p.body_box[0] >= 0.0f && p.body_box[2] <= 1.0f);
+        assert(p.body_box[1] >= 0.0f && p.body_box[3] <= 1.0f);
+        std::cout << "  Person score: " << p.score << " box: ["
+                  << p.body_box[0] << ", " << p.body_box[1] << ", "
+                  << p.body_box[2] << ", " << p.body_box[3] << "]"
+                  << " visible: [" << p.visible_box[0] << ", " << p.visible_box[1] << ", "
+                  << p.visible_box[2] << ", " << p.visible_box[3] << "]" << std::endl;
+    }
+    std::cout << "[2.5] SCRFD Person detection passed." << std::endl;
+
+    // =========================================================================
     // 3. 验证 FaceLiVTv2-L 特征提取与金标精度基线
     // =========================================================================
     std::cout << "[3] Testing FaceLiVTv2-L feature extraction & baseline accuracy..." << std::endl;
@@ -274,12 +304,16 @@ int main(int argc, char* argv[]) {
     assert(persons != nullptr);
     for (uint32_t i = 0; i < res->count; ++i) {
         const auto& p = persons[i];
-        assert(p.face_count >= 1);
-        assert(p.faces != nullptr);
-        const auto& f = p.faces[0];
-        assert(f.quality >= 0.50f);
-        assert(f.box[0] >= 0.0f && f.box[2] <= 1.0f);
-        assert(f.box[1] >= 0.0f && f.box[3] <= 1.0f);
+        assert(p.body_box[0] >= 0.0f && p.body_box[2] <= 1.0f);
+        assert(p.body_box[1] >= 0.0f && p.body_box[3] <= 1.0f);
+        assert(p.body_score >= 0.50f);
+        if (p.face_count > 0) {
+            assert(p.faces != nullptr);
+            const auto& f = p.faces[0];
+            assert(f.quality >= 0.50f);
+            assert(f.box[0] >= 0.0f && f.box[2] <= 1.0f);
+            assert(f.box[1] >= 0.0f && f.box[3] <= 1.0f);
+        }
     }
 
     api.result_release(res);
