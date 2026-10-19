@@ -1001,6 +1001,87 @@ void test_runner_broker_connect_failure_d6(const char* runner_bin, const char* p
     std::cout << "[PASS] test_runner_broker_connect_failure_d6" << std::endl;
 }
 
+// =============================================================================
+// Test: Runner --algorithm-id 透传至 MSG_RESULT 载荷 (algorithm_id) 跨进程端到端验证
+// =============================================================================
+void test_runner_result_algorithm_id_e2e(const char* runner_bin, const char* plugin_so) {
+    if (!runner_bin || !plugin_so) return;
+
+    uint64_t stream_id = 2007;
+    FrameBroker broker;
+    BrokerOptions opt;
+    opt.slot_count = 4;
+    opt.slot_size = 1024 * 1024;
+    assert(broker.start(stream_id, "/tmp", opt));
+
+    // 捕获 runner 经 MSG_RESULT 上报的载荷。回调由 broker 接收线程异步触发，
+    // 因此下方必须做有界轮询等待，不能依赖 waitpid 之后立即断言。
+    std::atomic<bool> received{false};
+    std::string received_payload;
+    broker.set_on_result([&](uint64_t /*s_id*/, uint32_t /*client_id*/, const uint8_t* payload, size_t size) {
+        received_payload = std::string(reinterpret_cast<const char*>(payload), size);
+        received.store(true);
+    });
+
+    // 启动独立子进程 Runner，显式传入 --algorithm-id
+    pid_t pid = fork();
+    if (pid == 0) {
+        execl(runner_bin, runner_bin,
+              "--plugin", plugin_so,
+              "--broker", broker.socket_path().c_str(),
+              "--name", "algo_id_worker",
+              "--algorithm-id", "e2e_algo",
+              "--max-frames", "3",
+              nullptr);
+        _exit(127);
+    }
+
+    assert(pid > 0);
+
+    // 等待子进程连接（最高等待 3 秒，避免并发测试时 CPU 抢占偶发超时）
+    for (int i = 0; i < 150; ++i) {
+        if (broker.client_count() == 1) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    assert(broker.client_count() == 1);
+
+    // 推送 3 帧；MockDetector 返回 count>0 的检测结果，runner 必定上报 MSG_RESULT
+    std::vector<uint8_t> dummy(640 * 480 * 3, 100);
+    HardwareFrame frame;
+    frame.width = 640;
+    frame.height = 480;
+    frame.stride = 640 * 3;
+    frame.format = FRAME_FORMAT_UNKNOWN;
+    frame.host_ptr = dummy.data();
+
+    for (int i = 0; i < 3; ++i) {
+        frame.pts = 100 + i;
+        assert(broker.publish_frame(frame));
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    }
+
+    // 等待子进程处理完 3 帧退出
+    int status = 0;
+    pid_t w = waitpid(pid, &status, 0);
+    assert(w == pid);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+
+    // ⚠️ waitpid 返回不代表 broker 接收线程的回调已执行，必须有界轮询等待置位
+    for (int i = 0; i < 50; ++i) {
+        if (received.load()) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    assert(received.load());
+
+    // 先 stop 再读载荷：回调由 server 的 detach 读线程执行，本用例会收到多次
+    // MSG_RESULT；stop() 会等待所有读线程退出，此后读取 received_payload 才无竞态。
+    broker.stop();
+
+    assert(received_payload.find("\"algorithm_id\":\"e2e_algo\"") != std::string::npos);
+
+    std::cout << "[PASS] test_runner_result_algorithm_id_e2e" << std::endl;
+}
+
 void test_frame_broker_result_egress() {
     uint64_t stream_id = 999;
     FrameBroker broker;
@@ -1285,6 +1366,7 @@ int main(int argc, char* argv[]) {
         test_runner_subprocess_e2e(runner_bin, plugin_so);
         test_runner_multi_broker_e2e(runner_bin, plugin_so);
         test_runner_broker_connect_failure_d6(runner_bin, plugin_so);
+        test_runner_result_algorithm_id_e2e(runner_bin, plugin_so);
     }
     std::cout << "All FrameBroker SHM and IPC integration tests passed successfully!" << std::endl;
     return 0;

@@ -783,6 +783,29 @@ func (m *mockRegionConfigProvider) ConfigFor(cameraID, algorithmID string) (regi
 	return region.Config{}, false
 }
 
+// recordingAIResultConsumer captures every inference result handed to it, so a
+// test can assert that the persistence path and the frontend broadcast path
+// observe the same (post-filter) payload.
+type recordingAIResultConsumer struct {
+	mu      sync.Mutex
+	results []aitypes.InferenceResult
+}
+
+func (c *recordingAIResultConsumer) ProcessInferenceResult(_ context.Context, res aitypes.InferenceResult) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.results = append(c.results, res)
+	return nil
+}
+
+func (c *recordingAIResultConsumer) snapshot() []aitypes.InferenceResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]aitypes.InferenceResult, len(c.results))
+	copy(out, c.results)
+	return out
+}
+
 func TestStreamHub_ConsumeAIResults_RegionFiltering(t *testing.T) {
 	store, lazyCipher, camID, cleanup := setupTestStoreAndCipher(t)
 	defer cleanup()
@@ -813,6 +836,12 @@ func TestStreamHub_ConsumeAIResults_RegionFiltering(t *testing.T) {
 		},
 	}
 	hub.SetRegionConfigProvider(provider)
+
+	// Register a recording AI consumer (the persistence path). Filtering must
+	// happen before both fan-out targets, so this consumer and the eventHub must
+	// observe byte-for-byte identical payloads.
+	consumer := &recordingAIResultConsumer{}
+	hub.SetAIConsumer(consumer)
 
 	aiSub, feed := engine.NewAIResultSubscriptionForTest(16)
 	ctx := context.Background()
@@ -860,6 +889,26 @@ func TestStreamHub_ConsumeAIResults_RegionFiltering(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for AI result SSE event")
+	}
+
+	// The consumer call precedes the eventHub broadcast in consumeAIResults, but
+	// poll with a bound rather than relying on that ordering assumption.
+	var consumerResults []aitypes.InferenceResult
+	for i := 0; i < 100; i++ {
+		consumerResults = consumer.snapshot()
+		if len(consumerResults) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(consumerResults) != 1 {
+		t.Fatalf("expected exactly 1 result on the persistence path, got %d", len(consumerResults))
+	}
+	if len(consumerResults[0].Detections) != 1 {
+		t.Fatalf("expected exactly 1 detection on the persistence path, got %d", len(consumerResults[0].Detections))
+	}
+	if consumerResults[0].Detections[0].Label != "keep_me" {
+		t.Errorf("expected keep_me on the persistence path, got %s", consumerResults[0].Detections[0].Label)
 	}
 
 	hub.ReleaseAIStreamSubscriber(camID, "test_algo")

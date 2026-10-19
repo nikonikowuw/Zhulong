@@ -166,7 +166,11 @@ describe('CameraFrameSurface', () => {
     await expect
       .element(screen.getByTestId('overlay-content'))
       .toBeInTheDocument()
-    expect(onStateChange).toHaveBeenCalledWith('live')
+    // 状态经 useEffect 在提交后 flush，与叠加层挂载不在同一拍：
+    // 叠加层已就位不代表 'live' 回调已触发，必须重试等待而非同步断言。
+    await vi.waitFor(() => {
+      expect(onStateChange).toHaveBeenCalledWith('live')
+    })
     // 叠加层拿到的是画面固有尺寸，元素盒尺寸由 frame-geometry 单测覆盖
     expect(seen[seen.length - 1].naturalWidth).toBe(800)
     expect(seen[seen.length - 1].naturalHeight).toBe(200)
