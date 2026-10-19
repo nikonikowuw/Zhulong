@@ -56,6 +56,27 @@ pnpm test            # Vitest 浏览器无头模式测试 (--browser.headless vi
 3. **关键弹窗交互流**：测试 `confirm-dialog` 的二次确认、取消动作及外部 `use-dialog-state` 响应；
 4. **表格与批量操作**：测试全选/反选、批量删除弹窗唤起与操作触发。
 
+### 2.3 断言 effect 产出的状态必须重试等待（`vi.waitFor`）
+
+⚠️ **症状**：`expect(onStateChange).toHaveBeenCalledWith('live')` 偶发失败且收到的是 `'loading'`；单文件跑必过，全量并行跑间歇失败（实测全量 1/6 失败、单文件 0/10）。
+
+**原因**：父级回调由子组件的 `useEffect([state])` 在**提交之后** flush，而驱动该状态的数据常来自 `act` 之外的路径（如 rAF 渲染循环里的 `onFrameDrawn`）。`await expect.element(...).toBeInTheDocument()` 只等到 DOM 出现，**不代表 effect 已 flush** —— 两者不在同一拍。
+
+```typescript
+// ❌ 同步断言：DOM 就位不等于 effect 已跑完
+await expect.element(screen.getByTestId('overlay-content')).toBeInTheDocument()
+expect(onStateChange).toHaveBeenCalledWith('live')
+
+// ✅ 重试等待，直到 effect 真正 flush
+await vi.waitFor(() => {
+  expect(onStateChange).toHaveBeenCalledWith('live')
+})
+```
+
+**边界**：初始挂载态（`no-camera` / `loading` / render 前就设好 `status` 的 `unavailable`）由 `render()` 的 `act` 包裹 flush，同步断言安全；**由 act 之外数据流驱动**的状态迁移必须重试等待。
+
+⚠️ **不得用测试等待掩盖产品缺陷**：若某状态本可由 props 在 render 期间同步派生，却回传给了 `useEffect`，那应改渲染派生而非给测试加等待 —— 此时 `vi.waitFor` 才是掩盖问题。
+
 ---
 
 ## 3. 严格类型约束与零 any 审计

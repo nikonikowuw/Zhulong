@@ -79,3 +79,32 @@ comp := algorithm.NewAlgorithmComponents(db, dir, "cpu", logger)
 
 
 **Prevention**：任何在构造期捕获依赖的组件包（`*Components`）都不支持事后替换字段；需要替换就先改环境变量/参数再构造。runner 桩用 `trap 'exit 0' TERM INT; while true; do sleep 1; done`，保证收到 SIGTERM 即退出且不留孤儿进程。
+
+### 4.4 多路扇出的过滤/变换必须对每一路都断言
+
+⚠️ **症状**：`StreamHub.consumeAIResults` 这类「一次变换 → N 路分发」的汇聚点，测试只注册了其中一路（如 `eventHub`），另一路（如 `aiConsumer` 落库）的过滤/变换正确性完全未被守护。此时把过滤挪到某一路之后仍会全绿。
+
+**修法**：为**每一路**分发目标注册记录型替身，各自对同一硬编码期望值断言。这比「两路互相比对」鉴别力更强 —— 不仅能发现单路漏过滤，也能发现两路同错。
+
+```go
+// 记录型替身：mutex 保护 + 快照深拷贝，避免与分发 goroutine 竞争
+type recordingAIResultConsumer struct {
+    mu      sync.Mutex
+    results []aitypes.InferenceResult
+}
+
+func (c *recordingAIResultConsumer) ProcessInferenceResult(_ context.Context, res aitypes.InferenceResult) error {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    c.results = append(c.results, res)
+    return nil
+}
+
+// 断言两路各自都只看到过滤后的 1 条（而非只断言 eventHub）
+hub.SetAIConsumer(consumer)
+// ... 喂入 3 条目标，其中 2 条应被 ROI/MASK 过滤 ...
+```
+
+**变更鉴别力自检（推荐做法）**：临时把过滤从某一路挪走（或让某一路拿到未过滤结果），确认该路断言**必定失败**，再还原。只靠「测试存在」无法证明它真的守住了契约。
+
+⚠️ 同理适用于断言前的异步排空（见 §4.1）：消费者调用与广播虽在同一 goroutine 内先后发生，仍应用**有界轮询**等待替身记录，而非依赖调用顺序的隐含假设。

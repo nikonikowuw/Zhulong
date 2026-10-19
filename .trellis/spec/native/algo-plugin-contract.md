@@ -301,3 +301,24 @@ Runner 维持两态机进行自适应节流，避免连续空画面产生无效 
 
 - **丢最旧（Drop Oldest）**：Go 侧 `AIResultSubscription` 采用固定容量环形队列（默认容量 32）。
 - 当队列满且慢消费者未及时取走时：丢弃最旧一帧、原子递增 `DroppedResults` 计数、新帧推入队列，绝不阻塞 Native 引擎与 FrameBroker 回调线程。
+
+### 9.6 端到端测试读取 `MSG_RESULT` 的时序与所有权
+
+守护 §9.2 的 `algorithm_id` 契约需跑跨进程用例（`native/tests/frame_broker_test.cpp` 的 `test_runner_result_algorithm_id_e2e`）：`fork` + `execl` 拉起真实 runner 并传 `--algorithm-id`，经 `broker.set_on_result` 捕获载荷后断言字段存在。两条硬约束：
+
+1. ⚠️ **`waitpid` 返回不代表回调已执行**：`MSG_RESULT` 由 `client_read_loop` 这个 **detach 的读线程**（`unix_socket.cpp`）回调上报，与子进程退出是两条独立路径。必须**有界轮询**等待标志位置位（与既有 `test_frame_broker_result_egress` 一致），绝不裸断言。
+2. ⚠️ **先 `broker.stop()` 再读捕获缓冲区**：该用例推送多帧（3 帧 → 最多 3 次回调），而非原子的捕获变量（如 `std::string`）会被后台读线程反复写入。`UnixSocketServer::stop()` 会 `while (active_workers_ > 0)` 等待所有读线程退出，因此把 `stop()` 提到读取之前才能消除数据竞争。
+
+```cpp
+for (int i = 0; i < 50; ++i) {
+    if (received.load()) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+}
+assert(received.load());
+broker.stop();  // 等读线程退出后，再读非原子的 captured payload
+assert(received_payload.find("\"algorithm_id\":\"e2e_algo\"") != std::string::npos);
+```
+
+⚠️ **`assert` 生效的前提**：本测试文件全篇用 `assert`，依赖 `native/CMakeLists.txt` 的 `ASSERT_TEST_TARGETS` 对 `ZhulongFrameBrokerTests` 显式 `-UNDEBUG`。新增断言型测试目标必须一并加入该列表，否则 NDEBUG 下断言会被静默编译掉，测试变成空跑。
+
+⚠️ **stream_id 与 socket 名不得与既有用例重名**：socket 路径由 stream_id 派生（`zhulong_broker_<stream_id>.sock`），`main()` 内串行执行。新增用例前先全文件 grep 已用编号（当前已占用 1001-1008/1010/1011/999/2001/2002/2007/3001-3003/9002）。
