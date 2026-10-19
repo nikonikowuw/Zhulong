@@ -64,14 +64,14 @@
 
 ## Acceptance Criteria
 
-- [ ] **AC1**：迁移 `000013` 可顺畅执行 `up` 与 `down`；历史存量任务数据平滑升级为“主表+子表”结构且零数据丢失（**含 `region_config_json` 的历史区域配置**）。
-- [ ] **AC2**：创建/更新通道任务为单次原子请求，在数据库事务内完成主表及多算法明细写入，任一算法校验失败或总算力超限时整体回滚。
-- [ ] **AC3**：算力超限（> 1000 点）时精准拦截，返回稳定机器码 `COMPUTE_BUDGET_EXCEEDED`；正常增删改查算力核算精准无偏差。
-- [ ] **AC4**：修改通道任务中勾选的算法或 sample_fps 后，受影响的算法 Runner 能准确实时建立或注销 FrameBroker 订阅，节流率自动提升为通道内最大采样率。
-- [ ] **AC5**：前端「配置通道任务」弹窗保存仅触发一次 API 提交，无任何客户端 diff 并发请求；保存成功后卡片与表格即时刷新。
-- [ ] **AC6**：算法包被卸载时，正确清理 `task_algorithms` 对应关联项，不留孤儿数据（注意 `internal/algorithm/store.go:188` 与 `internal/task/store.go:282` 是**两个不同包**的同类写死，不能只改一个）。
-- [ ] **AC7**：⚠️ **区域过滤在重构后仍然生效**：多算法通道任务下，每个算法子项能解析出各自的 `region_config_json`，`RegionConfigCache` 的快照构建正确。这是跨任务交接的关键回归项（见 `design.md §3.4.1`）。
-- [ ] **AC8**：全部单元测试与集成测试通过，执行 `make check` 全绿（前端 lint/type-check/test + native-test + api-docs + go-check）。
+- [x] **AC1**：迁移 `000013` 可顺畅执行 `up` 与 `down`；历史存量任务数据平滑升级为“主表+子表”结构且零数据丢失（**含 `region_config_json` 的历史区域配置**）。
+- [x] **AC2**：创建/更新通道任务为单次原子请求，在数据库事务内完成主表及多算法明细写入，任一算法校验失败或总算力超限时整体回滚。
+- [x] **AC3**：算力超限（> 1000 点）时精准拦截，返回稳定机器码 `COMPUTE_BUDGET_EXCEEDED`；正常增删改查算力核算精准无偏差。
+- [x] **AC4**：修改通道任务中勾选的算法或 sample_fps 后，受影响的算法 Runner 能准确实时建立或注销 FrameBroker 订阅，节流率自动提升为通道内最大采样率。
+- [x] **AC5**：前端「配置通道任务」弹窗保存仅触发一次 API 提交，无任何客户端 diff 并发请求；保存成功后卡片与表格即时刷新。
+- [x] **AC6**：算法包被卸载时，正确清理 `task_algorithms` 对应关联项，不留孤儿数据（注意 `internal/algorithm/store.go:188` 与 `internal/task/store.go:282` 是**两个不同包**的同类写死，不能只改一个）。
+- [x] **AC7**：⚠️ **区域过滤在重构后仍然生效**：多算法通道任务下，每个算法子项能解析出各自的 `region_config_json`，`RegionConfigCache` 的快照构建正确。这是跨任务交接的关键回归项（见 `design.md §3.4.1`）。
+- [x] **AC8**：全部单元测试与集成测试通过，执行 `make check` 全绿（前端 lint/type-check/test + native-test + api-docs + go-check）。
 
 ---
 
