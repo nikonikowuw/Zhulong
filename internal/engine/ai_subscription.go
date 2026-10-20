@@ -169,9 +169,11 @@ func (s *AIResultSubscription) Close() error {
 		}
 
 		s.mu.Lock()
-		s.closed = true
+		if !s.closed {
+			s.closed = true
+			close(s.done)
+		}
 		s.mu.Unlock()
-		close(s.done)
 		s.signal()
 
 		if s.stream != nil && s.stream.engine != nil && s.id > 0 {

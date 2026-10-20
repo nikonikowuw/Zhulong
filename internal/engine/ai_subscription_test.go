@@ -60,6 +60,27 @@ func TestAIResultSubscription_ContextCancel(t *testing.T) {
 	}
 }
 
+func TestAIResultSubscription_CloseAfterTerminalState(t *testing.T) {
+	sub := newAIResultSubscription(nil, 1, 1, 3)
+
+	sub.mu.Lock()
+	sub.err = ErrIO
+	sub.closed = true
+	close(sub.done)
+	sub.mu.Unlock()
+
+	if err := sub.Close(); err != nil {
+		t.Fatalf("Close after terminal state failed: %v", err)
+	}
+	if err := sub.Close(); err != nil {
+		t.Fatalf("repeated Close after terminal state failed: %v", err)
+	}
+
+	if _, err := sub.Next(context.Background()); err != ErrIO {
+		t.Fatalf("expected terminal error %v, got %v", ErrIO, err)
+	}
+}
+
 func TestAIResultSubscription_ControlLoopCancel(t *testing.T) {
 	sub := newAIResultSubscription(nil, 1, 1, 3)
 
