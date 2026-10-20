@@ -23,7 +23,7 @@
     "statusOverload": "算力超載"
   },
   "table": {
-    "id": "任務 ID",
+    "id": "任務 / 訂閱 ID",
     "camera": "關聯攝影機",
     "algorithm": "綁定演算法包",
     "fps": "採樣幀率",
@@ -35,7 +35,11 @@
     "statusStandby": "待命 (未激活)",
     "statusError": "異常",
     "statusPaused": "已暫停",
-    "copyIdSuccess": "任務 ID 已複製到剪貼簿",
+    "copyIdFailed": "複製失敗，請手動複製",
+    "copyTaskId": "複製任務 ID",
+    "copyTaskIdSuccess": "任務 ID 已複製到剪貼簿",
+    "copySubscriptionId": "複製訂閱 ID",
+    "copySubscriptionIdSuccess": "訂閱 ID 已複製到剪貼簿",
     "toggleSuccess": "任務狀態已更新",
     "toggleError": "更新任務狀態失敗",
     "channelResumed": "通道分析任務已恢復運行",

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { AlertCircle, Check, Copy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { copyToClipboard } from '@/lib/clipboard'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -54,14 +55,14 @@ export function AuditDetailDialog() {
   }
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(detailText)
-      setCopied(true)
-      toast.success(t('toast.copySuccess'))
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
+    // 只在真正复制成功后才置 copied / 报成功，失败时给出可操作的提示
+    if (!(await copyToClipboard(detailText))) {
       toast.error(t('toast.copyFailed'))
+      return
     }
+    setCopied(true)
+    toast.success(t('toast.copySuccess'))
+    setTimeout(() => setCopied(false), 2000)
   }
 
   return (

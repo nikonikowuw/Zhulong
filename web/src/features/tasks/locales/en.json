@@ -23,7 +23,7 @@
     "statusOverload": "Overloaded"
   },
   "table": {
-    "id": "Task ID",
+    "id": "Task / Subscription ID",
     "camera": "Camera",
     "algorithm": "Algorithm",
     "fps": "Sampling Rate",
@@ -35,7 +35,11 @@
     "statusStandby": "Standby (Inactive)",
     "statusError": "Error",
     "statusPaused": "Paused",
-    "copyIdSuccess": "Task ID copied to clipboard",
+    "copyIdFailed": "Failed to copy, please copy manually",
+    "copyTaskId": "Copy task ID",
+    "copyTaskIdSuccess": "Task ID copied to clipboard",
+    "copySubscriptionId": "Copy subscription ID",
+    "copySubscriptionIdSuccess": "Subscription ID copied to clipboard",
     "toggleSuccess": "Task status updated",
     "toggleError": "Failed to update task status",
     "channelResumed": "Channel analysis task resumed",

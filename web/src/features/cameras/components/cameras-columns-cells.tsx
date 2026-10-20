@@ -3,6 +3,7 @@ import { type Column } from '@tanstack/react-table'
 import { Check, Copy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { copyToClipboard } from '@/lib/clipboard'
 import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -17,7 +18,6 @@ import {
 import { DataTableColumnHeader } from '@/components/data-table'
 import { type Camera, type CameraHealth } from '../data/schema'
 import { useToggleCameraEnabled } from '../hooks/use-cameras'
-import { copyToClipboard } from '../utils/url-helper'
 
 export function CameraColumnHeader({
   column,

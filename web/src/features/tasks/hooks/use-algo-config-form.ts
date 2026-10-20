@@ -3,6 +3,7 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { copyToClipboard } from '@/lib/clipboard'
 import {
   buildConfigFormSchema,
   buildFormValues,
@@ -117,9 +118,7 @@ export function useAlgoConfigForm({
   }, [commit, t, value])
 
   const copyJson = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(value || '{}')
-    } catch {
+    if (!(await copyToClipboard(value || '{}'))) {
       toast.error(
         t('dynamicForm.copyError', '复制失败，请检查浏览器剪贴板权限')
       )

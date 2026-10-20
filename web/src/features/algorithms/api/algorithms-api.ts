@@ -1,8 +1,10 @@
 import { apiClient, type ApiResponse } from '@/lib/api-client'
 import {
+  algorithmActionResponseSchema,
   algorithmListResponseSchema,
   algorithmSchema,
   type Algorithm,
+  type AlgorithmStatus,
 } from '../data/schema'
 
 export interface UploadProgressCallback {
@@ -64,22 +66,38 @@ export const algorithmsApi = {
   },
 
   /**
-   * 启用算法
+   * 启用算法。
+   *
+   * 后端只回 `{ status }`（见 handler.Enable），不是完整算法实体；
+   * 用 `algorithmSchema` parse 会抛 ZodError 并污染全局 Toast。
    */
-  async enableAlgorithm(id: string): Promise<Algorithm> {
+  async enableAlgorithm(id: string): Promise<AlgorithmStatus> {
     const resp = await apiClient.post<ApiResponse<unknown>>(
       `/algorithms/${id}/enable`
     )
-    return algorithmSchema.parse(resp.data.data)
+    return algorithmActionResponseSchema.parse(resp.data.data).status
   },
 
   /**
-   * 停用算法
+   * 停用算法。响应契约同 {@link enableAlgorithm}。
    */
-  async disableAlgorithm(id: string): Promise<Algorithm> {
+  async disableAlgorithm(id: string): Promise<AlgorithmStatus> {
     const resp = await apiClient.post<ApiResponse<unknown>>(
       `/algorithms/${id}/disable`
     )
-    return algorithmSchema.parse(resp.data.data)
+    return algorithmActionResponseSchema.parse(resp.data.data).status
+  },
+
+  /**
+   * 重置熔断。
+   *
+   * 仅解除 CRASH_LOOP 熔断器并把状态置回 DISABLED，**不会**重启算法；
+   * 算法不处于熔断状态时后端返回 409 `ALGORITHM_NOT_IN_CRASH_LOOP`。
+   */
+  async resetAlgorithm(id: string): Promise<AlgorithmStatus> {
+    const resp = await apiClient.post<ApiResponse<unknown>>(
+      `/algorithms/${id}/reset`
+    )
+    return algorithmActionResponseSchema.parse(resp.data.data).status
   },
 }

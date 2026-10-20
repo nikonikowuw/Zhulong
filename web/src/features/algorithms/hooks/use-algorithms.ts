@@ -80,3 +80,23 @@ export function useDisableAlgorithm() {
     },
   })
 }
+
+/**
+ * 重置熔断 Mutation Hook
+ *
+ * `suppressGlobalToast` 是刻意声明的：调用方（AlgorithmResetDialog）把 409/500
+ * 渲染成弹窗内的留存 Banner 并提供重试，若再叠加全局兜底 Toast 就是双重反馈。
+ */
+export function useResetAlgorithm() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (id: string) => algorithmsApi.resetAlgorithm(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ALGORITHMS_QUERY_KEY })
+    },
+    meta: {
+      suppressGlobalToast: true,
+    },
+  })
+}

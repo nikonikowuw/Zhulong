@@ -2,6 +2,7 @@ import { DotsHorizontalIcon } from '@radix-ui/react-icons'
 import { Copy, Eye } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { copyToClipboard } from '@/lib/clipboard'
 import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -98,10 +99,9 @@ export function ActionCell({ log }: { log: AuditLog }) {
             <DropdownMenuItem
               onClick={async (e) => {
                 e.stopPropagation()
-                try {
-                  await navigator.clipboard.writeText(log.target)
+                if (await copyToClipboard(log.target)) {
                   toast.success(t('toast.copyTargetSuccess'))
-                } catch {
+                } else {
                   toast.error(t('toast.copyFailed'))
                 }
               }}
@@ -114,10 +114,9 @@ export function ActionCell({ log }: { log: AuditLog }) {
             <DropdownMenuItem
               onClick={async (e) => {
                 e.stopPropagation()
-                try {
-                  await navigator.clipboard.writeText(log.ip)
+                if (await copyToClipboard(log.ip)) {
                   toast.success(t('toast.copyIpSuccess'))
-                } catch {
+                } else {
                   toast.error(t('toast.copyFailed'))
                 }
               }}

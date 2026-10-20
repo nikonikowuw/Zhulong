@@ -69,3 +69,19 @@ export type Algorithm = z.infer<typeof algorithmSchema>
 export const algorithmListResponseSchema = z.array(algorithmSchema)
 
 export type AlgorithmListResponse = z.infer<typeof algorithmListResponseSchema>
+
+/**
+ * 动作型端点（`POST /algorithms/:id/enable|disable|reset`）的响应契约。
+ *
+ * 这些端点只回 `{ status }` 而**不是**完整算法实体，因此严禁复用
+ * `algorithmSchema` 去 parse：字段缺失会抛 `ZodError`，它既不是 `AxiosError`
+ * 也没有 `response.data.message`，最终被全局 `MutationCache` 兜底成
+ * `Something went wrong!`，同时 `onSuccess` 永不触发（列表不失效刷新）。
+ */
+export const algorithmActionResponseSchema = z.object({
+  status: algorithmStatusSchema,
+})
+
+export type AlgorithmActionResponse = z.infer<
+  typeof algorithmActionResponseSchema
+>

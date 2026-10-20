@@ -88,28 +88,38 @@ describe('algorithms-api', () => {
     expect(apiClient.delete).toHaveBeenCalledWith('/algorithms/algo_to_delete')
   })
 
-  it('enableAlgorithm and disableAlgorithm post to subroutes', async () => {
-    const mockAlgo = {
-      id: 'algo_1',
-      name: '算法',
-      version: '1.0',
-      taskType: 'classification',
-      category: 'general',
-      targetArch: 'x86_64',
-      targetDevice: 'cpu',
-      status: 'ACTIVE',
-      createdAt: '2026-10-15T00:00:00Z',
-      updatedAt: '2026-10-15T00:00:00Z',
-    }
-
+  it('enableAlgorithm and disableAlgorithm parse the {status} action envelope', async () => {
+    // 回归：后端 handler.Enable/Disable 只回 { status }，不是完整算法实体。
+    // 曾经这里 mock 了完整实体，掩盖了前端用 algorithmSchema parse 的契约错位，
+    // 真实环境下会抛 ZodError → 全局 Toast 显示 “Something went wrong!”。
     vi.mocked(apiClient.post).mockResolvedValue({
-      data: { code: 'OK', message: 'success', data: mockAlgo },
+      data: { code: 'OK', message: 'success', data: { status: 'ACTIVE' } },
     } as never)
 
-    await algorithmsApi.enableAlgorithm('algo_1')
+    await expect(algorithmsApi.enableAlgorithm('algo_1')).resolves.toBe(
+      'ACTIVE'
+    )
     expect(apiClient.post).toHaveBeenCalledWith('/algorithms/algo_1/enable')
 
-    await algorithmsApi.disableAlgorithm('algo_1')
+    vi.mocked(apiClient.post).mockResolvedValue({
+      data: { code: 'OK', message: 'success', data: { status: 'DISABLED' } },
+    } as never)
+
+    await expect(algorithmsApi.disableAlgorithm('algo_1')).resolves.toBe(
+      'DISABLED'
+    )
     expect(apiClient.post).toHaveBeenCalledWith('/algorithms/algo_1/disable')
+  })
+
+  it('resetAlgorithm parses the {status} action envelope', async () => {
+    // 回归：后端 handler.Reset 同样只回 { status: "DISABLED" }。
+    vi.mocked(apiClient.post).mockResolvedValue({
+      data: { code: 'OK', message: 'success', data: { status: 'DISABLED' } },
+    } as never)
+
+    await expect(algorithmsApi.resetAlgorithm('algo_1')).resolves.toBe(
+      'DISABLED'
+    )
+    expect(apiClient.post).toHaveBeenCalledWith('/algorithms/algo_1/reset')
   })
 })

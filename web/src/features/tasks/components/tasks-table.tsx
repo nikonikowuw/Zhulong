@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { Check, Copy, Pencil, Search, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
 import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
 import { Button } from '@/components/ui/button'
@@ -167,10 +168,20 @@ export function TasksTable({
     algoMap,
   ])
 
-  const handleCopyId = (id: string) => {
-    void navigator.clipboard.writeText(id)
+  const handleCopyId = async (
+    id: string,
+    successKey: 'table.copyTaskIdSuccess' | 'table.copySubscriptionIdSuccess',
+    successFallback: string
+  ) => {
+    // 非安全上下文（设备绑 0.0.0.0 后经明文 HTTP 局域网访问）下 navigator.clipboard
+    // 不存在，裸调会同步抛 TypeError；必须走共享工具的回退路径，
+    // 且只在真正复制成功后才给成功反馈，不得谎报。
+    if (!(await copyToClipboard(id))) {
+      toast.error(t('table.copyIdFailed', '复制失败，请手动复制'))
+      return
+    }
     setCopiedId(id)
-    toast.success(t('table.copyIdSuccess', '任务 ID 已复制到剪贴板'))
+    toast.success(t(successKey, successFallback))
     setTimeout(() => setCopiedId(null), 2000)
   }
 
@@ -352,8 +363,8 @@ export function TasksTable({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className='w-[130px]'>
-                {t('table.id', '任务 ID')}
+              <TableHead className='w-[180px]'>
+                {t('table.id', '任务 / 订阅 ID')}
               </TableHead>
               <TableHead>{t('table.camera', '关联摄像头')}</TableHead>
               <TableHead>{t('table.algorithm', '绑定算法包')}</TableHead>
@@ -421,22 +432,63 @@ export function TasksTable({
 
                 return (
                   <TableRow key={row.id} className='group'>
-                    {/* ID 列 */}
+                    {/* ID 列：本表按「通道任务 × 算法订阅」拍平，主键语义有两层，
+                        因此两层都展示——主行是 analysis_tasks.id（/tasks/{id} 与
+                        审计日志用的就是它），次行是 task_algorithms.id（update
+                        payload 里的 algorithms[].id）。 */}
                     <TableCell className='font-mono text-xs'>
-                      <div className='flex items-center gap-1.5'>
-                        <span>{row.id.slice(0, 8)}...</span>
-                        <Button
-                          variant='ghost'
-                          size='icon'
-                          className='h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100'
-                          onClick={() => handleCopyId(row.id)}
-                        >
-                          {copiedId === row.id ? (
-                            <Check className='h-3 w-3 text-emerald-500' />
-                          ) : (
-                            <Copy className='h-3 w-3 text-muted-foreground' />
-                          )}
-                        </Button>
+                      <div className='flex flex-col gap-0.5'>
+                        <div className='flex items-center gap-1.5'>
+                          <span className='text-foreground'>
+                            {row.taskId.slice(0, 8)}...
+                          </span>
+                          <Button
+                            variant='ghost'
+                            size='icon'
+                            className='h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100'
+                            aria-label={t('table.copyTaskId', '复制任务 ID')}
+                            title={t('table.copyTaskId', '复制任务 ID')}
+                            onClick={() =>
+                              void handleCopyId(
+                                row.taskId,
+                                'table.copyTaskIdSuccess',
+                                '任务 ID 已复制到剪贴板'
+                              )
+                            }
+                          >
+                            {copiedId === row.taskId ? (
+                              <Check className='h-3 w-3 text-emerald-500' />
+                            ) : (
+                              <Copy className='h-3 w-3 text-muted-foreground' />
+                            )}
+                          </Button>
+                        </div>
+                        <div className='flex items-center gap-1.5 text-[11px] text-muted-foreground'>
+                          <span>{row.id.slice(0, 8)}...</span>
+                          <Button
+                            variant='ghost'
+                            size='icon'
+                            className='h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100'
+                            aria-label={t(
+                              'table.copySubscriptionId',
+                              '复制订阅 ID'
+                            )}
+                            title={t('table.copySubscriptionId', '复制订阅 ID')}
+                            onClick={() =>
+                              void handleCopyId(
+                                row.id,
+                                'table.copySubscriptionIdSuccess',
+                                '订阅 ID 已复制到剪贴板'
+                              )
+                            }
+                          >
+                            {copiedId === row.id ? (
+                              <Check className='h-3 w-3 text-emerald-500' />
+                            ) : (
+                              <Copy className='h-3 w-3 text-muted-foreground' />
+                            )}
+                          </Button>
+                        </div>
                       </div>
                     </TableCell>
 

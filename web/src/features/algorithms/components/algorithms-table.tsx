@@ -7,6 +7,7 @@ import {
   UploadCloud,
   HardDrive,
   Activity,
+  RotateCcw,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { categoryBadgeClass, type CategoryHue } from '@/lib/category-palette'
@@ -31,6 +32,7 @@ import {
   useDisableAlgorithm,
 } from '../hooks/use-algorithms'
 import { AlgorithmDeleteDialog } from './algorithm-delete-dialog'
+import { AlgorithmResetDialog } from './algorithm-reset-dialog'
 import { AlgorithmStatusBadge } from './algorithm-status-badge'
 
 /** 任务类型 → §1.3.6 分类色板槽位（显式映射，避免新增分类时重排既有颜色）。 */
@@ -58,6 +60,8 @@ export function AlgorithmsTable({
   const [deletingAlgorithm, setDeletingAlgorithm] = useState<Algorithm | null>(
     null
   )
+  const [resettingAlgorithm, setResettingAlgorithm] =
+    useState<Algorithm | null>(null)
 
   const enableMutation = useEnableAlgorithm()
   const disableMutation = useDisableAlgorithm()
@@ -83,6 +87,10 @@ export function AlgorithmsTable({
   }, [algorithms, taskTypeFilter, searchQuery])
 
   const handleToggleStatus = (algo: Algorithm) => {
+    // 熔断态由熔断器封禁，启用必然 409 ALGORITHM_IN_CRASH_LOOP；
+    // 开关已 disabled，这里再兜一层防御，避免后续改动绕过 UI 约束。
+    if (algo.status === 'CRASH_LOOP') return
+
     if (algo.status === 'ACTIVE' || algo.status === 'RUNNING') {
       disableMutation.mutate(algo.id)
     } else {
@@ -251,6 +259,7 @@ export function AlgorithmsTable({
                   enableMutation.isPending || disableMutation.isPending
                 const isEnabled =
                   algo.status === 'ACTIVE' || algo.status === 'RUNNING'
+                const isCrashLoop = algo.status === 'CRASH_LOOP'
 
                 return (
                   <TableRow key={algo.id} className='transition-colors'>
@@ -326,35 +335,53 @@ export function AlgorithmsTable({
                     <TableCell>
                       <Switch
                         checked={isEnabled}
-                        disabled={isOperating}
+                        disabled={isOperating || isCrashLoop}
                         onCheckedChange={() => handleToggleStatus(algo)}
                         title={
-                          isEnabled
-                            ? t('clickToDisable', '点击停用')
-                            : t('clickToEnable', '点击启用')
+                          isCrashLoop
+                            ? t(
+                                'crashLoopSwitchHint',
+                                '算法处于熔断状态，请先重置熔断'
+                              )
+                            : isEnabled
+                              ? t('clickToDisable', '点击停用')
+                              : t('clickToEnable', '点击启用')
                         }
                       />
                     </TableCell>
 
-                    {/* 操作 (卸载删除) */}
+                    {/* 操作 (熔断复位 / 卸载删除) */}
                     <TableCell className='text-end'>
-                      <Button
-                        variant='ghost'
-                        size='icon'
-                        className='h-8 w-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
-                        disabled={isEnabled || isOperating}
-                        title={
-                          isEnabled
-                            ? t(
-                                'disableBeforeDelete',
-                                '请先停用算法包后再执行卸载'
-                              )
-                            : t('deleteAlgorithm', '卸载算法包')
-                        }
-                        onClick={() => setDeletingAlgorithm(algo)}
-                      >
-                        <Trash2 className='h-4 w-4' />
-                      </Button>
+                      <div className='flex items-center justify-end gap-1'>
+                        {isCrashLoop && (
+                          <Button
+                            variant='outline'
+                            size='sm'
+                            className='h-8 gap-1.5 text-xs'
+                            onClick={() => setResettingAlgorithm(algo)}
+                          >
+                            <RotateCcw className='h-3.5 w-3.5' />
+                            {t('resetCrashLoop', '重置熔断')}
+                          </Button>
+                        )}
+                        <Button
+                          variant='ghost'
+                          size='icon'
+                          className='h-8 w-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
+                          disabled={isEnabled || isOperating}
+                          title={
+                            isEnabled
+                              ? t(
+                                  'disableBeforeDelete',
+                                  '请先停用算法包后再执行卸载'
+                                )
+                              : t('deleteAlgorithm', '卸载算法包')
+                          }
+                          onClick={() => setDeletingAlgorithm(algo)}
+                        >
+                          <Trash2 className='h-4 w-4' />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 )
@@ -370,6 +397,15 @@ export function AlgorithmsTable({
         open={Boolean(deletingAlgorithm)}
         onOpenChange={(open) => {
           if (!open) setDeletingAlgorithm(null)
+        }}
+      />
+
+      {/* 熔断复位弹窗 */}
+      <AlgorithmResetDialog
+        algorithm={resettingAlgorithm}
+        open={Boolean(resettingAlgorithm)}
+        onOpenChange={(open) => {
+          if (!open) setResettingAlgorithm(null)
         }}
       />
     </div>
