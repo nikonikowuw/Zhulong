@@ -23,7 +23,7 @@ func NewHandler(service *Service, logger *zap.Logger) *Handler {
 	}
 	return &Handler{
 		service:        service,
-		logger:         logger.Named("algorithm_handler"),
+		logger:         logger.Named("algorithm.handler"),
 		maxUploadLimit: MaxUploadSize,
 	}
 }

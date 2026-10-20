@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "本子任务的质量检查清单与测试约定"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "检查实现是否与更新后的规范一致，以及规范是否已包含去重规则 / 采样策略 / UTC 约定 / logctx 用法 / nativelog"}
+{"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "检查 RequestID / AccessLog 的改动没有破坏中间件顺序约束"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "重点检查「删除 service 层重复日志」是否遗漏了 apperr.Err 为空的调用点（会导致日志全丢）"}
+{"file": ".trellis/spec/architecture.md", "reason": "检查 logctx 的 import 白名单未被违反（不得出现 gin / httputil / httpmiddleware）"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "检查是否重复实现：newLogger 与 main.go 的 -reset-network 分支应复用同一构造逻辑"}

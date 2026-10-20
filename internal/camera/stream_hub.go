@@ -91,7 +91,7 @@ func NewStreamHub(
 		cipher:        cipher,
 		registry:      registry,
 		eventHub:      eventHub,
-		logger:        logger.Named("stream_hub"),
+		logger:        logger.Named("camera.stream_hub"),
 		dispatchers:   make(map[string]*StreamDispatcher),
 		aiStreams:     make(map[string]*aiStreamRef),
 		aiSubscribers: make(map[string]map[string]struct{}),
@@ -197,11 +197,6 @@ func (h *StreamHub) createDispatcher(ctx context.Context, cameraID, role, key st
 	// 2. 解密明文 RTSP 地址
 	rawBytes, err := h.cipher.Decrypt(targetStream.EncryptedURI, MakeAAD(cameraID, role))
 	if err != nil {
-		h.logger.Error("decrypt stream uri failed",
-			zap.String("camera_id", cameraID),
-			zap.String("role", role),
-			zap.Error(err),
-		)
 		return nil, fmt.Errorf("decrypt stream uri: %w", err)
 	}
 	rawURI := string(rawBytes)

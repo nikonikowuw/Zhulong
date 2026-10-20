@@ -40,7 +40,7 @@ func NewService(provider MediaRootProvider, inspector DeviceInspector, logger *z
 	return &Service{
 		provider:  provider,
 		inspector: inspector,
-		logger:    logger.Named("mediafile"),
+		logger:    logger.Named("mediafile.service"),
 	}
 }
 

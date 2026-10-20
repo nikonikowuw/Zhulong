@@ -695,7 +695,7 @@ var runtimeModule = fx.Module("runtime",
 
 // Module contains the application's constructor graph and lifecycle registration.
 var Module = fx.Options(
-	fx.Provide(newLogger),
+	fx.Provide(provideLogger),
 	databaseModule,
 	engineModule,
 	auditModule,

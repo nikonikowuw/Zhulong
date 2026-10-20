@@ -90,6 +90,10 @@ type lifecycleRuntime struct {
 	configCache regionConfigReloader
 	server      *http.Server
 	logger      *zap.Logger
+	config      Config
+	logLevel    zap.AtomicLevel
+	logSink     loggerOutput
+	levelReload *logLevelReloader
 	listen      func(string, string) (net.Listener, error)
 	shutdown    func(context.Context) error
 
@@ -107,6 +111,7 @@ type lifecycleRuntime struct {
 	recordReady     bool
 	httpReady       bool
 	loggerSynced    bool
+	startAttempted  bool
 }
 
 type runtimeParams struct {
@@ -125,6 +130,9 @@ type runtimeParams struct {
 	ConfigCache regionConfigReloader `optional:"true"`
 	Server      *http.Server
 	Logger      *zap.Logger
+	Config      Config
+	LogLevel    zap.AtomicLevel
+	LogSink     loggerOutput
 }
 
 func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
@@ -146,18 +154,30 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		configCache: p.ConfigCache,
 		server:      p.Server,
 		logger:      p.Logger,
+		config:      p.Config,
+		logLevel:    p.LogLevel,
+		logSink:     p.LogSink,
 		listen:      net.Listen,
 		shutdown:    shutdown,
 	}
 }
 
 func (r *lifecycleRuntime) Start(ctx context.Context) error {
+	if r.startAttempted {
+		return errors.New("application is already started")
+	}
+	r.startAttempted = true
 	if r.databaseReady || r.nativeReady || r.httpReady {
 		return errors.New("application is already started")
 	}
+	if r.logSink != nil {
+		if err := r.logSink.Prepare(); err != nil {
+			return r.failStart(fmt.Errorf("prepare application log sink: %w", err))
+		}
+	}
 	if err := r.database.OpenAndMigrate(ctx); err != nil {
 		startupErr := fmt.Errorf("open database and apply migrations: %w", err)
-		return errors.Join(startupErr, r.database.Close(), r.syncLogger())
+		return r.failStart(startupErr, r.database.Close())
 	}
 	r.databaseReady = true
 
@@ -170,7 +190,7 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	if r.audit != nil {
 		if err := r.audit.Start(ctx); err != nil {
 			startupErr := fmt.Errorf("start audit service: %w", err)
-			return errors.Join(startupErr, r.closeDatabase(), r.syncLogger())
+			return r.failStart(startupErr, r.closeDatabase())
 		}
 		r.auditReady = true
 	}
@@ -219,18 +239,18 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 
 	if err := r.native.Start(); err != nil {
 		startupErr := fmt.Errorf("start native engine: %w", err)
-		return errors.Join(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
+		return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase())
 	}
 	r.nativeReady = true
 
 	if r.camera != nil {
 		if err := r.camera.InitCipher(ctx); err != nil {
 			startupErr := fmt.Errorf("initialize camera cipher: %w", err)
-			return errors.Join(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
+			return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase())
 		}
 		if err := r.camera.Start(ctx); err != nil {
 			startupErr := fmt.Errorf("start camera scheduler: %w", err)
-			return errors.Join(startupErr, r.closeCamera(), r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
+			return r.failStart(startupErr, r.closeCamera(), r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase())
 		}
 		r.cameraReady = true
 	}
@@ -238,7 +258,7 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	listener, err := r.listen("tcp", r.server.Addr)
 	if err != nil {
 		startupErr := fmt.Errorf("listen on %s: %w", r.server.Addr, err)
-		return errors.Join(startupErr, r.closeCamera(), r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase(), r.syncLogger())
+		return r.failStart(startupErr, r.closeCamera(), r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase())
 	}
 	r.listener = listener
 	r.serveDone = make(chan error, 1)
@@ -251,12 +271,49 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		close(r.serveDone)
 	}()
 	r.httpReady = true
+	if r.config.ConfigPath != "" {
+		r.levelReload = newLogLevelReloader(r.config.ConfigPath, r.logLevel, r.logger)
+		r.levelReload.Start()
+	}
 	r.logger.Info("HTTP server started", zap.String("address", listener.Addr().String()))
+	return nil
+}
+
+func (r *lifecycleRuntime) failStart(startupErr error, cleanup ...error) error {
+	cleanup = append(cleanup, r.syncLogger(), r.closeLogSink())
+	allErrors := append([]error{startupErr}, cleanup...)
+	return errors.Join(allErrors...)
+}
+
+func (r *lifecycleRuntime) closeLogSink() error {
+	if r.logSink == nil {
+		return nil
+	}
+	sink := r.logSink
+	r.logSink = nil
+	closeErr := sink.Close()
+	sinkErr, lost := sink.Health()
+	var sinkErrors []error
+	if closeErr != nil {
+		sinkErrors = append(sinkErrors, closeErr)
+	}
+	if sinkErr != nil {
+		sinkErrors = append(sinkErrors, fmt.Errorf("application log sink failed after %d refused writes: %w", lost, sinkErr))
+	} else if lost > 0 {
+		sinkErrors = append(sinkErrors, fmt.Errorf("application log sink refused %d writes", lost))
+	}
+	if err := errors.Join(sinkErrors...); err != nil {
+		return fmt.Errorf("close application log sink: %w", err)
+	}
 	return nil
 }
 
 func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 	var stopErrors []error
+	if r.levelReload != nil {
+		r.levelReload.Stop()
+		r.levelReload = nil
+	}
 
 	if r.httpReady {
 		if err := r.shutdown(ctx); err != nil {
@@ -310,6 +367,9 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 		stopErrors = append(stopErrors, err)
 	}
 	if err := r.syncLogger(); err != nil {
+		stopErrors = append(stopErrors, err)
+	}
+	if err := r.closeLogSink(); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
 	return errors.Join(stopErrors...)

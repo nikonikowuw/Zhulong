@@ -52,7 +52,7 @@ func NewService(store *Store, verifier *Verifier, supervisor *Supervisor, instal
 		verifier:        verifier,
 		supervisor:      supervisor,
 		installDir:      installDir,
-		logger:          logger.Named("algorithm_service"),
+		logger:          logger.Named("algorithm.service"),
 		restartTimers:   make(map[string]*time.Timer),
 		restartPending:  make(map[string]struct{}),
 		restartDebounce: defaultRestartDebounce,

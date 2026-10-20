@@ -6,6 +6,8 @@ address = "127.0.0.1:8000"
 
 [logging]
 development = false
+# Omitted policy values default to info/json/stderr with sampling and rotation disabled.
+# File output must explicitly enable bounded rotation and set a reviewed total-size budget.
 
 # Data directory for SQLite (zhulong.db), persistent keys (camera.key), and algorithms.
 # Defaults to "./data" in the project directory.

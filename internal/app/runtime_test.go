@@ -396,3 +396,74 @@ func TestAuditShutdownOrderAfterHTTPDrain(t *testing.T) {
 		t.Fatalf("unexpected shutdown order with audit: got %v, want %v", got, want)
 	}
 }
+
+type lifecycleLogSinkStub struct {
+	events     *eventLog
+	prepareErr error
+	closeErr   error
+}
+
+func (s *lifecycleLogSinkStub) Prepare() error {
+	s.events.add("log.prepare")
+	return s.prepareErr
+}
+
+func (s *lifecycleLogSinkStub) Health() (error, uint64)        { return nil, 0 }
+func (s *lifecycleLogSinkStub) Write(data []byte) (int, error) { return len(data), nil }
+func (s *lifecycleLogSinkStub) Sync() error                    { return nil }
+
+func (s *lifecycleLogSinkStub) Close() error {
+	s.events.add("log.close")
+	return s.closeErr
+}
+
+func TestLogSinkPreparedBeforeServicesAndClosedAfterShutdown(t *testing.T) {
+	events := &eventLog{}
+	server := &http.Server{Addr: "127.0.0.1:0"}
+	runtime := &lifecycleRuntime{
+		database: databaseStub{events: events},
+		native:   engineStub{events: events},
+		server:   server,
+		shutdown: server.Shutdown,
+		logger:   zap.NewNop(),
+		logSink:  &lifecycleLogSinkStub{events: events},
+		listen: func(network, address string) (net.Listener, error) {
+			events.add("http.listen")
+			return net.Listen(network, address)
+		},
+	}
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := runtime.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	want := []string{"log.prepare", "database.open", "engine.start", "http.listen", "engine.close", "database.close", "log.close"}
+	if got := events.snapshot(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected log sink lifecycle: got %v, want %v", got, want)
+	}
+}
+
+func TestLogSinkPrepareFailureStopsStartupAndClosesSink(t *testing.T) {
+	events := &eventLog{}
+	prepareErr := errors.New("log path unavailable")
+	runtime := &lifecycleRuntime{
+		database: databaseStub{events: events},
+		native:   engineStub{events: events},
+		server:   &http.Server{Addr: "127.0.0.1:0"},
+		logger:   zap.NewNop(),
+		logSink:  &lifecycleLogSinkStub{events: events, prepareErr: prepareErr},
+	}
+	if err := runtime.Start(context.Background()); !errors.Is(err, prepareErr) {
+		t.Fatalf("expected log sink startup error, got %v", err)
+	}
+	if got, want := events.snapshot(), []string{"log.prepare", "log.close"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("services started or sink was not closed after prepare failure: got %v, want %v", got, want)
+	}
+	if err := runtime.Start(context.Background()); err == nil || err.Error() != "application is already started" {
+		t.Fatalf("second Start after failed preparation = %v, want already-started error", err)
+	}
+	if got, want := events.snapshot(), []string{"log.prepare", "log.close"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("retry after failed preparation restarted services: got %v, want %v", got, want)
+	}
+}

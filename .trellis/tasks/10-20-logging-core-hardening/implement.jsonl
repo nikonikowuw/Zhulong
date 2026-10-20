@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "本子任务要重写 logger 初始化、引入 logctx、消除双重日志并更新本规范，必须先读既有规范与审计日志边界"}
+{"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "RequestID 与 AccessLog 的改动必须遵守中间件顺序约束（Recovery 最外层、RequestID 早于业务中间件）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "消除双重日志的前置保证：必须确认 apperr.Err 非空，否则 WriteError 不会记录任何内容"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "newLogger 的返回签名变更、nativelog 的 Fx 装配、构造函数纯粹性约束都依赖本规范"}
+{"file": ".trellis/spec/backend/host-runtime-contract.md", "reason": "lifecycleRuntime 的启动/停机顺序将新增 nativelog 消费者的启停，必须遵守既有生命周期契约"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试与源码同目录、-race 强制、engine 相关测试走 wrapper 等硬性约定"}
+{"file": ".trellis/spec/architecture.md", "reason": "logctx 的依赖白名单（打破 httputil → httpmiddleware 循环依赖）需要对照既有分层拓扑确认"}

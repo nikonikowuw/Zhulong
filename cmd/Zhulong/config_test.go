@@ -22,6 +22,57 @@ func TestLoadConfigUsesTOMLAndDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadConfigKeepsLegacyLoggingFieldsAndResolvesConfigPath(t *testing.T) {
+	path := writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n[logging]\ndevelopment = false\n")
+	got, err := loadConfigFile(path)
+	if err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("filepath.Abs: %v", err)
+	}
+	if got.ConfigPath != filepath.Clean(absPath) {
+		t.Fatalf("ConfigPath = %q, want %q", got.ConfigPath, filepath.Clean(absPath))
+	}
+	if got.Logging.Level != "info" || got.Logging.Output != "stderr" || got.Logging.Format != "" {
+		t.Fatalf("legacy config did not inherit logging defaults: %+v", got.Logging)
+	}
+	if got.Logging.Sampling.Enabled || got.Logging.Rotation.Enabled || got.Development {
+		t.Fatalf("legacy logging options unexpectedly enabled: %+v", got.Logging)
+	}
+}
+
+func TestLoadConfigParsesLoggingPolicyAndExample(t *testing.T) {
+	path := writeConfig(t, "[logging]\ndevelopment = true\nlevel = 'debug'\nformat = 'console'\noutput = 'stdout'\n[logging.sampling]\nenabled = true\ninitial = 2\nthereafter = 5\n[logging.rotation]\nenabled = true\nmax_size_mb = 8\nmax_backups = 3\nmax_age_days = 7\ncompress = true\nmax_total_size_mb = 24\n")
+	got, err := loadConfigFile(path)
+	if err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+	if !got.Development || !got.Logging.Development || got.Logging.Level != "debug" || got.Logging.Format != "console" || got.Logging.Output != "stdout" {
+		t.Fatalf("unexpected logging policy: %+v", got.Logging)
+	}
+	if !got.Logging.Sampling.Enabled || got.Logging.Sampling.Initial != 2 || got.Logging.Sampling.Thereafter != 5 {
+		t.Fatalf("unexpected sampling policy: %+v", got.Logging.Sampling)
+	}
+	if !got.Logging.Rotation.Enabled || got.Logging.Rotation.MaxSizeMB != 8 || got.Logging.Rotation.MaxBackups != 3 || got.Logging.Rotation.MaxAgeDays != 7 || !got.Logging.Rotation.Compress || got.Logging.Rotation.MaxTotalSizeMB != 24 {
+		t.Fatalf("unexpected rotation policy: %+v", got.Logging.Rotation)
+	}
+
+	examplePath := filepath.Join("..", "..", "config.toml.example")
+	if _, err := loadConfigFile(examplePath); err != nil {
+		t.Fatalf("example config does not match strict schema: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsUnknownLoggingKeys(t *testing.T) {
+	path := writeConfig(t, "[logging]\ndevelopment = false\nlevele = 'debug'\n")
+	_, err := loadConfigFile(path)
+	if err == nil || !strings.Contains(err.Error(), "levele") {
+		t.Fatalf("expected unknown logging key error, got %v", err)
+	}
+}
+
 func TestLoadConfigInheritsFacesDirFromDataDir(t *testing.T) {
 	path := writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n[data]\ndirectory = '/custom/data'\n")
 

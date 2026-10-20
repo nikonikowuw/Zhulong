@@ -9,6 +9,9 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/logctx"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestWriteErrorSanitizesInternalCause(t *testing.T) {
@@ -34,6 +37,54 @@ func TestWriteErrorSanitizesInternalCause(t *testing.T) {
 	}
 	if string(body["message"]) != `"伺服器內部錯誤"` {
 		t.Fatalf("message was not localized: %s", recorder.Body.String())
+	}
+}
+
+func TestWriteErrorLogsUnexpectedFiveHundredsOnceAndIgnoresCausedFourHundreds(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	core, observed := observer.New(zap.DebugLevel)
+	restore := zap.ReplaceGlobals(zap.New(core))
+	defer restore()
+
+	write := func(requestID string, status int, code string, cause error) {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/resource", nil)
+		request = request.WithContext(logctx.WithRequestID(request.Context(), requestID))
+		ctx.Request = request
+		WriteError(ctx, NewError(status, code, "safe", cause))
+	}
+
+	write("req-cause", http.StatusInternalServerError, "DATABASE_ERROR", errors.New("database unavailable"))
+	write("req-empty", http.StatusInternalServerError, "INTERNAL_ERROR", nil)
+	write("req-client", http.StatusBadRequest, "INVALID_INPUT", errors.New("bad input"))
+
+	entries := observed.All()
+	if len(entries) != 2 {
+		t.Fatalf("got %d Error events, want exactly 2 for the unexpected 5xx responses", len(entries))
+	}
+	want := []struct {
+		requestID string
+		code      string
+		status    int64
+	}{
+		{requestID: "req-cause", code: "DATABASE_ERROR", status: http.StatusInternalServerError},
+		{requestID: "req-empty", code: "INTERNAL_ERROR", status: http.StatusInternalServerError},
+	}
+	for i, entry := range entries {
+		if entry.Level != zap.ErrorLevel {
+			t.Errorf("entry %d level = %s, want error", i, entry.Level)
+		}
+		fields := entry.ContextMap()
+		if fields["requestId"] != want[i].requestID || fields["code"] != want[i].code || fields["status"] != int64(want[i].status) {
+			t.Errorf("entry %d fields = %#v, want requestId=%q code=%q status=%d", i, fields, want[i].requestID, want[i].code, want[i].status)
+		}
+	}
+	if got := entries[0].ContextMap()["error"]; got != "database unavailable" {
+		t.Fatalf("cause field = %#v, want database unavailable", got)
+	}
+	if _, present := entries[1].ContextMap()["error"]; present {
+		t.Fatalf("cause-free 5xx unexpectedly included an error field: %#v", entries[1].ContextMap())
 	}
 }
 

@@ -2,14 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/nikonikowuw/Zhulong/internal/app"
 	"github.com/nikonikowuw/Zhulong/internal/network"
-	"go.uber.org/zap"
 )
 
 // @title           Zhulong API
@@ -22,30 +21,42 @@ func main() {
 
 	config, err := loadConfig()
 	if err != nil {
-		log.Fatal(err)
+		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
+		os.Exit(1)
 	}
 
 	if *resetNetwork {
-		logger, _ := zap.NewProduction()
-		if config.Development {
-			logger, _ = zap.NewDevelopment()
-		}
-		defer func() { _ = logger.Sync() }()
-
-		provider := network.DetectProvider(config.CustomScript, logger)
-		watchdog := network.NewWatchdogManager(config.DataDir, provider, logger)
-		svc := network.NewNetworkService(provider, watchdog, logger)
-
-		ctx := context.Background()
-		if err := svc.ResetNetwork(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "Error resetting network: %v\n", err)
+		if err := resetNetworkCommand(config); err != nil {
+			fmt.Fprintf(os.Stderr, "network reset failed: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("Zhulong network emergency reset successfully completed:")
-		fmt.Println("  - Primary interface configured to 192.168.1.168/24 (no gateway)")
-		fmt.Println("  - Secondary interfaces restored to DHCP")
-		os.Exit(0)
+		return
 	}
 
 	app.New(config).Run()
+}
+
+func resetNetworkCommand(config app.Config) (resultErr error) {
+	logger, _, sink, err := app.NewLogger(config)
+	if err != nil {
+		return fmt.Errorf("logger initialization failed: %w", err)
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, logger.Sync(), sink.Close())
+	}()
+	if err := sink.Prepare(); err != nil {
+		return fmt.Errorf("logger sink initialization failed: %w", err)
+	}
+
+	provider := network.DetectProvider(config.CustomScript, logger)
+	watchdog := network.NewWatchdogManager(config.DataDir, provider, logger)
+	svc := network.NewNetworkService(provider, watchdog, logger)
+
+	if err := svc.ResetNetwork(context.Background()); err != nil {
+		return err
+	}
+	fmt.Println("Zhulong network emergency reset successfully completed:")
+	fmt.Println("  - Primary interface configured to 192.168.1.168/24 (no gateway)")
+	fmt.Println("  - Secondary interfaces restored to DHCP")
+	return nil
 }

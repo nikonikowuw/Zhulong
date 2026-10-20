@@ -53,14 +53,13 @@ Response 桃 [1. Recovery 捕获] 桃 ------------------- 桃 [4. AccessLog 耗�
 ## 3. 核心中间件设计红线
 
 * **RequestID 链路追踪**：优先读 `X-Request-ID`，无则生成；必须双写回响应头与 `c.Request.Context()`。
-* **Access Log (Zap)**：
-* 热路径必须强类型字段输出（`zap.Duration`, `zap.Int`），禁止字符串拼接反射。
-* 严禁打印密码、Token、RTSP 凭证与大体积 Body。
-* 状态码分级：`≥500` Error，`≥400` Warn，其余 Info。
-
+* **Access Log (Zap)**:
+* 热路径必须强类型字段输出；普通请求记录 `latency_ms`，SSE/WebSocket 分别记录 `stream.started` / `stream.closed`，成功连接使用 `session_ms`，失败握手使用 `established=false` 与 `latency_ms`。
+* access event 固定为 `Info`，不论状态码；5xx 的唯一 `Error` 归属 `httputil.WriteError`。必须记录 route template，不记录原始 URL/path、query、凭据或大体积 body。
 * **Recovery 防崩溃**：
-* 遇到 `Broken Pipe` / `Connection Reset` 仅记 Debug/Warn，不打印全量堆栈。
 * 对外一律脱敏返回统一 500 JSON：`{ "code": "INTERNAL_ERROR", "message": "...", "data": null }`。
+* panic 内部信息与堆栈由唯一的 `WriteError` Error event 承载；Recovery 不再额外输出第二条 Error。`PanicObserver` 仍在响应写完后通知审计层。
+* Broken Pipe / Connection Reset 作为客户端断开处理时，不额外打印完整堆栈。
 
 * **MaxBodyLimit 防击穿**：边缘端非文件接口强制限制 Body 上限（如 1~2MB），超限直接截断并返 413，防 OOM。
   * `ContentLength` 预检在路由 Handler 之前拒绝请求；无 `Content-Length` 的 chunked 请求会穿透预检，改由 `http.MaxBytesReader` 在绑定阶段拒绝。两者对审计的含义不同：前者无审计意图，后者属于「已声明意图的绑定失败」，需要留痕。

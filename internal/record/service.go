@@ -354,7 +354,6 @@ func marshalMapOrDefault(m map[string]any) string {
 func (s *Service) ListRecognitions(ctx context.Context, filter RecognitionFilter) ([]RecognitionResponse, int64, error) {
 	items, total, err := s.store.ListRecognitions(ctx, filter)
 	if err != nil {
-		s.logger.Error("failed to list recognitions", zap.Error(err))
 		return nil, 0, apperr.Internal("INTERNAL_ERROR", "failed to list recognitions", err)
 	}
 	responses := make([]RecognitionResponse, len(items))
@@ -368,7 +367,6 @@ func (s *Service) ListRecognitions(ctx context.Context, filter RecognitionFilter
 func (s *Service) GetRecognition(ctx context.Context, id string) (*RecognitionResponse, error) {
 	item, err := s.store.GetRecognitionByID(ctx, id)
 	if err != nil {
-		s.logger.Error("failed to get recognition", zap.String("id", id), zap.Error(err))
 		return nil, apperr.Internal("INTERNAL_ERROR", "failed to get recognition", err)
 	}
 	if item == nil {
@@ -382,7 +380,6 @@ func (s *Service) GetRecognition(ctx context.Context, id string) (*RecognitionRe
 func (s *Service) ListAlarms(ctx context.Context, filter AlarmFilter) ([]AlarmResponse, int64, error) {
 	items, total, err := s.store.ListAlarms(ctx, filter)
 	if err != nil {
-		s.logger.Error("failed to list alarms", zap.Error(err))
 		return nil, 0, apperr.Internal("INTERNAL_ERROR", "failed to list alarms", err)
 	}
 	responses := make([]AlarmResponse, len(items))
@@ -396,7 +393,6 @@ func (s *Service) ListAlarms(ctx context.Context, filter AlarmFilter) ([]AlarmRe
 func (s *Service) GetAlarm(ctx context.Context, id string) (*AlarmResponse, error) {
 	item, err := s.store.GetAlarmByID(ctx, id)
 	if err != nil {
-		s.logger.Error("failed to get alarm", zap.String("id", id), zap.Error(err))
 		return nil, apperr.Internal("INTERNAL_ERROR", "failed to get alarm", err)
 	}
 	if item == nil {
@@ -410,7 +406,6 @@ func (s *Service) GetAlarm(ctx context.Context, id string) (*AlarmResponse, erro
 func (s *Service) ListCaptures(ctx context.Context, filter CaptureFilter) ([]CaptureResponse, int64, error) {
 	items, total, err := s.store.ListCaptures(ctx, filter)
 	if err != nil {
-		s.logger.Error("failed to list captures", zap.Error(err))
 		return nil, 0, apperr.Internal("INTERNAL_ERROR", "failed to list captures", err)
 	}
 	responses := make([]CaptureResponse, len(items))
@@ -424,7 +419,6 @@ func (s *Service) ListCaptures(ctx context.Context, filter CaptureFilter) ([]Cap
 func (s *Service) GetCapture(ctx context.Context, id string) (*CaptureResponse, error) {
 	item, err := s.store.GetCaptureByID(ctx, id)
 	if err != nil {
-		s.logger.Error("failed to get capture", zap.String("id", id), zap.Error(err))
 		return nil, apperr.Internal("INTERNAL_ERROR", "failed to get capture", err)
 	}
 	if item == nil {
@@ -438,7 +432,6 @@ func (s *Service) GetCapture(ctx context.Context, id string) (*CaptureResponse, 
 func (s *Service) ListAlarmTypes(ctx context.Context) ([]string, error) {
 	types, err := s.store.ListDistinctAlarmTypes(ctx)
 	if err != nil {
-		s.logger.Error("failed to list alarm types", zap.Error(err))
 		return nil, apperr.Internal("INTERNAL_ERROR", "failed to list alarm types", err)
 	}
 	return types, nil
@@ -448,7 +441,6 @@ func (s *Service) ListAlarmTypes(ctx context.Context) ([]string, error) {
 func (s *Service) ListTargetTypes(ctx context.Context) ([]string, error) {
 	types, err := s.store.ListDistinctTargetTypes(ctx)
 	if err != nil {
-		s.logger.Error("failed to list target types", zap.Error(err))
 		return nil, apperr.Internal("INTERNAL_ERROR", "failed to list target types", err)
 	}
 	return types, nil

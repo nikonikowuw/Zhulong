@@ -78,7 +78,7 @@ func NewSupervisor(store LifecycleStore, algoDir, runnerPath string, opts Recove
 		store:      store,
 		algoDir:    algoDir,
 		runnerPath: runnerPath,
-		logger:     logger.Named("algorithm_supervisor"),
+		logger:     logger.Named("algorithm.supervisor"),
 		watchers:   make(map[string]*workerWatcher),
 		opts:       opts.normalize(),
 	}

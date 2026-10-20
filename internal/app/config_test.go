@@ -59,6 +59,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.SessionTTL != 24*time.Hour {
 		t.Fatalf("unexpected default SessionTTL: %v", cfg.SessionTTL)
 	}
+	if cfg.Logging.Level != "info" || cfg.Logging.Output != "stderr" || cfg.Logging.Sampling.Enabled || cfg.Logging.Rotation.Enabled {
+		t.Fatalf("unexpected default logging policy: %+v", cfg.Logging)
+	}
 }
 
 func TestParseSessionTTL(t *testing.T) {

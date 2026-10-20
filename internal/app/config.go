@@ -9,6 +9,33 @@ import (
 	"time"
 )
 
+// LoggingConfig contains runtime logging policy. Empty Format follows Development mode.
+type LoggingConfig struct {
+	Development bool           `mapstructure:"development"`
+	Level       string         `mapstructure:"level"`
+	Format      string         `mapstructure:"format"`
+	Output      string         `mapstructure:"output"`
+	Sampling    SamplingConfig `mapstructure:"sampling"`
+	Rotation    RotationConfig `mapstructure:"rotation"`
+}
+
+// SamplingConfig controls opt-in zap log sampling.
+type SamplingConfig struct {
+	Enabled    bool `mapstructure:"enabled"`
+	Initial    int  `mapstructure:"initial"`
+	Thereafter int  `mapstructure:"thereafter"`
+}
+
+// RotationConfig bounds file log storage. Values are deployment-profile specific.
+type RotationConfig struct {
+	Enabled        bool  `mapstructure:"enabled"`
+	MaxSizeMB      int64 `mapstructure:"max_size_mb"`
+	MaxBackups     int   `mapstructure:"max_backups"`
+	MaxAgeDays     int   `mapstructure:"max_age_days"`
+	Compress       bool  `mapstructure:"compress"`
+	MaxTotalSizeMB int64 `mapstructure:"max_total_size_mb"`
+}
+
 // Config contains host-level settings supplied before Fx constructs the application.
 type Config struct {
 	HTTPAddress     string
@@ -16,6 +43,8 @@ type Config struct {
 	FacesDir        string
 	AlgorithmTarget string
 	Development     bool
+	Logging         LoggingConfig
+	ConfigPath      string
 	CustomScript    string
 	SessionTTL      time.Duration
 }
@@ -80,6 +109,10 @@ func DefaultConfig() Config {
 		DataDir:         "./data",
 		FacesDir:        "",
 		AlgorithmTarget: "cpu",
-		SessionTTL:      24 * time.Hour,
+		Logging: LoggingConfig{
+			Level:  "info",
+			Output: "stderr",
+		},
+		SessionTTL: 24 * time.Hour,
 	}
 }

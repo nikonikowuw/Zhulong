@@ -1,9 +1,13 @@
 package httpmiddleware
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,15 +16,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
+	"github.com/nikonikowuw/Zhulong/internal/logctx"
 	"go.uber.org/zap"
 )
 
 const requestIDKey = "zhulong.request_id"
+const accessLogRecoveryKey = "zhulong.httpmiddleware.access_log_recovery"
 
 // MaxAPIRequestBodyBytes bounds non-file API request bodies to 1 MiB.
 const MaxAPIRequestBodyBytes int64 = 1 << 20
 
-var fallbackRequestIDCounter atomic.Uint64
+var (
+	fallbackRequestIDCounter atomic.Uint64
+	streamIDCounter          atomic.Uint64
+)
 
 // PanicObserver is notified after Recovery has handled a handler panic and the
 // sanitized 500 response has been written. Implementations must not panic and
@@ -33,17 +42,22 @@ type PanicObserver interface {
 	OnPanic(c *gin.Context)
 }
 
-// Recovery converts panics from HTTP handlers into a sanitized API response.
-//
-// Observers are notified after the 500 response is written, which is the only
-// point where c.Writer.Status() reliably reports 500. An audit layer cannot
-// observe panics from its own c.Next() continuation: a panicking handler never
-// advances gin's handler index, so the continuation is skipped entirely, and a
-// deferred read would still see the default 200 status.
+// Recovery converts panics from HTTP handlers into sanitized API errors. The
+// WriteError boundary owns the single Error event for every unexpected 5xx.
 func Recovery(logger *zap.Logger, observers ...PanicObserver) gin.HandlerFunc {
-	return gin.CustomRecovery(func(c *gin.Context, recovered any) {
-		logger.Error("HTTP handler panic", zap.Any("panic", recovered), zap.Stack("stack"))
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", nil))
+	return gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, recovered any) {
+		cause := fmt.Errorf("HTTP handler panic (%T)", recovered)
+		httputil.WriteErrorWithLogger(c,
+			httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", cause),
+			logger,
+			zap.Any("panic", recovered),
+			zap.Stack("stack"),
+		)
+		if value, exists := c.Get(accessLogRecoveryKey); exists {
+			if complete, ok := value.(func()); ok {
+				complete()
+			}
+		}
 		for _, observer := range observers {
 			if observer != nil {
 				observer.OnPanic(c)
@@ -60,7 +74,7 @@ func RequestID() gin.HandlerFunc {
 			requestID = newRequestID()
 		}
 		c.Set(requestIDKey, requestID)
-		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), requestIDContextKey{}, requestID))
+		c.Request = c.Request.WithContext(logctx.WithRequestID(c.Request.Context(), requestID))
 		c.Header("X-Request-ID", requestID)
 		c.Next()
 	}
@@ -78,37 +92,114 @@ func GetRequestID(c *gin.Context) string {
 
 // RequestIDFromContext returns the request ID propagated to a standard context.
 func RequestIDFromContext(ctx context.Context) string {
-	requestID, _ := ctx.Value(requestIDContextKey{}).(string)
-	return requestID
+	return logctx.RequestID(ctx)
 }
-
-type requestIDContextKey struct{}
 
 // AccessLog records API request metadata without buffering request or response bodies.
 func AccessLog(logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		started := time.Now()
-		c.Next()
-
-		status := c.Writer.Status()
-		fields := []zap.Field{
-			zap.String("requestId", GetRequestID(c)),
+		requestID := GetRequestID(c)
+		route := c.FullPath()
+		streamKind := classifyLongLivedRequest(route, c.Request.Header.Get("Upgrade"))
+		trackedWriter := &trackingResponseWriter{ResponseWriter: c.Writer}
+		c.Writer = trackedWriter
+		baseFields := []zap.Field{
+			zap.String("requestId", requestID),
 			zap.String("method", c.Request.Method),
-			zap.String("path", c.Request.URL.Path),
-			zap.Int("status", status),
-			zap.Duration("latency", time.Since(started)),
-			zap.Int("bytes", c.Writer.Size()),
-			zap.String("clientIP", c.ClientIP()),
+			zap.String("route", route),
 		}
-		switch {
-		case status >= http.StatusInternalServerError:
-			logger.Error("HTTP request", fields...)
-		case status >= http.StatusBadRequest:
-			logger.Warn("HTTP request", fields...)
-		default:
+		var streamLogger *zap.Logger
+		var streamFields []zap.Field
+		if streamKind != "" {
+			streamID := streamIDCounter.Add(1)
+			streamContext := logctx.WithStreamID(context.Background(), strconv.FormatUint(streamID, 10))
+			streamLogger = logctx.Logger(streamContext, logger)
+			streamFields = []zap.Field{
+				zap.String("method", c.Request.Method),
+				zap.String("route", route),
+			}
+			startFields := append([]zap.Field{zap.String("requestId", requestID)}, streamFields...)
+			streamLogger.Info("stream.started", startFields...)
+		}
+
+		completed := false
+		complete := func() {
+			if completed {
+				return
+			}
+			completed = true
+			status := trackedWriter.Status()
+			if streamKind != "" {
+				established := streamEstablished(streamKind, status, trackedWriter.Header().Get("Content-Type"), trackedWriter.hijacked)
+				fields := append(streamFields,
+					zap.Int("status", status),
+					zap.Int("bytes", trackedWriter.Size()),
+					zap.String("clientIP", c.ClientIP()),
+					zap.Bool("established", established),
+				)
+				if established {
+					fields = append(fields, zap.Int64("session_ms", time.Since(started).Milliseconds()))
+					streamLogger.Info("stream.closed", fields...)
+					return
+				}
+				fields = append(fields, zap.Int64("latency_ms", time.Since(started).Milliseconds()), zap.String("requestId", requestID))
+				streamLogger.Info("stream.closed", fields...)
+				return
+			}
+			fields := append(baseFields,
+				zap.Int("status", status),
+				zap.Int("bytes", trackedWriter.Size()),
+				zap.String("clientIP", c.ClientIP()),
+				zap.Int64("latency_ms", time.Since(started).Milliseconds()),
+			)
 			logger.Info("HTTP request", fields...)
 		}
+		c.Set(accessLogRecoveryKey, complete)
+		c.Next()
+		complete()
 	}
+}
+
+func classifyLongLivedRequest(route, upgrade string) string {
+	if strings.EqualFold(strings.TrimSpace(upgrade), "websocket") || strings.HasSuffix(route, "/ws") {
+		return "websocket"
+	}
+	if route == "/events" || strings.HasSuffix(route, "/cameras/events") {
+		return "sse"
+	}
+	return ""
+}
+
+func streamEstablished(kind string, status int, contentType string, hijacked bool) bool {
+	if kind == "websocket" {
+		return status == http.StatusSwitchingProtocols || hijacked
+	}
+	return status >= http.StatusOK && status < http.StatusMultipleChoices && strings.HasPrefix(strings.ToLower(contentType), "text/event-stream")
+}
+
+type trackingResponseWriter struct {
+	gin.ResponseWriter
+	hijacked bool
+}
+
+func (w *trackingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := w.ResponseWriter.Hijack()
+	if err == nil {
+		w.hijacked = true
+	}
+	return conn, rw, err
+}
+
+func (w *trackingResponseWriter) Status() int {
+	if w.hijacked {
+		return http.StatusSwitchingProtocols
+	}
+	return w.ResponseWriter.Status()
+}
+
+func (w *trackingResponseWriter) Written() bool {
+	return w.hijacked || w.ResponseWriter.Written()
 }
 
 // MaxBodyLimit rejects oversized API requests and caps bodies without a known length.

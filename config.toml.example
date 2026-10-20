@@ -6,6 +6,24 @@ address = "127.0.0.1:8000"
 
 [logging]
 development = false
+level = "info"
+# Empty format follows development: console in development, JSON otherwise.
+format = ""
+output = "stderr"
+
+[logging.sampling]
+enabled = false
+initial = 0
+thereafter = 0
+
+[logging.rotation]
+enabled = false
+max_size_mb = 0
+max_backups = 0
+max_age_days = 0
+compress = false
+# Set a deployment-reviewed positive budget before selecting file output.
+max_total_size_mb = 0
 
 # Data directory for SQLite (zhulong.db), persistent keys (camera.key), and algorithms.
 # Defaults to "./data" in the project directory.

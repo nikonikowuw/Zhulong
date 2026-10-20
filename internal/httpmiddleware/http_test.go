@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
+	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
@@ -60,7 +62,7 @@ func TestAccessLogRecordsRequestMetadata(t *testing.T) {
 		c.String(http.StatusBadRequest, "invalid")
 	})
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/health", nil)
+	request := httptest.NewRequest(http.MethodGet, "/health?token=secret", nil)
 	request.Header.Set("X-Request-ID", "request-123")
 	router.ServeHTTP(recorder, request)
 
@@ -69,20 +71,281 @@ func TestAccessLogRecordsRequestMetadata(t *testing.T) {
 		t.Fatalf("expected one access log entry, got %d", len(entries))
 	}
 	entry := entries[0]
-	if entry.Level != zap.WarnLevel {
-		t.Fatalf("expected warning for 400 response, got %s", entry.Level)
+	if entry.Level != zap.InfoLevel {
+		t.Fatalf("expected access events to remain info level for 400 responses, got %s", entry.Level)
 	}
 	fields := entry.ContextMap()
 	for name, want := range map[string]any{
 		"requestId": "request-123",
 		"method":    http.MethodGet,
-		"path":      "/health",
+		"route":     "/health",
 		"status":    int64(http.StatusBadRequest),
 		"bytes":     int64(len("invalid")),
 	} {
 		if got := fields[name]; got != want {
 			t.Errorf("field %q: expected %#v, got %#v", name, want, got)
 		}
+	}
+	if _, exists := fields["latency_ms"]; !exists {
+		t.Fatalf("missing latency_ms from access log: %#v", fields)
+	}
+	if _, exists := fields["path"]; exists {
+		t.Fatalf("raw path should not be logged: %#v", fields)
+	}
+	if strings.Contains(entry.Message, "secret") {
+		t.Fatalf("query string leaked into access event: %q", entry.Message)
+	}
+}
+
+func TestAccessLogAndWriteErrorShareRequestIDAndSingleErrorOwnership(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	core, observed := observer.New(zap.DebugLevel)
+	logger := zap.New(core)
+	restore := zap.ReplaceGlobals(logger)
+	defer restore()
+
+	router := gin.New()
+	router.Use(Recovery(logger), RequestID(), AccessLog(logger))
+	router.GET("/api/v1/records/:id", func(c *gin.Context) {
+		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "DATABASE_ERROR", "safe", nil))
+	})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/records/42?token=private", nil)
+	request.Header.Set("X-Request-ID", "req-failure-42")
+	router.ServeHTTP(recorder, request)
+
+	entries := observed.All()
+	if len(entries) != 2 {
+		t.Fatalf("got %d events, want one error and one access event", len(entries))
+	}
+	if entries[0].Level != zap.ErrorLevel || entries[0].Message != "HTTP request failed" {
+		t.Fatalf("first event is not the single WriteError event: %+v", entries[0])
+	}
+	if entries[1].Level != zap.InfoLevel || entries[1].Message != "HTTP request" {
+		t.Fatalf("access event must remain Info: %+v", entries[1])
+	}
+	for i, entry := range entries {
+		fields := entry.ContextMap()
+		if fields["requestId"] != "req-failure-42" {
+			t.Errorf("entry %d requestId = %#v", i, fields["requestId"])
+		}
+		if fields["status"] != int64(http.StatusInternalServerError) {
+			t.Errorf("entry %d status = %#v", i, fields["status"])
+		}
+	}
+	if fields := entries[0].ContextMap(); fields["code"] != "DATABASE_ERROR" {
+		t.Errorf("error code = %#v", fields["code"])
+	}
+	accessFields := entries[1].ContextMap()
+	if accessFields["route"] != "/api/v1/records/:id" || accessFields["latency_ms"] == nil {
+		t.Errorf("access event lacks route template/latency_ms: %#v", accessFields)
+	}
+	if _, exists := accessFields["path"]; exists {
+		t.Errorf("access event must not log raw path: %#v", accessFields)
+	}
+}
+
+func TestRecoveryLeavesErrorOwnershipToWriteError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	core, observed := observer.New(zap.DebugLevel)
+	logger := zap.New(core)
+	restore := zap.ReplaceGlobals(logger)
+	defer restore()
+
+	router := gin.New()
+	router.Use(Recovery(logger), RequestID(), AccessLog(logger))
+	router.GET("/panic", func(*gin.Context) { panic("private panic detail") })
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	request.Header.Set("X-Request-ID", "req-panic")
+	router.ServeHTTP(recorder, request)
+
+	entries := observed.All()
+	if len(entries) != 2 {
+		t.Fatalf("panic must produce one WriteError event and one access event, got %+v", entries)
+	}
+	if entries[0].Level != zap.ErrorLevel || entries[0].Message != "HTTP request failed" {
+		t.Fatalf("panic must produce exactly one WriteError event, got %+v", entries)
+	}
+	if entries[1].Level != zap.InfoLevel || entries[1].Message != "HTTP request" {
+		t.Fatalf("panic access event must remain Info: %+v", entries[1])
+	}
+	fields := entries[0].ContextMap()
+	if fields["requestId"] != "req-panic" || fields["code"] != "INTERNAL_ERROR" {
+		t.Fatalf("panic error event lacks stable correlation: %#v", fields)
+	}
+	if fields["panic"] != "private panic detail" || fields["stack"] == "" {
+		t.Fatalf("single panic error event lacks internal panic detail and stack: %#v", fields)
+	}
+	accessFields := entries[1].ContextMap()
+	if accessFields["requestId"] != "req-panic" || accessFields["route"] != "/panic" || accessFields["status"] != int64(http.StatusInternalServerError) || accessFields["latency_ms"] == nil {
+		t.Fatalf("panic access event lacks safe request metadata: %#v", accessFields)
+	}
+	if _, exists := accessFields["path"]; exists {
+		t.Fatalf("panic access event must not log a raw path: %#v", accessFields)
+	}
+}
+
+func TestAccessLogSSEEstablishedAndFailedHandshake(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, test := range []struct {
+		name        string
+		established bool
+	}{
+		{name: "established", established: true},
+		{name: "failed handshake", established: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			core, observed := observer.New(zap.DebugLevel)
+			router := gin.New()
+			router.Use(RequestID(), AccessLog(zap.New(core)))
+			router.GET("/api/v1/cameras/events", func(c *gin.Context) {
+				if test.established {
+					c.Header("Content-Type", "text/event-stream; charset=utf-8")
+					c.String(http.StatusOK, "event: ready\\n\\n")
+					return
+				}
+				c.String(http.StatusServiceUnavailable, "unavailable")
+			})
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/cameras/events", nil)
+			request.Header.Set("X-Request-ID", "req-sse")
+			router.ServeHTTP(recorder, request)
+
+			entries := observed.All()
+			if len(entries) != 2 || entries[0].Message != "stream.started" || entries[1].Message != "stream.closed" {
+				t.Fatalf("unexpected SSE events: %+v", entries)
+			}
+			var streamID string
+			for i, entry := range entries {
+				fields := entry.ContextMap()
+				if i == 0 || !test.established {
+					if fields["requestId"] != "req-sse" {
+						t.Fatalf("stream request event %d lost requestId: %#v", i, fields)
+					}
+				} else if _, present := fields["requestId"]; present {
+					t.Fatalf("established stream event inherited HTTP requestId: %#v", fields)
+				}
+				id, ok := fields["streamId"].(string)
+				if !ok || id == "" || (streamID != "" && id != streamID) {
+					t.Fatalf("stream event %d lacks a stable streamId: %#v", i, fields)
+				}
+				streamID = id
+			}
+			fields := entries[1].ContextMap()
+			if fields["established"] != test.established {
+				t.Fatalf("established = %#v, want %t", fields["established"], test.established)
+			}
+			if test.established {
+				if fields["session_ms"] == nil || fields["latency_ms"] != nil {
+					t.Fatalf("successful SSE must use session_ms only: %#v", fields)
+				}
+			} else if fields["latency_ms"] == nil || fields["session_ms"] != nil {
+				t.Fatalf("failed SSE handshake must use latency_ms only: %#v", fields)
+			}
+		})
+	}
+}
+
+func TestAccessLogClosesPanickedSSERequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	core, observed := observer.New(zap.DebugLevel)
+	logger := zap.New(core)
+	router := gin.New()
+	router.Use(Recovery(logger), RequestID(), AccessLog(logger))
+	router.GET("/api/v1/cameras/events", func(c *gin.Context) {
+		c.Header("Content-Type", "text/event-stream; charset=utf-8")
+		panic("stream panic")
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/cameras/events?token=private", nil)
+	request.Header.Set("X-Request-ID", "req-stream-panic")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	entries := observed.All()
+	if len(entries) != 3 || entries[0].Message != "stream.started" || entries[1].Level != zap.ErrorLevel || entries[1].Message != "HTTP request failed" || entries[2].Message != "stream.closed" {
+		t.Fatalf("panicked SSE must emit start, one error, and close events: %+v", entries)
+	}
+	if entries[1].ContextMap()["requestId"] != "req-stream-panic" {
+		t.Fatalf("panic error lost request ID: %#v", entries[1].ContextMap())
+	}
+	fields := entries[2].ContextMap()
+	if fields["requestId"] != "req-stream-panic" || fields["route"] != "/api/v1/cameras/events" || fields["status"] != int64(http.StatusInternalServerError) || fields["established"] != false || fields["latency_ms"] == nil || fields["session_ms"] != nil {
+		t.Fatalf("panicked SSE close event has invalid lifecycle metadata: %#v", fields)
+	}
+	if _, exists := fields["path"]; exists {
+		t.Fatalf("panicked SSE close event logged a raw path: %#v", fields)
+	}
+}
+
+func TestAccessLogWebSocketEstablishedAndFailedHandshake(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	core, observed := observer.New(zap.DebugLevel)
+	router := gin.New()
+	router.Use(RequestID(), AccessLog(zap.New(core)))
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	router.GET("/cameras/:id/ws", func(c *gin.Context) {
+		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+		if err == nil {
+			_ = conn.Close()
+		}
+	})
+	server := httptest.NewServer(router)
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/cameras/cam-1/ws"
+	conn, response, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"X-Request-ID": []string{"req-websocket"}})
+	if err != nil {
+		server.Close()
+		t.Fatalf("WebSocket handshake: %v (response=%v)", err, response)
+	}
+	_ = conn.Close()
+	server.Close()
+
+	entries := observed.All()
+	if len(entries) != 2 || entries[0].Message != "stream.started" || entries[1].Message != "stream.closed" {
+		t.Fatalf("unexpected WebSocket events: %+v", entries)
+	}
+	var streamID string
+	for i, entry := range entries {
+		fields := entry.ContextMap()
+		if i == 0 {
+			if fields["requestId"] != "req-websocket" {
+				t.Fatalf("stream start event lost requestId: %#v", fields)
+			}
+		} else if _, present := fields["requestId"]; present {
+			t.Fatalf("established stream event inherited HTTP requestId: %#v", fields)
+		}
+		id, ok := fields["streamId"].(string)
+		if !ok || id == "" || (streamID != "" && id != streamID) {
+			t.Fatalf("stream event %d lacks a stable streamId: %#v", i, fields)
+		}
+		streamID = id
+	}
+	fields := entries[1].ContextMap()
+	if fields["established"] != true || fields["session_ms"] == nil || fields["latency_ms"] != nil {
+		t.Fatalf("successful WebSocket must use session_ms only: %#v", fields)
+	}
+
+	failedCore, failedLogs := observer.New(zap.DebugLevel)
+	failedRouter := gin.New()
+	failedRouter.Use(RequestID(), AccessLog(zap.New(failedCore)))
+	failedRouter.GET("/cameras/:id/ws", func(*gin.Context) {})
+	failedResponse := httptest.NewRecorder()
+	failedRequest := httptest.NewRequest(http.MethodGet, "/cameras/cam-2/ws", nil)
+	failedRequest.Header.Set("X-Request-ID", "req-failed-websocket")
+	failedRouter.ServeHTTP(failedResponse, failedRequest)
+	failedEntries := failedLogs.All()
+	if len(failedEntries) != 2 || failedEntries[1].Message != "stream.closed" {
+		t.Fatalf("failed WebSocket handshake events: %+v", failedEntries)
+	}
+	failedFields := failedEntries[1].ContextMap()
+	if failedFields["requestId"] != "req-failed-websocket" {
+		t.Fatalf("failed handshake access event lost requestId: %#v", failedFields)
+	}
+	if id, ok := failedFields["streamId"].(string); !ok || id == "" {
+		t.Fatalf("failed stream event lacks streamId: %#v", failedFields)
+	}
+	if failedFields["established"] != false || failedFields["latency_ms"] == nil || failedFields["session_ms"] != nil {
+		t.Fatalf("failed WebSocket handshake fields: %#v", failedFields)
 	}
 }
 

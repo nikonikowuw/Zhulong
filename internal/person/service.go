@@ -86,7 +86,7 @@ func NewService(
 		extractor:       extractor,
 		galleryNotifier: notifier,
 		facesDir:        facesDir,
-		logger:          logger.Named("person_service"),
+		logger:          logger.Named("person.service"),
 	}
 }
 

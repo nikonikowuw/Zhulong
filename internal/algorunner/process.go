@@ -590,7 +590,7 @@ func NewGalleryBroadcaster(broadcaster AIMessageBroadcaster, logger *zap.Logger)
 	}
 	return &GalleryBroadcaster{
 		broadcaster: broadcaster,
-		logger:      logger.Named("gallery_broadcaster"),
+		logger:      logger.Named("algorithm.gallery_broadcaster"),
 	}
 }
 

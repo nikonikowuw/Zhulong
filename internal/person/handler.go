@@ -24,7 +24,7 @@ func NewHandler(service *Service, logger *zap.Logger) *Handler {
 	}
 	return &Handler{
 		service: service,
-		logger:  logger.Named("person_handler"),
+		logger:  logger.Named("person.handler"),
 	}
 }
 

@@ -1,11 +1,13 @@
 package httputil
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/logctx"
 	"go.uber.org/zap"
 )
 
@@ -74,8 +76,14 @@ func KindToHTTPStatus(k apperr.Kind) int {
 	}
 }
 
-// WriteError writes a sanitized API error and logs its internal cause server-side.
+// WriteError writes a sanitized API error and logs unexpected server failures.
 func WriteError(c *gin.Context, err error) {
+	WriteErrorWithLogger(c, err, zap.L())
+}
+
+// WriteErrorWithLogger writes the standard sanitized response and emits its
+// single server-side Error event through logger.
+func WriteErrorWithLogger(c *gin.Context, err error, logger *zap.Logger, extraFields ...zap.Field) {
 	var appError *AppError
 	var appErr *apperr.Error
 	var fallbackMsg string
@@ -121,12 +129,20 @@ func WriteError(c *gin.Context, err error) {
 			response.Details[i] = detail
 		}
 	}
-	if appError.Err != nil {
-		zap.L().Error("HTTP request failed",
+	if status >= http.StatusInternalServerError {
+		var ctx context.Context
+		if c.Request != nil {
+			ctx = c.Request.Context()
+		}
+		fields := []zap.Field{
 			zap.String("code", appError.Code),
 			zap.Int("status", status),
-			zap.Error(appError.Err),
-		)
+		}
+		if appError.Err != nil {
+			fields = append(fields, zap.Error(appError.Err))
+		}
+		fields = append(fields, extraFields...)
+		logctx.Logger(ctx, logger).Error("HTTP request failed", fields...)
 	}
 
 	// Expose only the sanitized code and outward message to other HTTP layers.
