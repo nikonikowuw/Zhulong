@@ -1313,3 +1313,26 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 77: Go日志核心加固续接与验收归档
+<!-- trellis-session: v=2 fp=e71c59d8f48cf828 -->
+
+**Date**: 2026-10-20
+**Task**: Go日志核心加固续接与验收归档
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+恢复并完成 Go 日志核心任务的质量复核：相关 race tests、make go-check 与离线 make check 全部通过；新增 logging spec 无需继续扩写。提交工作变更 59a4e90，随后按用户 Finish Work 指令归档任务。AC-A6 的完整服务级 SIGHUP 验证、AC-A7 的部署 profile 与 journald 预算签署仍未完成，归档不代表这两项已验收。四个 web 文件及其他任务规划目录作为并行工作保留。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `59a4e90` | feat(logging): harden Go runtime logging |
+
+### Status
+
+[OK] **Completed**
