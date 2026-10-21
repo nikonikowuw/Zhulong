@@ -130,6 +130,7 @@ endif()
 # ==============================================================================
 add_library(ZhulongEngine STATIC
     src/abi/engine.cpp
+    src/abi/snapshot.cpp
     src/pipeline/engine.cpp
     src/pipeline/stream.cpp
     src/pipeline/subscription.cpp
@@ -138,6 +139,7 @@ add_library(ZhulongEngine STATIC
     src/nodes/decode/ffmpeg_decoder.cpp
     src/nodes/decode/mpp_loader.cpp
     src/nodes/decode/mpp_decoder.cpp
+    src/nodes/snapshot/jpeg_encoder.cpp
 )
 target_compile_features(ZhulongEngine PUBLIC cxx_std_17)
 target_include_directories(ZhulongEngine
@@ -534,6 +536,12 @@ if(BUILD_TESTING)
     target_include_directories(ZhulongDecoderTests PRIVATE src)
     target_link_libraries(ZhulongDecoderTests PRIVATE ZhulongEngine)
     add_test(NAME ZhulongDecoder COMMAND ZhulongDecoderTests)
+
+    # 抓拍 JPEG 编码链路单元测试（离线合成 NV12 / YUV420P，不需要真实摄像机）
+    add_executable(ZhulongSnapshotTests tests/snapshot_test.cpp)
+    target_include_directories(ZhulongSnapshotTests PRIVATE src)
+    target_link_libraries(ZhulongSnapshotTests PRIVATE ZhulongEngine)
+    add_test(NAME ZhulongSnapshot COMMAND ZhulongSnapshotTests)
 
     # 人脸特征提取单次 C ABI 单元测试
     add_executable(ZhulongFaceFeatureExtractTests tests/face_feature_extract_test.cpp)

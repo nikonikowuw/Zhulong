@@ -61,7 +61,11 @@ FLAGS = [
     "--enable-static", "--enable-pic", "--enable-network", "--enable-avformat",
     "--enable-avcodec", "--enable-avutil", "--enable-demuxer=rtsp",
     "--enable-protocol=tcp,udp,rtp", "--enable-parser=h264,hevc",
-    "--enable-decoder=h264,hevc"
+    "--enable-decoder=h264,hevc",
+    # 抓拍（JPEG）需要 MJPEG 编码器。注意：这是**编码器**，与上面的解码器是两回事。
+    # mjpeg 编码器在 FFmpeg 中属于 LGPL 组件，不会把整包变为 GPL；
+    # 切勿为了它去打开 --enable-gpl / --enable-nonfree。
+    "--enable-encoder=mjpeg"
 ]
 PACKAGE_RESOLVER = ROOT / "native/scripts/no_external_pkg_config.sh"
 

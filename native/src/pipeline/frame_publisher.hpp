@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 namespace zhulong {
@@ -57,6 +58,22 @@ public:
     /** @brief 获取当前最大采样率 */
     [[nodiscard]] uint32_t max_sample_fps() const noexcept;
 
+    /**
+     * @brief 取出最近一次发布过的最新一帧（抓拍用），不阻塞
+     *
+     * ⚠️ 该帧是「当前最新一帧」，不是「产生某个推理结果的那一帧」。抓拍在推理结果
+     * 回传后才发起，因此与结果之间存在固有延迟（实测约 1~4 帧）。调用方必须把
+     * 该偏差视为已知语义。
+     *
+     * ⚠️ 只保留 1 帧的理由：MPP 的 buffer group 在 1080p 下仅 16 个 buffer，
+     * 多保留几帧就会把解码器自己的缓冲耗尽。因此这里采用「新帧覆盖旧帧」语义，
+     * 绝不排队。
+     *
+     * @return 最新帧的只读智能指针；尚未发布过任何帧时返回空指针。
+     *         返回值的生命周期由 shared_ptr 决定，调用方持有期间底层 buffer 不会被复用。
+     */
+    HardwareFrame::ConstPtr latest_frame() const;
+
 private:
     void publish_loop() noexcept;
 
@@ -65,6 +82,11 @@ private:
     std::atomic<bool> stop_{false};
     std::atomic<uint32_t> max_sample_fps_{0};
     std::thread worker_;
+
+    // 抓拍用的最新帧引用：新帧覆盖旧帧（不排队），因此最多只多占 1 个解码 buffer。
+    // ⚠️ mutable + mutex：latest_frame() 是 const 查询接口，但需要加锁读取。
+    mutable std::mutex latest_mutex_;
+    HardwareFrame::ConstPtr latest_frame_;
 };
 
 } // namespace zhulong

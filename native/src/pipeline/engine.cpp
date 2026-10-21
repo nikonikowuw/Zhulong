@@ -483,6 +483,23 @@ void Engine::set_publish_rate(Zhulong_stream_id id, uint32_t max_sample_fps) {
     it->second->set_max_sample_fps(max_sample_fps);
 }
 
+HardwareFrame::ConstPtr Engine::latest_frame(Zhulong_stream_id id) {
+    FramePublisher *publisher = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(control);
+        if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
+        auto it = publishers.find(id);
+        if (it == publishers.end() || !it->second) {
+            // 无 AI 消费者就没有 FramePublisher，也就没有已解码的帧可供抓拍。
+            // 不自行拉起拉流：那是 acquire() 的职责，默默拉流会引来无法解释的带宽消耗。
+            throw Failure{Zhulong_ERR_NOT_FOUND};
+        }
+        publisher = it->second.get();
+    }
+    // 锁外读取：latest_frame() 自身只拿 publisher 内部的短锁，不与 control 嵌套
+    return publisher->latest_frame();
+}
+
 Zhulong_status_t Engine::broadcast_ai_message(Zhulong_stream_id stream_id, uint16_t msg_type, const void* payload, size_t payload_size) {
     std::lock_guard<std::mutex> lock(control);
     if (!running) return Zhulong_ERR_NOT_RUNNING;

@@ -19,6 +19,9 @@ var (
 	ErrStreamHubClosed      = errors.New("stream hub is closed")
 	ErrCameraDisabled       = errors.New("camera is disabled")
 	ErrCameraStreamNotFound = errors.New("camera stream not found")
+	// ErrAIStreamInactive 表示该相机当前没有活跃的 AI 分析流，因而没有可用的
+	// 解码会话可供抓拍。这是暂时状态（任务停用 / 算法未启动），不是配置错误。
+	ErrAIStreamInactive = errors.New("camera has no active AI stream")
 )
 
 // StreamHub 管理全系统的摄像机媒体分发器生命周期与按需订阅。
@@ -490,6 +493,30 @@ func (h *StreamHub) SetAIPublishRate(ctx context.Context, cameraID string, fps u
 		return nil
 	}
 	return ref.stream.SetPublishRate(ctx, fps)
+}
+
+// Snapshot 对指定相机的 AI 分析流执行抓拍（全幅 + 可选裁剪），返回 JPEG 字节流。
+//
+// 语义（⚠️ 调用方必须了解）：
+//   - 抓到的是该相机 AI 解码会话的**当前最新一帧**，不是产生某个推理结果的那一帧。
+//     抓拍在推理结果回传后的宿主侧发起，因此与结果之间有 1~4 帧的固有偏差。
+//   - 相机当前没有活跃 AI 流时返回 ErrAIStreamInactive，不自行拉起拉流：
+//     默默拉流会引来无法解释的带宽消耗与运维困惑。
+//   - 本调用同步执行 JPEG 编码（RK3568 1080p 约 35~60ms），必须在独立 goroutine
+//     中调用，绝不能阻塞 AI 结果消费 goroutine。
+func (h *StreamHub) Snapshot(ctx context.Context, cameraID string, options engine.SnapshotOptions) ([]engine.SnapshotImage, error) {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return nil, ErrStreamHubClosed
+	}
+	ref := h.aiStreams[cameraID]
+	h.mu.Unlock()
+
+	if ref == nil {
+		return nil, ErrAIStreamInactive
+	}
+	return ref.stream.Snapshot(ctx, options)
 }
 
 // Close 停机时安全关闭所有分发器。

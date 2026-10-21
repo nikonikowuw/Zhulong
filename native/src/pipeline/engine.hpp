@@ -145,6 +145,22 @@ struct Engine {
      * @return 状态码
      */
     Zhulong_status_t broadcast_ai_message(Zhulong_stream_id stream_id, uint16_t msg_type, const void* payload, size_t payload_size);
+
+    /**
+     * @brief 取指定流当前最新帧的只读引用（抓拍用）
+     *
+     * 仅在该流存在 FramePublisher（即存在 AI 消费者）时可用；否则抛出 Zhulong_ERR_NOT_FOUND。
+     * 返回的 shared_ptr 持有期间底层解码 buffer 不会被复用，因此调用方必须尽快完成
+     * 像素拷贝（典型耗时 < 5ms）并释放。
+     *
+     * ⚠️ 本方法内部会短暂持有 control 锁取 publisher 指针，但**在锁外**读取最新帧，
+     * 因此与解码/发布线程之间无锁竞争。严禁在回调上下文调用。
+     *
+     * @param id 物理流 ID
+     * @return 最新帧只读指针；流存在但尚未发布过帧时返回空指针
+     * @throws Failure Zhulong_ERR_NOT_RUNNING / Zhulong_ERR_NOT_FOUND
+     */
+    HardwareFrame::ConstPtr latest_frame(Zhulong_stream_id id);
 };
 
 } // namespace zhulong

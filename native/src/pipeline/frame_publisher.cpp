@@ -35,6 +35,17 @@ void FramePublisher::stop() {
         worker_.join();
         ZL_LOGI(stream_->id, "pipeline.frame_publisher", "frame_publisher_stopped");
     }
+    // ⚠️ 必须释放快照帧引用：即使 worker 已汇合，若这里不清空，最后一个
+    // HardwareFrame 引用仍持有解码器 buffer，停流时会拖到宽限期超时。
+    {
+        std::lock_guard<std::mutex> lock(latest_mutex_);
+        latest_frame_.reset();
+    }
+}
+
+HardwareFrame::ConstPtr FramePublisher::latest_frame() const {
+    std::lock_guard<std::mutex> lock(latest_mutex_);
+    return latest_frame_;
 }
 
 void FramePublisher::set_max_sample_fps(uint32_t fps) noexcept {
@@ -86,6 +97,13 @@ void FramePublisher::publish_loop() noexcept {
 
         if (broker_ && broker_->is_running()) {
             broker_->publish_frame(*frame);
+        }
+
+        // 抓拍快照引用：新帧覆盖旧帧（不排队），最多只多占 1 个解码 buffer。
+        // ⚠️ 必须在 frame.reset() 之前赋值，否则只能拿到空指针。
+        {
+            std::lock_guard<std::mutex> lock(latest_mutex_);
+            latest_frame_ = frame;
         }
 
         // ⚠️ 防慢算法拖垮解码器准则：

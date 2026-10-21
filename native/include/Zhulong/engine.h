@@ -382,6 +382,110 @@ Zhulong_status_t Zhulong_stream_unsubscribe(Zhulong_engine_h engine, Zhulong_str
     Zhulong_subscription_id subscription);
 
 /**
+ * @brief 抓拍请求中允许携带的最大裁剪框数量
+ *
+ * 上限存在的原因：一次抓拍要为每个框单独编码一张 JPEG，而 MJPEG 编码是有
+ * 成本的同步操作。8 个框已经覆盖「一帧内多个告警目标」的实际场景，超出请分批调用。
+ */
+#define ZHULONG_SNAPSHOT_MAX_BOXES 8
+
+/**
+ * @brief 单张抓拍图（全幅或某个裁剪框）
+ *
+ * 内存所有权（⚠️ 谁分配谁释放）：
+ *   - data 由 Native 侧分配，由 Zhulong_snapshot_destroy 统一释放；
+ *   - 调用方若需长期持有，必须在 destroy 之前自行深拷贝；
+ *   - 严禁对 data 调用 free/realloc，也严禁把 Go 堆指针交给本结构。
+ *   - data 指向**完整可独立解码**的 JPEG 字节流（含 SOI/EOI），不是裸像素。
+ */
+typedef struct {
+    int32_t      box_index; /**< -1 表示全幅图；>=0 表示对应请求 boxes[box_index] 的裁剪图 */
+    const uint8_t *data;    /**< JPEG 字节流首地址（借用，随 result 句柄失效） */
+    size_t       size;      /**< JPEG 字节流长度 */
+    int32_t      width;     /**< 该图实际像素宽度 */
+    int32_t      height;    /**< 该图实际像素高度 */
+} Zhulong_snapshot_image;
+
+/**
+ * @brief 抓拍请求
+ *
+ * 坐标约定：boxes 中的每个框为**归一化** [x1, y1, x2, y2] ∈ [0.0, 1.0]，
+ * 与 zhulong_bbox 的坐标系完全一致，调用方无需做像素换算。
+ *
+ * 返回顺序约定：结果中恒有且仅有一张 box_index = -1 的全幅图，其后按
+ * box_index 升序排列各裁剪图。某个框因越界或退化（宽/高不足 2 像素）
+ * 而被跳过时，该索引不会出现在结果中——调用方必须按 box_index 索引，
+ * 不得假设「第 i 张裁剪图对应 boxes[i]」。
+ */
+typedef struct {
+    int32_t quality;      /**< JPEG 质量 1..100（越界时收敛到 [1,100]，传 0 使用默认 85） */
+    int32_t box_count;    /**< 裁剪框数量，范围 [0, ZHULONG_SNAPSHOT_MAX_BOXES]；0 表示只出全幅图 */
+    const float *boxes;   /**< 长度为 box_count * 4 的归一化坐标数组；box_count 为 0 时可为 NULL */
+} Zhulong_snapshot_request;
+
+/** @brief 抓拍结果的不透明句柄类型，由 Zhulong_stream_snapshot 分配 */
+typedef struct Zhulong_snapshot_result_t *Zhulong_snapshot_h;
+
+/**
+ * @brief 对指定流的 AI 解码会话当前最新一帧执行抓拍（全幅 + 可选裁剪），输出 JPEG
+ *
+ * 语义与限制（⚠️ 请完整阅读后再使用）：
+ *   - **帧来源**：取的是该流 AI 解码会话中**当前最新的一帧**，不是产生某个推理结果的那一帧。
+ *     抓拍与推理结果之间存在「结果回传 + 宿主处理」的固有延迟，实测约 1~4 帧。
+ *     调用方必须把该偏差视为已知语义，而不是缺陷。
+ *   - **前置条件**：该流必须存在活跃的 AI 解码会话（即已有 AI 消费者挂载）。
+ *     无解码会话时返回 Zhulong_ERR_NOT_FOUND，而不是自行拉起拉流。
+ *   - **持帧上限**：Native 侧只为快照保留最后 1 帧引用。超过 1 帧会把解码器
+ *     buffer group 耗尽（1080p 下仅 16 个 buffer）并导致画面卡顿。
+ *   - **同步阻塞**：本函数执行 JPEG 编码，耗时与分辨率、裁剪框数量正相关
+ *     （RK3568 上 1080p 单帧软编约 35~60ms）。严禁在数据包/AI 结果回调内调用，
+ *     那样会触发 Zhulong_ERR_CALLBACK_CONTEXT。
+ *   - **DMA-BUF 一致性**：若帧来自硬件解码（dma_fd >= 0），本函数会自行做
+ *     CPU 侧 cache 同步；调用方无需也不得额外做 DMA_BUF_IOCTL_SYNC。
+ *
+ * @param engine   引擎句柄
+ * @param stream   物理流 ID
+ * @param request  抓拍参数；传 NULL 等价于「默认质量、仅全幅图」
+ * @param[out] out_result 成功时接收结果句柄，**必须**由 Zhulong_snapshot_destroy 释放
+ * @return Zhulong_status_t 状态码：
+ *         Zhulong_OK 成功；
+ *         Zhulong_ERR_INVALID_ARGUMENT 参数非法（空指针、box_count 越界、非有限坐标）；
+ *         Zhulong_ERR_NOT_FOUND 流不存在或无活跃 AI 解码会话；
+ *         Zhulong_ERR_NOT_RUNNING 引擎未启动；
+ *         Zhulong_ERR_UNSUPPORTED 帧格式不支持（仅 NV12 / YUV420P）；
+ *         Zhulong_ERR_OUT_OF_MEMORY 内存分配失败；
+ *         Zhulong_ERR_CALLBACK_CONTEXT 在回调上下文中调用；
+ *         Zhulong_ERR_INTERNAL 编码器内部错误
+ */
+Zhulong_status_t Zhulong_stream_snapshot(Zhulong_engine_h engine, Zhulong_stream_id stream,
+    const Zhulong_snapshot_request *request, Zhulong_snapshot_h *out_result);
+
+/**
+ * @brief 查询抓拍结果中的图片数量
+ *
+ * 成功抓拍恒有 >= 1 张（全幅图）。空句柄返回 0。
+ */
+int32_t Zhulong_snapshot_count(Zhulong_snapshot_h result);
+
+/**
+ * @brief 按索引取出抓拍图
+ *
+ * @param result 结果句柄
+ * @param index  索引，范围 [0, Zhulong_snapshot_count(result))
+ * @return 指向内部图片描述的借用指针；索引越界或句柄为空时返回 NULL。
+ *         该指针在 Zhulong_snapshot_destroy 之后失效。
+ */
+const Zhulong_snapshot_image *Zhulong_snapshot_at(Zhulong_snapshot_h result, int32_t index);
+
+/**
+ * @brief 释放抓拍结果及其全部图片数据
+ *
+ * ⚠️ 内存所有权：本函数释放 result 内部所有 image.data 与句柄本身。
+ * 传入 NULL 是安全操作。重复释放同一句柄是未定义行为。
+ */
+void Zhulong_snapshot_destroy(Zhulong_snapshot_h result);
+
+/**
  * @brief 订阅物理流的 AI 推理结果事件派发
  *
  * 约定与安全要求：

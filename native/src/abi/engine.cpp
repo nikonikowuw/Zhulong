@@ -16,8 +16,9 @@
 #include "common/log.hpp"
 #include "pipeline/engine.hpp"
 
-#include <chrono>
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdlib>
@@ -33,6 +34,26 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+namespace zhulong {
+
+/**
+ * @brief 抓拍实现（定义在 abi/snapshot.cpp）
+ *
+ * 前置声明而非 include 头文件：snapshot 的内部结构体不需要在本文件可见，
+ * 只要有一个明确的函数边界就够了。
+ *
+ * @param frame 已取到的只读帧引用
+ * @param quality 已收敛到 [1,100] 的 JPEG 质量
+ * @param boxes 归一化 [x1,y1,x2,y2] 框列表（可为空）
+ * @param[out] out 成功时接收分配好的结果句柄
+ * @return Zhulong_status_t
+ */
+Zhulong_status_t encode_snapshot(const HardwareFrame &frame, int32_t quality,
+                                 const std::vector<std::array<float, 4>> &boxes,
+                                 Zhulong_snapshot_h *out);
+
+} // namespace zhulong
 
 // 不透明结构体具体定义：持有底层 C++ 引擎与探测视频结果实例
 struct Zhulong_engine_t { zhulong::Engine implementation; };
@@ -675,6 +696,68 @@ void zhulong_face_plugin_engine_created() {
 
 void zhulong_face_plugin_engine_destroyed() {
     FacePluginLoader::instance().on_engine_destroyed();
+}
+
+/**
+ * @brief 对指定流当前最新一帧执行抓拍（全幅 + 可选裁剪）
+ *
+ * 分层职责：
+ *   1. 在本文件解析并校验 ABI 参数（归一化坐标、质量、box 数量）;
+ *   2. 向 Engine 取最新帧引用（短锁），然后**立即释放 control 锁**;
+ *   3. 锁外调用 encode_snapshot() 做像素拷贝与 JPEG 编码。
+ *
+ * ⚠️ 为什么拆成两段：JPEG 编码在 RK3568 上约 35~60ms/帧。若在持有
+ * Engine::control 的期间编码，所有流的 acquire/release/status 都会一起阻塞。
+ */
+extern "C" Zhulong_status_t Zhulong_stream_snapshot(Zhulong_engine_h engine, Zhulong_stream_id stream,
+    const Zhulong_snapshot_request *request, Zhulong_snapshot_h *out_result) {
+    if (out_result) *out_result = nullptr;
+    return boundary([&] {
+        require(engine != nullptr);
+        require(stream != 0);
+        require(out_result != nullptr);
+
+        // 1. 参数解析与收敛：质量 0 走默认 85，越界夹到 [1,100]
+        int32_t quality = 85;
+        int32_t box_count = 0;
+        if (request != nullptr) {
+            if (request->quality != 0) {
+                quality = request->quality < 1 ? 1 : (request->quality > 100 ? 100 : request->quality);
+            }
+            box_count = request->box_count;
+            require(box_count >= 0 && box_count <= ZHULONG_SNAPSHOT_MAX_BOXES);
+            if (box_count > 0) {
+                require(request->boxes != nullptr);
+            }
+        }
+
+        // 2. 把 C 数组拷进局部 vector —— 只读一次，避免与调用方内存生命周期纠缠。
+        //    ⚠️ 严禁把 request->boxes 的指针带进后续异步路径：C 侧不保证它一直有效。
+        std::vector<std::array<float, 4>> boxes;
+        boxes.reserve(static_cast<size_t>(box_count));
+        for (int32_t i = 0; i < box_count; ++i) {
+            const float *src = request->boxes + static_cast<size_t>(i) * 4;
+            for (int c = 0; c < 4; ++c) {
+                // 非有限值（NaN/Inf）在浮点比较里恒为 false，必须单独拦截，
+                // 否则会一路传到 (int)(NaN * width) 的未定义行为。
+                require(std::isfinite(src[c]));
+            }
+            boxes.push_back({src[0], src[1], src[2], src[3]});
+        }
+
+        // 3. 取最新帧（内部短锁），返回后锁已释放
+        zhulong::HardwareFrame::ConstPtr frame = engine->implementation.latest_frame(stream);
+        if (!frame) {
+            // 流存在但尚未发布过帧（刚接入/重建解码器）。这是暂时状态，不是配置错误。
+            throw zhulong::Failure{Zhulong_ERR_NOT_FOUND};
+        }
+
+        // 4. 锁外编码
+        const Zhulong_status_t rc = zhulong::encode_snapshot(*frame, quality, boxes, out_result);
+        if (rc != Zhulong_OK) {
+            throw zhulong::Failure{rc};
+        }
+    });
 }
 
 /**

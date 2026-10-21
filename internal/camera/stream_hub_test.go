@@ -71,6 +71,10 @@ func (s *mockMediaStream) SetPublishRate(ctx context.Context, fps uint32) error 
 	return nil
 }
 
+func (s *mockMediaStream) Snapshot(ctx context.Context, options engine.SnapshotOptions) ([]engine.SnapshotImage, error) {
+	return nil, engine.ErrSnapshotUnavailable
+}
+
 func (s *mockMediaStream) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()

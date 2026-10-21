@@ -18,6 +18,7 @@ type MediaStream interface {
 	SubscribeAIResults(ctx context.Context) (*engine.AIResultSubscription, error)
 	BrokerPath(ctx context.Context) (string, error)
 	SetPublishRate(ctx context.Context, fps uint32) error
+	Snapshot(ctx context.Context, options engine.SnapshotOptions) ([]engine.SnapshotImage, error)
 	Close() error
 }
 
@@ -71,6 +72,10 @@ func (s *streamAdapter) BrokerPath(ctx context.Context) (string, error) {
 
 func (s *streamAdapter) SetPublishRate(ctx context.Context, fps uint32) error {
 	return s.stream.SetPublishRate(ctx, fps)
+}
+
+func (s *streamAdapter) Snapshot(ctx context.Context, options engine.SnapshotOptions) ([]engine.SnapshotImage, error) {
+	return s.stream.Snapshot(ctx, options)
 }
 
 func (s *streamAdapter) Close() error {
