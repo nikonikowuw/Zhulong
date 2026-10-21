@@ -12,8 +12,10 @@ import (
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/camera"
+	"github.com/nikonikowuw/Zhulong/internal/clientlog"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
+	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
 	"github.com/nikonikowuw/Zhulong/internal/nativelog"
 	"github.com/nikonikowuw/Zhulong/internal/network"
@@ -651,6 +653,37 @@ var personModule = fx.Module("person",
 	fx.Provide(providePerson),
 )
 
+// --- Client Log Module ---
+
+type clientLogOut struct {
+	fx.Out
+
+	Handler      *clientlog.Handler
+	Limiter      *httpmiddleware.IPRateLimiter
+	PublicRoutes RouteRegistrar `group:"public_routes"`
+}
+
+// provideClientLog builds the unauthenticated browser error ingestion surface.
+//
+// The endpoint is public on purpose: browser errors peak when a session has
+// expired. That means its bounds are the only protection, so they are
+// constructed here rather than defaulted at the call site. The per-IP values are
+// fixed by the API contract; the process-wide values are provisional defaults
+// that a deployment profile may override and that are NOT a signed budget.
+func provideClientLog(logger *zap.Logger) clientLogOut {
+	limiter := httpmiddleware.NewIPRateLimiter(httpmiddleware.RateLimitConfig{})
+	handler := clientlog.NewHandler(logger, limiter)
+	return clientLogOut{
+		Handler:      handler,
+		Limiter:      limiter,
+		PublicRoutes: handler,
+	}
+}
+
+var clientLogModule = fx.Module("client-log",
+	fx.Provide(provideClientLog),
+)
+
 // --- Record Module ---
 
 type recordOut struct {
@@ -718,6 +751,7 @@ var Module = fx.Options(
 	algorithmModule,
 	taskModule,
 	personModule,
+	clientLogModule,
 	recordModule,
 	httpModule,
 	runtimeModule,

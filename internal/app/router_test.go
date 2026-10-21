@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
+	"github.com/nikonikowuw/Zhulong/internal/clientlog"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
@@ -427,5 +428,37 @@ func TestRouterAuditSkipsUntaggedRequests(t *testing.T) {
 
 	if entries := drainAuditRouter(t, auditSvc); len(entries) != 0 {
 		t.Fatalf("expected no audit entries for a read-only request, got %+v", entries)
+	}
+}
+
+// TestRouterMountsClientLogsAsPublicRoute proves the client-log ingestion
+// endpoint is reachable without a session. That is the whole reason it exists:
+// browser errors peak exactly when the session has expired, so a protected
+// mount would discard the evidence we most need.
+func TestRouterMountsClientLogsAsPublicRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := clientlog.NewHandler(zap.NewNop(), nil)
+	router := newRouter(RouterParams{
+		Logger:        zap.NewNop(),
+		DatabaseReady: readinessStub(true),
+		NativeReady:   readinessStub(true),
+		// AuthService is present, so RequireAuth guards protected routes. The
+		// client-log route must still be reachable without any session.
+		AuthService:  authStubService{},
+		PublicRoutes: []RouteRegistrar{handler},
+		Assets: http.FS(fstest.MapFS{
+			"index.html": &fstest.MapFile{Data: []byte("shell")},
+		}),
+	})
+
+	body := `{"entries":[{"level":"error","msg":"server.error","route":"cameras.list","fields":{"status":503}}]}`
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/client-logs", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unauthenticated POST /api/v1/client-logs = %d, want 200; body=%s",
+			recorder.Code, recorder.Body.String())
 	}
 }
