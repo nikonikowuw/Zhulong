@@ -1336,3 +1336,52 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 78: 原生日志桥接收尾：定位并修复 runner 日志记录丢失竞争
+<!-- trellis-session: v=2 fp=b3c19e7d54a08e21 -->
+
+**Date**: 2026-10-21
+**Task**: 原生层日志桥接（10-20-native-log-bridge 收尾提交）
+**Package**: backend
+**Branch**: `feat/native-log-bridge`
+
+### Summary
+
+恢复 `native-log-bridge` 的收尾状态：该任务已被归档但 `commit` 仍为 null，31 个修改 + 8 个新增路径从未提交，且 `make check` 实际是失败的（`ZhulongAlgoRunnerJson` 失败，stderr 上找不到 `zhulongLog` 记录）。定位并修复了 `ZhulongLog` runner ring 生产者准入的竞争条件，补上具备鉴别力的回归测试，随后按三提交序列落地。
+
+### Main Changes
+
+- 定位方式：runner 级别复现 8/300（~2.7%）失败；用带原因计数的隔离 harness 得到 **15/15 全部是 `lockfail=1`**，没有一次是队列满或 post-stop 丢弃，从而把范围从「多条丢弃路径」收敛到唯一原因。
+- 根因：`enqueue()` 用 `try_to_lock` 做生产者准入，但 ring mutex 与 writer 线程共享，writer 每次 `wait_for` 唤醒都会重新拿锁，生产者在这个竞争上落败后静默丢弃一条完全健康的记录 —— 包括启动后的第一条 `Error`。
+- 修复：生产者改为阻塞拿锁。安全性依据是临界区内只做定长 `Record` 拷贝，序列化与 stderr 写入都在释放锁之后，因此延迟有界且不会死锁。丢弃计数收敛为「真正满」与「post-stop」。
+- 回归测试：`native_log_test.cpp` 增加 400 轮 start→write→stop 循环。做了变异验证 —— 还原 try_lock 后 2/20 失败并给出可读诊断，修复后 0/20。
+- 判据修正：原测试在「管道已饱和」前提下只断言 `drops > before`，即把丢弃当成预期结果，因此结构性无法发现该 bug。
+- 未把同一改动套到 Go `nativelog.Queue`：其准入锁与消费路径刻意分离，`TryLock` 只在真实竞争下丢弃，符合既有契约。
+- 规格与设计同步：`logging-guidelines.md` §3 记录「runner ring 禁用 try_lock」契约；归档的 `design.md` §3.2 加上更正说明，避免原始「non-waiting producer admission」表述继续误导。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `81d646d` | feat(logging): bridge native C++ logs to Go via a C ABI callback |
+| `006ea64` | docs(spec): record the runner log admission contract |
+| `03ead3e` | chore(task): record industrial-logging task tree and archive native-log-bridge |
+
+### Testing
+
+- [OK] `make check` 提交前后各跑一次，均 EXIT=0（frontend 86 files / 502 tests、native 22/22、api-docs、go-check + Go bridge integration）
+- [OK] `ctest` 全套连跑 10 轮 0 失败（确认原有 flaky 已消失）
+- [OK] runner 级别连跑 600 次 0 失败（修复前 ~2.7%）
+- [OK] 变异测试：还原 try_lock 后新用例 2/20 失败；修复后 0/20
+- [OK] 定位性证据：隔离 harness 15/15 失败均为 `lockfail=1`
+
+### Next Steps
+
+- 4 个前端文件按计划**未纳入**本次提交（`web/vite.config.ts` 与 3 个浏览器测试），它们属于 ROI/MASK 那条线的残留工作：region-editor 断言加固 + 为两个 flaky 用例拆出 `chromium-desktop` viewport 实例。需要时单独提交。
+- AC-B5（RK3568 EVB1 目标板 p50/p95/p99、峰值 RSS、队列丢弃）仍未测量，host 数据不替代目标板结论；该豁免已在归档时经用户批准。
+- 父任务 `10-20-industrial-logging` 仍为 planning：子任务 C（`10-20-logging-safety-and-frontend`）尚未开工。
+
+### Status
+
+[OK] **Completed**（收尾提交与门禁；目标板性能项仍待验证）
