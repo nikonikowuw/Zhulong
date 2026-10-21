@@ -27,4 +27,4 @@
 ## Phase 5: 全链路质量验证与收工
 
 - [x] **Step 5.1**: 执行 `make check`（前端 lint/type-check/test + native-test + api-docs + go-check）。
-- [ ] **Step 5.2**: 组装车牌识别算法插件模板（`packages/plate_recognition/`），完成交付验证。
+- [x] **Step 5.2**: 组装车牌识别算法插件模板（`packages/plate_recognition/`），完成交付验证。

@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PlateRecognitionConfig",
+  "type": "object",
+  "properties": {
+    "confidence_threshold": {
+      "type": "number",
+      "minimum": 0.1,
+      "maximum": 1.0,
+      "default": 0.35,
+      "description": "车牌检测置信度阈值"
+    },
+    "nms_threshold": {
+      "type": "number",
+      "minimum": 0.1,
+      "maximum": 0.9,
+      "default": 0.45,
+      "description": "NMS 重叠抑制阈值"
+    }
+  }
+}
