@@ -1385,3 +1385,54 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**（收尾提交与门禁；目标板性能项仍待验证）
+
+
+## Session 79: 日志安全与前端可观测（子任务 C）交付
+<!-- trellis-session: v=2 fp=7c41e08a2b9d1365 -->
+
+**Date**: 2026-10-21
+**Task**: 10-20-logging-safety-and-frontend
+**Package**: backend + frontend
+**Branch**: `feat/native-log-bridge`
+
+### Summary
+
+交付子任务 C：新建 `internal/logsafe`（typed helper + SanitizingCore）、`internal/httpmiddleware` 限流器、`internal/clientlog` 公共上报端点、`web/src/lib/logger.ts` 前端统一 logger，并回写 spec。`make check` 全绿（前端 87 files/525 tests、native 22/22）。实施期间修正了两处规划缺陷，并抓到三个「测试通过但实际错」的 bug。
+
+### Main Changes
+
+- **规划缺陷 1（采样顺序）**：`design.md §2.4` 写「wrapper 包在 sampling 之外」。实测 1000 条相同记录（first=1/thereafter=100）：wrapper 在外 → 写 1000 条（采样静默失效），sampler 在外 → 写 10 条。改 design 并把决策记录进 implement §4。
+- **规划缺陷 2（AC-C4 前提反了）**：原表格把「`SanitizeURL` 只被调用 1 次」当作「日志漏用脱敏」的证据。实测日志调用点**没有任何 RTSP URL**，唯一消费者是 `streamAuditDetail` → 审计表 → 前端取证弹窗。降成 `logsafe.URL` 会让 `rtsp://admin:xxxxx@192.168.1.10:554/stream` 变成 `rtsp://[REDACTED_URL]`，运维无法判断哪台摄像机出事。已回退 + AC-C4 收窄。
+- **bug 1（IP 非幂等）**：handler 先遮成 `/24`，`SanitizingCore` 对同一 `clientIp` 字段再遮一次；`IP()` 不认 CIDR → 变成 `[REDACTED_IP]`，**网段信息全丢**。单元测试只测单次调用测不出，端到端才暴露。已修 + `TestIPIsIdempotent`。
+- **bug 2（客户端事件带 stacktrace）**：全局 `AddStacktrace(ErrorLevel)` 给每条浏览器上报附绝对构建路径。测试 helper 用裸 `zap.New(core)` 没带 `AddStacktrace`，导致该回归不可见；镜像生产 option 集后测试才有鉴别力。handler 提升阈值到 `InvalidLevel`。
+- **bug 3（上传失败不释放缓冲）**：失败批次留在 buffer，崩溃循环页面会攒成无界重试队列。已修（计为 dropped 并移除）+ 单测。
+- 限流器 key 空间满时 **LRU 淘汰而非拒绝新 IP**（拒绝会让一个攻击者锁死所有正常客户端），变异验证覆盖。
+- 端到端实测：per-IP burst 精确 10 → 90 个 429；413/422 信封正确；`token=abc123`/`hunter2` 零回显；零原始 IP 泄漏；零 RTSP 凭据泄漏。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `abd4b66` | feat(logging): add typed sanitizers and a sanitizing zap core |
+| `9860a6a` | feat(logging): add rate limit middleware and client log endpoint |
+| `6d07c2d` | feat(web): add bounded allowlisted browser error logger |
+| `b2a4b89` | docs(spec): record logging safety contracts and narrow AC-C4 |
+
+### Testing
+
+- [OK] `make check` EXIT=0，提交后复跑仍 EXIT=0
+- [OK] `go test -race ./internal/logsafe/ ./internal/httpmiddleware/ ./internal/clientlog/ ./internal/app/`
+- [OK] `npx vitest run` 87 files / 525 tests（真实无头 Chromium）
+- [OK] 变异验证 5 处：LRU 拒绝新 key、route 不校验、原始 IP、stacktrace、IP 幂等性 —— 全部能被测试抓到
+- [OK] 端到端真实服务验证（`build/Zhulong` + curl），确认限流/信封/无回显/无泄漏
+- [NOTE] 子代理两次 30min 超时且零产出，本轮全部手写
+
+### Next Steps
+
+- **未验证项**：AC-C6/AC-C7 的「真实浏览器页面真卸载时 sendBeacon 行为」与「崩溃循环下实际丢包率」仅在合成测试覆盖，未在真设备/真浏览会话验证。AC-14 部署预算签核仍 open（provisional 默认值 120 req/min、2 MiB/min、8 in-flight 未经签核）。
+- 4 个前端文件（`web/vite.config.ts` + 3 个浏览器测试）仍为 ROI 线遗留，未纳入本任务提交。
+- 父任务 `10-20-industrial-logging` 的三个子任务中 A、B 已归档，C 本次交付但未归档；父任务 §4 集成评审（联合-1～联合-5）尚未执行。
+
+### Status
+
+[OK] **Completed**（代码与门禁；真浏览器卸载路径与部署预算签核保持 open）
