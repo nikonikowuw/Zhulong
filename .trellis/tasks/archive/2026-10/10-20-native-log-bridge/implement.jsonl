@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "本子任务的核心：cgo.Handle token、指针不得跨回调保留、回调线程语义、异常不穿越 ABI"}
+{"file": ".trellis/spec/native/index.md", "reason": "原生层规范的入口清单与 Pre-Development Checklist"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "日志点铺开的重点区域是 src/pipeline/（流生命周期、订阅、背压），需先理解既有管线语义"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "RTSP 采集与解码的既有契约；同时是 FFmpeg 日志静默（防凭据泄漏）约束的上下文"}
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "日志点铺开的第二个重点区域是 src/backends/（RKNN / ONNX / RGA 初始化与推理失败）"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "runner 进程与插件的 ABI 契约；runner 的 stdout 是协议而非日志，不得改动其格式"}
+{"file": ".trellis/spec/architecture.md", "reason": "跨层拓扑：ZhulongEngine / ZhulongAlgoIpc / ZhulongAlgoRuntime 的链接关系决定日志设施应放在哪一层"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Go 侧 runner 日志解析与脱敏必须与 Go 侧日志规范一致"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "交叉编译只允许编译不允许执行测试、engine 相关测试走 wrapper 等硬性约定"}

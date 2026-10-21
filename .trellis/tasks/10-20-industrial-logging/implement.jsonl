@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "本任务的规范源头与收口目标：去重规则、采样策略、UTC 约定、logctx 用法、原生日志通道、敏感字段清单都将写回此文件"}
+{"file": ".trellis/spec/architecture.md", "reason": "跨层拓扑与 C ABI 边界：本任务横跨 Go / CGO / C++ / React 四层，必须先对齐既有分层契约"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "本任务是典型的跨层任务（Go 配置 → logctx → CGO 回调 → C++ 宏 → runner 管道 → 前端上报），需要按跨层思维梳理数据流与所有权"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "子任务 B 的 CGO 桥接（cgo.Handle token、指针规则、回调线程语义）必须严格遵守本契约"}
+{"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "子任务 A 改动 RequestID / AccessLog 中间件，子任务 C 新增限流中间件；中间件顺序与 Recovery 最外层约束在此"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "子任务 A 的「消除双重日志」依赖 apperr.Err 非空保证与 WriteError 的既有语义；子任务 C 的 429 走 apperr.KindRateLimited"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "子任务 C 的前端统一 logger 与上报端点接入需遵循既有前端约定"}

@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端改动的质量检查清单"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "检查敏感字段清单与 logsafe/sensitiveKeys 是否一致，以及规范是否完整写回"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "检查客户端日志端点的信封、错误码、路由挂载（public_routes）是否符合约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "检查前端测试是否真的跑在无头浏览器里，以及上报限流/去重/防递归是否被覆盖"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "重点检查未认证端点（client-logs）的六条硬限制是否逐条落实 —— 这是一处新增的攻击面"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "检查 logsafe 是否被增量补全而非覆盖 B 的最小实现；检查是否重复实现了既有脱敏逻辑"}

@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "本子任务要把敏感字段清单、logsafe 规则、SanitizingCore、客户端日志端点写回本规范"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "客户端日志端点必须遵循既有信封 {code,message,data}、错误码与路由 group 约定"}
+{"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "新增的按 IP 限流中间件必须与业务无关，且遵守中间件顺序约束（RateLimit 在 RequestID 之后）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "429 走 apperr.KindRateLimited；413/422 的既有映射与本地化在此定义"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试与源码同目录、表驱动、-race 强制等约定"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "前端统一 logger 与全局错误捕获需遵循既有前端开发约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端测试跑在真实无头浏览器（vitest browser + playwright），不是 JSDOM —— 上报/卸载路径的测试必须按此写"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "新增 web/src/lib/logger.ts 的位置与既有 lib 目录约定"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "logsafe.URL 应复用 camera.SanitizeURL 的既有实现；限流器需论证为何不引 golang.org/x/time/rate"}

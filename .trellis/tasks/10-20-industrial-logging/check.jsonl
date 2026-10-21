@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "集成评审阶段的质量检查清单"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "验收本任务是否把新规则完整写回规范，以及实现是否与规范一致"}
+{"file": ".trellis/spec/architecture.md", "reason": "跨层一致性检查：本任务不得破坏既有分层边界（尤其 logctx 的依赖白名单与 C ABI 的纯增量要求）"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "子任务 B 的 CGO 桥接是否违反指针规则 / 回调线程约束"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "子任务 C 的前端改动质量检查（真实无头浏览器测试，非 JSDOM）"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "检查是否重复造轮子：logsafe 应复用 camera.SanitizeURL 逻辑；限流器需论证为何不引 x/time/rate；nativelog 需论证为何不复用 zapcore 异步方案"}
