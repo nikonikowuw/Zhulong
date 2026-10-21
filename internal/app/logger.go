@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/logsafe"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -130,7 +131,15 @@ func buildLogger(config Config) (*zap.Logger, zap.AtomicLevel, loggerOutput, err
 	}
 
 	atomicLevel := zap.NewAtomicLevelAt(level)
-	var core zapcore.Core = zapcore.NewCore(encoder, sink, atomicLevel)
+	// The safety wrapper is always enabled and sits directly above the encoder
+	// core, so every field and message is sanitized before encoding. It has no
+	// production disable switch.
+	//
+	// Sampling, when configured, wraps the sanitizing core rather than being
+	// wrapped by it: SanitizingCore.Check attaches only itself (so a Write can
+	// never bypass sanitization), which means a sampler placed *inside* the
+	// wrapper would never be consulted and would silently stop sampling.
+	var core zapcore.Core = logsafe.NewSanitizingCore(zapcore.NewCore(encoder, sink, atomicLevel))
 	if logging.Sampling.Enabled {
 		if logging.Sampling.Initial <= 0 || logging.Sampling.Thereafter <= 0 {
 			return nil, zap.AtomicLevel{}, nil, errors.New("logging.sampling.initial and logging.sampling.thereafter must be positive when sampling is enabled")

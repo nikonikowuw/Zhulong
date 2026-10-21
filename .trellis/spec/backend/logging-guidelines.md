@@ -113,6 +113,116 @@ Sink `Sync()` 仅请求操作系统同步当前活动文件；它不代表设备
 - The C++ `ZhulongLog` runner ring must **not** use `try_lock` for producer admission. Its ring lock is shared with the writer, which re-acquires it on every `wait_for` wakeup, so a `try_lock` producer loses that race under the scheduler and silently drops a healthy record — measured at ~2.7% of runner process starts, including the first `Error`. Block on the ring mutex instead: the critical section is bounded by a fixed-size `Record` copy because serialization and stderr writes happen after the lock is released, so producer latency stays bounded and cannot deadlock. Drop counting is reserved for genuinely full capacity and post-stop admission. `native/tests/native_log_test.cpp` guards this with 400 start-write-stop cycles.
 - `WriteError` owns the unique Error event for unexpected HTTP 5xx, with requestId, stable code and status even without a cause. Expected 4xx remain non-Error; AccessLog remains Info.
 
+### 3.1 Sensitive data: typed helpers, not a universal scrubber
+
+The primary control is the call site: sensitive values are never passed to a log
+as free text. `internal/logsafe` provides the typed helpers, and `SanitizingCore`
+is defence in depth only.
+
+| Helper | Contract |
+| --- | --- |
+| `Safe(s)` | Normalises UTF-8, replaces control characters, truncates at a valid boundary to 2048 bytes. **Not** a secret detector: credentials embedded in prose, base64 or concatenated strings pass through. |
+| `URL(raw)` | Returns lower-cased scheme + fixed marker only; never userinfo/host/path/query/fragment. Empty, relative, oversized or malformed → fixed marker. |
+| `Path(s)` / `Paths` | Never return input. State that "a path was involved" without exposing device IDs or account names. |
+| `Secret(s)` | Always the fixed placeholder. |
+| `IP(raw)` | Masked network summary (IPv4 /24, IPv6 /64). Must be **idempotent**: `SanitizingCore` re-applies it to the same `clientIp` field, so a non-idempotent version replaces the useful summary with the unparseable marker. |
+| `ErrorSummary(err)` | Never calls `err.Error()`; reports presence only. |
+
+`internal/logsafe` imports the standard library only and must never import
+`internal/camera` or any business package.
+
+**Known sensitive keys** handled by `SanitizingCore` (defence in depth, matched on
+normalised key): `password`, `passwd`, `pwd`, `token`, `accessToken`,
+`refreshToken`, `secret`, `clientSecret`, `jwtSecret`, `credential(s)`,
+`authorization`, `cookie`, `setCookie`, `apiKey`, `rtspUrl`, `url`, `dsn`, `path`,
+`filePath`, `socketPath`. `clientIp` uses the typed IP helper.
+
+**Never logged**, at any level: raw exception messages, stack traces of
+application errors, user prose, URL queries, filesystem/device paths, cookie or
+credential values, and application-defined `ObjectMarshaler`/`ArrayMarshaler`
+output (omitted with a fixed marker, never invoked).
+
+`SanitizingCore` is always enabled and has no production disable switch. It
+sanitises `Write` message and fields, `With` fields, `ErrorType` values and known
+keys; `Check` attaches only itself (`ce.AddCore`) so `Write` cannot bypass it.
+
+**Measured overhead** (x86_64 host, Go toolchain and zap as pinned in `go.mod`;
+no hard latency threshold is promised — safety and correctness take precedence):
+
+| Benchmark | Plain | Sanitizing |
+| --- | --- | --- |
+| discard core, 3 fields | 169 ns/op, 2 allocs | 505 ns/op, 3 allocs |
+| JSON encoder, 3 fields | 614 ns/op, 2 allocs | 950 ns/op, 3 allocs |
+| message only | 69 ns/op, 0 allocs | 96 ns/op, 0 allocs |
+| `With` fields | — | 464 ns/op, 6 allocs |
+| oversized 2048-byte field | 106 ns/op, 1 alloc | 1579 ns/op, 3 allocs |
+
+The oversized case is the worst relative regression because it must rewrite and
+re-check the whole value; it is also the case a real log line rarely hits.
+
+⚠️ **Sampling order.** When `logging.sampling.enabled`, the sampler wraps the
+sanitising core — `logger → sampler → SanitizingCore → encoder`. The reverse
+order silently disables sampling: a sampler decides inside its own `Check`, which
+is never consulted when the wrapper is outermost and attaches only itself.
+Measured with 1000 identical records at `first=1/thereafter=100`: correct order
+writes 10, inverted order writes 1000 while appearing configured. Sanitisation is
+unaffected, because it happens in `Write`/`With`, which the sampler calls
+through to; a sampler-dropped entry is never written anywhere, so nothing
+unsanitised escapes.
+
+### 3.2 Client log ingestion (`POST /api/v1/client-logs`)
+
+The endpoint is **public/unauthenticated** on purpose: browser errors peak
+exactly when a session has expired. Everything below is mandatory because of
+that.
+
+- Schema: `msg` is a stable event ID matching `^[a-z0-9_.-]{1,64}$` — **not
+  prose**. `route` is an allowlisted category (`cameras.list`), never a URL:
+  query, fragment and path segments are rejected. Fields are scalars from a
+  closed allowlist, max 16 per entry, string values max 256 bytes. Optional
+  top-level `dropped` is an integer in `[0, 2^32-1]`.
+- Limits: 50 entries/request, 64 KiB body (413), invalid input → 422. Invalid
+  input is **rejected**, never truncated-and-logged, and body content is never
+  echoed in the response.
+- Rate limits: per-IP 60 req/minute, burst 10, LRU-bounded key space of 1024.
+  Process-wide provisional defaults: 120 req/minute, 2 MiB/minute, 8 in-flight,
+  configurable under `[clientlog]`; zero value falls back and a missing section
+  does **not** abort startup. ⚠️ These defaults are bounded-by-construction but
+  **not deployment-signed** — they are not a capacity or bandwidth conclusion
+  for any target board.
+- When the per-IP key space is full, evict the least-recently-used key. Never
+  reject an unknown key: that would let one source exhaust the map and lock out
+  every legitimate client, turning a DoS defence into a DoS.
+- Emit only: stable event IDs, allowlisted typed fields, `source=web`, server
+  requestId and a **masked** client IP. Client-supplied IP/URL/arbitrary values
+  are never logged. No audit record is created: an anonymous report has no
+  responsible actor.
+- Client-origin events must not carry a server stacktrace. Raise the logger's
+  stacktrace threshold above Error for this handler; a browser report has no
+  meaningful server stack, and the global policy would leak absolute build paths
+  on every client error.
+
+### 3.3 Frontend logger
+
+`web/src/lib/logger.ts` is the only production `console.*` owner.
+
+- Accepts four levels and a **closed** event-ID union plus allowlisted field
+  keys; unknown keys are dropped at runtime, not just by TypeScript.
+- Production buffers `warn`/`error` only: 100-entry ring (overflow drops oldest
+  and counts), flush every 5s or at 20 entries, max 50 entries and 48 KiB
+  encoded per upload, dedup `(level,event)` to 3/second.
+- Uploads use `fetch(credentials: "omit", keepalive: true)`. Failure counts the
+  batch as dropped and removes it; it never calls `log()`, never requeues and
+  never retries immediately — otherwise a crash-looping page becomes an
+  unbounded request loop against a public endpoint.
+- On `visibilitychange → hidden`, at most two `sendBeacon` batches, sharing the
+  single-flight gate with `fetch`. Beacon cannot set a credentials mode, so that
+  path cannot promise omission; the endpoint ignores session cookies.
+- Never uploaded: `Error.message`, stack traces, URL query, request/response
+  bodies. Global handlers report only an event class.
+- Browser crash, process kill and final-batch rejection can still lose events;
+  Beacon acceptance is not server acknowledgement.
+
 ### 4. Validation & Error Matrix
 | Condition | Required behavior |
 | --- | --- |

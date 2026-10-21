@@ -3,12 +3,15 @@ package app
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/logsafe"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -223,4 +226,181 @@ func withSampling(sampling SamplingConfig) Config {
 	config := DefaultConfig()
 	config.Logging.Sampling = sampling
 	return config
+}
+
+// TestNewLoggerAppliesSanitizingCore proves the assembled logger routes Write,
+// With and Check through logsafe.SanitizingCore. It writes to a real file so the
+// assertion covers the actual production assembly (encoder + sink), not a
+// substitute core.
+func TestNewLoggerAppliesSanitizingCore(t *testing.T) {
+	restore := zap.ReplaceGlobals(zap.NewNop())
+	defer restore()
+
+	path := filepath.Join(t.TempDir(), "sanitized.log")
+	logger, _, sink, err := NewLogger(fileLoggerConfig(path))
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	if err := sink.Prepare(); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	t.Cleanup(func() { _ = sink.Close() })
+
+	// Write path: sensitive key, control characters and an error value.
+	logger.Info("camera started\r\ninjected",
+		zap.String("password", "hunter2"),
+		zap.String("rtspUrl", "rtsp://admin:hunter2@10.0.0.1/live/main"),
+		zap.String("clientIp", "192.168.1.77"),
+		zap.Error(errors.New("dial rtsp://admin:hunter2@10.0.0.1:554 failed")),
+		zap.Any("payload", map[string]string{"password": "hunter2"}),
+	)
+	// With path: fields attached before Write must be sanitized too.
+	logger.With(zap.String("token", "abc123")).Warn("session renewed")
+	// Check path: writing through the CheckedEntry must still be sanitized,
+	// which only holds if Check attached the wrapper rather than the inner core.
+	ce := logger.Core().Check(zapcore.Entry{Level: zapcore.InfoLevel, Message: "via check"}, nil)
+	if ce == nil {
+		t.Fatal("Check rejected an enabled entry")
+	}
+	ce.Write(zap.String("secret", "abc123"))
+	if err := logger.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log output: %v", err)
+	}
+	text := string(data)
+	for _, leak := range []string{
+		"hunter2",
+		"abc123",
+		"10.0.0.1",
+		"192.168.1.77",
+		"/live/main",
+		"admin:",
+	} {
+		if strings.Contains(text, leak) {
+			t.Fatalf("assembled logger leaked %q:\n%s", leak, text)
+		}
+	}
+	// The injected CRLF must be flattened into the single "msg" value, so the
+	// JSON line for the Write path still ends right after the last field.
+	if !strings.Contains(text, `"msg":"camera started  injected"`) {
+		t.Fatalf("message control characters were not normalized:\n%s", text)
+	}
+	if !strings.Contains(text, logsafe.ValueMarker) {
+		t.Fatalf("sensitive keys were not replaced with the marker:\n%s", text)
+	}
+	if !strings.Contains(text, logsafe.OmittedMarker) {
+		t.Fatalf("reflect field was not omitted:\n%s", text)
+	}
+	if !strings.Contains(text, "192.168.1.0/24") {
+		t.Fatalf("clientIp was not reduced to a masked network summary:\n%s", text)
+	}
+}
+
+// TestNewLoggerSanitizingCoreIsAlwaysEnabled pins that no configuration value
+// can unwrap the safety core.
+func TestNewLoggerSanitizingCoreIsAlwaysEnabled(t *testing.T) {
+	restore := zap.ReplaceGlobals(zap.NewNop())
+	defer restore()
+	for _, format := range []string{"json", "console"} {
+		t.Run(format, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), format+".log")
+			config := fileLoggerConfig(path)
+			config.Logging.Format = format
+			config.Logging.Sampling = SamplingConfig{Enabled: true, Initial: 100, Thereafter: 100}
+			logger, _, sink, err := NewLogger(config)
+			if err != nil {
+				t.Fatalf("NewLogger: %v", err)
+			}
+			if err := sink.Prepare(); err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+			t.Cleanup(func() { _ = sink.Close() })
+
+			// With sampling enabled the sampler must be the outer core and the
+			// wrapper must sit directly beneath it. If the wrapper were outer,
+			// Check would attach only itself and the sampler would never run.
+			if got := typeName(logger.Core()); !strings.Contains(got, "sampler") {
+				t.Fatalf("sampling enabled but the outer core is %s", got)
+			}
+			logger.Error("boom", zap.String("password", "hunter2"))
+			if err := logger.Sync(); err != nil {
+				t.Fatalf("Sync: %v", err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read log output: %v", err)
+			}
+			if strings.Contains(string(data), "hunter2") {
+				t.Fatalf("sampled assembly leaked a sensitive value:\n%s", data)
+			}
+		})
+	}
+}
+
+// TestNewLoggerSamplingStillApplies proves the documented ordering: the wrapper
+// sits under the sampler, so enabling sampling still reduces record count.
+func TestNewLoggerSamplingStillApplies(t *testing.T) {
+	restore := zap.ReplaceGlobals(zap.NewNop())
+	defer restore()
+	path := filepath.Join(t.TempDir(), "sampled-sanitized.log")
+	config := fileLoggerConfig(path)
+	config.Logging.Sampling = SamplingConfig{Enabled: true, Initial: 1, Thereafter: 100}
+	logger, _, sink, err := NewLogger(config)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	if err := sink.Prepare(); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	t.Cleanup(func() { _ = sink.Close() })
+	for i := 0; i < 1000; i++ {
+		logger.Info("repeated", zap.String("password", "hunter2"))
+	}
+	if err := logger.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log output: %v", err)
+	}
+	records := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line != "" {
+			records++
+		}
+	}
+	if records >= 1000 {
+		t.Fatalf("sampling did not apply to the sanitizing core: %d records", records)
+	}
+	if strings.Contains(string(data), "hunter2") {
+		t.Fatalf("sampled sanitizing core leaked a sensitive value")
+	}
+}
+
+// typeName renders the dynamic type name of a core for diagnostic assertions.
+func typeName(core zapcore.Core) string {
+	return fmt.Sprintf("%T", core)
+}
+
+// TestNewLoggerWithoutSamplingWrapsDirectly proves the unsampled assembly puts
+// the sanitizing wrapper at the top of the core chain.
+func TestNewLoggerWithoutSamplingWrapsDirectly(t *testing.T) {
+	restore := zap.ReplaceGlobals(zap.NewNop())
+	defer restore()
+	path := filepath.Join(t.TempDir(), "nosample.log")
+	logger, _, sink, err := NewLogger(fileLoggerConfig(path))
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	if err := sink.Prepare(); err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	t.Cleanup(func() { _ = sink.Close() })
+	if got := typeName(logger.Core()); !strings.Contains(got, "SanitizingCore") {
+		t.Fatalf("unsampled assembly core = %s, want a SanitizingCore at the top", got)
+	}
 }
