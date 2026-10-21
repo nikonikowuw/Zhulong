@@ -1,10 +1,21 @@
 import { AxiosError } from 'axios'
 import { toast } from 'sonner'
+import { log } from './logger'
 
 export function handleServerError(error: unknown): void {
-  if (import.meta.env.DEV) {
-    // eslint-disable-next-line no-console
-    console.log(error)
+  if (error instanceof AxiosError) {
+    // Report the status and the stable error code only. The response message is
+    // server-authored prose and may echo request details, so it is never
+    // uploaded; it is still shown to the user through the toast below.
+    log('error', 'server.error', {
+      status: error.response?.status,
+      code:
+        typeof error.response?.data?.code === 'string'
+          ? error.response.data.code
+          : undefined,
+    })
+  } else {
+    log('error', 'server.error')
   }
 
   let errMsg = 'Something went wrong!'

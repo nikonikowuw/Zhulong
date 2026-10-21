@@ -1,6 +1,7 @@
 import { AxiosError } from 'axios'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { handleServerError } from './handle-server-error'
+import { __testing } from './logger'
 
 const toastError = vi.hoisted(() => vi.fn())
 
@@ -71,28 +72,45 @@ describe('handleServerError', () => {
     })
   })
 
-  it('logs the error to the console in development', () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const err = new Error('logged')
+  it('reports a stable event id without the raw error message', () => {
+    __testing.reset()
+    __testing.setProduction(true)
+    const err = new Error('secret token=abc123 in message')
 
     handleServerError(err)
 
-    expect(log).toHaveBeenCalledTimes(1)
-    expect(log).toHaveBeenCalledWith(err)
-
-    log.mockRestore()
+    const entries = __testing.pendingEntries()
+    expect(entries).toHaveLength(1)
+    expect(entries[0].msg).toBe('server.error')
+    // The raw message must never leave the browser.
+    expect(JSON.stringify(entries)).not.toContain('abc123')
+    __testing.reset()
   })
 
-  it('does not log the error to the console in production', () => {
-    vi.stubEnv('DEV', false)
+  it('reports the response status and stable code, not the server message', () => {
+    __testing.reset()
+    __testing.setProduction(true)
+    const error = new AxiosError('boom')
+    error.response = {
+      status: 503,
+      data: { code: 'SERVICE_UNAVAILABLE', message: 'internal detail here' },
+    } as AxiosError['response']
 
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
-    const err = new Error('not logged')
+    handleServerError(error)
 
-    handleServerError(err)
+    const [entry] = __testing.pendingEntries()
+    expect(entry.fields).toEqual({ status: 503, code: 'SERVICE_UNAVAILABLE' })
+    expect(JSON.stringify(entry)).not.toContain('internal detail here')
+    __testing.reset()
+  })
 
-    expect(log).not.toHaveBeenCalled()
+  it('does not queue anything in development', () => {
+    __testing.reset()
+    __testing.setProduction(false)
 
-    log.mockRestore()
+    handleServerError(new Error('not uploaded'))
+
+    expect(__testing.bufferLength()).toBe(0)
+    __testing.reset()
   })
 })

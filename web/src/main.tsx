@@ -11,6 +11,7 @@ import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { handleServerError } from '@/lib/handle-server-error'
+import { installGlobalErrorHandlers, log } from '@/lib/logger'
 import { DirectionProvider } from './context/direction-provider'
 import { FontProvider } from './context/font-provider'
 import { ThemeProvider } from './context/theme-provider'
@@ -33,8 +34,11 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: (failureCount, error) => {
-        // eslint-disable-next-line no-console
-        if (import.meta.env.DEV) console.log({ failureCount, error })
+        log('debug', 'query.retry', {
+          failureCount,
+          status:
+            error instanceof AxiosError ? error.response?.status : undefined,
+        })
 
         if (failureCount >= 0 && import.meta.env.DEV) return false
         if (failureCount > 3 && import.meta.env.PROD) return false
@@ -98,6 +102,11 @@ declare module '@tanstack/react-router' {
     router: typeof router
   }
 }
+
+// Install browser error capture once, before React mounts, so a failure during
+// startup is still reported. Handlers send only an event class — never
+// Error.message, stacks or URL query strings.
+installGlobalErrorHandlers()
 
 // Render the app
 const rootElement = document.getElementById('root')!

@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useNavigate, useRouter } from '@tanstack/react-router'
+import { log } from '@/lib/logger'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 
@@ -20,9 +21,9 @@ export function GeneralError({
 
   useEffect(() => {
     if (error) {
-      // 始终在控制台输出真实异常，便于开发与排错，避免被误判为后端 HTTP 500
-      // eslint-disable-next-line no-console
-      console.error('[Router Error Boundary Caught Exception]:', error)
+      // 只上报稳定的事件类。真实异常消息与堆栈可能是任意长度、受外部输入
+      // 影响，且常带凭据，因此只进开发期控制台（logger 内部处理），不上传。
+      log('error', 'router.error_boundary', { boundary: 'route_error' })
     }
   }, [error])
 
