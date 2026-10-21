@@ -67,7 +67,9 @@ std::unique_ptr<BrokerResourceLock> BrokerResourceLock::acquire(const std::vecto
             if (error_msg) *error_msg = dir + " is not a directory";
             return nullptr;
         }
-        DirIdentity id{major(st.st_dev), minor(st.st_dev), st.st_ino};
+        DirIdentity id{static_cast<unsigned int>(major(st.st_dev)),
+                       static_cast<unsigned int>(minor(st.st_dev)),
+                       st.st_ino};
         bool seen = false;
         for (const auto& existing : resolved) {
             if (existing.id == id) { seen = true; break; }

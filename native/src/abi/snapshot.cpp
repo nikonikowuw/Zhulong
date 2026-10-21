@@ -27,11 +27,14 @@
 #include <new>
 #include <vector>
 
+#if defined(__linux__) || defined(__APPLE__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
 #if defined(__linux__)
 #include <cerrno>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
-#include <unistd.h>
 #if defined(__has_include)
 #if __has_include(<linux/dma-buf.h>)
 #include <linux/dma-buf.h>
@@ -106,11 +109,13 @@ public:
     MappedDmaBuffer() = default;
     ~MappedDmaBuffer() {
         if (addr_ && addr_ != MAP_FAILED) {
+#if defined(__linux__)
             if (sync_started_) {
                 dma_buf_sync sync{};
                 sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
                 (void)::ioctl(fd_, DMA_BUF_IOCTL_SYNC, &sync);
             }
+#endif
             ::munmap(addr_, size_);
         }
     }
@@ -149,7 +154,9 @@ private:
     int fd_{-1};
     void *addr_{nullptr};
     size_t size_{0};
+#if defined(__linux__)
     bool sync_started_{false};
+#endif
 };
 
 /**

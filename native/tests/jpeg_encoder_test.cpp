@@ -102,12 +102,14 @@ struct DmaHeapBuffer {
     size_t size{0};
 
     ~DmaHeapBuffer() {
+#if defined(__linux__)
         if (va != nullptr) {
             munmap(va, size);
         }
         if (fd >= 0) {
             close(fd);
         }
+#endif
     }
 
     bool alloc(size_t len) {
