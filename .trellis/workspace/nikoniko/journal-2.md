@@ -1462,3 +1462,26 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 81: 人员与人脸管理交互与 UI 现代化升级 (方案 B)
+<!-- trellis-session: v=2 fp=6f315e424581fdf6 -->
+
+**Date**: 2026-10-21
+**Task**: 人员与人脸管理交互与 UI 现代化升级 (方案 B)
+**Package**: backend
+**Branch**: `feat/native-log-bridge`
+
+### Summary
+
+重构人员管理与人脸管理的前端交互与界面风格。在新建人员弹窗中集成首张人脸照片拖拽与链式特征建模；将人脸管理改造成右侧滑出的现代化抽屉 Sheet，支持多图批量上传并翻新人脸卡片设计；实现表格与画廊卡片双视图切换，全量支持三语国际化与自动化浏览器测试。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cc6fab0` | feat(persons): overhaul personnel and face management UI/UX |
+
+### Status
+
+[OK] **Completed**
