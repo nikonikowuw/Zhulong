@@ -13,9 +13,14 @@ failed = subprocess.run(
 )
 assert failed.returncode != 0
 start = json.loads(failed.stdout.splitlines()[0])
-error = json.loads(failed.stderr.splitlines()[0])
+errors = [json.loads(line) for line in failed.stderr.splitlines()]
+error = next(report for report in errors if report.get("status") == "failed")
+native_log = next(report for report in errors if report.get("zhulongLog") is True)
 assert start["plugin"] == missing_plugin
 assert error["status"] == "failed"
+assert native_log["module"] == "algorithm.runner"
+assert native_log["message"] == "plugin_load_failed reason=dlopen"
+assert missing_plugin not in json.dumps(native_log)
 
 sample = 'sample "quoted" \\ path\ncontrol ' + chr(1)
 passed = subprocess.run(

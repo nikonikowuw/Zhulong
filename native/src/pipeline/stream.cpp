@@ -19,6 +19,7 @@
  */
 
 #include "pipeline/stream.hpp"
+#include "common/log.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -125,11 +126,14 @@ bool DecodeSession::push_packet(const Zhulong_packet_view &packet) {
     if (!packet_queue_.push(std::move(qp))) {
         // 队列已满溢出：立即丢弃全部积压并等待下一个关键帧重同步。
         // 否则 AI 将长期消费一条落后约一个队列深度 (60 包) 的陈旧画面，延迟无法自愈。
-        waiting_keyframe_.store(true, std::memory_order_relaxed);
+        const bool already_waiting = waiting_keyframe_.exchange(true, std::memory_order_relaxed);
         packet_queue_.clear();
         // 仅在队列未被取消时计数：停机竞态下的 push 失败不是拥塞，不污染统计
         if (!packet_queue_.is_cancelled()) {
             congestion_resyncs_.fetch_add(1, std::memory_order_relaxed);
+            if (!already_waiting) {
+                ZL_LOGW(stream_id_, "pipeline.stream", "decode_queue_resync");
+            }
         }
         return false;
     }
@@ -208,7 +212,9 @@ void DecodeSession::decode_loop() noexcept {
                     meta.extradata.empty() ? nullptr : meta.extradata.data(),
                     meta.extradata.size(),
                     final_tb_num,
-                    final_tb_den
+                    final_tb_den,
+                    DecoderBackend::AUTO,
+                    stream_id_
                 );
                 if (decoder) {
                     decoder_generation = generation;
@@ -217,12 +223,16 @@ void DecodeSession::decode_loop() noexcept {
                 } else {
                     next_create_attempt = SteadyClock::now() + retry_delay;
                     retry_delay = std::min(retry_delay * 2, kMaxRetryDelay);
+                    ZL_LOGW(stream_id_, "pipeline.stream", "decoder_create_failed retry_delay_ms=%lld",
+                        static_cast<long long>(retry_delay.count()));
                 }
             }
         } catch (...) {
             decoder.reset();
             next_create_attempt = SteadyClock::now() + retry_delay;
             retry_delay = std::min(retry_delay * 2, kMaxRetryDelay);
+            ZL_LOGW(stream_id_, "pipeline.stream", "decoder_create_failed retry_delay_ms=%lld",
+                static_cast<long long>(retry_delay.count()));
         }
         return decoder.get();
     };
@@ -296,12 +306,16 @@ void DecodeSession::decode_loop() noexcept {
                     // 并等待下一个关键帧，避免参考错误持续污染后续画面
                     dec->flush();
                     need_keyframe = true;
+                    ZL_LOGW(stream_id_, "pipeline.stream", "decode_packet_failed rc=%d", ret);
                 }
             } else {
                 // 解码器不可用 (codec 无效 / 创建退避窗口内 / 创建失败)：本包被丢弃
                 decoder_unavailable_drops_.fetch_add(1, std::memory_order_relaxed);
             }
         } catch (...) {
+            if (!need_keyframe) {
+                ZL_LOGW(stream_id_, "pipeline.stream", "decode_packet_exception");
+            }
             if (decoder) {
                 try {
                     decoder->flush();
@@ -441,6 +455,8 @@ void Stream::on_ready(const Video &video) {
     if (session) {
         session->update_metadata(video);
     }
+    ZL_LOGI(id, "pipeline.stream", "stream_ready codec=%d width=%d height=%d",
+        video.view.codec, video.view.width, video.view.height);
 }
 
 void Stream::rebuild_subscribers() {
@@ -490,13 +506,19 @@ void Stream::capture() noexcept {
             },
             [this](const Video &video) {
                 on_ready(video);
-            });
+            },
+            id);
     } catch (const Failure &failure) {
         error = failure.status;
+        if (error != Zhulong_ERR_CANCELLED) {
+            ZL_LOGE(id, "pipeline.stream", "capture_failed rc=%d", static_cast<int>(error));
+        }
     } catch (const std::bad_alloc &) {
         error = Zhulong_ERR_OUT_OF_MEMORY;
+        ZL_LOGE(id, "pipeline.stream", "capture_failed rc=%d", static_cast<int>(error));
     } catch (...) {
         error = Zhulong_ERR_INTERNAL;
+        ZL_LOGE(id, "pipeline.stream", "capture_failed rc=%d", static_cast<int>(error));
     }
 
     std::lock_guard<std::mutex> lock(mutex);

@@ -271,5 +271,5 @@ func (q *Queue) reportDrops() {
 }
 
 func (r Record) valid() bool {
-	return r.Level <= Error && r.Module != "" && r.Message != "" && !r.SeenAt.IsZero()
+	return r.Level <= Error && r.Module != "" && !r.SeenAt.IsZero()
 }

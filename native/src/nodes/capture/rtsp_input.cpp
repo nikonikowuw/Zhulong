@@ -15,6 +15,7 @@
  */
 
 #include "rtsp_input.hpp"
+#include "common/log.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -97,14 +98,22 @@ struct PacketDeleter {
  * ⚠️ stream_info 可能在被打断后依然返回非负值（部分元数据成功），
  * 因此必须优先检查 cancel.stopped 与绝对 deadline。
  */
-void check(int result, const Cancellation &cancel) {
+void check(int result, const Cancellation &cancel, uint64_t stream_id, const char *operation) {
     if (cancel.stopped.load()) throw Failure{Zhulong_ERR_CANCELLED};
     if (Clock::now() >= cancel.deadline || result == AVERROR(ETIMEDOUT)) {
+        ZL_LOGW(stream_id, "nodes.capture", "rtsp_timeout operation=%s rc=%d", operation, result);
         throw Failure{Zhulong_ERR_TIMEOUT};
     }
     if (result >= 0) return;
-    if (result == AVERROR_EOF) throw Failure{Zhulong_ERR_EOF};
-    if (result == AVERROR(ENOMEM)) throw std::bad_alloc();
+    if (result == AVERROR_EOF) {
+        ZL_LOGW(stream_id, "nodes.capture", "rtsp_eof operation=%s rc=%d", operation, result);
+        throw Failure{Zhulong_ERR_EOF};
+    }
+    if (result == AVERROR(ENOMEM)) {
+        ZL_LOGE(stream_id, "nodes.capture", "rtsp_out_of_memory operation=%s rc=%d", operation, result);
+        throw std::bad_alloc();
+    }
+    ZL_LOGW(stream_id, "nodes.capture", "rtsp_io_failed operation=%s rc=%d", operation, result);
     throw Failure{Zhulong_ERR_IO};
 }
 
@@ -275,7 +284,11 @@ void initialize_ffmpeg() {
         av_log_set_level(AV_LOG_QUIET);
         av_log_set_callback([](void *, int, const char *, va_list) {});
         // 初始化网络子系统
-        if (avformat_network_init() < 0) throw Failure{Zhulong_ERR_IO};
+        const int ret = avformat_network_init();
+        if (ret < 0) {
+            ZL_LOGE(0, "nodes.capture", "ffmpeg_network_init_failed rc=%d", ret);
+            throw Failure{Zhulong_ERR_IO};
+        }
     });
 }
 
@@ -285,10 +298,10 @@ void initialize_ffmpeg() {
 
 Video read_rtsp(const std::string &url, const Options &options, Cancellation &cancel,
                 const std::function<void(const Zhulong_packet_view &)> &consume,
-                const std::function<void(const Video &)> &ready) {
+                const std::function<void(const Video &)> &ready, uint64_t stream_id) {
     // 设置建连超时
     cancel.expire_after(options.open_timeout_ms);
-    check(0, cancel);
+    check(0, cancel, stream_id, "open");
 
     Input input(cancel);
     Dictionary dictionary;
@@ -301,26 +314,37 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
     dictionary.set("probesize", "1048576");
 
     // 1. 打开 RTSP 输入
-    check(avformat_open_input(&input.context, url.c_str(), av_find_input_format("rtsp"), &dictionary.value), cancel);
+    const int open_result = avformat_open_input(&input.context, url.c_str(), av_find_input_format("rtsp"), &dictionary.value);
+    check(open_result, cancel, stream_id, "open");
 
     // 2. 定位最佳视频流轨道
     const int index = av_find_best_stream(input.context, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    if (index < 0) throw Failure{Zhulong_ERR_UNSUPPORTED};
+    if (index < 0) {
+        ZL_LOGW(stream_id, "nodes.capture", "rtsp_video_stream_unavailable rc=%d", index);
+        throw Failure{Zhulong_ERR_UNSUPPORTED};
+    }
 
     // 快速前置编解码格式检查（在解析深度流信息前拒绝不支持的格式）
-    codec_id(input.context->streams[index]->codecpar->codec_id);
+    const auto detected_codec = input.context->streams[index]->codecpar->codec_id;
+    if (detected_codec != AV_CODEC_ID_H264 && detected_codec != AV_CODEC_ID_HEVC) {
+        ZL_LOGW(stream_id, "nodes.capture", "rtsp_codec_unsupported codec_id=%d", static_cast<int>(detected_codec));
+        throw Failure{Zhulong_ERR_UNSUPPORTED};
+    }
 
     // 3. 读取流参数信息
-    check(avformat_find_stream_info(input.context, nullptr), cancel);
+    const int info_result = avformat_find_stream_info(input.context, nullptr);
+    check(info_result, cancel, stream_id, "stream_info");
 
     const auto *stream = input.context->streams[index];
     const auto *parameters = stream->codecpar;
 
     // 提取并校验视频流元数据
     Video video;
-    video.view.codec = codec_id(parameters->codec_id);
+    video.view.codec = codec_id(detected_codec);
     if (parameters->width <= 0 || parameters->height <= 0 ||
         stream->time_base.num <= 0 || stream->time_base.den <= 0) {
+        ZL_LOGW(stream_id, "nodes.capture", "rtsp_video_metadata_invalid width=%d height=%d time_base_num=%d time_base_den=%d",
+                parameters->width, parameters->height, stream->time_base.num, stream->time_base.den);
         throw Failure{Zhulong_ERR_UNSUPPORTED};
     }
     video.view.width = parameters->width;
@@ -349,11 +373,15 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
     // 4. 帧读取循环（使用 idle_timeout_ms 监控两帧之间的间隔）
     cancel.expire_after(options.idle_timeout_ms);
     while (!cancel.stopped.load()) {
-        if (cancel.interrupted()) throw Failure{Zhulong_ERR_TIMEOUT};
+        if (cancel.stopped.load(std::memory_order_relaxed)) break;
+        if (Clock::now() >= cancel.deadline) {
+            ZL_LOGW(stream_id, "nodes.capture", "rtsp_idle_timeout timeout_ms=%u", options.idle_timeout_ms);
+            throw Failure{Zhulong_ERR_TIMEOUT};
+        }
 
         const int result = av_read_frame(input.context, packet.get());
         if (result == AVERROR(EAGAIN)) continue;
-        check(result, cancel);
+        check(result, cancel, stream_id, "read");
 
         // 仅处理所选视频轨道的有效数据包
         if (packet->stream_index == index && packet->size > 0) {

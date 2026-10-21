@@ -277,6 +277,12 @@ if(ZHULONG_VISION_BACKEND STREQUAL "rga")
     set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")
 endif()
 # ==============================================================================
+add_library(ZhulongLog STATIC src/common/log.cpp)
+target_compile_features(ZhulongLog PUBLIC cxx_std_17)
+target_include_directories(ZhulongLog PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(ZhulongLog PUBLIC Threads::Threads)
+set_target_properties(ZhulongLog PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_library(ZhulongAlgoIpc STATIC
     src/platform/dmabuf/dmabuf_allocator.cpp
     src/algorithm/ipc/shm_pool.cpp
@@ -287,7 +293,8 @@ target_compile_features(ZhulongAlgoIpc PUBLIC cxx_std_17)
 target_include_directories(ZhulongAlgoIpc
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(ZhulongAlgoIpc PUBLIC Threads::Threads)
+target_link_libraries(ZhulongAlgoIpc PUBLIC ZhulongLog Threads::Threads)
+target_compile_definitions(ZhulongAlgoIpc PRIVATE ZHULONG_IPC_LOGGING=1)
 if(UNIX AND NOT APPLE)
     target_link_libraries(ZhulongAlgoIpc PUBLIC rt)
 endif()
@@ -361,6 +368,15 @@ endif()
 #                      5. 单元测试与集成测试构建（BUILD_TESTING）
 # ==============================================================================
 if(BUILD_TESTING)
+    # Bounded native logging core is shared by the host engine and standalone runner,
+    # but intentionally not linked into ZhulongAlgoRuntime.
+    add_executable(ZhulongNativeLogTests tests/native_log_test.cpp)
+    target_compile_features(ZhulongNativeLogTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongNativeLogTests PRIVATE src)
+    target_link_libraries(ZhulongNativeLogTests PRIVATE ZhulongLog Threads::Threads)
+    add_test(NAME ZhulongNativeLog COMMAND ZhulongNativeLogTests)
+    set_tests_properties(ZhulongNativeLog PROPERTIES TIMEOUT 10)
+
     # C++ 引擎生命周期基础测试
     add_executable(ZhulongEngineTests tests/engine_test.cpp)
     target_link_libraries(ZhulongEngineTests PRIVATE ZhulongEngine)

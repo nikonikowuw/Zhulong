@@ -13,6 +13,7 @@
  */
 
 #include <zhulong/plugin.h>
+#include "common/log.hpp"
 #include "json.hpp"
 #include "gallery_index.hpp"
 #include "gallery_parser.hpp"
@@ -46,10 +47,21 @@ struct dma_buf_sync {
 #include <fstream>
 #include <sstream>
 #include <chrono>
+#include <utility>
 
 namespace zhulong
 {
     using namespace zhulong::runner;
+
+    template <typename... Parts>
+    void write_runner_error_line(Parts &&...parts)
+    {
+        std::ostringstream output;
+        (output << ... << std::forward<Parts>(parts));
+        std::string line = output.str();
+        line.push_back('\n');
+        write_runner_stderr(line.data(), line.size());
+    }
 
     /**
      * @brief 从 FrameBroker socket 路径中解析 stream_id。
@@ -238,6 +250,7 @@ namespace zhulong
             {
                 const char *err = dlerror();
                 error_msg = err ? err : "unknown dlopen error";
+                ZL_LOGE(0, "algorithm.runner", "plugin_load_failed reason=dlopen");
                 return false;
             }
 
@@ -246,6 +259,7 @@ namespace zhulong
             if (!get_api_fn)
             {
                 error_msg = "Symbol " ZHULONG_PLUGIN_ENTRY_POINT " not found in plugin";
+                ZL_LOGE(0, "algorithm.runner", "plugin_load_failed reason=entry_symbol_missing");
                 unload();
                 return false;
             }
@@ -255,6 +269,8 @@ namespace zhulong
             if (rc != ZHULONG_PLUGIN_OK || api_.api_version != 1)
             {
                 error_msg = "Plugin ABI handshake failed or version unsupported";
+                ZL_LOGE(0, "algorithm.runner", "plugin_handshake_failed rc=%d api_version=%u",
+                        static_cast<int>(rc), api_.api_version);
                 unload();
                 return false;
             }
@@ -302,8 +318,8 @@ namespace zhulong
         std::string err;
         if (!loader.load(so_path, err))
         {
-            std::cerr << "{\"status\":\"failed\",\"stage\":\"dlopen\",\"error\":"
-                      << runner::json_quote(err) << "}" << std::endl;
+            write_runner_error_line("{\"status\":\"failed\",\"stage\":\"dlopen\",\"error\":",
+                                    runner::json_quote(err), "}");
             return 1;
         }
 
@@ -318,7 +334,9 @@ namespace zhulong
         zhulong_status_t rc = api.model_create("{}", &model);
         if (rc != ZHULONG_PLUGIN_OK || !model)
         {
-            std::cerr << "{\"status\":\"failed\",\"stage\":\"model_create\",\"rc\":" << rc << "}" << std::endl;
+            ZL_LOGE(0, "algorithm.runner", "plugin_model_create_failed rc=%d model_present=%d",
+                    static_cast<int>(rc), model != nullptr ? 1 : 0);
+            write_runner_error_line("{\"status\":\"failed\",\"stage\":\"model_create\",\"rc\":", rc, "}");
             return 2;
         }
 
@@ -327,8 +345,10 @@ namespace zhulong
         rc = api.worker_create(model, 0, &worker);
         if (rc != ZHULONG_PLUGIN_OK || !worker)
         {
+            ZL_LOGE(0, "algorithm.runner", "plugin_worker_create_failed rc=%d worker_present=%d",
+                    static_cast<int>(rc), worker != nullptr ? 1 : 0);
             api.model_destroy(model);
-            std::cerr << "{\"status\":\"failed\",\"stage\":\"worker_create\",\"rc\":" << rc << "}" << std::endl;
+            write_runner_error_line("{\"status\":\"failed\",\"stage\":\"worker_create\",\"rc\":", rc, "}");
             return 3;
         }
 
@@ -337,9 +357,11 @@ namespace zhulong
         rc = api.task_open(worker, 1, &task);
         if (rc != ZHULONG_PLUGIN_OK || !task)
         {
+            ZL_LOGE(0, "algorithm.runner", "plugin_task_open_failed rc=%d task_present=%d",
+                    static_cast<int>(rc), task != nullptr ? 1 : 0);
             api.worker_destroy(worker);
             api.model_destroy(model);
-            std::cerr << "{\"status\":\"failed\",\"stage\":\"task_open\",\"rc\":" << rc << "}" << std::endl;
+            write_runner_error_line("{\"status\":\"failed\",\"stage\":\"task_open\",\"rc\":", rc, "}");
             return 4;
         }
 
@@ -363,10 +385,11 @@ namespace zhulong
         rc = api.process(task, &frame, &result);
         if (rc != ZHULONG_PLUGIN_OK)
         {
+            ZL_LOGE(0, "algorithm.runner", "plugin_process_failed rc=%d", static_cast<int>(rc));
             api.task_close(task);
             api.worker_destroy(worker);
             api.model_destroy(model);
-            std::cerr << "{\"status\":\"failed\",\"stage\":\"process\",\"rc\":" << rc << "}" << std::endl;
+            write_runner_error_line("{\"status\":\"failed\",\"stage\":\"process\",\"rc\":", rc, "}");
             return 5;
         }
 
@@ -419,7 +442,7 @@ namespace zhulong
     {
         if (broker_socks.empty())
         {
-            std::cerr << "{\"status\":\"failed\",\"stage\":\"args\",\"error\":\"no broker socks provided\"}" << std::endl;
+            write_runner_error_line("{\"status\":\"failed\",\"stage\":\"args\",\"error\":\"no broker socks provided\"}");
             return 5;
         }
 
@@ -427,7 +450,7 @@ namespace zhulong
         std::string err;
         if (!loader.load(so_path, err))
         {
-            std::cerr << "{\"status\":\"failed\",\"stage\":\"dlopen\",\"error\":\"" << err << "\"}" << std::endl;
+            write_runner_error_line("{\"status\":\"failed\",\"stage\":\"dlopen\",\"error\":\"", err, "\"}");
             return 1;
         }
 
@@ -435,7 +458,11 @@ namespace zhulong
         zhulong_model_group_h model = nullptr;
         zhulong_status_t model_rc = api.model_create("{}", &model);
         if (model_rc != ZHULONG_PLUGIN_OK || !model)
+        {
+            ZL_LOGE(0, "algorithm.runner", "plugin_model_create_failed rc=%d model_present=%d",
+                    static_cast<int>(model_rc), model != nullptr ? 1 : 0);
             return 2;
+        }
 
         std::atomic<bool> stop_all{false};
         std::atomic<int> exit_code{0};
@@ -452,8 +479,9 @@ namespace zhulong
             const uint64_t stream_id = parse_stream_id_from_socket(broker_sock);
             if (stream_id == 0)
             {
-                std::cerr << "{\"status\":\"failed\",\"stage\":\"args\",\"index\":" << idx
-                          << ",\"path\":\"" << broker_sock << "\",\"error\":\"cannot derive stream id from broker socket path\"}" << std::endl;
+                write_runner_error_line("{\"status\":\"failed\",\"stage\":\"args\",\"index\":", idx,
+                                        ",\"path\":\"", broker_sock,
+                                        "\",\"error\":\"cannot derive stream id from broker socket path\"}");
                 int expected = 0;
                 exit_code.compare_exchange_strong(expected, 5);
                 stop_all.store(true);
@@ -467,7 +495,7 @@ namespace zhulong
             }
             if (name.size() >= sizeof(ipc::HandshakeReq::client_name))
             {
-                std::cerr << "{\"status\":\"failed\",\"stage\":\"name_check\",\"error\":\"client name too long: " << name << "\"}" << std::endl;
+                write_runner_error_line("{\"status\":\"failed\",\"stage\":\"name_check\",\"error\":\"client name too long: ", name, "\"}");
                 int expected = 0;
                 exit_code.compare_exchange_strong(expected, 1);
                 stop_all.store(true);
@@ -478,7 +506,9 @@ namespace zhulong
             zhulong_status_t wrc = api.worker_create(model, static_cast<uint32_t>(idx), &worker);
             if (wrc != ZHULONG_PLUGIN_OK || !worker)
             {
-                std::cerr << "{\"status\":\"failed\",\"stage\":\"worker_create\",\"rc\":" << wrc << "}" << std::endl;
+                ZL_LOGE(stream_id, "algorithm.runner", "plugin_worker_create_failed rc=%d worker_present=%d",
+                        static_cast<int>(wrc), worker != nullptr ? 1 : 0);
+                write_runner_error_line("{\"status\":\"failed\",\"stage\":\"worker_create\",\"rc\":", wrc, "}");
                 int expected = 0;
                 exit_code.compare_exchange_strong(expected, 3);
                 stop_all.store(true);
@@ -489,7 +519,9 @@ namespace zhulong
             wrc = api.task_open(worker, stream_id, &task);
             if (wrc != ZHULONG_PLUGIN_OK || !task)
             {
-                std::cerr << "{\"status\":\"failed\",\"stage\":\"task_open\",\"rc\":" << wrc << "}" << std::endl;
+                ZL_LOGE(stream_id, "algorithm.runner", "plugin_task_open_failed rc=%d task_present=%d",
+                        static_cast<int>(wrc), task != nullptr ? 1 : 0);
+                write_runner_error_line("{\"status\":\"failed\",\"stage\":\"task_open\",\"rc\":", wrc, "}");
                 api.worker_destroy(worker);
                 int expected = 0;
                 exit_code.compare_exchange_strong(expected, 4);
@@ -501,8 +533,9 @@ namespace zhulong
             std::string conn_err;
             if (!client.connect(broker_sock, &conn_err))
             {
-                std::cerr << "{\"status\":\"failed\",\"stage\":\"connect\",\"index\":" << idx
-                          << ",\"path\":\"" << broker_sock << "\",\"error\":\"" << conn_err << "\"}" << std::endl;
+                write_runner_error_line("{\"status\":\"failed\",\"stage\":\"connect\",\"index\":", idx,
+                                        ",\"path\":\"", broker_sock,
+                                        "\",\"error\":\"", conn_err, "\"}");
                 api.task_close(task);
                 api.worker_destroy(worker);
                 int expected = 0;
@@ -547,7 +580,7 @@ namespace zhulong
             std::string shm_err;
             if (!shm.init(resp.shm_name, ipc::ShmMode::OPEN_READ_ONLY, 0, 0, &shm_err))
             {
-                std::cerr << "{\"status\":\"failed\",\"stage\":\"shm_init\",\"error\":\"" << shm_err << "\"}" << std::endl;
+                write_runner_error_line("{\"status\":\"failed\",\"stage\":\"shm_init\",\"error\":\"", shm_err, "\"}");
                 api.task_close(task);
                 api.worker_destroy(worker);
                 int expected = 0;
@@ -558,6 +591,7 @@ namespace zhulong
 
             int frames_processed = 0;
             bool last_had_targets = false;
+            bool process_failure_reported = false;
             ShardedSyncContext sync_ctx;
             while (!stop_all.load(std::memory_order_relaxed) && (max_frames < 0 || frames_processed < max_frames))
             {
@@ -628,6 +662,20 @@ namespace zhulong
                         auto t1 = std::chrono::steady_clock::now();
                         int64_t cost_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
 
+                        if (rc != ZHULONG_PLUGIN_OK)
+                        {
+                            if (!process_failure_reported)
+                            {
+                                ZL_LOGE(stream_id, "algorithm.runner", "plugin_process_failed rc=%d",
+                                        static_cast<int>(rc));
+                            }
+                            process_failure_reported = true;
+                        }
+                        else
+                        {
+                            process_failure_reported = false;
+                        }
+
                         uint32_t count = (result != nullptr && rc == ZHULONG_PLUGIN_OK) ? result->count : 0;
                         bool has_targets = (count > 0);
 
@@ -684,10 +732,9 @@ namespace zhulong
                     if (shard.shard_total > 0 && !accepted &&
                         (shard.shard_index < 0 || shard.shard_index >= shard.shard_total))
                     {
-                        std::cerr << "{\"status\":\"warning\",\"stage\":\"gallery_sync\","
-                                  << "\"error\":\"shard_index out of range\",\"shard_index\":"
-                                  << shard.shard_index << ",\"shard_total\":" << shard.shard_total << "}"
-                                  << std::endl;
+                        write_runner_error_line("{\"status\":\"warning\",\"stage\":\"gallery_sync\","
+                                                "\"error\":\"shard_index out of range\",\"shard_index\":",
+                                                shard.shard_index, ",\"shard_total\":", shard.shard_total, "}");
                     }
                     // 重复分片无需告警（正常重传）
 
@@ -762,6 +809,17 @@ namespace zhulong
 
 } // namespace zhulong
 
+class RunnerLogWriterGuard {
+public:
+    RunnerLogWriterGuard() noexcept : started_(zhulong::start_runner_log_writer()) {}
+    ~RunnerLogWriterGuard() {
+        if (started_) zhulong::stop_runner_log_writer();
+    }
+    bool started() const noexcept { return started_; }
+private:
+    bool started_;
+};
+
 /**
  * @brief Runner CLI 入口：解析命令行参数并分派到验包或 IPC 消费路径
  *
@@ -811,11 +869,15 @@ int main(int argc, char *argv[])
 
     if (!verify_plugin_path.empty())
     {
+        RunnerLogWriterGuard log_writer;
+        if (!log_writer.started()) return 1;
         return zhulong::run_verify_plugin(verify_plugin_path, sample_path);
     }
 
     if (!plugin_path.empty() && !broker_socks.empty())
     {
+        RunnerLogWriterGuard log_writer;
+        if (!log_writer.started()) return 1;
         return zhulong::run_ipc_workers(plugin_path, broker_socks, client_name, max_frames, algorithm_id);
     }
 

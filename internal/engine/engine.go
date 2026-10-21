@@ -48,6 +48,7 @@ type Engine struct {
 	handle        C.Zhulong_engine_h
 	running       bool
 	stopping      bool
+	nativeStopped bool
 	generation    uint64
 	pendingTokens []func()
 
@@ -58,6 +59,8 @@ type Engine struct {
 
 	streamsMu     sync.Mutex
 	activeStreams map[*Stream]struct{}
+
+	logHandle cgo.Handle
 }
 
 // New 创建一个未初始化的 Native 引擎包装实例。
@@ -115,6 +118,7 @@ func (e *Engine) Start() error {
 
 	e.running = true
 	e.stopping = false
+	e.nativeStopped = false
 	e.mu.Unlock()
 	return nil
 }
@@ -129,7 +133,7 @@ func (e *Engine) Stop() error {
 
 func (e *Engine) stopInternal() error {
 	e.mu.Lock()
-	if !e.running && e.handle == nil {
+	if (!e.running && e.handle == nil) || (!e.running && e.nativeStopped) {
 		e.mu.Unlock()
 		return nil
 	}
@@ -171,8 +175,14 @@ func (e *Engine) stopInternal() error {
 
 	e.mu.Lock()
 	e.stopping = false
-	tokensToDrain := e.pendingTokens
-	e.pendingTokens = nil
+	var tokensToDrain []func()
+	if status == C.Zhulong_OK {
+		e.nativeStopped = true
+		tokensToDrain = e.pendingTokens
+		e.pendingTokens = nil
+	} else {
+		e.nativeStopped = false
+	}
 	e.mu.Unlock()
 
 	for _, fn := range tokensToDrain {
@@ -205,19 +215,30 @@ func (e *Engine) Close() error {
 	e.mu.Unlock()
 
 	stopErr := e.stopInternal()
+	if stopErr != nil {
+		return stopErr
+	}
 
 	e.handleMu.Lock()
 	e.mu.Lock()
-	if e.handle != nil {
-		C.Zhulong_engine_destroy(e.handle)
-		e.handle = nil
-	}
+	handle := e.handle
+	e.handle = nil
 	e.running = false
 	e.stopping = false
 	e.mu.Unlock()
+	if handle != nil {
+		C.Zhulong_engine_destroy(handle)
+	}
+	e.mu.Lock()
+	tokensToDrain := e.pendingTokens
+	e.pendingTokens = nil
+	e.mu.Unlock()
+	for _, fn := range tokensToDrain {
+		fn()
+	}
 	e.handleMu.Unlock()
 
-	return stopErr
+	return nil
 }
 
 // Probe 对指定 RTSP 流执行独立的视频元数据探测。

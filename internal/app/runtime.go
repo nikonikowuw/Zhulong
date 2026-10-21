@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"syscall"
 
+	"github.com/nikonikowuw/Zhulong/internal/nativelog"
 	"github.com/nikonikowuw/Zhulong/internal/task"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -33,6 +34,12 @@ type databaseLifecycle interface {
 type engineLifecycle interface {
 	Start() error
 	Close() error
+}
+
+type nativeLogEngineLifecycle interface {
+	SetNativeLogSink(*nativelog.Queue) error
+	Stop() error
+	CloseNativeLogSink() error
 }
 
 type cameraLifecycle interface {
@@ -79,6 +86,7 @@ type recordLifecycle interface {
 type lifecycleRuntime struct {
 	database    databaseLifecycle
 	native      engineLifecycle
+	nativeLog   *nativelog.Queue
 	camera      cameraLifecycle
 	audit       auditLifecycle
 	network     networkLifecycle
@@ -97,21 +105,23 @@ type lifecycleRuntime struct {
 	listen      func(string, string) (net.Listener, error)
 	shutdown    func(context.Context) error
 
-	listener        net.Listener
-	serveDone       chan error
-	databaseReady   bool
-	nativeReady     bool
-	cameraReady     bool
-	auditReady      bool
-	networkReady    bool
-	systemTimeReady bool
-	storageReady    bool
-	algorithmReady  bool
-	personReady     bool
-	recordReady     bool
-	httpReady       bool
-	loggerSynced    bool
-	startAttempted  bool
+	listener            net.Listener
+	serveDone           chan error
+	databaseReady       bool
+	nativeReady         bool
+	nativeLogReady      bool
+	nativeLogRegistered bool
+	cameraReady         bool
+	auditReady          bool
+	networkReady        bool
+	systemTimeReady     bool
+	storageReady        bool
+	algorithmReady      bool
+	personReady         bool
+	recordReady         bool
+	httpReady           bool
+	loggerSynced        bool
+	startAttempted      bool
 }
 
 type runtimeParams struct {
@@ -119,6 +129,7 @@ type runtimeParams struct {
 
 	Database    databaseLifecycle
 	Native      engineLifecycle
+	NativeLog   *nativelog.Queue
 	Camera      cameraLifecycle      `optional:"true"`
 	Audit       auditLifecycle       `optional:"true"`
 	Network     networkLifecycle     `optional:"true"`
@@ -143,6 +154,7 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 	return &lifecycleRuntime{
 		database:    p.Database,
 		native:      p.Native,
+		nativeLog:   p.NativeLog,
 		camera:      p.Camera,
 		audit:       p.Audit,
 		network:     p.Network,
@@ -237,20 +249,38 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.recordReady = true
 	}
 
+	if r.nativeLog != nil {
+		if err := r.nativeLog.Start(); err != nil {
+			startupErr := fmt.Errorf("start native log queue: %w", err)
+			return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+		}
+		r.nativeLogReady = true
+		logEngine, ok := r.native.(nativeLogEngineLifecycle)
+		if !ok {
+			startupErr := errors.New("native engine does not support log callback lifecycle")
+			return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+		}
+		if err := logEngine.SetNativeLogSink(r.nativeLog); err != nil {
+			startupErr := fmt.Errorf("register native log callback: %w", err)
+			return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+		}
+		r.nativeLogRegistered = true
+	}
+
 	if err := r.native.Start(); err != nil {
 		startupErr := fmt.Errorf("start native engine: %w", err)
-		return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase())
+		return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
 	}
 	r.nativeReady = true
 
 	if r.camera != nil {
 		if err := r.camera.InitCipher(ctx); err != nil {
 			startupErr := fmt.Errorf("initialize camera cipher: %w", err)
-			return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase())
+			return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
 		}
 		if err := r.camera.Start(ctx); err != nil {
 			startupErr := fmt.Errorf("start camera scheduler: %w", err)
-			return r.failStart(startupErr, r.closeCamera(), r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase())
+			return r.failStart(startupErr, r.closeCamera(), r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
 		}
 		r.cameraReady = true
 	}
@@ -258,7 +288,7 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	listener, err := r.listen("tcp", r.server.Addr)
 	if err != nil {
 		startupErr := fmt.Errorf("listen on %s: %w", r.server.Addr, err)
-		return r.failStart(startupErr, r.closeCamera(), r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(), r.closeDatabase())
+		return r.failStart(startupErr, r.closeCamera(), r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
 	}
 	r.listener = listener
 	r.serveDone = make(chan error, 1)
@@ -280,7 +310,11 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 }
 
 func (r *lifecycleRuntime) failStart(startupErr error, cleanup ...error) error {
-	cleanup = append(cleanup, r.syncLogger(), r.closeLogSink())
+	if r.nativeReady || r.nativeLogRegistered || r.nativeLogReady {
+		cleanup = append(cleanup, errors.New("native logging may still be active; application logger retained"))
+	} else {
+		cleanup = append(cleanup, r.syncLogger(), r.closeLogSink())
+	}
 	allErrors := append([]error{startupErr}, cleanup...)
 	return errors.Join(allErrors...)
 }
@@ -360,17 +394,21 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 	if err := r.closeAudit(ctx); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
-	if err := r.closeNative(); err != nil {
+	if err := r.closeNative(ctx); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
 	if err := r.closeDatabase(); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
-	if err := r.syncLogger(); err != nil {
-		stopErrors = append(stopErrors, err)
-	}
-	if err := r.closeLogSink(); err != nil {
-		stopErrors = append(stopErrors, err)
+	if r.nativeReady || r.nativeLogRegistered || r.nativeLogReady {
+		stopErrors = append(stopErrors, errors.New("native logging may still be active; application logger retained"))
+	} else {
+		if err := r.syncLogger(); err != nil {
+			stopErrors = append(stopErrors, err)
+		}
+		if err := r.closeLogSink(); err != nil {
+			stopErrors = append(stopErrors, err)
+		}
 	}
 	return errors.Join(stopErrors...)
 }
@@ -477,13 +515,39 @@ func (r *lifecycleRuntime) closeAudit(ctx context.Context) error {
 	return nil
 }
 
-func (r *lifecycleRuntime) closeNative() error {
-	if !r.nativeReady {
-		return nil
+func (r *lifecycleRuntime) closeNative(ctx context.Context) error {
+	if r.nativeReady {
+		if native, ok := r.native.(nativeLogEngineLifecycle); ok {
+			if err := native.Stop(); err != nil {
+				return fmt.Errorf("stop native engine: %w", err)
+			}
+		}
+		if err := r.native.Close(); err != nil {
+			return fmt.Errorf("close native engine: %w", err)
+		}
+		r.nativeReady = false
 	}
-	r.nativeReady = false
-	if err := r.native.Close(); err != nil {
-		return fmt.Errorf("close native engine: %w", err)
+
+	if r.nativeLogRegistered {
+		native, ok := r.native.(nativeLogEngineLifecycle)
+		if !ok {
+			return errors.New("native engine lost native log callback lifecycle")
+		}
+		if err := native.CloseNativeLogSink(); err != nil {
+			return fmt.Errorf("unregister native log callback: %w", err)
+		}
+		r.nativeLogRegistered = false
+	}
+
+	if r.nativeLogReady {
+		pending, err := r.nativeLog.Stop(ctx)
+		if err != nil {
+			return fmt.Errorf("stop native log queue with %d pending records: %w", pending, err)
+		}
+		if pending != 0 {
+			return fmt.Errorf("stop native log queue left %d pending records", pending)
+		}
+		r.nativeLogReady = false
 	}
 	return nil
 }

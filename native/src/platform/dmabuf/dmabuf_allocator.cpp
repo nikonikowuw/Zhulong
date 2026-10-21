@@ -5,6 +5,11 @@
 
 #include "dmabuf_allocator.hpp"
 
+#if defined(ZHULONG_IPC_LOGGING)
+#include "common/log.hpp"
+#include <atomic>
+#endif
+
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -80,6 +85,20 @@ struct drm_prime_handle {
 #endif // __linux__
 
 namespace zhulong::platform {
+
+#if defined(ZHULONG_IPC_LOGGING)
+namespace {
+std::atomic<bool> allocation_failure_reported{false};
+
+void report_allocation_failure(const char* reason, int error_number, size_t size) noexcept {
+    if (allocation_failure_reported.exchange(true, std::memory_order_relaxed)) {
+        return;
+    }
+    ZL_LOGE(0, "platform.dmabuf", "allocation_failed reason=%s errno=%d size_bytes=%zu",
+            reason, error_number, size);
+}
+}
+#endif
 
 #if defined(__linux__)
 static void scan_dma_heaps(std::vector<std::string>& cma_candidates,
@@ -371,6 +390,9 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
 
         if (ioctl(heap_fd_, DMA_HEAP_IOCTL_ALLOC, &alloc_data) < 0) {
             int err = errno;
+#if defined(ZHULONG_IPC_LOGGING)
+            report_allocation_failure("dma_heap_ioctl", err, size);
+#endif
             if (err == ENOMEM) {
                 set_error("DMA_HEAP_IOCTL_ALLOC out of memory (CMA/system pool exhausted)");
             } else if (err == EMFILE || err == ENFILE) {
@@ -384,11 +406,18 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
         int dma_fd = static_cast<int>(alloc_data.fd);
         void* ptr = ::mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, dma_fd, 0);
         if (ptr == MAP_FAILED) {
-            set_error("mmap dma_buf fd failed: " + std::string(std::strerror(errno)));
+            int err = errno;
+#if defined(ZHULONG_IPC_LOGGING)
+            report_allocation_failure("dma_heap_mmap", err, size);
+#endif
+            set_error("mmap dma_buf fd failed: " + std::string(std::strerror(err)));
             ::close(dma_fd);
             return nullptr;
         }
 
+#if defined(ZHULONG_IPC_LOGGING)
+        allocation_failure_reported.store(false, std::memory_order_relaxed);
+#endif
         return std::make_unique<DmaBuffer>(dma_fd, size, ptr);
     }
 
@@ -407,6 +436,9 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
 
         if (ioctl(drm_fd_, DRM_IOCTL_MODE_CREATE_DUMB, &create_req) < 0) {
             int err = errno;
+#if defined(ZHULONG_IPC_LOGGING)
+            report_allocation_failure("drm_create_dumb", err, size);
+#endif
             set_error("DRM_IOCTL_MODE_CREATE_DUMB failed with errno " + std::to_string(err));
             return nullptr;
         }
@@ -418,6 +450,9 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
 
         if (ioctl(drm_fd_, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime_req) < 0) {
             int err = errno;
+#if defined(ZHULONG_IPC_LOGGING)
+            report_allocation_failure("drm_prime_handle_to_fd", err, size);
+#endif
             set_error("DRM_IOCTL_PRIME_HANDLE_TO_FD failed with errno " + std::to_string(err));
             struct drm_mode_destroy_dumb destroy_req{};
             destroy_req.handle = create_req.handle;
@@ -432,7 +467,11 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
 
         void* ptr = ::mmap(nullptr, actual_mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, prime_req.fd, 0);
         if (ptr == MAP_FAILED) {
-            set_error("mmap DRM dumb PRIME fd failed: " + std::string(std::strerror(errno)));
+            int err = errno;
+#if defined(ZHULONG_IPC_LOGGING)
+            report_allocation_failure("drm_mmap", err, size);
+#endif
+            set_error("mmap DRM dumb PRIME fd failed: " + std::string(std::strerror(err)));
             ::close(prime_req.fd);
             struct drm_mode_destroy_dumb destroy_req{};
             destroy_req.handle = create_req.handle;
@@ -440,6 +479,9 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
             return nullptr;
         }
 
+#if defined(ZHULONG_IPC_LOGGING)
+        allocation_failure_reported.store(false, std::memory_order_relaxed);
+#endif
         return std::make_unique<DmaBuffer>(prime_req.fd, size, ptr, drm_fd_, create_req.handle, actual_mmap_size);
     }
 #endif

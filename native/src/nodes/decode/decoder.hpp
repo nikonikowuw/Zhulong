@@ -84,11 +84,12 @@ public:
      * @param time_base_num 源流时间基分子
      * @param time_base_den 源流时间基分母
      * @param backend 期望的解码器后端类型
+     * @param stream_id 用于原生日志关联的稳定流 ID；未提供时为 0
      * @return Ptr 创建成功的解码节点唯一智能指针
      */
     static Ptr create(int32_t codec, const uint8_t *extradata = nullptr, size_t extradata_size = 0,
                       int32_t time_base_num = 1, int32_t time_base_den = 90000,
-                      DecoderBackend backend = DecoderBackend::AUTO);
+                      DecoderBackend backend = DecoderBackend::AUTO, uint64_t stream_id = 0);
 };
 
 } // namespace zhulong

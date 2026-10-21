@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -145,7 +146,7 @@ class BuildContractTests(unittest.TestCase):
                 self.assertNotIn("SDKROOT", os.environ)
 
     def test_engine_archive_content_invalidates_cgo_link_flags(self):
-        """测试 Engine 与 AlgoIpc 静态归档内容变更会生成新的 CGO 链接路径（防止 Go CGO 缓存失效失灵）"""
+        """测试 Zhulong 静态归档内容变更会生成新的 CGO 链接路径，且保留正确的依赖顺序"""
         with tempfile.TemporaryDirectory() as directory:
             native = Path(directory) / "native"
             native.mkdir()
@@ -153,7 +154,9 @@ class BuildContractTests(unittest.TestCase):
             self.make_pc(prefix)
             archive = native / "libZhulongEngine.a"
             ipc_archive = native / "libZhulongAlgoIpc.a"
+            log_archive = native / "libZhulongLog.a"
             ipc_archive.write_bytes(b"ipc initial archive")
+            log_archive.write_bytes(b"log initial archive")
             profile = dict(mode="host", target_os="linux", goarch="amd64", cc="cc", cxx="c++")
             with patch.object(build, "run") as run:
                 archive.write_bytes(b"archive version one")
@@ -167,6 +170,11 @@ class BuildContractTests(unittest.TestCase):
             self.assertIn("-lrt", second)
             self.assertEqual(len(list((native / "go-link").glob("*/libZhulongEngine.a"))), 2)
             self.assertEqual(len(list((native / "go-link").glob("*/libZhulongAlgoIpc.a"))), 1)
+            self.assertEqual(len(list((native / "go-link").glob("*/libZhulongLog.a"))), 1)
+            flags = shlex.split(second)
+            archive_positions = [next(index for index, flag in enumerate(flags) if flag.endswith(name)) for name in
+                                 ("libZhulongEngine.a", "libZhulongAlgoIpc.a", "libZhulongLog.a")]
+            self.assertEqual(archive_positions, sorted(archive_positions))
 
             with patch.object(build, "run") as run:
                 ipc_archive.write_bytes(b"ipc updated archive")
@@ -174,6 +182,13 @@ class BuildContractTests(unittest.TestCase):
                 third = run.call_args.kwargs["env"]["CGO_LDFLAGS"]
             self.assertNotEqual(second, third)
             self.assertEqual(len(list((native / "go-link").glob("*/libZhulongAlgoIpc.a"))), 2)
+
+            with patch.object(build, "run") as run:
+                log_archive.write_bytes(b"log updated archive")
+                build.go(profile, native, prefix, ["build", "./cmd/Zhulong"])
+                fourth = run.call_args.kwargs["env"]["CGO_LDFLAGS"]
+            self.assertNotEqual(third, fourth)
+            self.assertEqual(len(list((native / "go-link").glob("*/libZhulongLog.a"))), 2)
 
     def test_cross_flags_are_explicit_not_stale_cmake_initializers(self):
         """测试交叉编译标志通过 CMake Toolchain 显式注入而非继承残留配置"""

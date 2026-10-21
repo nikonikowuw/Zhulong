@@ -10,6 +10,7 @@
  */
 
 #include "pipeline/frame_publisher.hpp"
+#include "common/log.hpp"
 
 namespace zhulong {
 
@@ -24,6 +25,7 @@ void FramePublisher::start() {
     if (!worker_.joinable()) {
         stop_.store(false, std::memory_order_relaxed);
         worker_ = std::thread(&FramePublisher::publish_loop, this);
+        ZL_LOGI(stream_->id, "pipeline.frame_publisher", "frame_publisher_started");
     }
 }
 
@@ -31,11 +33,15 @@ void FramePublisher::stop() {
     stop_.store(true, std::memory_order_relaxed);
     if (worker_.joinable()) {
         worker_.join();
+        ZL_LOGI(stream_->id, "pipeline.frame_publisher", "frame_publisher_stopped");
     }
 }
 
 void FramePublisher::set_max_sample_fps(uint32_t fps) noexcept {
-    max_sample_fps_.store(fps, std::memory_order_relaxed);
+    const uint32_t previous = max_sample_fps_.exchange(fps, std::memory_order_relaxed);
+    if (previous != fps) {
+        ZL_LOGI(stream_->id, "pipeline.frame_publisher", "publish_rate_changed fps=%u", fps);
+    }
 }
 
 uint32_t FramePublisher::max_sample_fps() const noexcept {

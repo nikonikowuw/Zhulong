@@ -185,6 +185,21 @@ typedef void (*Zhulong_packet_callback)(uintptr_t token, const Zhulong_packet_vi
 typedef void (*Zhulong_ai_result_callback)(uintptr_t token, Zhulong_stream_id stream,
     const char *json_payload, size_t payload_len);
 
+/** @brief Native log severity values; independent of host logger values. */
+enum {
+    Zhulong_LOG_DEBUG = 0,
+    Zhulong_LOG_INFO = 1,
+    Zhulong_LOG_WARN = 2,
+    Zhulong_LOG_ERROR = 3
+};
+
+/**
+ * @brief Native log callback. Module and text are borrowed for the call only.
+ * module must be 1..128 bytes; text must be 0..2048 bytes.
+ */
+typedef void (*Zhulong_log_callback)(uintptr_t token, int32_t level, uint64_t stream_id,
+    const char *module, size_t module_len, const char *text, size_t text_len);
+
 /* ========================================================================== */
 /*                             引擎生命周期管理接口                              */
 /* ========================================================================== */
@@ -196,6 +211,14 @@ typedef void (*Zhulong_ai_result_callback)(uintptr_t token, Zhulong_stream_id st
  * @return Zhulong_status_t Zhulong_OK 成功；Zhulong_ERR_INVALID_ARGUMENT 参数空；Zhulong_ERR_OUT_OF_MEMORY 内存不足
  */
 Zhulong_status_t Zhulong_engine_create(Zhulong_engine_h *out_engine);
+
+/**
+ * @brief Register or clear the native logging callback.
+ * Registration is permitted only before any engine handle is created; clear it
+ * only after all native producers have stopped and all engine handles destroyed.
+ * Pass callback=NULL and token=0 to clear the callback.
+ */
+Zhulong_status_t Zhulong_set_log_callback(Zhulong_log_callback callback, uintptr_t token);
 
 /**
  * @brief 启动 Native 引擎及内部清理/调度线程

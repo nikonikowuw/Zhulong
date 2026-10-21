@@ -15,6 +15,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
+	"github.com/nikonikowuw/Zhulong/internal/nativelog"
 	"github.com/nikonikowuw/Zhulong/internal/network"
 	"github.com/nikonikowuw/Zhulong/internal/person"
 	"github.com/nikonikowuw/Zhulong/internal/record"
@@ -68,6 +69,14 @@ func provideEngine() engineOut {
 
 var engineModule = fx.Module("engine",
 	fx.Provide(provideEngine),
+)
+
+func provideNativeLogQueue(logger *zap.Logger) (*nativelog.Queue, error) {
+	return nativelog.NewQueue(256, logger)
+}
+
+var nativeLogModule = fx.Module("native-log",
+	fx.Provide(provideNativeLogQueue),
 )
 
 // --- Audit Module ---
@@ -698,6 +707,7 @@ var Module = fx.Options(
 	fx.Provide(provideLogger),
 	databaseModule,
 	engineModule,
+	nativeLogModule,
 	auditModule,
 	authModule,
 	cameraModule,

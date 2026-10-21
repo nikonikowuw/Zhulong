@@ -13,6 +13,7 @@
  */
 
 #include "Zhulong/engine.h"
+#include "common/log.hpp"
 #include "pipeline/engine.hpp"
 
 #include <chrono>
@@ -29,6 +30,7 @@
 #include <new>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -37,6 +39,11 @@ struct Zhulong_engine_t { zhulong::Engine implementation; };
 struct Zhulong_probe_result_t { zhulong::Video video; };
 
 namespace {
+
+std::mutex g_log_registration_mutex;
+size_t g_engine_handles = 0;
+static_assert(std::is_same<Zhulong_log_callback, zhulong::LogSink>::value,
+    "public Zhulong log callback and internal LogSink ABI must stay identical");
 
 /**
  * @brief C ABI 异常防爆门模板
@@ -99,10 +106,22 @@ extern "C" Zhulong_status_t Zhulong_engine_create(Zhulong_engine_h *out_engine) 
     if (out_engine) *out_engine = nullptr;
     return boundary([&] {
         require(out_engine != nullptr);
+        std::lock_guard<std::mutex> registration_lock(g_log_registration_mutex);
         // 全局只执行一次 FFmpeg 网络与日志环境初始化
         zhulong::initialize_ffmpeg();
-        *out_engine = new Zhulong_engine_t;
+        auto *created = new Zhulong_engine_t;
+        ++g_engine_handles;
+        *out_engine = created;
         zhulong_face_plugin_engine_created();
+    });
+}
+
+extern "C" Zhulong_status_t Zhulong_set_log_callback(Zhulong_log_callback callback, uintptr_t token) {
+    return boundary([&] {
+        require((callback == nullptr) == (token == 0));
+        std::lock_guard<std::mutex> registration_lock(g_log_registration_mutex);
+        if (g_engine_handles != 0) throw zhulong::Failure{Zhulong_ERR_BUSY};
+        if (!zhulong::set_log_sink(callback, token)) throw zhulong::Failure{Zhulong_ERR_INVALID_ARGUMENT};
     });
 }
 
@@ -146,7 +165,11 @@ extern "C" void Zhulong_engine_destroy(Zhulong_engine_h engine) {
     // 空句柄为无操作：绝不能递减引擎引用计数，否则会误卸载仍在使用中的插件与模型
     if (engine == nullptr) return;
     try {
-        delete engine;
+        {
+            std::lock_guard<std::mutex> registration_lock(g_log_registration_mutex);
+            delete engine;
+            if (g_engine_handles > 0) --g_engine_handles;
+        }
         zhulong_face_plugin_engine_destroyed();
     } catch (...) {}
 }

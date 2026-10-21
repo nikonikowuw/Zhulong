@@ -10,19 +10,51 @@
  */
 
 #include "Zhulong/engine.h"
+#include <string.h>
+
+static int callback_count;
+static int32_t callback_level;
+static uint64_t callback_stream_id;
+static char callback_module[129];
+static char callback_text[2049];
+static size_t callback_module_len;
+static size_t callback_text_len;
+
+static void capture_log(uintptr_t token, int32_t level, uint64_t stream_id,
+    const char *module, size_t module_len, const char *text, size_t text_len) {
+    if (token != (uintptr_t)123 || module == 0 || module_len == 0 || module_len > 128 ||
+        text_len > 2048 || (text == 0 && text_len != 0)) return;
+    callback_level = level;
+    callback_stream_id = stream_id;
+    callback_module_len = module_len;
+    callback_text_len = text_len;
+    memcpy(callback_module, module, module_len);
+    callback_module[module_len] = '\0';
+    if (text_len != 0) memcpy(callback_text, text, text_len);
+    callback_text[text_len] = '\0';
+    ++callback_count;
+}
 
 int main(void) {
     Zhulong_engine_h engine = 0;
 
+    /* Logging must be registered before even the first engine create attempt. */
+    if (Zhulong_set_log_callback(capture_log, (uintptr_t)123) != Zhulong_OK) return 1;
+    if (Zhulong_set_log_callback(0, (uintptr_t)123) != Zhulong_ERR_INVALID_ARGUMENT) return 2;
+
     /* 1. 测试空指针创建：必须安全失败并返回 INVALID_ARGUMENT */
-    if (Zhulong_engine_create(0) != Zhulong_ERR_INVALID_ARGUMENT) return 1;
+    if (Zhulong_engine_create(0) != Zhulong_ERR_INVALID_ARGUMENT) return 3;
 
     /* 2. 正常创建引擎实例 */
-    if (Zhulong_engine_create(&engine) != Zhulong_OK || engine == 0) return 2;
+    if (Zhulong_engine_create(&engine) != Zhulong_OK || engine == 0) return 4;
+    if (Zhulong_set_log_callback(0, 0) != Zhulong_ERR_BUSY) return 5;
 
-    /* 3. 正常启动与停止 */
-    if (Zhulong_engine_start(engine) != Zhulong_OK) return 3;
-    if (Zhulong_engine_stop(engine) != Zhulong_OK) return 4;
+    /* 3. 正常启动与停止；启动事件 proves callback lengths and stream context. */
+    if (Zhulong_engine_start(engine) != Zhulong_OK) return 6;
+    if (callback_count == 0 || callback_level != Zhulong_LOG_INFO || callback_stream_id != 0) return 7;
+    if (callback_module_len != strlen("pipeline.engine") || strcmp(callback_module, "pipeline.engine") != 0) return 8;
+    if (callback_text_len != strlen("engine_started") || strcmp(callback_text, "engine_started") != 0) return 9;
+    if (Zhulong_engine_stop(engine) != Zhulong_OK) return 10;
 
     /* 4. 边界校验：引擎停止状态下获取流必须返回 NOT_RUNNING */
     Zhulong_probe_result_h result = 0;
@@ -32,36 +64,37 @@ int main(void) {
     Zhulong_stream_options options = {99, 0, 0};
 
     if (Zhulong_stream_acquire(engine, "rtsp://localhost/A", 0, 1,
-        Zhulong_CONSUMER_PREVIEW, &stream) != Zhulong_ERR_NOT_RUNNING || stream != 0) return 5;
+        Zhulong_CONSUMER_PREVIEW, &stream) != Zhulong_ERR_NOT_RUNNING || stream != 0) return 11;
 
     /* 5. 空指针防御校验 */
-    if (Zhulong_engine_probe(0, "rtsp://localhost/A", 0, &result) != Zhulong_ERR_INVALID_ARGUMENT || result != 0) return 6;
-    if (Zhulong_probe_result_view(0, &video) != Zhulong_ERR_INVALID_ARGUMENT) return 7;
-    if (Zhulong_stream_subscribe(engine, 0, 1, 0, 0, &subscription) != Zhulong_ERR_INVALID_ARGUMENT || subscription != 0) return 8;
+    if (Zhulong_engine_probe(0, "rtsp://localhost/A", 0, &result) != Zhulong_ERR_INVALID_ARGUMENT || result != 0) return 12;
+    if (Zhulong_probe_result_view(0, &video) != Zhulong_ERR_INVALID_ARGUMENT) return 13;
+    if (Zhulong_stream_subscribe(engine, 0, 1, 0, 0, &subscription) != Zhulong_ERR_INVALID_ARGUMENT || subscription != 0) return 14;
 
     /* 6. 非法选项校验（如未知的 transport 协议值 99） */
     if (Zhulong_stream_acquire(engine, "rtsp://localhost/A", &options, 1,
-        Zhulong_CONSUMER_PREVIEW, &stream) != Zhulong_ERR_INVALID_ARGUMENT) return 9;
+        Zhulong_CONSUMER_PREVIEW, &stream) != Zhulong_ERR_INVALID_ARGUMENT) return 15;
 
     /* 7. 非法句柄调用校验 */
     char broker_buf[256];
     size_t broker_len = sizeof(broker_buf);
-    if (Zhulong_stream_release(0, 1, 1) != Zhulong_ERR_INVALID_ARGUMENT) return 10;
-    if (Zhulong_stream_unsubscribe(0, 1, 1) != Zhulong_ERR_INVALID_ARGUMENT) return 11;
-    if (Zhulong_stream_get_status(0, 1, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 12;
-    if (Zhulong_stream_get_broker_path(0, 1, broker_buf, &broker_len) != Zhulong_ERR_INVALID_ARGUMENT) return 13;
-    if (Zhulong_stream_get_broker_path(engine, 1, 0, &broker_len) != Zhulong_ERR_INVALID_ARGUMENT) return 14;
-    if (Zhulong_stream_get_broker_path(engine, 1, broker_buf, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 15;
+    if (Zhulong_stream_release(0, 1, 1) != Zhulong_ERR_INVALID_ARGUMENT) return 16;
+    if (Zhulong_stream_unsubscribe(0, 1, 1) != Zhulong_ERR_INVALID_ARGUMENT) return 17;
+    if (Zhulong_stream_get_status(0, 1, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 18;
+    if (Zhulong_stream_get_broker_path(0, 1, broker_buf, &broker_len) != Zhulong_ERR_INVALID_ARGUMENT) return 19;
+    if (Zhulong_stream_get_broker_path(engine, 1, 0, &broker_len) != Zhulong_ERR_INVALID_ARGUMENT) return 20;
+    if (Zhulong_stream_get_broker_path(engine, 1, broker_buf, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 21;
     size_t zero_len = 0;
-    if (Zhulong_stream_get_broker_path(engine, 1, broker_buf, &zero_len) != Zhulong_ERR_INVALID_ARGUMENT) return 16;
-    if (Zhulong_stream_set_publish_rate(0, 1, 10) != Zhulong_ERR_INVALID_ARGUMENT) return 17;
-    if (Zhulong_stream_get_broker_path(engine, 1, broker_buf, &broker_len) != Zhulong_ERR_NOT_RUNNING) return 18;
-    if (Zhulong_stream_set_publish_rate(engine, 1, 10) != Zhulong_ERR_NOT_RUNNING) return 19;
+    if (Zhulong_stream_get_broker_path(engine, 1, broker_buf, &zero_len) != Zhulong_ERR_INVALID_ARGUMENT) return 22;
+    if (Zhulong_stream_set_publish_rate(0, 1, 10) != Zhulong_ERR_INVALID_ARGUMENT) return 23;
+    if (Zhulong_stream_get_broker_path(engine, 1, broker_buf, &broker_len) != Zhulong_ERR_NOT_RUNNING) return 24;
+    if (Zhulong_stream_set_publish_rate(engine, 1, 10) != Zhulong_ERR_NOT_RUNNING) return 25;
 
     /* 8. 销毁安全测试：传入 NULL 指针必须保证安全无崩溃 */
     Zhulong_probe_result_destroy(0);
     Zhulong_engine_destroy(engine);
     Zhulong_engine_destroy(0);
+    if (Zhulong_set_log_callback(0, 0) != Zhulong_OK) return 26;
 
     return 0;
 }

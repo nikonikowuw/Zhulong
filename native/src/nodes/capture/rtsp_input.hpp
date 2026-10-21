@@ -138,12 +138,13 @@ struct Video {
  * @param cancel 协作式取消与超时控制器（生命周期必须覆盖整个读取过程与清理阶段）
  * @param consume 数据包派发回调（可选）
  * @param ready 连接建立就绪回调（可选）
+ * @param stream_id 用于原生日志关联的稳定流 ID；探测模式默认使用 0
  * @return Video 视频元数据
  * @throws Failure 底层 IO 失败、格式不支持、超时或已取消时抛出对应的 Failure 异常
  */
 Video read_rtsp(const std::string &url, const Options &options, Cancellation &cancel,
                 const std::function<void(const Zhulong_packet_view &)> &consume = {},
-                const std::function<void(const Video &)> &ready = {});
+                const std::function<void(const Video &)> &ready = {}, uint64_t stream_id = 0);
 
 /**
  * @brief 全局初始化 FFmpeg 库环境（网络模块与静默日志配置，具备进程全局单次执行保证）

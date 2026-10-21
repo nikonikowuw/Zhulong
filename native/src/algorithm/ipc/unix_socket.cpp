@@ -4,6 +4,7 @@
  */
 
 #include "unix_socket.hpp"
+#include "common/log.hpp"
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -11,7 +12,6 @@
 #include <poll.h>
 #include <cstring>
 #include <cerrno>
-#include <iostream>
 
 namespace zhulong::ipc {
 
@@ -371,10 +371,10 @@ void UnixSocketServer::client_read_loop(uint32_t client_id, std::shared_ptr<Clie
                 on_message_(client_id, header, payload.empty() ? nullptr : payload.data());
             }
         }
-    } catch (const std::exception& e) {
-        std::cerr << "[UnixSocketServer] Worker exception for client " << client_id << ": " << e.what() << std::endl;
+    } catch (const std::exception&) {
+        ZL_LOGE(0, "ipc.unix_socket", "worker_exception");
     } catch (...) {
-        std::cerr << "[UnixSocketServer] Unknown exception for client " << client_id << std::endl;
+        ZL_LOGE(0, "ipc.unix_socket", "worker_unknown_exception");
     }
 
     remove_client(client_id);

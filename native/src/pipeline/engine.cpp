@@ -13,6 +13,7 @@
  *    - 生产者停止 ➔ 唤醒 Reaper ➔ 停止发布与 Broker ➔ 同步排空 AI 订阅 ➔ 汇合拉流线程与探测排空。
  */
 
+#include "common/log.hpp"
 #include "pipeline/engine.hpp"
 
 #include <algorithm>
@@ -42,6 +43,7 @@ void Engine::start() {
     try {
         reaper = std::thread(&Engine::reap, this);
         running = true;
+        ZL_LOGI(0, "pipeline.engine", "engine_started");
     } catch (...) {
         reaper_stop.store(true);
         throw;
@@ -111,6 +113,7 @@ void Engine::stop() {
 
     std::unique_lock<std::mutex> lock(probe_mutex);
     probes_drained.wait(lock, [this] { return probes.empty(); });
+    ZL_LOGI(0, "pipeline.engine", "engine_stopped");
 }
 
 void Engine::wake_reaper() {
@@ -159,6 +162,7 @@ void Engine::reap() noexcept {
                     std::lock_guard<std::mutex> lock(control);
                     streams.erase(stream->id);
                 }
+                ZL_LOGI(stream->id, "pipeline.engine", "stream_retired");
                 stream_retired.notify_all();
             }
             continue;
@@ -238,6 +242,7 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
     try {
         stream->start();
     } catch (...) {
+        ZL_LOGE(stream->id, "pipeline.engine", "stream_start_failed");
         streams.erase(stream->id);
         throw;
     }
@@ -260,6 +265,7 @@ bool Engine::ensure_frame_broker(const std::shared_ptr<Stream> &stream, int32_t 
     auto broker = std::make_unique<ipc::FrameBroker>();
     std::string err;
     if (!broker->start(stream->id, broker_base_dir, {}, &err)) {
+        ZL_LOGE(stream->id, "pipeline.engine", "frame_broker_start_failed");
         if (rollback) rollback();
         return false;
     }
@@ -316,6 +322,7 @@ void Engine::release(Zhulong_stream_id id, uint64_t consumer) {
 
         if (stream->consumers.empty()) {
             stream->expiry = Clock::now() + get_stream_grace_period();
+            ZL_LOGI(id, "pipeline.engine", "stream_idle");
             wake_reaper();
         }
     }
@@ -327,6 +334,7 @@ void Engine::release(Zhulong_stream_id id, uint64_t consumer) {
         broker_to_stop->stop();
     }
     Stream::stop_decode_session(std::move(session_to_stop));
+    ZL_LOGI(id, "pipeline.engine", "stream_consumer_released");
 }
 
 Zhulong_stream_status Engine::status(Zhulong_stream_id id) {
@@ -361,6 +369,7 @@ Zhulong_subscription_id Engine::subscribe(Zhulong_stream_id id, uint64_t consume
     const auto subscription = next_subscription++;
     stream->subscriptions.emplace(subscription, std::make_shared<Subscription>(consumer, callback, token));
     stream->rebuild_subscribers();
+    ZL_LOGI(id, "pipeline.engine", "packet_subscription_attached");
     return subscription;
 }
 
@@ -380,6 +389,7 @@ void Engine::unsubscribe(Zhulong_stream_id id, Zhulong_subscription_id subscript
 
     operation.unlock();
     removed->disable_and_drain();
+    ZL_LOGI(id, "pipeline.engine", "packet_subscription_released");
 }
 
 Zhulong_subscription_id Engine::subscribe_ai_results(Zhulong_stream_id id,
@@ -394,6 +404,7 @@ Zhulong_subscription_id Engine::subscribe_ai_results(Zhulong_stream_id id,
     if (!next_subscription) throw Failure{Zhulong_ERR_INTERNAL};
     const auto subscription = next_subscription++;
     ai_subscriptions.emplace(subscription, std::make_shared<AISubscription>(id, callback, token));
+    ZL_LOGI(id, "pipeline.engine", "ai_result_subscription_attached");
     return subscription;
 }
 
@@ -410,6 +421,7 @@ void Engine::unsubscribe_ai_results(Zhulong_stream_id id, Zhulong_subscription_i
     }
     if (removed) {
         removed->disable_and_drain();
+        ZL_LOGI(id, "pipeline.engine", "ai_result_subscription_released");
     }
 }
 

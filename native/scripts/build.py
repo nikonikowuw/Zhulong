@@ -7,7 +7,7 @@
    - 校验依赖源码的固定版本与完整 SHA-256 指纹。
 2. 内容寻址与 CGO 缓存失效保护（Content-addressed CGO link input）：
    - Go 编译器对外部归档（.a）的时间戳与内容变化不敏感，极易导致 CGO 复用旧二进制；
-   - 本脚本基于生成的 libZhulongEngine.a 文件的完整 SHA-256 哈希值建立隔离的链接目录，
+   - 本脚本基于参与 CGO 静态链接的 Zhulong .a 归档完整 SHA-256 哈希值建立隔离的链接目录，
      动态修改 CGO_LDFLAGS 链接参数，确保 Go 编译器 100% 能够感知 Native 代码变动。
 3. 纯洁的跨架构与交叉编译支持：
    - 严禁读取宿主机未受控的环境变量（如 CPATH、C_INCLUDE_PATH、LIBRARY_PATH 等）；
@@ -474,7 +474,7 @@ def go(p, build, prefix, args):
     """执行 Go 构建命令（动态注入内容寻址的 CGO 链接参数）
 
     ⚠️ 解决 Go 构建缓存不感知外部 .a 变化的根本方法：
-      为 libZhulongEngine.a 与 libZhulongAlgoIpc.a 分别计算内容哈希，复制到独立的哈希子目录下进行链接。
+      为 libZhulongEngine.a、libZhulongAlgoIpc.a 与 libZhulongLog.a 分别计算内容哈希，复制到独立的哈希子目录下进行链接。
     """
     engine_archive = build / "libZhulongEngine.a"
     engine_link = build / "go-link" / digest(engine_archive) / engine_archive.name
@@ -488,6 +488,12 @@ def go(p, build, prefix, args):
         ipc_link.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ipc_archive, ipc_link)
 
+    log_archive = build / "libZhulongLog.a"
+    log_link = build / "go-link" / digest(log_archive) / log_archive.name
+    if not log_link.exists():
+        log_link.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(log_archive, log_link)
+
     cgo_sys_libs = []
     for flag in system_libraries(prefix):
         if flag.startswith("-framework "):
@@ -495,13 +501,13 @@ def go(p, build, prefix, args):
         else:
             cgo_sys_libs.append(flag)
 
-    libraries = [engine_link, ipc_link] + [prefix / "lib" / f"lib{lib}.a" for lib in ("avformat", "avcodec", "avutil")]
+    libraries = [engine_link, ipc_link, log_link] + [prefix / "lib" / f"lib{lib}.a" for lib in ("avformat", "avcodec", "avutil")]
     flags = list(map(str, libraries)) + [
         "-lc++" if p["target_os"] == "darwin" else "-lstdc++",
         *cgo_sys_libs, "-pthread"
     ]
     # Zhulong 自有归档的系统库依赖，按目标 OS 显式追加（见 ZHULONG_SYSTEM_LIBRARIES）。
-    # ⚠️ 必须排在两个归档之后：GNU ld 对静态库与 -l 的顺序敏感。
+    # ⚠️ 必须排在三个归档之后：GNU ld 对静态库与 -l 的顺序敏感。
     for lib in ZHULONG_SYSTEM_LIBRARIES.get(p["target_os"], []):
         if lib not in flags:
             flags.append(lib)

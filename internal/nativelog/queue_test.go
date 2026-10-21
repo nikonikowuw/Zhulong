@@ -43,6 +43,28 @@ func TestNewQueueLogsStructuredNativeRecords(t *testing.T) {
 	}
 }
 
+func TestNewQueueAcceptsEmptyNativeMessage(t *testing.T) {
+	core, observed := observer.New(zap.DebugLevel)
+	queue, err := NewQueue(1, zap.New(core))
+	if err != nil {
+		t.Fatalf("NewQueue: %v", err)
+	}
+	if err := queue.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !queue.TryEnqueue(Record{Level: Info, Module: "engine", SeenAt: time.Now()}) {
+		t.Fatal("TryEnqueue rejected a valid empty native message")
+	}
+	pending, err := queue.Stop(context.Background())
+	if err != nil || pending != 0 {
+		t.Fatalf("Stop = (%d, %v), want a fully drained queue", pending, err)
+	}
+	entries := observed.All()
+	if len(entries) != 1 || entries[0].ContextMap()["message"] != "" {
+		t.Fatalf("empty native message was not preserved: %+v", entries)
+	}
+}
+
 func TestQueueNonblockingAdmissionAndDropAccounting(t *testing.T) {
 	queue := newQueue(1, func(Record) error { return nil })
 	queue.admission.Lock()

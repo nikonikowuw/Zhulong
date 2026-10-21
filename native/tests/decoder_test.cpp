@@ -9,8 +9,7 @@
 #include "pipeline/bounded_queue.hpp"
 #include "pipeline/stream.hpp"
 #include "Zhulong/frame.hpp"
-
-constexpr int64_t kNoPts = INT64_MIN;
+#include "common/log.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -19,6 +18,25 @@ constexpr int64_t kNoPts = INT64_MIN;
 #include <string>
 #include <thread>
 #include <vector>
+
+struct CapturedNativeLog {
+    int32_t level{};
+    uint64_t stream_id{};
+    std::string module;
+    std::string message;
+};
+
+static void capture_native_log(uintptr_t token, int32_t level, uint64_t stream_id,
+                               const char *module, size_t module_len,
+                               const char *text, size_t text_len) {
+    auto *capture = reinterpret_cast<CapturedNativeLog *>(token);
+    capture->level = level;
+    capture->stream_id = stream_id;
+    capture->module.assign(module, module_len);
+    capture->message.assign(text, text_len);
+}
+
+constexpr int64_t kNoPts = INT64_MIN;
 
 #define CHECK(condition) \
     do { \
@@ -59,6 +77,22 @@ int main() {
         using zhulong::HardwareFrame;
         using zhulong::IDecodeNode;
         using zhulong::OverflowStrategy;
+
+        // Decoder initialization failures expose only a safe operation token and numeric context.
+        CapturedNativeLog captured_log;
+        CHECK(zhulong::set_log_sink(capture_native_log, reinterpret_cast<uintptr_t>(&captured_log)));
+        bool invalid_decoder_rejected = false;
+        try {
+            IDecodeNode::create(999, nullptr, 0, 1, 90000, zhulong::DecoderBackend::FFMPEG_SW, 42);
+        } catch (const std::invalid_argument &) {
+            invalid_decoder_rejected = true;
+        }
+        CHECK(zhulong::set_log_sink(nullptr, 0));
+        CHECK(invalid_decoder_rejected);
+        CHECK(captured_log.level == static_cast<int32_t>(zhulong::LogLevel::Error));
+        CHECK(captured_log.stream_id == 42);
+        CHECK(captured_log.module == "nodes.decode");
+        CHECK(captured_log.message == "ffmpeg_decoder_init_failed codec=999");
 
         // ====================================================================
         // 1. BoundedQueue 基础容量、Drop-Oldest 与协作式取消测试

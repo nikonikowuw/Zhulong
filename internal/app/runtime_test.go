@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/nativelog"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 type eventLog struct {
@@ -58,6 +60,63 @@ func (e engineStub) Start() error {
 
 func (e engineStub) Close() error {
 	e.events.add("engine.close")
+	return nil
+}
+
+type lifecycleLogAwareEngineStub struct {
+	events *eventLog
+	queue  *nativelog.Queue
+}
+
+func (e *lifecycleLogAwareEngineStub) Start() error {
+	e.events.add("engine.start")
+	return nil
+}
+
+func (e *lifecycleLogAwareEngineStub) Stop() error {
+	e.events.add("native.stop")
+	return nil
+}
+
+func (e *lifecycleLogAwareEngineStub) Close() error {
+	e.events.add("native.close")
+	e.queue.TryEnqueue(nativelog.Record{
+		Level:   nativelog.Info,
+		Module:  "pipeline.engine",
+		Message: "destroy_event",
+		SeenAt:  time.Now(),
+	})
+	return nil
+}
+
+func (e *lifecycleLogAwareEngineStub) SetNativeLogSink(queue *nativelog.Queue) error {
+	e.events.add("native.log.register")
+	e.queue = queue
+	return nil
+}
+
+func (e *lifecycleLogAwareEngineStub) CloseNativeLogSink() error {
+	e.events.add("native.log.unregister")
+	return nil
+}
+
+type lifecycleRecordingCore struct {
+	events *eventLog
+}
+
+func (c *lifecycleRecordingCore) Enabled(zapcore.Level) bool        { return true }
+func (c *lifecycleRecordingCore) With([]zapcore.Field) zapcore.Core { return c }
+func (c *lifecycleRecordingCore) Check(entry zapcore.Entry, checked *zapcore.CheckedEntry) *zapcore.CheckedEntry {
+	return checked.AddCore(entry, c)
+}
+func (c *lifecycleRecordingCore) Write(entry zapcore.Entry, _ []zapcore.Field) error {
+	if entry.LoggerName == "native.log" {
+		c.events.add("native.log.record")
+	}
+	return nil
+}
+func (c *lifecycleRecordingCore) Sync() error {
+	c.events.add("logger.sync")
 	return nil
 }
 
@@ -394,6 +453,68 @@ func TestAuditShutdownOrderAfterHTTPDrain(t *testing.T) {
 	}
 	if got, want := events.snapshot(), []string{"http.shutdown", "camera.stop", "audit.stop", "engine.close", "database.close"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected shutdown order with audit: got %v, want %v", got, want)
+	}
+}
+
+func TestNativeLogLifecycleDrainsAfterDestroyAndBeforeLoggerSync(t *testing.T) {
+	events := &eventLog{}
+	core := &lifecycleRecordingCore{events: events}
+	logger := zap.New(core)
+	queue, err := nativelog.NewQueue(16, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Addr: "127.0.0.1:0"}
+	runtime := &lifecycleRuntime{
+		database:  databaseStub{events: events},
+		native:    &lifecycleLogAwareEngineStub{events: events},
+		nativeLog: queue,
+		algorithm: algorithmStub{events: events},
+		server:    server,
+		logger:    logger,
+		listen: func(network, address string) (net.Listener, error) {
+			events.add("http.listen")
+			return net.Listen(network, address)
+		},
+		shutdown: func(ctx context.Context) error {
+			events.add("http.shutdown")
+			return server.Shutdown(ctx)
+		},
+	}
+
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := runtime.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if got := queue.Pending(); got != 0 {
+		t.Fatalf("native log queue pending after Stop = %d, want 0", got)
+	}
+
+	order := events.snapshot()
+	index := func(event string) int {
+		t.Helper()
+		for i, got := range order {
+			if got == event {
+				return i
+			}
+		}
+		t.Fatalf("event %q missing from lifecycle trace %v", event, order)
+		return -1
+	}
+	for _, pair := range [][2]string{
+		{"native.log.register", "engine.start"},
+		{"http.shutdown", "algorithm.stop"},
+		{"algorithm.stop", "native.stop"},
+		{"native.stop", "native.close"},
+		{"native.close", "native.log.unregister"},
+		{"native.close", "native.log.record"},
+		{"native.log.record", "logger.sync"},
+	} {
+		if index(pair[0]) >= index(pair[1]) {
+			t.Fatalf("lifecycle order violated: %s must precede %s: %v", pair[0], pair[1], order)
+		}
 	}
 }
 

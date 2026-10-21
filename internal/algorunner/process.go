@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,6 +32,9 @@ const (
 	MsgGalleryUpsert = algoipc.MsgGalleryUpsert
 	MsgGalleryDelete = algoipc.MsgGalleryDelete
 	MsgGalleryAck    = algoipc.MsgGalleryAck
+
+	maxRunnerLogLine = 64 * 1024
+	runnerLogRate    = 100
 )
 
 var ErrIpcPayloadTooLarge = algoipc.ErrIpcPayloadTooLarge
@@ -96,6 +101,29 @@ type RunnerProcess struct {
 	exitCode     int
 	failureStage string
 	startTime    time.Time
+	logRateMu    sync.Mutex
+	logRate      [2]runnerLogWindow
+	logStats     [2]runnerLogStats
+}
+
+type runnerLogWindow struct {
+	started time.Time
+	emitted int
+}
+
+type runnerLogStats struct {
+	rateLimited uint64
+	invalid     uint64
+	oversized   uint64
+	readErrors  uint64
+	reported    runnerLogStatsSnapshot
+}
+
+type runnerLogStatsSnapshot struct {
+	rateLimited uint64
+	invalid     uint64
+	oversized   uint64
+	readErrors  uint64
 }
 
 // NewRunnerProcess creates a new RunnerProcess instance.
@@ -106,7 +134,7 @@ func NewRunnerProcess(cfg ProcessConfig) *RunnerProcess {
 	}
 	return &RunnerProcess{
 		config: cfg,
-		logger: l.With(zap.String("algorithm", cfg.AlgorithmName)),
+		logger: l,
 		state:  StatusDisabled,
 	}
 }
@@ -159,8 +187,7 @@ func (p *RunnerProcess) Start() error {
 	if p.config.EnvFile != "" {
 		loaded, err := LoadDotEnv(p.config.EnvFile)
 		if err != nil {
-			p.logger.Warn("failed to load runner dotenv file",
-				zap.String("path", p.config.EnvFile), zap.Error(err))
+			p.logger.Warn("failed to load runner dotenv file", zap.String("reason", "parse_error"))
 		}
 		for k, v := range loaded {
 			envMap[k] = v
@@ -232,18 +259,306 @@ func (p *RunnerProcess) Start() error {
 }
 
 func (p *RunnerProcess) streamLogs(r *os.File, level zapcore.Level, isStderr bool) {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		text := scanner.Text()
-		p.logger.Log(level, "runner log", zap.String("text", text))
-		// Primary failure-stage channel: the runner reports a broker connect
-		// failure on stderr as {"stage":"connect"}.
-		if isStderr && strings.Contains(text, `"stage":"connect"`) {
-			p.mu.Lock()
-			p.failureStage = FailureStageBrokerConnect
-			p.mu.Unlock()
+	source := "stdout"
+	if isStderr {
+		source = "stderr"
+	}
+	p.streamLogReader(r, source, level)
+}
+
+func (p *RunnerProcess) streamLogReader(reader io.Reader, source string, fallback zapcore.Level) {
+	buf := bufio.NewReaderSize(reader, 4096)
+	for {
+		line, lineBytes, oversized, err := readBoundedLine(buf, maxRunnerLogLine)
+		if err != nil && !errors.Is(err, io.EOF) {
+			p.countRunnerIssue(source, "read_error")
+			p.logger.Error("runner log reader stopped", zap.String("source", source), zap.String("reason", "read_error"))
+			break
+		}
+		if oversized {
+			p.countRunnerIssue(source, "oversized")
+			p.emitRunnerEvent(source, fallback, "runner output line exceeded limit",
+				zap.String("source", source), zap.Int64("line_bytes", lineBytes))
+		} else if len(line) != 0 {
+			parsed := classifyRunnerLine(line, source, fallback)
+			if parsed.invalid {
+				p.countRunnerIssue(source, "invalid")
+			}
+			if parsed.stage == FailureStageBrokerConnect {
+				p.mu.Lock()
+				p.failureStage = FailureStageBrokerConnect
+				p.mu.Unlock()
+			}
+			p.emitRunnerEvent(source, parsed.level, parsed.message, parsed.fields...)
+		}
+		if errors.Is(err, io.EOF) {
+			break
 		}
 	}
+	p.reportRunnerIssues(source)
+}
+
+type parsedRunnerLine struct {
+	message string
+	level   zapcore.Level
+	fields  []zap.Field
+	stage   string
+	invalid bool
+}
+
+func classifyRunnerLine(line []byte, source string, fallback zapcore.Level) parsedRunnerLine {
+	base := []zap.Field{zap.String("source", source), zap.Int("line_bytes", len(line))}
+	parsed := parsedRunnerLine{level: fallback}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(line, &object) != nil || object == nil {
+		parsed.message = "runner output ignored"
+		parsed.fields = base
+		return parsed
+	}
+
+	_, hasStatus := object["status"]
+	_, hasStage := object["stage"]
+	_, hasStep := object["step"]
+	if hasStatus || hasStage || hasStep {
+		parsed.message = "runner protocol event"
+		parsed.fields = base
+		for key, allowed := range map[string]func(string) bool{
+			"status": validRunnerStatus,
+			"stage":  validRunnerStage,
+			"step":   validRunnerStep,
+		} {
+			raw, exists := object[key]
+			if !exists {
+				continue
+			}
+			var value string
+			if json.Unmarshal(raw, &value) != nil || !allowed(value) {
+				parsed.invalid = true
+				parsed.message = "runner protocol record rejected"
+				parsed.fields = base
+				return parsed
+			}
+			parsed.fields = append(parsed.fields, zap.String(key, value))
+			if key == "stage" {
+				parsed.stage = value
+			}
+		}
+		if raw, exists := object["rc"]; exists {
+			code, err := strconv.ParseInt(string(raw), 10, 32)
+			if err != nil {
+				parsed.invalid = true
+				parsed.message = "runner protocol record rejected"
+				parsed.fields = base
+				return parsed
+			}
+			parsed.fields = append(parsed.fields, zap.Int64("rc", code))
+		}
+		_, errorExists := object["error"]
+		errorPresent := errorExists && string(object["error"]) != "null"
+		parsed.fields = append(parsed.fields, zap.Bool("error_present", errorPresent))
+		return parsed
+	}
+
+	var nativeLog bool
+	if raw, exists := object["zhulongLog"]; exists && json.Unmarshal(raw, &nativeLog) == nil && nativeLog {
+		var module, level, message string
+		if json.Unmarshal(object["module"], &module) != nil || !validNativeModule(module) ||
+			json.Unmarshal(object["level"], &level) != nil ||
+			json.Unmarshal(object["message"], &message) != nil {
+			parsed.invalid = true
+			parsed.message = "runner native log rejected"
+			parsed.fields = base
+			return parsed
+		}
+		nativeLevel, ok := nativeZapLevel(level)
+		if !ok {
+			parsed.invalid = true
+			parsed.message = "runner native log rejected"
+			parsed.fields = base
+			return parsed
+		}
+		parsed.message = "runner native log"
+		parsed.level = nativeLevel
+		parsed.fields = append(base,
+			zap.String("module", module),
+			zap.String("level", level),
+			zap.Int("message_bytes", len(message)),
+		)
+		if rawStreamID, exists := object["streamId"]; exists {
+			streamID, err := strconv.ParseUint(string(rawStreamID), 10, 64)
+			if err != nil {
+				parsed.invalid = true
+				parsed.message = "runner native log rejected"
+				parsed.fields = base
+				return parsed
+			}
+			if streamID != 0 {
+				parsed.fields = append(parsed.fields, zap.Uint64("stream_id", streamID))
+			}
+		}
+		return parsed
+	}
+
+	parsed.message = "runner output ignored"
+	parsed.fields = base
+	return parsed
+}
+
+func validRunnerStatus(value string) bool {
+	switch value {
+	case "failed", "passed", "warning":
+		return true
+	default:
+		return false
+	}
+}
+
+func validRunnerStage(value string) bool {
+	switch value {
+	case "args", "dlopen", "model_create", "worker_create", "task_open", "process", "connect", "name_check", "shm_init", "gallery_sync":
+		return true
+	default:
+		return false
+	}
+}
+
+func validRunnerStep(value string) bool {
+	switch value {
+	case "start", "abi_verified":
+		return true
+	default:
+		return false
+	}
+}
+
+func validNativeModule(value string) bool {
+	if len(value) == 0 || len(value) > 128 {
+		return false
+	}
+	for _, char := range []byte(value) {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '_' || char == '-' || char == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func nativeZapLevel(value string) (zapcore.Level, bool) {
+	switch value {
+	case "debug":
+		return zapcore.DebugLevel, true
+	case "info":
+		return zapcore.InfoLevel, true
+	case "warn":
+		return zapcore.WarnLevel, true
+	case "error":
+		return zapcore.ErrorLevel, true
+	default:
+		return 0, false
+	}
+}
+
+func readBoundedLine(reader *bufio.Reader, max int) ([]byte, int64, bool, error) {
+	line := make([]byte, 0, min(max, 4096))
+	var total int64
+	oversized := false
+	const maxInt64 = int64(1<<63 - 1)
+	for {
+		part, err := reader.ReadSlice('\n')
+		content := part
+		if len(content) > 0 && content[len(content)-1] == '\n' {
+			content = content[:len(content)-1]
+		}
+		if int64(len(content)) > maxInt64-total {
+			total = maxInt64
+		} else {
+			total += int64(len(content))
+		}
+		if !oversized {
+			if len(content) > max-len(line) {
+				oversized = true
+				line = nil
+			} else {
+				line = append(line, content...)
+			}
+		}
+		if err == nil {
+			return line, total, oversized, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return line, total, oversized, err
+	}
+}
+
+func (p *RunnerProcess) emitRunnerEvent(source string, level zapcore.Level, message string, fields ...zap.Field) {
+	index := runnerSourceIndex(source)
+	p.logRateMu.Lock()
+	window := &p.logRate[index]
+	now := time.Now()
+	if window.started.IsZero() || now.Sub(window.started) >= time.Second {
+		window.started = now
+		window.emitted = 0
+	}
+	if window.emitted >= runnerLogRate {
+		p.logStats[index].rateLimited++
+		p.logRateMu.Unlock()
+		return
+	}
+	window.emitted++
+	p.logRateMu.Unlock()
+	p.reportRunnerIssues(source)
+	p.logger.Log(level, message, fields...)
+}
+
+func runnerSourceIndex(source string) int {
+	if source == "stderr" {
+		return 1
+	}
+	return 0
+}
+
+func (p *RunnerProcess) countRunnerIssue(source, kind string) {
+	p.logRateMu.Lock()
+	stats := &p.logStats[runnerSourceIndex(source)]
+	switch kind {
+	case "invalid":
+		stats.invalid++
+	case "oversized":
+		stats.oversized++
+	case "read_error":
+		stats.readErrors++
+	}
+	p.logRateMu.Unlock()
+}
+
+func (p *RunnerProcess) reportRunnerIssues(source string) {
+	p.logRateMu.Lock()
+	stats := &p.logStats[runnerSourceIndex(source)]
+	rateLimited := stats.rateLimited - stats.reported.rateLimited
+	invalid := stats.invalid - stats.reported.invalid
+	oversized := stats.oversized - stats.reported.oversized
+	readErrors := stats.readErrors - stats.reported.readErrors
+	stats.reported = runnerLogStatsSnapshot{
+		rateLimited: stats.rateLimited,
+		invalid:     stats.invalid,
+		oversized:   stats.oversized,
+		readErrors:  stats.readErrors,
+	}
+	p.logRateMu.Unlock()
+	if rateLimited+invalid+oversized+readErrors == 0 {
+		return
+	}
+	p.logger.Warn("runner output records dropped",
+		zap.String("source", source),
+		zap.Uint64("rate_limited", rateLimited),
+		zap.Uint64("invalid", invalid),
+		zap.Uint64("oversized", oversized),
+		zap.Uint64("read_errors", readErrors),
+	)
 }
 
 func (p *RunnerProcess) watchExit(cmd *exec.Cmd, stdoutR, stderrR *os.File, logWg *sync.WaitGroup) {
@@ -291,14 +606,15 @@ func (p *RunnerProcess) watchExit(cmd *exec.Cmd, stdoutR, stderrR *os.File, logW
 			// not fake success or change watchdog restart/circuit-breaker behaviour.
 			p.logger.Error("runner exited because it could not connect to its frame broker sockets",
 				zap.Int("exit_code", p.exitCode),
-				zap.Strings("broker_socks", p.config.BrokerSocks),
 				zap.String("reason", "broker_unavailable"),
-				zap.String("algorithm", p.config.AlgorithmID),
+				zap.String("source", "process_exit"),
 			)
 		} else {
 			p.logger.Warn("runner process exited unexpectedly",
 				zap.Int("exit_code", p.exitCode),
-				zap.Error(err),
+				zap.Bool("error_present", err != nil),
+				zap.String("reason", "unexpected_exit"),
+				zap.String("source", "process_exit"),
 			)
 		}
 	}

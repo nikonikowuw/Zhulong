@@ -11,6 +11,7 @@
 
 #include "nodes/decode/ffmpeg_decoder.hpp"
 #include "nodes/decode/mpp_decoder.hpp"
+#include "common/log.hpp"
 
 #include <cstring>
 #include <stdexcept>
@@ -19,21 +20,32 @@ namespace zhulong {
 
 IDecodeNode::Ptr IDecodeNode::create(int32_t codec, const uint8_t *extradata, size_t extradata_size,
                                      int32_t time_base_num, int32_t time_base_den,
-                                     DecoderBackend backend) {
+                                     DecoderBackend backend, uint64_t stream_id) {
     if (backend == DecoderBackend::AUTO || backend == DecoderBackend::MPP_HW) {
         if (MppDecodeNode::is_supported()) {
             try {
                 return std::make_unique<MppDecodeNode>(codec, extradata, extradata_size, time_base_num, time_base_den);
             } catch (...) {
                 if (backend == DecoderBackend::MPP_HW) {
+                    ZL_LOGE(stream_id, "nodes.decode", "mpp_decoder_init_failed codec=%d", codec);
                     throw;
                 }
+                ZL_LOGW(stream_id, "nodes.decode", "mpp_decoder_init_failed_fallback codec=%d", codec);
             }
         } else if (backend == DecoderBackend::MPP_HW) {
+            ZL_LOGE(stream_id, "nodes.decode", "mpp_decoder_unavailable codec=%d", codec);
             throw std::runtime_error("MPP hardware decoder requested but not supported on this host");
+        } else {
+            ZL_LOGI(stream_id, "nodes.decode", "mpp_unavailable_fallback codec=%d", codec);
         }
     }
-    return std::make_unique<FFmpegDecodeNode>(codec, extradata, extradata_size, time_base_num, time_base_den);
+
+    try {
+        return std::make_unique<FFmpegDecodeNode>(codec, extradata, extradata_size, time_base_num, time_base_den);
+    } catch (...) {
+        ZL_LOGE(stream_id, "nodes.decode", "ffmpeg_decoder_init_failed codec=%d", codec);
+        throw;
+    }
 }
 
 FFmpegDecodeNode::FFmpegDecodeNode(int32_t codec, const uint8_t *extradata, size_t extradata_size,

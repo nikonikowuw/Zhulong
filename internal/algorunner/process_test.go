@@ -151,14 +151,14 @@ func TestRunnerProcessInjectsDotEnvEndToEnd(t *testing.T) {
 	// wiring (EnvFile never being set), which is exactly what this task fixes.
 	dir := t.TempDir()
 	script := filepath.Join(dir, "runner.sh")
-	scriptBody := "#!/bin/sh\necho \"ZHULONG_ENV_PROBE=$ZHULONG_ENV_PROBE\"\nsleep 0.3\n"
-	if err := os.WriteFile(script, []byte(scriptBody), 0755); err != nil {
-		t.Fatalf("write runner script: %v", err)
-	}
-
 	envFile := filepath.Join(dir, ".env")
 	if err := os.WriteFile(envFile, []byte("ZHULONG_ENV_PROBE=injected\n"), 0644); err != nil {
 		t.Fatalf("write .env: %v", err)
+	}
+	envProbePath := filepath.Join(dir, "env-probe")
+	scriptBody := fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"$ZHULONG_ENV_PROBE\" > '%s'\necho \"ZHULONG_ENV_PROBE=$ZHULONG_ENV_PROBE\"\nsleep 0.3\n", envProbePath)
+	if err := os.WriteFile(script, []byte(scriptBody), 0755); err != nil {
+		t.Fatalf("write runner script: %v", err)
 	}
 
 	core, observed := observer.New(zapcore.DebugLevel)
@@ -179,27 +179,28 @@ func TestRunnerProcessInjectsDotEnvEndToEnd(t *testing.T) {
 	}
 	defer proc.Stop(2 * time.Second)
 
-	// Wait for the child to emit its line (up to 5s under concurrent -race load).
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, entry := range observed.All() {
-			if strings.Contains(entry.Message, "ZHULONG_ENV_PROBE=injected") {
-				return
-			}
-			if f := entry.ContextMap(); f != nil {
-				if text, ok := f["text"].(string); ok && strings.Contains(text, "ZHULONG_ENV_PROBE=injected") {
-					return
-				}
-			}
-		}
-		time.Sleep(20 * time.Millisecond)
+	select {
+	case <-proc.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner did not exit after emitting its probe line")
 	}
-
-	var lines []string
+	value, err := os.ReadFile(envProbePath)
+	if err != nil || string(value) != "injected" {
+		t.Fatalf("runner did not receive .env value: value=%q err=%v", value, err)
+	}
+	foundRedactedLine := false
 	for _, entry := range observed.All() {
-		lines = append(lines, entry.Message)
+		fields := entry.ContextMap()
+		if entry.Message == "runner output ignored" && fields["source"] == "stdout" && fields["line_bytes"] == int64(len("ZHULONG_ENV_PROBE=injected")) {
+			foundRedactedLine = true
+		}
+		if strings.Contains(entry.Message, "ZHULONG_ENV_PROBE=injected") || strings.Contains(fmt.Sprint(fields), "ZHULONG_ENV_PROBE=injected") {
+			t.Fatalf("runner stdout content was not redacted: %+v", entry)
+		}
 	}
-	t.Fatalf("expected injected env var in runner stdout logs; observed: %v", lines)
+	if !foundRedactedLine {
+		t.Fatalf("expected a redacted stdout record with byte count; observed: %+v", observed.All())
+	}
 }
 
 func TestRunnerProcessMissingDotEnvIsOptional(t *testing.T) {
@@ -361,8 +362,11 @@ func TestRunnerProcessReportsDotEnvParseFailure(t *testing.T) {
 		if entry.Level == zapcore.WarnLevel && strings.Contains(entry.Message, "failed to load runner dotenv file") {
 			foundWarn = true
 			if fields := entry.ContextMap(); fields != nil {
-				if path, ok := fields["path"].(string); !ok || path != envFile {
-					t.Errorf("expected dotenv warn to carry path=%q, got %v", envFile, fields["path"])
+				if reason, ok := fields["reason"].(string); !ok || reason != "parse_error" {
+					t.Errorf("expected stable dotenv parse reason, got %v", fields["reason"])
+				}
+				if _, hasPath := fields["path"]; hasPath {
+					t.Error("dotenv warning must not expose its path")
 				}
 			}
 		}
@@ -622,7 +626,9 @@ sleep 10
 func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "echo_args.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"ARGS: $@\"\nexit 0\n"), 0755); err != nil {
+	argsPath := filepath.Join(dir, "args.txt")
+	scriptBody := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGS_CAPTURE\"\nexit 0\n"
+	if err := os.WriteFile(script, []byte(scriptBody), 0755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 
@@ -635,6 +641,7 @@ func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
 		RunnerPath:    script,
 		PluginPath:    "plugin.so",
 		BrokerSocks:   []string{"/tmp/sock1.sock", "/tmp/sock2.sock"},
+		ExtraEnv:      map[string]string{"ARGS_CAPTURE": argsPath},
 		Logger:        logger,
 	}
 
@@ -650,17 +657,25 @@ func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
 		t.Fatal("timed out waiting for script to finish")
 	}
 
-	found := false
-	for _, entry := range observed.All() {
-		for _, f := range entry.Context {
-			if strings.Contains(f.String, "--broker /tmp/sock1.sock --broker /tmp/sock2.sock") {
-				found = true
-				break
-			}
-		}
+	gotBytes, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read captured arguments: %v", err)
 	}
-	if !found {
-		t.Fatalf("expected command line to contain multiple --broker flags, got logs: %+v", observed.All())
+	gotArgs := strings.Fields(string(gotBytes))
+	wantArgs := []string{
+		"--plugin", "plugin.so",
+		"--broker", "/tmp/sock1.sock",
+		"--broker", "/tmp/sock2.sock",
+		"--name", "multi_broker_pkg",
+		"--algorithm-id", "multi_broker_pkg",
+	}
+	if !reflect.DeepEqual(gotArgs, wantArgs) {
+		t.Fatalf("runner arguments = %#v, want %#v", gotArgs, wantArgs)
+	}
+	for _, entry := range observed.All() {
+		if strings.Contains(fmt.Sprint(entry.ContextMap()), "/tmp/sock") {
+			t.Fatalf("runner output leaked broker socket path: %+v", entry)
+		}
 	}
 }
 
