@@ -8,11 +8,12 @@ import (
 type ResultType = aitypes.ResultType
 
 const (
-	ResultTypeUnknown         = aitypes.ResultTypeUnknown
-	ResultTypeDetection       = aitypes.ResultTypeDetection
-	ResultTypeClassification  = aitypes.ResultTypeClassification
-	ResultTypePersonStructure = aitypes.ResultTypePersonStructure
-	ResultTypeCustom          = aitypes.ResultTypeCustom
+	ResultTypeUnknown          = aitypes.ResultTypeUnknown
+	ResultTypeDetection        = aitypes.ResultTypeDetection
+	ResultTypeClassification   = aitypes.ResultTypeClassification
+	ResultTypePersonStructure  = aitypes.ResultTypePersonStructure
+	ResultTypeVehicleStructure = aitypes.ResultTypeVehicleStructure
+	ResultTypeCustom           = aitypes.ResultTypeCustom
 )
 
 // DetectionItem represents a single detected object with normalized coordinates.
@@ -30,6 +31,12 @@ type FaceSubItem = aitypes.FaceSubItem
 // PersonItem represents a detected person with body box and mounted face items (1:N).
 type PersonItem = aitypes.PersonItem
 
+// PlateSubItem represents a license plate mounted onto a vehicle entity.
+type PlateSubItem = aitypes.PlateSubItem
+
+// VehicleItem represents a detected vehicle with vehicle box and mounted plate items (1:N).
+type VehicleItem = aitypes.VehicleItem
+
 // InferenceResult is the unified inference output event payload.
 type InferenceResult = aitypes.InferenceResult
 
@@ -38,8 +45,9 @@ type RawInferencePayload = aitypes.RawInferencePayload
 
 // Factory functions delegated to aitypes.
 var (
-	NewDetectionResult       = aitypes.NewDetectionResult
-	NewClassificationResult  = aitypes.NewClassificationResult
-	NewPersonStructureResult = aitypes.NewPersonStructureResult
-	ParseInferenceResult     = aitypes.ParseInferenceResult
+	NewDetectionResult        = aitypes.NewDetectionResult
+	NewClassificationResult   = aitypes.NewClassificationResult
+	NewPersonStructureResult  = aitypes.NewPersonStructureResult
+	NewVehicleStructureResult = aitypes.NewVehicleStructureResult
+	ParseInferenceResult      = aitypes.ParseInferenceResult
 )

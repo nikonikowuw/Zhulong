@@ -22,6 +22,7 @@ export const algorithmTaskTypeSchema = z.enum([
   'detection',
   'classification',
   'person_structure',
+  'vehicle_structure',
 ])
 
 export type AlgorithmTaskType = z.infer<typeof algorithmTaskTypeSchema>

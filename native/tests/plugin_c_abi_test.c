@@ -99,6 +99,7 @@ int main(void) {
     assert(ZHULONG_FACE_ID_MAX_LEN == 64);
     assert(ZHULONG_FACE_LANDMARK_COUNT == 5);
     assert(ZHULONG_RESULT_TYPE_PERSON_STRUCTURE == 3);
+    assert(ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE == 4);
 
     _Static_assert(sizeof(zhulong_face_candidate) == 200, "zhulong_face_candidate must be 200 bytes");
     _Static_assert(sizeof(zhulong_face_candidate) % 8 == 0, "zhulong_face_candidate must be 8-byte aligned");
@@ -108,6 +109,12 @@ int main(void) {
 
     _Static_assert(sizeof(zhulong_person_item) == 40, "zhulong_person_item must be 40 bytes");
     _Static_assert(sizeof(zhulong_person_item) % 8 == 0, "zhulong_person_item must be 8-byte aligned");
+
+    _Static_assert(sizeof(zhulong_plate_item) == 72, "zhulong_plate_item must be 72 bytes");
+    _Static_assert(sizeof(zhulong_plate_item) % 8 == 0, "zhulong_plate_item must be 8-byte aligned");
+
+    _Static_assert(sizeof(zhulong_vehicle_item) == 88, "zhulong_vehicle_item must be 88 bytes");
+    _Static_assert(sizeof(zhulong_vehicle_item) % 8 == 0, "zhulong_vehicle_item must be 8-byte aligned");
 
     /* 3. 验证 API 表填写与调用流程 */
     zhulong_plugin_api_v1 api;
@@ -219,6 +226,64 @@ int main(void) {
         assert(p->faces[0].candidate_count == 1);
         assert(strcmp(p->faces[0].candidates[0].person_name, "Alice") == 0);
         assert(strcmp(p->faces[0].candidates[0].face_id, "face_001") == 0);
+
+        /* 单次 free 释放整个 Arena 树 */
+        free(res.internal_token);
+    }
+
+    /* 5. 验证机动车/车牌结构化结果在纯 C 边界下的单块 Arena 解构 */
+    {
+        /* 模拟分配 1 辆机动车 + 1 块车牌的 Arena 连续内存块 */
+        size_t arena_size = sizeof(zhulong_vehicle_item) + sizeof(zhulong_plate_item);
+        uint8_t* arena = (uint8_t*)malloc(arena_size);
+        assert(arena != NULL);
+        memset(arena, 0, arena_size);
+
+        zhulong_vehicle_item* vehicle = (zhulong_vehicle_item*)arena;
+        zhulong_plate_item* plate = (zhulong_plate_item*)(arena + sizeof(zhulong_vehicle_item));
+
+        /* 填充车牌 */
+        plate->box[0] = 0.2f;
+        plate->box[1] = 0.3f;
+        plate->box[2] = 0.4f;
+        plate->box[3] = 0.45f;
+        plate->score = 0.96f;
+        strncpy(plate->plate_number, "粤B88888", sizeof(plate->plate_number) - 1);
+        strncpy(plate->plate_color, "蓝色", sizeof(plate->plate_color) - 1);
+        plate->plate_type = 0;
+
+        /* 填充机动车 (退化模式测试：车身框即车牌框) */
+        vehicle->track_id = 0;
+        vehicle->vehicle_box[0] = plate->box[0];
+        vehicle->vehicle_box[1] = plate->box[1];
+        vehicle->vehicle_box[2] = plate->box[2];
+        vehicle->vehicle_box[3] = plate->box[3];
+        vehicle->vehicle_score = plate->score;
+        strncpy(vehicle->vehicle_type, "car", sizeof(vehicle->vehicle_type) - 1);
+        strncpy(vehicle->vehicle_color, "white", sizeof(vehicle->vehicle_color) - 1);
+        vehicle->plate_count = 1;
+        vehicle->plates = plate;
+
+        /* 构造 zhulong_inference_result */
+        zhulong_inference_result res;
+        res.frame_id = 101;
+        res.task_id = 201;
+        res.result_type = ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE;
+        res.count = 1;
+        res.data = arena;
+        res.internal_token = arena;
+
+        /* 断言验证纯 C 读取 */
+        assert(res.result_type == ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE);
+        assert(res.count == 1);
+        const zhulong_vehicle_item* v = (const zhulong_vehicle_item*)res.data;
+        assert(v->plate_count == 1);
+        assert(v->plates != NULL);
+        assert(strcmp(v->plates[0].plate_number, "粤B88888") == 0);
+        assert(strcmp(v->plates[0].plate_color, "蓝色") == 0);
+        assert(v->plates[0].plate_type == 0);
+        assert(strcmp(v->vehicle_type, "car") == 0);
+        assert(strcmp(v->vehicle_color, "white") == 0);
 
         /* 单次 free 释放整个 Arena 树 */
         free(res.internal_token);

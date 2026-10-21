@@ -47,6 +47,36 @@ export type PersonItem = z.infer<typeof personItemSchema>
 export type PersonItemInput = z.input<typeof personItemSchema>
 
 /**
+ * 挂载在机动车下的车牌子目标契约
+ * 坐标为严格归一化 [x1, y1, x2, y2] ∈ [0.0, 1.0]
+ */
+export const plateSubItemSchema = z.object({
+  box: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+  score: z.number().default(0),
+  plate_number: z.string().default(''),
+  plate_color: z.string().default(''),
+  plate_type: z.number().default(0),
+})
+
+export type PlateSubItem = z.infer<typeof plateSubItemSchema>
+export type PlateSubItemInput = z.input<typeof plateSubItemSchema>
+
+/**
+ * 结构化机动车项契约（1:N 挂载车牌）
+ */
+export const vehicleItemSchema = z.object({
+  track_id: z.number().default(0),
+  vehicle_box: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+  vehicle_score: z.number().default(0),
+  vehicle_type: z.string().optional().default(''),
+  vehicle_color: z.string().optional().default(''),
+  plates: z.array(plateSubItemSchema).default([]),
+})
+
+export type VehicleItem = z.infer<typeof vehicleItemSchema>
+export type VehicleItemInput = z.input<typeof vehicleItemSchema>
+
+/**
  * 基础目标检测项契约
  */
 export const detectionItemSchema = z.object({
@@ -70,6 +100,7 @@ export const aiResultEventSchema = z.object({
   detections: z.array(detectionItemSchema).optional().default([]),
   classifications: z.array(z.unknown()).optional().default([]),
   persons: z.array(personItemSchema).optional().default([]),
+  vehicles: z.array(vehicleItemSchema).optional().default([]),
 })
 
 export type AIResultEvent = z.infer<typeof aiResultEventSchema>

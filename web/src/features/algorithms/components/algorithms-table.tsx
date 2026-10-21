@@ -43,6 +43,7 @@ const TASK_TYPE_BADGE: Record<
   detection: { labelKey: 'taskDetection', hue: 'blue' },
   classification: { labelKey: 'taskClassification', hue: 'violet' },
   person_structure: { labelKey: 'taskPersonStructure', hue: 'emerald' },
+  vehicle_structure: { labelKey: 'taskVehicleStructure', hue: 'fuchsia' },
 }
 
 interface AlgorithmsTableProps {
@@ -190,6 +191,7 @@ export function AlgorithmsTable({
               { key: 'all', labelKey: 'filterAll' },
               { key: 'detection', labelKey: 'taskDetection' },
               { key: 'person_structure', labelKey: 'taskPersonStructure' },
+              { key: 'vehicle_structure', labelKey: 'taskVehicleStructure' },
               { key: 'classification', labelKey: 'taskClassification' },
             ].map((tab) => {
               const isActive = taskTypeFilter === tab.key

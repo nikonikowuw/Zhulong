@@ -130,7 +130,8 @@ namespace zhulong
             ss << ",\"task_type\":\"\""
                << ",\"detections\":[]"
                << ",\"classifications\":[]"
-               << ",\"persons\":[]}";
+               << ",\"persons\":[]"
+               << ",\"vehicles\":[]}";
             return ss.str();
         }
 
@@ -147,7 +148,7 @@ namespace zhulong
                    << ",\"label\":" << runner::json_quote(boxes[i].label)
                    << ",\"score\":" << boxes[i].confidence << "}";
             }
-            ss << "],\"classifications\":[],\"persons\":[]}";
+            ss << "],\"classifications\":[],\"persons\":[],\"vehicles\":[]}";
         }
         else if (result->result_type == ZHULONG_RESULT_TYPE_CLASSIFICATION)
         {
@@ -160,7 +161,7 @@ namespace zhulong
                 ss << "{\"label\":" << runner::json_quote(items[i].label)
                    << ",\"score\":" << items[i].confidence << "}";
             }
-            ss << "],\"persons\":[]}";
+            ss << "],\"persons\":[],\"vehicles\":[]}";
         }
         else if (result->result_type == ZHULONG_RESULT_TYPE_PERSON_STRUCTURE)
         {
@@ -208,11 +209,43 @@ namespace zhulong
                 }
                 ss << "]}";
             }
+            ss << "],\"vehicles\":[]}";
+        }
+        else if (result->result_type == ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE)
+        {
+            ss << ",\"task_type\":\"vehicle_structure\""
+               << ",\"detections\":[],\"classifications\":[],\"persons\":[]"
+               << ",\"vehicles\":[";
+            const auto* vehicles = static_cast<const zhulong_vehicle_item*>(result->data);
+            for (uint32_t i = 0; i < result->count; ++i)
+            {
+                if (i > 0) ss << ",";
+                const auto& v = vehicles[i];
+                ss << "{\"track_id\":" << v.track_id
+                   << ",\"vehicle_box\":[" << v.vehicle_box[0] << "," << v.vehicle_box[1] << ","
+                   << v.vehicle_box[2] << "," << v.vehicle_box[3] << "]"
+                   << ",\"vehicle_score\":" << v.vehicle_score
+                   << ",\"vehicle_type\":" << runner::json_quote(v.vehicle_type)
+                   << ",\"vehicle_color\":" << runner::json_quote(v.vehicle_color)
+                   << ",\"plates\":[";
+                for (uint32_t j = 0; j < v.plate_count; ++j)
+                {
+                    if (j > 0) ss << ",";
+                    const auto& pl = v.plates[j];
+                    ss << "{\"box\":[" << pl.box[0] << "," << pl.box[1] << ","
+                       << pl.box[2] << "," << pl.box[3] << "]"
+                       << ",\"score\":" << pl.score
+                       << ",\"plate_number\":" << runner::json_quote(pl.plate_number)
+                       << ",\"plate_color\":" << runner::json_quote(pl.plate_color)
+                       << ",\"plate_type\":" << pl.plate_type << "}";
+                }
+                ss << "]}";
+            }
             ss << "]}";
         }
         else
         {
-            ss << ",\"task_type\":\"custom\",\"detections\":[],\"classifications\":[],\"persons\":[]}";
+            ss << ",\"task_type\":\"custom\",\"detections\":[],\"classifications\":[],\"persons\":[],\"vehicles\":[]}";
         }
 
         return ss.str();

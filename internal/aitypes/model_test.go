@@ -26,6 +26,34 @@ func TestInferenceResultJSONEmptySlices(t *testing.T) {
 	if !strings.Contains(s, `"persons":[]`) {
 		t.Errorf("expected persons to be empty array [], got JSON: %s", s)
 	}
+	if !strings.Contains(s, `"vehicles":[]`) {
+		t.Errorf("expected vehicles to be empty array [], got JSON: %s", s)
+	}
+}
+
+func TestResultConstructorsInitializeEmptySlices(t *testing.T) {
+	constructors := []struct {
+		name      string
+		taskType  string
+		newResult func(string, string, int64, int64) aitypes.InferenceResult
+	}{
+		{"detection", aitypes.TaskTypeDetection, aitypes.NewDetectionResult},
+		{"classification", aitypes.TaskTypeClassification, aitypes.NewClassificationResult},
+		{"person_structure", aitypes.TaskTypePersonStructure, aitypes.NewPersonStructureResult},
+		{"vehicle_structure", aitypes.TaskTypeVehicleStructure, aitypes.NewVehicleStructureResult},
+	}
+
+	for _, constructor := range constructors {
+		t.Run(constructor.name, func(t *testing.T) {
+			res := constructor.newResult("cam_01", "algo_01", 123, 7)
+			if res.TaskType != constructor.taskType {
+				t.Fatalf("expected task type %q, got %q", constructor.taskType, res.TaskType)
+			}
+			if res.Detections == nil || res.Classifications == nil || res.Persons == nil || res.Vehicles == nil {
+				t.Fatalf("expected all result slices to be initialized: %+v", res)
+			}
+		})
+	}
 }
 
 func TestPersonStructureResultWithTopK(t *testing.T) {
@@ -160,6 +188,23 @@ func TestParseInferenceResult(t *testing.T) {
 	}
 	if resWithoutAlgo.AlgorithmID != "fallback_algo" {
 		t.Errorf("expected algorithm_id 'fallback_algo', got %q", resWithoutAlgo.AlgorithmID)
+	}
+
+	// 5. Vehicle structure
+	vehJSON := []byte(`{"stream_id":1,"pts":4000,"cost_ms":18,"task_type":"vehicle_structure","detections":[],"classifications":[],"persons":[],"vehicles":[{"track_id":42,"vehicle_box":[0.1,0.2,0.6,0.7],"vehicle_score":0.93,"vehicle_type":"suv","vehicle_color":"black","plates":[{"box":[0.25,0.55,0.45,0.65],"score":0.97,"plate_number":"粤B88888","plate_color":"蓝色","plate_type":0}]}]}`)
+	vehRes, err := aitypes.ParseInferenceResult("cam_1", "algo_plate", vehJSON)
+	if err != nil {
+		t.Fatalf("ParseInferenceResult vehicle structure failed: %v", err)
+	}
+	if vehRes.TaskType != aitypes.TaskTypeVehicleStructure || len(vehRes.Vehicles) != 1 {
+		t.Fatalf("unexpected vehicle structure result: %+v", vehRes)
+	}
+	v := vehRes.Vehicles[0]
+	if v.TrackID != 42 || v.VehicleType != "suv" || v.VehicleColor != "black" {
+		t.Errorf("unexpected vehicle fields: %+v", v)
+	}
+	if len(v.Plates) != 1 || v.Plates[0].PlateNumber != "粤B88888" || v.Plates[0].PlateColor != "蓝色" {
+		t.Errorf("unexpected plates content: %+v", v.Plates)
 	}
 
 	// 5. Invalid or empty

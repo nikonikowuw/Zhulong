@@ -62,7 +62,7 @@
 | `name` | string | 是 | 字符串，UTF-8 字节长度 `1 ~ 32` | 展示名称；超过 32 字节将在 IPC 握手包定长缓冲截断并被拒 |
 | `version` | string | 是 | 正则 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` | 语义化版本号（如 `1.0.0`） |
 | `description` | string | 否 | 字符串，≤ 256 字符 | 算法功能简短描述 |
-| `task_type` | string | 是 | 枚举：`detection` \| `classification` \| `person_structure` | 算法任务类型，决定推理结果的数据结构 |
+| `task_type` | string | 是 | 枚举：`detection` \| `classification` \| `person_structure` \| `vehicle_structure` | 算法任务类型，决定推理结果的数据结构 |
 | `category` | string | 是 | 枚举：`safety` \| `security` \| `fire` \| `traffic` \| `general` | 应用行业分类 |
 | `platform.arch` | string | 是 | 枚举：`x86_64` \| `aarch64` | 目标硬件 CPU 指令集架构 |
 | `platform.target` | string | 是 | 枚举：`cpu` \| `rknn` \| `cann` \| `tensorrt` | 硬件推理加速后端 |

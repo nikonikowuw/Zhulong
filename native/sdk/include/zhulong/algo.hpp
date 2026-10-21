@@ -152,6 +152,38 @@ struct PersonItem {
 };
 
 /**
+ * @brief 车牌子目标项
+ */
+struct PlateItem {
+    float box[4]{0.0f, 0.0f, 0.0f, 0.0f}; /**< [x1, y1, x2, y2] 严格归一化坐标 [0.0, 1.0] */
+    float score{0.0f};                    /**< 车牌识别置信度 (0.0 ~ 1.0) */
+    std::string plate_number;             /**< 车牌号码 UTF-8 字符串 (如 "粤B88888") */
+    std::string plate_color;              /**< 车牌颜色 (如 "蓝色", "黄色") */
+    int32_t plate_type{0};                /**< 车牌类型编号 (0=单层, 1=双层, 2=新能源...) */
+};
+
+/**
+ * @brief 结构化机动车项 (1 辆机动车挂载 0~N 块车牌)
+ *
+ * 纯车牌场景退化语义说明：
+ *   - 在纯车牌检测/识别场景下，每个检出车牌映射为一个 VehicleItem；
+ *   - track_id 填 0；
+ *   - vehicle_box 填对应 plate_box 的归一化坐标；
+ *   - vehicle_score 填 plate 的 score；
+ *   - vehicle_type 填 "unknown"；
+ *   - vehicle_color 填 ""；
+ *   - plates 包含单块车牌项。
+ */
+struct VehicleItem {
+    int64_t track_id{0};                          /**< 车辆跟踪 ID (纯车牌场景填 0) */
+    float vehicle_box[4]{0.0f, 0.0f, 0.0f, 0.0f}; /**< [x1, y1, x2, y2] 归一化坐标 (纯车牌场景同 plate_box) */
+    float vehicle_score{0.0f};                    /**< 车辆检出置信度 (纯车牌场景同 plate_score) */
+    std::string vehicle_type;                     /**< 车型描述 */
+    std::string vehicle_color;                    /**< 车身颜色 */
+    std::vector<PlateItem> plates;                /**< 关联的车牌列表 (0~N 块) */
+};
+
+/**
  * @brief 推理会话 (单 Worker 独占执行)
  *
  * 封装底层的硬件执行上下文（SessionContext），负责在单线程内驱动硬件加速推理。
@@ -341,6 +373,10 @@ static_assert(sizeof(zhulong_face_item) == 280, "zhulong_face_item must be 280 b
 static_assert(sizeof(zhulong_face_item) % 8 == 0, "zhulong_face_item must be 8-byte aligned");
 static_assert(sizeof(zhulong_person_item) == 40, "zhulong_person_item must be 40 bytes");
 static_assert(sizeof(zhulong_person_item) % 8 == 0, "zhulong_person_item must be 8-byte aligned");
+static_assert(sizeof(zhulong_plate_item) == 72, "zhulong_plate_item must be 72 bytes");
+static_assert(sizeof(zhulong_plate_item) % 8 == 0, "zhulong_plate_item must be 8-byte aligned");
+static_assert(sizeof(zhulong_vehicle_item) == 88, "zhulong_vehicle_item must be 88 bytes");
+static_assert(sizeof(zhulong_vehicle_item) % 8 == 0, "zhulong_vehicle_item must be 8-byte aligned");
 
 /**
  * @brief 通用目标检测结果 C ABI 序列化适配器
@@ -587,6 +623,113 @@ struct PersonStructureResultAdapter {
 };
 
 /**
+ * @brief 机动车/车牌结构化结果 C ABI 序列化适配器
+ *
+ * 采用单块连续 Arena 内存打包模式（Contiguous Arena Packing）：
+ *   - 将顶层 zhulong_vehicle_item 数组与各嵌套 zhulong_plate_item 数组连续打包在单块堆内存中；
+ *   - 所有嵌套子指针均指向该 Arena 内存块内部偏移，杜绝裸指针悬挂与内存碎片；
+ *   - internal_token 记录 Arena 内存块首地址，result_release 时通过单次 std::free 彻底释放整棵结果树。
+ */
+struct VehicleStructureResultAdapter {
+    using item_type = zhulong_vehicle_item;
+    static constexpr zhulong_result_type_t result_type = ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE;
+
+    /** @brief 调用插件类的 detect_vehicles 方法执行机动车/车牌结构化推理 */
+    template<typename PluginClass>
+    static std::vector<VehicleItem> infer(PluginClass& plugin, Session& session, const Image& image) {
+        return plugin.detect_vehicles(session, image);
+    }
+
+    /** @brief 将多级嵌套机动车/车牌结构以单块连续 Arena 内存打包输出至 zhulong_inference_result */
+    template<typename PluginClass>
+    static void pack(PluginClass& plugin, Session& session, const Image& image,
+                     zhulong_inference_result& out) {
+        auto vehicles = infer(plugin, session, image);
+        size_t n_vehicles = vehicles.size();
+        size_t n_plates = 0;
+
+        for (const auto& v : vehicles) {
+            n_plates += v.plates.size();
+        }
+
+        if (n_vehicles == 0) {
+            out.count = 0;
+            out.data = nullptr;
+            out.internal_token = nullptr;
+            return;
+        }
+
+        size_t vehicles_bytes = n_vehicles * sizeof(zhulong_vehicle_item);
+        size_t plates_bytes = n_plates * sizeof(zhulong_plate_item);
+        size_t total_bytes = vehicles_bytes + plates_bytes;
+
+        uint8_t* arena = static_cast<uint8_t*>(std::malloc(total_bytes));
+        if (!arena) {
+            throw std::bad_alloc();
+        }
+        std::memset(arena, 0, total_bytes);
+
+        auto* out_vehicles = reinterpret_cast<zhulong_vehicle_item*>(arena);
+        auto* out_plates = reinterpret_cast<zhulong_plate_item*>(arena + vehicles_bytes);
+
+        size_t plate_idx = 0;
+
+        for (size_t i = 0; i < n_vehicles; ++i) {
+            const auto& src_v = vehicles[i];
+            auto& dst_v = out_vehicles[i];
+
+            dst_v.track_id = src_v.track_id;
+            dst_v.vehicle_box[0] = src_v.vehicle_box[0];
+            dst_v.vehicle_box[1] = src_v.vehicle_box[1];
+            dst_v.vehicle_box[2] = src_v.vehicle_box[2];
+            dst_v.vehicle_box[3] = src_v.vehicle_box[3];
+            dst_v.vehicle_score = src_v.vehicle_score;
+
+            std::strncpy(dst_v.vehicle_type, src_v.vehicle_type.c_str(), sizeof(dst_v.vehicle_type) - 1);
+            dst_v.vehicle_type[sizeof(dst_v.vehicle_type) - 1] = '\0';
+            std::strncpy(dst_v.vehicle_color, src_v.vehicle_color.c_str(), sizeof(dst_v.vehicle_color) - 1);
+            dst_v.vehicle_color[sizeof(dst_v.vehicle_color) - 1] = '\0';
+
+            dst_v.plate_count = static_cast<uint32_t>(src_v.plates.size());
+
+            if (dst_v.plate_count > 0) {
+                dst_v.plates = &out_plates[plate_idx];
+                for (size_t j = 0; j < src_v.plates.size(); ++j) {
+                    const auto& src_p = src_v.plates[j];
+                    auto& dst_p = out_plates[plate_idx++];
+
+                    dst_p.box[0] = src_p.box[0];
+                    dst_p.box[1] = src_p.box[1];
+                    dst_p.box[2] = src_p.box[2];
+                    dst_p.box[3] = src_p.box[3];
+                    dst_p.score = src_p.score;
+
+                    std::strncpy(dst_p.plate_number, src_p.plate_number.c_str(), sizeof(dst_p.plate_number) - 1);
+                    dst_p.plate_number[sizeof(dst_p.plate_number) - 1] = '\0';
+                    std::strncpy(dst_p.plate_color, src_p.plate_color.c_str(), sizeof(dst_p.plate_color) - 1);
+                    dst_p.plate_color[sizeof(dst_p.plate_color) - 1] = '\0';
+
+                    dst_p.plate_type = src_p.plate_type;
+                }
+            } else {
+                dst_v.plates = nullptr;
+            }
+        }
+
+        out.count = static_cast<uint32_t>(n_vehicles);
+        out.data = out_vehicles;
+        out.internal_token = arena;
+    }
+
+    /** @brief 释放单块连续 Arena 内存 */
+    static void release(void* token) {
+        if (token) {
+            std::free(token);
+        }
+    }
+};
+
+/**
  * @brief 插件 C ABI 桥接模板类
  *
  * 将开发者编写的 C++ 插件类（PluginClass）与结果序列化适配器（ResultAdapter）
@@ -795,5 +938,17 @@ extern "C" ZHULONG_PLUGIN_EXPORT zhulong_status_t zhulong_plugin_get_api( \
 #define ZHULONG_REGISTER_PERSON_STRUCTURE_PLUGIN(PluginClass, PluginNameStr, PluginVersionStr) \
     ZHULONG_REGISTER_PLUGIN_WITH_ADAPTER(PluginClass, PluginNameStr, PluginVersionStr, \
                                          ::zhulong::detail::PersonStructureResultAdapter)
+
+/**
+ * @brief 注册结构化机动车/车牌插件
+ *
+ * 约定 PluginClass 类必须提供以下公共成员方法：
+ *   - zhulong_status_t init(const std::string& config_json);
+ *   - zhulong::Session create_session(uint32_t worker_id);
+ *   - std::vector<zhulong::VehicleItem> detect_vehicles(zhulong::Session& session, const zhulong::Image& image);
+ */
+#define ZHULONG_REGISTER_VEHICLE_STRUCTURE_PLUGIN(PluginClass, PluginNameStr, PluginVersionStr) \
+    ZHULONG_REGISTER_PLUGIN_WITH_ADAPTER(PluginClass, PluginNameStr, PluginVersionStr, \
+                                         ::zhulong::detail::VehicleStructureResultAdapter)
 
 #endif /* ZHULONG_ALGO_HPP */

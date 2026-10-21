@@ -62,6 +62,10 @@ enum {
 #define ZHULONG_PERSON_NAME_MAX_LEN  64 /**< 底库人员显示姓名最大字节长度（含末尾 '\\0'） */
 #define ZHULONG_FACE_ID_MAX_LEN      64 /**< 底库单张人脸照片唯一标识符最大字节长度（含末尾 '\\0'） */
 #define ZHULONG_FACE_LANDMARK_COUNT  5  /**< 人脸关键点标准数量（5 点：左眼、右眼、鼻尖、左嘴角、右嘴角） */
+#define ZHULONG_PLATE_NUMBER_MAX_LEN 32 /**< 车牌号码最大字节长度（含末尾 '\\0'） */
+#define ZHULONG_PLATE_COLOR_MAX_LEN  16 /**< 车牌颜色最大字节长度（含末尾 '\\0'） */
+#define ZHULONG_VEHICLE_TYPE_MAX_LEN 32 /**< 车型描述最大字节长度（含末尾 '\\0'） */
+#define ZHULONG_VEHICLE_COLOR_MAX_LEN 16 /**< 车身颜色最大字节长度（含末尾 '\\0'） */
 
 /**
  * @brief 推理结果载荷类型枚举
@@ -69,11 +73,12 @@ enum {
 typedef int32_t zhulong_result_type_t;
 
 enum {
-    ZHULONG_RESULT_TYPE_UNKNOWN          = 0,  /**< 未知结果类型 */
-    ZHULONG_RESULT_TYPE_DETECTION        = 1,  /**< 通用目标检测结果（载荷为 zhulong_bbox[]） */
-    ZHULONG_RESULT_TYPE_CLASSIFICATION   = 2,  /**< 图像分类结果（载荷为 zhulong_classification_item[]） */
-    ZHULONG_RESULT_TYPE_PERSON_STRUCTURE = 3,  /**< 结构化人体/人脸结果（载荷为 zhulong_person_item[]） */
-    ZHULONG_RESULT_TYPE_CUSTOM           = 99  /**< 自定义私有载荷类型 */
+    ZHULONG_RESULT_TYPE_UNKNOWN           = 0,  /**< 未知结果类型 */
+    ZHULONG_RESULT_TYPE_DETECTION         = 1,  /**< 通用目标检测结果（载荷为 zhulong_bbox[]） */
+    ZHULONG_RESULT_TYPE_CLASSIFICATION    = 2,  /**< 图像分类结果（载荷为 zhulong_classification_item[]） */
+    ZHULONG_RESULT_TYPE_PERSON_STRUCTURE  = 3,  /**< 结构化人体/人脸结果（载荷为 zhulong_person_item[]） */
+    ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE = 4,  /**< 结构化机动车/车牌结果（载荷为 zhulong_vehicle_item[]） */
+    ZHULONG_RESULT_TYPE_CUSTOM            = 99  /**< 自定义私有载荷类型 */
 };
 
 /**
@@ -175,6 +180,47 @@ typedef struct zhulong_person_item {
     uint32_t face_count;                             /* faces 数组元素数 */
     const zhulong_face_item* faces;                  /* 指向人脸数组 (只读，指向同一 Arena) */
 } zhulong_person_item;
+
+/**
+ * @brief 车牌子目标项
+ *
+ * 坐标系与内存约定：
+ *   - box 必须为严格归一化坐标 [x1, y1, x2, y2] ∈ [0.0, 1.0]；
+ *   - plate_number 为 UTF-8 车牌号码（以 '\\0' 结尾）；
+ *   - plate_color 为车牌颜色字符串（以 '\\0' 结尾）；
+ *   - plate_type 为车牌分类数字标识（0=单层, 1=双层, 2=新能源...）；
+ *   - 结构体总尺寸固定为 72 字节，满足 8 字节自然对齐。
+ */
+typedef struct zhulong_plate_item {
+    float   box[4];                                     /* [x1, y1, x2, y2] 严格归一化坐标 [0.0, 1.0] */
+    float   score;                                      /* 车牌识别置信度 (0.0 ~ 1.0) */
+    char    plate_number[ZHULONG_PLATE_NUMBER_MAX_LEN]; /* 车牌号码 (UTF-8, 以 '\0' 结尾) */
+    char    plate_color[ZHULONG_PLATE_COLOR_MAX_LEN];   /* 车牌颜色 (以 '\0' 结尾) */
+    int32_t plate_type;                                 /* 车牌类型编号 (0=单层, 1=双层, 2=新能源...) */
+} zhulong_plate_item;
+
+/**
+ * @brief 结构化机动车项 (1 辆机动车挂载 0~N 块车牌)
+ *
+ * 纯车牌场景退化语义约定：
+ *   - 纯车牌检测场景下，每个检出的车牌映射为一个 zhulong_vehicle_item；
+ *   - track_id 填 0；
+ *   - vehicle_box 填 plate_box 的归一化坐标；
+ *   - vehicle_score 填 plate_score 的置信度；
+ *   - vehicle_type 填 "unknown"；
+ *   - vehicle_color 填 ""；
+ *   - plate_count 填 1，plates 指向对应的车牌项。
+ * 结构体总尺寸固定为 88 字节，满足 8 字节自然对齐。
+ */
+typedef struct zhulong_vehicle_item {
+    int64_t  track_id;                                  /* 车辆跟踪 ID (纯车牌场景填 0) */
+    float    vehicle_box[4];                            /* [x1, y1, x2, y2] 严格归一化 (纯车牌场景同 plate_box) */
+    float    vehicle_score;                             /* 车辆检出置信度 (纯车牌场景同 plate_score) */
+    char     vehicle_type[ZHULONG_VEHICLE_TYPE_MAX_LEN];   /* 车型 (以 '\0' 结尾) */
+    char     vehicle_color[ZHULONG_VEHICLE_COLOR_MAX_LEN]; /* 车身颜色 (以 '\0' 结尾) */
+    uint32_t plate_count;                               /* plates 数组元素数 */
+    const zhulong_plate_item* plates;                   /* 指向车牌数组 (只读，指向同一 Arena) */
+} zhulong_vehicle_item;
 
 /**
  * @brief 通用结构化感知推理结果

@@ -61,9 +61,10 @@ const (
 
 // Task type enum
 const (
-	TaskTypeDetection       = "detection"
-	TaskTypeClassification  = "classification"
-	TaskTypePersonStructure = "person_structure"
+	TaskTypeDetection        = "detection"
+	TaskTypeClassification   = "classification"
+	TaskTypePersonStructure  = "person_structure"
+	TaskTypeVehicleStructure = "vehicle_structure"
 )
 
 // Category enum

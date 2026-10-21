@@ -71,6 +71,8 @@ func (s *Service) ProcessInferenceResult(ctx context.Context, res aitypes.Infere
 	switch res.TaskType {
 	case aitypes.TaskTypePersonStructure:
 		return s.processPersonStructure(ctx, res, algo, capturedAt, dateStr)
+	case aitypes.TaskTypeVehicleStructure:
+		return s.processVehicleStructure(ctx, res, algo, capturedAt, dateStr)
 	case aitypes.TaskTypeDetection:
 		return s.processDetection(ctx, res, algo, capturedAt, dateStr)
 	case aitypes.TaskTypeClassification:
@@ -215,6 +217,89 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 	if len(captures) > 0 {
 		if err := s.store.CreateCaptureBatch(ctx, captures); err != nil {
 			s.logger.Error("failed to batch insert captures", zap.Error(err))
+		}
+	}
+
+	return nil
+}
+
+func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.InferenceResult, algo AlgorithmSnapshot, capturedAt time.Time, dateStr string) error {
+	var captures []*Capture
+
+	for _, v := range res.Vehicles {
+		var capKey string
+		firstPlateNo := ""
+		if len(v.Plates) > 0 && v.Plates[0].PlateNumber != "" {
+			firstPlateNo = v.Plates[0].PlateNumber
+			capKey = fmt.Sprintf("cap:%s:vehicle:plate:%s", res.CameraID, firstPlateNo)
+		} else if v.TrackID > 0 {
+			capKey = fmt.Sprintf("cap:%s:vehicle:track:%d", res.CameraID, v.TrackID)
+		} else {
+			capKey = fmt.Sprintf("cap:%s:vehicle:box:%.3f:%.3f", res.CameraID, v.VehicleBox[0], v.VehicleBox[1])
+		}
+
+		if s.cooldown.Allow(capKey, capturedAt) {
+			capID := idutil.New()
+			boxBytes, _ := json.Marshal(v.VehicleBox)
+
+			attrs := make(map[string]any)
+			for k, val := range v.Attributes {
+				attrs[k] = val
+			}
+			if v.VehicleType != "" {
+				attrs["vehicle_type"] = v.VehicleType
+			}
+			if v.VehicleColor != "" {
+				attrs["vehicle_color"] = v.VehicleColor
+			}
+			if len(v.Plates) > 0 {
+				attrs["plates"] = v.Plates
+				if firstPlateNo != "" {
+					attrs["plate_number"] = firstPlateNo
+				}
+				if v.Plates[0].PlateColor != "" {
+					attrs["plate_color"] = v.Plates[0].PlateColor
+				}
+				attrs["plate_type"] = v.Plates[0].PlateType
+			}
+
+			attrsJSON := marshalMapOrDefault(attrs)
+
+			fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, capID)
+			cropPath := fmt.Sprintf("snapshots/%s/%s/%s_crop.jpg", res.CameraID, dateStr, capID)
+
+			cap := &Capture{
+				ID:               capID,
+				CameraID:         res.CameraID,
+				AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
+				AlgorithmName:    algo.Name,
+				AlgorithmVersion: algo.Version,
+				TargetType:       "vehicle",
+				TrackID:          v.TrackID,
+				Score:            v.VehicleScore,
+				BoxJSON:          string(boxBytes),
+				CropPath:         cropPath,
+				ImagePath:        fullPath,
+				AttributesJSON:   attrsJSON,
+				PTS:              res.PTS,
+				CapturedAt:       capturedAt,
+				CreatedAt:        time.Now().UTC(),
+			}
+			captures = append(captures, cap)
+
+			snapshotBoxes := []engine.SnapshotBox{
+				{v.VehicleBox[0], v.VehicleBox[1], v.VehicleBox[2], v.VehicleBox[3]},
+			}
+			s.enqueueSnapshot(res.CameraID, capturedAt, snapshotBoxes, []snapshotOutput{
+				{boxIndex: -1, relPath: fullPath},
+				{boxIndex: 0, relPath: cropPath},
+			})
+		}
+	}
+
+	if len(captures) > 0 {
+		if err := s.store.CreateCaptureBatch(ctx, captures); err != nil {
+			s.logger.Error("failed to batch insert vehicle captures", zap.Error(err))
 		}
 	}
 

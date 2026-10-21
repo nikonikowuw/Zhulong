@@ -96,4 +96,42 @@ describe('ai-result schema and parser', () => {
     expect(face.person_name).toBe('')
     expect(face.landmarks).toEqual([])
   })
+
+  it('parses valid vehicle_structure event with mounted plate', () => {
+    const raw = {
+      camera_id: 'cam_03',
+      algorithm_id: 'algo_plate_rec',
+      pts: 987654,
+      task_type: 'vehicle_structure',
+      cost_ms: 15,
+      vehicles: [
+        {
+          track_id: 12,
+          vehicle_box: [0.1, 0.2, 0.7, 0.8],
+          vehicle_score: 0.95,
+          vehicle_type: 'car',
+          vehicle_color: 'white',
+          plates: [
+            {
+              box: [0.3, 0.6, 0.5, 0.7],
+              score: 0.99,
+              plate_number: '粤B88888',
+              plate_color: '蓝色',
+              plate_type: 0,
+            },
+          ],
+        },
+      ],
+    }
+
+    const parsed = parseAIResultEvent(raw)
+    expect(parsed).not.toBeNull()
+    expect(parsed?.task_type).toBe('vehicle_structure')
+    expect(parsed?.vehicles).toHaveLength(1)
+    const veh = parsed!.vehicles[0]
+    expect(veh.vehicle_type).toBe('car')
+    expect(veh.plates).toHaveLength(1)
+    expect(veh.plates[0].plate_number).toBe('粤B88888')
+    expect(veh.plates[0].plate_color).toBe('蓝色')
+  })
 })

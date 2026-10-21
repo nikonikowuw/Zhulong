@@ -154,7 +154,7 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifes
 
 	// Validate task_type
 	switch manifest.TaskType {
-	case TaskTypeDetection, TaskTypeClassification, TaskTypePersonStructure:
+	case TaskTypeDetection, TaskTypeClassification, TaskTypePersonStructure, TaskTypeVehicleStructure:
 	default:
 		return nil, "", "", fmt.Errorf("%w: invalid task_type %q", ErrInvalidManifest, manifest.TaskType)
 	}
@@ -255,6 +255,10 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, pluginPath, sampl
 	case TaskTypePersonStructure:
 		if report.ResultType != int(ResultTypePersonStructure) {
 			return fmt.Errorf("%w: expected result_type %d for %s, got %d", ErrResultTypeMismatch, ResultTypePersonStructure, taskType, report.ResultType)
+		}
+	case TaskTypeVehicleStructure:
+		if report.ResultType != int(ResultTypeVehicleStructure) {
+			return fmt.Errorf("%w: expected result_type %d for %s, got %d", ErrResultTypeMismatch, ResultTypeVehicleStructure, taskType, report.ResultType)
 		}
 	}
 

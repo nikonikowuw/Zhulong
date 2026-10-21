@@ -215,6 +215,7 @@ describe('AlgorithmsTable', () => {
     ['detection', '目标检测', 'blue'],
     ['classification', '图像分类', 'violet'],
     ['person_structure', '结构化人脸', 'emerald'],
+    ['vehicle_structure', '机动车结构化', 'fuchsia'],
   ]
 
   it.each(TASK_TYPE_HUE)(

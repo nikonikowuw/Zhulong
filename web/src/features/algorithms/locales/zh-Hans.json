@@ -43,6 +43,7 @@
   "taskDetection": "目标检测",
   "taskClassification": "图像分类",
   "taskPersonStructure": "结构化人脸",
+  "taskVehicleStructure": "机动车结构化",
   "statusActive": "已激活",
   "statusRunning": "运行中",
   "statusStarting": "启动中",

@@ -43,6 +43,7 @@
   "taskDetection": "目標檢測",
   "taskClassification": "影像分類",
   "taskPersonStructure": "結構化人臉",
+  "taskVehicleStructure": "機動車結構化",
   "statusActive": "已啟動",
   "statusRunning": "運行中",
   "statusStarting": "啟動中",

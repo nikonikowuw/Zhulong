@@ -43,6 +43,7 @@
   "taskDetection": "Detection",
   "taskClassification": "Classification",
   "taskPersonStructure": "Face & Structure",
+  "taskVehicleStructure": "Vehicle & Plate",
   "statusActive": "Active",
   "statusRunning": "Running",
   "statusStarting": "Starting",
