@@ -3,7 +3,7 @@
   "name": "logging-safety-and-frontend",
   "title": "日志安全与前端可观测：统一脱敏器、日志注入防护、前端统一 logger",
   "description": "日志安全与前端可观测：统一脱敏器、日志注入防护、前端统一 logger",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": "backend",

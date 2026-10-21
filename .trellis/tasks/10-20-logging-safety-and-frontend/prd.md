@@ -16,7 +16,7 @@
 
 | 位置 | 现状 |
 | --- | --- |
-| `internal/camera/uri.go:171` | `SanitizeURL` 存在，但**全仓库只被调用 1 次**（`camera/handler.go:387`） |
+| `internal/camera/uri.go:171` | `SanitizeURL` 存在，全仓库只被调用 1 次（`camera/handler.go:387`）—— 该调用点是**审计详情**，不是日志（见下方更正） |
 | `internal/algorunner/process.go:292` | `zap.Strings("broker_socks", ...)` 未脱敏 |
 | 全局 | 无统一脱敏入口，无日志注入防护，无敏感字段黑名单 |
 | `web/src/lib/handle-server-error.ts:7` | `if (import.meta.env.DEV) console.log(error)` —— **生产环境静默丢弃** |
@@ -26,6 +26,25 @@
 | 后端 | 无客户端日志接收端点，无速率限制中间件（`apperr.KindRateLimited` 已存在但仅 SSE 用过） |
 
 全仓库前端生产代码只有 3 处 `console.*`，其中 2 处在 DEV-only 分支里。
+
+### 勘察更正（2026-10-21，阶段一实施后复核）
+
+原表把「`SanitizeURL` 只被调用 1 次」当成**日志漏用脱敏**的证据，这个推断是**反的**。实测：
+
+```bash
+grep -rn 'zap\.[A-Za-z]*([^)]*\(rtsp\|RTSP\|url\|Url\|URL\)' internal --include="*.go" | grep -v _test
+# → 空
+```
+
+- 生产日志调用点里**没有任何 RTSP URL**，因此不存在「裸 URL 被写进日志」的泄漏面。
+- `SanitizeURL` 唯一的调用者是 `camera/handler.go:387` 的 `streamAuditDetail` → `audithttp.TagDetail`，
+  产出**存进审计表**并经前端 `AuditDetailDialog`（「查看完整请求上下文」）展示给运维。
+- 因此该处**必须保留人可读的 host/path**；换成 `logsafe.URL` 会把
+  `rtsp://admin:xxxxx@192.168.1.10:554/stream` 降为 `rtsp://[REDACTED_URL]`，运维无法判断是哪台摄像机出事。
+- 这同时违反本 PRD Scope 的排除项「审计日志（`internal/audit`）的行为变更」。
+
+结论：`logsafe.URL` 用于**日志**侧（含未来调用点与 `SanitizingCore` 的 `url`/`rtspUrl` 敏感键兜底），
+不改动审计详情。AC-C4 / AC-C5 已按此收窄。
 
 ## Scope
 
@@ -108,8 +127,8 @@
 - [ ] **AC-C1 helpers**: valid URL hides userinfo and query/fragment; malformed/oversized URL returns a fixed redaction marker. Path/IP/ErrorSummary cover empty, malformed, long and control-character inputs.
 - [ ] **AC-C2 Core contract**: tests cover message, `Write` fields, `With` fields, `ErrorType`, complex fields, newline and caller-slice immutability; unsupported arbitrary application marshalers/content are omitted.
 - [ ] **AC-C3 performance report**: benchmarks record plain-vs-sanitizing Core latency and allocations on supported target(s); there is no fixed `<1µs` or zero-allocation threshold.
-- [ ] **AC-C4 call-site safety**: no raw RTSP URL, broker socket path, arbitrary error text or exception stack is written; call-site inventory records dispositions.
-- [ ] **AC-C5 leakage regression**: valid RTSP credentials and malformed credential-shaped input never appear in collected logs; test exact logger output, not grep alone.
+- [ ] **AC-C4 call-site safety** (narrowed 2026-10-21): no raw broker socket path, arbitrary error text or exception stack is written by any log call site; there is no raw RTSP URL log call site to sanitize, and the single `SanitizeURL` consumer is human-readable *audit* detail that must stay readable. Call-site inventory records dispositions, including the RTSP-vs-audit split.
+- [ ] **AC-C5 leakage regression**: valid RTSP credentials and malformed credential-shaped input never appear in collected **logs**; assert exact logger output (observer), not grep alone. Audit detail is explicitly out of scope here — it intentionally keeps a partially-readable URL with the password masked.
 - [ ] **AC-C6 frontend upload**: production browser error emits a stable allowlisted event within 5s; exception text/stack/query are absent.
 - [ ] **AC-C7 frontend limits**: 10000 generated errors stay within buffer, dedup, entry/encoded-byte batch limits and backend budgets; drop counts are observable.
 - [ ] **AC-C8 endpoint limits**: per-IP and process-wide over-budget requests return 429; response does not echo body; no audit row is created; no raw IP/body is logged.
@@ -138,10 +157,24 @@
 | Last browser batch loss | Missing final events | Use sendBeacon/keepalive; document browser crash/kill/queue overflow as a limit |
 | A/B logging call-site overlap | Merge conflicts | C follows A and B; update call-site inventory against the final implementation |
 
-## Open Decision
+## Resolved Decision (2026-10-21)
 
 C 的 client-log route 是 public/unauthenticated。仓库当前 `Config` 与 `config.toml` 未定义 process-wide request、byte 或 in-flight budget；现有需求仅确定 per-IP `60 requests/minute`、burst `10`、body `64 KiB`，而 aggregate budget 要从 deployment profile 注入并在发布前签核。
 
-**需要产品/部署决策**：确认 process-wide request/minute、byte/minute 与 max in-flight 数值，以及这些值是仅作为可配置 provisional defaults（部署签核仍 pending），还是必须由部署 profile 显式提供且缺失时拒绝启动。
+**决策（已由产品/部署确认，方案 A）**：process-wide budget 采用**可配置 provisional defaults**，缺失时以默认值启动，不拒绝启动。默认值：
 
-实现建议（未选定）：可配置 `120 requests/minute`、`2 MiB/minute`、最多 `8` 个并发 handler；这样覆盖单一控制台约每 5 秒上报一次的正常批次，同时对多 IP churn 施加总量上限。此建议不是部署签核，换成更低阈值会增加客户端事件丢弃，换成更高阈值会扩大 public endpoint 的资源上限。
+| 预算 | provisional 默认 | 语义 |
+| --- | --- | --- |
+| process-wide requests | `120 / minute` | 覆盖单一控制台约每 5 秒一次上报的批次，并对多 IP churn 施加总量上限 |
+| process-wide bytes | `2 MiB / minute` | 按请求体实际字节计，与 `64 KiB` body 上限独立 |
+| max in-flight handlers | `8` | 并发执行中的 client-log handler 上限 |
+
+配置落在新增 `[clientlog]` 节（`process_requests_per_minute` / `process_bytes_per_minute` / `max_in_flight`），全部零值即回落上述默认。
+
+⚠️ **这些默认值未经部署签核。** 它们只表示「有界」而非「符合某部署画像的性能/带宽结论」。因此：
+
+- 父任务 AC-14 的数值预算签核**保持 open**，不因本决策关闭；
+- 不接受将 provisional 默认值表述为已签核预算；
+- 部署画像复核后调整数值不构成实现变更，只需改 `config.toml` 与本文档。
+
+放弃的方案：要求配置显式提供且缺失即拒绝启动（更安全，但会使既有 `config.toml` 升级即 breaking）；仅做 per-IP 限制、总量延后（会使 AC-C8 的 process-wide 429 无法验收）。

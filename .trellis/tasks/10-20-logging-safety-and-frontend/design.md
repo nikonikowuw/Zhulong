@@ -58,7 +58,26 @@ A regression test must assert that `Check` routes `Write` through the wrapper, n
 
 ### 2.3 Assembly
 
-`newLogger` wraps the configured core with `SanitizingCore` after optional sampling. The safety wrapper has no production disable switch.
+`newLogger` builds the encoder core, wraps it with `SanitizingCore`, and then applies sampling **on the outside** of the wrapper:
+
+```txt
+logger → sampler (optional) → SanitizingCore → zapcore.NewCore(encoder, sink, level)
+```
+
+The safety wrapper has no production disable switch.
+
+⚠️ **Corrected 2026-10-21.** An earlier revision of this section said the wrapper is applied *after* optional sampling, i.e. wrapper outermost. That ordering is **wrong and silently breaks sampling**: a sampler makes its decision inside its own `Check`, and §2.2 requires `SanitizingCore.Check` to attach only itself (never delegate to the inner core's `Check`). With the wrapper outermost, the sampler's `Check` is therefore never consulted, so sampling appears configured while doing nothing.
+
+Measured with 1000 identical `Info` calls and `First=1, Thereafter=100`:
+
+| Ordering | Records written | Outcome |
+| --- | --- | --- |
+| wrapper outermost (sampler inside) | 1000 | sampling silently dead |
+| sampler outermost (wrapper inside) | 10 | sampling works, sanitization still applied |
+
+Sanitization is unaffected by this ordering because it happens in `Write`/`With`, which the sampler calls through to. An entry dropped by the sampler is never sanitized, but it is also never written anywhere, so no unsanitized data escapes.
+
+Regression coverage: `internal/app` `TestNewLoggerSamplingStillApplies` and `TestNewLoggerSamplingIsExplicitOptIn`. Reverting to the literal old wording fails both.
 
 ---
 
@@ -130,8 +149,11 @@ Content-Type: application/json
 | Request body | 64 KiB | 413 |
 | Per-IP rate | 60 requests/minute, burst 10 | 429 |
 | Per-IP key map | 1024 entries, LRU | bounded |
-| Process-wide request/byte budget | deployment-profile settings | 429 |
+| Process-wide request/byte budget | provisional defaults: 120 req/minute, 2 MiB/minute | 429 |
+| Max in-flight client-log handlers | provisional default: 8 | 429 (reject, do not queue) |
 | Client-reported drop count | integer in `[0, 2^32-1]` | 422 |
+
+**Provisional defaults (decided 2026-10-21, PRD "Resolved Decision")**: the three process-wide budgets live in a new `[clientlog]` config section (`process_requests_per_minute`, `process_bytes_per_minute`, `max_in_flight`). Zero value falls back to the defaults above; a missing section does **not** abort startup. These defaults are bounded-by-construction but are **not** deployment-signed: they are not a bandwidth or capacity conclusion for any target board, and parent AC-14 stays open. Changing the numbers after deployment-profile review is a config-only change, not an implementation change.
 
 ### 4.3 Route
 
