@@ -478,6 +478,9 @@ UnixSocketClient::~UnixSocketClient() {
 bool UnixSocketClient::connect(const std::string& socket_path, std::string* error_msg) {
     disconnect();
     socket_path_ = socket_path;
+    // ⚠️ 新连接必须重置挂断标记：disconnect() 只关 fd，不碰 peer_closed_（它由接收路径
+    //    写入），因此这里显式复位，否则同一对象重连后 is_connected() 会永远为假。
+    peer_closed_.store(false);
 
     int sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (sock < 0) {
@@ -549,9 +552,23 @@ bool UnixSocketClient::recv_msg_with_fd(IpcHeader& out_header, std::vector<uint8
         pfd.events = POLLIN;
         int ret = poll(&pfd, 1, timeout_ms);
         if (ret == 0) return false;
-        if (ret < 0) return false;
-        if (pfd.revents & (POLLERR | POLLNVAL)) return false;
-        if ((pfd.revents & POLLHUP) && !(pfd.revents & POLLIN)) return false;
+        if (ret < 0) {
+            // poll 失败（非 EINTR）同样是不可恢复的连接错误，必须标脏，
+            // 否则上层 `continue` 会退化成忙等。
+            if (errno != EINTR) mark_peer_closed();
+            return false;
+        }
+        if (pfd.revents & (POLLERR | POLLNVAL)) {
+            mark_peer_closed();
+            return false;
+        }
+        // ⚠️ 宿主进程被 kill -9 / OOM / 崩溃时，内核只会置 POLLHUP（含 POLLIN 仍可能置位），
+        //    这里必须无条件标脏：只读走 recv 会拿到 EOF，但上层的 is_connected() 若仍为真，
+        //    runner 主循环就会 `continue` 成 100% CPU 忙等孤儿进程。
+        if (pfd.revents & POLLHUP) {
+            mark_peer_closed();
+            return false;
+        }
     }
 
     struct msghdr msg{};
@@ -576,6 +593,8 @@ bool UnixSocketClient::recv_msg_with_fd(IpcHeader& out_header, std::vector<uint8
         break;
     }
     if (n <= 0) {
+        // n == 0 是对端正常关闭（EOF）；n < 0 且非 EINTR 是硬错误。两者都意味着连接已不可用。
+        mark_peer_closed();
         return false;
     }
 
@@ -608,12 +627,16 @@ bool UnixSocketClient::recv_msg_with_fd(IpcHeader& out_header, std::vector<uint8
         ReadStatus st = read_all(sock, ptr, rem, 1000);
         if (st != ReadStatus::SUCCESS) {
             if (out_fd >= 0) { ::close(out_fd); out_fd = -1; }
+            // 半包脱节/EOF/超时均不可恢复，防止上层忙等。
+            mark_peer_closed();
             return false;
         }
     }
 
     if (out_header.magic != IPC_MAGIC || out_header.payload_size > MAX_IPC_PAYLOAD_SIZE) {
         if (out_fd >= 0) { ::close(out_fd); out_fd = -1; }
+        // 协议失步是本端/对端流的契约破裂，重试不可能自愈。
+        mark_peer_closed();
         return false;
     }
 
@@ -622,6 +645,7 @@ bool UnixSocketClient::recv_msg_with_fd(IpcHeader& out_header, std::vector<uint8
         ReadStatus pst = read_all(sock, out_payload.data(), out_header.payload_size, 1000);
         if (pst != ReadStatus::SUCCESS) {
             if (out_fd >= 0) { ::close(out_fd); out_fd = -1; }
+            mark_peer_closed();
             return false;
         }
     }

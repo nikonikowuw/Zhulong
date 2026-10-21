@@ -4,6 +4,7 @@
  */
 
 #include "frame_broker.hpp"
+#include "broker_resource_lock.hpp"
 #include <cstring>
 #include <iostream>
 
@@ -55,6 +56,21 @@ bool FrameBroker::start(uint64_t stream_id, const std::string& base_dir,
 
     shm_name_ = "/zhulong_shm_" + std::to_string(stream_id_);
     socket_path_ = base_dir + "/zhulong_broker_" + std::to_string(stream_id_) + ".sock";
+
+    // 0. 与宿主启动清扫互斥
+    //
+    // 宿主（internal/algorunner）在每次启动时清扫上个进程进程遗留的 shm 段与 broker socket。
+    // 它判断「无人使用」的依据是 /proc，而本函数创建的两类资源都存在「文件已存在、但尚不可用」
+    // 的窗口：shm_open 之后才 mmap，bind 之后才 listen。落在窗口里的清扫会删掉活 broker 的资源。
+    // 因此创建侧必须阻塞持有同一批目录锁（Go 侧 resource_lock_linux.go 为非阻塞）。
+    //
+    // ⚠️ 锁必须覆盖 shm 初始化与 socket bind/listen 全程，提前释放等于没有锁。
+    std::string lock_error;
+    auto resource_lock = BrokerResourceLock::acquire({base_dir, "/dev/shm"}, &lock_error);
+    if (!resource_lock) {
+        if (error_msg) *error_msg = "broker resource lock failed: " + lock_error;
+        return false;
+    }
 
     // 1. 初始化共享内存池 (主写模式)
     if (!shm_pool_.init(shm_name_, ShmMode::CREATE_READ_WRITE, options_.slot_count, options_.slot_size, error_msg)) {

@@ -287,6 +287,7 @@ add_library(ZhulongAlgoIpc STATIC
     src/platform/dmabuf/dmabuf_allocator.cpp
     src/algorithm/ipc/shm_pool.cpp
     src/algorithm/ipc/unix_socket.cpp
+    src/algorithm/ipc/broker_resource_lock.cpp
     src/algorithm/ipc/frame_broker.cpp
 )
 target_compile_features(ZhulongAlgoIpc PUBLIC cxx_std_17)

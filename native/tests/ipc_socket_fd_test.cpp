@@ -112,6 +112,83 @@ int main() {
     server.stop();
     ::unlink(sock_path.c_str());
 
+    // 7. ⚠️ 对端消失必须让 is_connected() 变假（孤儿忙等回归门禁）
+    //
+    // 宿主被 kill -9 / OOM 杀掉时不会发 MSG_DISCONNECT，内核只把客户端 socket 置
+    // POLLHUP。旧实现在 poll 里把 HUP 当「本次收包失败」返回，但 fd_ 依旧 >= 0，
+    // is_connected() 恒真，runner 主循环于是 `continue` 成 100% CPU 忙等孤儿
+    // （实测 20s 内烧满 19.98s CPU）。这里直接锁死该行为。
+    {
+        std::string crash_sock = "/tmp/zhulong_test_peer_crash.sock";
+        ::unlink(crash_sock.c_str());
+
+        UnixSocketServer owner;
+        assert(owner.start(crash_sock));
+
+        UnixSocketClient orphan;
+        assert(orphan.connect(crash_sock));
+        for (int i = 0; i < 50 && owner.client_count() == 0; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        assert(owner.client_count() == 1);
+        assert(orphan.is_connected());
+
+        // 模拟宿主崩溃：去掉 MSG_DISCONNECT 的优雅路径，直接销毁服务端套接字。
+        owner.stop();
+
+        // 首次 recv 必须在有界时间内返回并锁死连接（不可退化成忙等）。
+        bool closed = false;
+        for (int attempt = 0; attempt < 20; ++attempt) {
+            IpcHeader h{};
+            std::vector<uint8_t> p;
+            int fd = -1;
+            if (!orphan.recv_msg_with_fd(h, p, fd, 200) && !orphan.is_connected()) {
+                closed = true;
+                break;
+            }
+        }
+        assert(closed);
+        assert(!orphan.is_connected());
+
+        // 幂等性：重复探测不得复活连接。
+        assert(!orphan.is_connected());
+        orphan.disconnect();
+        ::unlink(crash_sock.c_str());
+    }
+
+    // 8. 空闲超时绝不能误判为掉线（否则正常无帧期就会自杀）
+    {
+        std::string idle_sock = "/tmp/zhulong_test_peer_idle.sock";
+        ::unlink(idle_sock.c_str());
+
+        UnixSocketServer quiet;
+        assert(quiet.start(idle_sock));
+        UnixSocketClient waiting;
+        assert(waiting.connect(idle_sock));
+        for (int i = 0; i < 50 && quiet.client_count() == 0; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+
+        // 对端仍在，只是没有帧：连续多轮超时后必须依旧 is_connected()。
+        for (int round = 0; round < 5; ++round) {
+            IpcHeader h{};
+            std::vector<uint8_t> p;
+            int fd = -1;
+            assert(!waiting.recv_msg_with_fd(h, p, fd, 50));
+            assert(waiting.is_connected());
+        }
+
+        // 重连语义：断开后重新 connect 必须复位挂断标记，否则同一对象永久假死。
+        waiting.disconnect();
+        assert(!waiting.is_connected());
+        assert(waiting.connect(idle_sock));
+        assert(waiting.is_connected());
+
+        waiting.disconnect();
+        quiet.stop();
+        ::unlink(idle_sock.c_str());
+    }
+
     std::cout << "[Test] ZhulongIpcSocketFdTests PASSED" << std::endl;
     return 0;
 }

@@ -2,8 +2,10 @@
 #include "../src/algorithm/ipc/shm_pool.hpp"
 #include "../src/algorithm/ipc/unix_socket.hpp"
 #include "../src/algorithm/ipc/frame_broker.hpp"
+#include "../src/algorithm/ipc/broker_resource_lock.hpp"
 #include <Zhulong/frame.hpp>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <cassert>
@@ -1343,6 +1345,59 @@ void test_frame_broker_malformed_ack_keeps_quota() {
     std::cout << "[PASS] test_frame_broker_malformed_ack_keeps_quota" << std::endl;
 }
 
+// =============================================================================
+// Test: broker 创建必须等待宿主资源目录锁
+//
+// 宿主启动清扫（internal/algorunner）与 FrameBroker::start 共享 broker 资源目录锁。
+// 清扫判断「无人使用」依赖 /proc，而 shm_open→mmap 与 bind→listen 之间存在窗口，
+// 此时资源已可见却尚不可用。本测试持有锁并断言：创建侧在此期间不得发布任何资源，
+// 释放锁后才完成创建。没有这把锁，清扫会删掉正被创建的 broker 资源。
+// =============================================================================
+void test_frame_broker_start_waits_for_resource_lock() {
+    const uint64_t stream_id = 1200;
+    std::string base_dir = "/tmp/zhulong_lock_test_" + std::to_string(::getpid());
+    ::mkdir(base_dir.c_str(), 0755);
+    const std::string sock = base_dir + "/zhulong_broker_" + std::to_string(stream_id) + ".sock";
+
+    std::string err;
+    auto held = BrokerResourceLock::acquire({base_dir, "/dev/shm"}, &err);
+    assert(held);
+    assert(held->size() >= 1); // 去重后至少一把锁（base_dir；/dev/shm 可能与其同源）
+
+    std::atomic<bool> finished{false};
+    std::atomic<bool> started{false};
+    FrameBroker broker;
+    std::thread creator([&]() {
+        BrokerOptions opt;
+        opt.slot_count = 2;
+        started.store(broker.start(stream_id, base_dir, opt, &err));
+        finished.store(true);
+    });
+
+    // 锁在创建侧手里等待时，任何资源都不得出现。
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    bool released_early = finished.load();
+    if (!released_early) {
+        struct stat st{};
+        released_early = (::stat(sock.c_str(), &st) == 0);
+    }
+
+    held.reset(); // 释放锁：创建侧应当立刻完成
+    creator.join();
+
+    assert(!released_early);
+    assert(finished.load());
+    assert(started.load());
+    struct stat st{};
+    assert(::stat(sock.c_str(), &st) == 0);
+    assert(broker.is_running());
+
+    broker.stop();
+    ::unlink(sock.c_str());
+    ::rmdir(base_dir.c_str());
+    std::cout << "[PASS] test_frame_broker_start_waits_for_resource_lock" << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     const char* runner_bin = (argc > 1) ? argv[1] : nullptr;
     const char* plugin_so = (argc > 2) ? argv[2] : nullptr;
@@ -1362,6 +1417,7 @@ int main(int argc, char* argv[]) {
     test_frame_broker_malformed_ack_keeps_quota();
     test_frame_broker_result_egress();
     test_frame_broker_control_broadcast();
+    test_frame_broker_start_waits_for_resource_lock();
     if (runner_bin && plugin_so) {
         test_runner_subprocess_e2e(runner_bin, plugin_so);
         test_runner_multi_broker_e2e(runner_bin, plugin_so);

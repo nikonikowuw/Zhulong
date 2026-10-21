@@ -593,6 +593,11 @@ namespace zhulong
             bool last_had_targets = false;
             bool process_failure_reported = false;
             ShardedSyncContext sync_ctx;
+            // ⚠️ 退出门禁：recv_msg_with_fd 返回 false 有两种含义——「500ms 内没等到帧」
+            //    （可重试）与「连接已不可恢复」（EOF / POLLHUP / 流脱节）。后者由客户端内部
+            //    置脏，is_connected() 随即变假。必须在检测到失联时立刻 break，绝不可无条件
+            //    `continue` 重试：宿主被 kill -9 / OOM 杀掉时，那会让 runner 退化成永久
+            //    100% 占用一个 CPU 核的孤儿进程（实测 20s 内烧满 19.98s CPU）。
             while (!stop_all.load(std::memory_order_relaxed) && (max_frames < 0 || frames_processed < max_frames))
             {
                 ipc::IpcHeader hdr{};
@@ -601,7 +606,13 @@ namespace zhulong
                 if (!client.recv_msg_with_fd(hdr, payload, received_fd, 500))
                 {
                     if (!client.is_connected())
+                    {
+                        // 宿主进程已消失（kill -9 / OOM / 崩溃）或流已脱节：干净收摊退出，
+                        // 释放插件 worker/task 与共享内存映射，不留孤儿。
+                        std::cerr << "{\"status\":\"info\",\"stage\":\"broker_disconnected\",\"index\":"
+                                  << idx << ",\"frames_processed\":" << frames_processed << "}" << std::endl;
                         break;
+                    }
                     continue;
                 }
 

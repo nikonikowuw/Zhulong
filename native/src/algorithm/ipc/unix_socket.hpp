@@ -201,12 +201,27 @@ public:
     bool recv_msg(IpcHeader& out_header, std::vector<uint8_t>& out_payload, int timeout_ms = -1);
 
     /**
-     * @brief 检查客户端是否处于已连接状态
+     * @brief 检查连接是否仍然可用
+     *
+     * ⚠️ 不能只看 fd_ >= 0：对端进程消失（kill -9 / 崩溃）后内核只会让 poll 返回
+     *    POLLHUP，本地 fd 依然有效，因此本方法还必须叠加 peer_closed_。
+     *    runner 主循环正是靠它跳出 `continue` 忙等，否则孤儿进程会 100% 占满一个 CPU 核。
      */
-    [[nodiscard]] bool is_connected() const noexcept { return fd_.load() >= 0; }
+    [[nodiscard]] bool is_connected() const noexcept {
+        return fd_.load() >= 0 && !peer_closed_.load();
+    }
 
 private:
-    std::atomic<int> fd_{-1};      /**< 套接字文件描述符 */
+    /**
+     * @brief 登记「对端已确定消失」：此后 is_connected() 恒假，调用方必须退出循环
+     *
+     * 仅在 EOF / POLLHUP / POLLERR / 半包脱节这些不可恢复路径上调用；
+     * 空闲 poll 超时绝不能标脏，否则一次正常的无帧等待就会误判掉线。
+     */
+    void mark_peer_closed() noexcept { peer_closed_.store(true); }
+
+    std::atomic<int> fd_{-1};              /**< 套接字文件描述符 */
+    std::atomic<bool> peer_closed_{false}; /**< 对端是否已确定消失（EOF/HUP/脱节） */
     std::string socket_path_;      /**< 连接的服务端路径 */
     std::mutex send_mutex_;        /**< 发送锁，保证客户端并发写安全 */
     std::mutex recv_mutex_;        /**< 接收锁，保证整包接收期间互斥 */
