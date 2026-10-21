@@ -44,7 +44,7 @@ export function PersonAvatarCell({ person }: { person: Person }) {
         type='button'
         onClick={handlePreview}
         title={person.name}
-        className='group relative flex shrink-0 cursor-pointer rounded-full focus:outline-hidden focus:ring-2 focus:ring-primary focus:ring-offset-2'
+        className='group relative flex shrink-0 cursor-pointer rounded-full focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:outline-hidden'
       >
         <Avatar className='h-9 w-9 rounded-full border border-border shadow-xs transition-transform duration-200 group-hover:scale-110'>
           <AvatarImage

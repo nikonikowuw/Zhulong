@@ -58,7 +58,9 @@ describe('PersonsTable', () => {
     )
 
     await expect.element(getByRole('table')).toBeInTheDocument()
-    await expect.element(getByRole('checkbox', { name: /Select all/i })).toBeInTheDocument()
+    await expect
+      .element(getByRole('checkbox', { name: /Select all/i }))
+      .toBeInTheDocument()
     await expect.element(getByText(/人脸照片/i)).toBeInTheDocument()
     await expect.element(getByText('Alice Cooper')).toBeInTheDocument()
     await expect.element(getByText('EMP-001')).toBeInTheDocument()
@@ -155,5 +157,35 @@ describe('PersonsTable', () => {
 
     await expect.element(getByText('Bob Unbound')).toBeInTheDocument()
     await expect.element(getByText('-')).toBeInTheDocument()
+  })
+
+  it('switches between table and grid views when clicking view toggle', async () => {
+    const queryClient = new QueryClient()
+
+    const { getByRole, getByTestId } = await render(
+      <QueryClientProvider client={queryClient}>
+        <PersonsProvider>
+          <PersonsTable
+            data={mockPersons}
+            total={1}
+            isLoading={false}
+            isError={false}
+            onRetry={vi.fn()}
+            search={{}}
+            navigate={vi.fn()}
+          />
+        </PersonsProvider>
+      </QueryClientProvider>
+    )
+
+    // 默认是表格模式
+    await expect.element(getByRole('table')).toBeInTheDocument()
+
+    // 切换到画廊视图
+    const gridBtn = getByRole('button', { name: /画廊视图/i })
+    await gridBtn.click()
+
+    // 此时出现卡片视图
+    await expect.element(getByTestId('person-card')).toBeInTheDocument()
   })
 })

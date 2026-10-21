@@ -1,4 +1,8 @@
 {
+  "views": {
+    "table": "表格檢視",
+    "grid": "畫廊檢視"
+  },
   "title": "人員管理",
   "description": "維護系統人員檔案庫，管理人臉底庫相片以支援視覺演算法特徵比對。",
   "table": {
@@ -63,15 +67,24 @@
     "removeSelected": "移除選取的相片",
     "uploadAndEnroll": "上傳並錄人人臉",
     "faceCountUnit": "{{count}} 張",
+    "initialFace": "首張人臉底庫（選填）",
+    "initialFaceTip": "拖曳或點擊上傳，建檔後將自動提取特徵並設為主人臉",
+    "batchUpload": "批次上傳人臉",
+    "batchUploadTip": "支援一次選取多張人臉相片批次錄入",
+    "uploadingCount": "正在錄入第 {{current}}/{{total}} 張人臉...",
     "primaryFace": "主人臉",
     "createdAt": "建立時間"
   },
   "status": {
     "emptyFaces": "暫無人臉底庫相片",
-    "emptyFacesDesc": "請在下方區域選擇或拖曳圖片進行錄入。"
+    "emptyFacesDesc": "請在下方區域選擇或拖曳圖片進行錄入。",
+    "unregistered": "未錄入底庫",
+    "enrolledCount": "{{count}} 張底庫"
   },
   "notifications": {
     "createSuccess": "人員「{{name}}」建立成功",
+    "createSuccessWithFace": "人員「{{name}}」建立成功，首張人臉已同步建模錄入！",
+    "createSuccessFaceFailed": "人員「{{name}}」已建立，但首張人臉錄入失敗：{{error}}。可在詳情中重新上傳。",
     "updateSuccess": "人員「{{name}}」資料已更新",
     "deleteSuccess": "人員檔案已刪除",
     "batchDeleteSuccess": "成功刪除選取的 {{count}} 位人員檔案",
@@ -86,6 +99,14 @@
     "fileTooLarge": "圖片大小超過 10MB 限制",
     "invalidFileType": "只允許上傳 JPG、PNG 或 WebP 格式圖片",
     "faceIdRequired": "請指定人臉 ID"
+  },
+  "sheet": {
+    "detailTitle": "人員檔案與人臉底庫",
+    "detailDesc": "檢視人員詳細資訊，管理一人多照人臉底庫及特徵建模狀態。",
+    "personInfo": "基本資訊",
+    "faceGallery": "底庫畫廊",
+    "copyId": "複製工號",
+    "idCopied": "工號已複製到剪貼簿"
   },
   "imagePreview": {
     "zoomOut": "縮小 (-)",

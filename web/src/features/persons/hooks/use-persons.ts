@@ -4,10 +4,7 @@ import {
   useQueryClient,
   type UseQueryResult,
 } from '@tanstack/react-query'
-import {
-  personsApi,
-  type GetPersonsParams,
-} from '../api/persons-api'
+import { personsApi, type GetPersonsParams } from '../api/persons-api'
 import {
   type CreatePersonDto,
   type FaceListResponse,
@@ -140,13 +137,8 @@ export function useDeleteFace() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({
-      personId,
-      faceId,
-    }: {
-      personId: string
-      faceId: string
-    }) => personsApi.deleteFace(personId, faceId),
+    mutationFn: ({ personId, faceId }: { personId: string; faceId: string }) =>
+      personsApi.deleteFace(personId, faceId),
     onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({
         queryKey: [...PERSONS_QUERY_KEY, variables.personId, 'faces'],
@@ -163,13 +155,8 @@ export function useSetPrimaryFace() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({
-      personId,
-      faceId,
-    }: {
-      personId: string
-      faceId: string
-    }) => personsApi.setPrimaryFace(personId, faceId),
+    mutationFn: ({ personId, faceId }: { personId: string; faceId: string }) =>
+      personsApi.setPrimaryFace(personId, faceId),
     onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
       void queryClient.invalidateQueries({

@@ -14,6 +14,10 @@ vi.mock('../hooks/use-persons', () => ({
     mutateAsync: vi.fn(),
     isPending: false,
   }),
+  useAddFace: () => ({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  }),
 }))
 
 function TestComponent() {
@@ -60,7 +64,7 @@ describe('PersonsActionDialog', () => {
   it('renders create dialog with name and personId fields when opened', async () => {
     const queryClient = new QueryClient()
 
-    const { getByRole, getByPlaceholder } = await render(
+    const { getByRole, getByPlaceholder, getByText } = await render(
       <QueryClientProvider client={queryClient}>
         <PersonsProvider>
           <TestComponent />
@@ -82,6 +86,11 @@ describe('PersonsActionDialog', () => {
     await expect
       .element(getByRole('button', { name: /确定/i }))
       .toBeInTheDocument()
+
+    // 包含首张人脸上传拖拽区提示
+    await expect
+      .element(getByText(/点击选择或将人脸照片拖拽至此处/i))
+      .toBeInTheDocument()
   })
 
   it('displays localized validation error when submitting empty name', async () => {
@@ -101,9 +110,7 @@ describe('PersonsActionDialog', () => {
     const submitBtn = getByRole('button', { name: /确定/i })
     await submitBtn.click()
 
-    await expect
-      .element(getByText(/请输入人员姓名/i))
-      .toBeInTheDocument()
+    await expect.element(getByText(/请输入人员姓名/i)).toBeInTheDocument()
   })
 
   it('enables personId input when editing a person without assigned personId', async () => {
@@ -138,7 +145,11 @@ describe('PersonsActionDialog', () => {
       <QueryClientProvider client={queryClient}>
         <PersonsProvider>
           <EditTestComponent
-            person={{ id: 'p_bound', name: '已有工号员工', personId: 'EMP-001' }}
+            person={{
+              id: 'p_bound',
+              name: '已有工号员工',
+              personId: 'EMP-001',
+            }}
           />
         </PersonsProvider>
       </QueryClientProvider>

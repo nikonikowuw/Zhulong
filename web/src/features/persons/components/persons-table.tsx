@@ -11,7 +11,13 @@ import {
   getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { AlertCircle, RefreshCw, Users as UsersIcon } from 'lucide-react'
+import {
+  AlertCircle,
+  LayoutGrid,
+  List,
+  RefreshCw,
+  Users as UsersIcon,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
 import { Button } from '@/components/ui/button'
@@ -28,6 +34,7 @@ import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
 import { type Person } from '../data/schema'
 import { personsColumns as columns } from './persons-columns'
 import { PersonsDataTableBulkActions } from './persons-data-table-bulk-actions'
+import { PersonsGrid } from './persons-grid'
 import { usePersonsContext } from './persons-provider'
 
 interface PersonsTableProps {
@@ -55,6 +62,20 @@ export function PersonsTable({
   const [rowSelection, setRowSelection] = useState({})
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
   const [sorting, setSorting] = useState<SortingState>([])
+  const [viewMode, setViewMode] = useState<'table' | 'grid'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('persons-view-mode')
+      if (saved === 'grid' || saved === 'table') return saved
+    }
+    return 'table'
+  })
+
+  const handleViewModeChange = (mode: 'table' | 'grid') => {
+    setViewMode(mode)
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('persons-view-mode', mode)
+    }
+  }
 
   const {
     columnFilters,
@@ -110,147 +131,186 @@ export function PersonsTable({
 
   return (
     <div className='flex flex-1 flex-col gap-4'>
-      <DataTableToolbar
-        table={table}
-        searchPlaceholder={t('table.searchPlaceholder')}
-        columnLabels={{
-          name: t('table.columns.name'),
-          personId: t('table.columns.personId'),
-          faces: t('table.columns.faceCount'),
-          createdAt: t('table.columns.createdAt'),
-        }}
-      />
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <div className='flex-1'>
+          <DataTableToolbar
+            table={table}
+            searchPlaceholder={t('table.searchPlaceholder')}
+            columnLabels={{
+              name: t('table.columns.name'),
+              personId: t('table.columns.personId'),
+              faces: t('table.columns.faceCount'),
+              createdAt: t('table.columns.createdAt'),
+            }}
+          />
+        </div>
+        <div className='flex items-center gap-1 rounded-lg border border-border bg-muted/40 p-0.5'>
+          <Button
+            type='button'
+            variant={viewMode === 'table' ? 'secondary' : 'ghost'}
+            size='sm'
+            onClick={() => handleViewModeChange('table')}
+            className='h-7 gap-1.5 px-2 text-xs'
+            title={t('views.table')}
+          >
+            <List className='h-3.5 w-3.5' />
+            <span className='hidden sm:inline'>{t('views.table')}</span>
+          </Button>
+          <Button
+            type='button'
+            variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
+            size='sm'
+            onClick={() => handleViewModeChange('grid')}
+            className='h-7 gap-1.5 px-2 text-xs'
+            title={t('views.grid')}
+          >
+            <LayoutGrid className='h-3.5 w-3.5' />
+            <span className='hidden sm:inline'>{t('views.grid')}</span>
+          </Button>
+        </div>
+      </div>
 
-      <div className='rounded-md border border-border bg-card'>
-        <Table className='border-separate border-spacing-0'>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHead
-                    key={header.id}
-                    colSpan={header.colSpan}
-                    className={header.column.columnDef.meta?.className}
-                  >
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(
-                          header.column.columnDef.header,
-                          header.getContext()
-                        )}
-                  </TableHead>
-                ))}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              Array.from({ length: 5 }).map((_, index) => (
-                <TableRow key={`skeleton-${index}`}>
-                  <TableCell>
-                    <Skeleton className='h-4 w-28' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-24' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-6 w-16 rounded-full' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-24' />
-                  </TableCell>
-                  <TableCell className='sticky end-0 right-0 z-20 w-12 bg-card text-end'>
-                    <Skeleton className='h-8 w-8 rounded-md' />
-                  </TableCell>
-                </TableRow>
-              ))
-            ) : isError ? (
-              <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className='h-48 text-center'
-                >
-                  <div className='flex flex-col items-center justify-center gap-2 text-destructive'>
-                    <AlertCircle className='h-8 w-8' />
-                    <span className='font-medium'>{t('table.loadFailed')}</span>
-                    <Button
-                      variant='outline'
-                      size='sm'
-                      onClick={onRetry}
-                      className='mt-2'
+      {viewMode === 'table' ? (
+        <div className='rounded-md border border-border bg-card'>
+          <Table className='border-separate border-spacing-0'>
+            <TableHeader>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHead
+                      key={header.id}
+                      colSpan={header.colSpan}
+                      className={header.column.columnDef.meta?.className}
                     >
-                      <RefreshCw className='me-1 h-4 w-4' />
-                      {t('actions.retry')}
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ) : table.getRowModel().rows?.length ? (
-              table.getRowModel().rows.map((row) => (
-                <TableRow
-                  key={row.original.id}
-                  data-state={row.getIsSelected() && 'selected'}
-                  className='group'
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell
-                      key={cell.id}
-                      className={cell.column.columnDef.meta?.className}
-                    >
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext()
-                      )}
-                    </TableCell>
+                      {header.isPlaceholder
+                        ? null
+                        : flexRender(
+                            header.column.columnDef.header,
+                            header.getContext()
+                          )}
+                    </TableHead>
                   ))}
                 </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell
-                  colSpan={columns.length}
-                  className='h-64 text-center'
-                >
-                  <div className='flex flex-col items-center justify-center gap-2'>
-                    <div className='flex h-12 w-12 items-center justify-center rounded-full bg-muted'>
-                      <UsersIcon className='h-6 w-6 text-muted-foreground' />
-                    </div>
-                    <span className='text-base font-semibold text-foreground'>
-                      {isFiltered ? t('table.filterEmpty') : t('table.empty')}
-                    </span>
-                    <p className='max-w-sm text-sm text-muted-foreground'>
-                      {isFiltered
-                        ? t('table.filterEmptyDesc')
-                        : t('table.emptyDesc')}
-                    </p>
-                    {isFiltered ? (
+              ))}
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                Array.from({ length: 5 }).map((_, index) => (
+                  <TableRow key={`skeleton-${index}`}>
+                    <TableCell>
+                      <Skeleton className='h-4 w-28' />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className='h-4 w-24' />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className='h-6 w-16 rounded-full' />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className='h-4 w-24' />
+                    </TableCell>
+                    <TableCell className='sticky end-0 right-0 z-20 w-12 bg-card text-end'>
+                      <Skeleton className='h-8 w-8 rounded-md' />
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : isError ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={columns.length}
+                    className='h-48 text-center'
+                  >
+                    <div className='flex flex-col items-center justify-center gap-2 text-destructive'>
+                      <AlertCircle className='h-8 w-8' />
+                      <span className='font-medium'>
+                        {t('table.loadFailed')}
+                      </span>
                       <Button
                         variant='outline'
                         size='sm'
-                        onClick={() => {
-                          table.resetGlobalFilter()
-                          table.resetColumnFilters()
-                        }}
+                        onClick={onRetry}
                         className='mt-2'
                       >
-                        {t('table.resetFilter')}
+                        <RefreshCw className='me-1 h-4 w-4' />
+                        {t('actions.retry')}
                       </Button>
-                    ) : (
-                      <Button
-                        size='sm'
-                        onClick={() => setOpen('create')}
-                        className='mt-2'
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : table.getRowModel().rows?.length ? (
+                table.getRowModel().rows.map((row) => (
+                  <TableRow
+                    key={row.original.id}
+                    data-state={row.getIsSelected() && 'selected'}
+                    className='group'
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell
+                        key={cell.id}
+                        className={cell.column.columnDef.meta?.className}
                       >
-                        {t('actions.create')}
-                      </Button>
-                    )}
-                  </div>
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext()
+                        )}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell
+                    colSpan={columns.length}
+                    className='h-64 text-center'
+                  >
+                    <div className='flex flex-col items-center justify-center gap-2'>
+                      <div className='flex h-12 w-12 items-center justify-center rounded-full bg-muted'>
+                        <UsersIcon className='h-6 w-6 text-muted-foreground' />
+                      </div>
+                      <span className='text-base font-semibold text-foreground'>
+                        {isFiltered ? t('table.filterEmpty') : t('table.empty')}
+                      </span>
+                      <p className='max-w-sm text-sm text-muted-foreground'>
+                        {isFiltered
+                          ? t('table.filterEmptyDesc')
+                          : t('table.emptyDesc')}
+                      </p>
+                      {isFiltered ? (
+                        <Button
+                          variant='outline'
+                          size='sm'
+                          onClick={() => {
+                            table.resetGlobalFilter()
+                            table.resetColumnFilters()
+                          }}
+                          className='mt-2'
+                        >
+                          {t('table.resetFilter')}
+                        </Button>
+                      ) : (
+                        <Button
+                          size='sm'
+                          onClick={() => setOpen('create')}
+                          className='mt-2'
+                        >
+                          {t('actions.create')}
+                        </Button>
+                      )}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      ) : (
+        <PersonsGrid
+          table={table}
+          isLoading={isLoading}
+          isError={isError}
+          onRetry={onRetry}
+        />
+      )}
 
       <DataTablePagination table={table} />
 

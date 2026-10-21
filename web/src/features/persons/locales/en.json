@@ -1,4 +1,8 @@
 {
+  "views": {
+    "table": "Table View",
+    "grid": "Gallery View"
+  },
   "title": "Personnel Management",
   "description": "Maintain personnel profiles and enroll face templates for visual inference algorithms.",
   "table": {
@@ -63,15 +67,24 @@
     "removeSelected": "Remove Selected Photo",
     "uploadAndEnroll": "Upload and Enroll",
     "faceCountUnit": "{{count}} photo(s)",
+    "initialFace": "Initial Face Template (Optional)",
+    "initialFaceTip": "Drag or click to upload; automatically modeled as primary face upon creation",
+    "batchUpload": "Batch Upload Faces",
+    "batchUploadTip": "Select multiple face photos to enroll in batch",
+    "uploadingCount": "Enrolling face {{current}}/{{total}}...",
     "primaryFace": "Primary Face",
     "createdAt": "Enrolled At"
   },
   "status": {
     "emptyFaces": "No face templates enrolled",
-    "emptyFacesDesc": "Select or drag photos below to enroll faces."
+    "emptyFacesDesc": "Select or drag photos below to enroll faces.",
+    "unregistered": "Not Enrolled",
+    "enrolledCount": "{{count}} Face(s)"
   },
   "notifications": {
     "createSuccess": "Person '{{name}}' created successfully",
+    "createSuccessWithFace": "Person '{{name}}' created and initial face enrolled successfully!",
+    "createSuccessFaceFailed": "Person '{{name}}' created, but initial face enrollment failed: {{error}}.",
     "updateSuccess": "Person '{{name}}' updated successfully",
     "deleteSuccess": "Person profile deleted",
     "batchDeleteSuccess": "Successfully deleted {{count}} personnel",
@@ -86,6 +99,14 @@
     "fileTooLarge": "File exceeds the 10MB limit",
     "invalidFileType": "Only JPG, PNG or WebP images are allowed",
     "faceIdRequired": "Please specify a face ID"
+  },
+  "sheet": {
+    "detailTitle": "Personnel Profile & Face Gallery",
+    "detailDesc": "View personnel details and manage multi-angle face templates.",
+    "personInfo": "Basic Info",
+    "faceGallery": "Face Gallery",
+    "copyId": "Copy ID",
+    "idCopied": "Personnel ID copied to clipboard"
   },
   "imagePreview": {
     "zoomOut": "Zoom out (-)",

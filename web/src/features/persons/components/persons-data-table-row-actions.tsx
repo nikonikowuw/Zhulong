@@ -1,5 +1,10 @@
 import { type Row } from '@tanstack/react-table'
-import { Image as ImageIcon, MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
+import {
+  Image as ImageIcon,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import {

@@ -35,9 +35,15 @@ describe('personsApi', () => {
       pageSize: 10,
     }
 
-    const spy = vi.spyOn(apiClient, 'get').mockResolvedValueOnce(mockResponse(mockData))
+    const spy = vi
+      .spyOn(apiClient, 'get')
+      .mockResolvedValueOnce(mockResponse(mockData))
 
-    const res = await personsApi.getPersons({ page: 2, pageSize: 20, search: 'Alice' })
+    const res = await personsApi.getPersons({
+      page: 2,
+      pageSize: 20,
+      search: 'Alice',
+    })
     expect(res).toEqual(mockData)
     expect(spy).toHaveBeenCalledWith('/persons', {
       params: { page: 2, pageSize: 20, search: 'Alice' },
@@ -54,7 +60,9 @@ describe('personsApi', () => {
       faces: [],
     }
 
-    const spy = vi.spyOn(apiClient, 'get').mockResolvedValueOnce(mockResponse(mockPerson))
+    const spy = vi
+      .spyOn(apiClient, 'get')
+      .mockResolvedValueOnce(mockResponse(mockPerson))
 
     const res = await personsApi.getPerson('p-01')
     expect(res).toEqual(mockPerson)
@@ -72,7 +80,9 @@ describe('personsApi', () => {
       faces: [],
     }
 
-    const spy = vi.spyOn(apiClient, 'post').mockResolvedValueOnce(mockResponse(created, 201))
+    const spy = vi
+      .spyOn(apiClient, 'post')
+      .mockResolvedValueOnce(mockResponse(created, 201))
 
     const res = await personsApi.createPerson(payload)
     expect(res).toEqual(created)
@@ -90,7 +100,9 @@ describe('personsApi', () => {
       faces: [],
     }
 
-    const spy = vi.spyOn(apiClient, 'put').mockResolvedValueOnce(mockResponse(updated))
+    const spy = vi
+      .spyOn(apiClient, 'put')
+      .mockResolvedValueOnce(mockResponse(updated))
 
     const res = await personsApi.updatePerson('p-02', payload)
     expect(res).toEqual(updated)
@@ -142,7 +154,9 @@ describe('personsApi', () => {
       createdAt: '2026-10-14T00:00:00Z',
     }
 
-    const spy = vi.spyOn(apiClient, 'post').mockResolvedValueOnce(mockResponse(createdFace, 201))
+    const spy = vi
+      .spyOn(apiClient, 'post')
+      .mockResolvedValueOnce(mockResponse(createdFace, 201))
 
     const res = await personsApi.addFace('p-01', file)
     expect(res).toEqual(createdFace)
@@ -178,10 +192,14 @@ describe('personsApi', () => {
       faces: [],
     }
 
-    const spy = vi.spyOn(apiClient, 'put').mockResolvedValueOnce(mockResponse(updated))
+    const spy = vi
+      .spyOn(apiClient, 'put')
+      .mockResolvedValueOnce(mockResponse(updated))
 
     const res = await personsApi.setPrimaryFace('p-01', 'f-02')
     expect(res).toEqual(updated)
-    expect(spy).toHaveBeenCalledWith('/persons/p-01/primary-face', { faceId: 'f-02' })
+    expect(spy).toHaveBeenCalledWith('/persons/p-01/primary-face', {
+      faceId: 'f-02',
+    })
   })
 })

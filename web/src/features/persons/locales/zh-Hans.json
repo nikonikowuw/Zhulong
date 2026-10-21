@@ -1,4 +1,8 @@
 {
+  "views": {
+    "table": "表格视图",
+    "grid": "画廊视图"
+  },
   "title": "人员管理",
   "description": "维护系统人员档案库，管理人脸底库照片以支持视觉算法特征比对。",
   "table": {
@@ -63,15 +67,24 @@
     "removeSelected": "移除选中的照片",
     "uploadAndEnroll": "上传并录入人脸",
     "faceCountUnit": "{{count}} 张",
+    "initialFace": "首张人脸底库（可选）",
+    "initialFaceTip": "拖拽或点击上传，建档后将自动提取特征并设为主图",
+    "batchUpload": "批量上传人脸",
+    "batchUploadTip": "支持一次选中多张人脸照片批量录入",
+    "uploadingCount": "正在录入第 {{current}}/{{total}} 张人脸...",
     "primaryFace": "主人脸",
     "createdAt": "录入时间"
   },
   "status": {
     "emptyFaces": "暂无人脸底库照片",
-    "emptyFacesDesc": "请在下方区域选择或拖拽图片进行录入。"
+    "emptyFacesDesc": "请在下方区域选择或拖拽图片进行录入。",
+    "unregistered": "未录入底库",
+    "enrolledCount": "{{count}} 张底库"
   },
   "notifications": {
     "createSuccess": "人员「{{name}}」创建成功",
+    "createSuccessWithFace": "人员「{{name}}」创建成功，首张人脸已同步建模录入！",
+    "createSuccessFaceFailed": "人员「{{name}}」已创建，但首张人脸录入失败：{{error}}。可在详情中重新上传。",
     "updateSuccess": "人员「{{name}}」资料已更新",
     "deleteSuccess": "人员档案已删除",
     "batchDeleteSuccess": "成功删除选中的 {{count}} 位人员档案",
@@ -86,6 +99,14 @@
     "fileTooLarge": "图片大小超过 10MB 限制",
     "invalidFileType": "只允许上传 JPG、PNG 或 WebP 格式图片",
     "faceIdRequired": "请指定人脸 ID"
+  },
+  "sheet": {
+    "detailTitle": "人员档案与人脸底库",
+    "detailDesc": "查看人员详细信息，管理一人多照人脸底库及特征建模状态。",
+    "personInfo": "基本信息",
+    "faceGallery": "底库画廊",
+    "copyId": "复制工号",
+    "idCopied": "工号已复制到剪贴板"
   },
   "imagePreview": {
     "zoomOut": "缩小 (-)",

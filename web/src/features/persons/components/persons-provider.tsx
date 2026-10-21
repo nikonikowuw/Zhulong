@@ -23,7 +23,9 @@ const PersonsContext = React.createContext<PersonsContextType | null>(null)
 export function PersonsProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useDialogState<PersonsDialogType>(null)
   const [currentRow, setCurrentRow] = useState<Person | null>(null)
-  const [previewImage, setPreviewImage] = useState<PreviewImageInfo | null>(null)
+  const [previewImage, setPreviewImage] = useState<PreviewImageInfo | null>(
+    null
+  )
 
   return (
     <PersonsContext

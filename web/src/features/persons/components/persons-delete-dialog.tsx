@@ -42,7 +42,8 @@ export function PersonsDeleteDialog() {
             {t('dialogs.deleteDesc', { name: currentRow?.name || '' })}
           </p>
           <div className='rounded-md bg-muted p-2.5 font-mono text-xs text-muted-foreground'>
-            ID: {currentRow?.id} | {t('fields.personId')}: {currentRow?.personId}
+            ID: {currentRow?.id} | {t('fields.personId')}:{' '}
+            {currentRow?.personId}
           </div>
         </div>
       }

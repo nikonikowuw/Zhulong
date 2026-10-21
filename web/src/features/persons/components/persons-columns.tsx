@@ -26,7 +26,9 @@ export const personsColumns: ColumnDef<Person>[] = [
       />
     ),
     meta: {
-      className: cn('inset-s-0 z-10 rounded-tl-[inherit] max-md:sticky w-10 text-center'),
+      className: cn(
+        'inset-s-0 z-10 w-10 rounded-tl-[inherit] text-center max-md:sticky'
+      ),
     },
     cell: ({ row }) => (
       <Checkbox

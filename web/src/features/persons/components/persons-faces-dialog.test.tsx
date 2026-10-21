@@ -83,14 +83,10 @@ describe('PersonsFacesDialog', () => {
       .element(getByRole('heading', { name: /人脸底库管理 - Alice Cooper/i }))
       .toBeInTheDocument()
 
-    await expect
-      .element(getByText('alice_01.jpg'))
-      .toBeInTheDocument()
+    await expect.element(getByText('alice_01.jpg')).toBeInTheDocument()
 
     // 默认首张人脸标记为主图
-    await expect
-      .element(getByText(/主人脸/i))
-      .toBeInTheDocument()
+    await expect.element(getByText(/主人脸/i)).toBeInTheDocument()
 
     await expect
       .element(getByText(/点击选择或将人脸照片拖拽至此处/i))
