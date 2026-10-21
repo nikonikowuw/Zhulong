@@ -52,6 +52,20 @@ public:
     /** @brief 当前持有的锁对象数量（去重后的目录数），用于诊断与测试 */
     [[nodiscard]] size_t size() const noexcept { return fds_.size(); }
 
+    /**
+     * @brief broker 资源目录集合（创建侧与测试的唯一来源）
+     *
+     * 创建侧（FrameBroker::start）与宿主清扫（Go: internal/algorunner）必须锁定同一批对象，
+     * 否则互斥不成立。这里集中定义避免调用点各写一份字面量而漂移。
+     *
+     * shm 目录只在存在可枚举挂载点的平台上纳入：Linux 的 shm_open 名字空间是 /dev/shm，
+     * macOS 在内存里且 Go 侧清扫为 no-op（orphan_other.go），锁一个不存在的目录只会让
+     * stat 失败、把 broker 创建整体打成 ERR_IO。
+     *
+     * @param base_dir broker socket 所在目录
+     */
+    static std::vector<std::string> resource_dirs(const std::string& base_dir);
+
 private:
     BrokerResourceLock() = default;
 

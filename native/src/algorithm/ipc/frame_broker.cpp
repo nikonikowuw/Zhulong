@@ -65,8 +65,12 @@ bool FrameBroker::start(uint64_t stream_id, const std::string& base_dir,
     // 因此创建侧必须阻塞持有同一批目录锁（Go 侧 resource_lock_linux.go 为非阻塞）。
     //
     // ⚠️ 锁必须覆盖 shm 初始化与 socket bind/listen 全程，提前释放等于没有锁。
+    //
+    // 目录集合由 BrokerResourceLock::resource_dirs 集中定义：两侧必须锁同一批对象，
+    // 而 shm 目录只在存在可枚举挂载点的平台上纳入。
     std::string lock_error;
-    auto resource_lock = BrokerResourceLock::acquire({base_dir, "/dev/shm"}, &lock_error);
+    auto resource_lock = BrokerResourceLock::acquire(
+        BrokerResourceLock::resource_dirs(base_dir), &lock_error);
     if (!resource_lock) {
         if (error_msg) *error_msg = "broker resource lock failed: " + lock_error;
         return false;

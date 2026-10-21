@@ -1360,9 +1360,10 @@ void test_frame_broker_start_waits_for_resource_lock() {
     const std::string sock = base_dir + "/zhulong_broker_" + std::to_string(stream_id) + ".sock";
 
     std::string err;
-    auto held = BrokerResourceLock::acquire({base_dir, "/dev/shm"}, &err);
+    // 与创建侧同源：shm 目录只在存在可枚举挂载点的平台上纳入锁集。
+    auto held = BrokerResourceLock::acquire(BrokerResourceLock::resource_dirs(base_dir), &err);
     assert(held);
-    assert(held->size() >= 1); // 去重后至少一把锁（base_dir；/dev/shm 可能与其同源）
+    assert(held->size() >= 1); // 去重后至少一把锁（base_dir；/dev/shm 可能与其同源或不存在）
 
     std::atomic<bool> finished{false};
     std::atomic<bool> started{false};

@@ -313,6 +313,19 @@ void UnixSocketServer::listen_loop() {
         tv.tv_usec = 50000;
         setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
+        // 发送缓冲必须容得下一条最大报文。
+        //
+        // 协议单包上限是 MAX_IPC_PAYLOAD_SIZE (64KB)，加上 IpcHeader 略高于 64KB。
+        // Linux 的 AF_UNIX 默认 SO_SNDBUF 很大（约 200KB），这条设置是冗余的；
+        // 而 macOS 默认只有 8KB，于是「单次 sendmsg 发一条满负载报文」在无并发
+        // 读者的情况下必然撞上上面的 50ms 超时并返回 false —— 把一条协议内允许
+        // 的报文误判成发送失败。缓冲按上限的两倍预留，给头部与内核记账留余量。
+        //
+        // 注意：这里只调大上限，不改变 50ms 超时语义 —— 慢消费者依旧被拒绝，
+        // 只是「一条合法报文」不再被误杀。
+        int sndbuf = static_cast<int>(MAX_IPC_PAYLOAD_SIZE) * 2;
+        setsockopt(client_fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+
         uint32_t cid = next_client_id_.fetch_add(1);
         auto channel = std::make_shared<ClientChannel>();
         channel->fd = client_fd;

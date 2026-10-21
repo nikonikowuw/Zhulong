@@ -494,6 +494,18 @@ extern "C" void Zhulong_probe_result_destroy(Zhulong_probe_result_h result) {
  * 并发契约：extract() 全程持有 mu_，保证 Reaper 与 shutdown() 不会在推理执行途中
  * dlclose 掉正在运行的代码段（Use-After-Unload）。
  */
+/**
+ * @brief 动态库文件扩展名（含前导点）
+ *
+ * dlopen 需要真实文件名，而各平台共享库后缀不同：Linux 用 .so，macOS 用 .dylib。
+ * 候选路径表必须由它拼装，硬编码 .so 会让加载器在 macOS 上永远 miss。
+ */
+#if defined(__APPLE__)
+constexpr const char* kPluginExt = ".dylib";
+#else
+constexpr const char* kPluginExt = ".so";
+#endif
+
 class FacePluginLoader {
 public:
     using ExtractFn = zhulong_status_t (*)(const uint8_t*, int32_t, int32_t, int32_t, int32_t, float*, uint32_t*);
@@ -578,25 +590,37 @@ private:
             return {std::string(env_path)};
         }
 
+        // 插件文件名随平台变化：Linux 是 .so，macOS 是 .dylib。硬编码 .so 会让
+        // 加载器在 macOS 上永远找不到插件，extract 一路返回 UNSUPPORTED，
+        // 把「模型/插件不可用」伪装成正常路径。
+        const std::vector<std::string> file_names = {
+            "libFaceRecognitionPlugin" + std::string(kPluginExt),
+            "FaceRecognitionPlugin" + std::string(kPluginExt),
+            std::string("plugin") + kPluginExt,
+        };
+
         std::vector<std::string> candidates;
         const char* env_dir = std::getenv("ZHULONG_PLUGIN_DIR");
         if (env_dir && env_dir[0] != '\0') {
-            candidates.push_back(std::string(env_dir) + "/libFaceRecognitionPlugin.so");
-            candidates.push_back(std::string(env_dir) + "/FaceRecognitionPlugin.so");
-            candidates.push_back(std::string(env_dir) + "/plugin.so");
+            for (const auto& name : file_names) {
+                candidates.push_back(std::string(env_dir) + "/" + name);
+            }
         }
 
-        const std::vector<std::string> rel_candidates = {
-            "build/native/host/libFaceRecognitionPlugin.so",
-            "build/native/host/FaceRecognitionPlugin.so",
-            "packages/face_recognition/targets/cpu/plugin.so",
-            "libFaceRecognitionPlugin.so",
-            "./libFaceRecognitionPlugin.so",
-            "../build/native/host/libFaceRecognitionPlugin.so",
-            "../../build/native/host/libFaceRecognitionPlugin.so",
-            "../../../build/native/host/libFaceRecognitionPlugin.so",
+        const std::vector<std::string> rel_dirs = {
+            "build/native/host",
+            "packages/face_recognition/targets/cpu",
+            "",
+            ".",
+            "../build/native/host",
+            "../../build/native/host",
+            "../../../build/native/host",
         };
-        candidates.insert(candidates.end(), rel_candidates.begin(), rel_candidates.end());
+        for (const auto& dir : rel_dirs) {
+            for (const auto& name : file_names) {
+                candidates.push_back(dir.empty() ? name : dir + "/" + name);
+            }
+        }
 
         Dl_info info;
         if (dladdr(reinterpret_cast<void*>(&Zhulong_engine_extract_face_feature), &info) && info.dli_fname) {
@@ -604,9 +628,10 @@ private:
             auto pos = so_path.find_last_of('/');
             if (pos != std::string::npos) {
                 std::string dir = so_path.substr(0, pos);
-                candidates.push_back(dir + "/libFaceRecognitionPlugin.so");
-                candidates.push_back(dir + "/FaceRecognitionPlugin.so");
-                candidates.push_back(dir + "/../build/native/host/libFaceRecognitionPlugin.so");
+                for (const auto& name : file_names) {
+                    candidates.push_back(dir + "/" + name);
+                    candidates.push_back(dir + "/../build/native/host/" + name);
+                }
             }
         }
         return candidates;

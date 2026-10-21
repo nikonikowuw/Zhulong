@@ -230,8 +230,11 @@ DmaBuffer& DmaBuffer::operator=(DmaBuffer&& other) noexcept {
 }
 
 bool DmaBuffer::sync_start(uint64_t flags) {
-#if defined(__linux__)
+    // 空对象必须先拒绝：没有 fd 就没有可同步的缓冲。这个检查必须留在条件编译
+    // 之外 —— 非 Linux 平台没有 ioctl 可用，但「不能对自己不拥有的 fd 报告成功」
+    // 与平台无关。迁移到 sync_end 同理。
     if (fd_ < 0) return false;
+#if defined(__linux__)
     struct dma_buf_sync sync{};
     sync.flags = DMA_BUF_SYNC_START | (flags & DMA_BUF_SYNC_RW);
     int ret = 0;
@@ -256,8 +259,8 @@ bool DmaBuffer::sync_start(uint64_t flags) {
 }
 
 bool DmaBuffer::sync_end(uint64_t flags) {
-#if defined(__linux__)
     if (fd_ < 0) return false;
+#if defined(__linux__)
     struct dma_buf_sync sync{};
     sync.flags = DMA_BUF_SYNC_END | (flags & DMA_BUF_SYNC_RW);
     int ret = 0;

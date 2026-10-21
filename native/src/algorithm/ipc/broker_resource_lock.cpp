@@ -49,7 +49,31 @@ struct ResolvedDir {
     std::string path;
 };
 
+/**
+ * @brief POSIX 共享内存对象在文件系统中的挂载点。
+ *
+ * Linux 的 shm_open("/name") 映射到 /dev/shm/name，宿主启动清扫
+ * （Go: internal/algorunner/orphan_linux.go 的 shmRoot）按该目录枚举段。
+ *
+ * macOS 上 shm_open 的名字空间在内存里，没有可供枚举的目录；对应地，
+ * Go 侧的清扫实现在非 Linux 平台是 no-op（orphan_other.go）。既然不存在
+ * 清扫方，创建侧也就不该去锁一个不存在的目录。
+ */
+#if defined(__linux__)
+constexpr const char* kShmSweepDir = "/dev/shm";
+#else
+constexpr const char* kShmSweepDir = nullptr;
+#endif
+
 } // namespace
+
+std::vector<std::string> BrokerResourceLock::resource_dirs(const std::string& base_dir) {
+    std::vector<std::string> dirs;
+    dirs.reserve(2);
+    if (!base_dir.empty()) dirs.push_back(base_dir);
+    if (kShmSweepDir != nullptr) dirs.emplace_back(kShmSweepDir);
+    return dirs;
+}
 
 std::unique_ptr<BrokerResourceLock> BrokerResourceLock::acquire(const std::vector<std::string>& dirs,
                                                                std::string* error_msg) {
