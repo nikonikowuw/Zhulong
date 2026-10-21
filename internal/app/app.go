@@ -692,6 +692,7 @@ type recordOut struct {
 	Store           *record.Store
 	Service         *record.Service
 	Handler         *record.Handler
+	Snapshots       *record.SnapshotStore
 	Lifecycle       recordLifecycle
 	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
 }
@@ -699,9 +700,22 @@ type recordOut struct {
 func provideRecord(
 	dbProvider database.DBProvider,
 	streamHub *camera.StreamHub,
+	storageSvc *storage.Service,
 	logger *zap.Logger,
 ) recordOut {
 	comp := record.NewRecordComponents(dbProvider, logger)
+
+	// 抓拍落盘组件：把 StreamHub（抓拍源）与 storage（媒体根 + 写入门闸）接进
+	// record 域。两者都是窄接口，record 不认识 camera / storage 的内部类型。
+	snapshots := record.NewSnapshotStore(
+		streamHub,
+		mediafile.NewMediaRootProvider(storageSvc),
+		storageSvc,
+		0, // 0 = 使用 engine.DefaultSnapshotQuality
+		logger,
+	)
+	comp.Service.SetSnapshotStore(snapshots)
+
 	if streamHub != nil {
 		streamHub.SetAIConsumer(comp.Service)
 	}
@@ -709,6 +723,7 @@ func provideRecord(
 		Store:           comp.Store,
 		Service:         comp.Service,
 		Handler:         comp.Handler,
+		Snapshots:       snapshots,
 		Lifecycle:       comp.Lifecycle,
 		ProtectedRoutes: comp.ProtectedRoutes,
 	}

@@ -57,7 +57,7 @@ func TestHandlerListAndGetRecognitions(t *testing.T) {
 	rec := &record.Recognition{
 		ID:               recID,
 		CameraID:         "cam_01",
-		AlgorithmID:      "algo_01",
+		AlgorithmID:      strPtr("algo_01"),
 		PTS:              1000,
 		TrackID:          1,
 		PersonName:       "Alice",
@@ -149,7 +149,7 @@ func TestHandlerListAndGetAlarms(t *testing.T) {
 	alarm := &record.Alarm{
 		ID:          alarmID,
 		CameraID:    "cam_01",
-		AlgorithmID: "algo_01",
+		AlgorithmID: strPtr("algo_01"),
 		AlarmType:   "smoke_detection",
 		Score:       0.94,
 		BoxJSON:     `[0,0,1,1]`,

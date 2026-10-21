@@ -1059,3 +1059,286 @@ func TestChannelMultiAlgoTaskMigrationSymmetry(t *testing.T) {
 		t.Fatalf("expected 3 task_algorithms after re-apply, got %d", detailCount)
 	}
 }
+
+// TestMigration000014_PerceptionForeignKeys locks down the three reference-integrity
+// fixes introduced by migration 14. Each assertion corresponds to a defect that was
+// reproduced against the pre-14 schema:
+//
+//  1. An empty algorithm_id must be storable (it means "source not annotated").
+//     Before 14 the NOT NULL + REFERENCES combination rejected it, and
+//     record.Service swallowed the error, silently dropping every such record.
+//  2. Deleting a camera that has perception records must succeed and cascade them.
+//     Before 14 the bare REFERENCES cameras(id) made such cameras永久 undeletable.
+//  3. Deleting an algorithm that produced records must succeed and cascade them.
+func TestMigration000014_PerceptionForeignKeys(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_migrate_14.db")
+
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// Bring the schema to 13, i.e. the state that shipped with the defects.
+	if err := migrator.Migrate(13); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(13): %v", err)
+	}
+
+	// Seed prerequisite rows plus one record per table.
+	for _, stmt := range []string{
+		`INSERT INTO cameras (id, name, enabled, revision, created_at, updated_at)
+		 VALUES ('cam_a', 'A', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		`INSERT INTO cameras (id, name, enabled, revision, created_at, updated_at)
+		 VALUES ('cam_b', 'B', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		`INSERT INTO algorithms (id, name, version, task_type, category, target_arch,
+		   target_device, compute_cost, memory_mb, description, manifest_json,
+		   config_schema_json, status, previous_version, created_at, updated_at)
+		 VALUES ('algo_a', 'Det', '1.0.0', 'detection', 'safety', 'aarch64', 'rknn',
+		   10, 64, '', '{}', '{}', 'ACTIVE', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		`INSERT INTO recognitions (id, camera_id, algorithm_id, pts, captured_at, created_at)
+		 VALUES ('rec_a', 'cam_a', 'algo_a', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		`INSERT INTO alarms (id, camera_id, algorithm_id, alarm_type, pts, captured_at, created_at)
+		 VALUES ('alm_a', 'cam_a', 'algo_a', 'fire', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		`INSERT INTO captures (id, camera_id, target_type, pts, captured_at, created_at)
+		 VALUES ('cap_a', 'cam_a', 'person', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		`INSERT INTO captures (id, camera_id, target_type, pts, captured_at, created_at)
+		 VALUES ('cap_b', 'cam_b', 'person', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("seed %q: %v", stmt, err)
+		}
+	}
+
+	// Apply migrations 14 and 15. 14 relaxed the algorithm_id constraint, 15
+	// replaced its ON DELETE CASCADE with ON DELETE SET NULL and added the
+	// algorithm_name / algorithm_version snapshots. The assertions below target
+	// the post-15 schema, which is the one that ships.
+	if err := migrator.Migrate(16); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(16): %v", err)
+	}
+
+	// ── Defect 1: unattributed records (NULL algorithm_id) are storable ────
+	// NULL is the only value SQLite skips foreign-key validation for; an empty
+	// string would still be checked against algorithms(id) and rejected.
+	if _, err := db.Exec(`INSERT INTO recognitions
+		(id, camera_id, algorithm_id, pts, captured_at, created_at)
+		VALUES ('rec_unattributed', 'cam_a', NULL, 2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatalf("NULL algorithm_id must be storable after migration 14: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO alarms
+		(id, camera_id, algorithm_id, alarm_type, pts, captured_at, created_at)
+		VALUES ('alm_unattributed', 'cam_a', NULL, 'fire', 2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatalf("NULL algorithm_id must be storable in alarms: %v", err)
+	}
+
+	// A non-empty but nonexistent algorithm must still be rejected: the fix
+	// relaxes "not empty", it does not disable referential integrity.
+	if _, err := db.Exec(`INSERT INTO recognitions
+		(id, camera_id, algorithm_id, pts, captured_at, created_at)
+		VALUES ('rec_bogus', 'cam_a', 'no_such_algo', 3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err == nil {
+		t.Fatal("nonexistent algorithm_id must still violate the foreign key")
+	}
+
+	// ── Defect 2: camera deletion cascades perception records ─────────────
+	if _, err := db.Exec(`DELETE FROM cameras WHERE id = 'cam_b'`); err != nil {
+		t.Fatalf("deleting a camera with perception records must succeed: %v", err)
+	}
+	var orphanCaptures int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM captures WHERE camera_id = 'cam_b'`).Scan(&orphanCaptures); err != nil {
+		t.Fatalf("count orphan captures: %v", err)
+	}
+	if orphanCaptures != 0 {
+		t.Errorf("expected cascade to remove captures of deleted camera, %d left", orphanCaptures)
+	}
+	// Records of the surviving camera must be untouched.
+	var keptCaptures int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM captures WHERE camera_id = 'cam_a'`).Scan(&keptCaptures); err != nil {
+		t.Fatalf("count kept captures: %v", err)
+	}
+	if keptCaptures != 1 {
+		t.Errorf("expected cam_a's capture to survive, got %d", keptCaptures)
+	}
+
+	// ── Defect 3: algorithm deletion PRESERVES perception records ─────────
+	// 卸载算法是卸载工具，不是销毁历史。记录必须留着，只把来源引用置 NULL，
+	// 并依赖 algorithm_name / algorithm_version 快照回答「这批告警是谁产生的」。
+	// 迁移 14 曾经错误地用了 ON DELETE CASCADE，15 纠正为 SET NULL。
+	//
+	// 模拟卸载前的状态：写入时快照了名称与版本。
+	if _, err := db.Exec(`UPDATE recognitions
+		SET algorithm_name = 'Det', algorithm_version = '1.0.0'
+		WHERE algorithm_id = 'algo_a'`); err != nil {
+		t.Fatalf("seed algorithm snapshot on recognitions: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE alarms
+		SET algorithm_name = 'Det', algorithm_version = '1.0.0'
+		WHERE algorithm_id = 'algo_a'`); err != nil {
+		t.Fatalf("seed algorithm snapshot on alarms: %v", err)
+	}
+
+	if _, err := db.Exec(`DELETE FROM algorithms WHERE id = 'algo_a'`); err != nil {
+		t.Fatalf("deleting an algorithm with perception records must succeed: %v", err)
+	}
+
+	// 记录仍在，且来源引用被置 NULL。
+	var algoRecs int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM recognitions
+		WHERE id = 'rec_a' AND algorithm_id IS NULL`).Scan(&algoRecs); err != nil {
+		t.Fatalf("count surviving recognitions: %v", err)
+	}
+	if algoRecs != 1 {
+		t.Errorf("perception record must survive algorithm deletion with NULL algorithm_id, got %d", algoRecs)
+	}
+	var algoAlarms int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM alarms
+		WHERE id = 'alm_a' AND algorithm_id IS NULL`).Scan(&algoAlarms); err != nil {
+		t.Fatalf("count surviving alarms: %v", err)
+	}
+	if algoAlarms != 1 {
+		t.Errorf("alarm must survive algorithm deletion with NULL algorithm_id, got %d", algoAlarms)
+	}
+
+	// 快照仍能回答「哪个算法产生的」—— 这正是冗余列的全部意义。
+	var snapName, snapVersion string
+	if err := db.QueryRow(`SELECT algorithm_name, algorithm_version FROM recognitions
+		WHERE id = 'rec_a'`).Scan(&snapName, &snapVersion); err != nil {
+		t.Fatalf("read algorithm snapshot: %v", err)
+	}
+	if snapName != "Det" || snapVersion != "1.0.0" {
+		t.Errorf("algorithm snapshot lost after uninstall: name=%q version=%q", snapName, snapVersion)
+	}
+
+	// The unattributed rows survive untouched.
+	var unattributed int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM recognitions WHERE algorithm_id IS NULL`).Scan(&unattributed); err != nil {
+		t.Fatalf("count unattributed recognitions: %v", err)
+	}
+	if unattributed != 2 {
+		t.Errorf("expected both unattributed recognitions to survive, got %d", unattributed)
+	}
+}
+
+// TestMigration000016_CaptureAlgorithmRef locks down the captures-side algorithm
+// attribution added by migration 16. Unlike recognitions/alarms (which needed a
+// table rebuild to fix their foreign keys), captures was a plain ADD COLUMN, so
+// the interesting assertions are the column defaults and the SET NULL semantics.
+func TestMigration000016_CaptureAlgorithmRef(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_migrate_16.db")
+
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// 1. Schema to 15, seed a capture written before the column existed.
+	if err := migrator.Migrate(15); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(15): %v", err)
+	}
+	for _, stmt := range []string{
+		`INSERT INTO cameras (id, name, enabled, revision, created_at, updated_at)
+		 VALUES ('cam_c', 'C', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		`INSERT INTO algorithms (id, name, version, task_type, category, target_arch,
+		   target_device, compute_cost, memory_mb, description, manifest_json,
+		   config_schema_json, status, previous_version, created_at, updated_at)
+		 VALUES ('algo_c', 'Intrusion', '3.2.1', 'detection', 'security', 'aarch64',
+		   'rknn', 10, 64, '', '{}', '{}', 'ACTIVE', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		`INSERT INTO captures (id, camera_id, target_type, pts, captured_at, created_at)
+		 VALUES ('cap_legacy', 'cam_c', 'person', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("seed %q: %v", stmt, err)
+		}
+	}
+
+	// 2. Apply migration 16.
+	if err := migrator.Migrate(16); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(16): %v", err)
+	}
+
+	// 3. The legacy row survives with NULL id and empty snapshots: historical
+	//    captures cannot be attributed retroactively, and guessing would be worse
+	//    than leaving it unknown.
+	var legacyAlgoID sql.NullString
+	var legacyName, legacyVersion string
+	if err := db.QueryRow(`SELECT algorithm_id, algorithm_name, algorithm_version
+		FROM captures WHERE id = 'cap_legacy'`).
+		Scan(&legacyAlgoID, &legacyName, &legacyVersion); err != nil {
+		t.Fatalf("read legacy capture: %v", err)
+	}
+	if legacyAlgoID.Valid {
+		t.Errorf("legacy capture must keep NULL algorithm_id, got %q", legacyAlgoID.String)
+	}
+	if legacyName != "" || legacyVersion != "" {
+		t.Errorf("legacy capture must not have guessed snapshots, got name=%q version=%q",
+			legacyName, legacyVersion)
+	}
+
+	// 4. A new capture can carry full attribution.
+	if _, err := db.Exec(`INSERT INTO captures
+		(id, camera_id, algorithm_id, algorithm_name, algorithm_version,
+		 target_type, pts, captured_at, created_at)
+		VALUES ('cap_new', 'cam_c', 'algo_c', 'Intrusion', '3.2.1',
+		        'person', 2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatalf("insert attributed capture: %v", err)
+	}
+
+	// 5. Uninstalling the algorithm must NOT delete the capture — it only clears
+	//    the reference, exactly like recognitions/alarms.
+	if _, err := db.Exec(`DELETE FROM algorithms WHERE id = 'algo_c'`); err != nil {
+		t.Fatalf("uninstall algorithm: %v", err)
+	}
+	var newAlgoID sql.NullString
+	var newName, newVersion string
+	if err := db.QueryRow(`SELECT algorithm_id, algorithm_name, algorithm_version
+		FROM captures WHERE id = 'cap_new'`).
+		Scan(&newAlgoID, &newName, &newVersion); err != nil {
+		t.Fatalf("capture disappeared after algorithm uninstall: %v", err)
+	}
+	if newAlgoID.Valid {
+		t.Errorf("expected NULL algorithm_id after uninstall, got %q", newAlgoID.String)
+	}
+	if newName != "Intrusion" || newVersion != "3.2.1" {
+		t.Errorf("algorithm snapshot lost: name=%q version=%q", newName, newVersion)
+	}
+
+	// 6. A nonexistent algorithm is still rejected: the column is a real FK.
+	if _, err := db.Exec(`INSERT INTO captures
+		(id, camera_id, algorithm_id, target_type, pts, captured_at, created_at)
+		VALUES ('cap_bogus', 'cam_c', 'no_such_algo', 'person', 3,
+		        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err == nil {
+		t.Fatal("nonexistent algorithm_id must still violate the foreign key")
+	}
+}

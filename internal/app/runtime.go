@@ -83,6 +83,16 @@ type recordLifecycle interface {
 	Stop(context.Context) error
 }
 
+// snapshotLifecycle 管理抓拍写盘 worker 的起停。
+//
+// ⚠️ 必须在 record 之前启动、在 record 之后停止：record 的 Stop 之后不再有新的
+// 抓拍任务入队，但队列里已接收的任务仍需被执行完，否则这些记录会留下指向不存在
+// 文件的路径。
+type snapshotLifecycle interface {
+	Start()
+	Stop()
+}
+
 type lifecycleRuntime struct {
 	database    databaseLifecycle
 	native      engineLifecycle
@@ -95,6 +105,7 @@ type lifecycleRuntime struct {
 	algorithm   algorithmLifecycle
 	person      personLifecycle
 	record      recordLifecycle
+	snapshot    snapshotLifecycle
 	configCache regionConfigReloader
 	server      *http.Server
 	logger      *zap.Logger
@@ -119,6 +130,7 @@ type lifecycleRuntime struct {
 	algorithmReady      bool
 	personReady         bool
 	recordReady         bool
+	snapshotReady       bool
 	httpReady           bool
 	loggerSynced        bool
 	startAttempted      bool
@@ -138,6 +150,7 @@ type runtimeParams struct {
 	Algorithm   algorithmLifecycle   `optional:"true"`
 	Person      personLifecycle      `optional:"true"`
 	Record      recordLifecycle      `optional:"true"`
+	Snapshot    snapshotLifecycle    `optional:"true"`
 	ConfigCache regionConfigReloader `optional:"true"`
 	Server      *http.Server
 	Logger      *zap.Logger
@@ -163,6 +176,7 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		algorithm:   p.Algorithm,
 		person:      p.Person,
 		record:      p.Record,
+		snapshot:    p.Snapshot,
 		configCache: p.ConfigCache,
 		server:      p.Server,
 		logger:      p.Logger,
@@ -240,6 +254,13 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 			r.logger.Warn("person start warning", zap.Error(err))
 		}
 		r.personReady = true
+	}
+
+	// 抓拍 worker 必须先于 record 启动：record 在 Start 之后就可能开始接收 AI 结果
+	// 并登记抓拍任务，worker 未就绪会让队列迅速积满并持续丢弃。
+	if r.snapshot != nil {
+		r.snapshot.Start()
+		r.snapshotReady = true
 	}
 
 	if r.record != nil {
@@ -382,6 +403,9 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 	if err := r.closeRecord(ctx); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
+	// 抓拍 worker 必须在 record 之后、camera（抓拍帧来源）与 storage（媒体根）
+	// 之前停止：队列里已接收的任务仍需要 StreamHub 与媒体根才能跑完。
+	r.closeSnapshot()
 	if err := r.closeStorage(ctx); err != nil {
 		stopErrors = append(stopErrors, err)
 	}
@@ -487,6 +511,17 @@ func (r *lifecycleRuntime) closeRecord(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// closeSnapshot 在 record 之后停止抓拍 worker，把已入队的写盘任务做完。
+func (r *lifecycleRuntime) closeSnapshot() {
+	if !r.snapshotReady {
+		return
+	}
+	r.snapshotReady = false
+	if r.snapshot != nil {
+		r.snapshot.Stop()
+	}
 }
 
 func (r *lifecycleRuntime) closeSystemTime(ctx context.Context) error {

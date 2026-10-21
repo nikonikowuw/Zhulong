@@ -13,7 +13,7 @@ func TestResponses_NullJSONBecomesEmptySliceAndMap(t *testing.T) {
 	rec := &record.Recognition{
 		ID:             "rec_1",
 		CameraID:       "cam_1",
-		AlgorithmID:    "algo_1",
+		AlgorithmID:    strPtr("algo_1"),
 		CandidatesJSON: "null",
 		BoxJSON:        "null",
 		BodyBoxJSON:    "null",
@@ -47,7 +47,7 @@ func TestResponses_NullJSONBecomesEmptySliceAndMap(t *testing.T) {
 	alarm := &record.Alarm{
 		ID:          "alarm_1",
 		CameraID:    "cam_1",
-		AlgorithmID: "algo_1",
+		AlgorithmID: strPtr("algo_1"),
 		AlarmType:   "smoke",
 		ExtraJSON:   "null",
 		CapturedAt:  time.Now().UTC(),

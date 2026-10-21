@@ -9,15 +9,18 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
 
 // Service coordinates perception records, alarms, cooldown deduplication, and persistence.
 type Service struct {
-	store    *Store
-	cooldown *CooldownManager
-	logger   *zap.Logger
+	store      *Store
+	cooldown   *CooldownManager
+	snapshots  *SnapshotStore
+	algorithms *AlgorithmResolver
+	logger     *zap.Logger
 }
 
 // NewService creates a new record Service.
@@ -26,15 +29,26 @@ func NewService(store *Store, logger *zap.Logger) *Service {
 		logger = zap.NewNop()
 	}
 	return &Service{
-		store:    store,
-		cooldown: NewCooldownManager(DefaultCooldown),
-		logger:   logger,
+		store:      store,
+		cooldown:   NewCooldownManager(DefaultCooldown),
+		algorithms: NewAlgorithmResolver(store),
+		logger:     logger,
 	}
 }
 
 // SetCooldownWindow sets the deduplication window for tracking cooldowns.
 func (s *Service) SetCooldownWindow(d time.Duration) {
 	s.cooldown.SetCooldown(d)
+}
+
+// SetSnapshotStore 注入抓拍落盘组件。
+//
+// ⚠️ 用 setter 而不是构造参数，是为了守住领域内聚：record 域由
+// NewRecordComponents 一次性装配，而抓拍需要 camera.StreamHub 与 storage 两个
+// 外部依赖，把它们塞进构造函数会让 record 域反过来依赖相机与存储的生命周期顺序。
+// 未注入时进程仍能正常落库，只是路径字段留空（与「抓拍失败」表现一致）。
+func (s *Service) SetSnapshotStore(store *SnapshotStore) {
+	s.snapshots = store
 }
 
 // ProcessInferenceResult consumes an inference result from StreamHub, applies
@@ -50,19 +64,35 @@ func (s *Service) ProcessInferenceResult(ctx context.Context, res aitypes.Infere
 	}
 	dateStr := capturedAt.Format("2006-01-02")
 
+	// 解析算法身份快照（幂等、带短 TTL 缓存）。一次结果的所有记录共用同一个
+	// 算法 ID，因此只查一次库。
+	algo := s.resolveAlgorithm(ctx, res.AlgorithmID)
+
 	switch res.TaskType {
 	case aitypes.TaskTypePersonStructure:
-		return s.processPersonStructure(ctx, res, capturedAt, dateStr)
+		return s.processPersonStructure(ctx, res, algo, capturedAt, dateStr)
 	case aitypes.TaskTypeDetection:
-		return s.processDetection(ctx, res, capturedAt, dateStr)
+		return s.processDetection(ctx, res, algo, capturedAt, dateStr)
 	case aitypes.TaskTypeClassification:
-		return s.processClassification(ctx, res, capturedAt, dateStr)
+		return s.processClassification(ctx, res, algo, capturedAt, dateStr)
 	default:
 		return nil
 	}
 }
 
-func (s *Service) processPersonStructure(ctx context.Context, res aitypes.InferenceResult, capturedAt time.Time, dateStr string) error {
+// resolveAlgorithm 返回该结果对应的算法身份快照。
+//
+// 找不到（算法已卸载 / 载荷未带 ID / 查询失败）时返回零值快照，调用方会写入
+// 空名称与 NULL 外键 —— 记录本身必须落库，来源标注的完整性是次级信息。
+func (s *Service) resolveAlgorithm(ctx context.Context, algorithmID string) AlgorithmSnapshot {
+	if algorithmID == "" || s.algorithms == nil {
+		return AlgorithmSnapshot{}
+	}
+	resolved := s.algorithms.resolveAlgorithmSnapshots(ctx, []string{algorithmID})
+	return resolved[algorithmID]
+}
+
+func (s *Service) processPersonStructure(ctx context.Context, res aitypes.InferenceResult, algo AlgorithmSnapshot, capturedAt time.Time, dateStr string) error {
 	var recognitions []*Recognition
 	var captures []*Capture
 
@@ -99,10 +129,17 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 					bodyBoxBytes, _ := json.Marshal(p.BodyBox)
 					attrsJSON := marshalMapOrDefault(p.Attributes)
 
+					// 两条证据图：全幅（imagePath）+ 人脸裁剪（faceImagePath）。
+					// 两者在一次抓拍里产出，避免为同一帧编码两次。
+					fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, recID)
+					facePath := fmt.Sprintf("snapshots/%s/%s/%s_face.jpg", res.CameraID, dateStr, recID)
+
 					rec := &Recognition{
 						ID:               recID,
 						CameraID:         res.CameraID,
-						AlgorithmID:      res.AlgorithmID,
+						AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
+						AlgorithmName:    algo.Name,
+						AlgorithmVersion: algo.Version,
 						PTS:              res.PTS,
 						TrackID:          p.TrackID,
 						PersonID:         personIDPtr,
@@ -111,9 +148,9 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 						Matched:          face.Matched,
 						Similarity:       face.Similarity,
 						CandidatesJSON:   candidatesJSON,
-						FaceImagePath:    fmt.Sprintf("snapshots/%s/%s/%s_face.jpg", res.CameraID, dateStr, recID),
+						FaceImagePath:    facePath,
 						GalleryImagePath: galleryImagePath,
-						ImagePath:        fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, recID),
+						ImagePath:        fullPath,
 						BoxJSON:          string(boxBytes),
 						BodyBoxJSON:      string(bodyBoxBytes),
 						AttributesJSON:   attrsJSON,
@@ -121,6 +158,13 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 						CreatedAt:        time.Now().UTC(),
 					}
 					recognitions = append(recognitions, rec)
+
+					s.enqueueSnapshot(res.CameraID, capturedAt, []engine.SnapshotBox{
+						{face.Box[0], face.Box[1], face.Box[2], face.Box[3]},
+					}, []snapshotOutput{
+						{boxIndex: -1, relPath: fullPath},
+						{boxIndex: 0, relPath: facePath},
+					})
 				}
 			}
 		}
@@ -132,21 +176,34 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 			bodyBoxBytes, _ := json.Marshal(p.BodyBox)
 			attrsJSON := marshalMapOrDefault(p.Attributes)
 
+			fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, capID)
+			cropPath := fmt.Sprintf("snapshots/%s/%s/%s_crop.jpg", res.CameraID, dateStr, capID)
+
 			cap := &Capture{
-				ID:             capID,
-				CameraID:       res.CameraID,
-				TargetType:     "person",
-				TrackID:        p.TrackID,
-				Score:          p.BodyScore,
-				BoxJSON:        string(bodyBoxBytes),
-				CropPath:       fmt.Sprintf("snapshots/%s/%s/%s_crop.jpg", res.CameraID, dateStr, capID),
-				ImagePath:      fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, capID),
-				AttributesJSON: attrsJSON,
-				PTS:            res.PTS,
-				CapturedAt:     capturedAt,
-				CreatedAt:      time.Now().UTC(),
+				ID:               capID,
+				CameraID:         res.CameraID,
+				AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
+				AlgorithmName:    algo.Name,
+				AlgorithmVersion: algo.Version,
+				TargetType:       "person",
+				TrackID:          p.TrackID,
+				Score:            p.BodyScore,
+				BoxJSON:          string(bodyBoxBytes),
+				CropPath:         cropPath,
+				ImagePath:        fullPath,
+				AttributesJSON:   attrsJSON,
+				PTS:              res.PTS,
+				CapturedAt:       capturedAt,
+				CreatedAt:        time.Now().UTC(),
 			}
 			captures = append(captures, cap)
+
+			s.enqueueSnapshot(res.CameraID, capturedAt, []engine.SnapshotBox{
+				{p.BodyBox[0], p.BodyBox[1], p.BodyBox[2], p.BodyBox[3]},
+			}, []snapshotOutput{
+				{boxIndex: -1, relPath: fullPath},
+				{boxIndex: 0, relPath: cropPath},
+			})
 		}
 	}
 
@@ -164,7 +221,7 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 	return nil
 }
 
-func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceResult, capturedAt time.Time, dateStr string) error {
+func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceResult, algo AlgorithmSnapshot, capturedAt time.Time, dateStr string) error {
 	var alarms []*Alarm
 	var captures []*Capture
 
@@ -184,21 +241,34 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 					cropPath = fmt.Sprintf("snapshots/%s/%s/%s_crop.jpg", res.CameraID, dateStr, alarmID)
 				}
 
+				fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, alarmID)
+
 				alarm := &Alarm{
-					ID:          alarmID,
-					CameraID:    res.CameraID,
-					AlgorithmID: res.AlgorithmID,
-					AlarmType:   d.Label,
-					Score:       d.Score,
-					BoxJSON:     string(boxBytes),
-					ImagePath:   fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, alarmID),
-					CropPath:    cropPath,
-					ExtraJSON:   attrsJSON,
-					PTS:         res.PTS,
-					CapturedAt:  capturedAt,
-					CreatedAt:   time.Now().UTC(),
+					ID:               alarmID,
+					CameraID:         res.CameraID,
+					AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
+					AlgorithmName:    algo.Name,
+					AlgorithmVersion: algo.Version,
+					AlarmType:        d.Label,
+					Score:            d.Score,
+					BoxJSON:          string(boxBytes),
+					ImagePath:        fullPath,
+					CropPath:         cropPath,
+					ExtraJSON:        attrsJSON,
+					PTS:              res.PTS,
+					CapturedAt:       capturedAt,
+					CreatedAt:        time.Now().UTC(),
 				}
 				alarms = append(alarms, alarm)
+
+				// 场景级告警（烟火）没有目标裁剪框，只出全幅图。
+				outs := []snapshotOutput{{boxIndex: -1, relPath: fullPath}}
+				boxList := []engine.SnapshotBox{}
+				if cropPath != "" {
+					boxList = append(boxList, engine.SnapshotBox{d.Box[0], d.Box[1], d.Box[2], d.Box[3]})
+					outs = append(outs, snapshotOutput{boxIndex: 0, relPath: cropPath})
+				}
+				s.enqueueSnapshot(res.CameraID, capturedAt, boxList, outs)
 			}
 		} else {
 			// Regular object capture
@@ -208,21 +278,34 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 				boxBytes, _ := json.Marshal(d.Box)
 				attrsJSON := marshalMapOrDefault(d.Attributes)
 
+				fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, capID)
+				cropPath := fmt.Sprintf("snapshots/%s/%s/%s_crop.jpg", res.CameraID, dateStr, capID)
+
 				cap := &Capture{
-					ID:             capID,
-					CameraID:       res.CameraID,
-					TargetType:     d.Label,
-					TrackID:        0,
-					Score:          d.Score,
-					BoxJSON:        string(boxBytes),
-					CropPath:       fmt.Sprintf("snapshots/%s/%s/%s_crop.jpg", res.CameraID, dateStr, capID),
-					ImagePath:      fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, capID),
-					AttributesJSON: attrsJSON,
-					PTS:            res.PTS,
-					CapturedAt:     capturedAt,
-					CreatedAt:      time.Now().UTC(),
+					ID:               capID,
+					CameraID:         res.CameraID,
+					AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
+					AlgorithmName:    algo.Name,
+					AlgorithmVersion: algo.Version,
+					TargetType:       d.Label,
+					TrackID:          0,
+					Score:            d.Score,
+					BoxJSON:          string(boxBytes),
+					CropPath:         cropPath,
+					ImagePath:        fullPath,
+					AttributesJSON:   attrsJSON,
+					PTS:              res.PTS,
+					CapturedAt:       capturedAt,
+					CreatedAt:        time.Now().UTC(),
 				}
 				captures = append(captures, cap)
+
+				s.enqueueSnapshot(res.CameraID, capturedAt, []engine.SnapshotBox{
+					{d.Box[0], d.Box[1], d.Box[2], d.Box[3]},
+				}, []snapshotOutput{
+					{boxIndex: -1, relPath: fullPath},
+					{boxIndex: 0, relPath: cropPath},
+				})
 			}
 		}
 	}
@@ -241,28 +324,36 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 	return nil
 }
 
-func (s *Service) processClassification(ctx context.Context, res aitypes.InferenceResult, capturedAt time.Time, dateStr string) error {
+func (s *Service) processClassification(ctx context.Context, res aitypes.InferenceResult, algo AlgorithmSnapshot, capturedAt time.Time, dateStr string) error {
 	var alarms []*Alarm
 	for _, c := range res.Classifications {
 		if isAlarmLabel(c.Label) {
 			alarmKey := fmt.Sprintf("alarm:%s:%s", res.CameraID, c.Label)
 			if s.cooldown.Allow(alarmKey, capturedAt) {
 				alarmID := idutil.New()
+				fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, alarmID)
+
 				alarm := &Alarm{
-					ID:          alarmID,
-					CameraID:    res.CameraID,
-					AlgorithmID: res.AlgorithmID,
-					AlarmType:   c.Label,
-					Score:       c.Score,
-					BoxJSON:     "[]",
-					ImagePath:   fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, alarmID),
-					CropPath:    "",
-					ExtraJSON:   "{}",
-					PTS:         res.PTS,
-					CapturedAt:  capturedAt,
-					CreatedAt:   time.Now().UTC(),
+					ID:               alarmID,
+					CameraID:         res.CameraID,
+					AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
+					AlgorithmName:    algo.Name,
+					AlgorithmVersion: algo.Version,
+					AlarmType:        c.Label,
+					Score:            c.Score,
+					BoxJSON:          "[]",
+					ImagePath:        fullPath,
+					CropPath:         "",
+					ExtraJSON:        "{}",
+					PTS:              res.PTS,
+					CapturedAt:       capturedAt,
+					CreatedAt:        time.Now().UTC(),
 				}
 				alarms = append(alarms, alarm)
+
+				// 分类结果没有检测框，只能出全幅图。
+				s.enqueueSnapshot(res.CameraID, capturedAt, nil,
+					[]snapshotOutput{{boxIndex: -1, relPath: fullPath}})
 			}
 		}
 	}
@@ -272,6 +363,46 @@ func (s *Service) processClassification(ctx context.Context, res aitypes.Inferen
 		}
 	}
 	return nil
+}
+
+// optionalAlgorithmID 把推理结果里的算法标识转换成可空列值。
+//
+// ⚠️ 空串必须转成 nil：recognitions.algorithm_id / alarms.algorithm_id 上是
+// REFERENCES algorithms(id)，SQLite 对空串同样要求父表存在匹配行，只有 NULL 才
+// 跳过外键校验。直接写空串会让整条记录 insert 失败，而 service 只记日志不返回
+// 错误 —— 表现就是「记录莫名其妙消失」。
+//
+// 空串的来源是历史设计：AI 流按相机共享，Hub 无法归属算法，若 runner 未在载荷里
+// 打戳就只剩空串。
+func optionalAlgorithmID(id string) *string {
+	if id == "" {
+		return nil
+	}
+	return &id
+}
+
+// enqueueSnapshot 把一次抓拍写盘任务登记到后台队列。
+//
+// ⚠️ 这里是「非阻塞登记」而不是「同步抓拍」：JPEG 编码在 RK3568 上 35~60ms/帧，
+// 若在本 goroutine 里执行，consumeAIResults 会被磁盘与编码拖住，进而让 AI 结果
+// 订阅队列丢帧。因此只登记，由 SnapshotStore 的 worker 实际执行。
+//
+// 未注入 SnapshotStore 或队列已满时静默跳过：路径字段已在记录里生成，前端拿不到
+// 文件时显示占位图，不影响记录本身的可检索性。
+func (s *Service) enqueueSnapshot(
+	cameraID string,
+	capturedAt time.Time,
+	boxes []engine.SnapshotBox,
+	outputs []snapshotOutput,
+) {
+	if s.snapshots == nil {
+		return
+	}
+	s.snapshots.Enqueue(snapshotJob{
+		cameraID: cameraID,
+		boxes:    boxes,
+		outputs:  outputs,
+	})
 }
 
 // resolveGalleryImagePath queries person_faces via Store for the image_path associated with the matched face ID.

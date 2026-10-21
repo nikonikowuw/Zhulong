@@ -116,6 +116,7 @@ func (c *CleanerEngine) RunPrune(ctx context.Context, mediaDir string, cfg *Stor
 
 	// Step 1: Collect candidates
 	exportsCandidates := c.collectExports(mediaDir, time.Duration(cfg.ExportsRetentionHours)*time.Hour)
+	snapshotsCandidates := c.collectSnapshots(mediaDir, time.Duration(cfg.SnapshotsRetentionDays)*24*time.Hour)
 	recordingsCandidates := c.collectRecordings(mediaDir, time.Duration(cfg.RecordingsRetentionDays)*24*time.Hour)
 
 	// Step 2: Delete expired exports first
@@ -123,7 +124,16 @@ func (c *CleanerEngine) RunPrune(ctx context.Context, mediaDir string, cfg *Stor
 	summary.DeletedFiles += deleted
 	summary.FreedBytes += freed
 
-	// Step 3: If still above low watermark (or manual), delete expired/oldest recordings
+	// Step 3: AI 抓拍按 TTL 清理。放在 exports 之后、recordings 之前：抓拍图在
+	// 「证据价值」排序上低于导出（人工产物）而高于常规录像，与 storage-guidelines
+	// §4 的删除顺序一致。
+	if ctx.Err() == nil {
+		snapDeleted, snapFreed := c.deleteBatch(ctx, snapshotsCandidates, mediaDir, cfg.LowWatermarkPercent)
+		summary.DeletedFiles += snapDeleted
+		summary.FreedBytes += snapFreed
+	}
+
+	// Step 4: If still above low watermark (or manual), delete expired/oldest recordings
 	if ctx.Err() == nil && (isManual || c.isAboveLowWatermark(mediaDir, cfg.LowWatermarkPercent)) {
 		recDeleted, recFreed := c.deleteBatch(ctx, recordingsCandidates, mediaDir, cfg.LowWatermarkPercent)
 		summary.DeletedFiles += recDeleted
@@ -222,6 +232,46 @@ func (c *CleanerEngine) collectExports(mediaDir string, ttl time.Duration) []can
 		return candidates[i].modTime.Before(candidates[j].modTime)
 	})
 
+	return candidates
+}
+
+// collectSnapshots collects AI snapshot images older than ttl.
+//
+// 与 recordings 的区别：
+//   - 不参与水印驱动的「最旧优先」删除：抓拍总量远小于录像，TTL 到期才清；
+//   - 带 .lock / _locked 保护标记的文件一律跳过（与 recordings 同一铁律），
+//     这样告警证据可以被人为锁定而不被清理流程误杀。
+func (c *CleanerEngine) collectSnapshots(mediaDir string, ttl time.Duration) []candidateFile {
+	snapshotsDir := filepath.Join(mediaDir, "snapshots")
+	threshold := time.Now().Add(-ttl)
+
+	var candidates []candidateFile
+	_ = filepath.WalkDir(snapshotsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if strings.HasSuffix(name, ".lock") || strings.Contains(name, "_locked") {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if info.ModTime().Before(threshold) {
+			candidates = append(candidates, candidateFile{
+				path:    path,
+				size:    info.Size(),
+				modTime: info.ModTime(),
+			})
+		}
+		return nil
+	})
+
+	// Oldest first
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime.Before(candidates[j].modTime)
+	})
 	return candidates
 }
 

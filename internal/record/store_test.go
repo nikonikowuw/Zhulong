@@ -70,7 +70,7 @@ func TestStoreRecognitionCRUDAndFilters(t *testing.T) {
 	r1 := &record.Recognition{
 		ID:               idutil.New(),
 		CameraID:         "cam_01",
-		AlgorithmID:      "algo_01",
+		AlgorithmID:      strPtr("algo_01"),
 		PTS:              1000,
 		TrackID:          1,
 		PersonID:         strPtr("person_alice"),
@@ -91,7 +91,7 @@ func TestStoreRecognitionCRUDAndFilters(t *testing.T) {
 	r2 := &record.Recognition{
 		ID:             idutil.New(),
 		CameraID:       "cam_01",
-		AlgorithmID:    "algo_01",
+		AlgorithmID:    strPtr("algo_01"),
 		PTS:            2000,
 		TrackID:        2,
 		PersonID:       nil,
@@ -106,7 +106,7 @@ func TestStoreRecognitionCRUDAndFilters(t *testing.T) {
 	r3 := &record.Recognition{
 		ID:             idutil.New(),
 		CameraID:       "cam_02",
-		AlgorithmID:    "algo_01",
+		AlgorithmID:    strPtr("algo_01"),
 		PTS:            3000,
 		TrackID:        3,
 		PersonID:       strPtr("person_alice"),
@@ -195,7 +195,7 @@ func TestStoreAlarmCRUDAndFilters(t *testing.T) {
 	a1 := &record.Alarm{
 		ID:          idutil.New(),
 		CameraID:    "cam_01",
-		AlgorithmID: "algo_01",
+		AlgorithmID: strPtr("algo_01"),
 		AlarmType:   "no_helmet",
 		Score:       0.89,
 		BoxJSON:     "[0.2, 0.3, 0.4, 0.5]",
@@ -209,7 +209,7 @@ func TestStoreAlarmCRUDAndFilters(t *testing.T) {
 	a2 := &record.Alarm{
 		ID:          idutil.New(),
 		CameraID:    "cam_01",
-		AlgorithmID: "algo_01",
+		AlgorithmID: strPtr("algo_01"),
 		AlarmType:   "smoke_detection",
 		Score:       0.94,
 		BoxJSON:     "[]",
