@@ -865,3 +865,121 @@ func TestGalleryBroadcaster_SyncUpsertDelete(t *testing.T) {
 		t.Errorf("expected MsgGalleryDelete (12), got %d", mock.messages[2].msgType)
 	}
 }
+
+// TestRunnerProcessSpawnThreadSurvivesWhileChildRuns guards the thread-lifetime
+// contract behind Pdeathsig (go.dev/issue/27505): the kernel signals the child
+// when the *OS thread* that forked it exits, not when the process exits. If the
+// spawn thread were released early, Go reclaiming that idle M would SIGKILL a
+// perfectly healthy runner.
+//
+// The critical case is a SHORT-LIVED caller. Start is called from goroutines the
+// host does not keep alive (HTTP handlers, Fx hooks, worker loops), and
+// runtime.LockOSThread pins the goroutine that calls it — not its caller's
+// creation thread. So each runner here is started from its own throwaway
+// goroutine, which is allowed to exit before liveness is checked. A single
+// runner hides the defect (one exiting goroutine rarely makes the runtime retire
+// its M fast enough); several make it reliable, and the original implementation
+// killed most of them within a second.
+func TestRunnerProcessSpawnThreadSurvivesWhileChildRuns(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "long_lived_runner.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile true; do sleep 0.05; done\n"), 0755); err != nil {
+		t.Fatalf("write long-lived runner: %v", err)
+	}
+
+	const runnerCount = 5
+	procs := make([]*algorunner.RunnerProcess, 0, runnerCount)
+	pids := make([]int, 0, runnerCount)
+	t.Cleanup(func() {
+		for _, proc := range procs {
+			_ = proc.Stop(2 * time.Second)
+		}
+	})
+
+	for i := 0; i < runnerCount; i++ {
+		proc := algorunner.NewRunnerProcess(algorunner.ProcessConfig{
+			AlgorithmID:   fmt.Sprintf("thread_pin_pkg_%d", i),
+			AlgorithmName: "thread_pin_pkg",
+			RunnerPath:    script,
+			PluginPath:    "unused.so",
+			Logger:        zap.NewNop(),
+		})
+		// The spawning goroutine is deliberately not kept alive: it exits as soon
+		// as Start returns, which is exactly the host shape this test guards.
+		startErr := make(chan error, 1)
+		go func() { startErr <- proc.Start() }()
+		if err := <-startErr; err != nil {
+			t.Fatalf("Start failed: %v", err)
+		}
+		procs = append(procs, proc)
+		pids = append(pids, proc.PID())
+	}
+
+	for i, pid := range pids {
+		if pid <= 0 {
+			t.Fatalf("runner %d pid was never recorded", i)
+		}
+	}
+
+	// 1.5s is far longer than the ~1s window in which the old implementation lost
+	// the thread. A steady timer keeps the scheduler busy so an unpinned spawn
+	// goroutine would almost certainly be migrated off its thread.
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for time.Now().Before(deadline) {
+		<-ticker.C
+		for i, pid := range pids {
+			if err := syscall.Kill(pid, 0); err != nil {
+				t.Fatalf("runner %d (pid %d) was killed while it should still be running: %v "+
+					"(Pdeathsig fired because the spawn thread was released with its caller)", i, pid, err)
+			}
+			if state := procs[i].State(); state != algorunner.StatusRunning {
+				t.Fatalf("runner %d state = %q, want %q", i, state, algorunner.StatusRunning)
+			}
+		}
+	}
+
+	// The pin must not defeat Stop: the process still has to be killable.
+	for i, proc := range procs {
+		if err := proc.Stop(2 * time.Second); err != nil {
+			t.Fatalf("runner %d Stop failed: %v", i, err)
+		}
+		select {
+		case <-proc.Done():
+		case <-time.After(2 * time.Second):
+			t.Fatalf("runner %d did not terminate after Stop; the pinned spawn thread leaked", i)
+		}
+	}
+}
+
+// TestRunnerProcessStartFailureLeavesNoHalfStartedState pins the failure half of
+// the spawn handshake: a spawn error must settle the process state, close Done
+// and release the pinned thread instead of stranding a watcher.
+func TestRunnerProcessStartFailureLeavesNoHalfStartedState(t *testing.T) {
+	proc := algorunner.NewRunnerProcess(algorunner.ProcessConfig{
+		AlgorithmID:   "broken_pkg",
+		AlgorithmName: "broken_pkg",
+		RunnerPath:    filepath.Join(t.TempDir(), "does-not-exist-runner"),
+		PluginPath:    "unused.so",
+		Logger:        zap.NewNop(),
+	})
+	if err := proc.Start(); err == nil {
+		t.Fatal("Start succeeded for a nonexistent runner binary")
+	}
+	if state := proc.State(); state != algorunner.StatusDisabled {
+		t.Fatalf("state after failed Start = %q, want %q", state, algorunner.StatusDisabled)
+	}
+	if pid := proc.PID(); pid != 0 {
+		t.Fatalf("PID after failed Start = %d, want 0", pid)
+	}
+	select {
+	case <-proc.Done():
+	case <-time.After(time.Second):
+		t.Fatal("Done() was not closed after a failed Start; the lifecycle would hang")
+	}
+	// Stop must stay a no-op rather than blocking on a half-built process.
+	if err := proc.Stop(100 * time.Millisecond); err != nil {
+		t.Fatalf("Stop after failed Start = %v", err)
+	}
+}

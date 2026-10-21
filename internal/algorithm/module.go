@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
 )
@@ -19,12 +20,34 @@ type AlgorithmLifecycle interface {
 }
 
 type algorithmLifecycleImpl struct {
-	service *Service
-	logger  *zap.Logger
+	service    *Service
+	runnerPath string
+	logger     *zap.Logger
 }
 
 func (l *algorithmLifecycleImpl) Start(ctx context.Context) error {
 	l.logger.Info("Starting algorithm management lifecycle...")
+
+	// Reclaim runners and artefacts left by a previous host process BEFORE any
+	// auto-start. Pdeathsig stops new orphans from surviving a crash, but it
+	// cannot touch runners orphaned before this fix shipped, and it never removes
+	// the socket / shm files they were holding. A leftover runner would otherwise
+	// stay pinned to no supervisor while burning a full CPU core, and a stale shm
+	// segment would make the next stream fail to attach a broker.
+	//
+	// The sweep only acts on processes whose argv[0] is our runner binary and
+	// whose parent is not another live host, so a second running instance is safe.
+	if report, sweepErr := algorunner.ReapOrphanRunners(ctx, l.runnerPath, l.logger); sweepErr != nil {
+		// Never block boot on a cleanup failure: the host is still usable, and a
+		// stubborn leftover is reported by the supervisor's own crash handling.
+		l.logger.Warn("startup orphan sweep reported problems",
+			zap.Ints("killed_pids", report.Killed),
+			zap.Strings("removed_sockets", report.RemovedSockets),
+			zap.Strings("removed_shm", report.RemovedShm),
+			zap.Error(sweepErr),
+		)
+	}
+
 	// Auto-start active algorithms on host boot
 	algos, err := l.service.ListAlgorithms(ctx)
 	if err == nil {
@@ -97,7 +120,7 @@ func NewAlgorithmComponents(
 		Supervisor:      supervisor,
 		Service:         service,
 		Handler:         handler,
-		Lifecycle:       &algorithmLifecycleImpl{service: service, logger: logger},
+		Lifecycle:       &algorithmLifecycleImpl{service: service, runnerPath: runnerPath, logger: logger},
 		ProtectedRoutes: handler,
 		UploadRoutes:    handler.UploadRouteRegistrar(),
 	}

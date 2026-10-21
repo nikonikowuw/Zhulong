@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -175,8 +176,10 @@ func (p *RunnerProcess) Start() error {
 
 	// Run the runner in its own process group. Stop signals the whole group, so
 	// grandchildren the runner spawns cannot leak while holding the broker socket
-	// or shared memory after the runner itself has exited.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// or shared memory after the runner itself has exited. On Linux this also
+	// arms Pdeathsig, the only defence that survives host death without Go code
+	// running (SIGKILL / OOM / native crash). See runnerSysProcAttr.
+	cmd.SysProcAttr = runnerSysProcAttr()
 
 	// Load and inject .env variables. A missing file is optional (LoadDotEnv
 	// turns os.IsNotExist into an empty map + nil error), so any error here is a
@@ -221,14 +224,46 @@ func (p *RunnerProcess) Start() error {
 	cmd.Stdout = stdoutW
 	cmd.Stderr = stderrW
 
-	if err := cmd.Start(); err != nil {
+	// ⚠️ Pdeathsig is delivered when the *OS thread* that forked the child exits,
+	// not when the process exits (go.dev/issue/27505). runtime.LockOSThread pins
+	// the calling goroutine, and only that goroutine may unlock it, so the spawn
+	// and the reap must happen on the SAME goroutine — a separate watcher calling
+	// UnlockOSThread is a no-op on its own (unlocked) goroutine and leaves the
+	// caller's pin behind. Pinning the caller is also wrong because Start's caller
+	// (an HTTP handler, an Fx hook, a worker) is free to return at any time; when
+	// that goroutine exits the runtime retires the M and the kernel SIGKILLs a
+	// perfectly healthy runner.
+	//
+	// This goroutine therefore owns the thread for the whole child lifetime: pin,
+	// spawn, report, wait for the caller to finish wiring, then reap and unlock.
+	// The unlock happens only after cmd.Wait has returned, so a live runner is
+	// never exposed to M reclamation.
+	var logWg sync.WaitGroup
+	started := make(chan error, 1)
+	ready := make(chan struct{})
+	go func() {
+		runtime.LockOSThread()
+		if err := cmd.Start(); err != nil {
+			runtime.UnlockOSThread()
+			started <- err
+			return
+		}
+		started <- nil
+		// Wait for Start to publish p.cmd/state and start the log readers before
+		// reaping: an immediately-exiting child would otherwise reach the state
+		// bookkeeping in watchExit while Start is still mutating the struct.
+		<-ready
+		p.watchExit(cmd, stdoutR, stderrR, &logWg)
+	}()
+
+	if startErr := <-started; startErr != nil {
 		stdoutR.Close()
 		stdoutW.Close()
 		stderrR.Close()
 		stderrW.Close()
 		p.state = StatusDisabled
 		close(p.doneCh)
-		return fmt.Errorf("start runner process: %w", err)
+		return fmt.Errorf("start runner process: %w", startErr)
 	}
 
 	// Close parent's write ends immediately so EOF propagates when child terminates
@@ -239,7 +274,6 @@ func (p *RunnerProcess) Start() error {
 	p.startTime = time.Now()
 	p.state = StatusRunning
 
-	var logWg sync.WaitGroup
 	logWg.Add(2)
 	go func() {
 		defer logWg.Done()
@@ -252,9 +286,8 @@ func (p *RunnerProcess) Start() error {
 		stderrR.Close()
 	}()
 
-	// Watcher goroutine
-	go p.watchExit(cmd, stdoutR, stderrR, &logWg)
-
+	// Everything the watcher needs is now initialised; let it proceed to Wait.
+	close(ready)
 	return nil
 }
 
@@ -406,16 +439,21 @@ func classifyRunnerLine(line []byte, source string, fallback zapcore.Level) pars
 
 func validRunnerStatus(value string) bool {
 	switch value {
-	case "failed", "passed", "warning":
+	case "failed", "passed", "warning", "info":
 		return true
 	default:
 		return false
 	}
 }
 
+// validRunnerStage must stay in sync with the stages zhulong_algo_runner emits
+// (native/src/algorithm/runner/runner.cpp). A stage the runner emits but this
+// allowlist rejects is classified as "runner protocol record rejected", which
+// hides the real event: `broker_disconnected` is exactly the signal an operator
+// needs to tell "host died" apart from "plugin crashed".
 func validRunnerStage(value string) bool {
 	switch value {
-	case "args", "dlopen", "model_create", "worker_create", "task_open", "process", "connect", "name_check", "shm_init", "gallery_sync":
+	case "args", "dlopen", "model_create", "worker_create", "task_open", "process", "connect", "name_check", "shm_init", "gallery_sync", "broker_disconnected":
 		return true
 	default:
 		return false
@@ -562,6 +600,12 @@ func (p *RunnerProcess) reportRunnerIssues(source string) {
 }
 
 func (p *RunnerProcess) watchExit(cmd *exec.Cmd, stdoutR, stderrR *os.File, logWg *sync.WaitGroup) {
+	// Never release the spawn thread before the child is reaped, or Pdeathsig
+	// would fire on a healthy runner. This function runs on the goroutine that
+	// called runtime.LockOSThread and cmd.Start (see Start); it is the only
+	// unlock site, and only a goroutine that actually holds the lock may unlock it.
+	defer runtime.UnlockOSThread()
+
 	err := cmd.Wait()
 
 	// Wait for pipe readers to consume all remaining buffered logs.

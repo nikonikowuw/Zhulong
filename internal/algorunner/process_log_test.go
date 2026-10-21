@@ -114,6 +114,59 @@ func TestClassifyRunnerLinesRedactsUntrustedText(t *testing.T) {
 	}
 }
 
+// TestStreamLogReaderAcceptsBrokerDisconnectEvent pins the cross-layer contract
+// with native/src/algorithm/runner/runner.cpp: when the runner loses its broker
+// it emits {"status":"info","stage":"broker_disconnected"} on stderr. Both
+// tokens must be in the allowlist — otherwise the one event that distinguishes
+// "host died" from "plugin crashed" is downgraded to "record rejected" and
+// counted as invalid output.
+func TestStreamLogReaderAcceptsBrokerDisconnectEvent(t *testing.T) {
+	core, observed := observer.New(zapcore.DebugLevel)
+	process := NewRunnerProcess(ProcessConfig{Logger: zap.New(core)})
+	process.streamLogReader(strings.NewReader(
+		`{"status":"info","stage":"broker_disconnected","index":0,"frames_processed":9001}`+"\n"+
+			`{"status":"failed","stage":"broker_disconnected"}`+"\n"), "stderr", zapcore.WarnLevel)
+
+	if invalid := process.logStats[runnerSourceIndex("stderr")].invalid; invalid != 0 {
+		t.Fatalf("broker disconnect events counted as invalid runner output: %d", invalid)
+	}
+	entries := observed.All()
+	if len(entries) != 2 {
+		t.Fatalf("expected two protocol events, got %+v", entries)
+	}
+	if entries[0].Message != "runner protocol event" {
+		t.Fatalf("broker disconnect classified as %q", entries[0].Message)
+	}
+	fields := entries[0].ContextMap()
+	if fields["status"] != "info" || fields["stage"] != "broker_disconnected" {
+		t.Fatalf("broker disconnect event lost its tokens: %+v", fields)
+	}
+	// It must stay a one-line event: the runner's numeric diagnostics are not
+	// logged verbatim, only the allowlisted protocol tokens plus presence flags.
+	if _, exists := fields["frames_processed"]; exists {
+		t.Fatalf("runner-specific numeric field leaked into the log event: %+v", fields)
+	}
+	if entries[1].ContextMap()["status"] != "failed" {
+		t.Fatalf("failed/disconnected event = %+v", entries[1].ContextMap())
+	}
+}
+
+// TestClassifyRunnerLineStillRejectsUnknownTokens guards the other half of the
+// allowlist: accepting the runner's real vocabulary must not turn the check into
+// a wildcard, or arbitrary runner text would be promoted to a structured event.
+func TestClassifyRunnerLineStillRejectsUnknownTokens(t *testing.T) {
+	for _, line := range []string{
+		`{"status":"totally_new_status"}`,
+		`{"status":"failed","stage":"totally_new_stage"}`,
+		`{"status":"info","stage":"broker_disconnected","rc":"not-a-number"}`,
+	} {
+		parsed := classifyRunnerLine([]byte(line), "stderr", zapcore.WarnLevel)
+		if !parsed.invalid || parsed.message != "runner protocol record rejected" {
+			t.Fatalf("line %s was not rejected: %+v", line, parsed)
+		}
+	}
+}
+
 func TestReadBoundedLineDrainsAndRecovers(t *testing.T) {
 	long := strings.Repeat("x", maxRunnerLogLine+257)
 	input := long + "\n{\"status\":\"failed\",\"stage\":\"connect\"}\nfinal"
