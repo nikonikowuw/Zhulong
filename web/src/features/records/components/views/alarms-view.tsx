@@ -21,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { type Alarm } from '../../data/schema'
+import { algorithmLabel, type Alarm } from '../../data/schema'
 import { AlarmCard } from '../alarms/alarm-card'
 import { MediaImage } from '../common/media-image'
 
@@ -144,7 +144,7 @@ export function AlarmsView({
         enableSorting: false,
         cell: ({ row }) => (
           <span className='font-mono text-xs text-muted-foreground'>
-            {row.original.algorithmId || '-'}
+            {algorithmLabel(row.original) || '-'}
           </span>
         ),
       },

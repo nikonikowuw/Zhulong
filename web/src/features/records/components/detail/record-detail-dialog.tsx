@@ -23,6 +23,7 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import {
+  algorithmLabel,
   type Alarm,
   type Capture,
   type Recognition,
@@ -30,6 +31,7 @@ import {
 } from '../../data/schema'
 import { BoundingBoxCanvas } from '../common/bounding-box-canvas'
 import { MediaImage } from '../common/media-image'
+import { getGalleryImageUrl } from '../common/media-utils'
 import { RecordJsonViewer } from './record-json-viewer'
 
 export interface RecordDetailDialogProps {
@@ -191,8 +193,13 @@ export function RecordDetailDialog({
                       {t('detail.gallery')}
                     </span>
                     <div className='size-28 overflow-hidden rounded-md border border-border bg-muted/40'>
+                      {/*
+                        ⚠️ 底库照不能用 galleryImagePath 拼媒体 URL：它在 facesDir 下，
+                        与 mediafile 托管的媒体根是两个根，且存的是裸文件名。
+                        必须走 person 域的按人脸取图端点。
+                      */}
                       <MediaImage
-                        path={rec.galleryImagePath}
+                        src={getGalleryImageUrl(rec.personId, rec.matchedFaceId)}
                         alt='Gallery Target'
                         className='size-full'
                         fallbackText={t('detail.noGallery')}
@@ -314,7 +321,7 @@ export function RecordDetailDialog({
                     {t('detail.algorithmId')}
                   </span>
                   <span className='font-mono text-foreground'>
-                    {record.algorithmId || '-'}
+                    {algorithmLabel(record) || '-'}
                   </span>
                 </div>
               )}

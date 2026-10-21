@@ -82,6 +82,49 @@ describe('RecordDetailDialog', () => {
     await expect.element(getByText('Top-N 候选人比对')).toBeInTheDocument()
   })
 
+  it('loads the gallery photo from the person endpoint, not the media root', async () => {
+    // 回归用例：底库照存放在 facesDir，与 mediafile 托管的媒体根是两个根。
+    // 曾经这里把 galleryImagePath（裸文件名）拼成 /api/v1/media/content/...，
+    // 被首段白名单以 422 MEDIA_KIND_INVALID 拒绝，详情页永远显示占位图。
+    //
+    // ⚠️ 断言必须尽早做：真实无头浏览器里图片 404 会触发 onError，MediaImage
+    // 随即卸载 <img> 换成占位图标。因此这里捕获首次渲染的 src，而不是等待元素
+    // 稳定存在。
+    const seenSrcs: string[] = []
+    const originalCreateElement = document.createElement.bind(document)
+    const spy = vi
+      .spyOn(document, 'createElement')
+      .mockImplementation(((tag: string, options?: ElementCreationOptions) => {
+        const el = originalCreateElement(tag, options)
+        if (tag === 'img') {
+          const setAttribute = el.setAttribute.bind(el)
+          el.setAttribute = (name: string, value: string) => {
+            if (name === 'src') seenSrcs.push(value)
+            setAttribute(name, value)
+          }
+        }
+        return el
+      }) as typeof document.createElement)
+
+    const handleOpenChange = vi.fn()
+    await render(
+      <RecordDetailDialog
+        open={true}
+        onOpenChange={handleOpenChange}
+        record={mockRecognition}
+        tab='recognitions'
+      />
+    )
+    spy.mockRestore()
+
+    const gallerySrc = seenSrcs.find((src) => src.includes('/persons/'))
+    expect(gallerySrc).toBe(
+      `/api/v1/persons/${mockRecognition.personId}/faces/${mockRecognition.matchedFaceId}/image`
+    )
+    // 底库照绝不能走 media/content 取：那条路径必然 422。
+    expect(seenSrcs).not.toContain('/api/v1/media/content/gallery/p-888.jpg')
+  })
+
   it('renders alarm details and extra parameters', async () => {
     const handleOpenChange = vi.fn()
     const { getByText, getByRole } = await render(

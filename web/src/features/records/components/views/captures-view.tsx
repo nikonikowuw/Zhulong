@@ -22,7 +22,7 @@ import {
 } from '@/components/ui/table'
 import { DataTableColumnHeader } from '@/components/data-table/column-header'
 import { DataTablePagination } from '@/components/data-table/pagination'
-import { type Capture } from '../../data/schema'
+import { algorithmLabel, type Capture } from '../../data/schema'
 import { targetTypeBadgeClass } from '../../data/target-type'
 import { CaptureCard } from '../captures/capture-card'
 import { MediaImage } from '../common/media-image'
@@ -144,6 +144,23 @@ export function CapturesView({
         cell: ({ row }) => (
           <span className='font-mono text-xs text-muted-foreground'>
             {row.original.trackId > 0 ? `#${row.original.trackId}` : '-'}
+          </span>
+        ),
+      },
+      {
+        // 展示 algorithmLabel 而不是裸 algorithmId：算法被卸载后 ID 会变空，
+        // 只有写入时快照的名称/版本还能回答「这张抓拍是谁产生的」。
+        accessorKey: 'algorithmId',
+        header: ({ column }) => (
+          <DataTableColumnHeader
+            column={column}
+            title={t('table.algorithmId')}
+          />
+        ),
+        enableSorting: false,
+        cell: ({ row }) => (
+          <span className='font-mono text-xs text-muted-foreground'>
+            {algorithmLabel(row.original) || '-'}
           </span>
         ),
       },

@@ -51,6 +51,9 @@ const sampleCaptures: Capture[] = [
   {
     id: 'cap-1',
     cameraId: 'cam-lane',
+    algorithmId: 'algo-vehicle',
+    algorithmName: '车辆检测',
+    algorithmVersion: '1.4.0',
     targetType: 'vehicle',
     trackId: 5,
     score: 0.92,
@@ -223,6 +226,56 @@ describe('Records Views', () => {
       await expect.element(getByRole('table')).toBeInTheDocument()
       await expect.element(getByText('#5')).toBeInTheDocument()
       await expect.element(getByText('cam-lane')).toBeInTheDocument()
+    })
+
+    it('shows the algorithm snapshot in the captures table', async () => {
+      // 迁移 000016 之前 captures 根本没有算法归属列，抓拍列表无法按算法归因。
+      const { getByText } = await render(
+        <CapturesView
+          items={sampleCaptures}
+          total={1}
+          page={1}
+          pageSize={20}
+          view='table'
+          isLoading={false}
+          isError={false}
+          onPageChange={vi.fn()}
+          onPageSizeChange={vi.fn()}
+          onSelect={vi.fn()}
+          onRetry={vi.fn()}
+        />
+      )
+
+      // 优先展示名称+版本，而不是裸 ID。
+      await expect.element(getByText('车辆检测 v1.4.0')).toBeInTheDocument()
+    })
+
+    it('falls back to the id when the capture has no algorithm snapshot', async () => {
+      // 迁移 000016 之前写入的历史抓拍没有快照，只能显示 ID（或 '-'）。
+      const legacyCapture: Capture = {
+        ...sampleCaptures[0],
+        id: 'cap-legacy',
+        algorithmId: 'algo-legacy',
+        algorithmName: undefined,
+        algorithmVersion: undefined,
+      }
+      const { getByText } = await render(
+        <CapturesView
+          items={[legacyCapture]}
+          total={1}
+          page={1}
+          pageSize={20}
+          view='table'
+          isLoading={false}
+          isError={false}
+          onPageChange={vi.fn()}
+          onPageSizeChange={vi.fn()}
+          onSelect={vi.fn()}
+          onRetry={vi.fn()}
+        />
+      )
+
+      await expect.element(getByText('algo-legacy')).toBeInTheDocument()
     })
   })
 })
