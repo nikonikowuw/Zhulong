@@ -19,6 +19,7 @@ using MppBuffer = void*;
 using MppBufferGroup = void*;
 using MppPacket = void*;
 using MppFrame = void*;
+using MppEncCfg = void*;
 
 using MppCtxType = int32_t;
 constexpr MppCtxType MPP_CTX_DEC = 0;
@@ -26,8 +27,9 @@ constexpr MppCtxType MPP_CTX_ENC = 1;
 constexpr MppCtxType MPP_CTX_ISP = 2;
 
 using MppCodingType = int32_t;
-constexpr MppCodingType MPP_VIDEO_CodingAVC  = 7;        /**< H.264/AVC */
-constexpr MppCodingType MPP_VIDEO_CodingHEVC = 16777220; /**< H.265/HEVC (0x01000004) */
+constexpr MppCodingType MPP_VIDEO_CodingAVC   = 7;        /**< H.264/AVC */
+constexpr MppCodingType MPP_VIDEO_CodingMJPEG = 8;        /**< Motion JPEG（对齐 rk_type.h 的 MppCodingType 序号） */
+constexpr MppCodingType MPP_VIDEO_CodingHEVC  = 16777220; /**< H.265/HEVC (0x01000004) */
 
 using MppFrameFormat = uint32_t;
 constexpr MppFrameFormat MPP_FMT_YUV420SP       = 0; /**< NV12: Y plane + UV interleaved */
@@ -63,6 +65,12 @@ constexpr int32_t MPP_DEC_SET_PARSER_FAST_MODE   = MPP_DEC_CMD_BASE + 6; /**< 0x
 constexpr int32_t MPP_DEC_SET_OUTPUT_FORMAT      = MPP_DEC_CMD_BASE + 10;/**< 0x0031000a */
 constexpr int32_t MPP_DEC_SET_IMMEDIATE_OUT      = MPP_DEC_CMD_BASE + 12;/**< 0x0031000c */
 constexpr int32_t MPP_DEC_SET_ENABLE_FAST_PLAY   = MPP_DEC_CMD_BASE + 14;/**< 0x0031000e */
+
+constexpr int32_t CMD_CTX_ID_ENC   = 0x00020000;
+constexpr int32_t MPP_ENC_CMD_BASE = CMD_MODULE_CODEC | CMD_CTX_ID_ENC; /**< 0x00320000 */
+
+/** @brief 0x00320001：下完整 MppEncCfg（含 prep / codec / rc / jpeg 子项） */
+constexpr int32_t MPP_ENC_SET_CFG = MPP_ENC_CMD_BASE + 1;
 
 // MPP 错误码
 constexpr int32_t MPP_OK              = 0;

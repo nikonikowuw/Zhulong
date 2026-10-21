@@ -16,6 +16,7 @@
 #include "Zhulong/engine.h"
 #include "Zhulong/frame.hpp"
 #include "nodes/snapshot/jpeg_encoder.hpp"
+#include "nodes/snapshot/jpeg_encoder_backend.hpp"
 
 #include <algorithm>
 #include <array>
@@ -273,9 +274,10 @@ bool append_image(Zhulong_snapshot_result_t &result, int32_t box_index, int32_t 
 Zhulong_status_t encode_snapshot(const HardwareFrame &frame, int32_t quality,
                                  const std::vector<std::array<float, 4>> &boxes,
                                  Zhulong_snapshot_h *out) {
-    // 先探编码器能力：静态 FFmpeg 若未编译 mjpeg，应立刻返回 UNSUPPORTED，
-    // 而不是让调用方误以为「这一帧有问题，下次再试」。
-    if (!jpeg_encoder_available()) {
+    // 先探编码能力：两个后端都不可用（静态 FFmpeg 未编译 mjpeg 且平台无 VEPU）时
+    // 应立即返回 UNSUPPORTED，而不是让调用方误以为「这一帧有问题，下次再试」。
+    JpegBackend &backend = JpegBackend::instance();
+    if (!backend.available()) {
         return Zhulong_ERR_UNSUPPORTED;
     }
 
@@ -285,17 +287,26 @@ Zhulong_status_t encode_snapshot(const HardwareFrame &frame, int32_t quality,
         return Zhulong_ERR_UNSUPPORTED;
     }
 
-    auto result = std::make_unique<Zhulong_snapshot_result_t>();
-    YuvFrame full{};
-    if (!extract_yuv_region(view, 0, 0, static_cast<int>(view.width), static_cast<int>(view.height), full)) {
+    // 全幅矩形按 2 像素向内取整（色度下采样要求），与裁剪框的取整规则一致；
+    // 两个编码后端产出的尺寸因此完全相同，调用方不必感知后端差异。
+    const int full_w = static_cast<int>(view.width) & ~1;
+    const int full_h = static_cast<int>(view.height) & ~1;
+    if (full_w < 2 || full_h < 2) {
         return Zhulong_ERR_UNSUPPORTED;
     }
 
+    auto result = std::make_unique<Zhulong_snapshot_result_t>();
     std::vector<uint8_t> jpeg;
-    if (!encode_jpeg(full, quality, jpeg)) {
+    // 全幅优先走 DMA-BUF 直通（零 CPU 拷贝）；不可用或失败时回退到 CPU 视图上传，
+    // 两条路径对同一帧产出等价图像，调用方无需感知。
+    bool encoded = backend.encode_dma(frame, view, full_w, full_h, quality, jpeg);
+    if (!encoded) {
+        encoded = backend.encode(view, 0, 0, full_w, full_h, quality, jpeg);
+    }
+    if (!encoded) {
         return Zhulong_ERR_INTERNAL;
     }
-    append_image(*result, -1, static_cast<int32_t>(full.width), static_cast<int32_t>(full.height),
+    append_image(*result, -1, static_cast<int32_t>(full_w), static_cast<int32_t>(full_h),
                  std::move(jpeg));
 
     // 裁剪图：某个框越界/退化时静默跳过，不使整次抓拍失败。
@@ -308,18 +319,13 @@ Zhulong_status_t encode_snapshot(const HardwareFrame &frame, int32_t quality,
         if (!normalized_box_to_pixels(boxes[i].data(), view.width, view.height, px, py, pw, ph)) {
             continue;
         }
-        YuvFrame crop{};
-        if (!extract_yuv_region(view, px, py, pw, ph, crop)) {
-            continue;
-        }
         std::vector<uint8_t> crop_jpeg;
-        if (!encode_jpeg(crop, quality, crop_jpeg)) {
-            // 单张裁剪图编码失败不影响其他图：抓拍的核心价值是全幅图。
+        // 单张裁剪图编码失败不影响其他图：抓拍的核心价值是全幅图。
+        if (!backend.encode(view, px, py, pw, ph, quality, crop_jpeg)) {
             continue;
         }
-        append_image(*result, static_cast<int32_t>(i),
-                     static_cast<int32_t>(crop.width), static_cast<int32_t>(crop.height),
-                     std::move(crop_jpeg));
+        append_image(*result, static_cast<int32_t>(i), static_cast<int32_t>(pw),
+                     static_cast<int32_t>(ph), std::move(crop_jpeg));
     }
 
     *out = result.release();

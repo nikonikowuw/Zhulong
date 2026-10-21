@@ -140,6 +140,8 @@ add_library(ZhulongEngine STATIC
     src/nodes/decode/mpp_loader.cpp
     src/nodes/decode/mpp_decoder.cpp
     src/nodes/snapshot/jpeg_encoder.cpp
+    src/nodes/snapshot/jpeg_encoder_backend.cpp
+    src/nodes/snapshot/mpp_jpeg_encoder.cpp
 )
 target_compile_features(ZhulongEngine PUBLIC cxx_std_17)
 target_include_directories(ZhulongEngine
@@ -359,12 +361,31 @@ target_include_directories(FaceRecognitionPlugin PRIVATE
 target_link_libraries(FaceRecognitionPlugin PRIVATE ZhulongAlgoRuntime)
 set_target_properties(FaceRecognitionPlugin PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 
+# ==============================================================================
+#                      4.6 构建车牌识别算法插件 (PlateRecognitionPlugin)
+# ==============================================================================
+add_library(PlateRecognitionPlugin SHARED
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/src/plate_recognition.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/src/plate_detector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/src/plate_recognizer.cpp
+)
+target_compile_features(PlateRecognitionPlugin PUBLIC cxx_std_17)
+target_compile_definitions(PlateRecognitionPlugin PRIVATE ZHULONG_PLUGIN_BUILD)
+target_include_directories(PlateRecognitionPlugin PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/src
+)
+target_link_libraries(PlateRecognitionPlugin PRIVATE ZhulongAlgoRuntime)
+set_target_properties(PlateRecognitionPlugin PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(PLUGIN_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/cmake/plugin-exports.map")
     target_link_options(MockDetector PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
     target_link_options(MockClassifier PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
     target_link_options(MockPersonStructure PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
     target_link_options(FaceRecognitionPlugin PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
+    target_link_options(PlateRecognitionPlugin PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
 endif()
 
 # ==============================================================================
@@ -470,6 +491,18 @@ if(BUILD_TESTING)
         target_link_libraries(ZhulongFaceRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
         add_test(NAME ZhulongFaceRecognitionPlugin COMMAND ZhulongFaceRecognitionPluginTests $<TARGET_FILE:FaceRecognitionPlugin>)
         set_tests_properties(ZhulongFaceRecognitionPlugin PROPERTIES TIMEOUT 10)
+
+        add_executable(ZhulongPlateRecognitionPluginTests
+            tests/plate_recognition_plugin_test.cpp
+        )
+        target_compile_features(ZhulongPlateRecognitionPluginTests PRIVATE cxx_std_17)
+        target_include_directories(ZhulongPlateRecognitionPluginTests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(ZhulongPlateRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
+        add_test(NAME ZhulongPlateRecognitionPlugin COMMAND ZhulongPlateRecognitionPluginTests $<TARGET_FILE:PlateRecognitionPlugin>)
+        set_tests_properties(ZhulongPlateRecognitionPlugin PROPERTIES TIMEOUT 10)
     endif()
 
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
@@ -504,6 +537,9 @@ if(BUILD_TESTING)
     )
     if(TARGET ZhulongFaceRecognitionPluginTests)
         list(APPEND ASSERT_TEST_TARGETS ZhulongFaceRecognitionPluginTests)
+    endif()
+    if(TARGET ZhulongPlateRecognitionPluginTests)
+        list(APPEND ASSERT_TEST_TARGETS ZhulongPlateRecognitionPluginTests)
     endif()
     if(TARGET ZhulongFaceRecognitionOnnxTests)
         list(APPEND ASSERT_TEST_TARGETS ZhulongFaceRecognitionOnnxTests)
@@ -543,6 +579,16 @@ if(BUILD_TESTING)
     target_link_libraries(ZhulongSnapshotTests PRIVATE ZhulongEngine)
     add_test(NAME ZhulongSnapshot COMMAND ZhulongSnapshotTests)
 
+    # JPEG 编码后端选择与硬件（VEPU）编码自检。
+    # ⚠️ 默认强制 software 后端：本机（x86）没有 /dev/mpp_service，若允许 auto
+    #    会让测试结果依赖构建机环境；硬件路径由板端用 ZHULONG_JPEG_BACKEND=mpp 覆盖。
+    add_executable(ZhulongJpegEncoderTests tests/jpeg_encoder_test.cpp)
+    target_include_directories(ZhulongJpegEncoderTests PRIVATE src)
+    target_link_libraries(ZhulongJpegEncoderTests PRIVATE ZhulongEngine)
+    add_test(NAME ZhulongJpegEncoder COMMAND ZhulongJpegEncoderTests)
+    set_tests_properties(ZhulongJpegEncoder PROPERTIES
+        ENVIRONMENT "ZHULONG_JPEG_BACKEND=cpu" TIMEOUT 120)
+
     # 人脸特征提取单次 C ABI 单元测试
     add_executable(ZhulongFaceFeatureExtractTests tests/face_feature_extract_test.cpp)
     target_link_libraries(ZhulongFaceFeatureExtractTests PRIVATE ZhulongEngine ${CMAKE_DL_LIBS})
@@ -578,6 +624,7 @@ if(BUILD_TESTING)
             add_test(NAME ZhulongPluginSymbolVisibility COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_plugin_symbols.py ${CMAKE_NM}
                 $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier> $<TARGET_FILE:MockPersonStructure>
+                $<TARGET_FILE:PlateRecognitionPlugin>
                 "$<TARGET_FILE:FaceRecognitionPlugin>=zhulong_plugin_get_api,zhulong_face_extract_feature,zhulong_face_extract_release")
         endif()
         add_test(NAME ZhulongRtspIntegration COMMAND ${Python3_EXECUTABLE}

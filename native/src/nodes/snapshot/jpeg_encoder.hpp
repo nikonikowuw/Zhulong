@@ -3,8 +3,11 @@
  * @brief 静态 FFmpeg MJPEG 编码器封装（单帧 NV12 / YUV420P → 完整 JPEG 字节流）
  *
  * 核心设计原则：
- * 1. **单帧独立编码**：每个实例封装一次性编码所需的全部状态，编码完即可丢弃。
- *    抓拍是低频事件（默认 3s 冷却），复用 codec context 的收益不抵复杂度。
+ * 1. **本文件只负责软件编码**：硬件（VEPU）路径在 `mpp_jpeg_encoder.hpp`，两者由
+ *    `jpeg_encoder_backend.hpp` 的 `JpegBackend` 统一选择与回退 —— 调用方（C ABI
+ *    抓拍）只认 `JpegBackend`，不直接接触任何一个具体后端。
+ *    软件路径按单帧独立编码：抓拍是低频事件，复用 codec context 的收益不抵复杂度；
+ *    硬件路径的会话复用价值则完全相反（几十毫秒级建会话），故在硬件实现里池化。
  * 2. **格式归一**：解码器可能产出 NV12（MPP 硬解）或 YUV420P 三平面（FFmpeg 软解），
  *    两者统一喂给同一个编码器；NV12 在喂入前拆成 YUV420P 平面。
  * 3. **不依赖 swscale**：静态 FFmpeg 以 `--disable-swscale` 构建，因此色彩空间转换
