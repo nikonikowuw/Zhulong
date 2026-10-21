@@ -1436,3 +1436,29 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**（代码与门禁；真浏览器卸载路径与部署预算签核保持 open）
+
+
+## Session 80: Runner 生命周期与 Broker 清扫收尾
+<!-- trellis-session: v=2 fp=c776217ccc683737 -->
+
+**Date**: 2026-10-21
+**Task**: Runner 生命周期与 Broker 清扫收尾
+**Package**: backend
+**Branch**: `feat/native-log-bridge`
+
+### Summary
+
+修复 runner spawn 线程所有权与 Linux 孤儿资源清扫安全性，Go/C++ broker 共享目录 flock，接入 broker_disconnected 结构化解析并恢复协作约定；稳定前端浏览器测试的 viewport 上下文。验证 make check、native-test 与交叉编译通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `74468d7` | fix(algorunner): 修正 runner spawn 线程所有权与启动清扫安全性 |
+| `6b8aaf9` | feat(native): broker 资源目录锁与 runner 结构化日志桥接 |
+| `8f927e2` | docs(spec): 记录 spawn 线程、清扫 fail-closed 与 resource flock 契约 |
+| `9d096d8` | test(web): stabilize browser tests across viewport contexts |
+
+### Status
+
+[OK] **Completed**

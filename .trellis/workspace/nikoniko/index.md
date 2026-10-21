@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 77
-- **Last Active**: 2026-10-20
+- **Total Sessions**: 80
+- **Last Active**: 2026-10-21
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1338 | Active |
+| `journal-2.md` | ~1464 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 80 | 2026-10-21 | Runner 生命周期与 Broker 清扫收尾 | `74468d7`, `6b8aaf9`, `8f927e2`, `9d096d8` | `feat/native-log-bridge` |
 | 77 | 2026-10-20 | Go日志核心加固续接与验收归档 | `59a4e90` | `dev` |
 | 76 | 2026-10-19 | 工业级前端错误反馈与通知体系重构 | `57b1afd` | `dev` |
 | 75 | 2026-10-19 | 人脸识别插件集成 SCRFD 人体检测双模型 | `2f053fd`, `41fee2e` | `dev` |
