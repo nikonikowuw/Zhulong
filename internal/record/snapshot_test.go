@@ -68,6 +68,22 @@ func (p *fakeSnapshotProvider) snapshotCalls() int {
 	return p.calls
 }
 
+// lastOptions returns a copy of the most recent request under the same mutex
+// the worker writes it with. Reading p.options directly from the test goroutine
+// is a data race: Snapshot lands on the SnapshotStore worker goroutine, so the
+// test must not touch the field without holding the lock.
+func (p *fakeSnapshotProvider) lastOptions() engine.SnapshotOptions {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	opts := p.options
+	// Copy the slice header's backing array too: the worker may later reuse or
+	// mutate it, and the caller compares element count and contents.
+	if opts.Boxes != nil {
+		opts.Boxes = append([]engine.SnapshotBox(nil), opts.Boxes...)
+	}
+	return opts
+}
+
 // fakeMediaRoot 返回固定媒体根。
 type fakeMediaRoot struct {
 	root string
@@ -142,11 +158,12 @@ func TestSnapshotStoreWritesFullAndCrop(t *testing.T) {
 	}
 
 	// 请求必须带上质量与裁剪框，否则原生层只会出全幅图。
-	if provider.options.Quality != 85 {
-		t.Errorf("expected quality 85, got %d", provider.options.Quality)
+	opts := provider.lastOptions()
+	if opts.Quality != 85 {
+		t.Errorf("expected quality 85, got %d", opts.Quality)
 	}
-	if len(provider.options.Boxes) != 1 {
-		t.Errorf("expected 1 box, got %d", len(provider.options.Boxes))
+	if len(opts.Boxes) != 1 {
+		t.Errorf("expected 1 box, got %d", len(opts.Boxes))
 	}
 }
 
@@ -272,7 +289,8 @@ func TestServiceEnqueuesSnapshotOnRecord(t *testing.T) {
 	})
 
 	// 烟火类告警无目标裁剪框：只应出全幅图，不应请求任何裁剪。
-	if len(provider.options.Boxes) != 0 {
-		t.Errorf("scene-wide alarm must not request crops, got %d boxes", len(provider.options.Boxes))
+	// 读之前必须走带锁的访问器：options 是 worker goroutine 写的。
+	if opts := provider.lastOptions(); len(opts.Boxes) != 0 {
+		t.Errorf("scene-wide alarm must not request crops, got %d boxes", len(opts.Boxes))
 	}
 }
