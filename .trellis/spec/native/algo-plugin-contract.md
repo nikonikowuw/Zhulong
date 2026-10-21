@@ -170,6 +170,10 @@ zhulong_algo_runner --verify-plugin <path_to_plugin.so> --sample <test_image_or_
 - 原生 `Engine` 托管 `FrameBroker` 与 `FramePublisher` 线程，当 `ConsumerAI` 挂载时拉起、卸载时销毁；
 - 解码后的帧在 Native 侧由 `FramePublisher` 线程基于 `max(sample_fps)` 进行发布侧节流并推入共享内存；
 - 零像素数据进入 Go GC 内存，Go 仅负责控制流与 socket 路径装配。
+- ⚠️ **创建必须持有与宿主清扫共享的目录锁**：`FrameBroker::start` 一开始就 `BrokerResourceLock::acquire({base_dir, "/dev/shm"})`（`src/algorithm/ipc/broker_resource_lock.{hpp,cpp}`），并**阻塞持有到 shm 初始化与 socket `bind`/`listen` 全部完成**后才能释放。原因：`shm_open` 在 `mmap` 之前、`bind` 在 `listen` 之前都会把资源发布到文件系统中，而宿主启动清扫（Go `internal/algorunner`）只能依据 `/proc` 判断“无人使用”，这两个窗口里的新资源会被当成废弃文件删掉。
+  - 锁集合必须按 `(device, inode)` **去重 + 升序排序**，与 Go 侧 `resource_lock_linux.go` 完全一致；别名路径（symlink / bind mount / `base_dir == /dev/shm`）不得变成两把锁或交叉加锁死锁。
+  - 创建侧阻塞（不可跳过同步），清扫侧非阻塞（锁忙即整体跳过）。取锁失败必须通过既有 `error_msg` 返回失败，**不得**在无锁状态下继续创建。
+  - 回归门禁：`ZhulongFrameBrokerTests::test_frame_broker_start_waits_for_resource_lock`（持有 `/dev/shm` 锁时断言 200ms 内既无 socket 也无 `start` 返回，释放后才成功）。
 
 ---
 
