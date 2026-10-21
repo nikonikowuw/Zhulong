@@ -127,7 +127,9 @@ describe('RegionEditorDialog', () => {
       expect(screen.getByTitle('删除区域').elements()).toHaveLength(0)
     })
 
-    await screen.getByRole('button', { name: '撤销' }).click()
+    const undoButton = screen.getByRole('button', { name: '撤销' })
+    await expect.element(undoButton).not.toBeDisabled()
+    await undoButton.click()
     await expect
       .element(screen.getByText('未设置关注区域（全画面推理上报）'))
       .not.toBeInTheDocument()
@@ -143,7 +145,9 @@ describe('RegionEditorDialog', () => {
       .element(screen.getByTestId('frame-surface'))
       .toHaveAttribute('data-paused', 'false')
 
-    await screen.getByRole('button', { name: '冻结画面' }).click()
+    const freezeButton = screen.getByRole('button', { name: '冻结画面' })
+    await expect.element(freezeButton).not.toBeDisabled()
+    await freezeButton.click()
     await expect
       .element(screen.getByTestId('frame-surface'))
       .toHaveAttribute('data-paused', 'true')

@@ -23,10 +23,21 @@ describe('LanguageSwitch', () => {
     // Click English
     await userEvent.click(englishOption)
     expect(i18n.language).toBe('en')
+    await expect.element(englishOption).not.toBeInTheDocument()
 
-    // Click trigger again to switch back
-    await userEvent.click(trigger)
+    const updatedTrigger = getByRole('button', { name: /switch language/i })
+    await expect
+      .element(updatedTrigger)
+      .toHaveAttribute('aria-expanded', 'false')
+
+    // Re-open only after the previous menu has closed.
+    await userEvent.click(updatedTrigger)
+    await expect
+      .element(updatedTrigger)
+      .toHaveAttribute('aria-expanded', 'true')
+
     const zhHansOption = getByText('简体中文')
+    await expect.element(zhHansOption).toBeInTheDocument()
     await userEvent.click(zhHansOption)
     expect(i18n.language).toBe('zh-Hans')
   })

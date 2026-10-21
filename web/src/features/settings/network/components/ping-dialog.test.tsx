@@ -3,11 +3,11 @@ import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
 import { PingDialog } from './ping-dialog'
 
-const mutateMock = vi.fn()
+const mutateAsyncMock = vi.fn().mockResolvedValue({ reachable: true, rttMs: 1 })
 
 vi.mock('../hooks/use-network', () => ({
   usePingMutation: () => ({
-    mutate: mutateMock,
+    mutateAsync: mutateAsyncMock,
     reset: vi.fn(),
     isPending: false,
     data: null,
@@ -47,7 +47,7 @@ describe('PingDialog', () => {
     await userEvent.click(getByRole('button', { name: /开始探测/i }))
 
     await vi.waitFor(() => {
-      expect(mutateMock).toHaveBeenCalledWith('10.0.0.1')
+      expect(mutateAsyncMock).toHaveBeenCalledWith('10.0.0.1')
     })
   })
 })

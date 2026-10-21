@@ -1,10 +1,9 @@
-/// <reference types="vitest/config" />
 import path from 'path'
-import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import { playwright } from '@vitest/browser-playwright'
+import { defineConfig, configDefaults } from 'vitest/config'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -45,7 +44,27 @@ export default defineConfig({
     browser: {
       enabled: true,
       provider: playwright(),
-      instances: [{ browser: 'chromium' }],
+      instances: [
+        {
+          browser: 'chromium',
+          name: 'chromium-default',
+          exclude: [
+            ...configDefaults.exclude,
+            'src/components/config-drawer.test.tsx',
+            'src/features/tasks/components/region-editor-dialog.test.tsx',
+          ],
+        },
+        {
+          browser: 'chromium',
+          name: 'chromium-desktop',
+          include: [
+            'src/components/config-drawer.test.tsx',
+            'src/features/tasks/components/region-editor-dialog.test.tsx',
+          ],
+          viewport: { width: 1280, height: 896 },
+        },
+      ],
+      api: { host: '127.0.0.1' },
     },
     coverage: {
       // include: ['src/**/*.{js,jsx,ts,tsx}'], // Uncomment to expand the report to all src/**/* so untested modules appear as 0% coverage.
