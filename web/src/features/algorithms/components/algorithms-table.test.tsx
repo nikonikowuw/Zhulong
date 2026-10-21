@@ -38,6 +38,24 @@ vi.mock('../hooks/use-algorithms', () => ({
     mutate: vi.fn(),
     isPending: false,
   }),
+  // 表格里会渲染卸载确认弹窗，它依赖影响面查询；这里给一个「干净算法」的
+  // 空影响面，避免 hook 未被 mock 导致模块加载失败。
+  useDeletionImpact: () => ({
+    data: {
+      algorithmId: 'face_recognition',
+      algorithmName: '人脸识别算法',
+      version: '1.0.0',
+      status: 'DISABLED',
+      boundTaskCount: 0,
+      affectedCameraIds: [],
+      recognitionCount: 0,
+      alarmCount: 0,
+      captureCount: 0,
+      requiresStop: false,
+    },
+    isPending: false,
+    isError: false,
+  }),
 }))
 
 describe('AlgorithmsTable', () => {

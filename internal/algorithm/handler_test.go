@@ -16,9 +16,18 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 func setupTestRouter(t *testing.T) (*gin.Engine, *algorithm.Service) {
+	t.Helper()
+	router, svc, _ := newAlgorithmTestApp(t)
+	return router, svc
+}
+
+// newAlgorithmTestApp 是测试装配的内核：除 router 与 service 外还回传 *gorm.DB，
+// 让需要直接播种数据的用例（如影响面统计）不必穿透 Service 的内部字段。
+func newAlgorithmTestApp(t *testing.T) (*gin.Engine, *algorithm.Service, *gorm.DB) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	tempDir := t.TempDir()
@@ -40,7 +49,7 @@ func setupTestRouter(t *testing.T) (*gin.Engine, *algorithm.Service) {
 	comp.Handler.RegisterRoutes(api)
 	comp.Handler.RegisterUploadRoutes(api)
 
-	return r, comp.Service
+	return r, comp.Service, dbStore.DB()
 }
 
 func TestHandlerListAndInstall(t *testing.T) {

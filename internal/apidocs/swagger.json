@@ -231,6 +231,59 @@
                 }
             }
         },
+        "/algorithms/{id}/deletion-impact": {
+            "get": {
+                "description": "Returns how many tasks, cameras and evidence records reference this algorithm. Read-only: it has no side effects and can be called freely before asking the operator to confirm. Note that deleting an algorithm does NOT delete evidence records — it only clears their algorithm reference, so `algorithmId` becomes empty while the `algorithmName` / `algorithmVersion` snapshots remain.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "algorithm"
+                ],
+                "summary": "Preview the impact of deleting an algorithm",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Algorithm ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/algorithm.DeletionImpact"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/algorithms/{id}/disable": {
             "post": {
                 "description": "Stops the supervised runner subprocess and sets the algorithm status to DISABLED.",
@@ -3704,6 +3757,48 @@
                 }
             }
         },
+        "algorithm.DeletionImpact": {
+            "type": "object",
+            "properties": {
+                "affectedCameraIds": {
+                    "description": "AffectedCameraIDs 列出受影响相机，供前端直接展示「这 3 台相机会停」。",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "alarmCount": {
+                    "type": "integer"
+                },
+                "algorithmId": {
+                    "type": "string"
+                },
+                "algorithmName": {
+                    "type": "string"
+                },
+                "boundTaskCount": {
+                    "description": "BoundTaskCount 是当前绑定了该算法的通道任务数。卸载后这些任务的该算法条目\n会被删除；任务本身保留（其他算法不受影响），但若某任务因此变成空任务，\n那台相机就完全停止分析了。",
+                    "type": "integer"
+                },
+                "captureCount": {
+                    "type": "integer"
+                },
+                "recognitionCount": {
+                    "description": "RecognitionCount / AlarmCount / CaptureCount 是历史证据条数。\n卸载**不会删除**它们，只会让 algorithm_id 变成 NULL。\n前端文案必须准确：是「失去归属」而非「删除」。",
+                    "type": "integer"
+                },
+                "requiresStop": {
+                    "description": "RequiresStop 表示算法当前正在运行，卸载会先强制停止它。",
+                    "type": "boolean"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
         "app.HealthData": {
             "type": "object",
             "properties": {
@@ -4649,6 +4744,13 @@
                 "algorithmId": {
                     "type": "string"
                 },
+                "algorithmName": {
+                    "description": "同 RecognitionResponse：算法卸载后的来源凭证。",
+                    "type": "string"
+                },
+                "algorithmVersion": {
+                    "type": "string"
+                },
                 "box": {
                     "type": "array",
                     "items": {
@@ -4688,6 +4790,16 @@
         "record.CaptureResponse": {
             "type": "object",
             "properties": {
+                "algorithmId": {
+                    "description": "与 RecognitionResponse / AlarmResponse 同构：算法卸载后 ID 变空，\n名称与版本快照仍能回答「这张抓拍是哪个算法产生的」。",
+                    "type": "string"
+                },
+                "algorithmName": {
+                    "type": "string"
+                },
+                "algorithmVersion": {
+                    "type": "string"
+                },
                 "attributes": {
                     "type": "object",
                     "additionalProperties": {}
@@ -4734,6 +4846,13 @@
             "type": "object",
             "properties": {
                 "algorithmId": {
+                    "type": "string"
+                },
+                "algorithmName": {
+                    "description": "AlgorithmName/Version 来自写入时快照：算法被卸载后 algorithmId 变空，\n但这两个字段仍能回答「这批记录是哪个算法产生的」。",
+                    "type": "string"
+                },
+                "algorithmVersion": {
                     "type": "string"
                 },
                 "attributes": {

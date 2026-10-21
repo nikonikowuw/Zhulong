@@ -79,6 +79,58 @@ describe('algorithms-api', () => {
     )
   })
 
+  it('getDeletionImpact calls the read-only impact endpoint', async () => {
+    const spy = vi
+      .spyOn(apiClient, 'get')
+      .mockResolvedValue({
+        data: {
+          code: 'OK',
+          message: 'ok',
+          data: {
+            algorithmId: 'a1',
+            algorithmName: '安全帽检测',
+            version: '2.1.0',
+            status: 'DISABLED',
+            boundTaskCount: 2,
+            affectedCameraIds: ['cam-a', 'cam-b'],
+            recognitionCount: 10,
+            alarmCount: 3,
+            captureCount: 7,
+            requiresStop: false,
+          },
+        },
+      } as never)
+
+    const impact = await algorithmsApi.getDeletionImpact('a1')
+
+    expect(spy).toHaveBeenCalledWith('/algorithms/a1/deletion-impact')
+    expect(impact.boundTaskCount).toBe(2)
+    expect(impact.affectedCameraIds).toEqual(['cam-a', 'cam-b'])
+    expect(impact.alarmCount).toBe(3)
+  })
+
+  it('getDeletionImpact defaults missing counters to zero', async () => {
+    // 老固件可能不返回某些字段，用 default 兜住而不是抛 ZodError。
+    vi.spyOn(apiClient, 'get').mockResolvedValue({
+      data: {
+        code: 'OK',
+        message: 'ok',
+        data: {
+          algorithmId: 'a1',
+          algorithmName: 'X',
+          version: '1.0.0',
+          status: 'DISABLED',
+        },
+      },
+    } as never)
+
+    const impact = await algorithmsApi.getDeletionImpact('a1')
+
+    expect(impact.boundTaskCount).toBe(0)
+    expect(impact.affectedCameraIds).toEqual([])
+    expect(impact.requiresStop).toBe(false)
+  })
+
   it('deleteAlgorithm calls DELETE endpoint', async () => {
     vi.mocked(apiClient.delete).mockResolvedValue({
       data: { code: 'OK', message: 'deleted' },

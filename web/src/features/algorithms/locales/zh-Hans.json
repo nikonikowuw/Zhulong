@@ -38,7 +38,7 @@
   "disableBeforeDelete": "请先停用算法包后再执行卸载",
   "deleteAlgorithm": "卸载算法包",
   "deleteConfirmTitle": "确认卸载该算法包？",
-  "deleteConfirmDesc": "将物理移除算法包 {{name}} (v{{version}}) 及其权重模型文件。若有正在使用该算法的分析任务，请先将其解绑。",
+  "deleteConfirmDesc": "将物理移除算法包 {{name}} (v{{version}}) 及其权重模型文件。",
   "confirmDelete": "确认卸载",
   "taskDetection": "目标检测",
   "taskClassification": "图像分类",
@@ -68,5 +68,10 @@
   "resetSuccess": "已解除熔断，算法回到「已停用」状态",
   "resetFailedTitle": "重置失败",
   "resetFailedFallback": "重置失败，请稍后重试。",
-  "resetFailedHint": "请确认该算法仍处于熔断状态，然后重试。"
+  "resetFailedHint": "请确认该算法仍处于熔断状态，然后重试。",
+  "impactUnavailable": "无法获取影响面统计，请谨慎确认后再卸载。",
+  "impactTasks": "将解绑 {{count}} 路分析任务，受影响的摄像机：{{cameras}}。任务本身保留，但会失去该算法。",
+  "impactNoTasks": "当前没有分析任务绑定该算法。",
+  "impactEvidenceKept": "历史证据不会被删除：{{recognitions}} 条识别、{{alarms}} 条告警、{{captures}} 条抓拍将继续保留，并保留算法名称与版本快照，但无法再按该算法筛选。",
+  "impactRequiresStop": "该算法当前正在运行，卸载会先强制停止其进程。"
 }

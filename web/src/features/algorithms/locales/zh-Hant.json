@@ -38,7 +38,7 @@
   "disableBeforeDelete": "請先停用演算法包後再執行卸載",
   "deleteAlgorithm": "卸載演算法包",
   "deleteConfirmTitle": "確認卸載該演算法包？",
-  "deleteConfirmDesc": "將實體移除演算法包 {{name}} (v{{version}}) 及其權重模型檔案。若有正在使用該演算法的分析任務，請先將其解綁。",
+  "deleteConfirmDesc": "將實體移除演算法包 {{name}} (v{{version}}) 及其權重模型檔案。",
   "confirmDelete": "確認卸載",
   "taskDetection": "目標檢測",
   "taskClassification": "影像分類",
@@ -68,5 +68,10 @@
   "resetSuccess": "已解除熔斷，演算法回到「已停用」狀態",
   "resetFailedTitle": "重置失敗",
   "resetFailedFallback": "重置失敗，請稍後重試。",
-  "resetFailedHint": "請確認該演算法仍處於熔斷狀態，然後重試。"
+  "resetFailedHint": "請確認該演算法仍處於熔斷狀態，然後重試。",
+  "impactUnavailable": "無法取得影響面統計，請謹慎確認後再卸載。",
+  "impactTasks": "將解綁 {{count}} 路分析任務，受影響的攝影機：{{cameras}}。任務本身保留，但會失去該演算法。",
+  "impactNoTasks": "目前沒有分析任務綁定該演算法。",
+  "impactEvidenceKept": "歷史證據不會被刪除：{{recognitions}} 條辨識、{{alarms}} 條告警、{{captures}} 條抓拍將繼續保留，並保留演算法名稱與版本快照，但無法再按該演算法篩選。",
+  "impactRequiresStop": "該演算法目前正在執行，卸載會先強制停止其行程。"
 }

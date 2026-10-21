@@ -3,8 +3,10 @@ import {
   algorithmActionResponseSchema,
   algorithmListResponseSchema,
   algorithmSchema,
+  deletionImpactSchema,
   type Algorithm,
   type AlgorithmStatus,
+  type DeletionImpact,
 } from '../data/schema'
 
 export interface UploadProgressCallback {
@@ -56,6 +58,20 @@ export const algorithmsApi = {
       }
     )
     return algorithmSchema.parse(resp.data.data)
+  },
+
+  /**
+   * 查询卸载影响面（只读，无副作用）。
+   *
+   * 必须在用户确认卸载**之前**调用：它告诉用户会解绑几路任务、多少条
+   * 证据会失去算法归属。不要用 DELETE 的 409 载荷来替代 —— 那样「预览」
+   * 与「执行」会混在一个非幂等方法里。
+   */
+  async getDeletionImpact(id: string): Promise<DeletionImpact> {
+    const resp = await apiClient.get<ApiResponse<unknown>>(
+      `/algorithms/${id}/deletion-impact`
+    )
+    return deletionImpactSchema.parse(resp.data.data)
   },
 
   /**

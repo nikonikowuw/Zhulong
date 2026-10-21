@@ -1,7 +1,9 @@
 package algorithm
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
@@ -42,6 +44,10 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.POST("/:id/enable", h.Enable)
 		group.POST("/:id/disable", h.Disable)
 		group.POST("/:id/reset", h.Reset)
+		// 卸载影响面查询必须用独立的 GET，而不是让 DELETE 返回 409 + 载荷：
+		// 后者会让「查询」与「执行」混在一个非幂等方法里，前端无法在用户
+		// 确认前安全地预览后果。
+		group.GET("/:id/deletion-impact", h.GetDeletionImpact)
 		group.DELETE("/:id", h.Delete)
 	}
 }
@@ -201,6 +207,29 @@ func (h *Handler) Reset(c *gin.Context) {
 	httputil.Success(c, gin.H{"status": StatusDisabled})
 }
 
+// GetDeletionImpact godoc
+// @Summary      Preview the impact of deleting an algorithm
+// @Description  Returns how many tasks, cameras and evidence records reference this algorithm. Read-only: it has no side effects and can be called freely before asking the operator to confirm. Note that deleting an algorithm does NOT delete evidence records — it only clears their algorithm reference, so `algorithmId` becomes empty while the `algorithmName` / `algorithmVersion` snapshots remain.
+// @Tags         algorithm
+// @Produce      json
+// @Param        id path string true "Algorithm ID"
+// @Success      200  {object}  httputil.Response{data=DeletionImpact}
+// @Failure      404  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /algorithms/{id}/deletion-impact [get]
+func (h *Handler) GetDeletionImpact(c *gin.Context) {
+	id := c.Param("id")
+
+	// 刻意不打审计标签：这是只读预览，用户可能只是点开看看就取消，
+	// 记录成操作会把审计日志淹没在无效条目里。
+	impact, err := h.service.GetDeletionImpact(c.Request.Context(), id)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	httputil.Success(c, impact)
+}
+
 // Delete godoc
 // @Summary      Delete an algorithm
 // @Description  Removes the algorithm registration and its installed files. Deleting an algorithm that is currently ACTIVE returns 409 ALGORITHM_IS_ACTIVE; disable it first.
@@ -216,9 +245,27 @@ func (h *Handler) Delete(c *gin.Context) {
 	id := c.Param("id")
 	audithttp.Tag(c, ActionAlgorithmDelete, "algorithm:"+id, "Delete algorithm "+id)
 
+	// 卸载前先取一次影响面，写进审计详情。
+	//
+	// 理由：卸载之后这些关联信息就不可重建了（tasks 条目被删、记录失去
+	// algorithm_id）。事后追查「当时卸载造成了什么后果」只能靠这条审计。
+	// ⚠️ 这里是尽力而为：取不到影响面不应阻断卸载本身。
+	var impact *DeletionImpact
+	if computed, err := h.service.GetDeletionImpact(c.Request.Context(), id); err == nil {
+		impact = computed
+	}
+
 	if err := h.service.DeleteAlgorithm(c.Request.Context(), id); err != nil {
 		httputil.WriteError(c, err)
 		return
+	}
+
+	if impact != nil {
+		audithttp.TagDetail(c, fmt.Sprintf(
+			"uninstalled %s v%s; detached %d task(s) on %s, kept %d recognition(s)/%d alarm(s)/%d capture(s) with name snapshot",
+			impact.AlgorithmName, impact.Version, impact.BoundTaskCount,
+			strings.Join(impact.AffectedCameraIDs, ","),
+			impact.RecognitionCount, impact.AlarmCount, impact.CaptureCount))
 	}
 	httputil.Success(c, gin.H{"deleted": true})
 }

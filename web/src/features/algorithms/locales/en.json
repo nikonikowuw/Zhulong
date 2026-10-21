@@ -38,7 +38,7 @@
   "disableBeforeDelete": "Please disable the algorithm package before uninstalling",
   "deleteAlgorithm": "Uninstall package",
   "deleteConfirmTitle": "Uninstall Algorithm Package?",
-  "deleteConfirmDesc": "This will physically remove package {{name}} (v{{version}}) and its model weights. If any camera analysis task is using this algorithm, please unbind it first.",
+  "deleteConfirmDesc": "This will physically remove package {{name}} (v{{version}}) and its model weights.",
   "confirmDelete": "Uninstall",
   "taskDetection": "Detection",
   "taskClassification": "Classification",
@@ -68,5 +68,10 @@
   "resetSuccess": "Breaker cleared. The algorithm is now Disabled.",
   "resetFailedTitle": "Reset Failed",
   "resetFailedFallback": "Reset failed. Please try again later.",
-  "resetFailedHint": "Make sure the algorithm is still in crash loop, then retry."
+  "resetFailedHint": "Make sure the algorithm is still in crash loop, then retry.",
+  "impactUnavailable": "Could not load the impact summary. Proceed with caution.",
+  "impactTasks": "{{count}} analysis task(s) will be unbound. Affected cameras: {{cameras}}. The tasks themselves are kept but lose this algorithm.",
+  "impactNoTasks": "No analysis task is currently bound to this algorithm.",
+  "impactEvidenceKept": "Historical evidence is preserved: {{recognitions}} recognition(s), {{alarms}} alarm(s) and {{captures}} capture(s) will remain, keeping their algorithm name and version snapshot, but they can no longer be filtered by this algorithm.",
+  "impactRequiresStop": "This algorithm is currently running; uninstalling will stop its process first."
 }

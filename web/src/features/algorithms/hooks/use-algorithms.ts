@@ -40,6 +40,23 @@ export function useInstallAlgorithm(options?: {
 }
 
 /**
+ * 查询卸载影响面。
+ *
+ * 只在弹窗打开时启用（`enabled` 由调用方传入），避免为每张表格行都发一次请求。
+ * 刻意不设 staleTime：用户可能刚建完任务就回来卸载，缓存会让提示数字过期。
+ */
+export function useDeletionImpact(algorithmId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['algorithms', algorithmId, 'deletion-impact'],
+    queryFn: () => algorithmsApi.getDeletionImpact(algorithmId as string),
+    enabled: enabled && Boolean(algorithmId),
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+  })
+}
+
+/**
  * 卸载/删除算法包 Mutation Hook
  */
 export function useDeleteAlgorithm() {
