@@ -170,3 +170,13 @@ zhulong_algo_runner --verify-plugin plugin.so --sample sample.jpg
    - 接口幂等性：对已在运行中的算法调用 `EnableAlgorithm` 必须幂等返回 `200 OK`；对处于 `CRASH_LOOP` 熔断态的算法调用 `EnableAlgorithm` 返回 409 Conflict（机器码 `ALGORITHM_IN_CRASH_LOOP`），引导用户先重置。
 
 
+6. **卸载前必须让操作者看到影响面 (Deletion Impact Preview)**：
+   - 卸载算法包**不可撤销**，且会带来两类截然不同的后果，弹窗必须分开陈述：
+     - **会失去的能力**：`task_algorithms` 中该算法的条目被删除（任务本身保留，但对应相机在这条算法上停止分析）；算法包与模型文件从磁盘移除；
+     - **不会丢失的东西**：历史证据（`recognitions` / `alarms` / `captures`）**保留**，只把 `algorithm_id` 置 NULL，`algorithm_name` / `algorithm_version` 快照仍在（迁移 `000015`/`000016`）。失去的是**按算法筛选**的能力，不是数据。
+   - ⚠️ 文案铁律：**绝不可**写「将删除 N 条记录」。用户会以为证据没了，从而不敢卸载或误以为需要先备份。
+   - 接口形态：`GET /api/v1/algorithms/{id}/deletion-impact`（只读、无副作用、不打审计），前端在弹窗打开时调用；**不要**让 `DELETE` 返回 409 + 载荷来表达影响面 —— 那会把「预览」与「执行」混在一个非幂等方法里，前端无法在用户确认前安全地预览后果。
+   - 影响面取不到（500/超时）时前端必须**显式警告**「无法获取统计，请谨慎确认」，静默失败会让用户误以为「没有影响」。
+   - `DELETE` 执行时后端会再取一次影响面并写入审计详情：卸载后 tasks 条目已删、记录已失去 algorithm_id，这些关联信息事后不可重建，只能靠这条审计追溯。
+   - ⚠️ 刻意**不统计**抓拍图片字节数：扫描 `snapshots/` 需要目录遍历，几千个文件在 RK3568 上会明显拖慢接口，而图片不会因卸载消失，字节数不影响决策。
+   - 回归门禁：`TestDeletionImpactReportsBindingsAndEvidence`（含「查询无副作用」断言）、`TestDeletionImpactZeroWhenClean`（空数组而非 null）、`TestDeleteAlgorithmKeepsEvidenceAfterImpact`（预览与真实后果一致）、`algorithm-delete-dialog.test.tsx` 的 7 个用例。

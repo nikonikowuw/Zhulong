@@ -36,6 +36,21 @@
 
 ⚠️ `MediaDirectory` 的默认值 `"data/media"`（`storage/model.go`）本身就是**相对 CWD** 的路径，这使「绝对路径」与「URL」两个选项同时不可行。
 
+### 1.4 ⚠️ 底库照片不属于这个媒体根
+
+人员底库照片存放在 `FacesDir`（默认 `<data-dir>/faces`，`internal/app/config.go`），与
+`MediaDirectory` 是**两个独立的根**。因此：
+
+- `person_faces.image_path` 里存的是**裸文件名**（`{personID}_{faceID}{ext}`），**不是**
+  可拼进 `/api/v1/media/content/*` 的相对路径；
+- 前端若把该字段塞给 `getMediaUrl()`，首段（文件名）不在 `recordings|snapshots|exports`
+  白名单内，`resolver.validate` 会直接返回 **422 MEDIA_KIND_INVALID**；
+- 唯一正确入口是 `GET /api/v1/persons/{id}/faces/{face_id}/image`（`person/handler.go`）。
+  前端封装为 `getGalleryImageUrl(personId, faceId)`（`records/components/common/media-utils.ts`）。
+
+**不要把 `FacesDir` 并入 mediafile 的类型白名单**：那会破坏两个根的隔离语义，且让
+`media/content/*` 能读到人员底库这类敏感数据。
+
 ---
 
 ## 2. 路径防护：四层，但执行时机不同

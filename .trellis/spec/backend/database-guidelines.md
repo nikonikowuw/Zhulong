@@ -62,6 +62,15 @@ sqlDB.SetMaxIdleConns(1)
 - **内部记账分离**：`created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP` 仅用于 SQLite 底层插入时间记账，不得用于业务回溯或前后端事件时间对账；
 - **弱外键与快照冗余保护**：感知事件中的实体引用（如 `recognitions.person_id`）采用弱外键设计（`REFERENCES persons(id) ON DELETE SET NULL`），并强行冗余快照不可变字段（`person_name`、`gallery_image_path`），确保底库人员注销或底照变更后，已发生的历史证据链完好无损；
 - **相对路径存储**：图片统一存储相对路径且首段必须为 `snapshots/...`，绝不在数据库中存储绝对物理路径或裸 URL。
+- **引用完整性的三条硬规则（迁移 `000014`/`000015` 起）**：
+  1. **可空外键用 NULL 表达「未标注」，绝不用空串**：SQLite 的外键检查对空串一视同仁地要求父表存在匹配行，只有 NULL 才跳过校验。把「算法归属未知」写成 `''` 会让整条记录 insert 失败，而 `record.Service` 只记日志不返回错误 —— 表现就是记录静默消失。对外 API 仍以 `""` 呈现（`derefString`），内部必须是 `*string`。
+  2. **`algorithm_id` 与 `person_id` 都用 `ON DELETE SET NULL` + 冗余快照**：证据是**已发生事实的记录**，它的价值不依赖于产生它的工具是否还装在本机。卸载算法是卸载工具，不是销毁历史。
+     - `person_id` 冗余 `person_name` / `gallery_image_path`；
+     - `algorithm_id` 冗余 `algorithm_name` / `algorithm_version`。三张感知表（`recognitions` / `alarms` / `captures`）**逐一具备**这三个字段 —— 迁移 `000015` 补齐前两者，`000016` 补齐 `captures`（它此前连 `algorithm_id` 列都没有，导致抓拍无法按算法归因）。
+     - ⚠️ 只有 id 没有快照 = 卸载后「谁产生的」永久丢失；只有快照没有 id = 无法按算法筛选统计。**两者必须成对**。
+     - ⚠️ 冗余值必须**写入时快照**，严禁改成读取时 join 回父表补全 —— 那正是算法/人员被删后数据消失的根因。
+     - ⚠️ 迁移 `000014` 曾错误地把 `algorithm_id` 设成 `ON DELETE CASCADE`（理由「label 语义随包消失」），`000015` 已纠正。判据是：**「能不能解释」影响的是展示，不是存废**；无法解释的证据仍应保留并标注来源缺失。
+  3. **`camera_id` 用 `ON DELETE CASCADE`**：与上条方向相反且**不可动摇** —— `image_path` 指向 `snapshots/{camera_id}/`，相机一删整棵子树无主，记录也无法再回答「画面从哪来」。判据：**卸工具不该毁证据，删对象来源则让证据失去物理载体**。同样地在 `camera/store.go` 里手动删记录是错误的，那是把外键约束的责任搬到业务层。
 
 ## 4. 持久化规约与防爆边界
 
