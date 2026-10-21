@@ -44,6 +44,12 @@ Fx provider 必须把 `*zap.Logger` 声明为必需依赖；缺失时由 Fx 返�
 
 `internal/nativelog.Queue` 是有界、非阻塞的 native event 通道。队列满、锁竞争和无效输入均丢弃并计数；不得让实时/native producer 等待日志 I/O。消费者独立输出结构化记录并周期性报告累计丢弃数；停机先等 native producers quiesce、注销 callback、删除 handle，再 Stop/drain queue，最后 `logger.Sync()`。队列计数仍可能在突发掉电时未持久化。
 
+`Zhulong_set_log_callback` 的 C ABI token 仅承载 `runtime/cgo.Handle` 整数。callback 参数中的 module/text 是借用缓冲区，只在同步调用期间有效；Go trampoline 必须先校验空指针、长度与 UTF-8，再用 `C.GoStringN` 复制到 Go 内存并非阻塞地提交 `nativelog.Queue`，不得保留 C 指针。注册仅能在 native producers 尚未启动时进行；销毁顺序是停止并 join runner/native producers、销毁 engine、注销 callback、删除 handle、排空队列，最后同步应用 logger。
+
+C++ `ZhulongLog` producer 只做有界格式化和队列/回调提交，不写 sink I/O。独立 runner 使用 256 条有界队列和 writer 输出完整 JSON-lines；runner 协议错误行与 native writer 共用 stderr 写锁，避免记录交错。应用侧 runner parser 只输出 allowlisted module/stream ID/长度与稳定 operation token/数值 `rc`，不得转发原始行、message 正文、异常或供应商错误文本。新增 native call sites 只允许稳定事件 token 和经过审查的数值上下文；不得记录 URL、凭据、路径、帧内容或任意外部文本。FFmpeg 日志必须继续由 RTSP capture 入口静默，不得转发 FFmpeg callback。
+
+日志库拓扑是显式安全边界：`ZhulongAlgoRuntime` 不链接 `ZhulongLog`；runner 插件 API 只提供通用 operation/`rc` 失败摘要。共享 DMA-BUF allocator 仅在 `ZhulongAlgoIpc` 编译变体启用 native logging，避免把 sink 状态复制进 runtime `.so`。
+
 
 ---
 
@@ -104,6 +110,7 @@ Sink `Sync()` 仅请求操作系统同步当前活动文件；它不代表设备
 - SIGHUP rereads only `logging.level` from the absolute `ConfigPath` selected at startup. It never changes sink or encoder; read/validation failure warns and retains the active level.
 - `logctx` stores only non-empty IDs. `Fields(nil)` and an empty context return nil; `Logger` preserves the base logger name and uses `zap.L()` only for a nil base. HTTP request IDs belong to the request lifetime; later stream events use `streamId` instead.
 - Queue admission is bounded and nonblocking, including mutex contention. Invalid records, contention, full capacity, and post-stop admission return false and increment `Dropped()`. The consumer never holds the admission lock during sink I/O; producers must be quiescent before `Stop`.
+- The C++ `ZhulongLog` runner ring must **not** use `try_lock` for producer admission. Its ring lock is shared with the writer, which re-acquires it on every `wait_for` wakeup, so a `try_lock` producer loses that race under the scheduler and silently drops a healthy record — measured at ~2.7% of runner process starts, including the first `Error`. Block on the ring mutex instead: the critical section is bounded by a fixed-size `Record` copy because serialization and stderr writes happen after the lock is released, so producer latency stays bounded and cannot deadlock. Drop counting is reserved for genuinely full capacity and post-stop admission. `native/tests/native_log_test.cpp` guards this with 400 start-write-stop cycles.
 - `WriteError` owns the unique Error event for unexpected HTTP 5xx, with requestId, stable code and status even without a cause. Expected 4xx remain non-Error; AccessLog remains Info.
 
 ### 4. Validation & Error Matrix
