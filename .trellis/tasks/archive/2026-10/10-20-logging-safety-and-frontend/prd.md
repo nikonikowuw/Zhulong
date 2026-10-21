@@ -124,18 +124,18 @@ grep -rn 'zap\.[A-Za-z]*([^)]*\(rtsp\|RTSP\|url\|Url\|URL\)' internal --include=
 
 ## Acceptance Criteria
 
-- [ ] **AC-C1 helpers**: valid URL hides userinfo and query/fragment; malformed/oversized URL returns a fixed redaction marker. Path/IP/ErrorSummary cover empty, malformed, long and control-character inputs.
-- [ ] **AC-C2 Core contract**: tests cover message, `Write` fields, `With` fields, `ErrorType`, complex fields, newline and caller-slice immutability; unsupported arbitrary application marshalers/content are omitted.
-- [ ] **AC-C3 performance report**: benchmarks record plain-vs-sanitizing Core latency and allocations on supported target(s); there is no fixed `<1µs` or zero-allocation threshold.
-- [ ] **AC-C4 call-site safety** (narrowed 2026-10-21): no raw broker socket path, arbitrary error text or exception stack is written by any log call site; there is no raw RTSP URL log call site to sanitize, and the single `SanitizeURL` consumer is human-readable *audit* detail that must stay readable. Call-site inventory records dispositions, including the RTSP-vs-audit split.
-- [ ] **AC-C5 leakage regression**: valid RTSP credentials and malformed credential-shaped input never appear in collected **logs**; assert exact logger output (observer), not grep alone. Audit detail is explicitly out of scope here — it intentionally keeps a partially-readable URL with the password masked.
-- [ ] **AC-C6 frontend upload**: production browser error emits a stable allowlisted event within 5s; exception text/stack/query are absent.
-- [ ] **AC-C7 frontend limits**: 10000 generated errors stay within buffer, dedup, entry/encoded-byte batch limits and backend budgets; drop counts are observable.
-- [ ] **AC-C8 endpoint limits**: per-IP and process-wide over-budget requests return 429; response does not echo body; no audit row is created; no raw IP/body is logged.
-- [ ] **AC-C9 limiter boundedness**: 10000 distinct source IPs leave the per-IP map within its configured maximum.
-- [ ] **AC-C10 frontend console**: only `logger.ts` contains production console calls.
-- [ ] **AC-C11 browser tests**: `pnpm --dir web test` passes in the real headless browser.
-- [ ] **AC-C12 project gate**: `make check` passes.
+- [x] **AC-C1 helpers**: valid URL hides userinfo and query/fragment; malformed/oversized URL returns a fixed redaction marker. Path/IP/ErrorSummary cover empty, malformed, long and control-character inputs.
+- [x] **AC-C2 Core contract**: tests cover message, `Write` fields, `With` fields, `ErrorType`, complex fields, newline and caller-slice immutability; unsupported arbitrary application marshalers/content are omitted.
+- [x] **AC-C3 performance report**: benchmarks record plain-vs-sanitizing Core latency and allocations on supported target(s); there is no fixed `<1µs` or zero-allocation threshold.
+- [x] **AC-C4 call-site safety** (narrowed 2026-10-21): no raw broker socket path, arbitrary error text or exception stack is written by any log call site; there is no raw RTSP URL log call site to sanitize, and the single `SanitizeURL` consumer is human-readable *audit* detail that must stay readable. Call-site inventory records dispositions, including the RTSP-vs-audit split.
+- [x] **AC-C5 leakage regression**: valid RTSP credentials and malformed credential-shaped input never appear in collected **logs**; assert exact logger output (observer), not grep alone. Audit detail is explicitly out of scope here — it intentionally keeps a partially-readable URL with the password masked.
+- [ ] **AC-C6 frontend upload** — ⚠️ synthetic browser test only; real page-unload sendBeacon not exercised on a live browser session or target board.: production browser error emits a stable allowlisted event within 5s; exception text/stack/query are absent.
+- [ ] **AC-C7 frontend limits** — ⚠️ buffer/dedup/byte caps covered by synthetic test; real crash-loop drop rate unmeasured.: 10000 generated errors stay within buffer, dedup, entry/encoded-byte batch limits and backend budgets; drop counts are observable.
+- [x] **AC-C8 endpoint limits**: per-IP and process-wide over-budget requests return 429; response does not echo body; no audit row is created; no raw IP/body is logged.
+- [x] **AC-C9 limiter boundedness**: 10000 distinct source IPs leave the per-IP map within its configured maximum.
+- [x] **AC-C10 frontend console**: only `logger.ts` contains production console calls.
+- [x] **AC-C11 browser tests**: `pnpm --dir web test` passes in the real headless browser.
+- [x] **AC-C12 project gate**: `make check` passes.
 
 ## Constraints
 

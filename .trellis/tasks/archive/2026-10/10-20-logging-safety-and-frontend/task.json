@@ -3,7 +3,7 @@
   "name": "logging-safety-and-frontend",
   "title": "日志安全与前端可观测：统一脱敏器、日志注入防护、前端统一 logger",
   "description": "日志安全与前端可观测：统一脱敏器、日志注入防护、前端统一 logger",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": "backend",
@@ -11,7 +11,7 @@
   "creator": "nikoniko",
   "assignee": "nikoniko",
   "createdAt": "2026-10-20",
-  "completedAt": null,
+  "completedAt": "2026-10-21",
   "branch": "feat/native-log-bridge",
   "base_branch": "dev",
   "worktree_path": null,
@@ -21,6 +21,6 @@
   "children": [],
   "parent": "10-20-industrial-logging",
   "relatedFiles": [],
-  "notes": "",
+  "notes": "Archived with AC-C6/AC-C7 verified only in synthetic browser tests. The real page-unload sendBeacon path and the crash-loop drop rate were not exercised in a real browser session or on RK3568. Parent AC-14 deployment budget signoff stays open: the process-wide defaults (120 req/min, 2 MiB/min, 8 in-flight) are provisional and must not be reported as a signed budget. AC-C4 was narrowed during implementation after the audit premise proved inverted: no production log call site carries an RTSP URL, and the single SanitizeURL consumer writes human-readable audit detail that must stay readable.",
   "meta": {}
 }
