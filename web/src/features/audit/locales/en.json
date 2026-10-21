@@ -39,6 +39,9 @@
     "time.ntp_sync": "NTP Time Sync",
     "time.manual_set": "Manual Set Time",
     "time.rtc_heal": "RTC Hardware Heal",
+    "time.clock_step": "Clock Step Correction",
+    "time.ntp_sync_failed": "NTP Sync Failed",
+    "time.ntp_sync_recovered": "NTP Sync Recovered",
     "audit.clear": "Clear Audit Logs"
   },
   "actions": {

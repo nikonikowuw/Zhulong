@@ -24,6 +24,51 @@ var (
 	ErrPanicReview = errors.New("time offset exceeds panic threshold; entering review")
 )
 
+// ActionKind classifies what a single NTP probe actually did to the clock.
+//
+// The caller uses it to decide whether the probe deserves an audit record. This
+// distinction is the whole point: a steady-state slew only nudges the clock by a
+// few milliseconds via adjtimex and repeats every sync interval, so recording it
+// turns the bounded audit table into a heartbeat log that eventually prunes the
+// operations an operator actually needs to trace.
+type ActionKind int
+
+const (
+	// ActionNone means the probe produced no clock change worth auditing: a
+	// steady-state slew below SlewThreshold. Telemetry, not an event.
+	ActionNone ActionKind = iota
+	// ActionStepped means SetRealtime moved the wall clock. This is a real,
+	// user-visible discontinuity in time and always worth auditing.
+	ActionStepped
+	// ActionPanicReview means the measured offset crossed PanicThreshold and the
+	// state machine is holding a multi-sample verification. This is a high-risk
+	// condition and must never be reported as a success.
+	ActionPanicReview
+)
+
+// String renders the kind for logging.
+func (k ActionKind) String() string {
+	switch k {
+	case ActionStepped:
+		return "stepped"
+	case ActionPanicReview:
+		return "panic_review"
+	default:
+		return "none"
+	}
+}
+
+// SyncOutcome reports what one probe did, so the service layer can audit only
+// the transitions and the real clock changes.
+type SyncOutcome struct {
+	Kind ActionKind
+	// Step is the applied correction. Only meaningful for ActionStepped.
+	Step time.Duration
+	// Review is the consecutive-verification progress (n of PanicRequiredChecks).
+	// Only meaningful for ActionPanicReview.
+	Review int
+}
+
 // TimeStateMachine governs safe system time transitions and ensures monotonicity.
 type TimeStateMachine struct {
 	mu             sync.RWMutex
@@ -57,7 +102,11 @@ func NewTimeStateMachine(driver ClockDriver) *TimeStateMachine {
 }
 
 // ProcessNTPResult handles an NTP probe result through the two-stage safety state machine.
-func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) error {
+//
+// The returned SyncOutcome describes the side effect even when the error is
+// non-nil: an ErrPanicReview result still carries ActionPanicReview so the caller
+// can audit the high-risk condition as a failure instead of silently dropping it.
+func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) (SyncOutcome, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -65,7 +114,7 @@ func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) error {
 	if err != nil {
 		sm.state = SyncStateFailed
 		sm.lastError = err.Error()
-		return fmt.Errorf("get system time: %w", err)
+		return SyncOutcome{}, fmt.Errorf("get system time: %w", err)
 	}
 
 	absOffset := res.Offset
@@ -79,7 +128,7 @@ func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) error {
 		if err := sm.driver.SetRealtime(target); err != nil {
 			sm.state = SyncStateFailed
 			sm.lastError = err.Error()
-			return fmt.Errorf("initial step adjustment failed: %w", err)
+			return SyncOutcome{}, fmt.Errorf("initial step adjustment failed: %w", err)
 		}
 		_ = sm.driver.WriteRTC(target)
 
@@ -87,7 +136,7 @@ func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) error {
 		sm.state = SyncStateSynchronized
 		sm.panicCount = 0
 		sm.recordSyncSuccess(res)
-		return nil
+		return SyncOutcome{Kind: ActionStepped, Step: res.Offset}, nil
 	}
 
 	// Stage 2: Steady state
@@ -96,7 +145,7 @@ func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) error {
 		if err := sm.driver.AdjTime(res.Offset); err != nil {
 			sm.state = SyncStateFailed
 			sm.lastError = err.Error()
-			return fmt.Errorf("slew adjtime failed: %w", err)
+			return SyncOutcome{}, fmt.Errorf("slew adjtime failed: %w", err)
 		}
 		// Periodically refresh RTC to keep it aligned
 		_ = sm.driver.WriteRTC(sysTime.Add(res.Offset))
@@ -104,7 +153,10 @@ func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) error {
 		sm.state = SyncStateSynchronized
 		sm.panicCount = 0
 		sm.recordSyncSuccess(res)
-		return nil
+		// Slew only warps the clock frequency by a few ms; the wall clock never
+		// jumps. This is telemetry that repeats every sync interval, so it must
+		// stay out of the audit trail.
+		return SyncOutcome{Kind: ActionNone}, nil
 	}
 
 	// Case 2.2: Moderate deviation (500ms <= |Offset| < 10m) -> Step
@@ -113,14 +165,14 @@ func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) error {
 		if err := sm.driver.SetRealtime(target); err != nil {
 			sm.state = SyncStateFailed
 			sm.lastError = err.Error()
-			return fmt.Errorf("step adjustment failed: %w", err)
+			return SyncOutcome{}, fmt.Errorf("step adjustment failed: %w", err)
 		}
 		_ = sm.driver.WriteRTC(target)
 
 		sm.state = SyncStateSynchronized
 		sm.panicCount = 0
 		sm.recordSyncSuccess(res)
-		return nil
+		return SyncOutcome{Kind: ActionStepped, Step: res.Offset}, nil
 	}
 
 	// Case 2.3: Panic threshold exceeded (|Offset| >= 10m) -> Continuous multi-sample review
@@ -132,7 +184,11 @@ func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) error {
 			sm.state = SyncStatePanicReview
 			sm.lastError = fmt.Sprintf("offset %v exceeds panic threshold (10m), verification %d/%d",
 				res.Offset.Round(time.Millisecond), sm.panicCount, PanicRequiredChecks)
-			return ErrPanicReview
+			// Carry the outcome alongside the error: the caller must audit this as
+			// a failure. Returning only the error previously let the service fall
+			// through to a "success" record, which is the exact opposite of the
+			// truth for a 15-minute clock jump under verification.
+			return SyncOutcome{Kind: ActionPanicReview, Review: sm.panicCount}, ErrPanicReview
 		}
 
 		// Verified 3 times consistently: Apply Step
@@ -140,14 +196,14 @@ func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) error {
 		if err := sm.driver.SetRealtime(target); err != nil {
 			sm.state = SyncStateFailed
 			sm.lastError = err.Error()
-			return fmt.Errorf("panic step adjustment failed: %w", err)
+			return SyncOutcome{}, fmt.Errorf("panic step adjustment failed: %w", err)
 		}
 		_ = sm.driver.WriteRTC(target)
 
 		sm.state = SyncStateSynchronized
 		sm.panicCount = 0
 		sm.recordSyncSuccess(res)
-		return nil
+		return SyncOutcome{Kind: ActionStepped, Step: res.Offset}, nil
 	}
 
 	// Inconsistent panic readings: reset counter and hold
@@ -156,7 +212,7 @@ func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) error {
 	sm.state = SyncStatePanicReview
 	sm.lastError = fmt.Sprintf("fluctuating large offset %v, verification restarted 1/%d",
 		res.Offset.Round(time.Millisecond), PanicRequiredChecks)
-	return ErrPanicReview
+	return SyncOutcome{Kind: ActionPanicReview, Review: sm.panicCount}, ErrPanicReview
 }
 
 // ProcessManualTime explicitly sets the system time (Manual / Browser sync).

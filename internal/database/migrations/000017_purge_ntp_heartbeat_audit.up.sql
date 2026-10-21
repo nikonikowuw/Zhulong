@@ -1,0 +1,34 @@
+-- 000017_purge_ntp_heartbeat_audit.up.sql
+-- 清理 NTP 周期巡检写进审计表的「心跳」行。
+--
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 为什么需要
+--   在此修复之前，systemtime 的后台 worker 在每一轮探针成功后都无条件写一条
+--   time.ntp_sync 审计记录，而 worker 是按 sync_interval_seconds（默认 900s）
+--   循环的。也就是说审计表里每 15 分钟就多一行「我对时成功了，偏移 3ms」。
+--
+--   audit_logs 是有界 FIFO（DefaultMaxEntries = 5000，Prune 按 created_at ASC
+--   删最旧）。96 行/天意味着约 52 天就把整张表滚穿一遍 —— 届时 camera.create、
+--   auth.login、storage.emergency_stop 这些真正需要溯源的记录会被心跳全部挤掉。
+--   这比「日志吵」严重得多：审计的证据链被遥测噪声静默销毁。
+--
+-- 为什么只删 username = 'system'
+--   time.ntp_sync 被两类来源共用：
+--     · 后台探针            → username = 'system'，ip = ''
+--     · 用户点「立即对时」  → username = 'anonymous'（或真实账号），ip = 真实来源
+--   后者是人工操作证据，必须保留。判据是归因字段，不是 action 本身。
+--
+-- 为什么不保留成 'failed'
+--   这些行不是「失败被记成了成功」的那个 bug 产生的（那个 bug 只影响 panic_review
+--   场景，量极小且当时根本没写对）。它们是一次都没意义的成功巡检，保留只会让
+--   新表从被扣掉的额度开始。用户已明确选择清理。
+--
+-- 后续
+--   修复后后台只写三种事件：time.clock_step（墙钟跳变，含 panic 复核记为 failed）、
+--   time.ntp_sync_failed（进入失败态一次）、time.ntp_sync_recovered（恢复一次）。
+--   稳态 slew 只进 Zap Debug 运行日志。
+--
+-- ⚠️ 附带影响：若现场有人按 time.ntp_sync 建了告警规则，清理后该 action 只会
+--   来自人工操作。这是预期行为，需在变更说明中提及。
+
+DELETE FROM audit_logs WHERE action = 'time.ntp_sync' AND username = 'system';

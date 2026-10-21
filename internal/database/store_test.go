@@ -1342,3 +1342,111 @@ func TestMigration000016_CaptureAlgorithmRef(t *testing.T) {
 		t.Fatal("nonexistent algorithm_id must still violate the foreign key")
 	}
 }
+
+// TestMigration000017_PurgeNTPHeartbeat pins the cleanup of NTP heartbeat rows.
+//
+// Before this migration the systemtime worker wrote one `time.ntp_sync` audit
+// record per successful probe, and it probes every sync interval (default 900s).
+// At 96 rows/day against a 5000-row FIFO table, roughly 52 days of uptime would
+// prune every operator-facing record out of the audit trail.
+//
+// The assertion that matters is the attribution split: only system-attributed
+// rows are noise. A user pressing "sync now" also produces `time.ntp_sync`, and
+// that is evidence of a human action which must survive.
+func TestMigration000017_PurgeNTPHeartbeat(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_migrate_17.db")
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// 1. Schema to 16, then seed both kinds of time.ntp_sync plus a bystander.
+	if err := migrator.Migrate(16); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(16): %v", err)
+	}
+	seeds := []struct {
+		id       int
+		action   string
+		username string
+		ip       string
+	}{
+		{1, "time.ntp_sync", "system", ""},               // background heartbeat
+		{2, "time.ntp_sync", "system", ""},               // background heartbeat
+		{3, "time.ntp_sync", "anonymous", "192.168.1.9"}, // user pressed sync
+		{4, "time.ntp_sync", "admin", "192.168.1.10"},    // authenticated user sync
+		{5, "camera.create", "admin", "192.168.1.10"},    // must survive
+		{6, "time.clock_step", "system", ""},             // new-style event, must survive
+	}
+	for _, s := range seeds {
+		if _, err := db.Exec(
+			`INSERT INTO audit_logs (id, action, username, ip, target, detail, status)
+			 VALUES (?, ?, ?, ?, 'system_time', '', 'success')`,
+			s.id, s.action, s.username, s.ip,
+		); err != nil {
+			t.Fatalf("seed audit log %d: %v", s.id, err)
+		}
+	}
+
+	// 2. Apply migration 17.
+	if err := migrator.Migrate(17); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(17): %v", err)
+	}
+
+	// 3. Only the system-attributed heartbeats are gone.
+	remaining := map[int]bool{}
+	rows, err := db.Query(`SELECT id FROM audit_logs`)
+	if err != nil {
+		t.Fatalf("query surviving audit logs: %v", err)
+	}
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatalf("scan surviving id: %v", err)
+		}
+		remaining[id] = true
+	}
+	rows.Close()
+
+	for _, id := range []int{1, 2} {
+		if remaining[id] {
+			t.Errorf("heartbeat row %d must be purged", id)
+		}
+	}
+	for _, id := range []int{3, 4, 5, 6} {
+		if !remaining[id] {
+			t.Errorf("row %d must survive: only system-attributed heartbeats are noise", id)
+		}
+	}
+
+	// 4. Rollback is a deliberate no-op on data: purged rows cannot be
+	//    reconstructed without fabricating audit evidence.
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator Steps(-1): %v", err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM audit_logs WHERE id IN (1, 2)`).Scan(&count); err != nil {
+		t.Fatalf("count purged rows after rollback: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("down migration must not resurrect purged rows, got %d", count)
+	}
+}

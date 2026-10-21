@@ -76,6 +76,12 @@ C++ `ZhulongLog` producer 只做有界格式化和队列/回调提交，不写 s
 11. **归因字段**：单账号系统以**请求 IP 为主要归因字段**，取自 TCP 连接来源；未认证请求使用 `anonymous`，缺失 Actor 使用 `unknown`，只有 `RecordSystem` 才使用 `system` 与空 IP。严禁将空用户名默认回退为 `admin`。
     * ⚠️ 不要用 `c.GetString("username")` 取当前账号：本代码库没有任何 `c.Set("username", ...)`，该表达式恒为空，后面接 `if username == "" { username = "admin" }` 就是对每条记录伪造身份。正确做法是 `audit.FromContext(c.Request.Context())` 读取 `auth.RequireAuth` 写入的 Actor（不引入 `auth` 依赖），未认证时记为 `audit.UsernameAnonymous`。
 12. **强保证路径**：普通审计走可丢弃的异步队列；只有清空日志（`audit.clear`）使用同步事务 `ClearWithAudit`，因为「已成功清空」这一事实不能依赖可丢弃队列。
+13. **禁止心跳型审计 (No Heartbeat Auditing)**：这是本规范最容易犯、后果最严重的一条。审计表按容量 FIFO 裁剪，**任何按固定周期无条件写入的「我还活着 / 我又成功了一次」记录都会在有限天数的运行后把真实操作记录全部挤掉**。5000 条上限下，一条 900s 周期的记录就是 96 条/天、约 52 天滚穿整表 —— 届时 `camera.create`、`auth.login`、`storage.emergency_stop` 这些真正需要溯源的证据被静默销毁，而表看起来「一切正常」。
+    - **判据**：这条记录是否可能成为事故追溯时需要的证据？「周期巡检成功了」的答案永远是**否**；「墙钟被跳变了 5 秒」「进入高危复核」「从断网恢复」的答案是是。
+    - **周期性遥测一律走运行日志**（Zap，Debug/Info 级），不进 `audit_logs`。「当期状态」类信息（如 `SyncStatus.lastSyncTime` / `offsetMs`）应通过状态查询 API 暴露并由前端消费，**不得双写成审计行**。
+    - **长时失败只记跃迁**：后台重试退避（如 NTP 探针 30s → 60s → … → interval）必须在**进入失败态时记一次、恢复时记一次**，而不是每次重试一条。用带锁的 `lastXxxFailed` 边沿检测器实现（见 `internal/systemtime/service.go` 的 `recordProbeFailure` / `recordProbeSuccess`）。
+    - **同一 action 不得混用两类归因**：`username='system'` + 空 IP 是后台事件的标志，有真实 IP 是人工操作的标志。若一个 action 同时被两者使用（历史缺陷：`time.ntp_sync` 既被后台探针又被「立即对时」按钮写入），筛选与告警都会失效 —— 必须拆成不同 action（`time.ntp_sync` 留给人工，后台用 `time.clock_step` / `time.ntp_sync_failed` / `time.ntp_sync_recovered`）。
+    - **后台事件挂在返回 error 上时必须带上结果语义**：若状态机/驱动器返回 `(outcome, err)`，绝不能在 `errors.Is(err, Sentinel)` 时丢弃 outcome 直接落到成功分支 —— 那正是「15 分钟时钟偏移复核」被记成 `success` 的根因。
 
 ---
 
@@ -92,6 +98,30 @@ Logger 子名采用 `<domain>.<layer>` 点分隔形式，例如 `camera.stream_h
 内置轮转只支持一个进程写同一路径。写前检查 active size，超限按 `fsync` → close → rename → reopen 顺序轮转；归档名使用 UTC 时间戳与单调 sequence，保留顺序按 sequence，`max_age` 按时间戳计算。压缩最多一个 worker，启动前先按源大小加保守扩张余量预留临时输出；临时输出受限写入，预留不足就跳过压缩。预算冲突时取消压缩并拒绝当前写入，不得突破总预算。
 
 Sink `Sync()` 仅请求操作系统同步当前活动文件；它不代表设备缓存或存储硬件已经持久化。目录项在轮转/压缩变更后同步，但平台需验证实际掉电行为，不能承诺零丢失。
+
+## Scenario: Background Workers and the Audit Trail
+
+### 1. Scope / Trigger
+- Trigger: a background goroutine (periodic probe, watchdog, supervisor) wants to record its work in `audit_logs` via `audit.Service.RecordSystem`.
+- The audit trail answers "who did what", not "is the system still healthy". Health is a metric; poll results are run logs.
+
+### 2. Signatures
+- `audit.Service.RecordSystem(action, target, detail string, opErr error)` — background events, empty IP, `username='system'`.
+- `systemtime.SystemEventRecorder` — the deliberately narrow interface a service receives instead of `*audit.Service`, so a service can never record user operations by accident.
+- `systemtime.(SyncOutcome, error)` from `ProcessNTPResult` — outcome rides alongside the error so a sentinel error can never be mistaken for success.
+
+### 3. Contracts
+- A background worker records **transitions and real state changes only**. Stable steady state produces zero audit rows per cycle, indefinitely.
+- Steady-state poll telemetry goes to the run log at `Debug`/`Info`; the current value is exposed through the status API. Neither is duplicated into `audit_logs`.
+- Transient failures are edge-debounced: one row entering the failed state, one row on recovery. `N` backoff retries produce `0` additional rows.
+- When a state machine returns `(outcome, err)` and `err` carries an expected sentinel (e.g. `ErrPanicReview`), the caller must branch on `outcome`, never on `err == nil` alone. Dropping the outcome on a sentinel path is how a high-risk condition gets persisted as `success`.
+- An `action` name belongs to exactly one attribution class. Interpreters that correlate by action must be able to assume `username='system'` + empty IP means the same kind of origin every time.
+
+### 4. Acceptance
+- `TestProbeSteadyStateSlewRecordsNoAudit` — N healthy cycles, 0 audit rows, N debug records.
+- `TestProbeStepRecordsClockStep`, `TestProbePanicReviewRecordsFailure` — a real wall-clock step and a panic review are audited; the latter as `failed`.
+- `TestProbeFailureTransitionRecordedOnce` — 3 failing cycles produce exactly 1 failure row; the recovery cycle adds exactly 1 more.
+- Migration `000017` purges historical `time.ntp_sync` rows attributed to `system` and leaves human-attributed rows intact.
 
 ## Scenario: Configurable Runtime Logging and Correlation
 

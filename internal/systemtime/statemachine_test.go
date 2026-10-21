@@ -22,9 +22,12 @@ func TestStateMachineColdBootStep(t *testing.T) {
 		RTT:    20 * time.Millisecond,
 	}
 
-	err := sm.ProcessNTPResult(res)
+	outcome, err := sm.ProcessNTPResult(res)
 	if err != nil {
 		t.Fatalf("expected cold boot step to succeed, got %v", err)
+	}
+	if outcome.Kind != ActionStepped {
+		t.Fatalf("expected a clock step, got %s", outcome.Kind)
 	}
 
 	stepCalls := driver.GetStepCalls()
@@ -57,9 +60,13 @@ func TestStateMachineSteadyStateSlew(t *testing.T) {
 		RTT:    15 * time.Millisecond,
 	}
 
-	err := sm.ProcessNTPResult(res)
+	outcome, err := sm.ProcessNTPResult(res)
 	if err != nil {
 		t.Fatalf("expected slew to succeed, got %v", err)
+	}
+	// A sub-threshold slew must stay out of the audit trail.
+	if outcome.Kind != ActionNone {
+		t.Fatalf("expected no auditable action for a steady-state slew, got %s", outcome.Kind)
 	}
 
 	slewCalls := driver.GetSlewCalls()
@@ -86,9 +93,12 @@ func TestStateMachineSteadyStateModerateStep(t *testing.T) {
 		RTT:    25 * time.Millisecond,
 	}
 
-	err := sm.ProcessNTPResult(res)
+	outcome, err := sm.ProcessNTPResult(res)
 	if err != nil {
 		t.Fatalf("expected moderate step to succeed, got %v", err)
+	}
+	if outcome.Kind != ActionStepped {
+		t.Fatalf("expected a clock step, got %s", outcome.Kind)
 	}
 
 	stepCalls := driver.GetStepCalls()
@@ -111,24 +121,37 @@ func TestStateMachineSteadyStatePanicReview(t *testing.T) {
 	}
 
 	// 1st attempt -> ErrPanicReview
-	err := sm.ProcessNTPResult(res)
+	outcome, err := sm.ProcessNTPResult(res)
 	if !errors.Is(err, ErrPanicReview) {
 		t.Fatalf("expected ErrPanicReview on 1st probe, got %v", err)
+	}
+	// The outcome must ride alongside the error: dropping it is what made the
+	// service record a 15-minute clock jump as a successful sync.
+	if outcome.Kind != ActionPanicReview || outcome.Review != 1 {
+		t.Fatalf("expected panic review 1/%d, got %s review=%d",
+			PanicRequiredChecks, outcome.Kind, outcome.Review)
 	}
 	if sm.GetSyncStatus().State != SyncStatePanicReview {
 		t.Errorf("expected state panic_review, got %s", sm.GetSyncStatus().State)
 	}
 
 	// 2nd attempt -> ErrPanicReview
-	err = sm.ProcessNTPResult(res)
+	outcome, err = sm.ProcessNTPResult(res)
 	if !errors.Is(err, ErrPanicReview) {
 		t.Fatalf("expected ErrPanicReview on 2nd probe, got %v", err)
 	}
+	if outcome.Kind != ActionPanicReview || outcome.Review != 2 {
+		t.Fatalf("expected panic review 2/%d, got %s review=%d",
+			PanicRequiredChecks, outcome.Kind, outcome.Review)
+	}
 
 	// 3rd attempt -> Passes and applies Step
-	err = sm.ProcessNTPResult(res)
+	outcome, err = sm.ProcessNTPResult(res)
 	if err != nil {
 		t.Fatalf("expected 3rd probe to confirm panic offset and step, got %v", err)
+	}
+	if outcome.Kind != ActionStepped {
+		t.Fatalf("expected the confirmed panic offset to be applied as a step, got %s", outcome.Kind)
 	}
 	if sm.GetSyncStatus().State != SyncStateSynchronized {
 		t.Errorf("expected state synchronized after 3 confirmed probes, got %s", sm.GetSyncStatus().State)

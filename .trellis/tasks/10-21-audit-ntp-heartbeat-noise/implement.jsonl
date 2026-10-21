@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "审计与运行日志边界、action 命名空间、RecordSystem 归因规则"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "新增迁移 000017 的编号递增与 up/down 成对规则"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "审计测试必须挂真实中间件、Stop 排空队列"}

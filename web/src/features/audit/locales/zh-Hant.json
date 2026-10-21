@@ -39,6 +39,9 @@
     "time.ntp_sync": "NTP 對時同步",
     "time.manual_set": "手動設定時間",
     "time.rtc_heal": "RTC 硬體自癒",
+    "time.clock_step": "時鐘跳變校正",
+    "time.ntp_sync_failed": "NTP 對時失敗",
+    "time.ntp_sync_recovered": "NTP 對時恢復",
     "audit.clear": "清理日誌"
   },
   "actions": {

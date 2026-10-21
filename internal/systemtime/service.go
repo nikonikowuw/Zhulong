@@ -31,6 +31,13 @@ type TimeService struct {
 	doneCh   chan struct{}
 	wakeCh   chan struct{}
 	syncMu   sync.Mutex
+
+	// auditMu guards lastProbeFailed, the edge detector that keeps a prolonged
+	// network outage from writing one failed audit record (plus one recovery
+	// record) per backoff retry. Only the failure/recovery *transitions* are
+	// auditable; the retries between them are telemetry.
+	auditMu         sync.Mutex
+	lastProbeFailed bool
 }
 
 // NewTimeService constructs a new TimeService.
@@ -160,7 +167,7 @@ func (s *TimeService) SyncNow(ctx context.Context) (*SystemTimeStatus, error) {
 		return s.GetStatus(ctx)
 	}
 
-	if err := s.sm.ProcessNTPResult(res); err != nil && !errors.Is(err, ErrPanicReview) {
+	if _, err := s.sm.ProcessNTPResult(res); err != nil && !errors.Is(err, ErrPanicReview) {
 		s.logger.Warn("Failed to apply NTP result in state machine", zap.Error(err))
 	}
 
@@ -345,25 +352,87 @@ func (s *TimeService) probeOnce(ctx context.Context) bool {
 	if err != nil {
 		s.sm.ProcessSyncError(err)
 		s.logger.Warn("Periodic NTP sync failed", zap.Error(err))
-		if s.recorder != nil {
-			s.recorder.RecordSystem(ActionTimeNTPSync, "system_time",
-				fmt.Sprintf("servers=%v", servers), err)
-		}
+		s.recordProbeFailure(fmt.Sprintf("servers=%v", servers), err)
 		return false
 	}
 
-	if err := s.sm.ProcessNTPResult(res); err != nil && !errors.Is(err, ErrPanicReview) {
-		s.logger.Warn("Failed to process periodic NTP result", zap.Error(err))
-		if s.recorder != nil {
-			s.recorder.RecordSystem(ActionTimeNTPSync, "system_time",
-				fmt.Sprintf("server=%s", res.Server), err)
-		}
+	outcome, stepErr := s.sm.ProcessNTPResult(res)
+
+	// A driver-level failure (no CAP_SYS_TIME, RTC missing, syscall error) is an
+	// outage in the same sense a network failure is: debounce it through the same
+	// edge detector so a retry loop cannot flood the table.
+	if stepErr != nil && !errors.Is(stepErr, ErrPanicReview) {
+		s.logger.Warn("Failed to apply NTP result in state machine", zap.Error(stepErr))
+		s.recordProbeFailure(fmt.Sprintf("server=%s, offset=%v", res.Server, res.Offset), stepErr)
 		return false
 	}
-	if s.recorder != nil {
-		s.recorder.RecordSystem(ActionTimeNTPSync, "system_time",
-			fmt.Sprintf("server=%s, offset=%v, rtt=%v, stratum=%d",
-				res.Server, res.Offset, res.RTT, res.Stratum), nil)
+
+	s.recordProbeSuccess()
+
+	// Every probe is telemetry. Only the outcomes that move the clock or cross a
+	// safety threshold are events. Keeping the steady-state slew out of the audit
+	// trail is what stops a 15-minute heartbeat from pruning the operations an
+	// operator actually needs to trace.
+	s.logger.Debug("NTP probe ok",
+		zap.String("server", res.Server),
+		zap.Duration("offset", res.Offset),
+		zap.Duration("rtt", res.RTT),
+		zap.Uint8("stratum", res.Stratum),
+		zap.String("action", outcome.Kind.String()))
+
+	switch outcome.Kind {
+	case ActionStepped:
+		s.recordSystem(ActionTimeClockStep, "system_time",
+			fmt.Sprintf("server=%s, step=%v, offset=%v, rtt=%v",
+				res.Server, outcome.Step, res.Offset, res.RTT), nil)
+	case ActionPanicReview:
+		// A clock offset past the panic threshold is a high-risk condition. It must
+		// be audited as failed even though the probe itself succeeded, otherwise
+		// the record claims success for the exact situation that needs attention.
+		s.logger.Warn("NTP offset exceeds panic threshold", zap.Error(stepErr))
+		s.recordSystem(ActionTimeClockStep, "system_time",
+			fmt.Sprintf("server=%s, offset=%v, review=%d/%d",
+				res.Server, res.Offset, outcome.Review, PanicRequiredChecks), stepErr)
 	}
+
 	return true
+}
+
+// recordSystem forwards a background event to the recorder, tolerating a nil
+// recorder: the recorder is an optional dependency bound via
+// SetSystemEventRecorder, and tests exercise the service without one.
+func (s *TimeService) recordSystem(action, target, detail string, opErr error) {
+	if s.recorder == nil {
+		return
+	}
+	s.recorder.RecordSystem(action, target, detail, opErr)
+}
+
+// recordProbeFailure audits a probe failure only when the service enters the
+// failed state. A sustained outage retries with backoff; each retry is a
+// telemetry event, not a new auditable occurrence.
+func (s *TimeService) recordProbeFailure(detail string, probeErr error) {
+	s.auditMu.Lock()
+	firstFailure := !s.lastProbeFailed
+	s.lastProbeFailed = true
+	s.auditMu.Unlock()
+
+	if !firstFailure {
+		return
+	}
+	s.recordSystem(ActionTimeNTPSyncFailed, "system_time", detail, probeErr)
+}
+
+// recordProbeSuccess audits the recovery edge only: the transition back from a
+// failed state is worth one record, a healthy steady state is not.
+func (s *TimeService) recordProbeSuccess() {
+	s.auditMu.Lock()
+	wasFailing := s.lastProbeFailed
+	s.lastProbeFailed = false
+	s.auditMu.Unlock()
+
+	if !wasFailing {
+		return
+	}
+	s.recordSystem(ActionTimeNTPRecovered, "system_time", "NTP synchronization recovered", nil)
 }

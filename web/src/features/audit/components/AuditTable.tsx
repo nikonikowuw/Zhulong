@@ -163,6 +163,18 @@ export function AuditTable({
       value: 'time.rtc_heal',
     },
     {
+      label: t('actionNames.time.clock_step'),
+      value: 'time.clock_step',
+    },
+    {
+      label: t('actionNames.time.ntp_sync_failed'),
+      value: 'time.ntp_sync_failed',
+    },
+    {
+      label: t('actionNames.time.ntp_sync_recovered'),
+      value: 'time.ntp_sync_recovered',
+    },
+    {
       label: t('actionNames.audit.clear'),
       value: 'audit.clear',
     },

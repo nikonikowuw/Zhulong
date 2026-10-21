@@ -27,11 +27,26 @@ const (
 )
 
 // Audit actions
+//
+// The time domain deliberately separates user intent from background clock
+// work. `time.ntp_sync` is a *user* action recorded by the audit middleware when
+// an operator presses sync. Background probes are not heartbeats to be logged:
+// only a real wall-clock step, a panic-threshold review, and the failure/recovery
+// edges are auditable.
 const (
 	ActionTimeUpdateConfig = "time.update_config"
 	ActionTimeManualSet    = "time.manual_set"
 	ActionTimeNTPSync      = "time.ntp_sync"
 	ActionTimeRTCHeal      = "time.rtc_heal"
+	// ActionTimeClockStep records a wheel-clock jump applied by the background
+	// worker (cold-boot step, moderate step, or a panic offset confirmed by
+	// consecutive probes). Steady-state slew never reaches the audit trail.
+	ActionTimeClockStep = "time.clock_step"
+	// ActionTimeNTPSyncFailed records the transition into a failed sync state.
+	// It is written once per outage, not once per backoff retry.
+	ActionTimeNTPSyncFailed = "time.ntp_sync_failed"
+	// ActionTimeNTPRecovered records the transition back from a failed state.
+	ActionTimeNTPRecovered = "time.ntp_sync_recovered"
 )
 
 // SystemTimeConfig represents the persisted time configuration.
