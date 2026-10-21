@@ -274,7 +274,86 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 
 ---
 
-## 7. 验证命令
+## 7. Rockchip VEPU JPEG 硬件编码后端契约（抓拍）
+
+*硬件基线：RK3568（Debian 11 arm64 / 内核 5.10.226 / `librockchip-mpp` 1.5.0-1 / `vepu@fdee0000`）。*
+
+### 7.1 三个硬件节点互不干扰（实测）
+
+| 节点 | 用途 | MJPEG ×20 | AVC ×20 |
+| --- | --- | --- | --- |
+| `fdee0000.vepu` | JPEG 硬编 | **+20 中断** | +0 |
+| `fdf40000.rkvenc` | H.264/H.265 硬编 | +0 | **+20 中断** |
+| `fded0000.jpegd` | JPEG 解码 | +0 | +0 |
+
+- **结论**：抓拍 JPEG 永远不会与将来的录像硬编抢硬件，**不需要仲裁**。唯一共享资源是 DDR 带宽与 IOMMU。
+- ⚠️ 不要把 `/proc/interrupts` 里的 `fdf40000.rkvenc` 当成 JPEG 编码的证据；JPEG 在 `fdee0000.vepu`（设备树节点名是 `vepu@fdee0000`，用 `grep vpu` 搜不到它）。
+
+### 7.2 尺寸与色彩契约（实测，⚠️ 禁止凭直觉加对齐/padding）
+
+| 输入尺寸 | 产物 SOF 尺寸 | 备注 |
+| --- | --- | --- |
+| 16×16 / 32×32 / 48×48 / 60×60 / 64×64 | 完全一致 | 无最小尺寸门槛（16×16 可用） |
+| **66×66** / 100×100 / 200×400 | 完全一致 | 非 16 对齐**无位移、无模糊、无 padding 伪影** |
+| 1920×1080 / **1922×1082** | 完全一致 | 非 16 对齐的 1080p 级同样精确 |
+| Y=16/128/235/255 | 解码 Y 原样返回 | **无 range 转换**，与软件后端行为一致 |
+
+- ⚠️ **不得为对齐而外扩/内缩 ROI**：VEPU 自己处理内部 stride 对齐，人为改框只会白白改变证据图内容。
+- 全幅矩形按 2 像素向内取整即可（色度下采样要求），与 `normalized_box_to_pixels` 的取整规则一致，保证两个后端产物几何相同。
+
+### 7.3 后端选择与分流阈值
+
+运行期开关 `ZHULONG_JPEG_BACKEND=cpu|mpp|auto`（默认 `auto`）。**未知取值 fail closed 到 `cpu`** 并记 ERROR，避免拼写错误静默打开硬件。
+
+实测（真实代码路径，`quality=85`，`CLOCK_PROCESS_CPUTIME_ID`）：
+
+| 尺寸 | 硬编 wall / cpu | 软编 wall / cpu | 胜者 |
+| --- | --- | --- | --- |
+| 64×64 | 0.92 / 0.69 ms | **0.38 / 0.38 ms** | 软编 2.4× |
+| 100×100 | 0.82 / 0.63 ms | **0.58 / 0.58 ms** | 软编 1.4× |
+| 128×128 | 0.87 / 0.64 ms | **0.64 / 0.64 ms** | 持平 |
+| 160×160 | 0.95 / **0.64 ms** | 0.84 / 0.84 ms | 硬编省 CPU |
+| 320×240 | **1.50 / 0.74 ms** | 2.12 / 2.11 ms | 硬编 1.4× |
+| 1920×1080 | **21.7 / 2.35 ms** | 53.0 / 52.98 ms | 硬编 **22.5× CPU** |
+
+- **分流规则**：`JpegBackend::prefer_hardware()` 以 `w*h > 16384`（128×128）为界。小图硬编的固定开销（上传拷贝 + ioctl ≈0.5ms）超过小面积 DCT，硬上只会拖慢 wall 并占住共享硬件。
+- 人脸脸框量级（≤128×128）落在软件侧；人体框、全幅走硬件。
+
+### 7.4 ⚠️ 强制启动自检（不可跳过）
+
+`MppJpegEncoder::self_test()` 用两张**仅亮度不同**（Y=16 vs 235）、色度同为 128 的 32×32 合成帧断言：
+
+1. 产物 SOI/EOI 完整；
+2. SOF 声明尺寸 = 请求尺寸；
+3. 两份 JPEG 字节**必须不同**。
+
+第 3 条拦的是「编码成功、产出合法 JPEG、但恒为纯灰图且不报错」——自研骨架在帧挂载序列不完整时真实复现过（`mpi_enc_test` 同库同硬件正常）。自检失败即 WARN 并回退软件，**不得为「先跑起来」跳过**。
+
+### 7.5 会话池与内存所有权
+
+- 会话按 `(width, height)` 分桶，上限 8，满载按 LRU 淘汰；**绝不是每帧 `mpp_init`**（那是几十毫秒级）。
+- 板端已验证：24 个不同尺寸连续编码（触发多轮淘汰与 `mpp_destroy`）不崩、不退化。
+- 所有权：会话/缓冲由 `MppJpegEncoder` 分配并释放；`MppFrame`/`MppPacket` 每次编码配平释放；JPEG 字节**拷贝**给调用方，packet 缓冲不外泄。
+- ⚠️ **编码符号表与解码节点独立**：不得并入 `nodes/decode/mpp_loader`，否则一个缺失的 enc 符号会把硬件解码一并判为不支持。
+
+### 7.6 DMA-BUF 直通（已启用，**仅整帧**）
+
+`MppJpegEncoder::encode_dma_frame()`：把解码器产出的 fd 直接 `mpp_buffer_import(MPP_BUFFER_TYPE_EXT_DMA)`
+成 `MppBuffer` 交给 VEPU，**零 CPU 拷贝**。实测（1080p，`quality=85`）：
+
+| 路径 | wall | CPU | 备注 |
+| --- | --- | --- | --- |
+| 软编 (FFmpeg mjpeg) | 53.0 ms | 52.98 ms | 基线 |
+| 硬编 + CPU 上传 | 21.7 ms | 2.31 ms | §7.3 |
+| **硬编 + DMA-BUF 直通** | **20.3 ms** | **0.91 ms** | 相对软编 **58× CPU** |
+
+- ⚠️ **wall 的地板是 VEPU 本身**（1080p 约 20ms）。继续压 CPU 不会让单张变快，只降低对 A55 的占用与抢占。
+- ⚠️ **裁剪框不走直通**：MPP 编码器没有一致可靠的「源偏移」语义（UV 平面基址是否跟随 offset 未验证）。要做需 RGA crop → `mpp_buffer`，而裁剪图多是 ≤128×128（本来就走软编），收益与复杂度不成比例。
+- ⚠️ **stride 必须原样取自帧**（`frame.stride` / `frame.vstride`），**绝不可**用 `align16(width)` 顶替 —— 解码器可能给 2048 这类行跨度，顶替会让 VEPU 按错行宽读取、产出斜切图。会话池的 key 因此升级为 `(w, h, hor_stride, ver_stride)` 四元组。
+- ⚠️ **缓存一致性**：直通路径的写者也是硬件（解码器），CPU 侧无脏行，**不需要** `DMA_BUF_IOCTL_SYNC`。一旦引入「CPU 写完再硬编」（OSD、水印、马赛克），必须显式 end-write 同步，否则表现为**静默灰图**而不是报错。
+- **运行期自证（不可省略）**：首次直通会对**同一帧**分别走直通与上传路径并逐字节比对 —— 相等才启用，不等即 `ERROR` 并**永久停用**。这条把「dma_heap 测试缓冲」的验证升级成「真实解码器帧的 fd 语义」验证，而后者只能在真机上完成。另外连续失败 3 次也永久停用，防止「每帧先付 import 开销再回退」的隐性退化。
+
+## 8. 验证命令
 
 ```bash
 # 1. 检查头文件依赖隔离（仅允许在 native/src/backends/{rknn,onnx}/ 引用）
@@ -307,5 +386,11 @@ python3 native/scripts/build.py --inference-backend onnx go test -race -count=1 
 python3 native/scripts/build.py --profile native/profiles/rk3568-rknn-rga.json build
 scp build/native/cross-rk3568-rknn-rga/ZhulongDecoderTests rk3568:/tmp/
 ssh rk3568 "/tmp/ZhulongDecoderTests"
+
+# 6. JPEG 硬编（VEPU）板端验证：自检 + 尺寸矩阵 + 会话池淘汰 + 后端分流
+python3 native/scripts/build.py --profile native/profiles/rk3568.json build
+scp build/native/cross-rk3568/ZhulongJpegEncoderTests rk3568:/tmp/
+ssh rk3568 "/tmp/ZhulongJpegEncoderTests"                      # 无环境变量 = auto，应报 mpp
+ssh rk3568 "ZHULONG_JPEG_BACKEND=cpu /tmp/ZhulongJpegEncoderTests"  # 强制软编对照组
 ```
 
