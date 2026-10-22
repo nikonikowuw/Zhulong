@@ -8,7 +8,7 @@ import {
   type StreamType,
 } from '../types'
 import { isWebCodecsSupported } from './webcodecs-decoder'
-import { parseZlm1Packet } from './wire-parser'
+import { parseZlm2Packet } from './wire-parser'
 
 /**
  * 前端单例流连接池管理器 (StreamConnectionPool)
@@ -18,7 +18,14 @@ export class StreamConnectionPool {
   private static instance: StreamConnectionPool | null = null
   private streams = new Map<string, ManagedStream>()
   private readonly gracePeriodMs = 3000
-  private readonly maxReconnectAttempts = 5
+
+  /**
+   * 重连次数提示阈值。
+   *
+   * ⚠️ 这不是重试上限 —— 边缘设备无人值守，任何「重试 N 次后放弃」
+   * 的设计都等于现场必须派人去点按钮。超过该阈值只改变 UI 文案。
+   */
+  private readonly reconnectNoticeAfter = 5
 
   private constructor() {}
 
@@ -59,8 +66,15 @@ export class StreamConnectionPool {
     subscriber.onStatusChange(stream.status, stream.lastError)
     subscriber.onStatsUpdate(stream.stats)
 
-    // 0 -> 1 真正激活连接
-    if (stream.refCount === 1 && stream.status === 'idle') {
+    // 0 -> 1 真正激活连接。
+    // 除 connected / connecting 之外的所有状态都要重连：尤其是 'error'
+    // 和 'closed'，否则 React 严格模式重挂载或路由往返会让流永远卡在错误态。
+    if (
+      stream.refCount === 1 &&
+      stream.status !== 'connected' &&
+      stream.status !== 'connecting'
+    ) {
+      stream.reconnectAttempts = 0
       this.connect(stream)
     }
 
@@ -157,9 +171,9 @@ export class StreamConnectionPool {
 
           let parsedPacket: ParsedPacket | null = null
           try {
-            parsedPacket = parseZlm1Packet(buffer)
+            parsedPacket = parseZlm2Packet(buffer)
           } catch {
-            // 忽略非 ZLM1 格式或损坏数据包
+            // 忽略非 ZLM2 格式或损坏数据包
           }
 
           const rawBytes = parsedPacket
@@ -195,26 +209,24 @@ export class StreamConnectionPool {
   }
 
   private scheduleReconnect(stream: ManagedStream): void {
-    if (stream.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.updateStatus(
-        stream,
-        'error',
-        `多次重连失败 (超过 ${this.maxReconnectAttempts} 次)，请检查设备网络`
-      )
-      return
-    }
-
     stream.reconnectAttempts++
-    // 指数退避加抖动：1s, 2s, 4s, 8s...
-    const delay = Math.min(
+
+    // 指数退避 + 抖动：1s → 2s → 4s → 8s → 16s 封顶。
+    // 抖动是必需的：16 路同时断线后若不带抖动重连，等于对设备发起一次小型 DDoS，
+    // 而边缘 A55 的 Gin 协程池撑不住这种同步脉冲。
+    const base = Math.min(
       1000 * Math.pow(2, stream.reconnectAttempts - 1),
       16000
     )
-    this.updateStatus(
-      stream,
-      'reconnecting',
-      `连接已断开，正在重连 (${stream.reconnectAttempts}/${this.maxReconnectAttempts})...`
-    )
+    const delay = Math.round(base * (0.5 + Math.random() * 0.5))
+
+    // 永不放弃：只在文案上区分「还在正常重试」与「已经重试很多次了」
+    const message =
+      stream.reconnectAttempts > this.reconnectNoticeAfter
+        ? `持续重连中（第 ${stream.reconnectAttempts} 次），请检查设备与网络`
+        : `连接已断开，正在重连（第 ${stream.reconnectAttempts} 次）...`
+
+    this.updateStatus(stream, 'reconnecting', message)
 
     if (stream.reconnectTimer) {
       clearTimeout(stream.reconnectTimer)

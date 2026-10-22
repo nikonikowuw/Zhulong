@@ -123,6 +123,13 @@ void zhulong_face_plugin_engine_destroyed();
  * @param[out] out_engine 输出参数，接收创建成功后的引擎句柄指针
  * @return Zhulong_status_t 执行状态码
  */
+extern "C" Zhulong_status_t Zhulong_engine_get_abi_version(uint32_t *out_version) {
+    return boundary([&] {
+        require(out_version != nullptr);
+        *out_version = ZHULONG_ABI_VERSION;
+    });
+}
+
 extern "C" Zhulong_status_t Zhulong_engine_create(Zhulong_engine_h *out_engine) {
     if (out_engine) *out_engine = nullptr;
     return boundary([&] {

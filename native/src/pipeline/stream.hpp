@@ -24,6 +24,7 @@
 #include "nodes/capture/rtsp_input.hpp"
 #include "nodes/decode/decoder.hpp"
 #include "pipeline/bounded_queue.hpp"
+#include "pipeline/preview_normalizer.hpp"
 #include "pipeline/subscription.hpp"
 
 #include <atomic>
@@ -179,6 +180,14 @@ struct Stream {
     Video video_meta_{};                        /**< 缓存的 RTSP 视频流元数据 */
     std::shared_ptr<DecodeSession> decode_session_{nullptr}; /**< 动态解码会话 (按需激活) */
 
+    /**
+     * @brief 预览契约整形器（单调微秒时间戳 / 参数集注入 / 帧分类）
+     *
+     * ⚠️ 仅由拉流 Worker 线程访问（on_ready 与 dispatch 均在该线程），内部无锁。
+     * 本层平台无关：RK3568 与 RK3588 共用同一实现，平台差异仅体现在 Go 侧的资源配额。
+     */
+    PreviewNormalizer preview_normalizer_{};
+
     // 被逐订阅者隔离的回调异常累计次数 (仅统计用途，relaxed 原子)
     std::atomic<uint64_t> callback_exceptions_{0};
 
@@ -211,7 +220,13 @@ struct Stream {
     /** @brief 将 subscriptions 重新发布为不可变快照 (调用方必须持有 mutex) */
     void rebuild_subscribers();
 
-    /** @brief 将解析出的数据包派发至该流的所有活跃订阅者及解码队列 */
+    /**
+     * @brief 将解析出的数据包整形后派发至该流的所有活跃订阅者及解码队列
+     *
+     * 派发前统一经过 PreviewNormalizer：补齐单调微秒时间戳、帧分类，
+     * 并在关键帧自缺参数集时注入 VPS/SPS/PPS。
+     * 订阅回调与解码队列拿到的都是整形后的视图（pts/dts/time_base 仍为源流原值）。
+     */
     void dispatch(const Zhulong_packet_view &packet);
 
     /** @brief 检查当前是否有 AI 消费者 */

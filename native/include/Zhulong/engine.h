@@ -132,6 +132,9 @@ typedef struct {
  *   - data 指针仅在回调函数同步调用的执行周期内有效！
  *   - 若回调接收方需保留数据包供异步处理，必须在回调返回前完成独立内存分配并进行深拷贝（Deep Copy）。
  *   - 时间戳 pts / dts 为源流时间基下的原生滴答数（Ticks），而非系统墙上时钟或毫秒。
+ *   - v3 起额外提供微秒单位的 pts_us / dts_us；pts_us 保留显示顺序，允许 B 帧重排，
+ *     dts_us 按解码顺序单调（源缺失 DTS 时为合成值）。源流 ticks / time_base 继续透传，
+ *     供 AI 解码等需要原始时基的消费者使用。
  */
 typedef struct {
     int32_t codec;               /**< 数据包编解码类型 */
@@ -144,7 +147,39 @@ typedef struct {
     int32_t key_frame;           /**< 是否为关键帧 / IDR 帧（1 为关键帧，0 为非关键帧） */
     const uint8_t *data;         /**< 数据负载首地址（借用指针） */
     size_t size;                 /**< 数据负载长度（字节数） */
+
+    /* ---------------- v3 追加：预览路径归一化字段（原有偏移不变） ---------------- */
+
+    int64_t pts_us;              /**< 显示时间戳微秒值；保留 B 帧重排，不保证按包序单调 */
+    int64_t dts_us;              /**< 解码时间戳微秒值；按包序单调，缺失源 DTS 时使用合成值 */
+    int32_t frame_class;         /**< 帧类型，取值见 Zhulong_FRAME_*；决定接收方可否安全丢弃 */
+    uint32_t gop_id;             /**< GOP 序号：每遇到关键帧或时间轴跳变时自增，跨值即代表可重建解码器 */
+    uint32_t pkt_flags;          /**< 包属性位，取值见 ZHULONG_PKT_FLAG_* */
 } Zhulong_packet_view;
+
+/**
+ * @brief 预览帧类型枚举（v3）
+ *
+ * 语义约定：
+ *   - 接收方仅可无条件丢弃 Zhulong_FRAME_NON_REFERENCE；
+ *   - 丢弃 Zhulong_FRAME_PREDICTIVE 会破坏后续帧的参考链，必须整段丢弃至下一个 IDR；
+ *   - 引擎在无法可靠判定时一律归类为 PREDICTIVE（保守策略，绝不误判为可丢）。
+ */
+enum {
+    Zhulong_FRAME_UNKNOWN       = 0, /**< 未分类（旧版原生库或非视频包） */
+    Zhulong_FRAME_IDR           = 1, /**< 关键帧 / 随机接入点 */
+    Zhulong_FRAME_PREDICTIVE    = 2, /**< 参考帧，不可单独丢弃 */
+    Zhulong_FRAME_NON_REFERENCE = 3  /**< 非参考帧，可安全丢弃而不影响后续解码 */
+};
+
+/** @brief pts_us 由 dts 合成（源流缺失 PTS） */
+#define ZHULONG_PKT_FLAG_TIMESTAMP_SYNTHETIC 0x0001u
+/** @brief 引擎已为本帧前置注入参数集（VPS/SPS/PPS），接收方无需再等待 */
+#define ZHULONG_PKT_FLAG_PARAM_SETS_INJECTED 0x0002u
+/** @brief 源流时间轴发生跳变（典型为相机或 RTSP 会话重建），接收方必须重置解码器 */
+#define ZHULONG_PKT_FLAG_DISCONTINUITY       0x0004u
+/** @brief 源流缺失 DTS，dts_us 是用于诊断/背压的合成解码时钟 */
+#define ZHULONG_PKT_FLAG_DTS_SYNTHETIC        0x0008u
 
 /**
  * @brief 流状态信息结构体
@@ -203,6 +238,26 @@ typedef void (*Zhulong_log_callback)(uintptr_t token, int32_t level, uint64_t st
 /* ========================================================================== */
 /*                             引擎生命周期管理接口                              */
 /* ========================================================================== */
+
+/**
+ * @brief 当前 C ABI 版本号（v2 为追加帧分类、GOP 序号与微秒时间戳之前的版本）
+ *
+ * 演进约定：ABI 只允许在结构体**尾部追加**字段，绝不调整已有字段偏移或语义。
+ * Go 侧在初始化后必须调用 Zhulong_engine_get_abi_version 校验，头文件与静态库不一致时
+ * 直接拒绝启动，避免旧归档被语言层静默复用引发的内存越界。
+ */
+#define ZHULONG_ABI_VERSION 3
+
+/**
+ * @brief 查询原生静态库编译时对应的 ABI 版本
+ *
+ * 用途：Make / wrapper 已对 Engine 归档做内容寻址，但交叉产物、旧 build 目录或手工链接
+ * 仍可能把上一次的头文件和新一次的归档混在一起。本接口让这种不一致当场暴露。
+ *
+ * @param[out] out_version 输出 ABI 版本号
+ * @return Zhulong_status_t Zhulong_OK 成功；Zhulong_ERR_INVALID_ARGUMENT 空指针
+ */
+Zhulong_status_t Zhulong_engine_get_abi_version(uint32_t *out_version);
 
 /**
  * @brief 创建并分配 Native 引擎实例

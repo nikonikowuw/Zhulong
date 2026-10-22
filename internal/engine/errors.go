@@ -88,6 +88,14 @@ var (
 	ErrInternal          = &NativeError{Code: StatusInternal, Message: "internal engine error"}
 )
 
+// ErrABIMismatch 表示 Go 侧编译期头文件与原生静态库的 ABI 版本不一致。
+//
+// 这是构建期错配而非运行时故障：Make 与 wrapper 已对 Engine 归档做内容寻址，
+// 但交叉产物、遗留 build 目录或手工链接仍可能把新头文件与旧归档混在一起。
+// 这种错配在链接期不会报错，只会让 cgo 按错误的结构体偏移读内存 ——
+// 表现为随机崩溃或莫名其妙的字段值，排查成本极高。宁可启动直接拒绝。
+var ErrABIMismatch = errors.New("native engine ABI version mismatch")
+
 // ErrUnsupportedImageFormat 表示调用方提供的图片字节流无法被解码（格式不受支持或文件损坏）。
 //
 // ⚠️ 它与 StatusUnsupported（原生能力缺失，如 CPU 桩后端没有人脸识别能力）是**两类**问题：

@@ -73,9 +73,30 @@ func New() *Engine {
 }
 
 // Start 启动 Native 引擎。
+// expectedABIVersion 必须与 native/include/Zhulong/engine.h 的 ZHULONG_ABI_VERSION 同步。
+// 改动 ABI 时两边一起改，让不一致在启动瞬间暴露，而不是在板端随机崩溃。
+const expectedABIVersion = 3
+
+// verifyABI 校验头文件与静态库是否来自同一次构建（幂等，失败后不缓存结果）。
+func verifyABI() error {
+	var version C.uint32_t
+	if status := C.Zhulong_engine_get_abi_version(&version); status != C.Zhulong_OK {
+		return mapNativeStatus("abi_version", int32(status))
+	}
+	if int(version) != expectedABIVersion {
+		return fmt.Errorf("%w: native=v%d, expected=v%d; run `make native-build`",
+			ErrABIMismatch, int(version), expectedABIVersion)
+	}
+	return nil
+}
+
 func (e *Engine) Start() error {
 	e.lifecycleMu.Lock()
 	defer e.lifecycleMu.Unlock()
+
+	if err := verifyABI(); err != nil {
+		return err
+	}
 
 	e.mu.Lock()
 	if e.running {

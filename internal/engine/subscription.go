@@ -50,6 +50,39 @@ func (s *Subscription) deleteToken() {
 	}
 }
 
+// inboundPacket 承载一次原生回调携带的全部字段。
+//
+// 之所以用结构体而不是继续加位置参数：ABI v3 之后字段已达 13 个，长参数表一旦错序
+// （例如把 dts_us 传成 pts_us）编译期不会报错，只会让预览端时间戳静默错乱。
+type inboundPacket struct {
+	Codec      Codec
+	PTS        int64
+	DTS        int64
+	HasPTS     bool
+	HasDTS     bool
+	TimeBase   Rational
+	KeyFrame   bool
+	Data       []byte
+	Size       int
+	PtsUS      int64
+	DtsUS      int64
+	FrameClass FrameClass
+	GOPID      uint32
+	Flags      PacketFlag
+}
+
+// fail 以终态错误关闭订阅并唤醒等待方。
+func (s *Subscription) fail(err error) {
+	s.mu.Lock()
+	if !s.closed {
+		s.err = err
+		s.closed = true
+		close(s.done)
+	}
+	s.mu.Unlock()
+	s.signal()
+}
+
 // onPacket 由 CGO 回调在 Native 工作线程同步调用。
 func (s *Subscription) onPacket(packet *C.Zhulong_packet_view) {
 	if packet == nil {
@@ -58,14 +91,7 @@ func (s *Subscription) onPacket(packet *C.Zhulong_packet_view) {
 
 	size := int(packet.size)
 	if size < 0 || (size > 0 && packet.data == nil) {
-		s.mu.Lock()
-		if !s.closed {
-			s.err = ErrInvalidArgument
-			s.closed = true
-			close(s.done)
-		}
-		s.mu.Unlock()
-		s.signal()
+		s.fail(ErrInvalidArgument)
 		return
 	}
 
@@ -74,37 +100,27 @@ func (s *Subscription) onPacket(packet *C.Zhulong_packet_view) {
 		borrowedData = unsafe.Slice((*byte)(unsafe.Pointer(packet.data)), size)
 	}
 
-	s.onPacketData(
-		int32(packet.codec),
-		int64(packet.pts),
-		int64(packet.dts),
-		packet.has_pts != 0,
-		packet.has_dts != 0,
-		Rational{Num: int32(packet.time_base_num), Den: int32(packet.time_base_den)},
-		packet.key_frame != 0,
-		borrowedData,
-		size,
-	)
+	s.onPacketData(inboundPacket{
+		Codec:      Codec(packet.codec),
+		PTS:        int64(packet.pts),
+		DTS:        int64(packet.dts),
+		HasPTS:     packet.has_pts != 0,
+		HasDTS:     packet.has_dts != 0,
+		TimeBase:   Rational{Num: int32(packet.time_base_num), Den: int32(packet.time_base_den)},
+		KeyFrame:   packet.key_frame != 0,
+		Data:       borrowedData,
+		Size:       size,
+		PtsUS:      int64(packet.pts_us),
+		DtsUS:      int64(packet.dts_us),
+		FrameClass: FrameClass(packet.frame_class),
+		GOPID:      uint32(packet.gop_id),
+		Flags:      PacketFlag(packet.pkt_flags),
+	})
 }
 
-func (s *Subscription) onPacketData(
-	codec int32,
-	pts, dts int64,
-	hasPTS, hasDTS bool,
-	timeBase Rational,
-	keyFrame bool,
-	borrowedData []byte,
-	size int,
-) {
-	if size < 0 || size > s.maxPacketBytes {
-		s.mu.Lock()
-		if !s.closed {
-			s.err = ErrPacketTooLarge
-			s.closed = true
-			close(s.done)
-		}
-		s.mu.Unlock()
-		s.signal()
+func (s *Subscription) onPacketData(in inboundPacket) {
+	if in.Size < 0 || in.Size > s.maxPacketBytes {
+		s.fail(ErrPacketTooLarge)
 		return
 	}
 
@@ -115,7 +131,7 @@ func (s *Subscription) onPacketData(
 	}
 
 	// 检查包数与字节预算
-	if len(s.queue) >= s.maxPackets || s.bufferedBytes+size > s.maxBufferedBytes {
+	if len(s.queue) >= s.maxPackets || s.bufferedBytes+in.Size > s.maxBufferedBytes {
 		s.err = ErrBackpressure
 		s.closed = true
 		close(s.done)
@@ -126,20 +142,25 @@ func (s *Subscription) onPacketData(
 
 	// 从借用指针深拷贝到 Go 内存中，实现生命周期彻底解耦
 	var data []byte
-	if size > 0 && len(borrowedData) > 0 {
-		data = make([]byte, size)
-		copy(data, borrowedData)
+	if in.Size > 0 && len(in.Data) > 0 {
+		data = make([]byte, in.Size)
+		copy(data, in.Data)
 	}
 
 	pkt := Packet{
-		Codec:    Codec(codec),
-		PTS:      pts,
-		DTS:      dts,
-		HasPTS:   hasPTS,
-		HasDTS:   hasDTS,
-		TimeBase: timeBase,
-		KeyFrame: keyFrame,
-		Data:     data,
+		Codec:      in.Codec,
+		PTS:        in.PTS,
+		DTS:        in.DTS,
+		HasPTS:     in.HasPTS,
+		HasDTS:     in.HasDTS,
+		TimeBase:   in.TimeBase,
+		KeyFrame:   in.KeyFrame,
+		Data:       data,
+		PtsUS:      in.PtsUS,
+		DtsUS:      in.DtsUS,
+		FrameClass: in.FrameClass,
+		GOPID:      in.GOPID,
+		Flags:      in.Flags,
 	}
 
 	s.queue = append(s.queue, pkt)

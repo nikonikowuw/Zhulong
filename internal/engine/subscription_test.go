@@ -19,17 +19,17 @@ func TestSubscriptionQueueAndNext(t *testing.T) {
 	payload := []byte("test_h264_payload")
 
 	// 派发包
-	sub.onPacketData(
-		1, // H264
-		1000,
-		1000,
-		true,
-		true,
-		Rational{Num: 1, Den: 90000},
-		true,
-		payload,
-		len(payload),
-	)
+	sub.onPacketData(inboundPacket{
+		Codec:    CodecH264,
+		PTS:      1000,
+		DTS:      1000,
+		HasPTS:   true,
+		HasDTS:   true,
+		TimeBase: Rational{Num: 1, Den: 90000},
+		KeyFrame: true,
+		Data:     payload,
+		Size:     len(payload),
+	})
 
 	// 修改原始 payload，验证深拷贝隔离
 	payload[0] = 'X'
@@ -67,15 +67,15 @@ func TestSubscriptionBackpressureMaxPackets(t *testing.T) {
 
 	raw := []byte("frame")
 
-	sub.onPacketData(1, 0, 0, false, false, Rational{Num: 1, Den: 90000}, false, raw, len(raw))
-	sub.onPacketData(1, 0, 0, false, false, Rational{Num: 1, Den: 90000}, false, raw, len(raw))
+	sub.onPacketData(inboundPacket{Codec: CodecH264, TimeBase: Rational{Num: 1, Den: 90000}, Data: raw, Size: len(raw)})
+	sub.onPacketData(inboundPacket{Codec: CodecH264, TimeBase: Rational{Num: 1, Den: 90000}, Data: raw, Size: len(raw)})
 
 	if sub.Err() != nil {
 		t.Fatalf("unexpected error before overflow: %v", sub.Err())
 	}
 
 	// 第 3 包应当触发背压
-	sub.onPacketData(1, 0, 0, false, false, Rational{Num: 1, Den: 90000}, false, raw, len(raw))
+	sub.onPacketData(inboundPacket{Codec: CodecH264, TimeBase: Rational{Num: 1, Den: 90000}, Data: raw, Size: len(raw)})
 
 	if !errors.Is(sub.Err(), ErrBackpressure) {
 		t.Fatalf("expected ErrBackpressure, got %v", sub.Err())
@@ -101,7 +101,7 @@ func TestSubscriptionPacketTooLarge(t *testing.T) {
 	}
 
 	huge := make([]byte, 200)
-	sub.onPacketData(1, 0, 0, false, false, Rational{Num: 1, Den: 90000}, false, huge, len(huge))
+	sub.onPacketData(inboundPacket{Codec: CodecH264, TimeBase: Rational{Num: 1, Den: 90000}, Data: huge, Size: len(huge)})
 
 	if !errors.Is(sub.Err(), ErrPacketTooLarge) {
 		t.Fatalf("expected ErrPacketTooLarge, got %v", sub.Err())
@@ -173,7 +173,7 @@ func TestSubscriptionInvalidPacket(t *testing.T) {
 	}
 
 	// 传入非法尺寸
-	sub.onPacketData(1, 0, 0, false, false, Rational{Num: 1, Den: 90000}, false, nil, -1)
+	sub.onPacketData(inboundPacket{Codec: CodecH264, TimeBase: Rational{Num: 1, Den: 90000}, Size: -1})
 	if !errors.Is(sub.Err(), ErrPacketTooLarge) {
 		t.Fatalf("expected ErrPacketTooLarge for negative size, got %v", sub.Err())
 	}

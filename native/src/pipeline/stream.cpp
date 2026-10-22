@@ -452,11 +452,19 @@ void Stream::on_ready(const Video &video) {
         status.state = Zhulong_STREAM_RUNNING;
         session = decode_session_;
     }
+    // 参数集在此完成 Annex B 归一化；放在锁外，不与 dispatch 热路径争锁
+    preview_normalizer_.update_metadata(
+        video.view.codec,
+        video.extradata.empty() ? nullptr : video.extradata.data(),
+        video.extradata.size(),
+        video.view.time_base_num,
+        video.view.time_base_den);
     if (session) {
         session->update_metadata(video);
     }
-    ZL_LOGI(id, "pipeline.stream", "stream_ready codec=%d width=%d height=%d",
-        video.view.codec, video.view.width, video.view.height);
+    ZL_LOGI(id, "pipeline.stream", "stream_ready codec=%d width=%d height=%d extradata=%zu tb=%d/%d",
+        video.view.codec, video.view.width, video.view.height, video.extradata.size(),
+        video.view.time_base_num, video.view.time_base_den);
 }
 
 void Stream::rebuild_subscribers() {
@@ -469,6 +477,11 @@ void Stream::rebuild_subscribers() {
 }
 
 void Stream::dispatch(const Zhulong_packet_view &packet) {
+    // 预览契约整形：单调微秒时间戳 + 帧分类 + 参数集注入。
+    // 返回值中的 data 可能借用整形器内部缓冲，仅在下一次 dispatch 前有效，
+    // 与 engine.h 的「回调期间借用」契约一致；解码队列会在 push_packet 内深拷贝。
+    const Zhulong_packet_view shaped = preview_normalizer_.normalize(packet);
+
     // 单次加锁同时取得解码会话与订阅者快照 (仅拷贝 shared_ptr，热路径无堆分配)
     std::shared_ptr<DecodeSession> session;
     std::shared_ptr<const SubscriberList> subscribers;
@@ -480,7 +493,7 @@ void Stream::dispatch(const Zhulong_packet_view &packet) {
 
     // 1. 优先推送至 AI 解码队列 (先于 Preview 回调，避免慢回调延迟 AI 处理)
     if (session && !cancel.stopped.load()) {
-        session->push_packet(packet);
+        session->push_packet(shaped);
     }
 
     // 2. 在锁外逐个调用订阅回调
@@ -488,7 +501,7 @@ void Stream::dispatch(const Zhulong_packet_view &packet) {
     for (const auto &subscription : *subscribers) {
         if (cancel.stopped.load()) break;
         try {
-            subscription->invoke(packet);
+            subscription->invoke(shaped);
         } catch (...) {
             // invoke 已在抛出前恢复 in_callback 并置 enabled=false，此处仅计数：
             // 违约订阅者静默失效，流状态保持 RUNNING，其他订阅者不受影响

@@ -1,0 +1,138 @@
+#include "pipeline/preview_normalizer.hpp"
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <iostream>
+#include <iterator>
+#include <vector>
+
+namespace {
+
+void Check(bool condition, const char *message) {
+    if (!condition) {
+        std::cerr << "FAILED: " << message << '\n';
+        std::exit(1);
+    }
+}
+
+bool StartsWith(const std::vector<uint8_t> &data, const std::vector<uint8_t> &prefix) {
+    return data.size() >= prefix.size() &&
+           std::equal(prefix.begin(), prefix.end(), data.begin());
+}
+
+Zhulong_packet_view Packet(int64_t pts, int64_t dts, bool keyframe = false) {
+    static const uint8_t payload[] = {0, 0, 0, 1, 0x41, 0x88};
+    Zhulong_packet_view packet{};
+    packet.codec = Zhulong_CODEC_H264;
+    packet.pts = pts;
+    packet.dts = dts;
+    packet.has_pts = 1;
+    packet.has_dts = 1;
+    packet.time_base_num = 1;
+    packet.time_base_den = 25;
+    packet.key_frame = keyframe ? 1 : 0;
+    packet.data = payload;
+    packet.size = sizeof(payload);
+    return packet;
+}
+
+void TestAvcConfigurationRecord() {
+    const uint8_t avcc[] = {
+        1, 0x64, 0, 0x1f, 0xff, 0xe1,
+        0, 2, 0x67, 0x64,
+        1, 0, 2, 0x68, 0xee,
+    };
+    const auto parameter_sets = zhulong::ToAnnexB(
+        Zhulong_CODEC_H264, avcc, sizeof(avcc));
+    Check(StartsWith(parameter_sets, {0, 0, 0, 1}),
+          "avcC parameters should be prefixed by an Annex B start code");
+    Check(zhulong::HasCompleteParameterSets(
+              Zhulong_CODEC_H264, parameter_sets.data(), parameter_sets.size()),
+          "avcC SPS/PPS should be extracted into Annex B");
+
+    zhulong::PreviewNormalizer normalizer;
+    normalizer.update_metadata(Zhulong_CODEC_H264, avcc, sizeof(avcc), 1, 25);
+    auto keyframe = Packet(0, 0, true);
+    keyframe.data = keyframe.data + 4;
+    keyframe.size -= 4;
+    const auto output = normalizer.normalize(keyframe);
+    Check((output.pkt_flags & ZHULONG_PKT_FLAG_PARAM_SETS_INJECTED) != 0,
+          "avcC parameter sets should be injected into an IDR");
+    Check(output.size > keyframe.size && output.data[0] == 0 && output.data[3] == 1,
+          "injected avcC parameter sets should use Annex B start codes");
+}
+
+void TestHevcConfigurationRecord() {
+    std::vector<uint8_t> hvcc(23, 0);
+    hvcc[0] = 1;
+    hvcc[22] = 3;
+    const uint8_t arrays[][7] = {
+        {0x80 | 32, 0, 1, 0, 2, 0x40, 0x01},
+        {0x80 | 33, 0, 1, 0, 2, 0x42, 0x01},
+        {0x80 | 34, 0, 1, 0, 2, 0x44, 0x01},
+    };
+    for (const auto &array : arrays) {
+        hvcc.insert(hvcc.end(), std::begin(array), std::end(array));
+    }
+
+    const auto parameter_sets = zhulong::ToAnnexB(
+        Zhulong_CODEC_H265, hvcc.data(), hvcc.size());
+    Check(StartsWith(parameter_sets, {0, 0, 0, 1}),
+          "hvcC parameters should be prefixed by an Annex B start code");
+    Check(zhulong::HasCompleteParameterSets(
+              Zhulong_CODEC_H265, parameter_sets.data(), parameter_sets.size()),
+          "hvcC VPS/SPS/PPS should be extracted into Annex B");
+}
+
+void TestBFrameTimestampsAndDiscontinuity() {
+    zhulong::PreviewNormalizer normalizer;
+    normalizer.update_metadata(Zhulong_CODEC_H264, nullptr, 0, 1, 25);
+
+    const int64_t pts[] = {0, 3, 1, 2};
+    const int64_t dts[] = {0, 1, 2, 3};
+    const int64_t expected_pts[] = {0, 120000, 40000, 80000};
+    for (size_t i = 0; i < 4; ++i) {
+        auto packet = Packet(pts[i], dts[i]);
+        const auto output = normalizer.normalize(packet);
+        Check(output.pts_us == expected_pts[i], "presentation timestamp must preserve B-frame order");
+        Check(output.dts_us == static_cast<int64_t>(i) * 40000,
+              "decode timestamp must stay monotonic in packet order");
+        Check((output.pkt_flags & ZHULONG_PKT_FLAG_DISCONTINUITY) == 0,
+              "normal B-frame PTS reordering must not signal discontinuity");
+    }
+
+    auto restarted = Packet(0, 0);
+    const auto output = normalizer.normalize(restarted);
+    Check((output.pkt_flags & ZHULONG_PKT_FLAG_DISCONTINUITY) != 0,
+          "DTS reset should signal a source discontinuity");
+    Check(output.dts_us == 120001,
+          "normalized DTS after discontinuity should continue after prior decode time");
+}
+
+void TestMissingDtsGetsSyntheticDecodeClock() {
+    zhulong::PreviewNormalizer normalizer;
+    normalizer.update_metadata(Zhulong_CODEC_H264, nullptr, 0, 1, 25);
+    auto first = Packet(0, 0);
+    first.has_dts = 0;
+    auto second = Packet(0, 0);
+    second.has_dts = 0;
+
+    const auto first_output = normalizer.normalize(first);
+    const auto second_output = normalizer.normalize(second);
+    Check((first_output.pkt_flags & ZHULONG_PKT_FLAG_DTS_SYNTHETIC) != 0,
+          "missing DTS must be marked synthetic");
+    Check(second_output.dts_us > first_output.dts_us,
+          "synthetic DTS must increase in packet order");
+}
+
+} // namespace
+
+int main() {
+    TestAvcConfigurationRecord();
+    TestHevcConfigurationRecord();
+    TestBFrameTimestampsAndDiscontinuity();
+    TestMissingDtsGetsSyntheticDecodeClock();
+    std::cout << "Preview normalizer tests passed\n";
+    return 0;
+}

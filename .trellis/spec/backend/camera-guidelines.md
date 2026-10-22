@@ -82,27 +82,59 @@ CREATE TABLE camera_streams (
 
 ---
 
-## 5. WebSocket 实时推流与 ZLM1 协议规约
+## 5. WebSocket 实时推流与 ZLM2 协议规约
 
-1. **二进制封包协议 (Wire Protocol: ZLM1)**：
-   每个推送到 WebSocket 客户端的二进制消息包含 24 字节大端序固定头：
-   - `Bytes 0..3`：Magic `0x5A4C4D31` ("ZLM1")
-   - `Byte 4`：Codec（`0x01` = H.264, `0x02` = H.265）
-   - `Byte 5`：Flags（位掩码：Bit 0 = KeyFrame, Bit 1 = HasPTS, Bit 2 = HasDTS）
-   - `Bytes 6..7`：Reserved（`0x0000`）
-   - `Bytes 8..15`：PTS（`int64` 大端序，90kHz 时钟基）
-   - `Bytes 16..23`：DTS（`int64` 大端序）
-   - `Bytes 24..N`：Annex B NALU 载荷（以 `00 00 00 01` 或 `00 00 01` 起始码分隔）
+1. **二进制封包协议 (Wire Protocol: ZLM2)**：
+   每个推送到 WebSocket 客户端的二进制消息包含 32 字节大端序固定头：
+
+   | 偏移 | 长度 | 字段 | 说明 |
+   | --- | --- | --- | --- |
+   | 0 | 4 | Magic | `0x5A4C4D32` ("ZLM2") |
+   | 4 | 1 | Version | `2` |
+   | 5 | 1 | Codec | `0x01` = H.264, `0x02` = H.265 |
+   | 6 | 1 | FrameClass | `Zhulong_FRAME_*` 取值 |
+   | 7 | 1 | Flags | Bit0 KeyFrame / Bit1 Discontinuity / Bit2 ParamInjected / Bit3 PtsSynthetic / Bit4 DtsSynthetic |
+   | 8 | 8 | `pts_us` | **显示时间戳微秒值**，保留 B 帧重排，不保证按包序单调 |
+   | 16 | 8 | `dts_us` | **解码时间戳微秒值**，按解码包序单调；缺失时由原生层合成 |
+   | 24 | 4 | `seq` | 流级帧序号，接收方据此统计真实丢帧 |
+   | 28 | 4 | `gop_id` | 关键帧序号，变化即代表可重建解码器 |
+   | 32 | N | Payload | Annex B NALU |
+
+   - 载荷时基归一化责任固定在 Native `PreviewNormalizer`；前端不做时基换算。PTS 表示显示时间，可能因 B 帧重排回退；
+     WebCodecs 按收到顺序解码，并将原始 `pts_us` 作为 chunk timestamp。
+
 2. **按需生命周期与单例拉流**：
    - 路由：`GET /api/v1/cameras/:id/streams/:role/ws`（及 `/api/v1/cameras/:id/ws` 默认主流），严格受 `auth.RequireAuth` 保护。
    - $0 \rightarrow 1$ 激活：首个 Web 客户端连入时，解密 RTSP 凭据并向 Native 引擎发起 `Acquire(ConsumerPreview)` 与 `Subscribe`，状态切为 `SessionStateRunning`，并立即向 `/api/v1/cameras/events` 广播状态变更。
    - 并发 Singleflight 保护：StreamHub 采用 `singleflight.Group` 协同合并对同一路流的并发获取请求，彻底避免击穿造成对摄像机重复发起物理 RTSP 握手与 C++ 句柄开销。
    - $1 \rightarrow N$ 扇出：同一路流多个 Web 观众共享单例物理拉流，单次封包并发扇出。
    - $1 \rightarrow 0$ 释放：所有客户端断开后，注销拉流，进入 Native 8s Grace Period 防抖休眠，状态切为 `SessionStateIdle`，并向 SSE 广播状态变更。
-3. **GOP 秒开缓存 (Instant Playback)**：
-   - 分发器持续缓存最近的关键帧（包含 SPS/PPS/VPS）。新连入的客户端立即收到该帧，消除等待长 GOP 造成的黑屏。
-4. **背压与慢客户端淘汰**：
-   - 每个客户端分配 64-slot 有界缓冲。拥塞时优先丢弃非关键帧；持续阻塞则主动断开连接（Close 1008 Policy Violation），保护服务端内存。
+
+3. **GOP 完整补发 (Instant Playback)**：
+   - 分发器缓存**从最近 IDR 到当前时刻的完整帧窗口**（`gopCache`，字节上限 `gopCacheMaxBytes = 4 MiB`），新客户端在 `RegisterClient` 内**锁内**逐帧补齐。
+   - ⚠️ **不得退化为「只缓存关键帧单帧」**。只补 IDR 然后接实时帧，中间缺掉的 P 帧会让参考链断裂 ——
+     外部表现就是「刚开始播放卡几帧、花一下才正常」。这是已修复的真实缺陷，不要重新引入。
+   - 补发必须在 `d.mu` 内完成：与 `Broadcast` 互斥保证「历史帧 → 实时帧」顺序不乱；且此时客户端尚未进入
+     `subscribers`，不会与 `Broadcast` 重复投递同一个 GOP 起点帧。
+   - 补发成功后 `client.lastSentUS` 必须落在 GOP 末帧；若停留在 GOP 起点，第一帧实时帧就会被时间预算
+     判定为「落后」并丢弃刚补发的 IDR，秒开直接失效。
+   - 队列装不下完整 GOP 时**整段放弃**并置 `needsKey`，等下一个 IDR —— 半截 GOP 等于断链，比不补更糟。
+   - GOP 超过字节上限时 `gop.complete = false` 并告警，退化为「等下一个 IDR」。此时应在相机侧调小 GOP，
+     而不是放宽缓存上限：相机 GOP 配到十几秒是相机配置问题，边缘设备不能为此无限吃内存。
+
+4. **背压以 DTS 写出进度预算为准，不按包数**：
+   - 判据是 `最新输入帧.dtsUS - 最近一次成功 WebSocket 写入帧.dtsUS > maxClientLagUS(500ms)`，不是队列长度；
+     基准仅在 WebSocket 二进制帧写成功后推进，首次入队时用最早待发帧初始化。
+   - PTS 是显示时间戳，B 帧可能按解码包序回退，**不可用于背压差值**。
+   - 超预算时整段丢弃该客户端积压并置 `needsKey`，**只接受下一个 IDR**。
+   - ⚠️ **严禁逐帧挑着丢非关键帧**。H.264 的 P 帧绝大多数是参考帧，丢一帧后面全花直到下一个 IDR。
+   - ⚠️ **严禁因慢而踢掉客户端**（旧实现的 `ClosePolicyViolation` 已移除）。弱网下踢连接等于制造重连风暴，
+     边缘 A55 的协程池撑不住。改为降级为「只跟关键帧」。
+   - GOP 缓存和客户端队列共享 128 帧硬上限及 4 MiB 字节上限；超过任一限制就放弃完整 GOP 并告警，
+     避免缓存保留了客户端队列无法补发的半截 GOP。
+
+5. **观测计数**：`StreamDispatcher.Counters()` 暴露 `KeyframeInjected / LagResyncs / QueueResyncs / ResyncSkips /
+   GOPTruncations / Subscribers`。现场排障优先看 `GOPTruncations`（相机 GOP 过长）与 `LagResyncs`（客户端跟不上）。
 
 ---
 
@@ -122,17 +154,31 @@ CREATE TABLE camera_streams (
 
 ## 7. 前端实时播放器与多路宫格监控规范 (`features/live/`)
 
-1. **协议解包 (`wireParser.ts`)**：
-   - 严格解析 24 字节大端序 ZLM1 帧头，校验魔数 `0x5A4C4D31`、Codec（H.264 / H.265）、Flags（KeyFrame/PTS/DTS）以及 90kHz PTS/DTS；
-   - 提取 Annex B NALU 载荷；解析错误主动忽略保护。
-2. **连接池复用与防抖释放 (`streamPool.ts`)**：
-   - `FrontendStreamPool` 针对每个 `${cameraId}:${role}` 维护 WebSocket 单例与 `refCount`；
+1. **协议解包 (`wire-parser.ts`)**：
+   - 严格解析 32 字节大端序 ZLM2 帧头：校验魔数 `0x5A4C4D32`、版本号 `2`、Codec、FrameClass、Flags、
+     `pts_us`、`seq`、`gop_id`；版本或魔数不符必须抛错，不得静默容错（旧协议帧若被误解析会产出错误时序）；
+   - ⚠️ **不得对 `pts_us` 做任何时基换算**（ZLM1 的 `/90` 已删除）。归一化责任在 Native 层。
+   - 提取 Annex B NALU 载荷（零拷贝视图）；解析错误主动忽略保护。
+2. **连接池复用与防抖释放 (`stream-pool.ts`)**：
+   - `StreamConnectionPool` 针对每个 `${cameraId}:${role}` 维护 WebSocket 单例与 `refCount`；
    - 多个视口绑定同路流时共享同一条物理 WebSocket，单包广播分发；
-   - 视口全部卸载（`refCount == 0`）后启动 3 秒 Grace Period 防抖，超时才真正关闭 WebSocket，避免布局切换时频密握手。
-3. **WebCodecs 硬件加速渲染 (`LivePlayer.tsx`)**：
+   - 视口全部卸载（`refCount == 0`）后启动 3 秒 Grace Period 防抖，超时才真正关闭 WebSocket，避免布局切换时频密握手；
+   - **重连永不放弃**：指数退避（1s→16s 封顶）+ 抖动（0.5~1.0 倍），抖动是必需的 ——
+     16 路同时断线后无抖动重连等于对设备发起一次小型 DDoS。重试次数只用于改变 UI 文案，不作为停止条件；
+   - `refCount 0→1` 时，除 `connected` / `connecting` 外的一切状态都必须重连。尤其 `error` / `closed`：
+     否则 React 严格模式重挂载或路由往返会让流永久卡在错误态。
+3. **WebCodecs 硬件加速渲染 (`live-player.tsx` + `webcodecs-decoder.ts`)**：
    - 优先通过 `VideoDecoder` 进行低延迟解码并绘制至 `<canvas>`；
-   - 队列堆积超过 6 帧时丢弃非关键帧实现快速追帧（端到端延迟控制在 150ms 以内）；
-   - 收到帧后及时调用 `frame.close()` 释放 GPU 显存。
+   - ⚠️ **configure 时必须显式声明 `avc: { format: 'annexb' }` / `hevc: { format: 'annexb' }`**。
+     规范中 `AvcDecoderConfig.format` 默认是 `"avc"`（AVCC 长度前缀），而载荷是 Annex B；
+     Chrome 有启发式容错，Safari 严格实现会直接 `DecodingError`。
+   - 追帧采用**整段跳到下一个 IDR**（`skipping`），不得逐帧挑着丢非关键帧 —— 丢参考帧会让画面花到下一个 IDR。
+   - 触发跳帧需同时满足「已过 `WARMUP_FRAMES` 预热帧」与「连续 `CONGESTION_STREAK_THRESHOLD` 次超阈值」。
+     硬件解码器首帧初始化要 100~300ms，不加预热窗口会在上电瞬间误判拥塞，表现正是「刚开始播放卡几帧」。
+   - `H.265` codec string 的 compatibility 字段必须做 32 位**位反转**（ISO/IEC 14496-15）。
+   - ⚠️ **`restartKey` 不得绑定 `showAIOverlay`**。restartKey 变化会销毁并重建解码器，而重建后必须等下一个
+     IDR 才能出画；叠加层开关只影响绘制，`onFrameDrawn` 走 ref 传递，根本不需要重建解码器。
+   - 收到帧后及时调用 `frame.close()` 释放 GPU 显存（`use-webcodecs-render-loop.ts` 统一负责）。
 4. **1 / 4 / 9 宫格监控看板 (`LiveDashboard.tsx`)**：
    - 支持 1、4、9 宫格响应式排布；支持视口分配摄像机、主/子流切换、单视口独立全屏；
    - 视口绑定与布局模式持久化存储在 `localStorage`。

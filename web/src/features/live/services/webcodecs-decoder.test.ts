@@ -1,8 +1,10 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   extractH264Codec,
   extractH265Codec,
   isWebCodecsSupported,
+  reverseBits32,
+  StreamDecoder,
 } from './webcodecs-decoder'
 
 describe('webcodecs-decoder', () => {
@@ -33,6 +35,35 @@ describe('webcodecs-decoder', () => {
     expect(codec).toBe('hvc1.1.6.L150.B0')
   })
 
+  it('H.265 compatibility 字段按 ISO 14496-15 做位反转 (回归保护)', () => {
+    // x265 Main profile 的 general_profile_compatibility_flags 原始值是
+    // 0x60000000，但 codec string 里必须写成位反转后的 6。
+    // 直接输出原值会得到 hvc1.1.60000000...，浏览器解析出的 profile 与实际不符。
+    const sps = new Uint8Array(20)
+    sps[0] = 0x00
+    sps[1] = 0x00
+    sps[2] = 0x00
+    sps[3] = 0x01
+    sps[4] = 0x42 // nalType = 33 (SPS)
+    sps[5] = 0x01
+    sps[6] = 0x01
+    sps[7] = 0x01 // profile_idc = 1, tier = L
+    sps[8] = 0x60 // compat 0x60000000
+    sps[9] = 0x00
+    sps[10] = 0x00
+    sps[11] = 0x00
+    sps[18] = 120 // Level 4.0
+
+    expect(extractH265Codec(sps)).toBe('hvc1.1.6.L120.B0')
+  })
+
+  it('reverseBits32 对本项目涉及的 profile 位序正确', () => {
+    expect(reverseBits32(0x60000000)).toBe(0x00000006)
+    expect(reverseBits32(0x00000000)).toBe(0)
+    expect(reverseBits32(0xffffffff)).toBe(0xffffffff)
+    expect(reverseBits32(0x80000000)).toBe(0x00000001)
+  })
+
   it('从包含 SPS (type 33) 的 H.265 载荷中提取准确 profile/level', () => {
     // SPS NALU: nalType = 33 -> byte0 = 33 << 1 = 66 (0x42), byte1 = 0x01
     // followed by: ptlByte, compat (4 bytes), 6 bytes constraint, levelIdc
@@ -57,5 +88,148 @@ describe('webcodecs-decoder', () => {
     const codec = extractH265Codec(fullSps)
     expect(codec).toContain('hvc1.1.')
     expect(codec).toContain('.L120.B0')
+  })
+})
+
+describe('StreamDecoder 重同步语义', () => {
+  function packet({
+    isKeyFrame,
+    frameClass = isKeyFrame ? 'idr' : 'predictive',
+    ptsUs,
+    rawKey = isKeyFrame,
+    discontinuity = false,
+  }: {
+    isKeyFrame: boolean
+    frameClass?: 'unknown' | 'idr' | 'predictive' | 'non_reference'
+    ptsUs: number
+    rawKey?: boolean
+    discontinuity?: boolean
+  }) {
+    return {
+      codec: 'h264' as const,
+      codecByte: 1,
+      flags: 0,
+      frameClass,
+      isKeyFrame: rawKey,
+      ptsUs,
+      dtsUs: ptsUs,
+      seq: 0,
+      gopId: 1,
+      hasDiscontinuity: discontinuity,
+      hasInjectedParamSets: true,
+      hasSyntheticPts: false,
+      hasSyntheticDts: false,
+      payload: new Uint8Array([0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1f]),
+    }
+  }
+
+  it('异步解码错误后重建 VideoDecoder 并在下一个 IDR 恢复', () => {
+    class FakeVideoDecoder {
+      static instances: FakeVideoDecoder[] = []
+      state: 'unconfigured' | 'configured' | 'closed' = 'unconfigured'
+      decodeQueueSize = 0
+      decodeCount = 0
+
+      constructor(private readonly callbacks: VideoDecoderInit) {
+        FakeVideoDecoder.instances.push(this)
+      }
+
+      configure(_config: VideoDecoderConfig) {
+        this.state = 'configured'
+      }
+
+      decode(_chunk: EncodedVideoChunk) {
+        if (this.state !== 'configured')
+          throw new Error('decoder not configured')
+        this.decodeCount++
+      }
+
+      reset() {
+        this.state = 'unconfigured'
+      }
+
+      close() {
+        this.state = 'closed'
+      }
+
+      fail() {
+        this.state = 'closed'
+        this.callbacks.error(new DOMException('decode failed', 'EncodingError'))
+      }
+    }
+
+    class FakeEncodedVideoChunk {
+      constructor(_init: EncodedVideoChunkInit) {}
+    }
+
+    vi.stubGlobal('VideoDecoder', FakeVideoDecoder)
+    vi.stubGlobal('EncodedVideoChunk', FakeEncodedVideoChunk)
+    FakeVideoDecoder.instances = []
+
+    const decoder = new StreamDecoder({ onFrame: () => {} })
+    try {
+      const keyframe = packet({ isKeyFrame: true, ptsUs: 0 })
+      const delta = packet({ isKeyFrame: false, ptsUs: 40_000 })
+      expect(decoder.decode(keyframe)).toBe(true)
+      expect(FakeVideoDecoder.instances).toHaveLength(1)
+
+      FakeVideoDecoder.instances[0].fail()
+      expect(decoder.isSkipping()).toBe(true)
+      expect(FakeVideoDecoder.instances).toHaveLength(2)
+      expect(decoder.decode(delta)).toBe(false)
+      expect(decoder.decode(packet({ isKeyFrame: true, ptsUs: 80_000 }))).toBe(
+        true
+      )
+      expect(FakeVideoDecoder.instances[1].decodeCount).toBe(1)
+      expect(decoder.getStats().errors).toBe(1)
+    } finally {
+      decoder.close()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('拒绝未知 codec，避免以 H.264 配置送入解码器', () => {
+    const decoder = new StreamDecoder({ onFrame: () => {} })
+    try {
+      expect(
+        decoder.decode({
+          ...packet({ isKeyFrame: true, ptsUs: 0 }),
+          codec: 'unknown',
+          codecByte: 0x7f,
+        })
+      ).toBe(false)
+    } finally {
+      decoder.close()
+    }
+  })
+
+  it('未配置时丢弃非关键帧，等待关键帧', () => {
+    const decoder = new StreamDecoder({ onFrame: () => {} })
+    try {
+      expect(decoder.decode(packet({ isKeyFrame: false, ptsUs: 1000 }))).toBe(
+        false
+      )
+      expect(decoder.isSkipping()).toBe(false)
+    } finally {
+      decoder.close()
+    }
+  })
+
+  it('时间轴跳变后必须等待关键帧（不能继续喂 delta 帧）', () => {
+    const decoder = new StreamDecoder({ onFrame: () => {} })
+    try {
+      decoder.decode(packet({ isKeyFrame: true, ptsUs: 0 }))
+      decoder.decode(
+        packet({ isKeyFrame: false, ptsUs: 40000, discontinuity: true })
+      )
+
+      expect(decoder.isSkipping()).toBe(true)
+      expect(decoder.decode(packet({ isKeyFrame: false, ptsUs: 80000 }))).toBe(
+        false
+      )
+      expect(decoder.getStats().rebuilds).toBeGreaterThan(0)
+    } finally {
+      decoder.close()
+    }
   })
 })

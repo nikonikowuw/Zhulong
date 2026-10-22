@@ -110,7 +110,3 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
 此区域由 Trellis 管理；后续运行 `trellis update` 时可能会覆盖其中的修改。区域外的内容会保留。
 
 <!-- TRELLIS:END -->
-
-## Pi 子代理约定
-
-在 Pi Agent 中委派统一使用 `npm:pi-subagents` 提供的 `subagent` 工具；不要调用 Trellis 自带的 `trellis_subagent`。本项目当前的 `.pi/extensions/trellis/index.ts` 只注册会话/上下文事件，没有注册原生 `trellis_subagent` 工具。单个子代理直接使用 `{ agent, task }`，不要设置 `workflow: true`。只有需要脚本编排时才使用 `workflow: true`，并在同一条回复中提供唯一一个 `js workflow` 代码块。委派 Trellis 任务时，提示首行写 `Active task: <task path>`，让子代理加载对应任务上下文。

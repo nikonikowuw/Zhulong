@@ -211,7 +211,7 @@ func TestStreamHubOnDemandAcquireAndRelease(t *testing.T) {
 	}
 
 	clientA := &StreamClient{
-		sendChan:   make(chan []byte, 16),
+		sendChan:   make(chan outFrame, 16),
 		dispatcher: disp,
 		done:       make(chan struct{}),
 		logger:     logger,
@@ -237,7 +237,7 @@ func TestStreamHubOnDemandAcquireAndRelease(t *testing.T) {
 	}
 
 	clientB := &StreamClient{
-		sendChan:   make(chan []byte, 16),
+		sendChan:   make(chan outFrame, 16),
 		dispatcher: disp,
 		done:       make(chan struct{}),
 		logger:     logger,
@@ -286,91 +286,345 @@ func TestStreamDispatcherGOPCacheInstantPlayback(t *testing.T) {
 
 	// 1. 发送一帧关键帧
 	keyPkt := engine.Packet{
-		Codec:    engine.CodecH264,
-		PTS:      1000,
-		DTS:      1000,
-		HasPTS:   true,
-		HasDTS:   true,
-		KeyFrame: true,
-		Data:     []byte{0x00, 0x00, 0x00, 0x01, 0x67, 0x42},
+		Codec:      engine.CodecH264,
+		PTS:        1000,
+		DTS:        1000,
+		HasPTS:     true,
+		HasDTS:     true,
+		KeyFrame:   true,
+		PtsUS:      10000,
+		DtsUS:      10000,
+		FrameClass: engine.FrameIDR,
+		GOPID:      1,
+		Data:       []byte{0x00, 0x00, 0x00, 0x01, 0x67, 0x42},
 	}
 	disp.Broadcast(keyPkt)
 
 	// 2. 发送一帧非关键帧
 	pPkt := engine.Packet{
-		Codec:    engine.CodecH264,
-		PTS:      2000,
-		DTS:      2000,
-		HasPTS:   true,
-		HasDTS:   true,
-		KeyFrame: false,
-		Data:     []byte{0x00, 0x00, 0x00, 0x01, 0x41},
+		Codec:      engine.CodecH264,
+		PTS:        2000,
+		DTS:        2000,
+		HasPTS:     true,
+		HasDTS:     true,
+		KeyFrame:   false,
+		PtsUS:      20000,
+		DtsUS:      20000,
+		FrameClass: engine.FramePredictive,
+		GOPID:      1,
+		Data:       []byte{0x00, 0x00, 0x00, 0x01, 0x41},
 	}
 	disp.Broadcast(pPkt)
 
 	// 3. 新客户端连入
 	client := &StreamClient{
-		sendChan:   make(chan []byte, 16),
+		sendChan:   make(chan outFrame, 16),
 		dispatcher: disp,
 		done:       make(chan struct{}),
 		logger:     zap.NewNop(),
 	}
 	disp.RegisterClient(client)
 
-	// 4. 验证新客户端立即收到缓存的关键帧
+	// 4. 新客户端必须收到「完整 GOP」：IDR + 其后的每一个 P 帧。
+	//    只补一个 IDR、然后把中间的 P 帧全跳过，会让参考链断裂，
+	//    外部表现正是「刚开始播放时卡几帧」。
+	wantPts := []int64{10000, 20000}
+	for i, expected := range wantPts {
+		select {
+		case frame := <-client.sendChan:
+			header, payload, err := UnpackPacket(frame.data)
+			if err != nil {
+				t.Fatalf("unpack primed frame %d failed: %v", i, err)
+			}
+			if header.PTSUS != expected {
+				t.Fatalf("primed frame %d: expected pts_us %d, got %d", i, expected, header.PTSUS)
+			}
+			if i == 0 && !header.IsKeyFrame() {
+				t.Fatalf("expected first primed frame to be keyframe")
+			}
+			if i == 0 && len(payload) != len(keyPkt.Data) {
+				t.Fatalf("expected payload len %d, got %d", len(keyPkt.Data), len(payload))
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timeout waiting for primed frame %d", i)
+		}
+	}
+
+	// 5. 补齐后时间预算基准应落在 GOP 最后一帧，后续实时帧不得再触发重同步。
+	//    这是「秒开即被自己丢掉」那个 bug 的回归保护。
+	disp.Broadcast(engine.Packet{
+		Codec:      engine.CodecH264,
+		PtsUS:      60000,
+		DtsUS:      60000,
+		FrameClass: engine.FramePredictive,
+		GOPID:      1,
+		Data:       []byte{0x00, 0x00, 0x00, 0x01, 0x41},
+	})
+	if got := disp.Counters().LagResyncs; got != 0 {
+		t.Fatalf("expected no lag resync right after priming, got %d", got)
+	}
 	select {
 	case frame := <-client.sendChan:
-		header, payload, err := UnpackPacket(frame)
-		if err != nil {
-			t.Fatalf("unpack cached frame failed: %v", err)
-		}
-		if !header.IsKeyFrame() {
-			t.Fatalf("expected first frame to be keyframe, got non-key")
-		}
-		if header.PTS != 1000 {
-			t.Fatalf("expected PTS 1000, got %d", header.PTS)
-		}
-		if len(payload) != len(keyPkt.Data) {
-			t.Fatalf("expected payload len %d, got %d", len(keyPkt.Data), len(payload))
+		if frame.ptsUS != 60000 {
+			t.Fatalf("expected realtime frame pts_us 60000, got %d", frame.ptsUS)
 		}
 	case <-time.After(time.Second):
-		t.Fatalf("timeout waiting for cached keyframe")
+		t.Fatalf("timeout waiting for realtime frame after priming")
 	}
 }
 
-func TestStreamDispatcherBackpressureSlowConsumer(t *testing.T) {
+// TestStreamDispatcherGOPCacheResetsOnNewIDR 验证新 GOP 到来时缓存被替换，
+// 而不是把两个 GOP 拼在一起（那会让新客户端收到跨 GOP 的断链帧）。
+func TestStreamDispatcherGOPCacheResetsOnNewIDR(t *testing.T) {
 	disp := NewStreamDispatcher(nil, "cam_test", "main", nil, nil, nil, zap.NewNop())
 	defer disp.Close()
 
-	// 创建一个发送缓冲极小（容量 1）的客户端
+	broadcast := func(ptsUS int64, key bool) {
+		pkt := engine.Packet{
+			Codec:      engine.CodecH264,
+			KeyFrame:   key,
+			PtsUS:      ptsUS,
+			DtsUS:      ptsUS,
+			FrameClass: engine.FramePredictive,
+			GOPID:      1,
+			Data:       []byte{0x00, 0x00, 0x00, 0x01, 0x41},
+		}
+		if key {
+			pkt.FrameClass = engine.FrameIDR
+		}
+		disp.Broadcast(pkt)
+	}
+
+	broadcast(10000, true)
+	broadcast(20000, false)
+	broadcast(30000, false)
+	broadcast(40000, true) // 新 GOP
+	broadcast(50000, false)
+
 	client := &StreamClient{
-		sendChan:   make(chan []byte, 1),
+		sendChan:   make(chan outFrame, 16),
 		dispatcher: disp,
 		done:       make(chan struct{}),
 		logger:     zap.NewNop(),
 	}
 	disp.RegisterClient(client)
 
-	// 填满客户端缓冲
-	client.sendChan <- []byte("stalled")
-
-	// 1. 广播非关键帧 -> 不阻塞，自动丢弃
-	nonKeyPkt := engine.Packet{
-		Codec:    engine.CodecH264,
-		KeyFrame: false,
-		Data:     []byte{0x01},
+	got := []int64{}
+	for {
+		select {
+		case frame := <-client.sendChan:
+			got = append(got, frame.ptsUS)
+			continue
+		default:
+		}
+		break
 	}
-	doneCh := make(chan struct{})
-	go func() {
-		disp.Broadcast(nonKeyPkt)
-		close(doneCh)
-	}()
+
+	want := []int64{40000, 50000}
+	if len(got) != len(want) {
+		t.Fatalf("expected primed frames %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expected primed frames %v, got %v", want, got)
+		}
+	}
+}
+
+// TestStreamDispatcherBackpressureResync 验证慢客户端的处置语义：
+//
+//   - 绝不逐帧挑着丢非关键帧（那会破坏参考链，画面花到下一个 IDR）；
+//   - 队列溢出时整段丢弃并降级为「只等关键帧」，关键帧到来后自动接上；
+//   - 绝不因慢而踢掉客户端 —— 踢掉只会在弱网上制造重连风暴。
+func TestStreamDispatcherBackpressureResync(t *testing.T) {
+	disp := NewStreamDispatcher(nil, "cam_test", "main", nil, nil, nil, zap.NewNop())
+	defer disp.Close()
+
+	mark := func(ptsUS int64, key bool) engine.Packet {
+		pkt := engine.Packet{
+			Codec:      engine.CodecH264,
+			KeyFrame:   key,
+			PtsUS:      ptsUS,
+			DtsUS:      ptsUS,
+			FrameClass: engine.FramePredictive,
+			GOPID:      1,
+			Data:       []byte{0x00, 0x00, 0x00, 0x01, 0x41},
+		}
+		if key {
+			pkt.FrameClass = engine.FrameIDR
+		}
+		return pkt
+	}
+
+	// 建立一个完整 GOP：IDR + 一个参考帧
+	disp.Broadcast(mark(10_000, true))
+	disp.Broadcast(mark(20_000, false))
+
+	// 容量 2 的客户端：补发这两帧恰好填满队列，模拟消费端卡住
+	client := &StreamClient{
+		sendChan:   make(chan outFrame, 2),
+		dispatcher: disp,
+		done:       make(chan struct{}),
+		logger:     zap.NewNop(),
+	}
+	disp.RegisterClient(client)
+
+	// 新帧到达但队列已满 → 整段重同步
+	disp.Broadcast(mark(30_000, false))
+	if got := disp.Counters().QueueResyncs; got == 0 {
+		t.Fatalf("expected at least one queue resync, got %d", got)
+	}
+
+	// 重同步期间参考帧被跳过，而不是被塞进队列
+	disp.Broadcast(mark(40_000, false))
+	if got := disp.Counters().ResyncSkips; got == 0 {
+		t.Fatalf("expected predictive frames to be skipped during resync, got %d", got)
+	}
+
+	// 关键帧到来：重同步结束，客户端恢复正常投递
+	disp.Broadcast(mark(100_000, true))
 
 	select {
-	case <-doneCh:
-		// Broadcast 未被慢客户端阻塞
+	case frame := <-client.sendChan:
+		header, _, err := UnpackPacket(frame.data)
+		if err != nil {
+			t.Fatalf("unpack frame failed: %v", err)
+		}
+		if !header.IsKeyFrame() {
+			t.Fatalf("expected recovery frame to be keyframe, got class %d", header.FrameClass)
+		}
+		if header.PTSUS != 100_000 {
+			t.Fatalf("expected recovery pts_us 100000, got %d", header.PTSUS)
+		}
 	case <-time.After(time.Second):
-		t.Fatalf("broadcast blocked by slow consumer on non-keyframe")
+		t.Fatalf("client did not recover after keyframe")
+	}
+}
+
+func TestStreamDispatcherLagBudgetTracksWriteProgress(t *testing.T) {
+	disp := NewStreamDispatcher(nil, "cam_test", "main", nil, nil, nil, zap.NewNop())
+	defer disp.Close()
+
+	client := &StreamClient{
+		sendChan:   make(chan outFrame, 64),
+		dispatcher: disp,
+		done:       make(chan struct{}),
+		logger:     zap.NewNop(),
+	}
+	disp.RegisterClient(client)
+
+	for i := int64(0); i <= 20; i++ {
+		key := i == 0
+		frameClass := engine.FramePredictive
+		if key {
+			frameClass = engine.FrameIDR
+		}
+		ptsUs := i * 40_000
+		disp.Broadcast(engine.Packet{
+			Codec:      engine.CodecH264,
+			KeyFrame:   key,
+			PtsUS:      ptsUs,
+			DtsUS:      ptsUs,
+			FrameClass: frameClass,
+			GOPID:      1,
+			Data:       []byte{0, 0, 0, 1, 0x41},
+		})
+	}
+
+	if got := disp.Counters().LagResyncs; got == 0 {
+		t.Fatal("expected stalled writer to trigger DTS progress resynchronization")
+	}
+	if got := disp.Counters().QueueResyncs; got != 0 {
+		t.Fatalf("lag resync should trigger before queue fills, got queue resyncs %d", got)
+	}
+	if len(client.sendChan) != 0 {
+		t.Fatalf("expected stalled client's queued frames to be drained, got %d", len(client.sendChan))
+	}
+}
+
+func TestStreamDispatcherLagBudgetAdvancesOnSuccessfulWrites(t *testing.T) {
+	disp := NewStreamDispatcher(nil, "cam_test", "main", nil, nil, nil, zap.NewNop())
+	defer disp.Close()
+
+	client := &StreamClient{
+		sendChan:   make(chan outFrame, 8),
+		dispatcher: disp,
+		done:       make(chan struct{}),
+		logger:     zap.NewNop(),
+	}
+	disp.RegisterClient(client)
+
+	for i := int64(0); i <= 20; i++ {
+		key := i == 0
+		frameClass := engine.FramePredictive
+		if key {
+			frameClass = engine.FrameIDR
+		}
+		ptsUs := i * 40_000
+		disp.Broadcast(engine.Packet{
+			Codec:      engine.CodecH264,
+			KeyFrame:   key,
+			PtsUS:      ptsUs,
+			DtsUS:      ptsUs,
+			FrameClass: frameClass,
+			GOPID:      1,
+			Data:       []byte{0, 0, 0, 1, 0x41},
+		})
+
+		select {
+		case frame := <-client.sendChan:
+			disp.markFrameWritten(client, frame)
+		default:
+			t.Fatalf("frame %d was not queued for a progressing writer", i)
+		}
+	}
+
+	if got := disp.Counters().LagResyncs; got != 0 {
+		t.Fatalf("successful writes should advance the DTS budget, got %d lag resyncs", got)
+	}
+	if got := disp.Counters().QueueResyncs; got != 0 {
+		t.Fatalf("progressing writer should not hit queue resync, got %d", got)
+	}
+}
+
+func TestStreamDispatcherGOPCacheFrameLimitMatchesClientQueue(t *testing.T) {
+	disp := NewStreamDispatcher(nil, "cam_test", "main", nil, nil, nil, zap.NewNop())
+	defer disp.Close()
+
+	for i := 0; i <= gopCacheMaxFrames; i++ {
+		key := i == 0
+		frameClass := engine.FramePredictive
+		if key {
+			frameClass = engine.FrameIDR
+		}
+		ptsUs := int64(i) * 40_000
+		disp.Broadcast(engine.Packet{
+			Codec:      engine.CodecH264,
+			KeyFrame:   key,
+			PtsUS:      ptsUs,
+			DtsUS:      ptsUs,
+			FrameClass: frameClass,
+			GOPID:      1,
+			Data:       []byte{0, 0, 0, 1, 0x41},
+		})
+	}
+
+	if disp.gop.complete {
+		t.Fatal("GOP cache must not mark a GOP complete when it cannot fit the client queue")
+	}
+	if got := disp.Counters().GOPTruncations; got != 1 {
+		t.Fatalf("expected one frame-limit truncation, got %d", got)
+	}
+
+	client := &StreamClient{
+		sendChan:   make(chan outFrame, defaultClientBufferSize),
+		dispatcher: disp,
+		done:       make(chan struct{}),
+		logger:     zap.NewNop(),
+	}
+	disp.RegisterClient(client)
+	if len(client.sendChan) != 0 || !client.needsKey {
+		t.Fatal("incomplete GOP must not be primed; client must wait for the next IDR")
 	}
 }
 
@@ -395,7 +649,7 @@ func TestStreamHubShutdown(t *testing.T) {
 	}
 
 	client := &StreamClient{
-		sendChan:   make(chan []byte, 16),
+		sendChan:   make(chan outFrame, 16),
 		dispatcher: disp,
 		done:       make(chan struct{}),
 		logger:     zap.NewNop(),
@@ -528,7 +782,7 @@ func TestStreamHubSessionStateBroadcast(t *testing.T) {
 
 	// 2. 注册并注销客户端 -> 触发 StreamDispatcher.Close 与 SessionStateIdle 广播
 	client := &StreamClient{
-		sendChan:   make(chan []byte, 16),
+		sendChan:   make(chan outFrame, 16),
 		dispatcher: disp,
 		done:       make(chan struct{}),
 		logger:     zap.NewNop(),

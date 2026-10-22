@@ -38,17 +38,34 @@ export type StreamStatus =
 
 export type CodecType = 'h264' | 'h265' | 'unknown'
 
+/** ZLM2 帧分类，与后端 WireFrame* / Native Zhulong_FRAME_* 一一对应。 */
+export type FrameClass = 'unknown' | 'idr' | 'predictive' | 'non_reference'
+
+/** ZLM2 帧头标志位，与后端 WireFlag* 一一对应。 */
+export const WIRE_FLAG_KEYFRAME = 0x01
+export const WIRE_FLAG_DISCONTINUITY = 0x02
+export const WIRE_FLAG_PARAM_INJECTED = 0x04
+export const WIRE_FLAG_TIMESTAMP_SYNTHETIC = 0x08
+export const WIRE_FLAG_DTS_SYNTHETIC = 0x10
+
 export interface ParsedPacket {
   codec: CodecType
   codecByte: number
   flags: number
+  frameClass: FrameClass
   isKeyFrame: boolean
-  hasPts: boolean
-  hasDts: boolean
-  pts: bigint
-  dts: bigint
-  ptsMs: number
-  dtsMs: number
+  /** 微秒，服务端归一化后的显示时间戳；允许 B 帧在解码包序中回退。 */
+  ptsUs: number
+  /** 微秒，服务端归一化后的解码时间戳，按包序单调。 */
+  dtsUs: number
+  /** 流级帧序号，用于统计真实丢帧（区别于本地主动跳帧）。 */
+  seq: number
+  /** GOP 序号，变化即代表可以安全重建解码器。 */
+  gopId: number
+  hasDiscontinuity: boolean
+  hasInjectedParamSets: boolean
+  hasSyntheticPts: boolean
+  hasSyntheticDts: boolean
   payload: Uint8Array
 }
 

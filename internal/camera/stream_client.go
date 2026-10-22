@@ -9,28 +9,48 @@ import (
 )
 
 const (
-	// defaultClientBufferSize 单个 WebSocket 客户端发送缓冲队列容量（64 包，约 2.5s @ 25fps）。
-	defaultClientBufferSize = 64
+	// 默认 WebSocket 队列容量（帧）。GOP 缓存使用相同帧数上限，保证 complete GOP 可补发。
+	defaultClientBufferSize = 128
 
 	// wsWriteWait 写入超时时间。
 	wsWriteWait = 5 * time.Second
 
 	// wsPongWait 接收对端 Pong 的最大超时。
-	wsPongWait = 60 * time.Second
+	//
+	// 边缘现场的价值是「快速发现死连接」而不是「尽量不误断」。
+	// 60s 的容忍度意味着一次断网后旧连接会占着资源 —— 期间所有帧都在往黑洞里写。
+	wsPongWait = 20 * time.Second
 
-	// wsPingPeriod 心跳 Ping 发送间隔（必须小于 wsPongWait）。
-	wsPingPeriod = (wsPongWait * 9) / 10
+	// wsPingPeriod 心跳 Ping 发送间隔（必须显著小于 wsPongWait）。
+	//
+	// 不按 9/10 派生：视频帧本身就是天然活性信号，Ping 只是兜底；
+	// 固定 5s 能让「对端已死」在 20s 内被发现，而不是拖到 54s。
+	wsPingPeriod = 5 * time.Second
 
 	// wsMaxMessageSize 客户端上行控制消息最大字节数。
 	wsMaxMessageSize = 512
 )
 
+// outFrame 携带 PTS 供解码器呈现、DTS 供服务端测量写出进度，并携带帧分类供安全重同步。
+type outFrame struct {
+	data  []byte
+	ptsUS int64
+	dtsUS int64
+	frame byte // WireFrame* 帧分类
+	gopID uint32
+}
+
 // StreamClient 封装单个 WebSocket 客户端长连接会话。
 type StreamClient struct {
 	conn       *websocket.Conn
-	sendChan   chan []byte
+	sendChan   chan outFrame
 	dispatcher *StreamDispatcher
 	logger     *zap.Logger
+
+	// 只有 WebSocket 写成功才推进基准；首帧先以最早排队的 DTS 初始化，确保写阻塞时预算仍会增长。
+	needsKey          bool
+	lastProgressDTSUS int64
+	hasProgressDTS    bool
 
 	done      chan struct{}
 	closeOnce sync.Once
@@ -43,7 +63,7 @@ func NewStreamClient(conn *websocket.Conn, dispatcher *StreamDispatcher, logger 
 	}
 	return &StreamClient{
 		conn:       conn,
-		sendChan:   make(chan []byte, defaultClientBufferSize),
+		sendChan:   make(chan outFrame, defaultClientBufferSize),
 		dispatcher: dispatcher,
 		logger:     logger,
 		done:       make(chan struct{}),
@@ -92,15 +112,18 @@ func (c *StreamClient) WritePump() {
 
 	for {
 		select {
-		case msg, ok := <-c.sendChan:
+		case f, ok := <-c.sendChan:
 			_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 			if !ok {
 				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-			if err := c.conn.WriteMessage(websocket.BinaryMessage, msg); err != nil {
+			if err := c.conn.WriteMessage(websocket.BinaryMessage, f.data); err != nil {
 				c.logger.Debug("ws write binary failed", zap.Error(err))
 				return
+			}
+			if c.dispatcher != nil {
+				c.dispatcher.markFrameWritten(c, f)
 			}
 		case <-ticker.C:
 			_ = c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))

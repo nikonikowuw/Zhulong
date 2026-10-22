@@ -282,13 +282,17 @@ func TestCameraHandlerStreamWS(t *testing.T) {
 	mockEngine.mu.Unlock()
 
 	testPkt := engine.Packet{
-		Codec:    engine.CodecH264,
-		PTS:      90000,
-		DTS:      90000,
-		HasPTS:   true,
-		HasDTS:   true,
-		KeyFrame: true,
-		Data:     []byte{0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1f},
+		Codec:      engine.CodecH264,
+		PTS:        90000,
+		DTS:        90000,
+		HasPTS:     true,
+		HasDTS:     true,
+		KeyFrame:   true,
+		PtsUS:      1000000,
+		DtsUS:      1000000,
+		FrameClass: engine.FrameIDR,
+		GOPID:      1,
+		Data:       []byte{0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1f},
 	}
 	activeStream.source.packets <- testPkt
 
@@ -311,8 +315,14 @@ func TestCameraHandlerStreamWS(t *testing.T) {
 	if !header.IsKeyFrame() {
 		t.Fatalf("expected key frame flag")
 	}
-	if header.PTS != 90000 {
-		t.Fatalf("expected PTS 90000, got %d", header.PTS)
+	if header.PTSUS != 1000000 {
+		t.Fatalf("expected pts_us 1000000, got %d", header.PTSUS)
+	}
+	if header.FrameClass != WireFrameIDR {
+		t.Fatalf("expected IDR frame class, got %d", header.FrameClass)
+	}
+	if header.GOPID != 1 {
+		t.Fatalf("expected gop id 1, got %d", header.GOPID)
 	}
 	if !bytes.Equal(payload, testPkt.Data) {
 		t.Fatalf("payload mismatch")

@@ -111,7 +111,14 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
           error instanceof Error ? error.message : 'WebCodecs 解码异常'
         )
       },
-      restartKey: String(showAIOverlay),
+      // ⚠️ 不要用 showAIOverlay 当 restartKey。
+      //
+      // restartKey 变化会销毁并重建解码器，而重建后必须等下一个 IDR 才能出画
+      // ——「切换叠加层开关」会因此变成一次黑屏等待 IDR，短 GOP 也要卡一两秒。
+      // 而 onFrameDrawn 走的是 ref，叠加层开关根本不需要重建解码器。
+      // 同理：LivePlayer 首次挂载时若 showAIOverlay 由 undefined 变为 true，
+      // 也会触发一次重建，这正是「刚开始播放总卡几帧」的来源之一。
+      restartKey: '',
     })
 
     // 订阅 AI 推理结果事件流（零 React 重渲染，直接驱动 Canvas 2D）
@@ -210,7 +217,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
           }
         },
         setMute: (_mute: boolean) => {
-          // 当前 ZLM1 视频流为纯图像流，预留音频轨道支持
+          // 当前 ZLM2 视频流为纯图像流，预留音频轨道支持
         },
         reset: () => {
           resetRenderLoop()

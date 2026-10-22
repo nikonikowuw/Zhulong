@@ -133,6 +133,7 @@ add_library(ZhulongEngine STATIC
     src/abi/snapshot.cpp
     src/pipeline/engine.cpp
     src/pipeline/stream.cpp
+    src/pipeline/preview_normalizer.cpp
     src/pipeline/subscription.cpp
     src/pipeline/frame_publisher.cpp
     src/nodes/capture/rtsp_input.cpp
@@ -551,6 +552,17 @@ if(BUILD_TESTING)
     # 独立黑盒验包 CLI 工具测试
     add_test(NAME ZhulongAlgoVerifyCli COMMAND zhulong_algo_runner --verify-plugin $<TARGET_FILE:MockDetector> --sample mock_sample.jpg)
     set_tests_properties(ZhulongAlgoVerifyCli PROPERTIES TIMEOUT 10)
+
+    # 预览契约整形器单元测试（avcC/hvcC、B 帧时间戳与断流重置）
+    add_executable(ZhulongPreviewNormalizerTests
+        tests/preview_normalizer_test.cpp
+        src/pipeline/preview_normalizer.cpp
+    )
+    target_compile_features(ZhulongPreviewNormalizerTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongPreviewNormalizerTests PRIVATE src include)
+    target_link_libraries(ZhulongPreviewNormalizerTests PRIVATE Threads::Threads)
+    add_test(NAME ZhulongPreviewNormalizer COMMAND ZhulongPreviewNormalizerTests)
+    set_tests_properties(ZhulongPreviewNormalizer PROPERTIES TIMEOUT 10)
 
     # RTSP 采集节点单元测试（URL 规范化、选项、排空）
     add_executable(ZhulongCaptureUnitTests tests/capture_unit_test.cpp)

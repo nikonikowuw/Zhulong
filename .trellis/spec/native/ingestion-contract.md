@@ -47,12 +47,35 @@
 - **URI 规范化去重**：按规范化 RTSP URI 执行流去重，相同 URI 复用同一底层流；重复的消费者 ID 不增加引用计数。
 - **8 秒退出宽限期**：当某流所有消费者全部 release（引用归零）后，启动 8 秒宽限期定时器；若 8 秒内有新请求重新 acquire，立即取消定时器并无缝复用物理连接；宽限期满后才真正关闭网络流与释放连接。
 
-### 3.5 内存所有权与 CGO 指针合规
+### 3.5 预览契约整形（ABI v3）
+
+`Stream::dispatch` 在派发前统一经过 `PreviewNormalizer`（`native/src/pipeline/preview_normalizer.*`），
+把「浏览器能不能出画」收敛到原生层，Go 与前端不再对时基、参数集位置、可丢帧性做任何假设。
+
+- **时间戳归一化**：`pts_us` / `dts_us` 由源 time_base 换算为微秒；PTS 保留显示顺序，允许 B 帧重排，
+  DTS 保持解码包序单调。检测 DTS 回退或大幅跳变后续接输出时间轴并置 `ZHULONG_PKT_FLAG_DISCONTINUITY`；
+  源缺失 PTS/DTS 时分别设置 `TIMESTAMP_SYNTHETIC` / `DTS_SYNTHETIC` 标志。
+- **参数集注入**：按 codec 解析 Annex B、H.264 `avcC` 或 H.265 `hvcC` 配置记录；也支持裸 4 字节长度前缀 NAL 序列。
+  关键帧自身缺少 VPS/SPS/PPS 时前置拼接，并置 `ZHULONG_PKT_FLAG_PARAM_SETS_INJECTED`。
+  拼接复用成员缓冲，只在关键帧触发。
+- **帧分类**：标注 `Zhulong_FRAME_IDR / PREDICTIVE / NON_REFERENCE`。判定不确定时**一律归为 PREDICTIVE**，
+  绝不误判为可丢 —— 接收方只能无条件丢弃 `NON_REFERENCE`。
+- **平台无关**：本层不含任何 Rockchip / DMA / 内核依赖，RK3568 与 RK3588 共用同一实现；
+  平台差异只体现在 Go 侧的资源配额（preview profile），不体现在这里。
+- **线程模型**：整形器不加锁，只允许单一拉流 Worker 线程访问（`on_ready` 与 `dispatch` 均在该线程）。
+
+⚠️ **ABI 演进约定**：结构体只允许在**尾部追加**字段，绝不调整已有偏移或语义。
+`ZHULONG_ABI_VERSION` 与 Go 侧 `engine.expectedABIVersion` 必须同步；`Engine.Start` 在创建句柄前
+调用 `Zhulong_engine_get_abi_version` 校验，不一致直接拒绝启动（`ErrABIMismatch`）。
+这类错配在链接期不报错，只会让 cgo 按错误偏移读内存。
+
+### 3.6 内存所有权与 CGO 指针合规
 
 - **包视图即时有效**：回调传递的 `Zhulong_packet_view` 仅在回调同步执行期间有效，下游需要保留数据必须深拷贝；
+  参数集注入时 `data` 指向整形器内部缓冲，同样只在下一次 `normalize` 之前有效；
 - **禁止传递 Go 指针**：回调令牌 `token` 必须通过 `uintptr_t`（`cgo.Handle` 转换的整数）传递，严禁向 C 暴露 Go 堆指针；Go 侧必须在 `unsubscribe` 彻底排空（drain）并确认无在途回调后，方可注销句柄。
 
-### 3.6 静态构建与跨平台链接门禁
+### 3.7 静态构建与跨平台链接门禁
 
 - **FFmpeg 静态绑定**：全仓使用固定的 FFmpeg 7.1.5（SHA-256: `de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f`），构建期严禁动态联网下载，绝不回退到系统共享库。
 - **内容寻址归档**：使用基于内容摘要命名引擎静态归档，使 C++ 源码改动能准确使 Go 侧 CGO 缓存失效，杜绝陈旧库静默复用。
