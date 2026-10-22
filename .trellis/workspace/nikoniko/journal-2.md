@@ -1532,3 +1532,44 @@ NTP 周期巡检不再写审计（改运行日志），只有墙钟跳变、pani
 ### Next Steps
 
 - 父任务 10-20-industrial-logging 仍为 planning，三个子任务已归档，可评估收口
+
+
+## Session 83: vehicle_structure 机动车结构化端到端链路与车牌识别算法包 (10-21-vehicle-structure-pipeline)
+<!-- trellis-session: v=2 fp=d2fce8c78322c6c3 -->
+
+**Date**: 2026-10-22
+**Task**: vehicle_structure 机动车结构化端到端链路与车牌识别算法包 (10-21-vehicle-structure-pipeline)
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+新增 vehicle_structure 任务类型：纯 C ABI 两级嵌套结构体 + 单块 Arena 打包、Runner IPC 序列化、Go aitypes 解析、record 冷却去重落库、前端 Zod 校验与画框，并交付 packages/plate_recognition 级联算法包（含纯车牌退化语义）。
+
+### Main Changes
+
+- native：plugin.h 增 result type 4 / plate_item(72B) / vehicle_item(88B) + static_assert；algo.hpp 增 Arena 打包适配器与注册宏
+- runner：format_inference_json 输出 vehicle_structure 与嵌套 vehicles[].plates[]
+- Go：aitypes 新增 vehicle_structure 模型；record.processVehicleStructure 按 track_id/车牌号/坐标冷却去重写 captures
+- 前端：algorithms 枚举放行 + live/ai-result 新增 plate/vehicle Zod schema 与测试
+- packages/plate_recognition：车身-车牌 1:N 级联（detector + recognizer）、打包脚本、单图验收脚本、native 回归测试
+- spec：algo-plugin-contract 与 algorithm-guidelines 同步新任务类型
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0565d00` | feat(algorithm): support vehicle structure inference results |
+| `e9307c2` | feat(algorithm): add plate recognition algorithm package and native tests |
+
+### Testing
+
+- [OK] make check 全绿（native-test 24/24、go-check -race、frontend 551 tests）
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 13MB ONNX 权重已入库，第二个算法包接入前评估 git-lfs 或外部发放

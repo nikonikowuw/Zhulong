@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 82
+- **Total Sessions**: 83
 - **Last Active**: 2026-10-22
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1534 | Active |
+| `journal-2.md` | ~1575 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 83 | 2026-10-22 | vehicle_structure 机动车结构化端到端链路与车牌识别算法包 (10-21-vehicle-structure-pipeline) | `0565d00`, `e9307c2` | `dev` |
 | 82 | 2026-10-22 | 审计日志去心跳噪声与双宿主可移植性收口 (10-21-audit-ntp-heartbeat-noise) | `f2d0333`, `89d46cf`, `cfb0fba`, `9f08142`, `b58193a` | `dev` |
 | 81 | 2026-10-21 | 人员与人脸管理交互与 UI 现代化升级 (方案 B) | `cc6fab0` | `feat/native-log-bridge` |
 | 80 | 2026-10-21 | Runner 生命周期与 Broker 清扫收尾 | `74468d7`, `6b8aaf9`, `8f927e2`, `9d096d8` | `feat/native-log-bridge` |
