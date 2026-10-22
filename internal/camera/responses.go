@@ -8,6 +8,7 @@ type StreamResponse struct {
 	Role         string           `json:"role"`
 	Protocol     string           `json:"protocol"`
 	RTSPURL      string           `json:"rtspUrl"` // Complete RTSP URL for frontend playback and display
+	Host         string           `json:"host"`    // Target host (IP or domain) for display and search; empty when the URI cannot be resolved or decrypted
 	Transport    string           `json:"transport"`
 	Codec        string           `json:"codec"`
 	Width        int              `json:"width"`

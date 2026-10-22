@@ -140,6 +140,49 @@ func (c cameraStub) Stop() {
 	c.events.add("camera.stop")
 }
 
+type storageLifecycleStub struct {
+	events *eventLog
+}
+
+func (s storageLifecycleStub) Start(context.Context) error {
+	s.events.add("storage.start")
+	return nil
+}
+
+func (s storageLifecycleStub) Stop(context.Context) error {
+	s.events.add("storage.stop")
+	return nil
+}
+
+type recordContextStub struct {
+	events  *eventLog
+	ctxDone <-chan struct{}
+}
+
+func (r *recordContextStub) Start(ctx context.Context) error {
+	r.ctxDone = ctx.Done()
+	r.events.add("record.start")
+	return nil
+}
+
+func (r *recordContextStub) Stop(context.Context) error {
+	select {
+	case <-r.ctxDone:
+		r.events.add("record.context.cancelled")
+	default:
+		r.events.add("record.context.active")
+	}
+	r.events.add("record.stop")
+	return nil
+}
+
+type snapshotLifecycleStub struct {
+	events *eventLog
+}
+
+func (s snapshotLifecycleStub) Start() { s.events.add("snapshot.start") }
+func (s snapshotLifecycleStub) Stop()  { s.events.add("snapshot.stop") }
+
 // algorithmStub records the algorithm supervisor stop in the shutdown sequence.
 type algorithmStub struct {
 	events   *eventLog
@@ -347,6 +390,46 @@ func TestListenerFailureRollsBackNativeAndDatabase(t *testing.T) {
 		t.Fatalf("expected listener error, got %v", err)
 	}
 	if got, want := events.snapshot(), []string{"database.open", "engine.start", "http.listen", "engine.close", "database.close"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected startup rollback order: got %v, want %v", got, want)
+	}
+}
+
+func TestListenerFailureStopsRecordAndSnapshotWorkers(t *testing.T) {
+	events := &eventLog{}
+	record := &recordContextStub{events: events}
+	runtime := &lifecycleRuntime{
+		database: databaseStub{events: events},
+		native:   engineStub{events: events},
+		storage:  storageLifecycleStub{events: events},
+		snapshot: snapshotLifecycleStub{events: events},
+		record:   record,
+		server:   &http.Server{Addr: "127.0.0.1:0"},
+		logger:   zap.NewNop(),
+		listen: func(string, string) (net.Listener, error) {
+			events.add("http.listen")
+			return nil, errors.New("address unavailable")
+		},
+	}
+
+	if err := runtime.Start(context.Background()); err == nil {
+		t.Fatal("expected listener startup error")
+	}
+
+	got, want := events.snapshot(), []string{
+		"database.open",
+		"storage.start",
+		"snapshot.start",
+		"record.start",
+		"engine.start",
+		"http.listen",
+		"record.context.cancelled",
+		"record.stop",
+		"snapshot.stop",
+		"storage.stop",
+		"engine.close",
+		"database.close",
+	}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected startup rollback order: got %v, want %v", got, want)
 	}
 }

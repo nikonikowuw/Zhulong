@@ -7,7 +7,7 @@ describe('useLiveGrid', () => {
   const dummyCamera: LiveCameraItem = {
     id: 'cam-01',
     name: '测试相机',
-    ip: '192.168.1.100',
+    host: '192.168.1.100',
     status: 'online',
     hasSubStream: true,
     codec: 'h264',

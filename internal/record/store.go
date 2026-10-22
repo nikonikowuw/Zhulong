@@ -3,10 +3,18 @@ package record
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"gorm.io/gorm"
+)
+
+// 感知记录的三张表名。保留清理会直接拼进 SQL，因此必须是常量而非外部输入。
+const (
+	tableRecognitions = "recognitions"
+	tableAlarms       = "alarms"
+	tableCaptures     = "captures"
 )
 
 // Store provides persistence operations for perception and alarm records.
@@ -412,6 +420,76 @@ func (s *Store) ListDistinctTargetTypes(ctx context.Context) ([]string, error) {
 		types = make([]string, 0)
 	}
 	return types, nil
+}
+
+type retentionCursor struct {
+	CapturedAt time.Time
+	ID         string
+}
+
+type retentionCandidate struct {
+	ID            string
+	CapturedAt    time.Time
+	ImagePath     string
+	SecondaryPath string
+}
+
+// retentionCandidatesBatch returns expired non-alarm rows in stable cursor order.
+func (s *Store) retentionCandidatesBatch(
+	ctx context.Context,
+	table string,
+	cutoff time.Time,
+	after *retentionCursor,
+	limit int,
+) ([]retentionCandidate, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	query := db.Table(table)
+	switch table {
+	case tableRecognitions:
+		query = query.Select("id, captured_at, image_path, face_image_path AS secondary_path")
+	case tableCaptures:
+		query = query.Select("id, captured_at, image_path, crop_path AS secondary_path")
+	default:
+		return nil, fmt.Errorf("unsupported retention table %q", table)
+	}
+
+	query = query.Where("captured_at < ?", cutoff.UTC())
+	if after != nil {
+		query = query.Where(
+			"((captured_at > ?) OR (captured_at = ? AND id > ?))",
+			after.CapturedAt.UTC(), after.CapturedAt.UTC(), after.ID,
+		)
+	}
+
+	var rows []retentionCandidate
+	if err := query.Order("captured_at ASC, id ASC").Limit(limit).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (s *Store) deleteRetentionRows(ctx context.Context, table string, cutoff time.Time, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	db, err := s.db(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if table != tableRecognitions && table != tableCaptures {
+		return 0, fmt.Errorf("unsupported retention table %q", table)
+	}
+
+	stmt := fmt.Sprintf("DELETE FROM %s WHERE captured_at < ? AND id IN ?", table)
+	res := db.Exec(stmt, cutoff.UTC(), ids)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
 }
 
 // GetFaceImagePath retrieves the image_path associated with the matched face ID from person_faces.

@@ -13,6 +13,7 @@ type RecordComponents struct {
 	Store           *Store
 	Service         *Service
 	Handler         *Handler
+	Pruner          *RetentionPruner
 	Lifecycle       RecordLifecycle
 	ProtectedRoutes RouteRegistrar
 }
@@ -25,14 +26,23 @@ type RecordLifecycle interface {
 
 type recordLifecycleImpl struct {
 	logger *zap.Logger
+	pruner *RetentionPruner
 }
 
 func (l *recordLifecycleImpl) Start(ctx context.Context) error {
+	// 保留清理在应用生命周期 context 下后台巡检。
+	if l.pruner != nil {
+		l.pruner.Start(ctx)
+	}
 	l.logger.Info("record service started")
 	return nil
 }
 
 func (l *recordLifecycleImpl) Stop(ctx context.Context) error {
+	// 先停清理：它要写 SQLite，必须在 native/数据库关闭之前退出。
+	if l.pruner != nil {
+		l.pruner.Stop()
+	}
 	l.logger.Info("record service stopped")
 	return nil
 }
@@ -53,12 +63,14 @@ func NewRecordComponents(
 	store := NewStore(dbProvider)
 	service := NewService(store, logger)
 	handler := NewHandler(service, logger)
+	pruner := NewRetentionPruner(store, logger)
 
 	return RecordComponents{
 		Store:           store,
 		Service:         service,
 		Handler:         handler,
-		Lifecycle:       &recordLifecycleImpl{logger: logger.Named("record.lifecycle")},
+		Pruner:          pruner,
+		Lifecycle:       &recordLifecycleImpl{logger: logger.Named("record.lifecycle"), pruner: pruner},
 		ProtectedRoutes: handler,
 	}
 }

@@ -237,6 +237,38 @@ func TestSnapshotStoreUnavailableWhenDependenciesMissing(t *testing.T) {
 	}
 }
 
+func TestServiceDoesNotWriteSnapshotsWhenRecordBatchInsertFails(t *testing.T) {
+	store, _, cleanup := setupTestStore(t)
+	defer cleanup()
+	root := t.TempDir()
+	provider := &fakeSnapshotProvider{}
+	snapshots := record.NewSnapshotStore(provider, &fakeMediaRoot{root: root}, &fakeGate{allow: true}, 85, zap.NewNop())
+	snapshots.Start()
+	defer snapshots.Stop()
+
+	svc := record.NewService(store, zap.NewNop())
+	svc.SetSnapshotStore(snapshots)
+	res := aitypes.InferenceResult{
+		CameraID:    "cam_01",
+		AlgorithmID: "missing-algorithm",
+		Timestamp:   time.Now().UTC(),
+		TaskType:    aitypes.TaskTypeDetection,
+		Detections: []aitypes.DetectionItem{
+			{Box: [4]float64{0.1, 0.1, 0.5, 0.8}, Label: "person", Score: 0.9},
+		},
+	}
+	if err := svc.ProcessInferenceResult(context.Background(), res); err != nil {
+		t.Fatalf("ProcessInferenceResult: %v", err)
+	}
+
+	if provider.snapshotCalls() != 0 {
+		t.Fatalf("snapshot provider called despite failed record batch: %d", provider.snapshotCalls())
+	}
+	if _, err := os.Stat(filepath.Join(root, "snapshots")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected snapshot output after failed record batch, err=%v", err)
+	}
+}
+
 // TestServiceEnqueuesSnapshotOnRecord 验证落库路径确实会登记抓拍任务，
 // 且记录的 imagePath 与写入的文件路径一致。
 func TestServiceEnqueuesSnapshotOnRecord(t *testing.T) {
@@ -282,10 +314,11 @@ func TestServiceEnqueuesSnapshotOnRecord(t *testing.T) {
 		t.Fatal("alarm.ImagePath must not be empty")
 	}
 
-	// 抓拍任务应当被登记，最终文件出现在记录声明的路径上。
-	waitFor(t, "alarm image written", func() bool {
-		_, err := os.Stat(filepath.Join(root, alarm.ImagePath))
-		return err == nil
+	// 抓拍任务应当被登记，最终文件与高价值保护标记都出现在记录声明的路径旁。
+	waitFor(t, "alarm image and protection marker written", func() bool {
+		_, imageErr := os.Stat(filepath.Join(root, alarm.ImagePath))
+		_, markerErr := os.Stat(filepath.Join(root, alarm.ImagePath) + ".lock")
+		return imageErr == nil && markerErr == nil
 	})
 
 	// 烟火类告警无目标裁剪框：只应出全幅图，不应请求任何裁剪。

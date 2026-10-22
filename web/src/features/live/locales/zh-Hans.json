@@ -69,5 +69,7 @@
     "streamUnavailable": "视频流无法连接",
     "retry": "重试连接",
     "noCamera": "未指定摄像机"
-  }
+  },
+  "targetHost": "目标地址",
+  "resolution": "分辨率"
 }

@@ -169,6 +169,8 @@ func TestService_TriggerManualCleanup(t *testing.T) {
 	defer func() {
 		_ = svc.Stop(ctx)
 	}()
+	pruned := make(chan struct{}, 1)
+	svc.SetAfterPrune(func(context.Context) { pruned <- struct{}{} })
 
 	// Put an expired export
 	expDir := filepath.Join(mediaDir, "exports")
@@ -183,5 +185,10 @@ func TestService_TriggerManualCleanup(t *testing.T) {
 	}
 	if summary.DeletedFiles != 1 {
 		t.Errorf("expected 1 deleted file, got %d", summary.DeletedFiles)
+	}
+	select {
+	case <-pruned:
+	case <-time.After(time.Second):
+		t.Fatal("after-prune callback was not called")
 	}
 }

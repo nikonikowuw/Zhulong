@@ -8,6 +8,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
@@ -469,6 +470,50 @@ func (a *personGalleryAdapter) BroadcastDelete(ctx context.Context, faceID, pers
 	return a.broadcaster.BroadcastDelete(ctx, faceID, personID)
 }
 
+type recordSnapshotFileChecker struct {
+	media *mediafile.Service
+}
+
+func (c recordSnapshotFileChecker) SnapshotFileExists(ctx context.Context, relativePath string) (bool, error) {
+	if c.media == nil {
+		return false, errors.New("media file service is unavailable")
+	}
+	_, err := c.media.GetEntry(ctx, relativePath)
+	if err == nil {
+		return true, nil
+	}
+	var domainErr *apperr.Error
+	if errors.As(err, &domainErr) && domainErr.Kind == apperr.KindNotFound {
+		return false, nil
+	}
+	return false, err
+}
+
+// recordRetentionDaysProvider 把 storage 域持有的抓拍保留天数暴露给 record 域。
+//
+// 存在的理由：record 只认得「证据图还能活几天」这一个整数，不应该依赖
+// storage.StorageConfig 或 storage.Service 的任何其他能力（保留天数每次现取，
+// 跟着 UpdateConfig 热生效，不得缓存）。
+// 未配置（nil service / 配置读不到）时返回 0，即「不启用清理」：宁可不删，
+// 也不能拿猜的天数去删证据。
+type recordRetentionDaysProvider struct {
+	storage *storage.Service
+}
+
+func (p recordRetentionDaysProvider) SnapshotRetentionDays(ctx context.Context) (int, error) {
+	if p.storage == nil {
+		return 0, nil
+	}
+	cfg, err := p.storage.GetConfig(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if cfg == nil {
+		return 0, nil
+	}
+	return cfg.SnapshotsRetentionDays, nil
+}
+
 type supervisorGallerySyncAdapter struct {
 	service *person.Service
 }
@@ -701,9 +746,28 @@ func provideRecord(
 	dbProvider database.DBProvider,
 	streamHub *camera.StreamHub,
 	storageSvc *storage.Service,
+	mediaFiles *mediafile.Service,
 	logger *zap.Logger,
 ) recordOut {
 	comp := record.NewRecordComponents(dbProvider, logger)
+
+	// 感知记录库表行的保留期与抓拍图 TTL 同源：图没了，行就只剩指向空文件的悬空引用。
+	// 保留天数由 storage 域持有（用户在存储设置里改的就是这个值），这里只做转译。
+	comp.Pruner.SetRetentionDaysProvider(recordRetentionDaysProvider{storage: storageSvc})
+	comp.Pruner.SetSnapshotFileChecker(recordSnapshotFileChecker{media: mediaFiles})
+	if storageSvc != nil {
+		storageSvc.SetAfterPrune(func(ctx context.Context) {
+			result, err := comp.Pruner.PruneNow(ctx)
+			if err != nil {
+				logger.Warn("reconcile perception records after storage cleanup failed", zap.Error(err))
+				return
+			}
+			if result.Total() > 0 {
+				logger.Info("reconciled perception records after storage cleanup",
+					zap.Int64("deleted_rows", result.Total()))
+			}
+		})
+	}
 
 	// 抓拍落盘组件：把 StreamHub（抓拍源）与 storage（媒体根 + 写入门闸）接进
 	// record 域。两者都是窄接口，record 不认识 camera / storage 的内部类型。

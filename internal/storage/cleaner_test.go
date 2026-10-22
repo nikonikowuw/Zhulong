@@ -175,6 +175,52 @@ func TestCleaner_CascadeOrderAndLockedFileProtection(t *testing.T) {
 	}
 }
 
+func TestCleaner_PreservesSnapshotsWithLockSidecars(t *testing.T) {
+	mediaDir := t.TempDir()
+	snapshotsDir := filepath.Join(mediaDir, "snapshots", "cam_01")
+	if err := os.MkdirAll(snapshotsDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	locked := filepath.Join(snapshotsDir, "alarm.jpg")
+	marker := locked + ".lock"
+	expired := filepath.Join(snapshotsDir, "ordinary.jpg")
+	for _, path := range []string{locked, marker, expired} {
+		if err := os.WriteFile(path, []byte("evidence"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-48 * time.Hour)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	inspector := &mockInspector{stats: FSStats{
+		TotalBytes: 100 * 1024 * 1024,
+		UsedBytes:  95 * 1024 * 1024,
+	}}
+	cleaner := NewCleanerEngine(inspector, zap.NewNop(), CleanerOptions{BatchSize: 1, BatchSleep: 0})
+	summary, err := cleaner.RunPrune(context.Background(), mediaDir, &StorageConfig{
+		LowWatermarkPercent:    80,
+		SnapshotsRetentionDays: 1,
+	}, "manual")
+	if err != nil {
+		t.Fatalf("RunPrune: %v", err)
+	}
+
+	for _, path := range []string{locked, marker} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("protected evidence %s was removed: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(expired); !os.IsNotExist(err) {
+		t.Errorf("expired ordinary snapshot should be removed, err=%v", err)
+	}
+	if summary.DeletedFiles != 1 {
+		t.Errorf("deleted files = %d, want 1", summary.DeletedFiles)
+	}
+}
+
 func TestCleaner_ConcurrentPrevention(t *testing.T) {
 	tempDir := t.TempDir()
 	mock := &mockInspector{

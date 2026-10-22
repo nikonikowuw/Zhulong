@@ -53,7 +53,7 @@ export function LiveCameraSidebar({
     ? cameras.filter(
         (cam) =>
           cam.name.toLowerCase().includes(normalizedSearch) ||
-          cam.ip.includes(normalizedSearch)
+          (cam.host?.includes(normalizedSearch) ?? false)
       )
     : cameras
 
@@ -138,96 +138,106 @@ export function LiveCameraSidebar({
 
     // 5. 真实摄像机列表
     return filteredCameras.map((camera) => (
-      <div
-        key={camera.id}
-        draggable
-        onDragStart={(e) => {
-          e.dataTransfer.setData('application/json', JSON.stringify(camera))
-          e.dataTransfer.effectAllowed = 'copy'
-        }}
-        onDoubleClick={() => onAssignCamera(camera, 'main')}
-        className='group flex cursor-grab flex-col gap-1.5 rounded-lg border border-border/50 bg-card p-2.5 text-xs shadow-2xs transition-all hover:border-primary/50 hover:bg-accent/40 active:cursor-grabbing'
-      >
-        <div className='flex items-center justify-between'>
-          <div className='flex max-w-[150px] items-center gap-1.5 truncate font-medium'>
-            <span
-              className={`h-2 w-2 rounded-full ${
-                camera.status === 'online'
-                  ? 'bg-emerald-500 shadow-xs shadow-emerald-500/50'
-                  : 'bg-destructive shadow-xs shadow-destructive/50'
-              }`}
-            />
-            <span className='truncate'>{camera.name}</span>
-          </div>
-
-          <Button
-            variant='ghost'
-            size='icon'
-            className='h-6 w-6 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-primary/10 hover:text-primary'
-            title={t('dragOrClickTip', { id: activeCellId + 1 })}
-            onClick={() => onAssignCamera(camera, 'main')}
+      <Tooltip key={camera.id}>
+        <TooltipTrigger asChild>
+          <div
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData('application/json', JSON.stringify(camera))
+              e.dataTransfer.effectAllowed = 'copy'
+            }}
+            onDoubleClick={() => onAssignCamera(camera, 'main')}
+            className='group flex cursor-grab flex-col gap-1.5 rounded-lg border border-border/50 bg-card p-2.5 text-xs shadow-2xs transition-all hover:border-primary/50 hover:bg-accent/40 active:cursor-grabbing'
           >
-            <Play className='h-3 w-3 fill-current' />
-          </Button>
-        </div>
+            <div className='flex items-center justify-between'>
+              <div className='flex max-w-[150px] items-center gap-1.5 truncate font-medium'>
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    camera.status === 'online'
+                      ? 'bg-emerald-500 shadow-xs shadow-emerald-500/50'
+                      : 'bg-destructive shadow-xs shadow-destructive/50'
+                  }`}
+                />
+                <span className='truncate'>{camera.name}</span>
+              </div>
 
-        <div className='flex items-center justify-between text-[11px] text-muted-foreground'>
-          <span className='font-mono'>{camera.ip}</span>
-          <div className='flex gap-1'>
-            <Badge
-              variant='outline'
-              className='border-border/60 px-1 py-0 text-[10px] font-normal'
-            >
-              {camera.codec.toUpperCase()}
-            </Badge>
-            {camera.hasSubStream && (
-              <Badge
-                variant='secondary'
-                className='px-1 py-0 text-[10px] font-normal'
-              >
-                {t('dualStream')}
-              </Badge>
-            )}
-          </div>
-        </div>
-      </div>
-    ))
-  }
-
-  if (isCollapsed) {
-    return (
-      <TooltipProvider delayDuration={200}>
-        <div className='flex h-full w-12 flex-col items-center justify-between rounded-xl border border-border bg-card py-3 shadow-xs'>
-          <Tooltip>
-            <TooltipTrigger asChild>
               <Button
                 variant='ghost'
                 size='icon'
-                className='h-8 w-8 text-muted-foreground hover:text-foreground'
-                onClick={onToggleCollapse}
+                className='h-6 w-6 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-primary/10 hover:text-primary'
+                title={t('dragOrClickTip', { id: activeCellId + 1 })}
+                onClick={() => onAssignCamera(camera, 'main')}
               >
-                <ChevronRight className='h-4 w-4' />
+                <Play className='h-3 w-3 fill-current' />
               </Button>
-            </TooltipTrigger>
-            <TooltipContent side='right'>{t('expandSidebar')}</TooltipContent>
-          </Tooltip>
-
-          <div className='flex flex-col items-center gap-2'>
-            <div className='rounded-full bg-muted p-2 text-muted-foreground'>
-              <Video className='h-4 w-4' />
             </div>
-            <Badge variant='secondary' className='h-5 px-1.5 text-[10px]'>
-              {cameras.length}
-            </Badge>
-          </div>
 
-          <div className='h-4' />
-        </div>
-      </TooltipProvider>
-    )
+            <div className='flex items-center justify-between text-[11px] text-muted-foreground'>
+              {camera.resolution ? (
+                <span className='font-mono'>{camera.resolution}</span>
+              ) : null}
+              <div className='ms-auto flex gap-1'>
+                <Badge
+                  variant='outline'
+                  className='border-border/60 px-1 py-0 text-[10px] font-normal'
+                >
+                  {camera.codec.toUpperCase()}
+                </Badge>
+                {camera.hasSubStream && (
+                  <Badge
+                    variant='secondary'
+                    className='px-1 py-0 text-[10px] font-normal'
+                  >
+                    {t('dualStream')}
+                  </Badge>
+                )}
+              </div>
+            </div>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side='right' className='text-[11px]'>
+          <div className='space-y-0.5'>
+            <div className='font-medium'>{camera.name}</div>
+            <div className='font-mono text-muted-foreground'>
+              {t('targetHost')}: {camera.host ?? '-'}
+            </div>
+            <div className='text-muted-foreground'>
+              {t('resolution')}: {camera.resolution ?? '-'}
+            </div>
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    ))
   }
 
-  return (
+  const sidebar = isCollapsed ? (
+    <div className='flex h-full w-12 flex-col items-center justify-between rounded-xl border border-border bg-card py-3 shadow-xs'>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant='ghost'
+            size='icon'
+            className='h-8 w-8 text-muted-foreground hover:text-foreground'
+            onClick={onToggleCollapse}
+          >
+            <ChevronRight className='h-4 w-4' />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side='right'>{t('expandSidebar')}</TooltipContent>
+      </Tooltip>
+
+      <div className='flex flex-col items-center gap-2'>
+        <div className='rounded-full bg-muted p-2 text-muted-foreground'>
+          <Video className='h-4 w-4' />
+        </div>
+        <Badge variant='secondary' className='h-5 px-1.5 text-[10px]'>
+          {cameras.length}
+        </Badge>
+      </div>
+
+      <div className='h-4' />
+    </div>
+  ) : (
     <div className='flex h-full w-64 flex-col rounded-xl border border-border bg-card shadow-xs sm:w-72'>
       {/* 侧栏顶栏 */}
       <div className='flex items-center justify-between border-b border-border/80 px-3.5 py-3'>
@@ -284,4 +294,6 @@ export function LiveCameraSidebar({
       </ScrollArea>
     </div>
   )
+
+  return <TooltipProvider delayDuration={200}>{sidebar}</TooltipProvider>
 }

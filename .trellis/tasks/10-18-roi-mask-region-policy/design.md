@@ -117,6 +117,7 @@ keep(obj):
 | :--- | :--- | :--- |
 | `detections` | `DetectionItem.Box` | 逐个判定 |
 | `persons` | `PersonItem.BodyBox` | 逐个判定；保留则其嵌套 `faces` 一并保留 |
+| `vehicles` | `VehicleItem.VehicleBox` | 逐个判定；保留则其嵌套 `plates` 一并保留 |
 | `classifications` | 无 | 无框，不受影响 |
 
 ⚠️ **空结果信标必须原样透传**：`MSG_RESULT` 的「目标消失退出信标」（`algo-plugin-contract.md` §9.3）是空列表，过滤后仍为空，前端才能清空滞留画框。过滤不得把空结果丢弃或改写。

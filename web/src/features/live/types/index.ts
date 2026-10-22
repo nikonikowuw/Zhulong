@@ -11,13 +11,13 @@ export type CameraHealthStatus = 'online' | 'offline' | 'error' | 'reconnecting'
 export interface LiveCameraItem {
   id: string
   name: string
-  ip: string
+  /** 相机目标主机（IP 或域名）；后端无法解析时为空，UI 不得伪造 */
+  host?: string
   status: CameraHealthStatus
   hasSubStream: boolean
   codec: 'h264' | 'h265'
+  /** 主码流分辨率；后端未上报时为空 */
   resolution?: string
-  mainStreamUrl?: string
-  subStreamUrl?: string
 }
 
 export interface LiveCellState {

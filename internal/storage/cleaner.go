@@ -254,6 +254,9 @@ func (c *CleanerEngine) collectSnapshots(mediaDir string, ttl time.Duration) []c
 		if strings.HasSuffix(name, ".lock") || strings.Contains(name, "_locked") {
 			return nil
 		}
+		if _, err := os.Lstat(path + ".lock"); err == nil || !os.IsNotExist(err) {
+			return nil
+		}
 		info, err := d.Info()
 		if err != nil {
 			return nil

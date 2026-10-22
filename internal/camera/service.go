@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -435,6 +436,7 @@ func (s *CameraService) buildCameraResponse(cam *Camera, state *CameraStateInfo)
 			Role:         stream.Role,
 			Protocol:     stream.Protocol,
 			RTSPURL:      fullURL,
+			Host:         streamHost(fullURL),
 			Transport:    stream.Transport,
 			Codec:        stream.Codec,
 			Width:        stream.Width,
@@ -449,6 +451,17 @@ func (s *CameraService) buildCameraResponse(cam *Camera, state *CameraStateInfo)
 	resp.Streams = streamResponses
 
 	return resp
+}
+
+// streamHost extracts the target host from a decrypted stream URI for display and search.
+// It deliberately returns an empty string instead of a placeholder when the URI is missing,
+// still encrypted, or unparsable — callers must not fabricate a host.
+func streamHost(rawURI string) string {
+	parsed, err := url.Parse(rawURI)
+	if err != nil {
+		return ""
+	}
+	return parsed.Hostname()
 }
 
 func (s *CameraService) decryptStreamURI(cameraID string, stream *CameraStream) (string, error) {

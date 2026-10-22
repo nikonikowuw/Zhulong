@@ -53,6 +53,25 @@ func TestConfig_Apply(t *testing.T) {
 					BodyScore: 0.85,
 				},
 			},
+			Vehicles: []aitypes.VehicleItem{
+				{
+					TrackID:      101,
+					VehicleBox:   [4]float64{0.1, 0.1, 0.3, 0.3}, // bottom center: (0.2, 0.3)
+					VehicleScore: 0.93,
+					Plates:       []aitypes.PlateSubItem{{Box: [4]float64{0.15, 0.2, 0.25, 0.28}, Score: 0.97, PlateNumber: "\u4eacA12345"}},
+				},
+				{
+					TrackID:      102,
+					VehicleBox:   [4]float64{0.7, 0.7, 0.9, 0.9}, // bottom center: (0.8, 0.9)
+					VehicleScore: 0.88,
+					Plates:       []aitypes.PlateSubItem{{Box: [4]float64{0.75, 0.8, 0.85, 0.88}, Score: 0.91, PlateNumber: "\u6caaB54321"}},
+				},
+				{
+					TrackID:      103,
+					VehicleBox:   [4]float64{0.35, 0.35, 0.45, 0.45}, // bottom center: (0.4, 0.45)
+					VehicleScore: 0.80,
+				},
+			},
 			Classifications: []aitypes.ClassificationItem{
 				{Label: "indoor", Score: 0.99},
 			},
@@ -76,6 +95,7 @@ func TestConfig_Apply(t *testing.T) {
 			CameraID:   "cam-1",
 			Detections: []aitypes.DetectionItem{},
 			Persons:    []aitypes.PersonItem{},
+			Vehicles:   []aitypes.VehicleItem{},
 		}
 		out := cfg.Filter(beacon)
 		if out.Detections == nil || len(out.Detections) != 0 {
@@ -83,6 +103,9 @@ func TestConfig_Apply(t *testing.T) {
 		}
 		if out.Persons == nil || len(out.Persons) != 0 {
 			t.Fatalf("expected empty non-nil persons slice")
+		}
+		if out.Vehicles == nil || len(out.Vehicles) != 0 {
+			t.Fatalf("expected empty non-nil vehicles slice")
 		}
 	})
 
@@ -112,6 +135,17 @@ func TestConfig_Apply(t *testing.T) {
 			t.Errorf("expected face kept intact, got %d", len(out.Persons[0].Faces))
 		}
 
+		// Vehicles obey the same policy (vehicle_structure / plate recognition package)
+		if len(out.Vehicles) != 2 {
+			t.Fatalf("expected 2 vehicles, got %d", len(out.Vehicles))
+		}
+		if out.Vehicles[0].TrackID != 101 || out.Vehicles[1].TrackID != 103 {
+			t.Errorf("expected tracks 101,103, got %d,%d", out.Vehicles[0].TrackID, out.Vehicles[1].TrackID)
+		}
+		if len(out.Vehicles[0].Plates) != 1 {
+			t.Errorf("expected plates kept intact, got %d", len(out.Vehicles[0].Plates))
+		}
+
 		// Classification untouched
 		if len(out.Classifications) != 1 {
 			t.Errorf("expected 1 classification, got %d", len(out.Classifications))
@@ -132,6 +166,13 @@ func TestConfig_Apply(t *testing.T) {
 		}
 		if out.Detections[1].Label != "outside_roi" {
 			t.Errorf("expected outside_roi, got %s", out.Detections[1].Label)
+		}
+
+		if len(out.Vehicles) != 2 {
+			t.Fatalf("expected 2 vehicles, got %d", len(out.Vehicles))
+		}
+		if out.Vehicles[0].TrackID != 101 || out.Vehicles[1].TrackID != 102 {
+			t.Errorf("expected tracks 101,102, got %d,%d", out.Vehicles[0].TrackID, out.Vehicles[1].TrackID)
 		}
 	})
 
@@ -158,6 +199,16 @@ func TestConfig_Apply(t *testing.T) {
 		}
 		if out.Persons[0].TrackID != 1 {
 			t.Errorf("expected track id 1, got %d", out.Persons[0].TrackID)
+		}
+
+		if len(out.Vehicles) != 1 {
+			t.Fatalf("expected 1 vehicle, got %d", len(out.Vehicles))
+		}
+		if out.Vehicles[0].TrackID != 101 {
+			t.Errorf("expected vehicle track 101, got %d", out.Vehicles[0].TrackID)
+		}
+		if len(out.Vehicles[0].Plates) != 1 || out.Vehicles[0].Plates[0].PlateNumber != "\u4eacA12345" {
+			t.Errorf("expected vehicle plate kept intact, got %+v", out.Vehicles[0].Plates)
 		}
 	})
 }

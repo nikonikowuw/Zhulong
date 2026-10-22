@@ -27,6 +27,7 @@ type Service struct {
 	lastStatus       *StorageStatus
 	lastBreakdown    StorageUsageBreakdown
 	lastBreakdownAt  time.Time
+	afterPrune       func(context.Context)
 
 	stopCh chan struct{}
 	doneCh chan struct{}
@@ -92,6 +93,21 @@ func (s *Service) SetAuditor(auditor *audit.Service) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.auditor = auditor
+}
+
+func (s *Service) SetAfterPrune(callback func(context.Context)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.afterPrune = callback
+}
+
+func (s *Service) notifyAfterPrune(ctx context.Context) {
+	s.mu.RLock()
+	callback := s.afterPrune
+	s.mu.RUnlock()
+	if callback != nil {
+		callback(ctx)
+	}
 }
 
 // errEmergencyStop is the safe summary recorded when the storage circuit
@@ -168,7 +184,12 @@ func (s *Service) runLoop() {
 					if err != nil {
 						return
 					}
-					_, _ = s.cleaner.RunPrune(cCtx, status.MediaDirectory, cfg, "watermark")
+					_, err = s.cleaner.RunPrune(cCtx, status.MediaDirectory, cfg, "watermark")
+					if err != nil {
+						s.logger.Warn("automatic storage cleanup failed", zap.Error(err))
+					} else {
+						s.notifyAfterPrune(cCtx)
+					}
 					_, _ = s.RefreshStatus(cCtx)
 				}()
 			}
@@ -397,6 +418,7 @@ func (s *Service) TriggerManualCleanup(ctx context.Context, username, ip string)
 	if err != nil {
 		return nil, err
 	}
+	s.notifyAfterPrune(ctx)
 
 	_, _ = s.RefreshStatus(ctx)
 

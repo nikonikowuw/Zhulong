@@ -97,6 +97,8 @@ func (s *Service) resolveAlgorithm(ctx context.Context, algorithmID string) Algo
 func (s *Service) processPersonStructure(ctx context.Context, res aitypes.InferenceResult, algo AlgorithmSnapshot, capturedAt time.Time, dateStr string) error {
 	var recognitions []*Recognition
 	var captures []*Capture
+	var recognitionSnapshots []snapshotJob
+	var captureSnapshots []snapshotJob
 
 	for _, p := range res.Persons {
 		// 1. Process Face Recognition if faces exist
@@ -161,11 +163,15 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 					}
 					recognitions = append(recognitions, rec)
 
-					s.enqueueSnapshot(res.CameraID, capturedAt, []engine.SnapshotBox{
-						{face.Box[0], face.Box[1], face.Box[2], face.Box[3]},
-					}, []snapshotOutput{
-						{boxIndex: -1, relPath: fullPath},
-						{boxIndex: 0, relPath: facePath},
+					recognitionSnapshots = append(recognitionSnapshots, snapshotJob{
+						cameraID: res.CameraID,
+						boxes: []engine.SnapshotBox{
+							{face.Box[0], face.Box[1], face.Box[2], face.Box[3]},
+						},
+						outputs: []snapshotOutput{
+							{boxIndex: -1, relPath: fullPath},
+							{boxIndex: 0, relPath: facePath},
+						},
 					})
 				}
 			}
@@ -200,11 +206,15 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 			}
 			captures = append(captures, cap)
 
-			s.enqueueSnapshot(res.CameraID, capturedAt, []engine.SnapshotBox{
-				{p.BodyBox[0], p.BodyBox[1], p.BodyBox[2], p.BodyBox[3]},
-			}, []snapshotOutput{
-				{boxIndex: -1, relPath: fullPath},
-				{boxIndex: 0, relPath: cropPath},
+			captureSnapshots = append(captureSnapshots, snapshotJob{
+				cameraID: res.CameraID,
+				boxes: []engine.SnapshotBox{
+					{p.BodyBox[0], p.BodyBox[1], p.BodyBox[2], p.BodyBox[3]},
+				},
+				outputs: []snapshotOutput{
+					{boxIndex: -1, relPath: fullPath},
+					{boxIndex: 0, relPath: cropPath},
+				},
 			})
 		}
 	}
@@ -212,11 +222,15 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 	if len(recognitions) > 0 {
 		if err := s.store.CreateRecognitionBatch(ctx, recognitions); err != nil {
 			s.logger.Error("failed to batch insert recognitions", zap.Error(err))
+		} else {
+			s.enqueueSnapshots(recognitionSnapshots)
 		}
 	}
 	if len(captures) > 0 {
 		if err := s.store.CreateCaptureBatch(ctx, captures); err != nil {
 			s.logger.Error("failed to batch insert captures", zap.Error(err))
+		} else {
+			s.enqueueSnapshots(captureSnapshots)
 		}
 	}
 
@@ -225,6 +239,7 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 
 func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.InferenceResult, algo AlgorithmSnapshot, capturedAt time.Time, dateStr string) error {
 	var captures []*Capture
+	var snapshots []snapshotJob
 
 	for _, v := range res.Vehicles {
 		var capKey string
@@ -287,12 +302,15 @@ func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.Infer
 			}
 			captures = append(captures, cap)
 
-			snapshotBoxes := []engine.SnapshotBox{
-				{v.VehicleBox[0], v.VehicleBox[1], v.VehicleBox[2], v.VehicleBox[3]},
-			}
-			s.enqueueSnapshot(res.CameraID, capturedAt, snapshotBoxes, []snapshotOutput{
-				{boxIndex: -1, relPath: fullPath},
-				{boxIndex: 0, relPath: cropPath},
+			snapshots = append(snapshots, snapshotJob{
+				cameraID: res.CameraID,
+				boxes: []engine.SnapshotBox{
+					{v.VehicleBox[0], v.VehicleBox[1], v.VehicleBox[2], v.VehicleBox[3]},
+				},
+				outputs: []snapshotOutput{
+					{boxIndex: -1, relPath: fullPath},
+					{boxIndex: 0, relPath: cropPath},
+				},
 			})
 		}
 	}
@@ -300,6 +318,8 @@ func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.Infer
 	if len(captures) > 0 {
 		if err := s.store.CreateCaptureBatch(ctx, captures); err != nil {
 			s.logger.Error("failed to batch insert vehicle captures", zap.Error(err))
+		} else {
+			s.enqueueSnapshots(snapshots)
 		}
 	}
 
@@ -309,6 +329,8 @@ func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.Infer
 func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceResult, algo AlgorithmSnapshot, capturedAt time.Time, dateStr string) error {
 	var alarms []*Alarm
 	var captures []*Capture
+	var alarmSnapshots []snapshotJob
+	var captureSnapshots []snapshotJob
 
 	for _, d := range res.Detections {
 		// Detect whether this is an alarm category (e.g. helmet, smoke, fire, intrusion, etc.)
@@ -347,13 +369,17 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 				alarms = append(alarms, alarm)
 
 				// 场景级告警（烟火）没有目标裁剪框，只出全幅图。
-				outs := []snapshotOutput{{boxIndex: -1, relPath: fullPath}}
+				outs := []snapshotOutput{{boxIndex: -1, relPath: fullPath, protected: true}}
 				boxList := []engine.SnapshotBox{}
 				if cropPath != "" {
 					boxList = append(boxList, engine.SnapshotBox{d.Box[0], d.Box[1], d.Box[2], d.Box[3]})
-					outs = append(outs, snapshotOutput{boxIndex: 0, relPath: cropPath})
+					outs = append(outs, snapshotOutput{boxIndex: 0, relPath: cropPath, protected: true})
 				}
-				s.enqueueSnapshot(res.CameraID, capturedAt, boxList, outs)
+				alarmSnapshots = append(alarmSnapshots, snapshotJob{
+					cameraID: res.CameraID,
+					boxes:    boxList,
+					outputs:  outs,
+				})
 			}
 		} else {
 			// Regular object capture
@@ -385,11 +411,15 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 				}
 				captures = append(captures, cap)
 
-				s.enqueueSnapshot(res.CameraID, capturedAt, []engine.SnapshotBox{
-					{d.Box[0], d.Box[1], d.Box[2], d.Box[3]},
-				}, []snapshotOutput{
-					{boxIndex: -1, relPath: fullPath},
-					{boxIndex: 0, relPath: cropPath},
+				captureSnapshots = append(captureSnapshots, snapshotJob{
+					cameraID: res.CameraID,
+					boxes: []engine.SnapshotBox{
+						{d.Box[0], d.Box[1], d.Box[2], d.Box[3]},
+					},
+					outputs: []snapshotOutput{
+						{boxIndex: -1, relPath: fullPath},
+						{boxIndex: 0, relPath: cropPath},
+					},
 				})
 			}
 		}
@@ -398,11 +428,15 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 	if len(alarms) > 0 {
 		if err := s.store.CreateAlarmBatch(ctx, alarms); err != nil {
 			s.logger.Error("failed to batch insert alarms", zap.Error(err))
+		} else {
+			s.enqueueSnapshots(alarmSnapshots)
 		}
 	}
 	if len(captures) > 0 {
 		if err := s.store.CreateCaptureBatch(ctx, captures); err != nil {
 			s.logger.Error("failed to batch insert captures", zap.Error(err))
+		} else {
+			s.enqueueSnapshots(captureSnapshots)
 		}
 	}
 
@@ -411,6 +445,7 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 
 func (s *Service) processClassification(ctx context.Context, res aitypes.InferenceResult, algo AlgorithmSnapshot, capturedAt time.Time, dateStr string) error {
 	var alarms []*Alarm
+	var snapshots []snapshotJob
 	for _, c := range res.Classifications {
 		if isAlarmLabel(c.Label) {
 			alarmKey := fmt.Sprintf("alarm:%s:%s", res.CameraID, c.Label)
@@ -437,14 +472,18 @@ func (s *Service) processClassification(ctx context.Context, res aitypes.Inferen
 				alarms = append(alarms, alarm)
 
 				// 分类结果没有检测框，只能出全幅图。
-				s.enqueueSnapshot(res.CameraID, capturedAt, nil,
-					[]snapshotOutput{{boxIndex: -1, relPath: fullPath}})
+				snapshots = append(snapshots, snapshotJob{
+					cameraID: res.CameraID,
+					outputs:  []snapshotOutput{{boxIndex: -1, relPath: fullPath, protected: true}},
+				})
 			}
 		}
 	}
 	if len(alarms) > 0 {
 		if err := s.store.CreateAlarmBatch(ctx, alarms); err != nil {
 			s.logger.Error("failed to batch insert classification alarms", zap.Error(err))
+		} else {
+			s.enqueueSnapshots(snapshots)
 		}
 	}
 	return nil
@@ -466,28 +505,16 @@ func optionalAlgorithmID(id string) *string {
 	return &id
 }
 
-// enqueueSnapshot 把一次抓拍写盘任务登记到后台队列。
+// enqueueSnapshots 把成功落库记录对应的抓拍任务登记到后台队列。
 //
-// ⚠️ 这里是「非阻塞登记」而不是「同步抓拍」：JPEG 编码在 RK3568 上 35~60ms/帧，
-// 若在本 goroutine 里执行，consumeAIResults 会被磁盘与编码拖住，进而让 AI 结果
-// 订阅队列丢帧。因此只登记，由 SnapshotStore 的 worker 实际执行。
-//
-// 未注入 SnapshotStore 或队列已满时静默跳过：路径字段已在记录里生成，前端拿不到
-// 文件时显示占位图，不影响记录本身的可检索性。
-func (s *Service) enqueueSnapshot(
-	cameraID string,
-	capturedAt time.Time,
-	boxes []engine.SnapshotBox,
-	outputs []snapshotOutput,
-) {
+// 写库失败的任务不得落盘，否则会产生没有数据库引用的孤儿图片。
+func (s *Service) enqueueSnapshots(jobs []snapshotJob) {
 	if s.snapshots == nil {
 		return
 	}
-	s.snapshots.Enqueue(snapshotJob{
-		cameraID: cameraID,
-		boxes:    boxes,
-		outputs:  outputs,
-	})
+	for _, job := range jobs {
+		s.snapshots.Enqueue(job)
+	}
 }
 
 // resolveGalleryImagePath queries person_faces via Store for the image_path associated with the matched face ID.

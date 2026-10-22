@@ -118,6 +118,7 @@ type lifecycleRuntime struct {
 
 	listener            net.Listener
 	serveDone           chan error
+	recordCancel        context.CancelFunc
 	databaseReady       bool
 	nativeReady         bool
 	nativeLogReady      bool
@@ -264,7 +265,9 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	}
 
 	if r.record != nil {
-		if err := r.record.Start(ctx); err != nil {
+		recordCtx, cancel := context.WithCancel(context.Background())
+		r.recordCancel = cancel
+		if err := r.record.Start(recordCtx); err != nil {
 			r.logger.Warn("record start warning", zap.Error(err))
 		}
 		r.recordReady = true
@@ -273,35 +276,35 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	if r.nativeLog != nil {
 		if err := r.nativeLog.Start(); err != nil {
 			startupErr := fmt.Errorf("start native log queue: %w", err)
-			return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+			return r.failStart(startupErr, r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
 		}
 		r.nativeLogReady = true
 		logEngine, ok := r.native.(nativeLogEngineLifecycle)
 		if !ok {
 			startupErr := errors.New("native engine does not support log callback lifecycle")
-			return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+			return r.failStart(startupErr, r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
 		}
 		if err := logEngine.SetNativeLogSink(r.nativeLog); err != nil {
 			startupErr := fmt.Errorf("register native log callback: %w", err)
-			return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+			return r.failStart(startupErr, r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
 		}
 		r.nativeLogRegistered = true
 	}
 
 	if err := r.native.Start(); err != nil {
 		startupErr := fmt.Errorf("start native engine: %w", err)
-		return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+		return r.failStart(startupErr, r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
 	}
 	r.nativeReady = true
 
 	if r.camera != nil {
 		if err := r.camera.InitCipher(ctx); err != nil {
 			startupErr := fmt.Errorf("initialize camera cipher: %w", err)
-			return r.failStart(startupErr, r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+			return r.failStart(startupErr, r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
 		}
 		if err := r.camera.Start(ctx); err != nil {
 			startupErr := fmt.Errorf("start camera scheduler: %w", err)
-			return r.failStart(startupErr, r.closeCamera(), r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+			return r.failStart(startupErr, r.closeCamera(), r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
 		}
 		r.cameraReady = true
 	}
@@ -309,7 +312,7 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	listener, err := r.listen("tcp", r.server.Addr)
 	if err != nil {
 		startupErr := fmt.Errorf("listen on %s: %w", r.server.Addr, err)
-		return r.failStart(startupErr, r.closeCamera(), r.closePerson(ctx), r.closeAlgorithm(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+		return r.failStart(startupErr, r.closeCamera(), r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
 	}
 	r.listener = listener
 	r.serveDone = make(chan error, 1)
@@ -501,6 +504,10 @@ func (r *lifecycleRuntime) closePerson(ctx context.Context) error {
 }
 
 func (r *lifecycleRuntime) closeRecord(ctx context.Context) error {
+	if r.recordCancel != nil {
+		r.recordCancel()
+		r.recordCancel = nil
+	}
 	if !r.recordReady {
 		return nil
 	}
@@ -511,6 +518,12 @@ func (r *lifecycleRuntime) closeRecord(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (r *lifecycleRuntime) closeRecordAndSnapshot(ctx context.Context) error {
+	err := r.closeRecord(ctx)
+	r.closeSnapshot()
+	return err
 }
 
 // closeSnapshot 在 record 之后停止抓拍 worker，把已入队的写盘任务做完。

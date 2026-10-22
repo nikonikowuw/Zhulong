@@ -69,5 +69,7 @@
     "streamUnavailable": "Unable to connect to the video stream",
     "retry": "Reconnect",
     "noCamera": "No camera selected"
-  }
+  },
+  "targetHost": "Target host",
+  "resolution": "Resolution"
 }

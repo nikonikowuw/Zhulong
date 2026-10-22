@@ -7,7 +7,7 @@ describe('LivePlayerCell 交互测试', () => {
   const dummyCamera: LiveCameraItem = {
     id: 'cam-01',
     name: '东大门测试枪机',
-    ip: '192.168.1.101',
+    host: '192.168.1.101',
     status: 'online',
     hasSubStream: true,
     codec: 'h265',

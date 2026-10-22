@@ -44,7 +44,8 @@ type snapshotOutput struct {
 	// relPath 是相对媒体根的路径，例如
 	// snapshots/cam-01/2026-10-20/01J8XYZ.jpg。必须满足 mediafile 的路径契约
 	// （首段为 snapshots，无前导斜杠，无 .. 段）。
-	relPath string
+	relPath   string
+	protected bool
 }
 
 // snapshotJob 是一次待执行的抓拍写盘任务。
@@ -221,9 +222,25 @@ func (s *SnapshotStore) run(job snapshotJob) {
 				zap.String("camera_id", job.cameraID), zap.String("dir", filepath.Dir(abs)), zap.Error(err))
 			return
 		}
+		marker := abs + ".lock"
+		if out.protected {
+			// Write the marker before the image so a concurrent cleaner cannot
+			// collect the file between its creation and protection.
+			if err := os.WriteFile(marker, nil, 0o640); err != nil {
+				s.logger.Warn("protect snapshot file failed",
+					zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Error(err))
+				continue
+			}
+		}
 		// 0o640：证据图需要被服务进程之外的只读消费者（巡检脚本、导出工具）读取，
 		// 因此保留组读权限；但不给其他用户，避免多租户宿主上的越权读取。
 		if err := os.WriteFile(abs, img.JPEG, 0o640); err != nil {
+			if out.protected {
+				if removeErr := os.Remove(marker); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+					s.logger.Warn("remove snapshot protection marker after write failure",
+						zap.String("path", marker), zap.Error(removeErr))
+				}
+			}
 			s.logger.Warn("write snapshot file failed",
 				zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Error(err))
 		}
@@ -241,15 +258,20 @@ func snapshotRelDir(cameraID string, capturedAt time.Time) string {
 // ⚠️ 生产代码不应引用本类型：它存在只是因为 Go 的 external test package
 // （record_test）无法访问未导出字段，而 Enqueue 需要一个可构造的任务描述。
 type SnapshotOutputForTest struct {
-	BoxIndex int
-	RelPath  string
+	BoxIndex  int
+	RelPath   string
+	Protected bool
 }
 
 // NewSnapshotJobForTest 构造一个等价于内部 snapshotJob 的任务，仅供测试使用。
 func NewSnapshotJobForTest(cameraID string, boxes []engine.SnapshotBox, outputs []SnapshotOutputForTest) snapshotJob {
 	converted := make([]snapshotOutput, 0, len(outputs))
 	for _, out := range outputs {
-		converted = append(converted, snapshotOutput{boxIndex: out.BoxIndex, relPath: out.RelPath})
+		converted = append(converted, snapshotOutput{
+			boxIndex:  out.BoxIndex,
+			relPath:   out.RelPath,
+			protected: out.Protected,
+		})
 	}
 	return snapshotJob{cameraID: cameraID, boxes: boxes, outputs: converted}
 }

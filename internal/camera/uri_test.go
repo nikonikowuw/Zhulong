@@ -135,6 +135,69 @@ func TestSanitizeURL(t *testing.T) {
 	}
 }
 
+func TestStreamHost(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "credentialed URL",
+			input:    "rtsp://admin:pass123@192.168.1.10:554/live/main",
+			expected: "192.168.1.10",
+		},
+		{
+			// 旧前端正则依赖 `@`，无凭据 URL 会被误判为回环地址
+			name:     "credential-less URL",
+			input:    "rtsp://192.168.1.10:554/live",
+			expected: "192.168.1.10",
+		},
+		{
+			name:     "password containing at sign",
+			input:    "rtsp://admin:p@ss@1.2.3.4/live",
+			expected: "1.2.3.4",
+		},
+		{
+			name:     "percent-encoded at sign in password",
+			input:    "rtsp://admin:p%40ss@1.2.3.4/live",
+			expected: "1.2.3.4",
+		},
+		{
+			name:     "IPv6 literal without brackets",
+			input:    "rtsp://[fe80::1]:554/live",
+			expected: "fe80::1",
+		},
+		{
+			name:     "hostname instead of IP",
+			input:    "rtsp://camera.local/live",
+			expected: "camera.local",
+		},
+		{
+			name:     "encrypted placeholder yields empty host",
+			input:    "[ENCRYPTED]",
+			expected: "",
+		},
+		{
+			name:     "empty authority yields empty host",
+			input:    "rtsp:///live",
+			expected: "",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := streamHost(c.input); got != c.expected {
+				t.Errorf("streamHost(%q) = %q, expected %q", c.input, got, c.expected)
+			}
+		})
+	}
+}
+
 func TestBuildRTSPURL(t *testing.T) {
 	q := url.Values{}
 	q.Set("token", "123")

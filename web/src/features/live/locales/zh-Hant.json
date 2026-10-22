@@ -69,5 +69,7 @@
     "streamUnavailable": "視訊串流無法連線",
     "retry": "重試連線",
     "noCamera": "未指定攝影機"
-  }
+  },
+  "targetHost": "目標位址",
+  "resolution": "解析度"
 }

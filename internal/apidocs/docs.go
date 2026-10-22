@@ -4099,6 +4099,10 @@ const docTemplate = `{
                 "height": {
                     "type": "integer"
                 },
+                "host": {
+                    "description": "Target host (IP or domain) for display and search; empty when the URI cannot be resolved or decrypted",
+                    "type": "string"
+                },
                 "id": {
                     "type": "integer"
                 },

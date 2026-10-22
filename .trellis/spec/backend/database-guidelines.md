@@ -72,6 +72,15 @@ sqlDB.SetMaxIdleConns(1)
      - ⚠️ 迁移 `000014` 曾错误地把 `algorithm_id` 设成 `ON DELETE CASCADE`（理由「label 语义随包消失」），`000015` 已纠正。判据是：**「能不能解释」影响的是展示，不是存废**；无法解释的证据仍应保留并标注来源缺失。
   3. **`camera_id` 用 `ON DELETE CASCADE`**：与上条方向相反且**不可动摇** —— `image_path` 指向 `snapshots/{camera_id}/`，相机一删整棵子树无主，记录也无法再回答「画面从哪来」。判据：**卸工具不该毁证据，删对象来源则让证据失去物理载体**。同样地在 `camera/store.go` 里手动删记录是错误的，那是把外键约束的责任搬到业务层。
 
+### 感知记录的保留清理归属 (Retention Ownership)
+
+- **文件归 storage，行归 record**：`storage.CleanerEngine` 只删 `snapshots/` 下的**文件**，不碰 SQLite。告警图片带 `.lock` 标记，告警行不参加自动 TTL 清理。
+- **普通行的删除前提**：`recognitions` / `captures` 只有在 `captured_at` 超过配置的 `snapshotsRetentionDays` 截止时间，且该行的所有快照引用（识别全幅/人脸图、抓拍全幅/裁剪图）都已不存在时，才由 `record.RetentionPruner` 删除。图片仍在则行保留，避免留下孤儿文件。
+- **协调与恢复**：storage 每次成功清理文件后，app 层触发一次 record 对账；启动后的后台巡检以相同规则恢复中断或失败的对账。mediafile 的安全路径解析用于判断图片是否仍存在；无法读取配置或核验失败时不删除行。
+- **依赖方向**：storage 不依赖 record，record 不直接删除文件；通过 app 注入保留期、文件检查器和清理后通知完成组合。
+- **读不到保留期或检查器就不删**：provider 缺失、读配置报错、文件检查器缺失/报错时，`RetentionPruner` 安全空操作或返回错误 —— 宁可不删，也不猜测。
+- **分批 + 让渡**：单批不超过 `DefaultRetentionBatchSize`（2000 行），批间让渡 20ms，避免长时间占用 WAL writer 拖慢 AI 结果落库（同连接池）。
+
 ## 4. 持久化规约与防爆边界
 
 1. **业务自管 Store**：数据操作收敛在各模块 `internal/<module>/store.go`，禁止跨模块大表模型。
