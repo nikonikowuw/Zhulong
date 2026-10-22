@@ -1573,3 +1573,26 @@ NTP 周期巡检不再写审计（改运行日志），只有墙钟跳变、pani
 ### Next Steps
 
 - 13MB ONNX 权重已入库，第二个算法包接入前评估 git-lfs 或外部发放
+
+
+## Session 84: Add vehicle tab to records
+<!-- trellis-session: v=2 fp=2df131e9f436403f -->
+
+**Date**: 2026-10-22
+**Task**: Add vehicle tab to records
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+Implemented fourth vehicles tab in perception records reusing captures endpoint with targetType=vehicle, presenting paired full-scene and vehicle crop imagery without turning attributes into columns, and passing all browser tests and quality gates.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c96b6b8` | feat(records): add vehicle captures tab with paired image evidence |
+
+### Status
+
+[OK] **Completed**
