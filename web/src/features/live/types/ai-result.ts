@@ -127,6 +127,23 @@ export function createMockFace(
 }
 
 /**
+ * 创建机动车项 Mock 辅助函数
+ */
+export function createMockVehicle(
+  overrides: Partial<VehicleItem> = {}
+): VehicleItem {
+  return {
+    track_id: 0,
+    vehicle_box: [0.1, 0.1, 0.5, 0.5],
+    vehicle_score: 0.9,
+    vehicle_type: '',
+    vehicle_color: '',
+    plates: [],
+    ...overrides,
+  }
+}
+
+/**
  * 实时抓拍卡片条目（用于实时识别记录流）
  */
 export interface RecognitionRecordItem {

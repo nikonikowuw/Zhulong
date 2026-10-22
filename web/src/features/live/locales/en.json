@@ -49,6 +49,7 @@
   "cameraFallback": "Camera {{id}}",
   "networkError": "Network connection error",
   "unrecognizedFace": "Unregistered",
+  "unrecognizedPlate": "Unknown Plate",
   "enableAIOverlay": "Enable Face AI Overlay",
   "disableAIOverlay": "Disable Face AI Overlay",
   "showRecognitionFeed": "Show Recognition Feed",

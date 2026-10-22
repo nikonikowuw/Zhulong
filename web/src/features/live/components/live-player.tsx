@@ -6,11 +6,18 @@ import {
   useState,
   useCallback,
 } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useWebCodecsRenderLoop } from '../hooks/use-webcodecs-render-loop'
 import { AIResultService } from '../services/ai-result-service'
 import { drawFaceOverlay } from '../services/face-overlay-renderer'
+import { drawVehicleOverlay } from '../services/vehicle-overlay-renderer'
 import { isWebCodecsSupported } from '../services/webcodecs-decoder'
-import { type FaceSubItem, type ParsedPacket, type StreamStats } from '../types'
+import {
+  type FaceSubItem,
+  type VehicleItem,
+  type ParsedPacket,
+  type StreamStats,
+} from '../types'
 
 export interface LivePlayerRef {
   decode: (packet: ParsedPacket) => void
@@ -44,12 +51,14 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
     },
     ref
   ): React.JSX.Element {
+    const { t } = useTranslation('live')
     const canvasRef = useRef<HTMLCanvasElement | null>(null)
     const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null)
     const lastResolutionRef = useRef<string | null>(null)
     const [isSupported] = useState(() => isWebCodecsSupported())
 
     const facesRef = useRef<FaceSubItem[]>([])
+    const vehiclesRef = useRef<VehicleItem[]>([])
     const lastEventTimeRef = useRef<number>(0)
     const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -67,13 +76,26 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
       if (!ctx) return
 
       const isExpired = Date.now() - lastEventTimeRef.current > 350
+      const currentFaces = isExpired ? [] : facesRef.current
+      const currentVehicles = isExpired ? [] : vehiclesRef.current
+
       drawFaceOverlay({
         ctx,
         width: overlay.width,
         height: overlay.height,
-        faces: isExpired ? [] : facesRef.current,
+        faces: currentFaces,
+        unrecognizedLabel: t('unrecognizedFace', '未登记'),
+        clear: true,
       })
-    }, [showAIOverlay])
+      drawVehicleOverlay({
+        ctx,
+        width: overlay.width,
+        height: overlay.height,
+        vehicles: currentVehicles,
+        unrecognizedLabel: t('unrecognizedPlate', '未识别车牌'),
+        clear: false,
+      })
+    }, [showAIOverlay, t])
 
     /**
      * 每帧后处理：上报分辨率变化、同步叠加层画布尺寸并重绘人脸框。
@@ -126,6 +148,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
       const overlayCanvas = overlayCanvasRef.current
       if (!showAIOverlay || !cameraId) {
         facesRef.current = []
+        vehiclesRef.current = []
         if (overlayCanvas) {
           const ctx = overlayCanvas.getContext('2d')
           ctx?.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height)
@@ -144,7 +167,13 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
           }
         }
 
+        const extractedVehicles: VehicleItem[] = []
+        if (event.vehicles && event.vehicles.length > 0) {
+          extractedVehicles.push(...event.vehicles)
+        }
+
         facesRef.current = extractedFaces
+        vehiclesRef.current = extractedVehicles
         lastEventTimeRef.current = Date.now()
         redrawOverlay()
 
@@ -153,6 +182,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
         }
         fadeTimerRef.current = setTimeout(() => {
           facesRef.current = []
+          vehiclesRef.current = []
           redrawOverlay()
           fadeTimerRef.current = null
         }, 350)
@@ -165,6 +195,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
         }
         unsubscribe()
         facesRef.current = []
+        vehiclesRef.current = []
         if (overlayCanvas) {
           const ctx = overlayCanvas.getContext('2d')
           ctx?.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height)

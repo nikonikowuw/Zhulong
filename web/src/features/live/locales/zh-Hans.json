@@ -49,6 +49,7 @@
   "cameraFallback": "摄像机 {{id}}",
   "networkError": "网络连接异常",
   "unrecognizedFace": "未登记",
+  "unrecognizedPlate": "未识别车牌",
   "enableAIOverlay": "开启人脸框叠加",
   "disableAIOverlay": "关闭人脸框叠加",
   "showRecognitionFeed": "显示实时识别流",

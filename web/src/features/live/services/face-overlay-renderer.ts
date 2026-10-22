@@ -6,6 +6,7 @@ export interface DrawFaceOverlayOptions {
   height: number
   faces: FaceSubItem[]
   unrecognizedLabel?: string
+  clear?: boolean
 }
 
 /**
@@ -18,8 +19,11 @@ export function drawFaceOverlay({
   height,
   faces,
   unrecognizedLabel = '未识别',
+  clear = true,
 }: DrawFaceOverlayOptions): void {
-  ctx.clearRect(0, 0, width, height)
+  if (clear) {
+    ctx.clearRect(0, 0, width, height)
+  }
 
   if (!faces || faces.length === 0 || width <= 0 || height <= 0) {
     return

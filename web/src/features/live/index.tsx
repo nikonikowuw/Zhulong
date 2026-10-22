@@ -156,6 +156,7 @@ export function Live(): React.JSX.Element {
 }
 
 export { LiveFaceOverlay } from './components/live-face-overlay'
+export { LiveVehicleOverlay } from './components/live-vehicle-overlay'
 export { LiveRecognitionFeed } from './components/live-recognition-feed'
 export {
   CameraFrameSurface,

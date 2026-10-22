@@ -16,6 +16,7 @@ import { LivePlayer, type LivePlayerRef } from './live-player'
 import { LivePlayerCellFooter } from './live-player-cell-footer'
 import { LivePlayerCellHeader } from './live-player-cell-header'
 import { LivePlayerEmptyCell } from './live-player-empty-cell'
+import { LiveVehicleOverlay } from './live-vehicle-overlay'
 import {
   MockStreamCanvas,
   type MockStreamCanvasRef,
@@ -183,10 +184,16 @@ export function LivePlayerCell({
               streamType={cell.streamType}
             />
             {showAIOverlay && cell.cameraId && (
-              <LiveFaceOverlay
-                cameraId={cell.cameraId}
-                enabled={showAIOverlay}
-              />
+              <>
+                <LiveFaceOverlay
+                  cameraId={cell.cameraId}
+                  enabled={showAIOverlay}
+                />
+                <LiveVehicleOverlay
+                  cameraId={cell.cameraId}
+                  enabled={showAIOverlay}
+                />
+              </>
             )}
           </>
         ) : (

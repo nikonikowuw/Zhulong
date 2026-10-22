@@ -49,6 +49,7 @@
   "cameraFallback": "攝影機 {{id}}",
   "networkError": "網路連線異常",
   "unrecognizedFace": "未登記",
+  "unrecognizedPlate": "未識別車牌",
   "enableAIOverlay": "開啟人臉框疊加",
   "disableAIOverlay": "關閉人臉框疊加",
   "showRecognitionFeed": "顯示即時識別流",
