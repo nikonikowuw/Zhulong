@@ -1485,3 +1485,50 @@ Session summary was not supplied.
 ### Status
 
 [OK] **Completed**
+
+
+## Session 82: 审计日志去心跳噪声与双宿主可移植性收口 (10-21-audit-ntp-heartbeat-noise)
+<!-- trellis-session: v=2 fp=22dc95f0924a539e -->
+
+**Date**: 2026-10-22
+**Task**: 审计日志去心跳噪声与双宿主可移植性收口 (10-21-audit-ntp-heartbeat-noise)
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+NTP 周期巡检不再写审计（改运行日志），只有墙钟跳变、panic 复核与失败/恢复跃迁落审计；新增三个 action 与迁移 000017 清理历史心跳；顺带修掉 macOS 上四处平台假设缺陷与 internal/record 数据竞争。
+
+### Main Changes
+
+- internal/systemtime：ProcessNTPResult 返回 (SyncOutcome, error)，probeOnce 只对 step/panic 写审计，失败恢复走边沿检测
+- 新增 time.clock_step / time.ntp_sync_failed / time.ntp_recovered，前端 action 过滤器与三份 locale 同步
+- 迁移 000017 清理历史 time.ntp_sync 心跳记录（down 为 no-op，避免伪造审计）
+- native：/dev/shm 收敛为 kShmSweepDir、fd 守卫移出条件编译、SO_SNDBUF 按报文上限设置、插件后缀 kPluginExt
+- internal/record：fakeSnapshotProvider 新增持锁 lastOptions() 访问器消除数据竞争
+- spec：logging-guidelines 新增禁止心跳型审计；新增 native/host-portability.md
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f2d0333` | fix(audit): stop recording every NTP poll as an audit event |
+| `89d46cf` | fix(native): stop hardcoding Linux paths and suffixes on macOS |
+| `cfb0fba` | fix(record): read fakeSnapshotProvider options under its mutex |
+| `9f08142` | fix(native): support macOS native build |
+| `b58193a` | docs(spec): 记录原生层 Linux/macOS 双宿主可移植性契约 |
+
+### Testing
+
+- [OK] make native-test 24/24 passed
+- [OK] make go-check 全包通过含 bridge integration
+- [OK] make frontend-check 551 tests passed
+- [OK] make api-docs 已重新生成
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 父任务 10-20-industrial-logging 仍为 planning，三个子任务已归档，可评估收口
