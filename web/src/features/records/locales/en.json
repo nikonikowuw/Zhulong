@@ -4,7 +4,15 @@
   "tabs": {
     "recognitions": "Recognitions",
     "alarms": "Alarms",
-    "captures": "Captures"
+    "captures": "Captures",
+    "vehicles": "Vehicles"
+  },
+  "vehicle": {
+    "fullScene": "Full scene",
+    "crop": "Vehicle crop",
+    "fullSceneAlt": "Full-scene vehicle capture",
+    "cropAlt": "Vehicle crop capture",
+    "viewDetail": "View vehicle details"
   },
   "views": {
     "grid": "Grid View",
@@ -32,6 +40,7 @@
   },
   "table": {
     "thumbnail": "Snapshot",
+    "evidence": "Image Evidence",
     "time": "Captured Time",
     "camera": "Camera",
     "target": "Target / Person",
@@ -43,6 +52,8 @@
     "actions": "Actions",
     "empty": "No records found",
     "emptyDesc": "No perception records match the current filter criteria.",
+    "emptyVehicles": "No vehicle captures found",
+    "emptyVehiclesDesc": "No vehicle records match the current filter criteria.",
     "loading": "Retrieving records...",
     "error": "Failed to load records",
     "retry": "Retry"
@@ -60,9 +71,11 @@
     "recognitionTitle": "Face Recognition Details",
     "alarmTitle": "Alarm Event Details",
     "captureTitle": "Target Capture Details",
+    "vehicleTitle": "Vehicle Structure Capture Details",
     "fullImage": "Full Image & Bounding Box",
     "comparison": "Gallery vs. Capture Comparison",
     "snapshot": "Captured Crop",
+    "vehicleCrop": "Vehicle Crop",
     "gallery": "Gallery Photo",
     "noGallery": "No gallery photo associated",
     "candidates": "Top-N Candidates",

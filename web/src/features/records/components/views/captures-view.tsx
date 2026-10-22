@@ -26,6 +26,8 @@ import { algorithmLabel, type Capture } from '../../data/schema'
 import { targetTypeBadgeClass } from '../../data/target-type'
 import { CaptureCard } from '../captures/capture-card'
 import { MediaImage } from '../common/media-image'
+import { VehicleCaptureCard } from '../vehicles/vehicle-capture-card'
+import { VehicleEvidence } from '../vehicles/vehicle-evidence'
 
 export interface CapturesViewProps {
   items: Capture[]
@@ -33,6 +35,7 @@ export interface CapturesViewProps {
   page: number
   pageSize: number
   view: 'grid' | 'table'
+  mode?: 'captures' | 'vehicles'
   isLoading: boolean
   isError: boolean
   onPageChange: (page: number) => void
@@ -47,6 +50,7 @@ export function CapturesView({
   page,
   pageSize,
   view,
+  mode = 'captures',
   isLoading,
   isError,
   onPageChange,
@@ -56,25 +60,33 @@ export function CapturesView({
 }: CapturesViewProps) {
   const { t } = useTranslation('records')
 
-  const columns = useMemo<ColumnDef<Capture>[]>(
-    () => [
+  const columns = useMemo<ColumnDef<Capture>[]>(() => {
+    const cols: ColumnDef<Capture>[] = [
       {
         accessorKey: 'cropPath',
         header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('table.thumbnail')} />
+          <DataTableColumnHeader
+            column={column}
+            title={
+              mode === 'vehicles' ? t('table.evidence') : t('table.thumbnail')
+            }
+          />
         ),
-        size: 90,
+        size: mode === 'vehicles' ? 190 : 90,
         enableSorting: false,
-        cell: ({ row }) => (
-          <div className='size-10 overflow-hidden rounded-md border border-border bg-muted/40'>
-            <MediaImage
-              path={row.original.cropPath || row.original.imagePath}
-              alt={row.original.targetType}
-              className='size-full'
-              fallbackText='Capture'
-            />
-          </div>
-        ),
+        cell: ({ row }) =>
+          mode === 'vehicles' ? (
+            <VehicleEvidence capture={row.original} layout='table' />
+          ) : (
+            <div className='size-10 overflow-hidden rounded-md border border-border bg-muted/40'>
+              <MediaImage
+                path={row.original.cropPath || row.original.imagePath}
+                alt={row.original.targetType}
+                className='size-full'
+                fallbackText='Capture'
+              />
+            </div>
+          ),
       },
       {
         accessorKey: 'capturedAt',
@@ -101,7 +113,10 @@ export function CapturesView({
           <span className='text-xs font-medium'>{row.original.cameraId}</span>
         ),
       },
-      {
+    ]
+
+    if (mode === 'captures') {
+      cols.push({
         accessorKey: 'targetType',
         header: ({ column }) => (
           <DataTableColumnHeader column={column} title={t('table.type')} />
@@ -119,7 +134,10 @@ export function CapturesView({
             {row.original.targetType}
           </Badge>
         ),
-      },
+      })
+    }
+
+    cols.push(
       {
         accessorKey: 'score',
         header: ({ column }) => (
@@ -163,10 +181,11 @@ export function CapturesView({
             {algorithmLabel(row.original) || '-'}
           </span>
         ),
-      },
-    ],
-    [t]
-  )
+      }
+    )
+
+    return cols
+  }, [mode, t])
 
   // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
@@ -208,7 +227,12 @@ export function CapturesView({
                   key={`cap-skel-${idx}`}
                   className='overflow-hidden rounded-lg border border-border bg-card'
                 >
-                  <Skeleton className='aspect-square w-full' />
+                  <Skeleton
+                    className={cn(
+                      'w-full',
+                      mode === 'vehicles' ? 'aspect-[3/2]' : 'aspect-square'
+                    )}
+                  />
                   <div className='space-y-2 p-3'>
                     <Skeleton className='h-4 w-3/4' />
                     <Skeleton className='h-3 w-1/2' />
@@ -244,9 +268,15 @@ export function CapturesView({
           <div className='mb-3 rounded-full bg-muted p-3'>
             <Camera className='size-6 text-muted-foreground' />
           </div>
-          <h3 className='text-base font-semibold'>{t('table.empty')}</h3>
+          <h3 className='text-base font-semibold'>
+            {t(mode === 'vehicles' ? 'table.emptyVehicles' : 'table.empty')}
+          </h3>
           <p className='mt-1 text-sm text-muted-foreground'>
-            {t('table.emptyDesc')}
+            {t(
+              mode === 'vehicles'
+                ? 'table.emptyVehiclesDesc'
+                : 'table.emptyDesc'
+            )}
           </p>
         </div>
       )
@@ -255,9 +285,17 @@ export function CapturesView({
     return (
       <div className='space-y-4'>
         <div className='grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'>
-          {items.map((item) => (
-            <CaptureCard key={item.id} item={item} onSelect={onSelect} />
-          ))}
+          {items.map((item) =>
+            mode === 'vehicles' ? (
+              <VehicleCaptureCard
+                key={item.id}
+                item={item}
+                onSelect={onSelect}
+              />
+            ) : (
+              <CaptureCard key={item.id} item={item} onSelect={onSelect} />
+            )
+          )}
         </div>
         <DataTablePagination table={table} />
       </div>
@@ -346,9 +384,19 @@ export function CapturesView({
                 >
                   <div className='flex flex-col items-center justify-center gap-2'>
                     <Camera className='size-8 text-muted-foreground' />
-                    <p className='text-sm font-medium'>{t('table.empty')}</p>
+                    <p className='text-sm font-medium'>
+                      {t(
+                        mode === 'vehicles'
+                          ? 'table.emptyVehicles'
+                          : 'table.empty'
+                      )}
+                    </p>
                     <p className='text-xs text-muted-foreground'>
-                      {t('table.emptyDesc')}
+                      {t(
+                        mode === 'vehicles'
+                          ? 'table.emptyVehiclesDesc'
+                          : 'table.emptyDesc'
+                      )}
                     </p>
                   </div>
                 </TableCell>

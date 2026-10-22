@@ -159,8 +159,17 @@ export interface GetCapturesParams {
   endTime?: string
 }
 
+export const recordsTabSchema = z.enum([
+  'recognitions',
+  'alarms',
+  'captures',
+  'vehicles',
+])
+
+export type RecordsTab = z.infer<typeof recordsTabSchema>
+
 export const recordsSearchSchema = z.object({
-  tab: z.enum(['recognitions', 'alarms', 'captures']).catch('recognitions'),
+  tab: recordsTabSchema.catch('recognitions'),
   view: z.enum(['table', 'grid']).catch('table'),
   page: z.coerce.number().int().positive().catch(1).default(1),
   pageSize: z.coerce.number().int().positive().max(100).catch(20).default(20),

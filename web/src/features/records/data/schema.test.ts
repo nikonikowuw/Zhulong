@@ -204,6 +204,12 @@ describe('Records Schemas', () => {
       expect(parsed.pageSize).toBe(20)
     })
 
+    it('accepts the vehicles tab in URL state', () => {
+      expect(recordsSearchSchema.parse({ tab: 'vehicles' }).tab).toBe(
+        'vehicles'
+      )
+    })
+
     it('parses valid search params', () => {
       const parsed = recordsSearchSchema.parse({
         tab: 'alarms',

@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { Cross2Icon } from '@radix-ui/react-icons'
 import { LayoutGrid, RotateCcw, Table as TableIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -12,14 +13,14 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useCameras } from '@/features/cameras/hooks/use-cameras'
-import { cn } from '@/lib/utils'
+import { type RecordsTab } from '../data/schema'
 import { type RecordsDateRange, type TimePresetKey } from '../data/time-presets'
 import { useAlarmTypes } from '../hooks/use-alarm-types'
 import { useCaptureTargetTypes } from '../hooks/use-capture-target-types'
 import { RecordsDateRangePicker } from './records-date-range-picker'
 
 export interface RecordsToolbarProps {
-  tab: 'recognitions' | 'alarms' | 'captures'
+  tab: RecordsTab
   view: 'grid' | 'table'
   cameraId?: string
   preset?: TimePresetKey
@@ -29,7 +30,7 @@ export interface RecordsToolbarProps {
   personId?: string
   alarmType?: string
   targetType?: string
-  onTabChange: (tab: 'recognitions' | 'alarms' | 'captures') => void
+  onTabChange: (tab: RecordsTab) => void
   onViewChange: (view: 'grid' | 'table') => void
   onCameraChange: (cameraId?: string) => void
   onDateRangeChange: (range: RecordsDateRange) => void
@@ -87,13 +88,13 @@ export function RecordsToolbar({
 
   const isFiltered = Boolean(
     cameraId ||
-      preset ||
-      startTime ||
-      endTime ||
-      (matched && matched !== 'all') ||
-      personId ||
-      alarmType ||
-      targetType
+    preset ||
+    startTime ||
+    endTime ||
+    (matched && matched !== 'all') ||
+    personId ||
+    alarmType ||
+    (tab === 'captures' && targetType)
   )
 
   return (
@@ -108,7 +109,7 @@ export function RecordsToolbar({
             onChange={(e) =>
               onPersonIdChange?.(e.target.value.trim() || undefined)
             }
-            className='h-8 w-37.5 lg:w-62.5 text-xs'
+            className='h-8 w-37.5 text-xs lg:w-62.5'
           />
         )}
 
@@ -211,7 +212,7 @@ export function RecordsToolbar({
             variant='ghost'
             size='sm'
             onClick={onResetFilters}
-            className='h-8 px-2 lg:px-3 text-xs'
+            className='h-8 px-2 text-xs lg:px-3'
           >
             {t('toolbar.reset')}
             <Cross2Icon className='ms-1.5 h-3.5 w-3.5' />
@@ -221,7 +222,7 @@ export function RecordsToolbar({
 
       {/* 右侧：视图切换与可选刷新 */}
       <div className='flex items-center gap-2'>
-        <div className='flex items-center rounded-md border border-border p-0.5 bg-muted/30'>
+        <div className='flex items-center rounded-md border border-border bg-muted/30 p-0.5'>
           <Button
             variant={view === 'grid' ? 'secondary' : 'ghost'}
             size='sm'
@@ -229,7 +230,7 @@ export function RecordsToolbar({
             className='h-7 px-2.5 text-xs'
             title={t('views.grid')}
           >
-            <LayoutGrid className='size-3.5 me-1' />
+            <LayoutGrid className='me-1 size-3.5' />
             <span>{t('views.grid')}</span>
           </Button>
           <Button
@@ -239,7 +240,7 @@ export function RecordsToolbar({
             className='h-7 px-2.5 text-xs'
             title={t('views.table')}
           >
-            <TableIcon className='size-3.5 me-1' />
+            <TableIcon className='me-1 size-3.5' />
             <span>{t('views.table')}</span>
           </Button>
         </div>

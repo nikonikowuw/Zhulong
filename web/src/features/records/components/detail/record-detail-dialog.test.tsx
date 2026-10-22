@@ -92,19 +92,20 @@ describe('RecordDetailDialog', () => {
     // 稳定存在。
     const seenSrcs: string[] = []
     const originalCreateElement = document.createElement.bind(document)
-    const spy = vi
-      .spyOn(document, 'createElement')
-      .mockImplementation(((tag: string, options?: ElementCreationOptions) => {
-        const el = originalCreateElement(tag, options)
-        if (tag === 'img') {
-          const setAttribute = el.setAttribute.bind(el)
-          el.setAttribute = (name: string, value: string) => {
-            if (name === 'src') seenSrcs.push(value)
-            setAttribute(name, value)
-          }
+    const spy = vi.spyOn(document, 'createElement').mockImplementation(((
+      tag: string,
+      options?: ElementCreationOptions
+    ) => {
+      const el = originalCreateElement(tag, options)
+      if (tag === 'img') {
+        const setAttribute = el.setAttribute.bind(el)
+        el.setAttribute = (name: string, value: string) => {
+          if (name === 'src') seenSrcs.push(value)
+          setAttribute(name, value)
         }
-        return el
-      }) as typeof document.createElement)
+      }
+      return el
+    }) as typeof document.createElement)
 
     const handleOpenChange = vi.fn()
     await render(
@@ -141,6 +142,33 @@ describe('RecordDetailDialog', () => {
       .element(getByRole('heading', { name: /事件告警研判详情/ }))
       .toBeInTheDocument()
     await expect.element(getByText('tripwire')).toBeInTheDocument()
+  })
+
+  it('renders vehicle details with full scene, crop, and structured attributes', async () => {
+    const vehicleCapture: Capture = {
+      ...mockCapture,
+      attributes: {
+        plate_number: '粤B88888',
+        plate_color: 'blue',
+        vehicle_type: 'suv',
+      },
+    }
+
+    const { getByRole, getByText } = await render(
+      <RecordDetailDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        record={vehicleCapture}
+        tab='vehicles'
+      />
+    )
+
+    await expect
+      .element(getByRole('heading', { name: '车辆结构化抓拍详情' }))
+      .toBeInTheDocument()
+    await expect.element(getByText('车辆裁剪图')).toBeInTheDocument()
+    await expect.element(getByText(/plate_number/)).toBeInTheDocument()
+    await expect.element(getByText(/粤B88888/)).toBeInTheDocument()
   })
 
   it('renders capture details and closes dialog on close button click', async () => {

@@ -6,6 +6,7 @@ import { getMediaUrl } from './media-utils'
 export interface MediaImageProps extends ImgHTMLAttributes<HTMLImageElement> {
   path?: string
   fallbackText?: string
+  imageClassName?: string
   showLoadingSkeleton?: boolean
 }
 
@@ -15,6 +16,7 @@ export function MediaImage({
   alt = 'Media',
   className,
   fallbackText,
+  imageClassName,
   showLoadingSkeleton = true,
   ...props
 }: MediaImageProps) {
@@ -26,6 +28,7 @@ export function MediaImage({
   if (!resolvedUrl || error) {
     return (
       <div
+        role='img'
         className={cn(
           'flex flex-col items-center justify-center bg-muted/60 text-muted-foreground select-none',
           className
@@ -56,7 +59,8 @@ export function MediaImage({
         onError={() => setError(true)}
         className={cn(
           'size-full object-cover transition-opacity duration-300',
-          loaded ? 'opacity-100' : 'opacity-0'
+          loaded ? 'opacity-100' : 'opacity-0',
+          imageClassName
         )}
         {...props}
       />

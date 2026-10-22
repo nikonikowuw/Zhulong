@@ -228,6 +228,60 @@ describe('Records Views', () => {
       await expect.element(getByText('cam-lane')).toBeInTheDocument()
     })
 
+    it('shows both vehicle images in grid cards and opens details', async () => {
+      const handleSelect = vi.fn()
+      const { getByRole } = await render(
+        <CapturesView
+          items={sampleCaptures}
+          total={1}
+          page={1}
+          pageSize={20}
+          view='grid'
+          mode='vehicles'
+          isLoading={false}
+          isError={false}
+          onPageChange={vi.fn()}
+          onPageSizeChange={vi.fn()}
+          onSelect={handleSelect}
+          onRetry={vi.fn()}
+        />
+      )
+
+      await expect
+        .element(getByRole('img', { name: '车辆全景抓拍' }))
+        .toBeInTheDocument()
+      await expect
+        .element(getByRole('img', { name: '车辆裁剪抓拍' }))
+        .toBeInTheDocument()
+      await userEvent.click(getByRole('button', { name: '查看车辆详情' }))
+      expect(handleSelect).toHaveBeenCalledWith(sampleCaptures[0])
+    })
+
+    it('shows paired image evidence in vehicle table without vehicle attributes columns', async () => {
+      const { getByRole, getByText } = await render(
+        <CapturesView
+          items={sampleCaptures}
+          total={1}
+          page={1}
+          pageSize={20}
+          view='table'
+          mode='vehicles'
+          isLoading={false}
+          isError={false}
+          onPageChange={vi.fn()}
+          onPageSizeChange={vi.fn()}
+          onSelect={vi.fn()}
+          onRetry={vi.fn()}
+        />
+      )
+
+      await expect.element(getByRole('table')).toBeInTheDocument()
+      await expect.element(getByText('图像证据')).toBeInTheDocument()
+      await expect.element(getByText('全景图')).toBeInTheDocument()
+      await expect.element(getByText('车辆裁剪图')).toBeInTheDocument()
+      await expect.element(getByText('cam-lane')).toBeInTheDocument()
+    })
+
     it('shows the algorithm snapshot in the captures table', async () => {
       // 迁移 000016 之前 captures 根本没有算法归属列，抓拍列表无法按算法归因。
       const { getByText } = await render(

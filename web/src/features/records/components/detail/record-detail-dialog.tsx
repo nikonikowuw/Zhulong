@@ -28,6 +28,7 @@ import {
   type Capture,
   type Recognition,
   type RecordItem,
+  type RecordsTab,
 } from '../../data/schema'
 import { BoundingBoxCanvas } from '../common/bounding-box-canvas'
 import { MediaImage } from '../common/media-image'
@@ -38,7 +39,7 @@ export interface RecordDetailDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   record: RecordItem | null
-  tab: 'recognitions' | 'alarms' | 'captures'
+  tab: RecordsTab
 }
 
 export function RecordDetailDialog({
@@ -53,7 +54,8 @@ export function RecordDetailDialog({
 
   const isRecognition = tab === 'recognitions'
   const isAlarm = tab === 'alarms'
-  const isCapture = tab === 'captures'
+  const isVehicleCapture = tab === 'vehicles'
+  const isCapture = tab === 'captures' || isVehicleCapture
 
   const rec = isRecognition ? (record as Recognition) : null
   const alm = isAlarm ? (record as Alarm) : null
@@ -67,7 +69,9 @@ export function RecordDetailDialog({
     ? t('detail.recognitionTitle')
     : isAlarm
       ? t('detail.alarmTitle')
-      : t('detail.captureTitle')
+      : isVehicleCapture
+        ? t('detail.vehicleTitle')
+        : t('detail.captureTitle')
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -141,7 +145,7 @@ export function RecordDetailDialog({
               <div className='flex justify-center rounded-lg border border-border bg-black/95 p-2'>
                 <BoundingBoxCanvas
                   imagePath={record.imagePath}
-                  alt='Full Scene'
+                  alt={t('detail.fullImage')}
                   primaryBox={record.box}
                   primaryLabel={
                     isRecognition && rec
@@ -199,7 +203,10 @@ export function RecordDetailDialog({
                         必须走 person 域的按人脸取图端点。
                       */}
                       <MediaImage
-                        src={getGalleryImageUrl(rec.personId, rec.matchedFaceId)}
+                        src={getGalleryImageUrl(
+                          rec.personId,
+                          rec.matchedFaceId
+                        )}
                         alt='Gallery Target'
                         className='size-full'
                         fallbackText={t('detail.noGallery')}
@@ -273,12 +280,16 @@ export function RecordDetailDialog({
             {isCapture && cap && cap.cropPath && (
               <div className='space-y-2'>
                 <h4 className='text-xs font-semibold tracking-wider text-muted-foreground uppercase'>
-                  {t('detail.snapshot')}
+                  {isVehicleCapture
+                    ? t('detail.vehicleCrop')
+                    : t('detail.snapshot')}
                 </h4>
                 <div className='size-32 overflow-hidden rounded-md border border-border bg-muted/40'>
                   <MediaImage
                     path={cap.cropPath}
-                    alt={cap.targetType}
+                    alt={
+                      isVehicleCapture ? t('vehicle.cropAlt') : cap.targetType
+                    }
                     className='size-full'
                   />
                 </div>

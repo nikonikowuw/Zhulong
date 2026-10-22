@@ -4,7 +4,15 @@
   "tabs": {
     "recognitions": "識別記錄",
     "alarms": "告警記錄",
-    "captures": "抓拍記錄"
+    "captures": "抓拍記錄",
+    "vehicles": "車輛記錄"
+  },
+  "vehicle": {
+    "fullScene": "全景圖",
+    "crop": "車輛裁剪圖",
+    "fullSceneAlt": "車輛全景抓拍",
+    "cropAlt": "車輛裁剪抓拍",
+    "viewDetail": "檢視車輛詳情"
   },
   "views": {
     "grid": "畫廊卡片",
@@ -32,6 +40,7 @@
   },
   "table": {
     "thumbnail": "抓拍快照",
+    "evidence": "影像證據",
     "time": "抓拍時間",
     "camera": "攝影機",
     "target": "目標識別",
@@ -43,6 +52,8 @@
     "actions": "操作",
     "empty": "暫無感知記錄",
     "emptyDesc": "當前篩選條件下未檢索到任何記錄數據。",
+    "emptyVehicles": "暫無車輛抓拍",
+    "emptyVehiclesDesc": "當前篩選條件下沒有找到車輛記錄。",
     "loading": "正在檢索記錄...",
     "error": "載入記錄失敗",
     "retry": "重新載入"
@@ -60,9 +71,11 @@
     "recognitionTitle": "人臉識別研判詳情",
     "alarmTitle": "事件告警研判詳情",
     "captureTitle": "目標抓拍研判詳情",
+    "vehicleTitle": "車輛結構化抓拍詳情",
     "fullImage": "全景原圖與標註目標框",
     "comparison": "底庫對標照片與現場切片",
     "snapshot": "現場切片",
+    "vehicleCrop": "車輛裁剪圖",
     "gallery": "底庫照片",
     "noGallery": "未關聯底庫照片",
     "candidates": "Top-N 候選人比對",

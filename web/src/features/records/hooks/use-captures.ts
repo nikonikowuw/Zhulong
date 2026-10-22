@@ -14,7 +14,20 @@ export function useCaptures(
   return useQuery({
     queryKey: [...CAPTURES_QUERY_KEY, params],
     queryFn: () => recordsApi.getCaptures(params),
-    placeholderData: (previousData) => previousData,
+    placeholderData: (previousData, previousQuery) => {
+      const previousParams = previousQuery?.queryKey[2]
+      const previousTargetType =
+        typeof previousParams === 'object' &&
+        previousParams !== null &&
+        'targetType' in previousParams &&
+        typeof previousParams.targetType === 'string'
+          ? previousParams.targetType
+          : undefined
+
+      return previousTargetType === params?.targetType
+        ? previousData
+        : undefined
+    },
   })
 }
 

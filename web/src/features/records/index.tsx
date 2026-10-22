@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { getRouteApi } from '@tanstack/react-router'
-import { AlertTriangle, Camera, UserCheck } from 'lucide-react'
+import { CarFront, AlertTriangle, Camera, UserCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfigDrawer } from '@/components/config-drawer'
 import { LanguageSwitch } from '@/components/language-switch'
 import { Header } from '@/components/layout/header'
@@ -9,14 +10,17 @@ import { Main } from '@/components/layout/main'
 import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RecordDetailDialog } from './components/detail/record-detail-dialog'
 import { RecordsPrimaryButtons } from './components/records-primary-buttons'
 import { RecordsToolbar } from './components/records-toolbar'
 import { AlarmsView } from './components/views/alarms-view'
 import { CapturesView } from './components/views/captures-view'
 import { RecognitionsView } from './components/views/recognitions-view'
-import { type RecordItem, type RecordsSearchParams } from './data/schema'
+import {
+  type RecordItem,
+  type RecordsSearchParams,
+  type RecordsTab,
+} from './data/schema'
 import { type RecordsDateRange } from './data/time-presets'
 import { useAlarms } from './hooks/use-alarms'
 import { useCaptures } from './hooks/use-captures'
@@ -97,19 +101,19 @@ export function Records() {
 
   // 抓拍记录 Query
   const capturesQuery = useCaptures(
-    tab === 'captures'
+    tab === 'captures' || tab === 'vehicles'
       ? {
           page,
           pageSize,
           cameraId,
-          targetType,
+          targetType: tab === 'vehicles' ? 'vehicle' : targetType,
           startTime,
           endTime,
         }
       : undefined
   )
 
-  const handleTabChange = (nextTab: 'recognitions' | 'alarms' | 'captures') => {
+  const handleTabChange = (nextTab: RecordsTab) => {
     updateSearch({
       tab: nextTab,
       page: 1,
@@ -164,9 +168,7 @@ export function Records() {
         {/* 核心 Tab 切换与数据表格工作区 */}
         <Tabs
           value={tab}
-          onValueChange={(val) =>
-            handleTabChange(val as 'recognitions' | 'alarms' | 'captures')
-          }
+          onValueChange={(val) => handleTabChange(val as RecordsTab)}
           className='space-y-4'
         >
           <TabsList className='h-9'>
@@ -181,6 +183,10 @@ export function Records() {
             <TabsTrigger value='captures' className='gap-1.5 text-xs'>
               <Camera className='size-3.5' />
               <span>{t('tabs.captures')}</span>
+            </TabsTrigger>
+            <TabsTrigger value='vehicles' className='gap-1.5 text-xs'>
+              <CarFront className='size-3.5' />
+              <span>{t('tabs.vehicles')}</span>
             </TabsTrigger>
           </TabsList>
 
@@ -274,8 +280,9 @@ export function Records() {
               />
             )}
 
-            {tab === 'captures' && (
+            {(tab === 'captures' || tab === 'vehicles') && (
               <CapturesView
+                mode={tab === 'vehicles' ? 'vehicles' : 'captures'}
                 items={capturesQuery.data?.items ?? []}
                 total={capturesQuery.data?.total ?? 0}
                 page={page}
