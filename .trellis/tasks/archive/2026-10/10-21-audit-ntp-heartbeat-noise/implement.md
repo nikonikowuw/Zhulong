@@ -26,6 +26,7 @@
 | 文件 | 改动 |
 | --- | --- |
 | `.trellis/spec/backend/logging-guidelines.md` | §4 新增第 13 条「禁止心跳型审计」；新增 Scenario「Background Workers and the Audit Trail」 |
+| `.trellis/spec/native/host-portability.md` | 新增：把 macOS 暴露的四类平台假设缺陷收敛为规范，并接入 `native/index.md` 索引与检查清单 |
 
 ## 关键决策
 
