@@ -79,6 +79,11 @@ web/
 2. **`src/features/<feature>/` 承载核心业务**：
    - 所有的业务交互、表格组装、弹窗控制、TanStack Query 逻辑全部闭环在 `features/<feature>` 内部；
    - 模块对外通过 `index.tsx` 暴露清晰的页面入口组件（如 `CameraPage`）或跨模块共享组件。
+   - ⚠️ **非组件契约走 `contract.ts`，不走 `index.tsx`**：需要跨模块共享 hook / 类型 / 数据契约时，
+     另建 `features/<feature>/contract.ts` 作为契约门面。`index.tsx` 是路由页面入口，在其中 re-export
+     非组件会触发 `react-refresh/only-export-components`，破坏 HMR 边界。
+     例：`features/cameras/contract.ts` 向 `features/live` 提供 `Camera`/`Stream` 契约、
+     `useAllCameras` 与 `useCameraEvents`，使实时预览页无需为 `/cameras` 响应二次建模。
 
 ---
 

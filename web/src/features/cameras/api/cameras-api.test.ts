@@ -1,5 +1,5 @@
 import type { AxiosResponse } from 'axios'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { apiClient, type ApiResponse } from '@/lib/api-client'
 import { camerasApi } from './cameras-api'
 
@@ -132,5 +132,88 @@ describe('camerasApi', () => {
     const res = await camerasApi.deleteCamera('cam-01')
     expect(res).toEqual(mockDelete)
     expect(apiClient.delete).toHaveBeenCalledWith('/cameras/cam-01')
+  })
+
+  describe('getAll', () => {
+    // 前面的用例已经 spy 过同一个方法，`mock.calls` 会串到用例之间
+    beforeEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    function cameraItem(id: string) {
+      return {
+        id,
+        name: `Camera ${id}`,
+        enabled: true,
+        revision: 1,
+        health: 'online' as const,
+        session: 'running' as const,
+        degraded: false,
+        stale: false,
+        reason: '',
+        streams: [],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      }
+    }
+
+    it('stops after the first page when total fits inside the page limit', async () => {
+      const getSpy = vi.spyOn(apiClient, 'get').mockResolvedValueOnce(
+        mockResponse({
+          items: [cameraItem('cam-01'), cameraItem('cam-02')],
+          total: 2,
+          page: 1,
+          pageSize: 100,
+        })
+      )
+
+      const res = await camerasApi.getAll()
+
+      expect(res.items).toHaveLength(2)
+      expect(getSpy).toHaveBeenCalledTimes(1)
+      expect(getSpy).toHaveBeenCalledWith('/cameras', {
+        params: { page: 1, pageSize: 100 },
+      })
+    })
+
+    it('merges every page when total exceeds the single-page limit', async () => {
+      // 后端单页上限 100，而 MaxCameraCapacity 为 128，因此必然出现第二页
+      const firstPage = Array.from({ length: 100 }, (_, i) =>
+        cameraItem(`cam-${String(i).padStart(3, '0')}`)
+      )
+      const secondPage = Array.from({ length: 28 }, (_, i) =>
+        cameraItem(`cam-1${String(i).padStart(2, '0')}`)
+      )
+
+      const getSpy = vi
+        .spyOn(apiClient, 'get')
+        .mockResolvedValueOnce(
+          mockResponse({
+            items: firstPage,
+            total: 128,
+            page: 1,
+            pageSize: 100,
+          })
+        )
+        .mockResolvedValueOnce(
+          mockResponse({
+            items: secondPage,
+            total: 128,
+            page: 2,
+            pageSize: 100,
+          })
+        )
+
+      const res = await camerasApi.getAll()
+
+      expect(res.items).toHaveLength(128)
+      expect(res.total).toBe(128)
+      expect(getSpy).toHaveBeenCalledTimes(2)
+      expect(getSpy).toHaveBeenNthCalledWith(2, '/cameras', {
+        params: { page: 2, pageSize: 100 },
+      })
+      // 不重复、不丢失
+      expect(new Set(res.items.map((c) => c.id)).size).toBe(128)
+    })
   })
 })

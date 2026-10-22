@@ -6,6 +6,8 @@ const streamSchema = z.object({
   role: z.enum(['main', 'sub']),
   protocol: z.string().default('rtsp'),
   rtspUrl: z.string(),
+  // 后端从流地址解析出的目标主机（不含凭据）；无法解密或解析时为空串
+  host: z.string().optional(),
   transport: z.enum(['tcp', 'udp']).default('tcp'),
   codec: z.string().optional().default(''),
   width: z.number().optional().default(0),

@@ -1,62 +1,44 @@
-import type { AxiosResponse } from 'axios'
-import { describe, expect, it, vi } from 'vitest'
-import { apiClient, type ApiResponse } from '@/lib/api-client'
-import {
-  fetchLiveCameras,
-  type BackendCameraListResponse,
-  type BackendStreamResponse,
-} from './live-camera-api'
+import { describe, expect, it } from 'vitest'
+import { type Camera, type Stream } from '@/features/cameras/contract'
+import { toLiveCameraItem } from './live-camera-api'
 
-function mockResponse<T>(data: T): AxiosResponse<ApiResponse<T>> {
-  return {
-    data: { code: 'OK', message: 'success', data },
-    status: 200,
-    statusText: 'OK',
-    headers: {},
-    config: {} as AxiosResponse['config'],
-  }
-}
-
-function stream(
-  overrides: Partial<BackendStreamResponse> &
-    Pick<BackendStreamResponse, 'role'>
-): BackendStreamResponse {
+function stream(overrides: Partial<Stream> & Pick<Stream, 'role'>): Stream {
   return {
     id: 1,
     protocol: 'rtsp',
+    rtspUrl: 'rtsp://192.168.1.10:554/live',
+    host: '',
+    transport: 'tcp',
     codec: 'H264',
     width: 1920,
     height: 1080,
+    fpsString: '25',
     ...overrides,
   }
 }
 
-function baseCamera(
-  overrides: Partial<BackendCameraListResponse['items'][number]> = {}
-): BackendCameraListResponse['items'][number] {
+function camera(overrides: Partial<Camera> = {}): Camera {
   return {
     id: 'cam-01',
     name: '大门',
     enabled: true,
+    revision: 1,
     health: 'online',
     session: 'running',
+    degraded: false,
+    stale: false,
+    reason: '',
     streams: [],
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
     ...overrides,
   }
 }
 
-function mockCameras(
-  items: BackendCameraListResponse['items']
-): BackendCameraListResponse {
-  const payload = { items, total: items.length }
-  vi.spyOn(apiClient, 'get').mockResolvedValueOnce(mockResponse(payload))
-  return payload
-}
-
-describe('fetchLiveCameras', () => {
-  it('adapts a full main stream', async () => {
-    mockCameras([
-      baseCamera({
+describe('toLiveCameraItem', () => {
+  it('adapts a full main stream', () => {
+    const item = toLiveCameraItem(
+      camera({
         streams: [
           stream({
             role: 'main',
@@ -66,107 +48,91 @@ describe('fetchLiveCameras', () => {
             height: 1440,
           }),
         ],
-      }),
-    ])
+      })
+    )
 
-    const [cam] = await fetchLiveCameras()
-    expect(cam.host).toBe('192.168.1.10')
-    expect(cam.resolution).toBe('2560x1440')
-    expect(cam.codec).toBe('h265')
-    expect(cam.status).toBe('online')
-    expect(cam.hasSubStream).toBe(false)
+    expect(item).toEqual({
+      id: 'cam-01',
+      name: '大门',
+      host: '192.168.1.10',
+      status: 'online',
+      hasSubStream: false,
+      codec: 'h265',
+      resolution: '2560x1440',
+    })
   })
 
-  it('uses the backend-provided host verbatim without deriving it from rtspUrl', async () => {
-    mockCameras([
-      baseCamera({
+  it('never derives the host from rtspUrl when the backend omits it', () => {
+    const item = toLiveCameraItem(
+      camera({
         streams: [
           stream({
             role: 'main',
-            // 有凭据的完整 URL 存在，但后端没有下发 host —— 前端不得自行解析
             rtspUrl: 'rtsp://admin:pass@192.168.1.10:554/live/main',
             host: '',
           }),
         ],
-      }),
-    ])
+      })
+    )
 
-    const [cam] = await fetchLiveCameras()
-    expect(cam.host).toBeUndefined()
+    expect(item.host).toBeUndefined()
   })
 
-  it('normalizes casing and blank hosts', async () => {
-    mockCameras([
-      baseCamera({
-        id: 'cam-upper',
-        streams: [stream({ role: 'main', host: 'CAM.Local' })],
-      }),
-      baseCamera({
-        id: 'cam-blank',
-        streams: [stream({ role: 'main', host: '   ' })],
-      }),
-    ])
+  it('normalizes host casing and blank values', () => {
+    expect(
+      toLiveCameraItem(
+        camera({ streams: [stream({ role: 'main', host: 'CAM.Local' })] })
+      ).host
+    ).toBe('cam.local')
 
-    const [upper, blank] = await fetchLiveCameras()
-    expect(upper.host).toBe('cam.local')
-    expect(blank.host).toBeUndefined()
+    expect(
+      toLiveCameraItem(
+        camera({ streams: [stream({ role: 'main', host: '   ' })] })
+      ).host
+    ).toBeUndefined()
   })
 
-  it('falls back to the sub stream host when main stream is absent', async () => {
-    mockCameras([
-      baseCamera({
+  it('falls back to the sub stream host when the main stream is absent', () => {
+    const item = toLiveCameraItem(
+      camera({
         streams: [
-          stream({
-            role: 'sub',
-            host: '172.16.0.9',
-            width: 704,
-            height: 576,
-          }),
+          stream({ role: 'sub', host: '172.16.0.9', width: 704, height: 576 }),
         ],
-      }),
-    ])
+      })
+    )
 
-    const [cam] = await fetchLiveCameras()
-    expect(cam.host).toBe('172.16.0.9')
-    expect(cam.hasSubStream).toBe(true)
+    expect(item.host).toBe('172.16.0.9')
+    expect(item.hasSubStream).toBe(true)
   })
 
-  it('leaves host and resolution empty when the backend provides no usable data', async () => {
-    mockCameras([
-      // 解密失败：后端不提供 host，宽高为 0
-      baseCamera({
-        id: 'cam-enc',
-        streams: [stream({ role: 'main', host: '', width: 0, height: 0 })],
-      }),
-      // 完全没有码流
-      baseCamera({ id: 'cam-empty', health: 'unknown', session: 'idle' }),
-    ])
+  it('leaves host, resolution and codec defaults empty when there is no stream', () => {
+    const item = toLiveCameraItem(camera())
 
-    const cameras = await fetchLiveCameras()
-    expect(cameras).toHaveLength(2)
-    for (const cam of cameras) {
-      expect(cam.host).toBeUndefined()
-      expect(cam.resolution).toBeUndefined()
+    expect(item.host).toBeUndefined()
+    expect(item.resolution).toBeUndefined()
+    expect(item.hasSubStream).toBe(false)
+    expect(item.codec).toBe('h264')
+  })
+
+  it('treats zero dimensions as unknown instead of rendering 0x0', () => {
+    const item = toLiveCameraItem(
+      camera({ streams: [stream({ role: 'main', width: 0, height: 0 })] })
+    )
+
+    expect(item.resolution).toBeUndefined()
+  })
+
+  it.each([
+    ['online', 'running', 'online'],
+    ['offline', 'idle', 'offline'],
+    ['error', 'idle', 'error'],
+    ['unknown', 'reconnecting', 'reconnecting'],
+    ['unknown', 'idle', 'offline'],
+  ] as const)(
+    'maps health=%s session=%s to status=%s',
+    (health, session, expected) => {
+      const item = toLiveCameraItem(camera({ health, session }))
+      expect(item.status).toBe(expected)
     }
-  })
-
-  it('rejects malformed backend camera data at runtime', async () => {
-    const invalidData: unknown = {
-      items: [
-        {
-          ...baseCamera(),
-          streams: [
-            {
-              ...stream({ role: 'main' }),
-              width: '1920',
-            },
-          ],
-        },
-      ],
-      total: 1,
-    }
-    vi.spyOn(apiClient, 'get').mockResolvedValueOnce(mockResponse(invalidData))
-
-    await expect(fetchLiveCameras()).rejects.toThrow()
-  })
+  )
 })

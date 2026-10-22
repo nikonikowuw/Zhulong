@@ -40,6 +40,9 @@ export interface GetCamerasParams {
   search?: string
 }
 
+/** 后端单页返回条目的硬上限（`httputil.PaginationQuery.Normalize`） */
+const CAMERA_FETCH_PAGE_SIZE = 100
+
 export const camerasApi = {
   /**
    * 获取摄像机分页列表
@@ -119,5 +122,32 @@ export const camerasApi = {
       `/cameras/${id}/diagnose`
     )
     return diagnoseResponseSchema.parse(resp.data.data)
+  },
+
+  /**
+   * 拉取全量摄像机（内部按后端分页上限循环）
+   *
+   * 后端默认 pageSize 为 20、单页上限 100，而 `MaxCameraCapacity` 为 128，
+   * 因此无法用一次请求拿到全部设备。实时预览页侧栏需要完整的设备树，
+   * 不能默默丢掉第二页的设备。
+   */
+  async getAll(): Promise<CameraListResponse> {
+    const first = await camerasApi.getCameras({
+      page: 1,
+      pageSize: CAMERA_FETCH_PAGE_SIZE,
+    })
+    if (first.items.length >= first.total) return first
+
+    const items = [...first.items]
+    const pageCount = Math.ceil(first.total / CAMERA_FETCH_PAGE_SIZE)
+    for (let page = 2; page <= pageCount; page += 1) {
+      const next = await camerasApi.getCameras({
+        page,
+        pageSize: CAMERA_FETCH_PAGE_SIZE,
+      })
+      items.push(...next.items)
+    }
+
+    return { ...first, items, total: first.total }
   },
 }

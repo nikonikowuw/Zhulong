@@ -33,6 +33,23 @@ export function useCameras(
 }
 
 /**
+ * 获取全量摄像机列表（不分页）
+ *
+ * 专为需要完整设备树的页面（如实时预览侧栏）设计。
+ * queryKey 以 `CAMERAS_QUERY_KEY` 为前缀，因此 `useCameraEvents` 的 SSE 增量
+ * 会通过 `setQueriesData` 自动 patch 到这里，无需轮询。
+ */
+export function useAllCameras(): UseQueryResult<CameraListResponse, Error> {
+  return useQuery({
+    queryKey: [...CAMERAS_QUERY_KEY, 'all'],
+    queryFn: () => camerasApi.getAll(),
+    // SSE 是主通道；窗口重新聚焦作为兼底，不做定时轮询
+    staleTime: 60_000,
+    refetchInterval: false,
+  })
+}
+
+/**
  * 获取单台摄像机详情
  */
 export function useCamera(id?: string): UseQueryResult<Camera, Error> {
@@ -129,9 +146,7 @@ export function useCameraCredentials(id: string | null, enabled = false) {
 /**
  * 手动主动诊断 Mutation
  */
-export function useDiagnoseCamera(options?: {
-  suppressGlobalToast?: boolean
-}) {
+export function useDiagnoseCamera(options?: { suppressGlobalToast?: boolean }) {
   return useMutation<DiagnoseResponse, Error, string>({
     mutationFn: (id: string) => camerasApi.diagnose(id),
     meta: {
