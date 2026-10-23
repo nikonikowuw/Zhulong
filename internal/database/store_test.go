@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1448,5 +1450,88 @@ func TestMigration000017_PurgeNTPHeartbeat(t *testing.T) {
 	}
 	if count != 0 {
 		t.Errorf("down migration must not resurrect purged rows, got %d", count)
+	}
+}
+
+func TestSQLiteDSNCarriesPerformancePragmas(t *testing.T) {
+	dsn, err := sqliteDSN(t.TempDir())
+	if err != nil {
+		t.Fatalf("sqliteDSN: %v", err)
+	}
+
+	separator := strings.IndexByte(dsn, '?')
+	if separator < 0 || separator == len(dsn)-1 {
+		t.Fatalf("sqliteDSN(%q) must carry query parameters", dsn)
+	}
+	params, err := url.ParseQuery(dsn[separator+1:])
+	if err != nil {
+		t.Fatalf("parse DSN query %q: %v", dsn, err)
+	}
+
+	cases := map[string]string{
+		"_busy_timeout": "5000",
+		"_foreign_keys": "on",
+		"_journal_mode": "WAL",
+		// WAL 下 synchronous 默认为 FULL，会让每次提交都 fsync；
+		// NORMAL 是写入吞吐的关键配置，缺失即为性能回归。
+		"_synchronous": "NORMAL",
+		"_cache_size":  "-32768",
+	}
+	for key, want := range cases {
+		if got := params.Get(key); got != want {
+			t.Errorf("DSN %s = %q, want %q (full DSN: %s)", key, got, want, dsn)
+		}
+	}
+}
+
+func TestOpenAndMigrateAppliesConnectionPragmas(t *testing.T) {
+	store := New(t.TempDir(), zap.NewNop())
+	ctx := context.Background()
+	if err := store.OpenAndMigrate(ctx); err != nil {
+		t.Fatalf("OpenAndMigrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+
+	sqlDB, err := store.DB().DB()
+	if err != nil {
+		t.Fatalf("get SQL connection pool: %v", err)
+	}
+
+	// 驱动会静默忽略不认识的 DSN 参数；只有读回 PRAGMA 才能证明配置生效。
+	var journalMode string
+	if err := sqlDB.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if !strings.EqualFold(journalMode, "wal") {
+		t.Errorf("PRAGMA journal_mode = %q, want \"wal\"", journalMode)
+	}
+
+	// synchronous: 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA
+	var synchronous int
+	if err := sqlDB.QueryRowContext(ctx, "PRAGMA synchronous").Scan(&synchronous); err != nil {
+		t.Fatalf("PRAGMA synchronous: %v", err)
+	}
+	if synchronous != 1 {
+		t.Errorf("PRAGMA synchronous = %d, want 1 (NORMAL)", synchronous)
+	}
+
+	var cacheSize int
+	if err := sqlDB.QueryRowContext(ctx, "PRAGMA cache_size").Scan(&cacheSize); err != nil {
+		t.Fatalf("PRAGMA cache_size: %v", err)
+	}
+	if cacheSize != -sqlitePageCacheKiB {
+		t.Errorf("PRAGMA cache_size = %d, want %d", cacheSize, -sqlitePageCacheKiB)
+	}
+
+	var foreignKeys int
+	if err := sqlDB.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+		t.Fatalf("PRAGMA foreign_keys: %v", err)
+	}
+	if foreignKeys != 1 {
+		t.Errorf("PRAGMA foreign_keys = %d, want 1", foreignKeys)
 	}
 }

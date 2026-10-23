@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -33,6 +34,16 @@ type Store struct {
 }
 
 var _ DBProvider = (*Store)(nil)
+
+// SQLite 连接参数集中定义，供生产 DSN 与测试断言共用，避免魔法字符串散落。
+const (
+	// sqliteBusyTimeoutMS 是锁冲突时的最长退避等待。
+	sqliteBusyTimeoutMS = 5000
+	// sqlitePageCacheKiB 是单连接页缓存上限（负值表示单位为 KiB）。
+	// 边缘设备（如 RK3568，2-4 GiB 内存）需与 NPU 推理、视频缓冲共享内存，
+	// 32 MiB 足以缓存热索引页，同时不会挤压推理侧。
+	sqlitePageCacheKiB = 32768
+)
 
 // New creates a Store without opening files or database connections.
 func New(dataDirectory string, logger *zap.Logger) *Store {
@@ -148,5 +159,19 @@ func sqliteDSN(dataDirectory string) (string, error) {
 		return "", err
 	}
 	databaseURL := url.URL{Scheme: "file", Path: filepath.ToSlash(absolutePath)}
-	return databaseURL.String() + "?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", nil
+	return databaseURL.String() + "?" + sqlitePragmas().Encode(), nil
+}
+
+// sqlitePragmas 返回生产与测试共用的连接级 PRAGMA 参数。
+func sqlitePragmas() url.Values {
+	params := url.Values{}
+	params.Set("_busy_timeout", strconv.Itoa(sqliteBusyTimeoutMS))
+	params.Set("_foreign_keys", "on")
+	params.Set("_journal_mode", "WAL")
+	// WAL 下 synchronous=NORMAL 仅在 checkpoint 时 fsync：进程崩溃或掉电不会损坏
+	// 数据库文件，最坏丢失最近若干毫秒未 checkpoint 的事务。SQLite 默认的 FULL 会让
+	// 每次提交都 fsync 数据页与 WAL，在 eMMC/SD 卡上把写入吞吐压到百 TPS 量级。
+	params.Set("_synchronous", "NORMAL")
+	params.Set("_cache_size", strconv.Itoa(-sqlitePageCacheKiB))
+	return params
 }

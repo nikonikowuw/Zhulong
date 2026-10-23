@@ -27,24 +27,56 @@
 
 ## 2. 连接池与 PRAGMA 配置
 
-当前宿主将数据库文件命名为 `<data-dir>/zhulong.db`，DSN 使用 SQLite file URL，并配置 `_busy_timeout=5000`、`_foreign_keys=on` 和 `_journal_mode=WAL`。GORM 连接池固定为一个 open/idle connection，避免本地单进程骨架打开多个写连接；GORM 日志级别为 Silent。
+当前宿主将数据库文件命名为 `<data-dir>/zhulong.db`，DSN 使用 SQLite file URL，参数由 `sqlitePragmas()` 统一构造（生产 DSN 与测试断言共用同一来源，禁止在别处手写 PRAGMA 字符串）。GORM 连接池固定为一个 open/idle connection，避免本地单进程骨架打开多个写连接；GORM 日志级别为 Silent。
 
 ```go
-dsn := "file:///absolute/path/zhulong.db?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL"
+// internal/database/store.go
+const (
+	sqliteBusyTimeoutMS = 5000
+	sqlitePageCacheKiB  = 32768 // 负值单位为 KiB，即 32 MiB
+)
+
+func sqlitePragmas() url.Values {
+	params := url.Values{}
+	params.Set("_busy_timeout", strconv.Itoa(sqliteBusyTimeoutMS))
+	params.Set("_foreign_keys", "on")
+	params.Set("_journal_mode", "WAL")
+	params.Set("_synchronous", "NORMAL")
+	params.Set("_cache_size", strconv.Itoa(-sqlitePageCacheKiB))
+	return params
+}
+
 db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-    Logger: gormlog.Default.LogMode(gormlog.Silent),
-    NowFunc: func() time.Time { return time.Now().UTC() },
+	Logger:  gormlog.Default.LogMode(gormlog.Silent),
+	NowFunc: func() time.Time { return time.Now().UTC() },
 })
 sqlDB, err := db.DB()
 sqlDB.SetMaxOpenConns(1)
 sqlDB.SetMaxIdleConns(1)
 ```
 
-迁移器另用 `database/sql` 打开迁移连接，并将连接数设为 1；它使用嵌入的 `iofs` SQL migrations 和 `golang-migrate` SQLite driver。迁移成功后才将 GORM Store 标记 Ready。
+迁移器另用 `database/sql` 打开迁移连接，并将连接数设为 1；它使用嵌入的 `iofs` SQL migrations 和 `golang-migrate` SQLite driver。迁移成功后才将 GORM Store 标记 Ready。迁移连接复用同一 DSN，因此也继承下面的 PRAGMA。
 
 - **`journal_mode=WAL`**：允许并发读取与单写入者模式。
 - **`busy_timeout=5000`**：SQLite 锁冲突等待最长 5 秒。
 - **`foreign_keys=on`**：启用外键约束。
+- **`synchronous=NORMAL`**：⚠️ **性能关键项，不得删除**。WAL 下 NORMAL 只在 checkpoint 时 fsync，进程崩溃或掉电不会损坏数据库文件，最坏丢失最近若干毫秒未 checkpoint 的事务。SQLite 默认的 `FULL` 会让**每次提交都 fsync 数据页与 WAL** —— 在 eMMC/SD 卡上（`fsync` 为毫秒级）这是把写入吞吐压到百 TPS 量级的头号原因，而不是 SQLite 本身的上限。
+- **`cache_size=-32768`**：32 MiB 页缓存（负值单位为 KiB）。边缘设备需与 NPU 推理、视频缓冲共享内存，该值是按 RK3568（2-4 GiB）取的保守值；调大前先确认设备可用内存，**不要**在低内存板子上盲目设成 128 MiB 以上。
+
+### PRAGMA 验证铁律
+
+驱动会**静默忽略**不认识的 DSN 参数名（写错 `_sync_mode` 之类不会有任何报错）。因此修改或审视连接参数时必须读回实际生效值，`internal/database/store_test.go` 中的 `TestOpenAndMigrateAppliesConnectionPragmas` 承担这个守门职责：它断言 `journal_mode=wal`、`synchronous=1(NORMAL)`、`cache_size=-32768`、`foreign_keys=1`。**新增或调整 PRAGMA 时必须同步更新该测试**，只改 DSN 不改断言等于没有验证。
+
+参考实测（2000 条 INSERT，桌面 NVMe；eMMC/SD 上 FULL 的惩罚更显著）：
+
+| 配置 | 总耗时 | TPS | 相对改动前 |
+| --- | --- | --- | --- |
+| `FULL` + 单条提交 | 863 ms | 2 318 | 1× |
+| `NORMAL` + 单条提交 | 69 ms | 28 797 | **12.4×** |
+| `NORMAL` + 每批 100 条（当前路径） | 9 ms | 228 970 | **98.8×** |
+
+结论前置：写入吞吐不足时，**先确认批量路径真的在被调用、PRAGMA 正确**，再考虑换数据库。`internal/record/service.go` 的高频写入必须走 `Create*Batch`（`CreateInBatches(_, 100)`），单条 `Create` 接口仅用于低频管理操作。
+
 
 ---
 
