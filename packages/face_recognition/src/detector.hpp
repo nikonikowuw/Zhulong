@@ -43,9 +43,7 @@ public:
     std::vector<FaceDetection> detect(zhulong::Session& session, const zhulong::Image& image);
 
     /**
-     * @brief 对输入图像执行人脸与人体检测 (CPU 兼容/单测降级路径)
-     * @param image 输入只读帧视图
-     * @return 检出的结构化目标列表 (全黑或无目标图像返回空 vector)
+     * @brief Session-less calls fail closed because no model can produce detections.
      */
     std::vector<FaceDetection> detect(const zhulong::Image& image);
 
@@ -55,7 +53,6 @@ public:
     bool is_onnx() const noexcept { return is_onnx_; }
 
 private:
-    std::vector<FaceDetection> detect_cpu_fallback(const zhulong::Image& image);
     std::vector<FaceDetection> decode_scrfd(
         const std::vector<zhulong::Tensor>& outputs,
         int orig_w, int orig_h, float det_scale,
@@ -96,7 +93,7 @@ public:
     std::vector<PersonBodyDetection> detect(zhulong::Session& session, const zhulong::Image& image);
 
     /**
-     * @brief CPU 单测/降级桩方法
+     * @brief Session-less calls fail closed because no model can produce detections.
      */
     std::vector<PersonBodyDetection> detect(const zhulong::Image& image);
 
@@ -106,7 +103,6 @@ public:
     bool is_onnx() const noexcept { return is_onnx_; }
 
 private:
-    std::vector<PersonBodyDetection> detect_cpu_fallback(const zhulong::Image& image);
     std::vector<PersonBodyDetection> decode_scrfd_person(
         const std::vector<zhulong::Tensor>& outputs,
         int orig_w, int orig_h, float det_scale,

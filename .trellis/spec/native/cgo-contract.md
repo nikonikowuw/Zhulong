@@ -133,7 +133,7 @@ void             zhulong_face_extract_release(void);
 
 - 宿主 `native/src/abi/engine.cpp` 的 `FacePluginLoader` 单例懒加载该插件：`libZhulongEngine.a` 与 `zhulong` 可执行文件**绝不**产生 `libonnxruntime.so` 的 `DT_NEEDED` 依赖，宿主在缺失 ORT 的机器上仍可启动并服务 Web/流媒体；
 - 寻址优先级：`ZHULONG_FACE_PLUGIN_PATH`（**显式覆盖，设置后即为唯一候选，不再静默回退**）→ `ZHULONG_PLUGIN_DIR` → 构建产物目录 → `dladdr` 同目录；
-- 底库录入与视频流识别必须使用同一份模型权重（`det_500m.onnx` + `facelivtv2-l.onnx`），保证两侧特征处于同一度量空间。
+- 底库录入与视频流识别必须使用同一目标平台的模型权重（ONNX 后端使用 `.onnx`；RKNN profile 只使用 `.rknn`），保证两侧特征处于同一度量空间。
 
 ### 6.2 Fail-Closed 闭环报错（严禁静默退化）
 
@@ -141,11 +141,10 @@ void             zhulong_face_extract_release(void);
 | :--- | :--- | :--- | :--- | :--- |
 | 成功 | `ZHULONG_PLUGIN_OK` | `Zhulong_OK` | `nil` | 200 |
 | 插件缺失 / 符号缺失 / 模型不可用 | *(dlopen 失败)* / `ERR_INTERNAL` | `Zhulong_ERR_UNSUPPORTED` / `ERR_INTERNAL` | `ErrUnsupported` / `ErrInternal` | 500 |
-| 检出结果来自 CPU 降级桩（`is_real_detection == false`） | `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED` | `Zhulong_ERR_UNSUPPORTED` | `ErrUnsupported` | 500 |
-| 真实推理但未检出人脸（含全黑图） | `ZHULONG_PLUGIN_ERR_NOT_FOUND` | `Zhulong_ERR_NOT_FOUND` | `ErrNotFound` | 400 `NO_FACE_DETECTED` |
+| 模型未检出人脸或输出无法解码（含全黑图和 CPU 测试桩输出） | `ZHULONG_PLUGIN_ERR_NOT_FOUND` | `Zhulong_ERR_NOT_FOUND` | `ErrNotFound` | 400 `NO_FACE_DETECTED` |
 | 参数非法（空指针 / 尺寸 / stride / 容量 < 512） | `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT` | `Zhulong_ERR_INVALID_ARGUMENT` | `ErrInvalidArgument` | 400 |
 
-⚠️ **严禁回退到数学模拟特征**：任何一条失败路径都不允许写出向量，否则会向人员底库写入无效特征并让后续视频流识别永久失灵。检测器在真实 9 头 SCRFD 路径上**不得**再用 CPU 桩伪造检出框（`FaceDetector::detect` 的桩回退只允许出现在非 9 头输出，即 CPU/桩后端）。
+⚠️ **严禁回退到数学模拟特征或合成检测框**：任何失败路径都不允许写出向量。真实模型输出为空或结构不合法时一律无检测结果；CPU 测试桩输出同样不得转成亮度框、关键点或特征向量。
 
 ### 6.3 TTL 空闲回收与生命周期汇合
 
@@ -155,7 +154,7 @@ void             zhulong_face_extract_release(void);
 
 ### 6.4 验证边界
 
-- `ZhulongFaceFeatureExtract` 在 ONNX 后端断言真实人脸样本产出 512 维单位特征，在 CPU 桩后端断言 Fail-Closed（`UNSUPPORTED`）；两个分支由 CMake 宏 `ZHULONG_TEST_ONNX_INFERENCE` 区分。
+- `ZhulongFaceFeatureExtract` 在 ONNX 后端用真实人脸样本断言产出 512 维单位特征；CPU 测试桩无模型检测能力，噪点与样本输入均断言 `NOT_FOUND`，确保不会合成检测框或特征向量。两个分支由 CMake 宏 `ZHULONG_TEST_ONNX_INFERENCE` 区分。
 - `ZhulongFacePluginTtl` 使用最小插件替身（`native/tests/mock_face_plugin.cpp`）黑盒验证「TTL 卸载 → 抽走插件文件后报 `UNSUPPORTED` → 恢复文件后重新唤醒」。
 
 

@@ -80,19 +80,8 @@ int main(int argc, char* argv[]) {
     rc = api.process(task, &frame, &result);
     assert(rc == ZHULONG_PLUGIN_OK && result != nullptr);
     assert(result->result_type == ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE);
-    assert(result->count >= 1);
+    assert(result->count == 0);
 
-    auto* vehicles = static_cast<const zhulong_vehicle_item*>(result->data);
-    assert(vehicles != nullptr);
-    assert(vehicles[0].plate_count >= 1);
-    assert(vehicles[0].plates != nullptr);
-    assert(std::strlen(vehicles[0].plates[0].plate_number) > 0);
-    assert(std::strlen(vehicles[0].plates[0].plate_color) > 0);
-    std::cout << "[✓] VehicleStructure output: vehicle_box=["
-              << vehicles[0].vehicle_box[0] << "," << vehicles[0].vehicle_box[1] << ","
-              << vehicles[0].vehicle_box[2] << "," << vehicles[0].vehicle_box[3] << "], plate="
-              << vehicles[0].plates[0].plate_number << " (" << vehicles[0].plates[0].plate_color << ")"
-              << std::endl;
 
     // 5. 释放结果
     api.result_release(result);

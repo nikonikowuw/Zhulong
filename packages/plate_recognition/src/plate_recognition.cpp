@@ -67,11 +67,13 @@ public:
 
     zhulong_status_t init(const std::string& config_json) {
         (void)config_json;
-        // 尝试加载检测模型与识别模型
-        det_model_ = zhulong::Model::load(resolve_model_path("models/plate_detect.onnx"));
-        rec_model_ = zhulong::Model::load(resolve_model_path("models/plate_rec_color.onnx"));
-
-        // 即使模型权重未挂载，也允许通过降级通路完成黑盒验收与轻量化测试
+        const std::string detection_model = std::string("models/plate_detect") + zhulong::TARGET_MODEL_EXT;
+        const std::string recognition_model = std::string("models/plate_rec_color") + zhulong::TARGET_MODEL_EXT;
+        det_model_ = zhulong::Model::load(resolve_model_path(detection_model));
+        rec_model_ = zhulong::Model::load(resolve_model_path(recognition_model));
+        if (!det_model_.valid() || !rec_model_.valid()) {
+            return ZHULONG_PLUGIN_ERR_NOT_FOUND;
+        }
         return ZHULONG_PLUGIN_OK;
     }
 
@@ -113,8 +115,10 @@ public:
             RecognizedPlate rec;
             if (rec_session && rec_session->valid()) {
                 rec = recognizer_.recognize(*rec_session, raw, d.box, d.class_id);
-            } else {
-                rec = recognizer_.recognize_fallback(raw, d.box, d.class_id);
+            }
+
+            if (rec.plate_number.empty()) {
+                continue;
             }
 
             zhulong::VehicleItem veh;

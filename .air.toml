@@ -5,7 +5,14 @@ root = "."
 tmp_dir = "build/air"
 
 [build]
-  cmd = "python3 native/scripts/build.py go build -o ./build/air/Zhulong ./cmd/Zhulong"
+  # ⚠️ 后端选择必须在这里显式给出：Air 会独立调用 build.py，而每次调用都会重新 configure
+  # CMake，缓存里的 ZHULONG_INFERENCE_BACKEND 会被无参 configure 重置回 cpu，
+  # 从而静默重链出 CpuInferenceBackend 桩后端——算法插件仍能 init 成功、health 仍 ready，
+  # 但 forward() 只返回固定的 1x6 张量，SCRFD 拿不到 9 个输出头，于是 0 检出、0 记录。
+  # 默认 onnx（Host 开发机必须真推理）；临时想跑桩压测可用
+  # `ZHULONG_INFERENCE_BACKEND=cpu make dev` 覆盖。
+  # 注意保持与 `make dev` / `make native-build` 的选择一致，否则两者会来回重编 native。
+  cmd = "ZHULONG_INFERENCE_BACKEND=${ZHULONG_INFERENCE_BACKEND:-onnx} python3 native/scripts/build.py go build -o ./build/air/Zhulong ./cmd/Zhulong"
   bin = "./build/air/Zhulong"
   full_bin = "./build/air/Zhulong"
   include_ext = ["go", "toml"]

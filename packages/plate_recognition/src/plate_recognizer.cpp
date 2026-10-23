@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstring>
 
 namespace zhulong::plate {
 
@@ -64,7 +63,7 @@ RecognizedPlate PlateRecognizer::recognize(
     int32_t class_id
 ) {
     if (!session.valid() || raw.planes[0] == nullptr || raw.width <= 0 || raw.height <= 0) {
-        return recognize_fallback(raw, box, class_id);
+        return {};
     }
 
     int x1 = std::clamp(static_cast<int>(box[0] * raw.width), 0, raw.width - 1);
@@ -75,7 +74,7 @@ RecognizedPlate PlateRecognizer::recognize(
     int crop_h = y2 - y1;
 
     if (crop_w <= 0 || crop_h <= 0) {
-        return recognize_fallback(raw, box, class_id);
+        return {};
     }
 
     constexpr int target_w = 168;
@@ -131,8 +130,8 @@ RecognizedPlate PlateRecognizer::recognize(
     }
 
     auto outputs = session.forward({input_tensor});
-    if (outputs.empty() || outputs[0].element_count() < 21 * NUM_PLATE_CHARS) {
-        return recognize_fallback(raw, box, class_id);
+    if (outputs.empty() || outputs[0].element_count() < NUM_PLATE_CHARS) {
+        return {};
     }
 
     RecognizedPlate res;
@@ -140,6 +139,9 @@ RecognizedPlate PlateRecognizer::recognize(
 
     // 1. 解析车牌字符序列 (CTC Greedy Decode)
     const float* char_logits = outputs[0].data<float>();
+    if (!char_logits) {
+        return {};
+    }
     size_t timesteps = 21;
     size_t num_classes = NUM_PLATE_CHARS;
 
@@ -149,14 +151,20 @@ RecognizedPlate PlateRecognizer::recognize(
         num_classes = out0_shape[2];
     }
 
+    if (timesteps == 0 || num_classes == 0 || timesteps * num_classes > outputs[0].element_count()) {
+        return {};
+    }
+
     size_t pre_idx = 0;
+    size_t recognized_chars = 0;
+    float confidence_sum = 0.0f;
     std::string plate_no;
 
     for (size_t t = 0; t < timesteps; ++t) {
         const float* step_logits = char_logits + t * num_classes;
         size_t best_c = 0;
         float max_val = step_logits[0];
-        for (size_t c = 1; c < num_classes && c < NUM_PLATE_CHARS; ++c) {
+        for (size_t c = 1; c < num_classes; ++c) {
             if (step_logits[c] > max_val) {
                 max_val = step_logits[c];
                 best_c = c;
@@ -166,44 +174,39 @@ RecognizedPlate PlateRecognizer::recognize(
         // CTC 规则：跳过 0 占位符 ('#')，且去除连续重复字符
         if (best_c != 0 && best_c != pre_idx && best_c < NUM_PLATE_CHARS) {
             plate_no += PLATE_NAMES[best_c];
+            float exp_sum = 0.0f;
+            for (size_t c = 0; c < num_classes; ++c) {
+                exp_sum += std::exp(step_logits[c] - max_val);
+            }
+            if (exp_sum > 0.0f && std::isfinite(exp_sum)) {
+                confidence_sum += 1.0f / exp_sum;
+                ++recognized_chars;
+            }
         }
         pre_idx = best_c;
     }
 
-    res.plate_number = plate_no.empty() ? "粤B88888" : plate_no;
-    res.score = 0.96f;
+    if (plate_no.empty() || recognized_chars == 0) {
+        return {};
+    }
+    res.plate_number = plate_no;
+    res.score = confidence_sum / static_cast<float>(recognized_chars);
 
-    // 2. 解析车牌颜色
     if (outputs.size() > 1 && outputs[1].element_count() >= NUM_COLORS) {
         const float* color_logits = outputs[1].data<float>();
-        size_t best_color = 1; // 默认蓝色
-        float max_color_val = color_logits[0];
-        for (size_t i = 1; i < NUM_COLORS; ++i) {
-            if (color_logits[i] > max_color_val) {
-                max_color_val = color_logits[i];
-                best_color = i;
+        if (color_logits) {
+            size_t best_color = 0;
+            float max_color_val = color_logits[0];
+            for (size_t i = 1; i < NUM_COLORS; ++i) {
+                if (color_logits[i] > max_color_val) {
+                    max_color_val = color_logits[i];
+                    best_color = i;
+                }
             }
+            res.plate_color = COLOR_NAMES[best_color];
         }
-        res.plate_color = COLOR_NAMES[best_color];
-    } else {
-        res.plate_color = "蓝色";
     }
 
-    return res;
-}
-
-RecognizedPlate PlateRecognizer::recognize_fallback(
-    const zhulong_frame_view& raw,
-    const std::array<float, 4>& box,
-    int32_t class_id
-) {
-    (void)raw;
-    (void)box;
-    RecognizedPlate res;
-    res.plate_number = "粤B88888";
-    res.plate_color = (class_id == 1) ? "黄色" : "蓝色";
-    res.score = 0.98f;
-    res.plate_type = class_id;
     return res;
 }
 

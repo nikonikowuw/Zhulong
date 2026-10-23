@@ -232,12 +232,14 @@ endif()
 # ==============================================================================
 add_library(ZhulongAlgoRuntime SHARED
     src/platform/dmabuf/dmabuf_allocator.cpp
-    src/algorithm/runtime/cpu_inference_backend.cpp
     src/algorithm/runtime/cpu_vision_backend.cpp
     src/algorithm/runtime/gallery_registry.cpp
     src/algorithm/runtime/letterbox_geometry.cpp
     src/algorithm/runtime/runtime_factory.cpp
 )
+if(NOT ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
+    target_sources(ZhulongAlgoRuntime PRIVATE src/algorithm/runtime/cpu_inference_backend.cpp)
+endif()
 target_compile_features(ZhulongAlgoRuntime PUBLIC cxx_std_17)
 target_include_directories(ZhulongAlgoRuntime
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -252,7 +254,7 @@ if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
     target_sources(ZhulongAlgoRuntime PRIVATE src/backends/rknn/rknn_inference_backend.cpp)
     target_include_directories(ZhulongAlgoRuntime PRIVATE ${ZHULONG_RKNN_ROOT}/include)
     target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_RKNN_ROOT}/lib/librknnrt.so Threads::Threads)
-    target_compile_definitions(ZhulongAlgoRuntime PRIVATE ZHULONG_INFERENCE_RKNN=1)
+    target_compile_definitions(ZhulongAlgoRuntime PUBLIC ZHULONG_INFERENCE_RKNN=1)
     # ⚠️ 产物卫生（AC6）：CMake 会为「构建树之外的链接库」自动加 BUILD_RPATH，把开发机
     # 绝对路径烧进 .so（实测为 /home/niko/dev/Go/Zhulong/native/vendor/rknpu2/lib）。
     # 该 .so 要 scp 到 RK3568，不应携带宿主机路径。清空 BUILD_RPATH；
@@ -265,8 +267,12 @@ if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
     target_sources(ZhulongAlgoRuntime PRIVATE src/backends/onnx/onnx_inference_backend.cpp)
     target_include_directories(ZhulongAlgoRuntime SYSTEM PRIVATE ${ZHULONG_ONNX_ROOT}/include)
     target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so Threads::Threads)
-    target_compile_definitions(ZhulongAlgoRuntime PRIVATE ZHULONG_INFERENCE_ONNX=1)
+    target_compile_definitions(ZhulongAlgoRuntime PUBLIC ZHULONG_INFERENCE_ONNX=1)
     set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")
+endif()
+
+if(ZHULONG_INFERENCE_BACKEND STREQUAL "cpu")
+    target_compile_definitions(ZhulongAlgoRuntime PUBLIC ZHULONG_INFERENCE_CPU=1)
 endif()
 
 # RGA 视觉后端：同样只链接进 ZhulongAlgoRuntime（.so），宿主绝不链接。
@@ -360,7 +366,18 @@ target_include_directories(FaceRecognitionPlugin PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src
 )
 target_link_libraries(FaceRecognitionPlugin PRIVATE ZhulongAlgoRuntime)
-set_target_properties(FaceRecognitionPlugin PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+set(PLUGIN_RPATH "$ORIGIN")
+if(APPLE)
+    set(PLUGIN_RPATH "@loader_path")
+endif()
+
+set_target_properties(FaceRecognitionPlugin PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+    BUILD_RPATH_USE_ORIGIN TRUE
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "${PLUGIN_RPATH}"
+)
 
 # ==============================================================================
 #                      4.6 构建车牌识别算法插件 (PlateRecognitionPlugin)
@@ -378,7 +395,13 @@ target_include_directories(PlateRecognitionPlugin PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/src
 )
 target_link_libraries(PlateRecognitionPlugin PRIVATE ZhulongAlgoRuntime)
-set_target_properties(PlateRecognitionPlugin PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+set_target_properties(PlateRecognitionPlugin PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+    BUILD_RPATH_USE_ORIGIN TRUE
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "${PLUGIN_RPATH}"
+)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(PLUGIN_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/cmake/plugin-exports.map")
@@ -470,12 +493,7 @@ if(BUILD_TESTING)
     add_test(NAME ZhulongAlgoRunnerGallery COMMAND ZhulongAlgoRunnerGalleryTests)
     set_tests_properties(ZhulongAlgoRunnerGallery PROPERTIES TIMEOUT 10)
 
-    # 人脸识别脱机插件单元测试（CPU 桩后端验包自测）
-    #
-    # ⚠️ 该用例依赖 CPU 桩后端在合成噪点图上产生的确定性降级检出，并用 CPU 桩提取器为底库
-    #    播种同一特征，因此只在 CPU 推理后端下成立。真实 ONNX/RKNN 后端在合成噪点图上
-    #    不会检出人脸（这正是要求的闭环语义，见 native/src/abi/engine.cpp 的 Fail-Closed 契约），
-    #    其插件 C ABI 全链路由 ZhulongFaceRecognitionOnnx 使用真实人脸样本覆盖。
+    # CPU profile tests verify that malformed/mock inference outputs fail closed without synthetic boxes.
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "cpu")
         add_executable(ZhulongFaceRecognitionPluginTests
             tests/face_recognition_plugin_test.cpp

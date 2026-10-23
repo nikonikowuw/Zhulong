@@ -17,7 +17,6 @@ public:
     PlateDetector() = default;
 
     std::vector<PlateBoxDetection> detect(zhulong::Session& session, const zhulong::Image& image);
-    std::vector<PlateBoxDetection> detect_fallback(const zhulong::Image& image);
 
     void set_confidence_threshold(float conf) noexcept { conf_threshold_ = conf; }
     void set_nms_threshold(float nms) noexcept { nms_threshold_ = nms; }

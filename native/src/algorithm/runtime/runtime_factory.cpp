@@ -8,8 +8,11 @@
  */
 
 #include "runtime_factory.hpp"
-#include "cpu_inference_backend.hpp"
 #include "cpu_vision_backend.hpp"
+
+#if !defined(ZHULONG_INFERENCE_RKNN)
+#include "cpu_inference_backend.hpp"
+#endif
 
 #ifdef ZHULONG_INFERENCE_RKNN
 #include <backends/rknn/rknn_inference_backend.hpp>

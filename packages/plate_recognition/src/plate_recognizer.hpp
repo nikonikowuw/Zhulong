@@ -23,12 +23,6 @@ public:
         const std::array<float, 4>& box,
         int32_t class_id
     );
-
-    RecognizedPlate recognize_fallback(
-        const zhulong_frame_view& raw,
-        const std::array<float, 4>& box,
-        int32_t class_id
-    );
 };
 
 } // namespace zhulong::plate

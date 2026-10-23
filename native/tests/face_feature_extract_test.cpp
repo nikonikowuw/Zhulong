@@ -5,8 +5,8 @@
  * 测试在两种推理后端配置下都必须通过，但断言语义不同：
  *   - ZHULONG_TEST_ONNX_INFERENCE（ZHULONG_INFERENCE_BACKEND=onnx）：
  *     真实人脸样本必须检出并产出 512 维 L2 单位特征；无脸图必须返回 NOT_FOUND；
- *   - CPU 桩后端：不具备真实人脸能力，必须闭环报错（UNSUPPORTED），
- *     绝不允许用桩坐标伪造出「看起来有效」的特征向量。
+ *   - CPU test backend: has no face model, so synthetic/noise inputs and the sample fixture must fail closed with NOT_FOUND.
+ *     It must never synthesize boxes or feature vectors.
  */
 
 #include "Zhulong/engine.h"
@@ -114,14 +114,14 @@ int main(int argc, char** argv) {
     // 2. 全黑无脸图片：两种后端都必须返回 NOT_FOUND
     if (Zhulong_engine_extract_face_feature(engine, pixels.data(), 100, 100, 300, 2, features, &dim) != Zhulong_ERR_NOT_FOUND) return 10;
 
-    // 3. 纯噪点无脸图片：真实后端返回 NOT_FOUND；桩后端必须闭环报错而不是伪造特征
+    // 3. Pure-noise input has no model-backed detection and must not produce synthetic features.
     for (size_t i = 0; i < pixels.size(); ++i) {
         pixels[i] = static_cast<uint8_t>((i * 7 + 13) % 256);
     }
     dim = kFeatureDim;
     {
         int rc = Zhulong_engine_extract_face_feature(engine, pixels.data(), 100, 100, 0, 2, features, &dim);
-        int expected = kRealInference ? Zhulong_ERR_NOT_FOUND : Zhulong_ERR_UNSUPPORTED;
+        int expected = Zhulong_ERR_NOT_FOUND;
         if (rc != expected) {
             std::cerr << "noise image: expected rc=" << expected << ", got " << rc << std::endl;
             return 11;
@@ -142,9 +142,9 @@ int main(int argc, char** argv) {
         engine, sample.rgb.data(), sample.width, sample.height, sample.width * 3, 2, rgb_features, &dim);
 
     if (!kRealInference) {
-        // CPU 桩后端不具备真实人脸能力：必须显式 UNSUPPORTED，严禁返回伪特征
-        if (rc != Zhulong_ERR_UNSUPPORTED) {
-            std::cerr << "stub backend: expected fail-closed UNSUPPORTED, got rc=" << rc << std::endl;
+        // CPU test backend has no real face model and must not synthesize a detection or feature.
+        if (rc != Zhulong_ERR_NOT_FOUND) {
+            std::cerr << "CPU test backend: expected no-detection NOT_FOUND, got rc=" << rc << std::endl;
             return 13;
         }
     } else {

@@ -10,7 +10,7 @@
 
 | 变量 | 取值 | 说明 |
 | :--- | :--- | :--- |
-| `ZHULONG_INFERENCE_BACKEND` | `cpu`（默认）\| `rknn` \| `onnx` | 推理后端选择 |
+| `ZHULONG_INFERENCE_BACKEND` | `cpu`（测试桩）\| `rknn` \| `onnx` | 推理后端选择；`cpu` 不代表真实 CPU 模型推理 |
 | `ZHULONG_VISION_BACKEND` | `cpu`（默认）\| `rga` | 视觉前处理后端选择 |
 | `ZHULONG_RKNN_ROOT` | 路径 | 仅 `rknn` 需要；须含 `include/rknn_api.h` 与 `lib/librknnrt.so` |
 | `ZHULONG_ONNX_ROOT` | 路径 | 仅 `onnx` 需要；须含 `include/onnxruntime_cxx_api.h` 与 `lib/libonnxruntime.so` |
@@ -19,7 +19,9 @@
 - **编译防御**：`rknn` 缺 `ZHULONG_RKNN_ROOT`、`onnx` 缺 `ZHULONG_ONNX_ROOT` 或 `rga` 缺 `ZHULONG_RGA_ROOT` 时，CMake 触发 `FATAL_ERROR`（fail closed）。
 - **正交性**：两个开关完全解耦，支持任意组合（如「RKNN 推理 + CPU 前处理」、「RKNN 推理 + RGA 前处理」等）。
 - **目标产物归属**：后端实现直接编译进 `libzhulong_algo_runtime.so`。宿主二进制 `Zhulong` 仅静态链接 `libZhulongEngine.a`，**严禁向宿主引入任何厂商 SDK 动态库依赖**。
-- **Profile 分流**：`cpu` 与 `rknn` 采用不同的交叉 profile（`native/profiles/rk3568.json` 与 `rk3568-rknn.json`），避免 mock 插件在 rknn profile 下因缺少真实模型而启动失败。
+- **Profile 分流**：`cpu` 与 `rknn` 采用不同的交叉 profile（`native/profiles/rk3568.json` 与 `rk3568-rknn.json`）；CPU 推理后端仅供测试桩使用，RKNN profile 不编译 `cpu_inference_backend.cpp`。
+- **RKNN 模型闭环**：目标为 ARM/RKNN 时算法包只解析 `.rknn`，不探测 `.onnx` 或 `.weights`。检测器、特征提取器和 OCR 遇到缺失会话、预处理失败或无效输出必须返回空/错误结果，禁止基于亮度生成框、固定特征、固定车牌文本或固定置信度。
+- **板端模型边界**：`face_recognition/targets/rk3568` 已提供 RKNN 模型；当前 `plate_recognition` 只有 CPU ONNX 模型，没有 RKNN 包，因此 RKNN 运行时不得加载其 ONNX 资产，也不得以模拟结果替代。
 
 ### 1.1 后端的运行期入口与优先级（环境变量是统一开关）
 
@@ -270,7 +272,8 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
    - 算法插件（如 `FaceRecognitionPlugin`）通过检测模型输入张量的形状与数据类型（`[1, 3, H, W]` Float32 vs `[1, H, W, 3]` UInt8），动态自适应采用 NCHW 归一化 Float32 张量（ONNX SCRFD: `(x - 127.5f)/128.0f`；ArcFace/FaceLiVTv2: `(x - 127.5f)/127.5f`）或 NHWC 裸字节张量（RKNN），使上层应用与推理引擎布局约束完全解耦。
    - 特征提取输出 512 维向量在插件内原地执行 L2 归一化（Unit Norm），确保后续 1:N 余弦相似度比对稳定对齐黄金基准。
 2. **测试环境 Mock 委派规范**：
-   - 在启用 `ZHULONG_INFERENCE_BACKEND=onnx` 构建时，通用 Runner/Broker 单元测试可能加载 `mock.model` 或以 `.weights` 结尾的桩模型。`OnnxInferenceBackend` 对符合 Mock 规约的模型透明委派至 `CpuInferenceBackend`，而对于真实 `.onnx` 模型或非法/损毁文件则执行严格的 ONNX 格式校验与错误码映射，兼顾了通用测试桩复用与 ONNX 严苛错误边界。
+   - 在启用 `ZHULONG_INFERENCE_BACKEND=onnx` 构建时，通用 Runner/Broker 单元测试可能加载 `mock.model` 或以 `.weights` 结尾的桩模型。`OnnxInferenceBackend` 对符合 Mock 规约的模型透明委派至 `CpuInferenceBackend`，仅用于通用测试；算法包不得将该委派结果当作真实检测、特征或 OCR 输出。
+   - 对真实 `.onnx` 模型或非法/损毁文件仍执行严格的 ONNX 格式校验与错误码映射。
 
 ---
 

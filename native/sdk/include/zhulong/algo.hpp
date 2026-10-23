@@ -31,6 +31,18 @@
 
 namespace zhulong {
 
+/**
+ * @brief 目标平台模型权重文件扩展名
+ *
+ * 在 RKNN 构建配置（或 ARM Linux 默认）下为 ".rknn"；
+ * 在 ONNX 构建配置、macOS（含 Apple Silicon）与 CPU 桩配置下为 ".onnx"。
+ */
+#if defined(ZHULONG_INFERENCE_RKNN) || ((defined(__arm__) || defined(__aarch64__)) && !defined(__APPLE__) && !defined(ZHULONG_INFERENCE_ONNX) && !defined(ZHULONG_INFERENCE_CPU))
+inline constexpr const char* TARGET_MODEL_EXT = ".rknn";
+#else
+inline constexpr const char* TARGET_MODEL_EXT = ".onnx";
+#endif
+
 using GalleryRegistry = zhulong::runtime::GalleryRegistry;
 using FaceTemplate = zhulong::runtime::FaceTemplate;
 

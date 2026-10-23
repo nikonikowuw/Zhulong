@@ -39,10 +39,10 @@
 1. **真实人体框保障**：优先使用人体检测模型预测出的真实全身框作为 `body_box`（禁止通过人脸宽高比外推“脑补”人体框，以防背身/低头/遮挡时整个人体漏检）；
 2. **空间挂载准则 (Spatial Association)**：
    - 人脸中心落入人体框上半身（$y \le y_{top} + 0.45 \cdot h$）且人脸在人体内的交并覆盖比 $\text{IoF} \ge 0.50$ 时，该人脸挂载进对应人体的 `faces` 列表；
-3. **退化与兜底保全**：
-   - **背身/无正脸人体**：生成 `faces` 为空的 `zhulong_person_item`（保留真实 `body_box` 与置信度），供宿主生成人员抓拍记录与周界报警；
-   - **近景特写人脸**：未匹配到任何人体框的人脸，兜底生成 `body_box = face_box` 的 `zhulong_person_item`，保证人脸比对与底库检索结果不丢失；
-   - **脱机桩/纯人脸退化语义**：当无真实神经网络人体检出时（如 CPU 桩单测环境），每个检出人脸映射为一个 `zhulong_person_item`（`track_id=0`，`body_box=face_box`，`body_score=1.0`）。
+3. **真实检测的结构化语义**：
+   - **背身/无正脸人体**：模型检出的真实全身框可以生成 `faces` 为空的 `zhulong_person_item`，供宿主生成人员抓拍记录与周界报警；
+   - **近景特写人脸**：真实检出但未匹配人体框的人脸，可以生成 `body_box = face_box` 的 `zhulong_person_item`，保证人脸比对结果不丢失；
+   - 人体/人脸会话缺失、预处理失败或输出形状不合法时返回空结果；不得由亮度、固定分数或外推坐标合成检测结果。
 
 插件入口声明使用 `ZHULONG_PLUGIN_EXPORT`。启用 hidden default visibility 时，只显式导出 `zhulong_plugin_get_api`；Linux 示例插件还使用 GNU ld version script 将其他定义符号设为 local（仅靠编译器 visibility 可能在 sanitizer 构建暴露弱 RTTI 符号）。CMake 示例插件目标定义 `ZHULONG_PLUGIN_BUILD` 并设置 hidden C++ / inline visibility。
 

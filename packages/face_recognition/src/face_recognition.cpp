@@ -78,36 +78,11 @@ static std::string resolve_model_path(const std::string& rel_path) {
     return rel_path;
 }
 
-// 模型扩展名按目标架构择优：ARM 板端优先 RKNN，其余平台优先 ONNX；两者都缺失时回退历史 .weights 桩。
-#if defined(__arm__) || defined(__aarch64__)
-constexpr const char* PREFERRED_MODEL_EXT = ".rknn";
-constexpr const char* FALLBACK_MODEL_EXT = ".onnx";
-#else
-constexpr const char* PREFERRED_MODEL_EXT = ".onnx";
-constexpr const char* FALLBACK_MODEL_EXT = ".rknn";
-#endif
-
-/**
- * @brief 按「首选扩展名 → 回退扩展名 → .weights 桩」顺序加载模型
- *
- * 检测与特征提取两条流水线共享同一套寻址与择优逻辑，避免两处实现漂移。
- *
- * @param base_name 不含扩展名的模型相对路径（如 "models/det_500m"）
- * @param[out] is_onnx 命中的模型是否为 ONNX 格式（决定预处理张量布局）
- * @return 加载成功的模型实例；全部候选失败时返回 valid() == false 的空模型
- */
-static zhulong::Model load_model_preferred(const char* base_name, bool& is_onnx) {
-    const std::string base(base_name);
-    const char* candidates[] = {PREFERRED_MODEL_EXT, FALLBACK_MODEL_EXT, ".weights"};
-    for (const char* ext : candidates) {
-        zhulong::Model model = zhulong::Model::load(resolve_model_path(base + ext));
-        if (model.valid()) {
-            is_onnx = (std::string(ext) == ".onnx");
-            return model;
-        }
-    }
-    is_onnx = false;
-    return zhulong::Model();
+static zhulong::Model load_target_model(const char* base_name, bool& is_onnx) {
+    const std::string path = resolve_model_path(std::string(base_name) + zhulong::TARGET_MODEL_EXT);
+    zhulong::Model model = zhulong::Model::load(path);
+    is_onnx = model.valid() && std::string(zhulong::TARGET_MODEL_EXT) == ".onnx";
+    return model;
 }
 
 class FaceRecognitionPlugin {
@@ -119,15 +94,15 @@ public:
 
         // 1. 加载人体检测模型 (SCRFD scrfd_person_2.5g)
         bool person_is_onnx = false;
-        person_model_ = load_model_preferred("models/scrfd_person_2.5g", person_is_onnx);
+        person_model_ = load_target_model("models/scrfd_person_2.5g", person_is_onnx);
 
         // 2. 加载人脸检测模型 (SCRFD det_500m)
         bool det_is_onnx = false;
-        det_model_ = load_model_preferred("models/det_500m", det_is_onnx);
+        det_model_ = load_target_model("models/det_500m", det_is_onnx);
 
         // 3. 加载人脸特征提取模型 (FaceLiVTv2-L)
         bool rec_is_onnx = false;
-        rec_model_ = load_model_preferred("models/facelivtv2-l", rec_is_onnx);
+        rec_model_ = load_target_model("models/facelivtv2-l", rec_is_onnx);
 
         if (!det_model_.valid() || !rec_model_.valid()) {
             return ZHULONG_PLUGIN_ERR_INTERNAL;
@@ -200,6 +175,10 @@ public:
         processed_faces.reserve(face_dets.size());
 
         for (auto& det : face_dets) {
+            if (!det.is_real_detection || !rec_session || !rec_session->valid()) {
+                continue;
+            }
+
             std::array<Point2f, 5> src_pixels;
             if (det.landmarks_pixels[0].x > 0.0f || det.landmarks_pixels[0].y > 0.0f) {
                 src_pixels = det.landmarks_pixels;
@@ -216,16 +195,12 @@ public:
             if (Aligner::estimate_similarity_transform(src_pixels, affine_mat)) {
                 zhulong::Tensor rec_input({1, 112, 112, 3}, zhulong::DataType::UINT8);
                 if (Aligner::crop_and_align_direct(image, affine_mat, rec_input.data<uint8_t>(), 112, 112)) {
-                    if (det.is_real_detection && rec_session && rec_session->valid()) {
-                        probe_features = extractor_.extract(*rec_session, rec_input);
-                    } else {
-                        probe_features = extractor_.extract(rec_input.data<uint8_t>(), 112, 112, det.face_box);
-                    }
+                    probe_features = extractor_.extract(*rec_session, rec_input);
                 }
             }
 
             if (probe_features.size() != 512) {
-                probe_features.assign(512, 0.0f);
+                continue;
             }
 
             MatchResult match_res = matcher_.match(probe_features.data(), 512, *gallery_snapshot);
@@ -534,11 +509,11 @@ private:
 
         // 1. 加载人脸检测模型 (SCRFD det_500m)
         bool det_is_onnx = false;
-        det_model_ = load_model_preferred("models/det_500m", det_is_onnx);
+        det_model_ = load_target_model("models/det_500m", det_is_onnx);
 
         // 2. 加载人脸特征提取模型 (FaceLiVTv2-L)
         bool rec_is_onnx = false;
-        rec_model_ = load_model_preferred("models/facelivtv2-l", rec_is_onnx);
+        rec_model_ = load_target_model("models/facelivtv2-l", rec_is_onnx);
 
         // 模型缺失属于「能力不可用」，绝不等同于「图中没有人脸」：必须闭环报错，禁止伪造特征。
         if (!det_model_.valid() || !rec_model_.valid()) {

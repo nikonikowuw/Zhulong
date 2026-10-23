@@ -43,7 +43,7 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
     }
 
     if (!session.valid()) {
-        return detect_cpu_fallback(image);
+        return {};
     }
 
     const int orig_w = raw.width;
@@ -85,7 +85,7 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
     }
 
     if (status != ZHULONG_PLUGIN_OK) {
-        return detect_cpu_fallback(image);
+        return {};
     }
 
     // 2. NPU / 后端前向推理
@@ -96,7 +96,7 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
         const uint8_t* src_hwc = input_tensor.data<uint8_t>();
         float* dst_nchw = onnx_input.data<float>();
         if (!src_hwc || !dst_nchw) {
-            return detect_cpu_fallback(image);
+            return {};
         }
         constexpr int plane_size = model_w * model_h;
         float* dst_r = dst_nchw;
@@ -114,13 +114,11 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
         outputs = session.forward({input_tensor});
     }
 
-    // 3. 检查是否为真实 SCRFD 9 头输出；若非 9 头（如 CPU Mock 桩），平滑回退到桩检测
+    // A missing or incompatible model output is not a detection.
     if (outputs.size() != 9) {
-        return detect_cpu_fallback(image);
+        return {};
     }
 
-    // 真实 SCRFD 输出：空结果就是「图中没有人脸」，严禁再用 CPU 桩伪造检出框，
-    // 否则会向底库写入与人脸无关的伪特征（静默退化）。
     return decode_scrfd(outputs, orig_w, orig_h, params.scale, params.pad_left, params.pad_top);
 }
 
@@ -265,110 +263,8 @@ std::vector<FaceDetection> FaceDetector::decode_scrfd(
 }
 
 std::vector<FaceDetection> FaceDetector::detect(const zhulong::Image& image) {
-    return detect_cpu_fallback(image);
-}
-
-std::vector<FaceDetection> FaceDetector::detect_cpu_fallback(const zhulong::Image& image) {
-    const auto& raw = image.raw_view();
-    if (raw.planes[0] == nullptr || raw.width <= 0 || raw.height <= 0) {
-        return {};
-    }
-
-    const uint8_t* pixel_data = raw.planes[0];
-    const int32_t width = raw.width;
-    const int32_t height = raw.height;
-    const int32_t stride = raw.strides[0] > 0 ? raw.strides[0] : width * 3;
-
-    // 扫描像素并检测负样本 (全黑或无有效信号图像直接返回空结果)
-    bool all_zero = true;
-    uint64_t pixel_sum = 0;
-    int32_t min_x = width, max_x = 0;
-    int32_t min_y = height, max_y = 0;
-    uint64_t weighted_x = 0;
-    uint64_t weighted_y = 0;
-
-    const int step_y = std::max(1, height / 240);
-    const int step_x = std::max(1, width / 320);
-
-    for (int y = 0; y < height; y += step_y) {
-        const uint8_t* row = pixel_data + static_cast<size_t>(y) * stride;
-        for (int x = 0; x < width; x += step_x) {
-            uint8_t r = row[x * 3];
-            uint8_t g = row[x * 3 + 1];
-            uint8_t b = row[x * 3 + 2];
-            uint32_t lum = static_cast<uint32_t>(r) * 38 + static_cast<uint32_t>(g) * 75 + static_cast<uint32_t>(b) * 15;
-            lum >>= 7;
-
-            if (lum > 16) {
-                all_zero = false;
-                pixel_sum += lum;
-                weighted_x += static_cast<uint64_t>(x) * lum;
-                weighted_y += static_cast<uint64_t>(y) * lum;
-
-                if (x < min_x) min_x = x;
-                if (x > max_x) max_x = x;
-                if (y < min_y) min_y = y;
-                if (y > max_y) max_y = y;
-            }
-        }
-    }
-
-    if (all_zero || pixel_sum == 0 || min_x >= max_x || min_y >= max_y) {
-        return {};
-    }
-
-    float cx = static_cast<float>(weighted_x) / static_cast<float>(pixel_sum);
-    float cy = static_cast<float>(weighted_y) / static_cast<float>(pixel_sum);
-
-    float span_w = static_cast<float>(max_x - min_x);
-    float span_h = static_cast<float>(max_y - min_y);
-
-    float face_w = std::clamp(span_w * 0.45f, 60.0f, static_cast<float>(width) * 0.60f);
-    float face_h = face_w * 1.25f;
-
-    float fx1 = std::clamp(cx - face_w * 0.5f, 0.0f, static_cast<float>(width - 1));
-    float fy1 = std::clamp(cy - face_h * 0.55f, 0.0f, static_cast<float>(height - 1));
-    float fx2 = std::clamp(fx1 + face_w, 0.0f, static_cast<float>(width));
-    float fy2 = std::clamp(fy1 + face_h, 0.0f, static_cast<float>(height));
-
-    FaceDetection det;
-    det.face_box_pixels = {fx1, fy1, fx2, fy2};
-    det.face_box[0] = fx1 / static_cast<float>(width);
-    det.face_box[1] = fy1 / static_cast<float>(height);
-    det.face_box[2] = fx2 / static_cast<float>(width);
-    det.face_box[3] = fy2 / static_cast<float>(height);
-    det.face_score = 0.96f;
-
-    const float fw = det.face_box[2] - det.face_box[0];
-    const float fh = det.face_box[3] - det.face_box[1];
-
-    det.landmarks = {{
-        {det.face_box[0] + fw * 0.32f, det.face_box[1] + fh * 0.35f},
-        {det.face_box[0] + fw * 0.68f, det.face_box[1] + fh * 0.35f},
-        {det.face_box[0] + fw * 0.50f, det.face_box[1] + fh * 0.55f},
-        {det.face_box[0] + fw * 0.36f, det.face_box[1] + fh * 0.76f},
-        {det.face_box[0] + fw * 0.64f, det.face_box[1] + fh * 0.76f}
-    }};
-
-    for (int k = 0; k < 5; ++k) {
-        det.landmarks_pixels[k].x = det.landmarks[k].x * static_cast<float>(width);
-        det.landmarks_pixels[k].y = det.landmarks[k].y * static_cast<float>(height);
-    }
-
-    float bx1 = std::clamp(det.face_box[0] + fw * 0.5f - fw * 1.3f, 0.0f, 1.0f);
-    float bx2 = std::clamp(det.face_box[0] + fw * 0.5f + fw * 1.3f, 0.0f, 1.0f);
-    float by1 = std::clamp(det.face_box[1] - fh * 0.15f, 0.0f, 1.0f);
-    float by2 = std::clamp(det.face_box[1] + fh * 4.5f, 0.0f, 1.0f);
-
-    det.body_box[0] = bx1;
-    det.body_box[1] = by1;
-    det.body_box[2] = bx2;
-    det.body_box[3] = by2;
-    det.body_score = 1.0f;
-    det.track_id = 0;
-    det.is_real_detection = false;
-
-    return {det};
+    (void)image;
+    return {};
 }
 
 // ============================================================================
@@ -411,7 +307,7 @@ std::vector<PersonBodyDetection> PersonDetector::detect(zhulong::Session& sessio
     }
 
     if (!session.valid()) {
-        return detect_cpu_fallback(image);
+        return {};
     }
 
     const int orig_w = raw.width;
@@ -451,7 +347,7 @@ std::vector<PersonBodyDetection> PersonDetector::detect(zhulong::Session& sessio
     }
 
     if (status != ZHULONG_PLUGIN_OK) {
-        return detect_cpu_fallback(image);
+        return {};
     }
 
     std::vector<zhulong::Tensor> outputs;
@@ -461,7 +357,7 @@ std::vector<PersonBodyDetection> PersonDetector::detect(zhulong::Session& sessio
         const uint8_t* src_hwc = input_tensor.data<uint8_t>();
         float* dst_nchw = onnx_input.data<float>();
         if (!src_hwc || !dst_nchw) {
-            return detect_cpu_fallback(image);
+            return {};
         }
         constexpr int plane_size = model_w * model_h;
         float* dst_r = dst_nchw;
@@ -480,7 +376,7 @@ std::vector<PersonBodyDetection> PersonDetector::detect(zhulong::Session& sessio
     }
 
     if (outputs.size() != 15) {
-        return detect_cpu_fallback(image);
+        return {};
     }
 
     return decode_scrfd_person(outputs, orig_w, orig_h, params.scale, params.pad_left, params.pad_top);
@@ -611,68 +507,8 @@ std::vector<PersonBodyDetection> PersonDetector::decode_scrfd_person(
 }
 
 std::vector<PersonBodyDetection> PersonDetector::detect(const zhulong::Image& image) {
-    return detect_cpu_fallback(image);
-}
-
-std::vector<PersonBodyDetection> PersonDetector::detect_cpu_fallback(const zhulong::Image& image) {
-    const auto& raw = image.raw_view();
-    if (raw.planes[0] == nullptr || raw.width <= 0 || raw.height <= 0) {
-        return {};
-    }
-
-    const uint8_t* pixel_data = raw.planes[0];
-    const int32_t width = raw.width;
-    const int32_t height = raw.height;
-    const int32_t stride = raw.strides[0] > 0 ? raw.strides[0] : width * 3;
-
-    bool all_zero = true;
-    uint64_t pixel_sum = 0;
-    int32_t min_x = width, max_x = 0;
-    int32_t min_y = height, max_y = 0;
-
-    const int step_y = std::max(1, height / 240);
-    const int step_x = std::max(1, width / 320);
-
-    for (int y = 0; y < height; y += step_y) {
-        const uint8_t* row = pixel_data + static_cast<size_t>(y) * stride;
-        for (int x = 0; x < width; x += step_x) {
-            uint8_t r = row[x * 3];
-            uint8_t g = row[x * 3 + 1];
-            uint8_t b = row[x * 3 + 2];
-            uint32_t lum = static_cast<uint32_t>(r) * 38 + static_cast<uint32_t>(g) * 75 + static_cast<uint32_t>(b) * 15;
-            lum >>= 7;
-
-            if (lum > 16) {
-                all_zero = false;
-                pixel_sum += lum;
-                if (x < min_x) min_x = x;
-                if (x > max_x) max_x = x;
-                if (y < min_y) min_y = y;
-                if (y > max_y) max_y = y;
-            }
-        }
-    }
-
-    if (all_zero || pixel_sum == 0 || min_x >= max_x || min_y >= max_y) {
-        return {};
-    }
-
-    PersonBodyDetection det;
-    float bx1 = static_cast<float>(min_x);
-    float by1 = static_cast<float>(min_y);
-    float bx2 = static_cast<float>(max_x);
-    float by2 = static_cast<float>(max_y);
-
-    det.body_box_pixels = {bx1, by1, bx2, by2};
-    det.body_box[0] = bx1 / static_cast<float>(width);
-    det.body_box[1] = by1 / static_cast<float>(height);
-    det.body_box[2] = bx2 / static_cast<float>(width);
-    det.body_box[3] = by2 / static_cast<float>(height);
-    det.visible_box = det.body_box;
-    det.score = 0.95f;
-    det.is_real_detection = false;
-
-    return {det};
+    (void)image;
+    return {};
 }
 
 } // namespace zhulong::face

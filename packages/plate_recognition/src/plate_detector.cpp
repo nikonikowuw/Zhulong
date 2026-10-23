@@ -30,7 +30,7 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session, 
     }
 
     if (!session.valid()) {
-        return detect_fallback(image);
+        return {};
     }
 
     // 1. 前处理 Letterbox
@@ -42,24 +42,24 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session, 
 
     zhulong_status_t rc = zhulong::ops::letterbox(image, input_tensor, params);
     if (rc != ZHULONG_PLUGIN_OK) {
-        return detect_fallback(image);
+        return {};
     }
 
     // 2. 前向推理
     auto outputs = session.forward({input_tensor});
     if (outputs.empty() || outputs[0].element_count() == 0) {
-        return detect_fallback(image);
+        return {};
     }
 
     // 3. 解析 YOLOv8 输出 (预期形状为 [1, 6, 8400] 或 [1, 8400, 6])
     const auto& out_tensor = outputs[0];
     if (out_tensor.element_count() < 8400 * 6) {
-        return detect_fallback(image);
+        return {};
     }
 
     const float* data = out_tensor.data<float>();
     if (!data) {
-        return detect_fallback(image);
+        return {};
     }
 
     const auto& shape = out_tensor.shape();
@@ -120,7 +120,7 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session, 
     }
 
     if (candidates.empty()) {
-        return detect_fallback(image);
+        return {};
     }
 
     // 4. 按置信度降序排序
@@ -146,42 +146,5 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session, 
     return kept;
 }
 
-std::vector<PlateBoxDetection> PlateDetector::detect_fallback(const zhulong::Image& image) {
-    const auto& raw = image.raw_view();
-    if (raw.planes[0] == nullptr || raw.width <= 0 || raw.height <= 0) {
-        return {};
-    }
-
-    // 快速扫描图像亮度，检测是否为全黑图像
-    const uint8_t* p = raw.planes[0];
-    int stride = raw.strides[0] > 0 ? raw.strides[0] : raw.width * 3;
-    bool has_content = false;
-
-    for (int y = 0; y < raw.height; y += std::max(1, raw.height / 32)) {
-        const uint8_t* row = p + y * stride;
-        for (int x = 0; x < raw.width; x += std::max(1, raw.width / 32)) {
-            if (row[x * 3] > 16 || row[x * 3 + 1] > 16 || row[x * 3 + 2] > 16) {
-                has_content = true;
-                break;
-            }
-        }
-        if (has_content) break;
-    }
-
-    if (!has_content) {
-        return {};
-    }
-
-    // 针对有效样本图像产生标准测试检测框
-    PlateBoxDetection d;
-    d.box[0] = 0.30f;
-    d.box[1] = 0.55f;
-    d.box[2] = 0.70f;
-    d.box[3] = 0.75f;
-    d.score = 0.95f;
-    d.class_id = 0; // 单层
-
-    return {d};
-}
 
 } // namespace zhulong::plate
