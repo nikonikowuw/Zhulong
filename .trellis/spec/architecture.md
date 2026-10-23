@@ -1,74 +1,77 @@
 # Zhulong 系统总体架构规范
 
-> Zhulong 系统全局拓扑、方案 A 部署模型、跨层责任边界及技术选型规则。
+> 系统拓扑、单主程序交付模型、当前实现边界与跨层责任。硬件能力和详细行为以对应层规范为准。
 
 ---
 
-## 1. 系统拓扑与总体架构
+## 1. 系统拓扑
 
 ```txt
-┌────────────────────────────────────────────────────────────────────────┐
-│                        React 前端界面 (Web SPA)                         │
-│  React 18+, TypeScript (严格模式), Vite, TanStack Query, shadcn/ui     │
-│  深浅双色主题, 英文/简体中文/繁体中文 全文国际化                         │
-└───────────────────────────────────▲────────────────────────────────────┘
-                                    │ HTTP (Gin) / SSE (推理事件) / WebSocket
-┌───────────────────────────────────▼────────────────────────────────────┐
-│                        Go 业务应用宿主 (Host)                           │
-│  业务模块分包 (cmd/Zhulong, internal/{camera,person,algorithm,...})       │
-│  Uber Fx 生命周期编排 (OnStart/OnStop), GORM + SQLite, Swaggo 2.0      │
-│  统一响应信封: { code: "OK", message, data, details? }                │
-└───────────────────────────────────▲────────────────────────────────────┘
-                                    │ CGO / C ABI 门面 (include/Zhulong/engine.h)
-┌───────────────────────────────────▼────────────────────────────────────┐
-│                      原生处理引擎 (C++ Pipeline)                        │
-│  处理节点流水线 (Node Pipeline: 采集 ➔ 解码 ➔ 预处理 ➔ 推理)            │
-│  有界队列背压, 零拷贝缓冲传递, 严格的所有权生命周期                      │
-└───────────────────────────────────▲────────────────────────────────────┘
-                                    │ Linux UAPI / 硬件驱动动态库
-┌───────────────────────────────────▼────────────────────────────────────┐
-│                       底层硬件与外设交互加速                            │
-│  IP 摄像机 (RTSP/ONVIF), 硬件编解码, 图像处理, 异构 NPU/GPU, Linux UAPI│
-└────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│ React 19 SPA · TypeScript · Vite · TanStack · shadcn/ui             │
+│ 英文 / 简体中文 / 繁体中文 · 主题与布局                                │
+└───────────────────────────────▲──────────────────────────────────────┘
+                                │ HTTP / SSE / WebSocket
+┌───────────────────────────────▼──────────────────────────────────────┐
+│ Go Host · Gin · Uber Fx · SQLite                                     │
+│ 业务域、认证、配置、调度、API 与静态资源                               │
+└───────────────────────────────▲──────────────────────────────────────┘
+                                │ CGO · 纯 C ABI
+┌───────────────────────────────▼──────────────────────────────────────┐
+│ C++ Engine · FFmpeg/RTSP · capture/decode · FrameBroker · snapshot    │
+│ 可选 Runner 推理与 RGA/RKNN 后端；有界队列与显式资源所有权              │
+└───────────────────────────────▲──────────────────────────────────────┘
+                                │ Linux UAPI · vendor runtime · DMA-BUF
+┌───────────────────────────────▼──────────────────────────────────────┐
+│ IP Camera · Linux media devices · platform-specific accelerators      │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## 2. 方案 A 单主程序交付模型
-
-1. **单宿主可执行程序**：Go 编译为单个应用二进制（如 `Zhulong`）。
-2. **内嵌前端静态资源**：Vite 构建产物通过 `//go:embed` 打包至 `internal/webui`，由 Go 直接托管，零 Node.js 运行时依赖。
-3. **原生 C++ 内联链接**：当前仅交付无硬件生命周期 stub，通过 C ABI 静态链接进主程序；未来媒体流水线另行实现。
-4. **允许外部动态链接**：允许动态依赖宿主 Linux 的 C 运行时（glibc/musl）、线程库及未来选择的厂商驱动（非 all-static）。
-5. **外部持久化存储分离**：当前本机 host 将 SQLite 存于 `<data-dir>/zhulong.db`，默认目录为 `./data`，可由 `config.toml` 中 `[data].directory` 覆盖；未来录像文件与模型权重另行放入配置的数据卷。
-
-## 当前实现边界
-
-本仓库已完成 `cmd/Zhulong`、`internal/app`、`database`（`000001`–`000007` 版本化迁移）、`engine`、`httputil`、`webui`、`auth` 单用户凭据会话、`camera` 全生命周期管理、`person` 人员与人脸底库域、`algorithm` 算法包生命周期与 Runner 进程监督、`storage` 存储水位感知、`network` 网络配置两阶段回滚看门狗、`systemtime` 时间同步与 `audit` 操作审计。
-
-**尚未交付**：人员底库经 UDS 下发至 Runner 的热更新链路、录像模块——不得把架构目标图解读为已全量交付。已交付的感知链路：算法 Runner 的 `MSG_RESULT` 经 FrameBroker socket 交给 Go，`internal/camera` 汇聚并做 ROI/MASK 过滤后分发到 `internal/record`（冷却去重 + SQLite 落库）与 SSE 广播；区域策略**统一覆盖 detection / person / vehicle 三类目标**（判定点一律取目标框底部中心，子目标如人脸/车牌不单独判定）；抓拍证据图由 `Zhulong_stream_snapshot` 在宿主侧对解码会话最新帧编码为 JPEG（全幅 + 各检测框裁剪），由 `internal/record.SnapshotStore` 异步写入 `snapshots/{camera_id}/{YYYY-MM-DD}/`。感知记录的 `algorithm_id` 为弱外键（`ON DELETE SET NULL`），并冗余写入 `algorithm_name` / `algorithm_version` 快照 —— 卸载算法包不会删除任何历史证据。感知记录的**库表行**由 `internal/record.RetentionPruner` 按 `storage.snapshotsRetentionDays` 后台分批清理（与抓拍图同一时间尺度；文件删除仍归 storage 的水位清理，两者不交叉）。⚠️ 抓拍取的是「当前最新一帧」而非产生该结果的那一帧，存在 1~4 帧固有偏差；抓拍 JPEG 编码优先走 RK3568 VEPU 硬件编码（`nodes/snapshot/jpeg_encoder_backend` 的 `JpegBackend`，1080p 实测 CPU 52.98ms → 0.91ms，整帧 DMA-BUF 直通零拷贝），仅在非 Rockchip 平台或硬件探针/启动自检失败时回退到静态 FFmpeg 的 mjpeg 软编；≤128×128 的裁剪图按实测分流回软编（见 `native/hardware-backends.md` §7）。当前 native 组件已支持宿主 C ABI、流探测、按需包借用与订阅生命周期，以及 FrameBroker 共享内存帧分发宿主（每路 AI 流一个 broker，发布侧按 `max(sample_fps)` 节流，socket 路径经 C ABI 交给 Go）与 runner 多路 `--broker` 连接。⚠️ 该通路走的是**逐 plane 拷贝到共享内存**的参考路径，**不是** DMA-BUF 零拷贝；帧数据不经过 Go，但「零拷贝」不能据此宣称已交付。
-
-**RKNN 推理后端与 RGA 视觉前处理后端均已交付**（详见 [原生硬件加速后端规范](./native/hardware-backends.md)）：
-
-- `native/src/backends/rknn/` 实现 `IInferenceBackend` 的 RKNN 版本，经**编译期 CMake profile** 选择（`ZHULONG_INFERENCE_BACKEND=cpu|rknn`），`rknn_dup_context` 权重共享已在 RK3568 真机验证成立（4 上下文 RSS 峰值 50.4MB → 14.3MB）。
-- `native/src/backends/rga/` 实现 `IVisionBackend` 的 RGA 版本，经**编译期 CMake profile** 选择（`ZHULONG_VISION_BACKEND=cpu|rga`），支持 Letterbox、Resize、两阶段 Crop & Scale 及 NV12/YUV420P 多平面硬件 CSC 转换，并在不可用时具备透明 CPU 回退机制。
-⚠️ 两个硬件后端均**接受 host↔device 的拷贝**，同样**不是**零拷贝；DMA-BUF 零拷贝数据通路仍**未交付**。
+**DMA-BUF 是按平台、格式和后端条件启用的路径，不是所有帧都零拷贝。** CPU/共享内存回退、颜色转换、预处理或布局变化都可能产生拷贝；只有已验证的具体数据路径才可称为零拷贝。见 [原生硬件后端规范](./native/hardware-backends.md) 与 [算法插件契约](./native/algo-plugin-contract.md)。
 
 ---
 
-## 3. 跨层交互防爆门契约
+## 2. 交付模型
 
-| 跨层边界 | 允许的交互方式 | 绝对严禁的反模式 |
+1. **单宿主程序**：Go 构建为一个可执行文件；运行时不依赖 Node.js。
+2. **内嵌前端**：Vite 产物通过 `//go:embed` 打入 Go 程序，发布前同步 `internal/webui/dist`。
+3. **原生 ABI 边界**：C++ Engine 通过 `native/include/Zhulong/engine.h` 的纯 C ABI 静态链接；Go 侧仅由 `internal/engine` 使用 CGO。C++ 异常不得穿越 ABI。
+4. **外部运行库**：允许依赖宿主 C 运行库、线程库和所选平台的厂商运行库；不得假定宿主二进制是完全静态链接。
+5. **持久化分离**：SQLite、算法包和媒体文件位于配置的数据/媒体目录；迁移与文件生命周期分别由数据库和 storage 域管理。
+
+---
+
+## 3. 当前实现边界
+
+下表是能力摘要，不替代具体 API、ABI、线程、生命周期和平台合同。修改能力时，应同时核对对应规范与实现/测试。
+
+| 能力 | 当前边界 | 详细规范 |
 | --- | --- | --- |
-| **React ⇄ Go** | Gin 处理标准 JSON、SSE 推送实时检测、WebSocket 设备遥测；中间件流水线 (Recovery/RequestID/AccessLog) 保障隔离与追踪 | 暴露底层指针地址；裸漏 SQLite 报错或 CGO 堆栈；全局滥挂 API 中间件污染 SPA 静态文件 |
-| **Go ⇄ CGO / C ABI** | 仅经 `include/Zhulong/engine.h` 交互；使用不透明句柄与基本类型 | 跨 CGO 传含 Go 指针的内存；C 长期持有未 Pinned 的 Go 指针；漏调 `C.free` |
-| **C ABI ⇄ C++** | 在 `src/abi/` 内以 `try-catch (...)` 拦截所有异常并转为状态码 | C++ 异常穿越 C ABI；公开头文件出现 C++ class/STL/模板 |
-| **C++ ⇄ 驱动/NPU** | DMA-BUF 零拷贝流转、V4L2 抓帧、硬件加速上下文 | 网络断流或推理拥塞时无界堆积内存；多线程无保护竞态访问硬件上下文 |
+| Go Host | Fx 生命周期、版本化 SQLite 迁移、认证、摄像机、人员、算法 Runner、storage、audit、task、record 等业务域已实现。 | [Backend index](./backend/index.md) |
+| 媒体 Engine | C ABI 提供流探测、获取/释放、订阅、FrameBroker 和抓拍能力；原生实现包含 RTSP 接入与解码。不是单纯的生命周期 stub。 | [接入合同](./native/ingestion-contract.md)、[插件与 FrameBroker](./native/algo-plugin-contract.md) |
+| 算法与底库 | Runner 支持启动时全量同步及运行期增量同步；推理后端由构建 profile 选择。 | [插件契约](./native/algo-plugin-contract.md)、[硬件后端](./native/hardware-backends.md) |
+| DMA-BUF | 解码帧可经 FrameBroker 传递 DMA-BUF FD；支持路径依赖驱动、格式、设备权限与后端组合。CPU/共享内存路径仍可能复制，host 构建或单元测试不证明目标板上的硬件路径可用。 | [硬件后端](./native/hardware-backends.md)、[插件与 IPC](./native/algo-plugin-contract.md) |
+| 感知记录与抓拍 | `StreamHub` 在推理结果 fan-out 前应用区域过滤；record 域负责识别/告警/目标抓拍记录和异步证据图。它不等同于连续视频录像。 | [感知记录与抓拍](./backend/record-guidelines.md)、[摄像机规范](./backend/camera-guidelines.md) |
+| 连续录像 | 当前仓库有 recordings 的存储、保留与读取边界，但未交付持续写入视频文件的 recorder 数据面。 | [Storage](./backend/storage-guidelines.md)、[Media file](./backend/mediafile-guidelines.md) |
+
+平台兼容性、量化类型、驱动版本与实测数据必须引用具体 profile、SDK/BSP 和验证条件。主机测试通过不代表目标板硬件路径已验证。
 
 ---
 
-## 4. 延迟决定的技术选型 (Deferred Selections)
+## 4. 跨层责任边界
 
-- **CMake 构建系统**：已选用 CMake 管理 C++17 静态库；根级 Makefile 编排前端、native、Swagger 和 Go build 顺序。
-- **SQLite 驱动**：使用 CGO `mattn/go-sqlite3`，GORM SQLite driver 用于业务连接，`golang-migrate` sqlite3 adapter 用于版本化 migrations。
-- **前端 i18n**：使用 `react-i18next` / `i18next`，语言选项为 `en`、`zh-Hans`、`zh-Hant`；硬件与部署目标仍待实机选定。
+| 边界 | 合法职责 | 禁止事项 |
+| --- | --- | --- |
+| **React ⇄ Go** | API 使用统一 JSON 信封；实时业务按契约使用 SSE/WebSocket；前端解析不可信输入。 | 暴露原生指针、底层驱动错误或未脱敏凭据；API 错误回退成 SPA HTML。 |
+| **Go ⇄ CGO** | 仅经公开 C ABI；opaque handle 与状态码；明确同步回调和缓冲区生命周期。 | 把含 Go 指针的内存交给 C；在调用返回后保留未 pin 的 Go 指针；依赖 GC 释放原生资源。 |
+| **C ABI ⇄ C++** | 在每个导出边界捕获异常并转成状态码；公开 ABI 保持纯 C。 | C++ 异常穿越 ABI；公开 C 头文件暴露 C++ ABI。 |
+| **C++ ⇄ Driver/NPU** | 按平台能力使用媒体 UAPI、厂商 runtime 与 DMA-BUF；队列容量、FD 所有权和同步语义必须明确。 | 把可选硬件路径描述成通用保证；无界缓存；跨线程无保护访问硬件上下文。 |
+
+---
+
+## 5. 已确定的关键选型
+
+- C++17 与 CMake 管理原生静态 Engine；根级 `Makefile` 编排前端、Native、Swagger 与 Go 构建。
+- Go 通过 CGO `mattn/go-sqlite3` 访问 SQLite，schema 变更使用版本化 SQL migration，不用 GORM `AutoMigrate`。
+- 前端使用 `react-i18next` / `i18next`，语言为 `en`、`zh-Hans`、`zh-Hant`。
+- 硬件后端是否可用由目标平台 profile 与 SDK/BSP 决定；参阅 [原生硬件后端规范](./native/hardware-backends.md)，不要从通用架构图推断支持范围。

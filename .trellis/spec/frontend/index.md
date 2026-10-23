@@ -1,6 +1,6 @@
 # React 前端开发规范总览
 
-> 基于 `satnaing/shadcn-admin` 脚手架（React 19 + Vite 8 + Tailwind CSS v4 + TanStack Router / Query / Table + Radix UI）的前端架构规范、所有者 12 条编码铁律、主题/国际化契约及质量门禁。
+> 基于 `satnaing/shadcn-admin` 脚手架（React 19 + Vite 8 + Tailwind CSS v4 + TanStack Router / Query / Table + Radix UI）的前端架构规范、编码原则、主题/国际化契约及质量门禁。
 
 ---
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | [目录架构](./directory-structure.md) | `shadcn-admin` 拓扑、TanStack Router 文件路由、`features/` 业务切片、`components/` 分层与定制组件维护 |
 | [跨语言命名规范](../naming-guidelines.md) | 文件名、React 组件、Hook、函数、变量和领域术语 |
-| [编码铁律与开发指南](./development-guidelines.md) | 所有者 12 条编码铁律、TanStack Query 服务端状态、TanStack Table URL 驱动、表单/弹窗契约、流媒体监控 UX |
+| [编码原则与开发指南](./development-guidelines.md) | React 组件、TanStack Query 服务端状态、TanStack Table URL 驱动、表单/弹窗契约、流媒体监控 UX |
 | [主题与三语国际化契约](./theme-and-i18n.md) | Tailwind v4 + OKLCH 语义主题、Light/Dark/System 模式、Font/Direction (RTL) 支持与英/简/繁三语契约 |
 | [质量检验与测试规范](./quality-guidelines.md) | Vitest + Playwright 浏览器测试、TypeScript 强类型与零 any、Knip 死代码检测、Vite 构建与 Go 嵌入对接 |
 
@@ -51,11 +51,10 @@
 
 ## 4. 质量验证基线
 
+全仓前端门禁由根目录 Makefile 管理：
+
 ```bash
-# 在 web/ 根目录下执行
-pnpm lint            # ESLint 10 + TypeScript 静态分析 (含禁止 any 校验)
-pnpm format:check    # Prettier 代码格式检查
-pnpm knip            # Knip 依赖与无用导出/死代码分析
-pnpm build           # tsc -b 强类型编译 + Vite 生产构建打包
-pnpm test            # Vitest 浏览器无头模式测试 (--browser.headless via Playwright)
+make frontend-check
 ```
+
+可单独运行的格式检查、Knip 和门禁映射见 [质量与测试规范](./quality-guidelines.md)。

@@ -18,6 +18,7 @@
 | [边缘媒体存储与动态生命周期](./storage-guidelines.md) | 存储路径规范、statfs 水位感知、外挂盘防穿透（写侧熔断 + 读侧穿透）、双水位回差清理与熔断 |
 | [媒体文件服务（只读字节层）](./mediafile-guidelines.md) | 按相对路径取元信息与 Range 传输、`os.Root` 四层路径防护、无列表边界、裸字节端点与 HEAD/503 陷阱 |
 | [摄像机业务与生命周期](./camera-guidelines.md) | 主子流建模、AES-GCM 凭据加密、双流原子门禁、正交状态机与探活调度 |
+| [感知记录与抓拍](./record-guidelines.md) | 推理结果过滤与 fan-out、记录归属快照、异步证据图和记录保留清理 |
 | [算法包开发与交付规范](./algorithm-guidelines.md) | 算法包物理拓扑、manifest 元数据、C ABI/SDK 契约、结果规范与验包门禁 |
 | [视频分析任务管理](./task-guidelines.md) | 视频流分析任务调度、算法与相机绑定、算力预算分配与 D5 联动契约 |
 | [宿主启动与构建合同](./host-runtime-contract.md) | CLI、health/SPA/Swagger、迁移、CGO 静态链接与跨层验证合同 |
@@ -49,8 +50,7 @@
 ## 3. 质量验证命令
 
 ```bash
-gofmt -w cmd internal
 make go-check
 ```
 
-*`make go-check` 通过 Native 构建脚本为 vet/race 注入正确的静态链接输入；详见 [Native 接入合同](../native/ingestion-contract.md)。门禁限定在 `cmd/` 和 `internal/` 自有包，避免 `./...` 递归扫描 `web/node_modules` 中第三方包自带的 Go 示例。*
+只格式化本次改动的 Go 文件；`make go-check` 只读检查格式、运行 vet、race 测试与 Go/native 桥接测试。

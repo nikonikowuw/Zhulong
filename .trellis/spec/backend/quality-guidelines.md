@@ -7,11 +7,16 @@
 ## 1. 质量检验命令与门禁标准
 
 ```bash
-gofmt -w cmd internal
 make go-check
 ```
 
-*`make go-check` 通过 Native 构建脚本传递静态 FFmpeg 与内容摘要 Engine 归档，随后运行 vet/race。需要单独 Go 命令时使用 `python3 native/scripts/build.py go test -race ./internal/engine`，不要依赖固定路径的 CGO 外部归档缓存。门禁限定在 `cmd/` 和 `internal/` 自有包，避免 `./...` 递归扫描 `web/node_modules` 中第三方包自带的 Go 示例。*
+格式化时仅对本次修改的 Go 文件运行 `gofmt -w`。需要单独测试依赖 `internal/engine` 的包时，使用 native wrapper；例如：
+
+```bash
+python3 native/scripts/build.py go test -race ./internal/camera
+```
+
+不要裸跑间接依赖 `internal/engine` 的 Go 命令，以免复用陈旧 Engine/FFmpeg 归档。`make go-check` 会只读检查 `cmd/` 与 `internal/` 的格式，并通过 Native 构建脚本运行 vet、race 测试和 Go/native 桥接测试。
 
 ---
 

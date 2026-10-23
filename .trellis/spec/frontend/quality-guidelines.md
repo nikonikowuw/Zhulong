@@ -16,6 +16,8 @@ pnpm build           # tsc -b 强类型编译 + Vite 生产打包
 pnpm test            # Vitest 浏览器无头模式测试 (--browser.headless via Playwright)
 ```
 
+上面是可单独运行的 package scripts。仓库必过门禁由 `make frontend-check` 执行 `lint`、`test`、`build`（类型检查包含在 build）；`format:check` 与 `knip` 虽可单独运行，但不属于 `make check`。
+
 ### 1.1 与 `make frontend-check` 的对应关系
 
 仓库根 `Makefile` 的前端目标固定使用 **pnpm**（仓库只提供 `pnpm-lock.yaml`，`npm ci` 因缺
