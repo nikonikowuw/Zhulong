@@ -45,6 +45,11 @@ class IInferenceBackend {
 public:
     virtual ~IInferenceBackend() = default;
 
+    // ⚠️ 本接口的 vtable 位于 plugin.so 与 libZhulongAlgoRuntime.so 的边界上，属于
+    //    **内部 ABI**：任何在这里增删/重排虚函数都会让已编译的旧插件在新运行库上
+    //    调用错槽位（实测：新增一个虚函数后，旧 face 插件在 forward 槽位上直接段
+    //    错误）。诊断信息（如后端标识）请用 runtime_factory.hpp 的自由函数，不要走虚表。
+
     /**
      * @brief 载入不可变模型资产与权重（整包共享）
      *

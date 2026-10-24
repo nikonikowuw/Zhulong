@@ -17,14 +17,36 @@
 namespace zhulong {
 
 /**
- * @brief 获取当前平台编译配置下的默认推理后端单例
+ * @brief 当前平台编译配置下的默认推理后端单例
  */
 std::shared_ptr<IInferenceBackend> get_default_inference_backend();
 
 /**
- * @brief 获取当前平台编译配置下的默认视觉前处理后端单例
+ * @brief 当前平台编译配置下的默认视觉前处理后端单例
  */
 std::shared_ptr<IVisionBackend> get_default_vision_backend();
+
+/**
+ * @brief 当前编译配置下的推理后端标识（cpu_mock / onnx / rknn）
+ *
+ * ⚠️ 刻意做成自由函数而不是 `IInferenceBackend` 的虚函数：该接口的 vtable 位于
+ *    plugin.so 与 libZhulongAlgoRuntime.so 的边界上，增删虚函数会让已编译的旧插件
+ *    在新运行库上调用错槽位（实测直接段错误）。诊断类信息一律绕开虚表。
+ *
+ * `cpu_mock` 是 host 构建的确定性桩后端：它**不执行任何真实推理**，且按设计拒绝
+ * 一切真实模型路径。任何依赖真实模型的算法包在该后端下都只会在 model_create
+ * 阶段硬失败，Runner 会把本标识写入失败日志，便于区分「模型没拷全」与
+ * 「host 推理后端选错」。
+ */
+inline const char* default_inference_backend_name() noexcept {
+#if defined(ZHULONG_INFERENCE_RKNN)
+    return "rknn";
+#elif defined(ZHULONG_INFERENCE_ONNX)
+    return "onnx";
+#else
+    return "cpu_mock";
+#endif
+}
 
 } // namespace zhulong
 

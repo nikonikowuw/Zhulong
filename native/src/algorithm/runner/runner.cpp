@@ -20,6 +20,7 @@
 #include "../ipc/ipc_protocol.hpp"
 #include "../ipc/shm_pool.hpp"
 #include "../ipc/unix_socket.hpp"
+#include <algorithm/runtime/runtime_factory.hpp>
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -333,14 +334,125 @@ namespace zhulong
     };
 
     /**
+     * @brief 验包用的样本帧（PPM/PGM 解码结果）
+     */
+    struct SampleFrame
+    {
+        int width{0};
+        int height{0};
+        std::vector<uint8_t> rgb; /**< 紧凑 RGB24（PGM 单通道展开为 RGB） */
+        bool decoded() const noexcept { return width > 0 && height > 0 && !rgb.empty(); }
+    };
+
+    /**
+     * @brief 读取 netpbm 头字段，跳过 PPM/PGM 注释行
+     */
+    bool read_netpbm_header(std::istream &input, std::string &magic, int &width, int &height, int &max_value)
+    {
+        if (!(input >> magic) || (magic != "P6" && magic != "P5"))
+        {
+            return false;
+        }
+        auto next_int = [&input](int &value) -> bool {
+            while (true)
+            {
+                input >> std::ws;
+                if (input.peek() == '#')
+                {
+                    std::string ignored;
+                    std::getline(input, ignored);
+                    continue;
+                }
+                return static_cast<bool>(input >> value);
+            }
+        };
+        if (!next_int(width) || !next_int(height) || !next_int(max_value))
+        {
+            return false;
+        }
+        return width > 0 && height > 0 && max_value > 0 && max_value <= 255;
+    }
+
+    /**
+     * @brief 解码 netpbm 样本帧（P6 RGB / P5 灰度）为紧凑 RGB24
+     *
+     * ⚠️ 刻意不引入 JPEG/PNG 解码器：Runner 不链接 FFmpeg，也不应有图像解码依赖。
+     * 需要「真实样本帧」的调用方（Go 侧验包门禁、开发机自测）负责把图转成 netpbm。
+     * 解码失败不是致命错误：回退合成帧并输出 sample_decoded=false，绝不假装验过样本。
+     */
+    SampleFrame load_sample_frame(const std::string &path)
+    {
+        SampleFrame frame;
+        std::ifstream input(path, std::ios::binary);
+        if (!input.is_open())
+        {
+            return frame;
+        }
+
+        std::string magic;
+        int max_value = 0;
+        if (!read_netpbm_header(input, magic, frame.width, frame.height, max_value))
+        {
+            frame.width = 0;
+            frame.height = 0;
+            return frame;
+        }
+        input.get(); // 头部与像素数据之间的单个空白符
+
+        const size_t pixels = static_cast<size_t>(frame.width) * static_cast<size_t>(frame.height);
+        if (magic == "P6")
+        {
+            frame.rgb.resize(pixels * 3);
+            input.read(reinterpret_cast<char *>(frame.rgb.data()), static_cast<std::streamsize>(frame.rgb.size()));
+            if (input.gcount() != static_cast<std::streamsize>(frame.rgb.size()))
+            {
+                frame.rgb.clear();
+            }
+        }
+        else
+        {
+            std::vector<uint8_t> gray(pixels);
+            input.read(reinterpret_cast<char *>(gray.data()), static_cast<std::streamsize>(gray.size()));
+            if (input.gcount() != static_cast<std::streamsize>(gray.size()))
+            {
+                return SampleFrame{};
+            }
+            frame.rgb.resize(pixels * 3);
+            for (size_t i = 0; i < pixels; ++i)
+            {
+                frame.rgb[i * 3 + 0] = gray[i];
+                frame.rgb[i * 3 + 1] = gray[i];
+                frame.rgb[i * 3 + 2] = gray[i];
+            }
+        }
+        if (frame.rgb.size() != pixels * 3)
+        {
+            return SampleFrame{};
+        }
+        return frame;
+    }
+
+    /**
+     * @brief 当前进程的推理后端标识（诊断用，来自编译期后端选择）
+     */
+    std::string inference_backend_name()
+    {
+        return std::string(zhulong::default_inference_backend_name());
+    }
+
+    /**
      * @brief 单次黑盒验包路径：加载插件并执行一次完整推理生命周期
      *
      * 依次执行 model_create -> worker_create -> task_open -> process -> result_release，
      * 任一步失败即输出对应 stage 的 JSON 诊断并提前返回。退出码 0~5 对应
      * dlopen / model_create / worker_create / task_open / process 各阶段失败。
      *
+     * 样本帧语义：`--sample` 指向 PPM/PGM 时**真的**把这张图喂给插件（`sample_decoded=true`）；
+     * 其余格式（如包里约定的 sample.jpg）Runner 无法解码，回退合成帧并显式标记
+     * `sample_decoded=false` —— 宁可暴露「没验到真实样本」，也不静默伪造一次通过。
+     *
      * @param so_path 待验证的插件动态库路径
-     * @param sample_path 样本标识（仅用于输出回显；无样本时使用合成测试帧）
+     * @param sample_path 样本帧路径（PPM/PGM 会被真实解码）
      * @return int 0 全链路通过；非 0 为失败阶段序号
      */
     int run_verify_plugin(const std::string &so_path, const std::string &sample_path)
@@ -367,8 +479,11 @@ namespace zhulong
         zhulong_status_t rc = api.model_create("{}", &model);
         if (rc != ZHULONG_PLUGIN_OK || !model)
         {
-            ZL_LOGE(0, "algorithm.runner", "plugin_model_create_failed rc=%d model_present=%d",
-                    static_cast<int>(rc), model != nullptr ? 1 : 0);
+            // 桩后端（cpu_mock）按设计拒绝真实模型：这时的“模型加载失败”不是插件缺陷，
+            // 而是本构建不含真实推理能力。把后端名一并记入日志，否则运维会在
+            // “模型没拷全”与“host 后端选错”之间瞎猜。
+            ZL_LOGE(0, "algorithm.runner", "plugin_model_create_failed rc=%d model_present=%d backend=%s",
+                    static_cast<int>(rc), model != nullptr ? 1 : 0, inference_backend_name().c_str());
             write_runner_error_line("{\"status\":\"failed\",\"stage\":\"model_create\",\"rc\":", rc, "}");
             return 2;
         }
@@ -398,10 +513,29 @@ namespace zhulong
             return 4;
         }
 
-        // 4. 准备样本帧 (若指定文件读取测试样本，否则构造合成测试帧)
-        int width = 640;
-        int height = 480;
-        std::vector<uint8_t> dummy_buf(width * height * 3, 128);
+        // 4. 准备样本帧：`--sample` 为 PPM/PGM 时真实解码，否则回退合成帧并如实标记
+        const SampleFrame sample = load_sample_frame(sample_path);
+        const bool sample_decoded = sample.decoded();
+        if (!sample_decoded)
+        {
+            ZL_LOGW(0, "algorithm.runner", "verify_sample_undecodable reason=unsupported_or_unreadable");
+        }
+
+        int width = sample_decoded ? sample.width : 640;
+        int height = sample_decoded ? sample.height : 480;
+        std::vector<uint8_t> synthetic;
+        const uint8_t *pixels = nullptr;
+        zhulong_pixel_format_t format = ZHULONG_PIXEL_FORMAT_RGB24;
+        if (sample_decoded)
+        {
+            pixels = sample.rgb.data();
+        }
+        else
+        {
+            synthetic.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 3, 128);
+            pixels = synthetic.data();
+            format = ZHULONG_PIXEL_FORMAT_BGR24;
+        }
 
         zhulong_frame_view frame;
         std::memset(&frame, 0, sizeof(frame));
@@ -409,9 +543,10 @@ namespace zhulong
         frame.pts = 1000;
         frame.width = width;
         frame.height = height;
-        frame.format = ZHULONG_PIXEL_FORMAT_BGR24;
-        frame.planes[0] = dummy_buf.data();
+        frame.format = format;
+        frame.planes[0] = pixels;
         frame.strides[0] = width * 3;
+        frame.dma_buf_fd = -1;
 
         // 5. 单次标准推理调用
         zhulong_inference_result *result = nullptr;
@@ -441,6 +576,9 @@ namespace zhulong
         api.model_destroy(model);
 
         std::cout << "{\"status\":\"passed\",\"sample\":" << runner::json_quote(sample_path)
+                  << ",\"sample_decoded\":" << (sample_decoded ? "true" : "false")
+                  << ",\"width\":" << width
+                  << ",\"height\":" << height
                   << ",\"result_type\":" << res_type
                   << ",\"count\":" << count << "}" << std::endl;
         return 0;
@@ -492,8 +630,8 @@ namespace zhulong
         zhulong_status_t model_rc = api.model_create("{}", &model);
         if (model_rc != ZHULONG_PLUGIN_OK || !model)
         {
-            ZL_LOGE(0, "algorithm.runner", "plugin_model_create_failed rc=%d model_present=%d",
-                    static_cast<int>(model_rc), model != nullptr ? 1 : 0);
+            ZL_LOGE(0, "algorithm.runner", "plugin_model_create_failed rc=%d model_present=%d backend=%s",
+                    static_cast<int>(model_rc), model != nullptr ? 1 : 0, inference_backend_name().c_str());
             return 2;
         }
 

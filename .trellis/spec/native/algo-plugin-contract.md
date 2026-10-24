@@ -26,7 +26,7 @@
 2. **分类**：`ZHULONG_RESULT_TYPE_CLASSIFICATION` (2) + `zhulong_classification_item[]`；
 3. **结构化人体/人脸**：`ZHULONG_RESULT_TYPE_PERSON_STRUCTURE` (3) + `zhulong_person_item[]`（支持 1:N 嵌套人脸 `zhulong_face_item` 与 Top-K 候选人 `zhulong_face_candidate`）。
    - **方案 B 底库对账契约**：`zhulong_face_candidate` 包含 `char face_id[ZHULONG_FACE_ID_MAX_LEN]`（200 字节，8 字节整除自然对齐），精确记录候选人对应的单张登记照唯一标识；`zhulong_face_item` 包含 `char matched_face_id[ZHULONG_FACE_ID_MAX_LEN]`（280 字节，8 字节整除自然对齐），记录 Top-1 胜出底照 ID，支持宿主直接进行 1:1 双图（抓拍人脸 vs 底库登记照）核验。
-4. **结构化机动车/车牌**：`ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE` (4) + `zhulong_vehicle_item[]`（支持 1:N 嵌套车牌 `zhulong_plate_item`，车辆结构体 88 字节，车牌结构体 72 字节，均满足 8 字节整除自然对齐；支持纯车牌退化语义：仅检测车牌时 `track_id=0`，`vehicle_box=plate_box`，`vehicle_score=plate_score`，`plate_count=1`）。
+4. **结构化机动车/车牌**：`ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE` (4) + `zhulong_vehicle_item[]`（支持 1:N 嵌套车牌 `zhulong_plate_item`，车辆结构体 88 字节，车牌结构体 72 字节，均满足 8 字节整除自然对齐；支持纯车牌退化语义：仅检测车牌时 `track_id=0`，`vehicle_box=plate_box`，`vehicle_score` 填**车牌检测**置信度（与 `plate.score` 的字符识别置信度语义不同，严禁互换），`plate_count=1`）。
 
 全系统（通用目标检测、人体/人脸结构化、IPC 消息、Go 宿主领域模型与前端渲染）统一采用 `[x1, y1, x2, y2] ∈ [0.0, 1.0]` 严格归一化两点坐标，全面废弃 `(x, y, w, h)` 语义。
 结果内存由插件创建，并只能通过同一插件的 `result_release` 释放。添加分类与结构化能力保持 v1 函数表布局稳定（数据层多态）。
@@ -58,6 +58,23 @@ void             zhulong_face_extract_release(void);
 ### 异常防爆门守则
 
 导出入口和 API callbacks 必须以 `try { ... } catch (...)` 阻止 C++ 异常穿越动态库边界；失败返回 `ZHULONG_PLUGIN_ERR_INTERNAL`，并在失败时将输出句柄/result 初始化为空。
+
+### 运行库 HAL 的 vtable 属于内部 ABI（禁止增删虚函数）
+
+`IInferenceBackend` / `IVisionBackend` 的虚表跨越 `plugin.so ↔ libZhulongAlgoRuntime.so` 边界，而算法包是**独立交付、独立升级**的制品：宿主换代运行库时，旧插件 `.so` 仍会被装载。因此：
+
+- 严禁在这两个接口上增删或重排虚函数。实测：在 `IInferenceBackend` 上新增一个虚函数后，已编译的旧 face 插件在新的运行库上把 `forward` 调用打到偏移后的槽位，直接段错误（`--verify-plugin` 报 `signal: segmentation fault`）。
+- 诊断类能力（如推理后端标识）一律做成 `runtime_factory.hpp` 的自由函数（`default_inference_backend_name()`），不走虚表。
+- 新增 HAL 能力优先走「新增自由函数 + 新接口继承旧接口」，并把兼容性验证纳入 `ZhulongAlgoVerifyCli` / 安装准入。
+
+### 黑盒验包的样本帧契约
+
+`zhulong_algo_runner --verify-plugin --sample <path>` 必须真的把样本图喂进模型，否则准入只是一次 ABI 冒烟：
+
+- Runner **不链接任何图像解码器**（它不属于推理链路）：它原生解码 netpbm（`P6`/`P5`）。
+- 包内约定文件是 `sample.jpg/png`，解码责任在调用侧：Go 验包门禁（`internal/algorithm`）用标准库解码后以 PPM 交给 Runner，并以**包目录**为 CWD 启动 Runner（复现部署布局 `plugin.so` 与 `models/` 同级）。
+- 报告必须携带 `sample_decoded`：`false` 表示 Runner 回退到合成帧，此时准入**只**证明了 ABI 生命周期；验包门禁会把它记为告警，不得静默当作通过。
+- 算法包自身的准确率回归由 native 金标测试负责（如 `ZhulongPlateRecognitionPluginTests` 用 `native/tests/fixtures/onnx/plate_sample.ppm` 钉住车牌号与颜色），黑盒验包不重复承担该职责。
 
 ---
 

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
+	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )
 
@@ -60,7 +61,13 @@ type VerificationReport struct {
 	Sample     string `json:"sample"`
 	ResultType int    `json:"result_type"`
 	Count      int    `json:"count"`
-	Error      string `json:"error,omitempty"`
+	// SampleDecoded reports whether the runner decoded the sample into a real frame.
+	// False means the run fell back to a synthetic frame, so passing verification
+	// proves the ABI lifecycle only — never that the packaged sample was inferred.
+	SampleDecoded bool   `json:"sample_decoded"`
+	Width         int    `json:"width"`
+	Height        int    `json:"height"`
+	Error         string `json:"error,omitempty"`
 }
 
 // HostPlatform identifies the machine an algorithm package must match: the CPU
@@ -104,6 +111,9 @@ const DefaultVerifyTimeout = 15 * time.Second
 type VerifyOptions struct {
 	// Timeout bounds one dynamic verification run; <= 0 means DefaultVerifyTimeout.
 	Timeout time.Duration
+	// Logger receives non-fatal observations (a sample frame that could not be fed,
+	// or a decoded sample that produced no results). Nil silences them.
+	Logger *zap.Logger
 }
 
 // Verifier executes static contract audits and dynamic black-box verification.
@@ -115,14 +125,19 @@ type Verifier struct {
 	runnerPath string
 	host       HostPlatform
 	timeout    time.Duration
+	logger     *zap.Logger
 }
 
 // NewVerifier creates a Verifier. An empty runnerPath keeps the verifier to
 // static checks only; host.Target defaults to cpu.
 func NewVerifier(runnerPath string, host HostPlatform, opts ...VerifyOptions) *Verifier {
 	timeout := DefaultVerifyTimeout
-	if len(opts) > 0 && opts[0].Timeout > 0 {
-		timeout = opts[0].Timeout
+	var logger *zap.Logger
+	if len(opts) > 0 {
+		if opts[0].Timeout > 0 {
+			timeout = opts[0].Timeout
+		}
+		logger = opts[0].Logger
 	}
 
 	host.Target = normalizeHostTarget(host.Target)
@@ -131,7 +146,16 @@ func NewVerifier(runnerPath string, host HostPlatform, opts ...VerifyOptions) *V
 		runnerPath: runnerPath,
 		host:       host,
 		timeout:    timeout,
+		logger:     logger,
 	}
+}
+
+// warn emits a non-fatal verification observation when a logger is configured.
+func (v *Verifier) warn(msg string, fields ...zap.Field) {
+	if v.logger == nil {
+		return
+	}
+	v.logger.Warn(msg, fields...)
 }
 
 // HostPlatform reports the platform this verifier compares packages against.
@@ -266,7 +290,24 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, pluginPath, sampl
 	vCtx, cancel := context.WithTimeout(ctx, v.timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(vCtx, v.runnerPath, "--verify-plugin", pluginPath, "--sample", samplePath)
+	// 样本帧：Go 用标准库把 sample.jpg/png 解码成 PPM 交给 runner。runner 不链接任何
+	// 图像解码器（它不属于推理链路），所以「真的把包里的样本图喂进模型」这件事由调用侧
+	// 负责。解码失败不阻断安装（老包可能用了标准库不支持的编码），但会让 runner 回退
+	// 合成帧，并在报告里标记 sample_decoded=false，再以告警显式暴露给运维。
+	framePath, cleanup := writeSampleFramePPM(samplePath)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	sampleArg := samplePath
+	if framePath != "" {
+		sampleArg = framePath
+	}
+
+	cmd := exec.CommandContext(vCtx, v.runnerPath, "--verify-plugin", pluginPath, "--sample", sampleArg)
+	// 以包目录为 CWD：验包必须复现部署布局（plugin.so 与 models/ 同级）。
+	// 否则「从源码树 CWD 意外命中权重」会让模型路径类缺陷（拼出 models/models/…）
+	// 在开发机上全部逃过准入，到部署环境才以 model_create 失败爆出。
+	cmd.Dir = filepath.Dir(pluginPath)
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
@@ -290,6 +331,18 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, pluginPath, sampl
 
 	if report.Status != "passed" {
 		return fmt.Errorf("%w: runner reported status %q: %s", ErrVerificationFailed, report.Status, report.Error)
+	}
+
+	// 准入结论的可信度取决于「样本帧是否真的进了模型」：没解码成功就只能证明 ABI 生命周期。
+	if !report.SampleDecoded {
+		v.warn("algorithm verification ran without a decoded sample frame; only the ABI lifecycle was exercised",
+			zap.String("sample", samplePath),
+			zap.String("plugin", pluginPath))
+	} else if report.Count == 0 {
+		v.warn("algorithm verification decoded the sample frame but the plugin reported zero results",
+			zap.String("sample", samplePath),
+			zap.Int("width", report.Width),
+			zap.Int("height", report.Height))
 	}
 
 	// Cross-check result_type against manifest task_type:

@@ -20,6 +20,9 @@
 - **正交性**：两个开关完全解耦，支持任意组合（如「RKNN 推理 + CPU 前处理」、「RKNN 推理 + RGA 前处理」等）。
 - **目标产物归属**：后端实现直接编译进 `libzhulong_algo_runtime.so`。宿主二进制 `Zhulong` 仅静态链接 `libZhulongEngine.a`，**严禁向宿主引入任何厂商 SDK 动态库依赖**。
 - **Profile 分流**：`cpu` 与 `rknn` 采用不同的交叉 profile（`native/profiles/rk3568.json` 与 `rk3568-rknn.json`）；CPU 推理后端仅供测试桩使用，RKNN profile 不编译 `cpu_inference_backend.cpp`。
+- **`cpu` 桩后端不得伪装成可用推理（fail closed）**：`CpuInferenceBackend::load_model` 只接受带 `cpu_mock:` 前缀的显式**测试夹具标记**（native 侧 mock 插件与后端单测专用），任何真实模型路径（`.onnx`/`.rknn`）一律返回 `nullptr`，插件 `init` 随即硬失败、Runner 以 `model_create` 失败退出。历史行为（加载真实模型成功后返回合成张量）已被废除：它会把「进程健康、模型加载成功、结果永久为空」变成最难归因的现场故障。
+  - 诊断：Runner 在 `plugin_model_create_failed` 日志里附带 `backend=<cpu_mock|onnx|rknn>`（来自 `zhulong::default_inference_backend_name()` 自由函数，**不得**做成 HAL 虚函数）。
+  - 推论：用 `cpu` 桩后端构建的宿主**不能**服务任何真实算法包（安装准入会失败）。要在开发机跑真实算法，必须 `make INFERENCE_BACKEND=onnx check`（或保证 ONNX 依赖前缀已就绪，`build.py` 会自动选 `onnx`）。
 - **RKNN 模型闭环**：目标为 ARM/RKNN 时算法包只解析 `.rknn`，不探测 `.onnx` 或 `.weights`。检测器、特征提取器和 OCR 遇到缺失会话、预处理失败或无效输出必须返回空/错误结果，禁止基于亮度生成框、固定特征、固定车牌文本或固定置信度。
 - **板端模型边界**：`face_recognition/targets/rk3568` 已提供 RKNN 模型；当前 `plate_recognition` 只有 CPU ONNX 模型，没有 RKNN 包，因此 RKNN 运行时不得加载其 ONNX 资产，也不得以模拟结果替代。
 

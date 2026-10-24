@@ -105,7 +105,7 @@ func NewAlgorithmComponents(
 	logger *zap.Logger,
 ) *AlgorithmComponents {
 	store := NewStore(dbProvider)
-	verifier := NewVerifier(rt.VerifyRunnerPath, host)
+	verifier := NewVerifier(rt.VerifyRunnerPath, host, VerifyOptions{Logger: logger})
 	supervisor := algorunner.NewSupervisor(store, rt, algorunner.DefaultRecoveryOptions(), logger)
 	service := NewService(store, verifier, supervisor, rt, logger)
 	handler := NewHandler(service, logger)

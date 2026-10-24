@@ -2,33 +2,23 @@
 
 class MockDetectorPlugin {
 public:
+    // ⚠️ 夹具插件：不加载任何模型，也不依赖任何推理后端。
+    //   曾经它调用 Model::load("<name>.weights")：在 cpu_mock 桩后端下侥幸成功，
+    //   在 onnx/rknn 真实后端下必然 model_create 失败，导致同一套回归在换后端后假红/假绿。
     zhulong_status_t init(const std::string& config_json) {
         (void)config_json;
-        model_ = zhulong::Model::load("mock_detector.weights");
-        if (!model_.valid()) {
-            return ZHULONG_PLUGIN_ERR_INTERNAL;
-        }
         return ZHULONG_PLUGIN_OK;
     }
 
     zhulong::Session create_session(uint32_t worker_id) {
-        return model_.create_session(worker_id);
+        (void)worker_id;
+        return zhulong::Session();
     }
 
     std::vector<zhulong::Detection> detect(zhulong::Session& session, const zhulong::Image& image) {
-        zhulong::Tensor input_tensor;
-        zhulong::LetterboxParams params;
-        params.target_width = 640;
-        params.target_height = 640;
-        zhulong_status_t rc = zhulong::ops::letterbox(image, input_tensor, params);
-        if (rc != ZHULONG_PLUGIN_OK) {
-            return {};
-        }
-
-        auto outputs = session.forward({input_tensor});
-        if (outputs.empty()) {
-            return {};
-        }
+        // 夹具输出与图像内容无关：不跑推理，也不依赖任何后端
+        (void)session;
+        (void)image;
 
         // 构造检测结果 (归一化 [x1, y1, x2, y2])
         zhulong::Detection det;
@@ -42,9 +32,6 @@ public:
 
         return zhulong::ops::nms({det}, 0.45f);
     }
-
-private:
-    zhulong::Model model_;
 };
 
 ZHULONG_REGISTER_DETECTOR_PLUGIN(MockDetectorPlugin, "MockDetector", "1.0.0")

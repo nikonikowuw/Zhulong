@@ -110,10 +110,22 @@ NMS_THRESHOLD=0.50
 在向平台交付算法包之前，开发者必须在本地使用平台提供的 `zhulong_algo_runner` CLI 进行黑盒自测：
 
 ```bash
-zhulong_algo_runner --verify-plugin plugin.so --sample sample.jpg
+cd <包目录>   # ⚠️ 必须以包目录为 CWD，否则「源码树权重意外命中」会掩盖模型路径缺陷
+zhulong_algo_runner --verify-plugin plugin.so --sample sample.ppm
 ```
 
 退出码为 `0` 且终端输出 `{"status":"passed", ...}` 时方可通过准入校验。
+
+⚠️ `--sample` 必须是 Runner **能解码**的帧（netpbm `.ppm`/`.pgm`）：Runner 不链接图像解码器，`sample.jpg` 无法被它直接读取，至今会回退合成帧（报告里 `sample_decoded:false`）。`packages/*/scripts/build_package.py` 会自动用 `ffmpeg` 把 `sample.jpg` 转成 PPM 再验包。
+
+### 5.1 验包报告的诚实语义（不可把「烟测」当成「验过样本」）
+
+- Runner **不链接图像解码器**：它原生解码 netpbm（`P6`/`P5`）。`sample.jpg/png` 的解码责任在调用侧：平台准入（`internal/algorithm`）用 Go 标准库解码后以 PPM 交给 Runner，并以**包目录**为 CWD 启动（复现 `plugin.so` 与 `models/` 同级的部署布局）；`packages/*/scripts/build_package.py` 在以 `staging` 目录为 CWD 调用 Runner 的同时，优先用 `ffmpeg` 把 `sample.jpg` 转 PPM。
+- 报告字段 `sample_decoded` 决定这次「通过」到底证明了什么：
+  - `true` —— 包里那张样本图真的进了模型，`count` 是该图的真实结果数；
+  - `false` —— Runner 回退到合成灰帧，**只**证明 ABI 生命周期（dlopen / model_create / worker / task / process / release），平台侧会记一条告警。
+- `count == 0` 不阻断安装（样本本身可能确实没有目标），但平台会告警提醒「样本图不具代表性」；**算法准确率由算法包自己的 native 金标测试担保**（如 `ZhulongPlateRecognitionPluginTests` 钉住车牌号/颜色），不依赖验包 CLI。
+- `model_create` 失败时日志必带 `backend=<cpu_mock|onnx|rknn>`：`cpu_mock` 构建会按设计拒绝一切真实模型，此时应先换后端而不是查模型文件。
 
 ### 平台准入拦截错误代码对照表
 

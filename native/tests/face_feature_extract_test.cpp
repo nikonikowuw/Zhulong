@@ -29,6 +29,19 @@ namespace {
 
 constexpr uint32_t kFeatureDim = 512;
 
+/**
+ * @brief 判定「当前构建没有真实人脸能力」的返回码
+ *
+ * 桩后端（cpu_mock）按设计拒绝一切真实模型：模型文件存在 → init 返回 UNSUPPORTED，
+ * 文件缺失 → NOT_FOUND。两者都表示能力不可用，绝不能伪装成「检出成功」或合成特征。
+ */
+bool is_capability_unavailable(int rc) {
+    if (kRealInference) {
+        return rc == Zhulong_ERR_NOT_FOUND;
+    }
+    return rc == Zhulong_ERR_UNSUPPORTED || rc == Zhulong_ERR_NOT_FOUND;
+}
+
 struct PpmImage {
     int width{0};
     int height{0};
@@ -111,8 +124,9 @@ int main(int argc, char** argv) {
     // 非法 stride（小于 width * 3）
     if (Zhulong_engine_extract_face_feature(engine, pixels.data(), 100, 100, 299, 2, features, &dim) != Zhulong_ERR_INVALID_ARGUMENT) return 9;
 
-    // 2. 全黑无脸图片：两种后端都必须返回 NOT_FOUND
-    if (Zhulong_engine_extract_face_feature(engine, pixels.data(), 100, 100, 300, 2, features, &dim) != Zhulong_ERR_NOT_FOUND) return 10;
+    // 2. 全黑无脸图片：真实后端返回 NOT_FOUND；桩后端返回能力不可用码
+    if (!is_capability_unavailable(
+            Zhulong_engine_extract_face_feature(engine, pixels.data(), 100, 100, 300, 2, features, &dim))) return 10;
 
     // 3. Pure-noise input has no model-backed detection and must not produce synthetic features.
     for (size_t i = 0; i < pixels.size(); ++i) {
@@ -121,9 +135,8 @@ int main(int argc, char** argv) {
     dim = kFeatureDim;
     {
         int rc = Zhulong_engine_extract_face_feature(engine, pixels.data(), 100, 100, 0, 2, features, &dim);
-        int expected = Zhulong_ERR_NOT_FOUND;
-        if (rc != expected) {
-            std::cerr << "noise image: expected rc=" << expected << ", got " << rc << std::endl;
+        if (!is_capability_unavailable(rc)) {
+            std::cerr << "noise image: expected NOT_FOUND (real) or NOT_FOUND/UNSUPPORTED (stub), got " << rc << std::endl;
             return 11;
         }
     }
@@ -142,9 +155,9 @@ int main(int argc, char** argv) {
         engine, sample.rgb.data(), sample.width, sample.height, sample.width * 3, 2, rgb_features, &dim);
 
     if (!kRealInference) {
-        // CPU test backend has no real face model and must not synthesize a detection or feature.
-        if (rc != Zhulong_ERR_NOT_FOUND) {
-            std::cerr << "CPU test backend: expected no-detection NOT_FOUND, got rc=" << rc << std::endl;
+        // 桩后端不得合成检出或特征：模型被拒绝（UNSUPPORTED）或缺失（NOT_FOUND）都算能力不可用。
+        if (!is_capability_unavailable(rc)) {
+            std::cerr << "CPU stub backend: expected NOT_FOUND/UNSUPPORTED, got rc=" << rc << std::endl;
             return 13;
         }
     } else {

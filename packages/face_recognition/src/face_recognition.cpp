@@ -85,6 +85,18 @@ static zhulong::Model load_target_model(const char* base_name, bool& is_onnx) {
     return model;
 }
 
+/**
+ * @brief 将「模型加载失败」细分为可行动的状态码
+ *
+ * 文件存在却加载不出来 = 当前推理后端不支持真实模型（典型：host 用 cpu_mock 桩后端，
+ * 它按设计拒绝一切真实模型路径）；文件不存在 = NOT_FOUND。
+ * 不区分这两者，运维就只能在「模型没拷全」与「host 推理后端选错」之间瞎猜。
+ */
+static zhulong_status_t model_unavailable_status(const char* base_name) {
+    const std::string path = resolve_model_path(std::string(base_name) + zhulong::TARGET_MODEL_EXT);
+    return std::ifstream(path).good() ? ZHULONG_PLUGIN_ERR_NOT_SUPPORTED : ZHULONG_PLUGIN_ERR_NOT_FOUND;
+}
+
 class FaceRecognitionPlugin {
 public:
     FaceRecognitionPlugin() = default;
@@ -104,8 +116,11 @@ public:
         bool rec_is_onnx = false;
         rec_model_ = load_target_model("models/facelivtv2-l", rec_is_onnx);
 
-        if (!det_model_.valid() || !rec_model_.valid()) {
-            return ZHULONG_PLUGIN_ERR_INTERNAL;
+        if (!det_model_.valid()) {
+            return model_unavailable_status("models/det_500m");
+        }
+        if (!rec_model_.valid()) {
+            return model_unavailable_status("models/facelivtv2-l");
         }
 
         if (person_model_.valid()) {
@@ -516,8 +531,11 @@ private:
         rec_model_ = load_target_model("models/facelivtv2-l", rec_is_onnx);
 
         // 模型缺失属于「能力不可用」，绝不等同于「图中没有人脸」：必须闭环报错，禁止伪造特征。
-        if (!det_model_.valid() || !rec_model_.valid()) {
-            return ZHULONG_PLUGIN_ERR_INTERNAL;
+        if (!det_model_.valid()) {
+            return model_unavailable_status("models/det_500m");
+        }
+        if (!rec_model_.valid()) {
+            return model_unavailable_status("models/facelivtv2-l");
         }
 
         detector_.set_is_onnx(det_is_onnx);

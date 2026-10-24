@@ -2,33 +2,23 @@
 
 class MockClassifierPlugin {
 public:
+    // ⚠️ 夹具插件：不加载任何模型，也不依赖任何推理后端。
+    //   曾经它调用 Model::load("<name>.weights")：在 cpu_mock 桩后端下侥幸成功，
+    //   在 onnx/rknn 真实后端下必然 model_create 失败，导致同一套回归在换后端后假红/假绿。
     zhulong_status_t init(const std::string& config_json) {
         (void)config_json;
-        model_ = zhulong::Model::load("mock_classifier.weights");
-        if (!model_.valid()) {
-            return ZHULONG_PLUGIN_ERR_INTERNAL;
-        }
         return ZHULONG_PLUGIN_OK;
     }
 
     zhulong::Session create_session(uint32_t worker_id) {
-        return model_.create_session(worker_id);
+        (void)worker_id;
+        return zhulong::Session();
     }
 
     std::vector<zhulong::Classification> classify(zhulong::Session& session, const zhulong::Image& image) {
-        zhulong::Tensor input_tensor;
-        zhulong::LetterboxParams params;
-        params.target_width = 224;
-        params.target_height = 224;
-        zhulong_status_t rc = zhulong::ops::letterbox(image, input_tensor, params);
-        if (rc != ZHULONG_PLUGIN_OK) {
-            return {};
-        }
-
-        auto outputs = session.forward({input_tensor});
-        if (outputs.empty()) {
-            return {};
-        }
+        // 夹具输出与图像内容无关：不跑推理，也不依赖任何后端
+        (void)session;
+        (void)image;
 
         zhulong::Classification result;
         result.class_id = 7;
@@ -36,9 +26,6 @@ public:
         result.label = "helmet_detected";
         return {result};
     }
-
-private:
-    zhulong::Model model_;
 };
 
 ZHULONG_REGISTER_CLASSIFIER_PLUGIN(MockClassifierPlugin, "MockClassifier", "1.0.0")
