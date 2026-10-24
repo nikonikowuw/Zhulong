@@ -34,8 +34,41 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/algoipc"
 )
 
+// probeContext 持有一次独立探测的私有引擎实例。
+//
+// ⚠️ 生命周期：stop 与 destroy 必须互斥（mu）。stopInternal 会拿着从 activeProbes
+// 取出的快照逐个 stop，而探测 goroutine 自己也会 stop 并在返回时 destroy ——
+// 没有这把锁，两者交错就会对已释放的句柄调用 stop（Use-After-Free）。
 type probeContext struct {
-	engine C.Zhulong_engine_h
+	mu        sync.Mutex
+	engine    C.Zhulong_engine_h
+	destroyed bool
+}
+
+// stop 请求私有引擎停止；已销毁时为空操作。
+func (p *probeContext) stop() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.destroyed || p.engine == nil {
+		return
+	}
+	C.Zhulong_engine_stop(p.engine)
+}
+
+// destroy 是私有引擎的终点：先排空 stop 语义，再释放句柄。
+func (p *probeContext) destroy() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.destroyed {
+		return
+	}
+	p.destroyed = true
+	if p.engine == nil {
+		return
+	}
+	C.Zhulong_engine_stop(p.engine)
+	C.Zhulong_engine_destroy(p.engine)
+	p.engine = nil
 }
 
 // Engine 封装 Native C++ 引擎的不透明指针句柄。
@@ -173,7 +206,7 @@ func (e *Engine) stopInternal() error {
 	e.probesMu.Unlock()
 
 	for _, pCtx := range probes {
-		C.Zhulong_engine_stop(pCtx.engine)
+		pCtx.stop()
 	}
 
 	// 2. 关闭并退订所有物理流持有着
@@ -262,6 +295,13 @@ func (e *Engine) Close() error {
 	return nil
 }
 
+// unregisterProbe 把私有引擎从停机排空集合里摘除。
+func (e *Engine) unregisterProbe(pCtx *probeContext) {
+	e.probesMu.Lock()
+	delete(e.activeProbes, pCtx)
+	e.probesMu.Unlock()
+}
+
 // Probe 对指定 RTSP 流执行独立的视频元数据探测。
 // 每个探测使用隔离的私有 Native Engine 实例，最大并发数为 4。
 func (e *Engine) Probe(ctx context.Context, uri string, options StreamOptions) (VideoInfo, error) {
@@ -309,28 +349,25 @@ func (e *Engine) Probe(ctx context.Context, uri string, options StreamOptions) (
 	if st := C.Zhulong_engine_create(&probeEngine); st != C.Zhulong_OK {
 		return VideoInfo{}, mapNativeStatus("probe_create", int32(st))
 	}
-	defer C.Zhulong_engine_destroy(probeEngine)
+
+	// 私有引擎的一切 stop/destroy 都必须经过 pCtx：它把两者串在同一把锁下，
+	// 保证 destroy 之后不再有 stop（否则 stopInternal 的快照晚用一步就是 UAF）。
+	pCtx := &probeContext{engine: probeEngine}
+	defer pCtx.destroy()
 
 	if st := C.Zhulong_engine_start(probeEngine); st != C.Zhulong_OK {
 		return VideoInfo{}, mapNativeStatus("probe_start", int32(st))
 	}
 
-	pCtx := &probeContext{engine: probeEngine}
 	e.probesMu.Lock()
 	if e.probesClosed {
 		e.probesMu.Unlock()
-		C.Zhulong_engine_stop(probeEngine)
 		return VideoInfo{}, ErrNotRunning
 	}
 	e.activeProbes[pCtx] = struct{}{}
 	e.probesMu.Unlock()
 
-	defer func() {
-		e.probesMu.Lock()
-		delete(e.activeProbes, pCtx)
-		e.probesMu.Unlock()
-		C.Zhulong_engine_stop(probeEngine)
-	}()
+	defer e.unregisterProbe(pCtx)
 
 	cURI := C.CString(uri)
 	defer C.free(unsafe.Pointer(cURI))
@@ -361,7 +398,7 @@ func (e *Engine) Probe(ctx context.Context, uri string, options StreamOptions) (
 		return extractVideoInfo(res.result)
 
 	case <-ctx.Done():
-		C.Zhulong_engine_stop(probeEngine)
+		pCtx.stop()
 		res := <-resChan
 		if res.result != nil {
 			C.Zhulong_probe_result_destroy(res.result)

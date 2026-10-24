@@ -65,7 +65,7 @@ func TestEngineStaleResource(t *testing.T) {
 		consumerID: 100,
 		kind:       ConsumerPreview,
 		url:        "rtsp://127.0.0.1:8554/live",
-		generation: e.generation,
+		generation: generationForTest(e),
 	}
 
 	// 重启引擎，触发 generation 递增
@@ -177,7 +177,7 @@ func TestEngineUnsubscribeNotFoundDeletesToken(t *testing.T) {
 	}
 
 	// 针对一个不存在的 stream ID 或 subscription ID 执行退订，C++ 会返回 ERR_NOT_FOUND
-	err := e.unsubscribe(e.generation, 99999, 88888, deleteToken)
+	err := e.unsubscribe(generationForTest(e), 99999, 88888, deleteToken)
 	if err == nil {
 		t.Fatal("expected error for non-existent stream/subscription")
 	}
@@ -203,7 +203,7 @@ func TestEngineBrokerPathAndPublishRateValidation(t *testing.T) {
 		consumerID: 101,
 		kind:       ConsumerAI,
 		closed:     true,
-		generation: e.generation,
+		generation: generationForTest(e),
 	}
 	if _, err := sClosed.BrokerPath(ctx); !errors.Is(err, ErrClosed) {
 		t.Fatalf("expected ErrClosed on closed stream BrokerPath, got %v", err)
@@ -219,12 +219,76 @@ func TestEngineBrokerPathAndPublishRateValidation(t *testing.T) {
 		consumerID: 102,
 		kind:       ConsumerAI,
 		closed:     false,
-		generation: e.generation,
+		generation: generationForTest(e),
 	}
 	if _, err := sNonExistent.BrokerPath(ctx); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for non-existent stream, got %v", err)
 	}
 	if err := sNonExistent.SetPublishRate(ctx, 10); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for non-existent stream, got %v", err)
+	}
+}
+
+// TestEngineStopRacesInFlightProbe 覆盖「停机快照 vs 探测自行销毁」的竞态窗口。
+//
+// 历史缺陷：stopInternal 把 activeProbes 快照出锁后裸调 Zhulong_engine_stop，
+// 而探测 goroutine 同时会 stop 并在返回时 destroy 同一个私有引擎 ——
+// 快照晚用一步就是对已释放句柄调 stop（Use-After-Free）。
+// 窗口靠调度，因此这里用「不可路由地址 + 立即 Stop/Close」反复冲击它。
+func TestEngineStopRacesInFlightProbe(t *testing.T) {
+	for iteration := 0; iteration < 10; iteration++ {
+		eng := New()
+		if err := eng.Start(); err != nil {
+			t.Fatalf("iteration %d: Start: %v", iteration, err)
+		}
+
+		var probes sync.WaitGroup
+		for range 2 {
+			probes.Add(1)
+			go func() {
+				defer probes.Done()
+				ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+				defer cancel()
+				// TEST-NET-1（RFC 5737）：连接会被黑洞，探测停留在原生 open 里。
+				_, _ = eng.Probe(ctx, "rtsp://192.0.2.1:554/race", StreamOptions{OpenTimeout: 500 * time.Millisecond})
+			}()
+		}
+
+		time.Sleep(2 * time.Millisecond)
+		if err := eng.Stop(); err != nil {
+			t.Fatalf("iteration %d: Stop: %v", iteration, err)
+		}
+		if err := eng.Close(); err != nil {
+			t.Fatalf("iteration %d: Close: %v", iteration, err)
+		}
+		probes.Wait()
+	}
+}
+
+// TestProbeContextStopDestroyAreSerialized 验证私有探测上下文的 stop/destroy 互斥。
+//
+// 这是 UAF 防护的最小可测单元：stopInternal 拿着 activeProbes 的快照调 stop，
+// 而探测 goroutine 自己会 destroy 同一个上下文。两者若不在同一把锁下串行，
+// 快照晚用的那一步就会对已释放句柄调用 Zhulong_engine_stop。
+// 用空句柄（不碰 C 内存）只验证 destroyed 标志的读写被串行化 —— 裸读写会被 -race 抓到。
+func TestProbeContextStopDestroyAreSerialized(t *testing.T) {
+	for iteration := 0; iteration < 200; iteration++ {
+		pCtx := &probeContext{}
+
+		var both sync.WaitGroup
+		both.Add(2)
+		go func() {
+			defer both.Done()
+			pCtx.stop()
+		}()
+		go func() {
+			defer both.Done()
+			pCtx.destroy()
+		}()
+		both.Wait()
+
+		if !pCtx.destroyed {
+			t.Fatalf("iteration %d: destroy must mark the context as destroyed", iteration)
+		}
 	}
 }

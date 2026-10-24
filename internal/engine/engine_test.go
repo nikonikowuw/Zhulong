@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+// generationForTest 在 e.mu 保护下读取代次，避免测试自身制造数据竞争。
+func generationForTest(e *Engine) uint64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.generation
+}
+
 func TestEngineLifecycle(t *testing.T) {
 	engine := New()
 	if engine.Ready() {
@@ -94,7 +101,7 @@ func TestEngineConcurrentCloseWithOperations(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				_ = engine.setPublishRate(engine.generation, 1, 30)
+				_ = engine.setPublishRate(generationForTest(engine), 1, 30)
 			}
 		}()
 
@@ -124,7 +131,7 @@ func TestUnsubscribeDeferredOnNotRunning(t *testing.T) {
 		t.Fatalf("Stop failed: %v", err)
 	}
 
-	_ = e.unsubscribe(e.generation, 1, 1, deleteToken)
+	_ = e.unsubscribe(generationForTest(e), 1, 1, deleteToken)
 	if tokenDeleted {
 		t.Fatal("expected deleteToken to be deferred during ERR_NOT_RUNNING")
 	}
