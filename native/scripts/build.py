@@ -212,20 +212,37 @@ def profile(path):
     p.setdefault("ldflags", [])
 
     # 后端选择（编译期 profile 开关）：推理与视觉前处理两个正交维度。
-    # 优先级：profile JSON 显式值 → 环境变量 ZHULONG_<KEY> → cpu。
+    # 优先级：profile JSON 显式值 → 环境变量 ZHULONG_<KEY> → 默认值（见 default_inference_backend）。
     # 不往 identity 里叠加无意义的失效（见 dependency()），也不默认写入未声明的键。
     #
     # ⚠️ 环境变量这一层是必需的：`make` 与 Air（.air.toml 的 build cmd）各自独立调用
     #    build.py，而每次调用都会重新 configure CMake。只在命令行传
     #    `--inference-backend onnx` 无法覆盖 Air 内部那次无参调用——它会把
     #    ZHULONG_INFERENCE_BACKEND 重置回 cpu 并重链出桩后端。
+    is_cross = p["mode"] != "host"
     for key, allowed in (("inference_backend", ("cpu", "rknn", "onnx")), ("vision_backend", ("cpu", "rga"))):
-        env_key = "ZHULONG_" + key.upper()
-        value = p.get(key) or os.environ.get(env_key) or "cpu"
+        value = p.get(key) or os.environ.get("ZHULONG_" + key.upper())
+        if not value:
+            value = default_inference_backend(p, is_cross) if key == "inference_backend" else "cpu"
         if value not in allowed:
             raise ValueError(f"invalid {key}: {value!r}; expected one of {allowed}")
         p[key] = value
     return p
+
+
+def default_inference_backend(p, is_cross):
+    """未声明推理后端时的默认值：Host 有 ONNX 前缀就用真实推理，交叉一律 cpu。
+
+    ⚠️ 交叉构建绝不能落到 onnx：板端要的是能与目标 sysroot 匹配的实现，
+    宿主机上的 libonnxruntime.so 链进 arm64 产物只会产出无法运行的二进制。
+    """
+    if is_cross:
+        return "cpu"
+    try:
+        onnx_prefix(p.get("onnx_root"))
+    except ValueError:
+        return "cpu"
+    return "onnx"
 
 
 def rknn_prefix():
