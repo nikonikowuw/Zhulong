@@ -12,10 +12,18 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const (
+	// configSingletonID is the only row the time configuration ever uses.
+	configSingletonID = 1
+	// defaultSyncIntervalSeconds matches the column default.
+	defaultSyncIntervalSeconds = 900
+	defaultTimezone            = "Asia/Shanghai"
+)
+
 // Repository manages persistence for system time configurations.
 type Repository interface {
-	GetConfig(ctx context.Context) (*SystemTimeConfig, []string, error)
-	UpdateConfig(ctx context.Context, mode string, ntpServers []string, syncInterval int, timezone string) (*SystemTimeConfig, []string, error)
+	GetConfig(ctx context.Context) (*SystemTimeConfig, error)
+	UpdateConfig(ctx context.Context, update TimeConfigUpdate) (*SystemTimeConfig, error)
 }
 
 type repositoryImpl struct {
@@ -42,62 +50,57 @@ func defaultServers() []string {
 	return []string{"ntp.aliyun.com", "cn.pool.ntp.org", "pool.ntp.org"}
 }
 
-// GetConfig retrieves the singleton time configuration (id=1).
-func (r *repositoryImpl) GetConfig(ctx context.Context) (*SystemTimeConfig, []string, error) {
+// GetConfig retrieves the singleton time configuration (id=1). When the row is
+// missing it returns the in-memory defaults without writing them: the first
+// UpdateConfig is what persists the row.
+func (r *repositoryImpl) GetConfig(ctx context.Context) (*SystemTimeConfig, error) {
 	db, err := r.db(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var cfg SystemTimeConfig
-	err = db.Where("id = ?", 1).First(&cfg).Error
-	if err != nil {
+	if err := db.Where("id = ?", configSingletonID).First(&cfg).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// Return default configuration
-			servers := defaultServers()
-			serversBytes, _ := json.Marshal(servers)
-			defaultCfg := &SystemTimeConfig{
-				ID:                  1,
-				Mode:                ModeNTP,
-				NTPServersJSON:      string(serversBytes),
-				SyncIntervalSeconds: 900,
-				Timezone:            "Asia/Shanghai",
-				UpdatedAt:           time.Now().UTC(),
-			}
-			return defaultCfg, servers, nil
+			return defaultConfig()
 		}
-		return nil, nil, fmt.Errorf("query system_time_configs: %w", err)
+		return nil, fmt.Errorf("query system_time_configs: %w", err)
 	}
 
-	var servers []string
-	if err := json.Unmarshal([]byte(cfg.NTPServersJSON), &servers); err != nil || len(servers) == 0 {
+	// A corrupt or hand-edited column must not brick time management; fall back
+	// to the shipped pool and let the next write repair the row.
+	servers, err := decodeServers(cfg.NTPServersJSON)
+	if err != nil || len(servers) == 0 {
 		servers = defaultServers()
 	}
-	return &cfg, servers, nil
+	cfg.NTPServers = servers
+	return &cfg, nil
 }
 
 // UpdateConfig updates or creates the singleton time configuration.
-func (r *repositoryImpl) UpdateConfig(ctx context.Context, mode string, ntpServers []string, syncInterval int, timezone string) (*SystemTimeConfig, []string, error) {
+func (r *repositoryImpl) UpdateConfig(ctx context.Context, update TimeConfigUpdate) (*SystemTimeConfig, error) {
 	db, err := r.db(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	if len(ntpServers) == 0 {
-		ntpServers = defaultServers()
+	servers := update.NTPServers
+	if len(servers) == 0 {
+		servers = defaultServers()
 	}
-	serversBytes, err := json.Marshal(ntpServers)
+	serversJSON, err := json.Marshal(servers)
 	if err != nil {
-		return nil, nil, fmt.Errorf("marshal ntp servers: %w", err)
+		return nil, fmt.Errorf("marshal ntp servers: %w", err)
 	}
 
 	cfg := SystemTimeConfig{
-		ID:                  1,
-		Mode:                mode,
-		NTPServersJSON:      string(serversBytes),
-		SyncIntervalSeconds: syncInterval,
-		Timezone:            timezone,
+		ID:                  configSingletonID,
+		Mode:                update.Mode,
+		NTPServersJSON:      string(serversJSON),
+		SyncIntervalSeconds: update.SyncIntervalSeconds,
+		Timezone:            update.Timezone,
 		UpdatedAt:           time.Now().UTC(),
+		NTPServers:          servers,
 	}
 
 	err = db.Clauses(clause.OnConflict{
@@ -105,8 +108,33 @@ func (r *repositoryImpl) UpdateConfig(ctx context.Context, mode string, ntpServe
 		DoUpdates: clause.AssignmentColumns([]string{"mode", "ntp_servers", "sync_interval_seconds", "timezone", "updated_at"}),
 	}).Create(&cfg).Error
 	if err != nil {
-		return nil, nil, fmt.Errorf("save system_time_configs: %w", err)
+		return nil, fmt.Errorf("save system_time_configs: %w", err)
 	}
 
-	return &cfg, ntpServers, nil
+	return &cfg, nil
+}
+
+func defaultConfig() (*SystemTimeConfig, error) {
+	servers := defaultServers()
+	serversJSON, err := json.Marshal(servers)
+	if err != nil {
+		return nil, fmt.Errorf("marshal default ntp servers: %w", err)
+	}
+	return &SystemTimeConfig{
+		ID:                  configSingletonID,
+		Mode:                ModeNTP,
+		NTPServersJSON:      string(serversJSON),
+		SyncIntervalSeconds: defaultSyncIntervalSeconds,
+		Timezone:            defaultTimezone,
+		UpdatedAt:           time.Now().UTC(),
+		NTPServers:          servers,
+	}, nil
+}
+
+func decodeServers(encoded string) ([]string, error) {
+	var servers []string
+	if err := json.Unmarshal([]byte(encoded), &servers); err != nil {
+		return nil, fmt.Errorf("decode ntp servers: %w", err)
+	}
+	return servers, nil
 }

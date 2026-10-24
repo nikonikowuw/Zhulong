@@ -15,7 +15,7 @@ type ClockDriver interface {
 	// WriteRTC writes UTC time into hardware RTC device.
 	WriteRTC(t time.Time) error
 	// GetRTCStatus checks if hardware RTC device is present and functional.
-	GetRTCStatus() RtcStatus
+	GetRTCStatus() RTCStatus
 	// GetTimezone returns the system's active IANA timezone name.
 	GetTimezone() (string, error)
 	// ApplyTimezone atomically applies the system timezone and reloads runtime timezone caches.

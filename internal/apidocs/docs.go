@@ -3080,7 +3080,7 @@ const docTemplate = `{
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "DATABASE_ERROR",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -3131,20 +3131,14 @@ const docTemplate = `{
                             ]
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/httputil.Response"
-                        }
-                    },
                     "422": {
-                        "description": "Unprocessable Entity",
+                        "description": "VALIDATION_FAILED or INVALID_TIME_CONFIG",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "DATABASE_ERROR",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -3195,20 +3189,14 @@ const docTemplate = `{
                             ]
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/httputil.Response"
-                        }
-                    },
                     "422": {
-                        "description": "Unprocessable Entity",
+                        "description": "VALIDATION_FAILED or INVALID_TIMESTAMP",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "SET_TIME_FAILED",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -3245,20 +3233,20 @@ const docTemplate = `{
                             ]
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
+                    "409": {
+                        "description": "SYNC_IN_PROGRESS",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
                     },
-                    "409": {
-                        "description": "Conflict",
+                    "412": {
+                        "description": "MANUAL_MODE_ACTIVE",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "DATABASE_ERROR",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -5241,7 +5229,7 @@ const docTemplate = `{
                 }
             }
         },
-        "systemtime.RtcStatus": {
+        "systemtime.RTCStatus": {
             "type": "string",
             "enum": [
                 "normal",
@@ -5249,9 +5237,9 @@ const docTemplate = `{
                 "error"
             ],
             "x-enum-varnames": [
-                "RtcStatusNormal",
-                "RtcStatusMissing",
-                "RtcStatusError"
+                "RTCStatusNormal",
+                "RTCStatusMissing",
+                "RTCStatusError"
             ]
         },
         "systemtime.SyncStatus": {
@@ -5296,7 +5284,7 @@ const docTemplate = `{
                     }
                 },
                 "rtcStatus": {
-                    "$ref": "#/definitions/systemtime.RtcStatus"
+                    "$ref": "#/definitions/systemtime.RTCStatus"
                 },
                 "syncIntervalSeconds": {
                     "type": "integer"

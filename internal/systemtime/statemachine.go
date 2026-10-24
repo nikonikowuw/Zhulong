@@ -7,22 +7,30 @@ import (
 	"time"
 )
 
-var (
-	// BuildEpoch represents the base boundary time (2026-01-01). Times before this indicate an unsynced RTC/clock.
-	BuildEpoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+// BuildEpoch is the boundary below which the system clock is treated as unsynced
+// (2026-01-01). It is a var rather than a const because time.Date is not a
+// constant expression, and it is not exported for writing by other packages.
+var BuildEpoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	// SlewThreshold defines maximum offset for linear adjtime phase correction.
+const (
+	// SlewThreshold is the largest offset corrected by adjtime slew instead of a
+	// step. Below it the wall clock never jumps.
 	SlewThreshold = 500 * time.Millisecond
 
-	// PanicThreshold defines maximum offset allowed without consecutive verification.
+	// PanicThreshold is the largest offset stepped without consecutive checks.
 	PanicThreshold = 10 * time.Minute
 
-	// PanicRequiredChecks is the count of consecutive identical deviations needed before stepping a panic-level offset.
+	// PanicRequiredChecks is the number of consecutive consistent offsets needed
+	// before a panic-level offset may be stepped.
 	PanicRequiredChecks = 3
 
-	// ErrPanicReview indicates offset is under consecutive verification.
-	ErrPanicReview = errors.New("time offset exceeds panic threshold; entering review")
+	// panicConsistencyWindow bounds how far two panic-level offsets may drift
+	// apart and still count as evidence of the same clock jump.
+	panicConsistencyWindow = 10 * time.Second
 )
+
+// ErrPanicReview indicates offset is under consecutive verification.
+var ErrPanicReview = errors.New("time offset exceeds panic threshold; entering review")
 
 // ActionKind classifies what a single NTP probe actually did to the clock.
 //
@@ -67,9 +75,16 @@ type SyncOutcome struct {
 	// Review is the consecutive-verification progress (n of PanicRequiredChecks).
 	// Only meaningful for ActionPanicReview.
 	Review int
+	// RTCErr reports a failed hardware RTC write-back. It never fails the probe:
+	// CLOCK_REALTIME already moved, but a stale RTC means the next cold boot
+	// restarts from the wrong time, so the caller has to surface it.
+	RTCErr error
 }
 
 // TimeStateMachine governs safe system time transitions and ensures monotonicity.
+//
+// All exported methods take the lock themselves; the Locked-suffixed helpers
+// assume the caller already holds it.
 type TimeStateMachine struct {
 	mu             sync.RWMutex
 	driver         ClockDriver
@@ -86,19 +101,15 @@ type TimeStateMachine struct {
 }
 
 // NewTimeStateMachine constructs a state machine bound to a ClockDriver.
+//
+// It deliberately performs no driver I/O: the "is this clock already plausible?"
+// decision needs a syscall, and constructors in this codebase stay pure. The
+// first ProcessNTPResult call makes that decision instead.
 func NewTimeStateMachine(driver ClockDriver) *TimeStateMachine {
-	sm := &TimeStateMachine{
+	return &TimeStateMachine{
 		driver: driver,
 		state:  SyncStateUnsynced,
 	}
-
-	// Check if current system time is already ahead of BuildEpoch
-	curr, err := driver.GetSystemTime()
-	if err == nil && curr.After(BuildEpoch) {
-		// Device already has plausible modern time
-		sm.initialSynced = true
-	}
-	return sm
 }
 
 // ProcessNTPResult handles an NTP probe result through the two-stage safety state machine.
@@ -112,118 +123,47 @@ func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) (SyncOutcome, erro
 
 	sysTime, err := sm.driver.GetSystemTime()
 	if err != nil {
-		sm.state = SyncStateFailed
-		sm.lastError = err.Error()
-		return SyncOutcome{}, fmt.Errorf("get system time: %w", err)
+		return SyncOutcome{}, sm.failLocked(fmt.Errorf("get system time: %w", err))
 	}
 
-	absOffset := res.Offset
-	if absOffset < 0 {
-		absOffset = -absOffset
-	}
-
-	// Stage 1: Cold boot / Unsynchronized
-	if !sm.initialSynced || sysTime.Before(BuildEpoch) {
-		target := sysTime.Add(res.Offset)
-		if err := sm.driver.SetRealtime(target); err != nil {
-			sm.state = SyncStateFailed
-			sm.lastError = err.Error()
-			return SyncOutcome{}, fmt.Errorf("initial step adjustment failed: %w", err)
-		}
-		_ = sm.driver.WriteRTC(target)
-
+	// A device that boots with plausible time must not be stepped just because
+	// this process has never synced: adopt the running clock as the baseline.
+	if !sm.initialSynced && sysTime.After(BuildEpoch) {
 		sm.initialSynced = true
-		sm.state = SyncStateSynchronized
-		sm.panicCount = 0
-		sm.recordSyncSuccess(res)
-		return SyncOutcome{Kind: ActionStepped, Step: res.Offset}, nil
 	}
 
-	// Stage 2: Steady state
-	// Case 2.1: Micro-offset (|Offset| < 500ms) -> Slew via adjtimex
-	if absOffset < SlewThreshold {
-		if err := sm.driver.AdjTime(res.Offset); err != nil {
-			sm.state = SyncStateFailed
-			sm.lastError = err.Error()
-			return SyncOutcome{}, fmt.Errorf("slew adjtime failed: %w", err)
-		}
-		// Periodically refresh RTC to keep it aligned
-		_ = sm.driver.WriteRTC(sysTime.Add(res.Offset))
+	absOffset := absDuration(res.Offset)
 
-		sm.state = SyncStateSynchronized
-		sm.panicCount = 0
-		sm.recordSyncSuccess(res)
-		// Slew only warps the clock frequency by a few ms; the wall clock never
-		// jumps. This is telemetry that repeats every sync interval, so it must
-		// stay out of the audit trail.
-		return SyncOutcome{Kind: ActionNone}, nil
+	switch {
+	// Stage 1: cold boot / unsynchronized clock.
+	case !sm.initialSynced || sysTime.Before(BuildEpoch):
+		return sm.stepLocked(sysTime.Add(res.Offset), res)
+
+	// Stage 2.1: micro-offset below SlewThreshold -> linear adjtime slew.
+	case absOffset < SlewThreshold:
+		return sm.slewLocked(sysTime, res)
+
+	// Stage 2.2: moderate deviation below PanicThreshold -> immediate step.
+	case absOffset < PanicThreshold:
+		return sm.stepLocked(sysTime.Add(res.Offset), res)
+
+	// Stage 2.3: panic-level offset -> consecutive multi-sample review.
+	default:
+		return sm.reviewPanicLocked(sysTime, res)
 	}
-
-	// Case 2.2: Moderate deviation (500ms <= |Offset| < 10m) -> Step
-	if absOffset < PanicThreshold {
-		target := sysTime.Add(res.Offset)
-		if err := sm.driver.SetRealtime(target); err != nil {
-			sm.state = SyncStateFailed
-			sm.lastError = err.Error()
-			return SyncOutcome{}, fmt.Errorf("step adjustment failed: %w", err)
-		}
-		_ = sm.driver.WriteRTC(target)
-
-		sm.state = SyncStateSynchronized
-		sm.panicCount = 0
-		sm.recordSyncSuccess(res)
-		return SyncOutcome{Kind: ActionStepped, Step: res.Offset}, nil
-	}
-
-	// Case 2.3: Panic threshold exceeded (|Offset| >= 10m) -> Continuous multi-sample review
-	if sm.panicCount == 0 || durationDiff(res.Offset, sm.lastPanicDelta) < 10*time.Second {
-		sm.panicCount++
-		sm.lastPanicDelta = res.Offset
-
-		if sm.panicCount < PanicRequiredChecks {
-			sm.state = SyncStatePanicReview
-			sm.lastError = fmt.Sprintf("offset %v exceeds panic threshold (10m), verification %d/%d",
-				res.Offset.Round(time.Millisecond), sm.panicCount, PanicRequiredChecks)
-			// Carry the outcome alongside the error: the caller must audit this as
-			// a failure. Returning only the error previously let the service fall
-			// through to a "success" record, which is the exact opposite of the
-			// truth for a 15-minute clock jump under verification.
-			return SyncOutcome{Kind: ActionPanicReview, Review: sm.panicCount}, ErrPanicReview
-		}
-
-		// Verified 3 times consistently: Apply Step
-		target := sysTime.Add(res.Offset)
-		if err := sm.driver.SetRealtime(target); err != nil {
-			sm.state = SyncStateFailed
-			sm.lastError = err.Error()
-			return SyncOutcome{}, fmt.Errorf("panic step adjustment failed: %w", err)
-		}
-		_ = sm.driver.WriteRTC(target)
-
-		sm.state = SyncStateSynchronized
-		sm.panicCount = 0
-		sm.recordSyncSuccess(res)
-		return SyncOutcome{Kind: ActionStepped, Step: res.Offset}, nil
-	}
-
-	// Inconsistent panic readings: reset counter and hold
-	sm.panicCount = 1
-	sm.lastPanicDelta = res.Offset
-	sm.state = SyncStatePanicReview
-	sm.lastError = fmt.Sprintf("fluctuating large offset %v, verification restarted 1/%d",
-		res.Offset.Round(time.Millisecond), PanicRequiredChecks)
-	return SyncOutcome{Kind: ActionPanicReview, Review: sm.panicCount}, ErrPanicReview
 }
 
-// ProcessManualTime explicitly sets the system time (Manual / Browser sync).
-func (sm *TimeStateMachine) ProcessManualTime(target time.Time) error {
+// ProcessManualTime explicitly sets the system time (manual / browser sync).
+func (sm *TimeStateMachine) ProcessManualTime(target time.Time) (SyncOutcome, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if err := sm.driver.SetRealtime(target); err != nil {
-		return fmt.Errorf("set realtime failed: %w", err)
+		return SyncOutcome{}, sm.failLocked(fmt.Errorf("set realtime to %s: %w",
+			target.UTC().Format(time.RFC3339), err))
 	}
-	_ = sm.driver.WriteRTC(target)
+
+	rtcErr := writeHardwareRTC(sm.driver, target)
 
 	sm.initialSynced = true
 	sm.state = SyncStateSynchronized
@@ -235,7 +175,7 @@ func (sm *TimeStateMachine) ProcessManualTime(target time.Time) error {
 	sm.lastOffset = 0
 	sm.lastRTT = 0
 	sm.lastError = ""
-	return nil
+	return SyncOutcome{Kind: ActionStepped, RTCErr: rtcErr}, nil
 }
 
 // ProcessSyncError records an NTP probe or network failure.
@@ -272,7 +212,76 @@ func (sm *TimeStateMachine) GetSyncStatus() SyncStatus {
 	}
 }
 
-func (sm *TimeStateMachine) recordSyncSuccess(res *SNTPResult) {
+// stepLocked jumps CLOCK_REALTIME to target and records the success.
+func (sm *TimeStateMachine) stepLocked(target time.Time, res *SNTPResult) (SyncOutcome, error) {
+	if err := sm.driver.SetRealtime(target); err != nil {
+		return SyncOutcome{}, sm.failLocked(fmt.Errorf("step clock to %s: %w",
+			target.UTC().Format(time.RFC3339), err))
+	}
+	rtcErr := writeHardwareRTC(sm.driver, target)
+
+	sm.initialSynced = true
+	sm.state = SyncStateSynchronized
+	sm.panicCount = 0
+	sm.recordSyncSuccessLocked(res)
+
+	return SyncOutcome{Kind: ActionStepped, Step: res.Offset, RTCErr: rtcErr}, nil
+}
+
+// slewLocked applies a sub-threshold correction without moving the wall clock.
+func (sm *TimeStateMachine) slewLocked(sysTime time.Time, res *SNTPResult) (SyncOutcome, error) {
+	if err := sm.driver.AdjTime(res.Offset); err != nil {
+		return SyncOutcome{}, sm.failLocked(fmt.Errorf("slew clock by %v: %w", res.Offset, err))
+	}
+	rtcErr := writeHardwareRTC(sm.driver, sysTime.Add(res.Offset))
+
+	sm.state = SyncStateSynchronized
+	sm.panicCount = 0
+	sm.recordSyncSuccessLocked(res)
+
+	// A slew only warps the clock frequency; the wall clock never jumps. This
+	// repeats every sync interval, so it stays out of the audit trail.
+	return SyncOutcome{Kind: ActionNone, RTCErr: rtcErr}, nil
+}
+
+// reviewPanicLocked holds a panic-level offset until consecutive probes agree,
+// then applies it. Two differing large offsets restart the verification: they
+// are not evidence of a single jump, so stepping either one is unsafe.
+func (sm *TimeStateMachine) reviewPanicLocked(sysTime time.Time, res *SNTPResult) (SyncOutcome, error) {
+	restarted := sm.panicCount > 0 && absDuration(res.Offset-sm.lastPanicDelta) >= panicConsistencyWindow
+	if restarted {
+		sm.panicCount = 0
+	}
+	sm.panicCount++
+	sm.lastPanicDelta = res.Offset
+
+	if sm.panicCount < PanicRequiredChecks {
+		sm.state = SyncStatePanicReview
+		if restarted {
+			sm.lastError = fmt.Sprintf("fluctuating large offset %v, verification restarted %d/%d",
+				res.Offset.Round(time.Millisecond), sm.panicCount, PanicRequiredChecks)
+		} else {
+			sm.lastError = fmt.Sprintf("offset %v exceeds panic threshold (%v), verification %d/%d",
+				res.Offset.Round(time.Millisecond), PanicThreshold, sm.panicCount, PanicRequiredChecks)
+		}
+		// Carry the outcome alongside the error: the caller must audit this as a
+		// failure. Returning only the error previously let the service fall
+		// through to a "success" record, which is the exact opposite of the truth
+		// for a 15-minute clock jump under verification.
+		return SyncOutcome{Kind: ActionPanicReview, Review: sm.panicCount}, ErrPanicReview
+	}
+
+	return sm.stepLocked(sysTime.Add(res.Offset), res)
+}
+
+// failLocked records a driver-level failure and returns err unchanged.
+func (sm *TimeStateMachine) failLocked(err error) error {
+	sm.state = SyncStateFailed
+	sm.lastError = err.Error()
+	return err
+}
+
+func (sm *TimeStateMachine) recordSyncSuccessLocked(res *SNTPResult) {
 	now := time.Now().UTC()
 	sm.lastSyncTime = &now
 	sm.lastSyncServer = res.Server
@@ -281,10 +290,16 @@ func (sm *TimeStateMachine) recordSyncSuccess(res *SNTPResult) {
 	sm.lastError = ""
 }
 
-func durationDiff(a, b time.Duration) time.Duration {
-	d := a - b
-	if d < 0 {
-		return -d
+// writeHardwareRTC mirrors the wall clock into the RTC chip. The error is
+// returned rather than dropped: the clock already moved, so it cannot fail the
+// operation, but a silent failure here is what makes the next cold boot wrong.
+func writeHardwareRTC(driver ClockDriver, t time.Time) error {
+	if err := driver.WriteRTC(t); err != nil {
+		return fmt.Errorf("write hardware rtc: %w", err)
 	}
-	return d
+	return nil
+}
+
+func absDuration(d time.Duration) time.Duration {
+	return max(d, -d)
 }

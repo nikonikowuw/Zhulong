@@ -2,6 +2,7 @@ package systemtime
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -166,9 +167,12 @@ func TestStateMachineManualTime(t *testing.T) {
 	sm := NewTimeStateMachine(driver)
 
 	manualTarget := time.Date(2026, 12, 25, 8, 0, 0, 0, time.UTC)
-	err := sm.ProcessManualTime(manualTarget)
+	outcome, err := sm.ProcessManualTime(manualTarget)
 	if err != nil {
 		t.Fatalf("ProcessManualTime failed: %v", err)
+	}
+	if outcome.RTCErr != nil {
+		t.Errorf("expected the RTC write to succeed, got %v", outcome.RTCErr)
 	}
 
 	if sm.GetSyncStatus().State != SyncStateSynchronized {
@@ -179,5 +183,78 @@ func TestStateMachineManualTime(t *testing.T) {
 	}
 	if len(driver.GetRTCWrites()) != 1 {
 		t.Errorf("expected 1 rtc write for manual set, got %d", len(driver.GetRTCWrites()))
+	}
+}
+
+// TestStateMachineRTCWriteFailureIsReported pins that a hardware RTC write
+// failure is surfaced instead of swallowed: the wall clock already moved, so the
+// probe succeeds, but a stale RTC silently ruins the next cold boot.
+func TestStateMachineRTCWriteFailureIsReported(t *testing.T) {
+	driver := NewStubClockDriver()
+	driver.SetRTCStatus(RTCStatusMissing)
+	sm := NewTimeStateMachine(driver)
+
+	res := &SNTPResult{
+		Server: "ntp.test.com",
+		Offset: 2 * time.Second,
+		RTT:    20 * time.Millisecond,
+	}
+
+	outcome, err := sm.ProcessNTPResult(res)
+	if err != nil {
+		t.Fatalf("a refused RTC write must not fail the probe, got %v", err)
+	}
+	if outcome.Kind != ActionStepped {
+		t.Fatalf("expected the clock to be stepped, got %s", outcome.Kind)
+	}
+	if outcome.RTCErr == nil {
+		t.Fatal("expected the RTC write failure to be reported, got nil")
+	}
+	if sm.GetSyncStatus().State != SyncStateSynchronized {
+		t.Errorf("expected synchronized state, got %s", sm.GetSyncStatus().State)
+	}
+}
+
+// TestStateMachineUnreadableSystemClockFails drives the GetSystemTime error path
+// that the previous linux driver made unreachable by always returning nil.
+func TestStateMachineUnreadableSystemClockFails(t *testing.T) {
+	driver := NewStubClockDriver()
+	driver.SetSystemTimeError(errors.New("clock_gettime: operation not permitted"))
+	sm := NewTimeStateMachine(driver)
+
+	_, err := sm.ProcessNTPResult(&SNTPResult{Server: "ntp.test.com", Offset: time.Second})
+	if err == nil {
+		t.Fatal("expected the probe to fail when the system clock is unreadable")
+	}
+	if !strings.Contains(err.Error(), "get system time") {
+		t.Errorf("expected the error to name the failed operation, got %v", err)
+	}
+	if sm.GetSyncStatus().State != SyncStateFailed {
+		t.Errorf("expected failed state, got %s", sm.GetSyncStatus().State)
+	}
+}
+
+// TestStateMachineFluctuatingPanicOffsetRestartsVerification covers the branch
+// where two panic-level offsets disagree and the counter has to restart.
+func TestStateMachineFluctuatingPanicOffsetRestartsVerification(t *testing.T) {
+	driver := NewStubClockDriver()
+	sm := NewTimeStateMachine(driver)
+
+	first := &SNTPResult{Server: "ntp.test.com", Offset: 15 * time.Minute}
+	drifted := &SNTPResult{Server: "ntp.test.com", Offset: 45 * time.Minute}
+
+	if _, err := sm.ProcessNTPResult(first); !errors.Is(err, ErrPanicReview) {
+		t.Fatalf("expected the first probe to enter review, got %v", err)
+	}
+
+	outcome, err := sm.ProcessNTPResult(drifted)
+	if !errors.Is(err, ErrPanicReview) {
+		t.Fatalf("expected the drifted probe to stay in review, got %v", err)
+	}
+	if outcome.Review != 1 {
+		t.Errorf("expected the verification to restart at 1, got %d", outcome.Review)
+	}
+	if status := sm.GetSyncStatus(); !strings.Contains(status.ErrorMessage, "restarted") {
+		t.Errorf("expected a restart to be reported, got %q", status.ErrorMessage)
 	}
 }

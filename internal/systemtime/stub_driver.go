@@ -2,6 +2,8 @@ package systemtime
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
@@ -11,9 +13,13 @@ type StubClockDriver struct {
 	mu            sync.RWMutex
 	offset        time.Duration
 	rtcTime       time.Time
-	rtcStatus     RtcStatus
+	rtcStatus     RTCStatus
 	timezone      string
 	hasPermission bool
+
+	// systemTimeErr forces GetSystemTime to fail, so callers' fallback paths can
+	// be exercised.
+	systemTimeErr error
 
 	stepCalls     []time.Time
 	slewCalls     []time.Duration
@@ -24,7 +30,7 @@ type StubClockDriver struct {
 func NewStubClockDriver() *StubClockDriver {
 	return &StubClockDriver{
 		rtcTime:       time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC),
-		rtcStatus:     RtcStatusNormal,
+		rtcStatus:     RTCStatusNormal,
 		timezone:      "Asia/Shanghai",
 		hasPermission: true,
 	}
@@ -33,6 +39,9 @@ func NewStubClockDriver() *StubClockDriver {
 func (s *StubClockDriver) GetSystemTime() (time.Time, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.systemTimeErr != nil {
+		return time.Time{}, s.systemTimeErr
+	}
 	return time.Now().Add(s.offset), nil
 }
 
@@ -61,7 +70,7 @@ func (s *StubClockDriver) AdjTime(offset time.Duration) error {
 func (s *StubClockDriver) ReadRTC() (time.Time, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.rtcStatus != RtcStatusNormal {
+	if s.rtcStatus != RTCStatusNormal {
 		return time.Time{}, errors.New("hardware rtc device not available")
 	}
 	return s.rtcTime, nil
@@ -73,7 +82,7 @@ func (s *StubClockDriver) WriteRTC(t time.Time) error {
 	if !s.hasPermission {
 		return errors.New("operation not permitted")
 	}
-	if s.rtcStatus != RtcStatusNormal {
+	if s.rtcStatus != RTCStatusNormal {
 		return errors.New("hardware rtc device not available")
 	}
 	utcTime := t.UTC()
@@ -82,7 +91,7 @@ func (s *StubClockDriver) WriteRTC(t time.Time) error {
 	return nil
 }
 
-func (s *StubClockDriver) GetRTCStatus() RtcStatus {
+func (s *StubClockDriver) GetRTCStatus() RTCStatus {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.rtcStatus
@@ -99,7 +108,7 @@ func (s *StubClockDriver) ApplyTimezone(iana string) error {
 	defer s.mu.Unlock()
 	loc, err := time.LoadLocation(iana)
 	if err != nil {
-		return err
+		return fmt.Errorf("load timezone %q: %w", iana, err)
 	}
 	s.timezone = loc.String()
 	return nil
@@ -119,7 +128,7 @@ func (s *StubClockDriver) SetPermission(p bool) {
 	s.hasPermission = p
 }
 
-func (s *StubClockDriver) SetRTCStatus(status RtcStatus) {
+func (s *StubClockDriver) SetRTCStatus(status RTCStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.rtcStatus = status
@@ -134,23 +143,25 @@ func (s *StubClockDriver) SetRTCTime(t time.Time) {
 func (s *StubClockDriver) GetStepCalls() []time.Time {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	res := make([]time.Time, len(s.stepCalls))
-	copy(res, s.stepCalls)
-	return res
+	return slices.Clone(s.stepCalls)
 }
 
 func (s *StubClockDriver) GetSlewCalls() []time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	res := make([]time.Duration, len(s.slewCalls))
-	copy(res, s.slewCalls)
-	return res
+	return slices.Clone(s.slewCalls)
 }
 
 func (s *StubClockDriver) GetRTCWrites() []time.Time {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	res := make([]time.Time, len(s.rtcWriteCalls))
-	copy(res, s.rtcWriteCalls)
-	return res
+	return slices.Clone(s.rtcWriteCalls)
+}
+
+// SetSystemTimeError makes GetSystemTime fail with err; nil restores normal
+// behaviour.
+func (s *StubClockDriver) SetSystemTimeError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.systemTimeErr = err
 }

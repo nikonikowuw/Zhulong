@@ -17,13 +17,13 @@ const (
 	SyncStateFailed       = "failed"
 )
 
-// RtcStatus represents the hardware RTC health state
-type RtcStatus string
+// RTCStatus represents the hardware RTC health state.
+type RTCStatus string
 
 const (
-	RtcStatusNormal  RtcStatus = "normal"
-	RtcStatusMissing RtcStatus = "missing"
-	RtcStatusError   RtcStatus = "error"
+	RTCStatusNormal  RTCStatus = "normal"
+	RTCStatusMissing RTCStatus = "missing"
+	RTCStatusError   RTCStatus = "error"
 )
 
 // Audit actions
@@ -57,6 +57,20 @@ type SystemTimeConfig struct {
 	SyncIntervalSeconds int       `gorm:"column:sync_interval_seconds;not null;default:900" json:"syncIntervalSeconds"`
 	Timezone            string    `gorm:"column:timezone;type:text;not null;default:'Asia/Shanghai'" json:"timezone"`
 	UpdatedAt           time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
+
+	// NTPServers is the decoded form of NTPServersJSON so callers never have to
+	// carry a second return value around. GORM ignores it; the repository fills
+	// it on read.
+	NTPServers []string `gorm:"-" json:"ntpServers"`
+}
+
+// TimeConfigUpdate is a validated time configuration write: the domain-level
+// shape shared by the service and the repository.
+type TimeConfigUpdate struct {
+	Mode                string
+	NTPServers          []string
+	SyncIntervalSeconds int
+	Timezone            string
 }
 
 // TableName overrides the GORM table name.
@@ -82,7 +96,7 @@ type SystemTimeStatus struct {
 	NTPServers          []string   `json:"ntpServers"`
 	SyncIntervalSeconds int        `json:"syncIntervalSeconds"`
 	SyncStatus          SyncStatus `json:"syncStatus"`
-	RTCStatus           RtcStatus  `json:"rtcStatus"`
+	RTCStatus           RTCStatus  `json:"rtcStatus"`
 	HasPermission       bool       `json:"hasPermission"`
 }
 

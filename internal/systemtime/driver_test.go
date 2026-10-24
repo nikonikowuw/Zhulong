@@ -12,7 +12,7 @@ func TestStubClockDriverBasic(t *testing.T) {
 	if !driver.HasClockPermission() {
 		t.Error("expected default permission true")
 	}
-	if driver.GetRTCStatus() != RtcStatusNormal {
+	if driver.GetRTCStatus() != RTCStatusNormal {
 		t.Errorf("expected RTC normal, got %s", driver.GetRTCStatus())
 	}
 
@@ -78,7 +78,7 @@ func TestStubClockDriverNoPermission(t *testing.T) {
 
 func TestStubClockDriverMissingRTC(t *testing.T) {
 	driver := NewStubClockDriver()
-	driver.SetRTCStatus(RtcStatusMissing)
+	driver.SetRTCStatus(RTCStatusMissing)
 
 	if _, err := driver.ReadRTC(); err == nil {
 		t.Error("expected error reading missing RTC")

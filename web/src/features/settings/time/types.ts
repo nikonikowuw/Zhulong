@@ -5,7 +5,7 @@ export type SyncState =
   | 'panic_review'
   | 'failed'
 
-export type RtcStatus = 'normal' | 'missing' | 'error'
+export type RTCStatus = 'normal' | 'missing' | 'error'
 
 export interface SyncStatus {
   state: SyncState
@@ -23,7 +23,7 @@ export interface SystemTimeStatus {
   ntpServers: string[]
   syncIntervalSeconds: number
   syncStatus: SyncStatus
-  rtcStatus: RtcStatus
+  rtcStatus: RTCStatus
   hasPermission: boolean
 }
 

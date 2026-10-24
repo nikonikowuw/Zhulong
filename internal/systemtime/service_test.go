@@ -2,6 +2,7 @@ package systemtime
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -182,5 +183,72 @@ func TestTimeServiceWorkerLifecycle(t *testing.T) {
 	defer cancel()
 	if err := svc.Stop(stopCtx); err != nil {
 		t.Fatalf("Stop failed: %v", err)
+	}
+}
+
+// TestTimeServiceGetStatusSurvivesUnreadableClock pins the fallback that the
+// linux driver's error-swallowing used to make dead code: the endpoint reports
+// the process's own time instead of failing outright.
+func TestTimeServiceGetStatusSurvivesUnreadableClock(t *testing.T) {
+	repo, cleanup := setupTestRepository(t)
+	defer cleanup()
+
+	driver := NewStubClockDriver()
+	driver.SetSystemTimeError(errors.New("clock_gettime: operation not permitted"))
+	svc := NewTimeService(repo, driver, &mockSNTPClient{}, zap.NewNop())
+
+	status, err := svc.GetStatus(context.Background())
+	if err != nil {
+		t.Fatalf("GetStatus failed: %v", err)
+	}
+	if status.CurrentTime.IsZero() {
+		t.Fatal("expected the process clock as a fallback, got the zero time")
+	}
+	if delta := time.Since(status.CurrentTime); delta < 0 || delta > time.Minute {
+		t.Errorf("expected a fallback close to now, got %v off", delta)
+	}
+}
+
+// TestTimeServiceRestartAfterStop guards the worker lifecycle: the goroutine must
+// close the channel it was started with, so a later Start/Stop pair still joins
+// instead of waiting for the context deadline.
+func TestTimeServiceRestartAfterStop(t *testing.T) {
+	repo, cleanup := setupTestRepository(t)
+	defer cleanup()
+
+	driver := NewStubClockDriver()
+	sntpMock := &mockSNTPClient{
+		result: &SNTPResult{Server: "test.ntp", Offset: 10 * time.Millisecond, Stratum: 2},
+	}
+	svc := NewTimeService(repo, driver, sntpMock, zap.NewNop())
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	for cycle := 0; cycle < 3; cycle++ {
+		if err := svc.Start(context.Background()); err != nil {
+			t.Fatalf("cycle %d: Start failed: %v", cycle, err)
+		}
+		if err := svc.Stop(stopCtx); err != nil {
+			t.Fatalf("cycle %d: Stop failed: %v", cycle, err)
+		}
+	}
+}
+
+// TestProbeSkippedWhenSyncInFlight pins that a probe preempted by an explicit
+// sync is not reported as a failure: the worker must not back off for a reason
+// it did not cause.
+func TestProbeSkippedWhenSyncInFlight(t *testing.T) {
+	repo, cleanup := setupTestRepository(t)
+	defer cleanup()
+
+	driver := NewStubClockDriver()
+	svc := NewTimeService(repo, driver, &mockSNTPClient{}, zap.NewNop())
+
+	svc.syncMu.Lock()
+	defer svc.syncMu.Unlock()
+
+	if !svc.probeOnce(context.Background()) {
+		t.Fatal("a skipped probe must not be reported as a failure")
 	}
 }

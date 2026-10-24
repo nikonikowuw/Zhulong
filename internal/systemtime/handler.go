@@ -1,12 +1,11 @@
 package systemtime
 
 import (
-	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
@@ -29,7 +28,9 @@ func NewHandler(service *TimeService, logger *zap.Logger) *Handler {
 	}
 }
 
-// RegisterRoutes implements the app.RouteRegistrar interface for protected routes.
+// RegisterRoutes mounts the time endpoints. It satisfies the package's
+// RouteRegistrar contract (module.go), which is what the Fx protected_routes
+// value group consumes.
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	group := rg.Group("/system/time")
 	{
@@ -46,12 +47,12 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Tags         system
 // @Produce      json
 // @Success      200  {object}  httputil.Response{data=SystemTimeStatus}
-// @Failure      500  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response  "DATABASE_ERROR"
 // @Router       /system/time [get]
 func (h *Handler) GetTime(c *gin.Context) {
 	status, err := h.service.GetStatus(c.Request.Context())
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve system time status", err))
+		httputil.WriteError(c, err)
 		return
 	}
 	httputil.Success(c, status)
@@ -65,9 +66,8 @@ func (h *Handler) GetTime(c *gin.Context) {
 // @Produce      json
 // @Param        body body      UpdateConfigRequest  true  "Time configuration parameters"
 // @Success      200  {object}  httputil.Response{data=SystemTimeStatus}
-// @Failure      400  {object}  httputil.Response
-// @Failure      422  {object}  httputil.Response
-// @Failure      500  {object}  httputil.Response
+// @Failure      422  {object}  httputil.Response  "VALIDATION_FAILED or INVALID_TIME_CONFIG"
+// @Failure      500  {object}  httputil.Response  "DATABASE_ERROR"
 // @Router       /system/time/config [put]
 func (h *Handler) UpdateConfig(c *gin.Context) {
 	audithttp.Tag(c, ActionTimeUpdateConfig, "system_time", "Update time configuration")
@@ -80,7 +80,7 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 
 	status, err := h.service.UpdateConfig(c.Request.Context(), req)
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_TIME_CONFIG", err.Error(), err))
+		httputil.WriteError(c, err)
 		return
 	}
 	// Whitelisted summary: the request fields are non-sensitive configuration.
@@ -95,24 +95,19 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 // @Tags         system
 // @Produce      json
 // @Success      200  {object}  httputil.Response{data=SystemTimeStatus}
-// @Failure      400  {object}  httputil.Response
-// @Failure      409  {object}  httputil.Response
-// @Failure      500  {object}  httputil.Response
+// @Failure      409  {object}  httputil.Response  "SYNC_IN_PROGRESS"
+// @Failure      412  {object}  httputil.Response  "MANUAL_MODE_ACTIVE"
+// @Failure      500  {object}  httputil.Response  "DATABASE_ERROR"
 // @Router       /system/time/sync [post]
 func (h *Handler) SyncNow(c *gin.Context) {
 	audithttp.Tag(c, ActionTimeNTPSync, "system_time", "Manual NTP sync")
 
 	status, err := h.service.SyncNow(c.Request.Context())
 	if err != nil {
-		if errors.Is(err, ErrSyncInProgress) {
-			httputil.WriteError(c, httputil.NewError(http.StatusConflict, "SYNC_IN_PROGRESS", "NTP synchronization is already in progress", err))
-			return
-		}
-		if errors.Is(err, ErrManualMode) {
-			httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "MANUAL_MODE_ACTIVE", "Cannot perform NTP sync while in manual mode", err))
-			return
-		}
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "NTP_SYNC_FAILED", err.Error(), err))
+		// The service returns apperr values, so the status code follows from the
+		// domain Kind (conflict / precondition / internal) instead of a local
+		// status table that can drift from the documented contract.
+		httputil.WriteError(c, err)
 		return
 	}
 	// The endpoint keeps its 200 contract even when the probe failed, so the
@@ -132,9 +127,8 @@ func (h *Handler) SyncNow(c *gin.Context) {
 // @Produce      json
 // @Param        body body      ManualTimeRequest  true  "Target ISO-8601 or RFC3339 timestamp"
 // @Success      200  {object}  httputil.Response{data=SystemTimeStatus}
-// @Failure      400  {object}  httputil.Response
-// @Failure      422  {object}  httputil.Response
-// @Failure      500  {object}  httputil.Response
+// @Failure      422  {object}  httputil.Response  "VALIDATION_FAILED or INVALID_TIMESTAMP"
+// @Failure      500  {object}  httputil.Response  "SET_TIME_FAILED"
 // @Router       /system/time/manual [post]
 func (h *Handler) ManualSet(c *gin.Context) {
 	audithttp.Tag(c, ActionTimeManualSet, "system_time", "Set system time manually")
@@ -147,13 +141,14 @@ func (h *Handler) ManualSet(c *gin.Context) {
 
 	targetTime, err := parseTimestamp(req.TargetTime)
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_TIMESTAMP", "Target timestamp must be valid ISO-8601 or RFC3339 format", err))
+		httputil.WriteError(c, apperr.Invalid("INVALID_TIMESTAMP",
+			"Target timestamp must be a valid ISO-8601 or RFC3339 timestamp", err))
 		return
 	}
 
 	status, err := h.service.SetManualTime(c.Request.Context(), targetTime)
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "SET_TIME_FAILED", err.Error(), err))
+		httputil.WriteError(c, err)
 		return
 	}
 	audithttp.TagDetail(c, "target="+targetTime.Format(time.RFC3339Nano))
@@ -173,5 +168,5 @@ func parseTimestamp(ts string) (time.Time, error) {
 			return t, nil
 		}
 	}
-	return time.Time{}, errors.New("unrecognized timestamp format")
+	return time.Time{}, fmt.Errorf("unrecognized timestamp format %q", ts)
 }
