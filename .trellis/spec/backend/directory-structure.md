@@ -20,7 +20,7 @@ internal/
   camera/                     # 相机管理业务模块 (主子流建模、凭据加密、探活调度)
   person/                     # 人员与人脸底库域 (persons / person_faces 一人多照 CRUD)
   algorithm/                  # 算法包生命周期与静态资产管理中心 (验包解包、Manifest与版本元数据)
-  algorunner/                 # 算法子进程看护与自愈调度 (Supervisor 守护、退避熔断状态机、进程生命周期)
+  algorunner/                 # 算法子进程看护与自愈调度 (Supervisor 守护、退避熔断状态机、进程生命周期、Runtime 磁盘布局唯一真相源)
   algoipc/                    # 算法 Runner 子进程间二进制 IPC 编解码与定长帧头协议
   aitypes/                    # 纯数据契约包 (InferenceResult, DetectionItem, 任务与分类模型)
   region/                     # 区域策略纯逻辑包 (ROI/MASK 归一化矩形校验，过滤 detection/person/vehicle)

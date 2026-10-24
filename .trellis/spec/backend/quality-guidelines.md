@@ -55,24 +55,35 @@ comp.Handler.RegisterRoutes(api)
 
 ⚠️ 断言前必须先排空异步队列：`Record` 是非阻塞投递，响应写出时条目可能仍在队列中，直接 `List` 会随机漏项。统一用 `auditSvc.Stop(ctx)` 排空后再查询（见 `internal/{person,camera,algorithm,systemtime}` 的 `drainAudit` 辅助函数）。
 
-### 4.2 `NewAlgorithmComponents` 在构造时捕获 Supervisor
+### 4.2 `*Components` 构造期捕获依赖，测试必须从输入侧注入
 
-**Symptom**：测试里写 `comp.Supervisor = algorithm.NewSupervisor(...)` 后调用 enable/disable，得到 `fork/exec build/native/host/zhulong_algo_runner: no such file or directory`。
+**Symptom**：测试里写 `comp.Supervisor = algorithm.NewSupervisor(...)` 或 `comp.Verifier = ...` 后再调用 enable/disable 或 upload，行为没有变化，甚至去 fork 一个不存在的 runner 而报 `no such file or directory`。
 
-**Cause**：`Service` 持有的是构造时传入的 supervisor 实例，事后替换 `comp.Supervisor` 字段只改了组件包的引用，`Service` 仍指向原实例。
+**Cause**：`NewAlgorithmComponents` 在构造时把 `supervisor`/`verifier` 传给了 `Service`，`Service` 持有的是**原实例**。事后替换组件包上的字段只改了 `AlgorithmComponents` 的引用，`Service` 仍指向旧对象。
 
-**Fix**：在构造**之前**用 `t.Setenv("ZHULONG_ALGO_RUNNER", stubPath)` 注入 runner，让 `NewAlgorithmComponents` 自行取到桩。
+**Fix**：构造函数保持**纯粹**——不读环境变量、不拼路径，把 host 侧输入（`algorunner.Runtime`、`algorithm.HostPlatform`）作为参数传进去。测试想要不同图（静态验证 + 桩 runner）就在构造前把参数造好。
 
 ```go
-// ❌ 无效：Service 已经捕获了原 supervisor
-t.Setenv("ZHULONG_ALGO_RUNNER", stub)
-comp := algorithm.NewAlgorithmComponents(db, dir, "cpu", logger)
-comp.Supervisor = algorithm.NewSupervisor(comp.Store, dir, stub, "", opts, logger)
+// ❌ 无效：Service 已经捕获了原实例，字段替换对它无效
+comp := algorithm.NewAlgorithmComponents(db, rt, host, logger)
+comp.Verifier = algorithm.NewVerifier("", host)
 
-// ✅ 正确：构造前注入，字段无需替换
-t.Setenv("ZHULONG_ALGO_RUNNER", stub)
-comp := algorithm.NewAlgorithmComponents(db, dir, "cpu", logger)
+// ✅ 正确：从输入侧决定，构造出的图从一开始就是想要的形状
+rt := algorunner.Runtime{
+	AlgorithmsDir: dataDir,
+	RunnerPath:    stubPath, // 只给 supervisor 用
+	// VerifyRunnerPath 留空 → 验包只跑静态检查
+}
+comp := algorithm.NewAlgorithmComponents(db, rt, x86Host(), logger)
 ```
+
+`Runtime` 把两个 runner 角色分开：`RunnerPath` 是 supervisor 起进程服务的二进制，`VerifyRunnerPath` 是验包时以 `--verify-plugin` 调用的那一个。两者在 `internal/app` 的 `newAlgorithmRuntime` 里解析为同一个值；测试里则常常只需要其一。
+
+**Prevention**：
+
+- 任何在构造期捕获依赖的组件包（`*Components`）都不支持事后替换字段；需要更换协作者就改**构造输入**，不要改字段。
+- `Verifier` 构造后不可变（host / runnerPath / timeout 全部私有且一次捕获），因此不存在「改一半字段导致判定不一致」的可能；要不同行为就换实例。
+- runner 桩用 `trap 'exit 0' TERM INT; while true; do sleep 1; done`，保证收到 SIGTERM 即退出且不留孤儿进程。
 
 ### 4.3 Swagger 文档生成（`make api-docs`）跨包类型解析
 
