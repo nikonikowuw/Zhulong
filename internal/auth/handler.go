@@ -2,11 +2,9 @@ package auth
 
 import (
 	"errors"
-	"net/http"
-	"time"
+	"fmt"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
@@ -30,30 +28,19 @@ func NewHandler(service AuthService) *Handler {
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	authGroup := rg.Group("/auth")
 	authGroup.GET("/status", httputil.Handle(h.statusHandler))
-	authGroup.POST("/init", audithttp.TagMiddleware(audit.ActionAuthInit, "system", "Initialize administrator"), httputil.HandleJSON(h.initHandler))
-	authGroup.POST("/login", audithttp.TagMiddleware(audit.ActionAuthLogin, "user:", "Login"), httputil.HandleJSON(h.loginHandler))
-	authGroup.POST("/logout", RequireAuth(h.service), h.logoutHandler)
+	authGroup.POST(
+		"/init",
+		audithttp.TagMiddleware(audit.ActionAuthInit, "system", "Initialize administrator"),
+		httputil.HandleJSON(h.initHandler),
+	)
+	authGroup.POST(
+		"/login",
+		audithttp.TagMiddleware(audit.ActionAuthLogin, "user:", "Login"),
+		httputil.HandleJSON(h.loginHandler),
+	)
+	// logout clears the cookie itself, so RequireAuth must not re-issue it first.
+	authGroup.POST("/logout", withoutCookieRenewal(), RequireAuth(h.service), h.logoutHandler)
 	authGroup.GET("/me", RequireAuth(h.service), httputil.Handle(h.meHandler))
-}
-
-func setSessionCookie(c *gin.Context, token string, maxAge int) {
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(SessionCookieName, token, maxAge, "/", "", false, true)
-}
-
-func (h *Handler) sessionCookieMaxAge() int {
-	if h.service != nil {
-		ttl := h.service.SessionTTL()
-		if ttl > 0 {
-			return int(ttl / time.Second)
-		}
-	}
-	return DefaultSessionCookieMaxAge
-}
-
-func clearSessionCookie(c *gin.Context) {
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(SessionCookieName, "", -1, "/", "", false, true)
 }
 
 // statusHandler godoc
@@ -88,7 +75,7 @@ func (h *Handler) initHandler(c *gin.Context, req InitAdminRequest) (UserRespons
 	}
 	audithttp.TagActor(c, user.Username)
 	audithttp.TagTarget(c, "user:"+user.Username)
-	setSessionCookie(c, token, h.sessionCookieMaxAge())
+	setSessionCookie(c, token, sessionCookieMaxAge(h.service))
 	return user, nil
 }
 
@@ -114,7 +101,7 @@ func (h *Handler) loginHandler(c *gin.Context, req LoginRequest) (UserResponse, 
 	}
 	audithttp.TagActor(c, user.Username)
 	audithttp.TagTarget(c, "user:"+user.Username)
-	setSessionCookie(c, token, h.sessionCookieMaxAge())
+	setSessionCookie(c, token, sessionCookieMaxAge(h.service))
 	return user, nil
 }
 
@@ -122,38 +109,44 @@ func (h *Handler) loginHandler(c *gin.Context, req LoginRequest) (UserResponse, 
 // @Summary      Logout administrator session
 // @Tags         auth
 // @Produce      json
-// @Success      200  {object}  httputil.Response{data=object}
+// @Success      200  {object}  httputil.Response{data=LogoutResponse}
 // @Failure      401  {object}  httputil.Response
 // @Router       /auth/logout [post]
 func (h *Handler) logoutHandler(c *gin.Context) {
-	// Resolve the account name for the audit target and actor without ever
-	// defaulting to a hardcoded admin.
-	username := ""
-	if u, ok := GetCurrentUser(c); ok && u.Username != "" {
-		username = u.Username
-	}
-	token := GetSessionToken(c)
-	if token == "" {
-		token, _ = c.Cookie(SessionCookieName)
-	}
-	if token != "" {
-		if session, ok := h.service.ValidateSession(token); ok && session.Username != "" {
-			username = session.Username
-		}
-		h.service.Logout(token)
-	}
+	username, token := h.sessionIdentity(c)
+	h.service.Logout(token)
 
-	target := "user:"
-	if username != "" {
-		target = "user:" + username
-	}
-	audithttp.Tag(c, audit.ActionAuthLogout, target, "Logout")
+	target := "user:" + username
+	audithttp.Tag(
+		c,
+		audit.ActionAuthLogout,
+		target,
+		"Logout",
+	)
 	if username != "" {
 		audithttp.TagActor(c, username)
 	}
 
 	clearSessionCookie(c)
-	httputil.Success(c, gin.H{"loggedOut": true})
+	httputil.Success(c, LogoutResponse{LoggedOut: true})
+}
+
+// sessionIdentity resolves the account name and token for the audit record. The
+// session is the only authority: it never defaults to a hardcoded admin, and a
+// missing or expired session leaves the actor anonymous.
+func (h *Handler) sessionIdentity(c *gin.Context) (username, token string) {
+	if user, ok := GetCurrentUser(c); ok {
+		username = user.Username
+	}
+
+	token = GetSessionToken(c)
+	if token == "" {
+		return username, ""
+	}
+	if session, ok := h.service.ValidateSession(token); ok && session.Username != "" {
+		username = session.Username
+	}
+	return username, token
 }
 
 // meHandler godoc
@@ -166,16 +159,19 @@ func (h *Handler) logoutHandler(c *gin.Context) {
 func (h *Handler) meHandler(c *gin.Context) (UserResponse, error) {
 	sessionUser, ok := GetCurrentUser(c)
 	if !ok {
-		return UserResponse{}, apperr.Unauthenticated("UNAUTHORIZED", "Authentication required", nil)
+		return UserResponse{}, errUnauthorized
 	}
+
 	user, err := h.service.GetCurrentUser(c.Request.Context(), sessionUser.ID)
 	if errors.Is(err, ErrUserNotFound) {
+		// The account vanished between the session lookup and this query: drop the
+		// dangling session instead of leaving the client half authenticated.
 		h.service.Logout(GetSessionToken(c))
 		clearSessionCookie(c)
-		return UserResponse{}, apperr.Unauthenticated("UNAUTHORIZED", "Authentication required", err)
+		return UserResponse{}, errUnauthorized
 	}
 	if err != nil {
-		return UserResponse{}, err
+		return UserResponse{}, fmt.Errorf("load current user: %w", err)
 	}
 	return user, nil
 }

@@ -14,6 +14,9 @@ const (
 
 	// DefaultSessionCookieMaxAge is the cookie lifetime matching DefaultSessionTTL in seconds.
 	DefaultSessionCookieMaxAge = int(DefaultSessionTTL / time.Second)
+
+	// tokenBytes is the CSPRNG payload behind a session token; hex encoding doubles it.
+	tokenBytes = 32
 )
 
 // SessionItem represents an active in-memory session.
@@ -53,11 +56,11 @@ func NewMemorySessionStore(ttl time.Duration) *MemorySessionStore {
 
 // Create generates a secure 64-character token and stores the session item.
 func (s *MemorySessionStore) Create(userID int64, username string) (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
+	raw := make([]byte, tokenBytes)
+	if _, err := rand.Read(raw); err != nil {
 		return "", fmt.Errorf("generate session token: %w", err)
 	}
-	token := hex.EncodeToString(bytes)
+	token := hex.EncodeToString(raw)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -114,5 +117,7 @@ func (s *MemorySessionStore) Delete(token string) {
 
 // TTL returns the configured session duration.
 func (s *MemorySessionStore) TTL() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.ttl
 }

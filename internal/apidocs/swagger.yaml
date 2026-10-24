@@ -143,6 +143,11 @@ definitions:
     - password
     - username
     type: object
+  auth.LogoutResponse:
+    properties:
+      loggedOut:
+        type: boolean
+    type: object
   auth.UserResponse:
     properties:
       createdAt:
@@ -1695,7 +1700,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  type: object
+                  $ref: '#/definitions/auth.LogoutResponse'
               type: object
         "401":
           description: Unauthorized

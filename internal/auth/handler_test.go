@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,140 +119,217 @@ func TestAuthHandler_ValidationDetailsUseJSONFieldsAndLocalizedCodes(t *testing.
 	}
 }
 
+func findSessionCookie(cookies []*http.Cookie) *http.Cookie {
+	for _, cookie := range cookies {
+		if cookie.Name == SessionCookieName {
+			return cookie
+		}
+	}
+	return nil
+}
+
+func postJSON(t *testing.T, router *gin.Engine, path string, payload any, language string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	if language != "" {
+		request.Header.Set("Accept-Language", language)
+	}
+	router.ServeHTTP(recorder, request)
+	return recorder
+}
+
 func TestAuthHandler_InitAndLoginFlow(t *testing.T) {
 	router, svc := setupTestRouter(t)
-
-	// 1. Protected endpoint returns 401 without cookie
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/protected", nil)
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
-	}
-
-	// Logout requires an active session too.
-	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401 when logging out without a session, got %d", w.Code)
-	}
-
-	// 2. Init with password mismatch returns 422
-	initBody, _ := json.Marshal(InitAdminRequest{
-		Username:        "admin",
-		Password:        "password123",
-		ConfirmPassword: "otherPassword",
-	})
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/init", bytes.NewReader(initBody))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("expected 422 for mismatch, got %d", w.Code)
-	}
-
-	// 3. Init with valid input returns 200 and sets cookie
-	initBody, _ = json.Marshal(InitAdminRequest{
+	credentials := InitAdminRequest{
 		Username:        "admin",
 		Password:        "password123",
 		ConfirmPassword: "password123",
-	})
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/init", bytes.NewReader(initBody))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
-	cookies := w.Result().Cookies()
 	var sessionCookie *http.Cookie
-	for _, c := range cookies {
-		if c.Name == SessionCookieName {
-			sessionCookie = c
-			break
+
+	t.Run("protected endpoint rejects a missing session", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/protected", nil)
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d", w.Code)
 		}
-	}
-	if sessionCookie == nil || sessionCookie.Value == "" {
-		t.Fatal("expected session cookie to be set")
-	}
-
-	// 4. Second init returns 403
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/init", bytes.NewReader(initBody))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 for duplicate init, got %d", w.Code)
-	}
-
-	// 5. Test protected endpoint with session cookie
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodGet, "/api/v1/protected", nil)
-	req.AddCookie(sessionCookie)
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 on protected endpoint, got %d", w.Code)
-	}
-	var refreshedCookie *http.Cookie
-	for _, c := range w.Result().Cookies() {
-		if c.Name == SessionCookieName {
-			refreshedCookie = c
-			break
-		}
-	}
-	if refreshedCookie == nil || refreshedCookie.Value != sessionCookie.Value || refreshedCookie.MaxAge != int(svc.SessionTTL().Seconds()) {
-		t.Fatalf("expected session cookie renewal on protected endpoint: %+v", refreshedCookie)
-	}
-
-	// 6. Test /me endpoint with session cookie
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
-	req.AddCookie(sessionCookie)
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 on /me, got %d", w.Code)
-	}
-	var meResponse struct {
-		Data UserResponse `json:"data"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &meResponse); err != nil {
-		t.Fatalf("decode /me response: %v", err)
-	}
-	if meResponse.Data.CreatedAt.IsZero() {
-		t.Fatalf("expected /me createdAt to be populated, got %+v", meResponse.Data)
-	}
-
-	// 7. Test logout
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
-	req.AddCookie(sessionCookie)
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 on logout, got %d", w.Code)
-	}
-
-	// 8. Protected endpoint fails again with the logged-out cookie
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodGet, "/api/v1/protected", nil)
-	req.AddCookie(sessionCookie)
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401 after logout, got %d", w.Code)
-	}
-
-	// 9. Login with correct credentials
-	loginBody, _ := json.Marshal(LoginRequest{
-		Username: "admin",
-		Password: "password123",
 	})
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(loginBody))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 on login, got %d: %s", w.Code, w.Body.String())
+
+	t.Run("logout rejects a missing session", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 when logging out without a session, got %d", w.Code)
+		}
+	})
+
+	t.Run("init rejects a password mismatch", func(t *testing.T) {
+		mismatch := credentials
+		mismatch.ConfirmPassword = "otherPassword"
+		w := postJSON(t, router, "/api/v1/auth/init", mismatch, "")
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for mismatch, got %d", w.Code)
+		}
+	})
+
+	t.Run("init succeeds and issues a hardened cookie", func(t *testing.T) {
+		w := postJSON(t, router, "/api/v1/auth/init", credentials, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		cookie := findSessionCookie(w.Result().Cookies())
+		if cookie == nil || cookie.Value == "" {
+			t.Fatal("expected session cookie to be set")
+		}
+		if !cookie.HttpOnly {
+			t.Error("session cookie must be HttpOnly")
+		}
+		if cookie.SameSite != http.SameSiteLaxMode {
+			t.Errorf("expected SameSite=Lax, got %v", cookie.SameSite)
+		}
+		if cookie.Path != "/" {
+			t.Errorf("expected Path=/, got %q", cookie.Path)
+		}
+		if cookie.MaxAge != int(svc.SessionTTL().Seconds()) {
+			t.Errorf("expected MaxAge=%d, got %d", int(svc.SessionTTL().Seconds()), cookie.MaxAge)
+		}
+		sessionCookie = cookie
+	})
+
+	t.Run("second init is rejected", func(t *testing.T) {
+		w := postJSON(t, router, "/api/v1/auth/init", credentials, "")
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for duplicate init, got %d", w.Code)
+		}
+	})
+
+	t.Run("protected endpoint accepts the session and renews the cookie", func(t *testing.T) {
+		if sessionCookie == nil {
+			t.Fatal("no session cookie from the init step")
+		}
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/protected", nil)
+		req.AddCookie(sessionCookie)
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 on protected endpoint, got %d", w.Code)
+		}
+
+		renewed := findSessionCookie(w.Result().Cookies())
+		if renewed == nil || renewed.Value != sessionCookie.Value {
+			t.Fatalf("expected the session cookie to be renewed in place: %+v", renewed)
+		}
+		if renewed.MaxAge != int(svc.SessionTTL().Seconds()) {
+			t.Errorf("expected renewed MaxAge=%d, got %d", int(svc.SessionTTL().Seconds()), renewed.MaxAge)
+		}
+	})
+
+	t.Run("me returns the stored account", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+		req.AddCookie(sessionCookie)
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 on /me, got %d", w.Code)
+		}
+
+		var response struct {
+			Data UserResponse `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode /me response: %v", err)
+		}
+		if response.Data.CreatedAt.IsZero() {
+			t.Fatalf("expected /me createdAt to be populated, got %+v", response.Data)
+		}
+	})
+
+	t.Run("logout clears the cookie without re-issuing it", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+		req.AddCookie(sessionCookie)
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 on logout, got %d", w.Code)
+		}
+
+		// RequireAuth must not renew the cookie it is about to delete, otherwise the
+		// browser receives two conflicting Set-Cookie headers.
+		var issued []*http.Cookie
+		for _, cookie := range w.Result().Cookies() {
+			if cookie.Name == SessionCookieName {
+				issued = append(issued, cookie)
+			}
+		}
+		if len(issued) != 1 {
+			t.Fatalf("expected exactly one session Set-Cookie on logout, got %d", len(issued))
+		}
+		if issued[0].Value != "" || issued[0].MaxAge >= 0 {
+			t.Fatalf("expected the session cookie to be expired, got %+v", issued[0])
+		}
+	})
+
+	t.Run("protected endpoint rejects the logged-out session", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/protected", nil)
+		req.AddCookie(sessionCookie)
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 after logout, got %d", w.Code)
+		}
+	})
+
+	t.Run("login succeeds with the configured credentials", func(t *testing.T) {
+		w := postJSON(t, router, "/api/v1/auth/login", LoginRequest{
+			Username: credentials.Username,
+			Password: credentials.Password,
+		}, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 on login, got %d: %s", w.Code, w.Body.String())
+		}
+		if findSessionCookie(w.Result().Cookies()) == nil {
+			t.Fatal("expected a session cookie on login")
+		}
+	})
+}
+
+// A password that satisfies the 64-rune binding contract can still exceed the
+// 72 bytes bcrypt accepts. That must be a client error, never a 500.
+func TestAuthHandler_InitRejectsPasswordBeyondBcryptLimit(t *testing.T) {
+	router, _ := setupTestRouter(t)
+	password := strings.Repeat("密", 64) // 64 runes, 192 bytes
+
+	w := postJSON(t, router, "/api/v1/auth/init", InitAdminRequest{
+		Username:        "admin",
+		Password:        password,
+		ConfirmPassword: password,
+	}, "zh-Hans")
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Code != "PASSWORD_TOO_LONG" {
+		t.Fatalf("expected PASSWORD_TOO_LONG, got %+v", response)
+	}
+	if !strings.Contains(response.Message, "密码过长") {
+		t.Fatalf("expected a localized message, got %q", response.Message)
 	}
 }
 

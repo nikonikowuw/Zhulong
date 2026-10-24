@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/authentication-guidelines.md", "reason": "认证契约、限流预留语义与密码策略"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "apperr 与本地化错误码"}

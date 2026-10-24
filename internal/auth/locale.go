@@ -44,6 +44,11 @@ func init() {
 			"zh-Hans": "密码长度不能少于 8 位",
 			"zh-Hant": "密碼長度不能少於 8 位",
 		},
+		"PASSWORD_TOO_LONG": {
+			"en":      "Password is too long (max 64 characters and 72 bytes)",
+			"zh-Hans": "密码过长（最多 64 个字符，且不超过 72 字节）",
+			"zh-Hant": "密碼過長（最多 64 個字元，且不超過 72 位元組）",
+		},
 		"PASSWORD_MISMATCH": {
 			"en":      "Passwords do not match",
 			"zh-Hans": "两次输入的密码不一致",

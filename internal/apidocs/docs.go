@@ -701,7 +701,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/auth.LogoutResponse"
                                         }
                                     }
                                 }
@@ -3901,6 +3901,14 @@ const docTemplate = `{
                 },
                 "username": {
                     "type": "string"
+                }
+            }
+        },
+        "auth.LogoutResponse": {
+            "type": "object",
+            "properties": {
+                "loggedOut": {
+                    "type": "boolean"
                 }
             }
         },

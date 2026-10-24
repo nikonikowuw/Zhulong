@@ -21,6 +21,14 @@ func setupTestDB(t *testing.T) *database.Store {
 	return store
 }
 
+// userCount reports how many accounts are persisted, bypassing the store's
+// single-user guard so tests can assert the invariant directly.
+func userCount(store *database.Store) (int64, error) {
+	var count int64
+	err := store.DB().Model(&User{}).Count(&count).Error
+	return count, err
+}
+
 func TestGORMUserStore_HasUserAndCreate(t *testing.T) {
 	dbStore := setupTestDB(t)
 	userStore := NewUserStore(dbStore)
