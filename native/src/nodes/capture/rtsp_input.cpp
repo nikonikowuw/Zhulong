@@ -26,11 +26,46 @@ extern "C" {
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 namespace zhulong {
 namespace {
+
+/** @brief URL 最大长度上限（防御性上界，避免对超长输入做无界扫描） */
+constexpr size_t max_url_length = 8192;
+
+/** @brief RTSP scheme 字面量 */
+constexpr char rtsp_scheme[] = "rtsp://";
+
+/** @brief RTSP scheme 的字符数 */
+constexpr size_t scheme_length = sizeof(rtsp_scheme) - 1;
+
+/** @brief RTSP 默认端口，与默认端口等价时从规范化结果中省略 */
+constexpr int default_rtsp_port = 554;
+
+/** @brief 端口上限（TCP/UDP 端口最大值） */
+constexpr int max_port = 65535;
+
+/** @brief 流信息探测时长上界（微秒），避免在弱网下耗尽建连超时窗口 */
+constexpr int probe_analyze_duration_us = 1000000;
+
+/** @brief 流信息探测字节量上界，与探测时长共同限制元数据解析开销 */
+constexpr int probe_size_bytes = 1048576;
+
+/** @brief 表示「未设置截止时间」的纳秒滴答值 */
+constexpr int64_t never_expires_at = std::numeric_limits<int64_t>::max();
+
+/** @brief 每毫秒对应的纳秒数 */
+constexpr int64_t nanoseconds_per_millisecond = 1000000;
+
+/** @brief 当前单调时钟时刻的纳秒滴答值 */
+int64_t now_ticks() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+}
 
 /**
  * @brief FFmpeg 底层中断回调函数
@@ -48,6 +83,8 @@ int interrupt(void *opaque) noexcept {
  * 保证在生命周期结束时安全释放上下文。
  * ⚠️ 注意：即使在探测成功或正常结束时，也必须在 avformat_close_input 之前置 cancel.stopped=true，
  * 因为某些 RTSP 服务器在接收 TEARDOWN 命令后不发响应，提前打断可防止关闭时挂死。
+ *
+ * ⚠️ 本类型独占底层指针，拷贝会导致双重释放，因此显式禁用拷贝与移动。
  */
 struct Input {
     AVFormatContext *context = avformat_alloc_context();
@@ -61,20 +98,34 @@ struct Input {
 
     ~Input() {
         // 确保在 TEARDOWN / 关闭网络流时不会因对端停顿而挂起
-        cancel.stopped.store(true);
+        cancel.stopped.store(true, std::memory_order_relaxed);
         avformat_close_input(&context);
     }
+
+    Input(const Input &) = delete;
+    Input &operator=(const Input &) = delete;
+    Input(Input &&) = delete;
+    Input &operator=(Input &&) = delete;
 };
 
 /**
  * @brief RAII 管理的 AVDictionary 字典包装
+ *
+ * 与 Input 同理，独占所有权并禁用拷贝/移动，避免 av_dict_free 被重复调用。
  */
 struct Dictionary {
     AVDictionary *value = nullptr;
 
+    Dictionary() = default;
+
     ~Dictionary() {
         av_dict_free(&value);
     }
+
+    Dictionary(const Dictionary &) = delete;
+    Dictionary &operator=(const Dictionary &) = delete;
+    Dictionary(Dictionary &&) = delete;
+    Dictionary &operator=(Dictionary &&) = delete;
 
     void set(const char *key, const std::string &text) {
         if (av_dict_set(&value, key, text.c_str(), 0) < 0) {
@@ -99,8 +150,8 @@ struct PacketDeleter {
  * 因此必须优先检查 cancel.stopped 与绝对 deadline。
  */
 void check(int result, const Cancellation &cancel, uint64_t stream_id, const char *operation) {
-    if (cancel.stopped.load()) throw Failure{Zhulong_ERR_CANCELLED};
-    if (Clock::now() >= cancel.deadline || result == AVERROR(ETIMEDOUT)) {
+    if (cancel.stopped.load(std::memory_order_relaxed)) throw Failure{Zhulong_ERR_CANCELLED};
+    if (cancel.expired() || result == AVERROR(ETIMEDOUT)) {
         ZL_LOGW(stream_id, "nodes.capture", "rtsp_timeout operation=%s rc=%d", operation, result);
         throw Failure{Zhulong_ERR_TIMEOUT};
     }
@@ -117,6 +168,11 @@ void check(int result, const Cancellation &cancel, uint64_t stream_id, const cha
     throw Failure{Zhulong_ERR_IO};
 }
 
+/** @brief 在进入阻塞调用前确认未被取消（不从结果码推断，仅看取消标志） */
+void throw_if_cancelled(const Cancellation &cancel) {
+    if (cancel.stopped.load(std::memory_order_relaxed)) throw Failure{Zhulong_ERR_CANCELLED};
+}
+
 /**
  * @brief 将 FFmpeg 编解码枚举映射为 Zhulong C ABI 编解码枚举
  */
@@ -126,9 +182,16 @@ int codec_id(AVCodecID codec) {
     throw Failure{Zhulong_ERR_UNSUPPORTED};
 }
 
-/** @brief 判断字符是否为空白字符 */
-bool ascii_space(unsigned char character) {
-    return character == ' ' || character == '\t' || character == '\r' || character == '\n';
+/** @brief URL 两端需要剥离的空白字符集 */
+constexpr char url_blank_characters[] = " \t\r\n";
+
+/** @brief 大小写不敏感地判断字符串是否以 RTSP scheme 开头（无额外分配） */
+bool has_rtsp_scheme(const std::string &url) {
+    if (url.size() < scheme_length) return false;
+    return std::equal(url.begin(), url.begin() + static_cast<std::ptrdiff_t>(scheme_length), rtsp_scheme,
+        [](char actual, char expected) {
+            return expected == static_cast<char>(std::tolower(static_cast<unsigned char>(actual)));
+        });
 }
 
 /** @brief 将字符串转换为小写 */
@@ -167,12 +230,14 @@ std::string normalize_rtsp_url(const char *raw) {
     if (!raw) throw Failure{Zhulong_ERR_INVALID_ARGUMENT};
     std::string url(raw);
 
-    // 剥离两端空白字符
-    while (!url.empty() && ascii_space(url.front())) url.erase(url.begin());
-    while (!url.empty() && ascii_space(url.back())) url.pop_back();
+    // 剥离两端空白字符：一次性定位边界，避免逐字符 erase 的 O(n²) 搬移
+    const auto trim_begin = url.find_first_not_of(url_blank_characters);
+    if (trim_begin == std::string::npos) throw Failure{Zhulong_ERR_INVALID_ARGUMENT};
+    const auto trim_end = url.find_last_not_of(url_blank_characters);
+    url = url.substr(trim_begin, trim_end - trim_begin + 1);
 
-    // 长度与 scheme 校验
-    if (url.size() > 8192 || url.size() < 8 || lower(url.substr(0, 7)) != "rtsp://") {
+    // 长度与 scheme 校验（scheme 后至少需要 1 个主机字符）
+    if (url.size() > max_url_length || url.size() <= scheme_length || !has_rtsp_scheme(url)) {
         throw Failure{Zhulong_ERR_INVALID_ARGUMENT};
     }
 
@@ -193,9 +258,9 @@ std::string normalize_rtsp_url(const char *raw) {
     }
 
     // 分离 authority 与路径/查询参数
-    auto end = url.find_first_of("/?", 7);
-    if (end == std::string::npos) end = url.size();
-    std::string authority = url.substr(7, end - 7);
+    auto authority_end = url.find_first_of("/?", scheme_length);
+    if (authority_end == std::string::npos) authority_end = url.size();
+    std::string authority = url.substr(scheme_length, authority_end - scheme_length);
 
     // 提取 userinfo（用户名:密码）
     std::string userinfo;
@@ -251,23 +316,29 @@ std::string normalize_rtsp_url(const char *raw) {
             throw Failure{Zhulong_ERR_INVALID_ARGUMENT};
         }
         const int number = std::stoi(port);
-        if (number < 1 || number > 65535) throw Failure{Zhulong_ERR_INVALID_ARGUMENT};
-        port = number == 554 ? "" : ":" + std::to_string(number);
+        if (number < 1 || number > max_port) throw Failure{Zhulong_ERR_INVALID_ARGUMENT};
+        port = number == default_rtsp_port ? "" : ":" + std::to_string(number);
     }
 
-    return "rtsp://" + userinfo + lower(host) + port + url.substr(end);
+    return std::string(rtsp_scheme) + userinfo + lower(host) + port + url.substr(authority_end);
 }
 
 // ============================================================================
 //                               Cancellation 实现
 // ============================================================================
 
-void Cancellation::expire_after(uint32_t milliseconds) {
-    deadline = Clock::now() + std::chrono::milliseconds(milliseconds);
+void Cancellation::expire_after(uint32_t milliseconds) noexcept {
+    deadline_ticks_.store(now_ticks() + static_cast<int64_t>(milliseconds) * nanoseconds_per_millisecond,
+        std::memory_order_relaxed);
+}
+
+bool Cancellation::expired() const noexcept {
+    const int64_t deadline_ticks = deadline_ticks_.load(std::memory_order_relaxed);
+    return deadline_ticks != never_expires_at && now_ticks() >= deadline_ticks;
 }
 
 bool Cancellation::interrupted() const noexcept {
-    return stopped.load(std::memory_order_relaxed) || Clock::now() >= deadline;
+    return stopped.load(std::memory_order_relaxed) || expired();
 }
 
 Zhulong_video_view Video::borrowed_view() const {
@@ -280,7 +351,10 @@ Zhulong_video_view Video::borrowed_view() const {
 void initialize_ffmpeg() {
     static std::once_flag once;
     std::call_once(once, [] {
-        // 进程级别静默 FFmpeg 日志，防止 RTSP 认证凭据打入控制台或日志文件
+        // 进程级别静默 FFmpeg 日志，防止 RTSP 认证凭据（URL 内 user:pass@）打入控制台或日志文件。
+        // ⚠️ 刻意取舍：这里用「构造性保证」而非「正则脱敏」——只要没有任何输出，就不可能泄露凭据，
+        //    代价是 FFmpeg 自身诊断全部丢失。因此本模块的错误路径必须自带 rc 与 operation 上下文
+        //    （见 check()），不得依赖 FFmpeg 日志排障。
         av_log_set_level(AV_LOG_QUIET);
         av_log_set_callback([](void *, int, const char *, va_list) {});
         // 初始化网络子系统
@@ -299,9 +373,9 @@ void initialize_ffmpeg() {
 Video read_rtsp(const std::string &url, const Options &options, Cancellation &cancel,
                 const std::function<void(const Zhulong_packet_view &)> &consume,
                 const std::function<void(const Video &)> &ready, uint64_t stream_id) {
-    // 设置建连超时
+    // 设置建连超时；入口处仅判定取消，不伪造结果码
     cancel.expire_after(options.open_timeout_ms);
-    check(0, cancel, stream_id, "open");
+    throw_if_cancelled(cancel);
 
     Input input(cancel);
     Dictionary dictionary;
@@ -310,8 +384,8 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
     dictionary.set("timeout", std::to_string(static_cast<int64_t>(std::max(options.open_timeout_ms, options.idle_timeout_ms)) * 1000));
     dictionary.set("allowed_media_types", "video");
     // 约束分析流信息的探测时长与字节量，避免在弱网下耗尽超时窗口
-    dictionary.set("analyzeduration", "1000000");
-    dictionary.set("probesize", "1048576");
+    dictionary.set("analyzeduration", std::to_string(probe_analyze_duration_us));
+    dictionary.set("probesize", std::to_string(probe_size_bytes));
 
     // 1. 打开 RTSP 输入
     const int open_result = avformat_open_input(&input.context, url.c_str(), av_find_input_format("rtsp"), &dictionary.value);
@@ -325,9 +399,11 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
     }
 
     // 快速前置编解码格式检查（在解析深度流信息前拒绝不支持的格式）
-    const auto detected_codec = input.context->streams[index]->codecpar->codec_id;
-    if (detected_codec != AV_CODEC_ID_H264 && detected_codec != AV_CODEC_ID_HEVC) {
-        ZL_LOGW(stream_id, "nodes.capture", "rtsp_codec_unsupported codec_id=%d", static_cast<int>(detected_codec));
+    // ⚠️ RTSP 的 SDP 可能尚未解析出 codec（AV_CODEC_ID_NONE），此时不得过早拒绝；
+    //    权威判定在 avformat_find_stream_info 之后使用 codecpar->codec_id 完成。
+    const auto early_codec = input.context->streams[index]->codecpar->codec_id;
+    if (early_codec != AV_CODEC_ID_NONE && early_codec != AV_CODEC_ID_H264 && early_codec != AV_CODEC_ID_HEVC) {
+        ZL_LOGW(stream_id, "nodes.capture", "rtsp_codec_unsupported codec_id=%d", static_cast<int>(early_codec));
         throw Failure{Zhulong_ERR_UNSUPPORTED};
     }
 
@@ -340,7 +416,8 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
 
     // 提取并校验视频流元数据
     Video video;
-    video.view.codec = codec_id(detected_codec);
+    // 使用流信息解析后的权威 codec_id；codec_id() 已包含不支持格式的拒绝逻辑
+    video.view.codec = codec_id(parameters->codec_id);
     if (parameters->width <= 0 || parameters->height <= 0 ||
         stream->time_base.num <= 0 || stream->time_base.den <= 0) {
         ZL_LOGW(stream_id, "nodes.capture", "rtsp_video_metadata_invalid width=%d height=%d time_base_num=%d time_base_den=%d",
@@ -372,16 +449,20 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
 
     // 4. 帧读取循环（使用 idle_timeout_ms 监控两帧之间的间隔）
     cancel.expire_after(options.idle_timeout_ms);
-    while (!cancel.stopped.load()) {
-        if (cancel.stopped.load(std::memory_order_relaxed)) break;
-        if (Clock::now() >= cancel.deadline) {
+    while (!cancel.stopped.load(std::memory_order_relaxed)) {
+        if (cancel.expired()) {
             ZL_LOGW(stream_id, "nodes.capture", "rtsp_idle_timeout timeout_ms=%u", options.idle_timeout_ms);
             throw Failure{Zhulong_ERR_TIMEOUT};
         }
 
         const int result = av_read_frame(input.context, packet.get());
-        if (result == AVERROR(EAGAIN)) continue;
-        check(result, cancel, stream_id, "read");
+        if (result == AVERROR(EAGAIN)) {
+            // 阻塞式 RTSP 套接字理论上不会返回 EAGAIN；若出现则主动退让 1ms，避免空转占满 CPU
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        // 成功读取的包不再参与超时判定：否则恰好跨越截止点的合法帧会被当作超时丢弃
+        if (result < 0) check(result, cancel, stream_id, "read");
 
         // 仅处理所选视频轨道的有效数据包
         if (packet->stream_index == index && packet->size > 0) {
@@ -407,7 +488,8 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
         av_packet_unref(packet.get());
     }
 
-    return video;
+    // 循环退出只可能是因为停止标志被置位；与 check() 的错误语义保持一致
+    throw Failure{Zhulong_ERR_CANCELLED};
 }
 
 } // namespace zhulong

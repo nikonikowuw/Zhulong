@@ -5,6 +5,7 @@
  * 核心机制说明：
  * 1. 协作式中断与超时（Cancellation & Deadlines）：
  *    - 封装了基于单调时钟 steady_clock 的绝对截止时间管理与 atomic<bool> 取消信号；
+ *    - 取消标志与截止时间均为原子量，控制线程可直接置位取消或改写超时，不存在跨线程数据竞争；
  *    - 通过 FFmpeg 的 interrupt_callback 在底层网络阻塞（如 TCP 握手、RTSP DESCRIBE、av_read_frame）中实现毫秒级快速打断。
  * 2. 视频元数据与内存生命周期（Video & extradata）：
  *    - 内部用 std::vector<uint8_t> 深拷贝保留 SPS/PPS/VPS 等 extradata；
@@ -19,8 +20,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <functional>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -38,11 +43,15 @@ constexpr auto stream_grace_period = std::chrono::seconds(8);
 /** @brief 获取流宽限期（默认 8 秒，可通过环境变量 ZHULONG_STREAM_GRACE_PERIOD_MS 覆写用于加速测试） */
 inline std::chrono::milliseconds get_stream_grace_period() {
     static const auto period = [] {
+        // 取值在首次调用时冻结：非法值（非数字/负数/溢出）一律回落到默认宽限期，
+        // 此处在静态初始化期，不依赖日志系统可用，故仅做显式回落而不记录。
         if (const char *env = std::getenv("ZHULONG_STREAM_GRACE_PERIOD_MS")) {
             try {
-                int val = std::stoi(env);
+                const int val = std::stoi(env);
                 if (val >= 0) return std::chrono::milliseconds(val);
-            } catch (...) {}
+            } catch (const std::exception &) {
+                // 落入下方默认值
+            }
         }
         return std::chrono::duration_cast<std::chrono::milliseconds>(stream_grace_period);
     }();
@@ -69,6 +78,10 @@ struct Options {
 
 /**
  * @brief 解析并校验 C ABI 传入的流选项结构体
+ *
+ * 超时字段为 0 时表示「使用默认值」（5000ms），而非「不设超时」；
+ * 该映射同时用于 Options::operator== 的重复流配置一致性判定。
+ *
  * @param options C ABI 选项指针（为 nullptr 时返回默认配置）
  * @return Options 校验并规范化后的内部配置
  * @throws Failure 若参数不合法抛出 Zhulong_ERR_INVALID_ARGUMENT
@@ -95,19 +108,27 @@ std::string normalize_rtsp_url(const char *url);
  * @brief 跨线程协作式取消与超时控制状态
  *
  * 线程访问规则：
- *   - stopped 标志支持跨线程原子写入；
- *   - deadline 仅由拥有该 Input 的单个 Worker 线程读写；
- *   - interrupted() 由 FFmpeg 中断回调在网络 IO 期间周期性轮询。
+ *   - stopped 与截止时间均为原子量，任何线程都可安全置位取消或改写超时；
+ *   - 未调用过 expire_after 时「永不超时」，因此默认构造的实例不会被误判为已过期；
+ *   - interrupted() / expired() 会被 FFmpeg 中断回调在网络 IO 期间高频轮询，必须保持无锁轻量。
  */
-struct Cancellation {
-    std::atomic<bool> stopped{false}; /**< 原子停止标志 */
-    Clock::time_point deadline;        /**< 绝对截止时间点 */
+class Cancellation {
+public:
+    /** @brief 原子停止标志（置位后不可逆） */
+    std::atomic<bool> stopped{false};
 
-    /** @brief 从当前时刻起设置指定毫秒后的超时截止点 */
-    void expire_after(uint32_t milliseconds);
+    /** @brief 从当前时刻起设置指定毫秒后的超时截止点（任何线程可调用） */
+    void expire_after(uint32_t milliseconds) noexcept;
 
     /** @brief 检查是否已被外部中断或已超过设定的截止时间 */
     bool interrupted() const noexcept;
+
+    /** @brief 仅检查绝对截止时间是否已到达；未设置截止时间时恒为 false */
+    bool expired() const noexcept;
+
+private:
+    /** @brief 以 Clock 纳秒滴答表示的绝对截止点；INT64_MAX 表示尚未设置 */
+    std::atomic<int64_t> deadline_ticks_{std::numeric_limits<int64_t>::max()};
 };
 
 /**
@@ -131,7 +152,8 @@ struct Video {
  *    - 仅打开连接、解析流信息并提取视频元数据，随后立即优雅断开并返回 Video。
  * 2. 持续拉流模式（consume 提供了回调函数）：
  *    - 打开连接后触发 ready 回调；
- *    - 进入帧循环读取 av_read_frame，并将视频包通过 consume 回调派发，直到 cancel 被触发或发生错误。
+ *    - 进入帧循环读取 av_read_frame，并将视频包通过 consume 回调派发；
+ *    - 被取消时抛出 Zhulong_ERR_CANCELLED，元数据以 ready 回调为准，返回值不应被使用。
  *
  * @param url 规范化后的 RTSP URL
  * @param options 拉流选项

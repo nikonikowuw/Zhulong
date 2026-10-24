@@ -7,10 +7,11 @@
  *    - 剥离前后空白、小写 scheme 和 host、IPv6 字面量保持、省略默认 554 端口、保留百分号合法编码；
  *    - 严格拒绝非法 scheme、无效端口、不完整百分号转义、fragment 锚点及格式错误等。
  * 2. 默认拉流选项（Options）解析正确性。
- * 3. 视频元数据与 extradata 借用视图（borrowed_view）内存布局一致性。
- * 4. 订阅通道排空（disable_and_drain）：
+ * 3. 取消与超时状态机（Cancellation）：默认不超时、零超时立即可见、刷新后恢复。
+ * 4. 视频元数据与 extradata 借用视图（borrowed_view）内存布局一致性。
+ * 5. 订阅通道排空（disable_and_drain）：
  *    - 验证排空后绝不再执行新的用户回调。
- * 5. 异常鲁棒性（Throwing consumer）：
+ * 6. 异常鲁棒性（Throwing consumer）：
  *    - 验证当用户回调抛出 C++ 异常时，in_callback 标志与排空条件变量能够被正确复原。
  */
 
@@ -43,6 +44,8 @@ int main() {
             "rtsp:///A",             // 缺失 host
             "rtsp://a:b@c@host/A",   // 歧义的多个 @
             "rtsp://host/a b",       // 未转义的空格
+            "   ",                  // 仅空白字符，剥离后为空
+            "rtsp://",              // 仅 scheme，缺主机
             "rtsp://host/a%2",       // 不完整的百分号转义
             "rtsp://host/a#b",       // RTSP 不支持 fragment (#)
             "rtsp://host:0/A",       // 端口为 0
@@ -65,13 +68,24 @@ int main() {
         CHECK(defaults.transport == Zhulong_TRANSPORT_TCP);
         CHECK(defaults.open_timeout_ms == 5000 && defaults.idle_timeout_ms == 5000);
 
-        /* 4. 测试 Video extradata 借用视图一致性 */
+        /* 4. 测试取消与超时状态机（默认不超时 / 显式超时 / 停止标志） */
+        zhulong::Cancellation cancellation;
+        CHECK(!cancellation.expired());      // 默认构造不得被误判为已过期
+        CHECK(!cancellation.interrupted());
+        cancellation.expire_after(0);         // 零超时等价于立即过期
+        CHECK(cancellation.expired() && cancellation.interrupted());
+        cancellation.expire_after(60000);     // 刷新为未来截止点后恢复未过期
+        CHECK(!cancellation.expired() && !cancellation.interrupted());
+        cancellation.stopped.store(true);
+        CHECK(cancellation.interrupted());
+
+        /* 5. 测试 Video extradata 借用视图一致性 */
         zhulong::Video video;
         video.extradata.resize(4096, 42);
         const auto view = video.borrowed_view();
         CHECK(view.extradata_size == 4096 && view.extradata[4095] == 42);
 
-        /* 5. 测试订阅禁用与排空（disable_and_drain）：排空后即使调用 invoke 也不得触发回调 */
+        /* 6. 测试订阅禁用与排空（disable_and_drain）：排空后即使调用 invoke 也不得触发回调 */
         int calls = 0;
         zhulong::Subscription subscription(1, [](uintptr_t token, const Zhulong_packet_view *) {
             ++*reinterpret_cast<int *>(token);
@@ -80,7 +94,7 @@ int main() {
         subscription.invoke({});
         CHECK(calls == 0);
 
-        /* 6. 测试异常安全（Throwing consumer）：抛出异常的回调不得残留 active 状态或损坏 TLS 标记 */
+        /* 7. 测试异常安全（Throwing consumer）：抛出异常的回调不得残留 active 状态或损坏 TLS 标记 */
         zhulong::Subscription throwing(1, [](uintptr_t, const Zhulong_packet_view *) { throw 1; }, 0);
         try {
             throwing.invoke({});
