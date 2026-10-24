@@ -95,6 +95,9 @@ internal/webui/dist/*
 *.mp4
 *.h264
 *.h265
+# 例外：离线回归必需的裸码流夹具（非运行时录像产物）
+!native/tests/fixtures/*.h264
+!native/tests/fixtures/*.h265
 
 # 异构 NPU 转换权重与本地模型 (避免超大二进制污染 Git 历史)
 /models/*.onnx

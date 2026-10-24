@@ -217,13 +217,25 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
    - 从 `mpp_frame_get_buffer(frame)` 提取底层 `MppBuffer`；
    - 驱动返回的 `mpp_buffer_get_fd(buf)` 在 MPP 内部受生命周期管理。为避免下游异步消费与解码器内部复用产生竞态，必须通过 `int owned_fd = ::dup(raw_fd)` 获取独立文件描述符回填至 `HardwareFrame::dma_fd`。
 2. ⚠️ **帧池防死锁关键时序 (Ref Increment & Immediate Deinit)**：
-   - 取得 `MppBuffer` 后，必须调用 `mpp_buffer_inc_ref(buf)` 显式增加底层物理缓冲区的引用计数；
+   - 取得 `MppBuffer` 后，必须调用 `mpp_buffer_inc_ref(buf)` 显式增加底层物理缓冲区的引用计数，**并校验其返回值**；失败时立刻 `close(dup_fd)` 并返回错误，禁止继续装配（否则 `release_fn` 的 `mpp_buffer_put` 会造成净减引用）；
    - 紧接着**立即调用 `mpp_frame_deinit(&frame)` 释放外层 `MppFrame` 描述符容器**！若持有 `MppFrame` 直至下游消费完毕，MPP 内部的固定槽位（通常为 16~24 槽位）将在几帧后耗尽，导致硬件解码器永久挂起陷入死锁；
    - 将 `mpp_buffer_put(buf)` 绑定在 `HardwareFrame::release_fn` RAII 析构闭包中，并由 `close(owned_fd)` 释放独立描述符。当下游算法或 `FrameBroker` 消费完毕时，自动归还底层 VPU 缓冲池。
-3. **硬件步长对齐与格式保真**：
-   - 导出的图像格式恒定标记为 `FRAME_FORMAT_NV12`；
+
+3. ⚠️ **外部缓冲组生命周期必须与解码器实例解耦**：
+   - `mpp_buffer_group_clear/put` 只能在**该组的全部 buffer 已归还**后调用（见 `mpp_buffer.h` 的 normal flow：`inc_ref → put → put → group_put`）。
+   - 解码器可能在 `HardwareFrame` 仍在途时被销毁（停机）或重新配置（分辨率切换触发 `info_change`）。因此缓冲组由 `MppDecodeNode::BufferGroup`（引用计数持有者）管理，`release_fn` 捕获其 `shared_ptr` 保活；解码器析构 / `info_change` 只解除本地引用。
+   - 在解码器析构或重建时就地 `mpp_buffer_group_clear/put`，会让在途帧持有的 `MppBuffer` 指向已释放的缓冲组，后续 `mpp_buffer_put` 即 use-after-free（板端表现为偶发段错误或 VPU 挂死）。`native/tests/decoder_test.cpp` 用例 10.3 是该场景的板端回归。
+
+4. **硬件步长对齐与格式保真**：
+   - 导出的像素格式必须**读取真实帧格式**（`mpp_frame_get_fmt`）校验：仅 `MPP_FMT_YUV420SP`（NV12 8bit）可通过并标记为 `FRAME_FORMAT_NV12`；
+   - ⚠️ 10bit（`MPP_FMT_YUV420SP_10BIT`）等未支持格式必须**丢弃该帧并告警一次**（`mpp_unsupported_frame_format fmt=%u`），**严禁**一律硬编码 `FRAME_FORMAT_NV12` —— 否则下游 RGA/RKNN 会按 8bit 解析造成静默错帧；
    - 水平步长 `hor_stride` 遵循 16 字节对齐，垂直步长 `ver_stride` 遵循 16 行对齐；
    - `HardwareFrame` 的 `stride` 与 `vstride` 严格填入实际物理跨度，确保下游 RGA 与 RKNN 能够以真实的物理行宽进行零拷贝直绑与 Letterbox 转换。
+
+5. **失败诊断（stream_id 与告警纪律）**：
+   - `MppDecodeNode` 构造函数必须接收 `stream_id` 并用于原生日志关联；
+   - `mpi->control()` 的返回值必须校验：`MPP_DEC_SET_PARSER_SPLIT_MODE` 失败即判定初始化失败（会导致首帧滞留），其余纯性能开关（`FAST_MODE` / `FAST_PLAY` / `IMMEDIATE_OUT` / 超时）失败仅告警；
+   - 日志只输出稳定 token + 数值上下文（`mpp_control_failed what=%s cmd=0x%08x ret=%d`），不得回写自由文本。
 
 ---
 

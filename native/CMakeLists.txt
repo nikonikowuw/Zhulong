@@ -137,6 +137,7 @@ add_library(ZhulongEngine STATIC
     src/pipeline/subscription.cpp
     src/pipeline/frame_publisher.cpp
     src/nodes/capture/rtsp_input.cpp
+    src/nodes/decode/decoder_factory.cpp
     src/nodes/decode/ffmpeg_decoder.cpp
     src/nodes/decode/mpp_loader.cpp
     src/nodes/decode/mpp_decoder.cpp

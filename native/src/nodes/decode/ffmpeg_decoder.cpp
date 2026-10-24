@@ -5,53 +5,28 @@
  * 核心实现规范：
  * 1. 参数集注入：为 extradata 补充 AV_INPUT_BUFFER_PADDING_SIZE 字节的安全填充，杜绝 FFmpeg 汇编优化越界读取；
  * 2. 借用指针防护：在 send_packet 调用后立即解除 AVPacket 对外部数据指针的挂接，防止 unref 误释放借用内存；
+ *    注意 libavcodec 内部会通过 `av_packet_ref()` 对 `buf == nullptr` 的包做一次受控拷贝（见 FFmpeg 7.1.5
+ *    `libavcodec/decode.c` 与 `libavcodec/packet.c`），因此这里是「安全借用」而**不是**零拷贝；
  * 3. 多平面装配：软解标准输出 YUV420P 多平面格式，准确回填 host_planes 与 plane_strides；
- * 4. 延迟回收闭包：通过 release_fn lambda 捕获 AVFrame 指针，确保当所有外部消费者完成帧借用后，才由最后一个持有方安全释放底层帧缓冲。
+ * 4. 延迟回收闭包：通过 release_fn lambda 捕获 AVFrame 指针，确保当所有外部消费者完成帧借用后，
+ *    才由最后一个持有方安全释放底层帧缓冲。
  */
 
 #include "nodes/decode/ffmpeg_decoder.hpp"
-#include "nodes/decode/mpp_decoder.hpp"
 #include "common/log.hpp"
 
+#include <cerrno>
+#include <climits>
 #include <cstring>
 #include <stdexcept>
 
 namespace zhulong {
 
-IDecodeNode::Ptr IDecodeNode::create(int32_t codec, const uint8_t *extradata, size_t extradata_size,
-                                     int32_t time_base_num, int32_t time_base_den,
-                                     DecoderBackend backend, uint64_t stream_id) {
-    if (backend == DecoderBackend::AUTO || backend == DecoderBackend::MPP_HW) {
-        if (MppDecodeNode::is_supported()) {
-            try {
-                return std::make_unique<MppDecodeNode>(codec, extradata, extradata_size, time_base_num, time_base_den);
-            } catch (...) {
-                if (backend == DecoderBackend::MPP_HW) {
-                    ZL_LOGE(stream_id, "nodes.decode", "mpp_decoder_init_failed codec=%d", codec);
-                    throw;
-                }
-                ZL_LOGW(stream_id, "nodes.decode", "mpp_decoder_init_failed_fallback codec=%d", codec);
-            }
-        } else if (backend == DecoderBackend::MPP_HW) {
-            ZL_LOGE(stream_id, "nodes.decode", "mpp_decoder_unavailable codec=%d", codec);
-            throw std::runtime_error("MPP hardware decoder requested but not supported on this host");
-        } else {
-            ZL_LOGI(stream_id, "nodes.decode", "mpp_unavailable_fallback codec=%d", codec);
-        }
-    }
-
-    try {
-        return std::make_unique<FFmpegDecodeNode>(codec, extradata, extradata_size, time_base_num, time_base_den);
-    } catch (...) {
-        ZL_LOGE(stream_id, "nodes.decode", "ffmpeg_decoder_init_failed codec=%d", codec);
-        throw;
-    }
-}
-
 FFmpegDecodeNode::FFmpegDecodeNode(int32_t codec, const uint8_t *extradata, size_t extradata_size,
-                                   int32_t time_base_num, int32_t time_base_den)
+                                   int32_t time_base_num, int32_t time_base_den, uint64_t stream_id)
     : time_base_num_(time_base_num > 0 ? time_base_num : 1),
-      time_base_den_(time_base_den > 0 ? time_base_den : 90000) {
+      time_base_den_(time_base_den > 0 ? time_base_den : 90000),
+      stream_id_(stream_id) {
     AVCodecID codec_id = AV_CODEC_ID_NONE;
     if (codec == Zhulong_CODEC_H264) {
         codec_id = AV_CODEC_ID_H264;
@@ -108,11 +83,16 @@ FFmpegDecodeNode::~FFmpegDecodeNode() {
 }
 
 int FFmpegDecodeNode::send_packet(const uint8_t *data, size_t size, int64_t pts, int64_t dts) {
-    if (!codec_ctx_) return -1;
+    if (!codec_ctx_ || !packet_) return decode_backend_failure;
 
     if (!data || size == 0) {
         // 发送 NULL 包以 flush/drain 解码器内部驻留帧
         return avcodec_send_packet(codec_ctx_, nullptr);
+    }
+
+    if (size > static_cast<size_t>(INT_MAX)) {
+        ZL_LOGE(stream_id_, "nodes.decode", "ffmpeg_packet_too_large size=%zu", size);
+        return AVERROR(EINVAL);
     }
 
     av_packet_unref(packet_);
@@ -130,10 +110,10 @@ int FFmpegDecodeNode::send_packet(const uint8_t *data, size_t size, int64_t pts,
 
 int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
     out_frame = nullptr;
-    if (!codec_ctx_) return -1;
+    if (!codec_ctx_) return decode_backend_failure;
 
     AVFrame *av_frame = av_frame_alloc();
-    if (!av_frame) return -1;
+    if (!av_frame) return AVERROR(ENOMEM);
 
     struct FrameGuard {
         AVFrame *f{nullptr};
@@ -146,17 +126,18 @@ int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
 
     int ret = avcodec_receive_frame(codec_ctx_, av_frame);
     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-        return 1; // 暂无输出，需继续喂入下一个数据包
+        return decode_again; // 暂无输出，需继续喂入下一个数据包
     }
     if (ret < 0) {
-        return ret; // 解码器内部严重错误
+        return ret; // 解码器内部严重错误（已是 AVERROR 命名空间）
     }
 
     // 成功解出一帧，装配至跨层统一 HardwareFrame 对象
     auto frame = std::make_shared<HardwareFrame>();
     frame->width = static_cast<uint32_t>(av_frame->width);
     frame->height = static_cast<uint32_t>(av_frame->height);
-    frame->stride = static_cast<uint32_t>(av_frame->linesize[0]);
+    // ⚠️ linesize 允许为负（垂直翻转），负值不得窄化为巨大无符号数值
+    frame->stride = av_frame->linesize[0] > 0 ? static_cast<uint32_t>(av_frame->linesize[0]) : 0;
     frame->vstride = static_cast<uint32_t>(av_frame->height);
     // ⚠️ 明确标记多平面格式：软解输出标准为 YUV420P（含 Full Range YUVJ420P），严禁外部当作单平面连续 NV12 解析
     if (av_frame->format == AV_PIX_FMT_YUV420P || av_frame->format == AV_PIX_FMT_YUVJ420P) {
@@ -164,13 +145,21 @@ int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
     } else if (av_frame->format == AV_PIX_FMT_NV12) {
         frame->format = FRAME_FORMAT_NV12;
     } else {
+        // 10bit 等未支持格式标记为 UNKNOWN：下游（jpeg_encoder / snapshot / frame_broker）会显式拒绝，
+        // 绝不猜测成 NV12 造成静默错帧
         frame->format = FRAME_FORMAT_UNKNOWN;
+        if (!unsupported_format_logged_) {
+            unsupported_format_logged_ = true;
+            ZL_LOGW(stream_id_, "nodes.decode", "ffmpeg_unsupported_pix_fmt fmt=%d", av_frame->format);
+        }
     }
     frame->host_ptr = av_frame->data[0];
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < frame_plane_count; ++i) {
         if (av_frame->data[i]) {
             frame->host_planes[i] = av_frame->data[i];
-            frame->plane_strides[i] = static_cast<uint32_t>(av_frame->linesize[i]);
+            frame->plane_strides[i] = av_frame->linesize[i] > 0
+                                          ? static_cast<uint32_t>(av_frame->linesize[i])
+                                          : 0;
         }
     }
     // ⚠️ 时间戳保真透传：严禁将没有 PTS 的帧直接当作 PTS=0 处理
@@ -187,12 +176,12 @@ int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
 
     guard.f = nullptr; // 成功转移所有权给 release_fn
     out_frame = std::move(frame);
-    return 0;
+    return decode_ok;
 }
 
 void FFmpegDecodeNode::flush() {
     if (codec_ctx_) {
-        // 清空 DPB 参考帧缓冲
+        // 清空 DPB 参考帧缓冲，同时复位内部 draining 状态（后续仍可继续送包）
         avcodec_flush_buffers(codec_ctx_);
     }
 }

@@ -21,9 +21,12 @@ namespace zhulong {
 /**
  * @brief 常用像素格式常量 (与 Linux DRM FourCC 格式码兼容定义)
  */
-constexpr uint32_t FRAME_FORMAT_UNKNOWN = 0;           /**< 未知或未指定格式 */
+constexpr uint32_t FRAME_FORMAT_UNKNOWN = 0;           /**< 未知或未指定格式（下游必须拒绝，不得按 NV12 猜测） */
 constexpr uint32_t FRAME_FORMAT_YUV420P = 0x32315559; /**< 'YU12' / I420 三平面连续 YUV420P 格式 */
 constexpr uint32_t FRAME_FORMAT_NV12    = 0x3231564E; /**< 'NV12' 两平面 Y 平面 + UV 交错平面格式 */
+
+/** @brief HardwareFrame 支持的平面槽位数量 (Y/U/V/alpha)，用于平面数组尺寸与遍历上界 */
+constexpr int frame_plane_count = 4;
 
 /**
  * @brief 专为异构多算法推理管线设计的统一硬件帧对象
@@ -50,8 +53,8 @@ struct HardwareFrame {
     int      dma_fd{-1};                   /**< DMA-BUF 文件描述符 (Rockchip MPP / Jetson / V4L2)，未启用时为 -1 */
     void*    dev_ptr{nullptr};             /**< 异构设备显存指针 (华为昇腾 DVPP acldvppMalloc / CUDA devPtr)，非设备内存时为 nullptr */
     uint8_t* host_ptr{nullptr};            /**< 单平面/打包格式的 CPU 虚拟地址 (仅软解/调试回退有效) */
-    uint8_t* host_planes[4]{nullptr, nullptr, nullptr, nullptr}; /**< 各平面独立的 CPU 虚拟地址 (多平面软解时使用，如 Y/U/V 各自独立) */
-    uint32_t plane_strides[4]{0, 0, 0, 0}; /**< 各平面独立的水平行跨度 (字节数) */
+    uint8_t* host_planes[frame_plane_count]{nullptr, nullptr, nullptr, nullptr}; /**< 各平面独立的 CPU 虚拟地址 (多平面软解时使用，如 Y/U/V 各自独立) */
+    uint32_t plane_strides[frame_plane_count]{0, 0, 0, 0}; /**< 各平面独立的水平行跨度 (字节数) */
 
     // =========================================================================
     // 3. 关联事件与时序
@@ -121,7 +124,8 @@ struct HardwareFrame {
           dev_ptr(other.dev_ptr),
           host_ptr(other.host_ptr),
           host_planes{other.host_planes[0], other.host_planes[1], other.host_planes[2], other.host_planes[3]},
-          plane_strides{other.plane_strides[0], other.plane_strides[1], other.plane_strides[2], other.plane_strides[3]},
+          plane_strides{other.plane_strides[0], other.plane_strides[1], other.plane_strides[2],
+                        other.plane_strides[3]},
           pts(other.pts),
           has_pts(other.has_pts),
           time_base_num(other.time_base_num),
@@ -132,7 +136,7 @@ struct HardwareFrame {
         other.dma_fd = -1;
         other.dev_ptr = nullptr;
         other.host_ptr = nullptr;
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < frame_plane_count; ++i) {
             other.host_planes[i] = nullptr;
             other.plane_strides[i] = 0;
         }
@@ -163,7 +167,7 @@ struct HardwareFrame {
             dma_fd = other.dma_fd;
             dev_ptr = other.dev_ptr;
             host_ptr = other.host_ptr;
-            for (int i = 0; i < 4; ++i) {
+            for (int i = 0; i < frame_plane_count; ++i) {
                 host_planes[i] = other.host_planes[i];
                 plane_strides[i] = other.plane_strides[i];
                 other.host_planes[i] = nullptr;

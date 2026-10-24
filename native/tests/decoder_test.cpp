@@ -13,7 +13,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -69,6 +71,19 @@ static std::vector<uint8_t> base64_decode(const std::string &in) {
         }
     }
     return out;
+}
+
+// 从源码树相对路径加载二进制夹具（兼容从仓库根目录或 build 目录运行的两种 CWD）
+static std::vector<uint8_t> read_binary_fixture(const std::string &relative_path) {
+    static const char *kPrefixes[] = {"", "native/", "../native/", "../../native/", "../../../native/"};
+    for (const char *prefix : kPrefixes) {
+        std::ifstream input(prefix + relative_path, std::ios::binary);
+        if (input) {
+            return std::vector<uint8_t>(std::istreambuf_iterator<char>(input),
+                                        std::istreambuf_iterator<char>());
+        }
+    }
+    return {};
 }
 
 int main() {
@@ -624,7 +639,7 @@ int main() {
                 decoder->send_packet(nullptr, 0, 0, 0);
 
                 HardwareFrame::Ptr frame;
-                int recv_ret = 1;
+                int recv_ret = zhulong::decode_again;
                 for (int i = 0; i < 50; ++i) {
                     recv_ret = decoder->receive_frame(frame);
                     if (recv_ret == 0) {
@@ -708,7 +723,7 @@ int main() {
                 decoder->send_packet(nullptr, 0, 0, 0);
 
                 HardwareFrame::Ptr frame;
-                int recv_ret = 1;
+                int recv_ret = zhulong::decode_again;
                 for (int i = 0; i < 50; ++i) {
                     recv_ret = decoder->receive_frame(frame);
                     if (recv_ret == 0) {
@@ -724,6 +739,138 @@ int main() {
                 CHECK(frame->dma_fd >= 0);
                 CHECK(frame->pts == 2000);
             }
+
+            // 10.3 ⚠️ 解码器析构后遗留硬件帧的归还（缓冲组生命周期必须与解码器实例解耦）
+            // 若在解码器销毁时无条件 mpp_buffer_group_clear/put，本用例会在最后 reset() 时
+            // 对已释放的缓冲组调用 mpp_buffer_put（use-after-free）。
+            {
+                HardwareFrame::Ptr survivor;
+                {
+                    auto decoder = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000,
+                                                       zhulong::DecoderBackend::MPP_HW);
+                    CHECK(decoder != nullptr);
+                    std::vector<std::string> h264_nalus = {
+                        "Z0LACtxHsBEAAAMAAQAAAwAyjxIngA==",
+                        "aM4PyA==",
+                        "ZYiEOiYoAAkCycnJ111111114A=="
+                    };
+                    std::vector<uint8_t> annex_b;
+                    for (const auto &b64 : h264_nalus) {
+                        auto nalu = base64_decode(b64);
+                        annex_b.push_back(0x00);
+                        annex_b.push_back(0x00);
+                        annex_b.push_back(0x00);
+                        annex_b.push_back(0x01);
+                        annex_b.insert(annex_b.end(), nalu.begin(), nalu.end());
+                    }
+                    CHECK(decoder->send_packet(annex_b.data(), annex_b.size(), 3000, 3000) >= 0);
+                    decoder->send_packet(nullptr, 0, 0, 0);
+                    for (int i = 0; i < 50 && !survivor; ++i) {
+                        if (decoder->receive_frame(survivor) != 0) {
+                            std::this_thread::sleep_for(5ms);
+                        }
+                    }
+                    CHECK(survivor != nullptr);
+                } // 解码器在此销毁，帧仍存活
+                CHECK(survivor->dma_fd >= 0);
+                survivor.reset(); // 归还时必须安全
+            }
+        }
+
+        // ====================================================================
+        // 11. 统一返回码契约 (send_packet / receive_frame 共用 AVERROR 值域)
+        // ====================================================================
+        {
+            // 常量自证：背压码必须与 AVERROR(EAGAIN) 同值（AVERROR(e) == -e），后端私有码不得外溢
+            static_assert(zhulong::decode_again == -EAGAIN, "decode_again must equal AVERROR(EAGAIN)");
+            static_assert(zhulong::decode_backend_failure < 0, "backend failure must be negative");
+            static_assert(zhulong::decode_ok == 0, "decode_ok must be 0");
+
+            auto decoder = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000,
+                                               zhulong::DecoderBackend::FFMPEG_SW);
+            CHECK(decoder != nullptr);
+
+            HardwareFrame::Ptr frame;
+            // 未送入任何数据包：必须返回 decode_again（旧契约的魔法值 1 已废除）
+            CHECK(decoder->receive_frame(frame) == zhulong::decode_again);
+            CHECK(frame == nullptr);
+
+            // 空解码器送 drain 标记后再拉取：仍稳定返回 decode_again，且不得产出空帧
+            CHECK(decoder->send_packet(nullptr, 0, 0, 0) == zhulong::decode_ok);
+            CHECK(decoder->receive_frame(frame) == zhulong::decode_again);
+            CHECK(frame == nullptr);
+
+            // flush 必须复位内部 draining 状态，flush 后仍可继续工作
+            decoder->flush();
+            CHECK(decoder->receive_frame(frame) == zhulong::decode_again);
+        }
+
+        // ====================================================================
+        // 12. 未支持像素格式 fail-safe（HEVC Main10 必须标 UNKNOWN，严禁误标 NV12）
+        //     夹具生成命令：
+        //       ffmpeg -f lavfi -i color=black:size=16x16:rate=1 -frames:v 1 \
+        //         -pix_fmt yuv420p10le -c:v libx265 -x265-params log-level=none:crf=51 \
+        //         -f hevc tests/fixtures/h265_main10_16x16.h265
+        // ====================================================================
+        {
+            const std::vector<uint8_t> main10 = read_binary_fixture("tests/fixtures/h265_main10_16x16.h265");
+            CHECK(!main10.empty());
+
+            auto decoder = IDecodeNode::create(Zhulong_CODEC_H265, nullptr, 0, 1, 90000,
+                                               zhulong::DecoderBackend::FFMPEG_SW);
+            CHECK(decoder != nullptr);
+            CHECK(decoder->send_packet(main10.data(), main10.size(), 7000, 7000) >= 0);
+            CHECK(decoder->send_packet(nullptr, 0, 0, 0) >= 0);
+
+            HardwareFrame::Ptr frame;
+            int recv_ret = zhulong::decode_again;
+            for (int i = 0; i < 50 && recv_ret == zhulong::decode_again; ++i) {
+                recv_ret = decoder->receive_frame(frame);
+            }
+            CHECK(recv_ret == zhulong::decode_ok);
+            CHECK(frame != nullptr);
+            CHECK(frame->width == 16 && frame->height == 16);
+            // 10bit 像素格式不在受支持集合内：必须 fail closed 标记 UNKNOWN，由下游显式拒绝
+            CHECK(frame->format == zhulong::FRAME_FORMAT_UNKNOWN);
+            CHECK(frame->format != zhulong::FRAME_FORMAT_NV12);
+        }
+
+        // ====================================================================
+        // 13. 解码器析构后遗留帧仍可读且可安全归还（生命周期与解码器实例解耦）
+        // ====================================================================
+        {
+            HardwareFrame::Ptr survivor;
+            {
+                std::vector<std::string> h264_nalus = {
+                    "Z0LACtxHsBEAAAMAAQAAAwAyjxIngA==",
+                    "aM4PyA==",
+                    "ZYiEOiYoAAkCycnJ111111114A=="
+                };
+                std::vector<uint8_t> annex_b;
+                for (const auto &b64 : h264_nalus) {
+                    auto nalu = base64_decode(b64);
+                    annex_b.push_back(0x00);
+                    annex_b.push_back(0x00);
+                    annex_b.push_back(0x00);
+                    annex_b.push_back(0x01);
+                    annex_b.insert(annex_b.end(), nalu.begin(), nalu.end());
+                }
+
+                auto decoder = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000,
+                                                   zhulong::DecoderBackend::FFMPEG_SW);
+                CHECK(decoder != nullptr);
+                CHECK(decoder->send_packet(annex_b.data(), annex_b.size(), 9000, 9000) >= 0);
+                CHECK(decoder->send_packet(nullptr, 0, 0, 0) >= 0);
+                CHECK(decoder->receive_frame(survivor) == zhulong::decode_ok);
+                CHECK(survivor != nullptr);
+            } // 解码器在此销毁
+
+            // 底层帧缓冲由 release_fn 独立持有，读取必须仍然有效
+            CHECK(survivor->width == 64 && survivor->height == 48);
+            CHECK(survivor->host_planes[0] != nullptr);
+            CHECK(survivor->release_fn != nullptr);
+            survivor.reset();
+            CHECK(survivor == nullptr);
         }
 
         std::cout << "All Decoder & BoundedQueue tests passed successfully!" << std::endl;

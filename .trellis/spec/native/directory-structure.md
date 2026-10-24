@@ -15,8 +15,12 @@
   - `engine.hpp / .cpp`：顶层流池管理、Reaper 清理线程与 Probe。
 - `src/nodes/capture/rtsp_input.*`：FFmpeg 所有权、URI 与时钟契约；
 - `src/nodes/decode/`：
-  - `decoder.hpp`：统一解码节点抽象契约 (`IDecodeNode`)；
-  - `ffmpeg_decoder.hpp / .cpp`：单流确定性软解实现 (`FFmpegDecodeNode`)，产出带 RAII `release_fn` 的 `HardwareFrame`。
+  - `decoder.hpp`：统一解码节点抽象契约 (`IDecodeNode`) 与统一返回码常量 (`decode_ok` / `decode_again` / `decode_backend_failure`)；
+  - `decoder_factory.cpp`：`IDecodeNode::create` 后端分流与透明回退，不寄生在任何具体后端里；
+  - `ffmpeg_decoder.hpp / .cpp`：单流确定性软解实现 (`FFmpegDecodeNode`)，产出带 RAII `release_fn` 的 `HardwareFrame`；
+  - `mpp_loader.hpp / .cpp`：Rockchip MPP 动态装载器与只读符号表 (`MppLoader::Api`)；
+  - `mpp_decoder.hpp / .cpp`：Rockchip MPP 硬解实现 (`MppDecodeNode`) 与外部缓冲组引用计数持有者 (`BufferGroup`)；
+  - `mpp_api_types.hpp`：无编译期 SDK 依赖的 MPP 类型/枚举/函数表声明。
 - `scripts/build.py` 负责依赖、目标和最终 Go 链接；`tests/` 包含 Native、纯 C、真实 loopback RTSP、硬件帧生命周期与解码节点回归。当前基础构建与主机测试不要求厂商 SDK；可选硬件后端及其专有头文件由 `src/backends/` 隔离，并由对应 profile、SDK/BSP 和目标板环境单独启用与验证。
 
 以下仍是后续完整节点架构的规划，功能未开始前严禁创建空目录。

@@ -27,7 +27,14 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
 - **零拷贝帧封装与异常安全守护**：
   - 通过 `HardwareFrame` 封装解码输出，软解由 `release_fn` 闭包安全回收底层 `AVFrame` 引用，硬解由 `release_fn` 闭包调用 `mpp_buffer_put` 释放 VPU 缓冲区并关闭 `dup` 出的独立 `dma_fd`，由下游算法只读借用。
   - 硬件解码从显存池提取 `mpp_buf` 并 `::dup` 出 `dma_fd` 后，装配期间必须由栈上 RAII Guard 全程看护，确保即使抛出 `std::bad_alloc` 亦能自动安全回退释放，杜绝内核句柄与物理显存泄漏。
-  - 统一背压契约：底层硬件/软件解码器在待解包缓冲满时统一返回 `AVERROR(EAGAIN)`，驱动调用方排空已就绪帧后重发当前包，严禁将缓冲满误判为解码错误而调用 `flush()` 冲刷参考帧。
+  - ⚠️ `mpp_buffer_inc_ref()` 的返回值**必须校验**：加引用失败时立即 `close(fd)` 并返回错误，不得进入装配流程 —— 否则 `release_fn` 中的 `mpp_buffer_put` 会造成净减引用与显存提前回收。
+  - ⚠️ 帧的底层资源（`AVFrame` / `MppBuffer` / `MppBufferGroup`）生命周期**必须与解码器实例解耦**：解码器可能在帧尚未归还时被销毁（停机）或重新配置（分辨率切换）。硬解的外部缓冲组由 `MppDecodeNode::BufferGroup` 引用计数持有，`release_fn` 必须捕获该持有者的 `shared_ptr` 保活；解码器析构/`info_change` 只解除本地引用，**严禁**就地 `mpp_buffer_group_clear/put`。
+- **解码节点返回码契约（单一值域）**：
+  - `send_packet()` 与 `receive_frame()` 共用 `decoder.hpp` 的具名常量：`decode_ok`(0)、`decode_again`(== `AVERROR(EAGAIN)`)、`decode_backend_failure`(== `AVERROR(EIO)`)，另可透出 `AVERROR_EOF`。
+  - 硬件后端私有错误码（`MPP_ERR_BUFFER_FULL=-1012`、`MPP_NOK=-1` 等）**必须在后端内部归一化**为上述常量，严禁外溢 —— 否则与 AVERROR 值域语义混淆，调用方无法区分背压与损坏。
+  - ⚠️ 禁止再用魔法值 `1` 表达「暂无输出」；`IDecodeNode` 同时禁止拷贝与移动（副本会共享同一份解码器上下文导致重复释放）。
+  - 统一背压契约：后端在待解包缓冲满时统一返回 `decode_again`，驱动调用方排空已就绪帧后重发当前包；排空后二次仍背压即记 `decode_backpressure_drop` 告警，严禁静默吞包。
+  - 工厂 `IDecodeNode::create` 实现位于独立的 `nodes/decode/decoder_factory.cpp`，不寄生在任何具体后端实现里；初始化失败日志只输出稳定 token + 数值上下文（`codec=%d`），**不得**回写 `what()` 等自由文本。
 - **订阅通道逐订阅者异常隔离**：
   - `Stream::dispatch` 的扇出循环必须对每个 `subscription->invoke()` 单独 `try/catch`。回调抛 C++ 异常是调用方违约（`engine.h` 明文禁止），**不得**中断同流其他订阅者的数据供给，**也不得**将流置为 `FAILED`。
   - `Subscription::invoke` 在重抛前已恢复 `in_callback` 并置 `enabled=false`，故违约订阅者自动静默失效（后续 `invoke` 首行直接返回），无需从快照移除。

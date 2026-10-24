@@ -1,29 +1,85 @@
 /**
  * @file mpp_decoder.cpp
  * @brief Rockchip MPP 硬件解码节点实现
+ *
+ * 关键时序（详见 .trellis/spec/native/hardware-backends.md §5）：
+ * 1. Parser Split / Fast Mode 必须在 `mpp_init` 之前下发，否则单包输入无法识别 Access Unit 边界；
+ * 2. `mpp_buffer_inc_ref` 之后立即 `mpp_frame_deinit` 外层 MppFrame，避免占满 MPP 固定槽位导致 VPU 死锁；
+ * 3. 帧的归还（`mpp_buffer_put` + `close(dma_fd)`）绑定在 `HardwareFrame::release_fn` 上；
+ * 4. 外部缓冲组的销毁时机由最后一张引用它的帧决定（见 `BufferGroup`），绝不在解码器析构或分辨率
+ *    切换时释放仍有在途帧的显存。
  */
 
-#include "mpp_decoder.hpp"
+#include "nodes/decode/mpp_decoder.hpp"
+#include "common/log.hpp"
 
 extern "C" {
 #include <libavutil/avutil.h>
 #include <libavutil/error.h>
 }
 
-#include <iostream>
+#include <cerrno>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
 
 namespace zhulong {
 
+namespace {
+
+constexpr const char *kLogModule = "nodes.decode";
+
+/** @brief 外部缓冲组分配器探测顺序：DMA_HEAP -> DRM -> ION */
+constexpr mpp::MppBufferType kBufferTypes[] = {
+    mpp::MPP_BUFFER_TYPE_DMA_HEAP,
+    mpp::MPP_BUFFER_TYPE_DRM,
+    mpp::MPP_BUFFER_TYPE_ION,
+};
+
+/** @brief 缓冲池容量分级（720P 及以下 / 1080P 及以下 / 4K） */
+constexpr int32_t kBufferCountSd = 10;
+constexpr int32_t kBufferCountHd = 16;
+constexpr int32_t kBufferCountUhd = 20;
+constexpr uint64_t kSdPixelLimit = 1280ULL * 720ULL;
+constexpr uint64_t kHdPixelLimit = 1920ULL * 1080ULL;
+
+/** @brief 硬件步长对齐粒度：水平 16 字节、垂直 16 行 */
+constexpr uint32_t kStrideAlign = 16;
+
+int32_t buffer_count_for(uint32_t width, uint32_t height) {
+    const uint64_t pixels = static_cast<uint64_t>(width) * height;
+    if (pixels <= kSdPixelLimit) return kBufferCountSd;
+    if (pixels <= kHdPixelLimit) return kBufferCountHd;
+    return kBufferCountUhd;
+}
+
+uint32_t align_up(uint32_t value, uint32_t alignment) {
+    return alignment > 0 ? ((value + alignment - 1) / alignment) * alignment : value;
+}
+
+} // namespace
+
 bool MppDecodeNode::is_supported() noexcept {
     return mpp::MppLoader::instance().is_supported();
 }
 
+MppDecodeNode::BufferGroup::~BufferGroup() {
+    if (!raw || !loader) return;
+
+    const auto &api = loader->api();
+    if (api.buffer_group_clear && api.buffer_group_clear(raw) != mpp::MPP_OK) {
+        ZL_LOGW(stream_id, kLogModule, "mpp_buffer_group_clear_failed");
+    }
+    if (api.buffer_group_put && api.buffer_group_put(raw) != mpp::MPP_OK) {
+        ZL_LOGW(stream_id, kLogModule, "mpp_buffer_group_put_failed");
+    }
+    raw = nullptr;
+}
+
 MppDecodeNode::MppDecodeNode(int32_t codec, const uint8_t *extradata, size_t extradata_size,
-                             int32_t time_base_num, int32_t time_base_den)
+                             int32_t time_base_num, int32_t time_base_den, uint64_t stream_id)
     : loader_(mpp::MppLoader::instance()),
+      stream_id_(stream_id),
       time_base_num_(time_base_num > 0 ? time_base_num : 1),
       time_base_den_(time_base_den > 0 ? time_base_den : 90000) {
     if (!loader_.is_supported()) {
@@ -37,6 +93,16 @@ MppDecodeNode::~MppDecodeNode() {
 }
 
 void MppDecodeNode::init_mpp(int32_t codec, const uint8_t *extradata, size_t extradata_size) {
+    try {
+        setup_mpp(codec, extradata, extradata_size);
+    } catch (...) {
+        // ⚠️ 构造函数抛出异常时本对象的析构函数不会运行，必须在此回收半初始化的 MPP 上下文与缓冲组
+        destroy_mpp();
+        throw;
+    }
+}
+
+void MppDecodeNode::setup_mpp(int32_t codec, const uint8_t *extradata, size_t extradata_size) {
     mpp::MppCodingType coding = mpp::MPP_VIDEO_CodingAVC;
     if (codec == Zhulong_CODEC_H264) {
         coding = mpp::MPP_VIDEO_CodingAVC;
@@ -46,143 +112,235 @@ void MppDecodeNode::init_mpp(int32_t codec, const uint8_t *extradata, size_t ext
         throw std::invalid_argument("Unsupported codec for MppDecodeNode: " + std::to_string(codec));
     }
 
-    int ret = loader_.mpp_create(&ctx_, &mpi_);
+    const auto &api = loader_.api();
+    int ret = api.create ? api.create(&ctx_, &mpi_) : mpp::MPP_NOK;
     if (ret != mpp::MPP_OK || !ctx_ || !mpi_) {
         throw std::runtime_error("mpp_create failed with code " + std::to_string(ret));
     }
 
-    // ⚠️ 开启内部 Parser Split Mode 与 Fast Mode，必须在 mpp_init 之前设置 (Need to setup before init)
+    // ⚠️ Parser 命令字必须在 mpp_init 之前设置完成，否则单包输入无法识别 AU 边界并造成首帧滞留
     uint32_t split_mode = 1;
-    if (mpi_->control) {
-        mpi_->control(ctx_, mpp::MPP_DEC_SET_PARSER_SPLIT_MODE, &split_mode);
-        uint32_t fast_mode = 1;
-        mpi_->control(ctx_, mpp::MPP_DEC_SET_PARSER_FAST_MODE, &fast_mode);
+    if (control(mpp::MPP_DEC_SET_PARSER_SPLIT_MODE, &split_mode, "set_parser_split_mode") != decode_ok) {
+        throw std::runtime_error("mpp parser split mode setup failed");
     }
+    // 快速解析仅为性能开关：失败已由 control() 记录告警，不阻断初始化
+    uint32_t fast_mode = 1;
+    (void)control(mpp::MPP_DEC_SET_PARSER_FAST_MODE, &fast_mode, "set_parser_fast_mode");
 
-    ret = loader_.mpp_init(ctx_, mpp::MPP_CTX_DEC, coding);
+    ret = api.init ? api.init(ctx_, mpp::MPP_CTX_DEC, coding) : mpp::MPP_NOK;
     if (ret != mpp::MPP_OK) {
-        destroy_mpp();
         throw std::runtime_error("mpp_init failed with code " + std::to_string(ret));
     }
 
-    if (mpi_->control) {
-        // 设置非阻塞超时 (与 IDecodeNode 的两段式非阻塞流式契约保持一致)
-        int64_t timeout_ms = 0;
-        mpi_->control(ctx_, mpp::MPP_SET_INPUT_TIMEOUT, &timeout_ms);
-        mpi_->control(ctx_, mpp::MPP_SET_OUTPUT_TIMEOUT, &timeout_ms);
+    // 非阻塞超时（0ms）：与 IDecodeNode 的两段式非阻塞流式契约保持一致
+    int64_t timeout_ms = 0;
+    (void)control(mpp::MPP_SET_INPUT_TIMEOUT, &timeout_ms, "set_input_timeout");
+    (void)control(mpp::MPP_SET_OUTPUT_TIMEOUT, &timeout_ms, "set_output_timeout");
 
-        // 开启即时输出与快速播放，使 IDR 关键帧能即时完成解码输出
-        uint32_t fast_play = 1;
-        mpi_->control(ctx_, mpp::MPP_DEC_SET_ENABLE_FAST_PLAY, &fast_play);
-        uint32_t imm_out = 1;
-        mpi_->control(ctx_, mpp::MPP_DEC_SET_IMMEDIATE_OUT, &imm_out);
-    }
+    // 即时输出与快速播放：使 IDR 关键帧无需积攒后续 P 帧即可立即解算输出
+    uint32_t fast_play = 1;
+    (void)control(mpp::MPP_DEC_SET_ENABLE_FAST_PLAY, &fast_play, "set_fast_play");
+    uint32_t imm_out = 1;
+    (void)control(mpp::MPP_DEC_SET_IMMEDIATE_OUT, &imm_out, "set_immediate_out");
 
     // 若调用方提供了 extradata（SPS/PPS 参数集），作为初始化包预先送入
-    if (extradata && extradata_size > 0 && mpi_->decode_put_packet) {
+    if (extradata && extradata_size > 0) {
         mpp::MppPacket packet = nullptr;
-        if (loader_.mpp_packet_init(&packet, const_cast<uint8_t*>(extradata), extradata_size) == mpp::MPP_OK) {
-            mpi_->decode_put_packet(ctx_, packet);
-            loader_.mpp_packet_deinit(&packet);
+        if (!api.packet_init || api.packet_init(&packet, const_cast<uint8_t *>(extradata), extradata_size) != mpp::MPP_OK ||
+            !packet) {
+            throw std::runtime_error("mpp_packet_init for extradata failed");
+        }
+        const int put_ret = mpi_->decode_put_packet ? mpi_->decode_put_packet(ctx_, packet) : mpp::MPP_NOK;
+        api.packet_deinit(&packet);
+        if (put_ret != mpp::MPP_OK) {
+            ZL_LOGW(stream_id_, kLogModule, "mpp_extradata_put_failed ret=%d", put_ret);
         }
     }
 
     initialized_ = true;
 }
 
-void MppDecodeNode::reset_buffer_group() noexcept {
-    if (buf_group_ && loader_.mpp_buffer_group_put) {
-        if (loader_.mpp_buffer_group_clear) {
-            loader_.mpp_buffer_group_clear(buf_group_);
+void MppDecodeNode::destroy_mpp() noexcept {
+    if (ctx_ && loader_.api().destroy) {
+        const int ret = loader_.api().destroy(ctx_);
+        if (ret != mpp::MPP_OK) {
+            ZL_LOGW(stream_id_, kLogModule, "mpp_destroy_failed ret=%d", ret);
         }
-        loader_.mpp_buffer_group_put(buf_group_);
-        buf_group_ = nullptr;
     }
+    ctx_ = nullptr;
+    mpi_ = nullptr;
+    initialized_ = false;
+    eos_sent_ = false;
+    // ⚠️ 只解除本地强引用：仍在途的 HardwareFrame 持有同一缓冲组，最后一帧释放时才真正销毁
+    buf_group_.reset();
 }
 
-void MppDecodeNode::destroy_mpp() noexcept {
-    if (ctx_ && loader_.mpp_destroy) {
-        loader_.mpp_destroy(ctx_);
-        ctx_ = nullptr;
-        mpi_ = nullptr;
+int MppDecodeNode::control(int32_t cmd, void *param, const char *what) noexcept {
+    if (!mpi_ || !mpi_->control) {
+        ZL_LOGE(stream_id_, kLogModule, "mpp_control_unavailable what=%s", what);
+        return decode_backend_failure;
     }
-    reset_buffer_group();
-    initialized_ = false;
+    const int ret = mpi_->control(ctx_, cmd, param);
+    if (ret != mpp::MPP_OK) {
+        ZL_LOGW(stream_id_, kLogModule, "mpp_control_failed what=%s cmd=0x%08x ret=%d", what,
+                static_cast<unsigned>(cmd), ret);
+        return decode_backend_failure;
+    }
+    return decode_ok;
+}
+
+int MppDecodeNode::configure_buffer_group(mpp::MppFrame frame) {
+    const auto &api = loader_.api();
+
+    const uint32_t width = api.frame_get_width(frame);
+    const uint32_t height = api.frame_get_height(frame);
+    const uint32_t hor_stride_in = api.frame_get_hor_stride(frame);
+    const uint32_t ver_stride_in = api.frame_get_ver_stride(frame);
+    const size_t raw_buf_size = api.frame_get_buf_size ? api.frame_get_buf_size(frame) : 0;
+
+    const uint32_t hor_stride = hor_stride_in > 0 ? hor_stride_in : align_up(width, kStrideAlign);
+    const uint32_t ver_stride = ver_stride_in > 0 ? ver_stride_in : align_up(height, kStrideAlign);
+    const size_t buf_size =
+        raw_buf_size > 0 ? raw_buf_size : static_cast<size_t>(hor_stride) * ver_stride * 3 / 2;
+    const int32_t count = buffer_count_for(width, height);
+
+    // 先创建持有者、再由持有者接收 MppBufferGroup：make_shared 抛出 bad_alloc 时尚未分配任何组，
+    // 异常路径零泄漏（无需额外的栈上临时守卫）
+    auto holder = std::make_shared<BufferGroup>();
+    holder->loader = &loader_;
+    holder->stream_id = stream_id_;
+
+    int ret = mpp::MPP_NOK;
+    for (const auto type : kBufferTypes) {
+        holder->raw = nullptr;
+        ret = api.buffer_group_get(&holder->raw, type, mpp::MPP_BUFFER_INTERNAL, "ZhulongBufGrp", "info_change");
+        if (ret == mpp::MPP_OK && holder->raw) {
+            break;
+        }
+    }
+    if (ret != mpp::MPP_OK || !holder->raw) {
+        ZL_LOGE(stream_id_, kLogModule, "mpp_buffer_group_get_failed ret=%d", ret);
+        return decode_backend_failure;
+    }
+
+    if (api.buffer_group_limit_config && api.buffer_group_limit_config(holder->raw, buf_size, count) != mpp::MPP_OK) {
+        ZL_LOGW(stream_id_, kLogModule, "mpp_buffer_group_limit_failed size=%zu count=%d", buf_size, count);
+    }
+
+    // 绑定外部缓冲池并通知解除挂起
+    if (control(mpp::MPP_DEC_SET_EXT_BUF_GROUP, holder->raw, "set_ext_buf_group") != decode_ok) {
+        return decode_backend_failure;
+    }
+    if (control(mpp::MPP_DEC_SET_INFO_CHANGE_READY, nullptr, "info_change_ready") != decode_ok) {
+        return decode_backend_failure;
+    }
+
+    ZL_LOGI(stream_id_, kLogModule, "mpp_info_change width=%u height=%u stride=%u vstride=%u buffers=%d", width,
+            height, hor_stride, ver_stride, count);
+
+    // 旧组不在此销毁：仍持有它的在途帧会在释放时把引用计数降为 0
+    buf_group_ = std::move(holder);
+    return decode_ok;
 }
 
 int MppDecodeNode::send_packet(const uint8_t *data, size_t size, int64_t pts, int64_t dts) {
-    (void)dts;
+    (void)dts; // MPP 硬解只透传显示时间戳，无独立解码时间戳语义
     if (!initialized_ || !mpi_ || !mpi_->decode_put_packet) {
-        return -1;
+        return decode_backend_failure;
     }
+    const auto &api = loader_.api();
 
     // 排空 (Drain) 信号：data 为 nullptr 或 size 为 0
     if (!data || size == 0) {
         if (eos_sent_) {
-            return 0;
+            return decode_ok;
         }
         mpp::MppPacket packet = nullptr;
-        int ret = loader_.mpp_packet_init(&packet, nullptr, 0);
-        if (ret == mpp::MPP_OK && packet) {
-            loader_.mpp_packet_set_eos(packet);
-            mpi_->decode_put_packet(ctx_, packet);
-            loader_.mpp_packet_deinit(&packet);
-            eos_sent_ = true;
+        if (!api.packet_init || api.packet_init(&packet, nullptr, 0) != mpp::MPP_OK || !packet) {
+            ZL_LOGE(stream_id_, kLogModule, "mpp_eos_packet_init_failed");
+            return decode_backend_failure;
         }
-        return 0;
+        if (api.packet_set_eos) {
+            api.packet_set_eos(packet);
+        }
+        const int put_ret = mpi_->decode_put_packet(ctx_, packet);
+        api.packet_deinit(&packet);
+        // ⚠️ EOS 未真正入队时不得标记 eos_sent_，调用方排空后可重试
+        if (put_ret == mpp::MPP_ERR_BUFFER_FULL || put_ret == mpp::MPP_ERR_TIMEOUT) {
+            return decode_again;
+        }
+        if (put_ret != mpp::MPP_OK) {
+            ZL_LOGW(stream_id_, kLogModule, "mpp_eos_put_failed ret=%d", put_ret);
+            return decode_backend_failure;
+        }
+        eos_sent_ = true;
+        return decode_ok;
     }
 
     eos_sent_ = false;
     mpp::MppPacket packet = nullptr;
-    // 零拷贝借用入参缓冲区构造 MppPacket
-    int ret = loader_.mpp_packet_init(&packet, const_cast<uint8_t*>(data), size);
-    if (ret != mpp::MPP_OK || !packet) {
-        return -1;
+    // 借用入参缓冲区构造 MppPacket：仅在 decode_put_packet 同步调用期间有效，返回后立即 deinit
+    if (api.packet_init(&packet, const_cast<uint8_t *>(data), size) != mpp::MPP_OK || !packet) {
+        ZL_LOGE(stream_id_, kLogModule, "mpp_packet_init_failed size=%zu", size);
+        return decode_backend_failure;
     }
-    loader_.mpp_packet_set_pts(packet, pts);
+    if (api.packet_set_pts) {
+        api.packet_set_pts(packet, pts);
+    }
 
-    int put_ret = mpi_->decode_put_packet(ctx_, packet);
-    loader_.mpp_packet_deinit(&packet);
+    const int put_ret = mpi_->decode_put_packet(ctx_, packet);
+    api.packet_deinit(&packet);
 
     if (put_ret == mpp::MPP_OK) {
-        return 0;
+        return decode_ok;
     }
-    // ⚠️ 契约归一化：将硬件队列满或超时背压映射为 AVERROR(EAGAIN)，驱动调用方排空已解帧后重试，防止误判为损坏清空 DPB
+    // ⚠️ 契约归一化：硬件队列满或超时属于背压，映射为 decode_again，避免上层误判为损坏而清空 DPB
     if (put_ret == mpp::MPP_ERR_BUFFER_FULL || put_ret == mpp::MPP_ERR_TIMEOUT) {
-        return AVERROR(EAGAIN);
+        return decode_again;
     }
-    return put_ret;
+    ZL_LOGW(stream_id_, kLogModule, "mpp_put_packet_failed ret=%d", put_ret);
+    return decode_backend_failure;
 }
 
 int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
     out_frame.reset();
     if (!initialized_ || !mpi_ || !mpi_->decode_get_frame) {
-        return -1;
+        return decode_backend_failure;
     }
+    const auto &api = loader_.api();
+    mpp::MppLoader *const loader_ptr = &loader_;
 
     while (true) {
         mpp::MppFrame frame = nullptr;
-        int ret = mpi_->decode_get_frame(ctx_, &frame);
-        if (ret == mpp::MPP_ERR_TIMEOUT || (ret == 0 && !frame)) {
-            return 1; // EAGAIN：暂无输出，需继续喂包
+        const int ret = mpi_->decode_get_frame(ctx_, &frame);
+        if (ret == mpp::MPP_ERR_TIMEOUT || (ret == mpp::MPP_OK && !frame)) {
+            return decode_again; // 暂无输出，需继续喂包
         }
         if (ret != mpp::MPP_OK || !frame) {
-            return -1;
+            // EOS 之后的终止态不是故障：排空完成，继续喂包即可
+            if (eos_sent_) {
+                return decode_again;
+            }
+            ZL_LOGW(stream_id_, kLogModule, "mpp_decode_get_frame_failed ret=%d", ret);
+            return decode_backend_failure;
         }
 
-        // RAII 保护守卫：无论通过 continue 还是 return 离开当前轮次，均自动归还 MppFrame 容器
+        // RAII 保护守卫：无论通过 continue 还是 return 离开当前轮次，均自动归还 MppFrame 容器。
+        // ⚠️ 必须在取出 MppBuffer 并 inc_ref 后立即释放，否则会耗尽 MPP 固定槽位导致 VPU 死锁。
         struct FrameGuard {
-            mpp::MppFrame f{nullptr};
-            mpp::MppLoader &ldr;
+            mpp::MppFrame frame{nullptr};
+            mpp::MppLoader *loader{nullptr};
             ~FrameGuard() {
-                if (f) ldr.mpp_frame_deinit(&f);
+                if (frame && loader && loader->api().frame_deinit) {
+                    loader->api().frame_deinit(&frame);
+                }
             }
-        } frame_guard{frame, loader_};
+        } frame_guard{frame, loader_ptr};
 
         // 1. 处理 info_change 事件 (流参数更新或首次解析出 SPS/PPS)
-        if (loader_.mpp_frame_get_info_change(frame)) {
-            int info_ret = handle_info_change(frame);
-            if (info_ret != 0) {
+        if (api.frame_get_info_change(frame)) {
+            const int info_ret = configure_buffer_group(frame);
+            if (info_ret != decode_ok) {
                 return info_ret;
             }
             // info_change 帧不携带图像数据，继续拉取真正的画面帧
@@ -190,142 +348,111 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
         }
 
         // 2. 坏帧与丢弃帧过滤
-        if (loader_.mpp_frame_get_errinfo(frame) != 0 || loader_.mpp_frame_get_discard(frame) != 0) {
+        if (api.frame_get_errinfo(frame) != 0 || api.frame_get_discard(frame) != 0) {
             continue;
         }
 
-        // 3. 提取底层物理 MppBuffer 与内核 DMA-BUF 文件描述符
-        mpp::MppBuffer mpp_buf = loader_.mpp_frame_get_buffer(frame);
+        // 3. 输出格式校验：MPP 可能输出 10bit 半平面（MPP_FMT_YUV420SP_10BIT）或其他格式，
+        //    ⚠️ 严禁一律硬编码为 NV12，否则下游 RGA/RKNN 会按 8bit 解析造成静默错帧
+        const mpp::MppFrameFormat format =
+            api.frame_get_fmt ? api.frame_get_fmt(frame) : mpp::MPP_FMT_YUV420SP;
+        if (format != mpp::MPP_FMT_YUV420SP) {
+            if (!unsupported_format_logged_) {
+                unsupported_format_logged_ = true;
+                ZL_LOGW(stream_id_, kLogModule, "mpp_unsupported_frame_format fmt=%u",
+                        static_cast<unsigned>(format));
+            }
+            continue;
+        }
+
+        // 4. 提取底层物理 MppBuffer 与内核 DMA-BUF 文件描述符
+        mpp::MppBuffer mpp_buf = api.frame_get_buffer(frame);
         if (!mpp_buf) {
             continue;
         }
 
-        int raw_fd = loader_.buffer_get_fd(mpp_buf);
+        const int raw_fd = loader_.fd(mpp_buf);
         if (raw_fd < 0) {
-            return -1;
+            ZL_LOGE(stream_id_, kLogModule, "mpp_buffer_get_fd_failed");
+            return decode_backend_failure;
         }
 
         // dup 独立文件描述符以与 HardwareFrame 生命周期解耦
-        int owned_fd = ::dup(raw_fd);
+        const int owned_fd = ::dup(raw_fd);
         if (owned_fd < 0) {
-            return -1;
+            ZL_LOGE(stream_id_, kLogModule, "mpp_dma_fd_dup_failed errno=%d", errno);
+            return decode_backend_failure;
         }
 
-        // 递增底层 MppBuffer 引用计数，保证跨线程流转期间显存不被复用
-        loader_.buffer_inc_ref(mpp_buf);
+        // ⚠️ 引用计数必须校验：加引用失败时立刻回滚 fd，绝不进入装配流程；
+        //    否则 release_fn 中的 mpp_buffer_put 会造成净减引用并提前回收显存
+        if (loader_.inc_ref(mpp_buf) != mpp::MPP_OK) {
+            ::close(owned_fd);
+            ZL_LOGE(stream_id_, kLogModule, "mpp_buffer_inc_ref_failed");
+            return decode_backend_failure;
+        }
 
-        // RAII 保护守卫：防止 make_shared 抛出 std::bad_alloc 或后续装配异常导致 owned_fd 与 buffer 引用计数泄露
+        // RAII 保护守卫：防止 make_shared 抛出 std::bad_alloc 或装配期间异常导致 fd 与引用计数泄漏
         struct ScopeGuard {
             int fd{-1};
-            mpp::MppBuffer buf{nullptr};
-            mpp::MppLoader &ldr;
+            mpp::MppBuffer buffer{nullptr};
+            mpp::MppLoader *loader{nullptr};
             bool active{true};
             ~ScopeGuard() {
-                if (active) {
-                    if (fd >= 0) {
-                        ::close(fd);
-                    }
-                    if (buf) {
-                        ldr.buffer_put(buf);
-                    }
+                if (!active) return;
+                if (fd >= 0) {
+                    ::close(fd);
+                }
+                if (buffer && loader) {
+                    loader->put(buffer);
                 }
             }
-        } guard{owned_fd, mpp_buf, loader_, true};
+        } guard{owned_fd, mpp_buf, loader_ptr, true};
 
-        // 4. 组装硬件帧
-        out_frame = std::make_shared<HardwareFrame>();
-        out_frame->width = loader_.mpp_frame_get_width(frame);
-        out_frame->height = loader_.mpp_frame_get_height(frame);
-        out_frame->stride = loader_.mpp_frame_get_hor_stride(frame);
-        out_frame->vstride = loader_.mpp_frame_get_ver_stride(frame);
-        out_frame->format = FRAME_FORMAT_NV12;
-        out_frame->dma_fd = owned_fd;
+        // 5. 组装硬件帧。
+        // ⚠️ 先在局部装配、最后一步才写入 out_frame：任何一步抛出（如 std::function 分配失败）
+        // 都不会让调用方看到半成品输出，契约「失败时 out_frame 被置空」始终成立。
+        auto frame_obj = std::make_shared<HardwareFrame>();
+        frame_obj->width = api.frame_get_width(frame);
+        frame_obj->height = api.frame_get_height(frame);
+        frame_obj->stride = api.frame_get_hor_stride(frame);
+        frame_obj->vstride = api.frame_get_ver_stride(frame);
+        frame_obj->format = FRAME_FORMAT_NV12;
+        frame_obj->dma_fd = owned_fd;
 
         // ⚠️ 时间戳保真透传：严格遵循 (raw_pts != AV_NOPTS_VALUE) 契约判定有效性
-        const int64_t raw_pts = loader_.mpp_frame_get_pts(frame);
-        out_frame->has_pts = (raw_pts != AV_NOPTS_VALUE);
-        out_frame->pts = out_frame->has_pts ? raw_pts : 0;
-        out_frame->time_base_num = time_base_num_;
-        out_frame->time_base_den = time_base_den_;
+        const int64_t raw_pts = api.frame_get_pts ? api.frame_get_pts(frame) : AV_NOPTS_VALUE;
+        frame_obj->has_pts = (raw_pts != AV_NOPTS_VALUE);
+        frame_obj->pts = frame_obj->has_pts ? raw_pts : 0;
+        frame_obj->time_base_num = time_base_num_;
+        frame_obj->time_base_den = time_base_den_;
 
-        // RAII 回收闭包：当 HardwareFrame 最后一个智能指针析构时安全归还显存并关闭 fd
-        auto &loader_ref = loader_;
-        out_frame->release_fn = [&loader_ref, mpp_buf, owned_fd](HardwareFrame*) {
+        // RAII 回收闭包：当 HardwareFrame 最后一个智能指针析构时安全归还显存并关闭 fd。
+        // ⚠️ group_keepalive 是必须的：它保证本次帧所属的缓冲组存活到本帧归还之后。
+        const std::shared_ptr<BufferGroup> group_keepalive = buf_group_;
+        frame_obj->release_fn = [loader_ptr, mpp_buf, owned_fd, group_keepalive](HardwareFrame *) {
             if (owned_fd >= 0) {
                 ::close(owned_fd);
             }
-            loader_ref.buffer_put(mpp_buf);
+            loader_ptr->put(mpp_buf);
+            (void)group_keepalive;
         };
 
         // 成功交接所有权给 HardwareFrame，解除栈上守卫
         guard.active = false;
-        return 0;
+        out_frame = std::move(frame_obj);
+        return decode_ok;
     }
-}
-
-int MppDecodeNode::handle_info_change(mpp::MppFrame frame) {
-    uint32_t w = loader_.mpp_frame_get_width(frame);
-    uint32_t h = loader_.mpp_frame_get_height(frame);
-    uint32_t hor_s = loader_.mpp_frame_get_hor_stride(frame);
-    uint32_t ver_s = loader_.mpp_frame_get_ver_stride(frame);
-    size_t raw_buf_size = loader_.mpp_frame_get_buf_size(frame);
-
-    width_ = w;
-    height_ = h;
-    hor_stride_ = (hor_s > 0) ? hor_s : ((w + 15) & ~15);
-    ver_stride_ = (ver_s > 0) ? ver_s : ((h + 15) & ~15);
-
-    size_t buf_size = (raw_buf_size > 0) ? raw_buf_size : (static_cast<size_t>(hor_stride_) * ver_stride_ * 3 / 2);
-
-    // 根据分辨率计算自适应缓冲池容量 (720P: 10, 1080P: 16, 4K: 20)
-    int count = 16;
-    uint64_t pixels = static_cast<uint64_t>(w) * h;
-    if (pixels <= 1280 * 720) {
-        count = 10;
-    } else if (pixels <= 1920 * 1080) {
-        count = 16;
-    } else {
-        count = 20;
-    }
-
-    reset_buffer_group();
-
-    // 依次探测 DMA_HEAP -> DRM -> ION 分配器
-    static const mpp::MppBufferType kTypes[] = {
-        mpp::MPP_BUFFER_TYPE_DMA_HEAP,
-        mpp::MPP_BUFFER_TYPE_DRM,
-        mpp::MPP_BUFFER_TYPE_ION
-    };
-
-    int ret = mpp::MPP_NOK;
-    for (auto type : kTypes) {
-        ret = loader_.mpp_buffer_group_get(&buf_group_, type, mpp::MPP_BUFFER_INTERNAL, "ZhulongBufGrp", "info_change");
-        if (ret == mpp::MPP_OK && buf_group_) {
-            break;
-        }
-    }
-
-    if (ret != mpp::MPP_OK || !buf_group_) {
-        return -1;
-    }
-
-    loader_.mpp_buffer_group_limit_config(buf_group_, buf_size, count);
-
-    // 绑定外部缓冲池并通知解除挂起
-    if (mpi_->control) {
-        mpi_->control(ctx_, mpp::MPP_DEC_SET_EXT_BUF_GROUP, buf_group_);
-        mpi_->control(ctx_, mpp::MPP_DEC_SET_INFO_CHANGE_READY, nullptr);
-        uint32_t fast_play = 1;
-        mpi_->control(ctx_, mpp::MPP_DEC_SET_ENABLE_FAST_PLAY, &fast_play);
-    }
-    return 0;
 }
 
 void MppDecodeNode::flush() {
-    if (initialized_ && mpi_ && mpi_->reset) {
-        mpi_->reset(ctx_);
-        eos_sent_ = false;
+    if (!initialized_ || !mpi_ || !mpi_->reset) {
+        return;
     }
+    if (mpi_->reset(ctx_) != mpp::MPP_OK) {
+        ZL_LOGW(stream_id_, kLogModule, "mpp_reset_failed");
+    }
+    eos_sent_ = false;
 }
 
 } // namespace zhulong

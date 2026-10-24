@@ -10,9 +10,9 @@
  * 2. 拥塞重同步与关键帧门控（R16）：
  *    - 面对网络抖动或丢包，当 packet_queue_ 满载时触发 waiting_keyframe_=true 并清空积压旧包；
  *    - 拒绝一切非关键帧，直到完整关键帧到达并清空旧队列后才恢复解码，解码器调用 flush() 清空 DPB；
- * 3. EAGAIN 完整排空（R19）：
- *    - 当 send_packet 返回 AVERROR(EAGAIN) 时，立即循环 receive_frame 排空当前就绪帧，
- *      随后再次重试送入该包，杜绝静默吞包丢帧；
+ * 3. 背压完整排空（R19）：
+ *    - 当 send_packet 返回 decode_again 时，立即循环 receive_frame 排空当前就绪帧，
+ *      随后再次重试送入该包；二次仍背压则记录告警，杜绝静默吞包丢帧；
  * 4. 优先级分发与逐订阅者异常隔离：
  *    - 数据包优先拷入 AI 解码队列，确保分析低延迟；
  *    - 锁外通过不可变快照遍历 Preview 订阅者，单个订阅者回调抛错不影响其他订阅者与主采集流程。
@@ -240,7 +240,7 @@ void DecodeSession::decode_loop() noexcept {
     auto drain_frames = [&](IDecodeNode *dec) {
         if (!dec) return;
         HardwareFrame::Ptr frame;
-        while (dec->receive_frame(frame) == 0 && frame != nullptr) {
+        while (dec->receive_frame(frame) == decode_ok && frame != nullptr) {
             frame->stream_id = stream_id_;
             frame_queue_.push(std::move(frame));
         }
@@ -293,15 +293,18 @@ void DecodeSession::decode_loop() noexcept {
 
                 int ret = dec->send_packet(pkt.data.data(), actual_size, pts, dts);
 
-                // ⚠️ 若底层缓冲已满导致 EAGAIN，先排空已解码帧，再重新发送当前包，严防静默吞包
-                if (ret == AVERROR(EAGAIN)) {
+                // ⚠️ 若底层缓冲已满导致背压，先排空已解码帧，再重新发送当前包，严防静默吞包
+                if (ret == decode_again) {
                     drain_frames(dec);
                     ret = dec->send_packet(pkt.data.data(), actual_size, pts, dts);
                 }
 
-                if (ret >= 0) {
+                if (ret == decode_ok) {
                     drain_frames(dec);
-                } else if (ret != AVERROR_EOF && ret != AVERROR(EAGAIN)) {
+                } else if (ret == decode_again) {
+                    // 排空后仍背压：本包被丢弃。持续性背压说明解码器已停止消费，必须可观测
+                    ZL_LOGW(stream_id_, "pipeline.stream", "decode_backpressure_drop size=%zu", actual_size);
+                } else if (ret != AVERROR_EOF) {
                     // 解码单包遇到错误（如弱网残损包），执行冲刷清空 DPB，
                     // 并等待下一个关键帧，避免参考错误持续污染后续画面
                     dec->flush();
