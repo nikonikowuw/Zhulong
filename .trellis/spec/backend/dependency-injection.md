@@ -12,21 +12,20 @@
 
 ---
 
-## 2. 当前骨架生命周期时序
+## 2. 当前宿主生命周期顺序
 
-| 阶段 | 严格顺序 |
+`lifecycleRuntime` 管理多个领域服务，下面是当前实现顺序。新增或调整生命周期 hook 时，应同步更新此表与 `internal/app/runtime_test.go` 的顺序测试。
+
+| 阶段 | 当前顺序 |
 | --- | --- |
-| **启动 (`lifecycleRuntime.Start`)** | 1. 打开 GORM/SQLite 并执行嵌入式版本化迁移 (失败则阻断) ➔ 2. 初始重载区域策略缓存 `RegionConfigCache.Reload`（失败仅告警不阻断）➔ 3. 创建并启动 Native C++ Engine ➔ 4. 校验/初始化相机 AES-256-GCM 密钥（已有密文而密钥缺失则阻断）➔ 5. 启动 Camera HealthScheduler ➔ 6. 绑定 TCP listener 并启动 Gin HTTP Serve |
-| **停止 (`lifecycleRuntime.Stop`)** | 1. 优雅关闭 HTTP 并等待 Serve 退出 ➔ 2. 关闭 SSE Hub 与停止 Camera HealthScheduler（含 StreamHub 分发器与 AI 流） ➔ 3. 停止 Algorithm Supervisor 所有运行中的子进程 ➔ 4. 停止并销毁 C++ opaque handle ➔ 5. 关闭 SQLite pool ➔ 6. Sync Zap |
+| **启动 (`lifecycleRuntime.Start`)** | 日志输出准备 ➔ 数据库打开与迁移（失败阻断）➔ 区域配置缓存重载（失败仅告警）➔ Audit ➔ Network ➔ SystemTime ➔ Storage ➔ Person ➔ Snapshot worker ➔ Record ➔ native 日志队列与回调注册 ➔ Native Engine ➔ Camera 密钥初始化与健康调度器 ➔ Algorithm ➔ TCP listener 与 HTTP Serve。Network、SystemTime、Storage、Person、Record、Algorithm 的启动错误当前记录告警后继续；Native、日志回调、Camera 初始化和 listener 等关键步骤失败会回滚已启动资源。
+| **停止 (`lifecycleRuntime.Stop`)** | HTTP 优雅关闭并等待 Serve ➔ Camera ➔ Algorithm ➔ Person ➔ Record ➔ Snapshot worker 排空并停止 ➔ Storage ➔ SystemTime ➔ Network ➔ Audit ➔ Native Engine / 日志回调 ➔ SQLite ➔ 同步并关闭日志资源。
 
-⚠️ **停机顺序是硬约束，不得静默调整**：`camera.Stop` 必须先于 `algorithm.Stop`，`algorithm.Stop` 又必须先于 `native.Close`（即 `engine.close`）。理由是 native `Engine` 持有 per-stream 的 `FrameBroker`，而 runner 子进程是它的 IPC 客户端：
+⚠️ **有数据依赖的相对顺序是硬约束**：`camera.Stop` 先于 `algorithm.Stop`，`algorithm.Stop` 先于 `native.Close`；`record.Stop` 先于 Snapshot worker 停止，Snapshot worker 必须在 Storage 与 Native 仍可用时排空。不得仅凭 Fx 注册顺序推断这些依赖。
 
-- 若 `native.Close` 先于 `algorithm.Stop`，runner 仍持有 shm 映射而 broker 已随引擎析构；
-- 若 `algorithm.Stop` 先于 `camera.Stop`，AI 消费者会先消失、broker 先被销毁，而 runner 仍在收帧。
+`internal/app/runtime_test.go` 应守护关键顺序（包括 AI 消费者停止先于 Native 销毁）；新增后台 worker 时，应明确其依赖、取消方式、排空行为与关闭位置。
 
-该顺序由 `internal/app/runtime_test.go` 的 `TestAIShutdownOrderPrecedesNativeClose` 守护：被改坏时测试会失败，而不是静默产生 use-after-free。
-
-启动的后续步骤失败时，`lifecycleRuntime.Start` 在返回错误前按逆序清理已打开资源，因为 Fx 不会对失败的 `OnStart` 自动调用该 hook 的 `OnStop`。正常停机时先排空 HTTP 请求，再释放 native 与数据库资源。当前 native stub 不创建 worker thread、媒体流水线或 NPU context；未来增加后台线程时，必须先停止、唤醒并 Join 后才能销毁句柄。
+启动后续步骤失败时，`lifecycleRuntime.Start` 在返回错误前清理已启动资源，因为 Fx 不会对失败的 `OnStart` 自动调用该 hook 的 `OnStop`。当前 Engine 已包含媒体流、FrameBroker 与异步处理能力，不得再按“native stub 无 worker/流水线”的假设设计关闭行为。
 
 ---
 

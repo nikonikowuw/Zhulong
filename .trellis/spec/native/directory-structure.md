@@ -17,7 +17,7 @@
 - `src/nodes/decode/`：
   - `decoder.hpp`：统一解码节点抽象契约 (`IDecodeNode`)；
   - `ffmpeg_decoder.hpp / .cpp`：单流确定性软解实现 (`FFmpegDecodeNode`)，产出带 RAII `release_fn` 的 `HardwareFrame`。
-- `scripts/build.py` 负责依赖/目标/最终 Go 链接，`tests/` 包含 Native、纯 C、真实 loopback RTSP、硬件帧生命周期与解码节点全项回归。没有厂商专有 SDK。
+- `scripts/build.py` 负责依赖、目标和最终 Go 链接；`tests/` 包含 Native、纯 C、真实 loopback RTSP、硬件帧生命周期与解码节点回归。当前基础构建与主机测试不要求厂商 SDK；可选硬件后端及其专有头文件由 `src/backends/` 隔离，并由对应 profile、SDK/BSP 和目标板环境单独启用与验证。
 
 以下仍是后续完整节点架构的规划，功能未开始前严禁创建空目录。
 

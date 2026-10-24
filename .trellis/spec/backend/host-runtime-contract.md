@@ -27,7 +27,7 @@
 - `GET /api/v1/health` returns HTTP 200 only after both database migrations and native startup complete; otherwise it returns HTTP 503 with the standard error envelope.
 - `/api/*` and `/swagger/*` are reserved. Unknown API routes and unsupported API methods return an HTTP 404 JSON envelope and must not fall back to SPA HTML. `/` and extensionless client routes serve the embedded SPA.
 - SQLite stores `<data-dir>/zhulong.db`; DSN settings are `_busy_timeout=5000`, `_foreign_keys=on`, `_journal_mode=WAL`. GORM uses one open/idle connection. Schema changes are embedded, versioned `internal/database/migrations/*.sql`; never use GORM `AutoMigrate`.
-- Startup order is database open+migrate, native `Start`, then TCP bind and HTTP `Serve`. Any failed step cleans up resources acquired earlier before returning. Shutdown drains HTTP/Serve first, then closes the native handle, closes SQLite, and syncs Zap.
+- `lifecycleRuntime.Start` 先准备日志、打开数据库并执行迁移，再按领域顺序启动 Audit、Network、SystemTime、Storage、Person、Snapshot、Record、Native 日志回调、Native Engine、Camera 与 Algorithm，最后绑定 TCP listener 并启动 HTTP Serve；关键步骤失败时清理已获取资源。`lifecycleRuntime.Stop` 先排空 HTTP，再按依赖顺序停止 Camera、Algorithm、Record/Snapshot、Storage 等服务，最后关闭 Native 与 SQLite 并同步日志。具体顺序以 [依赖注入与生命周期规范](./dependency-injection.md) 和运行时测试为准。
 - Vite outputs to `internal/webui/dist` and clears that directory. A tracked `.keep` preserves the embed target before the first build, and the build plugin recreates it after Vite clears the output. Root `make build` builds frontend and native dependencies before the Go binary.
 - The C++ side allocates and frees the opaque engine handle. Go owns only the handle value and serializes access; the current bridge passes no Go pointer to C. Every exported C ABI function isolates C++ exceptions; status-returning functions map failures to fixed codes, while destroy remains void.
 
@@ -56,7 +56,7 @@
 - `internal/app`: assert Fx graph validity, health and SPA/API routing, migration failure blocking HTTP, listener failure rollback, and request drain before native/DB close.
 - `internal/httputil`: assert exact success/error envelope keys, `data: null`, localized 422 details, and internal-error redaction.
 - `web`: assert loading/error/retry/ready UI, persisted language/theme behavior, and document language after locale changes.
-- Root: `make check` passes formatting, vet, race tests, CTest, frontend lint/type-check/tests/audit/build; `make smoke` validates the built host end to end.
+- Root: `make check` 通过前端 lint、真实无头浏览器测试、生产构建、Native CTest、API 文档生成、Go vet、race 测试和 Go/native 桥接测试；前端类型检查包含在 `build` 的 `tsc -b` 中。`format:check`、`knip` 与依赖安全审计可单独运行，但不属于当前 `make check` 的通过条件；安全审计结果必须单独记录，不得宣称已通过。`make smoke` 验证构建产物的宿主端到端行为。
 
 ### 7. Wrong vs Correct
 
