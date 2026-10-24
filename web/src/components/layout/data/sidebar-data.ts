@@ -38,6 +38,17 @@ export const sidebarData: SidebarData = {
           url: '/',
           icon: LayoutDashboard,
         },
+        // 顺序遵循 NVR 通行心智：监看 → 检索 → 运营配置 → 日志
+        {
+          title: 'Live View',
+          url: '/live',
+          icon: Monitor,
+        },
+        {
+          title: 'Records',
+          url: '/records',
+          icon: Images,
+        },
         {
           title: 'Cameras',
           url: '/cameras',
@@ -57,16 +68,6 @@ export const sidebarData: SidebarData = {
           title: 'Tasks',
           url: '/tasks',
           icon: Workflow,
-        },
-        {
-          title: 'Live View',
-          url: '/live',
-          icon: Monitor,
-        },
-        {
-          title: 'Records',
-          url: '/records',
-          icon: Images,
         },
         {
           title: 'Audit Logs',
