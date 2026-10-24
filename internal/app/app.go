@@ -214,7 +214,11 @@ type networkOut struct {
 }
 
 func provideNetwork(config Config, logger *zap.Logger) networkOut {
-	comp := network.NewNetworkComponents(config.DataDir, config.CustomScript, logger)
+	comp := network.NewNetworkComponents(network.Options{
+		DataDir:      config.DataDir,
+		CustomScript: config.CustomScript,
+		HTTPAddress:  config.HTTPAddress,
+	}, logger)
 	return networkOut{
 		Provider:        comp.Provider,
 		Watchdog:        comp.Watchdog,

@@ -2490,7 +2490,7 @@ const docTemplate = `{
         },
         "/system/network/confirm": {
             "post": {
-                "description": "Solidifies current trial configuration and disarms the watchdog timer. Accepts session authentication or one-time confirmation token.",
+                "description": "Solidifies the trial configuration and disarms the watchdog timer. Accepts a session or token.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2541,7 +2541,7 @@ const docTemplate = `{
         },
         "/system/network/interfaces": {
             "get": {
-                "description": "Queries physical network interfaces, marking the current session interface only when it can be identified unambiguously.",
+                "description": "Queries physical interfaces, marking the current one only when identified unambiguously.",
                 "produces": [
                     "application/json"
                 ],
@@ -2717,7 +2717,7 @@ const docTemplate = `{
         },
         "/system/network/rollback": {
             "post": {
-                "description": "Immediately cancels trial configuration and restores previous safe state. Accepts session authentication or one-time confirmation token.",
+                "description": "Cancels the trial configuration and restores the previous state. Accepts a session or token.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4576,7 +4576,7 @@ const docTemplate = `{
                     }
                 },
                 "isCurrent": {
-                    "description": "True only when the current HTTP request maps unambiguously to this interface",
+                    "description": "True only when the request maps unambiguously to this interface",
                     "type": "boolean"
                 },
                 "isDefaultGw": {

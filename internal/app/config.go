@@ -110,7 +110,7 @@ func ParseSessionTTL(raw string) (time.Duration, error) {
 // DefaultConfig returns local-only defaults suitable for development and smoke tests.
 func DefaultConfig() Config {
 	return Config{
-		HTTPAddress:     "127.0.0.1:8080",
+		HTTPAddress:     "127.0.0.1:8000",
 		DataDir:         "./data",
 		FacesDir:        "",
 		AlgorithmTarget: "cpu",

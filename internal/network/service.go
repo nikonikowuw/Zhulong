@@ -12,29 +12,59 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// applyDelay lets the HTTP response flush before the interface is reconfigured.
+	applyDelay = 300 * time.Millisecond
+
+	// applyTimeout bounds the delayed reconfiguration handed to the provider.
+	applyTimeout = 20 * time.Second
+
+	// maintenanceInterface is preferred as primary during emergency recovery when present.
+	maintenanceInterface = "eth0"
+)
+
 // NetworkService orchestrates host network configuration, watchdog transactions, and safety rules.
 type NetworkService struct {
 	provider           NetworkProvider
 	watchdog           *WatchdogManager
 	logger             *zap.Logger
+	publicPort         string
 	mu                 sync.Mutex
 	cancelPendingApply context.CancelFunc
 }
 
 // NewNetworkService creates a new NetworkService.
-func NewNetworkService(provider NetworkProvider, watchdog *WatchdogManager, logger *zap.Logger) *NetworkService {
+//
+// publicPort is the console port the host listens on; it is only used to build the confirmation
+// URL that a client must open after the interface has been reconfigured.
+func NewNetworkService(
+	provider NetworkProvider,
+	watchdog *WatchdogManager,
+	publicPort string,
+	logger *zap.Logger,
+) *NetworkService {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &NetworkService{
-		provider: provider,
-		watchdog: watchdog,
-		logger:   logger,
+		provider:   provider,
+		watchdog:   watchdog,
+		logger:     logger,
+		publicPort: publicPort,
 	}
 }
 
-// ListInterfaces queries physical network interfaces and marks the current one only when it can be matched unambiguously.
-func (s *NetworkService) ListInterfaces(ctx context.Context, localAddr, host, clientIP string) ([]InterfaceInfo, error) {
+func errNetworkPermissionDenied() error {
+	return apperr.New(
+		apperr.KindPermissionDenied,
+		"SYSTEM_NETWORK_PERMISSION_DENIED",
+		"Insufficient permissions: CAP_NET_ADMIN or root required",
+		nil,
+	)
+}
+
+// ListInterfaces lists physical interfaces and marks the current one only when the match is unambiguous.
+func (s *NetworkService) ListInterfaces(ctx context.Context, origin RequestOrigin) ([]InterfaceInfo, error) {
 	ifaces, err := s.provider.ListPhysicalInterfaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list physical interfaces: %w", err)
@@ -48,9 +78,9 @@ func (s *NetworkService) ListInterfaces(ctx context.Context, localAddr, host, cl
 		address  string
 		bySubnet bool
 	}{
-		{address: localAddr},
-		{address: host},
-		{address: clientIP, bySubnet: true},
+		{address: origin.LocalAddr},
+		{address: origin.Host},
+		{address: origin.ClientIP, bySubnet: true},
 	}
 
 	for _, candidate := range candidates {
@@ -65,7 +95,10 @@ func (s *NetworkService) ListInterfaces(ctx context.Context, localAddr, host, cl
 		}
 	}
 
-	// Guarantee non-nil slices so JSON serialization encodes [] instead of null
+	// Guarantee non-nil slices so JSON serialization encodes [] instead of null.
+	if ifaces == nil {
+		ifaces = make([]InterfaceInfo, 0)
+	}
 	for i := range ifaces {
 		if ifaces[i].IPAddresses == nil {
 			ifaces[i].IPAddresses = make([]string, 0)
@@ -82,14 +115,14 @@ func findUniqueInterfaceIndex(ifaces []InterfaceInfo, address net.IP, bySubnet b
 	matchedIndex := -1
 	for index := range ifaces {
 		for _, cidr := range ifaces[index].IPAddresses {
-			ip, network, err := net.ParseCIDR(cidr)
+			ip, ipNet, err := net.ParseCIDR(cidr)
 			if err != nil {
 				continue
 			}
 
 			matches := ip.Equal(address)
 			if bySubnet {
-				matches = network.Contains(address)
+				matches = ipNet.Contains(address)
 			}
 			if !matches {
 				continue
@@ -111,25 +144,22 @@ func (s *NetworkService) ApplyConfig(
 	iface string,
 	cfg InterfaceConfig,
 	currentHost string,
-	clientIP string,
 ) (*ApplyResponse, error) {
-	// 0. Permission check
 	if !s.provider.HasPermission() {
-		return nil, apperr.New(apperr.KindPermissionDenied, "SYSTEM_NETWORK_PERMISSION_DENIED", "Insufficient permissions: CAP_NET_ADMIN or root required", nil)
+		return nil, errNetworkPermissionDenied()
 	}
 
-	// 1. Basic validation
-	if cfg.Mode != "dhcp" && cfg.Mode != "static" {
+	if !isValidMode(cfg.Mode) {
 		return nil, apperr.New(apperr.KindInvalid, "INVALID_MODE", "Mode must be 'dhcp' or 'static'", nil)
 	}
 
-	if cfg.Mode == "static" {
+	if cfg.Mode == modeStatic {
 		if err := validateStaticConfig(cfg); err != nil {
 			return nil, err
 		}
 	}
 
-	// 2. Fetch existing interfaces for constraints & rollback backup
+	// Fetch existing interfaces for constraints and rollback backup.
 	existing, err := s.provider.ListPhysicalInterfaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read existing interfaces: %w", err)
@@ -143,73 +173,82 @@ func (s *NetworkService) ApplyConfig(
 		}
 	}
 	if currentTarget == nil {
-		return nil, apperr.New(apperr.KindNotFound, "INTERFACE_NOT_FOUND", fmt.Sprintf("Interface %q not found", iface), nil)
+		return nil, apperr.New(
+			apperr.KindNotFound,
+			"INTERFACE_NOT_FOUND",
+			fmt.Sprintf("Interface %q not found", iface),
+			nil,
+		)
 	}
 
-	// 3. Single Default Gateway rule enforcement
 	if cfg.SetDefault {
 		for _, other := range existing {
-			if other.Name != iface && other.IsDefaultGW {
-				return nil, apperr.New(apperr.KindConflict, "DEFAULT_GATEWAY_CONFLICT",
-					fmt.Sprintf("Interface %q is already configured as the default gateway", other.Name), nil)
+			if other.Name == iface || !other.IsDefaultGW {
+				continue
 			}
+			return nil, apperr.New(
+				apperr.KindConflict,
+				"DEFAULT_GATEWAY_CONFLICT",
+				fmt.Sprintf("Interface %q is already configured as the default gateway", other.Name),
+				nil,
+			)
 		}
 	}
 
-	// 4. Capture current state for rollback
-	rollbackDNS := currentTarget.DNS
-	if rollbackDNS == nil {
-		rollbackDNS = make([]string, 0)
+	confirmToken, err := GenerateSecureToken(32)
+	if err != nil {
+		return nil, fmt.Errorf("generate confirmation token: %w", err)
 	}
-	rollbackCfg := InterfaceConfig{
-		Mode:       currentTarget.Mode,
-		Gateway:    currentTarget.Gateway,
-		DNS:        rollbackDNS,
-		SetDefault: currentTarget.IsDefaultGW,
-	}
-	if len(currentTarget.IPAddresses) > 0 {
-		ip, mask, err := ParseCIDRToIPAndMask(currentTarget.IPAddresses[0])
-		if err == nil {
-			rollbackCfg.IPAddress = ip
-			rollbackCfg.SubnetMask = mask
-		}
+	txSuffix, err := GenerateSecureToken(4)
+	if err != nil {
+		return nil, fmt.Errorf("generate transaction id: %w", err)
 	}
 
-	// 5. Generate secure confirm token and transaction ID
-	confirmToken := GenerateSecureToken(32)
-	txID := fmt.Sprintf("tx_%d_%s", time.Now().Unix(), GenerateSecureToken(4))
+	txID := fmt.Sprintf("tx_%d_%s", time.Now().Unix(), txSuffix)
+	targetURL := computeTargetURL(cfg, currentHost, s.publicPort, confirmToken)
 
-	// 6. Compute Target URL
-	targetURL := computeTargetURL(cfg, currentHost, confirmToken)
-
-	// 7. Persist to Watchdog
 	txState := TransactionState{
 		TransactionID: txID,
 		InterfaceName: iface,
 		ConfirmToken:  confirmToken,
 		TargetURL:     targetURL,
 		TimeoutSec:    DefaultTimeoutSec,
-		RollbackCfg:   rollbackCfg,
+		RollbackCfg:   buildRollbackConfig(*currentTarget),
 	}
 
 	if err := s.watchdog.BeginTransaction(txState); err != nil {
 		return nil, fmt.Errorf("begin watchdog transaction: %w", err)
 	}
 
-	// 8. Delayed apply coordination (sleep 300ms so HTTP response completes cleanly)
+	s.scheduleApply(iface, cfg)
+
+	return &ApplyResponse{
+		TransactionID: txID,
+		TimeoutSec:    DefaultTimeoutSec,
+		TargetURL:     targetURL,
+		ConfirmToken:  confirmToken,
+	}, nil
+}
+
+// scheduleApply runs the reconfiguration after the HTTP response has been written,
+// cancelling any previously scheduled apply.
+func (s *NetworkService) scheduleApply(iface string, cfg InterfaceConfig) {
 	s.mu.Lock()
 	if s.cancelPendingApply != nil {
 		s.cancelPendingApply()
 	}
-	applyCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	applyCtx, cancel := context.WithTimeout(context.Background(), applyTimeout)
 	s.cancelPendingApply = cancel
 	s.mu.Unlock()
 
 	go func() {
+		defer cancel()
+
 		select {
-		case <-time.After(300 * time.Millisecond):
+		case <-time.After(applyDelay):
 		case <-applyCtx.Done():
-			s.logger.Info("Delayed network reconfiguration cancelled before execution", zap.String("interface", iface))
+			s.logger.Info("Delayed network reconfiguration cancelled before execution",
+				zap.String("interface", iface))
 			return
 		}
 
@@ -221,16 +260,14 @@ func (s *NetworkService) ApplyConfig(
 			s.logger.Error("Delayed network apply failed, rolling back immediately",
 				zap.String("interface", iface),
 				zap.Error(err))
-			_ = s.watchdog.RollbackTransaction(context.Background())
+
+			if rbErr := s.watchdog.RollbackTransaction(context.Background()); rbErr != nil {
+				s.logger.Error("Immediate rollback after apply failure also failed; host may be unreachable",
+					zap.String("interface", iface),
+					zap.Error(rbErr))
+			}
 		}
 	}()
-
-	return &ApplyResponse{
-		TransactionID: txID,
-		TimeoutSec:    DefaultTimeoutSec,
-		TargetURL:     targetURL,
-		ConfirmToken:  confirmToken,
-	}, nil
 }
 
 // Stop cancels any pending asynchronous operations and disarms the watchdog timer.
@@ -254,7 +291,7 @@ func (s *NetworkService) HasPermission() bool {
 // Confirm solidifies the trial network configuration.
 func (s *NetworkService) Confirm(ctx context.Context, token string) error {
 	if !s.provider.HasPermission() {
-		return apperr.New(apperr.KindPermissionDenied, "SYSTEM_NETWORK_PERMISSION_DENIED", "Insufficient permissions: CAP_NET_ADMIN or root required", nil)
+		return errNetworkPermissionDenied()
 	}
 	return s.watchdog.ConfirmTransaction(token)
 }
@@ -262,7 +299,7 @@ func (s *NetworkService) Confirm(ctx context.Context, token string) error {
 // Rollback immediately restores the prior configuration.
 func (s *NetworkService) Rollback(ctx context.Context, token string) error {
 	if !s.provider.HasPermission() {
-		return apperr.New(apperr.KindPermissionDenied, "SYSTEM_NETWORK_PERMISSION_DENIED", "Insufficient permissions: CAP_NET_ADMIN or root required", nil)
+		return errNetworkPermissionDenied()
 	}
 	return s.watchdog.RollbackTransaction(ctx)
 }
@@ -275,7 +312,7 @@ func (s *NetworkService) Ping(ctx context.Context, target string) (*PingResponse
 // ResetNetwork executes emergency recovery to maintenance IP 192.168.1.168/24 and restores secondary NICs to DHCP.
 func (s *NetworkService) ResetNetwork(ctx context.Context) error {
 	if !s.provider.HasPermission() {
-		return apperr.New(apperr.KindPermissionDenied, "SYSTEM_NETWORK_PERMISSION_DENIED", "Insufficient permissions: CAP_NET_ADMIN or root required", nil)
+		return errNetworkPermissionDenied()
 	}
 
 	ifaces, err := s.provider.ListPhysicalInterfaces(ctx)
@@ -286,29 +323,37 @@ func (s *NetworkService) ResetNetwork(ctx context.Context) error {
 		return fmt.Errorf("no physical network interfaces found")
 	}
 
-	primary := ifaces[0].Name
-	for _, iface := range ifaces {
-		if iface.Name == "eth0" {
-			primary = "eth0"
-			break
-		}
-	}
-
+	primary := pickPrimaryInterface(ifaces)
 	s.logger.Warn("Executing emergency network reset", zap.String("primary_interface", primary))
 	if err := s.provider.ResetInterfaceToMaintenance(ctx, primary); err != nil {
 		return fmt.Errorf("reset primary interface %s: %w", primary, err)
 	}
 
-	// Secondary interfaces restored to DHCP
-	for _, iface := range ifaces {
-		if iface.Name != primary {
-			s.logger.Info("Restoring secondary interface to DHCP", zap.String("interface", iface.Name))
-			_ = s.provider.ApplyInterfaceConfig(ctx, iface.Name, InterfaceConfig{
-				Mode: "dhcp",
-			})
+	// Secondary interfaces are restored to DHCP. A failure here must not abort the recovery,
+	// because the primary interface is already on the maintenance address.
+	for _, ifc := range ifaces {
+		if ifc.Name == primary {
+			continue
+		}
+
+		s.logger.Info("Restoring secondary interface to DHCP", zap.String("interface", ifc.Name))
+		if err := s.provider.ApplyInterfaceConfig(ctx, ifc.Name, InterfaceConfig{Mode: modeDHCP}); err != nil {
+			s.logger.Error("Failed to restore secondary interface to DHCP",
+				zap.String("interface", ifc.Name),
+				zap.Error(err))
 		}
 	}
+
 	return nil
+}
+
+func pickPrimaryInterface(ifaces []InterfaceInfo) string {
+	for _, ifc := range ifaces {
+		if ifc.Name == maintenanceInterface {
+			return maintenanceInterface
+		}
+	}
+	return ifaces[0].Name
 }
 
 // OnBootCheck evaluates watchdog transactions on startup.
@@ -318,77 +363,147 @@ func (s *NetworkService) OnBootCheck(ctx context.Context) error {
 
 // GetTransactionStatus returns active transaction state if any.
 func (s *NetworkService) GetTransactionStatus() *TransactionState {
-	st := s.watchdog.GetActiveTransaction()
-	if st != nil && st.RollbackCfg.DNS == nil {
-		st.RollbackCfg.DNS = make([]string, 0)
+	return s.watchdog.GetActiveTransaction()
+}
+
+// buildRollbackConfig captures the current interface state as the configuration to restore.
+func buildRollbackConfig(current InterfaceInfo) InterfaceConfig {
+	dns := current.DNS
+	if dns == nil {
+		dns = make([]string, 0)
 	}
-	return st
+
+	cfg := InterfaceConfig{
+		Mode:       current.Mode,
+		Gateway:    current.Gateway,
+		DNS:        dns,
+		SetDefault: current.IsDefaultGW,
+	}
+
+	if len(current.IPAddresses) == 0 {
+		return cfg
+	}
+
+	if ip, mask, err := ParseCIDRToIPAndMask(current.IPAddresses[0]); err == nil {
+		cfg.IPAddress = ip
+		cfg.SubnetMask = mask
+	}
+	return cfg
+}
+
+// isValidMode reports whether mode is one of the supported interface configuration modes.
+func isValidMode(mode string) bool {
+	return mode == modeDHCP || mode == modeStatic
 }
 
 func validateStaticConfig(cfg InterfaceConfig) error {
-	ip := net.ParseIP(strings.TrimSpace(cfg.IPAddress))
-	if ip == nil || ip.To4() == nil {
+	ip := parseIPv4(cfg.IPAddress)
+	if ip == nil {
 		return apperr.New(apperr.KindInvalid, "INVALID_IP_ADDRESS", "A valid IPv4 address is required", nil)
 	}
 	if ip.IsLoopback() || ip.IsMulticast() {
-		return apperr.New(apperr.KindInvalid, "INVALID_IP_ADDRESS", "Loopback and multicast addresses are not allowed", nil)
+		return apperr.New(
+			apperr.KindInvalid,
+			"INVALID_IP_ADDRESS",
+			"Loopback and multicast addresses are not allowed",
+			nil,
+		)
 	}
 
-	maskIP := net.ParseIP(strings.TrimSpace(cfg.SubnetMask))
-	if maskIP == nil || maskIP.To4() == nil {
+	maskIP := parseIPv4(cfg.SubnetMask)
+	if maskIP == nil {
 		return apperr.New(apperr.KindInvalid, "INVALID_SUBNET_MASK", "A valid IPv4 subnet mask is required", nil)
 	}
 
-	maskBytes := maskIP.To4()
-	mask := net.IPv4Mask(maskBytes[0], maskBytes[1], maskBytes[2], maskBytes[3])
+	mask := net.IPv4Mask(maskIP[0], maskIP[1], maskIP[2], maskIP[3])
 	ones, bits := mask.Size()
 	if bits != 32 || ones == 0 {
 		return apperr.New(apperr.KindInvalid, "INVALID_SUBNET_MASK", "Invalid IPv4 subnet mask", nil)
 	}
 
-	// Validate gateway if set
 	if strings.TrimSpace(cfg.Gateway) != "" {
-		gwIP := net.ParseIP(strings.TrimSpace(cfg.Gateway))
-		if gwIP == nil || gwIP.To4() == nil {
+		gwIP := parseIPv4(cfg.Gateway)
+		if gwIP == nil {
 			return apperr.New(apperr.KindInvalid, "INVALID_GATEWAY", "Gateway must be a valid IPv4 address", nil)
 		}
-		// Gateway must belong to the same subnet
-		ipNet := net.IPNet{IP: ip.To4().Mask(mask), Mask: mask}
-		if !ipNet.Contains(gwIP.To4()) {
-			return apperr.New(apperr.KindInvalid, "GATEWAY_OUT_OF_SUBNET",
-				fmt.Sprintf("Gateway %s does not belong to subnet %s/%d", cfg.Gateway, ip.String(), ones), nil)
+
+		ipNet := net.IPNet{IP: ip.Mask(mask), Mask: mask}
+		if !ipNet.Contains(gwIP) {
+			return apperr.New(
+				apperr.KindInvalid,
+				"GATEWAY_OUT_OF_SUBNET",
+				fmt.Sprintf("Gateway %s does not belong to subnet %s/%d", cfg.Gateway, ip.String(), ones),
+				nil,
+			)
 		}
 	}
 
-	// Validate DNS entries
 	for _, dns := range cfg.DNS {
-		trimmed := strings.TrimSpace(dns)
-		if trimmed != "" && (net.ParseIP(trimmed) == nil || net.ParseIP(trimmed).To4() == nil) {
-			return apperr.New(apperr.KindInvalid, "INVALID_DNS", fmt.Sprintf("Invalid DNS IPv4 address %q", dns), nil)
+		if strings.TrimSpace(dns) == "" {
+			continue
+		}
+		if parseIPv4(dns) == nil {
+			return apperr.New(
+				apperr.KindInvalid,
+				"INVALID_DNS",
+				fmt.Sprintf("Invalid DNS IPv4 address %q", dns),
+				nil,
+			)
 		}
 	}
 
 	return nil
 }
 
-func computeTargetURL(cfg InterfaceConfig, currentHost string, token string) string {
+// computeTargetURL builds the URL the operator must open to confirm the trial configuration.
+// The port of the incoming request wins; defaultPort covers requests that carry none.
+func computeTargetURL(cfg InterfaceConfig, currentHost, defaultPort, token string) string {
 	cleanHost := strings.TrimSpace(currentHost)
-	port := "8080"
-	if cleanHost != "" {
-		if h, p, err := net.SplitHostPort(cleanHost); err == nil {
-			port = p
-			_ = h
-		}
+
+	port := defaultPort
+	if _, requestPort, err := net.SplitHostPort(cleanHost); err == nil {
+		port = requestPort
 	}
 
-	if cfg.Mode == "static" && cfg.IPAddress != "" {
-		return fmt.Sprintf("http://%s:%s/#settings?token=%s", cfg.IPAddress, port, token)
+	switch {
+	case cfg.Mode == modeStatic && cfg.IPAddress != "":
+		return settingsURL(hostWithPort(cfg.IPAddress, port), token)
+	case cleanHost != "":
+		// The request host already carries its own port when it is not the scheme default.
+		return settingsURL(cleanHost, token)
+	default:
+		return settingsURL(hostWithPort("127.0.0.1", port), token)
 	}
+}
 
-	if cleanHost != "" {
-		return fmt.Sprintf("http://%s/#settings?token=%s", cleanHost, token)
+func settingsURL(host, token string) string {
+	return fmt.Sprintf("http://%s/#settings?token=%s", host, token)
+}
+
+// portOf extracts the port from a host:port listen address, returning "" when absent.
+func portOf(address string) string {
+	_, port, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return ""
 	}
-	return fmt.Sprintf("http://127.0.0.1:8080/#settings?token=%s", token)
+	return port
+}
+
+// hostWithPort joins host and port, omitting the separator when no port is known.
+func hostWithPort(host, port string) string {
+	if port == "" {
+		return host
+	}
+	return host + ":" + port
+}
+
+// parseIPv4 returns the 4-byte form of value, or nil when value is not a valid IPv4 literal.
+func parseIPv4(value string) net.IP {
+	ip := net.ParseIP(strings.TrimSpace(value))
+	if ip == nil {
+		return nil
+	}
+	return ip.To4()
 }
 
 func parseCleanIP(clientIP string) net.IP {

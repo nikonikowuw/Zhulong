@@ -21,6 +21,9 @@ const (
 	DefaultTimeoutSec   = 60
 )
 
+// rollbackTimeout bounds the rollback attempt triggered by the in-memory timer.
+const rollbackTimeout = 10 * time.Second
+
 // WatchdogManager coordinates two-phase network configuration rollbacks and disk persistence.
 type WatchdogManager struct {
 	mu          sync.Mutex
@@ -47,16 +50,56 @@ func (w *WatchdogManager) transactionFilePath() string {
 	return filepath.Join(w.dataDir, TransactionFileName)
 }
 
+// disarmTimerLocked stops and clears the pending rollback timer. Callers must hold w.mu.
+func (w *WatchdogManager) disarmTimerLocked() {
+	if w.timer == nil {
+		return
+	}
+	w.timer.Stop()
+	w.timer = nil
+}
+
+// loadActiveStateLocked loads the persisted transaction into memory when absent.
+// Callers must hold w.mu.
+func (w *WatchdogManager) loadActiveStateLocked() error {
+	if w.activeState != nil {
+		return nil
+	}
+
+	diskState, err := w.readDiskStateLocked()
+	if err != nil || diskState == nil {
+		return noPendingTransactionError()
+	}
+	w.activeState = diskState
+	return nil
+}
+
+// clearDiskStateLocked removes the persisted transaction file. Callers must hold w.mu.
+func (w *WatchdogManager) clearDiskStateLocked() {
+	filePath := w.transactionFilePath()
+	if err := os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// A leftover pending_confirm file would trigger an unwanted boot rollback, so it must be visible.
+		w.logger.Warn("Failed to remove network transaction file",
+			zap.String("path", filePath),
+			zap.Error(err))
+	}
+}
+
+func noPendingTransactionError() error {
+	return apperr.New(
+		apperr.KindNotFound,
+		"NO_PENDING_TRANSACTION",
+		"No pending network transaction",
+		nil,
+	)
+}
+
 // BeginTransaction initiates a two-phase transaction, writes state to disk with fsync, and arms rollback timer.
 func (w *WatchdogManager) BeginTransaction(state TransactionState) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// If a previous timer is ticking, stop it
-	if w.timer != nil {
-		w.timer.Stop()
-		w.timer = nil
-	}
+	w.disarmTimerLocked()
 
 	state.Status = "pending_confirm"
 	if state.TimeoutSec <= 0 {
@@ -67,18 +110,14 @@ func (w *WatchdogManager) BeginTransaction(state TransactionState) error {
 		state.RollbackCfg.DNS = make([]string, 0)
 	}
 
-	// Atomic write with fsync
 	if err := w.persistStateLocked(state); err != nil {
 		return fmt.Errorf("persist network transaction: %w", err)
 	}
 
 	w.activeState = &state
 
-	// Arm in-memory rollback timer
 	timeout := time.Duration(state.TimeoutSec) * time.Second
-	w.timer = time.AfterFunc(timeout, func() {
-		w.handleTimeout()
-	})
+	w.timer = time.AfterFunc(timeout, w.handleTimeout)
 
 	w.logger.Info("Network watchdog transaction armed",
 		zap.String("tx_id", state.TransactionID),
@@ -91,10 +130,7 @@ func (w *WatchdogManager) BeginTransaction(state TransactionState) error {
 func (w *WatchdogManager) Stop() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.timer != nil {
-		w.timer.Stop()
-		w.timer = nil
-	}
+	w.disarmTimerLocked()
 }
 
 // ConfirmTransaction commits the transaction, stops timer, and removes disk state.
@@ -102,27 +138,21 @@ func (w *WatchdogManager) ConfirmTransaction(token string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	// If memory state is empty, attempt to read from disk
-	if w.activeState == nil {
-		diskState, err := w.readDiskStateLocked()
-		if err != nil || diskState == nil {
-			return apperr.New(apperr.KindNotFound, "NO_PENDING_TRANSACTION", "No pending network transaction to confirm", nil)
-		}
-		w.activeState = diskState
+	if err := w.loadActiveStateLocked(); err != nil {
+		return err
 	}
 
 	if token != "" && w.activeState.ConfirmToken != token {
-		return apperr.New(apperr.KindPermissionDenied, "INVALID_CONFIRM_TOKEN", "Confirmation token is invalid", nil)
+		return apperr.New(
+			apperr.KindPermissionDenied,
+			"INVALID_CONFIRM_TOKEN",
+			"Confirmation token is invalid",
+			nil,
+		)
 	}
 
-	if w.timer != nil {
-		w.timer.Stop()
-		w.timer = nil
-	}
-
-	// Remove transaction file from disk
-	filePath := w.transactionFilePath()
-	_ = os.Remove(filePath)
+	w.disarmTimerLocked()
+	w.clearDiskStateLocked()
 
 	txID := w.activeState.TransactionID
 	iface := w.activeState.InterfaceName
@@ -139,20 +169,13 @@ func (w *WatchdogManager) RollbackTransaction(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if w.timer != nil {
-		w.timer.Stop()
-		w.timer = nil
+	w.disarmTimerLocked()
+
+	if err := w.loadActiveStateLocked(); err != nil {
+		return err
 	}
 
 	state := w.activeState
-	if state == nil {
-		var err error
-		state, err = w.readDiskStateLocked()
-		if err != nil || state == nil {
-			return apperr.New(apperr.KindNotFound, "NO_PENDING_TRANSACTION", "No pending network transaction to rollback", nil)
-		}
-	}
-
 	w.logger.Warn("Triggering network rollback to previous safe configuration",
 		zap.String("tx_id", state.TransactionID),
 		zap.String("interface", state.InterfaceName),
@@ -160,8 +183,7 @@ func (w *WatchdogManager) RollbackTransaction(ctx context.Context) error {
 
 	applyErr := w.provider.ApplyInterfaceConfig(ctx, state.InterfaceName, state.RollbackCfg)
 
-	// Clean up disk and memory
-	_ = os.Remove(w.transactionFilePath())
+	w.clearDiskStateLocked()
 	w.activeState = nil
 
 	if applyErr != nil {
@@ -177,10 +199,9 @@ func (w *WatchdogManager) CheckPendingBootTransaction(ctx context.Context) error
 
 	state, err := w.readDiskStateLocked()
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
+		if !errors.Is(err, os.ErrNotExist) {
+			w.logger.Warn("Failed to read network transaction file on boot", zap.Error(err))
 		}
-		w.logger.Warn("Failed to read network transaction file on boot", zap.Error(err))
 		return nil
 	}
 
@@ -188,7 +209,7 @@ func (w *WatchdogManager) CheckPendingBootTransaction(ctx context.Context) error
 		return nil
 	}
 
-	w.logger.Warn("⚠️ DISCOVERED UNCONFIRMED NETWORK TRANSACTION ON BOOT. Initiating emergency auto-rollback to restore safe network configuration",
+	w.logger.Warn("Discovered unconfirmed network transaction on boot, auto-rolling back to the safe configuration",
 		zap.String("tx_id", state.TransactionID),
 		zap.String("interface", state.InterfaceName),
 		zap.Time("expires_at", state.ExpiresAt))
@@ -198,34 +219,30 @@ func (w *WatchdogManager) CheckPendingBootTransaction(ctx context.Context) error
 		return fmt.Errorf("boot auto-rollback: %w", err)
 	}
 
-	_ = os.Remove(w.transactionFilePath())
+	w.clearDiskStateLocked()
 	w.logger.Info("Boot auto-rollback completed successfully; network transaction file cleared")
 	return nil
 }
 
-// GetActiveTransaction returns current in-memory transaction status.
+// GetActiveTransaction returns a deep copy of the current transaction status.
 func (w *WatchdogManager) GetActiveTransaction() *TransactionState {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if w.activeState == nil {
-		diskState, err := w.readDiskStateLocked()
-		if err == nil && diskState != nil {
-			w.activeState = diskState
-		}
-	}
-
-	if w.activeState == nil {
+	if err := w.loadActiveStateLocked(); err != nil || w.activeState == nil {
 		return nil
 	}
 
 	copied := *w.activeState
+	currentDNS := w.activeState.RollbackCfg.DNS
+	copied.RollbackCfg.DNS = append(make([]string, 0, len(currentDNS)), currentDNS...)
 	return &copied
 }
 
 func (w *WatchdogManager) handleTimeout() {
 	w.logger.Warn("Network trial timeout expired without confirmation, rolling back now...")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
 	defer cancel()
 
 	if err := w.RollbackTransaction(ctx); err != nil {
@@ -234,7 +251,7 @@ func (w *WatchdogManager) handleTimeout() {
 }
 
 func (w *WatchdogManager) persistStateLocked(state TransactionState) error {
-	if err := os.MkdirAll(w.dataDir, 0755); err != nil {
+	if err := os.MkdirAll(w.dataDir, 0o755); err != nil {
 		return fmt.Errorf("ensure data directory %s: %w", w.dataDir, err)
 	}
 
@@ -246,31 +263,13 @@ func (w *WatchdogManager) persistStateLocked(state TransactionState) error {
 	targetPath := w.transactionFilePath()
 	tmpPath := targetPath + ".tmp"
 
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("create temporary transaction file: %w", err)
-	}
-
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("write transaction data: %w", err)
-	}
-
-	// Critical fsync to ensure data hit non-volatile media before network switch
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("fsync transaction data: %w", err)
-	}
-
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close transaction file: %w", err)
+	if err := writeFileSynced(tmpPath, data, 0o600); err != nil {
+		discardTempFile(w.logger, tmpPath)
+		return err
 	}
 
 	if err := os.Rename(tmpPath, targetPath); err != nil {
-		_ = os.Remove(tmpPath)
+		discardTempFile(w.logger, tmpPath)
 		return fmt.Errorf("rename transaction file: %w", err)
 	}
 
@@ -278,8 +277,7 @@ func (w *WatchdogManager) persistStateLocked(state TransactionState) error {
 }
 
 func (w *WatchdogManager) readDiskStateLocked() (*TransactionState, error) {
-	filePath := w.transactionFilePath()
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(w.transactionFilePath())
 	if err != nil {
 		return nil, err
 	}
@@ -295,10 +293,10 @@ func (w *WatchdogManager) readDiskStateLocked() (*TransactionState, error) {
 }
 
 // GenerateSecureToken returns a cryptographically secure random hex string.
-func GenerateSecureToken(bytesLen int) string {
-	b := make([]byte, bytesLen)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("fallback_token_%d", time.Now().UnixNano())
+func GenerateSecureToken(bytesLen int) (string, error) {
+	buf := make([]byte, bytesLen)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("read random bytes: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(buf), nil
 }

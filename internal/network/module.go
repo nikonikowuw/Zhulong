@@ -14,11 +14,15 @@ type NetworkLifecycle interface {
 }
 
 type networkLifecycleImpl struct {
-	service *NetworkService
-	logger  *zap.Logger
+	service  *NetworkService
+	provider *lazyProvider
+	logger   *zap.Logger
 }
 
 func (l *networkLifecycleImpl) Start(ctx context.Context) error {
+	// Detection is deferred to here so that dependency injection wiring stays side-effect free.
+	l.provider.resolve()
+
 	l.logger.Info("Checking network watchdog boot status...")
 	return l.service.OnBootCheck(ctx)
 }
@@ -33,6 +37,14 @@ type RouteRegistrar interface {
 	RegisterRoutes(rg *gin.RouterGroup)
 }
 
+// Options carries the host-specific inputs the network components need at construction time.
+type Options struct {
+	DataDir      string
+	CustomScript string
+	// HTTPAddress is the host listen address, e.g. "127.0.0.1:8000". Only its port is used.
+	HTTPAddress string
+}
+
 // NetworkComponents bundles all instantiated network services and adapters.
 type NetworkComponents struct {
 	Provider        NetworkProvider
@@ -45,16 +57,23 @@ type NetworkComponents struct {
 }
 
 // NewNetworkComponents creates and wires the network module components.
-func NewNetworkComponents(dataDir string, customScript string, logger *zap.Logger) NetworkComponents {
+//
+// Construction is side-effect free: host network stack detection happens in
+// NetworkLifecycle.Start (see lazyProvider), not here.
+func NewNetworkComponents(opts Options, logger *zap.Logger) NetworkComponents {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 
-	provider := DetectProvider(customScript, logger)
-	watchdog := NewWatchdogManager(dataDir, provider, logger)
-	service := NewNetworkService(provider, watchdog, logger)
-	handler := NewHandler(service, logger)
-	lifecycle := &networkLifecycleImpl{service: service, logger: logger}
+	provider := newLazyProvider(opts.CustomScript, logger)
+	watchdog := NewWatchdogManager(opts.DataDir, provider, logger)
+	service := NewNetworkService(provider, watchdog, portOf(opts.HTTPAddress), logger)
+	handler := NewHandler(service)
+	lifecycle := &networkLifecycleImpl{
+		service:  service,
+		provider: provider,
+		logger:   logger,
+	}
 
 	return NetworkComponents{
 		Provider:        provider,

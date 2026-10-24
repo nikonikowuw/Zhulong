@@ -12,6 +12,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	systemdNetworkDir       = "/etc/systemd/network"
+	maintenanceIPWithPrefix = "192.168.1.168/24"
+)
+
 // SystemdNetworkdProvider manages network configuration through systemd-networkd (.network files).
 type SystemdNetworkdProvider struct {
 	networkDir string
@@ -24,13 +29,13 @@ func NewSystemdNetworkdProvider(logger *zap.Logger) *SystemdNetworkdProvider {
 		logger = zap.NewNop()
 	}
 	return &SystemdNetworkdProvider{
-		networkDir: "/etc/systemd/network",
+		networkDir: systemdNetworkDir,
 		logger:     logger,
 	}
 }
 
-func (p *SystemdNetworkdProvider) Name() string {
-	return string(ProviderSystemdNetwork)
+func (p *SystemdNetworkdProvider) Name() ProviderName {
+	return ProviderSystemdNetwork
 }
 
 func (p *SystemdNetworkdProvider) IsSupported() bool {
@@ -50,47 +55,16 @@ func (p *SystemdNetworkdProvider) ListPhysicalInterfaces(ctx context.Context) ([
 }
 
 func (p *SystemdNetworkdProvider) ApplyInterfaceConfig(ctx context.Context, iface string, cfg InterfaceConfig) error {
-	filePath := filepath.Join(p.networkDir, fmt.Sprintf("10-%s.network", iface))
-
-	var content strings.Builder
-	content.WriteString(fmt.Sprintf("[Match]\nName=%s\n\n[Network]\n", iface))
-
-	if cfg.Mode == "static" {
-		cidr, err := CIDRFromIPAndMask(cfg.IPAddress, cfg.SubnetMask)
-		if err != nil {
-			return fmt.Errorf("calculate CIDR: %w", err)
-		}
-		content.WriteString(fmt.Sprintf("Address=%s\n", cidr))
-
-		if cfg.SetDefault && cfg.Gateway != "" {
-			content.WriteString(fmt.Sprintf("Gateway=%s\n", cfg.Gateway))
-		}
-		for _, dns := range cfg.DNS {
-			if trimmed := strings.TrimSpace(dns); trimmed != "" {
-				content.WriteString(fmt.Sprintf("DNS=%s\n", trimmed))
-			}
-		}
-	} else {
-		// DHCP mode
-		content.WriteString("DHCP=yes\n")
-		if !cfg.SetDefault {
-			content.WriteString("\n[DHCPv4]\nUseRoutes=false\n")
-		}
+	content, err := buildNetworkFileContent(iface, cfg)
+	if err != nil {
+		return err
 	}
 
-	if err := os.MkdirAll(p.networkDir, 0755); err != nil {
-		return fmt.Errorf("ensure %s directory: %w", p.networkDir, err)
+	filePath := p.networkFilePath(iface)
+	if err := p.writeNetworkFile(filePath, content); err != nil {
+		return err
 	}
 
-	tmpFile := filePath + ".tmp"
-	if err := os.WriteFile(tmpFile, []byte(content.String()), 0644); err != nil {
-		return fmt.Errorf("write temporary network file: %w", err)
-	}
-	if err := os.Rename(tmpFile, filePath); err != nil {
-		return fmt.Errorf("commit network configuration file %s: %w", filePath, err)
-	}
-
-	// Reload systemd-networkd
 	if err := p.reloadNetworkd(ctx, iface); err != nil {
 		return fmt.Errorf("reload networkd for %s: %w", iface, err)
 	}
@@ -102,11 +76,11 @@ func (p *SystemdNetworkdProvider) ApplyInterfaceConfig(ctx context.Context, ifac
 }
 
 func (p *SystemdNetworkdProvider) ResetInterfaceToMaintenance(ctx context.Context, iface string) error {
-	filePath := filepath.Join(p.networkDir, fmt.Sprintf("10-%s.network", iface))
-	content := fmt.Sprintf("[Match]\nName=%s\n\n[Network]\nAddress=192.168.1.168/24\n", iface)
+	filePath := p.networkFilePath(iface)
+	content := fmt.Sprintf("[Match]\nName=%s\n\n[Network]\nAddress=%s\n", iface, maintenanceIPWithPrefix)
 
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-		return fmt.Errorf("write maintenance configuration: %w", err)
+	if err := p.writeNetworkFile(filePath, content); err != nil {
+		return err
 	}
 
 	if err := p.reloadNetworkd(ctx, iface); err != nil {
@@ -118,21 +92,76 @@ func (p *SystemdNetworkdProvider) ResetInterfaceToMaintenance(ctx context.Contex
 	return nil
 }
 
+func (p *SystemdNetworkdProvider) networkFilePath(iface string) string {
+	return filepath.Join(p.networkDir, fmt.Sprintf("10-%s.network", iface))
+}
+
+// writeNetworkFile atomically replaces a .network file so that networkd never reads a partial file.
+func (p *SystemdNetworkdProvider) writeNetworkFile(filePath, content string) error {
+	if err := os.MkdirAll(p.networkDir, 0o755); err != nil {
+		return fmt.Errorf("ensure %s directory: %w", p.networkDir, err)
+	}
+
+	tmpFile := filePath + ".tmp"
+	if err := writeFileSynced(tmpFile, []byte(content), 0o644); err != nil {
+		discardTempFile(p.logger, tmpFile)
+		return fmt.Errorf("write network configuration file %s: %w", filePath, err)
+	}
+
+	if err := os.Rename(tmpFile, filePath); err != nil {
+		discardTempFile(p.logger, tmpFile)
+		return fmt.Errorf("commit network configuration file %s: %w", filePath, err)
+	}
+	return nil
+}
+
 func (p *SystemdNetworkdProvider) reloadNetworkd(ctx context.Context, iface string) error {
 	var stderr bytes.Buffer
-	// Try networkctl reconfigure first
-	cmd := exec.CommandContext(ctx, "networkctl", "reconfigure", iface)
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err == nil {
+
+	reconfigure := exec.CommandContext(ctx, "networkctl", "reconfigure", iface)
+	reconfigure.Stderr = &stderr
+	if err := reconfigure.Run(); err == nil {
 		return nil
 	}
 
-	// Fallback to networkctl reload
 	stderr.Reset()
-	reloadCmd := exec.CommandContext(ctx, "networkctl", "reload")
-	reloadCmd.Stderr = &stderr
-	if err := reloadCmd.Run(); err != nil {
+	reload := exec.CommandContext(ctx, "networkctl", "reload")
+	reload.Stderr = &stderr
+	if err := reload.Run(); err != nil {
 		return fmt.Errorf("networkctl reload failed: %w, stderr: %s", err, stderr.String())
 	}
 	return nil
+}
+
+// buildNetworkFileContent renders the .network file body for the requested configuration.
+func buildNetworkFileContent(iface string, cfg InterfaceConfig) (string, error) {
+	var content strings.Builder
+	fmt.Fprintf(&content, "[Match]\nName=%s\n\n[Network]\n", iface)
+
+	switch cfg.Mode {
+	case modeStatic:
+		cidr, err := CIDRFromIPAndMask(cfg.IPAddress, cfg.SubnetMask)
+		if err != nil {
+			return "", fmt.Errorf("calculate CIDR: %w", err)
+		}
+		fmt.Fprintf(&content, "Address=%s\n", cidr)
+
+		if cfg.SetDefault && cfg.Gateway != "" {
+			fmt.Fprintf(&content, "Gateway=%s\n", cfg.Gateway)
+		}
+		for _, dns := range cfg.DNS {
+			if trimmed := strings.TrimSpace(dns); trimmed != "" {
+				fmt.Fprintf(&content, "DNS=%s\n", trimmed)
+			}
+		}
+	case modeDHCP:
+		content.WriteString("DHCP=yes\n")
+		if !cfg.SetDefault {
+			content.WriteString("\n[DHCPv4]\nUseRoutes=false\n")
+		}
+	default:
+		return "", fmt.Errorf("unsupported interface mode %q", cfg.Mode)
+	}
+
+	return content.String(), nil
 }

@@ -142,7 +142,7 @@ make dev             # Air（Go 热重载）+ Vite dev server 一起启动
 
 ```toml
 [http]
-address = "127.0.0.1:8000"      # 内置默认是 127.0.0.1:8080
+address = "127.0.0.1:8000"      # 内置默认同为 127.0.0.1:8000
 
 [logging]
 development = false
@@ -157,8 +157,9 @@ custom_script = ""              # 可选的厂商网络脚本
 target = "cpu"                  # 必须匹配算法包 manifest.json 的 platform.target
 ```
 
-> **端口**：内置默认 `8080`（`app.DefaultConfig`），仓库内 `config.toml` 用 `8000`，
-> Vite 代理跟随 `config.toml` —— 改端口需同步这两处。
+> **端口**：内置默认（`app.DefaultConfig`）、仓库内 `config.toml` 与 Vite 开发代理统一为
+> `8000`。改端口时需同步 `internal/app/config.go` 与 `web/vite.config.ts`，否则网络重配的
+> 确认链接会指向客户端连不上的端口。
 
 除紧急恢复参数 `-reset-network`（绕过 Fx 依赖图，将主网口重置为维护 IP）外，
 宿主没有任何启动开关：改配置请编辑 TOML 后重启服务。

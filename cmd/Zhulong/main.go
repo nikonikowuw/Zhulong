@@ -48,11 +48,13 @@ func resetNetworkCommand(config app.Config) (resultErr error) {
 		return fmt.Errorf("logger sink initialization failed: %w", err)
 	}
 
-	provider := network.DetectProvider(config.CustomScript, logger)
-	watchdog := network.NewWatchdogManager(config.DataDir, provider, logger)
-	svc := network.NewNetworkService(provider, watchdog, logger)
+	comp := network.NewNetworkComponents(network.Options{
+		DataDir:      config.DataDir,
+		CustomScript: config.CustomScript,
+		HTTPAddress:  config.HTTPAddress,
+	}, logger)
 
-	if err := svc.ResetNetwork(context.Background()); err != nil {
+	if err := comp.Service.ResetNetwork(context.Background()); err != nil {
 		return err
 	}
 	fmt.Println("Zhulong network emergency reset successfully completed:")

@@ -169,7 +169,7 @@ func TestDetectProviderFallback(t *testing.T) {
 	}
 
 	sp := DetectProvider(scriptFile, logger)
-	if sp.Name() != string(ProviderCustomScript) {
+	if sp.Name() != ProviderCustomScript {
 		t.Errorf("expected %s, got %s", ProviderCustomScript, sp.Name())
 	}
 }

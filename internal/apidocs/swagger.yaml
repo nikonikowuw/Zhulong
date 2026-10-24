@@ -599,8 +599,7 @@ definitions:
           type: string
         type: array
       isCurrent:
-        description: True only when the current HTTP request maps unambiguously to
-          this interface
+        description: True only when the request maps unambiguously to this interface
         type: boolean
       isDefaultGw:
         description: True if interface hosts default route (0.0.0.0/0)
@@ -2792,8 +2791,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: Solidifies current trial configuration and disarms the watchdog
-        timer. Accepts session authentication or one-time confirmation token.
+      description: Solidifies the trial configuration and disarms the watchdog timer.
+        Accepts a session or token.
       parameters:
       - description: Confirmation token
         in: query
@@ -2824,8 +2823,8 @@ paths:
       - network
   /system/network/interfaces:
     get:
-      description: Queries physical network interfaces, marking the current session
-        interface only when it can be identified unambiguously.
+      description: Queries physical interfaces, marking the current one only when
+        identified unambiguously.
       produces:
       - application/json
       responses:
@@ -2936,8 +2935,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: Immediately cancels trial configuration and restores previous safe
-        state. Accepts session authentication or one-time confirmation token.
+      description: Cancels the trial configuration and restores the previous state.
+        Accepts a session or token.
       parameters:
       - description: Confirmation token
         in: query

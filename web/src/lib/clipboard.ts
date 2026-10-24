@@ -3,7 +3,7 @@
  *
  * 为什么必须走这个函数而不是直接 `navigator.clipboard.writeText`：
  * `navigator.clipboard` **只在安全上下文**（HTTPS 或 localhost）中存在。
- * 边缘设备把服务绑到 `0.0.0.0` 后通过 `http://192.168.x.x:8080` 访问时它是
+ * 边缘设备把服务绑到 `0.0.0.0` 后通过 `http://192.168.x.x:8000` 访问时它是
  * `undefined`，裸调 `navigator.clipboard.writeText(...)` 会在同步求值阶段抛
  * TypeError。本函数先探测可用性，再降级到 `execCommand('copy')`。
  *

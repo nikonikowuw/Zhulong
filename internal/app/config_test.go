@@ -44,7 +44,7 @@ func TestNewHTTPServerRejectsInvalidAddress(t *testing.T) {
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.HTTPAddress != "127.0.0.1:8080" {
+	if cfg.HTTPAddress != "127.0.0.1:8000" {
 		t.Fatalf("unexpected default HTTPAddress: %q", cfg.HTTPAddress)
 	}
 	if cfg.DataDir != "./data" {

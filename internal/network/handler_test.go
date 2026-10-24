@@ -20,8 +20,8 @@ func setupTestNetworkHandler(t *testing.T) (*gin.Engine, *NetworkService, *Watch
 	tmpDir := t.TempDir()
 	provider := NewMockProvider(zap.NewNop())
 	watchdog := NewWatchdogManager(tmpDir, provider, zap.NewNop())
-	service := NewNetworkService(provider, watchdog, zap.NewNop())
-	handler := NewHandler(service, zap.NewNop())
+	service := NewNetworkService(provider, watchdog, "8000", zap.NewNop())
+	handler := NewHandler(service)
 
 	router := gin.New()
 	api := router.Group("/api/v1")
@@ -190,7 +190,11 @@ func TestHandlerRollback(t *testing.T) {
 	_ = json.Unmarshal(raw, &applyResp)
 
 	// Rollback with token
-	rollbackReq, _ := http.NewRequest(http.MethodPost, "/api/v1/system/network/rollback?token="+applyResp.ConfirmToken, nil)
+	rollbackReq, _ := http.NewRequest(
+		http.MethodPost,
+		"/api/v1/system/network/rollback?token="+applyResp.ConfirmToken,
+		nil,
+	)
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, rollbackReq)
 

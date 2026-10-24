@@ -12,12 +12,14 @@ func TestServiceListInterfacesCurrent(t *testing.T) {
 	tmpDir := t.TempDir()
 	provider := NewMockProvider(zap.NewNop())
 	watchdog := NewWatchdogManager(tmpDir, provider, zap.NewNop())
-	svc := NewNetworkService(provider, watchdog, zap.NewNop())
+	svc := NewNetworkService(provider, watchdog, "8000", zap.NewNop())
 
 	ctx := context.Background()
 
 	// 1. Client IP matching eth0 (192.168.1.55 within 192.168.1.100/24)
-	ifaces, err := svc.ListInterfaces(ctx, "", "", "192.168.1.55:54321")
+	ifaces, err := svc.ListInterfaces(ctx, RequestOrigin{
+		ClientIP: "192.168.1.55:54321",
+	})
 	if err != nil {
 		t.Fatalf("ListInterfaces failed: %v", err)
 	}
@@ -40,7 +42,9 @@ func TestServiceListInterfacesCurrent(t *testing.T) {
 	}
 
 	// 2. Client IP matching eth1 (10.0.0.100 within 10.0.0.2/24)
-	ifaces2, _ := svc.ListInterfaces(ctx, "", "", "10.0.0.100")
+	ifaces2, _ := svc.ListInterfaces(ctx, RequestOrigin{
+		ClientIP: "10.0.0.100",
+	})
 	for _, iface := range ifaces2 {
 		if iface.Name == "eth1" && !iface.IsCurrent {
 			t.Errorf("expected eth1 to be current for 10.0.0.100")
@@ -48,14 +52,21 @@ func TestServiceListInterfacesCurrent(t *testing.T) {
 	}
 
 	// 3. Socket Local Address matching eth0 explicitly
-	ifaces3, _ := svc.ListInterfaces(ctx, "192.168.1.100:8080", "localhost", "172.16.0.5")
+	ifaces3, _ := svc.ListInterfaces(ctx, RequestOrigin{
+		LocalAddr: "192.168.1.100:8080",
+		Host:      "localhost",
+		ClientIP:  "172.16.0.5",
+	})
 	for _, iface := range ifaces3 {
 		if iface.Name == "eth0" && !iface.IsCurrent {
 			t.Errorf("expected eth0 to be current for local socket address 192.168.1.100:8080")
 		}
 	}
 	// 4. Host IP matching eth0 directly
-	hostMatched, err := svc.ListInterfaces(ctx, "", "192.168.1.100", "172.16.0.5")
+	hostMatched, err := svc.ListInterfaces(ctx, RequestOrigin{
+		Host:     "192.168.1.100",
+		ClientIP: "172.16.0.5",
+	})
 	if err != nil {
 		t.Fatalf("ListInterfaces failed: %v", err)
 	}
@@ -66,7 +77,9 @@ func TestServiceListInterfacesCurrent(t *testing.T) {
 	}
 
 	// 5. An unmatched or ambiguous client address must remain unmarked.
-	unmatched, err := svc.ListInterfaces(ctx, "", "", "172.16.0.5")
+	unmatched, err := svc.ListInterfaces(ctx, RequestOrigin{
+		ClientIP: "172.16.0.5",
+	})
 	if err != nil {
 		t.Fatalf("ListInterfaces failed: %v", err)
 	}
@@ -85,8 +98,10 @@ func TestServiceListInterfacesDoesNotGuessAmbiguousSubnet(t *testing.T) {
 	provider.interfaces["eth1"] = eth1
 	provider.mu.Unlock()
 
-	svc := NewNetworkService(provider, NewWatchdogManager(t.TempDir(), provider, zap.NewNop()), zap.NewNop())
-	ifaces, err := svc.ListInterfaces(context.Background(), "", "", "192.168.1.55")
+	svc := NewNetworkService(provider, NewWatchdogManager(t.TempDir(), provider, zap.NewNop()), "8000", zap.NewNop())
+	ifaces, err := svc.ListInterfaces(context.Background(), RequestOrigin{
+		ClientIP: "192.168.1.55",
+	})
 	if err != nil {
 		t.Fatalf("ListInterfaces failed: %v", err)
 	}
@@ -97,11 +112,117 @@ func TestServiceListInterfacesDoesNotGuessAmbiguousSubnet(t *testing.T) {
 	}
 }
 
+// emptyProvider simulates a host that exposes no physical network interface.
+type emptyProvider struct{}
+
+func (emptyProvider) Name() ProviderName  { return ProviderMock }
+func (emptyProvider) IsSupported() bool   { return true }
+func (emptyProvider) HasPermission() bool { return true }
+
+func (emptyProvider) ListPhysicalInterfaces(context.Context) ([]InterfaceInfo, error) {
+	return nil, nil
+}
+
+func (emptyProvider) ApplyInterfaceConfig(context.Context, string, InterfaceConfig) error { return nil }
+func (emptyProvider) ResetInterfaceToMaintenance(context.Context, string) error           { return nil }
+
+func TestServiceListInterfacesWithoutPhysicalNICs(t *testing.T) {
+	provider := emptyProvider{}
+	svc := NewNetworkService(provider, NewWatchdogManager(t.TempDir(), provider, zap.NewNop()), "8000", zap.NewNop())
+
+	ifaces, err := svc.ListInterfaces(context.Background(), RequestOrigin{})
+	if err != nil {
+		t.Fatalf("ListInterfaces failed: %v", err)
+	}
+	if ifaces == nil {
+		t.Fatal("expected a non-nil slice so the API encodes [] instead of null")
+	}
+	if len(ifaces) != 0 {
+		t.Fatalf("expected no interfaces, got %d", len(ifaces))
+	}
+}
+
+func TestComputeTargetURL(t *testing.T) {
+	staticCfg := InterfaceConfig{Mode: modeStatic, IPAddress: "192.168.1.150"}
+	dhcpCfg := InterfaceConfig{Mode: modeDHCP}
+
+	tests := []struct {
+		name        string
+		cfg         InterfaceConfig
+		currentHost string
+		defaultPort string
+		want        string
+	}{
+		{
+			name:        "static mode targets the new address on the request port",
+			cfg:         staticCfg,
+			currentHost: "192.168.1.100:9000",
+			defaultPort: "8000",
+			want:        "http://192.168.1.150:9000/#settings?token=tok",
+		},
+		{
+			name:        "static mode falls back to the configured port",
+			cfg:         staticCfg,
+			currentHost: "192.168.1.100",
+			defaultPort: "8000",
+			want:        "http://192.168.1.150:8000/#settings?token=tok",
+		},
+		{
+			name:        "dhcp mode keeps the request host",
+			cfg:         dhcpCfg,
+			currentHost: "192.168.1.100:8000",
+			defaultPort: "8000",
+			want:        "http://192.168.1.100:8000/#settings?token=tok",
+		},
+		{
+			name:        "missing request host falls back to loopback",
+			cfg:         dhcpCfg,
+			currentHost: "",
+			defaultPort: "8000",
+			want:        "http://127.0.0.1:8000/#settings?token=tok",
+		},
+		{
+			name:        "unknown port omits the separator",
+			cfg:         dhcpCfg,
+			currentHost: "",
+			defaultPort: "",
+			want:        "http://127.0.0.1/#settings?token=tok",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := computeTargetURL(test.cfg, test.currentHost, test.defaultPort, "tok")
+			if got != test.want {
+				t.Fatalf("computeTargetURL() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPortOf(t *testing.T) {
+	tests := []struct {
+		address string
+		want    string
+	}{
+		{address: "127.0.0.1:8000", want: "8000"},
+		{address: "0.0.0.0:9001", want: "9001"},
+		{address: "127.0.0.1", want: ""},
+		{address: "", want: ""},
+	}
+
+	for _, test := range tests {
+		if got := portOf(test.address); got != test.want {
+			t.Errorf("portOf(%q) = %q, want %q", test.address, got, test.want)
+		}
+	}
+}
+
 func TestServiceValidationAndGatewayConflict(t *testing.T) {
 	tmpDir := t.TempDir()
 	provider := NewMockProvider(zap.NewNop())
 	watchdog := NewWatchdogManager(tmpDir, provider, zap.NewNop())
-	svc := NewNetworkService(provider, watchdog, zap.NewNop())
+	svc := NewNetworkService(provider, watchdog, "8000", zap.NewNop())
 	ctx := context.Background()
 
 	// 1. Invalid IP
@@ -109,7 +230,7 @@ func TestServiceValidationAndGatewayConflict(t *testing.T) {
 		Mode:       "static",
 		IPAddress:  "invalid-ip",
 		SubnetMask: "255.255.255.0",
-	}, "127.0.0.1:8080", "127.0.0.1")
+	}, "127.0.0.1:8080")
 	if err == nil {
 		t.Errorf("expected error for invalid IP")
 	}
@@ -120,7 +241,7 @@ func TestServiceValidationAndGatewayConflict(t *testing.T) {
 		IPAddress:  "192.168.1.100",
 		SubnetMask: "255.255.255.0",
 		Gateway:    "10.0.0.1", // outside 192.168.1.0/24!
-	}, "127.0.0.1:8080", "127.0.0.1")
+	}, "127.0.0.1:8080")
 	if err == nil {
 		t.Errorf("expected error for gateway out of subnet")
 	}
@@ -134,7 +255,7 @@ func TestServiceValidationAndGatewayConflict(t *testing.T) {
 		SubnetMask: "255.255.255.0",
 		Gateway:    "10.0.0.1",
 		SetDefault: true,
-	}, "127.0.0.1:8080", "127.0.0.1")
+	}, "127.0.0.1:8080")
 	if err == nil {
 		t.Errorf("expected DEFAULT_GATEWAY_CONFLICT when setting another default gateway on eth1")
 	}
@@ -144,7 +265,7 @@ func TestServiceApplyAndConfirmWorkflow(t *testing.T) {
 	tmpDir := t.TempDir()
 	provider := NewMockProvider(zap.NewNop())
 	watchdog := NewWatchdogManager(tmpDir, provider, zap.NewNop())
-	svc := NewNetworkService(provider, watchdog, zap.NewNop())
+	svc := NewNetworkService(provider, watchdog, "8000", zap.NewNop())
 	ctx := context.Background()
 
 	// Valid static apply on eth0
@@ -155,7 +276,7 @@ func TestServiceApplyAndConfirmWorkflow(t *testing.T) {
 		Gateway:    "192.168.1.1",
 		DNS:        []string{"8.8.8.8"},
 		SetDefault: true,
-	}, "192.168.1.100:8080", "192.168.1.50")
+	}, "192.168.1.100:8080")
 	if err != nil {
 		t.Fatalf("ApplyConfig failed: %v", err)
 	}
@@ -190,7 +311,7 @@ func TestServiceResetNetwork(t *testing.T) {
 	tmpDir := t.TempDir()
 	provider := NewMockProvider(zap.NewNop())
 	watchdog := NewWatchdogManager(tmpDir, provider, zap.NewNop())
-	svc := NewNetworkService(provider, watchdog, zap.NewNop())
+	svc := NewNetworkService(provider, watchdog, "8000", zap.NewNop())
 	ctx := context.Background()
 
 	if err := svc.ResetNetwork(ctx); err != nil {
@@ -227,12 +348,12 @@ func TestServicePermissionDenied(t *testing.T) {
 	tmpDir := t.TempDir()
 	provider := &unprivilegedMockProvider{MockProvider: NewMockProvider(zap.NewNop())}
 	watchdog := NewWatchdogManager(tmpDir, provider, zap.NewNop())
-	svc := NewNetworkService(provider, watchdog, zap.NewNop())
+	svc := NewNetworkService(provider, watchdog, "8000", zap.NewNop())
 	ctx := context.Background()
 
 	_, err := svc.ApplyConfig(ctx, "eth0", InterfaceConfig{
 		Mode: "dhcp",
-	}, "127.0.0.1:8080", "127.0.0.1")
+	}, "127.0.0.1:8080")
 	if err == nil {
 		t.Errorf("expected permission denied error on ApplyConfig")
 	}
@@ -254,7 +375,7 @@ func TestServiceStopLifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
 	provider := NewMockProvider(zap.NewNop())
 	watchdog := NewWatchdogManager(tmpDir, provider, zap.NewNop())
-	svc := NewNetworkService(provider, watchdog, zap.NewNop())
+	svc := NewNetworkService(provider, watchdog, "8000", zap.NewNop())
 	ctx := context.Background()
 
 	// Apply then stop immediately before 300ms delayed apply executes
@@ -263,7 +384,7 @@ func TestServiceStopLifecycle(t *testing.T) {
 		IPAddress:  "192.168.1.222",
 		SubnetMask: "255.255.255.0",
 		SetDefault: true,
-	}, "127.0.0.1:8080", "127.0.0.1")
+	}, "127.0.0.1:8080")
 	if err != nil {
 		t.Fatalf("ApplyConfig failed: %v", err)
 	}

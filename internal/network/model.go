@@ -7,6 +7,19 @@ import (
 	"time"
 )
 
+// Supported interface configuration modes.
+const (
+	modeDHCP   = "dhcp"
+	modeStatic = "static"
+)
+
+// RequestOrigin carries the addresses a request arrived on, used to identify the serving interface.
+type RequestOrigin struct {
+	LocalAddr string // Local socket address of the accepted connection, e.g. "192.168.1.100:8000"
+	Host      string // Host header of the request, e.g. "192.168.1.100:8000"
+	ClientIP  string // Remote peer address, matched by subnet only
+}
+
 // InterfaceInfo describes the operational and configuration state of a physical network interface.
 type InterfaceInfo struct {
 	Name        string   `json:"name"`        // Interface identifier, e.g. "eth0"
@@ -17,7 +30,7 @@ type InterfaceInfo struct {
 	Gateway     string   `json:"gateway"`     // Configured gateway address, or empty
 	DNS         []string `json:"dns"`         // Configured DNS servers
 	IsDefaultGW bool     `json:"isDefaultGw"` // True if interface hosts default route (0.0.0.0/0)
-	IsCurrent   bool     `json:"isCurrent"`   // True only when the current HTTP request maps unambiguously to this interface
+	IsCurrent   bool     `json:"isCurrent"`   // True only when the request maps unambiguously to this interface
 }
 
 // InterfaceConfig contains parameters to reconfigure a network interface.

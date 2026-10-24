@@ -7,35 +7,25 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 // Handler handles HTTP requests for system network configuration.
 type Handler struct {
 	service *NetworkService
-	logger  *zap.Logger
 }
 
 // NewHandler creates a new network Handler.
-func NewHandler(service *NetworkService, logger *zap.Logger) *Handler {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
-	return &Handler{
-		service: service,
-		logger:  logger,
-	}
+func NewHandler(service *NetworkService) *Handler {
+	return &Handler{service: service}
 }
 
 // RegisterProtectedRoutes mounts endpoints requiring authentication.
 func (h *Handler) RegisterProtectedRoutes(rg *gin.RouterGroup) {
 	group := rg.Group("/system/network")
-	{
-		group.GET("/interfaces", h.ListInterfaces)
-		group.POST("/interfaces/:name/apply", h.ApplyConfig)
-		group.GET("/status", h.GetStatus)
-		group.POST("/ping", h.Ping)
-	}
+	group.GET("/interfaces", h.ListInterfaces)
+	group.POST("/interfaces/:name/apply", h.ApplyConfig)
+	group.GET("/status", h.GetStatus)
+	group.POST("/ping", h.Ping)
 }
 
 // RegisterRoutes implements the app.RouteRegistrar interface for protected routes.
@@ -52,39 +42,40 @@ func (r *publicNetworkRegistrar) RegisterRoutes(rg *gin.RouterGroup) {
 }
 
 // PublicRouteRegistrar returns a RouteRegistrar for public network endpoints.
-func (h *Handler) PublicRouteRegistrar() interface{ RegisterRoutes(*gin.RouterGroup) } {
+func (h *Handler) PublicRouteRegistrar() RouteRegistrar {
 	return &publicNetworkRegistrar{handler: h}
 }
 
 // RegisterPublicRoutes mounts endpoints that can be accessed with token or authenticated session.
 func (h *Handler) RegisterPublicRoutes(rg *gin.RouterGroup) {
 	group := rg.Group("/system/network")
-	{
-		// Allow unified confirmation and rollback via either token or session
-		group.POST("/confirm", h.Confirm)
-		group.POST("/rollback", h.Rollback)
-	}
+
+	// Confirmation and rollback accept either a one-time token or an authenticated session.
+	group.POST("/confirm", h.Confirm)
+	group.POST("/rollback", h.Rollback)
 }
 
 // ListInterfaces godoc
 // @Summary      List physical network interfaces
-// @Description  Queries physical network interfaces, marking the current session interface only when it can be identified unambiguously.
+// @Description  Queries physical interfaces, marking the current one only when identified unambiguously.
 // @Tags         network
 // @Produce      json
 // @Success      200  {object}  httputil.Response{data=[]InterfaceInfo}
 // @Failure      500  {object}  httputil.Response
 // @Router       /system/network/interfaces [get]
 func (h *Handler) ListInterfaces(c *gin.Context) {
-	localAddr := ""
-	if la, ok := c.Request.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
-		localAddr = la.String()
+	origin := RequestOrigin{
+		Host:     c.Request.Host,
+		ClientIP: c.ClientIP(),
 	}
-	if localAddr == "" && c.Request.Host != "" {
-		localAddr = c.Request.Host
+	if localAddr, ok := c.Request.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
+		origin.LocalAddr = localAddr.String()
+	}
+	if origin.LocalAddr == "" {
+		origin.LocalAddr = origin.Host
 	}
 
-	clientIP := c.ClientIP()
-	ifaces, err := h.service.ListInterfaces(c.Request.Context(), localAddr, c.Request.Host, clientIP)
+	ifaces, err := h.service.ListInterfaces(c.Request.Context(), origin)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
@@ -108,16 +99,14 @@ func (h *Handler) ListInterfaces(c *gin.Context) {
 // @Router       /system/network/interfaces/{name}/apply [post]
 func (h *Handler) ApplyConfig(c *gin.Context) {
 	iface := c.Param("name")
+
 	var req InterfaceConfig
 	if err := c.ShouldBindJSON(&req); err != nil {
 		httputil.HandleBindError(c, err)
 		return
 	}
 
-	currentHost := c.Request.Host
-	clientIP := c.ClientIP()
-
-	resp, err := h.service.ApplyConfig(c.Request.Context(), iface, req, currentHost, clientIP)
+	resp, err := h.service.ApplyConfig(c.Request.Context(), iface, req, c.Request.Host)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
@@ -126,21 +115,40 @@ func (h *Handler) ApplyConfig(c *gin.Context) {
 	httputil.Success(c, resp)
 }
 
+// extractToken reads the confirmation token from the query string or the JSON body.
 func extractToken(c *gin.Context) string {
-	token := strings.TrimSpace(c.Query("token"))
-	if token != "" {
+	if token := strings.TrimSpace(c.Query("token")); token != "" {
 		return token
 	}
+
 	var req ConfirmRequest
-	if err := c.ShouldBindJSON(&req); err == nil && req.Token != "" {
+	if err := c.ShouldBindJSON(&req); err == nil {
 		return strings.TrimSpace(req.Token)
 	}
 	return ""
 }
 
+// requireTokenOrSession enforces that a token or an authenticated session is present.
+func requireTokenOrSession(c *gin.Context, token string) error {
+	_, hasUser := c.Get("user")
+	_, hasSession := c.Get("session")
+
+	hasToken := token != ""
+	if hasToken || hasUser || hasSession {
+		return nil
+	}
+
+	return httputil.NewError(
+		http.StatusForbidden,
+		"TOKEN_REQUIRED",
+		"Authentication or valid confirmation token required",
+		nil,
+	)
+}
+
 // Confirm godoc
 // @Summary      Confirm network trial configuration
-// @Description  Solidifies current trial configuration and disarms the watchdog timer. Accepts session authentication or one-time confirmation token.
+// @Description  Solidifies the trial configuration and disarms the watchdog timer. Accepts a session or token.
 // @Tags         network
 // @Accept       json
 // @Produce      json
@@ -152,10 +160,8 @@ func extractToken(c *gin.Context) string {
 // @Router       /system/network/confirm [post]
 func (h *Handler) Confirm(c *gin.Context) {
 	token := extractToken(c)
-	_, hasUser := c.Get("user")
-	_, hasSession := c.Get("session")
-	if token == "" && !hasUser && !hasSession {
-		httputil.WriteError(c, httputil.NewError(http.StatusForbidden, "TOKEN_REQUIRED", "Authentication or valid confirmation token required", nil))
+	if err := requireTokenOrSession(c, token); err != nil {
+		httputil.WriteError(c, err)
 		return
 	}
 
@@ -169,7 +175,7 @@ func (h *Handler) Confirm(c *gin.Context) {
 
 // Rollback godoc
 // @Summary      Rollback network trial configuration
-// @Description  Immediately cancels trial configuration and restores previous safe state. Accepts session authentication or one-time confirmation token.
+// @Description  Cancels the trial configuration and restores the previous state. Accepts a session or token.
 // @Tags         network
 // @Accept       json
 // @Produce      json
@@ -182,10 +188,8 @@ func (h *Handler) Confirm(c *gin.Context) {
 // @Router       /system/network/rollback [post]
 func (h *Handler) Rollback(c *gin.Context) {
 	token := extractToken(c)
-	_, hasUser := c.Get("user")
-	_, hasSession := c.Get("session")
-	if token == "" && !hasUser && !hasSession {
-		httputil.WriteError(c, httputil.NewError(http.StatusForbidden, "TOKEN_REQUIRED", "Authentication or valid confirmation token required", nil))
+	if err := requireTokenOrSession(c, token); err != nil {
+		httputil.WriteError(c, err)
 		return
 	}
 
@@ -205,8 +209,7 @@ func (h *Handler) Rollback(c *gin.Context) {
 // @Success      200  {object}  httputil.Response{data=TransactionState}
 // @Router       /system/network/status [get]
 func (h *Handler) GetStatus(c *gin.Context) {
-	status := h.service.GetTransactionStatus()
-	httputil.Success(c, status)
+	httputil.Success(c, h.service.GetTransactionStatus())
 }
 
 // Ping godoc

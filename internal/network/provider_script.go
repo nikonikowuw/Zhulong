@@ -28,8 +28,8 @@ func NewScriptProvider(scriptPath string, logger *zap.Logger) *ScriptProvider {
 	}
 }
 
-func (p *ScriptProvider) Name() string {
-	return string(ProviderCustomScript)
+func (p *ScriptProvider) Name() ProviderName {
+	return ProviderCustomScript
 }
 
 func (p *ScriptProvider) IsSupported() bool {
@@ -41,10 +41,11 @@ func (p *ScriptProvider) HasPermission() bool {
 }
 
 func (p *ScriptProvider) ListPhysicalInterfaces(ctx context.Context) ([]InterfaceInfo, error) {
-	// Try asking script with 'list' action
+	// A script may answer the 'list' action with its own JSON view of the interfaces.
 	cmd := exec.CommandContext(ctx, p.scriptPath, "list")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
+
 	if err := cmd.Run(); err == nil && stdout.Len() > 0 {
 		var list []InterfaceInfo
 		if err := json.Unmarshal(stdout.Bytes(), &list); err == nil && len(list) > 0 {
@@ -52,13 +53,13 @@ func (p *ScriptProvider) ListPhysicalInterfaces(ctx context.Context) ([]Interfac
 		}
 	}
 
-	// Fallback to kernel sysfs / netlink reader
+	// Fall back to the kernel sysfs reader when the script cannot describe the host.
 	return readPhysicalInterfaces(ctx)
 }
 
 func (p *ScriptProvider) ApplyInterfaceConfig(ctx context.Context, iface string, cfg InterfaceConfig) error {
 	cidr := ""
-	if cfg.Mode == "static" {
+	if cfg.Mode == modeStatic {
 		var err error
 		cidr, err = CIDRFromIPAndMask(cfg.IPAddress, cfg.SubnetMask)
 		if err != nil {
@@ -66,16 +67,17 @@ func (p *ScriptProvider) ApplyInterfaceConfig(ctx context.Context, iface string,
 		}
 	}
 
-	dnsStr := strings.Join(cfg.DNS, ",")
-	setDefaultStr := "0"
+	setDefault := "0"
 	if cfg.SetDefault {
-		setDefaultStr = "1"
+		setDefault = "1"
 	}
 
-	args := []string{"apply", iface, cfg.Mode, cidr, cfg.Gateway, dnsStr, setDefaultStr}
+	args := []string{"apply", iface, cfg.Mode, cidr, cfg.Gateway, strings.Join(cfg.DNS, ","), setDefault}
+
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, p.scriptPath, args...)
 	cmd.Stderr = &stderr
+
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("custom script %s apply failed: %w, stderr: %s", p.scriptPath, err, stderr.String())
 	}
@@ -90,6 +92,7 @@ func (p *ScriptProvider) ResetInterfaceToMaintenance(ctx context.Context, iface 
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, p.scriptPath, "reset", iface)
 	cmd.Stderr = &stderr
+
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("custom script %s reset failed: %w, stderr: %s", p.scriptPath, err, stderr.String())
 	}

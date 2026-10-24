@@ -23,8 +23,8 @@ func NewNetworkManagerProvider(logger *zap.Logger) *NetworkManagerProvider {
 	return &NetworkManagerProvider{logger: logger}
 }
 
-func (p *NetworkManagerProvider) Name() string {
-	return string(ProviderNetworkManager)
+func (p *NetworkManagerProvider) Name() ProviderName {
+	return ProviderNetworkManager
 }
 
 func (p *NetworkManagerProvider) IsSupported() bool {
@@ -41,56 +41,20 @@ func (p *NetworkManagerProvider) ListPhysicalInterfaces(ctx context.Context) ([]
 }
 
 func (p *NetworkManagerProvider) ApplyInterfaceConfig(ctx context.Context, iface string, cfg InterfaceConfig) error {
-	connName := p.getOrCreateConnection(ctx, iface)
-
-	if cfg.Mode == "static" {
-		cidr, err := CIDRFromIPAndMask(cfg.IPAddress, cfg.SubnetMask)
-		if err != nil {
-			return fmt.Errorf("calculate CIDR: %w", err)
-		}
-
-		args := []string{"con", "mod", connName, "ipv4.method", "manual", "ipv4.addresses", cidr}
-		if cfg.Gateway != "" {
-			args = append(args, "ipv4.gateway", cfg.Gateway)
-		} else {
-			args = append(args, "ipv4.gateway", "")
-		}
-
-		if len(cfg.DNS) > 0 {
-			args = append(args, "ipv4.dns", strings.Join(cfg.DNS, " "))
-		} else {
-			args = append(args, "ipv4.dns", "")
-		}
-
-		if cfg.SetDefault {
-			args = append(args, "ipv4.never-default", "no")
-		} else {
-			args = append(args, "ipv4.never-default", "yes")
-		}
-
-		if err := p.runNmcli(ctx, args...); err != nil {
-			return fmt.Errorf("modify connection %s to static: %w", connName, err)
-		}
-	} else {
-		// DHCP mode
-		args := []string{
-			"con", "mod", connName,
-			"ipv4.method", "auto",
-			"ipv4.addresses", "",
-			"ipv4.gateway", "",
-			"ipv4.dns", "",
-		}
-		if cfg.SetDefault {
-			args = append(args, "ipv4.never-default", "no")
-		} else {
-			args = append(args, "ipv4.never-default", "yes")
-		}
-		if err := p.runNmcli(ctx, args...); err != nil {
-			return fmt.Errorf("modify connection %s to dhcp: %w", connName, err)
-		}
+	connName, err := p.getOrCreateConnection(ctx, iface)
+	if err != nil {
+		return err
 	}
 
-	// Apply connection
+	args, err := buildNmcliModifyArgs(connName, cfg)
+	if err != nil {
+		return err
+	}
+
+	if err := p.runNmcli(ctx, args...); err != nil {
+		return fmt.Errorf("modify connection %s to %s: %w", connName, cfg.Mode, err)
+	}
+
 	if err := p.runNmcli(ctx, "con", "up", connName); err != nil {
 		return fmt.Errorf("activate connection %s: %w", connName, err)
 	}
@@ -101,10 +65,46 @@ func (p *NetworkManagerProvider) ApplyInterfaceConfig(ctx context.Context, iface
 	return nil
 }
 
-func (p *NetworkManagerProvider) ResetInterfaceToMaintenance(ctx context.Context, iface string) error {
-	connName := p.getOrCreateConnection(ctx, iface)
+// buildNmcliModifyArgs translates an InterfaceConfig into a single `nmcli con mod` argument list.
+// DHCP is the default branch; static overrides the address related properties.
+func buildNmcliModifyArgs(connName string, cfg InterfaceConfig) ([]string, error) {
+	method := "auto"
+	addresses := ""
+	gateway := ""
+	dns := ""
 
-	// Set 192.168.1.168/24 static
+	if cfg.Mode == modeStatic {
+		cidr, err := CIDRFromIPAndMask(cfg.IPAddress, cfg.SubnetMask)
+		if err != nil {
+			return nil, fmt.Errorf("calculate CIDR: %w", err)
+		}
+		method = "manual"
+		addresses = cidr
+		gateway = cfg.Gateway
+		dns = strings.Join(cfg.DNS, " ")
+	}
+
+	neverDefault := "yes"
+	if cfg.SetDefault {
+		neverDefault = "no"
+	}
+
+	return []string{
+		"con", "mod", connName,
+		"ipv4.method", method,
+		"ipv4.addresses", addresses,
+		"ipv4.gateway", gateway,
+		"ipv4.dns", dns,
+		"ipv4.never-default", neverDefault,
+	}, nil
+}
+
+func (p *NetworkManagerProvider) ResetInterfaceToMaintenance(ctx context.Context, iface string) error {
+	connName, err := p.getOrCreateConnection(ctx, iface)
+	if err != nil {
+		return err
+	}
+
 	args := []string{
 		"con", "mod", connName,
 		"ipv4.method", "manual",
@@ -126,29 +126,29 @@ func (p *NetworkManagerProvider) ResetInterfaceToMaintenance(ctx context.Context
 	return nil
 }
 
-func (p *NetworkManagerProvider) getOrCreateConnection(ctx context.Context, iface string) string {
-	// Look up active connection name for this interface
+func (p *NetworkManagerProvider) getOrCreateConnection(ctx context.Context, iface string) (string, error) {
 	out, err := exec.CommandContext(ctx, "nmcli", "-g", "GENERAL.CONNECTION", "device", "show", iface).Output()
 	conn := strings.TrimSpace(string(out))
 	if err == nil && conn != "" && conn != "--" {
-		return conn
+		return conn, nil
 	}
 
-	// Check if a connection with name == iface already exists
-	checkOut, _ := exec.CommandContext(ctx, "nmcli", "-g", "NAME", "con", "show", iface).Output()
-	if strings.TrimSpace(string(checkOut)) == iface {
-		return iface
+	checkOut, checkErr := exec.CommandContext(ctx, "nmcli", "-g", "NAME", "con", "show", iface).Output()
+	if checkErr == nil && strings.TrimSpace(string(checkOut)) == iface {
+		return iface, nil
 	}
 
-	// Create new ethernet connection
-	_ = p.runNmcli(ctx, "con", "add", "type", "ethernet", "ifname", iface, "con-name", iface)
-	return iface
+	if err := p.runNmcli(ctx, "con", "add", "type", "ethernet", "ifname", iface, "con-name", iface); err != nil {
+		return "", fmt.Errorf("create connection for %s: %w", iface, err)
+	}
+	return iface, nil
 }
 
 func (p *NetworkManagerProvider) runNmcli(ctx context.Context, args ...string) error {
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "nmcli", args...)
 	cmd.Stderr = &stderr
+
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("nmcli %s failed: %w, stderr: %s", strings.Join(args, " "), err, stderr.String())
 	}

@@ -73,8 +73,9 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
 - `src/routeTree.gen.ts` 是生成物，不手改；`src/lib/api-client.ts` 注入 `Accept-Language` 并拆 Go 信封；
   不可信输入用 Zod 解析而非断言类型。
 - `src/components/ui/**` 是改造过的 shadcn/ui fork：未合并本地改动前**不要** `shadcn add --overwrite`。
-- Vite 把 `/api` 代理到 `127.0.0.1:8000`（与仓库内 `config.toml` 一致），而编译内置默认是 `8080`
-  （`app.DefaultConfig`）—— 改端口要同步这两处。
+- 端口三处统一为 `8000`：`app.DefaultConfig`、仓库内 `config.toml`、Vite 的 `/api` 代理。
+  改端口必须同步 `internal/app/config.go` 与 `web/vite.config.ts`；网络重配的确认链接
+  （`internal/network`）从 `http.address` 取端口，不再有独立常量。
 - 发布前确认 `internal/webui/dist` 的内嵌副本是最新的。
 
 **配置**：`config.toml` 从 CWD 读取，viper 严格模式（未知键即中止启动）；数据目录存放 `zhulong.db`、
