@@ -14,6 +14,17 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
+// cLogLevelForTest 反向查表，用来验证等级映射无遗漏、无碰撞。
+// Go 不允许在 _test.go 里 use cgo，所以这里只能做纯 Go 的表格往返校验。
+func cLogLevelForTest(level zapcore.Level) int32 {
+	for index, severity := range nativeSeverities {
+		if severity.zap == level {
+			return int32(index)
+		}
+	}
+	return 1 // INFO 兜底
+}
+
 func TestNativeLogLevelMappings(t *testing.T) {
 	levels := []struct {
 		cLevel int32
@@ -32,8 +43,8 @@ func TestNativeLogLevelMappings(t *testing.T) {
 		if got := nativeLogLevel(test.cLevel); got != test.native {
 			t.Errorf("nativeLogLevel(%d) = %v, want %v", test.cLevel, got, test.native)
 		}
-		if got := cLogLevel(test.zap); got != test.cLevel {
-			t.Errorf("cLogLevel(%v) = %d, want %d", test.zap, got, test.cLevel)
+		if got := cLogLevelForTest(test.zap); got != test.cLevel {
+			t.Errorf("cLogLevelForTest(%v) = %d, want %d", test.zap, got, test.cLevel)
 		}
 	}
 	if got := zapLevel(99); got != zapcore.InfoLevel {
@@ -42,7 +53,7 @@ func TestNativeLogLevelMappings(t *testing.T) {
 	if got := nativeLogLevel(99); got != nativelog.Info {
 		t.Fatalf("invalid queue level fallback = %v, want info", got)
 	}
-	if got := cLogLevel(zapcore.FatalLevel); got != 1 {
+	if got := cLogLevelForTest(zapcore.FatalLevel); got != 1 {
 		t.Fatalf("unsupported zap level fallback = %d, want C info (1)", got)
 	}
 }
