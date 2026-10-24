@@ -10,9 +10,8 @@
  * 3. **只做「改参数」级适配（O(1)）**：源侧 stride 直接传实际 linesize；`srect`
  *    坐标按探测到的 offset 对齐取整。**任何需要重排内存（O(N)）的适配一律不做**
  *    —— CPU 都遍历全图了，RGA 的收益已归零，不如直接回退 CPU（design §5.3 判据）。
- * 4. **不引入 importbuffer_fd**（DMA-BUF 属后续任务，R9）：只用
- *    wrapbuffer_virtualaddr，它不接管内存所有权。⚠️ 因此**不得声称零拷贝**：
- *    存在用户态虚拟地址到 DMA 映射的开销。
+ * 4. 有 DMA-BUF fd 时用 wrapbuffer_fd，否则用 wrapbuffer_virtualaddr；两者都不转移
+ *    缓冲区所有权。本后端不缓存 importbuffer handle，也不据此声称整条链路零拷贝。
  * 5. **多平面格式（NV12/YUV420P）用单 buffer 连续布局**：RGA 的 im2d API 没有
  *    多平面入口，plane 偏移由库按 `wstride × hstride` 推导（真机实测，见
  *    `algo-plugin-contract.md` §9）。因此调用方必须提供**连续**的平面布局；

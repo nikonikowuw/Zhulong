@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -206,7 +207,8 @@ void case_formats() {
 
     // 3) NV12 连续平面
     {
-        std::vector<uint8_t> nv12(w * h + w * (h / 2), 128);
+        std::vector<uint8_t> nv12(
+            static_cast<size_t>(w) * h + static_cast<size_t>(w) * (h / 2) + 1, 128);
         zhulong_frame_view frame{};
         frame.width = w;
         frame.height = h;
@@ -224,16 +226,16 @@ void case_formats() {
 
         zhulong_status_t rga_rc = rga.letterbox(frame, out, params);
         zhulong_status_t cpu_rc = cpu.letterbox(frame, out, params);
-        require(cpu_rc == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED, "case4: cpu rejects NV12");
+        require(cpu_rc == ZHULONG_PLUGIN_OK, "case4: cpu accepts NV12");
         if (rga.rga_usable()) {
             require(rga_rc == ZHULONG_PLUGIN_OK, "case4: rga accepts contiguous NV12");
         }
 
-        // 非连续 NV12 (plane1 错位) 应被安全拒绝并回退 CPU (返回 NOT_SUPPORTED)
+        // Non-contiguous NV12 is rejected by RGA and processed by the CPU fallback.
         frame.planes[1] = nv12.data() + w * h + 1;
         uint64_t prev_fallback = rga.fallback_count();
         rga_rc = rga.letterbox(frame, out, params);
-        require(rga_rc == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED, "case4: rga rejects non-contiguous NV12");
+        require(rga_rc == ZHULONG_PLUGIN_OK, "case4: non-contiguous NV12 uses CPU fallback");
         require(rga.fallback_count() > prev_fallback, "case4: non-contiguous NV12 increments fallback_count");
 
         // NV12 含垂直对齐步长 (如 MPP 硬件解码 1080P height=1080, vstride=1088)
@@ -259,7 +261,8 @@ void case_formats() {
 
     // 4) YUV420P 连续平面
     {
-        std::vector<uint8_t> yuv420p(w * h + 2 * (w / 2) * (h / 2), 128);
+        std::vector<uint8_t> yuv420p(
+            static_cast<size_t>(w) * h + 2 * static_cast<size_t>(w / 2) * (h / 2) + 1, 128);
         zhulong_frame_view frame{};
         frame.width = w;
         frame.height = h;
@@ -279,15 +282,27 @@ void case_formats() {
 
         zhulong_status_t rga_rc = rga.letterbox(frame, out, params);
         zhulong_status_t cpu_rc = cpu.letterbox(frame, out, params);
-        require(cpu_rc == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED, "case4: cpu rejects YUV420P");
+        require(cpu_rc == ZHULONG_PLUGIN_OK, "case4: cpu accepts YUV420P");
         if (rga.rga_usable()) {
             require(rga_rc == ZHULONG_PLUGIN_OK, "case4: rga accepts contiguous YUV420P");
         }
 
-        // 非连续 YUV420P 应被安全拒绝并回退 CPU
+        // RGA's single stride descriptor requires each planar chroma stride to be half the Y stride.
+        frame.strides[1] = w / 2 + 16;
+        const uint64_t prev_stride_fallback = rga.fallback_count();
+        const zhulong_status_t stride_rc = rga.letterbox(frame, out, params);
+        require(stride_rc == ZHULONG_PLUGIN_OK, "case4: YUV420P stride mismatch uses CPU fallback");
+        require(rga.fallback_count() > prev_stride_fallback,
+                "case4: YUV420P stride mismatch increments fallback_count");
+        frame.strides[1] = w / 2;
+
+        // Non-contiguous YUV420P should be handled by the CPU backend after RGA rejects it.
         frame.planes[2] = yuv420p.data() + w * h + (w / 2) * (h / 2) + 1;
+        const uint64_t prev_fallback = rga.fallback_count();
         rga_rc = rga.letterbox(frame, out, params);
-        require(rga_rc == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED, "case4: rga rejects non-contiguous YUV420P");
+        require(rga_rc == ZHULONG_PLUGIN_OK, "case4: non-contiguous YUV420P uses CPU fallback");
+        require(rga.fallback_count() > prev_fallback,
+                "case4: non-contiguous YUV420P increments fallback_count");
     }
 
     // 5) UNKNOWN
@@ -475,6 +490,17 @@ void case_crop_scale() {
         require(rga.rect_adapted_count() > prev_rect_adapted,
                 "case9: odd roi incremented rect_adapted_count");
     }
+
+    const zhulong::CropRect overflowing_roi{std::numeric_limits<int>::max(), 0, 1, 1};
+    rc = rga.crop_scale(frame, overflowing_roi, dst.data(), dst_w * 3, dst_w, dst_h,
+                        ZHULONG_PIXEL_FORMAT_RGB24);
+    require(rc == ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT, "case9: overflowing roi rejected");
+
+    frame.strides[0] = 3;
+    const zhulong::CropRect one_pixel_roi{0, 0, 1, 1};
+    rc = rga.crop_scale(frame, one_pixel_roi, dst.data(), dst_w * 3, dst_w, dst_h,
+                        ZHULONG_PIXEL_FORMAT_RGB24);
+    require(rc == ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT, "case9: undersized source stride rejected");
 }
 
 // ── Case 10：行跨度适配 (stride_adapted_count) ───────────────────────────
@@ -519,6 +545,27 @@ void case_tensor_reuse() {
                                          ZHULONG_PIXEL_FORMAT_RGB24, 32, 32, out);
     require(rc2 == ZHULONG_PLUGIN_OK, "case11: second letterbox ok");
     require(out.raw_data() == second_ptr, "case11: CPU tensor buffer reused on second call");
+
+    zhulong::Tensor unmapped = zhulong::Tensor::from_dma_buf(
+        77, {32, 32, 3}, zhulong::DataType::UINT8, nullptr);
+    const zhulong_status_t unmapped_rc = run_letterbox(
+        rga, src.data(), w, 32, w * 3, ZHULONG_PIXEL_FORMAT_RGB24,
+        ZHULONG_PIXEL_FORMAT_RGB24, 32, 32, unmapped);
+    require(unmapped_rc == ZHULONG_PLUGIN_OK, "case11: unmapped DMA output falls back safely");
+    require(unmapped.dma_buf_fd() < 0 && unmapped.raw_data() != nullptr,
+            "case11: unmapped DMA output replaced by CPU storage");
+    require(unmapped.data<uint8_t>()[0] == 114, "case11: unmapped DMA output padding initialized");
+
+    zhulong::CpuVisionBackend cpu;
+    std::vector<uint8_t> mapped_storage(32 * 32 * 3 * sizeof(float), 0);
+    zhulong::Tensor wrong_dtype = zhulong::Tensor::from_dma_buf(
+        78, {32, 32, 3}, zhulong::DataType::FLOAT32, mapped_storage.data());
+    const zhulong_status_t dtype_rc = run_letterbox(
+        cpu, src.data(), w, 32, w * 3, ZHULONG_PIXEL_FORMAT_RGB24,
+        ZHULONG_PIXEL_FORMAT_RGB24, 32, 32, wrong_dtype);
+    require(dtype_rc == ZHULONG_PLUGIN_OK, "case11: mapped DMA output with wrong dtype handled");
+    require(wrong_dtype.dtype() == zhulong::DataType::UINT8 && wrong_dtype.dma_buf_fd() == 78,
+            "case11: mapped DMA output normalized to UINT8 while reusing fd");
 }
 
 } // namespace
