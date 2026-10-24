@@ -97,19 +97,45 @@ def main():
         shutil.copytree(models_src, staging_dir / "models", dirs_exist_ok=True)
 
     # 6. 本地黑盒验包
+    #    ⚠️ 必须以 staging_dir 为 CWD 调用：包目录才是部署布局（plugin.so 与 models/ 同级）。
+    #    从仓库根跑会命中源码树里的权重，让「模型路径拼错」这类缺陷在准入阶段 100% 逃逸。
     runner_bin = build_dir / "zhulong_algo_runner"
     if not args.no_verify and runner_bin.exists() and args.target == "cpu":
-        print(f"[*] 执行本地黑盒验包...")
+        print(f"[*] 执行本地黑盒验包（cwd={staging_dir}）...")
+        sample_path = staging_dir / "sample.jpg"
+        # runner 不含图像解码器：若本机有 ffmpeg 就转成 PPM，让验包真的跑一张图；
+        # 否则退回 .jpg（runner 会输出 sample_decoded=false，不假装验过样本）。
+        verify_sample = sample_path
+        converted = staging_dir / ".verify_sample.ppm"
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            conv = subprocess.run(
+                [ffmpeg, "-v", "error", "-y", "-i", str(sample_path),
+                 "-pix_fmt", "rgb24", str(converted)],
+                capture_output=True, text=True,
+            )
+            if conv.returncode == 0 and converted.exists():
+                verify_sample = converted
+            else:
+                print("[!] 警告: sample.jpg 转 PPM 失败，验包将使用合成帧（sample_decoded=false）", file=sys.stderr)
+        else:
+            print("[!] 警告: 未找到 ffmpeg，验包将使用合成帧（sample_decoded=false）", file=sys.stderr)
+
         verify_cmd = [
             str(runner_bin),
             "--verify-plugin", str(dest_plugin),
-            "--sample", str(staging_dir / "sample.jpg")
+            "--sample", str(verify_sample),
         ]
-        proc = subprocess.run(verify_cmd, capture_output=True, text=True)
+        proc = subprocess.run(verify_cmd, capture_output=True, text=True, cwd=str(staging_dir))
+        if converted.exists():
+            converted.unlink()
         if proc.returncode != 0:
             print(proc.stderr, file=sys.stderr)
             sys.exit(f"错误: 黑盒验包未通过 (退出码 {proc.returncode})")
-        print(f"[✓] 黑盒验包通过！输出: {proc.stdout.strip()}")
+        report = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else "{}"
+        print(f"[✓] 黑盒验包通过！{report}")
+        if '"sample_decoded":false' in report:
+            print("[!] 警告: 本次验包未使用真实样本帧，只证明了 ABI 生命周期", file=sys.stderr)
 
     # 7. 打包成 .tar.gz
     out_dir = repo_root / args.output_dir

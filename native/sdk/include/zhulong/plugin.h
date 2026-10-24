@@ -206,7 +206,8 @@ typedef struct zhulong_plate_item {
  *   - 纯车牌检测场景下，每个检出的车牌映射为一个 zhulong_vehicle_item；
  *   - track_id 填 0；
  *   - vehicle_box 填 plate_box 的归一化坐标；
- *   - vehicle_score 填 plate_score 的置信度；
+ *   - vehicle_score 填**车牌检测**置信度（退化场景下「车」就是车牌框）；
+ *     注意它与 plate.score（字符识别置信度）语义不同，二者不可互换；
  *   - vehicle_type 填 "unknown"；
  *   - vehicle_color 填 ""；
  *   - plate_count 填 1，plates 指向对应的车牌项。
@@ -215,7 +216,7 @@ typedef struct zhulong_plate_item {
 typedef struct zhulong_vehicle_item {
     int64_t  track_id;                                  /* 车辆跟踪 ID (纯车牌场景填 0) */
     float    vehicle_box[4];                            /* [x1, y1, x2, y2] 严格归一化 (纯车牌场景同 plate_box) */
-    float    vehicle_score;                             /* 车辆检出置信度 (纯车牌场景同 plate_score) */
+    float    vehicle_score;                             /* 车辆检出置信度 (纯车牌场景填车牌检测置信度) */
     char     vehicle_type[ZHULONG_VEHICLE_TYPE_MAX_LEN];   /* 车型 (以 '\0' 结尾) */
     char     vehicle_color[ZHULONG_VEHICLE_COLOR_MAX_LEN]; /* 车身颜色 (以 '\0' 结尾) */
     uint32_t plate_count;                               /* plates 数组元素数 */

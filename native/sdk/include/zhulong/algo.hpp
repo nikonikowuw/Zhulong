@@ -181,7 +181,8 @@ struct PlateItem {
  *   - 在纯车牌检测/识别场景下，每个检出车牌映射为一个 VehicleItem；
  *   - track_id 填 0；
  *   - vehicle_box 填对应 plate_box 的归一化坐标；
- *   - vehicle_score 填 plate 的 score；
+ *   - vehicle_score 填**车牌检测**置信度（退化场景下「车」就是车牌框）；
+ *     它与 plate.score（字符识别置信度）语义不同，二者不可互换；
  *   - vehicle_type 填 "unknown"；
  *   - vehicle_color 填 ""；
  *   - plates 包含单块车牌项。
@@ -189,7 +190,7 @@ struct PlateItem {
 struct VehicleItem {
     int64_t track_id{0};                          /**< 车辆跟踪 ID (纯车牌场景填 0) */
     float vehicle_box[4]{0.0f, 0.0f, 0.0f, 0.0f}; /**< [x1, y1, x2, y2] 归一化坐标 (纯车牌场景同 plate_box) */
-    float vehicle_score{0.0f};                    /**< 车辆检出置信度 (纯车牌场景同 plate_score) */
+    float vehicle_score{0.0f};                    /**< 车辆检出置信度 (纯车牌场景填车牌检测置信度) */
     std::string vehicle_type;                     /**< 车型描述 */
     std::string vehicle_color;                    /**< 车身颜色 */
     std::vector<PlateItem> plates;                /**< 关联的车牌列表 (0~N 块) */
