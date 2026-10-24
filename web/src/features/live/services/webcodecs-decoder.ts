@@ -1,4 +1,14 @@
-import { type FrameClass, type ParsedPacket } from '../types'
+import {
+  type FrameClass,
+  type ParsedPacket,
+  WIRE_FLAG_KEYFRAME,
+} from '../types'
+
+declare global {
+  interface Window {
+    __ZHULONG_WEB_CODECS_DIAGNOSTICS__?: boolean
+  }
+}
 
 /**
  * 解码队列积压阈值（帧）。
@@ -8,13 +18,7 @@ import { type FrameClass, type ParsedPacket } from '../types'
  */
 const MAX_DECODE_QUEUE_FRAMES = 12
 
-/**
- * 解码器刚 configure 后的预热帧数。
- *
- * 硬件解码器首帧初始化要 100~300ms（H.265 1080p 更久），这段时间 decodeQueueSize
- * 必然短暂超阈值。若不加预热窗口，一上电就误判「卡了」→ 丢弃后续帧 → 等下一个 IDR，
- * 用户看到的就是「刚开始播放卡几帧」。这是真实踩过的坑，别删。
- */
+/** 解码器刚 configure 后的预热帧数，避免启动阶段的短暂队列抖动触发重同步。 */
 const WARMUP_FRAMES = 10
 
 /**
@@ -43,6 +47,64 @@ export interface StreamDecoderStats {
   rebuilds: number
   /** 解码器报错次数 */
   errors: number
+}
+
+interface DecoderDiagnosticCounters {
+  inputPackets: number
+  keyPackets: number
+  idrClassPackets: number
+  keyFlagPackets: number
+  submittedChunks: number
+  outputFrames: number
+  waitingForKeyFrameDrops: number
+  congestionDrops: number
+  initialKeyFrameDrops: number
+  unknownCodecDrops: number
+  decoderUnavailableDrops: number
+  keyFrameRecoveries: number
+  configureAttempts: number
+}
+
+function emptyDiagnosticCounters(): DecoderDiagnosticCounters {
+  return {
+    inputPackets: 0,
+    keyPackets: 0,
+    idrClassPackets: 0,
+    keyFlagPackets: 0,
+    submittedChunks: 0,
+    outputFrames: 0,
+    waitingForKeyFrameDrops: 0,
+    congestionDrops: 0,
+    initialKeyFrameDrops: 0,
+    unknownCodecDrops: 0,
+    decoderUnavailableDrops: 0,
+    keyFrameRecoveries: 0,
+    configureAttempts: 0,
+  }
+}
+
+/** 诊断开关：宿主或调试者在 window 上置 true 时输出详细事件。 */
+export function isWebCodecsDiagnosticsEnabled(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    window.__ZHULONG_WEB_CODECS_DIAGNOSTICS__ === true
+  )
+}
+
+/**
+ * 输出一条带统一前缀的 WebCodecs 诊断事件。
+ *
+ * 调用方自行判断是否已开启诊断（高频事件不要为了一行日志先做字符串拼接）。
+ */
+export function logWebCodecsDiagnostic(
+  level: 'info' | 'warn' | 'error',
+  event: string,
+  details: Record<string, unknown>
+): void {
+  const message = `[Zhulong][WebCodecs] ${event}`
+  // eslint-disable-next-line no-console
+  const sink = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info
+  sink(message, details)
 }
 
 export function isWebCodecsSupported(): boolean {
@@ -175,12 +237,18 @@ export class StreamDecoder {
 
   /** configure 之后已成功送入解码器的帧数，用于预热窗口判定。 */
   private framesSinceConfigure = 0
-  /** 连续观测到解码队列超阈值的次数。 */
+  /** 连续观测到的过载次数。 */
   private congestionStreak = 0
+  /** 最近一次成功 configure 的单调时钟，仅用于诊断输出。 */
+  private configuredAtMs: number | null = null
 
   private readonly onFrame: FrameOutputCallback
   private readonly onError?: DecoderErrorCallback
   private stats: StreamDecoderStats = { resyncs: 0, rebuilds: 0, errors: 0 }
+  private diagnosticWindowStart = 0
+  private diagnosticCounters = emptyDiagnosticCounters()
+  private diagnosticLastPacket: Record<string, unknown> | null = null
+  private lastDecoderInitFailureLogAt = 0
 
   constructor(options: StreamDecoderOptions) {
     this.onFrame = options.onFrame
@@ -201,17 +269,26 @@ export class StreamDecoder {
             frame.close()
             return
           }
+          this.recordDiagnosticOutput()
           this.onFrame(frame)
         },
         error: (err: DOMException) => {
           if (this.decoder === decoder) {
-            this.recoverFromDecoderError(err)
+            this.recoverFromDecoderError(err, 'async')
           }
         },
       })
       this.decoder = decoder
       return decoder
     } catch (e) {
+      const now = Date.now()
+      if (now - this.lastDecoderInitFailureLogAt >= 1000) {
+        this.lastDecoderInitFailureLogAt = now
+        logWebCodecsDiagnostic('error', 'decoder_init_failed', {
+          errorName: e instanceof Error ? e.name : 'UnknownError',
+          errorMessage: e instanceof Error ? e.message : String(e),
+        })
+      }
       if (this.onError && e instanceof Error) {
         this.onError(e)
       }
@@ -235,13 +312,19 @@ export class StreamDecoder {
    * @returns 是否真正送入了解码器（false 表示被丢弃）
    */
   public decode(packet: ParsedPacket): boolean {
+    this.recordDiagnosticPacket(packet)
+
     let decoder = this.decoder
     if (!decoder || decoder.state === 'closed') {
       this.decoder = null
       decoder = this.initDecoder()
-      if (!decoder || decoder.state === 'closed') return false
+      if (!decoder || decoder.state === 'closed') {
+        this.countDiagnostic('decoderUnavailableDrops')
+        return false
+      }
     }
     if (packet.codec === 'unknown') {
+      this.countDiagnostic('unknownCodecDrops')
       this.onError?.(new Error(`Unsupported video codec: ${packet.codecByte}`))
       this.skipping = true
       return false
@@ -250,12 +333,41 @@ export class StreamDecoder {
     // 服务端标记时间轴跳变（相机重启 / RTSP 会话重建）：
     // 解码器里残留的参考帧全部作废，必须重建。等关键帧再继续。
     if (packet.hasDiscontinuity) {
+      logWebCodecsDiagnostic('warn', 'stream_discontinuity', {
+        seq: packet.seq,
+        gopId: packet.gopId,
+        codec: packet.codec,
+        frameClass: packet.frameClass,
+        keyFrame: packet.isKeyFrame,
+        flags: packet.flags,
+        hasSyntheticPts: packet.hasSyntheticPts,
+        hasSyntheticDts: packet.hasSyntheticDts,
+        hasInjectedParamSets: packet.hasInjectedParamSets,
+        ptsUs: packet.ptsUs,
+        dtsUs: packet.dtsUs,
+      })
       this.rebuild()
     }
 
     // 跳过模式：只接受关键帧
     if (this.skipping) {
-      if (!packet.isKeyFrame) return false
+      if (!packet.isKeyFrame) {
+        this.countDiagnostic('waitingForKeyFrameDrops')
+        return false
+      }
+      this.countDiagnostic('keyFrameRecoveries')
+      if (isWebCodecsDiagnosticsEnabled()) {
+        logWebCodecsDiagnostic('info', 'keyframe_recovery_candidate', {
+          seq: packet.seq,
+          gopId: packet.gopId,
+          codec: packet.codec,
+          frameClass: packet.frameClass,
+          keyFlag: (packet.flags & WIRE_FLAG_KEYFRAME) !== 0,
+          keyFrame: packet.isKeyFrame,
+          hasInjectedParamSets: packet.hasInjectedParamSets,
+          decodeQueueSize: decoder.decodeQueueSize,
+        })
+      }
       this.skipping = false
       this.needsReconfigure = true
     }
@@ -274,6 +386,21 @@ export class StreamDecoder {
         this.skipping = true
         this.stats.resyncs++
         this.congestionStreak = 0
+        this.countDiagnostic('congestionDrops')
+        logWebCodecsDiagnostic('warn', 'decode_queue_resync', {
+          seq: packet.seq,
+          gopId: packet.gopId,
+          codec: packet.codec,
+          frameClass: packet.frameClass,
+          decodeQueueSize: decoder.decodeQueueSize,
+          maxDecodeQueueFrames: MAX_DECODE_QUEUE_FRAMES,
+          framesSinceConfigure: this.framesSinceConfigure,
+          configuredForMs:
+            this.configuredAtMs === null
+              ? null
+              : Math.round(performance.now() - this.configuredAtMs),
+          resyncs: this.stats.resyncs,
+        })
         return false
       }
     } else {
@@ -289,9 +416,10 @@ export class StreamDecoder {
     ) {
       // 未初始化前必须等到关键帧（参数集随关键帧到达或由服务端注入）
       if (!packet.isKeyFrame) {
+        this.countDiagnostic('initialKeyFrameDrops')
         return false
       }
-      if (!this.reconfigure(codecStr, packet.frameClass)) {
+      if (!this.reconfigure(codecStr, packet.frameClass, packet)) {
         return false
       }
     }
@@ -304,13 +432,95 @@ export class StreamDecoder {
       })
       decoder.decode(chunk)
       this.framesSinceConfigure++
+      this.countDiagnostic('submittedChunks')
       return true
     } catch (err) {
       // EncodedVideoChunk 构造或入队失败：隔离旧实例，等下一个关键帧重建。
       this.recoverFromDecoderError(
-        err instanceof Error ? err : new Error(String(err))
+        err instanceof Error ? err : new Error(String(err)),
+        'decode'
       )
       return false
+    }
+  }
+
+  private recordDiagnosticPacket(packet: ParsedPacket): void {
+    if (!isWebCodecsDiagnosticsEnabled()) {
+      this.diagnosticWindowStart = 0
+      this.diagnosticCounters = emptyDiagnosticCounters()
+      this.diagnosticLastPacket = null
+      return
+    }
+
+    const now = Date.now()
+    if (this.diagnosticWindowStart === 0) {
+      this.diagnosticWindowStart = now
+    } else if (now - this.diagnosticWindowStart >= 1000) {
+      logWebCodecsDiagnostic('info', '1s_decoder_summary', {
+        durationMs: now - this.diagnosticWindowStart,
+        ...this.diagnosticCounters,
+        state: this.decoder?.state ?? 'unavailable',
+        decodeQueueSize: this.decoder?.decodeQueueSize ?? null,
+        configured: this.isConfigured,
+        configuredCodec: this.configuredCodec,
+        configuredForMs:
+          this.configuredAtMs === null
+            ? null
+            : Math.round(performance.now() - this.configuredAtMs),
+        skipping: this.skipping,
+        needsReconfigure: this.needsReconfigure,
+        resyncs: this.stats.resyncs,
+        rebuilds: this.stats.rebuilds,
+        errors: this.stats.errors,
+        lastPacket: this.diagnosticLastPacket,
+      })
+      this.diagnosticWindowStart = now
+      this.diagnosticCounters = emptyDiagnosticCounters()
+      this.diagnosticLastPacket = null
+    }
+
+    this.diagnosticCounters.inputPackets++
+    if (packet.isKeyFrame) this.diagnosticCounters.keyPackets++
+    if (packet.frameClass === 'idr') {
+      this.diagnosticCounters.idrClassPackets++
+    }
+    if ((packet.flags & WIRE_FLAG_KEYFRAME) !== 0) {
+      this.diagnosticCounters.keyFlagPackets++
+    }
+    this.diagnosticLastPacket = {
+      seq: packet.seq,
+      gopId: packet.gopId,
+      codec: packet.codec,
+      frameClass: packet.frameClass,
+      keyFrame: packet.isKeyFrame,
+      keyFlag: (packet.flags & WIRE_FLAG_KEYFRAME) !== 0,
+      hasInjectedParamSets: packet.hasInjectedParamSets,
+      payloadBytes: packet.payload.byteLength,
+      ptsUs: packet.ptsUs,
+    }
+  }
+
+  private recordDiagnosticOutput(): void {
+    if (isWebCodecsDiagnosticsEnabled()) {
+      this.diagnosticCounters.outputFrames++
+    }
+  }
+
+  private countDiagnostic(
+    counter: keyof Pick<
+      DecoderDiagnosticCounters,
+      | 'waitingForKeyFrameDrops'
+      | 'congestionDrops'
+      | 'initialKeyFrameDrops'
+      | 'unknownCodecDrops'
+      | 'decoderUnavailableDrops'
+      | 'keyFrameRecoveries'
+      | 'submittedChunks'
+      | 'configureAttempts'
+    >
+  ): void {
+    if (isWebCodecsDiagnosticsEnabled()) {
+      this.diagnosticCounters[counter]++
     }
   }
 
@@ -334,10 +544,18 @@ export class StreamDecoder {
       : extractH264Codec(packet.payload)
   }
 
-  private reconfigure(codecStr: string, frameClass: FrameClass): boolean {
-    if (!this.decoder || this.decoder.state === 'closed') return false
+  private reconfigure(
+    codecStr: string,
+    frameClass: FrameClass,
+    packet: ParsedPacket
+  ): boolean {
+    if (!this.decoder || this.decoder.state === 'closed') {
+      this.countDiagnostic('decoderUnavailableDrops')
+      return false
+    }
 
     const config = this.buildConfig(codecStr)
+    this.countDiagnostic('configureAttempts')
     try {
       this.decoder.configure(config)
       this.configuredCodec = codecStr
@@ -345,11 +563,25 @@ export class StreamDecoder {
       this.needsReconfigure = false
       this.framesSinceConfigure = 0
       this.congestionStreak = 0
+      this.configuredAtMs = performance.now()
       return true
     } catch (err) {
       this.stats.errors++
       this.isConfigured = false
       this.skipping = frameClass !== 'idr'
+      this.configuredAtMs = null
+      logWebCodecsDiagnostic('error', 'decoder_configure_failed', {
+        seq: packet.seq,
+        gopId: packet.gopId,
+        codec: packet.codec,
+        codecString: codecStr,
+        frameClass: packet.frameClass,
+        keyFrame: packet.isKeyFrame,
+        keyFlag: (packet.flags & WIRE_FLAG_KEYFRAME) !== 0,
+        hasInjectedParamSets: packet.hasInjectedParamSets,
+        errorName: err instanceof Error ? err.name : 'UnknownError',
+        errorMessage: err instanceof Error ? err.message : String(err),
+      })
       if (this.onError && err instanceof Error) {
         this.onError(err)
       }
@@ -389,11 +621,23 @@ export class StreamDecoder {
     this.skipping = true
     this.framesSinceConfigure = 0
     this.congestionStreak = 0
+    this.configuredAtMs = null
   }
 
-  private recoverFromDecoderError(error: DOMException | Error): void {
+  private recoverFromDecoderError(
+    error: DOMException | Error,
+    source: 'async' | 'decode'
+  ): void {
     this.stats.errors++
     this.stats.rebuilds++
+    logWebCodecsDiagnostic('error', 'decoder_error', {
+      source,
+      errorName: error.name,
+      errorMessage: error.message,
+      state: this.decoder?.state ?? 'unavailable',
+      decodeQueueSize: this.decoder?.decodeQueueSize ?? null,
+      configuredCodec: this.configuredCodec,
+    })
     const decoder = this.decoder
     this.decoder = null
     if (decoder && decoder.state !== 'closed') {
@@ -409,6 +653,7 @@ export class StreamDecoder {
     this.skipping = true
     this.framesSinceConfigure = 0
     this.congestionStreak = 0
+    this.configuredAtMs = null
     this.onError?.(error)
     this.initDecoder()
   }
@@ -432,5 +677,6 @@ export class StreamDecoder {
     this.configuredCodec = null
     this.needsReconfigure = true
     this.skipping = true
+    this.configuredAtMs = null
   }
 }

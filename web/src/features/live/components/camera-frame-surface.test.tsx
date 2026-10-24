@@ -34,7 +34,9 @@ vi.mock('../hooks/use-stream-connection', () => ({
 }))
 
 vi.mock('../services/webcodecs-decoder', () => ({
+  isWebCodecsDiagnosticsEnabled: () => false,
   isWebCodecsSupported: () => mocks.supported,
+  logWebCodecsDiagnostic: () => {},
   StreamDecoder: class {
     constructor(options: { onFrame: (frame: VideoFrame) => void }) {
       mocks.decoderOnFrame = options.onFrame

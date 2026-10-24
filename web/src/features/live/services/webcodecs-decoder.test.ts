@@ -215,6 +215,74 @@ describe('StreamDecoder 重同步语义', () => {
     }
   })
 
+  it('debug mode reports packet classification and decoder flow once per second', () => {
+    class FakeVideoDecoder {
+      state: 'unconfigured' | 'configured' | 'closed' = 'unconfigured'
+      decodeQueueSize = 0
+
+      constructor(_callbacks: VideoDecoderInit) {}
+
+      configure(_config: VideoDecoderConfig) {
+        this.state = 'configured'
+      }
+
+      decode(_chunk: EncodedVideoChunk) {}
+
+      reset() {
+        this.state = 'unconfigured'
+      }
+
+      close() {
+        this.state = 'closed'
+      }
+    }
+
+    class FakeEncodedVideoChunk {
+      constructor(_init: EncodedVideoChunkInit) {}
+    }
+
+    const previousDiagnostics = window.__ZHULONG_WEB_CODECS_DIAGNOSTICS__
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const nowSpy = vi.spyOn(Date, 'now')
+    vi.stubGlobal('VideoDecoder', FakeVideoDecoder)
+    vi.stubGlobal('EncodedVideoChunk', FakeEncodedVideoChunk)
+    window.__ZHULONG_WEB_CODECS_DIAGNOSTICS__ = true
+
+    const decoder = new StreamDecoder({ onFrame: () => {} })
+    try {
+      nowSpy.mockReturnValue(1000)
+      expect(decoder.decode(packet({ isKeyFrame: true, ptsUs: 0 }))).toBe(true)
+
+      nowSpy.mockReturnValue(2001)
+      expect(decoder.decode(packet({ isKeyFrame: false, ptsUs: 40_000 }))).toBe(
+        true
+      )
+
+      const summary = infoSpy.mock.calls.find(
+        ([event]) => event === '[Zhulong][WebCodecs] 1s_decoder_summary'
+      )?.[1]
+      expect(summary).toMatchObject({
+        inputPackets: 1,
+        keyPackets: 1,
+        idrClassPackets: 1,
+        keyFlagPackets: 0,
+        submittedChunks: 1,
+        outputFrames: 0,
+        lastPacket: { frameClass: 'idr', keyFrame: true, keyFlag: false },
+      })
+    } finally {
+      decoder.close()
+      if (previousDiagnostics === undefined) {
+        delete window.__ZHULONG_WEB_CODECS_DIAGNOSTICS__
+      } else {
+        window.__ZHULONG_WEB_CODECS_DIAGNOSTICS__ = previousDiagnostics
+      }
+      infoSpy.mockRestore()
+      nowSpy.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('时间轴跳变后必须等待关键帧（不能继续喂 delta 帧）', () => {
     const decoder = new StreamDecoder({ onFrame: () => {} })
     try {

@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, type RefObject } from 'react'
-import { StreamDecoder } from '../services/webcodecs-decoder'
+import { createRenderDiagnosticSession } from '../services/render-diagnostics'
+import {
+  isWebCodecsDiagnosticsEnabled,
+  logWebCodecsDiagnostic,
+  StreamDecoder,
+} from '../services/webcodecs-decoder'
 
 export interface UseWebCodecsRenderLoopOptions {
   /** 为 false 时不建解码器（例如环境不支持 WebCodecs）。 */
@@ -43,6 +48,7 @@ export function useWebCodecsRenderLoop({
 }: UseWebCodecsRenderLoopOptions): UseWebCodecsRenderLoopResult {
   const pendingFrameRef = useRef<VideoFrame | null>(null)
   const rafIdRef = useRef<number | null>(null)
+  const lastRafRequestedAtRef = useRef<number | null>(null)
   const decoderRef = useRef<StreamDecoder | null>(null)
 
   // 回调经 ref 读取：放进依赖数组会让解码器按帧重建
@@ -64,6 +70,7 @@ export function useWebCodecsRenderLoop({
       cancelAnimationFrame(rafIdRef.current)
       rafIdRef.current = null
     }
+    lastRafRequestedAtRef.current = null
     if (pendingFrameRef.current) {
       pendingFrameRef.current.close()
       pendingFrameRef.current = null
@@ -74,14 +81,30 @@ export function useWebCodecsRenderLoop({
   useEffect(() => {
     if (!enabled) return
 
-    const renderLoop = () => {
+    const diagnostic = createRenderDiagnosticSession(logWebCodecsDiagnostic)
+
+    const renderLoop = (timestamp: number) => {
+      diagnostic.count('rafCallbacks')
+      if (!isWebCodecsDiagnosticsEnabled()) {
+        lastRafRequestedAtRef.current = null
+      } else if (lastRafRequestedAtRef.current !== null) {
+        diagnostic.recordRafDelay(
+          Math.max(0, timestamp - lastRafRequestedAtRef.current)
+        )
+        lastRafRequestedAtRef.current = null
+      }
+
       const frame = pendingFrameRef.current
       pendingFrameRef.current = null
       rafIdRef.current = null
-      if (!frame) return
+      if (!frame) {
+        diagnostic.count('rafWithoutFrame')
+        return
+      }
 
       const canvas = canvasRef.current
       if (!canvas) {
+        diagnostic.count('framesWithoutCanvas')
         // canvas 已卸载：必须关闭，否则解码帧泄漏
         frame.close()
         return
@@ -97,24 +120,51 @@ export function useWebCodecsRenderLoop({
 
       const ctx = canvas.getContext('2d')
       if (ctx) {
-        ctx.drawImage(frame, 0, 0, canvas.width, canvas.height)
+        const drawStartedAt = diagnostic.now()
+        try {
+          ctx.drawImage(frame, 0, 0, canvas.width, canvas.height)
+          if (drawStartedAt > 0) {
+            diagnostic.recordDraw(performance.now() - drawStartedAt)
+          }
+        } catch (error) {
+          diagnostic.count('drawErrors')
+          if (isWebCodecsDiagnosticsEnabled()) {
+            logWebCodecsDiagnostic('error', 'canvas_draw_failed', {
+              errorName: error instanceof Error ? error.name : 'UnknownError',
+              errorMessage:
+                error instanceof Error ? error.message : String(error),
+              frameSize: `${frame.displayWidth}x${frame.displayHeight}`,
+              canvasSize: `${canvas.width}x${canvas.height}`,
+            })
+          }
+          throw error
+        }
+      } else {
+        diagnostic.count('framesWithoutContext')
       }
 
       onFrameDrawnRef.current?.(frame, canvas)
+      diagnostic.count('frameCallbacks')
       frame.close()
     }
 
     const decoder = new StreamDecoder({
       onFrame: (frame: VideoFrame) => {
+        diagnostic.recordOutputFrame(frame, canvasRef.current)
         if (isPausedRef.current?.()) {
+          diagnostic.count('pausedDrops')
           frame.close()
           return
         }
         if (pendingFrameRef.current) {
+          diagnostic.count('replacedPendingFrames')
           pendingFrameRef.current.close()
         }
         pendingFrameRef.current = frame
         if (rafIdRef.current === null) {
+          diagnostic.count('rafRequests')
+          const requestedAt = diagnostic.now()
+          lastRafRequestedAtRef.current = requestedAt > 0 ? requestedAt : null
           rafIdRef.current = requestAnimationFrame(renderLoop)
         }
       },
@@ -129,6 +179,7 @@ export function useWebCodecsRenderLoop({
         cancelAnimationFrame(rafIdRef.current)
         rafIdRef.current = null
       }
+      lastRafRequestedAtRef.current = null
       if (pendingFrameRef.current) {
         pendingFrameRef.current.close()
         pendingFrameRef.current = null
