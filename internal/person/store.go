@@ -117,7 +117,7 @@ func (s *Store) CreatePerson(ctx context.Context, p *Person) error {
 //
 // The preload is narrowed to the summary columns: no caller of GetPerson needs a
 // feature vector. The gallery paths that do (GetGallerySyncData, the re-publish
-// after a rename) read them through ListAllPersons / ListFacesByPerson.
+// after a rename) read them through ListPersonsForGallery / ListFacesByPerson.
 func (s *Store) GetPerson(ctx context.Context, id string) (*Person, error) {
 	db, err := s.db(ctx)
 	if err != nil {
@@ -163,8 +163,11 @@ func (s *Store) ListPersons(ctx context.Context, limit, offset int, search strin
 	query := db.Model(&Person{})
 	search = strings.TrimSpace(search)
 	if search != "" {
-		likePattern := "%" + search + "%"
-		query = query.Where("name LIKE ? OR (person_id IS NOT NULL AND person_id LIKE ?)", likePattern, likePattern)
+		// The keyword is data, not a pattern: % and _ must match themselves instead of
+		// turning a search for "50%" into a full-table wildcard.
+		likePattern := "%" + escapeLike(search) + "%"
+		query = query.Where(`name LIKE ? ESCAPE '\' OR (person_id IS NOT NULL AND person_id LIKE ? ESCAPE '\')`,
+			likePattern, likePattern)
 	}
 
 	var total int64
@@ -181,14 +184,40 @@ func (s *Store) ListPersons(ctx context.Context, limit, offset int, search strin
 	return list, total, nil
 }
 
-// ListAllPersons returns all enrolled persons with associated Face templates without pagination (for gallery syncing).
-func (s *Store) ListAllPersons(ctx context.Context) ([]Person, error) {
+// escapeLike neutralises the LIKE metacharacters of a user-supplied keyword.
+//
+// The escape character is the backslash declared by the callers' ESCAPE clause, so a
+// backslash in the input has to be escaped first; doing it in the other order would
+// double-escape the metacharacters added for % and _.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+	)
+	return r.Replace(s)
+}
+
+// ListPersonsForGallery returns one page of persons with every face template, feature
+// vectors included. Gallery sync walks it page by page instead of loading the whole
+// gallery in one query.
+//
+// The page bound of clampPagination deliberately does not apply: this reader is an
+// internal iterator, not a client-facing page, and silently capping it would truncate
+// the gallery that the caller believes it has read in full.
+func (s *Store) ListPersonsForGallery(ctx context.Context, limit, offset int) ([]Person, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return nil, err
 	}
+	if limit <= 0 {
+		limit = defaultPageSize
+	}
+	if offset < 0 {
+		offset = 0
+	}
 	var list []Person
-	if err := db.Preload("Faces").Order("created_at ASC, id ASC").Find(&list).Error; err != nil {
+	if err := db.Preload("Faces").Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
 		return nil, err
 	}
 	return list, nil

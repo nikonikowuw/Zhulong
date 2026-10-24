@@ -97,6 +97,14 @@ var (
 			"zh-Hans": "输入值无效",
 			"zh-Hant": "輸入值無效",
 		},
+		// DATABASE_ERROR is the machine code every domain store failure is reported
+		// under. It lives in the shared catalog because the text must not name the
+		// failing operation: the underlying cause is logged server-side only.
+		"DATABASE_ERROR": {
+			"en":      "Storage operation failed",
+			"zh-Hans": "数据存储操作失败",
+			"zh-Hant": "資料儲存操作失敗",
+		},
 		"NO_FACE_DETECTED": {
 			"en":      "No detectable face found in the uploaded photo",
 			"zh-Hans": "上传的照片中未检测到清晰人脸",

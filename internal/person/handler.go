@@ -2,10 +2,8 @@ package person
 
 import (
 	"net/http"
-	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
@@ -289,18 +287,16 @@ func (h *Handler) GetFaceImage(c *gin.Context) {
 	personID := c.Param("id")
 	faceID := c.Param("face_id")
 
-	imgPath, err := h.service.GetFaceImagePath(c.Request.Context(), personID, faceID)
+	file, info, err := h.service.OpenFaceImage(c.Request.Context(), personID, faceID)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
+	defer file.Close()
 
-	if _, err := os.Stat(imgPath); err != nil {
-		httputil.WriteError(c, apperr.NotFound("IMAGE_NOT_FOUND", "image file not found on disk", err))
-		return
-	}
-
-	c.File(imgPath)
+	// ServeContent owns the stat result and the Range handling: reopening the path the
+	// service just resolved would reintroduce the traversal window it closed.
+	http.ServeContent(c.Writer, c.Request, info.Name(), info.ModTime(), file)
 }
 
 // DeleteFace godoc

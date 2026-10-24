@@ -87,7 +87,7 @@ func TestStorePersonMultiFaceCRUD(t *testing.T) {
 		t.Fatalf("expected 2 registered faces for person, got %d", len(foundPerson.Faces))
 	}
 
-	// 4.1 Test ListPersons (paginated) and ListAllPersons
+	// 4.1 Test ListPersons (paginated) and the gallery page reader
 	pList, total, err := store.ListPersons(ctx, 10, 0, "")
 	if err != nil {
 		t.Fatalf("ListPersons failed: %v", err)
@@ -95,12 +95,15 @@ func TestStorePersonMultiFaceCRUD(t *testing.T) {
 	if total != 1 || len(pList) != 1 {
 		t.Fatalf("expected total 1 and len 1, got total=%d len=%d", total, len(pList))
 	}
-	allPersons, err := store.ListAllPersons(ctx)
+	allPersons, err := store.ListPersonsForGallery(ctx, 10, 0)
 	if err != nil {
-		t.Fatalf("ListAllPersons failed: %v", err)
+		t.Fatalf("ListPersonsForGallery failed: %v", err)
 	}
 	if len(allPersons) != 1 {
-		t.Fatalf("expected len 1 for ListAllPersons, got %d", len(allPersons))
+		t.Fatalf("expected len 1 for ListPersonsForGallery, got %d", len(allPersons))
+	}
+	if len(allPersons[0].Faces) != 2 {
+		t.Errorf("expected the gallery page to carry feature vectors for both faces, got %d", len(allPersons[0].Faces))
 	}
 
 	// 5. List this person's faces

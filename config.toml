@@ -20,6 +20,11 @@ directory = "./data"
 # Directory for enrolled face template photos.
 # Defaults to "<data.directory>/faces" if omitted or left empty.
 faces_directory = ""
+# Refuse face enrollment for a person that has no personId yet.
+# Enable this when recognitions are reported to an external business system: a face
+# whose owner has no business key can only ever produce an unreportable record, so the
+# refusal happens at enrollment instead of surfacing later as undeliverable evidence.
+require_person_id_for_face_enrollment = false
 
 # Must match manifest.json platform.target for algorithm packages.
 [algorithm]

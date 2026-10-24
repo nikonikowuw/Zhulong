@@ -16,7 +16,8 @@ type fileConfig struct {
 		Directory string `mapstructure:"directory"`
 	} `mapstructure:"data"`
 	Person struct {
-		FacesDirectory string `mapstructure:"faces_directory"`
+		FacesDirectory               string `mapstructure:"faces_directory"`
+		RequirePersonIDForEnrollment bool   `mapstructure:"require_person_id_for_face_enrollment"`
 	} `mapstructure:"person"`
 	Logging app.LoggingConfig `mapstructure:"logging"`
 	Network struct {
@@ -42,6 +43,7 @@ func loadConfigFile(path string) (app.Config, error) {
 	settings.SetDefault("http.address", defaults.HTTPAddress)
 	settings.SetDefault("data.directory", defaults.DataDir)
 	settings.SetDefault("person.faces_directory", "")
+	settings.SetDefault("person.require_person_id_for_face_enrollment", false)
 	settings.SetDefault("logging.development", defaults.Development)
 	settings.SetDefault("logging.level", defaults.Logging.Level)
 	settings.SetDefault("logging.format", defaults.Logging.Format)
@@ -87,14 +89,15 @@ func loadConfigFile(path string) (app.Config, error) {
 	}
 
 	return app.Config{
-		HTTPAddress:     values.HTTP.Address,
-		DataDir:         values.Data.Directory,
-		FacesDir:        facesDir,
-		AlgorithmTarget: values.Algorithm.Target,
-		Development:     values.Logging.Development,
-		Logging:         values.Logging,
-		ConfigPath:      filepath.Clean(configPath),
-		CustomScript:    values.Network.CustomScript,
-		SessionTTL:      sessionTTL,
+		HTTPAddress:                  values.HTTP.Address,
+		DataDir:                      values.Data.Directory,
+		FacesDir:                     facesDir,
+		AlgorithmTarget:              values.Algorithm.Target,
+		Development:                  values.Logging.Development,
+		Logging:                      values.Logging,
+		ConfigPath:                   filepath.Clean(configPath),
+		CustomScript:                 values.Network.CustomScript,
+		SessionTTL:                   sessionTTL,
+		RequirePersonIDForEnrollment: values.Person.RequirePersonIDForEnrollment,
 	}, nil
 }

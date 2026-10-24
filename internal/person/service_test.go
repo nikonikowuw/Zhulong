@@ -169,7 +169,7 @@ func TestGetGallerySyncData(t *testing.T) {
 	defer dbStore.Close()
 
 	store := NewStore(dbStore)
-	svc := NewService(store, tempDir, nil, nil, zap.NewNop())
+	svc := NewService(store, tempDir, nil, nil, Options{}, zap.NewNop())
 	ctx := context.Background()
 
 	p := &Person{
@@ -236,7 +236,7 @@ func newTestService(t *testing.T) *Service {
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	return NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), nil, zap.NewNop())
+	return NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), nil, Options{}, zap.NewNop())
 }
 
 func requireDomainError(t *testing.T, err error, kind apperr.Kind, code string) {
@@ -556,15 +556,17 @@ func TestFaceSubresourcesAreScopedToOwningPerson(t *testing.T) {
 		t.Fatalf("enroll face: %v", err)
 	}
 
-	_, err = svc.GetFaceImagePath(ctx, other.ID, face.ID)
+	_, _, err = svc.OpenFaceImage(ctx, other.ID, face.ID)
 	requireDomainError(t, err, apperr.KindNotFound, "FACE_NOT_FOUND")
 	requireDomainError(t, svc.DeleteFace(ctx, other.ID, face.ID), apperr.KindNotFound, "FACE_NOT_FOUND")
 
 	// The owner's own path still resolves, proving the rejection above was scoping
 	// and not a blanket failure.
-	if _, err := svc.GetFaceImagePath(ctx, owner.ID, face.ID); err != nil {
+	file, _, err := svc.OpenFaceImage(ctx, owner.ID, face.ID)
+	if err != nil {
 		t.Fatalf("owner should resolve their own face: %v", err)
 	}
+	file.Close()
 }
 
 // TestAuditActionNamespaces keeps the <domain>.<resource>.<verb> naming contract that
@@ -581,9 +583,10 @@ func TestAuditActionNamespaces(t *testing.T) {
 	}
 }
 
-// TestServiceDoesNotDependOnAudit pins the layering rule: the person service has no
-// audit dependency, so user-operation auditing cannot drift back into the service layer.
-func TestServiceDoesNotDependOnAudit(t *testing.T) {
+// TestUpdatePersonRejectsBusinessKeyReassignment pins the immutability rule at the
+// service boundary: a rejected reassignment returns a domain error and leaves the
+// stored key untouched.
+func TestUpdatePersonRejectsBusinessKeyReassignment(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
@@ -592,15 +595,23 @@ func TestServiceDoesNotDependOnAudit(t *testing.T) {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
 
-	// A refused immutable-key reassignment must still return a domain error; it
-	// simply no longer writes an audit record from this layer.
 	other := "EMP_OTHER"
-	if _, err := svc.UpdatePerson(ctx, created.ID, UpdatePersonRequest{PersonID: &other}); err == nil {
-		t.Fatal("expected the personId reassignment to be rejected")
+	_, err = svc.UpdatePerson(ctx, created.ID, UpdatePersonRequest{PersonID: &other})
+	requireDomainError(t, err, apperr.KindConflict, "PERSON_ID_IMMUTABLE")
+
+	stored, err := svc.GetPerson(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetPerson failed: %v", err)
+	}
+	if stored.PersonID == nil || *stored.PersonID != "EMP_1" {
+		t.Errorf("expected the business key to stay EMP_1, got %v", stored.PersonID)
 	}
 }
 
-func TestGetFaceImagePath_RelativeAndAbsoluteResolution(t *testing.T) {
+// TestOpenFaceImageStaysInsideFacesDirectory pins the containment contract of the
+// only read path for enrolled photos: reads go through an os.Root handle, so neither a
+// relative escape nor a symlink inside the faces directory can reach outside it.
+func TestOpenFaceImageStaysInsideFacesDirectory(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 
@@ -613,53 +624,86 @@ func TestGetFaceImagePath_RelativeAndAbsoluteResolution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddFaceWithReader failed: %v", err)
 	}
-
-	// 1. Verify stored path is relative
 	if filepath.IsAbs(face.ImagePath) {
 		t.Errorf("expected ImagePath in memory/DB to be relative, got: %s", face.ImagePath)
 	}
 
-	// 2. Verify GetFaceImagePath resolves to absolute path on disk
-	resolved, err := svc.GetFaceImagePath(ctx, p.ID, face.ID)
+	// A relative name resolves to the enrolled photo itself.
+	file, info, err := svc.OpenFaceImage(ctx, p.ID, face.ID)
 	if err != nil {
-		t.Fatalf("GetFaceImagePath failed: %v", err)
+		t.Fatalf("OpenFaceImage failed: %v", err)
 	}
-	expected := filepath.Join(svc.facesDir, face.ImagePath)
-	if resolved != expected {
-		t.Errorf("expected resolved path %s, got %s", expected, resolved)
+	if info.Name() != face.ImagePath {
+		t.Errorf("expected %q, got %q", face.ImagePath, info.Name())
 	}
+	if info.IsDir() {
+		t.Error("expected a regular file, got a directory")
+	}
+	file.Close()
 
-	// 3. Test backward compatibility: legacy absolute path within facesDir resolves correctly
-	legacyFace := &Face{
+	// Rows from an older deployment may hold an absolute path; it resolves only when
+	// it lives inside the faces directory.
+	legacy := &Face{
 		ID:            "legacy_face_id",
 		PersonRowID:   p.ID,
 		ImagePath:     filepath.Join(svc.facesDir, "legacy_photo.jpg"),
 		FeatureVector: make([]byte, 2048),
 	}
-	if err := svc.store.AddFace(ctx, legacyFace); err != nil {
+	if err := os.WriteFile(legacy.ImagePath, testPNGBytes, 0o644); err != nil {
+		t.Fatalf("write legacy photo: %v", err)
+	}
+	if err := svc.store.AddFace(ctx, legacy); err != nil {
 		t.Fatalf("AddFace legacy failed: %v", err)
 	}
-	resolvedLegacy, err := svc.GetFaceImagePath(ctx, p.ID, legacyFace.ID)
+	legacyFile, _, err := svc.OpenFaceImage(ctx, p.ID, legacy.ID)
 	if err != nil {
-		t.Fatalf("GetFaceImagePath for legacy failed: %v", err)
+		t.Fatalf("expected a legacy absolute path inside the faces directory to resolve: %v", err)
 	}
-	if resolvedLegacy != legacyFace.ImagePath {
-		t.Errorf("expected %s, got %s", legacyFace.ImagePath, resolvedLegacy)
-	}
+	legacyFile.Close()
 
-	// 4. Test path traversal rejection: absolute path outside facesDir must be rejected
-	escapingFace := &Face{
+	// Absolute paths outside the faces directory are refused.
+	escaping := &Face{
 		ID:            "escape_face_id",
 		PersonRowID:   p.ID,
 		ImagePath:     "/etc/shadow",
 		FeatureVector: make([]byte, 2048),
 	}
-	if err := svc.store.AddFace(ctx, escapingFace); err != nil {
+	if err := svc.store.AddFace(ctx, escaping); err != nil {
 		t.Fatalf("AddFace escaping failed: %v", err)
 	}
-	if _, err := svc.GetFaceImagePath(ctx, p.ID, escapingFace.ID); err == nil {
-		t.Errorf("expected GetFaceImagePath to reject escaping path /etc/shadow")
+	if _, _, err := svc.OpenFaceImage(ctx, p.ID, escaping.ID); err == nil {
+		t.Error("expected an absolute path outside the faces directory to be rejected")
 	}
+
+	// A symlink planted inside the faces directory must not be followed out of it.
+	symlinkFace := &Face{
+		ID:            "symlink_face_id",
+		PersonRowID:   p.ID,
+		ImagePath:     "planted.jpg",
+		FeatureVector: make([]byte, 2048),
+	}
+	if err := svc.store.AddFace(ctx, symlinkFace); err != nil {
+		t.Fatalf("AddFace symlink failed: %v", err)
+	}
+	if err := os.Symlink("/etc/shadow", filepath.Join(svc.facesDir, "planted.jpg")); err != nil {
+		t.Skipf("symlinks unavailable in this environment: %v", err)
+	}
+	if _, _, err := svc.OpenFaceImage(ctx, p.ID, symlinkFace.ID); err == nil {
+		t.Error("expected os.Root to refuse a symlink pointing outside the faces directory")
+	}
+
+	// A database row whose file vanished is a 404 on the image, not a 500.
+	missing := &Face{
+		ID:            "missing_face_id",
+		PersonRowID:   p.ID,
+		ImagePath:     "gone.jpg",
+		FeatureVector: make([]byte, 2048),
+	}
+	if err := svc.store.AddFace(ctx, missing); err != nil {
+		t.Fatalf("AddFace missing failed: %v", err)
+	}
+	_, _, err = svc.OpenFaceImage(ctx, p.ID, missing.ID)
+	requireDomainError(t, err, apperr.KindNotFound, "IMAGE_NOT_FOUND")
 }
 
 type mockExtractor struct {
@@ -688,7 +732,7 @@ func TestAddFace_WithExtractor_Success(t *testing.T) {
 	}
 
 	extractor := &mockExtractor{features: expectedFeats}
-	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, Options{}, zap.NewNop())
 	ctx := context.Background()
 
 	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("P_EXTRACT_1"), Name: "特征提取测试员"})
@@ -746,7 +790,7 @@ func TestAddFace_WithExtractor_NoFaceDetected(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	extractor := &mockExtractor{err: fmt.Errorf("%w: mock extractor", ErrNoFaceDetected)}
-	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, Options{}, zap.NewNop())
 	ctx := context.Background()
 
 	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("P_EXTRACT_2"), Name: "失败测试员"})
@@ -789,7 +833,7 @@ func TestAddFace_WithExtractor_DimMismatch(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	extractor := &mockExtractor{features: make([]float32, 256)} // 维度不符
-	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, Options{}, zap.NewNop())
 	ctx := context.Background()
 
 	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("P_EXTRACT_3"), Name: "维度测试员"})
@@ -817,7 +861,7 @@ func TestAddFace_WithoutExtractorFails(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	svc := NewService(NewStore(dbStore), tempDir, nil, nil, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, nil, nil, Options{}, zap.NewNop())
 	ctx := context.Background()
 
 	p, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "无提取器"})
@@ -848,7 +892,7 @@ func TestAddFace_ExtractorFailureIsNotBlamedOnThePhoto(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	extractor := &mockExtractor{err: errors.New("engine crashed")}
-	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, Options{}, zap.NewNop())
 	ctx := context.Background()
 
 	p, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "引擎故障"})
@@ -871,7 +915,7 @@ func TestAddFace_UndecodableImageIsAClientError(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	extractor := &mockExtractor{err: fmt.Errorf("%w: image: unknown format", ErrUnsupportedImageFormat)}
-	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, Options{}, zap.NewNop())
 	ctx := context.Background()
 
 	p, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "格式错误"})
@@ -925,7 +969,7 @@ func TestGalleryNotifier_AddUpdateDelete(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	notifier := &mockGalleryNotifier{}
-	svc := NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), notifier, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), notifier, Options{}, zap.NewNop())
 	ctx := context.Background()
 
 	// 1. Create Person
@@ -981,5 +1025,250 @@ func TestGalleryNotifier_AddUpdateDelete(t *testing.T) {
 	}
 	if notifier.deletes[1].faceID != "" || notifier.deletes[1].personID != "NOTIFY_P1" {
 		t.Errorf("person delete mismatch: %+v", notifier.deletes[1])
+	}
+}
+
+// TestUpdatePersonNoOpIsNotAWrite pins that a payload repeating the stored values does
+// not bump updated_at and does not re-broadcast the person's gallery entry.
+func TestUpdatePersonNoOpIsNotAWrite(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	notifier := &mockGalleryNotifier{}
+	svc := NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), notifier, Options{}, zap.NewNop())
+	ctx := context.Background()
+
+	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("EMP_SAME"), Name: "同名"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+	if notifier.upserts != nil {
+		t.Fatalf("CreatePerson must not publish to the gallery, got %d upserts", len(notifier.upserts))
+	}
+
+	before, err := svc.GetPerson(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetPerson failed: %v", err)
+	}
+
+	sameName := "同名"
+	updated, err := svc.UpdatePerson(ctx, created.ID, UpdatePersonRequest{
+		Name:     &sameName,
+		PersonID: strPtr("EMP_SAME"),
+	})
+	if err != nil {
+		t.Fatalf("UpdatePerson failed: %v", err)
+	}
+	if !updated.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("expected updated_at to stay %v on a no-op update, got %v", before.UpdatedAt, updated.UpdatedAt)
+	}
+	if len(notifier.upserts) != 0 {
+		t.Errorf("expected no gallery re-publish on a no-op update, got %d", len(notifier.upserts))
+	}
+}
+
+// TestUpdatePersonReturnsTheSameProjectionAsGet pins that a write answers with the
+// preloaded face list GET returns, so a client replacing its cached person with the
+// response cannot lose the faces.
+func TestUpdatePersonReturnsTheSameProjectionAsGet(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("EMP_FACES"), Name: "有脸"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+	if _, err := svc.AddFaceWithReader(ctx, created.ID, "a.jpg", bytes.NewReader(testJPEGBytes)); err != nil {
+		t.Fatalf("AddFaceWithReader failed: %v", err)
+	}
+
+	newName := "改名了"
+	updated, err := svc.UpdatePerson(ctx, created.ID, UpdatePersonRequest{Name: &newName})
+	if err != nil {
+		t.Fatalf("UpdatePerson failed: %v", err)
+	}
+	got, err := svc.GetPerson(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetPerson failed: %v", err)
+	}
+	if len(updated.Faces) != len(got.Faces) || len(updated.Faces) != 1 {
+		t.Errorf("expected the update response to carry the face list, got %d (GET has %d)",
+			len(updated.Faces), len(got.Faces))
+	}
+}
+
+// stubKeyBackfiller records the business-key backfill requests the person domain makes.
+type stubKeyBackfiller struct {
+	calls []struct {
+		personRowID string
+		externalID  string
+	}
+	err error
+}
+
+func (s *stubKeyBackfiller) BackfillPersonExternalID(_ context.Context, personRowID, externalID string) (int64, error) {
+	s.calls = append(s.calls, struct {
+		personRowID string
+		externalID  string
+	}{personRowID: personRowID, externalID: externalID})
+	if s.err != nil {
+		return 0, s.err
+	}
+	return 1, nil
+}
+
+// TestUpdatePersonBackfillsRecognitionKeysWhenBinding pins the retro-fill contract: only
+// the transition from "no business key" to "keyed" reaches the record domain.
+func TestUpdatePersonBackfillsRecognitionKeysWhenBinding(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	backfiller := &stubKeyBackfiller{}
+	svc := NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), nil,
+		Options{RecognitionKeyBackfiller: backfiller}, zap.NewNop())
+	ctx := context.Background()
+
+	created, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "未绑定"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+	if len(backfiller.calls) != 0 {
+		t.Fatalf("creation must not trigger a backfill, got %d calls", len(backfiller.calls))
+	}
+
+	if _, err := svc.UpdatePerson(ctx, created.ID, UpdatePersonRequest{PersonID: strPtr("EMP_BIND")}); err != nil {
+		t.Fatalf("binding UpdatePerson failed: %v", err)
+	}
+	if len(backfiller.calls) != 1 {
+		t.Fatalf("expected exactly 1 backfill call after binding, got %d", len(backfiller.calls))
+	}
+	if call := backfiller.calls[0]; call.personRowID != created.ID || call.externalID != "EMP_BIND" {
+		t.Errorf("unexpected backfill arguments: %+v", call)
+	}
+
+	// A rename does not change the business key, so it must not re-run the backfill.
+	newName := "已绑定"
+	if _, err := svc.UpdatePerson(ctx, created.ID, UpdatePersonRequest{Name: &newName}); err != nil {
+		t.Fatalf("rename UpdatePerson failed: %v", err)
+	}
+	if len(backfiller.calls) != 1 {
+		t.Errorf("expected the rename to leave the backfill untouched, got %d calls", len(backfiller.calls))
+	}
+}
+
+// TestAddFaceRequiresBusinessKeyWhenPolicyEnabled pins the enrollment gate: with the
+// policy on, an unreportable face cannot enter the gallery at all.
+func TestAddFaceRequiresBusinessKeyWhenPolicyEnabled(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	svc := NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), nil,
+		Options{RequirePersonIDForEnrollment: true}, zap.NewNop())
+	ctx := context.Background()
+
+	unkeyed, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "未绑定"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+	_, err = svc.AddFaceWithReader(ctx, unkeyed.ID, "a.jpg", bytes.NewReader(testJPEGBytes))
+	requireDomainError(t, err, apperr.KindConflict, "PERSON_ID_REQUIRED_FOR_ENROLLMENT")
+
+	keyed, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("EMP_OK"), Name: "已绑定"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+	if _, err := svc.AddFaceWithReader(ctx, keyed.ID, "b.jpg", bytes.NewReader(testJPEGBytes)); err != nil {
+		t.Fatalf("expected a keyed person to enroll normally: %v", err)
+	}
+}
+
+// TestListPersonsSearchTreatsWildcardsAsText pins that % and _ in a keyword match
+// themselves instead of turning the search into a full-table wildcard.
+func TestListPersonsSearchTreatsWildcardsAsText(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	for _, name := range []string{"50%折扣", "502员工", "A_B", "AXB"} {
+		if _, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: name}); err != nil {
+			t.Fatalf("CreatePerson(%q) failed: %v", name, err)
+		}
+	}
+
+	for _, tc := range []struct {
+		search string
+		want   []string
+	}{
+		{search: "50%", want: []string{"50%折扣"}},
+		{search: "A_B", want: []string{"A_B"}},
+		{search: "502", want: []string{"502员工"}},
+	} {
+		got, total, err := svc.ListPersons(ctx, 20, 0, tc.search)
+		if err != nil {
+			t.Fatalf("ListPersons(%q) failed: %v", tc.search, err)
+		}
+		if int(total) != len(tc.want) {
+			t.Errorf("search %q: expected %d matches, got %d (%+v)", tc.search, len(tc.want), total, got)
+			continue
+		}
+		for i, want := range tc.want {
+			if got[i].Name != want {
+				t.Errorf("search %q: expected %q at %d, got %q", tc.search, want, i, got[i].Name)
+			}
+		}
+	}
+}
+
+// TestGetGallerySyncDataWalksEveryPage guards the paged cold-start sync: a gallery
+// larger than one page must not be truncated to the first page.
+func TestGetGallerySyncDataWalksEveryPage(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	store := NewStore(dbStore)
+	svc := NewService(store, tempDir, nil, nil, Options{}, zap.NewNop())
+	ctx := context.Background()
+
+	// One more person than a single page holds, with the only face on the last one:
+	// a sync that stops after the first page returns no items at all.
+	const total = gallerySyncPageSize + 5
+	var last *Person
+	for range total {
+		p, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "分页员"})
+		if err != nil {
+			t.Fatalf("CreatePerson failed: %v", err)
+		}
+		last = p
+	}
+	if err := store.AddFace(ctx, &Face{
+		ID:            "face_last_page",
+		PersonRowID:   last.ID,
+		ImagePath:     "last.jpg",
+		FeatureVector: make([]byte, faceFeatureDim*4),
+	}); err != nil {
+		t.Fatalf("AddFace failed: %v", err)
+	}
+
+	items, err := svc.GetGallerySyncData(ctx)
+	if err != nil {
+		t.Fatalf("GetGallerySyncData failed: %v", err)
+	}
+	if len(items) != 1 || items[0].FaceID != "face_last_page" {
+		t.Fatalf("expected the face from the last page, got %d items: %+v", len(items), items)
 	}
 }

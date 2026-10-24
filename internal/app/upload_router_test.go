@@ -366,7 +366,7 @@ func TestPersonFaceUploadRouterAllowsLargeImage(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	personComp := person.NewPersonComponents(dbStore, filepath.Join(dataDir, "faces"), stubPersonExtractor{}, nil, zap.NewNop())
+	personComp := person.NewPersonComponents(dbStore, filepath.Join(dataDir, "faces"), stubPersonExtractor{}, nil, person.Options{}, zap.NewNop())
 
 	assets := http.FS(fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("shell")},

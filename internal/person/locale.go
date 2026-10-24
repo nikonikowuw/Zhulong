@@ -99,5 +99,15 @@ func init() {
 			"zh-Hans": "人脸特征维度异常",
 			"zh-Hant": "人臉特徵維度異常",
 		},
+		"FEATURE_EXTRACTOR_UNAVAILABLE": {
+			"en":      "Face feature extraction is not configured",
+			"zh-Hans": "人脸特征提取未配置",
+			"zh-Hant": "人臉特徵提取未設定",
+		},
+		"PERSON_ID_REQUIRED_FOR_ENROLLMENT": {
+			"en":      "Assign a personId before enrolling face photos",
+			"zh-Hans": "请先为该人员绑定人员编号，再登记人脸照片",
+			"zh-Hant": "請先為該人員綁定人員編號，再登記人臉照片",
+		},
 	})
 }

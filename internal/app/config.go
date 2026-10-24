@@ -47,6 +47,11 @@ type Config struct {
 	ConfigPath      string
 	CustomScript    string
 	SessionTTL      time.Duration
+	// RequirePersonIDForEnrollment refuses face enrollment for a person without an
+	// external business key. It is deployment policy, not a schema constraint: an
+	// offline host still creates persons without a key, but a host that reports
+	// recognitions to a business system refuses to build a gallery it cannot attribute.
+	RequirePersonIDForEnrollment bool
 }
 
 func validateHTTPAddress(address string) error {

@@ -470,6 +470,22 @@ func (a *personGalleryAdapter) BroadcastDelete(ctx context.Context, faceID, pers
 	return a.broadcaster.BroadcastDelete(ctx, faceID, personID)
 }
 
+// personKeyBackfillerAdapter bridges the person domain's first-time business-key binding
+// onto recognitions already captured for that person.
+//
+// The translation lives here rather than in either domain: person owns the binding, the
+// record store owns the recognitions table, and neither may reach into the other.
+type personKeyBackfillerAdapter struct {
+	store *record.Store
+}
+
+func (a *personKeyBackfillerAdapter) BackfillPersonExternalID(ctx context.Context, personRowID, externalID string) (int64, error) {
+	if a.store == nil {
+		return 0, nil
+	}
+	return a.store.BackfillPersonExternalID(ctx, personRowID, externalID)
+}
+
 type recordSnapshotFileChecker struct {
 	media *mediafile.Service
 }
@@ -663,6 +679,7 @@ func providePerson(
 	eng *engine.Engine,
 	broadcaster *algorunner.GalleryBroadcaster,
 	supervisor *algorunner.Supervisor,
+	recordStore *record.Store,
 	logger *zap.Logger,
 ) personOut {
 	facesDir := config.FacesDir
@@ -679,8 +696,16 @@ func providePerson(
 	if broadcaster != nil {
 		notifier = &personGalleryAdapter{broadcaster: broadcaster}
 	}
+	var keyBackfiller person.RecognitionKeyBackfiller
+	if recordStore != nil {
+		keyBackfiller = &personKeyBackfillerAdapter{store: recordStore}
+	}
 
-	comp := person.NewPersonComponents(dbProvider, facesDir, extractor, notifier, logger)
+	opts := person.Options{
+		RequirePersonIDForEnrollment: config.RequirePersonIDForEnrollment,
+		RecognitionKeyBackfiller:     keyBackfiller,
+	}
+	comp := person.NewPersonComponents(dbProvider, facesDir, extractor, notifier, opts, logger)
 	if supervisor != nil && broadcaster != nil {
 		supervisor.SetGallerySync(&supervisorGallerySyncAdapter{service: comp.Service}, broadcaster)
 	}

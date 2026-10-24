@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"mime/multipart"
@@ -60,33 +59,65 @@ type GalleryNotifier interface {
 	BroadcastDelete(ctx context.Context, faceID, personID string) error
 }
 
-// Service provides high-level business logic for personnel and face gallery.
-type Service struct {
-	store           *Store
-	extractor       FaceFeatureExtractor
-	galleryNotifier GalleryNotifier
-	facesDir        string
-	logger          *zap.Logger
+// RecognitionKeyBackfiller fills in the business-key snapshot of recognitions that
+// were captured before their person had an external key.
+//
+// It exists because the person domain owns the binding while the record domain owns
+// the rows: binding a key retroactively is a person decision, but only the record
+// store may touch recognitions. Implemented by the record domain; nil disables it.
+type RecognitionKeyBackfiller interface {
+	BackfillPersonExternalID(ctx context.Context, personRowID, externalID string) (int64, error)
 }
 
-// NewService creates a Service instance. extractor and notifier are captured at
-// construction time and never swapped afterwards.
+// Options carries deployment policy and the cross-domain collaborator that the person
+// domain cannot construct itself. Both are captured at construction time.
+type Options struct {
+	// RequirePersonIDForEnrollment rejects face enrollment for a person that has no
+	// external business key yet.
+	//
+	// Enable it once recognitions are reported to an external system: a face whose
+	// owner has no business key can only ever produce an unreportable record, so the
+	// refusal belongs at enrollment instead of surfacing later as a recognition nobody
+	// can hand to the business system.
+	RequirePersonIDForEnrollment bool
+
+	// RecognitionKeyBackfiller backfills historical recognitions when a person's
+	// business key is bound for the first time. Nil disables the backfill.
+	RecognitionKeyBackfiller RecognitionKeyBackfiller
+}
+
+// Service provides high-level business logic for personnel and face gallery.
+type Service struct {
+	store                        *Store
+	extractor                    FaceFeatureExtractor
+	galleryNotifier              GalleryNotifier
+	keyBackfiller                RecognitionKeyBackfiller
+	facesDir                     string
+	logger                       *zap.Logger
+	requirePersonIDForEnrollment bool
+}
+
+// NewService creates a Service instance. Every collaborator and policy flag is
+// captured here and never swapped afterwards.
 func NewService(
 	store *Store,
 	facesDir string,
 	extractor FaceFeatureExtractor,
 	notifier GalleryNotifier,
+	opts Options,
 	logger *zap.Logger,
 ) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &Service{
-		store:           store,
-		extractor:       extractor,
-		galleryNotifier: notifier,
-		facesDir:        facesDir,
-		logger:          logger.Named("person.service"),
+		store:                        store,
+		extractor:                    extractor,
+		galleryNotifier:              notifier,
+		keyBackfiller:                opts.RecognitionKeyBackfiller,
+		facesDir:                     facesDir,
+		logger:                       logger.Named("person.service"),
+		requirePersonIDForEnrollment: opts.RequirePersonIDForEnrollment,
 	}
 }
 
@@ -167,15 +198,20 @@ func (s *Service) UpdatePerson(ctx context.Context, id string, req UpdatePersonR
 		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to get person", err)
 	}
 
+	nameChanged := false
+	personIDChanged := false
+
 	// person_id is the business key external systems correlate on. If not yet assigned (nil or empty),
 	// it can be bound. Once assigned, attempts to change it are rejected with PERSON_ID_IMMUTABLE.
 	if req.PersonID != nil {
 		trimmed := strings.TrimSpace(*req.PersonID)
-		if p.PersonID == nil || *p.PersonID == "" {
+		switch {
+		case p.PersonID == nil || *p.PersonID == "":
 			if trimmed != "" {
 				p.PersonID = &trimmed
+				personIDChanged = true
 			}
-		} else if trimmed != *p.PersonID {
+		case trimmed != *p.PersonID:
 			return nil, apperr.Conflict("PERSON_ID_IMMUTABLE", "personId cannot be changed", nil)
 		}
 	}
@@ -184,7 +220,17 @@ func (s *Service) UpdatePerson(ctx context.Context, id string, req UpdatePersonR
 		if err != nil {
 			return nil, err
 		}
-		p.Name = name
+		if name != p.Name {
+			p.Name = name
+			nameChanged = true
+		}
+	}
+
+	// A payload that repeats the stored values is not an update: writing it would
+	// bump updated_at and re-broadcast the whole gallery entry of a person whose
+	// identity did not change.
+	if !nameChanged && !personIDChanged {
+		return s.reloadPerson(ctx, id, p)
 	}
 
 	if err := s.store.UpdatePerson(ctx, p); err != nil {
@@ -197,13 +243,53 @@ func (s *Service) UpdatePerson(ctx context.Context, id string, req UpdatePersonR
 		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to update person", err)
 	}
 
-	// The gallery keys faces by personId and personName, so both must be re-published
-	// whenever either changes.
-	if req.Name != nil || req.PersonID != nil {
-		s.publishPersonFaces(ctx, p)
+	// Binding the business key also retro-fills the identity snapshot of records that
+	// were captured while the person had none, so they become reportable too.
+	if personIDChanged {
+		s.backfillRecognitionKeys(ctx, p)
 	}
 
+	// The gallery keys faces by personId and personName, so both must be re-published
+	// whenever either changes.
+	s.publishPersonFaces(ctx, p)
+
+	return s.reloadPerson(ctx, id, p)
+}
+
+// reloadPerson re-reads a person with the face summary preloaded, so every write path
+// answers with the same projection GET returns.
+//
+// A reload failure is logged rather than returned: the caller's write is already
+// committed, and reporting an error would describe work that did happen as failed.
+func (s *Service) reloadPerson(ctx context.Context, id string, fallback *Person) (*Person, error) {
+	p, err := s.store.GetPerson(ctx, id)
+	if err != nil {
+		s.logger.Warn("failed to reload person after update", zap.String("person_id", id), zap.Error(err))
+		return fallback, nil
+	}
 	return p, nil
+}
+
+// backfillRecognitionKeys asks the record domain to stamp the business key onto every
+// recognition of this person that was captured before the key existed. A failure is
+// logged and swallowed: the binding itself is committed and stays valid.
+func (s *Service) backfillRecognitionKeys(ctx context.Context, p *Person) {
+	if s.keyBackfiller == nil || p.PersonID == nil || *p.PersonID == "" {
+		return
+	}
+	n, err := s.keyBackfiller.BackfillPersonExternalID(ctx, p.ID, *p.PersonID)
+	if err != nil {
+		s.logger.Warn("failed to backfill recognition business keys",
+			zap.String("person_id", p.ID),
+			zap.String("external_person_id", *p.PersonID),
+			zap.Error(err))
+		return
+	}
+	if n > 0 {
+		s.logger.Info("backfilled recognition business keys",
+			zap.String("person_id", p.ID),
+			zap.Int64("rows", n))
+	}
 }
 
 // publishPersonFaces re-broadcasts every face of a person to the algorithm runner
@@ -306,17 +392,30 @@ func (s *Service) DeletePerson(ctx context.Context, id string) error {
 // removeFaceFile deletes an enrolled photo from disk. The database row is already
 // gone by the time this runs, so a failure leaves an orphaned file rather than a
 // dangling record: it is logged, not returned.
+//
+// The removal goes through an os.Root handle for the same reason reads do: a symlink
+// planted inside the faces directory must not be able to steer the delete elsewhere.
+// os.Remove only unlinks the link itself, but keeping every filesystem operation on the
+// same containment path removes the need to reason about which ones are safe.
 func (s *Service) removeFaceFile(imagePath string) {
 	if imagePath == "" {
 		return
 	}
-	safePath, err := s.resolveFaceFilePath(imagePath)
+	rel, err := s.faceStorageName(imagePath)
 	if err != nil {
 		s.logger.Warn("skipped deletion of face file outside faces directory", zap.String("path", imagePath), zap.Error(err))
 		return
 	}
-	if err := os.Remove(safePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		s.logger.Warn("failed to delete face file", zap.String("path", safePath), zap.Error(err))
+	root, err := os.OpenRoot(s.facesDir)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			s.logger.Warn("failed to open faces directory for deletion", zap.String("dir", s.facesDir), zap.Error(err))
+		}
+		return
+	}
+	defer root.Close()
+	if err := root.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.logger.Warn("failed to delete face file", zap.String("path", rel), zap.Error(err))
 	}
 }
 
@@ -369,23 +468,49 @@ func newGalleryItem(f Face, personID, personName string) GalleryItem {
 	}
 }
 
-// resolveFaceFilePath safely verifies that imagePath resolves to a file within s.facesDir.
-func (s *Service) resolveFaceFilePath(imagePath string) (string, error) {
+// faceStorageName validates a stored image_path and returns it as a path relative to
+// the faces directory, so it can be handed to an os.Root handle.
+//
+// Rows written by this service hold a bare file name. Rows restored from an older
+// deployment may hold an absolute path; those are accepted only when they resolve
+// inside the faces directory, and they are still converted back to a relative name so
+// the open itself never re-traverses the path from the root.
+func (s *Service) faceStorageName(imagePath string) (string, error) {
 	if imagePath == "" {
 		return "", apperr.NotFound("IMAGE_NOT_FOUND", "image path is empty", nil)
 	}
-	cleanDir := filepath.Clean(s.facesDir)
-	var target string
-	if filepath.IsAbs(imagePath) {
-		target = filepath.Clean(imagePath)
-	} else {
-		target = filepath.Clean(filepath.Join(cleanDir, imagePath))
+	if strings.ContainsRune(imagePath, '\x00') {
+		return "", apperr.Invalid("INVALID_IMAGE_PATH", "image path contains NUL bytes", nil)
 	}
-	rel, err := filepath.Rel(cleanDir, target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", apperr.Invalid("INVALID_IMAGE_PATH", "image path escapes allowed storage directory", nil)
+
+	clean := filepath.Clean(imagePath)
+	if filepath.IsAbs(clean) {
+		rel, err := filepath.Rel(filepath.Clean(s.facesDir), clean)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", apperr.Invalid("INVALID_IMAGE_PATH", "image path escapes allowed storage directory", nil)
+		}
+		clean = rel
 	}
-	return target, nil
+
+	for _, segment := range strings.Split(clean, string(filepath.Separator)) {
+		if segment == "" || segment == "." || segment == ".." {
+			return "", apperr.Invalid("INVALID_IMAGE_PATH", "image path must not contain relative segments", nil)
+		}
+	}
+	return clean, nil
+}
+
+// faceFileName composes the stored file name for a newly enrolled face.
+//
+// personID arrives as a path parameter, so the characters that would turn the name
+// into a nested path are rejected here instead of being assumed absent because the
+// person lookup happened to succeed first.
+func faceFileName(personID, faceID, ext string) (string, error) {
+	name := personID + "_" + faceID + ext
+	if name != filepath.Base(name) || strings.ContainsAny(name, `/:\\`) || strings.ContainsRune(name, '\x00') {
+		return "", apperr.Internal("STORAGE_ERROR", "Failed to compose face image file name", nil)
+	}
+	return name, nil
 }
 
 // invalidFileTypeError reports a rejected enrollment photo. The accepted set is
@@ -435,6 +560,14 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
 		}
 		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+	}
+
+	// An enrolled photo is the anchor a recognition is attributed by, and attribution
+	// travels as the external business key. Refusing here keeps unreportable faces out
+	// of the gallery instead of surfacing them later as records nobody can deliver.
+	if s.requirePersonIDForEnrollment && (personMeta.PersonID == nil || *personMeta.PersonID == "") {
+		return nil, apperr.Conflict("PERSON_ID_REQUIRED_FOR_ENROLLMENT",
+			"Person must be assigned a personId before faces can be enrolled", nil)
 	}
 
 	ext := strings.ToLower(filepath.Ext(filename))
@@ -490,7 +623,10 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 	}
 
 	faceID := idutil.New()
-	fileName := fmt.Sprintf("%s_%s%s", personID, faceID, ext)
+	fileName, err := faceFileName(personID, faceID, ext)
+	if err != nil {
+		return nil, err
+	}
 	savePath := filepath.Join(s.facesDir, fileName)
 	if err := os.WriteFile(savePath, fullBytes, 0644); err != nil {
 		return nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to save face image", err)
@@ -520,19 +656,59 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 	return face, nil
 }
 
-// GetFaceImagePath returns the disk path of the requested face template.
-func (s *Service) GetFaceImagePath(ctx context.Context, personID, faceID string) (string, error) {
+// OpenFaceImage resolves the stored photo of a face template and returns it opened for
+// reading, together with its metadata. The caller owns the file and must close it.
+//
+// The read goes through an os.Root handle rather than a validated absolute path. A
+// prefix check followed by a separate open leaves exactly the window a symlink inside
+// the faces directory needs: os.Root resolves relative to the directory handle and
+// refuses anything that escapes it, absolute symlink targets included.
+func (s *Service) OpenFaceImage(ctx context.Context, personID, faceID string) (*os.File, os.FileInfo, error) {
 	face, err := s.store.GetFace(ctx, faceID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return "", apperr.NotFound("FACE_NOT_FOUND", "Face not found", err)
+			return nil, nil, apperr.NotFound("FACE_NOT_FOUND", "Face not found", err)
 		}
-		return "", apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to load face", err)
+		return nil, nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to load face", err)
 	}
 	if face.PersonRowID != personID {
-		return "", apperr.NotFound("FACE_NOT_FOUND", "Face not found", nil)
+		return nil, nil, apperr.NotFound("FACE_NOT_FOUND", "Face not found", nil)
 	}
-	return s.resolveFaceFilePath(face.ImagePath)
+
+	rel, err := s.faceStorageName(face.ImagePath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	root, err := os.OpenRoot(s.facesDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil, apperr.NotFound("IMAGE_NOT_FOUND", "Face image file not found on disk", err)
+		}
+		return nil, nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to open faces directory", err)
+	}
+	// Files opened through the root stay valid after it is closed.
+	defer root.Close()
+
+	file, err := root.Open(rel)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil, apperr.NotFound("IMAGE_NOT_FOUND", "Face image file not found on disk", err)
+		}
+		return nil, nil, apperr.Invalid("INVALID_IMAGE_PATH", "image path escapes allowed storage directory", err)
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to stat face image", err)
+	}
+	if info.IsDir() {
+		// os.Root.Open succeeds on a directory; a face image never is one.
+		file.Close()
+		return nil, nil, apperr.NotFound("IMAGE_NOT_FOUND", "Face image file not found on disk", nil)
+	}
+	return file, info, nil
 }
 
 // DeleteFace deletes a specific face template belonging to the given person.
@@ -597,24 +773,34 @@ func (s *Service) ListFaces(ctx context.Context, personID string, limit, offset 
 	return faces, total, nil
 }
 
+// gallerySyncPageSize bounds how many persons (each with every feature vector) are
+// materialised per query during a cold-start gallery sync. The assembled item slice is
+// inherently whole — sharding needs all of it — but the database round trip does not
+// have to be, and on an edge box with tens of thousands of faces that is the difference
+// between one 40MB read and a stream of small ones.
+const gallerySyncPageSize = 200
+
 // GetGallerySyncData prepares all enrolled face templates for IPC downlinking to algorithm runners.
 func (s *Service) GetGallerySyncData(ctx context.Context) ([]GalleryItem, error) {
-	persons, err := s.store.ListAllPersons(ctx)
-	if err != nil {
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to list gallery persons", err)
-	}
-
-	var syncItems []GalleryItem
-	for _, p := range persons {
-		personID := ""
-		if p.PersonID != nil {
-			personID = *p.PersonID
+	syncItems := make([]GalleryItem, 0)
+	for offset := 0; ; offset += gallerySyncPageSize {
+		persons, err := s.store.ListPersonsForGallery(ctx, gallerySyncPageSize, offset)
+		if err != nil {
+			return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to list gallery persons", err)
 		}
-		for _, f := range p.Faces {
-			syncItems = append(syncItems, newGalleryItem(f, personID, p.Name))
+		for _, p := range persons {
+			personID := ""
+			if p.PersonID != nil {
+				personID = *p.PersonID
+			}
+			for _, f := range p.Faces {
+				syncItems = append(syncItems, newGalleryItem(f, personID, p.Name))
+			}
+		}
+		if len(persons) < gallerySyncPageSize {
+			return syncItems, nil
 		}
 	}
-	return syncItems, nil
 }
 
 var isLittleEndian = func() bool {
