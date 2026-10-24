@@ -95,7 +95,12 @@ func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]f
 
 句柄生命周期防护与并发控制：
 - **句柄操作读写锁隔离 (`handleMu sync.RWMutex`)**：所有跨 CGO 访问底层 `handle` 的调用均在读锁保护下执行（`handleMu.RLock()` / `handleMu.RUnlock()`）；`Close()` 销毁 `handle` 前必须获取写锁（`handleMu.Lock()`）彻底排空在途调用，消除野指针与 Use-After-Free 隐患。
-- **停机注销延迟排空**：若退订发生在底层引擎停机期间（返回 `Zhulong_ERR_NOT_RUNNING`），严禁立即调用 `deleteToken()`，必须暂存并在底层工作线程全部 `join()` 汇合完成后（`stopInternal` 之后）统一释放，防止残余回调在注销后访问非法 `cgo.Handle`。
+- **私有探测引擎的 stop/destroy 互斥**：`Probe` 使用隔离的私有引擎实例。`stopInternal` 把 `activeProbes` 快照出锁后逐个 `stop`，而探测 goroutine 自己也会 `stop` 并在返回时 `destroy` —— 两者必须经 `probeContext.mu` 串行，否则「快照晚用一步」就是对已释放句柄调用 `Zhulong_engine_stop`。`destroy` 必须吸收 `stop` 语义（先 stop 再 destroy 并标记 `destroyed`），保证 destroy 之后不会再有 stop。
+- **停机注销延迟排空（三分支）**：注销返回后 `cgo.Handle` 的释放时机由 `planTokenRelease` 决定 —— 仅 `Zhulong_OK` / `Zhulong_ERR_NOT_FOUND`（已同步排空或本就无此订阅）可立即 `Delete`；`Zhulong_ERR_NOT_RUNNING`（停机中）与**任何未预期状态**（如 `Zhulong_ERR_CALLBACK_CONTEXT`、`ERR_BUSY`）都必须暂存到 `pendingTokens`，等底层工作线程全部 `join()` 汇合完成后统一释放。默认分支必须保守：晚一点释放永远优于提前释放（残余回调会命中已删除句柄）或永不释放（`cgo.Handle` 泄漏）。
+- **ABI 版本取自头文件宏**：`expectedABIVersion` 用 `uint32(C.ZHULONG_ABI_VERSION)` 而非手写常量，避免 Go 常量与 `engine.h` 漂移；该检查校验的是「头文件」与「静态库归档」是否同源，不匹配时 `Start` 直接拒绝。
+- **阻塞式 CGO 调用的超时上限**：`maxAllowedTimeout`（2 分钟）同时是优雅停机的最坏阻塞上界 —— `Close` 必须等持读锁的在途调用（如 `Acquire` 的 RTSP open）返回才能取写锁销毁句柄。放宽该上限前先确认停机预算。
+- **Go 桥接私有状态码必须独占**：`NativeError.Is` 只比较 `Code`，因此每个哨兵必须一个码（例如 `StatusSnapshotUnavailable` 不能复用 `StatusUnsupported`，否则两类失败会互相 `errors.Is` 为真）。Go 私有码从 `-100` 起，绝不跨越 ABI 边界。
+- **回调 panic 必须可观测**：`//export` 回调内 `recover` 之后必须转成订阅终态（`nativeCallbackPanic` → `ErrInternal`）或计入丢弃（日志通道 `RecordDrop`），严禁裸 `_ = recover()` 静默吞掉 —— 否则「偶发丢帧」将既无日志也无错误码。
 
 ---
 
@@ -111,6 +116,8 @@ func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]f
 - `make native-test` 运行 C++17 生命周期、纯 C ABI、真实本地 RTSP/RTP 和构建合同测试；`make go-check` 包含 Go vet/race 与真实 loopback RTSP 桥接门禁（`run_go_bridge_tests.py`）。
 - Go Engine wrapper 已完整实现 Probe 探测（独立私有 Engine 隔离取消）、Stream 物理流复用/宽限期管理、有界深拷贝包订阅（Subscription）、同步排空后释放 `cgo.Handle`。
 - 包只在同步回调期间借用，入队前深拷贝至 Go 内存；probe-result view 仅在 result destroy 前有效。注销须 drain 在途回调后才允许 Go 侧 `cgo.Handle.Delete()`。
+- 两条订阅通道（视频包 / AI 结果）共用 `queueCore[T]`：「入队 → 非阻塞唤醒 → 幂等终态」只实现一次，准入策略各异（包订阅超限即 `ErrBackpressure` 终止；AI 结果采用丢最旧且计数）。`Next` 仅支持单消费者 —— `notify` 容量为 1，扇出必须由业务层完成。
+- `TestProbeContextStopDestroyAreSerialized` 用空句柄把「私有引擎 stop/destroy 必须串行」钉成可被 `-race` 抓到的回归测试；`TestPlanTokenRelease` 钉死 token 释放时机（含未知状态走保守分支）；`TestSentinelCodesAreUnique` 钉死「一个哨兵一个状态码」。
 - stop 取消输入和 probe、join worker/reaper，之后才释放资源。回调内控制 API 返回 CALLBACK_CONTEXT，destroy 由外部所有者串行调用。
 - Linux host 与 Native sanitizer 检查不证明真实摄像机、解码、板端或旧系统兼容；具体命令/断言/残余限制见 [接入合同](./ingestion-contract.md)。
 
