@@ -472,7 +472,7 @@ const docTemplate = `{
                             "type": "string"
                         },
                         "collectionFormat": "multi",
-                        "description": "Filter by any matching action (repeat parameter for multiple values)",
+                        "description": "Filter by any matching action (repeat for more)",
                         "name": "actions",
                         "in": "query"
                     },

@@ -66,29 +66,31 @@ func Middleware(service *audit.Service) gin.HandlerFunc {
 		c.Next()
 
 		entry, ok := state.resolve(c)
-		if !ok || service == nil {
+		if !ok {
 			return
 		}
 		// The handler may have upgraded the actor, so read it back from the
 		// request context rather than using the initial value.
-		finalActor := actor
-		if updated, found := audit.FromContext(c.Request.Context()); found {
-			finalActor = updated
-		}
-		if finalActor.Username == "" {
-			finalActor.Username = audit.UsernameUnknown
-		}
-
-		service.Record(audit.Entry{
-			IP:       finalActor.IP,
-			Username: finalActor.Username,
-			Action:   entry.action,
-			Target:   entry.target,
-			Detail:   entry.detail,
-			Status:   entry.status,
-			ErrorMsg: entry.errorMsg,
-		})
+		recordResolved(service, entry, audit.ActorFromContext(c.Request.Context()))
 	}
+}
+
+// recordResolved writes a resolved request outcome through the asynchronous
+// queue. The normal path and the panic observer share it so the field mapping
+// lives in one place.
+func recordResolved(service *audit.Service, entry resolvedEntry, actor audit.Actor) {
+	if service == nil {
+		return
+	}
+	service.Record(audit.Entry{
+		IP:       actor.IP,
+		Username: actor.Username,
+		Action:   entry.action,
+		Target:   entry.target,
+		Detail:   entry.detail,
+		Status:   entry.status,
+		ErrorMsg: entry.errorMsg,
+	})
 }
 
 // resolvedEntry is the outcome derived from the request scope and response.
@@ -242,6 +244,10 @@ func TagDetail(c *gin.Context, detail string) {
 // succeeds, while preserving the request IP as the primary attribution field.
 // It updates the standard request context so that later audit resolution
 // observes the same actor.
+//
+// It replaces c.Request's context and is therefore not goroutine-safe: call it
+// from the request goroutine only. The scope fields below are mutex-guarded
+// because handlers may amend them concurrently.
 func TagActor(c *gin.Context, username string) {
 	actor, ok := audit.FromContext(c.Request.Context())
 	if !ok {

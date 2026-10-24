@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,6 +167,32 @@ func TestHandlerListLogsFilterAndValidationError(t *testing.T) {
 	router.ServeHTTP(badW, badReq)
 	if badW.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 for an invalid date, got %d", badW.Code)
+	}
+}
+
+// TestHandlerListLogsRejectsMalformedPagination pins the fix for a silent
+// filter drop: Gin stops binding at the first malformed field, so ignoring the
+// binding error would discard the action filter and return every record.
+func TestHandlerListLogsRejectsMalformedPagination(t *testing.T) {
+	router, service, cleanup := newHandlerHarness(t)
+	defer cleanup()
+
+	if err := service.RecordSync(context.Background(), audit.Entry{
+		Action: audit.ActionCameraDelete,
+		Target: "camera:1",
+	}); err != nil {
+		t.Fatalf("seed audit entry: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/logs?page=abc&actions=auth.login", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for malformed pagination, got %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "camera:1") {
+		t.Fatalf("malformed query must not return unfiltered records: %s", w.Body.String())
 	}
 }
 

@@ -58,8 +58,9 @@ type ClearLogsQuery struct {
 	Before string `form:"before"`
 }
 
-// ParseBefore parses the optional before RFC3339 timestamp.
-func (q *ClearLogsQuery) ParseBefore() ([]time.Time, error) {
+// ParseBefore parses the optional before RFC3339 timestamp. A nil result means
+// every prunable record matches.
+func (q *ClearLogsQuery) ParseBefore() (*time.Time, error) {
 	if q.Before == "" {
 		return nil, nil
 	}
@@ -69,5 +70,5 @@ func (q *ClearLogsQuery) ParseBefore() ([]time.Time, error) {
 			{Field: "before", Code: "INVALID_FORMAT", Message: "before must be in RFC3339 format"},
 		})
 	}
-	return []time.Time{t}, nil
+	return &t, nil
 }

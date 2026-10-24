@@ -17,14 +17,39 @@ type Config struct {
 	MaxEntries    int
 }
 
+// Default batch-writing settings. DefaultMaxEntries and DefaultBufferSize live
+// in model.go because they bound the persisted data and the queue respectively.
+const (
+	defaultBatchSize     = 50
+	defaultFlushInterval = 1 * time.Second
+)
+
 // DefaultConfig returns recommended production defaults.
 func DefaultConfig() Config {
 	return Config{
 		BufferSize:    DefaultBufferSize,
-		BatchSize:     50,
-		FlushInterval: 1 * time.Second,
+		BatchSize:     defaultBatchSize,
+		FlushInterval: defaultFlushInterval,
 		MaxEntries:    DefaultMaxEntries,
 	}
+}
+
+// withDefaults fills in zero or negative fields so a partial Config never
+// produces a busy loop, an unbuffered queue, or an unbounded table.
+func (c Config) withDefaults() Config {
+	if c.BufferSize <= 0 {
+		c.BufferSize = DefaultBufferSize
+	}
+	if c.BatchSize <= 0 {
+		c.BatchSize = defaultBatchSize
+	}
+	if c.FlushInterval <= 0 {
+		c.FlushInterval = defaultFlushInterval
+	}
+	if c.MaxEntries <= 0 {
+		c.MaxEntries = DefaultMaxEntries
+	}
+	return c
 }
 
 // Service manages asynchronous recording, batching, pruning, and querying of audit logs.
@@ -48,19 +73,7 @@ func NewService(store *Store, logger *zap.Logger, cfgs ...Config) *Service {
 	}
 	cfg := DefaultConfig()
 	if len(cfgs) > 0 {
-		cfg = cfgs[0]
-		if cfg.BufferSize <= 0 {
-			cfg.BufferSize = DefaultBufferSize
-		}
-		if cfg.BatchSize <= 0 {
-			cfg.BatchSize = 50
-		}
-		if cfg.FlushInterval <= 0 {
-			cfg.FlushInterval = 1 * time.Second
-		}
-		if cfg.MaxEntries <= 0 {
-			cfg.MaxEntries = DefaultMaxEntries
-		}
+		cfg = cfgs[0].withDefaults()
 	}
 
 	return &Service{
@@ -160,12 +173,7 @@ func (s *Service) RecordSystem(action, target, detail string, opErr error) {
 
 // eventEntry builds an Entry for a human-initiated operation from ctx.
 func eventEntry(ctx context.Context, action, target, detail string, opErr error) Entry {
-	actor, ok := FromContext(ctx)
-	if !ok {
-		actor = Actor{Username: UsernameUnknown}
-	} else if actor.Username == "" {
-		actor.Username = UsernameUnknown
-	}
+	actor := ActorFromContext(ctx)
 	entry := Entry{
 		IP:       actor.IP,
 		Username: actor.Username,
@@ -224,7 +232,12 @@ func (s *Service) RecordSync(ctx context.Context, entry Entry) error {
 	if err := s.store.Create(ctx, log); err != nil {
 		return err
 	}
-	_, _ = s.store.Prune(ctx, s.cfg.MaxEntries)
+	// Pruning is best-effort here: the record is already committed, but a
+	// recurring prune failure would let the table grow unbounded, so it must
+	// not be discarded silently.
+	if _, pruneErr := s.store.Prune(ctx, s.cfg.MaxEntries); pruneErr != nil {
+		s.logger.Warn("failed to prune audit records", zap.Error(pruneErr))
+	}
 	return nil
 }
 
@@ -233,25 +246,14 @@ func (s *Service) List(ctx context.Context, filter Filter) ([]AuditLog, int64, e
 	return s.store.List(ctx, filter)
 }
 
-// Clear deletes all audit records or those older than the specified time.
-// It is intended for internal callers; the public DELETE endpoint must use
-// ClearWithAudit so the clearing operation leaves its own record.
-func (s *Service) Clear(ctx context.Context, before ...time.Time) (int64, error) {
-	return s.store.Clear(ctx, before...)
-}
-
 // ClearWithAudit deletes matching records and persists the audit.clear
 // self-audit entry in one transaction, then returns the deleted count.
 //
 // The actor is resolved from ctx exactly like RecordEvent: an unattributed
 // caller is recorded as unknown with an empty IP, never as a system event.
-func (s *Service) ClearWithAudit(ctx context.Context, target string, before ...time.Time) (int64, error) {
-	actor, ok := FromContext(ctx)
-	if !ok {
-		actor = Actor{Username: UsernameUnknown}
-	} else if actor.Username == "" {
-		actor.Username = UsernameUnknown
-	}
+// A nil before clears everything prunable.
+func (s *Service) ClearWithAudit(ctx context.Context, target string, before *time.Time) (int64, error) {
+	actor := ActorFromContext(ctx)
 
 	entry := entryToLog(Entry{
 		IP:       actor.IP,
@@ -261,7 +263,7 @@ func (s *Service) ClearWithAudit(ctx context.Context, target string, before ...t
 		Status:   StatusSuccess,
 	})
 
-	cleared, err := s.store.ClearWithAudit(ctx, entry, before...)
+	cleared, err := s.store.ClearWithAudit(ctx, entry, before)
 	if err != nil {
 		return 0, err
 	}

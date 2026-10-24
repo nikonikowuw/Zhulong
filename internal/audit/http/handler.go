@@ -33,6 +33,19 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	}
 }
 
+// bindQuery binds query parameters and converts a binding failure into a
+// validation error. Ignoring the error is not an option: Gin stops at the first
+// malformed field, so a bad page number would silently drop every later filter
+// and return records the caller did not ask for.
+func bindQuery(c *gin.Context, target any) error {
+	if err := c.ShouldBindQuery(target); err != nil {
+		return httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
+			{Field: "query", Code: "INVALID_FORMAT", Message: "query parameter is malformed"},
+		})
+	}
+	return nil
+}
+
 // ListLogs godoc
 // @Summary      List audit logs with filtering and pagination
 // @Tags         audit
@@ -40,7 +53,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Param        page query int false "Page number (1-based, default 1)"
 // @Param        pageSize query int false "Page size (default 20, max 100)"
 // @Param        action query string false "Filter by one action (legacy parameter)"
-// @Param        actions query []string false "Filter by any matching action (repeat parameter for multiple values)" collectionFormat(multi)
+// @Param        actions query []string false "Filter by any matching action (repeat for more)" collectionFormat(multi)
 // @Param        status query string false "Filter by status (success/failed)"
 // @Param        startTime query string false "Start time (RFC3339)"
 // @Param        endTime query string false "End time (RFC3339)"
@@ -48,7 +61,10 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Router       /audit/logs [get]
 func (h *Handler) ListLogs(c *gin.Context) {
 	var q ListLogsQuery
-	_ = c.ShouldBindQuery(&q)
+	if err := bindQuery(c, &q); err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
 
 	filter, page, pageSize, err := q.ToFilter()
 	if err != nil {
@@ -80,15 +96,22 @@ func (h *Handler) ListLogs(c *gin.Context) {
 // asynchronous queue for its own evidence.
 func (h *Handler) ClearLogs(c *gin.Context) {
 	var q ClearLogsQuery
-	_ = c.ShouldBindQuery(&q)
+	if err := bindQuery(c, &q); err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
 
-	beforeTime, err := q.ParseBefore()
+	before, err := q.ParseBefore()
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
 
-	cleared, err := h.service.ClearWithAudit(c.Request.Context(), "audit_logs", beforeTime...)
+	cleared, err := h.service.ClearWithAudit(
+		c.Request.Context(),
+		audit.AuditLog{}.TableName(),
+		before,
+	)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return

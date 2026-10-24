@@ -379,7 +379,8 @@ func TestPanicWithoutTagProducesNoRecord(t *testing.T) {
 	})
 	defer h.cleanup()
 
-	if w := do(h.router, httptest.NewRequest(http.MethodGet, "/api/v1/boom", nil)); w.Code != http.StatusInternalServerError {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/boom", nil)
+	if w := do(h.router, req); w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", w.Code)
 	}
 

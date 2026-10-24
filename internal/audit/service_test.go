@@ -221,7 +221,7 @@ func TestServiceClearWithAuditUsesContextActor(t *testing.T) {
 		}
 	}
 
-	cleared, err := svc.ClearWithAudit(WithActor(ctx, Actor{IP: "172.16.0.8", Username: "operator"}), "audit_logs")
+	cleared, err := svc.ClearWithAudit(WithActor(ctx, Actor{IP: "172.16.0.8", Username: "operator"}), "audit_logs", nil)
 	if err != nil {
 		t.Fatalf("ClearWithAudit failed: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestServiceClearWithAuditWithoutActorIsUnknown(t *testing.T) {
 	svc := NewService(store, zap.NewNop())
 	ctx := context.Background()
 
-	if _, err := svc.ClearWithAudit(ctx, "audit_logs"); err != nil {
+	if _, err := svc.ClearWithAudit(ctx, "audit_logs", nil); err != nil {
 		t.Fatalf("ClearWithAudit failed: %v", err)
 	}
 
@@ -264,5 +264,30 @@ func TestServiceClearWithAuditWithoutActorIsUnknown(t *testing.T) {
 	}
 	if items[0].IP != "" {
 		t.Fatalf("expected empty IP, got %q", items[0].IP)
+	}
+}
+
+func TestNewServiceAppliesConfigDefaults(t *testing.T) {
+	cases := map[string][]Config{
+		"no config":                 nil,
+		"partial config":            {{BatchSize: -1}},
+		"all fields set explicitly": {{BufferSize: 7, BatchSize: 3, FlushInterval: 2 * time.Second, MaxEntries: 42}},
+	}
+	expected := map[string]Config{
+		"no config":                 DefaultConfig(),
+		"partial config":            DefaultConfig(),
+		"all fields set explicitly": {BufferSize: 7, BatchSize: 3, FlushInterval: 2 * time.Second, MaxEntries: 42},
+	}
+
+	for name, cfgs := range cases {
+		t.Run(name, func(t *testing.T) {
+			svc := NewService(NewStore(mockNilDBProvider{}), nil, cfgs...)
+			if svc.cfg != expected[name] {
+				t.Fatalf("expected config %+v, got %+v", expected[name], svc.cfg)
+			}
+			if cap(svc.queue) != expected[name].BufferSize {
+				t.Fatalf("expected queue capacity %d, got %d", expected[name].BufferSize, cap(svc.queue))
+			}
+		})
 	}
 }

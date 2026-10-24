@@ -56,3 +56,18 @@ func FromContext(ctx context.Context) (Actor, bool) {
 	}
 	return actor, true
 }
+
+// ActorFromContext resolves the actor for an audited operation. A missing or
+// unnamed actor becomes "unknown", never "system": only RecordSystem may
+// attribute an event to background work, so the fallback must not imply an
+// origin the event does not have.
+func ActorFromContext(ctx context.Context) Actor {
+	actor, ok := FromContext(ctx)
+	if !ok {
+		return Actor{Username: UsernameUnknown}
+	}
+	if actor.Username == "" {
+		actor.Username = UsernameUnknown
+	}
+	return actor
+}

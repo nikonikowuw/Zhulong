@@ -247,7 +247,74 @@ func TestStorePruneFIFO(t *testing.T) {
 	}
 }
 
-func TestStoreClear(t *testing.T) {
+// TestPruneBoundsPrunableRowsWhenClearRecordsDominate pins the counting fix:
+// audit.clear rows are exempt from deletion, so they must not be counted as
+// excess. Otherwise the delete statement runs out of eligible rows and the
+// table stays above maxEntries for good.
+func TestPruneBoundsPrunableRowsWhenClearRecordsDominate(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	base := time.Now().UTC()
+
+	for i := 0; i < 20; i++ {
+		if err := store.Create(ctx, &AuditLog{
+			CreatedAt: base.Add(-time.Hour + time.Duration(i)*time.Millisecond),
+			Action:    ActionAuditClear,
+			Status:    StatusSuccess,
+		}); err != nil {
+			t.Fatalf("seed audit.clear %d failed: %v", i, err)
+		}
+	}
+	for i := 0; i < 12; i++ {
+		if err := store.Create(ctx, &AuditLog{
+			CreatedAt: base.Add(time.Duration(i) * time.Millisecond),
+			Action:    ActionCameraUpdate,
+			Status:    StatusSuccess,
+		}); err != nil {
+			t.Fatalf("seed ordinary record %d failed: %v", i, err)
+		}
+	}
+
+	const maxEntries = 5
+	deleted, err := store.Prune(ctx, maxEntries)
+	if err != nil {
+		t.Fatalf("Prune failed: %v", err)
+	}
+	if deleted != 7 {
+		t.Fatalf("expected 7 prunable records deleted, got %d", deleted)
+	}
+
+	// Exempt rows survive, and pruning is idempotent once the limit is met.
+	deleted, err = store.Prune(ctx, maxEntries)
+	if err != nil {
+		t.Fatalf("second Prune failed: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("expected no further deletions, got %d", deleted)
+	}
+
+	items, total, err := store.List(ctx, Filter{Limit: 100})
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if total != int64(20+maxEntries) || len(items) != int(total) {
+		t.Fatalf("expected 20 exempt plus %d prunable rows, got total=%d items=%d",
+			maxEntries, total, len(items))
+	}
+
+	clears := 0
+	for _, item := range items {
+		if item.Action == ActionAuditClear {
+			clears++
+		}
+	}
+	if clears != 20 {
+		t.Fatalf("expected all 20 audit.clear records to survive, got %d", clears)
+	}
+}
+
+func TestStoreClearAllPreservesSelfAudit(t *testing.T) {
 	store, cleanup := setupTestStore(t)
 	defer cleanup()
 
@@ -270,27 +337,37 @@ func TestStoreClear(t *testing.T) {
 		t.Fatalf("CreateBatch failed: %v", err)
 	}
 
-	// Clear before baseTime + 5 minutes -> deletes 1
-	deleted, err := store.Clear(ctx, baseTime.Add(5*time.Minute))
+	auditEntry := func() *AuditLog {
+		return &AuditLog{Action: ActionAuditClear, Target: "audit_logs", Status: StatusSuccess}
+	}
+
+	// Clearing before baseTime + 5 minutes deletes 1 ordinary record and adds
+	// the self-audit record in the same transaction.
+	before := baseTime.Add(5 * time.Minute)
+	deleted, err := store.ClearWithAudit(ctx, auditEntry(), &before)
 	if err != nil {
-		t.Fatalf("Clear with time failed: %v", err)
+		t.Fatalf("ClearWithAudit with before failed: %v", err)
 	}
 	if deleted != 1 {
 		t.Fatalf("expected 1 deleted, got %d", deleted)
 	}
 
-	// Clear all
-	deleted, err = store.Clear(ctx)
+	// Clearing everything removes the remaining ordinary record; only the two
+	// self-audit records survive.
+	deleted, err = store.ClearWithAudit(ctx, auditEntry(), nil)
 	if err != nil {
-		t.Fatalf("Clear all failed: %v", err)
+		t.Fatalf("ClearWithAudit all failed: %v", err)
 	}
 	if deleted != 1 {
 		t.Fatalf("expected 1 deleted, got %d", deleted)
 	}
 
-	count, _ := store.Count(ctx)
-	if count != 0 {
-		t.Fatalf("expected 0 count, got %d", count)
+	count, err := store.Count(ctx)
+	if err != nil {
+		t.Fatalf("Count failed: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected only the 2 audit.clear records to remain, got %d", count)
 	}
 }
 
@@ -321,8 +398,8 @@ func TestStoreUnreadyDatabase(t *testing.T) {
 			if _, err := store.Prune(ctx, 10); err == nil {
 				t.Errorf("%s: expected error on Prune, got nil", name)
 			}
-			if _, err := store.Clear(ctx); err == nil {
-				t.Errorf("%s: expected error on Clear, got nil", name)
+			if _, err := store.ClearWithAudit(ctx, &AuditLog{Action: ActionAuditClear}, nil); err == nil {
+				t.Errorf("%s: expected error on ClearWithAudit, got nil", name)
 			}
 		})
 	}
@@ -398,7 +475,7 @@ func TestClearWithAuditPersistsSelfAudit(t *testing.T) {
 		Username: "operator",
 		Status:   StatusSuccess,
 	}
-	cleared, err := store.ClearWithAudit(ctx, entry)
+	cleared, err := store.ClearWithAudit(ctx, entry, nil)
 	if err != nil {
 		t.Fatalf("ClearWithAudit failed: %v", err)
 	}
@@ -449,7 +526,7 @@ func TestClearWithAuditKeepsPreviousClearRecords(t *testing.T) {
 		Target:   "audit_logs",
 		Username: "second-operator",
 		Status:   StatusSuccess,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("ClearWithAudit failed: %v", err)
 	}
@@ -486,11 +563,12 @@ func TestClearWithAuditRespectsBeforeFilter(t *testing.T) {
 		t.Fatalf("seed failed: %v", err)
 	}
 
+	before := base.Add(-time.Hour)
 	cleared, err := store.ClearWithAudit(ctx, &AuditLog{
 		Action: ActionAuditClear,
 		Target: "audit_logs",
 		Status: StatusSuccess,
-	}, base.Add(-time.Hour))
+	}, &before)
 	if err != nil {
 		t.Fatalf("ClearWithAudit failed: %v", err)
 	}
@@ -516,7 +594,7 @@ func TestClearWithAuditFailsWhenDatabaseUnavailable(t *testing.T) {
 		"nil":     NewStore(nil),
 	} {
 		t.Run(name, func(t *testing.T) {
-			cleared, err := store.ClearWithAudit(ctx, &AuditLog{Action: ActionAuditClear})
+			cleared, err := store.ClearWithAudit(ctx, &AuditLog{Action: ActionAuditClear}, nil)
 			if err == nil {
 				t.Fatalf("%s: expected an error so the caller cannot report success", name)
 			}

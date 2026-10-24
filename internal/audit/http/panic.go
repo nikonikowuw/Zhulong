@@ -30,7 +30,7 @@ func NewPanicObserver(service *audit.Service) *panicObserver {
 // OnPanic records the failed audit entry. It must not panic and must not write
 // to the response, both of which are already handled by Recovery.
 func (o *panicObserver) OnPanic(c *gin.Context) {
-	if o == nil || o.service == nil || c == nil {
+	if o == nil || c == nil {
 		return
 	}
 
@@ -51,21 +51,5 @@ func (o *panicObserver) OnPanic(c *gin.Context) {
 		entry.errorMsg = "INTERNAL_ERROR"
 	}
 
-	actor := audit.Actor{Username: audit.UsernameUnknown}
-	if found, present := audit.FromContext(requestContext(c)); present {
-		actor = found
-	}
-	if actor.Username == "" {
-		actor.Username = audit.UsernameUnknown
-	}
-
-	o.service.Record(audit.Entry{
-		IP:       actor.IP,
-		Username: actor.Username,
-		Action:   entry.action,
-		Target:   entry.target,
-		Detail:   entry.detail,
-		Status:   entry.status,
-		ErrorMsg: entry.errorMsg,
-	})
+	recordResolved(o.service, entry, audit.ActorFromContext(requestContext(c)))
 }
