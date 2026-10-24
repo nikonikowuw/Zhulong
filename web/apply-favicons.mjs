@@ -7,46 +7,25 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const imagesDir = path.join(__dirname, 'public/images');
 const publicDir = path.join(__dirname, 'public');
 
-// Symmetrical Kinetic Monogram "Z" (Clean Modern Infra Aesthetic)
-export function getSvgZ(mode = 'dark') {
-  // mode: 'dark' for dark tab chrome, 'light' for light tab chrome
-  const isLight = mode === 'light';
-  // In light tab mode, slightly punchier crimson base to maximize contrast against white/gray
-  const stop1 = isLight ? '#f43f5e' : '#ff4757';
-  const stop2 = isLight ? '#ea580c' : '#ff793f';
-  const stop3 = isLight ? '#e11d48' : '#ff3366';
+const Z_PATH = 'M 14 14 H 50 L 14 50 H 50';
+const NODE_PATH = 'M 28 28 H 36 V 36 H 28 Z';
+
+export function getSvgZ(mode = 'light') {
+  const isDark = mode === 'dark';
+  const ink = isDark ? '#F1E9DA' : '#1D2B2E';
+  const signal = isDark ? '#FF7655' : '#C44536';
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <defs>
-    <linearGradient id="zhulong-z-${mode}" x1="10" y1="8" x2="54" y2="56" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="${stop1}"/>
-      <stop offset="42%" stop-color="${stop2}"/>
-      <stop offset="100%" stop-color="${stop3}"/>
-    </linearGradient>
-  </defs>
-  <!-- 工业动力学 Z 标 (Zhulong Kinetic Monogram) -->
-  <path d="M 14 8 H 48 C 51.3 8 54 10.7 54 14 V 18 C 54 19.8 53.2 21.5 51.8 22.6 L 27.2 38 H 48 C 51.3 38 54 40.7 54 44 V 50 C 54 53.3 51.3 56 48 56 H 16 C 12.7 56 10 53.3 10 50 V 46 C 10 44.2 10.8 42.5 12.2 41.4 L 36.8 26 H 16 C 12.7 26 10 23.3 10 20 V 14 C 10 10.7 12.7 8 16 8 Z" 
-        fill="url(#zhulong-z-${mode})"/>
+  <path d="${Z_PATH}" stroke="${ink}" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"/>
+  <path d="${NODE_PATH}" fill="${signal}"/>
 </svg>`;
 }
 
-// App / Apple Touch Icon version: with sleek obsidian background container
 export function getSvgZAppIcon() {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <defs>
-    <linearGradient id="z-app-bg" x1="4" y1="4" x2="60" y2="60" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#1c1622"/>
-      <stop offset="100%" stop-color="#0a0c14"/>
-    </linearGradient>
-    <linearGradient id="z-app-grad" x1="14" y1="12" x2="50" y2="52" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#ff4757"/>
-      <stop offset="40%" stop-color="#ff793f"/>
-      <stop offset="100%" stop-color="#ff3366"/>
-    </linearGradient>
-  </defs>
-  <rect width="64" height="64" rx="14" fill="url(#z-app-bg)" stroke="#2d354b" stroke-width="1.8"/>
-  <path d="M 16 12 H 46 C 48.8 12 51 14.2 51 17 V 20.2 C 51 21.8 50.3 23.2 49.1 24.2 L 28.5 37 H 46 C 48.8 37 51 39.2 51 42 V 47 C 51 49.8 48.8 52 46 52 H 18 C 15.2 52 13 49.8 13 47 V 43.8 C 13 42.2 13.7 40.8 14.9 39.8 L 35.5 27 H 18 C 15.2 27 13 24.8 13 22 V 17 C 13 14.2 15.2 12 18 12 Z" 
-        fill="url(#z-app-grad)"/>
+  <rect width="64" height="64" fill="#161B1D"/>
+  <path d="${Z_PATH}" stroke="#F1E9DA" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"/>
+  <path d="${NODE_PATH}" fill="#FF7655"/>
 </svg>`;
 }
 
@@ -80,7 +59,7 @@ function createIco(pngBuffers) {
 }
 
 export async function applyFavicons() {
-  console.log('Generating and applying Zhulong Z Monogram Favicon set...');
+  console.log('Generating and applying Zhulong industrial Z-mark favicon set...');
   
   const browser = await playwright.chromium.launch({
     headless: true,
@@ -112,14 +91,14 @@ export async function applyFavicons() {
   console.log('✔ Wrote favicon.png and favicon_light.png (48x48)');
 
   // 3. Render 16x16 and 32x32 for tab / ICO
-  const png16 = await renderPng(svgDark, 16);
-  const png32 = await renderPng(svgDark, 32);
-  const png48 = await renderPng(svgDark, 48);
+  const png16 = await renderPng(svgApp, 16, false);
+  const png32 = await renderPng(svgApp, 32, false);
+  const png48 = await renderPng(svgApp, 48, false);
   fs.writeFileSync(path.join(imagesDir, 'favicon-16x16.png'), png16);
   fs.writeFileSync(path.join(imagesDir, 'favicon-32x32.png'), png32);
   console.log('✔ Wrote favicon-16x16.png and favicon-32x32.png');
 
-  // 4. Render Apple Touch Icon (180x180) with elegant squircle base
+  // 4. Render Apple Touch Icon (180x180); iOS applies its own icon mask.
   const png180 = await renderPng(svgApp, 180, false);
   fs.writeFileSync(path.join(imagesDir, 'apple-touch-icon.png'), png180);
   fs.writeFileSync(path.join(publicDir, 'apple-touch-icon.png'), png180);
