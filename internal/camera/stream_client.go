@@ -46,14 +46,12 @@ type StreamClient struct {
 	sendChan   chan outFrame
 	dispatcher *StreamDispatcher
 	logger     *zap.Logger
-
+	done       chan struct{}
 	// 只有 WebSocket 写成功才推进基准；首帧先以最早排队的 DTS 初始化，确保写阻塞时预算仍会增长。
-	needsKey          bool
 	lastProgressDTSUS int64
+	closeOnce         sync.Once
+	needsKey          bool
 	hasProgressDTS    bool
-
-	done      chan struct{}
-	closeOnce sync.Once
 }
 
 // NewStreamClient 构造单个客户端。

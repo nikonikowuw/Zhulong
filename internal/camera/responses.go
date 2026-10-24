@@ -4,44 +4,44 @@ import "time"
 
 // StreamResponse represents public stream information in API responses.
 type StreamResponse struct {
-	ID           int64            `json:"id"`
-	Role         string           `json:"role"`
-	Protocol     string           `json:"protocol"`
+	UpdatedAt    time.Time        `json:"updatedAt"`
+	CreatedAt    time.Time        `json:"createdAt"`
+	FPS          *float64         `json:"fps"`
+	RuntimeState *StreamStateInfo `json:"runtimeState,omitempty"`
 	RTSPURL      string           `json:"rtspUrl"` // Complete RTSP URL for frontend playback and display
-	Host         string           `json:"host"`    // Target host (IP or domain) for display and search; empty when the URI cannot be resolved or decrypted
 	Transport    string           `json:"transport"`
 	Codec        string           `json:"codec"`
+	Host         string           `json:"host"` // Target host (IP or domain) for display and search; empty when the URI cannot be resolved or decrypted
+	FPSString    string           `json:"fpsString"`
+	Protocol     string           `json:"protocol"`
+	Role         string           `json:"role"`
 	Width        int              `json:"width"`
 	Height       int              `json:"height"`
-	FPS          *float64         `json:"fps"`
-	FPSString    string           `json:"fpsString"`
-	CreatedAt    time.Time        `json:"createdAt"`
-	UpdatedAt    time.Time        `json:"updatedAt"`
-	RuntimeState *StreamStateInfo `json:"runtimeState,omitempty"`
+	ID           int64            `json:"id"`
 }
 
 // CameraResponse represents public camera status and stream information in API responses.
 type CameraResponse struct {
-	ID            string           `json:"id"`
+	UpdatedAt     time.Time        `json:"updatedAt"`
+	CreatedAt     time.Time        `json:"createdAt"`
+	LastSuccessAt *time.Time       `json:"lastSuccessAt,omitempty"`
+	LastCheckedAt *time.Time       `json:"lastCheckedAt,omitempty"`
 	Name          string           `json:"name"`
-	Enabled       bool             `json:"enabled"`
-	Revision      int64            `json:"revision"`
+	ID            string           `json:"id"`
 	Health        string           `json:"health"`
 	Session       string           `json:"session"`
-	Degraded      bool             `json:"degraded"`
-	Stale         bool             `json:"stale"`
 	Reason        string           `json:"reason,omitempty"`
-	LastCheckedAt *time.Time       `json:"lastCheckedAt,omitempty"`
-	LastSuccessAt *time.Time       `json:"lastSuccessAt,omitempty"`
 	Streams       []StreamResponse `json:"streams"`
-	CreatedAt     time.Time        `json:"createdAt"`
-	UpdatedAt     time.Time        `json:"updatedAt"`
+	Revision      int64            `json:"revision"`
+	Stale         bool             `json:"stale"`
+	Degraded      bool             `json:"degraded"`
+	Enabled       bool             `json:"enabled"`
 }
 
 // CameraCredentialsResponse provides decrypted stream URLs for authorized administrator inspection/copying.
 type CameraCredentialsResponse struct {
-	CameraID    string            `json:"cameraId"`
 	Credentials map[string]string `json:"credentials"` // role -> full plaintext RTSP URL
+	CameraID    string            `json:"cameraId"`
 }
 
 // DiagnoseResponse returns the outcome of an on-demand manual camera probe.

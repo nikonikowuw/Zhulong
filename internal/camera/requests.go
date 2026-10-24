@@ -10,18 +10,18 @@ type CreateStreamRequest struct {
 
 // CreateCameraRequest represents parameters for adding a new camera.
 type CreateCameraRequest struct {
+	Enabled    *bool                `json:"enabled,omitempty"`
+	SubStream  *CreateStreamRequest `json:"subStream,omitempty"`
+	MainStream CreateStreamRequest  `json:"mainStream" binding:"required"`
 	ID         string               `json:"id,omitempty"`
 	Name       string               `json:"name" binding:"required,min=1,max=64"`
-	Enabled    *bool                `json:"enabled,omitempty"`
-	MainStream CreateStreamRequest  `json:"mainStream" binding:"required"`
-	SubStream  *CreateStreamRequest `json:"subStream,omitempty"`
 }
 
 // UpdateCameraRequest represents parameters for updating an existing camera.
 type UpdateCameraRequest struct {
-	Revision   int64                `json:"revision" binding:"required"`
 	Name       *string              `json:"name,omitempty" binding:"omitempty,min=1,max=64"`
 	Enabled    *bool                `json:"enabled,omitempty"`
 	MainStream *CreateStreamRequest `json:"mainStream,omitempty"`
 	SubStream  *CreateStreamRequest `json:"subStream,omitempty"`
+	Revision   int64                `json:"revision" binding:"required"`
 }

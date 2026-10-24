@@ -18,36 +18,36 @@ const (
 
 // StreamStateInfo tracks the runtime health and session state of an individual stream.
 type StreamStateInfo struct {
+	LastCheckedAt       *time.Time `json:"lastCheckedAt,omitempty"`
+	LastSuccessAt       *time.Time `json:"lastSuccessAt,omitempty"`
 	Role                string     `json:"role"`
 	Health              string     `json:"health"`
 	Session             string     `json:"session"`
 	EvidenceType        string     `json:"evidenceType"`
 	Reason              string     `json:"reason,omitempty"`
-	ConsecutiveFailures int        `json:"consecutiveFailures"`
-	LastCheckedAt       *time.Time `json:"lastCheckedAt,omitempty"`
-	LastSuccessAt       *time.Time `json:"lastSuccessAt,omitempty"`
 	ErrorMessage        string     `json:"errorMessage,omitempty"`
+	ConsecutiveFailures int        `json:"consecutiveFailures"`
 }
 
 // CameraStateInfo represents the full runtime status of a camera including aggregated state and per-stream details.
 type CameraStateInfo struct {
-	CameraID      string                      `json:"cameraId"`
-	Enabled       bool                        `json:"enabled"`
-	Revision      int64                       `json:"revision"`
-	Health        string                      `json:"health"`
-	Session       string                      `json:"session"`
-	Degraded      bool                        `json:"degraded"`
-	Stale         bool                        `json:"stale"`
-	Reason        string                      `json:"reason,omitempty"`
 	LastCheckedAt *time.Time                  `json:"lastCheckedAt,omitempty"`
 	LastSuccessAt *time.Time                  `json:"lastSuccessAt,omitempty"`
 	Streams       map[string]*StreamStateInfo `json:"streams"`
+	CameraID      string                      `json:"cameraId"`
+	Health        string                      `json:"health"`
+	Session       string                      `json:"session"`
+	Reason        string                      `json:"reason,omitempty"`
+	Revision      int64                       `json:"revision"`
+	Enabled       bool                        `json:"enabled"`
+	Degraded      bool                        `json:"degraded"`
+	Stale         bool                        `json:"stale"`
 }
 
 // StateRegistry provides a thread-safe in-memory cache and state manager for camera runtime states.
 type StateRegistry struct {
-	mu     sync.RWMutex
 	states map[string]*CameraStateInfo
+	mu     sync.RWMutex
 }
 
 // NewStateRegistry constructs an empty StateRegistry.
@@ -191,16 +191,16 @@ func (r *StateRegistry) RecordStreamFailure(cameraID string, expectedRevision in
 		stream.Session = SessionStateReconnecting
 		stream.Health = HealthStateError
 		stream.EvidenceType = EvidenceError
-	} else {
-		// Control plane / Describe probe failure
-		if stream.LastSuccessAt == nil || stream.ConsecutiveFailures >= DefaultFailureOfflineCount {
-			stream.Health = HealthStateOffline
-		} else {
-			// Transient failure
-			stream.Health = HealthStateError
-		}
-		stream.EvidenceType = EvidenceError
+		r.aggregateCameraStateLocked(state, now)
+		return r.cloneState(state)
 	}
+
+	// Control plane / Describe probe failure
+	stream.Health = HealthStateError
+	if stream.LastSuccessAt == nil || stream.ConsecutiveFailures >= DefaultFailureOfflineCount {
+		stream.Health = HealthStateOffline
+	}
+	stream.EvidenceType = EvidenceError
 
 	r.aggregateCameraStateLocked(state, now)
 	return r.cloneState(state)

@@ -26,22 +26,21 @@ var (
 
 // StreamHub 管理全系统的摄像机媒体分发器生命周期与按需订阅。
 type StreamHub struct {
-	engine   MediaEngine
-	store    CameraStore
-	cipher   *LazyCipher
-	registry *StateRegistry
-	eventHub *EventHub
-	logger   *zap.Logger
-
 	aiConsumer     AIResultConsumer
+	store          CameraStore
+	flight         singleflight.Group
+	engine         MediaEngine
 	regionProvider RegionConfigProvider
-	mu             sync.Mutex
+	registry       *StateRegistry
+	logger         *zap.Logger
+	eventHub       *EventHub
 	dispatchers    map[string]*StreamDispatcher
 	aiStreams      map[string]*aiStreamRef
 	aiSubscribers  map[string]map[string]struct{}
-	closed         bool
+	cipher         *LazyCipher
 	nextConsumerID atomic.Uint64
-	flight         singleflight.Group
+	mu             sync.Mutex
+	closed         bool
 }
 
 // aiStreamRef 表示一路相机的 AI 分析流（ConsumerAI 物理拉流 + FrameBroker）。
@@ -398,13 +397,14 @@ func (h *StreamHub) ResolveAIStreamBrokerPath(ctx context.Context, cameraID stri
 
 		aiSub, err := mediaStream.SubscribeAIResults(context.Background())
 		var cancel context.CancelFunc
+		if err != nil {
+			h.logger.Warn("subscribe AI results for camera failed",
+				zap.String("camera_id", cameraID), zap.Error(err))
+		}
 		if err == nil && aiSub != nil {
 			var ctx context.Context
 			ctx, cancel = context.WithCancel(context.Background())
 			go h.consumeAIResults(ctx, cameraID, aiSub)
-		} else if err != nil {
-			h.logger.Warn("subscribe AI results for camera failed",
-				zap.String("camera_id", cameraID), zap.Error(err))
 		}
 
 		h.mu.Lock()
@@ -414,7 +414,9 @@ func (h *StreamHub) ResolveAIStreamBrokerPath(ctx context.Context, cameraID stri
 				cancel()
 			}
 			if aiSub != nil {
-				_ = aiSub.Close()
+				if closeSubErr := aiSub.Close(); closeSubErr != nil {
+					h.logger.Warn("close AI subscription failed", zap.Error(closeSubErr))
+				}
 			}
 			if closeErr := mediaStream.Close(); closeErr != nil {
 				h.logger.Warn("close AI stream after hub shutdown",

@@ -89,8 +89,8 @@ func TestCameraHandlerCRUD(t *testing.T) {
 	}
 
 	var resp struct {
-		Code string          `json:"code"`
 		Data *CameraResponse `json:"data"`
+		Code string          `json:"code"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("Unmarshal response failed: %v", err)
@@ -110,8 +110,8 @@ func TestCameraHandlerCRUD(t *testing.T) {
 		t.Fatalf("expected Cache-Control: no-store on camera detail, got: %q", w.Header().Get("Cache-Control"))
 	}
 	var getResp struct {
-		Code string          `json:"code"`
 		Data *CameraResponse `json:"data"`
+		Code string          `json:"code"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &getResp); err != nil {
 		t.Fatalf("Unmarshal get response failed: %v", err)
@@ -498,8 +498,8 @@ func TestCameraHandlerCreate_GeneratedULID(t *testing.T) {
 	}
 
 	var resp1 struct {
-		Code string          `json:"code"`
 		Data *CameraResponse `json:"data"`
+		Code string          `json:"code"`
 	}
 	if err := json.Unmarshal(w1.Body.Bytes(), &resp1); err != nil {
 		t.Fatalf("Unmarshal response failed: %v", err)
@@ -528,8 +528,8 @@ func TestCameraHandlerCreate_GeneratedULID(t *testing.T) {
 	}
 
 	var resp2 struct {
-		Code string          `json:"code"`
 		Data *CameraResponse `json:"data"`
+		Code string          `json:"code"`
 	}
 	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
 		t.Fatalf("Unmarshal response failed: %v", err)

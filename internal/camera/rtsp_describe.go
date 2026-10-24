@@ -38,17 +38,17 @@ var (
 
 // DescribeResult contains the verified lightweight probe evidence.
 type DescribeResult struct {
-	StatusCode int
-	Codec      string
-	SDPBytes   int
 	CheckedAt  time.Time
+	Codec      string
+	StatusCode int
+	SDPBytes   int
 }
 
 type rtspResponse struct {
-	statusCode int
-	statusText string
 	headers    map[string][]string
+	statusText string
 	body       []byte
+	statusCode int
 	cseq       int
 }
 
@@ -317,11 +317,12 @@ func (c *DescribeClient) readResponse(r *bufio.Reader, expectedCSeq int) (*rtspR
 
 		headers[key] = append(headers[key], val)
 
-		if key == "cseq" {
+		switch key {
+		case "cseq":
 			if parsedCSeq, err := strconv.Atoi(val); err == nil {
 				respCSeq = parsedCSeq
 			}
-		} else if key == "content-length" {
+		case "content-length":
 			if cl, err := strconv.Atoi(val); err == nil && cl >= 0 {
 				contentLength = cl
 			}

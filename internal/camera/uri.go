@@ -55,9 +55,10 @@ func BuildRTSPURL(host string, port int, path string, query url.Values, username
 	}
 
 	path = strings.TrimSpace(path)
-	if path == "" {
+	switch {
+	case path == "":
 		path = "/"
-	} else if !strings.HasPrefix(path, "/") {
+	case !strings.HasPrefix(path, "/"):
 		path = "/" + path
 	}
 
@@ -131,7 +132,8 @@ func ParseAndNormalizeRTSP(raw string, transport string) (*StreamConnectionInfo,
 	transport = strings.ToLower(strings.TrimSpace(transport))
 	if transport == "" {
 		transport = TransportTCP
-	} else if transport != TransportTCP && transport != TransportUDP {
+	}
+	if transport != TransportTCP && transport != TransportUDP {
 		return nil, ErrUnsupportedTransport
 	}
 

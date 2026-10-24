@@ -29,12 +29,12 @@ const (
 
 // ParsedChallenge represents an analyzed and normalized authentication challenge.
 type ParsedChallenge struct {
+	DigestChallenge *digest.Challenge
 	Type            AuthType
 	RawChallenge    string
-	DigestChallenge *digest.Challenge
 	Algorithm       string
-	HadEmptyOpaque  bool
 	Realm           string
+	HadEmptyOpaque  bool
 }
 
 // GenerateCnonce generates a cryptographically secure 16-hex-character cnonce string.
@@ -54,14 +54,12 @@ func NormalizeChallengeHeader(header string) (normalized string, hadEmptyOpaque 
 		return "", false, ErrMalformedAuthChallenge
 	}
 
-	var prefix string
-	var params string
-	if idx := strings.IndexByte(header, ' '); idx > 0 {
-		prefix = header[:idx]
-		params = strings.TrimSpace(header[idx+1:])
-	} else {
+	idx := strings.IndexByte(header, ' ')
+	if idx <= 0 {
 		return header, false, nil
 	}
+	prefix := header[:idx]
+	params := strings.TrimSpace(header[idx+1:])
 
 	lowerPrefix := strings.ToLower(prefix)
 	if lowerPrefix == "basic" {
@@ -113,13 +111,13 @@ func NormalizeChallengeHeader(header string) (normalized string, hadEmptyOpaque 
 
 	var normParts []string
 	for _, part := range parts {
-		eqIdx := strings.IndexByte(part, '=')
-		if eqIdx < 0 {
+		before, after, ok := strings.Cut(part, "=")
+		if !ok {
 			normParts = append(normParts, part)
 			continue
 		}
-		key := strings.ToLower(strings.TrimSpace(part[:eqIdx]))
-		val := strings.TrimSpace(part[eqIdx+1:])
+		key := strings.ToLower(strings.TrimSpace(before))
+		val := strings.TrimSpace(after)
 
 		// Check for empty opaque
 		if key == "opaque" && (val == `""` || val == "") {

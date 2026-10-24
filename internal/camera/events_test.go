@@ -79,7 +79,7 @@ func TestEventHubEvictsSlowConsumer(t *testing.T) {
 	// Do not read from sub.Channel()
 	// Fill queue past capacity (SSEClientQueueSize = 32)
 	dummyState := &CameraStateInfo{CameraID: "cam_slow", Health: HealthStateOnline}
-	for i := 0; i < SSEClientQueueSize+5; i++ {
+	for range SSEClientQueueSize + 5 {
 		hub.BroadcastChange(dummyState)
 	}
 
@@ -103,7 +103,7 @@ func TestEventHubMaxClientsLimit(t *testing.T) {
 	defer hub.Close()
 
 	var subs []*ClientSubscription
-	for i := 0; i < SSEMaxClients; i++ {
+	for i := range SSEMaxClients {
 		sub, _, err := hub.Subscribe()
 		if err != nil {
 			t.Fatalf("Subscribe %d failed: %v", i, err)

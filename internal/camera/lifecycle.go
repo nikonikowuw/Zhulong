@@ -9,8 +9,8 @@ import (
 
 // LazyCipher provides a thread-safe deferred Cipher implementation initialized during runtime lifecycle start.
 type LazyCipher struct {
-	mu     sync.RWMutex
 	cipher Cipher
+	mu     sync.RWMutex
 }
 
 // NewLazyCipher creates an uninitialized LazyCipher.

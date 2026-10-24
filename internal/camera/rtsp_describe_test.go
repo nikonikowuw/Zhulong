@@ -73,9 +73,10 @@ func readMockRTSPRequest(r *bufio.Reader) (method, uri, cseq, auth string, err e
 		if colon > 0 {
 			k := strings.ToLower(strings.TrimSpace(trimmed[:colon]))
 			v := strings.TrimSpace(trimmed[colon+1:])
-			if k == "cseq" {
+			switch k {
+			case "cseq":
 				cseq = v
-			} else if k == "authorization" {
+			case "authorization":
 				auth = v
 			}
 		}
@@ -125,7 +126,10 @@ func TestDescribeClientDigestAuthWorkflow(t *testing.T) {
 			return
 		}
 
-		resp1 := fmt.Sprintf("RTSP/1.0 401 Unauthorized\r\nCSeq: %s\r\nWWW-Authenticate: Digest realm=\"MockCam\", nonce=\"testnonce123\", algorithm=\"MD5\", qop=\"auth\"\r\nContent-Length: 0\r\n\r\n", cseq1)
+		resp1 := fmt.Sprintf("RTSP/1.0 401 Unauthorized\r\n"+
+			"CSeq: %s\r\n"+
+			"WWW-Authenticate: Digest realm=\"MockCam\", nonce=\"testnonce123\", algorithm=\"MD5\", qop=\"auth\"\r\n"+
+			"Content-Length: 0\r\n\r\n", cseq1)
 		_, _ = conn.Write([]byte(resp1))
 
 		// Request 2: with auth -> return 200 OK
@@ -170,12 +174,18 @@ func TestDescribeClientAuthRejectedOnWrongPassword(t *testing.T) {
 
 		// 1. Send 401
 		_, _, cseq1, _, _ := readMockRTSPRequest(r)
-		resp1 := fmt.Sprintf("RTSP/1.0 401 Unauthorized\r\nCSeq: %s\r\nWWW-Authenticate: Digest realm=\"MockCam\", nonce=\"testnonce123\", algorithm=\"MD5\"\r\nContent-Length: 0\r\n\r\n", cseq1)
+		resp1 := fmt.Sprintf("RTSP/1.0 401 Unauthorized\r\n"+
+			"CSeq: %s\r\n"+
+			"WWW-Authenticate: Digest realm=\"MockCam\", nonce=\"testnonce123\", algorithm=\"MD5\"\r\n"+
+			"Content-Length: 0\r\n\r\n", cseq1)
 		_, _ = conn.Write([]byte(resp1))
 
 		// 2. Client responds with auth, server rejects with 401
 		_, _, cseq2, _, _ := readMockRTSPRequest(r)
-		resp2 := fmt.Sprintf("RTSP/1.0 401 Unauthorized\r\nCSeq: %s\r\nWWW-Authenticate: Digest realm=\"MockCam\", nonce=\"testnonce123\", algorithm=\"MD5\"\r\nContent-Length: 0\r\n\r\n", cseq2)
+		resp2 := fmt.Sprintf("RTSP/1.0 401 Unauthorized\r\n"+
+			"CSeq: %s\r\n"+
+			"WWW-Authenticate: Digest realm=\"MockCam\", nonce=\"testnonce123\", algorithm=\"MD5\"\r\n"+
+			"Content-Length: 0\r\n\r\n", cseq2)
 		_, _ = conn.Write([]byte(resp2))
 	})
 	defer cleanup()

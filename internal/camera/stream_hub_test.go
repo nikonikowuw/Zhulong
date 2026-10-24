@@ -86,10 +86,10 @@ func (s *mockMediaStream) Close() error {
 }
 
 type mockMediaEngine struct {
-	mu           sync.Mutex
-	acquireCount int
-	streams      []*mockMediaStream
 	nextStream   *mockMediaStream
+	streams      []*mockMediaStream
+	acquireCount int
+	mu           sync.Mutex
 }
 
 func newMockMediaEngine() *mockMediaEngine {
@@ -699,7 +699,7 @@ func TestStreamHubSingleflightConcurrentRequests(t *testing.T) {
 	errs := make([]error, concurrentCount)
 
 	wg.Add(concurrentCount)
-	for i := 0; i < concurrentCount; i++ {
+	for i := range concurrentCount {
 		idx := i
 		go func() {
 			defer wg.Done()
@@ -1003,7 +1003,9 @@ func TestStreamHub_ConsumeAIResultsAndBroadcast(t *testing.T) {
 	hub.AttachAIStreamSubscriber(camID, "test_algo")
 
 	// 模拟 Runner 上报一条检测结果
-	feed([]byte(`{"stream_id":1,"pts":12345,"cost_ms":10,"task_type":"detection","detections":[{"box":[0.1,0.2,0.3,0.4],"label":"helmet","score":0.95}],"classifications":[],"persons":[]}`))
+	feed([]byte(`{"stream_id":1,"pts":12345,"cost_ms":10,"task_type":"detection",` +
+		`"detections":[{"box":[0.1,0.2,0.3,0.4],"label":"helmet","score":0.95}],` +
+		`"classifications":[],"persons":[]}`))
 
 	// SSE 客户端应当收到广播事件
 	select {
@@ -1045,8 +1047,8 @@ func (m *mockRegionConfigProvider) ConfigFor(cameraID, algorithmID string) (regi
 // test can assert that the persistence path and the frontend broadcast path
 // observe the same (post-filter) payload.
 type recordingAIResultConsumer struct {
-	mu      sync.Mutex
 	results []aitypes.InferenceResult
+	mu      sync.Mutex
 }
 
 func (c *recordingAIResultConsumer) ProcessInferenceResult(_ context.Context, res aitypes.InferenceResult) error {
@@ -1152,7 +1154,7 @@ func TestStreamHub_ConsumeAIResults_RegionFiltering(t *testing.T) {
 	// The consumer call precedes the eventHub broadcast in consumeAIResults, but
 	// poll with a bound rather than relying on that ordering assumption.
 	var consumerResults []aitypes.InferenceResult
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		consumerResults = consumer.snapshot()
 		if len(consumerResults) > 0 {
 			break

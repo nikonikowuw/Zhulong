@@ -250,12 +250,13 @@ func (s *CameraService) Update(ctx context.Context, id string, req UpdateCameraR
 		}
 
 		var subInfo *StreamConnectionInfo
-		if req.SubStream != nil && strings.TrimSpace(req.SubStream.RTSPURL) != "" {
+		switch {
+		case req.SubStream != nil && strings.TrimSpace(req.SubStream.RTSPURL) != "":
 			subInfo, err = ParseAndNormalizeRTSP(req.SubStream.RTSPURL, req.SubStream.Transport)
 			if err != nil {
 				return nil, apperr.New(apperr.KindInvalid, "CAMERA_INVALID_PARAM", "Invalid sub stream URL format", err)
 			}
-		} else if req.SubStream == nil {
+		case req.SubStream == nil:
 			// Symmetrically preserve existing sub stream if present
 			for _, st := range current.Streams {
 				if st.Role == StreamRoleSub {
@@ -402,6 +403,8 @@ func (s *CameraService) buildCameraResponse(cam *Camera, state *CameraStateInfo)
 		Name:      cam.Name,
 		Enabled:   cam.Enabled,
 		Revision:  cam.Revision,
+		Health:    HealthStateUnknown,
+		Session:   SessionStateIdle,
 		CreatedAt: cam.CreatedAt,
 		UpdatedAt: cam.UpdatedAt,
 	}
@@ -414,9 +417,6 @@ func (s *CameraService) buildCameraResponse(cam *Camera, state *CameraStateInfo)
 		resp.Reason = state.Reason
 		resp.LastCheckedAt = state.LastCheckedAt
 		resp.LastSuccessAt = state.LastSuccessAt
-	} else {
-		resp.Health = HealthStateUnknown
-		resp.Session = SessionStateIdle
 	}
 
 	streamResponses := make([]StreamResponse, len(cam.Streams))

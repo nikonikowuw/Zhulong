@@ -63,18 +63,14 @@ func (s *ProbeService) ValidateStreams(
 	var wg sync.WaitGroup
 	var mainErr, subErr error
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		mainRes, mainErr = s.probeSingleStream(probeCtx, mainInfo)
-	}()
+	})
 
 	if subInfo != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			subRes, subErr = s.probeSingleStream(probeCtx, subInfo)
-		}()
+		})
 	}
 
 	wg.Wait()

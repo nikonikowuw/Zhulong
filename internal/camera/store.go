@@ -19,11 +19,11 @@ var (
 
 // UpdateCameraParams bundles parameters for conditional camera updates.
 type UpdateCameraParams struct {
-	ID               string
-	ExpectedRevision int64
 	Name             *string
 	Enabled          *bool
+	ID               string
 	Streams          []CameraStream
+	ExpectedRevision int64
 }
 
 // CameraStore defines database persistence operations for cameras and their streams.
@@ -128,7 +128,8 @@ func (s *gormCameraStore) List(ctx context.Context, limit, offset int) ([]Camera
 
 	if limit <= 0 {
 		limit = 20
-	} else if limit > 100 {
+	}
+	if limit > 100 {
 		limit = 100
 	}
 	if offset < 0 {

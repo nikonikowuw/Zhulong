@@ -30,13 +30,13 @@ const (
 
 // Camera represents the logical video camera entity persisted in SQLite.
 type Camera struct {
-	ID        string         `gorm:"primaryKey;column:id" json:"id"`
-	Name      string         `gorm:"column:name;not null" json:"name"`
-	Enabled   bool           `gorm:"column:enabled;not null;default:true" json:"enabled"`
-	Revision  int64          `gorm:"column:revision;not null;default:1" json:"revision"`
 	CreatedAt time.Time      `gorm:"column:created_at" json:"createdAt"`
 	UpdatedAt time.Time      `gorm:"column:updated_at" json:"updatedAt"`
+	ID        string         `gorm:"primaryKey;column:id" json:"id"`
+	Name      string         `gorm:"column:name;not null" json:"name"`
 	Streams   []CameraStream `gorm:"foreignKey:CameraID;references:ID;constraint:OnDelete:CASCADE" json:"streams,omitempty"`
+	Revision  int64          `gorm:"column:revision;not null;default:1" json:"revision"`
+	Enabled   bool           `gorm:"column:enabled;not null;default:true" json:"enabled"`
 }
 
 // TableName returns the table name for GORM.
@@ -46,19 +46,19 @@ func (Camera) TableName() string {
 
 // CameraStream represents a specific stream (main/sub) associated with a camera.
 type CameraStream struct {
-	ID             int64     `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
-	CameraID       string    `gorm:"column:camera_id;not null;index" json:"cameraId"`
-	Role           string    `gorm:"column:role;not null" json:"role"`
-	Protocol       string    `gorm:"column:protocol;not null;default:'rtsp'" json:"protocol"`
-	EncryptedURI   []byte    `gorm:"column:encrypted_uri;not null" json:"-"`
-	Transport      string    `gorm:"column:transport;not null;default:'tcp'" json:"transport"`
+	CreatedAt      time.Time `gorm:"column:created_at" json:"createdAt"`
+	UpdatedAt      time.Time `gorm:"column:updated_at" json:"updatedAt"`
 	Codec          string    `gorm:"column:codec;not null" json:"codec"`
+	Protocol       string    `gorm:"column:protocol;not null;default:'rtsp'" json:"protocol"`
+	Transport      string    `gorm:"column:transport;not null;default:'tcp'" json:"transport"`
+	Role           string    `gorm:"column:role;not null" json:"role"`
+	CameraID       string    `gorm:"column:camera_id;not null;index" json:"cameraId"`
+	EncryptedURI   []byte    `gorm:"column:encrypted_uri;not null" json:"-"`
+	ID             int64     `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	Width          int       `gorm:"column:width;not null" json:"width"`
 	Height         int       `gorm:"column:height;not null" json:"height"`
 	FPSNumerator   int       `gorm:"column:fps_numerator;not null;default:0" json:"fpsNumerator"`
 	FPSDenominator int       `gorm:"column:fps_denominator;not null;default:1" json:"fpsDenominator"`
-	CreatedAt      time.Time `gorm:"column:created_at" json:"createdAt"`
-	UpdatedAt      time.Time `gorm:"column:updated_at" json:"updatedAt"`
 }
 
 // TableName returns the table name for GORM.

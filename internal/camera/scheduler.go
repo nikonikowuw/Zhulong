@@ -23,21 +23,19 @@ const (
 type HealthScheduler struct {
 	store          CameraStore
 	cipher         Cipher
-	registry       *StateRegistry
-	hub            *EventHub
+	rootCtx        context.Context
+	inFlight       map[string]bool
 	describeClient *DescribeClient
 	logger         *zap.Logger
-
-	interval   time.Duration
-	semaphore  chan struct{}
-	inFlightMu sync.Mutex
-	inFlight   map[string]bool
-	stopCh     chan struct{}
-	stopped    atomic.Bool
-	wg         sync.WaitGroup
-
-	rootCtx    context.Context
-	cancelRoot context.CancelFunc
+	semaphore      chan struct{}
+	hub            *EventHub
+	stopCh         chan struct{}
+	registry       *StateRegistry
+	cancelRoot     context.CancelFunc
+	wg             sync.WaitGroup
+	interval       time.Duration
+	inFlightMu     sync.Mutex
+	stopped        atomic.Bool
 }
 
 // NewHealthScheduler constructs a HealthScheduler.
@@ -225,9 +223,7 @@ func (s *HealthScheduler) checkStreamAsync(cam *Camera, stream *CameraStream) {
 	s.inFlight[key] = true
 	s.inFlightMu.Unlock()
 
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		defer func() {
 			s.inFlightMu.Lock()
 			delete(s.inFlight, key)
@@ -245,7 +241,7 @@ func (s *HealthScheduler) checkStreamAsync(cam *Camera, stream *CameraStream) {
 		defer cancel()
 
 		s.checkStream(ctx, cam, stream)
-	}()
+	})
 }
 
 func (s *HealthScheduler) checkStream(ctx context.Context, cam *Camera, stream *CameraStream) {

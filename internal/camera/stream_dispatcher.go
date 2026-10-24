@@ -37,30 +37,26 @@ type gopCache struct {
 
 // StreamDispatcher 负责单路摄像机流的拉流消费、GOP 缓存与 Web 客户端扇出。
 type StreamDispatcher struct {
-	hub      *StreamHub
-	cameraID string
-	role     string
-	logger   *zap.Logger
-
-	mu          sync.Mutex
-	subscribers map[*StreamClient]struct{}
-	gop         gopCache
-
-	stream     MediaStream
-	sub        PacketSource
-	cancelPump context.CancelFunc
-	closed     bool
-	closeOnce  sync.Once
-
-	// seq 是流级帧序号：即使某个客户端自己跳了帧，也能从 seq 空洞看出
-	// 「是流本身丢了包」还是「是我这边主动丢的」，这是定位问题的关键分界。
-	seq atomic.Uint32
-
+	stream           MediaStream
+	sub              PacketSource
+	cancelPump       context.CancelFunc
+	logger           *zap.Logger
+	hub              *StreamHub
+	subscribers      map[*StreamClient]struct{}
+	role             string
+	cameraID         string
+	gop              gopCache
+	queueResyncs     atomic.Uint64
+	gopTruncations   atomic.Uint64
+	resyncSkips      atomic.Uint64
 	keyframeInjected atomic.Uint64
 	lagResyncs       atomic.Uint64
-	queueResyncs     atomic.Uint64
-	resyncSkips      atomic.Uint64
-	gopTruncations   atomic.Uint64
+	closeOnce        sync.Once
+	mu               sync.Mutex
+	// seq 是流级帧序号：即使某个客户端自己跳了帧，也能从 seq 空洞看出
+	// 「是流本身丢了包」还是「是我这边主动丢的」，这是定位问题的关键分界。
+	seq    atomic.Uint32
+	closed bool
 }
 
 // NewStreamDispatcher 构造单流分发器。
@@ -106,7 +102,9 @@ func (d *StreamDispatcher) RegisterClient(client *StreamClient) {
 	}
 
 	primed := 0
+	client.needsKey = true
 	if d.gop.complete && len(d.gop.frames) > 0 {
+		client.needsKey = false
 	prime:
 		for _, frame := range d.gop.frames {
 			select {
@@ -126,9 +124,6 @@ func (d *StreamDispatcher) RegisterClient(client *StreamClient) {
 				break prime
 			}
 		}
-	} else {
-		// 没有可用 GOP（刚建流或已因超限退化）
-		client.needsKey = true
 	}
 
 	d.subscribers[client] = struct{}{}

@@ -31,26 +31,26 @@ const (
 
 // EventMessage represents a message pushed over SSE.
 type EventMessage struct {
+	Data     any       `json:"data"`
 	Event    EventType `json:"event"`
 	Sequence uint64    `json:"sequence"`
-	Data     any       `json:"data"`
 }
 
 // ClientSubscription represents a connected SSE client session.
 type ClientSubscription struct {
-	id     uint64
 	ch     chan *EventMessage
+	id     uint64
 	closed atomic.Bool
 }
 
 // EventHub manages SSE client subscribers, sequence generation, and thread-safe event broadcasting.
 type EventHub struct {
-	mu           sync.RWMutex
 	clients      map[uint64]*ClientSubscription
-	nextClientID uint64
-	sequence     atomic.Uint64
 	registry     *StateRegistry
 	stopCh       chan struct{}
+	nextClientID uint64
+	sequence     atomic.Uint64
+	mu           sync.RWMutex
 	stopped      atomic.Bool
 }
 
