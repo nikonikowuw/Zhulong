@@ -6,11 +6,30 @@ import (
 	"fmt"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"go.uber.org/zap"
 )
+
+const (
+	// statusRefreshInterval is how often the background loop re-probes the volume.
+	statusRefreshInterval = 15 * time.Second
+	// statusCacheTTL is how long a status snapshot is served without re-probing.
+	statusCacheTTL = 5 * time.Second
+	// breakdownScanInterval throttles the recursive size scan, which is far more
+	// expensive than a statfs probe.
+	breakdownScanInterval = 30 * time.Second
+	// breakdownScanTimeout bounds a single recursive scan.
+	breakdownScanTimeout = 3 * time.Second
+	// pruneRunTimeout bounds one automatic prune cycle.
+	pruneRunTimeout = 5 * time.Minute
+)
+
+// errServiceNotRestartable is returned by Start when the monitoring loop was
+// already started (or already stopped) once.
+var errServiceNotRestartable = errors.New("storage service already started")
 
 // Service coordinates storage inspection, persistence, hysteresis cleaning, and write safety.
 type Service struct {
@@ -29,8 +48,11 @@ type Service struct {
 	lastBreakdownAt  time.Time
 	afterPrune       func(context.Context)
 
-	stopCh chan struct{}
-	doneCh chan struct{}
+	stopCh   chan struct{}
+	drained  chan struct{}
+	stopOnce sync.Once
+	started  atomic.Bool
+	wg       sync.WaitGroup
 }
 
 // NewService creates and initializes a storage management service.
@@ -61,7 +83,7 @@ func NewService(
 		gate:      gate,
 		cleaner:   cleaner,
 		stopCh:    make(chan struct{}),
-		doneCh:    make(chan struct{}),
+		drained:   make(chan struct{}),
 	}
 
 	gate.SetCallbacks(
@@ -120,7 +142,14 @@ func (s *Service) CanWrite() bool {
 }
 
 // Start begins background monitoring and periodic pruning checks.
+//
+// Start may only succeed once; after Stop the service is terminal and cannot be
+// restarted, because writers and readers already observed its final state.
 func (s *Service) Start(ctx context.Context) error {
+	if !s.started.CompareAndSwap(false, true) {
+		return errServiceNotRestartable
+	}
+
 	cfg, err := s.repo.GetConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("load initial storage config: %w", err)
@@ -135,21 +164,28 @@ func (s *Service) Start(ctx context.Context) error {
 		s.logger.Warn("initial storage status inspection encountered warning", zap.Error(err))
 	}
 
+	s.wg.Add(1)
 	go s.runLoop()
 	return nil
 }
 
-// Stop cleanly terminates the background monitoring loop.
+// Stop cleanly terminates the background monitoring loop and waits for any
+// in-flight prune run to finish.
+//
+// Stop is safe to call concurrently and repeatedly: the loop is signalled once
+// and every caller waits on the same drained channel, so a stop that races with
+// another stop can no longer double-close the stop channel.
 func (s *Service) Stop(ctx context.Context) error {
-	select {
-	case <-s.stopCh:
-		return nil
-	default:
+	s.stopOnce.Do(func() {
 		close(s.stopCh)
-	}
+		go func() {
+			s.wg.Wait()
+			close(s.drained)
+		}()
+	})
 
 	select {
-	case <-s.doneCh:
+	case <-s.drained:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -157,9 +193,9 @@ func (s *Service) Stop(ctx context.Context) error {
 }
 
 func (s *Service) runLoop() {
-	defer close(s.doneCh)
+	defer s.wg.Done()
 
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(statusRefreshInterval)
 	defer ticker.Stop()
 
 	for {
@@ -167,34 +203,53 @@ func (s *Service) runLoop() {
 		case <-s.stopCh:
 			return
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			status, err := s.RefreshStatus(ctx)
-			cancel()
-			if err != nil {
-				s.logger.Warn("periodic storage refresh failed", zap.Error(err))
-				continue
-			}
-
-			// Check if watermark cleaner should trigger
-			if status.Status == StatusWarning && !s.cleaner.IsCleaning() {
-				go func() {
-					cCtx, cCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-					defer cCancel()
-					cfg, err := s.repo.GetConfig(cCtx)
-					if err != nil {
-						return
-					}
-					_, err = s.cleaner.RunPrune(cCtx, status.MediaDirectory, cfg, "watermark")
-					if err != nil {
-						s.logger.Warn("automatic storage cleanup failed", zap.Error(err))
-					} else {
-						s.notifyAfterPrune(cCtx)
-					}
-					_, _ = s.RefreshStatus(cCtx)
-				}()
-			}
+			s.tick()
 		}
 	}
+}
+
+// tick refreshes the status once and kicks off a watermark prune when needed.
+//
+// The prune runs in its own tracked goroutine so Stop can wait for it; the
+// cleaner's own in-progress flag makes a duplicate start a no-op error.
+func (s *Service) tick() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	status, err := s.RefreshStatus(ctx)
+	cancel()
+	if err != nil {
+		s.logger.Warn("periodic storage refresh failed", zap.Error(err))
+		return
+	}
+
+	if status.Status != StatusWarning || s.cleaner.IsCleaning() {
+		return
+	}
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+
+		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), pruneRunTimeout)
+		defer pruneCancel()
+
+		cfg, err := s.repo.GetConfig(pruneCtx)
+		if err != nil {
+			s.logger.Warn("automatic storage cleanup skipped: config unavailable", zap.Error(err))
+			return
+		}
+
+		if _, err := s.cleaner.RunPrune(pruneCtx, status.MediaDirectory, cfg, PruneTriggerWatermark); err != nil {
+			if !errors.Is(err, ErrCleanupInProgress) {
+				s.logger.Warn("automatic storage cleanup failed", zap.Error(err))
+			}
+			return
+		}
+
+		s.notifyAfterPrune(pruneCtx)
+		if _, err := s.RefreshStatus(pruneCtx); err != nil {
+			s.logger.Warn("storage status refresh after automatic cleanup failed", zap.Error(err))
+		}
+	}()
 }
 
 // GetStatus returns the current storage telemetry snapshot.
@@ -229,10 +284,13 @@ func (s *Service) RefreshStatus(ctx context.Context) (*StorageStatus, error) {
 
 	stats, err := s.inspector.InspectFS(s.activeMediaDir)
 	if err != nil {
+		// An uninspectable media root is the mount-loss case the gate exists for:
+		// block writes instead of only reporting canWrite=false in the DTO.
+		s.gate.BlockWrites("storage telemetry unavailable for " + s.activeMediaDir)
 		s.lastStatus = &StorageStatus{
 			MediaDirectory: s.activeMediaDir,
 			Status:         StatusError,
-			CanWrite:       false,
+			CanWrite:       s.gate.CanWrite(),
 			UpdatedAt:      time.Now().UTC(),
 		}
 		return s.lastStatus, fmt.Errorf("inspect filesystem %s: %w", s.activeMediaDir, err)
@@ -380,7 +438,10 @@ func (s *Service) TestPath(ctx context.Context, path string, username, ip string
 		return res, nil
 	}
 
-	rootDev, _ := s.inspector.GetRootDeviceID()
+	rootDev, err := s.inspector.GetRootDeviceID()
+	if err != nil {
+		return nil, fmt.Errorf("resolve root device ID: %w", err)
+	}
 	res.MountPoint = stats.MountPoint
 	res.FSType = stats.FSType
 	res.TotalBytes = stats.TotalBytes

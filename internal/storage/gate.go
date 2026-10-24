@@ -9,12 +9,11 @@ import (
 
 // EmergencyGate guards against filesystem exhaustion by regulating write permissions.
 type EmergencyGate struct {
-	mu           sync.RWMutex
-	logger       *zap.Logger
-	canWrite     atomic.Bool
-	isEmergency  atomic.Bool
-	isDismounted atomic.Bool
-	reason       string
+	mu          sync.RWMutex
+	logger      *zap.Logger
+	canWrite    atomic.Bool
+	isEmergency atomic.Bool
+	reason      string
 
 	onEmergencyStop   func(reason string)
 	onEmergencyResume func()
@@ -57,12 +56,37 @@ func (g *EmergencyGate) Reason() string {
 	return g.reason
 }
 
+// BlockWrites suspends writes when storage telemetry itself is unavailable, for
+// example when the media root can no longer be stat-ed.
+//
+// It shares the emergency state with Evaluate, so a later healthy probe clears
+// the block and fires the resume callback exactly once. Without this, an
+// uninspectable media root would report canWrite=false in the status DTO while
+// the gate kept letting writers create files.
+func (g *EmergencyGate) BlockWrites(reason string) {
+	g.mu.Lock()
+	prevEmergency := g.isEmergency.Swap(true)
+	g.canWrite.Store(false)
+	g.reason = reason
+	onStop := g.onEmergencyStop
+	g.mu.Unlock()
+
+	g.logger.Error("storage gate: writes blocked; telemetry unavailable", zap.String("reason", reason))
+
+	if !prevEmergency && onStop != nil {
+		onStop(reason)
+	}
+}
+
 // Evaluate checks the current filesystem stats against configured emergency thresholds.
-func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounted bool) (health StorageHealthStatus) {
+func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounted bool) StorageHealthStatus {
 	var stopCallback func(string)
 	var resumeCallback func()
 	var stopReason string
 
+	// This defer is registered before the unlock defer so listeners run after the
+	// lock is released; reordering the two would deadlock any listener that calls
+	// back into the gate.
 	defer func() {
 		if stopCallback != nil {
 			stopCallback(stopReason)
@@ -82,7 +106,6 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 	}
 
 	if isDismounted {
-		g.isDismounted.Store(true)
 		g.canWrite.Store(false)
 		g.reason = "external mount point disconnected (fallthrough hazard)"
 		g.logger.Error("storage gate: dismount fallthrough hazard detected; writes blocked",
@@ -91,7 +114,6 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 		)
 		return StatusError
 	}
-	g.isDismounted.Store(false)
 
 	if stats.IsReadOnly {
 		g.canWrite.Store(false)

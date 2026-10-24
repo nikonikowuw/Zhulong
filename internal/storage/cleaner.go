@@ -21,6 +21,19 @@ var (
 	ErrCleanupInProgress = errors.New("cleanup is already in progress")
 )
 
+// Prune trigger reasons. They are recorded in CleanupSummary.TriggerReason and
+// decide whether the high watermark gate is bypassed.
+const (
+	PruneTriggerManual    = "manual"
+	PruneTriggerWatermark = "watermark"
+)
+
+// Prune outcome codes reported in CleanupSummary.TargetStatus.
+const (
+	PruneStatusCompleted  = "completed"
+	PruneStatusSkippedLow = "skipped_below_high_watermark"
+)
+
 type candidateFile struct {
 	path    string
 	size    int64
@@ -99,12 +112,12 @@ func (c *CleanerEngine) RunPrune(ctx context.Context, mediaDir string, cfg *Stor
 		currentUsagePercent = int((stats.UsedBytes * 100) / stats.TotalBytes)
 	}
 
-	isManual := triggerReason == "manual"
+	isManual := triggerReason == PruneTriggerManual
 	// For automatic watermark triggers, only activate when usage >= HighWatermarkPercent
 	if !isManual && currentUsagePercent < cfg.HighWatermarkPercent {
 		summary.DurationMs = time.Since(startTime).Milliseconds()
 		summary.FinishedAt = time.Now().UTC()
-		summary.TargetStatus = "skipped_below_high_watermark"
+		summary.TargetStatus = PruneStatusSkippedLow
 		return summary, nil
 	}
 
@@ -142,7 +155,7 @@ func (c *CleanerEngine) RunPrune(ctx context.Context, mediaDir string, cfg *Stor
 
 	summary.DurationMs = time.Since(startTime).Milliseconds()
 	summary.FinishedAt = time.Now().UTC()
-	summary.TargetStatus = "completed"
+	summary.TargetStatus = PruneStatusCompleted
 
 	c.logger.Info("finished storage cleanup cycle",
 		zap.Int("deleted_files", summary.DeletedFiles),
