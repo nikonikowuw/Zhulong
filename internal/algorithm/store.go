@@ -12,9 +12,7 @@ import (
 
 var _ algorunner.LifecycleStore = (*Store)(nil)
 
-var (
-	ErrNotFound = errors.New("record not found")
-)
+var ErrNotFound = errors.New("record not found")
 
 // Store handles database persistence for algorithms, analysis tasks, and face galleries.
 type Store struct {
@@ -105,7 +103,8 @@ func (s *Store) ListAlgorithms(ctx context.Context) ([]Algorithm, error) {
 	if err != nil {
 		return nil, err
 	}
-	var list []Algorithm
+	// Initialized, not nil: an empty list must serialize to [] rather than null.
+	list := make([]Algorithm, 0)
 	if err := db.Order("created_at ASC").Find(&list).Error; err != nil {
 		return nil, err
 	}

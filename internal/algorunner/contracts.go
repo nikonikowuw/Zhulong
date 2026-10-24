@@ -1,9 +1,6 @@
 package algorunner
 
-import (
-	"context"
-	"path/filepath"
-)
+import "context"
 
 // Lifecycle statuses for algorithm packages and runtime processes.
 const (
@@ -23,21 +20,6 @@ type PackageMeta struct {
 	Version         string
 	PreviousVersion string
 	Status          string
-}
-
-// InstallDir returns the install directory of the algorithm given base algorithms directory.
-func (p PackageMeta) InstallDir(algoDir string) string {
-	return filepath.Join(algoDir, p.ID, p.Version)
-}
-
-// EntryPath returns the convention path to plugin.so.
-func (p PackageMeta) EntryPath(algoDir string) string {
-	return filepath.Join(p.InstallDir(algoDir), "plugin.so")
-}
-
-// EnvPath returns the convention path to optional .env.
-func (p PackageMeta) EnvPath(algoDir string) string {
-	return filepath.Join(p.InstallDir(algoDir), ".env")
 }
 
 // LifecycleStore provides package lookup and status updates for the supervisor.

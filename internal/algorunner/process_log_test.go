@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nikonikowuw/Zhulong/internal/algoipc"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -195,7 +196,7 @@ func TestStreamLogReaderRecoversAfterOversizedLine(t *testing.T) {
 	long := strings.Repeat("x", maxRunnerLogLine+1)
 	process.streamLogReader(strings.NewReader(long+"\n{\"status\":\"failed\",\"stage\":\"connect\"}\n"), "stderr", zapcore.WarnLevel)
 
-	if process.failureStage != FailureStageBrokerConnect {
+	if process.failureStage != algoipc.FailureStageBrokerConnect {
 		t.Fatalf("failure stage = %q, want broker connect", process.failureStage)
 	}
 	foundProtocol := false

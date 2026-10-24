@@ -8,10 +8,13 @@ import (
 )
 
 func renameDirectoryNoReplace(src, dst string) error {
-	if _, err := os.Lstat(dst); err == nil {
+	_, statErr := os.Lstat(dst)
+	switch {
+	case statErr == nil:
 		return os.ErrExist
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+	case !errors.Is(statErr, os.ErrNotExist):
+		return statErr
 	}
+
 	return os.Rename(src, dst)
 }

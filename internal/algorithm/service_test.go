@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
@@ -27,7 +28,7 @@ func setupServiceTest(t *testing.T) (*algorithm.AlgorithmComponents, *database.S
 			t.Errorf("close database: %v", err)
 		}
 	})
-	return algorithm.NewAlgorithmComponents(dbStore, tempDir, "cpu", zap.NewNop()), dbStore, tempDir
+	return algorithm.NewAlgorithmComponents(dbStore, algorunner.Runtime{AlgorithmsDir: tempDir}, x86Host(), zap.NewNop()), dbStore, tempDir
 }
 
 func TestServiceDeleteAlgorithmCleansUpTasks(t *testing.T) {
@@ -84,8 +85,9 @@ func TestServiceDeleteAlgorithmCleansUpTasks(t *testing.T) {
 
 func TestNewAlgorithmComponentsDoesNotCreateInstallDirectory(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "not-created-yet")
-	if comp := algorithm.NewAlgorithmComponents(nil, dataDir, "rknn", zap.NewNop()); comp.Verifier.HostTarget != "rknn" {
-		t.Fatalf("expected configured host target to reach verifier, got %q", comp.Verifier.HostTarget)
+	host := algorithm.DetectHostPlatform("rknn")
+	if comp := algorithm.NewAlgorithmComponents(nil, algorunner.Runtime{AlgorithmsDir: filepath.Join(dataDir, "algorithms")}, host, zap.NewNop()); comp.Verifier.HostPlatform().Target != "rknn" {
+		t.Fatalf("expected configured host target to reach verifier, got %q", comp.Verifier.HostPlatform().Target)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "algorithms")); !os.IsNotExist(err) {
 		t.Fatalf("expected constructor to leave install directory absent, stat error = %v", err)
@@ -148,11 +150,11 @@ func TestServiceDeleteStopsRestartDuringCrashBackoff(t *testing.T) {
 		t.Fatalf("write fake runner: %v", err)
 	}
 
-	options := algorithm.DefaultRecoveryOptions()
+	options := algorunner.DefaultRecoveryOptions()
 	options.InitialBackoff = 250 * time.Millisecond
 	options.MaxBackoff = time.Second
-	supervisor := algorithm.NewSupervisor(store, filepath.Join(dataDir, "algorithms"), runnerPath, options, zap.NewNop())
-	service := algorithm.NewService(store, nil, supervisor, filepath.Join(dataDir, "algorithms"), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: filepath.Join(dataDir, "algorithms"), RunnerPath: runnerPath}, options, zap.NewNop())
+	service := algorithm.NewService(store, nil, supervisor, algorunner.Runtime{AlgorithmsDir: filepath.Join(dataDir, "algorithms")}, zap.NewNop())
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 		if err := dbStore.Close(); err != nil {
@@ -265,12 +267,12 @@ func TestEnableAlgorithmInCrashLoopReturnsConflict(t *testing.T) {
 		t.Fatalf("write fail runner: %v", err)
 	}
 
-	opts := algorithm.DefaultRecoveryOptions()
+	opts := algorunner.DefaultRecoveryOptions()
 	opts.MaxCrashes = 1
 	opts.InitialBackoff = 5 * time.Millisecond
 	opts.CrashWindow = time.Second
-	supervisor := algorithm.NewSupervisor(store, dataDir, runnerPath, opts, zap.NewNop())
-	service := algorithm.NewService(store, nil, supervisor, dataDir, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir, RunnerPath: runnerPath}, opts, zap.NewNop())
+	service := algorithm.NewService(store, nil, supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 		_ = dbStore.Close()

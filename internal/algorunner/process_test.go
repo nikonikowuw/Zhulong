@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/algoipc"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -26,7 +27,7 @@ import (
 // shardBudget mirrors the unexported algorunner.shardBudget. process_test.go is
 // an external (black-box) test package, so it cannot reference the constant
 // directly; it must still assert the same bound the implementation guarantees.
-const shardBudget = algorunner.MaxIpcPayloadSize * 9 / 10
+const shardBudget = algoipc.MaxIpcPayloadSize * 9 / 10
 
 // testGalleryFeature builds a realistic 512-dim L2-normalized float32 embedding:
 // each component is drawn from N(0, 1/512) and the vector is then normalized.
@@ -110,37 +111,37 @@ func findMockDetectorPlugin(t *testing.T) string {
 
 func TestIpcPayloadSizeGate(t *testing.T) {
 	// Exactly at the limit must pass.
-	exact := make([]byte, algorunner.MaxIpcPayloadSize)
-	msgBytes, err := algorunner.EncodeIpcMessage(algorunner.MsgGallerySync, 1, exact)
+	exact := make([]byte, algoipc.MaxIpcPayloadSize)
+	msgBytes, err := algoipc.EncodeIpcMessage(algoipc.MsgGallerySync, 1, exact)
 	if err != nil {
-		t.Fatalf("payload of exactly MaxIpcPayloadSize must be accepted, got: %v", err)
+		t.Fatalf("payload of exactly algoipc.MaxIpcPayloadSize must be accepted, got: %v", err)
 	}
-	if len(msgBytes) != 16+algorunner.MaxIpcPayloadSize {
+	if len(msgBytes) != 16+algoipc.MaxIpcPayloadSize {
 		t.Fatalf("unexpected framed length: %d", len(msgBytes))
 	}
-	hdr, err := algorunner.DecodeIpcHeader(msgBytes)
+	hdr, err := algoipc.DecodeIpcHeader(msgBytes)
 	if err != nil {
-		t.Fatalf("DecodeIpcHeader on boundary payload failed: %v", err)
+		t.Fatalf("algoipc.DecodeIpcHeader on boundary payload failed: %v", err)
 	}
-	if hdr.PayloadSize != uint32(algorunner.MaxIpcPayloadSize) {
-		t.Errorf("expected payload_size %d, got %d", algorunner.MaxIpcPayloadSize, hdr.PayloadSize)
+	if hdr.PayloadSize != uint32(algoipc.MaxIpcPayloadSize) {
+		t.Errorf("expected payload_size %d, got %d", algoipc.MaxIpcPayloadSize, hdr.PayloadSize)
 	}
 
 	// One byte over the limit must be rejected by the send path.
-	tooLarge := make([]byte, algorunner.MaxIpcPayloadSize+1)
-	if _, err := algorunner.EncodeIpcMessage(algorunner.MsgGallerySync, 1, tooLarge); !errors.Is(err, algorunner.ErrIpcPayloadTooLarge) {
-		t.Errorf("expected ErrIpcPayloadTooLarge for 64KB+1, got: %v", err)
+	tooLarge := make([]byte, algoipc.MaxIpcPayloadSize+1)
+	if _, err := algoipc.EncodeIpcMessage(algoipc.MsgGallerySync, 1, tooLarge); !errors.Is(err, algoipc.ErrIpcPayloadTooLarge) {
+		t.Errorf("expected algoipc.ErrIpcPayloadTooLarge for 64KB+1, got: %v", err)
 	}
 
 	// The receive path must also reject a header declaring an oversized payload.
 	buf := make([]byte, 16)
-	binary.LittleEndian.PutUint32(buf[0:4], algorunner.IpcMagic)
-	binary.LittleEndian.PutUint16(buf[4:6], algorunner.MsgGallerySync)
-	binary.LittleEndian.PutUint16(buf[6:8], algorunner.IpcVersion)
-	binary.LittleEndian.PutUint32(buf[8:12], uint32(algorunner.MaxIpcPayloadSize+1))
+	binary.LittleEndian.PutUint32(buf[0:4], algoipc.IpcMagic)
+	binary.LittleEndian.PutUint16(buf[4:6], algoipc.MsgGallerySync)
+	binary.LittleEndian.PutUint16(buf[6:8], algoipc.IpcVersion)
+	binary.LittleEndian.PutUint32(buf[8:12], uint32(algoipc.MaxIpcPayloadSize+1))
 	binary.LittleEndian.PutUint32(buf[12:16], 1)
-	if _, err := algorunner.DecodeIpcHeader(buf); !errors.Is(err, algorunner.ErrIpcPayloadTooLarge) {
-		t.Errorf("expected DecodeIpcHeader to reject oversized payload_size, got: %v", err)
+	if _, err := algoipc.DecodeIpcHeader(buf); !errors.Is(err, algoipc.ErrIpcPayloadTooLarge) {
+		t.Errorf("expected algoipc.DecodeIpcHeader to reject oversized payload_size, got: %v", err)
 	}
 }
 
@@ -152,12 +153,12 @@ func TestRunnerProcessInjectsDotEnvEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "runner.sh")
 	envFile := filepath.Join(dir, ".env")
-	if err := os.WriteFile(envFile, []byte("ZHULONG_ENV_PROBE=injected\n"), 0644); err != nil {
+	if err := os.WriteFile(envFile, []byte("ZHULONG_ENV_PROBE=injected\n"), 0o644); err != nil {
 		t.Fatalf("write .env: %v", err)
 	}
 	envProbePath := filepath.Join(dir, "env-probe")
 	scriptBody := fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"$ZHULONG_ENV_PROBE\" > '%s'\necho \"ZHULONG_ENV_PROBE=$ZHULONG_ENV_PROBE\"\nsleep 0.3\n", envProbePath)
-	if err := os.WriteFile(script, []byte(scriptBody), 0755); err != nil {
+	if err := os.WriteFile(script, []byte(scriptBody), 0o755); err != nil {
 		t.Fatalf("write runner script: %v", err)
 	}
 
@@ -207,7 +208,7 @@ func TestRunnerProcessMissingDotEnvIsOptional(t *testing.T) {
 	// A missing .env file must not be an error: .env is optional.
 	dir := t.TempDir()
 	script := filepath.Join(dir, "runner.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 0.3\n"), 0755); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 0.3\n"), 0o755); err != nil {
 		t.Fatalf("write runner script: %v", err)
 	}
 
@@ -322,13 +323,13 @@ func TestRunnerProcessReportsDotEnvParseFailure(t *testing.T) {
 	// and still start the process (a broken .env must not block the runner).
 	dir := t.TempDir()
 	script := filepath.Join(dir, "runner.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 0.3\n"), 0755); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 0.3\n"), 0o755); err != nil {
 		t.Fatalf("write runner script: %v", err)
 	}
 
 	envFile := filepath.Join(dir, ".env")
 	oversizedLine := "ZHULONG_OVERSIZED=" + strings.Repeat("x", 70000)
-	if err := os.WriteFile(envFile, []byte(oversizedLine+"\n"), 0644); err != nil {
+	if err := os.WriteFile(envFile, []byte(oversizedLine+"\n"), 0o644); err != nil {
 		t.Fatalf("write oversized .env: %v", err)
 	}
 
@@ -388,7 +389,7 @@ EMPTY_LINE=
 OMP_NUM_THREADS="4"
 QUOTED_VAL='hello world'
 `
-	if err := os.WriteFile(envPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(envPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write .env: %v", err)
 	}
 
@@ -414,25 +415,25 @@ QUOTED_VAL='hello world'
 func TestIpcMessageFramingAndGalleryMessages(t *testing.T) {
 	// 1. Framing and header
 	payload := []byte("hello_ipc")
-	msgBytes, err := algorunner.EncodeIpcMessage(algorunner.MsgGalleryUpsert, 42, payload)
+	msgBytes, err := algoipc.EncodeIpcMessage(algoipc.MsgGalleryUpsert, 42, payload)
 	if err != nil {
-		t.Fatalf("EncodeIpcMessage failed: %v", err)
+		t.Fatalf("algoipc.EncodeIpcMessage failed: %v", err)
 	}
 
 	if len(msgBytes) != 16+len(payload) {
 		t.Fatalf("expected length %d, got %d", 16+len(payload), len(msgBytes))
 	}
 
-	hdr, err := algorunner.DecodeIpcHeader(msgBytes)
+	hdr, err := algoipc.DecodeIpcHeader(msgBytes)
 	if err != nil {
-		t.Fatalf("DecodeIpcHeader failed: %v", err)
+		t.Fatalf("algoipc.DecodeIpcHeader failed: %v", err)
 	}
 
-	if hdr.Magic != algorunner.IpcMagic {
-		t.Errorf("expected magic 0x%X, got 0x%X", algorunner.IpcMagic, hdr.Magic)
+	if hdr.Magic != algoipc.IpcMagic {
+		t.Errorf("expected magic 0x%X, got 0x%X", algoipc.IpcMagic, hdr.Magic)
 	}
-	if hdr.MsgType != algorunner.MsgGalleryUpsert {
-		t.Errorf("expected msg_type %d, got %d", algorunner.MsgGalleryUpsert, hdr.MsgType)
+	if hdr.MsgType != algoipc.MsgGalleryUpsert {
+		t.Errorf("expected msg_type %d, got %d", algoipc.MsgGalleryUpsert, hdr.MsgType)
 	}
 	if hdr.Sequence != 42 {
 		t.Errorf("expected sequence 42, got %d", hdr.Sequence)
@@ -454,12 +455,12 @@ func TestIpcMessageFramingAndGalleryMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateGallerySyncMsg failed: %v", err)
 	}
-	syncHdr, err := algorunner.DecodeIpcHeader(syncBytes)
+	syncHdr, err := algoipc.DecodeIpcHeader(syncBytes)
 	if err != nil {
 		t.Fatalf("decode sync header failed: %v", err)
 	}
-	if syncHdr.MsgType != algorunner.MsgGallerySync {
-		t.Errorf("expected MsgGallerySync type, got %d", syncHdr.MsgType)
+	if syncHdr.MsgType != algoipc.MsgGallerySync {
+		t.Errorf("expected algoipc.MsgGallerySync type, got %d", syncHdr.MsgType)
 	}
 
 	var parsedSync algorunner.GallerySyncPayload
@@ -520,7 +521,7 @@ func TestRunnerProcessStopKillsProcessGroup(t *testing.T) {
 	pidFile := filepath.Join(dir, "child.pid")
 	script := filepath.Join(dir, "spawning_runner.sh")
 	scriptBody := "#!/bin/sh\nsleep 30 &\necho $! > \"$CHILD_PID_FILE\"\nwait\n"
-	if err := os.WriteFile(script, []byte(scriptBody), 0755); err != nil {
+	if err := os.WriteFile(script, []byte(scriptBody), 0o755); err != nil {
 		t.Fatalf("write spawning runner script: %v", err)
 	}
 
@@ -585,7 +586,7 @@ func TestRunnerProcessForceKillOnTimeout(t *testing.T) {
 trap '' TERM
 sleep 10
 `
-	if err := os.WriteFile(scriptFile, []byte(scriptContent), 0755); err != nil {
+	if err := os.WriteFile(scriptFile, []byte(scriptContent), 0o755); err != nil {
 		t.Fatalf("write trap script: %v", err)
 	}
 
@@ -628,7 +629,7 @@ func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
 	script := filepath.Join(dir, "echo_args.sh")
 	argsPath := filepath.Join(dir, "args.txt")
 	scriptBody := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGS_CAPTURE\"\nexit 0\n"
-	if err := os.WriteFile(script, []byte(scriptBody), 0755); err != nil {
+	if err := os.WriteFile(script, []byte(scriptBody), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 
@@ -818,7 +819,7 @@ func TestCreateGallerySyncShards_ShardBudgetHoldsForRealisticGallery(t *testing.
 		if len(s) > shardBudget {
 			t.Errorf("shard %d exceeds shardBudget (%d): %d bytes", i, shardBudget, len(s))
 		}
-		if len(s) > int(algorunner.MaxIpcPayloadSize) {
+		if len(s) > int(algoipc.MaxIpcPayloadSize) {
 			t.Errorf("shard %d exceeds the protocol limit: %d bytes", i, len(s))
 		}
 		p := decodeShard(t, s)
@@ -855,14 +856,14 @@ func TestGalleryBroadcaster_SyncUpsertDelete(t *testing.T) {
 	if len(mock.messages) != 3 {
 		t.Fatalf("expected 3 broadcast messages, got %d", len(mock.messages))
 	}
-	if mock.messages[0].msgType != algorunner.MsgGallerySync {
-		t.Errorf("expected MsgGallerySync (10), got %d", mock.messages[0].msgType)
+	if mock.messages[0].msgType != algoipc.MsgGallerySync {
+		t.Errorf("expected algoipc.MsgGallerySync (10), got %d", mock.messages[0].msgType)
 	}
-	if mock.messages[1].msgType != algorunner.MsgGalleryUpsert {
-		t.Errorf("expected MsgGalleryUpsert (11), got %d", mock.messages[1].msgType)
+	if mock.messages[1].msgType != algoipc.MsgGalleryUpsert {
+		t.Errorf("expected algoipc.MsgGalleryUpsert (11), got %d", mock.messages[1].msgType)
 	}
-	if mock.messages[2].msgType != algorunner.MsgGalleryDelete {
-		t.Errorf("expected MsgGalleryDelete (12), got %d", mock.messages[2].msgType)
+	if mock.messages[2].msgType != algoipc.MsgGalleryDelete {
+		t.Errorf("expected algoipc.MsgGalleryDelete (12), got %d", mock.messages[2].msgType)
 	}
 }
 
@@ -883,7 +884,7 @@ func TestGalleryBroadcaster_SyncUpsertDelete(t *testing.T) {
 func TestRunnerProcessSpawnThreadSurvivesWhileChildRuns(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "long_lived_runner.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile true; do sleep 0.05; done\n"), 0755); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile true; do sleep 0.05; done\n"), 0o755); err != nil {
 		t.Fatalf("write long-lived runner: %v", err)
 	}
 

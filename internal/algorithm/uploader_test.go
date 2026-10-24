@@ -28,7 +28,7 @@ func createTestTarGz(t *testing.T, files map[string][]byte) string {
 	for name, content := range files {
 		hdr := &tar.Header{
 			Name: name,
-			Mode: 0644,
+			Mode: 0o644,
 			Size: int64(len(content)),
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
@@ -168,7 +168,7 @@ func TestExtractArchiveWindowsPermissionCompensation(t *testing.T) {
 	}
 
 	// Mode should have executable permission 0755
-	if fi.Mode().Perm()&0111 == 0 {
+	if fi.Mode().Perm()&0o111 == 0 {
 		t.Errorf("expected plugin.so to have executable bits, got %o", fi.Mode().Perm())
 	}
 }

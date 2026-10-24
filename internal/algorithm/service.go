@@ -7,10 +7,10 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/task"
@@ -26,8 +26,8 @@ var (
 type Service struct {
 	store      *Store
 	verifier   *Verifier
-	supervisor *Supervisor
-	installDir string
+	supervisor *algorunner.Supervisor
+	rt         algorunner.Runtime
 	logger     *zap.Logger
 	mu         sync.Mutex
 
@@ -43,7 +43,7 @@ type Service struct {
 const defaultRestartDebounce = 200 * time.Millisecond
 
 // NewService creates a new Service instance.
-func NewService(store *Store, verifier *Verifier, supervisor *Supervisor, installDir string, logger *zap.Logger) *Service {
+func NewService(store *Store, verifier *Verifier, supervisor *algorunner.Supervisor, rt algorunner.Runtime, logger *zap.Logger) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -51,7 +51,7 @@ func NewService(store *Store, verifier *Verifier, supervisor *Supervisor, instal
 		store:           store,
 		verifier:        verifier,
 		supervisor:      supervisor,
-		installDir:      installDir,
+		rt:              rt,
 		logger:          logger.Named("algorithm.service"),
 		restartTimers:   make(map[string]*time.Timer),
 		restartPending:  make(map[string]struct{}),
@@ -114,13 +114,13 @@ func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Al
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	algo, err := s.verifier.StageAndVerify(ctx, archivePath, s.installDir)
+	algo, err := s.verifier.StageAndVerify(ctx, archivePath, s.rt.AlgorithmsDir)
 	if err != nil {
 		return nil, normalizeInstallError(fmt.Errorf("verify and stage algorithm: %w", err))
 	}
 	discardStagedVersion := func() {
-		if removeErr := os.RemoveAll(algo.InstallDir(s.installDir)); removeErr != nil {
-			s.logger.Warn("failed to remove unregistered algorithm version", zap.String("path", algo.InstallDir(s.installDir)), zap.Error(removeErr))
+		if removeErr := os.RemoveAll(s.rt.PackageDir(algo.ID, algo.Version)); removeErr != nil {
+			s.logger.Warn("failed to remove unregistered algorithm version", zap.String("path", s.rt.PackageDir(algo.ID, algo.Version)), zap.Error(removeErr))
 		}
 	}
 
@@ -225,7 +225,7 @@ func (s *Service) EnableAlgorithm(ctx context.Context, id string) error {
 	}
 
 	if err := s.supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); err != nil {
-		if errors.Is(err, ErrNoBrokerSockets) {
+		if errors.Is(err, algorunner.ErrNoBrokerSockets) {
 			// 无活跃任务：平滑进入待命态 (Standby)，写 ACTIVE 到 DB
 			s.logger.Info("algorithm enabled in standby state (no active tasks)", zap.String("id", id))
 			if err := s.store.UpdateAlgorithmStatus(ctx, id, StatusActive); err != nil {
@@ -233,7 +233,7 @@ func (s *Service) EnableAlgorithm(ctx context.Context, id string) error {
 			}
 			return nil
 		}
-		if errors.Is(err, ErrAlgorithmAlreadyRunning) {
+		if errors.Is(err, algorunner.ErrAlgorithmAlreadyRunning) {
 			// 并发注册竞争赢家已拉起，幂等成功
 			if algo.Status != StatusActive {
 				_ = s.store.UpdateAlgorithmStatus(ctx, id, StatusActive)
@@ -270,7 +270,7 @@ func (s *Service) DisableAlgorithm(ctx context.Context, id string) error {
 // ResetAlgorithm resets an algorithm from CRASH_LOOP back to DISABLED so it can be re-enabled.
 func (s *Service) ResetAlgorithm(ctx context.Context, id string) error {
 	if err := s.supervisor.ResetAlgorithm(ctx, id); err != nil {
-		if errors.Is(err, ErrAlgorithmNotInCrashLoop) {
+		if errors.Is(err, algorunner.ErrAlgorithmNotInCrashLoop) {
 			return apperr.Conflict("ALGORITHM_NOT_IN_CRASH_LOOP", "Algorithm is not in CRASH_LOOP", err)
 		}
 		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("reset algorithm: %v", err), err)
@@ -303,7 +303,7 @@ func (s *Service) DeleteAlgorithm(ctx context.Context, id string) error {
 	}
 
 	// Remove files
-	algoBaseDir := filepath.Join(s.installDir, algo.ID)
+	algoBaseDir := s.rt.IDDir(algo.ID)
 	if err := os.RemoveAll(algoBaseDir); err != nil && !os.IsNotExist(err) {
 		s.logger.Warn("failed to remove algorithm directory on disk", zap.String("path", algoBaseDir), zap.Error(err))
 	}
@@ -425,7 +425,7 @@ func (s *Service) restartAlgorithmNow(algorithmID string) {
 	} else if liveStatus == StatusDisabled {
 		// 处于待命态（Standby）：新任务加入，尝试从待命态拉起 Runner
 		if err := s.supervisor.StartAlgorithm(context.Background(), algo.ToPackageMeta()); err != nil {
-			if !errors.Is(err, ErrNoBrokerSockets) && !errors.Is(err, ErrAlgorithmAlreadyRunning) {
+			if !errors.Is(err, algorunner.ErrNoBrokerSockets) && !errors.Is(err, algorunner.ErrAlgorithmAlreadyRunning) {
 				s.logger.Warn("failed to start standby algorithm after task change",
 					zap.String("algorithm_id", algorithmID),
 					zap.Error(err),

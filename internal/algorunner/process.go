@@ -22,29 +22,12 @@ import (
 )
 
 const (
-	IpcMagic                    = algoipc.IpcMagic
-	IpcVersion                  = algoipc.IpcVersion
-	MaxIpcPayloadSize           = algoipc.MaxIpcPayloadSize
-	FailureStageBrokerConnect   = algoipc.FailureStageBrokerConnect
+	// runnerExitBrokerUnavailable is the runner's exit code when it could not
+	// reach every frame broker socket.
 	runnerExitBrokerUnavailable = algoipc.RunnerExitBrokerUnavailable
-	MsgResult                   = algoipc.MsgResult
-
-	MsgGallerySync   = algoipc.MsgGallerySync
-	MsgGalleryUpsert = algoipc.MsgGalleryUpsert
-	MsgGalleryDelete = algoipc.MsgGalleryDelete
-	MsgGalleryAck    = algoipc.MsgGalleryAck
 
 	maxRunnerLogLine = 64 * 1024
 	runnerLogRate    = 100
-)
-
-var ErrIpcPayloadTooLarge = algoipc.ErrIpcPayloadTooLarge
-
-type IpcHeader = algoipc.IpcHeader
-
-var (
-	EncodeIpcMessage = algoipc.EncodeIpcMessage
-	DecodeIpcHeader  = algoipc.DecodeIpcHeader
 )
 
 // LoadDotEnv reads key-value environment variable pairs from a .env file.
@@ -317,9 +300,9 @@ func (p *RunnerProcess) streamLogReader(reader io.Reader, source string, fallbac
 			if parsed.invalid {
 				p.countRunnerIssue(source, "invalid")
 			}
-			if parsed.stage == FailureStageBrokerConnect {
+			if parsed.stage == algoipc.FailureStageBrokerConnect {
 				p.mu.Lock()
-				p.failureStage = FailureStageBrokerConnect
+				p.failureStage = algoipc.FailureStageBrokerConnect
 				p.mu.Unlock()
 			}
 			p.emitRunnerEvent(source, parsed.level, parsed.message, parsed.fields...)
@@ -352,7 +335,8 @@ func classifyRunnerLine(line []byte, source string, fallback zapcore.Level) pars
 	_, hasStatus := object["status"]
 	_, hasStage := object["stage"]
 	_, hasStep := object["step"]
-	if hasStatus || hasStage || hasStep {
+	hasProtocolEvent := hasStatus || hasStage || hasStep
+	if hasProtocolEvent {
 		parsed.message = "runner protocol event"
 		parsed.fields = base
 		for key, allowed := range map[string]func(string) bool{
@@ -392,19 +376,11 @@ func classifyRunnerLine(line []byte, source string, fallback zapcore.Level) pars
 		return parsed
 	}
 
-	var nativeLog bool
-	if raw, exists := object["zhulongLog"]; exists && json.Unmarshal(raw, &nativeLog) == nil && nativeLog {
-		var module, level, message string
-		if json.Unmarshal(object["module"], &module) != nil || !validNativeModule(module) ||
-			json.Unmarshal(object["level"], &level) != nil ||
-			json.Unmarshal(object["message"], &message) != nil {
-			parsed.invalid = true
-			parsed.message = "runner native log rejected"
-			parsed.fields = base
-			return parsed
-		}
-		nativeLevel, ok := nativeZapLevel(level)
-		if !ok {
+	nativeLog, ok := decodeLogFlag(object["zhulongLog"])
+	if ok && nativeLog {
+		module, level, message, fieldsOK := decodeNativeLogFields(object)
+		nativeLevel, levelOK := nativeZapLevel(level)
+		if !fieldsOK || !levelOK {
 			parsed.invalid = true
 			parsed.message = "runner native log rejected"
 			parsed.fields = base
@@ -474,13 +450,45 @@ func validNativeModule(value string) bool {
 		return false
 	}
 	for _, char := range []byte(value) {
-		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
-			(char >= '0' && char <= '9') || char == '_' || char == '-' || char == '.' {
-			continue
+		if !isNativeModuleChar(char) {
+			return false
 		}
-		return false
 	}
 	return true
+}
+
+// isNativeModuleChar reports whether char may appear in a native module name
+// (C++ style identifiers plus the project's "_32" style suffixes).
+func isNativeModuleChar(char byte) bool {
+	switch {
+	case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9':
+		return true
+	case char == '_', char == '-', char == '.':
+		return true
+	}
+	return false
+}
+
+// decodeLogFlag decodes the optional zhulongLog marker of a native log record.
+// A missing or malformed marker is not an error: the line simply falls through
+// to the plain-text classification paths.
+func decodeLogFlag(raw json.RawMessage) (flag bool, ok bool) {
+	if raw == nil || json.Unmarshal(raw, &flag) != nil {
+		return false, false
+	}
+	return flag, true
+}
+
+// decodeNativeLogFields decodes the module/level/message triple of a native
+// runner log record and validates the module name, which ends up as a log field.
+func decodeNativeLogFields(object map[string]json.RawMessage) (module, level, message string, ok bool) {
+	if json.Unmarshal(object["module"], &module) != nil || !validNativeModule(module) {
+		return "", "", "", false
+	}
+	if json.Unmarshal(object["level"], &level) != nil || json.Unmarshal(object["message"], &message) != nil {
+		return "", "", "", false
+	}
+	return module, level, message, true
 }
 
 func nativeZapLevel(value string) (zapcore.Level, bool) {
@@ -638,13 +646,13 @@ func (p *RunnerProcess) watchExit(cmd *exec.Cmd, stdoutR, stderrR *os.File, logW
 	// connect to the broker. Robustness note: the stderr marker above is the
 	// primary signal because exit codes are more fragile to native changes.
 	if p.exitCode == runnerExitBrokerUnavailable {
-		p.failureStage = FailureStageBrokerConnect
+		p.failureStage = algoipc.FailureStageBrokerConnect
 	}
 
 	if p.state == StatusRunning {
 		p.state = StatusCrashed
 
-		if p.failureStage == FailureStageBrokerConnect {
+		if p.failureStage == algoipc.FailureStageBrokerConnect {
 			// The runner could not connect to every broker socket it was given.
 			// This is a distinguishable signal, NOT an ordinary plugin crash. We do
 			// not fake success or change watchdog restart/circuit-breaker behaviour.
@@ -694,7 +702,8 @@ func (p *RunnerProcess) Stop(timeout time.Duration) error {
 	doneCh := p.doneCh
 	p.mu.Unlock()
 
-	if cmd == nil || cmd.Process == nil || state == StatusDisabled {
+	noProcessHandle := cmd == nil || cmd.Process == nil
+	if noProcessHandle || state == StatusDisabled {
 		return nil
 	}
 
@@ -807,11 +816,11 @@ type GalleryDeletePayload struct {
 
 // shardBudget caps a single gallery sync shard at 90% of the protocol limit so
 // the shard header and marshalling drift cannot push a payload past
-// MaxIpcPayloadSize. Measured sizes: a 512-dim L2-normalized float32 embedding
+// algoipc.MaxIpcPayloadSize. Measured sizes: a 512-dim L2-normalized float32 embedding
 // serializes to ~12.3 bytes per component (~6.3KB per item), so the old fixed
 // 10-items-per-shard packing left under 1% headroom on real data (10 items
 // measured at 64204~65373 bytes against the 65536 limit).
-const shardBudget = MaxIpcPayloadSize * 9 / 10
+const shardBudget = algoipc.MaxIpcPayloadSize * 9 / 10
 
 // CreateGallerySyncShards fragments gallery items into a sequence of JSON
 // payloads, each strictly within shardBudget (and therefore well under the 64KB
@@ -902,7 +911,7 @@ func CreateGallerySyncShards(syncID string, items []GallerySyncItem) ([][]byte, 
 		}
 		// Defensive gate: the packing math above should make this unreachable, but
 		// it is the last line of defence before the 64KB protocol limit.
-		if len(payload) > int(MaxIpcPayloadSize) {
+		if len(payload) > int(algoipc.MaxIpcPayloadSize) {
 			return nil, fmt.Errorf("gallery sync shard %d exceeds 64KB (%d bytes)", i, len(payload))
 		}
 		shards = append(shards, payload)
@@ -916,7 +925,7 @@ func CreateGallerySyncMsg(seq uint32, items []GallerySyncItem) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal gallery sync payload: %w", err)
 	}
-	return EncodeIpcMessage(MsgGallerySync, seq, payload)
+	return algoipc.EncodeIpcMessage(algoipc.MsgGallerySync, seq, payload)
 }
 
 // CreateGalleryUpsertMsg serializes an incremental face enrollment update into framed IPC bytes.
@@ -925,7 +934,7 @@ func CreateGalleryUpsertMsg(seq uint32, item GalleryUpsertPayload) ([]byte, erro
 	if err != nil {
 		return nil, fmt.Errorf("marshal gallery upsert payload: %w", err)
 	}
-	return EncodeIpcMessage(MsgGalleryUpsert, seq, payload)
+	return algoipc.EncodeIpcMessage(algoipc.MsgGalleryUpsert, seq, payload)
 }
 
 // CreateGalleryDeleteMsg serializes a delete face/person update into framed IPC bytes.
@@ -934,7 +943,7 @@ func CreateGalleryDeleteMsg(seq uint32, faceID, personID string) ([]byte, error)
 	if err != nil {
 		return nil, fmt.Errorf("marshal gallery delete payload: %w", err)
 	}
-	return EncodeIpcMessage(MsgGalleryDelete, seq, payload)
+	return algoipc.EncodeIpcMessage(algoipc.MsgGalleryDelete, seq, payload)
 }
 
 // GalleryBroadcaster distributes full and incremental gallery updates to running algorithm processes.
@@ -964,7 +973,7 @@ func (b *GalleryBroadcaster) BroadcastSync(ctx context.Context, syncID string, i
 		return fmt.Errorf("create gallery sync shards: %w", err)
 	}
 	for i, shard := range shards {
-		if err := b.broadcaster.BroadcastAIMessage(ctx, 0, MsgGallerySync, shard); err != nil {
+		if err := b.broadcaster.BroadcastAIMessage(ctx, 0, algoipc.MsgGallerySync, shard); err != nil {
 			return fmt.Errorf("broadcast sync shard %d/%d: %w", i, len(shards), err)
 		}
 	}
@@ -980,7 +989,7 @@ func (b *GalleryBroadcaster) BroadcastUpsert(ctx context.Context, item GalleryUp
 	if err != nil {
 		return fmt.Errorf("marshal gallery upsert: %w", err)
 	}
-	return b.broadcaster.BroadcastAIMessage(ctx, 0, MsgGalleryUpsert, payload)
+	return b.broadcaster.BroadcastAIMessage(ctx, 0, algoipc.MsgGalleryUpsert, payload)
 }
 
 // BroadcastDelete broadcasts face or person deletion.
@@ -992,5 +1001,5 @@ func (b *GalleryBroadcaster) BroadcastDelete(ctx context.Context, faceID, person
 	if err != nil {
 		return fmt.Errorf("marshal gallery delete: %w", err)
 	}
-	return b.broadcaster.BroadcastAIMessage(ctx, 0, MsgGalleryDelete, payload)
+	return b.broadcaster.BroadcastAIMessage(ctx, 0, algoipc.MsgGalleryDelete, payload)
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/database"
@@ -68,7 +69,7 @@ func createUncompressedTestTarGz(t *testing.T, payloadBytes int) string {
 	for name, content := range files {
 		hdr := &tar.Header{
 			Name: name,
-			Mode: 0644,
+			Mode: 0o644,
 			Size: int64(len(content)),
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
@@ -82,7 +83,7 @@ func createUncompressedTestTarGz(t *testing.T, payloadBytes int) string {
 	if payloadBytes > 0 {
 		hdr := &tar.Header{
 			Name: "large_payload.bin",
-			Mode: 0644,
+			Mode: 0o644,
 			Size: int64(payloadBytes),
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
@@ -166,10 +167,7 @@ func TestUploadRouteEndToEndRealRouter(t *testing.T) {
 		}
 	})
 
-	comp := algorithm.NewAlgorithmComponents(dbStore, dataDir, "cpu", zap.NewNop())
-	comp.Supervisor = algorithm.NewSupervisor(comp.Store, dataDir, "sleep", algorithm.DefaultRecoveryOptions(), zap.NewNop())
-	comp.Verifier.HostArch = "x86_64"
-	comp.Verifier.RunnerPath = "" // bypass dynamic runner check in test
+	comp := algorithm.NewAlgorithmComponents(dbStore, algorunner.Runtime{AlgorithmsDir: dataDir}, algorithm.HostPlatform{Arch: "x86_64", Target: "cpu"}, zap.NewNop())
 
 	assets := http.FS(fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("shell")},
@@ -305,10 +303,7 @@ func TestUploadRouteProducesAuditRecord(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
 
-	comp := algorithm.NewAlgorithmComponents(dbStore, dataDir, "cpu", zap.NewNop())
-	comp.Supervisor = algorithm.NewSupervisor(comp.Store, dataDir, "sleep", algorithm.DefaultRecoveryOptions(), zap.NewNop())
-	comp.Verifier.HostArch = "x86_64"
-	comp.Verifier.RunnerPath = "" // bypass dynamic runner check in test
+	comp := algorithm.NewAlgorithmComponents(dbStore, algorunner.Runtime{AlgorithmsDir: dataDir}, algorithm.HostPlatform{Arch: "x86_64", Target: "cpu"}, zap.NewNop())
 
 	assets := http.FS(fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("shell")},

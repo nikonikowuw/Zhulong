@@ -121,9 +121,6 @@ func (h *Handler) List(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	if algos == nil {
-		algos = make([]Algorithm, 0)
-	}
 	httputil.Success(c, algos)
 }
 

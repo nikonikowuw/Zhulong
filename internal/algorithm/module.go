@@ -3,8 +3,6 @@ package algorithm
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -55,7 +53,7 @@ func (l *algorithmLifecycleImpl) Start(ctx context.Context) error {
 			if algo.Status == StatusActive {
 				l.logger.Info("auto-starting active algorithm", zap.String("id", algo.ID))
 				if startErr := l.service.supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); startErr != nil {
-					if errors.Is(startErr, ErrNoBrokerSockets) {
+					if errors.Is(startErr, algorunner.ErrNoBrokerSockets) {
 						l.logger.Info("active algorithm held in standby state on host startup (no active tasks)", zap.String("id", algo.ID))
 					} else {
 						l.logger.Error("failed to auto-start active algorithm",
@@ -87,7 +85,7 @@ type RouteRegistrar interface {
 type AlgorithmComponents struct {
 	Store           *Store
 	Verifier        *Verifier
-	Supervisor      *Supervisor
+	Supervisor      *algorunner.Supervisor
 	Service         *Service
 	Handler         *Handler
 	Lifecycle       AlgorithmLifecycle
@@ -96,22 +94,20 @@ type AlgorithmComponents struct {
 }
 
 // NewAlgorithmComponents instantiates and wires algorithm components.
+//
+// Pure on purpose: the environment and the host platform are resolved by the
+// composition root and handed in, so tests can wire a different graph (static
+// verification, stub runner) without reaching into the built components.
 func NewAlgorithmComponents(
 	dbProvider database.DBProvider,
-	dataDir string,
-	hostTarget string,
+	rt algorunner.Runtime,
+	host HostPlatform,
 	logger *zap.Logger,
 ) *AlgorithmComponents {
 	store := NewStore(dbProvider)
-	runnerPath := os.Getenv("ZHULONG_ALGO_RUNNER")
-	if runnerPath == "" {
-		runnerPath = "build/native/host/zhulong_algo_runner"
-	}
-	installDir := filepath.Join(dataDir, "algorithms")
-
-	verifier := NewVerifier(runnerPath, hostTarget)
-	supervisor := NewSupervisor(store, installDir, runnerPath, DefaultRecoveryOptions(), logger)
-	service := NewService(store, verifier, supervisor, installDir, logger)
+	verifier := NewVerifier(rt.VerifyRunnerPath, host)
+	supervisor := algorunner.NewSupervisor(store, rt, algorunner.DefaultRecoveryOptions(), logger)
+	service := NewService(store, verifier, supervisor, rt, logger)
 	handler := NewHandler(service, logger)
 
 	return &AlgorithmComponents{
@@ -120,7 +116,7 @@ func NewAlgorithmComponents(
 		Supervisor:      supervisor,
 		Service:         service,
 		Handler:         handler,
-		Lifecycle:       &algorithmLifecycleImpl{service: service, runnerPath: runnerPath, logger: logger},
+		Lifecycle:       &algorithmLifecycleImpl{service: service, runnerPath: rt.RunnerPath, logger: logger},
 		ProtectedRoutes: handler,
 		UploadRoutes:    handler.UploadRouteRegistrar(),
 	}

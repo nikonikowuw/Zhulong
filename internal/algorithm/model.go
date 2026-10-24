@@ -1,49 +1,23 @@
 package algorithm
 
 import (
-	"path/filepath"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/task"
 )
 
-// Re-exports from algorunner for backward compatibility and clean cross-domain boundaries.
-type (
-	PackageMeta                = algorunner.PackageMeta
-	LifecycleStore             = algorunner.LifecycleStore
-	BrokerSubscriptionResolver = algorunner.BrokerSubscriptionResolver
-	GallerySyncProvider        = algorunner.GallerySyncProvider
-	GallerySyncItem            = algorunner.GallerySyncItem
-	GallerySyncPayload         = algorunner.GallerySyncPayload
-	GallerySyncShardPayload    = algorunner.GallerySyncShardPayload
-	GalleryAckPayload          = algorunner.GalleryAckPayload
-	GalleryUpsertPayload       = algorunner.GalleryUpsertPayload
-	GalleryDeletePayload       = algorunner.GalleryDeletePayload
-	GalleryBroadcaster         = algorunner.GalleryBroadcaster
-	Supervisor                 = algorunner.Supervisor
-	RecoveryOptions            = algorunner.RecoveryOptions
-)
-
-var (
-	NewRecoveryStateMachine    = algorunner.NewRecoveryStateMachine
-	DefaultRecoveryOptions     = algorunner.DefaultRecoveryOptions
-	NewSupervisor              = algorunner.NewSupervisor
-	NewGalleryBroadcaster      = algorunner.NewGalleryBroadcaster
-	ErrAlgorithmNotInCrashLoop = algorunner.ErrAlgorithmNotInCrashLoop
-	ErrAlgorithmAlreadyRunning = algorunner.ErrAlgorithmAlreadyRunning
-	ErrNoBrokerSockets         = algorunner.ErrNoBrokerSockets
-)
-
-// Algorithm status enum
+// Lifecycle statuses are owned by algorunner, which drives the recovery state
+// machine and writes them to the database. Duplicating the literals here would
+// create a second source of truth for values that must match exactly.
 const (
-	StatusActive      = "ACTIVE"
-	StatusDisabled    = "DISABLED"
-	StatusStarting    = "STARTING"
-	StatusRunning     = "RUNNING"
-	StatusCrashed     = "CRASHED"
-	StatusCrashLoop   = "CRASH_LOOP"
-	StatusRollingBack = "ROLLING_BACK"
+	StatusActive      = algorunner.StatusActive
+	StatusDisabled    = algorunner.StatusDisabled
+	StatusStarting    = algorunner.StatusStarting
+	StatusRunning     = algorunner.StatusRunning
+	StatusCrashed     = algorunner.StatusCrashed
+	StatusCrashLoop   = algorunner.StatusCrashLoop
+	StatusRollingBack = algorunner.StatusRollingBack
 )
 
 // Audit actions for algorithm-domain operations. Namespaced as
@@ -118,47 +92,6 @@ func (a *Algorithm) ToPackageMeta() algorunner.PackageMeta {
 // TableName overrides the default table name for Algorithm.
 func (Algorithm) TableName() string {
 	return "algorithms"
-}
-
-// InstallDir returns the install directory of the algorithm given base algorithms directory.
-func (a *Algorithm) InstallDir(algoDir string) string {
-	return filepath.Join(algoDir, a.ID, a.Version)
-}
-
-// EntryPath returns the convention path to plugin.so.
-func (a *Algorithm) EntryPath(algoDir string) string {
-	return filepath.Join(a.InstallDir(algoDir), "plugin.so")
-}
-
-// SamplePath returns the convention path to sample.jpg.
-func (a *Algorithm) SamplePath(algoDir string) string {
-	return filepath.Join(a.InstallDir(algoDir), "sample.jpg")
-}
-
-// EnvPath returns the convention path to optional .env.
-func (a *Algorithm) EnvPath(algoDir string) string {
-	return filepath.Join(a.InstallDir(algoDir), ".env")
-}
-
-// ModelsDir returns the convention path to models/.
-func (a *Algorithm) ModelsDir(algoDir string) string {
-	return filepath.Join(a.InstallDir(algoDir), "models")
-}
-
-// PreviousInstallDir returns the directory of the previous version if available.
-func (a *Algorithm) PreviousInstallDir(algoDir string) string {
-	if a.PreviousVersion == "" {
-		return ""
-	}
-	return filepath.Join(algoDir, a.ID, a.PreviousVersion)
-}
-
-// PreviousEntryPath returns the entry path of the previous version if available.
-func (a *Algorithm) PreviousEntryPath(algoDir string) string {
-	if a.PreviousVersion == "" {
-		return ""
-	}
-	return filepath.Join(a.PreviousInstallDir(algoDir), "plugin.so")
 }
 
 // AnalysisTask is an alias to task.Task for backward compatibility.

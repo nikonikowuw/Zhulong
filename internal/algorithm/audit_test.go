@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/database"
@@ -44,14 +45,10 @@ func setupAuditRouter(t *testing.T) (*gin.Engine, *algorithm.Service, *audit.Ser
 
 	// enable/disable need a runner process that actually starts. The stub
 	// ignores the --plugin/--broker/--name arguments and stays alive until it
-	// is signalled, so the supervised status is deterministic.
-	//
-	// The path must be injected before construction: Service captures the
-	// supervisor it is built with, so reassigning comp.Supervisor afterwards
-	// would leave the Service pointing at the original one.
-	t.Setenv("ZHULONG_ALGO_RUNNER", writeIdleRunner(t))
-	comp := algorithm.NewAlgorithmComponents(dbStore, dataDir, "cpu", zap.NewNop())
-	comp.Verifier.RunnerPath = "" // bypass dynamic runner verification
+	// is signalled, so the supervised status is deterministic. Verification gets
+	// no runner at all: the stub cannot answer an --verify-plugin probe.
+	rt := algorunner.Runtime{AlgorithmsDir: dataDir, RunnerPath: writeIdleRunner(t)}
+	comp := algorithm.NewAlgorithmComponents(dbStore, rt, x86Host(), zap.NewNop())
 	t.Cleanup(func() { comp.Supervisor.StopAll(time.Second) })
 
 	router := gin.New()

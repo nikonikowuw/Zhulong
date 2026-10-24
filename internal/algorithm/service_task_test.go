@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
 )
@@ -18,7 +19,7 @@ import (
 // newTaskService builds a Service backed by a real migrated DB and a supervisor
 // whose runner is a stub shell script, so package restarts are observable without a native
 // runner binary.
-func newTaskService(t *testing.T) (*algorithm.Service, *algorithm.Supervisor, *algorithm.Store, *database.Store, func()) {
+func newTaskService(t *testing.T) (*algorithm.Service, *algorunner.Supervisor, *algorithm.Store, *database.Store, func()) {
 	t.Helper()
 	dataDir := t.TempDir()
 	dbStore := database.New(dataDir, zap.NewNop())
@@ -30,9 +31,9 @@ func newTaskService(t *testing.T) (*algorithm.Service, *algorithm.Supervisor, *a
 	if err := os.WriteFile(runnerPath, []byte("#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile true; do sleep 1; done\n"), 0o755); err != nil {
 		t.Fatalf("write stub runner: %v", err)
 	}
-	supervisor := algorithm.NewSupervisor(store, dataDir, runnerPath, algorithm.DefaultRecoveryOptions(), zap.NewNop())
-	verifier := algorithm.NewVerifier("", "cpu")
-	service := algorithm.NewService(store, verifier, supervisor, dataDir, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir, RunnerPath: runnerPath}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	verifier := algorithm.NewVerifier("", x86Host())
+	service := algorithm.NewService(store, verifier, supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
 
 	cleanup := func() {
 		supervisor.StopAll(time.Second)
@@ -223,10 +224,10 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	argFile := filepath.Join(t.TempDir(), "runner-args")
 	t.Setenv("RUN_ARG_FILE", argFile)
 
-	supervisor := algorithm.NewSupervisor(store, dataDir, brokerRecordingRunner(t, dataDir), algorithm.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir, RunnerPath: brokerRecordingRunner(t, dataDir)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	resolver := &storeBackedBrokerResolver{dbStore: dbStore}
 	supervisor.SetBrokerSubscriptionResolver(resolver)
-	service := algorithm.NewService(store, algorithm.NewVerifier("", "cpu"), supervisor, dataDir, zap.NewNop())
+	service := algorithm.NewService(store, algorithm.NewVerifier("", x86Host()), supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
 
 	ctx := context.Background()
 	t.Cleanup(func() {
@@ -303,10 +304,10 @@ func TestTaskDrivenLazyStartupAndTeardownLifecycle(t *testing.T) {
 	argFile := filepath.Join(t.TempDir(), "runner-args")
 	t.Setenv("RUN_ARG_FILE", argFile)
 
-	supervisor := algorithm.NewSupervisor(store, dataDir, brokerRecordingRunner(t, dataDir), algorithm.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir, RunnerPath: brokerRecordingRunner(t, dataDir)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	resolver := &storeBackedBrokerResolver{dbStore: dbStore}
 	supervisor.SetBrokerSubscriptionResolver(resolver)
-	service := algorithm.NewService(store, algorithm.NewVerifier("", "cpu"), supervisor, dataDir, zap.NewNop())
+	service := algorithm.NewService(store, algorithm.NewVerifier("", x86Host()), supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
 
 	ctx := context.Background()
 	t.Cleanup(func() {

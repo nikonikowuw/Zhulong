@@ -240,5 +240,4 @@ func TestDeleteAlgorithmKeepsEvidenceAfterImpact(t *testing.T) {
 	if alarm.AlgorithmName != "入侵检测" || alarm.AlgorithmVersion != "1.2.3" {
 		t.Errorf("snapshot lost: name=%q version=%q", alarm.AlgorithmName, alarm.AlgorithmVersion)
 	}
-
 }

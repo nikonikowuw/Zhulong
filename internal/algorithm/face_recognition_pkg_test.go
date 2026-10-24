@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 )
 
 func findFaceRecognitionArchive(t *testing.T) string {
@@ -62,14 +63,11 @@ func TestFaceRecognitionPackageVerification(t *testing.T) {
 	runnerPath := findRunnerBinary(t)
 	archivePath := findFaceRecognitionArchive(t)
 
-	verifier := algorithm.NewVerifier(runnerPath, "cpu")
-	verifier.HostArch = "x86_64"
-	verifier.HostTarget = "cpu"
 	// The probe loads the ONNX face model, so its runtime is dominated by model init
 	// and by how many sibling packages are competing for the CPU. A 10s budget made
 	// this test a coin flip under `go test -race ./...` (it measures ~10s even alone),
 	// which is a property of the test harness, not of the package being verified.
-	verifier.Timeout = 60 * time.Second
+	verifier := algorithm.NewVerifier(runnerPath, x86Host(), algorithm.VerifyOptions{Timeout: 60 * time.Second})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -106,13 +104,14 @@ func TestFaceRecognitionPackageVerification(t *testing.T) {
 	}
 
 	// 验证解压产物规范与可执行权限
-	pkgDir := installed.InstallDir(installDir)
-	pluginPath := filepath.Join(pkgDir, "plugin.so")
+	rt := algorunner.Runtime{AlgorithmsDir: installDir}
+	pkgDir := rt.PackageDir(installed.ID, installed.Version)
+	pluginPath := rt.PluginPath(installed.ID, installed.Version)
 	fi, err := os.Stat(pluginPath)
 	if err != nil {
 		t.Fatalf("stat plugin.so: %v", err)
 	}
-	if fi.Mode().Perm()&0111 == 0 {
+	if fi.Mode().Perm()&0o111 == 0 {
 		t.Errorf("expected plugin.so to have executable permissions, got: %o", fi.Mode().Perm())
 	}
 

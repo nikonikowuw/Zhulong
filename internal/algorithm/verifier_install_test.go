@@ -14,10 +14,10 @@ func TestInstallDirectoryAtomicallyDoesNotReplaceConcurrentTarget(t *testing.T) 
 	dst := filepath.Join(root, "installed")
 	for _, payload := range []string{"first", "second"} {
 		src := filepath.Join(root, payload)
-		if err := os.Mkdir(src, 0755); err != nil {
+		if err := os.Mkdir(src, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(src, "payload"), []byte(payload), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(src, "payload"), []byte(payload), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -63,10 +63,10 @@ func TestInstallDirectoryAtomicallyDoesNotReplaceConcurrentTarget(t *testing.T) 
 
 func TestInstallDirectoryAtomicallyCopiesAcrossFilesystems(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "source")
-	if err := os.Mkdir(src, 0755); err != nil {
+	if err := os.Mkdir(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(src, "payload"), []byte("complete"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(src, "payload"), []byte("complete"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -85,10 +85,10 @@ func TestInstallDirectoryAtomicallyCopiesAcrossFilesystems(t *testing.T) {
 
 func TestInstallDirectoryAtomicallyCleansFailedCrossFilesystemCopy(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "source")
-	if err := os.Mkdir(src, 0755); err != nil {
+	if err := os.Mkdir(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(src, "a-payload"), []byte("partial"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(src, "a-payload"), []byte("partial"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("missing-target", filepath.Join(src, "z-link")); err != nil {

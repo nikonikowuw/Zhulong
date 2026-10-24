@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
@@ -38,11 +39,9 @@ func newAlgorithmTestApp(t *testing.T) (*gin.Engine, *algorithm.Service, *gorm.D
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	comp := algorithm.NewAlgorithmComponents(dbStore, tempDir, "cpu", zap.NewNop())
-	comp.Verifier.HostArch = "x86_64"
-	// Use sleep as stub runner in unit tests
-	comp.Supervisor = algorithm.NewSupervisor(comp.Store, tempDir, "sleep", algorithm.DefaultRecoveryOptions(), zap.NewNop())
-	comp.Verifier.RunnerPath = "" // bypass dynamic runner in router unit test
+	// No runner binary in the Runtime: verification stays static, and the stub
+	// supervisor below never starts a process either.
+	comp := algorithm.NewAlgorithmComponents(dbStore, algorunner.Runtime{AlgorithmsDir: tempDir}, x86Host(), zap.NewNop())
 
 	r := gin.New()
 	api := r.Group("/api/v1")

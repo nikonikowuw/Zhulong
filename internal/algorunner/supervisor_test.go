@@ -309,7 +309,7 @@ func TestGetStatusNotBlockedByBrokerResolution(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	resolver := newBlockingBrokerPathResolver([]string{"/tmp/r3_broker.sock"})
-	supervisor := algorunner.NewSupervisor(store, t.TempDir(), writeIdleRunner(t), algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	supervisor.SetBrokerSubscriptionResolver(resolver)
 	t.Cleanup(func() {
 		resolver.unblock()
@@ -352,7 +352,7 @@ func TestConcurrentStartAlgorithmRegistersOnce(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	resolver := newBlockingBrokerPathResolver([]string{"/tmp/r3_race.sock"})
-	supervisor := algorunner.NewSupervisor(store, t.TempDir(), writeIdleRunner(t), algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	supervisor.SetBrokerSubscriptionResolver(resolver)
 	t.Cleanup(func() {
 		resolver.unblock()
@@ -413,7 +413,7 @@ func TestSupervisorResetAllowsRestartAfterCrashLoop(t *testing.T) {
 	options.InitialBackoff = 5 * time.Millisecond
 	options.MaxBackoff = 10 * time.Millisecond
 	options.MaxCrashes = 1
-	supervisor := algorunner.NewSupervisor(store, t.TempDir(), runner, options, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runner}, options, zap.NewNop())
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 	})
@@ -453,7 +453,7 @@ func TestSupervisorCrashRestartReResolvesBrokerList(t *testing.T) {
 	options := algorunner.DefaultRecoveryOptions()
 	options.InitialBackoff = 5 * time.Millisecond
 	options.MaxBackoff = 10 * time.Millisecond
-	supervisor := algorunner.NewSupervisor(store, t.TempDir(), runner, options, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runner}, options, zap.NewNop())
 
 	initialSocks := []string{"/tmp/zhulong_broker_1.sock"}
 	newSocks := []string{"/tmp/zhulong_broker_2.sock", "/tmp/zhulong_broker_3.sock"}
@@ -511,7 +511,7 @@ func TestSupervisorCrashRestartFallsBackWhenResolveFails(t *testing.T) {
 	options := algorunner.DefaultRecoveryOptions()
 	options.InitialBackoff = 5 * time.Millisecond
 	options.MaxBackoff = 10 * time.Millisecond
-	supervisor := algorunner.NewSupervisor(store, t.TempDir(), runner, options, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runner}, options, zap.NewNop())
 
 	cachedSocks := []string{"/tmp/zhulong_broker_keep.sock"}
 	resolver := newMutableBrokerPathResolver(cachedSocks)
@@ -567,7 +567,7 @@ func TestSupervisorCrashRestartKeepsUsableBrokerList(t *testing.T) {
 	options := algorunner.DefaultRecoveryOptions()
 	options.InitialBackoff = 5 * time.Millisecond
 	options.MaxBackoff = 10 * time.Millisecond
-	supervisor := algorunner.NewSupervisor(store, t.TempDir(), runner, options, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runner}, options, zap.NewNop())
 
 	wantSocks := []string{"/tmp/zhulong_broker_7.sock", "/tmp/zhulong_broker_9.sock"}
 	supervisor.SetBrokerSubscriptionResolver(&mockBrokerPathResolver{paths: wantSocks})
@@ -612,7 +612,7 @@ func TestSupervisorBrokerPathResolverAndRestart(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	runner := writeIdleRunner(t)
-	supervisor := algorunner.NewSupervisor(store, t.TempDir(), runner, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runner}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	resolver := &mockBrokerPathResolver{
 		paths: []string{"/tmp/mock_b1.sock", "/tmp/mock_b2.sock"},
 	}
@@ -647,7 +647,7 @@ func TestSupervisorStartFailsWhenBrokerResolutionFails(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	resolveErr := errors.New("camera lookup exploded")
-	supervisor := algorunner.NewSupervisor(store, t.TempDir(), "sleep", algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: "sleep"}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	supervisor.SetBrokerSubscriptionResolver(&failingBrokerPathResolver{err: resolveErr})
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
@@ -670,7 +670,7 @@ func TestSupervisorRestartPreservesActiveStatus(t *testing.T) {
 	algo := supervisorTestPackage()
 	store.packages[algo.ID] = algo
 
-	supervisor := algorunner.NewSupervisor(store, t.TempDir(), writeIdleRunner(t), algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 	})
@@ -740,7 +740,7 @@ while true; do sleep 0.05; done
 		options.RollbackGuardWindow = 3 * time.Second
 		options.InitialBackoff = 5 * time.Millisecond
 		options.MaxBackoff = 10 * time.Millisecond
-		supervisor := algorunner.NewSupervisor(store, t.TempDir(), runnerScript, options, zap.NewNop())
+		supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runnerScript}, options, zap.NewNop())
 
 		if err := supervisor.StartAlgorithm(ctx, algoV1); err != nil {
 			supervisor.StopAll(time.Second)
@@ -789,7 +789,7 @@ func TestSupervisorUpgradeAlgorithmSuccess(t *testing.T) {
 	algoV1 := supervisorTestPackage()
 	store.packages[algoV1.ID] = algoV1
 
-	supervisor := algorunner.NewSupervisor(store, t.TempDir(), writeIdleRunner(t), algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 	})
@@ -840,7 +840,7 @@ while true; do sleep 0.1; done
 
 	options := algorunner.DefaultRecoveryOptions()
 	options.RollbackGuardWindow = 2 * time.Second
-	supervisor := algorunner.NewSupervisor(store, t.TempDir(), runnerScript, options, zaptest.NewLogger(t))
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runnerScript}, options, zaptest.NewLogger(t))
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 	})
@@ -884,7 +884,7 @@ func TestSupervisorStartFailsWithNoBrokerSocketsWhenResolverConfigured(t *testin
 	algo := supervisorTestPackage()
 	store.packages[algo.ID] = algo
 
-	supervisor := algorunner.NewSupervisor(store, t.TempDir(), writeIdleRunner(t), algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	supervisor.SetBrokerSubscriptionResolver(&mockBrokerPathResolver{paths: []string{}})
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
@@ -905,7 +905,7 @@ func TestSupervisorRestartWithZeroBrokersRetiresRunnerToStandby(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	resolver := newMutableBrokerPathResolver([]string{"/tmp/stream1.sock"})
-	supervisor := algorunner.NewSupervisor(store, t.TempDir(), writeIdleRunner(t), algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	supervisor.SetBrokerSubscriptionResolver(resolver)
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)

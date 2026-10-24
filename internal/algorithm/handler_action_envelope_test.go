@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
 )
@@ -38,10 +39,10 @@ func TestHandlerEnableDisableActionEnvelope(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	// A runner stub that ignores the --plugin/--broker arguments and stays alive
-	// until it is signalled keeps the supervised status deterministic.
-	t.Setenv("ZHULONG_ALGO_RUNNER", writeIdleRunner(t))
-
-	comp := algorithm.NewAlgorithmComponents(dbStore, dataDir, "cpu", zap.NewNop())
+	// until it is signalled keeps the supervised status deterministic. The verify
+	// runner stays empty so package verification remains static.
+	rt := algorunner.Runtime{AlgorithmsDir: dataDir, RunnerPath: writeIdleRunner(t)}
+	comp := algorithm.NewAlgorithmComponents(dbStore, rt, x86Host(), zap.NewNop())
 	t.Cleanup(func() { comp.Supervisor.StopAll(time.Second) })
 
 	seed := &algorithm.Algorithm{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
@@ -584,6 +585,26 @@ func (a *faceFeatureExtractorAdapter) ExtractFaceFeature(ctx context.Context, im
 	return features, nil
 }
 
+// DefaultAlgorithmRunnerPath is where the build tree puts the runner binary; it
+// is the fallback when ZHULONG_ALGO_RUNNER is not set.
+const DefaultAlgorithmRunnerPath = "build/native/host/zhulong_algo_runner"
+
+// newAlgorithmRuntime resolves the algorithm subsystem's on-disk layout. This is
+// the one place that reads the environment and derives subdirectories; every
+// algorithm component then shares the resulting value.
+func newAlgorithmRuntime(dataDir string) algorunner.Runtime {
+	runnerPath := os.Getenv("ZHULONG_ALGO_RUNNER")
+	if runnerPath == "" {
+		runnerPath = DefaultAlgorithmRunnerPath
+	}
+
+	return algorunner.Runtime{
+		AlgorithmsDir:    filepath.Join(dataDir, "algorithms"),
+		RunnerPath:       runnerPath,
+		VerifyRunnerPath: runnerPath,
+	}
+}
+
 func provideAlgorithm(
 	dbProvider database.DBProvider,
 	streamHub *camera.StreamHub,
@@ -592,7 +613,12 @@ func provideAlgorithm(
 	taskStore *task.Store,
 	logger *zap.Logger,
 ) algorithmOut {
-	comp := algorithm.NewAlgorithmComponents(dbProvider, config.DataDir, config.AlgorithmTarget, logger)
+	comp := algorithm.NewAlgorithmComponents(
+		dbProvider,
+		newAlgorithmRuntime(config.DataDir),
+		algorithm.DetectHostPlatform(config.AlgorithmTarget),
+		logger,
+	)
 	if streamHub != nil {
 		comp.Supervisor.SetBrokerSubscriptionResolver(&appBrokerPathResolver{
 			taskStore: taskStore,

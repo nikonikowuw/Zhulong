@@ -187,21 +187,40 @@ type RollbackGuard struct {
 	logger          *zap.Logger
 }
 
+// RollbackGuardOptions identifies the freshly upgraded package and the window
+// during which a crash still triggers a rollback.
+//
+// The version fields are named rather than positional on purpose: NewVersion and
+// PreviousVersion are both plain strings, so an argument swap would invert the
+// rollback direction with no compile error.
+type RollbackGuardOptions struct {
+	PackageID       string
+	NewVersion      string
+	PreviousVersion string
+	// GuardWindow <= 0 falls back to DefaultRollbackGuardWindow.
+	GuardWindow time.Duration
+	Logger      *zap.Logger
+}
+
 // NewRollbackGuard creates a guard to observe newly upgraded package stability.
-func NewRollbackGuard(pkgID, newVersion, prevVersion string, guardWindow time.Duration, logger *zap.Logger) *RollbackGuard {
+func NewRollbackGuard(opts RollbackGuardOptions) *RollbackGuard {
+	logger := opts.Logger
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+
+	guardWindow := opts.GuardWindow
 	if guardWindow <= 0 {
 		guardWindow = DefaultRollbackGuardWindow
 	}
+
 	return &RollbackGuard{
-		pkgID:           pkgID,
-		newVersion:      newVersion,
-		previousVersion: prevVersion,
+		pkgID:           opts.PackageID,
+		newVersion:      opts.NewVersion,
+		previousVersion: opts.PreviousVersion,
 		startedAt:       time.Now(),
 		guardWindow:     guardWindow,
-		logger:          logger.With(zap.String("package", pkgID)),
+		logger:          logger.With(zap.String("package", opts.PackageID)),
 	}
 }
 

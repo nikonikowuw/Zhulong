@@ -78,7 +78,8 @@ func ReapOrphanRunners(ctx context.Context, runnerPath string, logger *zap.Logge
 		logger = zap.NewNop()
 	}
 	runnerBase := filepath.Base(runnerPath)
-	if runnerBase == "" || runnerBase == "." || runnerBase == "/" {
+	switch runnerBase {
+	case "", ".", "/":
 		return report, errors.New("orphan sweep: runner path is empty")
 	}
 
@@ -171,7 +172,8 @@ func ReapOrphanRunners(ctx context.Context, runnerPath string, logger *zap.Logge
 		failures = append(failures, fmt.Errorf("orphan sweep: %w", lockErr))
 	}
 
-	if len(report.Killed) > 0 || len(report.RemovedShm) > 0 || len(report.RemovedSockets) > 0 {
+	reclaimedAnything := len(report.Killed) > 0 || len(report.RemovedShm) > 0 || len(report.RemovedSockets) > 0
+	if reclaimedAnything {
 		logger.Warn("startup orphan sweep reclaimed leaked algorithm resources",
 			zap.Ints("killed_pids", report.Killed),
 			zap.Strings("removed_sockets", report.RemovedSockets),

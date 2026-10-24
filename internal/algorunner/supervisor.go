@@ -14,8 +14,7 @@ import (
 // managing exponential backoffs, circuit breakers, and automatic rollbacks.
 type Supervisor struct {
 	store               LifecycleStore
-	algoDir             string
-	runnerPath          string
+	rt                  Runtime
 	resolver            BrokerSubscriptionResolver
 	gallerySyncProvider GallerySyncProvider
 	galleryBroadcaster  *GalleryBroadcaster
@@ -70,17 +69,16 @@ func (w *workerWatcher) stopProcess(timeout time.Duration) error {
 // SetBrokerSubscriptionResolver: the broker host lives in the native engine and derives
 // one socket per physical stream, so there is no process-wide default to fall
 // back to.
-func NewSupervisor(store LifecycleStore, algoDir, runnerPath string, opts RecoveryOptions, logger *zap.Logger) *Supervisor {
+func NewSupervisor(store LifecycleStore, rt Runtime, opts RecoveryOptions, logger *zap.Logger) *Supervisor {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &Supervisor{
-		store:      store,
-		algoDir:    algoDir,
-		runnerPath: runnerPath,
-		logger:     logger.Named("algorithm.supervisor"),
-		watchers:   make(map[string]*workerWatcher),
-		opts:       opts.normalize(),
+		store:    store,
+		rt:       rt,
+		logger:   logger.Named("algorithm.supervisor"),
+		watchers: make(map[string]*workerWatcher),
+		opts:     opts.normalize(),
 	}
 }
 
@@ -205,10 +203,10 @@ func (s *Supervisor) StartAlgorithm(ctx context.Context, algo PackageMeta) error
 	cfg := ProcessConfig{
 		AlgorithmID:   algo.ID,
 		AlgorithmName: algo.Name,
-		RunnerPath:    s.runnerPath,
-		PluginPath:    algo.EntryPath(s.algoDir),
+		RunnerPath:    s.rt.RunnerPath,
+		PluginPath:    s.rt.PluginPath(algo.ID, algo.Version),
 		BrokerSocks:   w.brokerSocks,
-		EnvFile:       algo.EnvPath(s.algoDir),
+		EnvFile:       s.rt.EnvPath(algo.ID, algo.Version),
 		Logger:        s.logger,
 	}
 	w.process = NewRunnerProcess(cfg)
@@ -358,13 +356,13 @@ func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo PackageMeta, 
 		supervisor: s,
 		algo:       newAlgo,
 		sm:         NewRecoveryStateMachine(s.opts),
-		guard: NewRollbackGuard(
-			newAlgo.ID,
-			newAlgo.Version,
-			oldAlgo.Version,
-			s.opts.RollbackGuardWindow,
-			s.logger,
-		),
+		guard: NewRollbackGuard(RollbackGuardOptions{
+			PackageID:       newAlgo.ID,
+			NewVersion:      newAlgo.Version,
+			PreviousVersion: oldAlgo.Version,
+			GuardWindow:     s.opts.RollbackGuardWindow,
+			Logger:          s.logger,
+		}),
 		stopCh:      make(chan struct{}),
 		doneCh:      make(chan struct{}),
 		status:      StatusStarting,
@@ -374,10 +372,10 @@ func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo PackageMeta, 
 	cfg := ProcessConfig{
 		AlgorithmID:   newAlgo.ID,
 		AlgorithmName: newAlgo.Name,
-		RunnerPath:    s.runnerPath,
-		PluginPath:    newAlgo.EntryPath(s.algoDir),
+		RunnerPath:    s.rt.RunnerPath,
+		PluginPath:    s.rt.PluginPath(newAlgo.ID, newAlgo.Version),
 		BrokerSocks:   w.brokerSocks,
-		EnvFile:       newAlgo.EnvPath(s.algoDir),
+		EnvFile:       s.rt.EnvPath(newAlgo.ID, newAlgo.Version),
 		Logger:        s.logger,
 	}
 	w.process = NewRunnerProcess(cfg)
@@ -432,10 +430,10 @@ func (s *Supervisor) rollbackToOldLocked(ctx context.Context, oldAlgo PackageMet
 	cfg := ProcessConfig{
 		AlgorithmID:   oldAlgo.ID,
 		AlgorithmName: oldAlgo.Name,
-		RunnerPath:    s.runnerPath,
-		PluginPath:    oldAlgo.EntryPath(s.algoDir),
+		RunnerPath:    s.rt.RunnerPath,
+		PluginPath:    s.rt.PluginPath(oldAlgo.ID, oldAlgo.Version),
 		BrokerSocks:   w.brokerSocks,
-		EnvFile:       oldAlgo.EnvPath(s.algoDir),
+		EnvFile:       s.rt.EnvPath(oldAlgo.ID, oldAlgo.Version),
 		Logger:        s.logger,
 	}
 	w.process = NewRunnerProcess(cfg)
@@ -705,10 +703,10 @@ func (w *workerWatcher) superviseLoop() {
 			cfg := ProcessConfig{
 				AlgorithmID:   w.algo.ID,
 				AlgorithmName: w.algo.Name,
-				RunnerPath:    w.supervisor.runnerPath,
-				PluginPath:    w.algo.EntryPath(w.supervisor.algoDir),
+				RunnerPath:    w.supervisor.rt.RunnerPath,
+				PluginPath:    w.supervisor.rt.PluginPath(w.algo.ID, w.algo.Version),
 				BrokerSocks:   w.brokerSocks,
-				EnvFile:       w.algo.EnvPath(w.supervisor.algoDir),
+				EnvFile:       w.supervisor.rt.EnvPath(w.algo.ID, w.algo.Version),
 				Logger:        w.supervisor.logger,
 			}
 			w.process = NewRunnerProcess(cfg)

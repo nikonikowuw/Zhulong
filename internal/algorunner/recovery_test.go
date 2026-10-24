@@ -163,7 +163,7 @@ func TestRecoveryOptionsNormalize(t *testing.T) {
 						t.Fatalf("NewSupervisor panicked for %s: %v", tc.name, r)
 					}
 				}()
-				supervisor = algorunner.NewSupervisor(store, t.TempDir(), writeIdleRunner(t), opts, zap.NewNop())
+				supervisor = algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, opts, zap.NewNop())
 			}()
 			t.Cleanup(func() { supervisor.StopAll(time.Second) })
 
@@ -180,7 +180,13 @@ func TestRecoveryOptionsNormalize(t *testing.T) {
 
 func TestRollbackGuardWindow(t *testing.T) {
 	guardWindow := 2 * time.Second
-	guard := algorunner.NewRollbackGuard("pkg_01", "2.0.0", "1.0.0", guardWindow, zap.NewNop())
+	guard := algorunner.NewRollbackGuard(algorunner.RollbackGuardOptions{
+		PackageID:       "pkg_01",
+		NewVersion:      "2.0.0",
+		PreviousVersion: "1.0.0",
+		GuardWindow:     guardWindow,
+		Logger:          zap.NewNop(),
+	})
 
 	// Crash at 500ms (within 2s window) -> Should Rollback!
 	crashTime := time.Now().Add(500 * time.Millisecond)
@@ -194,14 +200,27 @@ func TestRollbackGuardWindow(t *testing.T) {
 	}
 
 	// New guard: crash outside guard window -> Should NOT rollback!
-	guard2 := algorunner.NewRollbackGuard("pkg_02", "2.0.0", "1.0.0", 100*time.Millisecond, zap.NewNop())
+	guard2 := algorunner.NewRollbackGuard(algorunner.RollbackGuardOptions{
+		PackageID:       "pkg_02",
+		NewVersion:      "2.0.0",
+		PreviousVersion: "1.0.0",
+		GuardWindow:     100 * time.Millisecond,
+		Logger:          zap.NewNop(),
+	})
 	time.Sleep(150 * time.Millisecond)
 	if guard2.ShouldRollback(time.Now()) {
 		t.Errorf("expected ShouldRollback=false when crashing after guard window elapsed")
 	}
 
 	// Guard with no previous version -> Should NOT rollback
-	guard3 := algorunner.NewRollbackGuard("pkg_03", "1.0.0", "", guardWindow, zap.NewNop())
+	// No previous version: a crash must not roll back to an empty target.
+	guard3 := algorunner.NewRollbackGuard(algorunner.RollbackGuardOptions{
+		PackageID:       "pkg_03",
+		NewVersion:      "1.0.0",
+		PreviousVersion: "",
+		GuardWindow:     guardWindow,
+		Logger:          zap.NewNop(),
+	})
 	if guard3.ShouldRollback(time.Now()) {
 		t.Errorf("expected ShouldRollback=false when no previous version exists")
 	}

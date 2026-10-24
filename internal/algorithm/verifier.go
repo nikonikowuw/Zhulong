@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"golang.org/x/sys/unix"
 )
 
@@ -62,41 +63,87 @@ type VerificationReport struct {
 	Error      string `json:"error,omitempty"`
 }
 
-// Verifier executes static contract audits and dynamic black-box verification.
-type Verifier struct {
-	RunnerPath string
-	HostArch   string
-	HostTarget string
-	Timeout    time.Duration
+// HostPlatform identifies the machine an algorithm package must match: the CPU
+// architecture plus the accelerator target from [algorithm].target. It is the Go
+// counterpart of manifest.platform.
+type HostPlatform struct {
+	// Arch is x86_64 / aarch64, spelled as packages declare it.
+	Arch string
+	// Target is cpu or an accelerator family such as rk3568. Empty means cpu.
+	Target string
 }
 
-// NewVerifier creates a Verifier initialized with system defaults.
-func NewVerifier(runnerPath, hostTarget string) *Verifier {
-	arch := runtime.GOARCH
-	if arch == "amd64" {
-		arch = "x86_64"
-	} else if arch == "arm64" {
-		arch = "aarch64"
+// DetectHostPlatform reports the platform of the machine this process runs on,
+// with the accelerator target taken from the operator configuration.
+func DetectHostPlatform(target string) HostPlatform {
+	return HostPlatform{Arch: detectedArch(), Target: normalizeHostTarget(target)}
+}
+
+func detectedArch() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "x86_64"
+	case "arm64":
+		return "aarch64"
+	default:
+		return runtime.GOARCH
+	}
+}
+
+func normalizeHostTarget(target string) string {
+	if target == "" {
+		return "cpu"
+	}
+	return target
+}
+
+// DefaultVerifyTimeout bounds a single dynamic verification run of the runner.
+const DefaultVerifyTimeout = 15 * time.Second
+
+// VerifyOptions tunes verification. Zero values select the defaults.
+type VerifyOptions struct {
+	// Timeout bounds one dynamic verification run; <= 0 means DefaultVerifyTimeout.
+	Timeout time.Duration
+}
+
+// Verifier executes static contract audits and dynamic black-box verification.
+//
+// Immutable after construction: the host identity, the runner binary and the
+// timeout are captured once, so a verdict can never depend on a field mutated
+// between calls.
+type Verifier struct {
+	runnerPath string
+	host       HostPlatform
+	timeout    time.Duration
+}
+
+// NewVerifier creates a Verifier. An empty runnerPath keeps the verifier to
+// static checks only; host.Target defaults to cpu.
+func NewVerifier(runnerPath string, host HostPlatform, opts ...VerifyOptions) *Verifier {
+	timeout := DefaultVerifyTimeout
+	if len(opts) > 0 && opts[0].Timeout > 0 {
+		timeout = opts[0].Timeout
 	}
 
-	target := hostTarget
-	if target == "" {
-		target = "cpu"
-	}
+	host.Target = normalizeHostTarget(host.Target)
 
 	return &Verifier{
-		RunnerPath: runnerPath,
-		HostArch:   arch,
-		HostTarget: target,
-		Timeout:    15 * time.Second,
+		runnerPath: runnerPath,
+		host:       host,
+		timeout:    timeout,
 	}
+}
+
+// HostPlatform reports the platform this verifier compares packages against.
+func (v *Verifier) HostPlatform() HostPlatform {
+	return v.host
 }
 
 // VerifyDirectory verifies an extracted package directory.
 // Returns the parsed Manifest, configSchemaJSON, and .env contents if any.
 func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifest, string, string, error) {
 	manifestPath := filepath.Join(pkgDir, "manifest.json")
-	pluginPath := filepath.Join(pkgDir, "plugin.so")
+	pluginPath := filepath.Join(pkgDir, algorunner.EntryFileName)
 	samplePath := filepath.Join(pkgDir, "sample.jpg")
 
 	// 1. Convention files presence check
@@ -128,7 +175,7 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifes
 	// Reject path traversal / illegal characters in the PATH-BEARING identity
 	// fields before they are ever joined into an install path (see
 	// ErrInvalidManifestToken). Only ID and Version are path-bearing:
-	//   targetDir = filepath.Join(installDir, manifest.ID, manifest.Version)
+	//   targetDir = Runtime.PackageDir(manifest.ID, manifest.Version)
 	// Name is deliberately NOT charset-restricted here — it is a human-readable
 	// display field (e.g. "安全帽佩戴检测算法") and never participates in path
 	// construction. It only needs to fit the runner's handshake buffer.
@@ -136,8 +183,8 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifes
 		name  string
 		value string
 	}{
-		{"id", manifest.ID},
-		{"version", manifest.Version},
+		{name: "id", value: manifest.ID},
+		{name: "version", value: manifest.Version},
 	} {
 		if !manifestTokenPattern.MatchString(field.value) {
 			return nil, "", "", fmt.Errorf("%w: %s %q", ErrInvalidManifestToken, field.name, field.value)
@@ -175,11 +222,14 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifes
 	}
 
 	// 3. Stage 1: Static platform compatibility gate
-	if manifest.Platform.Arch != "" && manifest.Platform.Arch != v.HostArch {
-		return nil, "", "", fmt.Errorf("%w: package requires arch %q, host is %q", ErrPlatformMismatch, manifest.Platform.Arch, v.HostArch)
+	if manifest.Platform.Arch != "" && manifest.Platform.Arch != v.host.Arch {
+		return nil, "", "", fmt.Errorf("%w: package requires arch %q, host is %q", ErrPlatformMismatch, manifest.Platform.Arch, v.host.Arch)
 	}
-	if manifest.Platform.Target != "" && v.HostTarget != "" && manifest.Platform.Target != v.HostTarget {
-		return nil, "", "", fmt.Errorf("%w: package requires target %q, host is %q", ErrPlatformMismatch, manifest.Platform.Target, v.HostTarget)
+	// An empty target on either side means "unspecified", not "mismatch": the
+	// package may not pin a device, and the host may not know its own.
+	bothTargetsKnown := manifest.Platform.Target != "" && v.host.Target != ""
+	if bothTargetsKnown && manifest.Platform.Target != v.host.Target {
+		return nil, "", "", fmt.Errorf("%w: package requires target %q, host is %q", ErrPlatformMismatch, manifest.Platform.Target, v.host.Target)
 	}
 
 	// Optional config.schema.json validation
@@ -197,13 +247,13 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifes
 
 	// Optional .env
 	var envContent string
-	envPath := filepath.Join(pkgDir, ".env")
+	envPath := filepath.Join(pkgDir, algorunner.EnvFileName)
 	if b, err := os.ReadFile(envPath); err == nil {
 		envContent = string(b)
 	}
 
 	// 4. Stage 2: Dynamic black-box verification via runner
-	if v.RunnerPath != "" {
+	if v.runnerPath != "" {
 		if err := v.runDynamicVerification(ctx, pluginPath, samplePath, manifest.TaskType); err != nil {
 			return nil, "", "", err
 		}
@@ -213,10 +263,10 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifes
 }
 
 func (v *Verifier) runDynamicVerification(ctx context.Context, pluginPath, samplePath, taskType string) error {
-	vCtx, cancel := context.WithTimeout(ctx, v.Timeout)
+	vCtx, cancel := context.WithTimeout(ctx, v.timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(vCtx, v.RunnerPath, "--verify-plugin", pluginPath, "--sample", samplePath)
+	cmd := exec.CommandContext(vCtx, v.runnerPath, "--verify-plugin", pluginPath, "--sample", samplePath)
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
@@ -268,7 +318,7 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, pluginPath, sampl
 // StageAndVerify extracts an archive into a temporary folder, verifies it,
 // and atomically publishes the immutable version directory under finalInstallDir.
 func (v *Verifier) StageAndVerify(ctx context.Context, archivePath, finalInstallDir string) (algo *Algorithm, retErr error) {
-	if err := os.MkdirAll(finalInstallDir, 0755); err != nil {
+	if err := os.MkdirAll(finalInstallDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create install directory: %w", err)
 	}
 	tempExtractDir, err := os.MkdirTemp(finalInstallDir, ".zhulong_verify_*")
@@ -294,7 +344,8 @@ func (v *Verifier) StageAndVerify(ctx context.Context, archivePath, finalInstall
 		return nil, fmt.Errorf("marshal verified manifest: %w", err)
 	}
 
-	targetDir := filepath.Join(finalInstallDir, manifest.ID, manifest.Version)
+	rt := algorunner.Runtime{AlgorithmsDir: finalInstallDir}
+	targetDir := rt.PackageDir(manifest.ID, manifest.Version)
 	absBase, err := filepath.Abs(finalInstallDir)
 	if err != nil {
 		return nil, fmt.Errorf("resolve install root: %w", err)
@@ -304,12 +355,12 @@ func (v *Verifier) StageAndVerify(ctx context.Context, archivePath, finalInstall
 		return nil, fmt.Errorf("%w: resolve install path: %v", ErrInvalidManifestToken, err)
 	}
 	relTarget, err := filepath.Rel(absBase, absTarget)
-	if err != nil || relTarget == "." || relTarget == ".." || strings.HasPrefix(relTarget, ".."+string(filepath.Separator)) || filepath.IsAbs(relTarget) {
+	if err != nil || escapesInstallRoot(relTarget) {
 		return nil, fmt.Errorf("%w: resolved install path escapes the install root", ErrInvalidManifestToken)
 	}
 
-	idDir := filepath.Join(finalInstallDir, manifest.ID)
-	if err := os.Mkdir(idDir, 0755); err != nil && !os.IsExist(err) {
+	idDir := rt.IDDir(manifest.ID)
+	if err := os.Mkdir(idDir, 0o755); err != nil && !os.IsExist(err) {
 		return nil, fmt.Errorf("create algorithm directory: %w", err)
 	}
 	idInfo, err := os.Lstat(idDir)
@@ -319,10 +370,12 @@ func (v *Verifier) StageAndVerify(ctx context.Context, archivePath, finalInstall
 	if !idInfo.IsDir() || idInfo.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("%w: algorithm install path is not a directory", ErrInvalidManifestToken)
 	}
-	if _, err := os.Lstat(targetDir); err == nil {
+	_, statErr := os.Lstat(targetDir)
+	switch {
+	case statErr == nil:
 		return nil, ErrVersionAlreadyInstalled
-	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("inspect install target: %w", err)
+	case !os.IsNotExist(statErr):
+		return nil, fmt.Errorf("inspect install target: %w", statErr)
 	}
 	if err := installDirectoryAtomically(tempExtractDir, targetDir); err != nil {
 		if errors.Is(err, ErrVersionAlreadyInstalled) {
@@ -352,14 +405,33 @@ func (v *Verifier) StageAndVerify(ctx context.Context, archivePath, finalInstall
 	return algo, nil
 }
 
+// escapesInstallRoot reports whether relTarget, obtained from filepath.Rel
+// against the install root, fails to resolve to a strict descendant of it.
+// "." is rejected because the install target must live *below* the root.
+func escapesInstallRoot(relTarget string) bool {
+	switch relTarget {
+	case ".", "..":
+		return true
+	}
+	if filepath.IsAbs(relTarget) {
+		return true
+	}
+	return strings.HasPrefix(relTarget, ".."+string(filepath.Separator))
+}
+
 func installDirectoryAtomically(src, dst string) (retErr error) {
-	if err := renameDirectoryNoReplace(src, dst); err == nil {
+	renameErr := renameDirectoryNoReplace(src, dst)
+	if renameErr == nil {
 		return nil
-	} else if !errors.Is(err, unix.EXDEV) {
+	}
+
+	// EXDEV means the staging directory sits on another filesystem; anything
+	// else is a real failure and must not be retried through the copy path.
+	if !errors.Is(renameErr, unix.EXDEV) {
 		if _, statErr := os.Lstat(dst); statErr == nil {
 			return ErrVersionAlreadyInstalled
 		}
-		return err
+		return renameErr
 	}
 
 	stagingDir, err := os.MkdirTemp(filepath.Dir(dst), ".zhulong_install_*")
@@ -399,7 +471,7 @@ func copyDir(src, dst string) error {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("unsupported file type in staged package: %s", path)
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
 		in, err := os.Open(path)

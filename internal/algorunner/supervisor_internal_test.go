@@ -47,7 +47,7 @@ func (s *stubLifecycleStore) statusOf(id string) (string, bool) {
 // status-write guard sound: retireWatcher reports whether it actually removed
 // the caller's watcher, and never disturbs a replacement watcher.
 func TestRetireWatcherReportsWhetherItRemoved(t *testing.T) {
-	supervisor := NewSupervisor(nil, "", "", DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := NewSupervisor(nil, Runtime{}, DefaultRecoveryOptions(), zap.NewNop())
 
 	const algoID = "algo_retire"
 	w1 := &workerWatcher{supervisor: supervisor, algo: PackageMeta{ID: algoID}}
@@ -79,7 +79,7 @@ func TestRetireWatcherReportsWhetherItRemoved(t *testing.T) {
 // process runs).
 func TestStopAlgorithmDoesNotDisableAReplacedWatcher(t *testing.T) {
 	store := newStubLifecycleStore()
-	supervisor := NewSupervisor(store, "", "", DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := NewSupervisor(store, Runtime{}, DefaultRecoveryOptions(), zap.NewNop())
 
 	const algoID = "algo_replaced"
 	w1 := &workerWatcher{
@@ -136,7 +136,7 @@ func TestStopAlgorithmDoesNotDisableAReplacedWatcher(t *testing.T) {
 // would still pass.
 func TestStopAlgorithmDisablesWhenItRetiresItsOwnWatcher(t *testing.T) {
 	store := newStubLifecycleStore()
-	supervisor := NewSupervisor(store, "", "", DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := NewSupervisor(store, Runtime{}, DefaultRecoveryOptions(), zap.NewNop())
 
 	const algoID = "algo_owned_stop"
 	w := &workerWatcher{
