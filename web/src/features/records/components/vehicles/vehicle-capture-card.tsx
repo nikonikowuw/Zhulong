@@ -2,16 +2,19 @@ import { type KeyboardEvent } from 'react'
 import { format } from 'date-fns'
 import { useTranslation } from 'react-i18next'
 import { Card, CardContent } from '@/components/ui/card'
+import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { type Capture } from '../../data/schema'
 import { VehicleEvidence } from './vehicle-evidence'
 
 interface VehicleCaptureCardProps {
   item: Capture
+  cameraName?: CameraNameLookup
   onSelect: (item: Capture) => void
 }
 
 export function VehicleCaptureCard({
   item,
+  cameraName,
   onSelect,
 }: VehicleCaptureCardProps) {
   const { t } = useTranslation('records')
@@ -39,7 +42,9 @@ export function VehicleCaptureCard({
       <VehicleEvidence capture={item} layout='card' />
       <CardContent className='space-y-1.5 p-3'>
         <div className='flex items-center justify-between gap-2 text-xs'>
-          <span className='truncate font-medium'>{item.cameraId}</span>
+          <span className='truncate font-medium'>
+            {cameraLabel(item.cameraId, cameraName)}
+          </span>
           <span className='shrink-0 font-mono text-[11px] text-muted-foreground'>
             {formattedTime}
           </span>

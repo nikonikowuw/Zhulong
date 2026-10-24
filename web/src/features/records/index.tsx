@@ -23,6 +23,7 @@ import {
 } from './data/schema'
 import { type RecordsDateRange } from './data/time-presets'
 import { useAlarms } from './hooks/use-alarms'
+import { useCameraNames } from './hooks/use-camera-names'
 import { useCaptures } from './hooks/use-captures'
 import { useRecognitions } from './hooks/use-recognitions'
 
@@ -52,6 +53,9 @@ export function Records() {
   // 详情弹窗状态
   const [detailOpen, setDetailOpen] = useState(false)
   const [selectedRecord, setSelectedRecord] = useState<RecordItem | null>(null)
+
+  // 记录行只存 cameraId，展示时必须解析成摄像机名称
+  const cameraName = useCameraNames()
 
   // 状态驱动的路由跳转辅助
   const updateSearch = (updater: Partial<RecordsSearchParams>) => {
@@ -251,6 +255,7 @@ export function Records() {
                 page={page}
                 pageSize={pageSize}
                 view={view}
+                cameraName={cameraName}
                 isLoading={recognitionsQuery.isLoading}
                 isError={recognitionsQuery.isError}
                 onPageChange={(nextPage) => updateSearch({ page: nextPage })}
@@ -269,6 +274,7 @@ export function Records() {
                 page={page}
                 pageSize={pageSize}
                 view={view}
+                cameraName={cameraName}
                 isLoading={alarmsQuery.isLoading}
                 isError={alarmsQuery.isError}
                 onPageChange={(nextPage) => updateSearch({ page: nextPage })}
@@ -288,6 +294,7 @@ export function Records() {
                 page={page}
                 pageSize={pageSize}
                 view={view}
+                cameraName={cameraName}
                 isLoading={capturesQuery.isLoading}
                 isError={capturesQuery.isError}
                 onPageChange={(nextPage) => updateSearch({ page: nextPage })}
@@ -307,6 +314,7 @@ export function Records() {
         tab={tab}
         record={selectedRecord}
         open={detailOpen}
+        cameraName={cameraName}
         onOpenChange={setDetailOpen}
       />
     </>

@@ -63,6 +63,10 @@ const mockCapture: Capture = {
   createdAt: '2026-03-31T13:00:01Z',
 }
 
+const camNames = (cameraId: string) =>
+  ({ 'cam-gate': '南门枪机', 'cam-perimeter': '北墙球机' })[cameraId] ??
+  (cameraId === 'cam-lane' ? '东门卡口' : undefined)
+
 describe('RecordDetailDialog', () => {
   it('renders recognition details correctly', async () => {
     const handleOpenChange = vi.fn()
@@ -124,6 +128,24 @@ describe('RecordDetailDialog', () => {
     )
     // 底库照绝不能走 media/content 取：那条路径必然 422。
     expect(seenSrcs).not.toContain('/api/v1/media/content/gallery/p-888.jpg')
+  })
+
+  it('renders the camera name in the header and metadata strip', async () => {
+    const { getByText } = await render(
+      <RecordDetailDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        record={mockRecognition}
+        tab='recognitions'
+        cameraName={camNames}
+      />
+    )
+
+    // 表头与底部元数据条都应显示名称，任何一处都不应再露出裸 ID。
+    await vi.waitFor(() => {
+      expect(getByText('南门枪机').elements()).toHaveLength(2)
+    })
+    expect(getByText('cam-gate').query()).toBeNull()
   })
 
   it('renders alarm details and extra parameters', async () => {

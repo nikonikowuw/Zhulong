@@ -1,15 +1,13 @@
 import { useMemo } from 'react'
+import { format } from 'date-fns'
 import {
   type ColumnDef,
   getCoreRowModel,
   useReactTable,
   flexRender,
 } from '@tanstack/react-table'
-import { format } from 'date-fns'
 import { AlertCircle, Bell, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { DataTableColumnHeader } from '@/components/data-table/column-header'
-import { DataTablePagination } from '@/components/data-table/pagination'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -21,6 +19,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { DataTableColumnHeader } from '@/components/data-table/column-header'
+import { DataTablePagination } from '@/components/data-table/pagination'
+import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { algorithmLabel, type Alarm } from '../../data/schema'
 import { AlarmCard } from '../alarms/alarm-card'
 import { MediaImage } from '../common/media-image'
@@ -31,6 +32,8 @@ export interface AlarmsViewProps {
   page: number
   pageSize: number
   view: 'grid' | 'table'
+  /** `cameraId → 名称` 解析器，见 data/camera-label.ts */
+  cameraName?: CameraNameLookup
   isLoading: boolean
   isError: boolean
   onPageChange: (page: number) => void
@@ -45,6 +48,7 @@ export function AlarmsView({
   page,
   pageSize,
   view,
+  cameraName,
   isLoading,
   isError,
   onPageChange,
@@ -59,10 +63,7 @@ export function AlarmsView({
       {
         accessorKey: 'cropPath',
         header: ({ column }) => (
-          <DataTableColumnHeader
-            column={column}
-            title={t('table.thumbnail')}
-          />
+          <DataTableColumnHeader column={column} title={t('table.thumbnail')} />
         ),
         size: 90,
         enableSorting: false,
@@ -99,7 +100,9 @@ export function AlarmsView({
         ),
         enableSorting: false,
         cell: ({ row }) => (
-          <span className='text-xs font-medium'>{row.original.cameraId}</span>
+          <span className='text-xs font-medium'>
+            {cameraLabel(row.original.cameraId, cameraName)}
+          </span>
         ),
       },
       {
@@ -111,9 +114,9 @@ export function AlarmsView({
         cell: ({ row }) => (
           <Badge
             variant='outline'
-            className='border-destructive/40 bg-destructive/10 text-destructive font-medium'
+            className='border-destructive/40 bg-destructive/10 font-medium text-destructive'
           >
-            <Bell className='size-3 me-1' />
+            <Bell className='me-1 size-3' />
             {row.original.alarmType}
           </Badge>
         ),
@@ -149,7 +152,7 @@ export function AlarmsView({
         ),
       },
     ],
-    [t]
+    [t, cameraName]
   )
 
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -240,7 +243,12 @@ export function AlarmsView({
       <div className='space-y-4'>
         <div className='grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'>
           {items.map((item) => (
-            <AlarmCard key={item.id} item={item} onSelect={onSelect} />
+            <AlarmCard
+              key={item.id}
+              item={item}
+              cameraName={cameraName}
+              onSelect={onSelect}
+            />
           ))}
         </div>
         <DataTablePagination table={table} />

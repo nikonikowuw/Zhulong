@@ -3,15 +3,17 @@ import { AlertTriangle, Eye } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
+import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { type Alarm } from '../../data/schema'
 import { MediaImage } from '../common/media-image'
 
 interface AlarmCardProps {
   item: Alarm
+  cameraName?: CameraNameLookup
   onSelect: (item: Alarm) => void
 }
 
-export function AlarmCard({ item, onSelect }: AlarmCardProps) {
+export function AlarmCard({ item, cameraName, onSelect }: AlarmCardProps) {
   const { t } = useTranslation('records')
   const formattedTime = item.capturedAt
     ? format(new Date(item.capturedAt), 'MM-dd HH:mm:ss')
@@ -69,7 +71,9 @@ export function AlarmCard({ item, onSelect }: AlarmCardProps) {
         </div>
 
         <div className='flex items-center justify-between text-[11px] text-muted-foreground'>
-          <span className='max-w-[130px] truncate'>{item.cameraId}</span>
+          <span className='max-w-[130px] truncate'>
+            {cameraLabel(item.cameraId, cameraName)}
+          </span>
           {item.pts > 0 && (
             <span className='font-mono text-[10px] opacity-75'>
               pts:{item.pts}

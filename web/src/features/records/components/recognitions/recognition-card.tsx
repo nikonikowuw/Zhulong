@@ -5,15 +5,21 @@ import { statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
+import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { type Recognition } from '../../data/schema'
 import { MediaImage } from '../common/media-image'
 
 interface RecognitionCardProps {
   item: Recognition
+  cameraName?: CameraNameLookup
   onSelect: (item: Recognition) => void
 }
 
-export function RecognitionCard({ item, onSelect }: RecognitionCardProps) {
+export function RecognitionCard({
+  item,
+  cameraName,
+  onSelect,
+}: RecognitionCardProps) {
   const { t } = useTranslation('records')
   const formattedTime = item.capturedAt
     ? format(new Date(item.capturedAt), 'MM-dd HH:mm:ss')
@@ -83,7 +89,9 @@ export function RecognitionCard({ item, onSelect }: RecognitionCardProps) {
         </div>
 
         <div className='flex items-center justify-between text-[11px] text-muted-foreground'>
-          <span className='max-w-[130px] truncate'>{item.cameraId}</span>
+          <span className='max-w-[130px] truncate'>
+            {cameraLabel(item.cameraId, cameraName)}
+          </span>
           {item.trackId > 0 && (
             <span className='font-mono'>#{item.trackId}</span>
           )}

@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/table'
 import { DataTableColumnHeader } from '@/components/data-table/column-header'
 import { DataTablePagination } from '@/components/data-table/pagination'
+import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { algorithmLabel, type Capture } from '../../data/schema'
 import { targetTypeBadgeClass } from '../../data/target-type'
 import { CaptureCard } from '../captures/capture-card'
@@ -36,6 +37,8 @@ export interface CapturesViewProps {
   pageSize: number
   view: 'grid' | 'table'
   mode?: 'captures' | 'vehicles'
+  /** `cameraId → 名称` 解析器，见 data/camera-label.ts */
+  cameraName?: CameraNameLookup
   isLoading: boolean
   isError: boolean
   onPageChange: (page: number) => void
@@ -51,6 +54,7 @@ export function CapturesView({
   pageSize,
   view,
   mode = 'captures',
+  cameraName,
   isLoading,
   isError,
   onPageChange,
@@ -110,7 +114,9 @@ export function CapturesView({
         ),
         enableSorting: false,
         cell: ({ row }) => (
-          <span className='text-xs font-medium'>{row.original.cameraId}</span>
+          <span className='text-xs font-medium'>
+            {cameraLabel(row.original.cameraId, cameraName)}
+          </span>
         ),
       },
     ]
@@ -185,7 +191,7 @@ export function CapturesView({
     )
 
     return cols
-  }, [mode, t])
+  }, [mode, t, cameraName])
 
   // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
@@ -290,10 +296,16 @@ export function CapturesView({
               <VehicleCaptureCard
                 key={item.id}
                 item={item}
+                cameraName={cameraName}
                 onSelect={onSelect}
               />
             ) : (
-              <CaptureCard key={item.id} item={item} onSelect={onSelect} />
+              <CaptureCard
+                key={item.id}
+                item={item}
+                cameraName={cameraName}
+                onSelect={onSelect}
+              />
             )
           )}
         </div>

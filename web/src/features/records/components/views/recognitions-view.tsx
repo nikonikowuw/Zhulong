@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/table'
 import { DataTableColumnHeader } from '@/components/data-table/column-header'
 import { DataTablePagination } from '@/components/data-table/pagination'
+import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { type Recognition } from '../../data/schema'
 import { MediaImage } from '../common/media-image'
 import { RecognitionCard } from '../recognitions/recognition-card'
@@ -33,6 +34,8 @@ export interface RecognitionsViewProps {
   page: number
   pageSize: number
   view: 'grid' | 'table'
+  /** `cameraId → 名称` 解析器，见 data/camera-label.ts */
+  cameraName?: CameraNameLookup
   isLoading: boolean
   isError: boolean
   onPageChange: (page: number) => void
@@ -47,6 +50,7 @@ export function RecognitionsView({
   page,
   pageSize,
   view,
+  cameraName,
   isLoading,
   isError,
   onPageChange,
@@ -98,7 +102,9 @@ export function RecognitionsView({
         ),
         enableSorting: false,
         cell: ({ row }) => (
-          <span className='text-xs font-medium'>{row.original.cameraId}</span>
+          <span className='text-xs font-medium'>
+            {cameraLabel(row.original.cameraId, cameraName)}
+          </span>
         ),
       },
       {
@@ -163,7 +169,7 @@ export function RecognitionsView({
         ),
       },
     ],
-    [t]
+    [t, cameraName]
   )
 
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -254,7 +260,12 @@ export function RecognitionsView({
       <div className='space-y-4'>
         <div className='grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'>
           {items.map((item) => (
-            <RecognitionCard key={item.id} item={item} onSelect={onSelect} />
+            <RecognitionCard
+              key={item.id}
+              item={item}
+              cameraName={cameraName}
+              onSelect={onSelect}
+            />
           ))}
         </div>
         <DataTablePagination table={table} />

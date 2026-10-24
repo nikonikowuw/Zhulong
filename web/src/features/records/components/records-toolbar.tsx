@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { useCameras } from '@/features/cameras/hooks/use-cameras'
+import { useAllCameras } from '@/features/cameras/contract'
 import { type RecordsTab } from '../data/schema'
 import { type RecordsDateRange, type TimePresetKey } from '../data/time-presets'
 import { useAlarmTypes } from '../hooks/use-alarm-types'
@@ -66,7 +66,7 @@ export function RecordsToolbar({
   isFetching = false,
 }: RecordsToolbarProps) {
   const { t } = useTranslation('records')
-  const { data: cameraData } = useCameras({ page: 1, pageSize: 100 })
+  const { data: cameraData } = useAllCameras()
   const cameras = cameraData?.items ?? []
 
   const { data: rawAlarmTypes = [] } = useAlarmTypes()

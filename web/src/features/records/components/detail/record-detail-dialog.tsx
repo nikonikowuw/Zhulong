@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
+import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import {
   algorithmLabel,
   type Alarm,
@@ -40,6 +41,8 @@ export interface RecordDetailDialogProps {
   onOpenChange: (open: boolean) => void
   record: RecordItem | null
   tab: RecordsTab
+  /** `cameraId → 名称` 解析器，见 data/camera-label.ts */
+  cameraName?: CameraNameLookup
 }
 
 export function RecordDetailDialog({
@@ -47,6 +50,7 @@ export function RecordDetailDialog({
   onOpenChange,
   record,
   tab,
+  cameraName,
 }: RecordDetailDialogProps) {
   const { t } = useTranslation('records')
 
@@ -120,7 +124,8 @@ export function RecordDetailDialog({
               </DialogTitle>
               <DialogDescription className='flex items-center gap-3 text-xs text-muted-foreground'>
                 <span>
-                  {t('detail.cameraId')}: <strong>{record.cameraId}</strong>
+                  {t('detail.cameraId')}:{' '}
+                  <strong>{cameraLabel(record.cameraId, cameraName)}</strong>
                 </span>
                 <span>•</span>
                 <span>
@@ -322,8 +327,8 @@ export function RecordDetailDialog({
                 <span className='block text-[10px] font-medium uppercase'>
                   {t('detail.cameraId')}
                 </span>
-                <span className='font-mono text-foreground'>
-                  {record.cameraId}
+                <span className='truncate text-foreground'>
+                  {cameraLabel(record.cameraId, cameraName)}
                 </span>
               </div>
               {'algorithmId' in record && (

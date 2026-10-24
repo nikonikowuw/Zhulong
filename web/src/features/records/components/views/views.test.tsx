@@ -6,6 +6,11 @@ import { AlarmsView } from './alarms-view'
 import { CapturesView } from './captures-view'
 import { RecognitionsView } from './recognitions-view'
 
+/** `cameraId → 名称` 解析器替身：记录行只存 ID，展示层必须解析成名称 */
+const camNames = (cameraId: string) =>
+  ({ 'cam-gate': '南门枪机', 'cam-perimeter': '北墙球机' })[cameraId] ??
+  (cameraId === 'cam-lane' ? '东门卡口' : undefined)
+
 const sampleRecognitions: Recognition[] = [
   {
     id: 'rec-1',
@@ -78,6 +83,7 @@ describe('Records Views', () => {
           page={1}
           pageSize={20}
           view='grid'
+          cameraName={camNames}
           isLoading={false}
           isError={false}
           onPageChange={vi.fn()}
@@ -102,6 +108,7 @@ describe('Records Views', () => {
           page={1}
           pageSize={20}
           view='table'
+          cameraName={camNames}
           isLoading={false}
           isError={false}
           onPageChange={vi.fn()}
@@ -116,6 +123,26 @@ describe('Records Views', () => {
       await expect.element(rowItem).toBeInTheDocument()
       await userEvent.click(rowItem)
       expect(handleSelect).toHaveBeenCalledWith(sampleRecognitions[0])
+    })
+
+    it('falls back to the raw camera id when no resolver is provided', async () => {
+      const { getByText } = await render(
+        <RecognitionsView
+          items={sampleRecognitions}
+          total={1}
+          page={1}
+          pageSize={20}
+          view='grid'
+          isLoading={false}
+          isError={false}
+          onPageChange={vi.fn()}
+          onPageSizeChange={vi.fn()}
+          onSelect={vi.fn()}
+          onRetry={vi.fn()}
+        />
+      )
+
+      await expect.element(getByText('cam-gate')).toBeInTheDocument()
     })
 
     it('renders empty state when no items exist in grid and table', async () => {
@@ -171,6 +198,7 @@ describe('Records Views', () => {
           page={1}
           pageSize={20}
           view='grid'
+          cameraName={camNames}
           isLoading={false}
           isError={false}
           onPageChange={vi.fn()}
@@ -180,7 +208,8 @@ describe('Records Views', () => {
         />
       )
 
-      await expect.element(getByText('cam-perimeter')).toBeInTheDocument()
+      await expect.element(getByText('北墙球机')).toBeInTheDocument()
+      expect(getByText('cam-perimeter').query()).toBeNull()
     })
   })
 
@@ -194,6 +223,7 @@ describe('Records Views', () => {
           page={1}
           pageSize={20}
           view='grid'
+          cameraName={camNames}
           isLoading={false}
           isError={false}
           onPageChange={vi.fn()}
@@ -203,7 +233,8 @@ describe('Records Views', () => {
         />
       )
 
-      await expect.element(getByText('cam-lane')).toBeInTheDocument()
+      await expect.element(getByText('东门卡口')).toBeInTheDocument()
+      expect(getByText('cam-lane').query()).toBeNull()
     })
 
     it('renders capture table view with trackId', async () => {
@@ -214,6 +245,7 @@ describe('Records Views', () => {
           page={1}
           pageSize={20}
           view='table'
+          cameraName={camNames}
           isLoading={false}
           isError={false}
           onPageChange={vi.fn()}
@@ -225,7 +257,7 @@ describe('Records Views', () => {
 
       await expect.element(getByRole('table')).toBeInTheDocument()
       await expect.element(getByText('#5')).toBeInTheDocument()
-      await expect.element(getByText('cam-lane')).toBeInTheDocument()
+      await expect.element(getByText('东门卡口')).toBeInTheDocument()
     })
 
     it('shows both vehicle images in grid cards and opens details', async () => {
@@ -238,6 +270,7 @@ describe('Records Views', () => {
           pageSize={20}
           view='grid'
           mode='vehicles'
+          cameraName={camNames}
           isLoading={false}
           isError={false}
           onPageChange={vi.fn()}
@@ -266,6 +299,7 @@ describe('Records Views', () => {
           pageSize={20}
           view='table'
           mode='vehicles'
+          cameraName={camNames}
           isLoading={false}
           isError={false}
           onPageChange={vi.fn()}
@@ -279,7 +313,7 @@ describe('Records Views', () => {
       await expect.element(getByText('图像证据')).toBeInTheDocument()
       await expect.element(getByText('全景图')).toBeInTheDocument()
       await expect.element(getByText('车辆裁剪图')).toBeInTheDocument()
-      await expect.element(getByText('cam-lane')).toBeInTheDocument()
+      await expect.element(getByText('东门卡口')).toBeInTheDocument()
     })
 
     it('shows the algorithm snapshot in the captures table', async () => {
