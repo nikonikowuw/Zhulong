@@ -69,11 +69,16 @@ public:
         (void)config_json;
         const std::string detection_model = std::string("models/plate_detect") + zhulong::TARGET_MODEL_EXT;
         const std::string recognition_model = std::string("models/plate_rec_color") + zhulong::TARGET_MODEL_EXT;
-        det_model_ = zhulong::Model::load(resolve_model_path(detection_model));
-        rec_model_ = zhulong::Model::load(resolve_model_path(recognition_model));
+        std::string resolved_det = resolve_model_path(detection_model);
+        std::string resolved_rec = resolve_model_path(recognition_model);
+        det_model_ = zhulong::Model::load(resolved_det);
+        rec_model_ = zhulong::Model::load(resolved_rec);
         if (!det_model_.valid() || !rec_model_.valid()) {
             return ZHULONG_PLUGIN_ERR_NOT_FOUND;
         }
+
+        bool is_onnx = (resolved_det.find(".onnx") != std::string::npos);
+        detector_.set_is_onnx(is_onnx);
         return ZHULONG_PLUGIN_OK;
     }
 

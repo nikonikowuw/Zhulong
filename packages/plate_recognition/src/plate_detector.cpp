@@ -45,8 +45,31 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session, 
         return {};
     }
 
-    // 2. 前向推理
-    auto outputs = session.forward({input_tensor});
+    // 2. 前向推理（ONNX 模型需要归一化为 [1, 3, 640, 640] FLOAT32 NCHW）
+    std::vector<zhulong::Tensor> outputs;
+    if (is_onnx_) {
+        constexpr int model_w = 640;
+        constexpr int model_h = 640;
+        zhulong::Tensor onnx_input({1, 3, model_h, model_w}, zhulong::DataType::FLOAT32);
+        const uint8_t* src_hwc = input_tensor.data<uint8_t>();
+        float* dst_nchw = onnx_input.data<float>();
+        if (!src_hwc || !dst_nchw) {
+            return {};
+        }
+        constexpr int plane_size = model_w * model_h;
+        float* dst_r = dst_nchw;
+        float* dst_g = dst_nchw + plane_size;
+        float* dst_b = dst_nchw + plane_size * 2;
+        for (int i = 0; i < plane_size; ++i) {
+            dst_r[i] = static_cast<float>(src_hwc[i * 3 + 0]) / 255.0f;
+            dst_g[i] = static_cast<float>(src_hwc[i * 3 + 1]) / 255.0f;
+            dst_b[i] = static_cast<float>(src_hwc[i * 3 + 2]) / 255.0f;
+        }
+        outputs = session.forward({onnx_input});
+    } else {
+        outputs = session.forward({input_tensor});
+    }
+
     if (outputs.empty() || outputs[0].element_count() == 0) {
         return {};
     }
