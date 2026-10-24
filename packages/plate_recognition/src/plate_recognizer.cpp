@@ -1,4 +1,5 @@
 #include "plate_recognizer.hpp"
+#include <algorithm/runtime/yuv_sampling.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -22,8 +23,8 @@ constexpr size_t NUM_PLATE_CHARS = sizeof(PLATE_NAMES) / sizeof(PLATE_NAMES[0]);
 static const char* COLOR_NAMES[] = {"黑色", "蓝色", "绿色", "白色", "黄色"};
 constexpr size_t NUM_COLORS = sizeof(COLOR_NAMES) / sizeof(COLOR_NAMES[0]);
 
-// 双线性插值采样像素 (输入图像为 BGR24 或 RGB24)
-inline void sample_bilinear(
+// 双线性插值采样像素，统一输出 RGB 浮点通道（由 sample_packed_rgb 的 BGR 顺序纠正）
+inline void sample_packed_rgb(
     const uint8_t* src, int w, int h, int stride,
     float fx, float fy, float& out_b, float& out_g, float& out_r
 ) {
@@ -38,10 +39,10 @@ inline void sample_bilinear(
     float dx = fx - x0;
     float dy = fy - y0;
 
-    const uint8_t* p00 = src + y0 * stride + x0 * 3;
-    const uint8_t* p01 = src + y0 * stride + x1 * 3;
-    const uint8_t* p10 = src + y1 * stride + x0 * 3;
-    const uint8_t* p11 = src + y1 * stride + x1 * 3;
+    const uint8_t* p00 = src + static_cast<size_t>(y0) * stride + x0 * 3;
+    const uint8_t* p01 = src + static_cast<size_t>(y0) * stride + x1 * 3;
+    const uint8_t* p10 = src + static_cast<size_t>(y1) * stride + x0 * 3;
+    const uint8_t* p11 = src + static_cast<size_t>(y1) * stride + x1 * 3;
 
     for (int c = 0; c < 3; ++c) {
         float val = (1.0f - dx) * (1.0f - dy) * p00[c] +
@@ -52,6 +53,68 @@ inline void sample_bilinear(
         else if (c == 1) out_g = val;
         else out_r = val;
     }
+}
+
+/**
+ * @brief 按像素格式采样单个像素，输出归一化前的 RGB 浮点值
+ *
+ * 支持 YUV420P / NV12 / packed RGB24・BGR24。采样数学与 CPU 视觉后端共用
+ * yuv_sampling.hpp：两条路径（喂模型的前处理 vs 裁给识别器的局部采样）必须颜色一致。
+ */
+inline void sample_pixel_rgb(
+    const zhulong_frame_view& raw,
+    float fx, float fy, float& out_r, float& out_g, float& out_b
+) {
+    const int w = raw.width;
+    const int h = raw.height;
+    const int uv_w = (w + 1) / 2;
+    const int uv_h = (h + 1) / 2;
+    const float uv_x = (fx + 0.5f) * uv_w / w - 0.5f;
+    const float uv_y = (fy + 0.5f) * uv_h / h - 0.5f;
+
+    if (raw.format == ZHULONG_PIXEL_FORMAT_YUV420P && raw.planes[0] && raw.planes[1] && raw.planes[2]) {
+        const int u_stride = raw.strides[1] > 0 ? raw.strides[1] : uv_w;
+        const int v_stride = raw.strides[2] > 0 ? raw.strides[2] : uv_w;
+
+        const float y_val = zhulong::sample_plane_bilinear(raw.planes[0], w, h, raw.strides[0] > 0 ? raw.strides[0] : w, fx, fy);
+        const float u_val = zhulong::sample_plane_bilinear(raw.planes[1], uv_w, uv_h, u_stride, uv_x, uv_y);
+        const float v_val = zhulong::sample_plane_bilinear(raw.planes[2], uv_w, uv_h, v_stride, uv_x, uv_y);
+        zhulong::yuv_to_rgb(y_val, u_val, v_val, out_r, out_g, out_b);
+        return;
+    }
+
+    if (raw.format == ZHULONG_PIXEL_FORMAT_NV12 && raw.planes[0] && raw.planes[1]) {
+        const int uv_stride = raw.strides[1] > 0 ? raw.strides[1] : w;
+
+        const float y_val = zhulong::sample_plane_bilinear(raw.planes[0], w, h, raw.strides[0] > 0 ? raw.strides[0] : w, fx, fy);
+        float u_val = 128.0f;
+        float v_val = 128.0f;
+        zhulong::sample_nv12_uv_bilinear(raw.planes[1], uv_w, uv_h, uv_stride, uv_x, uv_y, u_val, v_val);
+        zhulong::yuv_to_rgb(y_val, u_val, v_val, out_r, out_g, out_b);
+        return;
+    }
+
+    if (raw.planes[0]) {
+        const int stride = raw.strides[0] > 0 ? raw.strides[0] : w * 3;
+        float c0 = 0.0f;
+        float c1 = 0.0f;
+        float c2 = 0.0f;
+        sample_packed_rgb(raw.planes[0], w, h, stride, fx, fy, c0, c1, c2);
+        if (raw.format == ZHULONG_PIXEL_FORMAT_BGR24) {
+            out_r = c2;
+            out_g = c1;
+            out_b = c0;
+        } else {
+            out_r = c0;
+            out_g = c1;
+            out_b = c2;
+        }
+        return;
+    }
+
+    out_r = 0.0f;
+    out_g = 0.0f;
+    out_b = 0.0f;
 }
 
 } // namespace
@@ -85,10 +148,6 @@ RecognizedPlate PlateRecognizer::recognize(
     float* g_plane = r_plane + target_h * target_w;
     float* b_plane = g_plane + target_h * target_w;
 
-    const uint8_t* src_pixels = raw.planes[0];
-    int stride = raw.strides[0] > 0 ? raw.strides[0] : raw.width * 3;
-    bool is_bgr = (raw.format == ZHULONG_PIXEL_FORMAT_BGR24);
-
     constexpr float mean_val = 0.588f;
     constexpr float std_val = 0.193f;
 
@@ -115,12 +174,8 @@ RecognizedPlate PlateRecognizer::recognize(
                 fy = y1 + (y + 0.5f) * (crop_h / static_cast<float>(target_h)) - 0.5f;
             }
 
-            float c0 = 0.0f, c1 = 0.0f, c2 = 0.0f;
-            sample_bilinear(src_pixels, raw.width, raw.height, stride, fx, fy, c0, c1, c2);
-
-            float r = is_bgr ? c2 : c0;
-            float g = c1;
-            float b = is_bgr ? c0 : c2;
+            float r = 0.0f, g = 0.0f, b = 0.0f;
+            sample_pixel_rgb(raw, fx, fy, r, g, b);
 
             int idx = y * target_w + x;
             r_plane[idx] = (r / 255.0f - mean_val) / std_val;

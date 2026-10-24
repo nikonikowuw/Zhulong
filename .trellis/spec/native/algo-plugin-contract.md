@@ -124,7 +124,8 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 ```
 
 - `zhulong_frame_view.strides[0] == 0` 表示 packed 紧密排列；正 stride 必须至少为 `width * 3`；负值或不足行宽返回 `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`。
-- `NV12`、`YUV420P`、`RGBA32`、`UNKNOWN` 等尚未实现的格式返回 `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED`，且不得读取源像素。
+- **YUV 输入**：`letterbox` 接受 `YUV420P` 与 `NV12`，目标格式仍限 `RGB24`/`BGR24`。亮度与色度均按像素中心坐标双线性采样（越界 clamp 到边缘），再经 ITU-R BT.601 有限范围系数转 RGB。`RGBA32`、`UNKNOWN` 及其他未实现格式返回 `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED`，且不得读取源像素；`YUV420P`/`NV12` 缺少必需平面则返回 `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`。
+- ⚠️ **YUV 采样数学只有一份实现**：`native/src/algorithm/runtime/yuv_sampling.hpp`（`sample_plane_bilinear` / `sample_nv12_uv_bilinear` / `yuv_to_rgb`）。CPU 视觉后端与车牌识别插件的裁剪采样都必须复用它，不得各自复制一份 —— 两份实现一旦在 UV 索引或 clamp 边界上漂移，同一码流在「喂模型」与「裁给识别器」两条路径上会出现颜色差异，真机只表现为「识别率莫名变低」。
 - RGB/BGR 目标顺序不一致时必须交换 R/B 通道。缩放采用像素中心坐标、双线性插值和边界 clamp；Letterbox 补边值为 114，缩放直接写到最终 Tensor ROI，不分配 `resized_temp`。
 - 空默认 Tensor 的 `element_count()` 为 0；非空 shape 中任一维度 `<= 0` 抛出 `std::invalid_argument`；元素数或字节数乘法溢出抛出 `std::length_error`。动态 shape 分配不在当前 API 支持范围内。
 
@@ -132,8 +133,9 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 
 | 条件 | 结果 |
 | --- | --- |
-| 输入和目标格式均为 RGB24/BGR24，stride 为 0 或至少 `width * 3` | 成功 |
-| 输入/目标格式包含尚未实现的格式 | `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED` |
+| 输入为 RGB24/BGR24 且 stride 为 0 或至少 `width * 3`，目标为 RGB24/BGR24 | 成功 |
+| 输入为 YUV420P / NV12，所需平面齐全、stride 合法，目标为 RGB24/BGR24 | 成功 |
+| 输入/目标格式包含尚未实现的格式（RGBA32 / UNKNOWN 等） | `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED` |
 | 空像素指针、非正图像尺寸、负 stride、stride 小于行字节数 | `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT` |
 | 非空 Tensor shape 含零/负维度 | 抛出 `std::invalid_argument` |
 | Tensor 元素数/字节数无法由 `size_t` 表示 | 抛出 `std::length_error` |

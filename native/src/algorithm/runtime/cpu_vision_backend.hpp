@@ -2,8 +2,8 @@
  * @file cpu_vision_backend.hpp
  * @brief CPU 视觉前处理后端（无硬件依赖的 host 实现）
  *
- * ⚠️ 仅支持 packed RGB24 / BGR24 输入与目标格式；NV12 / YUV420P / RGBA32 / UNKNOWN
- * 等尚未实现的格式返回 NOT_SUPPORTED，且**不得读取源像素**。
+ * ⚠️ letterbox 支持 packed RGB24 / BGR24、YUV420P 及 NV12 输入，目标格式为 RGB24 / BGR24；
+ * RGBA32 / UNKNOWN 等未实现格式返回 NOT_SUPPORTED，且不得读取源像素。
  * ⚠️ 几何计算统一复用 compute_letterbox_geometry，与 RGA 后端保持同一套语义。
  */
 

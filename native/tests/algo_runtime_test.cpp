@@ -144,14 +144,78 @@ int main() {
     assert(pixels[(1 * 4 + 3) * 3] == 20);
     assert(pixels[(3 * 4) * 3] == 114);
 
-    // Unsupported formats and invalid strides fail before source pixels are read.
-    for (zhulong_pixel_format_t unsupported : {ZHULONG_PIXEL_FORMAT_NV12,
-                                                ZHULONG_PIXEL_FORMAT_YUV420P,
-                                                ZHULONG_PIXEL_FORMAT_RGBA32,
+    // Unsupported formats fail before source pixels are read.
+    for (zhulong_pixel_format_t unsupported : {ZHULONG_PIXEL_FORMAT_RGBA32,
                                                 ZHULONG_PIXEL_FORMAT_UNKNOWN}) {
         rc = run_letterbox(*vision_backend, nullptr, 2, 2, 0,
                            unsupported, ZHULONG_PIXEL_FORMAT_RGB24, 2, 2, letterbox_out);
         assert(rc == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED);
+    }
+    // Supported formats with nullptr plane fail with INVALID_ARGUMENT.
+    for (zhulong_pixel_format_t supported_null : {ZHULONG_PIXEL_FORMAT_NV12,
+                                                  ZHULONG_PIXEL_FORMAT_YUV420P}) {
+        rc = run_letterbox(*vision_backend, nullptr, 2, 2, 0,
+                           supported_null, ZHULONG_PIXEL_FORMAT_RGB24, 2, 2, letterbox_out);
+        assert(rc == ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT);
+    }
+
+    // Test YUV420P letterbox.
+    {
+        std::vector<uint8_t> y_plane = {100, 100, 100, 100};
+        std::vector<uint8_t> u_plane = {128};
+        std::vector<uint8_t> v_plane = {128};
+        zhulong_frame_view yuv_frame{};
+        yuv_frame.width = 2;
+        yuv_frame.height = 2;
+        yuv_frame.format = ZHULONG_PIXEL_FORMAT_YUV420P;
+        yuv_frame.planes[0] = y_plane.data();
+        yuv_frame.planes[1] = u_plane.data();
+        yuv_frame.planes[2] = v_plane.data();
+        yuv_frame.strides[0] = 2;
+        yuv_frame.strides[1] = 1;
+        yuv_frame.strides[2] = 1;
+
+        zhulong::LetterboxParams yuv_params;
+        yuv_params.target_width = 2;
+        yuv_params.target_height = 2;
+        yuv_params.target_format = ZHULONG_PIXEL_FORMAT_RGB24;
+        zhulong::Tensor yuv_out;
+        rc = vision_backend->letterbox(yuv_frame, yuv_out, yuv_params);
+        assert(rc == ZHULONG_PLUGIN_OK);
+        assert(yuv_out.shape() == std::vector<int64_t>({2, 2, 3}));
+        const uint8_t* yuv_pixels = yuv_out.data<uint8_t>();
+        assert(yuv_pixels != nullptr);
+        for (int i = 0; i < 4 * 3; ++i) {
+            assert(yuv_pixels[i] == 100);
+        }
+    }
+
+    // Test NV12 letterbox.
+    {
+        std::vector<uint8_t> y_plane = {150, 150, 150, 150};
+        std::vector<uint8_t> uv_plane = {128, 128};
+        zhulong_frame_view nv12_frame{};
+        nv12_frame.width = 2;
+        nv12_frame.height = 2;
+        nv12_frame.format = ZHULONG_PIXEL_FORMAT_NV12;
+        nv12_frame.planes[0] = y_plane.data();
+        nv12_frame.planes[1] = uv_plane.data();
+        nv12_frame.strides[0] = 2;
+        nv12_frame.strides[1] = 2;
+
+        zhulong::LetterboxParams nv12_params;
+        nv12_params.target_width = 2;
+        nv12_params.target_height = 2;
+        nv12_params.target_format = ZHULONG_PIXEL_FORMAT_RGB24;
+        zhulong::Tensor nv12_out;
+        rc = vision_backend->letterbox(nv12_frame, nv12_out, nv12_params);
+        assert(rc == ZHULONG_PLUGIN_OK);
+        assert(nv12_out.shape() == std::vector<int64_t>({2, 2, 3}));
+        const uint8_t* nv12_pixels = nv12_out.data<uint8_t>();
+        assert(nv12_pixels != nullptr);
+        for (int i = 0; i < 4 * 3; ++i) {
+            assert(nv12_pixels[i] == 150);
+        }
     }
     rc = run_letterbox(*vision_backend, nullptr, 1, 1, 0,
                        ZHULONG_PIXEL_FORMAT_RGB24, ZHULONG_PIXEL_FORMAT_RGBA32,
