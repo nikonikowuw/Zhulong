@@ -134,8 +134,9 @@ private:
     bool origin_set_{false};
     int64_t origin_ticks_{0};
     int64_t timestamp_shift_us_{0};
-    bool has_last_source_dts_{false};
-    int64_t last_source_dts_us_{0};
+    bool has_last_source_clock_{false};
+    int64_t last_source_clock_us_{0};
+    bool last_source_clock_has_dts_{false};
     bool has_last_dts_{false};
     int64_t last_dts_us_{0};
 

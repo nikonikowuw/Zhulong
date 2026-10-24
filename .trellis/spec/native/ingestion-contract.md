@@ -55,6 +55,9 @@
 - **时间戳归一化**：`pts_us` / `dts_us` 由源 time_base 换算为微秒；PTS 保留显示顺序，允许 B 帧重排，
   DTS 保持解码包序单调。检测 DTS 回退或大幅跳变后续接输出时间轴并置 `ZHULONG_PKT_FLAG_DISCONTINUITY`；
   源缺失 PTS/DTS 时分别设置 `TIMESTAMP_SYNTHETIC` / `DTS_SYNTHETIC` 标志。
+  连续包的时钟来源变化（真实 DTS 与 PTS 回退替代互换）不能按普通 DTS 回退处理：小幅回退允许 B 帧重排，
+  只有超过 5 秒的跨来源跳变才标记 discontinuity；同为真实 DTS 的回退仍立即标记。该边界由
+  `native/tests/preview_normalizer_test.cpp` 的 `TestDtsAvailabilityTransitionDoesNotSignalDiscontinuity` 覆盖。
 - **参数集注入**：按 codec 解析 Annex B、H.264 `avcC` 或 H.265 `hvcC` 配置记录；也支持裸 4 字节长度前缀 NAL 序列。
   关键帧自身缺少 VPS/SPS/PPS 时前置拼接，并置 `ZHULONG_PKT_FLAG_PARAM_SETS_INJECTED`。
   拼接复用成员缓冲，只在关键帧触发。

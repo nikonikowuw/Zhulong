@@ -110,6 +110,42 @@ void TestBFrameTimestampsAndDiscontinuity() {
           "normalized DTS after discontinuity should continue after prior decode time");
 }
 
+void TestDtsAvailabilityTransitionDoesNotSignalDiscontinuity() {
+    zhulong::PreviewNormalizer normalizer;
+    normalizer.update_metadata(Zhulong_CODEC_H264, nullptr, 0, 1, 25);
+
+    auto first = Packet(3, 3, true);
+    first.has_dts = 0;
+    const auto first_output = normalizer.normalize(first);
+    Check((first_output.pkt_flags & ZHULONG_PKT_FLAG_DTS_SYNTHETIC) != 0,
+          "missing first DTS should use a synthetic decode clock");
+
+    const auto second_output = normalizer.normalize(Packet(1, 1));
+    Check((second_output.pkt_flags & ZHULONG_PKT_FLAG_DISCONTINUITY) == 0,
+          "switching from PTS fallback to real DTS must not signal discontinuity");
+    Check(second_output.gop_id == first_output.gop_id,
+          "a timestamp source transition must preserve the current GOP");
+    Check(second_output.dts_us > first_output.dts_us,
+          "normalized DTS must remain monotonic across a timestamp source transition");
+
+    const auto third_output = normalizer.normalize(Packet(2, 2));
+    Check((third_output.pkt_flags & ZHULONG_PKT_FLAG_DISCONTINUITY) == 0,
+          "monotonic DTS after the source transition must remain continuous");
+
+    const auto restarted_output = normalizer.normalize(Packet(0, 0));
+    Check((restarted_output.pkt_flags & ZHULONG_PKT_FLAG_DISCONTINUITY) != 0,
+          "a DTS reset after comparable DTS packets must still be detected");
+
+    zhulong::PreviewNormalizer mixed_clock_restart;
+    mixed_clock_restart.update_metadata(Zhulong_CODEC_H264, nullptr, 0, 1, 25);
+    auto pts_fallback = Packet(1000, 1000, true);
+    pts_fallback.has_dts = 0;
+    mixed_clock_restart.normalize(pts_fallback);
+    const auto large_restart = mixed_clock_restart.normalize(Packet(0, 0));
+    Check((large_restart.pkt_flags & ZHULONG_PKT_FLAG_DISCONTINUITY) != 0,
+          "a large reset must still be detected when DTS availability changes");
+}
+
 void TestMissingDtsGetsSyntheticDecodeClock() {
     zhulong::PreviewNormalizer normalizer;
     normalizer.update_metadata(Zhulong_CODEC_H264, nullptr, 0, 1, 25);
@@ -132,6 +168,7 @@ int main() {
     TestAvcConfigurationRecord();
     TestHevcConfigurationRecord();
     TestBFrameTimestampsAndDiscontinuity();
+    TestDtsAvailabilityTransitionDoesNotSignalDiscontinuity();
     TestMissingDtsGetsSyntheticDecodeClock();
     std::cout << "Preview normalizer tests passed\n";
     return 0;

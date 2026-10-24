@@ -278,8 +278,9 @@ void PreviewNormalizer::reset() {
     origin_set_ = false;
     origin_ticks_ = 0;
     timestamp_shift_us_ = 0;
-    has_last_source_dts_ = false;
-    last_source_dts_us_ = 0;
+    has_last_source_clock_ = false;
+    last_source_clock_us_ = 0;
+    last_source_clock_has_dts_ = false;
     has_last_dts_ = false;
     last_dts_us_ = 0;
     gop_id_ = 0;
@@ -348,21 +349,24 @@ Zhulong_packet_view PreviewNormalizer::normalize(const Zhulong_packet_view &in) 
     int64_t source_dts_us = has_source_timestamp
                                 ? rescale_delta_to_microseconds(decode_ticks, origin_ticks_,
                                                                 tb_num, tb_den)
-                                : (has_last_source_dts_ ? NextTimestamp(last_source_dts_us_) : 0);
+                                : (has_last_source_clock_ ? NextTimestamp(last_source_clock_us_) : 0);
     int64_t source_pts_us = has_pts
                                 ? rescale_delta_to_microseconds(in.pts, origin_ticks_, tb_num,
                                                                 tb_den)
                                 : source_dts_us;
 
-    // DTS is in decode order and is therefore the reliable discontinuity clock.
-    // PTS can move backwards for ordinary B-frame reordering; only use it as a
-    // fallback when DTS is absent, with a large-jump threshold to detect resets.
+    // DTS is reliable in decode order. When both packets have DTS, any rollback
+    // is a discontinuity. If either packet falls back to PTS, B-frame reordering
+    // can move the clock slightly, so only detect large jumps across that boundary.
     const int64_t source_clock_us = has_dts ? source_dts_us : source_pts_us;
-    const bool went_backwards = has_last_source_dts_ &&
-                                (has_dts ? source_clock_us < last_source_dts_us_
-                                         : IsBackwardJump(source_clock_us, last_source_dts_us_));
-    const bool jumped_forward = has_last_source_dts_ &&
-                                IsForwardJump(source_clock_us, last_source_dts_us_);
+    const bool comparable_clock = has_last_source_clock_;
+    const bool both_have_dts = has_dts && last_source_clock_has_dts_;
+    const bool went_backwards = comparable_clock &&
+                                (both_have_dts
+                                     ? source_clock_us < last_source_clock_us_
+                                     : IsBackwardJump(source_clock_us, last_source_clock_us_));
+    const bool jumped_forward = comparable_clock &&
+                                IsForwardJump(source_clock_us, last_source_clock_us_);
     if (went_backwards || jumped_forward) {
         origin_ticks_ = decode_ticks;
         source_dts_us = 0;
@@ -374,11 +378,11 @@ Zhulong_packet_view PreviewNormalizer::normalize(const Zhulong_packet_view &in) 
         out.pkt_flags |= ZHULONG_PKT_FLAG_DISCONTINUITY;
         ++gop_id_;
         ++discontinuity_count_;
-    } else if (!has_dts && has_last_source_dts_ &&
-               source_dts_us <= last_source_dts_us_) {
+    } else if (!has_dts && has_last_source_clock_ &&
+               source_dts_us <= last_source_clock_us_) {
         // Without source DTS, keep a synthetic decode clock monotonic without
         // rewriting the presentation timestamp of a reordered frame.
-        source_dts_us = NextTimestamp(last_source_dts_us_);
+        source_dts_us = NextTimestamp(last_source_clock_us_);
     }
 
     int64_t dts_us = SaturatingAdd(source_dts_us, timestamp_shift_us_);
@@ -392,8 +396,9 @@ Zhulong_packet_view PreviewNormalizer::normalize(const Zhulong_packet_view &in) 
         dts_us = next_dts_us;
     }
 
-    has_last_source_dts_ = true;
-    last_source_dts_us_ = source_dts_us;
+    has_last_source_clock_ = true;
+    last_source_clock_us_ = source_dts_us;
+    last_source_clock_has_dts_ = has_dts;
     has_last_dts_ = true;
     last_dts_us_ = dts_us;
     out.pts_us = pts_us;
