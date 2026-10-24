@@ -29,6 +29,23 @@ func init() {
 			"zh-Hans": "删除分析任务失败",
 			"zh-Hant": "刪除分析任務失敗",
 		},
+		"TASK_SAVE_FAILED": {
+			"en":      "Failed to save analysis task",
+			"zh-Hans": "保存分析任务失败",
+			"zh-Hant": "儲存分析任務失敗",
+		},
+		"DUPLICATE_ALGORITHM": {
+			"en":      "Duplicate algorithm in analysis task",
+			"zh-Hans": "分析任务中存在重复算法",
+			"zh-Hant": "分析任務中存在重複演算法",
+		},
+		// INVALID_REQUEST 描述的是请求体绑定失败（HTTP 400）；algorithm 包注册了同名 key，
+		// 两处文案必须保持一致。
+		"INVALID_REQUEST": {
+			"en":      "Invalid analysis task request payload",
+			"zh-Hans": "分析任务请求内容无效",
+			"zh-Hant": "分析任務請求內容無效",
+		},
 		"INVALID_TASK_CONFIG": {
 			"en":      "Analysis task config does not match algorithm schema",
 			"zh-Hans": "分析任务配置不符合算法参数规范",

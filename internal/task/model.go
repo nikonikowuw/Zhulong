@@ -14,6 +14,15 @@ const (
 	ActionTaskDelete = "task.delete"
 )
 
+// SampleFPSMax 是单路分析任务的采样帧率上限。
+const SampleFPSMax = 1000
+
+// DefaultSampleFPS 是单路分析任务的默认采样帧率。
+const DefaultSampleFPS = 5
+
+// defaultConfigJSON 是未指定算法参数与区域策略时的空 JSON 文档。
+const defaultConfigJSON = "{}"
+
 // Task represents a channel video analysis task aggregate root associated with a camera and multiple algorithms.
 //
 // ⚠️ Enabled 不得带 `gorm:"default:true"` 标签：GORM 对带 default 标签的零值字段会
@@ -52,21 +61,23 @@ func (TaskAlgorithm) TableName() string {
 	return "task_algorithms"
 }
 
-// SampleFPSMax 是单路分析任务的采样帧率上限。
-const SampleFPSMax = 1000
-
-// DefaultSampleFPS 是单路分析任务的默认采样帧率。
-const DefaultSampleFPS = 5
-
-// ValidateSampleFPS 校验并收敛分析任务的采样帧率。
+// ValidateSampleFPS 校验分析任务的采样帧率。
+//
+// 负数与超过上限都是调用方的输入错误，直接拒绝而不做静默纠正；0 由调用方按默认值收敛。
 func ValidateSampleFPS(raw int) (uint32, error) {
 	if raw < 0 || raw > SampleFPSMax {
-		return 0, apperr.Invalid("INVALID_TASK_CONFIG", fmt.Sprintf("sample_fps %d out of range [0, %d]", raw, SampleFPSMax), ErrInvalidTaskConfig)
+		return 0, apperr.Invalid(
+			"INVALID_TASK_CONFIG",
+			fmt.Sprintf("sample_fps %d out of range [0, %d]", raw, SampleFPSMax),
+			ErrInvalidTaskConfig,
+		)
 	}
 	return uint32(raw), nil
 }
 
 // TaskAlgorithmItem represents an algorithm configuration item in creation or update requests.
+//
+// 同时接受 camelCase 与 snake_case 两种键名（历史客户端兼容）；camelCase 优先。
 type TaskAlgorithmItem struct {
 	ID                  string `json:"id,omitempty"`
 	AlgorithmID         string `json:"algorithmId"`
@@ -81,32 +92,9 @@ type TaskAlgorithmItem struct {
 }
 
 // ToEntity converts TaskAlgorithmItem to a TaskAlgorithm entity.
-func (item *TaskAlgorithmItem) ToEntity(taskID string) TaskAlgorithm {
-	algoID := item.AlgorithmID
-	if algoID == "" {
-		algoID = item.AlgorithmIDAlt
-	}
-	fps := item.SampleFPS
-	if fps <= 0 {
-		fps = item.SampleFPSAlt
-	}
-	if fps <= 0 {
-		fps = DefaultSampleFPS
-	}
-	cfg := item.ConfigJSON
-	if cfg == "" {
-		cfg = item.ConfigJSONAlt
-	}
-	if cfg == "" {
-		cfg = "{}"
-	}
-	regionCfg := item.RegionConfigJSON
-	if regionCfg == "" {
-		regionCfg = item.RegionConfigJSONAlt
-	}
-	if regionCfg == "" {
-		regionCfg = "{}"
-	}
+//
+// 负数 sampleFps 不会被吞成默认值，交由 Service 的 ValidateSampleFPS 拒绝。
+func (item TaskAlgorithmItem) ToEntity(taskID string) TaskAlgorithm {
 	enabled := true
 	if item.Enabled != nil {
 		enabled = *item.Enabled
@@ -114,11 +102,11 @@ func (item *TaskAlgorithmItem) ToEntity(taskID string) TaskAlgorithm {
 	return TaskAlgorithm{
 		ID:               item.ID,
 		TaskID:           taskID,
-		AlgorithmID:      algoID,
+		AlgorithmID:      firstNonZero(item.AlgorithmID, item.AlgorithmIDAlt),
 		Enabled:          enabled,
-		SampleFPS:        fps,
-		ConfigJSON:       cfg,
-		RegionConfigJSON: regionCfg,
+		SampleFPS:        firstNonZero(item.SampleFPS, item.SampleFPSAlt, DefaultSampleFPS),
+		ConfigJSON:       firstNonZero(item.ConfigJSON, item.ConfigJSONAlt, defaultConfigJSON),
+		RegionConfigJSON: firstNonZero(item.RegionConfigJSON, item.RegionConfigJSONAlt, defaultConfigJSON),
 	}
 }
 
@@ -145,47 +133,45 @@ type CreateTaskRequest struct {
 // ToTask converts CreateTaskRequest into a Task entity skeleton,
 // resolving camelCase and snake_case alias fields and supporting legacy single-algorithm payloads.
 func (req *CreateTaskRequest) ToTask() *Task {
-	camID := req.CameraID
-	if camID == "" {
-		camID = req.CameraIDAlt
-	}
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-
 	t := &Task{
 		ID:       req.ID,
-		CameraID: camID,
+		CameraID: firstNonZero(req.CameraID, req.CameraIDAlt),
 		Name:     req.Name,
 		Enabled:  enabled,
 	}
 
 	items := req.Algorithms
-	// Support legacy single-algorithm request
-	legacyAlgoID := req.AlgorithmID
-	if legacyAlgoID == "" {
-		legacyAlgoID = req.AlgorithmIDAlt
-	}
-	if len(items) == 0 && legacyAlgoID != "" {
-		items = []TaskAlgorithmItem{{
-			AlgorithmID:         legacyAlgoID,
-			Enabled:             req.Enabled,
-			SampleFPS:           req.SampleFPS,
-			SampleFPSAlt:        req.SampleFPSAlt,
-			ConfigJSON:          req.ConfigJSON,
-			ConfigJSONAlt:       req.ConfigJSONAlt,
-			RegionConfigJSON:    req.RegionConfigJSON,
-			RegionConfigJSONAlt: req.RegionConfigJSONAlt,
-		}}
+	if legacy := req.legacyAlgorithmItem(); len(items) == 0 && legacy != nil {
+		items = []TaskAlgorithmItem{*legacy}
 	}
 
 	t.Algorithms = make([]TaskAlgorithm, 0, len(items))
-	for _, it := range items {
-		t.Algorithms = append(t.Algorithms, it.ToEntity(t.ID))
+	for _, item := range items {
+		t.Algorithms = append(t.Algorithms, item.ToEntity(t.ID))
 	}
-
 	return t
+}
+
+// legacyAlgorithmItem 把旧的扁平单算法字段折成一个算法项；没有 legacy 字段时返回 nil。
+func (req *CreateTaskRequest) legacyAlgorithmItem() *TaskAlgorithmItem {
+	algorithmID := firstNonZero(req.AlgorithmID, req.AlgorithmIDAlt)
+	if algorithmID == "" {
+		return nil
+	}
+	return &TaskAlgorithmItem{
+		AlgorithmID:         algorithmID,
+		Enabled:             req.Enabled,
+		SampleFPS:           req.SampleFPS,
+		SampleFPSAlt:        req.SampleFPSAlt,
+		ConfigJSON:          req.ConfigJSON,
+		ConfigJSONAlt:       req.ConfigJSONAlt,
+		RegionConfigJSON:    req.RegionConfigJSON,
+		RegionConfigJSONAlt: req.RegionConfigJSONAlt,
+	}
 }
 
 // UpdateTaskRequest is the request payload for updating an analysis task.
@@ -204,6 +190,9 @@ type UpdateTaskRequest struct {
 
 // ApplyTo applies the update fields onto the target task entity.
 func (req *UpdateTaskRequest) ApplyTo(t *Task) {
+	if t == nil {
+		return
+	}
 	if req.Name != "" {
 		t.Name = req.Name
 	}
@@ -212,31 +201,39 @@ func (req *UpdateTaskRequest) ApplyTo(t *Task) {
 	}
 	if req.Algorithms != nil {
 		t.Algorithms = make([]TaskAlgorithm, 0, len(*req.Algorithms))
-		for _, it := range *req.Algorithms {
-			t.Algorithms = append(t.Algorithms, it.ToEntity(t.ID))
+		for _, item := range *req.Algorithms {
+			t.Algorithms = append(t.Algorithms, item.ToEntity(t.ID))
 		}
-	} else if len(t.Algorithms) == 1 {
-		// Legacy single-algorithm update fallback
-		fps := req.SampleFPS
-		if fps <= 0 {
-			fps = req.SampleFPSAlt
-		}
-		if fps > 0 {
-			t.Algorithms[0].SampleFPS = fps
-		}
-		cfg := req.ConfigJSON
-		if cfg == "" {
-			cfg = req.ConfigJSONAlt
-		}
-		if cfg != "" {
-			t.Algorithms[0].ConfigJSON = cfg
-		}
-		regionCfg := req.RegionConfigJSON
-		if regionCfg == "" {
-			regionCfg = req.RegionConfigJSONAlt
-		}
-		if regionCfg != "" {
-			t.Algorithms[0].RegionConfigJSON = regionCfg
+		return
+	}
+	// 兼容旧的扁平单算法字段：只在任务恰好挂了一个算法子项时生效。
+	if len(t.Algorithms) == 1 {
+		req.applyLegacyFields(&t.Algorithms[0])
+	}
+}
+
+// applyLegacyFields 把扁平单算法字段合并进既有子项，只覆盖调用方显式给出的字段。
+func (req *UpdateTaskRequest) applyLegacyFields(sub *TaskAlgorithm) {
+	if fps := firstNonZero(req.SampleFPS, req.SampleFPSAlt); fps != 0 {
+		sub.SampleFPS = fps
+	}
+	if cfg := firstNonZero(req.ConfigJSON, req.ConfigJSONAlt); cfg != "" {
+		sub.ConfigJSON = cfg
+	}
+	if regionCfg := firstNonZero(req.RegionConfigJSON, req.RegionConfigJSONAlt); regionCfg != "" {
+		sub.RegionConfigJSON = regionCfg
+	}
+}
+
+// firstNonZero 返回候选值里第一个非零值；全为零时返回零值。
+//
+// 用于 camelCase / snake_case 别名兜底，以及"未提供则取默认值"的场景。
+func firstNonZero[T comparable](candidates ...T) T {
+	var zero T
+	for _, candidate := range candidates {
+		if candidate != zero {
+			return candidate
 		}
 	}
+	return zero
 }

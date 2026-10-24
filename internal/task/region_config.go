@@ -40,10 +40,8 @@ func NewRegionConfigCache(store *Store, logger *zap.Logger) *RegionConfigCache {
 // ConfigFor returns the region configuration for the given camera and algorithm.
 // If not found or if the task carries no custom configuration, returns (zero value, false).
 func (c *RegionConfigCache) ConfigFor(cameraID, algorithmID string) (region.Config, bool) {
+	// 构造函数必然写入非 nil 快照，这里无需再判空。
 	snap := c.snapshot.Load()
-	if snap == nil {
-		return region.Config{}, false
-	}
 	cfg, ok := (*snap)[RegionKey{CameraID: cameraID, AlgorithmID: algorithmID}]
 	return cfg, ok
 }
@@ -59,6 +57,9 @@ func (c *RegionConfigCache) OnTaskChanged(ctx context.Context, _ string) {
 
 // Reload queries all active tasks from the store, compiles their region configurations,
 // and atomically replaces the current snapshot.
+//
+// 契约：全量重建（每次任务变更都重新扫一遍启用中的任务）。缓存规模与任务数同级、变更频率低，
+// 因此不做增量 diff。
 func (c *RegionConfigCache) Reload(ctx context.Context) error {
 	if c.store == nil {
 		return nil
@@ -79,9 +80,7 @@ func (c *RegionConfigCache) Reload(ctx context.Context) error {
 			if !algo.Enabled {
 				continue
 			}
-			if algo.RegionConfigJSON == "" || algo.RegionConfigJSON == "{}" {
-				continue
-			}
+			// ParseConfig 把空串与 "{}" 都视作"无自定义区域策略"，随后由 IsEmpty 统一过滤。
 			cfg, err := region.ParseConfig(algo.RegionConfigJSON)
 			if err != nil {
 				c.logger.Warn("skip invalid region config in cache reload",

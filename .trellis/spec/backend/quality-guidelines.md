@@ -113,3 +113,27 @@ hub.SetAIConsumer(consumer)
 **变更鉴别力自检（推荐做法）**：临时把过滤从某一路挪走（或让某一路拿到未过滤结果），确认该路断言**必定失败**，再还原。只靠「测试存在」无法证明它真的守住了契约。
 
 ⚠️ 同理适用于断言前的异步排空（见 §4.1）：消费者调用与广播虽在同一 goroutine 内先后发生，仍应用**有界轮询**等待替身记录，而非依赖调用顺序的隐含假设。
+
+### 4.5 存储层错误分支：用 GORM 回调注入故障，不要 mock ORM
+
+要验证 `fmt.Errorf("...: %w", err)` 这类「驱动失败必须被包装并向上传播」的分支，**不要**引入 `go-sqlmock` 或给 Store 抽 Repository 接口：
+
+- `database.DBProvider.DB()` 返回具体类型 `*gorm.DB`，为了 mock 要么改生产接口，要么拼 `sqlite.Dialector{DriverName: "sqlmock"}` 的 DSN hack；
+- 本仓既有范式是**真 SQLite**（`t.TempDir()` + `database.New` + `OpenAndMigrate`），再引一套 mock 等于第二种测试范式并存；
+- 驱动是 cgo 的 `mattn/go-sqlite3`，mock 掉 database/sql 层则 SQL 方言差异全被跳过。
+
+正确做法是在测试里给**同一个真实 `*gorm.DB`** 注册回调注入错误（`internal/task/store_fault_test.go` 是参考实现）：
+
+```go
+// 让 CREATE 处理器的第 nth 次调用返回 fault；callbacks 由 session/tx 共享，注册在根 db 上即可生效。
+hook := func(tx *gorm.DB) { calls++; if calls == nth { tx.AddError(fault) } }
+db.Callback().Create().Before("gorm:create").Register("zl:test_fault", hook)
+```
+
+要点：
+
+- **处理器要选对**：普通 SELECT 走 `Query()`，但 `(*DB).Scan(...)` 走 `Row()`，`Raw`/`Exec` 走 `Raw()`。选错会出现「注入了故障但用例仍通过」的假绿。
+- **精确定位**：优先按 `tx.Statement.Dest` 的类型匹配（如只打中 `*TaskAlgorithm` 的查询），比数第几次更抗后续改动；确实只能计数时，用注释写清该流程的查询顺序。
+- **模拟竞态**：用 `db.Callback().Delete().Replace("gorm:delete", func(tx *gorm.DB){ tx.RowsAffected = 0 })` 让「读到了但删不到」的 TOCTOU 分支可复现。
+- **断言错误链**：用 `errors.Is(err, fault)` 验证 cause 未被吞掉，用 `errors.As(err, &apperr.Error)` 验证机器码；不要断言 `fmt.Errorf` 的包装文案。
+- 纯映射函数（如 `mapWriteError` / `mapTaskError`）根本不需要触库，直接喂合成 error 即可。

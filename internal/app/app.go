@@ -643,7 +643,7 @@ func provideTaskComponents(
 		algoService,
 		configCache,
 	}, logger)
-	handler := task.NewHandler(service, logger)
+	handler := task.NewHandler(service)
 	return taskOut{
 		Service:         service,
 		Handler:         handler,

@@ -6,24 +6,33 @@ import (
 	"github.com/gin-gonic/gin"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 // Handler handles HTTP requests for video analysis tasks.
+//
+// handler 层不写业务日志：请求级留痕由 audit 中间件负责，领域日志落在 Service。
 type Handler struct {
 	service *Service
-	logger  *zap.Logger
 }
 
 // NewHandler instantiates a new Task Handler.
-func NewHandler(service *Service, logger *zap.Logger) *Handler {
-	if logger == nil {
-		logger = zap.NewNop()
+func NewHandler(service *Service) *Handler {
+	return &Handler{service: service}
+}
+
+// bindTaskPayload 解析 JSON 请求体；失败时写出 400 并返回 false。
+func bindTaskPayload(c *gin.Context, dst any) bool {
+	if err := c.ShouldBindJSON(dst); err != nil {
+		writeErr := httputil.NewError(
+			http.StatusBadRequest,
+			"INVALID_REQUEST",
+			"Invalid analysis task payload",
+			err,
+		)
+		httputil.WriteError(c, writeErr)
+		return false
 	}
-	return &Handler{
-		service: service,
-		logger:  logger,
-	}
+	return true
 }
 
 // RegisterRoutes registers task endpoints on the provided router group.
@@ -71,9 +80,6 @@ func (h *Handler) ListTasks(c *gin.Context) {
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
-	}
-	if tasks == nil {
-		tasks = make([]Task, 0)
 	}
 	httputil.Success(c, tasks)
 }
@@ -133,8 +139,7 @@ func (h *Handler) CreateTask(c *gin.Context) {
 	audithttp.Tag(c, ActionTaskCreate, "task:", "Create analysis task")
 
 	var req CreateTaskRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_REQUEST", "Invalid analysis task payload", err))
+	if !bindTaskPayload(c, &req) {
 		return
 	}
 
@@ -167,8 +172,7 @@ func (h *Handler) UpdateTask(c *gin.Context) {
 	audithttp.Tag(c, ActionTaskUpdate, "task:"+id, "Update analysis task "+id)
 
 	var req UpdateTaskRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_REQUEST", "Invalid analysis task payload", err))
+	if !bindTaskPayload(c, &req) {
 		return
 	}
 
@@ -199,8 +203,7 @@ func (h *Handler) SaveTaskByCamera(c *gin.Context) {
 	audithttp.Tag(c, ActionTaskUpdate, "camera:"+camID, "Save channel task for camera "+camID)
 
 	var req CreateTaskRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_REQUEST", "Invalid analysis task payload", err))
+	if !bindTaskPayload(c, &req) {
 		return
 	}
 	req.CameraID = camID

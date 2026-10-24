@@ -55,9 +55,30 @@ type TaskChangeListener interface {
    - 任务消耗计算公式：
      $$\text{TaskPoints} = \begin{cases} 
      0, & \text{if } \text{Task.Enabled} = \text{false} \\ 
-     \sum_{ta \in \text{Algorithms}, ta.\text{Enabled}} (ta.\text{SampleFPS} \times \text{algo.ComputeCost}), & \text{if } \text{Task.Enabled} = \text{true}
+     \sum_{ta \in \text{Algorithms}, ta.\text{Enabled}} (ta.\text{SampleFPS} \times \text{algo.ComputeCost}), & \text{if } \text{Task.Enabled} = \text{true} 
      \end{cases}$$
    - 算力检查在保存通道任务的单一数据库事务中与现有其他 enabled 通道任务累加，超限直接阻断并返回 409 `COMPUTE_BUDGET_EXCEEDED`。
+4. **唯一写入口**：生产的任务写入只允许 `Store.CreateTaskWithinBudget` 与 `Store.SaveTaskWithinBudget`。
+   `Store.CreateTask`（无预算校验）仅服务于种子数据与测试这类“无预算语义”的场景，禁止在 Handler/Service 新路径中调用。
+5. **upsert 定位与“一对多”防护**：`SaveTaskWithinBudget` 先按显式 `id`、未命中再按 `camera_id` 定位既有行；
+   若目标 `camera_id` 已被另一个任务占用，返回 `ErrTaskAlreadyExists`（上层映射 409），绝不靠 `id = ? OR camera_id = ?` 一次性探测。
+   并发建同一摄像头任务时预检查会失效，权威判定是 `analysis_tasks.camera_id` 唯一约束；
+   冲突**不得**靠匹配 SQLite 错误字符串归因，必须在事务内做探针查询后返回 `ErrTaskAlreadyExists`。
+6. **主键由 Store 在事务内决定**：`Service` 不预先分配任务 ID（否则按 camera 的 upsert 永远命中不到既有行）。
+7. **区域策略缓存**：`RegionConfigCache.Reload` 是**全量重建**（每次任务变更都重扫启用中的任务），
+   不做增量 diff；单条区域配置解析失败只降级为 warn 日志并跳过，不影响其余缓存项。
+
+---
+
+## 3.1 子项归一化契约
+
+- `normalizeAndValidateAlgorithms` 会**就地**归一化 `TaskAlgorithm`：`SampleFPS == 0` 收敛为 `DefaultSampleFPS`，
+  空 `config_json` / `region_config_json` 收敛为 `{}`，并把按名字传入的 `AlgorithmID` 替换为规格 ID。
+- `sample_fps` **负数不静默纠正**：直接返回 422 `INVALID_TASK_CONFIG`。上限为 `SampleFPSMax = 1000`。
+- 同一任务内重复的 `algorithmId` 返回 409 `DUPLICATE_ALGORITHM`。
+- `Enabled` 的"默认开启"只发生在 Handler 的 DTO 层（`CreateTaskRequest.ToTask`）；**直接调用 `Service` 时必须显式设置**，
+  零值 `Enabled=false` 会原样落库（这是 `gorm` 零值不回弹特性的直接后果，不要试图在 Store 里补默认值）。
+- 包内不保留双份职责的构造函数：`TaskComponents` / `NewTaskComponents` 已删除，Fx 装配在 `internal/app` 内完成。
 
 ---
 
@@ -65,7 +86,9 @@ type TaskChangeListener interface {
 
 ### 4.1 标准端点 (`/api/v1/tasks`)
 
-- **`GET /api/v1/tasks`**：获取所有通道任务列表（嵌套 `algorithms: [...]`）。支持 `?camera_id=xxx` 或 `?algorithm_id=xxx` 过滤。
+- **`GET /api/v1/tasks`**：获取所有通道任务列表（嵌套 `algorithms: [...]`）。支持 `?camera_id=xxx` 或 `?algorithm_id=xxx` 过滤；
+  两者同时给出时 **`camera_id` 优先、`algorithm_id` 被忽略**（单摄像头单任务模型下没有交集语义）。
+  列表始终返回非 nil 切片，空结果为 JSON `[]` 而不是 `null`。
 - **`GET /api/v1/tasks/:id`**：获取指定通道任务详情（含算法配置列表）。
 - **`GET /api/v1/tasks/camera/:cameraId`**：按摄像头 ID 获取通道分析任务详情。
 - **`POST /api/v1/tasks`**：创建通道分析任务（201 Created，支持包含完整算法列表）。
@@ -76,6 +99,16 @@ type TaskChangeListener interface {
 ### 4.2 向下兼容端点 (`/api/v1/algorithms/tasks`)
 
 保留原有挂载在 `/api/v1/algorithms/tasks` 下的端点，兼容接收扁平单算法字段，底层业务逻辑完全委托至 `task` 领域服务。
+
+### 4.3 错误码与文案门禁
+
+- 本包对外的全部机器码：`TASK_NOT_FOUND`、`TASK_ALREADY_EXISTS`、`TASK_CREATE_FAILED`、`TASK_UPDATE_FAILED`、
+  `TASK_DELETE_FAILED`、`TASK_SAVE_FAILED`、`DUPLICATE_ALGORITHM`、`INVALID_TASK_CONFIG`、`INVALID_REGION_CONFIG`、
+  `COMPUTE_BUDGET_EXCEEDED`、`ALGORITHM_NOT_FOUND`、`INVALID_REQUEST`，以及复用的 `VALIDATION_FAILED`、`INTERNAL_ERROR`。
+- 每个码都必须在 `internal/task/locale.go`（或 `httputil` 内置目录）有 en / zh-Hans / zh-Hant 三语文案；
+  漏注册会让 `WriteError` 静默回退到通用 `REQUEST_FAILED` 文案。
+- `internal/task/error_codes_test.go` 是这条契约的门禁：新增错误码必须同步加入 `taskErrorCodes` 表。
+- `INVALID_REQUEST` 与 `internal/algorithm/locale.go` 共享同名 key，两处文案必须保持一致。
 
 ---
 

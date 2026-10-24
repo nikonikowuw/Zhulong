@@ -32,8 +32,10 @@ func insertMockAlgorithm(t *testing.T, db *gorm.DB, id, name string, computeCost
 		id, name, version, task_type, category, target_arch, target_device,
 		compute_cost, memory_mb, description, manifest_json, config_schema_json,
 		status, previous_version, created_at, updated_at
-	) VALUES (?, ?, '1.0.0', 'detection', 'safety', 'x86_64', 'cpu', ?, 64, '', '{}', '{}', 'ACTIVE', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-		id, name, computeCost,
+	) VALUES (
+		?, ?, '1.0.0', 'detection', 'safety', 'x86_64', 'cpu', ?, 64,
+		'', '{}', '{}', 'ACTIVE', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+	)`, id, name, computeCost,
 	).Error
 	if err != nil {
 		t.Fatalf("failed to insert mock algorithm: %v", err)
@@ -75,14 +77,6 @@ func TestStoreTaskCRUD(t *testing.T) {
 		t.Fatalf("unexpected found task: %+v", found)
 	}
 
-	foundByCam, err := store.GetTaskByCameraAndAlgorithm(ctx, "cam_01", "algo_01")
-	if err != nil {
-		t.Fatalf("GetTaskByCameraAndAlgorithm failed: %v", err)
-	}
-	if foundByCam.ID != "task_01" {
-		t.Fatalf("expected task_01, got %s", foundByCam.ID)
-	}
-
 	camList, err := store.ListTasksByCamera(ctx, "cam_01")
 	if err != nil || len(camList) != 1 {
 		t.Fatalf("ListTasksByCamera failed: %v, count=%d", err, len(camList))
@@ -94,8 +88,8 @@ func TestStoreTaskCRUD(t *testing.T) {
 	}
 
 	tsk.Algorithms[0].SampleFPS = 10
-	if err := store.UpdateTask(ctx, tsk); err != nil {
-		t.Fatalf("UpdateTask failed: %v", err)
+	if err := store.SaveTaskWithinBudget(ctx, tsk, task.MaxComputePoints); err != nil {
+		t.Fatalf("SaveTaskWithinBudget failed: %v", err)
 	}
 	updated, _ := store.GetTask(ctx, "task_01")
 	if len(updated.Algorithms) != 1 || updated.Algorithms[0].SampleFPS != 10 {
@@ -106,7 +100,7 @@ func TestStoreTaskCRUD(t *testing.T) {
 		t.Fatalf("DeleteTask failed: %v", err)
 	}
 
-	if _, err := store.GetTask(ctx, "task_01"); err != task.ErrNotFound {
+	if _, err := store.GetTask(ctx, "task_01"); !errors.Is(err, task.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -279,5 +273,199 @@ func TestStoreSaveTaskSyncAlgorithms(t *testing.T) {
 	}
 	if c, ok := algoMap["algo_c"]; !ok || c.SampleFPS != 4 {
 		t.Errorf("algo_c should be added with sampleFPS 4, got %+v", c)
+	}
+}
+
+func TestStoreCreateTaskWithinBudgetRejectsDuplicateCamera(t *testing.T) {
+	store, db, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	insertMockAlgorithm(t, db, "algo_dup", "dup_detector", 10)
+
+	first := &task.Task{
+		CameraID: "cam_dup",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{AlgorithmID: "algo_dup", Enabled: true, SampleFPS: 5, ConfigJSON: "{}"},
+		},
+	}
+	if err := store.CreateTaskWithinBudget(ctx, first, 1000); err != nil {
+		t.Fatalf("first create failed: %v", err)
+	}
+
+	// 同一摄像头再来一次：必须被 camera_id 唯一约束拦下，并归因为 ErrTaskAlreadyExists，
+	// 而不是把原始 SQLite 错误交给上层变成 500。
+	second := &task.Task{
+		CameraID: "cam_dup",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{AlgorithmID: "algo_dup", Enabled: true, SampleFPS: 5, ConfigJSON: "{}"},
+		},
+	}
+	err := store.CreateTaskWithinBudget(ctx, second, 1000)
+	if !errors.Is(err, task.ErrTaskAlreadyExists) {
+		t.Fatalf("expected ErrTaskAlreadyExists, got %v", err)
+	}
+}
+
+func TestStoreSaveTaskWithinBudgetRejectsCameraMove(t *testing.T) {
+	store, db, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	insertMockAlgorithm(t, db, "algo_move", "move_detector", 10)
+
+	taskA := &task.Task{
+		CameraID: "cam_move_a",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{AlgorithmID: "algo_move", Enabled: true, SampleFPS: 5, ConfigJSON: "{}"},
+		},
+	}
+	taskB := &task.Task{
+		CameraID: "cam_move_b",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{AlgorithmID: "algo_move", Enabled: true, SampleFPS: 5, ConfigJSON: "{}"},
+		},
+	}
+	for _, tsk := range []*task.Task{taskA, taskB} {
+		if err := store.CreateTaskWithinBudget(ctx, tsk, 1000); err != nil {
+			t.Fatalf("create task for %s: %v", tsk.CameraID, err)
+		}
+	}
+
+	// 用 A 的 ID 把任务挪到已被 B 占用的摄像头：必须拒绝，不能把 B 覆盖掉。
+	moved := &task.Task{
+		ID:       taskA.ID,
+		CameraID: "cam_move_b",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{AlgorithmID: "algo_move", Enabled: true, SampleFPS: 5, ConfigJSON: "{}"},
+		},
+	}
+	err := store.SaveTaskWithinBudget(ctx, moved, 1000)
+	if !errors.Is(err, task.ErrTaskAlreadyExists) {
+		t.Fatalf("expected ErrTaskAlreadyExists, got %v", err)
+	}
+
+	stored, err := store.GetTask(ctx, taskB.ID)
+	if err != nil {
+		t.Fatalf("get task B: %v", err)
+	}
+	if stored.CameraID != "cam_move_b" {
+		t.Fatalf("task B must stay on cam_move_b, got %s", stored.CameraID)
+	}
+}
+
+func TestStoreListTasksReturnsEmptySlice(t *testing.T) {
+	store, _, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	list, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatalf("ListTasks failed: %v", err)
+	}
+	if list == nil {
+		t.Fatal("expected non-nil empty slice so JSON encodes [] instead of null")
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected empty list, got %d", len(list))
+	}
+}
+
+// nilDBProvider 模拟"数据库还没初始化"的装配顺序，用于验证 Store 的前置守卫。
+type nilDBProvider struct{}
+
+func (nilDBProvider) DB() *gorm.DB { return nil }
+
+func TestStoreRequiresInitializedDatabase(t *testing.T) {
+	ctx := context.Background()
+
+	for name, provider := range map[string]database.DBProvider{
+		"nil provider": nil,
+		"nil database": nilDBProvider{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := task.NewStore(provider)
+
+			// 每个入口都必须在触库前给出错误，而不是 panic 或静默返回空结果。
+			if _, err := store.GetTask(ctx, "task_x"); err == nil {
+				t.Error("GetTask must fail")
+			}
+			if _, err := store.GetTaskByCamera(ctx, "cam_x"); err == nil {
+				t.Error("GetTaskByCamera must fail")
+			}
+			if _, err := store.ListTasks(ctx); err == nil {
+				t.Error("ListTasks must fail")
+			}
+			if _, err := store.ListTasksByCamera(ctx, "cam_x"); err == nil {
+				t.Error("ListTasksByCamera must fail")
+			}
+			if _, err := store.ListTasksByAlgorithm(ctx, "algo_x"); err == nil {
+				t.Error("ListTasksByAlgorithm must fail")
+			}
+			if err := store.CreateTask(ctx, &task.Task{CameraID: "cam_x"}); err == nil {
+				t.Error("CreateTask must fail")
+			}
+			if err := store.CreateTaskWithinBudget(ctx, &task.Task{CameraID: "cam_x"}, 1000); err == nil {
+				t.Error("CreateTaskWithinBudget must fail")
+			}
+			if err := store.SaveTaskWithinBudget(ctx, &task.Task{CameraID: "cam_x"}, 1000); err == nil {
+				t.Error("SaveTaskWithinBudget must fail")
+			}
+			if err := store.DeleteTask(ctx, "task_x"); err == nil {
+				t.Error("DeleteTask must fail")
+			}
+		})
+	}
+}
+
+func TestStoreRejectsNilTask(t *testing.T) {
+	store, _, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if err := store.CreateTask(ctx, nil); err == nil {
+		t.Error("CreateTask(nil) must fail")
+	}
+	if err := store.CreateTaskWithinBudget(ctx, nil, 1000); err == nil {
+		t.Error("CreateTaskWithinBudget(nil) must fail")
+	}
+	if err := store.SaveTaskWithinBudget(ctx, nil, 1000); err == nil {
+		t.Error("SaveTaskWithinBudget(nil) must fail")
+	}
+}
+
+func TestStoreBudgetSkipsDisabledAlgorithms(t *testing.T) {
+	store, db, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	insertMockAlgorithm(t, db, "algo_heavy", "heavy_detector", 100)
+	insertMockAlgorithm(t, db, "algo_light", "light_detector", 10)
+
+	// 通道启用，但其中一条算法子项停用：只有启用项计入预算。
+	tsk := &task.Task{
+		CameraID: "cam_mixed",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{AlgorithmID: "algo_heavy", Enabled: false, SampleFPS: 1000, ConfigJSON: "{}"},
+			{AlgorithmID: "algo_light", Enabled: true, SampleFPS: 5, ConfigJSON: "{}"},
+		},
+	}
+	if err := store.CreateTaskWithinBudget(ctx, tsk, 1000); err != nil {
+		t.Fatalf("disabled algorithm must not consume budget: %v", err)
+	}
+}
+
+func TestStoreDeleteMissingTask(t *testing.T) {
+	store, _, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	if err := store.DeleteTask(context.Background(), "task_absent"); !errors.Is(err, task.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
