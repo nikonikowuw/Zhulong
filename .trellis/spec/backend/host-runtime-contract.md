@@ -27,7 +27,7 @@
 - `GET /api/v1/health` returns HTTP 200 only after both database migrations and native startup complete; otherwise it returns HTTP 503 with the standard error envelope.
 - `/api/*` and `/swagger/*` are reserved. Unknown API routes and unsupported API methods return an HTTP 404 JSON envelope and must not fall back to SPA HTML. `/` and extensionless client routes serve the embedded SPA.
 - SQLite stores `<data-dir>/zhulong.db`; DSN settings are `_busy_timeout=5000`, `_foreign_keys=on`, `_journal_mode=WAL`. GORM uses one open/idle connection. Schema changes are embedded, versioned `internal/database/migrations/*.sql`; never use GORM `AutoMigrate`.
-- `lifecycleRuntime.Start` 先准备日志、打开数据库并执行迁移，再按领域顺序启动 Audit、Network、SystemTime、Storage、Person、Snapshot、Record、Native 日志回调、Native Engine、Camera 与 Algorithm，最后绑定 TCP listener 并启动 HTTP Serve；关键步骤失败时清理已获取资源。`lifecycleRuntime.Stop` 先排空 HTTP，再按依赖顺序停止 Camera、Algorithm、Record/Snapshot、Storage 等服务，最后关闭 Native 与 SQLite 并同步日志。具体顺序以 [依赖注入与生命周期规范](./dependency-injection.md) 和运行时测试为准。
+- `lifecycleRuntime.Start` 先准备日志、打开数据库并执行迁移，再按领域顺序启动 Audit、Network、SystemTime、Storage、Person、Snapshot、Record、Native 日志回调、Native Engine、Camera 与 Algorithm，最后绑定 TCP listener 并启动 HTTP Serve；关键步骤失败时清理已获取资源，可选域失败则记入降级清单继续启动。`lifecycleRuntime.Stop` 先排空 HTTP，再按依赖顺序停止 Camera、Algorithm、Record/Snapshot、Storage 等服务，最后关闭 Native 与 SQLite 并同步日志；`Stop` 与启动回滚共用同一份 `stopSequence()`。具体顺序以 [依赖注入与生命周期规范](./dependency-injection.md) 和运行时测试为准。
 - Vite outputs to `internal/webui/dist` and clears that directory. A tracked `.keep` preserves the embed target before the first build, and the build plugin recreates it after Vite clears the output. Root `make build` builds frontend and native dependencies before the Go binary.
 - The C++ side allocates and frees the opaque engine handle. Go owns only the handle value and serializes access; the current bridge passes no Go pointer to C. Every exported C ABI function isolates C++ exceptions; status-returning functions map failures to fixed codes, while destroy remains void.
 
@@ -38,6 +38,7 @@
 | SQLite open or migration fails | Host startup fails; native startup and HTTP bind do not occur; opened DB resources close. |
 | Native start fails | Host startup fails; database closes; HTTP does not bind. |
 | TCP bind fails after DB/native start | Host startup fails; native and DB close; logger syncs. |
+| An optional domain (Network/SystemTime/Storage/Person/Record/Algorithm) fails to start | Startup continues; the subsystem is named in a `host started with degraded subsystems` warning and still stopped on shutdown. |
 | Health requested before dependencies are ready | HTTP 503, `SERVICE_UNAVAILABLE`, `data: null`. |
 | Unknown `/api/*` route or method | HTTP 404, `ROUTE_NOT_FOUND`, `data: null`; never HTML. |
 | Unhandled internal error | HTTP 500, safe localized message, `data: null`; cause is logged server-side only. |

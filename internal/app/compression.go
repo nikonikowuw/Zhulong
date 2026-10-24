@@ -93,12 +93,27 @@ func (s *boundedFileSink) compressionWorker() {
 	}
 }
 
+// releaseLocked returns job's reservation to the budget and frees the single
+// compression slot. Every exit path of finishCompression must reach it exactly
+// once: skipping one either leaks budget until the next restart or leaves the
+// scheduler believing a compression is still running.
+func (s *boundedFileSink) releaseLocked(job *compressionJob) {
+	s.reservedBytes -= job.reservation
+	s.compression = nil
+}
+
+// compressArchive writes the gzip copy of one archive and returns its size. The
+// temporary file belongs to this function: on error it is already removed, on
+// success the caller renames it into place.
 func compressArchive(job *compressionJob) (string, int64, error) {
 	source, err := os.Open(job.archive.path)
 	if err != nil {
 		return "", 0, fmt.Errorf("open archive for compression: %w", err)
 	}
+	// Read-only handle: a close failure here cannot lose data, and the copy below
+	// is what reports real I/O errors.
 	defer source.Close()
+
 	info, err := source.Stat()
 	if err != nil {
 		return "", 0, fmt.Errorf("stat archive for compression: %w", err)
@@ -106,60 +121,85 @@ func compressArchive(job *compressionJob) (string, int64, error) {
 	if info.Size() != job.archive.size {
 		return "", 0, fmt.Errorf("archive size changed before compression (%d != %d)", info.Size(), job.archive.size)
 	}
+
 	temporary := job.archive.path + ".tmp"
-	output, err := os.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	size, err := writeCompressedCopy(job, source, temporary)
 	if err != nil {
-		return "", 0, fmt.Errorf("create bounded compression temporary file: %w", err)
-	}
-	keepTemporary := false
-	defer func() {
-		_ = output.Close()
-		if !keepTemporary {
-			_ = os.Remove(temporary)
+		if removeErr := os.Remove(temporary); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			err = errors.Join(err, fmt.Errorf("remove compression temporary %s: %w", temporary, removeErr))
 		}
-	}()
+		return "", 0, err
+	}
+	return temporary, size, nil
+}
+
+// writeCompressedCopy owns the output handle: it closes it exactly once and, when
+// the stream itself succeeded, reports a Sync or Close failure. That is the last
+// place where the final gzip bytes can still surface an I/O error.
+func writeCompressedCopy(job *compressionJob, source io.Reader, path string) (int64, error) {
+	output, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return 0, fmt.Errorf("create bounded compression temporary file: %w", err)
+	}
 
 	limited := &limitedWriter{writer: output, limit: job.reservation}
-	compressed := gzip.NewWriter(limited)
+	writeErr := writeGzipStream(job, source, limited)
+	if writeErr == nil && limited.written > job.reservation {
+		writeErr = fmt.Errorf("compressed archive exceeded its reservation (%d > %d bytes)",
+			limited.written, job.reservation)
+	}
+	if writeErr == nil {
+		if syncErr := output.Sync(); syncErr != nil {
+			writeErr = fmt.Errorf("sync compressed archive: %w", syncErr)
+		}
+	}
+	if closeErr := output.Close(); closeErr != nil && writeErr == nil {
+		writeErr = fmt.Errorf("close compressed archive: %w", closeErr)
+	}
+	if writeErr != nil {
+		return 0, writeErr
+	}
+	return limited.written, nil
+}
+
+// writeGzipStream copies source through a gzip writer in chunks, checking for
+// cancellation between chunks so a shutdown never waits for a whole archive.
+func writeGzipStream(job *compressionJob, source io.Reader, destination io.Writer) error {
+	compressed := gzip.NewWriter(destination)
 	buffer := make([]byte, 32*1024)
 	for {
-		select {
-		case <-job.cancel:
-			return "", 0, errCompressionCancelled
-		default:
+		if compressionCancelled(job) {
+			return errCompressionCancelled
 		}
 		count, readErr := source.Read(buffer)
 		if count > 0 {
-			select {
-			case <-job.cancel:
-				return "", 0, errCompressionCancelled
-			default:
+			if compressionCancelled(job) {
+				return errCompressionCancelled
 			}
 			if _, err := compressed.Write(buffer[:count]); err != nil {
-				return "", 0, fmt.Errorf("write compressed archive: %w", err)
+				return fmt.Errorf("write compressed archive: %w", err)
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
 			break
 		}
 		if readErr != nil {
-			return "", 0, fmt.Errorf("read archive for compression: %w", readErr)
+			return fmt.Errorf("read archive for compression: %w", readErr)
 		}
 	}
 	if err := compressed.Close(); err != nil {
-		return "", 0, fmt.Errorf("finish compressed archive: %w", err)
+		return fmt.Errorf("finish compressed archive: %w", err)
 	}
-	if err := output.Sync(); err != nil {
-		return "", 0, fmt.Errorf("sync compressed archive: %w", err)
+	return nil
+}
+
+func compressionCancelled(job *compressionJob) bool {
+	select {
+	case <-job.cancel:
+		return true
+	default:
+		return false
 	}
-	if err := output.Close(); err != nil {
-		return "", 0, fmt.Errorf("close compressed archive: %w", err)
-	}
-	if limited.written > job.reservation {
-		return "", 0, fmt.Errorf("compressed archive exceeded its reservation (%d > %d bytes)", limited.written, job.reservation)
-	}
-	keepTemporary = true
-	return temporary, limited.written, nil
 }
 
 func (s *boundedFileSink) finishCompression(job *compressionJob, temporary string, compressedSize int64, compressionErr error) {
@@ -182,8 +222,7 @@ func (s *boundedFileSink) finishCompression(job *compressionJob, temporary strin
 		if temporary != "" {
 			_ = os.Remove(temporary)
 		}
-		s.reservedBytes -= job.reservation
-		s.compression = nil
+		s.releaseLocked(job)
 		if !errors.Is(compressionErr, errCompressionCancelled) {
 			s.reportDiagnosticLocked("compression failed for %s; retaining source archive: %v", job.archive.path, compressionErr)
 		}
@@ -192,8 +231,7 @@ func (s *boundedFileSink) finishCompression(job *compressionJob, temporary strin
 	select {
 	case <-job.cancel:
 		_ = os.Remove(temporary)
-		s.reservedBytes -= job.reservation
-		s.compression = nil
+		s.releaseLocked(job)
 		return
 	default:
 	}
@@ -201,21 +239,18 @@ func (s *boundedFileSink) finishCompression(job *compressionJob, temporary strin
 	destination := job.archive.path + ".gz"
 	if _, err := os.Lstat(destination); err == nil {
 		_ = os.Remove(temporary)
-		s.reservedBytes -= job.reservation
-		s.compression = nil
+		s.releaseLocked(job)
 		s.reportDiagnosticLocked("compression skipped for %s: destination already exists", job.archive.path)
 		return
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		_ = os.Remove(temporary)
-		s.reservedBytes -= job.reservation
-		s.compression = nil
+		s.releaseLocked(job)
 		s.reportDiagnosticLocked("compression failed for %s: inspect destination: %v", job.archive.path, err)
 		return
 	}
 	if err := os.Rename(temporary, destination); err != nil {
 		_ = os.Remove(temporary)
-		s.reservedBytes -= job.reservation
-		s.compression = nil
+		s.releaseLocked(job)
 		s.reportDiagnosticLocked("compression failed for %s: rename output: %v", job.archive.path, err)
 		return
 	}
@@ -226,14 +261,12 @@ func (s *boundedFileSink) finishCompression(job *compressionJob, temporary strin
 				sequence: job.archive.sequence, compressed: true,
 			})
 		}
-		s.reservedBytes -= job.reservation
-		s.compression = nil
+		s.releaseLocked(job)
 		s.failLocked(fmt.Errorf("remove uncompressed archive after compression: %w", err))
 		return
 	}
 	if err := syncDirectory(filepath.Dir(job.archive.path)); err != nil {
-		s.reservedBytes -= job.reservation
-		s.compression = nil
+		s.releaseLocked(job)
 		s.failLocked(fmt.Errorf("sync log directory after compression: %w", err))
 		return
 	}
@@ -243,8 +276,7 @@ func (s *boundedFileSink) finishCompression(job *compressionJob, temporary strin
 			sequence: job.archive.sequence, compressed: true,
 		}
 	}
-	s.reservedBytes -= job.reservation
-	s.compression = nil
+	s.releaseLocked(job)
 	if err := s.pruneLocked(0); err != nil {
 		s.failLocked(fmt.Errorf("prune compressed log archives: %w", err))
 		return

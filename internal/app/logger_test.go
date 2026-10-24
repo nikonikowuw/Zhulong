@@ -16,6 +16,17 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// newLogger is the test-only entry point into buildLogger: it drops the sink a
+// caller cannot close without owning the process lifecycle.
+//
+// It lives in the test file on purpose — production code always goes through
+// provideLogger, which hands the sink to the runtime that must Prepare and Close
+// it (TestFileLoggerSinkRequiresLifecyclePrepare).
+func newLogger(config Config) (*zap.Logger, zap.AtomicLevel, error) {
+	logger, level, _, err := buildLogger(config)
+	return logger, level, err
+}
+
 func TestNewLoggerRejectsUnsupportedPolicy(t *testing.T) {
 	restore := zap.ReplaceGlobals(zap.NewNop())
 	defer restore()
@@ -49,7 +60,7 @@ func TestNewLoggerUsesConfiguredLevelAndUTCEncoding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("logger provider performed file I/O before lifecycle Prepare: stat err=%v", err)
 	}
 	if err := sink.Prepare(); err != nil {
@@ -186,7 +197,7 @@ func TestFileLoggerSinkRequiresLifecyclePrepare(t *testing.T) {
 	if err := logger.Core().Write(zapcore.Entry{Message: "too-early"}, nil); err == nil {
 		t.Fatal("expected file sink to reject writes before Prepare")
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("file created before Prepare: stat err=%v", err)
 	}
 	if err := sink.Prepare(); err != nil {

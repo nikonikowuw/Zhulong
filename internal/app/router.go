@@ -113,6 +113,13 @@ func newRouter(p RouterParams) *gin.Engine {
 	}
 
 	// Mount upload routes with the archive size plus bounded multipart framing overhead.
+	//
+	// This is a second, parallel /api/v1 pipeline rather than a child of `api`: the
+	// protected group inherits the 1 MiB MaxBodyLimit, and Gin evaluates group
+	// middleware at Group() time, so the limit cannot be relaxed afterwards
+	// (middleware-guidelines.md §1). The cost of the split is that AccessLog,
+	// audit and RequireAuth appear twice — any middleware meant to cover every
+	// /api/v1 endpoint has to be added to both groups.
 	upload := router.Group("/api/v1")
 	upload.Use(httpmiddleware.AccessLog(p.Logger),
 		httpmiddleware.MaxBodyLimitWithLimitAndCode(algorithm.MaxUploadRequestBodySize, "FILE_TOO_LARGE"))

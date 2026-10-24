@@ -141,12 +141,13 @@ func (c cameraStub) Stop() {
 }
 
 type storageLifecycleStub struct {
-	events *eventLog
+	events   *eventLog
+	startErr error
 }
 
 func (s storageLifecycleStub) Start(context.Context) error {
 	s.events.add("storage.start")
-	return nil
+	return s.startErr
 }
 
 func (s storageLifecycleStub) Stop(context.Context) error {
@@ -198,6 +199,22 @@ func (a algorithmStub) Start(context.Context) error {
 func (a algorithmStub) Stop(context.Context) error {
 	a.events.add("algorithm.stop")
 	return a.stopErr
+}
+
+// personLifecycleStub records person-domain start/stop so the shared shutdown
+// order test can tell it apart from the audit domain.
+type personLifecycleStub struct {
+	events *eventLog
+}
+
+func (p personLifecycleStub) Start(context.Context) error {
+	p.events.add("person.start")
+	return nil
+}
+
+func (p personLifecycleStub) Stop(context.Context) error {
+	p.events.add("person.stop")
+	return nil
 }
 
 // TestAIShutdownOrderPrecedesNativeClose 守护跨层停机顺序：
@@ -252,6 +269,114 @@ func TestAIShutdownOrderPrecedesNativeClose(t *testing.T) {
 	}
 	if index("algorithm.stop") > index("engine.close") {
 		t.Fatal("algorithm must stop before engine.close: runner clients must be drained before the broker host is destroyed")
+	}
+}
+
+// TestStartupRollbackSharesShutdownOrder 守护「只有一份停机顺序」。
+//
+// Start 失败回滚与正常 Stop 必须走同一条序列：它们曾经是两份手写清单，一次 listen
+// 失败会把 algorithm 排在 camera 之前释放，而正常停机的顺序恰好相反。这里对同一组已
+// 就绪的域分别跑两条路径，要求事件轨迹除去 HTTP 排空外逐项相等。
+func TestStartupRollbackSharesShutdownOrder(t *testing.T) {
+	build := func(events *eventLog) *lifecycleRuntime {
+		return &lifecycleRuntime{
+			database:       databaseStub{events: events},
+			native:         engineStub{events: events},
+			camera:         cameraStub{events: events},
+			algorithm:      algorithmStub{events: events},
+			audit:          auditStub{events: events},
+			storage:        storageLifecycleStub{events: events},
+			person:         personLifecycleStub{events: events},
+			record:         &recordContextStub{events: events},
+			snapshot:       snapshotLifecycleStub{events: events},
+			logger:         zap.NewNop(),
+			databaseReady:  true,
+			nativeReady:    true,
+			cameraReady:    true,
+			algorithmReady: true,
+			auditReady:     true,
+			storageReady:   true,
+			personReady:    true,
+			recordReady:    true,
+			snapshotReady:  true,
+		}
+	}
+
+	rollbackEvents := &eventLog{}
+	runtime := build(rollbackEvents)
+	if err := errors.Join(runtime.rollback(context.Background())...); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+
+	stopEvents := &eventLog{}
+	serveDone := make(chan error, 1)
+	runtime = build(stopEvents)
+	runtime.server = &http.Server{Addr: "127.0.0.1:0"}
+	runtime.httpReady = true
+	runtime.serveDone = serveDone
+	runtime.shutdown = func(context.Context) error {
+		stopEvents.add("http.shutdown")
+		serveDone <- http.ErrServerClosed
+		return nil
+	}
+	if err := runtime.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	want, got := rollbackEvents.snapshot(), stopEvents.snapshot()
+	if len(got) == 0 || got[0] != "http.shutdown" {
+		t.Fatalf("shutdown must drain HTTP first: %v", got)
+	}
+	got = got[1:]
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("rollback order diverged from shutdown order:\n rollback: %v\n shutdown: %v", want, got)
+	}
+}
+
+// TestDegradedSubsystemStartIsRecordedAndStillStopped 守护降级启动语义：
+// 可选域的 Start 失败既不能让整机启不了机，也不能被悄悄吞掉——它要进退化清单，
+// 并且仍被标记 ready，因为只有该域自己的 Stop 能释放它申请了一半的资源。
+func TestDegradedSubsystemStartIsRecordedAndStillStopped(t *testing.T) {
+	events := &eventLog{}
+	storageErr := errors.New("media root is not mounted")
+	server := &http.Server{Addr: "127.0.0.1:0"}
+	runtime := &lifecycleRuntime{
+		database: databaseStub{events: events},
+		native:   engineStub{events: events},
+		storage:  storageLifecycleStub{events: events, startErr: storageErr},
+		server:   server,
+		logger:   zap.NewNop(),
+		listen: func(network, address string) (net.Listener, error) {
+			events.add("http.listen")
+			return net.Listen(network, address)
+		},
+		shutdown: server.Shutdown,
+	}
+
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("a degraded subsystem must not abort the boot: %v", err)
+	}
+	if got, want := runtime.degraded, []string{"storage"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("degraded subsystems = %v, want %v", got, want)
+	}
+	if !runtime.storageReady {
+		t.Fatal("a degraded subsystem must stay ready so Stop releases what it acquired")
+	}
+
+	if err := runtime.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	want := []string{
+		"database.open",
+		"storage.start",
+		"engine.start",
+		"http.listen",
+		"storage.stop",
+		"engine.close",
+		"database.close",
+	}
+	if got := events.snapshot(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected degraded lifecycle: got %v, want %v", got, want)
 	}
 }
 

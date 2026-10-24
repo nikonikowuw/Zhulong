@@ -135,6 +135,10 @@ type lifecycleRuntime struct {
 	httpReady           bool
 	loggerSynced        bool
 	startAttempted      bool
+	// degraded lists the subsystems whose Start failed without aborting the boot,
+	// so the startup summary can name them instead of scattering the fact across
+	// one warning per subsystem.
+	degraded []string
 }
 
 type runtimeParams struct {
@@ -194,9 +198,7 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		return errors.New("application is already started")
 	}
 	r.startAttempted = true
-	if r.databaseReady || r.nativeReady || r.httpReady {
-		return errors.New("application is already started")
-	}
+
 	if r.logSink != nil {
 		if err := r.logSink.Prepare(); err != nil {
 			return r.failStart(fmt.Errorf("prepare application log sink: %w", err))
@@ -210,42 +212,49 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 
 	if r.configCache != nil {
 		if err := r.configCache.Reload(ctx); err != nil {
-			r.logger.Warn("initial region config cache reload warning", zap.Error(err))
+			r.degradedStart("region_config_cache", err)
 		}
 	}
 
 	if r.audit != nil {
 		if err := r.audit.Start(ctx); err != nil {
 			startupErr := fmt.Errorf("start audit service: %w", err)
-			return r.failStart(startupErr, r.closeDatabase())
+			return r.failStart(startupErr, r.closeDatabase(ctx))
 		}
 		r.auditReady = true
 	}
 
+	// The remaining domains are optional at runtime: a failure downgrades the host
+	// instead of aborting the boot, because a broken algorithm supervisor must not
+	// cost the operator the whole web console.
+	//
+	// ready is set even when Start failed, on purpose: ready means "Stop must run",
+	// not "started cleanly". A subsystem that failed half way still owns a worker,
+	// a file handle or a socket, and only its own Stop releases them.
 	if r.network != nil {
 		if err := r.network.Start(ctx); err != nil {
-			r.logger.Warn("network boot check warning", zap.Error(err))
+			r.degradedStart("network", err)
 		}
 		r.networkReady = true
 	}
 
 	if r.systemTime != nil {
 		if err := r.systemTime.Start(ctx); err != nil {
-			r.logger.Warn("system time start warning", zap.Error(err))
+			r.degradedStart("system_time", err)
 		}
 		r.systemTimeReady = true
 	}
 
 	if r.storage != nil {
 		if err := r.storage.Start(ctx); err != nil {
-			r.logger.Warn("storage start warning", zap.Error(err))
+			r.degradedStart("storage", err)
 		}
 		r.storageReady = true
 	}
 
 	if r.person != nil {
 		if err := r.person.Start(ctx); err != nil {
-			r.logger.Warn("person start warning", zap.Error(err))
+			r.degradedStart("person", err)
 		}
 		r.personReady = true
 	}
@@ -261,7 +270,7 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		recordCtx, cancel := context.WithCancel(context.Background())
 		r.recordCancel = cancel
 		if err := r.record.Start(recordCtx); err != nil {
-			r.logger.Warn("record start warning", zap.Error(err))
+			r.degradedStart("record", err)
 		}
 		r.recordReady = true
 	}
@@ -300,7 +309,7 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	// 这样开机自动拉起 active 算法时，能够成功解密 URI 并通过 Engine.AcquireStream 建立 AI 物理流。
 	if r.algorithm != nil {
 		if err := r.algorithm.Start(ctx); err != nil {
-			r.logger.Warn("algorithm start warning", zap.Error(err))
+			r.degradedStart("algorithm", err)
 		}
 		r.algorithmReady = true
 	}
@@ -325,26 +334,62 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.levelReload.Start()
 	}
 	r.logger.Info("HTTP server started", zap.String("address", listener.Addr().String()))
+	// One aggregated line, because the per-subsystem warnings above are easy to
+	// lose in a long boot log and nothing else reports a degraded host: /health
+	// only promises database and engine readiness.
+	if len(r.degraded) > 0 {
+		r.logger.Warn("host started with degraded subsystems; see the warnings above",
+			zap.Strings("subsystems", r.degraded))
+	}
 	return nil
 }
 
-// rollback 按依赖逆序释放已启动的阶段，供 Start 失败时统一收尾。
+// stopSequence is the single authoritative teardown order. Both Stop and the
+// startup rollback walk this one list, so the two paths cannot drift apart:
+// keeping two hand-maintained copies used to give a failed startup a different
+// order than a clean shutdown.
 //
-// 每个 close* 都自检各自的 ready 标志，因此无条件走完整序列与「按失败点截断」等价，
-// 不会重复关闭。顺序即反向依赖：先停有数据流入的（算法/相机/record），再拆基础设施。
-func (r *lifecycleRuntime) rollback(ctx context.Context) []error {
-	return []error{
-		r.closeAlgorithm(ctx),
-		r.closeCamera(),
-		r.closePerson(ctx),
-		r.closeRecordAndSnapshot(ctx),
-		r.closeStorage(ctx),
-		r.closeSystemTime(ctx),
-		r.closeNetwork(ctx),
-		r.closeAudit(ctx),
-		r.closeNative(ctx),
-		r.closeDatabase(),
+// The relative order is the contract in dependency-injection.md §2: camera
+// before algorithm before native.Close, and record before the snapshot worker
+// drains before storage loses the media root. camera must precede native.Close
+// in particular because StreamHub.Close releases engine.AIResultSubscription
+// handles, which are backed by native state.
+//
+// Every close* self-checks its readiness flag, so walking the whole sequence is
+// equivalent to truncating it at the failure point and never closes twice.
+func (r *lifecycleRuntime) stopSequence() []func(context.Context) error {
+	return []func(context.Context) error{
+		r.closeCamera,
+		r.closeAlgorithm,
+		r.closePerson,
+		r.closeRecordAndSnapshot,
+		r.closeStorage,
+		r.closeSystemTime,
+		r.closeNetwork,
+		r.closeAudit,
+		r.closeNative,
+		r.closeDatabase,
 	}
+}
+
+// rollback releases whatever a failed Start acquired, in stop order.
+func (r *lifecycleRuntime) rollback(ctx context.Context) []error {
+	var rollbackErrors []error
+	for _, stop := range r.stopSequence() {
+		if err := stop(ctx); err != nil {
+			rollbackErrors = append(rollbackErrors, err)
+		}
+	}
+	return rollbackErrors
+}
+
+// degradedStart records an optional subsystem that failed to start. The host
+// keeps running, but the failure must stay visible: it goes into the one-line
+// startup summary and is logged with the cause at the moment it happens.
+func (r *lifecycleRuntime) degradedStart(subsystem string, startErr error) {
+	r.degraded = append(r.degraded, subsystem)
+	r.logger.Warn("subsystem failed to start; host continues degraded",
+		zap.String("subsystem", subsystem), zap.Error(startErr))
 }
 
 func (r *lifecycleRuntime) failStart(startupErr error, cleanup ...error) error {
@@ -408,38 +453,10 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 		r.listener = nil
 	}
 
-	if err := r.closeCamera(); err != nil {
-		stopErrors = append(stopErrors, err)
-	}
-	if err := r.closeAlgorithm(ctx); err != nil {
-		stopErrors = append(stopErrors, err)
-	}
-	if err := r.closePerson(ctx); err != nil {
-		stopErrors = append(stopErrors, err)
-	}
-	if err := r.closeRecord(ctx); err != nil {
-		stopErrors = append(stopErrors, err)
-	}
-	// 抓拍 worker 必须在 record 之后、camera（抓拍帧来源）与 storage（媒体根）
-	// 之前停止：队列里已接收的任务仍需要 StreamHub 与媒体根才能跑完。
-	r.closeSnapshot()
-	if err := r.closeStorage(ctx); err != nil {
-		stopErrors = append(stopErrors, err)
-	}
-	if err := r.closeSystemTime(ctx); err != nil {
-		stopErrors = append(stopErrors, err)
-	}
-	if err := r.closeNetwork(ctx); err != nil {
-		stopErrors = append(stopErrors, err)
-	}
-	if err := r.closeAudit(ctx); err != nil {
-		stopErrors = append(stopErrors, err)
-	}
-	if err := r.closeNative(ctx); err != nil {
-		stopErrors = append(stopErrors, err)
-	}
-	if err := r.closeDatabase(); err != nil {
-		stopErrors = append(stopErrors, err)
+	for _, stop := range r.stopSequence() {
+		if err := stop(ctx); err != nil {
+			stopErrors = append(stopErrors, err)
+		}
 	}
 	if r.nativeReady || r.nativeLogRegistered || r.nativeLogReady {
 		stopErrors = append(stopErrors, errors.New("native logging may still be active; application logger retained"))
@@ -454,7 +471,9 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 	return errors.Join(stopErrors...)
 }
 
-func (r *lifecycleRuntime) closeCamera() error {
+// closeCamera stops the health scheduler and the StreamHub. It runs before
+// closeAlgorithm per dependency-injection.md §2.
+func (r *lifecycleRuntime) closeCamera(context.Context) error {
 	if !r.cameraReady {
 		return nil
 	}
@@ -614,7 +633,9 @@ func (r *lifecycleRuntime) closeNative(ctx context.Context) error {
 	return nil
 }
 
-func (r *lifecycleRuntime) closeDatabase() error {
+// closeDatabase ignores the shutdown context: closing SQLite is a local syscall,
+// and every domain that writes to it has already stopped by this stage.
+func (r *lifecycleRuntime) closeDatabase(context.Context) error {
 	if !r.databaseReady {
 		return nil
 	}

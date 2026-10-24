@@ -156,7 +156,7 @@ func (s *boundedFileSink) prepareLocked() error {
 	}
 	if info, err := os.Lstat(s.path); err == nil && !info.Mode().IsRegular() {
 		return s.failLocked(fmt.Errorf("log output %q is not a regular file", s.path))
-	} else if err != nil && !os.IsNotExist(err) {
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return s.failLocked(fmt.Errorf("inspect log output: %w", err))
 	}
 	file, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
@@ -310,7 +310,7 @@ func (s *boundedFileSink) nextArchivePathLocked() (string, time.Time, uint64, er
 	for attempts := 0; attempts < 1_000_000; attempts++ {
 		s.sequence++
 		name := fmt.Sprintf("%s.%s.%06d", s.path, created.Format("20060102T150405Z"), s.sequence)
-		if _, err := os.Lstat(name); os.IsNotExist(err) {
+		if _, err := os.Lstat(name); errors.Is(err, os.ErrNotExist) {
 			return name, created, s.sequence, nil
 		} else if err != nil {
 			return "", time.Time{}, 0, fmt.Errorf("check archive path: %w", err)
@@ -355,7 +355,7 @@ func (s *boundedFileSink) readArchivesLocked() ([]rotatedArchive, error) {
 			continue
 		}
 		if temporary {
-			if err := os.Remove(candidate); err != nil && !os.IsNotExist(err) {
+			if err := os.Remove(candidate); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return nil, fmt.Errorf("remove abandoned log compression file: %w", err)
 			}
 			continue
@@ -453,7 +453,7 @@ func (s *boundedFileSink) removeArchiveLocked(index int) error {
 	if s.archiveCompressingLocked(archive.path) {
 		return s.compressionReservationErrorLocked()
 	}
-	if err := os.Remove(archive.path); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(archive.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove old log archive: %w", err)
 	}
 	if err := syncDirectory(filepath.Dir(s.path)); err != nil {

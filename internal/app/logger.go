@@ -53,11 +53,6 @@ func parseLogLevel(value string) (zapcore.Level, error) {
 	}
 }
 
-func newLogger(config Config) (*zap.Logger, zap.AtomicLevel, error) {
-	logger, level, _, err := buildLogger(config)
-	return logger, level, err
-}
-
 // NewLogger constructs a configured logger for command modes outside the Fx host.
 // Callers that use file output must prepare the returned sink before doing work.
 func NewLogger(config Config) (*zap.Logger, zap.AtomicLevel, LoggerSink, error) {
