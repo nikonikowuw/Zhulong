@@ -7,103 +7,229 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestEmergencyGate_Evaluate(t *testing.T) {
-	gate := NewEmergencyGate(zap.NewNop())
-
-	var stopCalls atomic.Int32
-	var resumeCalls atomic.Int32
-	gate.SetCallbacks(
-		func(string) { stopCalls.Add(1) },
-		func() { resumeCalls.Add(1) },
-	)
-
-	cfg := &StorageConfig{
+// testStorageConfig is the watermark policy shared by the gate tests.
+func testStorageConfig() *StorageConfig {
+	return &StorageConfig{
 		HighWatermarkPercent: 90,
 		LowWatermarkPercent:  80,
 		EmergencyStopPercent: 95,
 		EmergencyStopMinMB:   2048, // 2GB
 	}
+}
 
-	// 1. Healthy: 70% used, 30GB free
+func TestEmergencyGate_Evaluate(t *testing.T) {
+	const (
+		gigabyte = uint64(1024 * 1024 * 1024)
+		totalGB  = 100
+	)
+
+	tests := []struct {
+		name         string
+		usedGB       uint64
+		freeGB       uint64
+		readOnly     bool
+		dismounted   bool
+		want         StorageHealthStatus
+		wantCanWrite bool
+		wantStops    int32
+	}{
+		{
+			name:         "healthy volume",
+			usedGB:       70,
+			freeGB:       30,
+			want:         StatusHealthy,
+			wantCanWrite: true,
+		},
+		{
+			name:         "warning at high watermark",
+			usedGB:       92,
+			freeGB:       8,
+			want:         StatusWarning,
+			wantCanWrite: true,
+		},
+		{
+			name:         "emergency above usage percent",
+			usedGB:       96,
+			freeGB:       4,
+			want:         StatusEmergencyStopped,
+			wantCanWrite: false,
+			wantStops:    1,
+		},
+		{
+			name:         "emergency below minimum free space",
+			usedGB:       90,
+			freeGB:       1,
+			want:         StatusEmergencyStopped,
+			wantCanWrite: false,
+			wantStops:    1,
+		},
+		{
+			name:         "dismount fallthrough hazard",
+			usedGB:       70,
+			freeGB:       30,
+			dismounted:   true,
+			want:         StatusError,
+			wantCanWrite: false,
+		},
+		{
+			name:         "read-only mount",
+			usedGB:       70,
+			freeGB:       30,
+			readOnly:     true,
+			want:         StatusError,
+			wantCanWrite: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gate := NewEmergencyGate(zap.NewNop())
+			var stops atomic.Int32
+			gate.SetCallbacks(
+				func(string) { stops.Add(1) },
+				func() {},
+			)
+
+			stats := &FSStats{
+				TotalBytes: totalGB * gigabyte,
+				UsedBytes:  tc.usedGB * gigabyte,
+				FreeBytes:  tc.freeGB * gigabyte,
+				IsReadOnly: tc.readOnly,
+			}
+
+			if got := gate.Evaluate(stats, testStorageConfig(), tc.dismounted); got != tc.want {
+				t.Errorf("Evaluate() = %q, want %q", got, tc.want)
+			}
+			if got := gate.CanWrite(); got != tc.wantCanWrite {
+				t.Errorf("CanWrite() = %v, want %v", got, tc.wantCanWrite)
+			}
+			if got := stops.Load(); got != tc.wantStops {
+				t.Errorf("stop callbacks = %d, want %d", got, tc.wantStops)
+			}
+		})
+	}
+}
+
+func TestEmergencyGate_EvaluateWithoutTelemetry(t *testing.T) {
+	gate := NewEmergencyGate(zap.NewNop())
+
+	if got := gate.Evaluate(nil, testStorageConfig(), false); got != StatusError {
+		t.Errorf("Evaluate(nil stats) = %q, want %q", got, StatusError)
+	}
+	if gate.CanWrite() {
+		t.Error("CanWrite() = true, want false when telemetry is missing")
+	}
+	if gate.Reason() == "" {
+		t.Error("Reason() is empty, want the telemetry failure recorded")
+	}
+}
+
+func TestEmergencyGate_RecoversFromEmergencyOnce(t *testing.T) {
+	gate := NewEmergencyGate(zap.NewNop())
+
+	var stops atomic.Int32
+	var resumes atomic.Int32
+	gate.SetCallbacks(
+		func(string) { stops.Add(1) },
+		func() { resumes.Add(1) },
+	)
+
+	const gigabyte = uint64(1024 * 1024 * 1024)
 	stats := &FSStats{
-		TotalBytes: 100 * 1024 * 1024 * 1024,
-		UsedBytes:  70 * 1024 * 1024 * 1024,
-		FreeBytes:  30 * 1024 * 1024 * 1024,
+		TotalBytes: 100 * gigabyte,
+		UsedBytes:  96 * gigabyte,
+		FreeBytes:  4 * gigabyte,
 	}
-	status := gate.Evaluate(stats, cfg, false)
-	if status != StatusHealthy {
-		t.Errorf("expected StatusHealthy, got %v", status)
+
+	if got := gate.Evaluate(stats, testStorageConfig(), false); got != StatusEmergencyStopped {
+		t.Fatalf("Evaluate(emergency) = %q, want %q", got, StatusEmergencyStopped)
+	}
+
+	stats.UsedBytes = 75 * gigabyte
+	stats.FreeBytes = 25 * gigabyte
+
+	for range 2 {
+		if got := gate.Evaluate(stats, testStorageConfig(), false); got != StatusHealthy {
+			t.Fatalf("Evaluate(recovered) = %q, want %q", got, StatusHealthy)
+		}
+		if !gate.CanWrite() {
+			t.Fatal("CanWrite() = false after recovery")
+		}
+	}
+
+	if got := stops.Load(); got != 1 {
+		t.Errorf("stop callbacks = %d, want 1", got)
+	}
+	if got := resumes.Load(); got != 1 {
+		t.Errorf("resume callbacks = %d, want 1 (edge-triggered)", got)
+	}
+}
+
+func TestEmergencyGate_BlockWritesIsEdgeTriggered(t *testing.T) {
+	gate := NewEmergencyGate(zap.NewNop())
+
+	var stops atomic.Int32
+	var resumes atomic.Int32
+	gate.SetCallbacks(
+		func(string) { stops.Add(1) },
+		func() { resumes.Add(1) },
+	)
+
+	gate.BlockWrites("storage telemetry unavailable")
+	gate.BlockWrites("storage telemetry unavailable")
+
+	if gate.CanWrite() {
+		t.Error("CanWrite() = true, want false after BlockWrites")
+	}
+	if !gate.IsEmergency() {
+		t.Error("IsEmergency() = false, want true after BlockWrites")
+	}
+	if got := stops.Load(); got != 1 {
+		t.Errorf("stop callbacks = %d, want 1 (edge-triggered)", got)
+	}
+	if got := resumes.Load(); got != 0 {
+		t.Errorf("resume callbacks = %d, want 0 while still blocked", got)
+	}
+	if gate.Reason() == "" {
+		t.Error("Reason() is empty, want the block reason recorded")
+	}
+}
+
+func TestEmergencyGate_HealthyProbeClearsBlock(t *testing.T) {
+	gate := NewEmergencyGate(zap.NewNop())
+
+	var stops atomic.Int32
+	var resumes atomic.Int32
+	gate.SetCallbacks(
+		func(string) { stops.Add(1) },
+		func() { resumes.Add(1) },
+	)
+
+	gate.BlockWrites("storage telemetry unavailable")
+
+	const gigabyte = uint64(1024 * 1024 * 1024)
+	stats := &FSStats{
+		TotalBytes: 100 * gigabyte,
+		UsedBytes:  50 * gigabyte,
+		FreeBytes:  50 * gigabyte,
+	}
+
+	if got := gate.Evaluate(stats, testStorageConfig(), false); got != StatusHealthy {
+		t.Fatalf("Evaluate() = %q, want %q", got, StatusHealthy)
 	}
 	if !gate.CanWrite() {
-		t.Errorf("expected CanWrite to be true")
+		t.Error("CanWrite() = false, want true after a healthy probe")
 	}
-
-	// 2. Warning: 92% used (>= 90% high watermark, but < 95% emergency)
-	stats.UsedBytes = 92 * 1024 * 1024 * 1024
-	stats.FreeBytes = 8 * 1024 * 1024 * 1024
-	status = gate.Evaluate(stats, cfg, false)
-	if status != StatusWarning {
-		t.Errorf("expected StatusWarning, got %v", status)
+	if gate.IsEmergency() {
+		t.Error("IsEmergency() = true, want false after a healthy probe")
 	}
-	if !gate.CanWrite() {
-		t.Errorf("expected CanWrite to be true")
+	if got := gate.Reason(); got != "" {
+		t.Errorf("Reason() = %q, want empty after a healthy probe", got)
 	}
-
-	// 3. Emergency: 96% used (>= 95% emergency stop)
-	stats.UsedBytes = 96 * 1024 * 1024 * 1024
-	stats.FreeBytes = 4 * 1024 * 1024 * 1024
-	status = gate.Evaluate(stats, cfg, false)
-	if status != StatusEmergencyStopped {
-		t.Errorf("expected StatusEmergencyStopped, got %v", status)
+	if got := stops.Load(); got != 1 {
+		t.Errorf("stop callbacks = %d, want 1", got)
 	}
-	if gate.CanWrite() {
-		t.Errorf("expected CanWrite to be false")
-	}
-	if stopCalls.Load() != 1 {
-		t.Errorf("expected stopCalls to be 1, got %d", stopCalls.Load())
-	}
-
-	// 4. Recovery: drops back to 75% used, 25GB free
-	stats.UsedBytes = 75 * 1024 * 1024 * 1024
-	stats.FreeBytes = 25 * 1024 * 1024 * 1024
-	status = gate.Evaluate(stats, cfg, false)
-	if status != StatusHealthy {
-		t.Errorf("expected StatusHealthy after recovery, got %v", status)
-	}
-	if !gate.CanWrite() {
-		t.Errorf("expected CanWrite to be true after recovery")
-	}
-	if resumeCalls.Load() != 1 {
-		t.Errorf("expected resumeCalls to be 1, got %d", resumeCalls.Load())
-	}
-
-	// 5. Emergency by free bytes threshold (< 2GB) even if percentage < 95%
-	stats.UsedBytes = 90 * 1024 * 1024 * 1024
-	stats.FreeBytes = 1 * 1024 * 1024 * 1024 // 1GB free (< 2GB)
-	status = gate.Evaluate(stats, cfg, false)
-	if status != StatusEmergencyStopped {
-		t.Errorf("expected StatusEmergencyStopped due to low free space, got %v", status)
-	}
-	if gate.CanWrite() {
-		t.Errorf("expected CanWrite to be false")
-	}
-
-	// 6. Dismount / Fallthrough hazard
-	status = gate.Evaluate(stats, cfg, true)
-	if status != StatusError {
-		t.Errorf("expected StatusError for dismount, got %v", status)
-	}
-	if gate.CanWrite() {
-		t.Errorf("expected CanWrite to be false on dismount")
-	}
-
-	// 7. Read-only filesystem
-	stats.IsReadOnly = true
-	status = gate.Evaluate(stats, cfg, false)
-	if status != StatusError {
-		t.Errorf("expected StatusError for read-only, got %v", status)
-	}
-	if gate.CanWrite() {
-		t.Errorf("expected CanWrite to be false on read-only")
+	if got := resumes.Load(); got != 1 {
+		t.Errorf("resume callbacks = %d, want 1", got)
 	}
 }

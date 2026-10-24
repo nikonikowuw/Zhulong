@@ -69,11 +69,11 @@ func TestCleaner_WatermarkHysteresisSkippedWhenLow(t *testing.T) {
 	}
 
 	// Automatic trigger should skip because usage (50%) < high watermark (90%)
-	summary, err := cleaner.RunPrune(context.Background(), tempDir, cfg, "watermark")
+	summary, err := cleaner.RunPrune(context.Background(), tempDir, cfg, PruneTriggerWatermark)
 	if err != nil {
 		t.Fatalf("unexpected prune error: %v", err)
 	}
-	if summary.TargetStatus != "skipped_below_high_watermark" {
+	if summary.TargetStatus != PruneStatusSkippedLow {
 		t.Errorf("expected skipped_below_high_watermark, got %q", summary.TargetStatus)
 	}
 	if summary.DeletedFiles != 0 {
@@ -87,40 +87,40 @@ func TestCleaner_CascadeOrderAndLockedFileProtection(t *testing.T) {
 	// Create directories
 	exportsDir := filepath.Join(tempDir, "exports")
 	recordingsDir := filepath.Join(tempDir, "recordings", "cam_01")
-	_ = os.MkdirAll(exportsDir, 0o750)
-	_ = os.MkdirAll(recordingsDir, 0o750)
+	mustMkdirAll(t, exportsDir)
+	mustMkdirAll(t, recordingsDir)
 
 	now := time.Now()
 
 	// 1. Expired export file (3 days old)
 	expOld := filepath.Join(exportsDir, "export_old.mp4")
-	_ = os.WriteFile(expOld, []byte("old_export"), 0o600)
-	_ = os.Chtimes(expOld, now.Add(-72*time.Hour), now.Add(-72*time.Hour))
+	mustWriteFile(t, expOld, []byte("old_export"))
+	mustSetModTime(t, expOld, now.Add(-72*time.Hour))
 
 	// 2. Fresh export file (1 hour old)
 	expFresh := filepath.Join(exportsDir, "export_fresh.mp4")
-	_ = os.WriteFile(expFresh, []byte("fresh_export"), 0o600)
-	_ = os.Chtimes(expFresh, now.Add(-1*time.Hour), now.Add(-1*time.Hour))
+	mustWriteFile(t, expFresh, []byte("fresh_export"))
+	mustSetModTime(t, expFresh, now.Add(-1*time.Hour))
 
 	// 3. Expired recording (20 days old)
 	recOld := filepath.Join(recordingsDir, "rec_old.mp4")
-	_ = os.WriteFile(recOld, []byte("old_recording"), 0o600)
-	_ = os.Chtimes(recOld, now.Add(-20*24*time.Hour), now.Add(-20*24*time.Hour))
+	mustWriteFile(t, recOld, []byte("old_recording"))
+	mustSetModTime(t, recOld, now.Add(-20*24*time.Hour))
 
 	// 4. Locked recording (25 days old, but marked with .lock)
 	recLocked := filepath.Join(recordingsDir, "evidence.lock")
-	_ = os.WriteFile(recLocked, []byte("vital_evidence"), 0o600)
-	_ = os.Chtimes(recLocked, now.Add(-25*24*time.Hour), now.Add(-25*24*time.Hour))
+	mustWriteFile(t, recLocked, []byte("vital_evidence"))
+	mustSetModTime(t, recLocked, now.Add(-25*24*time.Hour))
 
 	// 5. Locked recording with _locked in name
 	recLocked2 := filepath.Join(recordingsDir, "alarm_event_locked.mp4")
-	_ = os.WriteFile(recLocked2, []byte("important_alarm"), 0o600)
-	_ = os.Chtimes(recLocked2, now.Add(-25*24*time.Hour), now.Add(-25*24*time.Hour))
+	mustWriteFile(t, recLocked2, []byte("important_alarm"))
+	mustSetModTime(t, recLocked2, now.Add(-25*24*time.Hour))
 
 	// 6. Normal recent recording (2 days old)
 	recNormal := filepath.Join(recordingsDir, "rec_normal.mp4")
-	_ = os.WriteFile(recNormal, []byte("normal_recording"), 0o600)
-	_ = os.Chtimes(recNormal, now.Add(-48*time.Hour), now.Add(-48*time.Hour))
+	mustWriteFile(t, recNormal, []byte("normal_recording"))
+	mustSetModTime(t, recNormal, now.Add(-48*time.Hour))
 
 	mock := &mockInspector{
 		stats: FSStats{
@@ -143,7 +143,7 @@ func TestCleaner_CascadeOrderAndLockedFileProtection(t *testing.T) {
 	})
 
 	// Run manual prune
-	summary, err := cleaner.RunPrune(context.Background(), tempDir, cfg, "manual")
+	summary, err := cleaner.RunPrune(context.Background(), tempDir, cfg, PruneTriggerManual)
 	if err != nil {
 		t.Fatalf("prune failed: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestCleaner_PreservesSnapshotsWithLockSidecars(t *testing.T) {
 	summary, err := cleaner.RunPrune(context.Background(), mediaDir, &StorageConfig{
 		LowWatermarkPercent:    80,
 		SnapshotsRetentionDays: 1,
-	}, "manual")
+	}, PruneTriggerManual)
 	if err != nil {
 		t.Fatalf("RunPrune: %v", err)
 	}
@@ -239,10 +239,10 @@ func TestCleaner_ConcurrentPrevention(t *testing.T) {
 
 	// Put a file in exports to trigger remover
 	expDir := filepath.Join(tempDir, "exports")
-	_ = os.MkdirAll(expDir, 0o750)
+	mustMkdirAll(t, expDir)
 	fPath := filepath.Join(expDir, "f.mp4")
-	_ = os.WriteFile(fPath, []byte("data"), 0o600)
-	_ = os.Chtimes(fPath, time.Now().Add(-100*time.Hour), time.Now().Add(-100*time.Hour))
+	mustWriteFile(t, fPath, []byte("data"))
+	mustSetModTime(t, fPath, time.Now().Add(-100*time.Hour))
 
 	cfg := &StorageConfig{
 		HighWatermarkPercent:  90,
@@ -251,7 +251,7 @@ func TestCleaner_ConcurrentPrevention(t *testing.T) {
 	}
 
 	go func() {
-		_, _ = cleaner.RunPrune(context.Background(), tempDir, cfg, "manual")
+		_, _ = cleaner.RunPrune(context.Background(), tempDir, cfg, PruneTriggerManual)
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -261,7 +261,7 @@ func TestCleaner_ConcurrentPrevention(t *testing.T) {
 	}
 
 	// Second concurrent call should fail with ErrCleanupInProgress
-	_, err := cleaner.RunPrune(context.Background(), tempDir, cfg, "manual")
+	_, err := cleaner.RunPrune(context.Background(), tempDir, cfg, PruneTriggerManual)
 	if err != ErrCleanupInProgress {
 		t.Errorf("expected ErrCleanupInProgress, got %v", err)
 	}

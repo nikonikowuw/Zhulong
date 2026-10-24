@@ -82,13 +82,13 @@ func TestInspector_ScanBreakdown(t *testing.T) {
 	snapFile := filepath.Join(tempDir, "snapshots", "cam_1", "2026-10-07", "snap.jpg")
 	expFile := filepath.Join(tempDir, "exports", "clip.mp4")
 
-	_ = os.MkdirAll(filepath.Dir(recFile), 0o750)
-	_ = os.MkdirAll(filepath.Dir(snapFile), 0o750)
-	_ = os.MkdirAll(filepath.Dir(expFile), 0o750)
+	mustMkdirAll(t, filepath.Dir(recFile))
+	mustMkdirAll(t, filepath.Dir(snapFile))
+	mustMkdirAll(t, filepath.Dir(expFile))
 
-	_ = os.WriteFile(recFile, make([]byte, 1024), 0o600)
-	_ = os.WriteFile(snapFile, make([]byte, 2048), 0o600)
-	_ = os.WriteFile(expFile, make([]byte, 4096), 0o600)
+	mustWriteFile(t, recFile, make([]byte, 1024))
+	mustWriteFile(t, snapFile, make([]byte, 2048))
+	mustWriteFile(t, expFile, make([]byte, 4096))
 
 	bd, err = inspector.ScanBreakdown(ctx, tempDir)
 	if err != nil {

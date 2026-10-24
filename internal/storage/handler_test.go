@@ -28,11 +28,13 @@ func setupTestHandler(t *testing.T) (*gin.Engine, *Service, string, func()) {
 
 	repo := NewRepository(dbStore)
 	mediaDir := filepath.Join(tempDir, "media")
-	_ = os.MkdirAll(mediaDir, 0o750)
+	mustMkdirAll(t, mediaDir)
 
 	initCfg := DefaultStorageConfig()
 	initCfg.MediaDirectory = mediaDir
-	_, _ = repo.UpdateConfig(context.Background(), initCfg)
+	if _, err := repo.UpdateConfig(context.Background(), initCfg); err != nil {
+		t.Fatalf("init storage config: %v", err)
+	}
 
 	inspector := NewDefaultPathInspector()
 	gate := NewEmergencyGate(zap.NewNop())
@@ -43,7 +45,9 @@ func setupTestHandler(t *testing.T) (*gin.Engine, *Service, string, func()) {
 
 	svc := NewService(repo, inspector, gate, cleaner, zap.NewNop())
 	svc.SetAuditor(auditSvc)
-	_ = svc.Start(context.Background())
+	if err := svc.Start(context.Background()); err != nil {
+		t.Fatalf("start storage service: %v", err)
+	}
 
 	handler := NewHandler(svc, zap.NewNop())
 
@@ -102,7 +106,7 @@ func TestHandler_GetConfig(t *testing.T) {
 	}
 
 	var resp httputil.Response
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	mustUnmarshalJSON(t, w.Body.Bytes(), &resp)
 	dataMap := resp.Data.(map[string]any)
 	if dataMap["mediaDirectory"] != mediaDir {
 		t.Errorf("expected mediaDirectory %q, got %v", mediaDir, dataMap["mediaDirectory"])
@@ -138,7 +142,7 @@ func TestHandler_UpdateConfig(t *testing.T) {
 	}
 
 	var resp httputil.Response
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	mustUnmarshalJSON(t, w.Body.Bytes(), &resp)
 	dataMap := resp.Data.(map[string]any)
 	if dataMap["mediaDirectory"] != newMedia {
 		t.Errorf("expected updated media dir %q, got %v", newMedia, dataMap["mediaDirectory"])
@@ -180,7 +184,7 @@ func TestHandler_TestPath(t *testing.T) {
 	}
 
 	var resp httputil.Response
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	mustUnmarshalJSON(t, w.Body.Bytes(), &resp)
 	dataMap := resp.Data.(map[string]any)
 	if dataMap["writable"] != true {
 		t.Errorf("expected writable = true, got %v", dataMap["writable"])
@@ -200,7 +204,7 @@ func TestHandler_TriggerCleanup(t *testing.T) {
 	}
 
 	var resp httputil.Response
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	mustUnmarshalJSON(t, w.Body.Bytes(), &resp)
 	if resp.Code != "OK" {
 		t.Errorf("expected OK, got %s", resp.Code)
 	}
