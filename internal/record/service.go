@@ -100,6 +100,8 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 	var recognitionSnapshots []snapshotJob
 	var captureSnapshots []snapshotJob
 
+	galleryFaces := s.resolveGalleryFaces(ctx, collectMatchedFaceIDs(res.Persons))
+
 	for _, p := range res.Persons {
 		// 1. Process Face Recognition if faces exist
 		if len(p.Faces) > 0 {
@@ -117,17 +119,13 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 				if s.cooldown.Allow(recKey, capturedAt) {
 					recID := idutil.New()
 
-					// Resolve gallery image path if matched
-					var galleryImagePath string
-					var personIDPtr *string
-					if face.Matched && face.MatchedFaceID != "" {
-						galleryImagePath = s.resolveGalleryImagePath(ctx, face.MatchedFaceID)
+					// 身份归属以本地底库为准：matched_face_id 落空（并发删除）时降级为
+					// 「未归属」记录，而不是把 runner 载荷里的业务键写进外键列。
+					ref := galleryFaces[face.MatchedFaceID]
+					personName := ref.PersonName
+					if personName == "" {
+						personName = face.PersonName
 					}
-					if face.PersonID != "" {
-						pid := face.PersonID
-						personIDPtr = &pid
-					}
-
 					candidatesJSON := marshalSliceOrDefault(face.Candidates)
 					boxBytes, _ := json.Marshal(face.Box)
 					bodyBoxBytes, _ := json.Marshal(p.BodyBox)
@@ -146,14 +144,15 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 						AlgorithmVersion: algo.Version,
 						PTS:              res.PTS,
 						TrackID:          p.TrackID,
-						PersonID:         personIDPtr,
-						PersonName:       face.PersonName,
+						PersonID:         optionalString(ref.PersonRowID),
+						PersonExternalID: ref.PersonExternalID,
+						PersonName:       personName,
 						MatchedFaceID:    face.MatchedFaceID,
 						Matched:          face.Matched,
 						Similarity:       face.Similarity,
 						CandidatesJSON:   candidatesJSON,
 						FaceImagePath:    facePath,
-						GalleryImagePath: galleryImagePath,
+						GalleryImagePath: ref.ImagePath,
 						ImagePath:        fullPath,
 						BoxJSON:          string(boxBytes),
 						BodyBoxJSON:      string(bodyBoxBytes),
@@ -544,17 +543,41 @@ func (s *Service) clearJobPaths(jobs []snapshotJob) {
 	}
 }
 
-// resolveGalleryImagePath queries person_faces via Store for the image_path associated with the matched face ID.
-func (s *Service) resolveGalleryImagePath(ctx context.Context, faceID string) string {
-	if s.store == nil || faceID == "" {
-		return ""
+// optionalString 把空串转换成可空列值 nil，与 optionalAlgorithmID 同构。
+func optionalString(v string) *string {
+	if v == "" {
+		return nil
 	}
-	path, err := s.store.GetFaceImagePath(ctx, faceID)
+	return &v
+}
+
+// collectMatchedFaceIDs gathers the gallery face ids a result matched on, so the
+// whole batch is resolved with one query instead of one lookup per face.
+func collectMatchedFaceIDs(persons []aitypes.PersonItem) []string {
+	ids := make([]string, 0, len(persons))
+	for _, p := range persons {
+		for _, face := range p.Faces {
+			if face.Matched && face.MatchedFaceID != "" {
+				ids = append(ids, face.MatchedFaceID)
+			}
+		}
+	}
+	return ids
+}
+
+// resolveGalleryFaces 把命中的人脸 ID 解析为本地人员身份（内部行 ID + 业务键快照）。
+//
+// 解析失败只降级不中断：记录本身是已发生事实，归属标注的完整性是次级信息。
+func (s *Service) resolveGalleryFaces(ctx context.Context, faceIDs []string) map[string]GalleryFaceRef {
+	if s.store == nil || len(faceIDs) == 0 {
+		return nil
+	}
+	refs, err := s.store.ResolveGalleryFaces(ctx, faceIDs)
 	if err != nil {
-		s.logger.Debug("failed to resolve gallery image path", zap.String("face_id", faceID), zap.Error(err))
-		return ""
+		s.logger.Error("failed to resolve gallery faces", zap.Int("faces", len(faceIDs)), zap.Error(err))
+		return nil
 	}
-	return path
+	return refs
 }
 
 var nonAlarmSubstrings = []string{

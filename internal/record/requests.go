@@ -9,11 +9,14 @@ import (
 // ListRecognitionsQuery defines query parameters for listing recognitions.
 type ListRecognitionsQuery struct {
 	httputil.PaginationQuery
-	CameraID  string `form:"cameraId"`
-	PersonID  string `form:"personId"`
-	Matched   *bool  `form:"matched"`
-	StartTime string `form:"startTime"`
-	EndTime   string `form:"endTime"`
+	CameraID string `form:"cameraId"`
+	// PersonID 按内部 persons.id 过滤；personExternalId 按对外业务键快照过滤。
+	// 对接业务系统时用后者，界面上按人员档案点进去时用前者。
+	PersonID         string `form:"personId"`
+	PersonExternalID string `form:"personExternalId"`
+	Matched          *bool  `form:"matched"`
+	StartTime        string `form:"startTime"`
+	EndTime          string `form:"endTime"`
 }
 
 // ToFilter converts query parameters into a validated RecognitionFilter.
@@ -28,13 +31,14 @@ func (q *ListRecognitionsQuery) ToFilter() (RecognitionFilter, error) {
 		return RecognitionFilter{}, err
 	}
 	return RecognitionFilter{
-		CameraID:  q.CameraID,
-		PersonID:  q.PersonID,
-		Matched:   q.Matched,
-		StartTime: start,
-		EndTime:   end,
-		Page:      page,
-		PageSize:  pageSize,
+		CameraID:         q.CameraID,
+		PersonID:         q.PersonID,
+		PersonExternalID: q.PersonExternalID,
+		Matched:          q.Matched,
+		StartTime:        start,
+		EndTime:          end,
+		Page:             page,
+		PageSize:         pageSize,
 	}, nil
 }
 

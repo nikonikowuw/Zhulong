@@ -17,11 +17,17 @@ type Recognition struct {
 	// 算法包卸载后 algorithms 行消失，id 被置 NULL；若没有这两个冗余字段，
 	// 历史证据将永久失去「是哪个算法产生的」这一信息。
 	// ⚠️ 严禁改成读取时 join 回 algorithms 表补全 —— 那正是依赖被删数据的反模式。
-	AlgorithmName    string    `gorm:"column:algorithm_name;not null;default:''" json:"-"`
-	AlgorithmVersion string    `gorm:"column:algorithm_version;not null;default:''" json:"-"`
-	PTS              int64     `gorm:"column:pts;not null" json:"pts"`
-	TrackID          int64     `gorm:"column:track_id;not null;default:0" json:"trackId"`
+	AlgorithmName    string `gorm:"column:algorithm_name;not null;default:''" json:"-"`
+	AlgorithmVersion string `gorm:"column:algorithm_version;not null;default:''" json:"-"`
+	PTS              int64  `gorm:"column:pts;not null" json:"pts"`
+	TrackID          int64  `gorm:"column:track_id;not null;default:0" json:"trackId"`
+	// PersonID 是内部 persons.id 的弱外键；PersonExternalID 是同一时刻对外业务键
+	// （persons.person_id）的写入时快照。
+	// ⚠️ 两者不可互换：前者负责库内关联与 ON DELETE SET NULL，后者负责跨系统上报。
+	// 底库 IPC 载荷下发的 person_id 是业务键原值，绝不能直接写进 PersonID ——
+	// 那会让业务键不等于内部主键的人员，每次命中都撞外键、整批记录静默丢失。
 	PersonID         *string   `gorm:"column:person_id" json:"personId"`
+	PersonExternalID string    `gorm:"column:person_external_id;not null;default:''" json:"personExternalId"`
 	PersonName       string    `gorm:"column:person_name;not null;default:''" json:"personName"`
 	MatchedFaceID    string    `gorm:"column:matched_face_id;not null;default:''" json:"matchedFaceId"`
 	Matched          bool      `gorm:"column:matched;not null;default:0" json:"matched"`
@@ -92,13 +98,18 @@ func (Capture) TableName() string {
 
 // RecognitionFilter defines query filter criteria for Recognitions.
 type RecognitionFilter struct {
-	CameraID  string     `form:"cameraId"`
-	PersonID  string     `form:"personId"`
-	Matched   *bool      `form:"matched"`
-	StartTime *time.Time `form:"startTime" time_format:"2006-01-02T15:04:05Z07:00"`
-	EndTime   *time.Time `form:"endTime" time_format:"2006-01-02T15:04:05Z07:00"`
-	Page      int        `form:"page"`
-	PageSize  int        `form:"pageSize"`
+	CameraID string `form:"cameraId"`
+	// PersonID filters on the internal persons.id; PersonExternalID filters on the
+	// external business-key snapshot. They are separate parameters on purpose: the
+	// business key is what an outside system correlates with, and it never equals
+	// the internal row id once a person has been assigned one.
+	PersonID         string     `form:"personId"`
+	PersonExternalID string     `form:"personExternalId"`
+	Matched          *bool      `form:"matched"`
+	StartTime        *time.Time `form:"startTime" time_format:"2006-01-02T15:04:05Z07:00"`
+	EndTime          *time.Time `form:"endTime" time_format:"2006-01-02T15:04:05Z07:00"`
+	Page             int        `form:"page"`
+	PageSize         int        `form:"pageSize"`
 }
 
 // AlarmFilter defines query filter criteria for Alarms.

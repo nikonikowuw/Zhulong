@@ -11,6 +11,7 @@ const mockRecognition: Recognition = {
   pts: 55000,
   trackId: 18,
   personId: 'p-888',
+  personExternalId: 'EMP-888',
   personName: 'Alice Zhang',
   matchedFaceId: 'f-1',
   matched: true,

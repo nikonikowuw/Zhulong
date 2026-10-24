@@ -331,3 +331,98 @@ func TestStoreCaptureCRUDAndFilters(t *testing.T) {
 		t.Errorf("unexpected target types: %v", targetTypes)
 	}
 }
+
+// TestStoreResolveGalleryFaces pins the mapping the ingest path relies on: a face id
+// answers both "which internal person row" and "which business key", in one query.
+func TestStoreResolveGalleryFaces(t *testing.T) {
+	store, dbStore, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if err := dbStore.DB().Exec(
+		`INSERT INTO persons (id, person_id, name, created_at, updated_at)
+		 VALUES ('person_keyed', 'EMP-1', 'Keyed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error; err != nil {
+		t.Fatalf("insert keyed person: %v", err)
+	}
+	for _, face := range []struct{ id, personID, path string }{
+		{"face_01", "person_alice", "faces/alice.jpg"},
+		{"face_02", "person_keyed", "faces/keyed.jpg"},
+	} {
+		if err := dbStore.DB().Exec(
+			`INSERT INTO person_faces (id, person_id, image_path, feature_vector, created_at)
+			 VALUES (?, ?, ?, X'00', CURRENT_TIMESTAMP)`, face.id, face.personID, face.path).Error; err != nil {
+			t.Fatalf("insert face %s: %v", face.id, err)
+		}
+	}
+
+	refs, err := store.ResolveGalleryFaces(ctx, []string{"face_01", "face_01", "face_02", "face_missing", ""})
+	if err != nil {
+		t.Fatalf("ResolveGalleryFaces failed: %v", err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("expected 2 resolved faces (duplicates collapsed, unknown skipped), got %d: %+v", len(refs), refs)
+	}
+
+	if got := refs["face_01"]; got.PersonRowID != "person_alice" || got.PersonExternalID != "" || got.ImagePath != "faces/alice.jpg" || got.PersonName != "Alice" {
+		t.Errorf("unexpected ref for an unkeyed person: %+v", got)
+	}
+	if got := refs["face_02"]; got.PersonRowID != "person_keyed" || got.PersonExternalID != "EMP-1" || got.ImagePath != "faces/keyed.jpg" || got.PersonName != "Keyed" {
+		t.Errorf("unexpected ref for a keyed person: %+v", got)
+	}
+}
+
+// TestStoreBackfillPersonExternalID pins that binding a business key retro-fills only the
+// empty snapshots, and stays a no-op afterwards.
+func TestStoreBackfillPersonExternalID(t *testing.T) {
+	store, _, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	capturedAt := time.Date(2026, 10, 16, 19, 0, 0, 0, time.UTC)
+	alice := "person_alice"
+	rows := []*record.Recognition{
+		{ID: idutil.New(), CameraID: "cam_01", PTS: 1, PersonID: &alice, CapturedAt: capturedAt},
+		{ID: idutil.New(), CameraID: "cam_01", PTS: 2, PersonID: &alice, PersonExternalID: "KEEP-ME", CapturedAt: capturedAt},
+		{ID: idutil.New(), CameraID: "cam_01", PTS: 3, PersonExternalID: "OTHER", CapturedAt: capturedAt},
+	}
+	if err := store.CreateRecognitionBatch(ctx, rows); err != nil {
+		t.Fatalf("CreateRecognitionBatch failed: %v", err)
+	}
+	n, err := store.BackfillPersonExternalID(ctx, alice, "EMP-777")
+	if err != nil {
+		t.Fatalf("BackfillPersonExternalID failed: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected exactly 1 backfilled row (the empty snapshot), got %d", n)
+	}
+
+	for _, tc := range []struct {
+		id   string
+		want string
+	}{
+		{rows[0].ID, "EMP-777"},
+		{rows[1].ID, "KEEP-ME"},
+		{rows[2].ID, "OTHER"},
+	} {
+		got, err := store.GetRecognitionByID(ctx, tc.id)
+		if err != nil {
+			t.Fatalf("GetRecognitionByID(%s) failed: %v", tc.id, err)
+		}
+		if got.PersonExternalID != tc.want {
+			t.Errorf("row %s: expected personExternalId %q, got %q", tc.id, tc.want, got.PersonExternalID)
+		}
+	}
+
+	again, err := store.BackfillPersonExternalID(ctx, alice, "EMP-777")
+	if err != nil {
+		t.Fatalf("second BackfillPersonExternalID failed: %v", err)
+	}
+	if again != 0 {
+		t.Errorf("expected the backfill to be idempotent, touched %d rows on the second pass", again)
+	}
+
+	// An unknown person row is a silent no-op: there is nothing to attribute.
+	if n, err := store.BackfillPersonExternalID(ctx, "person_ghost", "EMP-1"); err != nil || n != 0 {
+		t.Errorf("expected no-op for a missing person, got n=%d err=%v", n, err)
+	}
+}

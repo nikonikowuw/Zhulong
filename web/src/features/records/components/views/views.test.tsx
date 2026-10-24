@@ -19,6 +19,7 @@ const sampleRecognitions: Recognition[] = [
     pts: 1001,
     trackId: 10,
     personId: 'p-1',
+    personExternalId: 'EMP-1',
     personName: 'Alice Zhang',
     matchedFaceId: 'f-1',
     matched: true,

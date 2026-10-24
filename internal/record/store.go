@@ -124,6 +124,9 @@ func (s *Store) ListRecognitions(ctx context.Context, filter RecognitionFilter) 
 	if filter.PersonID != "" {
 		query = query.Where("person_id = ?", filter.PersonID)
 	}
+	if filter.PersonExternalID != "" {
+		query = query.Where("person_external_id = ?", filter.PersonExternalID)
+	}
 	if filter.Matched != nil {
 		query = query.Where("matched = ?", *filter.Matched)
 	}
@@ -492,24 +495,105 @@ func (s *Store) deleteRetentionRows(ctx context.Context, table string, cutoff ti
 	return res.RowsAffected, nil
 }
 
-// GetFaceImagePath retrieves the image_path associated with the matched face ID from person_faces.
-func (s *Store) GetFaceImagePath(ctx context.Context, faceID string) (string, error) {
-	if faceID == "" {
-		return "", nil
+// GalleryFaceRef is the local identity behind one enrolled face, resolved from the
+// person tables. A zero value means the face is not (or no longer) in the local gallery.
+type GalleryFaceRef struct {
+	ImagePath        string
+	PersonRowID      string
+	PersonExternalID string
+	PersonName       string
+}
+
+// ResolveGalleryFaces maps runner-reported face ids onto their owning person.
+//
+// The lookup is keyed by matched_face_id rather than by the person_id the runner
+// reports. That is deliberate: the IPC payload carries the *external business key*
+// while every recognitions column carries the *internal row id*, so mapping through
+// the payload would either write the wrong value into the foreign key or silently
+// lose records whenever a runner holds a stale gallery. matched_face_id is a primary
+// key of this database, so one JOIN answers both questions at once.
+//
+// Face ids with no local row (deleted between inference and ingest) are absent from
+// the returned map instead of being an error: the caller degrades to an unattributed
+// record, which is still evidence worth keeping.
+func (s *Store) ResolveGalleryFaces(ctx context.Context, faceIDs []string) (map[string]GalleryFaceRef, error) {
+	refs := make(map[string]GalleryFaceRef, len(faceIDs))
+	if len(faceIDs) == 0 {
+		return refs, nil
 	}
 	db, err := s.db(ctx)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	var imagePath string
-	row := db.Table("person_faces").Select("image_path").Where("id = ?", faceID).Row()
-	if err := row.Scan(&imagePath); err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", nil
+
+	unique := make([]string, 0, len(faceIDs))
+	seen := make(map[string]struct{}, len(faceIDs))
+	for _, id := range faceIDs {
+		if id == "" {
+			continue
 		}
-		return "", err
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
 	}
-	return imagePath, nil
+	if len(unique) == 0 {
+		return refs, nil
+	}
+
+	type row struct {
+		FaceID           string
+		ImagePath        string
+		PersonRowID      string
+		PersonExternalID *string
+		PersonName       string
+	}
+	var rows []row
+	if err := db.Table("person_faces AS f").
+		Select("f.id AS face_id, f.image_path, f.person_id AS person_row_id, "+
+			"p.person_id AS person_external_id, p.name AS person_name").
+		Joins("JOIN persons AS p ON p.id = f.person_id").
+		Where("f.id IN ?", unique).
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("resolve gallery faces: %w", err)
+	}
+
+	for _, r := range rows {
+		ref := GalleryFaceRef{
+			ImagePath:   r.ImagePath,
+			PersonRowID: r.PersonRowID,
+			PersonName:  r.PersonName,
+		}
+		if r.PersonExternalID != nil {
+			ref.PersonExternalID = *r.PersonExternalID
+		}
+		refs[r.FaceID] = ref
+	}
+	return refs, nil
+}
+
+// BackfillPersonExternalID fills in the business-key snapshot of recognitions that
+// were captured before their person had one.
+//
+// Only empty snapshots are written: a non-empty value records the identity as it was
+// at capture time, and the person domain makes the business key immutable once set,
+// so rewriting it is never legitimate. Returns the number of rows touched.
+func (s *Store) BackfillPersonExternalID(ctx context.Context, personRowID, externalID string) (int64, error) {
+	if personRowID == "" || externalID == "" {
+		return 0, nil
+	}
+	db, err := s.db(ctx)
+	if err != nil {
+		return 0, err
+	}
+	res := db.Model(&Recognition{}).
+		Where("person_id = ? AND person_external_id = ?", personRowID, "").
+		Update("person_external_id", externalID)
+	if res.Error != nil {
+		return 0, fmt.Errorf("backfill recognition person_external_id: %w", res.Error)
+	}
+	return res.RowsAffected, nil
 }
 
 // ClearRecordSnapshotPaths clears image_path, crop_path, and face_image_path for a record when snapshot generation fails.

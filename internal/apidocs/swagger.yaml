@@ -844,6 +844,11 @@ definitions:
         type: boolean
       matchedFaceId:
         type: string
+      personExternalId:
+        description: |-
+          PersonExternalID 是上报业务系统用的身份：写入时快照的 persons.person_id。
+          空串表示该人员当时尚未绑定业务键 —— 该条记录不可上报，不要回退成 personId。
+        type: string
       personId:
         type: string
       personName:
@@ -2721,9 +2726,13 @@ paths:
         in: query
         name: cameraId
         type: string
-      - description: Filter by person ID
+      - description: Filter by internal person row ID
         in: query
         name: personId
+        type: string
+      - description: Filter by external business key (persons.person_id snapshot)
+        in: query
+        name: personExternalId
         type: string
       - description: Filter by match status
         in: query

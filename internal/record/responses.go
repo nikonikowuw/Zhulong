@@ -14,11 +14,14 @@ type RecognitionResponse struct {
 	AlgorithmID string `json:"algorithmId"`
 	// AlgorithmName/Version 来自写入时快照：算法被卸载后 algorithmId 变空，
 	// 但这两个字段仍能回答「这批记录是哪个算法产生的」。
-	AlgorithmName    string                  `json:"algorithmName"`
-	AlgorithmVersion string                  `json:"algorithmVersion"`
-	PTS              int64                   `json:"pts"`
-	TrackID          int64                   `json:"trackId"`
-	PersonID         *string                 `json:"personId"`
+	AlgorithmName    string  `json:"algorithmName"`
+	AlgorithmVersion string  `json:"algorithmVersion"`
+	PTS              int64   `json:"pts"`
+	TrackID          int64   `json:"trackId"`
+	PersonID         *string `json:"personId"`
+	// PersonExternalID 是上报业务系统用的身份：写入时快照的 persons.person_id。
+	// 空串表示该人员当时尚未绑定业务键 —— 该条记录不可上报，不要回退成 personId。
+	PersonExternalID string                  `json:"personExternalId"`
 	PersonName       string                  `json:"personName"`
 	MatchedFaceID    string                  `json:"matchedFaceId"`
 	Matched          bool                    `json:"matched"`
@@ -82,6 +85,7 @@ func (r *Recognition) ToResponse() RecognitionResponse {
 		PTS:              r.PTS,
 		TrackID:          r.TrackID,
 		PersonID:         r.PersonID,
+		PersonExternalID: r.PersonExternalID,
 		PersonName:       r.PersonName,
 		MatchedFaceID:    r.MatchedFaceID,
 		Matched:          r.Matched,

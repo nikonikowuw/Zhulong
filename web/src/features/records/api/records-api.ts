@@ -31,6 +31,7 @@ export const recordsApi = {
         pageSize: params?.pageSize ?? 20,
         cameraId: params?.cameraId?.trim() || undefined,
         personId: params?.personId?.trim() || undefined,
+        personExternalId: params?.personExternalId?.trim() || undefined,
         matched:
           params?.matched !== undefined ? String(params.matched) : undefined,
         startTime: params?.startTime?.trim() || undefined,

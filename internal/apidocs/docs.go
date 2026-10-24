@@ -2391,8 +2391,14 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Filter by person ID",
+                        "description": "Filter by internal person row ID",
                         "name": "personId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by external business key (persons.person_id snapshot)",
+                        "name": "personExternalId",
                         "in": "query"
                     },
                     {
@@ -4913,6 +4919,10 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "matchedFaceId": {
+                    "type": "string"
+                },
+                "personExternalId": {
+                    "description": "PersonExternalID 是上报业务系统用的身份：写入时快照的 persons.person_id。\n空串表示该人员当时尚未绑定业务键 —— 该条记录不可上报，不要回退成 personId。",
                     "type": "string"
                 },
                 "personId": {

@@ -38,6 +38,9 @@ export const recognitionSchema = z.object({
   pts: z.number().int().default(0),
   trackId: z.number().int().default(0),
   personId: z.string().nullable().default(null),
+  // 上报给业务系统的身份：写入时快照的 persons.person_id。
+  // ⚠️ 与 personId（内部行 ID）不是同一个东西；空串表示该人员当时未绑定业务键。
+  personExternalId: z.string().default(''),
   personName: z.string().default(''),
   matchedFaceId: z.string().default(''),
   matched: z.boolean().default(false),
@@ -136,6 +139,7 @@ export interface GetRecognitionsParams {
   pageSize?: number
   cameraId?: string
   personId?: string
+  personExternalId?: string
   matched?: boolean
   startTime?: string
   endTime?: string
