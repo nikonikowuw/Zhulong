@@ -84,7 +84,7 @@ export function useWebCodecsRenderLoop({
     const diagnostic = createRenderDiagnosticSession(logWebCodecsDiagnostic)
 
     const renderLoop = (timestamp: number) => {
-      diagnostic.count('rafCallbacks')
+      diagnostic.recordRafCallback(timestamp)
       if (!isWebCodecsDiagnosticsEnabled()) {
         lastRafRequestedAtRef.current = null
       } else if (lastRafRequestedAtRef.current !== null) {
@@ -124,7 +124,10 @@ export function useWebCodecsRenderLoop({
         try {
           ctx.drawImage(frame, 0, 0, canvas.width, canvas.height)
           if (drawStartedAt > 0) {
-            diagnostic.recordDraw(performance.now() - drawStartedAt)
+            diagnostic.recordDraw(
+              performance.now() - drawStartedAt,
+              drawStartedAt
+            )
           }
         } catch (error) {
           diagnostic.count('drawErrors')

@@ -20,7 +20,21 @@ export interface RenderDiagnosticCounters {
   drawErrors: number
   frameCallbacks: number
   rafDelayTotalMs: number
+  rafDelaySamples: number
   maxRafDelayMs: number
+  rafIntervalTotalMs: number
+  rafIntervalSamples: number
+  maxRafIntervalMs: number
+  outputCallbackIntervalTotalMs: number
+  outputCallbackIntervalSamples: number
+  maxOutputCallbackIntervalMs: number
+  outputFrameIntervalTotalMs: number
+  outputFrameIntervalSamples: number
+  maxOutputFrameIntervalMs: number
+  nonIncreasingFrameTimestamps: number
+  drawIntervalTotalMs: number
+  drawIntervalSamples: number
+  maxDrawIntervalMs: number
   drawTimeTotalMs: number
   maxDrawTimeMs: number
 }
@@ -43,7 +57,21 @@ function emptyCounters(): RenderDiagnosticCounters {
     drawErrors: 0,
     frameCallbacks: 0,
     rafDelayTotalMs: 0,
+    rafDelaySamples: 0,
     maxRafDelayMs: 0,
+    rafIntervalTotalMs: 0,
+    rafIntervalSamples: 0,
+    maxRafIntervalMs: 0,
+    outputCallbackIntervalTotalMs: 0,
+    outputCallbackIntervalSamples: 0,
+    maxOutputCallbackIntervalMs: 0,
+    outputFrameIntervalTotalMs: 0,
+    outputFrameIntervalSamples: 0,
+    maxOutputFrameIntervalMs: 0,
+    nonIncreasingFrameTimestamps: 0,
+    drawIntervalTotalMs: 0,
+    drawIntervalSamples: 0,
+    maxDrawIntervalMs: 0,
     drawTimeTotalMs: 0,
     maxDrawTimeMs: 0,
   }
@@ -57,9 +85,11 @@ function average(total: number, count: number): number {
 export interface RenderDiagnosticSession {
   /** 计数 +1；诊断关闭时为空操作。 */
   count(counter: RenderDiagnosticCounter): void
-  /** 记录一次成功绘制及其耗时。 */
-  recordDraw(durationMs: number): void
-  /** 记录一次 rAF 实际调度延迟（请求 → 回调）。 */
+  /** 记录一次成功绘制耗时和绘制时刻。 */
+  recordDraw(durationMs: number, timestampMs: number): void
+  /** 记录一次 rAF 回调及其与上次回调的间隔。 */
+  recordRafCallback(timestampMs: number): void
+  /** 记录一次 rAF 请求到回调的调度延迟。 */
   recordRafDelay(delayMs: number): void
   /** 记录一帧解码输出，并按秒输出汇总。 */
   recordOutputFrame(frame: VideoFrame, canvas: HTMLCanvasElement | null): void
@@ -81,11 +111,43 @@ export function createRenderDiagnosticSession(
   let windowStart: number | null = null
   let counters = emptyCounters()
   let lastFrameSize: string | null = null
+  let lastOutputCallbackAt: number | null = null
+  let lastFrameTimestampUs: number | null = null
+  let lastRafCallbackAt: number | null = null
+  let lastDrawAt: number | null = null
 
   const reset = () => {
     windowStart = null
     counters = emptyCounters()
     lastFrameSize = null
+    lastOutputCallbackAt = null
+    lastFrameTimestampUs = null
+    lastRafCallbackAt = null
+    lastDrawAt = null
+  }
+
+  const recordInterval = (
+    intervalMs: number,
+    totalKey:
+      | 'rafIntervalTotalMs'
+      | 'outputCallbackIntervalTotalMs'
+      | 'outputFrameIntervalTotalMs'
+      | 'drawIntervalTotalMs',
+    samplesKey:
+      | 'rafIntervalSamples'
+      | 'outputCallbackIntervalSamples'
+      | 'outputFrameIntervalSamples'
+      | 'drawIntervalSamples',
+    maxKey:
+      | 'maxRafIntervalMs'
+      | 'maxOutputCallbackIntervalMs'
+      | 'maxOutputFrameIntervalMs'
+      | 'maxDrawIntervalMs'
+  ) => {
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) return
+    counters[totalKey] += intervalMs
+    counters[samplesKey]++
+    counters[maxKey] = Math.max(counters[maxKey], intervalMs)
   }
 
   const flush = (now: number, canvas: HTMLCanvasElement | null) => {
@@ -97,7 +159,26 @@ export function createRenderDiagnosticSession(
     log('info', '1s_render_summary', {
       durationMs: Math.round(durationMs),
       ...counters,
-      averageRafDelayMs: average(counters.rafDelayTotalMs, counters.rafCallbacks),
+      averageRafDelayMs: average(
+        counters.rafDelayTotalMs,
+        counters.rafDelaySamples
+      ),
+      averageRafIntervalMs: average(
+        counters.rafIntervalTotalMs,
+        counters.rafIntervalSamples
+      ),
+      averageOutputCallbackIntervalMs: average(
+        counters.outputCallbackIntervalTotalMs,
+        counters.outputCallbackIntervalSamples
+      ),
+      averageOutputFrameIntervalMs: average(
+        counters.outputFrameIntervalTotalMs,
+        counters.outputFrameIntervalSamples
+      ),
+      averageDrawIntervalMs: average(
+        counters.drawIntervalTotalMs,
+        counters.drawIntervalSamples
+      ),
       averageDrawMs: average(counters.drawTimeTotalMs, counters.drawCalls),
       lastFrameSize,
       canvas: canvas
@@ -117,13 +198,38 @@ export function createRenderDiagnosticSession(
     count(counter) {
       if (isWebCodecsDiagnosticsEnabled()) counters[counter]++
     },
-    recordDraw(durationMs) {
+    recordDraw(durationMs, timestampMs) {
+      if (!isWebCodecsDiagnosticsEnabled()) return
       counters.drawCalls++
       counters.drawTimeTotalMs += durationMs
       counters.maxDrawTimeMs = Math.max(counters.maxDrawTimeMs, durationMs)
+      if (lastDrawAt !== null) {
+        recordInterval(
+          timestampMs - lastDrawAt,
+          'drawIntervalTotalMs',
+          'drawIntervalSamples',
+          'maxDrawIntervalMs'
+        )
+      }
+      lastDrawAt = timestampMs
+    },
+    recordRafCallback(timestampMs) {
+      if (!isWebCodecsDiagnosticsEnabled()) return
+      counters.rafCallbacks++
+      if (lastRafCallbackAt !== null) {
+        recordInterval(
+          timestampMs - lastRafCallbackAt,
+          'rafIntervalTotalMs',
+          'rafIntervalSamples',
+          'maxRafIntervalMs'
+        )
+      }
+      lastRafCallbackAt = timestampMs
     },
     recordRafDelay(delayMs) {
+      if (!isWebCodecsDiagnosticsEnabled()) return
       counters.rafDelayTotalMs += delayMs
+      counters.rafDelaySamples++
       counters.maxRafDelayMs = Math.max(counters.maxRafDelayMs, delayMs)
     },
     recordOutputFrame(frame, canvas) {
@@ -136,6 +242,29 @@ export function createRenderDiagnosticSession(
         windowStart = now
       }
       flush(now, canvas)
+      if (lastOutputCallbackAt !== null) {
+        recordInterval(
+          now - lastOutputCallbackAt,
+          'outputCallbackIntervalTotalMs',
+          'outputCallbackIntervalSamples',
+          'maxOutputCallbackIntervalMs'
+        )
+      }
+      if (lastFrameTimestampUs !== null) {
+        const frameIntervalMs = (frame.timestamp - lastFrameTimestampUs) / 1000
+        if (frameIntervalMs > 0) {
+          recordInterval(
+            frameIntervalMs,
+            'outputFrameIntervalTotalMs',
+            'outputFrameIntervalSamples',
+            'maxOutputFrameIntervalMs'
+          )
+        } else {
+          counters.nonIncreasingFrameTimestamps++
+        }
+      }
+      lastOutputCallbackAt = now
+      lastFrameTimestampUs = frame.timestamp
       counters.outputFrames++
       lastFrameSize = `${frame.displayWidth}x${frame.displayHeight}`
     },
