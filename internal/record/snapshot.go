@@ -37,6 +37,11 @@ type WriteGate interface {
 	CanWrite() bool
 }
 
+// SnapshotPathCleaner 负责在抓拍生成或落盘失败时，将记录中预填的虚假图片路径清空。
+type SnapshotPathCleaner interface {
+	ClearRecordSnapshotPaths(ctx context.Context, table, id string) error
+}
+
 // snapshotOutput 描述一张输出图的目标位置。
 type snapshotOutput struct {
 	// boxIndex 为 -1 表示全幅图，>=0 表示 boxes[boxIndex] 的裁剪图。
@@ -50,7 +55,9 @@ type snapshotOutput struct {
 
 // snapshotJob 是一次待执行的抓拍写盘任务。
 type snapshotJob struct {
-	cameraID string
+	cameraID    string
+	targetTable string
+	targetID    string
 	// boxes 是归一化裁剪框，索引 i 对应 boxIndex == i 的输出。
 	boxes   []engine.SnapshotBox
 	outputs []snapshotOutput
@@ -70,6 +77,7 @@ type SnapshotStore struct {
 	provider SnapshotProvider
 	media    MediaRootProvider
 	gate     WriteGate
+	cleaner  SnapshotPathCleaner
 	logger   *zap.Logger
 
 	queue    chan snapshotJob
@@ -121,6 +129,11 @@ func (s *SnapshotStore) Start() {
 func (s *SnapshotStore) Stop() {
 	s.stopOnce.Do(func() { close(s.stop) })
 	s.wg.Wait()
+}
+
+// SetPathCleaner 注入落盘失败时的路径清理器。
+func (s *SnapshotStore) SetPathCleaner(cleaner SnapshotPathCleaner) {
+	s.cleaner = cleaner
 }
 
 // Available 报告抓拍能力是否可用（依赖注入是否齐备）。
@@ -180,10 +193,20 @@ func (s *SnapshotStore) worker() {
 
 // run 执行一次抓拍 + 写盘。所有错误只记日志，不向上传播。
 func (s *SnapshotStore) run(job snapshotJob) {
+	clearOnFailure := func() {
+		if s.cleaner != nil && job.targetTable != "" && job.targetID != "" {
+			if err := s.cleaner.ClearRecordSnapshotPaths(context.Background(), job.targetTable, job.targetID); err != nil {
+				s.logger.Warn("clear snapshot paths on failure failed",
+					zap.String("table", job.targetTable), zap.String("id", job.targetID), zap.Error(err))
+			}
+		}
+	}
+
 	// 存储熔断时不写：写满的盘会让整机录像停摆，抓拍没有资格抢占。
 	if s.gate != nil && !s.gate.CanWrite() {
-		s.logger.Debug("storage gate is closed, skipping snapshot",
+		s.logger.Warn("storage gate is closed, skipping snapshot",
 			zap.String("camera_id", job.cameraID))
+		clearOnFailure()
 		return
 	}
 
@@ -192,6 +215,7 @@ func (s *SnapshotStore) run(job snapshotJob) {
 	if err != nil {
 		s.logger.Warn("resolve media root for snapshot failed",
 			zap.String("camera_id", job.cameraID), zap.Error(err))
+		clearOnFailure()
 		return
 	}
 
@@ -200,8 +224,9 @@ func (s *SnapshotStore) run(job snapshotJob) {
 		Boxes:   job.boxes,
 	})
 	if err != nil {
-		s.logger.Debug("snapshot capture failed",
+		s.logger.Warn("snapshot capture failed",
 			zap.String("camera_id", job.cameraID), zap.Error(err))
+		clearOnFailure()
 		return
 	}
 
@@ -211,16 +236,21 @@ func (s *SnapshotStore) run(job snapshotJob) {
 		byIndex[img.BoxIndex] = img
 	}
 
+	writtenCount := 0
 	for _, out := range job.outputs {
 		img, ok := byIndex[out.boxIndex]
 		if !ok {
+			s.logger.Warn("snapshot image for output not found in result",
+				zap.Int("box_index", out.boxIndex),
+				zap.String("rel_path", out.relPath),
+				zap.Int("total_images", len(images)))
 			continue
 		}
 		abs := filepath.Join(root, out.relPath)
 		if err := os.MkdirAll(filepath.Dir(abs), 0o750); err != nil {
 			s.logger.Warn("create snapshot directory failed",
 				zap.String("camera_id", job.cameraID), zap.String("dir", filepath.Dir(abs)), zap.Error(err))
-			return
+			continue
 		}
 		marker := abs + ".lock"
 		if out.protected {
@@ -243,7 +273,15 @@ func (s *SnapshotStore) run(job snapshotJob) {
 			}
 			s.logger.Warn("write snapshot file failed",
 				zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Error(err))
+			continue
 		}
+		s.logger.Info("snapshot file written successfully",
+			zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Int("bytes", len(img.JPEG)))
+		writtenCount++
+	}
+
+	if writtenCount == 0 && len(job.outputs) > 0 {
+		clearOnFailure()
 	}
 }
 

@@ -243,13 +243,6 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.storageReady = true
 	}
 
-	if r.algorithm != nil {
-		if err := r.algorithm.Start(ctx); err != nil {
-			r.logger.Warn("algorithm start warning", zap.Error(err))
-		}
-		r.algorithmReady = true
-	}
-
 	if r.person != nil {
 		if err := r.person.Start(ctx); err != nil {
 			r.logger.Warn("person start warning", zap.Error(err))
@@ -275,44 +268,46 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 
 	if r.nativeLog != nil {
 		if err := r.nativeLog.Start(); err != nil {
-			startupErr := fmt.Errorf("start native log queue: %w", err)
-			return r.failStart(startupErr, r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+			return r.failStart(fmt.Errorf("start native log queue: %w", err), r.rollback(ctx)...)
 		}
 		r.nativeLogReady = true
 		logEngine, ok := r.native.(nativeLogEngineLifecycle)
 		if !ok {
-			startupErr := errors.New("native engine does not support log callback lifecycle")
-			return r.failStart(startupErr, r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+			return r.failStart(errors.New("native engine does not support log callback lifecycle"), r.rollback(ctx)...)
 		}
 		if err := logEngine.SetNativeLogSink(r.nativeLog); err != nil {
-			startupErr := fmt.Errorf("register native log callback: %w", err)
-			return r.failStart(startupErr, r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+			return r.failStart(fmt.Errorf("register native log callback: %w", err), r.rollback(ctx)...)
 		}
 		r.nativeLogRegistered = true
 	}
 
 	if err := r.native.Start(); err != nil {
-		startupErr := fmt.Errorf("start native engine: %w", err)
-		return r.failStart(startupErr, r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+		return r.failStart(fmt.Errorf("start native engine: %w", err), r.rollback(ctx)...)
 	}
 	r.nativeReady = true
 
 	if r.camera != nil {
 		if err := r.camera.InitCipher(ctx); err != nil {
-			startupErr := fmt.Errorf("initialize camera cipher: %w", err)
-			return r.failStart(startupErr, r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+			return r.failStart(fmt.Errorf("initialize camera cipher: %w", err), r.rollback(ctx)...)
 		}
 		if err := r.camera.Start(ctx); err != nil {
-			startupErr := fmt.Errorf("start camera scheduler: %w", err)
-			return r.failStart(startupErr, r.closeCamera(), r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+			return r.failStart(fmt.Errorf("start camera scheduler: %w", err), r.rollback(ctx)...)
 		}
 		r.cameraReady = true
 	}
 
+	// 算法管理必须在 native 引擎启动与 camera 初始化之后启动：
+	// 这样开机自动拉起 active 算法时，能够成功解密 URI 并通过 Engine.AcquireStream 建立 AI 物理流。
+	if r.algorithm != nil {
+		if err := r.algorithm.Start(ctx); err != nil {
+			r.logger.Warn("algorithm start warning", zap.Error(err))
+		}
+		r.algorithmReady = true
+	}
+
 	listener, err := r.listen("tcp", r.server.Addr)
 	if err != nil {
-		startupErr := fmt.Errorf("listen on %s: %w", r.server.Addr, err)
-		return r.failStart(startupErr, r.closeCamera(), r.closeAlgorithm(ctx), r.closePerson(ctx), r.closeRecordAndSnapshot(ctx), r.closeStorage(ctx), r.closeSystemTime(ctx), r.closeNetwork(ctx), r.closeAudit(ctx), r.closeNative(ctx), r.closeDatabase())
+		return r.failStart(fmt.Errorf("listen on %s: %w", r.server.Addr, err), r.rollback(ctx)...)
 	}
 	r.listener = listener
 	r.serveDone = make(chan error, 1)
@@ -331,6 +326,25 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	}
 	r.logger.Info("HTTP server started", zap.String("address", listener.Addr().String()))
 	return nil
+}
+
+// rollback 按依赖逆序释放已启动的阶段，供 Start 失败时统一收尾。
+//
+// 每个 close* 都自检各自的 ready 标志，因此无条件走完整序列与「按失败点截断」等价，
+// 不会重复关闭。顺序即反向依赖：先停有数据流入的（算法/相机/record），再拆基础设施。
+func (r *lifecycleRuntime) rollback(ctx context.Context) []error {
+	return []error{
+		r.closeAlgorithm(ctx),
+		r.closeCamera(),
+		r.closePerson(ctx),
+		r.closeRecordAndSnapshot(ctx),
+		r.closeStorage(ctx),
+		r.closeSystemTime(ctx),
+		r.closeNetwork(ctx),
+		r.closeAudit(ctx),
+		r.closeNative(ctx),
+		r.closeDatabase(),
+	}
 }
 
 func (r *lifecycleRuntime) failStart(startupErr error, cleanup ...error) error {

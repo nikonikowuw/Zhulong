@@ -327,3 +327,57 @@ func TestServiceEnqueuesSnapshotOnRecord(t *testing.T) {
 		t.Errorf("scene-wide alarm must not request crops, got %d boxes", len(opts.Boxes))
 	}
 }
+
+// TestSnapshotStoreClearsPathsOnSnapshotFailure 验证当底层视频源截图失败时，
+// 数据库中预填的图片路径会被自动清空，防止前端拿到死链。
+func TestSnapshotStoreClearsPathsOnSnapshotFailure(t *testing.T) {
+	store, dbStore, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	root := t.TempDir()
+	provider := &fakeSnapshotProvider{err: errors.New("stream decoding unavailable")}
+	snapshots := record.NewSnapshotStore(provider, &fakeMediaRoot{root: root}, &fakeGate{allow: true}, 85, zap.NewNop())
+	snapshots.SetPathCleaner(store)
+	snapshots.Start()
+	defer snapshots.Stop()
+
+	svc := record.NewService(store, zap.NewNop())
+	svc.SetSnapshotStore(snapshots)
+
+	captureTime := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	res := aitypes.InferenceResult{
+		CameraID:    "cam_01",
+		AlgorithmID: "algo_01",
+		PTS:         1000,
+		Timestamp:   captureTime,
+		TaskType:    aitypes.TaskTypeVehicleStructure,
+		Vehicles: []aitypes.VehicleItem{
+			{
+				TrackID:      101,
+				VehicleBox:   [4]float64{0.1, 0.2, 0.5, 0.6},
+				VehicleScore: 0.92,
+				Plates: []aitypes.PlateSubItem{
+					{
+						Box:         [4]float64{0.2, 0.3, 0.4, 0.5},
+						Score:       0.95,
+						PlateNumber: "粤B12345",
+					},
+				},
+			},
+		},
+	}
+
+	if err := svc.ProcessInferenceResult(ctx, res); err != nil {
+		t.Fatalf("ProcessInferenceResult: %v", err)
+	}
+
+	// 等待异步抓拍失败后清空路径
+	waitFor(t, "capture snapshot paths cleared on failure", func() bool {
+		var caps []record.Capture
+		if err := dbStore.DB().Find(&caps).Error; err != nil || len(caps) != 1 {
+			return false
+		}
+		return caps[0].ImagePath == "" && caps[0].CropPath == ""
+	})
+}

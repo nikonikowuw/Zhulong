@@ -514,9 +514,16 @@ func (h *StreamHub) Snapshot(ctx context.Context, cameraID string, options engin
 	h.mu.Unlock()
 
 	if ref == nil {
+		h.logger.Warn("StreamHub.Snapshot: no active AI stream for camera",
+			zap.String("camera_id", cameraID))
 		return nil, ErrAIStreamInactive
 	}
-	return ref.stream.Snapshot(ctx, options)
+	imgs, err := ref.stream.Snapshot(ctx, options)
+	if err != nil {
+		h.logger.Warn("StreamHub.Snapshot: stream.Snapshot failed",
+			zap.String("camera_id", cameraID), zap.Error(err))
+	}
+	return imgs, err
 }
 
 // Close 停机时安全关闭所有分发器。

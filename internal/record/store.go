@@ -511,3 +511,33 @@ func (s *Store) GetFaceImagePath(ctx context.Context, faceID string) (string, er
 	}
 	return imagePath, nil
 }
+
+// ClearRecordSnapshotPaths clears image_path, crop_path, and face_image_path for a record when snapshot generation fails.
+func (s *Store) ClearRecordSnapshotPaths(ctx context.Context, table, id string) error {
+	if id == "" {
+		return nil
+	}
+	db, err := s.db(ctx)
+	if err != nil {
+		return err
+	}
+	switch table {
+	case tableCaptures:
+		return db.Model(&Capture{}).Where("id = ?", id).Updates(map[string]any{
+			"image_path": "",
+			"crop_path":  "",
+		}).Error
+	case tableAlarms:
+		return db.Model(&Alarm{}).Where("id = ?", id).Updates(map[string]any{
+			"image_path": "",
+			"crop_path":  "",
+		}).Error
+	case tableRecognitions:
+		return db.Model(&Recognition{}).Where("id = ?", id).Updates(map[string]any{
+			"image_path":      "",
+			"face_image_path": "",
+		}).Error
+	default:
+		return nil
+	}
+}

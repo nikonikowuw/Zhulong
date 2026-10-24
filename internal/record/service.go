@@ -164,7 +164,9 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 					recognitions = append(recognitions, rec)
 
 					recognitionSnapshots = append(recognitionSnapshots, snapshotJob{
-						cameraID: res.CameraID,
+						cameraID:    res.CameraID,
+						targetTable: tableRecognitions,
+						targetID:    recID,
 						boxes: []engine.SnapshotBox{
 							{face.Box[0], face.Box[1], face.Box[2], face.Box[3]},
 						},
@@ -207,7 +209,9 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 			captures = append(captures, cap)
 
 			captureSnapshots = append(captureSnapshots, snapshotJob{
-				cameraID: res.CameraID,
+				cameraID:    res.CameraID,
+				targetTable: tableCaptures,
+				targetID:    capID,
 				boxes: []engine.SnapshotBox{
 					{p.BodyBox[0], p.BodyBox[1], p.BodyBox[2], p.BodyBox[3]},
 				},
@@ -303,7 +307,9 @@ func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.Infer
 			captures = append(captures, cap)
 
 			snapshots = append(snapshots, snapshotJob{
-				cameraID: res.CameraID,
+				cameraID:    res.CameraID,
+				targetTable: tableCaptures,
+				targetID:    capID,
 				boxes: []engine.SnapshotBox{
 					{v.VehicleBox[0], v.VehicleBox[1], v.VehicleBox[2], v.VehicleBox[3]},
 				},
@@ -376,9 +382,11 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 					outs = append(outs, snapshotOutput{boxIndex: 0, relPath: cropPath, protected: true})
 				}
 				alarmSnapshots = append(alarmSnapshots, snapshotJob{
-					cameraID: res.CameraID,
-					boxes:    boxList,
-					outputs:  outs,
+					cameraID:    res.CameraID,
+					targetTable: tableAlarms,
+					targetID:    alarmID,
+					boxes:       boxList,
+					outputs:     outs,
 				})
 			}
 		} else {
@@ -412,7 +420,9 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 				captures = append(captures, cap)
 
 				captureSnapshots = append(captureSnapshots, snapshotJob{
-					cameraID: res.CameraID,
+					cameraID:    res.CameraID,
+					targetTable: tableCaptures,
+					targetID:    capID,
 					boxes: []engine.SnapshotBox{
 						{d.Box[0], d.Box[1], d.Box[2], d.Box[3]},
 					},
@@ -473,8 +483,10 @@ func (s *Service) processClassification(ctx context.Context, res aitypes.Inferen
 
 				// 分类结果没有检测框，只能出全幅图。
 				snapshots = append(snapshots, snapshotJob{
-					cameraID: res.CameraID,
-					outputs:  []snapshotOutput{{boxIndex: -1, relPath: fullPath, protected: true}},
+					cameraID:    res.CameraID,
+					targetTable: tableAlarms,
+					targetID:    alarmID,
+					outputs:     []snapshotOutput{{boxIndex: -1, relPath: fullPath, protected: true}},
 				})
 			}
 		}
@@ -507,13 +519,28 @@ func optionalAlgorithmID(id string) *string {
 
 // enqueueSnapshots 把成功落库记录对应的抓拍任务登记到后台队列。
 //
-// 写库失败的任务不得落盘，否则会产生没有数据库引用的孤儿图片。
+// 写库失败的任务不得落盘，否则会产生没有数据库引用的孤儿图片；
+// 若抓拍队列不可用或丢弃任务，则清理已预填的虚假图片路径，避免死链。
 func (s *Service) enqueueSnapshots(jobs []snapshotJob) {
 	if s.snapshots == nil {
 		return
 	}
 	for _, job := range jobs {
-		s.snapshots.Enqueue(job)
+		if !s.snapshots.Enqueue(job) {
+			s.clearJobPaths([]snapshotJob{job})
+		}
+	}
+}
+
+func (s *Service) clearJobPaths(jobs []snapshotJob) {
+	if s.store == nil {
+		return
+	}
+	ctx := context.Background()
+	for _, job := range jobs {
+		if job.targetTable != "" && job.targetID != "" {
+			_ = s.store.ClearRecordSnapshotPaths(ctx, job.targetTable, job.targetID)
+		}
 	}
 }
 

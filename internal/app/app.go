@@ -734,12 +734,13 @@ var clientLogModule = fx.Module("client-log",
 type recordOut struct {
 	fx.Out
 
-	Store           *record.Store
-	Service         *record.Service
-	Handler         *record.Handler
-	Snapshots       *record.SnapshotStore
-	Lifecycle       recordLifecycle
-	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+	Store             *record.Store
+	Service           *record.Service
+	Handler           *record.Handler
+	Snapshots         *record.SnapshotStore
+	SnapshotLifecycle snapshotLifecycle
+	Lifecycle         recordLifecycle
+	ProtectedRoutes   RouteRegistrar `group:"protected_routes"`
 }
 
 func provideRecord(
@@ -778,18 +779,20 @@ func provideRecord(
 		0, // 0 = 使用 engine.DefaultSnapshotQuality
 		logger,
 	)
+	snapshots.SetPathCleaner(comp.Store)
 	comp.Service.SetSnapshotStore(snapshots)
 
 	if streamHub != nil {
 		streamHub.SetAIConsumer(comp.Service)
 	}
 	return recordOut{
-		Store:           comp.Store,
-		Service:         comp.Service,
-		Handler:         comp.Handler,
-		Snapshots:       snapshots,
-		Lifecycle:       comp.Lifecycle,
-		ProtectedRoutes: comp.ProtectedRoutes,
+		Store:             comp.Store,
+		Service:           comp.Service,
+		Handler:           comp.Handler,
+		Snapshots:         snapshots,
+		SnapshotLifecycle: snapshots,
+		Lifecycle:         comp.Lifecycle,
+		ProtectedRoutes:   comp.ProtectedRoutes,
 	}
 }
 
