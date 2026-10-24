@@ -51,9 +51,51 @@ func validateConsumer(consumerID uint64, kind ConsumerKind) error {
 	return nil
 }
 
+// subscriptionLimits 是收敛后的订阅队列预算。
+type subscriptionLimits struct {
+	maxPackets       int
+	maxPacketBytes   int
+	maxBufferedBytes int
+}
+
+// validate 把调用方给出的上限收敛成确定值：0 取默认值，超过硬上限即拒绝。
+func (l subscriptionLimits) validate() (subscriptionLimits, error) {
+	limits := subscriptionLimits{
+		maxPackets:       DefaultMaxPackets,
+		maxPacketBytes:   DefaultMaxPacketBytes,
+		maxBufferedBytes: DefaultMaxBufferedBytes,
+	}
+
+	if l.maxPackets < 0 || l.maxPackets > HardLimitMaxPackets {
+		return subscriptionLimits{}, fmt.Errorf("%w: MaxPackets must be within [1, %d]", ErrInvalidArgument, HardLimitMaxPackets)
+	}
+	if l.maxPacketBytes < 0 || l.maxPacketBytes > HardLimitMaxPacketBytes {
+		return subscriptionLimits{}, fmt.Errorf("%w: MaxPacketBytes must be within [1, %d]", ErrInvalidArgument, HardLimitMaxPacketBytes)
+	}
+	if l.maxBufferedBytes < 0 || l.maxBufferedBytes > HardLimitMaxBufferedBytes {
+		return subscriptionLimits{}, fmt.Errorf("%w: MaxBufferedBytes must be within [1, %d]", ErrInvalidArgument, HardLimitMaxBufferedBytes)
+	}
+
+	if l.maxPackets > 0 {
+		limits.maxPackets = l.maxPackets
+	}
+	if l.maxPacketBytes > 0 {
+		limits.maxPacketBytes = l.maxPacketBytes
+	}
+	if l.maxBufferedBytes > 0 {
+		limits.maxBufferedBytes = l.maxBufferedBytes
+	}
+	// 注意：MaxBufferedBytes < MaxPacketBytes 是合法配置 —— 它等价于
+	// 「单个包超过总字节预算就立即触发背压」，用于按总字节强制限流。
+	return limits, nil
+}
+
 const (
-	defaultTimeoutMs  = 5000
-	maxAllowedTimeout = 24 * time.Hour
+	defaultTimeoutMs = 5000
+	// maxAllowedTimeout 同时是优雅停机的最坏阻塞上界：Close 必须等在途的阻塞式
+	// CGO 调用（如 Acquire 的 RTSP open）返回之后才能销毁句柄，所以这个上限
+	// 不能大到让停机超时。实网 RTSP 建连通常 < 5s，2 分钟已是极宽裕的门槛。
+	maxAllowedTimeout = 2 * time.Minute
 )
 
 // resolveTimeoutMs 计算毫秒超时值。
@@ -72,7 +114,7 @@ func resolveTimeoutMs(d time.Duration, ctx context.Context, clampToContext bool)
 		return 0, fmt.Errorf("%w: timeout cannot be negative", ErrInvalidArgument)
 	}
 	if d > maxAllowedTimeout {
-		return 0, fmt.Errorf("%w: timeout exceeds maximum allowed 24h", ErrInvalidArgument)
+		return 0, fmt.Errorf("%w: timeout exceeds maximum allowed %s", ErrInvalidArgument, maxAllowedTimeout)
 	}
 
 	timeoutMs := uint32(defaultTimeoutMs)

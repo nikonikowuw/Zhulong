@@ -10,7 +10,7 @@ import "C"
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"runtime"
 	"unsafe"
 )
@@ -24,10 +24,14 @@ const DefaultSnapshotQuality = 85
 
 // ErrSnapshotUnavailable 表示原生侧不具备抓拍能力（静态 FFmpeg 未编译 mjpeg
 // 编码器，或目标平台不支持）。它与「本次抓拍失败」不同：重试永远不会成功。
+//
+// ⚠️ 独占 StatusSnapshotUnavailable：不能复用 StatusUnsupported，否则
+// errors.Is(err, ErrUnsupported) 与 errors.Is(err, ErrSnapshotUnavailable)
+// 会在彼此的错误上互相为真。
 var ErrSnapshotUnavailable = &NativeError{
 	Op:      "snapshot",
-	Code:    StatusUnsupported,
-	Message: "jpeg encoder is not available in this build",
+	Code:    StatusSnapshotUnavailable,
+	Message: statusMessage(StatusSnapshotUnavailable),
 }
 
 // SnapshotBox 是一个归一化裁剪框，坐标语义与 aitypes.DetectionItem.Box 完全一致：
@@ -159,13 +163,13 @@ func (e *Engine) snapshot(gen uint64, streamID C.Zhulong_stream_id, req *C.Zhulo
 		return nil, mapNativeStatus("snapshot", int32(st))
 	}
 	if result == nil {
-		return nil, errors.New("native snapshot returned a nil handle")
+		return nil, fmt.Errorf("%w: native snapshot returned a nil handle", ErrInternal)
 	}
 	defer C.Zhulong_snapshot_destroy(result)
 
 	count := int(C.Zhulong_snapshot_count(result))
 	if count <= 0 {
-		return nil, errors.New("native snapshot returned no images")
+		return nil, fmt.Errorf("%w: native snapshot returned no images", ErrInternal)
 	}
 
 	images := make([]SnapshotImage, 0, count)
@@ -186,7 +190,7 @@ func (e *Engine) snapshot(gen uint64, streamID C.Zhulong_stream_id, req *C.Zhulo
 		})
 	}
 	if len(images) == 0 {
-		return nil, errors.New("native snapshot returned only empty images")
+		return nil, fmt.Errorf("%w: native snapshot returned only empty images", ErrInternal)
 	}
 	return images, nil
 }

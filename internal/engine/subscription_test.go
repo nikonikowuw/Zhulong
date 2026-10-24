@@ -7,14 +7,26 @@ import (
 	"time"
 )
 
+// newTestSubscription 构造一个不绑定物理流的订阅，用于验证队列语义。
+func newTestSubscription(t *testing.T, limits subscriptionLimits) *Subscription {
+	t.Helper()
+
+	validated, err := limits.validate()
+	if err != nil {
+		t.Fatalf("validate limits: %v", err)
+	}
+	return &Subscription{
+		limits: validated,
+		core:   newQueueCore[Packet](func(pkt Packet) int { return len(pkt.Data) }),
+	}
+}
+
 func TestSubscriptionQueueAndNext(t *testing.T) {
-	sub := &Subscription{
+	sub := newTestSubscription(t, subscriptionLimits{
 		maxPackets:       10,
 		maxPacketBytes:   1024,
 		maxBufferedBytes: 4096,
-		notify:           make(chan struct{}, 1),
-		done:             make(chan struct{}),
-	}
+	})
 
 	payload := []byte("test_h264_payload")
 
@@ -57,25 +69,24 @@ func TestSubscriptionQueueAndNext(t *testing.T) {
 }
 
 func TestSubscriptionBackpressureMaxPackets(t *testing.T) {
-	sub := &Subscription{
+	sub := newTestSubscription(t, subscriptionLimits{
 		maxPackets:       2,
 		maxPacketBytes:   1024,
 		maxBufferedBytes: 4096,
-		notify:           make(chan struct{}, 1),
-		done:             make(chan struct{}),
-	}
+	})
 
 	raw := []byte("frame")
+	frame := inboundPacket{Codec: CodecH264, TimeBase: Rational{Num: 1, Den: 90000}, Data: raw, Size: len(raw)}
 
-	sub.onPacketData(inboundPacket{Codec: CodecH264, TimeBase: Rational{Num: 1, Den: 90000}, Data: raw, Size: len(raw)})
-	sub.onPacketData(inboundPacket{Codec: CodecH264, TimeBase: Rational{Num: 1, Den: 90000}, Data: raw, Size: len(raw)})
+	sub.onPacketData(frame)
+	sub.onPacketData(frame)
 
 	if sub.Err() != nil {
 		t.Fatalf("unexpected error before overflow: %v", sub.Err())
 	}
 
 	// 第 3 包应当触发背压
-	sub.onPacketData(inboundPacket{Codec: CodecH264, TimeBase: Rational{Num: 1, Den: 90000}, Data: raw, Size: len(raw)})
+	sub.onPacketData(frame)
 
 	if !errors.Is(sub.Err(), ErrBackpressure) {
 		t.Fatalf("expected ErrBackpressure, got %v", sub.Err())
@@ -91,14 +102,33 @@ func TestSubscriptionBackpressureMaxPackets(t *testing.T) {
 	}
 }
 
+func TestSubscriptionBackpressureMaxBufferedBytes(t *testing.T) {
+	sub := newTestSubscription(t, subscriptionLimits{
+		maxPackets:       8,
+		maxPacketBytes:   100,
+		maxBufferedBytes: 250,
+	})
+
+	frame := inboundPacket{Codec: CodecH264, TimeBase: Rational{Num: 1, Den: 90000}, Data: make([]byte, 100), Size: 100}
+	sub.onPacketData(frame)
+	sub.onPacketData(frame)
+	if sub.Err() != nil {
+		t.Fatalf("byte budget should hold two packets: %v", sub.Err())
+	}
+
+	// 第 3 包让总字节数越过 250 的预算
+	sub.onPacketData(frame)
+	if !errors.Is(sub.Err(), ErrBackpressure) {
+		t.Fatalf("expected ErrBackpressure from byte budget, got %v", sub.Err())
+	}
+}
+
 func TestSubscriptionPacketTooLarge(t *testing.T) {
-	sub := &Subscription{
+	sub := newTestSubscription(t, subscriptionLimits{
 		maxPackets:       10,
 		maxPacketBytes:   100,
 		maxBufferedBytes: 1000,
-		notify:           make(chan struct{}, 1),
-		done:             make(chan struct{}),
-	}
+	})
 
 	huge := make([]byte, 200)
 	sub.onPacketData(inboundPacket{Codec: CodecH264, TimeBase: Rational{Num: 1, Den: 90000}, Data: huge, Size: len(huge)})
@@ -109,13 +139,11 @@ func TestSubscriptionPacketTooLarge(t *testing.T) {
 }
 
 func TestSubscriptionNextContextCancellation(t *testing.T) {
-	sub := &Subscription{
+	sub := newTestSubscription(t, subscriptionLimits{
 		maxPackets:       10,
 		maxPacketBytes:   1024,
 		maxBufferedBytes: 4096,
-		notify:           make(chan struct{}, 1),
-		done:             make(chan struct{}),
-	}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -127,13 +155,11 @@ func TestSubscriptionNextContextCancellation(t *testing.T) {
 }
 
 func TestSubscriptionCloseIdempotency(t *testing.T) {
-	sub := &Subscription{
+	sub := newTestSubscription(t, subscriptionLimits{
 		maxPackets:       10,
 		maxPacketBytes:   1024,
 		maxBufferedBytes: 4096,
-		notify:           make(chan struct{}, 1),
-		done:             make(chan struct{}),
-	}
+	})
 
 	if err := sub.Close(); err != nil {
 		t.Fatalf("first Close failed: %v", err)
@@ -157,14 +183,33 @@ func TestSubscriptionCloseIdempotency(t *testing.T) {
 	}
 }
 
-func TestSubscriptionInvalidPacket(t *testing.T) {
-	sub := &Subscription{
+func TestSubscriptionCloseDropsQueuedPackets(t *testing.T) {
+	sub := newTestSubscription(t, subscriptionLimits{
 		maxPackets:       10,
 		maxPacketBytes:   1024,
 		maxBufferedBytes: 4096,
-		notify:           make(chan struct{}, 1),
-		done:             make(chan struct{}),
+	})
+
+	raw := []byte("frame")
+	sub.onPacketData(inboundPacket{Codec: CodecH264, TimeBase: Rational{Num: 1, Den: 90000}, Data: raw, Size: len(raw)})
+
+	if err := sub.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
 	}
+
+	// 关闭后不得再交付陈旧帧
+	_, err := sub.Next(context.Background())
+	if !errors.Is(err, ErrClosed) {
+		t.Fatalf("expected ErrClosed instead of stale packet, got %v", err)
+	}
+}
+
+func TestSubscriptionInvalidPacket(t *testing.T) {
+	sub := newTestSubscription(t, subscriptionLimits{
+		maxPackets:       10,
+		maxPacketBytes:   1024,
+		maxBufferedBytes: 4096,
+	})
 
 	// 模拟 data == nil 但 size > 0 的脏包视图
 	sub.onPacket(nil) // nil packet 不做处理
@@ -180,13 +225,11 @@ func TestSubscriptionInvalidPacket(t *testing.T) {
 }
 
 func TestSubscriptionControlLoopContextCancelled(t *testing.T) {
-	sub := &Subscription{
+	sub := newTestSubscription(t, subscriptionLimits{
 		maxPackets:       10,
 		maxPacketBytes:   1024,
 		maxBufferedBytes: 4096,
-		notify:           make(chan struct{}, 1),
-		done:             make(chan struct{}),
-	}
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -195,5 +238,72 @@ func TestSubscriptionControlLoopContextCancelled(t *testing.T) {
 
 	if !errors.Is(sub.Err(), context.Canceled) {
 		t.Fatalf("expected context.Canceled in sub.Err(), got %v", sub.Err())
+	}
+}
+
+func TestSubscriptionLimitsValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		limits  subscriptionLimits
+		wantErr bool
+		want    subscriptionLimits
+	}{
+		{
+			name:   "zero means defaults",
+			limits: subscriptionLimits{},
+			want: subscriptionLimits{
+				maxPackets:       DefaultMaxPackets,
+				maxPacketBytes:   DefaultMaxPacketBytes,
+				maxBufferedBytes: DefaultMaxBufferedBytes,
+			},
+		},
+		{
+			name:    "max packets over hard limit",
+			limits:  subscriptionLimits{maxPackets: HardLimitMaxPackets + 1},
+			wantErr: true,
+		},
+		{
+			name:    "max packet bytes over hard limit",
+			limits:  subscriptionLimits{maxPacketBytes: HardLimitMaxPacketBytes + 1},
+			wantErr: true,
+		},
+		{
+			name:    "max buffered bytes over hard limit",
+			limits:  subscriptionLimits{maxBufferedBytes: HardLimitMaxBufferedBytes + 1},
+			wantErr: true,
+		},
+		{
+			name:    "negative value rejected",
+			limits:  subscriptionLimits{maxPackets: -1},
+			wantErr: true,
+		},
+		{
+			// 合法：等价于「单包超过总预算即触发背压」，用于按总字节强制限流。
+			name:   "byte budget smaller than a single packet",
+			limits: subscriptionLimits{maxPacketBytes: 8192, maxBufferedBytes: 4096},
+			want: subscriptionLimits{
+				maxPackets:       DefaultMaxPackets,
+				maxPacketBytes:   8192,
+				maxBufferedBytes: 4096,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := test.limits.validate()
+			if test.wantErr {
+				if !errors.Is(err, ErrInvalidArgument) {
+					t.Fatalf("validate() error = %v, want ErrInvalidArgument", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validate() error = %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("validate() = %+v, want %+v", got, test.want)
+			}
+		})
 	}
 }

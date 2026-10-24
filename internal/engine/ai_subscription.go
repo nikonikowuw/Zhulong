@@ -9,10 +9,8 @@ import "C"
 
 import (
 	"context"
-	"runtime/cgo"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // AIResultSubscription 封装对物理流 AI 推理结果事件流的订阅。
@@ -21,52 +19,45 @@ type AIResultSubscription struct {
 	stream     *Stream
 	streamID   C.Zhulong_stream_id
 	id         C.Zhulong_subscription_id
-	token      uintptr
+	token      cgoToken
 	generation uint64
 
 	capacity int
 
-	mu           sync.Mutex
-	queue        [][]byte
-	droppedCount atomic.Uint64
-	closed       bool
-	err          error
-
-	notify        chan struct{}
-	done          chan struct{}
+	core          *queueCore[[]byte]
+	droppedCount  atomic.Uint64
 	closeOnce     sync.Once
-	tokenDeleted  atomic.Bool
 	cancelControl context.CancelFunc
 }
 
+// defaultAIResultCapacity 是 AI 结果队列的默认深度（丢最旧策略，不宜过深）。
+const defaultAIResultCapacity = 32
+
 func newAIResultSubscription(s *Stream, streamID C.Zhulong_stream_id, gen uint64, capacity int) *AIResultSubscription {
 	if capacity <= 0 {
-		capacity = 32
+		capacity = defaultAIResultCapacity
 	}
 	return &AIResultSubscription{
 		stream:     s,
 		streamID:   streamID,
 		generation: gen,
 		capacity:   capacity,
-		queue:      make([][]byte, 0, capacity),
-		notify:     make(chan struct{}, 1),
-		done:       make(chan struct{}),
+		core:       newQueueCore[[]byte](func(payload []byte) int { return len(payload) }),
 	}
+}
+
+// NewAIResultSubscriptionForTest 创建用于测试的隔离 AIResultSubscription 及模拟推流函数。
+//
+// ⚠️ 仅供测试：生产路径必须通过 Stream.SubscribeAIResults 取得实例，
+// 否则拿不到 generation / streamID，也就无法安全注销。
+func NewAIResultSubscriptionForTest(capacity int) (*AIResultSubscription, func(data []byte)) {
+	sub := newAIResultSubscription(nil, 1, 1, capacity)
+	return sub, func(data []byte) { sub.onResult(1, data) }
 }
 
 func (s *AIResultSubscription) init(id C.Zhulong_subscription_id, token uintptr) {
 	s.id = id
-	s.token = token
-}
-
-func (s *AIResultSubscription) deleteToken() {
-	if s.token == 0 {
-		return
-	}
-	if s.tokenDeleted.CompareAndSwap(false, true) {
-		h := cgo.Handle(s.token)
-		h.Delete()
-	}
+	s.token.value = token
 }
 
 // onResult 由 CGO 回调在 Native 工作线程同步调用。
@@ -74,57 +65,14 @@ func (s *AIResultSubscription) onResult(streamID uint64, data []byte) {
 	if len(data) == 0 {
 		return
 	}
-
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return
-	}
-
-	// 丢最旧（Drop Oldest）背压策略
-	if len(s.queue) >= s.capacity {
-		s.queue[0] = nil // 协助 GC
-		s.queue = s.queue[1:]
-		s.droppedCount.Add(1)
-	}
-
-	s.queue = append(s.queue, data)
-	s.mu.Unlock()
-
-	select {
-	case s.notify <- struct{}{}:
-	default:
+	if dropped := s.core.pushDropOldest(data, s.capacity); dropped > 0 {
+		s.droppedCount.Add(uint64(dropped))
 	}
 }
 
 // Next 阻塞等待获取下一个 AI 推理结果 JSON 原始载荷，支持 Context 取消。
 func (s *AIResultSubscription) Next(ctx context.Context) ([]byte, error) {
-	for {
-		s.mu.Lock()
-		if len(s.queue) > 0 {
-			res := s.queue[0]
-			s.queue[0] = nil
-			s.queue = s.queue[1:]
-			s.mu.Unlock()
-			return res, nil
-		}
-		if s.closed {
-			err := s.err
-			s.mu.Unlock()
-			if err == nil {
-				return nil, ErrClosed
-			}
-			return nil, err
-		}
-		s.mu.Unlock()
-
-		select {
-		case <-s.notify:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-s.done:
-		}
-	}
+	return s.core.next(ctx)
 }
 
 // DroppedCount 返回因慢消费而被丢弃的历史结果数量。
@@ -132,114 +80,59 @@ func (s *AIResultSubscription) DroppedCount() uint64 {
 	return s.droppedCount.Load()
 }
 
-// NewAIResultSubscriptionForTest 创建用于测试的隔离 AIResultSubscription 及模拟推流函数。
-func NewAIResultSubscriptionForTest(capacity int) (*AIResultSubscription, func(data []byte)) {
-	sub := newAIResultSubscription(nil, 1, 1, capacity)
-	feed := func(data []byte) {
-		sub.onResult(1, data)
-	}
-	return sub, feed
-}
-
 // Done 返回订阅关闭的只读通道。
 func (s *AIResultSubscription) Done() <-chan struct{} {
-	return s.done
+	return s.core.Done()
 }
 
 // Err 返回订阅异常中止时的内部错误。
 func (s *AIResultSubscription) Err() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.err
+	return s.core.Err()
 }
 
-func (s *AIResultSubscription) signal() {
-	select {
-	case s.notify <- struct{}{}:
-	default:
+// reportCallbackPanic 把回调内的 panic 转成订阅终态，避免它变成「静默丢结果」。
+func (s *AIResultSubscription) reportCallbackPanic(recovered any) {
+	if recovered == nil {
+		return
 	}
+	s.core.closeWithErr(nativeCallbackPanic("ai_result_subscription", recovered))
 }
 
 // Close 幂等注销该 AI 结果订阅并排空回收 cgo.Handle。
 func (s *AIResultSubscription) Close() error {
-	var err error
+	var closeErr error
 	s.closeOnce.Do(func() {
 		if s.cancelControl != nil {
 			s.cancelControl()
 		}
 
-		s.mu.Lock()
-		if !s.closed {
-			s.closed = true
-			close(s.done)
-		}
-		s.mu.Unlock()
-		s.signal()
+		s.core.closeWithErr(nil)
+		s.core.dropQueued()
 
 		if s.stream != nil && s.stream.engine != nil && s.id > 0 {
-			err = s.stream.engine.unsubscribeAIResults(s.generation, s.streamID, s.id, s.deleteToken)
+			closeErr = s.stream.engine.unsubscribeWith(
+				s.generation,
+				"unsubscribe_ai_results",
+				func(handle C.Zhulong_engine_h) C.Zhulong_status_t {
+					return C.Zhulong_stream_unsubscribe_ai_results(handle, s.streamID, s.id)
+				},
+				s.token.release,
+			)
 		} else {
-			s.deleteToken()
+			s.token.release()
 		}
 
 		if s.stream != nil {
 			s.stream.onAISubClosed(s)
 		}
 	})
-	return err
+	return closeErr
 }
 
-// runControlLoop 监控订阅生命周期与底层物理流状态（每 250ms 轮询）。
+// runControlLoop 监控订阅生命周期与底层物理流状态。
 func (s *AIResultSubscription) runControlLoop(ctx context.Context) {
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			s.mu.Lock()
-			if !s.closed && s.err == nil {
-				s.err = ctx.Err()
-			}
-			s.mu.Unlock()
-			_ = s.Close()
-			return
-		case <-s.done:
-			_ = s.Close()
-			return
-		case <-ticker.C:
-			if s.stream == nil {
-				continue
-			}
-			status, err := s.stream.Status(ctx)
-			if err != nil {
-				s.mu.Lock()
-				if !s.closed {
-					s.err = err
-					s.closed = true
-					close(s.done)
-				}
-				s.mu.Unlock()
-				s.signal()
-				_ = s.Close()
-				return
-			}
-			if status.State == StreamFailed {
-				s.mu.Lock()
-				if !s.closed {
-					if status.Error != nil {
-						s.err = status.Error
-					} else {
-						s.err = ErrIO
-					}
-					s.closed = true
-					close(s.done)
-				}
-				s.mu.Unlock()
-				s.signal()
-				_ = s.Close()
-				return
-			}
-		}
-	}
+	s.core.watch(ctx, s.stream, func() {
+		// 同 Subscription：退出路径无处上报注销错误，终态由 core 保证可见。
+		_ = s.Close()
+	})
 }

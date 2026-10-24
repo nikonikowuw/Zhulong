@@ -32,6 +32,9 @@ type Stream struct {
 // BrokerPath 查询当前物理流关联的 FrameBroker Unix Domain Socket 路径。
 // 必须在 ConsumerAI 类型流上调用（且当前流仍有活跃 AI 消费者）。
 func (s *Stream) BrokerPath(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -44,6 +47,9 @@ func (s *Stream) BrokerPath(ctx context.Context) (string, error) {
 
 // SetPublishRate 动态设置帧发布最大采样帧率（由关联任务的 max(sample_fps) 驱动，0 表示不节流）。
 func (s *Stream) SetPublishRate(ctx context.Context, fps uint32) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -56,6 +62,9 @@ func (s *Stream) SetPublishRate(ctx context.Context, fps uint32) error {
 
 // Status 查询物理流当前运行状态与底层错误码。
 func (s *Stream) Status(ctx context.Context) (StreamStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return StreamStatus{}, err
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -71,6 +80,18 @@ func (s *Stream) Subscribe(ctx context.Context, options SubscriptionOptions) (*S
 	if s.kind != ConsumerPreview {
 		return nil, fmt.Errorf("%w: only preview consumers can subscribe to packets", ErrInvalidArgument)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	limits, err := subscriptionLimits{
+		maxPackets:       options.MaxPackets,
+		maxPacketBytes:   options.MaxPacketBytes,
+		maxBufferedBytes: options.MaxBufferedBytes,
+	}.validate()
+	if err != nil {
+		return nil, err
+	}
 
 	s.mu.Lock()
 	if s.closed {
@@ -82,42 +103,13 @@ func (s *Stream) Subscribe(ctx context.Context, options SubscriptionOptions) (*S
 		return nil, ErrDuplicate
 	}
 
-	// 校验 SubscriptionOptions
-	maxPackets := options.MaxPackets
-	if maxPackets <= 0 {
-		maxPackets = DefaultMaxPackets
-	} else if maxPackets > HardLimitMaxPackets {
-		s.mu.Unlock()
-		return nil, fmt.Errorf("%w: MaxPackets exceeds %d", ErrInvalidArgument, HardLimitMaxPackets)
-	}
-
-	maxPacketBytes := options.MaxPacketBytes
-	if maxPacketBytes <= 0 {
-		maxPacketBytes = DefaultMaxPacketBytes
-	} else if maxPacketBytes > HardLimitMaxPacketBytes {
-		s.mu.Unlock()
-		return nil, fmt.Errorf("%w: MaxPacketBytes exceeds %d", ErrInvalidArgument, HardLimitMaxPacketBytes)
-	}
-
-	maxBufferedBytes := options.MaxBufferedBytes
-	if maxBufferedBytes <= 0 {
-		maxBufferedBytes = DefaultMaxBufferedBytes
-	} else if maxBufferedBytes > HardLimitMaxBufferedBytes {
-		s.mu.Unlock()
-		return nil, fmt.Errorf("%w: MaxBufferedBytes exceeds %d", ErrInvalidArgument, HardLimitMaxBufferedBytes)
-	}
-
 	ctrlCtx, cancelCtrl := context.WithCancel(ctx)
-
 	sub := &Subscription{
-		stream:           s,
-		generation:       s.generation,
-		maxPackets:       maxPackets,
-		maxPacketBytes:   maxPacketBytes,
-		maxBufferedBytes: maxBufferedBytes,
-		notify:           make(chan struct{}, 1),
-		done:             make(chan struct{}),
-		cancelControl:    cancelCtrl,
+		stream:        s,
+		generation:    s.generation,
+		limits:        limits,
+		core:          newQueueCore[Packet](func(pkt Packet) int { return len(pkt.Data) }),
+		cancelControl: cancelCtrl,
 	}
 
 	subID, token, err := s.engine.subscribe(s.generation, s.id, s.consumerID, sub)
@@ -128,7 +120,7 @@ func (s *Stream) Subscribe(ctx context.Context, options SubscriptionOptions) (*S
 	}
 
 	sub.id = subID
-	sub.token = token
+	sub.token.value = token
 	s.activeSub = sub
 	s.mu.Unlock()
 
@@ -195,7 +187,7 @@ func (s *Stream) SubscribeAIResults(ctx context.Context) (*AIResultSubscription,
 	eng := s.engine
 
 	ctrlCtx, cancelCtrl := context.WithCancel(ctx)
-	sub := newAIResultSubscription(s, streamID, gen, 32)
+	sub := newAIResultSubscription(s, streamID, gen, defaultAIResultCapacity)
 	sub.cancelControl = cancelCtrl
 
 	subID, token, err := eng.subscribeAIResults(gen, streamID, sub)

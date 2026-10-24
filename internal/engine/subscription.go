@@ -9,45 +9,25 @@ import "C"
 
 import (
 	"context"
-	"runtime/cgo"
 	"sync"
-	"sync/atomic"
-	"time"
 	"unsafe"
 )
 
 // Subscription 封装对物理流视频数据包的按需订阅。
+//
+// 队列语义：包数 + 字节双预算，任一超限立即以 ErrBackpressure 终止订阅并唤醒读者，
+// 绝不阻塞原生工作线程。
 type Subscription struct {
 	stream     *Stream
 	id         C.Zhulong_subscription_id
-	token      uintptr
+	token      cgoToken
 	generation uint64
 
-	maxPackets       int
-	maxPacketBytes   int
-	maxBufferedBytes int
+	limits subscriptionLimits
 
-	mu            sync.Mutex
-	queue         []Packet
-	bufferedBytes int
-	closed        bool
-	err           error
-
-	notify        chan struct{}
-	done          chan struct{}
+	core          *queueCore[Packet]
 	closeOnce     sync.Once
-	tokenDeleted  atomic.Bool
 	cancelControl context.CancelFunc
-}
-
-func (s *Subscription) deleteToken() {
-	if s.token == 0 {
-		return
-	}
-	if s.tokenDeleted.CompareAndSwap(false, true) {
-		h := cgo.Handle(s.token)
-		h.Delete()
-	}
 }
 
 // inboundPacket 承载一次原生回调携带的全部字段。
@@ -62,7 +42,7 @@ type inboundPacket struct {
 	HasDTS     bool
 	TimeBase   Rational
 	KeyFrame   bool
-	Data       []byte
+	Data       []byte // 借用的原生内存，仅在回调期间有效
 	Size       int
 	PtsUS      int64
 	DtsUS      int64
@@ -71,83 +51,16 @@ type inboundPacket struct {
 	Flags      PacketFlag
 }
 
-// fail 以终态错误关闭订阅并唤醒等待方。
-func (s *Subscription) fail(err error) {
-	s.mu.Lock()
-	if !s.closed {
-		s.err = err
-		s.closed = true
-		close(s.done)
-	}
-	s.mu.Unlock()
-	s.signal()
-}
-
-// onPacket 由 CGO 回调在 Native 工作线程同步调用。
-func (s *Subscription) onPacket(packet *C.Zhulong_packet_view) {
-	if packet == nil {
-		return
-	}
-
-	size := int(packet.size)
-	if size < 0 || (size > 0 && packet.data == nil) {
-		s.fail(ErrInvalidArgument)
-		return
-	}
-
-	var borrowedData []byte
-	if size > 0 {
-		borrowedData = unsafe.Slice((*byte)(unsafe.Pointer(packet.data)), size)
-	}
-
-	s.onPacketData(inboundPacket{
-		Codec:      Codec(packet.codec),
-		PTS:        int64(packet.pts),
-		DTS:        int64(packet.dts),
-		HasPTS:     packet.has_pts != 0,
-		HasDTS:     packet.has_dts != 0,
-		TimeBase:   Rational{Num: int32(packet.time_base_num), Den: int32(packet.time_base_den)},
-		KeyFrame:   packet.key_frame != 0,
-		Data:       borrowedData,
-		Size:       size,
-		PtsUS:      int64(packet.pts_us),
-		DtsUS:      int64(packet.dts_us),
-		FrameClass: FrameClass(packet.frame_class),
-		GOPID:      uint32(packet.gop_id),
-		Flags:      PacketFlag(packet.pkt_flags),
-	})
-}
-
-func (s *Subscription) onPacketData(in inboundPacket) {
-	if in.Size < 0 || in.Size > s.maxPacketBytes {
-		s.fail(ErrPacketTooLarge)
-		return
-	}
-
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return
-	}
-
-	// 检查包数与字节预算
-	if len(s.queue) >= s.maxPackets || s.bufferedBytes+in.Size > s.maxBufferedBytes {
-		s.err = ErrBackpressure
-		s.closed = true
-		close(s.done)
-		s.mu.Unlock()
-		s.signal()
-		return
-	}
-
-	// 从借用指针深拷贝到 Go 内存中，实现生命周期彻底解耦
+// toPacket 把回调视图深拷贝为 Go 拥有的 Packet。
+//
+// ⚠️ 借用指针只在同步回调期间有效，必须在这里完成拷贝，绝不外传。
+func (in inboundPacket) toPacket() Packet {
 	var data []byte
-	if in.Size > 0 && len(in.Data) > 0 {
+	if in.Size > 0 {
 		data = make([]byte, in.Size)
 		copy(data, in.Data)
 	}
-
-	pkt := Packet{
+	return Packet{
 		Codec:      in.Codec,
 		PTS:        in.PTS,
 		DTS:        in.DTS,
@@ -162,61 +75,81 @@ func (s *Subscription) onPacketData(in inboundPacket) {
 		GOPID:      in.GOPID,
 		Flags:      in.Flags,
 	}
-
-	s.queue = append(s.queue, pkt)
-	s.bufferedBytes += len(data)
-	s.mu.Unlock()
-	s.signal()
 }
 
-func (s *Subscription) signal() {
-	select {
-	case s.notify <- struct{}{}:
-	default:
+// onPacket 由 CGO 回调在 Native 工作线程同步调用。
+func (s *Subscription) onPacket(packet *C.Zhulong_packet_view) {
+	if packet == nil {
+		return
 	}
+
+	size := int(packet.size)
+	if size < 0 || (size > 0 && packet.data == nil) {
+		s.core.closeWithErr(ErrInvalidArgument)
+		return
+	}
+
+	var borrowed []byte
+	if size > 0 {
+		borrowed = unsafe.Slice((*byte)(unsafe.Pointer(packet.data)), size)
+	}
+
+	s.onPacketData(inboundPacket{
+		Codec:      Codec(packet.codec),
+		PTS:        int64(packet.pts),
+		DTS:        int64(packet.dts),
+		HasPTS:     packet.has_pts != 0,
+		HasDTS:     packet.has_dts != 0,
+		TimeBase:   Rational{Num: int32(packet.time_base_num), Den: int32(packet.time_base_den)},
+		KeyFrame:   packet.key_frame != 0,
+		Data:       borrowed,
+		Size:       size,
+		PtsUS:      int64(packet.pts_us),
+		DtsUS:      int64(packet.dts_us),
+		FrameClass: FrameClass(packet.frame_class),
+		GOPID:      uint32(packet.gop_id),
+		Flags:      PacketFlag(packet.pkt_flags),
+	})
+}
+
+func (s *Subscription) onPacketData(in inboundPacket) {
+	if in.Size < 0 || in.Size > s.limits.maxPacketBytes {
+		s.core.closeWithErr(ErrPacketTooLarge)
+		return
+	}
+	// 回调视图必须自洽：声明了长度就必须有同样长（或更长）的借用内存。
+	if in.Size > len(in.Data) {
+		s.core.closeWithErr(ErrInvalidArgument)
+		return
+	}
+	// 订阅已终止时直接丢弃，省掉一次无谓的深拷贝。
+	if s.core.isClosed() {
+		return
+	}
+	s.core.pushBounded(in.toPacket(), in.Size, s.limits.maxPackets, s.limits.maxBufferedBytes, ErrBackpressure)
 }
 
 // Next 阻塞等待获取下一个视频压缩包，支持 Context 取消。
 func (s *Subscription) Next(ctx context.Context) (Packet, error) {
-	for {
-		s.mu.Lock()
-		if len(s.queue) > 0 {
-			pkt := s.queue[0]
-			s.queue[0] = Packet{}
-			s.queue = s.queue[1:]
-			s.bufferedBytes -= len(pkt.Data)
-			s.mu.Unlock()
-			return pkt, nil
-		}
-		if s.closed {
-			err := s.err
-			s.mu.Unlock()
-			if err == nil {
-				return Packet{}, ErrClosed
-			}
-			return Packet{}, err
-		}
-		s.mu.Unlock()
-
-		select {
-		case <-s.notify:
-		case <-ctx.Done():
-			return Packet{}, ctx.Err()
-		case <-s.done:
-		}
-	}
+	return s.core.next(ctx)
 }
 
 // Done 返回订阅结束的通知通道。
 func (s *Subscription) Done() <-chan struct{} {
-	return s.done
+	return s.core.Done()
 }
 
 // Err 返回订阅终态错误（若正常关闭则为 nil）。
 func (s *Subscription) Err() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.err
+	return s.core.Err()
+}
+
+// reportCallbackPanic 把回调内的 panic 转成订阅终态，避免它变成「静默丢帧」。
+func (s *Subscription) reportCallbackPanic(recovered any) {
+	if recovered == nil {
+		return
+	}
+	s.core.closeWithErr(nativeCallbackPanic("packet_subscription", recovered))
 }
 
 // Close 关闭订阅并同步排空（Drain）底层 Native 回调。
@@ -228,21 +161,20 @@ func (s *Subscription) Close() error {
 		}
 
 		if s.stream != nil && s.stream.engine != nil {
-			closeErr = s.stream.engine.unsubscribe(s.generation, s.stream.id, s.id, s.deleteToken)
+			closeErr = s.stream.engine.unsubscribeWith(
+				s.generation,
+				"unsubscribe",
+				func(handle C.Zhulong_engine_h) C.Zhulong_status_t {
+					return C.Zhulong_stream_unsubscribe(handle, s.stream.id, s.id)
+				},
+				s.token.release,
+			)
 		} else {
-			s.deleteToken()
+			s.token.release()
 		}
 
-		s.mu.Lock()
-		if !s.closed {
-			s.closed = true
-			close(s.done)
-		}
-		s.queue = nil
-		s.bufferedBytes = 0
-		s.mu.Unlock()
-
-		s.signal()
+		s.core.closeWithErr(nil)
+		s.core.dropQueued()
 
 		if s.stream != nil {
 			s.stream.onSubClosed(s)
@@ -251,54 +183,11 @@ func (s *Subscription) Close() error {
 	return closeErr
 }
 
-// runControlLoop 监控订阅生命周期与底层物理流状态（每 250ms 轮询）。
+// runControlLoop 监控订阅生命周期与底层物理流状态。
 func (s *Subscription) runControlLoop(ctx context.Context) {
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			s.mu.Lock()
-			if !s.closed && s.err == nil {
-				s.err = ctx.Err()
-			}
-			s.mu.Unlock()
-			_ = s.Close()
-			return
-		case <-s.done:
-			_ = s.Close()
-			return
-		case <-ticker.C:
-			status, err := s.stream.Status(ctx)
-			if err != nil {
-				s.mu.Lock()
-				if !s.closed {
-					s.err = err
-					s.closed = true
-					close(s.done)
-				}
-				s.mu.Unlock()
-				s.signal()
-				_ = s.Close()
-				return
-			}
-			if status.State == StreamFailed {
-				s.mu.Lock()
-				if !s.closed {
-					if status.Error != nil {
-						s.err = status.Error
-					} else {
-						s.err = ErrIO
-					}
-					s.closed = true
-					close(s.done)
-				}
-				s.mu.Unlock()
-				s.signal()
-				_ = s.Close()
-				return
-			}
-		}
-	}
+	s.core.watch(ctx, s.stream, func() {
+		// 控制循环的退出路径无处上报注销错误：订阅终态已由 core 记录，
+		// 资源回收失败由原生侧日志兜底。
+		_ = s.Close()
+	})
 }
