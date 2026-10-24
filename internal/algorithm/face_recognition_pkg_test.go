@@ -65,9 +65,13 @@ func TestFaceRecognitionPackageVerification(t *testing.T) {
 	verifier := algorithm.NewVerifier(runnerPath, "cpu")
 	verifier.HostArch = "x86_64"
 	verifier.HostTarget = "cpu"
-	verifier.Timeout = 10 * time.Second
+	// The probe loads the ONNX face model, so its runtime is dominated by model init
+	// and by how many sibling packages are competing for the CPU. A 10s budget made
+	// this test a coin flip under `go test -race ./...` (it measures ~10s even alone),
+	// which is a property of the test harness, not of the package being verified.
+	verifier.Timeout = 60 * time.Second
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	installDir := t.TempDir()
