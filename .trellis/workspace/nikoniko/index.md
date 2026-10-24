@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 84
-- **Last Active**: 2026-10-22
+- **Total Sessions**: 85
+- **Last Active**: 2026-10-25
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1598 | Active |
+| `journal-2.md` | ~1642 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 85 | 2026-10-25 | auth 模块硬化：多字节密码 500 与限流/会话契约 | `0379051` | `dev` |
 | 84 | 2026-10-22 | Add vehicle tab to records | `c96b6b8` | `dev` |
 | 83 | 2026-10-22 | vehicle_structure 机动车结构化端到端链路与车牌识别算法包 (10-21-vehicle-structure-pipeline) | `0565d00`, `e9307c2` | `dev` |
 | 82 | 2026-10-22 | 审计日志去心跳噪声与双宿主可移植性收口 (10-21-audit-ntp-heartbeat-noise) | `f2d0333`, `89d46cf`, `cfb0fba`, `9f08142`, `b58193a` | `dev` |

@@ -1596,3 +1596,47 @@ Implemented fourth vehicles tab in perception records reusing captures endpoint 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 85: auth 模块硬化：多字节密码 500 与限流/会话契约
+<!-- trellis-session: v=2 fp=0d2725d111b4a930 -->
+
+**Date**: 2026-10-25
+**Task**: auth 模块硬化：多字节密码 500 与限流/会话契约
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+修复 64 CJK 字符密码被 bcrypt 拒绝后冒泡成 500 的缺陷；限流额度改为可 defer 的租约，消除漏释放锁死 IP 的风险；logout 的 Cookie 续期跳过改由路由声明；补齐并发初始化、多字节密码、Attempt 幂等回归测试，并同步认证 spec。
+
+### Main Changes
+
+- 新增 password.go：密码策略同时约束 8–64 字符与 bcrypt 的 72 字节上限，超限返回 422 PASSWORD_TOO_LONG（含三语文案）
+- 新增 cookie.go：Cookie 7 个位置参数改为命名常量，并注释 Secure=false 的明文 HTTP 部署前提
+- RateLimiter 的 Allow/RecordFailure/Reset/Cancel 改为 Reserve() (*Attempt, bool) + 幂等 Fail/Reset/Cancel，Login 用 defer attempt.Cancel() 兜底
+- verifyPassword 对未知用户名做同 cost 的 dummy bcrypt 比较，消除用户名枚举的时序差
+- logout 用 withoutCookieRenewal() 路由标记替代中间件 URL 路径匹配；RequireAuth(nil) fail-closed；Gin 上下文身份改用 SessionUser
+- 收敛 UserResponse 投影、限流窗口过滤、Cookie MaxAge 推导、注销身份解析；修正 session.go 里遮蔽 bytes 包名的变量
+- 同步 authentication-guidelines.md：Session TTL 实际默认 24h（非 7 天）、[auth].session_ttl、新限流 API 与密码字节规则
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0379051` | fix(auth): 修正多字节密码 500 并收敛会话与限流契约 |
+
+### Testing
+
+- [OK] make go-check 全绿（gofmt / vet / race 全量测试 / native bridge 集成）
+- [OK] 新增用例钉住 64 CJK 字符 → 422 且不落库、8 CJK 字符可初始化、8 并发 InitAdmin 恰好 1 成功且 users 表 1 行、Attempt 收尾幂等、logout 仅 1 个 Set-Cookie
+- [OK] make api-docs 已重新生成 internal/apidocs
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 10-18-roi-mask-region-policy、10-20-industrial-logging、10-24-algo-package-blackbox-exe 仍未归档，待各自收尾
+- 多实例部署需要外置 Session 存储；限流 429 可补 Retry-After 响应头
