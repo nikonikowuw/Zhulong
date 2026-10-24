@@ -64,6 +64,9 @@ export function CapturesView({
 }: CapturesViewProps) {
   const { t } = useTranslation('records')
 
+  // 骨架数量对齐真实行数：加载态与结算态高度一致，切 Tab 时页面不再上下跳
+  const placeholderCount = Math.max(1, Math.min(pageSize, total || pageSize))
+
   const columns = useMemo<ColumnDef<Capture>[]>(() => {
     const cols: ColumnDef<Capture>[] = [
       {
@@ -227,25 +230,23 @@ export function CapturesView({
       return (
         <div className='space-y-4'>
           <div className='grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'>
-            {Array.from({ length: pageSize > 12 ? 12 : pageSize }).map(
-              (_, idx) => (
-                <div
-                  key={`cap-skel-${idx}`}
-                  className='overflow-hidden rounded-lg border border-border bg-card'
-                >
-                  <Skeleton
-                    className={cn(
-                      'w-full',
-                      mode === 'vehicles' ? 'aspect-[3/2]' : 'aspect-square'
-                    )}
-                  />
-                  <div className='space-y-2 p-3'>
-                    <Skeleton className='h-4 w-3/4' />
-                    <Skeleton className='h-3 w-1/2' />
-                  </div>
+            {Array.from({ length: placeholderCount }).map((_, idx) => (
+              <div
+                key={`cap-skel-${idx}`}
+                className='overflow-hidden rounded-lg border border-border bg-card'
+              >
+                <Skeleton
+                  className={cn(
+                    'w-full',
+                    mode === 'vehicles' ? 'aspect-[3/2]' : 'aspect-square'
+                  )}
+                />
+                <div className='space-y-2 p-3'>
+                  <Skeleton className='h-4 w-3/4' />
+                  <Skeleton className='h-3 w-1/2' />
                 </div>
-              )
-            )}
+              </div>
+            ))}
           </div>
           <DataTablePagination table={table} />
         </div>
@@ -341,11 +342,20 @@ export function CapturesView({
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              Array.from({ length: 6 }).map((_, rIdx) => (
+              Array.from({ length: placeholderCount }).map((_, rIdx) => (
                 <TableRow key={`cap-table-skel-${rIdx}`}>
                   {columns.map((_, cIdx) => (
                     <TableCell key={`cap-table-skel-c-${cIdx}`}>
-                      <Skeleton className='h-5 w-full' />
+                      {cIdx === 0 ? (
+                        <Skeleton
+                          className={cn(
+                            'rounded-md',
+                            mode === 'vehicles' ? 'h-14 w-40' : 'size-10'
+                          )}
+                        />
+                      ) : (
+                        <Skeleton className='h-4 w-24' />
+                      )}
                     </TableCell>
                   ))}
                 </TableRow>

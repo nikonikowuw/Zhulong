@@ -12,6 +12,9 @@
   }
   html {
     @apply overflow-x-hidden;
+    /* 常驻预留纵向滚动条占位：内容高度变化（加载/空态/满数据）时
+       不再因为滚动条开关让整页可用宽度抖动 */
+    scrollbar-gutter: stable;
   }
   body {
     @apply min-h-svh w-full bg-background text-foreground has-[div[data-variant='inset']]:bg-sidebar;
