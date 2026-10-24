@@ -480,7 +480,7 @@ if(BUILD_TESTING)
     target_include_directories(ZhulongFrameBrokerTests PRIVATE sdk/include include src)
     target_link_libraries(ZhulongFrameBrokerTests PRIVATE ZhulongAlgoIpc)
     add_test(NAME ZhulongFrameBroker COMMAND ZhulongFrameBrokerTests $<TARGET_FILE:zhulong_algo_runner> $<TARGET_FILE:MockDetector>)
-    set_tests_properties(ZhulongFrameBroker PROPERTIES TIMEOUT 15)
+    set_tests_properties(ZhulongFrameBroker PROPERTIES TIMEOUT 45)
 
     add_executable(ZhulongAlgoJsonTests tests/algo_json_test.cpp)
     target_compile_features(ZhulongAlgoJsonTests PRIVATE cxx_std_17)

@@ -441,6 +441,20 @@ func TestBridgeIntegration_AIConsumerAndBrokerPath(t *testing.T) {
 		t.Fatalf("expected result %s, got %s", testResultJSON, recvResult)
 	}
 
+	// 5.5 验证真实解码帧快照抓取
+	time.Sleep(300 * time.Millisecond)
+	images, err := s.Snapshot(ctx, SnapshotOptions{Quality: 85})
+	if err != nil {
+		_ = aiSub.Close()
+		_ = s.Close()
+		t.Fatalf("Snapshot failed: %v", err)
+	}
+	if len(images) == 0 {
+		_ = aiSub.Close()
+		_ = s.Close()
+		t.Fatal("expected at least 1 snapshot image")
+	}
+
 	if err := aiSub.Close(); err != nil {
 		_ = s.Close()
 		t.Fatalf("aiSub.Close failed: %v", err)

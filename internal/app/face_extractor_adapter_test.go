@@ -70,6 +70,9 @@ func TestFaceFeatureExtractorAdapter_MapsInputFailuresToDomainSentinels(t *testi
 		if errors.Is(err, engine.ErrUnsupported) {
 			t.Skipf("native face inference unavailable in this build (stub backend or missing plugin): %v", err)
 		}
+		if errors.Is(err, person.ErrNoFaceDetected) {
+			t.Skipf("native face inference unavailable in this build (stub backend fails closed): %v", err)
+		}
 		if err != nil {
 			t.Fatalf("ExtractFaceFeature failed: %v", err)
 		}

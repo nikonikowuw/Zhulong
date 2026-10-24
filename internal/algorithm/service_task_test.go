@@ -171,14 +171,40 @@ func (r *storeBackedBrokerResolver) SyncBrokerSubscriptions(ctx context.Context,
 
 func waitForBrokerInvocations(t *testing.T, path string, want int) {
 	t.Helper()
+	waitForRunnerInvocationCount(t, path, want)
+}
+
+// waitForRunnerInvocationCount 轮询到第 count 次 runner 启动，返回全部调用的 broker 参数。
+//
+// 包重启是异步的，固定 sleep 猜时序会让用例在慢机上随机失败；这里等的是
+// 「第 count 次启动且参数符合预期」这一状态本身。
+func waitForRunnerInvocationCount(t *testing.T, path string, count int) [][]string {
+	t.Helper()
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(readRunnerBrokerFlags(t, path)) >= want {
+		if invocations := readRunnerBrokerFlags(t, path); len(invocations) >= count {
+			return invocations
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("runner invocations did not reach %d; got %d", count, len(readRunnerBrokerFlags(t, path)))
+	return nil
+}
+
+// waitForLastBrokerFlags 等到最近一次 runner 启动的 broker 参数等于 want。
+//
+// 不能用固定下标取：重启过程中可能同时存在旧进程的残留记录，只有「最后一次」
+// 才代表当前生效的订阅集合。
+func waitForLastBrokerFlags(t *testing.T, path string, want []string) {
+	t.Helper()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if invocations := readRunnerBrokerFlags(t, path); len(invocations) > 0 && reflect.DeepEqual(invocations[len(invocations)-1], want) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("runner invocations did not reach %d; got %d", want, len(readRunnerBrokerFlags(t, path)))
+	t.Fatalf("last runner broker flags = %v, want %v", readRunnerBrokerFlags(t, path), want)
 }
 
 // TestServiceTaskChangeRestartsPackageWithNewBrokerSet covers AC9's end-to-end
@@ -235,12 +261,8 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	service.OnTaskChanged(ctx, algo.ID)
 	service.FlushPendingRestarts()
 
-	waitForBrokerInvocations(t, argFile, 2)
-	second := readRunnerBrokerFlags(t, argFile)
 	want := []string{"/tmp/zhulong_broker_camera1.sock", "/tmp/zhulong_broker_camera2.sock"}
-	if got := second[1]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("restart after adding camera2 broker flags = %v, want %v", got, want)
-	}
+	waitForLastBrokerFlags(t, argFile, want)
 	if got := supervisor.GetStatus(algo.ID); got != algorithm.StatusRunning {
 		t.Fatalf("expected package running after task-driven restart, got %s", got)
 	}
@@ -252,11 +274,8 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	service.OnTaskChanged(ctx, algo.ID)
 	service.FlushPendingRestarts()
 
-	waitForBrokerInvocations(t, argFile, 3)
-	third := readRunnerBrokerFlags(t, argFile)
-	if got := third[2]; !reflect.DeepEqual(got, []string{"/tmp/zhulong_broker_camera1.sock"}) {
-		t.Fatalf("restart after deleting camera2 broker flags = %v, want 1 sock for camera1", got)
-	}
+	wantThird := []string{"/tmp/zhulong_broker_camera1.sock"}
+	waitForLastBrokerFlags(t, argFile, wantThird)
 }
 
 // TestTaskDrivenLazyStartupAndTeardownLifecycle verifies the complete lifecycle:

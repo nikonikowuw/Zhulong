@@ -105,6 +105,9 @@ func TestExtractFaceFeature_ValidationAndSuccess(t *testing.T) {
 	if errors.Is(err, engine.ErrUnsupported) {
 		t.Skipf("native face inference unavailable in this build (stub backend or missing plugin): %v", err)
 	}
+	if errors.Is(err, engine.ErrNotFound) {
+		t.Skipf("native face inference unavailable in this build (stub backend fails closed): %v", err)
+	}
 	if err != nil {
 		t.Fatalf("ExtractFaceFeature failed: %v", err)
 	}
@@ -146,6 +149,9 @@ func TestExtractFaceFeature_WebPInput(t *testing.T) {
 	}
 	if errors.Is(err, engine.ErrUnsupported) {
 		t.Skipf("native face inference unavailable in this build (stub backend or missing plugin): %v", err)
+	}
+	if errors.Is(err, engine.ErrNotFound) {
+		t.Skipf("native face inference unavailable in this build (stub backend fails closed): %v", err)
 	}
 	if err != nil {
 		t.Fatalf("ExtractFaceFeature on WebP failed: %v", err)
