@@ -92,12 +92,18 @@ sqlDB.SetMaxIdleConns(1)
 - **物理抓拍时间戳铁律 (`captured_at`)**：对于 `recognitions`、`alarms`、`captures` 等流式高频机器视觉感知事件，**业务主时间戳强制采用 `captured_at DATETIME NOT NULL`**，严格取自视频帧物理抓拍瞬间的绝对 UTC 时间戳（`InferenceResult.Timestamp` / `capture_time_ms`），坚决禁止使用推理完成或数据插入时的宿主墙上时间，彻底杜绝排队延迟导致的时序漂移；
 - **时序索引设计**：所有基于相机的时间范围查询、降序列表与事件回放，核心索引统一建立为 `(camera_id, captured_at DESC)`；
 - **内部记账分离**：`created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP` 仅用于 SQLite 底层插入时间记账，不得用于业务回溯或前后端事件时间对账；
-- **弱外键与快照冗余保护**：感知事件中的实体引用（如 `recognitions.person_id`）采用弱外键设计（`REFERENCES persons(id) ON DELETE SET NULL`），并强行冗余快照不可变字段（`person_name`、`gallery_image_path`），确保底库人员注销或底照变更后，已发生的历史证据链完好无损；
+- **弱外键与快照冗余保护**：感知事件中的实体引用（如 `recognitions.person_id`）采用弱外键设计（`REFERENCES persons(id) ON DELETE SET NULL`），并强行冗余快照不可变字段（`person_name`、`person_external_id`、`gallery_image_path`），确保底库人员注销或底照变更后，已发生的历史证据链完好无损；
+- **对外业务键与内部主键在记录表里必须分列存放（迁移 `000018` 起）**：
+  - `recognitions.person_id` 只装内部代理主键 `persons.id`，承外键、级联与筛选；
+  - `recognitions.person_external_id` 装**写入时快照**的对外业务键 `persons.person_id`，承上报对账；
+  - ⚠️ **底库 IPC 载荷里的 `person_id` 是业务键原值，绝不能直接写进外键列**：只要人员的业务键 ≠ 内部主键，每次识别命中都会 `FOREIGN KEY constraint failed`，`CreateRecognitionBatch` 整批失败而 `record.Service` 只记日志 —— 表现为「识别记录静默消失」。归属必须经 `matched_face_id → person_faces.person_id → persons.id` 解析（`Store.ResolveGalleryFaces`），顺带以数据库为准刷新 `person_name` / `gallery_image_path`，免疫 runner 持有的陈旧底库；
+  - 人员从未绑定业务键 → 快照为空串，该条记录**不可上报**，严禁回退成内部主键充当身份；
+  - 业务键首次绑定（NULL → 值）时回填历史空快照（`PersonKeyBackfiller`，只写空串行，幂等），已赋值的业务键不可改写，所以补录不会造成同一记录的身份漂移。
 - **相对路径存储**：图片统一存储相对路径且首段必须为 `snapshots/...`，绝不在数据库中存储绝对物理路径或裸 URL。
 - **引用完整性的三条硬规则（迁移 `000014`/`000015` 起）**：
   1. **可空外键用 NULL 表达「未标注」，绝不用空串**：SQLite 的外键检查对空串一视同仁地要求父表存在匹配行，只有 NULL 才跳过校验。把「算法归属未知」写成 `''` 会让整条记录 insert 失败，而 `record.Service` 只记日志不返回错误 —— 表现就是记录静默消失。对外 API 仍以 `""` 呈现（`derefString`），内部必须是 `*string`。
   2. **`algorithm_id` 与 `person_id` 都用 `ON DELETE SET NULL` + 冗余快照**：证据是**已发生事实的记录**，它的价值不依赖于产生它的工具是否还装在本机。卸载算法是卸载工具，不是销毁历史。
-     - `person_id` 冗余 `person_name` / `gallery_image_path`；
+     - `person_id` 冗余 `person_name` / `person_external_id` / `gallery_image_path`；
      - `algorithm_id` 冗余 `algorithm_name` / `algorithm_version`。三张感知表（`recognitions` / `alarms` / `captures`）**逐一具备**这三个字段 —— 迁移 `000015` 补齐前两者，`000016` 补齐 `captures`（它此前连 `algorithm_id` 列都没有，导致抓拍无法按算法归因）。
      - ⚠️ 只有 id 没有快照 = 卸载后「谁产生的」永久丢失；只有快照没有 id = 无法按算法筛选统计。**两者必须成对**。
      - ⚠️ 冗余值必须**写入时快照**，严禁改成读取时 join 回父表补全 —— 那正是算法/人员被删后数据消失的根因。

@@ -35,6 +35,8 @@
    - `POST /api/v1/persons/{id}/faces` 严格采用 `multipart/form-data` 直传，**不接受任何客户端路径字符串**；
    - 服务端经魔数嗅探后将图片落盘至配置的底库目录（默认 `<data.directory>/faces`）；
    - 数据库仅持久化服务端生成的**相对文件名** `{person_id}_{face_id}.ext`，读取时动态拼装；
+   - **读取与删除一律经 `os.Root`**：`Service.OpenFaceImage` / `removeFaceFile` 把库里的相对名交给 `os.OpenRoot(<facesDir>)` 解析，不再「先判前缀、再拼路径打开」—— 后者留给底库目录里一个符号链接就足以穿到目录外，而 `os.Root` 连绝对符号链接目标一起拒。历史行的绝对路径先做包含性判断，再收敛成相对名交给 root，绝不用拼装出的绝对路径直接 `open`；
+   - **登记前置校验**：配置项 `[person].require_person_id_for_face_enrollment` 打开时（对外上报部署），未绑定 `person_id` 的人员**拒绝登记人脸**（`409 PERSON_ID_REQUIRED_FOR_ENROLLMENT`），因为无业务键的底照永远产不出可上报的记录；
    - 响应中回传该相对文件名（`Face.imagePath`），前端仅作展示，不得将其作为路径输入回传。
 2. **路径形态防御性收敛规则**：
    若任何端点未来需接受文件路径引用，必须严格执行纵深形态校验，严禁裸路径入库：

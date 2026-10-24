@@ -256,7 +256,8 @@ Go 侧与 Runner 进程之间 IPC 载荷统一使用 `features` 字段，表示�
 | **ACK 语义** | 全量 `MSG_GALLERY_SYNC` 组装完成后回复 `MSG_GALLERY_ACK`；增量同步无需 ACK |
 | **单条上限与分片** | 单条上限 64KB。Go 侧按 10 项/片切分分片，Runner 维持 5 秒组装窗口，收齐后原子应用并清空旧底库；超时或乱序显式报错 |
 | **分片聚合幂等与范围门禁** | 聚合逻辑统一走 `accumulate_sync_shard(ctx, shard)`（`gallery_parser.hpp`），必须同时满足：① `shard_index ∈ [0, shard_total)`，越界/负值分片直接丢弃且**不改变 `ctx` 任何状态**；② 同一 `shard_index` 重复到达时**跳过 items 累加**。⚠️ `received_shards.insert()` 幂等但 `collected_items.push_back()` 不是 —— 只靠 `insert` 会让 `is_complete()` 判定不变而 `collected_items` 重复膨胀，最终经 `gallery_index.reset()` **永久污染底库** |
-| **身份字段** | 载荷 `person_id` 恒取 `persons.person_id`（对外业务键）**原值**，严禁混用内部行 ID |
+| **身份字段** | 载荷 `person_id` 恒取 `persons.person_id`（对外业务键）**原值**，未绑定时为空串，严禁混用内部行 ID |
+| **宿主侧回转身份** | 载荷 `person_id` 只用于展示与对账，**绝不写入 `recognitions.person_id` 外键列**。回顾落库时一律经 `matched_face_id → person_faces.id → person_faces.person_id`（内部主键）解析，并把载荷里的业务键原值快照到 `recognitions.person_external_id`。详见 [数据库规约 · 对外业务键与内部主键分列](../backend/database-guidelines.md)。反例：直接把载荷值写进外键列，会让业务键 ≠ 内部主键的人员每次命中都 `FOREIGN KEY constraint failed`，整批识别记录静默丢失 |
 | **本地索引** | Runner 进程内通过 `GalleryIndex` 维护 `face_id -> FaceTemplate` 映射，写操作受互斥锁保护，推理读取通过 `snapshot()` 获取不可变只读视图 |
 
 ### 7.4 进程内跨库底库共享注册表 (`GalleryRegistry`)
