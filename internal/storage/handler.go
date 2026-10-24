@@ -70,7 +70,12 @@ func (h *Handler) currentActor(c *gin.Context) (username, ip string) {
 func (h *Handler) GetStatus(c *gin.Context) {
 	status, err := h.service.GetStatus(c.Request.Context())
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve storage status", err))
+		httputil.WriteError(c, httputil.NewError(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to retrieve storage status",
+			err,
+		))
 		return
 	}
 	httputil.Success(c, status)
@@ -87,7 +92,12 @@ func (h *Handler) GetStatus(c *gin.Context) {
 func (h *Handler) GetConfig(c *gin.Context) {
 	cfg, err := h.service.GetConfig(c.Request.Context())
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve storage config", err))
+		httputil.WriteError(c, httputil.NewError(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to retrieve storage config",
+			err,
+		))
 		return
 	}
 	httputil.Success(c, cfg)
@@ -127,7 +137,15 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 
 	status, err := h.service.UpdateConfig(c.Request.Context(), cfg, username, clientIP)
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "INVALID_STORAGE_CONFIG", err.Error(), err))
+		// The response carries only the localized message registered for the code,
+		// so the concrete rejection reason goes to the server log instead.
+		h.logger.Warn("storage config rejected", zap.Error(err))
+		httputil.WriteError(c, httputil.NewError(
+			http.StatusBadRequest,
+			"INVALID_STORAGE_CONFIG",
+			"Invalid storage configuration",
+			err,
+		))
 		return
 	}
 	httputil.Success(c, status)
@@ -156,7 +174,13 @@ func (h *Handler) TestPath(c *gin.Context) {
 
 	res, err := h.service.TestPath(c.Request.Context(), req.Path, username, clientIP)
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "STORAGE_PATH_INVALID", err.Error(), err))
+		h.logger.Warn("storage path test failed", zap.String("path", req.Path), zap.Error(err))
+		httputil.WriteError(c, httputil.NewError(
+			http.StatusBadRequest,
+			"STORAGE_PATH_INVALID",
+			"Storage path is invalid or not writable",
+			err,
+		))
 		return
 	}
 	httputil.Success(c, res)
@@ -177,10 +201,21 @@ func (h *Handler) TriggerCleanup(c *gin.Context) {
 	summary, err := h.service.TriggerManualCleanup(c.Request.Context(), username, clientIP)
 	if err != nil {
 		if errors.Is(err, ErrCleanupInProgress) {
-			httputil.WriteError(c, httputil.NewError(http.StatusConflict, "STORAGE_CLEANUP_IN_PROGRESS", "Cleanup cycle is already in progress", err))
+			httputil.WriteError(c, httputil.NewError(
+				http.StatusConflict,
+				"STORAGE_CLEANUP_IN_PROGRESS",
+				"Cleanup cycle is already in progress",
+				err,
+			))
 			return
 		}
-		httputil.WriteError(c, httputil.NewError(http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to execute cleanup", err))
+
+		httputil.WriteError(c, httputil.NewError(
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Failed to execute cleanup",
+			err,
+		))
 		return
 	}
 	httputil.Success(c, summary)

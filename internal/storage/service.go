@@ -31,9 +31,23 @@ const (
 // already started (or already stopped) once.
 var errServiceNotRestartable = errors.New("storage service already started")
 
+// errEmergencyStop is the safe summary recorded when the storage circuit
+// breaker trips. The detailed reason travels in the detail field.
+var errEmergencyStop = errors.New("storage emergency stop engaged")
+
+// refreshSnapshot is the set of cached fields one refresh run needs, read under
+// the snapshot lock and used after it is released.
+type refreshSnapshot struct {
+	mediaDir         string
+	expectedDeviceID uint64
+	breakdownDue     bool
+	breakdown        StorageUsageBreakdown
+}
+
 // Service coordinates storage inspection, persistence, hysteresis cleaning, and write safety.
 type Service struct {
 	mu        sync.RWMutex
+	refreshMu sync.Mutex
 	logger    *zap.Logger
 	repo      Repository
 	inspector PathInspector
@@ -88,16 +102,15 @@ func NewService(
 
 	gate.SetCallbacks(
 		func(reason string) {
-			if s.auditor != nil {
+			if auditor := s.auditLog(); auditor != nil {
 				// Background event: no client origin, so it is recorded with an
 				// empty IP rather than a faked loopback address.
-				s.auditor.RecordSystem(ActionStorageEmergencyStop, "media_storage", reason,
-					errEmergencyStop)
+				auditor.RecordSystem(ActionStorageEmergencyStop, "media_storage", reason, errEmergencyStop)
 			}
 		},
 		func() {
-			if s.auditor != nil {
-				s.auditor.RecordSystem(ActionStorageEmergencyResume, "media_storage",
+			if auditor := s.auditLog(); auditor != nil {
+				auditor.RecordSystem(ActionStorageEmergencyResume, "media_storage",
 					"storage capacity recovered to safe levels", nil)
 			}
 		},
@@ -123,6 +136,16 @@ func (s *Service) SetAfterPrune(callback func(context.Context)) {
 	s.afterPrune = callback
 }
 
+// auditLog returns the configured auditor, if any. Auditors are installed at
+// wiring time, so this is only for honest locking of the field rather than for
+// racing writers.
+func (s *Service) auditLog() *audit.Service {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.auditor
+}
+
 func (s *Service) notifyAfterPrune(ctx context.Context) {
 	s.mu.RLock()
 	callback := s.afterPrune
@@ -131,10 +154,6 @@ func (s *Service) notifyAfterPrune(ctx context.Context) {
 		callback(ctx)
 	}
 }
-
-// errEmergencyStop is the safe summary recorded when the storage circuit
-// breaker trips. The detailed reason travels in the detail field.
-var errEmergencyStop = errors.New("storage emergency stop engaged")
 
 // CanWrite returns whether storage currently allows writing new files.
 func (s *Service) CanWrite() bool {
@@ -258,7 +277,7 @@ func (s *Service) GetStatus(ctx context.Context) (*StorageStatus, error) {
 	last := s.lastStatus
 	s.mu.RUnlock()
 
-	if last != nil && time.Since(last.UpdatedAt) < 5*time.Second {
+	if last != nil && time.Since(last.UpdatedAt) < statusCacheTTL {
 		return last, nil
 	}
 	return s.RefreshStatus(ctx)
@@ -270,30 +289,35 @@ func (s *Service) GetConfig(ctx context.Context) (*StorageConfig, error) {
 }
 
 // RefreshStatus performs an on-demand inspection and updates the cached status.
+//
+// Refreshes are serialized by refreshMu so concurrent callers do not duplicate
+// the expensive scans, while mu only guards the snapshot fields. Holding one
+// lock across InspectFS/ScanBreakdown would stall every GetStatus caller for the
+// whole probe, and would deadlock any gate listener that reads the status.
 func (s *Service) RefreshStatus(ctx context.Context) (*StorageStatus, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
 
 	cfg, err := s.repo.GetConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("read storage config: %w", err)
 	}
-	if s.activeMediaDir == "" {
-		s.activeMediaDir = cfg.MediaDirectory
-	}
 
-	stats, err := s.inspector.InspectFS(s.activeMediaDir)
+	snap := s.snapshotForRefresh(cfg.MediaDirectory)
+
+	stats, err := s.inspector.InspectFS(snap.mediaDir)
 	if err != nil {
 		// An uninspectable media root is the mount-loss case the gate exists for:
 		// block writes instead of only reporting canWrite=false in the DTO.
-		s.gate.BlockWrites("storage telemetry unavailable for " + s.activeMediaDir)
-		s.lastStatus = &StorageStatus{
-			MediaDirectory: s.activeMediaDir,
+		s.gate.BlockWrites("storage telemetry unavailable for " + snap.mediaDir)
+		status := &StorageStatus{
+			MediaDirectory: snap.mediaDir,
 			Status:         StatusError,
 			CanWrite:       s.gate.CanWrite(),
 			UpdatedAt:      time.Now().UTC(),
 		}
-		return s.lastStatus, fmt.Errorf("inspect filesystem %s: %w", s.activeMediaDir, err)
+		s.storeStatus(status)
+		return status, fmt.Errorf("inspect filesystem %s: %w", snap.mediaDir, err)
 	}
 
 	rootDev, err := s.inspector.GetRootDeviceID()
@@ -304,50 +328,45 @@ func (s *Service) RefreshStatus(ctx context.Context) (*StorageStatus, error) {
 	isExternal := stats.DeviceID != rootDev
 	// Fallthrough detection: if this volume was registered as an external disk,
 	// but suddenly matches root filesystem device ID, the disk dropped/unmounted.
-	isDismounted := false
-	if s.expectedDeviceID != 0 && s.expectedDeviceID != rootDev && stats.DeviceID == rootDev {
-		isDismounted = true
-	} else if isExternal && s.expectedDeviceID == 0 {
-		// First discovery of external device ID
+	wasExternal := snap.expectedDeviceID != 0 && snap.expectedDeviceID != rootDev
+	isDismounted := wasExternal && stats.DeviceID == rootDev
+
+	s.mu.Lock()
+	if !isDismounted && isExternal && s.expectedDeviceID == 0 {
+		// First discovery of an external device ID.
 		s.expectedDeviceID = stats.DeviceID
 	}
+	s.mu.Unlock()
 
 	health := s.gate.Evaluate(stats, cfg, isDismounted)
 	if s.cleaner.IsCleaning() && health != StatusEmergencyStopped && health != StatusError {
 		health = StatusCleaning
 	}
 
-	var usagePercent int
-	if stats.TotalBytes > 0 {
-		usagePercent = int((stats.UsedBytes * 100) / stats.TotalBytes)
-	}
-
-	// Update breakdown periodically (every 30 seconds to avoid disk I/O thrashing)
-	if time.Since(s.lastBreakdownAt) > 30*time.Second {
-		bCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		bd, bErr := s.inspector.ScanBreakdown(bCtx, s.activeMediaDir)
-		cancel()
-		if bErr == nil {
-			s.lastBreakdown = bd
-			s.lastBreakdownAt = time.Now()
+	breakdown := snap.breakdown
+	if snap.breakdownDue {
+		scanned, ok := s.scanBreakdown(ctx, snap.mediaDir)
+		if ok {
+			breakdown = scanned
 		}
 	}
 
-	// Calculate other bytes on same volume
-	breakdown := s.lastBreakdown
+	// Other bytes are derived, so they must be recomputed on every refresh
+	// instead of inheriting the value cached with the last breakdown scan.
+	breakdown.OtherBytes = 0
 	mediaBytes := breakdown.RecordingsBytes + breakdown.SnapshotsBytes + breakdown.ExportsBytes
-	if stats.UsedBytes > uint64(mediaBytes) {
+	if mediaBytes > 0 && stats.UsedBytes > uint64(mediaBytes) {
 		breakdown.OtherBytes = int64(stats.UsedBytes) - mediaBytes
 	}
 
 	status := &StorageStatus{
-		MediaDirectory: s.activeMediaDir,
+		MediaDirectory: snap.mediaDir,
 		MountPoint:     stats.MountPoint,
 		FSType:         stats.FSType,
 		TotalBytes:     stats.TotalBytes,
 		UsedBytes:      stats.UsedBytes,
 		FreeBytes:      stats.FreeBytes,
-		UsagePercent:   usagePercent,
+		UsagePercent:   percentUsed(stats.UsedBytes, stats.TotalBytes),
 		Breakdown:      breakdown,
 		Status:         health,
 		DeviceID:       stats.DeviceID,
@@ -355,9 +374,55 @@ func (s *Service) RefreshStatus(ctx context.Context) (*StorageStatus, error) {
 		CanWrite:       s.gate.CanWrite(),
 		UpdatedAt:      time.Now().UTC(),
 	}
+	s.storeStatus(status)
 
-	s.lastStatus = status
 	return status, nil
+}
+
+// snapshotForRefresh reads the fields a refresh run needs without holding the
+// snapshot lock across filesystem I/O.
+func (s *Service) snapshotForRefresh(configuredMediaDir string) refreshSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.activeMediaDir == "" {
+		s.activeMediaDir = configuredMediaDir
+	}
+
+	return refreshSnapshot{
+		mediaDir:         s.activeMediaDir,
+		expectedDeviceID: s.expectedDeviceID,
+		breakdownDue:     time.Since(s.lastBreakdownAt) > breakdownScanInterval,
+		breakdown:        s.lastBreakdown,
+	}
+}
+
+// storeStatus publishes a fresh snapshot for GetStatus readers.
+func (s *Service) storeStatus(status *StorageStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastStatus = status
+}
+
+// scanBreakdown refreshes the cached per-category usage breakdown.
+//
+// It reports false when the scan failed or exceeded its time budget, in which
+// case the previously cached breakdown stays in effect.
+func (s *Service) scanBreakdown(ctx context.Context, mediaDir string) (StorageUsageBreakdown, bool) {
+	scanCtx, cancel := context.WithTimeout(ctx, breakdownScanTimeout)
+	defer cancel()
+
+	scanned, err := s.inspector.ScanBreakdown(scanCtx, mediaDir)
+	if err != nil {
+		return StorageUsageBreakdown{}, false
+	}
+
+	s.mu.Lock()
+	s.lastBreakdown = scanned
+	s.lastBreakdownAt = time.Now()
+	s.mu.Unlock()
+
+	return scanned, true
 }
 
 // UpdateConfig updates the storage lifecycle settings and switches to new directory if changed.
@@ -399,14 +464,21 @@ func (s *Service) UpdateConfig(ctx context.Context, cfg StorageConfig, username,
 		s.logger.Warn("refresh status after config update failed", zap.Error(err))
 	}
 
-	if s.auditor != nil {
-		s.auditor.Record(audit.Entry{
+	if auditor := s.auditLog(); auditor != nil {
+		auditor.Record(audit.Entry{
 			Username: username,
 			IP:       ip,
 			Action:   ActionStorageUpdateConfig,
 			Target:   "media_storage",
-			Detail: fmt.Sprintf("mediaDir=%s, recDays=%d, snapDays=%d, expHours=%d, high=%d%%, low=%d%%",
-				saved.MediaDirectory, saved.RecordingsRetentionDays, saved.SnapshotsRetentionDays, saved.ExportsRetentionHours, saved.HighWatermarkPercent, saved.LowWatermarkPercent),
+			Detail: fmt.Sprintf(
+				"mediaDir=%s, recDays=%d, snapDays=%d, expHours=%d, high=%d%%, low=%d%%",
+				saved.MediaDirectory,
+				saved.RecordingsRetentionDays,
+				saved.SnapshotsRetentionDays,
+				saved.ExportsRetentionHours,
+				saved.HighWatermarkPercent,
+				saved.LowWatermarkPercent,
+			),
 			Status: audit.StatusSuccess,
 		})
 	}
@@ -421,10 +493,9 @@ func (s *Service) TestPath(ctx context.Context, path string, username, ip string
 		Path: cleanPath,
 	}
 
-	writeErr := s.inspector.ProbeWritable(cleanPath)
-	if writeErr != nil {
+	if err := s.inspector.ProbeWritable(cleanPath); err != nil {
 		res.Writable = false
-		res.ErrorReason = writeErr.Error()
+		res.ErrorReason = err.Error()
 	} else {
 		res.Exists = true
 		res.Writable = true
@@ -450,14 +521,19 @@ func (s *Service) TestPath(ctx context.Context, path string, username, ip string
 	res.IsExternal = stats.DeviceID != rootDev
 	res.IsMount = stats.MountPoint == cleanPath
 
-	if s.auditor != nil {
-		s.auditor.Record(audit.Entry{
+	if auditor := s.auditLog(); auditor != nil {
+		auditor.Record(audit.Entry{
 			Username: username,
 			IP:       ip,
 			Action:   ActionStoragePathTest,
 			Target:   cleanPath,
-			Detail:   fmt.Sprintf("writable=%v, external=%v, mount=%s", res.Writable, res.IsExternal, res.MountPoint),
-			Status:   audit.StatusSuccess,
+			Detail: fmt.Sprintf(
+				"writable=%v, external=%v, mount=%s",
+				res.Writable,
+				res.IsExternal,
+				res.MountPoint,
+			),
+			Status: audit.StatusSuccess,
 		})
 	}
 
@@ -475,22 +551,29 @@ func (s *Service) TriggerManualCleanup(ctx context.Context, username, ip string)
 	mediaDir := s.activeMediaDir
 	s.mu.RUnlock()
 
-	summary, err := s.cleaner.RunPrune(ctx, mediaDir, cfg, "manual")
+	summary, err := s.cleaner.RunPrune(ctx, mediaDir, cfg, PruneTriggerManual)
 	if err != nil {
 		return nil, err
 	}
 	s.notifyAfterPrune(ctx)
 
-	_, _ = s.RefreshStatus(ctx)
+	if _, err := s.RefreshStatus(ctx); err != nil {
+		s.logger.Warn("storage status refresh after manual cleanup failed", zap.Error(err))
+	}
 
-	if s.auditor != nil {
-		s.auditor.Record(audit.Entry{
+	if auditor := s.auditLog(); auditor != nil {
+		auditor.Record(audit.Entry{
 			Username: username,
 			IP:       ip,
 			Action:   ActionStorageManualCleanup,
 			Target:   mediaDir,
-			Detail:   fmt.Sprintf("deleted=%d, freedBytes=%d, durationMs=%d", summary.DeletedFiles, summary.FreedBytes, summary.DurationMs),
-			Status:   audit.StatusSuccess,
+			Detail: fmt.Sprintf(
+				"deleted=%d, freedBytes=%d, durationMs=%d",
+				summary.DeletedFiles,
+				summary.FreedBytes,
+				summary.DurationMs,
+			),
+			Status: audit.StatusSuccess,
 		})
 	}
 

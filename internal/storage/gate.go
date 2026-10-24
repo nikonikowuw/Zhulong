@@ -104,7 +104,6 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 		g.reason = "storage telemetry unavailable"
 		return StatusError
 	}
-
 	if isDismounted {
 		g.canWrite.Store(false)
 		g.reason = "external mount point disconnected (fallthrough hazard)"
@@ -122,28 +121,24 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 		return StatusError
 	}
 
-	var usagePercent int
-	if stats.TotalBytes > 0 {
-		usagePercent = int((stats.UsedBytes * 100) / stats.TotalBytes)
-	}
+	usage := percentUsed(stats.UsedBytes, stats.TotalBytes)
 
 	minFreeBytes := uint64(cfg.EmergencyStopMinMB) * 1024 * 1024
-	emergencyTriggered := usagePercent >= cfg.EmergencyStopPercent || stats.FreeBytes < minFreeBytes
+	emergencyTriggered := usage >= cfg.EmergencyStopPercent || stats.FreeBytes < minFreeBytes
 
 	if emergencyTriggered {
 		prevEmergency := g.isEmergency.Swap(true)
 		g.canWrite.Store(false)
-		reason := "insufficient disk space: "
-		if usagePercent >= cfg.EmergencyStopPercent {
-			reason += "usage exceeded emergency limit"
-		} else {
-			reason += "free space below minimum safe margin"
+
+		reason := "insufficient disk space: free space below minimum safe margin"
+		if usage >= cfg.EmergencyStopPercent {
+			reason = "insufficient disk space: usage exceeded emergency limit"
 		}
 		g.reason = reason
 
 		if !prevEmergency {
 			g.logger.Warn("storage gate: emergency write stop activated",
-				zap.Int("usage_percent", usagePercent),
+				zap.Int("usage_percent", usage),
 				zap.Uint64("free_bytes", stats.FreeBytes),
 				zap.Int64("min_free_mb", cfg.EmergencyStopMinMB),
 			)
@@ -160,13 +155,13 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 
 	if wasEmergency {
 		g.logger.Info("storage gate: emergency write stop cleared; resuming normal operation",
-			zap.Int("usage_percent", usagePercent),
+			zap.Int("usage_percent", usage),
 			zap.Uint64("free_bytes", stats.FreeBytes),
 		)
 		resumeCallback = g.onEmergencyResume
 	}
 
-	if usagePercent >= cfg.HighWatermarkPercent {
+	if usage >= cfg.HighWatermarkPercent {
 		return StatusWarning
 	}
 

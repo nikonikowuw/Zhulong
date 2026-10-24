@@ -13,11 +13,14 @@ func (p *DefaultPathInspector) GetRootDeviceID() (uint64, error) {
 }
 
 // InspectFS provides safe fallback filesystem telemetry for non-Linux platforms.
+//
+// The numbers are synthetic: they exist so developers can run the host and its
+// tests off-device, and must never be read as real volume state.
 func (p *DefaultPathInspector) InspectFS(path string) (*FSStats, error) {
 	cleanPath := filepath.Clean(path)
-	if err := os.MkdirAll(cleanPath, 0o750); err != nil && !os.IsExist(err) {
-		// ignore
-	}
+	// The probe directory is best effort here: a synthetic inspector cannot test
+	// writability, so a creation failure must not fail the simulation either.
+	_ = os.MkdirAll(cleanPath, 0o750)
 
 	// 100 GB total, 50 GB free fallback
 	total := uint64(100 * 1024 * 1024 * 1024)

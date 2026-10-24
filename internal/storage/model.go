@@ -34,6 +34,16 @@ type StorageConfig struct {
 	EmergencyStopMinMB      int64  `json:"emergencyStopMinMb"`      // Emergency minimum free space in megabytes (100..102400)
 }
 
+// percentUsed converts byte counts into a 0..100 usage percentage, reporting 0
+// when the volume geometry is unknown.
+func percentUsed(used, total uint64) int {
+	if total == 0 {
+		return 0
+	}
+
+	return int((used * 100) / total)
+}
+
 // DefaultStorageConfig returns safe default settings tuned for edge NVR/AI boxes.
 func DefaultStorageConfig() StorageConfig {
 	return StorageConfig{

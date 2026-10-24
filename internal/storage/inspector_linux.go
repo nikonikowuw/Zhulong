@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -62,10 +63,12 @@ func (p *DefaultPathInspector) InspectFS(path string) (*FSStats, error) {
 	bsize := uint64(statfs.Bsize)
 	totalBytes := statfs.Blocks * bsize
 	freeBytes := statfs.Bavail * bsize
+
 	var usedBytes uint64
-	if statfs.Blocks >= statfs.Bfree {
+	switch {
+	case statfs.Blocks >= statfs.Bfree:
 		usedBytes = (statfs.Blocks - statfs.Bfree) * bsize
-	} else if totalBytes >= freeBytes {
+	case totalBytes >= freeBytes:
 		usedBytes = totalBytes - freeBytes
 	}
 
@@ -77,8 +80,6 @@ func (p *DefaultPathInspector) InspectFS(path string) (*FSStats, error) {
 		mountPoint = "/"
 	}
 
-	isReadOnly := (statfs.Flags & unix.MS_RDONLY) != 0
-
 	return &FSStats{
 		TotalBytes: totalBytes,
 		FreeBytes:  freeBytes,
@@ -86,32 +87,39 @@ func (p *DefaultPathInspector) InspectFS(path string) (*FSStats, error) {
 		DeviceID:   stat.Dev,
 		MountPoint: mountPoint,
 		FSType:     fsName,
-		IsReadOnly: isReadOnly,
+		IsReadOnly: statfs.Flags&unix.MS_RDONLY != 0,
 		IsExternal: stat.Dev != rootDev,
 	}, nil
 }
 
+// fsTypeFromMagic maps a statfs magic number to a filesystem name. Magic
+// numbers without a constant in x/sys/unix stay literal.
 func fsTypeFromMagic(magic uint64) string {
 	switch magic {
-	case 0xef53:
+	case unix.EXT4_SUPER_MAGIC:
 		return "ext4"
-	case 0x58465342:
+	case unix.XFS_SUPER_MAGIC:
 		return "xfs"
-	case 0x9123683e:
+	case unix.BTRFS_SUPER_MAGIC:
 		return "btrfs"
-	case 0x4d44, 0x4006:
+	case unix.MSDOS_SUPER_MAGIC, 0x4006: // 0x4006 is the FAT12/16 alias, not exported by x/sys.
 		return "vfat"
-	case 0x6969:
+	case unix.NFS_SUPER_MAGIC:
 		return "nfs"
-	case 0x01021994:
+	case unix.TMPFS_MAGIC:
 		return "tmpfs"
-	case 0x794c7630:
+	case unix.OVERLAYFS_SUPER_MAGIC:
 		return "overlay"
 	default:
 		return fmt.Sprintf("0x%x", magic)
 	}
 }
 
+// findMountInfoLinux returns the longest mount point that contains targetPath
+// along with its filesystem type.
+//
+// Unparseable entries are skipped rather than aborting the scan, so the answer
+// degrades to the entries read before /proc/mounts changed under us.
 func findMountInfoLinux(targetPath string) (string, string) {
 	file, err := os.Open("/proc/mounts")
 	if err != nil {
@@ -121,22 +129,64 @@ func findMountInfoLinux(targetPath string) (string, string) {
 
 	bestMount := ""
 	bestFSType := ""
+
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
 		if len(fields) < 3 {
 			continue
 		}
-		mountPoint := fields[1]
-		fsType := fields[2]
 
-		if targetPath == mountPoint || strings.HasPrefix(targetPath, mountPoint+"/") || (mountPoint == "/" && strings.HasPrefix(targetPath, "/")) {
-			if len(mountPoint) > len(bestMount) {
-				bestMount = mountPoint
-				bestFSType = fsType
-			}
+		mountPoint := unescapeMountField(fields[1])
+		if !mountPointCovers(targetPath, mountPoint) || len(mountPoint) <= len(bestMount) {
+			continue
 		}
+
+		bestMount = mountPoint
+		bestFSType = fields[2]
 	}
 
 	return bestMount, bestFSType
+}
+
+// mountPointCovers reports whether targetPath lives at or below mountPoint.
+func mountPointCovers(targetPath, mountPoint string) bool {
+	if targetPath == mountPoint {
+		return true
+	}
+	if mountPoint == "/" {
+		return strings.HasPrefix(targetPath, "/")
+	}
+
+	return strings.HasPrefix(targetPath, mountPoint+"/")
+}
+
+// unescapeMountField decodes the octal escapes (\040 for a space, \011 for a
+// tab) that keep one /proc/mounts entry per line. Without decoding, a mount
+// point containing a space never matches and silently degrades to "/".
+func unescapeMountField(field string) string {
+	if !strings.Contains(field, `\`) {
+		return field
+	}
+
+	var decoded strings.Builder
+	decoded.Grow(len(field))
+
+	for i := 0; i < len(field); i++ {
+		if field[i] != '\\' || i+3 >= len(field) {
+			decoded.WriteByte(field[i])
+			continue
+		}
+
+		octal, err := strconv.ParseUint(field[i+1:i+4], 8, 8)
+		if err != nil {
+			decoded.WriteByte(field[i])
+			continue
+		}
+
+		decoded.WriteByte(byte(octal))
+		i += 3
+	}
+
+	return decoded.String()
 }

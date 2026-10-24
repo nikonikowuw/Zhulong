@@ -21,12 +21,12 @@ type storageLifecycleImpl struct {
 }
 
 func (l *storageLifecycleImpl) Start(ctx context.Context) error {
-	l.logger.Info("Starting system storage lifecycle...")
+	l.logger.Info("starting system storage lifecycle")
 	return l.service.Start(ctx)
 }
 
 func (l *storageLifecycleImpl) Stop(ctx context.Context) error {
-	l.logger.Info("Stopping system storage lifecycle...")
+	l.logger.Info("stopping system storage lifecycle")
 	return l.service.Stop(ctx)
 }
 

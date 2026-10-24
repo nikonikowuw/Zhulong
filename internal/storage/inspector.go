@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -60,10 +61,14 @@ func (p *DefaultPathInspector) ProbeWritable(path string) error {
 		return fmt.Errorf("path %s is not a directory", cleanPath)
 	}
 
-	// Generate random probe file name
+	// Generate random probe file name. crypto/rand.Read never returns an error on
+	// any platform Go supports, so the result needs no check.
 	var randomBytes [8]byte
 	_, _ = rand.Read(randomBytes[:])
-	probeFileName := filepath.Join(cleanPath, fmt.Sprintf(".zhulong_storage_probe_%s", hex.EncodeToString(randomBytes[:])))
+	probeFileName := filepath.Join(
+		cleanPath,
+		fmt.Sprintf(".zhulong_storage_probe_%s", hex.EncodeToString(randomBytes[:])),
+	)
 
 	payload := []byte("zhulong_storage_probe_check")
 	if err := os.WriteFile(probeFileName, payload, 0o600); err != nil {
@@ -77,7 +82,7 @@ func (p *DefaultPathInspector) ProbeWritable(path string) error {
 	if err != nil {
 		return fmt.Errorf("read back test file in %s: %w", cleanPath, err)
 	}
-	if string(readBack) != string(payload) {
+	if !bytes.Equal(readBack, payload) {
 		return fmt.Errorf("corrupted test file content in %s", cleanPath)
 	}
 
@@ -89,31 +94,27 @@ func (p *DefaultPathInspector) ScanBreakdown(ctx context.Context, mediaDir strin
 	var breakdown StorageUsageBreakdown
 	cleanRoot := filepath.Clean(mediaDir)
 
-	recordingsDir := filepath.Join(cleanRoot, "recordings")
-	snapshotsDir := filepath.Join(cleanRoot, "snapshots")
-	exportsDir := filepath.Join(cleanRoot, "exports")
-
-	var err error
-	breakdown.RecordingsBytes, err = dirSize(ctx, recordingsDir)
-	if err != nil && !os.IsNotExist(err) {
-		return breakdown, fmt.Errorf("scan recordings dir: %w", err)
+	targets := []struct {
+		dir string
+		dst *int64
+	}{
+		{dir: "recordings", dst: &breakdown.RecordingsBytes},
+		{dir: "snapshots", dst: &breakdown.SnapshotsBytes},
+		{dir: "exports", dst: &breakdown.ExportsBytes},
 	}
 
-	breakdown.SnapshotsBytes, err = dirSize(ctx, snapshotsDir)
-	if err != nil && !os.IsNotExist(err) {
-		return breakdown, fmt.Errorf("scan snapshots dir: %w", err)
-	}
-
-	breakdown.ExportsBytes, err = dirSize(ctx, exportsDir)
-	if err != nil && !os.IsNotExist(err) {
-		return breakdown, fmt.Errorf("scan exports dir: %w", err)
+	for _, target := range targets {
+		size, err := dirSize(ctx, filepath.Join(cleanRoot, target.dir))
+		if err != nil && !os.IsNotExist(err) {
+			return breakdown, fmt.Errorf("scan %s dir: %w", target.dir, err)
+		}
+		*target.dst = size
 	}
 
 	return breakdown, nil
 }
 
 func dirSize(ctx context.Context, root string) (int64, error) {
-	var total int64
 	info, err := os.Stat(root)
 	if err != nil {
 		return 0, err
@@ -122,22 +123,30 @@ func dirSize(ctx context.Context, root string) (int64, error) {
 		return 0, nil
 	}
 
+	var total int64
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if errors.Is(walkErr, os.ErrNotExist) {
+				// A directory vanishing mid-walk just stops contributing bytes.
 				return nil
 			}
 			return walkErr
 		}
-		if ctx != nil && ctx.Err() != nil {
-			return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		if !d.IsDir() {
-			finfo, err := d.Info()
-			if err == nil {
-				total += finfo.Size()
-			}
+		if d.IsDir() {
+			return nil
 		}
+
+		finfo, err := d.Info()
+		if err != nil {
+			// The file was removed between the walk and the stat; it simply no
+			// longer occupies space.
+			return nil
+		}
+		total += finfo.Size()
+
 		return nil
 	})
 

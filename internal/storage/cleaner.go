@@ -9,17 +9,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
 )
 
-var (
-	// ErrCleanupInProgress is returned when a cleanup cycle is already running.
-	ErrCleanupInProgress = errors.New("cleanup is already in progress")
-)
+// ErrCleanupInProgress is returned when a cleanup cycle is already running.
+var ErrCleanupInProgress = errors.New("cleanup is already in progress")
 
 // Prune trigger reasons. They are recorded in CleanupSummary.TriggerReason and
 // decide whether the high watermark gate is bypassed.
@@ -34,22 +31,43 @@ const (
 	PruneStatusSkippedLow = "skipped_below_high_watermark"
 )
 
+const (
+	defaultPruneBatchSize  = 25
+	defaultPruneBatchSleep = 50 * time.Millisecond
+	// lockMarkerSuffix names the sidecar file that protects a media file.
+	lockMarkerSuffix = ".lock"
+	// lockedNameInfix additionally protects files whose name carries the marker.
+	lockedNameInfix = "_locked"
+)
+
 type candidateFile struct {
 	path    string
 	size    int64
 	modTime time.Time
 }
 
+// pruneResult is the outcome of deleting one candidate batch.
+type pruneResult struct {
+	deleted int
+	freed   int64
+}
+
+// pruneScope is the shared context of a single prune cycle: the volume being
+// cleaned and the watermark its batches stop at.
+type pruneScope struct {
+	mediaDir     string
+	lowWatermark int
+}
+
 // CleanerEngine coordinates watermark hysteresis pruning and throttled file deletion.
 type CleanerEngine struct {
-	mu         sync.Mutex
 	running    atomic.Bool
 	logger     *zap.Logger
 	inspector  PathInspector
 	batchSize  int
 	batchSleep time.Duration
 
-	// Optional hook for testing
+	// fileRemover is an optional hook for testing.
 	fileRemover func(path string) error
 }
 
@@ -64,24 +82,25 @@ func NewCleanerEngine(inspector PathInspector, logger *zap.Logger, opts ...Clean
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	batchSize := 25
-	batchSleep := 50 * time.Millisecond
+
+	engine := &CleanerEngine{
+		logger:      logger,
+		inspector:   inspector,
+		batchSize:   defaultPruneBatchSize,
+		batchSleep:  defaultPruneBatchSleep,
+		fileRemover: os.Remove,
+	}
+
 	if len(opts) > 0 {
 		if opts[0].BatchSize > 0 {
-			batchSize = opts[0].BatchSize
+			engine.batchSize = opts[0].BatchSize
 		}
 		if opts[0].BatchSleep >= 0 {
-			batchSleep = opts[0].BatchSleep
+			engine.batchSleep = opts[0].BatchSleep
 		}
 	}
 
-	return &CleanerEngine{
-		logger:      logger,
-		inspector:   inspector,
-		batchSize:   batchSize,
-		batchSleep:  batchSleep,
-		fileRemover: os.Remove,
-	}
+	return engine
 }
 
 // IsCleaning reports whether a background or manual cleanup run is currently executing.
@@ -89,73 +108,74 @@ func (c *CleanerEngine) IsCleaning() bool {
 	return c.running.Load()
 }
 
-// RunPrune executes a prune cycle based on configured watermarks and retention policies.
-// If force is true, it proceeds even if usage has not touched high watermark (e.g. manual trigger).
-func (c *CleanerEngine) RunPrune(ctx context.Context, mediaDir string, cfg *StorageConfig, triggerReason string) (*CleanupSummary, error) {
+// RunPrune executes a prune cycle based on the configured watermarks and
+// retention policies.
+//
+// triggerReason decides whether the high watermark gate applies: a manual run
+// proceeds unconditionally, an automatic one only when usage has reached the
+// high watermark.
+func (c *CleanerEngine) RunPrune(
+	ctx context.Context,
+	mediaDir string,
+	cfg *StorageConfig,
+	triggerReason string,
+) (*CleanupSummary, error) {
 	if !c.running.CompareAndSwap(false, true) {
 		return nil, ErrCleanupInProgress
 	}
 	defer c.running.Store(false)
 
 	startTime := time.Now()
-	summary := &CleanupSummary{
-		TriggerReason: triggerReason,
-	}
+	summary := &CleanupSummary{TriggerReason: triggerReason}
 
 	stats, err := c.inspector.InspectFS(mediaDir)
 	if err != nil {
 		return nil, fmt.Errorf("inspect filesystem before prune: %w", err)
 	}
 
-	var currentUsagePercent int
-	if stats.TotalBytes > 0 {
-		currentUsagePercent = int((stats.UsedBytes * 100) / stats.TotalBytes)
-	}
-
+	usage := percentUsed(stats.UsedBytes, stats.TotalBytes)
 	isManual := triggerReason == PruneTriggerManual
-	// For automatic watermark triggers, only activate when usage >= HighWatermarkPercent
-	if !isManual && currentUsagePercent < cfg.HighWatermarkPercent {
-		summary.DurationMs = time.Since(startTime).Milliseconds()
-		summary.FinishedAt = time.Now().UTC()
-		summary.TargetStatus = PruneStatusSkippedLow
-		return summary, nil
+
+	// Automatic watermark triggers must not delete anything below the high mark.
+	if !isManual && usage < cfg.HighWatermarkPercent {
+		return finishSummary(summary, startTime, PruneStatusSkippedLow), nil
 	}
 
 	c.logger.Info("starting storage cleanup cycle",
 		zap.String("reason", triggerReason),
-		zap.Int("current_usage", currentUsagePercent),
+		zap.Int("current_usage", usage),
 		zap.Int("target_low", cfg.LowWatermarkPercent),
 	)
 
-	// Step 1: Collect candidates
+	scope := pruneScope{mediaDir: mediaDir, lowWatermark: cfg.LowWatermarkPercent}
+
+	// Step 1: collect candidates.
 	exportsCandidates := c.collectExports(mediaDir, time.Duration(cfg.ExportsRetentionHours)*time.Hour)
 	snapshotsCandidates := c.collectSnapshots(mediaDir, time.Duration(cfg.SnapshotsRetentionDays)*24*time.Hour)
 	recordingsCandidates := c.collectRecordings(mediaDir, time.Duration(cfg.RecordingsRetentionDays)*24*time.Hour)
 
-	// Step 2: Delete expired exports first
-	deleted, freed := c.deleteBatch(ctx, exportsCandidates, mediaDir, cfg.LowWatermarkPercent)
-	summary.DeletedFiles += deleted
-	summary.FreedBytes += freed
+	// Step 2: expired exports first.
+	result := c.deleteBatch(ctx, exportsCandidates, scope)
+	summary.DeletedFiles += result.deleted
+	summary.FreedBytes += result.freed
 
 	// Step 3: AI 抓拍按 TTL 清理。放在 exports 之后、recordings 之前：抓拍图在
 	// 「证据价值」排序上低于导出（人工产物）而高于常规录像，与 storage-guidelines
 	// §4 的删除顺序一致。
 	if ctx.Err() == nil {
-		snapDeleted, snapFreed := c.deleteBatch(ctx, snapshotsCandidates, mediaDir, cfg.LowWatermarkPercent)
-		summary.DeletedFiles += snapDeleted
-		summary.FreedBytes += snapFreed
+		result = c.deleteBatch(ctx, snapshotsCandidates, scope)
+		summary.DeletedFiles += result.deleted
+		summary.FreedBytes += result.freed
 	}
 
-	// Step 4: If still above low watermark (or manual), delete expired/oldest recordings
+	// Step 4: only fall back to recordings while still above the low watermark.
 	if ctx.Err() == nil && (isManual || c.isAboveLowWatermark(mediaDir, cfg.LowWatermarkPercent)) {
-		recDeleted, recFreed := c.deleteBatch(ctx, recordingsCandidates, mediaDir, cfg.LowWatermarkPercent)
-		summary.DeletedFiles += recDeleted
-		summary.FreedBytes += recFreed
+		result = c.deleteBatch(ctx, recordingsCandidates, scope)
+		summary.DeletedFiles += result.deleted
+		summary.FreedBytes += result.freed
 	}
 
-	summary.DurationMs = time.Since(startTime).Milliseconds()
-	summary.FinishedAt = time.Now().UTC()
-	summary.TargetStatus = PruneStatusCompleted
+	summary = finishSummary(summary, startTime, PruneStatusCompleted)
 
 	c.logger.Info("finished storage cleanup cycle",
 		zap.Int("deleted_files", summary.DeletedFiles),
@@ -166,86 +186,93 @@ func (c *CleanerEngine) RunPrune(ctx context.Context, mediaDir string, cfg *Stor
 	return summary, nil
 }
 
-func (c *CleanerEngine) isAboveLowWatermark(mediaDir string, lowWatermarkPercent int) bool {
+// finishSummary stamps the cycle outcome, duration, and completion time.
+func finishSummary(summary *CleanupSummary, startTime time.Time, status string) *CleanupSummary {
+	summary.DurationMs = time.Since(startTime).Milliseconds()
+	summary.FinishedAt = time.Now().UTC()
+	summary.TargetStatus = status
+
+	return summary
+}
+
+func (c *CleanerEngine) isAboveLowWatermark(mediaDir string, lowWatermark int) bool {
 	stats, err := c.inspector.InspectFS(mediaDir)
 	if err != nil || stats.TotalBytes == 0 {
 		return false
 	}
-	usage := int((stats.UsedBytes * 100) / stats.TotalBytes)
-	return usage > lowWatermarkPercent
+
+	return percentUsed(stats.UsedBytes, stats.TotalBytes) > lowWatermark
 }
 
-func (c *CleanerEngine) deleteBatch(ctx context.Context, files []candidateFile, mediaDir string, lowWatermark int) (int, int64) {
-	deletedCount := 0
-	var freedBytes int64
+func (c *CleanerEngine) deleteBatch(ctx context.Context, files []candidateFile, scope pruneScope) pruneResult {
+	var result pruneResult
 
 	for i, f := range files {
-		if ctx != nil && ctx.Err() != nil {
+		if ctx.Err() != nil {
 			break
 		}
 
 		err := c.fileRemover(f.path)
-		if err == nil {
-			deletedCount++
-			freedBytes += f.size
-		} else if !os.IsNotExist(err) {
-			c.logger.Warn("failed to delete storage candidate file", zap.String("path", f.path), zap.Error(err))
+		switch {
+		case err == nil:
+			result.deleted++
+			result.freed += f.size
+		case !os.IsNotExist(err):
+			c.logger.Warn("failed to delete storage candidate file",
+				zap.String("path", f.path),
+				zap.Error(err),
+			)
 		}
 
-		// Clean up parent directory if empty
+		// Best effort: drop the parent directory once it is empty. This fails
+		// whenever siblings remain, which is the normal case, so the error is
+		// deliberately discarded.
 		_ = os.Remove(filepath.Dir(f.path))
 
-		// Throttling: yield CPU and ext4 journal locks every batch
-		if (i+1)%c.batchSize == 0 {
-			if c.batchSleep > 0 {
-				select {
-				case <-time.After(c.batchSleep):
-				case <-ctx.Done():
-					return deletedCount, freedBytes
-				}
+		// Throttling: yield CPU and ext4 journal locks every batch.
+		if (i+1)%c.batchSize != 0 {
+			continue
+		}
+
+		if c.batchSleep > 0 {
+			select {
+			case <-time.After(c.batchSleep):
+			case <-ctx.Done():
+				return result
 			}
-			// Check if we already reached below low watermark
-			if !c.isAboveLowWatermark(mediaDir, lowWatermark) {
-				c.logger.Debug("reached below low watermark; stopping batch delete early", zap.Int("deleted", deletedCount))
-				break
-			}
+		}
+
+		// Check whether the volume already fell back below the low watermark.
+		if !c.isAboveLowWatermark(scope.mediaDir, scope.lowWatermark) {
+			c.logger.Debug("reached below low watermark; stopping batch delete early",
+				zap.Int("deleted", result.deleted),
+			)
+			break
 		}
 	}
 
-	return deletedCount, freedBytes
+	return result
 }
 
+// collectExports collects exports older than ttl, oldest first.
 func (c *CleanerEngine) collectExports(mediaDir string, ttl time.Duration) []candidateFile {
-	exportsDir := filepath.Join(mediaDir, "exports")
-	now := time.Now()
-	threshold := now.Add(-ttl)
+	threshold := time.Now().Add(-ttl)
 
-	var candidates []candidateFile
-	_ = filepath.WalkDir(exportsDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
+	candidates := []candidateFile{}
+	walkMediaFiles(filepath.Join(mediaDir, "exports"), func(path string, d fs.DirEntry) {
 		info, err := d.Info()
-		if err != nil {
-			return nil
+		if err != nil || !info.ModTime().Before(threshold) {
+			return
 		}
-		// Any export older than TTL is a candidate
-		if info.ModTime().Before(threshold) {
-			candidates = append(candidates, candidateFile{
-				path:    path,
-				size:    info.Size(),
-				modTime: info.ModTime(),
-			})
-		}
-		return nil
+
+		candidates = append(candidates, candidateFile{
+			path:    path,
+			size:    info.Size(),
+			modTime: info.ModTime(),
+		})
 	})
 
-	// Oldest first
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].modTime.Before(candidates[j].modTime)
-	})
-
-	return candidates
+	return sortOldestFirst(candidates)
 }
 
 // collectSnapshots collects AI snapshot images older than ttl.
@@ -255,63 +282,44 @@ func (c *CleanerEngine) collectExports(mediaDir string, ttl time.Duration) []can
 //   - 带 .lock / _locked 保护标记的文件一律跳过（与 recordings 同一铁律），
 //     这样告警证据可以被人为锁定而不被清理流程误杀。
 func (c *CleanerEngine) collectSnapshots(mediaDir string, ttl time.Duration) []candidateFile {
-	snapshotsDir := filepath.Join(mediaDir, "snapshots")
 	threshold := time.Now().Add(-ttl)
 
-	var candidates []candidateFile
-	_ = filepath.WalkDir(snapshotsDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
+	candidates := []candidateFile{}
+	walkMediaFiles(filepath.Join(mediaDir, "snapshots"), func(path string, d fs.DirEntry) {
+		if isCleanupProtected(d.Name(), path) {
+			return
 		}
-		name := d.Name()
-		if strings.HasSuffix(name, ".lock") || strings.Contains(name, "_locked") {
-			return nil
-		}
-		if _, err := os.Lstat(path + ".lock"); err == nil || !os.IsNotExist(err) {
-			return nil
-		}
+
 		info, err := d.Info()
-		if err != nil {
-			return nil
+		if err != nil || !info.ModTime().Before(threshold) {
+			return
 		}
-		if info.ModTime().Before(threshold) {
-			candidates = append(candidates, candidateFile{
-				path:    path,
-				size:    info.Size(),
-				modTime: info.ModTime(),
-			})
-		}
-		return nil
+
+		candidates = append(candidates, candidateFile{
+			path:    path,
+			size:    info.Size(),
+			modTime: info.ModTime(),
+		})
 	})
 
-	// Oldest first
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].modTime.Before(candidates[j].modTime)
-	})
-	return candidates
+	return sortOldestFirst(candidates)
 }
 
+// collectRecordings collects recordings for FIFO eviction, retention-expired
+// files first and then the oldest remaining ones.
 func (c *CleanerEngine) collectRecordings(mediaDir string, ttl time.Duration) []candidateFile {
-	recordingsDir := filepath.Join(mediaDir, "recordings")
-	now := time.Now()
-	expiredThreshold := now.Add(-ttl)
+	expiredThreshold := time.Now().Add(-ttl)
 
-	var expiredCandidates []candidateFile
-	var normalCandidates []candidateFile
-
-	_ = filepath.WalkDir(recordingsDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		// Skip locked recordings (explicit safety protection)
-		name := d.Name()
-		if strings.HasSuffix(name, ".lock") || strings.Contains(name, "_locked") {
-			return nil
+	expired := []candidateFile{}
+	normal := []candidateFile{}
+	walkMediaFiles(filepath.Join(mediaDir, "recordings"), func(path string, d fs.DirEntry) {
+		if isCleanupProtected(d.Name(), path) {
+			return
 		}
 
 		info, err := d.Info()
 		if err != nil {
-			return nil
+			return
 		}
 
 		item := candidateFile{
@@ -319,23 +327,54 @@ func (c *CleanerEngine) collectRecordings(mediaDir string, ttl time.Duration) []
 			size:    info.Size(),
 			modTime: info.ModTime(),
 		}
-
 		if info.ModTime().Before(expiredThreshold) {
-			expiredCandidates = append(expiredCandidates, item)
-		} else {
-			normalCandidates = append(normalCandidates, item)
+			expired = append(expired, item)
+			return
 		}
+
+		normal = append(normal, item)
+	})
+
+	// Expired first, then oldest normal recordings.
+	return append(sortOldestFirst(expired), sortOldestFirst(normal)...)
+}
+
+// isCleanupProtected reports whether a media file must survive cleanup.
+//
+// Two markers count: a name carrying the ".lock" suffix or the "_locked" infix,
+// and a sibling "<name>.lock" sidecar that an operator or the alert pipeline
+// dropped next to the evidence.
+func isCleanupProtected(name, path string) bool {
+	if strings.HasSuffix(name, lockMarkerSuffix) || strings.Contains(name, lockedNameInfix) {
+		return true
+	}
+
+	// Anything other than a clean "not exists" protects the file: a permission
+	// error while looking for the marker must not turn into deleting evidence.
+	_, err := os.Lstat(path + lockMarkerSuffix)
+	return !os.IsNotExist(err)
+}
+
+// walkMediaFiles visits every regular file under root.
+//
+// Walk errors are deliberately ignored: a missing or unreadable subtree simply
+// contributes no candidates, and the prune cycle reports its own outcome.
+func walkMediaFiles(root string, visit func(path string, d fs.DirEntry)) {
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+
+		visit(path, d)
 		return nil
 	})
+}
 
-	// Sort oldest first (FIFO)
-	sort.Slice(expiredCandidates, func(i, j int) bool {
-		return expiredCandidates[i].modTime.Before(expiredCandidates[j].modTime)
-	})
-	sort.Slice(normalCandidates, func(i, j int) bool {
-		return normalCandidates[i].modTime.Before(normalCandidates[j].modTime)
+// sortOldestFirst orders candidates so the oldest file is evicted first.
+func sortOldestFirst(candidates []candidateFile) []candidateFile {
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime.Before(candidates[j].modTime)
 	})
 
-	// Expired first, then oldest normal recordings
-	return append(expiredCandidates, normalCandidates...)
+	return candidates
 }
