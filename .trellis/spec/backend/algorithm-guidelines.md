@@ -125,7 +125,7 @@ zhulong_algo_runner --verify-plugin plugin.so --sample sample.ppm
   - `true` —— 包里那张样本图真的进了模型，`count` 是该图的真实结果数；
   - `false` —— Runner 回退到合成灰帧，**只**证明 ABI 生命周期（dlopen / model_create / worker / task / process / release），平台侧会记一条告警。
 - `count == 0` 不阻断安装（样本本身可能确实没有目标），但平台会告警提醒「样本图不具代表性」；**算法准确率由算法包自己的 native 金标测试担保**（如 `ZhulongPlateRecognitionPluginTests` 钉住车牌号/颜色），不依赖验包 CLI。
-- `model_create` 失败时日志必带 `backend=<cpu_mock|onnx|rknn>`：`cpu_mock` 构建会按设计拒绝一切真实模型，此时应先换后端而不是查模型文件。
+- `model_create` 失败时日志必带 `backend=<onnx|rknn|test_stub>`：`test_stub` 是夹具构建，按设计拒绝一切真实模型（应先换后端而不是查模型文件）；产品构建只有 `onnx` / `rknn`，不存在静默降级路径。
 
 ### 平台准入拦截错误代码对照表
 

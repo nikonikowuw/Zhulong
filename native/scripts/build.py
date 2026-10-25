@@ -211,38 +211,40 @@ def profile(path):
     p.setdefault("cflags", [])
     p.setdefault("ldflags", [])
 
-    # 后端选择（编译期 profile 开关）：推理与视觉前处理两个正交维度。
-    # 优先级：profile JSON 显式值 → 环境变量 ZHULONG_<KEY> → 默认值（见 default_inference_backend）。
-    # 不往 identity 里叠加无意义的失效（见 dependency()），也不默认写入未声明的键。
-    #
-    # ⚠️ 环境变量这一层是必需的：`make` 与 Air（.air.toml 的 build cmd）各自独立调用
-    #    build.py，而每次调用都会重新 configure CMake。只在命令行传
-    #    `--inference-backend onnx` 无法覆盖 Air 内部那次无参调用——它会把
-    #    ZHULONG_INFERENCE_BACKEND 重置回 cpu 并重链出桩后端。
-    is_cross = p["mode"] != "host"
-    for key, allowed in (("inference_backend", ("cpu", "rknn", "onnx")), ("vision_backend", ("cpu", "rga"))):
-        value = p.get(key) or os.environ.get("ZHULONG_" + key.upper())
-        if not value:
-            value = default_inference_backend(p, is_cross) if key == "inference_backend" else "cpu"
-        if value not in allowed:
-            raise ValueError(f"invalid {key}: {value!r}; expected one of {allowed}")
-        p[key] = value
+    # 视觉前处理后端（编译期 profile 开关）：CPU 实现是**产品实现**，默认 cpu 合理。
+    # 推理后端不在这里给默认值：它必须显式来源（profile / CLI / 环境变量），
+    # 由 resolve_inference_backend() 在合并 CLI 与环境变量后统一解析。
+    vision = p.get("vision_backend") or os.environ.get("ZHULONG_VISION_BACKEND") or "cpu"
+    if vision not in ("cpu", "rga"):
+        raise ValueError(f"invalid vision_backend: {vision!r}; expected one of ('cpu', 'rga')")
+    p["vision_backend"] = vision
     return p
 
 
-def default_inference_backend(p, is_cross):
-    """未声明推理后端时的默认值：Host 有 ONNX 前缀就用真实推理，交叉一律 cpu。
+def resolve_inference_backend(p):
+    """解析推理后端（编译期开关）。
 
-    ⚠️ 交叉构建绝不能落到 onnx：板端要的是能与目标 sysroot 匹配的实现，
-    宿主机上的 libonnxruntime.so 链进 arm64 产物只会产出无法运行的二进制。
+    优先级：profile JSON → 命令行 --inference-backend → 环境变量 ZHULONG_INFERENCE_BACKEND。
+    ⚠️ 交叉构建**没有默认值**：未显式声明即失败。历史上交叉/无 ONNX 前缀的构建会静默
+    落到 `cpu`（旧 cpu_mock 桩），产出「编译成功但不可推理」的产物，并让包级测试以
+    [SKIP] 伪装通过；桩现已降级为测试夹具（test_stub），产品构建只有 onnx / rknn。
+    Host 缺省 onnx（R11 的主机档位），ORT 前缀缺失时由 onnx_prefix() 给出可操作错误。
     """
-    if is_cross:
-        return "cpu"
-    try:
-        onnx_prefix(p.get("onnx_root"))
-    except ValueError:
-        return "cpu"
-    return "onnx"
+    allowed = ("rknn", "onnx", "test_stub")
+    value = p.get("inference_backend") or os.environ.get("ZHULONG_INFERENCE_BACKEND")
+    if not value:
+        if p.get("mode") == "host":
+            value = "onnx"
+        else:
+            raise ValueError(
+                f"profile {p.get('name')!r} 未声明 inference_backend：请在 profile JSON 里显式写 "
+                '"inference_backend": "rknn"（板端）或 "test_stub"（测试夹具构建）。'
+                "没有默认后端——静默落到桩会产出「编译成功但不可推理」的产物。"
+            )
+    if value not in allowed:
+        raise ValueError(f"invalid inference_backend: {value!r}; expected one of {allowed}")
+    p["inference_backend"] = value
+    return p
 
 
 def rknn_prefix():
@@ -461,14 +463,14 @@ def configure(p, sanitizer):
         f"-DCMAKE_EXE_LINKER_FLAGS={shlex.join(p['ldflags'])}",
         f"-DZHULONG_SANITIZER={sanitizer or ''}", "-DBUILD_TESTING=ON",
         # 用 .get() 兼容直接调用 configure() 的单元测试（它们绕过 profile() 构造最小 profile）。
-        f"-DZHULONG_INFERENCE_BACKEND={p.get('inference_backend', 'cpu')}",
+        f"-DZHULONG_INFERENCE_BACKEND={p.get('inference_backend', '')}",
         f"-DZHULONG_VISION_BACKEND={p.get('vision_backend', 'cpu')}"
     ]
-    # 只有 rknn 才调 rknn_prefix()：cpu 构建不能因为缺 vendor 目录而失败。
+    # 只有 rknn/onnx 才校验各自前缀：test_stub 构建不能因为缺厂商 SDK 而失败。
     # 使用绝对文件路径链接，不把 RKNN 前缀塞进 CMAKE_FIND_ROOT_PATH。
-    if p.get("inference_backend", "cpu") == "rknn":
+    if p.get("inference_backend") == "rknn":
         args.append(f"-DZHULONG_RKNN_ROOT={rknn_prefix()}")
-    elif p.get("inference_backend", "cpu") == "onnx":
+    elif p.get("inference_backend") == "onnx":
         args.append(f"-DZHULONG_ONNX_ROOT={onnx_prefix(p.get('onnx_root'))}")
     # 同理，只有 rga 才校验 RGA 前缀。
     if p.get("vision_backend", "cpu") == "rga":
@@ -582,7 +584,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", help="显式交叉编译目标 JSON 配置；省略则表示编译为 Host 本地模式")
     parser.add_argument("--sanitizer", choices=("address", "thread"), help="开启 ASan 或 TSan 内存/线程检查")
-    parser.add_argument("--inference-backend", choices=("cpu", "rknn", "onnx"), help="算法运行库推理后端")
+    parser.add_argument("--inference-backend", choices=("rknn", "onnx", "test_stub"), help="算法运行库推理后端（无默认值；test_stub 仅供夹具构建）")
     parser.add_argument("--onnx-root", help="ONNX Runtime 前缀路径（覆盖 ZHULONG_ONNX_ROOT）")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -593,7 +595,7 @@ def main():
     for name in ("configure", "build", "test"):
         cmd_parser = sub.add_parser(name)
         cmd_parser.add_argument("--sanitizer", dest="sub_sanitizer", choices=("address", "thread"), help="开启 ASan 或 TSan 内存/线程检查")
-        cmd_parser.add_argument("--inference-backend", dest="sub_inference_backend", choices=("cpu", "rknn", "onnx"), help="算法运行库推理后端")
+        cmd_parser.add_argument("--inference-backend", dest="sub_inference_backend", choices=("rknn", "onnx", "test_stub"), help="算法运行库推理后端（无默认值；test_stub 仅供夹具构建）")
         cmd_parser.add_argument("--onnx-root", dest="sub_onnx_root", help="ONNX Runtime 前缀路径（覆盖 ZHULONG_ONNX_ROOT）")
 
     sub.add_parser("go", help="调用 Go 编译器（带 CGO 隔离参数）").add_argument("args", nargs=argparse.REMAINDER)
@@ -613,6 +615,7 @@ def main():
         p["inference_backend"] = inference_backend
     if onnx_root:
         p["onnx_root"] = onnx_root
+    resolve_inference_backend(p)
 
     if p["mode"] != "host" and args.command == "test":
         raise ValueError("cross tests cannot run on the host; use build then inspect/deploy")

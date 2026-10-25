@@ -1,5 +1,5 @@
 {
-  "name": "rk3568-rga",
+  "name": "rk3568-stub",
   "cc": "/usr/bin/aarch64-linux-gnu-gcc",
   "cxx": "/usr/bin/aarch64-linux-gnu-g++",
   "ar": "/usr/bin/aarch64-linux-gnu-ar",
@@ -8,8 +8,6 @@
   "arch": "aarch64",
   "goarch": "arm64",
   "target_os": "linux",
-  "inference_backend": "cpu",
-  "vision_backend": "rga",
   "cflags": [
     "-nostdinc",
     "-isystem",
@@ -35,5 +33,6 @@
     "-L/home/niko/dev/Go/Zhulong/build/sysroots/rk3568/lib/aarch64-linux-gnu",
     "-Wl,-u,__cxa_call_terminate",
     "-lsupc++"
-  ]
+  ],
+  "inference_backend": "test_stub"
 }

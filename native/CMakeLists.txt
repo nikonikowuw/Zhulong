@@ -160,18 +160,27 @@ target_compile_options(ZhulongEngine PRIVATE
 #          4.0 后端选择：推理 / 视觉前处理（编译期 profile 隔离）
 # ==============================================================================
 # 推理后端与视觉前处理后端是两个正交开关：可「RKNN 推理 + CPU 前处理」，也可
-# 「CPU 推理 + RGA 前处理」。默认均为 cpu，保持既有 CPU 路径零回归。
+# 「ONNX 推理 + RGA 前处理」。视觉后端的 CPU 实现是**产品实现**（默认 cpu 合理）；
+# 推理后端没有默认值，必须显式指定（见下方校验）。
 # 视觉后端 rga 由兄弟任务 10-13-algo-rga-vision-backend 实现，本任务只声明变量。
-set(ZHULONG_INFERENCE_BACKEND "cpu" CACHE STRING "算法运行库推理后端: cpu | rknn | onnx")
-set_property(CACHE ZHULONG_INFERENCE_BACKEND PROPERTY STRINGS cpu rknn onnx)
+# ⚠️ 没有默认推理后端：调用方（native/scripts/build.py）必须显式传入。
+#    `test_stub` 只允许用于测试夹具构建（broker/runner 回归），其实现位于 tests/fixtures/。
+set(ZHULONG_INFERENCE_BACKEND "" CACHE STRING "算法运行库推理后端: onnx | rknn | test_stub（无默认值，必须显式指定）")
+set_property(CACHE ZHULONG_INFERENCE_BACKEND PROPERTY STRINGS onnx rknn test_stub)
 set(ZHULONG_VISION_BACKEND "cpu" CACHE STRING "算法运行库视觉前处理后端: cpu | rga")
 set_property(CACHE ZHULONG_VISION_BACKEND PROPERTY STRINGS cpu rga)
 set(ZHULONG_RKNN_ROOT "" CACHE PATH "RKNN 前缀（include/rknn_api.h + lib/librknnrt.so）；仅 ZHULONG_INFERENCE_BACKEND=rknn 需要")
 set(ZHULONG_ONNX_ROOT "" CACHE PATH "ONNX Runtime 前缀（include/onnxruntime_cxx_api.h + lib/libonnxruntime.so）；仅 ZHULONG_INFERENCE_BACKEND=onnx 需要")
 set(ZHULONG_RGA_ROOT "" CACHE PATH "RGA 前缀（include/rga/im2d.h + lib/librga.so*）；仅 ZHULONG_VISION_BACKEND=rga 需要")
 
-if(NOT ZHULONG_INFERENCE_BACKEND MATCHES "^(cpu|rknn|onnx)$")
-    message(FATAL_ERROR "ZHULONG_INFERENCE_BACKEND 取值非法: ${ZHULONG_INFERENCE_BACKEND}（期望 cpu、rknn 或 onnx）")
+if(ZHULONG_INFERENCE_BACKEND STREQUAL "")
+    message(FATAL_ERROR
+        "未选择推理后端：请显式传入 -DZHULONG_INFERENCE_BACKEND=onnx|rknn"
+        "（测试夹具构建用 test_stub）。没有默认后端——静默降级到桩后端会产出"
+        "「编译成功但不可推理」的产物，这是明确禁止的。")
+endif()
+if(NOT ZHULONG_INFERENCE_BACKEND MATCHES "^(rknn|onnx|test_stub)$")
+    message(FATAL_ERROR "ZHULONG_INFERENCE_BACKEND 取值非法: ${ZHULONG_INFERENCE_BACKEND}（期望 rknn、onnx 或 test_stub）")
 endif()
 if(NOT ZHULONG_VISION_BACKEND MATCHES "^(cpu|rga)$")
     message(FATAL_ERROR "ZHULONG_VISION_BACKEND 取值非法: ${ZHULONG_VISION_BACKEND}（期望 cpu 或 rga）")
@@ -238,9 +247,6 @@ add_library(ZhulongAlgoRuntime SHARED
     src/algorithm/runtime/letterbox_geometry.cpp
     src/algorithm/runtime/runtime_factory.cpp
 )
-if(NOT ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
-    target_sources(ZhulongAlgoRuntime PRIVATE src/algorithm/runtime/cpu_inference_backend.cpp)
-endif()
 target_compile_features(ZhulongAlgoRuntime PUBLIC cxx_std_17)
 target_include_directories(ZhulongAlgoRuntime
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -272,8 +278,12 @@ if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
     set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")
 endif()
 
-if(ZHULONG_INFERENCE_BACKEND STREQUAL "cpu")
-    target_compile_definitions(ZhulongAlgoRuntime PUBLIC ZHULONG_INFERENCE_CPU=1)
+# 测试夹具桩后端：实现位于 tests/fixtures/，**只允许**由 test_stub 构建编译。
+# 产品构建（onnx / rknn）从不包含该文件，SDK 分发物也不含它。
+if(ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub")
+    target_sources(ZhulongAlgoRuntime PRIVATE tests/fixtures/stub_inference_backend.cpp)
+    target_include_directories(ZhulongAlgoRuntime PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures)
+    target_compile_definitions(ZhulongAlgoRuntime PUBLIC ZHULONG_INFERENCE_TEST_STUB=1)
 endif()
 
 # RGA 视觉后端：同样只链接进 ZhulongAlgoRuntime（.so），宿主绝不链接。
@@ -494,8 +504,9 @@ if(BUILD_TESTING)
     add_test(NAME ZhulongAlgoRunnerGallery COMMAND ZhulongAlgoRunnerGalleryTests)
     set_tests_properties(ZhulongAlgoRunnerGallery PROPERTIES TIMEOUT 10)
 
-    # CPU profile tests verify that malformed/mock inference outputs fail closed without synthetic boxes.
-    if(ZHULONG_INFERENCE_BACKEND STREQUAL "cpu")
+    # 夹具（test_stub）构建没有真实推理能力：这里只注册不依赖真实模型的断言，
+    # 模型相关断言在源码里用 ZHULONG_INFERENCE_TEST_STUB 编译期排除（不再运行期 SKIP）。
+    if(ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub" OR ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongFaceRecognitionPluginTests
             tests/face_recognition_plugin_test.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/detector.cpp
@@ -513,11 +524,11 @@ if(BUILD_TESTING)
         set_tests_properties(ZhulongFaceRecognitionPlugin PROPERTIES TIMEOUT 10)
     endif()
 
-    # 车牌插件测试：坐标映射单测 + ABI 生命周期 + 真实样本金标回归（一个可执行，按需自跳过）。
-    # - cpu（桩后端）：桩后端按设计拒绝真实模型，模型相关断言自动 SKIP，坐标映射断言照跑；
+    # 车牌插件测试：坐标映射单测 + ABI 生命周期 + 真实样本金标回归（一个可执行）。
+    # - test_stub：桩后端按设计拒绝真实模型，模型断言编译期排除，坐标映射断言照跑；
     # - onnx：完整跑金标回归（车牌号/颜色/配置阈值）；
     # - rknn：不注册（交叉构建无 .rknn 权重与本机执行能力）。
-    if(ZHULONG_INFERENCE_BACKEND STREQUAL "cpu" OR ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
+    if(ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub" OR ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongPlateRecognitionPluginTests
             tests/plate_recognition_plugin_test.cpp
             # 仅为 plate_sample_point 纯函数单测直接编译：坐标映射必须能被单测钉住，
@@ -634,7 +645,7 @@ if(BUILD_TESTING)
     add_executable(ZhulongFaceFeatureExtractTests tests/face_feature_extract_test.cpp)
     target_link_libraries(ZhulongFaceFeatureExtractTests PRIVATE ZhulongEngine ${CMAKE_DL_LIBS})
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
-        # 只有 ONNX 后端才具备真实人脸能力；CPU 桩后端必须走 Fail-Closed 断言分支
+        # 只有 ONNX 后端才具备真实人脸能力；其余构建（rknn / test_stub）必须走 Fail-Closed 断言分支
         target_compile_definitions(ZhulongFaceFeatureExtractTests PRIVATE ZHULONG_TEST_ONNX_INFERENCE=1)
     endif()
     add_test(NAME ZhulongFaceFeatureExtract COMMAND ZhulongFaceFeatureExtractTests $<TARGET_FILE:FaceRecognitionPlugin>)

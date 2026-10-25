@@ -5,8 +5,8 @@
  * 测试在两种推理后端配置下都必须通过，但断言语义不同：
  *   - ZHULONG_TEST_ONNX_INFERENCE（ZHULONG_INFERENCE_BACKEND=onnx）：
  *     真实人脸样本必须检出并产出 512 维 L2 单位特征；无脸图必须返回 NOT_FOUND；
- *   - CPU test backend: has no face model, so synthetic/noise inputs and the sample fixture must fail closed with NOT_FOUND.
- *     It must never synthesize boxes or feature vectors.
+ *   - 其它构建（rknn / test_stub 夹具）：没有真实人脸能力，合成/噪声输入与样本都必须
+ *     fail-closed（NOT_FOUND / UNSUPPORTED），绝不合成检测框或特征向量。
  */
 
 #include "Zhulong/engine.h"
@@ -32,7 +32,7 @@ constexpr uint32_t kFeatureDim = 512;
 /**
  * @brief 判定「当前构建没有真实人脸能力」的返回码
  *
- * 桩后端（cpu_mock）按设计拒绝一切真实模型：模型文件存在 → init 返回 UNSUPPORTED，
+ * 夹具后端（test_stub）与无模型的 rknn 构建按设计拒绝一切真实模型：模型文件存在 → init 返回 UNSUPPORTED，
  * 文件缺失 → NOT_FOUND。两者都表示能力不可用，绝不能伪装成「检出成功」或合成特征。
  */
 bool is_capability_unavailable(int rc) {

@@ -40,4 +40,4 @@ make native-test
 
 该 target 离线构建 C++17 Engine 与固定 FFmpeg 7.1.5 静态依赖，运行生命周期、纯 C ABI、capture 单元、真实 loopback RTSP/RTP 和构建合同测试。首次显式执行 `make native-deps` 或导入本地固定源码包。`make check` 是全栈门禁；ASan/UBSan 与 TSan 使用独立目录，见 [接入合同](./ingestion-contract.md)。Linux 主机验证不等于跨编译或 RK3568 运行验证。
 
-⚠️ **两个交叉 profile 各司其职**：`native/profiles/rk3568.json`（cpu 后端，服务 mock/broker 板端回归）与 `rk3568-rknn.json`（rknn 推理后端，专供 `ZhulongRknnTests`）。二者不可互相替代 —— 详见 [硬件加速后端规范](./hardware-backends.md)。
+⚠️ **交叉 profile 各司其职**：`native/profiles/rk3568-stub.json`（`test_stub` 夹具后端，服务 mock/broker 板端回归，产物不可交付）与 `rk3568-rknn.json` / `rk3568-rknn-rga.json`（`rknn` 推理后端）。推理后端没有默认值，profile 必须显式声明 —— 详见 [硬件加速后端规范](./hardware-backends.md)。

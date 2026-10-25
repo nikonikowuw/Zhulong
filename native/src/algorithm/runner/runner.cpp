@@ -479,7 +479,7 @@ namespace zhulong
         zhulong_status_t rc = api.model_create("{}", &model);
         if (rc != ZHULONG_PLUGIN_OK || !model)
         {
-            // 桩后端（cpu_mock）按设计拒绝真实模型：这时的“模型加载失败”不是插件缺陷，
+            // 测试夹具后端（test_stub）按设计拒绝真实模型：这时的“模型加载失败”不是插件缺陷，
             // 而是本构建不含真实推理能力。把后端名一并记入日志，否则运维会在
             // “模型没拷全”与“host 后端选错”之间瞎猜。
             ZL_LOGE(0, "algorithm.runner", "plugin_model_create_failed rc=%d model_present=%d backend=%s",

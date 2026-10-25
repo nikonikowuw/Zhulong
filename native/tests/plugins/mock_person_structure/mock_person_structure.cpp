@@ -3,8 +3,8 @@
 class MockPersonStructurePlugin {
 public:
     // ⚠️ 夹具插件：不加载任何模型，也不依赖任何推理后端。
-    //   曾经它调用 Model::load("<name>.weights")：在 cpu_mock 桩后端下侥幸成功，
-    //   在 onnx/rknn 真实后端下必然 model_create 失败，导致同一套回归在换后端后假红/假绿。
+    //   曾经它调用 Model::load("<name>.weights")：在旧的 cpu 桩后端下侥幸成功，
+    //   在 onnx/rknn 真实后端下必然 model_create 失败，导致同一套回归在换后端后假红/假绿。现在夹具不加载任何模型。
     zhulong_status_t init(const std::string& config_json) {
         (void)config_json;
         return ZHULONG_PLUGIN_OK;

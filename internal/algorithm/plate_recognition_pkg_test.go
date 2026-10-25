@@ -13,7 +13,7 @@ import (
 
 // findPlateRecognitionArchive locates (or builds) the packaged plate algorithm,
 // mirroring findFaceRecognitionArchive. Building requires a host with real
-// inference (onnx/rknn): the cpu_mock stub backend rejects real models by design,
+// inference (onnx/rknn): the test_stub fixture backend rejects real models by design,
 // so the packaging gate fails there and this test skips.
 func findPlateRecognitionArchive(t *testing.T) string {
 	t.Helper()
@@ -53,7 +53,7 @@ func findPlateRecognitionArchive(t *testing.T) string {
 		cmd := exec.Command("python3", absScript, "--target", "cpu")
 		cmd.Dir = filepath.Dir(filepath.Dir(filepath.Dir(absScript)))
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Logf("build_package.py failed (expected on a cpu_mock host build): %s", string(out))
+			t.Logf("build_package.py failed (expected on a test_stub host build): %s", string(out))
 			continue
 		}
 		if archive := find(); archive != "" {

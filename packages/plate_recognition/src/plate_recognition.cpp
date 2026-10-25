@@ -101,7 +101,7 @@ std::string resolve_model_path(const std::string& rel_path) {
 /**
  * @brief 模型加载失败时的精确状态码
  *
- * 文件存在却加载不出来 = 当前推理后端不支持真实模型（典型：host 用 cpu_mock 桩后端，
+ * 文件存在却加载不出来 = 当前构建不含真实推理能力（典型：test_stub 夹具构建，
  * 它按设计拒绝一切真实模型路径）；文件不存在 = NOT_FOUND。
  */
 zhulong_status_t model_unavailable_status(const std::string& resolved_path) {

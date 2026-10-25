@@ -88,7 +88,7 @@ static zhulong::Model load_target_model(const char* base_name, bool& is_onnx) {
 /**
  * @brief 将「模型加载失败」细分为可行动的状态码
  *
- * 文件存在却加载不出来 = 当前推理后端不支持真实模型（典型：host 用 cpu_mock 桩后端，
+ * 文件存在却加载不出来 = 当前构建不含真实推理能力（典型：test_stub 夹具构建，
  * 它按设计拒绝一切真实模型路径）；文件不存在 = NOT_FOUND。
  * 不区分这两者，运维就只能在「模型没拷全」与「host 推理后端选错」之间瞎猜。
  */

@@ -5,12 +5,13 @@ PNPM ?= pnpm
 CMAKE ?= cmake
 CTEST ?= ctest
 BUILD_DIR ?= build
-# 推理后端覆盖：cpu | rknn | onnx。留空时 Host 用 cpu、交叉编译沿用 profile JSON 内的
-# inference_backend（不要无条件注入，否则会覆盖 rk3568-rknn.json 的 rknn 选择）。
+# 推理后端覆盖：rknn | onnx | test_stub（无默认值；Host 缺省 onnx，交叉必须由 profile 声明）。
+# 留空时不注入，交叉编译沿用 profile JSON 内的 inference_backend（不要无条件注入，
+# 否则会覆盖 rk3568-rknn.json 的 rknn 选择）。
 # ⚠️ 必须走这个变量注入：每次 build.py 调用都会重新 configure CMake，而 CMake 缓存里的
-#    ZHULONG_INFERENCE_BACKEND 会被无参 configure 重置回 cpu。直接执行一次
+#    ZHULONG_INFERENCE_BACKEND 需要被显式重放。直接执行一次
 #    `build.py --inference-backend onnx build` 之后，任何 `make dev` / `make build` /
-#    `make check` 都会把它悄悄改回 cpu 并重链出桩后端。
+#    `make check` 都必须带上同一选择。
 # ⚠️ Air（.air.toml 的 build cmd）也会独立调用 build.py，所以还要把选择导出成
 #    ZHULONG_INFERENCE_BACKEND 让它继承；环境变量是该开关的统一入口。
 INFERENCE_BACKEND ?= $(ZHULONG_INFERENCE_BACKEND)

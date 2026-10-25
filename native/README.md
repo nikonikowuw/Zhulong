@@ -73,6 +73,10 @@ host, then copy/edit the template. For a 32-bit ARM userspace use `arch: "arm"`,
 `goarch: "arm"`, and explicit `goarm: "5"`, `"6"`, or `"7"`; select matching
 compiler ABI flags in `cflags`/`ldflags`. Do not infer userspace from the SoC name.
 
+Every cross profile **must** declare `"inference_backend"` (`rknn` for the board,
+`test_stub` for fixture-only broker/runner regressions); there is no default backend
+and CMake fails closed rather than silently linking a stub.
+
 ```sh
 make native-cross-build CROSS_PROFILE=/path/to/target.json \
   CROSS_OUTPUT=build/targets/PROFILE_NAME/Zhulong

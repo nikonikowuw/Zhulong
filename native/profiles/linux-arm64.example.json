@@ -9,5 +9,6 @@
   "goarch": "arm64",
   "target_os": "linux",
   "cflags": [],
-  "ldflags": []
+  "ldflags": [],
+  "inference_backend": "onnx"
 }

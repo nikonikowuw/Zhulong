@@ -47,14 +47,18 @@ int main(int argc, char* argv[]) {
 
     zhulong_model_group_h model = nullptr;
     rc = api.model_create("{\"threshold\":0.40,\"top_k\":3}", &model);
-    if (rc == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED) {
-        // host 用 cpu_mock 桩后端构建：桩后端按设计拒绝一切真实模型，插件必须硬失败。
-        // 这不是缺陷，而是「本构建不含真实推理能力」的诚实表达，跳过推理断言。
-        std::cout << "[SKIP] cpu_mock backend: real models are rejected by design" << std::endl;
-        dlclose(handle);
-        return 0;
-    }
+#if defined(ZHULONG_INFERENCE_TEST_STUB)
+    // 夹具构建没有真实推理能力：真实模型必须被硬拒绝——这是正确行为，不是缺陷。
+    // NOT_SUPPORTED = 模型找到但桩不接受；NOT_FOUND = 该工作目录找不到模型。
+    // 两者都必须是「没有 model」，绝不允许出现「加载成功」。
+    assert((rc == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED || rc == ZHULONG_PLUGIN_ERR_NOT_FOUND) &&
+           model == nullptr);
+    dlclose(handle);
+    std::cout << "[OK] test_stub build: real model rejected as designed" << std::endl;
+    return 0;
+#else
     assert(rc == ZHULONG_PLUGIN_OK && model != nullptr);
+#endif
 
     zhulong_worker_ctx_h worker = nullptr;
     rc = api.worker_create(model, 0, &worker);

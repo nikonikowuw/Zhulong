@@ -73,10 +73,13 @@ bool load_ppm(const std::string& path, PpmImage& out) {
     return input.gcount() == static_cast<std::streamsize>(out.rgb.size());
 }
 
-/** @brief host 构建的推理后端是否为确定性桩（cpu_mock 拒绝一切真实模型） */
-bool inference_backend_is_stub() {
-    return std::strcmp(zhulong::default_inference_backend_name(), "cpu_mock") == 0;
-}
+/** @brief 当前构建是否为测试夹具（test_stub）——编译期事实，不做运行期探测 */
+constexpr bool kTestStubBuild =
+#if defined(ZHULONG_INFERENCE_TEST_STUB)
+    true;
+#else
+    false;
+#endif
 
 zhulong_status_t load_plugin(const char* so_path, void** out_handle, zhulong_plugin_api_v1* out_api) {
     void* handle = dlopen(so_path, RTLD_NOW | RTLD_LOCAL);
@@ -212,9 +215,12 @@ void test_abi_lifecycle(const zhulong_plugin_api_v1& api, const std::string& plu
 
     zhulong_model_group_h model = nullptr;
     zhulong_status_t rc = api.model_create("{}", &model);
-    if (rc == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED) {
-        // cpu_mock 桩后端按设计拒绝一切真实模型：插件硬失败才是正确行为
-        std::cout << "[SKIP] " << plugin_so << " lifecycle: cpu_mock backend rejects real models" << std::endl;
+    if (kTestStubBuild) {
+        // 夹具构建没有真实推理能力：真实模型必须被硬拒绝——这是正确行为，不是缺陷。
+        // NOT_SUPPORTED = 模型找到但桩不接受；NOT_FOUND = 该工作目录找不到模型。
+        assert((rc == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED || rc == ZHULONG_PLUGIN_ERR_NOT_FOUND) &&
+               model == nullptr);
+        std::cout << "[OK] " << plugin_so << " lifecycle: real model rejected by test_stub build" << std::endl;
         return;
     }
     assert(rc == ZHULONG_PLUGIN_OK && model != nullptr);
@@ -251,12 +257,8 @@ void test_abi_lifecycle(const zhulong_plugin_api_v1& api, const std::string& plu
  * 标注真值；它保证通道顺序（BGR）、字符表与 CTC 解码不会悄悄漂移。颜色则由样本
  * 像素本身佐证：两块车牌区域的 B 通道显著高于 R 通道，必须是「蓝色」。
  */
+#if !defined(ZHULONG_INFERENCE_TEST_STUB)
 void test_sample_image_golden(const zhulong_plugin_api_v1& api, const std::string& plugin_so) {
-    if (inference_backend_is_stub()) {
-        std::cout << "[SKIP] " << plugin_so << " golden: cpu_mock backend has no real inference" << std::endl;
-        return;
-    }
-
     PpmImage sample;
     if (!load_ppm("native/tests/fixtures/onnx/plate_sample.ppm", sample)) {
         std::cerr << "missing fixture: native/tests/fixtures/onnx/plate_sample.ppm" << std::endl;
@@ -335,6 +337,7 @@ void test_sample_image_golden(const zhulong_plugin_api_v1& api, const std::strin
 
     std::cout << "[✓] plate sample golden regression passed" << std::endl;
 }
+#endif  // !ZHULONG_INFERENCE_TEST_STUB
 
 } // namespace
 
@@ -353,7 +356,9 @@ int main(int argc, char* argv[]) {
     }
 
     test_abi_lifecycle(api, plugin_so);
+#if !defined(ZHULONG_INFERENCE_TEST_STUB)
     test_sample_image_golden(api, plugin_so);
+#endif
 
     dlclose(handle);
     std::cout << "[✓] PlateRecognitionPlugin tests passed successfully!" << std::endl;

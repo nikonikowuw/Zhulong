@@ -70,35 +70,35 @@ int main() {
     auto infer_backend = zhulong::get_default_inference_backend();
     assert(infer_backend != nullptr);
 
-    // 推理后端的夹具断言只在桩后端（cpu_mock）下有意义：真实后端需要真实模型文件。
-    // ⚠️ 桩后端只接受显式夹具标记，真实模型路径必须硬失败——否则「加载成功 +
-    //    合成输出」会伪装成可用推理，是现场最难归因的一类故障。
-    if (std::strcmp(zhulong::default_inference_backend_name(), "cpu_mock") == 0) {
-        assert(infer_backend->load_model("models/plate_detect.onnx") == nullptr);
-        assert(infer_backend->load_model("{\"model_path\": \"mock.model\"}") == nullptr);
+    // 夹具断言按**构建**分派（编译期），不做运行期 SKIP：
+    // 只有 test_stub 构建才存在桩后端，产品构建（onnx/rknn）不得出现任何夹具通路。
+#if defined(ZHULONG_INFERENCE_TEST_STUB)
+    assert(infer_backend->load_model("models/plate_detect.onnx") == nullptr);
+    assert(infer_backend->load_model("{\"model_path\": \"mock.model\"}") == nullptr);
 
-        auto model = infer_backend->load_model("cpu_mock:algo_runtime_test");
-        assert(model != nullptr);
+    auto model = infer_backend->load_model("test_stub:algo_runtime_test");
+    assert(model != nullptr);
 
-        auto session = infer_backend->create_session(model, 1);
-        assert(session != nullptr);
+    auto session = infer_backend->create_session(model, 1);
+    assert(session != nullptr);
 
-        zhulong::Tensor input_tensor({1, 3, 640, 640}, zhulong::DataType::FLOAT32);
-        input_tensor.data<float>()[0] = 0.5f;
+    zhulong::Tensor input_tensor({1, 3, 640, 640}, zhulong::DataType::FLOAT32);
+    input_tensor.data<float>()[0] = 0.5f;
 
-        std::vector<zhulong::Tensor> outputs;
-        zhulong_status_t rc = infer_backend->forward(session.get(), {input_tensor}, outputs);
-        assert(rc == ZHULONG_PLUGIN_OK);
-        assert(outputs.size() == 1);
-        assert(outputs[0].shape().size() == 2);
-        assert(outputs[0].shape()[0] == 1 && outputs[0].shape()[1] == 6);
+    std::vector<zhulong::Tensor> outputs;
+    zhulong_status_t stub_rc = infer_backend->forward(session.get(), {input_tensor}, outputs);
+    assert(stub_rc == ZHULONG_PLUGIN_OK);
+    assert(outputs.size() == 1);
+    assert(outputs[0].shape().size() == 2);
+    assert(outputs[0].shape()[0] == 1 && outputs[0].shape()[1] == 6);
 
-        const float* out_data = outputs[0].data<float>();
-        assert(out_data[4] > 0.8f);
-    } else {
-        // 真实后端：桩夹具标记不是可加载的模型，同样必须失败。
-        assert(infer_backend->load_model("cpu_mock:algo_runtime_test") == nullptr);
-    }
+    const float* out_data = outputs[0].data<float>();
+    assert(out_data[4] > 0.8f);
+#else
+    // 产品后端：夹具标记与 mock 规格都不是可加载的模型，必须失败。
+    assert(infer_backend->load_model("test_stub:algo_runtime_test") == nullptr);
+    assert(infer_backend->load_model("{\"model_path\": \"mock.model\"}") == nullptr);
+#endif
 
     // 3. Padded BGR rows must be read by stride and converted to RGB.
     auto vision_backend = zhulong::get_default_vision_backend();

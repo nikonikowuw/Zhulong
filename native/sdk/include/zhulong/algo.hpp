@@ -34,10 +34,11 @@ namespace zhulong {
 /**
  * @brief 目标平台模型权重文件扩展名
  *
- * 在 RKNN 构建配置（或 ARM Linux 默认）下为 ".rknn"；
- * 在 ONNX 构建配置、macOS（含 Apple Silicon）与 CPU 桩配置下为 ".onnx"。
+ * 由**推理后端**唯一决定，不按架构猜测：rknn → ".rknn"；onnx / test_stub → ".onnx"。
+ * ⚠️ 这里曾用 `__arm__`/`__aarch64__` 兜底，属于「一套源码多平台」时期的隐式分支；
+ *    现在每个 target 独立构建，架构宏不再参与资产选择。
  */
-#if defined(ZHULONG_INFERENCE_RKNN) || ((defined(__arm__) || defined(__aarch64__)) && !defined(__APPLE__) && !defined(ZHULONG_INFERENCE_ONNX) && !defined(ZHULONG_INFERENCE_CPU))
+#if defined(ZHULONG_INFERENCE_RKNN)
 inline constexpr const char* TARGET_MODEL_EXT = ".rknn";
 #else
 inline constexpr const char* TARGET_MODEL_EXT = ".onnx";

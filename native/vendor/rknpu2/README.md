@@ -46,7 +46,7 @@ CMake 通过 `-DZHULONG_RKNN_ROOT=<本目录绝对路径>` 消费该前缀；inc
 板端 `MockDetector` 走 `zhulong::Model::load("mock_detector.weights")`；在 RKNN 后端下这会触发
 `rknn_init` 一个不存在的文件 → `model_create` 失败 → runner 退出码 2。因此：
 
-- **cpu 交叉产物**（`native/profiles/rk3568.json`）继续服务 mock / broker 板端测试；
+- **test_stub 交叉产物**（`native/profiles/rk3568-stub.json`）继续服务 mock / broker 板端测试，产物不可交付；
 - **rknn 交叉产物**（`native/profiles/rk3568-rknn.json`）专供 RKNN 后端验证。
 
 两个 profile 各司其职，不互相替代。
