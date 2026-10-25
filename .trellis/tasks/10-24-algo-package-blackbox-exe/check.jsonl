@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Go 测试与审计排空约定；阶段 4/5 单测的写法门禁"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "校验实现是否仍满足 C ABI 与结果契约，且未引入跨 .so C++ 类型"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "校验 manifest 变更、孤儿清扫与锁铁律未被破坏"}
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "校验静态/动态双产物未破坏依赖隔离与 RPATH 规则"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层改动（native + Go + 打包）的一致性检查"}

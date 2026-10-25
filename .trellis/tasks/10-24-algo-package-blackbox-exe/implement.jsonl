@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "C ABI 插件契约、SDK 门面、结果契约与异常边界；本任务改造的正是这一层的交付形态"}
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "公共运行库 libZhulongAlgoRuntime.so 的编译配置、依赖隔离与 PIC/RPATH 约束；阶段 1 静态产物必须遵守"}
+{"file": ".trellis/spec/native/directory-structure.md", "reason": "native 目录拓扑；阶段 1/2 新增 OBJECT/STATIC target 与 sdk/runtime 子目录需符合"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "broker 发布率、AI 消费者生命周期与销毁顺序；可执行文件形态不得改变 Stop 顺序"}
+{"file": ".trellis/spec/native/host-portability.md", "reason": "host/cross 构建与平台差异；阶段 7 干净容器验证的依据"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "算法包目录拓扑、manifest 权威字段、验包准入门禁与 algorunner 看护铁律（Pdeathsig/孤儿清扫/锁隔离）"}
+{"file": ".trellis/spec/architecture.md", "reason": "跨层边界与 CGO 契约；宿主↔native↔算法的拓扑约束"}
