@@ -2,13 +2,7 @@
   "pageTitle": "視訊分析任務",
   "pageDesc": "管理邊緣攝影機與演算法包的動態業務調度，支援通道級多演算法聚合配置與全平台 1,000 點算力預算管控。",
   "newChannelTask": "配置通道任務",
-  "viewChannel": "通道聚合視圖",
-  "viewTable": "任務明細表格",
   "searchPlaceholder": "搜尋任務 ID、攝影機或演算法名稱...",
-  "filterAllCameras": "全部攝影機",
-  "filterAllAlgorithms": "全部演算法",
-  "filterAllStatus": "全部狀態",
-  "resetFilters": "重置篩選",
   "budgetCard": {
     "title": "算力配額與調度看板",
     "desc": "全平台共享 1,000 點 NPU 異構加速算力池，基於已啟用任務的採樣率與演算法成本即時累加。",
@@ -48,7 +42,21 @@
     "removeAlgoSuccess": "已從通道中移除該演算法",
     "removeAlgoError": "移除演算法失敗",
     "empty": "暫無分析任務記錄",
-    "emptyFiltered": "未找到匹配的分析任務，請調整篩選條件"
+    "emptyFiltered": "未找到匹配的分析任務，請調整篩選條件",
+    "columns": {
+      "taskId": "任務 / 訂閱 ID",
+      "camera": "關聯攝影機",
+      "algorithm": "綁定演算法包",
+      "sampleFps": "取樣影格率",
+      "computePoints": "算力開銷",
+      "status": "執行狀態",
+      "updatedAt": "更新時間"
+    },
+    "loadFailed": "載入分析任務失敗",
+    "filterEmpty": "未找到符合的分析任務",
+    "filterEmptyDesc": "請調整搜尋關鍵字或篩選條件後重試。",
+    "emptyDesc": "尚未向任何攝影機分配分析演算法，點擊「配置通道任務」開始。",
+    "resetFilter": "重設篩選"
   },
   "channelCard": {
     "activeAlgorithms": "已配置演算法",
@@ -170,5 +178,15 @@
     "resumeHint": "恢復即時畫面",
     "save": "儲存區域策略",
     "cancel": "取消"
+  },
+  "actions": {
+    "refresh": "重新整理",
+    "retry": "重試",
+    "edit": "編輯配置",
+    "delete": "刪除任務"
+  },
+  "views": {
+    "channel": "通道聚合視圖",
+    "table": "任務明細表格"
   }
 }

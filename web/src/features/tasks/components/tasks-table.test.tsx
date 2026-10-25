@@ -3,15 +3,17 @@ import { render } from 'vitest-browser-react'
 import { type Algorithm } from '@/features/algorithms/data/schema'
 import { type Camera } from '@/features/cameras/data/schema'
 import { type Task } from '../data/schema'
+import { TasksProvider, useTasksContext } from './tasks-provider'
 import { TasksTable } from './tasks-table'
 
 const mockCopyToClipboard = vi.hoisted(() => vi.fn())
 const mockToastSuccess = vi.hoisted(() => vi.fn())
 const mockToastError = vi.hoisted(() => vi.fn())
+const mockUpdateMutate = vi.hoisted(() => vi.fn())
 
 vi.mock('../hooks/use-tasks', () => ({
   useUpdateTask: () => ({
-    mutate: vi.fn(),
+    mutate: mockUpdateMutate,
     isPending: false,
   }),
 }))
@@ -89,35 +91,40 @@ const mockTasks: Task[] = [
   },
 ]
 
-describe('TasksTable', () => {
-  const renderTable = () =>
-    render(
+/** 把 Provider 里的弹窗状态暴露成可断言的文本，替代旧的 onDeleteTask 回调断言。 */
+function DialogProbe() {
+  const { open, currentRow } = useTasksContext()
+  return <div>{`dialog:${open ?? 'none'}:${currentRow?.id ?? ''}`}</div>
+}
+
+function TasksTableHarness({ tasks }: { tasks: Task[] }) {
+  return (
+    <TasksProvider>
       <TasksTable
-        tasks={mockTasks}
+        tasks={tasks}
         cameras={mockCameras}
         algorithms={mockAlgorithms}
-        onEditTask={vi.fn()}
-        onDeleteTask={vi.fn()}
+        isLoading={false}
+        isError={false}
+        onRetry={vi.fn()}
+        // 明细表格视图（默认是通道聚合卡片视图）
+        search={{ view: 'table' }}
+        navigate={vi.fn()}
       />
-    )
+      <DialogProbe />
+    </TasksProvider>
+  )
+}
+
+describe('TasksTable', () => {
+  const renderTable = () => render(<TasksTableHarness tasks={mockTasks} />)
 
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
   it('renders table headers and row items correctly', async () => {
-    const onEdit = vi.fn()
-    const onDelete = vi.fn()
-
-    const { getByText } = await render(
-      <TasksTable
-        tasks={mockTasks}
-        cameras={mockCameras}
-        algorithms={mockAlgorithms}
-        onEditTask={onEdit}
-        onDeleteTask={onDelete}
-      />
-    )
+    const { getByText } = await renderTable()
 
     await expect.element(getByText('南门枪机')).toBeInTheDocument()
     await expect.element(getByText('烟火检测算法')).toBeInTheDocument()
@@ -130,34 +137,54 @@ describe('TasksTable', () => {
   })
 
   it('renders empty message when tasks array is empty', async () => {
-    const { getByText } = await render(
-      <TasksTable
-        tasks={[]}
-        cameras={mockCameras}
-        algorithms={mockAlgorithms}
-        onEditTask={vi.fn()}
-        onDeleteTask={vi.fn()}
-      />
-    )
+    const { getByText } = await render(<TasksTableHarness tasks={[]} />)
 
     await expect.element(getByText('暂无分析任务记录')).toBeInTheDocument()
   })
 
-  it('triggers onDeleteTask when single-algorithm task delete button is clicked', async () => {
-    const onDelete = vi.fn()
+  it('routes single-algorithm deletes to the task delete dialog', async () => {
+    const { getByRole, getByText } = await renderTable()
+
+    await getByRole('button', { name: /^操作$/ }).click()
+    await getByRole('menuitem', { name: /删除任务/ }).click()
+
+    // 该通道只剩一个算法 → 走整条任务删除，而不是「摘除订阅」
+    await expect
+      .element(getByText(`dialog:delete:${mockTasks[0].id}`))
+      .toBeInTheDocument()
+    expect(mockUpdateMutate).not.toHaveBeenCalled()
+  })
+
+  it('removes only the subscription when the channel keeps other algorithms', async () => {
+    const twoAlgoTask: Task = {
+      ...mockTasks[0],
+      algorithms: [
+        ...mockTasks[0].algorithms,
+        {
+          ...mockTasks[0].algorithms[0],
+          id: 'sub-2',
+        },
+      ],
+    }
+
     const { getByRole } = await render(
-      <TasksTable
-        tasks={mockTasks}
-        cameras={mockCameras}
-        algorithms={mockAlgorithms}
-        onEditTask={vi.fn()}
-        onDeleteTask={onDelete}
-      />
+      <TasksTableHarness tasks={[twoAlgoTask]} />
     )
 
-    const trashBtn = getByRole('button', { name: /确认删除|删除任务/i })
-    await trashBtn.click()
-    expect(onDelete).toHaveBeenCalledWith(mockTasks[0])
+    await getByRole('button', { name: /^操作$/ })
+      .first()
+      .click()
+    await getByRole('menuitem', { name: /删除任务/ })
+      .first()
+      .click()
+
+    expect(mockUpdateMutate).toHaveBeenCalledTimes(1)
+    const [payload] = mockUpdateMutate.mock.calls[0] as [
+      { id: string; data: { algorithms: { id: string }[] } },
+    ]
+    expect(payload.id).toBe(twoAlgoTask.id)
+    // 只摘掉被点的那条订阅，其余原样回传
+    expect(payload.data.algorithms.map((a) => a.id)).toEqual(['sub-2'])
   })
 
   it('shows both the task id and the algorithm subscription id', async () => {

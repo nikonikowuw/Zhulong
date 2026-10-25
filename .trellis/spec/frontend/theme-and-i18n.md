@@ -93,6 +93,23 @@ const HEALTH_LEVEL: Record<HealthStatus, StatusLevel> = {
 - 仪表盘与配置面板背景统一使用 `bg-muted/30` 或 `bg-card`，边框统一使用 `border border-border`，圆角使用 `rounded-lg` 或 `rounded-xl`；
 - 严禁手写 `bg-gray-100`, `bg-slate-50`, `border-gray-300` 等非语义类。
 
+#### 4.1 列表页骨架：照抄 `persons` / `cameras`，不要自行发明
+
+所有 CRUD 列表页必须与 `features/persons` 同构，禁止自造布局或私造控件：
+
+| 位置 | 规范 |
+| :--- | :--- |
+| 页面入口 | `Provider` 包住 `XxxContent`，弹窗状态（`open` / `currentRow`）由 Provider 持有，`<XxxDialogs />` 集中挂载 |
+| 标题行 | `flex flex-wrap items-end justify-between gap-2`；标题块加 `min-w-0 flex-1`（否则长文案会撑满整行、把按钮挤到第二行最左），描述加 `max-w-3xl` |
+| 主操作 | 独立 `XxxPrimaryButtons`：`Button variant='outline' size='sm' className='h-8'`（刷新）+ `Button size='sm' className='h-8'`（新建），图标用 `me-1 h-4 w-4` |
+| 表格 | `@tanstack/react-table` + `DataTableToolbar` / `DataTablePagination` / 列定义拆到 `*-columns.tsx`、单元格拆到 `*-columns-cells.tsx`；容器固定 `rounded-md border border-border bg-card` |
+| 行操作 | 右侧 `⋯` `DropdownMenu`，不用内联图标按钮 |
+| 视图切换 | 与 `persons` 一致：工具栏行右侧 `rounded-lg border border-border bg-muted/40 p-0.5` 里放 `h-7 px-2 text-xs` 的 `Button` |
+
+**空态铁律**：0 条有效数据时页面上不得残留任何业务卡片（含「未配置」占位卡片、统计看板、分页条）。分页条在 `getFilteredRowModel().rows.length === 0` 时不渲染，否则会出现 `Page 1 of 0`。空态统一放在表格 `TableCell` 内或 `rounded-xl border border-dashed` 容器里，并带一个主 CTA。
+
+**「有数据」的判据要按业务有效项，不是表行数**：例如分析任务只有带算法订阅（`task.algorithms.length > 0`）才算任务；后端可能落下空聚合行，不得据此渲染看板。
+
 #### 5. 错误与正确实现对比 (Wrong vs Correct)
 
 | 场景 | ❌ 严禁出现（私造轮子 / 视觉割裂） | ✅ 必须规范（shadcn-admin 原汁原味） |

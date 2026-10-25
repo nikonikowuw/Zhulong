@@ -1,21 +1,22 @@
-import { useCallback, useMemo, useState } from 'react'
-import { Check, Copy, Pencil, Search, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  type SortingState,
+  type VisibilityState,
+  flexRender,
+  getCoreRowModel,
+  getFacetedRowModel,
+  getFacetedUniqueValues,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useReactTable,
+} from '@tanstack/react-table'
+import { AlertCircle, LayoutGrid, List, RefreshCw, Video } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { copyToClipboard } from '@/lib/clipboard'
-import { cn } from '@/lib/utils'
 import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
 import {
   Table,
   TableBody,
@@ -24,21 +25,26 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
 import { type Algorithm } from '@/features/algorithms/data/schema'
 import { type Camera } from '@/features/cameras/data/schema'
 import { type Task } from '../data/schema'
+import { toTaskRows, type TaskRow } from '../data/task-row'
+import { useChannelTasks } from '../hooks/use-channel-tasks'
 import { useUpdateTask } from '../hooks/use-tasks'
-import { TaskStatusBadge } from './task-status-badge'
+import { ChannelTasksView } from './channel-tasks-view'
+import { tasksColumns as columns } from './tasks-columns'
+import { useTasksContext } from './tasks-provider'
 
 interface TasksTableProps {
   tasks: Task[]
   cameras: Camera[]
   algorithms: Algorithm[]
-  isLoading?: boolean
-  search?: Record<string, unknown>
-  navigate?: NavigateFn
-  onEditTask: (task: Task) => void
-  onDeleteTask: (task: Task) => void
+  isLoading: boolean
+  isError: boolean
+  onRetry: () => void
+  search: Record<string, unknown>
+  navigate: NavigateFn
 }
 
 export function TasksTable({
@@ -46,533 +52,426 @@ export function TasksTable({
   cameras,
   algorithms,
   isLoading,
-  search: searchProp,
-  navigate: navigateProp,
-  onEditTask,
-  onDeleteTask,
-}: TasksTableProps): React.JSX.Element {
+  isError,
+  onRetry,
+  search,
+  navigate,
+}: TasksTableProps) {
   const { t } = useTranslation('tasks')
+  const { setOpen, setCurrentRow, setTargetCameraId } = useTasksContext()
 
-  const fallbackSearch = useMemo(() => ({}), [])
-  const fallbackNavigate: NavigateFn = useCallback(() => {}, [])
+  const [sorting, setSorting] = useState<SortingState>([])
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+
+  // 双视角：通道聚合卡片 （业务主视角） ⇋ 明细表格
+  const viewMode: 'channel' | 'table' =
+    search.view === 'table' ? 'table' : 'channel'
+
+  const handleViewModeChange = (mode: 'channel' | 'table') => {
+    navigate({
+      search: (prev) => ({
+        ...prev,
+        view: mode === 'channel' ? undefined : mode,
+      }),
+    })
+  }
+
+  const rows = useMemo(
+    () => toTaskRows(tasks, cameras, algorithms),
+    [tasks, cameras, algorithms]
+  )
+  const allChannelGroups = useChannelTasks(cameras, algorithms, tasks)
 
   const {
-    globalFilter = '',
-    onGlobalFilterChange,
     columnFilters,
     onColumnFiltersChange,
+    pagination,
+    onPaginationChange,
+    globalFilter,
+    onGlobalFilterChange,
+    ensurePageInRange,
   } = useTableUrlState({
-    search: searchProp ?? fallbackSearch,
-    navigate: navigateProp ?? fallbackNavigate,
+    search,
+    navigate,
+    pagination: { defaultPage: 1, defaultPageSize: 10 },
     globalFilter: { enabled: true, key: 'search' },
     columnFilters: [
-      { columnId: 'camera', searchKey: 'camera', type: 'string' },
-      { columnId: 'algorithm', searchKey: 'algorithm', type: 'string' },
-      { columnId: 'status', searchKey: 'status', type: 'string' },
+      { columnId: 'camera', searchKey: 'camera', type: 'array' },
+      { columnId: 'algorithm', searchKey: 'algorithm', type: 'array' },
+      { columnId: 'status', searchKey: 'status', type: 'array' },
     ],
   })
 
-  const cameraFilter =
-    (columnFilters.find((f) => f.id === 'camera')?.value as string) || 'all'
-  const algoFilter =
-    (columnFilters.find((f) => f.id === 'algorithm')?.value as string) || 'all'
-  const statusFilter =
-    (columnFilters.find((f) => f.id === 'status')?.value as string) || 'all'
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const table = useReactTable<TaskRow>({
+    data: rows,
+    columns,
+    state: {
+      sorting,
+      columnVisibility,
+      columnFilters,
+      pagination,
+      globalFilter,
+    },
+    enableRowSelection: false,
+    onSortingChange: setSorting,
+    onColumnFiltersChange,
+    onColumnVisibilityChange: setColumnVisibility,
+    onPaginationChange,
+    onGlobalFilterChange,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getFacetedRowModel: getFacetedRowModel(),
+    getFacetedUniqueValues: getFacetedUniqueValues(),
+    getRowId: (row) => row.id,
+  })
 
-  const [togglingTaskId, setTogglingTaskId] = useState<string | null>(null)
-  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const pageCount = table.getPageCount()
+  useEffect(() => {
+    ensurePageInRange(pageCount)
+  }, [pageCount, ensurePageInRange])
+
+  const cameraOptions = cameras.map((camera) => ({
+    label: camera.name,
+    value: camera.id,
+  }))
+  const algorithmOptions = algorithms.map((algorithm) => ({
+    label: algorithm.name,
+    value: algorithm.id,
+  }))
+  const statusOptions = [
+    { label: t('table.statusRunning', '运行中'), value: 'running' },
+    { label: t('table.statusPaused', '已暂停'), value: 'paused' },
+  ]
+
+  const isFiltered = Boolean(globalFilter) || columnFilters.length > 0
+
+  /**
+   * 通道卡片视图的筛选语义：**筛卡片，不裁剪卡内算法列表**。
+   * 卡片是通道级聚合视图，卡内始终展示该通道的全部订阅项；
+   * 算法 / 状态筛选命中组内任意一项即保留整张卡片。
+   */
+  const channelGroups = useMemo(() => {
+    const filterValues = (columnId: string) =>
+      (columnFilters.find((f) => f.id === columnId)?.value as
+        | string[]
+        | undefined) ?? []
+
+    const cameraFilter = filterValues('camera')
+    const algorithmFilter = filterValues('algorithm')
+    const statusFilter = filterValues('status')
+    const keyword = (globalFilter ?? '').trim().toLowerCase()
+
+    return allChannelGroups.filter((group) => {
+      if (cameraFilter.length > 0 && !cameraFilter.includes(group.camera.id)) {
+        return false
+      }
+
+      if (
+        algorithmFilter.length > 0 &&
+        !group.items.some((item) =>
+          algorithmFilter.includes(item.algorithmItem.algorithmId)
+        )
+      ) {
+        return false
+      }
+
+      if (
+        statusFilter.length > 0 &&
+        !group.items.some((item) =>
+          statusFilter.includes(
+            item.task.enabled && item.algorithmItem.enabled
+              ? 'running'
+              : 'paused'
+          )
+        )
+      ) {
+        return false
+      }
+
+      if (!keyword) return true
+
+      const haystack = [
+        group.camera.name,
+        group.camera.id,
+        group.task?.id ?? '',
+        ...group.items.map((item) => item.algorithm?.name ?? ''),
+        ...group.items.map((item) => item.algorithmItem.algorithmId),
+      ]
+        .join(' ')
+        .toLowerCase()
+
+      return haystack.includes(keyword)
+    })
+  }, [allChannelGroups, columnFilters, globalFilter])
 
   const updateMutation = useUpdateTask()
 
-  const cameraMap = useMemo(
-    () => new Map(cameras.map((c) => [c.id, c])),
-    [cameras]
-  )
-  const algoMap = useMemo(
-    () => new Map(algorithms.map((a) => [a.id, a])),
-    [algorithms]
-  )
-
-  const flatRows = useMemo(() => {
-    const rows: {
-      task: Task
-      sub: Task['algorithms'][number]
-      id: string
-      taskId: string
-      cameraId: string
-      algorithmId: string
-      sampleFps: number
-      enabled: boolean
-      isChannelEnabled: boolean
-      isAlgoEnabled: boolean
-      createdAt: string
-      updatedAt: string
-    }[] = []
-    for (const task of tasks) {
-      for (const sub of task.algorithms ?? []) {
-        rows.push({
-          task,
-          sub,
-          id: sub.id,
-          taskId: task.id,
-          cameraId: task.cameraId,
-          algorithmId: sub.algorithmId,
-          sampleFps: sub.sampleFps,
-          enabled: task.enabled && sub.enabled,
-          isChannelEnabled: task.enabled,
-          isAlgoEnabled: sub.enabled,
-          createdAt: sub.createdAt,
-          updatedAt: sub.updatedAt,
-        })
-      }
-    }
-    return rows
-  }, [tasks])
-
-  const filteredTasks = useMemo(() => {
-    return flatRows.filter((row) => {
-      if (cameraFilter !== 'all' && row.cameraId !== cameraFilter) {
-        return false
-      }
-      if (algoFilter !== 'all' && row.algorithmId !== algoFilter) {
-        return false
-      }
-      if (statusFilter === 'running' && !row.enabled) {
-        return false
-      }
-      if (statusFilter === 'paused' && row.enabled) {
-        return false
-      }
-
-      if (globalFilter.trim()) {
-        const q = globalFilter.trim().toLowerCase()
-        const camName = cameraMap.get(row.cameraId)?.name.toLowerCase() || ''
-        const algoName = algoMap.get(row.algorithmId)?.name.toLowerCase() || ''
-        const matchesId =
-          row.taskId.toLowerCase().includes(q) ||
-          row.id.toLowerCase().includes(q)
-        if (!matchesId && !camName.includes(q) && !algoName.includes(q)) {
-          return false
-        }
-      }
-
-      return true
-    })
-  }, [
-    flatRows,
-    cameraFilter,
-    algoFilter,
-    statusFilter,
-    globalFilter,
-    cameraMap,
-    algoMap,
-  ])
-
-  const handleCopyId = async (
-    id: string,
-    successKey: 'table.copyTaskIdSuccess' | 'table.copySubscriptionIdSuccess',
-    successFallback: string
-  ) => {
-    // 非安全上下文（设备绑 0.0.0.0 后经明文 HTTP 局域网访问）下 navigator.clipboard
-    // 不存在，裸调会同步抛 TypeError；必须走共享工具的回退路径，
-    // 且只在真正复制成功后才给成功反馈，不得谎报。
-    if (!(await copyToClipboard(id))) {
-      toast.error(t('table.copyIdFailed', '复制失败，请手动复制'))
-      return
-    }
-    setCopiedId(id)
-    toast.success(t(successKey, successFallback))
-    setTimeout(() => setCopiedId(null), 2000)
+  const handleOpenChannelConfig = (cameraId?: string) => {
+    setCurrentRow(null)
+    setTargetCameraId(cameraId ?? null)
+    setOpen('channelTask')
   }
 
-  const handleToggleTask = (row: (typeof flatRows)[number]) => {
-    setTogglingTaskId(row.id)
-    const updatedAlgos = row.task.algorithms.map((a) =>
-      a.id === row.id ? { ...a, enabled: !row.isAlgoEnabled } : a
-    )
+  const handleToggleChannelTask = (task: Task) => {
     updateMutation.mutate(
-      {
-        id: row.taskId,
-        data: {
-          algorithms: updatedAlgos.map((a) => ({
-            id: a.id,
-            algorithmId: a.algorithmId,
-            sampleFps: a.sampleFps,
-            enabled: a.enabled,
-            configJson: a.configJson,
-            regionConfigJson: a.regionConfigJson,
-          })),
-        },
-      },
+      { id: task.id, data: { enabled: !task.enabled } },
       {
         onSuccess: () => {
-          toast.success(t('table.toggleSuccess', '任务状态已更新'))
+          toast.success(
+            !task.enabled
+              ? t('table.channelResumed', '通道分析任务已恢复运行')
+              : t('table.channelPaused', '通道分析任务已暂停')
+          )
         },
-        onSettled: () => {
-          setTogglingTaskId(null)
+        onError: () => {
+          toast.error(t('table.toggleError', '更新任务状态失败'))
         },
       }
     )
   }
 
-  const handleDeleteRow = (row: (typeof flatRows)[number]) => {
-    if ((row.task.algorithms?.length ?? 0) <= 1) {
-      onDeleteTask(row.task)
-    } else {
-      const remainingAlgos = row.task.algorithms.filter((a) => a.id !== row.id)
-      updateMutation.mutate(
-        {
-          id: row.taskId,
-          data: {
-            algorithms: remainingAlgos.map((a) => ({
-              id: a.id,
-              algorithmId: a.algorithmId,
-              sampleFps: a.sampleFps,
-              enabled: a.enabled,
-              configJson: a.configJson,
-              regionConfigJson: a.regionConfigJson,
-            })),
-          },
-        },
-        {
-          onSuccess: () => {
-            toast.success(t('table.removeAlgoSuccess', '已从通道中移除该算法'))
-          },
-          onError: () => {
-            toast.error(t('table.removeAlgoError', '移除算法失败'))
-          },
-        }
-      )
-    }
-  }
-
-  const handleCameraChange = (val: string) => {
-    onColumnFiltersChange?.((prev) => [
-      ...prev.filter((f) => f.id !== 'camera'),
-      ...(val !== 'all' ? [{ id: 'camera', value: val }] : []),
-    ])
-  }
-
-  const handleAlgoChange = (val: string) => {
-    onColumnFiltersChange?.((prev) => [
-      ...prev.filter((f) => f.id !== 'algorithm'),
-      ...(val !== 'all' ? [{ id: 'algorithm', value: val }] : []),
-    ])
-  }
-
-  const handleStatusChange = (val: string) => {
-    onColumnFiltersChange?.((prev) => [
-      ...prev.filter((f) => f.id !== 'status'),
-      ...(val !== 'all' ? [{ id: 'status', value: val }] : []),
-    ])
-  }
-
-  const handleResetFilters = () => {
-    onGlobalFilterChange?.('')
-    onColumnFiltersChange?.([])
+  const handleDeleteChannelTask = (task: Task) => {
+    setCurrentRow(task)
+    setOpen('delete')
   }
 
   return (
-    <div className='space-y-4'>
-      {/* 筛选过滤工具栏 */}
-      <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div className='relative w-full max-w-sm'>
-          <Search className='absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground' />
-          <Input
-            placeholder={t(
+    <div className='flex flex-1 flex-col gap-4'>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <div className='flex-1'>
+          <DataTableToolbar
+            table={table}
+            searchPlaceholder={t(
               'searchPlaceholder',
               '搜索任务 ID、摄像头或算法名称...'
             )}
-            value={globalFilter}
-            onChange={(e) => onGlobalFilterChange?.(e.target.value)}
-            className='ps-9 text-xs'
+            filters={[
+              {
+                columnId: 'camera',
+                title: t('table.columns.camera', '关联摄像头'),
+                options: cameraOptions,
+              },
+              {
+                columnId: 'algorithm',
+                title: t('table.columns.algorithm', '绑定算法包'),
+                options: algorithmOptions,
+              },
+              {
+                columnId: 'status',
+                title: t('table.columns.status', '运行状态'),
+                options: statusOptions,
+              },
+            ]}
+            columnLabels={{
+              taskId: t('table.columns.taskId', '任务 / 订阅 ID'),
+              camera: t('table.columns.camera', '关联摄像头'),
+              algorithm: t('table.columns.algorithm', '绑定算法包'),
+              sampleFps: t('table.columns.sampleFps', '采样帧率'),
+              computePoints: t('table.columns.computePoints', '算力开销'),
+              status: t('table.columns.status', '运行状态'),
+              updatedAt: t('table.columns.updatedAt', '更新时间'),
+            }}
           />
         </div>
 
-        <div className='flex flex-wrap items-center gap-2'>
-          {/* 相机筛选 */}
-          <Select value={cameraFilter} onValueChange={handleCameraChange}>
-            <SelectTrigger className='h-8 w-[140px] text-xs'>
-              <SelectValue placeholder={t('filterAllCameras', '全部摄像头')} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value='all'>
-                {t('filterAllCameras', '全部摄像头')}
-              </SelectItem>
-              {cameras.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          {/* 算法筛选 */}
-          <Select value={algoFilter} onValueChange={handleAlgoChange}>
-            <SelectTrigger className='h-8 w-[140px] text-xs'>
-              <SelectValue placeholder={t('filterAllAlgorithms', '全部算法')} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value='all'>
-                {t('filterAllAlgorithms', '全部算法')}
-              </SelectItem>
-              {algorithms.map((a) => (
-                <SelectItem key={a.id} value={a.id}>
-                  {a.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          {/* 状态筛选 */}
-          <Select value={statusFilter} onValueChange={handleStatusChange}>
-            <SelectTrigger className='h-8 w-[110px] text-xs'>
-              <SelectValue placeholder={t('filterAllStatus', '全部状态')} />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value='all'>
-                {t('filterAllStatus', '全部状态')}
-              </SelectItem>
-              <SelectItem value='running'>
-                {t('table.statusRunning', '运行中')}
-              </SelectItem>
-              <SelectItem value='paused'>
-                {t('table.statusPaused', '已暂停')}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-
-          {(globalFilter ||
-            cameraFilter !== 'all' ||
-            algoFilter !== 'all' ||
-            statusFilter !== 'all') && (
-            <Button
-              variant='ghost'
-              size='sm'
-              className='h-8 text-xs'
-              onClick={handleResetFilters}
-            >
-              {t('resetFilters', '重置筛选')}
-            </Button>
-          )}
+        <div className='flex items-center gap-1 rounded-lg border border-border bg-muted/40 p-0.5'>
+          <Button
+            type='button'
+            variant={viewMode === 'channel' ? 'secondary' : 'ghost'}
+            size='sm'
+            onClick={() => handleViewModeChange('channel')}
+            className='h-7 gap-1.5 px-2 text-xs'
+            title={t('views.channel', '通道聚合视图')}
+          >
+            <LayoutGrid className='h-3.5 w-3.5' />
+            <span className='hidden sm:inline'>
+              {t('views.channel', '通道聚合视图')}
+            </span>
+          </Button>
+          <Button
+            type='button'
+            variant={viewMode === 'table' ? 'secondary' : 'ghost'}
+            size='sm'
+            onClick={() => handleViewModeChange('table')}
+            className='h-7 gap-1.5 px-2 text-xs'
+            title={t('views.table', '任务明细表格')}
+          >
+            <List className='h-3.5 w-3.5' />
+            <span className='hidden sm:inline'>
+              {t('views.table', '任务明细表格')}
+            </span>
+          </Button>
         </div>
       </div>
 
-      {/* 表格容器 */}
-      <div className='overflow-hidden rounded-xl border border-border bg-card'>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className='w-[180px]'>
-                {t('table.id', '任务 / 订阅 ID')}
-              </TableHead>
-              <TableHead>{t('table.camera', '关联摄像头')}</TableHead>
-              <TableHead>{t('table.algorithm', '绑定算法包')}</TableHead>
-              <TableHead className='w-[110px]'>
-                {t('table.fps', '采样帧率')}
-              </TableHead>
-              <TableHead className='w-[100px]'>
-                {t('table.computePoints', '算力开销')}
-              </TableHead>
-              <TableHead className='w-[140px]'>
-                {t('table.status', '运行状态')}
-              </TableHead>
-              <TableHead className='w-[110px] text-end'>
-                {t('table.actions', '操作')}
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading ? (
-              Array.from({ length: 4 }).map((_, i) => (
-                <TableRow key={i}>
-                  <TableCell>
-                    <Skeleton className='h-4 w-20' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-32' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-28' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-12' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-12' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-20' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='ms-auto h-4 w-16' />
-                  </TableCell>
-                </TableRow>
-              ))
-            ) : filteredTasks.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={7}
-                  className='h-32 text-center text-xs text-muted-foreground'
-                >
-                  {tasks.length === 0
-                    ? t('table.empty', '暂无分析任务记录')
-                    : t(
-                        'table.emptyFiltered',
-                        '未找到匹配的分析任务，请调整筛选条件'
-                      )}
-                </TableCell>
-              </TableRow>
-            ) : (
-              filteredTasks.map((row) => {
-                const camera = cameraMap.get(row.cameraId)
-                const algorithm = algoMap.get(row.algorithmId)
-                const cost = algorithm?.computeCost ?? 10
-                const points = cost * row.sampleFps
-
-                return (
-                  <TableRow key={row.id} className='group'>
-                    {/* ID 列：本表按「通道任务 × 算法订阅」拍平，主键语义有两层，
-                        因此两层都展示——主行是 analysis_tasks.id（/tasks/{id} 与
-                        审计日志用的就是它），次行是 task_algorithms.id（update
-                        payload 里的 algorithms[].id）。 */}
-                    <TableCell className='font-mono text-xs'>
-                      <div className='flex flex-col gap-0.5'>
-                        <div className='flex items-center gap-1.5'>
-                          <span className='text-foreground'>
-                            {row.taskId.slice(0, 8)}...
-                          </span>
-                          <Button
-                            variant='ghost'
-                            size='icon'
-                            className='h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100'
-                            aria-label={t('table.copyTaskId', '复制任务 ID')}
-                            title={t('table.copyTaskId', '复制任务 ID')}
-                            onClick={() =>
-                              void handleCopyId(
-                                row.taskId,
-                                'table.copyTaskIdSuccess',
-                                '任务 ID 已复制到剪贴板'
-                              )
-                            }
-                          >
-                            {copiedId === row.taskId ? (
-                              <Check className='h-3 w-3 text-emerald-500' />
-                            ) : (
-                              <Copy className='h-3 w-3 text-muted-foreground' />
+      {viewMode === 'channel' ? (
+        <ChannelTasksView
+          groups={channelGroups}
+          onConfigureCamera={handleOpenChannelConfig}
+          onToggleChannelTask={handleToggleChannelTask}
+          onDeleteChannelTask={handleDeleteChannelTask}
+        />
+      ) : (
+        <>
+          <div className='rounded-md border border-border bg-card'>
+            <Table className='border-separate border-spacing-0'>
+              <TableHeader>
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <TableHead
+                        key={header.id}
+                        colSpan={header.colSpan}
+                        className={header.column.columnDef.meta?.className}
+                      >
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext()
                             )}
-                          </Button>
-                        </div>
-                        <div className='flex items-center gap-1.5 text-[11px] text-muted-foreground'>
-                          <span>{row.id.slice(0, 8)}...</span>
-                          <Button
-                            variant='ghost'
-                            size='icon'
-                            className='h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100'
-                            aria-label={t(
-                              'table.copySubscriptionId',
-                              '复制订阅 ID'
-                            )}
-                            title={t('table.copySubscriptionId', '复制订阅 ID')}
-                            onClick={() =>
-                              void handleCopyId(
-                                row.id,
-                                'table.copySubscriptionIdSuccess',
-                                '订阅 ID 已复制到剪贴板'
-                              )
-                            }
-                          >
-                            {copiedId === row.id ? (
-                              <Check className='h-3 w-3 text-emerald-500' />
-                            ) : (
-                              <Copy className='h-3 w-3 text-muted-foreground' />
-                            )}
-                          </Button>
-                        </div>
-                      </div>
-                    </TableCell>
-
-                    {/* 摄像头 */}
-                    <TableCell className='text-xs font-medium'>
-                      <div>{camera?.name || row.cameraId}</div>
-                    </TableCell>
-
-                    {/* 算法 */}
-                    <TableCell className='text-xs'>
-                      <div className='font-medium'>
-                        {algorithm?.name || row.algorithmId}
-                      </div>
-                      <div className='text-[10px] text-muted-foreground'>
-                        {cost} {t('dialog.costPerFrame', '点/帧')}
-                      </div>
-                    </TableCell>
-
-                    {/* 采样帧率 */}
-                    <TableCell className='text-xs font-medium'>
-                      {row.sampleFps} FPS
-                    </TableCell>
-
-                    {/* 算力开销 */}
-                    <TableCell className='font-mono text-xs font-medium'>
-                      {points} {t('channelCard.pointsSuffix', '点')}
-                    </TableCell>
-
-                    {/* 状态与行内 Switch */}
-                    <TableCell className='text-xs'>
-                      <div className='flex items-center gap-2'>
-                        <Switch
-                          checked={row.enabled}
-                          disabled={togglingTaskId === row.id}
-                          onCheckedChange={() => handleToggleTask(row)}
-                        />
-                        <TaskStatusBadge
-                          enabled={row.enabled}
-                          isChannelEnabled={row.isChannelEnabled}
-                          algorithmStatus={algorithm?.status}
-                        />
-                      </div>
-                    </TableCell>
-
-                    {/* 操作列 (Sticky Inset-End 防穿透) */}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                  Array.from({ length: 5 }).map((_, index) => (
+                    <TableRow key={`skeleton-${index}`}>
+                      <TableCell>
+                        <Skeleton className='h-4 w-28' />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className='h-4 w-24' />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className='h-4 w-24' />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className='h-4 w-12' />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className='h-4 w-12' />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className='h-6 w-32 rounded-full' />
+                      </TableCell>
+                      <TableCell>
+                        <Skeleton className='h-4 w-24' />
+                      </TableCell>
+                      <TableCell className='sticky end-0 right-0 z-20 w-12 bg-card text-end'>
+                        <Skeleton className='h-8 w-8 rounded-md' />
+                      </TableCell>
+                    </TableRow>
+                  ))
+                ) : isError ? (
+                  <TableRow>
                     <TableCell
-                      className={cn(
-                        'sticky inset-e-0 z-10 w-24 text-end',
-                        'relative bg-card',
-                        'before:pointer-events-none before:absolute before:inset-0 before:bg-muted/50 before:opacity-0 before:transition-opacity',
-                        'group-hover:before:opacity-100 group-data-[state=selected]:before:bg-muted group-data-[state=selected]:before:opacity-100'
-                      )}
+                      colSpan={columns.length}
+                      className='h-48 text-center'
                     >
-                      <div className='flex items-center justify-end gap-1'>
+                      <div className='flex flex-col items-center justify-center gap-2 text-destructive'>
+                        <AlertCircle className='h-8 w-8' />
+                        <span className='font-medium'>
+                          {t('table.loadFailed', '加载分析任务失败')}
+                        </span>
                         <Button
-                          variant='ghost'
-                          size='icon'
-                          className='h-7 w-7'
-                          onClick={() => onEditTask(row.task)}
+                          variant='outline'
+                          size='sm'
+                          onClick={onRetry}
+                          className='mt-2'
                         >
-                          <Pencil className='h-3.5 w-3.5' />
-                        </Button>
-                        <Button
-                          variant='ghost'
-                          size='icon'
-                          className='h-7 w-7 text-destructive hover:text-destructive'
-                          aria-label={
-                            (row.task.algorithms?.length ?? 0) <= 1
-                              ? t('deleteDialog.confirm', '删除任务')
-                              : t('table.removeAlgoSuccess', '移除算法')
-                          }
-                          onClick={() => handleDeleteRow(row)}
-                        >
-                          <Trash2 className='h-3.5 w-3.5' />
+                          <RefreshCw className='me-1 h-4 w-4' />
+                          {t('actions.retry', '重试')}
                         </Button>
                       </div>
                     </TableCell>
                   </TableRow>
-                )
-              })
-            )}
-          </TableBody>
-        </Table>
-      </div>
+                ) : table.getRowModel().rows?.length ? (
+                  table.getRowModel().rows.map((row) => (
+                    <TableRow
+                      key={row.id}
+                      data-state={row.getIsSelected() && 'selected'}
+                      className='group'
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell
+                          key={cell.id}
+                          className={cell.column.columnDef.meta?.className}
+                        >
+                          {flexRender(
+                            cell.column.columnDef.cell,
+                            cell.getContext()
+                          )}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell
+                      colSpan={columns.length}
+                      className='h-64 text-center'
+                    >
+                      <div className='flex flex-col items-center justify-center gap-2'>
+                        <div className='flex h-12 w-12 items-center justify-center rounded-full bg-muted'>
+                          <Video className='h-6 w-6 text-muted-foreground' />
+                        </div>
+                        <span className='text-base font-semibold text-foreground'>
+                          {isFiltered
+                            ? t('table.filterEmpty', '未找到匹配的分析任务')
+                            : t('table.empty', '暂无分析任务记录')}
+                        </span>
+                        <p className='max-w-sm text-sm text-muted-foreground'>
+                          {isFiltered
+                            ? t(
+                                'table.filterEmptyDesc',
+                                '请调整搜索关键词或筛选条件后重试。'
+                              )
+                            : t(
+                                'table.emptyDesc',
+                                '尚未向任何摄像头分配分析算法，点击「配置通道任务」开始。'
+                              )}
+                        </p>
+                        {isFiltered ? (
+                          <Button
+                            variant='outline'
+                            size='sm'
+                            onClick={() => {
+                              table.resetGlobalFilter()
+                              table.resetColumnFilters()
+                            }}
+                            className='mt-2'
+                          >
+                            {t('table.resetFilter', '重置筛选')}
+                          </Button>
+                        ) : (
+                          <Button
+                            size='sm'
+                            onClick={() => handleOpenChannelConfig()}
+                            className='mt-2'
+                          >
+                            {t('newChannelTask', '配置通道任务')}
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* 无数据时不渲染分页（否则会显示 “Page 1 of 0”） */}
+          {table.getFilteredRowModel().rows.length > 0 && (
+            <DataTablePagination table={table} />
+          )}
+        </>
+      )}
     </div>
   )
 }

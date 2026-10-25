@@ -2,13 +2,7 @@
   "pageTitle": "视频分析任务",
   "pageDesc": "管理边缘摄像头与算法包的动态业务调度，支持通道级多算法聚合配置与全平台 1,000 点算力预算管控。",
   "newChannelTask": "配置通道任务",
-  "viewChannel": "通道聚合视图",
-  "viewTable": "任务明细表格",
   "searchPlaceholder": "搜索任务 ID、摄像头或算法名称...",
-  "filterAllCameras": "全部摄像头",
-  "filterAllAlgorithms": "全部算法",
-  "filterAllStatus": "全部状态",
-  "resetFilters": "重置筛选",
   "budgetCard": {
     "title": "算力配额与调度看板",
     "desc": "全平台共享 1,000 点 NPU 异构加速算力池，基于已启用任务的采样率与算法成本实时累加。",
@@ -48,7 +42,21 @@
     "removeAlgoSuccess": "已从通道中移除该算法",
     "removeAlgoError": "移除算法失败",
     "empty": "暂无分析任务记录",
-    "emptyFiltered": "未找到匹配的分析任务，请调整筛选条件"
+    "emptyFiltered": "未找到匹配的分析任务，请调整筛选条件",
+    "columns": {
+      "taskId": "任务 / 订阅 ID",
+      "camera": "关联摄像头",
+      "algorithm": "绑定算法包",
+      "sampleFps": "采样帧率",
+      "computePoints": "算力开销",
+      "status": "运行状态",
+      "updatedAt": "更新时间"
+    },
+    "loadFailed": "加载分析任务失败",
+    "filterEmpty": "未找到匹配的分析任务",
+    "filterEmptyDesc": "请调整搜索关键词或筛选条件后重试。",
+    "emptyDesc": "尚未向任何摄像头分配分析算法，点击「配置通道任务」开始。",
+    "resetFilter": "重置筛选"
   },
   "channelCard": {
     "activeAlgorithms": "已配置算法",
@@ -170,5 +178,15 @@
     "resumeHint": "恢复实时画面",
     "save": "保存区域策略",
     "cancel": "取消"
+  },
+  "actions": {
+    "refresh": "刷新",
+    "retry": "重试",
+    "edit": "编辑配置",
+    "delete": "删除任务"
+  },
+  "views": {
+    "channel": "通道聚合视图",
+    "table": "任务明细表格"
   }
 }

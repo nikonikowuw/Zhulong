@@ -1,0 +1,40 @@
+import { useAlgorithms } from '@/features/algorithms/hooks/use-algorithms'
+import { useCameras } from '@/features/cameras/hooks/use-cameras'
+import { useTasks } from '../hooks/use-tasks'
+import { ChannelTaskDialog } from './channel-task-dialog'
+import { TaskDeleteDialog } from './task-delete-dialog'
+import { useTasksContext } from './tasks-provider'
+
+/**
+ * 弹窗集中挂载：与 Cameras / Persons 一致，状态由 Provider 持有，
+ * 领域数据各自通过 React Query 取（同一 queryKey 会被去重，不会重复请求）。
+ */
+export function TasksDialogs() {
+  const { open, setOpen, currentRow, targetCameraId } = useTasksContext()
+
+  const { data: camerasData } = useCameras({ pageSize: 100 })
+  const { data: algorithms = [] } = useAlgorithms()
+  const { data: tasks = [] } = useTasks()
+
+  const cameras = camerasData?.items ?? []
+  const initialCameraId = currentRow?.cameraId ?? targetCameraId ?? undefined
+
+  return (
+    <>
+      <ChannelTaskDialog
+        open={open === 'channelTask'}
+        onOpenChange={(isOpen) => setOpen(isOpen ? 'channelTask' : null)}
+        initialCameraId={initialCameraId}
+        cameras={cameras}
+        algorithms={algorithms}
+        allTasks={tasks}
+      />
+
+      <TaskDeleteDialog
+        task={currentRow}
+        open={open === 'delete'}
+        onOpenChange={(isOpen) => setOpen(isOpen ? 'delete' : null)}
+      />
+    </>
+  )
+}

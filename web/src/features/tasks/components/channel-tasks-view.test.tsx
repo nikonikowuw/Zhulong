@@ -11,6 +11,40 @@ describe('ChannelTasksView', () => {
     await expect.element(getByText('暂无分析任务记录')).toBeInTheDocument()
   })
 
+  it('does not render a card for a camera without any algorithm subscription', async () => {
+    // 回归：useChannelTasks 会为每台摄像头都派生一个 group，
+    // 若视图不过滤空 group，任务清空后页面上会残留一张空卡片。
+    const emptyGroups: ChannelTaskGroup[] = [
+      {
+        camera: {
+          id: 'cam-empty',
+          name: '未配置摄像头',
+          enabled: true,
+          revision: 1,
+          health: 'online',
+          session: 'running',
+          degraded: false,
+          stale: false,
+          reason: '',
+          streams: [],
+          createdAt: '',
+          updatedAt: '',
+        },
+        items: [],
+        totalChannelPoints: 0,
+        activeCount: 0,
+        totalCount: 0,
+      },
+    ]
+
+    const { getByText, container } = await render(
+      <ChannelTasksView groups={emptyGroups} onConfigureCamera={vi.fn()} />
+    )
+
+    await expect.element(getByText('暂无分析任务记录')).toBeInTheDocument()
+    expect(container.textContent ?? '').not.toContain('未配置摄像头')
+  })
+
   it('renders camera cards and configured algorithm badges', async () => {
     const mockGroups: ChannelTaskGroup[] = [
       {

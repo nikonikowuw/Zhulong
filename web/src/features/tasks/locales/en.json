@@ -2,13 +2,7 @@
   "pageTitle": "Video Analysis Tasks",
   "pageDesc": "Manage dynamic AI analysis scheduling between cameras and algorithm packages with channel-centric multi-algorithm configuration and a 1,000-point compute budget pool.",
   "newChannelTask": "Configure Channel Task",
-  "viewChannel": "Channel View",
-  "viewTable": "Task Table",
   "searchPlaceholder": "Search by task ID, camera, or algorithm...",
-  "filterAllCameras": "All Cameras",
-  "filterAllAlgorithms": "All Algorithms",
-  "filterAllStatus": "All Statuses",
-  "resetFilters": "Reset Filters",
   "budgetCard": {
     "title": "Compute Budget & Scheduler",
     "desc": "Global shared 1,000-point NPU compute pool, dynamically calculated from sampling rates and algorithm weights.",
@@ -48,7 +42,21 @@
     "removeAlgoSuccess": "Algorithm removed from channel",
     "removeAlgoError": "Failed to remove algorithm",
     "empty": "No analysis tasks configured",
-    "emptyFiltered": "No tasks match the filter criteria"
+    "emptyFiltered": "No tasks match the filter criteria",
+    "columns": {
+      "taskId": "Task / Subscription ID",
+      "camera": "Camera",
+      "algorithm": "Algorithm",
+      "sampleFps": "Sample FPS",
+      "computePoints": "Compute cost",
+      "status": "Status",
+      "updatedAt": "Updated at"
+    },
+    "loadFailed": "Failed to load analysis tasks",
+    "filterEmpty": "No matching analysis tasks",
+    "filterEmptyDesc": "Adjust the search keywords or filters and try again.",
+    "emptyDesc": "No algorithm has been assigned to any camera yet. Click \"Configure channel task\" to start.",
+    "resetFilter": "Reset filters"
   },
   "channelCard": {
     "activeAlgorithms": "Configured Algorithms",
@@ -170,5 +178,15 @@
     "resumeHint": "Resume the live stream",
     "save": "Save region policy",
     "cancel": "Cancel"
+  },
+  "actions": {
+    "refresh": "Refresh",
+    "retry": "Retry",
+    "edit": "Edit",
+    "delete": "Delete task"
+  },
+  "views": {
+    "channel": "Channel view",
+    "table": "Task table"
   }
 }
