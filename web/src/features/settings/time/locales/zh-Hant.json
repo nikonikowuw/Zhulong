@@ -3,20 +3,15 @@
     "title": "系統對時與時鐘服務",
     "desc": "管理邊緣主機時鐘同步策略，支援 RFC 4330 SNTP 自動網路校時、兩階段平滑微調以及現場一鍵同步瀏覽器時間。"
   },
-  "dashboard": {
-    "title": "設備即時時鐘與狀態看板",
-    "desc": "面向邊緣 Linux 主機的即時核心時鐘、兩階段對時狀態機與硬體 RTC 狀態。",
-    "refresh": "重新整理",
+  "statusBanner": {
     "permissionWarningTitle": "系統權限受限",
     "permissionWarningDesc": "當前應用程式缺失 CAP_SYS_TIME 或 root 權限，修改系統時間與 RTC 回寫可能被核心拒絕。",
     "liveClock": "設備即時核心時鐘",
-    "syncState": "時鐘同步狀態",
     "stateSynchronized": "已同步",
     "stateSyncing": "探測對時中",
     "statePanicReview": "暴衝複核中",
     "stateFailed": "同步失敗",
     "stateUnsynced": "未同步",
-    "rtcStatus": "硬體 RTC 晶片",
     "rtcNormal": "RTC 就緒",
     "rtcMissing": "未偵測到 RTC",
     "rtcError": "RTC 異常"

@@ -37,7 +37,7 @@ web/
       __root.tsx                      # 根路由 (注入 QueryClient, Toaster, Devtools 等)
       _authenticated/                 # 鉴权路由组 (挂载 AuthenticatedLayout 框架)
         route.tsx                     # 鉴权布局注入点
-        index.tsx                     # 控制台仪表盘首页 (/)
+        index.tsx                     # 控制台入口 (/)，重定向到实时监看
         <feature>/                    # 业务路由入口 (如 cameras/index.tsx, persons/index.tsx, algorithms/index.tsx, live/index.tsx, audit/index.tsx, records/index.tsx, tasks/index.tsx)
       (auth)/                         # 认证独立路由组 (sign-in.tsx, sign-up.tsx, otp.tsx 等)
       (errors)/                       # 错误页面路由组 (401.tsx, 404.tsx, 500.tsx 等)

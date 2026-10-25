@@ -3,20 +3,15 @@
     "title": "System Time & Clock Service",
     "desc": "Manage host time synchronization policies, supporting RFC 4330 SNTP automatic network sync, two-stage safe slew/step, and one-click browser time alignment."
   },
-  "dashboard": {
-    "title": "Live Clock & Synchronization Dashboard",
-    "desc": "Real-time kernel clock, two-stage safety state machine, and hardware RTC status for edge Linux hosts.",
-    "refresh": "Refresh",
+  "statusBanner": {
     "permissionWarningTitle": "System Permissions Restricted",
     "permissionWarningDesc": "The process lacks CAP_SYS_TIME or root privileges. Clock adjustments or RTC writes may be rejected by the kernel.",
     "liveClock": "Device Kernel Time",
-    "syncState": "Sync Status",
     "stateSynchronized": "Synchronized",
     "stateSyncing": "Syncing...",
     "statePanicReview": "Panic Review",
     "stateFailed": "Sync Failed",
     "stateUnsynced": "Unsynced",
-    "rtcStatus": "Hardware RTC Chip",
     "rtcNormal": "RTC Ready",
     "rtcMissing": "No RTC Detected",
     "rtcError": "RTC Error"

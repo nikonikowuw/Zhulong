@@ -1,5 +1,4 @@
 import {
-  LayoutDashboard,
   Video,
   Monitor,
   Palette,
@@ -33,11 +32,6 @@ export const sidebarData: SidebarData = {
     {
       title: 'General',
       items: [
-        {
-          title: 'Dashboard',
-          url: '/',
-          icon: LayoutDashboard,
-        },
         // 顺序遵循 NVR 通行心智：监看 → 检索 → 运营配置 → 日志
         {
           title: 'Live View',

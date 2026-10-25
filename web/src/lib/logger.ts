@@ -99,7 +99,6 @@ const ALLOWED_EVENTS = new Set<string>([
 /** Route categories are allowlisted; dynamic path segments never appear. */
 const ALLOWED_ROUTES = new Set<string>([
   'sign-in',
-  'dashboard',
   'cameras.list',
   'cameras.detail',
   'tasks.list',

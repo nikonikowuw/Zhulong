@@ -34,7 +34,7 @@ function renderSyncBadge(
               STATUS_DOT_CLASS.active
             )}
           />
-          {t('dashboard.stateSynchronized', { defaultValue: '已同步' })}
+          {t('statusBanner.stateSynchronized', { defaultValue: '已同步' })}
         </Badge>
       )
     case 'syncing':
@@ -52,7 +52,7 @@ function renderSyncBadge(
               STATUS_DOT_CLASS.warning
             )}
           />
-          {t('dashboard.stateSyncing', { defaultValue: '同步中' })}
+          {t('statusBanner.stateSyncing', { defaultValue: '同步中' })}
         </Badge>
       )
     case 'panic_review':
@@ -70,7 +70,7 @@ function renderSyncBadge(
               STATUS_DOT_CLASS.warning
             )}
           />
-          {t('dashboard.statePanicReview', { defaultValue: '复核中' })}
+          {t('statusBanner.statePanicReview', { defaultValue: '复核中' })}
         </Badge>
       )
     case 'failed':
@@ -88,7 +88,7 @@ function renderSyncBadge(
               STATUS_DOT_CLASS.destructive
             )}
           />
-          {t('dashboard.stateFailed', { defaultValue: '同步失败' })}
+          {t('statusBanner.stateFailed', { defaultValue: '同步失败' })}
         </Badge>
       )
     default:
@@ -106,7 +106,7 @@ function renderSyncBadge(
               STATUS_DOT_CLASS.inactive
             )}
           />
-          {t('dashboard.stateUnsynced', { defaultValue: '未同步' })}
+          {t('statusBanner.stateUnsynced', { defaultValue: '未同步' })}
         </Badge>
       )
   }
@@ -132,7 +132,7 @@ function renderRtcBadge(
               STATUS_DOT_CLASS.active
             )}
           />
-          {t('dashboard.rtcNormal', { defaultValue: 'RTC 就绪' })}
+          {t('statusBanner.rtcNormal', { defaultValue: 'RTC 就绪' })}
         </Badge>
       )
     case 'error':
@@ -150,7 +150,7 @@ function renderRtcBadge(
               STATUS_DOT_CLASS.destructive
             )}
           />
-          {t('dashboard.rtcError', { defaultValue: 'RTC 异常' })}
+          {t('statusBanner.rtcError', { defaultValue: 'RTC 异常' })}
         </Badge>
       )
     default:
@@ -168,7 +168,7 @@ function renderRtcBadge(
               STATUS_DOT_CLASS.inactive
             )}
           />
-          {t('dashboard.rtcMissing', { defaultValue: '无 RTC 硬件' })}
+          {t('statusBanner.rtcMissing', { defaultValue: '无 RTC 硬件' })}
         </Badge>
       )
   }
@@ -195,12 +195,12 @@ export function TimeStatusBanner({
         <Alert variant='destructive' className='px-3 py-2 text-xs'>
           <AlertTriangle className='h-4 w-4' />
           <AlertTitle className='text-xs font-semibold'>
-            {t('dashboard.permissionWarningTitle', {
+            {t('statusBanner.permissionWarningTitle', {
               defaultValue: '系统权限受限',
             })}
           </AlertTitle>
           <AlertDescription className='text-xs'>
-            {t('dashboard.permissionWarningDesc', {
+            {t('statusBanner.permissionWarningDesc', {
               defaultValue:
                 '当前进程缺失 CAP_SYS_TIME 或 root 权限，修改时钟与 RTC 回写可能被内核拒绝。',
             })}
@@ -214,7 +214,9 @@ export function TimeStatusBanner({
           <div className='flex items-center gap-2'>
             <span className='inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-500' />
             <span className='text-xs font-medium text-muted-foreground'>
-              {t('dashboard.liveClock', { defaultValue: '设备实时内核时钟' })}
+              {t('statusBanner.liveClock', {
+                defaultValue: '设备实时内核时钟',
+              })}
             </span>
             <Badge
               variant='outline'

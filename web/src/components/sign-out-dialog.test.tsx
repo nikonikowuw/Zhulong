@@ -6,7 +6,7 @@ import { SignOutDialog } from './sign-out-dialog'
 const navigate = vi.fn()
 const reset = vi.fn()
 
-const MOCK_HREF = 'https://app.test/dashboard?tab=1'
+const MOCK_HREF = 'https://app.test/cameras?tab=1'
 
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: () => ({
