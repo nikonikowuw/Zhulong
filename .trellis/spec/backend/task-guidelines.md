@@ -81,7 +81,7 @@ type TaskChangeListener interface {
   空 `config_json` / `region_config_json` 收敛为 `{}`，并把按名字传入的 `AlgorithmID` 替换为规格 ID。
 - `sample_fps` **负数不静默纠正**：直接返回 422 `INVALID_TASK_CONFIG`。上限为 `SampleFPSMax = 1000`。
 - 同一任务内重复的 `algorithmId` 返回 409 `DUPLICATE_ALGORITHM`。
-- `Enabled` 的"默认开启"只发生在 Handler 的 DTO 层（`CreateTaskRequest.ToTask`）；**直接调用 `Service` 时必须显式设置**，
+- `Enabled` 的"默认开启"只发生在 Handler 的请求类型层（`CreateTaskRequest.ToTask`）；**直接调用 `Service` 时必须显式设置**，
   零值 `Enabled=false` 会原样落库（这是 `gorm` 零值不回弹特性的直接后果，不要试图在 Store 里补默认值）。
 - 包内不保留双份职责的构造函数：`TaskComponents` / `NewTaskComponents` 已删除，Fx 装配在 `internal/app` 内完成。
 

@@ -25,7 +25,7 @@ web/
         components/                   # 模块私有 UI 组件
         data/                         # 模块 mock 数据、字段 schema 定义
         hooks/                        # 模块专属 Hooks (封装 TanStack Query 与数据派生)
-        api/                          # 强类型 REST 请求函数与 Zod DTO
+        api/                          # 强类型 REST 请求函数与 Zod schema
         types.ts                      # 模块私有类型定义
         index.tsx                     # 模块主入口视图 / 公共门面组件
       errors/                         # 401, 403, 404, 500, 503 等标准错误视图

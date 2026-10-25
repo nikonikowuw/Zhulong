@@ -30,10 +30,10 @@
 - `GET /status` 返回 `{ "initialized": boolean }`。无用户时仅允许初始化；已有用户时初始化必须返回 `403 SYSTEM_ALREADY_INITIALIZED`。
 - 初始化请求为 `{ "username": string, "password": string, "confirmPassword": string }`。用户名长度为 3–32 **字符**，密码长度为 8–64 **字符**，确认密码必须匹配；密码使用 `bcrypt.DefaultCost` 哈希后持久化，成功后创建管理员并建立会话。
 - 密码策略必须同时满足字符数与字节数：bcrypt 的输入上限是 **72 字节**，而请求绑定按 rune 计数，所以 64 个 CJK 字符（192 字节）能通过 `max=64` 却无法哈希。策略收敛在 `validateNewPassword`，超限返回 422 `PASSWORD_TOO_LONG`，**不得**让 `GenerateFromPassword` 的错误冒泡成 500。
-- 登录请求为 `{ "username": string, "password": string }`。成功后设置 `zhulong_session` Cookie 并返回不含密码哈希的用户 DTO。
+- 登录请求为 `{ "username": string, "password": string }`。成功后设置 `zhulong_session` Cookie 并返回不含密码哈希的用户响应类型（`UserResponse`）。
 - 会话 Cookie 属性为 `HttpOnly; SameSite=Lax; Path=/`，`MaxAge` 恒等于 `[auth].session_ttl`（默认 `24h`）。`Secure` 故意为 `false`：本机以明文 HTTP 提供 SPA 与 API，浏览器会丢弃 Secure Cookie 导致登录完全失效；**在前面终结 TLS 的部署必须把 `cookie.go` 里的 `sessionCookieSecure` 改为 `true`**。Session 仅在内存中，进程重启后所有会话失效。
 - 有效 Session 采用滑动过期：`Get` 成功即续期，`RequireAuth` 同步续写 Cookie 的 `MaxAge`。`logout` 路由必须用 `withoutCookieRenewal()` 标记，让中间件跳过续写；**不得**用 URL 路径字符串匹配来判断是否续期。
-- `POST /logout` 与 `GET /me` 必须通过认证中间件；登出删除对应内存 Session 并清除 Cookie。`/me` 返回从用户 Store 读取的当前用户 DTO，包括 `createdAt`。
+- `POST /logout` 与 `GET /me` 必须通过认证中间件；登出删除对应内存 Session 并清除 Cookie。`/me` 返回从用户 Store 读取的当前用户响应类型（`UserResponse`），包括 `createdAt`。
 - 登录按客户端 IP 使用 15 分钟滑动窗口限制最多 5 次失败。并发请求必须先原子预留额度；数据库或 Session 基础设施错误取消预留，不计为密码失败。过期 IP 记录需周期性清理。
 - 未知用户名与错误密码必须消耗同样的额度、返回同样的延迟：`verifyPassword` 在无 hash 时对 `timingEqualizerHash` 做一次同 cost 的 bcrypt 比较，不得提前 return 泄露用户名是否存在。
 - 前端请求必须设置 `credentials: "include"` 并发送当前 `Accept-Language`。认证初始化依次检查 status、再查询 me；受保护 API 的 401 由共享客户端通知全局认证状态清理。认证文本位于 feature-localized 的 `en`、`zh-Hans`、`zh-Hant` 语言包。

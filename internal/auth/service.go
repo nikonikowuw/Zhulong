@@ -319,7 +319,7 @@ func (s *authService) SessionTTL() time.Duration {
 	return DefaultSessionTTL
 }
 
-// userResponse projects a persisted account onto the client-facing DTO.
+// userResponse projects a persisted account onto the client-facing response type.
 func userResponse(user *User) UserResponse {
 	return UserResponse{
 		ID:        user.ID,

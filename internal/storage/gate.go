@@ -61,7 +61,7 @@ func (g *EmergencyGate) Reason() string {
 //
 // It shares the emergency state with Evaluate, so a later healthy probe clears
 // the block and fires the resume callback exactly once. Without this, an
-// uninspectable media root would report canWrite=false in the status DTO while
+// uninspectable media root would report canWrite=false in the status payload while
 // the gate kept letting writers create files.
 func (g *EmergencyGate) BlockWrites(reason string) {
 	g.mu.Lock()

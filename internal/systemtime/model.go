@@ -88,7 +88,7 @@ type SyncStatus struct {
 	ErrorMessage   string     `json:"errorMessage"`
 }
 
-// SystemTimeStatus is the complete DTO returned by GET /api/v1/system/time.
+// SystemTimeStatus is the complete response payload returned by GET /api/v1/system/time.
 type SystemTimeStatus struct {
 	CurrentTime         time.Time  `json:"currentTime"`
 	Timezone            string     `json:"timezone"`

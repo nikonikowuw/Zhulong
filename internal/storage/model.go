@@ -66,7 +66,7 @@ type StorageUsageBreakdown struct {
 	OtherBytes      int64 `json:"otherBytes"`      // Other files residing on the same filesystem/volume
 }
 
-// StorageStatus is the telemetry DTO returned by GET /api/v1/system/storage/status.
+// StorageStatus is the telemetry payload returned by GET /api/v1/system/storage/status.
 type StorageStatus struct {
 	MediaDirectory string                `json:"mediaDirectory"` // Currently active media directory
 	MountPoint     string                `json:"mountPoint"`     // Mount point where the media directory lives

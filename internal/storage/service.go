@@ -308,7 +308,7 @@ func (s *Service) RefreshStatus(ctx context.Context) (*StorageStatus, error) {
 	stats, err := s.inspector.InspectFS(snap.mediaDir)
 	if err != nil {
 		// An uninspectable media root is the mount-loss case the gate exists for:
-		// block writes instead of only reporting canWrite=false in the DTO.
+		// block writes instead of only reporting canWrite=false in the payload.
 		s.gate.BlockWrites("storage telemetry unavailable for " + snap.mediaDir)
 		status := &StorageStatus{
 			MediaDirectory: snap.mediaDir,

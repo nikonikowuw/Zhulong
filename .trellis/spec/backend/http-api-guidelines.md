@@ -21,7 +21,7 @@
 
 ### 时间字段格式与时区
 
-- API 中表示绝对时刻的字段统一序列化为 UTC RFC3339Nano，并带 `Z`，例如 `2026-10-04T08:12:34.123Z`。Go 响应 DTO 写出前应将 `time.Time` 规范化为 UTC。
+- API 中表示绝对时刻的字段统一序列化为 UTC RFC3339Nano，并带 `Z`，例如 `2026-10-04T08:12:34.123Z`。Go 响应类型写出前应将 `time.Time` 规范化为 UTC（见 §4「命名约定」）。
 - 纯日期使用 `YYYY-MM-DD`，不附加时区，也不转换为时间戳；持续时间使用带明确单位的数值字段。
 - 数据库与 API 的详细存储/序列化约定见 [SQLite 与 GORM 数据库开发规范](./database-guidelines.md)；前端不得把本地化后的显示字符串回传为 API 时间值。
 
@@ -55,7 +55,7 @@
 ```
 
 - **空数组铁律**：无数据时 `items` **必须返回空数组 `[]`，严禁返回 `null`**。
-- **DTO 字段 Null-safety 铁律**：当 DTO 中包含反序列化 JSON 字段（如 `candidates`、`attributes`）时，严防 `json.Unmarshal([]byte("null"), &slice)` 将已初始化的空切片覆盖为 `nil`。在 `ToResponse()` 方法中反序列化后必须做显式兜底（`if slice == nil { slice = make(...) }`），确保输出到 API 时列表恒为 `[]`、字典恒为 `{}`，避免前端 Zod 校验因收到 `null` 抛错崩溃。
+- **响应类型字段 Null-safety 铁律**：当响应类型中包含反序列化 JSON 字段（如 `candidates`、`attributes`）时，严防 `json.Unmarshal([]byte("null"), &slice)` 将已初始化的空切片覆盖为 `nil`。在 `ToResponse()` 方法中反序列化后必须做显式兜底（`if slice == nil { slice = make(...) }`），确保输出到 API 时列表恒为 `[]`、字典恒为 `{}`，避免前端 Zod 校验因收到 `null` 抛错崩溃。
 - **后端统一实现**：后端 Handler 统一使用 `httputil.PaginatedSuccess(c, items, total, page, pageSize)` 输出；
 - **前端统一契约**：前端 API 定义统一使用 `@/shared/api/client` 导出的 `createPaginatedSchema(itemSchema)` 校验，严禁直接使用裸 `z.array(itemSchema)` 解析分页接口。
 - **不分页特例**：仅在数据项具备严格物理极小上限（如网卡列表 `interfaces` ≤ 8、固定枚举字典、明确 < 20 条的单例轻量配置）时允许不分页，且依然推荐返回 `{ items: [...] }` 保持结构一致。
@@ -116,9 +116,9 @@ apiClient.get('/audit/logs', {
 })
 ```
 
-## 4. 请求校验与 DTO 边界
+## 4. 请求校验与响应类型边界
 
-1. **强制 DTO**：禁止在 HTTP 接口直接接收或返回 GORM Model，防止凭据泄露或级联循环。
+1. **强制类型隔离**：禁止在 HTTP 接口直接接收或返回 GORM Model，必须用独立的请求/响应类型，防止凭据泄露或级联循环。类型怎么取名见本节末「命名约定：请求 / 响应类型」。
 2. **声明式 Binding 校验**：
 
    ```go
@@ -130,8 +130,25 @@ apiClient.get('/audit/logs', {
    ```
 
 3. **校验失败返回字段细节**：`c.ShouldBindJSON(&req)` 报错时将 validator 结果映射为请求 JSON 字段路径、稳定校验码和本地化消息，再以 HTTP 422 返回 `httputil.NewValidationError(message, details)`。不得把原始输入或 validator/底层错误字符串直接返回客户端。
-4. **不可变字段必须显式拒绝，不得静默忽略**：对外业务键（如 `persons.personId`）等创建后不可修改的字段，必须**保留在 Update DTO 中**，并对"改成不同值"的请求返回显式冲突错误（409 + 专属错误码，如 `PERSON_ID_IMMUTABLE`）。把字段从 DTO 里删掉会让 `ShouldBindJSON` 静默丢弃它，接口返回 200 而值没变——集成方无法区分"改成功了"和"没生效"。
-5. **部分更新（PATCH 语义）的三态约定**：Update DTO 用指针字段区分"未提供"（`nil` → 不修改）与"提供了值"（→ 修改）。**严禁把"提供了空值"当成"未提供"**：`{"name": ""}` 必须返回 422 字段级校验失败，而不是 200 且值保持不变——后者与成功响应不可区分。若某字段确实允许被清空，就明确接受空值并写入空值，不要采用"空值即忽略"的隐式语义。
+4. **不可变字段必须显式拒绝，不得静默忽略**：对外业务键（如 `persons.personId`）等创建后不可修改的字段，必须**保留在 Update 请求类型中**，并对"改成不同值"的请求返回显式冲突错误（409 + 专属错误码，如 `PERSON_ID_IMMUTABLE`）。把字段从 Update 请求类型里删掉会让 `ShouldBindJSON` 静默丢弃它，接口返回 200 而值没变——集成方无法区分"改成功了"和"没生效"。
+5. **部分更新（PATCH 语义）的三态约定**：Update 请求类型用指针字段区分"未提供"（`nil` → 不修改）与"提供了值"（→ 修改）。**严禁把"提供了空值"当成"未提供"**：`{"name": ""}` 必须返回 422 字段级校验失败，而不是 200 且值保持不变——后者与成功响应不可区分。若某字段确实允许被清空，就明确接受空值并写入空值，不要采用"空值即忽略"的隐式语义。
+
+### 命名约定：请求 / 响应类型（强制）
+
+`DTO` 在本项目是一个**概念**——"HTTP 层不直接收发 GORM Model"——**不是类型名后缀**。类型名按它在响应树里的位置取后缀：
+
+| 位置 | 后缀 | 现有实例 |
+| --- | --- | --- |
+| 请求体（`c.ShouldBindJSON` 的目标） | `*Request` | `CreateCameraRequest`、`UpdateConfigRequest`、`UpsertDeviceRequest` |
+| 顶层响应载荷（`httputil.Success` 的 `data`） | `*Response` | `CameraResponse`、`DeviceResponse`、`ConfigResponse`、`DeviceListResponse` |
+| 嵌套在响应里的投影 / 状态块 | `*Info` | `StreamStateInfo`、`CameraStateInfo`、`InterfaceInfo`、`ConfigInfo` |
+| GET 的遥测 / 状态载荷 | `*Status` | `SystemTimeStatus`、`StorageStatus` |
+
+- **禁止** `XxxDTO` 形式的类型名。`DTO` 描述的是这一层的**职责**，后缀描述的是它在响应树里的**位置**；两套词并存会让同一层出现 `CameraResponse` 与 `CameraDTO` 两种风格。
+- 转换函数以 `to<Type>` 命名（`toDeviceResponse`、`toConfigInfo`）；`internal/record` 的历史写法是模型方法 `func (r *Recognition) ToResponse() RecognitionResponse`，两种都接受，**但同一个包内保持一致**。
+- 前端 Zod schema 名跟随 Go 响应名：`CameraResponse` ↔ `cameraResponseSchema`，列表载荷 `DeviceListResponse` ↔ `deviceListResponseSchema`。
+
+**Why**：一旦出现 `CameraDTO`，`@Success ... {object} httputil.Response{data=...}` 注解、Swagger definition 名（`gb28181.ConfigDTO`）、前端 Zod schema 名会各自跑偏成三套词，review 时无法一眼判断"这个类型是不是对外契约"，也无法靠名字判断一个字段会不会进 API。
 
 ---
 
@@ -144,7 +161,7 @@ apiClient.get('/audit/logs', {
 // @Tags         cameras
 // @Produce      json
 // @Param        id   path      string  true  "摄像机 ID"
-// @Success      200  {object}  httputil.Response{data=CameraDTO}
+// @Success      200  {object}  httputil.Response{data=CameraResponse}
 // @Failure      404  {object}  httputil.Response
 // @Router       /cameras/{id} [get]
 ```

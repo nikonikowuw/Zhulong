@@ -49,6 +49,7 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
   按 `Accept-Language` 选本地化文案、且只在服务端记录 cause；code 与文案在 `internal/httputil/locale.go`。
 - 未匹配的 `/api/*` 返回 JSON 错误信封，其余未匹配 GET/HEAD 回退到内嵌 SPA。
 - `internal/httpmiddleware` 必须与业务无关。
+- **不直接收发 GORM Model。** 请求/响应类型名按位置取后缀：`*Request` / `*Response`（顶层载荷）/ `*Info`（嵌套投影）/ `*Status`（状态载荷）；**类型名不用 `*DTO`**。详见 `.trellis/spec/backend/http-api-guidelines.md` §4「命名约定」。
 
 **持久化**
 

@@ -234,7 +234,7 @@ func TestService_TriggerManualCleanup(t *testing.T) {
 
 // TestService_RefreshStatusBlocksWritesWhenTelemetryFails pins the contract that
 // an uninspectable media root closes the write gate, not just the reported
-// status: writers read the gate, not the DTO.
+// status: writers read the gate, not the payload.
 func TestService_RefreshStatusBlocksWritesWhenTelemetryFails(t *testing.T) {
 	_, repo, closeDB := newTestRepository(t)
 	defer closeDB()

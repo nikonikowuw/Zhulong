@@ -369,7 +369,7 @@ func TestServiceUpdateTaskPartialFields(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	// 直接走 Service 时 Enabled 必须显式给出：默认值收敛只发生在 Handler 的 DTO 层。
+	// 直接走 Service 时 Enabled 必须显式给出：默认值收敛只发生在 Handler 的请求类型层。
 	tsk := &task.Task{
 		CameraID: "cam_partial",
 		Name:     "original",
