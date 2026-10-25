@@ -43,7 +43,10 @@ function stubFetch(ok = true): void {
  * clock is the honest approach: it models a slow crash loop rather than
  * disabling the very limit under test.
  */
-function fillBuffer(count: number, fieldName: 'failureCount' | 'retryCount' = 'failureCount'): void {
+function fillBuffer(
+  count: number,
+  fieldName: 'failureCount' | 'retryCount' = 'failureCount'
+): void {
   const base = Date.now()
   for (let index = 0; index < count; index += 1) {
     vi.setSystemTime(new Date(base + index * 1000))
@@ -120,7 +123,9 @@ describe('logger bounded buffer', () => {
     const overflow = 25
     vi.useFakeTimers()
     fillBuffer(__testing.constants.BUFFER_MAX + overflow)
-    expect(__testing.bufferLength()).toBeLessThanOrEqual(__testing.constants.BUFFER_MAX)
+    expect(__testing.bufferLength()).toBeLessThanOrEqual(
+      __testing.constants.BUFFER_MAX
+    )
     expect(__testing.droppedCount()).toBe(overflow)
   })
 
@@ -129,7 +134,9 @@ describe('logger bounded buffer', () => {
     for (let index = 0; index < 10000; index += 1) {
       log('error', 'window.error')
     }
-    expect(__testing.bufferLength()).toBeLessThanOrEqual(__testing.constants.BUFFER_MAX)
+    expect(__testing.bufferLength()).toBeLessThanOrEqual(
+      __testing.constants.BUFFER_MAX
+    )
     // Dedup plus the reservoir cap bound both memory and upload volume.
     expect(__testing.droppedCount()).toBeGreaterThanOrEqual(0)
   })
@@ -203,12 +210,15 @@ describe('logger upload', () => {
   it('uploads more than one batch when the queue exceeds the entry cap', async () => {
     __testing.setProduction(true)
     __testing.seed(
-      Array.from({ length: __testing.constants.MAX_ENTRIES_PER_UPLOAD + 10 }, (_, index) => ({
-        level: 'error' as const,
-        msg: 'server.error' as const,
-        ts: new Date().toISOString(),
-        fields: { failureCount: index },
-      }))
+      Array.from(
+        { length: __testing.constants.MAX_ENTRIES_PER_UPLOAD + 10 },
+        (_, index) => ({
+          level: 'error' as const,
+          msg: 'server.error' as const,
+          ts: new Date().toISOString(),
+          fields: { failureCount: index },
+        })
+      )
     )
     await flush()
     expect(captured.length).toBeGreaterThanOrEqual(2)
@@ -234,7 +244,9 @@ describe('logger upload', () => {
     const batches = __testing.buildBatches()
     expect(batches.length).toBeGreaterThanOrEqual(2)
     for (const batch of batches) {
-      expect(batch.length).toBeLessThanOrEqual(__testing.constants.MAX_ENTRIES_PER_UPLOAD)
+      expect(batch.length).toBeLessThanOrEqual(
+        __testing.constants.MAX_ENTRIES_PER_UPLOAD
+      )
     }
     // Nothing may be lost in packing.
     expect(batches.flat()).toHaveLength(total)
@@ -246,7 +258,10 @@ describe('logger upload', () => {
     const base = Date.now()
     for (let index = 0; index < 60; index += 1) {
       vi.setSystemTime(new Date(base + index * 1000))
-      log('error', 'server.error', { code: 'X'.repeat(60), failureCount: index })
+      log('error', 'server.error', {
+        code: 'X'.repeat(60),
+        failureCount: index,
+      })
     }
     vi.useRealTimers()
 

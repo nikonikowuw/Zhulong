@@ -4,6 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { AlertCircle, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { handleFormError } from '@/lib/form-error'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -32,7 +33,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { handleFormError } from '@/lib/form-error'
 import { createCameraFormSchema, type CameraFormValues } from '../data/schema'
 import { useCreateCamera, useUpdateCamera } from '../hooks/use-cameras'
 import { useCamerasContext } from './cameras-provider'

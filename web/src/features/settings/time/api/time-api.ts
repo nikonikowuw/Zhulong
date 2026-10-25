@@ -10,7 +10,8 @@ export const timeApi = {
    * 获取当前系统时间状态、对时配置与硬件 RTC 状态
    */
   async getStatus(): Promise<SystemTimeStatus> {
-    const res = await apiClient.get<ApiResponse<SystemTimeStatus>>('/system/time')
+    const res =
+      await apiClient.get<ApiResponse<SystemTimeStatus>>('/system/time')
     return res.data.data
   },
 
@@ -29,9 +30,8 @@ export const timeApi = {
    * 立即触发一次 NTP 探测与系统时钟同步
    */
   async syncNow(): Promise<SystemTimeStatus> {
-    const res = await apiClient.post<ApiResponse<SystemTimeStatus>>(
-      '/system/time/sync'
-    )
+    const res =
+      await apiClient.post<ApiResponse<SystemTimeStatus>>('/system/time/sync')
     return res.data.data
   },
 

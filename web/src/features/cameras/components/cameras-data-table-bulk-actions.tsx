@@ -98,9 +98,7 @@ export function CamerasDataTableBulkActions({
         loading: t('toast.batchDiagnosing', { count: selectedCameras.length }),
         success: (msg) => msg,
         error: (err) =>
-          err instanceof Error
-            ? err.message
-            : t('toast.batchDiagnoseFailed'),
+          err instanceof Error ? err.message : t('toast.batchDiagnoseFailed'),
       })
     } catch {
       // toast.promise 已统一展示失败反馈

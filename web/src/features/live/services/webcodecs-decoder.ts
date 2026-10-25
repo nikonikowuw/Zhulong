@@ -102,8 +102,17 @@ export function logWebCodecsDiagnostic(
   details: Record<string, unknown>
 ): void {
   const message = `[Zhulong][WebCodecs] ${event}`
-  // eslint-disable-next-line no-console
-  const sink = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info
+  // 诊断事件本身就是打日志：这是全模块唯一允许直连 console 的出口。
+  // 用块级 disable 而不是 `next-line`：三元拆行后 `next-line` 只能盖住第一行，
+  // 剩下的 console 调用会成为漏网之鱼（格式化后会静默变成 lint error）。
+  /* eslint-disable no-console */
+  const sink =
+    level === 'error'
+      ? console.error
+      : level === 'warn'
+        ? console.warn
+        : console.info
+  /* eslint-enable no-console */
   sink(message, details)
 }
 

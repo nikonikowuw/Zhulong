@@ -23,7 +23,8 @@ export function useStorageConfig() {
 export function useUpdateStorageConfig() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (payload: UpdateConfigPayload) => storageApi.updateConfig(payload),
+    mutationFn: (payload: UpdateConfigPayload) =>
+      storageApi.updateConfig(payload),
     onSuccess: (data) => {
       queryClient.setQueryData(STORAGE_STATUS_QUERY_KEY, data)
       void queryClient.invalidateQueries({ queryKey: STORAGE_CONFIG_QUERY_KEY })
@@ -31,7 +32,9 @@ export function useUpdateStorageConfig() {
   })
 }
 
-export function useTestStoragePath(options?: { suppressGlobalToast?: boolean }) {
+export function useTestStoragePath(options?: {
+  suppressGlobalToast?: boolean
+}) {
   return useMutation({
     mutationFn: (payload: PathTestPayload) => storageApi.testPath(payload),
     meta: {

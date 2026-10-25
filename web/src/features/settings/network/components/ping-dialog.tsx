@@ -65,7 +65,9 @@ export function PingDialog({
   const onSubmit = async (values: PingFormValues) => {
     try {
       await toast.promise(pingMutation.mutateAsync(values.target), {
-        loading: t('ping.probingMsg', { defaultValue: '正在探测网络连通性...' }),
+        loading: t('ping.probingMsg', {
+          defaultValue: '正在探测网络连通性...',
+        }),
         success: (res) =>
           res.reachable
             ? t('ping.successMsg', {

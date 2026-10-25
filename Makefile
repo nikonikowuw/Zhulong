@@ -39,12 +39,15 @@ frontend-install:
 frontend-build: frontend-install
 	$(PNPM) --dir web run build
 
-# 前端门禁：lint + 类型检查（含在 build 的 tsc -b 中）+ 真实无头浏览器测试 + 生产构建。
+# 前端门禁：格式 + lint + 类型检查（含在 build 的 tsc -b 中）+ 真实无头浏览器测试 + 生产构建。
 # 说明：`type-check` 与 `audit` 不是 web/package.json 里的 script。
 #   - type-check → 由 build 承担（其脚本为 `tsc -b && vite build`，类型检查已包含在内）；
 #   - audit      → 本目标不执行。生产依赖存在既有安全债（pnpm audit --prod 报告 52 项，
 #                  含 axios 的 2 项 critical），作为独立议题跟踪，避免阻断全部前端检查。
+# format:check 也必须进闸：eslint 不校验格式，漏了这一步 printWidth / import 排序
+# 会长期漂移（曾经一次就累计了 23 个文件），且排序插件不生效时 import 顺序全凭手写。
 frontend-check: frontend-install
+	$(PNPM) --dir web run format:check
 	$(PNPM) --dir web run lint
 	$(PNPM) --dir web test
 	$(PNPM) --dir web run build

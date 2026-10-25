@@ -9,9 +9,15 @@ describe('getMediaUrl', () => {
   })
 
   it('passes through absolute and data URLs unchanged', () => {
-    expect(getMediaUrl('http://example.com/a.jpg')).toBe('http://example.com/a.jpg')
-    expect(getMediaUrl('https://example.com/a.jpg')).toBe('https://example.com/a.jpg')
-    expect(getMediaUrl('data:image/png;base64,AAA')).toBe('data:image/png;base64,AAA')
+    expect(getMediaUrl('http://example.com/a.jpg')).toBe(
+      'http://example.com/a.jpg'
+    )
+    expect(getMediaUrl('https://example.com/a.jpg')).toBe(
+      'https://example.com/a.jpg'
+    )
+    expect(getMediaUrl('data:image/png;base64,AAA')).toBe(
+      'data:image/png;base64,AAA'
+    )
   })
 
   it('prefixes a relative media path exactly once', () => {
@@ -22,8 +28,12 @@ describe('getMediaUrl', () => {
   })
 
   it('strips leading slashes so the media resolver sees a relative path', () => {
-    expect(getMediaUrl('/snapshots/a.jpg')).toBe('/api/v1/media/content/snapshots/a.jpg')
-    expect(getMediaUrl('///snapshots/a.jpg')).toBe('/api/v1/media/content/snapshots/a.jpg')
+    expect(getMediaUrl('/snapshots/a.jpg')).toBe(
+      '/api/v1/media/content/snapshots/a.jpg'
+    )
+    expect(getMediaUrl('///snapshots/a.jpg')).toBe(
+      '/api/v1/media/content/snapshots/a.jpg'
+    )
   })
 })
 

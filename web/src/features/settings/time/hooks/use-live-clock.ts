@@ -12,7 +12,10 @@ interface LiveClockResult {
   virtualDate: Date
 }
 
-export function useLiveClock({ serverTimeStr, timezone }: LiveClockOptions): LiveClockResult {
+export function useLiveClock({
+  serverTimeStr,
+  timezone,
+}: LiveClockOptions): LiveClockResult {
   const [prevServerTimeStr, setPrevServerTimeStr] = useState(serverTimeStr)
   const [ticks, setTicks] = useState(0)
 
@@ -36,9 +39,27 @@ export function useLiveClock({ serverTimeStr, timezone }: LiveClockOptions): Liv
     try {
       const opts = { timeZone: tz, hour12: false }
       return {
-        date: new Intl.DateTimeFormat('zh-Hans-CN', { ...opts, year: 'numeric', month: '2-digit', day: '2-digit' }),
-        time: new Intl.DateTimeFormat('zh-Hans-CN', { ...opts, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        full: new Intl.DateTimeFormat('zh-Hans-CN', { ...opts, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        date: new Intl.DateTimeFormat('zh-Hans-CN', {
+          ...opts,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }),
+        time: new Intl.DateTimeFormat('zh-Hans-CN', {
+          ...opts,
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
+        full: new Intl.DateTimeFormat('zh-Hans-CN', {
+          ...opts,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        }),
       }
     } catch {
       return null

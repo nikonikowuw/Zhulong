@@ -148,7 +148,9 @@ function isProduction(): boolean {
 }
 
 /** Bound a field value to a short token; anything else is discarded. */
-function normalizeFieldValue(value: unknown): string | number | boolean | undefined {
+function normalizeFieldValue(
+  value: unknown
+): string | number | boolean | undefined {
   if (typeof value === 'number') {
     return Number.isFinite(value) ? value : undefined
   }
@@ -324,7 +326,10 @@ function buildBatches(): QueueEntry[][] {
   return batches
 }
 
-async function postBatch(entries: QueueEntry[], dropped: number): Promise<boolean> {
+async function postBatch(
+  entries: QueueEntry[],
+  dropped: number
+): Promise<boolean> {
   try {
     const response = await fetch(ENDPOINT, {
       method: 'POST',
@@ -403,7 +408,11 @@ function flushOnHide(disableBeacon: boolean): void {
     const droppedForBatch = index === 0 ? dropSnapshot : 0
     const body = JSON.stringify({ dropped: droppedForBatch, entries: batch })
 
-    if (disableBeacon || typeof navigator === 'undefined' || !navigator.sendBeacon) {
+    if (
+      disableBeacon ||
+      typeof navigator === 'undefined' ||
+      !navigator.sendBeacon
+    ) {
       // Fall back to a keepalive fetch; do not retry during teardown.
       void fetch(ENDPOINT, {
         method: 'POST',

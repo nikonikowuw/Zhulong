@@ -27,7 +27,9 @@ describe('handleServerError', () => {
   it('maps a plain object with status 204 to the no-content message', () => {
     handleServerError({ status: 204 })
 
-    expect(toastError).toHaveBeenCalledWith('No content.', { id: 'No content.' })
+    expect(toastError).toHaveBeenCalledWith('No content.', {
+      id: 'No content.',
+    })
   })
 
   it('prefers the API title when the error is an Axios error with response data', () => {

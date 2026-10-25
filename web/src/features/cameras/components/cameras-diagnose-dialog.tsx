@@ -34,11 +34,17 @@ export function CamerasDiagnoseDialog() {
     if (!currentRow?.id) return
     try {
       await toast.promise(diagnoseMutation.mutateAsync(currentRow.id), {
-        loading: t('toast.diagnosing', { defaultValue: '正在探测摄像头连通性...' }),
+        loading: t('toast.diagnosing', {
+          defaultValue: '正在探测摄像头连通性...',
+        }),
         success: (res) =>
           res.state?.health === 'online'
-            ? t('toast.diagnoseOnline', { defaultValue: '摄像头连通性正常，流已就绪' })
-            : t('toast.diagnoseOffline', { defaultValue: '诊断完成：摄像头当前处于离线/异常状态' }),
+            ? t('toast.diagnoseOnline', {
+                defaultValue: '摄像头连通性正常，流已就绪',
+              })
+            : t('toast.diagnoseOffline', {
+                defaultValue: '诊断完成：摄像头当前处于离线/异常状态',
+              }),
         error: (err) =>
           err instanceof Error
             ? err.message

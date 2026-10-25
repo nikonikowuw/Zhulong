@@ -16,7 +16,17 @@ pnpm build           # tsc -b 强类型编译 + Vite 生产打包
 pnpm test            # Vitest 浏览器无头模式测试 (--browser.headless via Playwright)
 ```
 
-上面是可单独运行的 package scripts。仓库必过门禁由 `make frontend-check` 执行 `lint`、`test`、`build`（类型检查包含在 build）；`format:check` 与 `knip` 虽可单独运行，但不属于 `make check`。
+上面是可单独运行的 package scripts。仓库必过门禁由 `make frontend-check` 执行 `format:check`、`lint`、`test`、`build`（类型检查包含在 build）；`knip` 虽可单独运行，但不属于 `make check`。
+
+> **为什么 `format:check` 必须进闸**：`eslint` 不校验格式。漏掉这一闸时 `printWidth` 与
+> `importOrder`（`@trivago/prettier-plugin-sort-imports`）会长期漂移 —— 曾经一次性累计了 23 个
+> `prettier --check` 失败文件（`src/lib/logger.ts`、若干 `*_dialog.tsx`、`time-api.ts` 等），
+> 使得「格式全绿」变成一句无法验证的口径。
+
+> ⚠️ **格式化会暴露被单行 `eslint-disable-next-line` 掩盖的违规**：若某行超宽且一行里有多个受限调用
+> （如三元里同时出现 `console.error/warn/info`），prettier 拆行后 `next-line` 只能盖住第一行，
+> 其余调用会突然变成 lint error。多行语句请用块级 `/* eslint-disable X */ … /* eslint-enable X */`，
+> 它不受排版影响。
 
 ### 1.1 与 `make frontend-check` 的对应关系
 
@@ -27,7 +37,7 @@ pnpm test            # Vitest 浏览器无头模式测试 (--browser.headless vi
 | --- | --- | --- |
 | `make frontend-install` | `pnpm --dir web install --frozen-lockfile` | 先 `command -v pnpm` 显式探测，缺工具即失败（不静默跳过） |
 | `make frontend-build` | `pnpm --dir web run build` | 同上表的 `pnpm build` |
-| `make frontend-check` | `lint` + `test` + `build` | `type-check` **不是**独立 script：`build` 的 `tsc -b` 已含类型检查 |
+| `make frontend-check` | `format:check` + `lint` + `test` + `build` | `type-check` **不是**独立 script：`build` 的 `tsc -b` 已含类型检查 |
 
 ⚠️ **两条容易踩错的约束**：
 

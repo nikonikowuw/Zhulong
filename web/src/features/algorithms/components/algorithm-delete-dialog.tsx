@@ -1,7 +1,7 @@
-import { useTranslation } from 'react-i18next'
 import { AlertTriangle, ListChecks, ShieldCheck } from 'lucide-react'
-import { ConfirmDialog } from '@/components/confirm-dialog'
+import { useTranslation } from 'react-i18next'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { type Algorithm } from '../data/schema'
 import { useDeletionImpact, useDeleteAlgorithm } from '../hooks/use-algorithms'
 
@@ -63,10 +63,7 @@ export function AlgorithmDeleteDialog({
       {impactQuery.isError && (
         <p className='flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs'>
           <AlertTriangle className='mt-0.5 size-3.5 shrink-0 text-amber-600' />
-          {t(
-            'impactUnavailable',
-            '无法获取影响面统计，请谨慎确认后再卸载。'
-          )}
+          {t('impactUnavailable', '无法获取影响面统计，请谨慎确认后再卸载。')}
         </p>
       )}
 

@@ -80,26 +80,24 @@ describe('algorithms-api', () => {
   })
 
   it('getDeletionImpact calls the read-only impact endpoint', async () => {
-    const spy = vi
-      .spyOn(apiClient, 'get')
-      .mockResolvedValue({
+    const spy = vi.spyOn(apiClient, 'get').mockResolvedValue({
+      data: {
+        code: 'OK',
+        message: 'ok',
         data: {
-          code: 'OK',
-          message: 'ok',
-          data: {
-            algorithmId: 'a1',
-            algorithmName: '安全帽检测',
-            version: '2.1.0',
-            status: 'DISABLED',
-            boundTaskCount: 2,
-            affectedCameraIds: ['cam-a', 'cam-b'],
-            recognitionCount: 10,
-            alarmCount: 3,
-            captureCount: 7,
-            requiresStop: false,
-          },
+          algorithmId: 'a1',
+          algorithmName: '安全帽检测',
+          version: '2.1.0',
+          status: 'DISABLED',
+          boundTaskCount: 2,
+          affectedCameraIds: ['cam-a', 'cam-b'],
+          recognitionCount: 10,
+          alarmCount: 3,
+          captureCount: 7,
+          requiresStop: false,
         },
-      } as never)
+      },
+    } as never)
 
     const impact = await algorithmsApi.getDeletionImpact('a1')
 

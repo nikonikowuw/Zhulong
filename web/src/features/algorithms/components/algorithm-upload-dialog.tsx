@@ -1,13 +1,7 @@
 import { useState, useRef } from 'react'
+import { UploadCloud, FileArchive, AlertCircle, Loader2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  UploadCloud,
-  FileArchive,
-  AlertCircle,
-  Loader2,
-  X,
-} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -47,7 +41,9 @@ export function AlgorithmUploadDialog({
     )
 
     if (!hasValidExt) {
-      setErrorMessage(t('invalidFileFormat', '仅支持 .tar.gz 或 .zip 格式的算法包归档文件'))
+      setErrorMessage(
+        t('invalidFileFormat', '仅支持 .tar.gz 或 .zip 格式的算法包归档文件')
+      )
       return
     }
 
@@ -84,14 +80,18 @@ export function AlgorithmUploadDialog({
           setSelectedFile(null)
           setUploadProgress(null)
           toast.success(
-            t('installSuccess', { defaultValue: '算法包安装成功并完成黑盒验证' })
+            t('installSuccess', {
+              defaultValue: '算法包安装成功并完成黑盒验证',
+            })
           )
           onOpenChange(false)
         },
         onError: (err) => {
           setUploadProgress(null)
           setErrorMessage(
-            err instanceof Error ? err.message : t('uploadFailed', '算法包安装失败')
+            err instanceof Error
+              ? err.message
+              : t('uploadFailed', '算法包安装失败')
           )
         },
       }
@@ -161,7 +161,7 @@ export function AlgorithmUploadDialog({
           {/* 已选中文件提示 */}
           {selectedFile && (
             <div className='flex items-center justify-between rounded-lg border border-border bg-card p-2.5 text-xs'>
-              <div className='flex items-center gap-2 min-w-0'>
+              <div className='flex min-w-0 items-center gap-2'>
                 <FileArchive className='h-4 w-4 shrink-0 text-primary' />
                 <span className='truncate font-medium text-foreground'>
                   {selectedFile.name}
@@ -205,7 +205,7 @@ export function AlgorithmUploadDialog({
           {/* 错误提示 */}
           {errorMessage && (
             <div className='flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 p-2.5 text-xs text-destructive'>
-              <AlertCircle className='h-4 w-4 shrink-0 mt-0.5' />
+              <AlertCircle className='mt-0.5 h-4 w-4 shrink-0' />
               <div className='min-w-0 flex-1 break-words'>{errorMessage}</div>
             </div>
           )}

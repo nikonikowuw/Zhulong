@@ -87,9 +87,7 @@ describe('AlgorithmDeleteDialog', () => {
       .element(getByRole('heading', { name: /确认卸载该算法包？/i }))
       .toBeInTheDocument()
 
-    await expect
-      .element(getByText(/安全帽检测/i))
-      .toBeInTheDocument()
+    await expect.element(getByText(/安全帽检测/i)).toBeInTheDocument()
   })
 
   it('reports bound tasks and affected cameras', async () => {
@@ -109,12 +107,8 @@ describe('AlgorithmDeleteDialog', () => {
       </QueryClientProvider>
     )
 
-    await expect
-      .element(getByText(/将解绑 2 路分析任务/i))
-      .toBeInTheDocument()
-    await expect
-      .element(getByText(/cam-gate、cam-yard/))
-      .toBeInTheDocument()
+    await expect.element(getByText(/将解绑 2 路分析任务/i)).toBeInTheDocument()
+    await expect.element(getByText(/cam-gate、cam-yard/)).toBeInTheDocument()
   })
 
   it('states that historical evidence is preserved, not deleted', async () => {
@@ -136,16 +130,12 @@ describe('AlgorithmDeleteDialog', () => {
       </QueryClientProvider>
     )
 
-    await expect
-      .element(getByText(/历史证据不会被删除/i))
-      .toBeInTheDocument()
+    await expect.element(getByText(/历史证据不会被删除/i)).toBeInTheDocument()
     await expect.element(getByText(/1247 条识别/)).toBeInTheDocument()
     await expect.element(getByText(/389 条告警/)).toBeInTheDocument()
     await expect.element(getByText(/2103 条抓拍/)).toBeInTheDocument()
     // 必须说明失去的是「筛选能力」而不是数据本身
-    await expect
-      .element(getByText(/无法再按该算法筛选/i))
-      .toBeInTheDocument()
+    await expect.element(getByText(/无法再按该算法筛选/i)).toBeInTheDocument()
   })
 
   it('omits the evidence block when no records exist', async () => {
@@ -194,9 +184,7 @@ describe('AlgorithmDeleteDialog', () => {
       </QueryClientProvider>
     )
 
-    await expect
-      .element(getByText(/无法获取影响面统计/i))
-      .toBeInTheDocument()
+    await expect.element(getByText(/无法获取影响面统计/i)).toBeInTheDocument()
   })
 
   it('triggers delete mutation when confirm button is clicked', async () => {

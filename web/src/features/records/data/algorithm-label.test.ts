@@ -35,8 +35,16 @@ describe('algorithmLabel', () => {
 
   it('returns an empty string when nothing is known', () => {
     expect(algorithmLabel({})).toBe('')
-    expect(algorithmLabel({ algorithmId: '', algorithmName: '', algorithmVersion: '' })).toBe('')
+    expect(
+      algorithmLabel({
+        algorithmId: '',
+        algorithmName: '',
+        algorithmVersion: '',
+      })
+    ).toBe('')
     // 空白的快照名不应被当成有效值（否则会显示 " v1.0.0"）
-    expect(algorithmLabel({ algorithmName: '   ', algorithmVersion: '1.0.0' })).toBe('')
+    expect(
+      algorithmLabel({ algorithmName: '   ', algorithmVersion: '1.0.0' })
+    ).toBe('')
   })
 })

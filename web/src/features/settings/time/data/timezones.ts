@@ -13,6 +13,12 @@ export const POPULAR_TIMEZONES = [
   { value: 'America/New_York', label: 'America/New_York (美东时间 UTC-5/-4)' },
   { value: 'America/Chicago', label: 'America/Chicago (美中时间 UTC-6/-5)' },
   { value: 'America/Denver', label: 'America/Denver (山地时间 UTC-7/-6)' },
-  { value: 'America/Los_Angeles', label: 'America/Los_Angeles (太平洋时间 UTC-8/-7)' },
-  { value: 'Australia/Sydney', label: 'Australia/Sydney (悉尼时间 UTC+10/+11)' },
+  {
+    value: 'America/Los_Angeles',
+    label: 'America/Los_Angeles (太平洋时间 UTC-8/-7)',
+  },
+  {
+    value: 'Australia/Sydney',
+    label: 'Australia/Sydney (悉尼时间 UTC+10/+11)',
+  },
 ]

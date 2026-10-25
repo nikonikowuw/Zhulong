@@ -1,5 +1,9 @@
 import { AxiosError } from 'axios'
-import { type FieldValues, type Path, type UseFormReturn } from 'react-hook-form'
+import {
+  type FieldValues,
+  type Path,
+  type UseFormReturn,
+} from 'react-hook-form'
 import { type ApiResponse } from '@/lib/api-client'
 
 export interface FieldDetail {
