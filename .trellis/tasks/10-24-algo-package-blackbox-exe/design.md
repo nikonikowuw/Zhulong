@@ -7,7 +7,7 @@
 >
 > | 主题 | 原结论 | 现结论 | 依据 |
 > | :--- | :--- | :--- | :--- |
-> | 多平台源码 | 一套源码 + 编译期宏（§4.8.4） | `packages/<id>/<target>/` 各自独立，零源码引用，允许重复纯数学；唯一共享物是 golden 向量 | `prd.md` R11、F21–F23 |
+> | 多平台源码 | 一套源码 + 编译期宏（§4.8.4） | `packages/<id>/<target>/` 各自独立，零源码引用，允许重复纯数学；**无共享测试夹具**（每 target 用 `sample.jpg` 出 `result.jpg`） | `prd.md` R11、F21–F23 |
 > | 归一化 / 输入契约 | `InputFacts` + `prepare_input` + `models/preprocess.json`（§4.8.6） | **整条撤销**：归一化常量留在各实现内 | `prd.md` R13 |
 > | 量化三态 | 每模型 `applied ∈ {converter, graph, none}` | 删除；`.rknn` 内嵌 attrs 只作 drift 检查，`CONVERSION.md` 是唯一来源 | `prd.md` R12 |
 > | 资产布局 | 运行期 `targets/<t>/` 候选 + 架构宏兜底 | 出包**摊平**到包根，算法侧不认 target 名 | `prd.md` R11 |
@@ -30,7 +30,7 @@
 | 包入口 | 仅包根 `<manifest.id>` 可执行文件 | `plugin.so` + `dlopen` 兼容形态及双形态分派 |
 | 桩后端 | `cpu_mock` 从产品面移除：factory 仅 `onnx`/`rknn` + `#else #error`，无默认值；桩移入测试夹具（`ZhulongAlgoRuntimeStub`），`test_stub` 产物拒绝出包（`prd.md` R14、F26–F28） | 保留 `cpu` 作为可选后端/默认值（交叉静默产出不可推理产物；包级测试以 `[SKIP]` 伪装通过） |
 | target 命名 | 主机档位 = **`onnx`**（决定它的是 ORT/f32），板端 = `rk3568`；**`cpu` 只指 build 侧 `cpu_mock` 桩与视觉 CPU 实现，不得作 target** | 沿用 `cpu` 作主机档位（与 `cpu_mock` 同名不同义，`[algorithm].target` 默认值误导为「CPU 推理」） |
-| 多平台形态 | **每 target 一套独立实现目录**（`packages/<id>/<target>/`），target 间零源码引用，仅共享 golden 向量；出包摊平 | 一套源码 + 编译期后端宏（N=2 且第二平台不可测，抽象税 > 收益；见文首「决策变更」） |
+| 多平台形态 | **每 target 一套独立实现目录**（`packages/<id>/<target>/`），target 间零源码引用、零共享夹具；开发期用包根 `sample.jpg` 跑出 `result.jpg` 看图验收；出包摊平 | 一套源码 + 编译期后端宏（N=2 且第二平台不可测，抽象税 > 收益；见文首「决策变更」） |
 | 宿主侧人脸特征提取 | 算法包可执行文件 `--extract-feature` 帧流 + Go 侧热进程缓存（§11） | engine `dlopen` 特征提取 `.so`（新形态下无产物，且 `dlopen` PIE 可执行文件被内核/glibc 拒绝） |
 
 ---
@@ -84,6 +84,8 @@ manifest 保持现状（`id`/`version`/`name`/`task_type`/`category`/`platform`/
 
 **可执行文件必须与 `models/` 同级（包根），不得放子目录。** 两个现有包的模型定位都是「取当前模块所在目录 + `/models/…`」：`plate_recognition.cpp:32-53` 与 `face_recognition.cpp:60` 使用 `dladdr`。插件代码静态编入可执行文件后，`dladdr` 返回可执行文件所在目录；放子目录会导致生产环境找不到 `models/`。放包根则维持现有路径语义。验包 CWD 也必须是包目录。
 
+> **实现建议（T2，2026-10-25 补充）**：取包根目录时以 `readlink("/proc/self/exe")` 为主路径、`dladdr` 为兜底。静态可执行文件下 `dladdr` 仍可用（有 `_DYNAMIC`），但 `/proc/self/exe` 不依赖动态链接器与传入的符号地址，且包目录被升级替换后能自然暴露 `" (deleted)"` 后缀（先 `TrimSuffix` 再拼 `models/`）。项目已是 Linux-only，无移植性代价。验收：阶段 3.4 的 `/tmp/pkgroot` 用例与升级后重装各跑一次。
+
 ### 3.2 可执行文件的 argv 契约
 
 ```
@@ -113,7 +115,19 @@ manifest 保持现状（`id`/`version`/`name`/`task_type`/`category`/`platform`/
 | :--- | :--- |
 | 唯一支持的可执行文件形态 | `<pkg>/<manifest.id> --verify --sample sample.jpg` |
 
-验包输出末行 JSON `{"status":"passed",...}` / 非零退出码，`VerificationReport` 结构不变（`internal/algorithm/verifier.go:59-65`）。动态验包直接执行已解析的包入口。
+验包输出末行 JSON / 非零退出码；动态验包直接执行已解析的包入口。
+
+**验包输出必须带明细（2026-10-25 补充）**：现有实现只报 `count`（`runner.cpp:578`），而按 `result_type` 分派的明细序列化器早就存在（`runner.cpp:115 serialize_inference_result`，IPC 路径 `:867` 在用）。两者应当合并：
+
+| 项 | 约定 |
+| :--- | :--- |
+| 载荷形状 | 结果 JSON = **IPC 结果载荷的超集**（多 `status` / `sample_decoded` / `width` / `height`）；三个消费者共用（broker 长驻 / 一次性推理 / `algo_probe.py`），**禁止**为某个消费者另起字段名 |
+| 演进 | **只允许追加字段**，不改名、不改语义；`count` 与载荷数组并存 |
+| 宿主兼容 | `VerificationReport` 以指针/slice 接收明细，缺字段 = nil → 跳过比对并 warn，**不判失败**（新宿主必须能读旧包） |
+| 不搬的字段 | `stream_id` / `pts` / `capture_time_ms`（验包场景无意义）；`cost_ms` 保留 |
+| `sample` 字段 | Go 侧 `verifier.go:301` 已把它换成解码后的**临时 PPM 路径**，渲染方要用原始 `sample.jpg` 作底图 |
+
+> **一次性推理的语义边界（不要留给用户猜）**：不连 `--broker` ⇒ 收不到 `MSG_GALLERY_SYNC`，`matched` 恒 false、`person_name` / `candidates` 恒空；无连续帧 ⇒ `track_id` 恒 0。验包与「UI 上传图片试用」都受此限，输出里不得伪造这两类字段。正因如此，明细输出在本任务就要定死——否则 UI 试用落地时必然要改包输出格式，而那正是本任务要终结的协议漂移。
 
 > ⚠️ **验包 CWD 必须是包目录。** 模型定位依赖包根可执行文件旁的 `models/`；若 CWD 错位，模型定位可能失败或意外命中源码树候选。验收必须把可执行文件和模型复制到临时包根后再运行。
 
@@ -171,7 +185,11 @@ native/sdk/
 
 1. **PIC**：OBJECT 库显式设置 `POSITION_INDEPENDENT_CODE ON`。
 2. **唯一归属 `dmabuf_allocator.cpp`**：它当前同时编进 runtime 与 IPC。静态 SDK 目标图必须确保最终可执行文件只链接一份该翻译单元，避免 `DmaBufAllocator` 出现两个单例；以最终算法包可执行文件的符号和运行时行为验收。
-3. **隐藏实现符号**：静态对象设 `CXX_VISIBILITY_PRESET hidden` + `VISIBILITY_INLINES_HIDDEN YES`，链接侧加 `-Wl,--exclude-libs,ALL`；验收 `nm -D <bin> | grep -c zhulong` = 0。
+3. **隐藏实现符号**：**链接侧**加 `-Wl,--exclude-libs,ALL`（静态归档符号不再导出）；**不要**在 `ZhulongAlgoRuntimeObjects` 上设 `CXX_VISIBILITY_PRESET hidden`（2026-10-25 修正）。
+   - 理由：只要旧的 `ZhulongAlgoRuntime`（SHARED）还从同一批对象构建、两个 plugin target 还 `target_link_libraries(... ZhulongAlgoRuntime)`，hidden 会让 `.so` 不再导出 `get_default_inference_backend` / `runtime::GalleryRegistry::instance` / `DmaBufAllocator::{allocate,instance}` 等符号，plugin **链接期直接 `undefined reference`**（基线：face 9 个、plate 3 个未定义符号，见 `prd.md` F1），阶段 1 的验证无法走到。
+   - `nm -D <exe> | grep -c zhulong` = 0 由两件事共同满足：可执行文件默认不导出未被动态对象引用的符号（不加 `-rdynamic`）+ `--exclude-libs,ALL`。hidden 对静态链入是**冗余**的，而对 SHARED 是致命的。
+   - 若确实需要 hidden，唯一正确做法是引入显式导出宏（`__attribute__((visibility("default")))`）并让 OBJECT 库按「SHARED 用 / STATIC 用」编两遍——等于两份实现，本任务不做。
+   - 更彻底且推荐的做法：阶段 1 就删掉旧 SHARED/plugin target（与 R5「只支持一种形态」一致），届时 hidden 才没有副作用；代价是 native 侧三个 plugin 用例必须同步迁走（见 `implement.md` Review gate 3）。
 
 静态可执行文件仍可能依赖第三方动态库；这与 Zhulong 自有符号隐藏是不同问题，依赖来源须在 SDK 文档中列明。
 
@@ -228,8 +246,8 @@ ZHULONG_ALGO_MAIN(MyDetector, zhulong::sdk::DetectionResultAdapter,
 
 ```
 native/CMakeLists.txt          # 只产：engine / runtime(.a) / sdk(.a) / mock 夹具 / native 测试
-packages/<id>/CMakeLists.txt   # 自足：find_package(ZhulongAlgoSDK) → add_executable(<manifest.id>)
-packages/<id>/tests/           # 包级测试随包（face / plate / face-onnx）
+packages/<id>/<target>/CMakeLists.txt   # 自足：find_package(ZhulongAlgoSDK) → add_executable(<manifest.id>)
+packages/<id>/<target>/tests/            # dev-only 开发期测试：sample.jpg → result.jpg（不进归档）
 build/sdk/prefix/              # make sdk-install 产出（include/ lib/ cmake/）
 ```
 
@@ -288,7 +306,9 @@ build/$(PKG): CMakeLists.txt $(wildcard src/*.cpp)
 	cmake --build build --target $(PKG)
 
 test: all
-	ctest --test-dir build --output-on-failure
+	# dev-only：出 result-<id>-<target>.jpg + 终端明细表；可依赖图像库，不进归档
+	cmake --build build --target $(PKG)_devtest
+	./build/$(PKG)_devtest sample.jpg
 
 package: all
 	$(PYTHON) $(SDK_PREFIX)/tools/pack_package.py --package-dir . --build-dir build \
@@ -511,7 +531,7 @@ my_detector/
 ├── config.schema.json      # 最小合法空 schema（type:object, properties:{}）
 ├── sample.jpg              # 占位样本（README 要求换成真实图）
 ├── src/my_detector.cpp     # ZHULONG_ALGO_MAIN + init/create_session/detect 空实现
-├── tests/                  # 包级 ctest 骨框架
+├── tests/                  # dev-only：dev_infer.cpp + stb_image*（不进归档）
 ├── scripts/build_package.py# 10 行薄壳
 └── README.md               # 三个命令 + 「空实现 = 永远 0 检出」的说明
 ```
@@ -592,7 +612,7 @@ make package-all                       # 对 TARGETS=onnx rk3568 逐个跑上述
 
 #### 4.8.4 为什么一套源码能覆盖多平台（以及它在哪里不成立） —— **已被取代（见文首「决策变更」；`prd.md` R11/R13）**
 
-这不是「一份代码适配所有硬件」，而是：**一套算法逻辑 + 一个窄接口 + N 份后端实现，编译期选定**。
+> **⚠️ 历史设计记录（已废弃）**：本节所描述的「一套源码 + 编译期宏跨平台」方案已被 2026-10-25 评审结论彻底撤销（理由见文首表格及 `prd.md` R11）。保留此节仅用于记录得失分析与为什么否定该路线。**现行方案一律采用 `packages/<id>/<target>/` 独立目录，target 间物理隔离、零源码引用。**
 
 | 层 | 是否按平台分叉 | 仓库证据 |
 | :--- | :--- | :--- |
@@ -642,7 +662,7 @@ grep -rn '__aarch64__\|__arm__' packages/*/src                  # 只允许模�
 
 #### 4.8.6 后端封装评估：方向对，切口选错了一层 —— **已被取代（见文首「决策变更」；`prd.md` R11/R13）**
 
-**做对的四件事**（不是客套，每条都能在代码里验证）：
+> **⚠️ 历史设计记录（已废弃）**：本节所设计的「`InputFacts` + `Session::prepare_input` + `models/preprocess.json` 契约下沉」方案已被 2026-10-25 评审结论彻底撤销（理由见文首表格及 `prd.md` R13）。保留此节仅作为设计演进的历史对比。**现行方案明确不引入任何输入契约类型或 preprocess.json，归一化常量留在各 target 实现目录内。**
 
 | 设计 | 为什么对 |
 | :--- | :--- |
@@ -856,9 +876,9 @@ grep -rn 'is_onnx_\|255.0f\|127.5f\|dma_buf_fd' packages/*/src     # 期望：�
 | `internal/app/config.go` + `config.toml` | 新增 `[person].extractor_algorithm`（默认 `face_recognition`） | 小 |
 | `native/tests/check_plugin_symbols.py` | face 插件白名单回退为 `zhulong_plugin_get_api`；新增 exe 形态「`nm -D --defined-only` 为空」断言 | 门禁 |
 | `native/CMakeLists.txt` | 删除 `FaceRecognitionPlugin` / `PlateRecognitionPlugin` 的 target、include、link 段落；新增 `ZhulongAlgoSdkStatic` 与 install/export 规则（§4.5） | 核心 |
-| `packages/*/CMakeLists.txt` | **新增**：只 `find_package(ZhulongAlgoSDK)`，产出 `<manifest.id>` 可执行文件 | 核心 |
-| `packages/*/tests/` | **新增**：从 `native/tests/` 迁入包级测试（face / plate / face-onnx） | 中 |
-| `packages/<id>/Makefile` | **新增**：包自己的 `make` / `make test` / `make package` / `make verify`（与 SDK 模板仅差 `SDK_PREFIX` 默认值） | 核心 |
+| `packages/*/<target>/CMakeLists.txt` | **新增**：只 `find_package(ZhulongAlgoSDK)`，产出 `<manifest.id>` 可执行文件 + `_devtest`（`EXCLUDE_FROM_ALL`） | 核心 |
+| `packages/*/<target>/tests/` | **新增**：从 `native/tests/` 迁入包级用例，改写成 dev-only `dev_infer.cpp`（读 `sample.jpg`、画框、写 `result.jpg`）；不进归档 | 中 |
+| `packages/<id>/<target>/Makefile` | **新增**：包自己的 `make` / `make test` / `make package` / `make verify`（与 SDK 模板仅差 `SDK_PREFIX` 默认值） | 核心 |
 | `native/sdk/tools/new_package.py` + `native/sdk/templates/**` | **新增**：脚手架与模板，生成开箱可编译/可验包/可打包的骨架（§4.7） | 核心 |
 | `packages/*/scripts/build_package.py` | 改为 **10 行薄壳**，转发到 `native/sdk/tools/pack_package.py`（保留 Go 测试调用路径）；删除 staging/验包/归档实现与 `cmake --build` 调用 | 核心 |
 | `native/sdk/tools/pack_package.py` | **新增**：唯一打包实现（staging、入口命名、`0755`、验包、归档命名），随 SDK 分发 | 核心 |
@@ -950,7 +970,9 @@ grep -rn 'is_onnx_\|255.0f\|127.5f\|dma_buf_fd' packages/*/src     # 期望：�
 
 3. RKNN target 是否在本任务范围内一起迁移？建议**先只做 `onnx` 档位**（`plate_recognition/targets/onnx`；原名 `cpu`，已按 F25 改名），RKNN 迁移作为后续验证项 —— 交叉编译无法在开发机执行测试（AGENTS.md 明确「交叉只允许编译，不允许执行测试」）。
 
-4. **已安装旧 `.so` 包的升级处置**（待确认，建议按「启动前校验」处理）：R5/AC4 只覆盖安装期拒绝，但升级宿主时数据目录里已有旧包，会绕过安装期。建议 supervisor 启动前用 `ResolveEntry` 校验，失败则把该包标记为不可用并上报明确错误码，**不进入重启退避循环**，避免「每 5 秒重试一次」的日志风暴。
+4. **已安装旧 `.so` 包的升级处置 —— 已拍板正式决策（T5）**：R5/AC4 覆盖安装期拒绝；针对升级宿主时数据目录已有的存量旧包：
+   - **正式决策**：supervisor 启动前用 `ResolveEntry` 校验每个已启用包，失败则将该包置为 `unavailable`、上报稳定错误码 `ALGO_ENTRY_INVALID`（携带包 id、版本及解析出的入口路径），并**进入「不自动重试」状态**，由运维/用户在前端触发「重建 / 重新安装」；同时记录一条一次性 WARN 日志明确列出受影响的包。
+   - **硬性禁止**：不得做成「启动失败 → 退避重试」进入每 5 秒一轮的重试风暴。
 
 ---
 
@@ -1157,6 +1179,7 @@ int run_extract_feature() {
 
 - `face_recognition` 已有 `zhulong_face_extract_feature`（`face_recognition.cpp:570`），静态链入后弱引用自然解析；`plate_recognition` 不提供 → `UNSUPPORTED`，不是构建错误。
 - **不新增公共门面**：`detect` / `classify` / `detect_persons` / `detect_vehicles`、四种 `ResultAdapter`、`plugin.h` 全部不动（与 §10.9 的 TaskContext 改动互不干扰）。
+- **弱符号必须由包自身对象文件提供（T1，2026-10-25 补充）**：GNU ld **不会**为满足「弱未定义引用」去抽取静态归档成员。因此 `zhulong_face_extract_feature` 的定义必须位于 `add_executable(<id> ...)` 直接编译的源码里（今天 `packages/face_recognition/src/face_recognition.cpp:570` 正是如此）；若某天把该定义移进 `libZhulongAlgoRuntime.a`，face 包会**静默**报 `UNSUPPORTED`（exit 5）——表现为「底库登记功能消失」且无错误日志。门禁：用 face 包喂 1 帧，必须**不**返回 `UNSUPPORTED`（`implement.md` 3.8）。
 - **不破 AC1 第三条**：`ZHULONG_PLUGIN_EXPORT` 的 default visibility 在 PIE 可执行文件里不进 `.dynsym`（已实测：不加 `-rdynamic` 时 `nm -D | grep -c zhulong` = 0）。**禁止**在为该目标添加 `-rdynamic` / `--export-dynamic`。
 
 ### 11.4 Go 侧热进程（本方案的关键部分）
@@ -1231,4 +1254,26 @@ int run_extract_feature() {
 - `config.toml` + `internal/app/config.go`：`[person].extractor_algorithm`。
 - **SDK 分发物**（阶段 7.1）：`tools/algo_probe.py`（帧流自查：`--verify` 与 `--extract-feature` 两种模式）与 `abi.json` 里的 `extract_feature` 可选能力声明。协议验证工具归 SDK，**不得**落在 `native/tests/`。
 
+---
 
+## 12. 文档修订记录
+
+> 2026-10-25 文档评审：下面每条都对应一份**已存在的仓库事实或链接期/运行期确定性行为**，不是风格偏好。按日期追加，不删除旧条目。
+
+| # | 位置 | 原内容 | 修正后 | 依据 |
+| :--- | :--- | :--- | :--- | :--- |
+| D1 | `design.md` §4.1.1 第 3 条、`implement.md` 1.1 / 1.4 | OBJECT 库设 `CXX_VISIBILITY_PRESET hidden`，同时 1.4 又期望旧 plugin 仍有 9 个未定义符号 | **不设 hidden**（静态链入不需要）；符号不入 `.dynsym` 靠「可执行文件默认不导出」+ `-Wl,--exclude-libs,ALL` | `native/CMakeLists.txt:377/:406` 的 plugin 仍 link 旧 SHARED，`native/src/algorithm/runtime` 无任何导出宏 → hidden 会让 plugin 链接期 `undefined reference` |
+| D2 | `prd.md` AC21 | 要求脚手架空实现包 `readelf -d` **无** onnxruntime，不区分档位 | 断言限定为 `rknn` / `test_stub` prefix；onnx 档位必然 `NEEDED` ORT，其约束是 AC18 | `algo_main` → `runtime::init()` → `runtime_factory.cpp:36` → `onnx_inference_backend.o`，静态链接下确定拉入 |
+| D3 | `prd.md` R7 / AC6、`implement.md` 阶段 6 | PRD 把「底库去单例」写成硬需求，implement 又标「可选、默认跳过」 | R7 降级为「保持现状，不改代码」；AC6 改为回归门禁；阶段 6 标为**不执行** | 静态链接后 `algo_main` 与算法同二进制，`GalleryRegistry::instance()` 天然唯一 |
+| D4 | `prd.md` Acceptance Criteria 顶部、`implement.md` 全局约束 | grep 门禁未区分「代码」与「注释」，`cpu_mock` 类断言今天就红 | 新增「门禁通用约定」：`--include=` + 剔除注释行；docstring 需显式豁免与上限；断言收编为单一脚本 | `native/scripts/build.py:229` 保留了解释「为何废除 `cpu_mock`」的 docstring |
+| D5 | `implement.md` 0.6 | 阶段 0 基线未采集，而阶段 1.0 已提交 | 新增 0.6：基线为**补录**，须标注采集时间/HEAD/R14 已生效的差异，且必须在 3.0f 改名前采完 | `research/` 目录不存在；commit `7aeb3bb` 已改 profile 与后端判定 |
+| D7 | `prd.md` 非目标表、`implement.md` 3.2 / 7.4、`design.md` §3.4 | 验包输出只报 `count`；「UI 上传图片试用算法包」未记录 | 验包输出改为 **IPC 结果载荷的超集**（复用 `serialize_inference_result`），只许追加字段，三个消费者共用一份契约；一次性推理的语义边界（无底库、无跨帧跟踪）写进契约；UI 试用记为独立任务并指向本契约 | 后续要加「上传图片测试」能力，若无明细则必然改包输出格式；而且一次性进程不连 broker，底库/跟踪本就不可用 |
+| T1 | `design.md` §11.3、`implement.md` 3.8 | 弱符号方案未说明定义必须先于链接可见 | 写明「定义必须在包自身对象文件，不得只存在于 `.a`」+ face 包不得返 `UNSUPPORTED` 的门禁 | GNU ld 不为满足弱未定义引用抽取静态归档成员 |
+| T2 | `design.md` §3.1 | 模型定位只靠 `dladdr` | 主路径 `readlink("/proc/self/exe")`，`dladdr` 兜底；处理 `" (deleted)"` | 不依赖动态链接器与符号地址；包升级替换后路径仍可信 |
+| T3 | `implement.md` Review gate 3 | 未写本阶段 `make check` 的预期状态 | 允许短暂为红，但红项须逐条列出并对应到 3.9/4.8 的替代用例 | `native/CMakeLists.txt:523/563/651` 三个 ctest 依赖旧 plugin target |
+| T4 | `implement.md` 3.0e | golden 向量只写了「存在」；后经评审**整条撤销** | 改为「每 target 自带 dev-only `tests/`：`sample.jpg` → `result.jpg` + 终端明细表；`tests/` 不进归档，可依赖图像库」。撤销理由：按 target 分叉的向量等于普通单测；不分叉则要求 f32 与 int8 同解，与 F24 矛盾 |
+| D6 | `prd.md` R11 / AC3 / AC19、`implement.md` 3.0e / 3.2 / 3.4 / 3.6 / 3.9、`design.md` §4.5 / §4.7 | 跨 target 共享 golden 向量（`tests/vectors/*.json`）作为唯一共享物 | **整条撤销**：每 target 自带 dev-only `tests/`，用包根 `sample.jpg` 跑出 `result.jpg`（画框 + 打标）与终端明细表；`tests/` 不进归档、可依赖图像库；`--verify` 需输出明细（复用 `runner.cpp:115` 的序列化器） | 量化不同 → 跨 target 结果本就不同（F24）；按 target 分叉的向量等于普通单测，不分叉则要求 f32 与 int8 同解 |
+| T5 | `design.md` §9.4 第 4 条、`implement.md` 4.6 | 「待确认」但 4.6 未标阻塞 | 标为**阻塞 4.6 的待拍板项**，附建议方案（`ALGO_ENTRY_INVALID` + 不自动重试） | 升级宿主时旧包绕过安装期门禁 |
+| T6 | `prd.md` AC13 | 「1s 内消失」 | 改为轮询断言 ≤3s，契约（Pdeathsig + 进程组）不变 | 慢 CI 上 1s 阈值会 flaky |
+
+**未在本轮修正、留待拍板的开放项**：`design.md` §9.4 第 4 条（T5）**已拍板**；`prd.md`「跨边界协议版本校验（`manifest.protocol`）」与「同一进程多算法包」两项已明确延后，不在本任务。

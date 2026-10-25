@@ -5,6 +5,8 @@
 
 ## 全局约束（AGENTS.md）
 
+- **门禁 grep 口径（D4）**：本文件所有 `grep` 断言只针对代码 / 构建脚本 / 配置值，统一用 `--include=` 限定并剔除注释行（写法见 `prd.md` 的「门禁通用约定」）。理由：`native/scripts/build.py:229` 这类「为何废除 `cpu_mock`」的 docstring 是**知识**不是**用法**；把注释算进断言，等于把「写下禁令」判成「违反禁令」，门禁会被当噪音关掉。Python docstring 不能靠行首规则剔除，必须显式给豁免（文件 + 处数上限）。
+
 - 改完 C++ **必须** `make native-build`（Air 只监听 Go/TOML）。
 - 依赖 `internal/engine` 的 Go 包**绝不**裸跑 `go build/test/vet`，一律走 wrapper：
   ```bash
@@ -22,7 +24,7 @@
 原「一套源码多平台 + 编译期后端宏 + `InputFacts`/`prepare_input` 契约下沉」**已撤销**（理由见 `prd.md` R11/R13、F21–F24）。本实现按以下形态执行，任何与 `design.md` §4.8.4 / §4.8.6 冲突之处以本节为准：
 
 - 源码目录 = `packages/<id>/<target>/`，target 之间**零源码引用**，允许重复纯数学；
-- 唯一共享物是 `packages/<id>/tests/vectors/*.json`（golden 向量）；
+- **不共享测试夹具**：每 target 自带 `tests/`，用包根 `sample.jpg` 跑出 `result.jpg` + 终端明细表；`tests/` 不进归档，可依赖图像库；
 - 出包时资产**摊平**到包根，归档内无 `targets/`；
 - 主机档位叫 **`onnx`**（不是 `cpu`，见 `prd.md` F25）；`plate_recognition` 只有 `onnx`，`face_recognition` 有 `onnx` 与 `rk3568`（后者只编译、不验包）。
 
@@ -49,38 +51,30 @@
       → `resource_lock_linux.go:73-77` 返回 `[ZHULONG_FRAME_BROKER_SOCK 或 /tmp, /dev/shm]`，socket 名为 `<base>/zhulong_broker_<stream_id>.sock`（`frame_broker.cpp:58`），**全局无隔离**。
       → 结论：`design.md` §6.2 原「broker 目录认亲」条**废弃**（对任意实例恒真，零区分力），改用 `exe` ∈ `<dataDir>/algorithms/`。已写回 `design.md` §6.2 / §9。
 
-- [ ] **0.2 记录改造前基线**（用于 AC3 行为等价对比），写入 `research/baseline.md`：
-      ```bash
-      nm -D --undefined-only build/native/host/libPlateRecognitionPlugin.so | grep -c zhulong   # plate 实测 3（face 为 9）
-      ls -l build/native/host/libZhulongAlgoRuntime.so build/native/host/libPlateRecognitionPlugin.so
-      ./build/native/host/zhulong_algo_runner --verify-plugin build/native/host/libPlateRecognitionPlugin.so --sample packages/plate_recognition/sample.jpg
-      readelf -d build/native/host/libPlateRecognitionPlugin.so | grep -E "NEEDED|RUNPATH"
-      ```
+- [x] **0.2 记录改造前基线**（用于 AC3 行为等价对比），写入 `research/baseline.md`：
+      已实测并固化至 `research/baseline.md`：
+      - `libPlateRecognitionPlugin.so` 未定义 `zhulong` 符号数：**3**；
+      - `libFaceRecognitionPlugin.so` 未定义 `zhulong` 符号数：**9**；
+      - 动态依赖与文件大小（runtime 2.0MB, plate 1.6MB, face 2.9MB, runner 2.2MB）。
 
-- [ ] **0.3 确认 `plate_recognition` 的 `onnx` 档位可独立验包**（阶段 3 的验收样本）。
-      ```bash
-      ./build/native/host/zhulong_algo_runner --verify-plugin build/native/host/libPlateRecognitionPlugin.so \
-        --sample packages/plate_recognition/sample.jpg
-      ```
-      记录 `{"status":"passed","count":N,...}` 的完整输出到 `research/baseline.md`。
+- [x] **0.3 确认 `plate_recognition` 的 `onnx` 档位可独立验包**（阶段 3 的验收样本）。
+      已实测并固化至 `research/baseline.md`：
+      - 直接传 `.jpg` 回退合成全黑帧（`sample_decoded: false, count: 0`）；
+      - 宿主解码为标准 PPM 后真实推理：`sample_decoded: true, width: 1106, height: 826, result_type: 4, count: 2`（检出 2 处车牌）。
 
-- [ ] **0.4 记录宿主侧特征提取的现状基线**（用于 AC9/AC13 的前后对比与参数标定，只记录不修改）：
-      ```bash
-      # 冷/热两次时延：第一次 dlopen + 加载模型，第二次命中缓存
-      go test -race -count=1 -run TestExtractFaceFeature_ValidationAndSuccess ./internal/engine -v
-      ps -o rss= -p $(pgrep -f 'Zhulong.*test' | head -1)   # 进程级 RSS，作 TTL 回收对照
-      ```
-      写入 `research/baseline.md`：首次/二次提取耗时、TTL（60s）空闲后的 RSS 回落、`build/native/host/libFaceRecognitionPlugin.so` 是否存在。
-      无法在本机测到的东西（如 RKNN 板端的模型加载时长）必须显式标为“未测”，不得估算。
+- [x] **0.4 记录宿主侧特征提取的现状基线**（用于 AC9/AC13 的前后对比与参数标定，只记录不修改）：
+      已实测并固化至 `research/baseline.md`：
+      - `TestExtractFaceFeature_ValidationAndSuccess` PASS (0.71s)，依赖 `build/native/host/libFaceRecognitionPlugin.so`；
+      - 板端 RKNN 硬件实测耗时标为「未测」。
 
-**Review gate 0**：把 0.2/0.3/0.4 的基线数字贴给用户确认，再进阶段 1。（0.1 已有结论：base dir 全局无隔离，判据见 `design.md` §6.2。）
+**Review gate 0**：0.1/0.2/0.3/0.4/0.5 基线数据已全部采集并写入 `research/baseline.md`，确认无误。已进阶段 1。
 
-- [ ] **0.5 记录「包构建寄生」的现状证据**（用于 AC16 前后对比）：写入 `research/baseline.md`：
-      ```bash
-      find packages -name 'CMakeLists.txt' | wc -l        # 期望 0
-      grep -n 'packages/' native/CMakeLists.txt | head    # 期望：add_library(... ../packages/...) 等
-      make native-build && find build/native/host -name '*Recognition*'  # 期望：有产物（改造后必须为空）
-      ```
+- [x] **0.5 记录「包构建寄生」的现状证据**（用于 AC16 前后对比）：写入 `research/baseline.md`：
+      - `find packages -name 'CMakeLists.txt'` = 0；
+      - `native/CMakeLists.txt:366-370` 直接引入 `packages/` 源码；
+      - `find build/native/host -name '*Recognition*'` 产出 5 项目标文件/库（改造后必须为 0）。
+
+- [x] **0.6 基线补录口径（D5，必读）**：阶段 1.0（R14，commit `7aeb3bb`）已先于本阶段落地，基线记录已在 `research/baseline.md` 顶部如实标注采集时间、HEAD `3842359` 及 R14 已生效事实，`make native-test` 28/28 通过。
 
 ---
 
@@ -121,7 +115,7 @@
 
 - [ ] **1.1** 把 `native/CMakeLists.txt:234` 的 `ZhulongAlgoRuntime` 源文件列表抽成 `ZhulongAlgoRuntimeObjects`（OBJECT 库），显式设：
       - `POSITION_INDEPENDENT_CODE ON`（⚠️ 现 target **没有**设，对比 `:154` / `:296` / `:314`；`SHARED` 会自动开、OBJECT 不会，漏了会在链接 PIE 时报 `R_X86_64_32 ... can not be used when making a PIE object`）；
-      - `CXX_VISIBILITY_PRESET hidden` + `VISIBILITY_INLINES_HIDDEN YES`（否则静态链入后 zhulong 符号会进可执行文件 `.dynsym`，而 AC1 的 `--undefined-only` 查不到，见 `design.md` §4.1.1）。
+      - ⚠️ **不要**设 `CXX_VISIBILITY_PRESET hidden`（2026-10-25 修正，原文错误）：1.2 让旧 `ZhulongAlgoRuntime`（SHARED）仍从这批对象构建，而 `native/CMakeLists.txt:377` / `:406` 的 plugin 还 `target_link_libraries(... ZhulongAlgoRuntime)`，hidden 会让 `.so` 不再导出那 9 个符号 → plugin **链接期 `undefined reference`**，阶段 1 走不到 1.4。符号不进可执行文件 `.dynsym` 由「可执行文件默认不导出未被动态对象引用的符号」+ 链接侧 `-Wl,--exclude-libs,ALL` 共同满足（`design.md` §4.1.1 第 3 条）。若确实要 hidden，唯一正确做法是加显式导出宏并让 OBJECT 编两遍——等于两份实现，本任务不做。
 - [ ] **1.1b** 把 `src/platform/dmabuf/dmabuf_allocator.cpp` 收敛为 OBJECT 库的**唯一归属**，`ZhulongAlgoIpc`（`:346`）改为消费 OBJECT 库、不再自行编译它。
       ⚠️ 现在它同时存在于 `ZhulongAlgoRuntime`（`:237`）与 `ZhulongAlgoIpc`（`:346`），靠动态符号介入才合成一个实例；全静态后链接结果取决于扫描顺序，最坏是两份 `DmaBufAllocator` 单例（同类 ABI 债）。见 `design.md` §4.1.1。
 
@@ -138,7 +132,7 @@
       make native-test
       ar t build/native/host/libZhulongAlgoRuntime.a | head
       readelf -d build/native/host/libZhulongAlgoRuntime.so | grep -E "NEEDED|RUNPATH"   # 与阶段 0 基线一致
-      nm -D --undefined-only build/native/host/libFaceRecognitionPlugin.so | grep -c zhulong  # 仍为 9，未被破坏
+      nm -D --undefined-only build/native/host/libFaceRecognitionPlugin.so | grep -c zhulong  # 仍为 9（变 0 或链接失败 ⇒ 1.1 误设了 hidden）
       nm -C build/native/host/libZhulongAlgoRuntime.so | grep -c "DmaBufAllocator::instance"    # 必须仍是 1
       ```
 
@@ -180,12 +174,21 @@
       - 每份实现内**删除** `#if defined(__arm__) || defined(__aarch64__)` 与 `targets/<t>/` 路径候选（`face_recognition.cpp:26-40`、`plate_recognition.cpp:79-82`），模型只在包根 `models/`，找不到即失败；
       - 每份实现内**删除**跨平台判断：`is_onnx_` / `set_is_onnx` / `!is_onnx_ && dma_buf_fd>=0` 全部消失——`onnx/` 实现只有 ONNX 一条路径，`rk3568/` 实现只有 RKNN 一条路径，没有分支可写；
       - 归一化常量与默认阈值保留在各自实现内（face det 640 `127.5/128`、extractor 112 `127.5/127.5`、plate recognizer `(x/255-0.588)/0.193`），**每处常量只允许一个定义点**，禁止在同实现内重复内联；
-      - 新增共享 golden 向量 `packages/<id>/tests/vectors/*.json`（张量输入 → 框/landmark/特征期望值），两份实现都跑同一份；这是**唯一**的跨 target 共享物；
+      - 新增 **dev-only 开发期测试**（取代原「共享 golden 向量」）：
+        - `packages/<id>/<target>/tests/dev_infer.cpp`：用 `stb_image` 读**包根 `sample.jpg`** → 调本 target 产品代码 → 归一化坐标 × 宽高 → 画框 + label/score + landmark 连线 → `stb_image_write` 写 **`result.jpg`** → 终端打一张明细表（sample / count / label / score / box / text / cost_ms）；
+        - CMake：`add_executable(<id>_devtest EXCLUDE_FROM_ALL tests/dev_infer.cpp src/*.cpp)` + `target_link_libraries(... Zhulong::AlgoRuntime)`；**不设 INSTALL_RPATH、不进安装规则** → 物理上进不了归档；
+        - 依赖：`stb_image.h` / `stb_image_write.h` 放 `tests/third_party/`（header-only，零动态依赖，也可改用系统 libjpeg——开发期工具不受 `ldd` 约束）；
+        - `make test` = 构建 `devtest` + 跑 `sample.jpg` + 断 `result.jpg` 存在；`result.jpg` 写到构建目录（`build/<target>/out/`），**不写安装目录**；
+        - 文件名带身份：`result-<id>-<target>.jpg`，避免 onnx 与 rk3568 互相覆盖，也便于板端回传时引用；
+        - **交叉构建的 `devtest` 允许在板端执行**（宿主不行）：这是 RKNN 档位唯一的行为验收方式，回传 `result.jpg` 并记入 `research/baseline.md`；
+        - 不要做的事：不要用 ctest 做像素级 diff（字体/渲染顺序一改就炸），也不要把量化的期望值写进用例——看图判断，跨 target 不比结果。
       - 验收：
         ```bash
         grep -rn '\.\./onnx\|\.\./rk3568\|targets/' packages/*/*/src            # 期望：空
         grep -rn 'is_onnx_\|set_is_onnx\|__aarch64__\|__arm__' packages/*/*/src   # 期望：空
         make -C packages/face_recognition/onnx test && make -C packages/face_recognition/rk3568 test
+        ls packages/*/*/build/*/out/result-*-*.jpg                                # 期望：每 target 一张
+        find packages -path '*vectors*'                                            # 期望：空（向量机制已撤销）
         ```
       - ⚠️ **不引入** `InputFacts` / `Session::prepare_input` / `models/preprocess.json`（R13 已撤销）。`prepare_input` 的复用槽只作为独立性能任务，不在本阶段。
       - ⚠️ 两边 `make test` 在交叉 profile 下只能编译（AGENTS.md），RKNN 侧的行为验收在板端，`research/baseline.md` 标「未测」。
@@ -215,6 +218,15 @@
       每个 Worker 只关联一个 broker 和一个 `TaskContext`。
 
 - [ ] **3.2** `Options` 支持重复 `--broker`、`--name`、`--algorithm-id`、`--verify --sample`。固定一 broker 一 Worker 线程，所有传入 broker 都须订阅；不接受或传递 `--max-workers`（该参数在现状 runner 中并不存在，此约束意为「不得新增」），不做线程 clamp。**不得**新增 `--config-file` 或任何 argv 配置通道；`model_create` 继续传 `"{}"`，与现状逐字一致。
+      - **`--verify` 必须输出明细，不能只给 `count`**：复用现有的 `runner::serialize_inference_result`（`runner.cpp:115`，已在 IPC 路径 `:867` 用着），把 `task_type` + `detections[{box,label,score}]` / `classifications[{label,score}]` / `persons[{track_id,body_box,body_score,faces[{box,quality,landmarks,matched,similarity,person_id,person_name,candidates}]}]` / `vehicles[{track_id,vehicle_box,vehicle_score,vehicle_type,vehicle_color,plates[{box,score,plate_number,plate_color,plate_type}]}]` 一并输出。
+        - **定位：`--verify` 的输出是 IPC 结果载荷的「超集」**（多出 `status` / `sample_decoded` / `width` / `height`），不是另一套格式。三个消费者共用同一份载荷形状：broker 长驻路径、一次性推理（验包 / 将来的宿主侧「试用」）、`algo_probe.py`。**禁止**为某个消费者另起字段名；
+        - **字段只允许追加，不允许改名或改语义**（契约在 `algo-plugin-contract.md`，见 7.4）。改名前先问：宿主的三个消费者能不能同时改？不能就别改；
+        - **明细必须可选**：`internal/algorithm.VerificationReport` 用指针/slice 接收（缺字段即 nil）。新宿主读旧包 → 跳过明细比对并打一条 warn，**不得判失败**——否则升级顺序被钉死；
+        - **不搬 IPC 专属字段**：`stream_id` / `pts` / `capture_time_ms` 在验包场景无意义，不输出（或恒 0）；`cost_ms` 保留，用于时延观测；
+        - `count` 与载荷数组并存（`count` = 载荷元素数），保持旧解析器的向后兼容；
+        - 归一化框坐标 + `width`/`height` 已足够外部工具（Go / 前端 canvas / `algo_probe.py`）画回原图，**不需要包内任何图像库**；
+        - ⚠️ **`sample` 字段语义澄清**：Go 侧 `verifier.go:301` 会把 `--sample` 换成解码后的**临时 PPM 路径**，所以该字段报的是 PPM 而非 `sample.jpg`。渲染方要用原始 `sample.jpg` 作底图（内容相同、尺寸相同），不要拿这个路径去显示/引用；
+      - **一次性推理的语义边界（写进输出与文档，别留给用户猜）**：不连 `--broker` → 收不到 `MSG_GALLERY_SYNC`，因此 `matched` 恒 false、`person_name` / `candidates` 恒空；无连续帧 → `track_id` 恒 0。验包与将来的 UI 试用都受此限，输出里不要伪造这两类字段。
 
 - [ ] **3.2b SDK 可安装：`make sdk-install`**（方案 A 的前提，`design.md` §4.5）
       - 新增 `ZhulongAlgoSdkStatic`（STATIC，`OUTPUT_NAME zhulong_algo_sdk`）：源集合 = `native/sdk/src/algo_main.cpp` + `native/src/algorithm/ipc/*` + `gallery_index/gallery_parser` 非 inline 部分 + `src/common/log.cpp`（`design.md` §4.4；**最容易漏 log.cpp**）；
@@ -226,7 +238,7 @@
       - 验收：`cmake -B /tmp/probe -S <一个临时最小工程> -DCMAKE_PREFIX_PATH=build/sdk/prefix` 能 `find_package(ZhulongAlgoSDK 1.0 REQUIRED)` 成功，且 `ar t` 能看到 `algo_main` 与 `log` 的目标文件；把 prefix 整体拷到 `/tmp/other-prefix` 后同一命令仍能 configure（可搬迁性）。
 
 - [ ] **3.2c SDK 模板 + 脚手架**（3.3/3.6 的蓝本，`design.md` §4.7）：
-      - 建 `native/sdk/templates/`：`CMakeLists.txt`（`find_package(ZhulongAlgoSDK)` + `add_executable(<id>)`）、`Makefile`（`make` / `make test` / `make package` / `make verify`）、`manifest.json`（`id`/`name`/`version`/`task_type`/`category`/`platform{arch,target}`/`resources{compute_cost,memory_mb}`）、`config.schema.json`（`type:object, properties:{}`）、`src/<id>.cpp`（`ZHULONG_ALGO_MAIN` + 空 `init`/`create_session`/`detect`）、`tests/`、`scripts/build_package.py`（薄壳）、`README.md`、`sample.jpg` 占位图；
+      - 建 `native/sdk/templates/`：`CMakeLists.txt`（`find_package(ZhulongAlgoSDK)` + `add_executable(<id>)`）、`Makefile`（`make` / `make test` / `make package` / `make verify`）、`manifest.json`（`id`/`name`/`version`/`task_type`/`category`/`platform{arch,target}`/`resources{compute_cost,memory_mb}`）、`config.schema.json`（`type:object, properties:{}`）、`src/<id>.cpp`（`ZHULONG_ALGO_MAIN` + 空 `init`/`create_session`/`detect`）、`tests/dev_infer.cpp`（读 `sample.jpg` → 空结果 → 写 `result.jpg`，证明「空实现 = 0 检出」而不是「跑不起来」）+ `tests/third_party/stb_image*.h`、`scripts/build_package.py`（薄壳）、`README.md`、`sample.jpg` 占位图；
       - 建 `native/sdk/tools/new_package.py`：参数 `--dir` / `--target` / `--task-type` / `--category` / `--version` / `--sdk-min-version` / `--force`；生成物落在 `<dir>/<id>/<target>/`（每 target 一个实现目录，对已存在的 `<id>` 再跑一次只新增 target 目录，不覆盖兄弟目录）；`id` 校验**复用** `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` 并显式拒绝 `plugin.so`（错误信息指向宿主规则，不让用户到安装期才发现）；
       - 生成的包**不拷 SDK**：`README.md` 写清「SDK 是构建期依赖，用 `SDK_PREFIX` 指向已安装的 SDK；发布物里没有 SDK」；
       - 根 `Makefile` 新增 `new-package PKG=<id> TARGET=<t>`（薄封装，落到 `packages/<id>/<t>/`）与 `sdk-selftest`（临时目录生成 → `make` → `make verify` → `make package`）；`sdk-selftest` 进 `make check`（仅在 host profile 下运行，交叉 profile 下 SKIP，避免执行目标架构产物）；
@@ -253,8 +265,8 @@
         && cp -r packages/plate_recognition/targets/onnx/models /tmp/pkgroot/ \
         && cp packages/plate_recognition/sample.jpg /tmp/pkgroot/
       (cd /tmp/pkgroot && ./plate_recognition --verify --sample sample.jpg)
-      # 期望 exit 0 + {"status":"passed","count":<与阶段 0.3 基线一致>}
-      # ⚠️ 必须真的校验 count，不能只看 status：dladdr 找不到 models/ 时若后端允许合成帧，会“通过”但什么都没算。
+      # 期望 exit 0 + {"status":"passed","count":<与阶段 0.3 基线一致>,"detections":[...]}
+      # ⚠️ 必须真的校验 count 与 detections，不能只看 status：dladdr 找不到 models/ 时若后端允许合成帧，会“通过”但什么都没算。
       ```
       > 为什么要拷到 `/tmp/pkgroot`：两个包的模型定位都靠 `dladdr` 取模块所在目录再拼 `models/`（`plate_recognition.cpp:32-53`）。可直接在 build 目录里跑会命中源码树候选，**掩盖包根约束缺陷**。
 
@@ -269,11 +281,11 @@
 - [ ] **3.6** `packages/face_recognition/{onnx,rk3568}/` 同构：各自 `CMakeLists.txt` + `Makefile`（两者与 plate 只差源文件列表与 `ZHULONG_ALGO_MAIN(...)`）；只链接 `Zhulong::AlgoSDK` / `Zhulong::AlgoRuntime`。
       - `onnx/` 侧：`models/*.onnx`，输入 NCHW f32、实现内自己归一化、host 内存；
       - `rk3568/` 侧：`models/*.rknn`，输入 NHWC u8 + `pass_through=0`（converter 归一化）+ DMA-BUF，阈值独立标定；
-      - 两份实现共享 `packages/face_recognition/tests/vectors/*.json`（decode/align 的 golden 向量），**不共享任何源码**；
+      - 两份实现**不共享任何源码、也不共享测试夹具**：各自 `tests/dev_infer.cpp` + `tests/third_party/stb_*`，各自出 `result-<id>-<target>.jpg`；阈值标定就靠改常量→重出图→看漏检/误检；
       目录内闭环验收（**不回仓库根**）：
       ```bash
       make -C packages/face_recognition/onnx    all test package verify
-      make -C packages/face_recognition/rk3568  all test package CROSS_PROFILE=rk3568   # 只编译，不 verify
+      make -C packages/face_recognition/rk3568  all test package CROSS_PROFILE=rk3568   # 只编译，不 verify；devtest 拷到板端跑出图
       ```
       并校验各 target 的 Makefile 与 SDK 模板只差一行：
       ```bash
@@ -291,7 +303,7 @@
       - **target 资产门禁（fail-closed）**：入参必须是 `packages/<id>/<target>/` 目录；缺 `manifest.json`、缺该 target 应有的模型、含 `.rknn` 却缺 `QUANTIZATION.md`、缺 `CONVERSION.md`（或转换脚本）→ 立即失败并列出缺失项；`--target` 取值收敛为「目录实际存在」；
       - **量化元信息**（`design.md` §4.8.5 → 已由 R12 收窄）：`QUANTIZATION.md` 逐模型写精度模式 + 校准集 + 工具版本；`CONVERSION.md` 是 `mean/std` 的唯一来源，`.rknn` 内嵌 `attrs` 只用于 drift 检查（不一致时报错退出，**不用它生成任何配置**）；
       - **资产摊平**：把 `<target>/models/`、`manifest.json`、`config.schema.json`、`QUANTIZATION.md` 落到 staging **包根**；归档内不得出现 `targets/` 路径（`tar tzf | grep -c 'targets/'` 期望 0）；
-      - 检查项：归档里不得出现 `plugin.so`（任何位置）；入口文件名为 `<manifest.id>` 且 `0755`；manifest 原样复制（本任务**不新增任何字段**）。
+      - 检查项：归档里不得出现 `plugin.so`（任何位置）；入口文件名为 `<manifest.id>` 且 `0755`；manifest 原样复制（本任务**不新增任何字段**）；**归档内不得出现 `tests/`、`result*.jpg`、`stb_image*`**（开发期产物零泄漏，一条 `tar tzf | grep -cE` 拦住）。
 
 - [ ] **3.8** SDK main 增加 `--extract-feature`（协议与弱符号方案见 `design.md` §11.2/§11.3）：
       - stdin 帧流（28 字节头 + 裸像元）→ stdout 逐帧一行 JSON；日志只能走 stderr；
@@ -299,6 +311,8 @@
       - 帧级错误（无脸/输入非法）**不退出进程**；`request_id` 必须原样回显；
       - **不新增公共门面**、不改 `plugin.h`、不引入图像解码依赖（像素在 Go 侧已展平）；
       - 禁止为目标添加 `-rdynamic` / `--export-dynamic`（会使 AC1 第三条失效）。
+      - ⚠️ **弱符号必须由包自身对象文件提供（T1，2026-10-25 补充）**：GNU ld **不会**为满足「弱未定义引用」抽取静态归档成员。`zhulong_face_extract_feature` 的定义必须位于 `add_executable` 直接编译的源码里（`packages/face_recognition/src/face_recognition.cpp:570`）；若被移进 `libZhulongAlgoRuntime.a`，face 包会**静默**返回 `UNSUPPORTED`（exit 5），表现为「底库登记功能消失」且无错误日志。
+        门禁：用 face 包喂 1 帧，必须**不**返回 `UNSUPPORTED`（与 plate 包的 `UNSUPPORTED` 用例互为对照，两条都要有）。
       手工验收（一次性执行，**不落成仓库测试资产**；帧协议是 SDK 公开契约，验证工具属于 SDK 分发物，见下）：
       ```bash
       make native-build
@@ -318,7 +332,7 @@
 
 - [ ] **3.9** 移除宿主构建树里的包定义，包级测试随包走（AC16）：
       - `native/CMakeLists.txt`：删除 `FaceRecognitionPlugin` / `PlateRecognitionPlugin` 的 `add_library`、`target_include_directories`、`target_link_libraries` 段落；
-      - 把 `native/tests/face_recognition_plugin_test.cpp`、`plate_recognition_plugin_test.cpp`、`face_recognition_onnx_test.cpp` 迁到对应 target 目录（`packages/face_recognition/<target>/tests/`、`packages/plate_recognition/onnx/tests/`），golden 向量放 `packages/<id>/tests/vectors/` 并跨 target 共享（**不得**再 `#include` `native/src`），在包 CMakeLists 里注册 ctest，由 `make packages-test` 驱动；
+      - 把 `native/tests/face_recognition_plugin_test.cpp`、`plate_recognition_plugin_test.cpp`、`face_recognition_onnx_test.cpp` 迁到对应 target 目录（`packages/face_recognition/<target>/tests/`、`packages/plate_recognition/onnx/tests/`），**不得**再 `#include` `native/src`；迁完后它们以 `devtest` 的可选子用例形式存在（或直接并入 `dev_infer.cpp` 的断言），由 `make packages-test` 驱动；不能迁的部分（依赖旧 `.so` 形态的断言）改写为 `dev_infer.cpp` 的检查项，不要为了保留旧断言而把 `.so` 形态抬成受支持路径；
       - `ZhulongFaceFeatureExtract` / `ZhulongFacePluginTtl`：前者随 R10 删除（改由 Go 侧覆盖），后者改测新的 `--extract-feature` 进程（用 mock 可执行文件，不依赖真实包）；`MockDetector` / `MockClassifier` / `MockPersonStructure` / `MockFaceExtractPlugin` 属夹具，留在 native；
       - `Makefile`：新增四个**根目录入口**——`make`（默认，产物齐全）/ `make test`（全量测试）/ `make package`（聚合各 target 的归档）/ `make check`（发布门禁）；`packages-*` 内部分解目标**只做委派**（`$(MAKE) -C packages/<id>/<target>`，target 列表来自目录枚举），不得重写编译或打包逻辑（`design.md` §4.5）；
       - `go-check: native-build packages-build`（`internal/algorithm/*_pkg_test.go` 依赖包产物，否则只能 skip）；`packages-package` 末尾把 `packages/*/dist/*.tar.gz` 聚合到 `build/packages/`；
@@ -338,7 +352,13 @@
       make packages-build && make packages-test
       ```
 
-**Review gate 3**：`make native-build` 不再产出任何 `*Recognition*`；两个包仅靠 `build/sdk/prefix` 构建成功（`grep packages/ native/CMakeLists.txt` 为空）；plate 验包 `count` 与阶段 0.3 基线一致；两者 `nm` / `ldd` / 导出表三项黑盒检查通过；真实 broker 上 Worker 数与订阅数一致；`--extract-feature` 帧流三项（多帧/无脸续跑/plate 报 UNSUPPORTED）通过，且特征向量与阶段 0.4 基线余弦相似度 ≥ 0.999。**rollback = 删除新增 SDK main、SDK install 规则及两个包目录下的 CMakeLists。**
+7f. 把 dev-only 测试（`tests/` / `result.jpg` / `stb_image*`）装进归档，或把图像库链进交付物 `<manifest.id>` → 撞 AC12/AC18 的 `ldd` 门禁；也没必要：只有开发期看图才需要图像库，交付形态只吃宿主喂的裸像素。
+
+**Review gate 3**：`make native-build` 不再产出任何 `*Recognition*`；两个包仅靠 `build/sdk/prefix` 构建成功（`grep packages/ native/CMakeLists.txt` 为空）；plate 验包 `count` 与阶段 0.3 基线一致；**每个 target 的 `make test` 都产出 `result-<id>-<target>.jpg` 与终端明细表，且归档内无 `tests/`**；两者 `nm` / `ldd` / 导出表三项黑盒检查通过；真实 broker 上 Worker 数与订阅数一致；`--extract-feature` 帧流三项（多帧/无脸续跑/plate 报 UNSUPPORTED）通过，且特征向量与阶段 0.4 基线余弦相似度 ≥ 0.999。
+
+**本阶段的 `make check` 预期状态（T3，2026-10-25 补充）**：3.9 把三个 native 用例（`ZhulongFaceRecognitionPlugin` / `ZhulongFaceRecognitionOnnx` / `ZhulongFaceFeatureExtract`）迁走前，它们仍链接旧 `FaceRecognitionPlugin` / `PlateRecognitionPlugin`，因此本阶段 `make native-test` **允许短暂为红**，但必须把红项**逐条列在本阶段的 PR 描述里**，每一条对应到 3.9 或 4.8 的替代用例；`make check` 的最终口径以 gate 7 为准。不允许「红了不记」——那是后续无人收口的唯一来源。
+
+**rollback = 删除新增 SDK main、SDK install 规则及两个包目录下的 CMakeLists。**
 
 ---
 
@@ -358,6 +378,7 @@
 - [ ] **4.4** `internal/algorunner/process.go`：用 `ProcessConfig.ExecutablePath` 作为命令路径，argv 只包含重复 `--broker`、`--name`、`--algorithm-id`；不传 `--plugin` 或 `--max-workers`。移除通用 `RunnerPath` / `PluginPath` spawn 分支。
 - [ ] **4.5** `internal/algorithm/verifier.go` 的 `runDynamicVerification` 直接执行已解析的包入口，参数为 `--verify --sample <image>`，`cmd.Dir` 固定为包目录。
 - [ ] **4.6** 更新 `Runtime` 与所有 supervisor 路径：启动、升级、回滚、崩溃恢复都使用当前包根可执行文件；移除 `DefaultAlgorithmRunnerPath` 对算法包进程的依赖。
+      已拍板方案（T5）：supervisor 启动前用 `ResolveEntry` 校验每个已启用包。对于旧 `.so` 包或缺失入口的包，标记为 `unavailable` 并上报稳定错误码 `ALGO_ENTRY_INVALID`，**直接进入「不自动重试」状态**，杜绝 5s 退避重试风暴；由运维在前端或管理端重新安装/重建为可执行文件形态。
 
 - [ ] **4.7** 验证：
       ```bash
@@ -410,9 +431,11 @@
 
 ---
 
-## 阶段 6（可选，默认跳过）：底库去进程内单例
+## 阶段 6（**不执行**；PRD R7 已降级）：底库去进程内单例
 
 > **降级理由**：在「可执行文件 + 静态链接运行时」形态下，`algo_main` 与算法代码在**同一二进制内**，`GalleryRegistry::instance()` 自然只有一份，`GalleryIndex`（写入）与 `face_recognition.cpp:184`（快照读取）使用同一个对象；因此本阶段没有功能收益。
+>
+> **2026-10-25 同步**：`prd.md` R7 / AC6 已按此判断降级为「保持现状，不改代码」，本阶段因此从「可选」变为**不执行**；6.1–6.4 保留为历史方案，供「将来同一进程加载两份算法代码」时取用。
 > 旧 SHARED/runner target 如为 native 测试暂留，不代表支持将静态 runtime 链入 `plugin.so` 并由宿主加载。
 > 若执行，顺序不变（6.1-6.4），并在 SDK 发布说明里标注 `GalleryRegistry::instance()` 已弃用。
 
@@ -444,6 +467,7 @@
       ├── tools/new_package.py                 # 脚手架（一条命令生成包骨架）
       ├── examples/plate_recognition/onnx/     # 最小可用样例（含自己的 Makefile，单 target 目录形态）
       ├── templates/{CMakeLists.txt,Makefile,manifest.json,config.schema.json}   # 生成到 <id>/<target>/
+      ├── templates/tests/{dev_infer.cpp,third_party/stb_image.h,third_party/stb_image_write.h}   # dev-only，不进包
       └── abi.json                             # api_version / protocol / 依赖声明
       ```
       必须写清的三件事（否则第三方一定卡住）：
@@ -459,7 +483,7 @@
       python3 $SDK/tools/new_package.py demo --target onnx  # AC17：脚手架 → demo/onnx/
       cd demo/onnx
       make SDK_PREFIX=$SDK          # 编译（TARGET 取自目录名）
-      make test SDK_PREFIX=$SDK     # 包级 ctest（含共享 golden 向量）
+      make test SDK_PREFIX=$SDK     # dev-only 开发期测试：出 result-<id>-<target>.jpg + 终端明细表
       make package SDK_PREFIX=$SDK  # 验包 + 归档
       tar tzf dist/demo-*.tar.gz | head
       tar tzf dist/demo-*.tar.gz | grep -c 'targets/'   # 期望 0（资产已摊平）
@@ -474,7 +498,8 @@
 - [ ] **7.4** Spec 同步（`make check` **不覆盖**这些文档，不写就会漂）：
       - `AGENTS.md` 的「命令」段：把日常入口改成 `make` / `make test` / `make package` / `make check`，并保留一行说明内部分解目标仅供 CI；不要列出 `cmake -B …` 这类实现细节；
       - `.trellis/spec/backend/algorithm-guidelines.md`：包根 `<manifest.id>` executable、`0755`、`models/` 同级、旧 `plugin.so` 拒绝及 `--verify --sample` 验包命令；并补「包自己的 `CMakeLists.txt` + `find_package(ZhulongAlgoSDK)` 构建、`make native-build` 不编包」；
-      - 同一份 spec 还要补 **R11 形态**：源码目录 = `packages/<id>/<target>/`、target 间零引用（含 CMake 路径）、唯一共享物是 `tests/vectors/*.json`、出包资产摊平（归档内无 `targets/`）、`--target` 取值必须对应真实目录；并写明「允许重复、禁止抽象」的 review 口径；
+      - `.trellis/spec/native/algo-plugin-contract.md` 补一节「结果 JSON = 唯一跨边界结果契约」：载荷形状与 `serialize_inference_result` 一致，三个消费者（broker 长驻 / 一次性推理 / `algo_probe.py`）共用；**只允许追加字段**；一次性推理不含底库与跨帧跟踪（`matched` 恒 false、`track_id` 恒 0）；`--verify` 输出是它的超集（带 `status` / `sample_decoded` / `width` / `height`）；
+      - 同一份 spec 还要补 **R11 形态**：源码目录 = `packages/<id>/<target>/`、target 间零引用（含 CMake 路径）、**无共享测试夹具**（每 target 自带 `tests/`，`make test` 出 `result.jpg` 与终端表；`tests/` 不进归档）、出包资产摊平（归档内无 `targets/`）、`--target` 取值必须对应真实目录；并写明「允许重复、禁止抽象」的 review 口径；
       - `.trellis/spec/native/algo-plugin-contract.md`：说明宿主直接启动包可执行文件；保留 C ABI 函数表作为 SDK 内部桥接契约，但标明 `.so` 加载不再是受支持的算法包交付形态；
       - 同步 `TaskContext { task_id, params }`、四种公开结果适配器、`ZHULONG_ALGO_MAIN(PluginClass, ResultAdapter, PluginName, PluginVersion)`、头文件模板 `run<...>` 及 detail 层 `PluginFactory` 的边界，以及一 broker 一 Worker 的约束；不记录 `max_workers`。
       - `.trellis/spec/native/cgo-contract.md §6` / `hardware-backends.md:258`：按 `design.md` §11.9 改写成「特征提取经包可执行文件一次性通道」（若阶段 4.9 已改，此处只做复查）。
@@ -493,23 +518,23 @@
 | AC3 行为等价 | 验包 `count` 与阶段 0.3 基线一致；broker 帧计数同量级 | 0.3 / 3.5 |
 | AC4 单一形态端到端 | face 与 plate 可执行包正常运行；旧 `.so` 包安装明确失败；`make check` | 4.7 / 7.3 |
 | AC5 孤儿清扫 | `TestReapOrphan*` 全套 | 5.3 |
-| AC6 底库无单例 | 静态形态下阶段 3 即满足（同二进制内单例天然唯一）；若执行阶段 6 则加 10k 底库命中率 + 分片边界用例 | 3.4 / 6.4 |
+| AC6 底库不回退 | 分片边界用例全绿；快照与改造前同源（不测 10k 命中率——同代码同数据，测不出差异） | 6.x 不执行 |
 | AC7 SDK 自足 | 干净容器编译 + 验包 | 7.2 |
 | AC8 门面 task/config 补齐 | 签名审阅 + `make native-test` + 验包与基线逐字一致 | 3.0a-c |
 | AC9 特征提取语义等价 | 特征向量余弦相似度 ≥ 0.999；四类 HTTP 语义不变 | 0.4 / 3.8 / 4.8 |
 | AC10 特征提取失败可诊断 | 包缺失/崩溃/超时/非法 JSON/维度越界各一用例，不 panic、不写零向量 | 4.8 |
 | AC11 宿主不再加载算法代码 | `grep dlopen\|dlsym native/src/abi/engine.cpp` 为空；`nm -D` 无 zhulong | 4.8 / 4.9 |
 | AC12 帧流协议 | 3 帧（含无脸）→ 3 行 JSON、`request_id` 对应、进程不退出；无新增解码依赖 | 3.8 |
-| AC13 热进程复用与回收 | 5 次登记 1 次 spawn；空闲 60s 归零；宿主 SIGKILL 后子进程 1s 内消失；超时无僵尸 | 4.8 |
+| AC13 热进程复用与回收 | 5 次登记 1 次 spawn；空闲 60s 归零；宿主 SIGKILL 后子进程 **≤3s**（轮询断言）内消失；超时无僵尸 | 4.8 |
 | AC14 包版本失效 | 替换包后首请求必起新进程并记录 retire 原因 | 4.8 |
 | AC15 现有 spawn 契约 | `TestRunnerProcessSpawnThreadSurvivesWhileChildRuns` + `make check` | 4.8 / 7.3 |
 | AC16 包独立构建 | `make native-build` 不产 `*Recognition*`；包仅靠 `build/sdk/prefix` 构建；`grep packages/ native/CMakeLists.txt` 为空；交叉 prefix 不混用；`diff templates/Makefile packages/<id>/<target>/Makefile` 仅差 `SDK_PREFIX` | 0.5 / 3.2b / 3.9 |
 | AC17 脚手架可用 | 一条命令生成 `<id>/<target>/` 骨架 → `make`/`make test`/`make verify`/`make package` 全绿；非法 id 生成期被拒；`make sdk-selftest` 进 `make check` 且交叉 profile 下 SKIP | 3.2c / 7.2 |
 | AC18 第三方运行时处置 | onnx：ORT 在包内 `lib/`、`ldd` 指向包内、归档含 `NOTICE`；rknn：不绑定且启动探测；验包输出 `bundled\|system` | 3.3 / 3.7 / 7.1 |
-| AC19 每 target 独立实现与产物 | 实现目录间零引用（`grep ../onnx|../rk3568|targets/` 为空）；各 target 独立构建互不覆盖；归档无 `targets/`、无 `.onnx` 混入 rknn；prefix target 断言生效；缺资产时 `build_package.py --target rk3588` 明确失败 | 3.0e / 3.2b / 3.3 / 3.6 / 3.7 |
+| AC19 每 target 独立实现与产物 | 实现目录间零引用（`grep ../onnx\|../rk3568\|targets/` 为空）；各 target 独立构建互不覆盖；**每 target 的 `make test` 产出 `result.jpg` + 终端明细表，且归档内无 `tests/`、`ldd` 无图像解码库**；无 `vectors/*.json`；归档无 `targets/`、无 `.onnx` 混入 rknn；prefix target 断言生效；缺资产时 `build_package.py --target rk3588` 明确失败 | 3.0e / 3.2b / 3.3 / 3.6 / 3.7 |
 | AC20 量化契约 | 算法 src 无 `zero_point`/`quant`；rknn 归档含 `QUANTIZATION.md`（逐模型精度模式）与 `CONVERSION.md`；`Tensor::data<T>()` dtype 校验生效；RKNN 输出恒 `FLOAT32`；`.rknn` 内嵌 attrs 仅用于 drift 检查 | 1.1c / 3.7 / 7.4 |
-| AC21 平台事实不做公共抽象 | `InputFacts`/`prepare_input`/`preprocess.json`/`set_is_onnx` 在仓库中归零；`pass_through = (io_attr.type ...)` 隐式判断删除；归一化常量每实现仅一处定义点；脚手架空实现包 `readelf -d` 无 onnxruntime | 1.1c / 3.0e / 3.7 |
-| AC22 桩后端退出产品面 | `cpu_mock` 在 `native/src`/`native/sdk`/`native/scripts`/`Makefile` 归零；`default_inference_backend` 删除；未声明后端的 profile configure 失败；`ar t` 产品存档无 stub；`[SKIP]` 伪装用例归零；`test_stub` 拒绝出包 | 1.0a-f |
+| AC21 平台事实不做公共抽象 | `InputFacts`/`prepare_input`/`preprocess.json`/`set_is_onnx` 在仓库中归零；`pass_through = (io_attr.type ...)` 隐式判断删除；归一化常量每实现仅一处定义点；**`rknn` / `test_stub` prefix 下**脚手架空实现包 `readelf -d` 无 onnxruntime（onnx 档位必然带 ORT，见 AC18） | 1.1c / 3.0e / 3.7 |
+| AC22 桩后端退出产品面 | `cpu_mock` 在 `native/src`/`native/sdk`/`native/scripts`/`Makefile` 的**代码与配置**中归零（允许 `build.py` 的 docstring 保留 1 处历史说明，见门禁通用约定）；`default_inference_backend` 删除；未声明后端的 profile configure 失败；`ar t` 产品存档无 stub；`[SKIP]` 伪装用例归零；`test_stub` 拒绝出包 | 1.0a-f |
 
 ---
 
@@ -524,7 +549,7 @@
 5. 为了“少一次 exec”把特征提取做成常驻守护进程 + 自定义 IPC → 等于再造一套 broker，把本任务消灭的跨边界机制原样长回来（`design.md` §11.7）。
 6. 在 `engine.cpp` 里 `posix_spawn` / 在 handler 里裸 `exec.Command` → 拿不到 `dataDir`，或者绕开 `Pdeathsig`+`LockOSThread` 契约把健康子进程 SIGKILL 掉（`design.md` §11.4 第 6 条）。
 7. 为了让 `make native-build` “一次编完”，在包 CMakeLists 里写 `if(TARGET ZhulongAlgoRuntimeStatic)` 回退到 in-tree target，或改回顶层 `add_subdirectory(../packages/x)` → 仓库包与第三方包重新分叉，AC7/AC16 同时失效（`design.md` §4.5）。
-7b. 为了「少写两遍 decode」把两个 target 目录合并、或让 `onnx/` 的 CMakeLists 引用 `../rk3568/` → 跨 target 隔离失效，AC19 直接红；重复是**被接受的代价**，用共享 golden 向量兜正确性。
+7b. 为了「少写两遍 decode」把两个 target 目录合并、或让 `onnx/` 的 CMakeLists 引用 `../rk3568/` → 跨 target 隔离失效，AC19 直接红；重复是**被接受的代价**，用 `make test` 出 `result.jpg` 看图兑正确性（不是把两份实现拧回一份）。
 7c. 为了「统一归一化」重新引入 `InputFacts` / `prepare_input` / `preprocess.json` / 配置表 → R13 已撤销，这是把分支搬进 SDK 的负收益抽象，review 直接拒绝。
 7d. 把主机档位重新叫回 `cpu`（或新增 `cpu` 档位）→ 与 build 侧 `cpu_mock` 桩后端同名不同义，运维会以为「CPU 推理」，而实际包跑的是 ORT/f32（`prd.md` F25）。
 7e. 为「省事」把桩后端留在产品面（`cpu` 作为可选后端/默认值/profile 档位）→ 交叉或不带 ORT 的机器会产出"编译成功但不可推理"的产物，包级测试用 `[SKIP]` 假装通过（F26/F27）；桩只能存在于夹具目标。
@@ -533,6 +558,8 @@
 10. 让脚手架生成「能编但过不了验包」的骨架（漏 `sample.jpg`、空实现却打了 `--no-verify`、或合成假检测框） → 第三方第一次体验就是失败，或模板把“合成结果”当成合法做法教出去（AC17 / `algo-plugin-contract.md`）。
 11. 为了「目录干净」把 ORT 放到宿主级共享目录（`<dataDir>/algorithms/.runtime/`）或全局 `/usr/lib` → 路径依赖安装深度/需要 root，升级后静默指向旧版本；正确做法是随包 `lib/` + `RUNPATH=$ORIGIN/lib`（`design.md` §4.5.4）。
 12. 「顺手」在算法里加反量化（`want_float=0` + 自己乘 scale）或以 int8 直出为由绕过后端 → 算法重新按后端分叉，「一套代码」立刻失效；量化只允许留在模型资产与后端内部（`design.md` §4.8.5）。
+13. 为将来的「UI 上传图片试用」另造一套结果 JSON（或给 `--verify` 起一套与 IPC 不同的字段名）→ 跨边界契约立刻分叉成两份，而这个任务的全部意义就是终结协议漂移。正确做法：明细就是 `serialize_inference_result` 的载荷，只许追加字段（3.2 / 7.4）。
+14. 为了「让 UI 好看」在一次性推理里伪造 `matched` / `person_name` / `track_id` → 一次性进程没有底库、没有跨帧状态，伪造会让人拿它当「识别不准」的证据；正确做法是如实返回 false / 0 并在输出与 UI 上标注（`design.md` §3.4）。
 
 ---
 

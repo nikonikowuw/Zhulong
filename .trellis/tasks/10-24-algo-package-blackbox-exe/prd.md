@@ -99,10 +99,13 @@
 - 必须改为不依赖二进制名的认领依据，且该依据必须**按宿主实例可区分**：采用本实例算法安装根下的真实可执行文件路径判定（`/proc/<pid>/exe` ∈ `<dataDir>/algorithms/`，见 `design.md` §6.2）。`--broker` 的 socket 目录不可用作依据——它全局落在 `/tmp`，对任意实例恒真。**绝不可**退化为「父进程不是我」这类反向判定（`algorithm-guidelines.md` 记录该缺陷实测杀过活进程）。
 - 新建与清扫共享的目录锁语义（`BrokerResourceLock`）不受影响，但 Pdeathsig / 进程组语义必须在新形态下重新验证。
 
-### R7. 底库跨进程传递不依赖进程内单例
+### R7. 底库跨进程传递（**已降级为「保持现状，不改代码」**）
 
-- 每个算法包自带运行时后，`GalleryRegistry::instance()` 会变成每个包一份独立实例。底库必须走**已有的 IPC 广播通道**（`MSG_GALLERY_SYNC`）以只读快照形态进入算法包，而不是依赖跨 `.so` 共享的全局单例。
-- 现有的分片（`shard_index` / `shard_total`）与 64KB 载荷上限语义不变。
+> 决策变更（2026-10-25 文档审阅）：原 R7 要求「去掉 `GalleryRegistry::instance()` 进程内单例，改为注入式只读快照」。在「可执行文件 + 静态链接运行时」形态下，`algo_main` 与算法代码在**同一二进制内**，`GalleryRegistry::instance()` 天然只有一份（`GalleryIndex` 写入侧与 `face_recognition.cpp:184` 读取侧是同一对象），原 R7 要解决的问题不存在；`MSG_GALLERY_SYNC` 本来就是现有唯一入口，无需新增机制。
+
+- **不新增机制、不改代码**：底库继续走既有 `MSG_GALLERY_SYNC` 广播，进程内持有只读快照；本任务**不**把 `GalleryRegistry` 改为可注入实例，也**不**引入 `zhulong::gallery()`。
+- 现有的分片（`shard_index` / `shard_total`）与 64KB 载荷上限语义不变，`accumulate_sync_shard` 逻辑不动。
+- `implement.md` 阶段 6.1–6.4 的「注入式快照」方案保留为历史记录，**不在本任务执行**（阶段 6 标题已同步标为「不执行」）。若将来出现「同一进程加载两份算法代码」的形态（本任务明确排除），再回到该方案讨论。
 
 ### R8. SDK 分发物自足
 
@@ -140,8 +143,14 @@
 - **target 命名口径（一次性改名，永久生效）**：主机档位叫 **`onnx`**——决定它的是推理后端（ORT / f32），不是「CPU」这件事；板端档位按芯片叫 `rk3568`（将来 `rk3588`）。**`cpu` 只允许指 build 侧的 `cpu_mock` 桩后端与视觉后端的 CPU 实现，不得作为 package target、目录名或 `platform.target` 的取值**（见 F25）。
   - 迁移动作：`targets/cpu/` → `targets/onnx/`；`manifest.platform.target` `"cpu"` → `"onnx"`；`[algorithm].target` 默认值与 `app.DefaultConfig.AlgorithmTarget` 同步改为 `"onnx"`；`normalizeHostTarget("")` 返回 `"onnx"`。
   - 安装期门禁：`platform.target == "cpu"` 返回稳定错误码 `PLATFORM_TARGET_CPU_RETIRED`，提示重建为 `onnx` 档位；**不做静默映射**（静默映射会把 mock 与 onnx 两个后端继续混在一起）。
-- **不共享源码**：两个 target 的实现目录之间不得互相引用——CMake 路径（`../onnx`、`../rk3568`）、`#include "../"`、`if(TARGET …)` 回退一律禁止。**允许并预期重复**：decode / NMS / 对齐等逐字相同的纯数学各存一份。
-- **共享测试，不共享实现**：`packages/<id>/tests/vectors/*.json` 是唯一共享物（golden 向量：张量输入 → 框 / landmark / 特征期望值），每个 target 的实现都必须过同一份向量。
+- **不共享源码、也不共享测试夹具**：两个 target 的实现目录之间不得互相引用——CMake 路径（`../onnx`、`../rk3568`）、`#include "../"`、`if(TARGET …)` 回退一律禁止。**允许并预期重复**：decode / NMS / 对齐等逐字相同的纯数学各存一份。
+- **开发期测试只服务本 target，不进归档**（2026-10-25 决策变更，取代「共享 golden 向量」）：
+  - 每个 target 自带 `tests/`，`make test` 拼一个 **dev-only** 可执行文件（`EXCLUDE_FROM_ALL`、不进安装规则），它自己读**包根 `sample.jpg`** → 直接调本 target 的产品代码 → 把框 / label / score / landmark 画回图上，写出 **`result-<id>-<target>.jpg`**，同时在终端打一张明细表；
+  - 这层**允许**依赖图像库（`stb_image` / `stb_image_write` header-only 即可，或系统 libjpeg）：它是开发期工具，不受「交付包 `ldd` 干净」约束。受该约束的是归档里那个 `<manifest.id>`，它仍只吃宿主喂的裸像素；
+  - **不进归档**：`pack_package.py` 只拷白名单，且断言 `tar tzf | grep -cE 'tests/|result\.jpg|stb_'` = 0；
+  - **跨 target 不比结果**：onnx（f32）与 rk3568（int8）推理本就不同（F24），两张 `result.jpg` 只各自对照自己的基线，不存在「两张图应当一致」这种要求；
+  - 交叉构建的 dev-only 可执行文件**可以在板端执行**（这是 RKNN 档位唯一可行的行为验收方式，不违反 AGENTS.md 的「交叉只许编译」——那条禁止的是在**宿主**执行目标架构产物），回传 `result.jpg` 即验收证据；
+  - **刻意不做**：张量级 golden 向量（`vectors/*.json` / base64 / regen 脚本 / tolerance）。按 target 分叉的向量等于普通单测；不分叉则捆绑两份实现必须同解——而真正需要在同 target 内防回退的东西，看 `result.jpg` 比看数字更直接。
 - 每 target 的归一化常量、默认阈值、NMS 参数写在**本 target 的实现目录内**；不跨 target 共用，也不做「per-target 覆盖」机制。
 - **构建隔离**（沿用原 R11，仍然有效）：`SDK_PREFIX` 按 target 各产一份并写 target 元数据，包 configure 断言与 `TARGET` 一致；构建目录 `build/<target>/` 不得共用（CMakeCache 会静默跨架构污染）；归档名必须含 `arch` 与 `target`。
 - **资产摊平**：出包时把本 target 的 `models/`、`manifest.json`、`config.schema.json`、`QUANTIZATION.md` 落到**包根**，归档内不存在 `targets/` 目录。算法侧不得出现 `targets/<t>/` 路径候选或 `__aarch64__` 兜底（见 F22 的回退链缺陷）：模型只在包根 `models/`，找不到即失败。
@@ -197,11 +206,24 @@
 | **算法参数下发与热更新** | 本任务只换交付形态，`model_create` 继续传 `"{}"` 以保持行为等价。参数下发是独立议题：`model_create` 是**包级**、`task_open` 无 config 入参，且任务变更目前走**防抖全进程重启**（`ScheduleAlgorithmRestart` → Stop + Start），改一个阈值会让该算法所有通道 AI 中断。真正的修复需要新增 broker 控制消息 + `task_update` 尾追加，属独立任务（`design.md` §10） |
 | `GalleryRegistry` 的只读快照数据格式重定义 | 复用现有 `MSG_GALLERY_SYNC` 载荷，仅调整消费侧位置 |
 | 前端 / 其余 Go 业务层改动 | 除 `internal/algorunner`、`internal/algorithm` 的进程管理，以及 R10 涉及的 `internal/engine`（删加载器）、`internal/person`（提取器装配）外不触碰 |
+| **算法包 UI 试用（上传图片 → 前端画框）** | 本任务只把它的**前置契约**准备好：`--verify` 输出明细 + 结果 JSON 定为唯一跨边界契约（只许追加字段）。HTTP 端点、上传校验与限额、一次性推理的并发/超时/孤儿看护、前端 canvas 画框（含 EXIF 方向与 `object-fit` letterbox 换算）、以及「本测试不含底库与跨帧跟踪」的提示，属独立任务 |
 | 特征提取的批处理与常驻服务化 | 帧流协议已允许一个进程处理 N 帧，但不新增批量导入接口、不做进程池扩展、不做多后端编排；N 帧一次处理属于协议能力，不是本任务的功能交付 |
 
 ---
 
 ## Acceptance Criteria
+
+> **门禁通用约定（D4）**
+>
+> 1. 本节所有 `grep` 断言只针对**代码、构建脚本与配置值**，不针对注释 / docstring / Markdown。统一写法：
+>    ```bash
+>    grep -rn --include='*.c' --include='*.cc' --include='*.cpp' --include='*.h' --include='*.hpp' \
+>         --include='*.py' --include='*.cmake' --include='CMakeLists.txt' --include='*.go' \
+>         '<pattern>' <dirs> | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|#|\*)'
+>    ```
+> 2. Python docstring 无法用行首规则剔除，因此**必须显式给豁免**：在 AC 里写明「允许在 `<文件>` 内出现 N 处，用于说明历史」。命中数超出豁免上限即失败——既有豁免也有上限。
+> 3. 理由：`native/scripts/build.py:229` 保留了解释「为什么废除 `cpu_mock`」的 docstring。那是**知识**，不是**用法**。若断言把「写下禁令」判成「违反禁令」，门禁会先被当成噪音，然后被人关掉。
+> 4. 这些断言在 `implement.md` 与 CI 中会重复出现，应收编为单一脚本（建议 `native/tests/check_layering.py`，规则表 + 豁免表两张纸）并挂进 `make check`，不在 Makefile 里散落 grep。
 
 ### AC1. 黑盒判据（硬性，可命令行验证）
 
@@ -221,9 +243,10 @@ nm -D <pkg>/plate_recognition | grep -c zhulong                    # = 0（导�
 
 ### AC3. 行为等价
 
-- 同一模型、同一 `sample.jpg`，改造前后推理结果的 `count`、`class_id`、`text`、`score` 在容差内一致；
+- 同一模型、同一 `sample.jpg`，改造前后推理结果的 `count`、`label` / `class_id`、`text`、`score`、`box` 在容差内一致（**同 target 内前后版本对比**）；
+- **证据形式**：`make verify` 的终端明细表（机器比对） + `make test` 产出的 `result.jpg`（人看框位置与标码）；两者都要，不能只靠 `count`；
 - 实时流路径：改造后的算法包在真实 broker 上收到的帧数、丢弃帧数、端到端时延与改造前同量级；
-- **可比性限定在同一 target 的前后版本之间**：量化/取整/RGA 采样使跨 target 不保证逐位一致，跨 target 只能给容差且必须板端实测（`design.md` §4.8.4）。
+- **可比性限定在同一 target 的前后版本之间**：量化/取整/RGA 采样使跨 target 不保证逐位一致，跨 target 不给数值结论（只各自对照自己的基线）——量化颗粒见 F24（约 `0.0034`）。
 
 ### AC4. 单一形态端到端运行
 
@@ -237,10 +260,13 @@ nm -D <pkg>/plate_recognition | grep -c zhulong                    # = 0（导�
 - 同名不同路径的另一实例的正常进程**不被误杀**；
 - 现存门禁 `TestReapOrphanRunners_KillsReparentedRunner` / `TestReapOrphanRunners_SkipsCleanupWhenLockIsBusy` 仍通过。
 
-### AC6. 底库同步在无单例前提下正常
+### AC6. 底库同步不因交付形态变化而回退
 
-- 10k 人脸底库经 IPC 推送后，算法包内比对命中率与改造前一致；
-- 分片边界（64KB / `shard_index` / `shard_total`）用例仍通过。
+> 依赖已降级的 R7：本任务不动底库代码，因此本条是**回归门禁**，不是新功能验收。
+
+- `make native-test` 中底库分片边界用例（64KB / `shard_index` / `shard_total`）全部通过；
+- `--verify --sample` 与真实 broker 路径下，人脸包收到的底库快照与改造前同源（同一份 `MSG_GALLERY_SYNC` 载荷，无单例改写、无注入式替换）；
+- **不要求**「10k 底库命中率」实测：该指标在改造前后由同一份代码产出，本任务无从产生差异，测了也无法归因。若板端需要精度回归，记入独立的精度任务，不属于本任务验收。
 
 ### AC7. SDK 自足性
 
@@ -283,7 +309,7 @@ nm -D <zhulong 二进制> | grep -c zhulong                  # 期望：0
 ### AC13. 热进程复用与回收
 
 - 连续 5 次登记只产生 1 次 spawn；空闲 60s 后进程数回到 0；
-- `kill -9` 宿主后子进程 1s 内消失（Pdeathsig）；
+- `kill -9` 宿主后子进程 **≤3s** 内消失（Pdeathsig；轮询断言，不写死 1s——慢 CI 上 1s 阈值会 flaky，而契约本身不变）；
 - 请求超时 → 进程组被 SIGKILL 且 `Wait()` 回收，无僵尸；下一次请求重建成功；
 - 并发 5 个登记请求全部成功或明确失败，按 `request_id` 断言无响应错配。
 
@@ -368,7 +394,12 @@ grep -rn 'AlgorithmTarget: *"onnx"\|target *= *"onnx"' internal/app/config.go co
 - 交叉过程中**未执行**任何目标架构二进制（日志里不得出现 `--verify` 的真实执行）；
 - 板端未测项在 `research/baseline.md` 明确标为未测，不得以宿主结果代替；
 - 每份实现只服务一个平台，因此不得出现后端选择宏或运行时后端判断（重建「一套源码」的痕迹）：`grep -rn 'ZHULONG_INFERENCE_\|ZHULONG_VISION_\|is_onnx_' packages/*/*/src` 为空；`grep -rn '__aarch64__\|__arm__' packages/*/*/src` 为空（不再有模型路径兜底）；
-- 共享测试向量生效：`packages/<id>/tests/vectors/*.json` 被**每个** target 的 `make test` 读到；删掉某个 target 目录后，该 target 的向量用例随之消失，另一 target 不受影响。
+- **开发期测试只服务本 target**：`make -C packages/<id>/<target> test` 能产出 `result.jpg`（框 + label + score + landmark）与终端明细表；`tests/` 可依赖图像库（stb_image 等 header-only），但**不得进归档**：
+  ```bash
+  tar tzf build/packages/<id>-<arch>-<target>.tar.gz | grep -cE 'tests/|result\.jpg|stb_'   # 期望：0
+  ldd build/packages/<解包>/<id> | grep -ci 'jpeg\|png\|webp'                              # 期望：0（交付物仍无图像库）
+  ```
+- **不做**张量级 golden 向量：`find packages -name '*.json' -path '*vectors*'` 为空；两个 target 的 `result.jpg` 不要求一致（量化差异本就不同，见 F24）。
 - 旧包（`platform.target == "cpu"`）安装期被拒，错误码 `PLATFORM_TARGET_CPU_RETIRED`，提示改用 `onnx`；`normalizeHostTarget("")` 返回 `"onnx"`（单测覆盖）。
 
 ### AC20. 量化契约（R12）
@@ -392,18 +423,20 @@ ls packages/face_recognition/rk3568/CONVERSION.md               # 期望存在�
 grep -rn 'InputFacts\|prepare_input\|preprocess\.json' native/ internal/ packages/   # 期望：空（机制未引入）
 grep -rn 'set_is_onnx' native/ packages/                                            # 期望：空（后端选择入口已删）
 grep -rn 'pass_through = (io_attr.type' native/src/backends/rknn/                   # 期望：空（改为显式 convert_input）
-readelf -d <scaffold 空实现包> | grep -c onnxruntime                                # 期望：0
+readelf -d <rknn 或 test_stub prefix 下的脚手架空实现包> | grep -c onnxruntime      # 期望：0
 ```
 
 - 归一化常量只在各 target 实现内出现，且同一实现内只允许**一处定义点**（禁止内联重复）；
 - SDK 公共头不出现任何「由后端声明输入契约」的类型；`Tensor` / `Session` / `zhulong::ops` 契约不变；
-- `--verify` 的空实现包（脚手架生成物）不得因未使用的后端而强制依赖第三方运行时：若上条 `readelf` 为 1，说明 SDK 仍经编译期工厂拉入后端，必须改为由平台实现显式注入后端（每 target 一份 SDK prefix 已使该改造可行），或在该 target 的 `CONVERSION.md` 里明确记录为什么必须携带；
+- **上条 `readelf` 断言只适用于「本不该带 ORT 的档位」（`rknn` / `test_stub` prefix）**（2026-10-25 修正）：`onnx` 档位**必然**出现 `NEEDED libonnxruntime.so.1.21`——`algo_main` 调 `runtime::init()` → 引用 `runtime_factory.cpp:36 get_default_inference_backend()` → 抽入 `onnx_inference_backend.o`，这是静态链接的确定性结果，不是缺陷。「每 target 一份 SDK prefix」也救不了它：onnx prefix 本身就是 ORT 档位。onnx 档位的正确约束是 **AC18**（随包 `lib/` + `RUNPATH=$ORIGIN/lib` + 归档带 `NOTICE` + 验包输出 `runtime: bundled|system`），不是「不许 NEEDED」；
+  - 若要在 onnx 档位也不带 ORT，唯一手段是把后端注册推迟到首次 `create_session` 并用 `dlopen` 打开 ORT——与本任务「消灭 dlopen」的方向相反，**明确不做**；
 - `pass_through` 改显式参数后，rknn 实现仍始终让 converter 做归一化（`convert_input=true`），并有单测覆盖「模型输入 dtype 与像素 dtype 相等」这一分支不被误判为「已归一化」。
 
 ### AC22. 桩后端已退出产品面（R14）
 
 ```bash
-grep -rn 'cpu_mock' native/src native/sdk native/scripts Makefile          # 期望：空
+# cpu_mock 不得作为后端名 / 配置值 / 分支出现；允许在注释与 docstring 中说明历史（见「门禁通用约定」第 2 条）
+grep -rn 'cpu_mock' native/src native/sdk native/scripts Makefile          # 期望：仅 native/scripts/build.py 内 1 处 docstring 历史说明，无代码/配置命中
 grep -rn 'default_inference_backend' native/scripts/build.py               # 期望：空（不再推导默认后端）
 python3 native/scripts/build.py --profile native/profiles/rk3568.json build   # 期望：失败，指出 profile 未声明 inference_backend
 ar t build/native/host/libZhulongAlgoRuntime.a | grep -c stub              # 期望：0
@@ -438,11 +471,11 @@ grep -rn '\[SKIP\].*cpu_mock\|cpu_mock backend' native/tests             # 期�
 | 交叉构建的 prefix 混用 | Host 的头/归档被用作交叉包的输入，产物在板端静默表现为加载失败或 ABI 异常 | 每个 `CROSS_PROFILE` 各产一份 SDK prefix，输出目录分离；`build_contract_test.py` 的 Host/Cross 约束扩展到包 |
 | 开发循环多一步 | `make native-build` 后忘记 `make packages-build`，验包引用到旧产物 | `make check` 固定顺序，`make build` 串联两者；`build_package.py` 不再隐式帮你编 |
 | **模板腐烂** | `templates/` 与真实包各自演化，第三方拿到的骨架编不过或打不出包 | `make sdk-selftest` 每次重新生成并跑全链（AC17）；AC16 的 diff 门禁把包与模板钉在一起 |
-| 第三方运行时未随包 / 许可漏配 | 现场 `dlopen` 失败，或再分发违反 ORT 及其闭包的许可要求 | onnx target 默认绑定 + 归档带 `NOTICE` + 验包输出报告 `bundled|system`（AC18） |
+| 第三方运行时未随包 / 许可漏配 | 现场 `dlopen` 失败，或再分发违反 ORT 及其闭包的许可要求 | onnx target 默认绑定 + 归档带 `NOTICE` + 验包输出报告 `bundled\|system`（AC18） |
 | 包体积失控 | 每包 +约 33MB，10 包约 330MB | 仅 onnx target 绑定；RKNN 不绑定；归档体积计入 `research/baseline.md` 监控 |
 | **跨 target 污染** | host 的 SDK prefix / CMakeCache 被用于交叉包，产物架构错或链到错误后端，现象是「板端加载失败/崩溃」 | prefix 带 target 元数据 + 每 target 独立构建目录 + configure 断言（R11 / AC19） |
-| **整包独立的重复代价** | decode / NMS / 对齐约 400–600 行纯数学在每份实现各存一份，修一侧漏另一侧 | 以**共享测试向量**（`packages/<id>/tests/vectors/*.json`）锚定行为；任何 decode 行为变更必须同时改向量，双向回归同一份用例 |
+| **整包独立的重复代价** | decode / NMS / 对齐约 400–600 行纯数学在每份实现各存一份，修一侧漏另一侧 | 每个 target 的 `make test` 用包根 `sample.jpg` 出 `result.jpg`（看图就能发现框偏/漏检），阈值标定也走同一路；**不引入**跨 target 共享夹具（按 target 分叉的向量等于普通单测） |
 | 平台事实重新长成框架 | 有人为「少写两遍」在 SDK 里重新引入 `InputFacts` / `prepare_input` / 配置表，把分支从算法搬到 SDK | R13 已撤销并写明禁止；AC21 的 grep 门禁直接拦；`code-review` 遇到即退 |
 | 桩后端仍在产品面 | 交叉/无 ORT 的机器静默产出不可推理的"成功"产物；包级测试以 `[SKIP]` 伪装成绿 | R14 + AC22：`#error` 兜底、profile 必须显式、桩仅在夹具 target、`test_stub` 拒绝出包 |
 | 删除桩后无 ORT 的机器编不了 native | 新上手/CI 机器直接 configure 失败 | `make native-deps` 本就是唯一联网步骤；错误信息里直接给出该命令 |
-| 空实现包仍强制携带第三方运行时 | 脚手架生成的包只因 SDK 静态库引用编译期后端工厂而被 `NEEDED libonnxruntime` | AC21 断言 `readelf -d` 为 0；不满足时改为由平台实现显式注入后端 |
+| 空实现包携带第三方运行时 | 脚手架生成的包因 SDK 静态库引用编译期后端工厂而被 `NEEDED libonnxruntime`（onnx 档位） | **onnx 档位是预期行为，不是缺陷**：约束改为 AC18（随包 `lib/` + `RUNPATH=$ORIGIN/lib` + `NOTICE` + 验包报 `bundled\|system`）。AC21 的 `readelf` 断言只适用于 `rknn` / `test_stub` prefix；要为 onnx 档位也去 ORT，只能改回 `dlopen`，与本任务方向相反 |
