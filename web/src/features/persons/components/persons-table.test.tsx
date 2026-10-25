@@ -161,8 +161,9 @@ describe('PersonsTable', () => {
 
   it('switches between table and grid views when clicking view toggle', async () => {
     const queryClient = new QueryClient()
+    const navigate = vi.fn()
 
-    const { getByRole, getByTestId } = await render(
+    const { getByRole } = await render(
       <QueryClientProvider client={queryClient}>
         <PersonsProvider>
           <PersonsTable
@@ -172,7 +173,7 @@ describe('PersonsTable', () => {
             isError={false}
             onRetry={vi.fn()}
             search={{}}
-            navigate={vi.fn()}
+            navigate={navigate}
           />
         </PersonsProvider>
       </QueryClientProvider>
@@ -181,11 +182,45 @@ describe('PersonsTable', () => {
     // 默认是表格模式
     await expect.element(getByRole('table')).toBeInTheDocument()
 
-    // 切换到画廊视图
+    // 视图选择写回 URL：view=grid
     const gridBtn = getByRole('button', { name: /画廊视图/i })
     await gridBtn.click()
 
-    // 此时出现卡片视图
-    await expect.element(getByTestId('person-card')).toBeInTheDocument()
+    expect(navigate).toHaveBeenCalledWith({
+      search: expect.any(Function),
+    })
+    const updater = navigate.mock.calls[0][0].search as (
+      prev: Record<string, unknown>
+    ) => Record<string, unknown>
+    expect(updater({ page: 2 })).toStrictEqual({ page: 2, view: 'grid' })
+
+    // 回落到表格时移除 view，缺省即主视角
+    const tableBtn = getByRole('button', { name: /表格视图/i })
+    await tableBtn.click()
+    const tableUpdater = navigate.mock.calls[1][0].search as (
+      prev: Record<string, unknown>
+    ) => Record<string, unknown>
+    expect(tableUpdater({ page: 2, view: 'grid' })).toStrictEqual({
+      page: 2,
+      view: undefined,
+    })
+
+    // URL 带 view=grid 时直接渲染卡片视图
+    const gallery = await render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PersonsProvider>
+          <PersonsTable
+            data={mockPersons}
+            total={1}
+            isLoading={false}
+            isError={false}
+            onRetry={vi.fn()}
+            search={{ view: 'grid' }}
+            navigate={vi.fn()}
+          />
+        </PersonsProvider>
+      </QueryClientProvider>
+    )
+    await expect.element(gallery.getByTestId('person-card')).toBeInTheDocument()
   })
 })

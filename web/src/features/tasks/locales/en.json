@@ -187,6 +187,6 @@
   },
   "views": {
     "channel": "Channel view",
-    "table": "Task table"
+    "table": "Detail view"
   }
 }

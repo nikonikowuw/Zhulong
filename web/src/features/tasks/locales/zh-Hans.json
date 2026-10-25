@@ -186,7 +186,7 @@
     "delete": "删除任务"
   },
   "views": {
-    "channel": "通道聚合视图",
-    "table": "任务明细表格"
+    "channel": "通道视图",
+    "table": "明细视图"
   }
 }

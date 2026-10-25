@@ -186,7 +186,7 @@
     "delete": "刪除任務"
   },
   "views": {
-    "channel": "通道聚合視圖",
-    "table": "任務明細表格"
+    "channel": "通道視圖",
+    "table": "明細視圖"
   }
 }

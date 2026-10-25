@@ -31,11 +31,20 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
+import {
+  ViewModeSwitch,
+  type ViewModeOption,
+} from '@/components/view-mode-switch'
 import { type Person } from '../data/schema'
 import { personsColumns as columns } from './persons-columns'
 import { PersonsDataTableBulkActions } from './persons-data-table-bulk-actions'
 import { PersonsGrid } from './persons-grid'
 import { usePersonsContext } from './persons-provider'
+
+const viewModeOptions = [
+  { value: 'table', label: 'views.table', icon: List },
+  { value: 'grid', label: 'views.grid', icon: LayoutGrid },
+] as const satisfies ReadonlyArray<ViewModeOption<'table' | 'grid'>>
 
 interface PersonsTableProps {
   data: Person[]
@@ -62,19 +71,16 @@ export function PersonsTable({
   const [rowSelection, setRowSelection] = useState({})
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
   const [sorting, setSorting] = useState<SortingState>([])
-  const [viewMode, setViewMode] = useState<'table' | 'grid'>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('persons-view-mode')
-      if (saved === 'grid' || saved === 'table') return saved
-    }
-    return 'table'
-  })
+  // 双视角：档案表格（主视角） ⇋ 人脸画廊；缺省 `view` 即主视角，与任务页一致
+  const viewMode: 'table' | 'grid' = search.view === 'grid' ? 'grid' : 'table'
 
   const handleViewModeChange = (mode: 'table' | 'grid') => {
-    setViewMode(mode)
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('persons-view-mode', mode)
-    }
+    navigate({
+      search: (prev) => ({
+        ...prev,
+        view: mode === 'grid' ? mode : undefined,
+      }),
+    })
   }
 
   const {
@@ -144,30 +150,14 @@ export function PersonsTable({
             }}
           />
         </div>
-        <div className='flex items-center gap-1 rounded-lg border border-border bg-muted/40 p-0.5'>
-          <Button
-            type='button'
-            variant={viewMode === 'table' ? 'secondary' : 'ghost'}
-            size='sm'
-            onClick={() => handleViewModeChange('table')}
-            className='h-7 gap-1.5 px-2 text-xs'
-            title={t('views.table')}
-          >
-            <List className='h-3.5 w-3.5' />
-            <span className='hidden sm:inline'>{t('views.table')}</span>
-          </Button>
-          <Button
-            type='button'
-            variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
-            size='sm'
-            onClick={() => handleViewModeChange('grid')}
-            className='h-7 gap-1.5 px-2 text-xs'
-            title={t('views.grid')}
-          >
-            <LayoutGrid className='h-3.5 w-3.5' />
-            <span className='hidden sm:inline'>{t('views.grid')}</span>
-          </Button>
-        </div>
+        <ViewModeSwitch
+          value={viewMode}
+          onChange={handleViewModeChange}
+          options={viewModeOptions.map((option) => ({
+            ...option,
+            label: t(option.label),
+          }))}
+        />
       </div>
 
       {viewMode === 'table' ? (

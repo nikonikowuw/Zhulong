@@ -26,6 +26,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
+import { ViewModeSwitch } from '@/components/view-mode-switch'
 import { type Algorithm } from '@/features/algorithms/data/schema'
 import { type Camera } from '@/features/cameras/data/schema'
 import { type Task } from '../data/schema'
@@ -35,6 +36,16 @@ import { useUpdateTask } from '../hooks/use-tasks'
 import { ChannelTasksView } from './channel-tasks-view'
 import { tasksColumns as columns } from './tasks-columns'
 import { useTasksContext } from './tasks-provider'
+
+const viewModeOptions = [
+  {
+    value: 'channel',
+    label: 'views.channel',
+    fallback: '通道视图',
+    icon: LayoutGrid,
+  },
+  { value: 'table', label: 'views.table', fallback: '明细视图', icon: List },
+] as const
 
 interface TasksTableProps {
   tasks: Task[]
@@ -277,34 +288,14 @@ export function TasksTable({
           />
         </div>
 
-        <div className='flex items-center gap-1 rounded-lg border border-border bg-muted/40 p-0.5'>
-          <Button
-            type='button'
-            variant={viewMode === 'channel' ? 'secondary' : 'ghost'}
-            size='sm'
-            onClick={() => handleViewModeChange('channel')}
-            className='h-7 gap-1.5 px-2 text-xs'
-            title={t('views.channel', '通道聚合视图')}
-          >
-            <LayoutGrid className='h-3.5 w-3.5' />
-            <span className='hidden sm:inline'>
-              {t('views.channel', '通道聚合视图')}
-            </span>
-          </Button>
-          <Button
-            type='button'
-            variant={viewMode === 'table' ? 'secondary' : 'ghost'}
-            size='sm'
-            onClick={() => handleViewModeChange('table')}
-            className='h-7 gap-1.5 px-2 text-xs'
-            title={t('views.table', '任务明细表格')}
-          >
-            <List className='h-3.5 w-3.5' />
-            <span className='hidden sm:inline'>
-              {t('views.table', '任务明细表格')}
-            </span>
-          </Button>
-        </div>
+        <ViewModeSwitch
+          value={viewMode}
+          onChange={handleViewModeChange}
+          options={viewModeOptions.map((option) => ({
+            ...option,
+            label: t(option.label, option.fallback),
+          }))}
+        />
       </div>
 
       {viewMode === 'channel' ? (
