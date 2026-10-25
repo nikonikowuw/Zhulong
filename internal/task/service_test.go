@@ -532,6 +532,62 @@ func TestServiceRejectsNilPayload(t *testing.T) {
 	assertAppErrCode(t, svc.SaveTask(ctx, nil), "INVALID_TASK_CONFIG")
 }
 
+// TestServiceRejectsEmptyAlgorithmList 守住「空聚合根」的回流口。
+//
+// 回归：曾经向 SaveTask/UpdateTask 提交 algorithms: [] 是合法的，Store 会剪掉全部子项、
+// 主表行原样保留，于是库里多出一条 enabled=true、algorithms=[] 的“看不见的任务”。
+// 它不占算力，却会让前端按“任务行存在”渲染出算力看板与空通道卡片。
+func TestServiceRejectsEmptyAlgorithmList(t *testing.T) {
+	svc, _, cleanup := setupTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	t.Run("create", func(t *testing.T) {
+		err := svc.CreateTask(ctx, &task.Task{CameraID: "cam_empty_create", Enabled: true})
+		assertAppErrCode(t, err, "TASK_ALGORITHM_REQUIRED")
+		if _, err := svc.GetTaskByCamera(ctx, "cam_empty_create"); err == nil {
+			t.Fatal("expected no task row to be created for an empty algorithm list")
+		}
+	})
+
+	t.Run("save", func(t *testing.T) {
+		err := svc.SaveTask(ctx, &task.Task{CameraID: "cam_empty_save", Enabled: true})
+		assertAppErrCode(t, err, "TASK_ALGORITHM_REQUIRED")
+		if _, err := svc.GetTaskByCamera(ctx, "cam_empty_save"); err == nil {
+			t.Fatal("expected no task row to be created for an empty algorithm list")
+		}
+	})
+
+	t.Run("update keeps existing algorithms", func(t *testing.T) {
+		created := &task.Task{
+			CameraID:   "cam_empty_update",
+			Enabled:    true,
+			Algorithms: []task.TaskAlgorithm{{AlgorithmID: "algo_helmet", SampleFPS: 5}},
+		}
+		if err := svc.SaveTask(ctx, created); err != nil {
+			t.Fatalf("SaveTask (seed) failed: %v", err)
+		}
+
+		stored, err := svc.GetTaskByCamera(ctx, "cam_empty_update")
+		if err != nil {
+			t.Fatalf("GetTaskByCamera failed: %v", err)
+		}
+
+		empty := []task.TaskAlgorithmItem{}
+		_, err = svc.UpdateTask(ctx, stored.ID, &task.UpdateTaskRequest{Algorithms: &empty})
+		assertAppErrCode(t, err, "TASK_ALGORITHM_REQUIRED")
+
+		// 拒绝必须发生在写库之前：原有订阅一字不动。
+		after, err := svc.GetTask(ctx, stored.ID)
+		if err != nil {
+			t.Fatalf("GetTask failed: %v", err)
+		}
+		if len(after.Algorithms) != 1 || after.Algorithms[0].AlgorithmID != "algo_helmet" {
+			t.Fatalf("expected existing algorithm to survive the rejected update, got %+v", after.Algorithms)
+		}
+	})
+}
+
 func TestServiceSaveTaskRejectsCameraConflict(t *testing.T) {
 	svc, _, cleanup := setupTestService(t)
 	defer cleanup()

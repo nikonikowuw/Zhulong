@@ -13,6 +13,13 @@ import (
 // MaxComputePoints is the total compute points allocated across all active tasks.
 const MaxComputePoints int64 = 1000
 
+// ErrTaskAlgorithmRequired 表示本次写入会让任务不绑定任何算法。
+//
+// 通道聚合根的意义由算法子项承载，零子项的主表行是「看不见却存在」的脏数据：
+// 它不产生明细行、不占算力，却会让统计看板与通道卡片按「有任务」渲染。
+// 清空整个通道必须走 DELETE，而不是把算法列表置空。
+var ErrTaskAlgorithmRequired = errors.New("analysis task must bind at least one algorithm")
+
 // AlgorithmSpec contains read-only algorithm metadata needed for task validation.
 type AlgorithmSpec struct {
 	ID               string
@@ -98,7 +105,18 @@ func (s *Service) prepareTask(ctx context.Context, t *Task) error {
 
 // normalizeAndValidateAlgorithms 就地归一化算法子项（默认帧率/空 JSON、名字换成规格 ID）
 // 并校验唯一性、帧率、区域策略与参数 schema。
+//
+// 空列表是**非法配置**而不是“清空”：保存时先删子项、再无人回填，会留下一行
+// algorithms 为空的主表记录（存量脏数据就是这么来的）。清空通道请调用 DeleteTask。
 func (s *Service) normalizeAndValidateAlgorithms(ctx context.Context, algorithms []TaskAlgorithm) error {
+	if len(algorithms) == 0 {
+		return apperr.Invalid(
+			"TASK_ALGORITHM_REQUIRED",
+			"analysis task must bind at least one algorithm; delete the task to clear the channel",
+			ErrTaskAlgorithmRequired,
+		)
+	}
+
 	seen := make(map[string]struct{}, len(algorithms))
 	for i := range algorithms {
 		sub := &algorithms[i]

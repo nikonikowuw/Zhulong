@@ -39,6 +39,11 @@ func init() {
 			"zh-Hans": "分析任务中存在重复算法",
 			"zh-Hant": "分析任務中存在重複演算法",
 		},
+		"TASK_ALGORITHM_REQUIRED": {
+			"en":      "An analysis task must bind at least one algorithm; delete the task to clear the channel",
+			"zh-Hans": "分析任务至少需要绑定一个算法，清空通道请直接删除该任务",
+			"zh-Hant": "分析任務至少需要綁定一個演算法，清空通道請直接刪除該任務",
+		},
 		// INVALID_REQUEST 描述的是请求体绑定失败（HTTP 400）；algorithm 包注册了同名 key，
 		// 两处文案必须保持一致。
 		"INVALID_REQUEST": {

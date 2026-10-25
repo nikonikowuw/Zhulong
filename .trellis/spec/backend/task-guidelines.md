@@ -72,6 +72,11 @@ type TaskChangeListener interface {
 
 ## 3.1 子项归一化契约
 
+- **空算法列表不是「清空」而是非法配置**（`len(algorithms) == 0` → 422 `TASK_ALGORITHM_REQUIRED`）。
+  清空整个通道必须走 `DELETE /api/v1/tasks/:id`。原因：`syncTaskAlgorithms` 的语义是「先按 keepIDs 剪掉不在列表里的子项，
+  再 upsert 剩下的」，提交空列表会把子项剪干净、主表行原样留着，落下一行 `enabled=true, algorithms=[]` 的**空聚合根**。
+  空行不占算力、不产生明细行，却会让前端按「任务行存在」渲染出算力看板与空通道卡片（即“没任务却有卡片”）。
+  存量脏数据由迁移 `000019_purge_empty_analysis_tasks` 清理（幂等；down 为 no-op）。
 - `normalizeAndValidateAlgorithms` 会**就地**归一化 `TaskAlgorithm`：`SampleFPS == 0` 收敛为 `DefaultSampleFPS`，
   空 `config_json` / `region_config_json` 收敛为 `{}`，并把按名字传入的 `AlgorithmID` 替换为规格 ID。
 - `sample_fps` **负数不静默纠正**：直接返回 422 `INVALID_TASK_CONFIG`。上限为 `SampleFPSMax = 1000`。
@@ -103,8 +108,9 @@ type TaskChangeListener interface {
 ### 4.3 错误码与文案门禁
 
 - 本包对外的全部机器码：`TASK_NOT_FOUND`、`TASK_ALREADY_EXISTS`、`TASK_CREATE_FAILED`、`TASK_UPDATE_FAILED`、
-  `TASK_DELETE_FAILED`、`TASK_SAVE_FAILED`、`DUPLICATE_ALGORITHM`、`INVALID_TASK_CONFIG`、`INVALID_REGION_CONFIG`、
-  `COMPUTE_BUDGET_EXCEEDED`、`ALGORITHM_NOT_FOUND`、`INVALID_REQUEST`，以及复用的 `VALIDATION_FAILED`、`INTERNAL_ERROR`。
+  `TASK_DELETE_FAILED`、`TASK_SAVE_FAILED`、`DUPLICATE_ALGORITHM`、`TASK_ALGORITHM_REQUIRED`、`INVALID_TASK_CONFIG`、
+  `INVALID_REGION_CONFIG`、`COMPUTE_BUDGET_EXCEEDED`、`ALGORITHM_NOT_FOUND`、`INVALID_REQUEST`，以及复用的
+  `VALIDATION_FAILED`、`INTERNAL_ERROR`。
 - 每个码都必须在 `internal/task/locale.go`（或 `httputil` 内置目录）有 en / zh-Hans / zh-Hant 三语文案；
   漏注册会让 `WriteError` 静默回退到通用 `REQUEST_FAILED` 文案。
 - `internal/task/error_codes_test.go` 是这条契约的门禁：新增错误码必须同步加入 `taskErrorCodes` 表。
