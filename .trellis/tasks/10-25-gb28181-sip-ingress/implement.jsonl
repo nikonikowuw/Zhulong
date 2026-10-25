@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "ABI v4 追加、Stream 去重键与宽限期语义、PreviewNormalizer 契约"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "UDP fd 传 C、dup 与所有权、回调 token 与 drain"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "新增 RTP/PS 输入源与 worker 线程归属"}
+{"file": ".trellis/spec/backend/camera-guidelines.md", "reason": "camera 双流模型、状态机、探测门禁对 GB28181 的例外"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "新增 REST 端点与统一信封"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "迁移 000020 与 DBProvider 依赖"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Fx 组件构造纯粹性与生命周期钩子"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "features/gb28181 切片与 index.tsx 出口"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "关联日志字段、审计脱敏与不落敏感信息"}
+{"file": ".trellis/spec/backend/authentication-guidelines.md", "reason": "Digest 凭据加密与 camera.key 丢失保护扩展"}
+{"file": ".trellis/spec/backend/host-runtime-contract.md", "reason": "可降级子系统的生命周期、启动回滚与运维上限"}

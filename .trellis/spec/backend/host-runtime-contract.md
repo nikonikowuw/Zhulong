@@ -39,6 +39,7 @@
 | Native start fails | Host startup fails; database closes; HTTP does not bind. |
 | TCP bind fails after DB/native start | Host startup fails; native and DB close; logger syncs. |
 | An optional domain (Network/SystemTime/Storage/Person/Record/Algorithm) fails to start | Startup continues; the subsystem is named in a `host started with degraded subsystems` warning and still stopped on shutdown. |
+| An optional domain is enabled by configuration but not actually running (e.g. GB28181 `enabled=true` with no ingress, bind failure, or invalid stored config) | Its own runtime state reports `error` plus a stable detail code. Never report `running` from a merely valid configuration: the field is what field engineers use to decide whether to look at the device or at the host. |
 | Health requested before dependencies are ready | HTTP 503, `SERVICE_UNAVAILABLE`, `data: null`. |
 | Unknown `/api/*` route or method | HTTP 404, `ROUTE_NOT_FOUND`, `data: null`; never HTML. |
 | Unhandled internal error | HTTP 500, safe localized message, `data: null`; cause is logged server-side only. |

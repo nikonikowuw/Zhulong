@@ -15,6 +15,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/clientlog"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
+	"github.com/nikonikowuw/Zhulong/internal/gb28181"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
 	"github.com/nikonikowuw/Zhulong/internal/nativelog"
@@ -145,11 +146,17 @@ var authModule = fx.Module("auth",
 type cameraOut struct {
 	fx.Out
 
-	Store        camera.CameraStore
-	Service      *camera.CameraService
-	StreamHub    *camera.StreamHub
-	Handler      *camera.Handler
-	Lifecycle    cameraLifecycle
+	Store     camera.CameraStore
+	Service   *camera.CameraService
+	StreamHub *camera.StreamHub
+	Handler   *camera.Handler
+	Lifecycle cameraLifecycle
+	// Cipher and Manager are exported as concrete types so other domains can
+	// (a) encrypt their own credentials with the same key and (b) register the fact
+	// that camera.key must not be regenerated. Keeping them typed as interfaces
+	// would force a reflection-based lookup in the assembly code.
+	Cipher       *camera.LazyCipher
+	Manager      *camera.LifecycleManager
 	CameraRoutes RouteRegistrar `group:"protected_routes"`
 }
 
@@ -189,12 +196,60 @@ func provideCamera(
 		StreamHub:    streamHub,
 		Handler:      camHandler,
 		Lifecycle:    camMgr,
+		Cipher:       lazyC,
+		Manager:      camMgr,
 		CameraRoutes: camHandler,
 	}
 }
 
 var cameraModule = fx.Module("camera",
 	fx.Provide(provideCamera),
+)
+
+// --- GB28181 Module ---
+
+type gb28181Out struct {
+	fx.Out
+
+	Store     *gb28181.Store
+	Runtime   *gb28181.Runtime
+	Service   *gb28181.Service
+	Handler   *gb28181.Handler
+	Lifecycle gb28181Lifecycle
+	GBRoutes  RouteRegistrar `group:"protected_routes"`
+}
+
+func provideGB28181(
+	dbProvider database.DBProvider,
+	cameraCipher *camera.LazyCipher,
+	cameraManager *camera.LifecycleManager,
+	logger *zap.Logger,
+) gb28181Out {
+	// The domain builds its own SIP ingress (S1); passing no override keeps the
+	// production wiring out of this provider.
+	comp := gb28181.NewComponents(gb28181.ComponentsOptions{
+		DBProvider: dbProvider,
+		Cipher:     cameraCipher,
+		Logger:     logger,
+	})
+	// The probe is registered on the camera lifecycle manager directly: that is the
+	// only consumer, so it must not be published as a second fx value that nothing
+	// reads (a reader could then believe the wiring happens through the graph).
+	if cameraManager != nil {
+		cameraManager.AddEncryptedDataProbe(comp.Store)
+	}
+	return gb28181Out{
+		Store:     comp.Store,
+		Runtime:   comp.Runtime,
+		Service:   comp.Service,
+		Handler:   comp.Handler,
+		Lifecycle: comp.Lifecycle,
+		GBRoutes:  comp.ProtectedRoutes,
+	}
+}
+
+var gb28181Module = fx.Module("gb28181",
+	fx.Provide(provideGB28181),
 )
 
 // --- Network Module ---
@@ -633,6 +688,7 @@ var Module = fx.Options(
 	auditModule,
 	authModule,
 	cameraModule,
+	gb28181Module,
 	networkModule,
 	systemTimeModule,
 	storageModule,

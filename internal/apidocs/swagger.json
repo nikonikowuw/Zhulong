@@ -1183,6 +1183,235 @@
                 "responses": {}
             }
         },
+        "/gb28181/config": {
+            "get": {
+                "description": "Returns the persisted GB28181 target configuration plus the configuration the running process actually loaded, its state and whether a restart is required.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "gb28181"
+                ],
+                "summary": "Get GB28181 configuration",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/gb28181.ConfigResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "DATABASE_ERROR",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Validates and atomically persists the GB28181 configuration. The running SIP listener is not reconfigured; the response reports restartRequired until the process is restarted. An empty mediaAdvertisedIp opts into single-address inference and assumes no NAT; NAT deployments must provide an explicit reachable address.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "gb28181"
+                ],
+                "summary": "Update GB28181 configuration",
+                "parameters": [
+                    {
+                        "description": "Complete target configuration",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/gb28181.UpdateConfigRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/gb28181.ConfigResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "422": {
+                        "description": "VALIDATION_FAILED, GB28181_CONFIG_INVALID, GB28181_PORT_RANGE_INVALID, GB28181_ADDRESS_UNRESOLVABLE, GB28181_PROFILE_UNSUPPORTED, GB28181_REGISTERED_DEVICE_REQUIRED",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "DATABASE_ERROR, GB28181_ADDRESS_PROBE_FAILED",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/gb28181/devices": {
+            "get": {
+                "description": "Returns the device allowlist with online state. Digest passwords are never included.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "gb28181"
+                ],
+                "summary": "List provisioned GB28181 devices",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/gb28181.DeviceListResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "DATABASE_ERROR",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/gb28181/devices/{deviceId}": {
+            "put": {
+                "description": "Adds a device to the registration allowlist or updates its metadata and Digest password. Omitting password keeps the stored credential. The password is encrypted before storage and is never returned.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "gb28181"
+                ],
+                "summary": "Provision or update a GB28181 device",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "20-digit GB28181 device identity",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Device metadata and optional password",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/gb28181.UpsertDeviceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/gb28181.DeviceResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "422": {
+                        "description": "VALIDATION_FAILED, GB28181_DEVICE_ID_INVALID, GB28181_TRANSPORT_INVALID, GB28181_PASSWORD_REQUIRED",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "DATABASE_ERROR, GB28181_RUNTIME_NOT_READY",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/gb28181/runtime": {
+            "get": {
+                "description": "Reports live counters for operators: device totals, active sessions, media port pool usage and exhausted-port hits.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "gb28181"
+                ],
+                "summary": "Get GB28181 runtime snapshot",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/gb28181.Snapshot"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
         "/health": {
             "get": {
                 "produces": [
@@ -4179,6 +4408,272 @@
                 },
                 "subStream": {
                     "$ref": "#/definitions/camera.CreateStreamRequest"
+                }
+            }
+        },
+        "gb28181.ConfigInfo": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "mediaAdvertisedIp": {
+                    "type": "string"
+                },
+                "mediaBindAddress": {
+                    "type": "string"
+                },
+                "requireRegisteredDevice": {
+                    "type": "boolean"
+                },
+                "rtpPortMax": {
+                    "type": "integer"
+                },
+                "rtpPortMin": {
+                    "type": "integer"
+                },
+                "securityProfile": {
+                    "type": "string"
+                },
+                "sipId": {
+                    "type": "string"
+                },
+                "sipListen": {
+                    "type": "string"
+                },
+                "sipRealm": {
+                    "type": "string"
+                },
+                "sipTransport": {
+                    "type": "string"
+                }
+            }
+        },
+        "gb28181.ConfigResponse": {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "$ref": "#/definitions/gb28181.ConfigInfo"
+                },
+                "runtime": {
+                    "$ref": "#/definitions/gb28181.RuntimeInfo"
+                }
+            }
+        },
+        "gb28181.DeviceCounters": {
+            "type": "object",
+            "properties": {
+                "online": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "gb28181.DeviceListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/gb28181.DeviceResponse"
+                    }
+                }
+            }
+        },
+        "gb28181.DeviceResponse": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "deviceId": {
+                    "type": "string"
+                },
+                "expiresSeconds": {
+                    "type": "integer"
+                },
+                "firmware": {
+                    "type": "string"
+                },
+                "lastKeepaliveAt": {
+                    "type": "string"
+                },
+                "manufacturer": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "registeredAt": {
+                    "type": "string"
+                },
+                "remoteAddr": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "transport": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "gb28181.PortPoolCounts": {
+            "type": "object",
+            "properties": {
+                "exhaustedHits": {
+                    "type": "integer"
+                },
+                "pairsTotal": {
+                    "type": "integer"
+                },
+                "pairsUsed": {
+                    "type": "integer"
+                }
+            }
+        },
+        "gb28181.RuntimeInfo": {
+            "type": "object",
+            "properties": {
+                "advertisedIp": {
+                    "type": "string"
+                },
+                "detail": {
+                    "type": "string"
+                },
+                "mediaCapacity": {
+                    "type": "integer"
+                },
+                "restartRequired": {
+                    "type": "boolean"
+                },
+                "startupConfig": {
+                    "$ref": "#/definitions/gb28181.ConfigInfo"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "gb28181.SessionCounts": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "integer"
+                }
+            }
+        },
+        "gb28181.Snapshot": {
+            "type": "object",
+            "properties": {
+                "devices": {
+                    "$ref": "#/definitions/gb28181.DeviceCounters"
+                },
+                "generatedAt": {
+                    "type": "string"
+                },
+                "portPool": {
+                    "$ref": "#/definitions/gb28181.PortPoolCounts"
+                },
+                "restartRequired": {
+                    "type": "boolean"
+                },
+                "sessions": {
+                    "$ref": "#/definitions/gb28181.SessionCounts"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "gb28181.UpdateConfigRequest": {
+            "type": "object",
+            "required": [
+                "requireRegisteredDevice"
+            ],
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "mediaAdvertisedIp": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "mediaBindAddress": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "requireRegisteredDevice": {
+                    "type": "boolean"
+                },
+                "rtpPortMax": {
+                    "type": "integer",
+                    "maximum": 65535,
+                    "minimum": 1
+                },
+                "rtpPortMin": {
+                    "type": "integer",
+                    "maximum": 65535,
+                    "minimum": 1
+                },
+                "securityProfile": {
+                    "type": "string",
+                    "enum": [
+                        "standard"
+                    ]
+                },
+                "sipId": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "sipListen": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "sipRealm": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "sipTransport": {
+                    "type": "string",
+                    "enum": [
+                        "udp",
+                        "tcp",
+                        "both"
+                    ]
+                }
+            }
+        },
+        "gb28181.UpsertDeviceRequest": {
+            "type": "object",
+            "properties": {
+                "expiresSeconds": {
+                    "type": "integer",
+                    "maximum": 86400,
+                    "minimum": 60
+                },
+                "name": {
+                    "type": "string",
+                    "maxLength": 128
+                },
+                "password": {
+                    "type": "string",
+                    "maxLength": 128
+                },
+                "transport": {
+                    "type": "string",
+                    "enum": [
+                        "udp",
+                        "tcp"
+                    ]
                 }
             }
         },

@@ -1535,3 +1535,146 @@ func TestOpenAndMigrateAppliesConnectionPragmas(t *testing.T) {
 		t.Errorf("PRAGMA foreign_keys = %d, want 1", foreignKeys)
 	}
 }
+
+// TestGB28181MigrationUpAndDownSymmetry pins migration 20: the singleton config
+// row, the device allowlist and the channel list must appear, enforce their
+// documented constraints, and disappear cleanly on rollback.
+func TestGB28181MigrationUpAndDownSymmetry(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "migration_symmetry_gb28181.db")
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create source driver: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	if err := migrator.Migrate(20); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(20): %v", err)
+	}
+
+	tableExists := func(name string) bool {
+		t.Helper()
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&count); err != nil {
+			t.Fatalf("query table %s: %v", name, err)
+		}
+		return count == 1
+	}
+	for _, table := range []string{"gb28181_configs", "gb_devices", "gb_channels"} {
+		if !tableExists(table) {
+			t.Fatalf("expected table %s after Up", table)
+		}
+	}
+
+	// The singleton row must exist and default to disabled: an enabled-by-default
+	// config would make a fresh box try to bind SIP 5060 without an operator.
+	var enabled, requireRegisteredDevice int
+	var portMin, portMax int
+	if err := db.QueryRow(
+		"SELECT enabled, rtp_port_min, rtp_port_max, require_registered_device FROM gb28181_configs WHERE id = 1").
+		Scan(&enabled, &portMin, &portMax, &requireRegisteredDevice); err != nil {
+		t.Fatalf("read singleton config: %v", err)
+	}
+	if enabled != 0 {
+		t.Errorf("expected GB28181 to be disabled by default, got enabled=%d", enabled)
+	}
+	if portMin != 30000 || portMax != 30100 {
+		t.Errorf("expected default port range 30000..30100, got %d..%d", portMin, portMax)
+	}
+	if requireRegisteredDevice != 1 {
+		t.Errorf("expected registered-device enforcement by default, got %d", requireRegisteredDevice)
+	}
+	if _, err := db.Exec("INSERT INTO gb28181_configs (id, enabled) VALUES (2, 0)"); err == nil {
+		t.Error("expected the singleton CHECK(id = 1) to reject a second row")
+	}
+	if _, err := db.Exec("UPDATE gb28181_configs SET security_profile = 'high' WHERE id = 1"); err == nil {
+		t.Error("expected the security_profile CHECK to reject profiles above standard")
+	}
+	if _, err := db.Exec("UPDATE gb28181_configs SET require_registered_device = 0 WHERE id = 1"); err == nil {
+		t.Error("expected the registered-device CHECK to reject disabling the allowlist")
+	}
+
+	// remote_addr must be nullable before the first REGISTER.
+	if _, err := db.Exec(`INSERT INTO gb_devices
+		(device_id, name, transport, remote_addr, expires_seconds, state, created_at, updated_at)
+		VALUES ('34020000001320000001', '未注册设备', 'udp', NULL, 3600, 'offline',
+		        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatalf("expected remote_addr to be nullable, got %v", err)
+	}
+
+	if _, err := db.Exec(`INSERT INTO gb_devices
+		(device_id, name, transport, expires_seconds, state, created_at, updated_at)
+		VALUES ('device-1', '无效编码', 'udp', 3600, 'offline', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err == nil {
+		t.Error("expected the device_id CHECK to require exactly 20 ASCII digits")
+	}
+	if _, err := db.Exec(`INSERT INTO gb_devices
+		(device_id, name, transport, expires_seconds, state, created_at, updated_at)
+		VALUES (NULL, '空编码', 'udp', 3600, 'offline', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err == nil {
+		t.Error("expected the device_id constraint to reject NULL")
+	}
+	// state and expires_seconds are constrained in the schema, not only in Go: the
+	// table is the last line of defence for a state machine about to be added in S1.
+	if _, err := db.Exec(`INSERT INTO gb_devices
+		(device_id, name, transport, expires_seconds, state, created_at, updated_at)
+		VALUES ('34020000001320000009', '未知状态', 'udp', 3600, 'unknown', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err == nil {
+		t.Error("expected the state CHECK to reject an unknown session state")
+	}
+	if _, err := db.Exec(`INSERT INTO gb_devices
+		(device_id, name, transport, expires_seconds, state, created_at, updated_at)
+		VALUES ('34020000001320000008', '过期时间过短', 'udp', 30, 'offline', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err == nil {
+		t.Error("expected the expires_seconds CHECK to reject a registration shorter than 60s")
+	}
+
+	// Deleting the device cascades to its channels.
+	if _, err := db.Exec(`INSERT INTO gb_channels
+		(device_id, channel_id, name, parental, created_at, updated_at)
+		VALUES ('34020000001320000001', '34020000001320000011', '通道一', 0,
+		        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatalf("insert channel: %v", err)
+	}
+	if _, err := db.Exec("DELETE FROM gb_devices WHERE device_id = '34020000001320000001'"); err != nil {
+		t.Fatalf("delete device: %v", err)
+	}
+	var channelCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM gb_channels").Scan(&channelCount); err != nil {
+		t.Fatalf("count channels: %v", err)
+	}
+	if channelCount != 0 {
+		t.Errorf("expected channels to cascade with their device, got %d rows", channelCount)
+	}
+
+	// Rollback must remove all three tables, child first.
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator Steps(-1): %v", err)
+	}
+	for _, table := range []string{"gb28181_configs", "gb_devices", "gb_channels"} {
+		if tableExists(table) {
+			t.Fatalf("expected table %s to be dropped after Down", table)
+		}
+	}
+
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator Steps(1): %v", err)
+	}
+	for _, table := range []string{"gb28181_configs", "gb_devices", "gb_channels"} {
+		if !tableExists(table) {
+			t.Fatalf("expected table %s after re-Up", table)
+		}
+	}
+}

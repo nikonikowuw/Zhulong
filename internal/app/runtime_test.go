@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -794,5 +795,97 @@ func TestLogSinkPrepareFailureStopsStartupAndClosesSink(t *testing.T) {
 	}
 	if got, want := events.snapshot(), []string{"log.prepare", "log.close"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("retry after failed preparation restarted services: got %v, want %v", got, want)
+	}
+}
+
+// gb28181Stub records the GB28181 subsystem's position in the startup and
+// shutdown sequences.
+type gb28181Stub struct {
+	events   *eventLog
+	startErr error
+	stopErr  error
+}
+
+func (g gb28181Stub) Start(context.Context) error {
+	g.events.add("gb28181.start")
+	return g.startErr
+}
+
+func (g gb28181Stub) Stop(context.Context) error {
+	g.events.add("gb28181.stop")
+	return g.stopErr
+}
+
+// TestGB28181StopsBeforeCamera pins the teardown contract: SIP ingress and media
+// leases must be released while camera and the native engine are still alive to
+// serve the teardown. Reversing this order leaks ports and can free native state
+// while a dialog still references it.
+func TestGB28181StopsBeforeCamera(t *testing.T) {
+	events := &eventLog{}
+	serveDone := make(chan error, 1)
+	runtime := &lifecycleRuntime{
+		database:      databaseStub{events: events},
+		native:        engineStub{events: events},
+		camera:        cameraStub{events: events},
+		gb28181:       gb28181Stub{events: events},
+		server:        &http.Server{Addr: "127.0.0.1:0"},
+		logger:        zap.NewNop(),
+		databaseReady: true,
+		nativeReady:   true,
+		cameraReady:   true,
+		gb28181Ready:  true,
+		httpReady:     true,
+		serveDone:     serveDone,
+		shutdown: func(context.Context) error {
+			events.add("http.shutdown")
+			serveDone <- http.ErrServerClosed
+			return nil
+		},
+	}
+
+	if err := runtime.Stop(context.Background()); err != nil {
+		t.Fatalf("unexpected stop error: %v", err)
+	}
+	want := []string{"http.shutdown", "gb28181.stop", "camera.stop", "engine.close", "database.close"}
+	if got := events.snapshot(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected shutdown order: got %v, want %v", got, want)
+	}
+}
+
+// TestGB28181StartFailureIsDegradedNotFatal guards the operator's escape hatch: a
+// bad stored config or a busy SIP port must not cost them the web console they
+// need to fix it.
+func TestGB28181StartFailureIsDegradedNotFatal(t *testing.T) {
+	events := &eventLog{}
+	server := &http.Server{Addr: "127.0.0.1:0", Handler: http.NotFoundHandler()}
+	runtime := &lifecycleRuntime{
+		database: databaseStub{events: events},
+		native:   engineStub{events: events},
+		camera:   cameraStub{events: events},
+		gb28181:  gb28181Stub{events: events, startErr: errors.New("sip port busy")},
+		server:   server,
+		logger:   zap.NewNop(),
+		listen: func(network, address string) (net.Listener, error) {
+			events.add("http.listen")
+			return net.Listen(network, address)
+		},
+		shutdown: func(ctx context.Context) error {
+			events.add("http.shutdown")
+			return server.Shutdown(ctx)
+		},
+	}
+
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("a GB28181 failure must not abort startup: %v", err)
+	}
+	if !slices.Contains(runtime.degraded, "gb28181") {
+		t.Fatalf("expected gb28181 in the degraded list, got %v", runtime.degraded)
+	}
+	// stopSequence must still run it: a half-started subsystem owns resources.
+	if err := runtime.Stop(context.Background()); err != nil {
+		t.Fatalf("unexpected stop error: %v", err)
+	}
+	if !slices.Contains(events.snapshot(), "gb28181.stop") {
+		t.Fatalf("expected the degraded subsystem to be stopped, got %v", events.snapshot())
 	}
 }

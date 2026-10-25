@@ -48,6 +48,15 @@ type cameraLifecycle interface {
 	Stop()
 }
 
+// gb28181Lifecycle is a degradable subsystem: its Start failure must not abort the
+// boot, because the web console is the only way to fix a bad stored config.
+// Stop runs before camera so in-flight SIP dialogs release their media leases
+// while the camera/engine side is still alive.
+type gb28181Lifecycle interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
+
 type auditLifecycle interface {
 	Start(context.Context) error
 	Stop(context.Context) error
@@ -98,6 +107,7 @@ type lifecycleRuntime struct {
 	native      engineLifecycle
 	nativeLog   *nativelog.Queue
 	camera      cameraLifecycle
+	gb28181     gb28181Lifecycle
 	audit       auditLifecycle
 	network     networkLifecycle
 	systemTime  systemTimeLifecycle
@@ -124,6 +134,7 @@ type lifecycleRuntime struct {
 	nativeLogReady      bool
 	nativeLogRegistered bool
 	cameraReady         bool
+	gb28181Ready        bool
 	auditReady          bool
 	networkReady        bool
 	systemTimeReady     bool
@@ -148,6 +159,7 @@ type runtimeParams struct {
 	Native      engineLifecycle
 	NativeLog   *nativelog.Queue
 	Camera      cameraLifecycle      `optional:"true"`
+	GB28181     gb28181Lifecycle     `optional:"true"`
 	Audit       auditLifecycle       `optional:"true"`
 	Network     networkLifecycle     `optional:"true"`
 	SystemTime  systemTimeLifecycle  `optional:"true"`
@@ -174,6 +186,7 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		native:      p.Native,
 		nativeLog:   p.NativeLog,
 		camera:      p.Camera,
+		gb28181:     p.GB28181,
 		audit:       p.Audit,
 		network:     p.Network,
 		systemTime:  p.SystemTime,
@@ -305,6 +318,16 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.cameraReady = true
 	}
 
+	// GB28181 接入属于可降级子系统：配置无效或 listener bind 失败时只记录降级，
+	// 不能连带整个 Web 管理面起不来（现场只能通过 UI 修改该配置）。
+	// ready 置位表示「必须执行 Stop」，不是「启动成功」。
+	if r.gb28181 != nil {
+		if err := r.gb28181.Start(ctx); err != nil {
+			r.degradedStart("gb28181", err)
+		}
+		r.gb28181Ready = true
+	}
+
 	// 算法管理必须在 native 引擎启动与 camera 初始化之后启动：
 	// 这样开机自动拉起 active 算法时，能够成功解密 URI 并通过 Engine.AcquireStream 建立 AI 物理流。
 	if r.algorithm != nil {
@@ -359,6 +382,9 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 // equivalent to truncating it at the failure point and never closes twice.
 func (r *lifecycleRuntime) stopSequence() []func(context.Context) error {
 	return []func(context.Context) error{
+		// GB28181 first: stop SIP ingress and release media leases while camera and
+		// the native engine are still alive to serve the teardown.
+		r.closeGB28181,
 		r.closeCamera,
 		r.closeAlgorithm,
 		r.closePerson,
@@ -473,6 +499,17 @@ func (r *lifecycleRuntime) Stop(ctx context.Context) error {
 
 // closeCamera stops the health scheduler and the StreamHub. It runs before
 // closeAlgorithm per dependency-injection.md §2.
+func (r *lifecycleRuntime) closeGB28181(ctx context.Context) error {
+	if !r.gb28181Ready {
+		return nil
+	}
+	r.gb28181Ready = false
+	if r.gb28181 == nil {
+		return nil
+	}
+	return r.gb28181.Stop(ctx)
+}
+
 func (r *lifecycleRuntime) closeCamera(context.Context) error {
 	if !r.cameraReady {
 		return nil

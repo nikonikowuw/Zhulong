@@ -9,6 +9,8 @@
 1. **凭据安全与密文隔离**：
    - 摄像机流凭据（RTSP URL）在 SQLite 中采用 AES-256-GCM 密文存储，使用关联数据 AAD（`v1:<camera_id>:<role>`）防止密文重放或跨流窜改。
    - 密钥文件必须设为 `0600` 严格权限。若数据库中存在密文而密钥丢失，系统**必须阻断启动并退出**，严禁自动生成替代密钥静默覆盖旧数据。
+   - **跨域密钥持有者必须注册**：`camera.key` 不是 camera 域私有的。任何新域把凭据密文写入本库（当前为 GB28181 设备 Digest 密码，`gb_devices.encrypted_password`，AAD = `v1:gb:<device_id>`），必须在 `internal/app` 装配期调用 `camera.LifecycleManager.AddEncryptedDataProbe`。
+     漏注册的后果是**启动时的密钥丢失检查只看摄像机表**、在仅有新域密文的库上静默生成新密钥，旧密文从此无法解密且没有任何报错。`internal/camera/lifecycle_test.go` 与 `internal/gb28181/store_test.go` 各自守住一侧：前者断言 probe 能阻止重新生成，后者断言 GB 密文能被探测到。
    - 日志与公开异常信息中必须强制脱敏凭据；已认证管理员会话的接口允许返回完整明文 RTSP URL 供前端展示与取流播放。
 2. **原子双流门禁（Dual-Stream Atomic Gate）**：
    - 主流必填，子流可选。创建或更新流配置时，在 3～5 秒绝对超时预算内执行原子探测门禁。

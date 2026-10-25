@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/architecture.md", "reason": "跨层职责边界与能力摘要表需同步更新"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "ABI v4 与去重键语义是否落实"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试同目录、表驱动、-race"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "apperr 稳定机器码与本地化文案"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端测试在真实无头浏览器"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "三语文案不得缺项"}
+{"file": ".trellis/tasks/10-25-gb28181-sip-ingress/prd.md", "reason": "验收标准逐条核对"}
+{"file": ".trellis/spec/backend/host-runtime-contract.md", "reason": "SIP listener 失败不拖垮管理面、停机和回滚顺序"}

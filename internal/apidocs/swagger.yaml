@@ -342,6 +342,185 @@ definitions:
     required:
     - revision
     type: object
+  gb28181.ConfigInfo:
+    properties:
+      enabled:
+        type: boolean
+      mediaAdvertisedIp:
+        type: string
+      mediaBindAddress:
+        type: string
+      requireRegisteredDevice:
+        type: boolean
+      rtpPortMax:
+        type: integer
+      rtpPortMin:
+        type: integer
+      securityProfile:
+        type: string
+      sipId:
+        type: string
+      sipListen:
+        type: string
+      sipRealm:
+        type: string
+      sipTransport:
+        type: string
+    type: object
+  gb28181.ConfigResponse:
+    properties:
+      config:
+        $ref: '#/definitions/gb28181.ConfigInfo'
+      runtime:
+        $ref: '#/definitions/gb28181.RuntimeInfo'
+    type: object
+  gb28181.DeviceCounters:
+    properties:
+      online:
+        type: integer
+      total:
+        type: integer
+    type: object
+  gb28181.DeviceListResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/gb28181.DeviceResponse'
+        type: array
+    type: object
+  gb28181.DeviceResponse:
+    properties:
+      createdAt:
+        type: string
+      deviceId:
+        type: string
+      expiresSeconds:
+        type: integer
+      firmware:
+        type: string
+      lastKeepaliveAt:
+        type: string
+      manufacturer:
+        type: string
+      model:
+        type: string
+      name:
+        type: string
+      registeredAt:
+        type: string
+      remoteAddr:
+        type: string
+      state:
+        type: string
+      transport:
+        type: string
+      updatedAt:
+        type: string
+    type: object
+  gb28181.PortPoolCounts:
+    properties:
+      exhaustedHits:
+        type: integer
+      pairsTotal:
+        type: integer
+      pairsUsed:
+        type: integer
+    type: object
+  gb28181.RuntimeInfo:
+    properties:
+      advertisedIp:
+        type: string
+      detail:
+        type: string
+      mediaCapacity:
+        type: integer
+      restartRequired:
+        type: boolean
+      startupConfig:
+        $ref: '#/definitions/gb28181.ConfigInfo'
+      state:
+        type: string
+    type: object
+  gb28181.SessionCounts:
+    properties:
+      active:
+        type: integer
+    type: object
+  gb28181.Snapshot:
+    properties:
+      devices:
+        $ref: '#/definitions/gb28181.DeviceCounters'
+      generatedAt:
+        type: string
+      portPool:
+        $ref: '#/definitions/gb28181.PortPoolCounts'
+      restartRequired:
+        type: boolean
+      sessions:
+        $ref: '#/definitions/gb28181.SessionCounts'
+      state:
+        type: string
+    type: object
+  gb28181.UpdateConfigRequest:
+    properties:
+      enabled:
+        type: boolean
+      mediaAdvertisedIp:
+        maxLength: 64
+        type: string
+      mediaBindAddress:
+        maxLength: 64
+        type: string
+      requireRegisteredDevice:
+        type: boolean
+      rtpPortMax:
+        maximum: 65535
+        minimum: 1
+        type: integer
+      rtpPortMin:
+        maximum: 65535
+        minimum: 1
+        type: integer
+      securityProfile:
+        enum:
+        - standard
+        type: string
+      sipId:
+        maxLength: 64
+        type: string
+      sipListen:
+        maxLength: 64
+        type: string
+      sipRealm:
+        maxLength: 64
+        type: string
+      sipTransport:
+        enum:
+        - udp
+        - tcp
+        - both
+        type: string
+    required:
+    - requireRegisteredDevice
+    type: object
+  gb28181.UpsertDeviceRequest:
+    properties:
+      expiresSeconds:
+        maximum: 86400
+        minimum: 60
+        type: integer
+      name:
+        maxLength: 128
+        type: string
+      password:
+        maxLength: 128
+        type: string
+      transport:
+        enum:
+        - udp
+        - tcp
+        type: string
+    type: object
   httputil.FieldDetail:
     properties:
       code:
@@ -1991,6 +2170,153 @@ paths:
       summary: Subscribe to camera state events via SSE
       tags:
       - camera
+  /gb28181/config:
+    get:
+      description: Returns the persisted GB28181 target configuration plus the configuration
+        the running process actually loaded, its state and whether a restart is required.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/gb28181.ConfigResponse'
+              type: object
+        "500":
+          description: DATABASE_ERROR
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get GB28181 configuration
+      tags:
+      - gb28181
+    put:
+      consumes:
+      - application/json
+      description: Validates and atomically persists the GB28181 configuration. The
+        running SIP listener is not reconfigured; the response reports restartRequired
+        until the process is restarted. An empty mediaAdvertisedIp opts into single-address
+        inference and assumes no NAT; NAT deployments must provide an explicit reachable
+        address.
+      parameters:
+      - description: Complete target configuration
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/gb28181.UpdateConfigRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/gb28181.ConfigResponse'
+              type: object
+        "422":
+          description: VALIDATION_FAILED, GB28181_CONFIG_INVALID, GB28181_PORT_RANGE_INVALID,
+            GB28181_ADDRESS_UNRESOLVABLE, GB28181_PROFILE_UNSUPPORTED, GB28181_REGISTERED_DEVICE_REQUIRED
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: DATABASE_ERROR, GB28181_ADDRESS_PROBE_FAILED
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Update GB28181 configuration
+      tags:
+      - gb28181
+  /gb28181/devices:
+    get:
+      description: Returns the device allowlist with online state. Digest passwords
+        are never included.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/gb28181.DeviceListResponse'
+              type: object
+        "500":
+          description: DATABASE_ERROR
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: List provisioned GB28181 devices
+      tags:
+      - gb28181
+  /gb28181/devices/{deviceId}:
+    put:
+      consumes:
+      - application/json
+      description: Adds a device to the registration allowlist or updates its metadata
+        and Digest password. Omitting password keeps the stored credential. The password
+        is encrypted before storage and is never returned.
+      parameters:
+      - description: 20-digit GB28181 device identity
+        in: path
+        name: deviceId
+        required: true
+        type: string
+      - description: Device metadata and optional password
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/gb28181.UpsertDeviceRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/gb28181.DeviceResponse'
+              type: object
+        "422":
+          description: VALIDATION_FAILED, GB28181_DEVICE_ID_INVALID, GB28181_TRANSPORT_INVALID,
+            GB28181_PASSWORD_REQUIRED
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: DATABASE_ERROR, GB28181_RUNTIME_NOT_READY
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Provision or update a GB28181 device
+      tags:
+      - gb28181
+  /gb28181/runtime:
+    get:
+      description: 'Reports live counters for operators: device totals, active sessions,
+        media port pool usage and exhausted-port hits.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/gb28181.Snapshot'
+              type: object
+      summary: Get GB28181 runtime snapshot
+      tags:
+      - gb28181
   /health:
     get:
       produces:
