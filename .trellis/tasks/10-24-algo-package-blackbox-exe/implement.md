@@ -347,7 +347,9 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
         - ⚠️ **`sample` 字段语义澄清**：Go 侧 `verifier.go:301` 会把 `--sample` 换成解码后的**临时 PPM 路径**，所以该字段报的是 PPM 而非 `sample.jpg`。渲染方要用原始 `sample.jpg` 作底图（内容相同、尺寸相同），不要拿这个路径去显示/引用；
       - **一次性推理的语义边界（写进输出与文档，别留给用户猜）**：不连 `--broker` → 收不到 `MSG_GALLERY_SYNC`，因此 `matched` 恒 false、`person_name` / `candidates` 恒空；无连续帧 → `track_id` 恒 0。验包与将来的 UI 试用都受此限，输出里不要伪造这两类字段。
 
-- [ ] **3.2b SDK 可安装：`make sdk-install`**（方案 A 的前提，`design.md` §4.5）
+- [~] **3.2b SDK 可安装：`make sdk-install`**（方案 A 的前提，`design.md` §4.5）
+      > 状态（2026-10-26）：**前缀安装、可搬迁配置、独立包验证已完成**；`ZhulongAlgoSdkStatic`（`algo_main` + IPC + `log.cpp`）仍待 3.1/3.2 —— 配置里用 `if(EXISTS …libzhulong_algo_sdk.a)` 容忍其缺席，等 3.1 落地后自动生效。
+
       - 新增 `ZhulongAlgoSdkStatic`（STATIC，`OUTPUT_NAME zhulong_algo_sdk`）：源集合 = `native/sdk/src/algo_main.cpp` + `native/src/algorithm/ipc/*` + `gallery_index/gallery_parser` 非 inline 部分 + `src/common/log.cpp`（`design.md` §4.4；**最容易漏 log.cpp**）；
       - install 规则：`include/zhulong/**`、`lib/{libzhulong_algo_sdk.a,libZhulongAlgoRuntime.a}`，导出 `ZhulongAlgoSDKConfig.cmake`，其中定义两个 imported target `Zhulong::AlgoSDK`（在前）与 `Zhulong::AlgoRuntime`（在后）并固定链接顺序；
       - **config 必须可搬迁**（`design.md` §4.5.0）：`IMPORTED_LOCATION` 用 `${CMAKE_CURRENT_LIST_DIR}` 推算 prefix；第三方依赖用 `find_library(... HINTS ${ONNXRUNTIME_ROOT}/lib)` 在使用端解析，不得写入构建机绝对路径；缺库时报可操作错误；
@@ -355,6 +357,36 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       - 额外产出 `VERSION` 与 `ZhulongAlgoSDKConfigVersion.cmake`（`write_basic_package_version_file`），与 `abi.json` 的 `api_version`/`protocol` 同源生成（`design.md` §4.5.2）；
       - **包目录内不得出现 SDK 头/库副本**：一律通过 prefix 引用，发布物里不含任何 SDK 文件（`design.md` §4.5.1）；
       - 验收：`cmake -B /tmp/probe -S <一个临时最小工程> -DCMAKE_PREFIX_PATH=build/sdk/prefix` 能 `find_package(ZhulongAlgoSDK 1.0 REQUIRED)` 成功，且 `ar t` 能看到 `algo_main` 与 `log` 的目标文件；把 prefix 整体拷到 `/tmp/other-prefix` 后同一命令仍能 configure（可搬迁性）。
+
+      **执行记录（2026-10-26，partial）**
+
+      - `make sdk-install`（默认 `SDK_PREFIX=build/sdk/prefix`，**绝不装系统路径**）产出：
+        `include/zhulong/**`、`lib/libZhulongAlgoRuntime.a`、`dev/stb/**`（开发期资产）、
+        `lib/cmake/ZhulongAlgoSDK/{ZhulongAlgoSDKConfig,ZhulongAlgoSDKConfigVersion}.cmake`、
+        `VERSION`、`abi.json`。
+      - **手写 config，不用 `install(EXPORT)`**：导出目标会把构建机绝对路径写进
+        `INTERFACE_LINK_LIBRARIES`，前缀一搬就废；手写版用 `${CMAKE_CURRENT_LIST_DIR}/../../..`
+        推前缀，导入目标 `Zhulong::AlgoRuntime`（`IMPORTED_LOCATION` + `INTERFACE_INCLUDE_DIRECTORIES`
+        + `INTERFACE_COMPILE_FEATURES cxx_std_17` + 后端编译定义），链接顺序固定为
+        「SDK 骨架（若有）→ 运行库 → 第三方运行时」。
+      - 版本同源：新增 `native/sdk/abi.json`（`sdk_version` / `api_version` / `protocol`），
+        `ZhulongAlgoSDKConfigVersion.cmake` 由它 `write_basic_package_version_file` 生成，
+        `VERSION` 文件同源输出；test_stub 构建**不产生任何安装规则**（夹具产物不可交付）。
+      - 第三方运行时解析：`find_library(NAMES onnxruntime libonnxruntime.so.1 HINTS <prefix>/third_party/onnx/lib, $ONNXRUNTIME_ROOT/lib)`，
+        找不到时再 glob `libonnxruntime.so*`（发行版运行时包常只有 versioned 文件，没有 -dev 软链，实测本机就是这种）；
+        仍找不到才 `FATAL_ERROR`，报错给三条可操作路径。
+      - `make sdk-install BUNDLE_RUNTIME=1` 会把 `libonnxruntime.so*` 拷进
+        `<prefix>/third_party/onnx/lib`，config 检测到库在前缀内就追加 `-Wl,-rpath,<dir>`：
+        否则「链接期用前缀、运行期去 ld.so 找」，换机器就是编译成功跑不起来。
+      - **包侧改成真正独立**：`packages/plate_recognition/onnx/{CMakeLists.txt,Makefile}` 现在
+        只有 `find_package(ZhulongAlgoSDK 1.0 REQUIRED)`，`SDK_PREFIX` 默认 `/opt/zhulong-sdk`，
+        文件里**没有任何** `../native` / `../../build` 之类仓库路径。
+      - **独立开发实测**（这是本节要证明的东西）：
+        1. `cp -a packages/plate_recognition/onnx /tmp/pkgdev/plate_recognition`，
+           `make test SDK_PREFIX=/tmp/pkgdev/sdk-prefix` → 2 块车牌、`result.jpg` 生成；
+        2. `make sdk-install BUNDLE_RUNTIME=1 SDK_PREFIX=/tmp/pkgdev/sdk-a` 后把前缀
+           `mv` 成 `sdk-b`（可搬迁性），在 `env -i PATH=… HOME=…` 下用另一份包拷贝
+           `make test SDK_PREFIX=/tmp/pkgdev/sdk-b` → 同样结果。全程没有进入仓库目录。
 
 - [ ] **3.2c SDK 模板 + 脚手架**（3.3/3.6 的蓝本，`design.md` §4.7）：
       - 建 `native/sdk/templates/`：`CMakeLists.txt`（`find_package(ZhulongAlgoSDK)` + `add_executable(<id>)`）、`Makefile`（`make` / `make test` / `make package` / `make verify`）、`manifest.json`（`id`/`name`/`version`/`task_type`/`category`/`platform{arch,target}`/`resources{compute_cost,memory_mb}`）、`config.schema.json`（`type:object, properties:{}`）、`src/<id>.cpp`（`ZHULONG_ALGO_MAIN` + 空 `init`/`create_session`/`detect`）、`tests/dev_infer.cpp`（读 `sample.jpg` → 空结果 → 写 `result.jpg`，证明「空实现 = 0 检出」而不是「跑不起来」）+ `tests/third_party/stb_image*.h`、`scripts/build_package.py`（薄壳）、`README.md`、`sample.jpg` 占位图；

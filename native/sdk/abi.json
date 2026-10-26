@@ -1,0 +1,11 @@
+{
+  "sdk_version": "1.0.0",
+  "api_version": 1,
+  "protocol": 1,
+  "_comment": [
+    "算法包 SDK 的版本权威来源。sdk_version 与 CMake 包版本一致（ZhulongAlgoSDKConfigVersion.cmake 由它生成）；",
+    "api_version 对应 zhulong_plugin_api_v1::api_version（plugin.h 的 struct 版本，恒为 1）；",
+    "protocol 对应 IPC 协议版本（ipc_protocol.hpp 的 IPC_VERSION）。",
+    "改任何一项都意味着已发布的算法包需要重新构建，别在补丁版本里静默改。"
+  ]
+}

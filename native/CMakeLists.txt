@@ -350,6 +350,51 @@ endforeach()
 # SHARED 维持 PRIVATE（下游靠 .so 的 NEEDED 解析，不继承 ORT / RKNN 链接项）。
 target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS})
 target_link_libraries(ZhulongAlgoRuntimeStatic PUBLIC ${ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS})
+
+# ==============================================================================
+#  4.1.1 算法包 SDK 安装（make sdk-install → build/sdk/prefix）
+# ==============================================================================
+# 交给第三方的是「已编译好的公共头 + 静态归档 + CMake 包配置」，不含 native/src。
+# ⚠️ 刻意**不用** install(EXPORT)：导出的目标不能携带构建机绝对路径，前缀一旦搬迁就失效，
+#    所以手写 ZhulongAlgoSDKConfig.cmake（cmake/ZhulongAlgoSDKConfig.cmake.in）。
+# ⚠️ test_stub 夹具构建不产生任何 SDK 安装规则：夹具产物不可交付（见 hardware-backends）。
+if(ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub")
+    message(STATUS "test_stub 夹具构建：跳过 SDK 安装规则（夹具产物不可交付）")
+else()
+    include(CMakePackageConfigHelpers)
+
+    # 版本与协议号的唯一来源：native/sdk/abi.json（3.2b）。改它等于要求已发布包重建。
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/sdk/abi.json" ZHULONG_SDK_ABI)
+    string(JSON ZHULONG_SDK_VERSION GET "${ZHULONG_SDK_ABI}" sdk_version)
+    string(JSON ZHULONG_SDK_API_VERSION GET "${ZHULONG_SDK_ABI}" api_version)
+    string(JSON ZHULONG_SDK_PROTOCOL GET "${ZHULONG_SDK_ABI}" protocol)
+
+    if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
+        set(ZHULONG_SDK_BACKEND rknn)
+        set(ZHULONG_SDK_BACKEND_DEFINE ZHULONG_INFERENCE_RKNN=1)
+    else()
+        set(ZHULONG_SDK_BACKEND onnx)
+        set(ZHULONG_SDK_BACKEND_DEFINE ZHULONG_INFERENCE_ONNX=1)
+    endif()
+
+    configure_file(cmake/ZhulongAlgoSDKConfig.cmake.in
+                   "${CMAKE_CURRENT_BINARY_DIR}/ZhulongAlgoSDKConfig.cmake" @ONLY)
+    write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/ZhulongAlgoSDKConfigVersion.cmake"
+        VERSION ${ZHULONG_SDK_VERSION}
+        COMPATIBILITY SameMajorVersion)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/VERSION"
+         "sdk_version=${ZHULONG_SDK_VERSION}\napi_version=${ZHULONG_SDK_API_VERSION}\nprotocol=${ZHULONG_SDK_PROTOCOL}\nbackend=${ZHULONG_SDK_BACKEND}\n")
+
+    install(TARGETS ZhulongAlgoRuntimeStatic ARCHIVE DESTINATION lib)
+    install(DIRECTORY sdk/include/ DESTINATION include)
+    # dev/ = 开发期资产（自制自测用的 stb），不是产品依赖
+    install(DIRECTORY sdk/tests/third_party/stb/ DESTINATION dev/stb)
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/ZhulongAlgoSDKConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/ZhulongAlgoSDKConfigVersion.cmake"
+        DESTINATION lib/cmake/ZhulongAlgoSDK)
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/VERSION" sdk/abi.json DESTINATION .)
+endif()
 # ==============================================================================
 add_library(ZhulongLog STATIC src/common/log.cpp)
 target_compile_features(ZhulongLog PUBLIC cxx_std_17)

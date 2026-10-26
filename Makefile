@@ -23,7 +23,7 @@ BINARY := $(BUILD_DIR)/Zhulong
 SWAG_VERSION := v1.16.6
 AIR ?= $(shell command -v air 2>/dev/null || (test -x "$$(go env GOPATH 2>/dev/null)/bin/air" && echo "$$(go env GOPATH)/bin/air") || echo air)
 
-.PHONY: all build go-build check frontend-install frontend-build frontend-check native-deps native-configure native-build native-test native-cross-build api-docs go-check smoke run web-dev dev-backend dev-frontend dev
+.PHONY: all build go-build check frontend-install frontend-build frontend-check native-deps native-configure native-build native-test native-cross-build sdk-install api-docs go-check smoke run web-dev dev-backend dev-frontend dev
 
 all: build
 
@@ -68,6 +68,29 @@ native-build:
 # 执行 Native CTest 单元测试与集成测试套件
 native-test:
 	$(NATIVE_BUILD) test
+
+# 生成算法包 SDK 前缀（第三方 / 独立算法包工程的唯一依赖）
+#
+#   make sdk-install                      → build/sdk/prefix（onnx 档位，ORT 由使用端解析）
+#   make sdk-install BUNDLE_RUNTIME=1     → 同时把 onnxruntime 闭包拷进前缀，可整体搬迁/离线
+#   make sdk-install SDK_PREFIX=/tmp/sdk  → 自定义安装位置（绝不装到系统路径）
+SDK_PREFIX ?= $(BUILD_DIR)/sdk/prefix
+
+sdk-install: native-build
+	rm -rf "$(SDK_PREFIX)"
+	$(CMAKE) --install build/native/host --prefix "$(SDK_PREFIX)"
+	@if [ "$(BUNDLE_RUNTIME)" = "1" ]; then \
+		ort_root="$(ONNX_RUNTIME_ROOT)"; \
+		if [ -z "$$ort_root" ]; then ort_root="build/deps/onnxruntime"; fi; \
+		if [ ! -e "$$ort_root/lib/libonnxruntime.so" ]; then \
+			echo "错误: BUNDLE_RUNTIME=1 需要 onnxruntime 前缀：-DONNX_RUNTIME_ROOT=<dir> 或 build/deps/onnxruntime"; exit 1; \
+		fi; \
+		mkdir -p "$(SDK_PREFIX)/third_party/onnx/lib"; \
+		cp -L "$$ort_root"/lib/libonnxruntime.so* "$(SDK_PREFIX)/third_party/onnx/lib/"; \
+		echo "[✓] onnxruntime 已拷入 $(SDK_PREFIX)/third_party/onnx/lib"; \
+	fi
+	@printf 'SDK 前缀: %s\n' "$(SDK_PREFIX)"
+	@cat "$(SDK_PREFIX)/VERSION"
 
 # 交叉编译目标二进制（严格要求指定目标板 Profile 与输出路径，防 Host/Cross 产物混淆）
 native-cross-build:

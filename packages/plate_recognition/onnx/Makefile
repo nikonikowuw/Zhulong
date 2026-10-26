@@ -1,16 +1,12 @@
-# 算法包 target 的开发期命令（阶段 3.0e / 3.3）
+# 算法包 target 的开发期命令
 #
 #   make test      读包根 sample.jpg → 跑本 target 产品代码 → build/out/result-*.jpg
 #   make clean
 #
-# ⚠️ 这里的 test 只是开发期自测（画一张图 + 打明细表），不是交付物；正式打包用
-#    packages/<id>/scripts/build_package.py。SDK 安装（3.2b）落地后，下面的默认路径
-#    会收敛为单一的 SDK_PREFIX。
-REPO_ROOT ?= $(abspath $(CURDIR)/../../..)
-SDK_INCLUDE ?= $(REPO_ROOT)/native/sdk/include
-STB_DIR ?= $(REPO_ROOT)/native/sdk/tests/third_party/stb
-ALGO_RUNTIME ?= $(REPO_ROOT)/build/native/host/libZhulongAlgoRuntime.a
-ONNX_ROOT ?= $(REPO_ROOT)/build/deps/onnxruntime
+# ⚠️ 本工程**只依赖已安装的 SDK 前缀**，不引用 Zhulong 仓库里的任何路径：
+#   - SDK 前缀由仓库侧 `make sdk-install` 产出（默认 build/sdk/prefix）；
+#   - 把整个档位目录拷到任意位置都能 `make test SDK_PREFIX=<prefix>` 跑通。
+SDK_PREFIX ?= /opt/zhulong-sdk
 
 BUILD_DIR ?= $(CURDIR)/build
 OUT_DIR := $(BUILD_DIR)/out
@@ -24,10 +20,7 @@ all: $(DEVTEST)
 $(DEVTEST): CMakeLists.txt tests/dev_infer.cpp $(wildcard src/*.cpp src/*.hpp)
 	cmake -S $(CURDIR) -B $(BUILD_DIR) \
 		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
-		-DZHULONG_SDK_INCLUDE=$(SDK_INCLUDE) \
-		-DZHULONG_STB_DIR=$(STB_DIR) \
-		-DZHULONG_ALGO_RUNTIME=$(ALGO_RUNTIME) \
-		-DZHULONG_ONNX_ROOT=$(ONNX_ROOT)
+		-DCMAKE_PREFIX_PATH=$(SDK_PREFIX)
 	cmake --build $(BUILD_DIR) --target plate_recognition_devtest
 
 test: $(DEVTEST)

@@ -1,0 +1,113 @@
+# Zhulong 算法包 SDK 的 CMake 包配置
+#
+# 由 `make sdk-install` 安装到 <prefix>/lib/cmake/ZhulongAlgoSDK/。
+# 刻意手写而不 install(EXPORT)：导入目标不能携带构建机绝对路径，否则前缀一搬迁就失效。
+#
+# 使用方式（算法包工程的 CMakeLists.txt）：
+#     find_package(ZhulongAlgoSDK 1.0 REQUIRED)
+#     target_link_libraries(${PROJECT_NAME} PRIVATE Zhulong::AlgoSDK Zhulong::AlgoRuntime)
+
+get_filename_component(ZHULONG_SDK_PREFIX "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+set(ZhulongAlgoSDK_VERSION "@ZHULONG_SDK_VERSION@")
+set(ZhulongAlgoSDK_BACKEND   "@ZHULONG_SDK_BACKEND@")
+
+# 开发期资产（vendored stb 等）：只给 `make test` 里的自测用，不属于产品依赖。
+set(ZhulongAlgoSDK_DEV_DIR "${ZHULONG_SDK_PREFIX}/dev")
+
+find_package(Threads REQUIRED)
+
+# ---------------------------------------------------------------------------
+# 运行库：静态归档 + 公共头 + 后端编译定义
+# ---------------------------------------------------------------------------
+if(TARGET Zhulong::AlgoRuntime)
+    return()
+endif()
+
+if(NOT EXISTS "${ZHULONG_SDK_PREFIX}/lib/libZhulongAlgoRuntime.a")
+    message(FATAL_ERROR
+        "SDK 前缀不完整：缺少 ${ZHULONG_SDK_PREFIX}/lib/libZhulongAlgoRuntime.a。"
+        "请重新安装 SDK（在 Zhulong 仓库内执行 make sdk-install）。")
+endif()
+
+add_library(Zhulong::AlgoRuntime STATIC IMPORTED)
+set_target_properties(Zhulong::AlgoRuntime PROPERTIES
+    IMPORTED_LOCATION "${ZHULONG_SDK_PREFIX}/lib/libZhulongAlgoRuntime.a"
+    INTERFACE_INCLUDE_DIRECTORIES "${ZHULONG_SDK_PREFIX}/include"
+    INTERFACE_COMPILE_FEATURES cxx_std_17
+    INTERFACE_COMPILE_DEFINITIONS "@ZHULONG_SDK_BACKEND_DEFINE@"
+)
+
+# ---------------------------------------------------------------------------
+# 第三方运行时（静态库无法「链接」依赖，只能交给最终消费者）
+# ---------------------------------------------------------------------------
+set(_zhulong_vendor_dir "${ZHULONG_SDK_PREFIX}/third_party/@ZHULONG_SDK_BACKEND@/lib")
+
+if("${ZhulongAlgoSDK_BACKEND}" STREQUAL "onnx")
+    # 线索顺序：前缀自带（可搬迁、可离线）→ 使用端显式 ONNXRUNTIME_ROOT → 系统默认路径。
+    set(_zhulong_ort_hints "${_zhulong_vendor_dir}")
+    if(DEFINED ONNXRUNTIME_ROOT)
+        list(APPEND _zhulong_ort_hints "${ONNXRUNTIME_ROOT}/lib")
+    endif()
+    find_library(ZHULONG_ONNXRUNTIME_LIBRARY NAMES onnxruntime libonnxruntime.so.1 HINTS ${_zhulong_ort_hints})
+    # 发行版的运行时包常只装 versioned 文件（libonnxruntime.so.1.21），没有 -dev 的裸 .so
+    # 软链；此时 find_library 按名字找不到，用 glob 兜一层，链接期用 soname 即可。
+    if(NOT ZHULONG_ONNXRUNTIME_LIBRARY)
+        file(GLOB _zhulong_ort_candidates
+            "${_zhulong_ort_hints}/libonnxruntime.so*"
+            "/usr/lib/*/libonnxruntime.so.*"
+            "/usr/lib/libonnxruntime.so.*"
+            "/usr/local/lib/libonnxruntime.so*")
+        if(_zhulong_ort_candidates)
+            list(SORT _zhulong_ort_candidates)
+            list(GET _zhulong_ort_candidates 0 ZHULONG_ONNXRUNTIME_LIBRARY)
+        endif()
+    endif()
+    if(NOT ZHULONG_ONNXRUNTIME_LIBRARY)
+        message(FATAL_ERROR
+            "找不到 libonnxruntime（本 SDK 前缀是 onnx 档位）。三条路选一条：\n"
+            "  1) 在 Zhulong 仓库内用 make sdk-install BUNDLE_RUNTIME=1 生成自带运行时的前缀；\n"
+            "  2) 设置 -DONNXRUNTIME_ROOT=<onnxruntime 前缀>（须含 lib/libonnxruntime.so）；\n"
+            "  3) 让系统包管理器提供 libonnxruntime（Debian/Ubuntu: libonnxruntime-dev）。")
+    endif()
+    set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
+        INTERFACE_LINK_LIBRARIES "${ZHULONG_ONNXRUNTIME_LIBRARY};Threads::Threads;${CMAKE_DL_LIBS}")
+    # 前缀自带运行时（make sdk-install BUNDLE_RUNTIME=1）时，把它的目录写进 RPATH：
+    # 否则链接期用前缀、运行期却去 ld.so 路径里找，换台机器就成了「编译成功、跑不起来」。
+    get_filename_component(_zhulong_ort_dir "${ZHULONG_ONNXRUNTIME_LIBRARY}" DIRECTORY)
+    if(_zhulong_ort_dir MATCHES "^${ZHULONG_SDK_PREFIX}/")
+        set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
+            INTERFACE_LINK_OPTIONS "-Wl,-rpath,${_zhulong_ort_dir}")
+    endif()
+elseif("${ZhulongAlgoSDK_BACKEND}" STREQUAL "rknn")
+    set(_zhulong_rknn_hints "${_zhulong_vendor_dir}")
+    if(DEFINED RKNN_ROOT)
+        list(APPEND _zhulong_rknn_hints "${RKNN_ROOT}/lib")
+    endif()
+    find_library(ZHULONG_RKNNRT_LIBRARY NAMES rknnrt HINTS ${_zhulong_rknn_hints})
+    if(NOT ZHULONG_RKNNRT_LIBRARY)
+        message(FATAL_ERROR
+            "找不到 librknnrt（本 SDK 前缀是 rknn 档位）：请设置 -DRKNN_ROOT=<rknpu2 前缀>，"
+            "或让板端 BSP 提供 /usr/lib/librknnrt.so。")
+    endif()
+    set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
+        INTERFACE_LINK_LIBRARIES "${ZHULONG_RKNNRT_LIBRARY};Threads::Threads;${CMAKE_DL_LIBS}")
+    # 传递依赖符号解析（librknnrt 的 NEEDED 不在默认搜索路径时）
+    set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
+        INTERFACE_LINK_OPTIONS "-Wl,-rpath-link,${_zhulong_vendor_dir}")
+else()
+    message(FATAL_ERROR "未知的 SDK 后端档位: '${ZhulongAlgoSDK_BACKEND}'")
+endif()
+
+# ---------------------------------------------------------------------------
+# 包入口可执行文件的骨架（阶段 3.1/3.2 产出；缺失时显式报错而不是静默跳过）
+# ---------------------------------------------------------------------------
+if(EXISTS "${ZHULONG_SDK_PREFIX}/lib/libzhulong_algo_sdk.a")
+    add_library(Zhulong::AlgoSDK STATIC IMPORTED)
+    set_target_properties(Zhulong::AlgoSDK PROPERTIES
+        IMPORTED_LOCATION "${ZHULONG_SDK_PREFIX}/lib/libzhulong_algo_sdk.a"
+        INTERFACE_INCLUDE_DIRECTORIES "${ZHULONG_SDK_PREFIX}/include"
+        INTERFACE_COMPILE_FEATURES cxx_std_17
+        # ⚠️ 链接顺序固定：SDK 骨架在前，运行库在后（GNU ld 单向扫描）
+        INTERFACE_LINK_LIBRARIES "Zhulong::AlgoRuntime"
+    )
+endif()
