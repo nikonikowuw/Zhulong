@@ -736,6 +736,25 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
 **Review gate 4**：AC4 —— 两个算法包均能安装、启动、停止、重启及回滚；旧 `.so` 包明确拒绝，且不进入启动重试；AC9-AC13 全过；`grep -n "dlopen\|dlsym" native/src/abi/engine.cpp` 为空。
 
 ---
+      **4.8 宿主接线完成（2026-10-26，提交 062960a）**
+
+      - `faceFeatureExtractorAdapter` 改驱动 `faceextract.Client`；包入口每次请求经 algorithm store
+        解析（升级/回滚/重装立刻生效，不会钉住旧路径继续用旧模型产出特征）。
+      - 图片解码（含 EXIF 方向归一化）搬到 `internal/faceextract/decode.go`；`decode_test.go`
+        与 `testdata/` 随之迁移。
+      - 配置新增 `[person].extractor_algorithm`（默认 `face_recognition`）。
+      - 删除 `Zhulong_engine_extract_face_feature`（头 + 实现）、`FacePluginLoader`（懒装载 / TTL
+        reaper / 生命周期汇合）、`zhulong_face_plugin_engine_created|destroyed`、
+        `engine.ExtractFaceFeature`、`engine.ErrUnsupportedImageFormat`、`MaxFaceImageDimension`，
+        以及三份只测这些的测试（`ZhulongFaceFeatureExtractTests`、`ZhulongFacePluginTtlTests`、
+        `engine_face_test.go`）。
+      - 门禁：`grep -n "dlopen\|dlsym" native/src/abi/engine.cpp` = 0（含注释也不留字面量，
+        否则机械门禁永远红）。
+      - 适配器测试改为桩 provider 进程驱动：不需要 ONNX Runtime 或真实模型，断言的正是
+        「解码 → 组帧 → 错误翻译」这条链路。
+
+      验证：`make go-check` exit 0、`go test -race ./internal/...` 全绿、`make native-test` 23/23。
+
       **4.8 进行中（2026-10-26，提交 cfc6493）—— 通道已就位**
 
       - SDK：`--extract-feature`（28 字节帧头 `ZLFE` + 一帧一调用 + stdout 单行 JSON），

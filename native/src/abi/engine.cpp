@@ -482,10 +482,10 @@ extern "C" void Zhulong_probe_result_destroy(Zhulong_probe_result_h result) {
     } catch (...) {}
 }
 
-// 宿主不再 dlopen 任何人脸插件：底库登记的特征提取改由「包可执行文件 +
+// 宿主不再动态装载任何人脸插件：底库登记的特征提取改由「包可执行文件 +
 // --extract-feature 帧协议」完成（internal/faceextract）。
-// 旧实现在这里 dlopen libFaceRecognitionPlugin.so、dlsym 两个符号并起 TTL reaper；
-// 包形态下 PIE 可执行文件无法被 dlopen，那条通道已整体下线。
+// 旧实现直接装载 libFaceRecognitionPlugin.so、解析两个符号并起 TTL reaper；
+// 包形态下 PIE 可执行文件无法被动态装载，那条通道已整体下线。
 
 /**
  * @brief 对指定流当前最新一帧执行抓拍（全幅 + 可选裁剪）
