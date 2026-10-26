@@ -54,7 +54,7 @@ func TestProvideGB28181RegistersEncryptedDataProbe(t *testing.T) {
 		camera.NewLazyCipher(),
 		nil, nil, nil,
 	)
-	provideGB28181(dbStore, camera.NewLazyCipher(), manager, zap.NewNop())
+	provideGB28181(dbStore, camera.NewLazyCipher(), manager, nil, zap.NewNop())
 
 	err := manager.InitCipher(context.Background())
 	if !errors.Is(err, camera.ErrKeyMissingWithExistingData) {

@@ -138,6 +138,7 @@ export const gb28181DeviceSchema = z.object({
   remoteAddr: z.string().nullish(),
   expiresSeconds: z.number(),
   state: z.string(),
+  channelCount: z.number().optional().default(0),
   lastKeepaliveAt: z.string().nullish(),
   registeredAt: z.string().nullish(),
   createdAt: z.string(),
@@ -151,6 +152,42 @@ export const gb28181DeviceListSchema = z.object({
 })
 
 export type Gb28181DeviceList = z.infer<typeof gb28181DeviceListSchema>
+
+export const gb28181ChannelSchema = z.object({
+  deviceId: z.string(),
+  channelId: z.string(),
+  name: z.string(),
+  manufacturer: z.string().nullish(),
+  model: z.string().nullish(),
+  owner: z.string().nullish(),
+  civilCode: z.string().nullish(),
+  address: z.string().nullish(),
+  parental: z.number().default(0),
+  parentId: z.string().nullish(),
+  safetyWay: z.number().nullish(),
+  registerWay: z.number().nullish(),
+  ptzType: z.number().nullish(),
+  resolutionWidth: z.number().nullish(),
+  resolutionHeight: z.number().nullish(),
+  cameraId: z.string().nullish(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+})
+
+export type Gb28181Channel = z.infer<typeof gb28181ChannelSchema>
+
+export const gb28181ChannelListSchema = z.object({
+  items: z.array(gb28181ChannelSchema),
+})
+
+export type Gb28181ChannelList = z.infer<typeof gb28181ChannelListSchema>
+
+export const syncCatalogResponseSchema = z.object({
+  deviceId: z.string(),
+  total: z.number(),
+})
+
+export type SyncCatalogResponse = z.infer<typeof syncCatalogResponseSchema>
 
 /** `PUT /gb28181/devices/:deviceId` 的请求体。缺省字段保持已存值。 */
 export interface UpsertGb28181DeviceRequest {

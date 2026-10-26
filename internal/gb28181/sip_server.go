@@ -14,6 +14,7 @@ import (
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"go.uber.org/zap"
 )
 
@@ -36,9 +37,11 @@ type sipIngress struct {
 	nonces       *nonceManager
 	limiter      *rateLimiter
 	devices      *deviceStateMachine
+	catalogs     *CatalogManager
 
 	ua       *sipgo.UserAgent
 	server   *sipgo.Server
+	client   *sipgo.Client
 	udpConn  net.PacketConn
 	tcpLn    *ingressListener
 	serveWG  sync.WaitGroup
@@ -61,7 +64,9 @@ func newSIPIngress(store *Store, runtime *Runtime, logger *zap.Logger, limits in
 		logger = zap.NewNop()
 	}
 	limits = limits.withDefaults()
-	return &sipIngress{store: store, runtime: runtime, logger: logger, limits: limits}
+	ingress := &sipIngress{store: store, runtime: runtime, logger: logger, limits: limits}
+	ingress.catalogs = NewCatalogManager(ingress, store, logger)
+	return ingress
 }
 
 // Start binds the SIP listeners described by cfg and begins serving.
@@ -151,8 +156,17 @@ func (i *sipIngress) buildStack() error {
 	server.OnMessage(i.handleMessage)
 	server.OnOptions(i.handleOptions)
 	server.OnNoRoute(i.handleUnsupported)
+
+	client, err := sipgo.NewClient(ua, sipgo.WithClientHostname(i.advertisedIP))
+	if err != nil {
+		closeQuietly(i.logger, server, "sip server")
+		closeQuietly(i.logger, ua, "sip user agent")
+		return fmt.Errorf("create sip client: %w", err)
+	}
+
 	i.ua = ua
 	i.server = server
+	i.client = client
 	return nil
 }
 
@@ -171,9 +185,10 @@ func (i *sipIngress) rollbackStack() {
 // i.server, so callers own the ordering: rollbackStack waits for them first, Stop
 // closes the listeners and then waits.
 func (i *sipIngress) closeStack() {
+	closeQuietly(i.logger, i.client, "sip client")
 	closeQuietly(i.logger, i.server, "sip server")
 	closeQuietly(i.logger, i.ua, "sip user agent")
-	i.ua, i.server = nil, nil
+	i.ua, i.server, i.client = nil, nil, nil
 }
 
 // startSweeper expires registrations that stopped renewing, off the request path.
@@ -346,4 +361,89 @@ func closeQuietly(logger *zap.Logger, closer io.Closer, name string) {
 	if logger != nil {
 		logger.Debug("failed to close sip resource", zap.String("resource", name), zap.Error(err))
 	}
+}
+
+// SendMessage dispatches an outbound SIP MESSAGE request to a device.
+func (i *sipIngress) SendMessage(ctx context.Context, device Device, body []byte) error {
+	if device.RemoteAddr == nil || *device.RemoteAddr == "" {
+		// No recorded source address means this device has not completed a REGISTER in
+		// this process; there is nothing reachable to address.
+		return apperr.Invalid(CodeDeviceOffline, "device has no recorded remote address", nil)
+	}
+
+	i.mu.Lock()
+	client := i.client
+	ua := i.ua
+	realm := i.cfg.SIPRealm
+	serverID := i.cfg.SIPID
+	i.mu.Unlock()
+
+	if client == nil || ua == nil {
+		return apperr.Internal(CodeRuntimeNotReady, "sip client is not ready", nil)
+	}
+
+	dest := *device.RemoteAddr
+	transport := strings.ToUpper(device.Transport)
+	if transport == "" {
+		transport = strings.ToUpper(TransportUDP)
+	}
+	if transport != strings.ToUpper(TransportUDP) {
+		// A stream transport is only reachable through the connection the device
+		// registered on: sipgo keys its connection pool by remote address, so a live
+		// flow means the request reuses it. A closed flow means the persisted
+		// remote_addr is a dead ephemeral port — dialing it would look like a silent
+		// failure instead of the truth ("the device must register again").
+		if _, err := ua.TransportLayer().GetConnection(strings.ToLower(transport), dest); err != nil {
+			return apperr.Precondition(CodeDeviceFlowClosed, "device signalling connection is closed", err)
+		}
+	}
+
+	tagBytes := make([]byte, 8)
+	if _, err := rand.Read(tagBytes); err != nil {
+		// Tag entropy is a protocol requirement (From tag correlation), so a broken
+		// entropy source is an error, not something to paper over with a zero tag.
+		return fmt.Errorf("generate sip message tag: %w", err)
+	}
+
+	req := sip.NewRequest(sip.MESSAGE, sip.Uri{
+		User: device.DeviceID,
+		Host: realm,
+	})
+	req.AppendHeader(&sip.FromHeader{
+		Address: sip.Uri{
+			User: serverID,
+			Host: realm,
+		},
+		Params: sip.HeaderParams{{K: "tag", V: fmt.Sprintf("%x", tagBytes)}},
+	})
+	req.AppendHeader(&sip.ToHeader{
+		Address: sip.Uri{
+			User: device.DeviceID,
+			Host: realm,
+		},
+	})
+	callID := sip.CallIDHeader(fmt.Sprintf("%s-%d", device.DeviceID, time.Now().UnixNano()))
+	req.AppendHeader(&callID)
+	req.AppendHeader(&sip.CSeqHeader{SeqNo: 1, MethodName: sip.MESSAGE})
+	req.AppendHeader(sip.NewHeader("Content-Type", "Application/MANSCDP+xml"))
+	req.SetBody(body)
+	req.SetDestination(dest)
+	req.SetTransport(transport)
+
+	res, err := client.Do(ctx, req)
+	if err != nil {
+		return fmt.Errorf("send sip message to %s: %w", dest, err)
+	}
+	if res.StatusCode != sip.StatusOK {
+		return fmt.Errorf("sip message rejected with status %d: %s", res.StatusCode, res.Reason)
+	}
+	return nil
+}
+
+// Sync initiates catalog discovery for an online device.
+func (i *sipIngress) Sync(ctx context.Context, device Device) ([]Channel, error) {
+	if i.catalogs == nil {
+		return nil, apperr.Internal(CodeRuntimeNotReady, "catalog manager is not initialized", nil)
+	}
+	return i.catalogs.Sync(ctx, device)
 }

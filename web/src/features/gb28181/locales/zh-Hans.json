@@ -108,6 +108,13 @@
     "expiresValue": "{{seconds}} 秒",
     "createSuccess": "设备 {{deviceId}} 已预置",
     "saveSuccess": "设备 {{deviceId}} 已更新",
+    "deleteDevice": "删除设备",
+    "deleteTitle": "确认删除此设备？",
+    "deleteDesc": "删除后将移除此设备及其未绑定摄像机的通道目录。已关联摄像机的通道必须先解绑。",
+    "deleteConfirm": "删除设备",
+    "deleteSuccess": "设备 {{deviceId}} 已删除",
+    "viewChannels": "查看通道",
+    "channelsCount": "通道 ({{count}})",
     "columns": {
       "deviceId": "设备编号",
       "name": "名称",
@@ -171,5 +178,28 @@
   "errors": {
     "requestFailed": "请求失败，请稍后重试",
     "unknown": "发生未知错误"
+  },
+  "channels": {
+    "title": "通道列表",
+    "description": "设备 {{deviceId}} 已同步的国标通道清单。",
+    "sync": "同步目录",
+    "syncing": "正在同步...",
+    "syncSuccess": "目录同步成功，共发现 {{count}} 个通道",
+    "syncFailed": "目录同步失败",
+    "loadFailed": "读取通道列表失败",
+    "addAsCamera": "添加为摄像机",
+    "adding": "正在添加...",
+    "added": "已添加",
+    "addSuccess": "通道 {{channelId}} 已添加为摄像机",
+    "addFailed": "添加摄像机失败",
+    "empty": "暂无通道数据",
+    "emptyDesc": "点击“同步目录”向在线设备下发 Catalog 查询指令。",
+    "offlineHint": "设备当前处于离线状态，无法下发目录查询指令。",
+    "columns": {
+      "channelId": "通道编号",
+      "name": "通道名称",
+      "resolution": "分辨率",
+      "actions": "操作"
+    }
   }
 }

@@ -251,6 +251,20 @@ func (s *HealthScheduler) checkStream(ctx context.Context, cam *Camera, stream *
 		return
 	}
 
+	// Only RTSP sources have an endpoint to DESCRIBE. A GB28181 channel is reachable
+	// through SIP/SDP only after an INVITE, so probing it here would report a
+	// permanent uri_error and broadcast that false state every interval. Leaving the
+	// state untouched keeps it "unknown", which is the truth until the native GB input
+	// (S4) gives this protocol its own health evidence.
+	if stream.Protocol != ProtocolRTSP {
+		s.logger.Debug("skipping describe probe for non-rtsp stream",
+			zap.String("camera_id", cam.ID),
+			zap.String("role", stream.Role),
+			zap.String("protocol", stream.Protocol),
+		)
+		return
+	}
+
 	// Decrypt URI
 	aad := MakeAAD(cam.ID, stream.Role)
 	rawURI, err := s.cipher.Decrypt(stream.EncryptedURI, aad)

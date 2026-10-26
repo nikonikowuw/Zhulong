@@ -169,6 +169,24 @@ func ParseAndNormalizeRTSP(raw string, transport string) (*StreamConnectionInfo,
 	}, nil
 }
 
+// IsGB28181ID reports whether id is a valid GB/T 28181 device or channel code.
+//
+// The 20-digit invariant is also a SQL CHECK on gb_devices (20 chars, digits only),
+// so the Go side must reject exactly what the schema rejects. Validating here keeps a
+// bad catalog entry from surfacing later as a database error or as a camera row whose
+// URI cannot be parsed back.
+func IsGB28181ID(id string) bool {
+	if len(id) != 20 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if id[i] < '0' || id[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // SanitizeURL masks credentials in any URL for safe logging and public display using standard library Redacted.
 func SanitizeURL(raw string) string {
 	raw = strings.TrimSpace(raw)

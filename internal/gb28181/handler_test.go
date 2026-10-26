@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,8 +14,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
+	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 type configEnvelope struct {
@@ -509,5 +512,203 @@ func TestHandlerAuditRecordsConcreteDeviceTarget(t *testing.T) {
 	}
 	if strings.Contains(entry.Detail, "audited-secret") {
 		t.Fatalf("the digest password leaked into the audit detail: %q", entry.Detail)
+	}
+}
+
+type mockCameraCreator struct {
+	db        *gorm.DB
+	createdID string
+	calls     int
+	deleted   []string
+}
+
+func (m *mockCameraCreator) CreateGB28181Camera(ctx context.Context, params camera.CreateGB28181CameraParams) (*camera.CameraResponse, error) {
+	m.calls++
+	m.createdID = "cam_01JTEST0000000000000000"
+	if m.db != nil {
+		if err := m.db.Exec("INSERT INTO cameras (id, name, revision, created_at, updated_at) VALUES (?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", m.createdID, params.Name).Error; err != nil {
+			return nil, fmt.Errorf("insert camera fixture: %w", err)
+		}
+	}
+	return &camera.CameraResponse{
+		ID:   m.createdID,
+		Name: params.Name,
+		Streams: []camera.StreamResponse{
+			{
+				Protocol: camera.ProtocolGB28181,
+				RTSPURL:  fmt.Sprintf("gb28181://%s/%s", params.DeviceID, params.ChannelID),
+			},
+		},
+	}, nil
+}
+
+func (m *mockCameraCreator) Delete(ctx context.Context, id string) error {
+	m.deleted = append(m.deleted, id)
+	if m.db == nil {
+		return nil
+	}
+	return m.db.Exec("DELETE FROM cameras WHERE id = ?", id).Error
+}
+
+type mockCatalogSyncer struct {
+	store    ChannelStore
+	channels []Channel
+	err      error
+}
+
+func (m *mockCatalogSyncer) Sync(ctx context.Context, device Device) ([]Channel, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.store != nil {
+		if err := m.store.SyncChannels(ctx, device.DeviceID, m.channels); err != nil {
+			return nil, err
+		}
+	}
+	return m.channels, nil
+}
+
+func TestHandlerChannelAndCatalogEndpoints(t *testing.T) {
+	dbStore := database.New(t.TempDir(), zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	defer func() { _ = dbStore.Close() }()
+
+	camCreator := &mockCameraCreator{db: dbStore.DB()}
+	catSyncer := &mockCatalogSyncer{}
+
+	comp := NewComponents(ComponentsOptions{
+		DBProvider:    dbStore,
+		Cipher:        fakeCipher{},
+		CameraCreator: camCreator,
+		CameraDeleter: camCreator,
+		Catalog:       catSyncer,
+		Logger:        zap.NewNop(),
+	})
+	catSyncer.store = comp.Store
+	if err := comp.Lifecycle.Start(context.Background()); err != nil {
+		t.Fatalf("lifecycle start failed: %v", err)
+	}
+	defer func() { _ = comp.Lifecycle.Stop(context.Background()) }()
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	comp.ProtectedRoutes.RegisterRoutes(router.Group("/api/v1"))
+
+	devID := "34020000001180000001"
+	chanID := "34020000001310000001"
+
+	// 1. Provision device
+	w := doJSON(t, router, http.MethodPut, "/api/v1/gb28181/devices/"+devID, `{"name":"Device 1","password":"secret"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("provision device: status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	// 2. List channels before sync -> empty list
+	w = doJSON(t, router, http.MethodGet, "/api/v1/gb28181/devices/"+devID+"/channels", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("list channels: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var listResp struct {
+		Data ChannelListResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal list channels: %v", err)
+	}
+	if len(listResp.Data.Items) != 0 {
+		t.Fatalf("expected 0 channels, got %d", len(listResp.Data.Items))
+	}
+
+	// 3. Trigger sync while offline -> 422 GB28181_DEVICE_OFFLINE
+	w = doJSON(t, router, http.MethodPost, "/api/v1/gb28181/devices/"+devID+"/catalog", "")
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for offline sync, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	// 4. Mark device online and set syncer return
+	db := dbStore.DB()
+	remoteAddr := "192.168.1.100:5060"
+	if err := db.Model(&Device{}).Where("device_id = ?", devID).Updates(map[string]any{
+		"state":       "online",
+		"remote_addr": remoteAddr,
+	}).Error; err != nil {
+		t.Fatalf("mark device online: %v", err)
+	}
+
+	w1, h1 := 1920, 1080
+	catSyncer.channels = []Channel{
+		{
+			DeviceID:         devID,
+			ChannelID:        chanID,
+			Name:             "Gate Camera",
+			ResolutionWidth:  &w1,
+			ResolutionHeight: &h1,
+		},
+	}
+
+	// 5. Trigger sync while online -> 200 OK
+	w = doJSON(t, router, http.MethodPost, "/api/v1/gb28181/devices/"+devID+"/catalog", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("catalog sync online: status=%d body=%s", w.Code, w.Body.String())
+	}
+	var syncResp struct {
+		Data SyncCatalogResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &syncResp); err != nil {
+		t.Fatalf("unmarshal sync resp: %v", err)
+	}
+	if syncResp.Data.Total != 1 {
+		t.Fatalf("expected total 1, got %d", syncResp.Data.Total)
+	}
+
+	// 6. List channels -> 1 channel
+	w = doJSON(t, router, http.MethodGet, "/api/v1/gb28181/devices/"+devID+"/channels", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("list channels: status=%d body=%s", w.Code, w.Body.String())
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &listResp)
+	if len(listResp.Data.Items) != 1 || listResp.Data.Items[0].ChannelID != chanID {
+		t.Fatalf("expected channel %s, got %+v", chanID, listResp.Data.Items)
+	}
+	if listResp.Data.Items[0].CameraID != nil {
+		t.Fatalf("expected camera_id to be nil initially")
+	}
+
+	// 7. Add channel as camera -> creates camera
+	w = doJSON(t, router, http.MethodPost, fmt.Sprintf("/api/v1/gb28181/devices/%s/channels/%s/camera", devID, chanID), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("add channel as camera: status=%d body=%s", w.Code, w.Body.String())
+	}
+	if camCreator.calls != 1 {
+		t.Fatalf("expected 1 call to CameraCreator, got %d", camCreator.calls)
+	}
+
+	// 8. Add channel again -> 409 GB28181_CHANNEL_ALREADY_BOUND
+	w = doJSON(t, router, http.MethodPost, fmt.Sprintf("/api/v1/gb28181/devices/%s/channels/%s/camera", devID, chanID), "")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 conflict when adding already bound channel, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	// 9. Delete device with bound camera -> 409 GB28181_CAMERA_BOUND
+	w = doJSON(t, router, http.MethodDelete, "/api/v1/gb28181/devices/"+devID, "")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 conflict when deleting device with bound camera, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	// 10. Delete the camera (FK ON DELETE SET NULL clears the binding), then the device
+	if err := camCreator.Delete(context.Background(), camCreator.createdID); err != nil {
+		t.Fatalf("delete camera: %v", err)
+	}
+	ch, err := comp.Store.GetChannel(context.Background(), devID, chanID)
+	if err != nil {
+		t.Fatalf("get channel: %v", err)
+	}
+	if ch.CameraID != nil {
+		t.Fatalf("expected camera binding cleared by ON DELETE SET NULL, got %v", *ch.CameraID)
+	}
+	w = doJSON(t, router, http.MethodDelete, "/api/v1/gb28181/devices/"+devID, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete device: status=%d body=%s", w.Code, w.Body.String())
 	}
 }

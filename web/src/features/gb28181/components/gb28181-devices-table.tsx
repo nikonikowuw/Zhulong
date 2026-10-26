@@ -35,6 +35,8 @@ interface Gb28181DevicesTableProps {
   errorMessage?: string
   onRetry: () => void
   onEdit: (device: Gb28181Device) => void
+  onViewChannels: (device: Gb28181Device) => void
+  onDelete: (device: Gb28181Device) => void
   search: Record<string, unknown>
   navigate: NavigateFn
 }
@@ -54,6 +56,8 @@ export function Gb28181DevicesTable({
   errorMessage,
   onRetry,
   onEdit,
+  onViewChannels,
+  onDelete,
   search,
   navigate,
 }: Gb28181DevicesTableProps) {
@@ -76,8 +80,15 @@ export function Gb28181DevicesTable({
   })
 
   const columns = useMemo(
-    () => createGb28181DeviceColumns({ t, language: i18n.language, onEdit }),
-    [t, i18n.language, onEdit]
+    () =>
+      createGb28181DeviceColumns({
+        t,
+        language: i18n.language,
+        onEdit,
+        onViewChannels,
+        onDelete,
+      }),
+    [t, i18n.language, onEdit, onViewChannels, onDelete]
   )
 
   const [sorting, setSorting] = useState<SortingState>([])

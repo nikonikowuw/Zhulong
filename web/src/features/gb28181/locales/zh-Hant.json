@@ -108,6 +108,13 @@
     "expiresValue": "{{seconds}} 秒",
     "createSuccess": "裝置 {{deviceId}} 已預置",
     "saveSuccess": "裝置 {{deviceId}} 已更新",
+    "deleteDevice": "刪除裝置",
+    "deleteTitle": "確定要刪除此裝置嗎？",
+    "deleteDesc": "刪除後將移除此裝置及其未關聯攝影機的通道目錄。已關聯攝影機的通道必須先解除關聯。",
+    "deleteConfirm": "刪除裝置",
+    "deleteSuccess": "裝置 {{deviceId}} 已刪除",
+    "viewChannels": "查看通道",
+    "channelsCount": "通道 ({{count}})",
     "columns": {
       "deviceId": "裝置編號",
       "name": "名稱",
@@ -171,5 +178,28 @@
   "errors": {
     "requestFailed": "請求失敗，請稍後重試",
     "unknown": "發生未知錯誤"
+  },
+  "channels": {
+    "title": "通道列表",
+    "description": "裝置 {{deviceId}} 已同步的國標通道清單。",
+    "sync": "同步目錄",
+    "syncing": "正在同步...",
+    "syncSuccess": "目錄同步成功，共發現 {{count}} 個通道",
+    "syncFailed": "目錄同步失敗",
+    "loadFailed": "讀取通道列表失敗",
+    "addAsCamera": "新增為攝影機",
+    "adding": "正在新增...",
+    "added": "已新增",
+    "addSuccess": "通道 {{channelId}} 已新增為攝影機",
+    "addFailed": "新增攝影機失敗",
+    "empty": "暫無通道資料",
+    "emptyDesc": "點擊「同步目錄」向在線裝置下發 Catalog 查詢指令。",
+    "offlineHint": "裝置目前處於離線狀態，無法下發目錄查詢指令。",
+    "columns": {
+      "channelId": "通道編號",
+      "name": "通道名稱",
+      "resolution": "解析度",
+      "actions": "操作"
+    }
   }
 }

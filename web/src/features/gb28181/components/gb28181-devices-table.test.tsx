@@ -14,6 +14,7 @@ const onlineDevice: Gb28181Device = {
   remoteAddr: '192.168.1.64:5060',
   expiresSeconds: 3600,
   state: 'online',
+  channelCount: 0,
   lastKeepaliveAt: '2026-10-25T08:00:00Z',
   registeredAt: '2026-10-25T07:00:00Z',
   createdAt: '2026-10-25T07:00:00Z',
@@ -40,6 +41,8 @@ function renderTable(
       isError={false}
       onRetry={vi.fn()}
       onEdit={vi.fn()}
+      onViewChannels={vi.fn()}
+      onDelete={vi.fn()}
       search={{}}
       navigate={vi.fn()}
       {...overrides}
@@ -64,9 +67,20 @@ describe('Gb28181DevicesTable', () => {
     const onEdit = vi.fn()
     const { getByRole } = await renderTable({ onEdit })
 
-    await userEvent.click(getByRole('button', { name: '更新凭据' }).first())
+    await userEvent.click(getByRole('button', { name: '操作' }).first())
+    await userEvent.click(getByRole('menuitem', { name: '更新凭据' }))
 
     expect(onEdit).toHaveBeenCalledWith(onlineDevice)
+  })
+
+  it('hands the selected device to the delete flow', async () => {
+    const onDelete = vi.fn()
+    const { getByRole } = await renderTable({ onDelete })
+
+    await userEvent.click(getByRole('button', { name: '操作' }).first())
+    await userEvent.click(getByRole('menuitem', { name: '删除设备' }))
+
+    expect(onDelete).toHaveBeenCalledWith(onlineDevice)
   })
 
   it('guides the operator when the allowlist is empty', async () => {

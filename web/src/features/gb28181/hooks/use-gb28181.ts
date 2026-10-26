@@ -7,10 +7,12 @@ import {
 } from '@tanstack/react-query'
 import { gb28181Api } from '../api/gb28181-api'
 import {
+  type Gb28181Channel,
   type Gb28181Config,
   type Gb28181ConfigResponse,
   type Gb28181Device,
   type Gb28181Snapshot,
+  type SyncCatalogResponse,
   type UpsertGb28181DeviceRequest,
 } from '../data/schema'
 
@@ -19,6 +21,8 @@ export const GB28181_QUERY_KEYS = {
   config: () => [...GB28181_QUERY_KEYS.all, 'config'] as const,
   runtime: () => [...GB28181_QUERY_KEYS.all, 'runtime'] as const,
   devices: () => [...GB28181_QUERY_KEYS.all, 'devices'] as const,
+  channels: (deviceId: string) =>
+    [...GB28181_QUERY_KEYS.all, 'channels', deviceId] as const,
 }
 
 /** 已保存配置 + 本进程启动配置与运行状态。 */
@@ -99,6 +103,84 @@ export function useUpsertGb28181Device(): UseMutationResult<
       })
       void queryClient.invalidateQueries({
         queryKey: GB28181_QUERY_KEYS.runtime(),
+      })
+    },
+  })
+}
+
+/** 查询设备下的通道列表。 */
+export function useGb28181Channels(
+  deviceId: string | null
+): UseQueryResult<Gb28181Channel[], Error> {
+  return useQuery({
+    queryKey: GB28181_QUERY_KEYS.channels(deviceId ?? ''),
+    queryFn: () => gb28181Api.listChannels(deviceId!),
+    enabled: !!deviceId,
+    staleTime: 5_000,
+  })
+}
+
+/** 手动触发目录同步指令。 */
+export function useSyncGb28181Catalog(): UseMutationResult<
+  SyncCatalogResponse,
+  Error,
+  string
+> {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (deviceId: string) => gb28181Api.syncCatalog(deviceId),
+    onSuccess: (_data, deviceId) => {
+      void queryClient.invalidateQueries({
+        queryKey: GB28181_QUERY_KEYS.channels(deviceId),
+      })
+      void queryClient.invalidateQueries({
+        queryKey: GB28181_QUERY_KEYS.devices(),
+      })
+    },
+  })
+}
+
+/** 将指定通道显式添加为系统摄像机。 */
+export function useAddGb28181ChannelCamera(): UseMutationResult<
+  unknown,
+  Error,
+  { deviceId: string; channelId: string }
+> {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ deviceId, channelId }) =>
+      gb28181Api.addChannelAsCamera(deviceId, channelId),
+    onSuccess: (_data, { deviceId }) => {
+      void queryClient.invalidateQueries({
+        queryKey: GB28181_QUERY_KEYS.channels(deviceId),
+      })
+      void queryClient.invalidateQueries({
+        queryKey: ['cameras'],
+      })
+    },
+  })
+}
+
+/** 删除设备。 */
+export function useDeleteGb28181Device(): UseMutationResult<
+  void,
+  Error,
+  string
+> {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (deviceId: string) => gb28181Api.deleteDevice(deviceId),
+    meta: { suppressGlobalToast: true },
+    onSuccess: (_data, deviceId) => {
+      void queryClient.invalidateQueries({
+        queryKey: GB28181_QUERY_KEYS.devices(),
+      })
+      void queryClient.invalidateQueries({
+        queryKey: GB28181_QUERY_KEYS.runtime(),
+      })
+      queryClient.removeQueries({
+        queryKey: GB28181_QUERY_KEYS.channels(deviceId),
+        exact: true,
       })
     },
   })

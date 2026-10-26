@@ -24,8 +24,11 @@ type Components struct {
 
 // ComponentsOptions defines the host dependencies for the GB28181 domain.
 type ComponentsOptions struct {
-	DBProvider database.DBProvider
-	Cipher     Cipher
+	DBProvider    database.DBProvider
+	Cipher        Cipher
+	CameraCreator CameraCreator
+	CameraDeleter CameraDeleter
+	Catalog       CatalogSyncer
 	// Ingress overrides the SIP ingress. Production passes nil and gets the real
 	// ingress; tests inject a stub to exercise the lifecycle without sockets.
 	Ingress Ingress
@@ -51,12 +54,23 @@ func NewComponents(options ComponentsOptions) Components {
 			defaultIngressLimits(),
 		)
 	}
+	var syncer CatalogSyncer
+	if options.Catalog != nil {
+		syncer = options.Catalog
+	} else if cs, ok := ingress.(CatalogSyncer); ok {
+		syncer = cs
+	}
+
 	service := NewService(ServiceOptions{
-		Configs: store,
-		Devices: store,
-		Runtime: runtime,
-		Addrs:   options.Addrs,
-		Logger:  options.Logger,
+		Configs:       store,
+		Devices:       store,
+		Channels:      store,
+		Catalog:       syncer,
+		CameraCreator: options.CameraCreator,
+		CameraDeleter: options.CameraDeleter,
+		Runtime:       runtime,
+		Addrs:         options.Addrs,
+		Logger:        options.Logger,
 	})
 	handler := NewHandler(service, options.Logger)
 	lifecycle := NewLifecycleManager(LifecycleOptions{

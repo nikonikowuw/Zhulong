@@ -2,13 +2,16 @@ import { useState } from 'react'
 import { getRouteApi } from '@tanstack/react-router'
 import { AlertCircle, Plus, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import useDialogState from '@/hooks/use-dialog-state'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ContentSection } from '@/components/layout/content-section'
+import { Gb28181ChannelsDrawer } from './components/gb28181-channels-drawer'
 import { Gb28181ConfigForm } from './components/gb28181-config-form'
+import { Gb28181DeviceDeleteDialog } from './components/gb28181-device-delete-dialog'
 import { Gb28181DeviceDialog } from './components/gb28181-device-dialog'
 import { Gb28181DevicesTable } from './components/gb28181-devices-table'
 import { Gb28181RuntimePanel } from './components/gb28181-runtime-panel'
@@ -17,6 +20,7 @@ import {
   useGb28181Config,
   useGb28181Devices,
   useGb28181Runtime,
+  useDeleteGb28181Device,
   useUpdateGb28181Config,
   useUpsertGb28181Device,
 } from './hooks/use-gb28181'
@@ -27,9 +31,7 @@ const route = getRouteApi('/_authenticated/settings/gb28181')
 /**
  * GB28181 接入设置页。
  *
- * 页面职责是「让值守的人看清三件事」：本进程在跑什么、已保存的配置与之
- * 差在哪、哪些设备被允许注册。它不负责触目录查询或点播 —— 那一层在
- * 后端 S2/S4 落地后才会有对应端点。
+ * 页面展示运行状态、配置和允许注册的设备，并提供设备目录查看、目录同步与摄像机添加操作。
  */
 export function SettingsGb28181() {
   const { t } = useTranslation('gb28181')
@@ -41,11 +43,35 @@ export function SettingsGb28181() {
   const devicesQuery = useGb28181Devices()
   const updateConfig = useUpdateGb28181Config()
   const upsertDevice = useUpsertGb28181Device()
+  const deleteDevice = useDeleteGb28181Device()
 
   // 弹窗开关走仓库统一的 `use-dialog-state`（规范 §1.8），
   // 不用裸 `useState<boolean>`：两种情况写反一颗布尔值时行为必须一致。
   const [deviceDialogOpen, setDeviceDialogOpen] = useDialogState<boolean>(false)
   const [editingDevice, setEditingDevice] = useState<Gb28181Device | null>(null)
+  // 通道抽屉与凭据弹窗同构：开关走 `use-dialog-state`，当前行单独持有，
+  // 关闭时一并清空，避免下次打开先闪一帧上一台设备。
+  const [channelsDrawerOpen, setChannelsDrawerOpen] =
+    useDialogState<boolean>(false)
+  const [channelsDevice, setChannelsDevice] = useState<Gb28181Device | null>(
+    null
+  )
+  const [deleteDialogOpen, setDeleteDialogOpen] = useDialogState<boolean>(false)
+  const [deletingDevice, setDeletingDevice] = useState<Gb28181Device | null>(
+    null
+  )
+
+  const handleViewChannels = (device: Gb28181Device) => {
+    setChannelsDevice(device)
+    setChannelsDrawerOpen(true)
+  }
+
+  const handleChannelsDrawerOpenChange = (open: boolean | null) => {
+    setChannelsDrawerOpen(open)
+    if (!open) {
+      setChannelsDevice(null)
+    }
+  }
 
   const handleRefresh = () => {
     void configQuery.refetch()
@@ -61,6 +87,32 @@ export function SettingsGb28181() {
   const handleEditDevice = (device: Gb28181Device) => {
     setEditingDevice(device)
     setDeviceDialogOpen(true)
+  }
+
+  const handleDeleteDevice = (device: Gb28181Device) => {
+    setDeletingDevice(device)
+    setDeleteDialogOpen(true)
+  }
+
+  const handleDeleteDialogOpenChange = (open: boolean) => {
+    setDeleteDialogOpen(open)
+    if (!open) setDeletingDevice(null)
+  }
+
+  const handleConfirmDelete = async () => {
+    const device = deletingDevice
+    if (!device || deleteDevice.isPending) return
+
+    try {
+      await deleteDevice.mutateAsync(device.deviceId)
+      toast.success(t('devices.deleteSuccess', { deviceId: device.deviceId }))
+      handleDeleteDialogOpenChange(false)
+      if (channelsDevice?.deviceId === device.deviceId) {
+        handleChannelsDrawerOpenChange(false)
+      }
+    } catch (error: unknown) {
+      toast.error(describeGb28181Error(error, t))
+    }
   }
 
   const config = configQuery.data?.config
@@ -159,10 +211,18 @@ export function SettingsGb28181() {
             }
             onRetry={() => void devicesQuery.refetch()}
             onEdit={handleEditDevice}
+            onViewChannels={handleViewChannels}
+            onDelete={handleDeleteDevice}
             search={search}
             navigate={navigate}
           />
         </section>
+
+        <Gb28181ChannelsDrawer
+          device={channelsDevice}
+          open={channelsDrawerOpen ?? false}
+          onOpenChange={handleChannelsDrawerOpenChange}
+        />
 
         <Gb28181DeviceDialog
           open={deviceDialogOpen ?? false}
@@ -172,6 +232,13 @@ export function SettingsGb28181() {
           onSubmit={async (deviceId, payload) => {
             await upsertDevice.mutateAsync({ deviceId, payload })
           }}
+        />
+        <Gb28181DeviceDeleteDialog
+          open={deleteDialogOpen ?? false}
+          device={deletingDevice}
+          isPending={deleteDevice.isPending}
+          onOpenChange={handleDeleteDialogOpenChange}
+          onConfirm={handleConfirmDelete}
         />
       </div>
     </ContentSection>

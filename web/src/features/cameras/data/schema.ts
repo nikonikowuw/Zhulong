@@ -122,7 +122,7 @@ export type DeleteCameraResponse = z.infer<typeof deleteCameraResponseSchema>
  * 此前写成 `'cameras.validation.nameRequired'` 这类裸 key，用户看到的就是 key 本身。
  * 传 `t` 时取 `cameras` 命名空间下的 `validation.*`（不要再加 `cameras.` 前缀，否则双重前缀查不到）。
  */
-export function createCameraFormSchema(t?: TFunction) {
+export function createCameraFormSchema(t?: TFunction, streamEditable = true) {
   const msg = {
     nameRequired: t ? t('validation.nameRequired') : '请输入摄像机名称',
     nameMax: t ? t('validation.nameMax') : '名称长度不能超过 64 个字符',
@@ -141,30 +141,31 @@ export function createCameraFormSchema(t?: TFunction) {
     .object({
       name: z.string().min(1, msg.nameRequired).max(64, msg.nameMax),
       enabled: z.boolean(),
-      mainRtspUrl: z
-        .string()
-        .min(1, msg.mainRtspRequired)
-        .regex(/^rtsp:\/\//i, msg.rtspInvalid),
+      mainRtspUrl: streamEditable
+        ? z
+            .string()
+            .min(1, msg.mainRtspRequired)
+            .regex(/^rtsp:\/\//i, msg.rtspInvalid)
+        : z.string(),
       mainTransport: z.enum(['tcp', 'udp']),
       hasSubStream: z.boolean(),
       subRtspUrl: z.string().optional(),
       subTransport: z.enum(['tcp', 'udp']),
     })
     .superRefine((data, ctx) => {
-      if (data.hasSubStream) {
-        if (!data.subRtspUrl || data.subRtspUrl.trim().length === 0) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['subRtspUrl'],
-            message: msg.subRtspRequired,
-          })
-        } else if (!/^rtsp:\/\//i.test(data.subRtspUrl)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['subRtspUrl'],
-            message: msg.rtspInvalid,
-          })
-        }
+      if (!streamEditable || !data.hasSubStream) return
+      if (!data.subRtspUrl || data.subRtspUrl.trim().length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['subRtspUrl'],
+          message: msg.subRtspRequired,
+        })
+      } else if (!/^rtsp:\/\//i.test(data.subRtspUrl)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['subRtspUrl'],
+          message: msg.rtspInvalid,
+        })
       }
     })
 }

@@ -52,15 +52,53 @@ func NewCameraService(
 	}
 }
 
+// ensureCapacity rejects creation once the camera table is full. It is shared by
+// every create path so a new protocol cannot quietly skip the budget check.
+func (s *CameraService) ensureCapacity(ctx context.Context) error {
+	_, total, err := s.store.List(ctx, 1, 0)
+	if err != nil {
+		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to query camera capacity", err)
+	}
+	if total >= MaxCameraCapacity {
+		return apperr.New(apperr.KindInvalid, "CAMERA_LIMIT_EXCEEDED", "Maximum camera capacity reached", nil)
+	}
+	return nil
+}
+
+// persistCamera writes a new camera row, initialises its runtime state and
+// broadcasts the change.
+//
+// probedRoles lists the stream roles whose credentials were proven by an RTSP
+// DESCRIBE; an empty list leaves the state unknown, which is the honest answer for a
+// source that has not been probed yet (a GB28181 channel has no RTSP endpoint).
+func (s *CameraService) persistCamera(
+	ctx context.Context,
+	camera *Camera,
+	streams []CameraStream,
+	probedRoles []string,
+) (*CameraResponse, error) {
+	if err := s.store.Create(ctx, camera, streams); err != nil {
+		if errors.Is(err, ErrDuplicateCamera) {
+			return nil, apperr.New(apperr.KindConflict, "CAMERA_ALREADY_EXISTS", "Camera already exists", err)
+		}
+		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to create camera record", err)
+	}
+
+	state := s.registry.InitCameraState(camera)
+	if camera.Enabled {
+		for _, role := range probedRoles {
+			state = s.registry.RecordStreamSuccess(camera.ID, camera.Revision, role, EvidenceRTSPDescribe)
+		}
+	}
+	s.hub.BroadcastChange(state)
+	return s.buildCameraResponse(camera, state), nil
+}
+
 // Create validates stream connections through the 3-5s probe gate, encrypts credentials, and persists the camera.
 func (s *CameraService) Create(ctx context.Context, req CreateCameraRequest) (*CameraResponse, error) {
 	// 1. Capacity limit check
-	_, total, err := s.store.List(ctx, 1, 0)
-	if err != nil {
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to query camera capacity", err)
-	}
-	if total >= MaxCameraCapacity {
-		return nil, apperr.New(apperr.KindInvalid, "CAMERA_LIMIT_EXCEEDED", "Maximum camera capacity reached", nil)
+	if err := s.ensureCapacity(ctx); err != nil {
+		return nil, err
 	}
 
 	// 2. Validate protocols
@@ -118,26 +156,75 @@ func (s *CameraService) Create(ctx context.Context, req CreateCameraRequest) (*C
 		Revision: 1,
 	}
 
-	// 7. Persist to DB in short transaction
-	if err := s.store.Create(ctx, camera, streams); err != nil {
-		if errors.Is(err, ErrDuplicateCamera) {
-			return nil, apperr.New(apperr.KindConflict, "CAMERA_ALREADY_EXISTS", "Camera already exists", err)
-		}
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to create camera record", err)
+	// 7. Persist and publish state; the probe gate above is the evidence for both roles
+	probedRoles := []string{StreamRoleMain}
+	if subInfo != nil {
+		probedRoles = append(probedRoles, StreamRoleSub)
+	}
+	return s.persistCamera(ctx, camera, streams, probedRoles)
+}
+
+// CreateGB28181CameraParams defines parameters for creating a camera from a GB28181 channel.
+type CreateGB28181CameraParams struct {
+	DeviceID         string
+	ChannelID        string
+	Name             string
+	ResolutionWidth  int
+	ResolutionHeight int
+}
+
+// CreateGB28181Camera creates a camera bound to protocol gb28181 without executing
+// the RTSP atomic probe gate.
+func (s *CameraService) CreateGB28181Camera(ctx context.Context, params CreateGB28181CameraParams) (*CameraResponse, error) {
+	deviceID := strings.TrimSpace(params.DeviceID)
+	channelID := strings.TrimSpace(params.ChannelID)
+	if !IsGB28181ID(deviceID) || !IsGB28181ID(channelID) {
+		return nil, apperr.New(apperr.KindInvalid, "CAMERA_INVALID_PARAM", "device ID and channel ID must be 20 digits", nil)
 	}
 
-	// 8. Register in Runtime State Registry
-	state := s.registry.InitCameraState(camera)
-	if camera.Enabled {
-		// Probe passed, mark main stream as checked
-		state = s.registry.RecordStreamSuccess(camID, camera.Revision, StreamRoleMain, EvidenceRTSPDescribe)
-		if subInfo != nil {
-			state = s.registry.RecordStreamSuccess(camID, camera.Revision, StreamRoleSub, EvidenceRTSPDescribe)
-		}
+	// 1. Capacity limit check
+	if err := s.ensureCapacity(ctx); err != nil {
+		return nil, err
 	}
-	s.hub.BroadcastChange(state)
 
-	return s.buildCameraResponse(camera, state), nil
+	// 2. Generate Camera ID
+	camID := idutil.New()
+
+	// 3. Encrypt URI
+	uri := fmt.Sprintf("%s://%s/%s", ProtocolGB28181, deviceID, channelID)
+	mainAAD := MakeAAD(camID, StreamRoleMain)
+	mainCiphertext, err := s.cipher.Encrypt([]byte(uri), mainAAD)
+	if err != nil {
+		return nil, apperr.New(apperr.KindInternal, "ENCRYPTION_ERROR", "Failed to encrypt stream credentials", err)
+	}
+
+	stream := CameraStream{
+		CameraID:       camID,
+		Role:           StreamRoleMain,
+		Protocol:       ProtocolGB28181,
+		EncryptedURI:   mainCiphertext,
+		Transport:      TransportUDP,
+		Codec:          "",
+		Width:          params.ResolutionWidth,
+		Height:         params.ResolutionHeight,
+		FPSNumerator:   0,
+		FPSDenominator: 1,
+	}
+
+	name := strings.TrimSpace(params.Name)
+	if name == "" {
+		name = channelID
+	}
+
+	camera := &Camera{
+		ID:       camID,
+		Name:     name,
+		Enabled:  true,
+		Revision: 1,
+	}
+
+	// 4. Persist and publish state. No RTSP probe ran, so no role is marked checked.
+	return s.persistCamera(ctx, camera, []CameraStream{stream}, nil)
 }
 
 // Get returns public status and sanitized stream information for a camera.

@@ -3,6 +3,7 @@ package gb28181
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"go.uber.org/zap"
 )
 
@@ -575,6 +577,84 @@ func TestReadFilterDropsOversizedDatagramWithoutStoppingUDP(t *testing.T) {
 	}
 }
 
+func TestMessageCatalogResponseCannotCompleteAnotherDevicesSync(t *testing.T) {
+	ingress, store, _, _, cleanup := newTestIngress(t)
+	defer cleanup()
+
+	deviceA := testDeviceID
+	deviceB := "34020000001320000002"
+	provisionDevice(t, store, deviceA, testPassword)
+	provisionDevice(t, store, deviceB, testPassword)
+
+	const existingChannelID = "34020000001310000009"
+	if err := store.SyncChannels(context.Background(), deviceB, []Channel{{
+		DeviceID:  deviceB,
+		ChannelID: existingChannelID,
+		Name:      "Existing channel",
+	}}); err != nil {
+		t.Fatalf("seed device B catalog: %v", err)
+	}
+
+	sender := &mockSipSender{}
+	catalogs := NewCatalogManager(sender, store, zap.NewNop())
+	catalogs.timeout = 300 * time.Millisecond
+	ingress.catalogs = catalogs
+	querySN := make(chan int, 1)
+	sender.onSend = func(_ Device, body []byte) {
+		message, err := decodeXML(body)
+		if err != nil {
+			t.Errorf("decode outbound catalog query: %v", err)
+			return
+		}
+		querySN <- message.SN
+	}
+
+	syncDone := make(chan error, 1)
+	go func() {
+		_, err := catalogs.Sync(context.Background(), Device{DeviceID: deviceB})
+		syncDone <- err
+	}()
+
+	var sn int
+	select {
+	case sn = <-querySN:
+	case err := <-syncDone:
+		t.Fatalf("catalog sync exited before query was sent: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("catalog query was not sent")
+	}
+
+	const forgedChannelID = "34020000001310000010"
+	body := []byte(fmt.Sprintf(
+		"<Response><CmdType>Catalog</CmdType><SN>%d</SN><DeviceID>%s</DeviceID><SumNum>1</SumNum><DeviceList><Item><DeviceID>%s</DeviceID><Name>Forged</Name></Item></DeviceList></Response>",
+		sn, deviceB, forgedChannelID,
+	))
+	request := newMessageRequest(t, deviceA, body)
+	recorder := newRecordingTx()
+	ingress.handleMessage(request, recorder)
+	if response := singleResponse(t, recorder); response.StatusCode != sip.StatusOK {
+		t.Fatalf("malformedly attributed Catalog response should be acknowledged, got %d", response.StatusCode)
+	}
+
+	select {
+	case err := <-syncDone:
+		var appErr *apperr.Error
+		if !errors.As(err, &appErr) || appErr.Code != CodeCatalogTimeout {
+			t.Fatalf("device A must not complete device B's sync, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("device B catalog sync did not time out after the forged response")
+	}
+
+	channels, err := store.ListChannels(context.Background(), deviceB)
+	if err != nil {
+		t.Fatalf("read device B catalog: %v", err)
+	}
+	if len(channels) != 1 || channels[0].ChannelID != existingChannelID {
+		t.Fatalf("forged response changed device B catalog: %+v", channels)
+	}
+}
+
 // TestMessageFromUnexpectedSourceIsRejected stops a spoofed datagram from refreshing
 // another device's liveness (and therefore from hiding a dead link).
 func TestMessageFromUnexpectedSourceIsRejected(t *testing.T) {
@@ -972,6 +1052,87 @@ func TestPeerDeviceRegistersOverTCP(t *testing.T) {
 	}
 	if device.Transport != TransportTCP {
 		t.Fatalf("expected the transport to be persisted as tcp, got %q", device.Transport)
+	}
+
+	// Outbound signalling must ride the flow the device registered on. This is the S1
+	// gate that says "a TCP registration is usable for device-directed requests": the
+	// persisted remote_addr is an ephemeral port that is only reachable while this very
+	// connection is alive.
+	readRequest := func() *sip.Request {
+		t.Helper()
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		buffer := make([]byte, 0, 4096)
+		chunk := make([]byte, 4096)
+		for {
+			if len(buffer) > 0 {
+				if message, err := sip.NewParser().ParseSIP(buffer); err == nil {
+					request, ok := message.(*sip.Request)
+					if !ok {
+						t.Fatalf("expected a SIP request, got %T", message)
+					}
+					return request
+				}
+			}
+			n, readErr := conn.Read(chunk)
+			if readErr != nil {
+				t.Fatalf("read request over tcp: %v (buffered %q)", readErr, buffer)
+			}
+			buffer = append(buffer, chunk[:n]...)
+		}
+	}
+
+	sendErr := make(chan error, 1)
+	go func() {
+		sendErr <- ingress.SendMessage(context.Background(), *device, []byte(buildCatalogQuery(1, testDeviceID)))
+	}()
+
+	outbound := readRequest()
+	if outbound.Method != sip.MESSAGE {
+		t.Fatalf("expected an outbound MESSAGE on the registered flow, got %s", outbound.Method)
+	}
+	if !bytes.Contains(outbound.Body(), []byte("<CmdType>Catalog</CmdType>")) {
+		t.Fatalf("unexpected outbound catalog query body: %q", outbound.Body())
+	}
+	if _, err := conn.Write([]byte(sip.NewResponseFromRequest(outbound, sip.StatusOK, "OK", nil).String())); err != nil {
+		t.Fatalf("answer outbound message: %v", err)
+	}
+	if err := <-sendErr; err != nil {
+		t.Fatalf("SendMessage over the registered flow: %v", err)
+	}
+}
+
+func TestSendMessageRejectsClosedStreamFlow(t *testing.T) {
+	store, _, cleanup := setupStore(t)
+	defer cleanup()
+	provisionDevice(t, store, testDeviceID, testPassword)
+
+	cfg := enabledConfig()
+	cfg.SIPListen = freeTCPAddress(t)
+	cfg.SIPTransport = TransportTCP
+	ingress := newSIPIngress(store, NewRuntime(), zap.NewNop(), defaultIngressLimits())
+	if err := ingress.Start(context.Background(), cfg, "127.0.0.1"); err != nil {
+		t.Fatalf("start ingress: %v", err)
+	}
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := ingress.Stop(stopCtx); err != nil {
+			t.Fatalf("stop ingress: %v", err)
+		}
+	}()
+
+	// A persisted address whose flow is gone: dialing it would hit an ephemeral port the
+	// device closed, which shows up as an unexplained timeout instead of "register again".
+	stale := "127.0.0.1:9"
+	err := ingress.SendMessage(context.Background(), Device{
+		DeviceID:   testDeviceID,
+		Transport:  TransportTCP,
+		RemoteAddr: &stale,
+	}, []byte(buildCatalogQuery(1, testDeviceID)))
+
+	var appErr *apperr.Error
+	if !errors.As(err, &appErr) || appErr.Code != CodeDeviceFlowClosed {
+		t.Fatalf("expected %s, got %v", CodeDeviceFlowClosed, err)
 	}
 }
 

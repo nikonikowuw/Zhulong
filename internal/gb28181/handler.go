@@ -34,6 +34,10 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.GET("/runtime", h.GetRuntime)
 		group.GET("/devices", h.ListDevices)
 		group.PUT("/devices/:deviceId", h.UpsertDevice)
+		group.DELETE("/devices/:deviceId", h.DeleteDevice)
+		group.POST("/devices/:deviceId/catalog", h.SyncCatalog)
+		group.GET("/devices/:deviceId/channels", h.ListChannels)
+		group.POST("/devices/:deviceId/channels/:channelId/camera", h.AddChannelAsCamera)
 	}
 }
 
@@ -173,4 +177,120 @@ func (h *Handler) UpsertDevice(c *gin.Context) {
 		zap.Bool("password_rotated", req.Password != nil),
 	)
 	httputil.Success(c, toDeviceResponse(*device))
+}
+
+// DeleteDevice godoc
+// @Summary      Delete GB28181 device
+// @Description  Deletes a pre-provisioned GB28181 device. If any of its channels are bound to a camera, deletion is rejected until the camera is unbound or deleted.
+// @Tags         gb28181
+// @Produce      json
+// @Param        deviceId  path      string  true  "20-digit device ID"
+// @Success      200       {object}  httputil.Response
+// @Failure      404       {object}  httputil.Response  "GB28181_DEVICE_NOT_FOUND"
+// @Failure      409       {object}  httputil.Response  "GB28181_CAMERA_BOUND"
+// @Router       /gb28181/devices/{deviceId} [delete]
+func (h *Handler) DeleteDevice(c *gin.Context) {
+	deviceID := strings.TrimSpace(c.Param("deviceId"))
+	if deviceID == "" {
+		httputil.WriteError(c, apperr.Invalid(CodeDeviceIDInvalid, "deviceId must not be empty", nil))
+		return
+	}
+	audithttp.Tag(c, ActionDeviceDelete, deviceID, "Delete GB28181 device")
+
+	if err := h.service.DeleteDevice(c.Request.Context(), deviceID); err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	h.logger.Info("gb28181 device deleted", zap.String("device_id", deviceID))
+	httputil.Success(c, gin.H{"deleted": true})
+}
+
+// SyncCatalog godoc
+// @Summary      Synchronize GB28181 device catalog
+// @Description  Sends a SIP Catalog query to an online GB28181 device, reassembles the channel fragments, and reconciles the local catalog: channels the device no longer reports are removed unless a camera is still bound to them.
+// @Tags         gb28181
+// @Produce      json
+// @Param        deviceId  path      string  true  "20-digit device ID"
+// @Success      200       {object}  httputil.Response{data=SyncCatalogResponse}
+// @Failure      404       {object}  httputil.Response  "GB28181_DEVICE_NOT_FOUND"
+// @Failure      412       {object}  httputil.Response  "GB28181_DEVICE_FLOW_CLOSED"
+// @Failure      422       {object}  httputil.Response  "GB28181_DEVICE_OFFLINE, GB28181_CATALOG_TIMEOUT, GB28181_CATALOG_SYNC_FAILED"
+// @Router       /gb28181/devices/{deviceId}/catalog [post]
+func (h *Handler) SyncCatalog(c *gin.Context) {
+	deviceID := strings.TrimSpace(c.Param("deviceId"))
+	if deviceID == "" {
+		httputil.WriteError(c, apperr.Invalid(CodeDeviceIDInvalid, "deviceId must not be empty", nil))
+		return
+	}
+	audithttp.Tag(c, ActionCatalogSync, deviceID, "Synchronize GB28181 device catalog")
+
+	resp, err := h.service.SyncCatalog(c.Request.Context(), deviceID)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	h.logger.Info("gb28181 catalog synchronized",
+		zap.String("device_id", deviceID),
+		zap.Int("total", resp.Total),
+	)
+	httputil.Success(c, resp)
+}
+
+// ListChannels godoc
+// @Summary      List GB28181 device channels
+// @Description  Returns all imported video channels for a GB28181 device.
+// @Tags         gb28181
+// @Produce      json
+// @Param        deviceId  path      string  true  "20-digit device ID"
+// @Success      200       {object}  httputil.Response{data=ChannelListResponse}
+// @Failure      404       {object}  httputil.Response  "GB28181_DEVICE_NOT_FOUND"
+// @Router       /gb28181/devices/{deviceId}/channels [get]
+func (h *Handler) ListChannels(c *gin.Context) {
+	deviceID := strings.TrimSpace(c.Param("deviceId"))
+	if deviceID == "" {
+		httputil.WriteError(c, apperr.Invalid(CodeDeviceIDInvalid, "deviceId must not be empty", nil))
+		return
+	}
+
+	resp, err := h.service.ListChannels(c.Request.Context(), deviceID)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	httputil.Success(c, resp)
+}
+
+// AddChannelAsCamera godoc
+// @Summary      Add GB28181 channel as camera
+// @Description  Creates a camera entity from an imported GB28181 channel, bypassing RTSP probe gates and assigning protocol gb28181.
+// @Tags         gb28181
+// @Produce      json
+// @Param        deviceId   path      string  true  "20-digit device ID"
+// @Param        channelId  path      string  true  "20-digit channel ID"
+// @Success      200        {object}  httputil.Response
+// @Failure      404        {object}  httputil.Response  "GB28181_CHANNEL_NOT_FOUND"
+// @Failure      409        {object}  httputil.Response  "GB28181_CHANNEL_ALREADY_BOUND"
+// @Failure      422        {object}  httputil.Response  "GB28181_DEVICE_ID_INVALID, GB28181_CHANNEL_ID_INVALID, CAMERA_INVALID_PARAM, CAMERA_LIMIT_EXCEEDED"
+// @Router       /gb28181/devices/{deviceId}/channels/{channelId}/camera [post]
+func (h *Handler) AddChannelAsCamera(c *gin.Context) {
+	deviceID := strings.TrimSpace(c.Param("deviceId"))
+	channelID := strings.TrimSpace(c.Param("channelId"))
+	if deviceID == "" || channelID == "" {
+		httputil.WriteError(c, apperr.Invalid(CodeDeviceIDInvalid, "deviceId and channelId must not be empty", nil))
+		return
+	}
+	target := deviceID + "/" + channelID
+	audithttp.Tag(c, ActionChannelBindCamera, target, "Add GB28181 channel as camera")
+
+	resp, err := h.service.AddChannelAsCamera(c.Request.Context(), deviceID, channelID)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	h.logger.Info("gb28181 channel bound as camera",
+		zap.String("device_id", deviceID),
+		zap.String("channel_id", channelID),
+		zap.String("camera_id", resp.ID),
+	)
+	httputil.Success(c, resp)
 }

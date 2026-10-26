@@ -1,8 +1,15 @@
 import { type ColumnDef } from '@tanstack/react-table'
 import { type TFunction } from 'i18next'
-import { KeyRound } from 'lucide-react'
+import { KeyRound, Layers, MoreHorizontal, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { DataTableColumnHeader } from '@/components/data-table'
 import { type Gb28181Device } from '../data/schema'
 import {
@@ -17,6 +24,8 @@ interface DeviceColumnOptions {
   /** 时间戳按当前界面语言格式化，切换语言要重建列。 */
   language: string
   onEdit: (device: Gb28181Device) => void
+  onViewChannels: (device: Gb28181Device) => void
+  onDelete: (device: Gb28181Device) => void
 }
 
 /**
@@ -29,6 +38,8 @@ export function createGb28181DeviceColumns({
   t,
   language,
   onEdit,
+  onViewChannels,
+  onDelete,
 }: DeviceColumnOptions): ColumnDef<Gb28181Device>[] {
   return [
     {
@@ -149,16 +160,41 @@ export function createGb28181DeviceColumns({
         <span className='sr-only'>{t('devices.columns.actions')}</span>
       ),
       cell: ({ row }) => (
-        <Button
-          variant='ghost'
-          size='icon'
-          className='size-8'
-          onClick={() => onEdit(row.original)}
-          aria-label={t('devices.editDevice')}
-          title={t('devices.editDevice')}
-        >
-          <KeyRound className='size-4' />
-        </Button>
+        <div className='flex justify-end'>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant='ghost'
+                size='icon'
+                className='size-8'
+                aria-label={t('devices.columns.actions')}
+                title={t('devices.columns.actions')}
+              >
+                <MoreHorizontal className='size-4' />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align='end'>
+              <DropdownMenuItem onClick={() => onViewChannels(row.original)}>
+                <Layers />
+                {t('devices.channelsCount', {
+                  count: row.original.channelCount ?? 0,
+                })}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onEdit(row.original)}>
+                <KeyRound />
+                {t('devices.editDevice')}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant='destructive'
+                onClick={() => onDelete(row.original)}
+              >
+                <Trash2 />
+                {t('devices.deleteDevice')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       ),
       enableSorting: false,
       enableHiding: false,

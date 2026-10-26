@@ -108,6 +108,13 @@
     "expiresValue": "{{seconds}} s",
     "createSuccess": "Device {{deviceId}} provisioned",
     "saveSuccess": "Device {{deviceId}} updated",
+    "deleteDevice": "Delete device",
+    "deleteTitle": "Delete this device?",
+    "deleteDesc": "This removes the device and its unbound catalog channels. Channels linked to cameras must be unbound first.",
+    "deleteConfirm": "Delete device",
+    "deleteSuccess": "Device {{deviceId}} deleted",
+    "viewChannels": "View channels",
+    "channelsCount": "Channels ({{count}})",
     "columns": {
       "deviceId": "Device ID",
       "name": "Name",
@@ -171,5 +178,28 @@
   "errors": {
     "requestFailed": "The request failed, please retry",
     "unknown": "An unknown error occurred"
+  },
+  "channels": {
+    "title": "Channels",
+    "description": "Synchronized GB28181 channels for device {{deviceId}}.",
+    "sync": "Sync Catalog",
+    "syncing": "Syncing...",
+    "syncSuccess": "Catalog synchronized successfully; {{count}} channels found",
+    "syncFailed": "Failed to synchronize catalog",
+    "loadFailed": "Failed to load channels",
+    "addAsCamera": "Add as camera",
+    "adding": "Adding...",
+    "added": "Added",
+    "addSuccess": "Channel {{channelId}} added as camera",
+    "addFailed": "Failed to add as camera",
+    "empty": "No channels yet",
+    "emptyDesc": "Click \"Sync Catalog\" to issue a Catalog query to the online device.",
+    "offlineHint": "The device is offline, so a catalog query cannot be sent.",
+    "columns": {
+      "channelId": "Channel ID",
+      "name": "Channel Name",
+      "resolution": "Resolution",
+      "actions": "Actions"
+    }
   }
 }

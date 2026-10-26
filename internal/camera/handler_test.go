@@ -545,3 +545,80 @@ func TestCameraHandlerCreate_GeneratedULID(t *testing.T) {
 		t.Fatalf("expected camera IDs to be monotonic (%s < %s)", resp1.Data.ID, resp2.Data.ID)
 	}
 }
+
+func TestCreateGB28181Camera(t *testing.T) {
+	_, service, _, _, cleanup := setupTestCameraApp(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// 1. Invalid params (non-20-digit)
+	_, err := service.CreateGB28181Camera(ctx, CreateGB28181CameraParams{
+		DeviceID:  "123",
+		ChannelID: "34020000001310000001",
+	})
+	if err == nil {
+		t.Fatalf("expected error for invalid device ID")
+	}
+
+	// 2. Valid GB28181 camera creation
+	cam, err := service.CreateGB28181Camera(ctx, CreateGB28181CameraParams{
+		DeviceID:         "34020000001180000001",
+		ChannelID:        "34020000001310000001",
+		Name:             "GB Channel 1",
+		ResolutionWidth:  1920,
+		ResolutionHeight: 1080,
+	})
+	if err != nil {
+		t.Fatalf("failed to create gb28181 camera: %v", err)
+	}
+
+	if cam.Name != "GB Channel 1" {
+		t.Errorf("expected name 'GB Channel 1', got %q", cam.Name)
+	}
+	if len(cam.Streams) != 1 {
+		t.Fatalf("expected 1 stream, got %d", len(cam.Streams))
+	}
+	mainStream := cam.Streams[0]
+	if mainStream.Protocol != ProtocolGB28181 {
+		t.Errorf("expected protocol gb28181, got %q", mainStream.Protocol)
+	}
+	expectedURI := "gb28181://34020000001180000001/34020000001310000001"
+	if mainStream.RTSPURL != expectedURI {
+		t.Errorf("expected URI %q, got %q", expectedURI, mainStream.RTSPURL)
+	}
+	if mainStream.Width != 1920 || mainStream.Height != 1080 {
+		t.Errorf("expected 1920x1080, got %dx%d", mainStream.Width, mainStream.Height)
+	}
+
+	// No RTSP probe ran for this protocol, so the state must stay "unknown": claiming
+	// online evidence here would be a lie the GB input (S4) cannot back yet.
+	state, ok := service.registry.GetState(cam.ID)
+	if !ok {
+		t.Fatalf("expected the created camera to be registered")
+	}
+	if state.Streams[StreamRoleMain].EvidenceType != EvidenceNone {
+		t.Errorf("expected no probe evidence, got %q", state.Streams[StreamRoleMain].EvidenceType)
+	}
+
+	// An unnamed channel falls back to its channel ID instead of an empty camera name.
+	unnamed, err := service.CreateGB28181Camera(ctx, CreateGB28181CameraParams{
+		DeviceID:  "34020000001180000001",
+		ChannelID: "34020000001310000009",
+	})
+	if err != nil {
+		t.Fatalf("create unnamed gb28181 camera: %v", err)
+	}
+	if unnamed.Name != "34020000001310000009" {
+		t.Errorf("expected the channel ID as the fallback name, got %q", unnamed.Name)
+	}
+
+	// 3. Verify camera is retrievable
+	fetched, err := service.Get(ctx, cam.ID)
+	if err != nil {
+		t.Fatalf("failed to get camera: %v", err)
+	}
+	if fetched.Streams[0].Protocol != ProtocolGB28181 {
+		t.Errorf("expected fetched protocol gb28181, got %q", fetched.Streams[0].Protocol)
+	}
+}

@@ -67,5 +67,45 @@ func init() {
 			"zh-Hans": "GB28181 运行时尚未就绪",
 			"zh-Hant": "GB28181 執行階段尚未就緒",
 		},
+		CodeDeviceOffline: {
+			"en":      "GB28181 device is offline",
+			"zh-Hans": "GB28181 设备当前离线",
+			"zh-Hant": "GB28181 裝置目前離線",
+		},
+		CodeDeviceFlowClosed: {
+			"en":      "The device signalling connection has been closed; wait for it to register again",
+			"zh-Hans": "设备信令连接已断开，请等待其重新注册",
+			"zh-Hant": "裝置信令連線已中斷，請等待其重新註冊",
+		},
+		CodeCatalogSyncFailed: {
+			"en":      "Failed to synchronize device catalog",
+			"zh-Hans": "同步设备目录失败",
+			"zh-Hant": "同步裝置目錄失敗",
+		},
+		CodeCatalogTimeout: {
+			"en":      "Catalog synchronization timed out",
+			"zh-Hans": "目录同步超时",
+			"zh-Hant": "目錄同步逾時",
+		},
+		CodeChannelNotFound: {
+			"en":      "GB28181 channel not found",
+			"zh-Hans": "指定的 GB28181 通道不存在",
+			"zh-Hant": "指定的 GB28181 通道不存在",
+		},
+		CodeChannelIDInvalid: {
+			"en":      "GB28181 channel ID must be 20 digits",
+			"zh-Hans": "GB28181 通道编号必须是 20 位数字",
+			"zh-Hant": "GB28181 通道編號必須是 20 位數字",
+		},
+		CodeChannelAlreadyBound: {
+			"en":      "Channel has already been added as a camera",
+			"zh-Hans": "该通道已添加为摄像机",
+			"zh-Hant": "該通道已新增為攝影機",
+		},
+		CodeCameraBound: {
+			"en":      "Device or channel has bound cameras; unbind or delete cameras first",
+			"zh-Hans": "设备或通道仍有关联摄像机，请先解绑或删除摄像机",
+			"zh-Hant": "裝置或通道仍有關聯攝影機，請先解除綁定或刪除攝影機",
+		},
 	})
 }

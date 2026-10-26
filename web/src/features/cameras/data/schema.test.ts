@@ -70,6 +70,21 @@ describe('camera schema validation', () => {
       }
     })
 
+    it('accepts metadata-only edits without requiring RTSP fields', () => {
+      const metadataSchema = createCameraFormSchema(undefined, false)
+      const result = metadataSchema.safeParse({
+        name: 'GB camera',
+        enabled: true,
+        mainRtspUrl: '',
+        mainTransport: 'tcp',
+        hasSubStream: false,
+        subRtspUrl: '',
+        subTransport: 'tcp',
+      })
+
+      expect(result.success).toBe(true)
+    })
+
     it('rejects camera form if sub stream is enabled but subRtspUrl is empty', () => {
       const input = {
         name: 'Gate Camera',

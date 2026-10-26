@@ -223,14 +223,17 @@ func provideGB28181(
 	dbProvider database.DBProvider,
 	cameraCipher *camera.LazyCipher,
 	cameraManager *camera.LifecycleManager,
+	cameraService *camera.CameraService,
 	logger *zap.Logger,
 ) gb28181Out {
 	// The domain builds its own SIP ingress (S1); passing no override keeps the
 	// production wiring out of this provider.
 	comp := gb28181.NewComponents(gb28181.ComponentsOptions{
-		DBProvider: dbProvider,
-		Cipher:     cameraCipher,
-		Logger:     logger,
+		DBProvider:    dbProvider,
+		Cipher:        cameraCipher,
+		CameraCreator: cameraService,
+		CameraDeleter: cameraService,
+		Logger:        logger,
 	})
 	// The probe is registered on the camera lifecycle manager directly: that is the
 	// only consumer, so it must not be published as a second fx value that nothing

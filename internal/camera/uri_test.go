@@ -210,3 +210,27 @@ func TestBuildRTSPURL(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, built)
 	}
 }
+
+func TestIsGB28181ID(t *testing.T) {
+	tests := []struct {
+		name string
+		id   string
+		want bool
+	}{
+		{name: "20 digits", id: "34020000001310000001", want: true},
+		{name: "all zeros", id: "00000000000000000000", want: true},
+		{name: "19 digits", id: "3402000000131000000", want: false},
+		{name: "21 digits", id: "340200000013100000011", want: false},
+		{name: "letter inside", id: "3402000000131000000X", want: false},
+		{name: "empty", id: "", want: false},
+		{name: "hostname shaped", id: "camera.example.local", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsGB28181ID(tt.id); got != tt.want {
+				t.Errorf("IsGB28181ID(%q) = %v, want %v", tt.id, got, tt.want)
+			}
+		})
+	}
+}

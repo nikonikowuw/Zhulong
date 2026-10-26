@@ -3,7 +3,9 @@ package gb28181
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
@@ -124,5 +126,89 @@ func TestDeclaredCharsetParsing(t *testing.T) {
 		if got := declaredCharset(test.instruction); got != test.want {
 			t.Errorf("declaredCharset(%q) = %q, want %q", test.instruction, got, test.want)
 		}
+	}
+}
+
+func TestCatalogXML(t *testing.T) {
+	// 1. Build Query XML
+	queryXML := buildCatalogQuery(12345, "34020000001180000001")
+	if !strings.Contains(string(queryXML), "<CmdType>Catalog</CmdType>") {
+		t.Errorf("missing CmdType in query: %s", string(queryXML))
+	}
+	if !strings.Contains(string(queryXML), "<SN>12345</SN>") {
+		t.Errorf("missing SN in query: %s", string(queryXML))
+	}
+	if !strings.Contains(string(queryXML), "<DeviceID>34020000001180000001</DeviceID>") {
+		t.Errorf("missing DeviceID in query: %s", string(queryXML))
+	}
+
+	// 2. Parse Catalog Response with multiple items, PTZType, PtzType, Resolution
+	xmlBody := []byte(`<?xml version="1.0" encoding="GB2312"?>
+<Response>
+  <CmdType>Catalog</CmdType>
+  <SN>12345</SN>
+  <DeviceID>34020000001180000001</DeviceID>
+  <SumNum>2</SumNum>
+  <DeviceList Num="2">
+    <Item>
+      <DeviceID>34020000001310000001</DeviceID>
+      <Name>Front Gate Camera</Name>
+      <Manufacturer>Hikvision</Manufacturer>
+      <Model>DS-2CD2T47</Model>
+      <Owner>Zhulong</Owner>
+      <CivilCode>34020000</CivilCode>
+      <Address>East Gate</Address>
+      <Parental>0</Parental>
+      <ParentID>34020000001180000001</ParentID>
+      <SafetyWay>0</SafetyWay>
+      <RegisterWay>1</RegisterWay>
+      <PTZType>1</PTZType>
+      <Resolution>1920*1080</Resolution>
+      <Status>ON</Status>
+    </Item>
+    <Item>
+      <DeviceID>34020000001310000002</DeviceID>
+      <Name>Back Yard Camera</Name>
+      <Manufacturer>Dahua</Manufacturer>
+      <Model>DH-IPC-HFW</Model>
+      <PtzType>2</PtzType>
+      <Resolution>2560x1440</Resolution>
+      <Status>ON</Status>
+    </Item>
+  </DeviceList>
+</Response>`)
+
+	resp, err := decodeCatalogResponse(xmlBody)
+	if err != nil {
+		t.Fatalf("decodeCatalogResponse failed: %v", err)
+	}
+	if resp.CmdType != "Catalog" || resp.SN != 12345 || resp.DeviceID != "34020000001180000001" {
+		t.Fatalf("unexpected envelope fields: %+v", resp)
+	}
+	if resp.SumNum != 2 || len(resp.DeviceList) != 2 {
+		t.Fatalf("expected SumNum=2 and 2 items, got sum=%d, len=%d", resp.SumNum, len(resp.DeviceList))
+	}
+
+	now := time.Now()
+	ch1 := resp.DeviceList[0].toChannel("34020000001180000001", now)
+	if ch1.ChannelID != "34020000001310000001" || ch1.Name != "Front Gate Camera" {
+		t.Errorf("unexpected ch1: %+v", ch1)
+	}
+	if ch1.PTZType == nil || *ch1.PTZType != 1 {
+		t.Errorf("expected PTZType=1, got %v", ch1.PTZType)
+	}
+	if ch1.ResolutionWidth == nil || *ch1.ResolutionWidth != 1920 || ch1.ResolutionHeight == nil || *ch1.ResolutionHeight != 1080 {
+		t.Errorf("expected 1920x1080, got %v x %v", ch1.ResolutionWidth, ch1.ResolutionHeight)
+	}
+
+	ch2 := resp.DeviceList[1].toChannel("34020000001180000001", now)
+	if ch2.ChannelID != "34020000001310000002" || ch2.Name != "Back Yard Camera" {
+		t.Errorf("unexpected ch2: %+v", ch2)
+	}
+	if ch2.PTZType == nil || *ch2.PTZType != 2 {
+		t.Errorf("expected PtzType=2, got %v", ch2.PTZType)
+	}
+	if ch2.ResolutionWidth == nil || *ch2.ResolutionWidth != 2560 || ch2.ResolutionHeight == nil || *ch2.ResolutionHeight != 1440 {
+		t.Errorf("expected 2560x1440, got %v x %v", ch2.ResolutionWidth, ch2.ResolutionHeight)
 	}
 }

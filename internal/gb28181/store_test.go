@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // fakeCipher keeps the store tests independent of the camera package: the store
@@ -413,5 +417,307 @@ func TestStoreOperationsFailBeforeDatabaseReady(t *testing.T) {
 	}
 	if _, err := store.ListDevices(context.Background()); err == nil {
 		t.Fatal("expected an error when the database provider is nil")
+	}
+}
+
+func TestChannelStoreOperations(t *testing.T) {
+	store, _, cleanup := setupStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	devID1 := "34020000001180000001"
+	devID2 := "34020000001180000002"
+	pwd := "testpass"
+
+	// Provision 2 devices
+	if _, err := store.UpsertDevice(ctx, DeviceUpsert{DeviceID: devID1, Password: &pwd}); err != nil {
+		t.Fatalf("upsert dev1: %v", err)
+	}
+	if _, err := store.UpsertDevice(ctx, DeviceUpsert{DeviceID: devID2, Password: &pwd}); err != nil {
+		t.Fatalf("upsert dev2: %v", err)
+	}
+
+	// 1. List channels for unknown device returns 404
+	if _, err := store.ListChannels(ctx, "34020000001180009999"); err == nil {
+		t.Fatalf("expected 404 for unknown device")
+	}
+
+	// 2. Insert channels for dev1
+	w, h := 1920, 1080
+	channels := []Channel{
+		{
+			DeviceID:         devID1,
+			ChannelID:        "34020000001310000002",
+			Name:             "Channel 2",
+			ResolutionWidth:  &w,
+			ResolutionHeight: &h,
+		},
+		{
+			DeviceID:         devID1,
+			ChannelID:        "34020000001310000001",
+			Name:             "Channel 1",
+			ResolutionWidth:  &w,
+			ResolutionHeight: &h,
+		},
+	}
+	if err := store.SyncChannels(ctx, devID1, channels); err != nil {
+		t.Fatalf("sync channels: %v", err)
+	}
+
+	// Verify order is channel_id ASC
+	listed, err := store.ListChannels(ctx, devID1)
+	if err != nil {
+		t.Fatalf("list channels: %v", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("expected 2 channels, got %d", len(listed))
+	}
+	if listed[0].ChannelID != "34020000001310000001" || listed[1].ChannelID != "34020000001310000002" {
+		t.Errorf("expected channel order ASC: %+v", listed)
+	}
+
+	// 3. Verify ChannelCount on Device
+	dev1, err := store.GetDevice(ctx, devID1)
+	if err != nil {
+		t.Fatalf("get device: %v", err)
+	}
+	if dev1.ChannelCount != 2 {
+		t.Errorf("expected ChannelCount 2, got %d", dev1.ChannelCount)
+	}
+
+	allDevs, err := store.ListDevices(ctx)
+	if err != nil {
+		t.Fatalf("list devices: %v", err)
+	}
+	for _, d := range allDevs {
+		if d.DeviceID == devID1 && d.ChannelCount != 2 {
+			t.Errorf("expected dev1 ChannelCount 2, got %d", d.ChannelCount)
+		}
+		if d.DeviceID == devID2 && d.ChannelCount != 0 {
+			t.Errorf("expected dev2 ChannelCount 0, got %d", d.ChannelCount)
+		}
+	}
+
+	// 4. Bind Channel to Camera (insert into cameras table first to satisfy foreign key)
+	camID := "cam_01JTEST0000000000000000"
+	db := store.dbProvider.DB()
+	if err := db.Exec("INSERT INTO cameras (id, name, revision, created_at, updated_at) VALUES (?, 'Test Cam', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", camID).Error; err != nil {
+		t.Fatalf("insert test camera: %v", err)
+	}
+
+	if err := store.BindChannelCamera(ctx, devID1, "34020000001310000001", camID); err != nil {
+		t.Fatalf("bind channel camera: %v", err)
+	}
+
+	ch, err := store.GetChannel(ctx, devID1, "34020000001310000001")
+	if err != nil {
+		t.Fatalf("get channel: %v", err)
+	}
+	if ch.CameraID == nil || *ch.CameraID != camID {
+		t.Fatalf("expected cameraId %q, got %v", camID, ch.CameraID)
+	}
+
+	// 5. Sync again with a renamed channel and one channel dropped by the device:
+	// the surviving row keeps its binding and its update, the dropped unbound row goes.
+	channels[1].Name = "Channel 1 Renamed"
+	if err := store.SyncChannels(ctx, devID1, channels[1:]); err != nil {
+		t.Fatalf("re-sync channels: %v", err)
+	}
+	ch, err = store.GetChannel(ctx, devID1, "34020000001310000001")
+	if err != nil {
+		t.Fatalf("get channel after re-sync: %v", err)
+	}
+	if ch.Name != "Channel 1 Renamed" {
+		t.Errorf("expected updated name, got %q", ch.Name)
+	}
+	if ch.CameraID == nil || *ch.CameraID != camID {
+		t.Fatalf("expected cameraId %q preserved across sync, got %v", camID, ch.CameraID)
+	}
+	if _, err := store.GetChannel(ctx, devID1, "34020000001310000002"); err == nil {
+		t.Fatalf("expected the channel dropped by the device to be pruned")
+	}
+
+	// A pruned report must never remove a bound channel even when the device stops
+	// listing it: the operator still has that camera.
+	if err := store.SyncChannels(ctx, devID1, nil); err != nil {
+		t.Fatalf("sync empty catalog: %v", err)
+	}
+	if _, err := store.GetChannel(ctx, devID1, "34020000001310000001"); err != nil {
+		t.Fatalf("bound channel must survive an empty catalog: %v", err)
+	}
+
+	// 6. DeleteDevice is refused while a camera is bound
+	err = store.DeleteDevice(ctx, devID1)
+	var appErr *apperr.Error
+	if !errors.As(err, &appErr) || appErr.Code != CodeCameraBound {
+		t.Fatalf("expected %s when deleting device with bound camera, got %v", CodeCameraBound, err)
+	}
+
+	// Deleting the camera clears the binding through ON DELETE SET NULL, after which
+	// the device delete is allowed and takes the catalog with it (ON DELETE CASCADE).
+	if err := db.Exec("DELETE FROM cameras WHERE id = ?", camID).Error; err != nil {
+		t.Fatalf("delete camera: %v", err)
+	}
+	ch, err = store.GetChannel(ctx, devID1, "34020000001310000001")
+	if err != nil {
+		t.Fatalf("get channel after camera delete: %v", err)
+	}
+	if ch.CameraID != nil {
+		t.Fatalf("expected ON DELETE SET NULL to clear camera_id, got %v", *ch.CameraID)
+	}
+	if err := store.DeleteDevice(ctx, devID1); err != nil {
+		t.Fatalf("delete device after unbind: %v", err)
+	}
+	var orphan int64
+	if err := db.Model(&Channel{}).Where("device_id = ?", devID1).Count(&orphan).Error; err != nil {
+		t.Fatalf("count orphan channels: %v", err)
+	}
+	if orphan != 0 {
+		t.Fatalf("expected device channels to cascade, found %d orphans", orphan)
+	}
+
+	// 7. 1600 channels (100 devices x 16) through the batch path. The budget is recorded,
+	// not asserted: a wall-clock threshold in a unit test turns a slow CI disk into a red
+	// run without saying anything about the code.
+	for d := 0; d < 100; d++ {
+		curDev := fmt.Sprintf("3402000000118%07d", d)
+		if err := db.Exec("INSERT OR IGNORE INTO gb_devices (device_id, name, transport, expires_seconds, state, created_at, updated_at) VALUES (?, 'Dev', 'udp', 3600, 'online', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", curDev).Error; err != nil {
+			t.Fatalf("insert test dev %s: %v", curDev, err)
+		}
+	}
+
+	bulkChannels := make([]Channel, 0, 1600)
+	for d := 0; d < 100; d++ {
+		curDev := fmt.Sprintf("3402000000118%07d", d)
+		for c := 0; c < 16; c++ {
+			bulkChannels = append(bulkChannels, Channel{
+				DeviceID:         curDev,
+				ChannelID:        fmt.Sprintf("3402000000131%04d%03d", d, c),
+				Name:             fmt.Sprintf("Channel %d-%d", d, c),
+				ResolutionWidth:  &w,
+				ResolutionHeight: &h,
+			})
+		}
+	}
+
+	start := time.Now()
+	for d := 0; d < 100; d++ {
+		curDev := fmt.Sprintf("3402000000118%07d", d)
+		devChannels := bulkChannels[d*16 : (d+1)*16]
+		if err := store.SyncChannels(ctx, curDev, devChannels); err != nil {
+			t.Fatalf("sync bulk channels for dev %s: %v", curDev, err)
+		}
+	}
+	t.Logf("synced 1600 channels in %v", time.Since(start))
+
+	var total int64
+	if err := db.Model(&Channel{}).Count(&total).Error; err != nil {
+		t.Fatalf("count channels: %v", err)
+	}
+	if total != 1600 {
+		t.Fatalf("expected 1600 channels, got %d", total)
+	}
+}
+
+func TestStoreDeleteDeviceSerializesWithChannelBinding(t *testing.T) {
+	store, _, cleanup := setupStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const (
+		deviceID  = "34020000001320000003"
+		channelID = "34020000001310000003"
+		cameraID  = "cam_01JTEST0000000000000001"
+	)
+	password := "secret"
+	if _, err := store.UpsertDevice(ctx, DeviceUpsert{DeviceID: deviceID, Password: &password}); err != nil {
+		t.Fatalf("provision device: %v", err)
+	}
+	if err := store.SyncChannels(ctx, deviceID, []Channel{{DeviceID: deviceID, ChannelID: channelID}}); err != nil {
+		t.Fatalf("seed channel: %v", err)
+	}
+	if err := store.dbProvider.DB().Exec(
+		"INSERT INTO cameras (id, name, revision, created_at, updated_at) VALUES (?, 'Test Cam', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+		cameraID,
+	).Error; err != nil {
+		t.Fatalf("insert camera: %v", err)
+	}
+
+	db := store.dbProvider.DB()
+	countReached := make(chan struct{})
+	resumeCount := make(chan struct{})
+	var countOnce sync.Once
+	if err := db.Callback().Query().Before("gorm:query").Register("test:block_delete_device_count", func(tx *gorm.DB) {
+		if tx.Statement.Table == "gb_channels" {
+			countOnce.Do(func() {
+				close(countReached)
+				<-resumeCount
+			})
+		}
+	}); err != nil {
+		t.Fatalf("register query callback: %v", err)
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- store.DeleteDevice(ctx, deviceID) }()
+
+	var deleteFinished bool
+	var bindDone chan error
+	var bindFinished bool
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(resumeCount) }) }
+	defer func() {
+		release()
+		if !deleteFinished {
+			<-deleteDone
+		}
+		if bindDone != nil && !bindFinished {
+			<-bindDone
+		}
+	}()
+
+	select {
+	case <-countReached:
+	case <-time.After(time.Second):
+		t.Fatal("device deletion did not reach its bound-channel check")
+	}
+
+	bindDone = make(chan error, 1)
+	bindStarted := make(chan struct{})
+	go func() {
+		close(bindStarted)
+		bindDone <- store.BindChannelCamera(ctx, deviceID, channelID, cameraID)
+	}()
+	<-bindStarted
+	select {
+	case err := <-bindDone:
+		bindFinished = true
+		t.Fatalf("channel binding passed an active device deletion check: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	release()
+	if err := <-deleteDone; err != nil {
+		deleteFinished = true
+		t.Fatalf("delete device: %v", err)
+	}
+	deleteFinished = true
+	if err := <-bindDone; err == nil {
+		bindFinished = true
+		t.Fatal("binding should fail after the device and its catalog are deleted")
+	} else {
+		bindFinished = true
+		var appErr *apperr.Error
+		if !errors.As(err, &appErr) || appErr.Code != CodeChannelNotFound {
+			t.Fatalf("expected channel-not-found after serialized delete, got %v", err)
+		}
+	}
+
+	var channelCount int64
+	if err := db.Model(&Channel{}).Where("device_id = ?", deviceID).Count(&channelCount).Error; err != nil {
+		t.Fatalf("count remaining channels: %v", err)
+	}
+	if channelCount != 0 {
+		t.Fatalf("device deletion left %d catalog rows", channelCount)
 	}
 }

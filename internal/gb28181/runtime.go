@@ -34,9 +34,9 @@ type RuntimeStatus struct {
 	Counters        Counters
 }
 
-// Counters is the observable surface for the runtime snapshot. P0 fills the device
-// and port-pool parts; session/media counters stay zero until S3/S4 wire the media
-// path, which keeps the API shape stable across the phase boundary.
+// Counters is the observable surface for the runtime snapshot. P0 fills the device,
+// catalog and port-pool parts; session/media counters stay zero until S3/S4 wire the
+// media path, which keeps the API shape stable across the phase boundary.
 type Counters struct {
 	DevicesTotal   int64
 	DevicesOnline  int64
@@ -44,6 +44,18 @@ type Counters struct {
 	PortPairsTotal int
 	PortPairsUsed  int64
 	PortExhausted  uint64
+	Catalog        CatalogCounts
+}
+
+// CatalogCounts is the catalog-sync side of the snapshot. Without it an operator
+// cannot tell "the device never answered" from "we never asked", which are two very
+// different field problems.
+type CatalogCounts struct {
+	Attempts     int64      `json:"attempts"`
+	Failures     int64      `json:"failures"`
+	Timeouts     int64      `json:"timeouts"`
+	LastChannels int64      `json:"lastChannels"`
+	LastSyncAt   *time.Time `json:"lastSyncAt"`
 }
 
 // Snapshot is the JSON-facing shape served by GET /gb28181/runtime.
@@ -51,6 +63,7 @@ type Snapshot struct {
 	State           string         `json:"state"`
 	RestartRequired bool           `json:"restartRequired"`
 	Devices         DeviceCounters `json:"devices"`
+	Catalog         CatalogCounts  `json:"catalog"`
 	Sessions        SessionCounts  `json:"sessions"`
 	PortPool        PortPoolCounts `json:"portPool"`
 	GeneratedAt     time.Time      `json:"generatedAt"`
@@ -89,6 +102,7 @@ type Runtime struct {
 	activePairs int64
 	exhausted   uint64
 	devices     DeviceCounters
+	catalog     CatalogCounts
 }
 
 // NewRuntime creates the runtime in the disabled state with default values, so a
@@ -146,6 +160,34 @@ func (r *Runtime) SetDeviceCounters(total, online int64) {
 	r.devices = DeviceCounters{Total: total, Online: online}
 }
 
+// RecordCatalogAttempt counts one operator-triggered catalog query.
+func (r *Runtime) RecordCatalogAttempt() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.catalog.Attempts++
+}
+
+// RecordCatalogSuccess records a completed sync and how many channels it imported.
+func (r *Runtime) RecordCatalogSuccess(channels int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now().UTC()
+	r.catalog.LastChannels = int64(channels)
+	r.catalog.LastSyncAt = &now
+}
+
+// RecordCatalogFailure records a sync that produced no catalog. timeout separates
+// "the device stayed silent" from "the exchange itself failed", which is the first
+// thing to check on site.
+func (r *Runtime) RecordCatalogFailure(timeout bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.catalog.Failures++
+	if timeout {
+		r.catalog.Timeouts++
+	}
+}
+
 // Status returns a consistent copy for the config endpoint.
 func (r *Runtime) Status() RuntimeStatus {
 	r.mu.RLock()
@@ -178,6 +220,7 @@ func (r *Runtime) statusLocked(desired Config) RuntimeStatus {
 			PortPairsTotal: r.startup.MediaCapacity(),
 			PortPairsUsed:  r.activePairs,
 			PortExhausted:  r.exhausted,
+			Catalog:        r.catalog,
 		},
 	}
 }
@@ -193,6 +236,7 @@ func (r *Runtime) Snapshot() Snapshot {
 			Total:  status.Counters.DevicesTotal,
 			Online: status.Counters.DevicesOnline,
 		},
+		Catalog:  status.Counters.Catalog,
 		Sessions: SessionCounts{Active: status.Counters.SessionsActive},
 		PortPool: PortPoolCounts{
 			PairsTotal:    status.Counters.PortPairsTotal,

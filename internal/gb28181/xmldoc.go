@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -55,35 +57,100 @@ type gbXMLMessage struct {
 	Status   string `xml:"Status"`
 }
 
-// decodeXML normalizes and validates a GB28181 XML body.
-//
-// Charset handling follows the bytes, not the declaration: GB2312/GB18030 payloads
-// from real devices are frequently undeclared or mis-declared, so a body that is not
-// valid UTF-8 is transcoded from GB18030 first, and the declaration is then only
-// checked for plausibility. Decoding never uses the declared charset because Go's
-// decoder would otherwise reject perfectly good documents.
-func decodeXML(raw []byte) (gbXMLMessage, error) {
-	var msg gbXMLMessage
+// gbCatalogItem represents an individual <Item> inside <DeviceList>.
+type gbCatalogItem struct {
+	DeviceID     string  `xml:"DeviceID"`
+	Name         string  `xml:"Name"`
+	Manufacturer *string `xml:"Manufacturer"`
+	Model        *string `xml:"Model"`
+	Owner        *string `xml:"Owner"`
+	CivilCode    *string `xml:"CivilCode"`
+	Address      *string `xml:"Address"`
+	Parental     int     `xml:"Parental"`
+	ParentID     *string `xml:"ParentID"`
+	SafetyWay    *int    `xml:"SafetyWay"`
+	RegisterWay  *int    `xml:"RegisterWay"`
+	PTZType1     *int    `xml:"PTZType"`
+	PTZType2     *int    `xml:"PtzType"`
+	Resolution   string  `xml:"Resolution"`
+	Status       string  `xml:"Status"`
+}
+
+func (item gbCatalogItem) toChannel(deviceID string, now time.Time) Channel {
+	ptz := item.PTZType1
+	if ptz == nil {
+		ptz = item.PTZType2
+	}
+	width, height := parseResolution(item.Resolution)
+	var parentID *string
+	if item.ParentID != nil && strings.TrimSpace(*item.ParentID) != "" {
+		trimmed := strings.TrimSpace(*item.ParentID)
+		parentID = &trimmed
+	}
+	return Channel{
+		DeviceID:         deviceID,
+		ChannelID:        strings.TrimSpace(item.DeviceID),
+		Name:             strings.TrimSpace(item.Name),
+		Manufacturer:     trimStringPtr(item.Manufacturer),
+		Model:            trimStringPtr(item.Model),
+		Owner:            trimStringPtr(item.Owner),
+		CivilCode:        trimStringPtr(item.CivilCode),
+		Address:          trimStringPtr(item.Address),
+		Parental:         item.Parental,
+		ParentID:         parentID,
+		SafetyWay:        item.SafetyWay,
+		RegisterWay:      item.RegisterWay,
+		PTZType:          ptz,
+		ResolutionWidth:  width,
+		ResolutionHeight: height,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+}
+
+// gbCatalogResponse represents a parsed Catalog response document.
+type gbCatalogResponse struct {
+	XMLName    xml.Name        `xml:"Response"`
+	CmdType    string          `xml:"CmdType"`
+	SN         int             `xml:"SN"`
+	DeviceID   string          `xml:"DeviceID"`
+	SumNum     int             `xml:"SumNum"`
+	DeviceList []gbCatalogItem `xml:"DeviceList>Item"`
+}
+
+// prepareXMLDocument normalizes and validates an inbound GB28181 XML payload,
+// transcoding from GB18030 when the payload is not valid UTF-8.
+func prepareXMLDocument(raw []byte) ([]byte, error) {
 	if len(raw) == 0 {
-		return msg, fmt.Errorf("%w: empty body", ErrXMLMalformed)
+		return nil, fmt.Errorf("%w: empty body", ErrXMLMalformed)
 	}
 	if len(raw) > maxInboundXMLBytes {
-		return msg, ErrXMLTooLarge
+		return nil, ErrXMLTooLarge
 	}
 
 	normalized := raw
 	if !utf8.Valid(raw) {
 		decoded, err := simplifiedchinese.GB18030.NewDecoder().Bytes(raw)
 		if err != nil {
-			return msg, fmt.Errorf("%w: transcode from GB18030: %v", ErrXMLMalformed, err)
+			return nil, fmt.Errorf("%w: transcode from GB18030: %v", ErrXMLMalformed, err)
 		}
 		normalized = decoded
 	}
 
 	if err := validateXMLDocument(normalized); err != nil {
-		return msg, err
+		return nil, err
+	}
+	return normalized, nil
+}
+
+// decodeXML normalizes and validates a GB28181 XML body.
+func decodeXML(raw []byte) (gbXMLMessage, error) {
+	normalized, err := prepareXMLDocument(raw)
+	if err != nil {
+		return gbXMLMessage{}, err
 	}
 
+	var msg gbXMLMessage
 	decoder := newXMLDecoder(normalized)
 	if err := decoder.Decode(&msg); err != nil {
 		return gbXMLMessage{}, fmt.Errorf("%w: %v", ErrXMLMalformed, err)
@@ -92,6 +159,72 @@ func decodeXML(raw []byte) (gbXMLMessage, error) {
 		return gbXMLMessage{}, fmt.Errorf("%w: missing root element", ErrXMLMalformed)
 	}
 	return msg, nil
+}
+
+// decodeCatalogResponse normalizes and decodes a Catalog Response XML body.
+func decodeCatalogResponse(raw []byte) (gbCatalogResponse, error) {
+	normalized, err := prepareXMLDocument(raw)
+	if err != nil {
+		return gbCatalogResponse{}, err
+	}
+
+	var resp gbCatalogResponse
+	decoder := newXMLDecoder(normalized)
+	if err := decoder.Decode(&resp); err != nil {
+		return gbCatalogResponse{}, fmt.Errorf("%w: %v", ErrXMLMalformed, err)
+	}
+	if resp.XMLName.Local == "" {
+		return gbCatalogResponse{}, fmt.Errorf("%w: missing root element", ErrXMLMalformed)
+	}
+	return resp, nil
+}
+
+// buildCatalogQuery serializes a standard GB/T 28181 Catalog Query XML body.
+func buildCatalogQuery(sn int, deviceID string) []byte {
+	return []byte(fmt.Sprintf("<?xml version=\"1.0\" encoding=\"GB2312\"?>\r\n"+
+		"<Query>\r\n"+
+		"<CmdType>Catalog</CmdType>\r\n"+
+		"<SN>%d</SN>\r\n"+
+		"<DeviceID>%s</DeviceID>\r\n"+
+		"</Query>\r\n", sn, deviceID))
+}
+
+func parseResolution(raw string) (width, height *int) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	sep := ""
+	for _, s := range []string{"*", "x", "X", "/"} {
+		if strings.Contains(raw, s) {
+			sep = s
+			break
+		}
+	}
+	if sep == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, sep)
+	if len(parts) != 2 {
+		return nil, nil
+	}
+	w, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+	h, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err1 != nil || err2 != nil || w <= 0 || h <= 0 {
+		return nil, nil
+	}
+	return &w, &h
+}
+
+func trimStringPtr(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*s)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }
 
 // validateXMLDocument walks the token stream before the struct decode so the depth

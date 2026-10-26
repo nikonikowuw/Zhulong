@@ -54,6 +54,7 @@ type DeviceResponse struct {
 	RemoteAddr      *string    `json:"remoteAddr"`
 	ExpiresSeconds  int        `json:"expiresSeconds"`
 	State           string     `json:"state"`
+	ChannelCount    int        `json:"channelCount"`
 	LastKeepaliveAt *time.Time `json:"lastKeepaliveAt"`
 	RegisteredAt    *time.Time `json:"registeredAt"`
 	CreatedAt       time.Time  `json:"createdAt"`
@@ -66,6 +67,39 @@ type DeviceResponse struct {
 // `items` rather than a bare array.
 type DeviceListResponse struct {
 	Items []DeviceResponse `json:"items"`
+}
+
+// ChannelResponse is the API projection for a device video channel.
+type ChannelResponse struct {
+	DeviceID         string    `json:"deviceId"`
+	ChannelID        string    `json:"channelId"`
+	Name             string    `json:"name"`
+	Manufacturer     *string   `json:"manufacturer"`
+	Model            *string   `json:"model"`
+	Owner            *string   `json:"owner"`
+	CivilCode        *string   `json:"civilCode"`
+	Address          *string   `json:"address"`
+	Parental         int       `json:"parental"`
+	ParentID         *string   `json:"parentId"`
+	SafetyWay        *int      `json:"safetyWay"`
+	RegisterWay      *int      `json:"registerWay"`
+	PTZType          *int      `json:"ptzType"`
+	ResolutionWidth  *int      `json:"resolutionWidth"`
+	ResolutionHeight *int      `json:"resolutionHeight"`
+	CameraID         *string   `json:"cameraId"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+}
+
+// ChannelListResponse wraps a channel list.
+type ChannelListResponse struct {
+	Items []ChannelResponse `json:"items"`
+}
+
+// SyncCatalogResponse reports the result of a catalog synchronization.
+type SyncCatalogResponse struct {
+	DeviceID string `json:"deviceId"`
+	Total    int    `json:"total"`
 }
 
 // toConfigInfo projects the persisted model onto the API shape.
@@ -110,10 +144,35 @@ func toDeviceResponse(device Device) DeviceResponse {
 		RemoteAddr:      device.RemoteAddr,
 		ExpiresSeconds:  device.ExpiresSeconds,
 		State:           device.State,
+		ChannelCount:    device.ChannelCount,
 		LastKeepaliveAt: utcOrNil(device.LastKeepaliveAt),
 		RegisteredAt:    utcOrNil(device.RegisteredAt),
 		CreatedAt:       device.CreatedAt.UTC(),
 		UpdatedAt:       device.UpdatedAt.UTC(),
+	}
+}
+
+// toChannelResponse projects a channel record onto the API shape.
+func toChannelResponse(ch Channel) ChannelResponse {
+	return ChannelResponse{
+		DeviceID:         ch.DeviceID,
+		ChannelID:        ch.ChannelID,
+		Name:             ch.Name,
+		Manufacturer:     ch.Manufacturer,
+		Model:            ch.Model,
+		Owner:            ch.Owner,
+		CivilCode:        ch.CivilCode,
+		Address:          ch.Address,
+		Parental:         ch.Parental,
+		ParentID:         ch.ParentID,
+		SafetyWay:        ch.SafetyWay,
+		RegisterWay:      ch.RegisterWay,
+		PTZType:          ch.PTZType,
+		ResolutionWidth:  ch.ResolutionWidth,
+		ResolutionHeight: ch.ResolutionHeight,
+		CameraID:         ch.CameraID,
+		CreatedAt:        ch.CreatedAt.UTC(),
+		UpdatedAt:        ch.UpdatedAt.UTC(),
 	}
 }
 

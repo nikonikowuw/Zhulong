@@ -58,8 +58,11 @@ const (
 // Audit actions recorded by the audit middleware tag. Only security summaries are
 // auditable: passwords and Authorization headers must never reach the audit trail.
 const (
-	ActionConfigUpdate = "gb28181.config_update"
-	ActionDeviceUpsert = "gb28181.device_upsert"
+	ActionConfigUpdate      = "gb28181.config_update"
+	ActionDeviceUpsert      = "gb28181.device_upsert"
+	ActionDeviceDelete      = "gb28181.device_delete"
+	ActionCatalogSync       = "gb28181.catalog_sync"
+	ActionChannelBindCamera = "gb28181.channel_bind_camera"
 )
 
 // Stable machine-readable error codes. Text lives in locale.go.
@@ -76,6 +79,14 @@ const (
 	CodeTransportInvalid         = "GB28181_TRANSPORT_INVALID"
 	CodeProfileUnsupported       = "GB28181_PROFILE_UNSUPPORTED"
 	CodeRuntimeNotReady          = "GB28181_RUNTIME_NOT_READY"
+	CodeDeviceOffline            = "GB28181_DEVICE_OFFLINE"
+	CodeDeviceFlowClosed         = "GB28181_DEVICE_FLOW_CLOSED"
+	CodeCatalogSyncFailed        = "GB28181_CATALOG_SYNC_FAILED"
+	CodeCatalogTimeout           = "GB28181_CATALOG_TIMEOUT"
+	CodeChannelNotFound          = "GB28181_CHANNEL_NOT_FOUND"
+	CodeChannelIDInvalid         = "GB28181_CHANNEL_ID_INVALID"
+	CodeChannelAlreadyBound      = "GB28181_CHANNEL_ALREADY_BOUND"
+	CodeCameraBound              = "GB28181_CAMERA_BOUND"
 
 	// CodeDatabaseError is the shared store-failure code owned by
 	// internal/httputil/locale.go. Store failures must not reuse a validation
@@ -83,6 +94,31 @@ const (
 	// GB28181_CONFIG_INVALID would tell the operator to fix a config that is fine.
 	CodeDatabaseError = "DATABASE_ERROR"
 )
+
+// Channel represents an imported video channel of a GB28181 device.
+type Channel struct {
+	DeviceID         string    `gorm:"column:device_id;primaryKey" json:"deviceId"`
+	ChannelID        string    `gorm:"column:channel_id;primaryKey" json:"channelId"`
+	Name             string    `gorm:"column:name;type:text;not null;default:''" json:"name"`
+	Manufacturer     *string   `gorm:"column:manufacturer;type:text" json:"manufacturer"`
+	Model            *string   `gorm:"column:model;type:text" json:"model"`
+	Owner            *string   `gorm:"column:owner;type:text" json:"owner"`
+	CivilCode        *string   `gorm:"column:civil_code;type:text" json:"civilCode"`
+	Address          *string   `gorm:"column:address;type:text" json:"address"`
+	Parental         int       `gorm:"column:parental;not null;default:0" json:"parental"`
+	ParentID         *string   `gorm:"column:parent_id;type:text" json:"parentId"`
+	SafetyWay        *int      `gorm:"column:safety_way" json:"safetyWay"`
+	RegisterWay      *int      `gorm:"column:register_way" json:"registerWay"`
+	PTZType          *int      `gorm:"column:ptz_type" json:"ptzType"`
+	ResolutionWidth  *int      `gorm:"column:resolution_width" json:"resolutionWidth"`
+	ResolutionHeight *int      `gorm:"column:resolution_height" json:"resolutionHeight"`
+	CameraID         *string   `gorm:"column:camera_id;type:text" json:"cameraId"`
+	CreatedAt        time.Time `gorm:"column:created_at;not null" json:"createdAt"`
+	UpdatedAt        time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
+}
+
+// TableName pins the table for GORM.
+func (Channel) TableName() string { return "gb_channels" }
 
 // Config is the singleton GB28181 runtime configuration. The persisted row in
 // gb28181_configs is the only source of truth; config.toml deliberately does not

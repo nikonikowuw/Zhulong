@@ -9,8 +9,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/camera"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // maxPasswordLength bounds the Digest secret before encryption, counted in
@@ -38,15 +40,20 @@ type EncryptedDataProbe interface {
 // Device is a pre-provisioned GB28181 device. The encrypted password is never part
 // of this struct: it does not cross the API boundary or reach logs.
 type Device struct {
-	DeviceID        string     `gorm:"column:device_id;primaryKey" json:"deviceId"`
-	Name            string     `gorm:"column:name;type:text;not null;default:''" json:"name"`
-	Manufacturer    *string    `gorm:"column:manufacturer;type:text" json:"manufacturer"`
-	Model           *string    `gorm:"column:model;type:text" json:"model"`
-	Firmware        *string    `gorm:"column:firmware;type:text" json:"firmware"`
-	Transport       string     `gorm:"column:transport;type:text;not null;default:'udp'" json:"transport"`
-	RemoteAddr      *string    `gorm:"column:remote_addr;type:text" json:"remoteAddr"`
-	ExpiresSeconds  int        `gorm:"column:expires_seconds;not null;default:3600" json:"expiresSeconds"`
-	State           string     `gorm:"column:state;type:text;not null;default:'offline'" json:"state"`
+	DeviceID       string  `gorm:"column:device_id;primaryKey" json:"deviceId"`
+	Name           string  `gorm:"column:name;type:text;not null;default:''" json:"name"`
+	Manufacturer   *string `gorm:"column:manufacturer;type:text" json:"manufacturer"`
+	Model          *string `gorm:"column:model;type:text" json:"model"`
+	Firmware       *string `gorm:"column:firmware;type:text" json:"firmware"`
+	Transport      string  `gorm:"column:transport;type:text;not null;default:'udp'" json:"transport"`
+	RemoteAddr     *string `gorm:"column:remote_addr;type:text" json:"remoteAddr"`
+	ExpiresSeconds int     `gorm:"column:expires_seconds;not null;default:3600" json:"expiresSeconds"`
+	State          string  `gorm:"column:state;type:text;not null;default:'offline'" json:"state"`
+	// ChannelCount is a projection, not a column: the store fills it from gb_channels so
+	// the API can show "N channels" without an N+1 query. A failed count is returned as
+	// an error rather than reported as 0, because "no channels" and "we could not count"
+	// must not look the same to an operator.
+	ChannelCount    int        `gorm:"-" json:"channelCount"`
 	LastKeepaliveAt *time.Time `gorm:"column:last_keepalive_at" json:"lastKeepaliveAt"`
 	RegisteredAt    *time.Time `gorm:"column:registered_at" json:"registeredAt"`
 	EncryptedPass   []byte     `gorm:"column:encrypted_password" json:"-"`
@@ -81,7 +88,19 @@ type DeviceStore interface {
 	UpsertDevice(ctx context.Context, upd DeviceUpsert) (*Device, error)
 	GetDevice(ctx context.Context, deviceID string) (*Device, error)
 	ListDevices(ctx context.Context) ([]Device, error)
+	DeleteDevice(ctx context.Context, deviceID string) error
 	DeviceCounts(ctx context.Context) (total, online int64, err error)
+}
+
+// ChannelStore persists device channels and manages camera bindings.
+type ChannelStore interface {
+	// SyncChannels reconciles the stored catalog of one device with the catalog it
+	// just reported: rows are upserted, and channels the device no longer reports are
+	// deleted unless a camera is still bound to them.
+	SyncChannels(ctx context.Context, deviceID string, channels []Channel) error
+	ListChannels(ctx context.Context, deviceID string) ([]Channel, error)
+	GetChannel(ctx context.Context, deviceID, channelID string) (*Channel, error)
+	BindChannelCamera(ctx context.Context, deviceID, channelID, cameraID string) error
 }
 
 type Store struct {
@@ -297,6 +316,13 @@ func (s *Store) GetDevice(ctx context.Context, deviceID string) (*Device, error)
 		return nil, fmt.Errorf("read gb device %s: %w", deviceID, err)
 	}
 	device.EncryptedPass = nil
+
+	var count int64
+	if err := db.Model(&Channel{}).Where("device_id = ?", deviceID).Count(&count).Error; err != nil {
+		return nil, fmt.Errorf("count gb channels for %s: %w", deviceID, err)
+	}
+	device.ChannelCount = int(count)
+
 	return &device, nil
 }
 
@@ -310,8 +336,26 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 	if err := db.Order("device_id ASC").Find(&devices).Error; err != nil {
 		return nil, fmt.Errorf("list gb devices: %w", err)
 	}
+
+	type countResult struct {
+		DeviceID string
+		Count    int
+	}
+	var counts []countResult
+	if err := db.Model(&Channel{}).
+		Select("device_id, count(*) as count").
+		Group("device_id").
+		Scan(&counts).Error; err != nil {
+		return nil, fmt.Errorf("count gb channels per device: %w", err)
+	}
+	countMap := make(map[string]int, len(counts))
+	for _, c := range counts {
+		countMap[c.DeviceID] = c.Count
+	}
+
 	for i := range devices {
 		devices[i].EncryptedPass = nil
+		devices[i].ChannelCount = countMap[devices[i].DeviceID]
 	}
 	return devices, nil
 }
@@ -539,4 +583,187 @@ func (s *Store) devicePassword(ctx context.Context, deviceID string) (string, er
 		return "", fmt.Errorf("decrypt gb device %s credential: %w", deviceID, decErr)
 	}
 	return string(plaintext), nil
+}
+
+const (
+	// SQLite's host-parameter limit varies with build options; 50 rows x 16 columns keeps
+	// every batch far below the conservative 999 interface value.
+	channelUpsertBatchSize = 50
+	// Delete chunks stay separate from the upsert batching: pruning is computed in Go
+	// (no NOT IN list), so the chunk only bounds the IN clause.
+	channelDeleteChunkSize = 200
+)
+
+// SyncChannels reconciles the stored catalog of one device with the catalog it just
+// reported.
+//
+// Upsert alone would keep every channel the device ever had, so an operator could add
+// a channel the device no longer exposes as a camera. Channels that disappeared from
+// the report are therefore deleted — except the ones still bound to a camera: dropping
+// the device's list must not delete a camera behind the operator's back, and the FK
+// (ON DELETE SET NULL) already covers the opposite direction.
+//
+// The whole reconciliation is one transaction, so a partially applied catalog cannot
+// be observed by a concurrent list.
+func (s *Store) SyncChannels(ctx context.Context, deviceID string, channels []Channel) error {
+	for _, ch := range channels {
+		if ch.DeviceID != deviceID {
+			return apperr.Invalid(CodeDeviceIDInvalid, "channel deviceId does not match target device", nil)
+		}
+		if !camera.IsGB28181ID(ch.ChannelID) {
+			return apperr.Invalid(CodeChannelIDInvalid, "channelId must be 20 digits", nil)
+		}
+	}
+
+	db, err := s.db(ctx)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+	reported := make(map[string]struct{}, len(channels))
+	for _, ch := range channels {
+		reported[ch.ChannelID] = struct{}{}
+	}
+
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for i := 0; i < len(channels); i += channelUpsertBatchSize {
+			end := i + channelUpsertBatchSize
+			if end > len(channels) {
+				end = len(channels)
+			}
+			batch := make([]Channel, end-i)
+			for j := i; j < end; j++ {
+				item := channels[j]
+				item.CreatedAt = now
+				item.UpdatedAt = now
+				batch[j-i] = item
+			}
+
+			if err := tx.Clauses(clause.OnConflict{
+				Columns: []clause.Column{{Name: "device_id"}, {Name: "channel_id"}},
+				// camera_id and created_at are deliberately absent: a catalog refresh must
+				// not clear a binding, and the first import time is a fact.
+				DoUpdates: clause.AssignmentColumns([]string{
+					"name", "manufacturer", "model", "owner", "civil_code", "address",
+					"parental", "parent_id", "safety_way", "register_way", "ptz_type",
+					"resolution_width", "resolution_height", "updated_at",
+				}),
+			}).Create(&batch).Error; err != nil {
+				return fmt.Errorf("upsert gb channels batch: %w", err)
+			}
+		}
+
+		var boundFree []string
+		if err := tx.Model(&Channel{}).
+			Where("device_id = ? AND camera_id IS NULL", deviceID).
+			Pluck("channel_id", &boundFree).Error; err != nil {
+			return fmt.Errorf("list prunable gb channels for %s: %w", deviceID, err)
+		}
+
+		stale := make([]string, 0, len(boundFree))
+		for _, id := range boundFree {
+			if _, ok := reported[id]; !ok {
+				stale = append(stale, id)
+			}
+		}
+		for start := 0; start < len(stale); start += channelDeleteChunkSize {
+			end := min(start+channelDeleteChunkSize, len(stale))
+			if err := tx.Where("device_id = ? AND camera_id IS NULL AND channel_id IN ?", deviceID, stale[start:end]).
+				Delete(&Channel{}).Error; err != nil {
+				return fmt.Errorf("prune stale gb channels for %s: %w", deviceID, err)
+			}
+		}
+		return nil
+	})
+}
+
+// ListChannels returns all channels for a given device ordered by channel_id.
+func (s *Store) ListChannels(ctx context.Context, deviceID string) ([]Channel, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var count int64
+	if err := db.Model(&Device{}).Where("device_id = ?", deviceID).Count(&count).Error; err != nil {
+		return nil, fmt.Errorf("check device %s: %w", deviceID, err)
+	}
+	if count == 0 {
+		return nil, apperr.NotFound(CodeDeviceNotFound, "GB28181 device not found", nil)
+	}
+
+	channels := make([]Channel, 0)
+	if err := db.Where("device_id = ?", deviceID).Order("channel_id ASC").Find(&channels).Error; err != nil {
+		return nil, fmt.Errorf("list gb channels for %s: %w", deviceID, err)
+	}
+	return channels, nil
+}
+
+// GetChannel returns a single channel by composite key.
+func (s *Store) GetChannel(ctx context.Context, deviceID, channelID string) (*Channel, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var ch Channel
+	err = db.Where("device_id = ? AND channel_id = ?", deviceID, channelID).First(&ch).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, apperr.NotFound(CodeChannelNotFound, "GB28181 channel not found", nil)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read gb channel %s/%s: %w", deviceID, channelID, err)
+	}
+	return &ch, nil
+}
+
+// BindChannelCamera associates a channel with a created camera record.
+func (s *Store) BindChannelCamera(ctx context.Context, deviceID, channelID, cameraID string) error {
+	db, err := s.db(ctx)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	res := db.Model(&Channel{}).
+		Where("device_id = ? AND channel_id = ?", deviceID, channelID).
+		Updates(map[string]any{
+			"camera_id":  cameraID,
+			"updated_at": now,
+		})
+	if res.Error != nil {
+		return fmt.Errorf("bind gb channel camera: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return apperr.NotFound(CodeChannelNotFound, "GB28181 channel not found", nil)
+	}
+	return nil
+}
+
+// DeleteDevice removes a device, its catalog rows (FK ON DELETE CASCADE) and its
+// pre-provisioned credential, provided none of its channels are bound to a camera.
+func (s *Store) DeleteDevice(ctx context.Context, deviceID string) error {
+	db, err := s.db(ctx)
+	if err != nil {
+		return err
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		var boundCount int64
+		if err := tx.Model(&Channel{}).
+			Where("device_id = ? AND camera_id IS NOT NULL", deviceID).
+			Count(&boundCount).Error; err != nil {
+			return fmt.Errorf("check bound cameras for %s: %w", deviceID, err)
+		}
+		if boundCount > 0 {
+			return apperr.Conflict(CodeCameraBound, "device has bound cameras; unbind or delete cameras first", nil)
+		}
+
+		res := tx.Where("device_id = ?", deviceID).Delete(&Device{})
+		if res.Error != nil {
+			return fmt.Errorf("delete gb device %s: %w", deviceID, res.Error)
+		}
+		if res.RowsAffected == 0 {
+			return apperr.NotFound(CodeDeviceNotFound, "GB28181 device not found", nil)
+		}
+		return nil
+	})
 }

@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { renderHook } from 'vitest-browser-react'
 import { gb28181Api } from '../api/gb28181-api'
 import { type Gb28181Config, type Gb28181ConfigResponse } from '../data/schema'
-import { GB28181_QUERY_KEYS, useUpdateGb28181Config } from './use-gb28181'
+import {
+  GB28181_QUERY_KEYS,
+  useDeleteGb28181Device,
+  useUpdateGb28181Config,
+} from './use-gb28181'
 
 vi.mock('../api/gb28181-api', () => ({
   gb28181Api: {
@@ -12,6 +16,7 @@ vi.mock('../api/gb28181-api', () => ({
     getRuntime: vi.fn(),
     listDevices: vi.fn(),
     upsertDevice: vi.fn(),
+    deleteDevice: vi.fn(),
   },
 }))
 
@@ -67,6 +72,38 @@ function createClient(): QueryClient {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
 }
+
+describe('useDeleteGb28181Device', () => {
+  it('invalidates device/runtime data and removes the deleted device catalog', async () => {
+    const deviceId = '34020000001320000001'
+    vi.mocked(gb28181Api.deleteDevice).mockResolvedValue()
+    const client = createClient()
+    client.setQueryData(GB28181_QUERY_KEYS.devices(), [{ deviceId }])
+    client.setQueryData(GB28181_QUERY_KEYS.runtime(), snapshotFixture)
+    client.setQueryData(GB28181_QUERY_KEYS.channels(deviceId), [])
+
+    const { act, result } = await renderHook(() => useDeleteGb28181Device(), {
+      wrapper: ({ children }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    await act(async () => {
+      await result.current.mutateAsync(deviceId)
+    })
+
+    expect(gb28181Api.deleteDevice).toHaveBeenCalledWith(deviceId)
+    expect(
+      client.getQueryState(GB28181_QUERY_KEYS.devices())?.isInvalidated
+    ).toBe(true)
+    expect(
+      client.getQueryState(GB28181_QUERY_KEYS.runtime())?.isInvalidated
+    ).toBe(true)
+    expect(
+      client.getQueryData(GB28181_QUERY_KEYS.channels(deviceId))
+    ).toBeUndefined()
+  })
+})
 
 describe('useUpdateGb28181Config', () => {
   it('writes the response back into the cache so the restart banner can flip', async () => {

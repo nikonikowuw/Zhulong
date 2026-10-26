@@ -166,8 +166,21 @@ func (i *sipIngress) handleMessage(req *sip.Request, tx sip.ServerTransaction) {
 			i.respond(req, tx, sip.StatusInternalServerError)
 			return
 		}
+	case "catalog":
+		if i.catalogs != nil {
+			catResp, err := decodeCatalogResponse(req.Body())
+			if err != nil {
+				i.logger.Warn("failed to decode gb28181 catalog response",
+					zap.String("device_id", deviceID), zap.Error(err))
+			} else {
+				if err := i.catalogs.HandleResponse(ctx, deviceID, catResp); err != nil {
+					i.logger.Warn("failed to handle gb28181 catalog response",
+						zap.String("device_id", deviceID), zap.Error(err))
+				}
+			}
+		}
 	default:
-		// Catalog/Alarm/DeviceInfo are acknowledged now and processed in S2.
+		// Alarm/DeviceInfo are acknowledged now and processed in later phases.
 		i.logger.Debug("gb28181 message acknowledged without a handler",
 			zap.String("device_id", deviceID),
 			zap.String("cmd_type", message.CmdType),

@@ -189,3 +189,62 @@ func TestHealthSchedulerGracefulStopCancelsProbes(t *testing.T) {
 		t.Fatal("scheduler.Stop hung for > 3s without canceling in-flight probe")
 	}
 }
+
+func TestHealthSchedulerSkipsDescribeForGB28181Streams(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer func() { _ = dbStore.Close() }()
+
+	km := NewKeyManager(tempDir)
+	cipher, err := km.InitOrLoadKey(false)
+	if err != nil {
+		t.Fatalf("init key: %v", err)
+	}
+	store := NewCameraStore(dbStore)
+	registry := NewStateRegistry()
+	hub := NewEventHub(registry)
+	defer hub.Close()
+
+	scheduler := NewHealthScheduler(store, cipher, registry, hub, nil, zap.NewNop())
+
+	cam := &Camera{ID: "cam_gb_skip", Name: "GB Channel", Enabled: true, Revision: 1}
+	uri := "gb28181://34020000001180000001/34020000001310000001"
+	encrypted, err := cipher.Encrypt([]byte(uri), MakeAAD(cam.ID, StreamRoleMain))
+	if err != nil {
+		t.Fatalf("encrypt uri: %v", err)
+	}
+	stream := CameraStream{
+		CameraID:     cam.ID,
+		Role:         StreamRoleMain,
+		Protocol:     ProtocolGB28181,
+		EncryptedURI: encrypted,
+		Transport:    TransportUDP,
+	}
+	if err := store.Create(context.Background(), cam, []CameraStream{stream}); err != nil {
+		t.Fatalf("create camera: %v", err)
+	}
+	registry.InitCameraState(cam)
+
+	scheduler.checkStream(context.Background(), cam, &stream)
+
+	// A GB28181 source has no RTSP endpoint to DESCRIBE. Probing it would record
+	// uri_error and broadcast that false state on every interval, so the state must stay
+	// "unknown" until the native GB input supplies real evidence (S4).
+	state, ok := registry.GetState(cam.ID)
+	if !ok {
+		t.Fatal("expected the camera state to exist")
+	}
+	streamState := state.Streams[StreamRoleMain]
+	if streamState == nil {
+		t.Fatal("expected the main stream state to exist")
+	}
+	if streamState.Health != HealthStateUnknown {
+		t.Errorf("expected health unknown, got %q (reason %q)", streamState.Health, streamState.Reason)
+	}
+	if streamState.Reason == "uri_error" {
+		t.Error("the RTSP describe path must not run for a gb28181 stream")
+	}
+}

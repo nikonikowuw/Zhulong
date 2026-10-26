@@ -1385,6 +1385,205 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "delete": {
+                "description": "Deletes a pre-provisioned GB28181 device. If any of its channels are bound to a camera, deletion is rejected until the camera is unbound or deleted.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "gb28181"
+                ],
+                "summary": "Delete GB28181 device",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "20-digit device ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "GB28181_DEVICE_NOT_FOUND",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "GB28181_CAMERA_BOUND",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/gb28181/devices/{deviceId}/catalog": {
+            "post": {
+                "description": "Sends a SIP Catalog query to an online GB28181 device, reassembles the channel fragments, and reconciles the local catalog: channels the device no longer reports are removed unless a camera is still bound to them.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "gb28181"
+                ],
+                "summary": "Synchronize GB28181 device catalog",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "20-digit device ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/gb28181.SyncCatalogResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "GB28181_DEVICE_NOT_FOUND",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "412": {
+                        "description": "GB28181_DEVICE_FLOW_CLOSED",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "GB28181_DEVICE_OFFLINE, GB28181_CATALOG_TIMEOUT, GB28181_CATALOG_SYNC_FAILED",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/gb28181/devices/{deviceId}/channels": {
+            "get": {
+                "description": "Returns all imported video channels for a GB28181 device.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "gb28181"
+                ],
+                "summary": "List GB28181 device channels",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "20-digit device ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/gb28181.ChannelListResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "GB28181_DEVICE_NOT_FOUND",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/gb28181/devices/{deviceId}/channels/{channelId}/camera": {
+            "post": {
+                "description": "Creates a camera entity from an imported GB28181 channel, bypassing RTSP probe gates and assigning protocol gb28181.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "gb28181"
+                ],
+                "summary": "Add GB28181 channel as camera",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "20-digit device ID",
+                        "name": "deviceId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "20-digit channel ID",
+                        "name": "channelId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "GB28181_CHANNEL_NOT_FOUND",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "GB28181_CHANNEL_ALREADY_BOUND",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "GB28181_DEVICE_ID_INVALID, GB28181_CHANNEL_ID_INVALID, CAMERA_INVALID_PARAM, CAMERA_LIMIT_EXCEEDED",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
             }
         },
         "/gb28181/runtime": {
@@ -4418,6 +4617,96 @@ const docTemplate = `{
                 }
             }
         },
+        "gb28181.CatalogCounts": {
+            "type": "object",
+            "properties": {
+                "attempts": {
+                    "type": "integer"
+                },
+                "failures": {
+                    "type": "integer"
+                },
+                "lastChannels": {
+                    "type": "integer"
+                },
+                "lastSyncAt": {
+                    "type": "string"
+                },
+                "timeouts": {
+                    "type": "integer"
+                }
+            }
+        },
+        "gb28181.ChannelListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/gb28181.ChannelResponse"
+                    }
+                }
+            }
+        },
+        "gb28181.ChannelResponse": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "cameraId": {
+                    "type": "string"
+                },
+                "channelId": {
+                    "type": "string"
+                },
+                "civilCode": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "deviceId": {
+                    "type": "string"
+                },
+                "manufacturer": {
+                    "type": "string"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner": {
+                    "type": "string"
+                },
+                "parentId": {
+                    "type": "string"
+                },
+                "parental": {
+                    "type": "integer"
+                },
+                "ptzType": {
+                    "type": "integer"
+                },
+                "registerWay": {
+                    "type": "integer"
+                },
+                "resolutionHeight": {
+                    "type": "integer"
+                },
+                "resolutionWidth": {
+                    "type": "integer"
+                },
+                "safetyWay": {
+                    "type": "integer"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
         "gb28181.ConfigInfo": {
             "type": "object",
             "properties": {
@@ -4492,6 +4781,9 @@ const docTemplate = `{
         "gb28181.DeviceResponse": {
             "type": "object",
             "properties": {
+                "channelCount": {
+                    "type": "integer"
+                },
                 "createdAt": {
                     "type": "string"
                 },
@@ -4581,6 +4873,9 @@ const docTemplate = `{
         "gb28181.Snapshot": {
             "type": "object",
             "properties": {
+                "catalog": {
+                    "$ref": "#/definitions/gb28181.CatalogCounts"
+                },
                 "devices": {
                     "$ref": "#/definitions/gb28181.DeviceCounters"
                 },
@@ -4598,6 +4893,17 @@ const docTemplate = `{
                 },
                 "state": {
                     "type": "string"
+                }
+            }
+        },
+        "gb28181.SyncCatalogResponse": {
+            "type": "object",
+            "properties": {
+                "deviceId": {
+                    "type": "string"
+                },
+                "total": {
+                    "type": "integer"
                 }
             }
         },

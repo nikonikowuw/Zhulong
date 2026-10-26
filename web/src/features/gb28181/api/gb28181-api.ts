@@ -1,13 +1,17 @@
 import { apiClient, type ApiResponse } from '@/lib/api-client'
 import {
+  gb28181ChannelListSchema,
   gb28181ConfigResponseSchema,
   gb28181DeviceListSchema,
   gb28181DeviceSchema,
   gb28181SnapshotSchema,
+  syncCatalogResponseSchema,
+  type Gb28181Channel,
   type Gb28181Config,
   type Gb28181ConfigResponse,
   type Gb28181Device,
   type Gb28181Snapshot,
+  type SyncCatalogResponse,
   type UpsertGb28181DeviceRequest,
 } from '../data/schema'
 
@@ -69,5 +73,44 @@ export const gb28181Api = {
       payload
     )
     return gb28181DeviceSchema.parse(resp.data.data)
+  },
+
+  /** 删除设备。若设备下仍有关联摄像机的通道，后端将拒绝删除。 */
+  async deleteDevice(deviceId: string): Promise<void> {
+    await apiClient.delete<ApiResponse<unknown>>(
+      `/gb28181/devices/${encodeURIComponent(deviceId)}`
+    )
+  },
+
+  /** 查询设备的全部通道。 */
+  async listChannels(deviceId: string): Promise<Gb28181Channel[]> {
+    const resp = await apiClient.get<ApiResponse<unknown>>(
+      `/gb28181/devices/${encodeURIComponent(deviceId)}/channels`
+    )
+    const parsed = gb28181ChannelListSchema.parse(
+      resp.data.data ?? { items: [] }
+    )
+    return parsed.items
+  },
+
+  /** 手动触发目录同步指令。 */
+  async syncCatalog(deviceId: string): Promise<SyncCatalogResponse> {
+    const resp = await apiClient.post<ApiResponse<SyncCatalogResponse>>(
+      `/gb28181/devices/${encodeURIComponent(deviceId)}/catalog`,
+      {}
+    )
+    return syncCatalogResponseSchema.parse(resp.data.data)
+  },
+
+  /** 将通道显式添加为系统摄像机。 */
+  async addChannelAsCamera(
+    deviceId: string,
+    channelId: string
+  ): Promise<unknown> {
+    const resp = await apiClient.post<ApiResponse<unknown>>(
+      `/gb28181/devices/${encodeURIComponent(deviceId)}/channels/${encodeURIComponent(channelId)}/camera`,
+      {}
+    )
+    return resp.data.data
   },
 }

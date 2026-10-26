@@ -137,4 +137,82 @@ describe('gb28181Api', () => {
       { password: 's3cret', transport: 'udp' }
     )
   })
+
+  it('listChannels returns parsed channel items', async () => {
+    const channelFixture = {
+      deviceId: '34020000001320000001',
+      channelId: '34020000001310000001',
+      name: 'Front Gate Camera',
+      manufacturer: 'Hikvision',
+      model: 'DS-2CD',
+      owner: null,
+      civilCode: null,
+      address: null,
+      parental: 0,
+      parentId: null,
+      safetyWay: null,
+      registerWay: null,
+      ptzType: 1,
+      resolutionWidth: 1920,
+      resolutionHeight: 1080,
+      cameraId: null,
+      createdAt: '2026-10-25T08:00:00Z',
+      updatedAt: '2026-10-25T08:00:00Z',
+    }
+    vi.spyOn(apiClient, 'get').mockResolvedValueOnce(
+      mockResponse({ items: [channelFixture] })
+    )
+
+    const channels = await gb28181Api.listChannels('34020000001320000001')
+
+    expect(channels).toHaveLength(1)
+    expect(channels[0].channelId).toBe('34020000001310000001')
+    expect(channels[0].resolutionWidth).toBe(1920)
+    expect(apiClient.get).toHaveBeenCalledWith(
+      '/gb28181/devices/34020000001320000001/channels'
+    )
+  })
+
+  it('syncCatalog issues POST to catalog endpoint', async () => {
+    vi.spyOn(apiClient, 'post').mockResolvedValueOnce(
+      mockResponse({ deviceId: '34020000001320000001', total: 5 })
+    )
+
+    const res = await gb28181Api.syncCatalog('34020000001320000001')
+
+    expect(res.total).toBe(5)
+    expect(apiClient.post).toHaveBeenCalledWith(
+      '/gb28181/devices/34020000001320000001/catalog',
+      {}
+    )
+  })
+
+  it('addChannelAsCamera posts to camera binding endpoint', async () => {
+    vi.spyOn(apiClient, 'post').mockResolvedValueOnce(
+      mockResponse({ id: 'cam_123', name: 'Front Gate Camera' })
+    )
+
+    const res = await gb28181Api.addChannelAsCamera(
+      '34020000001320000001',
+      '34020000001310000001'
+    )
+
+    expect(res).toEqual({ id: 'cam_123', name: 'Front Gate Camera' })
+    expect(apiClient.post).toHaveBeenCalledWith(
+      '/gb28181/devices/34020000001320000001/channels/34020000001310000001/camera',
+      {}
+    )
+  })
+
+  it('deleteDevice deletes the device', async () => {
+    vi.spyOn(apiClient, 'delete').mockResolvedValueOnce(
+      mockResponse({ deleted: true })
+    )
+
+    await gb28181Api.deleteDevice('34020000001320000001')
+
+    expect(apiClient.delete).toHaveBeenCalledWith(
+      '/gb28181/devices/34020000001320000001'
+    )
+  })
 })

@@ -45,12 +45,19 @@ export function CamerasActionDialog() {
 
   const isEdit = open === 'edit' && Boolean(currentRow)
   const isOpen = open === 'create' || open === 'edit'
+  const mainStream = currentRow?.streams?.find(
+    (stream) => stream.role === 'main'
+  )
+  const isGb28181 = isEdit && mainStream?.protocol === 'gb28181'
 
   const createMutation = useCreateCamera()
   const updateMutation = useUpdateCamera()
   const isPending = createMutation.isPending || updateMutation.isPending
 
-  const schema = useMemo(() => createCameraFormSchema(t), [t])
+  const schema = useMemo(
+    () => createCameraFormSchema(t, !isGb28181),
+    [t, isGb28181]
+  )
 
   const form = useForm<CameraFormValues>({
     resolver: zodResolver(schema),
@@ -74,10 +81,10 @@ export function CamerasActionDialog() {
         form.reset({
           name: currentRow.name,
           enabled: currentRow.enabled,
-          mainRtspUrl: main?.rtspUrl || '',
+          mainRtspUrl: isGb28181 ? '' : main?.rtspUrl || '',
           mainTransport: (main?.transport as 'tcp' | 'udp') || 'tcp',
-          hasSubStream: Boolean(sub),
-          subRtspUrl: sub?.rtspUrl || '',
+          hasSubStream: !isGb28181 && Boolean(sub),
+          subRtspUrl: isGb28181 ? '' : sub?.rtspUrl || '',
           subTransport: (sub?.transport as 'tcp' | 'udp') || 'tcp',
         })
       } else {
@@ -92,16 +99,15 @@ export function CamerasActionDialog() {
         })
       }
     }
-  }, [isOpen, isEdit, currentRow, form])
+  }, [isOpen, isEdit, currentRow, isGb28181, form])
 
   const onSubmit = async (values: CameraFormValues) => {
     if (isPending) return
     setProbeError(null)
     setConflictError(null)
 
+    const payload = { name: values.name, enabled: values.enabled }
     const streamPayload = {
-      name: values.name,
-      enabled: values.enabled,
       mainStream: {
         role: 'main' as const,
         protocol: 'rtsp',
@@ -131,12 +137,13 @@ export function CamerasActionDialog() {
           id: currentRow.id,
           data: {
             revision: currentRow.revision,
-            ...streamPayload,
+            ...payload,
+            ...(isGb28181 ? {} : streamPayload),
           },
         })
         toast.success(t('toast.updateSuccess'))
       } else {
-        await createMutation.mutateAsync(streamPayload)
+        await createMutation.mutateAsync({ ...payload, ...streamPayload })
         toast.success(t('toast.createSuccess'))
       }
       setProbeError(null)
@@ -184,7 +191,11 @@ export function CamerasActionDialog() {
             {isEdit ? t('dialog.editTitle') : t('dialog.createTitle')}
           </DialogTitle>
           <DialogDescription>
-            {isEdit ? t('dialog.editDesc') : t('dialog.createDesc')}
+            {isGb28181
+              ? t('dialog.gb28181EditDesc')
+              : isEdit
+                ? t('dialog.editDesc')
+                : t('dialog.createDesc')}
           </DialogDescription>
         </DialogHeader>
 
@@ -228,88 +239,25 @@ export function CamerasActionDialog() {
                 )}
               />
 
-              {/* 主流 RTSP URL */}
-              <FormField
-                control={form.control}
-                name='mainRtspUrl'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('form.mainRtsp')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder={t('form.mainRtspPlaceholder')}
-                        className='font-mono'
-                        autoComplete='off'
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              {/* 主流传输协议 */}
-              <FormField
-                control={form.control}
-                name='mainTransport'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('form.mainTransport')}</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger className='w-full'>
-                          <SelectValue />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value='tcp'>
-                          {t('form.transportTcp')}
-                        </SelectItem>
-                        <SelectItem value='udp'>
-                          {t('form.transportUdp')}
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              {/* 子流开关与配置 */}
-              <FormField
-                control={form.control}
-                name='hasSubStream'
-                render={({ field }) => (
-                  <FormItem className='flex flex-row items-center justify-between rounded-lg border border-border p-3'>
-                    <div className='space-y-0.5'>
-                      <FormLabel className='text-sm font-medium'>
-                        {t('table.columns.subStream')}
-                      </FormLabel>
-                      <FormDescription className='text-xs'>
-                        {t('form.hasSubStream')}
-                      </FormDescription>
-                    </div>
-                    <FormControl>
-                      <Switch
-                        checked={field.value}
-                        onCheckedChange={field.onChange}
-                      />
-                    </FormControl>
-                  </FormItem>
-                )}
-              />
-
-              {hasSub && (
-                <div className='space-y-4 rounded-lg border border-border/80 bg-muted/30 p-3.5'>
+              {isGb28181 ? (
+                <div
+                  className='rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground'
+                  role='note'
+                >
+                  {t('form.gb28181Managed')}
+                </div>
+              ) : (
+                <div className='space-y-4'>
+                  {/* 主流 RTSP URL */}
                   <FormField
                     control={form.control}
-                    name='subRtspUrl'
+                    name='mainRtspUrl'
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>{t('form.subRtsp')}</FormLabel>
+                        <FormLabel>{t('form.mainRtsp')}</FormLabel>
                         <FormControl>
                           <Input
-                            placeholder={t('form.subRtspPlaceholder')}
+                            placeholder={t('form.mainRtspPlaceholder')}
                             className='font-mono'
                             autoComplete='off'
                             {...field}
@@ -320,12 +268,13 @@ export function CamerasActionDialog() {
                     )}
                   />
 
+                  {/* 主流传输协议 */}
                   <FormField
                     control={form.control}
-                    name='subTransport'
+                    name='mainTransport'
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>{t('form.subTransport')}</FormLabel>
+                        <FormLabel>{t('form.mainTransport')}</FormLabel>
                         <Select
                           onValueChange={field.onChange}
                           value={field.value}
@@ -348,6 +297,82 @@ export function CamerasActionDialog() {
                       </FormItem>
                     )}
                   />
+
+                  {/* 子流开关与配置 */}
+                  <FormField
+                    control={form.control}
+                    name='hasSubStream'
+                    render={({ field }) => (
+                      <FormItem className='flex flex-row items-center justify-between rounded-lg border border-border p-3'>
+                        <div className='space-y-0.5'>
+                          <FormLabel className='text-sm font-medium'>
+                            {t('table.columns.subStream')}
+                          </FormLabel>
+                          <FormDescription className='text-xs'>
+                            {t('form.hasSubStream')}
+                          </FormDescription>
+                        </div>
+                        <FormControl>
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                          />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+
+                  {hasSub && (
+                    <div className='space-y-4 rounded-lg border border-border/80 bg-muted/30 p-3.5'>
+                      <FormField
+                        control={form.control}
+                        name='subRtspUrl'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('form.subRtsp')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder={t('form.subRtspPlaceholder')}
+                                className='font-mono'
+                                autoComplete='off'
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name='subTransport'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('form.subTransport')}</FormLabel>
+                            <Select
+                              onValueChange={field.onChange}
+                              value={field.value}
+                            >
+                              <FormControl>
+                                <SelectTrigger className='w-full'>
+                                  <SelectValue />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                <SelectItem value='tcp'>
+                                  {t('form.transportTcp')}
+                                </SelectItem>
+                                <SelectItem value='udp'>
+                                  {t('form.transportUdp')}
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -378,7 +403,11 @@ export function CamerasActionDialog() {
             {isPending && (
               <>
                 <Loader2 className='size-3.5 animate-spin text-primary' />
-                <span>{t('dialog.probingNotice')}</span>
+                <span>
+                  {isGb28181
+                    ? t('dialog.savingNotice')
+                    : t('dialog.probingNotice')}
+                </span>
               </>
             )}
           </div>
