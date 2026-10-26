@@ -40,7 +40,7 @@ type VehicleItem = aitypes.VehicleItem
 // InferenceResult is the unified inference output event payload.
 type InferenceResult = aitypes.InferenceResult
 
-// RawInferencePayload models the JSON payload serialized by zhulong_algo_runner.
+// RawInferencePayload models the JSON payload serialized by an algorithm package process.
 type RawInferencePayload = aitypes.RawInferencePayload
 
 // Factory functions delegated to aitypes.

@@ -2,7 +2,7 @@
  * @file algo_main.cpp
  * @brief 算法包可执行文件骨架的实现（静态链接进包，宿主不再 dlopen）
  *
- * 代码自 `native/src/algorithm/runner/runner.cpp` 迁移而来，语义必须与之一致：
+ * 代码自宿主的通用 runner 迁移而来（该 runner 已随 dlopen 通道一起下线），语义必须与交付形态一致：
  *   - stage token、退出码表、ACK 时机、去噪策略（只在有目标时上报）逐字保留；
  *   - 唯一差异：本文件**不**加载 `.so`，API 表由 `ZHULONG_ALGO_MAIN` 生成的
  *     `PluginApi<...>::get_api` 直接提供（算法与骨架在同一个二进制里）。
@@ -14,9 +14,9 @@
 #include <zhulong/plugin.h>
 
 #include "common/log.hpp"
-#include "algorithm/runner/json.hpp"
-#include "algorithm/runner/gallery_index.hpp"
-#include "algorithm/runner/gallery_parser.hpp"
+#include "internal/json.hpp"
+#include "internal/gallery_index.hpp"
+#include "internal/gallery_parser.hpp"
 #include "algorithm/ipc/ipc_protocol.hpp"
 #include "algorithm/ipc/shm_pool.hpp"
 #include "algorithm/ipc/unix_socket.hpp"

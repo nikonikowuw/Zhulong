@@ -81,6 +81,14 @@ def main():
     os.chmod(dest_entry, 0o755)
     print(f"[*] 包入口: {dest_entry.name}")
 
+    # 交付形态的符号门禁：可执行文件不得导出任何插件 C ABI 残留
+    # （`zhulong_plugin_get_api` / `zhulong_*`），否则旧 dlopen 通道还活着。
+    symbol_check = repo_root / "native" / "tests" / "check_plugin_symbols.py"
+    if symbol_check.exists() and shutil.which("nm") and not args.no_verify:
+        res = subprocess.run([sys.executable, str(symbol_check), "--entry", str(dest_entry)])
+        if res.returncode != 0:
+            sys.exit("错误: 包入口导出了插件 C ABI（交付形态不得再暴露 dlopen 入口）")
+
     # 3. 复制 sample.jpg
     sample_src = target_dir / "sample.jpg"
     if not sample_src.exists():

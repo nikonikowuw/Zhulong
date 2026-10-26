@@ -473,6 +473,7 @@ add_library(ZhulongAlgoSdkObjects OBJECT
 target_compile_features(ZhulongAlgoSdkObjects PRIVATE cxx_std_17)
 target_include_directories(ZhulongAlgoSdkObjects PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/sdk/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_compile_definitions(ZhulongAlgoSdkObjects PRIVATE ${ZHULONG_ALGO_RUNTIME_PUBLIC_DEFS})
@@ -506,20 +507,6 @@ endif()
 if(NOT ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub")
     install(TARGETS ZhulongAlgoSdkStatic ARCHIVE DESTINATION lib)
 endif()
-
-# ==============================================================================
-#                      4.3 构建通用算法 Runner 进程 (zhulong_algo_runner)
-# ==============================================================================
-# ⚠️ 迁移期形态：宿主仍需要「把 .so 包成 broker 消费者」的能力。此处只链接
-#    SDK 归档（骨架实现）——不要再加 ZhulongAlgoIpc，两者含同一批对象。
-add_executable(zhulong_algo_runner
-    src/algorithm/runner/runner.cpp
-)
-target_compile_features(zhulong_algo_runner PUBLIC cxx_std_17)
-target_include_directories(zhulong_algo_runner
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-target_link_libraries(zhulong_algo_runner PRIVATE ZhulongAlgoSdkStatic ZhulongAlgoRuntime ${CMAKE_DL_LIBS})
 
 # ==============================================================================
 #                      4.4 构建示例脱机插件 (.so)
@@ -667,32 +654,28 @@ if(BUILD_TESTING)
     add_test(NAME ZhulongAlgoRuntime COMMAND ZhulongAlgoRuntimeTests)
     set_tests_properties(ZhulongAlgoRuntime PROPERTIES TIMEOUT 10)
 
-    # 算法 Runner 与示例插件集成测试
-    add_executable(ZhulongAlgoRunnerTests tests/algo_runner_test.cpp)
-    target_compile_features(ZhulongAlgoRunnerTests PRIVATE cxx_std_17)
-    target_include_directories(ZhulongAlgoRunnerTests PRIVATE sdk/include)
-    target_link_libraries(ZhulongAlgoRunnerTests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
-    add_test(NAME ZhulongAlgoRunner COMMAND ZhulongAlgoRunnerTests $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier> $<TARGET_FILE:MockPersonStructure>)
-    set_tests_properties(ZhulongAlgoRunner PROPERTIES TIMEOUT 10)
-
     # FrameBroker 跨进程共享内存与租约集成测试
     add_executable(ZhulongFrameBrokerTests tests/frame_broker_test.cpp)
     target_compile_features(ZhulongFrameBrokerTests PRIVATE cxx_std_17)
     target_include_directories(ZhulongFrameBrokerTests PRIVATE sdk/include include src)
     target_link_libraries(ZhulongFrameBrokerTests PRIVATE ZhulongAlgoIpc)
-    add_test(NAME ZhulongFrameBroker COMMAND ZhulongFrameBrokerTests $<TARGET_FILE:zhulong_algo_runner> $<TARGET_FILE:MockDetector>)
+    # 子进程用「包形态」的桩算法可执行文件（自带算法类），不再 dlopen 插件
+    add_executable(zhulong_test_algo_consumer tests/fixtures/stub_algo_consumer.cpp)
+    target_compile_features(zhulong_test_algo_consumer PRIVATE cxx_std_17)
+    target_link_libraries(zhulong_test_algo_consumer PRIVATE ZhulongAlgoSdkStatic ZhulongAlgoRuntime ${CMAKE_DL_LIBS})
+    add_test(NAME ZhulongFrameBroker COMMAND ZhulongFrameBrokerTests $<TARGET_FILE:zhulong_test_algo_consumer>)
     set_tests_properties(ZhulongFrameBroker PROPERTIES TIMEOUT 45)
 
     add_executable(ZhulongAlgoJsonTests tests/algo_json_test.cpp)
     target_compile_features(ZhulongAlgoJsonTests PRIVATE cxx_std_17)
-    target_include_directories(ZhulongAlgoJsonTests PRIVATE src/algorithm/runner)
+    target_include_directories(ZhulongAlgoJsonTests PRIVATE sdk/src/internal)
 
-    add_executable(ZhulongAlgoRunnerGalleryTests tests/algo_runner_gallery_test.cpp)
-    target_compile_features(ZhulongAlgoRunnerGalleryTests PRIVATE cxx_std_17)
-    target_include_directories(ZhulongAlgoRunnerGalleryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/src/algorithm/runner)
-    target_link_libraries(ZhulongAlgoRunnerGalleryTests PRIVATE ZhulongAlgoRuntime Threads::Threads)
-    add_test(NAME ZhulongAlgoRunnerGallery COMMAND ZhulongAlgoRunnerGalleryTests)
-    set_tests_properties(ZhulongAlgoRunnerGallery PROPERTIES TIMEOUT 10)
+    add_executable(ZhulongGallerySyncTests tests/gallery_sync_test.cpp)
+    target_compile_features(ZhulongGallerySyncTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongGallerySyncTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/sdk/src)
+    target_link_libraries(ZhulongGallerySyncTests PRIVATE ZhulongAlgoRuntime Threads::Threads)
+    add_test(NAME ZhulongGallerySync COMMAND ZhulongGallerySyncTests)
+    set_tests_properties(ZhulongGallerySync PROPERTIES TIMEOUT 10)
 
     # 夹具（test_stub）构建没有真实推理能力：这里只注册不依赖真实模型的断言，
     # 模型相关断言在源码里用 ZHULONG_INFERENCE_TEST_STUB 编译期排除（不再运行期 SKIP）。
@@ -759,10 +742,9 @@ if(BUILD_TESTING)
     #    就不在本列表中，其断言从未真正执行过。
     set(ASSERT_TEST_TARGETS
         ZhulongAlgoRuntimeTests
-        ZhulongAlgoRunnerTests
         ZhulongAlgoJsonTests
         ZhulongFrameBrokerTests
-        ZhulongAlgoRunnerGalleryTests
+        ZhulongGallerySyncTests
         ZhulongIpcSocketFdTests
         ZhulongDmaBufAllocatorTests
     )
@@ -778,10 +760,6 @@ if(BUILD_TESTING)
     foreach(TEST_TARGET ${ASSERT_TEST_TARGETS})
         target_compile_options(${TEST_TARGET} PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
     endforeach()
-
-    # 独立黑盒验包 CLI 工具测试
-    add_test(NAME ZhulongAlgoVerifyCli COMMAND zhulong_algo_runner --verify-plugin $<TARGET_FILE:MockDetector> --sample mock_sample.jpg)
-    set_tests_properties(ZhulongAlgoVerifyCli PROPERTIES TIMEOUT 10)
 
     # 预览契约整形器单元测试（avcC/hvcC、B 帧时间戳与断流重置）
     add_executable(ZhulongPreviewNormalizerTests
@@ -858,9 +836,6 @@ if(BUILD_TESTING)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
         add_test(NAME ZhulongAlgoJsonRoundTrip COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/algo_json_roundtrip_test.py $<TARGET_FILE:ZhulongAlgoJsonTests>)
-        add_test(NAME ZhulongAlgoRunnerJson COMMAND ${Python3_EXECUTABLE}
-            ${CMAKE_CURRENT_SOURCE_DIR}/tests/algo_runner_json_test.py
-            $<TARGET_FILE:zhulong_algo_runner> $<TARGET_FILE:MockDetector>)
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             # 人脸识别插件除统一入口外，还必须导出宿主 dlopen 依赖的单次提取/释放 C ABI
             add_test(NAME ZhulongPluginSymbolVisibility COMMAND ${Python3_EXECUTABLE}

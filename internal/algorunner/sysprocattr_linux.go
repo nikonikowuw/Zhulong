@@ -4,7 +4,7 @@ package algorunner
 
 import "syscall"
 
-// runnerSysProcAttr returns the SysProcAttr used to launch zhulong_algo_runner.
+// runnerSysProcAttr returns the SysProcAttr used to launch a package process.
 //
 // Setpgid puts the runner in its own process group so Stop can signal the whole
 // group (runner plus any grandchildren it spawns). Without it, a grandchild

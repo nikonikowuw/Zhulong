@@ -342,10 +342,10 @@ void test_frame_broker_crash_reclaim() {
 #include <unistd.h>
 
 // =============================================================================
-// Test 5: 真实独立子进程 Runner 跨进程接收与推理全链路验证
+// Test 5: 真实独立包进程跨进程接收与推理全链路验证
 // =============================================================================
-void test_runner_subprocess_e2e(const char* runner_bin, const char* plugin_so) {
-    if (!runner_bin || !plugin_so) return;
+void test_consumer_subprocess_e2e(const char* consumer_bin) {
+    if (!consumer_bin) return;
 
     uint64_t stream_id = 1004;
     FrameBroker broker;
@@ -354,12 +354,11 @@ void test_runner_subprocess_e2e(const char* runner_bin, const char* plugin_so) {
     opt.slot_size = 1024 * 1024;
     assert(broker.start(stream_id, "/tmp", opt));
 
-    // 启动独立子进程 Runner
+    // 启动独立子进程：包形态的算法可执行文件
     pid_t pid = fork();
     if (pid == 0) {
         // 子进程
-        execl(runner_bin, runner_bin,
-              "--plugin", plugin_so,
+        execl(consumer_bin, consumer_bin,
               "--broker", broker.socket_path().c_str(),
               "--name", "sub_worker",
               "--max-frames", "3",
@@ -398,7 +397,7 @@ void test_runner_subprocess_e2e(const char* runner_bin, const char* plugin_so) {
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
     broker.stop();
-    std::cout << "[PASS] test_runner_subprocess_e2e" << std::endl;
+    std::cout << "[PASS] test_consumer_subprocess_e2e" << std::endl;
 }
 
 // =============================================================================
@@ -920,8 +919,8 @@ void test_broker_host_crash_then_restart() {
     std::cout << "[PASS] test_broker_host_crash_then_restart" << std::endl;
 }
 
-void test_runner_multi_broker_e2e(const char* runner_bin, const char* plugin_so) {
-    if (!runner_bin || !plugin_so) return;
+void test_consumer_multi_broker_e2e(const char* consumer_bin) {
+    if (!consumer_bin) return;
 
     uint64_t stream1 = 2001;
     uint64_t stream2 = 2002;
@@ -932,11 +931,10 @@ void test_runner_multi_broker_e2e(const char* runner_bin, const char* plugin_so)
     assert(broker1.start(stream1, "/tmp", opt));
     assert(broker2.start(stream2, "/tmp", opt));
 
-    // 启动多 broker 连接的独立 Runner 子进程
+    // 启动连接多路 broker 的独立包进程
     pid_t pid = fork();
     if (pid == 0) {
-        execl(runner_bin, runner_bin,
-              "--plugin", plugin_so,
+        execl(consumer_bin, consumer_bin,
               "--broker", broker1.socket_path().c_str(),
               "--broker", broker2.socket_path().c_str(),
               "--name", "multi_worker",
@@ -979,16 +977,15 @@ void test_runner_multi_broker_e2e(const char* runner_bin, const char* plugin_so)
 
     broker1.stop();
     broker2.stop();
-    std::cout << "[PASS] test_runner_multi_broker_e2e" << std::endl;
+    std::cout << "[PASS] test_consumer_multi_broker_e2e" << std::endl;
 }
 
-void test_runner_broker_connect_failure_d6(const char* runner_bin, const char* plugin_so) {
-    if (!runner_bin || !plugin_so) return;
+void test_consumer_broker_connect_failure_d6(const char* consumer_bin) {
+    if (!consumer_bin) return;
 
     pid_t pid = fork();
     if (pid == 0) {
-        execl(runner_bin, runner_bin,
-              "--plugin", plugin_so,
+        execl(consumer_bin, consumer_bin,
               "--broker", "/tmp/zhulong_definitely_nonexistent_broker.sock",
               "--name", "fail_worker",
               nullptr);
@@ -1000,14 +997,14 @@ void test_runner_broker_connect_failure_d6(const char* runner_bin, const char* p
     pid_t w = waitpid(pid, &status, 0);
     assert(w == pid);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 5);
-    std::cout << "[PASS] test_runner_broker_connect_failure_d6" << std::endl;
+    std::cout << "[PASS] test_consumer_broker_connect_failure_d6" << std::endl;
 }
 
 // =============================================================================
 // Test: Runner --algorithm-id 透传至 MSG_RESULT 载荷 (algorithm_id) 跨进程端到端验证
 // =============================================================================
-void test_runner_result_algorithm_id_e2e(const char* runner_bin, const char* plugin_so) {
-    if (!runner_bin || !plugin_so) return;
+void test_consumer_result_algorithm_id_e2e(const char* consumer_bin) {
+    if (!consumer_bin) return;
 
     uint64_t stream_id = 2007;
     FrameBroker broker;
@@ -1025,11 +1022,10 @@ void test_runner_result_algorithm_id_e2e(const char* runner_bin, const char* plu
         received.store(true);
     });
 
-    // 启动独立子进程 Runner，显式传入 --algorithm-id
+    // 启动独立子进程：包形态的算法可执行文件，显式传入 --algorithm-id
     pid_t pid = fork();
     if (pid == 0) {
-        execl(runner_bin, runner_bin,
-              "--plugin", plugin_so,
+        execl(consumer_bin, consumer_bin,
               "--broker", broker.socket_path().c_str(),
               "--name", "algo_id_worker",
               "--algorithm-id", "e2e_algo",
@@ -1081,7 +1077,7 @@ void test_runner_result_algorithm_id_e2e(const char* runner_bin, const char* plu
 
     assert(received_payload.find("\"algorithm_id\":\"e2e_algo\"") != std::string::npos);
 
-    std::cout << "[PASS] test_runner_result_algorithm_id_e2e" << std::endl;
+    std::cout << "[PASS] test_consumer_result_algorithm_id_e2e" << std::endl;
 }
 
 void test_frame_broker_result_egress() {
@@ -1400,8 +1396,8 @@ void test_frame_broker_start_waits_for_resource_lock() {
 }
 
 int main(int argc, char* argv[]) {
-    const char* runner_bin = (argc > 1) ? argv[1] : nullptr;
-    const char* plugin_so = (argc > 2) ? argv[2] : nullptr;
+    // 子进程是「包形态」的桩算法可执行文件：自带算法类，argv 只有 broker 相关参数。
+    const char* consumer_bin = (argc > 1) ? argv[1] : nullptr;
 
     test_shm_pool_basic();
     test_frame_broker_dispatch_and_leasing();
@@ -1419,11 +1415,11 @@ int main(int argc, char* argv[]) {
     test_frame_broker_result_egress();
     test_frame_broker_control_broadcast();
     test_frame_broker_start_waits_for_resource_lock();
-    if (runner_bin && plugin_so) {
-        test_runner_subprocess_e2e(runner_bin, plugin_so);
-        test_runner_multi_broker_e2e(runner_bin, plugin_so);
-        test_runner_broker_connect_failure_d6(runner_bin, plugin_so);
-        test_runner_result_algorithm_id_e2e(runner_bin, plugin_so);
+    if (consumer_bin) {
+        test_consumer_subprocess_e2e(consumer_bin);
+        test_consumer_multi_broker_e2e(consumer_bin);
+        test_consumer_broker_connect_failure_d6(consumer_bin);
+        test_consumer_result_algorithm_id_e2e(consumer_bin);
     }
     std::cout << "All FrameBroker SHM and IPC integration tests passed successfully!" << std::endl;
     return 0;

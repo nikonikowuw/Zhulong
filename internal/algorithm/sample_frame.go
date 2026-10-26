@@ -12,17 +12,18 @@ import (
 )
 
 // writeSampleFramePPM decodes the package sample image into a binary PPM (P6) file
-// the runner can read without linking any image decoder itself, and returns its
-// path plus a cleanup func.
+// the package entry can read without linking any image decoder itself, and returns
+// its path plus a cleanup func.
 //
-// The runner deliberately has no JPEG/PNG dependency: image decoding is not part of
-// the inference path. Handing it a decoded frame keeps `zhulong_algo_runner
-// --verify-plugin` an honest black-box check (the packaged sample really goes
-// through the model) instead of a lifecycle-only smoke test on a synthetic frame.
+// The package skeleton deliberately has no JPEG/PNG dependency: image decoding is
+// not part of the inference path. Handing it a decoded frame keeps
+// `<entry> --verify --sample` an honest black-box check (the packaged sample really
+// goes through the model) instead of a lifecycle-only smoke test on a synthetic
+// frame.
 //
 // Returns ("", nil) when the image cannot be decoded; callers then fall back to
-// passing the raw path, and the runner reports sample_decoded=false so the fallback
-// stays visible rather than silently "passing".
+// passing the raw path, and the package reports sample_decoded=false so the
+// fallback stays visible rather than silently "passing".
 func writeSampleFramePPM(samplePath string) (string, func()) {
 	file, err := os.Open(samplePath)
 	if err != nil {

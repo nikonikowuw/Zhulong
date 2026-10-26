@@ -61,19 +61,21 @@ void             zhulong_face_extract_release(void);
 
 ### 运行库 HAL 的 vtable 属于内部 ABI（禁止增删虚函数）
 
-`IInferenceBackend` / `IVisionBackend` 的虚表跨越 `plugin.so ↔ libZhulongAlgoRuntime.so` 边界，而算法包是**独立交付、独立升级**的制品：宿主换代运行库时，旧插件 `.so` 仍会被装载。因此：
+> 交付形态已是「包根可执行文件 + 静态链接运行时」，`plugin.so ↔ libZhulongAlgoRuntime.so` 的版本偏斜彻底消失。下面的约束保留为**同一次构建内**的纪律（运行库与算法类必须一致地编译），历史事故保留作理由。
 
-- 严禁在这两个接口上增删或重排虚函数。实测：在 `IInferenceBackend` 上新增一个虚函数后，已编译的旧 face 插件在新的运行库上把 `forward` 调用打到偏移后的槽位，直接段错误（`--verify-plugin` 报 `signal: segmentation fault`）。
+`IInferenceBackend` / `IVisionBackend` 的虚表曾在 `plugin.so ↔ libZhulongAlgoRuntime.so` 边界上，而算法包是**独立交付、独立升级**的制品：宿主换代运行库时，旧插件 `.so` 仍会被装载。因此：
+
+- 严禁在这两个接口上增删或重排虚函数。历史实测（dlopen 时代）：在 `IInferenceBackend` 上新增一个虚函数后，已编译的旧 face 插件在新的运行库上把 `forward` 调用打到偏移后的槽位，直接段错误（验包报 `signal: segmentation fault`）。
 - 诊断类能力（如推理后端标识）一律做成 `runtime_factory.hpp` 的自由函数（`default_inference_backend_name()`），不走虚表。
 - 新增 HAL 能力优先走「新增自由函数 + 新接口继承旧接口」，并把兼容性验证纳入 `ZhulongAlgoVerifyCli` / 安装准入。
 
 ### 黑盒验包的样本帧契约
 
-`zhulong_algo_runner --verify-plugin --sample <path>` 必须真的把样本图喂进模型，否则准入只是一次 ABI 冒烟：
+`<包根可执行文件> --verify --sample <path>` 必须真的把样本图喂进模型，否则准入只是一次 ABI 冒烟：
 
-- Runner **不链接任何图像解码器**（它不属于推理链路）：它原生解码 netpbm（`P6`/`P5`）。
-- 包内约定文件是 `sample.jpg/png`，解码责任在调用侧：Go 验包门禁（`internal/algorithm`）用标准库解码后以 PPM 交给 Runner，并以**包目录**为 CWD 启动 Runner（复现部署布局 `plugin.so` 与 `models/` 同级）。
-- 报告必须携带 `sample_decoded`：`false` 表示 Runner 回退到合成帧，此时准入**只**证明了 ABI 生命周期；验包门禁会把它记为告警，不得静默当作通过。
+- 包内骨架**不链接任何图像解码器**（它不属于推理链路）：它原生解码 netpbm（`P6`/`P5`）。
+- 包内约定文件是 `sample.jpg/png`，解码责任在调用侧：Go 验包门禁（`internal/algorithm`）用标准库解码后以 PPM 交给包入口，并以**包目录**为 CWD 启动它（复现部署布局：可执行文件与 `models/` 同级）。
+- 报告必须携带 `sample_decoded`：`false` 表示包入口回退到合成帧，此时准入**只**证明了 ABI 生命周期；验包门禁会把它记为告警，不得静默当作通过。
 - 算法包自身的准确率回归由 native 金标测试负责（如 `ZhulongPlateRecognitionPluginTests` 用 `native/tests/fixtures/onnx/plate_sample.ppm` 钉住车牌号与颜色），黑盒验包不重复承担该职责。
 
 ---
@@ -196,37 +198,40 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 
 ---
 
-## 5. 独立黑盒验包 CLI 工具 (`zhulong_algo_runner`)
+## 5. 包根可执行文件的 CLI 与退出码
 
-验包命令：
+包**就是**它自己的可执行文件（`<manifest.id>`，静态链接运行时）。宿主不再提供通用 runner，也不再 `dlopen` 任何东西；下面两种调用形态都由 `native/sdk/src/algo_main.cpp` 的骨架实现：
 
 ```bash
-zhulong_algo_runner --verify-plugin <path_to_plugin.so> --sample <test_image_or_mock>
+# 安装期黑盒验包（宿主 verifier 调用，cwd = 包目录）
+./<manifest.id> --verify --sample <test_image.ppm>
+
+# 运行期：连 broker 长驻消费（宿主 supervisor 调用）
+./<manifest.id> --broker <socket_path> [--broker <socket_path_2> ...] [--name <client_name>] [--algorithm-id <id>] [--max-frames <N>]
 ```
 
-输出严格 JSON 行。所有字符串字段均转义；退出码 `0` 表示 ABI、模型加载、Worker 创建、Task 打开、单次推理与内存释放全部符合规范。
+输出严格 JSON 行。所有字符串字段均转义；退出码 `0` 表示模型加载、Worker 创建、Task 打开、单次推理与内存释放全部符合规范。
 
-### 5.1 Runner 命令契约：`--broker` 参数语义
-
-`zhulong_algo_runner --plugin <plugin.so> --broker <socket_path> [--broker <socket_path_2> ...] [--name <client_name>] [--algorithm-id <id>] [--max-frames <N>]`
+### 5.1 运行期命令契约：`--broker` 参数语义
 
 - **`--broker` 的语义为字面 socket 路径**：客户端直接执行 `connect(path)`，不做目录派生。支持重复传入多个 `--broker` 参数以订阅多路相机流。
 - **Native Engine 作为 Broker 宿主**：当流具有 `ConsumerAI` 消费者时，Native `Engine` 自动实例化并启动 `ipc::FrameBroker`，生成的 socket 路径为 `<base_dir>/zhulong_broker_<stream_id>.sock`。
 - **`ZHULONG_FRAME_BROKER_SOCK` 环境变量**：仅在 Native 端作为 `base_dir` 读取（默认 `/tmp`），Go 侧不再读取该变量。
-- **路径解析与传递**：Go 侧通过 C ABI `Zhulong_stream_get_broker_path`（Go 封装为 `Stream.BrokerPath(ctx)`）获取各相机流的实际 socket 路径，并经 `BrokerSubscriptionResolver` 组装为 `--broker <socket_path>` 列表传给 runner。
-- **runner 从 socket 路径反解 stream_id**：runner 按 `<base_dir>/zhulong_broker_<stream_id>.sock` 从**字面 `--broker` 路径**反解 stream_id 并用作 `task_id`（`runner.cpp` 的 `parse_stream_id_from_socket`）。因此 `--broker` 传入的路径必须遵循宿主的派生规则。
-- **`--algorithm-id <id>`**：声明本 runner 实例所属的算法 ID；该值随每次推理结果写入载荷的 `algorithm_id` 字段（见 §9.2）。未传入时为空字符串。
+- **路径解析与传递**：Go 侧通过 C ABI `Zhulong_stream_get_broker_path`（Go 封装为 `Stream.BrokerPath(ctx)`）获取各相机流的实际 socket 路径，并经 `BrokerSubscriptionResolver` 组装为 `--broker <socket_path>` 列表传给包进程。
+- **包进程从 socket 路径反解 stream_id**：按 `<base_dir>/zhulong_broker_<stream_id>.sock` 从**字面 `--broker` 路径**反解 stream_id 并用作 `task_id`（`parse_stream_id_from_socket`）。因此 `--broker` 传入的路径必须遵循宿主的派生规则。
+- **`--algorithm-id <id>`**：声明本包实例所属的算法 ID；该值随每次推理结果写入载荷的 `algorithm_id` 字段（见 §9.2）。未传入时为空字符串。
+- **`--max-frames <N>`**：联调/自测用，消费 N 帧后正常退出（`<0` 不限）。宿主生产路径不传。
 
-### 5.2 Runner 退出码表
+### 5.2 退出码表
 
 | 退出码 | 含义 | 出处 |
 | :---: | :--- | :--- |
-| `0` | 正常退出 | `runner.cpp` |
-| `1` | `dlopen` 插件动态库失败 / 客户端名称超长（超过 32 字节） | `runner.cpp` |
-| `2` | `model_create` 失败 | `runner.cpp` |
-| `3` | `worker_create` 失败 | `runner.cpp` |
-| `4` | `task_open` 失败 | `runner.cpp` |
-| `5` | **broker 连接失败 / 无法从 `--broker` 路径反解 stream_id / 未提供 `--broker`** | `runner.cpp` |
+| `0` | 正常退出 | `algo_main.cpp` |
+| `1` | 客户端名称超长（超过 32 字节）/ 骨架内部错误 | `algo_main.cpp` |
+| `2` | `model_create` 失败 | `algo_main.cpp` |
+| `3` | `worker_create` 失败 | `algo_main.cpp` |
+| `4` | `task_open` 失败 | `algo_main.cpp` |
+| `5` | **broker 连接失败 / 无法从 `--broker` 路径反解 stream_id / 未提供 `--broker`** | `algo_main.cpp` |
 
 ⚠️ 多路 `--broker` 下，任一路连接失败即整体失败，退出码严格保持为 `5`；任一路失败会置位 `stop_all` 终止已连接各路，不存在部分成功中间态。
 
@@ -247,8 +252,8 @@ zhulong_algo_runner --verify-plugin <path_to_plugin.so> --sample <test_image_or_
 ### 6.1 内存拓扑与安全隔离
 
 - 主进程作为生产者独占创建 POSIX 共享内存（`/zhulong_shm_<stream_id>`，带固定 8~16 个 4MB 槽位），并将解码帧写入空闲槽位；
-- 各独立算法 Runner 子进程以只读权限（`PROT_READ`）映射共享内存，物理防止算法进程篡改原始画面；
-- 主进程与各 Runner 之间通过点对点 Unix Domain Socket 交换定长二进制 IPC 控制包（`MSG_HANDSHAKE`, `MSG_FRAME_DISPATCH`, `MSG_FRAME_ACK`）。
+- 各算法包进程以只读权限（`PROT_READ`）映射共享内存，物理防止算法进程篡改原始画面；
+- 主进程与各包进程之间通过点对点 Unix Domain Socket 交换定长二进制 IPC 控制包（`MSG_HANDSHAKE`, `MSG_FRAME_DISPATCH`, `MSG_FRAME_ACK`）。
 
 ### 6.2 租约生命周期与代次保护 (Generation)
 

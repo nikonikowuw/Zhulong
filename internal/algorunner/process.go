@@ -75,7 +75,7 @@ type ProcessConfig struct {
 	Logger         *zap.Logger
 }
 
-// RunnerProcess supervises an individual zhulong_algo_runner subprocess.
+// RunnerProcess supervises one algorithm package subprocess.
 type RunnerProcess struct {
 	config       ProcessConfig
 	logger       *zap.Logger
@@ -424,8 +424,8 @@ func validRunnerStatus(value string) bool {
 	}
 }
 
-// validRunnerStage must stay in sync with the stages zhulong_algo_runner emits
-// (native/src/algorithm/runner/runner.cpp). A stage the runner emits but this
+// validRunnerStage must stay in sync with the stages the package skeleton emits
+// (native/sdk/src/algo_main.cpp). A stage the runner emits but this
 // allowlist rejects is classified as "runner protocol record rejected", which
 // hides the real event: `broker_disconnected` is exactly the signal an operator
 // needs to tell "host died" apart from "plugin crashed".

@@ -1,5 +1,5 @@
-#include "../src/algorithm/runner/gallery_index.hpp"
-#include "../src/algorithm/runner/gallery_parser.hpp"
+#include "internal/gallery_index.hpp"
+#include "internal/gallery_parser.hpp"
 #include <cassert>
 #include <iostream>
 #include <thread>

@@ -107,23 +107,25 @@ NMS_THRESHOLD=0.50
 
 ## 5. 本地黑盒验包与自测门禁 (Verification Gate)
 
-在向平台交付算法包之前，开发者必须在本地使用平台提供的 `zhulong_algo_runner` CLI 进行黑盒自测：
+算法包**就是**一个自带算法类的可执行文件（`<manifest.id>`，静态链接运行时）。交付前必须在本地用**包的工程本身**做黑盒自测——命令与平台准入走的是同一个入口：
 
 ```bash
-cd <包目录>   # ⚠️ 必须以包目录为 CWD，否则「源码树权重意外命中」会掩盖模型路径缺陷
-zhulong_algo_runner --verify-plugin plugin.so --sample sample.ppm
+cd packages/<id>/<target>
+make SDK_PREFIX=<sdk 前缀>        # 构建包根可执行文件
+make verify                       # → ./build/<manifest.id> --verify --sample <ppm>（cwd = 包目录）
+make test                         # 开发期自测：sample.jpg 进 → build/out/result-*.jpg 出
 ```
 
-退出码为 `0` 且终端输出 `{"status":"passed", ...}` 时方可通过准入校验。
+`make verify` 退出码为 `0` 且输出 `{"status":"passed", ...}` 时方可通过准入校验。
 
-⚠️ `--sample` 必须是 Runner **能解码**的帧（netpbm `.ppm`/`.pgm`）：Runner 不链接图像解码器，`sample.jpg` 无法被它直接读取，至今会回退合成帧（报告里 `sample_decoded:false`）。`packages/*/scripts/build_package.py` 会自动用 `ffmpeg` 把 `sample.jpg` 转成 PPM 再验包。
+⚠️ `--sample` 必须是包**能解码**的帧（netpbm `.ppm`/`.pgm`）：包骨架不链接图像解码器，`sample.jpg` 无法被它直接读取，会回退合成帧（报告里 `sample_decoded:false`）。`packages/*/scripts/build_package.py` 会自动用 `ffmpeg` 把 `sample.jpg` 转成 PPM 再验包。
 
 ### 5.1 验包报告的诚实语义（不可把「烟测」当成「验过样本」）
 
-- Runner **不链接图像解码器**：它原生解码 netpbm（`P6`/`P5`）。`sample.jpg/png` 的解码责任在调用侧：平台准入（`internal/algorithm`）用 Go 标准库解码后以 PPM 交给 Runner，并以**包目录**为 CWD 启动（复现 `plugin.so` 与 `models/` 同级的部署布局）；`packages/*/scripts/build_package.py` 在以 `staging` 目录为 CWD 调用 Runner 的同时，优先用 `ffmpeg` 把 `sample.jpg` 转 PPM。
+- 包骨架**不链接图像解码器**：它原生解码 netpbm（`P6`/`P5`）。`sample.jpg/png` 的解码责任在调用侧：平台准入（`internal/algorithm`）用 Go 标准库解码后以 PPM 交给包入口，并以**包目录**为 CWD 启动（复现「可执行文件与 `models/` 同级」的部署布局）；`packages/*/scripts/build_package.py` 在以 `staging` 目录为 CWD 调用包入口的同时，优先用 `ffmpeg` 把 `sample.jpg` 转 PPM。
 - 报告字段 `sample_decoded` 决定这次「通过」到底证明了什么：
   - `true` —— 包里那张样本图真的进了模型，`count` 是该图的真实结果数；
-  - `false` —— Runner 回退到合成灰帧，**只**证明 ABI 生命周期（dlopen / model_create / worker / task / process / release），平台侧会记一条告警。
+  - `false` —— 包骨架回退到合成灰帧，**只**证明 ABI 生命周期（model_create / worker / task / process / release），平台侧会记一条告警。
 - `count == 0` 不阻断安装（样本本身可能确实没有目标），但平台会告警提醒「样本图不具代表性」；**算法准确率由算法包自己的 native 金标测试担保**（如 `ZhulongPlateRecognitionPluginTests` 钉住车牌号/颜色），不依赖验包 CLI。
 - `model_create` 失败时日志必带 `backend=<onnx|rknn|test_stub>`：`test_stub` 是夹具构建，按设计拒绝一切真实模型（应先换后端而不是查模型文件）；产品构建只有 `onnx` / `rknn`，不存在静默降级路径。
 
@@ -135,7 +137,8 @@ zhulong_algo_runner --verify-plugin plugin.so --sample sample.ppm
 | `DECOMPRESSION_BOMB_DETECTED` | 文件数 > 1,000 或解压总大小 > 1GB | 精简模型与依赖库体积，移除无用中间文件 |
 | `ALGO_PLATFORM_MISMATCH` | `platform.arch`/`target` 与运行宿主配置不符 | 核验交叉编译工具链与 `manifest.json` 平台声明 |
 | `INVALID_MANIFEST_TOKEN` | `id` / `version` 包含非法字符，或 `name` 超过 32 字节 | 匹配正则 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` 并缩短 `name` |
-| `ALGO_VERIFICATION_FAILED` | `zhulong_algo_runner` 验包退出码非 0 | 使用 `sample.jpg` 在本地复现排查崩溃与内存问题 |
+| `ALGO_VERIFICATION_FAILED` | 包根可执行文件验包退出码非 0 | 在包目录跑 `make verify` 复现崩溃与内存问题 |
+| `ALGO_ENTRY_INVALID` | 包根缺少以 `manifest.id` 命名的可执行文件（旧 `.so` 包，或归档被裁剪） | 用当前 SDK 重新构建/重新打包，归档内不得再有 `plugin.so` |
 
 ---
 

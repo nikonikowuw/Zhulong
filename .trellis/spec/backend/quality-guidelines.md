@@ -57,27 +57,23 @@ comp.Handler.RegisterRoutes(api)
 
 ### 4.2 `*Components` 构造期捕获依赖，测试必须从输入侧注入
 
-**Symptom**：测试里写 `comp.Supervisor = algorithm.NewSupervisor(...)` 或 `comp.Verifier = ...` 后再调用 enable/disable 或 upload，行为没有变化，甚至去 fork 一个不存在的 runner 而报 `no such file or directory`。
+**Symptom**：测试里写 `comp.Supervisor = algorithm.NewSupervisor(...)` 或 `comp.Verifier = ...` 后再调用 enable/disable 或 upload，行为没有变化，甚至去执行一个不存在的包入口而报 `no such file or directory`。
 
 **Cause**：`NewAlgorithmComponents` 在构造时把 `supervisor`/`verifier` 传给了 `Service`，`Service` 持有的是**原实例**。事后替换组件包上的字段只改了 `AlgorithmComponents` 的引用，`Service` 仍指向旧对象。
 
-**Fix**：构造函数保持**纯粹**——不读环境变量、不拼路径，把 host 侧输入（`algorunner.Runtime`、`algorithm.HostPlatform`）作为参数传进去。测试想要不同图（静态验证 + 桩 runner）就在构造前把参数造好。
+**Fix**：构造函数保持**纯粹**——不读环境变量、不拼路径，把 host 侧输入（`algorunner.Runtime`、`algorithm.HostPlatform`）作为参数传进去。测试想要不同图（静态验证 / 可执行的包桩）就在构造前把参数和**盘上的包**准备好。
 
 ```go
 // ❌ 无效：Service 已经捕获了原实例，字段替换对它无效
 comp := algorithm.NewAlgorithmComponents(db, rt, host, logger)
-comp.Verifier = algorithm.NewVerifier("", host)
+comp.Verifier = algorithm.NewVerifier(host, algorithm.VerifyOptions{SkipDynamic: true})
 
-// ✅ 正确：从输入侧决定，构造出的图从一开始就是想要的形状
-rt := algorunner.Runtime{
-	AlgorithmsDir: dataDir,
-	RunnerPath:    stubPath, // 只给 supervisor 用
-	// VerifyRunnerPath 留空 → 验包只跑静态检查
-}
-comp := algorithm.NewAlgorithmComponents(db, rt, x86Host(), logger)
+// ✅ 正确：从输入侧决定，并且在构造前把包桩落到 supervisor 会解析的位置
+installStubPackage(t, dataDir, "pkg_id", "1.0.0", idleStubScript())
+comp := algorithm.NewAlgorithmComponents(db, algorunner.Runtime{AlgorithmsDir: dataDir}, x86Host(), logger)
 ```
 
-`Runtime` 把两个 runner 角色分开：`RunnerPath` 是 supervisor 起进程服务的二进制，`VerifyRunnerPath` 是验包时以 `--verify-plugin` 调用的那一个。两者在 `internal/app` 的 `newAlgorithmRuntime` 里解析为同一个值；测试里则常常只需要其一。
+`Runtime` 只剩 `AlgorithmsDir`：包**就是**它自己的可执行文件（`<root>/<id>/<version>/<id>`，由 `algorunner.ResolveEntry` 解析），既没有可注入的 runner，也没有 `--verify-plugin` 的第二个角色。测试需要的「行为」全部来自**盘上那个入口**（可以是 shell 桩），而不是注入路径。
 
 **Prevention**：
 

@@ -47,7 +47,7 @@ func TestClassifyRunnerLinesRedactsUntrustedText(t *testing.T) {
 }
 
 // TestStreamLogReaderAcceptsBrokerDisconnectEvent pins the cross-layer contract
-// with native/src/algorithm/runner/runner.cpp: when the runner loses its broker
+// with native/sdk/src/algo_main.cpp: when a package process loses its broker
 // it emits {"status":"info","stage":"broker_disconnected"} on stderr. Both
 // tokens must be in the allowlist — otherwise the one event that distinguishes
 // "host died" from "plugin crashed" is downgraded to "record rejected" and

@@ -143,7 +143,7 @@ func newInferenceResult(cameraID, algorithmID string, pts, costMs int64, taskTyp
 	}
 }
 
-// RawInferencePayload models the JSON payload serialized by zhulong_algo_runner.
+// RawInferencePayload models the JSON payload serialized by an algorithm package process.
 type RawInferencePayload struct {
 	StreamID        uint64               `json:"stream_id"`
 	PTS             int64                `json:"pts"`

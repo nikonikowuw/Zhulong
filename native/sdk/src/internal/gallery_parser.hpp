@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "gallery_index.hpp"
+#include "internal/gallery_index.hpp"
 #include <string_view>
 #include <charconv>
 #include <cstdlib>
