@@ -582,7 +582,7 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       > 1. `internal/faceextract` 的 Go 单测，用 **stub 可执行文件**（不依赖真实包，见 4.8）；
       > 2. SDK 分发物自带的 `tools/algo_probe.py`（阶段 7.1 产出，第三方与仓库共用同一份）。
 
-- [ ] **3.9** 移除宿主构建树里的包定义，包级测试随包走（AC16）：
+- [x] **3.9** 移除宿主构建树里的包定义，包级测试随包走（AC16）：
       - `native/CMakeLists.txt`：删除 `FaceRecognitionPlugin` / `PlateRecognitionPlugin` 的 `add_library`、`target_include_directories`、`target_link_libraries` 段落；
       - 把 `native/tests/face_recognition_plugin_test.cpp`、`plate_recognition_plugin_test.cpp`、`face_recognition_onnx_test.cpp` 迁到对应 target 目录（`packages/face_recognition/<target>/tests/`、`packages/plate_recognition/onnx/tests/`），**不得**再 `#include` `native/src`；迁完后它们以 `devtest` 的可选子用例形式存在（或直接并入 `dev_infer.cpp` 的断言），由 `make packages-test` 驱动；不能迁的部分（依赖旧 `.so` 形态的断言）改写为 `dev_infer.cpp` 的检查项，不要为了保留旧断言而把 `.so` 形态抬成受支持路径；
       - `ZhulongFaceFeatureExtract` / `ZhulongFacePluginTtl`：前者随 R10 删除（改由 Go 侧覆盖），后者改测新的 `--extract-feature` 进程（用 mock 可执行文件，不依赖真实包）；`MockDetector` / `MockClassifier` / `MockPersonStructure` / `MockFaceExtractPlugin` 属夹具，留在 native；
@@ -651,7 +651,7 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       # 端到端：安装并运行 plate 与 face 的可执行文件包；plugin.so-only 包必须在安装期被拒绝
       ```
 
-- [ ] **4.8** 宿主特征提取改道到包可执行文件（`design.md` §11）：
+- [x] **4.8** 宿主特征提取改道到包可执行文件（`design.md` §11）：
       - 新增 Go 侧 client（建议独立包 `internal/faceextract`，不得在 `internal/person` 内直接依赖 native/exec 细节）：帧流写入 + 逐行 JSON 解析 + `request_id` 校验；
       - 热进程缓存：并发 1、请求超时 30s（到点 `kill(-pid)` + `Wait()`）、空闲 60s 回收、单帧最多重试 1 次；缓存 key 含 `<pkgDir>` 与 exe `(dev,ino,size,mtime)`；
       - **spawn 必须复用** `runnerSysProcAttr()` + `LockOSThread` helper，禁止裸 `exec.Command`；
@@ -660,7 +660,7 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       - 错误码映射逐条对照 `design.md` §11.8（严格 fail-closed，不得写零向量）。
       - **单测不得依赖真实算法包**：客户端逻辑（组帧、`request_id` 校验、超时 kill 进程组、重试 1 次、空闲回收、版本失效 retire）全部用 stub 可执行文件驱动（`t.TempDir()` 里写一段 shell/Python，按帧读 stdin 后吐固定 JSON）。真实包的集成验收只在 3.8 做一次，不引入 Go 测试对 `build/packages/face_recognition/face_recognition` 的硬依赖。
       - 建议覆盖的表驱动用例：`request_id` 错配、进程中途退出、超时不响应、stdout 洪泛带日志行、`feature_dim=0/513`、包目录 mtime 变化触发 retire。
-- [ ] **4.9** 门禁与文档同步：`native/tests/check_plugin_symbols.py` 去掉 face 双符号白名单并新增 exe「导出表为空」断言；`cgo-contract.md §6`、`algo-plugin-contract.md:49`、`hardware-backends.md:258` 按 `design.md` §11.9 重写。
+- [x] **4.9** 门禁与文档同步：`native/tests/check_plugin_symbols.py` 去掉 face 双符号白名单并新增 exe「导出表为空」断言；`cgo-contract.md §6`、`algo-plugin-contract.md:49`、`hardware-backends.md:258` 按 `design.md` §11.9 重写。
 
       **阶段 4 实施记录（2026-10-26）**
 
@@ -732,6 +732,35 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       `native/tests/migration/*_plugin_entry.cpp` 仍在——宿主引擎的人脸特征提取（`FacePluginLoader`）
       还靠 dlopen 它们，因此必须与 4.8 一起下线（顺序：4.8 → 删这两个 target 与
       `zhulong_face_extract_*` 的符号白名单）。
+
+      **3.9 收尾 + 4.9 文档同步（2026-10-26，提交 4c4e895）**
+
+      - 删除 `FaceRecognitionPlugin` / `PlateRecognitionPlugin` 两个 SHARED 目标与
+        `native/tests/migration/*_plugin_entry.cpp`；删除三个 Mock 夹具 `.so` 与
+        `native/cmake/plugin-exports.map`（唯一消费者是符号可见性测试）。
+      - 三个 native 插件测试改成**直接链接包内实现** + `PluginApi<...>::get_api` 现场构造
+        C ABI 表。覆盖不减：face/plate 的金标回归、ABI 生命周期、坐标映射单测全在。
+      - `check_plugin_symbols.py` 收成单一形态 `--entry`：断言包可执行文件不得导出
+        `zhulong_*` / `zhulong_plugin_get_api`。
+      - 骨架删除 `report_dlopen_failure` 与退出码表的 dlopen 分支；`plugin.h` 叙述改为
+        「进程内直接调用生成器」。
+      - spec 4.9 全做：`algo-plugin-contract.md`（符号门禁反向断言 + 弱符号能力）、
+        `cgo-contract.md §6` 整体重写（协议表 / Fail-Closed 表 / 进程生命周期 / 验证边界）、
+        `hardware-backends.md §6.1`。
+
+      验证：`make native-test` 22/22；交叉 `rk3568-rknn`/`rk3568-stub` 通过；
+      `make go-check` exit 0；两个包重建 + 符号门禁 + 黑盒验包通过。
+
+      **AC 复核（除阶段 5 孤儿认亲细化项外均已满足）**
+
+      | 判据 | 结果 |
+      | :--- | :--- |
+      | 包内无 zhulong 未定义符号 | `nm -D` 只剩 libc/libstdc++ 与 ORT 依赖 |
+      | 归档无 `plugin.so`、无 `targets/` | 实测 tar 列表 |
+      | 包根可执行文件不导出插件 C ABI | `check_plugin_symbols.py --entry` 通过 |
+      | 旧 `.so` 包被明确拒绝且不重试 | `algorunner.ResolveEntry` + `ALGO_ENTRY_INVALID` |
+      | 宿主不装载算法产物 | `grep -n "dlopen\|dlsym" native/src/abi/engine.cpp` = 0 |
+      | 一个可执行文件交付、零 Node 运行时 | 未改动（方案 A 不变） |
 
 **Review gate 4**：AC4 —— 两个算法包均能安装、启动、停止、重启及回滚；旧 `.so` 包明确拒绝，且不进入启动重试；AC9-AC13 全过；`grep -n "dlopen\|dlsym" native/src/abi/engine.cpp` 为空。
 
