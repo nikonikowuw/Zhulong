@@ -49,9 +49,6 @@ public:
 
     void set_score_threshold(float th) noexcept { score_threshold_ = th; }
     void set_nms_threshold(float th) noexcept { nms_threshold_ = th; }
-    void set_is_onnx(bool v) noexcept { is_onnx_ = v; }
-    bool is_onnx() const noexcept { return is_onnx_; }
-
 private:
     std::vector<FaceDetection> decode_scrfd(
         const std::vector<zhulong::Tensor>& outputs,
@@ -61,7 +58,6 @@ private:
 
     float score_threshold_{0.50f};
     float nms_threshold_{0.40f};
-    bool is_onnx_{false};
 
     std::unique_ptr<zhulong::platform::DmaBuffer> dma_input_buf_;
     int cached_w_{0};
@@ -99,9 +95,6 @@ public:
 
     void set_score_threshold(float th) noexcept { score_threshold_ = th; }
     void set_nms_threshold(float th) noexcept { nms_threshold_ = th; }
-    void set_is_onnx(bool v) noexcept { is_onnx_ = v; }
-    bool is_onnx() const noexcept { return is_onnx_; }
-
 private:
     std::vector<PersonBodyDetection> decode_scrfd_person(
         const std::vector<zhulong::Tensor>& outputs,
@@ -111,7 +104,6 @@ private:
 
     float score_threshold_{0.50f};
     float nms_threshold_{0.40f};
-    bool is_onnx_{false};
 
     std::unique_ptr<zhulong::platform::DmaBuffer> dma_input_buf_;
     int cached_w_{0};

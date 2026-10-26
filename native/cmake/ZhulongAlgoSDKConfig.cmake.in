@@ -15,6 +15,11 @@ set(ZhulongAlgoSDK_BACKEND   "@ZHULONG_SDK_BACKEND@")
 set(ZhulongAlgoSDK_DEV_DIR "${ZHULONG_SDK_PREFIX}/dev")
 
 find_package(Threads REQUIRED)
+if(UNIX AND NOT APPLE)
+    set(_zhulong_sdk_system_libs Threads::Threads rt ${CMAKE_DL_LIBS})
+else()
+    set(_zhulong_sdk_system_libs Threads::Threads ${CMAKE_DL_LIBS})
+endif()
 
 # ---------------------------------------------------------------------------
 # 运行库：静态归档 + 公共头 + 后端编译定义
@@ -70,7 +75,7 @@ if("${ZhulongAlgoSDK_BACKEND}" STREQUAL "onnx")
             "  3) 让系统包管理器提供 libonnxruntime（Debian/Ubuntu: libonnxruntime-dev）。")
     endif()
     set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
-        INTERFACE_LINK_LIBRARIES "${ZHULONG_ONNXRUNTIME_LIBRARY};Threads::Threads;${CMAKE_DL_LIBS}")
+        INTERFACE_LINK_LIBRARIES "${ZHULONG_ONNXRUNTIME_LIBRARY};${_zhulong_sdk_system_libs}")
     # 前缀自带运行时（make sdk-install BUNDLE_RUNTIME=1）时，把它的目录写进 RPATH：
     # 否则链接期用前缀、运行期却去 ld.so 路径里找，换台机器就成了「编译成功、跑不起来」。
     get_filename_component(_zhulong_ort_dir "${ZHULONG_ONNXRUNTIME_LIBRARY}" DIRECTORY)
@@ -90,7 +95,7 @@ elseif("${ZhulongAlgoSDK_BACKEND}" STREQUAL "rknn")
             "或让板端 BSP 提供 /usr/lib/librknnrt.so。")
     endif()
     set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
-        INTERFACE_LINK_LIBRARIES "${ZHULONG_RKNNRT_LIBRARY};Threads::Threads;${CMAKE_DL_LIBS}")
+        INTERFACE_LINK_LIBRARIES "${ZHULONG_RKNNRT_LIBRARY};${_zhulong_sdk_system_libs}")
     # 传递依赖符号解析（librknnrt 的 NEEDED 不在默认搜索路径时）
     set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
         INTERFACE_LINK_OPTIONS "-Wl,-rpath-link,${_zhulong_vendor_dir}")

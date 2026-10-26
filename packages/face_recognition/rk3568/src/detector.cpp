@@ -53,7 +53,7 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
     constexpr int model_h = 640;
 
     // 支持通过 DMA-BUF 持久缓存分配零拷贝输入张量（避免热路径单帧分配/释放抖动）
-    if (!is_onnx_ && image.dma_buf_fd() >= 0 && zhulong::platform::DmaBufAllocator::instance().is_supported()) {
+    if (image.dma_buf_fd() >= 0 && zhulong::platform::DmaBufAllocator::instance().is_supported()) {
         if (!dma_input_buf_ || cached_w_ != model_w || cached_h_ != model_h) {
             dma_input_buf_ = zhulong::platform::DmaBufAllocator::instance().allocate(model_w * model_h * 3);
             cached_w_ = model_w;
@@ -89,30 +89,7 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
     }
 
     // 2. NPU / 后端前向推理
-    std::vector<zhulong::Tensor> outputs;
-    if (is_onnx_) {
-        // ONNX SCRFD: [1, 3, 640, 640] FLOAT32 NCHW, RGB, (x - 127.5f) / 128.0f
-        zhulong::Tensor onnx_input({1, 3, model_h, model_w}, zhulong::DataType::FLOAT32);
-        const uint8_t* src_hwc = input_tensor.data<uint8_t>();
-        float* dst_nchw = onnx_input.data<float>();
-        if (!src_hwc || !dst_nchw) {
-            return {};
-        }
-        constexpr int plane_size = model_w * model_h;
-        float* dst_r = dst_nchw;
-        float* dst_g = dst_nchw + plane_size;
-        float* dst_b = dst_nchw + plane_size * 2;
-        constexpr float mean = 127.5f;
-        constexpr float inv_std = 1.0f / 128.0f;
-        for (int i = 0; i < plane_size; ++i) {
-            dst_r[i] = (static_cast<float>(src_hwc[i * 3 + 0]) - mean) * inv_std;
-            dst_g[i] = (static_cast<float>(src_hwc[i * 3 + 1]) - mean) * inv_std;
-            dst_b[i] = (static_cast<float>(src_hwc[i * 3 + 2]) - mean) * inv_std;
-        }
-        outputs = session.forward({onnx_input});
-    } else {
-        outputs = session.forward({input_tensor});
-    }
+    std::vector<zhulong::Tensor> outputs = session.forward({input_tensor});
 
     // A missing or incompatible model output is not a detection.
     if (outputs.size() != 9) {
@@ -315,7 +292,7 @@ std::vector<PersonBodyDetection> PersonDetector::detect(zhulong::Session& sessio
     constexpr int model_w = 640;
     constexpr int model_h = 640;
 
-    if (!is_onnx_ && image.dma_buf_fd() >= 0 && zhulong::platform::DmaBufAllocator::instance().is_supported()) {
+    if (image.dma_buf_fd() >= 0 && zhulong::platform::DmaBufAllocator::instance().is_supported()) {
         if (!dma_input_buf_ || cached_w_ != model_w || cached_h_ != model_h) {
             dma_input_buf_ = zhulong::platform::DmaBufAllocator::instance().allocate(model_w * model_h * 3);
             cached_w_ = model_w;
@@ -350,30 +327,7 @@ std::vector<PersonBodyDetection> PersonDetector::detect(zhulong::Session& sessio
         return {};
     }
 
-    std::vector<zhulong::Tensor> outputs;
-    if (is_onnx_) {
-        // ONNX: [1, 3, 640, 640] FLOAT32 NCHW, RGB, (x - 127.5f) / 128.0f
-        zhulong::Tensor onnx_input({1, 3, model_h, model_w}, zhulong::DataType::FLOAT32);
-        const uint8_t* src_hwc = input_tensor.data<uint8_t>();
-        float* dst_nchw = onnx_input.data<float>();
-        if (!src_hwc || !dst_nchw) {
-            return {};
-        }
-        constexpr int plane_size = model_w * model_h;
-        float* dst_r = dst_nchw;
-        float* dst_g = dst_nchw + plane_size;
-        float* dst_b = dst_nchw + plane_size * 2;
-        constexpr float mean = 127.5f;
-        constexpr float inv_std = 1.0f / 128.0f;
-        for (int i = 0; i < plane_size; ++i) {
-            dst_r[i] = (static_cast<float>(src_hwc[i * 3 + 0]) - mean) * inv_std;
-            dst_g[i] = (static_cast<float>(src_hwc[i * 3 + 1]) - mean) * inv_std;
-            dst_b[i] = (static_cast<float>(src_hwc[i * 3 + 2]) - mean) * inv_std;
-        }
-        outputs = session.forward({onnx_input});
-    } else {
-        outputs = session.forward({input_tensor});
-    }
+    std::vector<zhulong::Tensor> outputs = session.forward({input_tensor});
 
     if (outputs.size() != 15) {
         return {};

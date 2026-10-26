@@ -25,7 +25,7 @@
   - 诊断：Runner 在 `plugin_model_create_failed` 日志里附带 `backend=<onnx|rknn|test_stub>`（来自 `zhulong::default_inference_backend_name()` 自由函数，**不得**做成 HAL 虚函数）。
   - 推论：夹具构建的运行时**不能**服务任何真实算法包。要在开发机跑真实算法，必须 `make INFERENCE_BACKEND=onnx check`；不允许"编译成功但不可推理"的产物进入安装或分发链路。
 - **RKNN 模型闭环**：目标为 ARM/RKNN 时算法包只解析 `.rknn`，不探测 `.onnx` 或 `.weights`。检测器、特征提取器和 OCR 遇到缺失会话、预处理失败或无效输出必须返回空/错误结果，禁止基于亮度生成框、固定特征、固定车牌文本或固定置信度。
-- **板端模型边界**：`face_recognition/targets/rk3568` 已提供 RKNN 模型；当前 `plate_recognition` 只有 CPU ONNX 模型，没有 RKNN 包，因此 RKNN 运行时不得加载其 ONNX 资产，也不得以模拟结果替代。
+- **板端模型边界**：`face_recognition/rk3568` 已提供 RKNN 模型；当前 `plate_recognition` 只有 CPU ONNX 模型，没有 RKNN 包，因此 RKNN 运行时不得加载其 ONNX 资产，也不得以模拟结果替代。
 
 ### 1.1 后端的运行期入口与优先级（环境变量是统一开关）
 

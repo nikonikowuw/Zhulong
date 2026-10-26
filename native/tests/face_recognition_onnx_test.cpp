@@ -100,7 +100,7 @@ zhulong_status_t load_plugin(const char* so_path, void** out_handle, zhulong_plu
 int main(int argc, char* argv[]) {
     const char* plugin_so = (argc > 1) ? argv[1] : "./libFaceRecognitionPlugin.so";
     const std::string fixtures_dir = "tests/fixtures/onnx/";
-    const std::string models_dir = "packages/face_recognition/targets/onnx/models/";
+    const std::string models_dir = "packages/face_recognition/onnx/models/";
 
     std::cout << "[FaceRecognitionOnnxTest] Starting ONNX test suite..." << std::endl;
 
@@ -141,7 +141,6 @@ int main(int argc, char* argv[]) {
     zhulong::Image detect_img(raw_detect_view);
 
     zhulong::face::FaceDetector detector;
-    detector.set_is_onnx(true);
     detector.set_score_threshold(0.50f);
     detector.set_nms_threshold(0.40f);
 
@@ -179,7 +178,6 @@ int main(int argc, char* argv[]) {
     assert(person_session.valid());
 
     zhulong::face::PersonDetector person_detector;
-    person_detector.set_is_onnx(true);
     person_detector.set_score_threshold(0.50f);
     person_detector.set_nms_threshold(0.40f);
 
@@ -211,7 +209,6 @@ int main(int argc, char* argv[]) {
            load_ppm("../native/" + fixtures_dir + "face_b1_112x112.ppm", ppm_b1));
 
     zhulong::face::FaceFeatureExtractor extractor;
-    extractor.set_is_onnx(true);
 
     auto extract_from_ppm = [&](const PpmImage& ppm) {
         zhulong::Tensor tensor({1, 112, 112, 3}, zhulong::DataType::UINT8);

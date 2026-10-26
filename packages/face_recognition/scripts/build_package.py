@@ -25,7 +25,9 @@ def main():
 
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
     pkg_root = repo_root / "packages" / "face_recognition"
-    target_dir = pkg_root / "targets" / args.target
+    # 布局：packages/<id>/<target>/ 就是该档位的包目录（manifest / models / sample /
+    # config.schema.json 全在档位目录内，不再有 targets/ 中间层）。
+    target_dir = pkg_root / args.target
 
     if not target_dir.exists():
         sys.exit(f"错误: 目标芯片目录不存在: {target_dir}")
@@ -95,13 +97,13 @@ def main():
     os.chmod(dest_plugin, 0o755)
 
     # 3. 复制 sample.jpg
-    sample_src = pkg_root / "sample.jpg"
+    sample_src = target_dir / "sample.jpg"
     if not sample_src.exists():
         sys.exit(f"错误: 缺少 sample.jpg: {sample_src}")
     shutil.copy2(sample_src, staging_dir / "sample.jpg")
 
     # 4. 复制 config.schema.json
-    schema_src = pkg_root / "config.schema.json"
+    schema_src = target_dir / "config.schema.json"
     if schema_src.exists():
         shutil.copy2(schema_src, staging_dir / "config.schema.json")
 

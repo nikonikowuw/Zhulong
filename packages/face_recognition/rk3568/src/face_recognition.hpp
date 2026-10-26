@@ -1,7 +1,13 @@
 /**
- * @file face_recognition.cpp
- * @brief 人脸人体结构化算法插件主入口 (纯 C ABI 导出)
+ * @file face_recognition.hpp
+ * @brief 人脸人体结构化算法插件类（本 target 唯一实现）
+ *
+ * ⚠️ 类定义整体放在头文件里（含内联方法）：包内入口 `main.cpp`、迁移期 `.so` 胶水与
+ *    开发期 devtest 都要实例化它，而 `PluginApi<PluginClass, Adapter>` 需要完整类型。
+ *    头文件只被本 target 自己的 3 个 TU 包含。
  */
+
+#pragma once
 
 #include "detector.hpp"
 #include "aligner.hpp"
@@ -9,6 +15,8 @@
 #include "matcher.hpp"
 #include <zhulong/algo.hpp>
 #include <dlfcn.h>
+#include <unistd.h>
+
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -19,70 +27,95 @@
 
 namespace zhulong::face {
 
-static std::string resolve_model_path(const std::string& rel_path) {
+
+namespace {
+
+/**
+ * @brief 当前进程自身所在目录（不含结尾斜杠）；取不到时返回空串
+ *
+ * 已安装算法包布局：包根可执行文件与 `models/` 恒为同级目录。
+ * 主路径读 `/proc/self/exe`（与动态链接器无关，包被替换后路径仍可信），
+ * `dladdr` 只作 fallback（macOS / 无 procfs 的平台）。
+ */
+std::string executable_directory() {
+    std::string self_path;
+#if defined(__linux__)
+    char buffer[4096];
+    const ssize_t length = ::readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+    if (length > 0) {
+        buffer[length] = '\0';
+        self_path = buffer;
+        constexpr const char* kDeletedSuffix = " (deleted)";
+        const std::string suffix = kDeletedSuffix;
+        if (self_path.size() > suffix.size() &&
+            self_path.compare(self_path.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            self_path.erase(self_path.size() - suffix.size());
+        }
+    }
+#endif
+    if (self_path.empty()) {
+        Dl_info info;
+        if (dladdr(reinterpret_cast<void*>(&executable_directory), &info) == 0 || info.dli_fname == nullptr) {
+            return {};
+        }
+        self_path = info.dli_fname;
+    }
+    const auto slash = self_path.find_last_of('/');
+    if (slash == std::string::npos) {
+        return {};
+    }
+    return self_path.substr(0, slash);
+}
+
+/** @brief 本 target 只打包 .rknn 权重：扩展名是常量，不由编译期后端宏决定 */
+constexpr const char* kModelExtension = ".rknn";
+
+/**
+ * @brief 解析模型文件路径
+ *
+ * 顺序：包根（可执行文件同级 `models/`）→ 显式 env 覆盖 → 开发期源码树候选 → CWD。
+ * ⚠️ 没有跨 target 候选、没有架构宏：找错档位的权重表现为「能加载但结果全错」，
+ *    比直接失败难查得多。
+ */
+std::string resolve_model_path(const std::string& rel_path) {
+    const std::string exe_dir = executable_directory();
+    if (!exe_dir.empty()) {
+        const std::string candidate = exe_dir + "/" + rel_path;
+        if (std::ifstream(candidate).good()) {
+            return candidate;
+        }
+    }
+
+    for (const char* env_name : {"ZHULONG_FACE_MODEL_DIR", "ZHULONG_MODEL_DIR"}) {
+        const char* env_dir = std::getenv(env_name);
+        if (env_dir != nullptr && env_dir[0] != '\0') {
+            const std::string candidate = std::string(env_dir) + "/" + rel_path;
+            if (std::ifstream(candidate).good()) {
+                return candidate;
+            }
+        }
+    }
+
+    // 开发期兜底：只在源码树内有效，部署环境不会命中
+    for (const char* prefix : {"packages/face_recognition/rk3568/",
+                               "../../../packages/face_recognition/rk3568/",
+                               "../../packages/face_recognition/rk3568/",
+                               "../packages/face_recognition/rk3568/"}) {
+        const std::string candidate = std::string(prefix) + rel_path;
+        if (std::ifstream(candidate).good()) {
+            return candidate;
+        }
+    }
+
     if (std::ifstream(rel_path).good()) {
         return rel_path;
-    }
-#if defined(__arm__) || defined(__aarch64__)
-    const std::vector<std::string> target_dirs = {
-        "targets/rk3568/",
-        "targets/onnx/"
-    };
-#else
-    const std::vector<std::string> target_dirs = {
-        "targets/onnx/",
-        "targets/rk3568/"
-    };
-#endif
-
-    std::vector<std::string> cwd_candidates;
-    for (const auto& tdir : target_dirs) {
-        cwd_candidates.push_back("packages/face_recognition/" + tdir + rel_path);
-        cwd_candidates.push_back("../../../packages/face_recognition/" + tdir + rel_path);
-        cwd_candidates.push_back("../../packages/face_recognition/" + tdir + rel_path);
-        cwd_candidates.push_back("../packages/face_recognition/" + tdir + rel_path);
-    }
-
-    for (const auto& cand : cwd_candidates) {
-        if (std::ifstream(cand).good()) {
-            return cand;
-        }
-    }
-    const char* env_dir = std::getenv("ZHULONG_FACE_MODEL_DIR");
-    if (!env_dir) env_dir = std::getenv("ZHULONG_MODEL_DIR");
-    if (env_dir && env_dir[0] != '\0') {
-        std::string cand = std::string(env_dir) + "/" + rel_path;
-        if (std::ifstream(cand).good()) {
-            return cand;
-        }
-    }
-    Dl_info info;
-    if (dladdr(reinterpret_cast<void*>(&resolve_model_path), &info) && info.dli_fname) {
-        std::string so_path = info.dli_fname;
-        auto pos = so_path.find_last_of('/');
-        if (pos != std::string::npos) {
-            std::string dir = so_path.substr(0, pos);
-            std::vector<std::string> so_candidates = { dir + "/" + rel_path };
-            for (const auto& tdir : target_dirs) {
-                so_candidates.push_back(dir + "/../../../packages/face_recognition/" + tdir + rel_path);
-                so_candidates.push_back(dir + "/../../packages/face_recognition/" + tdir + rel_path);
-                so_candidates.push_back(dir + "/../packages/face_recognition/" + tdir + rel_path);
-            }
-            for (const auto& cand : so_candidates) {
-                if (std::ifstream(cand).good()) {
-                    return cand;
-                }
-            }
-        }
     }
     return rel_path;
 }
 
-static zhulong::Model load_target_model(const char* base_name, bool& is_onnx) {
-    const std::string path = resolve_model_path(std::string(base_name) + zhulong::TARGET_MODEL_EXT);
-    zhulong::Model model = zhulong::Model::load(path);
-    is_onnx = model.valid() && std::string(zhulong::TARGET_MODEL_EXT) == ".onnx";
-    return model;
+/** @brief 加载一个模型（路径基名 + 本 target 的固定扩展名） */
+zhulong::Model load_target_model(const char* base_name) {
+    return zhulong::Model::load(resolve_model_path(std::string(base_name) + kModelExtension));
 }
 
 /**
@@ -90,12 +123,13 @@ static zhulong::Model load_target_model(const char* base_name, bool& is_onnx) {
  *
  * 文件存在却加载不出来 = 当前构建不含真实推理能力（典型：test_stub 夹具构建，
  * 它按设计拒绝一切真实模型路径）；文件不存在 = NOT_FOUND。
- * 不区分这两者，运维就只能在「模型没拷全」与「host 推理后端选错」之间瞎猜。
  */
-static zhulong_status_t model_unavailable_status(const char* base_name) {
-    const std::string path = resolve_model_path(std::string(base_name) + zhulong::TARGET_MODEL_EXT);
+zhulong_status_t model_unavailable_status(const char* base_name) {
+    const std::string path = resolve_model_path(std::string(base_name) + kModelExtension);
     return std::ifstream(path).good() ? ZHULONG_PLUGIN_ERR_NOT_SUPPORTED : ZHULONG_PLUGIN_ERR_NOT_FOUND;
 }
+
+} // namespace
 
 class FaceRecognitionPlugin {
 public:
@@ -105,16 +139,13 @@ public:
         parse_config(config_json);
 
         // 1. 加载人体检测模型 (SCRFD scrfd_person_2.5g)
-        bool person_is_onnx = false;
-        person_model_ = load_target_model("models/scrfd_person_2.5g", person_is_onnx);
+        person_model_ = load_target_model("models/scrfd_person_2.5g");
 
         // 2. 加载人脸检测模型 (SCRFD det_500m)
-        bool det_is_onnx = false;
-        det_model_ = load_target_model("models/det_500m", det_is_onnx);
+        det_model_ = load_target_model("models/det_500m");
 
         // 3. 加载人脸特征提取模型 (FaceLiVTv2-L)
-        bool rec_is_onnx = false;
-        rec_model_ = load_target_model("models/facelivtv2-l", rec_is_onnx);
+        rec_model_ = load_target_model("models/facelivtv2-l");
 
         if (!det_model_.valid()) {
             return model_unavailable_status("models/det_500m");
@@ -122,12 +153,6 @@ public:
         if (!rec_model_.valid()) {
             return model_unavailable_status("models/facelivtv2-l");
         }
-
-        if (person_model_.valid()) {
-            person_detector_.set_is_onnx(person_is_onnx);
-        }
-        detector_.set_is_onnx(det_is_onnx);
-        extractor_.set_is_onnx(rec_is_onnx);
 
         return ZHULONG_PLUGIN_OK;
     }
@@ -524,12 +549,10 @@ private:
         }
 
         // 1. 加载人脸检测模型 (SCRFD det_500m)
-        bool det_is_onnx = false;
-        det_model_ = load_target_model("models/det_500m", det_is_onnx);
+        det_model_ = load_target_model("models/det_500m");
 
         // 2. 加载人脸特征提取模型 (FaceLiVTv2-L)
-        bool rec_is_onnx = false;
-        rec_model_ = load_target_model("models/facelivtv2-l", rec_is_onnx);
+        rec_model_ = load_target_model("models/facelivtv2-l");
 
         // 模型缺失属于「能力不可用」，绝不等同于「图中没有人脸」：必须闭环报错，禁止伪造特征。
         if (!det_model_.valid()) {
@@ -539,8 +562,6 @@ private:
             return model_unavailable_status("models/facelivtv2-l");
         }
 
-        detector_.set_is_onnx(det_is_onnx);
-        extractor_.set_is_onnx(rec_is_onnx);
 
         det_session_ = det_model_.create_session(999);
         rec_session_ = rec_model_.create_session(999);
@@ -565,38 +586,3 @@ private:
 };
 
 } // namespace zhulong::face
-
-extern "C" {
-
-ZHULONG_PLUGIN_EXPORT zhulong_status_t zhulong_face_extract_feature(
-    const uint8_t* pixel_data,
-    int32_t width,
-    int32_t height,
-    int32_t stride,
-    int32_t format,
-    float* out_features,
-    uint32_t* feature_dim
-) {
-    try {
-        return zhulong::face::FaceExtractorContext::instance().extract(
-            pixel_data, width, height, stride, format, out_features, feature_dim
-        );
-    } catch (...) {
-        return ZHULONG_PLUGIN_ERR_INTERNAL;
-    }
-}
-
-ZHULONG_PLUGIN_EXPORT void zhulong_face_extract_release() {
-    try {
-        zhulong::face::FaceExtractorContext::instance().release();
-    } catch (...) {}
-}
-
-} // extern "C"
-
-// 注册为任务类型 3 (person_structure) 算法插件
-ZHULONG_REGISTER_PERSON_STRUCTURE_PLUGIN(
-    zhulong::face::FaceRecognitionPlugin,
-    "FaceRecognition",
-    "1.0.0"
-)

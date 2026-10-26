@@ -352,6 +352,18 @@ target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_ALGO_RUNTIME_PRIVATE_
 target_link_libraries(ZhulongAlgoRuntimeStatic PUBLIC ${ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS})
 
 # ==============================================================================
+#  4.0.9 迁移期：人脸包按 target 选源码目录（阶段 3.9 删掉这段桥接）
+# ==============================================================================
+# 包源码已按 target 分家：`packages/face_recognition/{onnx,rk3568}/src`。
+# 宿主构建按推理后端选择一份——rknn 构建用板端实现，其余（onnx / test_stub 夹具）
+# 用主机实现。包真正独立构建后（SDK 前缀），这个变量应当消失。
+if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
+    set(ZHULONG_FACE_IMPL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/rk3568)
+else()
+    set(ZHULONG_FACE_IMPL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/onnx)
+endif()
+
+# ==============================================================================
 #  4.1.1 算法包 SDK 安装（make sdk-install → build/sdk/prefix）
 # ==============================================================================
 # 交给第三方的是「已编译好的公共头 + 静态归档 + CMake 包配置」，不含 native/src。
@@ -477,6 +489,12 @@ add_library(ZhulongAlgoSdkStatic STATIC
 set_target_properties(ZhulongAlgoSdkStatic PROPERTIES OUTPUT_NAME zhulong_algo_sdk)
 target_compile_features(ZhulongAlgoSdkStatic PUBLIC cxx_std_17)
 target_include_directories(ZhulongAlgoSdkStatic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include)
+# 骨架实现（socket / shm / 线程）需要的系统库，与 ZhulongAlgoIpc 一致：
+# 少了它们，交叉链接会报 `libpthread.so.0: DSO missing from command line`。
+target_link_libraries(ZhulongAlgoSdkStatic PUBLIC Threads::Threads)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(ZhulongAlgoSdkStatic PUBLIC rt)
+endif()
 # ⚠️ 不在这里链接运行库：骨架对运行库的引用由**消费端**解析（包可执行文件链接
 #    Zhulong::AlgoSDK + Zhulong::AlgoRuntime，顺序由 SDK 配置保证）。
 #    原因：宿主 runner 在迁移期仍要 dlopen 插件 .so，那个 .so 的 NEEDED 是
@@ -533,17 +551,19 @@ set_target_properties(MockPersonStructure PROPERTIES CXX_VISIBILITY_PRESET hidde
 #                      4.5 构建人脸识别算法插件 (FaceRecognitionPlugin)
 # ==============================================================================
 add_library(FaceRecognitionPlugin SHARED
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/face_recognition.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/matcher.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/aligner.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/detector.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/extractor.cpp
+    ${ZHULONG_FACE_IMPL_DIR}/src/face_recognition.cpp
+    ${ZHULONG_FACE_IMPL_DIR}/src/matcher.cpp
+    ${ZHULONG_FACE_IMPL_DIR}/src/aligner.cpp
+    ${ZHULONG_FACE_IMPL_DIR}/src/detector.cpp
+    ${ZHULONG_FACE_IMPL_DIR}/src/extractor.cpp
+    # 迁移期胶水：包内入口已是 main，这里重新导出 .so 需要的 C ABI 入口（阶段 4 删）
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/migration/face_plugin_entry.cpp
 )
 target_compile_features(FaceRecognitionPlugin PUBLIC cxx_std_17)
 target_compile_definitions(FaceRecognitionPlugin PRIVATE ZHULONG_PLUGIN_BUILD)
 target_include_directories(FaceRecognitionPlugin PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src
+    ${ZHULONG_FACE_IMPL_DIR}/src
 )
 target_link_libraries(FaceRecognitionPlugin PRIVATE ZhulongAlgoRuntime)
 set(PLUGIN_RPATH "$ORIGIN")
@@ -679,15 +699,15 @@ if(BUILD_TESTING)
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub" OR ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongFaceRecognitionPluginTests
             tests/face_recognition_plugin_test.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/detector.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/aligner.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/extractor.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/detector.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/aligner.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/extractor.cpp
         )
         target_compile_features(ZhulongFaceRecognitionPluginTests PRIVATE cxx_std_17)
         target_include_directories(ZhulongFaceRecognitionPluginTests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
             ${CMAKE_CURRENT_SOURCE_DIR}/src
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src
+            ${ZHULONG_FACE_IMPL_DIR}/src
         )
         target_link_libraries(ZhulongFaceRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
         add_test(NAME ZhulongFaceRecognitionPlugin COMMAND ZhulongFaceRecognitionPluginTests $<TARGET_FILE:FaceRecognitionPlugin>)
@@ -719,15 +739,15 @@ if(BUILD_TESTING)
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongFaceRecognitionOnnxTests
             tests/face_recognition_onnx_test.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/detector.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/aligner.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src/extractor.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/detector.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/aligner.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/extractor.cpp
         )
         target_compile_features(ZhulongFaceRecognitionOnnxTests PRIVATE cxx_std_17)
         target_include_directories(ZhulongFaceRecognitionOnnxTests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
             ${CMAKE_CURRENT_SOURCE_DIR}/src
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src
+            ${ZHULONG_FACE_IMPL_DIR}/src
         )
         target_link_libraries(ZhulongFaceRecognitionOnnxTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
         add_test(NAME ZhulongFaceRecognitionOnnx COMMAND ZhulongFaceRecognitionOnnxTests $<TARGET_FILE:FaceRecognitionPlugin>)

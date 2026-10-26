@@ -273,7 +273,7 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
 
 > 本阶段不动宿主。产出物先手工验证。
 
-- [ ] **3.0e** 包源码按 target 拆目录（R11；**取代原「输入契约下移到后端」**）：
+- [x] **3.0e** 包源码按 target 拆目录（R11；**取代原「输入契约下移到后端」**）：
       - 把 `packages/<id>/src/` 拆成 `packages/<id>/<target>/src/`：`face_recognition` 拆 `onnx/` 与 `rk3568/` 两份，`plate_recognition` 只建 `onnx/`（**不要**为 `rk3568`/`rk3588` 建空目录，见 target 资产门禁）；
       - 每份实现内**删除** `#if defined(__arm__) || defined(__aarch64__)` 与 `targets/<t>/` 路径候选（`face_recognition.cpp:26-40`、`plate_recognition.cpp:79-82`），模型只在包根 `models/`，找不到即失败；
       - 每份实现内**删除**跨平台判断：`is_onnx_` / `set_is_onnx` / `!is_onnx_ && dma_buf_fd>=0` 全部消失——`onnx/` 实现只有 ONNX 一条路径，`rk3568/` 实现只有 RKNN 一条路径，没有分支可写；
@@ -320,6 +320,41 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       - **实测**：`make -C packages/plate_recognition/onnx test` 输出
         `count: 2`、`豫B2V9L7 / 蓝色`、`辽DU4356 / 蓝色`、`cost_ms ≈ 115`，`result-plate_recognition-onnx.jpg` 生成（与金标回归的车牌号/颜色一致）。
       - ⚠️ devtest 运行时终端会出现 `Schema error: Trying to register schema with name …` 噪声：宿主 `zhulong_algo_runner` 也有同样输出，根因是机器上另装了系统 `libonnx.so.1`（`ldd` 可见）与 ORT 内置 schema 重复注册，与本改动无关，不要当回归信号。
+
+      **face 拆分完成（2026-10-26）—— 3.0e 收尾**
+
+      - 目录：`packages/face_recognition/{onnx,rk3568}/{manifest.json, models/, config.schema.json, sample.jpg, src/, tests/}`，
+        `targets/` 中间层与 `packages/face_recognition/src/` 一并消失。两份实现**零源码引用**：
+        `aligner` / `matcher` 的纯数学各留一份（R11 允许重复）。
+      - `is_onnx_` 在三处（FaceDetector / PersonDetector / FaceFeatureExtractor）与入口类的
+        `set_is_onnx` 调用全部删除：
+        - `onnx/`：只留 ONNX 的 `[1,3,H,W] FLOAT32 NCHW` 重排，**不编译 DMA-BUF 分支**，
+          也不再 include `zhulong/platform/dmabuf_allocator.hpp`；
+        - `rk3568/`：DMA-BUF 变成**无条件路径**（`dma_buf_fd >= 0 && allocator.is_supported()` 才走，
+          否则普通张量），推理直接喂 letterbox 的 HWC uint8——按任务负责人的拍板。
+      - 模型扩展名是各 target 内的常量（`.onnx` / `.rknn`），不再由 `TARGET_MODEL_EXT`（编译期后端宏）决定；
+        路径解析换成 T2 主路径 `readlink("/proc/self/exe")` + `dladdr` 兜底，候选里**没有**跨 target 目录。
+      - 类定义整体搬进 `face_recognition.hpp`（含内联方法）：`main.cpp`、迁移期胶水、devtest 都要
+        实例化它，而 `PluginApi<PluginClass, Adapter>` 需要完整类型。两个 `extern "C"`
+        人脸特征提取入口（`zhulong_face_extract_feature/release`）**留在 .cpp**——放头里会让
+        包含它的每个 TU 各定义一份，链接期 `multiple definition`（实测）。
+      - 迁移期桥接：`native/tests/migration/face_plugin_entry.cpp`（与 plate 同构），宿主侧临时胶水，
+        阶段 4 删；`native/CMakeLists.txt` 新增 `ZHULONG_FACE_IMPL_DIR`（rknn → rk3568 实现，
+        其余 → onnx 实现，3.9 连同 SHARED target 一起删）。
+      - dev 自测：两份 `tests/dev_infer.cpp`（person/face 画框）与各自的
+        `CMakeLists.txt`（`face_recognition` 可执行文件 + `face_recognition_devtest`）与 `Makefile`
+        （`make` / `make test` / `make verify`）。
+      - **`sample.jpg` 换成真实样本**：原来是个 149 字节占位图，`make test` 永远 0 检出，等于没测。
+        用 `native/tests/fixtures/onnx/face_detect_sample.ppm`（640×443，ffmpeg 转 jpg）替换后，
+        `make test` 输出 3 个人体 + 5 张人脸（质量 0.84~0.88），`cost_ms ≈ 130`。
+      - 打包：`build_package.py` 的 `target_dir = pkg_root/args.target`，sample/schema/models 从档位目录取；
+        重建后的归档是 `config.schema.json / manifest.json / models/ / plugin.so / sample.jpg`，**无 `targets/`**。
+      - 验证：`make native-test` 28/28（face/plate 金标一致）；`build.py go test -race ./internal/algorithm
+        -run 'TestFace|TestPlate'` 通过；`--target onnx` 重建面/车两个归档成功；
+        独立包工程（/tmp + SDK 前缀）`make` 出 `face_recognition` 可执行文件与 devtest，
+        `make test` 有真实检出。
+      - ⚠️ **`rk3568/` 档位只有编译级验证**：宿主侧交叉构建（`rk3568-rknn` profile）通过，
+        但 devtest 行为必须在板端跑（`research/baseline.md` 仍标「未测」）。
 
 - [x] **3.0f** target 命名迁移：`cpu` → `onnx`（`prd.md` F25；**先做这一步再拆目录**，否则目录名会把错误叫法固化）：
       - 资产：`packages/*/targets/cpu/` → `packages/*/targets/onnx/`；`manifest.platform.target` `"cpu"` → `"onnx"`（`arch` 仍是 `x86_64`）；
