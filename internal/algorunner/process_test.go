@@ -228,32 +228,6 @@ func TestRunnerProcessMissingDotEnvIsOptional(t *testing.T) {
 	}
 }
 
-// findRealRunnerBinary resolves the real zhulong_algo_runner binary, honouring
-// ZHULONG_ALGO_RUNNER first and then standard build locations. Skips when the
-// binary cannot be found.
-func findRealRunnerBinary(t *testing.T) string {
-	t.Helper()
-	candidates := []string{
-		os.Getenv("ZHULONG_ALGO_RUNNER"),
-		"../../build/native/host/zhulong_algo_runner",
-		"build/native/host/zhulong_algo_runner",
-	}
-	for _, c := range candidates {
-		if c == "" {
-			continue
-		}
-		abs, err := filepath.Abs(c)
-		if err != nil {
-			continue
-		}
-		if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
-			return abs
-		}
-	}
-	t.Skip("zhulong_algo_runner not found (set ZHULONG_ALGO_RUNNER), skipping broker-host-unavailable test")
-	return ""
-}
-
 // TestPackageProcessDetectsBrokerUnavailable drives a package process that exits
 // with code 5 (broker connect failure) and asserts the host classifies it as
 // broker_unavailable rather than as an ordinary crash.

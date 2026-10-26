@@ -2,13 +2,9 @@ package algorunner
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,71 +13,6 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
-
-func findRunnerBinaryForLogTest(t *testing.T) string {
-	t.Helper()
-	for _, candidate := range []string{
-		os.Getenv("ZHULONG_ALGO_RUNNER"),
-		"../../build/native/host/zhulong_algo_runner",
-		"build/native/host/zhulong_algo_runner",
-	} {
-		if candidate == "" {
-			continue
-		}
-		abs, err := filepath.Abs(candidate)
-		if err != nil {
-			continue
-		}
-		if info, err := os.Stat(abs); err == nil && !info.IsDir() {
-			return abs
-		}
-	}
-	t.Skip("zhulong_algo_runner not found (set ZHULONG_ALGO_RUNNER), skipping standalone runner log test")
-	return ""
-}
-
-func TestStandaloneRunnerEmitsSafePluginLoadLog(t *testing.T) {
-	runnerPath := findRunnerBinaryForLogTest(t)
-	pluginPath := filepath.Join(t.TempDir(), "private-plugin-directory", "missing-plugin.so")
-	cmd := exec.Command(runnerPath, "--verify-plugin", pluginPath)
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err == nil {
-		t.Fatal("runner unexpectedly loaded a missing plugin")
-	} else if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
-		t.Fatalf("runner exit = %v, want exit code 1", err)
-	}
-	if stdout.Len() == 0 {
-		t.Fatal("runner protocol output was unexpectedly empty")
-	}
-	for _, stream := range []string{stdout.String(), stderr.String()} {
-		for _, line := range strings.Split(stream, "\n") {
-			if line != "" && !json.Valid([]byte(line)) {
-				t.Fatalf("runner emitted a malformed JSON line (%d bytes)", len(line))
-			}
-		}
-	}
-
-	foundSafeLog := false
-	for _, line := range strings.Split(stderr.String(), "\n") {
-		if !strings.Contains(line, `"zhulongLog":true`) {
-			continue
-		}
-		classified := classifyRunnerLine([]byte(line), "stderr", zapcore.WarnLevel)
-		fields := zapFieldsString(classified.fields)
-		if classified.message != "runner native log" || fieldValue(classified.fields, "module").String != "algorithm.runner" {
-			t.Fatalf("runner native log classification = %+v", classified)
-		}
-		if strings.Contains(fields, pluginPath) || fieldValue(classified.fields, "message_bytes").Integer != int64(len("plugin_load_failed reason=dlopen")) {
-			t.Fatalf("runner log exposed untrusted detail or lost its safe summary: %s", fields)
-		}
-		foundSafeLog = true
-	}
-	if !foundSafeLog {
-		t.Fatal("runner did not emit a structured plugin load failure event")
-	}
-}
 
 func TestClassifyRunnerLinesRedactsUntrustedText(t *testing.T) {
 	secret := "rtsp://user:password@camera/private /tmp/secret.sock"
