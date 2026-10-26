@@ -86,32 +86,28 @@ std::vector<PlateBoxDetection> PlateDetector::detect(zhulong::Session& session, 
         return {};
     }
 
-    // 2. 前向推理：ONNX 导出模型吃 [1, 3, H, W] FLOAT32 NCHW 归一化输入；
-    //    NPU 后端吃 letterbox 的 HWC 原始像素张量。
-    std::vector<zhulong::Tensor> outputs;
-    if (is_onnx_) {
-        zhulong::Tensor model_input({1, 3, kModelInputSize, kModelInputSize}, zhulong::DataType::FLOAT32);
-        const uint8_t* source = letterboxed.data<uint8_t>();
-        float* destination = model_input.data<float>();
-        if (source == nullptr || destination == nullptr) {
-            return {};
-        }
-        // ⚠️ 每帧分配 ~4.9MB（640×640×3×4B）后做一次 HWC→CHW 重排。检测器可被多个
-        //    Worker 线程并发调用，因此这些缓冲必须是调用栈局部量：一旦提成成员变量
-        //    就会在多 Worker 下互相覆盖（Session 才是线程独占的最小单位）。
-        constexpr int kPlane = kModelInputSize * kModelInputSize;
-        float* plane_r = destination;
-        float* plane_g = destination + kPlane;
-        float* plane_b = destination + kPlane * 2;
-        for (int i = 0; i < kPlane; ++i) {
-            plane_r[i] = static_cast<float>(source[i * 3 + 0]) / 255.0f;
-            plane_g[i] = static_cast<float>(source[i * 3 + 1]) / 255.0f;
-            plane_b[i] = static_cast<float>(source[i * 3 + 2]) / 255.0f;
-        }
-        outputs = session.forward({model_input});
-    } else {
-        outputs = session.forward({letterboxed});
+    // 2. 前向推理：本 target 只有 ONNX 一条路径，模型吃 [1, 3, H, W] FLOAT32 NCHW 归一化输入。
+    //    （另一个 target 的 RKNN 实现直接喂 letterbox 的 HWC 原始像素张量——两份实现
+    //      互不引用，因此这里没有、也不允许出现运行期布局分支。）
+    zhulong::Tensor model_input({1, 3, kModelInputSize, kModelInputSize}, zhulong::DataType::FLOAT32);
+    const uint8_t* source = letterboxed.data<uint8_t>();
+    float* destination = model_input.data<float>();
+    if (source == nullptr || destination == nullptr) {
+        return {};
     }
+    // ⚠️ 每帧分配 ~4.9MB（640×640×3×4B）后做一次 HWC→CHW 重排。检测器可被多个
+    //    Worker 线程并发调用，因此这些缓冲必须是调用栈局部量：一旦提成成员变量
+    //    就会在多 Worker 下互相覆盖（Session 才是线程独占的最小单位）。
+    constexpr int kPlane = kModelInputSize * kModelInputSize;
+    float* plane_r = destination;
+    float* plane_g = destination + kPlane;
+    float* plane_b = destination + kPlane * 2;
+    for (int i = 0; i < kPlane; ++i) {
+        plane_r[i] = static_cast<float>(source[i * 3 + 0]) / 255.0f;
+        plane_g[i] = static_cast<float>(source[i * 3 + 1]) / 255.0f;
+        plane_b[i] = static_cast<float>(source[i * 3 + 2]) / 255.0f;
+    }
+    std::vector<zhulong::Tensor> outputs = session.forward({model_input});
 
     if (outputs.empty() || outputs[0].element_count() == 0) {
         return {};

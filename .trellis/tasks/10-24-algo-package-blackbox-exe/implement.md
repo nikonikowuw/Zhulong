@@ -276,6 +276,19 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       - ⚠️ **不引入** `InputFacts` / `Session::prepare_input` / `models/preprocess.json`（R13 已撤销）。`prepare_input` 的复用槽只作为独立性能任务，不在本阶段。
       - ⚠️ 两边 `make test` 在交叉 profile 下只能编译（AGENTS.md），RKNN 侧的行为验收在板端，`research/baseline.md` 标「未测」。
 
+      **执行记录（2026-10-26，partial：`plate_recognition/onnx` 已落地，face 与 dev 测试待做）**
+
+      已拍板的前置决策（来自与本任务负责人的确认）：
+      - `rk3568/` 实现里 DMA-BUF 前处理变成**无条件路径**（`dma_buf_fd >= 0 && allocator.is_supported()` 才走，否则普通张量），`is_onnx_` 成员与 `set_is_onnx()` 在**所有** target 里删除，不再有运行期布局分支。
+      - 因此 `zhulong/platform/dmabuf_allocator.hpp` 继续留在 SDK 公共面（rk3568 实现的生产路径要用，见阶段 2）。
+
+      已完成（plate）：
+      - **目录摊平成最终形态**：`packages/plate_recognition/{manifest.json, config.schema.json, sample.jpg, models/, src/}` → `packages/plate_recognition/onnx/…`，`targets/` 中间层消失。`build_package.py` 的 `target_dir = pkg_root/args.target`，sample / schema 也从档位目录取。
+      - **布局与推理单路径化**：`plate_detector.{hpp,cpp}` 删除 `is_onnx_` 与 HWC 原始像素分支，只保留 ONNX 的 `[1,3,H,W] FLOAT32 NCHW` 重排；`plate_recognition.cpp` 删掉 `set_is_onnx(...)`、`TARGET_MODEL_EXT`（改为字面量 `.onnx`）、`targets/<t>/` 与 `__arm__`/`__aarch64__` 候选——模型只在包根 `models/` 与显式 env 目录里找。
+      - **模型定位改用 T2 主路径**：`executable_directory()` 先 `readlink("/proc/self/exe")`（含 `" (deleted)"` 处理），`dladdr` 仅作 fallback。可执行文件形态（3.3）与旧 `.so` 形态同时可用。
+      - `native/CMakeLists.txt` 的 plate 源/包含路径指向 `…/plate_recognition/onnx/src`（3.9 会整段删除）。
+      - **验证**：`make native-test` 28/28（含 plate 金标回归，车牌号/颜色未变）；`--target onnx` 重建包成功，归档内已无 `targets/`（`config.schema.json / manifest.json / models/ / plugin.so / sample.jpg`），黑盒验包 `sample_decoded:true, count:2`（与阶段 0 基线一致）；`build.py go test -race ./internal/algorithm -run 'TestPlate|TestFace'` 通过。
+
 - [x] **3.0f** target 命名迁移：`cpu` → `onnx`（`prd.md` F25；**先做这一步再拆目录**，否则目录名会把错误叫法固化）：
       - 资产：`packages/*/targets/cpu/` → `packages/*/targets/onnx/`；`manifest.platform.target` `"cpu"` → `"onnx"`（`arch` 仍是 `x86_64`）；
       - 归档名随之变成 `<id>-x86_64-onnx.tar.gz`（`pack_package.py` 只读 manifest，无需硬编码）；

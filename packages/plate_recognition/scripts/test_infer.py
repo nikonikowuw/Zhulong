@@ -2,7 +2,7 @@
 """
 test_infer.py - 车牌检测与识别离线推理验证脚本（C++ 插件的参考实现）
 
-本脚本与 packages/plate_recognition/src/ 下的 C++ 实现保持**逐式对齐**，用于在没有
+本脚本与 packages/plate_recognition/onnx/src/ 下的 C++ 实现保持**逐式对齐**，用于在没有
 原生构建时交叉验证预处理与解码逻辑。三处曾经踩过的坑，改动前请先读：
 
 1. 通道顺序不一致：检测模型吃 RGB（letterbox 后需 BGR→RGB 翻转），而识别模型
@@ -233,9 +233,9 @@ def run_inference(image_path, det_model_path, rec_model_path, conf_threshold, nm
 def main():
     parser = argparse.ArgumentParser(description="离线验证车牌 ONNX 检测与识别")
     parser.add_argument("image", help="待测试图片路径")
-    parser.add_argument("--det-model", default="packages/plate_recognition/targets/onnx/models/plate_detect.onnx",
+    parser.add_argument("--det-model", default="packages/plate_recognition/onnx/models/plate_detect.onnx",
                         help="检测 ONNX 模型路径")
-    parser.add_argument("--rec-model", default="packages/plate_recognition/targets/onnx/models/plate_rec_color.onnx",
+    parser.add_argument("--rec-model", default="packages/plate_recognition/onnx/models/plate_rec_color.onnx",
                         help="识别 ONNX 模型路径")
     parser.add_argument("--conf", type=float, default=0.35, help="检测置信度阈值（同 config.schema.json）")
     parser.add_argument("--nms", type=float, default=0.45, help="NMS IoU 阈值（同 config.schema.json）")

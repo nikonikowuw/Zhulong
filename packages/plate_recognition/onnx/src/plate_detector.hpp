@@ -42,13 +42,9 @@ public:
     void set_confidence_threshold(float conf) noexcept { conf_threshold_ = conf; }
     void set_nms_threshold(float nms) noexcept { nms_threshold_ = nms; }
 
-    void set_is_onnx(bool v) noexcept { is_onnx_ = v; }
-    [[nodiscard]] bool is_onnx() const noexcept { return is_onnx_; }
-
 private:
     float conf_threshold_{0.35f};
     float nms_threshold_{0.45f};
-    bool is_onnx_{false};
 };
 
 } // namespace zhulong::plate

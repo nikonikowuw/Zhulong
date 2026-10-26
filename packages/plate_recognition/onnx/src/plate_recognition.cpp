@@ -4,6 +4,7 @@
 #include <zhulong/algo.hpp>
 
 #include <dlfcn.h>
+#include <unistd.h>
 
 #include <cerrno>
 #include <cmath>
@@ -25,28 +26,49 @@ constexpr float kDefaultConfidenceThreshold = 0.35f;
 constexpr float kDefaultNmsThreshold = 0.45f;
 
 /**
- * @brief 当前插件动态库所在目录（不含结尾斜杠）；取不到时返回空串
+ * @brief 当前进程自身所在目录（不含结尾斜杠）；取不到时返回空串
  *
- * 生产布局里 `plugin.so` 与 `models/` 恒为同级目录，这是模型解析的权威依据。
+ * 生产布局里包根可执行文件与 `models/` 恒为同级目录，这是模型解析的权威依据。
+ * 主路径读 `/proc/self/exe`（与动态链接器无关，包被替换后路径仍可信），
+ * `dladdr` 仅作 fallback（macOS / 无 procfs 的平台）。
  */
-std::string module_directory() {
-    Dl_info info;
-    if (dladdr(reinterpret_cast<void*>(&module_directory), &info) == 0 || info.dli_fname == nullptr) {
-        return {};
+std::string executable_directory() {
+    std::string self_path;
+#if defined(__linux__)
+    char buffer[4096];
+    const ssize_t length = ::readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
+    if (length > 0) {
+        buffer[length] = '\0';
+        self_path = buffer;
+        // 二进制被原地替换/删除时内核会附加 " (deleted)"，去掉它才指向真实目录。
+        constexpr const char* kDeletedSuffix = " (deleted)";
+        const std::string suffix = kDeletedSuffix;
+        if (self_path.size() > suffix.size() &&
+            self_path.compare(self_path.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            self_path.erase(self_path.size() - suffix.size());
+        }
     }
-    const std::string library_path = info.dli_fname;
-    const auto slash = library_path.find_last_of('/');
+#endif
+    if (self_path.empty()) {
+        Dl_info info;
+        if (dladdr(reinterpret_cast<void*>(&executable_directory), &info) == 0 || info.dli_fname == nullptr) {
+            return {};
+        }
+        self_path = info.dli_fname;
+    }
+    const auto slash = self_path.find_last_of('/');
     if (slash == std::string::npos) {
         return {};
     }
-    return library_path.substr(0, slash);
+    return self_path.substr(0, slash);
 }
 
 /**
  * @brief 解析模型文件路径
  *
  * 解析顺序（前者优先，越靠前越接近生产真相）：
- *   1. **插件所在目录** —— 已安装算法包布局（plugin.so 与 models/ 同级），生产唯一权威路径；
+ *   1. **包根可执行文件所在目录** —— 已安装算法包布局（包根可执行文件与 models/ 同级），
+ *      生产唯一权威路径；
  *   2. `ZHULONG_PLATE_MODEL_DIR` / `ZHULONG_MODEL_DIR` —— 部署侧显式覆盖；
  *   3. 仓库内源码树候选 —— 仅供开发期直接跑 build 目录时使用；
  *   4. CWD 相对路径 —— 最后兜底。
@@ -56,7 +78,7 @@ std::string module_directory() {
  * 结果安装后 model_create 直接 -4，但仓库根目录下运行却一切正常）。
  */
 std::string resolve_model_path(const std::string& rel_path) {
-    const std::string module_dir = module_directory();
+    const std::string module_dir = executable_directory();
     if (!module_dir.empty()) {
         const std::string candidate = module_dir + "/" + rel_path;
         if (std::ifstream(candidate).good()) {
@@ -74,21 +96,16 @@ std::string resolve_model_path(const std::string& rel_path) {
         }
     }
 
-    // 开发期兜底：仅在源码树内有效，部署环境不会命中
-    const std::vector<std::string> target_dirs = {
-        "targets/onnx/",
-#if defined(__arm__) || defined(__aarch64__)
-        "targets/rk3568/",
-        "targets/rk3588/",
-#endif
-    };
-    for (const auto& target_dir : target_dirs) {
-        for (const char* prefix : {"packages/plate_recognition/", "../../../packages/plate_recognition/",
-                                   "../../packages/plate_recognition/", "../packages/plate_recognition/"}) {
-            const std::string candidate = std::string(prefix) + target_dir + rel_path;
-            if (std::ifstream(candidate).good()) {
-                return candidate;
-            }
+    // 开发期兜底：仅在源码树内有效，部署环境不会命中。
+    // ⚠️ 只有本 target 自己的目录，没有跨 target 候选、没有架构宏——找错档位的权重
+    //    表现为「能加载但结果全错」，比直接失败难查得多。
+    for (const char* prefix : {"packages/plate_recognition/onnx/",
+                               "../../../packages/plate_recognition/onnx/",
+                               "../../packages/plate_recognition/onnx/",
+                               "../packages/plate_recognition/onnx/"}) {
+        const std::string candidate = std::string(prefix) + rel_path;
+        if (std::ifstream(candidate).good()) {
+            return candidate;
         }
     }
 
@@ -181,8 +198,9 @@ public:
         detector_.set_nms_threshold(
             resolve_threshold(config_json, "nms_threshold", "NMS_THRESHOLD", kDefaultNmsThreshold));
 
-        const std::string detection_model = std::string("models/plate_detect") + zhulong::TARGET_MODEL_EXT;
-        const std::string recognition_model = std::string("models/plate_rec_color") + zhulong::TARGET_MODEL_EXT;
+        // 本 target 只打包 ONNX 权重：扩展名是常量，不再由编译期后端宏或运行期探测决定。
+        const std::string detection_model = "models/plate_detect.onnx";
+        const std::string recognition_model = "models/plate_rec_color.onnx";
         const std::string resolved_detection = resolve_model_path(detection_model);
         const std::string resolved_recognition = resolve_model_path(recognition_model);
 
@@ -195,8 +213,6 @@ public:
             return model_unavailable_status(resolved_recognition);
         }
 
-        // 模型格式决定输入布局：ONNX 导出吃 FLOAT32 NCHW 归一化输入
-        detector_.set_is_onnx(resolved_detection.find(".onnx") != std::string::npos);
         return ZHULONG_PLUGIN_OK;
     }
 

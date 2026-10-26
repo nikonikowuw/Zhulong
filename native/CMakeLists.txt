@@ -452,15 +452,15 @@ set_target_properties(FaceRecognitionPlugin PROPERTIES
 #                      4.6 构建车牌识别算法插件 (PlateRecognitionPlugin)
 # ==============================================================================
 add_library(PlateRecognitionPlugin SHARED
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/src/plate_recognition.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/src/plate_detector.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/src/plate_recognizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_recognition.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_detector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_recognizer.cpp
 )
 target_compile_features(PlateRecognitionPlugin PUBLIC cxx_std_17)
 target_compile_definitions(PlateRecognitionPlugin PRIVATE ZHULONG_PLUGIN_BUILD)
 target_include_directories(PlateRecognitionPlugin PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src
 )
 target_link_libraries(PlateRecognitionPlugin PRIVATE ZhulongAlgoRuntime)
 set_target_properties(PlateRecognitionPlugin PROPERTIES
@@ -590,13 +590,13 @@ if(BUILD_TESTING)
             tests/plate_recognition_plugin_test.cpp
             # 仅为 plate_sample_point 纯函数单测直接编译：坐标映射必须能被单测钉住，
             # 而不是靠「跑一遍模型看结果像不像」验证
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/src/plate_recognizer.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_recognizer.cpp
         )
         target_compile_features(ZhulongPlateRecognitionPluginTests PRIVATE cxx_std_17)
         target_include_directories(ZhulongPlateRecognitionPluginTests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
             ${CMAKE_CURRENT_SOURCE_DIR}/src
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src
         )
         target_link_libraries(ZhulongPlateRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
         add_test(NAME ZhulongPlateRecognitionPlugin COMMAND ZhulongPlateRecognitionPluginTests $<TARGET_FILE:PlateRecognitionPlugin>)
