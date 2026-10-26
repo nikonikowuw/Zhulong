@@ -614,6 +614,18 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
 
 ---
 
+**3.3 打包切换（2026-10-26）**
+
+- 两个 `scripts/build_package.py` 现在先驱动**包自己的 Makefile**（`make -C packages/<id>/<target> SDK_PREFIX=…`，
+  默认 `build/sdk/prefix`，`--skip-build` 可复用），把 `<target>/build/<manifest.id>` 拷进 staging 并命名成
+  `<manifest.id>`、权限 `0755`——与宿主「按 id 找包根入口」的约定一致。
+- 安装期验包改成跑**包根可执行文件**：`<staging>/<id> --verify --sample <ppm>`，`cwd=staging`（包目录即部署布局）。
+  face 的验包段原来没有 jpg→ppm 转换、且直接拿 `sample.jpg` 去喂（骨架只解 netpbm），这次一并对齐 plate。
+- ⚠️ **过渡期归档内同时含有 `plugin.so`**：宿主侧（阶段 4）仍在 `dlopen` 旧 `.so`，安装期验包也要求它存在。
+  该分支在阶段 4 一并删除，届时归档只剩可执行文件 + 资产。
+- 实测：plate 归档验包 `sample_decoded:true, count:2`；face 归档验包 `count:5`；
+  `go test -race ./internal/algorithm`（含面/车包安装与运行用例）全绿。
+
 ## 阶段 4：宿主仅启动包根可执行文件（manifest 零改动）
 
 - [ ] **4.0** `internal/algorunner/runtime.go` 新增 `ResolveEntry(pkgDir, id string) (path string, err error)`，只解析一种形态：
