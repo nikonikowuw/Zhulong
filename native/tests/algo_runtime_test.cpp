@@ -66,6 +66,41 @@ int main() {
     }
     assert(overflow_rejected);
 
+    // 1.2 Tensor::data<T>() 必须按 dtype 硬校验（design.md §4.8.5）：
+    // ONNX 后端保留模型原始 dtype，非浮点输出被当成 float 读会静默得到垃圾值。
+    zhulong::Tensor f32_tensor({2, 2}, zhulong::DataType::FLOAT32);
+    f32_tensor.data<float>()[0] = 1.5f;
+    assert(f32_tensor.data<float>()[0] == 1.5f);
+
+    bool dtype_mismatch_rejected = false;
+    try {
+        (void)f32_tensor.data<uint8_t>();
+    } catch (const std::invalid_argument&) {
+        dtype_mismatch_rejected = true;
+    }
+    assert(dtype_mismatch_rejected);
+
+    // 只读重载同样校验；float ↔ int64 两个方向都必须拒绝
+    const zhulong::Tensor& f32_view = f32_tensor;
+    bool const_dtype_mismatch_rejected = false;
+    try {
+        (void)f32_view.data<int64_t>();
+    } catch (const std::invalid_argument&) {
+        const_dtype_mismatch_rejected = true;
+    }
+    assert(const_dtype_mismatch_rejected);
+
+    zhulong::Tensor i64_tensor({2}, zhulong::DataType::INT64);
+    i64_tensor.data<int64_t>()[1] = 42;
+    assert(i64_tensor.data<int64_t>()[1] == 42);
+    bool int64_as_float_rejected = false;
+    try {
+        (void)i64_tensor.data<float>();
+    } catch (const std::invalid_argument&) {
+        int64_as_float_rejected = true;
+    }
+    assert(int64_as_float_rejected);
+
     // 2. Test inference backend.
     auto infer_backend = zhulong::get_default_inference_backend();
     assert(infer_backend != nullptr);

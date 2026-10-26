@@ -238,30 +238,55 @@ if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
 endif()
 
 # ==============================================================================
-#                      4.1 构建公共算法运行库 (libzhulong_algo_runtime.so)
+#  4.1 公共算法运行库：OBJECT 单一归属 → SHARED（迁移基线）+ STATIC（交付形态）
 # ==============================================================================
-add_library(ZhulongAlgoRuntime SHARED
+# 源文件只在 OBJECT 库声明一次，SHARED 与 STATIC 都从同一批对象构建。若两个目标各自
+# 编译同一翻译单元，链接结果取决于归档扫描顺序，最坏会出现两份 DmaBufAllocator /
+# GalleryRegistry 单例（design.md §4.1.1 第 2 条）。
+#
+# ⚠️ **不要**给 OBJECT 库设 CXX_VISIBILITY_PRESET hidden（design.md §4.1.1 第 3 条）：
+#    ZhulongAlgoRuntime（SHARED）仍从这批对象构建，FaceRecognitionPlugin /
+#    PlateRecognitionPlugin 还 target_link_libraries 它；hidden 会让 .so 不再导出
+#    DmaBufAllocator / GalleryRegistry 等符号 → 插件链接期 undefined reference。
+#    算法包可执行文件不外泄 zhulong 符号由两件事满足：可执行文件默认不导出未被动态
+#    对象引用的符号（不加 -rdynamic）+ 链接侧 -Wl,--exclude-libs,ALL。
+add_library(ZhulongPlatformObjects OBJECT
     src/platform/dmabuf/dmabuf_allocator.cpp
+)
+add_library(ZhulongAlgoRuntimeObjects OBJECT
     src/algorithm/runtime/cpu_vision_backend.cpp
     src/algorithm/runtime/gallery_registry.cpp
     src/algorithm/runtime/letterbox_geometry.cpp
     src/algorithm/runtime/runtime_factory.cpp
 )
-target_compile_features(ZhulongAlgoRuntime PUBLIC cxx_std_17)
-target_include_directories(ZhulongAlgoRuntime
-    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-target_compile_options(ZhulongAlgoRuntime PRIVATE
-    $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wall;-Wextra;-Wpedantic>
+# ⚠️ OBJECT 库不会自动开 PIC（SHARED 才会）。漏掉这行，链接 PIE 时报
+#    `R_X86_64_32 ... can not be used when making a PIE object`。
+set_target_properties(ZhulongPlatformObjects ZhulongAlgoRuntimeObjects PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
 )
 
-# RKNN 推理后端：仅链接进 ZhulongAlgoRuntime（.so），宿主 ZhulongEngine 绝不链接。
+# 两个最终产物共享同一批对象，静态产物与 .so 同名（libZhulongAlgoRuntime.a / .so）。
+set(ZHULONG_ALGO_RUNTIME_OBJECTS
+    $<TARGET_OBJECTS:ZhulongAlgoRuntimeObjects>
+    $<TARGET_OBJECTS:ZhulongPlatformObjects>
+)
+add_library(ZhulongAlgoRuntime SHARED ${ZHULONG_ALGO_RUNTIME_OBJECTS})
+add_library(ZhulongAlgoRuntimeStatic STATIC ${ZHULONG_ALGO_RUNTIME_OBJECTS})
+set_target_properties(ZhulongAlgoRuntimeStatic PROPERTIES OUTPUT_NAME ZhulongAlgoRuntime)
+
+# 后端差异只累积到这两个变量，最后统一施加到四个目标上，避免同一份设置写四遍：
+#   ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS → 后端动态库（SHARED 私有；STATIC 以 PUBLIC 传递）
+#   ZHULONG_ALGO_RUNTIME_PUBLIC_DEFS  → 后端编译定义（OBJECT 编译 + SHARED/STATIC 使用要求）
+set(ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS "")
+set(ZHULONG_ALGO_RUNTIME_PUBLIC_DEFS "")
+
+# RKNN 推理后端：只进运行库，宿主 ZhulongEngine 绝不链接。
 # 绝对路径 include（PRIVATE）与绝对文件路径链接，避免污染 sysroot 与 CMAKE_FIND_ROOT_PATH。
 if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
-    target_sources(ZhulongAlgoRuntime PRIVATE src/backends/rknn/rknn_inference_backend.cpp)
-    target_include_directories(ZhulongAlgoRuntime PRIVATE ${ZHULONG_RKNN_ROOT}/include)
-    target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_RKNN_ROOT}/lib/librknnrt.so Threads::Threads)
-    target_compile_definitions(ZhulongAlgoRuntime PUBLIC ZHULONG_INFERENCE_RKNN=1)
+    target_sources(ZhulongAlgoRuntimeObjects PRIVATE src/backends/rknn/rknn_inference_backend.cpp)
+    target_include_directories(ZhulongAlgoRuntimeObjects PRIVATE ${ZHULONG_RKNN_ROOT}/include)
+    list(APPEND ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS ${ZHULONG_RKNN_ROOT}/lib/librknnrt.so Threads::Threads)
+    list(APPEND ZHULONG_ALGO_RUNTIME_PUBLIC_DEFS ZHULONG_INFERENCE_RKNN=1)
     # ⚠️ 产物卫生（AC6）：CMake 会为「构建树之外的链接库」自动加 BUILD_RPATH，把开发机
     # 绝对路径烧进 .so（实测为 /home/niko/dev/Go/Zhulong/native/vendor/rknpu2/lib）。
     # 该 .so 要 scp 到 RK3568，不应携带宿主机路径。清空 BUILD_RPATH；
@@ -269,35 +294,61 @@ if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
     set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")
 endif()
 
-# ONNX Runtime 推理后端：仅链接进 ZhulongAlgoRuntime（.so），宿主 ZhulongEngine 绝不链接。
+# ONNX Runtime 推理后端：只进运行库，宿主 ZhulongEngine 绝不链接。
 if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
-    target_sources(ZhulongAlgoRuntime PRIVATE src/backends/onnx/onnx_inference_backend.cpp)
-    target_include_directories(ZhulongAlgoRuntime SYSTEM PRIVATE ${ZHULONG_ONNX_ROOT}/include)
-    target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so Threads::Threads)
-    target_compile_definitions(ZhulongAlgoRuntime PUBLIC ZHULONG_INFERENCE_ONNX=1)
+    target_sources(ZhulongAlgoRuntimeObjects PRIVATE src/backends/onnx/onnx_inference_backend.cpp)
+    target_include_directories(ZhulongAlgoRuntimeObjects SYSTEM PRIVATE ${ZHULONG_ONNX_ROOT}/include)
+    list(APPEND ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS ${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so Threads::Threads)
+    list(APPEND ZHULONG_ALGO_RUNTIME_PUBLIC_DEFS ZHULONG_INFERENCE_ONNX=1)
     set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")
 endif()
 
 # 测试夹具桩后端：实现位于 tests/fixtures/，**只允许**由 test_stub 构建编译。
 # 产品构建（onnx / rknn）从不包含该文件，SDK 分发物也不含它。
 if(ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub")
-    target_sources(ZhulongAlgoRuntime PRIVATE tests/fixtures/stub_inference_backend.cpp)
-    target_include_directories(ZhulongAlgoRuntime PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures)
-    target_compile_definitions(ZhulongAlgoRuntime PUBLIC ZHULONG_INFERENCE_TEST_STUB=1)
+    target_sources(ZhulongAlgoRuntimeObjects PRIVATE tests/fixtures/stub_inference_backend.cpp)
+    target_include_directories(ZhulongAlgoRuntimeObjects PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures)
+    list(APPEND ZHULONG_ALGO_RUNTIME_PUBLIC_DEFS ZHULONG_INFERENCE_TEST_STUB=1)
 endif()
 
-# RGA 视觉后端：同样只链接进 ZhulongAlgoRuntime（.so），宿主绝不链接。
+# RGA 视觉后端：同样只进运行库，宿主绝不链接。
 # ⚠️ letterbox_geometry.cpp 是 CPU/RGA **共用**的几何计算，已在上面基础目标中，不在此重复。
 if(ZHULONG_VISION_BACKEND STREQUAL "rga")
-    target_sources(ZhulongAlgoRuntime PRIVATE
+    target_sources(ZhulongAlgoRuntimeObjects PRIVATE
         src/backends/rga/rga_vision_backend.cpp
     )
-    target_include_directories(ZhulongAlgoRuntime PRIVATE ${ZHULONG_RGA_ROOT}/include)
-    target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_RGA_ROOT}/lib/librga.so.2 Threads::Threads)
-    target_compile_definitions(ZhulongAlgoRuntime PRIVATE ZHULONG_VISION_RGA=1)
+    target_include_directories(ZhulongAlgoRuntimeObjects PRIVATE ${ZHULONG_RGA_ROOT}/include)
+    list(APPEND ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS ${ZHULONG_RGA_ROOT}/lib/librga.so.2 Threads::Threads)
+    target_compile_definitions(ZhulongAlgoRuntimeObjects PRIVATE ZHULONG_VISION_RGA=1)
     # 产物卫生：清空 BUILD_RPATH，理由同 RKNN 分支。
     set_target_properties(ZhulongAlgoRuntime PROPERTIES SKIP_BUILD_RPATH TRUE BUILD_RPATH "")
 endif()
+
+# 编译期公共设置：OBJECT 库真正编译，SHARED / STATIC 把同一份设置作为使用要求传给下游
+# （sdk/include + src 的头文件搜索路径、cxx_std_17、后端编译定义三处必须一致）。
+foreach(target ZhulongPlatformObjects ZhulongAlgoRuntimeObjects)
+    target_compile_features(${target} PRIVATE cxx_std_17)
+    target_include_directories(${target} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(${target} PRIVATE ${ZHULONG_ALGO_RUNTIME_PUBLIC_DEFS})
+endforeach()
+foreach(target ZhulongAlgoRuntime ZhulongAlgoRuntimeStatic)
+    target_compile_features(${target} PUBLIC cxx_std_17)
+    target_include_directories(${target} PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_compile_definitions(${target} PUBLIC ${ZHULONG_ALGO_RUNTIME_PUBLIC_DEFS})
+endforeach()
+foreach(target ZhulongPlatformObjects ZhulongAlgoRuntimeObjects)
+    target_compile_options(${target} PRIVATE
+        $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wall;-Wextra;-Wpedantic>
+    )
+endforeach()
+# 静态库不能「链接」依赖，只能把最终链接需求交给消费者；故 STATIC 用 PUBLIC，
+# SHARED 维持 PRIVATE（下游靠 .so 的 NEEDED 解析，不继承 ORT / RKNN 链接项）。
+target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS})
+target_link_libraries(ZhulongAlgoRuntimeStatic PUBLIC ${ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS})
 # ==============================================================================
 add_library(ZhulongLog STATIC src/common/log.cpp)
 target_compile_features(ZhulongLog PUBLIC cxx_std_17)
@@ -305,8 +356,13 @@ target_include_directories(ZhulongLog PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(ZhulongLog PUBLIC Threads::Threads)
 set_target_properties(ZhulongLog PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# ⚠️ dmabuf_allocator.cpp 的唯一归属是 ZhulongPlatformObjects（见 4.1）。这里用
+#    $<TARGET_OBJECTS:…> 把同一批对象**归档**进 libZhulongAlgoIpc.a，而不是再编一遍：
+#    · 宿主 CGO 链接行是写死的 engine.a + ipc.a + log.a（native/scripts/build.py），
+#      DmaBufAllocator 符号必须真的落在某个归档里，不能靠 OBJECT 库的传递依赖；
+#    · 同一构建树里该翻译单元只编译一次，DmaBufAllocator::instance() 只有一个定义。
 add_library(ZhulongAlgoIpc STATIC
-    src/platform/dmabuf/dmabuf_allocator.cpp
+    $<TARGET_OBJECTS:ZhulongPlatformObjects>
     src/algorithm/ipc/shm_pool.cpp
     src/algorithm/ipc/unix_socket.cpp
     src/algorithm/ipc/broker_resource_lock.cpp

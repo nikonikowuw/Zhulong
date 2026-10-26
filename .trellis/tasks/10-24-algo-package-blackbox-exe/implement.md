@@ -113,30 +113,76 @@
       - `algo.hpp` 的 `TARGET_MODEL_EXT` 不再按 `__arm__` 猜测，改由 `ZHULONG_INFERENCE_RKNN` 唯一决定。
       - 验证：`make native-build` + `make native-test` **28/28 通过**（host/onnx）；`test_stub` 独立构建目录 `ZhulongAlgoRuntime`/`AlgoRuntime`/`PlatePlugin`/`FacePlugin` 编译通过且 3 项用例通过；CMake 无后端时 `FATAL_ERROR`；交叉 `rk3568-stub` 与 `rk3568-rknn` configure 均通过；未声明后端的 profile 由 `build.py` 拒绝；`python3 native/scripts/build.py go build ./...` 与 `go test -race ./internal/algorithm ./internal/app` 通过。
 
-- [ ] **1.1** 把 `native/CMakeLists.txt:234` 的 `ZhulongAlgoRuntime` 源文件列表抽成 `ZhulongAlgoRuntimeObjects`（OBJECT 库），显式设：
+- [x] **1.1** 把 `native/CMakeLists.txt:234` 的 `ZhulongAlgoRuntime` 源文件列表抽成 `ZhulongAlgoRuntimeObjects`（OBJECT 库），显式设：
       - `POSITION_INDEPENDENT_CODE ON`（⚠️ 现 target **没有**设，对比 `:154` / `:296` / `:314`；`SHARED` 会自动开、OBJECT 不会，漏了会在链接 PIE 时报 `R_X86_64_32 ... can not be used when making a PIE object`）；
       - ⚠️ **不要**设 `CXX_VISIBILITY_PRESET hidden`（2026-10-25 修正，原文错误）：1.2 让旧 `ZhulongAlgoRuntime`（SHARED）仍从这批对象构建，而 `native/CMakeLists.txt:377` / `:406` 的 plugin 还 `target_link_libraries(... ZhulongAlgoRuntime)`，hidden 会让 `.so` 不再导出那 9 个符号 → plugin **链接期 `undefined reference`**，阶段 1 走不到 1.4。符号不进可执行文件 `.dynsym` 由「可执行文件默认不导出未被动态对象引用的符号」+ 链接侧 `-Wl,--exclude-libs,ALL` 共同满足（`design.md` §4.1.1 第 3 条）。若确实要 hidden，唯一正确做法是加显式导出宏并让 OBJECT 编两遍——等于两份实现，本任务不做。
-- [ ] **1.1b** 把 `src/platform/dmabuf/dmabuf_allocator.cpp` 收敛为 OBJECT 库的**唯一归属**，`ZhulongAlgoIpc`（`:346`）改为消费 OBJECT 库、不再自行编译它。
+
+      **执行记录（2026-10-25）**：见下方「阶段 1 执行记录」。
+
+- [x] **1.1b** 把 `src/platform/dmabuf/dmabuf_allocator.cpp` 收敛为 OBJECT 库的**唯一归属**，`ZhulongAlgoIpc`（`:346`）改为消费 OBJECT 库、不再自行编译它。
       ⚠️ 现在它同时存在于 `ZhulongAlgoRuntime`（`:237`）与 `ZhulongAlgoIpc`（`:346`），靠动态符号介入才合成一个实例；全静态后链接结果取决于扫描顺序，最坏是两份 `DmaBufAllocator` 单例（同类 ABI 债）。见 `design.md` §4.1.1。
 
-- [ ] **1.1c** `native/src/algorithm/runtime/tensor.hpp`：`data<T>()` / `data() const` 增加 dtype 校验——`dtype_` 与 `T` 不匹配时抛 `std::invalid_argument`（`design.md` §4.8.5）。当前实现明确不校验（`tensor.hpp:163-175`），而算法侧直接 `data<float>()`；ONNX 后端保留原始 dtype，非浮点输出会被静默读成垃圾。校验失败由 ABI 边界的 `try/catch` 转状态码，不得让异常穿越 C ABI。
+      **实现方式与初稿不同（有意）**：`dmabuf_allocator.cpp` 的归属是**独立的** `ZhulongPlatformObjects`（OBJECT 库），`ZhulongAlgoIpc` 以 `target_sources(... $<TARGET_OBJECTS:ZhulongPlatformObjects>)` 把同一批对象**归档**进 `.a`。没有用 `target_link_libraries(ZhulongAlgoIpc PUBLIC ZhulongPlatformObjects)`：CMake 不会把「被链接的 OBJECT 库」的对象装进静态归档，只会传递给消费者；而宿主 CGO 链接行是 `build.py:517-522` 写死的 `engine.a + ipc.a + log.a`，传递性对象永远到不了 Go 链接行 → `DmaBufAllocator` 未定义符号。独立平台对象库的另一个作用：`ZhulongAlgoRuntime`/`ZhulongAlgoRuntimeStatic` 与 `ZhulongAlgoIpc` 三方共享**同一批对象文件**，同一构建树里该翻译单元只编译一次。
+
+- [x] **1.1c** `native/src/algorithm/runtime/tensor.hpp`：`data<T>()` / `data() const` 增加 dtype 校验——`dtype_` 与 `T` 不匹配时抛 `std::invalid_argument`（`design.md` §4.8.5）。当前实现明确不校验（`tensor.hpp:163-175`），而算法侧直接 `data<float>()`；ONNX 后端保留原始 dtype，非浮点输出会被静默读成垃圾。校验失败由 ABI 边界的 `try/catch` 转状态码，不得让异常穿越 C ABI。
       验收：新增单测覆盖 float/int64 互读；`make native-test` 全绿（现有 UINT8 像素读取与 FLOAT32 输出不受影响）。
 
-- [ ] **1.2** `ZhulongAlgoRuntime`（SHARED）改为从 `$<TARGET_OBJECTS:ZhulongAlgoRuntimeObjects>` 构建，保持 `SKIP_BUILD_RPATH` / `BUILD_RPATH ""`（`:263` / `:272` / `:289`）与全部 `target_link_libraries` 不变。
+- [x] **1.2** `ZhulongAlgoRuntime`（SHARED）改为从 `$<TARGET_OBJECTS:ZhulongAlgoRuntimeObjects>` 构建，保持 `SKIP_BUILD_RPATH` / `BUILD_RPATH ""`（`:263` / `:272` / `:289`）与全部 `target_link_libraries` 不变。
 
-- [ ] **1.3** 新增 `ZhulongAlgoRuntimeStatic`（STATIC，`OUTPUT_NAME ZhulongAlgoRuntime`，产物 `libZhulongAlgoRuntime.a`），同样从 OBJECT 库取对象；把 onnxruntime / rknn 的依赖以 `PUBLIC` 传递（静态库不「链接」依赖，只能传递给最终消费者）。
+- [x] **1.3** 新增 `ZhulongAlgoRuntimeStatic`（STATIC，`OUTPUT_NAME ZhulongAlgoRuntime`，产物 `libZhulongAlgoRuntime.a`），同样从 OBJECT 库取对象；把 onnxruntime / rknn 的依赖以 `PUBLIC` 传递（静态库不「链接」依赖，只能传递给最终消费者）。
 
-- [ ] **1.4** 验证：
+- [x] **1.4** 验证：
       ```bash
       make native-build
       make native-test
       ar t build/native/host/libZhulongAlgoRuntime.a | head
       readelf -d build/native/host/libZhulongAlgoRuntime.so | grep -E "NEEDED|RUNPATH"   # 与阶段 0 基线一致
       nm -D --undefined-only build/native/host/libFaceRecognitionPlugin.so | grep -c zhulong  # 仍为 9（变 0 或链接失败 ⇒ 1.1 误设了 hidden）
-      nm -C build/native/host/libZhulongAlgoRuntime.so | grep -c "DmaBufAllocator::instance"    # 必须仍是 1
+      # ⚠️ 断言改写（2026-10-25）：原先写的是 `grep -c "DmaBufAllocator::instance"` = 1，
+      #    但基线实测该写法就是 4（guard variable / 定义 T / .cold 克隆 / 静态 inst）。
+      #    真正要防的是「两份定义」，因此收紧到定义行本身：期望 1。
+      nm -C build/native/host/libZhulongAlgoRuntime.so | grep -c "T zhulong::platform::DmaBufAllocator::instance()"
       ```
 
 **Review gate 1**：`make native-test` 全绿 + SO 的 NEEDED/RUNPATH 与基线逐字一致。**rollback = revert 本阶段 commit。**
+
+### 阶段 1 执行记录（2026-10-25）
+
+**目标图（`native/CMakeLists.txt` §4.1）**
+
+```
+ZhulongPlatformObjects   OBJECT  src/platform/dmabuf/dmabuf_allocator.cpp
+ZhulongAlgoRuntimeObjects OBJECT  cpu_vision_backend / gallery_registry / letterbox_geometry / runtime_factory
+                                  + <backend>_inference_backend.cpp（条件编译，只在此处声明）
+        │
+        ├─ ZhulongAlgoRuntime        SHARED  $<TARGET_OBJECTS:两个 OBJECT 库>
+        ├─ ZhulongAlgoRuntimeStatic  STATIC  同上，OUTPUT_NAME ZhulongAlgoRuntime
+        └─ ZhulongAlgoIpc            STATIC  $<TARGET_OBJECTS:ZhulongPlatformObjects> + ipc 源
+```
+
+- 后端差异只累积到 `ZHULONG_ALGO_RUNTIME_{PRIVATE_LIBS,PUBLIC_DEFS}` 两个变量，最后用一个 `foreach` 施加到四个目标，避免同一份 include/define 设置抄四遍。
+- 编译定义（`ZHULONG_INFERENCE_ONNX|RKNN|TEST_STUB`）对 OBJECT 库是 `PRIVATE`（用于编译）、对两个最终产物是 `PUBLIC`（插件侧 `algo.hpp` 的 `TARGET_MODEL_EXT` 依赖它）；`ZHULONG_VISION_RGA` 仍是纯编译期私有定义。
+- 后端链接项：SHARED 保持 `PRIVATE`（与阶段 0 行为一致，下游靠 NEEDED 解析）；STATIC 用 `PUBLIC`（静态库无法「链接」，最终链接需求必须交给消费者，对应 1.3）。
+
+**实测结果**
+
+| 断言 | 期望 | 实测 |
+| --- | --- | --- |
+| `make native-test`（host/onnx） | 28/28 | **28/28 PASS**（25.8s） |
+| `ar t libZhulongAlgoRuntime.a` | 含运行时 + 平台对象 | `cpu_vision_backend / gallery_registry / letterbox_geometry / runtime_factory / onnx_inference_backend / dmabuf_allocator` |
+| `.so` NEEDED/RUNPATH | 与基线逐字一致 | 完全一致（`libonnxruntime.so.1.21`、`libstdc++.so.6`、`libm.so.6`、`libgcc_s.so.1`、`libc.so.6`），**无 RUNPATH** |
+| `nm -D --undefined-only libFaceRecognitionPlugin.so \| grep -c zhulong` | 9 | **9** |
+| 同上 plate | 3 | **3** |
+| `nm -C .so \| grep -c "T …::DmaBufAllocator::instance()"` | 1 | **1** |
+| `dmabuf_allocator.cpp` 编译次数 | 1 | 1（只有 `CMakeFiles/ZhulongPlatformObjects.dir/build.make` 拥有编译规则；`ZhulongAlgoRuntime.dir/link.txt`、`…Static.dir/link.txt`、`ZhulongAlgoIpc.dir/link.txt` 均直接引用同一 `.o`） |
+| 交叉 `rk3568-stub` / `rk3568-rknn` 编译 | 通过 | 通过；两档 `.a` 分别是 `stub_inference_backend.cpp.o` / `rknn_inference_backend.cpp.o`，产品档无桩符号 |
+| rknn `.so` NEEDED | `librknnrt.so` 且无 RUNPATH | 一致 |
+| `build.py go build ./...` | 通过 | 通过（CGO 链接未受归档内容变更影响） |
+| `go test -race ./internal/{engine,algorithm,algorunner}` | 全绿 | 全绿（4.2s / 11.0s / 5.6s） |
+
+**1.1c 细节**：`tensor.hpp` 新增 `data_type_name()` 与编译期映射 `tensor_dtype_of<T>`（float/uint8/int8/int32/int64），未特化的 `T` 直接编译失败；`data<T>()` 去掉 `noexcept` 并在 `require_dtype()` 抛 `std::invalid_argument("tensor dtype mismatch: requested X, actual Y")`；`raw_data()` 仍是免检字节视图。单测加在 `native/tests/algo_runtime_test.cpp` 第 1.2 节：非 const 读错类型、const 重载读错类型、int64↔float 双向拒绝，四个方向全覆盖。全仓 `data<T>()` 实例化只有 `float` / `uint8_t` 两种（各 27 / 24 处），无一处的 dtype 与 T 不匹配（`make native-test` 全绿即为证）。
+
+**已知遗留（转交阶段 3/4）**：`dmabuf_allocator.cpp.o` 现在同时存在于 `libZhulongAlgoRuntime.a` 与 `libZhulongAlgoIpc.a`（同一目标文件，归档两份）。普通链接只会拉入一份，但**算法包可执行文件绝不能对这两个归档同时用 `--whole-archive`**，否则回到两份单例。SDK 静态链接的归档清单与 `--exclude-libs,ALL` 一起在阶段 3.9 / 7.2 定稿并验证。
 
 ---
 

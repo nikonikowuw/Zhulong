@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace zhulong {
 
@@ -46,6 +47,34 @@ inline size_t data_type_size(DataType dtype) {
         default: return 1;
     }
 }
+
+/**
+ * @brief 获取数据类型的可读名称（异常消息与日志用）
+ */
+inline const char* data_type_name(DataType dtype) noexcept {
+    switch (dtype) {
+        case DataType::FLOAT32: return "FLOAT32";
+        case DataType::UINT8:   return "UINT8";
+        case DataType::INT8:    return "INT8";
+        case DataType::INT32:   return "INT32";
+        case DataType::INT64:   return "INT64";
+    }
+    return "UNKNOWN";
+}
+
+/**
+ * @brief 编译期把 C++ 标量类型映射到 DataType，作为 Tensor::data<T>() 的校验依据
+ *
+ * 未特化的 T 会让 data<T>() 编译失败，而不是静默重解释成垃圾值。
+ */
+template<typename T>
+struct tensor_dtype_of;
+
+template<> struct tensor_dtype_of<float>   { static constexpr DataType value = DataType::FLOAT32; };
+template<> struct tensor_dtype_of<uint8_t> { static constexpr DataType value = DataType::UINT8; };
+template<> struct tensor_dtype_of<int8_t>  { static constexpr DataType value = DataType::INT8; };
+template<> struct tensor_dtype_of<int32_t> { static constexpr DataType value = DataType::INT32; };
+template<> struct tensor_dtype_of<int64_t> { static constexpr DataType value = DataType::INT64; };
 
 /**
  * @brief 多维张量容器（形状 + 类型 + packed 连续数据）
@@ -160,22 +189,42 @@ public:
     const void* raw_data() const noexcept { return is_external_ ? external_va_ : data_.data(); }
 
     /**
-     * @brief 按指定类型重解释数据区首地址（不校验 T 与 dtype_ 是否一致）
+     * @brief 按指定类型获取数据区首地址
+     *
+     * ⚠️ 硬校验：T 与 dtype() 不匹配时抛 std::invalid_argument。
+     * ONNX 后端保留模型原始 dtype，非浮点输出被当成 float 读会静默得到垃圾值，
+     * 这类错误必须在算法侧就地暴露；异常由 C ABI 边界的 try/catch 转状态码，
+     * 绝不穿越 ABI。需要绕过类型做字节视图请用 raw_data()。
+     *
+     * @throw std::invalid_argument T 对应的 DataType 与 dtype() 不一致
      */
     template<typename T>
-    T* data() noexcept {
+    T* data() {
+        require_dtype(tensor_dtype_of<T>::value);
         return reinterpret_cast<T*>(raw_data());
     }
 
     /**
-     * @brief 按指定类型只读重解释数据区首地址（不校验 T 与 dtype_ 是否一致）
+     * @brief 按指定类型只读获取数据区首地址（同样校验 dtype）
+     *
+     * @throw std::invalid_argument T 对应的 DataType 与 dtype() 不一致
      */
     template<typename T>
-    const T* data() const noexcept {
+    const T* data() const {
+        require_dtype(tensor_dtype_of<T>::value);
         return reinterpret_cast<const T*>(raw_data());
     }
 
 private:
+    /**
+     * @brief 校验请求的元素类型与本张量的 dtype 一致
+     */
+    void require_dtype(DataType requested) const {
+        if (requested == dtype_) return;
+        throw std::invalid_argument(std::string("tensor dtype mismatch: requested ") +
+                                    data_type_name(requested) + ", actual " +
+                                    data_type_name(dtype_));
+    }
     std::vector<int64_t> dims_;          /**< 形状维度列表 */
     DataType dtype_{DataType::FLOAT32};  /**< 元素数据类型 */
     std::vector<uint8_t> data_;          /**< packed 连续数据区 */
