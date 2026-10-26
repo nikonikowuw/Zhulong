@@ -1,8 +1,9 @@
-package engine
+package faceextract
 
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"image"
 
@@ -188,3 +189,30 @@ func parseTIFFOrientation(tiff []byte) int {
 	}
 	return 1
 }
+
+// MaxImageDimension bounds one side of an enrolment photo. It is the same 4096 the
+// retired engine path enforced — the limit exists to stop decompression bombs, not
+// to express a model requirement, so it moves with the codec, not with the model.
+const MaxImageDimension = 4096
+
+// ErrUnsupportedImageFormat means the bytes cannot be decoded by any registered
+// decoder (or the file is corrupt). The caller's input, not a server fault.
+var ErrUnsupportedImageFormat = errors.New("unsupported image format")
+
+// DecodeToRGB24 decodes an image into packed RGB24 pixels, normalising EXIF
+// orientation, and returns the resulting dimensions.
+//
+// It lives in this package because image decoding is *not* part of the inference
+// path: the package skeleton links no codec, so the host must flatten pixels before
+// they cross the process boundary. Keeping it beside the client makes that pairing
+// obvious instead of leaving it in a package that no longer extracts anything.
+func DecodeToRGB24(data []byte) (pixels []byte, width int, height int, err error) {
+	return decodeToRGB24(data, MaxImageDimension)
+}
+
+// Pixel formats accepted by the provider protocol. Values are part of the wire
+// contract (the package's C ABI uses the same numbers).
+const (
+	FormatBGR24 uint32 = 1
+	FormatRGB24 uint32 = 2
+)

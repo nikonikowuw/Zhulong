@@ -1,4 +1,4 @@
-package engine
+package faceextract
 
 import (
 	"bytes"
@@ -171,7 +171,7 @@ func readWebPFixture(t *testing.T) []byte {
 }
 
 func TestDecodeToRGB24_SupportsWebP(t *testing.T) {
-	pixels, w, h, err := decodeToRGB24(readWebPFixture(t), MaxFaceImageDimension)
+	pixels, w, h, err := DecodeToRGB24(readWebPFixture(t))
 	if err != nil {
 		t.Fatalf("WebP must decode (regression: 曾因缺少解码器报 unknown format): %v", err)
 	}
@@ -201,7 +201,7 @@ func TestDecodeToRGB24_RejectsUnknownAndCorruptedFormats(t *testing.T) {
 	}
 
 	for name, data := range cases {
-		if _, _, _, err := decodeToRGB24(data, MaxFaceImageDimension); !errors.Is(err, ErrUnsupportedImageFormat) {
+		if _, _, _, err := DecodeToRGB24(data); !errors.Is(err, ErrUnsupportedImageFormat) {
 			t.Errorf("%s: want ErrUnsupportedImageFormat, got %v", name, err)
 		}
 	}
@@ -217,7 +217,7 @@ func TestDecodeToRGB24_AnimatedWebPFailsClosed(t *testing.T) {
 		t.Fatalf("read animated fixture: %v", err)
 	}
 
-	if _, _, _, err := decodeToRGB24(data, MaxFaceImageDimension); !errors.Is(err, ErrUnsupportedImageFormat) {
+	if _, _, _, err := DecodeToRGB24(data); !errors.Is(err, ErrUnsupportedImageFormat) {
 		t.Fatalf("want ErrUnsupportedImageFormat for animated WebP, got %v", err)
 	}
 }
@@ -226,17 +226,17 @@ func TestDecodeToRGB24_AnimatedWebPFailsClosed(t *testing.T) {
 // 超限图在完整解码之前就被拒绝：否则 20000x20000 会先吃掉约 1.2GB 才被拦下。
 func TestDecodeToRGB24_RejectsOversizedBeforeFullDecode(t *testing.T) {
 	header := pngHeader(20000, 20000)
-	if _, _, _, err := decodeToRGB24(header, MaxFaceImageDimension); !errors.Is(err, ErrInvalidArgument) {
+	if _, _, _, err := DecodeToRGB24(header); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("want ErrInvalidArgument on oversized image header, got %v", err)
 	}
 
 	// 边界：恰好等于上限必须放行（尺寸检查不能多拒一个像素）
-	atLimit := pngHeader(MaxFaceImageDimension, MaxFaceImageDimension)
-	_, w, h, err := decodeToRGB24(atLimit, MaxFaceImageDimension)
+	atLimit := pngHeader(MaxImageDimension, MaxImageDimension)
+	_, w, h, err := DecodeToRGB24(atLimit)
 	if err == nil {
 		t.Fatalf("expected decode failure for header-only PNG, got %dx%d", w, h)
 	}
 	if errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("image exactly at MaxFaceImageDimension must pass the size guard, got %v", err)
+		t.Fatalf("image exactly at MaxImageDimension must pass the size guard, got %v", err)
 	}
 }

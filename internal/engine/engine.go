@@ -810,70 +810,9 @@ func extractVideoInfo(result C.Zhulong_probe_result_h) (VideoInfo, error) {
 	}, nil
 }
 
-// featureDim 是引擎输出的归一化人脸特征维数，与原生插件契约严格一致。
-const featureDim = 512
-
-// ExtractFaceFeature 解码图片、检测人脸并输出归一化的 512 维特征向量。
-//
-// 生命周期契约（与同包其它方法不同，这里是有意的）：
-// 人脸插件是进程级单例，不依赖引擎实例状态，因此未 Start 时也可调用；
-// C 侧对 engine 参数显式忽略（(void)engine），传入空句柄是合法的。
-// 同时也不需要 runtime.LockOSThread：插件内部用互斥量串行化，
-// 会话不绑定调用线程。若将来换绑线程的推理后端（如 RKNN 上下文），这里必须加。
-func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]float32, error) {
-	if len(imageBytes) == 0 {
-		return nil, ErrInvalidArgument
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	// 解码、EXIF 方向归一化与 RGB24 打包都在 image_input.go：
-	// 输入格式问题（ErrUnsupportedImageFormat）与原生能力缺失（ErrUnsupported）必须分开。
-	rgb, width, height, err := decodeToRGB24(imageBytes, MaxFaceImageDimension)
-	if err != nil {
-		return nil, err
-	}
-
-	outFeatures := make([]float32, featureDim)
-	dim := C.uint32_t(featureDim)
-
-	var handle C.Zhulong_engine_h
-	if e != nil {
-		e.handleMu.RLock()
-		defer e.handleMu.RUnlock()
-
-		e.mu.Lock()
-		handle = e.handle
-		e.mu.Unlock()
-	}
-
-	status := C.Zhulong_engine_extract_face_feature(
-		handle,
-		(*C.uint8_t)(unsafe.Pointer(&rgb[0])),
-		C.int32_t(width),
-		C.int32_t(height),
-		C.int32_t(width*3),
-		C.int32_t(2), // 2 = ZHULONG_PIXEL_FORMAT_RGB24
-		(*C.float)(unsafe.Pointer(&outFeatures[0])),
-		&dim,
-	)
-	runtime.KeepAlive(rgb)
-	runtime.KeepAlive(outFeatures)
-
-	if status != C.Zhulong_OK {
-		return nil, mapNativeStatus("extract_face_feature", int32(status))
-	}
-
-	// 插件回报的维数是不可信输入：超出容量会造成 Go 侧 slice 越界 panic，
-	// 为空则说明插件没有写回结果——两种都必须关死，不能静默降级。
-	if dim == 0 || int(dim) > len(outFeatures) {
-		return nil, fmt.Errorf("%w: plugin reported feature_dim=%d (capacity %d)",
-			ErrInternal, uint32(dim), len(outFeatures))
-	}
-
-	return outFeatures[:dim], nil
-}
+// 人脸特征提取不在这里：它从「engine 里 dlopen 人脸插件」改成了「跟包可执行文件
+// 说一个小协议」，实现在 internal/faceextract。留在这里的只会是两套模型加载路径，
+// 而且宿主根本不该认识算法二进制。
 
 // BroadcastAIMessage sends a typed control payload (e.g. MSG_GALLERY_*) to the FrameBroker of
 // the specified stream (or all active streams if streamID is 0) to reach connected algorithm runners.

@@ -25,6 +25,10 @@ faces_directory = ""
 # whose owner has no business key can only ever produce an unreportable record, so the
 # refusal happens at enrollment instead of surfacing later as undeliverable evidence.
 require_person_id_for_face_enrollment = false
+# Algorithm package that provides face feature extraction for gallery enrollment.
+# It is resolved per request (active version + package entry), so upgrading or
+# reinstalling the package needs no change here. Must be an installed package id.
+extractor_algorithm = "face_recognition"
 
 # Must match manifest.json platform.target for algorithm packages.
 [algorithm]

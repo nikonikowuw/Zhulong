@@ -16,7 +16,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/camera"
-	"github.com/nikonikowuw/Zhulong/internal/engine"
+	"github.com/nikonikowuw/Zhulong/internal/faceextract"
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
 	"github.com/nikonikowuw/Zhulong/internal/person"
 	"github.com/nikonikowuw/Zhulong/internal/record"
@@ -241,24 +241,45 @@ func (a *supervisorGallerySyncAdapter) GetGallerySyncData(ctx context.Context) (
 	return algoItems, nil
 }
 
-// faceFeatureExtractorAdapter bridges *engine.Engine to person.FaceFeatureExtractor.
+// faceFeatureExtractorAdapter bridges internal/faceextract to person.FaceFeatureExtractor.
 //
 // The translation lives here rather than in internal/person so the domain package
-// keeps its "no dependency on internal/engine" boundary. It also maps the engine's
-// "no face found" status onto person.ErrNoFaceDetected (→ 422), and a decode failure
-// onto person.ErrUnsupportedImageFormat (→ 400): an unusable upload must not be
-// reported as a server error, and a genuine engine failure must not be blamed on it.
+// keeps its "no dependency on process/pipe/codec" boundary. The mapping rules:
+//
+//   - an undecodable upload, or one the size guard rejects → person.ErrUnsupportedImageFormat
+//     (the caller's input is unusable; answering 500 would blame the server);
+//   - "no face in the photo" → person.ErrNoFaceDetected;
+//   - anything else (crash, timeout, protocol desync, package missing) → the raw error,
+//     which the service reports as a server failure.
+//
+// It never fabricates a vector: a zero embedding is indistinguishable from a real
+// enrollment in storage and would silently never match.
 type faceFeatureExtractorAdapter struct {
-	eng *engine.Engine
+	client *faceextract.Client
 }
 
 func (a *faceFeatureExtractorAdapter) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]float32, error) {
-	features, err := a.eng.ExtractFaceFeature(ctx, imageBytes)
+	if len(imageBytes) == 0 {
+		return nil, fmt.Errorf("%w: empty image", person.ErrUnsupportedImageFormat)
+	}
+
+	pixels, width, height, err := faceextract.DecodeToRGB24(imageBytes)
 	if err != nil {
-		if errors.Is(err, engine.ErrNotFound) {
+		// Decoding happens on the host: the package skeleton links no codec.
+		return nil, fmt.Errorf("%w: %v", person.ErrUnsupportedImageFormat, err)
+	}
+
+	features, err := a.client.Extract(ctx, faceextract.Frame{
+		Width:  uint32(width),
+		Height: uint32(height),
+		Format: faceextract.FormatRGB24,
+		Pixels: pixels,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, faceextract.ErrNoFaceDetected):
 			return nil, fmt.Errorf("%w: %v", person.ErrNoFaceDetected, err)
-		}
-		if errors.Is(err, engine.ErrUnsupportedImageFormat) {
+		case errors.Is(err, faceextract.ErrInvalidArgument):
 			return nil, fmt.Errorf("%w: %v", person.ErrUnsupportedImageFormat, err)
 		}
 		return nil, err

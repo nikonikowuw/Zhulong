@@ -650,49 +650,6 @@ void Zhulong_probe_result_destroy(Zhulong_probe_result_h result);
 /*                             人脸特征提取接口                                */
 /* ========================================================================== */
 
-/**
- * @brief 从图像像素数据同步提取 512 维人脸特征向量
- *
- * 内存与调用契约：
- *   - pixel_data: 连续像素数据借用指针，调用期间有效；
- *   - width / height: 图像宽高（像素）；
- *   - stride: 水平行扫描跨度（字节数，0 表示紧凑排列 width * 3）；
- *   - format: 像素色彩格式（当前支持 1=BGR24, 2=RGB24）；
- *   - out_features: 调用方预分配的 float 数组缓冲区，容量必须 >= 512；
- *   - feature_dim: 输入缓冲区容量（按 float 计数），输出实际写入特征维度（固定 512）；
- *   - 特征归一化保证：提取出的 512 维向量严格满足 L2 范数单位归一化（||v|| = 1.0）；
- *   - 线程安全：可在任意线程并发调用，不占用或阻塞流媒体流水线。
- *
- * 能力来源与闭环报错（Fail-Closed）：
- *   - 真实推理由动态加载的人脸识别算法插件（libFaceRecognitionPlugin.so）提供：首次调用懒加载，
- *     空闲超过 ZHULONG_FACE_PLUGIN_IDLE_TIMEOUT_SEC（默认 60 秒）后自动释放模型并卸载动态库；
- *   - 插件缺失、符号缺失或模型不可用时**显式返回错误码**，绝不允许回退到模拟特征向量。
- *
- * @param engine 引擎句柄（可为 NULL 或当前实例句柄）
- * @param pixel_data 连续像素数据首地址
- * @param width 图像宽度
- * @param height 图像高度
- * @param stride 行跨度（字节数）
- * @param format 像素格式（如 RGB24 / BGR24）
- * @param[out] out_features 输出特征向量缓冲区
- * @param[in,out] feature_dim 缓冲区容量输入与实际维度输出
- * @return Zhulong_status_t 操作状态码：
- *         Zhulong_OK 成功；
- *         Zhulong_ERR_INVALID_ARGUMENT 参数非法（空指针、非法尺寸或缓冲区容量 < 512）；
- *         Zhulong_ERR_UNSUPPORTED 像素格式不支持，或人脸算法插件/模型不可用；
- *         Zhulong_ERR_NOT_FOUND 未在图像中检测到人脸；
- *         Zhulong_ERR_INTERNAL 插件内部推理异常
- */
-Zhulong_status_t Zhulong_engine_extract_face_feature(
-    Zhulong_engine_h engine,
-    const uint8_t *pixel_data,
-    int32_t width,
-    int32_t height,
-    int32_t stride,
-    int32_t format,
-    float *out_features,
-    uint32_t *feature_dim
-);
 
 #ifdef __cplusplus
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/clientlog"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
+	"github.com/nikonikowuw/Zhulong/internal/faceextract"
 	"github.com/nikonikowuw/Zhulong/internal/gb28181"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
@@ -514,7 +516,7 @@ type personOut struct {
 func providePerson(
 	dbProvider database.DBProvider,
 	config Config,
-	eng *engine.Engine,
+	algStore *algorithm.Store,
 	broadcaster *algorunner.GalleryBroadcaster,
 	supervisor *algorunner.Supervisor,
 	recordStore *record.Store,
@@ -527,7 +529,22 @@ func providePerson(
 	// Collaborators are resolved before construction: the person components capture
 	// their dependencies once and never swap them afterwards. All three are
 	// required dependencies of this provider, so none of them can arrive nil.
-	extractor := &faceFeatureExtractorAdapter{eng: eng}
+	//
+	// The face provider is resolved *per request* through the algorithm store: the
+	// package can be upgraded, rolled back or reinstalled while the host runs, and a
+	// client pinned to one path would keep enrolling with the old model.
+	rt := newAlgorithmRuntime(config.DataDir)
+	providerID := config.ExtractorAlgorithm
+	extractor := &faceFeatureExtractorAdapter{client: faceextract.New(faceextract.Options{
+		Logger: logger,
+		Entry: func(ctx context.Context) (string, error) {
+			installed, err := algStore.GetAlgorithm(ctx, providerID)
+			if err != nil {
+				return "", fmt.Errorf("face provider %q: %w", providerID, err)
+			}
+			return algorunner.ResolveEntry(rt.PackageDir(installed.ID, installed.Version), installed.ID)
+		},
+	})}
 	notifier := &personGalleryAdapter{broadcaster: broadcaster}
 	keyBackfiller := &personKeyBackfillerAdapter{store: recordStore}
 

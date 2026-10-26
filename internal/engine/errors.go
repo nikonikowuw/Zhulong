@@ -144,12 +144,6 @@ var (
 // 表现为随机崩溃或莫名其妙的字段值，排查成本极高。宁可启动直接拒绝。
 var ErrABIMismatch = errors.New("native engine ABI version mismatch")
 
-// ErrUnsupportedImageFormat 表示调用方提供的图片字节流无法被解码（格式不受支持或文件损坏）。
-//
-// ⚠️ 它与 StatusUnsupported（原生能力缺失，如 CPU 桩后端没有人脸识别能力）是**两类**问题：
-// 本错误归咎于上传的输入，HTTP 层应回答 4xx；StatusUnsupported 是服务端能力问题，仍是 5xx。
-var ErrUnsupportedImageFormat = errors.New("unsupported image format")
-
 // nativeCallbackPanic 把 CGO 回调里的 panic 收敛成可上报的错误。
 //
 // 回调内 panic 说明 Go 侧违反了自己的契约（越界、空指针、句柄误用）。

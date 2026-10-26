@@ -52,6 +52,11 @@ type Config struct {
 	// offline host still creates persons without a key, but a host that reports
 	// recognitions to a business system refuses to build a gallery it cannot attribute.
 	RequirePersonIDForEnrollment bool
+	// ExtractorAlgorithm names the algorithm package that provides face feature
+	// extraction for gallery enrollment. It is an explicit id, not a path: the
+	// package's active version and entry are resolved at call time, so upgrading or
+	// reinstalling the package needs no configuration change.
+	ExtractorAlgorithm string
 }
 
 func validateHTTPAddress(address string) error {
@@ -118,6 +123,7 @@ func DefaultConfig() Config {
 			Level:  "info",
 			Output: "stderr",
 		},
-		SessionTTL: 24 * time.Hour,
+		SessionTTL:         24 * time.Hour,
+		ExtractorAlgorithm: "face_recognition",
 	}
 }

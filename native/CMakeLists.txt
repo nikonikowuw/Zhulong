@@ -809,35 +809,19 @@ if(BUILD_TESTING)
     set_tests_properties(ZhulongJpegEncoder PROPERTIES
         ENVIRONMENT "ZHULONG_JPEG_BACKEND=cpu" TIMEOUT 120)
 
-    # 人脸特征提取单次 C ABI 单元测试
-    add_executable(ZhulongFaceFeatureExtractTests tests/face_feature_extract_test.cpp)
-    target_link_libraries(ZhulongFaceFeatureExtractTests PRIVATE ZhulongEngine ${CMAKE_DL_LIBS})
-    if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
-        # 只有 ONNX 后端才具备真实人脸能力；其余构建（rknn / test_stub）必须走 Fail-Closed 断言分支
-        target_compile_definitions(ZhulongFaceFeatureExtractTests PRIVATE ZHULONG_TEST_ONNX_INFERENCE=1)
-    endif()
-    add_test(NAME ZhulongFaceFeatureExtract COMMAND ZhulongFaceFeatureExtractTests $<TARGET_FILE:FaceRecognitionPlugin>)
-    set_tests_properties(ZhulongFaceFeatureExtract PROPERTIES TIMEOUT 10)
-
-    # 宿主 FacePluginLoader 动态加载 / Fail-Closed / TTL 空闲卸载黑盒测试。
-    # 使用最小插件替身（不依赖 ONNX Runtime），因此 CPU 与 ONNX 后端均可覆盖宿主侧状态机。
-    add_library(MockFaceExtractPlugin SHARED tests/mock_face_plugin.cpp)
-    target_compile_features(MockFaceExtractPlugin PRIVATE cxx_std_17)
-    set_target_properties(MockFaceExtractPlugin PROPERTIES OUTPUT_NAME "MockFaceExtractPlugin")
-
-    add_executable(ZhulongFacePluginTtlTests tests/face_plugin_ttl_test.cpp)
-    target_compile_features(ZhulongFacePluginTtlTests PRIVATE cxx_std_17)
-    target_link_libraries(ZhulongFacePluginTtlTests PRIVATE ZhulongEngine)
-    add_test(NAME ZhulongFacePluginTtl COMMAND ZhulongFacePluginTtlTests
-        $<TARGET_FILE:MockFaceExtractPlugin> ${CMAKE_CURRENT_BINARY_DIR}/face_plugin_ttl)
-    set_tests_properties(ZhulongFacePluginTtl PROPERTIES TIMEOUT 30)
+    # 底库登记用的特征提取改由包可执行文件的 --extract-feature 通道完成
+    # （Go 侧 internal/faceextract）。宿主不再 dlopen 任何算法 .so，因此原
+    # FacePluginLoader 的 TTL/惰性卸载黑盒测试随实现一起下线；通道行为由
+    # packages/face_recognition 的 devtest 与 Go 侧单测覆盖。
 
     if(NOT CMAKE_CROSSCOMPILING)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
         add_test(NAME ZhulongAlgoJsonRoundTrip COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/algo_json_roundtrip_test.py $<TARGET_FILE:ZhulongAlgoJsonTests>)
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-            # 人脸识别插件除统一入口外，还必须导出宿主 dlopen 依赖的单次提取/释放 C ABI
+            # ⚠️ 过渡态：宿主已不再 dlopen 任何人脸特征通道，但 face 包的 .so 目标仍在
+            #    （还有 native 测试在用），其导出里因此仍带 zhulong_face_extract_*。
+            #    这两个 SHARED 目标一旦删除，本行回退为「只允许统一入口」。
             add_test(NAME ZhulongPluginSymbolVisibility COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_plugin_symbols.py ${CMAKE_NM}
                 $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier> $<TARGET_FILE:MockPersonStructure>

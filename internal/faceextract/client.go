@@ -532,7 +532,7 @@ func validateFrame(f Frame) error {
 	if f.Width > maxDimension || f.Height > maxDimension {
 		return fmt.Errorf("%w: frame dimensions exceed %d", ErrInvalidArgument, maxDimension)
 	}
-	if f.Format != formatRGB24 && f.Format != formatBGR24 {
+	if f.Format != FormatRGB24 && f.Format != FormatBGR24 {
 		return fmt.Errorf("%w: unsupported pixel format %d", ErrInvalidArgument, f.Format)
 	}
 	stride := f.Stride
