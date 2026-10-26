@@ -703,6 +703,36 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       `*_plugin_entry.cpp`、`FaceRecognitionPlugin`/`PlateRecognitionPlugin` 两个 SHARED target
       仍存在（现在只剩 native 测试在用），随 3.9 清理一起删。
 
+      **3.9 原生清理（runner 那一半，2026-10-26）**
+
+      - 删除 `native/src/algorithm/runner/runner.cpp` 与 `zhulong_algo_runner` 目标。宿主侧已无调用者，
+        留着的唯一后果是「一条没人跑的 dlopen 路径继续定义着插件契约」。
+      - `json.hpp` / `gallery_index.hpp` / `gallery_parser.hpp` 搬到 `native/sdk/src/internal/`：
+        实际使用者是 `algo_main`（骨架），不是宿主；`ZhulongAlgoSdkObjects` 增加 `sdk/src` 私有 include。
+      - 下线三个只服务该通道的测试目标：`ZhulongAlgoRunnerTests`、`ZhulongAlgoVerifyCli`、
+        `ZhulongAlgoRunnerJson`（含 `native/tests/algo_runner_json_test.py`）。
+      - **FrameBroker 跨进程测试没有降低覆盖面，只是换了子进程形态**：新增夹具
+        `native/tests/fixtures/stub_algo_consumer.cpp`（`ZHULONG_ALGO_MAIN` + 桩算法类，无模型依赖），
+        四个 e2e 用例（单路/多路 broker、连接失败退出码 5、`--algorithm-id` 透传）全部照旧通过。
+        argv 里不再有 `--plugin`，这正是生产形态。
+      - `algo_runner_gallery_test.cpp` → `gallery_sync_test.cpp`（目标 `ZhulongGallerySyncTests`）。
+      - `check_plugin_symbols.py` 增加 `--entry` 模式：包根可执行文件不得导出 `zhulong_*` /
+        `zhulong_plugin_get_api`。口径说明：`nm -D --defined-only` 仍会列出弱符号化的 libstdc++
+        模板实例与 libc 的 COPY 重定位（15 条左右），把它们算进「导出表必须为空」只会逼人上
+        version script 掩盖真问题——断言只针对插件 C ABI 面。两个 `build_package.py` 在暂存入口后即跑它。
+      - 文档同步：`algo-plugin-contract.md` §5（CLI + 退出码出处改为 `algo_main.cpp`）、
+        `algorithm-guidelines.md` §5（`make verify`/`make test`，新增 `ALGO_ENTRY_INVALID` 行）、
+        `quality-guidelines.md` §4.2（Runtime 只剩 AlgorithmsDir，桩要落到盘上）。
+
+      验证：`make native-test` 25/25；交叉 `rk3568-rknn`/`rk3568-stub` 编译通过；
+      两个包重建 → 符号门禁 + 黑盒验包（plate `count:2`、face `count:5`）通过；
+      `go test ./internal/algorithm` 通过。
+
+      ⚠️ **仍未做**：`FaceRecognitionPlugin` / `PlateRecognitionPlugin` 两个 SHARED 目标与
+      `native/tests/migration/*_plugin_entry.cpp` 仍在——宿主引擎的人脸特征提取（`FacePluginLoader`）
+      还靠 dlopen 它们，因此必须与 4.8 一起下线（顺序：4.8 → 删这两个 target 与
+      `zhulong_face_extract_*` 的符号白名单）。
+
 **Review gate 4**：AC4 —— 两个算法包均能安装、启动、停止、重启及回滚；旧 `.so` 包明确拒绝，且不进入启动重试；AC9-AC13 全过；`grep -n "dlopen\|dlsym" native/src/abi/engine.cpp` 为空。
 
 ---
