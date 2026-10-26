@@ -78,7 +78,7 @@ func TestHandlerListAndInstall(t *testing.T) {
 		Name:      "helmet_detector",
 		TaskType:  algorithm.TaskTypeDetection,
 		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 		Resources: algorithm.ManifestResources{ComputeCost: 30, MemoryMB: 64},
 	}
 	manifestBytes, _ := json.Marshal(manifest)

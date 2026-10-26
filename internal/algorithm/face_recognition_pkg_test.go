@@ -15,8 +15,8 @@ import (
 func findFaceRecognitionArchive(t *testing.T) string {
 	t.Helper()
 	candidates := []string{
-		"../../build/packages/face_recognition-x86_64-cpu.tar.gz",
-		"build/packages/face_recognition-x86_64-cpu.tar.gz",
+		"../../build/packages/face_recognition-x86_64-onnx.tar.gz",
+		"build/packages/face_recognition-x86_64-onnx.tar.gz",
 		"../../build/packages/face_recognition.tar.gz",
 		"build/packages/face_recognition.tar.gz",
 	}
@@ -38,7 +38,7 @@ func findFaceRecognitionArchive(t *testing.T) string {
 		absScript, err := filepath.Abs(s)
 		if err == nil {
 			if fi, err := os.Stat(absScript); err == nil && !fi.IsDir() {
-				cmd := exec.Command("python3", absScript, "--target", "cpu")
+				cmd := exec.Command("python3", absScript, "--target", "onnx")
 				cmd.Dir = filepath.Dir(filepath.Dir(filepath.Dir(absScript)))
 				if out, err := cmd.CombinedOutput(); err == nil {
 					for _, c := range candidates {
@@ -99,8 +99,8 @@ func TestFaceRecognitionPackageVerification(t *testing.T) {
 	if installed.TargetArch != "x86_64" {
 		t.Errorf("expected TargetArch 'x86_64', got: %s", installed.TargetArch)
 	}
-	if installed.TargetDevice != "cpu" {
-		t.Errorf("expected TargetDevice 'cpu', got: %s", installed.TargetDevice)
+	if installed.TargetDevice != "onnx" {
+		t.Errorf("expected TargetDevice 'onnx', got: %s", installed.TargetDevice)
 	}
 
 	// 验证解压产物规范与可执行权限

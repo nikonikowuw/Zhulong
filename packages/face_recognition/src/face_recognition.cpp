@@ -26,11 +26,11 @@ static std::string resolve_model_path(const std::string& rel_path) {
 #if defined(__arm__) || defined(__aarch64__)
     const std::vector<std::string> target_dirs = {
         "targets/rk3568/",
-        "targets/cpu/"
+        "targets/onnx/"
     };
 #else
     const std::vector<std::string> target_dirs = {
-        "targets/cpu/",
+        "targets/onnx/",
         "targets/rk3568/"
     };
 #endif

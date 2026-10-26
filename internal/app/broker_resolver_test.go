@@ -68,7 +68,7 @@ func TestPublishRateUsesCrossPackageMax(t *testing.T) {
 		algo := &algorithm.Algorithm{
 			ID: id, Name: id, Version: "1.0.0",
 			TaskType: algorithm.TaskTypeDetection, Category: algorithm.CategorySafety,
-			TargetArch: "x86_64", TargetDevice: "cpu", ComputeCost: 1,
+			TargetArch: "x86_64", TargetDevice: "onnx", ComputeCost: 1,
 			MemoryMB: 64, Status: algorithm.StatusActive,
 		}
 		if err := store.CreateAlgorithm(ctx, algo); err != nil {

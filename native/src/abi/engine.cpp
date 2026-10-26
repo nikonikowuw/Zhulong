@@ -616,7 +616,7 @@ private:
 
         const std::vector<std::string> rel_dirs = {
             "build/native/host",
-            "packages/face_recognition/targets/cpu",
+            "packages/face_recognition/targets/onnx",
             "",
             ".",
             "../build/native/host",

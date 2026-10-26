@@ -7,7 +7,7 @@
   "category": "safety",
   "platform": {
     "arch": "x86_64",
-    "target": "cpu"
+    "target": "onnx"
   },
   "resources": {
     "compute_cost": 35,

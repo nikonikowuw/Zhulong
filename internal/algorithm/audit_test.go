@@ -98,7 +98,7 @@ func installAuditArchive(t *testing.T, router *gin.Engine, remoteAddr string) *h
 		Name:      "audit_detector",
 		TaskType:  algorithm.TaskTypeDetection,
 		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Target: "cpu"},
+		Platform:  algorithm.ManifestPlatform{Target: "onnx"},
 		Resources: algorithm.ManifestResources{ComputeCost: 30, MemoryMB: 64},
 	}
 	manifestBytes, err := json.Marshal(manifest)

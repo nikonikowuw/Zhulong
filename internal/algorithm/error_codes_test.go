@@ -17,6 +17,7 @@ var algorithmErrorCodes = []string{
 	"INVALID_FILE",
 	"ALGO_INSTALL_FAILED",
 	"INVALID_REQUEST",
+	"PLATFORM_TARGET_CPU_RETIRED",
 }
 
 // TestAlgorithmErrorCodesAreLocalized asserts the previously unregistered codes

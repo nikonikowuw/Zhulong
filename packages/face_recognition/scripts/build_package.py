@@ -3,7 +3,7 @@
 build_package.py - 自动化算法包组装与校验脚本
 
 用法:
-    python3 packages/face_recognition/scripts/build_package.py [--target cpu|rk3568] [--output-dir build/packages]
+    python3 packages/face_recognition/scripts/build_package.py [--target onnx|rk3568] [--output-dir build/packages]
 """
 
 import argparse
@@ -17,7 +17,7 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description="组装人脸识别算法包")
-    parser.add_argument("--target", default="cpu", choices=["cpu", "rk3568", "rk3588"], help="目标平台/芯片架构 (默认: cpu)")
+    parser.add_argument("--target", default="onnx", choices=["onnx", "rk3568", "rk3588"], help="目标平台/芯片架构 (默认: onnx)")
     parser.add_argument("--build-dir", default="build/native/host", help="C++ 构建产物目录 (默认: build/native/host)")
     parser.add_argument("--output-dir", default="build/packages", help="输出包目录 (默认: build/packages)")
     parser.add_argument("--no-verify", action="store_true", help="跳过验包验证")
@@ -44,7 +44,7 @@ def main():
 
     # 寻找编译出的插件动态库
     build_dir = repo_root / args.build_dir
-    if args.build_dir == "build/native/host" and args.target != "cpu":
+    if args.build_dir == "build/native/host" and args.target != "onnx":
         cross_candidates = [
             repo_root / "build" / "native" / f"cross-{args.target}-rknn-rga",
             repo_root / "build" / "native" / f"cross-{args.target}-rknn",
@@ -112,7 +112,7 @@ def main():
 
     # 6. 黑盒验包（如果 runner 可执行程序存在且非交叉环境）
     runner_bin = build_dir / "zhulong_algo_runner"
-    if not args.no_verify and runner_bin.exists() and args.target == "cpu":
+    if not args.no_verify and runner_bin.exists() and args.target == "onnx":
         print(f"[*] 执行本地黑盒验包...")
         verify_cmd = [
             str(runner_bin),
@@ -139,7 +139,7 @@ def main():
 
     # 建立一个符号链接或副本人脸识别通用包 face_recognition.tar.gz 供快捷测试
     default_archive = out_dir / f"{pkg_id}.tar.gz"
-    if args.target == "cpu":
+    if args.target == "onnx":
         shutil.copy2(out_tar_path, default_archive)
 
     print(f"[✓] 成功生成算法包: {out_tar_path} (大小: {out_tar_path.stat().st_size} 字节)")

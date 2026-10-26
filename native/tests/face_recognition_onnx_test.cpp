@@ -100,7 +100,7 @@ zhulong_status_t load_plugin(const char* so_path, void** out_handle, zhulong_plu
 int main(int argc, char* argv[]) {
     const char* plugin_so = (argc > 1) ? argv[1] : "./libFaceRecognitionPlugin.so";
     const std::string fixtures_dir = "tests/fixtures/onnx/";
-    const std::string models_dir = "packages/face_recognition/targets/cpu/models/";
+    const std::string models_dir = "packages/face_recognition/targets/onnx/models/";
 
     std::cout << "[FaceRecognitionOnnxTest] Starting ONNX test suite..." << std::endl;
 

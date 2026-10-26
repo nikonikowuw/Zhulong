@@ -71,7 +71,7 @@ func findMockPersonStructurePlugin(t *testing.T) string {
 // x86Host is the platform the fixture manifests declare, pinned so the result
 // does not depend on the machine running the tests.
 func x86Host() algorithm.HostPlatform {
-	return algorithm.HostPlatform{Arch: "x86_64", Target: "cpu"}
+	return algorithm.HostPlatform{Arch: "x86_64", Target: "onnx"}
 }
 
 func TestVerifierMissingConventionFiles(t *testing.T) {
@@ -130,6 +130,42 @@ func TestVerifierPlatformMismatch(t *testing.T) {
 	}
 }
 
+// TestVerifierRejectsRetiredCPUTarget proves the "cpu" target is rejected with a
+// dedicated sentinel instead of being silently mapped onto "onnx". A cpu-built
+// package carries a different runtime and asset layout, so mapping it would only
+// move the failure to an opaque loader/exec error much later.
+func TestVerifierRejectsRetiredCPUTarget(t *testing.T) {
+	verifier := algorithm.NewVerifier("", x86Host())
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "plugin.so"), []byte(`fake`), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "sample.jpg"), []byte(`fake`), 0o644)
+
+	manifest := algorithm.Manifest{
+		ID:        "test_pkg",
+		Version:   "1.0.0",
+		Name:      "test_package",
+		TaskType:  algorithm.TaskTypeDetection,
+		Category:  algorithm.CategorySafety,
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+		Resources: algorithm.ManifestResources{ComputeCost: 30, MemoryMB: 64},
+	}
+	manifestBytes, _ := json.Marshal(manifest)
+	_ = os.WriteFile(filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
+
+	_, _, _, err := verifier.VerifyDirectory(ctx, dir)
+	if !errors.Is(err, algorithm.ErrPlatformTargetRetired) {
+		t.Fatalf("expected ErrPlatformTargetRetired, got: %v", err)
+	}
+	if errors.Is(err, algorithm.ErrPlatformMismatch) {
+		t.Errorf("retired target must not be reported as a plain platform mismatch")
+	}
+	if !strings.Contains(err.Error(), "onnx") {
+		t.Errorf("error should point at the onnx target, got: %v", err)
+	}
+}
+
 func TestVerifierInvalidComputeBudget(t *testing.T) {
 	verifier := algorithm.NewVerifier("", x86Host())
 	ctx := context.Background()
@@ -145,7 +181,7 @@ func TestVerifierInvalidComputeBudget(t *testing.T) {
 		Name:      "test_package",
 		TaskType:  algorithm.TaskTypeDetection,
 		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 		Resources: algorithm.ManifestResources{ComputeCost: 1500, MemoryMB: 64},
 	}
 	manifestBytes, _ := json.Marshal(manifest)
@@ -217,7 +253,7 @@ func TestVerifierManifestTokenCharset(t *testing.T) {
 				Name:      tc.pkgName,
 				TaskType:  algorithm.TaskTypeDetection,
 				Category:  algorithm.CategorySafety,
-				Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+				Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 				Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
 			}
 			manifestBytes, err := json.Marshal(manifest)
@@ -250,7 +286,7 @@ func TestVerifierManifestTokenCharset(t *testing.T) {
 			Name:      "pkg",
 			TaskType:  algorithm.TaskTypeDetection,
 			Category:  algorithm.CategorySafety,
-			Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+			Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 			Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
 		})
 		if err != nil {
@@ -273,7 +309,7 @@ func TestStageAndVerifyRejectsPathEscape(t *testing.T) {
 		Name:      "pwned",
 		TaskType:  algorithm.TaskTypeDetection,
 		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
 	}
 	manifestBytes, err := json.Marshal(manifest)
@@ -340,7 +376,7 @@ func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
 		Name:      "mismatch_package",
 		TaskType:  algorithm.TaskTypeClassification, // Mismatch!
 		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
 	}
 	mismatchBytes, _ := json.Marshal(mismatchManifest)
@@ -358,7 +394,7 @@ func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
 		Name:      "mismatch_person_package",
 		TaskType:  algorithm.TaskTypePersonStructure, // Mismatch with detector!
 		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
 	}
 	mismatchPersonBytes, _ := json.Marshal(mismatchPersonManifest)
@@ -376,7 +412,7 @@ func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
 		Name:      "valid_detector",
 		TaskType:  algorithm.TaskTypeDetection,
 		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
 	}
 	validBytes, _ := json.Marshal(validManifest)
@@ -407,7 +443,7 @@ func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
 		Name:      "valid_person_plugin",
 		TaskType:  algorithm.TaskTypePersonStructure,
 		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 		Resources: algorithm.ManifestResources{ComputeCost: 30, MemoryMB: 128},
 	}
 	validPersonBytes, _ := json.Marshal(validPersonManifest)
@@ -437,7 +473,7 @@ func TestStageAndVerifyEndToEnd(t *testing.T) {
 		Name:      "installed_detector",
 		TaskType:  algorithm.TaskTypeDetection,
 		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 		Resources: algorithm.ManifestResources{ComputeCost: 25, MemoryMB: 64},
 	}
 	manifestBytes, _ := json.Marshal(manifest)
@@ -482,7 +518,7 @@ func TestVerifierRejectsInvalidConfigSchema(t *testing.T) {
 	dir := t.TempDir()
 	mustWriteFile(t, filepath.Join(dir, "plugin.so"), []byte("fake"), 0o755)
 	mustWriteFile(t, filepath.Join(dir, "sample.jpg"), []byte("sample"), 0o644)
-	mustWriteFile(t, filepath.Join(dir, "manifest.json"), []byte(`{"id":"schema_pkg","version":"1.0.0","name":"schema_pkg","task_type":"detection","category":"safety","platform":{"arch":"x86_64","target":"cpu"},"resources":{"compute_cost":20,"memory_mb":64}}`), 0o644)
+	mustWriteFile(t, filepath.Join(dir, "manifest.json"), []byte(`{"id":"schema_pkg","version":"1.0.0","name":"schema_pkg","task_type":"detection","category":"safety","platform":{"arch":"x86_64","target":"onnx"},"resources":{"compute_cost":20,"memory_mb":64}}`), 0o644)
 	mustWriteFile(t, filepath.Join(dir, "config.schema.json"), []byte(`{"type":17}`), 0o644)
 
 	_, _, _, err := verifier.VerifyDirectory(context.Background(), dir)
@@ -495,7 +531,7 @@ func TestStageAndVerifyDoesNotReplaceExistingVersion(t *testing.T) {
 	manifest := algorithm.Manifest{
 		ID: "same_version_pkg", Version: "1.0.0", Name: "same_version_pkg",
 		TaskType: algorithm.TaskTypeDetection, Category: algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
 	}
 	manifestBytes, err := json.Marshal(manifest)

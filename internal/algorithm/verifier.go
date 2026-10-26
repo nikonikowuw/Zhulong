@@ -32,6 +32,13 @@ var (
 	ErrResultTypeMismatch      = errors.New("plugin exported result_type does not match manifest task_type")
 	ErrInvalidComputeBudget    = errors.New("invalid compute budget in manifest")
 
+	// ErrPlatformTargetRetired marks a package whose manifest.platform.target is
+	// the retired "cpu" spelling. The host target is now "onnx" (the ONNX Runtime
+	// tier); such packages must be rebuilt for that target. Deliberately not
+	// silently mapped: a cpu-built package carries a different runtime and assets,
+	// so the failure would surface much later as an opaque loader error.
+	ErrPlatformTargetRetired = errors.New("manifest.platform.target \"cpu\" is retired, rebuild the package for target \"onnx\"")
+
 	// ErrInvalidManifestToken is returned when a manifest identity field is unsafe:
 	// id/version outside the token charset, or a name exceeding the handshake
 	// buffer. Because manifest.ID and manifest.Version are used to build the
@@ -76,7 +83,7 @@ type VerificationReport struct {
 type HostPlatform struct {
 	// Arch is x86_64 / aarch64, spelled as packages declare it.
 	Arch string
-	// Target is cpu or an accelerator family such as rk3568. Empty means cpu.
+	// Target is onnx or an accelerator family such as rk3568. Empty means onnx.
 	Target string
 }
 
@@ -97,9 +104,14 @@ func detectedArch() string {
 	}
 }
 
+// retiredHostTarget is the spelling this field used before the onnx rename.
+// It is rejected at install time instead of being mapped onto onnx: a package
+// built for the old cpu target carries a different runtime and different assets.
+const retiredHostTarget = "cpu"
+
 func normalizeHostTarget(target string) string {
 	if target == "" {
-		return "cpu"
+		return "onnx"
 	}
 	return target
 }
@@ -129,7 +141,7 @@ type Verifier struct {
 }
 
 // NewVerifier creates a Verifier. An empty runnerPath keeps the verifier to
-// static checks only; host.Target defaults to cpu.
+// static checks only; host.Target defaults to onnx.
 func NewVerifier(runnerPath string, host HostPlatform, opts ...VerifyOptions) *Verifier {
 	timeout := DefaultVerifyTimeout
 	var logger *zap.Logger
@@ -246,6 +258,15 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifes
 	}
 
 	// 3. Stage 1: Static platform compatibility gate
+	//
+	// The retired "cpu" target is rejected before any comparison: silently
+	// treating it as "onnx" would install a package whose assets and runtime do
+	// not match the host, and the failure would surface much later as an opaque
+	// loader/exec error.
+	if manifest.Platform.Target == retiredHostTarget {
+		return nil, "", "", fmt.Errorf("%w: package %s %s was built for platform.target=%q",
+			ErrPlatformTargetRetired, manifest.ID, manifest.Version, retiredHostTarget)
+	}
 	if manifest.Platform.Arch != "" && manifest.Platform.Arch != v.host.Arch {
 		return nil, "", "", fmt.Errorf("%w: package requires arch %q, host is %q", ErrPlatformMismatch, manifest.Platform.Arch, v.host.Arch)
 	}

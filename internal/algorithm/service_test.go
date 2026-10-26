@@ -43,7 +43,7 @@ func TestServiceDeleteAlgorithmCleansUpTasks(t *testing.T) {
 		TaskType:     algorithm.TaskTypeDetection,
 		Category:     algorithm.CategoryFire,
 		TargetArch:   "x86_64",
-		TargetDevice: "cpu",
+		TargetDevice: "onnx",
 		ComputeCost:  20,
 		MemoryMB:     128,
 		Status:       algorithm.StatusDisabled,
@@ -115,7 +115,7 @@ func TestServiceErrorApperrClassifications(t *testing.T) {
 	algo := &algorithm.Algorithm{
 		ID: "algo_reset", Name: "reset_test", Version: "1.0.0",
 		TaskType: algorithm.TaskTypeDetection, Category: algorithm.CategorySafety,
-		TargetArch: "x86_64", TargetDevice: "cpu", ComputeCost: 10, MemoryMB: 64,
+		TargetArch: "x86_64", TargetDevice: "onnx", ComputeCost: 10, MemoryMB: 64,
 		Status: algorithm.StatusActive,
 	}
 	_ = comp.Store.CreateAlgorithm(ctx, algo)
@@ -135,7 +135,7 @@ func TestServiceDeleteStopsRestartDuringCrashBackoff(t *testing.T) {
 	algo := &algorithm.Algorithm{
 		ID: "supervisor_test", Name: "supervisor_test", Version: "1.0.0",
 		TaskType: algorithm.TaskTypeDetection, Category: algorithm.CategorySafety,
-		TargetArch: "x86_64", TargetDevice: "cpu", ComputeCost: 1,
+		TargetArch: "x86_64", TargetDevice: "onnx", ComputeCost: 1,
 		MemoryMB: 64, Status: algorithm.StatusDisabled,
 	}
 	if err := store.CreateAlgorithm(context.Background(), algo); err != nil {
@@ -211,7 +211,7 @@ func TestEnableAlgorithmWithZeroTasksEntersStandby(t *testing.T) {
 		TaskType:     algorithm.TaskTypeDetection,
 		Category:     algorithm.CategoryGeneral,
 		TargetArch:   "x86_64",
-		TargetDevice: "cpu",
+		TargetDevice: "onnx",
 		ComputeCost:  10,
 		MemoryMB:     64,
 		Status:       algorithm.StatusDisabled,
@@ -255,7 +255,7 @@ func TestEnableAlgorithmInCrashLoopReturnsConflict(t *testing.T) {
 	algo := &algorithm.Algorithm{
 		ID: "algo_crash_loop", Name: "crash_loop_test", Version: "1.0.0",
 		TaskType: algorithm.TaskTypeDetection, Category: algorithm.CategoryGeneral,
-		TargetArch: "x86_64", TargetDevice: "cpu", ComputeCost: 10,
+		TargetArch: "x86_64", TargetDevice: "onnx", ComputeCost: 10,
 		MemoryMB: 64, Status: algorithm.StatusDisabled,
 	}
 	if err := store.CreateAlgorithm(context.Background(), algo); err != nil {

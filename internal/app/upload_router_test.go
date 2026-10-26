@@ -57,7 +57,7 @@ func createUncompressedTestTarGz(t *testing.T, payloadBytes int) string {
 		"name": "e2e_large_pkg",
 		"task_type": "detection",
 		"category": "safety",
-		"platform": {"arch": "x86_64", "target": "cpu"},
+		"platform": {"arch": "x86_64", "target": "onnx"},
 		"resources": {"compute_cost": 20, "memory_mb": 64}
 	}`)
 	files := map[string][]byte{
@@ -167,7 +167,7 @@ func TestUploadRouteEndToEndRealRouter(t *testing.T) {
 		}
 	})
 
-	comp := algorithm.NewAlgorithmComponents(dbStore, algorunner.Runtime{AlgorithmsDir: dataDir}, algorithm.HostPlatform{Arch: "x86_64", Target: "cpu"}, zap.NewNop())
+	comp := algorithm.NewAlgorithmComponents(dbStore, algorunner.Runtime{AlgorithmsDir: dataDir}, algorithm.HostPlatform{Arch: "x86_64", Target: "onnx"}, zap.NewNop())
 
 	assets := http.FS(fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("shell")},
@@ -303,7 +303,7 @@ func TestUploadRouteProducesAuditRecord(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
 
-	comp := algorithm.NewAlgorithmComponents(dbStore, algorunner.Runtime{AlgorithmsDir: dataDir}, algorithm.HostPlatform{Arch: "x86_64", Target: "cpu"}, zap.NewNop())
+	comp := algorithm.NewAlgorithmComponents(dbStore, algorunner.Runtime{AlgorithmsDir: dataDir}, algorithm.HostPlatform{Arch: "x86_64", Target: "onnx"}, zap.NewNop())
 
 	assets := http.FS(fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("shell")},

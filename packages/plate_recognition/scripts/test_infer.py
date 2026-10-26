@@ -233,9 +233,9 @@ def run_inference(image_path, det_model_path, rec_model_path, conf_threshold, nm
 def main():
     parser = argparse.ArgumentParser(description="离线验证车牌 ONNX 检测与识别")
     parser.add_argument("image", help="待测试图片路径")
-    parser.add_argument("--det-model", default="packages/plate_recognition/targets/cpu/models/plate_detect.onnx",
+    parser.add_argument("--det-model", default="packages/plate_recognition/targets/onnx/models/plate_detect.onnx",
                         help="检测 ONNX 模型路径")
-    parser.add_argument("--rec-model", default="packages/plate_recognition/targets/cpu/models/plate_rec_color.onnx",
+    parser.add_argument("--rec-model", default="packages/plate_recognition/targets/onnx/models/plate_rec_color.onnx",
                         help="识别 ONNX 模型路径")
     parser.add_argument("--conf", type=float, default=0.35, help="检测置信度阈值（同 config.schema.json）")
     parser.add_argument("--nms", type=float, default=0.45, help="NMS IoU 阈值（同 config.schema.json）")

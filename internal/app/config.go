@@ -113,7 +113,7 @@ func DefaultConfig() Config {
 		HTTPAddress:     "127.0.0.1:8000",
 		DataDir:         "./data",
 		FacesDir:        "",
-		AlgorithmTarget: "cpu",
+		AlgorithmTarget: "onnx",
 		Logging: LoggingConfig{
 			Level:  "info",
 			Output: "stderr",

@@ -28,7 +28,7 @@ require_person_id_for_face_enrollment = false
 
 # Must match manifest.json platform.target for algorithm packages.
 [algorithm]
-target = "cpu"
+target = "onnx"
 
 # Authentication and session security configuration.
 [auth]

@@ -3,7 +3,7 @@
 build_package.py - 车牌识别算法包自动化组装与校验脚本
 
 用法:
-    python3 packages/plate_recognition/scripts/build_package.py [--target cpu|rk3568|rk3588] [--output-dir build/packages]
+    python3 packages/plate_recognition/scripts/build_package.py [--target onnx|rk3568|rk3588] [--output-dir build/packages]
 """
 
 import argparse
@@ -17,7 +17,7 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description="组装车牌识别算法包")
-    parser.add_argument("--target", default="cpu", choices=["cpu", "rk3568", "rk3588"], help="目标平台 (默认: cpu)")
+    parser.add_argument("--target", default="onnx", choices=["onnx", "rk3568", "rk3588"], help="目标平台 (默认: onnx)")
     parser.add_argument("--build-dir", default="build/native/host", help="C++ 构建产物目录 (默认: build/native/host)")
     parser.add_argument("--output-dir", default="build/packages", help="输出包目录 (默认: build/packages)")
     parser.add_argument("--no-verify", action="store_true", help="跳过验包验证")
@@ -100,7 +100,7 @@ def main():
     #    ⚠️ 必须以 staging_dir 为 CWD 调用：包目录才是部署布局（plugin.so 与 models/ 同级）。
     #    从仓库根跑会命中源码树里的权重，让「模型路径拼错」这类缺陷在准入阶段 100% 逃逸。
     runner_bin = build_dir / "zhulong_algo_runner"
-    if not args.no_verify and runner_bin.exists() and args.target == "cpu":
+    if not args.no_verify and runner_bin.exists() and args.target == "onnx":
         print(f"[*] 执行本地黑盒验包（cwd={staging_dir}）...")
         sample_path = staging_dir / "sample.jpg"
         # runner 不含图像解码器：若本机有 ffmpeg 就转成 PPM，让验包真的跑一张图；

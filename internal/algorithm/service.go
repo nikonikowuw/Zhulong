@@ -65,6 +65,8 @@ func normalizeInstallError(err error) error {
 		return nil
 	}
 	switch {
+	case errors.Is(err, ErrPlatformTargetRetired):
+		return httputil.NewError(http.StatusBadRequest, "PLATFORM_TARGET_CPU_RETIRED", err.Error(), err)
 	case errors.Is(err, ErrPlatformMismatch):
 		return httputil.NewError(http.StatusBadRequest, "ALGO_PLATFORM_MISMATCH", "Platform mismatch", err)
 	case errors.Is(err, ErrUnsupportedArchive):

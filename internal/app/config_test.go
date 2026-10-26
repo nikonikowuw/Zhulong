@@ -50,7 +50,7 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.DataDir != "./data" {
 		t.Fatalf("unexpected default DataDir: %q", cfg.DataDir)
 	}
-	if cfg.AlgorithmTarget != "cpu" {
+	if cfg.AlgorithmTarget != "onnx" {
 		t.Fatalf("unexpected default AlgorithmTarget: %q", cfg.AlgorithmTarget)
 	}
 	if cfg.Development {

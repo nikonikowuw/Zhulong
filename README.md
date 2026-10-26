@@ -154,7 +154,7 @@ directory = "./data"            # 存放 zhulong.db 与 camera.key
 custom_script = ""              # 可选的厂商网络脚本
 
 [algorithm]
-target = "cpu"                  # 必须匹配算法包 manifest.json 的 platform.target
+target = "onnx"                 # 必须匹配算法包 manifest.json 的 platform.target
 ```
 
 > **端口**：内置默认（`app.DefaultConfig`）、仓库内 `config.toml` 与 Vite 开发代理统一为

@@ -18,8 +18,8 @@ import (
 func findPlateRecognitionArchive(t *testing.T) string {
 	t.Helper()
 	candidates := []string{
-		"../../build/packages/plate_recognition-x86_64-cpu.tar.gz",
-		"build/packages/plate_recognition-x86_64-cpu.tar.gz",
+		"../../build/packages/plate_recognition-x86_64-onnx.tar.gz",
+		"build/packages/plate_recognition-x86_64-onnx.tar.gz",
 		"../../build/packages/plate_recognition.tar.gz",
 		"build/packages/plate_recognition.tar.gz",
 	}
@@ -50,7 +50,7 @@ func findPlateRecognitionArchive(t *testing.T) string {
 		if _, err := os.Stat(absScript); err != nil {
 			continue
 		}
-		cmd := exec.Command("python3", absScript, "--target", "cpu")
+		cmd := exec.Command("python3", absScript, "--target", "onnx")
 		cmd.Dir = filepath.Dir(filepath.Dir(filepath.Dir(absScript)))
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Logf("build_package.py failed (expected on a test_stub host build): %s", string(out))

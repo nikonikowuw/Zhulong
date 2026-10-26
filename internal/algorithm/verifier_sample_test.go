@@ -84,7 +84,7 @@ func newVerifiablePackage(t *testing.T, sampleWidth, sampleHeight int) string {
 		Name:      "sample_package",
 		TaskType:  algorithm.TaskTypeDetection,
 		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "cpu"},
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
 	}
 	raw, err := json.Marshal(manifest)

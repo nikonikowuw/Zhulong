@@ -276,7 +276,7 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       - ⚠️ **不引入** `InputFacts` / `Session::prepare_input` / `models/preprocess.json`（R13 已撤销）。`prepare_input` 的复用槽只作为独立性能任务，不在本阶段。
       - ⚠️ 两边 `make test` 在交叉 profile 下只能编译（AGENTS.md），RKNN 侧的行为验收在板端，`research/baseline.md` 标「未测」。
 
-- [ ] **3.0f** target 命名迁移：`cpu` → `onnx`（`prd.md` F25；**先做这一步再拆目录**，否则目录名会把错误叫法固化）：
+- [x] **3.0f** target 命名迁移：`cpu` → `onnx`（`prd.md` F25；**先做这一步再拆目录**，否则目录名会把错误叫法固化）：
       - 资产：`packages/*/targets/cpu/` → `packages/*/targets/onnx/`；`manifest.platform.target` `"cpu"` → `"onnx"`（`arch` 仍是 `x86_64`）；
       - 归档名随之变成 `<id>-x86_64-onnx.tar.gz`（`pack_package.py` 只读 manifest，无需硬编码）；
       - Go 侧默认值：`config.toml` 的 `[algorithm].target`、`internal/app/config.go` 的 `AlgorithmTarget` 默认值都改为 `"onnx"`；`internal/algorithm/verifier.go:100-105` 的 `normalizeHostTarget("")` 返回 `"onnx"`，注释同步（原文「cpu 或加速器家族」改为「onnx 或加速器家族」）；
@@ -287,6 +287,18 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
         go test -race ./internal/algorithm ./internal/app                                # 含 HostPlatform/normalize 用例
         ```
       - ⚠️ 这一步之后 `cpu` 在仓库里只剩两个含义：`ZHULONG_INFERENCE_BACKEND=cpu`（`cpu_mock` 桩，测试用）与视觉后端的 CPU 实现。任何新增 `cpu` 档位都视为命名回退。
+
+      **执行记录（2026-10-26）**
+
+      - **资产**：`git mv packages/face_recognition/targets/cpu → …/targets/onnx`、`packages/plate_recognition/targets/cpu → …/targets/onnx`；两份 `manifest.json` 的 `platform.target` 改为 `onnx`（`arch` 仍是 `x86_64`）。`rk3568` 档位资产不动。
+      - **归档名**：`pack_package` 只读 manifest，重建后自动变成 `face_recognition-x86_64-onnx.tar.gz` / `plate_recognition-x86_64-onnx.tar.gz`（已实测产出）。
+      - **Go 默认值**：`internal/app/config.go` `AlgorithmTarget` 与仓库 `config.toml` 均改为 `"onnx"`；`verifier.normalizeHostTarget("")` 返回 `"onnx"`，`HostPlatform.Target` / `NewVerifier` 注释同步。
+      - **退役门禁**：新增哨兵 `ErrPlatformTargetRetired`，在 `VerifyDirectory` 的静态平台门禁**最前面**判断（早于 arch/target 比对，避免被 `ErrPlatformMismatch` 吞掉），错误串指出「按 onnx 档位重建」；`normalizeInstallError` 映射为 HTTP 400 + 稳定码 `PLATFORM_TARGET_CPU_RETIRED`。文案注册在 **`internal/algorithm/locale.go`**（不是计划里写的 `internal/httputil/locale.go`——通用码在 httputil，算法域码一直是本包注册），并加进 `error_codes_test.go` 的 `algorithmErrorCodes` 本地化清单。
+      - **`cpu` 字面量的其余位置（都改了）**：两个 `build_package.py`（`--target` 默认值与 choices、host 构建目录判定、`--verify` 条件）、`scripts/test_infer.py` 的模型默认路径、两个包源码的 `targets/cpu/` 模型目录候选、`native/src/abi/engine.cpp` 的插件搜索目录、`native/tests/face_recognition_onnx_test.cpp` 的模型目录、`README.md` 配置示例、`.trellis/spec/backend/algorithm-guidelines.md` 的 manifest 示例与 `platform.target` 枚举说明（并写明 `cpu` 已退役、不做静默映射）。
+      - **测试夹具**：12 个测试文件里的 `Target: "cpu"` / `TargetDevice: "cpu"` / `"target":"cpu"` / `--target cpu` / `x86_64-cpu.tar.gz` 一并改为 `onnx`（唯一保留的 `Target: "cpu"` 是新增的退役门禁用例）。新增 `TestVerifierRejectsRetiredCPUTarget` 与 `internal/algorithm/error_mapping_test.go`（断言码与 400，且 `ALGO_PLATFORM_MISMATCH` 不被合并）。
+      - ⚠️ **验收 grep 的路径写错了**（原稿 `packages/*/*/manifest.json`）：manifest 在 `packages/<id>/targets/<target>/manifest.json`，glob 应写成 `packages/*/targets/*/manifest.json`，否则断言恒真（`No such file` 也算「空」）。
+      - ⚠️ **陈旧归档会掩盖重建**：`build/packages/face_recognition.tar.gz`（10-22 用 cpu 档位打的）会被 `findFaceRecognitionArchive` 的兜底候选先命中，测试于是拿旧包去验，报 `PLATFORM_TARGET_CPU_RETIRED`——这正好证明门禁生效。重建 `--target onnx` 后通过；排队顺序里 onnx 归档优先于无后缀候选。
+      - **验证**：`grep -rn '"cpu"' packages/*/targets/*/manifest.json internal/app/config.go config.toml` 为空；`make native-test` 28/28；`python3 native/scripts/build.py go test -race ./internal/algorithm`、`./internal/app` 通过（⚠️ 这两个包依赖 engine，**不能**裸跑 `go test`：直接跑会因缺 `CGO_LDFLAGS` 报一片 `undefined reference to Zhulong_*`）；`make go-check` 30 个包全绿。
 
 - [ ] **3.1** 从 `native/src/algorithm/runner/runner.cpp` 抽出 broker 循环到 `native/sdk/src/algo_main.cpp` + `native/sdk/include/zhulong/algo_main.hpp`。
       ⚠️ **逐字保留**仍适用于新可执行入口的 stage token：`connect`、`name_check`、`shm_init`、`gallery_sync`、`model_create`、`worker_create`、`task_open`、`process`、`broker_disconnected`、`args`。旧 `dlopen` stage 不再由算法包 runner 发出；进程 `exec` 失败由 Go spawn 层记录，不作为 runner stage。对照 `internal/algorunner/process.go:432` 的 allowlist。

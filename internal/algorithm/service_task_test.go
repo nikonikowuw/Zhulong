@@ -47,7 +47,7 @@ func seedTaskAlgorithm(t *testing.T, store *algorithm.Store) *algorithm.Algorith
 	algo := &algorithm.Algorithm{
 		ID: "task_algo", Name: "task_algo", Version: "1.0.0",
 		TaskType: algorithm.TaskTypeDetection, Category: algorithm.CategorySafety,
-		TargetArch: "x86_64", TargetDevice: "cpu", ComputeCost: 1,
+		TargetArch: "x86_64", TargetDevice: "onnx", ComputeCost: 1,
 		MemoryMB: 64, Status: algorithm.StatusActive,
 	}
 	if err := store.CreateAlgorithm(context.Background(), algo); err != nil {
@@ -294,7 +294,7 @@ func TestTaskDrivenLazyStartupAndTeardownLifecycle(t *testing.T) {
 	algo := &algorithm.Algorithm{
 		ID: "algo_lazy_lifecycle", Name: "lazy_lifecycle", Version: "1.0.0",
 		TaskType: algorithm.TaskTypeDetection, Category: algorithm.CategorySecurity,
-		TargetArch: "x86_64", TargetDevice: "cpu", ComputeCost: 10,
+		TargetArch: "x86_64", TargetDevice: "onnx", ComputeCost: 10,
 		MemoryMB: 64, Status: algorithm.StatusDisabled,
 	}
 	if err := store.CreateAlgorithm(context.Background(), algo); err != nil {

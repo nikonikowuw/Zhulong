@@ -45,7 +45,7 @@
   "category": "safety",
   "platform": {
     "arch": "x86_64",
-    "target": "cpu"
+    "target": "onnx"
   },
   "resources": {
     "compute_cost": 20,
@@ -65,7 +65,7 @@
 | `task_type` | string | 是 | 枚举：`detection` \| `classification` \| `person_structure` \| `vehicle_structure` | 算法任务类型，决定推理结果的数据结构 |
 | `category` | string | 是 | 枚举：`safety` \| `security` \| `fire` \| `traffic` \| `general` | 应用行业分类 |
 | `platform.arch` | string | 是 | 枚举：`x86_64` \| `aarch64` | 目标硬件 CPU 指令集架构 |
-| `platform.target` | string | 是 | 枚举：`cpu` \| `rknn` \| `cann` \| `tensorrt` | 硬件推理加速后端 |
+| `platform.target` | string | 是 | 枚举：`onnx` \| `rk3568` \| `cann` \| `tensorrt` | 目标档位。主机档位是 `onnx`（ONNX Runtime）；`cpu` 已**退役**，安装期以稳定码 `PLATFORM_TARGET_CPU_RETIRED` 拒绝，不做静默映射 |
 | `resources.compute_cost` | int | 是 | 整数 `1 ~ 1000` | 单帧基准算力消耗点数（全平台总预算池为 1,000 点） |
 | `resources.memory_mb` | int | 是 | 整数 `≥ 16` | 预估最大常驻内存（MB） |
 

@@ -76,7 +76,7 @@ std::string resolve_model_path(const std::string& rel_path) {
 
     // 开发期兜底：仅在源码树内有效，部署环境不会命中
     const std::vector<std::string> target_dirs = {
-        "targets/cpu/",
+        "targets/onnx/",
 #if defined(__arm__) || defined(__aarch64__)
         "targets/rk3568/",
         "targets/rk3588/",
