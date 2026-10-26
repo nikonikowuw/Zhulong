@@ -40,6 +40,10 @@ pprof.*.samples.*.pb.gz
 /build/
 /build-*/
 /cmake-build-*/
+
+# 算法包 target 的开发期构建产物（packages/<id>/<target>/build/）：
+# devtest 可执行文件与 result-*.jpg 都是本地产物，绝不入库。
+/packages/*/*/build/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake

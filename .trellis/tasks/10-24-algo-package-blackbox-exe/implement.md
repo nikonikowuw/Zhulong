@@ -289,6 +289,17 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       - `native/CMakeLists.txt` 的 plate 源/包含路径指向 `…/plate_recognition/onnx/src`（3.9 会整段删除）。
       - **验证**：`make native-test` 28/28（含 plate 金标回归，车牌号/颜色未变）；`--target onnx` 重建包成功，归档内已无 `targets/`（`config.schema.json / manifest.json / models/ / plugin.so / sample.jpg`），黑盒验包 `sample_decoded:true, count:2`（与阶段 0 基线一致）；`build.py go test -race ./internal/algorithm -run 'TestPlate|TestFace'` 通过。
 
+      **dev 自测工具（plate/onnx 样板，2026-10-26）**
+
+      - **图像解码定案：vendored stb，不用 PPM 中转**（按任务负责人否决 PPM 的意见）。理由是开发者体验：`sample.jpg` 进、`result.jpg` 出，不需要手工转格式；PPM 方案会让每个新算法包多一步「先转图」的仪式，且 `result.ppm` 在常见看图工具里体验很差。
+      - `native/sdk/tests/third_party/stb/`：`stb_image.h`(v2.26) / `stb_image_write.h`(v1.15) / `LICENSE.txt`(public domain · MIT) / `SHA256SUMS` / `README.md`。**单份**放在 SDK 下而不是每 target 一份：它属于构建期开发工具，复制进包目录反而违反「包目录内不得出现 SDK 副本」（design §4.5.1）。
+      - 包侧 `tests/dev_infer.cpp` 走的是**真 C ABI 表**（`zhulong_plugin_get_api` → `model_create` → `worker_create` → `task_open` → `process` → `result_release`），不是直接 new 插件类。好处：连异常防爆门一起验，且不需要为「让测试能 include 插件类」而把实现拆成头文件。
+      - `packages/plate_recognition/onnx/CMakeLists.txt`（开发期构建，`EXCLUDE_FROM_ALL`、无 install 规则 → 物理上进不了归档）：configure 阶段校验 `SHA256SUMS`，缺 `ZHULONG_SDK_INCLUDE` / `ZHULONG_STB_DIR` / `ZHULONG_ALGO_RUNTIME` / `ZHULONG_ONNX_ROOT` 任一即 `FATAL_ERROR`。
+      - `packages/plate_recognition/onnx/Makefile`：`make test` = 构建 devtest → 以 `ZHULONG_PLATE_MODEL_DIR=$(CURDIR)` 运行（模型在包根 `models/`，而二进制在 `build/`）→ 断言输出文件非空。`packages/*/*/build/` 已进 `.gitignore`。
+      - **实测**：`make -C packages/plate_recognition/onnx test` 输出
+        `count: 2`、`豫B2V9L7 / 蓝色`、`辽DU4356 / 蓝色`、`cost_ms ≈ 115`，`result-plate_recognition-onnx.jpg` 生成（与金标回归的车牌号/颜色一致）。
+      - ⚠️ devtest 运行时终端会出现 `Schema error: Trying to register schema with name …` 噪声：宿主 `zhulong_algo_runner` 也有同样输出，根因是机器上另装了系统 `libonnx.so.1`（`ldd` 可见）与 ORT 内置 schema 重复注册，与本改动无关，不要当回归信号。
+
 - [x] **3.0f** target 命名迁移：`cpu` → `onnx`（`prd.md` F25；**先做这一步再拆目录**，否则目录名会把错误叫法固化）：
       - 资产：`packages/*/targets/cpu/` → `packages/*/targets/onnx/`；`manifest.platform.target` `"cpu"` → `"onnx"`（`arch` 仍是 `x86_64`）；
       - 归档名随之变成 `<id>-x86_64-onnx.tar.gz`（`pack_package.py` 只读 manifest，无需硬编码）；
