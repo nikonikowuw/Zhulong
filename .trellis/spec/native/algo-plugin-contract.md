@@ -44,16 +44,16 @@
    - **近景特写人脸**：真实检出但未匹配人体框的人脸，可以生成 `body_box = face_box` 的 `zhulong_person_item`，保证人脸比对结果不丢失；
    - 人体/人脸会话缺失、预处理失败或输出形状不合法时返回空结果；不得由亮度、固定分数或外推坐标合成检测结果。
 
-插件入口声明使用 `ZHULONG_PLUGIN_EXPORT`。启用 hidden default visibility 时，只显式导出 `zhulong_plugin_get_api`；Linux 示例插件还使用 GNU ld version script 将其他定义符号设为 local（仅靠编译器 visibility 可能在 sanitizer 构建暴露弱 RTTI 符号）。CMake 示例插件目标定义 `ZHULONG_PLUGIN_BUILD` 并设置 hidden C++ / inline visibility。
+交付形态是**包根可执行文件**（`<manifest.id>`，静态链接运行时），宿主不装载任何算法产物，因此没有「导出表白名单」这回事：门禁反过来断言**包可执行文件不得导出任何插件 C ABI 符号**。
 
-**例外：宿主直连的专用 C ABI**。人脸识别插件额外导出宿主 `FacePluginLoader` 通过 `dlsym` 绑定的两个符号（见 [CGO 契约 §6](./cgo-contract.md)）：
-
-```c
-zhulong_status_t zhulong_face_extract_feature(const uint8_t*, int32_t, int32_t, int32_t, int32_t, float*, uint32_t*);
-void             zhulong_face_extract_release(void);
+```bash
+native/tests/check_plugin_symbols.py --entry <包根可执行文件>
+# 断言：nm -D --defined-only 里没有 `zhulong_*`，也没有 `zhulong_plugin_get_api`
 ```
 
-`native/cmake/plugin-exports.map` 的白名单必须与之一致。`ZhulongPluginSymbolVisibility` 用例通过 `native/tests/check_plugin_symbols.py` 逐插件断言「动态符号集合 == 白名单」（语法 `path=sym1,sym2`；省略 `=` 时默认只允许 `zhulong_plugin_get_api`），防止误导出内部符号或漏导出契约符号。
+口径：PIE 上 `nm -D --defined-only` 必然列出约 15 条弱符号化的 libstdc++ 模板实例与 libc COPY 重定位；断言只针对插件契约面（`zhulong_*`），否则只会逼人上 version script 掩盖真问题。
+
+`packages/*/scripts/build_package.py` 在暂存入口后立即跑这条门禁。包内骨架若需要「单次能力」（如底库登记的特征提取），走 `--extract-feature` 子命令 + 弱符号（见 §7），**不**重新导出 C ABI 给宿主。
 
 ### 异常防爆门守则
 

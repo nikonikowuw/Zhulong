@@ -125,43 +125,51 @@ func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]f
 
 ## 6. 单次人脸特征提取（离线录入通道）
 
-- **C ABI**：`Zhulong_engine_extract_face_feature` 接收紧凑图像像素内存（RGB24/BGR24），输出 512 维 `float32` 归一化特征向量。
-- **内存规则**：Go 侧在调用期间将连续图像切片首地址转为 `*C.uint8_t`，通过 `runtime.KeepAlive` 保证调用期间不被 GC 回收；输出由 Go 分配 512 维切片，C 侧原地写入，禁止跨调用缓存 Go 指针。
-- **业务解耦**：上层业务包（如 `internal/person`）禁止 `import "C"`，必须通过 `FaceFeatureExtractor` 接口解耦，由 Uber Fx 注入 `*engine.Engine`。
+底库登记需要「一张照片 → 一个 512 维特征」，这是宿主唯一需要算法能力却不走视频流的场景。
 
-### 6.1 能力来源：算法插件动态加载（dlopen）而非静态链接
+- **不再经过 CGO，也不再装载任何算法产物**：实现是 `internal/faceextract`，它跟**包可执行文件**说一个小协议（`<entry> --extract-feature`，stdin 帧流 → stdout 逐行 JSON）。CGO 边界只剩引擎自身的流媒体/抓拍 API。
+- **解码在 Go 侧**：包骨架不链接任何图像编解码器，所以 JPEG/PNG/WebP 解码 + EXIF 方向归一化留在 `internal/faceextract/decode.go`，跨边界只有裸 RGB24 像素。
+- **业务解耦**：`internal/person` 仍只认 `FaceFeatureExtractor` 接口（`ExtractFaceFeature(ctx, imageBytes)`），由 Uber Fx 注入 `internal/app` 的适配器；领域包不 import 进程/管道/解码细节。
+- **提供者包可配**：`[person].extractor_algorithm`（默认 `face_recognition`）。包入口在**每次请求**时按当前安装版本解析，升级/回滚/重装立即生效。
 
-真实推理（SCRFD 检测 → Umeyama 5 点对齐 → 512 维特征抽取）全部由算法插件 `libFaceRecognitionPlugin.so` 通过专用 C ABI 提供：
+### 6.1 协议与进程形态
 
-```c
-zhulong_status_t zhulong_face_extract_feature(const uint8_t*, int32_t, int32_t, int32_t, int32_t, float*, uint32_t*);
-void             zhulong_face_extract_release(void);
-```
+| 项 | 约定 |
+| :--- | :--- |
+| 命令 | `<pkg>/<manifest.id> --extract-feature`（不接 `--broker`） |
+| stdin | 28 字节帧头（`ZLFE` magic、`request_id`、宽高、stride、format、`payload_len`）+ 裸像元，可重复至 EOF |
+| stdout | 每帧一行 JSON：成功 `{"request_id":…,"status":"passed","feature_dim":512,"features":[…]}`；失败带 `code` |
+| 日志 | 一律 stderr（stdout 只能是协议行） |
+| 退出码 | `0` = stdin 正常 EOF；`5` = 能力缺失 / 帧头帧体截断 |
+| 帧级错误 | 无脸、输入非法**不退出进程**——一张坏图不该毁掉热进程 |
 
-- 宿主 `native/src/abi/engine.cpp` 的 `FacePluginLoader` 单例懒加载该插件：`libZhulongEngine.a` 与 `zhulong` 可执行文件**绝不**产生 `libonnxruntime.so` 的 `DT_NEEDED` 依赖，宿主在缺失 ORT 的机器上仍可启动并服务 Web/流媒体；
-- 寻址优先级：`ZHULONG_FACE_PLUGIN_PATH`（**显式覆盖，设置后即为唯一候选，不再静默回退**）→ `ZHULONG_PLUGIN_DIR` → 构建产物目录 → `dladdr` 同目录；
-- 底库录入与视频流识别必须使用同一目标平台的模型权重（ONNX 后端使用 `.onnx`；RKNN profile 只使用 `.rknn`），保证两侧特征处于同一度量空间。
+- 能力用**弱符号**提供：骨架 `extern "C" __attribute__((weak)) zhulong_face_extract_feature(...)`，face 包定义、静态链入即解析；plate 包不定义 → 如实回 `UNSUPPORTED`。
+- ⚠️ 弱引用**不会**让 ld 抽取静态归档成员：定义必须来自包内直接编译的源文件，搬进 `.a` 会让能力静默消失（表现为「底库登记功能没了且没有错误日志」）。
 
 ### 6.2 Fail-Closed 闭环报错（严禁静默退化）
 
-| 场景 | 插件状态码 | Engine 状态码 | Go 侧错误 | HTTP |
-| :--- | :--- | :--- | :--- | :--- |
-| 成功 | `ZHULONG_PLUGIN_OK` | `Zhulong_OK` | `nil` | 200 |
-| 插件缺失 / 符号缺失 / 模型不可用 | *(dlopen 失败)* / `ERR_INTERNAL` | `Zhulong_ERR_UNSUPPORTED` / `ERR_INTERNAL` | `ErrUnsupported` / `ErrInternal` | 500 |
-| 模型未检出人脸或输出无法解码（含全黑图和 CPU 测试桩输出） | `ZHULONG_PLUGIN_ERR_NOT_FOUND` | `Zhulong_ERR_NOT_FOUND` | `ErrNotFound` | 400 `NO_FACE_DETECTED` |
-| 参数非法（空指针 / 尺寸 / stride / 容量 < 512） | `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT` | `Zhulong_ERR_INVALID_ARGUMENT` | `ErrInvalidArgument` | 400 |
+| 场景 | 包进程输出 | Go 侧错误 | HTTP |
+| :--- | :--- | :--- | :--- |
+| 成功 | `status=passed`，`feature_dim=512` | `nil` | 200 |
+| 无脸 / 输出无法解码 | `code=NO_FACE_DETECTED` | `ErrNoFaceDetected` | 400 `NO_FACE_DETECTED` |
+| 帧头非法 / 尺寸越界 / payload 长度不符 | `code=INVALID_INPUT` | `ErrInvalidArgument` | 400 |
+| 包未安装 / 入口缺失 / 符号缺失 | `code=UNSUPPORTED`，exit 5 | `ErrUnsupported` / `ErrEntry` | 500 |
+| 模型不可用 | `code=MODEL_UNAVAILABLE`，exit 5 | `ErrUnsupported` | 500 |
+| 崩溃 / 超时 / 非 JSON / `request_id` 错配 | — | `ErrInternal` | 500 `FEATURE_EXTRACT_FAILED` |
+| `feature_dim` 为 0 或 > 512 | `status=passed` 但维度非法 | `ErrInternal` | 500 |
 
-⚠️ **严禁回退到数学模拟特征或合成检测框**：任何失败路径都不允许写出向量。真实模型输出为空或结构不合法时一律无检测结果；CPU 测试桩输出同样不得转成亮度框、关键点或特征向量。
+⚠️ **严禁任何失败路径写零向量**：零向量与真实登记在库里不可区分，会静默永不匹配。
 
-### 6.3 TTL 空闲回收与生命周期汇合
+### 6.3 进程生命周期与并发
 
-- 首次请求懒加载并进入热态（单张推理 10~25ms）；空闲超过 `ZHULONG_FACE_PLUGIN_IDLE_TIMEOUT_SEC`（默认 60 秒）后，后台 Reaper 线程调用 `zhulong_face_extract_release` 再 `dlclose`，把约 80MB 模型常驻内存交还操作系统；下次请求自动重新唤醒加载。
-- **并发契约**：`FacePluginLoader::extract()` 全程持有互斥锁，Reaper 与 `shutdown()` 不可能在推理执行途中卸载代码段（Use-After-Unload）。
-- `Zhulong_engine_destroy` 在**最后一个**引擎句柄销毁时同步停止 Reaper 并卸载；`Zhulong_engine_destroy(NULL)` 是无操作，不得递减引擎引用计数（否则会误卸载仍在使用的插件）。
+- **并发 1、一问一答**：与旧的插件互斥锁语义等价；请求排队由 30s 超时兜底，不引入无界并发 spawn。
+- **崩溃即重建、单帧最多重试 1 次**：`stdin` 写失败 / EOF / 非 JSON → 杀进程组 + `Wait()` → 重建 → 重发该帧；第二次失败 fail-closed。`request_id` 必须回显并校验——错配等于把别人的特征写进底库。
+- **超时杀进程组**：`kill(-pid, SIGKILL)`，只杀单进程会留下抱着模型的孙进程。
+- **空闲回收**：空闲 `ZHONG_FACE_PLUGIN_IDLE_TIMEOUT_SEC`（默认 60s，沿用历史变量）后回收，内存曲线与旧实现一致；计时与请求共用一把锁，绝不事后补 Reset（会把正在推理的进程杀掉）。
+- **缓存 key 含包身份**：`<entry 路径>` + `(dev, ino, size, mtime)`。包被原地替换后必须换进程，否则新登记的底照由旧模型产出，与流式识别不同源（表现是识别率莫名下降，且没有任何错误）。
+- **spawn 复用** `algorunner.StartPinned`：`Pdeathsig` 挂在 fork 的那个 OS 线程上，必须 pin→spawn→`Wait`→unlock 在同一 goroutine 内完成。
 
 ### 6.4 验证边界
 
-- `ZhulongFaceFeatureExtract` 在 ONNX 后端用真实人脸样本断言产出 512 维单位特征；CPU 测试桩无模型检测能力，噪点与样本输入均断言 `NOT_FOUND`，确保不会合成检测框或特征向量。两个分支由 CMake 宏 `ZHULONG_TEST_ONNX_INFERENCE` 区分。
-- `ZhulongFacePluginTtl` 使用最小插件替身（`native/tests/mock_face_plugin.cpp`）黑盒验证「TTL 卸载 → 抽走插件文件后报 `UNSUPPORTED` → 恢复文件后重新唤醒」。
-
-
+- Go 侧单测（`internal/faceextract`）用**桩 provider 可执行文件**驱动，覆盖：happy path、复用只起一个进程、五类失败码、`feature_dim` 0/513、`request_id` 错配、崩溃后重试一次、二次失败即终、超时杀组、stdout 非 JSON、包原地替换、空闲回收、坏帧不进进程。
+- 真包集成验收只做一次（`packages/face_recognition` 的 `make test` + 打包期的黑盒验包），Go 测试不硬依赖 `build/packages/` 下的产物。

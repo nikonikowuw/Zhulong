@@ -1,44 +1,28 @@
-#include <zhulong/plugin.h>
+#include <zhulong/algo.hpp>
 #include "detector.hpp"
-#include <dlfcn.h>
+#include "face_recognition.hpp"
 #include <cassert>
 #include <cstring>
 #include <iostream>
 #include <vector>
 
-static zhulong_status_t load_plugin(const char* so_path, void** out_handle, zhulong_plugin_api_v1* out_api) {
-    void* handle = dlopen(so_path, RTLD_NOW | RTLD_LOCAL);
-    if (!handle) {
-        std::cerr << "dlopen failed: " << dlerror() << std::endl;
-        return ZHULONG_PLUGIN_ERR_NOT_FOUND;
-    }
-    *out_handle = handle;
-
-    auto get_api = reinterpret_cast<zhulong_status_t (*)(uint32_t, void*, size_t)>(
-        dlsym(handle, ZHULONG_PLUGIN_ENTRY_POINT)
-    );
-    if (!get_api) {
-        dlclose(handle);
-        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
-    }
-
+// 直接构造算法类的 C ABI 表，不装载任何动态库。
+//
+// 交付形态下包就是一个可执行文件（PIE 无法被动态装载），宿主只 exec 它；
+// 这里验证的仍是同一张表、同一套生命周期语义，只是拿表的方式从「装载符号」
+// 变成「调用生成器」。测试因此不会因为产物形态变化而失去意义。
+static zhulong_status_t build_api(zhulong_plugin_api_v1* out_api) {
     std::memset(out_api, 0, sizeof(*out_api));
-    zhulong_status_t rc = get_api(1, out_api, sizeof(*out_api));
-    if (rc != ZHULONG_PLUGIN_OK) {
-        dlclose(handle);
-        return rc;
-    }
-    return ZHULONG_PLUGIN_OK;
+    return zhulong::detail::PluginApi<zhulong::face::FaceRecognitionPlugin,
+                                      zhulong::sdk::PersonStructureResultAdapter>::get_api(
+        1, out_api, sizeof(*out_api), "FaceRecognition", "1.0.0");
 }
 
-int main(int argc, char* argv[]) {
-    const char* plugin_so = (argc > 1) ? argv[1] : "./libFaceRecognitionPlugin.so";
-
-    void* handle = nullptr;
+int main() {
     zhulong_plugin_api_v1 api;
-    zhulong_status_t rc = load_plugin(plugin_so, &handle, &api);
+    zhulong_status_t rc = build_api(&api);
     if (rc != ZHULONG_PLUGIN_OK) {
-        std::cerr << "Failed to load plugin: " << plugin_so << std::endl;
+        std::cerr << "Failed to build the plugin API table: " << rc << std::endl;
         return 1;
     }
 
@@ -53,7 +37,6 @@ int main(int argc, char* argv[]) {
     // 两者都必须是「没有 model」，绝不允许出现「加载成功」。
     assert((rc == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED || rc == ZHULONG_PLUGIN_ERR_NOT_FOUND) &&
            model == nullptr);
-    dlclose(handle);
     std::cout << "[OK] test_stub build: real model rejected as designed" << std::endl;
     return 0;
 #else
@@ -107,7 +90,6 @@ int main(int argc, char* argv[]) {
     api.task_close(task);
     api.worker_destroy(worker);
     api.model_destroy(model);
-    dlclose(handle);
 
     std::cout << "All FaceRecognitionPlugin tests passed successfully!" << std::endl;
     return 0;

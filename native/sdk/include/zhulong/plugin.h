@@ -353,7 +353,8 @@ typedef struct zhulong_plugin_api_v1 {
 /**
  * @brief 插件动态库必须导出的唯一主符号函数原型
  *
- * 宿主在 dlopen 加载插件后调用此函数获取对应版本的 API 函数表。
+ * 生成器（`ZHULONG_REGISTER_*_PLUGIN` / `ZHULONG_ALGO_MAIN`）在进程内直接调用它
+ * 取得对应版本的 API 函数表；交付形态是包可执行文件，宿主不再动态装载任何产物。
  *
  * @param requested_version 宿主请求的 API 版本号 (当前必须为 1)
  * @param[out] out_api_table 宿主分配的 API 函数表缓冲指针 (类型为 zhulong_plugin_api_v1*)

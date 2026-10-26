@@ -53,9 +53,6 @@ bool parse_options(int argc, char** argv, Options& options, std::string& error);
 /** @brief 输出首行 `{"step":"start","plugin":...}`（宿主的验包解析器依赖它） */
 void print_start_line(const std::string& plugin_label);
 
-/** @brief 输出 `{"status":"failed","stage":"dlopen",...}`（仅迁移期 dlopen 形态需要） */
-void report_dlopen_failure(const std::string& error_text);
-
 /**
  * @brief 用已构造好的 C ABI 表执行骨架
  *

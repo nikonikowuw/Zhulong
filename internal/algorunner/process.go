@@ -431,7 +431,8 @@ func validRunnerStatus(value string) bool {
 // needs to tell "host died" apart from "plugin crashed".
 func validRunnerStage(value string) bool {
 	switch value {
-	case "args", "dlopen", "model_create", "worker_create", "task_open", "process", "connect", "name_check", "shm_init", "gallery_sync", "broker_disconnected":
+	// 注意：曾经还有 "dlopen"，随 dlopen 通道下线；包骨架不会再发这个 stage。
+	case "args", "model_create", "worker_create", "task_open", "process", "connect", "name_check", "shm_init", "gallery_sync", "broker_disconnected":
 		return true
 	default:
 		return false

@@ -509,96 +509,14 @@ if(NOT ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub")
 endif()
 
 # ==============================================================================
-#                      4.4 构建示例脱机插件 (.so)
+#  4.4 包可执行文件由包自己的工程构建（不再有 .so 插件目标）
 # ==============================================================================
-add_library(MockDetector SHARED tests/plugins/mock_detector/mock_detector.cpp)
-target_compile_features(MockDetector PUBLIC cxx_std_17)
-target_compile_definitions(MockDetector PRIVATE ZHULONG_PLUGIN_BUILD)
-# ⚠️ 算法包 target 只允许 sdk/include：不得再依赖 native/src（阶段 2.3）。
-#    插件若需要 src 内的头，说明公共头还没收拢干净，先去修根因。
-target_include_directories(MockDetector PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include)
-target_link_libraries(MockDetector PRIVATE ZhulongAlgoRuntime)
-set_target_properties(MockDetector PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
-
-add_library(MockClassifier SHARED tests/plugins/mock_classifier/mock_classifier.cpp)
-target_compile_features(MockClassifier PUBLIC cxx_std_17)
-target_compile_definitions(MockClassifier PRIVATE ZHULONG_PLUGIN_BUILD)
-target_include_directories(MockClassifier PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include)
-target_link_libraries(MockClassifier PRIVATE ZhulongAlgoRuntime)
-set_target_properties(MockClassifier PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
-
-add_library(MockPersonStructure SHARED tests/plugins/mock_person_structure/mock_person_structure.cpp)
-target_compile_features(MockPersonStructure PUBLIC cxx_std_17)
-target_compile_definitions(MockPersonStructure PRIVATE ZHULONG_PLUGIN_BUILD)
-target_include_directories(MockPersonStructure PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include)
-target_link_libraries(MockPersonStructure PRIVATE ZhulongAlgoRuntime)
-set_target_properties(MockPersonStructure PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
-
-# ==============================================================================
-#                      4.5 构建人脸识别算法插件 (FaceRecognitionPlugin)
-# ==============================================================================
-add_library(FaceRecognitionPlugin SHARED
-    ${ZHULONG_FACE_IMPL_DIR}/src/face_recognition.cpp
-    ${ZHULONG_FACE_IMPL_DIR}/src/matcher.cpp
-    ${ZHULONG_FACE_IMPL_DIR}/src/aligner.cpp
-    ${ZHULONG_FACE_IMPL_DIR}/src/detector.cpp
-    ${ZHULONG_FACE_IMPL_DIR}/src/extractor.cpp
-    # 迁移期胶水：包内入口已是 main，这里重新导出 .so 需要的 C ABI 入口（阶段 4 删）
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/migration/face_plugin_entry.cpp
-)
-target_compile_features(FaceRecognitionPlugin PUBLIC cxx_std_17)
-target_compile_definitions(FaceRecognitionPlugin PRIVATE ZHULONG_PLUGIN_BUILD)
-target_include_directories(FaceRecognitionPlugin PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
-    ${ZHULONG_FACE_IMPL_DIR}/src
-)
-target_link_libraries(FaceRecognitionPlugin PRIVATE ZhulongAlgoRuntime)
-set(PLUGIN_RPATH "$ORIGIN")
-if(APPLE)
-    set(PLUGIN_RPATH "@loader_path")
-endif()
-
-set_target_properties(FaceRecognitionPlugin PROPERTIES
-    CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN YES
-    BUILD_RPATH_USE_ORIGIN TRUE
-    BUILD_WITH_INSTALL_RPATH TRUE
-    INSTALL_RPATH "${PLUGIN_RPATH}"
-)
-
-# ==============================================================================
-#                      4.6 构建车牌识别算法插件 (PlateRecognitionPlugin)
-# ==============================================================================
-add_library(PlateRecognitionPlugin SHARED
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_recognition.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_detector.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_recognizer.cpp
-    # 迁移期胶水：把包内算法类重新导出成 .so 插件的 C ABI 入口（随阶段 4 删除）
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/migration/plate_plugin_entry.cpp
-)
-target_compile_features(PlateRecognitionPlugin PUBLIC cxx_std_17)
-target_compile_definitions(PlateRecognitionPlugin PRIVATE ZHULONG_PLUGIN_BUILD)
-target_include_directories(PlateRecognitionPlugin PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src
-)
-target_link_libraries(PlateRecognitionPlugin PRIVATE ZhulongAlgoRuntime)
-set_target_properties(PlateRecognitionPlugin PROPERTIES
-    CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN YES
-    BUILD_RPATH_USE_ORIGIN TRUE
-    BUILD_WITH_INSTALL_RPATH TRUE
-    INSTALL_RPATH "${PLUGIN_RPATH}"
-)
-
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(PLUGIN_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/cmake/plugin-exports.map")
-    target_link_options(MockDetector PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
-    target_link_options(MockClassifier PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
-    target_link_options(MockPersonStructure PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
-    target_link_options(FaceRecognitionPlugin PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
-    target_link_options(PlateRecognitionPlugin PRIVATE "LINKER:--version-script,${PLUGIN_EXPORT_MAP}")
-endif()
+# 交付形态是「包 = 自带算法类的可执行文件」，由 `packages/<id>/<target>/CMakeLists.txt`
+# 经 SDK 前缀独立构建（`make -C packages/... ` 或 build_package.py）。
+# 宿主侧只保留一个**测试用**的包形态夹具：`zhulong_test_algo_consumer`，
+# 它让跨进程 FrameBroker 回归仍然验证生产形态而不是 dlopen。
+# 曾经在这里的 MockDetector / MockClassifier / MockPersonStructure / 两个算法插件
+# SHARED 目标已随 dlopen 通道一起删除：没有装载者，就没有「导出表白名单」这回事。
 
 # ==============================================================================
 #                      5. 单元测试与集成测试构建（BUILD_TESTING）
@@ -682,6 +600,8 @@ if(BUILD_TESTING)
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub" OR ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongFaceRecognitionPluginTests
             tests/face_recognition_plugin_test.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/face_recognition.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/matcher.cpp
             ${ZHULONG_FACE_IMPL_DIR}/src/detector.cpp
             ${ZHULONG_FACE_IMPL_DIR}/src/aligner.cpp
             ${ZHULONG_FACE_IMPL_DIR}/src/extractor.cpp
@@ -693,7 +613,7 @@ if(BUILD_TESTING)
             ${ZHULONG_FACE_IMPL_DIR}/src
         )
         target_link_libraries(ZhulongFaceRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
-        add_test(NAME ZhulongFaceRecognitionPlugin COMMAND ZhulongFaceRecognitionPluginTests $<TARGET_FILE:FaceRecognitionPlugin>)
+        add_test(NAME ZhulongFaceRecognitionPlugin COMMAND ZhulongFaceRecognitionPluginTests)
         set_tests_properties(ZhulongFaceRecognitionPlugin PROPERTIES TIMEOUT 10)
     endif()
 
@@ -704,6 +624,9 @@ if(BUILD_TESTING)
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub" OR ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongPlateRecognitionPluginTests
             tests/plate_recognition_plugin_test.cpp
+            # 测试直接链接包内实现（不再经由 .so）：ABI 表由 PluginApi 现场生成
+            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_recognition.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_detector.cpp
             # 仅为 plate_sample_point 纯函数单测直接编译：坐标映射必须能被单测钉住，
             # 而不是靠「跑一遍模型看结果像不像」验证
             ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_recognizer.cpp
@@ -715,13 +638,15 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src
         )
         target_link_libraries(ZhulongPlateRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
-        add_test(NAME ZhulongPlateRecognitionPlugin COMMAND ZhulongPlateRecognitionPluginTests $<TARGET_FILE:PlateRecognitionPlugin>)
+        add_test(NAME ZhulongPlateRecognitionPlugin COMMAND ZhulongPlateRecognitionPluginTests)
         set_tests_properties(ZhulongPlateRecognitionPlugin PROPERTIES TIMEOUT 20)
     endif()
 
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongFaceRecognitionOnnxTests
             tests/face_recognition_onnx_test.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/face_recognition.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/matcher.cpp
             ${ZHULONG_FACE_IMPL_DIR}/src/detector.cpp
             ${ZHULONG_FACE_IMPL_DIR}/src/aligner.cpp
             ${ZHULONG_FACE_IMPL_DIR}/src/extractor.cpp
@@ -733,7 +658,7 @@ if(BUILD_TESTING)
             ${ZHULONG_FACE_IMPL_DIR}/src
         )
         target_link_libraries(ZhulongFaceRecognitionOnnxTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
-        add_test(NAME ZhulongFaceRecognitionOnnx COMMAND ZhulongFaceRecognitionOnnxTests $<TARGET_FILE:FaceRecognitionPlugin>)
+        add_test(NAME ZhulongFaceRecognitionOnnx COMMAND ZhulongFaceRecognitionOnnxTests)
         set_tests_properties(ZhulongFaceRecognitionOnnx PROPERTIES TIMEOUT 20)
     endif()
 
@@ -818,16 +743,6 @@ if(BUILD_TESTING)
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
         add_test(NAME ZhulongAlgoJsonRoundTrip COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/algo_json_roundtrip_test.py $<TARGET_FILE:ZhulongAlgoJsonTests>)
-        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-            # ⚠️ 过渡态：宿主已不再 dlopen 任何人脸特征通道，但 face 包的 .so 目标仍在
-            #    （还有 native 测试在用），其导出里因此仍带 zhulong_face_extract_*。
-            #    这两个 SHARED 目标一旦删除，本行回退为「只允许统一入口」。
-            add_test(NAME ZhulongPluginSymbolVisibility COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_plugin_symbols.py ${CMAKE_NM}
-                $<TARGET_FILE:MockDetector> $<TARGET_FILE:MockClassifier> $<TARGET_FILE:MockPersonStructure>
-                $<TARGET_FILE:PlateRecognitionPlugin>
-                "$<TARGET_FILE:FaceRecognitionPlugin>=zhulong_plugin_get_api,zhulong_face_extract_feature,zhulong_face_extract_release")
-        endif()
         add_test(NAME ZhulongRtspIntegration COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/tests/rtsp_fixture.py $<TARGET_FILE:ZhulongRtspTests>)
         set_tests_properties(ZhulongRtspIntegration PROPERTIES TIMEOUT 90)

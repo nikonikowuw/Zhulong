@@ -3,7 +3,7 @@
  * @brief 车牌识别插件测试：C ABI 生命周期 + 双层切块坐标映射单测 + 真实样本金标回归
  *
  * 三层断言的分工（缺一层就会出现「零检出却绿灯」的假绿）：
- *   1. ABI 生命周期：dlopen → model_create → worker_create → task_open → process → release；
+ *   1. ABI 生命周期：get_api → model_create → worker_create → task_open → process → release；
  *   2. 坐标映射单测：双层车牌的上下半重拼是全包最绕的一段算术，直接钉住采样坐标；
  *   3. 真实样本金标：把 packages/plate_recognition/sample.jpg 转成的 PPM 喂进全链路，
  *      钉住车牌号、颜色与检出数 —— 通道顺序、字符表、CTC 解码任何一处漂移都会失败。
@@ -12,12 +12,12 @@
 #include <zhulong/algo.hpp>
 #include <zhulong/plugin.h>
 
+#include "plate_recognition.hpp"
 #include "plate_recognizer.hpp"
 
 #include <cassert>
 #include <cmath>
 #include <cstring>
-#include <dlfcn.h>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -81,30 +81,13 @@ constexpr bool kTestStubBuild =
     false;
 #endif
 
-zhulong_status_t load_plugin(const char* so_path, void** out_handle, zhulong_plugin_api_v1* out_api) {
-    void* handle = dlopen(so_path, RTLD_NOW | RTLD_LOCAL);
-    if (!handle) {
-        std::cerr << "dlopen failed: " << dlerror() << std::endl;
-        return ZHULONG_PLUGIN_ERR_NOT_FOUND;
-    }
-    *out_handle = handle;
-
-    auto get_api = reinterpret_cast<zhulong_status_t (*)(uint32_t, void*, size_t)>(
-        dlsym(handle, ZHULONG_PLUGIN_ENTRY_POINT)
-    );
-    if (!get_api) {
-        dlclose(handle);
-        *out_handle = nullptr;
-        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
-    }
-
+// 直接构造算法类的 C ABI 表，不装载任何动态库：交付形态是包可执行文件
+// （PIE 无法被装载，宿主只 exec 它）。验证的仍是同一张表与同一套生命周期语义。
+zhulong_status_t build_api_table(zhulong_plugin_api_v1* out_api) {
     std::memset(out_api, 0, sizeof(*out_api));
-    const zhulong_status_t rc = get_api(1, out_api, sizeof(*out_api));
-    if (rc != ZHULONG_PLUGIN_OK) {
-        dlclose(handle);
-        *out_handle = nullptr;
-    }
-    return rc;
+    return zhulong::detail::PluginApi<zhulong::plate::PlateRecognitionPlugin,
+                                      zhulong::sdk::VehicleStructureResultAdapter>::get_api(
+        1, out_api, sizeof(*out_api), "PlateRecognition", "1.0.0");
 }
 
 /** @brief 用给定帧执行一次完整推理；失败返回 nullptr */
@@ -208,7 +191,7 @@ void test_sample_point_mapping() {
 /**
  * @brief ABI / 生命周期冒烟：合成灰帧不得产生任何检出
  */
-void test_abi_lifecycle(const zhulong_plugin_api_v1& api, const std::string& plugin_so) {
+void test_abi_lifecycle(const zhulong_plugin_api_v1& api, const std::string& label) {
     assert(api.api_version == 1);
     assert(std::strcmp(api.plugin_name, "PlateRecognition") == 0);
     assert(std::strcmp(api.plugin_version, "1.0.0") == 0);
@@ -220,7 +203,7 @@ void test_abi_lifecycle(const zhulong_plugin_api_v1& api, const std::string& plu
         // NOT_SUPPORTED = 模型找到但桩不接受；NOT_FOUND = 该工作目录找不到模型。
         assert((rc == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED || rc == ZHULONG_PLUGIN_ERR_NOT_FOUND) &&
                model == nullptr);
-        std::cout << "[OK] " << plugin_so << " lifecycle: real model rejected by test_stub build" << std::endl;
+        std::cout << "[OK] " << label << " lifecycle: real model rejected by test_stub build" << std::endl;
         return;
     }
     assert(rc == ZHULONG_PLUGIN_OK && model != nullptr);
@@ -258,7 +241,7 @@ void test_abi_lifecycle(const zhulong_plugin_api_v1& api, const std::string& plu
  * 像素本身佐证：两块车牌区域的 B 通道显著高于 R 通道，必须是「蓝色」。
  */
 #if !defined(ZHULONG_INFERENCE_TEST_STUB)
-void test_sample_image_golden(const zhulong_plugin_api_v1& api, const std::string& plugin_so) {
+void test_sample_image_golden(const zhulong_plugin_api_v1& api, const std::string& label) {
     PpmImage sample;
     if (!load_ppm("native/tests/fixtures/onnx/plate_sample.ppm", sample)) {
         std::cerr << "missing fixture: native/tests/fixtures/onnx/plate_sample.ppm" << std::endl;
@@ -341,26 +324,24 @@ void test_sample_image_golden(const zhulong_plugin_api_v1& api, const std::strin
 
 } // namespace
 
-int main(int argc, char* argv[]) {
+int main() {
     // 1. 纯函数单测：不依赖插件、不依赖模型
     test_sample_point_mapping();
 
     // 2. 插件全链路
-    const char* plugin_so = (argc > 1) ? argv[1] : "./libPlateRecognitionPlugin.so";
-    void* handle = nullptr;
     zhulong_plugin_api_v1 api;
-    const zhulong_status_t rc = load_plugin(plugin_so, &handle, &api);
-    if (rc != ZHULONG_PLUGIN_OK || handle == nullptr) {
-        std::cerr << "Failed to load plugin: " << plugin_so << std::endl;
+    const zhulong_status_t rc = build_api_table(&api);
+    if (rc != ZHULONG_PLUGIN_OK) {
+        std::cerr << "Failed to build the plugin API table: " << rc << std::endl;
         return 1;
     }
 
-    test_abi_lifecycle(api, plugin_so);
+    const std::string label = "PlateRecognition";
+    test_abi_lifecycle(api, label);
 #if !defined(ZHULONG_INFERENCE_TEST_STUB)
-    test_sample_image_golden(api, plugin_so);
+    test_sample_image_golden(api, label);
 #endif
 
-    dlclose(handle);
     std::cout << "[✓] PlateRecognitionPlugin tests passed successfully!" << std::endl;
     return 0;
 }

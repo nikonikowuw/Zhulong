@@ -7,13 +7,13 @@
 #include <zhulong/plugin.h>
 #include <zhulong/runtime/gallery_registry.hpp>
 #include "detector.hpp"
+#include "face_recognition.hpp"
 #include "aligner.hpp"
 #include "extractor.hpp"
 
 #include <cassert>
 #include <cmath>
 #include <cstring>
-#include <dlfcn.h>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -70,35 +70,18 @@ float cosine_similarity(const std::vector<float>& a, const std::vector<float>& b
     return dot;
 }
 
-zhulong_status_t load_plugin(const char* so_path, void** out_handle, zhulong_plugin_api_v1* out_api) {
-    void* handle = dlopen(so_path, RTLD_NOW | RTLD_GLOBAL);
-    if (!handle) {
-        std::cerr << "dlopen failed: " << dlerror() << std::endl;
-        return ZHULONG_PLUGIN_ERR_NOT_FOUND;
-    }
-    *out_handle = handle;
-
-    auto get_api = reinterpret_cast<zhulong_status_t (*)(uint32_t, void*, size_t)>(
-        dlsym(handle, ZHULONG_PLUGIN_ENTRY_POINT)
-    );
-    if (!get_api) {
-        dlclose(handle);
-        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
-    }
-
+// 直接构造算法类的 C ABI 表：交付形态是包可执行文件（PIE 无法被装载），
+// 宿主只 exec 它；这里验证的仍是同一张表与同一套生命周期语义。
+zhulong_status_t build_api_table(zhulong_plugin_api_v1* out_api) {
     std::memset(out_api, 0, sizeof(*out_api));
-    zhulong_status_t rc = get_api(1, out_api, sizeof(*out_api));
-    if (rc != ZHULONG_PLUGIN_OK) {
-        dlclose(handle);
-        return rc;
-    }
-    return ZHULONG_PLUGIN_OK;
+    return zhulong::detail::PluginApi<zhulong::face::FaceRecognitionPlugin,
+                                      zhulong::sdk::PersonStructureResultAdapter>::get_api(
+        1, out_api, sizeof(*out_api), "FaceRecognition", "1.0.0");
 }
 
 } // namespace
 
-int main(int argc, char* argv[]) {
-    const char* plugin_so = (argc > 1) ? argv[1] : "./libFaceRecognitionPlugin.so";
+int main() {
     const std::string fixtures_dir = "tests/fixtures/onnx/";
     const std::string models_dir = "packages/face_recognition/onnx/models/";
 
@@ -254,12 +237,10 @@ int main(int argc, char* argv[]) {
         feat_a1
     });
 
-    zhulong_status_t rc = ZHULONG_PLUGIN_OK;
-    void* handle = nullptr;
     zhulong_plugin_api_v1 api;
-    rc = load_plugin(plugin_so, &handle, &api);
+    zhulong_status_t rc = build_api_table(&api);
     if (rc != ZHULONG_PLUGIN_OK) {
-        std::cerr << "Failed to load plugin via dlopen: " << plugin_so << std::endl;
+        std::cerr << "Failed to build the plugin API table: " << rc << std::endl;
         return 1;
     }
 
@@ -279,7 +260,7 @@ int main(int argc, char* argv[]) {
     assert(rc == ZHULONG_PLUGIN_OK && task != nullptr);
 
     // =========================================================================
-    // 5. 验证插件 C ABI 完整链路 (dlopen, model_create, worker_create, process)
+    // 5. 验证插件 C ABI 完整链路 (get_api, model_create, worker_create, process)
     // =========================================================================
     std::cout << "[5] Testing Plugin C ABI end-to-end..." << std::endl;
     zhulong_frame_view frame{};
@@ -317,7 +298,6 @@ int main(int argc, char* argv[]) {
     api.task_close(task);
     api.worker_destroy(worker);
     api.model_destroy(model);
-    dlclose(handle);
 
     std::cout << "[5] Plugin C ABI end-to-end passed." << std::endl;
     std::cout << "All FaceRecognition ONNX tests completed successfully!" << std::endl;

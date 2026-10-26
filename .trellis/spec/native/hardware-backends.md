@@ -255,10 +255,10 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 2. **链接与 RPATH 卫生**：
    - 仅 `ZhulongAlgoRuntime` 以 `PRIVATE` 方式链接 `${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so`，宿主 `libZhulongEngine.a` 绝不链接；
    - 配置 `-Wl,-rpath-link,${ZHULONG_ONNX_ROOT}/lib` 与 `SKIP_BUILD_RPATH TRUE`、`BUILD_RPATH ""`，确保 `libZhulongAlgoRuntime.so` 不残留开发机绝对路径。
-3. **宿主复用 ONNX 能力的唯一通道是算法插件 + dlopen**：
-   - 宿主需要通用推理能力时（如离线人脸特征提取），必须通过算法插件导出的专用 C ABI 复用 `libzhulong_algo_runtime.so`，由宿主侧 `FacePluginLoader` 在运行期 `dlopen`（见 [CGO 契约 §6](./cgo-contract.md)）；
-   - 判据（必须为空）：`readelf -d build/targets/<name>/Zhulong | grep NEEDED` 不得出现 `libonnxruntime.so`；
-   - 插件缺失时必须显式返回 `Zhulong_ERR_UNSUPPORTED`（Fail-Closed），严禁静默退化到模拟特征。
+3. **宿主不装载任何算法产物，推理能力只存在于包进程里**：
+   - 交付形态是「包 = 自带算法类的可执行文件 + 静态链接运行时」；宿主需要单次推理能力时（如离线人脸特征提取）启动该可执行文件并跟它说协议，见 [CGO 契约 §6](./cgo-contract.md)；
+   - 判据（必须为空）：`readelf -d build/targets/<name>/Zhulong | grep NEEDED` 不得出现 `libonnxruntime.so`；另外 `grep -n "dlopen\|dlsym" native/src/abi/engine.cpp` 也必须为空；
+   - 包缺失 / 入口不可执行 / 能力未实现时必须显式失败（`Zhulong_ERR_UNSUPPORTED` 或 `ALGO_ENTRY_INVALID`），严禁静默退化到模拟特征。
 
 ### 6.2 资源模型、权重共享与并发约束
 

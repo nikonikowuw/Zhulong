@@ -717,7 +717,7 @@ namespace detail
      * | 码 | 含义 |
      * | -- | ---- |
      * | 0  | 正常退出（收到停止信号或达到 --max-frames） |
-     * | 1  | dlopen 失败，或 client name 超长（HandshakeReq.client_name[32]） |
+     * | 1  | client name 超长（HandshakeReq.client_name[32]）或骨架内部错误 |
      * | 2  | model_create 失败 |
      * | 3  | worker_create 失败 |
      * | 4  | task_open 失败 |
@@ -1118,11 +1118,6 @@ namespace detail
         std::cout << "{\"step\":\"start\",\"plugin\":" << runner::json_quote(plugin_label) << "}" << std::endl;
     }
 
-    void report_dlopen_failure(const std::string &error_text)
-    {
-        write_runner_error_line("{\"status\":\"failed\",\"stage\":\"dlopen\",\"error\":",
-                                runner::json_quote(error_text), "}");
-    }
 
     bool parse_options(int argc, char **argv, Options &options, std::string &error)
     {
