@@ -16,6 +16,9 @@ import authZhHant from '@/features/auth/locales/zh-Hant.json'
 import camerasEn from '@/features/cameras/locales/en.json'
 import camerasZhHans from '@/features/cameras/locales/zh-Hans.json'
 import camerasZhHant from '@/features/cameras/locales/zh-Hant.json'
+import gb28181En from '@/features/gb28181/locales/en.json'
+import gb28181ZhHans from '@/features/gb28181/locales/zh-Hans.json'
+import gb28181ZhHant from '@/features/gb28181/locales/zh-Hant.json'
 import liveEn from '@/features/live/locales/en.json'
 import liveZhHans from '@/features/live/locales/zh-Hans.json'
 import liveZhHant from '@/features/live/locales/zh-Hant.json'
@@ -50,6 +53,7 @@ export const resources = {
     storage: storageZhHans,
     live: liveZhHans,
     cameras: camerasZhHans,
+    gb28181: gb28181ZhHans,
     audit: auditZhHans,
     persons: personsZhHans,
     records: recordsZhHans,
@@ -64,6 +68,7 @@ export const resources = {
     storage: storageZhHant,
     live: liveZhHant,
     cameras: camerasZhHant,
+    gb28181: gb28181ZhHant,
     audit: auditZhHant,
     persons: personsZhHant,
     records: recordsZhHant,
@@ -78,6 +83,7 @@ export const resources = {
     storage: storageEn,
     live: liveEn,
     cameras: camerasEn,
+    gb28181: gb28181En,
     audit: auditEn,
     persons: personsEn,
     records: recordsEn,

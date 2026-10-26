@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Outlet } from '@tanstack/react-router'
-import { Palette, Network, Clock, HardDrive } from 'lucide-react'
+import { Palette, Network, Clock, HardDrive, RadioTower } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Separator } from '@/components/ui/separator'
 import { ConfigDrawer } from '@/components/config-drawer'
@@ -36,6 +36,11 @@ export function Settings() {
         title: t('nav.Storage', { defaultValue: 'Storage & Lifecycle' }),
         href: '/settings/storage',
         icon: <HardDrive size={18} />,
+      },
+      {
+        title: t('nav.GB28181', { defaultValue: 'GB28181 Ingress' }),
+        href: '/settings/gb28181',
+        icon: <RadioTower size={18} />,
       },
     ],
     [t]

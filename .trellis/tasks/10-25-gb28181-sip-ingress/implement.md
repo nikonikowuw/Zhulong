@@ -71,6 +71,10 @@
   同步期间管理 API 不得劣化到不可用（这是容量验收项，不是性能优化项）。
 - API 路由使用复合键：`POST /devices/:deviceId/channels/:channelId/camera`；`camera_id` 仅在显式添加时回填。
 - 前端 `features/gb28181` 提供设备列表、手工预置/更新凭据、通道抽屉和添加动作；系统设置导航新增 `/settings/gb28181`，文件路由只做页面声明并从 `features/gb28181/index.tsx` 引入配置页。TanStack Query 读取/更新服务端配置，保存后显示“需重启生效”，区分 desired、startup config 和 runtime state。
+
+  **进度（S1 阶段已落地）**：配置表单（含 desired/startup 差异表与 `restartRequired` 横幅）、运行态面板（在线设备／活动会话／端口池／耗尽计数）、设备白名单表与预置/凭据轮换弹窗、`/settings/gb28181` 导航与路由声明。
+
+  **仍缺（随 S2 backend 落地）**：通道抽屉与“添加为摄像机”动作 —— 依赖 `gb_channels` 的目录同步（S2 `catalog.go`）先存在，否则界面只能显示空抽屉。此处刻意不提前实现，不是漏做。
 - 前端另需展示 `GET /api/v1/gb28181/runtime` 的关键计数（在线设备、活动会话、端口占用），作为现场排障入口。
 
 **验证**：分片响应乱序/重复/丢片/超时、多个 device 下相同 channel_id、重复添加与删除关联测试；API 用 fake SIP peer 集成；1600 条目录批量入库压测并记录管理 API 时延；真实无头浏览器覆盖配置读取/保存、desired/startup 对比、保存后重启提示与 runtime error 状态，以及「设备预置 → 刷新目录 → 通道显式添加」页面交互。

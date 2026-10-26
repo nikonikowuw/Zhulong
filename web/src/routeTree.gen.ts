@@ -29,6 +29,7 @@ import { Route as AuthenticatedAlgorithmsIndexRouteImport } from './routes/_auth
 import { Route as AuthenticatedSettingsTimeRouteImport } from './routes/_authenticated/settings/time'
 import { Route as AuthenticatedSettingsStorageRouteImport } from './routes/_authenticated/settings/storage'
 import { Route as AuthenticatedSettingsNetworkRouteImport } from './routes/_authenticated/settings/network'
+import { Route as AuthenticatedSettingsGb28181RouteImport } from './routes/_authenticated/settings/gb28181'
 import { Route as AuthenticatedSettingsAppearanceRouteImport } from './routes/_authenticated/settings/appearance'
 import { Route as AuthenticatedErrorsErrorRouteImport } from './routes/_authenticated/errors/$error'
 
@@ -140,6 +141,12 @@ const AuthenticatedSettingsNetworkRoute =
     path: '/network',
     getParentRoute: () => AuthenticatedSettingsRouteRoute,
   } as any)
+const AuthenticatedSettingsGb28181Route =
+  AuthenticatedSettingsGb28181RouteImport.update({
+    id: '/gb28181',
+    path: '/gb28181',
+    getParentRoute: () => AuthenticatedSettingsRouteRoute,
+  } as any)
 const AuthenticatedSettingsAppearanceRoute =
   AuthenticatedSettingsAppearanceRouteImport.update({
     id: '/appearance',
@@ -164,6 +171,7 @@ export interface FileRoutesByFullPath {
   '/503': typeof errors503Route
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/settings/appearance': typeof AuthenticatedSettingsAppearanceRoute
+  '/settings/gb28181': typeof AuthenticatedSettingsGb28181Route
   '/settings/network': typeof AuthenticatedSettingsNetworkRoute
   '/settings/storage': typeof AuthenticatedSettingsStorageRoute
   '/settings/time': typeof AuthenticatedSettingsTimeRoute
@@ -186,6 +194,7 @@ export interface FileRoutesByTo {
   '/': typeof AuthenticatedIndexRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/settings/appearance': typeof AuthenticatedSettingsAppearanceRoute
+  '/settings/gb28181': typeof AuthenticatedSettingsGb28181Route
   '/settings/network': typeof AuthenticatedSettingsNetworkRoute
   '/settings/storage': typeof AuthenticatedSettingsStorageRoute
   '/settings/time': typeof AuthenticatedSettingsTimeRoute
@@ -211,6 +220,7 @@ export interface FileRoutesById {
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/errors/$error': typeof AuthenticatedErrorsErrorRoute
   '/_authenticated/settings/appearance': typeof AuthenticatedSettingsAppearanceRoute
+  '/_authenticated/settings/gb28181': typeof AuthenticatedSettingsGb28181Route
   '/_authenticated/settings/network': typeof AuthenticatedSettingsNetworkRoute
   '/_authenticated/settings/storage': typeof AuthenticatedSettingsStorageRoute
   '/_authenticated/settings/time': typeof AuthenticatedSettingsTimeRoute
@@ -236,6 +246,7 @@ export interface FileRouteTypes {
     | '/503'
     | '/errors/$error'
     | '/settings/appearance'
+    | '/settings/gb28181'
     | '/settings/network'
     | '/settings/storage'
     | '/settings/time'
@@ -258,6 +269,7 @@ export interface FileRouteTypes {
     | '/'
     | '/errors/$error'
     | '/settings/appearance'
+    | '/settings/gb28181'
     | '/settings/network'
     | '/settings/storage'
     | '/settings/time'
@@ -282,6 +294,7 @@ export interface FileRouteTypes {
     | '/_authenticated/'
     | '/_authenticated/errors/$error'
     | '/_authenticated/settings/appearance'
+    | '/_authenticated/settings/gb28181'
     | '/_authenticated/settings/network'
     | '/_authenticated/settings/storage'
     | '/_authenticated/settings/time'
@@ -447,6 +460,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsNetworkRouteImport
       parentRoute: typeof AuthenticatedSettingsRouteRoute
     }
+    '/_authenticated/settings/gb28181': {
+      id: '/_authenticated/settings/gb28181'
+      path: '/gb28181'
+      fullPath: '/settings/gb28181'
+      preLoaderRoute: typeof AuthenticatedSettingsGb28181RouteImport
+      parentRoute: typeof AuthenticatedSettingsRouteRoute
+    }
     '/_authenticated/settings/appearance': {
       id: '/_authenticated/settings/appearance'
       path: '/appearance'
@@ -466,6 +486,7 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedSettingsRouteRouteChildren {
   AuthenticatedSettingsAppearanceRoute: typeof AuthenticatedSettingsAppearanceRoute
+  AuthenticatedSettingsGb28181Route: typeof AuthenticatedSettingsGb28181Route
   AuthenticatedSettingsNetworkRoute: typeof AuthenticatedSettingsNetworkRoute
   AuthenticatedSettingsStorageRoute: typeof AuthenticatedSettingsStorageRoute
   AuthenticatedSettingsTimeRoute: typeof AuthenticatedSettingsTimeRoute
@@ -475,6 +496,7 @@ interface AuthenticatedSettingsRouteRouteChildren {
 const AuthenticatedSettingsRouteRouteChildren: AuthenticatedSettingsRouteRouteChildren =
   {
     AuthenticatedSettingsAppearanceRoute: AuthenticatedSettingsAppearanceRoute,
+    AuthenticatedSettingsGb28181Route: AuthenticatedSettingsGb28181Route,
     AuthenticatedSettingsNetworkRoute: AuthenticatedSettingsNetworkRoute,
     AuthenticatedSettingsStorageRoute: AuthenticatedSettingsStorageRoute,
     AuthenticatedSettingsTimeRoute: AuthenticatedSettingsTimeRoute,
