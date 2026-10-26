@@ -10,7 +10,7 @@
  *
  *     #include <zhulong/algo_main.hpp>
  *     class MyDetector { ... };            // init / create_session / detect
- *     ZHULONG_ALGO_MAIN(MyDetector, zhulong::detail::DetectionResultAdapter,
+ *     ZHULONG_ALGO_MAIN(MyDetector, zhulong::sdk::DetectionResultAdapter,
  *                       "MyDetector", "1.0.0")
  *
  * ⚠️ 骨架与 SDK 里的 runner 语义必须**逐字一致**（stage token、退出码表、ACK 时机）：

@@ -149,7 +149,8 @@ public:
         return det_session;
     }
 
-    std::vector<zhulong::PersonItem> detect_persons(zhulong::Session& session, const zhulong::Image& image) {
+    std::vector<zhulong::PersonItem> detect_persons(zhulong::Session& session, const zhulong::Image& image,
+                                                    zhulong::TaskContext& task_context) {
         uint32_t worker_id = session.worker_id();
         zhulong::Session* rec_session = nullptr;
         zhulong::Session* person_session = nullptr;

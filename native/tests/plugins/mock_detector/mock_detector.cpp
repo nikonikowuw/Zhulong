@@ -15,7 +15,8 @@ public:
         return zhulong::Session();
     }
 
-    std::vector<zhulong::Detection> detect(zhulong::Session& session, const zhulong::Image& image) {
+    std::vector<zhulong::Detection> detect(zhulong::Session& session, const zhulong::Image& image,
+                                           zhulong::TaskContext& task_context) {
         // 夹具输出与图像内容无关：不跑推理，也不依赖任何后端
         (void)session;
         (void)image;

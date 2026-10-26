@@ -91,6 +91,29 @@ private:
 };
 
 /**
+ * @brief 任务配置（当前为空值类型）
+ *
+ * 预留位：`MSG_TASK_CONFIG` 落地后由宿主下发（如区域掩码、阈值覆盖）。
+ * ⚠️ 本任务**不**定义任何业务字段：算法侧只接受它、不读它，输出必须与改造前一致。
+ */
+struct TaskConfig {};
+
+/**
+ * @brief 任务上下文：一门任务的身份与运行参数
+ *
+ * 由骨架按「一路 broker 一个 Worker」创建并传递，算法只读：
+ *   - `task_id` 是该路流的任务身份（当前等于 stream_id）；
+ *   - `params` 见 `TaskConfig` 的说明，本任务恒为默认值。
+ *
+ * ⚠️ 生命周期：引用只在 `detect` / `classify` / `detect_persons` / `detect_vehicles`
+ *    调用期间有效。需要跨帧保留的内容必须自己拷贝，不得保存该引用。
+ */
+struct TaskContext {
+    uint64_t task_id{0};   /**< 任务身份（一路 broker 一个） */
+    TaskConfig params{};   /**< 任务参数（本任务恒为默认值） */
+};
+
+/**
  * @brief 目标检测结果项
  *
  * 表示单个目标检测框及其置信度、类别 ID 与标签。
@@ -404,8 +427,9 @@ struct DetectionResultAdapter {
 
     /** @brief 调用插件类的 detect 方法执行检测推理 */
     template<typename PluginClass>
-    static std::vector<Detection> infer(PluginClass& plugin, Session& session, const Image& image) {
-        return plugin.detect(session, image);
+    static std::vector<Detection> infer(PluginClass& plugin, Session& session, const Image& image,
+                                        TaskContext& task_context) {
+        return plugin.detect(session, image, task_context);
     }
 
     /** @brief 将单个 Detection 结构体序列化至 C ABI zhulong_bbox */
@@ -424,8 +448,8 @@ struct DetectionResultAdapter {
     /** @brief 执行推理并将检测结果打包为 C ABI zhulong_inference_result 结构体 */
     template<typename PluginClass>
     static void pack(PluginClass& plugin, Session& session, const Image& image,
-                     zhulong_inference_result& out) {
-        auto values = infer(plugin, session, image);
+                     TaskContext& task_context, zhulong_inference_result& out) {
+        auto values = infer(plugin, session, image, task_context);
         out.count = static_cast<uint32_t>(values.size());
         if (values.empty()) {
             out.data = nullptr;
@@ -457,8 +481,9 @@ struct ClassificationResultAdapter {
 
     /** @brief 调用插件类的 classify 方法执行分类推理 */
     template<typename PluginClass>
-    static std::vector<Classification> infer(PluginClass& plugin, Session& session, const Image& image) {
-        return plugin.classify(session, image);
+    static std::vector<Classification> infer(PluginClass& plugin, Session& session, const Image& image,
+                                             TaskContext& task_context) {
+        return plugin.classify(session, image, task_context);
     }
 
     /** @brief 将单个 Classification 结构体序列化至 C ABI zhulong_classification_item */
@@ -472,8 +497,8 @@ struct ClassificationResultAdapter {
     /** @brief 执行推理并将分类结果打包为 C ABI zhulong_inference_result 结构体 */
     template<typename PluginClass>
     static void pack(PluginClass& plugin, Session& session, const Image& image,
-                     zhulong_inference_result& out) {
-        auto values = infer(plugin, session, image);
+                     TaskContext& task_context, zhulong_inference_result& out) {
+        auto values = infer(plugin, session, image, task_context);
         out.count = static_cast<uint32_t>(values.size());
         if (values.empty()) {
             out.data = nullptr;
@@ -513,15 +538,16 @@ struct PersonStructureResultAdapter {
 
     /** @brief 调用插件类的 detect_persons 方法执行人体/人脸结构化推理 */
     template<typename PluginClass>
-    static std::vector<PersonItem> infer(PluginClass& plugin, Session& session, const Image& image) {
-        return plugin.detect_persons(session, image);
+    static std::vector<PersonItem> infer(PluginClass& plugin, Session& session, const Image& image,
+                                         TaskContext& task_context) {
+        return plugin.detect_persons(session, image, task_context);
     }
 
     /** @brief 将多级嵌套人体/人脸结构以单块连续 Arena 内存打包输出至 zhulong_inference_result */
     template<typename PluginClass>
     static void pack(PluginClass& plugin, Session& session, const Image& image,
-                     zhulong_inference_result& out) {
-        auto persons = infer(plugin, session, image);
+                     TaskContext& task_context, zhulong_inference_result& out) {
+        auto persons = infer(plugin, session, image, task_context);
         size_t n_persons = persons.size();
         size_t n_faces = 0;
         size_t n_candidates = 0;
@@ -650,15 +676,16 @@ struct VehicleStructureResultAdapter {
 
     /** @brief 调用插件类的 detect_vehicles 方法执行机动车/车牌结构化推理 */
     template<typename PluginClass>
-    static std::vector<VehicleItem> infer(PluginClass& plugin, Session& session, const Image& image) {
-        return plugin.detect_vehicles(session, image);
+    static std::vector<VehicleItem> infer(PluginClass& plugin, Session& session, const Image& image,
+                                          TaskContext& task_context) {
+        return plugin.detect_vehicles(session, image, task_context);
     }
 
     /** @brief 将多级嵌套机动车/车牌结构以单块连续 Arena 内存打包输出至 zhulong_inference_result */
     template<typename PluginClass>
     static void pack(PluginClass& plugin, Session& session, const Image& image,
-                     zhulong_inference_result& out) {
-        auto vehicles = infer(plugin, session, image);
+                     TaskContext& task_context, zhulong_inference_result& out) {
+        auto vehicles = infer(plugin, session, image, task_context);
         size_t n_vehicles = vehicles.size();
         size_t n_plates = 0;
 
@@ -765,10 +792,15 @@ struct PluginApi {
         Session session;
     };
 
-    /** @brief 宿主不透明句柄 zhulong_task_ctx_h 对应的内部包装类型 */
-    struct TaskContext {
+    /**
+     * @brief 宿主不透明句柄 zhulong_task_ctx_h 对应的内部包装类型
+     *
+     * ⚠️ 与公开的 `zhulong::TaskContext` 不是同一个东西：本结构是 C ABI 句柄的
+     *    C++ 载体（持有 worker 指针），`user` 才是交给算法的那份只读上下文。
+     */
+    struct TaskState {
         WorkerContext* worker{nullptr};
-        uint64_t task_id{0};
+        ::zhulong::TaskContext user;
     };
 
     /** @brief 创建插件模型资源组，调用 PluginClass::init(config_json) */
@@ -824,9 +856,9 @@ struct PluginApi {
         if (!worker || !out_task) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
         *out_task = nullptr;
         try {
-            auto task = std::make_unique<TaskContext>();
+            auto task = std::make_unique<TaskState>();
             task->worker = reinterpret_cast<WorkerContext*>(worker);
-            task->task_id = task_id;
+            task->user.task_id = task_id;
             *out_task = reinterpret_cast<zhulong_task_ctx_h>(task.release());
             return ZHULONG_PLUGIN_OK;
         } catch (...) {
@@ -837,7 +869,7 @@ struct PluginApi {
     /** @brief 关闭摄像机任务状态 */
     static void task_close(zhulong_task_ctx_h task) {
         try {
-            delete reinterpret_cast<TaskContext*>(task);
+            delete reinterpret_cast<TaskState*>(task);
         } catch (...) {}
     }
 
@@ -847,15 +879,15 @@ struct PluginApi {
         if (!task || !frame || !out_result) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
         *out_result = nullptr;
         try {
-            auto* task_context = reinterpret_cast<TaskContext*>(task);
+            auto* task_state = reinterpret_cast<TaskState*>(task);
             Image image(*frame);
             auto result = std::make_unique<zhulong_inference_result>();
             result->frame_id = frame->frame_id;
-            result->task_id = task_context->task_id;
+            result->task_id = task_state->user.task_id;
             result->result_type = ResultAdapter::result_type;
 
-            ResultAdapter::pack(*task_context->worker->model_group->plugin,
-                                task_context->worker->session, image, *result);
+            ResultAdapter::pack(*task_state->worker->model_group->plugin,
+                                task_state->worker->session, image, task_state->user, *result);
 
             *out_result = result.release();
             return ZHULONG_PLUGIN_OK;
@@ -903,6 +935,20 @@ struct PluginApi {
 };
 
 } // namespace detail
+
+/**
+ * @brief 算法作者可见的四种结果适配器（3.0c）
+ *
+ * 绑定方式：`ZHULONG_ALGO_MAIN(MyDetector, zhulong::sdk::DetectionResultAdapter, "MyDetector", "1.0.0")`。
+ * 它们只是 `zhulong::detail` 四个适配器的公开别名：适配器内部实现属于 SDK，不是扩展点。
+ */
+namespace sdk {
+using DetectionResultAdapter = ::zhulong::detail::DetectionResultAdapter;
+using ClassificationResultAdapter = ::zhulong::detail::ClassificationResultAdapter;
+using PersonStructureResultAdapter = ::zhulong::detail::PersonStructureResultAdapter;
+using VehicleStructureResultAdapter = ::zhulong::detail::VehicleStructureResultAdapter;
+} // namespace sdk
+
 } // namespace zhulong
 
 /**

@@ -499,6 +499,21 @@ namespace detail
     }
 
     /**
+     * @brief 帧边界排出控制消息（**本任务为空实现**）
+     *
+     * 占位契约（design.md §10.8）：控制消息必须在**帧边界**消费，而不是与帧竞争同一
+     * 读取循环；这样 `MSG_TASK_CONFIG` 落地后可以直接改这里，算法侧的
+     * `detect(..., TaskContext&)` 签名不需要再动。
+     *
+     * ⚠️ 不要在这里读 socket：本任务连 `MSG_TASK_CONFIG` 都还没定义，凭空加协议会让
+     *    宿主与包两侧的消息编号假设分叉。等协议落地时由本函数负责从 socket 取消息。
+     */
+    void drain_control_messages(::zhulong::TaskContext &task_context)
+    {
+        (void)task_context;
+    }
+
+    /**
      * @brief IPC 长驻消费路径：连接一个或多个 FrameBroker 并持续消费共享内存帧
      *
      * ⚠️ 退出码表（运维与 Go 看门狗依赖此表区分故障类型）：
@@ -668,6 +683,11 @@ namespace detail
                 return;
             }
 
+            // 3.0d：一路 broker 一个 Worker 一个 TaskContext（不做 task map，也不多路复用
+            // 同一个 Worker）。task_id 取该路的 stream_id，与 task_open 的入参一致。
+            ::zhulong::TaskContext task_context;
+            task_context.task_id = stream_id;
+
             int frames_processed = 0;
             bool last_had_targets = false;
             bool process_failure_reported = false;
@@ -745,6 +765,9 @@ namespace detail
                             view.strides[2] = dispatch.strides[2];
                             view.planes[2] = slot_base + dispatch.offsets[2];
                         }
+
+                        // 帧边界：先排控制消息，再推理（TaskContext 由骨架按流维护）
+                        drain_control_messages(task_context);
 
                         zhulong_inference_result *result = nullptr;
                         auto t0 = std::chrono::steady_clock::now();

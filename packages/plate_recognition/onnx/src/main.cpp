@@ -11,5 +11,5 @@
 #include "plate_recognition.hpp"
 
 ZHULONG_ALGO_MAIN(zhulong::plate::PlateRecognitionPlugin,
-                  zhulong::detail::VehicleStructureResultAdapter,
+                  zhulong::sdk::VehicleStructureResultAdapter,
                   "PlateRecognition", "1.0.0")

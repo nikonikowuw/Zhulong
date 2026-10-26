@@ -34,14 +34,35 @@
 
 此修复**纳入本任务**，是阶段 3 的前置改动。原因：SDK 分发物是本任务的核心交付物，`detect` 签名一经发布即成为源码级契约。
 
-- [ ] **3.0a** `native/sdk/include/zhulong/algo.hpp`：在 `zhulong` namespace 下公开 `TaskContext { uint64_t task_id; TaskConfig params{}; }`；`TaskConfig` 当前为空值类型，不预设业务字段。所有 `ResultAdapter::infer()` 及 `detect` / `classify` / `detect_persons` / `detect_vehicles` 签名传入 `TaskContext&`。
-- [ ] **3.0b** `packages/face_recognition/{onnx,rk3568}/src/*` 与 `packages/plate_recognition/onnx/src/*` 的入口类同步改签名：**只加参数，不读取 `params`**，保证输出与改造前一致。
-- [ ] **3.0c** SDK 以模板 `run<PluginClass, ResultAdapter>` 在编译期绑定算法和结果适配器；`ZHULONG_ALGO_MAIN(PluginClass, ResultAdapter, PluginName, PluginVersion)` 生成唯一 `main`。`PluginFactory` 仅为 SDK `detail` 层的 C ABI API-table 构造函数指针，不由算法作者实现；结果适配器以 `zhulong::sdk` 下的四种公开类型提供。
-- [ ] **3.0d** `algo_main.cpp` 每个 Worker 持有一路流对应的 `TaskContext`，在帧边界调用空实现 `drain_control_messages(TaskContext&)`；不引入 task map 或多 broker 复用 Worker。
+- [x] **3.0a** `native/sdk/include/zhulong/algo.hpp`：在 `zhulong` namespace 下公开 `TaskContext { uint64_t task_id; TaskConfig params{}; }`；`TaskConfig` 当前为空值类型，不预设业务字段。所有 `ResultAdapter::infer()` 及 `detect` / `classify` / `detect_persons` / `detect_vehicles` 签名传入 `TaskContext&`。
+- [x] **3.0b** `packages/face_recognition/{onnx,rk3568}/src/*` 与 `packages/plate_recognition/onnx/src/*` 的入口类同步改签名：**只加参数，不读取 `params`**，保证输出与改造前一致。
+- [x] **3.0c** SDK 以模板 `run<PluginClass, ResultAdapter>` 在编译期绑定算法和结果适配器；`ZHULONG_ALGO_MAIN(PluginClass, ResultAdapter, PluginName, PluginVersion)` 生成唯一 `main`。`PluginFactory` 仅为 SDK `detail` 层的 C ABI API-table 构造函数指针，不由算法作者实现；结果适配器以 `zhulong::sdk` 下的四种公开类型提供。
+- [x] **3.0d** `algo_main.cpp` 每个 Worker 持有一路流对应的 `TaskContext`，在帧边界调用空实现 `drain_control_messages(TaskContext&)`；不引入 task map 或多 broker 复用 Worker。
 
 验收口径：AC3 由「代码不变」改为「同参数下输出一致」——允许入口签名变更，不允许 `count`/`class_id`/`text`/`score` 语义变化。
 
 **已知遗留（不在本任务）**：`TaskContext::params` 本任务始终为默认值；从 `MSG_TASK_CONFIG` 填充是后续任务。
+
+**执行记录（3.0a–3.0d，2026-10-26）**
+
+- **3.0a**：`zhulong::TaskConfig`（空值类型）+ `zhulong::TaskContext { uint64_t task_id; TaskConfig params; }`
+  进 `algo.hpp` 公开面；四个 `ResultAdapter::infer/pack` 都多一个 `TaskContext&` 参数，算法方法签名随之变为
+  `detect(session, image, task_context)` 等。
+- **内部句柄改名**：`PluginApi::TaskContext` → `PluginApi::TaskState`（C ABI 句柄的 C++ 载体，持 worker 指针），
+  并新增 `TaskState::user`（`::zhulong::TaskContext`）。不这么改，`detail` 与公开命名空间里的两个
+  `TaskContext` 会在模板实例化里互相遮蔽——这种事不该留给下一个人猜。
+- **3.0b**：`plate_recognition/onnx` 的 `detect_vehicles` 与 `face_recognition` 的 `detect_persons`
+  只加参数、不读 `params`；三个 mock 夹具插件同步。AC3 的验收因此从「代码不变」变成「同参数下输出一致」——
+  实测 `make native-test` 28/28（含车牌号/颜色金标、face 金标）与改造前一致。
+- **3.0c**：结果适配器以 `zhulong::sdk::{Detection,Classification,PersonStructure,VehicleStructure}ResultAdapter`
+  公开（`detail` 里的是实现）；`ZHULONG_ALGO_MAIN` 模板绑定不变。包侧 `src/main.cpp` 已改用公开别名。
+- **3.0d**：`algo_main.cpp` 的 Worker 循环里一路 broker 一个 `zhulong::TaskContext`（`task_id = stream_id`），
+  在帧边界调用空实现 `drain_control_messages(TaskContext&)`。**刻意不读 socket**：`MSG_TASK_CONFIG`
+  还没定义，凭空加消息会让宿主与包两侧的编号假设分叉。
+- spec 同步：`algo-plugin-contract.md` 新增「`TaskContext`：任务身份与参数的唯一入口」，写清只读、
+  不可跨帧持有、`task_id` 不是跟踪 ID，以及新增字段必须走 `TaskConfig` + `drain_control_messages`。
+- 独立包实测（/tmp 拷贝 + SDK 前缀）：`make` 产出 exe，`--verify --sample <ppm>` 仍 `sample_decoded:true, count:2`；
+  `make test` 仍检出 `豫B2V9L7 / 辽DU4356`。
 
 ---
 

@@ -26,7 +26,8 @@ public:
 
     zhulong_status_t init(const std::string& config_json);
     zhulong::Session create_session(uint32_t worker_id);
-    std::vector<zhulong::VehicleItem> detect_vehicles(zhulong::Session& session, const zhulong::Image& image);
+    std::vector<zhulong::VehicleItem> detect_vehicles(zhulong::Session& session, const zhulong::Image& image,
+                                                      zhulong::TaskContext& task_context);
 
 private:
     PlateDetector detector_;

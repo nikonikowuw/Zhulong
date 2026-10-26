@@ -156,8 +156,12 @@ int main(int argc, char** argv) {
     frame.strides[0] = width * 3;
     frame.dma_buf_fd = -1;
 
+    // 与产品路径一致：算法方法需要 TaskContext（dev 环境只填 task_id，params 用默认值）
+    zhulong::TaskContext task_context;
+    task_context.task_id = 1;
+
     const auto started = std::chrono::steady_clock::now();
-    const auto vehicles = plugin.detect_vehicles(session, zhulong::Image(frame));
+    const auto vehicles = plugin.detect_vehicles(session, zhulong::Image(frame), task_context);
     const double cost_ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 

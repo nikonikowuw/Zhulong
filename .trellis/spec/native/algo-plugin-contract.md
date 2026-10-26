@@ -89,7 +89,7 @@ void             zhulong_face_extract_release(void);
 | `zhulong/runtime/{runtime_factory,vision_backend,tensor,gallery_registry,inference_backend}.hpp` | 运行库 HAL 与张量：算法实现直接使用（后端工厂、视觉前处理、`Tensor`、底库快照） |
 | `zhulong/runtime/yuv_sampling.hpp` | YUV→RGB 采样数学（唯一实现，见 §2 的 letterbox 契约） |
 | `zhulong/platform/dmabuf_allocator.hpp` | DMA-BUF 分配与 CPU 缓存同步（`DmaBuffer` / `ScopedCpuSync`），板端零拷贝前处理用 |
-| `zhulong/algo_main.hpp`（阶段 3 落地） | 包可执行文件骨架：`ZHULONG_ALGO_MAIN(...)` |
+| `zhulong/algo_main.hpp` | 包可执行文件骨架：`ZHULONG_ALGO_MAIN(...)` + `sdk::Options` |
 
 - **铁律**：算法包 target 的 `target_include_directories` 里**只允许** `sdk/include`（加上包自身目录）；`native/src` 是宿主实现目录，任何包代码 `#include <algorithm/...>`、`<platform/...>`、`<common/...>` 都算外溢。
 - 收口的唯一方向是「把它移进 SDK」或「改走公开 API」，绝不靠给包 target 加 `-I native/src` 糊过去——第三方拿不到 `native/src`，加一次就等于让阶段 7 的干净容器构建必挂。
@@ -103,7 +103,8 @@ class MyDetector {
 public:
     zhulong_status_t init(const std::string& config_json);
     zhulong::Session create_session(uint32_t worker_id);
-    std::vector<zhulong::Detection> detect(zhulong::Session&, const zhulong::Image&);
+    std::vector<zhulong::Detection> detect(zhulong::Session&, const zhulong::Image&,
+                                           zhulong::TaskContext&);
 };
 ZHULONG_REGISTER_DETECTOR_PLUGIN(MyDetector, "MyDetector", "1.0.0")
 
@@ -111,7 +112,8 @@ class MyClassifier {
 public:
     zhulong_status_t init(const std::string& config_json);
     zhulong::Session create_session(uint32_t worker_id);
-    std::vector<zhulong::Classification> classify(zhulong::Session&, const zhulong::Image&);
+    std::vector<zhulong::Classification> classify(zhulong::Session&, const zhulong::Image&,
+                                                  zhulong::TaskContext&);
 };
 ZHULONG_REGISTER_CLASSIFIER_PLUGIN(MyClassifier, "MyClassifier", "1.0.0")
 
@@ -119,7 +121,8 @@ class MyPersonStructurePlugin {
 public:
     zhulong_status_t init(const std::string& config_json);
     zhulong::Session create_session(uint32_t worker_id);
-    std::vector<zhulong::PersonItem> detect_persons(zhulong::Session&, const zhulong::Image&);
+    std::vector<zhulong::PersonItem> detect_persons(zhulong::Session&, const zhulong::Image&,
+                                                   zhulong::TaskContext&);
 };
 ZHULONG_REGISTER_PERSON_STRUCTURE_PLUGIN(MyPersonStructurePlugin, "MyPersonStructure", "1.0.0")
 
@@ -127,7 +130,8 @@ class MyVehicleStructurePlugin {
 public:
     zhulong_status_t init(const std::string& config_json);
     zhulong::Session create_session(uint32_t worker_id);
-    std::vector<zhulong::VehicleItem> detect_vehicles(zhulong::Session&, const zhulong::Image&);
+    std::vector<zhulong::VehicleItem> detect_vehicles(zhulong::Session&, const zhulong::Image&,
+                                                     zhulong::TaskContext&);
 };
 ZHULONG_REGISTER_VEHICLE_STRUCTURE_PLUGIN(MyVehicleStructurePlugin, "MyVehicleStructure", "1.0.0")
 ```
@@ -161,6 +165,23 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 - ⚠️ **YUV 采样数学只有一份实现**：`native/sdk/include/zhulong/runtime/yuv_sampling.hpp`（`sample_plane_bilinear` / `sample_nv12_uv_bilinear` / `yuv_to_rgb`；随 SDK 分发，因为车牌识别插件的裁剪采样在生产路径上就要用它）。CPU 视觉后端与车牌识别插件的裁剪采样都必须复用它，不得各自复制一份 —— 两份实现一旦在 UV 索引或 clamp 边界上漂移，同一码流在「喂模型」与「裁给识别器」两条路径上会出现颜色差异，真机只表现为「识别率莫名变低」。
 - RGB/BGR 目标顺序不一致时必须交换 R/B 通道。缩放采用像素中心坐标、双线性插值和边界 clamp；Letterbox 补边值为 114，缩放直接写到最终 Tensor ROI，不分配 `resized_temp`。
 - 空默认 Tensor 的 `element_count()` 为 0；非空 shape 中任一维度 `<= 0` 抛出 `std::invalid_argument`；元素数或字节数乘法溢出抛出 `std::length_error`。动态 shape 分配不在当前 API 支持范围内。
+
+### `TaskContext`：任务身份与参数的唯一入口
+
+推理方法（`detect` / `classify` / `detect_persons` / `detect_vehicles`）的第三个参数
+`zhulong::TaskContext&` 是任务身份与参数的**唯一**入口：
+
+| 字段 | 语义 | 当前状态 |
+| :--- | :--- | :--- |
+| `task_id` | 该路流的任务身份（骨架按「一路 broker 一个 Worker」创建，取 `stream_id`） | 已生效 |
+| `params`（`TaskConfig`） | 任务级参数（区域掩码、阈值覆盖等） | **空值类型**，恒为默认值；`MSG_TASK_CONFIG` 是后续任务 |
+
+铁律：
+
+- 算法侧**只读**：不得修改、不得保存该引用（只在本次调用期间有效），需要跨帧保留的自己拷贝。
+- 不得把 `task_id` 当作跟踪 ID 或数据库主键——它标识的是「宿主给这路流开的任务」。
+- 新增字段必须先改 `TaskConfig` 再改骨架的 `drain_control_messages(TaskContext&)`
+  （帧边界排控制消息），不能在 `process` 里直接读 socket。
 
 ### 校验矩阵与错误码
 

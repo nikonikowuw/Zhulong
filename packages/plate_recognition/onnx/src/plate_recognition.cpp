@@ -221,7 +221,8 @@ float resolve_threshold(const std::string& config_json, const char* config_key, 
         return zhulong::Session();
     }
 
-    std::vector<zhulong::VehicleItem> PlateRecognitionPlugin::detect_vehicles(zhulong::Session& session, const zhulong::Image& image)
+    std::vector<zhulong::VehicleItem> PlateRecognitionPlugin::detect_vehicles(
+        zhulong::Session& session, const zhulong::Image& image, zhulong::TaskContext& task_context)
     {
         const uint32_t worker_id = session.worker_id();
 
