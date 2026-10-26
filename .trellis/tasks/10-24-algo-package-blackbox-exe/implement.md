@@ -736,6 +736,21 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
 **Review gate 4**：AC4 —— 两个算法包均能安装、启动、停止、重启及回滚；旧 `.so` 包明确拒绝，且不进入启动重试；AC9-AC13 全过；`grep -n "dlopen\|dlsym" native/src/abi/engine.cpp` 为空。
 
 ---
+      **4.8 进行中（2026-10-26，提交 cfc6493）—— 通道已就位**
+
+      - SDK：`--extract-feature`（28 字节帧头 `ZLFE` + 一帧一调用 + stdout 单行 JSON），
+        能力走**弱符号** `zhulong_face_extract_feature`；帧级错误不退进程，只有能力缺失 /
+        帧截断返回非 0。顺带删掉 `--plugin` 过渡兼容。
+      - Go：`algorunner.StartPinned` + `PinnedProcess`（pin→spawn→Wait→unlock 封成一个原语），
+        `internal/faceextract.Client`（并发 1 / request_id 校验 / 30s 超时杀组 / 空闲 60s 回收 /
+        单帧重试 1 次 / 入口 `(dev,ino,size,mtime)` 失效）。
+      - 真包实测：face 512 维成功、双帧 ID 分离、plate `UNSUPPORTED` exit 5、坏 magic
+        `INVALID_INPUT` exit 5、空 stdin exit 0。
+      - **尚未接线**（下一步）：`internal/app/adapters.go` 换成 faceextract 客户端（含图片解码
+        搬出 `internal/engine`）、`[person].extractor_algorithm` 配置、删除
+        `Zhulong_engine_extract_face_feature` 与 `engine.cpp` 的 `FacePluginLoader`、
+        以及随之可删的两个 SHARED 插件 target 与符号白名单。
+
 
 ## 阶段 5：孤儿认亲适配
 
