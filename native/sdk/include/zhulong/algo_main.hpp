@@ -41,6 +41,7 @@ struct Options {
     std::string algorithm_id;           /**< `--algorithm-id`，写进结果载荷 */
     std::string sample_path;            /**< `--verify --sample <path>`，PPM/PGM 才会被真实解码 */
     bool verify{false};                 /**< 单次验包模式（不连 broker） */
+    bool extract_feature{false};        /**< `--extract-feature`：stdin 帧流 → stdout 特征行 */
     int max_frames{-1};                 /**< `--max-frames <N>`，<0 表示不限（联调/自测用） */
 };
 
@@ -60,6 +61,7 @@ void report_dlopen_failure(const std::string& error_text);
  *
  * verify 模式：model_create → worker_create → task_open → process → release 一次，
  * 输出与 IPC 结果载荷同构的 JSON（多出 status/sample/width/height）。
+ * extract-feature 模式：stdin 帧流 → `zhulong_face_extract_feature`（弱符号）→ stdout 行。
  * 否则：连所有 `--broker`，每路一个 Worker 线程长驻消费，退出码见 `run_ipc_workers` 注释。
  */
 int run_api(const zhulong_plugin_api_v1& api, const Options& options);

@@ -24,6 +24,11 @@ import "syscall"
 //
 // ⚠️ Requires the spawn to happen on a pinned OS thread; see
 // RunnerProcess.Start for the thread-lifetime contract.
+// PackageSysProcAttr is runnerSysProcAttr under an exported name, so packages
+// outside this one (faceextract) reuse the exact same spawn contract instead of
+// re-deriving it — two opinions about Pdeathsig is how orphans survive.
+func PackageSysProcAttr() *syscall.SysProcAttr { return runnerSysProcAttr() }
+
 func runnerSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{
 		Setpgid:   true,

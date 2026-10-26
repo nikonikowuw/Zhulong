@@ -45,6 +45,7 @@ struct dma_buf_sync
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -381,6 +382,202 @@ namespace detail
      * @param sample_path 样本帧路径（PPM/PGM 会被真实解码）
      * @return int 0 全链路通过；非 0 为失败阶段序号
      */
+    // ======================================================================
+    //  --extract-feature：宿主底库登记用的单次特征提取通道
+    // ======================================================================
+    //
+    // 为什么是弱符号：能力由**包**提供（face 包实现了它，plate 包不实现）。宿主的旧通道
+    // 走 `dlopen(.so) + dlsym("zhulong_face_extract_feature")`，而 PIE 可执行文件无法
+    // 被 dlopen，所以改成「骨架弱引用 + 包内定义静态链入」。
+    //
+    // ⚠️ 弱引用必须由包**直接编译的源文件**提供定义：GNU ld 不会为满足弱未定义引用去
+    //    抽取静态归档成员。把定义搬进 .a 会让 face 包静默退化成 UNSUPPORTED（底库登记
+    //    功能消失且没有错误日志）——验收门禁就是「face 包喂一帧不得返回 UNSUPPORTED」。
+    extern "C" __attribute__((weak)) zhulong_status_t zhulong_face_extract_feature(
+        const uint8_t *pixel_data,
+        int32_t width,
+        int32_t height,
+        int32_t stride,
+        int32_t format,
+        float *out_features,
+        uint32_t *feature_dim);
+
+    namespace
+    {
+        constexpr uint32_t kExtractFrameMagic = 0x45464C5AU; // ASCII "ZLFE"（小端读作 u32）
+        constexpr uint32_t kExtractHeaderBytes = 28;
+        constexpr uint32_t kExtractMaxDimension = 16384;
+        constexpr uint32_t kExtractMaxFeatureDim = 512;
+
+        struct ExtractFrameHeader
+        {
+            uint32_t magic{0};
+            uint32_t request_id{0};
+            uint32_t width{0};
+            uint32_t height{0};
+            uint32_t stride{0};
+            uint32_t format{0};
+            uint32_t payload_len{0};
+        };
+
+        uint32_t read_le_u32(const uint8_t *bytes)
+        {
+            return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8) |
+                   (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
+        }
+
+        /** @brief 读一个完整帧头；EOF（干净的流结束）与半帧（截断）分别返回 false */
+        bool read_extract_header(std::istream &input, ExtractFrameHeader &header, bool &clean_eof)
+        {
+            uint8_t raw[kExtractHeaderBytes];
+            input.read(reinterpret_cast<char *>(raw), sizeof(raw));
+            const auto got = static_cast<uint32_t>(input.gcount());
+            if (got == 0)
+            {
+                clean_eof = true;
+                return false;
+            }
+            clean_eof = false;
+            if (got != sizeof(raw))
+            {
+                return false;
+            }
+            header.magic = read_le_u32(raw + 0);
+            header.request_id = read_le_u32(raw + 4);
+            header.width = read_le_u32(raw + 8);
+            header.height = read_le_u32(raw + 12);
+            header.stride = read_le_u32(raw + 16);
+            header.format = read_le_u32(raw + 20);
+            header.payload_len = read_le_u32(raw + 24);
+            return true;
+        }
+
+        void emit_extract_failure(uint32_t request_id, const char *code, const std::string &error)
+        {
+            std::cout << "{\"request_id\":" << request_id << ",\"status\":\"failed\",\"code\":"
+                      << runner::json_quote(code) << ",\"error\":" << runner::json_quote(error) << "}"
+                      << std::endl;
+        }
+
+        void emit_extract_result(uint32_t request_id, const float *features, uint32_t dim)
+        {
+            std::ostringstream output;
+            output << "{\"request_id\":" << request_id << ",\"status\":\"passed\",\"feature_dim\":" << dim
+                   << ",\"features\":[";
+            for (uint32_t i = 0; i < dim; ++i)
+            {
+                if (i != 0)
+                {
+                    output << ',';
+                }
+                // 固定 9 位有效数字：特征向量的用途是相似度比较，float 精度的完整十进制
+                // 表示没有必要，反而让协议行变长。
+                output << std::setprecision(9) << features[i];
+            }
+            output << "]}";
+            std::cout << output.str() << std::endl;
+        }
+
+        /** @brief zhulong_status_t → 协议 code；失败语义见 design §11.8 */
+        const char *extract_code_for_status(zhulong_status_t status)
+        {
+            switch (status)
+            {
+            case ZHULONG_PLUGIN_OK:
+                return "OK";
+            case ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT:
+                return "INVALID_INPUT";
+            case ZHULONG_PLUGIN_ERR_NOT_FOUND:
+                return "NO_FACE_DETECTED";
+            case ZHULONG_PLUGIN_ERR_NOT_SUPPORTED:
+                return "MODEL_UNAVAILABLE";
+            default:
+                return "INTERNAL";
+            }
+        }
+    } // namespace
+
+    /**
+     * @brief 执行 `--extract-feature`：stdin 帧流 → stdout 每帧一行 JSON
+     *
+     * 帧级错误（无脸/输入非法）**不退出进程**——一张坏图毁掉热进程会让后续登记全部失败。
+     * 只有「能力缺失 / 流截断」这类进程级问题才返回非 0。
+     *
+     * @return 0 = stdin 正常 EOF；5 = 能力缺失（弱符号未解析）或帧流截断
+     */
+    int run_extract_feature()
+    {
+        const bool has_capability = &zhulong_face_extract_feature != nullptr;
+
+        while (true)
+        {
+            ExtractFrameHeader header{};
+            bool clean_eof = false;
+            if (!read_extract_header(std::cin, header, clean_eof))
+            {
+                if (clean_eof)
+                {
+                    return 0;
+                }
+                write_runner_error_line("{\"status\":\"failed\",\"stage\":\"extract\",\"code\":\"INVALID_INPUT\",",
+                                        "\"error\":\"truncated frame header\"}");
+                return 5;
+            }
+
+            const bool header_valid = header.magic == kExtractFrameMagic &&
+                                      header.width > 0 && header.height > 0 &&
+                                      header.width <= kExtractMaxDimension && header.height <= kExtractMaxDimension &&
+                                      header.stride >= header.width * 3 &&
+                                      header.payload_len == header.stride * header.height;
+            if (!header_valid)
+            {
+                emit_extract_failure(header.request_id, "INVALID_INPUT", "malformed frame header");
+                // 帧体长度不可信：无法跳过，只能结束（否则会把像素当帧头解析）。
+                return 5;
+            }
+
+            std::vector<uint8_t> pixels(header.payload_len);
+            std::cin.read(reinterpret_cast<char *>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
+            if (static_cast<uint32_t>(std::cin.gcount()) != header.payload_len)
+            {
+                emit_extract_failure(header.request_id, "INVALID_INPUT", "truncated frame payload");
+                return 5;
+            }
+
+            if (!has_capability)
+            {
+                // 包没实现该能力：逐帧如实回答，然后以进程级码退出，宿主据此映射 500。
+                emit_extract_failure(header.request_id, "UNSUPPORTED", "package does not provide zhulong_face_extract_feature");
+                return 5;
+            }
+
+            float features[kExtractMaxFeatureDim]{};
+            uint32_t dim = kExtractMaxFeatureDim;
+            const zhulong_status_t status = zhulong_face_extract_feature(
+                pixels.data(), static_cast<int32_t>(header.width), static_cast<int32_t>(header.height),
+                static_cast<int32_t>(header.stride), static_cast<int32_t>(header.format), features, &dim);
+            if (status != ZHULONG_PLUGIN_OK)
+            {
+                emit_extract_failure(header.request_id, extract_code_for_status(status), "feature extraction failed");
+                if (status == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED)
+                {
+                    // 后端不具备真实人脸能力（桩/缺模型）：进程级不可用，别让宿主反复重试。
+                    return 5;
+                }
+                continue;
+            }
+            if (dim == 0 || dim > kExtractMaxFeatureDim)
+            {
+                // 维度非法按 internal 处理：宿主侧拒绝写入底库（严禁零向量）。
+                emit_extract_failure(header.request_id, "INTERNAL", "provider returned an invalid feature dimension");
+                continue;
+            }
+
+            emit_extract_result(header.request_id, features, dim);
+            std::cout.flush();
+        }
+    }
+
     int run_verify(const zhulong_plugin_api_v1 &api, const std::string &sample_path)
     {
         std::cout << "{\"step\":\"abi_verified\",\"name\":"
@@ -963,6 +1160,10 @@ namespace detail
             {
                 options.verify = true;
             }
+            else if (arg == "--extract-feature")
+            {
+                options.extract_feature = true;
+            }
             else if (arg == "--max-frames")
             {
                 if (!take_value(value)) return false;
@@ -972,12 +1173,6 @@ namespace detail
                     error = "--max-frames must be positive";
                     return false;
                 }
-            }
-            else if (arg == "--plugin")
-            {
-                // 过渡期兼容（阶段 4 之前的宿主仍会带 --plugin <自身路径>）：
-                // 包内不再需要这个路径——可执行文件不是被 dlopen 的。
-                if (!take_value(value)) return false;
             }
             else
             {
@@ -991,9 +1186,18 @@ namespace detail
             if (options.sample_path.empty()) options.sample_path = "sample.jpg";
             return true;
         }
+        if (options.extract_feature)
+        {
+            if (!options.brokers.empty())
+            {
+                error = "--extract-feature does not take --broker (stdin carries the frames)";
+                return false;
+            }
+            return true;
+        }
         if (options.brokers.empty())
         {
-            error = "no --broker provided (and not in --verify mode)";
+            error = "no --broker provided (and not in --verify / --extract-feature mode)";
             return false;
         }
         return true;
@@ -1008,8 +1212,19 @@ namespace detail
         //    启动，或进程内已装了 log sink。两种都不是错误——此时**不归我们所有**，
         //    因此也不能在这里 stop（会把宿主的日志通道关掉）。
         const bool owns_log_writer = zhulong::start_runner_log_writer();
-        const int rc = options.verify ? run_verify(api, options.sample_path)
-                                      : run_ipc_workers(api, options);
+        int rc = 0;
+        if (options.verify)
+        {
+            rc = run_verify(api, options.sample_path);
+        }
+        else if (options.extract_feature)
+        {
+            rc = run_extract_feature();
+        }
+        else
+        {
+            rc = run_ipc_workers(api, options);
+        }
         if (owns_log_writer)
         {
             zhulong::stop_runner_log_writer();
