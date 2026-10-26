@@ -5,7 +5,7 @@
 
 #include <zhulong/algo.hpp>
 #include <zhulong/plugin.h>
-#include <algorithm/runtime/gallery_registry.hpp>
+#include <zhulong/runtime/gallery_registry.hpp>
 #include "detector.hpp"
 #include "aligner.hpp"
 #include "extractor.hpp"

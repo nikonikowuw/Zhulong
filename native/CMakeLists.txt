@@ -335,9 +335,10 @@ foreach(target ZhulongPlatformObjects ZhulongAlgoRuntimeObjects)
 endforeach()
 foreach(target ZhulongAlgoRuntime ZhulongAlgoRuntimeStatic)
     target_compile_features(${target} PUBLIC cxx_std_17)
-    target_include_directories(${target} PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src
-    )
+    # ⚠️ 对外只暴露 sdk/include（阶段 2.3）：算法包 target 与第三方构建只允许这套头。
+    #    `src` 是仓库内部实现目录，任何消费方想要它都应由自己显式声明（白盒测试才会要）。
+    target_include_directories(${target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include)
+    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_compile_definitions(${target} PUBLIC ${ZHULONG_ALGO_RUNTIME_PUBLIC_DEFS})
 endforeach()
 foreach(target ZhulongPlatformObjects ZhulongAlgoRuntimeObjects)
@@ -397,21 +398,23 @@ target_link_libraries(zhulong_algo_runner PRIVATE ZhulongAlgoIpc ZhulongAlgoRunt
 add_library(MockDetector SHARED tests/plugins/mock_detector/mock_detector.cpp)
 target_compile_features(MockDetector PUBLIC cxx_std_17)
 target_compile_definitions(MockDetector PRIVATE ZHULONG_PLUGIN_BUILD)
-target_include_directories(MockDetector PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# ⚠️ 算法包 target 只允许 sdk/include：不得再依赖 native/src（阶段 2.3）。
+#    插件若需要 src 内的头，说明公共头还没收拢干净，先去修根因。
+target_include_directories(MockDetector PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include)
 target_link_libraries(MockDetector PRIVATE ZhulongAlgoRuntime)
 set_target_properties(MockDetector PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 
 add_library(MockClassifier SHARED tests/plugins/mock_classifier/mock_classifier.cpp)
 target_compile_features(MockClassifier PUBLIC cxx_std_17)
 target_compile_definitions(MockClassifier PRIVATE ZHULONG_PLUGIN_BUILD)
-target_include_directories(MockClassifier PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(MockClassifier PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include)
 target_link_libraries(MockClassifier PRIVATE ZhulongAlgoRuntime)
 set_target_properties(MockClassifier PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 
 add_library(MockPersonStructure SHARED tests/plugins/mock_person_structure/mock_person_structure.cpp)
 target_compile_features(MockPersonStructure PUBLIC cxx_std_17)
 target_compile_definitions(MockPersonStructure PRIVATE ZHULONG_PLUGIN_BUILD)
-target_include_directories(MockPersonStructure PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(MockPersonStructure PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include)
 target_link_libraries(MockPersonStructure PRIVATE ZhulongAlgoRuntime)
 set_target_properties(MockPersonStructure PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
 
@@ -429,7 +432,6 @@ target_compile_features(FaceRecognitionPlugin PUBLIC cxx_std_17)
 target_compile_definitions(FaceRecognitionPlugin PRIVATE ZHULONG_PLUGIN_BUILD)
 target_include_directories(FaceRecognitionPlugin PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../packages/face_recognition/src
 )
 target_link_libraries(FaceRecognitionPlugin PRIVATE ZhulongAlgoRuntime)
@@ -458,7 +460,6 @@ target_compile_features(PlateRecognitionPlugin PUBLIC cxx_std_17)
 target_compile_definitions(PlateRecognitionPlugin PRIVATE ZHULONG_PLUGIN_BUILD)
 target_include_directories(PlateRecognitionPlugin PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/src
 )
 target_link_libraries(PlateRecognitionPlugin PRIVATE ZhulongAlgoRuntime)

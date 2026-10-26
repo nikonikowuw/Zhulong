@@ -24,7 +24,7 @@
 
 #include <rknn_api.h>
 
-#include <algorithm/runtime/inference_backend.hpp>
+#include <zhulong/runtime/inference_backend.hpp>
 
 #include <mutex>
 #include <string>

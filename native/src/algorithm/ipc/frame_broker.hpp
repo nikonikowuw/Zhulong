@@ -17,7 +17,7 @@
 #include "ipc_protocol.hpp"
 #include "shm_pool.hpp"
 #include "unix_socket.hpp"
-#include <platform/dmabuf/dmabuf_allocator.hpp>
+#include <zhulong/platform/dmabuf_allocator.hpp>
 #include <Zhulong/frame.hpp>
 #include <functional>
 #include <string>

@@ -5,7 +5,7 @@
 
 #include "cpu_vision_backend.hpp"
 #include "letterbox_geometry.hpp"
-#include "yuv_sampling.hpp"
+#include <zhulong/runtime/yuv_sampling.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstring>

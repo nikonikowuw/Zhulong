@@ -18,10 +18,10 @@
 #define ZHULONG_ALGO_HPP
 
 #include <zhulong/plugin.h>
-#include <algorithm/runtime/runtime_factory.hpp>
-#include <algorithm/runtime/vision_backend.hpp>
-#include <algorithm/runtime/tensor.hpp>
-#include <algorithm/runtime/gallery_registry.hpp>
+#include <zhulong/runtime/runtime_factory.hpp>
+#include <zhulong/runtime/vision_backend.hpp>
+#include <zhulong/runtime/tensor.hpp>
+#include <zhulong/runtime/gallery_registry.hpp>
 
 #include <string>
 #include <vector>

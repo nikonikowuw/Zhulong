@@ -3,7 +3,7 @@
  * @brief Linux DMA-BUF 物理内存分配器与 CPU 缓存一致性同步实现
  */
 
-#include "dmabuf_allocator.hpp"
+#include <zhulong/platform/dmabuf_allocator.hpp>
 
 #if defined(ZHULONG_IPC_LOGGING)
 #include "common/log.hpp"

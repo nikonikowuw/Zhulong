@@ -10,7 +10,7 @@
 
 #include <onnxruntime_c_api.h>
 #include <zhulong/plugin.h>
-#include <algorithm/runtime/tensor.hpp>
+#include <zhulong/runtime/tensor.hpp>
 
 namespace zhulong {
 

@@ -6,9 +6,9 @@
 #include <backends/onnx/onnx_error_map.hpp>
 #include <backends/onnx/onnx_inference_backend.hpp>
 #include <backends/onnx/onnx_types.hpp>
-#include <algorithm/runtime/inference_backend.hpp>
-#include <algorithm/runtime/runtime_factory.hpp>
-#include <algorithm/runtime/tensor.hpp>
+#include <zhulong/runtime/inference_backend.hpp>
+#include <zhulong/runtime/runtime_factory.hpp>
+#include <zhulong/runtime/tensor.hpp>
 
 #include <cmath>
 #include <cstdint>

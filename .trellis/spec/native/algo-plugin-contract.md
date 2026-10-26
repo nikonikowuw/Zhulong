@@ -80,6 +80,22 @@ void             zhulong_face_extract_release(void);
 
 ## 3. 现代 C++17 SDK 门面 (`native/sdk/include/zhulong/algo.hpp`)
 
+### 3.0 公共头布局（算法包只能看到 `native/sdk/include`）
+
+| 头文件 | 角色 |
+| :--- | :--- |
+| `zhulong/plugin.h` | 纯 C ABI（结构体、状态码、函数指针表） |
+| `zhulong/algo.hpp` | 现代 C++17 门面（`Session` / `Image` / `Model` / 结果类型 / ops） |
+| `zhulong/runtime/{runtime_factory,vision_backend,tensor,gallery_registry,inference_backend}.hpp` | 运行库 HAL 与张量：算法实现直接使用（后端工厂、视觉前处理、`Tensor`、底库快照） |
+| `zhulong/runtime/yuv_sampling.hpp` | YUV→RGB 采样数学（唯一实现，见 §2 的 letterbox 契约） |
+| `zhulong/platform/dmabuf_allocator.hpp` | DMA-BUF 分配与 CPU 缓存同步（`DmaBuffer` / `ScopedCpuSync`），板端零拷贝前处理用 |
+| `zhulong/algo_main.hpp`（阶段 3 落地） | 包可执行文件骨架：`ZHULONG_ALGO_MAIN(...)` |
+
+- **铁律**：算法包 target 的 `target_include_directories` 里**只允许** `sdk/include`（加上包自身目录）；`native/src` 是宿主实现目录，任何包代码 `#include <algorithm/...>`、`<platform/...>`、`<common/...>` 都算外溢。
+- 收口的唯一方向是「把它移进 SDK」或「改走公开 API」，绝不靠给包 target 加 `-I native/src` 糊过去——第三方拿不到 `native/src`，加一次就等于让阶段 7 的干净容器构建必挂。
+- 实现细节头（`cpu_inference_backend.hpp`、`cpu_vision_backend.hpp`、`letterbox_geometry.hpp`、`rknn_*`、`onnx_*`）**不**进 SDK。
+- `Tensor::data<T>()` 硬校验 `dtype()`：T 与元素类型不符抛 `std::invalid_argument`，需要字节视图时用 `raw_data()`。
+
 算法类实现 `init(config_json)`、`create_session(worker_id)`，再按任务类型提供对应推理方法：
 
 ```cpp
@@ -142,7 +158,7 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 
 - `zhulong_frame_view.strides[0] == 0` 表示 packed 紧密排列；正 stride 必须至少为 `width * 3`；负值或不足行宽返回 `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`。
 - **YUV 输入**：`letterbox` 接受 `YUV420P` 与 `NV12`，目标格式仍限 `RGB24`/`BGR24`。亮度与色度均按像素中心坐标双线性采样（越界 clamp 到边缘），再经 ITU-R BT.601 有限范围系数转 RGB。`RGBA32`、`UNKNOWN` 及其他未实现格式返回 `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED`，且不得读取源像素；`YUV420P`/`NV12` 缺少必需平面则返回 `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`。
-- ⚠️ **YUV 采样数学只有一份实现**：`native/src/algorithm/runtime/yuv_sampling.hpp`（`sample_plane_bilinear` / `sample_nv12_uv_bilinear` / `yuv_to_rgb`）。CPU 视觉后端与车牌识别插件的裁剪采样都必须复用它，不得各自复制一份 —— 两份实现一旦在 UV 索引或 clamp 边界上漂移，同一码流在「喂模型」与「裁给识别器」两条路径上会出现颜色差异，真机只表现为「识别率莫名变低」。
+- ⚠️ **YUV 采样数学只有一份实现**：`native/sdk/include/zhulong/runtime/yuv_sampling.hpp`（`sample_plane_bilinear` / `sample_nv12_uv_bilinear` / `yuv_to_rgb`；随 SDK 分发，因为车牌识别插件的裁剪采样在生产路径上就要用它）。CPU 视觉后端与车牌识别插件的裁剪采样都必须复用它，不得各自复制一份 —— 两份实现一旦在 UV 索引或 clamp 边界上漂移，同一码流在「喂模型」与「裁给识别器」两条路径上会出现颜色差异，真机只表现为「识别率莫名变低」。
 - RGB/BGR 目标顺序不一致时必须交换 R/B 通道。缩放采用像素中心坐标、双线性插值和边界 clamp；Letterbox 补边值为 114，缩放直接写到最终 Tensor ROI，不分配 `resized_temp`。
 - 空默认 Tensor 的 `element_count()` 为 0；非空 shape 中任一维度 `<= 0` 抛出 `std::invalid_argument`；元素数或字节数乘法溢出抛出 `std::length_error`。动态 shape 分配不在当前 API 支持范围内。
 

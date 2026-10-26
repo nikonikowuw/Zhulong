@@ -1,6 +1,6 @@
 #include "plate_recognizer.hpp"
 
-#include <algorithm/runtime/yuv_sampling.hpp>
+#include <zhulong/runtime/yuv_sampling.hpp>
 
 #include <algorithm>
 #include <array>

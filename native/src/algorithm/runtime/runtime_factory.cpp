@@ -11,7 +11,7 @@
  *    而不是静默落到某个桩实现上——「编译成功但不可推理」是本仓库明令禁止的产物形态。
  */
 
-#include "runtime_factory.hpp"
+#include <zhulong/runtime/runtime_factory.hpp>
 #include "cpu_vision_backend.hpp"
 
 #ifdef ZHULONG_INFERENCE_RKNN

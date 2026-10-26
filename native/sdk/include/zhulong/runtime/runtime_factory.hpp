@@ -4,9 +4,10 @@
  *
  * ⚠️ 后端在**编译期**由 CMake cache 变量选定（ZHULONG_INFERENCE_BACKEND /
  * ZHULONG_VISION_BACKEND），不引入运行期 dlopen 后端分流。
- * ⚠️ native/sdk/include/zhulong/algo.hpp 通过 #include 直接依赖本私有头，
- * 因此具体后端实现（如 RknnInferenceBackend）**必须**编译进 libZhulongAlgoRuntime.so，
- * 不能作为独立 .so 由插件单独加载。
+ * ⚠️ 交付形态只有一种：算法包**静态链接**本运行时（libZhulongAlgoRuntime.a
+ * 与 libzhulong_algo_sdk.a）。仓库里留存的 SHARED target（libZhulongAlgoRuntime.so）
+ * 只服务 native 测试与迁移基线，**不是**算法包交付形态；具体后端实现
+ * （如 RknnInferenceBackend）随本头一起编进同一产物，不再作为独立 .so 被插件加载。
  */
 
 #pragma once

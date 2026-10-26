@@ -11,7 +11,7 @@
 
 #pragma once
 
-#include "algorithm/runtime/gallery_registry.hpp"
+#include <zhulong/runtime/gallery_registry.hpp>
 #include <string>
 #include <vector>
 #include <unordered_map>

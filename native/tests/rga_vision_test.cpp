@@ -10,8 +10,8 @@
 #include <backends/rga/rga_vision_backend.hpp>
 #include <algorithm/runtime/cpu_vision_backend.hpp>
 #include <algorithm/runtime/letterbox_geometry.hpp>
-#include <algorithm/runtime/tensor.hpp>
-#include <algorithm/runtime/vision_backend.hpp>
+#include <zhulong/runtime/tensor.hpp>
+#include <zhulong/runtime/vision_backend.hpp>
 
 #include <rga/im2d.h>
 

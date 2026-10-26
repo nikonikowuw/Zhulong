@@ -1,4 +1,4 @@
-#include "algorithm/runtime/gallery_registry.hpp"
+#include <zhulong/runtime/gallery_registry.hpp>
 
 namespace zhulong::runtime {
 

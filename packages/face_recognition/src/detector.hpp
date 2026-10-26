@@ -7,7 +7,7 @@
 
 #include "aligner.hpp"
 #include <zhulong/algo.hpp>
-#include <platform/dmabuf/dmabuf_allocator.hpp>
+#include <zhulong/platform/dmabuf_allocator.hpp>
 #include <array>
 #include <memory>
 #include <vector>

@@ -196,8 +196,10 @@ native/sdk/
 ### 4.2 头文件收拢的硬约束
 
 - `sdk/include/**` **不得**出现对 `native/src/**` 的 `#include`。落地后 `native/sdk` 的 CMake target 的 `target_include_directories` 里不得再出现 `${CMAKE_CURRENT_SOURCE_DIR}/src`。
+  - ⚠️ 2026-10-25 实测补充：只改包 target 的 include 列表**不生效**——`ZhulongAlgoRuntime` / `ZhulongAlgoRuntimeStatic` 的 `src` 是 `PUBLIC`，经 `target_link_libraries` 传播回包 target（`flags.make` 里仍见 `-I…/native/src`）。正确做法是把运行库产物的用法要求收敛为 `PUBLIC sdk/include` + `PRIVATE src`。
 - `runtime_factory.hpp:7-10` 的注释必须改写：算法包只使用静态链接运行时；若仓库保留 SHARED target，只限 native 测试与迁移基线，不作为算法包交付形态。
 - 实现细节头（`cpu_inference_backend.hpp`、`cpu_vision_backend.hpp`、`letterbox_geometry.hpp`）**不进** SDK。
+- **实际落地布局（2026-10-25，比本节原稿多两个头）**：`zhulong/runtime/{runtime_factory,vision_backend,tensor,gallery_registry,inference_backend}.hpp` 之外，`yuv_sampling.hpp` 进 `zhulong/runtime/`、`dmabuf_allocator.hpp` 进 `zhulong/platform/`。二者都是**生产路径**被包代码直接 include 的头（`plate_recognizer.cpp` 的采样数学、`face detector.{hpp,cpp}` 的 DMA-BUF 零拷贝），不搬就物理上无法移除 `-I native/src`；它们本身只依赖标准库，不会把 `src` 依赖带进分发物。
 
 ### 4.3 SDK main 骨架（形状，非最终签名）
 

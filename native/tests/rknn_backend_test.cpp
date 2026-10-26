@@ -9,8 +9,8 @@
 #include <backends/rknn/rknn_error_map.hpp>
 #include <backends/rknn/rknn_inference_backend.hpp>
 #include <backends/rknn/rknn_types.hpp>
-#include <algorithm/runtime/inference_backend.hpp>
-#include <algorithm/runtime/tensor.hpp>
+#include <zhulong/runtime/inference_backend.hpp>
+#include <zhulong/runtime/tensor.hpp>
 
 #include <rknn_api.h>
 

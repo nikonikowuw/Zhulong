@@ -190,24 +190,61 @@ ZhulongAlgoRuntimeObjects OBJECT  cpu_vision_backend / gallery_registry / letter
 
 > 目标：`sdk/include` 自足，不再需要 `-I native/src`。
 
-- [ ] **2.1** 新建 `native/sdk/include/zhulong/runtime/`，移入 5 个公共头：`runtime_factory.hpp`、`vision_backend.hpp`、`tensor.hpp`、`gallery_registry.hpp`、`inference_backend.hpp`。
+- [x] **2.1** 新建 `native/sdk/include/zhulong/runtime/`，移入 5 个公共头：`runtime_factory.hpp`、`vision_backend.hpp`、`tensor.hpp`、`gallery_registry.hpp`、`inference_backend.hpp`。
       - **不移入**实现细节头：`cpu_inference_backend.hpp`、`cpu_vision_backend.hpp`、`letterbox_geometry.hpp`。
       - 保持头内相对 `#include "tensor.hpp"` 同目录可用。
+      - **实际移入 7 个（有意扩大）**：除上述 5 个外，`yuv_sampling.hpp` → `zhulong/runtime/`、`dmabuf_allocator.hpp` → `zhulong/platform/`。理由：二者在生产路径上就被包代码直接 `#include`，不搬则 2.3 的「移除 `-I src`」物理上做不到：
+        - `packages/plate_recognition/src/plate_recognizer.cpp` 用 `yuv_sampling.hpp` 的采样数学（`algo-plugin-contract.md` §2 明令「YUV 采样只有一份实现」）；
+        - `packages/face_recognition/src/detector.{hpp,cpp}` 用 `DmaBufAllocator` / `DmaBuffer`（`prd.md` F1 已把它们的符号算进 plugin↔host 耦合清单，黑盒后必须由包自身解析）。
+        另：`yuv_sampling.hpp` 纯头（只依赖 `<algorithm>/<cmath>/<cstddef>/<cstdint>`）、`dmabuf_allocator.hpp` 纯头（只依赖 std 头），搬进 SDK 不会把 `src` 依赖带进分发物。
 
-- [ ] **2.2** 改 `native/sdk/include/zhulong/algo.hpp:21-24` 的 include 为 `<zhulong/runtime/...hpp>`。
+- [x] **2.2** 改 `native/sdk/include/zhulong/algo.hpp:21-24` 的 include 为 `<zhulong/runtime/...hpp>`。
 
-- [ ] **2.3** 改 `native/CMakeLists.txt:355-386`：`FaceRecognitionPlugin` / `PlateRecognitionPlugin` / `MockDetector` / `MockClassifier` / `MockPersonStructure` 的 `target_include_directories` **移除** `${CMAKE_CURRENT_SOURCE_DIR}/src`（若某处仍需要，说明还有外溢，先修完再移除）。
+- [x] **2.3** 改 `native/CMakeLists.txt:355-386`：`FaceRecognitionPlugin` / `PlateRecognitionPlugin` / `MockDetector` / `MockClassifier` / `MockPersonStructure` 的 `target_include_directories` **移除** `${CMAKE_CURRENT_SOURCE_DIR}/src`（若某处仍需要，说明还有外溢，先修完再移除）。
       > 本阶段是增量改造：包 target 仍暂住 `native/CMakeLists.txt`，到 **3.9** 才整段删除。Review gate 2 的「两个包编译通过」只在本阶段成立。
+      ⚠️ **只改这 5 个 target 不够**：`ZhulongAlgoRuntime` / `ZhulongAlgoRuntimeStatic` 的 `target_include_directories` 原本把 `${CMAKE_CURRENT_SOURCE_DIR}/src` 以 `PUBLIC` 暴露，包 target 通过 `target_link_libraries` 又把它继承回来（实测 `FaceRecognitionPlugin.dir/flags.make` 里仍有 `-I…/native/src`）。所以同时把运行库产物的用法要求收敛为 `PUBLIC sdk/include` + `PRIVATE src`。
 
-- [ ] **2.4** 改写 `native/src/algorithm/runtime/runtime_factory.hpp:7-10` 的注释：算法包只使用静态链接运行时；若仓库暂留 SHARED target，只限 native 测试与迁移基线，不作为算法包交付形态。
+- [x] **2.4** 改写 `native/src/algorithm/runtime/runtime_factory.hpp:7-10` 的注释：算法包只使用静态链接运行时；若仓库暂留 SHARED target，只限 native 测试与迁移基线，不作为算法包交付形态。
+      （文件已随 2.1 移到 `native/sdk/include/zhulong/runtime/runtime_factory.hpp`。）
 
-- [ ] **2.5** 验证：
+- [x] **2.5** 验证：
       ```bash
       make native-build && make native-test
       grep -rn "algorithm/runtime" native/sdk/ || echo "OK: sdk 无 src 外溢"
       ```
 
 **Review gate 2**：现有两个包编译通过、`native-test` 全绿、`grep` 为空。**rollback = revert 本阶段 commit。**
+
+### 阶段 2 执行记录（2026-10-25）
+
+**头文件布局（`native/sdk/include/zhulong/`）**
+
+```
+plugin.h                         纯 C ABI
+algo.hpp                         C++17 门面（include 改为 <zhulong/runtime/...>）
+runtime/runtime_factory.hpp      ← 移动
+runtime/vision_backend.hpp       ← 移动
+runtime/tensor.hpp               ← 移动
+runtime/gallery_registry.hpp     ← 移动
+runtime/inference_backend.hpp    ← 移动
+runtime/yuv_sampling.hpp         ← 移动（外溢：plate_recognizer.cpp 生产路径依赖）
+platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} 生产路径依赖）
+```
+
+留在 `native/src/algorithm/runtime/` 的只剩实现细节：`cpu_vision_backend.{hpp,cpp}`、`letterbox_geometry.{hpp,cpp}`、`*_inference_backend.cpp`、`runtime_factory.cpp`、`gallery_registry.cpp`。头内同目录相对 include（`"tensor.hpp"` 等）原样保留。
+
+**连带改动**：`native/src/**` 与 `native/tests/**` 全部 26 处 include 改为 `<zhulong/runtime/...>` / `<zhulong/platform/dmabuf_allocator.hpp>`；`frame_broker.hpp`、`dmabuf_allocator.cpp`、`cpu_vision_backend.{hpp,cpp}`、`runtime_factory.cpp` 同步。`.trellis/spec/native/algo-plugin-contract.md` 新增 §3.0「公共头布局」并把 YUV 采样路径指到新位置。
+
+**实测**
+
+| 断言 | 结果 |
+| --- | --- |
+| `make native-build` + `make native-test` | 28/28 PASS（25.7s） |
+| `grep -rn "algorithm/runtime" native/sdk/` | 空 |
+| `grep -rn '#include <\(algorithm\|platform\|common\)/' packages` | 空（原先 plate_recognizer / face detector 各 1 处） |
+| 包 target 的 `-I`（`flags.make`） | `FaceRecognitionPlugin` = `sdk/include` + 包自身；`PlateRecognitionPlugin` 同；3 个 mock = 只有 `sdk/include` |
+| 交叉 `rk3568-stub` / `rk3568-rknn` | 编译通过 |
+| `build.py go build ./...` / `make go-check` | 通过 |
 
 ---
 

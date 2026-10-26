@@ -1,5 +1,5 @@
 #include "detector.hpp"
-#include <platform/dmabuf/dmabuf_allocator.hpp>
+#include <zhulong/platform/dmabuf_allocator.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
