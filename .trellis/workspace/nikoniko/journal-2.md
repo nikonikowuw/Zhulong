@@ -1640,3 +1640,26 @@ Implemented fourth vehicles tab in perception records reusing captures endpoint 
 
 - 10-18-roi-mask-region-policy、10-20-industrial-logging、10-24-algo-package-blackbox-exe 仍未归档，待各自收尾
 - 多实例部署需要外置 Session 存储；限流 429 可补 Retry-After 响应头
+
+
+## Session 86: GB28181 目录同步与设备接入收尾
+<!-- trellis-session: v=2 fp=713d81593ac8f9c7 -->
+
+**Date**: 2026-10-26
+**Task**: GB28181 目录同步与设备接入收尾
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+提交 GB28181 目录同步、通道摄像机接入及审查修复；make check 全绿，前端 678 项、原生 28 项、Go race/vet 与桥接测试通过。归档任务 10-25-gb28181-sip-ingress。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b7d0c68` | feat(gb28181): 增加目录同步与通道摄像机接入 |
+
+### Status
+
+[OK] **Completed**
