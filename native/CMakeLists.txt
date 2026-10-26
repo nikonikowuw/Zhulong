@@ -396,11 +396,33 @@ else()
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/VERSION" sdk/abi.json DESTINATION .)
 endif()
 # ==============================================================================
-add_library(ZhulongLog STATIC src/common/log.cpp)
+# ⚠️ 源文件只在 OBJECT 库里编译一次：宿主归档（ZhulongLog）与 SDK 归档
+#    （libzhulong_algo_sdk.a）都从同一批对象构建，避免同一 TU 两份定义。
+add_library(ZhulongLogObjects OBJECT src/common/log.cpp)
+target_compile_features(ZhulongLogObjects PRIVATE cxx_std_17)
+target_include_directories(ZhulongLogObjects PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+set_target_properties(ZhulongLogObjects PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+add_library(ZhulongLog STATIC $<TARGET_OBJECTS:ZhulongLogObjects>)
 target_compile_features(ZhulongLog PUBLIC cxx_std_17)
 target_include_directories(ZhulongLog PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(ZhulongLog PUBLIC Threads::Threads)
 set_target_properties(ZhulongLog PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# ⚠️ IPC 源同样先编进 OBJECT 库：宿主归档（ZhulongAlgoIpc）与 SDK 归档
+#    （libzhulong_algo_sdk.a）共享同一批对象，一个 TU 只编译一次。
+add_library(ZhulongAlgoIpcObjects OBJECT
+    src/algorithm/ipc/shm_pool.cpp
+    src/algorithm/ipc/unix_socket.cpp
+    src/algorithm/ipc/broker_resource_lock.cpp
+    src/algorithm/ipc/frame_broker.cpp
+)
+target_compile_features(ZhulongAlgoIpcObjects PRIVATE cxx_std_17)
+target_include_directories(ZhulongAlgoIpcObjects PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_definitions(ZhulongAlgoIpcObjects PRIVATE ZHULONG_IPC_LOGGING=1)
+set_target_properties(ZhulongAlgoIpcObjects PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ⚠️ dmabuf_allocator.cpp 的唯一归属是 ZhulongPlatformObjects（见 4.1）。这里用
 #    $<TARGET_OBJECTS:…> 把同一批对象**归档**进 libZhulongAlgoIpc.a，而不是再编一遍：
@@ -409,10 +431,7 @@ set_target_properties(ZhulongLog PROPERTIES POSITION_INDEPENDENT_CODE ON)
 #    · 同一构建树里该翻译单元只编译一次，DmaBufAllocator::instance() 只有一个定义。
 add_library(ZhulongAlgoIpc STATIC
     $<TARGET_OBJECTS:ZhulongPlatformObjects>
-    src/algorithm/ipc/shm_pool.cpp
-    src/algorithm/ipc/unix_socket.cpp
-    src/algorithm/ipc/broker_resource_lock.cpp
-    src/algorithm/ipc/frame_broker.cpp
+    $<TARGET_OBJECTS:ZhulongAlgoIpcObjects>
 )
 target_compile_features(ZhulongAlgoIpc PUBLIC cxx_std_17)
 target_include_directories(ZhulongAlgoIpc
@@ -426,8 +445,55 @@ endif()
 set_target_properties(ZhulongAlgoIpc PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ==============================================================================
+#  4.2 Android/iOS 无关：算法包 SDK 骨架（libzhulong_algo_sdk.a）
+# ==============================================================================
+# 算法包可执行文件 = 包自己的算法对象 + 本归档。源集合（design.md §4.4）：
+#   algo_main.cpp（broker 循环 / 验包 / 结果序列化）
+#   + IPC 对象（unix_socket / shm_pool）与 log 对象
+# ⚠️ 这些对象与宿主归档（ZhulongAlgoIpc / ZhulongLog）是**同一批 .o**，不是再编一份：
+#    同一构建树一个 TU 只编译一次，也不会有两份静态状态。
+# ⚠️ 同一个最终二进制里不要同时链接 libzhulong_algo_sdk.a 与 libZhulongAlgoIpc.a：
+#    两者都含这批对象，`--whole-archive` 会变成重复定义。宿主侧用 AlgoIpc，
+#    包侧用 AlgoSDK。
+add_library(ZhulongAlgoSdkObjects OBJECT
+    sdk/src/algo_main.cpp
+)
+target_compile_features(ZhulongAlgoSdkObjects PRIVATE cxx_std_17)
+target_include_directories(ZhulongAlgoSdkObjects PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_definitions(ZhulongAlgoSdkObjects PRIVATE ${ZHULONG_ALGO_RUNTIME_PUBLIC_DEFS})
+target_compile_options(ZhulongAlgoSdkObjects PRIVATE
+    $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wall;-Wextra;-Wpedantic>
+)
+set_target_properties(ZhulongAlgoSdkObjects PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+add_library(ZhulongAlgoSdkStatic STATIC
+    $<TARGET_OBJECTS:ZhulongAlgoSdkObjects>
+    $<TARGET_OBJECTS:ZhulongAlgoIpcObjects>
+    $<TARGET_OBJECTS:ZhulongLogObjects>
+)
+set_target_properties(ZhulongAlgoSdkStatic PROPERTIES OUTPUT_NAME zhulong_algo_sdk)
+target_compile_features(ZhulongAlgoSdkStatic PUBLIC cxx_std_17)
+target_include_directories(ZhulongAlgoSdkStatic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include)
+# ⚠️ 不在这里链接运行库：骨架对运行库的引用由**消费端**解析（包可执行文件链接
+#    Zhulong::AlgoSDK + Zhulong::AlgoRuntime，顺序由 SDK 配置保证）。
+#    原因：宿主 runner 在迁移期仍要 dlopen 插件 .so，那个 .so 的 NEEDED 是
+#    libZhulongAlgoRuntime.so；如果 runner 自己链了静态运行库、又不再加载 .so，
+#    dlopen 会以「libZhulongAlgoRuntime.so: cannot open shared object」失败。
+
+# 安装规则必须写在本目标定义之后（CMake 要求 install(TARGETS) 的目标已存在）；
+# test_stub 夹具构建不安装任何 SDK 产物（夹具产物不可交付）。
+if(NOT ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub")
+    install(TARGETS ZhulongAlgoSdkStatic ARCHIVE DESTINATION lib)
+endif()
+
+# ==============================================================================
 #                      4.3 构建通用算法 Runner 进程 (zhulong_algo_runner)
 # ==============================================================================
+# ⚠️ 迁移期形态：宿主仍需要「把 .so 包成 broker 消费者」的能力。此处只链接
+#    SDK 归档（骨架实现）——不要再加 ZhulongAlgoIpc，两者含同一批对象。
 add_executable(zhulong_algo_runner
     src/algorithm/runner/runner.cpp
 )
@@ -435,7 +501,7 @@ target_compile_features(zhulong_algo_runner PUBLIC cxx_std_17)
 target_include_directories(zhulong_algo_runner
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(zhulong_algo_runner PRIVATE ZhulongAlgoIpc ZhulongAlgoRuntime ${CMAKE_DL_LIBS})
+target_link_libraries(zhulong_algo_runner PRIVATE ZhulongAlgoSdkStatic ZhulongAlgoRuntime ${CMAKE_DL_LIBS})
 
 # ==============================================================================
 #                      4.4 构建示例脱机插件 (.so)
@@ -500,6 +566,8 @@ add_library(PlateRecognitionPlugin SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_recognition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_detector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_recognizer.cpp
+    # 迁移期胶水：把包内算法类重新导出成 .so 插件的 C ABI 入口（随阶段 4 删除）
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/migration/plate_plugin_entry.cpp
 )
 target_compile_features(PlateRecognitionPlugin PUBLIC cxx_std_17)
 target_compile_definitions(PlateRecognitionPlugin PRIVATE ZHULONG_PLUGIN_BUILD)

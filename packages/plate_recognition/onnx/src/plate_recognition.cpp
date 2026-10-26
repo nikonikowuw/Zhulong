@@ -1,5 +1,4 @@
-#include "plate_detector.hpp"
-#include "plate_recognizer.hpp"
+#include "plate_recognition.hpp"
 
 #include <zhulong/algo.hpp>
 
@@ -182,17 +181,8 @@ float resolve_threshold(const std::string& config_json, const char* config_key, 
 
 } // namespace
 
-/**
- * @brief 车牌检测 + 字符/颜色识别插件
- *
- * 资源模型：检测模型会话由 Worker 直接持有（`create_session` 的返回值）；识别模型会话
- * 按 worker_id 保存，供同一 Worker 在执行 `detect_vehicles` 时取用。
- */
-class PlateRecognitionPlugin {
-public:
-    PlateRecognitionPlugin() = default;
-
-    zhulong_status_t init(const std::string& config_json) {
+    zhulong_status_t PlateRecognitionPlugin::init(const std::string& config_json)
+    {
         detector_.set_confidence_threshold(
             resolve_threshold(config_json, "confidence_threshold", "CONFIDENCE_THRESHOLD", kDefaultConfidenceThreshold));
         detector_.set_nms_threshold(
@@ -216,7 +206,8 @@ public:
         return ZHULONG_PLUGIN_OK;
     }
 
-    zhulong::Session create_session(uint32_t worker_id) {
+    zhulong::Session PlateRecognitionPlugin::create_session(uint32_t worker_id)
+    {
         std::lock_guard<std::mutex> lock(session_mutex_);
         if (rec_model_.valid()) {
             rec_sessions_[worker_id] = rec_model_.create_session(worker_id);
@@ -230,7 +221,8 @@ public:
         return zhulong::Session();
     }
 
-    std::vector<zhulong::VehicleItem> detect_vehicles(zhulong::Session& session, const zhulong::Image& image) {
+    std::vector<zhulong::VehicleItem> PlateRecognitionPlugin::detect_vehicles(zhulong::Session& session, const zhulong::Image& image)
+    {
         const uint32_t worker_id = session.worker_id();
 
         // ⚠️ 指针只在本函数内使用：unordered_map 重哈希不会失效元素引用（节点稳定），
@@ -296,16 +288,4 @@ public:
         return vehicles;
     }
 
-private:
-    PlateDetector detector_;
-    PlateRecognizer recognizer_;
-
-    zhulong::Model det_model_;
-    zhulong::Model rec_model_;
-    std::mutex session_mutex_;
-    std::unordered_map<uint32_t, zhulong::Session> rec_sessions_;
-};
-
 } // namespace zhulong::plate
-
-ZHULONG_REGISTER_VEHICLE_STRUCTURE_PLUGIN(zhulong::plate::PlateRecognitionPlugin, "PlateRecognition", "1.0.0")

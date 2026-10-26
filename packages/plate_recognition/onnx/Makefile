@@ -12,16 +12,29 @@ BUILD_DIR ?= $(CURDIR)/build
 OUT_DIR := $(BUILD_DIR)/out
 DEVTEST := $(BUILD_DIR)/plate_recognition_devtest
 RESULT := $(OUT_DIR)/result-plate_recognition-onnx.jpg
+# 包根可执行文件名必须等于 manifest.id（宿主按 id 找入口）
+EXE := $(BUILD_DIR)/plate_recognition
+# verify 的样本帧：骨架只解码 netpbm，jpg 会如实报 sample_decoded=false
+VERIFY_SAMPLE ?= $(CURDIR)/sample.jpg
 
-.PHONY: all test clean
+.PHONY: all test verify clean
 
-all: $(DEVTEST)
+all: $(EXE) $(DEVTEST)
 
-$(DEVTEST): CMakeLists.txt tests/dev_infer.cpp $(wildcard src/*.cpp src/*.hpp)
+$(BUILD_DIR)/CMakeCache.txt: CMakeLists.txt
 	cmake -S $(CURDIR) -B $(BUILD_DIR) \
 		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
 		-DCMAKE_PREFIX_PATH=$(SDK_PREFIX)
+
+$(EXE): $(BUILD_DIR)/CMakeCache.txt $(wildcard src/*.cpp src/*.hpp)
+	cmake --build $(BUILD_DIR) --target plate_recognition
+
+$(DEVTEST): $(BUILD_DIR)/CMakeCache.txt tests/dev_infer.cpp $(wildcard src/*.cpp src/*.hpp)
 	cmake --build $(BUILD_DIR) --target plate_recognition_devtest
+
+# 包根可执行文件的一次性验包（与宿主验包门禁同构：stage token + 载荷 JSON）
+verify: $(EXE)
+	@cd $(CURDIR) && $(EXE) --verify --sample $(VERIFY_SAMPLE)
 
 test: $(DEVTEST)
 	@mkdir -p $(OUT_DIR)

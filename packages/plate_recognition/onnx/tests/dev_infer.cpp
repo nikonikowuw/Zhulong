@@ -19,7 +19,8 @@
  */
 
 #include <zhulong/algo.hpp>
-#include <zhulong/plugin.h>
+
+#include "plate_recognition.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -81,12 +82,6 @@ void draw_box(uint8_t* canvas, int width, int height, const float box[4], uint8_
     }
 }
 
-/** @brief 取得本包导出的 C ABI 函数表（与产品路径完全一致的那张表） */
-zhulong_status_t load_api(zhulong_plugin_api_v1& api) {
-    std::memset(&api, 0, sizeof(api));
-    return zhulong_plugin_get_api(1, &api, sizeof(api));
-}
-
 void print_table(const std::string& sample, const char* result_type_name, uint32_t count,
                  double cost_ms, const std::vector<DetailRow>& rows) {
     std::printf("\n=== dev infer ===\n");
@@ -137,29 +132,16 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> canvas(pixels, pixels + pixel_bytes);
     stbi_image_free(pixels);
 
-    zhulong_plugin_api_v1 api;
-    zhulong_status_t rc = load_api(api);
+    // 直接调用本 target 的产品类（不走 C ABI 表）：dev 工具就该像算法作者那样用它。
+    zhulong::plate::PlateRecognitionPlugin plugin;
+    zhulong_status_t rc = plugin.init(config_json);
     if (rc != ZHULONG_PLUGIN_OK) {
-        std::fprintf(stderr, "zhulong_plugin_get_api failed: %d\n", static_cast<int>(rc));
+        std::fprintf(stderr, "init failed: %d (models/ 是否与可执行文件同级？)\n", static_cast<int>(rc));
         return 1;
     }
-
-    zhulong_model_group_h model = nullptr;
-    if ((rc = api.model_create(config_json.c_str(), &model)) != ZHULONG_PLUGIN_OK) {
-        std::fprintf(stderr, "model_create failed: %d (models/ 是否与可执行文件同级？)\n", static_cast<int>(rc));
-        return 1;
-    }
-    zhulong_worker_ctx_h worker = nullptr;
-    if ((rc = api.worker_create(model, 0, &worker)) != ZHULONG_PLUGIN_OK) {
-        std::fprintf(stderr, "worker_create failed: %d\n", static_cast<int>(rc));
-        api.model_destroy(model);
-        return 1;
-    }
-    zhulong_task_ctx_h task = nullptr;
-    if ((rc = api.task_open(worker, 1, &task)) != ZHULONG_PLUGIN_OK) {
-        std::fprintf(stderr, "task_open failed: %d\n", static_cast<int>(rc));
-        api.worker_destroy(worker);
-        api.model_destroy(model);
+    zhulong::Session session = plugin.create_session(0);
+    if (!session.valid()) {
+        std::fprintf(stderr, "create_session failed\n");
         return 1;
     }
 
@@ -174,120 +156,41 @@ int main(int argc, char** argv) {
     frame.strides[0] = width * 3;
     frame.dma_buf_fd = -1;
 
-    zhulong_inference_result* result = nullptr;
     const auto started = std::chrono::steady_clock::now();
-    rc = api.process(task, &frame, &result);
+    const auto vehicles = plugin.detect_vehicles(session, zhulong::Image(frame));
     const double cost_ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 
     std::vector<DetailRow> rows;
-    const char* result_type_name = "unknown";
-    uint32_t count = 0;
-    if (rc == ZHULONG_PLUGIN_OK && result != nullptr) {
-        count = result->count;
-        switch (result->result_type) {
-            case ZHULONG_RESULT_TYPE_DETECTION: {
-                result_type_name = "detection";
-                const auto* items = static_cast<const zhulong_bbox*>(result->data);
-                for (uint32_t i = 0; i < result->count; ++i) {
-                    DetailRow row;
-                    row.kind = "box";
-                    row.label = items[i].label;
-                    row.score = items[i].confidence;
-                    std::memcpy(row.box, items[i].box, sizeof(row.box));
-                    draw_box(canvas.data(), width, height, row.box, 0, 255, 0);
-                    rows.push_back(row);
-                }
-                break;
-            }
-            case ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE: {
-                result_type_name = "vehicle_structure";
-                const auto* vehicles = static_cast<const zhulong_vehicle_item*>(result->data);
-                for (uint32_t i = 0; i < result->count; ++i) {
-                    DetailRow vehicle;
-                    vehicle.kind = "vehicle";
-                    vehicle.label = vehicles[i].vehicle_type;
-                    vehicle.score = vehicles[i].vehicle_score;
-                    std::memcpy(vehicle.box, vehicles[i].vehicle_box, sizeof(vehicle.box));
-                    draw_box(canvas.data(), width, height, vehicle.box, 0, 255, 0);
-                    rows.push_back(vehicle);
+    for (const auto& vehicle : vehicles) {
+        DetailRow row_vehicle;
+        row_vehicle.kind = "vehicle";
+        row_vehicle.label = vehicle.vehicle_type;
+        row_vehicle.score = vehicle.vehicle_score;
+        std::memcpy(row_vehicle.box, vehicle.vehicle_box, sizeof(row_vehicle.box));
+        draw_box(canvas.data(), width, height, row_vehicle.box, 0, 255, 0);
+        rows.push_back(row_vehicle);
 
-                    for (uint32_t p = 0; p < vehicles[i].plate_count; ++p) {
-                        const zhulong_plate_item& plate = vehicles[i].plates[p];
-                        DetailRow row;
-                        row.kind = "plate";
-                        row.label = plate.plate_color;
-                        row.score = plate.score;
-                        std::memcpy(row.box, plate.box, sizeof(row.box));
-                        row.text = plate.plate_number;
-                        draw_box(canvas.data(), width, height, row.box, 0, 128, 255);
-                        rows.push_back(row);
-                    }
-                }
-                break;
-            }
-            case ZHULONG_RESULT_TYPE_PERSON_STRUCTURE: {
-                result_type_name = "person_structure";
-                const auto* persons = static_cast<const zhulong_person_item*>(result->data);
-                for (uint32_t i = 0; i < result->count; ++i) {
-                    DetailRow person;
-                    person.kind = "person";
-                    person.label = "body";
-                    person.score = persons[i].body_score;
-                    std::memcpy(person.box, persons[i].body_box, sizeof(person.box));
-                    draw_box(canvas.data(), width, height, person.box, 0, 255, 0);
-                    rows.push_back(person);
-
-                    for (uint32_t f = 0; f < persons[i].face_count; ++f) {
-                        const zhulong_face_item& face = persons[i].faces[f];
-                        DetailRow row;
-                        row.kind = "face";
-                        row.label = face.matched ? "matched" : "unmatched";
-                        row.score = face.quality;
-                        std::memcpy(row.box, face.box, sizeof(row.box));
-                        if (face.person_name[0] != '\0') {
-                            row.text = face.person_name;
-                        }
-                        draw_box(canvas.data(), width, height, row.box, 255, 128, 0);
-                        rows.push_back(row);
-                    }
-                }
-                break;
-            }
-            case ZHULONG_RESULT_TYPE_CLASSIFICATION: {
-                result_type_name = "classification";
-                const auto* items = static_cast<const zhulong_classification_item*>(result->data);
-                for (uint32_t i = 0; i < result->count; ++i) {
-                    DetailRow row;
-                    row.kind = "class";
-                    row.label = items[i].label;
-                    row.score = items[i].confidence;
-                    rows.push_back(row);
-                }
-                break;
-            }
-            default:
-                break;
+        for (const auto& plate : vehicle.plates) {
+            DetailRow row_plate;
+            row_plate.kind = "plate";
+            row_plate.label = plate.plate_color;
+            row_plate.score = plate.score;
+            std::memcpy(row_plate.box, plate.box, sizeof(row_plate.box));
+            row_plate.text = plate.plate_number;
+            draw_box(canvas.data(), width, height, row_plate.box, 0, 128, 255);
+            rows.push_back(row_plate);
         }
-    } else {
-        std::fprintf(stderr, "process failed: %d\n", static_cast<int>(rc));
     }
 
+    const char* result_type_name = "vehicle_structure";
+    const uint32_t count = static_cast<uint32_t>(vehicles.size());
     print_table(sample_path, result_type_name, count, cost_ms, rows);
     std::printf("result written: %s\n", output_path.c_str());
 
     if (stbi_write_jpg(output_path.c_str(), width, height, 3, canvas.data(), 92) == 0) {
         std::fprintf(stderr, "failed to write %s\n", output_path.c_str());
-        if (result != nullptr) api.result_release(result);
-        api.task_close(task);
-        api.worker_destroy(worker);
-        api.model_destroy(model);
         return 1;
     }
-
-    if (result != nullptr) api.result_release(result);
-    api.task_close(task);
-    api.worker_destroy(worker);
-    api.model_destroy(model);
-    return rc == ZHULONG_PLUGIN_OK ? 0 : 1;
+    return 0;
 }

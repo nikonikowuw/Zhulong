@@ -324,7 +324,7 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       - ⚠️ **陈旧归档会掩盖重建**：`build/packages/face_recognition.tar.gz`（10-22 用 cpu 档位打的）会被 `findFaceRecognitionArchive` 的兜底候选先命中，测试于是拿旧包去验，报 `PLATFORM_TARGET_CPU_RETIRED`——这正好证明门禁生效。重建 `--target onnx` 后通过；排队顺序里 onnx 归档优先于无后缀候选。
       - **验证**：`grep -rn '"cpu"' packages/*/targets/*/manifest.json internal/app/config.go config.toml` 为空；`make native-test` 28/28；`python3 native/scripts/build.py go test -race ./internal/algorithm`、`./internal/app` 通过（⚠️ 这两个包依赖 engine，**不能**裸跑 `go test`：直接跑会因缺 `CGO_LDFLAGS` 报一片 `undefined reference to Zhulong_*`）；`make go-check` 30 个包全绿。
 
-- [ ] **3.1** 从 `native/src/algorithm/runner/runner.cpp` 抽出 broker 循环到 `native/sdk/src/algo_main.cpp` + `native/sdk/include/zhulong/algo_main.hpp`。
+- [~] **3.1** 从 `native/src/algorithm/runner/runner.cpp` 抽出 broker 循环到 `native/sdk/src/algo_main.cpp` + `native/sdk/include/zhulong/algo_main.hpp`。
       ⚠️ **逐字保留**仍适用于新可执行入口的 stage token：`connect`、`name_check`、`shm_init`、`gallery_sync`、`model_create`、`worker_create`、`task_open`、`process`、`broker_disconnected`、`args`。旧 `dlopen` stage 不再由算法包 runner 发出；进程 `exec` 失败由 Go spawn 层记录，不作为 runner stage。对照 `internal/algorunner/process.go:432` 的 allowlist。
       ⚠️ **worker 循环必须留出帧边界控制消息的位置**（`design.md` §10.8）：
       ```cpp
@@ -336,7 +336,32 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       ```
       每个 Worker 只关联一个 broker 和一个 `TaskContext`。
 
-- [ ] **3.2** `Options` 支持重复 `--broker`、`--name`、`--algorithm-id`、`--verify --sample`。固定一 broker 一 Worker 线程，所有传入 broker 都须订阅；不接受或传递 `--max-workers`（该参数在现状 runner 中并不存在，此约束意为「不得新增」），不做线程 clamp。**不得**新增 `--config-file` 或任何 argv 配置通道；`model_create` 继续传 `"{}"`，与现状逐字一致。
+      **执行记录（2026-10-26）**
+
+      - `native/sdk/src/algo_main.cpp`（986 行，编译进 `libzhulong_algo_sdk.a`）：broker 循环、验包
+        路径、结果序列化、样本帧解码、socket→stream_id 解析全部迁入 `zhulong::sdk::detail`，
+        逐字保留 stage token / 退出码表 / ACK 时机 / 「只在有目标时上报」的去噪策略。
+      - `native/sdk/include/zhulong/algo_main.hpp`：`sdk::Options` + `detail::{parse_options,run_api,
+        print_start_line,report_dlopen_failure}` + 模板 `run<PluginClass, ResultAdapter>` +
+        `ZHULONG_ALGO_MAIN(...)`。API 表由既有 `PluginApi<...>::get_api` 构造，算法与骨架同进程。
+      - `runner.cpp` 从 1070 行缩到 ~230 行，只剩 `PluginLoader`（dlopen）+ CLI + 两次转发：
+        **没有第二份循环实现**。`ZhulongAlgoRunnerJson` / `ZhulongFrameBroker` / `ZhulongAlgoRunner`
+        全绿即证迁移期行为未变。
+      - **OBJECT 库扩围**：`ZhulongLog` / `ZhulongAlgoIpc` 拆成 `…Objects` + 归档，SDK 归档
+        （`algo_main` + IPC + log）与宿主归档共享**同一批 .o**，一个 TU 只编译一次。
+        ⚠️ 同一最终二进制不要同时链 `libzhulong_algo_sdk.a` 与 `libZhulongAlgoIpc.a`
+        （`--whole-archive` 会重复定义）：宿主用后者，包用前者。
+      - **已知未做（阻塞项）**：`3.0a–3.0d` 的 `TaskContext` 门面尚未落地，因此 worker 循环里
+        **还没有** `drain_control_messages(task_context)` 的帧边界钩子——等 3.0a/3.0d 做完再插，
+        以免先造一个随后要改签名的钩子。
+      - `ZhulongAlgoSdkStatic` 刻意**不**链接运行库：它的 `get_default_inference_backend` 引用由
+        消费端解析（包链 `Zhulong::AlgoSDK + Zhulong::AlgoRuntime`，顺序由 SDK 配置固定）。
+        理由（实测踩到）：迁移期 runner 仍要 dlopen `.so` 插件，而那些插件的 NEEDED 是
+        `libZhulongAlgoRuntime.so`；runner 若只链静态运行库，dlopen 直接报
+        `libZhulongAlgoRuntime.so: cannot open shared object file`（Go 侧两处 pkg 测试红）。现在
+        runner 链 `AlgoSDK + AlgoRuntime(SHARED)`，两处测试恢复。
+
+- [~] **3.2** `Options` 支持重复 `--broker`、`--name`、`--algorithm-id`、`--verify --sample`。固定一 broker 一 Worker 线程，所有传入 broker 都须订阅；不接受或传递 `--max-workers`（该参数在现状 runner 中并不存在，此约束意为「不得新增」），不做线程 clamp。**不得**新增 `--config-file` 或任何 argv 配置通道；`model_create` 继续传 `"{}"`，与现状逐字一致。
       - **`--verify` 必须输出明细，不能只给 `count`**：复用现有的 `runner::serialize_inference_result`（`runner.cpp:115`，已在 IPC 路径 `:867` 用着），把 `task_type` + `detections[{box,label,score}]` / `classifications[{label,score}]` / `persons[{track_id,body_box,body_score,faces[{box,quality,landmarks,matched,similarity,person_id,person_name,candidates}]}]` / `vehicles[{track_id,vehicle_box,vehicle_score,vehicle_type,vehicle_color,plates[{box,score,plate_number,plate_color,plate_type}]}]` 一并输出。
         - **定位：`--verify` 的输出是 IPC 结果载荷的「超集」**（多出 `status` / `sample_decoded` / `width` / `height`），不是另一套格式。三个消费者共用同一份载荷形状：broker 长驻路径、一次性推理（验包 / 将来的宿主侧「试用」）、`algo_probe.py`。**禁止**为某个消费者另起字段名；
         - **字段只允许追加，不允许改名或改语义**（契约在 `algo-plugin-contract.md`，见 7.4）。改名前先问：宿主的三个消费者能不能同时改？不能就别改；
@@ -347,7 +372,20 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
         - ⚠️ **`sample` 字段语义澄清**：Go 侧 `verifier.go:301` 会把 `--sample` 换成解码后的**临时 PPM 路径**，所以该字段报的是 PPM 而非 `sample.jpg`。渲染方要用原始 `sample.jpg` 作底图（内容相同、尺寸相同），不要拿这个路径去显示/引用；
       - **一次性推理的语义边界（写进输出与文档，别留给用户猜）**：不连 `--broker` → 收不到 `MSG_GALLERY_SYNC`，因此 `matched` 恒 false、`person_name` / `candidates` 恒空；无连续帧 → `track_id` 恒 0。验包与将来的 UI 试用都受此限，输出里不要伪造这两类字段。
 
-- [~] **3.2b SDK 可安装：`make sdk-install`**（方案 A 的前提，`design.md` §4.5）
+      **执行记录（2026-10-26，partial）**
+
+      - `parse_options` 支持 `--broker`(可重复) / `--name` / `--algorithm-id` / `--sample` /
+        `--verify` / `--max-frames`；**未知参数直接失败**（fail closed），不接受任何 `--config-file`。
+      - `--plugin <path>` 在迁移期被**接受并忽略**：阶段 4 之前的宿主仍会带它，但包内不需要自己的路径。
+      - `--verify` 复用 `serialize_inference_result`，输出与 IPC 载荷同构（`stream_id/pts/capture_time_ms`
+        只在长驻路径有意义，verify 下为 0/占位），另加 `step/status/sample/sample_decoded/width/height/result_type/count`。
+        首行 `{"step":"start",...}` 由 `print_start_line` 统一发（`.so` 形态报 so 路径，可执行文件形态报自身路径）。
+      - 日志写线程的所有权收进 `run_api`：`start_runner_log_writer()` 返回 false 表示「已有人启动」
+        （宿主/测试装了 sink），此时**不 stop**，否则会把宿主的日志通道关掉。
+      - **未做**：3.2 要求的「明细指针化 + 新宿主读旧包跳过明细比对」属于 Go 侧
+        `VerificationReport` 扩展，等阶段 4 切换调用方时一并做。
+
+- [x] **3.2b SDK 可安装：`make sdk-install`**（方案 A 的前提，`design.md` §4.5）
       > 状态（2026-10-26）：**前缀安装、可搬迁配置、独立包验证已完成**；`ZhulongAlgoSdkStatic`（`algo_main` + IPC + `log.cpp`）仍待 3.1/3.2 —— 配置里用 `if(EXISTS …libzhulong_algo_sdk.a)` 容忍其缺席，等 3.1 落地后自动生效。
 
       - 新增 `ZhulongAlgoSdkStatic`（STATIC，`OUTPUT_NAME zhulong_algo_sdk`）：源集合 = `native/sdk/src/algo_main.cpp` + `native/src/algorithm/ipc/*` + `gallery_index/gallery_parser` 非 inline 部分 + `src/common/log.cpp`（`design.md` §4.4；**最容易漏 log.cpp**）；
@@ -381,6 +419,13 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       - **包侧改成真正独立**：`packages/plate_recognition/onnx/{CMakeLists.txt,Makefile}` 现在
         只有 `find_package(ZhulongAlgoSDK 1.0 REQUIRED)`，`SDK_PREFIX` 默认 `/opt/zhulong-sdk`，
         文件里**没有任何** `../native` / `../../build` 之类仓库路径。
+      - **补记（2026-10-26，SDK 归档落地后）**：`libzhulong_algo_sdk.a` 进入前缀，`Zhulong::AlgoSDK`
+        由 config 的 `if(EXISTS …)` 条件导入；包侧 `CMakeLists.txt` 现在同时产出
+        **包根可执行文件 `<manifest.id>`**（`-Wl,--exclude-libs,ALL`，链接 `Zhulong::AlgoSDK Zhulong::AlgoRuntime`）
+        与开发期 `devtest`。实测：
+        `nm -D --defined-only build/plate_recognition | grep -c zhulong` = **0**；
+        `./plate_recognition --verify --sample <ppm>` → `sample_decoded:true, count:2`；
+        `--sample sample.jpg` → `sample_decoded:false, count:0`（骨架只解 netpbm，如实报 false）。
       - **独立开发实测**（这是本节要证明的东西）：
         1. `cp -a packages/plate_recognition/onnx /tmp/pkgdev/plate_recognition`，
            `make test SDK_PREFIX=/tmp/pkgdev/sdk-prefix` → 2 块车牌、`result.jpg` 生成；

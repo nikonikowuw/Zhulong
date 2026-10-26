@@ -1,0 +1,999 @@
+/**
+ * @file algo_main.cpp
+ * @brief 算法包可执行文件骨架的实现（静态链接进包，宿主不再 dlopen）
+ *
+ * 代码自 `native/src/algorithm/runner/runner.cpp` 迁移而来，语义必须与之一致：
+ *   - stage token、退出码表、ACK 时机、去噪策略（只在有目标时上报）逐字保留；
+ *   - 唯一差异：本文件**不**加载 `.so`，API 表由 `ZHULONG_ALGO_MAIN` 生成的
+ *     `PluginApi<...>::get_api` 直接提供（算法与骨架在同一个二进制里）。
+ *
+ * 归属：编译进 `libzhulong_algo_sdk.a`，随 SDK 前缀分发给包作者。
+ */
+
+#include <zhulong/algo_main.hpp>
+#include <zhulong/plugin.h>
+
+#include "common/log.hpp"
+#include "algorithm/runner/json.hpp"
+#include "algorithm/runner/gallery_index.hpp"
+#include "algorithm/runner/gallery_parser.hpp"
+#include "algorithm/ipc/ipc_protocol.hpp"
+#include "algorithm/ipc/shm_pool.hpp"
+#include "algorithm/ipc/unix_socket.hpp"
+#include <zhulong/runtime/runtime_factory.hpp>
+
+#include <unistd.h>
+#include <sys/mman.h>
+#if defined(__linux__)
+#include <sys/ioctl.h>
+#ifndef DMA_BUF_SYNC_READ
+struct dma_buf_sync
+{
+    uint64_t flags;
+};
+#define DMA_BUF_SYNC_READ (1 << 0)
+#define DMA_BUF_SYNC_WRITE (2 << 0)
+#define DMA_BUF_SYNC_START (0 << 2)
+#define DMA_BUF_SYNC_END (1 << 2)
+#define DMA_BUF_BASE 'b'
+#define DMA_BUF_IOCTL_SYNC _IOW(DMA_BUF_BASE, 0, struct dma_buf_sync)
+#endif
+#endif
+
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+namespace zhulong
+{
+namespace sdk
+{
+namespace detail
+{
+    using namespace zhulong::runner;
+
+    template <typename... Parts>
+    void write_runner_error_line(Parts &&...parts)
+    {
+        std::ostringstream output;
+        (output << ... << std::forward<Parts>(parts));
+        std::string line = output.str();
+        line.push_back('\n');
+        write_runner_stderr(line.data(), line.size());
+    }
+
+    /**
+     * @brief 从 FrameBroker socket 路径中解析 stream_id。
+     *
+     * native 宿主按 `<base_dir>/zhulong_broker_<stream_id>.sock` 派生路径
+     * （frame_broker.cpp:20），因此 stream_id 可从字面路径反解，无需扩展 IPC 协议。
+     * 解析失败返回 0（stream_id 从 1 开始，0 永不是合法值）。
+     */
+    inline uint64_t parse_stream_id_from_socket(const std::string &socket_path)
+    {
+        const std::string marker = "zhulong_broker_";
+        const auto start = socket_path.rfind(marker);
+        if (start == std::string::npos)
+        {
+            return 0;
+        }
+        const auto digits_begin = start + marker.size();
+        const auto suffix = socket_path.rfind(".sock");
+        if (suffix == std::string::npos || suffix <= digits_begin)
+        {
+            return 0;
+        }
+
+        uint64_t value = 0;
+        for (auto i = digits_begin; i < suffix; ++i)
+        {
+            const char c = socket_path[i];
+            if (c < '0' || c > '9')
+            {
+                return 0;
+            }
+            value = value * 10 + static_cast<uint64_t>(c - '0');
+        }
+        return value;
+    }
+
+    /**
+     * @brief 将插件返回的推理结果序列化为单行 JSON 字符串
+     *
+     * 按 result_type 分派为三种载荷形态（detection / classification / person_structure），
+     * 其余类型归为 custom 空载荷。所有字符串字段（标签、person_id、person_name）均经
+     * runner::json_quote 转义，保证输出可被标准 JSON parser 解析。
+     *
+     * @param stream_id 来源物理流 ID
+     * @param pts 帧呈现时间戳（原样透传，不做单位换算）
+     * @param cost_ms 本次推理耗时（毫秒，仅诊断用）
+     * @param result 插件产出的结果句柄（可为空，表示无输出）
+     * @return std::string 单行 JSON 文本（不含换行符）
+     */
+    static std::string serialize_inference_result(uint64_t stream_id,
+                                                  int64_t pts,
+                                                  int64_t capture_time_ms,
+                                                  int64_t cost_ms,
+                                                  const zhulong_inference_result* result,
+                                                  const std::string& algorithm_id = "")
+    {
+        std::ostringstream ss;
+        ss << "{\"stream_id\":" << stream_id
+           << ",\"pts\":" << pts
+           << ",\"capture_time_ms\":" << capture_time_ms
+           << ",\"cost_ms\":" << cost_ms
+           << ",\"algorithm_id\":" << runner::json_quote(algorithm_id);
+
+        if (!result || result->count == 0)
+        {
+            ss << ",\"task_type\":\"\""
+               << ",\"detections\":[]"
+               << ",\"classifications\":[]"
+               << ",\"persons\":[]"
+               << ",\"vehicles\":[]}";
+            return ss.str();
+        }
+
+        if (result->result_type == ZHULONG_RESULT_TYPE_DETECTION)
+        {
+            ss << ",\"task_type\":\"detection\""
+               << ",\"detections\":[";
+            const auto* boxes = static_cast<const zhulong_bbox*>(result->data);
+            for (uint32_t i = 0; i < result->count; ++i)
+            {
+                if (i > 0) ss << ",";
+                ss << "{\"box\":[" << boxes[i].box[0] << "," << boxes[i].box[1] << ","
+                   << boxes[i].box[2] << "," << boxes[i].box[3] << "]"
+                   << ",\"label\":" << runner::json_quote(boxes[i].label)
+                   << ",\"score\":" << boxes[i].confidence << "}";
+            }
+            ss << "],\"classifications\":[],\"persons\":[],\"vehicles\":[]}";
+        }
+        else if (result->result_type == ZHULONG_RESULT_TYPE_CLASSIFICATION)
+        {
+            ss << ",\"task_type\":\"classification\""
+               << ",\"detections\":[],\"classifications\":[";
+            const auto* items = static_cast<const zhulong_classification_item*>(result->data);
+            for (uint32_t i = 0; i < result->count; ++i)
+            {
+                if (i > 0) ss << ",";
+                ss << "{\"label\":" << runner::json_quote(items[i].label)
+                   << ",\"score\":" << items[i].confidence << "}";
+            }
+            ss << "],\"persons\":[],\"vehicles\":[]}";
+        }
+        else if (result->result_type == ZHULONG_RESULT_TYPE_PERSON_STRUCTURE)
+        {
+            ss << ",\"task_type\":\"person_structure\""
+               << ",\"detections\":[],\"classifications\":[],\"persons\":[";
+            const auto* persons = static_cast<const zhulong_person_item*>(result->data);
+            for (uint32_t i = 0; i < result->count; ++i)
+            {
+                if (i > 0) ss << ",";
+                const auto& p = persons[i];
+                ss << "{\"track_id\":" << p.track_id
+                   << ",\"body_box\":[" << p.body_box[0] << "," << p.body_box[1] << ","
+                   << p.body_box[2] << "," << p.body_box[3] << "]"
+                   << ",\"body_score\":" << p.body_score
+                   << ",\"faces\":[";
+                for (uint32_t j = 0; j < p.face_count; ++j)
+                {
+                    if (j > 0) ss << ",";
+                    const auto& f = p.faces[j];
+                    ss << "{\"box\":[" << f.box[0] << "," << f.box[1] << ","
+                       << f.box[2] << "," << f.box[3] << "]"
+                       << ",\"quality\":" << f.quality
+                       << ",\"landmarks\":[";
+                    for (size_t k = 0; k < ZHULONG_FACE_LANDMARK_COUNT; ++k)
+                    {
+                        if (k > 0) ss << ",";
+                        ss << "[" << f.landmarks[k][0] << "," << f.landmarks[k][1] << "]";
+                    }
+                    ss << "],\"matched\":" << (f.matched ? "true" : "false")
+                       << ",\"similarity\":" << f.similarity
+                       << ",\"person_id\":" << runner::json_quote(f.person_id)
+                       << ",\"person_name\":" << runner::json_quote(f.person_name)
+                       << ",\"matched_face_id\":" << runner::json_quote(f.matched_face_id)
+                       << ",\"candidates\":[";
+                    for (uint32_t k = 0; k < f.candidate_count; ++k)
+                    {
+                        if (k > 0) ss << ",";
+                        const auto& c = f.candidates[k];
+                        ss << "{\"person_id\":" << runner::json_quote(c.person_id)
+                           << ",\"person_name\":" << runner::json_quote(c.person_name)
+                           << ",\"face_id\":" << runner::json_quote(c.face_id)
+                           << ",\"similarity\":" << c.similarity << "}";
+                    }
+                    ss << "]}";
+                }
+                ss << "]}";
+            }
+            ss << "],\"vehicles\":[]}";
+        }
+        else if (result->result_type == ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE)
+        {
+            ss << ",\"task_type\":\"vehicle_structure\""
+               << ",\"detections\":[],\"classifications\":[],\"persons\":[]"
+               << ",\"vehicles\":[";
+            const auto* vehicles = static_cast<const zhulong_vehicle_item*>(result->data);
+            for (uint32_t i = 0; i < result->count; ++i)
+            {
+                if (i > 0) ss << ",";
+                const auto& v = vehicles[i];
+                ss << "{\"track_id\":" << v.track_id
+                   << ",\"vehicle_box\":[" << v.vehicle_box[0] << "," << v.vehicle_box[1] << ","
+                   << v.vehicle_box[2] << "," << v.vehicle_box[3] << "]"
+                   << ",\"vehicle_score\":" << v.vehicle_score
+                   << ",\"vehicle_type\":" << runner::json_quote(v.vehicle_type)
+                   << ",\"vehicle_color\":" << runner::json_quote(v.vehicle_color)
+                   << ",\"plates\":[";
+                for (uint32_t j = 0; j < v.plate_count; ++j)
+                {
+                    if (j > 0) ss << ",";
+                    const auto& pl = v.plates[j];
+                    ss << "{\"box\":[" << pl.box[0] << "," << pl.box[1] << ","
+                       << pl.box[2] << "," << pl.box[3] << "]"
+                       << ",\"score\":" << pl.score
+                       << ",\"plate_number\":" << runner::json_quote(pl.plate_number)
+                       << ",\"plate_color\":" << runner::json_quote(pl.plate_color)
+                       << ",\"plate_type\":" << pl.plate_type << "}";
+                }
+                ss << "]}";
+            }
+            ss << "]}";
+        }
+        else
+        {
+            ss << ",\"task_type\":\"custom\",\"detections\":[],\"classifications\":[],\"persons\":[],\"vehicles\":[]}";
+        }
+
+        return ss.str();
+    }
+
+    /**
+     * @brief 验包用的样本帧（PPM/PGM 解码结果）
+     */
+    struct SampleFrame
+    {
+        int width{0};
+        int height{0};
+        std::vector<uint8_t> rgb; /**< 紧凑 RGB24（PGM 单通道展开为 RGB） */
+        bool decoded() const noexcept { return width > 0 && height > 0 && !rgb.empty(); }
+    };
+
+    /**
+     * @brief 读取 netpbm 头字段，跳过 PPM/PGM 注释行
+     */
+    bool read_netpbm_header(std::istream &input, std::string &magic, int &width, int &height, int &max_value)
+    {
+        if (!(input >> magic) || (magic != "P6" && magic != "P5"))
+        {
+            return false;
+        }
+        auto next_int = [&input](int &value) -> bool {
+            while (true)
+            {
+                input >> std::ws;
+                if (input.peek() == '#')
+                {
+                    std::string ignored;
+                    std::getline(input, ignored);
+                    continue;
+                }
+                return static_cast<bool>(input >> value);
+            }
+        };
+        if (!next_int(width) || !next_int(height) || !next_int(max_value))
+        {
+            return false;
+        }
+        return width > 0 && height > 0 && max_value > 0 && max_value <= 255;
+    }
+
+    /**
+     * @brief 解码 netpbm 样本帧（P6 RGB / P5 灰度）为紧凑 RGB24
+     *
+     * ⚠️ 刻意不引入 JPEG/PNG 解码器：Runner 不链接 FFmpeg，也不应有图像解码依赖。
+     * 需要「真实样本帧」的调用方（Go 侧验包门禁、开发机自测）负责把图转成 netpbm。
+     * 解码失败不是致命错误：回退合成帧并输出 sample_decoded=false，绝不假装验过样本。
+     */
+    SampleFrame load_sample_frame(const std::string &path)
+    {
+        SampleFrame frame;
+        std::ifstream input(path, std::ios::binary);
+        if (!input.is_open())
+        {
+            return frame;
+        }
+
+        std::string magic;
+        int max_value = 0;
+        if (!read_netpbm_header(input, magic, frame.width, frame.height, max_value))
+        {
+            frame.width = 0;
+            frame.height = 0;
+            return frame;
+        }
+        input.get(); // 头部与像素数据之间的单个空白符
+
+        const size_t pixels = static_cast<size_t>(frame.width) * static_cast<size_t>(frame.height);
+        if (magic == "P6")
+        {
+            frame.rgb.resize(pixels * 3);
+            input.read(reinterpret_cast<char *>(frame.rgb.data()), static_cast<std::streamsize>(frame.rgb.size()));
+            if (input.gcount() != static_cast<std::streamsize>(frame.rgb.size()))
+            {
+                frame.rgb.clear();
+            }
+        }
+        else
+        {
+            std::vector<uint8_t> gray(pixels);
+            input.read(reinterpret_cast<char *>(gray.data()), static_cast<std::streamsize>(gray.size()));
+            if (input.gcount() != static_cast<std::streamsize>(gray.size()))
+            {
+                return SampleFrame{};
+            }
+            frame.rgb.resize(pixels * 3);
+            for (size_t i = 0; i < pixels; ++i)
+            {
+                frame.rgb[i * 3 + 0] = gray[i];
+                frame.rgb[i * 3 + 1] = gray[i];
+                frame.rgb[i * 3 + 2] = gray[i];
+            }
+        }
+        if (frame.rgb.size() != pixels * 3)
+        {
+            return SampleFrame{};
+        }
+        return frame;
+    }
+
+    /**
+     * @brief 当前进程的推理后端标识（诊断用，来自编译期后端选择）
+     */
+    std::string inference_backend_name()
+    {
+        return std::string(zhulong::default_inference_backend_name());
+    }
+
+    /**
+     * @brief 单次黑盒验包路径：加载插件并执行一次完整推理生命周期
+     *
+     * 依次执行 model_create -> worker_create -> task_open -> process -> result_release，
+     * 任一步失败即输出对应 stage 的 JSON 诊断并提前返回。退出码 0~5 对应
+     * api_table / model_create / worker_create / task_open / process 各阶段失败。
+     *
+     * 样本帧语义：`--sample` 指向 PPM/PGM 时**真的**把这张图喂给插件（`sample_decoded=true`）；
+     * 其余格式（如包里约定的 sample.jpg）Runner 无法解码，回退合成帧并显式标记
+     * `sample_decoded=false` —— 宁可暴露「没验到真实样本」，也不静默伪造一次通过。
+     *
+     * @param api 已构造好的 C ABI 表（算法与骨架同进程，没有 .so 可加载）
+     * @param sample_path 样本帧路径（PPM/PGM 会被真实解码）
+     * @return int 0 全链路通过；非 0 为失败阶段序号
+     */
+    int run_verify(const zhulong_plugin_api_v1 &api, const std::string &sample_path)
+    {
+        std::cout << "{\"step\":\"abi_verified\",\"name\":"
+                  << runner::json_quote(api.plugin_name ? api.plugin_name : "")
+                  << ",\"version\":" << runner::json_quote(api.plugin_version ? api.plugin_version : "")
+                  << "}" << std::endl;
+
+        // 1. 创建模型
+        zhulong_model_group_h model = nullptr;
+        zhulong_status_t rc = api.model_create("{}", &model);
+        if (rc != ZHULONG_PLUGIN_OK || !model)
+        {
+            // 测试夹具后端（test_stub）按设计拒绝真实模型：这时的“模型加载失败”不是插件缺陷，
+            // 而是本构建不含真实推理能力。把后端名一并记入日志，否则运维会在
+            // “模型没拷全”与“host 后端选错”之间瞎猜。
+            ZL_LOGE(0, "algorithm.runner", "plugin_model_create_failed rc=%d model_present=%d backend=%s",
+                    static_cast<int>(rc), model != nullptr ? 1 : 0, inference_backend_name().c_str());
+            write_runner_error_line("{\"status\":\"failed\",\"stage\":\"model_create\",\"rc\":", rc, "}");
+            return 2;
+        }
+
+        // 2. 创建 Worker
+        zhulong_worker_ctx_h worker = nullptr;
+        rc = api.worker_create(model, 0, &worker);
+        if (rc != ZHULONG_PLUGIN_OK || !worker)
+        {
+            ZL_LOGE(0, "algorithm.runner", "plugin_worker_create_failed rc=%d worker_present=%d",
+                    static_cast<int>(rc), worker != nullptr ? 1 : 0);
+            api.model_destroy(model);
+            write_runner_error_line("{\"status\":\"failed\",\"stage\":\"worker_create\",\"rc\":", rc, "}");
+            return 3;
+        }
+
+        // 3. 打开任务
+        zhulong_task_ctx_h task = nullptr;
+        rc = api.task_open(worker, 1, &task);
+        if (rc != ZHULONG_PLUGIN_OK || !task)
+        {
+            ZL_LOGE(0, "algorithm.runner", "plugin_task_open_failed rc=%d task_present=%d",
+                    static_cast<int>(rc), task != nullptr ? 1 : 0);
+            api.worker_destroy(worker);
+            api.model_destroy(model);
+            write_runner_error_line("{\"status\":\"failed\",\"stage\":\"task_open\",\"rc\":", rc, "}");
+            return 4;
+        }
+
+        // 4. 准备样本帧：`--sample` 为 PPM/PGM 时真实解码，否则回退合成帧并如实标记
+        const SampleFrame sample = load_sample_frame(sample_path);
+        const bool sample_decoded = sample.decoded();
+        if (!sample_decoded)
+        {
+            ZL_LOGW(0, "algorithm.runner", "verify_sample_undecodable reason=unsupported_or_unreadable");
+        }
+
+        int width = sample_decoded ? sample.width : 640;
+        int height = sample_decoded ? sample.height : 480;
+        std::vector<uint8_t> synthetic;
+        const uint8_t *pixels = nullptr;
+        zhulong_pixel_format_t format = ZHULONG_PIXEL_FORMAT_RGB24;
+        if (sample_decoded)
+        {
+            pixels = sample.rgb.data();
+        }
+        else
+        {
+            synthetic.assign(static_cast<size_t>(width) * static_cast<size_t>(height) * 3, 128);
+            pixels = synthetic.data();
+            format = ZHULONG_PIXEL_FORMAT_BGR24;
+        }
+
+        zhulong_frame_view frame;
+        std::memset(&frame, 0, sizeof(frame));
+        frame.frame_id = 1;
+        frame.pts = 1000;
+        frame.width = width;
+        frame.height = height;
+        frame.format = format;
+        frame.planes[0] = pixels;
+        frame.strides[0] = width * 3;
+        frame.dma_buf_fd = -1;
+
+        // 5. 单次标准推理调用
+        zhulong_inference_result *result = nullptr;
+        rc = api.process(task, &frame, &result);
+        if (rc != ZHULONG_PLUGIN_OK)
+        {
+            ZL_LOGE(0, "algorithm.runner", "plugin_process_failed rc=%d", static_cast<int>(rc));
+            api.task_close(task);
+            api.worker_destroy(worker);
+            api.model_destroy(model);
+            write_runner_error_line("{\"status\":\"failed\",\"stage\":\"process\",\"rc\":", rc, "}");
+            return 5;
+        }
+
+        uint32_t count = result ? result->count : 0;
+        int32_t res_type = result ? result->result_type : 0;
+
+        // 6. 释放结果
+        if (result)
+        {
+            api.result_release(result);
+        }
+
+        // 7. 析构资源
+        api.task_close(task);
+        api.worker_destroy(worker);
+        api.model_destroy(model);
+
+        std::cout << "{\"status\":\"passed\",\"sample\":" << runner::json_quote(sample_path)
+                  << ",\"sample_decoded\":" << (sample_decoded ? "true" : "false")
+                  << ",\"width\":" << width
+                  << ",\"height\":" << height
+                  << ",\"result_type\":" << res_type
+                  << ",\"count\":" << count << "}" << std::endl;
+        return 0;
+    }
+
+    /**
+     * @brief IPC 长驻消费路径：连接一个或多个 FrameBroker 并持续消费共享内存帧
+     *
+     * ⚠️ 退出码表（运维与 Go 看门狗依赖此表区分故障类型）：
+     * | 码 | 含义 |
+     * | -- | ---- |
+     * | 0  | 正常退出（收到停止信号或达到 --max-frames） |
+     * | 1  | dlopen 失败，或 client name 超长（HandshakeReq.client_name[32]） |
+     * | 2  | model_create 失败 |
+     * | 3  | worker_create 失败 |
+     * | 4  | task_open 失败 |
+     * | 5  | broker 连接失败 / 无法从 --broker 路径反解 stream_id / 未提供 --broker |
+     * | 6  | 握手请求发送失败 |
+     * | 7  | 握手应答接收失败或类型不符 |
+     * | 8  | 共享内存只读映射失败 |
+     *
+     * ⚠️ 多路 `--broker` 的 D6 语义：任一路失败即置位 `stop_all`，已连上的路也会被一并终止，
+     * 不存在「部分连接成功」的中间态。
+     *
+     * @param api 已构造好的 C ABI 表（算法与骨架同进程，没有 .so 可加载）
+     * @param options 启动参数（brokers / client_name / algorithm_id / max_frames）
+     * @return int 退出码（见上表）
+     */
+    int run_ipc_workers(const zhulong_plugin_api_v1 &api, const ::zhulong::sdk::Options &options)
+    {
+        const std::vector<std::string> &broker_socks = options.brokers;
+        const std::string &client_name = options.client_name;
+        const int max_frames = options.max_frames;
+        const std::string &algorithm_id = options.algorithm_id;
+
+        if (broker_socks.empty())
+        {
+            write_runner_error_line("{\"status\":\"failed\",\"stage\":\"args\",\"error\":\"no broker socks provided\"}");
+            return 5;
+        }
+
+        zhulong_model_group_h model = nullptr;
+        zhulong_status_t model_rc = api.model_create("{}", &model);
+        if (model_rc != ZHULONG_PLUGIN_OK || !model)
+        {
+            ZL_LOGE(0, "algorithm.runner", "plugin_model_create_failed rc=%d model_present=%d backend=%s",
+                    static_cast<int>(model_rc), model != nullptr ? 1 : 0, inference_backend_name().c_str());
+            return 2;
+        }
+
+        std::atomic<bool> stop_all{false};
+        std::atomic<int> exit_code{0};
+        GalleryIndex gallery_index;
+
+        auto run_single_worker = [&](size_t idx, const std::string &broker_sock)
+        {
+            // ⚠️ 必须是 lambda 局部变量：多路 --broker 时本 lambda 被多个线程并发执行，
+            //    共享外层变量构成数据竞争（-race 阻塞级）。
+            zhulong_status_t rc = ZHULONG_PLUGIN_OK;
+            // ⚠️ task 身份必须包含 stream_id：一个算法包可同时订阅多路流，
+            // 固定 task_id 会让多路共用一个 task state（父任务 design.md:242 要求 task→worker 亲和）。
+            // 这是 runner 唯一允许依赖 socket 路径命名格式的地方。
+            const uint64_t stream_id = parse_stream_id_from_socket(broker_sock);
+            if (stream_id == 0)
+            {
+                write_runner_error_line("{\"status\":\"failed\",\"stage\":\"args\",\"index\":", idx,
+                                        ",\"path\":\"", broker_sock,
+                                        "\",\"error\":\"cannot derive stream id from broker socket path\"}");
+                int expected = 0;
+                exit_code.compare_exchange_strong(expected, 5);
+                stop_all.store(true);
+                return;
+            }
+
+            std::string name = client_name;
+            if (broker_socks.size() > 1)
+            {
+                name += "#" + std::to_string(idx);
+            }
+            if (name.size() >= sizeof(ipc::HandshakeReq::client_name))
+            {
+                write_runner_error_line("{\"status\":\"failed\",\"stage\":\"name_check\",\"error\":\"client name too long: ", name, "\"}");
+                int expected = 0;
+                exit_code.compare_exchange_strong(expected, 1);
+                stop_all.store(true);
+                return;
+            }
+
+            zhulong_worker_ctx_h worker = nullptr;
+            zhulong_status_t wrc = api.worker_create(model, static_cast<uint32_t>(idx), &worker);
+            if (wrc != ZHULONG_PLUGIN_OK || !worker)
+            {
+                ZL_LOGE(stream_id, "algorithm.runner", "plugin_worker_create_failed rc=%d worker_present=%d",
+                        static_cast<int>(wrc), worker != nullptr ? 1 : 0);
+                write_runner_error_line("{\"status\":\"failed\",\"stage\":\"worker_create\",\"rc\":", wrc, "}");
+                int expected = 0;
+                exit_code.compare_exchange_strong(expected, 3);
+                stop_all.store(true);
+                return;
+            }
+
+            zhulong_task_ctx_h task = nullptr;
+            wrc = api.task_open(worker, stream_id, &task);
+            if (wrc != ZHULONG_PLUGIN_OK || !task)
+            {
+                ZL_LOGE(stream_id, "algorithm.runner", "plugin_task_open_failed rc=%d task_present=%d",
+                        static_cast<int>(wrc), task != nullptr ? 1 : 0);
+                write_runner_error_line("{\"status\":\"failed\",\"stage\":\"task_open\",\"rc\":", wrc, "}");
+                api.worker_destroy(worker);
+                int expected = 0;
+                exit_code.compare_exchange_strong(expected, 4);
+                stop_all.store(true);
+                return;
+            }
+
+            ipc::UnixSocketClient client;
+            std::string conn_err;
+            if (!client.connect(broker_sock, &conn_err))
+            {
+                write_runner_error_line("{\"status\":\"failed\",\"stage\":\"connect\",\"index\":", idx,
+                                        ",\"path\":\"", broker_sock,
+                                        "\",\"error\":\"", conn_err, "\"}");
+                api.task_close(task);
+                api.worker_destroy(worker);
+                int expected = 0;
+                exit_code.compare_exchange_strong(expected, 5);
+                stop_all.store(true);
+                return;
+            }
+
+            // 1. 发送握手
+            ipc::HandshakeReq req{};
+            req.api_version = 1;
+            std::strncpy(req.client_name, name.c_str(), sizeof(req.client_name) - 1);
+            if (!client.send_msg(ipc::MSG_HANDSHAKE_REQ, &req, sizeof(req)))
+            {
+                api.task_close(task);
+                api.worker_destroy(worker);
+                int expected = 0;
+                exit_code.compare_exchange_strong(expected, 6);
+                stop_all.store(true);
+                return;
+            }
+
+            // 2. 接收握手应答
+            ipc::IpcHeader resp_hdr{};
+            std::vector<uint8_t> resp_payload;
+            if (!client.recv_msg(resp_hdr, resp_payload, 5000) || resp_hdr.msg_type != ipc::MSG_HANDSHAKE_RESP || resp_payload.size() < sizeof(ipc::HandshakeResp))
+            {
+                api.task_close(task);
+                api.worker_destroy(worker);
+                int expected = 0;
+                exit_code.compare_exchange_strong(expected, 7);
+                stop_all.store(true);
+                return;
+            }
+
+            ipc::HandshakeResp resp{};
+            std::memcpy(&resp, resp_payload.data(), sizeof(resp));
+            uint32_t my_client_id = resp.client_id;
+
+            // 3. 映射共享内存
+            ipc::ShmPool shm;
+            std::string shm_err;
+            if (!shm.init(resp.shm_name, ipc::ShmMode::OPEN_READ_ONLY, 0, 0, &shm_err))
+            {
+                write_runner_error_line("{\"status\":\"failed\",\"stage\":\"shm_init\",\"error\":\"", shm_err, "\"}");
+                api.task_close(task);
+                api.worker_destroy(worker);
+                int expected = 0;
+                exit_code.compare_exchange_strong(expected, 8);
+                stop_all.store(true);
+                return;
+            }
+
+            int frames_processed = 0;
+            bool last_had_targets = false;
+            bool process_failure_reported = false;
+            ShardedSyncContext sync_ctx;
+            // ⚠️ 退出门禁：recv_msg_with_fd 返回 false 有两种含义——「500ms 内没等到帧」
+            //    （可重试）与「连接已不可恢复」（EOF / POLLHUP / 流脱节）。后者由客户端内部
+            //    置脏，is_connected() 随即变假。必须在检测到失联时立刻 break，绝不可无条件
+            //    `continue` 重试：宿主被 kill -9 / OOM 杀掉时，那会让 runner 退化成永久
+            //    100% 占用一个 CPU 核的孤儿进程（实测 20s 内烧满 19.98s CPU）。
+            while (!stop_all.load(std::memory_order_relaxed) && (max_frames < 0 || frames_processed < max_frames))
+            {
+                ipc::IpcHeader hdr{};
+                std::vector<uint8_t> payload;
+                int received_fd = -1;
+                if (!client.recv_msg_with_fd(hdr, payload, received_fd, 500))
+                {
+                    if (!client.is_connected())
+                    {
+                        // 宿主进程已消失（kill -9 / OOM / 崩溃）或流已脱节：干净收摊退出，
+                        // 释放插件 worker/task 与共享内存映射，不留孤儿。
+                        std::cerr << "{\"status\":\"info\",\"stage\":\"broker_disconnected\",\"index\":"
+                                  << idx << ",\"frames_processed\":" << frames_processed << "}" << std::endl;
+                        break;
+                    }
+                    continue;
+                }
+
+                if (hdr.msg_type == ipc::MSG_FRAME_DISPATCH && payload.size() >= sizeof(ipc::FrameDispatchMsg))
+                {
+                    ipc::FrameDispatchMsg dispatch{};
+                    std::memcpy(&dispatch, payload.data(), sizeof(dispatch));
+
+                    // ⚠️ 只接受 SCM_RIGHTS 传来的本地副本 fd。绝不回退到 dispatch.reserved_fd：
+                    //    那是宿主进程的 fd 号，在本进程中可能指向任意无关资源。
+                    const int active_dma_fd = received_fd;
+                    void* dma_mmap = nullptr;
+                    if (active_dma_fd >= 0 && shm.slot_size() > 0)
+                    {
+                        dma_mmap = ::mmap(nullptr, shm.slot_size(), PROT_READ, MAP_SHARED, active_dma_fd, 0);
+                        if (dma_mmap == MAP_FAILED)
+                        {
+                            dma_mmap = nullptr;
+                        }
+#if defined(__linux__)
+                        if (dma_mmap != nullptr)
+                        {
+                            struct dma_buf_sync sync{DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ};
+                            ioctl(active_dma_fd, DMA_BUF_IOCTL_SYNC, &sync);
+                        }
+#endif
+                    }
+
+                    const uint8_t *slot_base = (dma_mmap != nullptr)
+                        ? static_cast<const uint8_t*>(dma_mmap)
+                        : shm.slot_read_ptr(dispatch.slot_index);
+                    if (slot_base && dispatch.offsets[0] < shm.slot_size())
+                    {
+                        zhulong_frame_view view{};
+                        view.frame_id = dispatch.frame_id;
+                        view.pts = static_cast<uint64_t>(dispatch.pts);
+                        view.width = dispatch.width;
+                        view.height = dispatch.height;
+                        view.format = dispatch.format;
+                        view.dma_buf_fd = active_dma_fd;
+                        view.strides[0] = dispatch.strides[0];
+                        view.planes[0] = slot_base + dispatch.offsets[0];
+
+                        if (dispatch.offsets[1] > 0 && dispatch.offsets[1] < shm.slot_size())
+                        {
+                            view.strides[1] = dispatch.strides[1];
+                            view.planes[1] = slot_base + dispatch.offsets[1];
+                        }
+                        if (dispatch.offsets[2] > 0 && dispatch.offsets[2] < shm.slot_size())
+                        {
+                            view.strides[2] = dispatch.strides[2];
+                            view.planes[2] = slot_base + dispatch.offsets[2];
+                        }
+
+                        zhulong_inference_result *result = nullptr;
+                        auto t0 = std::chrono::steady_clock::now();
+                        rc = api.process(task, &view, &result);
+                        auto t1 = std::chrono::steady_clock::now();
+                        int64_t cost_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+
+                        if (rc != ZHULONG_PLUGIN_OK)
+                        {
+                            if (!process_failure_reported)
+                            {
+                                ZL_LOGE(stream_id, "algorithm.runner", "plugin_process_failed rc=%d",
+                                        static_cast<int>(rc));
+                            }
+                            process_failure_reported = true;
+                        }
+                        else
+                        {
+                            process_failure_reported = false;
+                        }
+
+                        uint32_t count = (result != nullptr && rc == ZHULONG_PLUGIN_OK) ? result->count : 0;
+                        bool has_targets = (count > 0);
+
+                        // 仅在本次或上次有目标时才上报结果，避免连续空帧刷屏（去噪）
+                        if (has_targets || last_had_targets)
+                        {
+                            std::string payload = serialize_inference_result(dispatch.stream_id, dispatch.pts, dispatch.capture_time_ms, cost_ms, result, algorithm_id);
+                            client.send_msg(ipc::MSG_RESULT, payload.data(), payload.size());
+                        }
+                        last_had_targets = has_targets;
+
+                        // ⚠️ R2：结果内存由插件创建，只能由同一插件的 result_release 释放。
+                        // 无论 process 是否成功，只要 result 非空就必须释放，不得泄漏。
+                        if (result)
+                        {
+                            api.result_release(result);
+                        }
+                    }
+
+                    if (dma_mmap != nullptr)
+                    {
+#if defined(__linux__)
+                        struct dma_buf_sync sync{DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ};
+                        ioctl(active_dma_fd, DMA_BUF_IOCTL_SYNC, &sync);
+#endif
+                        ::munmap(dma_mmap, shm.slot_size());
+                        dma_mmap = nullptr;
+                    }
+
+                    // 及时释放本进程通过 SCM_RIGHTS 接收到的描述符副本，杜绝文件句柄泄漏
+                    if (received_fd >= 0)
+                    {
+                        ::close(received_fd);
+                        received_fd = -1;
+                    }
+
+                    // 发送 ACK
+                    ipc::FrameAckMsg ack{};
+                    ack.stream_id = dispatch.stream_id;
+                    ack.frame_id = dispatch.frame_id;
+                    ack.slot_index = dispatch.slot_index;
+                    ack.generation = dispatch.generation;
+                    ack.client_id = my_client_id;
+                    client.send_msg(ipc::MSG_FRAME_ACK, &ack, sizeof(ack));
+
+                    frames_processed++;
+                }
+                else if (hdr.msg_type == ipc::MSG_GALLERY_SYNC && !payload.empty())
+                {
+                    ParsedSyncShard shard = parse_sync_shard_payload(payload.data(), payload.size());
+                    // ⚠️ 聚合逻辑提取到 accumulate_sync_shard（见 gallery_parser.hpp）：
+                    //    它内部完成「索引范围门禁 + 分片级幂等」，使该安全属性可被单测直接覆盖。
+                    const bool accepted = (shard.shard_total > 0) && accumulate_sync_shard(sync_ctx, shard);
+                    if (shard.shard_total > 0 && !accepted &&
+                        (shard.shard_index < 0 || shard.shard_index >= shard.shard_total))
+                    {
+                        write_runner_error_line("{\"status\":\"warning\",\"stage\":\"gallery_sync\","
+                                                "\"error\":\"shard_index out of range\",\"shard_index\":",
+                                                shard.shard_index, ",\"shard_total\":", shard.shard_total, "}");
+                    }
+                    // 重复分片无需告警（正常重传）
+
+                    // ⚠️ 仅在「本分片是新到达的」且「已收齐」时才应用底库。
+                    //    若去掉 accepted 条件：收齐后 `is_complete()` 恒为真，
+                    //    重复分片会再次 reset，而 collected_items 已被 move → **清空底库**。
+                    if (accepted && sync_ctx.is_complete())
+                    {
+                        size_t total_count = sync_ctx.collected_items.size();
+                        gallery_index.reset(std::move(sync_ctx.collected_items));
+
+                        // 发送 MSG_GALLERY_ACK
+                        std::string ack_json = "{\"sync_id\":" + runner::json_quote(sync_ctx.sync_id) +
+                                               ",\"success\":true,\"total_faces\":" + std::to_string(total_count) + "}";
+                        client.send_msg(ipc::MSG_GALLERY_ACK, ack_json.data(), ack_json.size());
+                    }
+                }
+                else if (hdr.msg_type == ipc::MSG_GALLERY_UPSERT && !payload.empty())
+                {
+                    FaceTemplate item = parse_upsert_payload(payload.data(), payload.size());
+                    if (!item.face_id.empty())
+                    {
+                        gallery_index.upsert(std::move(item));
+                    }
+                }
+                else if (hdr.msg_type == ipc::MSG_GALLERY_DELETE && !payload.empty())
+                {
+                    ParsedDelete del = parse_delete_payload(payload.data(), payload.size());
+                    gallery_index.remove(del.face_id, del.person_id);
+                }
+
+                if (received_fd >= 0)
+                {
+                    ::close(received_fd);
+                    received_fd = -1;
+                }
+            }
+
+            api.task_close(task);
+            api.worker_destroy(worker);
+        };
+
+        if (broker_socks.size() == 1)
+        {
+            run_single_worker(0, broker_socks[0]);
+        }
+        else
+        {
+            std::vector<std::thread> threads;
+            threads.reserve(broker_socks.size());
+            for (size_t i = 0; i < broker_socks.size(); ++i)
+            {
+                threads.emplace_back(run_single_worker, i, broker_socks[i]);
+            }
+            for (auto &t : threads)
+            {
+                if (t.joinable())
+                {
+                    t.join();
+                }
+            }
+        }
+
+        api.model_destroy(model);
+        return exit_code.load();
+    }
+
+
+    void print_start_line(const std::string &plugin_label)
+    {
+        std::cout << "{\"step\":\"start\",\"plugin\":" << runner::json_quote(plugin_label) << "}" << std::endl;
+    }
+
+    void report_dlopen_failure(const std::string &error_text)
+    {
+        write_runner_error_line("{\"status\":\"failed\",\"stage\":\"dlopen\",\"error\":",
+                                runner::json_quote(error_text), "}");
+    }
+
+    bool parse_options(int argc, char **argv, Options &options, std::string &error)
+    {
+        for (int i = 1; i < argc; ++i)
+        {
+            const std::string arg = argv[i];
+            const auto take_value = [&](std::string &out) -> bool {
+                if (i + 1 >= argc)
+                {
+                    error = "missing value for " + arg;
+                    return false;
+                }
+                out = argv[++i];
+                return true;
+            };
+            std::string value;
+            if (arg == "--broker")
+            {
+                if (!take_value(value)) return false;
+                options.brokers.push_back(value);
+            }
+            else if (arg == "--name")
+            {
+                if (!take_value(options.client_name)) return false;
+            }
+            else if (arg == "--algorithm-id")
+            {
+                if (!take_value(options.algorithm_id)) return false;
+            }
+            else if (arg == "--sample")
+            {
+                if (!take_value(options.sample_path)) return false;
+            }
+            else if (arg == "--verify")
+            {
+                options.verify = true;
+            }
+            else if (arg == "--max-frames")
+            {
+                if (!take_value(value)) return false;
+                options.max_frames = std::atoi(value.c_str());
+                if (options.max_frames <= 0)
+                {
+                    error = "--max-frames must be positive";
+                    return false;
+                }
+            }
+            else if (arg == "--plugin")
+            {
+                // 过渡期兼容（阶段 4 之前的宿主仍会带 --plugin <自身路径>）：
+                // 包内不再需要这个路径——可执行文件不是被 dlopen 的。
+                if (!take_value(value)) return false;
+            }
+            else
+            {
+                error = "unknown argument: " + arg;
+                return false;
+            }
+        }
+
+        if (options.verify)
+        {
+            if (options.sample_path.empty()) options.sample_path = "sample.jpg";
+            return true;
+        }
+        if (options.brokers.empty())
+        {
+            error = "no --broker provided (and not in --verify mode)";
+            return false;
+        }
+        return true;
+    }
+
+    int run_api(const zhulong_plugin_api_v1 &api, const Options &options)
+    {
+        // 诊断日志由 log.cpp 的写线程统一落到日志文件（stderr 兜底）；
+        // stdout 只承载结果/验包 JSON，宿主按行解析，两者不可混用。
+        //
+        // ⚠️ `start_runner_log_writer()` 返回 false 有两种含义：写线程已由宿主/测试
+        //    启动，或进程内已装了 log sink。两种都不是错误——此时**不归我们所有**，
+        //    因此也不能在这里 stop（会把宿主的日志通道关掉）。
+        const bool owns_log_writer = zhulong::start_runner_log_writer();
+        const int rc = options.verify ? run_verify(api, options.sample_path)
+                                      : run_ipc_workers(api, options);
+        if (owns_log_writer)
+        {
+            zhulong::stop_runner_log_writer();
+        }
+        return rc;
+    }
+
+} // namespace detail
+} // namespace sdk
+} // namespace zhulong

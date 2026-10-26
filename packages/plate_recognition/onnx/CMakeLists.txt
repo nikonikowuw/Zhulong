@@ -17,11 +17,31 @@ find_package(ZhulongAlgoSDK 1.0 REQUIRED)
 
 find_package(Threads REQUIRED)
 
-add_executable(plate_recognition_devtest EXCLUDE_FROM_ALL
-    tests/dev_infer.cpp
+# 产品代码（算法类本体）：包可执行文件与 devtest 共用，避免两份实现。
+add_library(plate_recognition_core OBJECT
     src/plate_recognition.cpp
     src/plate_detector.cpp
     src/plate_recognizer.cpp
+)
+target_compile_definitions(plate_recognition_core PRIVATE ZHULONG_PLUGIN_BUILD)
+target_include_directories(plate_recognition_core PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(plate_recognition_core PRIVATE Zhulong::AlgoRuntime)
+
+# 交付物：包根可执行文件名必须等于 manifest.id（宿主按 id 找入口）
+add_executable(plate_recognition
+    src/main.cpp
+    $<TARGET_OBJECTS:plate_recognition_core>
+)
+# 自有符号不外泄：静态归档里的 zhulong 符号不进 .dynsym
+target_link_options(plate_recognition PRIVATE "LINKER:--exclude-libs,ALL")
+target_link_libraries(plate_recognition PRIVATE Zhulong::AlgoSDK Zhulong::AlgoRuntime)
+
+# 开发期自测（EXCLUDE_FROM_ALL、无安装规则 → 物理上进不了归档）
+add_executable(plate_recognition_devtest EXCLUDE_FROM_ALL
+    tests/dev_infer.cpp
+    $<TARGET_OBJECTS:plate_recognition_core>
 )
 target_compile_definitions(plate_recognition_devtest PRIVATE ZHULONG_PLUGIN_BUILD)
 target_include_directories(plate_recognition_devtest PRIVATE
