@@ -163,7 +163,7 @@ func TestRecoveryOptionsNormalize(t *testing.T) {
 						t.Fatalf("NewSupervisor panicked for %s: %v", tc.name, r)
 					}
 				}()
-				supervisor = algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, opts, zap.NewNop())
+				supervisor = algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, opts, zap.NewNop())
 			}()
 			t.Cleanup(func() { supervisor.StopAll(time.Second) })
 

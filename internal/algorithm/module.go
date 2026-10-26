@@ -18,9 +18,9 @@ type AlgorithmLifecycle interface {
 }
 
 type algorithmLifecycleImpl struct {
-	service    *Service
-	runnerPath string
-	logger     *zap.Logger
+	service       *Service
+	algorithmsDir string
+	logger        *zap.Logger
 }
 
 func (l *algorithmLifecycleImpl) Start(ctx context.Context) error {
@@ -33,9 +33,10 @@ func (l *algorithmLifecycleImpl) Start(ctx context.Context) error {
 	// stay pinned to no supervisor while burning a full CPU core, and a stale shm
 	// segment would make the next stream fail to attach a broker.
 	//
-	// The sweep only acts on processes whose argv[0] is our runner binary and
-	// whose parent is not another live host, so a second running instance is safe.
-	if report, sweepErr := algorunner.ReapOrphanRunners(ctx, l.runnerPath, l.logger); sweepErr != nil {
+	// The sweep only acts on processes whose argv[0] is a package entry inside
+	// our algorithms directory and whose parent is not another live host, so a
+	// second running instance is safe.
+	if report, sweepErr := algorunner.ReapOrphanRunners(ctx, l.algorithmsDir, l.logger); sweepErr != nil {
 		// Never block boot on a cleanup failure: the host is still usable, and a
 		// stubborn leftover is reported by the supervisor's own crash handling.
 		l.logger.Warn("startup orphan sweep reported problems",
@@ -105,7 +106,7 @@ func NewAlgorithmComponents(
 	logger *zap.Logger,
 ) *AlgorithmComponents {
 	store := NewStore(dbProvider)
-	verifier := NewVerifier(rt.VerifyRunnerPath, host, VerifyOptions{Logger: logger})
+	verifier := NewVerifier(host, VerifyOptions{Logger: logger})
 	supervisor := algorunner.NewSupervisor(store, rt, algorunner.DefaultRecoveryOptions(), logger)
 	service := NewService(store, verifier, supervisor, rt, logger)
 	handler := NewHandler(service, logger)
@@ -116,7 +117,7 @@ func NewAlgorithmComponents(
 		Supervisor:      supervisor,
 		Service:         service,
 		Handler:         handler,
-		Lifecycle:       &algorithmLifecycleImpl{service: service, runnerPath: rt.RunnerPath, logger: logger},
+		Lifecycle:       &algorithmLifecycleImpl{service: service, algorithmsDir: rt.AlgorithmsDir, logger: logger},
 		ProtectedRoutes: handler,
 		UploadRoutes:    handler.UploadRouteRegistrar(),
 	}

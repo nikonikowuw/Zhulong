@@ -75,11 +75,10 @@ func TestPlateRecognitionPackageInstall(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping package build in short mode")
 	}
-	runnerPath := findRunnerBinary(t)
 	archivePath := findPlateRecognitionArchive(t)
 
 	installDir := t.TempDir()
-	verifier := algorithm.NewVerifier(runnerPath, x86Host())
+	verifier := algorithm.NewVerifier(x86Host())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*1e9)
 	defer cancel()
@@ -99,16 +98,19 @@ func TestPlateRecognitionPackageInstall(t *testing.T) {
 		t.Errorf("expected Category %s, got: %s", algorithm.CategoryTraffic, installed.Category)
 	}
 
-	// 安装产物：plugin.so 可执行、模型与样本随包落地
+	// 安装产物：包根可执行文件（名 = manifest.id）、模型与样本随包落地
 	rt := algorunner.Runtime{AlgorithmsDir: installDir}
 	pkgDir := rt.PackageDir(installed.ID, installed.Version)
-	pluginPath := rt.PluginPath(installed.ID, installed.Version)
-	info, err := os.Stat(pluginPath)
+	entryPath := rt.EntryPath(installed.ID, installed.Version)
+	info, err := os.Stat(entryPath)
 	if err != nil {
-		t.Fatalf("stat plugin.so: %v", err)
+		t.Fatalf("stat package entry: %v", err)
 	}
 	if info.Mode().Perm()&0o111 == 0 {
-		t.Errorf("expected plugin.so to have executable permissions, got: %o", info.Mode().Perm())
+		t.Errorf("expected the package entry to be executable, got: %o", info.Mode().Perm())
+	}
+	if _, statErr := os.Stat(filepath.Join(pkgDir, algorunner.LegacyEntryFileName)); statErr == nil {
+		t.Errorf("installed package still ships %s", algorunner.LegacyEntryFileName)
 	}
 	for _, name := range []string{
 		"sample.jpg",

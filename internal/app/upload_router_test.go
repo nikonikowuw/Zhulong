@@ -60,16 +60,22 @@ func createUncompressedTestTarGz(t *testing.T, payloadBytes int) string {
 		"platform": {"arch": "x86_64", "target": "onnx"},
 		"resources": {"compute_cost": 20, "memory_mb": 64}
 	}`)
+	// 包根可执行文件：名字必须等于 manifest.id。它要能应答安装期的 --verify 探针，
+	// 所以内容是一段会打印报告的脚本（不是 elf 桩）。
+	entryScript := []byte("#!/bin/sh\n" +
+		"case \"$1\" in\n" +
+		"  --verify) printf '%s\\n' '{\"status\":\"passed\",\"sample_decoded\":false,\"width\":0,\"height\":0,\"result_type\":1,\"count\":0}'; exit 0;;\n" +
+		"esac\nexit 0\n")
 	files := map[string][]byte{
 		"manifest.json": manifestContent,
-		"plugin.so":     []byte("elf_stub"),
+		"e2e_large_pkg": entryScript,
 		"sample.jpg":    []byte("jpg_stub"),
 	}
 
 	for name, content := range files {
 		hdr := &tar.Header{
 			Name: name,
-			Mode: 0o644,
+			Mode: 0o755,
 			Size: int64(len(content)),
 		}
 		if err := tw.WriteHeader(hdr); err != nil {

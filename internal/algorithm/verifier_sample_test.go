@@ -19,20 +19,21 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
-// fakeVerifyRunnerScript emulates `zhulong_algo_runner --verify-plugin` while
-// recording three facts the verifier contract depends on:
+// fakeVerifyEntryScript is the *package entry* of a stub package: it emulates
+// `<id> --verify --sample <image>` while recording two facts the verifier
+// contract depends on:
 //
-//	$1 → the working directory the runner was started in (must be the package dir)
-//	$2 → the copied sample frame (must be a P6 PPM, i.e. Go decoded sample.jpg)
+//	$CAPTURE_META line 1 → the working directory it was started in (must be the
+//	                       package dir, so weight resolution matches deployment)
+//	$CAPTURE_META line 2 → the sample path, copied to $CAPTURE_PPM (must be a P6
+//	                       PPM, i.e. Go decoded sample.jpg before handing it over)
 //
 // It reports the decoded dimensions from the environment so the test can assert
-// the report parsing without a native binary.
-const fakeVerifyRunnerScript = `#!/bin/sh
+// report parsing without a native binary.
+const fakeVerifyEntryScript = `#!/bin/sh
 sample=""
-plugin=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --verify-plugin) plugin="$2"; shift 2 ;;
     --sample) sample="$2"; shift 2 ;;
     *) shift ;;
   esac
@@ -43,16 +44,6 @@ cp "$sample" "$CAPTURE_PPM"
 printf '{"status":"passed","sample":"%s","sample_decoded":%s,"width":%s,"height":%s,"result_type":1,"count":%s}\n' \
   "$sample" "$SAMPLE_DECODED" "$SAMPLE_W" "$SAMPLE_H" "$RESULT_COUNT"
 `
-
-// writeFakeVerifyRunner installs the script above as an executable runner.
-func writeFakeVerifyRunner(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "fake_runner.sh")
-	if err := os.WriteFile(path, []byte(fakeVerifyRunnerScript), 0o755); err != nil {
-		t.Fatalf("write fake runner: %v", err)
-	}
-	return path
-}
 
 // writeSampleJPEG writes a tiny deterministic JPEG the verifier must decode.
 func writeSampleJPEG(t *testing.T, path string, width, height int) {
@@ -71,11 +62,12 @@ func writeSampleJPEG(t *testing.T, path string, width, height int) {
 }
 
 // newVerifiablePackage lays out a minimal package directory that passes the
-// static gates, so verification reaches the dynamic runner stage.
+// static gates, so verification reaches the dynamic stage. Its entry is the stub
+// script above — the package *is* its executable, there is no separate runner.
 func newVerifiablePackage(t *testing.T, sampleWidth, sampleHeight int) string {
 	t.Helper()
 	dir := t.TempDir()
-	mustWriteFile(t, filepath.Join(dir, "plugin.so"), []byte("fake"), 0o755)
+	mustWriteFile(t, filepath.Join(dir, "sample_pkg"), []byte(fakeVerifyEntryScript), 0o755)
 	writeSampleJPEG(t, filepath.Join(dir, "sample.jpg"), sampleWidth, sampleHeight)
 
 	manifest := algorithm.Manifest{
@@ -98,13 +90,12 @@ func newVerifiablePackage(t *testing.T, sampleWidth, sampleHeight int) string {
 // TestVerifierFeedsDecodedSampleFromPackageCwd pins the two behaviours that make
 // the black-box gate meaningful:
 //
-//  1. the runner is started with the package directory as CWD, so a plugin that
-//     resolves weights relative to its own .so is exercised the way it will run
-//     after install (a repo-CWD run would mask models/models/… style bugs);
+//  1. the entry is started with the package directory as CWD, so a package that
+//     resolves weights relative to its own executable is exercised the way it
+//     will run after install (a repo-CWD run would mask models/models/… bugs);
 //  2. the packaged sample.jpg is decoded by Go and handed over as a real frame,
-//     instead of the runner silently falling back to a synthetic gray image.
+//     instead of the package silently falling back to a synthetic gray image.
 func TestVerifierFeedsDecodedSampleFromPackageCwd(t *testing.T) {
-	runnerPath := writeFakeVerifyRunner(t)
 	pkgDir := newVerifiablePackage(t, 8, 6)
 
 	captureDir := t.TempDir()
@@ -118,7 +109,7 @@ func TestVerifierFeedsDecodedSampleFromPackageCwd(t *testing.T) {
 	t.Setenv("RESULT_COUNT", "1")
 
 	core, logs := observer.New(zapcore.WarnLevel)
-	verifier := algorithm.NewVerifier(runnerPath, x86Host(), algorithm.VerifyOptions{Logger: zap.New(core)})
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{Logger: zap.New(core)})
 
 	if _, _, _, err := verifier.VerifyDirectory(context.Background(), pkgDir); err != nil {
 		t.Fatalf("verification failed: %v", err)
@@ -138,7 +129,7 @@ func TestVerifierFeedsDecodedSampleFromPackageCwd(t *testing.T) {
 		t.Fatalf("resolve package dir: %v", err)
 	}
 	if lines[0] != resolvedPkgDir {
-		t.Errorf("runner cwd = %q, want package dir %q", lines[0], resolvedPkgDir)
+		t.Errorf("entry cwd = %q, want package dir %q", lines[0], resolvedPkgDir)
 	}
 
 	// The handed-over frame must be a real P6 PPM of the sample's dimensions.
@@ -159,11 +150,10 @@ func TestVerifierFeedsDecodedSampleFromPackageCwd(t *testing.T) {
 	}
 }
 
-// TestVerifierWarnsWhenRunnerCannotDecodeSample locks in the "no silent
+// TestVerifierWarnsWhenEntryCannotDecodeSample locks in the "no silent
 // fake-pass" contract: when the runner falls back to its synthetic frame the
 // verdict still stands, but the degradation must be visible to the operator.
-func TestVerifierWarnsWhenRunnerCannotDecodeSample(t *testing.T) {
-	runnerPath := writeFakeVerifyRunner(t)
+func TestVerifierWarnsWhenEntryCannotDecodeSample(t *testing.T) {
 	pkgDir := newVerifiablePackage(t, 4, 4)
 
 	t.Setenv("CAPTURE_META", filepath.Join(t.TempDir(), "meta.txt"))
@@ -174,7 +164,7 @@ func TestVerifierWarnsWhenRunnerCannotDecodeSample(t *testing.T) {
 	t.Setenv("RESULT_COUNT", "0")
 
 	core, logs := observer.New(zapcore.WarnLevel)
-	verifier := algorithm.NewVerifier(runnerPath, x86Host(), algorithm.VerifyOptions{Logger: zap.New(core)})
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{Logger: zap.New(core)})
 
 	if _, _, _, err := verifier.VerifyDirectory(context.Background(), pkgDir); err != nil {
 		t.Fatalf("verification must not fail, got: %v", err)
@@ -187,7 +177,6 @@ func TestVerifierWarnsWhenRunnerCannotDecodeSample(t *testing.T) {
 // TestVerifierWarnsOnZeroResultsFromDecodedSample covers the other honest-signal
 // case: the frame was real, but the plugin produced nothing.
 func TestVerifierWarnsOnZeroResultsFromDecodedSample(t *testing.T) {
-	runnerPath := writeFakeVerifyRunner(t)
 	pkgDir := newVerifiablePackage(t, 4, 4)
 
 	t.Setenv("CAPTURE_META", filepath.Join(t.TempDir(), "meta.txt"))
@@ -198,7 +187,7 @@ func TestVerifierWarnsOnZeroResultsFromDecodedSample(t *testing.T) {
 	t.Setenv("RESULT_COUNT", "0")
 
 	core, logs := observer.New(zapcore.WarnLevel)
-	verifier := algorithm.NewVerifier(runnerPath, x86Host(), algorithm.VerifyOptions{Logger: zap.New(core)})
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{Logger: zap.New(core)})
 
 	if _, _, _, err := verifier.VerifyDirectory(context.Background(), pkgDir); err != nil {
 		t.Fatalf("verification must not fail, got: %v", err)
@@ -208,17 +197,18 @@ func TestVerifierWarnsOnZeroResultsFromDecodedSample(t *testing.T) {
 	}
 }
 
-// TestVerifierReportsRunnerFailureWithStderr keeps the failure path intact: a
-// non-zero runner exit must surface as ErrVerificationFailed.
-func TestVerifierReportsRunnerFailureWithStderr(t *testing.T) {
-	failingRunner := filepath.Join(t.TempDir(), "failing_runner.sh")
-	script := "#!/bin/sh\necho 'boom: model_create failed' >&2\nexit 2\n"
-	if err := os.WriteFile(failingRunner, []byte(script), 0o755); err != nil {
-		t.Fatalf("write failing runner: %v", err)
-	}
+// TestVerifierReportsEntryFailureWithStderr keeps the failure path intact: a
+// non-zero package entry exit must surface as ErrVerificationFailed, and the
+// stderr it wrote must be carried into the message so the operator can act.
+func TestVerifierReportsEntryFailureWithStderr(t *testing.T) {
 	pkgDir := newVerifiablePackage(t, 4, 4)
+	// 覆盖成会失败的入口
+	script := "#!/bin/sh\necho 'boom: model_create failed' >&2\nexit 2\n"
+	if err := os.WriteFile(filepath.Join(pkgDir, "sample_pkg"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write failing entry: %v", err)
+	}
 
-	verifier := algorithm.NewVerifier(failingRunner, x86Host())
+	verifier := algorithm.NewVerifier(x86Host())
 	_, _, _, err := verifier.VerifyDirectory(context.Background(), pkgDir)
 	if !errors.Is(err, algorithm.ErrVerificationFailed) {
 		t.Fatalf("expected ErrVerificationFailed, got: %v", err)

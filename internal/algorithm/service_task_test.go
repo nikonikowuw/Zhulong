@@ -27,12 +27,10 @@ func newTaskService(t *testing.T) (*algorithm.Service, *algorunner.Supervisor, *
 		t.Fatalf("open database: %v", err)
 	}
 	store := algorithm.NewStore(dbStore)
-	runnerPath := filepath.Join(dataDir, "stub_runner.sh")
-	if err := os.WriteFile(runnerPath, []byte("#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile true; do sleep 1; done\n"), 0o755); err != nil {
-		t.Fatalf("write stub runner: %v", err)
-	}
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir, RunnerPath: runnerPath}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
-	verifier := algorithm.NewVerifier("", x86Host())
+	// 包 = 自己的可执行文件：把 idle 桩装到 supervisor 会去解析的位置。
+	installStubPackage(t, dataDir, "task_algo", "1.0.0", idleStubScript())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true})
 	service := algorithm.NewService(store, verifier, supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
 
 	cleanup := func() {
@@ -101,15 +99,10 @@ func TestServiceTaskChangeDebouncesRestart(t *testing.T) {
 	}
 }
 
-// brokerRecordingRunner 写入一个把每次启动的完整参数追加到 $RUN_ARG_FILE 的真实 runner。
-func brokerRecordingRunner(t *testing.T, dir string) string {
-	t.Helper()
-	path := filepath.Join(dir, "broker_recording_runner.sh")
-	script := "#!/bin/sh\nprintf 'start\\n' >> \"$RUN_ARG_FILE\"\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> \"$RUN_ARG_FILE\"; done\ntrap 'exit 0' TERM INT\nwhile true; do sleep 1; done\n"
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatalf("write recording runner: %v", err)
-	}
-	return path
+// argRecordingStubScript 把每次启动的完整 argv 追加到 $RUN_ARG_FILE，用来断言
+// 重启时宿主换的是哪一份 broker 列表。
+func argRecordingStubScript() string {
+	return "#!/bin/sh\nprintf 'start\\n' >> \"$RUN_ARG_FILE\"\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> \"$RUN_ARG_FILE\"; done\ntrap 'exit 0' TERM INT\nwhile true; do sleep 1; done\n"
 }
 
 func readRunnerBrokerFlags(t *testing.T, path string) [][]string {
@@ -224,10 +217,11 @@ func TestServiceTaskChangeRestartsPackageWithNewBrokerSet(t *testing.T) {
 	argFile := filepath.Join(t.TempDir(), "runner-args")
 	t.Setenv("RUN_ARG_FILE", argFile)
 
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir, RunnerPath: brokerRecordingRunner(t, dataDir)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	installStubPackage(t, dataDir, "task_algo", "1.0.0", argRecordingStubScript())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	resolver := &storeBackedBrokerResolver{dbStore: dbStore}
 	supervisor.SetBrokerSubscriptionResolver(resolver)
-	service := algorithm.NewService(store, algorithm.NewVerifier("", x86Host()), supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
+	service := algorithm.NewService(store, algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true}), supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
 
 	ctx := context.Background()
 	t.Cleanup(func() {
@@ -304,10 +298,11 @@ func TestTaskDrivenLazyStartupAndTeardownLifecycle(t *testing.T) {
 	argFile := filepath.Join(t.TempDir(), "runner-args")
 	t.Setenv("RUN_ARG_FILE", argFile)
 
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir, RunnerPath: brokerRecordingRunner(t, dataDir)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	installStubPackage(t, dataDir, algo.ID, algo.Version, argRecordingStubScript())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	resolver := &storeBackedBrokerResolver{dbStore: dbStore}
 	supervisor.SetBrokerSubscriptionResolver(resolver)
-	service := algorithm.NewService(store, algorithm.NewVerifier("", x86Host()), supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
+	service := algorithm.NewService(store, algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true}), supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
 
 	ctx := context.Background()
 	t.Cleanup(func() {

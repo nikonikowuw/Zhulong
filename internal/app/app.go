@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -398,24 +397,22 @@ type algorithmOut struct {
 	UploadRoutes       RouteRegistrar `group:"upload_routes"`
 }
 
-// DefaultAlgorithmRunnerPath is where the build tree puts the runner binary; it
-// is the fallback when ZHULONG_ALGO_RUNNER is not set.
-const DefaultAlgorithmRunnerPath = "build/native/host/zhulong_algo_runner"
-
 // newAlgorithmRuntime resolves the algorithm subsystem's on-disk layout. This is
-// the one place that reads the environment and derives subdirectories; every
-// algorithm component then shares the resulting value.
+// the one place that derives it; every algorithm component then shares the
+// resulting value.
+//
+// There is no runner binary to point at any more: each package is executed
+// through its own entry (algorunner.ResolveEntry), so the only host-side input
+// left is where packages live. The root is made absolute on purpose — package
+// processes inherit it as argv[0] and the orphan sweep matches on the absolute
+// install layout, so a relative data directory would make both depend on the
+// host's CWD.
 func newAlgorithmRuntime(dataDir string) algorunner.Runtime {
-	runnerPath := os.Getenv("ZHULONG_ALGO_RUNNER")
-	if runnerPath == "" {
-		runnerPath = DefaultAlgorithmRunnerPath
+	root := dataDir
+	if abs, err := filepath.Abs(dataDir); err == nil {
+		root = abs
 	}
-
-	return algorunner.Runtime{
-		AlgorithmsDir:    filepath.Join(dataDir, "algorithms"),
-		RunnerPath:       runnerPath,
-		VerifyRunnerPath: runnerPath,
-	}
+	return algorunner.Runtime{AlgorithmsDir: filepath.Join(root, "algorithms")}
 }
 
 func provideAlgorithm(

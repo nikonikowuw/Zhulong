@@ -61,16 +61,18 @@ func LoadDotEnv(filePath string) (map[string]string, error) {
 	return env, scanner.Err()
 }
 
-// ProcessConfig defines options for launching a runner subprocess.
+// ProcessConfig defines options for launching a package process.
 type ProcessConfig struct {
 	AlgorithmID   string
 	AlgorithmName string
-	RunnerPath    string
-	PluginPath    string
-	BrokerSocks   []string
-	EnvFile       string
-	ExtraEnv      map[string]string
-	Logger        *zap.Logger
+	// ExecutablePath is the package's own executable (resolved by ResolveEntry).
+	// The host passes no argument that selects an algorithm: the executable *is*
+	// the algorithm, so its argv only carries runtime plumbing.
+	ExecutablePath string
+	BrokerSocks    []string
+	EnvFile        string
+	ExtraEnv       map[string]string
+	Logger         *zap.Logger
 }
 
 // RunnerProcess supervises an individual zhulong_algo_runner subprocess.
@@ -138,9 +140,9 @@ func (p *RunnerProcess) Start() error {
 	p.exitCode = 0
 	p.failureStage = ""
 
-	args := []string{
-		"--plugin", p.config.PluginPath,
-	}
+	// No --plugin and no --max-workers: the executable carries its own algorithm
+	// class and its own worker pool configuration.
+	var args []string
 	if len(p.config.BrokerSocks) > 0 {
 		for _, sock := range p.config.BrokerSocks {
 			if sock != "" {
@@ -155,7 +157,7 @@ func (p *RunnerProcess) Start() error {
 		args = append(args, "--algorithm-id", p.config.AlgorithmID)
 	}
 
-	cmd := exec.Command(p.config.RunnerPath, args...)
+	cmd := exec.Command(p.config.ExecutablePath, args...)
 
 	// Run the runner in its own process group. Stop signals the whole group, so
 	// grandchildren the runner spawns cannot leak while holding the broker socket

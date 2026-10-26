@@ -146,33 +146,34 @@ func TestExtractArchiveZipSlipProtection(t *testing.T) {
 	}
 }
 
-func TestExtractArchiveWindowsPermissionCompensation(t *testing.T) {
+// TestExtractArchiveDoesNotGuessEntryPermissions pins the single-source rule for
+// permission bits: extraction never decides what is executable. It cannot know
+// which member is the package entry (the entry is named after manifest.id), and a
+// chmod-by-basename policy here would be a second, divergent opinion about what a
+// runnable package is. The verifier normalises the entry after confirming it is a
+// plain regular file inside the package.
+func TestExtractArchiveDoesNotGuessEntryPermissions(t *testing.T) {
 	destDir := t.TempDir()
 
-	// In zip, simulate Windows creating plugin.so without executable bit
+	// A zip created on Windows carries no POSIX exec bits at all.
 	zipPath := createTestZip(t, map[string][]byte{
-		"plugin.so":  []byte("fake elf library"),
+		"some_pkg":   []byte("fake elf binary"),
 		"sample.jpg": []byte("fake image"),
 	})
 	defer os.Remove(zipPath)
 
-	err := algorithm.ExtractArchive(zipPath, destDir)
-	if err != nil {
+	if err := algorithm.ExtractArchive(zipPath, destDir); err != nil {
 		t.Fatalf("ExtractArchive failed: %v", err)
 	}
 
-	extractedPlugin := filepath.Join(destDir, "plugin.so")
-	fi, err := os.Stat(extractedPlugin)
+	fi, err := os.Stat(filepath.Join(destDir, "some_pkg"))
 	if err != nil {
-		t.Fatalf("stat plugin.so: %v", err)
+		t.Fatalf("stat extracted entry: %v", err)
 	}
-
-	// Mode should have executable permission 0755
-	if fi.Mode().Perm()&0o111 == 0 {
-		t.Errorf("expected plugin.so to have executable bits, got %o", fi.Mode().Perm())
+	if fi.Mode().Perm()&0o111 != 0 {
+		t.Errorf("extraction must not invent exec bits, got %o", fi.Mode().Perm())
 	}
 }
-
 func TestExtractArchiveUnsupportedFormat(t *testing.T) {
 	tmpFile, err := os.CreateTemp("", "bad_archive_*.bin")
 	if err != nil {

@@ -13,61 +13,6 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 )
 
-func findRunnerBinary(t *testing.T) string {
-	t.Helper()
-	// Check standard build locations
-	candidates := []string{
-		"../../build/native/host/zhulong_algo_runner",
-		"build/native/host/zhulong_algo_runner",
-	}
-	for _, c := range candidates {
-		abs, err := filepath.Abs(c)
-		if err == nil {
-			if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
-				return abs
-			}
-		}
-	}
-	t.Skip("zhulong_algo_runner not found, skipping dynamic runner test")
-	return ""
-}
-
-func findMockDetectorPlugin(t *testing.T) string {
-	t.Helper()
-	candidates := []string{
-		"../../build/native/host/libMockDetector.so",
-		"build/native/host/libMockDetector.so",
-	}
-	for _, c := range candidates {
-		abs, err := filepath.Abs(c)
-		if err == nil {
-			if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
-				return abs
-			}
-		}
-	}
-	t.Skip("libMockDetector.so not found, skipping dynamic runner test")
-	return ""
-}
-
-func findMockPersonStructurePlugin(t *testing.T) string {
-	t.Helper()
-	candidates := []string{
-		"../../build/native/host/libMockPersonStructure.so",
-		"build/native/host/libMockPersonStructure.so",
-	}
-	for _, c := range candidates {
-		abs, err := filepath.Abs(c)
-		if err == nil {
-			if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
-				return abs
-			}
-		}
-	}
-	t.Skip("libMockPersonStructure.so not found, skipping dynamic runner test")
-	return ""
-}
-
 // x86Host is the platform the fixture manifests declare, pinned so the result
 // does not depend on the machine running the tests.
 func x86Host() algorithm.HostPlatform {
@@ -75,7 +20,7 @@ func x86Host() algorithm.HostPlatform {
 }
 
 func TestVerifierMissingConventionFiles(t *testing.T) {
-	verifier := algorithm.NewVerifier("", x86Host())
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true})
 	ctx := context.Background()
 	dir := t.TempDir()
 
@@ -85,32 +30,51 @@ func TestVerifierMissingConventionFiles(t *testing.T) {
 		t.Errorf("expected ErrMissingManifestFile, got: %v", err)
 	}
 
-	// Add manifest
-	_ = os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{}`), 0o644)
+	// 2. 合法 manifest 但缺包根可执行文件（入口名 = manifest.id）
+	manifestBytes, _ := json.Marshal(algorithm.Manifest{
+		ID: "sample_pkg", Version: "1.0.0", Name: "sample_pkg",
+		TaskType:  algorithm.TaskTypeDetection,
+		Category:  algorithm.CategorySafety,
+		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
+		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
+	})
+	mustWriteFile(t, filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
 
-	// 2. Missing plugin.so
-	_, _, _, err = verifier.VerifyDirectory(ctx, dir)
-	if !errors.Is(err, algorithm.ErrMissingPluginFile) {
-		t.Errorf("expected ErrMissingPluginFile, got: %v", err)
-	}
-
-	// Add plugin.so
-	_ = os.WriteFile(filepath.Join(dir, "plugin.so"), []byte(`fake`), 0o755)
-
-	// 3. Missing sample.jpg
 	_, _, _, err = verifier.VerifyDirectory(ctx, dir)
 	if !errors.Is(err, algorithm.ErrMissingSampleFile) {
 		t.Errorf("expected ErrMissingSampleFile, got: %v", err)
 	}
+
+	// 3. 有样本但缺包根可执行文件（入口名 = manifest.id）
+	mustWriteFile(t, filepath.Join(dir, "sample.jpg"), []byte(`fake`), 0o644)
+	_, _, _, err = verifier.VerifyDirectory(ctx, dir)
+	if !errors.Is(err, algorunner.ErrMissingEntry) {
+		t.Errorf("expected algorunner.ErrMissingEntry, got: %v", err)
+	}
+
+	// 4. 旧形态 plugin.so 不得被当成入口
+	mustWriteFile(t, filepath.Join(dir, "plugin.so"), []byte(`fake`), 0o755)
+	_, _, _, err = verifier.VerifyDirectory(ctx, dir)
+	if !errors.Is(err, algorunner.ErrLegacyEntry) {
+		t.Errorf("expected algorunner.ErrLegacyEntry, got: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "plugin.so")); err != nil {
+		t.Fatalf("remove legacy entry: %v", err)
+	}
+
+	// 5. 补上入口即通过静态检查
+	mustWriteFile(t, filepath.Join(dir, "sample_pkg"), []byte(verifyStubScript(1)), 0o755)
+	if _, _, _, err := verifier.VerifyDirectory(ctx, dir); err != nil {
+		t.Errorf("expected the package to verify, got: %v", err)
+	}
 }
 
 func TestVerifierPlatformMismatch(t *testing.T) {
-	verifier := algorithm.NewVerifier("", x86Host())
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true})
 	ctx := context.Background()
 
 	dir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(dir, "plugin.so"), []byte(`fake`), 0o755)
-	_ = os.WriteFile(filepath.Join(dir, "sample.jpg"), []byte(`fake`), 0o644)
+	seedSampleAndJunk(t, dir)
 
 	manifest := algorithm.Manifest{
 		ID:        "test_pkg",
@@ -135,12 +99,11 @@ func TestVerifierPlatformMismatch(t *testing.T) {
 // package carries a different runtime and asset layout, so mapping it would only
 // move the failure to an opaque loader/exec error much later.
 func TestVerifierRejectsRetiredCPUTarget(t *testing.T) {
-	verifier := algorithm.NewVerifier("", x86Host())
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true})
 	ctx := context.Background()
 
 	dir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(dir, "plugin.so"), []byte(`fake`), 0o755)
-	_ = os.WriteFile(filepath.Join(dir, "sample.jpg"), []byte(`fake`), 0o644)
+	seedSampleAndJunk(t, dir)
 
 	manifest := algorithm.Manifest{
 		ID:        "test_pkg",
@@ -167,12 +130,11 @@ func TestVerifierRejectsRetiredCPUTarget(t *testing.T) {
 }
 
 func TestVerifierInvalidComputeBudget(t *testing.T) {
-	verifier := algorithm.NewVerifier("", x86Host())
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true})
 	ctx := context.Background()
 
 	dir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(dir, "plugin.so"), []byte(`fake`), 0o755)
-	_ = os.WriteFile(filepath.Join(dir, "sample.jpg"), []byte(`fake`), 0o644)
+	seedSampleAndJunk(t, dir)
 
 	// compute_cost > 1000
 	manifest := algorithm.Manifest{
@@ -203,7 +165,7 @@ func mustWriteFile(t *testing.T, path string, data []byte, mode os.FileMode) {
 }
 
 func TestVerifierManifestTokenCharset(t *testing.T) {
-	verifier := algorithm.NewVerifier("", x86Host())
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true})
 	ctx := context.Background()
 
 	// Each case supplies the id/version/name triple. Malicious or malformed
@@ -244,8 +206,7 @@ func TestVerifierManifestTokenCharset(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			mustWriteFile(t, filepath.Join(dir, "plugin.so"), []byte("fake"), 0o755)
-			mustWriteFile(t, filepath.Join(dir, "sample.jpg"), []byte("fake"), 0o644)
+			seedSampleAndJunk(t, dir)
 
 			manifest := algorithm.Manifest{
 				ID:        tc.id,
@@ -261,6 +222,9 @@ func TestVerifierManifestTokenCharset(t *testing.T) {
 				t.Fatalf("marshal manifest: %v", err)
 			}
 			mustWriteFile(t, filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
+			if !tc.expectErr {
+				seedEntry(t, dir, tc.id)
+			}
 
 			_, _, _, err = verifier.VerifyDirectory(ctx, dir)
 			if tc.expectErr {
@@ -279,8 +243,7 @@ func TestVerifierManifestTokenCharset(t *testing.T) {
 	// charset whitelist. Assert that it is still rejected (defense in depth).
 	t.Run("empty id rejected", func(t *testing.T) {
 		dir := t.TempDir()
-		mustWriteFile(t, filepath.Join(dir, "plugin.so"), []byte("fake"), 0o755)
-		mustWriteFile(t, filepath.Join(dir, "sample.jpg"), []byte("fake"), 0o644)
+		seedSampleAndJunk(t, dir)
 		manifestBytes, err := json.Marshal(algorithm.Manifest{
 			Version:   "1.0.0",
 			Name:      "pkg",
@@ -319,7 +282,7 @@ func TestStageAndVerifyRejectsPathEscape(t *testing.T) {
 
 	archivePath := createTestTarGz(t, map[string][]byte{
 		"manifest.json": manifestBytes,
-		"plugin.so":     []byte("fake"),
+		"escaped_pkg":   []byte(verifyStubScript(1)),
 		"sample.jpg":    []byte("fake"),
 	})
 	defer os.Remove(archivePath)
@@ -332,7 +295,7 @@ func TestStageAndVerifyRejectsPathEscape(t *testing.T) {
 	}
 	sibling := filepath.Join(parent, "tmp")
 
-	verifier := algorithm.NewVerifier("", x86Host())
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true})
 
 	_, err = verifier.StageAndVerify(context.Background(), archivePath, installRoot)
 	if !errors.Is(err, algorithm.ErrInvalidManifestToken) {
@@ -353,105 +316,73 @@ func TestStageAndVerifyRejectsPathEscape(t *testing.T) {
 	}
 }
 
+// TestVerifierDynamicVerificationAndResultTypeMismatch pins the one cross-check
+// the dynamic stage exists for: a package whose verdict contradicts its manifest
+// must be rejected, no matter how healthy its process is.
+//
+// The packages here are stub entries rather than real models — that is the point
+// of the black-box stage, it only reads the report the entry prints.
 func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
-	runnerPath := findRunnerBinary(t)
-	mockPluginPath := findMockDetectorPlugin(t)
-
-	mockPluginBytes, err := os.ReadFile(mockPluginPath)
-	if err != nil {
-		t.Fatalf("read mock plugin: %v", err)
-	}
-
-	verifier := algorithm.NewVerifier(runnerPath, x86Host())
+	verifier := algorithm.NewVerifier(x86Host())
 	ctx := context.Background()
 
-	dir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(dir, "plugin.so"), mockPluginBytes, 0o755)
-	_ = os.WriteFile(filepath.Join(dir, "sample.jpg"), []byte("sample"), 0o644)
+	writePackage := func(t *testing.T, manifest algorithm.Manifest, entryScript string) string {
+		t.Helper()
+		dir := t.TempDir()
+		raw, err := json.Marshal(manifest)
+		if err != nil {
+			t.Fatalf("marshal manifest: %v", err)
+		}
+		mustWriteFile(t, filepath.Join(dir, "manifest.json"), raw, 0o644)
+		mustWriteFile(t, filepath.Join(dir, "sample.jpg"), []byte("sample"), 0o644)
+		// 入口名必须等于 manifest.id
+		mustWriteFile(t, filepath.Join(dir, manifest.ID), []byte(entryScript), 0o755)
+		return dir
+	}
 
-	// 1. Result type mismatch: detector plugin, but manifest says classification!
-	mismatchManifest := algorithm.Manifest{
-		ID:        "mismatch_pkg",
-		Version:   "1.0.0",
-		Name:      "mismatch_package",
-		TaskType:  algorithm.TaskTypeClassification, // Mismatch!
+	detectionManifest := algorithm.Manifest{
+		ID: "mismatch_pkg", Version: "1.0.0", Name: "mismatch_package",
+		TaskType:  algorithm.TaskTypeClassification, // 与包内报告的 result_type 1 冲突
 		Category:  algorithm.CategorySafety,
 		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
 		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
 	}
-	mismatchBytes, _ := json.Marshal(mismatchManifest)
-	_ = os.WriteFile(filepath.Join(dir, "manifest.json"), mismatchBytes, 0o644)
-
-	_, _, _, err = verifier.VerifyDirectory(ctx, dir)
-	if !errors.Is(err, algorithm.ErrResultTypeMismatch) {
+	dir := writePackage(t, detectionManifest, verifyStubScript(1))
+	if _, _, _, err := verifier.VerifyDirectory(ctx, dir); !errors.Is(err, algorithm.ErrResultTypeMismatch) {
 		t.Errorf("expected ErrResultTypeMismatch, got: %v", err)
 	}
 
-	// 2. Result type mismatch: detector plugin (result_type 1), but manifest says person_structure (expects 3)!
-	mismatchPersonManifest := algorithm.Manifest{
-		ID:        "mismatch_person_pkg",
-		Version:   "1.0.0",
-		Name:      "mismatch_person_package",
-		TaskType:  algorithm.TaskTypePersonStructure, // Mismatch with detector!
-		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
-		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
-	}
-	mismatchPersonBytes, _ := json.Marshal(mismatchPersonManifest)
-	_ = os.WriteFile(filepath.Join(dir, "manifest.json"), mismatchPersonBytes, 0o644)
-
-	_, _, _, err = verifier.VerifyDirectory(ctx, dir)
-	if !errors.Is(err, algorithm.ErrResultTypeMismatch) {
+	personManifest := detectionManifest
+	personManifest.ID = "mismatch_person_pkg"
+	personManifest.Name = "mismatch_person_package"
+	personManifest.TaskType = algorithm.TaskTypePersonStructure // 期望 3，包报告 1
+	personDir := writePackage(t, personManifest, verifyStubScript(1))
+	if _, _, _, err := verifier.VerifyDirectory(ctx, personDir); !errors.Is(err, algorithm.ErrResultTypeMismatch) {
 		t.Errorf("expected ErrResultTypeMismatch for person_structure vs detector, got: %v", err)
 	}
 
-	// 3. Matching manifest: detection!
-	validManifest := algorithm.Manifest{
-		ID:        "valid_detector",
-		Version:   "1.0.0",
-		Name:      "valid_detector",
-		TaskType:  algorithm.TaskTypeDetection,
-		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
-		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
-	}
-	validBytes, _ := json.Marshal(validManifest)
-	_ = os.WriteFile(filepath.Join(dir, "manifest.json"), validBytes, 0o644)
-
-	parsedManifest, _, _, err := verifier.VerifyDirectory(ctx, dir)
+	validManifest := detectionManifest
+	validManifest.ID = "valid_detector"
+	validManifest.Name = "valid_detector"
+	validManifest.TaskType = algorithm.TaskTypeDetection
+	validDir := writePackage(t, validManifest, verifyStubScript(1))
+	parsedManifest, _, _, err := verifier.VerifyDirectory(ctx, validDir)
 	if err != nil {
-		t.Fatalf("VerifyDirectory with real runner failed: %v", err)
+		t.Fatalf("VerifyDirectory for a matching detector failed: %v", err)
 	}
 	if parsedManifest.ID != "valid_detector" {
 		t.Errorf("expected manifest ID valid_detector, got: %s", parsedManifest.ID)
 	}
 
-	// 4. Matching manifest: person_structure!
-	mockPersonPluginPath := findMockPersonStructurePlugin(t)
-	mockPersonPluginBytes, err := os.ReadFile(mockPersonPluginPath)
+	validPersonManifest := detectionManifest
+	validPersonManifest.ID = "valid_person_plugin"
+	validPersonManifest.Name = "valid_person_plugin"
+	validPersonManifest.TaskType = algorithm.TaskTypePersonStructure
+	validPersonManifest.Resources = algorithm.ManifestResources{ComputeCost: 30, MemoryMB: 128}
+	validPersonDir := writePackage(t, validPersonManifest, verifyStubScript(3))
+	parsedPersonManifest, _, _, err := verifier.VerifyDirectory(ctx, validPersonDir)
 	if err != nil {
-		t.Fatalf("read mock person plugin: %v", err)
-	}
-
-	personDir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(personDir, "plugin.so"), mockPersonPluginBytes, 0o755)
-	_ = os.WriteFile(filepath.Join(personDir, "sample.jpg"), []byte("sample"), 0o644)
-
-	validPersonManifest := algorithm.Manifest{
-		ID:        "valid_person_plugin",
-		Version:   "1.0.0",
-		Name:      "valid_person_plugin",
-		TaskType:  algorithm.TaskTypePersonStructure,
-		Category:  algorithm.CategorySafety,
-		Platform:  algorithm.ManifestPlatform{Arch: "x86_64", Target: "onnx"},
-		Resources: algorithm.ManifestResources{ComputeCost: 30, MemoryMB: 128},
-	}
-	validPersonBytes, _ := json.Marshal(validPersonManifest)
-	_ = os.WriteFile(filepath.Join(personDir, "manifest.json"), validPersonBytes, 0o644)
-
-	parsedPersonManifest, _, _, err := verifier.VerifyDirectory(ctx, personDir)
-	if err != nil {
-		t.Fatalf("VerifyDirectory with real runner for person_structure failed: %v", err)
+		t.Fatalf("VerifyDirectory for a matching person_structure package failed: %v", err)
 	}
 	if parsedPersonManifest.ID != "valid_person_plugin" {
 		t.Errorf("expected manifest ID valid_person_plugin, got: %s", parsedPersonManifest.ID)
@@ -459,14 +390,6 @@ func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
 }
 
 func TestStageAndVerifyEndToEnd(t *testing.T) {
-	runnerPath := findRunnerBinary(t)
-	mockPluginPath := findMockDetectorPlugin(t)
-
-	mockPluginBytes, err := os.ReadFile(mockPluginPath)
-	if err != nil {
-		t.Fatalf("read mock plugin: %v", err)
-	}
-
 	manifest := algorithm.Manifest{
 		ID:        "installed_detector",
 		Version:   "1.0.0",
@@ -481,7 +404,7 @@ func TestStageAndVerifyEndToEnd(t *testing.T) {
 	// Create archive
 	archivePath := createTestTarGz(t, map[string][]byte{
 		"manifest.json":      manifestBytes,
-		"plugin.so":          mockPluginBytes,
+		"installed_detector": []byte(verifyStubScript(1)),
 		"sample.jpg":         []byte("sample image bytes"),
 		"config.schema.json": []byte(`{"type":"object"}`),
 		".env":               []byte("DEBUG=1"),
@@ -489,7 +412,7 @@ func TestStageAndVerifyEndToEnd(t *testing.T) {
 	defer os.Remove(archivePath)
 
 	installBaseDir := t.TempDir()
-	verifier := algorithm.NewVerifier(runnerPath, x86Host())
+	verifier := algorithm.NewVerifier(x86Host())
 
 	pkg, err := verifier.StageAndVerify(context.Background(), archivePath, installBaseDir)
 	if err != nil {
@@ -505,8 +428,8 @@ func TestStageAndVerifyEndToEnd(t *testing.T) {
 
 	// Verify installed files exist on disk
 	expectedDir := filepath.Join(installBaseDir, "installed_detector", "1.0.0")
-	if _, err := os.Stat(filepath.Join(expectedDir, "plugin.so")); err != nil {
-		t.Errorf("installed plugin.so not found: %v", err)
+	if _, err := os.Stat(filepath.Join(expectedDir, "installed_detector")); err != nil {
+		t.Errorf("installed package entry not found: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(expectedDir, "sample.jpg")); err != nil {
 		t.Errorf("installed sample.jpg not found: %v", err)
@@ -514,11 +437,11 @@ func TestStageAndVerifyEndToEnd(t *testing.T) {
 }
 
 func TestVerifierRejectsInvalidConfigSchema(t *testing.T) {
-	verifier := algorithm.NewVerifier("", x86Host())
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true})
 	dir := t.TempDir()
-	mustWriteFile(t, filepath.Join(dir, "plugin.so"), []byte("fake"), 0o755)
-	mustWriteFile(t, filepath.Join(dir, "sample.jpg"), []byte("sample"), 0o644)
+	seedSampleAndJunk(t, dir)
 	mustWriteFile(t, filepath.Join(dir, "manifest.json"), []byte(`{"id":"schema_pkg","version":"1.0.0","name":"schema_pkg","task_type":"detection","category":"safety","platform":{"arch":"x86_64","target":"onnx"},"resources":{"compute_cost":20,"memory_mb":64}}`), 0o644)
+	seedEntry(t, dir, "schema_pkg")
 	mustWriteFile(t, filepath.Join(dir, "config.schema.json"), []byte(`{"type":17}`), 0o644)
 
 	_, _, _, err := verifier.VerifyDirectory(context.Background(), dir)
@@ -541,9 +464,9 @@ func TestStageAndVerifyDoesNotReplaceExistingVersion(t *testing.T) {
 	archive := func(plugin []byte) string {
 		t.Helper()
 		path := createTestTarGz(t, map[string][]byte{
-			"manifest.json": manifestBytes,
-			"plugin.so":     plugin,
-			"sample.jpg":    []byte("sample"),
+			"manifest.json":    manifestBytes,
+			"same_version_pkg": plugin,
+			"sample.jpg":       []byte("sample"),
 		})
 		t.Cleanup(func() {
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -553,23 +476,23 @@ func TestStageAndVerifyDoesNotReplaceExistingVersion(t *testing.T) {
 		return path
 	}
 
-	verifier := algorithm.NewVerifier("", x86Host())
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true})
 	installDir := t.TempDir()
-	installed, err := verifier.StageAndVerify(context.Background(), archive([]byte("original")), installDir)
+	installed, err := verifier.StageAndVerify(context.Background(), archive([]byte(verifyStubScript(1))), installDir)
 	if err != nil {
 		t.Fatalf("install initial version: %v", err)
 	}
-	pluginPath := algorunner.Runtime{AlgorithmsDir: installDir}.PluginPath(installed.ID, installed.Version)
+	entryPath := algorunner.Runtime{AlgorithmsDir: installDir}.EntryPath(installed.ID, installed.Version)
 
-	_, err = verifier.StageAndVerify(context.Background(), archive([]byte("replacement")), installDir)
+	_, err = verifier.StageAndVerify(context.Background(), archive([]byte("#!/bin/sh\nexit 0\n")), installDir)
 	if !errors.Is(err, algorithm.ErrVersionAlreadyInstalled) {
 		t.Fatalf("expected existing-version conflict, got %v", err)
 	}
-	got, err := os.ReadFile(pluginPath)
+	got, err := os.ReadFile(entryPath)
 	if err != nil {
-		t.Fatalf("read installed plugin: %v", err)
+		t.Fatalf("read installed entry: %v", err)
 	}
-	if string(got) != "original" {
+	if string(got) != verifyStubScript(1) {
 		t.Fatalf("existing version was overwritten: got %q", got)
 	}
 }

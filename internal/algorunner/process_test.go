@@ -166,12 +166,11 @@ func TestRunnerProcessInjectsDotEnvEndToEnd(t *testing.T) {
 	logger := zap.New(core)
 
 	cfg := algorunner.ProcessConfig{
-		AlgorithmID:   "env_pkg",
-		AlgorithmName: "env_pkg",
-		RunnerPath:    script,
-		PluginPath:    "unused.so",
-		EnvFile:       envFile,
-		Logger:        logger,
+		AlgorithmID:    "env_pkg",
+		AlgorithmName:  "env_pkg",
+		ExecutablePath: script,
+		EnvFile:        envFile,
+		Logger:         logger,
 	}
 
 	proc := algorunner.NewRunnerProcess(cfg)
@@ -213,12 +212,11 @@ func TestRunnerProcessMissingDotEnvIsOptional(t *testing.T) {
 	}
 
 	cfg := algorunner.ProcessConfig{
-		AlgorithmID:   "no_env_pkg",
-		AlgorithmName: "no_env_pkg",
-		RunnerPath:    script,
-		PluginPath:    "unused.so",
-		EnvFile:       filepath.Join(dir, "does_not_exist.env"),
-		Logger:        zap.NewNop(),
+		AlgorithmID:    "no_env_pkg",
+		AlgorithmName:  "no_env_pkg",
+		ExecutablePath: script,
+		EnvFile:        filepath.Join(dir, "does_not_exist.env"),
+		Logger:         zap.NewNop(),
 	}
 
 	proc := algorunner.NewRunnerProcess(cfg)
@@ -256,29 +254,34 @@ func findRealRunnerBinary(t *testing.T) string {
 	return ""
 }
 
-// TestRunnerProcessDetectsBrokerUnavailable drives the REAL runner binary
-// against a broker socket path with no listening host. The runner must exit with
-// code 5 / stage=connect, which must surface as a distinguishable
-// broker_unavailable signal rather than an ordinary crash.
-func TestRunnerProcessDetectsBrokerHostUnavailable(t *testing.T) {
-	runnerPath := findRealRunnerBinary(t)
-	pluginPath := findMockDetectorPlugin(t)
+// TestPackageProcessDetectsBrokerUnavailable drives a package process that exits
+// with code 5 (broker connect failure) and asserts the host classifies it as
+// broker_unavailable rather than as an ordinary crash.
+//
+// The process is a stub script on purpose: the classification lives entirely in
+// the host (exit-code channel + stderr stage marker), so driving the real
+// inference binary here would only make the test slower and arch-dependent.
+//
+// --plugin is gone from the argv: the executable *is* the algorithm. --broker
+// stays, because broker paths are per-task plumbing the host still owns.
+func TestPackageProcessDetectsBrokerUnavailable(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "broker_probe_pkg")
+	body := "#!/bin/sh\nprintf '{\"step\":\"failed\",\"stage\":\"connect\"}\\n' >&2\nexit 5\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatalf("write stub entry: %v", err)
+	}
 
-	// Point --broker at a literal socket path with no listening host. The path
-	// must match the host's derivation rule (<base_dir>/zhulong_broker_<sid>.sock)
-	// because the runner now derives its task identity from it.
 	missingSock := filepath.Join(t.TempDir(), "zhulong_broker_4242.sock")
 
 	core, observed := observer.New(zapcore.DebugLevel)
 	logger := zap.New(core)
 
 	cfg := algorunner.ProcessConfig{
-		AlgorithmID:   "broker_probe_pkg",
-		AlgorithmName: "broker_probe_pkg",
-		RunnerPath:    runnerPath,
-		PluginPath:    pluginPath,
-		BrokerSocks:   []string{missingSock},
-		Logger:        logger,
+		AlgorithmID:    "broker_probe_pkg",
+		AlgorithmName:  "broker_probe_pkg",
+		ExecutablePath: script,
+		BrokerSocks:    []string{missingSock},
+		Logger:         logger,
 	}
 
 	proc := algorunner.NewRunnerProcess(cfg)
@@ -289,7 +292,7 @@ func TestRunnerProcessDetectsBrokerHostUnavailable(t *testing.T) {
 	select {
 	case <-proc.Done():
 	case <-time.After(10 * time.Second):
-		t.Fatal("runner did not exit within timeout")
+		t.Fatal("stub process did not exit within timeout")
 	}
 
 	foundReason := false
@@ -301,17 +304,16 @@ func TestRunnerProcessDetectsBrokerHostUnavailable(t *testing.T) {
 		}
 		if fields["reason"] == "broker_unavailable" {
 			foundReason = true
-			if code, ok := fields["exit_code"].(int64); ok && code == 5 {
+		}
+		if code, ok := fields["exit_code"]; ok {
+			if n, isInt := code.(int64); isInt && n == 5 {
 				foundExit5 = true
 			}
 		}
 	}
-
-	if !foundReason {
-		t.Errorf("expected a broker_unavailable log entry")
-	}
-	if !foundExit5 {
-		t.Errorf("expected exit_code=5 in the broker_unavailable log entry")
+	if !foundReason || !foundExit5 {
+		t.Fatalf("expected broker_unavailable classification with exit code 5; reason=%v exit5=%v logs=%v",
+			foundReason, foundExit5, observed.All())
 	}
 }
 
@@ -342,12 +344,11 @@ func TestRunnerProcessReportsDotEnvParseFailure(t *testing.T) {
 	logger := zap.New(core)
 
 	cfg := algorunner.ProcessConfig{
-		AlgorithmID:   "bad_env_pkg",
-		AlgorithmName: "bad_env_pkg",
-		RunnerPath:    script,
-		PluginPath:    "unused.so",
-		EnvFile:       envFile,
-		Logger:        logger,
+		AlgorithmID:    "bad_env_pkg",
+		AlgorithmName:  "bad_env_pkg",
+		ExecutablePath: script,
+		EnvFile:        envFile,
+		Logger:         logger,
 	}
 
 	proc := algorunner.NewRunnerProcess(cfg)
@@ -475,11 +476,10 @@ func TestIpcMessageFramingAndGalleryMessages(t *testing.T) {
 func TestRunnerProcessLifecycleGracefulStop(t *testing.T) {
 	// Use sleep as a test runner process
 	cfg := algorunner.ProcessConfig{
-		AlgorithmID:   "test_pkg",
-		AlgorithmName: "test_pkg",
-		RunnerPath:    "sleep",
-		PluginPath:    "5", // sleep for 5 seconds
-		Logger:        zap.NewNop(),
+		AlgorithmID:    "test_pkg",
+		AlgorithmName:  "test_pkg",
+		ExecutablePath: "sleep",
+		Logger:         zap.NewNop(),
 	}
 
 	proc := algorunner.NewRunnerProcess(cfg)
@@ -528,11 +528,10 @@ func TestRunnerProcessStopKillsProcessGroup(t *testing.T) {
 	t.Setenv("CHILD_PID_FILE", pidFile)
 
 	cfg := algorunner.ProcessConfig{
-		AlgorithmID:   "pg_pkg",
-		AlgorithmName: "pg_pkg",
-		RunnerPath:    script,
-		PluginPath:    "unused.so",
-		Logger:        zap.NewNop(),
+		AlgorithmID:    "pg_pkg",
+		AlgorithmName:  "pg_pkg",
+		ExecutablePath: script,
+		Logger:         zap.NewNop(),
 	}
 
 	proc := algorunner.NewRunnerProcess(cfg)
@@ -591,11 +590,10 @@ sleep 10
 	}
 
 	cfg := algorunner.ProcessConfig{
-		AlgorithmID:   "stub_pkg",
-		AlgorithmName: "stub_pkg",
-		RunnerPath:    "/bin/sh",
-		PluginPath:    scriptFile,
-		Logger:        zap.NewNop(),
+		AlgorithmID:    "stub_pkg",
+		AlgorithmName:  "stub_pkg",
+		ExecutablePath: "/bin/sh",
+		Logger:         zap.NewNop(),
 	}
 
 	proc := algorunner.NewRunnerProcess(cfg)
@@ -637,13 +635,12 @@ func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
 	logger := zap.New(core)
 
 	cfg := algorunner.ProcessConfig{
-		AlgorithmID:   "multi_broker_pkg",
-		AlgorithmName: "multi_broker_pkg",
-		RunnerPath:    script,
-		PluginPath:    "plugin.so",
-		BrokerSocks:   []string{"/tmp/sock1.sock", "/tmp/sock2.sock"},
-		ExtraEnv:      map[string]string{"ARGS_CAPTURE": argsPath},
-		Logger:        logger,
+		AlgorithmID:    "multi_broker_pkg",
+		AlgorithmName:  "multi_broker_pkg",
+		ExecutablePath: script,
+		BrokerSocks:    []string{"/tmp/sock1.sock", "/tmp/sock2.sock"},
+		ExtraEnv:       map[string]string{"ARGS_CAPTURE": argsPath},
+		Logger:         logger,
 	}
 
 	proc := algorunner.NewRunnerProcess(cfg)
@@ -663,8 +660,9 @@ func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
 		t.Fatalf("read captured arguments: %v", err)
 	}
 	gotArgs := strings.Fields(string(gotBytes))
+	// argv 里没有 --plugin：可执行文件本身就是算法。也没有 --max-workers：
+	// worker 池规模是包自己的事，宿主不该越权指定。
 	wantArgs := []string{
-		"--plugin", "plugin.so",
 		"--broker", "/tmp/sock1.sock",
 		"--broker", "/tmp/sock2.sock",
 		"--name", "multi_broker_pkg",
@@ -899,11 +897,10 @@ func TestRunnerProcessSpawnThreadSurvivesWhileChildRuns(t *testing.T) {
 
 	for i := 0; i < runnerCount; i++ {
 		proc := algorunner.NewRunnerProcess(algorunner.ProcessConfig{
-			AlgorithmID:   fmt.Sprintf("thread_pin_pkg_%d", i),
-			AlgorithmName: "thread_pin_pkg",
-			RunnerPath:    script,
-			PluginPath:    "unused.so",
-			Logger:        zap.NewNop(),
+			AlgorithmID:    fmt.Sprintf("thread_pin_pkg_%d", i),
+			AlgorithmName:  "thread_pin_pkg",
+			ExecutablePath: script,
+			Logger:         zap.NewNop(),
 		})
 		// The spawning goroutine is deliberately not kept alive: it exits as soon
 		// as Start returns, which is exactly the host shape this test guards.
@@ -959,11 +956,10 @@ func TestRunnerProcessSpawnThreadSurvivesWhileChildRuns(t *testing.T) {
 // and release the pinned thread instead of stranding a watcher.
 func TestRunnerProcessStartFailureLeavesNoHalfStartedState(t *testing.T) {
 	proc := algorunner.NewRunnerProcess(algorunner.ProcessConfig{
-		AlgorithmID:   "broken_pkg",
-		AlgorithmName: "broken_pkg",
-		RunnerPath:    filepath.Join(t.TempDir(), "does-not-exist-runner"),
-		PluginPath:    "unused.so",
-		Logger:        zap.NewNop(),
+		AlgorithmID:    "broken_pkg",
+		AlgorithmName:  "broken_pkg",
+		ExecutablePath: filepath.Join(t.TempDir(), "does-not-exist-runner"),
+		Logger:         zap.NewNop(),
 	})
 	if err := proc.Start(); err == nil {
 		t.Fatal("Start succeeded for a nonexistent runner binary")

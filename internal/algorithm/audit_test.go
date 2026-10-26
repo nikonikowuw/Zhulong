@@ -43,11 +43,9 @@ func setupAuditRouter(t *testing.T) (*gin.Engine, *algorithm.Service, *audit.Ser
 	}
 	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
 
-	// enable/disable need a runner process that actually starts. The stub
-	// ignores the --plugin/--broker/--name arguments and stays alive until it
-	// is signalled, so the supervised status is deterministic. Verification gets
-	// no runner at all: the stub cannot answer an --verify-plugin probe.
-	rt := algorunner.Runtime{AlgorithmsDir: dataDir, RunnerPath: writeIdleRunner(t)}
+	// enable/disable need a package process that actually starts; the archive's
+	// entry is an idle stub, so the supervised status is deterministic.
+	rt := algorunner.Runtime{AlgorithmsDir: dataDir}
 	comp := algorithm.NewAlgorithmComponents(dbStore, rt, x86Host(), zap.NewNop())
 	t.Cleanup(func() { comp.Supervisor.StopAll(time.Second) })
 
@@ -58,19 +56,6 @@ func setupAuditRouter(t *testing.T) (*gin.Engine, *algorithm.Service, *audit.Ser
 	comp.Handler.RegisterUploadRoutes(api)
 
 	return router, comp.Service, auditSvc
-}
-
-// writeIdleRunner writes a runner stub that stays alive until it receives
-// SIGTERM. A `while true; do sleep 1; done` loop keeps sh as the direct child
-// so the trap fires promptly and no long-lived orphan process is left behind.
-func writeIdleRunner(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "idle_runner.sh")
-	script := "#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile true; do sleep 1; done\n"
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatalf("write idle runner: %v", err)
-	}
-	return path
 }
 
 // drainAlgorithmAudit stops the service so queued entries are persisted, then
@@ -107,9 +92,9 @@ func installAuditArchive(t *testing.T, router *gin.Engine, remoteAddr string) *h
 	}
 
 	archivePath := createTestTarGz(t, map[string][]byte{
-		"manifest.json": manifestBytes,
-		"plugin.so":     []byte("elf_stub"),
-		"sample.jpg":    []byte("jpg_stub"),
+		"manifest.json":  manifestBytes,
+		"audit_detector": installableEntry(int(algorithm.ResultTypeDetection)),
+		"sample.jpg":     []byte("jpg_stub"),
 	})
 	defer os.Remove(archivePath)
 
@@ -323,9 +308,9 @@ func TestInstallAuditRecordsRejectedArchive(t *testing.T) {
 		t.Fatalf("marshal manifest: %v", err)
 	}
 	archivePath := createTestTarGz(t, map[string][]byte{
-		"manifest.json": manifestBytes,
-		"plugin.so":     []byte("elf_stub"),
-		"sample.jpg":    []byte("jpg_stub"),
+		"manifest.json":     manifestBytes,
+		"rejected_detector": installableEntry(int(algorithm.ResultTypeDetection)),
+		"sample.jpg":        []byte("jpg_stub"),
 	})
 	defer os.Remove(archivePath)
 

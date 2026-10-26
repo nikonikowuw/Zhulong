@@ -242,7 +242,18 @@ func (s *Service) EnableAlgorithm(ctx context.Context, id string) error {
 			}
 			return nil
 		}
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("start runner supervisor: %v", err), err)
+		if algorunner.IsEntryError(err) {
+			// 包目录里没有可执行的包根入口（旧 .so 形态，或归档被裁剪过）。
+			// 明确报出来，且**不注册 watcher**：没有进程就没有退避重试，
+			// 运维重新安装/重建后再次启用即可。
+			s.logger.Warn("algorithm package has no runnable entry",
+				zap.String("algorithm_id", id),
+				zap.Error(err),
+			)
+			return apperr.Invalid("ALGO_ENTRY_INVALID",
+				"Algorithm package has no runnable executable, reinstall it", err)
+		}
+		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("start package supervisor: %v", err), err)
 	}
 
 	if err := s.store.UpdateAlgorithmStatus(ctx, id, StatusActive); err != nil {
@@ -427,7 +438,12 @@ func (s *Service) restartAlgorithmNow(algorithmID string) {
 	} else if liveStatus == StatusDisabled {
 		// 处于待命态（Standby）：新任务加入，尝试从待命态拉起 Runner
 		if err := s.supervisor.StartAlgorithm(context.Background(), algo.ToPackageMeta()); err != nil {
-			if !errors.Is(err, algorunner.ErrNoBrokerSockets) && !errors.Is(err, algorunner.ErrAlgorithmAlreadyRunning) {
+			if algorunner.IsEntryError(err) {
+				s.logger.Error("standby algorithm has no runnable entry, leaving it disabled",
+					zap.String("algorithm_id", algorithmID),
+					zap.Error(err),
+				)
+			} else if !errors.Is(err, algorunner.ErrNoBrokerSockets) && !errors.Is(err, algorunner.ErrAlgorithmAlreadyRunning) {
 				s.logger.Warn("failed to start standby algorithm after task change",
 					zap.String("algorithm_id", algorithmID),
 					zap.Error(err),

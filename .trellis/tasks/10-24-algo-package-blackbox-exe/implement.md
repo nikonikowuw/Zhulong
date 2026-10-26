@@ -628,7 +628,7 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
 
 ## 阶段 4：宿主仅启动包根可执行文件（manifest 零改动）
 
-- [ ] **4.0** `internal/algorunner/runtime.go` 新增 `ResolveEntry(pkgDir, id string) (path string, err error)`，只解析一种形态：
+- [x] **4.0** `internal/algorunner/runtime.go` 新增 `ResolveEntry(pkgDir, id string) (path string, err error)`，只解析一种形态：
       - 校验 `id` 符合安全 token 且不等于 `plugin.so`；
       - `<pkgDir>/<id>` 必须是由 `Lstat` 确认的普通文件，拒绝目录与符号链接；
       - 包根存在 `plugin.so` 时返回明确的旧形态不支持错误；否则入口缺失返回 `ErrMissingEntry`；
@@ -637,14 +637,14 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       表驱动单测覆盖：合法入口、缺失、旧入口单独存在、旧入口与新入口同时存在、非法 ID、符号链接、`target == "cpu"` 的旧包。
 
 
-- [ ] **4.2** `internal/algorithm/verifier.go`：先解析并校验 manifest，再调用 `ResolveEntry` 验证 `<manifest.id>` 入口；对确认是普通文件的入口规范权限为 `0755`。旧 `plugin.so` 明确映射为不支持错误，缺失新入口映射为 `ErrMissingEntry`。
-- [ ] **4.3** `internal/algorithm/uploader.go`：移除按 basename 为 `plugin.so` 补执行权限的旧逻辑；归档安全检查保持不变，入口权限由 verifier 在验证包内普通文件后统一规范。
-- [ ] **4.4** `internal/algorunner/process.go`：用 `ProcessConfig.ExecutablePath` 作为命令路径，argv 只包含重复 `--broker`、`--name`、`--algorithm-id`；不传 `--plugin` 或 `--max-workers`。移除通用 `RunnerPath` / `PluginPath` spawn 分支。
-- [ ] **4.5** `internal/algorithm/verifier.go` 的 `runDynamicVerification` 直接执行已解析的包入口，参数为 `--verify --sample <image>`，`cmd.Dir` 固定为包目录。
-- [ ] **4.6** 更新 `Runtime` 与所有 supervisor 路径：启动、升级、回滚、崩溃恢复都使用当前包根可执行文件；移除 `DefaultAlgorithmRunnerPath` 对算法包进程的依赖。
+- [x] **4.2** `internal/algorithm/verifier.go`：先解析并校验 manifest，再调用 `ResolveEntry` 验证 `<manifest.id>` 入口；对确认是普通文件的入口规范权限为 `0755`。旧 `plugin.so` 明确映射为不支持错误，缺失新入口映射为 `ErrMissingEntry`。
+- [x] **4.3** `internal/algorithm/uploader.go`：移除按 basename 为 `plugin.so` 补执行权限的旧逻辑；归档安全检查保持不变，入口权限由 verifier 在验证包内普通文件后统一规范。
+- [x] **4.4** `internal/algorunner/process.go`：用 `ProcessConfig.ExecutablePath` 作为命令路径，argv 只包含重复 `--broker`、`--name`、`--algorithm-id`；不传 `--plugin` 或 `--max-workers`。移除通用 `RunnerPath` / `PluginPath` spawn 分支。
+- [x] **4.5** `internal/algorithm/verifier.go` 的 `runDynamicVerification` 直接执行已解析的包入口，参数为 `--verify --sample <image>`，`cmd.Dir` 固定为包目录。
+- [x] **4.6** 更新 `Runtime` 与所有 supervisor 路径：启动、升级、回滚、崩溃恢复都使用当前包根可执行文件；移除 `DefaultAlgorithmRunnerPath` 对算法包进程的依赖。
       已拍板方案（T5）：supervisor 启动前用 `ResolveEntry` 校验每个已启用包。对于旧 `.so` 包或缺失入口的包，标记为 `unavailable` 并上报稳定错误码 `ALGO_ENTRY_INVALID`，**直接进入「不自动重试」状态**，杜绝 5s 退避重试风暴；由运维在前端或管理端重新安装/重建为可执行文件形态。
 
-- [ ] **4.7** 验证：
+- [x] **4.7** 验证：
       ```bash
       python3 native/scripts/build.py go test -race ./internal/algorunner
       go test -race ./internal/algorithm
@@ -661,6 +661,47 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       - **单测不得依赖真实算法包**：客户端逻辑（组帧、`request_id` 校验、超时 kill 进程组、重试 1 次、空闲回收、版本失效 retire）全部用 stub 可执行文件驱动（`t.TempDir()` 里写一段 shell/Python，按帧读 stdin 后吐固定 JSON）。真实包的集成验收只在 3.8 做一次，不引入 Go 测试对 `build/packages/face_recognition/face_recognition` 的硬依赖。
       - 建议覆盖的表驱动用例：`request_id` 错配、进程中途退出、超时不响应、stdout 洪泛带日志行、`feature_dim=0/513`、包目录 mtime 变化触发 retire。
 - [ ] **4.9** 门禁与文档同步：`native/tests/check_plugin_symbols.py` 去掉 face 双符号白名单并新增 exe「导出表为空」断言；`cgo-contract.md §6`、`algo-plugin-contract.md:49`、`hardware-backends.md:258` 按 `design.md` §11.9 重写。
+
+      **阶段 4 实施记录（2026-10-26）**
+
+      - `algorunner.Runtime` 只剩 `AlgorithmsDir`；新增 `EntryPath` / `ResolveEntry` /
+        `LegacyEntryFileName` / `ErrMissingEntry` / `ErrLegacyEntry` / `ErrInvalidEntry`，
+        `plugin.so` 只要存在就报错（哪怕同目录另有合法入口——歧义包不许猜）。
+        符号链接与目录一律拒绝：包目录由安装器写、必须不可变。
+      - `VerifyDirectory` 顺序重排为「manifest 解析+全字段校验 → 平台闸门 → sample.jpg →
+        入口解析+chmod 0755 → schema/.env → 动态验包」。入口名依赖 manifest.id，所以
+        manifest 必须先解析（反过来等于拿未校验的路径片段拼路径）。权限规范只此一处。
+      - `uploader.go` 删掉两个「按 basename 给 plugin.so 补执行位」的分支：解压不猜哪一个是入口。
+      - `ProcessConfig.RunnerPath`+`PluginPath` → `ExecutablePath`；argv 只留重复 `--broker`、
+        `--name`、`--algorithm-id`，`--plugin`/`--max-workers` 消失。
+      - `Supervisor.processConfig()` 每次（重）启动都重新 `ResolveEntry`：升级换目录后不能走旧路径。
+        失败时 `IsEntryError` 区分「包缺陷」与「普通启动失败」：
+        `StartAlgorithm` 直接返回（**不注册 watcher → 没有退避重试**），
+        `UpgradeAlgorithm`/`rollbackToOldLocked` 走回滚，
+        崩溃重启路径发现入口变不可用则停在 `StatusCrashLoop` 并返回，不再每 5s 刷一次启动失败。
+      - `Service.EnableAlgorithm` 把入口错误映射成 `ALGO_ENTRY_INVALID`（400，三种语言文案），
+        待命态拉起失败则记 Error 并保持 disabled。
+      - **孤儿认亲跟着一起改**（本来属于阶段 5，但进程模型一变就得同步，否则旧清扫逻辑再也匹不上
+        包进程）：`ReapOrphanRunners(ctx, algorithmsDir, …)`，匹配规则从「argv[0] basename == runner 名」
+        改成 `isPackageEntryPath`：`<root>/<id>/<version>/<id>` 形状（尾段必须等于 id 段），
+        root 在 `newAlgorithmRuntime` 里 `filepath.Abs`（包进程继承 argv[0]，相对路径会随 CWD 漂）。
+      - 打包不再带 `plugin.so`（过渡期分支删除），归档现在只有 `manifest.json` / `<id>` /
+        `sample.jpg` / `config.schema.json` / `models/`。
+      - 测试全量迁移：包桩从「注入 runner 路径」改成「把桩装到 `<root>/<id>/<version>/<id>`」；
+        动态验包测试用打印报告 JSON 的 shell 桩（`verifyStubScript`），不再依赖 `.so` 与
+        `zhulong_algo_runner`；`TestRunnerProcessDetectsBrokerHostUnavailable` 改成桩驱动的
+        `TestPackageProcessDetectsBrokerUnavailable`（退出码 5 + stage=connect）；
+        新增 `TestResolveEntry` 表驱动（合法/缺失/仅旧入口/新旧并存/目录/符号链接/非法 id）。
+
+      验证：`go test -race ./internal/...` 全绿（含 `internal/app` 真实路由上传）、`make native-test` 28/28；
+      归档内无 `plugin.so`，安装期用**包内可执行文件**跑 `--verify` 通过；
+      手跑 `./plate_recognition --broker /tmp/nope.sock …` → `{"stage":"connect"}` 且 exit=5（宿主据此判
+      `broker_unavailable`，不是普通崩溃）。
+
+      ⚠️ **遗留**：4.8（宿主人脸特征提取改道到包进程 + 删 `engine.cpp` 的 `FacePluginLoader`）与
+      4.9（`check_plugin_symbols.py` 去白名单、spec 文档重写）未做；`runner.cpp`、两个迁移期
+      `*_plugin_entry.cpp`、`FaceRecognitionPlugin`/`PlateRecognitionPlugin` 两个 SHARED target
+      仍存在（现在只剩 native 测试在用），随 3.9 清理一起删。
 
 **Review gate 4**：AC4 —— 两个算法包均能安装、启动、停止、重启及回滚；旧 `.so` 包明确拒绝，且不进入启动重试；AC9-AC13 全过；`grep -n "dlopen\|dlsym" native/src/abi/engine.cpp` 为空。
 

@@ -48,6 +48,8 @@ def main():
     pkg_id = manifest.get("id", "face_recognition")
     version = manifest.get("version", "1.0.0")
 
+    build_dir = repo_root / args.build_dir
+
     # ---- 1. 构建包自己的可执行文件（交付形态）--------------------------------
     # 包工程只依赖 SDK 前缀；这里用包自己的 Makefile 驱动，与包作者在本机跑的命令一致。
     sdk_prefix = Path(args.sdk_prefix)
@@ -64,45 +66,6 @@ def main():
     if not exe_path.exists():
         sys.exit(f"错误: 缺少包可执行文件 {exe_path}（去掉 --skip-build 或先 make）")
 
-    # ---- 2. 过渡期：同时带上旧 .so 插件 -------------------------------------
-    # ⚠️ 宿主侧（阶段 4）还没切到「只 exec 包根可执行文件」，安装期验包仍要求 plugin.so。
-    #    这一块随阶段 4 删除，届时归档里只剩可执行文件。
-    build_dir = repo_root / args.build_dir
-    if args.build_dir == "build/native/host" and args.target != "onnx":
-        cross_candidates = [
-            repo_root / "build" / "native" / f"cross-{args.target}-rknn-rga",
-            repo_root / "build" / "native" / f"cross-{args.target}-rknn",
-            repo_root / "build" / "native" / f"cross-{args.target}",
-        ]
-        for cd in cross_candidates:
-            if (cd / "libFaceRecognitionPlugin.so").exists():
-                build_dir = cd
-                break
-
-    possible_so = [
-        build_dir / "libFaceRecognitionPlugin.so",
-        build_dir / "FaceRecognitionPlugin.so",
-        build_dir / "libface_recognition.so",
-    ]
-    plugin_so = None
-    for p in possible_so:
-        if p.exists():
-            plugin_so = p
-            break
-
-    if not plugin_so:
-        print(f"未找到已编译的插件 .so，尝试调用 cmake 构建...")
-        res = subprocess.run(["cmake", "--build", str(build_dir), "--target", "FaceRecognitionPlugin"], cwd=str(repo_root))
-        if res.returncode != 0:
-            sys.exit("错误: CMake 构建 FaceRecognitionPlugin 失败！")
-        for p in possible_so:
-            if p.exists():
-                plugin_so = p
-                break
-        if not plugin_so:
-            sys.exit(f"错误: 构建后仍未找到插件库文件")
-
-    print(f"[*] 使用插件库: {plugin_so}")
 
     # 组装扁平目录
     staging_dir = build_dir / "staging" / f"{pkg_id}_{target_name}"
@@ -113,16 +76,11 @@ def main():
     # 1. 复制 manifest.json
     shutil.copy2(manifest_path, staging_dir / "manifest.json")
 
-    # 2a. 包根可执行文件：文件名必须等于 manifest.id（宿主按 id 找入口）
+    # 2. 包根可执行文件：文件名必须等于 manifest.id（宿主按 id 找入口）
     dest_entry = staging_dir / pkg_id
     shutil.copy2(exe_path, dest_entry)
     os.chmod(dest_entry, 0o755)
     print(f"[*] 包入口: {dest_entry.name}")
-
-    # 2b. 过渡期：旧 .so 插件（阶段 4 删除）
-    dest_plugin = staging_dir / "plugin.so"
-    shutil.copy2(plugin_so, dest_plugin)
-    os.chmod(dest_plugin, 0o755)
 
     # 3. 复制 sample.jpg
     sample_src = target_dir / "sample.jpg"

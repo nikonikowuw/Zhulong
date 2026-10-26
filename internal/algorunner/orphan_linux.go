@@ -72,18 +72,17 @@ var procRoot = "/proc"
 //
 // It is safe to call on every startup; a clean boot performs zero destructive
 // actions and reports an empty result.
-func ReapOrphanRunners(ctx context.Context, runnerPath string, logger *zap.Logger) (OrphanCleanupReport, error) {
+func ReapOrphanRunners(ctx context.Context, algorithmsDir string, logger *zap.Logger) (OrphanCleanupReport, error) {
 	report := OrphanCleanupReport{}
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	runnerBase := filepath.Base(runnerPath)
-	switch runnerBase {
-	case "", ".", "/":
-		return report, errors.New("orphan sweep: runner path is empty")
+	root, err := filepath.Abs(algorithmsDir)
+	if err != nil || algorithmsDir == "" || algorithmsDir == "." {
+		return report, fmt.Errorf("orphan sweep: algorithms directory %q is unusable", algorithmsDir)
 	}
 
-	candidates, err := findOrphanCandidates(runnerBase)
+	candidates, err := findOrphanCandidates(root)
 	if err != nil {
 		return report, fmt.Errorf("orphan sweep: scan /proc: %w", err)
 	}
@@ -196,9 +195,33 @@ type orphanCandidate struct {
 	algorithmID string
 }
 
-// findOrphanCandidates lists processes whose argv[0] resolves to the runner
-// binary. No liveness judgement happens here; callers decide.
-func findOrphanCandidates(runnerBase string) ([]orphanCandidate, error) {
+// isPackageEntryPath reports whether argv0 is `<algorithmsRoot>/<id>/<version>/<id>`,
+// i.e. a package process this host could have started.
+//
+// Matching on the *shape* rather than on a basename is what makes the sweep work
+// for package executables: every package has its own name, so there is no single
+// runner name left to compare against, but the install layout is fixed. The
+// trailing component must equal the id component, so an unrelated binary placed
+// under the version directory is not mistaken for the package.
+func isPackageEntryPath(argv0, algorithmsRoot string) bool {
+	if argv0 == "" || !filepath.IsAbs(argv0) {
+		return false
+	}
+	rel, err := filepath.Rel(algorithmsRoot, filepath.Clean(argv0))
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) != 3 {
+		return false
+	}
+	return parts[0] != "." && parts[0] != ".." && parts[0] == parts[2]
+}
+
+// findOrphanCandidates lists processes whose argv[0] is a package entry
+// executable inside algorithmsRoot. No liveness judgement happens here; callers
+// decide.
+func findOrphanCandidates(algorithmsRoot string) ([]orphanCandidate, error) {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {
 		return nil, err
@@ -218,7 +241,7 @@ func findOrphanCandidates(runnerBase string) ([]orphanCandidate, error) {
 		if readErr != nil || len(argv) == 0 {
 			continue
 		}
-		if filepath.Base(argv[0]) != runnerBase {
+		if !isPackageEntryPath(argv[0], algorithmsRoot) {
 			continue
 		}
 

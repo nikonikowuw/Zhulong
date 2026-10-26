@@ -75,34 +75,55 @@ func supervisorTestPackage() algorunner.PackageMeta {
 	}
 }
 
-func writeFailingRunner(t *testing.T) string {
+// Package stubs.
+//
+// These used to be standalone runner scripts injected through Runtime.RunnerPath.
+// There is no such seam any more: a package *is* its own executable, so a stub has
+// to be installed at the exact path the supervisor resolves
+// (<root>/<id>/<version>/<id>). Keeping the installation in one helper means the
+// tests exercise the real resolution path instead of bypassing it.
+
+// stubPackageRoot installs script as pkg's entry executable and returns the
+// install root to hand to Runtime{AlgorithmsDir: ...}.
+func stubPackageRoot(t *testing.T, pkg algorunner.PackageMeta, script string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "runner.sh")
-	script := "#!/bin/sh\nprintf 'run\\n' >> \"$RUN_COUNT_FILE\"\nexit 1\n"
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake runner: %v", err)
+	root := t.TempDir()
+	dir := filepath.Join(root, pkg.ID, pkg.Version)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create package dir: %v", err)
 	}
-	return path
+	if err := os.WriteFile(filepath.Join(dir, pkg.ID), []byte(script), 0o755); err != nil {
+		t.Fatalf("write package entry: %v", err)
+	}
+	return root
 }
 
-func writeIdleRunner(t *testing.T) string {
+// stubPackageRootAt installs script as pkg's entry inside an existing root, for
+// multi-version scenarios where upgrade/rollback need two versions at once.
+func stubPackageRootAt(t *testing.T, root string, pkg algorunner.PackageMeta, script string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "idle_runner.sh")
-	script := "#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile true; do sleep 1; done\n"
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatalf("write idle runner: %v", err)
+	dir := filepath.Join(root, pkg.ID, pkg.Version)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create package dir: %v", err)
 	}
-	return path
+	if err := os.WriteFile(filepath.Join(dir, pkg.ID), []byte(script), 0o755); err != nil {
+		t.Fatalf("write package entry: %v", err)
+	}
 }
 
-func writeBrokerArgRecordingRunner(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "recording_runner.sh")
-	script := "#!/bin/sh\nprintf 'start\\n' >> \"$RUN_ARG_FILE\"\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> \"$RUN_ARG_FILE\"; done\nsleep 30\n"
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatalf("write recording runner: %v", err)
-	}
-	return path
+// crashingPackageScript exits non-zero on every start, recording each attempt.
+func crashingPackageScript() string {
+	return "#!/bin/sh\nprintf 'run\\n' >> \"$RUN_COUNT_FILE\"\nexit 1\n"
+}
+
+// idlePackageScript stays alive until asked to terminate.
+func idlePackageScript() string {
+	return "#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile true; do sleep 1; done\n"
+}
+
+// argRecordingPackageScript records every argv it receives, once per start.
+func argRecordingPackageScript() string {
+	return "#!/bin/sh\nprintf 'start\\n' >> \"$RUN_ARG_FILE\"\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> \"$RUN_ARG_FILE\"; done\nsleep 30\n"
 }
 
 func readRecordedRunnerInvocations(t *testing.T, path string) [][]string {
@@ -187,7 +208,8 @@ func findRunnerPID(t *testing.T, marker string) int {
 			if convErr != nil || pid == self {
 				continue
 			}
-			if strings.Contains(line, "recording_runner.sh") && strings.Contains(line, marker) {
+			// 新形态：进程名就是包 id（<root>/<id>/<version>/<id>），所以只按 id 匹配。
+			if len(fields) > 1 && filepath.Base(fields[1]) == marker {
 				return pid
 			}
 		}
@@ -207,9 +229,15 @@ func findRunnerPID(t *testing.T, marker string) int {
 		if readErr != nil {
 			continue
 		}
-		line := strings.ReplaceAll(string(cmdline), "\x00", " ")
-		if strings.Contains(line, "recording_runner.sh") && strings.Contains(line, marker) {
-			return pid
+		// argv[0] 是 <root>/<id>/<version>/<id>：没有固定的 runner 脚本名可匹配，
+		// 但进程名恒等于包 id。
+		// 桩是 shell 脚本，内核实际 exec 的是 `/bin/sh <entry>`，所以 argv[1]
+		// 才是入口（真实包是 ELF，argv[0] 就是入口）。两者都看。
+		fields := strings.Split(strings.ReplaceAll(string(cmdline), "\x00", " "), " ")
+		for i := 0; i < 2 && i < len(fields); i++ {
+			if filepath.Base(fields[i]) == marker {
+				return pid
+			}
 		}
 	}
 	return 0
@@ -309,7 +337,7 @@ func TestGetStatusNotBlockedByBrokerResolution(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	resolver := newBlockingBrokerPathResolver([]string{"/tmp/r3_broker.sock"})
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	supervisor.SetBrokerSubscriptionResolver(resolver)
 	t.Cleanup(func() {
 		resolver.unblock()
@@ -352,7 +380,7 @@ func TestConcurrentStartAlgorithmRegistersOnce(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	resolver := newBlockingBrokerPathResolver([]string{"/tmp/r3_race.sock"})
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	supervisor.SetBrokerSubscriptionResolver(resolver)
 	t.Cleanup(func() {
 		resolver.unblock()
@@ -408,12 +436,12 @@ func TestSupervisorResetAllowsRestartAfterCrashLoop(t *testing.T) {
 	algo := supervisorTestPackage()
 	store.packages[algo.ID] = algo
 
-	runner := writeFailingRunner(t)
+	runnerScript := crashingPackageScript()
 	options := algorunner.DefaultRecoveryOptions()
 	options.InitialBackoff = 5 * time.Millisecond
 	options.MaxBackoff = 10 * time.Millisecond
 	options.MaxCrashes = 1
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runner}, options, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, runnerScript)}, options, zap.NewNop())
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 	})
@@ -448,12 +476,12 @@ func TestSupervisorCrashRestartReResolvesBrokerList(t *testing.T) {
 
 	argFile := filepath.Join(t.TempDir(), "runner-args")
 	t.Setenv("RUN_ARG_FILE", argFile)
-	runner := writeBrokerArgRecordingRunner(t)
+	runnerScript := argRecordingPackageScript()
 
 	options := algorunner.DefaultRecoveryOptions()
 	options.InitialBackoff = 5 * time.Millisecond
 	options.MaxBackoff = 10 * time.Millisecond
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runner}, options, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, runnerScript)}, options, zap.NewNop())
 
 	initialSocks := []string{"/tmp/zhulong_broker_1.sock"}
 	newSocks := []string{"/tmp/zhulong_broker_2.sock", "/tmp/zhulong_broker_3.sock"}
@@ -506,12 +534,12 @@ func TestSupervisorCrashRestartFallsBackWhenResolveFails(t *testing.T) {
 
 	argFile := filepath.Join(t.TempDir(), "runner-args")
 	t.Setenv("RUN_ARG_FILE", argFile)
-	runner := writeBrokerArgRecordingRunner(t)
+	runnerScript := argRecordingPackageScript()
 
 	options := algorunner.DefaultRecoveryOptions()
 	options.InitialBackoff = 5 * time.Millisecond
 	options.MaxBackoff = 10 * time.Millisecond
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runner}, options, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, runnerScript)}, options, zap.NewNop())
 
 	cachedSocks := []string{"/tmp/zhulong_broker_keep.sock"}
 	resolver := newMutableBrokerPathResolver(cachedSocks)
@@ -562,12 +590,12 @@ func TestSupervisorCrashRestartKeepsUsableBrokerList(t *testing.T) {
 
 	argFile := filepath.Join(t.TempDir(), "runner-args")
 	t.Setenv("RUN_ARG_FILE", argFile)
-	runner := writeBrokerArgRecordingRunner(t)
+	runnerScript := argRecordingPackageScript()
 
 	options := algorunner.DefaultRecoveryOptions()
 	options.InitialBackoff = 5 * time.Millisecond
 	options.MaxBackoff = 10 * time.Millisecond
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runner}, options, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, runnerScript)}, options, zap.NewNop())
 
 	wantSocks := []string{"/tmp/zhulong_broker_7.sock", "/tmp/zhulong_broker_9.sock"}
 	supervisor.SetBrokerSubscriptionResolver(&mockBrokerPathResolver{paths: wantSocks})
@@ -611,8 +639,8 @@ func TestSupervisorBrokerPathResolverAndRestart(t *testing.T) {
 	algo := supervisorTestPackage()
 	store.packages[algo.ID] = algo
 
-	runner := writeIdleRunner(t)
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runner}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	runnerScript := idlePackageScript()
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, runnerScript)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	resolver := &mockBrokerPathResolver{
 		paths: []string{"/tmp/mock_b1.sock", "/tmp/mock_b2.sock"},
 	}
@@ -647,7 +675,7 @@ func TestSupervisorStartFailsWhenBrokerResolutionFails(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	resolveErr := errors.New("camera lookup exploded")
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: "sleep"}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	supervisor.SetBrokerSubscriptionResolver(&failingBrokerPathResolver{err: resolveErr})
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
@@ -670,7 +698,7 @@ func TestSupervisorRestartPreservesActiveStatus(t *testing.T) {
 	algo := supervisorTestPackage()
 	store.packages[algo.ID] = algo
 
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 	})
@@ -720,27 +748,27 @@ func TestSupervisorRollbackThenStopKeepsStatusConsistent(t *testing.T) {
 		algoV1.Version = "1.0.0"
 		store.packages[algoV1.ID] = algoV1
 
-		runnerScript := filepath.Join(t.TempDir(), "version_sensitive_runner.sh")
+		// 版本敏感的桩：新形态的 argv 里没有版本号，但入口路径自带版本目录
+		// （<root>/<id>/<version>/<id>），所以按 $0 分支才是对等写法。
 		scriptContent := `#!/bin/sh
-for a in "$@"; do
-	case "$a" in
-		*2.0.0*)
-			exit 1
-			;;
-	esac
-done
+case "$0" in
+	*2.0.0*)
+		exit 1
+		;;
+esac
 trap 'exit 0' TERM INT
 while true; do sleep 0.05; done
 `
-		if err := os.WriteFile(runnerScript, []byte(scriptContent), 0o755); err != nil {
-			t.Fatalf("round %d: write version sensitive runner: %v", round, err)
-		}
 
 		options := algorunner.DefaultRecoveryOptions()
 		options.RollbackGuardWindow = 3 * time.Second
 		options.InitialBackoff = 5 * time.Millisecond
 		options.MaxBackoff = 10 * time.Millisecond
-		supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runnerScript}, options, zap.NewNop())
+		root := stubPackageRoot(t, algoV1, scriptContent)
+		algoV2 := algoV1
+		algoV2.Version = "2.0.0"
+		stubPackageRootAt(t, root, algoV2, scriptContent)
+		supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: root}, options, zap.NewNop())
 
 		if err := supervisor.StartAlgorithm(ctx, algoV1); err != nil {
 			supervisor.StopAll(time.Second)
@@ -748,8 +776,6 @@ while true; do sleep 0.05; done
 		}
 		waitForSupervisorStatus(t, supervisor, algoV1.ID, algorunner.StatusRunning)
 
-		algoV2 := algoV1
-		algoV2.Version = "2.0.0"
 		algoV2.PreviousVersion = algoV1.Version
 		store.packages[algoV2.ID] = algoV2
 
@@ -789,7 +815,13 @@ func TestSupervisorUpgradeAlgorithmSuccess(t *testing.T) {
 	algoV1 := supervisorTestPackage()
 	store.packages[algoV1.ID] = algoV1
 
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	// 升级要拉起 2.0.0，所以两个版本的入口都得在盘上。
+	root := stubPackageRoot(t, algoV1, idlePackageScript())
+	algoV2 := algoV1
+	algoV2.Version = "2.0.0"
+	stubPackageRootAt(t, root, algoV2, idlePackageScript())
+
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: root}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 	})
@@ -800,8 +832,6 @@ func TestSupervisorUpgradeAlgorithmSuccess(t *testing.T) {
 	}
 	waitForSupervisorStatus(t, supervisor, algoV1.ID, algorunner.StatusRunning)
 
-	algoV2 := algoV1
-	algoV2.Version = "2.0.0"
 	algoV2.PreviousVersion = algoV1.Version
 
 	if err := supervisor.UpgradeAlgorithm(ctx, algoV2, algoV1); err != nil {
@@ -822,25 +852,24 @@ func TestSupervisorUpgradeAlgorithmRollbackOnCrash(t *testing.T) {
 	store.packages[algoV1.ID] = algoV1
 
 	// Script that crashes immediately when receiving 2.0.0 in args, but stays alive for 1.0.0
-	runnerScript := filepath.Join(t.TempDir(), "version_sensitive_runner.sh")
+	// 同上：按 $0 里的版本目录分支
 	scriptContent := `#!/bin/sh
-for a in "$@"; do
-	case "$a" in
-		*2.0.0*)
-			exit 1
-			;;
-	esac
-done
+case "$0" in
+	*2.0.0*)
+		exit 1
+		;;
+esac
 trap 'exit 0' TERM INT
 while true; do sleep 0.1; done
 `
-	if err := os.WriteFile(runnerScript, []byte(scriptContent), 0o755); err != nil {
-		t.Fatalf("write version sensitive runner: %v", err)
-	}
 
 	options := algorunner.DefaultRecoveryOptions()
 	options.RollbackGuardWindow = 2 * time.Second
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: runnerScript}, options, zaptest.NewLogger(t))
+	root := stubPackageRoot(t, algoV1, scriptContent)
+	algoV2 := algoV1
+	algoV2.Version = "2.0.0"
+	stubPackageRootAt(t, root, algoV2, scriptContent)
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: root}, options, zaptest.NewLogger(t))
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
 	})
@@ -851,8 +880,6 @@ while true; do sleep 0.1; done
 	}
 	waitForSupervisorStatus(t, supervisor, algoV1.ID, algorunner.StatusRunning)
 
-	algoV2 := algoV1
-	algoV2.Version = "2.0.0"
 	algoV2.PreviousVersion = algoV1.Version
 	store.packages[algoV2.ID] = algoV2
 
@@ -884,7 +911,7 @@ func TestSupervisorStartFailsWithNoBrokerSocketsWhenResolverConfigured(t *testin
 	algo := supervisorTestPackage()
 	store.packages[algo.ID] = algo
 
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	supervisor.SetBrokerSubscriptionResolver(&mockBrokerPathResolver{paths: []string{}})
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
@@ -905,7 +932,7 @@ func TestSupervisorRestartWithZeroBrokersRetiresRunnerToStandby(t *testing.T) {
 	store.packages[algo.ID] = algo
 
 	resolver := newMutableBrokerPathResolver([]string{"/tmp/stream1.sock"})
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: t.TempDir(), RunnerPath: writeIdleRunner(t)}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: stubPackageRoot(t, algo, idlePackageScript())}, algorunner.DefaultRecoveryOptions(), zap.NewNop())
 	supervisor.SetBrokerSubscriptionResolver(resolver)
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)

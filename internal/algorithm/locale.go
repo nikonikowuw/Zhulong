@@ -54,6 +54,11 @@ func init() {
 			"zh-Hans": "解压后体积或文件数超过安全上限",
 			"zh-Hant": "解壓縮後體積或檔案數超過安全上限",
 		},
+		"ALGO_ENTRY_INVALID": {
+			"en":      "Algorithm package has no runnable executable, reinstall it",
+			"zh-Hans": "算法包缺少可执行入口，请重新安装或重新构建该算法包",
+			"zh-Hant": "演算法套件缺少可執行入口，請重新安裝或重新建置該演算法套件",
+		},
 		"ALGO_VERIFICATION_FAILED": {
 			"en":      "Algorithm black-box verification failed",
 			"zh-Hans": "算法黑盒动态自测失败",

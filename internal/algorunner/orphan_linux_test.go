@@ -19,34 +19,25 @@ import (
 	"go.uber.org/zap"
 )
 
-// writeFakeRunner copies a real ELF binary to a uniquely named path inside a temp
-// dir and returns that path.
+// installFakePackage materialises a package whose entry is a real ELF binary and
+// returns the install root plus the entry path.
 //
-// ⚠️ It must be a real binary, not a shell script: for interpreted scripts the
-// kernel rewrites /proc/<pid>/cmdline to "/bin/sh <script> ...", so argv[0] would
-// be the interpreter and findOrphanCandidates would never see the script name it
-// is supposed to match.
-func writeFakeRunner(t *testing.T) string {
+// ⚠️ The entry must be a real binary, not a shell script: for interpreted
+// scripts the kernel rewrites /proc/<pid>/cmdline to "/bin/sh <script> ...", so
+// argv[0] would be the interpreter and the sweep would never see the entry.
+//
+// The layout (<root>/<id>/<version>/<id>) is not incidental — it is exactly what
+// isPackageEntryPath matches, because package executables all have different
+// names and only the install layout is shared.
+func installFakePackage(t *testing.T, id string) (root, entry string) {
 	t.Helper()
-	src, err := os.Open("/bin/sleep")
-	if err != nil {
-		t.Fatalf("open /bin/sleep: %v", err)
+	root = t.TempDir()
+	entry = filepath.Join(root, id, "1.0.0", id)
+	if err := os.MkdirAll(filepath.Dir(entry), 0o755); err != nil {
+		t.Fatalf("create package dir: %v", err)
 	}
-	defer src.Close()
-
-	path := filepath.Join(t.TempDir(), "fake_algo_runner_"+strconv.FormatInt(time.Now().UnixNano(), 36))
-	dst, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-	if err != nil {
-		t.Fatalf("create fake runner: %v", err)
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		dst.Close()
-		t.Fatalf("copy runner: %v", err)
-	}
-	if err := dst.Close(); err != nil {
-		t.Fatalf("close fake runner: %v", err)
-	}
-	return path
+	copyBinary(t, "/bin/sleep", entry)
+	return root, entry
 }
 
 // startReparentedRunner launches runnerPath as a grandchild so that it becomes
@@ -91,10 +82,10 @@ func copyBinary(t *testing.T, src, dst string) {
 }
 
 func TestReapOrphanRunners_KillsReparentedRunner(t *testing.T) {
-	runnerPath := writeFakeRunner(t)
-	pid := startReparentedRunner(t, runnerPath)
+	root, entry := installFakePackage(t, "reparented_pkg")
+	pid := startReparentedRunner(t, entry)
 
-	report, err := ReapOrphanRunners(context.Background(), runnerPath, zap.NewNop())
+	report, err := ReapOrphanRunners(context.Background(), root, zap.NewNop())
 	if err != nil {
 		t.Fatalf("ReapOrphanRunners returned error: %v", err)
 	}
@@ -114,12 +105,13 @@ func TestReapOrphanRunners_NeverKillsSupervisedRunner(t *testing.T) {
 	// A runner whose parent is a live process must be left alone. This is the
 	// shape of a second running Zhulong instance, and killing it would be a
 	// severe regression.
-	runnerPath := writeFakeRunner(t)
+	root, entry := installFakePackage(t, "supervised_pkg")
 
-	// Parent the runner under a separate long-lived process (/bin/sleep) rather
-	// than the test binary, which is the harder case: the supervisor is neither
-	// this process nor init, so any "is it us?" shortcut would misclassify it.
-	supervisor := exec.Command("/bin/sh", "-c", `"$0" 300 & wait`, runnerPath)
+	// Parent the package process under a separate long-lived process (/bin/sleep)
+	// rather than the test binary, which is the harder case: the supervisor is
+	// neither this process nor init, so any "is it us?" shortcut would
+	// misclassify it.
+	supervisor := exec.Command("/bin/sh", "-c", `"$0" 300 & wait`, entry)
 	if err := supervisor.Start(); err != nil {
 		t.Fatalf("start supervisor: %v", err)
 	}
@@ -129,10 +121,10 @@ func TestReapOrphanRunners_NeverKillsSupervisedRunner(t *testing.T) {
 		_ = supervisor.Wait()
 	})
 
-	runnerPID := waitForChildOf(t, supervisor.Process.Pid, runnerPath)
+	runnerPID := waitForChildOf(t, supervisor.Process.Pid, entry)
 	t.Cleanup(func() { _ = syscall.Kill(runnerPID, syscall.SIGKILL) })
 
-	report, err := ReapOrphanRunners(context.Background(), runnerPath, zap.NewNop())
+	report, err := ReapOrphanRunners(context.Background(), root, zap.NewNop())
 	if err != nil {
 		t.Fatalf("ReapOrphanRunners returned error: %v", err)
 	}
@@ -201,12 +193,16 @@ func parentOf(t *testing.T, pid int) int {
 	return ppid
 }
 
-func TestReapOrphanRunners_IgnoresOtherBinariesWithSameBasename(t *testing.T) {
-	runnerPath := writeFakeRunner(t)
+func TestReapOrphanRunners_IgnoresBinariesOutsideInstallRoot(t *testing.T) {
+	root, _ := installFakePackage(t, "some_pkg")
 
-	// Same basename, different directory: not our runner, must not be a candidate.
+	// A package-shaped path that lives outside the install root must not be a
+	// candidate: the sweep's blast radius is the host's own algorithms directory.
 	otherDir := t.TempDir()
-	impostor := filepath.Join(otherDir, filepath.Base(runnerPath))
+	impostor := filepath.Join(otherDir, "some_pkg", "1.0.0", "some_pkg")
+	if err := os.MkdirAll(filepath.Dir(impostor), 0o755); err != nil {
+		t.Fatalf("create impostor dir: %v", err)
+	}
 	copyBinary(t, "/bin/sleep", impostor)
 	cmd := exec.Command(impostor, "300")
 	if err := cmd.Start(); err != nil {
@@ -218,7 +214,7 @@ func TestReapOrphanRunners_IgnoresOtherBinariesWithSameBasename(t *testing.T) {
 		_ = cmd.Wait()
 	})
 
-	report, err := ReapOrphanRunners(context.Background(), runnerPath, zap.NewNop())
+	report, err := ReapOrphanRunners(context.Background(), root, zap.NewNop())
 	if err != nil {
 		t.Fatalf("ReapOrphanRunners returned error: %v", err)
 	}
@@ -228,9 +224,9 @@ func TestReapOrphanRunners_IgnoresOtherBinariesWithSameBasename(t *testing.T) {
 }
 
 func TestReapOrphanRunners_CleanHostIsNoOp(t *testing.T) {
-	runnerPath := writeFakeRunner(t)
+	root, _ := installFakePackage(t, "clean_pkg")
 
-	report, err := ReapOrphanRunners(context.Background(), runnerPath, zap.NewNop())
+	report, err := ReapOrphanRunners(context.Background(), root, zap.NewNop())
 	if err != nil {
 		t.Fatalf("ReapOrphanRunners returned error: %v", err)
 	}
@@ -239,9 +235,14 @@ func TestReapOrphanRunners_CleanHostIsNoOp(t *testing.T) {
 	}
 }
 
-func TestReapOrphanRunners_RejectsEmptyRunnerPath(t *testing.T) {
-	if _, err := ReapOrphanRunners(context.Background(), "", zap.NewNop()); err == nil {
-		t.Fatal("expected an error for an empty runner path")
+// TestReapOrphanRunners_RejectsUnusableRoot pins the guard against a sweep that
+// would otherwise scan /proc against a bogus root and match nothing (silently) or
+// match everything (catastrophically).
+func TestReapOrphanRunners_RejectsUnusableRoot(t *testing.T) {
+	for _, root := range []string{"", "."} {
+		if _, err := ReapOrphanRunners(context.Background(), root, zap.NewNop()); err == nil {
+			t.Errorf("expected an error for algorithms dir %q", root)
+		}
 	}
 }
 
@@ -249,7 +250,7 @@ func TestReapOrphanRunners_RejectsEmptyRunnerPath(t *testing.T) {
 // sweep, which has no live process to derive paths from and is judged purely by
 // liveness.
 func TestReapOrphanRunners_ReclaimsDeadSocketsAndShm(t *testing.T) {
-	runnerPath := writeFakeRunner(t)
+	root, _ := installFakePackage(t, "sockets_pkg")
 
 	// Broker dir override mirrors pipeline/engine.cpp's ZHULONG_FRAME_BROKER_SOCK.
 	brokerDir := t.TempDir()
@@ -259,7 +260,7 @@ func TestReapOrphanRunners_ReclaimsDeadSocketsAndShm(t *testing.T) {
 		t.Fatalf("create dead socket file: %v", err)
 	}
 
-	report, err := ReapOrphanRunners(context.Background(), runnerPath, zap.NewNop())
+	report, err := ReapOrphanRunners(context.Background(), root, zap.NewNop())
 	if err != nil {
 		t.Fatalf("ReapOrphanRunners returned error: %v", err)
 	}
@@ -655,7 +656,7 @@ func TestBrokerResourceLock_BlocksConcurrentSweepWithoutFailingStartup(t *testin
 }
 
 func TestReapOrphanRunners_SkipsCleanupWhenLockIsBusy(t *testing.T) {
-	runnerPath := writeFakeRunner(t)
+	root, _ := installFakePackage(t, "lock_busy_pkg")
 	brokerDir := t.TempDir()
 	t.Setenv("ZHULONG_FRAME_BROKER_SOCK", brokerDir)
 	deadSock := filepath.Join(brokerDir, "zhulong_broker_4243.sock")
@@ -664,7 +665,7 @@ func TestReapOrphanRunners_SkipsCleanupWhenLockIsBusy(t *testing.T) {
 	}
 
 	// Health check: with the lock free the sweep reclaims the file.
-	if _, err := ReapOrphanRunners(context.Background(), runnerPath, zap.NewNop()); err != nil {
+	if _, err := ReapOrphanRunners(context.Background(), root, zap.NewNop()); err != nil {
 		t.Fatalf("free-lock sweep: %v", err)
 	}
 	if _, statErr := os.Stat(deadSock); !errors.Is(statErr, os.ErrNotExist) {
@@ -682,7 +683,7 @@ func TestReapOrphanRunners_SkipsCleanupWhenLockIsBusy(t *testing.T) {
 	}
 	defer held.release()
 
-	report, err := ReapOrphanRunners(context.Background(), runnerPath, zap.NewNop())
+	report, err := ReapOrphanRunners(context.Background(), root, zap.NewNop())
 	if err != nil {
 		t.Fatalf("busy-lock sweep returned an error: %v", err)
 	}

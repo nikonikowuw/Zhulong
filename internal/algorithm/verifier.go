@@ -23,12 +23,12 @@ import (
 var (
 	ErrPlatformMismatch        = errors.New("algorithm platform does not match host platform")
 	ErrInvalidManifest         = errors.New("invalid manifest.json")
-	ErrMissingPluginFile       = errors.New("missing convention plugin.so in package root")
+	ErrMissingEntryExecutable  = errors.New("missing package entry executable in package root")
 	ErrMissingSampleFile       = errors.New("missing convention sample.jpg in package root")
 	ErrMissingManifestFile     = errors.New("missing convention manifest.json in package root")
 	ErrInvalidConfigSchema     = errors.New("invalid config.schema.json: not a valid JSON schema")
 	ErrVersionAlreadyInstalled = errors.New("algorithm version is already installed")
-	ErrVerificationFailed      = errors.New("dynamic plugin verification failed")
+	ErrVerificationFailed      = errors.New("dynamic package verification failed")
 	ErrResultTypeMismatch      = errors.New("plugin exported result_type does not match manifest task_type")
 	ErrInvalidComputeBudget    = errors.New("invalid compute budget in manifest")
 
@@ -56,19 +56,20 @@ var (
 // field that never participates in path construction. See manifestNameMaxBytes.
 var manifestTokenPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
-// manifestNameMaxBytes bounds manifest.Name to the runner's handshake buffer
+// manifestNameMaxBytes bounds manifest.Name to the package's handshake buffer
 // (HandshakeReq.client_name[32], ipc_protocol.hpp:37). The value travels to the
-// runner via --name (supervisor.go) and is copied with strncpy, which silently
+// package process via --name (supervisor.go) and is copied with strncpy, which silently
 // truncates on overflow — two packages could then share one client name.
 const manifestNameMaxBytes = 32
 
-// VerificationReport reflects the final JSON line emitted by zhulong_algo_runner --verify-plugin.
+// VerificationReport reflects the final JSON line emitted by the package entry
+// when invoked as `<entry> --verify --sample <image>`.
 type VerificationReport struct {
 	Status     string `json:"status"`
 	Sample     string `json:"sample"`
 	ResultType int    `json:"result_type"`
 	Count      int    `json:"count"`
-	// SampleDecoded reports whether the runner decoded the sample into a real frame.
+	// SampleDecoded reports whether the entry decoded the sample into a real frame.
 	// False means the run fell back to a synthetic frame, so passing verification
 	// proves the ABI lifecycle only — never that the packaged sample was inferred.
 	SampleDecoded bool   `json:"sample_decoded"`
@@ -126,39 +127,50 @@ type VerifyOptions struct {
 	// Logger receives non-fatal observations (a sample frame that could not be fed,
 	// or a decoded sample that produced no results). Nil silences them.
 	Logger *zap.Logger
+	// SkipDynamic keeps verification to static checks only. Reserved for tests and
+	// for build hosts that cannot execute target-arch binaries: without it a
+	// mismatched host/package pair fails with an exec error instead of a verdict
+	// about the package itself.
+	SkipDynamic bool
 }
 
 // Verifier executes static contract audits and dynamic black-box verification.
 //
-// Immutable after construction: the host identity, the runner binary and the
-// timeout are captured once, so a verdict can never depend on a field mutated
-// between calls.
+// Immutable after construction: the host identity, the skip flag and the timeout
+// are captured once, so a verdict can never depend on a field mutated between
+// calls.
+//
+// Note what is *not* here: there is no host-side runner binary. Dynamic
+// verification executes the package's own entry, because that is exactly what
+// production executes — verifying through a different launcher would let the two
+// code paths drift.
 type Verifier struct {
-	runnerPath string
-	host       HostPlatform
-	timeout    time.Duration
-	logger     *zap.Logger
+	host        HostPlatform
+	timeout     time.Duration
+	skipDynamic bool
+	logger      *zap.Logger
 }
 
-// NewVerifier creates a Verifier. An empty runnerPath keeps the verifier to
-// static checks only; host.Target defaults to onnx.
-func NewVerifier(runnerPath string, host HostPlatform, opts ...VerifyOptions) *Verifier {
+// NewVerifier creates a Verifier. host.Target defaults to onnx.
+func NewVerifier(host HostPlatform, opts ...VerifyOptions) *Verifier {
 	timeout := DefaultVerifyTimeout
 	var logger *zap.Logger
+	var skipDynamic bool
 	if len(opts) > 0 {
 		if opts[0].Timeout > 0 {
 			timeout = opts[0].Timeout
 		}
 		logger = opts[0].Logger
+		skipDynamic = opts[0].SkipDynamic
 	}
 
 	host.Target = normalizeHostTarget(host.Target)
 
 	return &Verifier{
-		runnerPath: runnerPath,
-		host:       host,
-		timeout:    timeout,
-		logger:     logger,
+		host:        host,
+		timeout:     timeout,
+		skipDynamic: skipDynamic,
+		logger:      logger,
 	}
 }
 
@@ -179,18 +191,16 @@ func (v *Verifier) HostPlatform() HostPlatform {
 // Returns the parsed Manifest, configSchemaJSON, and .env contents if any.
 func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifest, string, string, error) {
 	manifestPath := filepath.Join(pkgDir, "manifest.json")
-	pluginPath := filepath.Join(pkgDir, algorunner.EntryFileName)
 	samplePath := filepath.Join(pkgDir, "sample.jpg")
 
 	// 1. Convention files presence check
+	//
+	// manifest.json comes first on purpose: the entry executable is *named after*
+	// manifest.id, so the manifest has to be parsed and its id validated before
+	// the entry can be resolved at all. Doing it the other way would mean trusting
+	// an unvalidated path component.
 	if _, err := os.Stat(manifestPath); err != nil {
 		return nil, "", "", ErrMissingManifestFile
-	}
-	if _, err := os.Stat(pluginPath); err != nil {
-		return nil, "", "", ErrMissingPluginFile
-	}
-	if _, err := os.Stat(samplePath); err != nil {
-		return nil, "", "", ErrMissingSampleFile
 	}
 
 	// 2. Parse and validate manifest.json
@@ -257,7 +267,7 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifes
 		return nil, "", "", fmt.Errorf("%w: memory_mb must be positive", ErrInvalidComputeBudget)
 	}
 
-	// 3. Stage 1: Static platform compatibility gate
+	// 5. Stage 1: Static platform compatibility gate
 	//
 	// The retired "cpu" target is rejected before any comparison: silently
 	// treating it as "onnx" would install a package whose assets and runtime do
@@ -275,6 +285,30 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifes
 	bothTargetsKnown := manifest.Platform.Target != "" && v.host.Target != ""
 	if bothTargetsKnown && manifest.Platform.Target != v.host.Target {
 		return nil, "", "", fmt.Errorf("%w: package requires target %q, host is %q", ErrPlatformMismatch, manifest.Platform.Target, v.host.Target)
+	}
+
+	// 5. Convention files that the *dynamic* stage needs: the entry executable and
+	// the sample it is fed.
+	//
+	// Both are checked after the manifest and platform gates so an operator sees
+	// the cheapest, most actionable problem first: a package built for another
+	// device should be rejected for that, not for a missing file.
+	if _, err := os.Stat(samplePath); err != nil {
+		return nil, "", "", ErrMissingSampleFile
+	}
+
+	// The entry is a plain executable named after manifest.id. Resolved through
+	// algorunner so the installer accepts exactly what the supervisor will later
+	// execute; a package still shipping the retired plugin.so is rejected here,
+	// because install time is the only moment an operator can still act on it.
+	entryPath, err := algorunner.ResolveEntry(pkgDir, manifest.ID)
+	if err != nil {
+		return nil, "", "", err
+	}
+	// Normalise the permission bits only after the entry is known to be a plain
+	// regular file, so a chmod can never be talked into following a symlink.
+	if err := os.Chmod(entryPath, 0o755); err != nil {
+		return nil, "", "", fmt.Errorf("make package entry executable: %w", err)
 	}
 
 	// Optional config.schema.json validation
@@ -297,9 +331,9 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifes
 		envContent = string(b)
 	}
 
-	// 4. Stage 2: Dynamic black-box verification via runner
-	if v.runnerPath != "" {
-		if err := v.runDynamicVerification(ctx, pluginPath, samplePath, manifest.TaskType); err != nil {
+	// 6. Stage 2: Dynamic black-box verification by running the package entry
+	if !v.skipDynamic {
+		if err := v.runDynamicVerification(ctx, entryPath, samplePath, manifest.TaskType); err != nil {
 			return nil, "", "", err
 		}
 	}
@@ -307,14 +341,14 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifes
 	return &manifest, configSchemaJSON, envContent, nil
 }
 
-func (v *Verifier) runDynamicVerification(ctx context.Context, pluginPath, samplePath, taskType string) error {
+func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, samplePath, taskType string) error {
 	vCtx, cancel := context.WithTimeout(ctx, v.timeout)
 	defer cancel()
 
-	// 样本帧：Go 用标准库把 sample.jpg/png 解码成 PPM 交给 runner。runner 不链接任何
-	// 图像解码器（它不属于推理链路），所以「真的把包里的样本图喂进模型」这件事由调用侧
-	// 负责。解码失败不阻断安装（老包可能用了标准库不支持的编码），但会让 runner 回退
-	// 合成帧，并在报告里标记 sample_decoded=false，再以告警显式暴露给运维。
+	// 样本帧：Go 用标准库把 sample.jpg/png 解码成 PPM 交给包入口。包入口只带骨架，
+	// 不链接任何图像解码器（它不属于推理链路），所以「真的把包里的样本图喂进模型」
+	// 这件事由调用侧负责。解码失败不阻断安装（老包可能用了标准库不支持的编码），
+	// 但会让包入口回退合成帧，并在报告里标记 sample_decoded=false，再以告警暴露给运维。
 	framePath, cleanup := writeSampleFramePPM(samplePath)
 	if cleanup != nil {
 		defer cleanup()
@@ -324,11 +358,11 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, pluginPath, sampl
 		sampleArg = framePath
 	}
 
-	cmd := exec.CommandContext(vCtx, v.runnerPath, "--verify-plugin", pluginPath, "--sample", sampleArg)
-	// 以包目录为 CWD：验包必须复现部署布局（plugin.so 与 models/ 同级）。
+	cmd := exec.CommandContext(vCtx, entryPath, "--verify", "--sample", sampleArg)
+	// 以包目录为 CWD：验包必须复现部署布局（可执行文件与 models/ 同级）。
 	// 否则「从源码树 CWD 意外命中权重」会让模型路径类缺陷（拼出 models/models/…）
 	// 在开发机上全部逃过准入，到部署环境才以 model_create 失败爆出。
-	cmd.Dir = filepath.Dir(pluginPath)
+	cmd.Dir = filepath.Dir(entryPath)
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
@@ -337,28 +371,28 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, pluginPath, sampl
 		return fmt.Errorf("%w: execution failed (%v): %s", ErrVerificationFailed, err, stderrBuf.String())
 	}
 
-	// Parse the final JSON line
+	// Parse the final JSON line (the skeleton prints its report last)
 	output := strings.TrimSpace(stdoutBuf.String())
 	lines := strings.Split(output, "\n")
 	if len(lines) == 0 {
-		return fmt.Errorf("%w: empty output from runner", ErrVerificationFailed)
+		return fmt.Errorf("%w: empty output from package entry", ErrVerificationFailed)
 	}
 
 	lastLine := strings.TrimSpace(lines[len(lines)-1])
 	var report VerificationReport
 	if err := json.Unmarshal([]byte(lastLine), &report); err != nil {
-		return fmt.Errorf("%w: cannot parse runner report (%s): %v", ErrVerificationFailed, lastLine, err)
+		return fmt.Errorf("%w: cannot parse package report (%s): %v", ErrVerificationFailed, lastLine, err)
 	}
 
 	if report.Status != "passed" {
-		return fmt.Errorf("%w: runner reported status %q: %s", ErrVerificationFailed, report.Status, report.Error)
+		return fmt.Errorf("%w: package reported status %q: %s", ErrVerificationFailed, report.Status, report.Error)
 	}
 
 	// 准入结论的可信度取决于「样本帧是否真的进了模型」：没解码成功就只能证明 ABI 生命周期。
 	if !report.SampleDecoded {
 		v.warn("algorithm verification ran without a decoded sample frame; only the ABI lifecycle was exercised",
 			zap.String("sample", samplePath),
-			zap.String("plugin", pluginPath))
+			zap.String("entry", entryPath))
 	} else if report.Count == 0 {
 		v.warn("algorithm verification decoded the sample frame but the plugin reported zero results",
 			zap.String("sample", samplePath),

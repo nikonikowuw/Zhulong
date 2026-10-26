@@ -84,9 +84,9 @@ func TestHandlerListAndInstall(t *testing.T) {
 	manifestBytes, _ := json.Marshal(manifest)
 
 	tarGzPath := createTestTarGz(t, map[string][]byte{
-		"manifest.json": manifestBytes,
-		"plugin.so":     []byte("elf_stub"),
-		"sample.jpg":    []byte("jpg_stub"),
+		"manifest.json":   manifestBytes,
+		"helmet_detector": []byte(verifyStubScript(1)),
+		"sample.jpg":      []byte("jpg_stub"),
 	})
 	defer os.Remove(tarGzPath)
 

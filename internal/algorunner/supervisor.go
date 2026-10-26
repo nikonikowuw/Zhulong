@@ -164,6 +164,38 @@ func (s *Supervisor) resolveBrokerSocks(ctx context.Context, resolver BrokerSubs
 }
 
 // StartAlgorithm spawns and watches a runner subprocess for an algorithm.
+// processConfig builds the spawn configuration for one installed package,
+// resolving its entry executable.
+//
+// Resolution happens on every (re)start instead of once at install time: a
+// package directory can be replaced by an upgrade, and an old binary must never
+// be reached through a stale path. Errors are returned verbatim (wrapped by the
+// caller with the algorithm id) so that an unusable entry is reported as a
+// package defect — see IsEntryError.
+func (s *Supervisor) processConfig(algo PackageMeta, brokerSocks []string) (ProcessConfig, error) {
+	entry, err := ResolveEntry(s.rt.PackageDir(algo.ID, algo.Version), algo.ID)
+	if err != nil {
+		return ProcessConfig{}, err
+	}
+	return ProcessConfig{
+		AlgorithmID:    algo.ID,
+		AlgorithmName:  algo.Name,
+		ExecutablePath: entry,
+		BrokerSocks:    brokerSocks,
+		EnvFile:        s.rt.EnvPath(algo.ID, algo.Version),
+		Logger:         s.logger,
+	}, nil
+}
+
+// IsEntryError reports whether err came from entry resolution, i.e. the package
+// on disk cannot be executed at all. Callers must not retry such a failure: a
+// missing or legacy entry does not heal by itself, and retrying produces a
+// backoff storm that looks like a crash loop while the real cause is an
+// obsolete package.
+func IsEntryError(err error) bool {
+	return errors.Is(err, ErrMissingEntry) || errors.Is(err, ErrLegacyEntry) || errors.Is(err, ErrInvalidEntry)
+}
+
 func (s *Supervisor) StartAlgorithm(ctx context.Context, algo PackageMeta) error {
 	// 1. 快路径：锁内只做存在性判断，并顺带取出 resolver 引用。
 	s.mu.RLock()
@@ -200,19 +232,14 @@ func (s *Supervisor) StartAlgorithm(ctx context.Context, algo PackageMeta) error
 		brokerSocks: brokerSocks,
 	}
 
-	cfg := ProcessConfig{
-		AlgorithmID:   algo.ID,
-		AlgorithmName: algo.Name,
-		RunnerPath:    s.rt.RunnerPath,
-		PluginPath:    s.rt.PluginPath(algo.ID, algo.Version),
-		BrokerSocks:   w.brokerSocks,
-		EnvFile:       s.rt.EnvPath(algo.ID, algo.Version),
-		Logger:        s.logger,
+	cfg, err := s.processConfig(algo, w.brokerSocks)
+	if err != nil {
+		return fmt.Errorf("resolve package entry for %s: %w", algo.ID, err)
 	}
 	w.process = NewRunnerProcess(cfg)
 
 	if err := w.process.Start(); err != nil {
-		return fmt.Errorf("start runner process: %w", err)
+		return fmt.Errorf("start package process: %w", err)
 	}
 
 	w.status = StatusRunning
@@ -369,14 +396,14 @@ func (s *Supervisor) UpgradeAlgorithm(ctx context.Context, newAlgo PackageMeta, 
 		brokerSocks: brokerSocks,
 	}
 
-	cfg := ProcessConfig{
-		AlgorithmID:   newAlgo.ID,
-		AlgorithmName: newAlgo.Name,
-		RunnerPath:    s.rt.RunnerPath,
-		PluginPath:    s.rt.PluginPath(newAlgo.ID, newAlgo.Version),
-		BrokerSocks:   w.brokerSocks,
-		EnvFile:       s.rt.EnvPath(newAlgo.ID, newAlgo.Version),
-		Logger:        s.logger,
+	cfg, cfgErr := s.processConfig(newAlgo, w.brokerSocks)
+	if cfgErr != nil {
+		s.mu.Unlock()
+		s.logger.Warn("new algorithm version has no runnable entry, attempting immediate rollback",
+			zap.String("algorithm", newAlgo.ID),
+			zap.Error(cfgErr),
+		)
+		return s.rollbackToOld(ctx, oldAlgo)
 	}
 	w.process = NewRunnerProcess(cfg)
 
@@ -427,14 +454,9 @@ func (s *Supervisor) rollbackToOldLocked(ctx context.Context, oldAlgo PackageMet
 		brokerSocks: brokerSocks,
 	}
 
-	cfg := ProcessConfig{
-		AlgorithmID:   oldAlgo.ID,
-		AlgorithmName: oldAlgo.Name,
-		RunnerPath:    s.rt.RunnerPath,
-		PluginPath:    s.rt.PluginPath(oldAlgo.ID, oldAlgo.Version),
-		BrokerSocks:   w.brokerSocks,
-		EnvFile:       s.rt.EnvPath(oldAlgo.ID, oldAlgo.Version),
-		Logger:        s.logger,
+	cfg, err := s.processConfig(oldAlgo, w.brokerSocks)
+	if err != nil {
+		return fmt.Errorf("resolve package entry for %s %s: %w", oldAlgo.ID, oldAlgo.Version, err)
 	}
 	w.process = NewRunnerProcess(cfg)
 
@@ -700,14 +722,17 @@ func (w *workerWatcher) superviseLoop() {
 			default:
 			}
 			w.status = StatusStarting
-			cfg := ProcessConfig{
-				AlgorithmID:   w.algo.ID,
-				AlgorithmName: w.algo.Name,
-				RunnerPath:    w.supervisor.rt.RunnerPath,
-				PluginPath:    w.supervisor.rt.PluginPath(w.algo.ID, w.algo.Version),
-				BrokerSocks:   w.brokerSocks,
-				EnvFile:       w.supervisor.rt.EnvPath(w.algo.ID, w.algo.Version),
-				Logger:        w.supervisor.logger,
+			cfg, cfgErr := w.supervisor.processConfig(w.algo, w.brokerSocks)
+			if cfgErr != nil {
+				// 入口不可执行是包缺陷，重试不会自愈：直接停在 CRASH_LOOP，
+				// 让运维重新安装/重建，而不是每 5s 刷一次 start 失败日志。
+				w.status = StatusCrashLoop
+				w.mu.Unlock()
+				w.supervisor.logger.Error("package entry became unusable, giving up restart",
+					zap.String("algorithm", w.algo.ID),
+					zap.Error(cfgErr),
+				)
+				return
 			}
 			w.process = NewRunnerProcess(cfg)
 			if err := w.process.Start(); err != nil {

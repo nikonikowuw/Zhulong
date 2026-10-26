@@ -38,10 +38,11 @@ func TestHandlerEnableDisableActionEnvelope(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	// A runner stub that ignores the --plugin/--broker arguments and stays alive
-	// until it is signalled keeps the supervised status deterministic. The verify
-	// runner stays empty so package verification remains static.
-	rt := algorunner.Runtime{AlgorithmsDir: dataDir, RunnerPath: writeIdleRunner(t)}
+	// 每个被启用的包都要有可执行入口：把 idle 桩装到 supervisor 会解析的路径，
+	// 这样被监督状态才是确定的（没有任何进程注入的后门）。
+	installStubPackage(t, dataDir, "action_contract", "1.0.0", idleStubScript())
+	installStubPackage(t, dataDir, "action_contract_crash_loop", "1.0.0", idleStubScript())
+	rt := algorunner.Runtime{AlgorithmsDir: dataDir}
 	comp := algorithm.NewAlgorithmComponents(dbStore, rt, x86Host(), zap.NewNop())
 	t.Cleanup(func() { comp.Supervisor.StopAll(time.Second) })
 

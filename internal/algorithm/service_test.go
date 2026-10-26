@@ -144,16 +144,14 @@ func TestServiceDeleteStopsRestartDuringCrashBackoff(t *testing.T) {
 
 	counterPath := filepath.Join(t.TempDir(), "runner-count")
 	t.Setenv("RUN_COUNT_FILE", counterPath)
-	runnerPath := filepath.Join(t.TempDir(), "runner.sh")
+	// 每次启动都记一笔并退出 1 的包入口：崩溃/退避行为要能在没有原生 runner 的情况下观察
 	script := "#!/bin/sh\nprintf 'run\\n' >> \"$RUN_COUNT_FILE\"\nexit 1\n"
-	if err := os.WriteFile(runnerPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake runner: %v", err)
-	}
+	installStubPackage(t, filepath.Join(dataDir, "algorithms"), algo.ID, algo.Version, script)
 
 	options := algorunner.DefaultRecoveryOptions()
 	options.InitialBackoff = 250 * time.Millisecond
 	options.MaxBackoff = time.Second
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: filepath.Join(dataDir, "algorithms"), RunnerPath: runnerPath}, options, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: filepath.Join(dataDir, "algorithms")}, options, zap.NewNop())
 	service := algorithm.NewService(store, nil, supervisor, algorunner.Runtime{AlgorithmsDir: filepath.Join(dataDir, "algorithms")}, zap.NewNop())
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)
@@ -262,16 +260,13 @@ func TestEnableAlgorithmInCrashLoopReturnsConflict(t *testing.T) {
 		t.Fatalf("create algorithm: %v", err)
 	}
 
-	runnerPath := filepath.Join(dataDir, "fail_runner.sh")
-	if err := os.WriteFile(runnerPath, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
-		t.Fatalf("write fail runner: %v", err)
-	}
+	installStubPackage(t, dataDir, algo.ID, algo.Version, "#!/bin/sh\nexit 1\n")
 
 	opts := algorunner.DefaultRecoveryOptions()
 	opts.MaxCrashes = 1
 	opts.InitialBackoff = 5 * time.Millisecond
 	opts.CrashWindow = time.Second
-	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir, RunnerPath: runnerPath}, opts, zap.NewNop())
+	supervisor := algorunner.NewSupervisor(store, algorunner.Runtime{AlgorithmsDir: dataDir}, opts, zap.NewNop())
 	service := algorithm.NewService(store, nil, supervisor, algorunner.Runtime{AlgorithmsDir: dataDir}, zap.NewNop())
 	t.Cleanup(func() {
 		supervisor.StopAll(time.Second)

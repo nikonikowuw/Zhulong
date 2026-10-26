@@ -66,32 +66,6 @@ def main():
     if not exe_path.exists():
         sys.exit(f"错误: 缺少包可执行文件 {exe_path}（去掉 --skip-build 或先 make）")
 
-    # ---- 2. 过渡期：同时带上旧 .so 插件 -------------------------------------
-    # ⚠️ 宿主侧（阶段 4）还没切到「只 exec 包根可执行文件」，现在的安装期验包仍要求
-    #    plugin.so 存在。这一块随阶段 4 一起删除，届时归档里只剩可执行文件。
-    possible_so = [
-        build_dir / "libPlateRecognitionPlugin.so",
-        build_dir / "PlateRecognitionPlugin.so",
-    ]
-    plugin_so = None
-    for p in possible_so:
-        if p.exists():
-            plugin_so = p
-            break
-
-    if not plugin_so:
-        print(f"未找到已编译的插件 .so，尝试调用 cmake 构建...")
-        res = subprocess.run(["cmake", "--build", str(build_dir), "--target", "PlateRecognitionPlugin"], cwd=str(repo_root))
-        if res.returncode != 0:
-            sys.exit("错误: CMake 构建 PlateRecognitionPlugin 失败！")
-        for p in possible_so:
-            if p.exists():
-                plugin_so = p
-                break
-        if not plugin_so:
-            sys.exit(f"错误: 构建后仍未找到插件库文件")
-
-    print(f"[*] 使用插件库（过渡期）: {plugin_so}")
 
     staging_dir = build_dir / "staging" / f"{pkg_id}_{target_name}"
     if staging_dir.exists():
@@ -101,16 +75,11 @@ def main():
     # 1. 复制 manifest.json
     shutil.copy2(manifest_path, staging_dir / "manifest.json")
 
-    # 2a. 包根可执行文件：文件名必须等于 manifest.id（宿主按 id 找入口）
+    # 2. 包根可执行文件：文件名必须等于 manifest.id（宿主按 id 找入口）
     dest_entry = staging_dir / pkg_id
     shutil.copy2(exe_path, dest_entry)
     os.chmod(dest_entry, 0o755)
     print(f"[*] 包入口: {dest_entry.name}")
-
-    # 2b. 过渡期：旧 .so 插件（阶段 4 删除）
-    dest_plugin = staging_dir / "plugin.so"
-    shutil.copy2(plugin_so, dest_plugin)
-    os.chmod(dest_plugin, 0o755)
 
     # 3. 复制 sample.jpg
     sample_src = target_dir / "sample.jpg"
@@ -129,7 +98,7 @@ def main():
         shutil.copytree(models_src, staging_dir / "models", dirs_exist_ok=True)
 
     # 6. 本地黑盒验包
-    #    ⚠️ 必须以 staging_dir 为 CWD 调用：包目录才是部署布局（plugin.so 与 models/ 同级）。
+    #    ⚠️ 必须以 staging_dir 为 CWD 调用：包目录才是部署布局（可执行文件与 models/ 同级）。
     #    从仓库根跑会命中源码树里的权重，让「模型路径拼错」这类缺陷在准入阶段 100% 逃逸。
     if not args.no_verify and args.target == "onnx":
         print(f"[*] 执行本地黑盒验包（cwd={staging_dir}）...")
@@ -152,7 +121,7 @@ def main():
         else:
             print("[!] 警告: 未找到 ffmpeg，验包将使用合成帧（sample_decoded=false）", file=sys.stderr)
 
-        # 用**包根可执行文件**验包（交付形态），而不是 dlopen 旧 .so
+        # 用**包根可执行文件**验包——与生产启动的是同一个东西
         verify_cmd = [
             str(dest_entry),
             "--verify", "--sample", str(verify_sample),

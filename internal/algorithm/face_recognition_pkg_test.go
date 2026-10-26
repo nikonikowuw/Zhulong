@@ -60,14 +60,13 @@ func findFaceRecognitionArchive(t *testing.T) string {
 }
 
 func TestFaceRecognitionPackageVerification(t *testing.T) {
-	runnerPath := findRunnerBinary(t)
 	archivePath := findFaceRecognitionArchive(t)
 
 	// The probe loads the ONNX face model, so its runtime is dominated by model init
 	// and by how many sibling packages are competing for the CPU. A 10s budget made
 	// this test a coin flip under `go test -race ./...` (it measures ~10s even alone),
 	// which is a property of the test harness, not of the package being verified.
-	verifier := algorithm.NewVerifier(runnerPath, x86Host(), algorithm.VerifyOptions{Timeout: 60 * time.Second})
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{Timeout: 60 * time.Second})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -106,13 +105,17 @@ func TestFaceRecognitionPackageVerification(t *testing.T) {
 	// 验证解压产物规范与可执行权限
 	rt := algorunner.Runtime{AlgorithmsDir: installDir}
 	pkgDir := rt.PackageDir(installed.ID, installed.Version)
-	pluginPath := rt.PluginPath(installed.ID, installed.Version)
-	fi, err := os.Stat(pluginPath)
+	entryPath := rt.EntryPath(installed.ID, installed.Version)
+	fi, err := os.Stat(entryPath)
 	if err != nil {
-		t.Fatalf("stat plugin.so: %v", err)
+		t.Fatalf("stat package entry: %v", err)
 	}
 	if fi.Mode().Perm()&0o111 == 0 {
-		t.Errorf("expected plugin.so to have executable permissions, got: %o", fi.Mode().Perm())
+		t.Errorf("expected the package entry to be executable, got: %o", fi.Mode().Perm())
+	}
+	// 旧形态不得随包安装：两种入口并存意味着有代码没人跑。
+	if _, statErr := os.Stat(filepath.Join(pkgDir, algorunner.LegacyEntryFileName)); statErr == nil {
+		t.Errorf("installed package still ships %s", algorunner.LegacyEntryFileName)
 	}
 
 	samplePath := filepath.Join(pkgDir, "sample.jpg")

@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
 
@@ -231,12 +230,7 @@ func extractTarGz(r io.Reader, cleanDestDir string) error {
 				return copyErr
 			}
 
-			// Automatically compensate POSIX executable permission for plugin.so
-			if filepath.Base(targetPath) == algorunner.EntryFileName {
-				if chmodErr := os.Chmod(targetPath, 0o755); chmodErr != nil {
-					return fmt.Errorf("chmod plugin.so: %w", chmodErr)
-				}
-			}
+			// 入口权限由 verifier 在确认是包内普通文件后统一规范（单一来源）。
 		}
 	}
 
@@ -299,13 +293,7 @@ func extractZip(r io.ReaderAt, size int64, cleanDestDir string) error {
 			return copyErr
 		}
 
-		// Automatically compensate POSIX executable permission for plugin.so
-		// Especially crucial when archive was created on Windows without POSIX permissions
-		if filepath.Base(targetPath) == algorunner.EntryFileName {
-			if chmodErr := os.Chmod(targetPath, 0o755); chmodErr != nil {
-				return fmt.Errorf("chmod plugin.so: %w", chmodErr)
-			}
-		}
+		// 入口权限由 verifier 在确认是包内普通文件后统一规范（单一来源）。
 	}
 
 	return nil

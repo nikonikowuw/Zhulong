@@ -52,7 +52,7 @@ const (
 
 // Algorithm represents an installed computer vision algorithm.
 // Paths are derived via conventions:
-// - entry: plugin.so
+// - entry: <manifest.id> (the package's own executable)
 // - sample: sample.jpg
 // - models: models/
 // - env: .env
