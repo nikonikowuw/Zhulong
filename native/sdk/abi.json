@@ -6,6 +6,17 @@
     "算法包 SDK 的版本权威来源。sdk_version 与 CMake 包版本一致（ZhulongAlgoSDKConfigVersion.cmake 由它生成）；",
     "api_version 对应 zhulong_plugin_api_v1::api_version（plugin.h 的 struct 版本，恒为 1）；",
     "protocol 对应 IPC 协议版本（ipc_protocol.hpp 的 IPC_VERSION）。",
-    "改任何一项都意味着已发布的算法包需要重新构建，别在补丁版本里静默改。"
-  ]
+    "改任何一项都意味着已发布的算法包需要重新构建，别在补丁版本里静默改。",
+    "capabilities.extract_feature=optional 表示「实现它才能被宿主用于底库登记」：宿主通过 `--extract-feature` 子命令 + 弱符号 zhulong_face_extract_feature 调用，未实现时如实返回 UNSUPPORTED（进程级退出码 5），而不是构建错误。"
+  ],
+  "capabilities": {
+    "verify": "required",
+    "broker_consumer": "required",
+    "extract_feature": "optional"
+  },
+  "entry_protocols": {
+    "verify": "<entry> --verify --sample <netpbm>",
+    "extract_feature": "<entry> --extract-feature  (28-byte ZLFE header + raw pixels on stdin)",
+    "broker_consumer": "<entry> --broker <sock> [--broker ...] [--name <n>] [--algorithm-id <id>]"
+  }
 }

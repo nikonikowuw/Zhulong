@@ -53,7 +53,7 @@ native/tests/check_plugin_symbols.py --entry <包根可执行文件>
 
 口径：PIE 上 `nm -D --defined-only` 必然列出约 15 条弱符号化的 libstdc++ 模板实例与 libc COPY 重定位；断言只针对插件契约面（`zhulong_*`），否则只会逼人上 version script 掩盖真问题。
 
-`packages/*/scripts/build_package.py` 在暂存入口后立即跑这条门禁。包内骨架若需要「单次能力」（如底库登记的特征提取），走 `--extract-feature` 子命令 + 弱符号（见 §7），**不**重新导出 C ABI 给宿主。
+`packages/*/scripts/build_package.py` 在暂存入口后立即跑这条门禁。包内骨架若需要「单次能力」（如底库登记的特征提取），走 `--extract-feature` 子命令 + 弱符号（见 §5.4），**不**重新导出 C ABI 给宿主。
 
 ### 异常防爆门守则
 
@@ -231,7 +231,7 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 | `2` | `model_create` 失败 | `algo_main.cpp` |
 | `3` | `worker_create` 失败 | `algo_main.cpp` |
 | `4` | `task_open` 失败 | `algo_main.cpp` |
-| `5` | **broker 连接失败 / 无法从 `--broker` 路径反解 stream_id / 未提供 `--broker`** | `algo_main.cpp` |
+| `5` | **broker 连接失败 / 无法从 `--broker` 路径反解 stream_id / 未提供 `--broker`**；`--extract-feature` 下表示能力缺失（`UNSUPPORTED`）或模型不可用（`MODEL_UNAVAILABLE`）或帧头截断 | `algo_main.cpp` |
 
 ⚠️ 多路 `--broker` 下，任一路连接失败即整体失败，退出码严格保持为 `5`；任一路失败会置位 `stop_all` 终止已连接各路，不存在部分成功中间态。
 
@@ -244,6 +244,26 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
   - 锁集合必须按 `(device, inode)` **去重 + 升序排序**，与 Go 侧 `resource_lock_linux.go` 完全一致；别名路径（symlink / bind mount / `base_dir == /dev/shm`）不得变成两把锁或交叉加锁死锁。
   - 创建侧阻塞（不可跳过同步），清扫侧非阻塞（锁忙即整体跳过）。取锁失败必须通过既有 `error_msg` 返回失败，**不得**在无锁状态下继续创建。
   - 回归门禁：`ZhulongFrameBrokerTests::test_frame_broker_start_waits_for_resource_lock`（持有 `/dev/shm` 锁时断言 200ms 内既无 socket 也无 `start` 返回，释放后才成功）。
+
+### 5.4 `--extract-feature`：可选能力，走弱符号而不是重新导出 C ABI
+
+底库登记需要「一张照片 → 一个 512 维特征」，宿主不装载包，所以这部分也用**子命令 + 标准输入输出**：
+
+```bash
+./<manifest.id> --extract-feature            # stdin: 帧流；stdout: 每帧一行 JSON
+```
+
+- 帧 = 28 字节头（`"ZLFE"` magic、`request_id`、`w`/`h`/`stride`/`format`/`payload_len`，全部小端）+ 裸像元；
+- 能力用**弱符号**接入：骨架 `extern "C" __attribute__((weak)) zhulong_face_extract_feature(...)`，
+  包内定义即解析，未定义则如实返回 `UNSUPPORTED`（exit 5）。它**不是**构建错误，`abi.json`
+  的 `capabilities.extract_feature` 标为 `optional`；
+- ⚠️ 定义必须来自包内**直接编译**的源文件：ld 不会为满足弱未定义引用去抽取静态归档成员，
+  搬进 `.a` 会让能力静默消失；
+- 帧级错误（`NO_FACE_DETECTED` / `INVALID_INPUT`）**不退出进程**——一张坏图不该毁掉热进程；
+- `request_id` 必须回显，宿主侧会校验：错配等于把别人的特征写进底库。
+
+宿主侧实现与进程生命周期（并发 1、崩溃单帧重试 1 次、超时杀进程组、空闲回收、入口指纹失效）
+见 [CGO 契约 §6](./cgo-contract.md)。
 
 ---
 

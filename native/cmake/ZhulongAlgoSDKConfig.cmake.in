@@ -78,10 +78,20 @@ if("${ZhulongAlgoSDK_BACKEND}" STREQUAL "onnx")
         INTERFACE_LINK_LIBRARIES "${ZHULONG_ONNXRUNTIME_LIBRARY};${_zhulong_sdk_system_libs}")
     # 前缀自带运行时（make sdk-install BUNDLE_RUNTIME=1）时，把它的目录写进 RPATH：
     # 否则链接期用前缀、运行期却去 ld.so 路径里找，换台机器就成了「编译成功、跑不起来」。
+    # 同时要 -rpath-link：ORT 自己还有一层 NEEDED（libonnx / libprotobuf / libXNNPACK…），
+    # 只给 rpath 时**链接期**仍会报 undefined reference —— 那是 ld 找不到传递依赖，
+    # 不是运行期问题。
     get_filename_component(_zhulong_ort_dir "${ZHULONG_ONNXRUNTIME_LIBRARY}" DIRECTORY)
     if(_zhulong_ort_dir MATCHES "^${ZHULONG_SDK_PREFIX}/")
+        # ⚠️ `--disable-new-dtags` 不是洁癖：ORT 的 NEEDED 是 libonnx → libprotobuf →
+        #    libabsl_*（三层），而 DT_RUNPATH **不向下继承**，默认的 new-dtags 只能保证
+        #    第一层被找到，跑到容器里就成了「编译通过、运行期找不到 libabsl」。
+        #    DT_RPATH 会沿依赖链继承，正好是「整个前缀自成一体」需要的语义。
         set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
-            INTERFACE_LINK_OPTIONS "-Wl,-rpath,${_zhulong_ort_dir}")
+            INTERFACE_LINK_OPTIONS
+            "-Wl,--disable-new-dtags"
+            "-Wl,-rpath-link,${_zhulong_ort_dir}"
+            "-Wl,-rpath,${_zhulong_ort_dir}")
     endif()
 elseif("${ZhulongAlgoSDK_BACKEND}" STREQUAL "rknn")
     set(_zhulong_rknn_hints "${_zhulong_vendor_dir}")

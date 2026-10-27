@@ -23,7 +23,7 @@ BINARY := $(BUILD_DIR)/Zhulong
 SWAG_VERSION := v1.16.6
 AIR ?= $(shell command -v air 2>/dev/null || (test -x "$$(go env GOPATH 2>/dev/null)/bin/air" && echo "$$(go env GOPATH)/bin/air") || echo air)
 
-.PHONY: all build go-build check frontend-install frontend-build frontend-check native-deps native-configure native-build native-test native-cross-build sdk-install api-docs go-check smoke run web-dev dev-backend dev-frontend dev
+.PHONY: all build go-build check frontend-install frontend-build frontend-check native-deps native-configure native-build native-test native-cross-build sdk-install sdk-clean-check api-docs go-check smoke run web-dev dev-backend dev-frontend dev
 
 all: build
 
@@ -85,12 +85,20 @@ sdk-install: native-build
 		if [ ! -e "$$ort_root/lib/libonnxruntime.so" ]; then \
 			echo "错误: BUNDLE_RUNTIME=1 需要 onnxruntime 前缀：-DONNX_RUNTIME_ROOT=<dir> 或 build/deps/onnxruntime"; exit 1; \
 		fi; \
-		mkdir -p "$(SDK_PREFIX)/third_party/onnx/lib"; \
-		cp -L "$$ort_root"/lib/libonnxruntime.so* "$(SDK_PREFIX)/third_party/onnx/lib/"; \
-		echo "[✓] onnxruntime 已拷入 $(SDK_PREFIX)/third_party/onnx/lib"; \
+		python3 native/scripts/bundle_runtime.py \
+			--ort-root "$$ort_root/lib" \
+			--dest "$(SDK_PREFIX)/third_party/onnx/lib" || exit 1; \
 	fi
 	@printf 'SDK 前缀: %s\n' "$(SDK_PREFIX)"
 	@cat "$(SDK_PREFIX)/VERSION"
+
+# 干净容器验收：只挂 SDK 前缀 + 包目录，在 debian 里从零构建、自测、自查协议。
+# 这是「算法包能脱离仓库独立开发」的**唯一**可信证据；不进 make check（要联网 apt + docker）。
+sdk-clean-check: sdk-install
+	CONTAINER_RUNTIME=$(or $(CONTAINER_RUNTIME),docker) \
+	SDK_PREFIX=$(SDK_PREFIX) \
+	native/scripts/sdk_clean_check.sh \
+		packages/plate_recognition/onnx packages/face_recognition/onnx
 
 # 交叉编译目标二进制（严格要求指定目标板 Profile 与输出路径，防 Host/Cross 产物混淆）
 native-cross-build:

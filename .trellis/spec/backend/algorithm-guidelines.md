@@ -114,6 +114,10 @@ cd packages/<id>/<target>
 make SDK_PREFIX=<sdk 前缀>        # 构建包根可执行文件
 make verify                       # → ./build/<manifest.id> --verify --sample <ppm>（cwd = 包目录）
 make test                         # 开发期自测：sample.jpg 进 → build/out/result-*.jpg 出
+
+# SDK 前缀带来的协议自查工具（同时校验 --verify 与 --extract-feature）
+python3 <sdk 前缀>/tools/algo_probe.py --entry build/<manifest.id> --pkg-dir . \
+        --all --sample sample.ppm --image sample.ppm
 ```
 
 `make verify` 退出码为 `0` 且输出 `{"status":"passed", ...}` 时方可通过准入校验。
@@ -128,6 +132,44 @@ make test                         # 开发期自测：sample.jpg 进 → build/o
   - `false` —— 包骨架回退到合成灰帧，**只**证明 ABI 生命周期（model_create / worker / task / process / release），平台侧会记一条告警。
 - `count == 0` 不阻断安装（样本本身可能确实没有目标），但平台会告警提醒「样本图不具代表性」；**算法准确率由算法包自己的 native 金标测试担保**（如 `ZhulongPlateRecognitionPluginTests` 钉住车牌号/颜色），不依赖验包 CLI。
 - `model_create` 失败时日志必带 `backend=<onnx|rknn|test_stub>`：`test_stub` 是夹具构建，按设计拒绝一切真实模型（应先换后端而不是查模型文件）；产品构建只有 `onnx` / `rknn`，不存在静默降级路径。
+
+### 5.2 干净容器验收（「包能脱离仓库独立开发」的唯一可信证据）
+
+开发机上「碰巧能找到仓库里的头/库」是最容易漏的假绿，所以独立开发能力必须在一个**没有仓库、
+没有宿主二进制**的环境里证明：
+
+```bash
+make sdk-install BUNDLE_RUNTIME=1     # 前缀自带 onnxruntime 依赖闭包
+make sdk-clean-check                  # 只挂前缀 + 包目录，在 debian 里从零构建两个包
+```
+
+脚本（`native/scripts/sdk_clean_check.sh`）做四件事：
+
+1. **仓库路径门禁**：grep 包内 `CMakeLists.txt` / `Makefile` / 源码，出现指向仓库的相对路径即失败；
+2. 容器内 `rm -rf build && make SDK_PREFIX=/opt/zhulong-sdk`；
+3. `make test`：`sample.jpg` 进 → `build/out/result-*.jpg` 出（真实推理，不是合成帧）；
+4. `algo_probe.py --all`：`--verify` 断言 `status=passed` 且 `sample_decoded=true`；
+   `--extract-feature` 断言 512 维且 L2 范数 ≈ 1（非人脸包如实 `UNSUPPORTED` 记 `SKIPPED`）。
+
+⚠️ **镜像基线必须 ≥ 开发机那一代发行版**：前缀里的静态运行库与 bundled onnxruntime 是开发机
+编译的二进制，符号版本不向下兼容。老镜像上报 `undefined reference to __isoc23_strtol@GLIBC_2.38`
+是镜像太旧，不是包的问题。
+
+⚠️ `BUNDLE_RUNTIME=1` 必须拷 **NEEDED 闭包**（`native/scripts/bundle_runtime.py`），只拷
+`libonnxruntime.so` 会在干净容器里链接失败；导入目标的 `-Wl,--disable-new-dtags` 也不能省
+（`DT_RUNPATH` 不沿依赖链继承，三层 NEEDED 只找得到第一层）。
+
+### 5.3 模型不可用 ≠ 没检出人脸
+
+协议层必须能区分这两件事：
+
+| 情形 | 上报 | 宿主 HTTP |
+| :--- | :--- | :--- |
+| 权重缺失 / 后端初始化失败（包或环境坏了） | `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED` → `MODEL_UNAVAILABLE` | 500 |
+| 图里确实没有目标（输入问题） | `ZHULONG_PLUGIN_ERR_NOT_FOUND` → `NO_FACE_DETECTED` | 400 |
+
+⚠️ 初始化失败时**不要**把后端返回的 `NOT_FOUND` 直接透传：协议会把它理解成「这张图没检出人脸」，
+把包缺陷伪装成用户照片问题。`face_recognition` 的 `extract` 入口就是这么踩过一次。
 
 ### 平台准入拦截错误代码对照表
 

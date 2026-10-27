@@ -447,7 +447,11 @@ public:
         std::lock_guard<std::mutex> lock(mu_);
         zhulong_status_t st = init_locked();
         if (st != ZHULONG_PLUGIN_OK) {
-            return st;
+            // 模型不可用与「图里没有人脸」必须可区分：前者是包/环境坏了（宿主应报
+            // MODEL_UNAVAILABLE 并让运维去查模型），后者是输入问题（NO_FACE_DETECTED）。
+            // init_locked 在权重缺失时返回 NOT_FOUND，直接透传会被协议理解成「这张脸
+            // 没检出人脸」，把包缺陷伪装成用户照片问题。
+            return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
         }
 
         // 色彩通道处理：若是 BGR24，统一转换为 RGB24 供 SCRFD 与特征提取
