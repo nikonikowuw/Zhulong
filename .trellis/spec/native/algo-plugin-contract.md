@@ -163,6 +163,10 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 ```
 
 - `zhulong_frame_view.strides[0] == 0` 表示 packed 紧密排列；正 stride 必须至少为 `width * 3`；负值或不足行宽返回 `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`。
+- **多平面 stride 的紧凑默认值**：某平面 `strides[i] == 0` 时由该平面的自然行宽推导，**不是**一律取 `width`。`YUV420P` 的 U/V 平面取 `ceil(width / 2)`；`NV12` 的交错 UV 平面取 `2 * ceil(width / 2)` —— 奇数宽下后者比 `width` 大 1，按 `width` 回落会把合法的紧凑帧误判成 stride 不足。
+- **负 stride 一律拒绝**，不回落成紧凑布局：负 stride 的语义是底朝上的缓冲区，静默当 top-down 读会产出上下翻转的图像且无错误码，是「图能出来、精度莫名下降」的典型来源。CPU 与 RGA 后端必须给出一致的拒绝。
+- **`letterbox` 是 in-out + out 参数的混合体，失败路径不得改写任何出参**：所有入参校验（含 YUV 平面布局与 stride）必须在写 `dst`、回填 `scale`/`pad_left`/`pad_top` 之前完成；几何回填放在成功返回前的最后一步。否则调用方会拿到「新张量 + 已回填几何 + 错误码」的半成品状态。
+- `LetterboxParams::target_width` / `target_height` 必须由调用方显式给正数（结构体已自带 640 默认值）。后端**不得**再把 `<= 0` 兜成 640：那会让实际张量尺寸与调用方读到的 `target_*` 不一致。
 - **YUV 输入**：`letterbox` 接受 `YUV420P` 与 `NV12`，目标格式仍限 `RGB24`/`BGR24`。亮度与色度均按像素中心坐标双线性采样（越界 clamp 到边缘），再经 ITU-R BT.601 有限范围系数转 RGB。`RGBA32`、`UNKNOWN` 及其他未实现格式返回 `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED`，且不得读取源像素；`YUV420P`/`NV12` 缺少必需平面则返回 `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`。
 - ⚠️ **YUV 采样数学只有一份实现**：`native/sdk/include/zhulong/runtime/yuv_sampling.hpp`（`sample_plane_bilinear` / `sample_nv12_uv_bilinear` / `yuv_to_rgb`；随 SDK 分发，因为车牌识别插件的裁剪采样在生产路径上就要用它）。CPU 视觉后端与车牌识别插件的裁剪采样都必须复用它，不得各自复制一份 —— 两份实现一旦在 UV 索引或 clamp 边界上漂移，同一码流在「喂模型」与「裁给识别器」两条路径上会出现颜色差异，真机只表现为「识别率莫名变低」。
 - RGB/BGR 目标顺序不一致时必须交换 R/B 通道。缩放采用像素中心坐标、双线性插值和边界 clamp；Letterbox 补边值为 114，缩放直接写到最终 Tensor ROI，不分配 `resized_temp`。
@@ -193,6 +197,8 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 | 输入为 YUV420P / NV12，所需平面齐全、stride 合法，目标为 RGB24/BGR24 | 成功 |
 | 输入/目标格式包含尚未实现的格式（RGBA32 / UNKNOWN 等） | `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED` |
 | 空像素指针、非正图像尺寸、负 stride、stride 小于行字节数 | `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT` |
+| `target_width` / `target_height` 非正，或尺寸导致行偏移/字节数溢出 | `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT` |
+| `Tensor` 分配失败（构造抛出 `bad_alloc` / `length_error`） | `ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY`（就地转换，不得冒泡到 C ABI 的 `catch (...)`） |
 | 非空 Tensor shape 含零/负维度 | 抛出 `std::invalid_argument` |
 | Tensor 元素数/字节数无法由 `size_t` 表示 | 抛出 `std::length_error` |
 
@@ -339,13 +345,24 @@ Go 侧与 Runner 进程之间 IPC 载荷统一使用 `features` 字段，表示�
 | **宿主侧回转身份** | 载荷 `person_id` 只用于展示与对账，**绝不写入 `recognitions.person_id` 外键列**。回顾落库时一律经 `matched_face_id → person_faces.id → person_faces.person_id`（内部主键）解析，并把载荷里的业务键原值快照到 `recognitions.person_external_id`。详见 [数据库规约 · 对外业务键与内部主键分列](../backend/database-guidelines.md)。反例：直接把载荷值写进外键列，会让业务键 ≠ 内部主键的人员每次命中都 `FOREIGN KEY constraint failed`，整批识别记录静默丢失 |
 | **本地索引** | Runner 进程内通过 `GalleryIndex` 维护 `face_id -> FaceTemplate` 映射，写操作受互斥锁保护，推理读取通过 `snapshot()` 获取不可变只读视图 |
 
-### 7.4 进程内跨库底库共享注册表 (`GalleryRegistry`)
+### 7.4 底库注册表 (`GalleryRegistry`)：进程内单例，**不是**跨镜像共享
 
-由公共算法运行库 `libzhulong_algo_runtime.so` 导出的全局单例 `zhulong::runtime::GalleryRegistry`，为同一进程空间内的 Runner 宿主与脱机插件提供无锁读写隔离的底库模板快照访问：
+`zhulong::runtime::GalleryRegistry` 是维护人脸底库模板快照的线程安全单例。
 
-- **单例拓扑**：Runner 进程与插件动态库均动态链接 `libzhulong_algo_runtime.so`，共享唯一注册表实例；
-- **读写隔离**：Runner 收到 `MSG_GALLERY_*` 后在写锁保护下更新底库并原子重构快照；
-- **插件借用**：插件在 `detect_persons` 热路径中通过 `zhulong::GalleryRegistry::instance().snapshot()` 获取只读视图，零锁争用；
+⚠️ **单例的作用域是链接产物，不是进程名。** 交付形态下公共算法运行库以 `.a` **静态链接**进
+算法包可执行文件（`libZhulongAlgoRuntime.so` 仅作为迁移基线与 native 测试载体存在，
+宿主已不再 `dlopen` 任何算法 `.so`）。因此：
+
+- 每个链接了该静态库的可执行文件各自拿到**独立一份**注册表；两个镜像不会因为「在同一个进程里」就共享。
+- 跨进程的底库一致性由 Go 侧广播 `MSG_GALLERY_SYNC` 分片实现（见 7.3），**不是**靠这个单例。
+  不得假设 Runner 与任何其他组件「天然看到同一份底库」。
+
+访问契约：
+
+- **单一数据源**：底库内容与只读快照只存在于注册表内部。Runner 侧的 `GalleryIndex` 是纯转发门面，**不得**再维护第二份 `faces_` / `snapshot_`（两份状态一旦在异常路径上分叉就无法判定哪份是对的，且每次写要多付一份全量深拷贝）。
+- **读写隔离**：写操作（`reset` / `upsert` / `remove` / `clear`）在写锁保护下更新底库并原子重构快照指针。
+- **快照顺序确定**：快照按 `face_id` 升序输出，与 `unordered_map` 的迭代顺序解耦；按索引缓存或做 A/B 对比的下游不得依赖插入顺序。
+- **热路径借用**：`detect_persons` 里通过 `snapshot()` 取只读 `shared_ptr`，零锁争用；
 - **1:N 特征比对**：计算检出人脸 512 维特征与快照条目的余弦相似度（点积），Top-1 相似度 $\ge \text{threshold}$ 时判定命中并装填 `person_id`。
 
 ---
