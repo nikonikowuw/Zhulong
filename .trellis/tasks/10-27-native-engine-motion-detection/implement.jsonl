@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/architecture.md", "reason": "整体架构与跨层责任边界"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法插件契约、Runner 骨架与 IPC 协议规范"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "Native 流处理流水线与 FramePublisher 规范"}
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "硬件帧与 DMA-BUF 缓存一致性要求"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流与 ABI 约束"}

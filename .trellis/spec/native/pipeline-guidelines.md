@@ -122,6 +122,9 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
    - 解析路径与同步订阅必须是**同一次操作**（`BrokerSubscriptionResolver.SyncBrokerSubscriptions`）：只解析不登记，下一轮同步就会把该流回收；只登记不解析，则会留下无 broker 的孤儿流。
    - ⚠️ **解析失败不得提交订阅变更**，也不得遗留已 acquire 的流：实现必须先完成全部路径解析，再进入提交阶段。
    - ⚠️ **发布率跨包取 max**：一个 broker 只有一个发布率，因此该 stream 上的发布率是其**所有** enabled 分析任务 `max(sample_fps)`，而不是单个算法包内的 max。
+   - ⚠️ **运动检测是发布侧的一部分，不在算法包里做**：`FramePublisher` 内嵌一个 `MotionDetector`，对**已通过节流**的帧做 320×180 Y 平面网格差分，并把 `has_motion` / `motion_boxes` 一并放进 `publish_frame`。因为是每流一个 publisher，「每流每帧只算一次」由持有关系保证，与挂载了多少算法包无关。
+   - ⚠️ **检测失败必须 fail-open**：`MotionResult` 未被执行检测时默认 `has_motion = true`，`FrameMotionInfo` 默认同样放行；`detect()` 返回 `false`（格式不支持 / 像素拿不到）时直接把默认值发出去，**绝不**因为一次读取失败就把整条流的推理关掉。
+   - ⚠️ **DMA-BUF 帧要算上系统调用代价**：MPP 硬解帧只填 `dma_fd`，检测器每帧需要 `mmap` + `DMA_BUF_IOCTL_SYNC(START/END)` + `munmap`。这属于发布线程的常驻开销，写性能数字前先实测；不要把「检测本身零堆分配」讲成「整条路径零开销」。
 5. **跨层停机顺序**（Go 侧，硬约束）：
    - `camera.Stop` → `algorithm.Stop` → `native.Close`。理由：AI 消费者与 StreamHub 先撤，runner 子进程再排空，最后才销毁 broker 宿主。
    - 该顺序由 `internal/app/runtime_test.go` 的 `TestAIShutdownOrderPrecedesNativeClose` 守护；改坏顺序会让测试失败，而不是静默产生 use-after-free。

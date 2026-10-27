@@ -298,7 +298,10 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 
 ### 6.4 IPC 协议自然对齐与 Socket 鲁棒性规约
 
-- **严格 8 字节自然对齐**：IPC 二进制包中 64 位字段（`generation`、`stream_id`、`frame_id`、`pts`、`capture_time_ms`）必须排布在 8 字节自然对齐偏移上；`FrameDispatchMsg` 包含 `int64_t capture_time_ms`（帧物理采样绝对 UTC 毫秒时间戳），总尺寸 96 字节，编译期 `static_assert(offsetof(...) % 8 == 0)` 与总大小校验，杜绝嵌入式体系下非对齐访问与时钟时序漂移。
+- **严格 8 字节自然对齐**：IPC 二进制包中 64 位字段（`generation`、`stream_id`、`frame_id`、`pts`、`capture_time_ms`）必须排布在 8 字节自然对齐偏移上；`FrameDispatchMsg` 包含 `int64_t capture_time_ms`（帧物理采样绝对 UTC 毫秒时间戳），当前总尺寸 **168 字节**（运动检测扩展后），编译期 `static_assert(offsetof(...) % 8 == 0)` 与总大小校验，杜绝嵌入式体系下非对齐访问与时钟时序漂移。
+- **追加字段只能落在尾部（前缀兼容铁律）**：`has_motion` / `motion_box_count` / `motion_boxes[4]` 追加在原 96 字节布局**之后**，前 96 字节一个字节都不许动，由 `static_assert(LEGACY_FRAME_DISPATCH_SIZE == offsetof(FrameDispatchMsg, has_motion))` 钉死。原因是宿主与算法包**分开交付**（`make sdk-dist`），版本偏斜两个方向都会真实发生：
+  - 旧宿主（96 字节报文）+ 新 Runner：Runner 必须按遗留前缀解析，运动字段取默认值（`has_motion = 1`）退化为**全帧推理**。⚠️ 绝不可改回 `payload.size() >= sizeof(FrameDispatchMsg)` 的长度门禁 —— 那会让新 Runner 一条报文都不认，既不推理也不发 `MSG_FRAME_ACK`，静默退化成「每 `lease_timeout` 只收 2 帧」。解码统一走 `sdk/src/internal/motion_gate.hpp` 的 `gate::decode_frame_dispatch`。
+  - 新宿主 + 旧 Runner：旧 Runner 忽略多出的 72 字节，照常推理，只是不享受运动门禁。
 - **四态 Socket 状态机与半包熔断**：流读取使用四态机制（`SUCCESS`、`IDLE_TIMEOUT`、`CLOSED`、`DESYNC_ERROR`）。半包超时或错位直接置为 `DESYNC_ERROR` 并主动断开连接。
 - **发送超时隔离与最大 Payload 门禁**：服务端套接字配置 50ms `SO_SNDTIMEO` 发送超时；IPC 消息在**发送侧与接收侧双向**强制执行 `MAX_IPC_PAYLOAD_SIZE = 64KB` 尺寸检查（`UnixSocketServer::send_msg_with_fd` / `UnixSocketClient::send_msg_with_fd` 超限直接返回 `false`，杜绝 `static_cast<uint32_t>` 对超范围 `size_t` 的静默截断），并有线程级 `try ... catch` 异常防爆门。两侧常量与 Go 侧 `MaxIpcPayloadSize` 保持一致。
 - ⚠️ **`write_all` 的 EAGAIN 必须有界等待（防控制面挂死）**：在阻塞 socket + `SO_SNDTIMEO(50ms)` 下，`EAGAIN` 语义是「**本次发送超时**」而非「稍后重试」。`write_all` 必须走 `poll(POLLOUT, timeout)` 有界等待，**绝不可 `continue` 自旋**。
@@ -307,7 +310,7 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 ### 6.5 DMA-BUF 硬件零拷贝与 SCM_RIGHTS 传输契约
 
 - **跨进程句柄透传**：在支持 DMA-BUF 的边缘平台（如 RK3568），宿主 `FrameBroker` 在槽位分配时通过 `DmaBufAllocator` 预分配物理连续内存（CMA/System Heap）。通过 Unix Domain Socket 发送 `MSG_FRAME_DISPATCH` 时，利用 `SCM_RIGHTS` 辅助数据（`sendmsg`/`recvmsg`）将底层 DMA-BUF 引用文件描述符安全复制到 Runner 进程。
-- ⚠️ **`FrameDispatchMsg.reserved_fd` 恒为 `-1`**：fd 号是**进程本地句柄**，跨进程传值无意义且危险 —— 宿主的 fd 号在 Runner 进程中可能指向任意无关资源，一旦被当作 DMA-BUF 执行 `mmap` + `DMA_BUF_IOCTL_SYNC`，轻则静默退化，重则**把无关内存当图像喂给插件**。该字段仅作 8 字节对齐占位（保持 `FrameDispatchMsg` 总尺寸 96 字节不变）。
+- ⚠️ **`FrameDispatchMsg.reserved_fd` 恒为 `-1`**：fd 号是**进程本地句柄**，跨进程传值无意义且危险 —— 宿主的 fd 号在 Runner 进程中可能指向任意无关资源，一旦被当作 DMA-BUF 执行 `mmap` + `DMA_BUF_IOCTL_SYNC`，轻则静默退化，重则**把无关内存当图像喂给插件**。该字段仅作 8 字节对齐占位，其偏移必须保持不变（它是前缀兼容 96 字节的一部分）。
   真实 DMA-BUF 句柄**只经 `SCM_RIGHTS` 传递**；接收端**只认本地副本 fd**（`const int active_dma_fd = received_fd;`），**严禁**回退读取 `reserved_fd`。
 - **FD 接收与安全闭环**：
   - Runner 进程利用 `recvmsg` 提取 `SCM_RIGHTS` fd，并自动标记 `FD_CLOEXEC`（`recv_msg_with_fd`）；
@@ -315,6 +318,17 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
   - ⚠️ **严禁句柄泄漏**：Runner 进程在完成单帧推理并发出 `MSG_FRAME_ACK` 后，**必须立刻 close 接收到的局部复制 fd**。FrameBroker 端负责物理 slot 的持有与释放，两侧生命周期解耦。
 - **CPU Cache 同步守则**：DMA-BUF 在 CPU 软件访问前必须执行 `DMA_BUF_IOCTL_SYNC` 带 `DMA_BUF_SYNC_START`；硬件外设（RGA/NPU）读取前执行 `DMA_BUF_SYNC_END` 刷写脏缓存行，确保外设读取到最新像素。
 - **透明优雅降级**：非 Linux 环境或无 `/dev/dma_heap` 支持时，`dma_buf_fd` 恒为 `-1`，系统透明降级至纯 POSIX 共享内存与 CPU 软处理，上层无感。
+
+---
+
+### 6.6 帧运动门禁契约 (Motion Gate)
+
+- **事实提供者唯一**：运动检测只在宿主的 `FramePublisher` 内做，每流每帧一次（`src/pipeline/motion_detector.cpp`），结果随同一帧的 `MSG_FRAME_DISPATCH` 广播。算法包不重复计算，也不得自行拿原帧做门禁。
+- **短路判据只有一条**：`has_motion == 0` 才允许跳过 `api.process()`；其他任何取值（含未来新增值、遗留报文默认值）一律放行。实现固定在 `sdk/src/internal/motion_gate.hpp` 的 `gate::should_skip_inference`，并由 `native/tests/motion_gate_test.cpp` 钉住 — 漏检代价远高于一次多余推理。
+- **短路必须归还租约**：跳过推理仍要释放 DMA 映射、`close` SCM_RIGHTS 副本并发 `MSG_FRAME_ACK`，`in_flight_count` 必须正常回落。⚠️ 跳过路径**不得**先做 `mmap` / `DMA_BUF_IOCTL_SYNC`：静止帧连系统调用都不该发生（省算力不能只省 NPU）。
+- **消失信标**：跳过的帧若上一帧有目标，必须补发一次空结果并把 `last_had_targets` 归零，否则上游永远看不到目标消失。
+- **hold-off 属于检测器，不属于门禁**：运动停止后检测器继续放行 `MOTION_HOLD_FRAMES` 帧（`box_count = 0`，调用方按全帧处理），覆盖「人/车站住不动 ≠ 目标消失」。⚠️ 不要在门禁里加时间去抖，那会让判据依赖 Runner 本地时钟。
+- **ROI 预门禁尚未实现（已知缺口，不得在文档里声称已实现）**：广播报文里的 `motion_boxes` 目前**没有消费者**；ROI/MASK 仍由宿主侧 `internal/region.Filter` 在结果回来之后生效。Runner 侧「运动框与 ROI 无交集则短路」需要一条区域配置下发通道（`task_open` 只传 `task_id`，不带区域配置），属于独立特性。
 
 ---
 
