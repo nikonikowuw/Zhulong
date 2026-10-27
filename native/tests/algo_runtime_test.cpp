@@ -1,6 +1,7 @@
 #include <zhulong/runtime/runtime_factory.hpp>
 #include <zhulong/runtime/vision_backend.hpp>
 #include <cassert>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -287,6 +288,32 @@ int main() {
     assert(kept_boxes.size() == 2);
     assert(kept_boxes[0].confidence == 0.9f);
     assert(kept_boxes[1].confidence == 0.7f);
+
+    // 4.1 NMS 必须丢弃非有限置信度。
+    //     回归：NaN 会让 `a.confidence > b.confidence` 失去严格弱序，std::sort 在该
+    //     谓词下是 UB；即便不崩，NaN 框也会被保留并落在排序结果的任意位置。
+    {
+        std::vector<zhulong_bbox> nan_boxes(5);
+        for (int i = 0; i < 5; ++i) {
+            const float base = 0.1f * static_cast<float>(i);
+            nan_boxes[i].box[0] = base;
+            nan_boxes[i].box[1] = base;
+            nan_boxes[i].box[2] = base + 0.05f;
+            nan_boxes[i].box[3] = base + 0.05f;
+            nan_boxes[i].confidence = 0.5f + 0.01f * static_cast<float>(i);
+        }
+        nan_boxes[1].confidence = std::numeric_limits<float>::quiet_NaN();
+        nan_boxes[3].confidence = std::numeric_limits<float>::infinity();
+
+        const auto nan_kept = zhulong::nms(nan_boxes, 0.45f);
+        assert(nan_kept.size() == 3);
+        for (size_t i = 0; i < nan_kept.size(); ++i) {
+            assert(std::isfinite(nan_kept[i].confidence));
+            if (i > 0) {
+                assert(nan_kept[i - 1].confidence >= nan_kept[i].confidence);
+            }
+        }
+    }
 
     std::cout << "Algorithm runtime tests passed successfully!" << std::endl;
     return 0;

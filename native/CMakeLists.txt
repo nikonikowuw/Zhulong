@@ -255,6 +255,7 @@ add_library(ZhulongPlatformObjects OBJECT
 )
 add_library(ZhulongAlgoRuntimeObjects OBJECT
     src/algorithm/runtime/cpu_vision_backend.cpp
+    src/algorithm/runtime/detection_postprocess.cpp
     src/algorithm/runtime/gallery_registry.cpp
     src/algorithm/runtime/letterbox_geometry.cpp
     src/algorithm/runtime/runtime_factory.cpp
@@ -576,6 +577,16 @@ if(BUILD_TESTING)
     add_test(NAME ZhulongAlgoRuntime COMMAND ZhulongAlgoRuntimeTests)
     set_tests_properties(ZhulongAlgoRuntime PROPERTIES TIMEOUT 10)
 
+    # CPU 视觉前处理后端回归测试。
+    # ⚠️ 需显式把 src 加入搜索路径（直接实例化 CpuVisionBackend，属白盒测试）。
+    #    补上 rga_vision_test 之外的空缺：那个 target 只在 ZHULONG_VISION_BACKEND=rga 时构建。
+    add_executable(ZhulongCpuVisionTests tests/cpu_vision_backend_test.cpp)
+    target_compile_features(ZhulongCpuVisionTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongCpuVisionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(ZhulongCpuVisionTests PRIVATE ZhulongAlgoRuntime)
+    add_test(NAME ZhulongCpuVision COMMAND ZhulongCpuVisionTests)
+    set_tests_properties(ZhulongCpuVision PROPERTIES TIMEOUT 10)
+
     # FrameBroker 跨进程共享内存与租约集成测试
     add_executable(ZhulongFrameBrokerTests tests/frame_broker_test.cpp)
     target_compile_features(ZhulongFrameBrokerTests PRIVATE cxx_std_17)
@@ -671,6 +682,7 @@ if(BUILD_TESTING)
     #    就不在本列表中，其断言从未真正执行过。
     set(ASSERT_TEST_TARGETS
         ZhulongAlgoRuntimeTests
+        ZhulongCpuVisionTests
         ZhulongAlgoJsonTests
         ZhulongFrameBrokerTests
         ZhulongGallerySyncTests

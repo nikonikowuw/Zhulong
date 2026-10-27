@@ -10,9 +10,16 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <new>
+#include <stdexcept>
 
 namespace zhulong {
 namespace {
+
+/**
+ * @brief Letterbox 补边灰度值（与训练侧预处理对齐，非 0）
+ */
+constexpr uint8_t letterbox_pad_value = 114;
 
 /**
  * @brief 判断像素格式是否为 packed 24 位 RGB/BGR
@@ -90,15 +97,31 @@ zhulong_status_t resize_yuv(const zhulong_frame_view& src, const YuvLayout& layo
  * 未提供的平面（NV12 的 planes[2]）必须在读取像素前就拒绝。
  */
 zhulong_status_t describe_yuv_layout(const zhulong_frame_view& src, YuvLayout& layout) {
+    // ⚠️ 负 stride 表示「底朝上的缓冲区」，本后端不支持。必须显式拒绝，**不能**当成
+    //    「未提供 stride」回落到紧凑布局：那会把像素按 top-down 读出来（图像上下翻转、
+    //    无任何错误码），且与 RGA 后端（显式拒负）语义分叉，破坏「后端可替换」前提。
+    if (src.strides[0] < 0 || src.strides[1] < 0 || src.strides[2] < 0) {
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+    }
+
     layout.is_nv12 = (src.format == ZHULONG_PIXEL_FORMAT_NV12);
     layout.src_w = src.width;
     layout.src_h = src.height;
 
-    const int chroma_min_width = (src.width + 1) / 2;
+    // ⚠️ 用 int64 计算 (width + 1) / 2：width 逼近 INT_MAX 时 int 的 +1 是有符号溢出
+    //    （UBSan 下 -fno-sanitize-recover 会直接 abort）。顺手校验色度行宽可被 int 表示。
+    const int64_t chroma_min_width_64 = (static_cast<int64_t>(src.width) + 1) / 2;
+    if (chroma_min_width_64 * 2 > std::numeric_limits<int>::max()) {
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+    }
+    const int chroma_min_width = static_cast<int>(chroma_min_width_64);
+
     if (layout.is_nv12) {
         if (!src.planes[0] || !src.planes[1]) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
         layout.y_stride = src.strides[0] > 0 ? src.strides[0] : src.width;
-        layout.chroma_stride_0 = src.strides[1] > 0 ? src.strides[1] : src.width;
+        // ⚠️ NV12 的 UV 是交错平面，每行占 2 * ceil(width/2) 字节，**不是** width。
+        //    奇数宽时按 width 回落会把紧凑布局误判成 stride 不足而拒绝。
+        layout.chroma_stride_0 = src.strides[1] > 0 ? src.strides[1] : chroma_min_width * 2;
         layout.chroma_stride_1 = layout.chroma_stride_0;
         if (layout.y_stride < src.width || layout.chroma_stride_0 < chroma_min_width * 2) {
             return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
@@ -142,8 +165,13 @@ zhulong_status_t CpuVisionBackend::resize(const uint8_t* src, int src_w, int src
         return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
 
-    // RGB/BGR 目标顺序不一致时必须交换 R/B 通道
-    const bool swap_channels = src_format != dst_format;
+    // RGB/BGR 目标顺序不一致时必须交换 R/B 通道。
+    // ⚠️ 必须显式列出两个方向：写成「格式不同就交换」只在「唯一合法组合是
+    //    RGB24<->BGR24」时成立，将来一旦支持第三种 24 位布局就会静默错位。
+    const bool swap_channels = (src_format == ZHULONG_PIXEL_FORMAT_RGB24 &&
+                                dst_format == ZHULONG_PIXEL_FORMAT_BGR24) ||
+                               (src_format == ZHULONG_PIXEL_FORMAT_BGR24 &&
+                                dst_format == ZHULONG_PIXEL_FORMAT_RGB24);
     // 逐行以 src + y*stride 定位，严禁假定 src 为 packed 连续缓冲
     for (int y = 0; y < dst_h; ++y) {
         float source_y = (static_cast<float>(y) + 0.5f) * src_h / dst_h - 0.5f;
@@ -191,6 +219,19 @@ zhulong_status_t CpuVisionBackend::letterbox(const zhulong_frame_view& src,
         return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
 
+    // ⚠️ target 尺寸必须由调用方显式给出正数。LetterboxParams 已自带 640 默认值，此处再
+    //    兜一次会把「传 0」静默变成 640×640，且**不回写** inout_params —— 调用方读到的
+    //    target_* 与实际张量尺寸不一致，据此换算的后处理会错位。
+    const int target_w = inout_params.target_width;
+    const int target_h = inout_params.target_height;
+    if (target_w <= 0 || target_h <= 0) {
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+    }
+    // 行偏移按 int 计算，target_w * 3 必须能用 int 表示。
+    if (target_w > std::numeric_limits<int>::max() / 3) {
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+    }
+
     // 仅 packed 路径直接使用 src_stride；YUV 各平面的 stride 由 describe_yuv_layout 校验。
     int src_stride = src.strides[0];
     if (src_is_packed) {
@@ -204,114 +245,77 @@ zhulong_status_t CpuVisionBackend::letterbox(const zhulong_frame_view& src,
         }
     }
 
-    int target_w = inout_params.target_width > 0 ? inout_params.target_width : 640;
-    int target_h = inout_params.target_height > 0 ? inout_params.target_height : 640;
-    if (target_w > std::numeric_limits<int>::max() / 3) {
-        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+    // ⚠️ 全部入参校验（含 YUV 平面布局）必须在写入 dst / 回填几何**之前**完成：
+    //    失败路径不得改写调用方的 out 参数，否则调用方会拿到「新张量 + 已回填几何 + 错误码」
+    //    这种半成品状态，后续任何一次误用都是静默错图。
+    YuvLayout layout{};
+    if (src_is_yuv) {
+        const zhulong_status_t layout_status = describe_yuv_layout(src, layout);
+        if (layout_status != ZHULONG_PLUGIN_OK) {
+            return layout_status;
+        }
     }
 
     // 几何计算提取到 compute_letterbox_geometry()，与 RGA 后端共用同一套语义。
     const LetterboxGeometry geometry = compute_letterbox_geometry(src.width, src.height, target_w, target_h);
-    const int unpad_w = geometry.unpad_w;
-    const int unpad_h = geometry.unpad_h;
-    const int pad_left = geometry.pad_left;
-    const int pad_top = geometry.pad_top;
 
-    // ⚠️ 几何回填：后处理必须使用这些值将归一化坐标反算回原图
-    inout_params.scale = geometry.scale;
-    inout_params.pad_left = pad_left;
-    inout_params.pad_top = pad_top;
+    // target_h * target_w * 3 必须能用 size_t 表示（只校验 target_w 在 32 位 host 上不够）。
+    const size_t row_bytes = static_cast<size_t>(target_w) * 3;
+    if (static_cast<size_t>(target_h) > std::numeric_limits<size_t>::max() / row_bytes) {
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+    }
+    const size_t required_bytes = static_cast<size_t>(target_h) * row_bytes;
 
-    const size_t required_bytes = static_cast<size_t>(target_h) * target_w * 3;
     const std::vector<int64_t> target_shape{target_h, target_w, 3};
     const bool dma_reusable = (dst.dma_buf_fd() >= 0 && dst.raw_data() != nullptr &&
                                dst.byte_size() >= required_bytes);
     const bool cpu_reusable = (dst.dma_buf_fd() < 0 && dst.byte_size() >= required_bytes &&
                                dst.dtype() == DataType::UINT8 && dst.shape() == target_shape);
 
-    if (dma_reusable) {
-        if (dst.dtype() != DataType::UINT8 || dst.shape() != target_shape) {
-            dst = Tensor::from_dma_buf(dst.dma_buf_fd(), target_shape, DataType::UINT8, dst.raw_data());
+    // ⚠️ Tensor 构造失败以异常报告。就地转成状态码，否则会一路冒泡到 C ABI 的
+    //    catch (...) 里变成无法区分的通用错误，「内存不足」对上层就永久不可观测。
+    try {
+        if (dma_reusable) {
+            if (dst.dtype() != DataType::UINT8 || dst.shape() != target_shape) {
+                dst = Tensor::from_dma_buf(dst.dma_buf_fd(), target_shape, DataType::UINT8, dst.raw_data());
+            }
+        } else if (!cpu_reusable) {
+            dst = Tensor(target_shape, DataType::UINT8);
         }
-    } else if (!cpu_reusable) {
-        dst = Tensor(target_shape, DataType::UINT8);
+    } catch (const std::bad_alloc&) {
+        return ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY;
+    } catch (const std::length_error&) {
+        return ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY;
     }
+
     uint8_t* dst_buf = dst.data<uint8_t>();
     if (!dst_buf) {
         return ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY;
     }
-    // Letterbox 补边值为 114（非 0），与训练预处理保持一致
-    std::memset(dst_buf, 114, required_bytes);
+    // Letterbox 补边值为 letterbox_pad_value（非 0），与训练预处理保持一致
+    std::memset(dst_buf, letterbox_pad_value, required_bytes);
 
     // 缩放直接写到最终 Tensor ROI（内容区），不分配中间 resized_temp
     const int target_stride = target_w * 3;
-    uint8_t* resized_region = dst_buf + (static_cast<size_t>(pad_top) * target_w + pad_left) * 3;
+    uint8_t* resized_region =
+        dst_buf + (static_cast<size_t>(geometry.pad_top) * target_w + geometry.pad_left) * 3;
 
-    if (src_is_packed) {
-        return resize(src.planes[0], src.width, src.height, src_stride, src.format,
-                      resized_region, target_stride, unpad_w, unpad_h, inout_params.target_format);
+    const zhulong_status_t rc =
+        src_is_packed
+            ? resize(src.planes[0], src.width, src.height, src_stride, src.format, resized_region,
+                     target_stride, geometry.unpad_w, geometry.unpad_h, inout_params.target_format)
+            : resize_yuv(src, layout, resized_region, target_stride, geometry.unpad_w,
+                         geometry.unpad_h, inout_params.target_format);
+    if (rc != ZHULONG_PLUGIN_OK) {
+        return rc;
     }
 
-    YuvLayout layout{};
-    const zhulong_status_t layout_status = describe_yuv_layout(src, layout);
-    if (layout_status != ZHULONG_PLUGIN_OK) {
-        return layout_status;
-    }
-    return resize_yuv(src, layout, resized_region, target_stride, unpad_w, unpad_h,
-                      inout_params.target_format);
-}
-
-/**
- * @brief 基于归一化两点坐标 [x1,y1,x2,y2] 计算交并比（IoU）
- *
- * 使用 std::max(0.0f, ...) 防御越界或坐标倒置导致的负面积。
- */
-static float calc_iou(const zhulong_bbox& a, const zhulong_bbox& b) {
-    float x1 = std::max(a.box[0], b.box[0]);
-    float y1 = std::max(a.box[1], b.box[1]);
-    float x2 = std::min(a.box[2], b.box[2]);
-    float y2 = std::min(a.box[3], b.box[3]);
-
-    float inter_w = std::max(0.0f, x2 - x1);
-    float inter_h = std::max(0.0f, y2 - y1);
-    float inter_area = inter_w * inter_h;
-
-    float area_a = std::max(0.0f, a.box[2] - a.box[0]) * std::max(0.0f, a.box[3] - a.box[1]);
-    float area_b = std::max(0.0f, b.box[2] - b.box[0]) * std::max(0.0f, b.box[3] - b.box[1]);
-    float union_area = area_a + area_b - inter_area;
-
-    if (union_area <= 0.0f) return 0.0f;
-    return inter_area / union_area;
-}
-
-/**
- * @brief 按置信度降序排序后逐框抑制的标量 NMS（非极大值抑制），最坏复杂度 O(n^2)
- *
- * ⚠️ 输入框必须为已归一化坐标 [x1, y1, x2, y2] ∈ [0.0, 1.0]。
- */
-std::vector<zhulong_bbox> nms(const std::vector<zhulong_bbox>& boxes, float iou_threshold) {
-    if (boxes.empty()) return {};
-
-    std::vector<zhulong_bbox> sorted_boxes = boxes;
-    std::sort(sorted_boxes.begin(), sorted_boxes.end(), [](const zhulong_bbox& a, const zhulong_bbox& b) {
-        return a.confidence > b.confidence;
-    });
-
-    std::vector<bool> suppressed(sorted_boxes.size(), false);
-    std::vector<zhulong_bbox> keep;
-
-    for (size_t i = 0; i < sorted_boxes.size(); ++i) {
-        if (suppressed[i]) continue;
-        keep.push_back(sorted_boxes[i]);
-
-        for (size_t j = i + 1; j < sorted_boxes.size(); ++j) {
-            if (suppressed[j]) continue;
-            if (calc_iou(sorted_boxes[i], sorted_boxes[j]) > iou_threshold) {
-                suppressed[j] = true;
-            }
-        }
-    }
-    return keep;
+    // ⚠️ 几何回填放在最后：后处理必须用这些值把归一化坐标反算回原图，
+    //    任何失败路径都不得让调用方读到「看似已回填」的 scale/pad。
+    inout_params.scale = geometry.scale;
+    inout_params.pad_left = geometry.pad_left;
+    inout_params.pad_top = geometry.pad_top;
+    return ZHULONG_PLUGIN_OK;
 }
 
 } // namespace zhulong

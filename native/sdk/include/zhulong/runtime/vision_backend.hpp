@@ -78,6 +78,7 @@ public:
  *
  * ⚠️ 输入框必须为已归一化坐标 [x1, y1, x2, y2] ∈ [0.0, 1.0]；
  * IoU 阈值语义为「保留 IoU <= iou_threshold 的框」。
+ * ⚠️ 置信度非有限（NaN / ±Inf）的框会被直接丢弃，不进入排序也不出现在结果中。
  *
  * @param boxes 候选框列表（须已归一化）
  * @param iou_threshold 交并比抑制阈值
