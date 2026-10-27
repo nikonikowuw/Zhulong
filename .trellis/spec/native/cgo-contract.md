@@ -163,13 +163,18 @@ func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]f
 ### 6.3 进程生命周期与并发
 
 - **并发 1、一问一答**：与旧的插件互斥锁语义等价；请求排队由 30s 超时兜底，不引入无界并发 spawn。
-- **崩溃即重建、单帧最多重试 1 次**：`stdin` 写失败 / EOF / 非 JSON → 杀进程组 + `Wait()` → 重建 → 重发该帧；第二次失败 fail-closed。`request_id` 必须回显并校验——错配等于把别人的特征写进底库。
-- **超时杀进程组**：`kill(-pid, SIGKILL)`，只杀单进程会留下抱着模型的孙进程。
+- **只对「流失步」换进程**：写失败 / 读失败 / 超时 / 非 JSON / `request_id` 错配 / 维度非法 → 杀进程组 + `Wait()` → 重建 → 重发该帧，第二次失败 fail-closed。**帧级裁决（`NO_FACE_DETECTED` / `INVALID_INPUT`）不回显错误但换了进程**：包进程是健康的，换掉它只会让下一帧再付一次模型冷加载（见 §6.1「一张坏图不该毁掉热进程」）。`request_id` 必须回显并校验——错配等于把别人的特征写进底库。
+- **调用方取消不重试**：ctx 到期/取消时子进程已被 `AfterFunc` 杀掉，重试只会再起一个立刻再杀的进程；此时对外仍是 `ErrInternal`（宿主侧失败），但不进重试循环。
+- **单行上限 256 KiB**：stdout 一行 = 一条 JSON 回复，超过上限按失步处理；不然失控的包能用一行输出吃光宿主内存。
+- **`Close` 之后不再 spawn**：reaper 已停，此后再 spawn 就没人回收——`Extract` 直接返回 `ErrInternal`。
+- **超时杀进程组**：`kill(-pid, SIGKILL)`，只杀单进程会留下抱着模型的孙进程。已经 `Wait()` 回收的进程**不得再发信号**：pid 可能已被复用，`kill(-pid)` 会误伤别的进程组。
+- **超时文案要诚实**：报告实际等了多久 + 配置预算；预算可能来自调用方 ctx 而不是 `RequestTimeout`，只报后者会把排查引向错的旋钮。
 - **空闲回收**：空闲 `ZHONG_FACE_PLUGIN_IDLE_TIMEOUT_SEC`（默认 60s，沿用历史变量）后回收，内存曲线与旧实现一致；计时与请求共用一把锁，绝不事后补 Reset（会把正在推理的进程杀掉）。
 - **缓存 key 含包身份**：`<entry 路径>` + `(dev, ino, size, mtime)`。包被原地替换后必须换进程，否则新登记的底照由旧模型产出，与流式识别不同源（表现是识别率莫名下降，且没有任何错误）。
 - **spawn 复用** `algorunner.StartPinned`：`Pdeathsig` 挂在 fork 的那个 OS 线程上，必须 pin→spawn→`Wait`→unlock 在同一 goroutine 内完成。
 
 ### 6.4 验证边界
 
-- Go 侧单测（`internal/faceextract`）用**桩 provider 可执行文件**驱动，覆盖：happy path、复用只起一个进程、五类失败码、`feature_dim` 0/513、`request_id` 错配、崩溃后重试一次、二次失败即终、超时杀组、stdout 非 JSON、包原地替换、空闲回收、坏帧不进进程。
+- Go 侧单测（`internal/faceextract`）用**桩 provider 可执行文件**驱动，覆盖：happy path、复用只起一个进程、五类失败码、`feature_dim` 0/513、`request_id` 错配、崩溃后重试一次、二次失败即终、超时杀组、stdout 非 JSON、包原地替换、空闲回收、坏帧不进进程；外加**帧级裁决不换进程**、**失步才换进程**、**取消不重试**、**带 padding 的 stride**、**超长单行**、**Close 幂等且不再 spawn**。
+- `packRGB24` 的方向映射与旧逐像素 switch 实现逐字节等价（5 类 image × 8 个方向），防止仿射系数写错导致「行列对调但顺序错」的静默错图；`BenchmarkPackRGB24` 给定 1920x1080 量化基线（当前约 39 ms/帧，登记是人速操作，未做类型特化）。
 - 真包集成验收只做一次（`packages/face_recognition` 的 `make test` + 打包期的黑盒验包），Go 测试不硬依赖 `build/packages/` 下的产物。

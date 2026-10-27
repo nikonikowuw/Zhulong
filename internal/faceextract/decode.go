@@ -15,6 +15,15 @@ import (
 	_ "image/png"
 )
 
+// MaxImageDimension bounds one side of an enrolment photo. It is the same 4096 the
+// retired engine path enforced — the limit exists to stop decompression bombs, not
+// to express a model requirement, so it moves with the codec, not with the model.
+const MaxImageDimension = 4096
+
+// ErrUnsupportedImageFormat means the bytes cannot be decoded by any registered
+// decoder (or the file is corrupt). The caller's input, not a server fault.
+var ErrUnsupportedImageFormat = errors.New("unsupported image format")
+
 // decodeToRGB24 解码图片字节流，按 EXIF 方向归一化后输出打包连续的 RGB24 像素。
 //
 // 返回的错误区分两类失败，上层据此给出不同的 HTTP 语义：
@@ -61,44 +70,68 @@ func orientedDimensions(img image.Image, orientation int) (int, int) {
 	return w, h
 }
 
-// packRGB24 按 EXIF 方向把 img 映射为打包连续的 RGB24 像素（行优先，stride = 输出宽度*3）。
+// orientationTransform 把一个 EXIF 方向编译成仿射映射，使 packRGB24 的内层循环
+// 与方向无关：
 //
-// EXIF Orientation 语义（0th row / 0th column 的视觉位置）：
+//	ox = a*x + b*y + c
+//	oy = d*x + e*y + f
+//
+// 逐像素 switch 是循环不变量，放在内层等于给每个像素付一次分支；
+// 这里一次性算出系数，内层只剩两次乘加。
+type orientationTransform struct {
+	a, b, c  int
+	d, e, f  int
+	outWidth int
+}
+
+// newOrientationTransform 按 EXIF Orientation 语义（0th row / 0th column 的视觉位置）
+// 生成映射系数：
 //
 //	1 正立   2 水平镜像   3 旋转 180   4 垂直镜像
 //	5 转置   6 顺时针 90   7 反转置     8 逆时针 90
+func newOrientationTransform(srcWidth, srcHeight, orientation int) orientationTransform {
+	// 方向 1（以及任何未知值）是恒等映射：宽高不变、坐标原样。
+	t := orientationTransform{a: 1, e: 1, outWidth: srcWidth}
+	switch orientation {
+	case 2:
+		t.a, t.c = -1, srcWidth-1
+	case 3:
+		t.a, t.c, t.e, t.f = -1, srcWidth-1, -1, srcHeight-1
+	case 4:
+		t.e, t.f = -1, srcHeight-1
+	case 5:
+		t.a, t.b, t.d, t.e, t.outWidth = 0, 1, 1, 0, srcHeight
+	case 6:
+		t.a, t.b, t.c, t.d, t.e, t.outWidth = 0, -1, srcHeight-1, 1, 0, srcHeight
+	case 7:
+		t.a, t.b, t.c, t.d, t.e, t.f, t.outWidth = 0, -1, srcHeight-1, -1, 0, srcWidth-1, srcHeight
+	case 8:
+		t.a, t.b, t.d, t.e, t.f, t.outWidth = 0, 1, -1, 0, srcWidth-1, srcHeight
+	}
+	return t
+}
+
+// packRGB24 按 EXIF 方向把 img 映射为打包连续的 RGB24 像素（行优先，stride = 输出宽度*3）。
+//
+// dst 必须至少有 orientedDimensions(img, orientation) 两者相乘再乘 3 字节；调用方
+// （decodeToRGB24）按同一函数分配，二者必须同源，否则越界。
 //
 // ⚠️ 手机竖拍照片绝大多数是 6：像素在文件里是「躺着」的，而 image.Decode 不解释 EXIF，
 // 直接送检测器会导致人脸漏检。方向必须在进入推理前抹平。
 func packRGB24(img image.Image, orientation int, dst []byte) {
 	bounds := img.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
-	outWidth, _ := orientedDimensions(img, orientation)
+	tx := newOrientationTransform(w, h, orientation)
+	rowBytes := tx.outWidth * 3
 
 	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			var ox, oy int
-			switch orientation {
-			case 2:
-				ox, oy = w-1-x, y
-			case 3:
-				ox, oy = w-1-x, h-1-y
-			case 4:
-				ox, oy = x, h-1-y
-			case 5:
-				ox, oy = y, x
-			case 6:
-				ox, oy = h-1-y, x
-			case 7:
-				ox, oy = h-1-y, w-1-x
-			case 8:
-				ox, oy = y, w-1-x
-			default:
-				ox, oy = x, y
-			}
+		// 每行只算一次行基址，内层循环里只剩 ox/oy 的增量。
+		oxRow, oyRow := tx.b*y+tx.c, tx.e*y+tx.f
+		srcY := bounds.Min.Y + y
 
-			r, g, b, _ := img.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
-			idx := (oy*outWidth + ox) * 3
+		for x := 0; x < w; x++ {
+			r, g, b, _ := img.At(bounds.Min.X+x, srcY).RGBA()
+			idx := (tx.d*x+oyRow)*rowBytes + (tx.a*x+oxRow)*3
 			dst[idx] = byte(r >> 8)
 			dst[idx+1] = byte(g >> 8)
 			dst[idx+2] = byte(b >> 8)
@@ -190,15 +223,6 @@ func parseTIFFOrientation(tiff []byte) int {
 	return 1
 }
 
-// MaxImageDimension bounds one side of an enrolment photo. It is the same 4096 the
-// retired engine path enforced — the limit exists to stop decompression bombs, not
-// to express a model requirement, so it moves with the codec, not with the model.
-const MaxImageDimension = 4096
-
-// ErrUnsupportedImageFormat means the bytes cannot be decoded by any registered
-// decoder (or the file is corrupt). The caller's input, not a server fault.
-var ErrUnsupportedImageFormat = errors.New("unsupported image format")
-
 // DecodeToRGB24 decodes an image into packed RGB24 pixels, normalising EXIF
 // orientation, and returns the resulting dimensions.
 //
@@ -209,10 +233,3 @@ var ErrUnsupportedImageFormat = errors.New("unsupported image format")
 func DecodeToRGB24(data []byte) (pixels []byte, width int, height int, err error) {
 	return decodeToRGB24(data, MaxImageDimension)
 }
-
-// Pixel formats accepted by the provider protocol. Values are part of the wire
-// contract (the package's C ABI uses the same numbers).
-const (
-	FormatBGR24 uint32 = 1
-	FormatRGB24 uint32 = 2
-)

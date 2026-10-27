@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -25,12 +26,33 @@ import (
 // $EXIT_AFTER_FIRST is set.
 func stubEntry(t *testing.T, body string) string {
 	t.Helper()
+	if _, err := exec.LookPath("python3"); err != nil {
+		// Every stub here is a python3 script; skipping is honest, a confusing cascade
+		// of "exec format error" failures is not.
+		t.Skip("python3 is required to run the stub provider")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "stub_provider")
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatalf("write stub provider: %v", err)
 	}
 	return path
+}
+
+// waitUntil polls cond and fails the test if it never reports true. Every wait in this
+// file observes a fact (a process left, a file appeared) instead of guessing a sleep.
+func waitUntil(t *testing.T, within time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for {
+		if cond() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s within %s", what, within)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func staticEntry(path string) func(context.Context) (string, error) {
@@ -56,7 +78,7 @@ func validFrame() faceextract.Frame {
 	for i := range pixels {
 		pixels[i] = byte(i % 251)
 	}
-	return faceextract.Frame{Width: width, Height: height, Stride: width * 3, Format: 2, Pixels: pixels}
+	return faceextract.Frame{Width: width, Height: height, Stride: width * 3, Format: faceextract.FormatRGB24, Pixels: pixels}
 }
 
 // echoProvider reads exactly the 28-byte header plus payload the client writes and
@@ -302,23 +324,15 @@ time.sleep(60)
 	if readErr != nil {
 		t.Fatalf("read provider pid: %v", readErr)
 	}
-	var pid int
-	if _, err := fmt.Sscanf(strings.TrimSpace(string(pidBytes)), "%d", &pid); err != nil {
-		t.Fatalf("parse pid: %v", err)
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if convErr != nil {
+		t.Fatalf("parse pid: %v", convErr)
 	}
-	// 进程被 SIGKILL 后不应再存活（僵尸不算存活，但 -0 探测仍会成功直到被回收；
+	// 进程被 SIGKILL 后不应再存活（僵尸不算存活，-0 探测仍会成功直到被回收；
 	// 客户端会 Wait，所以这里应为「不存在」）。
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		if err := processAlive(pid); err == nil && !aliveIsZombie(pid) {
-			if time.Now().After(deadline) {
-				t.Fatalf("provider pid %d still alive after timeout kill", pid)
-			}
-			time.Sleep(20 * time.Millisecond)
-			continue
-		}
-		break
-	}
+	waitUntil(t, 3*time.Second, fmt.Sprintf("provider pid %d to disappear", pid), func() bool {
+		return processAlive(pid) != nil || aliveIsZombie(pid)
+	})
 }
 
 // TestExtractRejectsNonJSONStdout pins the "stdout is protocol only" rule: a package
@@ -396,16 +410,9 @@ func TestExtractIdleRetires(t *testing.T) {
 	firstPID := readPID(t, pidFile)
 
 	// 等 reaper 真的回收：以「子进程消失」为观察到的事实，而不是猜时间。
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if err := processAlive(firstPID); err != nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("idle reaper never retired provider pid %d", firstPID)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	waitUntil(t, 10*time.Second, fmt.Sprintf("idle reaper to retire provider pid %d", firstPID), func() bool {
+		return processAlive(firstPID) != nil
+	})
 
 	if _, err := client.Extract(context.Background(), validFrame()); err != nil {
 		t.Fatalf("second extract: %v", err)
@@ -417,20 +424,20 @@ func TestExtractIdleRetires(t *testing.T) {
 
 func readPID(t *testing.T, path string) int {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	var pid int
+	waitUntil(t, 5*time.Second, fmt.Sprintf("provider to publish its pid to %s", path), func() bool {
 		raw, err := os.ReadFile(path)
-		if err == nil {
-			var pid int
-			if _, scanErr := fmt.Sscanf(strings.TrimSpace(string(raw)), "%d", &pid); scanErr == nil {
-				return pid
-			}
+		if err != nil {
+			return false
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("provider never published its pid to %s", path)
+		got, convErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if convErr != nil {
+			return false
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		pid = got
+		return true
+	})
+	return pid
 }
 
 // TestExtractRejectsBadFrames keeps validation on the Go side: a malformed frame
@@ -444,18 +451,17 @@ func TestExtractRejectsBadFrames(t *testing.T) {
 		},
 	})
 
-	good := validFrame()
-	cases := []struct {
+	badFrames := []struct {
 		name  string
 		frame faceextract.Frame
 	}{
-		{"zero width", faceextract.Frame{Width: 0, Height: 1, Format: 2}},
-		{"zero height", faceextract.Frame{Width: 1, Height: 0, Format: 2}},
+		{"zero width", faceextract.Frame{Width: 0, Height: 1, Format: faceextract.FormatRGB24}},
+		{"zero height", faceextract.Frame{Width: 1, Height: 0, Format: faceextract.FormatRGB24}},
 		{"bad format", faceextract.Frame{Width: 2, Height: 2, Format: 9, Pixels: make([]byte, 12)}},
-		{"short stride", faceextract.Frame{Width: 4, Height: 2, Stride: 4, Format: 2, Pixels: make([]byte, 8)}},
-		{"payload mismatch", faceextract.Frame{Width: 4, Height: 2, Format: 2, Pixels: make([]byte, 23)}},
+		{"short stride", faceextract.Frame{Width: 4, Height: 2, Stride: 4, Format: faceextract.FormatRGB24, Pixels: make([]byte, 8)}},
+		{"payload mismatch", faceextract.Frame{Width: 4, Height: 2, Format: faceextract.FormatRGB24, Pixels: make([]byte, 23)}},
 	}
-	for _, tc := range cases {
+	for _, tc := range badFrames {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := client.Extract(context.Background(), tc.frame); !errors.Is(err, faceextract.ErrInvalidArgument) {
 				t.Fatalf("error = %v, want ErrInvalidArgument", err)
@@ -465,7 +471,6 @@ func TestExtractRejectsBadFrames(t *testing.T) {
 	if spawned.Load() {
 		t.Fatal("a malformed frame must be rejected before any provider process is started")
 	}
-	_ = good
 }
 
 // TestExtractReportsMissingEntry maps "package not installed / not runnable" onto a
@@ -478,6 +483,192 @@ func TestExtractReportsMissingEntry(t *testing.T) {
 	})
 	if _, err := client.Extract(context.Background(), validFrame()); !errors.Is(err, faceextract.ErrEntry) {
 		t.Fatalf("error = %v, want ErrEntry", err)
+	}
+}
+
+// TestExtractFrameVerdictKeepsProcess pins spec §6.1: a frame-level verdict means the
+// child answered correctly, so the hot process (with its loaded model) must survive.
+// Killing it here turns every rejected photo into a cold start for the next one.
+func TestExtractFrameVerdictKeepsProcess(t *testing.T) {
+	for _, code := range []string{"NO_FACE_DETECTED", "INVALID_INPUT"} {
+		t.Run(code, func(t *testing.T) {
+			dir := t.TempDir()
+			counter := filepath.Join(dir, "spawns")
+			body := strings.Replace(echoProvider(0, "failed", code), "import json, struct, sys",
+				"import json, struct, sys, os\nopen('"+counter+"', 'a').write('x')\n", 1)
+			client := newClient(t, faceextract.Options{Entry: staticEntry(stubEntry(t, body))})
+
+			for i := 0; i < 3; i++ {
+				if _, err := client.Extract(context.Background(), validFrame()); !errors.Is(err, faceextract.ErrNoFaceDetected) &&
+					!errors.Is(err, faceextract.ErrInvalidArgument) {
+					t.Fatalf("extract %d: error = %v, want a frame-level verdict", i, err)
+				}
+			}
+			if got := countSpawns(t, counter); got != 1 {
+				t.Fatalf("provider spawned %d times, want 1 (a bad photo must not destroy the hot process)", got)
+			}
+		})
+	}
+}
+
+// TestExtractDesyncRetiresProcess is the other half of the same rule: when stdout is
+// not a protocol line, the stream is untrustworthy and the child must be replaced
+// before the retry — reusing it would read the leftover of the previous answer.
+func TestExtractDesyncRetiresProcess(t *testing.T) {
+	dir := t.TempDir()
+	spawns := filepath.Join(dir, "spawns")
+	seq := filepath.Join(dir, "seq")
+	body := `#!/usr/bin/env python3
+import json, struct, sys, os
+open("` + spawns + `", "a").write("x")
+path = "` + seq + `"
+n = 1
+if os.path.exists(path):
+    n = int(open(path).read().strip()) + 1
+open(path, "w").write(str(n))
+while True:
+    header = sys.stdin.buffer.read(28)
+    if len(header) < 28:
+        break
+    magic, request_id, w, h, stride, fmt, payload_len = struct.unpack("<7I", header)
+    sys.stdin.buffer.read(payload_len)
+    if n == 1:
+        sys.stdout.write("debug: model loaded from /tmp/x.onnx\n")  # 非协议行，流已失步
+    else:
+        sys.stdout.write(json.dumps({"request_id": request_id, "status": "passed", "feature_dim": 2, "features": [0.5, 0.5]}) + "\n")
+    sys.stdout.flush()
+`
+	client := newClient(t, faceextract.Options{Entry: staticEntry(stubEntry(t, body))})
+
+	features, err := client.Extract(context.Background(), validFrame())
+	if err != nil {
+		t.Fatalf("the retry should have succeeded on a fresh process: %v", err)
+	}
+	if len(features) != 2 {
+		t.Fatalf("feature length = %d, want 2", len(features))
+	}
+	if got := countSpawns(t, spawns); got != 2 {
+		t.Fatalf("spawns = %d, want 2 (desync must replace the child)", got)
+	}
+}
+
+// TestExtractCancellationIsNotRetried covers the caller-goes-away path: the kill is
+// expected, but retrying would spawn a child only to kill it again immediately.
+func TestExtractCancellationIsNotRetried(t *testing.T) {
+	dir := t.TempDir()
+	spawns := filepath.Join(dir, "spawns")
+	body := `#!/usr/bin/env python3
+import json, struct, sys, os, time
+open("` + spawns + `", "a").write("x")
+while True:
+    header = sys.stdin.buffer.read(28)
+    if len(header) < 28:
+        break
+    magic, request_id, w, h, stride, fmt, payload_len = struct.unpack("<7I", header)
+    sys.stdin.buffer.read(payload_len)
+    time.sleep(60)  # 永不回答：只有 ctx 到期能让这次请求结束
+`
+	client := newClient(t, faceextract.Options{Entry: staticEntry(stubEntry(t, body))})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	_, err := client.Extract(ctx, validFrame())
+
+	if !errors.Is(err, faceextract.ErrInternal) {
+		t.Fatalf("error = %v, want ErrInternal (cancellation is still a host-side failure)", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("cancellation was not propagated promptly, took %s", elapsed)
+	}
+	if got := countSpawns(t, spawns); got != 1 {
+		t.Fatalf("spawns = %d, want 1 (a cancelled request must not be retried)", got)
+	}
+}
+
+// TestExtractAcceptsPaddedStride proves the stride field is honoured: a caller may
+// hand over rows with padding, and validation must accept exactly that frame.
+func TestExtractAcceptsPaddedStride(t *testing.T) {
+	dir := t.TempDir()
+	strideFile := filepath.Join(dir, "stride")
+	body := strings.Replace(echoProvider(2, "passed", ""), "    payload = sys.stdin.buffer.read(payload_len)",
+		"    payload = sys.stdin.buffer.read(payload_len)\n    open('"+strideFile+"', 'w').write('%d,%d' % (stride, len(payload)))", 1)
+	client := newClient(t, faceextract.Options{Entry: staticEntry(stubEntry(t, body))})
+
+	const width, height, stride = uint32(8), uint32(6), uint32(8*3 + 4)
+	frame := faceextract.Frame{
+		Width:  width,
+		Height: height,
+		Stride: stride,
+		Format: faceextract.FormatRGB24,
+		Pixels: make([]byte, stride*height),
+	}
+	if _, err := client.Extract(context.Background(), frame); err != nil {
+		t.Fatalf("padded stride must be accepted: %v", err)
+	}
+
+	got, err := os.ReadFile(strideFile)
+	if err != nil {
+		t.Fatalf("read stride probe: %v", err)
+	}
+	want := fmt.Sprintf("%d,%d", stride, stride*height)
+	if string(got) != want {
+		t.Fatalf("provider saw stride,payload = %q, want %q", string(got), want)
+	}
+}
+
+// TestExtractRejectsOverlongReplyLine keeps a runaway provider from turning one stdout
+// line into unbounded host memory: the line cap must fire long before the timeout.
+func TestExtractRejectsOverlongReplyLine(t *testing.T) {
+	body := `#!/usr/bin/env python3
+import sys
+sys.stdin.buffer.read(28)
+sys.stdout.buffer.write(b"x" * (1024 * 1024))
+sys.stdout.buffer.flush()
+sys.stdin.read()
+`
+	client := newClient(t, faceextract.Options{Entry: staticEntry(stubEntry(t, body))})
+
+	started := time.Now()
+	_, err := client.Extract(context.Background(), validFrame())
+	if !errors.Is(err, faceextract.ErrInternal) {
+		t.Fatalf("error = %v, want ErrInternal", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("an overlong line must be rejected without waiting for the timeout, took %s", elapsed)
+	}
+}
+
+// TestCloseIsIdempotentAndStopsExtraction pins the lifecycle contract: Close twice is
+// harmless, and a closed client must not spawn a child that no reaper would retire.
+func TestCloseIsIdempotentAndStopsExtraction(t *testing.T) {
+	dir := t.TempDir()
+	spawns := filepath.Join(dir, "spawns")
+	body := strings.Replace(echoProvider(2, "passed", ""), "import json, struct, sys",
+		"import json, struct, sys, os\nopen('"+spawns+"', 'a').write('x')\n", 1)
+	client := faceextract.New(faceextract.Options{
+		Entry:          staticEntry(stubEntry(t, body)),
+		RequestTimeout: 5 * time.Second,
+		IdleTimeout:    time.Minute,
+	})
+
+	if _, err := client.Extract(context.Background(), validFrame()); err != nil {
+		t.Fatalf("first extract: %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("second close: %v", err)
+	}
+
+	_, err := client.Extract(context.Background(), validFrame())
+	if !errors.Is(err, faceextract.ErrInternal) {
+		t.Fatalf("extract after close: error = %v, want ErrInternal", err)
+	}
+	if got := countSpawns(t, spawns); got != 1 {
+		t.Fatalf("spawns = %d, want 1 (a closed client must not spawn)", got)
 	}
 }
 

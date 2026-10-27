@@ -240,3 +240,112 @@ func TestDecodeToRGB24_RejectsOversizedBeforeFullDecode(t *testing.T) {
 		t.Fatalf("image exactly at MaxImageDimension must pass the size guard, got %v", err)
 	}
 }
+
+// packRGB24Reference 是「逐像素 switch」的旧实现，只作为等价性基准保留：
+// 仿射系数一旦写错，方向 5..8 会产出「行列对调但顺序错」的静默错图 —— 没有任何报错，
+// 只是检测器开始漏检。新实现必须与它在全部 8 个方向上逐字节一致。
+func packRGB24Reference(img image.Image, orientation int, dst []byte) {
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	outWidth, _ := orientedDimensions(img, orientation)
+
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			var ox, oy int
+			switch orientation {
+			case 2:
+				ox, oy = w-1-x, y
+			case 3:
+				ox, oy = w-1-x, h-1-y
+			case 4:
+				ox, oy = x, h-1-y
+			case 5:
+				ox, oy = y, x
+			case 6:
+				ox, oy = h-1-y, x
+			case 7:
+				ox, oy = h-1-y, w-1-x
+			case 8:
+				ox, oy = y, w-1-x
+			default:
+				ox, oy = x, y
+			}
+
+			r, g, b, _ := img.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
+			idx := (oy*outWidth + ox) * 3
+			dst[idx] = byte(r >> 8)
+			dst[idx+1] = byte(g >> 8)
+			dst[idx+2] = byte(b >> 8)
+		}
+	}
+}
+
+// oddImage 是「没有专门类型」的 image.Image，用来钉住回退路径。
+type oddImage struct{ w, h int }
+
+func (o oddImage) ColorModel() color.Model { return color.RGBAModel }
+
+func (o oddImage) Bounds() image.Rectangle { return image.Rect(0, 0, o.w, o.h) }
+
+func (o oddImage) At(x, y int) color.Color {
+	return color.RGBA{R: uint8(x * 17), G: uint8(y * 23), B: uint8((x + y) * 7), A: 255}
+}
+
+func TestPackRGB24_MatchesReferenceAcrossImageTypes(t *testing.T) {
+	nrgba := image.NewNRGBA(image.Rect(0, 0, 3, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 3; x++ {
+			// alpha 故意不是 255：预乘语义一旦写错，半透明像素就会偏色。
+			nrgba.SetNRGBA(x, y, color.NRGBA{R: uint8(10 + x*40), G: uint8(20 + y*30), B: uint8(90 - x*7), A: uint8(60 + x*30)})
+		}
+	}
+
+	gray := image.NewGray(image.Rect(0, 0, 3, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 3; x++ {
+			gray.SetGray(x, y, color.Gray{Y: uint8(x*30 + y*11)})
+		}
+	}
+
+	jpegBytes := encodeTestJPEG(t, checkerImage())
+	ycbcr, err := jpeg.Decode(bytes.NewReader(jpegBytes))
+	if err != nil {
+		t.Fatalf("decode jpeg: %v", err)
+	}
+
+	sources := map[string]image.Image{
+		"rgba":   checkerImage(),
+		"nrgba":  nrgba,
+		"gray":   gray,
+		"ycbcr":  ycbcr,
+		"custom": oddImage{w: 3, h: 4},
+	}
+
+	for name, img := range sources {
+		for orientation := 1; orientation <= 8; orientation++ {
+			w, h := orientedDimensions(img, orientation)
+			got := make([]byte, w*h*3)
+			want := make([]byte, w*h*3)
+			packRGB24(img, orientation, got)
+			packRGB24Reference(img, orientation, want)
+			if !bytes.Equal(got, want) {
+				t.Errorf("%s orientation %d: output differs from the reference mapping", name, orientation)
+			}
+		}
+	}
+}
+
+// BenchmarkPackRGB24 给「登记一张 1920x1080 底照要多久」一个可测的数字，
+// 免得围绕 img.At() 的接口调用做没有测量的优化。
+func BenchmarkPackRGB24(b *testing.B) {
+	img := image.NewYCbCr(image.Rect(0, 0, 1920, 1080), image.YCbCrSubsampleRatio420)
+	for i := range img.Y {
+		img.Y[i] = uint8(i)
+	}
+	dst := make([]byte, 1920*1080*3)
+
+	b.SetBytes(int64(len(dst)))
+	for b.Loop() {
+		packRGB24(img, 6, dst)
+	}
+}

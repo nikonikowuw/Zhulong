@@ -24,12 +24,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
@@ -56,6 +59,33 @@ var (
 	ErrInternal = errors.New("face feature extraction failed")
 )
 
+// Internal verdicts. They never cross the package boundary — callers only ever see
+// ErrInternal — but they decide whether the child process is replaced.
+var (
+	// errProtocolDesync means the byte stream can no longer be trusted: a failed
+	// write, a failed or timed-out read, a non-JSON line, a mismatched request_id, or
+	// a feature dimension the host cannot store. The child must be replaced, because a
+	// half-written frame or an unread reply would poison the next request.
+	//
+	// A frame-level verdict (no face, invalid input) is *not* a desync: the child is
+	// healthy and merely reported that this photo has no usable face. Killing it there
+	// would make the next frame pay another cold start (spec §6.1: a bad photo must not
+	// destroy the hot process).
+	errProtocolDesync = errors.New("provider protocol desync")
+
+	// errCallerCancelled means the caller went away mid-round-trip. It is never
+	// retried: the replacement child would be killed the instant it started.
+	errCallerCancelled = errors.New("caller cancelled the request")
+)
+
+// Pixel formats accepted by the provider protocol. The numbers are part of the wire
+// contract (the package's C ABI uses the same values), so they are declared next to
+// Frame and stay the single source of truth for both the client and the decoder.
+const (
+	FormatBGR24 uint32 = 1
+	FormatRGB24 uint32 = 2
+)
+
 // Protocol constants. They are part of the SDK contract (see algo-plugin-contract
 // §7), so they are named once here and asserted by tests rather than inlined.
 const (
@@ -63,8 +93,20 @@ const (
 	headerBytes          = 28
 	maxDimension  uint32 = 16384
 	maxFeatureDim        = 512
-	formatRGB24   uint32 = 2
-	formatBGR24   uint32 = 1
+
+	// maxReplyLineBytes caps one stdout line. 512 floats are a few KiB of JSON; the cap
+	// exists so a runaway package cannot exhaust host memory with a single line, not to
+	// express a model requirement.
+	maxReplyLineBytes = 256 << 10
+
+	// extractAttempts bounds the retry: the first failure may be a crash, the second is
+	// final.
+	extractAttempts = 2
+
+	// reapTimeout bounds the wait for a killed child. SIGKILL cannot be blocked, so this
+	// only fires if the kill itself never landed — and then it must not be allowed to
+	// wedge the client while it holds the request mutex.
+	reapTimeout = 10 * time.Second
 )
 
 // Frame is one RGB24/BGR24 image handed to the provider process.
@@ -76,7 +118,7 @@ type Frame struct {
 	Width  uint32
 	Height uint32
 	Stride uint32 // bytes per row; 0 means Width*3
-	Format uint32 // 1 = BGR24, 2 = RGB24
+	Format uint32 // FormatBGR24 or FormatRGB24
 	Pixels []byte
 }
 
@@ -127,6 +169,7 @@ type Client struct {
 	mu       sync.Mutex // serialises requests and idle-timer decisions
 	proc     *proc
 	lastUsed time.Time
+	closed   bool // set by Close; a closed client must not spawn an unreaped child
 
 	nextID atomic.Uint32
 
@@ -209,8 +252,17 @@ func (c *Client) Extract(ctx context.Context, f Frame) ([]float32, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.closed {
+		// Spawning here would leak a child that no reaper is left to retire.
+		return nil, fmt.Errorf("%w: client is closed", ErrInternal)
+	}
+
 	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
+	for range extractAttempts {
+		if err := ctx.Err(); err != nil {
+			return nil, callerGone(err)
+		}
+
 		p, err := c.ensureProcess(ctx)
 		if err != nil {
 			return nil, err
@@ -223,11 +275,16 @@ func (c *Client) Extract(ctx context.Context, f Frame) ([]float32, error) {
 		}
 		lastErr = err
 
-		// The child is in an unknown state: a half-written frame or an unread reply
-		// would poison the next request. Both are unrecoverable in-process.
-		c.discardLocked(p, "request failed")
+		// Only a desynced stream needs a fresh process. A frame-level verdict means the
+		// child answered correctly and is still healthy; killing it there would charge
+		// the next frame another cold start.
+		if errors.Is(err, errProtocolDesync) || errors.Is(err, errCallerCancelled) {
+			c.discardLocked(p, "protocol desync")
+		}
 
-		if !errors.Is(err, ErrInternal) {
+		// Retry once, and only for host-side failures. A cancelled caller is never
+		// retried: the replacement child would be killed the moment it started.
+		if !errors.Is(err, ErrInternal) || errors.Is(err, errCallerCancelled) {
 			return nil, err
 		}
 	}
@@ -236,6 +293,7 @@ func (c *Client) Extract(ctx context.Context, f Frame) ([]float32, error) {
 
 // Close retires the provider process and stops the idle reaper. It is safe to call
 // twice and safe to call while a request is in flight (the request finishes first).
+// After Close, Extract fails instead of spawning a child that nothing would reclaim.
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.reaperStop)
@@ -243,6 +301,7 @@ func (c *Client) Close() error {
 	})
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.closed = true
 	if c.proc != nil {
 		c.discardLocked(c.proc, "client closed")
 	}
@@ -311,6 +370,8 @@ func (c *Client) spawn(entry string, finger fileFingerprint) (*proc, error) {
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		// Nothing owns stdin yet: without this close the fd outlives the spawn attempt.
+		_ = stdin.Close()
 		return nil, fmt.Errorf("%w: stdout pipe: %v", ErrInternal, err)
 	}
 	// stderr is inherited on purpose: package logs go to the host's stderr already
@@ -320,7 +381,7 @@ func (c *Client) spawn(entry string, finger fileFingerprint) (*proc, error) {
 
 	pinned, err := algorunner.StartPinned(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("%w: start provider: %v", ErrUnsupported, err)
+		return nil, startFailure(err)
 	}
 
 	c.log.Info("started face feature provider process",
@@ -351,8 +412,9 @@ func (c *Client) roundTrip(ctx context.Context, p *proc, f Frame) ([]float32, er
 	})
 	defer stopWatch()
 
+	started := time.Now()
 	if err := writeFrame(p.stdin, requestID, f); err != nil {
-		return nil, fmt.Errorf("%w: write frame: %v", ErrInternal, err)
+		return nil, roundTripFailure(ctx, "write frame", err)
 	}
 
 	line, err := readLineBefore(p.stdout, deadline)
@@ -360,12 +422,41 @@ func (c *Client) roundTrip(ctx context.Context, p *proc, f Frame) ([]float32, er
 		if errors.Is(err, errDeadlineExceeded) {
 			// A hung child still holds the model; only a group kill frees it.
 			_ = p.cmd.KillGroup()
-			return nil, fmt.Errorf("%w: provider timed out after %s", ErrInternal, c.opts.RequestTimeout)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				// The budget came from the caller going away, not from the child stalling.
+				return nil, callerGone(ctxErr)
+			}
+			// Report the wait that actually elapsed: the budget may have come from the
+			// caller's context, not from RequestTimeout.
+			return nil, fmt.Errorf(
+				"%w: %w: provider did not answer within %s (configured budget %s)",
+				ErrInternal,
+				errProtocolDesync,
+				time.Since(started).Round(time.Millisecond),
+				c.opts.RequestTimeout,
+			)
 		}
-		return nil, fmt.Errorf("%w: read reply: %v", ErrInternal, err)
+		return nil, roundTripFailure(ctx, "read reply", err)
 	}
 
 	return parseReply(line, requestID)
+}
+
+// roundTripFailure classifies a transport-level failure. A caller that went away is
+// reported as such — never retried, never blamed on the package — while every other
+// transport error means the stream is no longer trustworthy.
+func roundTripFailure(ctx context.Context, stage string, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return callerGone(ctxErr)
+	}
+	return fmt.Errorf("%w: %w: %s: %v", ErrInternal, errProtocolDesync, stage, err)
+}
+
+// callerGone wraps the caller's cancellation. The result still satisfies
+// errors.Is(err, ErrInternal), so the HTTP layer keeps its 500 contract, but it
+// carries errCallerCancelled so Extract knows a retry would be pure waste.
+func callerGone(err error) error {
+	return fmt.Errorf("%w: %w: %v", ErrInternal, errCallerCancelled, err)
 }
 
 // discardLocked kills and reaps p, then forgets it. The lock must be held so no
@@ -377,10 +468,23 @@ func (c *Client) discardLocked(p *proc, reason string) {
 	if err := p.stdin.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
 		c.log.Debug("close provider stdin", zap.Error(err))
 	}
-	if err := p.cmd.KillGroup(); err != nil {
-		c.log.Warn("kill provider process group", zap.Int("pid", p.cmd.PID()), zap.Error(err))
+	// Never signal a process that Done already reported as reaped: its pid is free for
+	// reuse, so kill(-pid) would hit whatever process group inherited the number.
+	select {
+	case <-p.cmd.Done():
+	default:
+		if err := p.cmd.KillGroup(); err != nil {
+			c.log.Warn("kill provider process group", zap.Int("pid", p.cmd.PID()), zap.Error(err))
+		}
 	}
-	<-p.cmd.Done()
+	// SIGKILL cannot be blocked, so this normally returns at once. The timeout exists
+	// so a kill that never lands cannot wedge the client forever while it holds the
+	// request mutex.
+	select {
+	case <-p.cmd.Done():
+	case <-time.After(reapTimeout):
+		c.log.Error("provider process did not exit after SIGKILL", zap.Int("pid", p.cmd.PID()))
+	}
 	c.log.Info("retired face feature provider process",
 		zap.Int("pid", p.cmd.PID()),
 		zap.String("reason", reason),
@@ -418,11 +522,18 @@ func (c *Client) reapIdleLoop() {
 	}
 }
 
-var errDeadlineExceeded = errors.New("read deadline exceeded")
+var (
+	errDeadlineExceeded = errors.New("read deadline exceeded")
+	errReplyTooLong     = errors.New("provider reply line exceeds the protocol limit")
+)
 
 // readLineBefore reads one '\n'-terminated protocol line, honouring a wall-clock
-// deadline. The pipe is pollable, so SetReadDeadline gives us an interruptible read
-// without a watchdog goroutine that could outlive the request.
+// deadline.
+//
+// The read runs on a helper goroutine because there is no fd-level deadline to lean
+// on: a bufio.Reader over an os.Pipe cannot be interrupted, and bufio.Reader has no
+// SetReadDeadline. On the deadline path the goroutine stays blocked only until
+// roundTrip kills the process group, which closes the pipe and releases it.
 func readLineBefore(reader *bufio.Reader, deadline time.Time) (string, error) {
 	type result struct {
 		line string
@@ -430,7 +541,7 @@ func readLineBefore(reader *bufio.Reader, deadline time.Time) (string, error) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		line, err := reader.ReadString('\n')
+		line, err := readReplyLine(reader, maxReplyLineBytes)
 		done <- result{line: line, err: err}
 	}()
 
@@ -439,15 +550,51 @@ func readLineBefore(reader *bufio.Reader, deadline time.Time) (string, error) {
 
 	select {
 	case r := <-done:
-		if r.err != nil && !errors.Is(r.err, io.EOF) {
-			return "", r.err
-		}
+		// A partial line (io.EOF before '\n') is a desync, not a reply: parsing it
+		// would be one byte away from trusting a truncated vector.
 		if r.err != nil {
 			return "", r.err
 		}
 		return r.line, nil
 	case <-timer.C:
 		return "", errDeadlineExceeded
+	}
+}
+
+// readReplyLine reads one line, refusing to grow past limit: a runaway provider must
+// not be able to exhaust host memory with a single unbounded line.
+func readReplyLine(reader *bufio.Reader, limit int) (string, error) {
+	line := make([]byte, 0, 256)
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		line = append(line, chunk...)
+		if len(line) > limit {
+			return "", errReplyTooLong
+		}
+		if err == nil {
+			// Trim both terminators: a provider that emits CRLF must not make us fail on
+			// a stray '\r', which would be our parser's problem, not its bug.
+			return string(bytes.TrimRight(line, "\r\n")), nil
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return "", err
+		}
+	}
+}
+
+// startFailure keeps "this package cannot be run" (missing, not executable, no
+// permission) apart from "the spawn failed for a transient reason" — ETXTBSY while a
+// package is being replaced in place, or EAGAIN under load. Reporting the second as
+// ErrUnsupported would send operators looking for a capability bug that does not
+// exist: the package is fine, it is just being written to right now.
+func startFailure(err error) error {
+	switch {
+	case errors.Is(err, fs.ErrNotExist),
+		errors.Is(err, fs.ErrPermission),
+		errors.Is(err, syscall.ENOEXEC):
+		return fmt.Errorf("%w: start provider: %v", ErrEntry, err)
+	default:
+		return fmt.Errorf("%w: start provider: %v", ErrInternal, err)
 	}
 }
 
@@ -484,30 +631,40 @@ type reply struct {
 }
 
 func parseReply(line string, wantRequestID uint32) ([]float32, error) {
-	trimmed := bytes.TrimSpace([]byte(line))
-	if len(trimmed) == 0 || trimmed[0] != '{' {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || trimmed[0] != '{' {
 		// Anything else is either a stray log line or garbage. Treating it as a
-		// protocol error (retryable) is the only safe reading: a silent skip could
-		// pair this request with the *next* answer.
-		return nil, fmt.Errorf("%w: provider wrote a non-JSON line on stdout: %.120q", ErrInternal, string(trimmed))
+		// desync (retryable, and the child is replaced) is the only safe reading: a
+		// silent skip could pair this request with the *next* answer.
+		return nil, fmt.Errorf("%w: %w: provider wrote a non-JSON line on stdout: %.120q",
+			ErrInternal, errProtocolDesync, trimmed)
 	}
 	var r reply
-	if err := json.Unmarshal(trimmed, &r); err != nil {
-		return nil, fmt.Errorf("%w: decode provider reply: %v", ErrInternal, err)
+	if err := json.Unmarshal([]byte(trimmed), &r); err != nil {
+		return nil, fmt.Errorf("%w: %w: decode provider reply: %v", ErrInternal, errProtocolDesync, err)
 	}
 	if r.RequestID != wantRequestID {
 		// Mismatched ids mean the stream is out of step; attaching these features to
 		// this request would store someone else's embedding.
-		return nil, fmt.Errorf("%w: reply request_id %d does not match request %d", ErrInternal, r.RequestID, wantRequestID)
+		return nil, fmt.Errorf("%w: %w: reply request_id %d does not match request %d",
+			ErrInternal, errProtocolDesync, r.RequestID, wantRequestID)
 	}
 	if r.Status != "passed" {
-		if r.Error != "" {
-			return nil, failureForCode(r.Code, r.Error)
+		// A reply that echoes our id is in sync: the child answered this request. The
+		// code decides what to tell the caller, never whether the child is replaced —
+		// a "no face" verdict must leave the hot process alone.
+		detail := r.Error
+		if detail == "" {
+			detail = r.Status
 		}
-		return nil, failureForCode(r.Code, r.Status)
+		return nil, failureForCode(r.Code, detail)
 	}
 	if r.FeatureDim == 0 || r.FeatureDim > maxFeatureDim || len(r.Features) != int(r.FeatureDim) {
-		return nil, fmt.Errorf("%w: provider returned feature_dim=%d with %d values", ErrInternal, r.FeatureDim, len(r.Features))
+		// "passed" with an unusable dimension is a fake success: the child is in sync
+		// but produced something the gallery cannot store, so replace it rather than
+		// trust the next answer.
+		return nil, fmt.Errorf("%w: %w: provider returned feature_dim=%d with %d values",
+			ErrInternal, errProtocolDesync, r.FeatureDim, len(r.Features))
 	}
 	return r.Features, nil
 }
