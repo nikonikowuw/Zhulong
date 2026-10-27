@@ -802,16 +802,16 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
 
 ## 阶段 5：孤儿认亲适配
 
-- [ ] **5.1** 按 `design.md` §6.2 改 `internal/algorunner/orphan_linux.go:201-241`：
+- [x] **5.1** 按 `design.md` §6.2 改 `internal/algorunner/orphan_linux.go:201-241`：
       - `findOrphanCandidates` 增加 `algorithmsDir` 入参：逐 pid 读 `cmdline` 后，再 `readlink /proc/<pid>/exe`；
       - 唯一认亲条件为 `/proc/<pid>/exe` 严格落在当前实例 `algorithmsDir` 下，不再通过统一 `runnerBase` 接受旧 runner；
       - `exe` 先 `TrimSuffix(" (deleted)")`；`algorithmsDir` 先 `filepath.Abs` + `EvalSymlinks`，再用 `filepath.Rel` + `escapesInstallRoot` 判严格后代；
       - `parentIsReaper` 必要条件**原样保留**——它在 `ReapOrphanRunners` 主循环（`:96-101`），不在 `findOrphanCandidates` 里，两处都要顾到；
       - `readlink` / `cmdline` 的 `EACCES`、`ENOENT` 静默跳过；
       - **不得**新增「broker 目录归属」判据或退化为「父进程不是我」式反向判定。
-- [ ] **5.1b** `ReapOrphanRunners` 签名加 `algorithmsDir string`；调用侧 `internal/algorithm/module.go:119` 的 `algorithmLifecycleImpl` 增一个字段（取 `rt.AlgorithmsDir`），`algorunner` 不反向 import。
+- [x] **5.1b** `ReapOrphanRunners` 签名加 `algorithmsDir string`；调用侧 `internal/algorithm/module.go:119` 的 `algorithmLifecycleImpl` 增一个字段（取 `rt.AlgorithmsDir`），`algorunner` 不反向 import。
 
-- [ ] **5.2** 单测（`orphan_linux_test.go`）：
+- [x] **5.2** 单测（`orphan_linux_test.go`）：
       - 新形态孤儿：`writeFakeRunner` 产出的副本放进临时 `algorithmsDir`、被 init 收养 → 被回收；
       - **本实例之外**的同名可执行文件（另一个 `algorithmsDir`）被 init 收养 → **不被触碰**；
       - 活宿主监督的进程 → 不被触碰；
@@ -819,13 +819,36 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       - 现有 `TestReapOrphanRunners_KillsReparentedRunner`、`TestReapOrphanRunners_NeverKillsSupervisedRunner`、`TestReapOrphanRunners_SkipsCleanupWhenLockIsBusy`、`TestRemoveUnheldShmSegments_*` 仍通过。
       > 实况提醒：`writeFakeRunner` 把 `/bin/sleep` 拷到 `t.TempDir()` 并 exec，故 `/proc/<pid>/exe` 指向该副本；测试需把副本放进临时 `algorithmsDir` 并传入该目录。
 
-- [ ] **5.3** 验证：
+- [x] **5.3** 验证：
       ```bash
       python3 native/scripts/build.py go test -race ./internal/algorunner -run 'TestReapOrphan'
       python3 native/scripts/build.py go test -race ./internal/algorunner -run 'TestRemove'
       ```
 
 **Review gate 5**：AC5 全部用例通过。**rollback = revert 本阶段 commit。**
+
+**5.x 实施记录（2026-10-27）**
+
+落到代码里的认亲条件是 **`/proc/<pid>/exe`**，不是 argv[0]：
+
+- `argv[0]` 是父进程随便传的，`bash -c 'exec -a <包入口> /bin/sleep 300'` 一行就能伪造 ——
+  按它杀人等于给了任意进程一道「冒充即被杀」的后门。`/proc/<pid>/exe` 是内核给的、不可伪造；
+- 升级期 `exe` 会带 `" (deleted)"` 后缀（原地替换可执行文件时），先 `TrimSuffix` 再判；
+- `algorithmsDir` 先 `Abs` 再 `EvalSymlinks`：`exe` 本身已是符号链接解引用后的绝对路径，
+  根目录不解析的话，「数据目录经软链/绑定挂载」的部署会让清扫静默失效；
+- `readlink` 的 `EACCES` / `ENOENT` 静默跳过（别的用户的进程、扫描途中退出的进程）；
+- `cmdline` 读失败不再是「跳过」的理由：可执行文件是我们的就仍是候选，只是没有 broker 记账。
+
+新增两个用例把这件事钉死（**互相镜像，缺一个就等于没测**）：
+
+| 用例 | 场景 | 断言 |
+| :--- | :--- | :--- |
+| `IgnoresForgedArgv0` | `/bin/sleep` 带伪造的包入口 argv[0]，被 init 收养 | 不被杀，**且仍在运行**（否则「没杀」可能只是「没起来」） |
+| `KillsEntryEvenWithOddArgv0` | 真包入口以随便的 argv[0] 启动，被 init 收养 | 被回收 |
+
+⚠️ 写这两个用例时踩到一个坑：Debian 的 `/bin/sh` 是 dash，**不支持 `exec -a`**，用它启动会
+直接失败，测试变成「什么都没启动、也没杀任何人」的空绿灯。必须用 `/bin/bash`，并且加一条
+「进程真的活着」的前置断言。
 
 ---
 

@@ -147,6 +147,35 @@ ok  	github.com/nikonikowuw/Zhulong/internal/engine	1.728s
 
 *注意*：RKNN 板端在硬件上的冷启动与模型加载时长在本机无法测量，显式标记为「**未测**」，由后续板端联调记录。
 
+### 3.3 板端实测（2026-10-27，RK3568 实机，补上「未测」）
+
+**硬件/软件基线**（`ssh rk3568`）：
+
+```text
+Linux linaro-alip 5.10.226 aarch64      Debian 11.11
+librknnrt.so 2.3.2 (429f97ae6b@2025-04-09)   librockchip_mpp.so.1 / librga.so.2
+/dev/mpp_service, /dev/dri/renderD128|129     内存 1953MB，温度 46°C（连续推理后）
+```
+
+**做法**：交叉构建 aarch64 SDK 前缀 → 前缀与 `packages/face_recognition/rk3568/` 一起拷到板端 →
+**在板子上用板子自己的 g++ 10.2 编译包**（`make SDK_PREFIX=/tmp/sdk-rk3568`）。这比交叉编译包更强：
+顺带证明 SDK 前缀在真设备上可用，且不需要宿主机工具链参与。
+
+| 项 | 结果 |
+| :--- | :--- |
+| 包编译（板端 g++ 10.2 / cmake 3.25） | 通过（`face_recognition` + `face_recognition_devtest`，链接 GCC-14 交叉构建的 `.a` 无缺符号） |
+| `make test`（sample.jpg → result.jpg） | **5 人 / 5 脸**，`cost_ms ≈ 246`（对比 x86 ONNX 130ms） |
+| `--verify --sample <ppm>` | `{"status":"passed","sample_decoded":true,"width":640,"height":443,"result_type":3,"count":5}` |
+| `--extract-feature`（三帧） | 512 维、`norm=1.000000`；两帧同图向量一致；全黑帧 `NO_FACE_DETECTED` 且**进程不退出** |
+| `--broker /tmp/nope.sock` | `{"status":"failed","stage":"args",...}` exit 5（拒绝非法 socket 路径） |
+| AC1 黑盒判据 | `nm -D --undefined-only \| grep -c zhulong` = **0**；`nm -D \| grep -c zhulong` = **0**；`ldd \| grep -ci zhulong` = **0** |
+| 符号门禁 `check_plugin_symbols.py --entry` | 通过（不导出任何插件 C ABI） |
+| NPU 真的在算 | 连续 3 次推理后 `/sys/kernel/debug/rknpu/load` = **18%**（CPU 回退不会有这个读数） |
+
+⚠️ **跨平台特征不可混用**：同一张脸，onnx 档位向量 head 为 `[0.041, 0.011, 0.083]`，
+rk3568 档位为 `[0.026, -0.062, 0.055]`。权重不同 → 度量空间不同。`[person].extractor_algorithm`
+必须指向**与流式识别同平台**的人脸包，否则底库登记与识别永远匹配不上（且没有任何报错）。
+
 ---
 
 ## 4. 算法包构建寄生现状基线（0.5 / AC16 对照）

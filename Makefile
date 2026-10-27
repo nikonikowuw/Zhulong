@@ -23,7 +23,7 @@ BINARY := $(BUILD_DIR)/Zhulong
 SWAG_VERSION := v1.16.6
 AIR ?= $(shell command -v air 2>/dev/null || (test -x "$$(go env GOPATH 2>/dev/null)/bin/air" && echo "$$(go env GOPATH)/bin/air") || echo air)
 
-.PHONY: all build go-build check frontend-install frontend-build frontend-check native-deps native-configure native-build native-test native-cross-build sdk-install sdk-dist sdk-clean-check api-docs go-check smoke run web-dev dev-backend dev-frontend dev
+.PHONY: all build go-build check frontend-install frontend-build frontend-check native-deps native-configure native-build native-test native-cross-build sdk-install sdk-dist sdk-clean-check board-check api-docs go-check smoke run web-dev dev-backend dev-frontend dev
 
 all: build
 
@@ -107,6 +107,13 @@ sdk-dist:
 	mkdir -p "$(SDK_DIST_DIR)"; \
 	tar -czf "$(SDK_DIST_DIR)/$${name}.tar.gz" -C "$(SDK_PREFIX)" .; \
 	echo "[✓] $(SDK_DIST_DIR)/$${name}.tar.gz"
+
+# 板端验收：交叉产 aarch64 前缀 → 拷到板上 → **在板上用自己的编译器构建** → 自测/验包/协议自查。
+# 需要能 `ssh $(BOARD_HOST)`；不进 make check（要真实硬件）。
+BOARD_HOST ?= rk3568
+
+board-check:
+	BOARD_HOST=$(BOARD_HOST) native/scripts/board_check.sh
 
 # 干净容器验收：只挂 SDK 前缀 + 包目录，在 debian 里从零构建、自测、自查协议。
 # 这是「算法包能脱离仓库独立开发」的**唯一**可信证据；不进 make check（要联网 apt + docker）。

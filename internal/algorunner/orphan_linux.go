@@ -81,6 +81,12 @@ func ReapOrphanRunners(ctx context.Context, algorithmsDir string, logger *zap.Lo
 	if err != nil || algorithmsDir == "" || algorithmsDir == "." {
 		return report, fmt.Errorf("orphan sweep: algorithms directory %q is unusable", algorithmsDir)
 	}
+	// /proc/<pid>/exe is already symlink-free, so the root must be too — otherwise a
+	// data directory reached through a symlink (bind mount, relocated volume) never
+	// matches and the sweep silently stops working.
+	if resolved, evalErr := filepath.EvalSymlinks(root); evalErr == nil {
+		root = resolved
+	}
 
 	candidates, err := findOrphanCandidates(root)
 	if err != nil {
@@ -195,7 +201,7 @@ type orphanCandidate struct {
 	algorithmID string
 }
 
-// isPackageEntryPath reports whether argv0 is `<algorithmsRoot>/<id>/<version>/<id>`,
+// isPackageEntryPath reports whether exePath is `<algorithmsRoot>/<id>/<version>/<id>`,
 // i.e. a package process this host could have started.
 //
 // Matching on the *shape* rather than on a basename is what makes the sweep work
@@ -203,11 +209,11 @@ type orphanCandidate struct {
 // runner name left to compare against, but the install layout is fixed. The
 // trailing component must equal the id component, so an unrelated binary placed
 // under the version directory is not mistaken for the package.
-func isPackageEntryPath(argv0, algorithmsRoot string) bool {
-	if argv0 == "" || !filepath.IsAbs(argv0) {
+func isPackageEntryPath(exePath, algorithmsRoot string) bool {
+	if exePath == "" || !filepath.IsAbs(exePath) {
 		return false
 	}
-	rel, err := filepath.Rel(algorithmsRoot, filepath.Clean(argv0))
+	rel, err := filepath.Rel(algorithmsRoot, filepath.Clean(exePath))
 	if err != nil {
 		return false
 	}
@@ -218,8 +224,26 @@ func isPackageEntryPath(argv0, algorithmsRoot string) bool {
 	return parts[0] != "." && parts[0] != ".." && parts[0] == parts[2]
 }
 
-// findOrphanCandidates lists processes whose argv[0] is a package entry
-// executable inside algorithmsRoot. No liveness judgement happens here; callers
+// readExePath resolves /proc/<pid>/exe to an absolute path.
+//
+// This — not argv[0] — is the identity of a running process: argv[0] is whatever
+// the parent passed, so `exec -a <package entry> /bin/sleep 300` forges it
+// trivially. Killing on a forged argv[0] would be an arbitrary-process kill.
+//
+// The kernel appends " (deleted)" once the executable has been replaced or
+// removed (a package upgrade in place does exactly that); stripping it keeps a
+// legitimately orphaned package process recognizable.
+func readExePath(pid int) (string, error) {
+	target, err := os.Readlink(filepath.Join(procRoot, strconv.Itoa(pid), "exe"))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(target, " (deleted)"), nil
+}
+
+// findOrphanCandidates lists processes whose *executable* is a package entry
+// inside algorithmsRoot. argv is still read, but only for `--broker` /
+// `--algorithm-id` bookkeeping. No liveness judgement happens here; callers
 // decide.
 func findOrphanCandidates(algorithmsRoot string) ([]orphanCandidate, error) {
 	entries, err := os.ReadDir(procRoot)
@@ -237,12 +261,20 @@ func findOrphanCandidates(algorithmsRoot string) ([]orphanCandidate, error) {
 		if convErr != nil || pid <= 0 || pid == self {
 			continue
 		}
-		argv, readErr := readCmdline(pid)
-		if readErr != nil || len(argv) == 0 {
+		exePath, exeErr := readExePath(pid)
+		if exeErr != nil {
+			// EACCES (another user's process), ENOENT (exited mid-scan): nothing to
+			// judge, and guessing from argv[0] is exactly what we refuse to do.
 			continue
 		}
-		if !isPackageEntryPath(argv[0], algorithmsRoot) {
+		if !isPackageEntryPath(exePath, algorithmsRoot) {
 			continue
+		}
+		argv, readErr := readCmdline(pid)
+		if readErr != nil {
+			// The executable is ours but the arguments are gone; still a candidate,
+			// just without broker bookkeeping.
+			argv = nil
 		}
 
 		cand := orphanCandidate{PID: pid}

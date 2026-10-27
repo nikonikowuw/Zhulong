@@ -29,8 +29,9 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
   交叉**只允许编译，不允许执行测试**。
 - 收工前过 `make check`（前端 lint/type-check/test + native-test + api-docs + go-check）。
 - 算法包/SDK 相关：`make sdk-install BUNDLE_RUNTIME=1`（前缀）、`make sdk-dist`（分发 tarball）、
-  `make sdk-clean-check`（干净容器里从零构建两个包 + 脚手架 round-trip；要 docker 与网络，
-  **不进** `make check`）。
+  `make sdk-clean-check`（干净容器里从零构建两个包 + 脚手架 round-trip）、
+  `make board-check`（交叉产 aarch64 前缀后在 RK3568 上构建/自测/验包）。后两者分别要
+  docker+网络、真实硬件，**都不进** `make check`。
 
 ## 架构边界速查
 

@@ -81,6 +81,46 @@ func copyBinary(t *testing.T, src, dst string) {
 	}
 }
 
+// startReparentedWithArgv0 launches binary with an arbitrary argv[0], detaches it
+// so it is reparented to init, and returns its pid.
+//
+// ⚠️ 必须用 bash 而不是 /bin/sh：Debian 的 dash 不支持 `exec -a`，用 sh 时命令会直接
+//
+//	失败，测试就变成「什么都没启动、也没杀任何人」的空断言（绿灯但没验证任何东西）。
+func startReparentedWithArgv0(t *testing.T, binary, argv0 string, args ...string) int {
+	t.Helper()
+	if _, err := os.Stat("/bin/bash"); err != nil {
+		t.Skip("bash is required for `exec -a` (dash does not support it)")
+	}
+	quoted := make([]string, 0, len(args)+2)
+	quoted = append(quoted, shellQuote(binary), shellQuote(argv0))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	script := "exec -a " + quoted[1] + " " + quoted[0] + " " + strings.Join(quoted[2:], " ")
+	cmd := exec.Command("/bin/bash", "-c", script+" >/dev/null 2>&1 & echo $!")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("launch with forged argv0: %v", err)
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(out)))
+	if convErr != nil || pid <= 0 {
+		t.Fatalf("captured pid %q is not a pid: %v", strings.TrimSpace(string(out)), convErr)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	waitForReparent(t, pid)
+	// 断言它真的活着：否则「没被误杀」可能只是「没启动」。
+	if processGoneOrZombie(pid) {
+		t.Fatalf("process %d exited before the sweep; the assertion would be vacuous", pid)
+	}
+	return pid
+}
+
+// shellQuote wraps a string in single quotes for /bin/sh.
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
 func TestReapOrphanRunners_KillsReparentedRunner(t *testing.T) {
 	root, entry := installFakePackage(t, "reparented_pkg")
 	pid := startReparentedRunner(t, entry)
@@ -220,6 +260,50 @@ func TestReapOrphanRunners_IgnoresBinariesOutsideInstallRoot(t *testing.T) {
 	}
 	if len(report.Killed) != 0 {
 		t.Fatalf("sweep touched an unrelated process: %v", report.Killed)
+	}
+}
+
+func TestReapOrphanRunners_IgnoresForgedArgv0(t *testing.T) {
+	root, entry := installFakePackage(t, "argv0_pkg")
+	_ = entry
+
+	// argv[0] is whatever the parent passed: `exec -a` forges it in one line. The
+	// sweep must identify a package process by its executable, otherwise anyone
+	// running a binary with a package-shaped argv[0] gets killed.
+	forged := filepath.Join(root, "argv0_pkg", "1.0.0", "argv0_pkg")
+	pid := startReparentedWithArgv0(t, "/bin/sleep", forged, "300")
+
+	report, err := ReapOrphanRunners(context.Background(), root, zap.NewNop())
+	if err != nil {
+		t.Fatalf("ReapOrphanRunners returned error: %v", err)
+	}
+	if len(report.Killed) != 0 {
+		t.Fatalf("sweep killed a process on a forged argv[0]: %v", report.Killed)
+	}
+	// 「没被误杀」必须配上「它还活着」，否则测试在进程没起来时也会绿。
+	// 注意：它压根不该成为候选，所以断言的是「不在 Killed 里且仍在运行」，
+	// 而不是「出现在 Skipped 里」——Skipped 表示「是我们的进程但有活着的监管者」。
+	if processGoneOrZombie(pid) {
+		t.Fatalf("forged-argv0 process %d is gone; the sweep may have killed it", pid)
+	}
+}
+
+func TestReapOrphanRunners_KillsEntryEvenWithOddArgv0(t *testing.T) {
+	root, entry := installFakePackage(t, "odd_argv0_pkg")
+
+	// The mirror image: a real package entry started with an arbitrary argv[0].
+	// Its executable is what the host started, so it must still be reaped.
+	pid := startReparentedWithArgv0(t, entry, "not-a-package-name", "300")
+
+	report, err := ReapOrphanRunners(context.Background(), root, zap.NewNop())
+	if err != nil {
+		t.Fatalf("ReapOrphanRunners returned error: %v", err)
+	}
+	if len(report.Killed) != 1 || report.Killed[0] != pid {
+		t.Fatalf("killed pids = %v, want exactly [%d]", report.Killed, pid)
+	}
+	if !processGoneOrZombie(pid) {
+		t.Fatalf("orphan package process %d is still running after the sweep", pid)
 	}
 }
 

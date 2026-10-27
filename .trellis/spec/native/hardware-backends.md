@@ -411,5 +411,23 @@ python3 native/scripts/build.py --profile native/profiles/rk3568-stub.json build
 scp build/native/cross-rk3568-stub/ZhulongJpegEncoderTests rk3568:/tmp/
 ssh rk3568 "/tmp/ZhulongJpegEncoderTests"                      # 无环境变量 = auto，应报 mpp
 ssh rk3568 "ZHULONG_JPEG_BACKEND=cpu /tmp/ZhulongJpegEncoderTests"  # 强制软编对照组
+
+# 7. 算法包板端验收（rk3568 档位）：交叉只产前缀，**包在板上用自己的编译器构建**
+make board-check                                  # = native/scripts/board_check.sh
+make board-check BOARD_HOST=<ssh 主机别名>
 ```
+
+第 7 条的做法与理由：宿主机只用交叉工具链产 aarch64 SDK 前缀（`libZhulongAlgoRuntime.a` /
+`libzhulong_algo_sdk.a`），然后把前缀与包目录同步到板子，**在板上 `make SDK_PREFIX=…`**。
+这比「交叉编译包再拷二进制」更强：
+
+- 顺带证明 SDK 前缀在真设备上可用（头/库/CMake 变量齐全），第三方用自家 BSP 工具链走的是同一条路；
+- 少一层 toolchain 传递，出错时不必分辨是包的问题还是工具链的问题。
+
+实测基线（RK3568 / Debian 11.11 / librknnrt 2.3.2）：`make test` 5 人 5 脸、`cost_ms ≈ 246`；
+`--verify` `sample_decoded=true, count=5`；`--extract-feature` 512 维 `norm=1.000000`；
+`nm -D` 里 `zhulong` 符号数 0；连续推理后 `/sys/kernel/debug/rknpu/load` 有非零读数（NPU 真在算）。
+
+⚠️ **跨平台特征不可混用**：同一张脸在不同档位的向量属于不同度量空间（权重不同）。底库登记用的
+`[person].extractor_algorithm` 必须与流式识别指向**同平台**的人脸包，否则永远匹配不上且无任何报错。
 

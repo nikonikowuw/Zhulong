@@ -158,6 +158,10 @@ make sdk-clean-check                  # 只挂前缀 + 包目录，在 debian �
 5. `algo_probe.py --all`：`--verify` 断言 `status=passed` 且 `sample_decoded=true`；
    `--extract-feature` 断言 512 维且 L2 范数 ≈ 1（非人脸包如实 `UNSUPPORTED` 记 `SKIPPED`）。
 
+设备档位（`rk3568/`）走另一条更硬的路径：`make board-check`（交叉只产 aarch64 SDK 前缀，
+**包在板上用板自己的编译器构建**），细节与实测基线见
+[硬件加速后端规范 §板端验证](../native/hardware-backends.md)。
+
 ⚠️ **镜像基线必须 ≥ 开发机那一代发行版**：前缀里的静态运行库与 bundled onnxruntime 是开发机
 编译的二进制，符号版本不向下兼容。老镜像上报 `undefined reference to __isoc23_strtol@GLIBC_2.38`
 是镜像太旧，不是包的问题。
