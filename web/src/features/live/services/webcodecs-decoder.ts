@@ -116,6 +116,11 @@ export function logWebCodecsDiagnostic(
   sink(message, details)
 }
 
+export type WebCodecsSupportIssue =
+  | 'insecure_context'
+  | 'unsupported_browser'
+  | null
+
 export function isWebCodecsSupported(): boolean {
   return (
     typeof window !== 'undefined' &&
@@ -124,6 +129,22 @@ export function isWebCodecsSupported(): boolean {
     typeof (window as unknown as { EncodedVideoChunk?: unknown })
       .EncodedVideoChunk !== 'undefined'
   )
+}
+
+/**
+ * 诊断 WebCodecs 不可用原因。
+ *
+ * 若返回 'insecure_context'，说明当前运行在非安全上下文（如局域网明文 HTTP），
+ * 浏览器因此隐藏了 WebCodecs API；可通过开启 HTTPS 或白名单解决。
+ */
+export function getWebCodecsSupportIssue(): WebCodecsSupportIssue {
+  if (isWebCodecsSupported()) {
+    return null
+  }
+  if (typeof window !== 'undefined' && window.isSecureContext === false) {
+    return 'insecure_context'
+  }
+  return 'unsupported_browser'
 }
 
 /**
@@ -224,7 +245,7 @@ export function extractH265Codec(payload: Uint8Array): string {
 type FrameOutputCallback = (frame: VideoFrame) => void
 type DecoderErrorCallback = (error: DOMException | Error) => void
 
-interface StreamDecoderOptions {
+export interface StreamDecoderOptions {
   onFrame: FrameOutputCallback
   onError?: DecoderErrorCallback
 }

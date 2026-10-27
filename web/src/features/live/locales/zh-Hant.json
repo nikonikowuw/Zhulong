@@ -67,6 +67,11 @@
     "waitingFirstFrame": "等待首幀渲染...",
     "connecting": "連線視訊串流...",
     "unsupported": "目前環境不支援硬體加速解碼 (WebCodecs)",
+    "insecureContextTitle": "WebCodecs 需要安全上下文 (HTTPS)",
+    "insecureContextDesc": "目前透過區域網路 HTTP 存取，瀏覽器安全策略已停用 GPU 硬體加速。服務已內建自我簽署憑證，建議切換至 HTTPS 存取開啟硬解。",
+    "insecureContextAction": "切換至 HTTPS 存取",
+    "unsupportedBrowserTitle": "WebCodecs 硬體加速無法使用",
+    "unsupportedBrowserDesc": "請使用 Chromium / Safari 現代瀏覽器，並在 localhost 或 HTTPS 安全上下文下存取。",
     "streamUnavailable": "視訊串流無法連線",
     "retry": "重試連線",
     "noCamera": "未指定攝影機"

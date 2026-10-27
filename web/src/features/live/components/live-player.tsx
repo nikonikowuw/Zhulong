@@ -11,7 +11,10 @@ import { useWebCodecsRenderLoop } from '../hooks/use-webcodecs-render-loop'
 import { AIResultService } from '../services/ai-result-service'
 import { drawFaceOverlay } from '../services/face-overlay-renderer'
 import { drawVehicleOverlay } from '../services/vehicle-overlay-renderer'
-import { isWebCodecsSupported } from '../services/webcodecs-decoder'
+import {
+  isWebCodecsSupported,
+  getWebCodecsSupportIssue,
+} from '../services/webcodecs-decoder'
 import {
   type FaceSubItem,
   type VehicleItem,
@@ -261,15 +264,49 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
     )
 
     if (!isSupported) {
+      const supportIssue = getWebCodecsSupportIssue()
+      const isInsecure = supportIssue === 'insecure_context'
+      const handleSwitchHTTPS = () => {
+        if (typeof window !== 'undefined') {
+          const httpsPort = window.location.port
+            ? `:${window.location.port}`
+            : ''
+          window.location.href = `https://${window.location.hostname}${httpsPort}${window.location.pathname}${window.location.search}`
+        }
+      }
+
       return (
         <div
           className={`flex h-full w-full flex-col items-center justify-center bg-black p-4 text-center text-xs text-muted-foreground ${className}`}
         >
-          <p className='font-medium text-amber-400'>WebCodecs 硬件加速不可用</p>
-          <p className='mt-1 text-[11px] text-muted-foreground/70'>
-            请使用 Chromium / Safari 现代浏览器，并在 localhost 或 HTTPS
-            安全上下文下访问。
+          <p className='font-medium text-amber-400'>
+            {isInsecure
+              ? t(
+                  'frame.insecureContextTitle',
+                  'WebCodecs 需要安全上下文 (HTTPS)'
+                )
+              : t('frame.unsupportedBrowserTitle', 'WebCodecs 硬件加速不可用')}
           </p>
+          <p className='mt-1 max-w-md text-[11px] text-muted-foreground/70'>
+            {isInsecure
+              ? t(
+                  'frame.insecureContextDesc',
+                  '当前通过局域网 HTTP 访问，浏览器安全策略已禁用 GPU 硬件加速。服务已内置自签名证书，建议切换至 HTTPS 访问开启硬解。'
+                )
+              : t(
+                  'frame.unsupportedBrowserDesc',
+                  '请使用 Chromium / Safari 现代浏览器，并在 localhost 或 HTTPS 安全上下文下访问。'
+                )}
+          </p>
+          {isInsecure && (
+            <button
+              type='button'
+              onClick={handleSwitchHTTPS}
+              className='mt-3 inline-flex items-center gap-1.5 rounded border border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-400 transition-colors hover:bg-amber-500/20'
+            >
+              {t('frame.insecureContextAction', '切换至 HTTPS 访问')}
+            </button>
+          )}
         </div>
       )
     }

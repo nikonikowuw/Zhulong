@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -352,9 +353,17 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.algorithmReady = true
 	}
 
+	tlsConfig, err := BuildTLSConfig(r.config)
+	if err != nil {
+		return r.failStart(fmt.Errorf("configure TLS listener: %w", err), r.rollback(ctx)...)
+	}
+
 	listener, err := r.listen("tcp", r.server.Addr)
 	if err != nil {
 		return r.failStart(fmt.Errorf("listen on %s: %w", r.server.Addr, err), r.rollback(ctx)...)
+	}
+	if tlsConfig != nil {
+		listener = tls.NewListener(listener, tlsConfig)
 	}
 	r.listener = listener
 	r.serveDone = make(chan error, 1)
@@ -371,7 +380,11 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.levelReload = newLogLevelReloader(r.config.ConfigPath, r.config, r.logLevel, r.logger)
 		r.levelReload.Start()
 	}
-	r.logger.Info("HTTP server started", zap.String("address", listener.Addr().String()))
+	if tlsConfig != nil {
+		r.logger.Info("HTTPS (TLS) server started", zap.String("address", listener.Addr().String()), zap.String("tls_mode", r.config.TLSMode))
+	} else {
+		r.logger.Info("HTTP server started", zap.String("address", listener.Addr().String()))
+	}
 	// One aggregated line, because the per-subsystem warnings above are easy to
 	// lose in a long boot log and nothing else reports a degraded host at boot:
 	// /health names a degraded logger in its components map, but its status stays

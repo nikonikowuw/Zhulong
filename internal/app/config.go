@@ -56,6 +56,29 @@ type Config struct {
 	// package's active version and entry are resolved at call time, so upgrading or
 	// reinstalling the package needs no configuration change.
 	ExtractorAlgorithm string
+	// TLSMode controls whether the HTTP listener is wrapped with TLS.
+	// Valid values are "off" (plain HTTP), "auto" (self-signed cert with local/LAN SANs), and "manual".
+	TLSMode     string
+	TLSCertFile string
+	TLSKeyFile  string
+}
+
+// ValidateTLSConfig ensures the requested TLS mode and certificate paths are valid.
+func ValidateTLSConfig(mode, certFile, keyFile string) error {
+	switch mode {
+	case "", "off", "auto":
+		return nil
+	case "manual":
+		if strings.TrimSpace(certFile) == "" {
+			return errors.New("cert_file must not be empty when tls_mode is manual")
+		}
+		if strings.TrimSpace(keyFile) == "" {
+			return errors.New("key_file must not be empty when tls_mode is manual")
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid tls_mode %q: must be off, auto, or manual", mode)
+	}
 }
 
 func validateHTTPAddress(address string) error {
@@ -124,5 +147,6 @@ func DefaultConfig() Config {
 		},
 		SessionTTL:         24 * time.Hour,
 		ExtractorAlgorithm: "face_recognition",
+		TLSMode:            "off",
 	}
 }

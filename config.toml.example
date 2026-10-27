@@ -3,6 +3,11 @@
 
 [http]
 address = "127.0.0.1:8000"
+# TLS mode: "off" (plain HTTP, default), "auto" (self-signed cert with local/LAN SANs for WebCodecs), or "manual".
+tls_mode = "off"
+# Manual certificate paths (used when tls_mode = "manual")
+cert_file = ""
+key_file = ""
 
 [logging]
 level = "info"

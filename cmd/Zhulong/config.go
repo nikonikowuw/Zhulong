@@ -10,7 +10,10 @@ import (
 
 type fileConfig struct {
 	HTTP struct {
-		Address string `mapstructure:"address"`
+		Address  string `mapstructure:"address"`
+		TLSMode  string `mapstructure:"tls_mode"`
+		CertFile string `mapstructure:"cert_file"`
+		KeyFile  string `mapstructure:"key_file"`
 	} `mapstructure:"http"`
 	Data struct {
 		Directory string `mapstructure:"directory"`
@@ -42,6 +45,9 @@ func loadConfigFile(path string) (app.Config, error) {
 	settings.SetConfigFile(path)
 	settings.SetConfigType("toml")
 	settings.SetDefault("http.address", defaults.HTTPAddress)
+	settings.SetDefault("http.tls_mode", defaults.TLSMode)
+	settings.SetDefault("http.cert_file", "")
+	settings.SetDefault("http.key_file", "")
 	settings.SetDefault("data.directory", defaults.DataDir)
 	settings.SetDefault("person.faces_directory", "")
 	settings.SetDefault("person.require_person_id_for_face_enrollment", false)
@@ -89,8 +95,15 @@ func loadConfigFile(path string) (app.Config, error) {
 		return app.Config{}, fmt.Errorf("resolve configuration path %q: %w", settings.ConfigFileUsed(), err)
 	}
 
+	if err := app.ValidateTLSConfig(values.HTTP.TLSMode, values.HTTP.CertFile, values.HTTP.KeyFile); err != nil {
+		return app.Config{}, fmt.Errorf("decode configuration %q: %w", path, err)
+	}
+
 	return app.Config{
 		HTTPAddress:                  values.HTTP.Address,
+		TLSMode:                      values.HTTP.TLSMode,
+		TLSCertFile:                  values.HTTP.CertFile,
+		TLSKeyFile:                   values.HTTP.KeyFile,
 		DataDir:                      values.Data.Directory,
 		FacesDir:                     facesDir,
 		AlgorithmTarget:              values.Algorithm.Target,

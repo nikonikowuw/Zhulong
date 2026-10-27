@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -990,5 +991,58 @@ func TestGB28181StartFailureIsDegradedNotFatal(t *testing.T) {
 	}
 	if !slices.Contains(events.snapshot(), "gb28181.stop") {
 		t.Fatalf("expected the degraded subsystem to be stopped, got %v", events.snapshot())
+	}
+}
+
+func TestLifecycleRuntimeStartsAutoTLS(t *testing.T) {
+	tempDir := t.TempDir()
+	events := &eventLog{}
+	server := &http.Server{
+		Addr: "127.0.0.1:0",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	}
+	runtime := &lifecycleRuntime{
+		database: databaseStub{events: events},
+		native:   engineStub{events: events},
+		server:   server,
+		logger:   zap.NewNop(),
+		config: Config{
+			TLSMode: "auto",
+			DataDir: tempDir,
+		},
+		listen: func(network, address string) (net.Listener, error) {
+			events.add("http.listen")
+			return net.Listen(network, address)
+		},
+		shutdown: func(ctx context.Context) error {
+			events.add("http.shutdown")
+			return server.Shutdown(ctx)
+		},
+	}
+
+	if err := runtime.Start(context.Background()); err != nil {
+		t.Fatalf("runtime.Start with auto TLS failed: %v", err)
+	}
+	defer func() {
+		_ = runtime.Stop(context.Background())
+	}()
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 3 * time.Second,
+	}
+
+	resp, err := client.Get(fmt.Sprintf("https://%s/", runtime.listener.Addr().String()))
+	if err != nil {
+		t.Fatalf("GET over HTTPS failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected status 204, got %d", resp.StatusCode)
 	}
 }

@@ -155,6 +155,52 @@ func TestLoadConfigRejectsMissingFile(t *testing.T) {
 	}
 }
 
+func TestLoadConfigParsesTLSConfig(t *testing.T) {
+	// 1. Defaults to off
+	path := writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n")
+	got, err := loadConfigFile(path)
+	if err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+	if got.TLSMode != "off" || got.TLSCertFile != "" || got.TLSKeyFile != "" {
+		t.Fatalf("unexpected TLS defaults: %+v", got)
+	}
+
+	// 2. Auto mode
+	path = writeConfig(t, "[http]\naddress = '0.0.0.0:8000'\ntls_mode = 'auto'\n")
+	got, err = loadConfigFile(path)
+	if err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+	if got.TLSMode != "auto" {
+		t.Fatalf("expected tls_mode 'auto', got %q", got.TLSMode)
+	}
+
+	// 3. Manual mode valid
+	path = writeConfig(t, "[http]\naddress = '0.0.0.0:8000'\ntls_mode = 'manual'\ncert_file = '/path/to/cert.pem'\nkey_file = '/path/to/key.pem'\n")
+	got, err = loadConfigFile(path)
+	if err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+	if got.TLSMode != "manual" || got.TLSCertFile != "/path/to/cert.pem" || got.TLSKeyFile != "/path/to/key.pem" {
+		t.Fatalf("unexpected manual TLS config: %+v", got)
+	}
+
+	// 4. Manual mode missing cert_file
+	path = writeConfig(t, "[http]\naddress = '0.0.0.0:8000'\ntls_mode = 'manual'\n")
+	_, err = loadConfigFile(path)
+	if err == nil {
+		t.Fatal("expected error for manual mode without cert_file")
+	}
+
+	// 5. Invalid mode
+	path = writeConfig(t, "[http]\naddress = '0.0.0.0:8000'\ntls_mode = 'invalid_mode'\n")
+	_, err = loadConfigFile(path)
+	if err == nil {
+		t.Fatal("expected error for invalid tls_mode")
+	}
+}
+
 func writeConfig(t *testing.T, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")

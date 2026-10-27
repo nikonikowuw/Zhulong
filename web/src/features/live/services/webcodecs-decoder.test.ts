@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   extractH264Codec,
   extractH265Codec,
+  getWebCodecsSupportIssue,
   isWebCodecsSupported,
   reverseBits32,
   StreamDecoder,
@@ -11,6 +12,10 @@ describe('webcodecs-decoder', () => {
   it('正确检测 WebCodecs 支持环境', () => {
     // 浏览器测试环境中应当返回布尔值
     expect(typeof isWebCodecsSupported()).toBe('boolean')
+    // 在支持环境下 issue 应为 null
+    if (isWebCodecsSupported()) {
+      expect(getWebCodecsSupportIssue()).toBeNull()
+    }
   })
 
   it('从包含 SPS (type 7) 的 H.264 关键帧提取 codec', () => {

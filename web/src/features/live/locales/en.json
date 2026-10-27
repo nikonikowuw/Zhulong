@@ -67,6 +67,11 @@
     "waitingFirstFrame": "Waiting for the first frame...",
     "connecting": "Connecting to the video stream...",
     "unsupported": "Hardware-accelerated decoding (WebCodecs) is unavailable in this environment",
+    "insecureContextTitle": "WebCodecs Requires Secure Context (HTTPS)",
+    "insecureContextDesc": "Accessing via LAN HTTP causes browser security policies to disable GPU hardware acceleration. A built-in self-signed certificate is available—switch to HTTPS to enable it.",
+    "insecureContextAction": "Switch to HTTPS",
+    "unsupportedBrowserTitle": "Hardware-accelerated decoding (WebCodecs) is unavailable",
+    "unsupportedBrowserDesc": "Please use a modern Chromium / Safari browser in localhost or a secure HTTPS context.",
     "streamUnavailable": "Unable to connect to the video stream",
     "retry": "Reconnect",
     "noCamera": "No camera selected"

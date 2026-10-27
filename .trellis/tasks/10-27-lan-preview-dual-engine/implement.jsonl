@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/architecture.md", "reason": "跨层整体架构契约"}
+{"file": ".trellis/spec/backend/host-runtime-contract.md", "reason": "Go 宿主运行时与配置契约"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "前端开发规范与WebCodecs规范"}
+{"file": ".trellis/spec/backend/camera-guidelines.md", "reason": "相机流媒体传输契约"}

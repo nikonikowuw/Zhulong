@@ -67,6 +67,11 @@
     "waitingFirstFrame": "等待首帧渲染...",
     "connecting": "连接视频流...",
     "unsupported": "当前环境不支持硬件加速解码 (WebCodecs)",
+    "insecureContextTitle": "WebCodecs 需要安全上下文 (HTTPS)",
+    "insecureContextDesc": "当前通过局域网 HTTP 访问，浏览器安全策略已禁用 GPU 硬件加速。服务已内置自签名证书，建议切换至 HTTPS 访问开启硬解。",
+    "insecureContextAction": "切换至 HTTPS 访问",
+    "unsupportedBrowserTitle": "WebCodecs 硬件加速不可用",
+    "unsupportedBrowserDesc": "请使用 Chromium / Safari 现代浏览器，并在 localhost 或 HTTPS 安全上下文下访问。",
     "streamUnavailable": "视频流无法连接",
     "retry": "重试连接",
     "noCamera": "未指定摄像机"
