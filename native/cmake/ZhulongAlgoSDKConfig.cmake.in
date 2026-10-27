@@ -98,7 +98,22 @@ elseif("${ZhulongAlgoSDK_BACKEND}" STREQUAL "rknn")
     if(DEFINED RKNN_ROOT)
         list(APPEND _zhulong_rknn_hints "${RKNN_ROOT}/lib")
     endif()
-    find_library(ZHULONG_RKNNRT_LIBRARY NAMES rknnrt HINTS ${_zhulong_rknn_hints})
+    # ⚠️ 先按显式路径找，再退回 find_library：交叉构建时工具链设了
+    #    `CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY`，find_library 只会在 sysroot 里搜，
+    #    而 librknnrt 通常在厂商 SDK 目录（RKNN_ROOT）或板端 BSP 里 —— 表现是
+    #    「明明给了 -DRKNN_ROOT 却说找不到」。
+    foreach(_candidate IN ITEMS
+            "${_zhulong_vendor_dir}/librknnrt.so"
+            "${RKNN_ROOT}/lib/librknnrt.so"
+            "${RKNN_ROOT}/librknnrt.so")
+        if(EXISTS "${_candidate}")
+            set(ZHULONG_RKNNRT_LIBRARY "${_candidate}")
+            break()
+        endif()
+    endforeach()
+    if(NOT ZHULONG_RKNNRT_LIBRARY)
+        find_library(ZHULONG_RKNNRT_LIBRARY NAMES rknnrt HINTS ${_zhulong_rknn_hints})
+    endif()
     if(NOT ZHULONG_RKNNRT_LIBRARY)
         message(FATAL_ERROR
             "找不到 librknnrt（本 SDK 前缀是 rknn 档位）：请设置 -DRKNN_ROOT=<rknpu2 前缀>，"

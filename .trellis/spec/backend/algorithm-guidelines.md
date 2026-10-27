@@ -158,7 +158,16 @@ make sdk-clean-check                  # 只挂前缀 + 包目录，在 debian �
 5. `algo_probe.py --all`：`--verify` 断言 `status=passed` 且 `sample_decoded=true`；
    `--extract-feature` 断言 512 维且 L2 范数 ≈ 1（非人脸包如实 `UNSUPPORTED` 记 `SKIPPED`）。
 
-设备档位（`rk3568/`）走另一条更硬的路径：`make board-check`（交叉只产 aarch64 SDK 前缀，
+设备档位（`rk3568/`）的出货包要交叉构建（本机不能执行，验包留到目标设备）：
+
+```bash
+python3 packages/face_recognition/scripts/build_package.py --target rk3568 \
+    --sdk-prefix <aarch64 前缀> \
+    --toolchain build/native/cross-rk3568-rknn/toolchain.cmake \
+    --rknn-root native/vendor/rknpu2      # 会自动跳过本机验包并给出提示
+```
+
+设备档位还有一条更硬的验收路径：`make board-check`（交叉只产 aarch64 SDK 前缀，
 **包在板上用板自己的编译器构建**），细节与实测基线见
 [硬件加速后端规范 §板端验证](../native/hardware-backends.md)。
 

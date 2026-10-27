@@ -480,12 +480,23 @@ def configure(p, sanitizer):
         def quote(value):
             return '"' + value.replace('\\', '/').replace('"', '\\"') + '"'
         toolchain = build / "toolchain.cmake"
+        # 编译器与编译/链接选项**写进工具链文件**，而不是只走 -D 参数：
+        # 算法包工程（`packages/<id>/<target>`）交叉构建时只能拿到这个文件，拿不到本函数的
+        # -D 列表。写成完整工具链后，「宿主怎么编」与「包怎么编」是同一份配置，不会漂。
         toolchain.write_text("\n".join([
             "set(CMAKE_SYSTEM_NAME Linux)", f"set(CMAKE_SYSTEM_PROCESSOR {quote(p['arch'])})",
             f"set(CMAKE_SYSROOT {quote(p['sysroot'])})",
             f"set(CMAKE_FIND_ROOT_PATH {quote(p['sysroot'])} {quote(str(prefix))})",
             "set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)", "set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)",
-            "set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)", "set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)", ""
+            "set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)", "set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)",
+            f"set(CMAKE_C_COMPILER {quote(p['cc'])})",
+            f"set(CMAKE_CXX_COMPILER {quote(p['cxx'])})",
+            f"set(CMAKE_AR {quote(p['ar'])})",
+            f"set(CMAKE_RANLIB {quote(p['ranlib'])})",
+            f"set(CMAKE_C_FLAGS_INIT {quote(shlex.join(p['cflags']))})",
+            f"set(CMAKE_CXX_FLAGS_INIT {quote(shlex.join(p['cflags']))})",
+            f"set(CMAKE_EXE_LINKER_FLAGS_INIT {quote(shlex.join(p['ldflags']))})",
+            ""
         ]))
         args += [f"-DCMAKE_TOOLCHAIN_FILE={toolchain}"]
 

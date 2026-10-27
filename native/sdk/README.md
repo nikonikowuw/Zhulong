@@ -81,6 +81,17 @@ target_link_libraries(my_algorithm PRIVATE Zhulong::AlgoSDK Zhulong::AlgoRuntime
 ZHULONG_ALGO_MAIN(MyDetectorPlugin, zhulong::sdk::DetectionResultAdapter, "MyDetector", "1.0.0")
 ```
 
+交叉构建（为另一套 CPU 架构出包）时多给三个参数，CMakeLists 不用改：
+
+```bash
+make SDK_PREFIX=<aarch64 前缀> \
+     TOOLCHAIN=<cmake 工具链文件> \
+     RKNN_ROOT=<rknpu2 前缀>            # rknn 档位
+```
+
+⚠️ 交叉产物在本机无法执行，所以 `--verify` 必须留到目标设备上跑（本仓库的
+`build_package.py` 给了 `--toolchain` 就会自动跳过并提示）。
+
 要点：
 
 - **可执行文件名必须等于 `manifest.json` 的 `id`** —— 宿主按这个约定找入口。

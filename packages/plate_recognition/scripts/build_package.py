@@ -25,7 +25,18 @@ def main():
                         help="算法包 SDK 前缀（默认: build/sdk/prefix，需先 make sdk-install）")
     parser.add_argument("--skip-build", action="store_true",
                         help="跳过包自身可执行文件的构建（复用 packages/<id>/<target>/build/<id>）")
+    parser.add_argument("--toolchain", help="交叉构建用的 CMake 工具链文件（如 "
+                                            "build/native/cross-rk3568-rknn/toolchain.cmake）；"
+                                            "给了就跳过验包（交叉产物本机不能执行）")
+    parser.add_argument("--rknn-root", help="RKNN 前缀（交叉构建 rknn 档位时必需）")
+    parser.add_argument("--onnxruntime-root", help="ONNX Runtime 前缀（交叉构建 onnx 档位时用）")
     args = parser.parse_args()
+    if args.toolchain and not args.no_verify:
+        # 交叉产物在宿主机上 exec 只会得到 "Exec format error"；与其让它跑到验包步骤
+        # 才失败，不如在这里说清楚，并指明板端/容器里怎么验。
+        print("[*] 交叉构建：跳过本机验包（产物在宿主不可执行）。请在目标设备上跑 "
+              "<pkg>/<manifest.id> --verify --sample <netpbm>，或用 make board-check。")
+        args.no_verify = True
 
     repo_root = Path(__file__).resolve().parent.parent.parent.parent
     pkg_root = repo_root / "packages" / "plate_recognition"
@@ -60,7 +71,14 @@ def main():
         if not sdk_prefix.exists():
             sys.exit(f"错误: SDK 前缀不存在: {sdk_prefix}（先跑 make sdk-install）")
         print(f"[*] 构建包可执行文件（SDK 前缀 {sdk_prefix}）...")
-        res = subprocess.run(["make", "-C", str(target_dir), "SDK_PREFIX=" + str(sdk_prefix)])
+        make_args = ["make", "-C", str(target_dir), "SDK_PREFIX=" + str(sdk_prefix)]
+        if args.toolchain:
+            make_args.append("TOOLCHAIN=" + str(Path(args.toolchain).resolve()))
+        if args.rknn_root:
+            make_args.append("RKNN_ROOT=" + str(Path(args.rknn_root).resolve()))
+        if args.onnxruntime_root:
+            make_args.append("ONNXRUNTIME_ROOT=" + str(Path(args.onnxruntime_root).resolve()))
+        res = subprocess.run(make_args)
         if res.returncode != 0:
             sys.exit("错误: 包可执行文件构建失败")
     if not exe_path.exists():

@@ -417,12 +417,32 @@ make board-check                                  # = native/scripts/board_check
 make board-check BOARD_HOST=<ssh 主机别名>
 ```
 
-第 7 条的做法与理由：宿主机只用交叉工具链产 aarch64 SDK 前缀（`libZhulongAlgoRuntime.a` /
-`libzhulong_algo_sdk.a`），然后把前缀与包目录同步到板子，**在板上 `make SDK_PREFIX=…`**。
-这比「交叉编译包再拷二进制」更强：
+第 7 条走两条路，它们证明的是**不同**的事，所以两条都要：
 
-- 顺带证明 SDK 前缀在真设备上可用（头/库/CMake 变量齐全），第三方用自家 BSP 工具链走的是同一条路；
-- 少一层 toolchain 传递，出错时不必分辨是包的问题还是工具链的问题。
+| 路径 | 命令 | 证明什么 |
+| :--- | :--- | :--- |
+| 板端自建 | 同步前缀+包 → 板上 `make SDK_PREFIX=…` | SDK 前缀在真设备上可用（头/库/CMake 变量齐全）；第三方用自家 BSP 工具链走同一条路 |
+| 交叉出包 | `build_package.py --target rk3568 --toolchain … --rknn-root …` | **出货形态**真的能跑：归档 → 板上解包 → exec 包根入口 |
+
+宿主机交叉构建算法的三条关键参数（都通过包自己的 Makefile 透传，包工程不写死任何仓库路径）：
+
+```bash
+make -C packages/face_recognition/rk3568 \
+    SDK_PREFIX=<aarch64 前缀> \
+    TOOLCHAIN=build/native/cross-rk3568-rknn/toolchain.cmake \
+    RKNN_ROOT=native/vendor/rknpu2
+```
+
+- **工具链文件由 `native/scripts/build.py` 生成时就要写全**（编译器 + `CMAKE_*_FLAGS_INIT`），
+  因为包工程只能拿到这个文件，拿不到 build.py 的 `-D` 列表；
+- `-DZhulongAlgoSDK_DIR=<prefix>/lib/cmake/ZhulongAlgoSDK` 由包 Makefile 固定传入：
+  交叉工具链设了 `CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY`，`CMAKE_PREFIX_PATH` 会被
+  限制在 sysroot 内搜索，表现是「明明给了前缀却找不到包」；
+- `RKNN_ROOT` 在 SDK 配置里改成**先按显式路径**找 `librknnrt.so`，再退回 `find_library`：
+  同上，`FIND_ROOT_PATH_MODE_LIBRARY ONLY` 会让 `find_library` 看不见厂商 SDK 目录。
+
+实测：交叉产物与板端自建产物对同一张脸给出**逐位相同**的 512 维向量
+（`head=[0.02589, -0.06186, 0.05486, 0.00463]`，`norm=1.000000`）—— 同源同权重，确定性推理。
 
 实测基线（RK3568 / Debian 11.11 / librknnrt 2.3.2）：`make test` 5 人 5 脸、`cost_ms ≈ 246`；
 `--verify` `sample_decoded=true, count=5`；`--extract-feature` 512 维 `norm=1.000000`；

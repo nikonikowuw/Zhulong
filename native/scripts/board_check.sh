@@ -19,6 +19,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BOARD_HOST="${BOARD_HOST:-rk3568}"
 BOARD_DIR="${BOARD_DIR:-/tmp/zhulong-board-check}"
 PKG="${PKG:-packages/face_recognition/rk3568}"
+# 出货形态由包自己的打包脚本产出（交叉构建 + 归档），板端自建那条路只是「SDK 可用性」证据。
+BUILD_SCRIPT="${BUILD_SCRIPT:-packages/face_recognition/scripts/build_package.py}"
+RKNN_ROOT="${RKNN_ROOT:-${REPO_ROOT}/native/vendor/rknpu2}"
 PROFILE="${PROFILE:-native/profiles/rk3568-rknn.json}"
 SDK_LOCAL="${SDK_LOCAL:-/tmp/zhulong-sdk-aarch64}"
 
@@ -71,4 +74,27 @@ for _ in 1 2 3; do "\${entry}" --verify --sample /tmp/board_check.ppm >/dev/null
 cat /sys/kernel/debug/rknpu/load 2>/dev/null || echo "rknpu load 不可读（可能未开 debugfs）"
 REMOTE
 
-echo "[5/5] 板端验收完成"
+echo "[5/6] 交叉构建出货形态（归档）并在板上验同一份产物"
+TARGET_NAME="$(basename "${PKG}")"
+TOOLCHAIN="${REPO_ROOT}/build/native/cross-$(python3 -c "import json;print(json.load(open('${PROFILE}'))['name'])")/toolchain.cmake"
+python3 "${BUILD_SCRIPT}" --target "${TARGET_NAME}" --sdk-prefix "${SDK_LOCAL}" \
+    --toolchain "${TOOLCHAIN}" --rknn-root "${RKNN_ROOT}" > board-cross-build.log 2>&1 \
+    || { tail -20 board-cross-build.log; exit 1; }
+ARCHIVE="$(ls -t build/packages/*-"${TARGET_NAME}".tar.gz | head -1)"
+echo "    归档: ${ARCHIVE}"
+scp -q "${ARCHIVE}" "${BOARD_HOST}:/tmp/board-pkg.tar.gz"
+
+ssh "${BOARD_HOST}" bash -s <<'REMOTE' || exit 1
+set -euo pipefail
+# 归档 → 解包 → 直接跑（这就是宿主安装后干的事：解到 <root>/<id>/<ver>/，再 exec 包根入口）
+rm -rf /tmp/board-pkg && mkdir -p /tmp/board-pkg
+tar xzf /tmp/board-pkg.tar.gz -C /tmp/board-pkg
+cd /tmp/board-pkg
+id="$(python3 -c "import json;print(json.load(open('manifest.json'))['id'])")"
+echo -n "    归档内容: "; ls | tr '\n' ' '; echo
+"./${id}" --verify --sample /tmp/board_check.ppm | tail -1
+echo -n "    归档内 targets/ 与 plugin.so 计数（必须为 0）: "
+tar tzf /tmp/board-pkg.tar.gz | grep -cE 'targets/|plugin\.so' || true
+REMOTE
+
+echo "[6/6] 板端验收完成"

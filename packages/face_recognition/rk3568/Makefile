@@ -6,6 +6,13 @@
 # ⚠️ 只依赖已安装的 SDK 前缀；把整个档位目录拷到任意位置都能跑：
 #     make test SDK_PREFIX=<prefix>
 SDK_PREFIX ?= /opt/zhulong-sdk
+# 交叉构建用：`TOOLCHAIN=<cmake 工具链文件>`。宿主与板端工程用的是同一份 CMakeLists，
+# 差别只在工具链；不传就是本机原生构建。
+TOOLCHAIN ?=
+# 厂商运行库前缀（交叉构建时用；本机原生构建一般由系统 ldconfig 提供）
+RKNN_ROOT ?=
+ONNXRUNTIME_ROOT ?=
+EXTRA_CMAKE_ARGS ?=
 
 BUILD_DIR ?= $(CURDIR)/build
 OUT_DIR := $(BUILD_DIR)/out
@@ -21,7 +28,12 @@ all: $(EXE) $(DEVTEST)
 $(BUILD_DIR)/CMakeCache.txt: CMakeLists.txt
 	cmake -S $(CURDIR) -B $(BUILD_DIR) \
 		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
-		-DCMAKE_PREFIX_PATH=$(SDK_PREFIX)
+		-DCMAKE_PREFIX_PATH=$(SDK_PREFIX) \
+		-DZhulongAlgoSDK_DIR=$(SDK_PREFIX)/lib/cmake/ZhulongAlgoSDK \
+		$(if $(TOOLCHAIN),-DCMAKE_TOOLCHAIN_FILE=$(TOOLCHAIN),) \
+		$(if $(RKNN_ROOT),-DRKNN_ROOT=$(RKNN_ROOT),) \
+		$(if $(ONNXRUNTIME_ROOT),-DONNXRUNTIME_ROOT=$(ONNXRUNTIME_ROOT),) \
+		$(EXTRA_CMAKE_ARGS)
 
 $(EXE): $(BUILD_DIR)/CMakeCache.txt $(wildcard src/*.cpp src/*.hpp)
 	cmake --build $(BUILD_DIR) --target face_recognition
