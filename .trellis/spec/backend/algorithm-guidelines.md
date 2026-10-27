@@ -140,15 +140,22 @@ python3 <sdk 前缀>/tools/algo_probe.py --entry build/<manifest.id> --pkg-dir .
 
 ```bash
 make sdk-install BUNDLE_RUNTIME=1     # 前缀自带 onnxruntime 依赖闭包
-make sdk-clean-check                  # 只挂前缀 + 包目录，在 debian 里从零构建两个包
+make sdk-dist BUNDLE_RUNTIME=1        # → build/packages/zhulong-algo-sdk-<ver>-<arch>-<target>.tar.gz
+make sdk-clean-check                  # 只挂前缀 + 包目录，在 debian 里从零构建两个包 + 脚手架 round-trip
 ```
 
-脚本（`native/scripts/sdk_clean_check.sh`）做四件事：
+`make sdk-dist` 打包的就是 `make sdk-install` 装出来的前缀（含 `tools/algo_probe.py`、
+`tools/new_package.py`、`dev/stb`、`abi.json`），**不另建文件清单**：第二份清单必然与
+`install()` 规则漂移，漂移的代价是第三方拿到的 SDK 缺头/缺 `.a`。
+
+脚本（`native/scripts/sdk_clean_check.sh`）做五件事：
 
 1. **仓库路径门禁**：grep 包内 `CMakeLists.txt` / `Makefile` / 源码，出现指向仓库的相对路径即失败；
 2. 容器内 `rm -rf build && make SDK_PREFIX=/opt/zhulong-sdk`；
 3. `make test`：`sample.jpg` 进 → `build/out/result-*.jpg` 出（真实推理，不是合成帧）；
-4. `algo_probe.py --all`：`--verify` 断言 `status=passed` 且 `sample_decoded=true`；
+4. **脚手架 round-trip**：`new_package.py` 生成 `scaffold_demo/onnx` → `make` → `make test` →
+   `make verify`，证明第三方从零写包也走得通（SDK 缺东西会在这里红，而不是在用户那儿红）；
+5. `algo_probe.py --all`：`--verify` 断言 `status=passed` 且 `sample_decoded=true`；
    `--extract-feature` 断言 512 维且 L2 范数 ≈ 1（非人脸包如实 `UNSUPPORTED` 记 `SKIPPED`）。
 
 ⚠️ **镜像基线必须 ≥ 开发机那一代发行版**：前缀里的静态运行库与 bundled onnxruntime 是开发机

@@ -401,7 +401,7 @@ else()
     install(DIRECTORY sdk/include/ DESTINATION include)
     # 包作者自查工具与说明：协议属于 SDK 公开面，工具必须随 SDK 走，
     # 不能只放在仓库的 native/tests 里（那样第三方拿不到，仓库又多一处协议知识）。
-    install(PROGRAMS sdk/tools/algo_probe.py DESTINATION tools)
+    install(PROGRAMS sdk/tools/algo_probe.py sdk/tools/new_package.py DESTINATION tools)
     install(FILES sdk/README.md DESTINATION .)
     # dev/ = 开发期资产（自制自测用的 stb），不是产品依赖
     install(DIRECTORY sdk/tests/third_party/stb/ DESTINATION dev/stb)

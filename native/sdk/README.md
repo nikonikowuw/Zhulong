@@ -7,8 +7,14 @@
 make sdk-install                              # → build/sdk/prefix
 make sdk-install BUNDLE_RUNTIME=1             # 连 onnxruntime 依赖闭包一起拷进前缀（可整体搬迁/离线）
 make sdk-install SDK_PREFIX=/opt/zhulong-sdk  # 自定义位置（绝不装到系统路径）
-make sdk-clean-check                          # 干净容器里从零构建两个包并自查协议
+
+make sdk-dist                                # → build/packages/zhulong-algo-sdk-<ver>-<arch>-<target>.tar.gz
+make sdk-dist BUNDLE_RUNTIME=1               # 同上，但前缀自带运行时（可搬到无网/异构机器）
+make sdk-clean-check                         # 干净容器里从零构建两个包 + 脚手架 round-trip
 ```
+
+`sdk-dist` 就是「把安装好的前缀原样打包」——不另建文件清单：第二份清单必然和 `install()`
+规则漂移，而漂移的表现是「第三方缺个头/缺个 .a」却没人知道该改哪份。
 
 ⚠️ **镜像基线**：前缀里的 `libZhulongAlgoRuntime.a` 与 bundled `libonnxruntime.so` 是在开发机上
 编译的二进制，符号版本不向下兼容。目标机/镜像必须 **≥ 开发机**那一代发行版，否则链接期会报
@@ -24,6 +30,7 @@ make sdk-clean-check                          # 干净容器里从零构建两�
 <prefix>/lib/cmake/ZhulongAlgoSDK/ CMake 包配置（导入 Zhulong::AlgoSDK / Zhulong::AlgoRuntime）
 <prefix>/dev/stb/                  开发期资产（可选：devtest 读 jpg 用）
 <prefix>/tools/algo_probe.py       协议自查工具（只用 Python 标准库）
+<prefix>/tools/new_package.py      脚手架：一条命令生成可跑的包骨架
 <prefix>/abi.json                  版本与能力声明（sdk_version / api_version / protocol）
 ```
 
@@ -37,7 +44,20 @@ make sdk-clean-check                          # 干净容器里从零构建两�
 刻意**不**打包（必须来自目标系统）。有关闭 `--disable-new-dtags` 的原因也写在 CMake 配置里：
 `DT_RUNPATH` 不沿依赖链继承，三层 NEEDED 只能找到第一层。
 
-## 2. 包工程长什么样
+## 2. 从零起一个包
+
+```bash
+python3 <prefix>/tools/new_package.py my_detector --target onnx --sdk-prefix <prefix>
+cd my_detector/onnx
+ffmpeg -i sample.ppm sample.jpg     # manifest 要求 sample.jpg
+make SDK_PREFIX=<prefix> && make test SDK_PREFIX=<prefix> && make verify SDK_PREFIX=<prefix>
+```
+
+生成的是**能跑通的最小真包**（空检测实现 → `count` 恒 0），不是示例片段：把 `detect()`
+换成真实推理就是产品包。脚手架 round-trip 也是 `make sdk-clean-check` 的一步——SDK 少了
+任何东西（头/库/CMake 变量）都会在那儿红。
+
+## 3. 包工程长什么样
 
 ```cmake
 cmake_minimum_required(VERSION 3.20)
@@ -70,7 +90,7 @@ ZHULONG_ALGO_MAIN(MyDetectorPlugin, zhulong::sdk::DetectionResultAdapter, "MyDet
   运行时宿主把 CWD 设成包根，包也可以自己按 `/proc/self/exe` 定位。
 - 不要在包里 `dlopen` 任何东西，也不要导出自己的 C ABI：宿主不装载包，只 exec 它。
 
-## 3. 三个协议（`abi.json` 里逐条声明）
+## 4. 三个协议（`abi.json` 里逐条声明）
 
 | 协议 | 要求 | 命令 |
 | :--- | :--- | :--- |
@@ -109,7 +129,7 @@ zhulong_status_t zhulong_face_extract_feature(const uint8_t* pixels, int32_t wid
 失败码：`NO_FACE_DETECTED` / `INVALID_INPUT` / `UNSUPPORTED` / `MODEL_UNAVAILABLE` / `INTERNAL`。
 **帧级错误不要退出进程** —— 一张坏图不该毁掉热进程。
 
-## 4. 自查：`tools/algo_probe.py`
+## 5. 自查：`tools/algo_probe.py`
 
 ```bash
 # 开发布局（可执行文件在 <pkg>/build/ 下）需要显式给包根
@@ -131,7 +151,7 @@ python3 <prefix>/tools/algo_probe.py --entry ./my_algorithm --all --sample sampl
 图像只支持 netpbm（P6/P5）：包骨架不链接任何编解码器，JPEG/PNG 的解码责任在调用侧。
 要拿 jpg 自查先转一次：`ffmpeg -i sample.jpg -pix_fmt rgb24 sample.ppm`。
 
-## 5. 打包与安装
+## 6. 打包与安装
 
 ```bash
 # 目录内必须有：manifest.json, sample.jpg, models/, <id> 可执行文件（+ 可选 config.schema.json）

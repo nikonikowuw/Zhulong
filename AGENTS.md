@@ -28,6 +28,9 @@ Zhulong 是本地优先的边缘运维宿主：单个 Go 二进制内嵌 React S
 - 交叉编译需要 `CROSS_PROFILE` + `CROSS_OUTPUT`，产物必须在 `build/targets/<name>/` 下；
   交叉**只允许编译，不允许执行测试**。
 - 收工前过 `make check`（前端 lint/type-check/test + native-test + api-docs + go-check）。
+- 算法包/SDK 相关：`make sdk-install BUNDLE_RUNTIME=1`（前缀）、`make sdk-dist`（分发 tarball）、
+  `make sdk-clean-check`（干净容器里从零构建两个包 + 脚手架 round-trip；要 docker 与网络，
+  **不进** `make check`）。
 
 ## 架构边界速查
 

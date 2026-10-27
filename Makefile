@@ -23,7 +23,7 @@ BINARY := $(BUILD_DIR)/Zhulong
 SWAG_VERSION := v1.16.6
 AIR ?= $(shell command -v air 2>/dev/null || (test -x "$$(go env GOPATH 2>/dev/null)/bin/air" && echo "$$(go env GOPATH)/bin/air") || echo air)
 
-.PHONY: all build go-build check frontend-install frontend-build frontend-check native-deps native-configure native-build native-test native-cross-build sdk-install sdk-clean-check api-docs go-check smoke run web-dev dev-backend dev-frontend dev
+.PHONY: all build go-build check frontend-install frontend-build frontend-check native-deps native-configure native-build native-test native-cross-build sdk-install sdk-dist sdk-clean-check api-docs go-check smoke run web-dev dev-backend dev-frontend dev
 
 all: build
 
@@ -92,9 +92,29 @@ sdk-install: native-build
 	@printf 'SDK 前缀: %s\n' "$(SDK_PREFIX)"
 	@cat "$(SDK_PREFIX)/VERSION"
 
+# SDK 分发物：把安装好的前缀**原样**打包（含 include/ lib/ cmake/ tools/ README abi.json），
+# 不另建一份文件清单 —— 第二份清单必然与 install() 规则漂移。
+SDK_DIST_DIR ?= $(BUILD_DIR)/packages
+
+# BUNDLE_RUNTIME 透传：`make sdk-dist BUNDLE_RUNTIME=1` 出的是自带运行时的可搬迁包。
+# 写成前置依赖会把该变量吃掉（前置目标按默认值重装），装出来的 dist 少了 third_party/。
+sdk-dist:
+	$(MAKE) sdk-install$(if $(BUNDLE_RUNTIME), BUNDLE_RUNTIME=$(BUNDLE_RUNTIME),)
+	@ver="$$(sed -n 's/^sdk_version=//p' "$(SDK_PREFIX)/VERSION")"; \
+	backend="$$(sed -n 's/^backend=//p' "$(SDK_PREFIX)/VERSION")"; \
+	arch="$$(uname -m)"; \
+	name="zhulong-algo-sdk-$${ver}-$${arch}-$${backend}"; \
+	mkdir -p "$(SDK_DIST_DIR)"; \
+	tar -czf "$(SDK_DIST_DIR)/$${name}.tar.gz" -C "$(SDK_PREFIX)" .; \
+	echo "[✓] $(SDK_DIST_DIR)/$${name}.tar.gz"
+
 # 干净容器验收：只挂 SDK 前缀 + 包目录，在 debian 里从零构建、自测、自查协议。
 # 这是「算法包能脱离仓库独立开发」的**唯一**可信证据；不进 make check（要联网 apt + docker）。
-sdk-clean-check: sdk-install
+# 注意：这里用递归 make 显式带 BUNDLE_RUNTIME=1。写成 `sdk-clean-check: sdk-install`
+# 会让前置目标以**默认参数**重装前缀，把刚拷好的 onnxruntime 闭包冲掉，
+# 然后在容器里报「前缀里没有 onnxruntime」。
+sdk-clean-check:
+	$(MAKE) sdk-install BUNDLE_RUNTIME=1
 	CONTAINER_RUNTIME=$(or $(CONTAINER_RUNTIME),docker) \
 	SDK_PREFIX=$(SDK_PREFIX) \
 	native/scripts/sdk_clean_check.sh \

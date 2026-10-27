@@ -30,6 +30,8 @@ if [ "$#" -eq 0 ]; then
     echo "用法: $0 <package-dir> [package-dir ...]" >&2
     exit 2
 fi
+# make 传进来的是相对路径（build/sdk/prefix）；docker -v 会把它当卷名，必须先绝对化。
+SDK_PREFIX="$(cd "${SDK_PREFIX}" 2>/dev/null && pwd || echo "${SDK_PREFIX}")"
 if [ ! -f "${SDK_PREFIX}/lib/libzhulong_algo_sdk.a" ]; then
     echo "错误: SDK 前缀不完整: ${SDK_PREFIX}（先跑 make sdk-install BUNDLE_RUNTIME=1）" >&2
     exit 2
@@ -59,6 +61,7 @@ for pkg_dir in "$@"; do
         -v "${abs_pkg}:/work" \
         -v "${SDK_PREFIX}:/opt/zhulong-sdk:ro" \
         -w /work \
+        -e ZHULONG_KEEP_LOGS=1 \
         "${IMAGE}" \
         bash -lc '
             set -euo pipefail
@@ -82,6 +85,26 @@ for pkg_dir in "$@"; do
             python3 /opt/zhulong-sdk/tools/algo_probe.py \
                 --entry "${entry}" --pkg-dir . --all \
                 --sample "${sample_ppm}" --image "${sample_ppm}"
+
+            # 脚手架 round-trip：让「第三方从零写一个包」也走同一条路径。
+            # 走不通说明 SDK 还缺东西（头/库/CMake 变量），而不是第三方不会用。
+            echo "[容器] 脚手架 round-trip"
+            rm -rf /tmp/scaffold && mkdir -p /tmp/scaffold
+            python3 /opt/zhulong-sdk/tools/new_package.py scaffold_demo --target onnx \
+                --sdk-prefix /opt/zhulong-sdk --dir /tmp/scaffold >/dev/null
+            cd /tmp/scaffold/scaffold_demo/onnx
+            ffmpeg -v error -y -i sample.ppm sample.jpg
+            make SDK_PREFIX=/opt/zhulong-sdk >/dev/null
+            # ⚠️ 不要写 `make ... | grep -q`：grep -q 命中即退出 → make 收 SIGPIPE →
+            #    配合 `set -o pipefail` 就成了「明明成功却报失败」。先落文件再判定。
+            make test SDK_PREFIX=/opt/zhulong-sdk > /tmp/scaffold_test.log 2>&1 || { cat /tmp/scaffold_test.log >&2; exit 1; }
+            grep -q "result written" /tmp/scaffold_test.log || { cat /tmp/scaffold_test.log >&2; exit 1; }
+            make verify SDK_PREFIX=/opt/zhulong-sdk > /tmp/scaffold_verify.log 2>&1 || { cat /tmp/scaffold_verify.log >&2; exit 1; }
+            # ⚠️ 容器脚本整体被外层单引号包着，这里不能出现单引号（会把外围字符串截断，
+            #    模式变成不带引号的 status:passed，于是「明明通过却报失败」）。
+            tail -1 /tmp/scaffold_verify.log | grep -qF "\"status\":\"passed\"" \
+                || { cat /tmp/scaffold_verify.log >&2; exit 1; }
+            echo "[✓] 脚手架 round-trip 通过（编译 + devtest + verify）"
         '
 
     echo "[✓] ${pkg_name}: 干净容器验收通过"
