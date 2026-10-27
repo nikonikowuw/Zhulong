@@ -34,14 +34,18 @@ namespace zhulong {
  * @brief 返回当前编译配置选定的推理后端单例
  */
 std::shared_ptr<IInferenceBackend> get_default_inference_backend() {
+    // 每个分支就地 return：变量声明留在 #if 里、return 留在外面时，靠文件头的 #error
+    // 才能保证「所有路径都有定义」，读起来像引用一个可能不存在的名字。
 #if defined(ZHULONG_INFERENCE_RKNN)
-    static auto backend = std::make_shared<RknnInferenceBackend>();
-#elif defined(ZHULONG_INFERENCE_ONNX)
-    static auto backend = std::make_shared<OnnxInferenceBackend>();
-#elif defined(ZHULONG_INFERENCE_TEST_STUB)
-    static auto backend = std::make_shared<StubInferenceBackend>();
-#endif
+    static const auto backend = std::make_shared<RknnInferenceBackend>();
     return backend;
+#elif defined(ZHULONG_INFERENCE_ONNX)
+    static const auto backend = std::make_shared<OnnxInferenceBackend>();
+    return backend;
+#elif defined(ZHULONG_INFERENCE_TEST_STUB)
+    static const auto backend = std::make_shared<StubInferenceBackend>();
+    return backend;
+#endif
 }
 
 /**
@@ -49,11 +53,12 @@ std::shared_ptr<IInferenceBackend> get_default_inference_backend() {
  */
 std::shared_ptr<IVisionBackend> get_default_vision_backend() {
 #ifdef ZHULONG_VISION_RGA
-    static auto backend = std::make_shared<RgaVisionBackend>();
-#else
-    static auto backend = std::make_shared<CpuVisionBackend>();
-#endif
+    static const auto backend = std::make_shared<RgaVisionBackend>();
     return backend;
+#else
+    static const auto backend = std::make_shared<CpuVisionBackend>();
+    return backend;
+#endif
 }
 
 } // namespace zhulong
