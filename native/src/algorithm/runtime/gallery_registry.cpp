@@ -1,5 +1,7 @@
 #include <zhulong/runtime/gallery_registry.hpp>
 
+#include <algorithm>
+
 namespace zhulong::runtime {
 
 GalleryRegistry::GalleryRegistry() = default;
@@ -12,9 +14,15 @@ GalleryRegistry& GalleryRegistry::instance() {
 void GalleryRegistry::rebuild_snapshot_locked() {
     auto vec = std::make_shared<std::vector<FaceTemplate>>();
     vec->reserve(faces_.size());
-    for (const auto& [_, item] : faces_) {
-        vec->push_back(item);
+    for (const auto& entry : faces_) {
+        vec->push_back(entry.second);
     }
+    // ⚠️ unordered_map 的迭代顺序取决于插入顺序与哈希布局，进程间不保证一致。
+    //    快照顺序若不固定，任何「按索引缓存 / 做 A-B 对比 / 断言首条」的下游都会漂移。
+    //    按 face_id 排序把顺序固化成内容函数，与插入顺序解耦。
+    std::sort(vec->begin(), vec->end(), [](const FaceTemplate& a, const FaceTemplate& b) {
+        return a.face_id < b.face_id;
+    });
     snapshot_ = std::move(vec);
 }
 
@@ -67,7 +75,8 @@ size_t GalleryRegistry::size() const {
 void GalleryRegistry::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     faces_.clear();
-    snapshot_ = std::make_shared<std::vector<FaceTemplate>>();
+    // 复用 rebuild_snapshot_locked 而不是另写一份空快照，避免两条路径的语义漂移。
+    rebuild_snapshot_locked();
 }
 
 } // namespace zhulong::runtime
