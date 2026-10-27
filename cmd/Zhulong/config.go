@@ -46,7 +46,6 @@ func loadConfigFile(path string) (app.Config, error) {
 	settings.SetDefault("person.faces_directory", "")
 	settings.SetDefault("person.require_person_id_for_face_enrollment", false)
 	settings.SetDefault("person.extractor_algorithm", defaults.ExtractorAlgorithm)
-	settings.SetDefault("logging.development", defaults.Development)
 	settings.SetDefault("logging.level", defaults.Logging.Level)
 	settings.SetDefault("logging.format", defaults.Logging.Format)
 	settings.SetDefault("logging.output", defaults.Logging.Output)
@@ -95,7 +94,6 @@ func loadConfigFile(path string) (app.Config, error) {
 		DataDir:                      values.Data.Directory,
 		FacesDir:                     facesDir,
 		AlgorithmTarget:              values.Algorithm.Target,
-		Development:                  values.Logging.Development,
 		Logging:                      values.Logging,
 		ConfigPath:                   filepath.Clean(configPath),
 		CustomScript:                 values.Network.CustomScript,

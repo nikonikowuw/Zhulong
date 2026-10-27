@@ -25,6 +25,12 @@ func (l *storageLifecycleImpl) Start(ctx context.Context) error {
 	return l.service.Start(ctx)
 }
 
+// RegisterWriteObserver implements the host's optional write-state hook. It is
+// kept out of StorageLifecycle so the interface stays a lifecycle contract.
+func (l *storageLifecycleImpl) RegisterWriteObserver(observer func(blocked bool)) {
+	l.service.RegisterWriteObserver(observer)
+}
+
 func (l *storageLifecycleImpl) Stop(ctx context.Context) error {
 	l.logger.Info("stopping system storage lifecycle")
 	return l.service.Stop(ctx)

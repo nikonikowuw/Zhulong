@@ -45,14 +45,17 @@ type RouteRegistrar interface {
 type RouterParams struct {
 	fx.In
 
-	Logger          *zap.Logger
-	Database        *database.Store  `optional:"true"`
-	Native          *engine.Engine   `optional:"true"`
-	DatabaseReady   ServiceReadiness `optional:"true" name:"db_ready"`
-	NativeReady     ServiceReadiness `optional:"true" name:"native_ready"`
-	AuthService     auth.AuthService `optional:"true"`
-	AuditService    *audit.Service   `optional:"true"`
-	Assets          http.FileSystem
+	Logger        *zap.Logger
+	Database      *database.Store  `optional:"true"`
+	Native        *engine.Engine   `optional:"true"`
+	DatabaseReady ServiceReadiness `optional:"true" name:"db_ready"`
+	NativeReady   ServiceReadiness `optional:"true" name:"native_ready"`
+	AuthService   auth.AuthService `optional:"true"`
+	AuditService  *audit.Service   `optional:"true"`
+	Assets        http.FileSystem
+	// LogSink lets /health name a degraded log destination. Readiness itself stays
+	// database + engine: a host whose log file is unwritable still records video.
+	LogSink         loggerOutput     `optional:"true"`
 	PublicRoutes    []RouteRegistrar `group:"public_routes"`
 	ProtectedRoutes []RouteRegistrar `group:"protected_routes"`
 	UploadRoutes    []RouteRegistrar `group:"upload_routes"`
@@ -96,7 +99,7 @@ func newRouter(p RouterParams) *gin.Engine {
 	} else if p.NativeReady != nil {
 		nativeReady = p.NativeReady
 	}
-	api.GET("/health", healthHandler(dbReady, nativeReady))
+	api.GET("/health", healthHandler(dbReady, nativeReady, p.LogSink))
 
 	// Mount public routes (e.g. auth login, status, init)
 	for _, r := range p.PublicRoutes {
@@ -175,7 +178,7 @@ func newRouter(p RouterParams) *gin.Engine {
 // @Success      200  {object}  httputil.Response{data=HealthData}
 // @Failure      503  {object}  httputil.Response
 // @Router       /health [get]
-func healthHandler(database ServiceReadiness, native ServiceReadiness) gin.HandlerFunc {
+func healthHandler(database ServiceReadiness, native ServiceReadiness, logSink loggerOutput) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		dbReady := database != nil && database.Ready()
 		nativeReady := native != nil && native.Ready()
@@ -183,12 +186,23 @@ func healthHandler(database ServiceReadiness, native ServiceReadiness) gin.Handl
 			httputil.WriteError(c, httputil.NewError(http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "Service is not ready", nil))
 			return
 		}
+		components := map[string]string{
+			"database": "ready",
+			"engine":   "ready",
+		}
+		// A degraded logger belongs in the payload but not in the status code: the
+		// host's job is recording, and refusing /health 200 over a log file would
+		// take a working NVR out of rotation. Health must stay cheap — the sink
+		// contract forbids touching the file here.
+		if logSink != nil {
+			components["logging"] = "ready"
+			if sinkErr, dropped := logSink.Health(); sinkErr != nil || dropped > 0 {
+				components["logging"] = "degraded"
+			}
+		}
 		httputil.Success(c, HealthData{
-			Status: "ready",
-			Components: map[string]string{
-				"database": "ready",
-				"engine":   "ready",
-			},
+			Status:     "ready",
+			Components: components,
 		})
 	}
 }

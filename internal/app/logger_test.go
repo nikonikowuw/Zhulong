@@ -23,8 +23,8 @@ import (
 // provideLogger, which hands the sink to the runtime that must Prepare and Close
 // it (TestFileLoggerSinkRequiresLifecyclePrepare).
 func newLogger(config Config) (*zap.Logger, zap.AtomicLevel, error) {
-	logger, level, _, err := buildLogger(config)
-	return logger, level, err
+	built, err := buildLogger(config)
+	return built.logger, built.level, err
 }
 
 func TestNewLoggerRejectsUnsupportedPolicy(t *testing.T) {

@@ -9,14 +9,14 @@ import (
 	"time"
 )
 
-// LoggingConfig contains runtime logging policy. Empty Format follows Development mode.
+// LoggingConfig contains runtime logging policy. Empty Format defaults to json;
+// a development console is requested explicitly through Format.
 type LoggingConfig struct {
-	Development bool           `mapstructure:"development"`
-	Level       string         `mapstructure:"level"`
-	Format      string         `mapstructure:"format"`
-	Output      string         `mapstructure:"output"`
-	Sampling    SamplingConfig `mapstructure:"sampling"`
-	Rotation    RotationConfig `mapstructure:"rotation"`
+	Level    string         `mapstructure:"level"`
+	Format   string         `mapstructure:"format"`
+	Output   string         `mapstructure:"output"`
+	Sampling SamplingConfig `mapstructure:"sampling"`
+	Rotation RotationConfig `mapstructure:"rotation"`
 }
 
 // SamplingConfig controls opt-in zap log sampling.
@@ -42,7 +42,6 @@ type Config struct {
 	DataDir         string
 	FacesDir        string
 	AlgorithmTarget string
-	Development     bool
 	Logging         LoggingConfig
 	ConfigPath      string
 	CustomScript    string

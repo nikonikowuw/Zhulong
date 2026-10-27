@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -731,6 +733,8 @@ type lifecycleLogSinkStub struct {
 	events     *eventLog
 	prepareErr error
 	closeErr   error
+	healthErr  error
+	lost       uint64
 }
 
 func (s *lifecycleLogSinkStub) Prepare() error {
@@ -738,7 +742,7 @@ func (s *lifecycleLogSinkStub) Prepare() error {
 	return s.prepareErr
 }
 
-func (s *lifecycleLogSinkStub) Health() (error, uint64)        { return nil, 0 }
+func (s *lifecycleLogSinkStub) Health() (error, uint64)        { return s.healthErr, s.lost }
 func (s *lifecycleLogSinkStub) Write(data []byte) (int, error) { return len(data), nil }
 func (s *lifecycleLogSinkStub) Sync() error                    { return nil }
 
@@ -795,6 +799,105 @@ func TestLogSinkPrepareFailureStopsStartupAndClosesSink(t *testing.T) {
 	}
 	if got, want := events.snapshot(), []string{"log.prepare", "log.close"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("retry after failed preparation restarted services: got %v, want %v", got, want)
+	}
+}
+
+// TestLogSinkDegradationIsReportedAndDoesNotAbortStartup covers the policy split
+// between configuration errors (fatal, see TestLogSinkPrepareFailureStopsStartup)
+// and an unusable destination (degraded, host keeps recording).
+func TestLogSinkDegradationIsReportedAndDoesNotAbortStartup(t *testing.T) {
+	events := &eventLog{}
+	server := &http.Server{Addr: "127.0.0.1:0"}
+	sinkErr := errors.New("read-only file system")
+	lifecycle := &lifecycleRuntime{
+		database: databaseStub{events: events},
+		native:   engineStub{events: events},
+		server:   server,
+		shutdown: server.Shutdown,
+		logger:   zap.NewNop(),
+		logSink:  &lifecycleLogSinkStub{events: events, healthErr: sinkErr},
+		listen: func(network, address string) (net.Listener, error) {
+			return net.Listen(network, address)
+		},
+	}
+	if err := lifecycle.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !containsString(lifecycle.degraded, "logging") {
+		t.Fatalf("degraded = %v, want logging reported", lifecycle.degraded)
+	}
+	if err := lifecycle.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+}
+
+// lockedBuffer is a zapcore.WriteSyncer whose contents other goroutines can read.
+type lockedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(data)
+}
+
+func (b *lockedBuffer) Sync() error { return nil }
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
+// TestStorageWriteStatePressureIsAppliedAndReleasedOnce proves the storage gate
+// reaches the logger as an edge, and that the resulting reduction actually filters
+// records instead of only announcing itself.
+func TestStorageWriteStatePressureIsAppliedAndReleasedOnce(t *testing.T) {
+	var logs lockedBuffer
+	level := zap.NewAtomicLevelAt(zapcore.DebugLevel)
+	pressure := newLogPressure(level)
+	logger := zap.New(zapcore.NewCore(
+		zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
+		zapcore.AddSync(&logs),
+		pressure,
+	))
+	lifecycle := &lifecycleRuntime{
+		logger:      logger.Named("host"),
+		logLevel:    level,
+		logPressure: pressure,
+	}
+
+	lifecycle.applyStorageWriteState(true)
+	lifecycle.applyStorageWriteState(true)
+	if !pressure.UnderPressure() {
+		t.Fatal("storage emergency did not reduce log volume")
+	}
+	logger.Debug("debug-during-emergency")
+	logger.Info("info-during-emergency")
+	logger.Warn("warn-during-emergency")
+	if got := strings.Count(logs.String(), "run log volume reduced"); got != 1 {
+		t.Fatalf("reduction reported %d times, want 1: %s", got, logs.String())
+	}
+	if strings.Contains(logs.String(), "debug-during-emergency") || strings.Contains(logs.String(), "info-during-emergency") {
+		t.Fatalf("debug/info survived an emergency stop: %s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "warn-during-emergency") {
+		t.Fatalf("warn was filtered during an emergency stop: %s", logs.String())
+	}
+
+	lifecycle.applyStorageWriteState(false)
+	lifecycle.applyStorageWriteState(false)
+	if pressure.UnderPressure() {
+		t.Fatal("storage recovery did not restore log volume")
+	}
+	if got := strings.Count(logs.String(), "run log volume restored"); got != 1 {
+		t.Fatalf("restore reported %d times, want 1: %s", got, logs.String())
+	}
+	logger.Debug("debug-after-restore")
+	if !strings.Contains(logs.String(), "debug-after-restore") {
+		t.Fatalf("debug did not return after recovery: %s", logs.String())
 	}
 }
 

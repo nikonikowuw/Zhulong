@@ -93,7 +93,10 @@
 - `CanWrite()` 立即返回 `false`，停止视频落盘写入；
 - 记录 `STORAGE_EMERGENCY_STOP` 审计事件，状态切换为 `emergency_stopped`；
 - 保护底层 SQLite WAL 数据库和操作系统关键进程免遭 `ENOSPC` 崩溃；
+- 同一份预算也供运行日志使用：宿主通过 `EmergencyGate.RegisterObserver` 订阅 `canWrite` 翻转，熔断期间把运行日志地板抬到 `warn`，恢复时撤销（见 `logging-guidelines.md` §3.0.2）；
 - 当清理协程或运维清理使可用空间恢复安全水位后，自动解除熔断并恢复录像。
+
+`RegisterObserver` 是**追加式**观察者，只能观察 `canWrite` 的**边沿**：`Evaluate` 每个轮询周期都会执行，每次翻转各上报一次，稳定态零上报。`SetCallbacks` 仍只服务审计，不得被第二个消费者覆盖。观察者在门锁释放后调用，允许回调进入门（审计路径即如此）。
 
 ---
 

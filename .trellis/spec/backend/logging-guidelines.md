@@ -32,11 +32,34 @@
 
 本仓库使用 zap v1.28.0。该版本 `zap.NewProductionConfig()` 的采样默认值是 `100:100`（见 zap `config.go` 的 `SamplingConfig` 初始化），会在突发日志中静默丢弃记录。因此，应用 logger 必须显式组装 core；不得使用 `NewProductionConfig()`，生产默认采样关闭，只有配置显式启用且 `initial` / `thereafter` 均为正数时才安装 sampler。
 
+`logging.development` 已彻底移除，不留兼容墓碑：`format` 留空即 `json`，开发环境需要人类可读输出必须显式写 `format = "console"`。该键把一个正交维度（编码格式）藏在一个布尔后面，且在改用显式 encoder 组装后只剩「决定默认 format」这一条残余语义。配置里再出现它按未知键处理，启动直接报 `'logging' has invalid keys: development` —— 保留它等于保留第二个真相来源。
+
 应用配置只接受 `debug|info|warn|error` 和 `json|console`。默认输出 `stderr`；JSON level 小写、console level 大写彩色；时间戳为 UTC ISO8601，duration 编码为毫秒。Zap 自身编码/写入诊断经 `zap.ErrorOutput` 写到 stderr，不能被误认为业务结构化事件。
 
 文件输出必须在生命周期启动阶段、服务启动前执行 `LoggerSink.Prepare()`；Fx 构造函数只校验配置和构建 logger，不做目录创建或文件打开。Sink 关闭前先调用 `logger.Sync()`，随后关闭 sink。文件输出必须启用内置有界轮转并设置显式正数 `max_total_size_mb`。总预算覆盖活动文件、归档及压缩临时文件的最坏输出预留；最多一个 gzip 压缩 worker，预留不适配时跳过压缩。轮转/写入失败不得退化为无限追加，sink 健康错误和拒写计数可通过 `LoggerSink.Health()` 观察，并经独立 stderr 诊断。
 
 具体的文件预算、保留期和 journald 主机配额仍由部署 profile sign-off；不得从示例配置推断生产配额。`Sync()` 对当前文件执行 `fsync`，轮转和压缩时同步目录项，但不保证设备控制器、电源故障或文件系统能把数据持久化到介质，也不承诺突然掉电零丢失。
+
+#### 3.0.1 文件 sink 的阻塞与降级边界
+
+文件目的地由 `resilientSink` 包装，这是**唯一**可以阻塞宿主的日志目标必须满足的契约。stderr 不加队列：它是队列自身降级时的落点，把兜底也放进缓冲区等于没有兜底。
+
+- **写入永不等待**：`Write` 只做有界队列（`logQueueDepth = 1024` 条）的非阻塞投递，写满或投递竞争一律丢弃并计数、对 zap 返回成功（丢一条记录不能再引出同一热路径上的第二次同步写），关闭后的投递返回错误。单 worker 顺序落盘，因此顺序仍按投递顺序保持。
+- **`Prepare()` 的失败分两类**：配置/策略错误（level、format、rotation 参数）在 `buildLogger`/`openLogSink` 阶段中止启动，不回落、不改用 `zap.NewNop()`；**目的地不可用**（只读 rootfs、外挂盘未挂载、空间不足、路径不是普通文件）只降级：写入改投 stderr，`Host.degraded` 记录 `logging`，`/health` 的 `components.logging` 为 `degraded`，宿主继续录像与推理。边缘设备的第一职责是录像，不是写日志。
+- **瞬时拒写不等于熔断**：压缩预算预留不足这类拒绝只计数丢弃；只有 `Health()` 同时报告持久失败时才熔断到 stderr 并把当前记录补写到 stderr，保证失败本身的证据存留。
+- **`Sync()` 是屏障**：先排空队列再 fsync，否则优雅停机会 fsync 一个空缓冲并把日志尾部丢掉。`Close()` 在 `logDrainTimeout = 5s` 内排空；超时则放弃并报告待排空条数——卡死的 `write(2)` 仍持有文件互斥量，此时再调用 sink 关闭只会把停机一起拖死。
+- **`Health()` 不得触碰文件**：`/health` 每次请求都会调用它，若它去取写线程持有的互斥量（该互斥量可能正跨越一次阻塞写），`/health` 就会继承磁盘的延迟。持久失败原因与丢弃计数由原子状态维护。
+- **停机不因日志降级而失败**：降级只以 Warn 记录，`Stop` 的返回值只表达真正无法完成的 I/O。把已上报的降级再变成停机错误，会让 systemd 把一台仍在录像的宿主判为失败并进入重启循环。
+
+#### 3.0.2 存储紧急停止时的日志降量
+
+`EmergencyGate` 的写阻断状态经 `RegisterObserver` 传给宿主（`SetCallbacks` 仍专供审计，`RegisterObserver` 是追加式观察者）。进入紧急停止时 `logPressure` 把生效级别地板抬到 `warn`，恢复时撤销：
+
+- 地板只能**抬高**，不能降低：压力状态不得让配置级别已过滤的记录重新出现。
+- 实现在 `zapcore.LevelEnabler` 而非改 `AtomicLevel`：改配置级别需要记住旧值再回滚，并发的 SIGHUP 重载会让那份记忆失效。
+- 只上报**边沿**（进入一次、恢复一次）。`Evaluate` 每个存储周期都会跑，每周期一条记录正是降量要消除的量。
+- 存储侧 `canWrite` 的每次翻转（含 telemetry 不可用、挂载丢失、只读挂载）都要上报，不只 emergency 分支。
+
 
 Fx provider 必须把 `*zap.Logger` 声明为必需依赖；缺失时由 Fx 返回装配错误，不可 panic 或由生产装配静默补成 Nop。测试若要静音，显式注入 `zap.NewNop()`。
 
@@ -137,7 +160,12 @@ Sink `Sync()` 仅请求操作系统同步当前活动文件；它不代表设备
 
 ### 3. Contracts
 - `logging.level` is `debug|info|warn|error`; `format` is `json|console`; `output` is `stderr`, `stdout`, or a file path. File output requires enabled bounded rotation and positive `max_total_size_mb`. Sampling is opt-in and requires positive `initial` and `thereafter`.
+- The level predicate is `logPressure` wrapping the `AtomicLevel`: a storage emergency raises the floor to `warn`, and releasing it restores the configured level. It never promotes a filtered record.
+- `/health` reports `components.logging` as `ready` or `degraded`. The HTTP status stays `200` and `status` stays `ready`, because readiness is database + engine: an unwritable log file must not pull a recording host out of rotation.
+- `EmergencyGate.RegisterObserver` observes `canWrite` edges and is additive; `SetCallbacks` remains the single audit callback pair. Storage unavailability, mount loss, read-only mounts and emergency stops all report through it, not only the emergency branch.
 - SIGHUP rereads only `logging.level` from the absolute `ConfigPath` selected at startup. It never changes sink or encoder; read/validation failure warns and retains the active level.
+- A reload compares the rest of the logging section through `resolveLogPolicy` (the same resolution `buildLogger` uses) and reports `logging policy changed on disk; restart required to apply` with the changed field names. Applying `format`/`output`/`rotation`/`sampling` needs a new encoder and sink, so it is reported rather than half-applied — a file that claims one destination while the encoder writes to another is worse than an unfinished edit.
+- The reload tolerates unknown keys and unrelated edits on purpose: startup is where a bad configuration aborts the boot, while a reload that rejected them would keep an operator from fixing the level on a live host.
 - `logctx` stores only non-empty IDs. `Fields(nil)` and an empty context return nil; `Logger` preserves the base logger name and uses `zap.L()` only for a nil base. HTTP request IDs belong to the request lifetime; later stream events use `streamId` instead.
 - Queue admission is bounded and nonblocking, including mutex contention. Invalid records, contention, full capacity, and post-stop admission return false and increment `Dropped()`. The consumer never holds the admission lock during sink I/O; producers must be quiescent before `Stop`.
 - The C++ `ZhulongLog` runner ring must **not** use `try_lock` for producer admission. Its ring lock is shared with the writer, which re-acquires it on every `wait_for` wakeup, so a `try_lock` producer loses that race under the scheduler and silently drops a healthy record — measured at ~2.7% of runner process starts, including the first `Error`. Block on the ring mutex instead: the critical section is bounded by a fixed-size `Record` copy because serialization and stderr writes happen after the lock is released, so producer latency stays bounded and cannot deadlock. Drop counting is reserved for genuinely full capacity and post-stop admission. `native/tests/native_log_test.cpp` guards this with 400 start-write-stop cycles.
@@ -257,7 +285,15 @@ that.
 | Condition | Required behavior |
 | --- | --- |
 | Unsupported level/format, invalid sampling thresholds, or unbounded file output | Logger construction returns an error; startup fails without fallback to a different sink or `zap.NewNop()`. |
+| File destination unavailable at `Prepare()` (read-only rootfs, unmounted volume, path not a regular file) | Host starts on stderr; `degraded` lists `logging`; `/health` reports `components.logging=degraded` at `status=ready`. Never silently claim file output works. |
+| Queue full, admission contended, or write after `Close` | Drop and count; `Write` still reports success so zap does not re-enter the same path. |
+| Transient write refusal with a healthy sink (compression reservation) | Count the drop, keep the file destination; do not demote to stderr. |
+| Sticky write failure (sink `Health()` non-nil) | Circuit break to stderr, retry the failing record there, keep accepting records, report the cause through `Health()`. |
+| Shutdown with a stalled writer | `Close` returns after `logDrainTimeout` with the pending count; it never blocks on the mutex a stuck `write(2)` holds. |
+| Storage emergency write stop active | Raise the log floor to `warn`; report the transition once, restore on recovery, never lower a configured level. |
 | SIGHUP config missing or level invalid | Emit Warn; retain the last valid `AtomicLevel`; process stays alive. |
+| SIGHUP config changes `format`/`output`/`rotation`/`sampling` | Apply nothing; emit one Warn naming the fields and ``restart required``. |
+| Log sink degraded at shutdown | Warn with the drop count; `Stop` does not return an error for an already-reported degradation. |
 | Unexpected HTTP 5xx, with or without cause | Exactly one Error event from `WriteError`; include requestId, code and status. |
 | Expected HTTP 4xx with a cause | No Error event solely because a cause exists. |
 | Invalid/full/contended/post-stop queue admission | Return false immediately and increment the drop counter. |
@@ -271,6 +307,13 @@ that.
 
 ### 6. Tests Required
 - Logger tests assert level/format allowlists, explicit sampling counts, UTC timestamps, bounded rotation and refusal after sink failure.
+- `TestResilientSinkNeverBlocksOnAStalledDestination` — a destination blocked inside `write` must not stall `Write`, and the queue must count its drops.
+- `TestResilientSinkDegradesWhenTheDestinationCannotBePrepared`, `TestResilientSinkBreaksCircuitOnStickyFailure`, `TestResilientSinkKeepsWritingAfterTransientRefusal` — the three failure classes must stay distinguishable.
+- `TestResilientSinkSyncFlushesQueuedRecords`, `TestResilientSinkCloseDrainsQueuedRecords` — the shutdown tail must reach the file in order.
+- `TestResilientSinkHealthNeverTouchesAStalledDestination` — `/health` must not inherit a blocked disk.
+- `TestLogPressureOnlyRaisesTheFloor` — storage pressure hides `debug`/`info`, never promotes a filtered record, and survives a concurrent level reload.
+- `TestLogLevelReloaderReportsRestartOnlyPolicyChanges` — a level-only edit applies silently; a `format` edit names `logging.format` and keeps the applied level.
+- `TestHealthNamesDegradedLogSinkWithoutFailingReadiness` — a degraded logger is visible in the payload and does not change `status`.
 - SIGHUP test atomically replaces the TOML file, sends a real process signal, observes the level and emitted debug record, checks PID stability, then proves invalid/missing config retains the level.
 - `logctx` tests assert ID isolation, logger-name preservation and nil fields for empty context; benchmark the no-field path.
 - HTTP tests assert matching requestId on access/error events, one 5xx Error, no cause-driven 4xx Error, and SSE/WebSocket `session_ms` versus handshake `latency_ms`.

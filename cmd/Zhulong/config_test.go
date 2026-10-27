@@ -11,19 +11,19 @@ import (
 )
 
 func TestLoadConfigUsesTOMLAndDefaults(t *testing.T) {
-	path := writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n[data]\ndirectory = '/srv/zhulong'\n[person]\nfaces_directory = '/srv/custom_faces'\n[algorithm]\ntarget = 'rk3588'\n[logging]\ndevelopment = true\n")
+	path := writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n[data]\ndirectory = '/srv/zhulong'\n[person]\nfaces_directory = '/srv/custom_faces'\n[algorithm]\ntarget = 'rk3588'\n[logging]\nlevel = 'warn'\n")
 
 	got, err := loadConfigFile(path)
 	if err != nil {
 		t.Fatalf("loadConfigFile: %v", err)
 	}
-	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != "/srv/zhulong" || got.FacesDir != "/srv/custom_faces" || got.AlgorithmTarget != "rk3588" || !got.Development {
+	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != "/srv/zhulong" || got.FacesDir != "/srv/custom_faces" || got.AlgorithmTarget != "rk3588" || got.Logging.Level != "warn" {
 		t.Fatalf("unexpected config: %+v", got)
 	}
 }
 
-func TestLoadConfigKeepsLegacyLoggingFieldsAndResolvesConfigPath(t *testing.T) {
-	path := writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n[logging]\ndevelopment = false\n")
+func TestLoadConfigInheritsLoggingDefaultsAndResolvesConfigPath(t *testing.T) {
+	path := writeConfig(t, "[http]\naddress = '127.0.0.1:9000'\n")
 	got, err := loadConfigFile(path)
 	if err != nil {
 		t.Fatalf("loadConfigFile: %v", err)
@@ -36,20 +36,20 @@ func TestLoadConfigKeepsLegacyLoggingFieldsAndResolvesConfigPath(t *testing.T) {
 		t.Fatalf("ConfigPath = %q, want %q", got.ConfigPath, filepath.Clean(absPath))
 	}
 	if got.Logging.Level != "info" || got.Logging.Output != "stderr" || got.Logging.Format != "" {
-		t.Fatalf("legacy config did not inherit logging defaults: %+v", got.Logging)
+		t.Fatalf("config did not inherit logging defaults: %+v", got.Logging)
 	}
-	if got.Logging.Sampling.Enabled || got.Logging.Rotation.Enabled || got.Development {
-		t.Fatalf("legacy logging options unexpectedly enabled: %+v", got.Logging)
+	if got.Logging.Sampling.Enabled || got.Logging.Rotation.Enabled {
+		t.Fatalf("logging options unexpectedly enabled: %+v", got.Logging)
 	}
 }
 
 func TestLoadConfigParsesLoggingPolicyAndExample(t *testing.T) {
-	path := writeConfig(t, "[logging]\ndevelopment = true\nlevel = 'debug'\nformat = 'console'\noutput = 'stdout'\n[logging.sampling]\nenabled = true\ninitial = 2\nthereafter = 5\n[logging.rotation]\nenabled = true\nmax_size_mb = 8\nmax_backups = 3\nmax_age_days = 7\ncompress = true\nmax_total_size_mb = 24\n")
+	path := writeConfig(t, "[logging]\nlevel = 'debug'\nformat = 'console'\noutput = 'stdout'\n[logging.sampling]\nenabled = true\ninitial = 2\nthereafter = 5\n[logging.rotation]\nenabled = true\nmax_size_mb = 8\nmax_backups = 3\nmax_age_days = 7\ncompress = true\nmax_total_size_mb = 24\n")
 	got, err := loadConfigFile(path)
 	if err != nil {
 		t.Fatalf("loadConfigFile: %v", err)
 	}
-	if !got.Development || !got.Logging.Development || got.Logging.Level != "debug" || got.Logging.Format != "console" || got.Logging.Output != "stdout" {
+	if got.Logging.Level != "debug" || got.Logging.Format != "console" || got.Logging.Output != "stdout" {
 		t.Fatalf("unexpected logging policy: %+v", got.Logging)
 	}
 	if !got.Logging.Sampling.Enabled || got.Logging.Sampling.Initial != 2 || got.Logging.Sampling.Thereafter != 5 {
@@ -65,8 +65,19 @@ func TestLoadConfigParsesLoggingPolicyAndExample(t *testing.T) {
 	}
 }
 
+// TestLoadConfigRejectsRemovedLoggingDevelopmentKey pins the removal. The switch
+// only ever selected a default format, and an unknown key is a boot error here; a
+// stale config must say so instead of appearing to still configure something.
+func TestLoadConfigRejectsRemovedLoggingDevelopmentKey(t *testing.T) {
+	path := writeConfig(t, "[logging]\ndevelopment = true\n")
+	_, err := loadConfigFile(path)
+	if err == nil || !strings.Contains(err.Error(), "has invalid keys: development") {
+		t.Fatalf("expected the removed key to be rejected by name, got %v", err)
+	}
+}
+
 func TestLoadConfigRejectsUnknownLoggingKeys(t *testing.T) {
-	path := writeConfig(t, "[logging]\ndevelopment = false\nlevele = 'debug'\n")
+	path := writeConfig(t, "[logging]\nlevel = 'debug'\nlevele = 'debug'\n")
 	_, err := loadConfigFile(path)
 	if err == nil || !strings.Contains(err.Error(), "levele") {
 		t.Fatalf("expected unknown logging key error, got %v", err)
@@ -94,7 +105,7 @@ func TestLoadConfigKeepsDefaultsForOmittedValues(t *testing.T) {
 	}
 	defaults := app.DefaultConfig()
 	expectedFacesDir := filepath.Join(defaults.DataDir, "faces")
-	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != defaults.DataDir || got.FacesDir != expectedFacesDir || got.AlgorithmTarget != defaults.AlgorithmTarget || got.Development || got.SessionTTL != defaults.SessionTTL {
+	if got.HTTPAddress != "127.0.0.1:9000" || got.DataDir != defaults.DataDir || got.FacesDir != expectedFacesDir || got.AlgorithmTarget != defaults.AlgorithmTarget || got.SessionTTL != defaults.SessionTTL {
 		t.Fatalf("unexpected config: %+v", got)
 	}
 }

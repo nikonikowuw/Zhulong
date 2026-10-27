@@ -17,6 +17,7 @@ type EmergencyGate struct {
 
 	onEmergencyStop   func(reason string)
 	onEmergencyResume func()
+	observers         []func(blocked bool)
 }
 
 // NewEmergencyGate creates an EmergencyGate instance initially allowing writes.
@@ -37,6 +38,22 @@ func (g *EmergencyGate) SetCallbacks(onStop func(string), onResume func()) {
 	defer g.mu.Unlock()
 	g.onEmergencyStop = onStop
 	g.onEmergencyResume = onResume
+}
+
+// RegisterObserver adds a listener for filesystem write-block transitions. Unlike
+// SetCallbacks it is additive on purpose: the audit recorder and the host logger
+// both need the same transition, and a second SetCallbacks call would silently
+// replace the first.
+//
+// Observers run with the gate unlocked and must not block; the storage service
+// calls back into the gate from its own callback path.
+func (g *EmergencyGate) RegisterObserver(observer func(blocked bool)) {
+	if observer == nil {
+		return
+	}
+	g.mu.Lock()
+	g.observers = append(g.observers, observer)
+	g.mu.Unlock()
 }
 
 // CanWrite reports atomically whether video recorders and file sinks are allowed to create new files.
@@ -66,7 +83,7 @@ func (g *EmergencyGate) Reason() string {
 func (g *EmergencyGate) BlockWrites(reason string) {
 	g.mu.Lock()
 	prevEmergency := g.isEmergency.Swap(true)
-	g.canWrite.Store(false)
+	wasWritable := g.canWrite.Swap(false)
 	g.reason = reason
 	onStop := g.onEmergencyStop
 	g.mu.Unlock()
@@ -76,6 +93,20 @@ func (g *EmergencyGate) BlockWrites(reason string) {
 	if !prevEmergency && onStop != nil {
 		onStop(reason)
 	}
+	if wasWritable {
+		g.publishWriteState(true)
+	}
+}
+
+// publishWriteState reports a write-block transition. It must be called with the
+// gate mutex released, because observers may call back into the gate.
+func (g *EmergencyGate) publishWriteState(blocked bool) {
+	g.mu.RLock()
+	observers := append([]func(bool){}, g.observers...)
+	g.mu.RUnlock()
+	for _, observer := range observers {
+		observer(blocked)
+	}
 }
 
 // Evaluate checks the current filesystem stats against configured emergency thresholds.
@@ -83,6 +114,25 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 	var stopCallback func(string)
 	var resumeCallback func()
 	var stopReason string
+	var writeState *bool
+
+	// block and allow latch the write-block state so observers hear about edges
+	// only. Evaluate runs on every storage tick; a record per tick would be the
+	// volume the logger is being asked to shed.
+	block := func() {
+		if g.canWrite.Swap(false) {
+			value := true
+			writeState = &value
+		}
+	}
+	allow := func() {
+		// Swap returns the previous value: only a previously blocked gate is a
+		// transition worth reporting.
+		if !g.canWrite.Swap(true) {
+			value := false
+			writeState = &value
+		}
+	}
 
 	// This defer is registered before the unlock defer so listeners run after the
 	// lock is released; reordering the two would deadlock any listener that calls
@@ -94,18 +144,21 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 		if resumeCallback != nil {
 			resumeCallback()
 		}
+		if writeState != nil {
+			g.publishWriteState(*writeState)
+		}
 	}()
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	if stats == nil || cfg == nil {
-		g.canWrite.Store(false)
+		block()
 		g.reason = "storage telemetry unavailable"
 		return StatusError
 	}
 	if isDismounted {
-		g.canWrite.Store(false)
+		block()
 		g.reason = "external mount point disconnected (fallthrough hazard)"
 		g.logger.Error("storage gate: dismount fallthrough hazard detected; writes blocked",
 			zap.String("path", stats.MountPoint),
@@ -115,7 +168,7 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 	}
 
 	if stats.IsReadOnly {
-		g.canWrite.Store(false)
+		block()
 		g.reason = "filesystem is mounted read-only"
 		g.logger.Error("storage gate: filesystem is read-only", zap.String("mount", stats.MountPoint))
 		return StatusError
@@ -128,7 +181,7 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 
 	if emergencyTriggered {
 		prevEmergency := g.isEmergency.Swap(true)
-		g.canWrite.Store(false)
+		block()
 
 		reason := "insufficient disk space: free space below minimum safe margin"
 		if usage >= cfg.EmergencyStopPercent {
@@ -150,7 +203,7 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 
 	// Space is within safe zone; check if we are recovering from emergency stop
 	wasEmergency := g.isEmergency.Swap(false)
-	g.canWrite.Store(true)
+	allow()
 	g.reason = ""
 
 	if wasEmergency {

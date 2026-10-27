@@ -5,7 +5,10 @@
 address = "127.0.0.1:8000"
 
 [logging]
-development = false
+# Runtime level: debug | info | warn | error. SIGHUP re-reads this key in place, so
+# it must stay present here: a missing key makes the reload a no-op that keeps the
+# active level (the reload never falls back to a default).
+level = "info"
 # Omitted policy values default to info/json/stderr with sampling and rotation disabled.
 # File output must explicitly enable bounded rotation and set a reviewed total-size budget.
 

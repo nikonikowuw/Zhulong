@@ -53,8 +53,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.AlgorithmTarget != "onnx" {
 		t.Fatalf("unexpected default AlgorithmTarget: %q", cfg.AlgorithmTarget)
 	}
-	if cfg.Development {
-		t.Fatalf("expected Development to default to false, got true")
+	if cfg.Logging.Format != "" {
+		t.Fatalf("expected the format to stay unset so json is derived, got %q", cfg.Logging.Format)
 	}
 	if cfg.SessionTTL != 24*time.Hour {
 		t.Fatalf("unexpected default SessionTTL: %v", cfg.SessionTTL)

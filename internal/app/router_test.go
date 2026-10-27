@@ -100,6 +100,52 @@ func TestHealthRequiresInitializedDependencies(t *testing.T) {
 	}
 }
 
+// TestHealthNamesDegradedLogSinkWithoutFailingReadiness pins the reporting contract:
+// a logger that lost its file is visible in the payload but must not turn the host
+// unhealthy — this device's readiness is about the database and the engine.
+func TestHealthNamesDegradedLogSinkWithoutFailingReadiness(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := map[string]struct {
+		sink loggerOutput
+		want string
+	}{
+		"healthy": {sink: &lifecycleLogSinkStub{events: &eventLog{}}, want: "ready"},
+		"failed": {
+			sink: &lifecycleLogSinkStub{events: &eventLog{}, healthErr: errors.New("read-only file system")},
+			want: "degraded",
+		},
+		"dropping": {sink: &lifecycleLogSinkStub{events: &eventLog{}, lost: 3}, want: "degraded"},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			router := newRouter(RouterParams{
+				Logger:        zap.NewNop(),
+				DatabaseReady: readinessStub(true),
+				NativeReady:   readinessStub(true),
+				LogSink:       test.sink,
+				Assets: http.FS(fstest.MapFS{
+					"index.html": &fstest.MapFile{Data: []byte("shell")},
+				}),
+			})
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+			}
+			body := recorder.Body.String()
+			if !strings.Contains(body, `"logging":"`+test.want+`"`) {
+				t.Fatalf("components did not report logging=%s: %s", test.want, body)
+			}
+			if !strings.Contains(body, `"status":"ready"`) {
+				t.Fatalf("degraded logger changed host readiness: %s", body)
+			}
+		})
+	}
+}
+
 func TestUnknownErrorIsWrappedForClient(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

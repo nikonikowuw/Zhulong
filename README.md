@@ -145,7 +145,8 @@ make dev             # Air（Go 热重载）+ Vite dev server 一起启动
 address = "127.0.0.1:8000"      # 内置默认同为 127.0.0.1:8000
 
 [logging]
-development = false
+level = "info"                  # debug|info|warn|error，SIGHUP 可在原进程内重读
+format = "json"                 # json|console；留空等价于 json
 
 [data]
 directory = "./data"            # 存放 zhulong.db 与 camera.key
@@ -156,6 +157,11 @@ custom_script = ""              # 可选的厂商网络脚本
 [algorithm]
 target = "onnx"                 # 必须匹配算法包 manifest.json 的 platform.target
 ```
+
+> **日志**：`logging.level` 可在运行期用 `kill -HUP <pid>` 重读（该键必须写在文件里，
+> 缺失时重读只会保留当前级别）。文件输出在独立有界队列后异步落盘，写不进去时降级到 stderr：
+> `/health` 的 `components.logging` 会显示 `degraded`，但 `status` 仍为 `ready`——
+> 宿主是否就绪只看数据库与引擎，一块写不动的日志盘不该让一台还在录像的 NVR 退出服务。
 
 > **端口**：内置默认（`app.DefaultConfig`）、仓库内 `config.toml` 与 Vite 开发代理统一为
 > `8000`。改端口时需同步 `internal/app/config.go` 与 `web/vite.config.ts`，否则网络重配的

@@ -5,9 +5,8 @@
 address = "127.0.0.1:8000"
 
 [logging]
-development = false
 level = "info"
-# Empty format follows development: console in development, JSON otherwise.
+# Empty format defaults to json; set "console" for a human-readable log.
 format = ""
 output = "stderr"
 

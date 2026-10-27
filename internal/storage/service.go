@@ -119,6 +119,15 @@ func NewService(
 	return s
 }
 
+// RegisterWriteObserver forwards filesystem write-block transitions to the host.
+// The host uses them to shed log volume while an emergency stop is active.
+func (s *Service) RegisterWriteObserver(observer func(blocked bool)) {
+	if s == nil || s.gate == nil {
+		return
+	}
+	s.gate.RegisterObserver(observer)
+}
+
 // SetAuditor configures the system audit log service.
 //
 // User-initiated storage operations keep their existing audit path and are out

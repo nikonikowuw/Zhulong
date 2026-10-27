@@ -36,6 +36,18 @@ type loggerProviderResult struct {
 	Logger *zap.Logger
 	Level  zap.AtomicLevel
 	Sink   loggerOutput
+	// Pressure lets the storage gate shed log volume while the media filesystem
+	// is in an emergency write stop.
+	Pressure *logPressure
+}
+
+// builtLogger keeps the assembly result in one value so the exported constructors
+// stay readable as their field count grows.
+type builtLogger struct {
+	logger   *zap.Logger
+	level    zap.AtomicLevel
+	pressure *logPressure
+	sink     loggerOutput
 }
 
 func parseLogLevel(value string) (zapcore.Level, error) {
@@ -56,47 +68,100 @@ func parseLogLevel(value string) (zapcore.Level, error) {
 // NewLogger constructs a configured logger for command modes outside the Fx host.
 // Callers that use file output must prepare the returned sink before doing work.
 func NewLogger(config Config) (*zap.Logger, zap.AtomicLevel, LoggerSink, error) {
-	return buildLogger(config)
+	built, err := buildLogger(config)
+	if err != nil {
+		return nil, zap.AtomicLevel{}, nil, err
+	}
+	return built.logger, built.level, built.sink, nil
 }
 
 func provideLogger(config Config) (loggerProviderResult, error) {
-	logger, level, sink, err := buildLogger(config)
+	built, err := buildLogger(config)
 	if err != nil {
 		return loggerProviderResult{}, err
 	}
-	return loggerProviderResult{Logger: logger, Level: level, Sink: sink}, nil
+	return loggerProviderResult{
+		Logger:   built.logger,
+		Level:    built.level,
+		Sink:     built.sink,
+		Pressure: built.pressure,
+	}, nil
 }
 
-func buildLogger(config Config) (*zap.Logger, zap.AtomicLevel, loggerOutput, error) {
+// logPolicy is the part of the logging configuration that can only be applied by
+// rebuilding the encoder and the sink, i.e. by restarting.
+type logPolicy struct {
+	Format   string
+	Output   string
+	Rotation RotationConfig
+	Sampling SamplingConfig
+}
+
+// resolveLogPolicy derives the values buildLogger actually uses. Startup and the
+// SIGHUP reload both go through it so a comparison never pits raw TOML against a
+// defaulted startup config and reports a change that is not there.
+func resolveLogPolicy(config Config) logPolicy {
 	logging := config.Logging
-	development := config.Development || logging.Development
+
+	format := logging.Format
+	if format == "" {
+		format = "json"
+	}
+	output := strings.TrimSpace(logging.Output)
+	if output == "" {
+		output = defaultLogOutput
+	}
+	return logPolicy{
+		Format:   format,
+		Output:   output,
+		Rotation: logging.Rotation,
+		Sampling: logging.Sampling,
+	}
+}
+
+// diffLogPolicy names the fields that changed and that only a restart can apply.
+func diffLogPolicy(current, next logPolicy) []string {
+	var changed []string
+	if current.Format != next.Format {
+		changed = append(changed, "logging.format")
+	}
+	if current.Output != next.Output {
+		changed = append(changed, "logging.output")
+	}
+	if current.Rotation != next.Rotation {
+		changed = append(changed, "logging.rotation")
+	}
+	if current.Sampling != next.Sampling {
+		changed = append(changed, "logging.sampling")
+	}
+	return changed
+}
+
+func buildLogger(config Config) (builtLogger, error) {
+	logging := config.Logging
 	levelName := logging.Level
 	if levelName == "" {
 		levelName = defaultLogLevel
 	}
 	level, err := parseLogLevel(levelName)
 	if err != nil {
-		return nil, zap.AtomicLevel{}, nil, err
+		return builtLogger{}, err
 	}
-	format := logging.Format
-	if format == "" {
-		if development {
-			format = "console"
-		} else {
-			format = "json"
-		}
-	}
+	policy := resolveLogPolicy(config)
+	format, output := policy.Format, policy.Output
 	if format != "json" && format != "console" {
-		return nil, zap.AtomicLevel{}, nil, fmt.Errorf("logging.format must be json or console; got %q", logging.Format)
+		return builtLogger{}, fmt.Errorf("logging.format must be json or console; got %q", logging.Format)
 	}
 
-	output := strings.TrimSpace(logging.Output)
-	if output == "" {
-		output = defaultLogOutput
-	}
 	sink, err := openLogSink(output, logging.Rotation)
 	if err != nil {
-		return nil, zap.AtomicLevel{}, nil, err
+		return builtLogger{}, err
+	}
+	// Only the file destination can block the caller, so only it gets the
+	// non-blocking queue. stderr must stay synchronous: it is the fallback the
+	// queue itself degrades to, and a chain of buffers has no last resort.
+	if fileSink, isFile := sink.(*boundedFileSink); isFile {
+		sink = newResilientSink(fileSink, nil)
 	}
 
 	encoderConfig := zapcore.EncoderConfig{
@@ -134,10 +199,11 @@ func buildLogger(config Config) (*zap.Logger, zap.AtomicLevel, loggerOutput, err
 	// wrapped by it: SanitizingCore.Check attaches only itself (so a Write can
 	// never bypass sanitization), which means a sampler placed *inside* the
 	// wrapper would never be consulted and would silently stop sampling.
-	var core zapcore.Core = logsafe.NewSanitizingCore(zapcore.NewCore(encoder, sink, atomicLevel))
+	pressure := newLogPressure(atomicLevel)
+	var core zapcore.Core = logsafe.NewSanitizingCore(zapcore.NewCore(encoder, sink, pressure))
 	if logging.Sampling.Enabled {
 		if logging.Sampling.Initial <= 0 || logging.Sampling.Thereafter <= 0 {
-			return nil, zap.AtomicLevel{}, nil, errors.New("logging.sampling.initial and logging.sampling.thereafter must be positive when sampling is enabled")
+			return builtLogger{}, errors.New("logging.sampling.initial and logging.sampling.thereafter must be positive when sampling is enabled")
 		}
 		core = zapcore.NewSamplerWithOptions(core, time.Second, logging.Sampling.Initial, logging.Sampling.Thereafter)
 	}
@@ -148,5 +214,5 @@ func buildLogger(config Config) (*zap.Logger, zap.AtomicLevel, loggerOutput, err
 		zap.ErrorOutput(zapcore.Lock(os.Stderr)),
 	)
 	zap.ReplaceGlobals(logger)
-	return logger, atomicLevel, sink, nil
+	return builtLogger{logger: logger, level: atomicLevel, pressure: pressure, sink: sink}, nil
 }

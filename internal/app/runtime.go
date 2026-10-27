@@ -121,6 +121,7 @@ type lifecycleRuntime struct {
 	logger      *zap.Logger
 	config      Config
 	logLevel    zap.AtomicLevel
+	logPressure *logPressure
 	logSink     loggerOutput
 	levelReload *logLevelReloader
 	listen      func(string, string) (net.Listener, error)
@@ -173,6 +174,7 @@ type runtimeParams struct {
 	Logger      *zap.Logger
 	Config      Config
 	LogLevel    zap.AtomicLevel
+	LogPressure *logPressure
 	LogSink     loggerOutput
 }
 
@@ -200,6 +202,7 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		logger:      p.Logger,
 		config:      p.Config,
 		logLevel:    p.LogLevel,
+		logPressure: p.LogPressure,
 		logSink:     p.LogSink,
 		listen:      net.Listen,
 		shutdown:    shutdown,
@@ -215,6 +218,13 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	if r.logSink != nil {
 		if err := r.logSink.Prepare(); err != nil {
 			return r.failStart(fmt.Errorf("prepare application log sink: %w", err))
+		}
+		// A file destination that could not be opened degrades to stderr instead of
+		// aborting the boot (see resilientSink), so the failure has to be reported
+		// here or it disappears. Health is cheap by contract: it must not touch the
+		// file, or /health would inherit the disk's latency.
+		if sinkErr, dropped := r.logSink.Health(); sinkErr != nil || dropped > 0 {
+			r.degradedStart("logging", sinkErr)
 		}
 	}
 	if err := r.database.OpenAndMigrate(ctx); err != nil {
@@ -259,6 +269,11 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	}
 
 	if r.storage != nil {
+		// Registered before Start so a first probe that already finds the disk full
+		// still reaches the logger.
+		if observer, ok := r.storage.(writeStateObserver); ok {
+			observer.RegisterWriteObserver(r.applyStorageWriteState)
+		}
 		if err := r.storage.Start(ctx); err != nil {
 			r.degradedStart("storage", err)
 		}
@@ -353,13 +368,15 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 	}()
 	r.httpReady = true
 	if r.config.ConfigPath != "" {
-		r.levelReload = newLogLevelReloader(r.config.ConfigPath, r.logLevel, r.logger)
+		r.levelReload = newLogLevelReloader(r.config.ConfigPath, r.config, r.logLevel, r.logger)
 		r.levelReload.Start()
 	}
 	r.logger.Info("HTTP server started", zap.String("address", listener.Addr().String()))
 	// One aggregated line, because the per-subsystem warnings above are easy to
-	// lose in a long boot log and nothing else reports a degraded host: /health
-	// only promises database and engine readiness.
+	// lose in a long boot log and nothing else reports a degraded host at boot:
+	// /health names a degraded logger in its components map, but its status stays
+	// database + engine readiness so an unwritable log file cannot pull a working
+	// NVR out of rotation.
 	if len(r.degraded) > 0 {
 		r.logger.Warn("host started with degraded subsystems; see the warnings above",
 			zap.Strings("subsystems", r.degraded))
@@ -428,6 +445,31 @@ func (r *lifecycleRuntime) failStart(startupErr error, cleanup ...error) error {
 	return errors.Join(allErrors...)
 }
 
+// writeStateObserver is implemented by the storage lifecycle when the emergency
+// gate can report filesystem write-block transitions. It is optional so the host
+// does not require a storage domain to exist.
+type writeStateObserver interface {
+	RegisterWriteObserver(func(blocked bool))
+}
+
+// applyStorageWriteState sheds log volume while the media filesystem is in an
+// emergency write stop. The gate has already refused new recording and snapshot
+// files at that point; continuing to write Debug/Info records into the same
+// budget would undercut the gate it is reacting to.
+//
+// Only the edges are reported: Evaluate runs on every storage tick, and a record
+// per tick would itself be the volume this method exists to remove.
+func (r *lifecycleRuntime) applyStorageWriteState(blocked bool) {
+	if r.logPressure == nil || !r.logPressure.SetPressure(blocked) {
+		return
+	}
+	if blocked {
+		r.logger.Warn("storage writes blocked; run log volume reduced to warn and above")
+		return
+	}
+	r.logger.Info("storage writes resumed; run log volume restored")
+}
+
 func (r *lifecycleRuntime) closeLogSink() error {
 	if r.logSink == nil {
 		return nil
@@ -435,18 +477,18 @@ func (r *lifecycleRuntime) closeLogSink() error {
 	sink := r.logSink
 	r.logSink = nil
 	closeErr := sink.Close()
-	sinkErr, lost := sink.Health()
-	var sinkErrors []error
+	// A degraded logger is reported, not fatal. The cause already reached the startup
+	// summary and /health; returning it here as well would turn a host that kept
+	// recording video into a failed unit for its service manager, and systemd would
+	// answer that with a restart loop.
+	if sinkErr, lost := sink.Health(); sinkErr != nil || lost > 0 {
+		r.logger.Warn("application log sink was degraded",
+			zap.Uint64("dropped_records", lost),
+			zap.Error(sinkErr),
+		)
+	}
 	if closeErr != nil {
-		sinkErrors = append(sinkErrors, closeErr)
-	}
-	if sinkErr != nil {
-		sinkErrors = append(sinkErrors, fmt.Errorf("application log sink failed after %d refused writes: %w", lost, sinkErr))
-	} else if lost > 0 {
-		sinkErrors = append(sinkErrors, fmt.Errorf("application log sink refused %d writes", lost))
-	}
-	if err := errors.Join(sinkErrors...); err != nil {
-		return fmt.Errorf("close application log sink: %w", err)
+		return fmt.Errorf("close application log sink: %w", closeErr)
 	}
 	return nil
 }
