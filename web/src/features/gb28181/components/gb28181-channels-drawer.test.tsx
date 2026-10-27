@@ -1,10 +1,30 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
 import { gb28181Api } from '../api/gb28181-api'
 import { type Gb28181Channel, type Gb28181Device } from '../data/schema'
 import { Gb28181ChannelsDrawer } from './gb28181-channels-drawer'
+
+const { syncMutateAsync, addCameraMutateAsync } = vi.hoisted(() => ({
+  syncMutateAsync: vi.fn(),
+  addCameraMutateAsync: vi.fn(),
+}))
+
+vi.mock('../hooks/use-gb28181', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../hooks/use-gb28181')>()
+  return {
+    ...actual,
+    useSyncGb28181Catalog: () => ({
+      mutateAsync: syncMutateAsync,
+      isPending: false,
+    }),
+    useAddGb28181ChannelCamera: () => ({
+      mutateAsync: addCameraMutateAsync,
+      isPending: false,
+    }),
+  }
+})
 
 const onlineDevice: Gb28181Device = {
   deviceId: '34020000001320000001',
@@ -92,6 +112,10 @@ function renderDrawer(
 }
 
 describe('Gb28181ChannelsDrawer', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('renders channels with resolution and camera status', async () => {
     vi.spyOn(gb28181Api, 'listChannels').mockResolvedValueOnce(sampleChannels)
 
@@ -138,32 +162,35 @@ describe('Gb28181ChannelsDrawer', () => {
 
   it('triggers sync catalog on button click', async () => {
     vi.spyOn(gb28181Api, 'listChannels').mockResolvedValueOnce([])
-    const syncSpy = vi
-      .spyOn(gb28181Api, 'syncCatalog')
-      .mockResolvedValueOnce({ deviceId: onlineDevice.deviceId, total: 2 })
+    syncMutateAsync.mockResolvedValueOnce({
+      deviceId: onlineDevice.deviceId,
+      total: 2,
+    })
 
     const { getByRole } = await renderDrawer()
 
     await userEvent.click(getByRole('button', { name: '同步目录' }))
 
-    expect(syncSpy).toHaveBeenCalledWith(onlineDevice.deviceId)
+    await vi.waitFor(() => {
+      expect(syncMutateAsync).toHaveBeenCalledWith(onlineDevice.deviceId)
+    })
   })
 
   it('triggers add channel as camera on button click', async () => {
     vi.spyOn(gb28181Api, 'listChannels').mockResolvedValueOnce([
       sampleChannels[0],
     ])
-    const addSpy = vi
-      .spyOn(gb28181Api, 'addChannelAsCamera')
-      .mockResolvedValueOnce({ id: 'cam_new' })
+    addCameraMutateAsync.mockResolvedValueOnce({ id: 'cam_new' })
 
     const { getByRole } = await renderDrawer()
 
     await userEvent.click(getByRole('button', { name: '添加为摄像机' }))
 
-    expect(addSpy).toHaveBeenCalledWith(
-      onlineDevice.deviceId,
-      sampleChannels[0].channelId
-    )
+    await vi.waitFor(() => {
+      expect(addCameraMutateAsync).toHaveBeenCalledWith({
+        deviceId: onlineDevice.deviceId,
+        channelId: sampleChannels[0].channelId,
+      })
+    })
   })
 })
