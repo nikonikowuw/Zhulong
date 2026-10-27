@@ -191,7 +191,7 @@ int FrameBroker::find_or_evict_free_slot(std::unique_lock<std::mutex>& /*lock*/)
     return -1; // 全部繁忙且未超时
 }
 
-bool FrameBroker::publish_frame(const HardwareFrame& frame) {
+bool FrameBroker::publish_frame(const HardwareFrame& frame, const FrameMotionInfo& motion) {
     if (!running_.load()) return false;
 
     int slot_idx = -1;
@@ -279,6 +279,12 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame) {
     // ⚠️ 恒为 -1：fd 是进程本地句柄，跨进程传值无意义且危险（见 ipc_protocol.hpp 注释）。
     //    真实的 DMA-BUF 句柄仅通过 SCM_RIGHTS 传递，接收端必须只认本地副本 fd。
     msg.reserved_fd = -1;
+
+    msg.has_motion = motion.has_motion;
+    msg.motion_box_count = std::min(static_cast<size_t>(motion.motion_box_count), MAX_IPC_MOTION_BOXES);
+    for (size_t i = 0; i < msg.motion_box_count; ++i) {
+        msg.motion_boxes[i] = motion.motion_boxes[i];
+    }
 
     if (frame.format == FRAME_FORMAT_NV12) {
         msg.format = ZHULONG_PIXEL_FORMAT_NV12;

@@ -102,9 +102,11 @@ public:
 
     /**
      * @brief 写入帧数据到共享内存槽位并向所有已连接的 Runner 广播分发
+     * @param frame 输入硬件帧
+     * @param motion 可选运动检测元数据（默认 has_motion = 1 放行）
      * @return true 若帧成功写入并至少分发或进入槽位；false 若全槽位枯竭且无法驱逐导致丢帧
      */
-    bool publish_frame(const HardwareFrame& frame);
+    bool publish_frame(const HardwareFrame& frame, const FrameMotionInfo& motion = {});
 
     /**
      * @brief 检查 Broker 是否处于运行状态

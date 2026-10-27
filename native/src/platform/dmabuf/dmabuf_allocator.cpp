@@ -39,18 +39,8 @@ struct dma_heap_allocation_data {
 #define DMA_HEAP_IOCTL_ALLOC _IOWR(DMA_HEAP_IOC_MAGIC, 0x0, struct dma_heap_allocation_data)
 #endif
 
-#ifndef DMA_BUF_SYNC_READ
-struct dma_buf_sync {
-    __u64 flags;
-};
-#define DMA_BUF_SYNC_READ (1 << 0)
-#define DMA_BUF_SYNC_WRITE (2 << 0)
-#define DMA_BUF_SYNC_RW (DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE)
-#define DMA_BUF_SYNC_START (0 << 2)
-#define DMA_BUF_SYNC_END (1 << 2)
-#define DMA_BUF_BASE 'b'
-#define DMA_BUF_IOCTL_SYNC _IOW(DMA_BUF_BASE, 0, struct dma_buf_sync)
-#endif
+// <linux/dma-buf.h> 缺失时的 UAPI 兜底定义（全仓唯一来源）
+#include "platform/dmabuf/dmabuf_sync.hpp"
 
 #ifndef DRM_IOCTL_MODE_CREATE_DUMB
 struct drm_mode_create_dumb {

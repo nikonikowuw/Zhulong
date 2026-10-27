@@ -136,6 +136,7 @@ add_library(ZhulongEngine STATIC
     src/pipeline/preview_normalizer.cpp
     src/pipeline/subscription.cpp
     src/pipeline/frame_publisher.cpp
+    src/pipeline/motion_detector.cpp
     src/nodes/capture/rtsp_input.cpp
     src/nodes/decode/decoder_factory.cpp
     src/nodes/decode/ffmpeg_decoder.cpp
@@ -677,6 +678,19 @@ if(BUILD_TESTING)
         set_tests_properties(ZhulongFaceRecognitionOnnx PROPERTIES TIMEOUT 20)
     endif()
 
+    # 运动区域检测算法单元测试（纯合成帧与宏块聚类）
+    add_executable(ZhulongMotionDetectorTests tests/motion_detector_test.cpp)
+    target_compile_features(ZhulongMotionDetectorTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongMotionDetectorTests PRIVATE src include)
+    target_link_libraries(ZhulongMotionDetectorTests PRIVATE ZhulongEngine)
+    add_test(NAME ZhulongMotionDetector COMMAND ZhulongMotionDetectorTests)
+
+    # Runner 骨架帧运动门禁单元测试（报文前缀兼容 + 短路判定，纯头文件无需链接）
+    add_executable(ZhulongMotionGateTests tests/motion_gate_test.cpp)
+    target_compile_features(ZhulongMotionGateTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongMotionGateTests PRIVATE sdk/include sdk/src src)
+    add_test(NAME ZhulongMotionGate COMMAND ZhulongMotionGateTests)
+
     # ⚠️ 这些测试完全依赖 assert()，必须显式 -UNDEBUG：否则 RelWithDebInfo 构建下
     #    NDEBUG 会把全部断言编译掉，测试会「假绿」——曾经 ZhulongIpcSocketFdTests
     #    就不在本列表中，其断言从未真正执行过。
@@ -688,6 +702,8 @@ if(BUILD_TESTING)
         ZhulongGallerySyncTests
         ZhulongIpcSocketFdTests
         ZhulongDmaBufAllocatorTests
+        ZhulongMotionDetectorTests
+        ZhulongMotionGateTests
     )
     if(TARGET ZhulongFaceRecognitionPluginTests)
         list(APPEND ASSERT_TEST_TARGETS ZhulongFaceRecognitionPluginTests)

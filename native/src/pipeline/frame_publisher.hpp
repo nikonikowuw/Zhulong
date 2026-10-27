@@ -12,6 +12,7 @@
 #pragma once
 
 #include "pipeline/stream.hpp"
+#include "pipeline/motion_detector.hpp"
 #include "algorithm/ipc/frame_broker.hpp"
 
 #include <atomic>
@@ -87,6 +88,8 @@ private:
     // ⚠️ mutable + mutex：latest_frame() 是 const 查询接口，但需要加锁读取。
     mutable std::mutex latest_mutex_;
     HardwareFrame::ConstPtr latest_frame_;
+
+    MotionDetector motion_detector_;
 };
 
 } // namespace zhulong

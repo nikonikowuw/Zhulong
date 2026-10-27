@@ -35,34 +35,8 @@
 #if defined(__linux__)
 #include <cerrno>
 #include <sys/ioctl.h>
-#if defined(__has_include)
-#if __has_include(<linux/dma-buf.h>)
-#include <linux/dma-buf.h>
-#define ZHULONG_HAVE_DMA_BUF_H 1
-#endif
-#endif
-// 兜底定义：交叉编译 sysroot 缺少 <linux/dma-buf.h> 时仍需正确的 ioctl 编码。
-// 数值来自 Linux UAPI，与内核 ABI 一一对应，故意硬编码而不是自己发明。
-#ifndef ZHULONG_HAVE_DMA_BUF_H
-struct dma_buf_sync {
-    uint64_t flags;
-};
-#ifndef DMA_BUF_SYNC_READ
-#define DMA_BUF_SYNC_READ (1 << 0)
-#endif
-#ifndef DMA_BUF_SYNC_START
-#define DMA_BUF_SYNC_START (0 << 2)
-#endif
-#ifndef DMA_BUF_SYNC_END
-#define DMA_BUF_SYNC_END (1 << 2)
-#endif
-#ifndef DMA_BUF_BASE
-#define DMA_BUF_BASE 'b'
-#endif
-#ifndef DMA_BUF_IOCTL_SYNC
-#define DMA_BUF_IOCTL_SYNC _IOW(DMA_BUF_BASE, 0, struct dma_buf_sync)
-#endif
-#endif
+// <linux/dma-buf.h> 缺失时的 UAPI 兜底定义（全仓唯一来源）
+#include "platform/dmabuf/dmabuf_sync.hpp"
 #endif // __linux__
 
 namespace zhulong {

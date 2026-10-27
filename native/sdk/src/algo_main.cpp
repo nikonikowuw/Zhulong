@@ -17,28 +17,16 @@
 #include "internal/json.hpp"
 #include "internal/gallery_index.hpp"
 #include "internal/gallery_parser.hpp"
+#include "internal/motion_gate.hpp"
 #include "algorithm/ipc/ipc_protocol.hpp"
 #include "algorithm/ipc/shm_pool.hpp"
 #include "algorithm/ipc/unix_socket.hpp"
+// DMA_BUF_IOCTL_SYNC 的 UAPI 兜底定义全仓唯一来源，不要在这里再抄一份
+#include "platform/dmabuf/dmabuf_sync.hpp"
 #include <zhulong/runtime/runtime_factory.hpp>
 
 #include <unistd.h>
 #include <sys/mman.h>
-#if defined(__linux__)
-#include <sys/ioctl.h>
-#ifndef DMA_BUF_SYNC_READ
-struct dma_buf_sync
-{
-    uint64_t flags;
-};
-#define DMA_BUF_SYNC_READ (1 << 0)
-#define DMA_BUF_SYNC_WRITE (2 << 0)
-#define DMA_BUF_SYNC_START (0 << 2)
-#define DMA_BUF_SYNC_END (1 << 2)
-#define DMA_BUF_BASE 'b'
-#define DMA_BUF_IOCTL_SYNC _IOW(DMA_BUF_BASE, 0, struct dma_buf_sync)
-#endif
-#endif
 
 #include <atomic>
 #include <chrono>
@@ -912,96 +900,118 @@ namespace detail
                     continue;
                 }
 
-                if (hdr.msg_type == ipc::MSG_FRAME_DISPATCH && payload.size() >= sizeof(ipc::FrameDispatchMsg))
-                {
-                    ipc::FrameDispatchMsg dispatch{};
-                    std::memcpy(&dispatch, payload.data(), sizeof(dispatch));
+                // ⚠️ 前缀兼容：旧宿主没有运动字段，解码后 has_motion 恒为 1（全帧推理）。
+                //    若这里直接按 sizeof(FrameDispatchMsg) 卡长度，新 Runner 连旧宿主会一条报文都不认，
+                //    既不推理也不发 ACK，静默退化成「每租约超时收 2 帧」。
+                ipc::FrameDispatchMsg dispatch{};
+                const bool is_frame_dispatch =
+                    (hdr.msg_type == ipc::MSG_FRAME_DISPATCH) &&
+                    gate::decode_frame_dispatch(payload.data(), payload.size(), dispatch);
 
+                if (is_frame_dispatch)
+                {
                     // ⚠️ 只接受 SCM_RIGHTS 传来的本地副本 fd。绝不回退到 dispatch.reserved_fd：
                     //    那是宿主进程的 fd 号，在本进程中可能指向任意无关资源。
                     const int active_dma_fd = received_fd;
                     void* dma_mmap = nullptr;
-                    if (active_dma_fd >= 0 && shm.slot_size() > 0)
+
+                    if (gate::should_skip_inference(dispatch.has_motion))
                     {
-                        dma_mmap = ::mmap(nullptr, shm.slot_size(), PROT_READ, MAP_SHARED, active_dma_fd, 0);
-                        if (dma_mmap == MAP_FAILED)
+                        // 画面完全静止：跳过模型前向推理，实现 0 NPU/GPU 算力开销
+                        if (last_had_targets)
                         {
-                            dma_mmap = nullptr;
+                            // 若上一帧有目标，发送一次空结果作为消失信标
+                            std::string beacon = serialize_inference_result(dispatch.stream_id, dispatch.pts, dispatch.capture_time_ms, 0, nullptr, algorithm_id);
+                            client.send_msg(ipc::MSG_RESULT, beacon.data(), beacon.size());
+                            last_had_targets = false;
                         }
-#if defined(__linux__)
-                        if (dma_mmap != nullptr)
-                        {
-                            struct dma_buf_sync sync{DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ};
-                            ioctl(active_dma_fd, DMA_BUF_IOCTL_SYNC, &sync);
-                        }
-#endif
                     }
-
-                    const uint8_t *slot_base = (dma_mmap != nullptr)
-                        ? static_cast<const uint8_t*>(dma_mmap)
-                        : shm.slot_read_ptr(dispatch.slot_index);
-                    if (slot_base && dispatch.offsets[0] < shm.slot_size())
+                    else
                     {
-                        zhulong_frame_view view{};
-                        view.frame_id = dispatch.frame_id;
-                        view.pts = static_cast<uint64_t>(dispatch.pts);
-                        view.width = dispatch.width;
-                        view.height = dispatch.height;
-                        view.format = dispatch.format;
-                        view.dma_buf_fd = active_dma_fd;
-                        view.strides[0] = dispatch.strides[0];
-                        view.planes[0] = slot_base + dispatch.offsets[0];
-
-                        if (dispatch.offsets[1] > 0 && dispatch.offsets[1] < shm.slot_size())
+                        // ⚠️ DMA-BUF 映射必须在门禁之后：静止帧连 mmap/SYNC 都不该碰，
+                        //    否则「省算力」只是省了 NPU，系统调用照样每帧三次。
+                        if (active_dma_fd >= 0 && shm.slot_size() > 0)
                         {
-                            view.strides[1] = dispatch.strides[1];
-                            view.planes[1] = slot_base + dispatch.offsets[1];
-                        }
-                        if (dispatch.offsets[2] > 0 && dispatch.offsets[2] < shm.slot_size())
-                        {
-                            view.strides[2] = dispatch.strides[2];
-                            view.planes[2] = slot_base + dispatch.offsets[2];
-                        }
-
-                        // 帧边界：先排控制消息，再推理（TaskContext 由骨架按流维护）
-                        drain_control_messages(task_context);
-
-                        zhulong_inference_result *result = nullptr;
-                        auto t0 = std::chrono::steady_clock::now();
-                        rc = api.process(task, &view, &result);
-                        auto t1 = std::chrono::steady_clock::now();
-                        int64_t cost_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
-
-                        if (rc != ZHULONG_PLUGIN_OK)
-                        {
-                            if (!process_failure_reported)
+                            dma_mmap = ::mmap(nullptr, shm.slot_size(), PROT_READ, MAP_SHARED, active_dma_fd, 0);
+                            if (dma_mmap == MAP_FAILED)
                             {
-                                ZL_LOGE(stream_id, "algorithm.runner", "plugin_process_failed rc=%d",
-                                        static_cast<int>(rc));
+                                dma_mmap = nullptr;
                             }
-                            process_failure_reported = true;
-                        }
-                        else
-                        {
-                            process_failure_reported = false;
+#if defined(__linux__)
+                            if (dma_mmap != nullptr)
+                            {
+                                struct dma_buf_sync sync{DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ};
+                                ioctl(active_dma_fd, DMA_BUF_IOCTL_SYNC, &sync);
+                            }
+#endif
                         }
 
-                        uint32_t count = (result != nullptr && rc == ZHULONG_PLUGIN_OK) ? result->count : 0;
-                        bool has_targets = (count > 0);
-
-                        // 仅在本次或上次有目标时才上报结果，避免连续空帧刷屏（去噪）
-                        if (has_targets || last_had_targets)
+                        const uint8_t *slot_base = (dma_mmap != nullptr)
+                            ? static_cast<const uint8_t*>(dma_mmap)
+                            : shm.slot_read_ptr(dispatch.slot_index);
+                        if (slot_base && dispatch.offsets[0] < shm.slot_size())
                         {
-                            std::string payload = serialize_inference_result(dispatch.stream_id, dispatch.pts, dispatch.capture_time_ms, cost_ms, result, algorithm_id);
-                            client.send_msg(ipc::MSG_RESULT, payload.data(), payload.size());
-                        }
-                        last_had_targets = has_targets;
+                            zhulong_frame_view view{};
+                            view.frame_id = dispatch.frame_id;
+                            view.pts = static_cast<uint64_t>(dispatch.pts);
+                            view.width = dispatch.width;
+                            view.height = dispatch.height;
+                            view.format = dispatch.format;
+                            view.dma_buf_fd = active_dma_fd;
+                            view.strides[0] = dispatch.strides[0];
+                            view.planes[0] = slot_base + dispatch.offsets[0];
 
-                        // ⚠️ R2：结果内存由插件创建，只能由同一插件的 result_release 释放。
-                        // 无论 process 是否成功，只要 result 非空就必须释放，不得泄漏。
-                        if (result)
-                        {
-                            api.result_release(result);
+                            if (dispatch.offsets[1] > 0 && dispatch.offsets[1] < shm.slot_size())
+                            {
+                                view.strides[1] = dispatch.strides[1];
+                                view.planes[1] = slot_base + dispatch.offsets[1];
+                            }
+                            if (dispatch.offsets[2] > 0 && dispatch.offsets[2] < shm.slot_size())
+                            {
+                                view.strides[2] = dispatch.strides[2];
+                                view.planes[2] = slot_base + dispatch.offsets[2];
+                            }
+
+                            // 帧边界：先排控制消息，再推理（TaskContext 由骨架按流维护）
+                            drain_control_messages(task_context);
+
+                            zhulong_inference_result *result = nullptr;
+                            auto t0 = std::chrono::steady_clock::now();
+                            rc = api.process(task, &view, &result);
+                            auto t1 = std::chrono::steady_clock::now();
+                            int64_t cost_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+
+                            if (rc != ZHULONG_PLUGIN_OK)
+                            {
+                                if (!process_failure_reported)
+                                {
+                                    ZL_LOGE(stream_id, "algorithm.runner", "plugin_process_failed rc=%d",
+                                            static_cast<int>(rc));
+                                }
+                                process_failure_reported = true;
+                            }
+                            else
+                            {
+                                process_failure_reported = false;
+                            }
+
+                            uint32_t count = (result != nullptr && rc == ZHULONG_PLUGIN_OK) ? result->count : 0;
+                            bool has_targets = (count > 0);
+
+                            // 仅在本次或上次有目标时才上报结果，避免连续空帧刷屏（去噪）
+                            if (has_targets || last_had_targets)
+                            {
+                                std::string payload = serialize_inference_result(dispatch.stream_id, dispatch.pts, dispatch.capture_time_ms, cost_ms, result, algorithm_id);
+                                client.send_msg(ipc::MSG_RESULT, payload.data(), payload.size());
+                            }
+                            last_had_targets = has_targets;
+
+                            // ⚠️ R2：结果内存由插件创建，只能由同一插件的 result_release 释放。
+                            // 无论 process 是否成功，只要 result 非空就必须释放，不得泄漏。
+                            if (result)
+                            {
+                                api.result_release(result);
+                            }
                         }
                     }
 

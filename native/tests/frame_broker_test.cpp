@@ -628,7 +628,9 @@ void test_protocol_alignment_assertions() {
     assert(sizeof(IpcHeader) == 16);
     assert(sizeof(HandshakeReq) == 40);
     assert(sizeof(HandshakeResp) == 80);
-    assert(sizeof(FrameDispatchMsg) == 96);
+    assert(sizeof(IpcMotionBox) == 16);
+    assert(LEGACY_FRAME_DISPATCH_SIZE == 96);
+    assert(sizeof(FrameDispatchMsg) == 168);
     assert(sizeof(FrameAckMsg) == 32);
 
     assert(offsetof(FrameDispatchMsg, stream_id) % 8 == 0);
@@ -636,6 +638,8 @@ void test_protocol_alignment_assertions() {
     assert(offsetof(FrameDispatchMsg, generation) % 8 == 0);
     assert(offsetof(FrameDispatchMsg, pts) % 8 == 0);
     assert(offsetof(FrameDispatchMsg, capture_time_ms) % 8 == 0);
+    assert(offsetof(FrameDispatchMsg, has_motion) % 8 == 0);
+    assert(offsetof(FrameDispatchMsg, motion_boxes) % 8 == 0);
 
     assert(offsetof(FrameAckMsg, stream_id) % 8 == 0);
     assert(offsetof(FrameAckMsg, frame_id) % 8 == 0);
@@ -1342,6 +1346,91 @@ void test_frame_broker_malformed_ack_keeps_quota() {
 }
 
 // =============================================================================
+// Test: broker 分发带运动检测元数据的帧
+// =============================================================================
+void test_frame_broker_motion_dispatch() {
+    const uint64_t stream_id = 999;
+    FrameBroker broker;
+    assert(broker.start(stream_id));
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path()));
+
+    HandshakeReq req{};
+    req.client_id = 0;
+    std::strcpy(req.client_name, "motion_tester");
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> p;
+    assert(client.recv_msg(resp_hdr, p, 1000));
+    HandshakeResp resp{};
+    std::memcpy(&resp, p.data(), sizeof(resp));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    std::vector<uint8_t> dummy(640 * 480 * 3, 0);
+    HardwareFrame frame;
+    frame.width = 640;
+    frame.height = 480;
+    frame.stride = 640 * 3;
+    frame.format = FRAME_FORMAT_UNKNOWN;
+    frame.pts = 100;
+    frame.host_ptr = dummy.data();
+
+    FrameMotionInfo motion{};
+    motion.has_motion = 1;
+    motion.motion_box_count = 2;
+    motion.motion_boxes[0] = IpcMotionBox{0.1f, 0.2f, 0.3f, 0.4f};
+    motion.motion_boxes[1] = IpcMotionBox{0.5f, 0.6f, 0.7f, 0.8f};
+
+    assert(broker.publish_frame(frame, motion));
+
+    IpcHeader d_hdr{};
+    std::vector<uint8_t> d_payload;
+    assert(client.recv_msg(d_hdr, d_payload, 1000));
+    FrameDispatchMsg dispatch{};
+    std::memcpy(&dispatch, d_payload.data(), sizeof(dispatch));
+
+    assert(dispatch.has_motion == 1);
+    assert(dispatch.motion_box_count == 2);
+    assert(std::abs(dispatch.motion_boxes[0].x1 - 0.1f) < 1e-4f);
+    assert(std::abs(dispatch.motion_boxes[0].y1 - 0.2f) < 1e-4f);
+    assert(std::abs(dispatch.motion_boxes[0].x2 - 0.3f) < 1e-4f);
+    assert(std::abs(dispatch.motion_boxes[0].y2 - 0.4f) < 1e-4f);
+    assert(std::abs(dispatch.motion_boxes[1].x1 - 0.5f) < 1e-4f);
+    assert(std::abs(dispatch.motion_boxes[1].y1 - 0.6f) < 1e-4f);
+    assert(std::abs(dispatch.motion_boxes[1].x2 - 0.7f) < 1e-4f);
+    assert(std::abs(dispatch.motion_boxes[1].y2 - 0.8f) < 1e-4f);
+
+    FrameAckMsg ack{};
+    ack.stream_id = stream_id;
+    ack.frame_id = dispatch.frame_id;
+    ack.slot_index = dispatch.slot_index;
+    ack.generation = dispatch.generation;
+    ack.client_id = resp.client_id;
+    assert(client.send_msg(MSG_FRAME_ACK, &ack, sizeof(ack)));
+
+    // 不传运动元数据的调用（默认参数）必须表现为「全帧放行」的 fail-open，
+    // 而不是 has_motion = 0 把整条流的推理关掉。
+    assert(broker.publish_frame(frame));
+    FrameDispatchMsg default_dispatch{};
+    assert(client.recv_msg(d_hdr, d_payload, 1000));
+    std::memcpy(&default_dispatch, d_payload.data(), sizeof(default_dispatch));
+    assert(default_dispatch.has_motion == 1);
+    assert(default_dispatch.motion_box_count == 0);
+    assert(default_dispatch.motion_boxes[0].x1 == 0.0f);
+
+    ack.frame_id = default_dispatch.frame_id;
+    ack.slot_index = default_dispatch.slot_index;
+    ack.generation = default_dispatch.generation;
+    assert(client.send_msg(MSG_FRAME_ACK, &ack, sizeof(ack)));
+
+    client.disconnect();
+    broker.stop();
+    std::cout << "[PASS] test_frame_broker_motion_dispatch" << std::endl;
+}
+
+// =============================================================================
 // Test: broker 创建必须等待宿主资源目录锁
 //
 // 宿主启动清扫（internal/algorunner）与 FrameBroker::start 共享 broker 资源目录锁。
@@ -1412,6 +1501,7 @@ int main(int argc, char* argv[]) {
     test_broker_host_crash_then_restart();
     test_frame_broker_slot_capacity_reject();
     test_frame_broker_malformed_ack_keeps_quota();
+    test_frame_broker_motion_dispatch();
     test_frame_broker_result_egress();
     test_frame_broker_control_broadcast();
     test_frame_broker_start_waits_for_resource_lock();

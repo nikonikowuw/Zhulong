@@ -87,10 +87,35 @@ struct HandshakeResp {
     uint32_t slot_size{0};       /**< 单个槽位字节数 */
 };
 
+constexpr size_t MAX_IPC_MOTION_BOXES = 4;
+
 /**
- * @brief 帧分发通知负载（MSG_FRAME_DISPATCH，定长 88 字节）
+ * @brief 归一化运动外接矩形 [x1, y1, x2, y2] ∈ [0.0, 1.0]（定长 16 字节）
+ */
+struct IpcMotionBox {
+    float x1{0.0f};
+    float y1{0.0f};
+    float x2{0.0f};
+    float y2{0.0f};
+};
+
+/**
+ * @brief 帧运动检测元信息（用于 FrameBroker 构造分发报文）
+ */
+struct FrameMotionInfo {
+    uint32_t has_motion{1};       /**< 1 表示存在运动或未做检测（默认放行）；0 表示完全静止 */
+    uint32_t motion_box_count{0}; /**< 有效外接框数量 */
+    IpcMotionBox motion_boxes[MAX_IPC_MOTION_BOXES]{}; /**< 归一化外接矩形 */
+};
+
+/**
+ * @brief 帧分发通知负载（MSG_FRAME_DISPATCH，定长 168 字节）
  *
- * ⚠️ 64 位整数字段前置并严格保持 8 字节自然对齐，尾部含 reserved_pad 保证结构体总尺寸被 8 整除。
+ * ⚠️ 64 位整数字段前置并严格保持 8 字节自然对齐，尾部含运动检测扩展字段保证结构体总尺寸被 8 整除。
+ *
+ * ⚠️ **前缀兼容铁律**：运动检测字段追加在既有 96 字节布局的**尾部**，前 96 字节一个字节都不许动。
+ *    旧宿主（96 字节报文）配新 Runner 时，后者必须按遗留格式解析并退化为「全帧推理」；
+ *    因为宿主与算法包分开交付（`make sdk-dist`），两个方向的版本偏斜都会真实发生。
  */
 struct FrameDispatchMsg {
     uint64_t stream_id{0};       /**< 物理流全局唯一 ID */
@@ -108,8 +133,20 @@ struct FrameDispatchMsg {
                               *   ⚠️ 严禁写入宿主进程的 dma_fd：fd 号是进程本地句柄，
                               *   跨进程传值会让接收端对无关资源执行 mmap/ioctl。
                               *   真实句柄只经 SCM_RIGHTS 传递。 */
-    uint32_t reserved_pad{0};    /**< 结构体尾部对齐填充字段，确保总大小为 8 的倍数（96 字节） */
+    uint32_t reserved_pad{0};    /**< 结构体中间对齐填充字段（保持 8 字节对齐） */
+
+    /* ---------------- 运动检测扩展字段 (定长 72 字节) ---------------- */
+    uint32_t has_motion{1};       /**< 1 表示有运动或未启用检测（默认放行）；0 表示画面静止 */
+    uint32_t motion_box_count{0}; /**< 有效运动外接框数量（0 ~ MAX_IPC_MOTION_BOXES） */
+    IpcMotionBox motion_boxes[MAX_IPC_MOTION_BOXES]{}; /**< 4 * 16 = 64 字节归一化坐标 [x1, y1, x2, y2] */
 };
+
+/**
+ * @brief 运动检测字段落地前的分发报文尺寸（96 字节），新 Runner 的前缀兼容下限
+ *
+ * 由 `static_assert` 约束为「运动字段之前的所有内容」，杜绝有人往中间插字段。
+ */
+constexpr size_t LEGACY_FRAME_DISPATCH_SIZE = 96;
 
 /**
  * @brief 帧处理确认负载（MSG_FRAME_ACK，定长 32 字节）
@@ -137,7 +174,8 @@ struct HeartbeatMsg {
 static_assert(sizeof(IpcHeader) == 16, "IpcHeader must be 16 bytes");
 static_assert(sizeof(HandshakeReq) == 40, "HandshakeReq size mismatch");
 static_assert(sizeof(HandshakeResp) == 80, "HandshakeResp size mismatch");
-static_assert(sizeof(FrameDispatchMsg) == 96, "FrameDispatchMsg size mismatch");
+static_assert(sizeof(IpcMotionBox) == 16, "IpcMotionBox size mismatch");
+static_assert(sizeof(FrameDispatchMsg) == 168, "FrameDispatchMsg size mismatch");
 static_assert(sizeof(FrameAckMsg) == 32, "FrameAckMsg size mismatch");
 
 static_assert(offsetof(FrameDispatchMsg, stream_id) % 8 == 0, "stream_id unaligned");
@@ -145,6 +183,10 @@ static_assert(offsetof(FrameDispatchMsg, frame_id) % 8 == 0, "frame_id unaligned
 static_assert(offsetof(FrameDispatchMsg, generation) % 8 == 0, "generation unaligned");
 static_assert(offsetof(FrameDispatchMsg, pts) % 8 == 0, "pts unaligned");
 static_assert(offsetof(FrameDispatchMsg, capture_time_ms) % 8 == 0, "capture_time_ms unaligned");
+static_assert(offsetof(FrameDispatchMsg, has_motion) % 8 == 0, "has_motion unaligned");
+static_assert(offsetof(FrameDispatchMsg, motion_boxes) % 8 == 0, "motion_boxes unaligned");
+static_assert(LEGACY_FRAME_DISPATCH_SIZE == offsetof(FrameDispatchMsg, has_motion),
+              "legacy dispatch prefix must end exactly where motion fields begin");
 
 static_assert(offsetof(FrameAckMsg, stream_id) % 8 == 0, "stream_id unaligned");
 static_assert(offsetof(FrameAckMsg, frame_id) % 8 == 0, "frame_id unaligned");

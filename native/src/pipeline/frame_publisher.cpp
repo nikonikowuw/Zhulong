@@ -12,6 +12,8 @@
 #include "pipeline/frame_publisher.hpp"
 #include "common/log.hpp"
 
+#include <algorithm>
+
 namespace zhulong {
 
 FramePublisher::FramePublisher(std::shared_ptr<Stream> stream, ipc::FrameBroker* broker)
@@ -41,6 +43,7 @@ void FramePublisher::stop() {
         std::lock_guard<std::mutex> lock(latest_mutex_);
         latest_frame_.reset();
     }
+    motion_detector_.reset();
 }
 
 HardwareFrame::ConstPtr FramePublisher::latest_frame() const {
@@ -96,7 +99,17 @@ void FramePublisher::publish_loop() noexcept {
         }
 
         if (broker_ && broker_->is_running()) {
-            broker_->publish_frame(*frame);
+            // 运动元数据只是「省算力」的提示，不是正确性前提：检测失败一律保持
+            // FrameMotionInfo 的默认值（has_motion = 1）走全帧推理（fail-open），
+            // 绝不让一次像素读取失败变成漏检。
+            MotionResult motion_res{};
+            ipc::FrameMotionInfo motion_info{};
+            if (motion_detector_.detect(*frame, motion_res)) {
+                motion_info.has_motion = motion_res.has_motion ? 1U : 0U;
+                motion_info.motion_box_count = motion_res.box_count;
+                std::copy_n(motion_res.boxes, motion_res.box_count, motion_info.motion_boxes);
+            }
+            broker_->publish_frame(*frame, motion_info);
         }
 
         // 抓拍快照引用：新帧覆盖旧帧（不排队），最多只多占 1 个解码 buffer。

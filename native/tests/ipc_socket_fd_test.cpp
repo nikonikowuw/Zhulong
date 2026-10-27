@@ -93,7 +93,7 @@ int main() {
     assert(received.stream_id == 42);
     assert(received.frame_id == 7);
     assert(received.reserved_fd == -1);
-    assert(sizeof(FrameDispatchMsg) == 96); // 线格式未漂移
+    assert(sizeof(FrameDispatchMsg) == 168); // 线格式（含运动扩展）未漂移
 
     // 6. REQ-7: 发送侧必须对称拦截超大 payload（不得静默截断 size_t）
     std::vector<uint8_t> too_large(MAX_IPC_PAYLOAD_SIZE + 1, 0);
