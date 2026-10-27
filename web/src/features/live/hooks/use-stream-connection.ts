@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, useCallback } from 'react'
+import { useEffect, useId, useState, useCallback, useRef } from 'react'
 import { StreamConnectionPool } from '../services/stream-pool'
 import {
   type ParsedPacket,
@@ -39,6 +39,17 @@ export function useStreamConnection({
     decoderMode: 'WebCodecs',
   })
 
+  // 保持最新回调引用，避免因外部传入内联闭包导致频繁向连接池重复订阅与断开
+  const onFrameRef = useRef(onFrame)
+  useEffect(() => {
+    onFrameRef.current = onFrame
+  }, [onFrame])
+
+  const onPacketRef = useRef(onPacket)
+  useEffect(() => {
+    onPacketRef.current = onPacket
+  }, [onPacket])
+
   useEffect(() => {
     if (!enabled || !cameraId) {
       return
@@ -54,14 +65,14 @@ export function useStreamConnection({
       onStatsUpdate: (newStats) => {
         setStats(newStats)
       },
-      onFrame,
-      onPacket,
+      onFrame: (frame) => onFrameRef.current?.(frame),
+      onPacket: (packet) => onPacketRef.current?.(packet),
     })
 
     return () => {
       unsubscribe()
     }
-  }, [cameraId, streamType, enabled, subscriberId, onFrame, onPacket])
+  }, [cameraId, streamType, enabled, subscriberId])
 
   const retry = useCallback(() => {
     if (cameraId) {

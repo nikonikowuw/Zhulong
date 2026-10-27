@@ -56,9 +56,14 @@ export function CameraFrameSurface({
   const hasRenderedFirstFrame =
     renderedCameraId === cameraId && Boolean(cameraId)
 
+  const lastResolutionRef = useRef<{ width: number; height: number } | null>(
+    null
+  )
+
   /**
    * 仅在几何真正变化时提交状态。
-   * 每帧无条件 setState 会让整个叠加层（含区域编辑器）按帧率重渲染。
+   * 容器尺寸变化由 ResizeObserver 监听；画面固有分辨率变更或首帧出画时才重算。
+   * 杜绝每帧调用 measureContentRect 导致 getBoundingClientRect 触发高频同步回流。
    */
   const commitImageRect = useCallback(() => {
     const canvas = canvasRef.current
@@ -68,11 +73,23 @@ export function CameraFrameSurface({
   }, [])
 
   const handleFrameDrawn = useCallback(
-    (_frame: VideoFrame, _canvas: HTMLCanvasElement) => {
-      commitImageRect()
-      setRenderedCameraId(cameraId)
+    (frame: VideoFrame, _canvas: HTMLCanvasElement) => {
+      const isFirstFrameForCamera = renderedCameraId !== cameraId
+      const isResolutionChanged =
+        !lastResolutionRef.current ||
+        lastResolutionRef.current.width !== frame.displayWidth ||
+        lastResolutionRef.current.height !== frame.displayHeight
+
+      if (isFirstFrameForCamera || isResolutionChanged) {
+        lastResolutionRef.current = {
+          width: frame.displayWidth,
+          height: frame.displayHeight,
+        }
+        setRenderedCameraId(cameraId)
+        commitImageRect()
+      }
     },
-    [cameraId, commitImageRect]
+    [cameraId, renderedCameraId, commitImageRect]
   )
 
   const handleDecodeError = useCallback(() => {

@@ -11,6 +11,11 @@ interface UseAIResultsOptions {
 /**
  * 订阅指定相机的实时 AI 感知结果 Hook
  * 返回最新的人脸检测/识别结果，并提供自动消退计时（默认 350ms 无更新则清空），杜绝幽灵框。
+ *
+ * ⚠️ 性能与架构约束：
+ * 本 Hook 内部使用 useState 响应推理结果，适合低频卡片、详情抽屉或调试工具消费。
+ * 严禁在视频画面高频叠加层中使用本 Hook。实时叠加层必须严格遵循《AI 视觉叠加层：零 React 重渲染》
+ * 铁律，通过 AIResultService 单例配合 mutable ref 与 Canvas 2D / rAF 循环直接绘制。
  */
 export function useAIResults({
   cameraId,

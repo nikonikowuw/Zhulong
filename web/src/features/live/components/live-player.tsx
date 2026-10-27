@@ -216,11 +216,13 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
           if (!canvas || canvas.width === 0 || canvas.height === 0) return
           try {
             let dataUrl: string
+            const hasPerception =
+              facesRef.current.length > 0 || vehiclesRef.current.length > 0
             if (
               showAIOverlay &&
               overlayCanvas &&
               overlayCanvas.width > 0 &&
-              facesRef.current.length > 0
+              hasPerception
             ) {
               const offscreen = document.createElement('canvas')
               offscreen.width = canvas.width

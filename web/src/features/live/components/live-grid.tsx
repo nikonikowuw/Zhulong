@@ -1,3 +1,4 @@
+import { memo, useCallback } from 'react'
 import {
   type GridLayout,
   type LiveCameraItem,
@@ -12,6 +13,80 @@ const GRID_LAYOUT_CLASSES: Record<GridLayout, string> = {
   9: 'grid-cols-3 grid-rows-3',
   16: 'grid-cols-4 grid-rows-4',
 }
+
+interface LiveGridCellItemProps {
+  cell: LiveCellState
+  layout: GridLayout
+  isActive: boolean
+  isMaximized: boolean
+  showAIOverlay?: boolean
+  onSelectCell: (cellId: number) => void
+  onClearCell: (cellId: number) => void
+  onToggleMaximizeCell: (cellId: number) => void
+  onSetCellMute: (cellId: number, isMuted: boolean) => void
+  onSetCellStreamType: (cellId: number, streamType: StreamType) => void
+  onDropCameraToCell?: (cellId: number, camera: LiveCameraItem) => void
+}
+
+/**
+ * 宫格单元项封装（通过 React.memo 隔绝不必要重渲染）。
+ * 保证 16 分屏下切换 active 单元格时，仅有状态发生变化的单元格重新 render，
+ * 避免其余 14~15 个无状态变更的单元格连带触发虚拟 DOM 递归 diff。
+ */
+const LiveGridCellItem = memo(function LiveGridCellItem({
+  cell,
+  layout,
+  isActive,
+  isMaximized,
+  showAIOverlay = true,
+  onSelectCell,
+  onClearCell,
+  onToggleMaximizeCell,
+  onSetCellMute,
+  onSetCellStreamType,
+  onDropCameraToCell,
+}: LiveGridCellItemProps): React.JSX.Element {
+  const handleSelect = useCallback(
+    () => onSelectCell(cell.cellId),
+    [onSelectCell, cell.cellId]
+  )
+  const handleClear = useCallback(
+    () => onClearCell(cell.cellId),
+    [onClearCell, cell.cellId]
+  )
+  const handleToggleMaximize = useCallback(
+    () => onToggleMaximizeCell(cell.cellId),
+    [onToggleMaximizeCell, cell.cellId]
+  )
+  const handleSetMute = useCallback(
+    (muted: boolean) => onSetCellMute(cell.cellId, muted),
+    [onSetCellMute, cell.cellId]
+  )
+  const handleSetStreamType = useCallback(
+    (type: StreamType) => onSetCellStreamType(cell.cellId, type),
+    [onSetCellStreamType, cell.cellId]
+  )
+  const handleDropCamera = useCallback(
+    (cam: LiveCameraItem) => onDropCameraToCell?.(cell.cellId, cam),
+    [onDropCameraToCell, cell.cellId]
+  )
+
+  return (
+    <LivePlayerCell
+      cell={cell}
+      layout={layout}
+      isActive={isActive}
+      isMaximized={isMaximized}
+      showAIOverlay={showAIOverlay}
+      onSelect={handleSelect}
+      onClear={handleClear}
+      onToggleMaximize={handleToggleMaximize}
+      onSetMute={handleSetMute}
+      onSetStreamType={handleSetStreamType}
+      onDropCamera={handleDropCamera}
+    />
+  )
+})
 
 interface LiveGridProps {
   layout: GridLayout
@@ -72,18 +147,18 @@ export function LiveGrid({
       >
         {visibleCells.map((cell) => (
           <div key={cell.cellId} className='h-full min-h-0 w-full min-w-0'>
-            <LivePlayerCell
+            <LiveGridCellItem
               cell={cell}
               layout={layout}
               isActive={cell.cellId === activeCellId}
               isMaximized={false}
               showAIOverlay={showAIOverlay}
-              onSelect={() => onSelectCell(cell.cellId)}
-              onClear={() => onClearCell(cell.cellId)}
-              onToggleMaximize={() => onToggleMaximizeCell(cell.cellId)}
-              onSetMute={(muted) => onSetCellMute(cell.cellId, muted)}
-              onSetStreamType={(type) => onSetCellStreamType(cell.cellId, type)}
-              onDropCamera={(cam) => onDropCameraToCell?.(cell.cellId, cam)}
+              onSelectCell={onSelectCell}
+              onClearCell={onClearCell}
+              onToggleMaximizeCell={onToggleMaximizeCell}
+              onSetCellMute={onSetCellMute}
+              onSetCellStreamType={onSetCellStreamType}
+              onDropCameraToCell={onDropCameraToCell}
             />
           </div>
         ))}
