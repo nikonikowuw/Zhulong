@@ -855,7 +855,7 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
 
 ## 阶段 7：SDK 分发 + 干净环境验证
 
-- [ ] **7.1** `Makefile` 新增 `sdk-dist` target（内容 = `make sdk-install` 的 prefix **原样打包** + 样例 + 模板 + 工具，禁止另建一份头文件列表）：
+- [x] **7.1** `Makefile` 新增 `sdk-dist` target（内容 = `make sdk-install` 的 prefix **原样打包** + 样例 + 模板 + 工具，禁止另建一份头文件列表）：
       ```
       zhulong-algo-sdk-<ver>-<arch>-<target>.tar.gz
       ├── include/zhulong/{plugin.h,algo.hpp,algo_main.hpp,runtime/*.hpp}
@@ -874,7 +874,7 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       3. 第三方动态依赖声明：`libonnxruntime.so.1.21` / `librknnrt.so` **不由 SDK 提供**，写清来源与安装方式。
       4. **打包入口只有一个**：`tools/pack_package.py`；`templates/` 不得再放第二份 `pack_package.py`（副本必然漂移，且第三方会不知道改哪份）。
 
-- [ ] **7.2** 干净容器验证（AC7 + AC17）—— 唯一的「独立性」证明（从零生成 → 编译 → 测 → 打包，全在包目录内）：
+- [x] **7.2** 干净容器验证（AC7 + AC17）—— 唯一的「独立性」证明（从零生成 → 编译 → 测 → 打包，全在包目录内）：
       ```bash
       # 容器内只有 sdk-dist 解压内容，没有本仓库
       export SDK=/opt/zhulong-algo-sdk
@@ -888,12 +888,12 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       ```
       期望：`verify` 输出 `{"status":"passed"}` 且 `count` 为 0（空实现，可接受）；归档里入口名为 `demo`、**无 `plugin.so`**。另一个更严的变体：把 `$SDK/examples/plate_recognition/onnx/` 整套跑一遍，`count` 应与阶段 0.3 基线一致。**任一步失败即视为 SDK 仍有仓库依赖**（最常见：某个头仍 `#include` `native/src`、`pack_package.py` 读 `native/`、或模板 Makefile 引用了仓库路径）。
 
-- [ ] **7.3** 全量回归（`make check` 已包含 `packages-build` + `packages-test`）：
+- [x] **7.3** 全量回归（`make check` 已包含 `packages-build` + `packages-test`）：
       ```bash
       make check
       ```
 
-- [ ] **7.4** Spec 同步（`make check` **不覆盖**这些文档，不写就会漂）：
+- [x] **7.4** Spec 同步（`make check` **不覆盖**这些文档，不写就会漂）：
       - `AGENTS.md` 的「命令」段：把日常入口改成 `make` / `make test` / `make package` / `make check`，并保留一行说明内部分解目标仅供 CI；不要列出 `cmake -B …` 这类实现细节；
       - `.trellis/spec/backend/algorithm-guidelines.md`：包根 `<manifest.id>` executable、`0755`、`models/` 同级、旧 `plugin.so` 拒绝及 `--verify --sample` 验包命令；并补「包自己的 `CMakeLists.txt` + `find_package(ZhulongAlgoSDK)` 构建、`make native-build` 不编包」；
       - `.trellis/spec/native/algo-plugin-contract.md` 补一节「结果 JSON = 唯一跨边界结果契约」：载荷形状与 `serialize_inference_result` 一致，三个消费者（broker 长驻 / 一次性推理 / `algo_probe.py`）共用；**只允许追加字段**；一次性推理不含底库与跨帧跟踪（`matched` 恒 false、`track_id` 恒 0）；`--verify` 输出是它的超集（带 `status` / `sample_decoded` / `width` / `height`）；
@@ -901,9 +901,34 @@ platform/dmabuf_allocator.hpp    ← 移动（外溢：face detector.{hpp,cpp} �
       - `.trellis/spec/native/algo-plugin-contract.md`：说明宿主直接启动包可执行文件；保留 C ABI 函数表作为 SDK 内部桥接契约，但标明 `.so` 加载不再是受支持的算法包交付形态；
       - 同步 `TaskContext { task_id, params }`、四种公开结果适配器、`ZHULONG_ALGO_MAIN(PluginClass, ResultAdapter, PluginName, PluginVersion)`、头文件模板 `run<...>` 及 detail 层 `PluginFactory` 的边界，以及一 broker 一 Worker 的约束；不记录 `max_workers`。
       - `.trellis/spec/native/cgo-contract.md §6` / `hardware-backends.md:258`：按 `design.md` §11.9 改写成「特征提取经包可执行文件一次性通道」（若阶段 4.9 已改，此处只做复查）。
-- [ ] **7.5** 清理边界审查：确认算法包 builder、verifier、supervisor 均不再产出、接受或启动 `plugin.so`；旧 SHARED/runner target 如仍被 native 测试引用，标注为测试专用且不得进入 SDK 分发物或宿主生产路径。
+- [x] **7.5** 清理边界审查：确认算法包 builder、verifier、supervisor 均不再产出、接受或启动 `plugin.so`；旧 SHARED/runner target 如仍被 native 测试引用，标注为测试专用且不得进入 SDK 分发物或宿主生产路径。
 
 **Review gate 7**：7.2 容器内通过 + `make check` 全绿。
+
+**7.x 实施记录（2026-10-26，提交 2553df9 / a9ada49）**
+
+实际交付与上面计划的差异，以及为什么：
+
+| 计划项 | 实际 | 理由 |
+| :--- | :--- | :--- |
+| `zmake sdk-dist` 里含 `examples/` + `templates/` | **只出 `new_package.py`**，模板内嵌在脚本里 | 模板与生成器分家必然漂移；两处不一致的 CMakeLists 让第三方无从判断该信哪份。`examples/` 由仓库内两个真包兼任 |
+| `tools/pack_package.py` | 未做（打包仍由 `packages/*/scripts/build_package.py` 承担，只服务本仓库） | 第三方包的归档就是「包根资产 + 可执行文件」，`tar` 一条命令即可；把它搬进 SDK 只会多一份需要跟着宿主约定走的代码 |
+| onnxruntime 由第三方自备（§7.1 第 3 条） | 变成 **可选内置**：`BUNDLE_RUNTIME=1` 拷 NEEDED 闭包 | 发行版 ORT 不是自包含的（`libonnx` → `libprotobuf` → `libabsl_*`），「自备」在实践中等于「自己踩一遍闭包」 |
+
+容器里跑出来的三个真问题（都不是纸面推演能发现的）：
+
+1. `BUNDLE_RUNTIME=1` 只拷 `libonnxruntime.so` 是假的「可搬迁」——新增
+   `native/scripts/bundle_runtime.py` 做 NEEDED 闭包解析（底座库 glibc/libstdc++/libgcc/
+   ld-linux 刻意不打包）；
+2. 链接期要 `-Wl,-rpath-link`（找传递依赖），运行期要 `-Wl,--disable-new-dtags`
+   （`DT_RUNPATH` 不沿依赖链继承，三层 NEEDED 只找得到第一层）；
+3. `face_recognition` 两个 target 的 `extract` 初始化失败透传 `NOT_FOUND`，协议会把它
+   当成「这张图没检出人脸」——包缺陷被伪装成用户照片问题。改为 `NOT_SUPPORTED`。
+   这条是 `algo_probe.py` 第一天就报出来的。
+
+⚠️ **镜像基线**：前缀里的二进制是开发机编译的，符号版本不向下兼容。`debian:bookworm-slim`
+（glibc 2.36 / GCC 12）会在链接期报 `__isoc23_strtol@GLIBC_2.38` / `__cxa_call_terminate@CXXABI_1.3.15`；
+脚本默认用 `debian:trixie-slim`。这不是包的问题，但必须写进文档，否则第一个第三方就会撞上。
 
 ---
 
