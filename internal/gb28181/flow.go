@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -166,6 +165,10 @@ func (c *framedConn) advanceOverMessages() error {
 	}
 }
 
+// contentLengthHeader is the header name matched case-insensitively by the framing
+// state machine. It is a package value so the per-message path allocates nothing.
+var contentLengthHeader = []byte("Content-Length")
+
 // contentLengthOf extracts Content-Length from a raw header block. A missing or
 // unparsable value is treated as zero: the downstream parser decides whether the
 // message is acceptable, this only sizes the read window.
@@ -175,10 +178,10 @@ func contentLengthOf(header []byte) int {
 		if colon < 0 {
 			continue
 		}
-		if !strings.EqualFold(string(bytes.TrimSpace(line[:colon])), "Content-Length") {
+		if !bytes.EqualFold(bytes.TrimSpace(line[:colon]), contentLengthHeader) {
 			continue
 		}
-		value, err := strconv.Atoi(strings.TrimSpace(string(line[colon+1:])))
+		value, err := strconv.Atoi(string(bytes.TrimSpace(line[colon+1:])))
 		if err != nil || value < 0 {
 			return 0
 		}

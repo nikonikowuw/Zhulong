@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -341,7 +342,7 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 		DeviceID string
 		Count    int
 	}
-	var counts []countResult
+	counts := []countResult{}
 	if err := db.Model(&Channel{}).
 		Select("device_id, count(*) as count").
 		Group("device_id").
@@ -627,17 +628,13 @@ func (s *Store) SyncChannels(ctx context.Context, deviceID string, channels []Ch
 	}
 
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for i := 0; i < len(channels); i += channelUpsertBatchSize {
-			end := i + channelUpsertBatchSize
-			if end > len(channels) {
-				end = len(channels)
-			}
-			batch := make([]Channel, end-i)
-			for j := i; j < end; j++ {
-				item := channels[j]
+		for batch := range slices.Chunk(channels, channelUpsertBatchSize) {
+			stamped := make([]Channel, len(batch))
+			for j := range batch {
+				item := batch[j]
 				item.CreatedAt = now
 				item.UpdatedAt = now
-				batch[j-i] = item
+				stamped[j] = item
 			}
 
 			if err := tx.Clauses(clause.OnConflict{
@@ -649,12 +646,12 @@ func (s *Store) SyncChannels(ctx context.Context, deviceID string, channels []Ch
 					"parental", "parent_id", "safety_way", "register_way", "ptz_type",
 					"resolution_width", "resolution_height", "updated_at",
 				}),
-			}).Create(&batch).Error; err != nil {
+			}).Create(&stamped).Error; err != nil {
 				return fmt.Errorf("upsert gb channels batch: %w", err)
 			}
 		}
 
-		var boundFree []string
+		boundFree := []string{}
 		if err := tx.Model(&Channel{}).
 			Where("device_id = ? AND camera_id IS NULL", deviceID).
 			Pluck("channel_id", &boundFree).Error; err != nil {
@@ -667,9 +664,8 @@ func (s *Store) SyncChannels(ctx context.Context, deviceID string, channels []Ch
 				stale = append(stale, id)
 			}
 		}
-		for start := 0; start < len(stale); start += channelDeleteChunkSize {
-			end := min(start+channelDeleteChunkSize, len(stale))
-			if err := tx.Where("device_id = ? AND camera_id IS NULL AND channel_id IN ?", deviceID, stale[start:end]).
+		for chunk := range slices.Chunk(stale, channelDeleteChunkSize) {
+			if err := tx.Where("device_id = ? AND camera_id IS NULL AND channel_id IN ?", deviceID, chunk).
 				Delete(&Channel{}).Error; err != nil {
 				return fmt.Errorf("prune stale gb channels for %s: %w", deviceID, err)
 			}

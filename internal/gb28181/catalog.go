@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,6 +21,22 @@ import (
 // means a silent device holds a goroutine, a session entry and an open HTTP response
 // forever. The value covers the device's fragment bursts plus one retransmit.
 const DefaultCatalogTimeout = 20 * time.Second
+
+const (
+	// sendAttempts is one immediate send plus one retransmit. A single lost UDP
+	// MESSAGE is common on site; a third attempt only lengthens the operator's wait.
+	sendAttempts = 2
+
+	// sendRetryBackoff separates the retransmit so a device that dropped the first
+	// datagram has a moment to come back before we give up.
+	sendRetryBackoff = 200 * time.Millisecond
+
+	// SN (sequence number) is a decimal on the wire and GB/T 28181 keeps it below one
+	// billion, so allocation stays in [snBase, snBase+snSpan) and never wraps into a
+	// value a device could reject.
+	snBase = 10_000_000
+	snSpan = 90_000_000
+)
 
 // sipSender is the transport capability required to dispatch outbound SIP MESSAGE
 // requests to devices.
@@ -69,11 +86,11 @@ func NewCatalogManager(sender sipSender, store ChannelStore, logger *zap.Logger)
 }
 
 func sessionKey(deviceID string, sn int) string {
-	return fmt.Sprintf("%s:%d", deviceID, sn)
+	return deviceID + ":" + strconv.Itoa(sn)
 }
 
 func (cm *CatalogManager) allocateSN() int {
-	return int(cm.nextSN.Add(1)%90000000 + 10000000)
+	return int(cm.nextSN.Add(1)%snSpan + snBase)
 }
 
 // Sync sends a Catalog query to the target device, collects multi-fragment responses
@@ -111,14 +128,13 @@ func (cm *CatalogManager) Sync(ctx context.Context, device Device) ([]Channel, e
 
 	queryXML := buildCatalogQuery(sn, device.DeviceID)
 
-	// Send with retry (1 immediate retransmit on failure)
 	var sendErr error
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range sendAttempts {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
 				return nil, catalogTimeoutError(sess, ctx.Err())
-			case <-time.After(200 * time.Millisecond):
+			case <-time.After(sendRetryBackoff):
 			}
 		}
 		sendErr = cm.sender.SendMessage(ctx, device, queryXML)
@@ -231,11 +247,12 @@ func (cm *CatalogManager) HandleResponse(ctx context.Context, senderDeviceID str
 		)
 	}
 
-	// Terminate if:
-	// - SumNum is 0 (device has no channels)
-	// - We have accumulated at least SumNum unique items
-	// - SumNum <= 0 and empty device list
-	if sess.sumNum == 0 || (sess.sumNum > 0 && len(sess.items) >= sess.sumNum) || (sess.sumNum <= 0 && len(resp.DeviceList) == 0) {
+	// The exchange is complete on any of three independent conditions; naming them
+	// keeps the disjunction readable and the overlap explicit.
+	noChannels := sess.sumNum == 0
+	allReceived := sess.sumNum > 0 && len(sess.items) >= sess.sumNum
+	emptyReport := sess.sumNum <= 0 && len(resp.DeviceList) == 0
+	if noChannels || allReceived || emptyReport {
 		select {
 		case <-sess.done:
 		default:

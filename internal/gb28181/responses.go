@@ -102,6 +102,12 @@ type SyncCatalogResponse struct {
 	Total    int    `json:"total"`
 }
 
+// DeleteDeviceResponse confirms a device deletion. It is a named type rather than an
+// inline map so the endpoint has a documented shape for the UI and swagger alike.
+type DeleteDeviceResponse struct {
+	Deleted bool `json:"deleted"`
+}
+
 // toConfigInfo projects the persisted model onto the API shape.
 func toConfigInfo(cfg Config) ConfigInfo {
 	return ConfigInfo{

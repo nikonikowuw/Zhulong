@@ -22,6 +22,10 @@ import (
 const (
 	defaultNonceTTL = 5 * time.Minute
 	nonceSeparator  = "."
+
+	// nonceTimeHexLen is len(hex(UnixNano)): the fixed-width prefix that carries the
+	// issue time. It is parsed back by Verify, so the width is a wire contract.
+	nonceTimeHexLen = 16
 )
 
 var (
@@ -81,7 +85,12 @@ func (m *nonceManager) Verify(nonce string) error {
 	if subtle.ConstantTimeCompare([]byte(expected), []byte(signature)) != 1 {
 		return ErrDigestNonceInvalid
 	}
-	issuedAt, err := strconv.ParseInt(prefix[:16], 16, 64)
+	// Authentic, but the slices below index a fixed-width prefix: reject a short one
+	// here rather than relying on the HMAC comparison above to keep it unreachable.
+	if len(prefix) < nonceTimeHexLen {
+		return ErrDigestNonceInvalid
+	}
+	issuedAt, err := strconv.ParseInt(prefix[:nonceTimeHexLen], 16, 64)
 	if err != nil {
 		return ErrDigestNonceInvalid
 	}

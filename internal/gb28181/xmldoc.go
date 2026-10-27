@@ -70,10 +70,13 @@ type gbCatalogItem struct {
 	ParentID     *string `xml:"ParentID"`
 	SafetyWay    *int    `xml:"SafetyWay"`
 	RegisterWay  *int    `xml:"RegisterWay"`
-	PTZType1     *int    `xml:"PTZType"`
-	PTZType2     *int    `xml:"PtzType"`
-	Resolution   string  `xml:"Resolution"`
-	Status       string  `xml:"Status"`
+	// PTZType is sent as either <PTZType> or <PtzType> in the field; encoding/xml has
+	// no case-insensitive match, so both spellings get a field and toChannel picks
+	// whichever the device populated. The numeric suffixes mirror the tag names.
+	PTZType1   *int   `xml:"PTZType"`
+	PTZType2   *int   `xml:"PtzType"`
+	Resolution string `xml:"Resolution"`
+	Status     string `xml:"Status"`
 }
 
 func (item gbCatalogItem) toChannel(deviceID string, now time.Time) Channel {
@@ -82,11 +85,6 @@ func (item gbCatalogItem) toChannel(deviceID string, now time.Time) Channel {
 		ptz = item.PTZType2
 	}
 	width, height := parseResolution(item.Resolution)
-	var parentID *string
-	if item.ParentID != nil && strings.TrimSpace(*item.ParentID) != "" {
-		trimmed := strings.TrimSpace(*item.ParentID)
-		parentID = &trimmed
-	}
 	return Channel{
 		DeviceID:         deviceID,
 		ChannelID:        strings.TrimSpace(item.DeviceID),
@@ -97,7 +95,7 @@ func (item gbCatalogItem) toChannel(deviceID string, now time.Time) Channel {
 		CivilCode:        trimStringPtr(item.CivilCode),
 		Address:          trimStringPtr(item.Address),
 		Parental:         item.Parental,
-		ParentID:         parentID,
+		ParentID:         trimStringPtr(item.ParentID),
 		SafetyWay:        item.SafetyWay,
 		RegisterWay:      item.RegisterWay,
 		PTZType:          ptz,

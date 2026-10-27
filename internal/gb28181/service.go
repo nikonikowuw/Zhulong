@@ -72,6 +72,12 @@ func NewService(options ServiceOptions) *Service {
 	if options.Addrs == nil {
 		options.Addrs = DefaultInterfaceAddrs
 	}
+	// The runtime is process-local state this service writes to, not a caller's
+	// dependency. Defaulting it here lets every best-effort counter update call
+	// straight through instead of guarding a nil on each path.
+	if options.Runtime == nil {
+		options.Runtime = NewRuntime()
+	}
 	return &Service{
 		configs:       options.Configs,
 		devices:       options.Devices,
@@ -149,7 +155,7 @@ func (s *Service) UpsertDevice(ctx context.Context, upd DeviceUpsert) (*Device, 
 		// not surface as an anonymous 500.
 		return nil, storeFailure(err, "Failed to save GB28181 device")
 	}
-	s.refreshDeviceCounters(ctx)
+	publishDeviceCounters(ctx, s.devices, s.runtime, s.logger)
 	return device, nil
 }
 
@@ -167,14 +173,8 @@ func (s *Service) ListDevices(ctx context.Context) ([]Device, error) {
 // Snapshot returns the observability view. Counters are refreshed from the store
 // first so a polling dashboard never shows stale device totals.
 func (s *Service) Snapshot(ctx context.Context) (Snapshot, error) {
-	s.refreshDeviceCounters(ctx)
-	return s.runtime.Snapshot(), nil
-}
-
-// refreshDeviceCounters is best-effort: the snapshot is diagnostics, so a failed
-// count must not turn a successful device write into an error.
-func (s *Service) refreshDeviceCounters(ctx context.Context) {
 	publishDeviceCounters(ctx, s.devices, s.runtime, s.logger)
+	return s.runtime.Snapshot(), nil
 }
 
 // SyncCatalog queries the device for its video channels and reconciles the catalog.
@@ -190,7 +190,7 @@ func (s *Service) SyncCatalog(ctx context.Context, deviceID string) (*SyncCatalo
 		return nil, apperr.Internal(CodeRuntimeNotReady, "catalog syncer is not ready", nil)
 	}
 
-	s.recordCatalogAttempt()
+	s.runtime.RecordCatalogAttempt()
 	res, err, _ := s.syncGroup.Do(deviceID, func() (any, error) {
 		// The shared body must not inherit the first caller's cancellation: closing the
 		// browser tab must not abort an exchange that other callers are waiting on.
@@ -204,11 +204,16 @@ func (s *Service) SyncCatalog(ctx context.Context, deviceID string) (*SyncCatalo
 		return &SyncCatalogResponse{DeviceID: deviceID, Total: len(channels)}, nil
 	})
 	if err != nil {
-		s.recordCatalogFailure(err)
+		s.runtime.RecordCatalogFailure(catalogTimedOut(err))
 		return nil, err
 	}
-	response := res.(*SyncCatalogResponse)
-	s.recordCatalogSuccess(response.Total)
+	// singleflight hands back whatever the shared closure returned; the assertion is
+	// checked rather than trusted so a future edit here cannot panic a request.
+	response, ok := res.(*SyncCatalogResponse)
+	if !ok {
+		return nil, apperr.Internal(CodeCatalogSyncFailed, "catalog syncer returned an unexpected result", nil)
+	}
+	s.runtime.RecordCatalogSuccess(response.Total)
 	return response, nil
 }
 
@@ -253,7 +258,13 @@ func (s *Service) AddChannelAsCamera(ctx context.Context, deviceID, channelID st
 	if err != nil {
 		return nil, err
 	}
-	return res.(*camera.CameraResponse), nil
+	// Checked for the same reason as the catalog path: a wrong type here is a wiring
+	// bug, and it must answer with a 500 instead of a panic.
+	camResp, ok := res.(*camera.CameraResponse)
+	if !ok {
+		return nil, apperr.Internal(CodeRuntimeNotReady, "camera creator returned an unexpected result", nil)
+	}
+	return camResp, nil
 }
 
 // addChannelAsCamera performs the read-then-write binding. Callers must go through
@@ -316,29 +327,11 @@ func (s *Service) rollbackCamera(cameraID string) {
 	}
 }
 
-// recordCatalogAttempt counts an operator-triggered catalog query.
-func (s *Service) recordCatalogAttempt() {
-	if s.runtime != nil {
-		s.runtime.RecordCatalogAttempt()
-	}
-}
-
-// recordCatalogSuccess records a completed sync.
-func (s *Service) recordCatalogSuccess(channels int) {
-	if s.runtime != nil {
-		s.runtime.RecordCatalogSuccess(channels)
-	}
-}
-
-// recordCatalogFailure records a failed sync, distinguishing a timeout from an
-// exchange that failed outright.
-func (s *Service) recordCatalogFailure(err error) {
-	if s.runtime == nil {
-		return
-	}
+// catalogTimedOut reports whether err is a catalog exchange that ran out of time
+// rather than one that failed outright. It is the only split the snapshot makes.
+func catalogTimedOut(err error) bool {
 	var appErr *apperr.Error
-	timeout := errors.As(err, &appErr) && appErr.Code == CodeCatalogTimeout
-	s.runtime.RecordCatalogFailure(timeout)
+	return errors.As(err, &appErr) && appErr.Code == CodeCatalogTimeout
 }
 
 // DeleteDevice removes a pre-provisioned device and the catalog it reported. A device
@@ -348,7 +341,7 @@ func (s *Service) DeleteDevice(ctx context.Context, deviceID string) error {
 	if err := s.devices.DeleteDevice(ctx, deviceID); err != nil {
 		return storeFailure(err, "Failed to delete GB28181 device")
 	}
-	s.refreshDeviceCounters(ctx)
+	publishDeviceCounters(ctx, s.devices, s.runtime, s.logger)
 	return nil
 }
 

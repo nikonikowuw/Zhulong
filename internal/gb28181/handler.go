@@ -10,6 +10,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// The godoc annotations below deliberately exceed the 120-column guideline: swaggo
+// parses them line by line, and a wrapped @Description or @Failure is silently dropped
+// from the generated spec. Do not reflow them.
+
 // Handler exposes the protected GB28181 endpoints.
 type Handler struct {
 	service *Service
@@ -190,9 +194,8 @@ func (h *Handler) UpsertDevice(c *gin.Context) {
 // @Failure      409       {object}  httputil.Response  "GB28181_CAMERA_BOUND"
 // @Router       /gb28181/devices/{deviceId} [delete]
 func (h *Handler) DeleteDevice(c *gin.Context) {
-	deviceID := strings.TrimSpace(c.Param("deviceId"))
-	if deviceID == "" {
-		httputil.WriteError(c, apperr.Invalid(CodeDeviceIDInvalid, "deviceId must not be empty", nil))
+	deviceID, ok := requireDeviceID(c)
+	if !ok {
 		return
 	}
 	audithttp.Tag(c, ActionDeviceDelete, deviceID, "Delete GB28181 device")
@@ -202,7 +205,7 @@ func (h *Handler) DeleteDevice(c *gin.Context) {
 		return
 	}
 	h.logger.Info("gb28181 device deleted", zap.String("device_id", deviceID))
-	httputil.Success(c, gin.H{"deleted": true})
+	httputil.Success(c, DeleteDeviceResponse{Deleted: true})
 }
 
 // SyncCatalog godoc
@@ -217,9 +220,8 @@ func (h *Handler) DeleteDevice(c *gin.Context) {
 // @Failure      422       {object}  httputil.Response  "GB28181_DEVICE_OFFLINE, GB28181_CATALOG_TIMEOUT, GB28181_CATALOG_SYNC_FAILED"
 // @Router       /gb28181/devices/{deviceId}/catalog [post]
 func (h *Handler) SyncCatalog(c *gin.Context) {
-	deviceID := strings.TrimSpace(c.Param("deviceId"))
-	if deviceID == "" {
-		httputil.WriteError(c, apperr.Invalid(CodeDeviceIDInvalid, "deviceId must not be empty", nil))
+	deviceID, ok := requireDeviceID(c)
+	if !ok {
 		return
 	}
 	audithttp.Tag(c, ActionCatalogSync, deviceID, "Synchronize GB28181 device catalog")
@@ -246,9 +248,8 @@ func (h *Handler) SyncCatalog(c *gin.Context) {
 // @Failure      404       {object}  httputil.Response  "GB28181_DEVICE_NOT_FOUND"
 // @Router       /gb28181/devices/{deviceId}/channels [get]
 func (h *Handler) ListChannels(c *gin.Context) {
-	deviceID := strings.TrimSpace(c.Param("deviceId"))
-	if deviceID == "" {
-		httputil.WriteError(c, apperr.Invalid(CodeDeviceIDInvalid, "deviceId must not be empty", nil))
+	deviceID, ok := requireDeviceID(c)
+	if !ok {
 		return
 	}
 
@@ -273,10 +274,12 @@ func (h *Handler) ListChannels(c *gin.Context) {
 // @Failure      422        {object}  httputil.Response  "GB28181_DEVICE_ID_INVALID, GB28181_CHANNEL_ID_INVALID, CAMERA_INVALID_PARAM, CAMERA_LIMIT_EXCEEDED"
 // @Router       /gb28181/devices/{deviceId}/channels/{channelId}/camera [post]
 func (h *Handler) AddChannelAsCamera(c *gin.Context) {
-	deviceID := strings.TrimSpace(c.Param("deviceId"))
-	channelID := strings.TrimSpace(c.Param("channelId"))
-	if deviceID == "" || channelID == "" {
-		httputil.WriteError(c, apperr.Invalid(CodeDeviceIDInvalid, "deviceId and channelId must not be empty", nil))
+	deviceID, ok := requireDeviceID(c)
+	if !ok {
+		return
+	}
+	channelID, ok := requireChannelID(c)
+	if !ok {
 		return
 	}
 	target := deviceID + "/" + channelID
@@ -293,4 +296,26 @@ func (h *Handler) AddChannelAsCamera(c *gin.Context) {
 		zap.String("camera_id", resp.ID),
 	)
 	httputil.Success(c, resp)
+}
+
+// requireDeviceID returns the trimmed :deviceId path parameter, answering with a 422
+// (and false) when it is missing. Every device-scoped endpoint needs exactly this
+// check, so it lives in one place instead of five copies.
+func requireDeviceID(c *gin.Context) (string, bool) {
+	return requirePathID(c, "deviceId", CodeDeviceIDInvalid)
+}
+
+// requireChannelID is the channel-scoped counterpart of requireDeviceID. It carries
+// its own code so the UI can tell which half of the URI the client got wrong.
+func requireChannelID(c *gin.Context) (string, bool) {
+	return requirePathID(c, "channelId", CodeChannelIDInvalid)
+}
+
+func requirePathID(c *gin.Context, param, code string) (string, bool) {
+	value := strings.TrimSpace(c.Param(param))
+	if value == "" {
+		httputil.WriteError(c, apperr.Invalid(code, param+" must not be empty", nil))
+		return "", false
+	}
+	return value, true
 }

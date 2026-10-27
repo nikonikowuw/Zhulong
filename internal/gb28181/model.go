@@ -96,6 +96,9 @@ const (
 )
 
 // Channel represents an imported video channel of a GB28181 device.
+//
+// The struct tags below exceed the 120-column guideline: a tag is one atomic literal,
+// and splitting it across lines would change its value. Do not reflow them.
 type Channel struct {
 	DeviceID         string    `gorm:"column:device_id;primaryKey" json:"deviceId"`
 	ChannelID        string    `gorm:"column:channel_id;primaryKey" json:"channelId"`
@@ -273,18 +276,14 @@ func mediaCapacity(minPort, maxPort int) int {
 // Equal reports whether two configurations describe the same target state,
 // ignoring the audit timestamp. restartRequired is computed from this comparison
 // and is never persisted separately.
+//
+// The comparison zeroes the bookkeeping fields and then compares the whole struct, so
+// a field added later is covered automatically — the field-by-field && chain this
+// replaced would have silently stopped reporting restartRequired for any new knob.
 func (c Config) Equal(other Config) bool {
-	return c.Enabled == other.Enabled &&
-		c.SIPID == other.SIPID &&
-		c.SIPRealm == other.SIPRealm &&
-		c.SIPListen == other.SIPListen &&
-		c.SIPTransport == other.SIPTransport &&
-		c.SecurityProfile == other.SecurityProfile &&
-		c.MediaBindAddress == other.MediaBindAddress &&
-		c.MediaAdvertisedIP == other.MediaAdvertisedIP &&
-		c.RTPPortMin == other.RTPPortMin &&
-		c.RTPPortMax == other.RTPPortMax &&
-		c.RequireRegisteredDevice == other.RequireRegisteredDevice
+	c.ID, other.ID = 0, 0
+	c.UpdatedAt, other.UpdatedAt = time.Time{}, time.Time{}
+	return c == other
 }
 
 // deviceCredentialsAAD binds a device's ciphertext to its identity, so a blob
@@ -319,17 +318,27 @@ func validateIdentity(field, value string, maxLen int) error {
 			fmt.Sprintf("%s must not exceed %d characters", field, maxLen), nil)
 	}
 	for _, r := range value {
-		switch {
-		case r >= '0' && r <= '9',
-			r >= 'a' && r <= 'z',
-			r >= 'A' && r <= 'Z',
-			r == '.', r == '-', r == '_':
-		default:
+		if !validIdentityRune(r) {
 			return apperr.Invalid(CodeConfigInvalid,
 				field+" may only contain letters, digits, '.', '-' and '_'", nil)
 		}
 	}
 	return nil
+}
+
+// validIdentityRune reports whether r may appear in a persisted SIP identity. The set
+// is deliberately narrow: it is what devices and proxies put in From/Realm headers.
+func validIdentityRune(r rune) bool {
+	switch {
+	case r >= '0' && r <= '9':
+		return true
+	case r >= 'a' && r <= 'z':
+		return true
+	case r >= 'A' && r <= 'Z':
+		return true
+	default:
+		return r == '.' || r == '-' || r == '_'
+	}
 }
 
 func validateDeviceID(value string) error {

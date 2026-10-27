@@ -18,6 +18,14 @@ import (
 	"go.uber.org/zap"
 )
 
+// upperUDP is TransportUDP normalised the way outbound requests need it: sipgo wants
+// the transport name in upper case, while device.Transport is stored lower case.
+const upperUDP = "UDP"
+
+// sipTagBytes is the entropy behind the From tag. 64 bits keeps collision odds
+// negligible across a process lifetime, which is all tag correlation needs.
+const sipTagBytes = 8
+
 // sipIngress is the SIP UAS that accepts device registrations and keepalives.
 //
 // It deliberately stops at signalling: catalog sync (S2) and playback (S3) extend
@@ -385,9 +393,9 @@ func (i *sipIngress) SendMessage(ctx context.Context, device Device, body []byte
 	dest := *device.RemoteAddr
 	transport := strings.ToUpper(device.Transport)
 	if transport == "" {
-		transport = strings.ToUpper(TransportUDP)
+		transport = upperUDP
 	}
-	if transport != strings.ToUpper(TransportUDP) {
+	if transport != upperUDP {
 		// A stream transport is only reachable through the connection the device
 		// registered on: sipgo keys its connection pool by remote address, so a live
 		// flow means the request reuses it. A closed flow means the persisted
@@ -398,13 +406,37 @@ func (i *sipIngress) SendMessage(ctx context.Context, device Device, body []byte
 		}
 	}
 
-	tagBytes := make([]byte, 8)
+	tagBytes := make([]byte, sipTagBytes)
 	if _, err := rand.Read(tagBytes); err != nil {
 		// Tag entropy is a protocol requirement (From tag correlation), so a broken
 		// entropy source is an error, not something to paper over with a zero tag.
 		return fmt.Errorf("generate sip message tag: %w", err)
 	}
 
+	req := buildMessageRequest(device, realm, serverID, tagBytes, body)
+	req.SetDestination(dest)
+	req.SetTransport(transport)
+
+	res, err := client.Do(ctx, req)
+	if err != nil {
+		return fmt.Errorf("send sip message to %s: %w", dest, err)
+	}
+	if res.StatusCode != sip.StatusOK {
+		return fmt.Errorf("sip message rejected with status %d: %s", res.StatusCode, res.Reason)
+	}
+	return nil
+}
+
+// buildMessageRequest assembles an outbound MESSAGE with the identity, correlation and
+// content-type headers the MANSCDP body expects. It touches no socket, so the calling
+// path only has to decide *where* to send.
+func buildMessageRequest(
+	device Device,
+	realm string,
+	serverID string,
+	tagBytes []byte,
+	body []byte,
+) *sip.Request {
 	req := sip.NewRequest(sip.MESSAGE, sip.Uri{
 		User: device.DeviceID,
 		Host: realm,
@@ -427,17 +459,7 @@ func (i *sipIngress) SendMessage(ctx context.Context, device Device, body []byte
 	req.AppendHeader(&sip.CSeqHeader{SeqNo: 1, MethodName: sip.MESSAGE})
 	req.AppendHeader(sip.NewHeader("Content-Type", "Application/MANSCDP+xml"))
 	req.SetBody(body)
-	req.SetDestination(dest)
-	req.SetTransport(transport)
-
-	res, err := client.Do(ctx, req)
-	if err != nil {
-		return fmt.Errorf("send sip message to %s: %w", dest, err)
-	}
-	if res.StatusCode != sip.StatusOK {
-		return fmt.Errorf("sip message rejected with status %d: %s", res.StatusCode, res.Reason)
-	}
-	return nil
+	return req
 }
 
 // Sync initiates catalog discovery for an online device.

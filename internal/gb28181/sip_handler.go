@@ -167,18 +167,7 @@ func (i *sipIngress) handleMessage(req *sip.Request, tx sip.ServerTransaction) {
 			return
 		}
 	case "catalog":
-		if i.catalogs != nil {
-			catResp, err := decodeCatalogResponse(req.Body())
-			if err != nil {
-				i.logger.Warn("failed to decode gb28181 catalog response",
-					zap.String("device_id", deviceID), zap.Error(err))
-			} else {
-				if err := i.catalogs.HandleResponse(ctx, deviceID, catResp); err != nil {
-					i.logger.Warn("failed to handle gb28181 catalog response",
-						zap.String("device_id", deviceID), zap.Error(err))
-				}
-			}
-		}
+		i.handleCatalogMessage(ctx, deviceID, req.Body())
 	default:
 		// Alarm/DeviceInfo are acknowledged now and processed in later phases.
 		i.logger.Debug("gb28181 message acknowledged without a handler",
@@ -187,6 +176,25 @@ func (i *sipIngress) handleMessage(req *sip.Request, tx sip.ServerTransaction) {
 			zap.Int("sn", message.SN))
 	}
 	i.respond(req, tx, sip.StatusOK)
+}
+
+// handleCatalogMessage feeds one catalog fragment to the manager. Failures are logged
+// and swallowed: the device already holds its 200 OK, and a fragment we cannot use
+// must not turn into a retransmission storm.
+func (i *sipIngress) handleCatalogMessage(ctx context.Context, deviceID string, body []byte) {
+	if i.catalogs == nil {
+		return
+	}
+	catResp, err := decodeCatalogResponse(body)
+	if err != nil {
+		i.logger.Warn("failed to decode gb28181 catalog response",
+			zap.String("device_id", deviceID), zap.Error(err))
+		return
+	}
+	if err := i.catalogs.HandleResponse(ctx, deviceID, catResp); err != nil {
+		i.logger.Warn("failed to handle gb28181 catalog response",
+			zap.String("device_id", deviceID), zap.Error(err))
+	}
 }
 
 // messageSenderAllowed enforces two rules: the device must be on the allowlist, and a
@@ -223,7 +231,8 @@ func (i *sipIngress) messageSenderAllowed(req *sip.Request, tx sip.ServerTransac
 func (i *sipIngress) messageContent(
 	req *sip.Request,
 	tx sip.ServerTransaction,
-	deviceID, source string,
+	deviceID string,
+	source string,
 ) (gbXMLMessage, bool) {
 	body := req.Body()
 	if len(body) > i.limits.MaxXMLBytes {
