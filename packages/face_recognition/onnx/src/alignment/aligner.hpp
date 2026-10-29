@@ -5,16 +5,13 @@
 
 #pragma once
 
+#include "common/face_types.hpp"
+
 #include <zhulong/algo.hpp>
 #include <array>
 #include <vector>
 
 namespace zhulong::face {
-
-struct Point2f {
-    float x{0.0f};
-    float y{0.0f};
-};
 
 /**
  * @brief ArcFace 标准 112x112 参考人脸模板点

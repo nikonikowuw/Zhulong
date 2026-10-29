@@ -1,6 +1,6 @@
 #include <zhulong/algo.hpp>
-#include "detector.hpp"
-#include "face_recognition.hpp"
+#include "detection/detector.hpp"
+#include "pipeline/face_recognition.hpp"
 #include <cassert>
 #include <cstring>
 #include <iostream>

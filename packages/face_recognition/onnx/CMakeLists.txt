@@ -15,11 +15,11 @@ find_package(Threads REQUIRED)
 
 # 产品代码（算法类本体）：可执行文件与 devtest 共用，避免两份实现。
 add_library(face_recognition_core OBJECT
-    src/face_recognition.cpp
-    src/detector.cpp
-    src/aligner.cpp
-    src/extractor.cpp
-    src/matcher.cpp
+    src/detection/detector.cpp
+    src/alignment/aligner.cpp
+    src/feature/extractor.cpp
+    src/matching/matcher.cpp
+    src/pipeline/face_recognition.cpp
 )
 target_compile_definitions(face_recognition_core PRIVATE ZHULONG_PLUGIN_BUILD)
 target_include_directories(face_recognition_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -30,6 +30,7 @@ add_executable(face_recognition
     src/main.cpp
     $<TARGET_OBJECTS:face_recognition_core>
 )
+target_include_directories(face_recognition PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_options(face_recognition PRIVATE "LINKER:--exclude-libs,ALL")
 target_link_libraries(face_recognition PRIVATE Zhulong::AlgoSDK Zhulong::AlgoRuntime)
 

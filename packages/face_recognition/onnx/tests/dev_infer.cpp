@@ -20,7 +20,7 @@
 
 #include <zhulong/algo.hpp>
 
-#include "face_recognition.hpp"
+#include "pipeline/face_recognition.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"

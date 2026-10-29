@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "aligner.hpp"
+#include "common/face_types.hpp"
 #include <zhulong/algo.hpp>
 #include <zhulong/platform/dmabuf_allocator.hpp>
 #include <array>

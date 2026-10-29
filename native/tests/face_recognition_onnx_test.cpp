@@ -6,10 +6,10 @@
 #include <zhulong/algo.hpp>
 #include <zhulong/plugin.h>
 #include <zhulong/runtime/gallery_registry.hpp>
-#include "detector.hpp"
-#include "face_recognition.hpp"
-#include "aligner.hpp"
-#include "extractor.hpp"
+#include "alignment/aligner.hpp"
+#include "detection/detector.hpp"
+#include "feature/extractor.hpp"
+#include "pipeline/face_recognition.hpp"
 
 #include <cassert>
 #include <cmath>

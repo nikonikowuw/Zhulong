@@ -8,7 +8,7 @@
 
 #include <zhulong/algo_main.hpp>
 
-#include "face_recognition.hpp"
+#include "pipeline/face_recognition.hpp"
 
 ZHULONG_ALGO_MAIN(zhulong::face::FaceRecognitionPlugin,
                   zhulong::sdk::PersonStructureResultAdapter,

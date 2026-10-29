@@ -616,11 +616,11 @@ if(BUILD_TESTING)
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub" OR ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongFaceRecognitionPluginTests
             tests/face_recognition_plugin_test.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/face_recognition.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/matcher.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/detector.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/aligner.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/extractor.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/detection/detector.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/alignment/aligner.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/feature/extractor.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/matching/matcher.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/pipeline/face_recognition.cpp
         )
         target_compile_features(ZhulongFaceRecognitionPluginTests PRIVATE cxx_std_17)
         target_include_directories(ZhulongFaceRecognitionPluginTests PRIVATE
@@ -638,11 +638,11 @@ if(BUILD_TESTING)
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongFaceRecognitionOnnxTests
             tests/face_recognition_onnx_test.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/face_recognition.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/matcher.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/detector.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/aligner.cpp
-            ${ZHULONG_FACE_IMPL_DIR}/src/extractor.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/detection/detector.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/alignment/aligner.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/feature/extractor.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/matching/matcher.cpp
+            ${ZHULONG_FACE_IMPL_DIR}/src/pipeline/face_recognition.cpp
         )
         target_compile_features(ZhulongFaceRecognitionOnnxTests PRIVATE cxx_std_17)
         target_include_directories(ZhulongFaceRecognitionOnnxTests PRIVATE

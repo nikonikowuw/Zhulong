@@ -9,10 +9,10 @@
 
 #pragma once
 
-#include "detector.hpp"
-#include "aligner.hpp"
-#include "extractor.hpp"
-#include "matcher.hpp"
+#include "alignment/aligner.hpp"
+#include "detection/detector.hpp"
+#include "feature/extractor.hpp"
+#include "matching/matcher.hpp"
 #include <zhulong/algo.hpp>
 #include <dlfcn.h>
 #include <unistd.h>

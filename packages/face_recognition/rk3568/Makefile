@@ -21,6 +21,8 @@ RESULT := $(OUT_DIR)/result-face_recognition-rk3568.jpg
 EXE := $(BUILD_DIR)/face_recognition
 VERIFY_SAMPLE ?= $(CURDIR)/sample.jpg
 
+SRC_FILES := $(wildcard src/*.cpp src/*.hpp src/*/*.cpp src/*/*.hpp)
+
 .PHONY: all test verify clean
 
 all: $(EXE) $(DEVTEST)
@@ -35,10 +37,10 @@ $(BUILD_DIR)/CMakeCache.txt: CMakeLists.txt
 		$(if $(ONNXRUNTIME_ROOT),-DONNXRUNTIME_ROOT=$(ONNXRUNTIME_ROOT),) \
 		$(EXTRA_CMAKE_ARGS)
 
-$(EXE): $(BUILD_DIR)/CMakeCache.txt $(wildcard src/*.cpp src/*.hpp)
+$(EXE): $(BUILD_DIR)/CMakeCache.txt $(SRC_FILES)
 	cmake --build $(BUILD_DIR) --target face_recognition
 
-$(DEVTEST): $(BUILD_DIR)/CMakeCache.txt tests/dev_infer.cpp $(wildcard src/*.cpp src/*.hpp)
+$(DEVTEST): $(BUILD_DIR)/CMakeCache.txt tests/dev_infer.cpp $(SRC_FILES)
 	cmake --build $(BUILD_DIR) --target face_recognition_devtest
 
 verify: $(EXE)
