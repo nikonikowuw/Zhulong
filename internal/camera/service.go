@@ -139,7 +139,14 @@ func (s *CameraService) Create(ctx context.Context, req CreateCameraRequest) (*C
 	}
 
 	// 6. Encrypt Stream Credentials with AES-GCM and AAD
-	streams, err := s.buildEncryptedStreams(camID, mainInfo, subInfo, mainProbe, subProbe, mainProto)
+	streams, err := s.buildEncryptedStreams(buildStreamsParams{
+		cameraID:  camID,
+		mainProto: mainProto,
+		mainInfo:  mainInfo,
+		subInfo:   subInfo,
+		mainProbe: mainProbe,
+		subProbe:  subProbe,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +367,14 @@ func (s *CameraService) Update(ctx context.Context, id string, req UpdateCameraR
 			return nil, err
 		}
 
-		updatedStreams, err = s.buildEncryptedStreams(id, mainInfo, subInfo, mainProbe, subProbe, ProtocolRTSP)
+		updatedStreams, err = s.buildEncryptedStreams(buildStreamsParams{
+			cameraID:  id,
+			mainProto: ProtocolRTSP,
+			mainInfo:  mainInfo,
+			subInfo:   subInfo,
+			mainProbe: mainProbe,
+			subProbe:  subProbe,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -432,53 +446,53 @@ func (s *CameraService) Diagnose(ctx context.Context, id string) (*DiagnoseRespo
 	}, nil
 }
 
-func (s *CameraService) buildEncryptedStreams(
-	camID string,
-	mainInfo *StreamConnectionInfo,
-	subInfo *StreamConnectionInfo,
-	mainProbe *StreamProbeResult,
-	subProbe *StreamProbeResult,
-	mainProto string,
-) ([]CameraStream, error) {
-	mainAAD := MakeAAD(camID, StreamRoleMain)
-	mainCiphertext, err := s.cipher.Encrypt([]byte(mainInfo.NormalizedURI), mainAAD)
+type buildStreamsParams struct {
+	cameraID  string
+	mainProto string
+	mainInfo  *StreamConnectionInfo
+	subInfo   *StreamConnectionInfo
+	mainProbe *StreamProbeResult
+	subProbe  *StreamProbeResult
+}
+
+func (s *CameraService) encryptStream(
+	camID, role, proto string,
+	info *StreamConnectionInfo,
+	probe *StreamProbeResult,
+) (CameraStream, error) {
+	aad := MakeAAD(camID, role)
+	ciphertext, err := s.cipher.Encrypt([]byte(info.NormalizedURI), aad)
 	if err != nil {
-		return nil, apperr.New(apperr.KindInternal, "ENCRYPTION_ERROR", "Failed to encrypt main stream credentials", err)
+		return CameraStream{}, apperr.New(apperr.KindInternal, "ENCRYPTION_ERROR", fmt.Sprintf("Failed to encrypt %s stream credentials", role), err)
 	}
 
-	streams := []CameraStream{
-		{
-			CameraID:       camID,
-			Role:           StreamRoleMain,
-			Protocol:       mainProto,
-			EncryptedURI:   mainCiphertext,
-			Transport:      mainInfo.Transport,
-			Codec:          mainProbe.Codec,
-			Width:          mainProbe.Width,
-			Height:         mainProbe.Height,
-			FPSNumerator:   mainProbe.FPSNumerator,
-			FPSDenominator: mainProbe.FPSDenominator,
-		},
+	return CameraStream{
+		CameraID:       camID,
+		Role:           role,
+		Protocol:       proto,
+		EncryptedURI:   ciphertext,
+		Transport:      info.Transport,
+		Codec:          probe.Codec,
+		Width:          probe.Width,
+		Height:         probe.Height,
+		FPSNumerator:   probe.FPSNumerator,
+		FPSDenominator: probe.FPSDenominator,
+	}, nil
+}
+
+func (s *CameraService) buildEncryptedStreams(params buildStreamsParams) ([]CameraStream, error) {
+	mainStream, err := s.encryptStream(params.cameraID, StreamRoleMain, params.mainProto, params.mainInfo, params.mainProbe)
+	if err != nil {
+		return nil, err
 	}
 
-	if subInfo != nil && subProbe != nil {
-		subAAD := MakeAAD(camID, StreamRoleSub)
-		subCiphertext, err := s.cipher.Encrypt([]byte(subInfo.NormalizedURI), subAAD)
+	streams := []CameraStream{mainStream}
+	if params.subInfo != nil && params.subProbe != nil {
+		subStream, err := s.encryptStream(params.cameraID, StreamRoleSub, ProtocolRTSP, params.subInfo, params.subProbe)
 		if err != nil {
-			return nil, apperr.New(apperr.KindInternal, "ENCRYPTION_ERROR", "Failed to encrypt sub stream credentials", err)
+			return nil, err
 		}
-		streams = append(streams, CameraStream{
-			CameraID:       camID,
-			Role:           StreamRoleSub,
-			Protocol:       ProtocolRTSP,
-			EncryptedURI:   subCiphertext,
-			Transport:      subInfo.Transport,
-			Codec:          subProbe.Codec,
-			Width:          subProbe.Width,
-			Height:         subProbe.Height,
-			FPSNumerator:   subProbe.FPSNumerator,
-			FPSDenominator: subProbe.FPSDenominator,
-		})
+		streams = append(streams, subStream)
 	}
 
 	return streams, nil

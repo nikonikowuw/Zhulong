@@ -239,28 +239,34 @@ func SelectBestChallenge(challenges []string) (*ParsedChallenge, error) {
 	return nil, ErrNoSupportedAuthChallenge
 }
 
+// AuthorizationParams encapsulates parameters required to construct an Authorization header.
+type AuthorizationParams struct {
+	Challenge *ParsedChallenge
+	Method    string
+	URI       string
+	Username  string
+	Password  string
+	Cnonce    string
+	NC        int
+}
+
 // BuildAuthorizationHeader generates the Authorization header value for a given challenge, credentials, and request context.
-func BuildAuthorizationHeader(
-	challenge *ParsedChallenge,
-	method, uri string,
-	username, password string,
-	nc int,
-	cnonce string,
-) (string, error) {
-	if challenge == nil {
+func BuildAuthorizationHeader(params AuthorizationParams) (string, error) {
+	if params.Challenge == nil {
 		return "", errors.New("nil challenge")
 	}
 
-	switch challenge.Type {
+	switch params.Challenge.Type {
 	case AuthTypeBasic:
-		payload := username + ":" + password
+		payload := params.Username + ":" + params.Password
 		return "Basic " + base64.StdEncoding.EncodeToString([]byte(payload)), nil
 
 	case AuthTypeDigest:
-		if challenge.DigestChallenge == nil {
+		if params.Challenge.DigestChallenge == nil {
 			return "", errors.New("missing digest challenge details")
 		}
 
+		cnonce := params.Cnonce
 		if cnonce == "" {
 			var err error
 			cnonce, err = GenerateCnonce()
@@ -270,15 +276,15 @@ func BuildAuthorizationHeader(
 		}
 
 		opts := digest.Options{
-			Method:   method,
-			URI:      uri,
-			Username: username,
-			Password: password,
-			Count:    nc,
+			Method:   params.Method,
+			URI:      params.URI,
+			Username: params.Username,
+			Password: params.Password,
+			Count:    params.NC,
 			Cnonce:   cnonce,
 		}
 
-		cred, err := digest.Digest(challenge.DigestChallenge, opts)
+		cred, err := digest.Digest(params.Challenge.DigestChallenge, opts)
 		if err != nil {
 			return "", fmt.Errorf("calculate digest credentials: %w", err)
 		}
@@ -286,13 +292,13 @@ func BuildAuthorizationHeader(
 		headerVal := cred.String()
 
 		// If server provided empty opaque="" and cred.String() omitted it because cred.Opaque was empty
-		if challenge.HadEmptyOpaque && !strings.Contains(headerVal, "opaque=") {
+		if params.Challenge.HadEmptyOpaque && !strings.Contains(headerVal, "opaque=") {
 			headerVal += `, opaque=""`
 		}
 
 		return headerVal, nil
 
 	default:
-		return "", fmt.Errorf("unsupported auth type %v", challenge.Type)
+		return "", fmt.Errorf("unsupported auth type %v", params.Challenge.Type)
 	}
 }

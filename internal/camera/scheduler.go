@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -198,14 +199,14 @@ func (s *HealthScheduler) monitorActiveStreams() {
 					zap.String("role", role),
 					zap.Duration("elapsed", now.Sub(*streamState.LastCheckedAt)),
 				)
-				newState := s.registry.RecordStreamFailure(
-					camState.CameraID,
-					camState.Revision,
-					role,
-					"packet_timeout",
-					"no video packets received for >4s",
-					true, // isMediaSession = true
-				)
+				newState := s.registry.RecordStreamFailure(StreamFailureParams{
+					CameraID:         camState.CameraID,
+					Role:             role,
+					Reason:           "packet_timeout",
+					ErrorMessage:     "no video packets received for >4s",
+					ExpectedRevision: camState.Revision,
+					IsMediaSession:   true,
+				})
 				s.hub.BroadcastChange(newState)
 			}
 		}
@@ -274,14 +275,26 @@ func (s *HealthScheduler) checkStream(ctx context.Context, cam *Camera, stream *
 			zap.String("role", stream.Role),
 			zap.Error(err),
 		)
-		newState := s.registry.RecordStreamFailure(cam.ID, cam.Revision, stream.Role, "decryption_error", "unable to decrypt credentials", false)
+		newState := s.registry.RecordStreamFailure(StreamFailureParams{
+			CameraID:         cam.ID,
+			Role:             stream.Role,
+			Reason:           "decryption_error",
+			ErrorMessage:     "unable to decrypt credentials",
+			ExpectedRevision: cam.Revision,
+		})
 		s.hub.BroadcastChange(newState)
 		return
 	}
 
 	connInfo, err := ParseAndNormalizeRTSP(string(rawURI), stream.Transport)
 	if err != nil {
-		newState := s.registry.RecordStreamFailure(cam.ID, cam.Revision, stream.Role, "uri_error", "invalid RTSP URI", false)
+		newState := s.registry.RecordStreamFailure(StreamFailureParams{
+			CameraID:         cam.ID,
+			Role:             stream.Role,
+			Reason:           "uri_error",
+			ErrorMessage:     "invalid RTSP URI",
+			ExpectedRevision: cam.Revision,
+		})
 		s.hub.BroadcastChange(newState)
 		return
 	}
@@ -299,7 +312,13 @@ func (s *HealthScheduler) checkStream(ctx context.Context, cam *Camera, stream *
 			reason = "stream_not_found"
 		}
 
-		newState := s.registry.RecordStreamFailure(cam.ID, cam.Revision, stream.Role, reason, err.Error(), false)
+		newState := s.registry.RecordStreamFailure(StreamFailureParams{
+			CameraID:         cam.ID,
+			Role:             stream.Role,
+			Reason:           reason,
+			ErrorMessage:     err.Error(),
+			ExpectedRevision: cam.Revision,
+		})
 		s.hub.BroadcastChange(newState)
 		return
 	}
@@ -312,7 +331,9 @@ func (s *HealthScheduler) checkStream(ctx context.Context, cam *Camera, stream *
 
 func (s *HealthScheduler) jitterInterval() time.Duration {
 	var b [8]byte
-	_, _ = rand.Read(b[:])
+	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
+		return s.interval
+	}
 	randVal := binary.LittleEndian.Uint64(b[:])
 	// +/- 20% jitter
 	jitterPercent := 0.8 + 0.4*(float64(randVal%1000)/1000.0)

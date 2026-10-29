@@ -165,29 +165,39 @@ func (r *StateRegistry) RecordStreamSuccess(cameraID string, expectedRevision in
 	return r.cloneState(state)
 }
 
+// StreamFailureParams bundles parameters for recording stream failures in StateRegistry.
+type StreamFailureParams struct {
+	CameraID         string
+	Role             string
+	Reason           string
+	ErrorMessage     string
+	ExpectedRevision int64
+	IsMediaSession   bool
+}
+
 // RecordStreamFailure records a check or media failure for a stream.
 // If expectedRevision > 0 and the camera's current revision does not match on non-media checks, the stale result is ignored.
-func (r *StateRegistry) RecordStreamFailure(cameraID string, expectedRevision int64, role, reason, errMsg string, isMediaSession bool) *CameraStateInfo {
+func (r *StateRegistry) RecordStreamFailure(params StreamFailureParams) *CameraStateInfo {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	state, ok := r.states[cameraID]
+	state, ok := r.states[params.CameraID]
 	if !ok {
 		return nil
 	}
-	if !isMediaSession && expectedRevision > 0 && state.Revision != expectedRevision {
+	if !params.IsMediaSession && params.ExpectedRevision > 0 && state.Revision != params.ExpectedRevision {
 		return r.cloneState(state)
 	}
 
 	now := time.Now().UTC()
-	stream := r.getOrCreateStreamLocked(state, role)
+	stream := r.getOrCreateStreamLocked(state, params.Role)
 
 	stream.ConsecutiveFailures++
 	stream.LastCheckedAt = &now
-	stream.Reason = reason
-	stream.ErrorMessage = errMsg
+	stream.Reason = params.Reason
+	stream.ErrorMessage = params.ErrorMessage
 
-	if isMediaSession {
+	if params.IsMediaSession {
 		stream.Session = SessionStateReconnecting
 		stream.Health = HealthStateError
 		stream.EvidenceType = EvidenceError

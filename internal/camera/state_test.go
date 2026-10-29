@@ -31,13 +31,23 @@ func TestStateRegistryLifecycleAndAggregation(t *testing.T) {
 	}
 
 	// 3. Sub stream failure -> Camera remains online but becomes degraded
-	state = registry.RecordStreamFailure("cam_gate", 0, StreamRoleSub, "connect_failed", "connection refused", false)
+	state = registry.RecordStreamFailure(StreamFailureParams{
+		CameraID:     "cam_gate",
+		Role:         StreamRoleSub,
+		Reason:       "connect_failed",
+		ErrorMessage: "connection refused",
+	})
 	if state.Health != HealthStateOnline || !state.Degraded {
 		t.Fatalf("expected online and degraded, got: %+v", state)
 	}
 
 	// 4. Main stream failure -> Camera becomes error or offline, degraded clears
-	state = registry.RecordStreamFailure("cam_gate", 0, StreamRoleMain, "auth_failed", "bad password", false)
+	state = registry.RecordStreamFailure(StreamFailureParams{
+		CameraID:     "cam_gate",
+		Role:         StreamRoleMain,
+		Reason:       "auth_failed",
+		ErrorMessage: "bad password",
+	})
 	if state.Health == HealthStateOnline {
 		t.Fatalf("expected main failure to bring camera out of online, got: %+v", state)
 	}
@@ -63,19 +73,34 @@ func TestStateRegistryConsecutiveFailuresThreshold(t *testing.T) {
 	registry.RecordStreamSuccess("cam_01", 0, StreamRoleMain, EvidenceRTSPDescribe)
 
 	// Failure 1 -> transient error
-	s1 := registry.RecordStreamFailure("cam_01", 0, StreamRoleMain, "timeout", "timeout", false)
+	s1 := registry.RecordStreamFailure(StreamFailureParams{
+		CameraID:     "cam_01",
+		Role:         StreamRoleMain,
+		Reason:       "timeout",
+		ErrorMessage: "timeout",
+	})
 	if s1.Health != HealthStateError {
 		t.Fatalf("expected error on 1st failure, got %s", s1.Health)
 	}
 
 	// Failure 2 -> still error
-	s2 := registry.RecordStreamFailure("cam_01", 0, StreamRoleMain, "timeout", "timeout", false)
+	s2 := registry.RecordStreamFailure(StreamFailureParams{
+		CameraID:     "cam_01",
+		Role:         StreamRoleMain,
+		Reason:       "timeout",
+		ErrorMessage: "timeout",
+	})
 	if s2.Health != HealthStateError {
 		t.Fatalf("expected error on 2nd failure, got %s", s2.Health)
 	}
 
 	// Failure 3 -> offline
-	s3 := registry.RecordStreamFailure("cam_01", 0, StreamRoleMain, "timeout", "timeout", false)
+	s3 := registry.RecordStreamFailure(StreamFailureParams{
+		CameraID:     "cam_01",
+		Role:         StreamRoleMain,
+		Reason:       "timeout",
+		ErrorMessage: "timeout",
+	})
 	if s3.Health != HealthStateOffline {
 		t.Fatalf("expected offline on 3rd failure, got %s", s3.Health)
 	}

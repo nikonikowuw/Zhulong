@@ -67,15 +67,15 @@ func TestBuildAuthorizationHeaderDigestWithQopAndEmptyOpaque(t *testing.T) {
 		t.Fatalf("SelectBestChallenge failed: %v", err)
 	}
 
-	authHeader, err := BuildAuthorizationHeader(
-		chal,
-		"DESCRIBE",
-		"rtsp://192.168.1.100/live/main",
-		"admin",
-		"secretPass",
-		1,
-		"0a1b2c3d4e5f6a7b",
-	)
+	authHeader, err := BuildAuthorizationHeader(AuthorizationParams{
+		Challenge: chal,
+		Method:    "DESCRIBE",
+		URI:       "rtsp://192.168.1.100/live/main",
+		Username:  "admin",
+		Password:  "secretPass",
+		NC:        1,
+		Cnonce:    "0a1b2c3d4e5f6a7b",
+	})
 	if err != nil {
 		t.Fatalf("BuildAuthorizationHeader failed: %v", err)
 	}

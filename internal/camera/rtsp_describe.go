@@ -170,15 +170,15 @@ func (c *DescribeClient) Describe(ctx context.Context, info *StreamConnectionInf
 		return nil, err
 	}
 
-	authHeader, err := BuildAuthorizationHeader(
-		bestChal,
-		"DESCRIBE",
-		info.CleanURI,
-		info.Username,
-		info.Password,
-		nc,
-		cnonce,
-	)
+	authHeader, err := BuildAuthorizationHeader(AuthorizationParams{
+		Challenge: bestChal,
+		Method:    "DESCRIBE",
+		URI:       info.CleanURI,
+		Username:  info.Username,
+		Password:  info.Password,
+		NC:        nc,
+		Cnonce:    cnonce,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("build authorization header: %w", err)
 	}
@@ -203,15 +203,15 @@ func (c *DescribeClient) Describe(ctx context.Context, info *StreamConnectionInf
 				cseq++
 				nc++
 				cnonce, _ = GenerateCnonce()
-				staleAuthHeader, err := BuildAuthorizationHeader(
-					staleChal,
-					"DESCRIBE",
-					info.CleanURI,
-					info.Username,
-					info.Password,
-					nc,
-					cnonce,
-				)
+				staleAuthHeader, err := BuildAuthorizationHeader(AuthorizationParams{
+					Challenge: staleChal,
+					Method:    "DESCRIBE",
+					URI:       info.CleanURI,
+					Username:  info.Username,
+					Password:  info.Password,
+					NC:        nc,
+					Cnonce:    cnonce,
+				})
 				if err == nil {
 					resp3, err := c.sendDescribe(writer, reader, info.CleanURI, cseq, staleAuthHeader)
 					if err == nil && resp3.statusCode == 200 {

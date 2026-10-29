@@ -278,10 +278,14 @@ func (h *Handler) Events(c *gin.Context) {
 
 	// 1. Send initial snapshot
 	snapshotBytes, err := snapshotMsg.FormatSSE()
-	if err == nil {
-		_, _ = c.Writer.Write(snapshotBytes)
-		flusher.Flush()
+	if err != nil {
+		httputil.WriteError(c, apperr.New(apperr.KindInternal, "SSE_ERROR", "Failed to format initial SSE snapshot", err))
+		return
 	}
+	if _, err := c.Writer.Write(snapshotBytes); err != nil {
+		return
+	}
+	flusher.Flush()
 
 	clientGone := c.Request.Context().Done()
 	authTicker := time.NewTicker(30 * time.Second)

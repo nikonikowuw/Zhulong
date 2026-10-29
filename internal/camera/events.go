@@ -145,7 +145,7 @@ func (h *EventHub) BroadcastChange(state *CameraStateInfo) {
 	}
 
 	h.mu.RLock()
-	var slowClients []*ClientSubscription
+	slowClients := []*ClientSubscription{}
 	for _, sub := range h.clients {
 		select {
 		case sub.ch <- msg:
@@ -175,7 +175,7 @@ func (h *EventHub) BroadcastAIResult(result any) {
 	}
 
 	h.mu.RLock()
-	var slowClients []*ClientSubscription
+	slowClients := []*ClientSubscription{}
 	for _, sub := range h.clients {
 		select {
 		case sub.ch <- msg:
