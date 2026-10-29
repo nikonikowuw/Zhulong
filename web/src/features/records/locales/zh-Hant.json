@@ -89,6 +89,9 @@
     "algorithmId": "演算法套件",
     "pts": "PTS 幀時間戳",
     "capturedAt": "抓拍時間",
+    "highlightNotice": "目標位置連動高亮",
+    "copyPlate": "複製",
+    "copied": "已複製",
     "close": "關閉"
   },
   "toolbar": {

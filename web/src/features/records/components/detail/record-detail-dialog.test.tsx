@@ -191,7 +191,9 @@ describe('RecordDetailDialog', () => {
       .toBeInTheDocument()
     await expect.element(getByText('车辆裁剪图')).toBeInTheDocument()
     await expect.element(getByText(/plate_number/)).toBeInTheDocument()
-    await expect.element(getByText(/粤B88888/)).toBeInTheDocument()
+    await vi.waitFor(() => {
+      expect(getByText(/粤B88888/).elements().length).toBeGreaterThanOrEqual(1)
+    })
   })
 
   it('renders capture details and closes dialog on close button click', async () => {

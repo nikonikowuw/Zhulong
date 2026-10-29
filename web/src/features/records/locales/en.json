@@ -89,6 +89,9 @@
     "algorithmId": "Algorithm Package",
     "pts": "PTS Timestamp",
     "capturedAt": "Captured Time",
+    "highlightNotice": "Target sync highlight",
+    "copyPlate": "Copy",
+    "copied": "Copied",
     "close": "Close"
   },
   "toolbar": {
