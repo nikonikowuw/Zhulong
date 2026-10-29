@@ -27,6 +27,7 @@ import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { type Recognition } from '../../data/schema'
 import { MediaImage } from '../common/media-image'
 import { RecognitionCard } from '../recognitions/recognition-card'
+import { createPaginationChangeHandler } from './pagination'
 
 export interface RecognitionsViewProps {
   items: Recognition[]
@@ -188,19 +189,12 @@ export function RecognitionsView({
         pageSize,
       },
     },
-    onPaginationChange: (updater) => {
-      if (typeof updater === 'function') {
-        const next = updater({
-          pageIndex: Math.max(0, page - 1),
-          pageSize,
-        })
-        onPageChange(next.pageIndex + 1)
-        onPageSizeChange(next.pageSize)
-      } else {
-        onPageChange(updater.pageIndex + 1)
-        onPageSizeChange(updater.pageSize)
-      }
-    },
+    onPaginationChange: createPaginationChangeHandler({
+      page,
+      pageSize,
+      onPageChange,
+      onPageSizeChange,
+    }),
   })
 
   // 1. Grid 画廊视图

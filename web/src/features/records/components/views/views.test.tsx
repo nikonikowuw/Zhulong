@@ -367,4 +367,102 @@ describe('Records Views', () => {
       await expect.element(getByText('algo-legacy')).toBeInTheDocument()
     })
   })
+
+  /**
+   * 分页接线：点「下一页」只能触发一次路由跳转。
+   *
+   * 三个 View 曾经在 onPaginationChange 里同时调用 onPageChange 与
+   * onPageSizeChange，而父级 onPageSizeChange 会把 page 归 1 —— 页码先写成 2
+   * 又被写回 1，翻页在界面上完全无反应，后端日志却一切正常。
+   */
+  describe('pagination wiring', () => {
+    /** 分页条容器是 overflow-clip，按钮可能被裁切导致命中测试落到 <html>，直接派发原生 click。 */
+    const clickNextPage = async (
+      getByRole: (
+        role: string,
+        options: { name: RegExp }
+      ) => {
+        element: () => Element
+      }
+    ) => {
+      const next = getByRole('button', { name: /下一页|next page/i })
+      ;(next.element() as HTMLButtonElement).click()
+    }
+
+    it('RecognitionsView翻页只触发 onPageChange', async () => {
+      const onPageChange = vi.fn()
+      const onPageSizeChange = vi.fn()
+      const { getByRole } = await render(
+        <RecognitionsView
+          items={[]}
+          total={100}
+          page={1}
+          pageSize={20}
+          view='table'
+          isLoading={false}
+          isError={false}
+          onPageChange={onPageChange}
+          onPageSizeChange={onPageSizeChange}
+          onSelect={vi.fn()}
+          onRetry={vi.fn()}
+        />
+      )
+
+      await clickNextPage(getByRole)
+
+      expect(onPageChange).toHaveBeenCalledExactlyOnceWith(2)
+      expect(onPageSizeChange).not.toHaveBeenCalled()
+    })
+
+    it('AlarmsView翻页只触发 onPageChange', async () => {
+      const onPageChange = vi.fn()
+      const onPageSizeChange = vi.fn()
+      const { getByRole } = await render(
+        <AlarmsView
+          items={[]}
+          total={100}
+          page={1}
+          pageSize={20}
+          view='table'
+          isLoading={false}
+          isError={false}
+          onPageChange={onPageChange}
+          onPageSizeChange={onPageSizeChange}
+          onSelect={vi.fn()}
+          onRetry={vi.fn()}
+        />
+      )
+
+      await clickNextPage(getByRole)
+
+      expect(onPageChange).toHaveBeenCalledExactlyOnceWith(2)
+      expect(onPageSizeChange).not.toHaveBeenCalled()
+    })
+
+    it('CapturesView翻页只触发 onPageChange', async () => {
+      const onPageChange = vi.fn()
+      const onPageSizeChange = vi.fn()
+      const { getByRole } = await render(
+        <CapturesView
+          mode='captures'
+          items={[]}
+          total={100}
+          page={1}
+          pageSize={20}
+          view='table'
+          isLoading={false}
+          isError={false}
+          onPageChange={onPageChange}
+          onPageSizeChange={onPageSizeChange}
+          onSelect={vi.fn()}
+          onRetry={vi.fn()}
+        />
+      )
+
+      await clickNextPage(getByRole)
+
+      expect(onPageChange).toHaveBeenCalledExactlyOnceWith(2)
+      expect(onPageSizeChange).not.toHaveBeenCalled()
+    })
+  })
 })

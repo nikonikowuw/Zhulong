@@ -29,6 +29,7 @@ import { CaptureCard } from '../captures/capture-card'
 import { MediaImage } from '../common/media-image'
 import { VehicleCaptureCard } from '../vehicles/vehicle-capture-card'
 import { VehicleEvidence } from '../vehicles/vehicle-evidence'
+import { createPaginationChangeHandler } from './pagination'
 
 export interface CapturesViewProps {
   items: Capture[]
@@ -247,19 +248,12 @@ export function CapturesView({
         pageSize,
       },
     },
-    onPaginationChange: (updater) => {
-      if (typeof updater === 'function') {
-        const next = updater({
-          pageIndex: Math.max(0, page - 1),
-          pageSize,
-        })
-        onPageChange(next.pageIndex + 1)
-        onPageSizeChange(next.pageSize)
-      } else {
-        onPageChange(updater.pageIndex + 1)
-        onPageSizeChange(updater.pageSize)
-      }
-    },
+    onPaginationChange: createPaginationChangeHandler({
+      page,
+      pageSize,
+      onPageChange,
+      onPageSizeChange,
+    }),
   })
 
   // 1. Grid 模式

@@ -25,6 +25,7 @@ import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { algorithmLabel, type Alarm } from '../../data/schema'
 import { AlarmCard } from '../alarms/alarm-card'
 import { MediaImage } from '../common/media-image'
+import { createPaginationChangeHandler } from './pagination'
 
 export interface AlarmsViewProps {
   items: Alarm[]
@@ -171,19 +172,12 @@ export function AlarmsView({
         pageSize,
       },
     },
-    onPaginationChange: (updater) => {
-      if (typeof updater === 'function') {
-        const next = updater({
-          pageIndex: Math.max(0, page - 1),
-          pageSize,
-        })
-        onPageChange(next.pageIndex + 1)
-        onPageSizeChange(next.pageSize)
-      } else {
-        onPageChange(updater.pageIndex + 1)
-        onPageSizeChange(updater.pageSize)
-      }
-    },
+    onPaginationChange: createPaginationChangeHandler({
+      page,
+      pageSize,
+      onPageChange,
+      onPageSizeChange,
+    }),
   })
 
   // 1. Grid 模式
