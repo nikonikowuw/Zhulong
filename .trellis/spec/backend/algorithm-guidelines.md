@@ -6,23 +6,55 @@
 
 ## 1. 算法包物理目录拓扑 (Package Topology)
 
+### 1.1 交付归档拓扑 (Binary Package Topology)
+
 算法包必须采用**扁平化归档**（根目录下直接包含约定文件，**严禁外层包裹随机命名的顶层文件夹**）：
 
 ```txt
 <package_name>.tar.gz (或 .zip)
 ├── manifest.json       # [必须] 算法元数据声明与算力资源规格清单 (权威定义见 §2)
-├── plugin.so           # [必须] 导出纯 C ABI 的推理动态链接库 (权限必须为 0755)
+├── <manifest.id>       # [必须] 包根可执行文件 (静态链接 ZhulongAlgoSDK 与运行时，权限必须为 0755)
 ├── sample.jpg          # [必须] 用于准入黑盒测试的真实前向推理样本图
 ├── models/             # [可选] 算法只读权重模型 (.onnx, .rknn, .om, .engine 等)
 ├── config.schema.json  # [可选] 算法超参数配置的 JSON Schema (缺省为零参算法)
 └── .env                # [可选] 算法运行时本地环境变量覆写文件 (见 §3)
 ```
 
-### 1.1 归档与打包铁律 (Packaging Rules)
+> ⚠️ **历史废弃项**：交付形态已由动态库装载升级为独立进程可执行文件。归档内必须直接提供以 `manifest.id` 同名的二进制可执行文件，**归档内严禁再有 `plugin.so`**（检出即触发 `ALGO_ENTRY_INVALID` 准入拦截）。
+
+### 1.2 源码工程与 Stage 目录规范 (Source & Stage Architecture)
+
+对于多模型协同或带有后处理业务逻辑的复杂算法包，源码目录严禁按水平技术分层（如 `preprocess/`、`infer/`、`postprocess/`）切分，**必须按业务流水线阶段（Stage）进行垂直切片**：
+
+```txt
+packages/<id>/<target>/
+├── CMakeLists.txt      # 依赖纯 SDK 前缀构建，PRIVATE/PUBLIC 暴露 src/ 根
+├── Makefile            # 权威开发门禁：all, test, verify, clean
+├── manifest.json       # 包权威元信息
+├── config.schema.json  # 配置 schema
+├── sample.jpg          # 准入黑盒样本图
+├── models/             # 预置模型权重
+├── tests/
+│   └── dev_infer.cpp   # 本地闭环自测与各 Stage 细粒度测试
+└── src/
+    ├── main.cpp        # [入口] 仅调用 ZHULONG_ALGO_MAIN 绑定流水线插件与 SDK 结果适配器
+    ├── common/         # [通用] 跨 Stage 共享基础类型、常量映射表、字典、色彩枚举
+    ├── detection/      # [阶段 A: 检测] 封装输入前处理、检测推理、BBox 坐标映射与 NMS
+    ├── recognition/    # [阶段 B: 识别] 封装 ROI 仿射变换/切图、识别推理与 Greedy/CTC 解码
+    ├── format/         # [阶段 C: 校验] 纯领域规则与结构合法性校验（如车牌号牌正则与长度）
+    └── pipeline/       # [流水线] 资源生命周期管理、Worker Session 绑定、跨 Stage 级联与 SDK 结果组装
+```
+
+**Stage 垂直切片的核心设计原则**：
+1. **防止散弹式修改 (Avoid Shotgun Surgery)**：模型调整（如升级 Detector 输入尺寸或更换 Recognizer 模型）时，改动严格局限在单一 Stage 目录内，不跨层扩散到全局的 `preprocess/`。
+2. **异构前处理高内聚**：不同 Stage 可能采用不同前处理硬件（如 Stage 1 使用 RGA 硬件缩放，Stage 2 使用 CPU 仿射对齐）。将前处理与模型推理置于同一 Stage 内，能够天然隔离硬件抽象和生命周期。
+3. **阶段独立可测 (Stage Testability)**：每个 Stage 拥有明确且类型安全的输入输出（例如 `recognize(image, box) -> Result`），在 `tests/dev_infer.cpp` 中可直接对其进行单阶段白盒单元测试（如特定字符映射、负步幅异常防卫、非法字符规则拦截）。
+
+### 1.3 归档与打包铁律 (Packaging Rules)
 
 1. **归档格式**：仅支持 `.tar.gz`（魔数 `0x1F, 0x8B`）或 `.zip`（魔数 `0x50, 0x4B, 0x03, 0x04`）。
-2. **扁平根路径**：归档根目录下必须直接暴露 `manifest.json` 与 `plugin.so`。严禁打包为 `dist/` 或 `<package_name>/` 嵌套目录。
-3. **文件权限**：动态库 `plugin.so` 在 Linux 下必须具备可执行权限（`chmod 0755 plugin.so`）；Windows 打包 zip 时平台服务会在解压后自动补正为 `0755`。
+2. **扁平根路径**：归档根目录下必须直接暴露 `manifest.json` 与 `<manifest.id>` 二进制。严禁打包为 `dist/` 或 `<package_name>/` 嵌套目录。
+3. **文件权限**：二进制文件在 Linux 下必须具备可执行权限（`chmod 0755 <manifest.id>`）；Windows 打包 zip 时平台服务会在解压后自动补正为 `0755`。
 4. **安全与体积硬门禁**：
    - 压缩包上传体积 ≤ **500MB**（超限触发 HTTP 413 熔断）；
    - 解压后文件总数 ≤ **1,000 个**（防御解压炸弹）；

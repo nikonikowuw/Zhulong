@@ -24,6 +24,8 @@ EXE := $(BUILD_DIR)/plate_recognition
 # verify 的样本帧：骨架只解码 netpbm，jpg 会如实报 sample_decoded=false
 VERIFY_SAMPLE ?= $(CURDIR)/sample.jpg
 
+SRC_FILES := $(wildcard src/*.cpp src/*.hpp src/*/*.cpp src/*/*.hpp)
+
 .PHONY: all test verify clean
 
 all: $(EXE) $(DEVTEST)
@@ -38,10 +40,10 @@ $(BUILD_DIR)/CMakeCache.txt: CMakeLists.txt
 		$(if $(ONNXRUNTIME_ROOT),-DONNXRUNTIME_ROOT=$(ONNXRUNTIME_ROOT),) \
 		$(EXTRA_CMAKE_ARGS)
 
-$(EXE): $(BUILD_DIR)/CMakeCache.txt $(wildcard src/*.cpp src/*.hpp)
+$(EXE): $(BUILD_DIR)/CMakeCache.txt $(SRC_FILES)
 	cmake --build $(BUILD_DIR) --target plate_recognition
 
-$(DEVTEST): $(BUILD_DIR)/CMakeCache.txt tests/dev_infer.cpp $(wildcard src/*.cpp src/*.hpp)
+$(DEVTEST): $(BUILD_DIR)/CMakeCache.txt tests/dev_infer.cpp $(SRC_FILES)
 	cmake --build $(BUILD_DIR) --target plate_recognition_devtest
 
 # 包根可执行文件的一次性验包（与宿主验包门禁同构：stage token + 载荷 JSON）

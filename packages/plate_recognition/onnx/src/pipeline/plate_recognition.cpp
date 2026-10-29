@@ -1,6 +1,6 @@
 #include "plate_recognition.hpp"
 
-#include "plate_format.hpp"
+#include "format/plate_format.hpp"
 
 #include <zhulong/algo.hpp>
 

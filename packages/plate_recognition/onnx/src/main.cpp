@@ -8,7 +8,7 @@
 
 #include <zhulong/algo_main.hpp>
 
-#include "plate_recognition.hpp"
+#include "pipeline/plate_recognition.hpp"
 
 ZHULONG_ALGO_MAIN(zhulong::plate::PlateRecognitionPlugin,
                   zhulong::sdk::VehicleStructureResultAdapter,

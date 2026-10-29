@@ -20,9 +20,9 @@
 
 #include <zhulong/algo.hpp>
 
-#include "plate_format.hpp"
-#include "plate_recognition.hpp"
-#include "plate_recognizer.hpp"
+#include "format/plate_format.hpp"
+#include "pipeline/plate_recognition.hpp"
+#include "recognition/plate_recognizer.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"

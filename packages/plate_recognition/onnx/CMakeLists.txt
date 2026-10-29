@@ -20,10 +20,10 @@ find_package(Threads REQUIRED)
 
 # 产品代码（算法类本体）：包可执行文件与 devtest 共用，避免两份实现。
 add_library(plate_recognition_core OBJECT
-    src/plate_recognition.cpp
-    src/plate_detector.cpp
-    src/plate_recognizer.cpp
-    src/plate_format.cpp
+    src/detection/plate_detector.cpp
+    src/recognition/plate_recognizer.cpp
+    src/format/plate_format.cpp
+    src/pipeline/plate_recognition.cpp
 )
 target_compile_definitions(plate_recognition_core PRIVATE ZHULONG_PLUGIN_BUILD)
 target_include_directories(plate_recognition_core PRIVATE
@@ -35,6 +35,9 @@ target_link_libraries(plate_recognition_core PRIVATE Zhulong::AlgoRuntime)
 add_executable(plate_recognition
     src/main.cpp
     $<TARGET_OBJECTS:plate_recognition_core>
+)
+target_include_directories(plate_recognition PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 # 自有符号不外泄：静态归档里的 zhulong 符号不进 .dynsym
 target_link_options(plate_recognition PRIVATE "LINKER:--exclude-libs,ALL")

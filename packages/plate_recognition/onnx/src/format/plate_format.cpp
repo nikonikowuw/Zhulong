@@ -1,6 +1,6 @@
 #include "plate_format.hpp"
 
-#include "plate_charset.hpp"
+#include "common/plate_charset.hpp"
 
 #include <algorithm>
 #include <cstddef>

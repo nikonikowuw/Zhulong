@@ -206,6 +206,44 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 
 ---
 
+## 4. 算法包工程架构：Stage 垂直切片规范 (Stage-based Architecture Guidelines)
+
+多模型级联（如车牌检测+字符识别、人脸检测+特征提取）或包含复杂领域后处理的算法包，必须遵循 Stage 垂直切片架构，**严禁按水平技术层（`preprocess/`、`infer/`、`postprocess/`）组织源码**。
+
+### 4.1 目录分层与职责契约
+
+| 目录 | 职责范围 | 依赖与可见性边界 | 典型文件 |
+| :--- | :--- | :--- | :--- |
+| `src/common/` | 跨 Stage 共享基础类型、常量映射表、字典、色彩枚举 | 仅允许依赖标准库与 SDK 公开头，严禁依赖任何具体 Stage | `plate_charset.hpp` |
+| `src/<stage>/` (如 `detection/`, `recognition/`) | 独立模型/算法阶段：封装该 Stage 的专用前处理、模型推理与结果解码/后处理 | 仅暴露清晰的入参/出参函数或类；内聚管理专有会话与前处理缓冲 | `plate_detector.{hpp,cpp}`, `plate_recognizer.{hpp,cpp}` |
+| `src/format/` (或规则层) | 纯领域规则与结构合法性校验（CPU 轻量逻辑，无模型依赖） | 无硬件与模型推理依赖，接受 Stage 输出并返回校验断言/修正值 | `plate_format.{hpp,cpp}` |
+| `src/pipeline/` | 算法插件主类（实现 SDK 契约接口）：负责资源生命周期、多阶段时序编排与结果聚合 | 聚合所有 Stage；负责向 Worker 分配 Session，将 Stage 结果转换为 SDK 结构化类型 | `plate_recognition.{hpp,cpp}` |
+| `src/main.cpp` | 二进制交付入口：使用 `ZHULONG_ALGO_MAIN` 绑定插件类与 SDK 适配器 | 不包含任何算法业务逻辑，仅做类型装配 | `main.cpp` |
+
+### 4.2 级联模型生命周期与 Session 资源模型
+
+多模型流水线必须严格遵守 SDK 的两层生命周期：
+1. **全局 Model 资源（只读，多线程共享）**：
+   - 模型在 `Plugin::init(config_json)` 阶段通过 `zhulong::Model::load(...)` 一次性完成装载；
+   - 包含主检测模型与次级识别模型，其句柄由 Pipeline 插件类或各 Stage 统一持有；
+2. **线程绑定 Session 资源（并发隔离）**：
+   - `Plugin::create_session(worker_id)` 时，必须为每个阶段创建对应的推理会话；
+   - 返回给宿主 SDK 的 `zhulong::Session` 通常代表主检测器会话；
+   - **级联会话防降级保护**：若流水线中任一子阶段（如识别会话）创建失败，`create_session` **必须立即中止并返回非法 session**，严禁静默容错导致 Worker 运行在“半死状态”；
+   - 识别或二次推理会话按 `worker_id` 存储在 Pipeline 内部的互斥安全容器中，在 `detect_vehicles` 期间按当前 Worker 身份提取使用。
+
+### 4.3 跨 Stage 数据流契约与零拷贝原则
+
+1. **强类型 Stage 出入参**：
+   - 阶段之间避免传递裸指针或弱语义 `void*`；
+   - 检测 Stage 输出结构化 `std::vector<DetectionBox>`（包含归一化 `box[4]`、`score` 与关键点）；
+   - 识别 Stage 接收原始图像 `zhulong::Image` 与检测到的目标区域（或由硬件前处理生成的 ROI Tensor），输出具体识别文本及置信度；
+2. **前处理与采样一致性**：
+   - 裁剪与透视变换采样必须统一复用 SDK 权威工具（如 `yuv_sampling.hpp`），禁止在不同 Stage 中自行发明私有插值算法；
+   - 必须防范负 stride、零尺寸越界与 NaN 浮点计算。
+
+---
+
 ## 5. 包根可执行文件的 CLI 与退出码
 
 包**就是**它自己的可执行文件（`<manifest.id>`，静态链接运行时）。宿主不再提供通用 runner，也不再 `dlopen` 任何东西；下面两种调用形态都由 `native/sdk/src/algo_main.cpp` 的骨架实现：

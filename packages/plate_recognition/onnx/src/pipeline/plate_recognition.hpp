@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "plate_detector.hpp"
-#include "plate_recognizer.hpp"
+#include "detection/plate_detector.hpp"
+#include "recognition/plate_recognizer.hpp"
 
 #include <zhulong/algo.hpp>
 

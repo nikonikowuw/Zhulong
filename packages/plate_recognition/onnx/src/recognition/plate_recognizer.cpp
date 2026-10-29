@@ -1,6 +1,6 @@
 #include "plate_recognizer.hpp"
 
-#include "plate_charset.hpp"
+#include "common/plate_charset.hpp"
 
 #include <zhulong/runtime/yuv_sampling.hpp>
 
