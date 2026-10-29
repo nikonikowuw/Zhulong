@@ -18,6 +18,7 @@ export interface BoundingBoxCanvasProps {
   secondaryBox?: BoundingBox
   secondaryLabel?: string
   className?: string
+  imageClassName?: string
 }
 
 function isValidBox(box?: BoundingBox): boolean {
@@ -62,6 +63,7 @@ export function BoundingBoxCanvas({
   secondaryBox,
   secondaryLabel,
   className,
+  imageClassName,
 }: BoundingBoxCanvasProps) {
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
   const [imgLoaded, setImgLoaded] = useState(false)
@@ -73,28 +75,27 @@ export function BoundingBoxCanvas({
   const hasSecondary = isValidBox(secondaryBox)
 
   return (
-    <div
-      className={cn(
-        'relative inline-block overflow-hidden rounded-lg border border-border bg-black/90 shadow-inner',
-        className
-      )}
-    >
+    <div className='relative inline-block overflow-hidden rounded-lg border border-border bg-black/90 shadow-inner'>
       {/* 图像加载占位 */}
       {!imgLoaded && !imgError && (
-        <div className='flex aspect-video w-full items-center justify-center bg-muted/40 text-muted-foreground'>
+        <div className='flex aspect-video w-full min-w-[280px] items-center justify-center bg-muted/40 text-muted-foreground'>
           <span className='text-xs opacity-70'>Loading image...</span>
         </div>
       )}
 
       {imgError ? (
-        <div className='flex aspect-video w-full items-center justify-center bg-muted/50 text-muted-foreground'>
+        <div className='flex aspect-video w-full min-w-[280px] items-center justify-center bg-muted/50 text-muted-foreground'>
           <span className='text-xs'>Image preview unavailable</span>
         </div>
       ) : (
         <img
           src={resolvedUrl}
           alt={alt}
-          className='block max-h-[600px] w-auto max-w-full object-contain'
+          className={cn(
+            'block w-auto max-w-full',
+            className || 'max-h-[600px]',
+            imageClassName
+          )}
           onLoad={(e) => {
             const img = e.currentTarget
             setDimensions({
