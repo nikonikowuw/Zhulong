@@ -22,6 +22,10 @@ const nativePluginHeaderRelPath = "native/sdk/include/zhulong/plugin.h"
 // per-stream worker exit codes.
 const nativeWorkerGuardRelPath = "native/sdk/src/internal/worker_guard.hpp"
 
+// nativeStallWatchRelPath is the native single source of truth for the stall
+// watchdog's exit code and default threshold.
+const nativeStallWatchRelPath = "native/sdk/src/internal/stall_watch.hpp"
+
 // TestPluginContractMatchesNativeHeader cross-checks result_type enums and
 // string/dimension constraints between zhulong/plugin.h and Go ResultType.
 func TestPluginContractMatchesNativeHeader(t *testing.T) {
@@ -143,6 +147,16 @@ func TestRunnerExitCodeMatchesNativeSkeleton(t *testing.T) {
 	}
 
 	checkConstexprInt(t, string(raw), "kExitWorkerCrashed", uint64(algoipc.RunnerExitWorkerCrashed))
+
+	stallPath := findNativeHeader(t, nativeStallWatchRelPath)
+	if stallPath == "" {
+		t.Skipf("%s not found, skipping stall watchdog contract test", nativeStallWatchRelPath)
+	}
+	stallRaw, err := os.ReadFile(stallPath)
+	if err != nil {
+		t.Fatalf("read native stall watch header: %v", err)
+	}
+	checkConstexprInt(t, string(stallRaw), "kExitWorkerStalled", uint64(algoipc.RunnerExitWorkerStalled))
 }
 
 // checkConstexprInt extracts `constexpr int NAME = <literal>;` from a native header.

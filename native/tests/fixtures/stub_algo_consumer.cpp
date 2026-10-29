@@ -13,6 +13,9 @@
 #include <zhulong/algo.hpp>
 #include <zhulong/algo_main.hpp>
 
+#include <chrono>
+#include <cstdlib>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -40,6 +43,15 @@ public:
         (void)session;
         (void)image;
         (void)task_context;
+
+        // 集成测试用：让该路**卡在推理里**，验证无进展看门狗能把「卡死」变成可诊断的
+        // 受控退出。默认 0 = 不睡眠，其余用例（含生产夹具行为）完全不变。
+        if (const char* raw = std::getenv("ZHULONG_STUB_DETECT_SLEEP_MS")) {
+            const long sleep_ms = std::strtol(raw, nullptr, 10);
+            if (sleep_ms > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+            }
+        }
 
         zhulong::Detection det;
         det.box[0] = 0.10f;

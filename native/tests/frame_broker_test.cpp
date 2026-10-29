@@ -16,6 +16,7 @@
 #include <cstring>
 #include <csignal>
 #include <atomic>
+#include <string>
 
 using namespace zhulong;
 using namespace zhulong::ipc;
@@ -1005,6 +1006,88 @@ void test_consumer_broker_connect_failure_d6(const char* consumer_bin) {
 }
 
 // =============================================================================
+// 无进展看门狗：卡在推理里的一路必须在阈值后被**受控**终止
+// =============================================================================
+//
+// 这条路径以前完全没有出口：Worker 卡在 process() 里既不读标志位也不发 ACK，
+// 宿主只能看到 in-flight 配额被慢慢耗满（engine.h 没有 client-stats ABI 可查），
+// 进程就那么挂着。现在骨架自己发现并结束进程，把「卡死」翻译成可诊断、可重启的失败。
+//
+// 断言三件事：退出码是 10（不是 SIGABRT、不是超时后的 0）、确实发生在阈值附近
+// 而不是等 5s 假推理跑完、以及 stderr 真的留下了 stage=worker_stalled（否则运维
+// 依然什么都看不到）。
+void test_stall_watchdog_terminates_stuck_worker(const char* consumer_bin) {
+    if (!consumer_bin) return;
+
+    const uint64_t stream_id = 3004;
+    FrameBroker broker;
+    BrokerOptions opt;
+    opt.slot_count = 4;
+    opt.slot_size = 1024 * 1024;
+    assert(broker.start(stream_id, "/tmp", opt));
+
+    int err_pipe[2];
+    assert(::pipe(err_pipe) == 0);
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        ::close(err_pipe[0]);
+        // 收走 stderr：既要验证诊断记录真的发出，也避免污染测试输出。
+        if (::dup2(err_pipe[1], STDERR_FILENO) != STDERR_FILENO) {
+            _exit(127);
+        }
+        ::close(err_pipe[1]);
+        ::setenv("ZHULONG_STUB_DETECT_SLEEP_MS", "5000", 1);
+        ::setenv("ZHULONG_WORKER_STALL_TIMEOUT_MS", "300", 1);
+        execl(consumer_bin, consumer_bin,
+              "--broker", broker.socket_path().c_str(),
+              "--name", "stall_watchdog_consumer",
+              "--max-frames", "1",
+              nullptr);
+        _exit(127);
+    }
+    assert(pid > 0);
+    ::close(err_pipe[1]);
+
+    // 没有握手完成的 client 时 publish_frame 直接丢帧，看门狗也就无从计时。
+    for (int i = 0; i < 150; ++i) {
+        if (broker.client_count() == 1) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    assert(broker.client_count() == 1);
+
+    std::vector<uint8_t> dummy(640 * 480 * 3, 100);
+    HardwareFrame frame;
+    frame.width = 640;
+    frame.height = 480;
+    frame.stride = 640 * 3;
+    frame.format = FRAME_FORMAT_UNKNOWN;
+    frame.host_ptr = dummy.data();
+    frame.pts = 100;
+    assert(broker.publish_frame(frame));
+
+    // 子进程退出 → 管道 EOF。最坏情况（看门狗失效）是 5s 后以 0 退出，不会挂死。
+    std::string captured;
+    char buf[512];
+    ssize_t n = 0;
+    while ((n = ::read(err_pipe[0], buf, sizeof(buf))) > 0) {
+        captured.append(buf, static_cast<size_t>(n));
+    }
+    ::close(err_pipe[0]);
+
+    int status = 0;
+    assert(::waitpid(pid, &status, 0) == pid);
+    assert(WIFEXITED(status));
+    // 10 = kExitWorkerStalled（native/sdk/src/internal/stall_watch.hpp）。
+    // 刻意写字面量：这是对外的退出码契约，与 Go 侧常量各自独立钉住。
+    assert(WEXITSTATUS(status) == 10);
+    assert(captured.find("worker_stalled") != std::string::npos);
+
+    broker.stop();
+    std::cout << "[PASS] test_stall_watchdog_terminates_stuck_worker" << std::endl;
+}
+
+// =============================================================================
 // Test: Runner --algorithm-id 透传至 MSG_RESULT 载荷 (algorithm_id) 跨进程端到端验证
 // =============================================================================
 void test_consumer_result_algorithm_id_e2e(const char* consumer_bin) {
@@ -1509,6 +1592,7 @@ int main(int argc, char* argv[]) {
         test_consumer_subprocess_e2e(consumer_bin);
         test_consumer_multi_broker_e2e(consumer_bin);
         test_consumer_broker_connect_failure_d6(consumer_bin);
+        test_stall_watchdog_terminates_stuck_worker(consumer_bin);
         test_consumer_result_algorithm_id_e2e(consumer_bin);
     }
     std::cout << "All FrameBroker SHM and IPC integration tests passed successfully!" << std::endl;

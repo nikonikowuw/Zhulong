@@ -28,6 +28,11 @@ const (
 	// can back off on.
 	FailureStageWorkerException = "worker_exception"
 
+	// FailureStageWorkerStalled marks a runner that exited because one per-stream
+	// worker stopped making progress (stuck inside process()) and the skeleton's
+	// watchdog ended the process so the host could restart it.
+	FailureStageWorkerStalled = "worker_stalled"
+
 	// RunnerExitBrokerUnavailable is the runner's exit code for a failed broker connect.
 	RunnerExitBrokerUnavailable = 5
 
@@ -37,6 +42,15 @@ const (
 	// ⚠️ Must equal kExitWorkerCrashed in native/sdk/src/internal/worker_guard.hpp;
 	// TestRunnerExitCodeMatchesNativeSkeleton in internal/algorithm enforces it.
 	RunnerExitWorkerCrashed = 9
+
+	// RunnerExitWorkerStalled is the runner's exit code when a per-stream worker
+	// stopped making progress. Deliberately distinct from 9: a crash is
+	// deterministic (same build usually reproduces, leading to CRASH_LOOP and a
+	// version rollback), while a stall is often recoverable by a restart.
+	//
+	// ⚠️ Must equal kExitWorkerStalled in native/sdk/src/internal/stall_watch.hpp;
+	// TestRunnerExitCodeMatchesNativeSkeleton in internal/algorithm enforces it.
+	RunnerExitWorkerStalled = 10
 
 	// MsgResult is the inference result egress message type (Runner -> Broker/Go).
 	MsgResult uint16 = 7

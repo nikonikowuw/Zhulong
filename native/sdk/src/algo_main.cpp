@@ -18,6 +18,7 @@
 #include "internal/gallery_index.hpp"
 #include "internal/gallery_parser.hpp"
 #include "internal/motion_gate.hpp"
+#include "internal/stall_watch.hpp"
 #include "internal/worker_guard.hpp"
 #include "algorithm/ipc/ipc_protocol.hpp"
 #include "algorithm/ipc/shm_pool.hpp"
@@ -65,27 +66,37 @@ namespace detail
     }
 
     /**
-     * @brief 给当前 Worker 线程起一个可分辨的内核线程名（`ps -L` / gdb / perf 用）
-     *
-     * 多路订阅下所有 Worker 都是同一个可执行文件的线程，没有名字时排障只能靠 CPU 占用
-     * 猜「哪一路卡住了」。名称带下标，与控制消息里的 `index` 字段一致。
+     * @brief 给当前线程设一个可分辨的内核线程名（`ps -L` / gdb / perf 用）
      *
      * 平台差异收敛在这里：Linux 的 `pthread_setname_np` 作用于**指定**线程（需显式传
      * `pthread_self()`），macOS 的同名函数只作用于**调用线程**且不接受线程参数。两者都在
-     * 本函数（线程入口）调用，因此语义一致。
+     * 线程入口调用，因此语义一致。
+     */
+    inline void set_thread_name(const char *name) noexcept
+    {
+        // 内核上限 16 字节（含结尾 NUL）。超长会被截断或返回 ERANGE，调用方自己裁短。
+        char trimmed[16] = {};
+        std::snprintf(trimmed, sizeof(trimmed), "%s", name != nullptr ? name : "");
+#if defined(__linux__)
+        ::pthread_setname_np(::pthread_self(), trimmed);
+#elif defined(__APPLE__)
+        ::pthread_setname_np(trimmed);
+#else
+        (void)trimmed;
+#endif
+    }
+
+    /**
+     * @brief Worker 线程名：`algo-w<idx>`，下标与控制消息里的 `index` 字段一致
+     *
+     * 多路订阅下所有 Worker 都是同一个可执行文件的线程，没有名字时排障只能靠 CPU 占用
+     * 猜「哪一路卡住了」。
      */
     inline void set_worker_thread_name(size_t idx) noexcept
     {
-        // 内核上限 16 字节（含结尾 NUL）。超长会被截断或返回 ERANGE，这里显式裁短。
         char name[16] = {};
         std::snprintf(name, sizeof(name), "algo-w%zu", idx);
-#if defined(__linux__)
-        ::pthread_setname_np(::pthread_self(), name);
-#elif defined(__APPLE__)
-        ::pthread_setname_np(name);
-#else
-        (void)name;
-#endif
+        set_thread_name(name);
     }
 
     /**
@@ -802,6 +813,61 @@ namespace detail
         std::atomic<int> exit_code{0};
         GalleryIndex gallery_index;
 
+        // ── 无进展看门狗 ──────────────────────────────────────────────
+        // 卡在 process() 里的线程无法被协作式回收（它不读标志位、也不会发 ACK），
+        // 所以这里只做两件事：让卡死可诊断（stage=worker_stalled），以及让整包
+        // 受控退出、由宿主按既有退避/熔断链路重启。
+        //
+        // ⚠️ 判据是「已收帧、未 ACK」的这段时间，不是「距上次 ACK 多久」：
+        //    相机断流时 Worker 会长期空转在 500ms recv 超时循环里，那不是卡死。
+        const int64_t stall_timeout_ms = resolve_stall_timeout_ms(::getenv(kStallTimeoutEnv));
+        std::vector<StallTracker> stall_trackers(broker_socks.size());
+        std::atomic<bool> watchdog_stop{false};
+        std::thread watchdog;
+        if (stall_timeout_ms > 0)
+        {
+            const int64_t poll_ms = stall_poll_interval_ms(stall_timeout_ms);
+            ZL_LOGI(0, "algorithm.runner", "stall_watchdog_enabled timeout_ms=%lld poll_ms=%lld workers=%zu",
+                    static_cast<long long>(stall_timeout_ms), static_cast<long long>(poll_ms),
+                    stall_trackers.size());
+            try
+            {
+                // ⚠️ `poll_ms` 必须**按值**捕获：它声明在 `if` 块内，而这个 lambda 在块结束
+                //    之后仍在运行。引用捕获会让它读到一个生命周期已终止的栈槽，睡眠时长
+                //    变成垃圾值 —— 实测表现为看门狗永久睡死、主线程 join 卡住整包不退出。
+                watchdog = std::thread([&, poll_ms]()
+                {
+                    set_thread_name("algo-wd");
+                    while (!watchdog_stop.load(std::memory_order_relaxed))
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
+                        if (watchdog_stop.load(std::memory_order_relaxed))
+                        {
+                            break;
+                        }
+                        const int64_t now_ms = monotonic_now_ms();
+                        for (size_t i = 0; i < stall_trackers.size(); ++i)
+                        {
+                            const int64_t stalled_ms = stall_trackers[i].stalled_ms(now_ms);
+                            if (stalled_ms >= stall_timeout_ms)
+                            {
+                                // 不返回：_Exit(kExitWorkerStalled)
+                                report_stall_and_exit(i, parse_stream_id_from_socket(broker_socks[i]),
+                                                       stalled_ms);
+                            }
+                        }
+                    }
+                });
+            }
+            catch (const std::exception &watchdog_error)
+            {
+                // 线程资源耗尽：看门狗起不来是保护降级，不是致命错。不能因此
+                // 把整个包打死——那会从一个「可选保护」变成启动失败。
+                ZL_LOGW(0, "algorithm.runner", "stall_watchdog_unavailable reason=%s",
+                        watchdog_error.what());
+            }
+        }
+
         // 单路 Worker 的**完整工作体**。刻意保持原样（只由 run_single_worker 在异常边界内调用），
         // 不要把连接/握手/收帧逻辑拆出去：这段里的任何一个分配失败都必须被同一个边界接住。
         auto run_single_worker_body = [&](size_t idx, const std::string &broker_sock)
@@ -967,6 +1033,11 @@ namespace detail
 
                 if (is_frame_dispatch)
                 {
+                    // 从这里到 ACK 发出为止算「在处理」；看门狗只对这段时间计时。
+                    // RAII：块内所有 continue / break / 异常退出路径都会自动结束计时，
+                    // 漏掉任何一条都会让该路被永久判为在处理，进而被误杀。
+                    StallTracker::ProcessingScope processing_scope(stall_trackers[idx]);
+
                     // ⚠️ 只接受 SCM_RIGHTS 传来的本地副本 fd。绝不回退到 dispatch.reserved_fd：
                     //    那是宿主进程的 fd 号，在本进程中可能指向任意无关资源。
                     const int active_dma_fd = received_fd;
@@ -1201,6 +1272,12 @@ namespace detail
                     t.join();
                 }
             }
+        }
+
+        watchdog_stop.store(true, std::memory_order_relaxed);
+        if (watchdog.joinable())
+        {
+            watchdog.join();
         }
 
         api.model_destroy(model);

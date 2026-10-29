@@ -31,6 +31,10 @@ const (
 	// stage record is the primary signal (see the note in watchExit).
 	runnerExitWorkerCrashed = algoipc.RunnerExitWorkerCrashed
 
+	// runnerExitWorkerStalled is the runner's exit code when one per-stream worker
+	// stopped making progress and the skeleton's watchdog ended the process.
+	runnerExitWorkerStalled = algoipc.RunnerExitWorkerStalled
+
 	maxRunnerLogLine = 64 * 1024
 	runnerLogRate    = 100
 )
@@ -437,7 +441,7 @@ func validRunnerStatus(value string) bool {
 func validRunnerStage(value string) bool {
 	switch value {
 	// 注意：曾经还有 "dlopen"，随 dlopen 通道下线；包骨架不会再发这个 stage。
-	case "args", "model_create", "worker_create", "task_open", "process", "connect", "name_check", "shm_init", "gallery_sync", "broker_disconnected", "worker_exception":
+	case "args", "model_create", "worker_create", "task_open", "process", "connect", "name_check", "shm_init", "gallery_sync", "broker_disconnected", "worker_exception", "worker_stalled":
 		return true
 	default:
 		return false
@@ -657,6 +661,8 @@ func (p *RunnerProcess) watchExit(cmd *exec.Cmd, stdoutR, stderrR *os.File, logW
 		p.failureStage = algoipc.FailureStageBrokerConnect
 	} else if p.exitCode == runnerExitWorkerCrashed {
 		p.failureStage = algoipc.FailureStageWorkerException
+	} else if p.exitCode == runnerExitWorkerStalled {
+		p.failureStage = algoipc.FailureStageWorkerStalled
 	}
 
 	if p.state == StatusRunning {
@@ -679,6 +685,16 @@ func (p *RunnerProcess) watchExit(cmd *exec.Cmd, stdoutR, stderrR *os.File, logW
 			p.logger.Error("runner worker thread failed with an uncaught exception",
 				zap.Int("exit_code", p.exitCode),
 				zap.String("reason", "worker_exception"),
+				zap.String("source", "process_exit"),
+			)
+		} else if p.failureStage == algoipc.FailureStageWorkerStalled {
+			// One per-stream worker hung inside process() and the package watchdog
+			// ended the process. Same restart path as any other crash; reported
+			// apart because "the algorithm is too slow / deadlocked" is not the
+			// same investigation as "the algorithm crashed".
+			p.logger.Error("runner worker thread stopped making progress and was terminated by its watchdog",
+				zap.Int("exit_code", p.exitCode),
+				zap.String("reason", "worker_stalled"),
 				zap.String("source", "process_exit"),
 			)
 		} else {

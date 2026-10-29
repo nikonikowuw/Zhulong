@@ -244,6 +244,7 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 | `7` | 握手应答接收失败或类型不符 | `algo_main.cpp` |
 | `8` | 共享内存只读映射失败 | `algo_main.cpp` |
 | `9` | **单路 Worker 未捕获异常**（见 §5.2.1） | `worker_guard.hpp` |
+| `10` | **单路 Worker 无进展，被包内看门狗终止**（见 §5.2.2） | `stall_watch.hpp` |
 
 ⚠️ 多路 `--broker` 下，任一路连接失败即整体失败，退出码严格保持为 `5`；任一路失败会置位 `stop_all` 终止已连接各路，不存在部分成功中间态。
 
@@ -257,6 +258,21 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 - **故障域语义不变**：仍是「一路失败整包退出」（D6）。区别只在**可诊断、可退避、可熔断**。不要把它改成「该路静默退出、其它路继续」：那会让宿主以为全路都在跑，比一次受控重启更糟。
 - **诊断**：每个 Worker 线程在入口设内核线程名 `algo-w<idx>`（`set_worker_thread_name`），`ps -L` / gdb / perf 可直接区分是哪一路。
 - **跨语言约束**：`kExitWorkerCrashed` 必须等于 Go 侧 `algoipc.RunnerExitWorkerCrashed`（`internal/algorithm/ipc_contract_test.go` 的 `TestRunnerExitCodeMatchesNativeSkeleton` 钉住）；`worker_exception` 必须留在 `internal/algorunner/process.go` 的 `validRunnerStage` allowlist 里，否则该记录会被判为 "runner protocol record rejected"，真实事件被吞掉。
+
+### 5.2.2 单路 Worker 无进展看门狗（退出码 `10`）
+
+卡在 `process()` 里的 Worker 既**不读任何标志位**，也**不会发 `MSG_FRAME_ACK`**。因此没有任何协作式手段能回收它 —— 「停 ACK 让 broker 驱逐租约」这种事做不到，ACK 正是那个卡住的线程发的。C++ 也没有线程抢占（`pthread_cancel` 在持锁 / 未展开栈的 native 代码上是灾难）。
+
+所以看门狗只做两件事：让卡死**可见**，并让整包**受控退出**、由宿主按既有退避 / CRASH_LOOP / 回滚链路重启。
+
+- **判据只有一条**：「已收到帧、尚未 ACK」的这段时间（`StallTracker::ProcessingScope`）。⚠️ 不要用「距上次 ACK 多久」——相机断流时 Worker 会长期空转在 500ms `recv` 超时循环里，那不是卡死，用错判据会把断流相机全部误杀。
+- **阈值**：默认 60000ms，经 `ZHULONG_WORKER_STALL_TIMEOUT_MS` 覆盖（宿主 `.env` / `ExtraEnv` 是既有通道，argv 契约不变）；显式 `0` 或负数关闭，**非法值回退默认值而不是关闭**（拼错不该静默丢掉保护）。
+- **退出路径**：栈上 `snprintf` + 一次不分配的 `::write` + `std::_Exit(10)`。⚠️ 不能用日志通道：`_Exit` 会丢掉异步 writer 队列，而卡死时 `g_stderr_write_mutex` 很可能正被卡住那个线程持有。
+- **采样间隔**：`max(50, min(timeout/4, 1000))` ms，判定误差 ≤1s。
+- **停机延迟**：正常停包时 watchdog 最多再睡一个采样间隔（≤1s）才被 join；宿主 `StopAlgorithm` 的超时是 3s，有余量。
+- **`std::thread` 构造失败**（线程资源耗尽）：只打 `stall_watchdog_unavailable` 告警降级，**不**把整个包打死。
+- **跨语言约束**：同 §5.2.1；`kExitWorkerStalled` ↔ `algoipc.RunnerExitWorkerStalled` 由同一个契约测试钉住，`worker_stalled` 同样必须在 `validRunnerStage` 里。
+- **回归门禁**：`ZhulongStallWatchTests`（判据与阈值解析）+ `ZhulongFrameBrokerTests::test_stall_watchdog_terminates_stuck_worker`（真进程：断言退出码 10、stderr 含 `worker_stalled`、且不被 5s 假推理拖成 0）。
 
 ### 5.3 FrameBroker 宿主与帧发布通路
 
