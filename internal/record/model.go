@@ -2,6 +2,8 @@ package record
 
 import (
 	"time"
+
+	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
 
 // Recognition is the GORM model for the recognitions table.
@@ -108,8 +110,9 @@ type RecognitionFilter struct {
 	Matched          *bool      `form:"matched"`
 	StartTime        *time.Time `form:"startTime" time_format:"2006-01-02T15:04:05Z07:00"`
 	EndTime          *time.Time `form:"endTime" time_format:"2006-01-02T15:04:05Z07:00"`
-	Page             int        `form:"page"`
-	PageSize         int        `form:"pageSize"`
+	// Window 是已解析的分页窗口。store 直接用它，不再自行从 page/pageSize
+	// 推导 offset —— 二段推导正是 legacy limit/offset 被静默取整的原因。
+	Window httputil.PageWindow
 }
 
 // AlarmFilter defines query filter criteria for Alarms.
@@ -118,8 +121,8 @@ type AlarmFilter struct {
 	AlarmType string     `form:"alarmType"`
 	StartTime *time.Time `form:"startTime" time_format:"2006-01-02T15:04:05Z07:00"`
 	EndTime   *time.Time `form:"endTime" time_format:"2006-01-02T15:04:05Z07:00"`
-	Page      int        `form:"page"`
-	PageSize  int        `form:"pageSize"`
+	// Window 同 RecognitionFilter.Window。
+	Window httputil.PageWindow
 }
 
 // CaptureFilter defines query filter criteria for Captures.
@@ -128,6 +131,6 @@ type CaptureFilter struct {
 	TargetType string     `form:"targetType"`
 	StartTime  *time.Time `form:"startTime" time_format:"2006-01-02T15:04:05Z07:00"`
 	EndTime    *time.Time `form:"endTime" time_format:"2006-01-02T15:04:05Z07:00"`
-	Page       int        `form:"page"`
-	PageSize   int        `form:"pageSize"`
+	// Window 同 RecognitionFilter.Window。
+	Window httputil.PageWindow
 }

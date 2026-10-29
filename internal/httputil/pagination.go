@@ -6,6 +6,18 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// 分页参数边界。它们属于 HTTP 契约的一部分（超限被 clamp 而不是报错），
+// 所以集中从这里导出，各领域不再各自派生一份。
+const (
+	// DefaultPageSize 是未指定每页行数时的取值。
+	DefaultPageSize = 20
+	// MaxPageSize 是每页行数上限。
+	MaxPageSize = 100
+	// MaxPage 是页码上限。没有它，(page-1)*pageSize 会在 int64 上溢出成负数，
+	// 而 SQLite 把负 OFFSET 当 0 处理 —— 一次越界请求会静默返回第一页而不是空页。
+	MaxPage = 100000
+)
+
 // PaginationQuery provides standardized pagination query parameter binding and normalization.
 type PaginationQuery struct {
 	Page     int `form:"page"`
@@ -14,36 +26,54 @@ type PaginationQuery struct {
 	Offset   int `form:"offset"`
 }
 
-// Normalize sanitizes and resolves pagination parameters, ensuring safe defaults and bounds.
-// - page: 1-based current page index (minimum 1)
-// - pageSize: number of items per page (default 20, max 100)
-// - offset: 0-based database query offset ((page - 1) * pageSize)
-// - limit: database query limit (equal to pageSize)
-func (q *PaginationQuery) Normalize() (page, pageSize, offset, limit int) {
-	pageSize = q.PageSize
+// PageWindow is the resolved pagination window: what to query, and what to echo back.
+//
+// Page 与 Offset 由 Normalize 一并算出并始终自洽，因此响应不可能描述一个
+// 与实际读取的行区间不同的窗口。
+type PageWindow struct {
+	Page     int
+	PageSize int
+	Offset   int
+}
+
+// Normalize resolves the pagination parameters into a query window.
+//
+// page/pageSize 是主契约；limit/offset 仍被接受，作为 legacy 客户端的兼容写法。
+// 两个分支的 offset 语义不同，这一点是刻意的：
+//
+//   - 给了 page：offset = (page-1)*pageSize，窗口完全由页码决定。
+//   - 只给了 offset：offset 原样采用，绝不反推页码再重算 ——
+//     `limit=20&offset=30` 反推会得到第 2 页、offset=20，客户端拿到的就是
+//     第 21–40 条而不是它请求的第 31–50 条，且响应里看起来一切正常。
+func (q *PaginationQuery) Normalize() PageWindow {
+	pageSize := q.PageSize
 	if pageSize <= 0 {
-		if q.Limit > 0 {
-			pageSize = q.Limit
-		} else {
-			pageSize = 20
-		}
+		pageSize = q.Limit
 	}
-	if pageSize > 100 {
-		pageSize = 100
+	if pageSize <= 0 {
+		pageSize = DefaultPageSize
 	}
-
-	page = q.Page
-	if page <= 0 {
-		if q.Limit > 0 && q.Offset >= 0 {
-			page = (q.Offset / pageSize) + 1
-		} else {
-			page = 1
-		}
+	if pageSize > MaxPageSize {
+		pageSize = MaxPageSize
 	}
 
-	offset = (page - 1) * pageSize
-	limit = pageSize
-	return page, pageSize, offset, limit
+	if q.Page <= 0 && q.Offset > 0 {
+		return PageWindow{
+			// Page 只是该偏移落点的描述性取值，权威字段是 Offset。
+			Page:     q.Offset/pageSize + 1,
+			PageSize: pageSize,
+			Offset:   q.Offset,
+		}
+	}
+
+	page := q.Page
+	if page < 1 {
+		page = 1
+	}
+	if page > MaxPage {
+		page = MaxPage
+	}
+	return PageWindow{Page: page, PageSize: pageSize, Offset: (page - 1) * pageSize}
 }
 
 // PaginatedData represents standard paginated response payload.
@@ -52,25 +82,25 @@ type PaginatedData[T any] struct {
 	Total    int64 `json:"total"`
 	Page     int   `json:"page"`
 	PageSize int   `json:"pageSize"`
-	// Backwards compatibility fields for legacy clients expecting limit/offset
-	Limit  int `json:"limit,omitempty"`
-	Offset int `json:"offset,omitempty"`
+	// Legacy 客户端按 limit/offset 读取。两个字段恒出现（不做 omitempty）：
+	// offset=0 时字段消失会让「第一页」与「客户端没传 offset」不可区分。
+	Limit  int `json:"limit"`
+	Offset int `json:"offset"`
 }
 
 // PaginatedSuccess writes a standard HTTP 200 paginated response envelope.
-// Ensures items is never null (falls back to empty slice) and contains pagination metadata.
-func PaginatedSuccess[T any](c *gin.Context, items []T, total int64, page, pageSize int) {
+// Ensures items is never null and echoes back the exact window that was queried.
+func PaginatedSuccess[T any](c *gin.Context, items []T, total int64, window PageWindow) {
 	if items == nil {
 		items = []T{}
 	}
-	offset := (page - 1) * pageSize
 	data := PaginatedData[T]{
 		Items:    items,
 		Total:    total,
-		Page:     page,
-		PageSize: pageSize,
-		Limit:    pageSize,
-		Offset:   offset,
+		Page:     window.Page,
+		PageSize: window.PageSize,
+		Limit:    window.PageSize,
+		Offset:   window.Offset,
 	}
 	SuccessWithStatus(c, http.StatusOK, data)
 }

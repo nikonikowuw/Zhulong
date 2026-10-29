@@ -18,22 +18,22 @@ type ListLogsQuery struct {
 }
 
 // ToFilter converts query parameters into a validated audit.Filter, returning the filter,
-// normalized page, normalized pageSize, and any validation error.
-func (q *ListLogsQuery) ToFilter() (audit.Filter, int, int, error) {
-	page, pageSize, offset, limit := q.Normalize()
+// the pagination window that was resolved, and any validation error.
+func (q *ListLogsQuery) ToFilter() (audit.Filter, httputil.PageWindow, error) {
+	window := q.Normalize()
 
 	filter := audit.Filter{
 		Action:  q.Action,
 		Actions: q.Actions,
 		Status:  q.Status,
-		Limit:   limit,
-		Offset:  offset,
+		Limit:   window.PageSize,
+		Offset:  window.Offset,
 	}
 
 	if q.StartTime != "" {
 		t, err := time.Parse(time.RFC3339, q.StartTime)
 		if err != nil {
-			return filter, page, pageSize, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
+			return filter, window, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
 				{Field: "startTime", Code: "INVALID_FORMAT", Message: "startTime must be in RFC3339 format"},
 			})
 		}
@@ -43,14 +43,14 @@ func (q *ListLogsQuery) ToFilter() (audit.Filter, int, int, error) {
 	if q.EndTime != "" {
 		t, err := time.Parse(time.RFC3339, q.EndTime)
 		if err != nil {
-			return filter, page, pageSize, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
+			return filter, window, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
 				{Field: "endTime", Code: "INVALID_FORMAT", Message: "endTime must be in RFC3339 format"},
 			})
 		}
 		filter.EndTime = &t
 	}
 
-	return filter, page, pageSize, nil
+	return filter, window, nil
 }
 
 // ClearLogsQuery defines query parameters for deleting audit logs.

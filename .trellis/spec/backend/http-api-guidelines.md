@@ -33,9 +33,10 @@
 
 ### 请求参数标准（Query Parameters）
 
-- **`page`**：整数，页码，**从 1 开始**（默认 `1`）。若传入 `< 1`，后端强制归一化为 `1`。
+- **`page`**：整数，页码，**从 1 开始**（默认 `1`）。若传入 `< 1`，后端强制归一化为 `1`；若 `> httputil.MaxPage`（100000），截断为该上限。**页码必须有上限**：缺失时 `(page-1)*pageSize` 会溢出成负数，而 SQLite 把负 `OFFSET` 当 `0`，越界请求会静默返回第一页。
 - **`pageSize`**：整数，每页条数（默认 `20`，**硬上限 `100`**）。若传入 `<= 0`，归一化为 `20`；若 `> 100`，截断为 `100`。
-- **兼容别名支持**：后端通过 `httputil.PaginationQuery` 统一解析，若请求提供了 `limit` / `offset`，自动换算为对应的 `page` 与 `pageSize`。
+- **兼容别名 `limit` / `offset`**：仍被接受，但语义与页码不同 —— **只给了 `offset`、没给 `page` 时，`offset` 原样使用，绝不反推页码再重算**。`limit=20&offset=30` 反推会得到第 2 页、`offset=20`，客户端拿到的就是第 21–40 条而不是它请求的第 31–50 条，且响应里看不出异常。`page` 与 `offset` 同时出现时以 `page` 为准。
+- **唯一解析入口**：`(*httputil.PaginationQuery).Normalize()` 返回 `httputil.PageWindow{Page, PageSize, Offset}`，`Page` 与 `Offset` 恒自洽。**store / service 层不得再自行从 page/pageSize 推导 offset**（二段推导正是 legacy offset 被静默取整的根因），只允许对零值做防御（GORM 的 `Limit(0)` 表示不加 LIMIT，漏填 window 会把整表读进内存）。边界值统一引用 `httputil.DefaultPageSize` / `MaxPageSize` / `MaxPage`，不要在各领域抄第二份。
 
 ### 响应载荷四元组（Data Envelope）
 
@@ -56,7 +57,8 @@
 
 - **空数组铁律**：无数据时 `items` **必须返回空数组 `[]`，严禁返回 `null`**。
 - **响应类型字段 Null-safety 铁律**：当响应类型中包含反序列化 JSON 字段（如 `candidates`、`attributes`）时，严防 `json.Unmarshal([]byte("null"), &slice)` 将已初始化的空切片覆盖为 `nil`。在 `ToResponse()` 方法中反序列化后必须做显式兜底（`if slice == nil { slice = make(...) }`），确保输出到 API 时列表恒为 `[]`、字典恒为 `{}`，避免前端 Zod 校验因收到 `null` 抛错崩溃。
-- **后端统一实现**：后端 Handler 统一使用 `httputil.PaginatedSuccess(c, items, total, page, pageSize)` 输出；
+- **后端统一实现**：后端 Handler 统一使用 `httputil.PaginatedSuccess(c, items, total, window)` 输出，`window` 即解析出的 `PageWindow`；响应的 `page`/`pageSize`/`limit`/`offset` 必须与**实际查询的窗口**逐字段一致（不做二次换算）。
+- **`limit` / `offset` 恒出现（无 `omitempty`）**：第一页 `offset=0` 时字段若消失，客户端无法区分「offset 为 0」与「服务端没返回 offset」。
 - **前端统一契约**：前端 API 定义统一使用 `@/shared/api/client` 导出的 `createPaginatedSchema(itemSchema)` 校验，严禁直接使用裸 `z.array(itemSchema)` 解析分页接口。
 - **不分页特例**：仅在数据项具备严格物理极小上限（如网卡列表 `interfaces` ≤ 8、固定枚举字典、明确 < 20 条的单例轻量配置）时允许不分页，且依然推荐返回 `{ items: [...] }` 保持结构一致。
 

@@ -5128,7 +5128,7 @@ const docTemplate = `{
                     }
                 },
                 "limit": {
-                    "description": "Backwards compatibility fields for legacy clients expecting limit/offset",
+                    "description": "Legacy 客户端按 limit/offset 读取。两个字段恒出现（不做 omitempty）：\noffset=0 时字段消失会让「第一页」与「客户端没传 offset」不可区分。",
                     "type": "integer"
                 },
                 "offset": {
@@ -5155,7 +5155,7 @@ const docTemplate = `{
                     }
                 },
                 "limit": {
-                    "description": "Backwards compatibility fields for legacy clients expecting limit/offset",
+                    "description": "Legacy 客户端按 limit/offset 读取。两个字段恒出现（不做 omitempty）：\noffset=0 时字段消失会让「第一页」与「客户端没传 offset」不可区分。",
                     "type": "integer"
                 },
                 "offset": {
@@ -5182,7 +5182,7 @@ const docTemplate = `{
                     }
                 },
                 "limit": {
-                    "description": "Backwards compatibility fields for legacy clients expecting limit/offset",
+                    "description": "Legacy 客户端按 limit/offset 读取。两个字段恒出现（不做 omitempty）：\noffset=0 时字段消失会让「第一页」与「客户端没传 offset」不可区分。",
                     "type": "integer"
                 },
                 "offset": {
@@ -5209,7 +5209,7 @@ const docTemplate = `{
                     }
                 },
                 "limit": {
-                    "description": "Backwards compatibility fields for legacy clients expecting limit/offset",
+                    "description": "Legacy 客户端按 limit/offset 读取。两个字段恒出现（不做 omitempty）：\noffset=0 时字段消失会让「第一页」与「客户端没传 offset」不可区分。",
                     "type": "integer"
                 },
                 "offset": {
@@ -5236,7 +5236,7 @@ const docTemplate = `{
                     }
                 },
                 "limit": {
-                    "description": "Backwards compatibility fields for legacy clients expecting limit/offset",
+                    "description": "Legacy 客户端按 limit/offset 读取。两个字段恒出现（不做 omitempty）：\noffset=0 时字段消失会让「第一页」与「客户端没传 offset」不可区分。",
                     "type": "integer"
                 },
                 "offset": {
@@ -5263,7 +5263,7 @@ const docTemplate = `{
                     }
                 },
                 "limit": {
-                    "description": "Backwards compatibility fields for legacy clients expecting limit/offset",
+                    "description": "Legacy 客户端按 limit/offset 读取。两个字段恒出现（不做 omitempty）：\noffset=0 时字段消失会让「第一页」与「客户端没传 offset」不可区分。",
                     "type": "integer"
                 },
                 "offset": {
@@ -5290,7 +5290,7 @@ const docTemplate = `{
                     }
                 },
                 "limit": {
-                    "description": "Backwards compatibility fields for legacy clients expecting limit/offset",
+                    "description": "Legacy 客户端按 limit/offset 读取。两个字段恒出现（不做 omitempty）：\noffset=0 时字段消失会让「第一页」与「客户端没传 offset」不可区分。",
                     "type": "integer"
                 },
                 "offset": {

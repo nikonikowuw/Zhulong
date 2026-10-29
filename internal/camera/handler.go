@@ -124,15 +124,15 @@ func (h *Handler) Create(c *gin.Context) {
 func (h *Handler) List(c *gin.Context) {
 	var query httputil.PaginationQuery
 	_ = c.ShouldBindQuery(&query)
-	page, pageSize, offset, limit := query.Normalize()
+	window := query.Normalize()
 
-	cameras, total, err := h.service.List(c.Request.Context(), limit, offset)
+	cameras, total, err := h.service.List(c.Request.Context(), window.PageSize, window.Offset)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
 
-	httputil.PaginatedSuccess(c, cameras, total, page, pageSize)
+	httputil.PaginatedSuccess(c, cameras, total, window)
 }
 
 // Get godoc

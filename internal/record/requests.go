@@ -21,7 +21,7 @@ type ListRecognitionsQuery struct {
 
 // ToFilter converts query parameters into a validated RecognitionFilter.
 func (q *ListRecognitionsQuery) ToFilter() (RecognitionFilter, error) {
-	page, pageSize, _, _ := q.Normalize()
+	window := q.Normalize()
 	start, err := parseTime(q.StartTime, "startTime")
 	if err != nil {
 		return RecognitionFilter{}, err
@@ -37,8 +37,7 @@ func (q *ListRecognitionsQuery) ToFilter() (RecognitionFilter, error) {
 		Matched:          q.Matched,
 		StartTime:        start,
 		EndTime:          end,
-		Page:             page,
-		PageSize:         pageSize,
+		Window:           window,
 	}, nil
 }
 
@@ -53,7 +52,7 @@ type ListAlarmsQuery struct {
 
 // ToFilter converts query parameters into a validated AlarmFilter.
 func (q *ListAlarmsQuery) ToFilter() (AlarmFilter, error) {
-	page, pageSize, _, _ := q.Normalize()
+	window := q.Normalize()
 	start, err := parseTime(q.StartTime, "startTime")
 	if err != nil {
 		return AlarmFilter{}, err
@@ -67,8 +66,7 @@ func (q *ListAlarmsQuery) ToFilter() (AlarmFilter, error) {
 		AlarmType: q.AlarmType,
 		StartTime: start,
 		EndTime:   end,
-		Page:      page,
-		PageSize:  pageSize,
+		Window:    window,
 	}, nil
 }
 
@@ -83,7 +81,7 @@ type ListCapturesQuery struct {
 
 // ToFilter converts query parameters into a validated CaptureFilter.
 func (q *ListCapturesQuery) ToFilter() (CaptureFilter, error) {
-	page, pageSize, _, _ := q.Normalize()
+	window := q.Normalize()
 	start, err := parseTime(q.StartTime, "startTime")
 	if err != nil {
 		return CaptureFilter{}, err
@@ -97,8 +95,7 @@ func (q *ListCapturesQuery) ToFilter() (CaptureFilter, error) {
 		TargetType: q.TargetType,
 		StartTime:  start,
 		EndTime:    end,
-		Page:       page,
-		PageSize:   pageSize,
+		Window:     window,
 	}, nil
 }
 

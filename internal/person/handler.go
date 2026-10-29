@@ -89,15 +89,15 @@ func (h *Handler) List(c *gin.Context) {
 		httputil.HandleBindError(c, err)
 		return
 	}
-	page, pageSize, offset, limit := query.Normalize()
+	window := query.Normalize()
 
-	persons, total, err := h.service.ListPersons(c.Request.Context(), limit, offset, query.Search)
+	persons, total, err := h.service.ListPersons(c.Request.Context(), window.PageSize, window.Offset, query.Search)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
 
-	httputil.PaginatedSuccess(c, newPersonResponses(persons), total, page, pageSize)
+	httputil.PaginatedSuccess(c, newPersonResponses(persons), total, window)
 }
 
 // Create godoc
@@ -227,15 +227,15 @@ func (h *Handler) ListFaces(c *gin.Context) {
 		httputil.HandleBindError(c, err)
 		return
 	}
-	page, pageSize, offset, limit := query.Normalize()
+	window := query.Normalize()
 
-	faces, total, err := h.service.ListFaces(c.Request.Context(), personID, limit, offset)
+	faces, total, err := h.service.ListFaces(c.Request.Context(), personID, window.PageSize, window.Offset)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
 
-	httputil.PaginatedSuccess(c, newFaceResponses(faces), total, page, pageSize)
+	httputil.PaginatedSuccess(c, newFaceResponses(faces), total, window)
 }
 
 // AddFace godoc

@@ -66,7 +66,7 @@ func (h *Handler) ListLogs(c *gin.Context) {
 		return
 	}
 
-	filter, page, pageSize, err := q.ToFilter()
+	filter, window, err := q.ToFilter()
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
@@ -79,7 +79,7 @@ func (h *Handler) ListLogs(c *gin.Context) {
 	}
 
 	responses := toAuditLogResponses(items)
-	httputil.PaginatedSuccess(c, responses, total, page, pageSize)
+	httputil.PaginatedSuccess(c, responses, total, window)
 }
 
 // ClearLogs godoc

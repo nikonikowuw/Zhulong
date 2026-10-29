@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
+	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -21,20 +22,16 @@ var (
 	ErrDuplicatePersonID = errors.New("person with this person_id already exists")
 )
 
-// Page bounds applied to every paginated query in this package. They mirror
-// httputil.PaginationQuery.Normalize and act as a second line of defence for
-// callers that reach the store without going through a handler.
-const (
-	defaultPageSize = 20
-	maxPageSize     = 100
-)
-
-// clampPagination applies the shared page bounds.
+// clampPagination applies the shared page bounds as a second line of defence
+// for callers that reach the store without going through a handler.
+//
+// 边界值直接引用 httputil 的常量而不是本地再抄一份：两处各写一份 20/100，
+// 一边改了另一边不动就会静默漂移。
 func clampPagination(limit, offset int) (int, int) {
 	if limit <= 0 {
-		limit = defaultPageSize
-	} else if limit > maxPageSize {
-		limit = maxPageSize
+		limit = httputil.DefaultPageSize
+	} else if limit > httputil.MaxPageSize {
+		limit = httputil.MaxPageSize
 	}
 	if offset < 0 {
 		offset = 0
@@ -211,7 +208,7 @@ func (s *Store) ListPersonsForGallery(ctx context.Context, limit, offset int) ([
 		return nil, err
 	}
 	if limit <= 0 {
-		limit = defaultPageSize
+		limit = httputil.DefaultPageSize
 	}
 	if offset < 0 {
 		offset = 0

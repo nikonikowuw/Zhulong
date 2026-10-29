@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
+	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"gorm.io/gorm"
 )
 
@@ -38,17 +39,50 @@ func (s *Store) db(ctx context.Context) (*gorm.DB, error) {
 	return db.WithContext(ctx), nil
 }
 
-func normalizePagination(page, pageSize int) (int, int, int) {
-	if page < 1 {
-		page = 1
+// listInReadSnapshot 在同一个只读事务里执行 count 与分页查询。
+//
+// WAL 模式下读事务在第一条语句处建立快照，后续语句读同一版本：否则 Count 与
+// Find 之间的并发写入会让 total 与当前页不自洽 —— 翻页时表现为重复行或漏行。
+// 读事务不阻塞写者，代价只是一次 BEGIN/COMMIT。
+//
+// window 由调用方（HTTP 层）解析，这里只做零值/越界防御：GORM 的 Limit(0)
+// 表示**不加 LIMIT**，一个漏填的 window 会把整表读进内存，在边缘设备上直接 OOM。
+func (s *Store) listInReadSnapshot(
+	ctx context.Context,
+	build func(tx *gorm.DB) *gorm.DB,
+	window httputil.PageWindow,
+	dest any,
+) (int64, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return 0, err
 	}
-	if pageSize <= 0 {
-		pageSize = 20
-	} else if pageSize > 100 {
-		pageSize = 100
+
+	if window.PageSize <= 0 || window.PageSize > httputil.MaxPageSize {
+		window.PageSize = httputil.DefaultPageSize
 	}
-	offset := (page - 1) * pageSize
-	return page, pageSize, offset
+	if window.Offset < 0 {
+		window.Offset = 0
+	}
+
+	var total int64
+	err = db.Transaction(func(tx *gorm.DB) error {
+		// 每条语句各用一份独立 Statement：tx 在事务里 clone=0，两次 build 直接复用
+		// 同一个 Statement 会把 WHERE 子句追加两遍（结果仍对，但 SQL 与参数翻倍，
+		// 也让「count 与 find 条件一致」变得依赖 GORM 的子句合并细节）。
+		if err := build(tx.Session(&gorm.Session{})).Count(&total).Error; err != nil {
+			return err
+		}
+		return build(tx.Session(&gorm.Session{})).
+			Order("captured_at DESC, id DESC").
+			Offset(window.Offset).
+			Limit(window.PageSize).
+			Find(dest).Error
+	})
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // =========================================================================
@@ -112,43 +146,31 @@ func (s *Store) CreateRecognitionBatch(ctx context.Context, recs []*Recognition)
 
 // ListRecognitions returns filtered and paginated recognition records.
 func (s *Store) ListRecognitions(ctx context.Context, filter RecognitionFilter) ([]Recognition, int64, error) {
-	db, err := s.db(ctx)
+	items := make([]Recognition, 0)
+	total, err := s.listInReadSnapshot(ctx, func(tx *gorm.DB) *gorm.DB {
+		query := tx.Model(&Recognition{})
+		if filter.CameraID != "" {
+			query = query.Where("camera_id = ?", filter.CameraID)
+		}
+		if filter.PersonID != "" {
+			query = query.Where("person_id = ?", filter.PersonID)
+		}
+		if filter.PersonExternalID != "" {
+			query = query.Where("person_external_id = ?", filter.PersonExternalID)
+		}
+		if filter.Matched != nil {
+			query = query.Where("matched = ?", *filter.Matched)
+		}
+		if filter.StartTime != nil {
+			query = query.Where("captured_at >= ?", filter.StartTime.UTC())
+		}
+		if filter.EndTime != nil {
+			query = query.Where("captured_at <= ?", filter.EndTime.UTC())
+		}
+		return query
+	}, filter.Window, &items)
 	if err != nil {
 		return nil, 0, err
-	}
-
-	query := db.Model(&Recognition{})
-	if filter.CameraID != "" {
-		query = query.Where("camera_id = ?", filter.CameraID)
-	}
-	if filter.PersonID != "" {
-		query = query.Where("person_id = ?", filter.PersonID)
-	}
-	if filter.PersonExternalID != "" {
-		query = query.Where("person_external_id = ?", filter.PersonExternalID)
-	}
-	if filter.Matched != nil {
-		query = query.Where("matched = ?", *filter.Matched)
-	}
-	if filter.StartTime != nil {
-		query = query.Where("captured_at >= ?", filter.StartTime.UTC())
-	}
-	if filter.EndTime != nil {
-		query = query.Where("captured_at <= ?", filter.EndTime.UTC())
-	}
-
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
-	_, pageSize, offset := normalizePagination(filter.Page, filter.PageSize)
-	var items []Recognition
-	if err := query.Order("captured_at DESC, id DESC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
-		return nil, 0, err
-	}
-	if items == nil {
-		items = make([]Recognition, 0)
 	}
 	return items, total, nil
 }
@@ -230,37 +252,25 @@ func (s *Store) CreateAlarmBatch(ctx context.Context, alarms []*Alarm) error {
 
 // ListAlarms returns filtered and paginated alarm records.
 func (s *Store) ListAlarms(ctx context.Context, filter AlarmFilter) ([]Alarm, int64, error) {
-	db, err := s.db(ctx)
+	items := make([]Alarm, 0)
+	total, err := s.listInReadSnapshot(ctx, func(tx *gorm.DB) *gorm.DB {
+		query := tx.Model(&Alarm{})
+		if filter.CameraID != "" {
+			query = query.Where("camera_id = ?", filter.CameraID)
+		}
+		if filter.AlarmType != "" {
+			query = query.Where("alarm_type = ?", filter.AlarmType)
+		}
+		if filter.StartTime != nil {
+			query = query.Where("captured_at >= ?", filter.StartTime.UTC())
+		}
+		if filter.EndTime != nil {
+			query = query.Where("captured_at <= ?", filter.EndTime.UTC())
+		}
+		return query
+	}, filter.Window, &items)
 	if err != nil {
 		return nil, 0, err
-	}
-
-	query := db.Model(&Alarm{})
-	if filter.CameraID != "" {
-		query = query.Where("camera_id = ?", filter.CameraID)
-	}
-	if filter.AlarmType != "" {
-		query = query.Where("alarm_type = ?", filter.AlarmType)
-	}
-	if filter.StartTime != nil {
-		query = query.Where("captured_at >= ?", filter.StartTime.UTC())
-	}
-	if filter.EndTime != nil {
-		query = query.Where("captured_at <= ?", filter.EndTime.UTC())
-	}
-
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
-	_, pageSize, offset := normalizePagination(filter.Page, filter.PageSize)
-	var items []Alarm
-	if err := query.Order("captured_at DESC, id DESC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
-		return nil, 0, err
-	}
-	if items == nil {
-		items = make([]Alarm, 0)
 	}
 	return items, total, nil
 }
@@ -342,37 +352,25 @@ func (s *Store) CreateCaptureBatch(ctx context.Context, caps []*Capture) error {
 
 // ListCaptures returns filtered and paginated capture records.
 func (s *Store) ListCaptures(ctx context.Context, filter CaptureFilter) ([]Capture, int64, error) {
-	db, err := s.db(ctx)
+	items := make([]Capture, 0)
+	total, err := s.listInReadSnapshot(ctx, func(tx *gorm.DB) *gorm.DB {
+		query := tx.Model(&Capture{})
+		if filter.CameraID != "" {
+			query = query.Where("camera_id = ?", filter.CameraID)
+		}
+		if filter.TargetType != "" {
+			query = query.Where("target_type = ?", filter.TargetType)
+		}
+		if filter.StartTime != nil {
+			query = query.Where("captured_at >= ?", filter.StartTime.UTC())
+		}
+		if filter.EndTime != nil {
+			query = query.Where("captured_at <= ?", filter.EndTime.UTC())
+		}
+		return query
+	}, filter.Window, &items)
 	if err != nil {
 		return nil, 0, err
-	}
-
-	query := db.Model(&Capture{})
-	if filter.CameraID != "" {
-		query = query.Where("camera_id = ?", filter.CameraID)
-	}
-	if filter.TargetType != "" {
-		query = query.Where("target_type = ?", filter.TargetType)
-	}
-	if filter.StartTime != nil {
-		query = query.Where("captured_at >= ?", filter.StartTime.UTC())
-	}
-	if filter.EndTime != nil {
-		query = query.Where("captured_at <= ?", filter.EndTime.UTC())
-	}
-
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
-	_, pageSize, offset := normalizePagination(filter.Page, filter.PageSize)
-	var items []Capture
-	if err := query.Order("captured_at DESC, id DESC").Offset(offset).Limit(pageSize).Find(&items).Error; err != nil {
-		return nil, 0, err
-	}
-	if items == nil {
-		items = make([]Capture, 0)
 	}
 	return items, total, nil
 }

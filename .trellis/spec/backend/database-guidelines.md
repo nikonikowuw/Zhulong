@@ -90,7 +90,7 @@ sqlDB.SetMaxIdleConns(1)
 ### 感知记录与告警事件的时序主键契约 (Perception & Alarm Temporal Contract)
 
 - **物理抓拍时间戳铁律 (`captured_at`)**：对于 `recognitions`、`alarms`、`captures` 等流式高频机器视觉感知事件，**业务主时间戳强制采用 `captured_at DATETIME NOT NULL`**，严格取自视频帧物理抓拍瞬间的绝对 UTC 时间戳（`InferenceResult.Timestamp` / `capture_time_ms`），坚决禁止使用推理完成或数据插入时的宿主墙上时间，彻底杜绝排队延迟导致的时序漂移；
-- **时序索引设计**：所有基于相机的时间范围查询、降序列表与事件回放，核心索引统一建立为 `(camera_id, captured_at DESC)`；
+- **时序索引设计**：所有基于相机的时间范围查询、降序列表与事件回放，核心索引统一建立为 `(camera_id, captured_at DESC, id DESC)`，全表降序列表用 `(captured_at DESC, id DESC)`（迁移 `000021`）。**排序键必须完整进索引**：只索引 `captured_at` 时 SQLite 会对每一页做 `USE TEMP B-TREE FOR LAST TERM OF ORDER BY`，带 `camera_id` 过滤时更退化成全表扫描 + 全量排序 —— 深翻页的成本全在这里。`internal/record/pagination_test.go` 用 `EXPLAIN QUERY PLAN` 断言计划里不出现 `TEMP B-TREE`，改列表 SQL 的 ORDER BY 时必须同步；
 - **内部记账分离**：`created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP` 仅用于 SQLite 底层插入时间记账，不得用于业务回溯或前后端事件时间对账；
 - **弱外键与快照冗余保护**：感知事件中的实体引用（如 `recognitions.person_id`）采用弱外键设计（`REFERENCES persons(id) ON DELETE SET NULL`），并强行冗余快照不可变字段（`person_name`、`person_external_id`、`gallery_image_path`），确保底库人员注销或底照变更后，已发生的历史证据链完好无损；
 - **对外业务键与内部主键在记录表里必须分列存放（迁移 `000018` 起）**：
@@ -109,6 +109,12 @@ sqlDB.SetMaxIdleConns(1)
      - ⚠️ 冗余值必须**写入时快照**，严禁改成读取时 join 回父表补全 —— 那正是算法/人员被删后数据消失的根因。
      - ⚠️ 迁移 `000014` 曾错误地把 `algorithm_id` 设成 `ON DELETE CASCADE`（理由「label 语义随包消失」），`000015` 已纠正。判据是：**「能不能解释」影响的是展示，不是存废**；无法解释的证据仍应保留并标注来源缺失。
   3. **`camera_id` 用 `ON DELETE CASCADE`**：与上条方向相反且**不可动摇** —— `image_path` 指向 `snapshots/{camera_id}/`，相机一删整棵子树无主，记录也无法再回答「画面从哪来」。判据：**卸工具不该毁证据，删对象来源则让证据失去物理载体**。同样地在 `camera/store.go` 里手动删记录是错误的，那是把外键约束的责任搬到业务层。
+
+### 列表分页的读一致性 (Snapshot Reads)
+
+- **count 与分页数据必须在同一个只读事务里**：`Store.listInReadSnapshot` 用 `db.Transaction` 包住 `COUNT(*)` 与 `LIMIT/OFFSET` 两条语句。WAL 模式下读事务在第一条语句处取快照，后续语句读同一版本；否则两条语句之间的持续写入（边缘设备上这是常态）会让 `total` 与当前页不自洽，表现为翻页时重复行或漏行。读事务不阻塞写者，代价只是一次 `BEGIN/COMMIT`。
+- **不要用 `COUNT(*) OVER ()` 窗口函数代替**：窗口函数会把整个匹配集物化后才应用 `LIMIT`，等于每次列表查询都全表扫描；空页时还拿不到 `total`，仍要补一次 `COUNT`。
+- **`Limit(0)` 不是「不返回数据」而是「不加 LIMIT」**：GORM 的这个语义会把整表读进内存。任何接受分页窗口的 store 方法都必须对 `PageSize <= 0` 做零值防御（回落 `httputil.DefaultPageSize`），不能指望调用方一定归一化过。
 
 ### 感知记录的保留清理归属 (Retention Ownership)
 
