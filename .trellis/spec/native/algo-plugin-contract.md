@@ -327,6 +327,17 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
   ⚠️ **严禁**在容量不足时仍下发 `MSG_FRAME_DISPATCH` —— 那会让客户端收到「新 `frame_id` / 新 `pts` + **上一帧画面**」，且无任何错误信号（录像数据污染、前端幽灵框）。
   ⚠️ 门禁必须在**任何 `memcpy` 之前**完成，杜绝部分写入。零拷贝帧（`frame.dma_fd >= 0`）不占槽位、不拷贝，不受此门禁约束。
 - **子进程崩溃自愈**：当检测到客户端 Socket 断开或收到 `POLLHUP` 时，Broker 立即扫描并回收该客户端在所有槽位上的未归还租约，槽位引用清零后自动恢复为 `FREE`，彻底杜绝槽位死锁与泄漏。
+- **丢帧必须可观测（否则「背压隔离」等于「静默失效」）**：每客户端的 `in_flight` / `delivered_frames` / `dropped_frames` 经
+  `Zhulong_stream_get_broker_clients`（`engine.h`）导出，宿主对外经
+  `GET /api/v1/cameras/{id}/ai-stats` 暴露。
+  - 契约刻意**不**复用 `Zhulong_stream_get_broker_path` 的「容量不足报 `BUFFER_TOO_SMALL`」模式：客户端集合是动态的，
+    两次查询之间会变。改为「写入不超过 `capacity` 条 + `out_count` 回填**真实总数**」，调用方一次调用即可判断是否截断。
+  - `capacity == 0` 时允许 `out_clients == NULL`（只查数量）；其余 `capacity > 0 && NULL` 组合一律 `ERR_INVALID_ARGUMENT`，不做静默空操作。
+  - 流不存在／该流没有 AI 消费者时返回 `ERR_NOT_FOUND`，**不**返回「0 个客户端」——那会让「流没起来」和「没有算法订阅」无法区分。
+  - `clients_snapshot()` 按 `client_id` 升序输出：`clients_` 是 `unordered_map`，不排序会让同一份状态两次查询顺序不同，
+    做差分或按索引对比的调用方会得到假的变化。
+  - 两层锁顺序为 `control` → broker `mutex_`，与 `broadcast_ai_message` 一致；Go 侧在锁外调用原生接口（见 `StreamHub.AIStreamBrokerStats`），
+    避免一次统计查询阻塞所有相机的流操作。
 - **畸形 ACK 不得蚕食配额**：`handle_ack` 必须**先校验 `slot_index` 越界再修改任何状态**。若先扣 `in_flight_count` 再校验，畸形 ACK 会「只扣不还」，使该客户端配额被永久蚕食并静默停止收帧。
 
 ### 6.4 IPC 协议自然对齐与 Socket 鲁棒性规约

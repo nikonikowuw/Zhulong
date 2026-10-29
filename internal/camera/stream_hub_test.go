@@ -46,11 +46,13 @@ func (s *mockPacketSource) Close() error {
 }
 
 type mockMediaStream struct {
-	source    *mockPacketSource
-	aiSub     *engine.AIResultSubscription
-	closeOnce sync.Once
-	closed    bool
-	mu        sync.Mutex
+	source        *mockPacketSource
+	aiSub         *engine.AIResultSubscription
+	brokerClients []engine.BrokerClientStats
+	brokerTotal   uint32
+	closeOnce     sync.Once
+	closed        bool
+	mu            sync.Mutex
 }
 
 func (s *mockMediaStream) Subscribe(ctx context.Context, options engine.SubscriptionOptions) (PacketSource, error) {
@@ -65,6 +67,16 @@ func (s *mockMediaStream) SubscribeAIResults(ctx context.Context) (*engine.AIRes
 
 func (s *mockMediaStream) BrokerPath(ctx context.Context) (string, error) {
 	return "/tmp/zhulong_broker_test.sock", nil
+}
+
+func (s *mockMediaStream) BrokerClients(ctx context.Context) ([]engine.BrokerClientStats, uint32, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	total := s.brokerTotal
+	if total == 0 {
+		total = uint32(len(s.brokerClients))
+	}
+	return s.brokerClients, total, nil
 }
 
 func (s *mockMediaStream) SetPublishRate(ctx context.Context, fps uint32) error {

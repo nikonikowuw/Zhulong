@@ -5,6 +5,7 @@
 
 #include "frame_broker.hpp"
 #include "broker_resource_lock.hpp"
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 
@@ -533,6 +534,20 @@ bool FrameBroker::get_client_info(uint32_t client_id, ClientInfo& out_info) cons
         return true;
     }
     return false;
+}
+
+std::vector<ClientInfo> FrameBroker::clients_snapshot() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<ClientInfo> snapshot;
+    snapshot.reserve(clients_.size());
+    for (const auto& entry : clients_) {
+        snapshot.push_back(entry.second);
+    }
+    // 输出顺序确定：clients_ 是 unordered_map，不排序会让同一份状态在两次
+    // 查询中顺序不同，按索引对比或做差分的调用方会得到假的变化。
+    std::sort(snapshot.begin(), snapshot.end(),
+              [](const ClientInfo& lhs, const ClientInfo& rhs) { return lhs.client_id < rhs.client_id; });
+    return snapshot;
 }
 
 size_t FrameBroker::broadcast_message(uint16_t msg_type, const void* payload, size_t size) {

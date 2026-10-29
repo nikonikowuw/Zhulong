@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -471,6 +472,36 @@ std::string Engine::get_broker_path(Zhulong_stream_id id) {
         throw Failure{Zhulong_ERR_NOT_FOUND};
     }
     return it->second->socket_path();
+}
+
+uint32_t Engine::broker_client_stats(Zhulong_stream_id id, Zhulong_broker_client_stats *out,
+                                   uint32_t capacity) {
+    std::lock_guard<std::mutex> lock(control);
+    if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
+    auto it = brokers.find(id);
+    if (it == brokers.end() || !it->second || !it->second->is_running()) {
+        throw Failure{Zhulong_ERR_NOT_FOUND};
+    }
+
+    const ipc::FrameBroker &broker = *it->second;
+    const std::vector<ipc::ClientInfo> snapshot = broker.clients_snapshot();
+    const uint32_t max_in_flight = broker.max_in_flight_per_client();
+
+    for (size_t i = 0; i < snapshot.size() && i < capacity; ++i) {
+        Zhulong_broker_client_stats &slot = out[i];
+        std::memset(&slot, 0, sizeof(slot));
+        slot.client_id = snapshot[i].client_id;
+        slot.in_flight = snapshot[i].in_flight_count;
+        slot.max_in_flight = max_in_flight;
+        slot.delivered_frames = snapshot[i].delivered_frames;
+        slot.dropped_frames = snapshot[i].dropped_frames;
+        // 定长拷贝 + 强制结尾：name 由另一端握手时的 strncpy 写入，这里不信任那个上限。
+        std::strncpy(slot.name, snapshot[i].name.c_str(), sizeof(slot.name) - 1);
+        slot.name[sizeof(slot.name) - 1] = '\0';
+    }
+
+    // 返回**总数**而不是写入数：调用方靠 out_count > capacity 判断是否被截断。
+    return static_cast<uint32_t>(snapshot.size());
 }
 
 void Engine::set_publish_rate(Zhulong_stream_id id, uint32_t max_sample_fps) {

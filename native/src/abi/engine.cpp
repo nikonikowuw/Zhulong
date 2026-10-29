@@ -22,6 +22,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdlib>
+#include <cstddef>
 #include <cstring>
 #include <dlfcn.h>
 #include <fstream>
@@ -65,6 +66,14 @@ std::mutex g_log_registration_mutex;
 size_t g_engine_handles = 0;
 static_assert(std::is_same<Zhulong_log_callback, zhulong::LogSink>::value,
     "public Zhulong log callback and internal LogSink ABI must stay identical");
+
+// FrameBroker 客户端统计的跨语言布局：Go 侧直接用 cgo 映射本结构体，
+// 尺寸或 8 字节自然对齐一旦漂移，就是读错字段而不是编译错误。
+static_assert(sizeof(Zhulong_broker_client_stats) == 64, "Zhulong_broker_client_stats size drift");
+static_assert(offsetof(Zhulong_broker_client_stats, delivered_frames) % 8 == 0,
+    "delivered_frames must stay 8-byte aligned");
+static_assert(offsetof(Zhulong_broker_client_stats, dropped_frames) % 8 == 0,
+    "dropped_frames must stay 8-byte aligned");
 
 /**
  * @brief C ABI 异常防爆门模板
@@ -298,6 +307,29 @@ extern "C" Zhulong_status_t Zhulong_stream_get_broker_path(Zhulong_engine_h engi
         }
         std::memcpy(out_path, path.c_str(), needed);
         *inout_len = needed;
+    });
+}
+
+/**
+ * @brief 查询指定流 FrameBroker 的客户端投递统计快照
+ *
+ * @param engine      引擎句柄
+ * @param stream      物理流 ID
+ * @param out_clients 调用方提供的数组（capacity 为 0 时可为 NULL）
+ * @param capacity    out_clients 可容纳的条数
+ * @param[out] out_count 当前客户端**总数**（可能大于 capacity，表示被截断）
+ * @return Zhulong_status_t 执行状态码
+ */
+extern "C" Zhulong_status_t Zhulong_stream_get_broker_clients(Zhulong_engine_h engine,
+    Zhulong_stream_id stream, Zhulong_broker_client_stats *out_clients,
+    uint32_t capacity, uint32_t *out_count) {
+    // 失败时先清空输出：调用方只看 out_count 也不会读到未初始化内存。
+    if (out_count) *out_count = 0;
+    return boundary([&] {
+        require(engine && stream && out_count);
+        // capacity 与指针必须成对：允许 (NULL, 0) 表示只查数量，其余组合一律拒绝。
+        require(out_clients != nullptr || capacity == 0);
+        *out_count = engine->implementation.broker_client_stats(stream, out_clients, capacity);
     });
 }
 

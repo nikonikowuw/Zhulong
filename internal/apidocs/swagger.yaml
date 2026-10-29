@@ -167,6 +167,32 @@ definitions:
       username:
         type: string
     type: object
+  camera.AIStreamClientInfo:
+    properties:
+      clientId:
+        type: integer
+      deliveredFrames:
+        type: integer
+      droppedFrames:
+        type: integer
+      inFlight:
+        type: integer
+      maxInFlight:
+        type: integer
+      name:
+        type: string
+    type: object
+  camera.AIStreamStatsResponse:
+    properties:
+      cameraId:
+        type: string
+      clientCount:
+        type: integer
+      clients:
+        items:
+          $ref: '#/definitions/camera.AIStreamClientInfo'
+        type: array
+    type: object
   camera.CameraCredentialsResponse:
     properties:
       cameraId:
@@ -2166,6 +2192,40 @@ paths:
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Update camera configuration
+      tags:
+      - camera
+  /cameras/{id}/ai-stats:
+    get:
+      description: |-
+        Reports in-flight / delivered / dropped frame counters for every algorithm
+        package subscribed to this camera's AI analysis stream.
+      parameters:
+      - description: Camera ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/camera.AIStreamStatsResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get per-algorithm frame delivery stats for a camera AI stream
       tags:
       - camera
   /cameras/{id}/credentials:

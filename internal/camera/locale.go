@@ -81,6 +81,21 @@ func init() {
 			"zh-Hans": "拉取摄像机视频流失败，底层资源不可用",
 			"zh-Hant": "拉取攝影機視訊串流失敗，底層資源不可用",
 		},
+		"AI_STREAM_INACTIVE": {
+			"en":      "Camera has no active AI analysis stream",
+			"zh-Hans": "该摄像机当前没有活跃的 AI 分析流（任务已停用或算法未启动）",
+			"zh-Hant": "該攝影機目前沒有活躍的 AI 分析串流（任務已停用或演算法未啟動）",
+		},
+		"MEDIA_ENGINE_UNAVAILABLE": {
+			"en":      "Media engine is not running",
+			"zh-Hans": "媒体引擎未运行，请稍后重试",
+			"zh-Hant": "媒體引擎未執行，請稍後重試",
+		},
+		"AI_STREAM_STATS_FAILED": {
+			"en":      "Failed to read AI stream delivery stats",
+			"zh-Hans": "读取 AI 分析流投递统计失败",
+			"zh-Hant": "讀取 AI 分析串流投遞統計失敗",
+		},
 		"STREAM_HUB_NOT_INITIALIZED": {
 			"en":      "Media streaming hub is not initialized",
 			"zh-Hans": "视频流转分发中心未就绪",

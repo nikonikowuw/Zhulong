@@ -133,6 +133,20 @@ struct Engine {
     /** @brief 获取指定流关联的 FrameBroker socket 绝对路径 */
     std::string get_broker_path(Zhulong_stream_id id);
 
+    /**
+     * @brief 采集指定流 FrameBroker 的客户端投递统计快照
+     *
+     * 只读快照，内部短暂持有 control 锁与 broker 自身的互斥锁；两层锁顺序与
+     * broadcast_ai_message 一致（control → broker），不会与发布/回调路径形成环。
+     *
+     * @param id       物理流 ID
+     * @param[out] out 调用方提供的数组，可为空（`capacity == 0` 时仅查询数量）
+     * @param capacity 数组容量
+     * @return 当前客户端的**总数**（可能大于 capacity，表示结果被截断）
+     * @throws Failure Zhulong_ERR_NOT_RUNNING / Zhulong_ERR_NOT_FOUND
+     */
+    uint32_t broker_client_stats(Zhulong_stream_id id, Zhulong_broker_client_stats *out, uint32_t capacity);
+
     /** @brief 动态设置指定流的帧发布采样帧率 */
     void set_publish_rate(Zhulong_stream_id id, uint32_t max_sample_fps);
 

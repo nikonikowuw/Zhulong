@@ -219,6 +219,19 @@ type StreamStatus struct {
 	Error error
 }
 
+// BrokerClientStats 是单个算法 Runner 客户端的帧投递统计快照（FrameBroker 视角）。
+//
+// Name 来自 Runner 握手时上报的 `--name`，即算法包名；拿它就能直接判断
+// 是哪一路算法在拖、丢了多少帧，而不必去猜 CPU 占用。
+type BrokerClientStats struct {
+	ClientID        uint32 // Broker 分配的客户端 ID（仅单次 Broker 生命周期内唯一）
+	Name            string // 握手上报的客户端名，未命名时为空串
+	InFlight        uint32 // 当前已下发但尚未 ACK 的帧数（瞬时值）
+	MaxInFlight     uint32 // 该客户端的在途配额上限（瞬时值，即背压阈值）
+	DeliveredFrames uint64 // 累计成功投递帧数
+	DroppedFrames   uint64 // 累计因背压/发送失败丢弃的帧数
+}
+
 // SubscriptionOptions 定义包订阅选项与有界队列限制。
 type SubscriptionOptions struct {
 	MaxPackets       int // 队列最大包数（默认 32，上限 256）

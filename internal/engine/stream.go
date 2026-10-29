@@ -59,6 +59,18 @@ func (s *Stream) BrokerPath(ctx context.Context) (string, error) {
 	return s.engine.getBrokerPath(ref.generation, ref.id)
 }
 
+// BrokerClients 查询该流 FrameBroker 上各算法 Runner 客户端的帧投递统计。
+//
+// 返回的 total 是当前客户端**总数**；当 total > len(clients) 时结果已被截断
+// （每个物理流同时订阅的算法包量以个位数计，截断意味着出现了异常配置）。
+func (s *Stream) BrokerClients(ctx context.Context) (clients []BrokerClientStats, total uint32, err error) {
+	ref, err := s.lease(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	return s.engine.getBrokerClients(ref.generation, ref.id)
+}
+
 // SetPublishRate 动态设置帧发布最大采样帧率（由关联任务的 max(sample_fps) 驱动，0 表示不节流）。
 func (s *Stream) SetPublishRate(ctx context.Context, fps uint32) error {
 	ref, err := s.lease(ctx)

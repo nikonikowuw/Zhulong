@@ -90,6 +90,18 @@ int main(void) {
     if (Zhulong_stream_get_broker_path(engine, 1, broker_buf, &broker_len) != Zhulong_ERR_NOT_RUNNING) return 24;
     if (Zhulong_stream_set_publish_rate(engine, 1, 10) != Zhulong_ERR_NOT_RUNNING) return 25;
 
+    /* 7b. FrameBroker 客户端统计：输出指针必填；capacity 与数组必须成对 */
+    uint32_t client_count = 123;
+    Zhulong_broker_client_stats client_buf[4];
+    if (Zhulong_stream_get_broker_clients(0, 1, client_buf, 4, &client_count) != Zhulong_ERR_INVALID_ARGUMENT) return 27;
+    if (Zhulong_stream_get_broker_clients(engine, 0, client_buf, 4, &client_count) != Zhulong_ERR_INVALID_ARGUMENT) return 28;
+    if (Zhulong_stream_get_broker_clients(engine, 1, client_buf, 4, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 29;
+    /* capacity > 0 但数组为空：拒绝，而不是静默写成空操作 */
+    if (Zhulong_stream_get_broker_clients(engine, 1, 0, 4, &client_count) != Zhulong_ERR_INVALID_ARGUMENT) return 30;
+    /* 未运行时查询：out_count 必须被归零，调用方不会读到未初始化值 */
+    if (Zhulong_stream_get_broker_clients(engine, 1, 0, 0, &client_count) != Zhulong_ERR_NOT_RUNNING) return 31;
+    if (client_count != 0) return 32;
+
     /* 8. 销毁安全测试：传入 NULL 指针必须保证安全无崩溃 */
     Zhulong_probe_result_destroy(0);
     Zhulong_engine_destroy(engine);

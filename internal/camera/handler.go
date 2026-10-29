@@ -12,6 +12,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
+	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
 )
@@ -71,6 +72,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.PUT("/:id", h.Update)
 		group.DELETE("/:id", h.Delete)
 		group.POST("/:id/diagnose", h.Diagnose)
+		group.GET("/:id/ai-stats", h.AIStreamStats)
 
 		// WebSocket video streaming endpoints
 		group.GET("/:id/ws", h.StreamWS)
@@ -242,6 +244,61 @@ func (h *Handler) Diagnose(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
+	httputil.Success(c, res)
+}
+
+// AIStreamStats godoc
+// @Summary      Get per-algorithm frame delivery stats for a camera AI stream
+// @Description  Reports in-flight / delivered / dropped frame counters for every algorithm
+// @Description  package subscribed to this camera's AI analysis stream.
+// @Tags         camera
+// @Produce      json
+// @Param        id path string true "Camera ID"
+// @Success      200  {object}  httputil.Response{data=AIStreamStatsResponse}
+// @Failure      404  {object}  httputil.Response
+// @Failure      503  {object}  httputil.Response
+// @Router       /cameras/{id}/ai-stats [get]
+func (h *Handler) AIStreamStats(c *gin.Context) {
+	if h.streamHub == nil {
+		httputil.WriteError(c, apperr.New(apperr.KindInternal, "STREAM_HUB_NOT_INITIALIZED", "Stream hub not available", nil))
+		return
+	}
+
+	cameraID := c.Param("id")
+	clients, total, err := h.streamHub.AIStreamBrokerStats(c.Request.Context(), cameraID)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrAIStreamInactive):
+			// 暂时状态而非配置错误：任务停用或算法未启动时就是这样。
+			httputil.WriteError(c, apperr.New(apperr.KindNotFound, "AI_STREAM_INACTIVE",
+				"Camera has no active AI analysis stream", err))
+		case errors.Is(err, ErrStreamHubClosed), errors.Is(err, engine.ErrNotRunning), errors.Is(err, engine.ErrClosed):
+			// 可恢复的暂时状态：宿主正在停机或引擎尚未就绪，重启后可再查。
+			httputil.WriteError(c, apperr.New(apperr.KindPrecondition, "MEDIA_ENGINE_UNAVAILABLE",
+				"Media engine is not running", err))
+		default:
+			httputil.WriteError(c, apperr.New(apperr.KindInternal, "AI_STREAM_STATS_FAILED",
+				"Failed to read AI stream delivery stats", err))
+		}
+		return
+	}
+
+	res := AIStreamStatsResponse{
+		CameraID:    cameraID,
+		ClientCount: total,
+		Clients:     make([]AIStreamClientInfo, 0, len(clients)),
+	}
+	for _, client := range clients {
+		res.Clients = append(res.Clients, AIStreamClientInfo{
+			ClientID:        client.ClientID,
+			Name:            client.Name,
+			InFlight:        client.InFlight,
+			MaxInFlight:     client.MaxInFlight,
+			DeliveredFrames: client.DeliveredFrames,
+			DroppedFrames:   client.DroppedFrames,
+		})
+	}
+	c.Header("Cache-Control", "no-store")
 	httputil.Success(c, res)
 }
 

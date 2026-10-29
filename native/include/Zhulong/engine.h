@@ -196,6 +196,29 @@ typedef struct {
 } Zhulong_stream_status;
 
 /**
+ * @brief 单个算法 Runner 客户端的帧投递统计（FrameBroker 视角，只读快照）
+ *
+ * 用途：把「某路 AI 分析流上的帧到底投给了谁、丢了多少」暴露给宿主。
+ * 这些计数器存在于 Native FrameBroker 内部，之前没有任何 ABI 出口，
+ * 导致「算法包静默丢帧」在 Go 层完全不可见，只能靠 CPU 占用猜。
+ *
+ * 字段说明（均为自 Broker start 起的累计值，除非另有说明）：
+ * - `in_flight`：当前已下发但尚未 ACK 的帧数，瞬时值；
+ * - `max_in_flight`：该客户端的在途配额上限，瞬时值，即背压阈值；
+ * - `delivered_frames`：累计成功下发且被消费的帧数；
+ * - `dropped_frames`：因背压（in-flight 满）或 socket 发送失败累计丢弃的帧数。
+ */
+typedef struct {
+    uint32_t client_id;        /**< Broker 分配的客户端 ID（仅在单次 Broker 生命周期内唯一） */
+    uint32_t in_flight;        /**< 当前在途未归还租约数 */
+    uint32_t max_in_flight;    /**< 该客户端的在途配额上限 */
+    uint32_t reserved_pad;     /**< 对齐填充，恒为 0；不得赋予语义 */
+    uint64_t delivered_frames; /**< 累计成功投递帧数 */
+    uint64_t dropped_frames;   /**< 累计因背压/发送失败丢弃的帧数 */
+    char name[32];             /**< 握手时上报的客户端名（`--name`），未命名时为空串 */
+} Zhulong_broker_client_stats;
+
+/**
  * @brief 视频数据包回调函数原型
  *
  * 约定与安全要求：
@@ -390,6 +413,33 @@ Zhulong_status_t Zhulong_stream_get_status(Zhulong_engine_h engine, Zhulong_stre
  */
 Zhulong_status_t Zhulong_stream_get_broker_path(Zhulong_engine_h engine,
     Zhulong_stream_id stream, char *out_path, size_t *inout_len);
+
+/**
+ * @brief 查询指定流 FrameBroker 的客户端投递统计快照
+ *
+ * 调用前提：该流已通过 `Zhulong_stream_acquire` 以 `Zhulong_CONSUMER_AI` 获取，
+ * 且 FrameBroker 仍在运行。
+ *
+ * ⚠️ 契约刻意**不**复用 `Zhulong_stream_get_broker_path` 的「容量不足就报
+ *    `BUFFER_TOO_SMALL`」模式：客户端集合是动态的，两次查询之间可能已经变化。
+ *    本接口改为「写入不超过 `capacity` 条，并把**真实总数**写入 `out_count`」——
+ *    调用方看到 `*out_count > capacity` 就知道结果被截断，一次调用即可完成。
+ *
+ * @param engine       引擎句柄
+ * @param stream       物理流 ID
+ * @param out_clients  调用方提供的数组；`capacity == 0` 时允许传 NULL（仅查询数量）
+ * @param capacity     `out_clients` 的数组容量（可容纳多少条）
+ * @param[out] out_count 输出当前客户端**总数**（可能大于 capacity，表示已截断）
+ * @return Zhulong_status_t 操作状态码：
+ *         Zhulong_OK 成功；
+ *         Zhulong_ERR_INVALID_ARGUMENT 参数非法（空 out_count，或 capacity > 0 但
+ *         out_clients 为空）；
+ *         Zhulong_ERR_NOT_FOUND 流不存在或该流无 AI 消费者（未创建 FrameBroker）；
+ *         Zhulong_ERR_NOT_RUNNING 引擎未处于运行状态
+ */
+Zhulong_status_t Zhulong_stream_get_broker_clients(Zhulong_engine_h engine,
+    Zhulong_stream_id stream, Zhulong_broker_client_stats *out_clients,
+    uint32_t capacity, uint32_t *out_count);
 
 /**
  * @brief 动态设置指定流的帧发布节流帧率 (按 D7 准则由关联任务的 max(sample_fps) 驱动)

@@ -1074,6 +1074,59 @@ const docTemplate = `{
                 }
             }
         },
+        "/cameras/{id}/ai-stats": {
+            "get": {
+                "description": "Reports in-flight / delivered / dropped frame counters for every algorithm\npackage subscribed to this camera's AI analysis stream.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "camera"
+                ],
+                "summary": "Get per-algorithm frame delivery stats for a camera AI stream",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Camera ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/camera.AIStreamStatsResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/cameras/{id}/credentials": {
             "get": {
                 "produces": [
@@ -4355,6 +4408,46 @@ const docTemplate = `{
                 },
                 "username": {
                     "type": "string"
+                }
+            }
+        },
+        "camera.AIStreamClientInfo": {
+            "type": "object",
+            "properties": {
+                "clientId": {
+                    "type": "integer"
+                },
+                "deliveredFrames": {
+                    "type": "integer"
+                },
+                "droppedFrames": {
+                    "type": "integer"
+                },
+                "inFlight": {
+                    "type": "integer"
+                },
+                "maxInFlight": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "camera.AIStreamStatsResponse": {
+            "type": "object",
+            "properties": {
+                "cameraId": {
+                    "type": "string"
+                },
+                "clientCount": {
+                    "type": "integer"
+                },
+                "clients": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/camera.AIStreamClientInfo"
+                    }
                 }
             }
         },

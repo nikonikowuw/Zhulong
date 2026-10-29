@@ -148,6 +148,24 @@ public:
      */
     bool get_client_info(uint32_t client_id, ClientInfo& out_info) const;
 
+    /**
+     * @brief 采集所有已连接客户端的统计快照（按 client_id 升序）
+     *
+     * 宿主侧可观测性用：谁在拖、丢了多少帧。返回的是一份拷贝，不持有内部引用，
+     * 可安全跨锁使用。
+     */
+    [[nodiscard]] std::vector<ClientInfo> clients_snapshot() const;
+
+    /**
+     * @brief 单客户端在途帧配额上限（背压阈值）
+     *
+     * 由 BrokerOptions 决定，对所有客户端相同；快照本身不带这个值，
+     * 否则每条记录都要重复一份配置。
+     */
+    [[nodiscard]] uint32_t max_in_flight_per_client() const noexcept {
+        return options_.max_in_flight_per_client;
+    }
+
     using ResultCallback = std::function<void(uint64_t stream_id, uint32_t client_id, const uint8_t* payload, size_t size)>;
 
     /**

@@ -44,6 +44,27 @@ type CameraCredentialsResponse struct {
 	CameraID    string            `json:"cameraId"`
 }
 
+// AIStreamClientInfo is one algorithm package's delivery counters on a camera's AI stream.
+type AIStreamClientInfo struct {
+	ClientID        uint32 `json:"clientId"`
+	Name            string `json:"name"`
+	InFlight        uint32 `json:"inFlight"`
+	MaxInFlight     uint32 `json:"maxInFlight"`
+	DeliveredFrames uint64 `json:"deliveredFrames"`
+	DroppedFrames   uint64 `json:"droppedFrames"`
+}
+
+// AIStreamStatsResponse reports per-algorithm frame delivery on one camera's AI stream.
+//
+// ClientCount is the true number of connected clients. When it exceeds len(clients)
+// the list was truncated to the fixed ABI snapshot capacity — that itself is a signal
+// worth looking at, since a single stream normally has a single-digit subscriber count.
+type AIStreamStatsResponse struct {
+	CameraID    string               `json:"cameraId"`
+	ClientCount uint32               `json:"clientCount"`
+	Clients     []AIStreamClientInfo `json:"clients"`
+}
+
 // DiagnoseResponse returns the outcome of an on-demand manual camera probe.
 type DiagnoseResponse struct {
 	CameraID string           `json:"cameraId"`

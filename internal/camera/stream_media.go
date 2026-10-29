@@ -17,6 +17,9 @@ type MediaStream interface {
 	Subscribe(ctx context.Context, options engine.SubscriptionOptions) (PacketSource, error)
 	SubscribeAIResults(ctx context.Context) (*engine.AIResultSubscription, error)
 	BrokerPath(ctx context.Context) (string, error)
+	// BrokerClients 返回该路 AI 流上各算法包的帧投递统计（只读快照）。
+	// 第二个返回值是当前客户端总数，大于 len(clients) 时表示结果被截断。
+	BrokerClients(ctx context.Context) ([]engine.BrokerClientStats, uint32, error)
 	SetPublishRate(ctx context.Context, fps uint32) error
 	Snapshot(ctx context.Context, options engine.SnapshotOptions) ([]engine.SnapshotImage, error)
 	Close() error
@@ -68,6 +71,10 @@ func (s *streamAdapter) SubscribeAIResults(ctx context.Context) (*engine.AIResul
 
 func (s *streamAdapter) BrokerPath(ctx context.Context) (string, error) {
 	return s.stream.BrokerPath(ctx)
+}
+
+func (s *streamAdapter) BrokerClients(ctx context.Context) ([]engine.BrokerClientStats, uint32, error) {
+	return s.stream.BrokerClients(ctx)
 }
 
 func (s *streamAdapter) SetPublishRate(ctx context.Context, fps uint32) error {

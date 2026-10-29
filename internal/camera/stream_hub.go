@@ -565,6 +565,32 @@ func (h *StreamHub) SetAIPublishRate(ctx context.Context, cameraID string, fps u
 	return ref.stream.SetPublishRate(ctx, fps)
 }
 
+// AIStreamBrokerStats 返回该相机 AI 分析流上各算法包的帧投递统计快照。
+//
+// 用途：回答「这一路到底投给了谁、丢了多少」。FrameBroker 内部一直有 per-client 的
+// in_flight / delivered / dropped 计数，但此前没有任何出口，宿主只能靠 CPU 占用猜。
+//
+// 语义（⚠️ 与 ResolveAIStreamBrokerPath 的区别）：
+//   - 只读观测，**不会**为了查询而拉起拉流：没有活跃 AI 流时如实返回
+//     ErrAIStreamInactive。
+//   - 先在锁内取 ref 再在锁外调用原生接口 —— 与 Snapshot 一致；把原生调用留在锁内
+//     会让一次统计查询阻塞所有相机的流操作。
+//   - 第二个返回值是客户端**总数**，可能大于 len(clients)（截断）。
+func (h *StreamHub) AIStreamBrokerStats(ctx context.Context, cameraID string) ([]engine.BrokerClientStats, uint32, error) {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return nil, 0, ErrStreamHubClosed
+	}
+	ref := h.aiStreams[cameraID]
+	h.mu.Unlock()
+
+	if ref == nil {
+		return nil, 0, ErrAIStreamInactive
+	}
+	return ref.stream.BrokerClients(ctx)
+}
+
 // Snapshot 对指定相机的 AI 分析流执行抓拍（全幅 + 可选裁剪），返回 JPEG 字节流。
 //
 // 语义（⚠️ 调用方必须了解）：

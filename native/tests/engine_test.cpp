@@ -18,6 +18,13 @@ int main() {
     if (Zhulong_stream_get_broker_path(engine, 999, path_buf, &path_len) != Zhulong_ERR_NOT_FOUND) return 10;
     if (Zhulong_stream_set_publish_rate(engine, 999, 15) != Zhulong_ERR_NOT_FOUND) return 11;
 
+    // 客户端统计：流不存在（或该流没有 AI 消费者／未建 FrameBroker）时必须是 NOT_FOUND，
+    // 而不是安静地返回 0 条 —— 那会让「流没起来」和「没有算法订阅」变得无法区分。
+    uint32_t client_count = 7;
+    Zhulong_broker_client_stats client_buf[4];
+    if (Zhulong_stream_get_broker_clients(engine, 999, client_buf, 4, &client_count) != Zhulong_ERR_NOT_FOUND) return 12;
+    if (client_count != 0) return 13;
+
     Zhulong_engine_destroy(engine);
     Zhulong_engine_destroy(nullptr);
     return 0;
