@@ -21,6 +21,8 @@
 #include "Zhulong/engine.h"
 #include "../src/algorithm/ipc/ipc_protocol.hpp"
 #include "../src/algorithm/ipc/unix_socket.hpp"
+#include "../src/common/log.hpp"
+#include "../src/nodes/capture/rtsp_input.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -144,6 +146,22 @@ void probe_cases(Zhulong_engine_h engine, const std::string &base) {
     Zhulong_stream_options udp{Zhulong_TRANSPORT_UDP, 4000, 1000};
     ResultOwner udp_result;
     CHECK(Zhulong_engine_probe(engine, (base + "/udp").c_str(), &udp, &udp_result.result) == Zhulong_OK);
+
+    // 探测窗口收紧的兼容档重试：SDP 不带参数集且首帧晚于快速档窗口时，
+    // 必须换回旧预算重连一次并拿到完整元数据，而不是把相机判成不支持。
+    {
+        Zhulong_stream_options options{Zhulong_TRANSPORT_TCP, 6000, 3000};
+        ResultOwner result;
+        const auto start = Clock::now();
+        CHECK(Zhulong_engine_probe(engine, (base + "/late-probe").c_str(), &options, &result.result) == Zhulong_OK);
+        CHECK(Clock::now() - start < 4s);
+        Zhulong_video_view view{};
+        CHECK(Zhulong_probe_result_view(result.result, &view) == Zhulong_OK);
+        // 只有兼容档能探到分辨率：快速档的 128 KiB / 300ms 这里什么也拿不到
+        CHECK(view.width == 64 && view.height == 48);
+        // extradata 不强制要求：SDP 不带 sprop-parameter-sets 时参数集来自码流内联，
+        // 这正是 PreviewNormalizer::HasCompleteParameterSets 存在的理由。
+    }
 
     // 测试超时检测（stall-open / stall-info）
     for (const auto &path : {"/stall-open", "/stall-info"}) {
@@ -720,10 +738,78 @@ void ai_slow_consumer_isolation_case(Zhulong_engine_h engine, const std::string 
     CHECK(Zhulong_engine_stop(engine) == Zhulong_OK);
 }
 
+/**
+ * @brief 捕获 native 日志，用于断言「起播耗时归因」链路真的产出数据。
+ *
+ * 起播慢是现场最常见的投诉，而 avformat_open_input 的 1.2 秒到底花在哪个 RTSP
+ * 往返上，只能靠 rtsp_txn 这组日志回答。它一旦被静默掉了，同类问题又会退化成猜。
+ */
+struct CapturedLogs {
+    std::mutex mutex;
+    std::vector<std::string> lines;
+
+    static void sink(uintptr_t, int32_t, uint64_t, const char *, size_t,
+                     const char *text, size_t text_len) {
+        auto &self = instance();
+        std::lock_guard<std::mutex> lock(self.mutex);
+        self.lines.emplace_back(text, text_len);
+    }
+
+    static CapturedLogs &instance() {
+        static CapturedLogs captured;
+        return captured;
+    }
+
+    std::vector<std::string> snapshot() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return lines;
+    }
+
+    bool contains(const std::string &needle) {
+        std::lock_guard<std::mutex> lock(mutex);
+        for (const auto &line : lines) {
+            if (line.find(needle) != std::string::npos) return true;
+        }
+        return false;
+    }
+};
+
+/** @brief 凭据脱敏是日志放行的前提，必须独立钉住，不靠人眼检查日志 */
+static void credentials_redaction_case() {
+    CHECK(zhulong::redact_credentials(
+        "OPTIONS rtsp://alice:s3cret@10.0.0.9:554/live RTSP/1.0") ==
+        "OPTIONS rtsp://***@10.0.0.9:554/live RTSP/1.0");
+    // 无 userinfo 时原样返回
+    CHECK(zhulong::redact_credentials("DESCRIBE rtsp://10.0.0.9/live RTSP/1.0") ==
+        "DESCRIBE rtsp://10.0.0.9/live RTSP/1.0");
+    // userinfo 后面带查询串的路径也要能切开
+    CHECK(zhulong::redact_credentials("rtsp://bob:pw@h/x?y=1").find("pw") == std::string::npos);
+
+    // ⚠️ 密码本身含 '@'（很多相机接受未转义的 p@ss）：必须抹到最后一个 '@'，
+    //    只抹第一个会把密码尾部留在日志里。
+    const auto at_in_password = zhulong::redact_credentials("rtsp://user:p@ss@10.0.0.9/live");
+    CHECK(at_in_password == "rtsp://***@10.0.0.9/live");
+    CHECK(at_in_password.find("ss") == std::string::npos);
+
+    // scheme 大小写不敏感：大写 RTSP 同样不能漏
+    CHECK(zhulong::redact_credentials("OPTIONS RTSP://alice:s3cret@10.0.0.9/live") ==
+        "OPTIONS RTSP://***@10.0.0.9/live");
+
+    // 同一行里出现两个 URL：两个都要抹
+    const auto twice = zhulong::redact_credentials(
+        "rtsp://a:1@10.0.0.1/x -> rtsp://b:2@10.0.0.2/y");
+    CHECK(twice.find("1@") == std::string::npos);
+    CHECK(twice.find("2@") == std::string::npos);
+    CHECK(twice == "rtsp://***@10.0.0.1/x -> rtsp://***@10.0.0.2/y");
+}
+
 int main(int argc, char **argv) {
     try {
+        credentials_redaction_case();
         CHECK(argc == 2);
         setenv("ZHULONG_STREAM_GRACE_PERIOD_MS", "200", 0);
+        // token 必须非零：set_log_sink 用 (sink==nullptr) != (token==0) 拒绝半装状态
+        CHECK(zhulong::set_log_sink(&CapturedLogs::sink, 1));
         EngineOwner owner;
         const std::string base = argv[1];
 
@@ -739,7 +825,24 @@ int main(int argc, char **argv) {
         ai_publish_throttle_case(owner.engine, base);
         ai_slow_consumer_isolation_case(owner.engine, base);
 
-        std::cout << "probe, pool, packet clock, callback drain, cancellation, throttle and stress passed\n";
+        // 起播归因日志必须真的产出：请求行（Sending:）与应答行（RTSP/1.）各至少一条，
+        // 且耗时字段存在。缺失意味着全局日志静默策略把这条通道也吞掉了。
+        auto &logs = CapturedLogs::instance();
+        CHECK(logs.contains("rtsp_startup_timing"));
+        // 请求行（Sending:）与应答行（RTSP/1.）各至少一条，且带耗时字段
+        CHECK(logs.contains("rtsp_txn t="));
+        CHECK(logs.contains("RTSP/1."));
+
+        // 顺带把前几条事务日志打出来：格式本身就是排障口径，退化要当场可见。
+        int shown = 0;
+        for (const auto &line : logs.snapshot()) {
+            if (line.find("rtsp_txn") != std::string::npos && shown++ < 4) {
+                std::cout << "  sample: " << line << '\n';
+            }
+        }
+        zhulong::set_log_sink(nullptr, 0);
+
+        std::cout << "probe, pool, packet clock, callback drain, cancellation, throttle, stress and startup trace passed\n";
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';
         return 1;

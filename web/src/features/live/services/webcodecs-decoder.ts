@@ -18,16 +18,25 @@ declare global {
  */
 const MAX_DECODE_QUEUE_FRAMES = 12
 
-/** 解码器刚 configure 后的预热帧数，避免启动阶段的短暂队列抖动触发重同步。 */
-const WARMUP_FRAMES = 10
+/**
+ * 解码队列**硬上限**（帧）。超过它说明积压已经失控，必须立刻整段丢弃并重建。
+ *
+ * 为什么软阈值不够：WebCodecs 的待解码队列是无界的，只置 `skipping` 标记而不
+ * `reset()` 的话，先前入队的 chunk 仍会被逐个解出来 —— 客户端于是永久落后十几秒，
+ * 并且每秒复发一次。现场实测 `decodeQueueSize=262`、`resyncs=11` 就是这条路径。
+ * 64 帧（约 2.5 秒 @25fps）是「还可能有救」与「必须放弃」的分界。
+ */
+const MAX_DECODE_QUEUE_HARD_FRAMES = 64
 
 /**
- * 触发跳帧前所需的连续超阈值次数。
+ * 判定「真的跟不上」所需的持续超阈值时长（毫秒）。
  *
- * 单次瞬时抖动（GC、rAF 长帧、主线程忙）不该触发整段重同步；
- * 连续两次都超，才说明是真的追不上。
+ * 曾经用「连续 2 帧超阈值」作判据，但它只反映瞬时突发（连接时服务端补发整个 GOP、
+ * 一次 GC、一次布局抖动都够），而重同步的代价是**丢弃到下一个 IDR**：相机 GOP 通常
+ * 1~4 秒，于是每次误判都放大成秒级冻结，并与后端的 500ms 背压重同步互相触发成循环。
+ * 改成持续 1 秒超阈值才动作：真过载会持续，突发不会。
  */
-const CONGESTION_STREAK_THRESHOLD = 2
+const CONGESTION_SUSTAINED_MS = 1000
 
 /**
  * 允许显式声明 Annex B 的配置扩展。
@@ -265,12 +274,34 @@ export class StreamDecoder {
   private skipping = false
   private needsReconfigure = false
 
-  /** configure 之后已成功送入解码器的帧数，用于预热窗口判定。 */
+  /** configure 之后已成功送入解码器的帧数，仅用于诊断输出。 */
   private framesSinceConfigure = 0
-  /** 连续观测到的过载次数。 */
-  private congestionStreak = 0
+  /**
+   * 解码队列首次超阈值的单调时钟；null 表示当前未超阈值。
+   * 只有持续超过 CONGESTION_SUSTAINED_MS 才认定过载。
+   */
+  private congestionSinceMs: number | null = null
   /** 最近一次成功 configure 的单调时钟，仅用于诊断输出。 */
   private configuredAtMs: number | null = null
+  /**
+   * 起播追踪锚点（performance 时钟）：
+   *   firstDecodeCallAtMs —— 首个数据包进入解码器入口；
+   *   firstSubmitAtMs     —— 首帧真正通过 EncodedVideoChunk 送入解码器（即关键帧已就绪）。
+   * 两者之差就是「在等可解码的起点」花了多久。
+   */
+  private firstDecodeCallAtMs: number | null = null
+  private firstSubmitAtMs: number | null = null
+  private firstOutputAtMs: number | null = null
+  /**
+   * 流级帧序号空洞累计（服务端丢帧的**直接证据**）。
+   *
+   * ZLM2 帧头的 seq 由 StreamDispatcher 逐包递增，任何一端丢帧都会在 seq 上留下空洞。
+   * 有了它，「画面在顿」就能一刀切开：seq 有空洞 = 服务端/网络丢的；seq 连续 = 丢在前端。
+   */
+  private lastSeq: number | null = null
+  private seqGapFrames = 0
+  /** 解码队列峰值（自上次读取以来），用于观察队列是否在单调上涨。 */
+  private decodeQueuePeak = 0
 
   private readonly onFrame: FrameOutputCallback
   private readonly onError?: DecoderErrorCallback
@@ -336,12 +367,55 @@ export class StreamDecoder {
     return this.skipping
   }
 
+  /** 起播追踪：首个数据包进入解码器入口的墙钟时刻（performance 时钟）。 */
+  public getFirstDecodeCallAtMs(): number | null {
+    return this.firstDecodeCallAtMs
+  }
+
+  /** 起播追踪：首帧真正送入解码器的墙钟时刻。 */
+  public getFirstSubmitAtMs(): number | null {
+    return this.firstSubmitAtMs
+  }
+
+  /** 起播追踪：首帧解码输出的墙钟时刻，由渲染循环在首次 onFrame 时回填。 */
+  public markFirstOutputAt(nowMs: number): void {
+    if (this.firstOutputAtMs === null) this.firstOutputAtMs = nowMs
+  }
+
+  /** 起播追踪：首帧解码输出的墙钟时刻。 */
+  public getFirstOutputAtMs(): number | null {
+    return this.firstOutputAtMs
+  }
+
+  /** 解码器当前待解码队列深度（用于稳态健康观测）。 */
+  public getDecodeQueueSize(): number {
+    return this.decoder?.decodeQueueSize ?? 0
+  }
+
+  /** 累计的流级帧序号空洞（服务端丢帧的直接证据，用于稳态健康观测）。 */
+  public getSeqGapFrames(): number {
+    return this.seqGapFrames
+  }
+
   /**
    * 解码单个 ZLM2 数据包。
    *
    * @returns 是否真正送入了解码器（false 表示被丢弃）
    */
   public decode(packet: ParsedPacket): boolean {
+    if (this.firstDecodeCallAtMs === null) {
+      this.firstDecodeCallAtMs = performance.now()
+    }
+    if (this.lastSeq !== null && packet.seq > this.lastSeq + 1) {
+      this.seqGapFrames += packet.seq - this.lastSeq - 1
+    }
+    this.lastSeq = packet.seq
+    if (this.decoder) {
+      this.decodeQueuePeak = Math.max(
+        this.decodeQueuePeak,
+        this.decoder.decodeQueueSize
+      )
+    }
     this.recordDiagnosticPacket(packet)
 
     let decoder = this.decoder
@@ -403,38 +477,52 @@ export class StreamDecoder {
     }
 
     // 队列积压：整段跳到下一个关键帧，而不是逐帧丢参考帧。
-    // 需要「预热完成 + 连续两次超阈值」才动作，避免启动瞬间的假警报。
-    if (
-      !packet.isKeyFrame &&
-      decoder.decodeQueueSize > MAX_DECODE_QUEUE_FRAMES
-    ) {
-      this.congestionStreak++
-      if (
-        this.framesSinceConfigure > WARMUP_FRAMES &&
-        this.congestionStreak >= CONGESTION_STREAK_THRESHOLD
-      ) {
-        this.skipping = true
-        this.stats.resyncs++
-        this.congestionStreak = 0
-        this.countDiagnostic('congestionDrops')
+    //
+    // ⚠️ 必须走 rebuild()（内部 decoder.reset()）：只置 skipping 标记不会清空
+    // WebCodecs 内部待解码队列，旧积压仍会被解出来，客户端永久落后并在下一个
+    // 超阈值周期再次触发 —— 这就是「resyncs 一直涨、画面一顿一顿」的成因。
+    const decodeQueueSize = decoder.decodeQueueSize
+    if (!packet.isKeyFrame && decodeQueueSize > MAX_DECODE_QUEUE_HARD_FRAMES) {
+      logWebCodecsDiagnostic('warn', 'decode_queue_rebuild', {
+        seq: packet.seq,
+        gopId: packet.gopId,
+        codec: packet.codec,
+        frameClass: packet.frameClass,
+        decodeQueueSize,
+        hardLimitFrames: MAX_DECODE_QUEUE_HARD_FRAMES,
+        framesSinceConfigure: this.framesSinceConfigure,
+        resyncs: this.stats.resyncs,
+      })
+      this.resyncToKeyframe()
+      return false
+    }
+    // 软阈值：只有**持续**超限才动作 —— 瞬时突发（起播补发整个 GOP）不该换来一次冻结。
+    if (!packet.isKeyFrame && decodeQueueSize > MAX_DECODE_QUEUE_FRAMES) {
+      const now = performance.now()
+      if (this.congestionSinceMs === null) {
+        this.congestionSinceMs = now
+      } else if (now - this.congestionSinceMs >= CONGESTION_SUSTAINED_MS) {
+        const sustainedMs = Math.round(now - this.congestionSinceMs)
         logWebCodecsDiagnostic('warn', 'decode_queue_resync', {
           seq: packet.seq,
           gopId: packet.gopId,
           codec: packet.codec,
           frameClass: packet.frameClass,
-          decodeQueueSize: decoder.decodeQueueSize,
+          decodeQueueSize,
           maxDecodeQueueFrames: MAX_DECODE_QUEUE_FRAMES,
+          sustainedMs,
           framesSinceConfigure: this.framesSinceConfigure,
           configuredForMs:
             this.configuredAtMs === null
               ? null
               : Math.round(performance.now() - this.configuredAtMs),
-          resyncs: this.stats.resyncs,
+          resyncs: this.stats.resyncs + 1,
         })
+        this.resyncToKeyframe()
         return false
       }
     } else {
-      this.congestionStreak = 0
+      this.congestionSinceMs = null
     }
 
     const codecStr = this.resolveCodecString(packet)
@@ -461,6 +549,9 @@ export class StreamDecoder {
         data: packet.payload,
       })
       decoder.decode(chunk)
+      if (this.firstSubmitAtMs === null) {
+        this.firstSubmitAtMs = performance.now()
+      }
       this.framesSinceConfigure++
       this.countDiagnostic('submittedChunks')
       return true
@@ -592,7 +683,7 @@ export class StreamDecoder {
       this.isConfigured = true
       this.needsReconfigure = false
       this.framesSinceConfigure = 0
-      this.congestionStreak = 0
+      this.congestionSinceMs = null
       this.configuredAtMs = performance.now()
       return true
     } catch (err) {
@@ -623,6 +714,7 @@ export class StreamDecoder {
     const config: AnnexBDecoderConfig = {
       codec: codecStr,
       optimizeForLatency: true,
+      hardwareAcceleration: 'prefer-hardware',
     }
     // ⚠️ 规范中 AvcDecoderConfig.format 默认是 "avc"（AVCC 长度前缀），
     // 而我们送的是 Annex B（起始码分隔）。Chrome 有启发式容错，Safari 严格按规范
@@ -633,6 +725,25 @@ export class StreamDecoder {
       config.hevc = { format: 'annexb' }
     }
     return config
+  }
+
+  /**
+   * 重同步：丢弃解码器内部**待解码队列**并等待下一个关键帧。
+   *
+   * 与 `rebuild()` 的唯一区别是它同时记账 resync —— 让「跳帧归因」在指标上可分辨。
+   */
+  private resyncToKeyframe(): void {
+    this.stats.resyncs++
+    this.congestionSinceMs = null
+    this.countDiagnostic('congestionDrops')
+    this.rebuild()
+  }
+
+  /** 读取并清零解码队列峰值（用于稳态健康观测：队列是否在单调上涨）。 */
+  public takeDecodeQueuePeak(): number {
+    const peak = this.decodeQueuePeak
+    this.decodeQueuePeak = 0
+    return peak
   }
 
   /** 丢弃解码器内部状态并等待关键帧重建。 */
@@ -650,7 +761,7 @@ export class StreamDecoder {
     this.needsReconfigure = true
     this.skipping = true
     this.framesSinceConfigure = 0
-    this.congestionStreak = 0
+    this.congestionSinceMs = null
     this.configuredAtMs = null
   }
 
@@ -682,7 +793,7 @@ export class StreamDecoder {
     this.needsReconfigure = true
     this.skipping = true
     this.framesSinceConfigure = 0
-    this.congestionStreak = 0
+    this.congestionSinceMs = null
     this.configuredAtMs = null
     this.onError?.(error)
     this.initDecoder()
@@ -707,6 +818,7 @@ export class StreamDecoder {
     this.configuredCodec = null
     this.needsReconfigure = true
     this.skipping = true
+    this.congestionSinceMs = null
     this.configuredAtMs = null
   }
 }

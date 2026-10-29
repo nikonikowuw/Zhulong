@@ -24,6 +24,13 @@ var (
 	ErrAIStreamInactive = errors.New("camera has no active AI stream")
 )
 
+// defaultMaxWarmStreamDispatchers 是空闲热保留窗口内允许同时存活的分发器数量上限。
+//
+// 每条热流都还在拉 RTSP、跑包泵、占着 gopCache（单路上限 4 MiB）。若不设上限，
+// 「把 16 个机位挨个看过一遍」就等于「16 条流常驻 10 分钟」—— 边缘设备的带宽与内存
+// 里没有这笔预算。超上限时按最早进入空闲的顺序立即释放（走 Native 8s grace）。
+const defaultMaxWarmStreamDispatchers = 4
+
 // StreamHub 管理全系统的摄像机媒体分发器生命周期与按需订阅。
 type StreamHub struct {
 	aiConsumer     AIResultConsumer
@@ -37,6 +44,9 @@ type StreamHub struct {
 	dispatchers    map[string]*StreamDispatcher
 	aiStreams      map[string]*aiStreamRef
 	aiSubscribers  map[string]map[string]struct{}
+	// warmOrder 记录处于空闲热保留窗口的分发器 key，最早进入的在前。
+	warmOrder      []string
+	warmStreamCap  int
 	cipher         *LazyCipher
 	nextConsumerID atomic.Uint64
 	mu             sync.Mutex
@@ -97,6 +107,7 @@ func NewStreamHub(
 		dispatchers:   make(map[string]*StreamDispatcher),
 		aiStreams:     make(map[string]*aiStreamRef),
 		aiSubscribers: make(map[string]map[string]struct{}),
+		warmStreamCap: defaultMaxWarmStreamDispatchers,
 	}
 	hub.nextConsumerID.Store(1000)
 	return hub
@@ -125,9 +136,14 @@ func (h *StreamHub) recordPacketActivity(cameraID, role string) {
 	}
 }
 
+// streamKey 是分发器在 Hub 内的唯一标识：同一相机的主/子流各占一条。
+func streamKey(cameraID, role string) string {
+	return cameraID + ":" + role
+}
+
 // GetOrCreateDispatcher 获取或按需拉起指定摄像机流的分发器。
 func (h *StreamHub) GetOrCreateDispatcher(ctx context.Context, cameraID, role string) (*StreamDispatcher, error) {
-	key := fmt.Sprintf("%s:%s", cameraID, role)
+	key := streamKey(cameraID, role)
 
 	h.mu.Lock()
 	if h.closed {
@@ -277,10 +293,62 @@ func (h *StreamHub) createDispatcher(ctx context.Context, cameraID, role, key st
 }
 
 func (h *StreamHub) removeDispatcher(cameraID, role string) {
-	key := fmt.Sprintf("%s:%s", cameraID, role)
+	key := streamKey(cameraID, role)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.dispatchers, key)
+	h.dropWarmLocked(key)
+}
+
+// markStreamWarm 记录某路流进入空闲热保留窗口，并按上限回收最早进入空闲的那条。
+//
+// 必须在调用方释放分发器锁之后调用：回收会把受害者 Close 掉，而 Close 会回头拿 Hub 锁。
+func (h *StreamHub) markStreamWarm(cameraID, role string) {
+	key := streamKey(cameraID, role)
+
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
+	h.dropWarmLocked(key)
+	h.warmOrder = append(h.warmOrder, key)
+	var victim *StreamDispatcher
+	if h.warmStreamCap > 0 && len(h.warmOrder) > h.warmStreamCap {
+		victim = h.dispatchers[h.warmOrder[0]]
+		h.warmOrder = h.warmOrder[1:]
+	}
+	h.mu.Unlock()
+
+	if victim != nil {
+		h.logger.Debug("warm stream cap exceeded, releasing idle dispatcher")
+		victim.Close()
+	}
+}
+
+// markStreamActive 把某路流移出空闲热保留集合（有客户端回来了）。
+func (h *StreamHub) markStreamActive(cameraID, role string) {
+	key := streamKey(cameraID, role)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.dropWarmLocked(key)
+}
+
+// dropWarmLocked 从空闲集合中移除指定 key，要求持有 h.mu。
+func (h *StreamHub) dropWarmLocked(key string) {
+	for index, existing := range h.warmOrder {
+		if existing == key {
+			h.warmOrder = append(h.warmOrder[:index], h.warmOrder[index+1:]...)
+			return
+		}
+	}
+}
+
+// WarmStreams 返回当前处于空闲热保留窗口的流数量。
+func (h *StreamHub) WarmStreams() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.warmOrder)
 }
 
 // ActiveStreams 返回当前活跃流分发器数量。
@@ -549,6 +617,7 @@ func (h *StreamHub) Close() error {
 	}
 	h.aiStreams = make(map[string]*aiStreamRef)
 	h.aiSubscribers = make(map[string]map[string]struct{})
+	h.warmOrder = nil
 	h.mu.Unlock()
 
 	for _, d := range list {

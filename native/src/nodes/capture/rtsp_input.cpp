@@ -24,10 +24,14 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
+#include <cstdarg>
+#include <cstdio>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -50,11 +54,44 @@ constexpr int default_rtsp_port = 554;
 /** @brief 端口上限（TCP/UDP 端口最大值） */
 constexpr int max_port = 65535;
 
-/** @brief 流信息探测时长上界（微秒），避免在弱网下耗尽建连超时窗口 */
-constexpr int probe_analyze_duration_us = 1000000;
+/**
+ * @brief 流信息探测时长上界（微秒）。
+ *
+ * ⚠️ 这 **不是** 只是探测窗口，而是**每次冷建连的固定开销**：avformat_find_stream_info
+ * 会一直读到累计该时长的流数据才返回，对直播流等价于实打实等 1 秒。
+ *
+ * 而 RTSP 的 SDP 已经给出了 codec、分辨率与时基（H.264/H.265 的 SPS/PPS 通常由
+ * sprop-parameter-sets 提供），本代码只用探测结果补 avg_frame_rate 这类展示字段。
+ * 300ms 足够覆盖多包确认，又不把首帧拖长；参数集缺失时由关键帧自带的
+ * 内联 SPS/PPS 兜底（zhulong::HasCompleteParameterSets）。
+ */
+constexpr int probe_analyze_duration_us = 300000;
 
-/** @brief 流信息探测字节量上界，与探测时长共同限制元数据解析开销 */
-constexpr int probe_size_bytes = 1048576;
+/**
+ * @brief 流信息探测字节量上界。
+ *
+ * ⚠️ 与 analyzeduration 是「谁先到谁结束」，实测**往往是本值在卡**：
+ * 1080p H.265 低码率下读满 1 MiB 需要 2~3 秒，日志里 info_ms=3175 而
+ * analyzeduration 只配了 300ms 就是这种情况。RTSP 的 SDP 已给出 codec 与分辨率，
+ * 把上限降到 128 KiB 后探测通常在百毫秒级返回。
+ *
+ * 语义兜底：extradata（VPS/SPS/PPS）本就依赖 SDP 或码流内联，缺失时由关键帧
+ * 自带的参数集兜底（zhulong::HasCompleteParameterSets）。
+ *
+ * ⚠️ 窗口收紧必须配兼容档重试（见 legacy_probe_* 与 read_rtsp 的 fallback 分支）：
+ *    SDP 不带 sprop-parameter-sets、首包不是 IDR 的相机可能读不到完整参数集，
+ *    此时「探测不足」绝不能被当成「相机不可用」。
+ */
+constexpr int probe_size_bytes = 128 * 1024;
+
+/**
+ * @brief 兼容档探测预算：快速档读不出完整参数集时的一次性重试上限。
+ *
+ * 取收紧前的旧值（1 MiB / 1s）。它慢，但能救回「SDP 不带 sprop-parameter-sets、
+ * 首包也不是 IDR」这类相机；"探测不足"绝不能等同于"相机不可用"。
+ */
+constexpr int legacy_probe_analyze_duration_us = 1000000;
+constexpr int legacy_probe_size_bytes = 1048576;
 
 /** @brief 表示「未设置截止时间」的纳秒滴答值 */
 constexpr int64_t never_expires_at = std::numeric_limits<int64_t>::max();
@@ -100,6 +137,19 @@ struct Input {
         // 确保在 TEARDOWN / 关闭网络流时不会因对端停顿而挂起
         cancel.stopped.store(true, std::memory_order_relaxed);
         avformat_close_input(&context);
+    }
+
+    /**
+     * @brief 丢弃当前上下文并重新分配，供「换探测预算重试」使用。
+     *
+     * 重试是重新建连，因此不能置 cancel.stopped（那是终态取消）；
+     * 调用方必须在调用前刷新 open 截止时间，否则 TEARDOWN 可能碰到已过期的 deadline。
+     */
+    void reopen() {
+        if (context) avformat_close_input(&context);
+        context = avformat_alloc_context();
+        if (!context) throw std::bad_alloc();
+        context->interrupt_callback = {interrupt, &cancel};
     }
 
     Input(const Input &) = delete;
@@ -201,6 +251,199 @@ std::string lower(std::string value) {
     });
     return value;
 }
+
+// ============================================================================
+//                        RTSP 事务级计时（建连耗时归因）
+// ============================================================================
+
+/**
+ * 为什么需要它：avformat_open_input 实测 1236ms，而项目自带的 RTSP DESCRIBE
+ * 客户端对同一相机只要 ~288ms —— 说明这 1.2 秒不是「RTSP 建连固有成本」，
+ * 而是某个具体往返被拖住了（重挑战、PLAY 后等首包、SETUP 卡住……）。
+ *
+ * FFmpeg 的 rtsp 解复用器在 AV_LOG_DEBUG 下会把每个请求/响应整体打成一条日志，
+ * 因此在 open + find_stream_info 窗口内接管全局日志回调、只转发**本上下文**的
+ * 事务并附上相对耗时，就能把每个往返逐条摊开。
+ *
+ * ⚠️ 安全：请求行里带完整 URL（含 user:pass@）。全局静默 FFmpeg 日志正是为了
+ *    不泄露凭据，本类是那条策略下唯一允许放行的通道，因此必须脱敏后才能转出。
+ */
+constexpr size_t kMaxTxnLine = 200;
+
+} // namespace
+
+/** @brief 抹掉 URL 中的 userinfo，避免凭据进入日志（单独导出以便单测覆盖） */
+std::string redact_credentials(std::string text) {
+    // 不区分大小写地定位 scheme：FFmpeg 打日志的是规范化后的 URL，但不能赌它一定是小写。
+    auto find_scheme = [&text](size_t from) {
+        const size_t limit = text.size();
+        for (size_t position = from; position + scheme_length <= limit; ++position) {
+            bool matched = true;
+            for (size_t offset = 0; offset < scheme_length; ++offset) {
+                const auto actual = static_cast<unsigned char>(text[position + offset]);
+                if (std::tolower(actual) != rtsp_scheme[offset]) {
+                    matched = false;
+                    break;
+                }
+            }
+            if (matched) return position;
+        }
+        return std::string::npos;
+    };
+
+    size_t position = find_scheme(0);
+    while (position != std::string::npos) {
+        const size_t authority_start = position + scheme_length;
+        // authority 结束于路径 / 查询 / 空白
+        const size_t authority_end = text.find_first_of("/?# \t\r\n", authority_start);
+        // ⚠️ 取 authority 内**最后**一个 '@'，而不是第一个：密码本身可能含 '@'
+        //    （很多相机接受未转义的 p@ss）。取第一个只会把前半段替成 ***，
+        //    尾部仍以明文落盘 —— 而本函数是静默策略下唯一放行通道，不能尽力而为。
+        size_t at = std::string::npos;
+        const size_t scan_end = authority_end == std::string::npos ? text.size() : authority_end;
+        for (size_t index = authority_start; index < scan_end; ++index) {
+            if (text[index] == '@') at = index;
+        }
+        if (at != std::string::npos) {
+            text.replace(authority_start, at - authority_start, "***");
+            position = find_scheme(authority_start);
+            continue;
+        }
+        // 没有 userinfo：从 authority 之后继续找，避免重复扫描同一个 scheme
+        position = find_scheme(authority_start);
+    }
+    return text;
+}
+
+namespace {
+
+/** @brief 把一整块请求/响应压成「首行 + CSeq」，避免把 SDP 与头部刷进日志 */
+std::string summarize_rtsp_block(const std::string &block) {
+    std::string summary;
+    bool took_head = false;
+    size_t position = 0;
+    while (position <= block.size()) {
+        const size_t end = block.find('\n', position);
+        std::string line = block.substr(position, end == std::string::npos ? std::string::npos : end - position);
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if (!line.empty()) {
+            const bool is_marker = line == "Sending:" || line == "Receiving:";
+            const bool is_cseq = line.rfind("CSeq", 0) == 0;
+            if (!is_marker && (is_cseq || !took_head)) {
+                if (!summary.empty()) summary += " | ";
+                summary += line;
+                if (!is_cseq) took_head = true;
+            }
+        }
+        if (end == std::string::npos) break;
+        position = end + 1;
+    }
+    if (summary.size() > kMaxTxnLine) {
+        summary.resize(kMaxTxnLine);
+        summary += "...";
+    }
+    return summary;
+}
+
+/** @brief 静默日志回调：本类的存在正是为了「任何 FFmpeg 输出都不外泄」 */
+void silent_log_callback(void *, int, const char *, va_list) {}
+
+struct TraceEntry {
+    int64_t started_ticks;
+    uint64_t stream_id;
+    // token 让条目带身份：open 失败的上下文会被 FFmpeg 释放，指针可能被另一路复用，
+    // 仅按指针 erase 会踩掉后来者的条目、让它的日志静默消失。
+    uint64_t token;
+};
+
+/** @brief 单调递增的追踪序号，仅用于识别「同一个指针上换了一个上下文」。 */
+std::atomic<uint64_t> trace_token_source{0};
+
+struct TraceRegistry {
+    std::mutex mutex;
+    std::map<AVFormatContext *, TraceEntry> active;
+    int saved_level = AV_LOG_QUIET;
+    size_t users = 0;
+};
+
+TraceRegistry &trace_registry() {
+    static TraceRegistry registry_instance;
+    return registry_instance;
+}
+
+void trace_log_callback(void *avcl, int /*level*/, const char *format, va_list arguments) {
+    if (avcl == nullptr) return;
+
+    int64_t elapsed_ms = -1;
+    uint64_t stream_id = 0;
+    {
+        auto &registry = trace_registry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        const auto found = registry.active.find(static_cast<AVFormatContext *>(avcl));
+        if (found == registry.active.end()) return;
+        stream_id = found->second.stream_id;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            Clock::now() - std::chrono::steady_clock::time_point(std::chrono::nanoseconds(found->second.started_ticks)));
+        elapsed_ms = elapsed.count();
+    }
+
+    char buffer[1024];
+    vsnprintf(buffer, sizeof(buffer), format, arguments);
+    const std::string redacted = redact_credentials(buffer);
+    // FFmpeg 把请求打在 AV_LOG_TRACE（"Sending:..."），应答打在 AV_LOG_DEBUG。
+    // 为了不把 RTP 逐包 TRACE 也放进来，这里按内容再筛一道。
+    if (redacted.find("Sending") == std::string::npos &&
+        redacted.find("RTSP/1.") == std::string::npos) {
+        return;
+    }
+    const std::string summary = summarize_rtsp_block(redacted);
+    if (summary.empty()) return;
+    ZL_LOGI(stream_id, "nodes.capture", "rtsp_txn t=%lldms %s",
+        static_cast<long long>(elapsed_ms), summary.c_str());
+}
+
+/** @brief 在作用域内开启 RTSP 事务计时（可嵌套，最后一个析构时恢复原状） */
+class RtspTransactionTrace {
+public:
+    RtspTransactionTrace(AVFormatContext *context, uint64_t stream_id) : context_(context) {
+        if (!context_) return;
+        auto &registry = trace_registry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        token_ = ++trace_token_source;
+        registry.active[context_] = TraceEntry{Clock::now().time_since_epoch().count(), stream_id, token_};
+        if (registry.users++ == 0) {
+            registry.saved_level = av_log_get_level();
+            // 必须开到 TRACE：FFmpeg 的 RTSP 请求行只在 AV_LOG_TRACE 输出。
+            av_log_set_level(AV_LOG_TRACE);
+            av_log_set_callback(trace_log_callback);
+        }
+        installed_ = true;
+    }
+
+    ~RtspTransactionTrace() {
+        if (!installed_) return;
+        auto &registry = trace_registry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        const auto found = registry.active.find(context_);
+        if (found != registry.active.end() && found->second.token == token_) {
+            registry.active.erase(found);
+        }
+        if (--registry.users == 0) {
+            av_log_set_callback(silent_log_callback);
+            av_log_set_level(registry.saved_level);
+        }
+    }
+
+    RtspTransactionTrace(const RtspTransactionTrace &) = delete;
+    RtspTransactionTrace &operator=(const RtspTransactionTrace &) = delete;
+    RtspTransactionTrace(RtspTransactionTrace &&) = delete;
+    RtspTransactionTrace &operator=(RtspTransactionTrace &&) = delete;
+
+private:
+    AVFormatContext *context_;
+    uint64_t token_ = 0;
+    bool installed_ = false;
+};
 
 } // namespace
 
@@ -356,7 +599,7 @@ void initialize_ffmpeg() {
         //    代价是 FFmpeg 自身诊断全部丢失。因此本模块的错误路径必须自带 rc 与 operation 上下文
         //    （见 check()），不得依赖 FFmpeg 日志排障。
         av_log_set_level(AV_LOG_QUIET);
-        av_log_set_callback([](void *, int, const char *, va_list) {});
+        av_log_set_callback(silent_log_callback);
         // 初始化网络子系统
         const int ret = avformat_network_init();
         if (ret < 0) {
@@ -370,6 +613,101 @@ void initialize_ffmpeg() {
 //                               核心 RTSP 拉流循环
 // ============================================================================
 
+namespace {
+
+/** @brief 一次建连的探测预算。 */
+struct ProbeLimits {
+    int analyzeduration_us;
+    int probesize_bytes;
+};
+
+/** @brief 一次 open + find_stream_info 的产物。 */
+struct ProbeSession {
+    int64_t open_ms = 0;
+    int64_t info_ms = 0;
+    int index = -1;
+    int info_rc = 0;
+    bool info_ok = false;
+};
+
+/**
+ * @brief 用给定探测预算完成 open + find_stream_info（可重试一次）。
+ *
+ * 除「探测不足」（info_rc < 0）以外全部直接抛：超时、取消、编解码不支持
+ * 都不是「换个预算就能好」的问题，重试只会把失败时间翻倍。
+ * 探测不足的判定交给调用方，因为只有它知道还能不能再试。
+ *
+ * @throws Failure 建连失败 / 取消 / 超时 / 不支持的编解码
+ */
+ProbeSession open_and_probe(Input &input, const std::string &url, const Options &options,
+                            Cancellation &cancel, uint64_t stream_id, const ProbeLimits &limits) {
+    Dictionary dictionary;
+    dictionary.set("rtsp_transport", options.transport == Zhulong_TRANSPORT_TCP ? "tcp" : "udp");
+    if (options.transport == Zhulong_TRANSPORT_TCP) {
+        dictionary.set("rtsp_flags", "prefer_tcp");
+    }
+    dictionary.set("timeout", std::to_string(static_cast<int64_t>(std::max(options.open_timeout_ms, options.idle_timeout_ms)) * 1000));
+    dictionary.set("allowed_media_types", "video");
+    dictionary.set("analyzeduration", std::to_string(limits.analyzeduration_us));
+    dictionary.set("probesize", std::to_string(limits.probesize_bytes));
+    dictionary.set("fflags", "nobuffer");
+    dictionary.set("max_delay", "0");
+    dictionary.set("buffer_size", "1048576");
+
+    ProbeSession session;
+
+    // 建连窗口内开启 RTSP 事务级计时：把 open/info 的耗时摊到每个往返上。
+    // 作用域刻意只覆盖到 find_stream_info 结束，读流循环不再受全局日志回调影响。
+    RtspTransactionTrace trace(input.context, stream_id);
+
+    // 1. 打开 RTSP 输入
+    const auto open_started = Clock::now();
+    const int open_result = avformat_open_input(&input.context, url.c_str(), av_find_input_format("rtsp"), &dictionary.value);
+    check(open_result, cancel, stream_id, "open");
+    session.open_ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - open_started).count();
+
+    // 2. 定位最佳视频流轨道
+    session.index = av_find_best_stream(input.context, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (session.index < 0) {
+        ZL_LOGW(stream_id, "nodes.capture", "rtsp_video_stream_unavailable rc=%d", session.index);
+        throw Failure{Zhulong_ERR_UNSUPPORTED};
+    }
+
+    // 快速前置编解码格式检查（在解析深度流信息前拒绝不支持的格式）
+    // ⚠️ RTSP 的 SDP 可能尚未解析出 codec（AV_CODEC_ID_NONE），此时不得过早拒绝；
+    //    权威判定在 avformat_find_stream_info 之后使用 codecpar->codec_id 完成。
+    const auto early_codec = input.context->streams[session.index]->codecpar->codec_id;
+    if (early_codec != AV_CODEC_ID_NONE && early_codec != AV_CODEC_ID_H264 && early_codec != AV_CODEC_ID_HEVC) {
+        ZL_LOGW(stream_id, "nodes.capture", "rtsp_codec_unsupported codec_id=%d", static_cast<int>(early_codec));
+        throw Failure{Zhulong_ERR_UNSUPPORTED};
+    }
+
+    // 3. 读取流参数信息
+    const auto info_started = Clock::now();
+    session.info_rc = avformat_find_stream_info(input.context, nullptr);
+    session.info_ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - info_started).count();
+    session.info_ok = session.info_rc >= 0;
+    return session;
+}
+
+/**
+ * @brief 判定一次探测是否真的拿到了可用元数据。
+ *
+ * ⚠️ find_stream_info 返回 0 不等于探测成功：SDP 不带 sprop-parameter-sets、
+ *    首包又不是 IDR 时，它会「成功」返回但 width/height 仍为 0。
+ *    这种不完整元数据属于**探测不足**（可重试），而不是相机不支持。
+ */
+bool probe_metadata_usable(const AVFormatContext *context, int index, bool require_dimensions = true) {
+    if (!context || index < 0 || static_cast<size_t>(index) >= context->nb_streams) return false;
+    const auto *stream = context->streams[index];
+    const auto *parameters = stream->codecpar;
+    if (parameters->codec_id != AV_CODEC_ID_H264 && parameters->codec_id != AV_CODEC_ID_HEVC) return false;
+    if (require_dimensions && (parameters->width <= 0 || parameters->height <= 0)) return false;
+    return stream->time_base.num > 0 && stream->time_base.den > 0;
+}
+
+} // namespace
+
 Video read_rtsp(const std::string &url, const Options &options, Cancellation &cancel,
                 const std::function<void(const Zhulong_packet_view &)> &consume,
                 const std::function<void(const Video &)> &ready, uint64_t stream_id) {
@@ -378,38 +716,36 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
     throw_if_cancelled(cancel);
 
     Input input(cancel);
-    Dictionary dictionary;
-    // 配置 RTSP 参数
-    dictionary.set("rtsp_transport", options.transport == Zhulong_TRANSPORT_TCP ? "tcp" : "udp");
-    dictionary.set("timeout", std::to_string(static_cast<int64_t>(std::max(options.open_timeout_ms, options.idle_timeout_ms)) * 1000));
-    dictionary.set("allowed_media_types", "video");
-    // 约束分析流信息的探测时长与字节量，避免在弱网下耗尽超时窗口
-    dictionary.set("analyzeduration", std::to_string(probe_analyze_duration_us));
-    dictionary.set("probesize", std::to_string(probe_size_bytes));
 
-    // 1. 打开 RTSP 输入
-    const int open_result = avformat_open_input(&input.context, url.c_str(), av_find_input_format("rtsp"), &dictionary.value);
-    check(open_result, cancel, stream_id, "open");
+    const bool is_probe_only = !consume;
+    const ProbeLimits fast_limits{probe_analyze_duration_us, probe_size_bytes};
+    ProbeSession session = open_and_probe(input, url, options, cancel, stream_id, fast_limits);
+    bool probe_fallback = false;
+    // 「探测不足」有两种形态：find_stream_info 直接报错，以及它「成功」但元数据不可用。
+    // 两者都只能用兼容档重试一次来判断，绝不能直接判成相机不支持。
+    // ⚠️ 仅在独立探测（is_probe_only）且未获得分辨率，或探流彻底失败时才降级到兼容档重试；
+    //    拉流消费模式下只要具备 codec 与时基即可立即起播，首个 IDR 到达时自包含参数集，
+    //    严禁重连 RTSP 产生数秒的无谓阻塞。
+    if (!session.info_ok || !probe_metadata_usable(input.context, session.index, is_probe_only)) {
+        // 超时/取消优先抛：把「被打断」当成「探测不足」去重连，会白白再花一轮超时。
+        check(session.info_rc, cancel, stream_id, "stream_info");
 
-    // 2. 定位最佳视频流轨道
-    const int index = av_find_best_stream(input.context, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
-    if (index < 0) {
-        ZL_LOGW(stream_id, "nodes.capture", "rtsp_video_stream_unavailable rc=%d", index);
-        throw Failure{Zhulong_ERR_UNSUPPORTED};
+        ZL_LOGW(stream_id, "nodes.capture", "rtsp_probe_fallback rc=%d metadata_ok=%d probesize=%d analyzeduration_us=%d",
+            session.info_rc, probe_metadata_usable(input.context, session.index, is_probe_only) ? 1 : 0,
+            probe_size_bytes, probe_analyze_duration_us);
+        probe_fallback = true;
+
+        // 重连会重走 TEARDOWN + DESCRIBE + SETUP + PLAY，必须重新给足预算
+        cancel.expire_after(options.open_timeout_ms);
+        input.reopen();
+        const ProbeLimits legacy_limits{legacy_probe_analyze_duration_us, legacy_probe_size_bytes};
+        session = open_and_probe(input, url, options, cancel, stream_id, legacy_limits);
+        check(session.info_rc, cancel, stream_id, "stream_info");
     }
 
-    // 快速前置编解码格式检查（在解析深度流信息前拒绝不支持的格式）
-    // ⚠️ RTSP 的 SDP 可能尚未解析出 codec（AV_CODEC_ID_NONE），此时不得过早拒绝；
-    //    权威判定在 avformat_find_stream_info 之后使用 codecpar->codec_id 完成。
-    const auto early_codec = input.context->streams[index]->codecpar->codec_id;
-    if (early_codec != AV_CODEC_ID_NONE && early_codec != AV_CODEC_ID_H264 && early_codec != AV_CODEC_ID_HEVC) {
-        ZL_LOGW(stream_id, "nodes.capture", "rtsp_codec_unsupported codec_id=%d", static_cast<int>(early_codec));
-        throw Failure{Zhulong_ERR_UNSUPPORTED};
-    }
-
-    // 3. 读取流参数信息
-    const int info_result = avformat_find_stream_info(input.context, nullptr);
-    check(info_result, cancel, stream_id, "stream_info");
+    const int index = session.index;
+    const int64_t open_ms = session.open_ms;
+    const int64_t info_ms = session.info_ms;
 
     const auto *stream = input.context->streams[index];
     const auto *parameters = stream->codecpar;
@@ -418,14 +754,14 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
     Video video;
     // 使用流信息解析后的权威 codec_id；codec_id() 已包含不支持格式的拒绝逻辑
     video.view.codec = codec_id(parameters->codec_id);
-    if (parameters->width <= 0 || parameters->height <= 0 ||
+    if ((is_probe_only && (parameters->width <= 0 || parameters->height <= 0)) ||
         stream->time_base.num <= 0 || stream->time_base.den <= 0) {
         ZL_LOGW(stream_id, "nodes.capture", "rtsp_video_metadata_invalid width=%d height=%d time_base_num=%d time_base_den=%d",
                 parameters->width, parameters->height, stream->time_base.num, stream->time_base.den);
         throw Failure{Zhulong_ERR_UNSUPPORTED};
     }
-    video.view.width = parameters->width;
-    video.view.height = parameters->height;
+    video.view.width = std::max(0, parameters->width);
+    video.view.height = std::max(0, parameters->height);
     video.view.time_base_num = stream->time_base.num;
     video.view.time_base_den = stream->time_base.den;
     video.view.fps_den = 1;
@@ -449,6 +785,8 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
 
     // 4. 帧读取循环（使用 idle_timeout_ms 监控两帧之间的间隔）
     cancel.expire_after(options.idle_timeout_ms);
+    const auto read_started = Clock::now();
+    bool logged_first_packet = false;
     while (!cancel.stopped.load(std::memory_order_relaxed)) {
         if (cancel.expired()) {
             ZL_LOGW(stream_id, "nodes.capture", "rtsp_idle_timeout timeout_ms=%u", options.idle_timeout_ms);
@@ -466,6 +804,14 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
 
         // 仅处理所选视频轨道的有效数据包
         if (packet->stream_index == index && packet->size > 0) {
+            if (!logged_first_packet) {
+                logged_first_packet = true;
+                // 起播耗时拆解：这一步之后才可能有帧派发给订阅者
+                ZL_LOGI(stream_id, "nodes.capture", "rtsp_startup_timing open_ms=%lld info_ms=%lld first_packet_ms=%lld analyzeduration_us=%d probe_fallback=%d",
+                    static_cast<long long>(open_ms), static_cast<long long>(info_ms),
+                    static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - read_started).count()),
+                    probe_analyze_duration_us, probe_fallback ? 1 : 0);
+            }
             // 每收到一个目标视频数据包，刷新空闲超时倒计时
             cancel.expire_after(options.idle_timeout_ms);
 

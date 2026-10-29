@@ -1,9 +1,10 @@
-import { memo, useCallback, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { Camera, Loader2, RotateCcw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { useStreamConnection } from '../hooks/use-stream-connection'
 import { StreamConnectionPool } from '../services/stream-pool'
+import { isWebCodecsSupported } from '../services/webcodecs-decoder'
 import {
   type GridLayout,
   type LiveCameraItem,
@@ -62,6 +63,23 @@ export const LivePlayerCell = memo(function LivePlayerCell({
   const { t } = useTranslation('live')
   const [useMockCanvas, setUseMockCanvas] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
+  /**
+   * 是否已经出过首个画面。
+   *
+   * WebSocket 建立（status=connected）远早于首帧：服务端要先把 RTSP 连接建起来
+   * （实测 open 1.2s + 探测数百毫秒），这 1~2 秒里如果只按 status 判断，
+   * 遮罩会被撤掉、露出纯黑画面 —— 看起来像卡死，实际上是在等视频源。
+   */
+  const [hasFirstFrame, setHasFirstFrame] = useState(false)
+  /**
+   * 本播放器能否真的解码。
+   *
+   * ⚠️ 「连接已建立但首帧没来」的等待遮罩必须叠加这个前提：
+   *    局域网 HTTP（非安全上下文）下 WebCodecs 不可用，LivePlayer 会渲染
+   *    「需要安全上下文 / 切换至 HTTPS」的引导面板，此时首帧永远不会到达。
+   *    只看 status 的话，遮罩会把那个引导按钮永久盖住，用户既看不到原因也点不到出路。
+   */
+  const [supportsWebCodecs] = useState(() => isWebCodecsSupported())
   const playerRef = useRef<LivePlayerRef | null>(null)
   const mockCanvasRef = useRef<MockStreamCanvasRef | null>(null)
 
@@ -70,12 +88,35 @@ export const LivePlayerCell = memo(function LivePlayerCell({
     playerRef.current?.decode(packet)
   }, [])
 
+  // 切换机位或码流即视为重新起播，等待遮罩重新出现
+  const handleFirstFrame = useCallback(() => setHasFirstFrame(true), [])
+  const cellSourceKey = `${cell.cameraId ?? ''}:${cell.streamType}`
+  useEffect(() => {
+    setHasFirstFrame(false)
+  }, [cellSourceKey])
+
   const { status, errorMessage, stats, retry } = useStreamConnection({
     cameraId: cell.cameraId,
     streamType: cell.streamType,
     enabled: !useMockCanvas && Boolean(cell.cameraId),
     onPacket: handlePacket,
   })
+
+  /**
+   * 等待遮罩的文案；null 表示不需要遮罩。
+   *
+   * 用 if 链而不是嵌套三元：三种状态的含义差别很大，嵌套三元得数括号才读得清。
+   * 重连时即使没有错误文案也要保留遮罩（转圈本身就是反馈）。
+   */
+  const waitingText = ((): string | null => {
+    if (useMockCanvas || !supportsWebCodecs) return null
+    if (status === 'connecting') return t('connecting')
+    if (status === 'reconnecting') return errorMessage ?? ''
+    if (status === 'connected' && !hasFirstFrame) {
+      return t('frame.waitingFirstFrame')
+    }
+    return null
+  })()
 
   // 播放器识别出实际视频分辨率时，回流更新连接池状态
   const handlePlayerStatsChange = useCallback(
@@ -203,20 +244,20 @@ export const LivePlayerCell = memo(function LivePlayerCell({
             showAIOverlay={showAIOverlay}
             isMuted={cell.isMuted}
             onStatsChange={handlePlayerStatsChange}
+            onFirstFrame={handleFirstFrame}
           />
         )}
       </div>
 
-      {/* 状态与加载指示遮罩 */}
-      {!useMockCanvas &&
-        (status === 'connecting' || status === 'reconnecting') && (
-          <div className='absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/80 backdrop-blur-xs'>
-            <Loader2 className='h-6 w-6 animate-spin text-primary' />
-            <p className='mt-2 font-mono text-xs text-muted-foreground'>
-              {status === 'connecting' ? t('connecting') : errorMessage}
-            </p>
-          </div>
-        )}
+      {/* 状态与加载指示遮罩：连接中 / 重连中 / 已连上但首个画面还没出来 */}
+      {waitingText !== null && (
+        <div className='absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/80 backdrop-blur-xs'>
+          <Loader2 className='h-6 w-6 animate-spin text-primary' />
+          <p className='mt-2 font-mono text-xs text-muted-foreground'>
+            {waitingText}
+          </p>
+        </div>
+      )}
 
       {/* 异常错误提示遮罩 */}
       {!useMockCanvas && status === 'error' && (

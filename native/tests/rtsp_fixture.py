@@ -8,6 +8,7 @@
   4. 支持模拟各种异常网络与边缘用例：
      - /stall-open：连接挂起不响应；
      - /stall-info：SDP 缺失关键参数或挂起；
+     - /late-probe：SDP 缺参数集且首帧延迟下发（用于验证快速探测预算的兼容档重试）；
      - /stall-read：播放后断流；
      - /large-extra：超大 SPS/PPS 参数集；
      - /unsupported：不支持的编码格式（如 VP8）；
@@ -130,7 +131,7 @@ class Handler(socketserver.BaseRequestHandler):
 
             if "unsupported" in path:
                 name, fmtp = "VP8", ""
-            if "stall-info" in path:
+            if "stall-info" in path or "late-probe" in path:
                 fmtp = "packetization-mode=1"
 
             sdp = ("v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=fixture\r\n"
@@ -171,6 +172,10 @@ class Handler(socketserver.BaseRequestHandler):
         sequence = 1
         frame = 0
         try:
+            # 首帧延迟 500ms：快速档（300ms 探测窗口）必然读不到参数集，
+            # 只有兼容档（1s）才能拿到 SPS/PPS —— 这正是 fallback 路径要用例钉住的形态。
+            if "late-probe" in self.path:
+                self.done.wait(0.5)
             while not self.done.is_set():
                 if "stall-info" in self.path or (self.path == "/stall-read" and frame >= 8):
                     self.done.wait(0.04)

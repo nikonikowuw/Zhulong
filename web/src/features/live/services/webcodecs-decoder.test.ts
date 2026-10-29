@@ -288,6 +288,70 @@ describe('StreamDecoder 重同步语义', () => {
     }
   })
 
+  it('队列失控时重建解码器：必须 reset 清空待解码队列，而不是只打跳过标记', () => {
+    /**
+     * 回归保护：曾经的重同步只置 `skipping` 标记，没有 reset()，
+     * 于是 WebCodecs 内部的待解码 chunk 仍被逐个解出来 —— 现场实测
+     * decodeQueueSize=262、resyncs=11：客户端永久落后十几秒且每秒复发。
+     */
+    class FakeVideoDecoder {
+      static last: FakeVideoDecoder | null = null
+      state: 'unconfigured' | 'configured' | 'closed' = 'unconfigured'
+      decodeQueueSize = 0
+      resetCalls = 0
+
+      constructor(_callbacks: VideoDecoderInit) {
+        FakeVideoDecoder.last = this
+      }
+
+      configure(_config: VideoDecoderConfig) {
+        this.state = 'configured'
+      }
+
+      decode(_chunk: EncodedVideoChunk) {}
+
+      reset() {
+        this.resetCalls++
+        this.decodeQueueSize = 0
+        this.state = 'unconfigured'
+      }
+
+      close() {
+        this.state = 'closed'
+      }
+    }
+
+    class FakeEncodedVideoChunk {
+      constructor(_init: EncodedVideoChunkInit) {}
+    }
+
+    vi.stubGlobal('VideoDecoder', FakeVideoDecoder)
+    vi.stubGlobal('EncodedVideoChunk', FakeEncodedVideoChunk)
+
+    const decoder = new StreamDecoder({ onFrame: () => {} })
+    try {
+      expect(decoder.decode(packet({ isKeyFrame: true, ptsUs: 0 }))).toBe(true)
+      const fake = FakeVideoDecoder.last
+      expect(fake).not.toBeNull()
+
+      // 超过硬上限（64 帧）→ 立刻整段放弃，不必等持续 1 秒
+      fake!.decodeQueueSize = 262
+      expect(decoder.decode(packet({ isKeyFrame: false, ptsUs: 40_000 }))).toBe(
+        false
+      )
+
+      expect(fake!.resetCalls).toBeGreaterThan(0)
+      expect(decoder.getStats().resyncs).toBe(1)
+      expect(decoder.isSkipping()).toBe(true)
+      // 队列峰值可被读取并清零，供稳态健康行判断「吞吐不够 vs 成簇到达」
+      expect(decoder.takeDecodeQueuePeak()).toBe(262)
+      expect(decoder.takeDecodeQueuePeak()).toBe(0)
+    } finally {
+      decoder.close()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('时间轴跳变后必须等待关键帧（不能继续喂 delta 帧）', () => {
     const decoder = new StreamDecoder({ onFrame: () => {} })
     try {

@@ -47,11 +47,18 @@ type StreamClient struct {
 	dispatcher *StreamDispatcher
 	logger     *zap.Logger
 	done       chan struct{}
+	// subscribedAt 是**注册**时刻（由 RegisterClient 在锁内打点），仅用于首帧耗时诊断。
+	// ⚠️ 不要在构造函数里初始化：构造到注册之间可能隔着排队，基准点会漂。
+	subscribedAt time.Time
 	// 只有 WebSocket 写成功才推进基准；首帧先以最早排队的 DTS 初始化，确保写阻塞时预算仍会增长。
 	lastProgressDTSUS int64
-	closeOnce         sync.Once
-	needsKey          bool
-	hasProgressDTS    bool
+	// skippedBeforeFirstFrame 统计首帧写出前因等待关键帧而被跳过的帧数，
+	// 用于区分「卡在 RTSP 建连」与「卡在等 IDR」。
+	skippedBeforeFirstFrame int
+	closeOnce               sync.Once
+	needsKey                bool
+	hasProgressDTS          bool
+	hasWrittenFrame         bool
 }
 
 // NewStreamClient 构造单个客户端。
@@ -66,6 +73,19 @@ func NewStreamClient(conn *websocket.Conn, dispatcher *StreamDispatcher, logger 
 		logger:     logger,
 		done:       make(chan struct{}),
 	}
+}
+
+// advanceProgressDTS 把写出进度推进到 dtsUS，**只前进，绝不回退**。
+//
+// 单调性是这条字段的全部意义：补发 GOP 时进度会被预先锚在末帧，而「补发首帧真的
+// 写进 socket」的回调要晚一拍才到；若那里按最后一次写入直接赋值，进度就会倒退一整个
+// GOP，紧随其后的实时帧被误判为滞后，整段队列被清空。调用方必须持有 dispatcher 锁。
+func (c *StreamClient) advanceProgressDTS(dtsUS int64) {
+	if c.hasProgressDTS && dtsUS <= c.lastProgressDTSUS {
+		return
+	}
+	c.lastProgressDTSUS = dtsUS
+	c.hasProgressDTS = true
 }
 
 // Close 关闭客户端发送管道与连接。

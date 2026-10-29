@@ -36,6 +36,8 @@ export interface LivePlayerProps {
   className?: string
   cameraId?: string | null
   showAIOverlay?: boolean
+  /** 首个画面画到 canvas 时回调一次，供上层收起「等待首帧」遮罩。 */
+  onFirstFrame?: () => void
 }
 
 /**
@@ -51,6 +53,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
       className = '',
       cameraId,
       showAIOverlay = true,
+      onFirstFrame,
     },
     ref
   ): React.JSX.Element {
@@ -130,12 +133,14 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
     const { decoderRef, reset: resetRenderLoop } = useWebCodecsRenderLoop({
       enabled: isSupported,
       canvasRef,
+      traceId: cameraId ?? 'live-player',
       onFrameDrawn: handleFrameDrawn,
       onDecodeError: (error: unknown) => {
         onErrorRef.current?.(
           error instanceof Error ? error.message : 'WebCodecs 解码异常'
         )
       },
+      onFirstFrame,
       // ⚠️ 不要用 showAIOverlay 当 restartKey。
       //
       // restartKey 变化会销毁并重建解码器，而重建后必须等下一个 IDR 才能出画

@@ -47,11 +47,9 @@ export function useLiveGrid(): UseLiveGridReturn {
   }, [])
 
   const assignCamera = useCallback(
-    (
-      cellId: number,
-      camera: LiveCameraItem,
-      streamType: StreamType = 'main'
-    ) => {
+    (cellId: number, camera: LiveCameraItem, streamType?: StreamType) => {
+      const resolvedStreamType: StreamType =
+        streamType ?? (layout > 1 && camera.hasSubStream ? 'sub' : 'main')
       setCells((prev) =>
         prev.map((cell) =>
           cell.cellId === cellId
@@ -59,13 +57,14 @@ export function useLiveGrid(): UseLiveGridReturn {
                 ...cell,
                 cameraId: camera.id,
                 cameraName: camera.name,
-                streamType,
+                hasSubStream: camera.hasSubStream,
+                streamType: resolvedStreamType,
               }
             : cell
         )
       )
     },
-    []
+    [layout]
   )
 
   const clearCell = useCallback((cellId: number) => {
@@ -76,6 +75,7 @@ export function useLiveGrid(): UseLiveGridReturn {
               ...cell,
               cameraId: null,
               cameraName: undefined,
+              hasSubStream: undefined,
             }
           : cell
       )
@@ -103,9 +103,13 @@ export function useLiveGrid(): UseLiveGridReturn {
   const setCellStreamType = useCallback(
     (cellId: number, streamType: StreamType) => {
       setCells((prev) =>
-        prev.map((cell) =>
-          cell.cellId === cellId ? { ...cell, streamType } : cell
-        )
+        prev.map((cell) => {
+          if (cell.cellId !== cellId) return cell
+          if (streamType === 'sub' && !cell.hasSubStream) {
+            return cell
+          }
+          return { ...cell, streamType }
+        })
       )
     },
     []

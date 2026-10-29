@@ -220,6 +220,14 @@ func (r *StateRegistry) UpdateSessionState(cameraID, role, sessionState string) 
 	stream.Session = sessionState
 
 	now := time.Now().UTC()
+	if sessionState == SessionStateRunning {
+		// ⚠️ 转为 running 时必须重置活性基线。
+		//
+		// 否则调度器会拿上一次探测留下的陈旧 LastCheckedAt 与 now 比较，在首个数据包
+		// 到达前就判出 packet_timeout（实测 elapsed=9531ms）——冷启动必现的假告警，
+		// 而且会把相机推进失败态、向 SSE 广播一次假故障。
+		stream.LastCheckedAt = &now
+	}
 	r.aggregateCameraStateLocked(state, now)
 	return r.cloneState(state)
 }

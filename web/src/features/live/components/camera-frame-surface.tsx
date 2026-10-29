@@ -99,6 +99,7 @@ export function CameraFrameSurface({
   const { decoderRef } = useWebCodecsRenderLoop({
     enabled: Boolean(cameraId) && isSupported,
     canvasRef,
+    traceId: cameraId ?? 'frame-surface',
     isPaused: () => pausedRef.current,
     onFrameDrawn: handleFrameDrawn,
     onDecodeError: handleDecodeError,

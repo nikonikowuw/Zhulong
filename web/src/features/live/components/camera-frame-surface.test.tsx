@@ -48,6 +48,29 @@ vi.mock('../services/webcodecs-decoder', () => ({
       mocks.close()
     }
     reset() {}
+    // 起播追踪接口：替身必须与真实 StreamDecoder 同步，否则渲染循环会抛错。
+    markFirstOutputAt() {}
+    getFirstDecodeCallAtMs() {
+      return null
+    }
+    getFirstSubmitAtMs() {
+      return null
+    }
+    getFirstOutputAtMs() {
+      return null
+    }
+    isSkipping() {
+      return false
+    }
+    getStats() {
+      return { resyncs: 0, rebuilds: 0, errors: 0 }
+    }
+    getDecodeQueueSize() {
+      return 0
+    }
+    getSeqGapFrames() {
+      return 0
+    }
   },
 }))
 

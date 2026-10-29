@@ -105,6 +105,14 @@ Options parse_options(const Zhulong_stream_options *options);
 std::string normalize_rtsp_url(const char *url);
 
 /**
+ * @brief 抹掉 RTSP URL 中的 userinfo（user:pass@）以安全落日志。
+ *
+ * 全局静默 FFmpeg 日志正是为了不泄露凭据；RTSP 事务计时是那条策略下唯一的放行
+ * 通道，因此脱敏必须独立可测，而不是靠人眼在日志里确认。
+ */
+std::string redact_credentials(std::string text);
+
+/**
  * @brief 跨线程协作式取消与超时控制状态
  *
  * 线程访问规则：

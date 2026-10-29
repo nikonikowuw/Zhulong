@@ -51,6 +51,45 @@ describe('useLiveGrid', () => {
     expect(result.current.cells[1].cameraId).toBeNull()
   })
 
+  it('多分屏下未指定码流时自动选择子流，单分屏下选择主流', async () => {
+    const { result, act } = await renderHook(() => useLiveGrid())
+
+    await act(() => {
+      result.current.assignCamera(0, dummyCamera)
+    })
+    expect(result.current.cells[0].streamType).toBe('sub')
+
+    await act(() => {
+      result.current.setLayout(1)
+    })
+    await act(() => {
+      result.current.assignCamera(0, dummyCamera)
+    })
+    expect(result.current.cells[0].streamType).toBe('main')
+  })
+
+  it('相机无子流时多分屏仍选择主流，且禁止切换至子流', async () => {
+    const singleStreamCamera: LiveCameraItem = {
+      id: 'cam-single',
+      name: '单流相机',
+      status: 'online',
+      hasSubStream: false,
+      codec: 'h265',
+    }
+    const { result, act } = await renderHook(() => useLiveGrid())
+
+    await act(() => {
+      result.current.assignCamera(0, singleStreamCamera)
+    })
+    expect(result.current.cells[0].streamType).toBe('main')
+    expect(result.current.cells[0].hasSubStream).toBe(false)
+
+    await act(() => {
+      result.current.setCellStreamType(0, 'sub')
+    })
+    expect(result.current.cells[0].streamType).toBe('main')
+  })
+
   it('支持单窗放大与还原', async () => {
     const { result, act } = await renderHook(() => useLiveGrid())
 

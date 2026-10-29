@@ -1,4 +1,5 @@
 import { useEffect, useId, useState, useCallback, useRef } from 'react'
+import { createPoolColdStartTrace } from '../services/cold-start-trace'
 import { StreamConnectionPool } from '../services/stream-pool'
 import {
   type ParsedPacket,
@@ -56,21 +57,28 @@ export function useStreamConnection({
     }
 
     const pool = StreamConnectionPool.getInstance()
+    // 传输侧起播追踪：回答「服务端到底多快给了什么」，与渲染侧的 cold_start_render 拼成全链路。
+    const trace = createPoolColdStartTrace({ cameraId, streamType })
     const unsubscribe = pool.subscribe(cameraId, streamType, {
       id: subscriberId,
       onStatusChange: (newStatus, error) => {
         setStatus(newStatus)
         setErrorMessage(error)
+        trace.observeStatus(newStatus)
       },
       onStatsUpdate: (newStats) => {
         setStats(newStats)
       },
       onFrame: (frame) => onFrameRef.current?.(frame),
-      onPacket: (packet) => onPacketRef.current?.(packet),
+      onPacket: (packet) => {
+        trace.observePacket(packet)
+        onPacketRef.current?.(packet)
+      },
     })
 
     return () => {
       unsubscribe()
+      trace.dispose()
     }
   }, [cameraId, streamType, enabled, subscriberId])
 

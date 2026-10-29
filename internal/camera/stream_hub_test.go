@@ -216,6 +216,8 @@ func TestStreamHubOnDemandAcquireAndRelease(t *testing.T) {
 		done:       make(chan struct{}),
 		logger:     logger,
 	}
+	// 缩短空闲热保留窗口，让「订阅者清零 → 延迟释放」能在测试时间内完成。
+	disp.idleCloseDelay = 20 * time.Millisecond
 	disp.RegisterClient(clientA)
 
 	// 验证状态机切换为 running
@@ -257,16 +259,30 @@ func TestStreamHubOnDemandAcquireAndRelease(t *testing.T) {
 		t.Fatalf("expected 1 active stream, got %d", hub.ActiveStreams())
 	}
 
-	// 4. Client B 断开 -> 订阅者清零，自动关闭并释放底层流
+	// 4. Client B 断开 -> 订阅者清零。分发器不在此时销毁，而是进入空闲热保留窗口：
+	//    保留底层订阅与 GOP 缓存，供切页/刷新的客户端秒开复用。
 	disp.UnregisterClient(clientB)
-	if hub.ActiveStreams() != 0 {
-		t.Fatalf("expected 0 active streams after all unsubscribed, got %d", hub.ActiveStreams())
+	if disp.SubscriberCount() != 0 {
+		t.Fatalf("expected 0 subscribers, got %d", disp.SubscriberCount())
+	}
+	if hub.ActiveStreams() != 1 {
+		t.Fatalf("expected dispatcher to stay warm during idle window, got %d", hub.ActiveStreams())
+	}
+
+	// 5. 空闲窗口到期 -> 才真正关闭并释放底层流
+	deadline := time.After(time.Second)
+	for hub.ActiveStreams() != 0 {
+		select {
+		case <-deadline:
+			t.Fatalf("timeout waiting for idle dispatcher to close, got %d", hub.ActiveStreams())
+		case <-time.After(time.Millisecond):
+		}
 	}
 
 	// 验证状态机切为 idle。
 	// SessionStateIdle 由 StreamDispatcher 的收流协程异步写入（stream_dispatcher.go 中的
 	// UpdateSessionState 调用），可能晚于 UnregisterClient 返回，因此必须轮询等待而不能立即断言。
-	deadline := time.After(time.Second)
+	deadline = time.After(time.Second)
 	for {
 		info, ok = registry.GetState(camID)
 		if ok && info != nil && info.Streams["main"] != nil && info.Streams["main"].Session == SessionStateIdle {
@@ -277,6 +293,67 @@ func TestStreamHubOnDemandAcquireAndRelease(t *testing.T) {
 			t.Fatalf("timeout waiting for SessionStateIdle, got %v", info)
 		case <-time.After(time.Millisecond):
 		}
+	}
+}
+
+// 空闲窗口内重连必须复用热流与 GOP 缓存：不重新 AcquireStream，也不重建分发器。
+// 这是「起播卡 1~2 秒」只在真正冷启时发生的前提。
+func TestStreamDispatcherWarmStreamReuseWithinIdleWindow(t *testing.T) {
+	store, cipher, camID, cleanup := setupTestStoreAndCipher(t)
+	defer cleanup()
+
+	mockEngine := newMockMediaEngine()
+	registry := NewStateRegistry()
+	registry.InitCameraState(&Camera{
+		ID:       camID,
+		Name:     "Warm Reuse Camera",
+		Enabled:  true,
+		Revision: 1,
+		Streams:  []CameraStream{{Role: "main"}},
+	})
+	logger := zap.NewNop()
+
+	hub := NewStreamHub(mockEngine, store, cipher, registry, nil, logger)
+	defer hub.Close()
+
+	disp, err := hub.GetOrCreateDispatcher(context.Background(), camID, "main")
+	if err != nil {
+		t.Fatalf("get or create dispatcher failed: %v", err)
+	}
+
+	first := &StreamClient{
+		sendChan:   make(chan outFrame, 16),
+		dispatcher: disp,
+		done:       make(chan struct{}),
+		logger:     logger,
+	}
+	disp.RegisterClient(first)
+	disp.UnregisterClient(first)
+
+	// 窗口内重连：同一分发器实例，不重新打开 RTSP 流
+	reused, err := hub.GetOrCreateDispatcher(context.Background(), camID, "main")
+	if err != nil {
+		t.Fatalf("warm reuse failed: %v", err)
+	}
+	if reused != disp {
+		t.Fatal("expected warm dispatcher reuse within idle window, got a fresh one")
+	}
+	if got := mockEngine.getAcquireCount(); got != 1 {
+		t.Fatalf("acquire count = %d, want 1: warm reuse must not re-open the RTSP stream", got)
+	}
+
+	// 重新有人观看：会话状态必须从 idle 翻回 running
+	second := &StreamClient{
+		sendChan:   make(chan outFrame, 16),
+		dispatcher: disp,
+		done:       make(chan struct{}),
+		logger:     logger,
+	}
+	disp.RegisterClient(second)
+
+	info, ok := registry.GetState(camID)
+	if !ok || info == nil || info.Streams["main"] == nil || info.Streams["main"].Session != SessionStateRunning {
+		t.Fatalf("expected SessionStateRunning after warm reconnect, got %v", info)
 	}
 }
 
@@ -370,6 +447,75 @@ func TestStreamDispatcherGOPCacheInstantPlayback(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("timeout waiting for realtime frame after priming")
+	}
+}
+
+// 验证当 WritePump 异步写出补发的首个关键帧时，markFrameWritten 绝不回滚已锚定在 GOP 末帧的进度。
+// 否则后续实时帧一到，就会因「实时帧 DTS - 补发首帧 DTS > 500ms」被误判为 lag 并清空整个 GOP，导致秒开失效。
+func TestStreamDispatcherGOPPrimingProgressNotRewoundByMarkFrameWritten(t *testing.T) {
+	disp := NewStreamDispatcher(nil, "cam_test_priming", "main", nil, nil, nil, zap.NewNop())
+	defer disp.Close()
+
+	// 1. 发送 2 秒长的 GOP：首帧 IDR (10,000 us)，尾帧 P (2,000,000 us)
+	keyPkt := engine.Packet{
+		Codec:      engine.CodecH264,
+		KeyFrame:   true,
+		PtsUS:      10000,
+		DtsUS:      10000,
+		FrameClass: engine.FrameIDR,
+		GOPID:      1,
+		Data:       []byte{0x00, 0x00, 0x00, 0x01, 0x67, 0x42},
+	}
+	disp.Broadcast(keyPkt)
+
+	tailPkt := engine.Packet{
+		Codec:      engine.CodecH264,
+		KeyFrame:   false,
+		PtsUS:      2000000,
+		DtsUS:      2000000,
+		FrameClass: engine.FramePredictive,
+		GOPID:      1,
+		Data:       []byte{0x00, 0x00, 0x00, 0x01, 0x41},
+	}
+	disp.Broadcast(tailPkt)
+
+	// 2. 客户端接入，补发 GOP
+	client := &StreamClient{
+		sendChan:   make(chan outFrame, 16),
+		dispatcher: disp,
+		done:       make(chan struct{}),
+		logger:     zap.NewNop(),
+	}
+	disp.RegisterClient(client)
+
+	// 此时 client.lastProgressDTSUS 应为 tailPkt 的 2,000,000 us
+	frame0 := <-client.sendChan
+
+	// 3. 模拟 WritePump 成功发送了首帧并调用 markFrameWritten
+	disp.markFrameWritten(client, frame0)
+
+	// 4. 40ms 后下一枚实时帧到达 (2,040,000 us)
+	disp.Broadcast(engine.Packet{
+		Codec:      engine.CodecH264,
+		PtsUS:      2040000,
+		DtsUS:      2040000,
+		FrameClass: engine.FramePredictive,
+		GOPID:      1,
+		Data:       []byte{0x00, 0x00, 0x00, 0x01, 0x41},
+	})
+
+	// 5. 必须没有触发任何 LagResync，sendChan 里应有完整的内容
+	if got := disp.Counters().LagResyncs; got != 0 {
+		t.Fatalf("expected 0 lag resyncs, got %d (markFrameWritten rewound lastProgressDTSUS!)", got)
+	}
+
+	frameTail := <-client.sendChan
+	if frameTail.dtsUS != 2000000 {
+		t.Fatalf("expected primed tail frame dts 2000000, got %d", frameTail.dtsUS)
+	}
+	frameLive := <-client.sendChan
+	if frameLive.dtsUS != 2040000 {
+		t.Fatalf("expected live frame dts 2040000, got %d", frameLive.dtsUS)
 	}
 }
 
@@ -1172,4 +1318,49 @@ func TestStreamHub_ConsumeAIResults_RegionFiltering(t *testing.T) {
 	}
 
 	hub.ReleaseAIStreamSubscriber(camID, "test_algo")
+}
+
+// 热保留必须有路数上限：看过的机位不能按浏览历史无限常驻。
+//
+// 每条热流都还在拉 RTSP、跑包泵、占着 4 MiB 的 GOP 缓存；边缘设备没有
+// 「16 个机位各保留 10 分钟」的预算。超上限时按最早进入空闲的顺序立即释放。
+func TestStreamHubWarmStreamCapReleasesOldest(t *testing.T) {
+	hub := NewStreamHub(nil, nil, nil, nil, nil, zap.NewNop())
+	defer hub.Close()
+	hub.warmStreamCap = 2
+
+	cameraIDs := []string{"cam-1", "cam-2", "cam-3"}
+	dispatchers := make([]*StreamDispatcher, 0, len(cameraIDs))
+	for _, cameraID := range cameraIDs {
+		disp := NewStreamDispatcher(hub, cameraID, StreamRoleMain, nil, nil, nil, zap.NewNop())
+		hub.mu.Lock()
+		hub.dispatchers[cameraID+":"+StreamRoleMain] = disp
+		hub.mu.Unlock()
+		dispatchers = append(dispatchers, disp)
+		hub.markStreamWarm(cameraID, StreamRoleMain)
+	}
+
+	if !dispatcherClosed(dispatchers[0]) {
+		t.Fatal("oldest warm dispatcher must be released once the cap is exceeded")
+	}
+	for _, disp := range dispatchers[1:] {
+		if dispatcherClosed(disp) {
+			t.Fatalf("dispatcher %s must stay warm within the cap", disp.cameraID)
+		}
+	}
+	if got := hub.WarmStreams(); got != 2 {
+		t.Fatalf("warm streams = %d, want 2", got)
+	}
+
+	// 回来的流离开空闲集合，不再占热保留名额
+	hub.markStreamActive("cam-2", StreamRoleMain)
+	if got := hub.WarmStreams(); got != 1 {
+		t.Fatalf("warm streams = %d, want 1 after reactivation", got)
+	}
+}
+
+func dispatcherClosed(disp *StreamDispatcher) bool {
+	disp.mu.Lock()
+	defer disp.mu.Unlock()
+	return disp.closed
 }

@@ -10,7 +10,10 @@ import { isWebCodecsDiagnosticsEnabled } from './webcodecs-decoder'
 export interface RenderDiagnosticCounters {
   outputFrames: number
   pausedDrops: number
-  replacedPendingFrames: number
+  /** 被呈现调度器丢弃的帧（错过呈现窗口 / 超出队列上限 / 时间轴重建）。 */
+  presentationDrops: number
+  /** 呈现时钟因源流时间轴跳变而重锚的次数。 */
+  clockRebases: number
   rafRequests: number
   rafCallbacks: number
   rafWithoutFrame: number
@@ -47,7 +50,8 @@ function emptyCounters(): RenderDiagnosticCounters {
   return {
     outputFrames: 0,
     pausedDrops: 0,
-    replacedPendingFrames: 0,
+    presentationDrops: 0,
+    clockRebases: 0,
     rafRequests: 0,
     rafCallbacks: 0,
     rafWithoutFrame: 0,

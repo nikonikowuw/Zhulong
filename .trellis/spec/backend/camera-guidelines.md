@@ -110,7 +110,18 @@ CREATE TABLE camera_streams (
    - $0 \rightarrow 1$ 激活：首个 Web 客户端连入时，解密 RTSP 凭据并向 Native 引擎发起 `Acquire(ConsumerPreview)` 与 `Subscribe`，状态切为 `SessionStateRunning`，并立即向 `/api/v1/cameras/events` 广播状态变更。
    - 并发 Singleflight 保护：StreamHub 采用 `singleflight.Group` 协同合并对同一路流的并发获取请求，彻底避免击穿造成对摄像机重复发起物理 RTSP 握手与 C++ 句柄开销。
    - $1 \rightarrow N$ 扇出：同一路流多个 Web 观众共享单例物理拉流，单次封包并发扇出。
-   - $1 \rightarrow 0$ 释放：所有客户端断开后，注销拉流，进入 Native 8s Grace Period 防抖休眠，状态切为 `SessionStateIdle`，并向 SSE 广播状态变更。
+   - $1 \rightarrow 0$ 空闲热保留：所有客户端断开后立即把状态切为 `SessionStateIdle` 并向 SSE 广播，
+     但**分发器不立即销毁**，而是在 `idleCloseDelay`（默认 10min）内保住底层订阅与 GOP 缓存。
+     窗口内回来的客户端复用同一分发器与热 GOP，首帧只需一个目标延迟，而不是一次 RTSP 建连 + 等 IDR；
+     窗口到期才真正 Close，进入 Native 8s Grace Period 并释放物理流。
+   - ⚠️ **不要把「无观看者」和「不占资源」当成同一件事**：状态是语义信号（有没有人在看），
+     资源回收是延迟的。两者的解耦正是秒开的前提；立刻 Close 会让每次切页/刷新都付一次冷启动代价。
+   - ⚠️ **热保留必须有路数上限**（`defaultMaxWarmStreamDispatchers`，默认 4）：每条热流都还在拉 RTSP、跑包泵、
+     占着 4 MiB GOP 缓存。超上限时按「最早进入空闲」的顺序立即释放，绝不无限累积；
+     否则「看过 16 个机位」等于「16 条流常驻 10 分钟」，在 RK3568 上是实打实的带宽与内存。
+   - ⚠️ **`running` / `idle` 的写入必须串行**：分发器持有 `stateMu` 包住「写状态 + SSE 广播」，
+     并在锁内重新确认订阅者数。只在解锁后重新读一次 `len(subscribers)` 不够——
+     读与写之间仍可插进另一个方向的转换，最终状态会写反（有人观看却长期 idle，包超时监测随之失效）。
 
 3. **GOP 完整补发 (Instant Playback)**：
    - 分发器缓存**从最近 IDR 到当前时刻的完整帧窗口**（`gopCache`，字节上限 `gopCacheMaxBytes = 4 MiB`），新客户端在 `RegisterClient` 内**锁内**逐帧补齐。
@@ -118,7 +129,7 @@ CREATE TABLE camera_streams (
      外部表现就是「刚开始播放卡几帧、花一下才正常」。这是已修复的真实缺陷，不要重新引入。
    - 补发必须在 `d.mu` 内完成：与 `Broadcast` 互斥保证「历史帧 → 实时帧」顺序不乱；且此时客户端尚未进入
      `subscribers`，不会与 `Broadcast` 重复投递同一个 GOP 起点帧。
-   - 补发成功后 `client.lastSentUS` 必须落在 GOP 末帧；若停留在 GOP 起点，第一帧实时帧就会被时间预算
+   - 补发成功后 `client.lastProgressDTSUS` 必须落在 GOP 末帧；若停留在 GOP 起点，第一帧实时帧就会被时间预算
      判定为「落后」并丢弃刚补发的 IDR，秒开直接失效。
    - 队列装不下完整 GOP 时**整段放弃**并置 `needsKey`，等下一个 IDR —— 半截 GOP 等于断链，比不补更糟。
    - GOP 超过字节上限时 `gop.complete = false` 并告警，退化为「等下一个 IDR」。此时应在相机侧调小 GOP，
@@ -137,6 +148,20 @@ CREATE TABLE camera_streams (
 
 5. **观测计数**：`StreamDispatcher.Counters()` 暴露 `KeyframeInjected / LagResyncs / QueueResyncs / ResyncSkips /
    GOPTruncations / Subscribers`。现场排障优先看 `GOPTruncations`（相机 GOP 过长）与 `LagResyncs`（客户端跟不上）。
+
+6. **起播耗时必须可拆分测量**：起播 1~2 秒是典型投诉，它可能来自四个完全不同的阶段，
+   不拆开就只能猜。固定两端各一条日志：
+   - Native `rtsp_startup_timing open_ms=… info_ms=… first_packet_ms=… analyzeduration_us=…`；
+   - Go `preview first frame written since_subscribe_ms=… skipped_before_first_frame=… first_frame_is_idr=…`。
+
+   两者相减即可定位：`open_ms` 大 → 网络/凭证；`info_ms` 大 → `analyzeduration` 探测窗口过长
+   （RTSP 的 SDP 已带 codec/分辨率/参数集，1s 探测纯属浪费）；`skipped_before_first_frame` 大 →
+   在等相机下一个 IDR（相机 GOP 配置问题，改代码没用）。
+
+   ⚠️ **缩短探测窗口（`probesize` 128 KiB / `analyzeduration` 300ms）必须有兼容档兜底**：
+   SDP 不带 `sprop-parameter-sets`、首包不是 IDR、低码率 H.265 等情况下，快速档可能读不到完整参数集，
+   `avformat_find_stream_info` 返回负值。此时**不得直接判流不可用**，而是关闭并重连一次、
+   用旧上限（1 MiB / 1s）重试，日志记 `rtsp_probe_fallback`。把「探测不足」当成「相机坏了」是现场不可接受的误判。
 
 ---
 

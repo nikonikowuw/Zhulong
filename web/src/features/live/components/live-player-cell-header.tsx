@@ -51,31 +51,43 @@ export function LivePlayerCellHeader({
 
       <div className='flex items-center gap-0.5'>
         {/* 主/子流切换 */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant='ghost'
-              size='sm'
-              className={`gap-0.5 text-muted-foreground hover:text-foreground ${
-                isMicro ? 'h-5 px-1 text-[10px]' : 'h-6 px-1.5 text-[11px]'
-              }`}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <span>
-                {cell.streamType === 'main' ? t('mainStream') : t('subStream')}
-              </span>
-              <ChevronDown className='h-2.5 w-2.5 opacity-50' />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align='end' className='min-w-[100px]'>
-            <DropdownMenuItem onClick={() => onSetStreamType('main')}>
-              {t('mainStreamHd')}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => onSetStreamType('sub')}>
-              {t('subStreamSd')}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {cell.hasSubStream ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant='ghost'
+                size='sm'
+                className={`gap-0.5 text-muted-foreground hover:text-foreground ${
+                  isMicro ? 'h-5 px-1 text-[10px]' : 'h-6 px-1.5 text-[11px]'
+                }`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <span>
+                  {cell.streamType === 'main'
+                    ? t('mainStream')
+                    : t('subStream')}
+                </span>
+                <ChevronDown className='h-2.5 w-2.5 opacity-50' />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align='end' className='min-w-[100px]'>
+              <DropdownMenuItem onClick={() => onSetStreamType('main')}>
+                {t('mainStreamHd')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onSetStreamType('sub')}>
+                {t('subStreamSd')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <span
+            className={`font-mono text-muted-foreground select-none ${
+              isMicro ? 'px-1 text-[9px]' : 'px-1.5 text-[10px]'
+            }`}
+          >
+            HD
+          </span>
+        )}
 
         {/* 彩条测试图切换 */}
         <Button

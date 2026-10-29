@@ -24,6 +24,7 @@ export interface LiveCellState {
   cellId: number
   cameraId: string | null
   cameraName?: string
+  hasSubStream?: boolean
   streamType: StreamType
   isMuted: boolean
 }

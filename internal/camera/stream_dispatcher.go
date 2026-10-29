@@ -21,6 +21,17 @@ const (
 
 	// 4 MiB 单路 GOP 缓存字节上限；帧数同时受客户端队列容量约束。
 	gopCacheMaxBytes = 4 << 20
+
+	// defaultIdleCloseDelay 是最后一个客户端离开后保留分发器与 GOP 缓存的时长。
+	//
+	// 立刻 Close 会把「已经热起来的流」连同 GOP 缓存一起销毁：用户从监控页切走
+	// 再回来（或 F5）就得重走 RTSP 建连并等相机下一个 IDR，首帧代价 1~2 秒。
+	// native 层对物理流本来就有 8 秒宽限期，Go 层缺的正是这一半。
+	//
+	// 取 10 分钟而不是秒级：一次 RTSP 建连实测要 1~2 秒（日志 open_ms=1236），
+	// 这段时间没有任何东西可以掩盖。窗口越短，用户切几次页就要付几次这笔钱。
+	// 现场按 NVR 的常态理解——相机本来就该常连——10 分钟空闲才释放是可以接受的。
+	defaultIdleCloseDelay = 10 * time.Minute
 )
 
 // gopCache 是从最近一个关键帧到当前时刻的**完整**帧窗口。
@@ -53,6 +64,16 @@ type StreamDispatcher struct {
 	lagResyncs       atomic.Uint64
 	closeOnce        sync.Once
 	mu               sync.Mutex
+	// stateMu 把「写会话状态 + SSE 广播」变成一次串行事务。
+	//
+	// 仅靠解锁后重新读一次订阅者数是不够的：读与写之间仍可插进另一个方向的转换，
+	// 最终状态会被写反（有人观看却长期 idle，session 判定错位后包超时监测也随之失效）。
+	// 锁序固定为 stateMu → mu，禁止反向持有。
+	stateMu sync.Mutex
+	// idleTimer 在订阅者归零后延迟销毁，保住热流与 GOP 缓存供快速重连复用。
+	idleTimer *time.Timer
+	// idleCloseDelay 是保留热流的时长；字段化以便测试缩短，不改变生产默认值。
+	idleCloseDelay time.Duration
 	// seq 是流级帧序号：即使某个客户端自己跳了帧，也能从 seq 空洞看出
 	// 「是流本身丢了包」还是「是我这边主动丢的」，这是定位问题的关键分界。
 	seq    atomic.Uint32
@@ -81,6 +102,8 @@ func NewStreamDispatcher(
 		stream:      stream,
 		sub:         sub,
 		cancelPump:  cancelPump,
+
+		idleCloseDelay: defaultIdleCloseDelay,
 	}
 }
 
@@ -103,16 +126,15 @@ func (d *StreamDispatcher) RegisterClient(client *StreamClient) {
 
 	primed := 0
 	client.needsKey = true
+	// wasIdle 表示本客户端是在空闲热保留窗口内回来的：需要把会话状态翻回 running。
+	// （首次建流时状态由 RunPumpLoop 负责，不能在这里重复广播。）
+	wasIdle := d.stopIdleTimerLocked()
 	if d.gop.complete && len(d.gop.frames) > 0 {
 		client.needsKey = false
 	prime:
 		for _, frame := range d.gop.frames {
 			select {
 			case client.sendChan <- frame:
-				if !client.hasProgressDTS {
-					client.lastProgressDTSUS = frame.dtsUS
-					client.hasProgressDTS = true
-				}
 				primed++
 			default:
 				// 队列装不下完整 GOP：整段放弃，从下一个 IDR 干净接入
@@ -124,11 +146,34 @@ func (d *StreamDispatcher) RegisterClient(client *StreamClient) {
 				break prime
 			}
 		}
+
+		if primed > 0 {
+			// ⚠️ 进度基准必须锚在补发的**最后一帧**（即此刻的实时边缘），不能锚在第一帧。
+			//
+			// 锚在第一帧会让紧接着到达的第一枚实时帧看起来落后了整整一个 GOP：
+			// 相机 GOP 常为 2s，远大于 maxClientLagUS(500ms)，于是 deliverLocked 必然
+			// 判定客户端滞后 → drainLocked 清掉尚在队列里、还没发出去的 GOP 尾部
+			// → needsKey=true 等相机下一个 IDR。
+			// 客户端实际收到的是一个被截断的 GOP，表现为「起播必定卡 1~2 秒」。
+			//
+			// 语义上也是如此：补发完成后，客户端已被推进到该 GOP 的尾帧，
+			// 滞后的只是「写入 socket」这一步，由队列满路径开关负责兜底。
+			client.advanceProgressDTS(d.gop.frames[primed-1].dtsUS)
+		}
 	}
 
 	d.subscribers[client] = struct{}{}
+	// 注册时刻必须在锁内打点：它只用于起播耗时诊断，基准点必须是「注册」而不是「构造」。
+	client.subscribedAt = time.Now()
 	count := len(d.subscribers)
 	d.mu.Unlock()
+
+	if wasIdle {
+		if d.hub != nil {
+			d.hub.markStreamActive(d.cameraID, d.role)
+		}
+		d.publishSessionState(SessionStateRunning, nil)
+	}
 
 	d.logger.Debug("client subscribed to stream",
 		zap.String("camera_id", d.cameraID),
@@ -148,6 +193,11 @@ func (d *StreamDispatcher) UnregisterClient(client *StreamClient) {
 
 	delete(d.subscribers, client)
 	remaining := len(d.subscribers)
+	if remaining == 0 {
+		// 必须在锁内登记空闲定时器：RegisterClient 靠 idleTimer != nil 判定
+		// 「本次是空闲窗口内回来」，登记延后会让状态机漏掉一次 running。
+		d.scheduleIdleCloseLocked()
+	}
 	d.mu.Unlock()
 
 	d.logger.Debug("client unsubscribed from stream",
@@ -157,8 +207,66 @@ func (d *StreamDispatcher) UnregisterClient(client *StreamClient) {
 	)
 
 	if remaining == 0 {
-		d.Close()
+		d.publishSessionState(SessionStateIdle, func() bool {
+			// 广播前在 stateMu 内重新确认仍无订阅者：解锁到广播之间可能已经有客户端
+			// 重新注册（并已广播过 running），此时再发 idle 会把状态机写反。
+			d.mu.Lock()
+			idle := !d.closed && len(d.subscribers) == 0
+			d.mu.Unlock()
+			return idle
+		})
+		if d.hub != nil {
+			d.hub.markStreamWarm(d.cameraID, d.role)
+		}
 	}
+}
+
+// publishSessionState 串行地写入会话状态并广播，可选地先做一次幂等/前提校验。
+//
+// `precondition` 在 stateMu 内执行，因此「校验 → 写状态 → 广播」对其他同样走本方法的
+// 转换是原子的；这是 idle/running 不会互相覆盖的唯一保证。
+func (d *StreamDispatcher) publishSessionState(state string, precondition func() bool) {
+	d.stateMu.Lock()
+	defer d.stateMu.Unlock()
+
+	if d.hub == nil || d.hub.registry == nil {
+		return
+	}
+	if precondition != nil && !precondition() {
+		return
+	}
+	if newState := d.hub.registry.UpdateSessionState(d.cameraID, d.role, state); newState != nil {
+		d.hub.broadcastState(newState)
+	}
+}
+
+// scheduleIdleCloseLocked 在最后一个订阅者离开后延迟销毁分发器，要求持有 d.mu。
+//
+// 延迟窗口内保留底层订阅与 GOP 缓存：期间回来的客户端走 RegisterClient 的
+// 整段补发，首帧只需一个目标延迟，而不是一次 RTSP 建连 + 等 IDR。
+func (d *StreamDispatcher) scheduleIdleCloseLocked() {
+	if d.closed {
+		return
+	}
+	d.stopIdleTimerLocked()
+	d.idleTimer = time.AfterFunc(d.idleCloseDelay, func() {
+		d.mu.Lock()
+		stillIdle := !d.closed && len(d.subscribers) == 0
+		d.mu.Unlock()
+		if stillIdle {
+			d.Close()
+		}
+	})
+}
+
+// stopIdleTimerLocked 撤销待执行的空闲销毁，返回撤销前是否处于空闲窗口；要求持有 d.mu。
+func (d *StreamDispatcher) stopIdleTimerLocked() bool {
+	if d.idleTimer == nil {
+		return false
+	}
+	d.idleTimer.Stop()
+	d.idleTimer = nil
+	return true
 }
 
 // Broadcast 封包底层视频帧并扇出给所有已连接客户端。
@@ -243,6 +351,9 @@ func (d *StreamDispatcher) deliverLocked(client *StreamClient, frame outFrame) {
 	if client.needsKey {
 		if frame.frame != WireFrameIDR {
 			d.resyncSkips.Add(1)
+			if !client.hasWrittenFrame {
+				client.skippedBeforeFirstFrame++
+			}
 			return
 		}
 		client.needsKey = false
@@ -287,11 +398,29 @@ func (d *StreamDispatcher) deliverLocked(client *StreamClient, frame outFrame) {
 	}
 }
 
+// markFrameWritten 记录客户端的发送进度，并在首帧落盘时输出一条起播耗时诊断。
+//
+// 首帧耗时是判断「起播卡 1~2 秒」到底卡在 RTSP 建连、等 IDR 还是补发阶段的
+// 最直接证据：它与 native 的 rtsp_startup_timing 日志相加即为完整的起播预算。
 func (d *StreamDispatcher) markFrameWritten(client *StreamClient, frame outFrame) {
 	d.mu.Lock()
-	client.lastProgressDTSUS = frame.dtsUS
-	client.hasProgressDTS = true
+	client.advanceProgressDTS(frame.dtsUS)
+	firstFrame := !client.hasWrittenFrame
+	skipped := client.skippedBeforeFirstFrame
+	if firstFrame {
+		client.hasWrittenFrame = true
+	}
 	d.mu.Unlock()
+
+	if firstFrame {
+		d.logger.Info("preview first frame written",
+			zap.String("camera_id", d.cameraID),
+			zap.String("role", d.role),
+			zap.Int64("since_subscribe_ms", time.Since(client.subscribedAt).Milliseconds()),
+			zap.Int("skipped_before_first_frame", skipped),
+			zap.Bool("first_frame_is_idr", frame.frame == WireFrameIDR),
+		)
+	}
 }
 
 // drainLocked 丢弃客户端全部待发帧（非阻塞），为新一帧腾出空间。
@@ -332,12 +461,8 @@ func (d *StreamDispatcher) Counters() DispatchCounters {
 
 // RunPumpLoop 持续从底层包源读取数据并广播，直到上下文取消或流出错。
 func (d *StreamDispatcher) RunPumpLoop(ctx context.Context) {
-	if d.hub != nil && d.hub.registry != nil {
-		newState := d.hub.registry.UpdateSessionState(d.cameraID, d.role, SessionStateRunning)
-		if newState != nil {
-			d.hub.broadcastState(newState)
-		}
-	}
+	// 与 idle/running 的其它转换串行：拉流启动也是一次会话状态迁移。
+	d.publishSessionState(SessionStateRunning, nil)
 
 	defer func() {
 		d.Close()
@@ -379,6 +504,7 @@ func (d *StreamDispatcher) Close() {
 	d.closeOnce.Do(func() {
 		d.mu.Lock()
 		d.closed = true
+		d.stopIdleTimerLocked()
 		if d.cancelPump != nil {
 			d.cancelPump()
 		}
@@ -410,12 +536,8 @@ func (d *StreamDispatcher) Close() {
 		// 从全局 Hub 移除自身
 		if d.hub != nil {
 			d.hub.removeDispatcher(d.cameraID, d.role)
-			if d.hub.registry != nil {
-				newState := d.hub.registry.UpdateSessionState(d.cameraID, d.role, SessionStateIdle)
-				if newState != nil {
-					d.hub.broadcastState(newState)
-				}
-			}
+			// 销毁本身就是一次状态迁移，同样走串行通道，避免与正在进行的 running 交错。
+			d.publishSessionState(SessionStateIdle, nil)
 		}
 
 		d.logger.Info("stream dispatcher closed",
