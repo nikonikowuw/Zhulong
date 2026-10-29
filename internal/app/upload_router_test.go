@@ -220,7 +220,7 @@ func TestUploadRouteEndToEndRealRouter(t *testing.T) {
 	}
 
 	// 2. Upload with limit set lower than payload -> must return 413 FILE_TOO_LARGE
-	comp.Handler.SetMaxUploadLimitForTest(1024) // 1 KB limit
+	comp.Handler.SetUploadLimit(1024) // 1 KB limit
 	reqOverLimit, _ := buildMultipartRequest(t, archivePath)
 	wOverLimit := httptest.NewRecorder()
 	router.ServeHTTP(wOverLimit, reqOverLimit)
@@ -238,7 +238,7 @@ func TestUploadRouteEndToEndRealRouter(t *testing.T) {
 	}
 
 	// 3. Reset limit and verify authentication guard on upload route
-	comp.Handler.SetMaxUploadLimitForTest(algorithm.MaxUploadSize)
+	comp.Handler.SetUploadLimit(algorithm.MaxUploadSize)
 	authStub := authStubService{}
 	routerWithAuth := newRouter(RouterParams{
 		Logger:          zap.NewNop(),

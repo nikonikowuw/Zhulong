@@ -7,7 +7,8 @@ func init() {
 		"PLATFORM_TARGET_CPU_RETIRED": {
 			"en":      "The package was built for the retired \"cpu\" target. Rebuild it for target \"onnx\" and install again",
 			"zh-Hans": "该算法包是为已退役的 \"cpu\" 档位构建的，请按 \"onnx\" 档位重新构建后再安装",
-			"zh-Hant": "此演算法套件是為已退役的 \"cpu\" 檔位建置的，請依 \"onnx\" 檔位重新建置後再安裝",
+			"zh-Hant": "此演算法套件是為已退役的 \"cpu\" 檔位建置的，" +
+				"請依 \"onnx\" 檔位重新建置後再安裝",
 		},
 		"ALGO_PLATFORM_MISMATCH": {
 			"en":      "Algorithm platform does not match host platform",

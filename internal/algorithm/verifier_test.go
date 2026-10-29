@@ -25,7 +25,7 @@ func TestVerifierMissingConventionFiles(t *testing.T) {
 	dir := t.TempDir()
 
 	// 1. Missing manifest
-	_, _, _, err := verifier.VerifyDirectory(ctx, dir)
+	_, err := verifier.VerifyDirectory(ctx, dir)
 	if !errors.Is(err, algorithm.ErrMissingManifestFile) {
 		t.Errorf("expected ErrMissingManifestFile, got: %v", err)
 	}
@@ -40,21 +40,21 @@ func TestVerifierMissingConventionFiles(t *testing.T) {
 	})
 	mustWriteFile(t, filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
 
-	_, _, _, err = verifier.VerifyDirectory(ctx, dir)
+	_, err = verifier.VerifyDirectory(ctx, dir)
 	if !errors.Is(err, algorithm.ErrMissingSampleFile) {
 		t.Errorf("expected ErrMissingSampleFile, got: %v", err)
 	}
 
 	// 3. 有样本但缺包根可执行文件（入口名 = manifest.id）
 	mustWriteFile(t, filepath.Join(dir, "sample.jpg"), []byte(`fake`), 0o644)
-	_, _, _, err = verifier.VerifyDirectory(ctx, dir)
+	_, err = verifier.VerifyDirectory(ctx, dir)
 	if !errors.Is(err, algorunner.ErrMissingEntry) {
 		t.Errorf("expected algorunner.ErrMissingEntry, got: %v", err)
 	}
 
 	// 4. 旧形态 plugin.so 不得被当成入口
 	mustWriteFile(t, filepath.Join(dir, "plugin.so"), []byte(`fake`), 0o755)
-	_, _, _, err = verifier.VerifyDirectory(ctx, dir)
+	_, err = verifier.VerifyDirectory(ctx, dir)
 	if !errors.Is(err, algorunner.ErrLegacyEntry) {
 		t.Errorf("expected algorunner.ErrLegacyEntry, got: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestVerifierMissingConventionFiles(t *testing.T) {
 
 	// 5. 补上入口即通过静态检查
 	mustWriteFile(t, filepath.Join(dir, "sample_pkg"), []byte(verifyStubScript(1)), 0o755)
-	if _, _, _, err := verifier.VerifyDirectory(ctx, dir); err != nil {
+	if _, err := verifier.VerifyDirectory(ctx, dir); err != nil {
 		t.Errorf("expected the package to verify, got: %v", err)
 	}
 }
@@ -88,7 +88,7 @@ func TestVerifierPlatformMismatch(t *testing.T) {
 	manifestBytes, _ := json.Marshal(manifest)
 	_ = os.WriteFile(filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
 
-	_, _, _, err := verifier.VerifyDirectory(ctx, dir)
+	_, err := verifier.VerifyDirectory(ctx, dir)
 	if !errors.Is(err, algorithm.ErrPlatformMismatch) {
 		t.Errorf("expected ErrPlatformMismatch, got: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestVerifierRejectsRetiredCPUTarget(t *testing.T) {
 	manifestBytes, _ := json.Marshal(manifest)
 	_ = os.WriteFile(filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
 
-	_, _, _, err := verifier.VerifyDirectory(ctx, dir)
+	_, err := verifier.VerifyDirectory(ctx, dir)
 	if !errors.Is(err, algorithm.ErrPlatformTargetRetired) {
 		t.Fatalf("expected ErrPlatformTargetRetired, got: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestVerifierInvalidComputeBudget(t *testing.T) {
 	manifestBytes, _ := json.Marshal(manifest)
 	_ = os.WriteFile(filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
 
-	_, _, _, err := verifier.VerifyDirectory(ctx, dir)
+	_, err := verifier.VerifyDirectory(ctx, dir)
 	if !errors.Is(err, algorithm.ErrInvalidComputeBudget) {
 		t.Errorf("expected ErrInvalidComputeBudget, got: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestVerifierManifestTokenCharset(t *testing.T) {
 				seedEntry(t, dir, tc.id)
 			}
 
-			_, _, _, err = verifier.VerifyDirectory(ctx, dir)
+			_, err = verifier.VerifyDirectory(ctx, dir)
 			if tc.expectErr {
 				if !errors.Is(err, algorithm.ErrInvalidManifestToken) {
 					t.Errorf("expected ErrInvalidManifestToken for %q, got: %v", tc.id, err)
@@ -256,7 +256,7 @@ func TestVerifierManifestTokenCharset(t *testing.T) {
 			t.Fatalf("marshal manifest: %v", err)
 		}
 		mustWriteFile(t, filepath.Join(dir, "manifest.json"), manifestBytes, 0o644)
-		if _, _, _, err := verifier.VerifyDirectory(ctx, dir); err == nil {
+		if _, err := verifier.VerifyDirectory(ctx, dir); err == nil {
 			t.Errorf("expected empty id to be rejected")
 		}
 	})
@@ -323,7 +323,7 @@ func TestStageAndVerifyRejectsPathEscape(t *testing.T) {
 // The packages here are stub entries rather than real models — that is the point
 // of the black-box stage, it only reads the report the entry prints.
 func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
-	verifier := algorithm.NewVerifier(x86Host())
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{})
 	ctx := context.Background()
 
 	writePackage := func(t *testing.T, manifest algorithm.Manifest, entryScript string) string {
@@ -348,7 +348,7 @@ func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
 		Resources: algorithm.ManifestResources{ComputeCost: 20, MemoryMB: 64},
 	}
 	dir := writePackage(t, detectionManifest, verifyStubScript(1))
-	if _, _, _, err := verifier.VerifyDirectory(ctx, dir); !errors.Is(err, algorithm.ErrResultTypeMismatch) {
+	if _, err := verifier.VerifyDirectory(ctx, dir); !errors.Is(err, algorithm.ErrResultTypeMismatch) {
 		t.Errorf("expected ErrResultTypeMismatch, got: %v", err)
 	}
 
@@ -357,7 +357,7 @@ func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
 	personManifest.Name = "mismatch_person_package"
 	personManifest.TaskType = algorithm.TaskTypePersonStructure // 期望 3，包报告 1
 	personDir := writePackage(t, personManifest, verifyStubScript(1))
-	if _, _, _, err := verifier.VerifyDirectory(ctx, personDir); !errors.Is(err, algorithm.ErrResultTypeMismatch) {
+	if _, err := verifier.VerifyDirectory(ctx, personDir); !errors.Is(err, algorithm.ErrResultTypeMismatch) {
 		t.Errorf("expected ErrResultTypeMismatch for person_structure vs detector, got: %v", err)
 	}
 
@@ -366,12 +366,12 @@ func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
 	validManifest.Name = "valid_detector"
 	validManifest.TaskType = algorithm.TaskTypeDetection
 	validDir := writePackage(t, validManifest, verifyStubScript(1))
-	parsedManifest, _, _, err := verifier.VerifyDirectory(ctx, validDir)
+	verified, err := verifier.VerifyDirectory(ctx, validDir)
 	if err != nil {
 		t.Fatalf("VerifyDirectory for a matching detector failed: %v", err)
 	}
-	if parsedManifest.ID != "valid_detector" {
-		t.Errorf("expected manifest ID valid_detector, got: %s", parsedManifest.ID)
+	if verified.Manifest.ID != "valid_detector" {
+		t.Errorf("expected manifest ID valid_detector, got: %s", verified.Manifest.ID)
 	}
 
 	validPersonManifest := detectionManifest
@@ -380,12 +380,12 @@ func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
 	validPersonManifest.TaskType = algorithm.TaskTypePersonStructure
 	validPersonManifest.Resources = algorithm.ManifestResources{ComputeCost: 30, MemoryMB: 128}
 	validPersonDir := writePackage(t, validPersonManifest, verifyStubScript(3))
-	parsedPersonManifest, _, _, err := verifier.VerifyDirectory(ctx, validPersonDir)
+	verifiedPerson, err := verifier.VerifyDirectory(ctx, validPersonDir)
 	if err != nil {
 		t.Fatalf("VerifyDirectory for a matching person_structure package failed: %v", err)
 	}
-	if parsedPersonManifest.ID != "valid_person_plugin" {
-		t.Errorf("expected manifest ID valid_person_plugin, got: %s", parsedPersonManifest.ID)
+	if verifiedPerson.Manifest.ID != "valid_person_plugin" {
+		t.Errorf("expected manifest ID valid_person_plugin, got: %s", verifiedPerson.Manifest.ID)
 	}
 }
 
@@ -412,7 +412,7 @@ func TestStageAndVerifyEndToEnd(t *testing.T) {
 	defer os.Remove(archivePath)
 
 	installBaseDir := t.TempDir()
-	verifier := algorithm.NewVerifier(x86Host())
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{})
 
 	pkg, err := verifier.StageAndVerify(context.Background(), archivePath, installBaseDir)
 	if err != nil {
@@ -444,7 +444,7 @@ func TestVerifierRejectsInvalidConfigSchema(t *testing.T) {
 	seedEntry(t, dir, "schema_pkg")
 	mustWriteFile(t, filepath.Join(dir, "config.schema.json"), []byte(`{"type":17}`), 0o644)
 
-	_, _, _, err := verifier.VerifyDirectory(context.Background(), dir)
+	_, err := verifier.VerifyDirectory(context.Background(), dir)
 	if !errors.Is(err, algorithm.ErrInvalidConfigSchema) {
 		t.Fatalf("expected invalid config schema error, got %v", err)
 	}

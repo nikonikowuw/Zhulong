@@ -2,7 +2,6 @@ package algorithm
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 )
@@ -53,9 +52,9 @@ func (i DeletionImpact) HasEvidence() bool {
 // 这是一个纯查询接口：前端应在弹出卸载确认框之前调用它，把结果展示给用户，
 // 用户确认后再发 DELETE。
 func (s *Service) GetDeletionImpact(ctx context.Context, id string) (*DeletionImpact, error) {
-	algo, err := s.store.GetAlgorithm(ctx, id)
+	algo, err := s.loadAlgorithm(ctx, id)
 	if err != nil {
-		return nil, s.wrapLoadError(err)
+		return nil, err
 	}
 
 	impact := &DeletionImpact{
@@ -90,13 +89,4 @@ func (s *Service) GetDeletionImpact(ctx context.Context, id string) (*DeletionIm
 	}
 
 	return impact, nil
-}
-
-// wrapLoadError 把底层错误统一成 API 错误，避免 GetAlgorithm 的三种失败在
-// 两个调用点（DELETE 与 impact 查询）出现不一致的文案。
-func (s *Service) wrapLoadError(err error) error {
-	if err == ErrNotFound {
-		return apperr.NotFound("ALGORITHM_NOT_FOUND", "Algorithm not found", err)
-	}
-	return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("get algorithm: %v", err), err)
 }

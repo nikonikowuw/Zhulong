@@ -22,6 +22,10 @@ var (
 	ErrAlgorithmAlreadyExisting = errors.New("algorithm with this name already exists")
 )
 
+// internalErrorCode 是服务端内部失败的统一机器码，文案由 httputil 按
+// Accept-Language 本地化，因此 message 只作为无 locale 条目时的兜底。
+const internalErrorCode = "INTERNAL_ERROR"
+
 // Service provides high-level business lifecycle management for algorithms.
 type Service struct {
 	store      *Store
@@ -43,7 +47,13 @@ type Service struct {
 const defaultRestartDebounce = 200 * time.Millisecond
 
 // NewService creates a new Service instance.
-func NewService(store *Store, verifier *Verifier, supervisor *algorunner.Supervisor, rt algorunner.Runtime, logger *zap.Logger) *Service {
+func NewService(
+	store *Store,
+	verifier *Verifier,
+	supervisor *algorunner.Supervisor,
+	rt algorunner.Runtime,
+	logger *zap.Logger,
+) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -56,6 +66,41 @@ func NewService(store *Store, verifier *Verifier, supervisor *algorunner.Supervi
 		restartTimers:   make(map[string]*time.Timer),
 		restartPending:  make(map[string]struct{}),
 		restartDebounce: defaultRestartDebounce,
+	}
+}
+
+// wrapLoadError 把 store 的读取失败统一成 API 错误。读取算法是几乎所有写
+// 操作的第一步，分散写会让 ALGORITHM_NOT_FOUND 的文案与机器码逐渐漂移。
+func wrapLoadError(err error) error {
+	if errors.Is(err, ErrNotFound) {
+		return apperr.NotFound("ALGORITHM_NOT_FOUND", "Algorithm not found", err)
+	}
+	return apperr.Internal(internalErrorCode, "Failed to get algorithm", err)
+}
+
+// loadAlgorithm 读取算法并把 store 错误映射成 API 错误。
+func (s *Service) loadAlgorithm(ctx context.Context, id string) (*Algorithm, error) {
+	algo, err := s.store.GetAlgorithm(ctx, id)
+	if err != nil {
+		return nil, wrapLoadError(err)
+	}
+	return algo, nil
+}
+
+// markActiveBestEffort 在 runner 已就绪后把 DB 状态收敛为 ACTIVE。
+//
+// 进程已经起来了，所以写入失败不该改变 HTTP 结果；但必须留痕：module.go 的
+// 开机 auto-start 只看 StatusActive，静默失败会让算法在下一次重启后再也不起来。
+func (s *Service) markActiveBestEffort(ctx context.Context, algo *Algorithm) {
+	if algo.Status == StatusActive {
+		return
+	}
+	if err := s.store.UpdateAlgorithmStatus(ctx, algo.ID, StatusActive); err != nil {
+		s.logger.Warn("runner is up but the ACTIVE status could not be persisted; "+
+			"the algorithm will not auto-start after a host restart",
+			zap.String("algorithm_id", algo.ID),
+			zap.Error(err),
+		)
 	}
 }
 
@@ -121,8 +166,12 @@ func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Al
 		return nil, normalizeInstallError(fmt.Errorf("verify and stage algorithm: %w", err))
 	}
 	discardStagedVersion := func() {
-		if removeErr := os.RemoveAll(s.rt.PackageDir(algo.ID, algo.Version)); removeErr != nil {
-			s.logger.Warn("failed to remove unregistered algorithm version", zap.String("path", s.rt.PackageDir(algo.ID, algo.Version)), zap.Error(removeErr))
+		dir := s.rt.PackageDir(algo.ID, algo.Version)
+		if removeErr := os.RemoveAll(dir); removeErr != nil {
+			s.logger.Warn("failed to remove unregistered algorithm version",
+				zap.String("path", dir),
+				zap.Error(removeErr),
+			)
 		}
 	}
 
@@ -142,8 +191,16 @@ func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Al
 
 		// If the previous version is active or supervised, transition the worker process
 		// under the supervision of RollbackGuard.
-		if s.supervisor != nil && (s.supervisor.GetStatus(existing.ID) == StatusRunning || existing.Status == StatusActive) {
-			if upgradeErr := s.supervisor.UpgradeAlgorithm(ctx, algo.ToPackageMeta(), existing.ToPackageMeta()); upgradeErr != nil {
+		// runnerLive 先判 nil：supervisor 是可缺席依赖（见 scheduleAlgorithmRestart）。
+		runnerLive := s.supervisor != nil && s.supervisor.GetStatus(existing.ID) == StatusRunning
+		previouslyEnabled := existing.Status == StatusActive
+		if runnerLive || previouslyEnabled {
+			upgradeErr := s.supervisor.UpgradeAlgorithm(
+				ctx,
+				algo.ToPackageMeta(),
+				existing.ToPackageMeta(),
+			)
+			if upgradeErr != nil {
 				s.logger.Warn("failed to transition runner process to upgraded version",
 					zap.String("id", algo.ID),
 					zap.Error(upgradeErr),
@@ -176,7 +233,7 @@ func (s *Service) InstallAlgorithm(ctx context.Context, archivePath string) (*Al
 func (s *Service) ListAlgorithms(ctx context.Context) ([]Algorithm, error) {
 	algos, err := s.store.ListAlgorithms(ctx)
 	if err != nil {
-		return nil, apperr.Internal("INTERNAL_ERROR", "Failed to list algorithms", err)
+		return nil, apperr.Internal(internalErrorCode, "Failed to list algorithms", err)
 	}
 	// Enrich with live supervisor status
 	for i := range algos {
@@ -190,12 +247,9 @@ func (s *Service) ListAlgorithms(ctx context.Context) ([]Algorithm, error) {
 
 // GetAlgorithm returns an algorithm by ID.
 func (s *Service) GetAlgorithm(ctx context.Context, id string) (*Algorithm, error) {
-	algo, err := s.store.GetAlgorithm(ctx, id)
+	algo, err := s.loadAlgorithm(ctx, id)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, apperr.NotFound("ALGORITHM_NOT_FOUND", "Algorithm not found", err)
-		}
-		return nil, apperr.Internal("INTERNAL_ERROR", "Failed to get algorithm", err)
+		return nil, err
 	}
 	liveStatus := s.supervisor.GetStatus(algo.ID)
 	if liveStatus != StatusDisabled {
@@ -206,76 +260,79 @@ func (s *Service) GetAlgorithm(ctx context.Context, id string) (*Algorithm, erro
 
 // EnableAlgorithm starts the runner subprocess and updates DB status to ACTIVE.
 func (s *Service) EnableAlgorithm(ctx context.Context, id string) error {
-	algo, err := s.store.GetAlgorithm(ctx, id)
+	algo, err := s.loadAlgorithm(ctx, id)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("ALGORITHM_NOT_FOUND", "Algorithm not found", err)
-		}
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("get algorithm: %v", err), err)
+		return err
 	}
 
 	liveStatus := s.supervisor.GetStatus(id)
 	if liveStatus == StatusCrashLoop {
-		return apperr.Conflict("ALGORITHM_IN_CRASH_LOOP", "Algorithm is in CRASH_LOOP, please reset it first", nil)
+		return apperr.Conflict(
+			"ALGORITHM_IN_CRASH_LOOP",
+			"Algorithm is in CRASH_LOOP, please reset it first",
+			nil,
+		)
 	}
 	if liveStatus == StatusRunning || liveStatus == StatusStarting {
 		// 已经在运行中，幂等成功并确保 DB 为 ACTIVE
-		if algo.Status != StatusActive {
-			_ = s.store.UpdateAlgorithmStatus(ctx, id, StatusActive)
-		}
+		s.markActiveBestEffort(ctx, algo)
 		return nil
 	}
 
 	if err := s.supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); err != nil {
-		if errors.Is(err, algorunner.ErrNoBrokerSockets) {
-			// 无活跃任务：平滑进入待命态 (Standby)，写 ACTIVE 到 DB
-			s.logger.Info("algorithm enabled in standby state (no active tasks)", zap.String("id", id))
-			if err := s.store.UpdateAlgorithmStatus(ctx, id, StatusActive); err != nil {
-				return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("update algorithm status: %v", err), err)
-			}
-			return nil
-		}
-		if errors.Is(err, algorunner.ErrAlgorithmAlreadyRunning) {
-			// 并发注册竞争赢家已拉起，幂等成功
-			if algo.Status != StatusActive {
-				_ = s.store.UpdateAlgorithmStatus(ctx, id, StatusActive)
-			}
-			return nil
-		}
-		if algorunner.IsEntryError(err) {
-			// 包目录里没有可执行的包根入口（旧 .so 形态，或归档被裁剪过）。
-			// 明确报出来，且**不注册 watcher**：没有进程就没有退避重试，
-			// 运维重新安装/重建后再次启用即可。
-			s.logger.Warn("algorithm package has no runnable entry",
-				zap.String("algorithm_id", id),
-				zap.Error(err),
-			)
-			return apperr.Invalid("ALGO_ENTRY_INVALID",
-				"Algorithm package has no runnable executable, reinstall it", err)
-		}
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("start package supervisor: %v", err), err)
+		return s.handleStartFailure(ctx, algo, err)
 	}
 
 	if err := s.store.UpdateAlgorithmStatus(ctx, id, StatusActive); err != nil {
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("update algorithm status: %v", err), err)
+		return apperr.Internal(internalErrorCode, "Failed to update algorithm status", err)
 	}
 	return nil
 }
 
+// handleStartFailure 把 StartAlgorithm 的失败分成三类：可降级为「待命态」的成功、
+// 幂等成功、以及真正的错误。返回 nil 表示 HTTP 层应视为成功。
+func (s *Service) handleStartFailure(ctx context.Context, algo *Algorithm, startErr error) error {
+	switch {
+	case errors.Is(startErr, algorunner.ErrNoBrokerSockets):
+		// 无活跃任务：平滑进入待命态 (Standby)，写 ACTIVE 到 DB
+		s.logger.Info("algorithm enabled in standby state (no active tasks)", zap.String("id", algo.ID))
+		if err := s.store.UpdateAlgorithmStatus(ctx, algo.ID, StatusActive); err != nil {
+			return apperr.Internal(internalErrorCode, "Failed to update algorithm status", err)
+		}
+		return nil
+	case errors.Is(startErr, algorunner.ErrAlgorithmAlreadyRunning):
+		// 并发注册竞争赢家已拉起，幂等成功
+		s.markActiveBestEffort(ctx, algo)
+		return nil
+	case algorunner.IsEntryError(startErr):
+		// 包目录里没有可执行的包根入口（旧 .so 形态，或归档被裁剪过）。
+		// 明确报出来，且**不注册 watcher**：没有进程就没有退避重试，
+		// 运维重新安装/重建后再次启用即可。
+		s.logger.Warn("algorithm package has no runnable entry",
+			zap.String("algorithm_id", algo.ID),
+			zap.Error(startErr),
+		)
+		return apperr.Invalid(
+			"ALGO_ENTRY_INVALID",
+			"Algorithm package has no runnable executable, reinstall it",
+			startErr,
+		)
+	default:
+		return apperr.Internal(internalErrorCode, "Failed to start package supervisor", startErr)
+	}
+}
+
 // DisableAlgorithm stops the runner subprocess and updates DB status to DISABLED.
 func (s *Service) DisableAlgorithm(ctx context.Context, id string) error {
-	if _, err := s.store.GetAlgorithm(ctx, id); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("ALGORITHM_NOT_FOUND", "Algorithm not found", err)
-		}
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("get algorithm: %v", err), err)
+	if _, err := s.loadAlgorithm(ctx, id); err != nil {
+		return err
 	}
 
 	if err := s.supervisor.StopAlgorithm(ctx, id); err != nil {
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("stop runner supervisor: %v", err), err)
+		return apperr.Internal(internalErrorCode, "Failed to stop runner supervisor", err)
 	}
 	if err := s.store.UpdateAlgorithmStatus(ctx, id, StatusDisabled); err != nil {
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("update algorithm status: %v", err), err)
+		return apperr.Internal(internalErrorCode, "Failed to update algorithm status", err)
 	}
 	return nil
 }
@@ -286,19 +343,16 @@ func (s *Service) ResetAlgorithm(ctx context.Context, id string) error {
 		if errors.Is(err, algorunner.ErrAlgorithmNotInCrashLoop) {
 			return apperr.Conflict("ALGORITHM_NOT_IN_CRASH_LOOP", "Algorithm is not in CRASH_LOOP", err)
 		}
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("reset algorithm: %v", err), err)
+		return apperr.Internal(internalErrorCode, "Failed to reset algorithm", err)
 	}
 	return nil
 }
 
 // DeleteAlgorithm stops and uninstalls an algorithm from disk and database.
 func (s *Service) DeleteAlgorithm(ctx context.Context, id string) error {
-	algo, err := s.store.GetAlgorithm(ctx, id)
+	algo, err := s.loadAlgorithm(ctx, id)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("ALGORITHM_NOT_FOUND", "Algorithm not found", err)
-		}
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("get algorithm: %v", err), err)
+		return err
 	}
 
 	status := s.supervisor.GetStatus(id)
@@ -307,37 +361,38 @@ func (s *Service) DeleteAlgorithm(ctx context.Context, id string) error {
 		return apperr.Conflict("ALGORITHM_IS_ACTIVE", "Algorithm is active", ErrAlgorithmActive)
 	}
 	if err := s.supervisor.StopAlgorithm(ctx, id); err != nil {
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("stop algorithm before deletion: %v", err), err)
+		return apperr.Internal(internalErrorCode, "Failed to stop algorithm before deletion", err)
 	}
 
 	// Delete associated analysis tasks
 	if err := s.store.DeleteTasksByAlgorithm(ctx, algo.ID); err != nil {
-		s.logger.Warn("failed to delete associated tasks for algorithm", zap.String("id", algo.ID), zap.Error(err))
+		s.logger.Warn("failed to delete associated tasks for algorithm",
+			zap.String("id", algo.ID),
+			zap.Error(err),
+		)
 	}
 
 	// Remove files
 	algoBaseDir := s.rt.IDDir(algo.ID)
 	if err := os.RemoveAll(algoBaseDir); err != nil && !os.IsNotExist(err) {
-		s.logger.Warn("failed to remove algorithm directory on disk", zap.String("path", algoBaseDir), zap.Error(err))
+		s.logger.Warn("failed to remove algorithm directory on disk",
+			zap.String("path", algoBaseDir),
+			zap.Error(err),
+		)
 	}
 
 	if err := s.store.DeleteAlgorithm(ctx, id); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return apperr.NotFound("ALGORITHM_NOT_FOUND", "Algorithm not found", err)
 		}
-		return apperr.Internal("INTERNAL_ERROR", fmt.Sprintf("delete algorithm from db: %v", err), err)
+		return apperr.Internal(internalErrorCode, "Failed to delete algorithm from database", err)
 	}
 	return nil
 }
 
-// ScheduleAlgorithmRestart schedules a debounced restart for the algorithm runner.
-func (s *Service) ScheduleAlgorithmRestart(algorithmID string) {
-	s.scheduleAlgorithmRestart(algorithmID)
-}
-
 // OnTaskChanged implements task.TaskChangeListener.
 func (s *Service) OnTaskChanged(ctx context.Context, algorithmID string) {
-	s.ScheduleAlgorithmRestart(algorithmID)
+	s.scheduleAlgorithmRestart(algorithmID)
 }
 
 // GetAlgorithmSpec implements task.AlgorithmSpecProvider.
@@ -428,7 +483,8 @@ func (s *Service) restartAlgorithmNow(algorithmID string) {
 
 	liveStatus := s.supervisor.GetStatus(algorithmID)
 	if liveStatus == StatusRunning || liveStatus == StatusStarting {
-		// 运行中：执行 RestartAlgorithm（若任务变为空，Supervisor.RestartAlgorithm 会优雅停止并恢复 ACTIVE）
+		// 运行中：执行 RestartAlgorithm（若任务变为空，
+		// Supervisor.RestartAlgorithm 会优雅停止并恢复 ACTIVE）
 		if err := s.supervisor.RestartAlgorithm(context.Background(), algorithmID); err != nil {
 			s.logger.Warn("failed to restart algorithm after task change",
 				zap.String("algorithm_id", algorithmID),

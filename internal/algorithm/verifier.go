@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,7 +38,8 @@ var (
 	// tier); such packages must be rebuilt for that target. Deliberately not
 	// silently mapped: a cpu-built package carries a different runtime and assets,
 	// so the failure would surface much later as an opaque loader error.
-	ErrPlatformTargetRetired = errors.New("manifest.platform.target \"cpu\" is retired, rebuild the package for target \"onnx\"")
+	ErrPlatformTargetRetired = errors.New(
+		"manifest.platform.target \"cpu\" is retired, rebuild the package for target \"onnx\"")
 
 	// ErrInvalidManifestToken is returned when a manifest identity field is unsafe:
 	// id/version outside the token charset, or a name exceeding the handshake
@@ -151,17 +153,12 @@ type Verifier struct {
 	logger      *zap.Logger
 }
 
-// NewVerifier creates a Verifier. host.Target defaults to onnx.
-func NewVerifier(host HostPlatform, opts ...VerifyOptions) *Verifier {
+// NewVerifier creates a Verifier. host.Target defaults to onnx and the zero
+// VerifyOptions selects the defaults.
+func NewVerifier(host HostPlatform, opts VerifyOptions) *Verifier {
 	timeout := DefaultVerifyTimeout
-	var logger *zap.Logger
-	var skipDynamic bool
-	if len(opts) > 0 {
-		if opts[0].Timeout > 0 {
-			timeout = opts[0].Timeout
-		}
-		logger = opts[0].Logger
-		skipDynamic = opts[0].SkipDynamic
+	if opts.Timeout > 0 {
+		timeout = opts.Timeout
 	}
 
 	host.Target = normalizeHostTarget(host.Target)
@@ -169,8 +166,8 @@ func NewVerifier(host HostPlatform, opts ...VerifyOptions) *Verifier {
 	return &Verifier{
 		host:        host,
 		timeout:     timeout,
-		skipDynamic: skipDynamic,
-		logger:      logger,
+		skipDynamic: opts.SkipDynamic,
+		logger:      opts.Logger,
 	}
 }
 
@@ -187,44 +184,98 @@ func (v *Verifier) HostPlatform() HostPlatform {
 	return v.host
 }
 
-// VerifyDirectory verifies an extracted package directory.
-// Returns the parsed Manifest, configSchemaJSON, and .env contents if any.
-func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifest, string, string, error) {
-	manifestPath := filepath.Join(pkgDir, "manifest.json")
-	samplePath := filepath.Join(pkgDir, "sample.jpg")
+// VerifyResult 是一次目录级验包的产物。字段具名而不是相邻的裸 string 返回值：
+// ConfigSchema 与 EnvFile 类型相同、位置相邻，写反了编译器不会提醒。
+type VerifyResult struct {
+	// Manifest 是解析并校验通过的清单。
+	Manifest *Manifest
+	// ConfigSchema 是 config.schema.json 的内容，缺失时为 "{}"。
+	ConfigSchema string
+	// EnvFile 是 .env 的内容，缺失时为空串。
+	EnvFile string
+}
 
-	// 1. Convention files presence check
-	//
-	// manifest.json comes first on purpose: the entry executable is *named after*
-	// manifest.id, so the manifest has to be parsed and its id validated before
-	// the entry can be resolved at all. Doing it the other way would mean trusting
-	// an unvalidated path component.
-	if _, err := os.Stat(manifestPath); err != nil {
-		return nil, "", "", ErrMissingManifestFile
+// VerifyDirectory verifies an extracted package directory.
+//
+// 各阶段顺序固定：最便宜、最可行动的问题必须先暴露。一个为别的设备构建的包应该
+// 因为平台被拒，而不是因为一个它永远不会被要求执行的入口文件缺失。
+func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*VerifyResult, error) {
+	manifest, err := readManifest(pkgDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateIdentity(manifest); err != nil {
+		return nil, err
+	}
+	if err := validateEnums(manifest); err != nil {
+		return nil, err
+	}
+	if err := validateResources(manifest); err != nil {
+		return nil, err
+	}
+	if err := v.validatePlatform(manifest); err != nil {
+		return nil, err
 	}
 
-	// 2. Parse and validate manifest.json
+	samplePath, entryPath, err := resolveConventionFiles(pkgDir, manifest.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	configSchema, err := readConfigSchema(pkgDir)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &VerifyResult{
+		Manifest:     manifest,
+		ConfigSchema: configSchema,
+		EnvFile:      readEnvFile(pkgDir),
+	}
+
+	// Stage 2: Dynamic black-box verification by running the package entry
+	if !v.skipDynamic {
+		if err := v.runDynamicVerification(ctx, entryPath, samplePath, manifest.TaskType); err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
+}
+
+// readManifest 读取并解析包根的 manifest.json。
+//
+// manifest.json 排在约定文件检查的第一位：入口可执行文件是*按 manifest.id 命名*的，
+// 所以必须先解析清单并校验 id，才谈得上解析入口；反过来做就意味着信任一个未经
+// 校验的路径组件。
+func readManifest(pkgDir string) (*Manifest, error) {
+	manifestPath := filepath.Join(pkgDir, "manifest.json")
+	if _, err := os.Stat(manifestPath); err != nil {
+		return nil, ErrMissingManifestFile
+	}
+
 	manifestBytes, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("read manifest.json: %w", err)
+		return nil, fmt.Errorf("read manifest.json: %w", err)
 	}
 
 	var manifest Manifest
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
-		return nil, "", "", fmt.Errorf("%w: %v", ErrInvalidManifest, err)
+		return nil, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
 	}
-
 	if manifest.ID == "" || manifest.Version == "" || manifest.Name == "" {
-		return nil, "", "", fmt.Errorf("%w: id, version, and name are required", ErrInvalidManifest)
+		return nil, fmt.Errorf("%w: id, version, and name are required", ErrInvalidManifest)
 	}
+	return &manifest, nil
+}
 
-	// Reject path traversal / illegal characters in the PATH-BEARING identity
-	// fields before they are ever joined into an install path (see
-	// ErrInvalidManifestToken). Only ID and Version are path-bearing:
-	//   targetDir = Runtime.PackageDir(manifest.ID, manifest.Version)
-	// Name is deliberately NOT charset-restricted here — it is a human-readable
-	// display field (e.g. "安全帽佩戴检测算法") and never participates in path
-	// construction. It only needs to fit the runner's handshake buffer.
+// validateIdentity 校验清单的身份字段。
+//
+// 只有 ID 和 Version 参与路径构造（targetDir = Runtime.PackageDir(ID, Version)），
+// 所以只有它们受字符集约束，避免 "../../../tmp/pwned" 之类逃出 installDir。
+// Name 是人类可读的展示字段（如「安全帽佩戴检测算法」），从不参与路径构造，
+// 只需放得下 runner 的握手缓冲区。
+func validateIdentity(manifest *Manifest) error {
 	for _, field := range []struct {
 		name  string
 		value string
@@ -233,112 +284,126 @@ func (v *Verifier) VerifyDirectory(ctx context.Context, pkgDir string) (*Manifes
 		{name: "version", value: manifest.Version},
 	} {
 		if !manifestTokenPattern.MatchString(field.value) {
-			return nil, "", "", fmt.Errorf("%w: %s %q", ErrInvalidManifestToken, field.name, field.value)
+			return fmt.Errorf("%w: %s %q", ErrInvalidManifestToken, field.name, field.value)
 		}
 	}
 
-	// Name flows to the runner as --name and is copied into HandshakeReq's
-	// fixed-size client_name[32] buffer (ipc_protocol.hpp:37, runner.cpp:201),
-	// so it must be byte-bounded. strncpy truncates silently, which would make
-	// two packages share a client name; reject instead.
+	// Name 经 --name 传给包进程，被 strncpy 进 HandshakeReq 的 client_name[32]
+	// （ipc_protocol.hpp:37, runner.cpp:201），超长会被静默截断，两个包就可能
+	// 共享一个 client 名。这里直接拒绝。
 	if len(manifest.Name) > manifestNameMaxBytes {
-		return nil, "", "", fmt.Errorf("%w: name exceeds %d bytes", ErrInvalidManifestToken, manifestNameMaxBytes)
+		return fmt.Errorf("%w: name exceeds %d bytes", ErrInvalidManifestToken, manifestNameMaxBytes)
 	}
+	return nil
+}
 
-	// Validate task_type
+func validateEnums(manifest *Manifest) error {
 	switch manifest.TaskType {
 	case TaskTypeDetection, TaskTypeClassification, TaskTypePersonStructure, TaskTypeVehicleStructure:
 	default:
-		return nil, "", "", fmt.Errorf("%w: invalid task_type %q", ErrInvalidManifest, manifest.TaskType)
+		return fmt.Errorf("%w: invalid task_type %q", ErrInvalidManifest, manifest.TaskType)
 	}
 
-	// Validate category
 	switch manifest.Category {
 	case CategorySafety, CategorySecurity, CategoryFire, CategoryTraffic, CategoryGeneral:
 	default:
-		return nil, "", "", fmt.Errorf("%w: invalid category %q", ErrInvalidManifest, manifest.Category)
+		return fmt.Errorf("%w: invalid category %q", ErrInvalidManifest, manifest.Category)
 	}
+	return nil
+}
 
-	// Validate resources
+func validateResources(manifest *Manifest) error {
 	if manifest.Resources.ComputeCost <= 0 || manifest.Resources.ComputeCost > 1000 {
-		return nil, "", "", fmt.Errorf("%w: compute_cost must be between 1 and 1000", ErrInvalidComputeBudget)
+		return fmt.Errorf("%w: compute_cost must be between 1 and 1000", ErrInvalidComputeBudget)
 	}
 	if manifest.Resources.MemoryMB <= 0 {
-		return nil, "", "", fmt.Errorf("%w: memory_mb must be positive", ErrInvalidComputeBudget)
+		return fmt.Errorf("%w: memory_mb must be positive", ErrInvalidComputeBudget)
 	}
+	return nil
+}
 
-	// 5. Stage 1: Static platform compatibility gate
-	//
-	// The retired "cpu" target is rejected before any comparison: silently
-	// treating it as "onnx" would install a package whose assets and runtime do
-	// not match the host, and the failure would surface much later as an opaque
-	// loader/exec error.
+// validatePlatform 是静态平台准入闸门。
+//
+// 已退役的 "cpu" 档位在任何比较之前就被拒绝：把它当成 "onnx" 静默放行会装进一个
+// 运行时与资产都不匹配的包，失败要到很久以后才以一个难懂的 loader/exec 错误爆出来。
+func (v *Verifier) validatePlatform(manifest *Manifest) error {
 	if manifest.Platform.Target == retiredHostTarget {
-		return nil, "", "", fmt.Errorf("%w: package %s %s was built for platform.target=%q",
+		return fmt.Errorf("%w: package %s %s was built for platform.target=%q",
 			ErrPlatformTargetRetired, manifest.ID, manifest.Version, retiredHostTarget)
 	}
 	if manifest.Platform.Arch != "" && manifest.Platform.Arch != v.host.Arch {
-		return nil, "", "", fmt.Errorf("%w: package requires arch %q, host is %q", ErrPlatformMismatch, manifest.Platform.Arch, v.host.Arch)
+		return fmt.Errorf("%w: package requires arch %q, host is %q",
+			ErrPlatformMismatch, manifest.Platform.Arch, v.host.Arch)
 	}
+
 	// An empty target on either side means "unspecified", not "mismatch": the
 	// package may not pin a device, and the host may not know its own.
 	bothTargetsKnown := manifest.Platform.Target != "" && v.host.Target != ""
 	if bothTargetsKnown && manifest.Platform.Target != v.host.Target {
-		return nil, "", "", fmt.Errorf("%w: package requires target %q, host is %q", ErrPlatformMismatch, manifest.Platform.Target, v.host.Target)
+		return fmt.Errorf("%w: package requires target %q, host is %q",
+			ErrPlatformMismatch, manifest.Platform.Target, v.host.Target)
 	}
+	return nil
+}
 
-	// 5. Convention files that the *dynamic* stage needs: the entry executable and
-	// the sample it is fed.
-	//
-	// Both are checked after the manifest and platform gates so an operator sees
-	// the cheapest, most actionable problem first: a package built for another
-	// device should be rejected for that, not for a missing file.
+// resolveConventionFiles 定位动态阶段需要的两个约定文件：样本图与包根入口。
+//
+// 入口是一个以 manifest.id 命名的普通可执行文件，经 algorunner.ResolveEntry 解析，
+// 保证安装期接受的就是 supervisor 稍后要执行的那个文件；仍在发老式 plugin.so 的包
+// 在这里被拒，因为安装期是运维唯一还能处理它的时刻。
+func resolveConventionFiles(pkgDir, manifestID string) (samplePath, entryPath string, err error) {
+	samplePath = filepath.Join(pkgDir, "sample.jpg")
 	if _, err := os.Stat(samplePath); err != nil {
-		return nil, "", "", ErrMissingSampleFile
+		return "", "", ErrMissingSampleFile
 	}
 
-	// The entry is a plain executable named after manifest.id. Resolved through
-	// algorunner so the installer accepts exactly what the supervisor will later
-	// execute; a package still shipping the retired plugin.so is rejected here,
-	// because install time is the only moment an operator can still act on it.
-	entryPath, err := algorunner.ResolveEntry(pkgDir, manifest.ID)
+	entryPath, err = algorunner.ResolveEntry(pkgDir, manifestID)
 	if err != nil {
-		return nil, "", "", err
-	}
-	// Normalise the permission bits only after the entry is known to be a plain
-	// regular file, so a chmod can never be talked into following a symlink.
-	if err := os.Chmod(entryPath, 0o755); err != nil {
-		return nil, "", "", fmt.Errorf("make package entry executable: %w", err)
+		return "", "", err
 	}
 
-	// Optional config.schema.json validation
-	configSchemaJSON := "{}"
+	// 确认是包内普通文件之后才规范权限位，这样 chmod 不可能被诱导跟随符号链接。
+	if err := os.Chmod(entryPath, 0o755); err != nil {
+		return "", "", fmt.Errorf("make package entry executable: %w", err)
+	}
+	return samplePath, entryPath, nil
+}
+
+// readConfigSchema 读取可选的 config.schema.json：缺失返回 "{}"，
+// 存在但编译不通过则整体拒绝安装。
+func readConfigSchema(pkgDir string) (string, error) {
 	schemaPath := filepath.Join(pkgDir, "config.schema.json")
 	schemaBytes, err := os.ReadFile(schemaPath)
-	if err == nil {
-		configSchemaJSON = string(schemaBytes)
-		if _, err := compileConfigSchema(configSchemaJSON); err != nil {
-			return nil, "", "", fmt.Errorf("%w: %v", ErrInvalidConfigSchema, err)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "{}", nil
 		}
-	} else if !os.IsNotExist(err) {
-		return nil, "", "", fmt.Errorf("read config.schema.json: %w", err)
+		return "", fmt.Errorf("read config.schema.json: %w", err)
 	}
 
-	// Optional .env
-	var envContent string
-	envPath := filepath.Join(pkgDir, algorunner.EnvFileName)
-	if b, err := os.ReadFile(envPath); err == nil {
-		envContent = string(b)
+	schemaJSON := string(schemaBytes)
+	if _, err := compileConfigSchema(schemaJSON); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidConfigSchema, err)
 	}
+	return schemaJSON, nil
+}
 
-	// 6. Stage 2: Dynamic black-box verification by running the package entry
-	if !v.skipDynamic {
-		if err := v.runDynamicVerification(ctx, entryPath, samplePath, manifest.TaskType); err != nil {
-			return nil, "", "", err
-		}
+// readEnvFile 读取可选的 .env。读不到就当作没有：这个文件是包自己的运行时配置，
+// 准入结论（ABI / 平台 / 结果类型）不依赖它，安装路径也不消费它。
+func readEnvFile(pkgDir string) string {
+	content, err := os.ReadFile(filepath.Join(pkgDir, algorunner.EnvFileName))
+	if err != nil {
+		return ""
 	}
+	return string(content)
+}
 
-	return &manifest, configSchemaJSON, envContent, nil
+// expectedResultType 把 manifest 的 task_type 映射到插件必须导出的 result_type。
+var expectedResultType = map[string]ResultType{
+	TaskTypeDetection:        ResultTypeDetection,
+	TaskTypeClassification:   ResultTypeClassification,
+	TaskTypePersonStructure:  ResultTypePersonStructure,
+	TaskTypeVehicleStructure: ResultTypeVehicleStructure,
 }
 
 func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, samplePath, taskType string) error {
@@ -388,7 +453,8 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, sample
 		return fmt.Errorf("%w: package reported status %q: %s", ErrVerificationFailed, report.Status, report.Error)
 	}
 
-	// 准入结论的可信度取决于「样本帧是否真的进了模型」：没解码成功就只能证明 ABI 生命周期。
+	// 准入结论的可信度取决于「样本帧是否真的进了模型」：
+	// 没解码成功就只能证明 ABI 生命周期。
 	if !report.SampleDecoded {
 		v.warn("algorithm verification ran without a decoded sample frame; only the ABI lifecycle was exercised",
 			zap.String("sample", samplePath),
@@ -400,24 +466,10 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, sample
 			zap.Int("height", report.Height))
 	}
 
-	// Cross-check result_type against manifest task_type:
-	switch taskType {
-	case TaskTypeDetection:
-		if report.ResultType != int(ResultTypeDetection) {
-			return fmt.Errorf("%w: expected result_type %d for %s, got %d", ErrResultTypeMismatch, ResultTypeDetection, taskType, report.ResultType)
-		}
-	case TaskTypeClassification:
-		if report.ResultType != int(ResultTypeClassification) {
-			return fmt.Errorf("%w: expected result_type %d for %s, got %d", ErrResultTypeMismatch, ResultTypeClassification, taskType, report.ResultType)
-		}
-	case TaskTypePersonStructure:
-		if report.ResultType != int(ResultTypePersonStructure) {
-			return fmt.Errorf("%w: expected result_type %d for %s, got %d", ErrResultTypeMismatch, ResultTypePersonStructure, taskType, report.ResultType)
-		}
-	case TaskTypeVehicleStructure:
-		if report.ResultType != int(ResultTypeVehicleStructure) {
-			return fmt.Errorf("%w: expected result_type %d for %s, got %d", ErrResultTypeMismatch, ResultTypeVehicleStructure, taskType, report.ResultType)
-		}
+	// Cross-check result_type against manifest task_type
+	if expected, ok := expectedResultType[taskType]; ok && report.ResultType != int(expected) {
+		return fmt.Errorf("%w: expected result_type %d for %s, got %d",
+			ErrResultTypeMismatch, expected, taskType, report.ResultType)
 	}
 
 	return nil
@@ -425,7 +477,11 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, sample
 
 // StageAndVerify extracts an archive into a temporary folder, verifies it,
 // and atomically publishes the immutable version directory under finalInstallDir.
-func (v *Verifier) StageAndVerify(ctx context.Context, archivePath, finalInstallDir string) (algo *Algorithm, retErr error) {
+func (v *Verifier) StageAndVerify(
+	ctx context.Context,
+	archivePath string,
+	finalInstallDir string,
+) (algo *Algorithm, retErr error) {
 	if err := os.MkdirAll(finalInstallDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create install directory: %w", err)
 	}
@@ -443,10 +499,11 @@ func (v *Verifier) StageAndVerify(ctx context.Context, archivePath, finalInstall
 		return nil, fmt.Errorf("extract archive: %w", err)
 	}
 
-	manifest, configSchemaJSON, _, err := v.VerifyDirectory(ctx, tempExtractDir)
+	verified, err := v.VerifyDirectory(ctx, tempExtractDir)
 	if err != nil {
 		return nil, err
 	}
+	manifest := verified.Manifest
 	manifestJSON, err := json.Marshal(manifest)
 	if err != nil {
 		return nil, fmt.Errorf("marshal verified manifest: %w", err)
@@ -505,7 +562,7 @@ func (v *Verifier) StageAndVerify(ctx context.Context, archivePath, finalInstall
 		MemoryMB:         manifest.Resources.MemoryMB,
 		Description:      manifest.Description,
 		ManifestJSON:     string(manifestJSON),
-		ConfigSchemaJSON: configSchemaJSON,
+		ConfigSchemaJSON: verified.ConfigSchema,
 		Status:           StatusDisabled,
 		CreatedAt:        now,
 		UpdatedAt:        now,
@@ -563,12 +620,18 @@ func installDirectoryAtomically(src, dst string) (retErr error) {
 	return nil
 }
 
+// copyDir 递归复制 src 到 dst，只接受普通文件与目录：暂存区里出现符号链接或其他
+// 特殊文件时直接失败，而不是把它们带进安装目录。
 func copyDir(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, walkErr error) error {
+	return filepath.WalkDir(src, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
@@ -577,25 +640,33 @@ func copyDir(src, dst string) error {
 			return os.MkdirAll(target, info.Mode())
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("unsupported file type in staged package: %s", path)
+			return fmt.Errorf("unsupported file type in staged package: %q", path)
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		in, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
-		if err != nil {
-			if closeErr := in.Close(); closeErr != nil {
-				return errors.Join(err, closeErr)
-			}
-			return err
-		}
-		_, copyErr := io.Copy(out, in)
-		closeOutErr := out.Close()
-		closeInErr := in.Close()
-		return errors.Join(copyErr, closeOutErr, closeInErr)
+		return copyFile(path, target, info.Mode())
 	})
+}
+
+// copyFile 复制单个普通文件，落盘权限沿用源文件。
+func copyFile(src, dst string, mode fs.FileMode) (retErr error) {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := in.Close(); closeErr != nil {
+			retErr = errors.Join(retErr, closeErr)
+		}
+	}()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		return errors.Join(err, out.Close())
+	}
+	return out.Close()
 }

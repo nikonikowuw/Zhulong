@@ -46,6 +46,16 @@ definitions:
       version:
         type: string
     type: object
+  algorithm.AlgorithmDeleteResponse:
+    properties:
+      deleted:
+        type: boolean
+    type: object
+  algorithm.AlgorithmStatusResponse:
+    properties:
+      status:
+        type: string
+    type: object
   algorithm.DeletionImpact:
     properties:
       affectedCameraIds:
@@ -1564,7 +1574,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  type: object
+                  $ref: '#/definitions/algorithm.AlgorithmDeleteResponse'
               type: object
         "404":
           description: Not Found
@@ -1668,7 +1678,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  type: object
+                  $ref: '#/definitions/algorithm.AlgorithmStatusResponse'
               type: object
         "500":
           description: Internal Server Error
@@ -1698,7 +1708,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  type: object
+                  $ref: '#/definitions/algorithm.AlgorithmStatusResponse'
               type: object
         "500":
           description: Internal Server Error
@@ -1728,7 +1738,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  type: object
+                  $ref: '#/definitions/algorithm.AlgorithmStatusResponse'
               type: object
         "409":
           description: Conflict

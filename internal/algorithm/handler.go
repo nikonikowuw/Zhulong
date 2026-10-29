@@ -18,6 +18,29 @@ type Handler struct {
 	maxUploadLimit int64
 }
 
+// AlgorithmStatusResponse 是 enable/disable/reset 的响应载荷。
+// 具名而非 gin.H：裸 map 会让 Swagger 永远生成不出 definition，
+// 前端也就无法从契约生成 schema。
+type AlgorithmStatusResponse struct {
+	Status string `json:"status"`
+}
+
+// AlgorithmDeleteResponse 是卸载成功的响应载荷。
+type AlgorithmDeleteResponse struct {
+	Deleted bool `json:"deleted"`
+}
+
+// SetUploadLimit 覆盖上传体积上限（字节，<= 0 表示回到 MaxUploadSize）。
+//
+// 这是启动期配置，不是并发安全的运行时开关：应在路由开始服务之前调用一次。
+// 上限由 Install 端点透传给 Service，因此它不改变已经进入安装流程的请求。
+func (h *Handler) SetUploadLimit(limit int64) {
+	if limit <= 0 {
+		limit = MaxUploadSize
+	}
+	h.maxUploadLimit = limit
+}
+
 // NewHandler creates a new Handler instance.
 func NewHandler(service *Service, logger *zap.Logger) *Handler {
 	if logger == nil {
@@ -28,11 +51,6 @@ func NewHandler(service *Service, logger *zap.Logger) *Handler {
 		logger:         logger.Named("algorithm.handler"),
 		maxUploadLimit: MaxUploadSize,
 	}
-}
-
-// SetMaxUploadLimitForTest overrides the max upload limit for testing.
-func (h *Handler) SetMaxUploadLimitForTest(limit int64) {
-	h.maxUploadLimit = limit
 }
 
 // RegisterRoutes registers control-plane algorithm endpoints on the provided router group.
@@ -149,7 +167,7 @@ func (h *Handler) Get(c *gin.Context) {
 // @Tags         algorithm
 // @Produce      json
 // @Param        id path string true "Algorithm ID"
-// @Success      200  {object}  httputil.Response{data=object}
+// @Success      200  {object}  httputil.Response{data=AlgorithmStatusResponse}
 // @Failure      500  {object}  httputil.Response
 // @Router       /algorithms/{id}/enable [post]
 func (h *Handler) Enable(c *gin.Context) {
@@ -160,7 +178,7 @@ func (h *Handler) Enable(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, gin.H{"status": StatusActive})
+	httputil.Success(c, AlgorithmStatusResponse{Status: StatusActive})
 }
 
 // Disable godoc
@@ -169,7 +187,7 @@ func (h *Handler) Enable(c *gin.Context) {
 // @Tags         algorithm
 // @Produce      json
 // @Param        id path string true "Algorithm ID"
-// @Success      200  {object}  httputil.Response{data=object}
+// @Success      200  {object}  httputil.Response{data=AlgorithmStatusResponse}
 // @Failure      500  {object}  httputil.Response
 // @Router       /algorithms/{id}/disable [post]
 func (h *Handler) Disable(c *gin.Context) {
@@ -180,7 +198,7 @@ func (h *Handler) Disable(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, gin.H{"status": StatusDisabled})
+	httputil.Success(c, AlgorithmStatusResponse{Status: StatusDisabled})
 }
 
 // Reset godoc
@@ -189,7 +207,7 @@ func (h *Handler) Disable(c *gin.Context) {
 // @Tags         algorithm
 // @Produce      json
 // @Param        id path string true "Algorithm ID"
-// @Success      200  {object}  httputil.Response{data=object}
+// @Success      200  {object}  httputil.Response{data=AlgorithmStatusResponse}
 // @Failure      409  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /algorithms/{id}/reset [post]
@@ -201,7 +219,7 @@ func (h *Handler) Reset(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, gin.H{"status": StatusDisabled})
+	httputil.Success(c, AlgorithmStatusResponse{Status: StatusDisabled})
 }
 
 // GetDeletionImpact godoc
@@ -233,7 +251,7 @@ func (h *Handler) GetDeletionImpact(c *gin.Context) {
 // @Tags         algorithm
 // @Produce      json
 // @Param        id path string true "Algorithm ID"
-// @Success      200  {object}  httputil.Response{data=object}
+// @Success      200  {object}  httputil.Response{data=AlgorithmDeleteResponse}
 // @Failure      404  {object}  httputil.Response
 // @Failure      409  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
@@ -264,5 +282,5 @@ func (h *Handler) Delete(c *gin.Context) {
 			strings.Join(impact.AffectedCameraIDs, ","),
 			impact.RecognitionCount, impact.AlarmCount, impact.CaptureCount))
 	}
-	httputil.Success(c, gin.H{"deleted": true})
+	httputil.Success(c, AlgorithmDeleteResponse{Deleted: true})
 }

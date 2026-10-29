@@ -12,7 +12,14 @@ import (
 
 var _ algorunner.LifecycleStore = (*Store)(nil)
 
-var ErrNotFound = errors.New("record not found")
+var (
+	ErrNotFound = errors.New("record not found")
+
+	// 包内哨兵：都是装配顺序或调用方式错误，调用方只需向上传播。
+	errNilAlgorithm     = errors.New("algorithm is nil")
+	errNoDBProvider     = errors.New("database provider is nil")
+	errDatabaseNotReady = errors.New("database is not ready")
+)
 
 // Store handles database persistence for algorithms, analysis tasks, and face galleries.
 type Store struct {
@@ -26,11 +33,11 @@ func NewStore(dbProvider database.DBProvider) *Store {
 
 func (s *Store) db(ctx context.Context) (*gorm.DB, error) {
 	if s.dbProvider == nil {
-		return nil, errors.New("database provider is nil")
+		return nil, errNoDBProvider
 	}
 	db := s.dbProvider.DB()
 	if db == nil {
-		return nil, errors.New("database is not ready")
+		return nil, errDatabaseNotReady
 	}
 	return db.WithContext(ctx), nil
 }
@@ -39,7 +46,7 @@ func (s *Store) db(ctx context.Context) (*gorm.DB, error) {
 
 func (s *Store) CreateAlgorithm(ctx context.Context, algo *Algorithm) error {
 	if algo == nil {
-		return errors.New("algorithm is nil")
+		return errNilAlgorithm
 	}
 	db, err := s.db(ctx)
 	if err != nil {
@@ -60,18 +67,7 @@ func (s *Store) CreateAlgorithm(ctx context.Context, algo *Algorithm) error {
 }
 
 func (s *Store) GetAlgorithm(ctx context.Context, id string) (*Algorithm, error) {
-	db, err := s.db(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var algo Algorithm
-	if err := db.Where("id = ?", id).First(&algo).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	return &algo, nil
+	return s.findAlgorithmBy(ctx, "id = ?", id)
 }
 
 // GetAlgorithmPackage implements algorunner.LifecycleStore.
@@ -84,12 +80,18 @@ func (s *Store) GetAlgorithmPackage(ctx context.Context, id string) (algorunner.
 }
 
 func (s *Store) GetAlgorithmByName(ctx context.Context, name string) (*Algorithm, error) {
+	return s.findAlgorithmBy(ctx, "name = ?", name)
+}
+
+// findAlgorithmBy 是 GetAlgorithm / GetAlgorithmByName 的唯一实现。两者的差别
+// 只有一个查询列，各写一份会让 ErrNotFound 的映射多出第二个版本。
+func (s *Store) findAlgorithmBy(ctx context.Context, where string, arg any) (*Algorithm, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var algo Algorithm
-	if err := db.Where("name = ?", name).First(&algo).Error; err != nil {
+	if err := db.Where(where, arg).First(&algo).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
 		}
@@ -113,7 +115,7 @@ func (s *Store) ListAlgorithms(ctx context.Context) ([]Algorithm, error) {
 
 func (s *Store) UpdateAlgorithm(ctx context.Context, algo *Algorithm) error {
 	if algo == nil {
-		return errors.New("algorithm is nil")
+		return errNilAlgorithm
 	}
 	db, err := s.db(ctx)
 	if err != nil {
@@ -124,36 +126,30 @@ func (s *Store) UpdateAlgorithm(ctx context.Context, algo *Algorithm) error {
 }
 
 func (s *Store) UpdateAlgorithmStatus(ctx context.Context, id, status string) error {
-	db, err := s.db(ctx)
-	if err != nil {
-		return err
-	}
-	res := db.Model(&Algorithm{}).Where("id = ?", id).Updates(map[string]any{
-		"status":     status,
-		"updated_at": time.Now().UTC(),
-	})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.updateAlgorithmColumns(ctx, id, map[string]any{"status": status})
 }
 
 // RollbackAlgorithmVersion rolls back the algorithm's active version in the database
 // to targetVersion, preserves failedVersion in previous_version, and marks status as ACTIVE.
 func (s *Store) RollbackAlgorithmVersion(ctx context.Context, id, targetVersion, failedVersion string) error {
+	return s.updateAlgorithmColumns(ctx, id, map[string]any{
+		"version":          targetVersion,
+		"previous_version": failedVersion,
+		"status":           StatusActive,
+	})
+}
+
+// updateAlgorithmColumns 对单条算法记录做列级更新，并统一维护 updated_at。
+// 零行受影响即视为记录不存在：这是状态写入路径唯一的 ErrNotFound 来源。
+//
+// 注意：columns 会在原地写入 updated_at，调用方传入的字面量 map 不应复用。
+func (s *Store) updateAlgorithmColumns(ctx context.Context, id string, columns map[string]any) error {
 	db, err := s.db(ctx)
 	if err != nil {
 		return err
 	}
-	res := db.Model(&Algorithm{}).Where("id = ?", id).Updates(map[string]any{
-		"version":          targetVersion,
-		"previous_version": failedVersion,
-		"status":           StatusActive,
-		"updated_at":       time.Now().UTC(),
-	})
+	columns["updated_at"] = time.Now().UTC()
+	res := db.Model(&Algorithm{}).Where("id = ?", id).Updates(columns)
 	if res.Error != nil {
 		return res.Error
 	}

@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
-	"github.com/nikonikowuw/Zhulong/internal/task"
 )
 
 // Lifecycle statuses are owned by algorunner, which drives the recovery state
@@ -92,18 +91,6 @@ func (a *Algorithm) ToPackageMeta() algorunner.PackageMeta {
 // TableName overrides the default table name for Algorithm.
 func (Algorithm) TableName() string {
 	return "algorithms"
-}
-
-// AnalysisTask is an alias to task.Task for backward compatibility.
-// Deprecated: use task.Task from github.com/nikonikowuw/Zhulong/internal/task instead.
-type AnalysisTask = task.Task
-
-// SampleFPSMax 是单路分析任务的采样帧率上限。
-const SampleFPSMax = task.SampleFPSMax
-
-// ValidateSampleFPS 校验并收敛分析任务的采样帧率。
-func ValidateSampleFPS(raw int) (uint32, error) {
-	return task.ValidateSampleFPS(raw)
 }
 
 // ManifestPlatform describes the target hardware requirement in manifest.json.

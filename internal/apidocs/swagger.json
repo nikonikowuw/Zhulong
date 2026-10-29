@@ -203,7 +203,7 @@
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/algorithm.AlgorithmDeleteResponse"
                                         }
                                     }
                                 }
@@ -315,7 +315,7 @@
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/algorithm.AlgorithmStatusResponse"
                                         }
                                     }
                                 }
@@ -362,7 +362,7 @@
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/algorithm.AlgorithmStatusResponse"
                                         }
                                     }
                                 }
@@ -409,7 +409,7 @@
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/algorithm.AlgorithmStatusResponse"
                                         }
                                     }
                                 }
@@ -4175,6 +4175,22 @@
                     "type": "string"
                 },
                 "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "algorithm.AlgorithmDeleteResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "algorithm.AlgorithmStatusResponse": {
+            "type": "object",
+            "properties": {
+                "status": {
                     "type": "string"
                 }
             }

@@ -185,11 +185,7 @@ func TestHandlerAuditCoverage(t *testing.T) {
 		t.Fatalf("expected 6 audit entries, got %d: %+v", len(entries), entries)
 	}
 
-	type want struct {
-		action string
-		status string
-	}
-	wants := []want{
+	wants := []auditWant{
 		{algorithm.ActionAlgorithmInstall, audit.StatusSuccess},
 		{algorithm.ActionAlgorithmEnable, audit.StatusSuccess},
 		{algorithm.ActionAlgorithmReset, audit.StatusFailed},
@@ -197,11 +193,22 @@ func TestHandlerAuditCoverage(t *testing.T) {
 		{algorithm.ActionAlgorithmDelete, audit.StatusSuccess},
 		{algorithm.ActionAlgorithmDelete, audit.StatusFailed},
 	}
+	assertAuditEntriesMatch(t, entries, wants)
+	assertAuditDetails(t, entries, algoID)
+}
 
-	// Match entries to expectations by action and status rather than by
-	// insertion order: the service drains newest first and two records share
-	// the delete action.
-	remaining := make([]want, len(wants))
+// auditWant 是期望出现的一条审计记录：动作 + 结果。
+type auditWant struct {
+	action string
+	status string
+}
+
+// assertAuditEntriesMatch 按「动作 + 结果」而不是插入顺序配对：Service 倒序出队，
+// 且有两条记录共享 delete 动作。
+func assertAuditEntriesMatch(t *testing.T, entries []audit.AuditLog, wants []auditWant) {
+	t.Helper()
+
+	remaining := make([]auditWant, len(wants))
 	copy(remaining, wants)
 	for _, e := range entries {
 		if e.IP != "192.168.8.8" {
@@ -227,6 +234,12 @@ func TestHandlerAuditCoverage(t *testing.T) {
 	for _, w := range remaining {
 		t.Errorf("missing audit entry for %s with status %s", w.action, w.status)
 	}
+}
+
+// assertAuditDetails 断言目标/详情收敛，以及失败记录只带稳定机器码、
+// 不泄露底层数据库错误原文。
+func assertAuditDetails(t *testing.T, entries []audit.AuditLog, algoID string) {
+	t.Helper()
 
 	var installEntry, resetEntry, failedDelete *audit.AuditLog
 	for i := range entries {
@@ -250,8 +263,6 @@ func TestHandlerAuditCoverage(t *testing.T) {
 		t.Errorf("expected the algorithm name as detail, got %q", installEntry.Detail)
 	}
 
-	// Failure records must carry a safe, discriminating error summary and never
-	// raw internal error text.
 	if resetEntry == nil {
 		t.Fatal("missing reset audit entry")
 	}

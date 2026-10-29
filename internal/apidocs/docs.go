@@ -210,7 +210,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/algorithm.AlgorithmDeleteResponse"
                                         }
                                     }
                                 }
@@ -322,7 +322,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/algorithm.AlgorithmStatusResponse"
                                         }
                                     }
                                 }
@@ -369,7 +369,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/algorithm.AlgorithmStatusResponse"
                                         }
                                     }
                                 }
@@ -416,7 +416,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/algorithm.AlgorithmStatusResponse"
                                         }
                                     }
                                 }
@@ -4182,6 +4182,22 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "algorithm.AlgorithmDeleteResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "algorithm.AlgorithmStatusResponse": {
+            "type": "object",
+            "properties": {
+                "status": {
                     "type": "string"
                 }
             }

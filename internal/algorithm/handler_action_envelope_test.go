@@ -46,58 +46,16 @@ func TestHandlerEnableDisableActionEnvelope(t *testing.T) {
 	comp := algorithm.NewAlgorithmComponents(dbStore, rt, x86Host(), zap.NewNop())
 	t.Cleanup(func() { comp.Supervisor.StopAll(time.Second) })
 
-	seed := &algorithm.Algorithm{
-		ID:           "action_contract",
-		Name:         "action_contract",
-		Version:      "1.0.0",
-		TaskType:     algorithm.TaskTypeDetection,
-		Category:     algorithm.CategorySafety,
-		TargetArch:   "x86_64",
-		TargetDevice: "onnx",
-		ComputeCost:  10,
-		MemoryMB:     64,
-		Status:       algorithm.StatusDisabled,
-	}
-	if err := comp.Store.CreateAlgorithm(context.Background(), seed); err != nil {
-		t.Fatalf("seed algorithm: %v", err)
-	}
+	seedAlgorithm(t, comp.Store, "action_contract", algorithm.StatusDisabled)
 
 	// Reset only succeeds on an algorithm the backend already records as
 	// CRASH_LOOP. Seeding that state directly also covers supervisor path B (no
 	// in-memory watcher, e.g. after a host restart).
-	crashLooped := &algorithm.Algorithm{
-		ID:           "action_contract_crash_loop",
-		Name:         "action_contract_crash_loop",
-		Version:      "1.0.0",
-		TaskType:     algorithm.TaskTypeDetection,
-		Category:     algorithm.CategorySafety,
-		TargetArch:   "x86_64",
-		TargetDevice: "onnx",
-		ComputeCost:  10,
-		MemoryMB:     64,
-		Status:       algorithm.StatusCrashLoop,
-	}
-	if err := comp.Store.CreateAlgorithm(context.Background(), crashLooped); err != nil {
-		t.Fatalf("seed crash-looped algorithm: %v", err)
-	}
+	seedAlgorithm(t, comp.Store, "action_contract_crash_loop", algorithm.StatusCrashLoop)
 
 	// ACTIVE in the DB with no live watcher: reset must be rejected with 409,
 	// not silently reported as success.
-	activeNoWatcher := &algorithm.Algorithm{
-		ID:           "action_contract_active",
-		Name:         "action_contract_active",
-		Version:      "1.0.0",
-		TaskType:     algorithm.TaskTypeDetection,
-		Category:     algorithm.CategorySafety,
-		TargetArch:   "x86_64",
-		TargetDevice: "onnx",
-		ComputeCost:  10,
-		MemoryMB:     64,
-		Status:       algorithm.StatusActive,
-	}
-	if err := comp.Store.CreateAlgorithm(context.Background(), activeNoWatcher); err != nil {
-		t.Fatalf("seed active algorithm: %v", err)
-	}
+	seedAlgorithm(t, comp.Store, "action_contract_active", algorithm.StatusActive)
 
 	router := gin.New()
 	comp.Handler.RegisterRoutes(router.Group("/api/v1"))
@@ -162,5 +120,26 @@ func TestHandlerEnableDisableActionEnvelope(t *testing.T) {
 	}
 	if errEnvelope.Code != "ALGORITHM_NOT_IN_CRASH_LOOP" {
 		t.Fatalf("expected code ALGORITHM_NOT_IN_CRASH_LOOP, got %q", errEnvelope.Code)
+	}
+}
+
+// seedAlgorithm 落一条最小可用的算法记录。字段全部取自 manifest 约定，
+// 与被测的动作契约无关，抽出来是为了让断言本身留在视线里。
+func seedAlgorithm(t *testing.T, store *algorithm.Store, id, status string) {
+	t.Helper()
+	seed := &algorithm.Algorithm{
+		ID:           id,
+		Name:         id,
+		Version:      "1.0.0",
+		TaskType:     algorithm.TaskTypeDetection,
+		Category:     algorithm.CategorySafety,
+		TargetArch:   "x86_64",
+		TargetDevice: "onnx",
+		ComputeCost:  10,
+		MemoryMB:     64,
+		Status:       status,
+	}
+	if err := store.CreateAlgorithm(context.Background(), seed); err != nil {
+		t.Fatalf("seed algorithm %s: %v", id, err)
 	}
 }

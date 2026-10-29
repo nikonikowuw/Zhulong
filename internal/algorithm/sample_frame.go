@@ -29,9 +29,7 @@ func writeSampleFramePPM(samplePath string) (string, func()) {
 	if err != nil {
 		return "", nil
 	}
-	defer func() {
-		_ = file.Close()
-	}()
+	defer file.Close()
 
 	decoded, _, err := image.Decode(file)
 	if err != nil {

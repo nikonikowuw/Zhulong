@@ -78,7 +78,7 @@ func TestPlateRecognitionPackageInstall(t *testing.T) {
 	archivePath := findPlateRecognitionArchive(t)
 
 	installDir := t.TempDir()
-	verifier := algorithm.NewVerifier(x86Host())
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*1e9)
 	defer cancel()

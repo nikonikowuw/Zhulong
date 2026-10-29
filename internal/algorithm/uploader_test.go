@@ -69,9 +69,9 @@ func createTestZip(t *testing.T, files map[string][]byte) string {
 func TestSaveUploadStreamEnforcesSizeLimit(t *testing.T) {
 	// A small stream should succeed
 	smallData := bytes.NewReader([]byte("small payload"))
-	path, err := algorithm.SaveUploadStream(smallData, "")
+	path, err := algorithm.SaveUploadStreamWithLimit(smallData, "", algorithm.MaxUploadSize)
 	if err != nil {
-		t.Fatalf("SaveUploadStream failed: %v", err)
+		t.Fatalf("SaveUploadStreamWithLimit failed: %v", err)
 	}
 	defer os.Remove(path)
 
@@ -100,23 +100,6 @@ func TestSaveUploadStreamWithCustomLimit(t *testing.T) {
 	_, err = algorithm.SaveUploadStreamWithLimit(dataExceeding, "", customLimit)
 	if !errors.Is(err, algorithm.ErrFileTooLarge) {
 		t.Fatalf("expected ErrFileTooLarge, got: %v", err)
-	}
-}
-
-func TestDetectArchiveType(t *testing.T) {
-	tarGzHeader := []byte{0x1F, 0x8B, 0x08, 0x00}
-	if algorithm.DetectArchiveType(tarGzHeader) != algorithm.ArchiveTypeTarGz {
-		t.Errorf("expected ArchiveTypeTarGz")
-	}
-
-	zipHeader := []byte{0x50, 0x4B, 0x03, 0x04}
-	if algorithm.DetectArchiveType(zipHeader) != algorithm.ArchiveTypeZip {
-		t.Errorf("expected ArchiveTypeZip")
-	}
-
-	invalidHeader := []byte{0x00, 0x01, 0x02, 0x03}
-	if algorithm.DetectArchiveType(invalidHeader) != algorithm.ArchiveTypeUnknown {
-		t.Errorf("expected ArchiveTypeUnknown")
 	}
 }
 

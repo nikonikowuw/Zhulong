@@ -111,7 +111,7 @@ func TestVerifierFeedsDecodedSampleFromPackageCwd(t *testing.T) {
 	core, logs := observer.New(zapcore.WarnLevel)
 	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{Logger: zap.New(core)})
 
-	if _, _, _, err := verifier.VerifyDirectory(context.Background(), pkgDir); err != nil {
+	if _, err := verifier.VerifyDirectory(context.Background(), pkgDir); err != nil {
 		t.Fatalf("verification failed: %v", err)
 	}
 
@@ -166,7 +166,7 @@ func TestVerifierWarnsWhenEntryCannotDecodeSample(t *testing.T) {
 	core, logs := observer.New(zapcore.WarnLevel)
 	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{Logger: zap.New(core)})
 
-	if _, _, _, err := verifier.VerifyDirectory(context.Background(), pkgDir); err != nil {
+	if _, err := verifier.VerifyDirectory(context.Background(), pkgDir); err != nil {
 		t.Fatalf("verification must not fail, got: %v", err)
 	}
 	if entries := logs.FilterMessageSnippet("without a decoded sample frame").All(); len(entries) != 1 {
@@ -189,7 +189,7 @@ func TestVerifierWarnsOnZeroResultsFromDecodedSample(t *testing.T) {
 	core, logs := observer.New(zapcore.WarnLevel)
 	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{Logger: zap.New(core)})
 
-	if _, _, _, err := verifier.VerifyDirectory(context.Background(), pkgDir); err != nil {
+	if _, err := verifier.VerifyDirectory(context.Background(), pkgDir); err != nil {
 		t.Fatalf("verification must not fail, got: %v", err)
 	}
 	if entries := logs.FilterMessageSnippet("zero results").All(); len(entries) != 1 {
@@ -208,8 +208,8 @@ func TestVerifierReportsEntryFailureWithStderr(t *testing.T) {
 		t.Fatalf("write failing entry: %v", err)
 	}
 
-	verifier := algorithm.NewVerifier(x86Host())
-	_, _, _, err := verifier.VerifyDirectory(context.Background(), pkgDir)
+	verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{})
+	_, err := verifier.VerifyDirectory(context.Background(), pkgDir)
 	if !errors.Is(err, algorithm.ErrVerificationFailed) {
 		t.Fatalf("expected ErrVerificationFailed, got: %v", err)
 	}
