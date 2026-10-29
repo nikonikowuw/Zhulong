@@ -18,6 +18,10 @@ const nativeIpcProtocolRelPath = "native/src/algorithm/ipc/ipc_protocol.hpp"
 // nativePluginHeaderRelPath is the native single source of truth for the Plugin C ABI.
 const nativePluginHeaderRelPath = "native/sdk/include/zhulong/plugin.h"
 
+// nativeWorkerGuardRelPath is the native single source of truth for the skeleton's
+// per-stream worker exit codes.
+const nativeWorkerGuardRelPath = "native/sdk/src/internal/worker_guard.hpp"
+
 // TestPluginContractMatchesNativeHeader cross-checks result_type enums and
 // string/dimension constraints between zhulong/plugin.h and Go ResultType.
 func TestPluginContractMatchesNativeHeader(t *testing.T) {
@@ -121,6 +125,41 @@ func TestIpcContractMatchesNativeHeader(t *testing.T) {
 	checkEnumConst(t, content, "MSG_GALLERY_UPSERT", uint64(algoipc.MsgGalleryUpsert))
 	checkEnumConst(t, content, "MSG_GALLERY_DELETE", uint64(algoipc.MsgGalleryDelete))
 	checkEnumConst(t, content, "MSG_GALLERY_ACK", uint64(algoipc.MsgGalleryAck))
+}
+
+// TestRunnerExitCodeMatchesNativeSkeleton pins the process exit code the package
+// skeleton uses for a failed worker thread. The host reacts to it (failure-stage
+// classification), so a silent renumbering on either side would turn a diagnosable
+// failure back into "runner exited unexpectedly".
+func TestRunnerExitCodeMatchesNativeSkeleton(t *testing.T) {
+	path := findNativeHeader(t, nativeWorkerGuardRelPath)
+	if path == "" {
+		t.Skipf("%s not found, skipping cross-language worker guard contract test", nativeWorkerGuardRelPath)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read native worker guard header: %v", err)
+	}
+
+	checkConstexprInt(t, string(raw), "kExitWorkerCrashed", uint64(algoipc.RunnerExitWorkerCrashed))
+}
+
+// checkConstexprInt extracts `constexpr int NAME = <literal>;` from a native header.
+func checkConstexprInt(t *testing.T, content, name string, want uint64) {
+	t.Helper()
+	re := regexp.MustCompile(`constexpr\s+int\s+` + regexp.QuoteMeta(name) + `\s*=\s*([0-9]+)\s*;`)
+	m := re.FindStringSubmatch(content)
+	if m == nil {
+		t.Fatalf("native header does not declare constexpr int %s", name)
+	}
+	got, err := strconv.ParseUint(m[1], 10, 64)
+	if err != nil {
+		t.Fatalf("cannot parse %s value %q: %v", name, m[1], err)
+	}
+	if got != want {
+		t.Errorf("%s drift: native=%d, Go=%d", name, got, want)
+	}
 }
 
 // checkUint32Const extracts `constexpr uint32_t NAME = <expr>;` (or uint16_t)

@@ -18,6 +18,7 @@
 #include "internal/gallery_index.hpp"
 #include "internal/gallery_parser.hpp"
 #include "internal/motion_gate.hpp"
+#include "internal/worker_guard.hpp"
 #include "algorithm/ipc/ipc_protocol.hpp"
 #include "algorithm/ipc/shm_pool.hpp"
 #include "algorithm/ipc/unix_socket.hpp"
@@ -25,13 +26,16 @@
 #include "platform/dmabuf/dmabuf_sync.hpp"
 #include <zhulong/runtime/runtime_factory.hpp>
 
+#include <pthread.h>
 #include <unistd.h>
 #include <sys/mman.h>
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -58,6 +62,57 @@ namespace detail
         std::string line = output.str();
         line.push_back('\n');
         write_runner_stderr(line.data(), line.size());
+    }
+
+    /**
+     * @brief 给当前 Worker 线程起一个可分辨的内核线程名（`ps -L` / gdb / perf 用）
+     *
+     * 多路订阅下所有 Worker 都是同一个可执行文件的线程，没有名字时排障只能靠 CPU 占用
+     * 猜「哪一路卡住了」。名称带下标，与控制消息里的 `index` 字段一致。
+     *
+     * 平台差异收敛在这里：Linux 的 `pthread_setname_np` 作用于**指定**线程（需显式传
+     * `pthread_self()`），macOS 的同名函数只作用于**调用线程**且不接受线程参数。两者都在
+     * 本函数（线程入口）调用，因此语义一致。
+     */
+    inline void set_worker_thread_name(size_t idx) noexcept
+    {
+        // 内核上限 16 字节（含结尾 NUL）。超长会被截断或返回 ERANGE，这里显式裁短。
+        char name[16] = {};
+        std::snprintf(name, sizeof(name), "algo-w%zu", idx);
+#if defined(__linux__)
+        ::pthread_setname_np(::pthread_self(), name);
+#elif defined(__APPLE__)
+        ::pthread_setname_np(name);
+#else
+        (void)name;
+#endif
+    }
+
+    /**
+     * @brief 安装最后一道 terminate 兜底
+     *
+     * Worker 线程体内的异常由 `run_worker_guarded` 收口；但仍有几处例外不在它的边界内：
+     * `std::thread` 构造抛 `std::system_error`（线程资源耗尽）、`noexcept` 函数里抛异常、
+     * 以及未来新增代码的疏漏。这些路径的默认结局是 `std::terminate` → SIGABRT(134)：
+     * 退出码没有语义、stage 日志一条都没有，宿主只能记「runner exited unexpectedly」。
+     *
+     * 这个 handler 把同一种故障翻译成与 `run_worker_guarded` **同一个**退出码和 stage，
+     * 让宿主侧不需要区分两条路径。
+     *
+     * ⚠️ 这里**不能**用 `write_runner_error_line`：它构造 `ostringstream`（二次分配失败会
+     *    再抛一次，直接嵌套 terminate → abort），并且要拿 log.cpp 的 `g_stderr_write_mutex`
+     *    —— terminate 发生时该锁很可能正被当前线程持有，那就是死锁。只允许一次不分配的
+     *    `::write` 把诊断钉在 stderr 上。
+     */
+    inline void install_terminate_guard() noexcept
+    {
+        std::set_terminate([]() noexcept {
+            static constexpr char kRecord[] =
+                "{\"status\":\"failed\",\"stage\":\"worker_exception\",\"error\":\"terminate\"}\n";
+            const ssize_t written = ::write(STDERR_FILENO, kRecord, sizeof(kRecord) - 1);
+            (void)written;
+            std::_Exit(kExitWorkerCrashed);
+        });
     }
 
     /**
@@ -747,7 +802,9 @@ namespace detail
         std::atomic<int> exit_code{0};
         GalleryIndex gallery_index;
 
-        auto run_single_worker = [&](size_t idx, const std::string &broker_sock)
+        // 单路 Worker 的**完整工作体**。刻意保持原样（只由 run_single_worker 在异常边界内调用），
+        // 不要把连接/握手/收帧逻辑拆出去：这段里的任何一个分配失败都必须被同一个边界接住。
+        auto run_single_worker_body = [&](size_t idx, const std::string &broker_sock)
         {
             // ⚠️ 必须是 lambda 局部变量：多路 --broker 时本 lambda 被多个线程并发执行，
             //    共享外层变量构成数据竞争（-race 阻塞级）。
@@ -1097,6 +1154,34 @@ namespace detail
             api.worker_destroy(worker);
         };
 
+        // 单路 Worker 的异常边界（线程入口）。
+        //
+        // 之前这段是直接交给 std::thread 的：骨架自身的 C++ 异常（结果 JSON 序列化的
+        // ostringstream、数组增长、socket 路径拼接）一旦逃出线程函数就 std::terminate →
+        // SIGABRT(134)，既没有 stage 日志也没有退出码语义。现在翻译成与「broker 连不上」
+        // 同一类的**受控失败**：置 stop_all + 退出码 kExitWorkerCrashed，进程照常走宿主的
+        // 退避 / CRASH_LOOP 熔断 / 版本回滚。
+        //
+        // ⚠️ 这里保持 D6「任一路失败即整包退出」的语义不变：让宿主用一次几秒的重启换回
+        //    全部路，远好于一路静默缺失而宿主以为一切正常。
+        auto run_single_worker = [&](size_t idx, const std::string &broker_sock)
+        {
+            set_worker_thread_name(idx);
+            run_worker_guarded(
+                [&]() { run_single_worker_body(idx, broker_sock); },
+                [&](const char *detail)
+                {
+                    // 先置状态位再写日志：诊断字符串的构造本身也可能在 OOM 上再抛一次，
+                    // 而 stop_all / 退出码在任何情况下都必须是准确的。
+                    int expected = 0;
+                    exit_code.compare_exchange_strong(expected, kExitWorkerCrashed);
+                    stop_all.store(true);
+                    write_runner_error_line("{\"status\":\"failed\",\"stage\":\"worker_exception\",\"index\":",
+                                            idx, ",\"error\":",
+                                            runner::json_quote(detail != nullptr ? detail : ""));
+                });
+        };
+
         if (broker_socks.size() == 1)
         {
             run_single_worker(0, broker_socks[0]);
@@ -1210,6 +1295,11 @@ namespace detail
 
     int run_api(const zhulong_plugin_api_v1 &api, const Options &options)
     {
+        // 最后一道兜底必须在三条业务路径（verify / extract-feature / broker）之前安装。
+        // 唯一早于本函数的窗口是 argv 解析——那里只有几个定长 string 操作，为它去改公开
+        // 头 `ZHULONG_ALGO_MAIN` 不划算。
+        install_terminate_guard();
+
         // 诊断日志由 log.cpp 的写线程统一落到日志文件（stderr 兜底）；
         // stdout 只承载结果/验包 JSON，宿主按行解析，两者不可混用。
         //

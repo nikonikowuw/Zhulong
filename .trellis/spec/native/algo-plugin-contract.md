@@ -59,6 +59,8 @@ native/tests/check_plugin_symbols.py --entry <包根可执行文件>
 
 导出入口和 API callbacks 必须以 `try { ... } catch (...)` 阻止 C++ 异常穿越动态库边界；失败返回 `ZHULONG_PLUGIN_ERR_INTERNAL`，并在失败时将输出句柄/result 初始化为空。
 
+⚠️ 这道门只挡**算法类**抛出的异常。骨架自己的代码（结果 JSON 序列化、数组增长、路径拼接）在 OOM 上同样会抛，那类异常由**线程边界**收口并翻译成有退出码的受控失败——见 [§5.2.1 单路 Worker 异常边界](#521-单路-worker-异常边界退出码-9)。
+
 ### 运行库 HAL 的 vtable 属于内部 ABI（禁止增删虚函数）
 
 > 交付形态已是「包根可执行文件 + 静态链接运行时」，`plugin.so ↔ libZhulongAlgoRuntime.so` 的版本偏斜彻底消失。下面的约束保留为**同一次构建内**的纪律（运行库与算法类必须一致地编译），历史事故保留作理由。
@@ -238,8 +240,23 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 | `3` | `worker_create` 失败 | `algo_main.cpp` |
 | `4` | `task_open` 失败 | `algo_main.cpp` |
 | `5` | **broker 连接失败 / 无法从 `--broker` 路径反解 stream_id / 未提供 `--broker`**；`--extract-feature` 下表示能力缺失（`UNSUPPORTED`）或模型不可用（`MODEL_UNAVAILABLE`）或帧头截断 | `algo_main.cpp` |
+| `6` | 握手请求发送失败 | `algo_main.cpp` |
+| `7` | 握手应答接收失败或类型不符 | `algo_main.cpp` |
+| `8` | 共享内存只读映射失败 | `algo_main.cpp` |
+| `9` | **单路 Worker 未捕获异常**（见 §5.2.1） | `worker_guard.hpp` |
 
 ⚠️ 多路 `--broker` 下，任一路连接失败即整体失败，退出码严格保持为 `5`；任一路失败会置位 `stop_all` 终止已连接各路，不存在部分成功中间态。
+
+### 5.2.1 单路 Worker 异常边界（退出码 `9`）
+
+线程体内的未捕获异常由 `run_worker_guarded`（`sdk/src/internal/worker_guard.hpp`）在**线程边界**转换为受控失败：输出 `stage=worker_exception` 记录（含 `index`）、置 `stop_all`、退出码 `9`。
+
+- **为什么需要**：`PluginApi::process` 的 try-catch 只覆盖**算法类**。骨架自己的代码同样会抛——`serialize_inference_result` 每帧构造 `ostringstream`、结果数组增长、socket 路径拼接，在 OOM 上都有真实失败路径。异常一旦逃出线程函数就是 `std::terminate` → SIGABRT(134)：没有 stage 记录、退出码没有语义，宿主只能记一句 "runner exited unexpectedly"。
+- **`std::set_terminate` 兜底**（`install_terminate_guard`）覆盖边界之外的剩余路径（`std::thread` 构造抛 `system_error`、`noexcept` 边界、未来疏漏），复用同一个退出码与同一条 stage 记录。⚠️ handler 里只允许一次不分配的 `::write`：调 `write_runner_error_line` 会在 OOM 上二次抛（嵌套 terminate → abort），且要拿 `g_stderr_write_mutex`（terminate 时该锁可能正被本线程持有 → 死锁）。
+- **状态位先于日志**：`on_error` 里先 `compare_exchange` 退出码、再 `stop_all.store`、最后才构造诊断字符串——日志构造本身可能再抛，而状态位必须准确。
+- **故障域语义不变**：仍是「一路失败整包退出」（D6）。区别只在**可诊断、可退避、可熔断**。不要把它改成「该路静默退出、其它路继续」：那会让宿主以为全路都在跑，比一次受控重启更糟。
+- **诊断**：每个 Worker 线程在入口设内核线程名 `algo-w<idx>`（`set_worker_thread_name`），`ps -L` / gdb / perf 可直接区分是哪一路。
+- **跨语言约束**：`kExitWorkerCrashed` 必须等于 Go 侧 `algoipc.RunnerExitWorkerCrashed`（`internal/algorithm/ipc_contract_test.go` 的 `TestRunnerExitCodeMatchesNativeSkeleton` 钉住）；`worker_exception` 必须留在 `internal/algorunner/process.go` 的 `validRunnerStage` allowlist 里，否则该记录会被判为 "runner protocol record rejected"，真实事件被吞掉。
 
 ### 5.3 FrameBroker 宿主与帧发布通路
 

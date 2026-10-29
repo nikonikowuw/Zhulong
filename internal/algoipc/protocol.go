@@ -21,8 +21,22 @@ const (
 	// connect to at least one frame broker socket.
 	FailureStageBrokerConnect = "connect"
 
+	// FailureStageWorkerException marks a runner that exited because one per-stream
+	// worker thread failed (uncaught exception inside the package skeleton itself).
+	// The skeleton catches it at the thread boundary instead of letting std::terminate
+	// abort with SIGABRT, so the host still gets a stage record and an exit code it
+	// can back off on.
+	FailureStageWorkerException = "worker_exception"
+
 	// RunnerExitBrokerUnavailable is the runner's exit code for a failed broker connect.
 	RunnerExitBrokerUnavailable = 5
+
+	// RunnerExitWorkerCrashed is the runner's exit code when a per-stream worker
+	// failed with an uncaught C++ exception.
+	//
+	// ⚠️ Must equal kExitWorkerCrashed in native/sdk/src/internal/worker_guard.hpp;
+	// TestRunnerExitCodeMatchesNativeSkeleton in internal/algorithm enforces it.
+	RunnerExitWorkerCrashed = 9
 
 	// MsgResult is the inference result egress message type (Runner -> Broker/Go).
 	MsgResult uint16 = 7
