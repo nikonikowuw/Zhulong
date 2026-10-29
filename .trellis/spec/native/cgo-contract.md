@@ -79,7 +79,7 @@ func (e *Engine) Ready() bool
 func (e *Engine) Close() error
 
 func (e *Engine) Probe(ctx context.Context, uri string, options StreamOptions) (VideoInfo, error)
-func (e *Engine) Acquire(ctx context.Context, uri string, consumerID uint64, kind ConsumerKind, options StreamOptions) (*Stream, error)
+func (e *Engine) Acquire(ctx context.Context, uri string, consumer Consumer, options StreamOptions) (*Stream, error)
 func (s *Stream) Status(ctx context.Context) (StreamStatus, error)
 func (s *Stream) Subscribe(ctx context.Context, options SubscriptionOptions) (*Subscription, error)
 func (s *Stream) Close() error
@@ -87,16 +87,22 @@ func (s *Subscription) Next(ctx context.Context) (Packet, error)
 func (s *Subscription) Done() <-chan struct{}
 func (s *Subscription) Err() error
 func (s *Subscription) Close() error
-
-func (e *Engine) ExtractFaceFeature(ctx context.Context, imageBytes []byte) ([]float32, error)
 ```
+
+> 人脸特征提取**不在**本包：它从「engine 里 dlopen 人脸插件」改成了「与跟包可执行文件说一个小协议」，实现在 `internal/faceextract`，宿主不认识算法二进制。历史文档列过 `Engine.ExtractFaceFeature`，该符号已不存在。
+
+所有导出方法要求传入**非 nil** 的 `context.Context`（与标准库惯例一致）；本包不提供 nil 语义，内部辅助函数也不接受 nil（如 `normalizeTimeoutMs` / `clampToDeadline` 已拆开，不再用一个布尔量表示「是否收敛」）。
 
 `Start` 在持锁下创建 C-owned handle 并启动；启动失败时销毁 handle。`Stop` 不销毁句柄；幂等 `Close` 停止并销毁。Go 只保存不透明句柄值，不向 C 侧暴露可逃逸的 Go 指针。C++ 静态库由 `make native-build` 构建到 `build/native/host/libZhulongEngine.a`。Go 命令必须通过 `native/scripts/build.py go ...` 或 Make：脚本传递 Engine 内容摘要路径、FFmpeg 三个静态归档及目标系统库，避免 Go 外部归档缓存过期。交叉产物使用独立目录，不覆盖 host。
 
 句柄生命周期防护与并发控制：
-- **句柄操作读写锁隔离 (`handleMu sync.RWMutex`)**：所有跨 CGO 访问底层 `handle` 的调用均在读锁保护下执行（`handleMu.RLock()` / `handleMu.RUnlock()`）；`Close()` 销毁 `handle` 前必须获取写锁（`handleMu.Lock()`）彻底排空在途调用，消除野指针与 Use-After-Free 隐患。
+- **句柄租约统一走 `borrowHandle`**：所有跨 CGO 访问底层 `handle` 的调用都经 `Engine.borrowHandle(handleRequirement)` 取得 `handleLease` 与 `release` 函数，在 `handleMu` 读锁保护下执行（`release` 前所有 CGO 调用必然排在 `Close()` 取写锁之前、`Zhulong_engine_destroy` 之前），消除野指针与 Use-After-Free 隐患。**不要**再手写「RLock → mu → 守卫 → 取 handle」四行模板。
+  - `handleRequirement` 的三个条件（`requireRunning` / `requireGeneration` / `deniedError`）必须显式传，helper 不做缺省推断。
+  - ⚠️ **停机排空路径（`releaseStream` / `unsubscribeWith`）故意不要求运行态**：`stopInternal` 先把 `running` 置 false，再逐个 `s.Close()`；给它们加上运行态检查会让关流全部退化成 `ErrNotRunning`，token 便堆到下次排空。
+- **锁获取顺序严格单向**：`lifecycleMu → handleMu → mu → {probesMu, streamsMu}`，注释写在 `Engine` 类型上。`mu` 只保护状态字段，**绝不在其下做 CGO 调用**；`handle` 同时受 `handleMu`（指针不悬空）与 `mu`（状态自洽）保护。
 - **私有探测引擎的 stop/destroy 互斥**：`Probe` 使用隔离的私有引擎实例。`stopInternal` 把 `activeProbes` 快照出锁后逐个 `stop`，而探测 goroutine 自己也会 `stop` 并在返回时 `destroy` —— 两者必须经 `probeContext.mu` 串行，否则「快照晚用一步」就是对已释放句柄调用 `Zhulong_engine_stop`。`destroy` 必须吸收 `stop` 语义（先 stop 再 destroy 并标记 `destroyed`），保证 destroy 之后不会再有 stop。
-- **停机注销延迟排空（三分支）**：注销返回后 `cgo.Handle` 的释放时机由 `planTokenRelease` 决定 —— 仅 `Zhulong_OK` / `Zhulong_ERR_NOT_FOUND`（已同步排空或本就无此订阅）可立即 `Delete`；`Zhulong_ERR_NOT_RUNNING`（停机中）与**任何未预期状态**（如 `Zhulong_ERR_CALLBACK_CONTEXT`、`ERR_BUSY`）都必须暂存到 `pendingTokens`，等底层工作线程全部 `join()` 汇合完成后统一释放。默认分支必须保守：晚一点释放永远优于提前释放（残余回调会命中已删除句柄）或永不释放（`cgo.Handle` 泄漏）。
+- **停机注销延迟排空（两分支）**：注销返回后 `cgo.Handle` 的释放时机由 `planTokenRelease` 决定 —— 仅 `Zhulong_OK` / `Zhulong_ERR_NOT_FOUND`（已同步排空或本就无此订阅）可立即 `Delete`；**其余全部状态**（停机中的 `ERR_NOT_RUNNING` 与任何未预期状态，如 `ERR_CALLBACK_CONTEXT`、`ERR_BUSY`）都走 `default` 分支暂存到 `pendingTokens`，等底层工作线程全部 `join()` 汇合完成后统一释放。默认分支必须保守：晚一点释放永远优于提前释放（残余回调会命中已删除句柄）或永不释放（`cgo.Handle` 泄漏）。由于两条路径行为一致，不要再为 `ERR_NOT_RUNNING` 写单独的等同分支。
+- **`Stream` 前置检查统一走 `lease`**：`Status` / `BrokerPath` / `SetPublishRate` / `Snapshot` 用 `Stream.lease(ctx)` 一次性完成「ctx 校验 + 关闭态校验 + 在锁内取 `generation`/`id`」，避免四处复制同一段样板，也避免解锁后再读不可变字段这种「靠 happens-before 推理」的写法。
 - **ABI 版本取自头文件宏**：`expectedABIVersion` 用 `uint32(C.ZHULONG_ABI_VERSION)` 而非手写常量，避免 Go 常量与 `engine.h` 漂移；该检查校验的是「头文件」与「静态库归档」是否同源，不匹配时 `Start` 直接拒绝。
 - **阻塞式 CGO 调用的超时上限**：`maxAllowedTimeout`（2 分钟）同时是优雅停机的最坏阻塞上界 —— `Close` 必须等持读锁的在途调用（如 `Acquire` 的 RTSP open）返回才能取写锁销毁句柄。放宽该上限前先确认停机预算。
 - **Go 桥接私有状态码必须独占**：`NativeError.Is` 只比较 `Code`，因此每个哨兵必须一个码（例如 `StatusSnapshotUnavailable` 不能复用 `StatusUnsupported`，否则两类失败会互相 `errors.Is` 为真）。Go 私有码从 `-100` 起，绝不跨越 ABI 边界。
