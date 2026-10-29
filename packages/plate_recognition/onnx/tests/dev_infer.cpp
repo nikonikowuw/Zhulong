@@ -20,7 +20,9 @@
 
 #include <zhulong/algo.hpp>
 
+#include "plate_format.hpp"
 #include "plate_recognition.hpp"
+#include "plate_recognizer.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -28,6 +30,8 @@
 #include "stb_image_write.h"
 
 #include <chrono>
+#include <cmath>
+#include <cassert>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -100,9 +104,104 @@ void print_table(const std::string& sample, const char* result_type_name, uint32
     }
 }
 
+void run_internal_unit_tests() {
+    using namespace zhulong::plate;
+
+    // 1. 双层车牌切块重拼的坐标映射单测
+    constexpr int kTargetW = kRecognitionWidth;
+    constexpr int kTargetH = kRecognitionHeight;
+    const float crop_x = 100.0f;
+    const float crop_y = 200.0f;
+    const float crop_w = static_cast<float>(kTargetW);
+    const float crop_h = static_cast<float>(kTargetH);
+
+    const auto single = [&](int x, int y) {
+        return plate_sample_point(x, y, kTargetW, kTargetH, crop_x, crop_y,
+                                  crop_w, crop_h,
+                                  static_cast<int32_t>(PlateLineLayout::SingleLine));
+    };
+    const auto double_line = [&](int x, int y) {
+        return plate_sample_point(x, y, kTargetW, kTargetH, crop_x, crop_y,
+                                  crop_w, crop_h,
+                                  static_cast<int32_t>(PlateLineLayout::DoubleLine));
+    };
+    const auto new_energy = [&](int x, int y) {
+        return plate_sample_point(x, y, kTargetW, kTargetH, crop_x, crop_y,
+                                  crop_w, crop_h,
+                                  static_cast<int32_t>(PlateLineLayout::NewEnergy));
+    };
+
+    // 单层恒等映射
+    for (int y = 0; y < kTargetH; y += 7) {
+        for (int x = 0; x < kTargetW; x += 13) {
+            const auto point = single(x, y);
+            assert(std::fabs(point.fx - (crop_x + static_cast<float>(x))) < 1e-4f);
+            assert(std::fabs(point.fy - (crop_y + static_cast<float>(y))) < 1e-4f);
+        }
+    }
+    const auto energy_point = new_energy(10, 10);
+    const auto single_point = single(10, 10);
+    assert(std::fabs(energy_point.fx - single_point.fx) < 1e-4f);
+    assert(std::fabs(energy_point.fy - single_point.fy) < 1e-4f);
+
+    constexpr float kPixelCenter = 0.5f;
+    const float upper_band_end = crop_y + crop_h * 5.0f / 12.0f;
+    const float lower_band_start = crop_y + crop_h / 3.0f;
+    for (int y = 0; y < kTargetH; y += 5) {
+        assert(double_line(0, y).fy < upper_band_end);
+        assert(double_line(kTargetW / 2 - 1, y).fy < upper_band_end);
+        assert(double_line(kTargetW / 2, y).fy >= lower_band_start - kPixelCenter);
+        assert(double_line(kTargetW - 1, y).fy >= lower_band_start - kPixelCenter);
+        assert(double_line(kTargetW - 1, y).fy < crop_y + crop_h);
+    }
+
+    // 2. 号码结构规则校验
+    assert(validate_plate_number("豫B2V9L7").valid);
+    assert(validate_plate_number("辽DU4356").valid);
+    assert(validate_plate_number("京A12345").valid);
+    assert(validate_plate_number("粤AD12345").valid);
+    assert(validate_plate_number("粤AF12345").valid);
+    assert(validate_plate_number("京A12345D").valid);
+    assert(validate_plate_number("京A12345F").valid);
+    assert(validate_plate_number("京A1234警").valid);
+    assert(validate_plate_number("粤B1234学").valid);
+    assert(validate_plate_number("冀B1234挂").valid);
+    assert(validate_plate_number("使123456").valid);
+    assert(validate_plate_number("领123456").valid);
+
+    assert(validate_plate_number("").problem == PlateFormatProblem::BadLength);
+    assert(validate_plate_number("京A12").problem == PlateFormatProblem::BadLength);
+    assert(validate_plate_number("京A12345678").problem == PlateFormatProblem::BadLength);
+    assert(validate_plate_number("美A12345").problem == PlateFormatProblem::BadProvince);
+    assert(validate_plate_number("京I12345").problem == PlateFormatProblem::BadAuthority);
+    assert(validate_plate_number("京O12345").problem == PlateFormatProblem::BadAuthority);
+    assert(validate_plate_number("京A1学345").problem == PlateFormatProblem::BadCharacter);
+    assert(validate_plate_number("京A123456").problem == PlateFormatProblem::BadNewEnergyLayout);
+    assert(validate_plate_number("\xE4\xBA").problem == PlateFormatProblem::InvalidUtf8);
+
+    // 3. 负 stride 显式拒绝
+    PlateRecognizer recognizer;
+    zhulong::Session session;
+    zhulong_frame_view bad_stride_frame;
+    std::memset(&bad_stride_frame, 0, sizeof(bad_stride_frame));
+    uint8_t dummy[100] = {0};
+    bad_stride_frame.planes[0] = dummy;
+    bad_stride_frame.width = 100;
+    bad_stride_frame.height = 100;
+    bad_stride_frame.format = ZHULONG_PIXEL_FORMAT_RGB24;
+    bad_stride_frame.strides[0] = -300;
+    const auto bad_result = recognizer.recognize(session, bad_stride_frame, {0.1f, 0.1f, 0.5f, 0.5f}, 0);
+    assert(bad_result.plate_number.empty());
+
+    std::printf("[✓] plate algorithm internal unit asserts passed\n");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    // 运行算法内部纯函数单测（坐标映射、号牌结构、负 stride 防护）
+    run_internal_unit_tests();
+
     std::string sample_path = "sample.jpg";
     std::string output_path = "build/out/result.jpg";
     std::string config_json = "{}";

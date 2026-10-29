@@ -1,5 +1,7 @@
 #include "plate_recognition.hpp"
 
+#include "plate_format.hpp"
+
 #include <zhulong/algo.hpp>
 
 #include <dlfcn.h>
@@ -209,16 +211,24 @@ float resolve_threshold(const std::string& config_json, const char* config_key, 
     zhulong::Session PlateRecognitionPlugin::create_session(uint32_t worker_id)
     {
         std::lock_guard<std::mutex> lock(session_mutex_);
+        if (!det_model_.valid()) {
+            return zhulong::Session();
+        }
+        zhulong::Session det_session = det_model_.create_session(worker_id);
+        if (!det_session.valid()) {
+            return zhulong::Session();
+        }
+
         if (rec_model_.valid()) {
-            rec_sessions_[worker_id] = rec_model_.create_session(worker_id);
-            if (!rec_sessions_[worker_id].valid()) {
-                rec_sessions_.erase(worker_id);
+            zhulong::Session rec_session = rec_model_.create_session(worker_id);
+            if (!rec_session.valid()) {
+                // 级联模型会话创建失败时整体失败，严禁静默降级导致假活
+                return zhulong::Session();
             }
+            rec_sessions_[worker_id] = std::move(rec_session);
         }
-        if (det_model_.valid()) {
-            return det_model_.create_session(worker_id);
-        }
-        return zhulong::Session();
+
+        return det_session;
     }
 
     std::vector<zhulong::VehicleItem> PlateRecognitionPlugin::detect_vehicles(
@@ -259,6 +269,17 @@ float resolve_threshold(const std::string& config_json, const char* config_key, 
             //    生成抓拍去重键，而退化模式没有跟踪 ID，框抖动会让去重键持续变化并
             //    产生抓拍洪泛。宁可少报一块「读不出来的车牌」，也不制造无界证据。
             if (recognized.plate_number.empty()) {
+                continue;
+            }
+
+            // 号牌结构无条件合法性校验：拦截无法在现实中成立的畸形/噪点字符序列
+            const PlateFormatVerdict verdict = validate_plate_number(recognized.plate_number);
+            if (!verdict.valid) {
+                if (const char* debug_env = std::getenv("ZHULONG_PLATE_DEBUG"); debug_env != nullptr && debug_env[0] == '1') {
+                    std::fprintf(stderr, "[plate_recognition] rejected invalid plate '%s' (reason: %s)\n",
+                                 recognized.plate_number.c_str(),
+                                 plate_format_problem_name(verdict.problem));
+                }
                 continue;
             }
 

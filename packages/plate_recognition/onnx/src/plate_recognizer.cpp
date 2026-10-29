@@ -1,5 +1,7 @@
 #include "plate_recognizer.hpp"
 
+#include "plate_charset.hpp"
+
 #include <zhulong/runtime/yuv_sampling.hpp>
 
 #include <algorithm>
@@ -12,31 +14,11 @@ namespace zhulong::plate {
 
 namespace {
 
-/**
- * @brief 车牌字符表（CTC 类别索引，0 为空白符）
- *
- * ⚠️ 顺序即模型类别顺序，改动会导致全线串码。必须与训练侧
- * （以及参考实现 scripts/test_infer.py 的 PLATE_NAMES）逐字节一致。
- */
-const char* const kPlateNames[] = {
-    "#", "京", "沪", "津", "渝", "冀", "晋", "蒙", "辽", "吉", "黑",
-    "苏", "浙", "皖", "闽", "赣", "鲁", "豫", "鄂", "湘", "粤",
-    "桂", "琼", "川", "贵", "云", "藏", "陕", "甘", "青", "宁",
-    "新", "学", "警", "港", "澳", "挂", "使", "领", "民", "航", "危",
-    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
-    "A", "B", "C", "D", "E", "F", "G", "H", "J", "K",
-    "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V",
-    "W", "X", "Y", "Z", "险", "品"
-};
-constexpr size_t kNumPlateChars = sizeof(kPlateNames) / sizeof(kPlateNames[0]);
-
-/** @brief 颜色分类类别表（顺序即模型类别顺序） */
-const char* const kColorNames[] = {"黑色", "蓝色", "绿色", "白色", "黄色"};
-constexpr size_t kNumColors = sizeof(kColorNames) / sizeof(kColorNames[0]);
-
 /** @brief 识别模型的归一化参数（训练侧 mean/std） */
 constexpr float kNormalizeMean = 0.588f;
 constexpr float kNormalizeStd = 0.193f;
+constexpr float kNormalizeScale = 1.0f / (255.0f * kNormalizeStd);
+constexpr float kNormalizeShift = kNormalizeMean / kNormalizeStd;
 
 /** @brief 类别数与形状都取不到时的回退值（该权重固定 21 时间步） */
 constexpr size_t kFallbackTimesteps = 21;
@@ -244,6 +226,10 @@ RecognizedPlate PlateRecognizer::recognize(
     if (!session.valid() || raw.planes[0] == nullptr || raw.width <= 0 || raw.height <= 0) {
         return {};
     }
+    // 负 stride 显式拒绝（底朝上缓冲区在未声明翻转时禁止静默当成 top-down 读取）
+    if (raw.strides[0] < 0 || raw.strides[1] < 0 || raw.strides[2] < 0) {
+        return {};
+    }
 
     const int x1 = std::clamp(static_cast<int>(box[0] * static_cast<float>(raw.width)), 0, raw.width - 1);
     const int y1 = std::clamp(static_cast<int>(box[1] * static_cast<float>(raw.height)), 0, raw.height - 1);
@@ -282,9 +268,9 @@ RecognizedPlate PlateRecognizer::recognize(
             sample_pixel_bgr(raw, point.fx, point.fy, b, g, r);
 
             const size_t index = static_cast<size_t>(y) * kRecognitionWidth + x;
-            plane_b[index] = (b / 255.0f - kNormalizeMean) / kNormalizeStd;
-            plane_g[index] = (g / 255.0f - kNormalizeMean) / kNormalizeStd;
-            plane_r[index] = (r / 255.0f - kNormalizeMean) / kNormalizeStd;
+            plane_b[index] = b * kNormalizeScale - kNormalizeShift;
+            plane_g[index] = g * kNormalizeScale - kNormalizeShift;
+            plane_r[index] = r * kNormalizeScale - kNormalizeShift;
         }
     }
 

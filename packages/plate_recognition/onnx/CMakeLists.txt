@@ -23,6 +23,7 @@ add_library(plate_recognition_core OBJECT
     src/plate_recognition.cpp
     src/plate_detector.cpp
     src/plate_recognizer.cpp
+    src/plate_format.cpp
 )
 target_compile_definitions(plate_recognition_core PRIVATE ZHULONG_PLUGIN_BUILD)
 target_include_directories(plate_recognition_core PRIVATE

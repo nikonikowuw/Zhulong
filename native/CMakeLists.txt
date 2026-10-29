@@ -633,30 +633,7 @@ if(BUILD_TESTING)
         set_tests_properties(ZhulongFaceRecognitionPlugin PROPERTIES TIMEOUT 10)
     endif()
 
-    # 车牌插件测试：坐标映射单测 + ABI 生命周期 + 真实样本金标回归（一个可执行）。
-    # - test_stub：桩后端按设计拒绝真实模型，模型断言编译期排除，坐标映射断言照跑；
-    # - onnx：完整跑金标回归（车牌号/颜色/配置阈值）；
-    # - rknn：不注册（交叉构建无 .rknn 权重与本机执行能力）。
-    if(ZHULONG_INFERENCE_BACKEND STREQUAL "test_stub" OR ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
-        add_executable(ZhulongPlateRecognitionPluginTests
-            tests/plate_recognition_plugin_test.cpp
-            # 测试直接链接包内实现（不再经由 .so）：ABI 表由 PluginApi 现场生成
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_recognition.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_detector.cpp
-            # 仅为 plate_sample_point 纯函数单测直接编译：坐标映射必须能被单测钉住，
-            # 而不是靠「跑一遍模型看结果像不像」验证
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src/plate_recognizer.cpp
-        )
-        target_compile_features(ZhulongPlateRecognitionPluginTests PRIVATE cxx_std_17)
-        target_include_directories(ZhulongPlateRecognitionPluginTests PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
-            ${CMAKE_CURRENT_SOURCE_DIR}/src
-            ${CMAKE_CURRENT_SOURCE_DIR}/../packages/plate_recognition/onnx/src
-        )
-        target_link_libraries(ZhulongPlateRecognitionPluginTests PRIVATE ZhulongAlgoRuntime ${CMAKE_DL_LIBS} Threads::Threads)
-        add_test(NAME ZhulongPlateRecognitionPlugin COMMAND ZhulongPlateRecognitionPluginTests)
-        set_tests_properties(ZhulongPlateRecognitionPlugin PROPERTIES TIMEOUT 20)
-    endif()
+
 
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongFaceRecognitionOnnxTests
