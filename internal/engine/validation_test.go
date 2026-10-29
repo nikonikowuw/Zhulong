@@ -44,72 +44,91 @@ func TestValidateRTSPURI(t *testing.T) {
 }
 
 func TestValidateConsumer(t *testing.T) {
-	if err := validateConsumer(0, ConsumerPreview); !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("expected ErrInvalidArgument for zero consumerID, got %v", err)
+	invalid := []struct {
+		name     string
+		consumer Consumer
+	}{
+		{"zero ID", Consumer{ID: 0, Kind: ConsumerPreview}},
+		{"unknown kind", Consumer{ID: 1, Kind: ConsumerKind(99)}},
 	}
-	if err := validateConsumer(1, ConsumerKind(99)); !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("expected ErrInvalidArgument for invalid kind, got %v", err)
+	for _, c := range invalid {
+		t.Run(c.name, func(t *testing.T) {
+			if err := validateConsumer(c.consumer); !errors.Is(err, ErrInvalidArgument) {
+				t.Fatalf("expected ErrInvalidArgument for %s, got %v", c.name, err)
+			}
+		})
 	}
-	if err := validateConsumer(100, ConsumerPreview); err != nil {
-		t.Fatalf("valid consumer rejected: %v", err)
+
+	valid := []Consumer{
+		{ID: 100, Kind: ConsumerPreview},
+		{ID: 101, Kind: ConsumerRecording},
+		{ID: 102, Kind: ConsumerAI},
 	}
-	if err := validateConsumer(101, ConsumerRecording); err != nil {
-		t.Fatalf("valid consumer rejected: %v", err)
-	}
-	if err := validateConsumer(102, ConsumerAI); err != nil {
-		t.Fatalf("valid consumer rejected: %v", err)
+	for _, consumer := range valid {
+		if err := validateConsumer(consumer); err != nil {
+			t.Fatalf("valid consumer %+v rejected: %v", consumer, err)
+		}
 	}
 }
 
-func TestResolveTimeoutMs(t *testing.T) {
-	// 默认 5000ms
-	ms, err := resolveTimeoutMs(0, nil, false)
-	if err != nil || ms != 5000 {
-		t.Fatalf("expected default 5000ms, got %d (err: %v)", ms, err)
+func TestNormalizeTimeoutMs(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      time.Duration
+		want    uint32
+		wantErr error
+	}{
+		{"zero uses default", 0, defaultTimeoutMs, nil},
+		{"positive preserved", 3 * time.Second, 3000, nil},
+		// 截断后归零必须捉升到 1ms：0 在 ABI 上表示「用底层默认超时」。
+		{"sub-millisecond rounds up", 300 * time.Microsecond, 1, nil},
+		{"negative rejected", -time.Second, 0, ErrInvalidArgument},
+		// >maxAllowedTimeout（停机阻塞上界）必须拒绝，否则优雅停机会被拖死。
+		{"over max rejected", 3 * time.Minute, 0, ErrInvalidArgument},
 	}
 
-	// 指定正数
-	ms, err = resolveTimeoutMs(3*time.Second, nil, false)
-	if err != nil || ms != 3000 {
-		t.Fatalf("expected 3000ms, got %d", ms)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := normalizeTimeoutMs(c.in)
+			if c.wantErr != nil {
+				if !errors.Is(err, c.wantErr) {
+					t.Fatalf("expected %v, got %v", c.wantErr, err)
+				}
+				return
+			}
+			if err != nil || got != c.want {
+				t.Fatalf("expected %dms, got %d (err: %v)", c.want, got, err)
+			}
+		})
+	}
+}
+
+func TestClampToDeadline(t *testing.T) {
+	// 无 deadline 的 ctx 保持原值。
+	if got, err := clampToDeadline(5000, context.Background()); err != nil || got != 5000 {
+		t.Fatalf("expected 5000ms for ctx without deadline, got %d (err: %v)", got, err)
 	}
 
-	// 负数
-	_, err = resolveTimeoutMs(-1*time.Second, nil, false)
-	if !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("expected ErrInvalidArgument for negative duration, got %v", err)
-	}
-
-	// 超过 2 分钟（停机阻塞上界）
-	_, err = resolveTimeoutMs(3*time.Minute, nil, false)
-	if !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("expected ErrInvalidArgument for >maxAllowedTimeout, got %v", err)
-	}
-
-	// clampToContext=true（同步阻塞调用）：Context Deadline 比设置更短时收敛
+	// deadline 比设置更短时收敛。
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	ms, err = resolveTimeoutMs(5*time.Second, ctx, true)
-	if err != nil || ms > 250 {
-		t.Fatalf("expected clamped timeout <= 250ms, got %d", ms)
+	if got, err := clampToDeadline(5_000, ctx); err != nil || got > 250 {
+		t.Fatalf("expected clamped timeout <= 250ms, got %d (err: %v)", got, err)
 	}
 
-	// clampToContext=false（异步可取消调用）：超时必须保持原值，否则 native 自身超时会
-	// 先于 ctx deadline 到期，把取消语义变成调度时序竞态。
-	ms, err = resolveTimeoutMs(5*time.Second, ctx, false)
-	if err != nil || ms != 5000 {
-		t.Fatalf("expected unclamped 5000ms for async-cancellable call, got %d (err: %v)", ms, err)
+	// deadline 比设置更宽时不得放大。
+	wideCtx, cancelWide := context.WithTimeout(context.Background(), time.Minute)
+	defer cancelWide()
+	if got, err := clampToDeadline(300, wideCtx); err != nil || got != 300 {
+		t.Fatalf("expected 300ms preserved, got %d (err: %v)", got, err)
 	}
 
-	// 两种模式下，已过期的 deadline 都必须立即报错
+	// 已过期的 deadline 必须立即报错。
 	expired, cancelExpired := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancelExpired()
 	time.Sleep(time.Millisecond)
-	if _, err = resolveTimeoutMs(5*time.Second, expired, false); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected DeadlineExceeded for expired ctx (unclamped), got %v", err)
-	}
-	if _, err = resolveTimeoutMs(5*time.Second, expired, true); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected DeadlineExceeded for expired ctx (clamped), got %v", err)
+	if _, err := clampToDeadline(5_000, expired); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded for expired ctx, got %v", err)
 	}
 }
 

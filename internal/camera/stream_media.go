@@ -47,7 +47,7 @@ func (a *EngineMediaAdapter) AcquireStream(
 	if a.engine == nil {
 		return nil, engine.ErrNotRunning
 	}
-	s, err := a.engine.Acquire(ctx, uri, consumerID, kind, options)
+	s, err := a.engine.Acquire(ctx, uri, engine.Consumer{ID: consumerID, Kind: kind}, options)
 	if err != nil {
 		return nil, err
 	}

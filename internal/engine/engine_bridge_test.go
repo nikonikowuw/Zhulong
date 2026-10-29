@@ -16,12 +16,23 @@ func TestEngineProbeContextCancelled(t *testing.T) {
 	defer e.Close()
 
 	// 1. 发起前已经取消的 Context
-	ctx, cancel := context.WithCancel(context.Background())
+	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := e.Probe(ctx, "rtsp://127.0.0.1:8554/nonexistent", StreamOptions{})
+	_, err := e.Probe(canceledCtx, "rtsp://127.0.0.1:8554/nonexistent", StreamOptions{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+
+	// 2. 发起前已经到期的 deadline：Probe 不把 deadline 收敛进 native 超时
+	//（见 clampToDeadline），因此必须由 Probe 自己捉住它，绝不能返回引擎的 TIMEOUT。
+	expiredCtx, cancelExpired := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancelExpired()
+	time.Sleep(time.Millisecond)
+
+	_, err = e.Probe(expiredCtx, "rtsp://127.0.0.1:8554/nonexistent", StreamOptions{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
 	}
 }
 
@@ -101,7 +112,7 @@ func TestEngineAcquireWhenStopped(t *testing.T) {
 	e := New()
 	// 未 Start
 	ctx := context.Background()
-	_, err := e.Acquire(ctx, "rtsp://127.0.0.1:8554/live", 1, ConsumerPreview, StreamOptions{})
+	_, err := e.Acquire(ctx, "rtsp://127.0.0.1:8554/live", Consumer{ID: 1, Kind: ConsumerPreview}, StreamOptions{})
 	if !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("expected ErrNotRunning on stopped engine, got %v", err)
 	}
@@ -117,25 +128,25 @@ func TestEngineAcquireValidation(t *testing.T) {
 	ctx := context.Background()
 
 	// 非法 URL
-	_, err := e.Acquire(ctx, "http://invalid", 1, ConsumerPreview, StreamOptions{})
+	_, err := e.Acquire(ctx, "http://invalid", Consumer{ID: 1, Kind: ConsumerPreview}, StreamOptions{})
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for non-rtsp url, got %v", err)
 	}
 
 	// 零 consumerID
-	_, err = e.Acquire(ctx, "rtsp://127.0.0.1:8554/live", 0, ConsumerPreview, StreamOptions{})
+	_, err = e.Acquire(ctx, "rtsp://127.0.0.1:8554/live", Consumer{ID: 0, Kind: ConsumerPreview}, StreamOptions{})
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for consumerID=0, got %v", err)
 	}
 
 	// 非法 kind
-	_, err = e.Acquire(ctx, "rtsp://127.0.0.1:8554/live", 1, ConsumerKind(42), StreamOptions{})
+	_, err = e.Acquire(ctx, "rtsp://127.0.0.1:8554/live", Consumer{ID: 1, Kind: ConsumerKind(42)}, StreamOptions{})
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for invalid kind, got %v", err)
 	}
 
 	// 非法 Transport
-	_, err = e.Acquire(ctx, "rtsp://127.0.0.1:8554/live", 1, ConsumerPreview, StreamOptions{Transport: Transport(5)})
+	_, err = e.Acquire(ctx, "rtsp://127.0.0.1:8554/live", Consumer{ID: 1, Kind: ConsumerPreview}, StreamOptions{Transport: Transport(5)})
 	if !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for invalid transport, got %v", err)
 	}

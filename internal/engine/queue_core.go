@@ -105,7 +105,7 @@ func (q *queueCore[T]) next(ctx context.Context) (T, error) {
 			err := q.err
 			q.mu.Unlock()
 			if err == nil {
-				return zeroOf[T](), ErrClosed
+				err = ErrClosed
 			}
 			return zeroOf[T](), err
 		}

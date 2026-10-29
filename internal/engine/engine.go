@@ -10,6 +10,10 @@
 //   - 谁分配谁释放：Engine.Start 调用 C.Zhulong_engine_create 分配底层对象；
 //     Engine.Close 必须调用 C.Zhulong_engine_destroy 显式释放，禁止依赖 Go 垃圾回收器释放 C 内存。
 //   - 指针边界：Go 传给 C 的指针不得指向包含 Go 指针的内存；在生命周期内不向 C 侧暴露可逃逸的 Go 指针。
+//
+// 并发与 Context 约定：
+//   - 所有接受 context.Context 的导出方法都要求传入非 nil 值（与标准库惯例一致）；本包不提供 nil 语义。
+//   - Engine 上多把锁的获取顺序写在 Engine 类型注释里，新增调用点必须遵守。
 package engine
 
 /*
@@ -78,7 +82,22 @@ func (p *probeContext) handle() C.Zhulong_engine_h {
 	return p.engine
 }
 
+// probeConcurrency 是同时在途的独立探测上限。
+const probeConcurrency = 4
+
 // Engine 封装 Native C++ 引擎的不透明指针句柄。
+//
+// 锁获取顺序（严格单向，禁止反向；违反即死锁）：
+//
+//	lifecycleMu → handleMu → mu → {probesMu, streamsMu}
+//
+// 两层职责分工：
+//   - lifecycleMu 只串行化 Start / Stop / Close 这类长时状态切换，不在其下做 CGO 调用之外的等待。
+//   - handleMu 是「CGO 调用 vs destroy」的隔离层：所有访问底层 handle 的调用持读锁，
+//     Close 必须取写锁排空在途调用之后才能 destroy。
+//   - mu 只保护状态字段（running/stopping/generation/pendingTokens…），**绝不在其下做 CGO 调用**。
+//
+// handle 同时受 handleMu（生命周期）与 mu（可见性）保护：前者保证指针不悬空，后者保证状态自洽。
 type Engine struct {
 	lifecycleMu sync.Mutex // 串行化 Start, Stop, Close 等长时生命周期切换
 
@@ -113,17 +132,58 @@ func New() *Engine {
 	}
 }
 
-// probeConcurrency 是同时在途的独立探测上限。
-const probeConcurrency = 4
+// handleLease 是一次跨 CGO 访问对底层句柄的租约。
+//
+// 调用方释放返回值之前，所有使用 handle 的 CGO 调用都落在 handleMu 读锁保护区内，
+// 因此必然排在 Engine.Close 取写锁之前、Zhulong_engine_destroy 之前。
+type handleLease struct {
+	handle     C.Zhulong_engine_h
+	generation uint64
+}
+
+// handleRequirement 描述一次跨 CGO 调用对引擎状态的前置要求。
+//
+// 三个条件的不同组合覆盖全部调用点，差异必须显式写出来，borrowHandle 不做任何缺省推断；
+// deniedError 是必填项（nil 会被当作“拒绝时返回 nil 错误”的悖论）。
+//
+// 尤其 requireRunning：停机排空路径（releaseStream / unsubscribeWith）**故意**不要求
+// 运行态 —— 无条件加上会让关流退化成 ErrNotRunning，token 便会堆到下次排空。
+type handleRequirement struct {
+	requireRunning    bool
+	requireGeneration *uint64 // nil 表示不校验代次
+	deniedError       error   // 必填：前置条件不满足时返回的哨兵
+}
+
+// borrowHandle 取出句柄租约与解锁函数；成功时调用方必须 defer release()。
+func (e *Engine) borrowHandle(req handleRequirement) (handleLease, func(), error) {
+	e.handleMu.RLock()
+
+	e.mu.Lock()
+	lease := handleLease{handle: e.handle, generation: e.generation}
+	running := e.running && !e.stopping
+	e.mu.Unlock()
+
+	handleMissing := lease.handle == nil
+	notRunning := req.requireRunning && !running
+	generationChanged := req.requireGeneration != nil && lease.generation != *req.requireGeneration
+	if handleMissing || notRunning || generationChanged {
+		e.handleMu.RUnlock()
+		return handleLease{}, nil, req.deniedError
+	}
+	return lease, e.handleMu.RUnlock, nil
+}
 
 // runningGeneration 在运行态下返回当前代次；未运行或停机中返回 ErrNotRunning。
 func (e *Engine) runningGeneration() (uint64, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !e.running || e.stopping || e.handle == nil {
-		return 0, ErrNotRunning
+	lease, release, err := e.borrowHandle(handleRequirement{
+		requireRunning: true,
+		deniedError:    ErrNotRunning,
+	})
+	if err != nil {
+		return 0, err
 	}
-	return e.generation, nil
+	release()
+	return lease.generation, nil
 }
 
 // activeProbeContexts 快照当前在途的私有探测实例。
@@ -240,7 +300,8 @@ func (e *Engine) Stop() error {
 
 func (e *Engine) stopInternal() error {
 	e.mu.Lock()
-	if (!e.running && e.handle == nil) || (!e.running && e.nativeStopped) {
+	alreadyStopped := !e.running && (e.handle == nil || e.nativeStopped)
+	if alreadyStopped {
 		e.mu.Unlock()
 		return nil
 	}
@@ -254,7 +315,7 @@ func (e *Engine) stopInternal() error {
 		pCtx.stop()
 	}
 
-	// 2. 关闭并退订所有物理流持有着
+	// 2. 关闭并退订所有物理流持有者
 	for _, s := range e.activeStreamSet() {
 		// 流的注销错误在这里无可上报之处：物理流即将随引擎一起消失，
 		// 终态由各自的订阅通道保证可见。
@@ -262,7 +323,7 @@ func (e *Engine) stopInternal() error {
 	}
 
 	// 3. 停止常驻引擎实例（回收底层工作线程、排空回调）
-	var status C.Zhulong_status_t = C.Zhulong_OK
+	status := C.Zhulong_status_t(C.Zhulong_OK)
 	if handle != nil {
 		status = C.Zhulong_engine_stop(handle)
 	}
@@ -345,7 +406,6 @@ func (e *Engine) Probe(ctx context.Context, uri string, options StreamOptions) (
 		return VideoInfo{}, err
 	}
 
-	// 获取并发探测令牌
 	select {
 	case e.probeTokens <- struct{}{}:
 	case <-ctx.Done():
@@ -458,11 +518,11 @@ func runProbe(ctx context.Context, pCtx *probeContext, uri string, options C.Zhu
 }
 
 // Acquire 获取或复用物理 RTSP 流。
-func (e *Engine) Acquire(ctx context.Context, uri string, consumerID uint64, kind ConsumerKind, options StreamOptions) (*Stream, error) {
+func (e *Engine) Acquire(ctx context.Context, uri string, consumer Consumer, options StreamOptions) (*Stream, error) {
 	if err := validateRTSPURI(uri); err != nil {
 		return nil, err
 	}
-	if err := validateConsumer(consumerID, kind); err != nil {
+	if err := validateConsumer(consumer); err != nil {
 		return nil, err
 	}
 	// Acquire 是同步、不可异步取消的 CGO 调用，必须把 ctx deadline 收敛进
@@ -472,23 +532,20 @@ func (e *Engine) Acquire(ctx context.Context, uri string, consumerID uint64, kin
 		return nil, err
 	}
 
-	e.handleMu.RLock()
-	defer e.handleMu.RUnlock()
-
-	e.mu.Lock()
-	if !e.running || e.stopping || e.handle == nil {
-		e.mu.Unlock()
-		return nil, ErrNotRunning
+	lease, release, err := e.borrowHandle(handleRequirement{
+		requireRunning: true,
+		deniedError:    ErrNotRunning,
+	})
+	if err != nil {
+		return nil, err
 	}
-	gen := e.generation
-	handle := e.handle
-	e.mu.Unlock()
+	defer release()
 
 	cURI := C.CString(uri)
 	defer C.free(unsafe.Pointer(cURI))
 
 	var streamID C.Zhulong_stream_id
-	st := C.Zhulong_stream_acquire(handle, cURI, &cOptions, C.uint64_t(consumerID), C.int32_t(kind), &streamID)
+	st := C.Zhulong_stream_acquire(lease.handle, cURI, &cOptions, C.uint64_t(consumer.ID), C.int32_t(consumer.Kind), &streamID)
 	if st != C.Zhulong_OK {
 		return nil, mapNativeStatus("acquire", int32(st))
 	}
@@ -496,40 +553,52 @@ func (e *Engine) Acquire(ctx context.Context, uri string, consumerID uint64, kin
 	stream := &Stream{
 		engine:     e,
 		id:         streamID,
-		consumerID: consumerID,
-		kind:       kind,
+		consumerID: consumer.ID,
+		kind:       consumer.Kind,
 		url:        uri,
-		generation: gen,
+		generation: lease.generation,
 	}
 
+	if err := e.adoptStream(lease, stream); err != nil {
+		return nil, err
+	}
+	return stream, nil
+}
+
+// adoptStream 把刚创建好的流登记进停机排空集合。
+//
+// ⚠️ 原生 acquire 与登记之间引擎可能已经停机或重建代次：此时必须回滚原生侧的
+// 消费者引用，否则该流的生命周期就脱离了 Go 侧管理（停机排空列表里根本没有它）。
+func (e *Engine) adoptStream(lease handleLease, stream *Stream) error {
 	e.mu.Lock()
-	if !e.running || e.stopping || e.generation != gen || e.handle == nil {
+	handleMissing := e.handle == nil
+	notRunning := !e.running || e.stopping
+	generationChanged := e.generation != lease.generation
+	if handleMissing || notRunning || generationChanged {
 		e.mu.Unlock()
-		C.Zhulong_stream_release(handle, streamID, C.uint64_t(consumerID))
-		return nil, ErrNotRunning
+		// 回滚失败无可上报之处：引擎已停机，该引用会随 Zhulong_engine_destroy 一并释放。
+		C.Zhulong_stream_release(lease.handle, stream.id, C.uint64_t(stream.consumerID))
+		return ErrNotRunning
 	}
 	e.streamsMu.Lock()
 	e.activeStreams[stream] = struct{}{}
 	e.streamsMu.Unlock()
 	e.mu.Unlock()
-
-	return stream, nil
+	return nil
 }
 
 func (e *Engine) getStreamStatus(gen uint64, streamID C.Zhulong_stream_id) (StreamStatus, error) {
-	e.handleMu.RLock()
-	defer e.handleMu.RUnlock()
-
-	e.mu.Lock()
-	if e.handle == nil || e.generation != gen {
-		e.mu.Unlock()
-		return StreamStatus{}, ErrStaleResource
+	lease, release, err := e.borrowHandle(handleRequirement{
+		requireGeneration: &gen,
+		deniedError:       ErrStaleResource,
+	})
+	if err != nil {
+		return StreamStatus{}, err
 	}
-	handle := e.handle
-	e.mu.Unlock()
+	defer release()
 
 	var cStatus C.Zhulong_stream_status
-	st := C.Zhulong_stream_get_status(handle, streamID, &cStatus)
+	st := C.Zhulong_stream_get_status(lease.handle, streamID, &cStatus)
 	if st != C.Zhulong_OK {
 		return StreamStatus{}, mapNativeStatus("get_status", int32(st))
 	}
@@ -583,22 +652,21 @@ func (e *Engine) subscribeWith(
 	owner any,
 	call func(handle C.Zhulong_engine_h, token C.uintptr_t, out *C.Zhulong_subscription_id) C.Zhulong_status_t,
 ) (C.Zhulong_subscription_id, uintptr, error) {
-	e.handleMu.RLock()
-	defer e.handleMu.RUnlock()
-
-	e.mu.Lock()
-	if e.handle == nil || !e.running || e.stopping || e.generation != gen {
-		e.mu.Unlock()
-		return 0, 0, ErrNotRunning
+	lease, release, err := e.borrowHandle(handleRequirement{
+		requireRunning:    true,
+		requireGeneration: &gen,
+		deniedError:       ErrNotRunning,
+	})
+	if err != nil {
+		return 0, 0, err
 	}
-	handle := e.handle
-	e.mu.Unlock()
+	defer release()
 
 	h := cgo.NewHandle(owner)
 	token := uintptr(h)
 
 	var subID C.Zhulong_subscription_id
-	if status := call(handle, C.uintptr_t(token), &subID); status != C.Zhulong_OK {
+	if status := call(lease.handle, C.uintptr_t(token), &subID); status != C.Zhulong_OK {
 		h.Delete()
 		return 0, 0, mapNativeStatus(op, int32(status))
 	}
@@ -637,14 +705,13 @@ const (
 
 // planTokenRelease 把原生注销状态码翻译成 token 释放时机。
 //
-// ⚠️ 默认分支必须保守：未知状态下宁可晚一点释放（停机时统一排空），
-// 也绝不提前 Delete 让残余回调命中已删除的 cgo.Handle，更不往漏掉不管。
+// ⚠️ 默认分支必须保守：停机中（ERR_NOT_RUNNING）与任何未知状态下宁可晚一点释放
+// （停机时统一排空），也绝不提前 Delete 让残余回调命中已删除的 cgo.Handle，
+// 更不往漏掉不管。
 func planTokenRelease(status int32) releaseTiming {
 	switch StatusCode(status) {
 	case StatusOK, StatusNotFound:
 		return releaseNow
-	case StatusNotRunning:
-		return releaseAfterStop
 	default:
 		return releaseAfterStop
 	}
@@ -660,19 +727,18 @@ func (e *Engine) unsubscribeWith(
 	call func(handle C.Zhulong_engine_h) C.Zhulong_status_t,
 	releaseToken func(),
 ) error {
-	e.handleMu.RLock()
-	defer e.handleMu.RUnlock()
-
-	e.mu.Lock()
-	if e.handle == nil || e.generation != gen {
-		e.mu.Unlock()
+	lease, release, err := e.borrowHandle(handleRequirement{
+		requireGeneration: &gen,
+		deniedError:       ErrStaleResource,
+	})
+	if err != nil {
+		// 代次不符说明句柄已换：token 无论如何都得走释放路径，否则 cgo.Handle 泄漏。
 		releaseToken()
-		return ErrStaleResource
+		return err
 	}
-	handle := e.handle
-	e.mu.Unlock()
+	defer release()
 
-	status := call(handle)
+	status := call(lease.handle)
 	if planTokenRelease(int32(status)) == releaseNow {
 		releaseToken()
 	} else {
@@ -686,18 +752,16 @@ func (e *Engine) unsubscribeWith(
 }
 
 func (e *Engine) releaseStream(gen uint64, streamID C.Zhulong_stream_id, consumerID uint64) error {
-	e.handleMu.RLock()
-	defer e.handleMu.RUnlock()
-
-	e.mu.Lock()
-	if e.handle == nil || e.generation != gen {
-		e.mu.Unlock()
-		return ErrStaleResource
+	lease, release, err := e.borrowHandle(handleRequirement{
+		requireGeneration: &gen,
+		deniedError:       ErrStaleResource,
+	})
+	if err != nil {
+		return err
 	}
-	handle := e.handle
-	e.mu.Unlock()
+	defer release()
 
-	st := C.Zhulong_stream_release(handle, streamID, C.uint64_t(consumerID))
+	st := C.Zhulong_stream_release(lease.handle, streamID, C.uint64_t(consumerID))
 	if st != C.Zhulong_OK {
 		return mapNativeStatus("release", int32(st))
 	}
@@ -710,20 +774,19 @@ func (e *Engine) releaseStream(gen uint64, streamID C.Zhulong_stream_id, consume
 const brokerPathBufferBytes = 256
 
 func (e *Engine) getBrokerPath(gen uint64, streamID C.Zhulong_stream_id) (string, error) {
-	e.handleMu.RLock()
-	defer e.handleMu.RUnlock()
-
-	e.mu.Lock()
-	if e.handle == nil || !e.running || e.stopping || e.generation != gen {
-		e.mu.Unlock()
-		return "", ErrNotRunning
+	lease, release, err := e.borrowHandle(handleRequirement{
+		requireRunning:    true,
+		requireGeneration: &gen,
+		deniedError:       ErrNotRunning,
+	})
+	if err != nil {
+		return "", err
 	}
-	handle := e.handle
-	e.mu.Unlock()
+	defer release()
 
 	var buf [brokerPathBufferBytes]C.char
 	inoutLen := C.size_t(len(buf))
-	st := C.Zhulong_stream_get_broker_path(handle, streamID, &buf[0], &inoutLen)
+	st := C.Zhulong_stream_get_broker_path(lease.handle, streamID, &buf[0], &inoutLen)
 	if st != C.Zhulong_OK {
 		return "", mapNativeStatus("get_broker_path", int32(st))
 	}
@@ -731,18 +794,17 @@ func (e *Engine) getBrokerPath(gen uint64, streamID C.Zhulong_stream_id) (string
 }
 
 func (e *Engine) setPublishRate(gen uint64, streamID C.Zhulong_stream_id, fps uint32) error {
-	e.handleMu.RLock()
-	defer e.handleMu.RUnlock()
-
-	e.mu.Lock()
-	if e.handle == nil || !e.running || e.stopping || e.generation != gen {
-		e.mu.Unlock()
-		return ErrNotRunning
+	lease, release, err := e.borrowHandle(handleRequirement{
+		requireRunning:    true,
+		requireGeneration: &gen,
+		deniedError:       ErrNotRunning,
+	})
+	if err != nil {
+		return err
 	}
-	handle := e.handle
-	e.mu.Unlock()
+	defer release()
 
-	st := C.Zhulong_stream_set_publish_rate(handle, streamID, C.uint32_t(fps))
+	st := C.Zhulong_stream_set_publish_rate(lease.handle, streamID, C.uint32_t(fps))
 	if st != C.Zhulong_OK {
 		return mapNativeStatus("set_publish_rate", int32(st))
 	}
@@ -757,19 +819,25 @@ func (e *Engine) onStreamClosed(s *Stream) {
 
 // convertStreamOptions 把 StreamOptions 转为 C 层选项。
 //
-// clampToContext 语义见 resolveTimeoutMs：异步可取消的调用（Probe）传 false，
+// clampToContext 语义见 clampToDeadline：异步可取消的调用（Probe）传 false，
 // 同步阻塞的调用（Acquire）传 true。
 func convertStreamOptions(options StreamOptions, ctx context.Context, clampToContext bool) (C.Zhulong_stream_options, error) {
 	if options.Transport != TransportTCP && options.Transport != TransportUDP {
 		return C.Zhulong_stream_options{}, fmt.Errorf("%w: invalid transport %d", ErrInvalidArgument, options.Transport)
 	}
 
-	openTimeoutMs, err := resolveTimeoutMs(options.OpenTimeout, ctx, clampToContext)
+	openTimeoutMs, err := normalizeTimeoutMs(options.OpenTimeout)
 	if err != nil {
 		return C.Zhulong_stream_options{}, err
 	}
+	if clampToContext {
+		openTimeoutMs, err = clampToDeadline(openTimeoutMs, ctx)
+		if err != nil {
+			return C.Zhulong_stream_options{}, err
+		}
+	}
 
-	idleTimeoutMs, err := resolveTimeoutMs(options.IdleTimeout, nil, false)
+	idleTimeoutMs, err := normalizeTimeoutMs(options.IdleTimeout)
 	if err != nil {
 		return C.Zhulong_stream_options{}, err
 	}
@@ -814,28 +882,24 @@ func extractVideoInfo(result C.Zhulong_probe_result_h) (VideoInfo, error) {
 // 说一个小协议」，实现在 internal/faceextract。留在这里的只会是两套模型加载路径，
 // 而且宿主根本不该认识算法二进制。
 
-// BroadcastAIMessage sends a typed control payload (e.g. MSG_GALLERY_*) to the FrameBroker of
-// the specified stream (or all active streams if streamID is 0) to reach connected algorithm runners.
+// BroadcastAIMessage 向指定流的 FrameBroker 投递一条带类型的控制载荷
+// （如 MSG_GALLERY_*），以触达已连接的算法 runner；streamID 为 0 时广播给全部活跃流。
 func (e *Engine) BroadcastAIMessage(ctx context.Context, streamID uint64, msgType uint16, payload []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(payload) > algoipc.MaxIpcPayloadSize {
 		return fmt.Errorf("%w: payload exceeds %d limit (%d bytes)", ErrInvalidArgument, algoipc.MaxIpcPayloadSize, len(payload))
 	}
-	if ctx != nil {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-	}
 
-	e.handleMu.RLock()
-	defer e.handleMu.RUnlock()
-
-	e.mu.Lock()
-	if e.handle == nil || !e.running || e.stopping {
-		e.mu.Unlock()
-		return ErrNotRunning
+	lease, release, err := e.borrowHandle(handleRequirement{
+		requireRunning: true,
+		deniedError:    ErrNotRunning,
+	})
+	if err != nil {
+		return err
 	}
-	handle := e.handle
-	e.mu.Unlock()
+	defer release()
 
 	var ptr unsafe.Pointer
 	if len(payload) > 0 {
@@ -843,7 +907,7 @@ func (e *Engine) BroadcastAIMessage(ctx context.Context, streamID uint64, msgTyp
 	}
 
 	st := C.Zhulong_engine_broadcast_ai_message(
-		handle,
+		lease.handle,
 		C.Zhulong_stream_id(streamID),
 		C.uint16_t(msgType),
 		ptr,

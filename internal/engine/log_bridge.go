@@ -67,11 +67,14 @@ func nativeLogLevel(level int32) nativelog.Level {
 	return nativelog.Info
 }
 
+// nativeLogBridge 是挂到原生日志回调上的 Go 端载体。
+//
+// 它只持有队列指针，不持有 Engine —— 日志回调是进程级的，与句柄生命周期无关。
 type nativeLogBridge struct {
 	queue *nativelog.Queue
 }
 
-// SetNativeLogSink installs the process-wide callback before any native engine handle is created.
+// SetNativeLogSink 安装进程级原生日志回调；必须在任何引擎句柄创建之前调用。
 func (e *Engine) SetNativeLogSink(queue *nativelog.Queue) error {
 	if e == nil || queue == nil {
 		return ErrInvalidArgument
@@ -90,7 +93,7 @@ func (e *Engine) SetNativeLogSink(queue *nativelog.Queue) error {
 	handle := cgo.NewHandle(&nativeLogBridge{queue: queue})
 	if status := C.Zhulong_set_log_callback(C.Zhulong_log_callback(C.zhulongLogCallbackBridge), C.uintptr_t(handle)); status != C.Zhulong_OK {
 		handle.Delete()
-		return mapNativeStatus("register native log callback", int32(status))
+		return mapNativeStatus("set_log_callback", int32(status))
 	}
 
 	e.mu.Lock()
@@ -99,7 +102,7 @@ func (e *Engine) SetNativeLogSink(queue *nativelog.Queue) error {
 	return nil
 }
 
-// CloseNativeLogSink unregisters only after all native engine handles have been destroyed.
+// CloseNativeLogSink 卸载原生日志回调；必须在所有引擎句柄销毁之后调用。
 func (e *Engine) CloseNativeLogSink() error {
 	if e == nil {
 		return nil
@@ -120,7 +123,7 @@ func (e *Engine) CloseNativeLogSink() error {
 		e.mu.Lock()
 		e.logHandle = handle
 		e.mu.Unlock()
-		return mapNativeStatus("unregister native log callback", int32(status))
+		return mapNativeStatus("clear_log_callback", int32(status))
 	}
 
 	handle.Delete()

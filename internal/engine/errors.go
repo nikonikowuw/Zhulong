@@ -80,7 +80,6 @@ func statusMessage(code StatusCode) string {
 type NativeError struct {
 	Op      string
 	Code    StatusCode
-	Raw     int32
 	Message string
 }
 
@@ -112,8 +111,22 @@ func (e *NativeError) Is(target error) bool {
 }
 
 // sentinel 构造包级哨兵错误，文案取自 statusMessages。
+//
+// Op 留空是刻意的：Error() 据此区分「哨兵被 fmt.Errorf 包装」与「某次原生调用的返回」。
 func sentinel(code StatusCode) *NativeError {
 	return &NativeError{Code: code, Message: statusMessage(code)}
+}
+
+// nativeErrorf 构造一条带操作名与自定义细节的结构化错误。
+//
+// Code 决定 errors.Is 的匹配，Message 只供人读；细节必须是固定文案或不含敏感信息的值
+// —— 原始 URL 与凭据绝不能进这里。
+func nativeErrorf(op string, code StatusCode, format string, args ...any) *NativeError {
+	return &NativeError{
+		Op:      op,
+		Code:    code,
+		Message: fmt.Sprintf(format, args...),
+	}
 }
 
 var (
@@ -150,12 +163,7 @@ var ErrABIMismatch = errors.New("native engine ABI version mismatch")
 // 异常不能穿越 ABI，但也绝不能被 recover 静默吞掉 —— 那会让「偶发丢帧」
 // 变成没有日志、没有错误码的幽灵问题。这里把它转成订阅终态。
 func nativeCallbackPanic(op string, recovered any) error {
-	return &NativeError{
-		Op:      op,
-		Code:    StatusInternal,
-		Raw:     int32(StatusInternal),
-		Message: fmt.Sprintf("callback panicked: %v", recovered),
-	}
+	return nativeErrorf(op, StatusInternal, "callback panicked: %v", recovered)
 }
 
 // mapNativeStatus 把原生状态码映射为结构化错误；OK 返回 nil。
@@ -167,7 +175,6 @@ func mapNativeStatus(op string, raw int32) error {
 	return &NativeError{
 		Op:      op,
 		Code:    code,
-		Raw:     raw,
 		Message: statusMessage(code),
 	}
 }

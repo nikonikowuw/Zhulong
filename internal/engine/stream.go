@@ -29,50 +29,52 @@ type Stream struct {
 	closeOnce   sync.Once
 }
 
+// streamLease 是一次跨 CGO 调用前的流标识快照。
+type streamLease struct {
+	generation uint64
+	id         C.Zhulong_stream_id
+}
+
+// lease 校验 ctx 与关闭态，并在同一把锁内取出不可变的流标识。
+func (s *Stream) lease(ctx context.Context) (streamLease, error) {
+	if err := ctx.Err(); err != nil {
+		return streamLease{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return streamLease{}, ErrClosed
+	}
+	return streamLease{generation: s.generation, id: s.id}, nil
+}
+
 // BrokerPath 查询当前物理流关联的 FrameBroker Unix Domain Socket 路径。
 // 必须在 ConsumerAI 类型流上调用（且当前流仍有活跃 AI 消费者）。
 func (s *Stream) BrokerPath(ctx context.Context) (string, error) {
-	if err := ctx.Err(); err != nil {
+	ref, err := s.lease(ctx)
+	if err != nil {
 		return "", err
 	}
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return "", ErrClosed
-	}
-	s.mu.Unlock()
-
-	return s.engine.getBrokerPath(s.generation, s.id)
+	return s.engine.getBrokerPath(ref.generation, ref.id)
 }
 
 // SetPublishRate 动态设置帧发布最大采样帧率（由关联任务的 max(sample_fps) 驱动，0 表示不节流）。
 func (s *Stream) SetPublishRate(ctx context.Context, fps uint32) error {
-	if err := ctx.Err(); err != nil {
+	ref, err := s.lease(ctx)
+	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return ErrClosed
-	}
-	s.mu.Unlock()
-
-	return s.engine.setPublishRate(s.generation, s.id, fps)
+	return s.engine.setPublishRate(ref.generation, ref.id, fps)
 }
 
 // Status 查询物理流当前运行状态与底层错误码。
 func (s *Stream) Status(ctx context.Context) (StreamStatus, error) {
-	if err := ctx.Err(); err != nil {
+	ref, err := s.lease(ctx)
+	if err != nil {
 		return StreamStatus{}, err
 	}
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return StreamStatus{}, ErrClosed
-	}
-	s.mu.Unlock()
-
-	return s.engine.getStreamStatus(s.generation, s.id)
+	return s.engine.getStreamStatus(ref.generation, ref.id)
 }
 
 // Subscribe 开启视频压缩包的派发订阅（仅 Preview 类型的消费者允许调用）。

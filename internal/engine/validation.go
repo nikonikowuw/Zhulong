@@ -40,13 +40,13 @@ func validateRTSPURI(rawURI string) error {
 	return nil
 }
 
-// validateConsumer 校验消费者 ID 与类型。
-func validateConsumer(consumerID uint64, kind ConsumerKind) error {
-	if consumerID == 0 {
-		return fmt.Errorf("%w: consumerID must be non-zero", ErrInvalidArgument)
+// validateConsumer 校验消费者身份。
+func validateConsumer(consumer Consumer) error {
+	if consumer.ID == 0 {
+		return fmt.Errorf("%w: consumer ID must be non-zero", ErrInvalidArgument)
 	}
-	if kind != ConsumerPreview && kind != ConsumerRecording && kind != ConsumerAI {
-		return fmt.Errorf("%w: invalid consumer kind %d", ErrInvalidArgument, kind)
+	if consumer.Kind != ConsumerPreview && consumer.Kind != ConsumerRecording && consumer.Kind != ConsumerAI {
+		return fmt.Errorf("%w: invalid consumer kind %d", ErrInvalidArgument, consumer.Kind)
 	}
 	return nil
 }
@@ -98,36 +98,40 @@ const (
 	maxAllowedTimeout = 2 * time.Minute
 )
 
-// resolveTimeoutMs 计算毫秒超时值。
+// normalizeTimeoutMs 把调用方给出的时长收敛成合法的毫秒值：0 取默认值，负值与超上限拒绝。
 //
-// clampToContext 为 true 时，若 ctx 带有更早的 Deadline，则把超时收敛到该 Deadline
-// （至少 1ms）。这适用于**同步、不可异步取消**的调用（如 Acquire 的阻塞式 CGO 调用），
-// 避免底层阻塞超出调用方给定的 ctx 预算。
-//
-// ⚠️ **异步可取消的调用（如 Probe，已 select ctx.Done()）必须传 false**：
-// 若对其做收敛，毫秒截断会让 native 自身的超时**先于** ctx deadline 到期
-// （例：剩余 199.7ms 被截断为 199ms），此时 ctx.Err() 仍为 nil，调用返回的是
-// 引擎的 TIMEOUT 而非 context.DeadlineExceeded —— 取消语义退化为调度时序竞态。
-// 不收敛时 ctx 取消是唯一权威，native 超时只作为兜底。
-func resolveTimeoutMs(d time.Duration, ctx context.Context, clampToContext bool) (uint32, error) {
+// 截断后归零时提升为 1ms：毫秒值 0 在 ABI 上表示「用底层默认超时」，
+// 把「几乎立即超时」静默放大成 5 秒会改变取消语义。
+func normalizeTimeoutMs(d time.Duration) (uint32, error) {
 	if d < 0 {
 		return 0, fmt.Errorf("%w: timeout cannot be negative", ErrInvalidArgument)
 	}
 	if d > maxAllowedTimeout {
 		return 0, fmt.Errorf("%w: timeout exceeds maximum allowed %s", ErrInvalidArgument, maxAllowedTimeout)
 	}
-
-	timeoutMs := uint32(defaultTimeoutMs)
-	if d > 0 {
-		timeoutMs = uint32(d.Milliseconds())
-		if timeoutMs == 0 {
-			timeoutMs = 1
-		}
+	if d == 0 {
+		return defaultTimeoutMs, nil
 	}
 
-	if ctx == nil {
-		return timeoutMs, nil
+	timeoutMs := uint32(d.Milliseconds())
+	if timeoutMs == 0 {
+		timeoutMs = 1
 	}
+	return timeoutMs, nil
+}
+
+// clampToDeadline 把超时收敛进 ctx 的 deadline（至少 1ms）。
+//
+// ⚠️ 只适用于**同步、不可异步取消**的调用（如 Acquire 的阻塞式 CGO open）：
+// 这类调用没有别的取消通道，超时必须花掉 ctx 的预算，否则底层阻塞会超出调用方
+// 给定的截止时间。
+//
+// **异步可取消的调用（如 Probe，已 select ctx.Done()）绝不能用它**：
+// 毫秒截断会让 native 自身的超时**先于** ctx deadline 到期（例：剩余 199.7ms 被截断为
+// 199ms），此时 ctx.Err() 仍为 nil，调用返回的是引擎的 TIMEOUT 而非
+// context.DeadlineExceeded —— 取消语义退化为调度时序竞态。那种场景下 ctx 取消是唯一
+// 权威，native 超时只作兜底。
+func clampToDeadline(timeoutMs uint32, ctx context.Context) (uint32, error) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		return timeoutMs, nil
@@ -137,16 +141,13 @@ func resolveTimeoutMs(d time.Duration, ctx context.Context, clampToContext bool)
 	if remaining <= 0 {
 		return 0, context.DeadlineExceeded
 	}
-	if !clampToContext {
-		return timeoutMs, nil
-	}
 
-	remMs := uint32(remaining.Milliseconds())
-	if remMs == 0 {
-		remMs = 1 // 保证至少为 1ms，不能为 0（0 会回退到底层默认 5000ms）
+	remainingMs := uint32(remaining.Milliseconds())
+	if remainingMs == 0 {
+		remainingMs = 1 // 不能为 0（0 会回退到底层默认 5000ms）
 	}
-	if remMs < timeoutMs {
-		timeoutMs = remMs
+	if remainingMs < timeoutMs {
+		timeoutMs = remainingMs
 	}
 	return timeoutMs, nil
 }

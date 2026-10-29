@@ -96,13 +96,13 @@ func TestBridgeIntegration_StreamReuseAndGrace(t *testing.T) {
 	poolURL := baseURL + "/pool"
 
 	// 消费者 1 获取物理流
-	s1, err := e.Acquire(ctx, poolURL, 1001, ConsumerPreview, StreamOptions{Transport: TransportTCP})
+	s1, err := e.Acquire(ctx, poolURL, Consumer{ID: 1001, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
 	if err != nil {
 		t.Fatalf("Acquire s1 failed: %v", err)
 	}
 
 	// 消费者 2 获取相同物理流（应该复用）
-	s2, err := e.Acquire(ctx, poolURL, 1002, ConsumerPreview, StreamOptions{Transport: TransportTCP})
+	s2, err := e.Acquire(ctx, poolURL, Consumer{ID: 1002, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
 	if err != nil {
 		t.Fatalf("Acquire s2 failed: %v", err)
 	}
@@ -111,13 +111,13 @@ func TestBridgeIntegration_StreamReuseAndGrace(t *testing.T) {
 	}
 
 	// 重复 consumerID 应当拒绝
-	_, err = e.Acquire(ctx, poolURL, 1001, ConsumerPreview, StreamOptions{Transport: TransportTCP})
+	_, err = e.Acquire(ctx, poolURL, Consumer{ID: 1001, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
 	if !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("expected ErrDuplicate for duplicate consumerID, got %v", err)
 	}
 
 	// 传输参数冲突应当拒绝
-	_, err = e.Acquire(ctx, poolURL, 1003, ConsumerPreview, StreamOptions{Transport: TransportUDP})
+	_, err = e.Acquire(ctx, poolURL, Consumer{ID: 1003, Kind: ConsumerPreview}, StreamOptions{Transport: TransportUDP})
 	if !errors.Is(err, ErrConfigConflict) {
 		t.Fatalf("expected ErrConfigConflict for mismatched transport, got %v", err)
 	}
@@ -133,7 +133,7 @@ func TestBridgeIntegration_StreamReuseAndGrace(t *testing.T) {
 	}
 
 	// 宽限期内重新 acquire，应当复用原物理连接而无需重新建立
-	s3, err := e.Acquire(ctx, poolURL, 1003, ConsumerPreview, StreamOptions{Transport: TransportTCP})
+	s3, err := e.Acquire(ctx, poolURL, Consumer{ID: 1003, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
 	if err != nil {
 		t.Fatalf("Acquire s3 during grace failed: %v", err)
 	}
@@ -160,14 +160,14 @@ func TestBridgeIntegration_SubscriptionAndBackpressure(t *testing.T) {
 	liveURL := baseURL + "/live"
 
 	// 创建正常消费者
-	sFast, err := e.Acquire(ctx, liveURL, 2001, ConsumerPreview, StreamOptions{Transport: TransportTCP})
+	sFast, err := e.Acquire(ctx, liveURL, Consumer{ID: 2001, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
 	if err != nil {
 		t.Fatalf("Acquire sFast failed: %v", err)
 	}
 	defer sFast.Close()
 
 	// 创建慢消费者
-	sSlow, err := e.Acquire(ctx, liveURL, 2002, ConsumerPreview, StreamOptions{Transport: TransportTCP})
+	sSlow, err := e.Acquire(ctx, liveURL, Consumer{ID: 2002, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
 	if err != nil {
 		t.Fatalf("Acquire sSlow failed: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestBridgeIntegration_UDPStream(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	s, err := e.Acquire(ctx, baseURL+"/live", 3001, ConsumerPreview, StreamOptions{Transport: TransportUDP})
+	s, err := e.Acquire(ctx, baseURL+"/live", Consumer{ID: 3001, Kind: ConsumerPreview}, StreamOptions{Transport: TransportUDP})
 	if err != nil {
 		t.Fatalf("Acquire UDP stream failed: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestBridgeIntegration_ProbeDoesNotAffectActiveStream(t *testing.T) {
 	defer cancel()
 
 	// 1. 启动正常流预览
-	s, err := e.Acquire(ctx, baseURL+"/live", 4001, ConsumerPreview, StreamOptions{Transport: TransportTCP})
+	s, err := e.Acquire(ctx, baseURL+"/live", Consumer{ID: 4001, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
 	if err != nil {
 		t.Fatalf("Acquire failed: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestBridgeIntegration_AIConsumerAndBrokerPath(t *testing.T) {
 	defer cancel()
 
 	// 1. 获取 AI 消费者流
-	s, err := e.Acquire(ctx, baseURL+"/live", 5001, ConsumerAI, StreamOptions{Transport: TransportTCP})
+	s, err := e.Acquire(ctx, baseURL+"/live", Consumer{ID: 5001, Kind: ConsumerAI}, StreamOptions{Transport: TransportTCP})
 	if err != nil {
 		t.Fatalf("Acquire AI consumer failed: %v", err)
 	}

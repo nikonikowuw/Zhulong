@@ -28,11 +28,7 @@ const DefaultSnapshotQuality = 85
 // ⚠️ 独占 StatusSnapshotUnavailable：不能复用 StatusUnsupported，否则
 // errors.Is(err, ErrUnsupported) 与 errors.Is(err, ErrSnapshotUnavailable)
 // 会在彼此的错误上互相为真。
-var ErrSnapshotUnavailable = &NativeError{
-	Op:      "snapshot",
-	Code:    StatusSnapshotUnavailable,
-	Message: statusMessage(StatusSnapshotUnavailable),
-}
+var ErrSnapshotUnavailable = sentinel(StatusSnapshotUnavailable)
 
 // SnapshotBox 是一个归一化裁剪框，坐标语义与 aitypes.DetectionItem.Box 完全一致：
 // [x1, y1, x2, y2] ∈ [0.0, 1.0]，x1<=x2，y1<=y2。
@@ -70,55 +66,40 @@ type SnapshotOptions struct {
 //
 // 返回的 JPEG 切片已深拷贝进 Go 堆，与原生句柄生命周期无关，调用方可以自由持有。
 func (s *Stream) Snapshot(ctx context.Context, options SnapshotOptions) ([]SnapshotImage, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	if len(options.Boxes) > MaxSnapshotBoxes {
-		return nil, &NativeError{
-			Op:      "snapshot",
-			Code:    StatusInvalidArgument,
-			Message: "too many snapshot boxes",
-		}
+		return nil, nativeErrorf("snapshot", StatusInvalidArgument, "too many snapshot boxes: %d > %d", len(options.Boxes), MaxSnapshotBoxes)
 	}
 
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return nil, ErrClosed
+	// lease 同时校验 ctx 与关闭态，因此不需要在入参校验阶段重复 ctx.Err()。
+	ref, err := s.lease(ctx)
+	if err != nil {
+		return nil, err
 	}
-	generation := s.generation
-	streamID := s.id
-	s.mu.Unlock()
 
 	// 构造请求。使用 C.malloc 分配的数组，而不是 Go 切片：
 	// C 侧会在调用期间读它，用 Go 内存虽然合法（不含指针）但需要额外 Pin，
 	// 而这里的分配量极小（最多 32 个 float32），malloc 更直接且无需担心移动。
 	var req C.Zhulong_snapshot_request
-	var boxesPtr *C.float
 	if len(options.Boxes) > 0 {
 		size := C.size_t(len(options.Boxes) * 4 * int(unsafe.Sizeof(C.float(0))))
 		raw := C.malloc(size)
 		if raw == nil {
-			return nil, &NativeError{
-				Op:      "snapshot",
-				Code:    StatusOutOfMemory,
-				Message: "failed to allocate box array",
-			}
+			return nil, nativeErrorf("snapshot", StatusOutOfMemory, "failed to allocate %d bytes for box array", uint64(size))
 		}
 		defer C.free(raw)
-		boxesPtr = (*C.float)(raw)
-		flat := unsafe.Slice(boxesPtr, len(options.Boxes)*4)
+
+		boxes := unsafe.Slice((*C.float)(raw), len(options.Boxes)*4)
 		for i, box := range options.Boxes {
-			for c := 0; c < 4; c++ {
-				flat[i*4+c] = C.float(box[c])
+			for c, coordinate := range box {
+				boxes[i*4+c] = C.float(coordinate)
 			}
 		}
 		req.box_count = C.int32_t(len(options.Boxes))
-		req.boxes = boxesPtr
+		req.boxes = (*C.float)(raw)
 	}
 	req.quality = C.int32_t(clampQuality(options.Quality))
 
-	return s.engine.snapshot(generation, streamID, &req)
+	return s.engine.snapshot(ref.generation, ref.id, &req)
 }
 
 // clampQuality 把调用方给的质量收敛进 [1,100]，0 视为默认值。
@@ -141,19 +122,18 @@ func clampQuality(quality int) int {
 // 每张图的 JPEG 字节在 destroy 之前用 C.GoBytes 深拷贝出来，绝不把原生指针
 // 交给 Go 长期持有。
 func (e *Engine) snapshot(gen uint64, streamID C.Zhulong_stream_id, req *C.Zhulong_snapshot_request) ([]SnapshotImage, error) {
-	e.handleMu.RLock()
-	defer e.handleMu.RUnlock()
-
-	e.mu.Lock()
-	if e.handle == nil || !e.running || e.stopping || e.generation != gen {
-		e.mu.Unlock()
-		return nil, ErrNotRunning
+	lease, release, err := e.borrowHandle(handleRequirement{
+		requireRunning:    true,
+		requireGeneration: &gen,
+		deniedError:       ErrNotRunning,
+	})
+	if err != nil {
+		return nil, err
 	}
-	handle := e.handle
-	e.mu.Unlock()
+	defer release()
 
 	var result C.Zhulong_snapshot_h
-	st := C.Zhulong_stream_snapshot(handle, streamID, req, &result)
+	st := C.Zhulong_stream_snapshot(lease.handle, streamID, req, &result)
 	runtime.KeepAlive(req)
 	if st != C.Zhulong_OK {
 		// 把「构建不支持抓拍」与「本次抓拍失败」区分开：前者重试无意义。
@@ -173,7 +153,7 @@ func (e *Engine) snapshot(gen uint64, streamID C.Zhulong_stream_id, req *C.Zhulo
 	}
 
 	images := make([]SnapshotImage, 0, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		view := C.Zhulong_snapshot_at(result, C.int32_t(i))
 		if view == nil {
 			// 索引区间由 count 保证，取不到说明原生侧违反了契约，跳过而不是崩。

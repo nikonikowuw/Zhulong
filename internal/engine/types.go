@@ -46,6 +46,15 @@ func (k ConsumerKind) String() string {
 	}
 }
 
+// Consumer 标识一个流消费者：唯一 ID 与用途类型。
+//
+// 两者必须成对合法（ID 非零且 Kind 已知），因此作为整体在拉流接口与校验之间传递，
+// 而不是拆成两个平行参数 —— 那样下一次漏传一个就是静默的跨流串用。
+type Consumer struct {
+	ID   uint64
+	Kind ConsumerKind
+}
+
 // Codec 定义视频编码格式。
 type Codec int32
 
@@ -162,6 +171,9 @@ func (r Rational) String() string {
 	return fmt.Sprintf("%d/%d", r.Num, r.Den)
 }
 
+// MaxExtraDataBytes 是探测结果 extradata（VPS/SPS/PPS 等参数集）允许的最大字节数。
+const MaxExtraDataBytes = 1024 * 1024 // 1 MiB 上限
+
 // VideoInfo 描述视频流探测获取的元数据。
 type VideoInfo struct {
 	Codec     Codec
@@ -221,5 +233,4 @@ const (
 	HardLimitMaxPacketBytes   = 16 * 1024 * 1024
 	DefaultMaxBufferedBytes   = 16 * 1024 * 1024
 	HardLimitMaxBufferedBytes = 64 * 1024 * 1024
-	MaxExtraDataBytes         = 1024 * 1024 // 1 MiB 上限
 )
