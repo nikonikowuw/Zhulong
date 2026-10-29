@@ -127,7 +127,7 @@ export function RecordDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className='flex max-h-[92vh] w-[96vw] sm:max-w-4xl lg:max-w-5xl xl:max-w-6xl flex-col overflow-hidden p-0 sm:max-h-[88vh]'>
+      <DialogContent className='flex max-h-[92vh] w-[96vw] flex-col overflow-hidden p-0 sm:max-h-[88vh] sm:max-w-4xl lg:max-w-5xl xl:max-w-6xl'>
         {/* 顶部标题与快速概览 */}
         <DialogHeader className='border-b border-border px-6 py-4'>
           <div className='flex items-center justify-between gap-4'>
@@ -188,7 +188,7 @@ export function RecordDetailDialog({
         {/* 核心工作区：左右两栏专业研判台 */}
         <div className='flex flex-1 flex-col overflow-hidden lg:flex-row'>
           {/* 左栏：现场全景视口（暗色沉浸式监视屏） */}
-          <div className='flex flex-1 flex-col border-b border-border bg-neutral-950 p-4 lg:w-7/12 lg:border-b-0 lg:border-r'>
+          <div className='flex flex-1 flex-col border-b border-border bg-neutral-950 p-4 lg:w-7/12 lg:border-r lg:border-b-0'>
             <div className='mb-2 flex items-center justify-between text-xs text-muted-foreground'>
               <h4 className='flex items-center gap-1.5 font-semibold tracking-wider text-neutral-300 uppercase'>
                 <Layers className='size-3.5 text-primary' />
