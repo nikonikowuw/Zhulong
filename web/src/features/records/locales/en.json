@@ -41,6 +41,7 @@
   "table": {
     "thumbnail": "Snapshot",
     "evidence": "Image Evidence",
+    "plate": "License Plate",
     "time": "Captured Time",
     "camera": "Camera",
     "target": "Target / Person",

@@ -23,6 +23,12 @@ export function VehicleCaptureCard({
     : '-'
   const score = item.score > 0 ? `${Math.round(item.score * 100)}%` : '-'
 
+  const attrs = item.attributes as Record<string, unknown> | undefined
+  const plateNo =
+    typeof attrs?.plate_number === 'string' ? attrs.plate_number : ''
+  const plateColor =
+    typeof attrs?.plate_color === 'string' ? attrs.plate_color : ''
+
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
@@ -49,6 +55,20 @@ export function VehicleCaptureCard({
             {formattedTime}
           </span>
         </div>
+
+        {plateNo && (
+          <div className='flex items-center justify-between gap-2'>
+            <span className='inline-flex items-center rounded border border-blue-600/30 bg-blue-600/10 px-1.5 py-0.5 font-mono text-xs font-semibold text-blue-600 dark:text-blue-400'>
+              {plateNo}
+            </span>
+            {plateColor && (
+              <span className='text-[10px] text-muted-foreground'>
+                {plateColor}
+              </span>
+            )}
+          </div>
+        )}
+
         <div className='flex items-center justify-between gap-2 text-[11px] text-muted-foreground'>
           <span className='font-mono font-semibold text-foreground'>
             {score}

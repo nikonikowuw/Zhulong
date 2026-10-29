@@ -41,6 +41,7 @@
   "table": {
     "thumbnail": "抓拍快照",
     "evidence": "影像證據",
+    "plate": "車牌號碼",
     "time": "抓拍時間",
     "camera": "攝影機",
     "target": "目標識別",

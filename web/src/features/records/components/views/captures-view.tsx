@@ -79,17 +79,18 @@ export function CapturesView({
             }
           />
         ),
-        size: mode === 'vehicles' ? 190 : 90,
+        size: mode === 'vehicles' ? 220 : 90,
         enableSorting: false,
         cell: ({ row }) =>
           mode === 'vehicles' ? (
             <VehicleEvidence capture={row.original} layout='table' />
           ) : (
-            <div className='size-10 overflow-hidden rounded-md border border-border bg-muted/40'>
+            <div className='h-10 w-16 overflow-hidden rounded-md border border-border bg-muted/40'>
               <MediaImage
                 path={row.original.cropPath || row.original.imagePath}
                 alt={row.original.targetType}
                 className='size-full'
+                imageClassName='object-contain p-0.5'
                 fallbackText='Capture'
               />
             </div>
@@ -123,6 +124,43 @@ export function CapturesView({
         ),
       },
     ]
+
+    if (mode === 'vehicles') {
+      cols.push({
+        id: 'plate',
+        header: ({ column }) => (
+          <DataTableColumnHeader
+            column={column}
+            title={t('table.plate', '车牌号码')}
+          />
+        ),
+        enableSorting: false,
+        cell: ({ row }) => {
+          const attrs = row.original.attributes as
+            | Record<string, unknown>
+            | undefined
+          const plateNo =
+            typeof attrs?.plate_number === 'string' ? attrs.plate_number : ''
+          const plateColor =
+            typeof attrs?.plate_color === 'string' ? attrs.plate_color : ''
+          if (!plateNo) {
+            return <span className='text-xs text-muted-foreground'>-</span>
+          }
+          return (
+            <div className='flex items-center gap-1.5'>
+              <span className='inline-flex items-center rounded border border-blue-600/30 bg-blue-600/10 px-1.5 py-0.5 font-mono text-xs font-semibold text-blue-600 dark:text-blue-400'>
+                {plateNo}
+              </span>
+              {plateColor && (
+                <span className='text-[10px] text-muted-foreground'>
+                  {plateColor}
+                </span>
+              )}
+            </div>
+          )
+        },
+      })
+    }
 
     if (mode === 'captures') {
       cols.push({

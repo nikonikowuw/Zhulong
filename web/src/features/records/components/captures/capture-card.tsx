@@ -23,6 +23,10 @@ export function CaptureCard({ item, cameraName, onSelect }: CaptureCardProps) {
 
   const scorePercent = Math.round((item.score || 0) * 100)
 
+  const attrs = item.attributes as Record<string, unknown> | undefined
+  const plateNo =
+    typeof attrs?.plate_number === 'string' ? attrs.plate_number : ''
+
   return (
     <Card
       onClick={() => onSelect(item)}
@@ -33,6 +37,7 @@ export function CaptureCard({ item, cameraName, onSelect }: CaptureCardProps) {
           path={item.cropPath || item.imagePath}
           alt={item.targetType}
           className='size-full transition-transform duration-300 group-hover:scale-105'
+          imageClassName='object-contain p-2'
           fallbackText='Target Crop'
         />
 
@@ -74,6 +79,14 @@ export function CaptureCard({ item, cameraName, onSelect }: CaptureCardProps) {
             {formattedTime}
           </span>
         </div>
+
+        {plateNo && (
+          <div className='flex items-center justify-between gap-2'>
+            <span className='inline-flex items-center rounded border border-blue-600/30 bg-blue-600/10 px-1.5 py-0.5 font-mono text-xs font-semibold text-blue-600 dark:text-blue-400'>
+              {plateNo}
+            </span>
+          </div>
+        )}
 
         <div className='flex items-center justify-between text-[11px] text-muted-foreground'>
           <span className='max-w-[130px] truncate'>
