@@ -65,11 +65,60 @@ export function useAlgoConfigForm({
     []
   )
 
-  const parsedValue = useMemo(() => safeParseJson(value), [value])
-  const isValidJson = parsedValue !== null
+  const jsonError = useMemo(() => {
+    if (!value || value.trim() === '') return null
+    try {
+      const parsed = JSON.parse(value)
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        Array.isArray(parsed)
+      ) {
+        return t(
+          'dynamicForm.rootObjectRequired',
+          'JSON 根结构必须是对象 ({...})'
+        )
+      }
+      return null
+    } catch (err) {
+      return err instanceof Error
+        ? err.message
+        : t('dynamicForm.syntaxError', '语法错误')
+    }
+  }, [t, value])
+
+  const isValidJson = jsonError === null
+
+  // 跟踪内部提交的值，外部变更（切算法、切相机或父级重置）时执行 form.reset 同步
+  const lastCommittedRef = useRef(value)
+  const lastSchemaJsonRef = useRef(schemaJson)
+
+  useEffect(() => {
+    if (
+      value !== lastCommittedRef.current ||
+      schemaJson !== lastSchemaJsonRef.current
+    ) {
+      lastCommittedRef.current = value
+      lastSchemaJsonRef.current = schemaJson
+      const parsed = safeParseJson(value) ?? {}
+      form.reset(buildFormValues(schema, parsed))
+    }
+  }, [value, schemaJson, schema, form])
 
   const commit = useCallback(
-    (next: AlgoConfigValues) => onChange(serializeConfig(next)),
+    (next: AlgoConfigValues) => {
+      const serialized = serializeConfig(next)
+      lastCommittedRef.current = serialized
+      onChange(serialized)
+    },
+    [onChange]
+  )
+
+  const handleRawJsonChange = useCallback(
+    (nextRaw: string) => {
+      lastCommittedRef.current = nextRaw
+      onChange(nextRaw)
+    },
     [onChange]
   )
 
@@ -142,6 +191,8 @@ export function useAlgoConfigForm({
     resetDefaults,
     value,
     isValidJson,
+    jsonError,
+    handleRawJsonChange,
     formatJson,
     copyJson,
     copied,

@@ -1,6 +1,10 @@
-import { Check, Copy, RotateCcw, Terminal } from 'lucide-react'
+import { AlertCircle, Check, Copy, RotateCcw, Terminal } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
+import {
+  STATUS_DOT_CLASS,
+  STATUS_LEVEL_CLASS,
+  STATUS_TEXT_CLASS,
+} from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -11,6 +15,7 @@ interface AlgoConfigJsonEditorProps {
   isValid: boolean
   disabled: boolean
   copied: boolean
+  errorDetail?: string | null
   onChange: (next: string) => void
   onCopy: () => void
   onFormat: () => void
@@ -25,6 +30,7 @@ export function AlgoConfigJsonEditor({
   isValid,
   disabled,
   copied,
+  errorDetail,
   onChange,
   onCopy,
   onFormat,
@@ -41,8 +47,9 @@ export function AlgoConfigJsonEditor({
           </span>
           <Badge
             variant='outline'
+            title={!isValid && errorDetail ? errorDetail : undefined}
             className={cn(
-              'gap-1.5 px-1.5 py-0 text-[10px] font-normal',
+              'gap-1.5 px-1.5 py-0 text-[10px] font-normal transition-colors',
               isValid ? VALID_BADGE_CLASS : INVALID_BADGE_CLASS
             )}
           >
@@ -68,7 +75,7 @@ export function AlgoConfigJsonEditor({
             className='h-6 gap-1 px-2 text-[11px] text-muted-foreground'
           >
             {copied ? (
-              <Check className='h-3 w-3 text-emerald-600 dark:text-emerald-400' />
+              <Check className={cn('h-3 w-3', STATUS_TEXT_CLASS.active)} />
             ) : (
               <Copy className='h-3 w-3' />
             )}
@@ -93,13 +100,20 @@ export function AlgoConfigJsonEditor({
       </div>
 
       <Textarea
-        rows={5}
+        rows={6}
         disabled={disabled}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder='{}'
-        className='resize-y rounded-none border-0 bg-background font-mono text-xs leading-relaxed shadow-none focus-visible:ring-0'
+        className='max-h-[360px] min-h-[140px] resize-y rounded-none border-0 bg-background font-mono text-xs leading-relaxed shadow-none focus-visible:ring-0'
       />
+
+      {!isValid && errorDetail && (
+        <div className='flex items-center gap-1.5 border-t border-destructive/20 bg-destructive/10 px-3 py-1.5 font-mono text-[11px] text-destructive'>
+          <AlertCircle className='size-3.5 shrink-0' />
+          <span className='truncate'>{errorDetail}</span>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,4 +1,5 @@
 import { HelpCircle } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { FormLabel, FormMessage } from '@/components/ui/form'
 import {
@@ -11,20 +12,32 @@ interface AlgoConfigFieldLabelProps {
   title: string
   propertyKey: string
   description?: string
+  isRequired?: boolean
 }
 
-/** 字段标题 + 原始键名 + 说明 Tooltip + 校验信息，供全部字段类型复用。 */
+/** 字段标题 + 原始键名 + 必填标记 + 说明 Tooltip + 校验信息，供全部字段类型复用。 */
 export function AlgoConfigFieldLabel({
   title,
   propertyKey,
   description,
+  isRequired = false,
 }: AlgoConfigFieldLabelProps) {
+  const { t } = useTranslation('tasks')
+
   return (
     <div className='min-w-0 space-y-0.5'>
       <div className='flex min-w-0 items-center gap-1.5'>
-        <FormLabel className='cursor-pointer truncate text-xs font-medium text-foreground'>
+        <FormLabel className='cursor-pointer text-xs font-medium text-foreground'>
           {title}
         </FormLabel>
+        {isRequired && (
+          <span
+            className='text-xs leading-none font-bold text-destructive select-none'
+            title={t('dynamicForm.required', '必填')}
+          >
+            *
+          </span>
+        )}
         {title !== propertyKey && (
           <span className='font-mono text-[10px] text-muted-foreground/60'>
             ({propertyKey})

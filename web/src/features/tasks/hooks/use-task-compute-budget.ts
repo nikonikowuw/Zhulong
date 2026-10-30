@@ -3,6 +3,7 @@ import { type Algorithm } from '@/features/algorithms/data/schema'
 import { type Task } from '../data/schema'
 
 export const MAX_COMPUTE_POINTS = 1000
+export const DEFAULT_COMPUTE_COST = 10
 
 export interface TaskComputeBudget {
   totalUsedPoints: number
@@ -35,7 +36,7 @@ export function useTaskComputeBudget(
         if (t.enabled && sub.enabled) {
           enabledCount++
           const algo = algoMap.get(sub.algorithmId)
-          const cost = algo?.computeCost ?? 10
+          const cost = algo?.computeCost ?? DEFAULT_COMPUTE_COST
           totalUsedPoints += cost * sub.sampleFps
         }
       }

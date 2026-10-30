@@ -365,3 +365,75 @@ describe('AlgoConfigDynamicForm · 枚举', () => {
     expect(JSON.parse(lastCommit(onChange)).model_precision).toBe('int8')
   })
 })
+
+describe('AlgoConfigDynamicForm · 必填与动态同步', () => {
+  it('renders a required indicator for required schema properties', async () => {
+    const requiredSchema = JSON.stringify({
+      type: 'object',
+      required: ['api_key'],
+      properties: {
+        api_key: { type: 'string', title: '密钥' },
+        optional_note: { type: 'string', title: '备注' },
+      },
+    })
+    const { getByTitle } = await render(
+      <Harness schema={requiredSchema} initialValue='{}' />
+    )
+    await expect.element(getByTitle('必填')).toBeInTheDocument()
+  })
+
+  it('renders the syntax error banner when JSON is invalid', async () => {
+    const { getByText, getByPlaceholder } = await render(
+      <Harness initialValue='{}' />
+    )
+    await getByText('JSON 源码').click()
+    await getByPlaceholder('{}').fill('{ invalid json')
+    await expect.element(getByText('语法错误')).toBeInTheDocument()
+  })
+
+  it('resets form when external value updates', async () => {
+    const { getByRole, rerender } = await render(
+      <AlgoConfigDynamicForm
+        schemaJson={schemaJson}
+        value='{"threshold":0.2}'
+        onChange={vi.fn()}
+      />
+    )
+    await expect
+      .element(getByRole('textbox', { name: '比对阈值' }))
+      .toHaveValue('0.2')
+
+    await rerender(
+      <AlgoConfigDynamicForm
+        schemaJson={schemaJson}
+        value='{"threshold":0.75}'
+        onChange={vi.fn()}
+      />
+    )
+    await expect
+      .element(getByRole('textbox', { name: '比对阈值' }))
+      .toHaveValue('0.75')
+  })
+
+  it('preserves decimal input for float properties with wide ranges', async () => {
+    const wideFloatSchema = JSON.stringify({
+      type: 'object',
+      properties: {
+        score: {
+          type: 'number',
+          title: '置信度得分',
+          minimum: 0,
+          maximum: 100,
+        },
+      },
+    })
+    const onChange = vi.fn()
+    const { getByRole } = await render(
+      <Harness schema={wideFloatSchema} initialValue='{}' onChange={onChange} />
+    )
+    const input = getByRole('textbox', { name: '置信度得分' })
+    await input.fill('25.5')
+    await userEvent.keyboard('{Enter}')
+    expect(JSON.parse(lastCommit(onChange)).score).toBe(25.5)
+  })
+})

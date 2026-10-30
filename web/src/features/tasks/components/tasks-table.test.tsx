@@ -93,11 +93,20 @@ const mockTasks: Task[] = [
 
 /** 把 Provider 里的弹窗状态暴露成可断言的文本，替代旧的 onDeleteTask 回调断言。 */
 function DialogProbe() {
-  const { open, currentRow } = useTasksContext()
-  return <div>{`dialog:${open ?? 'none'}:${currentRow?.id ?? ''}`}</div>
+  const { open, currentRow, targetCameraId, targetAlgorithmId } =
+    useTasksContext()
+  return (
+    <div>{`dialog:${open ?? 'none'}:${currentRow?.id ?? ''}:${targetCameraId ?? ''}:${targetAlgorithmId ?? ''}`}</div>
+  )
 }
 
-function TasksTableHarness({ tasks }: { tasks: Task[] }) {
+function TasksTableHarness({
+  tasks,
+  defaultExpanded = true,
+}: {
+  tasks: Task[]
+  defaultExpanded?: boolean
+}) {
   return (
     <TasksProvider>
       <TasksTable
@@ -110,6 +119,7 @@ function TasksTableHarness({ tasks }: { tasks: Task[] }) {
         // 明细表格视图（默认是通道聚合卡片视图）
         search={{ view: 'table' }}
         navigate={vi.fn()}
+        defaultExpanded={defaultExpanded}
       />
       <DialogProbe />
     </TasksProvider>
@@ -174,7 +184,8 @@ describe('TasksTable', () => {
     await getByRole('button', { name: /^操作$/ })
       .first()
       .click()
-    await getByRole('menuitem', { name: /删除任务/ })
+    // 通道仍有其它算法时，动作是「移除该算法」而不是「删除任务」
+    await getByRole('menuitem', { name: /移除该算法/ })
       .first()
       .click()
 
@@ -242,5 +253,48 @@ describe('TasksTable', () => {
       expect(mockToastError).toHaveBeenCalledWith('复制失败，请手动复制')
     })
     expect(mockToastSuccess).not.toHaveBeenCalled()
+  })
+
+  it('defaults to collapsed and can be expanded to reveal sub-table details', async () => {
+    // 验证默认折叠行为（defaultExpanded 为 false）
+    const { getByRole, getByText } = await render(
+      <TasksTableHarness tasks={mockTasks} defaultExpanded={false} />
+    )
+
+    // 默认折叠：主行可见，子表格明细不可见
+    await expect.element(getByText('南门枪机')).toBeInTheDocument()
+    await expect
+      .element(getByText('绑定的算法实例明细'))
+      .not.toBeInTheDocument()
+
+    // 点击行首展开按钮展开明细
+    await getByRole('button', { name: /^展开明细$/ }).click()
+    await expect.element(getByText('绑定的算法实例明细')).toBeInTheDocument()
+    await expect.element(getByText('烟火检测算法')).toBeInTheDocument()
+
+    // 再次点击折叠
+    await getByRole('button', { name: /^折叠明细$/ }).click()
+    await expect
+      .element(getByText('绑定的算法实例明细'))
+      .not.toBeInTheDocument()
+  })
+
+  it('opens channel task dialog with targeted algorithm when clicking edit in sub-table', async () => {
+    const { getByRole, getByText } = await renderTable()
+
+    await getByRole('button', { name: /^操作$/ })
+      .first()
+      .click()
+    await getByRole('menuitem', { name: /编辑配置/ })
+      .first()
+      .click()
+
+    await expect
+      .element(
+        getByText(
+          `dialog:channelTask:${mockTasks[0].id}:cam-01:${mockTasks[0].algorithms[0].algorithmId}`
+        )
+      )
+      .toBeInTheDocument()
   })
 })

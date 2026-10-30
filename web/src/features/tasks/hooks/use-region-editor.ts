@@ -3,7 +3,6 @@ import { type RegionTool } from '../components/region-drag-types'
 import {
   MAX_RECTS_PER_CATEGORY,
   draftItems,
-  emptyDraft,
   fromDraft,
   parseRegionConfig,
   serializeRegionConfig,
@@ -17,6 +16,9 @@ import {
 
 /** 撤销栈上限：一次会话内的绘制操作远达不到，仅用于兜住异常长会话的内存。 */
 const MAX_HISTORY = 50
+
+/** 未配置区域时的 wire 契约字面量。 */
+const EMPTY_REGION_JSON = '{}'
 
 export interface RegionEditorController {
   draft: RegionDraft
@@ -44,16 +46,29 @@ export interface RegionEditorController {
  *
  * 稳定 id 由本 hook 内的自增 ref 生成，因此 id 只存在于编辑期、不进入 wire 契约，
  * 也不会引入模块级可变状态。
+ *
+ * `initialValue` 只在**首次挂载**时读取。刻意不做「值变了就 setState」的同步 effect：
+ * 那样会把外部真源与编辑缓冲变成双写。切换编辑对象时由调用方显式调 {@link reset}。
  */
-export function useRegionEditor(): RegionEditorController {
+export function useRegionEditor(
+  initialValue: string = EMPTY_REGION_JSON
+): RegionEditorController {
   const idSeqRef = useRef(0)
   const makeId = useCallback(() => {
     idSeqRef.current += 1
     return `region-${idSeqRef.current}`
   }, [])
 
-  const [draft, setDraft] = useState<RegionDraft>(emptyDraft)
-  const [baseline, setBaseline] = useState<RegionDraft>(emptyDraft)
+  // 初始 id 由局部序号派生：渲染期不得读 ref（react-hooks/refs），
+  // 而 `init-*` 前缀与运行期 `makeId` 的 `region-*` 天然不冲突。
+  const [draft, setDraft] = useState<RegionDraft>(() => {
+    let seq = 0
+    return toDraft(parseRegionConfig(initialValue), () => `init-${++seq}`)
+  })
+  const [baseline, setBaseline] = useState<RegionDraft>(() => {
+    let seq = 0
+    return toDraft(parseRegionConfig(initialValue), () => `init-${++seq}`)
+  })
   const [history, setHistory] = useState<RegionDraft[]>([])
   const [selected, setSelected] = useState<RegionSelection | null>(null)
   const [tool, setTool] = useState<RegionTool>('select')

@@ -8,7 +8,6 @@ import {
 } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { type TaskComputeBudget } from '../hooks/use-task-compute-budget'
 
 interface TasksComputeBudgetCardProps {
@@ -40,30 +39,20 @@ export function TasksComputeBudgetCard({
   const [statusTextKey, statusTextFallback] = BUDGET_STATUS_TEXT_KEY[level]
 
   return (
-    <Card className='gap-4 py-4 shadow-xs sm:py-5'>
-      <CardHeader className='px-4 sm:px-5'>
-        <div className='flex flex-wrap items-center justify-between gap-3'>
-          <div className='flex items-center gap-2.5'>
-            <div className='flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary'>
-              <Cpu className='size-5' />
-            </div>
-            <div className='space-y-0.5'>
-              <h3 className='text-sm leading-none font-semibold tracking-tight'>
-                {t('budgetCard.title', '算力配额与调度看板')}
-              </h3>
-              <p className='text-xs text-muted-foreground'>
-                {t(
-                  'budgetCard.desc',
-                  '全平台共享 1,000 点 NPU 异构加速算力池，基于已启用任务实时核算。'
-                )}
-              </p>
-            </div>
-          </div>
-
+    <div className='flex flex-col gap-3 rounded-xl border border-border/80 bg-card/60 p-3.5 shadow-xs backdrop-blur-xs transition-all sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4 sm:py-2.5'>
+      {/* 左侧：精简状态标识与标题 */}
+      <div className='flex shrink-0 items-center gap-3'>
+        <div className='flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/60 text-muted-foreground'>
+          <Cpu className='size-4' />
+        </div>
+        <div className='flex items-center gap-2'>
+          <span className='text-sm font-semibold tracking-tight text-foreground'>
+            {t('budgetCard.title', 'NPU 算力调度')}
+          </span>
           <Badge
             variant='outline'
             className={cn(
-              'gap-1.5 text-xs font-normal',
+              'h-5 gap-1 px-1.5 text-[11px] font-normal',
               STATUS_LEVEL_CLASS[level]
             )}
           >
@@ -73,79 +62,57 @@ export function TasksComputeBudgetCard({
             {t(statusTextKey, statusTextFallback)}
           </Badge>
         </div>
-      </CardHeader>
+      </div>
 
-      <CardContent className='space-y-4 px-4 sm:px-5'>
-        {/* 动态进度条 */}
-        <div className='space-y-1.5'>
-          <div className='flex items-center justify-between text-xs'>
-            <span className='font-medium text-foreground'>
-              {budget.totalUsedPoints} / {budget.maxPoints}{' '}
-              {t('channelCard.pointsSuffix', '点')}
-            </span>
-            <span className='text-muted-foreground'>{budget.percent}%</span>
-          </div>
-          <div className='h-2 w-full overflow-hidden rounded-full bg-muted/50'>
-            <div
-              className={cn(
-                'h-full transition-all duration-300',
-                STATUS_DOT_CLASS[level]
-              )}
-              style={{
-                width: `${Math.min(100, Math.max(0, budget.percent))}%`,
-              }}
-            />
-          </div>
+      {/* 中部：微型利用率进度条与点数 */}
+      <div className='flex min-w-[200px] flex-1 flex-col gap-1 sm:max-w-md'>
+        <div className='flex items-center justify-between text-xs'>
+          <span className='font-medium text-foreground'>
+            {budget.totalUsedPoints} / {budget.maxPoints}{' '}
+            {t('channelCard.pointsSuffix', '点')}
+          </span>
+          <span className='font-mono text-muted-foreground'>
+            {budget.percent}%
+          </span>
+        </div>
+        <div className='h-1.5 w-full overflow-hidden rounded-full bg-muted'>
+          <div
+            className={cn(
+              'h-full transition-all duration-300',
+              STATUS_DOT_CLASS[level]
+            )}
+            style={{
+              width: `${Math.min(100, Math.max(0, budget.percent))}%`,
+            }}
+          />
+        </div>
+      </div>
+
+      {/* 右侧：紧凑指标胶囊 */}
+      <div className='flex shrink-0 flex-wrap items-center gap-2 text-xs sm:gap-3'>
+        <div className='flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1 text-muted-foreground'>
+          <Activity className='size-3 text-muted-foreground/80' />
+          <span>{t('budgetCard.remainingPoints', '可用余量')}:</span>
+          <span
+            className={cn(
+              'font-semibold tracking-tight',
+              STATUS_TEXT_CLASS.active
+            )}
+          >
+            {budget.remainingPoints}
+          </span>
         </div>
 
-        {/* 指标统计栏目 */}
-        <div className='grid grid-cols-2 gap-3 sm:grid-cols-4'>
-          <div className='rounded-lg border border-border/60 bg-muted/30 p-2.5'>
-            <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>
-              <Activity className='size-3.5' />
-              <span>{t('budgetCard.usedPoints', '已用算力')}</span>
-            </div>
-            <div className='mt-1 text-base font-bold tracking-tight'>
-              {budget.totalUsedPoints}
-            </div>
-          </div>
-
-          <div className='rounded-lg border border-border/60 bg-muted/30 p-2.5'>
-            <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>
-              <Cpu className='size-3.5' />
-              <span>{t('budgetCard.remainingPoints', '可用余量')}</span>
-            </div>
-            <div
-              className={cn(
-                'mt-1 text-base font-bold tracking-tight',
-                STATUS_TEXT_CLASS.active
-              )}
-            >
-              {budget.remainingPoints}
-            </div>
-          </div>
-
-          <div className='rounded-lg border border-border/60 bg-muted/30 p-2.5'>
-            <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>
-              <Layers className='size-3.5' />
-              <span>{t('budgetCard.activeTasks', '活跃分析')}</span>
-            </div>
-            <div className='mt-1 text-base font-bold tracking-tight'>
-              {budget.enabledCount}
-            </div>
-          </div>
-
-          <div className='rounded-lg border border-border/60 bg-muted/30 p-2.5'>
-            <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>
-              <Layers className='size-3.5' />
-              <span>{t('budgetCard.totalTasks', '总配置数')}</span>
-            </div>
-            <div className='mt-1 text-base font-bold tracking-tight'>
-              {budget.totalCount}
-            </div>
-          </div>
+        <div className='flex items-center gap-1.5 rounded-md bg-muted/50 px-2 py-1 text-muted-foreground'>
+          <Layers className='size-3 text-muted-foreground/80' />
+          <span>{t('budgetCard.activeTasks', '活跃')}:</span>
+          <span className='font-semibold tracking-tight text-foreground'>
+            {budget.enabledCount}
+          </span>
+          <span className='text-muted-foreground/60'>/</span>
+          <span className='text-muted-foreground'>{budget.totalCount}</span>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   )
 }

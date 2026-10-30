@@ -26,6 +26,7 @@ interface AlgoConfigFieldProps {
   propertyKey: string
   prop: SchemaProperty
   disabled: boolean
+  isRequired?: boolean
   onValueChange: (key: string, value: unknown) => void
 }
 
@@ -47,6 +48,7 @@ export function AlgoConfigField({
   propertyKey,
   prop,
   disabled,
+  isRequired = false,
   onValueChange,
 }: AlgoConfigFieldProps) {
   const { t } = useTranslation('tasks')
@@ -58,11 +60,12 @@ export function AlgoConfigField({
       control={control}
       name={propertyKey}
       render={({ field }) => (
-        <FormItem className='flex items-center justify-between gap-3 p-2.5 transition-colors hover:bg-muted/20'>
+        <FormItem className='flex items-center justify-between gap-3 px-3 py-2.5 transition-colors hover:bg-muted/30'>
           <AlgoConfigFieldLabel
             title={title}
             propertyKey={propertyKey}
             description={prop.description}
+            isRequired={isRequired}
           />
 
           <div className='flex shrink-0 items-center gap-2'>
@@ -77,7 +80,8 @@ export function AlgoConfigField({
                 <FormControl>
                   <SelectTrigger
                     size='sm'
-                    className='w-32 bg-background font-mono'
+                    aria-label={title}
+                    className='h-7 w-36 bg-background font-mono text-xs'
                   >
                     <SelectValue
                       placeholder={t(
@@ -109,6 +113,7 @@ export function AlgoConfigField({
                 <FormControl>
                   <Switch
                     disabled={disabled}
+                    aria-label={title}
                     checked={Boolean(field.value)}
                     onCheckedChange={(checked) =>
                       onValueChange(propertyKey, checked)
@@ -128,6 +133,7 @@ export function AlgoConfigField({
               <FormControl>
                 <Input
                   disabled={disabled}
+                  aria-label={title}
                   value={typeof field.value === 'string' ? field.value : ''}
                   onChange={(event) =>
                     onValueChange(propertyKey, event.target.value)

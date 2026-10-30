@@ -1,4 +1,4 @@
-import { Plus, Settings2, Trash2, Video } from 'lucide-react'
+import { MoreHorizontal, Plus, Settings2, Trash2, Video } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   STATUS_DOT_CLASS,
@@ -9,6 +9,13 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import { type ChannelTaskGroup, type Task } from '../data/schema'
 import { TaskStatusBadge } from './task-status-badge'
@@ -67,20 +74,20 @@ export function ChannelTasksView({
         return (
           <Card
             key={group.camera.id}
-            className='gap-3 py-4 transition-shadow hover:shadow-md'
+            className='flex flex-col justify-between gap-0 overflow-hidden py-0 shadow-xs transition-all hover:border-primary/40 hover:shadow-md'
           >
             {/* 卡片头部：相机信息与在线徽标 */}
-            <CardHeader className='px-4'>
+            <CardHeader className='border-b border-border/40 bg-muted/20 px-4 py-3'>
               <div className='flex items-start justify-between gap-2'>
-                <div className='flex items-center gap-2.5'>
-                  <div className='flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary'>
+                <div className='flex min-w-0 items-center gap-2.5'>
+                  <div className='flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/60 text-muted-foreground'>
                     <Video className='size-4' />
                   </div>
                   <div className='min-w-0'>
                     <h4 className='truncate text-sm leading-tight font-semibold text-foreground'>
                       {group.camera.name}
                     </h4>
-                    <span className='text-xs text-muted-foreground'>
+                    <span className='text-[11px] text-muted-foreground'>
                       {group.camera.streams?.[0]?.protocol?.toUpperCase() ||
                         'RTSP'}{' '}
                       ·{' '}
@@ -91,29 +98,60 @@ export function ChannelTasksView({
                   </div>
                 </div>
 
-                <Badge
-                  variant='outline'
-                  className={cn(
-                    'gap-1.5 text-xs font-normal',
-                    STATUS_LEVEL_CLASS[healthLevel]
-                  )}
-                >
-                  <span
+                <div className='flex items-center gap-1.5'>
+                  <Badge
+                    variant='outline'
                     className={cn(
-                      'size-1.5 rounded-full',
-                      STATUS_DOT_CLASS[healthLevel]
+                      'shrink-0 gap-1.5 px-2 py-0.5 text-[11px] font-normal',
+                      STATUS_LEVEL_CLASS[healthLevel]
                     )}
-                  />
-                  {isOnline
-                    ? t('channelCard.cameraOnline', '在线')
-                    : t('channelCard.cameraOffline', '离线')}
-                </Badge>
+                  >
+                    <span
+                      className={cn(
+                        'size-1.5 rounded-full',
+                        STATUS_DOT_CLASS[healthLevel]
+                      )}
+                    />
+                    {isOnline
+                      ? t('channelCard.cameraOnline', '在线')
+                      : t('channelCard.cameraOffline', '离线')}
+                  </Badge>
+
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant='ghost'
+                        size='icon'
+                        className='size-7 text-muted-foreground hover:bg-muted hover:text-foreground'
+                        aria-label={t('channelCard.moreActions', '更多操作')}
+                      >
+                        <MoreHorizontal className='size-3.5' />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align='end' className='w-40'>
+                      <DropdownMenuItem
+                        onClick={() => onConfigureCamera(group.camera.id)}
+                      >
+                        <Settings2 className='me-2 size-3.5' />
+                        {t('channelCard.configButton', '配置算法')}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={() => onDeleteChannelTask?.(primaryTask)}
+                        className='text-destructive focus:text-destructive'
+                      >
+                        <Trash2 className='me-2 size-3.5' />
+                        {t('channelCard.deleteButton', '删除通道任务')}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
               </div>
             </CardHeader>
 
-            <CardContent className='space-y-3 px-4'>
+            <CardContent className='flex flex-1 flex-col gap-3 p-4'>
               {/* 算力消耗概要与通道主开关 */}
-              <div className='flex items-center justify-between border-y border-border/60 py-2 text-xs'>
+              <div className='flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2 text-xs'>
                 <div>
                   <span className='text-muted-foreground'>
                     {t('channelCard.channelPoints', '通道算力消耗')}:{' '}
@@ -126,7 +164,7 @@ export function ChannelTasksView({
                 </div>
 
                 <div className='flex items-center gap-1.5'>
-                  <span className='text-muted-foreground'>
+                  <span className='text-xs text-muted-foreground'>
                     {primaryTask.enabled
                       ? t('channelCard.channelRunning', '通道已启用')
                       : t('channelCard.channelPaused', '通道已暂停')}
@@ -142,12 +180,12 @@ export function ChannelTasksView({
                 </div>
               </div>
 
-              {/* 算法列表 */}
-              <div className='space-y-2'>
+              {/* 算法列表（设置统一定高与自适应滚动，杜绝瀑布流参差） */}
+              <div className='flex max-h-[148px] min-h-[96px] flex-col gap-1.5 overflow-y-auto pe-1'>
                 {group.items.map((item) => (
                   <div
                     key={item.algorithmItem.id}
-                    className='flex items-center justify-between rounded-lg border border-border/60 bg-muted/30 px-2.5 py-1.5 text-xs'
+                    className='flex items-center justify-between rounded-md border border-border/40 bg-card/60 px-2.5 py-1.5 text-xs transition-colors hover:bg-muted/40'
                   >
                     <div className='flex items-center gap-2 overflow-hidden'>
                       <TaskStatusBadge
@@ -176,28 +214,16 @@ export function ChannelTasksView({
             </CardContent>
 
             {/* 卡片底部操作按钮 */}
-            <CardFooter className='px-4'>
-              <div className='flex w-full items-center gap-2'>
-                <Button
-                  variant='outline'
-                  size='sm'
-                  className='h-8 flex-1 gap-1.5 text-xs'
-                  onClick={() => onConfigureCamera(group.camera.id)}
-                >
-                  <Settings2 className='size-3.5' />
-                  {t('channelCard.configButton', '配置算法')}
-                </Button>
-                <Button
-                  variant='ghost'
-                  size='icon'
-                  className='size-8 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive'
-                  title={t('channelCard.deleteButton', '删除通道任务')}
-                  aria-label={t('channelCard.deleteButton', '删除通道任务')}
-                  onClick={() => onDeleteChannelTask?.(primaryTask)}
-                >
-                  <Trash2 className='size-3.5' />
-                </Button>
-              </div>
+            <CardFooter className='border-t border-border/40 bg-muted/10 px-4 py-2.5'>
+              <Button
+                variant='outline'
+                size='sm'
+                className='h-8 w-full gap-1.5 text-xs font-medium'
+                onClick={() => onConfigureCamera(group.camera.id)}
+              >
+                <Settings2 className='size-3.5' />
+                {t('channelCard.configButton', '配置算法')}
+              </Button>
             </CardFooter>
           </Card>
         )

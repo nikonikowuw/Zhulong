@@ -17,7 +17,7 @@
     "statusOverload": "Overloaded"
   },
   "table": {
-    "id": "Task / Subscription ID",
+    "id": "Task ID",
     "camera": "Camera",
     "algorithm": "Algorithm",
     "fps": "Sampling Rate",
@@ -43,8 +43,13 @@
     "removeAlgoError": "Failed to remove algorithm",
     "empty": "No analysis tasks configured",
     "emptyFiltered": "No tasks match the filter criteria",
+    "subTableTitle": "Configured Algorithm Instances",
+    "subscriptionId": "Instance ID",
+    "expandAll": "Expand All",
+    "collapseAll": "Collapse All",
+    "deleteTask": "Delete Task",
     "columns": {
-      "taskId": "Task / Subscription ID",
+      "taskId": "Task ID",
       "camera": "Camera",
       "algorithm": "Algorithm",
       "sampleFps": "Sample FPS",
@@ -56,7 +61,11 @@
     "filterEmpty": "No matching analysis tasks",
     "filterEmptyDesc": "Adjust the search keywords or filters and try again.",
     "emptyDesc": "No algorithm has been assigned to any camera yet. Click \"Configure channel task\" to start.",
-    "resetFilter": "Reset filters"
+    "resetFilter": "Reset filters",
+    "expandRow": "Expand details",
+    "collapseRow": "Collapse details",
+    "removeAlgo": "Remove this algorithm",
+    "fpsValue": "{{fps}} FPS"
   },
   "channelCard": {
     "activeAlgorithms": "Configured Algorithms",
@@ -71,7 +80,10 @@
     "channelRunning": "Channel Enabled",
     "channelPaused": "Channel Paused",
     "toggleChannel": "Toggle channel analysis status",
-    "deleteButton": "Delete channel task"
+    "deleteButton": "Delete channel task",
+    "itemsCount": "{{count}} items",
+    "pointsTotalSuffix": "pts total",
+    "moreActions": "More actions"
   },
   "dialog": {
     "title": "Configure Channel Algorithms",
@@ -91,15 +103,19 @@
     "globalPointsPreview": "Platform Budget Usage",
     "budgetWarning": "⚠️ Configuration will exceed the 1,000-point platform compute budget! Please lower FPS or disable algorithms.",
     "invalidJsonError": "Advanced config for \"{{name}}\" is not a valid JSON document. Please correct it before saving.",
+    "invalidConfigError": "Configuration for algorithm \"{{name}}\" is invalid{{detail}}. Please fix before saving.",
     "algoDisabledBadge": "Inactive",
     "algoDisabledAlert": "This algorithm is currently disabled. Tasks will remain in standby until enabled.",
     "autoEnableDisabledAlgos": "Automatically enable selected algorithms on save (starts inference)",
     "saveSuccessWithEnable": "Channel task updated and algorithms have been enabled",
+    "saveSuccessEnableFailed": "Channel task updated, but some algorithms failed to enable automatically. Please enable them manually in Algorithms.",
     "cancel": "Cancel",
+    "close": "Close",
     "save": "Save Configuration",
     "saving": "Synchronizing...",
     "saveSuccess": "Channel algorithms updated successfully",
     "saveError": "Failed to save configuration",
+    "deleteFailed": "Failed to delete channel task",
     "duplicateWarning": "Camera and algorithm can only be bound once",
     "channelEnabledLabel": "Channel Analysis Master Switch",
     "channelEnabledDesc": "When disabled, all algorithms for this camera are suspended from analysis",
@@ -107,7 +123,15 @@
     "deleteChannelConfirmTitle": "Delete Channel Analysis Task",
     "deleteChannelConfirmDesc": "Are you sure you want to delete all algorithm analysis tasks for this channel? Compute points will be released immediately.",
     "channelTaskCleared": "Cleared and deleted analysis tasks for this channel",
-    "noAlgoSelectedError": "Please select at least one algorithm package, or delete the channel task directly"
+    "selectAlgoToConfigure": "Select an algorithm on the left to configure sampling rate and parameters",
+    "noAlgoSelectedError": "Please select at least one algorithm package, or delete the channel task directly",
+    "enabledCount": "{{selected}} / {{total}} enabled",
+    "activeAlgoLabel": "Editing",
+    "regionLockedTitle": "No reference frame — region policy is locked",
+    "regionLockedDesc": "The live main stream is unavailable (camera offline or decode failure). Region coordinates must come from a real frame, so drawing and saving new coordinates are disabled; stored regions stay visible read-only.",
+    "regionLockedLoading": "Waiting for the first frame of the main stream. Drawing unlocks once a frame is rendered.",
+    "regionDrawingHint": "Calibration mode: drag on the frame to define the active area for {{name}}",
+    "selectAlgoToConfigureDesc": "Once an algorithm is checked you can drag ROI inclusion and MASK exclusion rectangles directly on this frame."
   },
   "deleteDialog": {
     "title": "Delete Analysis Task",
@@ -139,6 +163,8 @@
     "sliderAria": "{{name}} slider",
     "syntaxValid": "Valid JSON",
     "syntaxError": "Syntax Error",
+    "required": "Required",
+    "rootObjectRequired": "JSON root must be an object ({...})",
     "zeroConfigDesc": "This algorithm is zero-config and operates with self-tuned inference parameters."
   },
   "region": {
@@ -177,7 +203,15 @@
     "resume": "Resume",
     "resumeHint": "Resume the live stream",
     "save": "Save region policy",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "kindRoi": "Inclusion",
+    "kindMask": "Exclusion",
+    "coverage": "Covers ~{{percent}}% of frame",
+    "roiDesc": "Allowlist mode: only events whose anchor point falls inside are reported; leaving it empty reports the whole frame.",
+    "maskDesc": "Denylist mode with the highest priority: drops false positives from swaying branches, passing vehicles and similar noise.",
+    "judgementTitle": "Anchor & evaluation",
+    "judgementDesc": "Region membership is decided by the bottom-center point of the target bounding box: anything inside a MASK is dropped, and when an ROI is configured the target must also fall inside an ROI to be reported.",
+    "resetHint": "Clear every region of the current algorithm"
   },
   "actions": {
     "refresh": "Refresh",

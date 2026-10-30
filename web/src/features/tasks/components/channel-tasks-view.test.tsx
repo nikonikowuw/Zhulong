@@ -227,8 +227,11 @@ describe('ChannelTasksView', () => {
     await switchBtn.click()
     expect(onToggle).toHaveBeenCalledWith(mockGroups[0].items[0].task)
 
-    const deleteBtn = getByRole('button', { name: '删除通道任务' })
-    await deleteBtn.click()
+    const moreActionsBtn = getByRole('button', { name: '更多操作' })
+    await moreActionsBtn.click()
+
+    const deleteMenuItem = getByRole('menuitem', { name: '删除通道任务' })
+    await deleteMenuItem.click()
     expect(onDelete).toHaveBeenCalledWith(mockGroups[0].items[0].task)
   })
 })

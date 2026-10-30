@@ -17,7 +17,7 @@
     "statusOverload": "算力超载"
   },
   "table": {
-    "id": "任务 / 订阅 ID",
+    "id": "任务 ID",
     "camera": "关联摄像头",
     "algorithm": "绑定算法包",
     "fps": "采样帧率",
@@ -43,8 +43,13 @@
     "removeAlgoError": "移除算法失败",
     "empty": "暂无分析任务记录",
     "emptyFiltered": "未找到匹配的分析任务，请调整筛选条件",
+    "subTableTitle": "绑定的算法实例明细",
+    "subscriptionId": "算法实例 ID",
+    "expandAll": "展开全部",
+    "collapseAll": "折叠全部",
+    "deleteTask": "删除任务",
     "columns": {
-      "taskId": "任务 / 订阅 ID",
+      "taskId": "任务 ID",
       "camera": "关联摄像头",
       "algorithm": "绑定算法包",
       "sampleFps": "采样帧率",
@@ -56,7 +61,11 @@
     "filterEmpty": "未找到匹配的分析任务",
     "filterEmptyDesc": "请调整搜索关键词或筛选条件后重试。",
     "emptyDesc": "尚未向任何摄像头分配分析算法，点击「配置通道任务」开始。",
-    "resetFilter": "重置筛选"
+    "resetFilter": "重置筛选",
+    "expandRow": "展开明细",
+    "collapseRow": "折叠明细",
+    "removeAlgo": "移除该算法",
+    "fpsValue": "{{fps}} FPS"
   },
   "channelCard": {
     "activeAlgorithms": "已配置算法",
@@ -71,7 +80,10 @@
     "channelRunning": "通道已启用",
     "channelPaused": "通道已暂停",
     "toggleChannel": "切换通道分析状态",
-    "deleteButton": "删除通道任务"
+    "deleteButton": "删除通道任务",
+    "itemsCount": "{{count}} 项",
+    "pointsTotalSuffix": "点总开销",
+    "moreActions": "更多操作"
   },
   "dialog": {
     "title": "配置通道算法任务",
@@ -91,15 +103,19 @@
     "globalPointsPreview": "全平台预算占用",
     "budgetWarning": "⚠️ 当前配置将导致全平台算力超出 1,000 点总预算上限，请降低采样帧率或取消部分算法！",
     "invalidJsonError": "算法「{{name}}」的高级参数不是合法的 JSON 格式，请修正后再保存",
+    "invalidConfigError": "算法「{{name}}」的参数配置不合规{{detail}}，请检查修正后再保存",
     "algoDisabledBadge": "未启用",
     "algoDisabledAlert": "该算法当前在算法管理中处于禁用状态，任务保存后将处于待命态。",
     "autoEnableDisabledAlgos": "保存时自动激活所选算法（立即启动推理）",
     "saveSuccessWithEnable": "通道算法调度已更新，已自动激活相关算法",
+    "saveSuccessEnableFailed": "通道算法调度已更新，但部分算法自动激活失败，请在算法管理中手动启用",
     "cancel": "取消",
+    "close": "关闭",
     "save": "保存并下发调度",
     "saving": "下发同步中...",
     "saveSuccess": "通道算法调度已成功更新",
     "saveError": "保存调度配置失败",
+    "deleteFailed": "删除通道任务失败",
     "duplicateWarning": "同一摄像头只能与该算法绑定一次",
     "channelEnabledLabel": "通道分析总开关",
     "channelEnabledDesc": "关闭后该摄像头下的所有算法均暂停订阅分析",
@@ -107,7 +123,15 @@
     "deleteChannelConfirmTitle": "删除通道分析任务",
     "deleteChannelConfirmDesc": "确定要删除该通道的全部算法分析任务吗？删除后将立即释放所占算力。",
     "channelTaskCleared": "已清空并删除该通道的分析任务",
-    "noAlgoSelectedError": "请至少选择一个算法包，或直接删除该通道任务"
+    "selectAlgoToConfigure": "在左侧勾选算法以开始配置采样率与运行参数",
+    "noAlgoSelectedError": "请至少选择一个算法包，或直接删除该通道任务",
+    "enabledCount": "{{selected}} / {{total}} 已启用",
+    "activeAlgoLabel": "当前配置算法",
+    "regionLockedTitle": "无参考画面，区域策略暂不可编辑",
+    "regionLockedDesc": "实时主码流不可用（相机离线或解码失败）。区域坐标必须基于真实画面，因此禁止绘制与保存新坐标；已存区域保持只读展示。",
+    "regionLockedLoading": "正在等待主码流首帧…出画后自动解锁绘制。",
+    "regionDrawingHint": "标定模式：在画面上拖拽即可圈定 {{name}} 的生效区域",
+    "selectAlgoToConfigureDesc": "勾选算法后，可在此画面上直接拖拽圈定 ROI 识别区与 MASK 屏蔽区。"
   },
   "deleteDialog": {
     "title": "删除分析任务",
@@ -139,6 +163,8 @@
     "sliderAria": "{{name}}滑块",
     "syntaxValid": "格式正确",
     "syntaxError": "语法错误",
+    "required": "必填",
+    "rootObjectRequired": "JSON 根结构必须是对象 ({...})",
     "zeroConfigDesc": "该算法采用零参设计，内置推理模型已自适应优化，无需额外配置。"
   },
   "region": {
@@ -177,7 +203,15 @@
     "resume": "恢复播放",
     "resumeHint": "恢复实时画面",
     "save": "保存区域策略",
-    "cancel": "取消"
+    "cancel": "取消",
+    "kindRoi": "识别区",
+    "kindMask": "屏蔽区",
+    "coverage": "覆盖画面 ~{{percent}}%",
+    "roiDesc": "白名单模式：仅上报判定点落在框内的目标；留空则整幅画面全量上报。",
+    "maskDesc": "黑名单最高优先级：过滤树枝晃动、道路车辆等干扰区域的误报。",
+    "judgementTitle": "落区与判定逻辑",
+    "judgementDesc": "算法以目标外接框底部中心点做区域归属裁决：命中任一屏蔽区即丢弃；配置了识别区时，目标必须落在识别区内才会被上报。",
+    "resetHint": "清空当前算法的全部区域"
   },
   "actions": {
     "refresh": "刷新",

@@ -17,7 +17,7 @@
     "statusOverload": "算力超載"
   },
   "table": {
-    "id": "任務 / 訂閱 ID",
+    "id": "任務 ID",
     "camera": "關聯攝影機",
     "algorithm": "綁定演算法包",
     "fps": "採樣幀率",
@@ -43,8 +43,13 @@
     "removeAlgoError": "移除演算法失敗",
     "empty": "暫無分析任務記錄",
     "emptyFiltered": "未找到匹配的分析任務，請調整篩選條件",
+    "subTableTitle": "綁定的演算法實例明細",
+    "subscriptionId": "演算法實例 ID",
+    "expandAll": "展開全部",
+    "collapseAll": "折疊全部",
+    "deleteTask": "刪除任務",
     "columns": {
-      "taskId": "任務 / 訂閱 ID",
+      "taskId": "任務 ID",
       "camera": "關聯攝影機",
       "algorithm": "綁定演算法包",
       "sampleFps": "取樣影格率",
@@ -56,7 +61,11 @@
     "filterEmpty": "未找到符合的分析任務",
     "filterEmptyDesc": "請調整搜尋關鍵字或篩選條件後重試。",
     "emptyDesc": "尚未向任何攝影機分配分析演算法，點擊「配置通道任務」開始。",
-    "resetFilter": "重設篩選"
+    "resetFilter": "重設篩選",
+    "expandRow": "展開明細",
+    "collapseRow": "折疊明細",
+    "removeAlgo": "移除該演算法",
+    "fpsValue": "{{fps}} FPS"
   },
   "channelCard": {
     "activeAlgorithms": "已配置演算法",
@@ -71,7 +80,10 @@
     "channelRunning": "通道已啟用",
     "channelPaused": "通道已暫停",
     "toggleChannel": "切換通道分析狀態",
-    "deleteButton": "刪除通道任務"
+    "deleteButton": "刪除通道任務",
+    "itemsCount": "{{count}} 項",
+    "pointsTotalSuffix": "點總開銷",
+    "moreActions": "更多操作"
   },
   "dialog": {
     "title": "配置通道演算法任務",
@@ -91,15 +103,19 @@
     "globalPointsPreview": "全平台預算佔用",
     "budgetWarning": "⚠️ 當前配置將導致全平台算力超出 1,000 點總預算上限，請降低採樣幀率或取消部分演算法！",
     "invalidJsonError": "演算法「{{name}}」的高級參數不是合法的 JSON 格式，請修正後再儲存",
+    "invalidConfigError": "演算法「{{name}}」的參數配置不合規{{detail}}，請檢查修正後再儲存",
     "algoDisabledBadge": "未啟用",
     "algoDisabledAlert": "該演算法當前在演算法管理中處於禁用狀態，任務儲存後將處於待命態。",
     "autoEnableDisabledAlgos": "儲存時自動啟用所選演算法（立即啟動推理）",
     "saveSuccessWithEnable": "通道演算法調度已更新，已自動啟用相關演算法",
+    "saveSuccessEnableFailed": "通道演算法調度已更新，但部分演算法自動啟用失敗，請在演算法管理中手動啟用",
     "cancel": "取消",
+    "close": "關閉",
     "save": "儲存並下發調度",
     "saving": "下發同步中...",
     "saveSuccess": "通道演算法調度已成功更新",
     "saveError": "儲存調度配置失敗",
+    "deleteFailed": "刪除通道任務失敗",
     "duplicateWarning": "同一攝影機只能與該演算法綁定一次",
     "channelEnabledLabel": "通道分析總開關",
     "channelEnabledDesc": "關閉後該攝影機下的所有演算法均暫停訂閱分析",
@@ -107,7 +123,15 @@
     "deleteChannelConfirmTitle": "刪除通道分析任務",
     "deleteChannelConfirmDesc": "確定要刪除該通道的全部演算法分析任務嗎？刪除後將立即釋放所佔算力。",
     "channelTaskCleared": "已清空並刪除該通道的分析任務",
-    "noAlgoSelectedError": "請至少選擇一個演算法包，或直接刪除該通道任務"
+    "selectAlgoToConfigure": "在左側勾選演算法以開始配置採樣率與運行參數",
+    "noAlgoSelectedError": "請至少選擇一個演算法包，或直接刪除該通道任務",
+    "enabledCount": "{{selected}} / {{total}} 已啟用",
+    "activeAlgoLabel": "目前配置演算法",
+    "regionLockedTitle": "無參考畫面，區域策略暫不可編輯",
+    "regionLockedDesc": "即時主碼流不可用（攝影機離線或解碼失敗）。區域座標必須基於真實畫面，因此禁止繪製與儲存新座標；已存區域保持唯讀展示。",
+    "regionLockedLoading": "正在等待主碼流首幀…出畫後自動解鎖繪製。",
+    "regionDrawingHint": "標定模式：在畫面上拖曳即可圈定 {{name}} 的生效區域",
+    "selectAlgoToConfigureDesc": "勾選演算法後，可在此畫面上直接拖曳圈定 ROI 識別區與 MASK 屏蔽區。"
   },
   "deleteDialog": {
     "title": "刪除分析任務",
@@ -139,6 +163,8 @@
     "sliderAria": "{{name}}滑桿",
     "syntaxValid": "格式正確",
     "syntaxError": "語法錯誤",
+    "required": "必填",
+    "rootObjectRequired": "JSON 根結構必須是物件 ({...})",
     "zeroConfigDesc": "該演算法採用零參設計，內建推理模型已自適應優化，無需額外配置。"
   },
   "region": {
@@ -177,7 +203,15 @@
     "resume": "恢復播放",
     "resumeHint": "恢復即時畫面",
     "save": "儲存區域策略",
-    "cancel": "取消"
+    "cancel": "取消",
+    "kindRoi": "識別區",
+    "kindMask": "屏蔽區",
+    "coverage": "覆蓋畫面 ~{{percent}}%",
+    "roiDesc": "白名單模式：僅上報判定點落在框內的目標；留空則整幅畫面全量上報。",
+    "maskDesc": "黑名單最高優先級：過濾樹枝晃動、道路車輛等干擾區域的誤報。",
+    "judgementTitle": "落區與判定邏輯",
+    "judgementDesc": "演算法以目標外接框底部中心點做區域歸屬裁決：命中任一屏蔽區即丟棄；配置了識別區時，目標必須落在識別區內才會被上報。",
+    "resetHint": "清空目前演算法的全部區域"
   },
   "actions": {
     "refresh": "重新整理",

@@ -16,6 +16,23 @@ interface AlgoConfigNumberFieldProps {
   onValueCommit: (next: number | undefined) => void
 }
 
+function getStepPrecision(step: number | 'any'): number {
+  if (step === 'any') return 2
+  const str = String(step)
+  const dot = str.indexOf('.')
+  return dot === -1 ? 0 : str.length - dot - 1
+}
+
+function cleanRound(
+  val: number,
+  step: number | 'any',
+  isInteger: boolean
+): number {
+  if (isInteger) return Math.round(val)
+  const precision = Math.min(6, getStepPrecision(step))
+  return Number(val.toFixed(precision))
+}
+
 /**
  * 数值字段：有 `minimum` + `maximum` 时渲染 Slider + 数字框联动，
  * 否则渲染独立数字框（浮点允许任意精度，不再退化为整数步长）。
@@ -42,7 +59,7 @@ export function AlgoConfigNumberField({
           disabled={disabled}
           aria-label={label}
           onValueCommit={onValueCommit}
-          className='h-7 w-24 bg-background'
+          className='h-7 w-36 bg-background text-center font-mono text-xs'
         />
       </FormControl>
     )
@@ -52,7 +69,7 @@ export function AlgoConfigNumberField({
   const sliderValue = value ?? min
 
   return (
-    <div className='flex flex-1 items-center justify-end gap-2.5'>
+    <div className='flex flex-1 items-center justify-end gap-2'>
       <Slider
         aria-label={t('dynamicForm.sliderAria', { name: label })}
         disabled={disabled}
@@ -61,9 +78,9 @@ export function AlgoConfigNumberField({
         step={sliderStep}
         value={[sliderValue]}
         onValueChange={([next]) =>
-          onValueCommit(isInteger ? Math.round(next) : next)
+          onValueCommit(cleanRound(next, sliderStep, isInteger))
         }
-        className='w-full min-w-28 sm:max-w-40 md:max-w-50'
+        className='w-full min-w-24 sm:max-w-36 md:max-w-44'
       />
       <FormControl>
         <NumberInput
@@ -73,12 +90,22 @@ export function AlgoConfigNumberField({
           max={max}
           disabled={disabled}
           aria-label={label}
-          onValueCommit={(next) => onValueCommit(next ?? min)}
+          onValueCommit={(next) => {
+            if (next === undefined) {
+              onValueCommit(min)
+              return
+            }
+            if (isInteger) {
+              onValueCommit(Math.round(next))
+              return
+            }
+            // 浮点数手动输入：保留至多 6 位有效精度，不按 slider 步长强行截断为整数
+            const manualPrecision = Math.max(getStepPrecision(step), 4)
+            onValueCommit(Number(next.toFixed(Math.min(6, manualPrecision))))
+          }}
+          className='h-7 w-16 shrink-0 bg-background text-center font-mono text-xs'
         />
       </FormControl>
-      <span className='w-14 shrink-0 text-end font-mono text-[10px] text-muted-foreground/70'>
-        [{min}-{max}]
-      </span>
     </div>
   )
 }

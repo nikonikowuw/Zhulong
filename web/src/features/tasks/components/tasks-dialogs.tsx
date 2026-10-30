@@ -10,7 +10,16 @@ import { useTasksContext } from './tasks-provider'
  * 领域数据各自通过 React Query 取（同一 queryKey 会被去重，不会重复请求）。
  */
 export function TasksDialogs() {
-  const { open, setOpen, currentRow, targetCameraId } = useTasksContext()
+  const {
+    open,
+    setOpen,
+    currentRow,
+    setCurrentRow,
+    targetCameraId,
+    setTargetCameraId,
+    targetAlgorithmId,
+    setTargetAlgorithmId,
+  } = useTasksContext()
 
   const { data: camerasData } = useCameras({ pageSize: 100 })
   const { data: algorithms = [] } = useAlgorithms()
@@ -19,12 +28,24 @@ export function TasksDialogs() {
   const cameras = camerasData?.items ?? []
   const initialCameraId = currentRow?.cameraId ?? targetCameraId ?? undefined
 
+  const handleOpenChannelChange = (isOpen: boolean) => {
+    if (!isOpen) {
+      setOpen(null)
+      setCurrentRow(null)
+      setTargetCameraId(null)
+      setTargetAlgorithmId(null)
+    } else {
+      setOpen('channelTask')
+    }
+  }
+
   return (
     <>
       <ChannelTaskDialog
         open={open === 'channelTask'}
-        onOpenChange={(isOpen) => setOpen(isOpen ? 'channelTask' : null)}
+        onOpenChange={handleOpenChannelChange}
         initialCameraId={initialCameraId}
+        initialAlgorithmId={targetAlgorithmId ?? undefined}
         cameras={cameras}
         algorithms={algorithms}
         allTasks={tasks}

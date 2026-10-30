@@ -1,6 +1,12 @@
-import { Trash2 } from 'lucide-react'
+import { Info, ShieldAlert, Sparkles, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { categorySolidClass, categoryTextClass } from '@/lib/category-palette'
+import {
+  categoryBadgeClass,
+  categorySolidClass,
+  categoryTextClass,
+} from '@/lib/category-palette'
+import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   MAX_RECTS_PER_CATEGORY,
@@ -17,6 +23,24 @@ export interface RegionRectListProps {
   disabled?: boolean
   onSelect: (selection: RegionSelection) => void
   onDelete: (category: RegionCategory, index: number) => void
+}
+
+const GROUP_META: Record<
+  RegionCategory,
+  { titleKey: string; ruleKey: string; emptyKey: string; descKey: string }
+> = {
+  roi: {
+    titleKey: 'region.roiTitle',
+    ruleKey: 'region.roiRule',
+    emptyKey: 'region.emptyRoi',
+    descKey: 'region.roiDesc',
+  },
+  mask: {
+    titleKey: 'region.maskTitle',
+    ruleKey: 'region.maskRule',
+    emptyKey: 'region.emptyMask',
+    descKey: 'region.maskDesc',
+  },
 }
 
 export function RegionRectList({
@@ -36,96 +60,144 @@ export function RegionRectList({
     const isSelected = selected?.category === category && selected.index === idx
     const hue = REGION_CATEGORY_HUE[category]
     const [x1, y1, x2, y2] = item.rect
-    const bcX = ((x1 + x2) / 2).toFixed(3)
-    const bcY = y2.toFixed(3)
+    const bottomCenterX = ((x1 + x2) / 2).toFixed(3)
+    const bottomCenterY = y2.toFixed(3)
+    const areaPercent = ((x2 - x1) * (y2 - y1) * 100).toFixed(1)
 
     return (
       <div
         key={item.id}
+        role='button'
+        tabIndex={0}
         onClick={() => onSelect({ category, index: idx })}
-        className={`flex cursor-pointer items-center justify-between rounded-md border p-2 text-xs transition-colors ${
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            onSelect({ category, index: idx })
+          }
+        }}
+        className={cn(
+          'group relative flex cursor-pointer items-start justify-between rounded-lg border p-2.5 text-xs transition-all',
           isSelected
-            ? 'border-primary bg-primary/10 shadow-sm'
-            : 'border-border/60 hover:border-border hover:bg-muted/40'
-        }`}
+            ? cn(categoryBadgeClass(hue), 'shadow-xs ring-1 ring-current/30')
+            : 'border-border bg-card hover:border-border/80 hover:bg-muted/40'
+        )}
       >
-        <div className='flex flex-col gap-0.5'>
-          <div className='flex items-center gap-1.5 font-medium'>
+        <div className='flex min-w-0 flex-1 flex-col gap-1.5'>
+          <div className='flex items-center gap-1.5'>
+            {/* 色块（不是状态圆点）：与画布矩形的分类色一一对应 */}
             <span
-              className={`h-2 w-2 rounded-full ${categorySolidClass(hue)}`}
+              aria-hidden
+              className={cn(
+                'size-2 shrink-0 rounded-[3px]',
+                categorySolidClass(hue)
+              )}
             />
-            <span>
+            <span className='font-semibold text-foreground'>
               {category.toUpperCase()} #{idx + 1}
             </span>
+            <Badge
+              variant='outline'
+              className={cn(
+                'h-4.5 px-1.5 text-[10px] font-normal',
+                categoryBadgeClass(hue)
+              )}
+            >
+              {category === 'roi'
+                ? t('region.kindRoi', '识别区')
+                : t('region.kindMask', '屏蔽区')}
+            </Badge>
           </div>
-          <div className='font-mono text-[11px] text-muted-foreground'>
-            [{x1.toFixed(3)}, {y1.toFixed(3)}, {x2.toFixed(3)}, {y2.toFixed(3)}]
-          </div>
-          <div className='text-[10px] text-muted-foreground/75'>
-            {t('region.bottomCenter')}: ({bcX}, {bcY})
+
+          <div className='flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground'>
+            <span className='font-mono'>
+              {t('region.coverage', '覆盖画面 ~{{percent}}%', {
+                percent: areaPercent,
+              })}
+            </span>
+            <span className='text-border'>•</span>
+            <span className='font-mono text-muted-foreground/80'>
+              {t('region.bottomCenter')}: ({bottomCenterX}, {bottomCenterY})
+            </span>
           </div>
         </div>
 
-        <Button
-          type='button'
-          variant='ghost'
-          size='icon'
-          disabled={disabled}
-          className='h-7 w-7 text-muted-foreground hover:text-destructive'
-          onClick={(e) => {
-            e.stopPropagation()
-            onDelete(category, idx)
-          }}
-          title={t('region.deleteRect')}
-        >
-          <Trash2 className='h-3.5 w-3.5' />
-        </Button>
+        <div className='ms-2 flex shrink-0 items-center gap-1'>
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon'
+            disabled={disabled}
+            className='size-7 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive'
+            onClick={(event) => {
+              event.stopPropagation()
+              onDelete(category, idx)
+            }}
+            title={t('region.deleteRect', '删除区域')}
+            aria-label={t('region.deleteRect', '删除区域')}
+          >
+            <Trash2 className='size-3.5' />
+          </Button>
+        </div>
       </div>
     )
   }
 
-  const renderGroup = (
-    category: RegionCategory,
-    items: RegionItem[],
-    titleKey: string,
-    ruleKey: string,
-    emptyKey: string
-  ) => (
-    <div className='space-y-2'>
-      <div className='flex items-center justify-between'>
-        <span
-          className={`font-semibold ${categoryTextClass(REGION_CATEGORY_HUE[category])}`}
-        >
-          {t(titleKey)} ({items.length}/{MAX_RECTS_PER_CATEGORY})
-        </span>
-        <span className='text-[10px] text-muted-foreground'>{t(ruleKey)}</span>
-      </div>
-      {items.length === 0 ? (
-        <p className='py-1 text-muted-foreground/60 italic'>{t(emptyKey)}</p>
-      ) : (
-        <div className='space-y-1.5'>
-          {items.map((item, i) => renderItem(item, category, i))}
+  const renderGroup = (category: RegionCategory, items: RegionItem[]) => {
+    const hue = REGION_CATEGORY_HUE[category]
+    const meta = GROUP_META[category]
+    const Icon = category === 'roi' ? Sparkles : ShieldAlert
+
+    return (
+      <div className='space-y-2'>
+        <div className='flex items-center justify-between'>
+          <div className='flex items-center gap-1.5'>
+            <Icon className={cn('size-3.5', categoryTextClass(hue))} />
+            <span className={cn('font-semibold', categoryTextClass(hue))}>
+              {t(meta.titleKey)} ({items.length}/{MAX_RECTS_PER_CATEGORY})
+            </span>
+          </div>
+          <span className='font-mono text-[10px] text-muted-foreground'>
+            {t(meta.ruleKey)}
+          </span>
         </div>
-      )}
-    </div>
-  )
+
+        <p className='text-[11px] leading-normal text-muted-foreground/80'>
+          {t(meta.descKey)}
+        </p>
+
+        {items.length === 0 ? (
+          <div className='flex items-center justify-center rounded-lg border border-dashed border-border/80 bg-muted/20 py-3 text-center'>
+            <p className='text-[11px] text-muted-foreground/70 italic'>
+              {t(meta.emptyKey)}
+            </p>
+          </div>
+        ) : (
+          <div className='space-y-1.5'>
+            {items.map((item, index) => renderItem(item, category, index))}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
-    <div className='flex flex-col gap-4 text-xs'>
-      {renderGroup(
-        'roi',
-        draft.roi,
-        'region.roiTitle',
-        'region.roiRule',
-        'region.emptyRoi'
-      )}
-      {renderGroup(
-        'mask',
-        draft.mask,
-        'region.maskTitle',
-        'region.maskRule',
-        'region.emptyMask'
-      )}
+    <div className='flex flex-col gap-5 text-xs'>
+      {renderGroup('roi', draft.roi)}
+      {renderGroup('mask', draft.mask)}
+
+      <div className='rounded-lg border border-border/60 bg-muted/30 p-3 text-[11px] text-muted-foreground'>
+        <div className='flex items-center gap-1.5 pb-1 font-semibold text-foreground'>
+          <Info className='size-3.5 text-muted-foreground' />
+          <span>{t('region.judgementTitle', '落区与判定逻辑')}</span>
+        </div>
+        <p className='leading-relaxed text-muted-foreground/90'>
+          {t(
+            'region.judgementDesc',
+            '算法以目标外接框底部中心点做区域归属裁决：命中任一屏蔽区即丢弃；配置了识别区时，目标必须落在识别区内才会被上报。'
+          )}
+        </p>
+      </div>
     </div>
   )
 }

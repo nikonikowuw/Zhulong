@@ -3,7 +3,9 @@ import {
   categoryRegionClass,
   categoryRegionPreviewClass,
   categorySolidClass,
+  categoryTextClass,
 } from '@/lib/category-palette'
+import { cn } from '@/lib/utils'
 import {
   REGION_CATEGORY_HUE,
   type Rect,
@@ -30,6 +32,15 @@ export interface RegionCanvasProps {
 }
 
 const RESIZE_HANDLES = ['tl', 'tr', 'bl', 'br'] as const
+
+/**
+ * MASK 斜纹填充。
+ *
+ * 用 `currentColor` 取色，色相由 `categoryTextClass(hue)` 提供——不在组件里硬编码
+ * rgba 色值（theme-and-i18n §1.3.6：配色只能来自查表色板）。
+ */
+const MASK_HATCH_BACKGROUND =
+  'repeating-linear-gradient(45deg, transparent 0 8px, currentColor 8px 16px)'
 
 const HANDLE_POSITION_CLASS: Record<(typeof RESIZE_HANDLES)[number], string> = {
   tl: 'top-0 left-0 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize',
@@ -74,6 +85,7 @@ export function RegionCanvas({
   ) => {
     const isSelected = selected?.category === category && selected.index === idx
     const hue = REGION_CATEGORY_HUE[category]
+    const isMask = category === 'mask'
     const [x1, y1, x2, y2] = item.rect
 
     return (
@@ -85,31 +97,50 @@ export function RegionCanvas({
           width: `${(x2 - x1) * 100}%`,
           height: `${(y2 - y1) * 100}%`,
         }}
-        className={`absolute border-2 ${categoryRegionClass(hue)} ${
-          isSelected ? 'ring-2 ring-primary ring-offset-1' : ''
-        } ${disabled ? 'cursor-not-allowed' : 'cursor-move'}`}
+        className={cn(
+          'absolute border-2 transition-shadow',
+          categoryRegionClass(hue),
+          isSelected
+            ? 'shadow-lg ring-2 ring-primary ring-offset-1'
+            : 'hover:border-foreground/60',
+          disabled ? 'cursor-not-allowed' : 'cursor-move'
+        )}
         onMouseDown={startMove(category, idx, item.rect)}
       >
+        {isMask && (
+          <span
+            aria-hidden
+            className={cn(
+              'pointer-events-none absolute inset-0 opacity-20',
+              categoryTextClass(hue)
+            )}
+            style={{ backgroundImage: MASK_HATCH_BACKGROUND }}
+          />
+        )}
+
+        {/* 顶部标签药丸 */}
         <span
-          className={`absolute top-0 left-0 -translate-y-full rounded-t px-1 py-0.5 font-mono text-[10px] leading-none font-bold text-white ${categorySolidClass(
-            hue
-          )}`}
+          className={cn(
+            'absolute top-0 left-0 -translate-y-full rounded-t-sm px-1.5 py-0.5 font-mono text-[10px] leading-none font-bold text-white shadow-xs',
+            categorySolidClass(hue)
+          )}
         >
           {category.toUpperCase()} #{idx + 1}
         </span>
 
-        {/* 底部中心判定锚点：过滤判定所用的落点 */}
+        {/* 底部中心判定锚点：落区判定基准点 */}
         <div
-          title={t('region.bottomCenterAnchor')}
-          className='absolute bottom-0 left-1/2 h-2.5 w-2.5 -translate-x-1/2 translate-y-1/2 rounded-full border border-background bg-primary shadow'
+          title={t('region.bottomCenterAnchor', '底部中心判定锚点')}
+          className='absolute bottom-0 left-1/2 size-2.5 -translate-x-1/2 translate-y-1/2 rounded-full border border-background bg-primary shadow-xs ring-1 ring-black/40'
         />
 
+        {/* 四角缩放手柄 */}
         {isSelected && !disabled && (
           <>
             {RESIZE_HANDLES.map((handle) => (
               <div
                 key={handle}
-                className={`absolute h-3 w-3 rounded-full border-2 border-primary bg-white shadow ${
+                className={`absolute size-3 rounded-full border-2 border-primary bg-white shadow-md transition-transform hover:scale-125 ${
                   HANDLE_POSITION_CLASS[handle]
                 }`}
                 onMouseDown={startResize(category, idx, handle, item.rect)}
@@ -147,7 +178,7 @@ export function RegionCanvas({
             width: `${(creatingPreview[2] - creatingPreview[0]) * 100}%`,
             height: `${(creatingPreview[3] - creatingPreview[1]) * 100}%`,
           }}
-          className={`pointer-events-none absolute border-2 border-dashed ${categoryRegionPreviewClass(
+          className={`pointer-events-none absolute border-2 border-dashed shadow-xs ${categoryRegionPreviewClass(
             previewHue
           )}`}
         />
