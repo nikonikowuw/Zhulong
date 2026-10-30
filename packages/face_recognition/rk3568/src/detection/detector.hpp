@@ -7,7 +7,6 @@
 
 #include "common/face_types.hpp"
 #include <zhulong/algo.hpp>
-#include <zhulong/platform/dmabuf_allocator.hpp>
 #include <array>
 #include <memory>
 #include <vector>
@@ -35,7 +34,7 @@ public:
     FaceDetector() = default;
 
     /**
-     * @brief 基于推理会话执行真实 NPU 人脸与人体检测 (SCRFD on RKNN)
+     * @brief 基于推理会话执行真实 NPU/ONNX 人脸与人体检测 (SCRFD det_500m)
      * @param session 当前 Worker 的检测执行会话
      * @param image 输入只读帧视图
      * @return 检出的结构化目标列表 (全黑或无目标图像返回空 vector)
@@ -58,10 +57,6 @@ private:
 
     float score_threshold_{0.50f};
     float nms_threshold_{0.40f};
-
-    std::unique_ptr<zhulong::platform::DmaBuffer> dma_input_buf_;
-    int cached_w_{0};
-    int cached_h_{0};
 };
 
 /**
@@ -104,10 +99,6 @@ private:
 
     float score_threshold_{0.50f};
     float nms_threshold_{0.40f};
-
-    std::unique_ptr<zhulong::platform::DmaBuffer> dma_input_buf_;
-    int cached_w_{0};
-    int cached_h_{0};
 };
 
 } // namespace zhulong::face

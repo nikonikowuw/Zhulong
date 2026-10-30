@@ -1,5 +1,4 @@
 #include "detector.hpp"
-#include <zhulong/platform/dmabuf_allocator.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -52,27 +51,13 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
     constexpr int model_w = 640;
     constexpr int model_h = 640;
 
-    // 支持通过 DMA-BUF 持久缓存分配零拷贝输入张量（避免热路径单帧分配/释放抖动）
-
-    zhulong::Tensor input_tensor;
-    if (dma_input_buf_) {
-        input_tensor = zhulong::Tensor::from_dma_buf(
-            dma_input_buf_->fd(), {1, model_h, model_w, 3}, zhulong::DataType::UINT8, dma_input_buf_->mmap_addr());
-        dma_input_buf_->sync_start(zhulong::platform::DMA_SYNC_WRITE);
-    } else {
-        input_tensor = zhulong::Tensor({1, model_h, model_w, 3}, zhulong::DataType::UINT8);
-    }
-
+    zhulong::Tensor input_tensor({1, model_h, model_w, 3}, zhulong::DataType::UINT8);
     zhulong::LetterboxParams params;
     params.target_width = model_w;
     params.target_height = model_h;
     params.target_format = ZHULONG_PIXEL_FORMAT_RGB24;
 
     zhulong_status_t status = zhulong::ops::letterbox(image, input_tensor, params);
-    if (dma_input_buf_) {
-        dma_input_buf_->sync_end(zhulong::platform::DMA_SYNC_WRITE);
-    }
-
     if (status != ZHULONG_PLUGIN_OK) {
         return {};
     }
@@ -219,19 +204,10 @@ std::vector<FaceDetection> FaceDetector::decode_scrfd(
             det.landmarks[k].y = c.kps[k].y / static_cast<float>(orig_h);
         }
 
-        // 关联人体检测框 (基于解剖学比例自适应估算)
-        const float fw = det.face_box[2] - det.face_box[0];
-        const float fh = det.face_box[3] - det.face_box[1];
-        float bx1 = std::clamp(det.face_box[0] + fw * 0.5f - fw * 1.3f, 0.0f, 1.0f);
-        float bx2 = std::clamp(det.face_box[0] + fw * 0.5f + fw * 1.3f, 0.0f, 1.0f);
-        float by1 = std::clamp(det.face_box[1] - fh * 0.15f, 0.0f, 1.0f);
-        float by2 = std::clamp(det.face_box[1] + fh * 4.5f, 0.0f, 1.0f);
-
-        det.body_box[0] = bx1;
-        det.body_box[1] = by1;
-        det.body_box[2] = bx2;
-        det.body_box[3] = by2;
-        det.body_score = 1.0f;
+        // 遵循规范：禁止通过人脸比例外推“脑补”人体框；
+        // 未匹配真实人体框前，默认为纯人脸特写退化语义 (body_box = face_box, body_score = face_score)
+        det.body_box = det.face_box;
+        det.body_score = det.face_score;
         det.track_id = 0;
         det.is_real_detection = true;
 
@@ -300,26 +276,13 @@ std::vector<PersonBodyDetection> PersonDetector::detect(zhulong::Session& sessio
     constexpr int model_w = 640;
     constexpr int model_h = 640;
 
-
-    zhulong::Tensor input_tensor;
-    if (dma_input_buf_) {
-        input_tensor = zhulong::Tensor::from_dma_buf(
-            dma_input_buf_->fd(), {1, model_h, model_w, 3}, zhulong::DataType::UINT8, dma_input_buf_->mmap_addr());
-        dma_input_buf_->sync_start(zhulong::platform::DMA_SYNC_WRITE);
-    } else {
-        input_tensor = zhulong::Tensor({1, model_h, model_w, 3}, zhulong::DataType::UINT8);
-    }
-
+    zhulong::Tensor input_tensor({1, model_h, model_w, 3}, zhulong::DataType::UINT8);
     zhulong::LetterboxParams params;
     params.target_width = model_w;
     params.target_height = model_h;
     params.target_format = ZHULONG_PIXEL_FORMAT_RGB24;
 
     zhulong_status_t status = zhulong::ops::letterbox(image, input_tensor, params);
-    if (dma_input_buf_) {
-        dma_input_buf_->sync_end(zhulong::platform::DMA_SYNC_WRITE);
-    }
-
     if (status != ZHULONG_PLUGIN_OK) {
         return {};
     }

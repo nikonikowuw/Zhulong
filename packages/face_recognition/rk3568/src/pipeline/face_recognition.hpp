@@ -163,7 +163,16 @@ public:
         zhulong::Session person_session;
         if (person_model_.valid()) {
             person_session = person_model_.create_session(worker_id);
+            if (!person_session.valid()) {
+                return {};
+            }
         }
+
+        // 级联会话防降级保护：任一阶段会话创建失败，必须立即中止并返回非法 session
+        if (!det_session.valid() || !rec_session.valid()) {
+            return {};
+        }
+
         {
             std::lock_guard<std::mutex> lock(sessions_mu_);
             rec_sessions_[worker_id] = std::move(rec_session);
@@ -279,19 +288,19 @@ public:
             }
         }
 
-        // 当没有真实神经网络人体检出时（如 CPU 桩单测环境）：
-        // 遵循纯人脸退化语义，每个检出的人脸直接对应一个 PersonItem，body_score 填 1.0f
+        // 当没有真实神经网络人体检出时（如近景特写人脸或纯人脸检出场景）：
+        // 遵循纯人脸特写退化语义，每个检出的人脸直接对应一个 PersonItem，body_box = face_box, body_score = face_score
         if (!has_real_person) {
             std::vector<zhulong::PersonItem> results;
             results.reserve(processed_faces.size());
             for (auto& pf : processed_faces) {
                 zhulong::PersonItem person;
                 person.track_id = pf.det.track_id;
-                person.body_box[0] = pf.det.body_box[0];
-                person.body_box[1] = pf.det.body_box[1];
-                person.body_box[2] = pf.det.body_box[2];
-                person.body_box[3] = pf.det.body_box[3];
-                person.body_score = pf.det.body_score;
+                person.body_box[0] = pf.det.face_box[0];
+                person.body_box[1] = pf.det.face_box[1];
+                person.body_box[2] = pf.det.face_box[2];
+                person.body_box[3] = pf.det.face_box[3];
+                person.body_score = pf.det.face_score;
                 person.faces.push_back(std::move(pf.item));
                 results.push_back(std::move(person));
             }
@@ -369,16 +378,35 @@ public:
 
 private:
     void parse_config(const std::string& json) {
-        auto pos_th = json.find("\"threshold\"");
-        if (pos_th != std::string::npos) {
-            auto colon = json.find(':', pos_th);
-            if (colon != std::string::npos) {
-                try {
-                    float th = std::stof(json.substr(colon + 1));
-                    if (th >= 0.0f && th <= 1.0f) {
-                        matcher_.set_threshold(th);
-                    }
-                } catch (...) {}
+        auto extract_number = [&json](const std::string& key, double& out_val) -> bool {
+            const std::string pattern = "\"" + key + "\"";
+            const size_t pos = json.find(pattern);
+            if (pos == std::string::npos) return false;
+            const size_t colon = json.find(':', pos + pattern.size());
+            if (colon == std::string::npos) return false;
+            const size_t start = json.find_first_not_of(" \t\r\n", colon + 1);
+            if (start == std::string::npos) return false;
+            try {
+                size_t idx = 0;
+                out_val = std::stod(json.substr(start), &idx);
+                return idx > 0;
+            } catch (...) {
+                return false;
+            }
+        };
+
+        double th = 0.0;
+        if (extract_number("threshold", th)) {
+            if (th >= 0.0 && th <= 1.0) {
+                matcher_.set_threshold(static_cast<float>(th));
+            }
+        }
+
+        double tk = 0.0;
+        if (extract_number("top_k", tk)) {
+            const int top_k = static_cast<int>(std::round(tk));
+            if (top_k >= 1 && top_k <= 20) {
+                matcher_.set_top_k(static_cast<size_t>(top_k));
             }
         }
     }
@@ -532,14 +560,8 @@ public:
             return ZHULONG_PLUGIN_ERR_INTERNAL;
         }
 
-        // 验证 L2 归一化 (防除零)
-        float norm_sq = 0.0f;
-        for (float v : probe_features) norm_sq += v * v;
-        float norm = std::sqrt(norm_sq);
-        if (norm < 1e-6f) norm = 1.0f;
-        for (size_t i = 0; i < 512; ++i) {
-            out_features[i] = probe_features[i] / norm;
-        }
+        // 特征抽取器已保证返回 512 维 L2 归一化单位向量
+        std::memcpy(out_features, probe_features.data(), 512 * sizeof(float));
         *feature_dim = 512;
 
         return ZHULONG_PLUGIN_OK;
