@@ -43,7 +43,12 @@
     "removeFromMap": "Unbind from canvas",
     "orientation": "Field of view heading",
     "coordinates": "Normalized coordinates",
-    "previewStream": "Live preview"
+    "previewStream": "Live preview",
+    "cameraPreview": "Live preview",
+    "closeCameraPreview": "Hide live preview",
+    "stampAction": "Select",
+    "stampingActive": "Armed",
+    "removePoint": "Remove point"
   },
   "trajectory": {
     "vehicle": "Vehicle",
@@ -74,12 +79,23 @@
   },
   "canvas": {
     "emptyMapHint": "Select or upload a floor plan to use as the base map",
+    "emptyMapTitle": "No Base Map Configured",
+    "emptyMapDesc": "Upload a campus layout, floor plan, or building blueprint to calibrate camera positions and trace spatio-temporal trajectories.",
+    "uploadMapAction": "Upload Base Map Now",
     "zoomIn": "Zoom in",
     "zoomOut": "Zoom out",
     "resetView": "Reset view",
+    "fitView": "Fit to view",
     "loading": "Loading base map...",
     "loadFailed": "Failed to load the base map",
+    "imageLoadFailed": "Failed to load base map image. Check network or re-upload.",
     "retry": "Retry"
+  },
+  "workbench": {
+    "modeTrajectory": "Trajectory",
+    "togglePanel": "Toggle camera list",
+    "exitConfirmTitle": "Discard unsaved changes?",
+    "exitConfirmDescription": "You have unsaved camera position changes. Switching mode will discard them."
   },
   "validation": {
     "plateRequired": "A plate number is required",

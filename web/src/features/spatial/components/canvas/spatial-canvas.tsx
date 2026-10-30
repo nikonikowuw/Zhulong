@@ -1,10 +1,18 @@
-import { useState, useRef } from 'react'
-import { Maximize2, Move, ZoomIn, ZoomOut } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Loader2,
+  Map as MapIcon,
+  Maximize2,
+  Plus,
+  RefreshCw,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import {
-  type CanvasMap,
   type CameraPositionInfo,
+  type CanvasMap,
   type TrajectoryNodeInfo,
 } from '../../data/schema'
 import { CameraMarker } from './camera-marker'
@@ -25,6 +33,7 @@ interface SpatialCanvasProps {
   isPlayingTrajectory?: boolean
   isCalibrating: boolean
   stampingCamera: StampingCamera | null
+  onUploadMap?: () => void
   onDropCamera: (
     cameraId: string,
     cameraName: string,
@@ -37,8 +46,8 @@ interface SpatialCanvasProps {
   onRemoveCamera: (cameraId: string) => void
 }
 
-const MIN_SCALE = 0.3
-const MAX_SCALE = 4
+const MIN_SCALE = 0.02
+const MAX_SCALE = 6
 /** 滚轮与缩放按钮各自的倍率；两者手感不同，故意分开。 */
 const WHEEL_ZOOM_STEP = 1.1
 const BUTTON_ZOOM_STEP = 1.2
@@ -67,6 +76,7 @@ export function SpatialCanvas({
   isPlayingTrajectory,
   isCalibrating,
   stampingCamera,
+  onUploadMap,
   onDropCamera,
   onStampCamera,
   onMoveCamera,
@@ -74,15 +84,70 @@ export function SpatialCanvas({
   onRemoveCamera,
 }: SpatialCanvasProps) {
   const { t } = useTranslation('spatial')
+  const viewportRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
 
   const [scale, setScale] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
+  const [loadedMapKey, setLoadedMapKey] = useState<string | null>(null)
+  const [failedMapKey, setFailedMapKey] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+
   const panStartRef = useRef({ x: 0, y: 0, initialPanX: 0, initialPanY: 0 })
 
   const mapWidth = currentMap?.width || 1200
   const mapHeight = currentMap?.height || 800
+
+  const currentKey = currentMap
+    ? `${currentMap.id}-${currentMap.imageUrl}-${reloadKey}`
+    : null
+  const imageLoading =
+    currentKey !== null &&
+    loadedMapKey !== currentKey &&
+    failedMapKey !== currentKey
+  const imageError = currentKey !== null && failedMapKey === currentKey
+
+  // 严格自适应当前底图尺寸并居中，防止固定约束破坏纵横比
+  const fitView = useCallback(() => {
+    const viewport = viewportRef.current
+    if (!viewport || !currentMap) {
+      setScale(1)
+      setPan({ x: 0, y: 0 })
+      return
+    }
+
+    const vw = viewport.clientWidth
+    const vh = viewport.clientHeight
+    if (vw <= 0 || vh <= 0) return
+
+    const padding = 32
+    const availableW = Math.max(100, vw - padding * 2)
+    const availableH = Math.max(100, vh - padding * 2)
+    const fitRatio = Math.min(
+      availableW / mapWidth,
+      availableH / mapHeight,
+      1.0
+    )
+
+    setScale(clampScale(fitRatio))
+    setPan({ x: 0, y: 0 })
+  }, [currentMap, mapWidth, mapHeight])
+
+  // 视口尺寸变化监听（侧边栏折叠/窗口缩放等随时保证居中自适应）
+  useEffect(() => {
+    const el = viewportRef.current
+    if (!el) return
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+          fitView()
+        }
+      }
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [fitView])
 
   const handleWheel = (e: React.WheelEvent) => {
     const zoomFactor = e.deltaY < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP
@@ -161,20 +226,18 @@ export function SpatialCanvas({
     onDropCamera(cameraId, cameraName, point.x, point.y)
   }
 
-  const resetView = () => {
-    setScale(1)
-    setPan({ x: 0, y: 0 })
-  }
-
   const zoomBy = (factor: number) => {
     setScale((prev) => clampScale(prev * factor))
   }
 
   // 点位徽标显示该摄像头在轨迹中的序号；同一摄像头出现多次时取最后一次。
-  const nodeByCameraId = new Map<string, TrajectoryNodeInfo>()
-  trajectoryNodes.forEach((node) => {
-    nodeByCameraId.set(node.cameraId, node)
-  })
+  const nodeByCameraId = useMemo(() => {
+    const map = new Map<string, TrajectoryNodeInfo>()
+    trajectoryNodes.forEach((node) => {
+      map.set(node.cameraId, node)
+    })
+    return map
+  }, [trajectoryNodes])
 
   const activeWaypointCameraId =
     activeTrajectoryNodeIndex !== undefined
@@ -183,6 +246,7 @@ export function SpatialCanvas({
 
   return (
     <div
+      ref={viewportRef}
       onWheel={handleWheel}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -211,16 +275,53 @@ export function SpatialCanvas({
             style={{
               width: mapWidth,
               height: mapHeight,
-              maxWidth: '90vw',
-              maxHeight: '80vh',
             }}
           >
+            {/* 底图图片 */}
             <img
+              key={currentKey ?? 'empty'}
               src={currentMap.imageUrl}
               alt={currentMap.name}
               draggable={false}
-              className='pointer-events-none h-full w-full object-contain'
+              onLoad={() => {
+                if (currentKey) setLoadedMapKey(currentKey)
+                fitView()
+              }}
+              onError={() => {
+                if (currentKey) setFailedMapKey(currentKey)
+              }}
+              className={`pointer-events-none block h-full w-full object-fill transition-opacity duration-300 ${
+                imageLoading ? 'opacity-0' : 'opacity-100'
+              }`}
             />
+
+            {/* 底图加载中微光动画 */}
+            {imageLoading && !imageError && (
+              <div className='absolute inset-0 flex flex-col items-center justify-center bg-card/40 backdrop-blur-xs'>
+                <Loader2 className='mb-2 h-8 w-8 animate-spin text-primary' />
+                <span className='text-xs font-medium text-foreground'>
+                  {t('canvas.loading')}
+                </span>
+              </div>
+            )}
+
+            {/* 底图加载失败重试层 */}
+            {imageError && (
+              <div className='absolute inset-0 flex flex-col items-center justify-center gap-3 bg-card/90 p-6 text-center backdrop-blur-sm'>
+                <p className='text-xs text-destructive'>
+                  {t('canvas.imageLoadFailed')}
+                </p>
+                <Button
+                  variant='outline'
+                  size='sm'
+                  className='h-7 gap-1.5 text-xs'
+                  onClick={() => setReloadKey((k) => k + 1)}
+                >
+                  <RefreshCw className='h-3 w-3' />
+                  {t('canvas.retry')}
+                </Button>
+              </div>
+            )}
 
             <TrajectoryLayer
               nodes={trajectoryNodes}
@@ -254,51 +355,74 @@ export function SpatialCanvas({
             })}
           </div>
         ) : (
-          <div className='flex flex-col items-center justify-center p-12 text-center text-muted-foreground'>
-            <Move className='mb-3 h-12 w-12 stroke-[1.5] opacity-40' />
-            <p className='text-sm'>{t('canvas.emptyMapHint')}</p>
+          /* 空态引导卡片：没有底图时直接呈现醒目的行动号召 */
+          <div
+            data-no-pan
+            className='relative flex flex-col items-center justify-center rounded-2xl border border-dashed border-border/80 bg-card/60 p-8 text-center shadow-lg backdrop-blur-md sm:max-w-md'
+          >
+            <div className='mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-8 ring-primary/5'>
+              <MapIcon className='h-8 w-8' />
+            </div>
+            <h3 className='text-base font-bold tracking-tight text-foreground'>
+              {t('canvas.emptyMapTitle')}
+            </h3>
+            <p className='mt-2 text-xs leading-relaxed text-muted-foreground'>
+              {t('canvas.emptyMapDesc')}
+            </p>
+            {onUploadMap && (
+              <Button
+                size='sm'
+                className='mt-5 h-9 gap-2 px-5 shadow-sm'
+                onClick={onUploadMap}
+              >
+                <Plus className='h-4 w-4' />
+                {t('canvas.uploadMapAction')}
+              </Button>
+            )}
           </div>
         )}
       </div>
 
-      <div
-        data-no-pan
-        className='absolute end-4 bottom-4 z-30 flex items-center gap-1 rounded-lg border border-border bg-background/90 p-1 shadow-md backdrop-blur-sm'
-      >
-        <Button
-          variant='ghost'
-          size='icon'
-          className='h-7 w-7'
-          onClick={() => zoomBy(BUTTON_ZOOM_STEP)}
-          aria-label={t('canvas.zoomIn')}
-          title={t('canvas.zoomIn')}
+      {currentMap && (
+        <div
+          data-no-pan
+          className='absolute end-4 bottom-4 z-30 flex items-center gap-1 rounded-lg border border-border bg-background/90 p-1 shadow-md backdrop-blur-sm'
         >
-          <ZoomIn className='h-3.5 w-3.5' />
-        </Button>
-        <span className='w-10 px-1 text-center font-mono text-[11px] text-muted-foreground'>
-          {Math.round(scale * 100)}%
-        </span>
-        <Button
-          variant='ghost'
-          size='icon'
-          className='h-7 w-7'
-          onClick={() => zoomBy(1 / BUTTON_ZOOM_STEP)}
-          aria-label={t('canvas.zoomOut')}
-          title={t('canvas.zoomOut')}
-        >
-          <ZoomOut className='h-3.5 w-3.5' />
-        </Button>
-        <Button
-          variant='ghost'
-          size='icon'
-          className='h-7 w-7'
-          onClick={resetView}
-          aria-label={t('canvas.resetView')}
-          title={t('canvas.resetView')}
-        >
-          <Maximize2 className='h-3.5 w-3.5' />
-        </Button>
-      </div>
+          <Button
+            variant='ghost'
+            size='icon'
+            className='h-7 w-7'
+            onClick={() => zoomBy(BUTTON_ZOOM_STEP)}
+            aria-label={t('canvas.zoomIn')}
+            title={t('canvas.zoomIn')}
+          >
+            <ZoomIn className='h-3.5 w-3.5' />
+          </Button>
+          <span className='w-12 px-1 text-center font-mono text-[11px] text-muted-foreground'>
+            {Math.round(scale * 100)}%
+          </span>
+          <Button
+            variant='ghost'
+            size='icon'
+            className='h-7 w-7'
+            onClick={() => zoomBy(1 / BUTTON_ZOOM_STEP)}
+            aria-label={t('canvas.zoomOut')}
+            title={t('canvas.zoomOut')}
+          >
+            <ZoomOut className='h-3.5 w-3.5' />
+          </Button>
+          <Button
+            variant='ghost'
+            size='icon'
+            className='h-7 w-7'
+            onClick={fitView}
+            aria-label={t('canvas.fitView')}
+            title={t('canvas.fitView')}
+          >
+            <Maximize2 className='h-3.5 w-3.5' />
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

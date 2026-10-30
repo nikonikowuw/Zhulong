@@ -30,12 +30,14 @@ interface MapSwitcherProps {
   selectedMapId: string | null
   onSelectMapId: (id: string | null) => void
   disabled?: boolean
+  onOpenUpload?: () => void
 }
 
 export function MapSwitcher({
   selectedMapId,
   onSelectMapId,
   disabled,
+  onOpenUpload,
 }: MapSwitcherProps) {
   const { t } = useTranslation('spatial')
   const { data: maps = [], isLoading } = useSpatialMaps()
@@ -90,7 +92,7 @@ export function MapSwitcher({
         variant='outline'
         size='sm'
         className='h-9'
-        onClick={() => setOpenDialog('upload')}
+        onClick={onOpenUpload ?? (() => setOpenDialog('upload'))}
         disabled={disabled}
       >
         <Plus className='me-1 h-4 w-4' />

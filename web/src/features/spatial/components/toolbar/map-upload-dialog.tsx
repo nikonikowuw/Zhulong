@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef } from 'react'
-import { useForm, useWatch } from 'react-hook-form'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Loader2, Upload } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -59,20 +59,24 @@ export function MapUploadDialog({
     defaultValues: emptyUploadValues(),
   })
 
-  const selectedFile = useWatch({ control: form.control, name: 'file' })
-  // 派生预览地址：object URL 的生命周期副作用交给下面的 effect 回收，
-  // 不在渲染期写 state。
-  const previewUrl = useMemo(
-    () =>
-      selectedFile instanceof File ? URL.createObjectURL(selectedFile) : null,
-    [selectedFile]
-  )
-  useEffect(
-    () => () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl)
-    },
-    [previewUrl]
-  )
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+
+  // 当 previewUrl 变更或组件卸载时，自动清理上一份 object URL
+  useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl)
+      }
+    }
+  }, [previewUrl])
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      form.reset(emptyUploadValues())
+      setPreviewUrl(null)
+    }
+    onOpenChange(nextOpen)
+  }
 
   const handleFileChange = (picked: File | null) => {
     if (!picked) return
@@ -83,6 +87,9 @@ export function MapUploadDialog({
         shouldValidate: true,
       })
     }
+
+    // 副作用在用户事件处理器中创建，生命周期回收由上面的 effect cleanup 负责
+    setPreviewUrl(URL.createObjectURL(picked))
   }
 
   const onSubmit = async (values: MapUploadFormValues) => {
@@ -93,6 +100,7 @@ export function MapUploadDialog({
       })
       toast.success(t('map.uploadSuccess'))
       form.reset(emptyUploadValues())
+      setPreviewUrl(null)
       onOpenChange(false)
       onSuccess(created.id)
     } catch (err: unknown) {
@@ -104,7 +112,7 @@ export function MapUploadDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className='sm:max-w-md'>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)}>
@@ -185,7 +193,7 @@ export function MapUploadDialog({
               <Button
                 type='button'
                 variant='outline'
-                onClick={() => onOpenChange(false)}
+                onClick={() => handleOpenChange(false)}
                 disabled={uploadMutation.isPending}
               >
                 {t('common:actions.cancel')}

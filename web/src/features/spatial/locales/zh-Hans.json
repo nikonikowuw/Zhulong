@@ -43,7 +43,12 @@
     "removeFromMap": "从画布解绑",
     "orientation": "视场朝向",
     "coordinates": "归一化坐标",
-    "previewStream": "实时画面验真"
+    "previewStream": "实时画面验真",
+    "cameraPreview": "预览画面",
+    "closeCameraPreview": "关闭画面预览",
+    "stampAction": "选中",
+    "stampingActive": "待落点",
+    "removePoint": "移除点位"
   },
   "trajectory": {
     "vehicle": "车辆",
@@ -74,12 +79,23 @@
   },
   "canvas": {
     "emptyMapHint": "请选择或上传一张平面图作为底图",
+    "emptyMapTitle": "暂无电子地图底图",
+    "emptyMapDesc": "上传园区平面图、CAD 户型图或高精度建筑图纸，即可直观标定摄像头物理点位并还原跨镜头时空轨迹。",
+    "uploadMapAction": "立即上传底图",
     "zoomIn": "放大",
     "zoomOut": "缩小",
     "resetView": "重置视图",
+    "fitView": "适应窗口",
     "loading": "正在加载底图...",
     "loadFailed": "底图加载失败",
+    "imageLoadFailed": "底图图片加载失败，请检查网络或重新上传",
     "retry": "重试"
+  },
+  "workbench": {
+    "modeTrajectory": "轨迹检索",
+    "togglePanel": "切换待标定列表",
+    "exitConfirmTitle": "放弃未保存的修改？",
+    "exitConfirmDescription": "当前底图有未保存的摄像头坐标变更，切换模式将丢失这些修改。"
   },
   "validation": {
     "plateRequired": "请输入车牌号",

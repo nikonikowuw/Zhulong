@@ -43,7 +43,12 @@
     "removeFromMap": "從畫布解除綁定",
     "orientation": "視場朝向",
     "coordinates": "歸一化座標",
-    "previewStream": "即時畫面驗真"
+    "previewStream": "即時畫面驗真",
+    "cameraPreview": "預覽畫面",
+    "closeCameraPreview": "關閉畫面預覽",
+    "stampAction": "選中",
+    "stampingActive": "待落點",
+    "removePoint": "移除點位"
   },
   "trajectory": {
     "vehicle": "車輛",
@@ -74,12 +79,23 @@
   },
   "canvas": {
     "emptyMapHint": "請選擇或上傳一張平面圖作為底圖",
+    "emptyMapTitle": "尚無電子地圖底圖",
+    "emptyMapDesc": "上傳園區平面圖、CAD 戶型圖或高精度建築圖紙，即可直觀標定攝影機物理點位並還原跨鏡頭時空軌跡。",
+    "uploadMapAction": "立即上傳底圖",
     "zoomIn": "放大",
     "zoomOut": "縮小",
     "resetView": "重設視圖",
+    "fitView": "適應視窗",
     "loading": "正在載入底圖...",
     "loadFailed": "底圖載入失敗",
+    "imageLoadFailed": "底圖圖片載入失敗，請檢查網路或重新上傳",
     "retry": "重試"
+  },
+  "workbench": {
+    "modeTrajectory": "軌跡檢索",
+    "togglePanel": "切換待標定列表",
+    "exitConfirmTitle": "放棄未儲存的修改？",
+    "exitConfirmDescription": "目前底圖有未儲存的攝影機座標變更，切換模式將遺失這些修改。"
   },
   "validation": {
     "plateRequired": "請輸入車牌號",

@@ -59,7 +59,10 @@ export function CameraMarker({
 }: CameraMarkerProps) {
   const [popoverOpen, setPopoverOpen] = useState(false)
   const isDraggingRef = useRef(false)
+  const dragMovedRef = useRef(false)
   const dragStartRef = useRef({ x: 0, y: 0, initialX: 0, initialY: 0 })
+  const dragPosRef = useRef<{ x: number; y: number } | null>(null)
+  const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null)
 
   const hasTrajectoryNode = trajectorySeq !== undefined
   const coneRadius = 40
@@ -78,6 +81,7 @@ export function CameraMarker({
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
     isDraggingRef.current = true
+    dragMovedRef.current = false
     dragStartRef.current = {
       x: e.clientX,
       y: e.clientY,
@@ -90,20 +94,32 @@ export function CameraMarker({
     if (!isDraggingRef.current || !onMove) return
     e.stopPropagation()
 
+    const dx = e.clientX - dragStartRef.current.x
+    const dy = e.clientY - dragStartRef.current.y
+    if (Math.hypot(dx, dy) > 4) {
+      dragMovedRef.current = true
+    }
+
     // getBoundingClientRect() 已经包含祖先 transform 的缩放：宽高就是屏幕上
     // 的可见尺寸。再除一次 zoomScale 会把位移修正两遍，缩放后点位跟不上鼠标。
     const container = e.currentTarget.closest('[data-spatial-canvas-content]')
     if (!container) return
     const rect = container.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return
 
-    const nextX =
-      dragStartRef.current.initialX +
-      (e.clientX - dragStartRef.current.x) / rect.width
-    const nextY =
-      dragStartRef.current.initialY +
-      (e.clientY - dragStartRef.current.y) / rect.height
+    const nextX = Math.max(
+      0,
+      Math.min(1, dragStartRef.current.initialX + dx / rect.width)
+    )
+    const nextY = Math.max(
+      0,
+      Math.min(1, dragStartRef.current.initialY + dy / rect.height)
+    )
 
-    onMove(Math.max(0, Math.min(1, nextX)), Math.max(0, Math.min(1, nextY)))
+    const nextPos = { x: nextX, y: nextY }
+    dragPosRef.current = nextPos
+    // 本地快速响应拖拽视觉位移，避免高频 pointermove 每帧触发父级不可变数组全量深拷贝
+    setDragPos(nextPos)
   }
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -115,15 +131,47 @@ export function CameraMarker({
     } catch {
       // 指针可能已被浏览器回收，释放失败不影响拖拽结束
     }
+
+    if (dragPosRef.current && dragMovedRef.current) {
+      onMove?.(dragPosRef.current.x, dragPosRef.current.y)
+    }
+    dragPosRef.current = null
+    setDragPos(null)
   }
+
+  const handlePointerCancel = (e: React.PointerEvent) => {
+    if (!isDraggingRef.current) return
+    isDraggingRef.current = false
+    dragMovedRef.current = false
+    dragPosRef.current = null
+    setDragPos(null)
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      // 指针可能已被浏览器回收，释放失败不影响取消
+    }
+  }
+
+  const handleClickCapture = (e: React.MouseEvent) => {
+    // 标定拖拽释放后捕获并吞掉原生 click 事件，防止误触 Popover 打开
+    if (dragMovedRef.current) {
+      e.stopPropagation()
+      e.preventDefault()
+      dragMovedRef.current = false
+    }
+  }
+
+  const currentX = dragPos?.x ?? position.x
+  const currentY = dragPos?.y ?? position.y
 
   return (
     <div
       style={{
-        left: `${position.x * 100}%`,
-        top: `${position.y * 100}%`,
+        left: `${currentX * 100}%`,
+        top: `${currentY * 100}%`,
       }}
       className='group absolute z-20 -translate-x-1/2 -translate-y-1/2 cursor-pointer select-none'
+      onClickCapture={handleClickCapture}
     >
       <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
         <PopoverTrigger asChild>
@@ -132,6 +180,7 @@ export function CameraMarker({
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerCancel}
           >
             <svg
               className='pointer-events-none absolute overflow-visible transition-transform'

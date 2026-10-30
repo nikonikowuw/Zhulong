@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { DirectionProvider } from '@/context/direction-provider'
-import { SidebarProvider } from '@/components/ui/sidebar'
+import { SearchProvider } from '@/context/search-provider'
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { Spatial } from './index'
 
 vi.mock('./hooks/use-spatial-maps', () => ({
@@ -97,11 +98,15 @@ describe('Spatial feature component', () => {
 
     const { getByText } = await render(
       <QueryClientProvider client={queryClient}>
-        <DirectionProvider>
-          <SidebarProvider>
-            <Spatial />
-          </SidebarProvider>
-        </DirectionProvider>
+        <SearchProvider>
+          <DirectionProvider>
+            <SidebarProvider>
+              <SidebarInset>
+                <Spatial />
+              </SidebarInset>
+            </SidebarProvider>
+          </DirectionProvider>
+        </SearchProvider>
       </QueryClientProvider>
     )
 
@@ -119,15 +124,45 @@ describe('Spatial feature component', () => {
 
     const { getByRole, getByText } = await render(
       <QueryClientProvider client={queryClient}>
-        <DirectionProvider>
-          <SidebarProvider>
-            <Spatial />
-          </SidebarProvider>
-        </DirectionProvider>
+        <SearchProvider>
+          <DirectionProvider>
+            <SidebarProvider>
+              <SidebarInset>
+                <Spatial />
+              </SidebarInset>
+            </SidebarProvider>
+          </DirectionProvider>
+        </SearchProvider>
       </QueryClientProvider>
     )
 
     await getByRole('button', { name: '查询轨迹' }).click()
     await expect.element(getByText('请输入车牌号')).toBeInTheDocument()
+  })
+
+  it('switches to calibration mode and keeps the base map visible alongside the cameras panel', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+
+    const { getByRole, getByText, getByAltText } = await render(
+      <QueryClientProvider client={queryClient}>
+        <SearchProvider>
+          <DirectionProvider>
+            <SidebarProvider>
+              <SidebarInset>
+                <Spatial />
+              </SidebarInset>
+            </SidebarProvider>
+          </DirectionProvider>
+        </SearchProvider>
+      </QueryClientProvider>
+    )
+
+    await getByRole('tab', { name: '标定点位' }).click()
+    await expect.element(getByText('待标定摄像机')).toBeInTheDocument()
+    await expect
+      .element(getByAltText('Zone A Ground Floor'))
+      .toBeInTheDocument()
   })
 })
