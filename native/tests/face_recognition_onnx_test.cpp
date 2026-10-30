@@ -173,9 +173,7 @@ int main() {
         assert(p.body_box[1] >= 0.0f && p.body_box[3] <= 1.0f);
         std::cout << "  Person score: " << p.score << " box: ["
                   << p.body_box[0] << ", " << p.body_box[1] << ", "
-                  << p.body_box[2] << ", " << p.body_box[3] << "]"
-                  << " visible: [" << p.visible_box[0] << ", " << p.visible_box[1] << ", "
-                  << p.visible_box[2] << ", " << p.visible_box[3] << "]" << std::endl;
+                  << p.body_box[2] << ", " << p.body_box[3] << "]" << std::endl;
     }
     std::cout << "[2.5] SCRFD Person detection passed." << std::endl;
 
@@ -280,21 +278,77 @@ int main() {
 
     const auto* persons = reinterpret_cast<const zhulong_person_item*>(res->data);
     assert(persons != nullptr);
+    uint32_t degenerate_items = 0;
     for (uint32_t i = 0; i < res->count; ++i) {
         const auto& p = persons[i];
         assert(p.body_box[0] >= 0.0f && p.body_box[2] <= 1.0f);
         assert(p.body_box[1] >= 0.0f && p.body_box[3] <= 1.0f);
         assert(p.body_score >= 0.50f);
+        // 退化项（有脸无人）绝不允许填 1.0f：那会让宿主的抓拍记录显示一个假的满分人体置信度。
+        assert(!(p.body_score == 1.0f && p.track_id == 0) &&
+               "退化项 body_score 必须是该人脸的质量分，不是 1.0f（见 plugin.h 退化语义）");
         if (p.face_count > 0) {
             assert(p.faces != nullptr);
             const auto& f = p.faces[0];
             assert(f.quality >= 0.50f);
             assert(f.box[0] >= 0.0f && f.box[2] <= 1.0f);
             assert(f.box[1] >= 0.0f && f.box[3] <= 1.0f);
+
+            // 退化项契约：track_id==0 且 body_box 逐位等于人脸框，body_score 沿用该人脸质量分
+            const bool is_degenerate = p.track_id == 0 && p.face_count == 1 &&
+                                       p.body_box[0] == f.box[0] && p.body_box[1] == f.box[1] &&
+                                       p.body_box[2] == f.box[2] && p.body_box[3] == f.box[3];
+            if (is_degenerate) {
+                ++degenerate_items;
+                assert(p.body_score == f.quality &&
+                       "退化项 body_score 必须等于该人脸 quality");
+            }
         }
+    }
+    // 本夹具含近景特写人脸，正常情况下应当至少出现一个退化项；否则说明挂载逻辑变了。
+    if (degenerate_items == 0) {
+        std::cout << "  [warn] 本帧未出现退化项（人脸全部挂到了人体框上）" << std::endl;
+    } else {
+        std::cout << "  Degenerate pure-face items: " << degenerate_items
+                  << "（body_box 别名人脸框，body_score 沿用人脸质量分）" << std::endl;
     }
 
     api.result_release(res);
+
+    // 纯人脸退化语义：把一张 112×112 人脸特写直接喂给插件（没有任何人体可言）。
+    // 契约允许两种结局：无目标（fail closed），或**全部是退化项**——绝不允许
+    // 出现「有 body_box 却没有人体来源分数」的四不像，也不允许退化项填 1.0f。
+    std::cout << "[5.5] Testing pure-face degenerate semantics..." << std::endl;
+    {
+        zhulong_frame_view face_frame = frame;
+        face_frame.width = ppm_a1.width;
+        face_frame.height = ppm_a1.height;
+        face_frame.planes[0] = ppm_a1.rgb.data();
+        face_frame.strides[0] = ppm_a1.width * 3;
+
+        zhulong_inference_result* face_res = nullptr;
+        rc = api.process(task, &face_frame, &face_res);
+        assert(rc == ZHULONG_PLUGIN_OK && face_res != nullptr);
+        assert(face_res->result_type == ZHULONG_RESULT_TYPE_PERSON_STRUCTURE);
+
+        const auto* face_persons = reinterpret_cast<const zhulong_person_item*>(face_res->data);
+        for (uint32_t i = 0; i < face_res->count; ++i) {
+            const auto& p = face_persons[i];
+            assert(p.track_id == 0 && "纯人脸场景 track_id 必须为 0");
+            assert(p.face_count == 1 && "退化项应当只挂一个人脸");
+            assert(p.faces != nullptr);
+            const auto& f = p.faces[0];
+            assert(p.body_box[0] == f.box[0] && p.body_box[1] == f.box[1] &&
+                   p.body_box[2] == f.box[2] && p.body_box[3] == f.box[3] &&
+                   "退化项 body_box 必须逐位别名人脸框");
+            assert(p.body_score == f.quality && "退化项 body_score 必须沿用人脸质量分");
+            assert(p.body_score != 1.0f && "禁止用 1.0f 标记退化项");
+        }
+        std::cout << "  pure-face frame -> " << face_res->count
+                  << " item(s)；退化项约束全部满足" << std::endl;
+        api.result_release(face_res);
+    }
+
     api.task_close(task);
     api.worker_destroy(worker);
     api.model_destroy(model);

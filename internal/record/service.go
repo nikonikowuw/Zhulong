@@ -178,8 +178,24 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 			}
 		}
 
-		// 2. Process Capture for Person
-		capKey := fmt.Sprintf("cap:%s:person:%d", res.CameraID, p.TrackID)
+		// 2. Process Capture for Person or Face Closeup
+		isCloseup := p.IsFaceCloseup()
+		targetType := "person"
+		if isCloseup {
+			targetType = "face"
+		}
+
+		var capKey string
+		if isCloseup {
+			// 纯人脸退化项（近景特写）：无跟踪 ID，按人脸空间位置降频，避免同一镜头内
+			// 多张不同特写人脸落到同一 "cap:cam:person:0" 导致互相抑制。
+			capKey = fmt.Sprintf("cap:%s:face:box:%.3f:%.3f", res.CameraID, p.BodyBox[0], p.BodyBox[1])
+		} else if p.TrackID > 0 {
+			capKey = fmt.Sprintf("cap:%s:person:%d", res.CameraID, p.TrackID)
+		} else {
+			capKey = fmt.Sprintf("cap:%s:person:box:%.3f:%.3f", res.CameraID, p.BodyBox[0], p.BodyBox[1])
+		}
+
 		if s.cooldown.Allow(capKey, capturedAt) {
 			capID := idutil.New()
 			bodyBoxBytes, _ := json.Marshal(p.BodyBox)
@@ -194,7 +210,7 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 				AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
 				AlgorithmName:    algo.Name,
 				AlgorithmVersion: algo.Version,
-				TargetType:       "person",
+				TargetType:       targetType,
 				TrackID:          p.TrackID,
 				Score:            p.BodyScore,
 				BoxJSON:          string(bodyBoxBytes),

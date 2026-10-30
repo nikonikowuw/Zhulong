@@ -1,6 +1,9 @@
 #include "matcher.hpp"
+
 #include <algorithm>
-#include <cmath>
+#include <cstddef>
+#include <utility>
+#include <vector>
 
 namespace zhulong::face {
 
@@ -17,67 +20,55 @@ MatchResult Matcher::match(
         return result;
     }
 
-    struct ScoredCandidate {
-        std::string person_id;
-        std::string person_name;
-        std::string face_id;
-        float similarity{0.0f};
-    };
-
-    std::vector<ScoredCandidate> scored;
+    // 只保留 (底库下标, 相似度)：候选人的人名/人员 ID 等字段等 Top-K 定下来再取。
+    // 为每个底库项拷贝 3 个 std::string 是这轮比对里最贵的一步（万级底库 × 每帧每脸）。
+    std::vector<std::pair<size_t, float>> scored;
     scored.reserve(gallery.size());
 
-    for (const auto& item : gallery) {
+    for (size_t index = 0; index < gallery.size(); ++index) {
+        const auto& item = gallery[index];
         if (item.features.size() != feature_dim) {
             continue;
         }
 
-        // 计算单位向量点积（余弦相似度）
+        // 单位向量点积（余弦相似度）
         float dot = 0.0f;
         for (size_t i = 0; i < feature_dim; ++i) {
             dot += probe_features[i] * item.features[i];
         }
-
-        // 截断至 [0.0, 1.0]
-        float sim = std::max(0.0f, std::min(1.0f, dot));
-        scored.push_back({item.person_id, item.person_name, item.face_id, sim});
+        // 截断至 [0.0, 1.0]：负相关按「不相似」处理
+        scored.emplace_back(index, std::clamp(dot, 0.0f, 1.0f));
     }
 
     if (scored.empty()) {
         return result;
     }
 
-    // 按相似度降序排列
-    std::sort(scored.begin(), scored.end(), [](const ScoredCandidate& a, const ScoredCandidate& b) {
-        return a.similarity > b.similarity;
-    });
+    const size_t count = std::min(top_k_, scored.size());
+    std::partial_sort(scored.begin(), scored.begin() + static_cast<std::ptrdiff_t>(count), scored.end(),
+                      [](const std::pair<size_t, float>& a, const std::pair<size_t, float>& b) {
+                          return a.second > b.second;
+                      });
 
-    // 提取 Top-K
-    size_t count = std::min(top_k_, scored.size());
     result.candidates.reserve(count);
     for (size_t i = 0; i < count; ++i) {
-        FaceCandidate cand;
-        cand.person_id = scored[i].person_id;
-        cand.person_name = scored[i].person_name;
-        cand.face_id = scored[i].face_id;
-        cand.similarity = scored[i].similarity;
-        result.candidates.push_back(std::move(cand));
+        const auto& item = gallery[scored[i].first];
+        FaceCandidate candidate;
+        candidate.person_id = item.person_id;
+        candidate.person_name = item.person_name;
+        candidate.face_id = item.face_id;
+        candidate.similarity = scored[i].second;
+        result.candidates.push_back(std::move(candidate));
     }
 
     // Top-1 决策
-    const auto& best = scored.front();
-    result.similarity = best.similarity;
-
-    if (best.similarity >= threshold_) {
+    const auto& best = gallery[scored.front().first];
+    result.similarity = scored.front().second;
+    if (result.similarity >= threshold_) {
         result.matched = true;
         result.person_id = best.person_id;
         result.person_name = best.person_name;
         result.matched_face_id = best.face_id;
-    } else {
-        result.matched = false;
-        result.person_id = "";
-        result.person_name = "";
-        result.matched_face_id = "";
     }
 
     return result;

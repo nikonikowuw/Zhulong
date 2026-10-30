@@ -23,7 +23,7 @@ BINARY := $(BUILD_DIR)/Zhulong
 SWAG_VERSION := v1.16.6
 AIR ?= $(shell command -v air 2>/dev/null || (test -x "$$(go env GOPATH 2>/dev/null)/bin/air" && echo "$$(go env GOPATH)/bin/air") || echo air)
 
-.PHONY: all build go-build check frontend-install frontend-build frontend-check native-deps native-configure native-build native-test native-cross-build sdk-install sdk-dist sdk-clean-check board-check api-docs go-check smoke run web-dev dev-backend dev-frontend dev
+.PHONY: all build go-build check frontend-install frontend-build frontend-check native-deps native-configure native-build native-test native-cross-build sdk-install sdk-dist sdk-clean-check board-check api-docs go-check pkg-drift-check smoke run web-dev dev-backend dev-frontend dev
 
 all: build
 
@@ -132,6 +132,12 @@ native-cross-build:
 	test -n "$(CROSS_PROFILE)" && test -n "$(CROSS_OUTPUT)"
 	$(NATIVE_BUILD) --profile "$(CROSS_PROFILE)" go build -ldflags=-linkmode=external -o "$(CROSS_OUTPUT)" ./cmd/Zhulong
 
+# 多 target 算法包的源码漂移检查：同一处逻辑修复必须同时落到每个档位，
+# 否则另一份会变成「能编译但结果不对」的孤儿。允许的差异登记在脚本里。
+pkg-drift-check:
+	python3 native/scripts/check_package_drift.py packages/face_recognition
+	python3 native/scripts/check_package_drift.py packages/plate_recognition
+
 api-docs:
 	$(GO) run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init --dir cmd/Zhulong,internal/app,internal/httputil,internal/auth,internal/audit,internal/camera,internal/network,internal/systemtime,internal/storage,internal/algorithm,internal/person,internal/mediafile,internal/record,internal/task,internal/gb28181,internal/aitypes,internal/spatial --generalInfo main.go --output internal/apidocs --parseInternal
 
@@ -143,6 +149,7 @@ go-check: native-build
 
 check:
 	$(MAKE) frontend-check
+	$(MAKE) pkg-drift-check
 	$(MAKE) native-test
 	$(MAKE) api-docs
 	$(MAKE) go-check

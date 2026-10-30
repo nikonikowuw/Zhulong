@@ -165,18 +165,20 @@ typedef struct zhulong_face_item {
 /**
  * @brief 结构化人体项 (1 个人体挂载 0~N 张人脸)
  *
- * 纯人脸场景退化语义约定：
+ * 纯人脸场景退化语义约定（本结构没有「无人体」取值，退化项用可识别的别名表达）：
  *   - 纯人脸检测场景下，每个检出的人脸映射为一个 zhulong_person_item；
- *   - track_id 填 0；
- *   - body_box 填 face_box 的归一化坐标；
- *   - body_score 填 1.0f；
+ *   - track_id 填 0（将来接入跟踪器时真人体项为非 0，判据只会更强）；
+ *   - body_box 逐位等于该人脸项 face_box 的归一化坐标（供宿主的区域过滤与抓拍裁剪使用）；
+ *   - body_score 填**该人脸的质量分**（与 vehicle_score 同理：退化项填真实来源的分数，
+ *     ⚠️ 它不是人体检出置信度，**不要**填 1.0——那会让真实体与退化项无法区分）；
  *   - face_count 填 1，faces 指向对应的人脸项。
- * 结构体总尺寸为 40 字节，满足 8 字节整除。
+ * 宿主识别退化项：track_id == 0 且 body_box == faces[0].box（插件必须原样别名，不得外扩）。
+ * 结构体总尺寸为 40 字节，满足 8 字节整除（无填充空位，因此没有预留字段可用）。
  */
 typedef struct zhulong_person_item {
     int64_t  track_id;                               /* 跟踪 ID (纯人脸场景填 0) */
-    float    body_box[4];                            /* [x1, y1, x2, y2] 严格归一化 (纯人脸场景同 face_box) */
-    float    body_score;                             /* 人体检出置信度 (纯人脸场景填 1.0) */
+    float    body_box[4];                            /* [x1, y1, x2, y2] 严格归一化 (退化项逐位同 face_box) */
+    float    body_score;                             /* 人体检出置信度 (纯人脸退化项填该人脸质量分) */
     uint32_t face_count;                             /* faces 数组元素数 */
     const zhulong_face_item* faces;                  /* 指向人脸数组 (只读，指向同一 Arena) */
 } zhulong_person_item;

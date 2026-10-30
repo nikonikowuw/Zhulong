@@ -1,58 +1,70 @@
 #include "extractor.hpp"
+
+#include "common/face_preprocess.hpp"
+
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace zhulong::face {
+
+namespace {
+
+/** @brief FaceLiVTv2 / ArcFace 输入归一化：(x - 127.5) / 127.5 */
+constexpr float kEmbeddingMean = 127.5f;
+constexpr float kEmbeddingInvStd = 1.0f / 127.5f;
+/** @brief 单位化时的零范数保护下限 */
+constexpr float kMinimumFeatureNorm = 1e-6f;
+
+} // namespace
 
 std::vector<float> FaceFeatureExtractor::extract(
     zhulong::Session& session,
     const zhulong::Tensor& patch_tensor
 ) const {
-    if (!session.valid() || patch_tensor.element_count() != 112 * 112 * 3) {
+    constexpr size_t kPatchElementCount =
+        static_cast<size_t>(kFeaturePatchWidth) * static_cast<size_t>(kFeaturePatchHeight) * 3;
+
+    if (!session.valid() || patch_tensor.dtype() != zhulong::DataType::UINT8 ||
+        patch_tensor.element_count() != kPatchElementCount) {
         return {};
     }
 
-    std::vector<zhulong::Tensor> outputs;
-    // ONNX FaceLiVTv2 / ArcFace: [1, 3, 112, 112] FLOAT32 NCHW, RGB, (x - 127.5f) / 127.5f
-    zhulong::Tensor onnx_patch({1, 3, 112, 112}, zhulong::DataType::FLOAT32);
-    const uint8_t* src_hwc = patch_tensor.data<uint8_t>();
-    float* dst_nchw = onnx_patch.data<float>();
-    if (src_hwc && dst_nchw) {
-        constexpr int plane_size = 112 * 112;
-        float* dst_r = dst_nchw;
-        float* dst_g = dst_nchw + plane_size;
-        float* dst_b = dst_nchw + plane_size * 2;
-        constexpr float mean = 127.5f;
-        constexpr float inv_std = 1.0f / 127.5f;
-        for (int i = 0; i < plane_size; ++i) {
-            dst_r[i] = (static_cast<float>(src_hwc[i * 3 + 0]) - mean) * inv_std;
-            dst_g[i] = (static_cast<float>(src_hwc[i * 3 + 1]) - mean) * inv_std;
-            dst_b[i] = (static_cast<float>(src_hwc[i * 3 + 2]) - mean) * inv_std;
-        }
-        outputs = session.forward({onnx_patch});
+    // HWC(uint8 RGB) → NCHW(float32) 归一化，与检测前处理共用同一实现。
+    zhulong::Tensor onnx_patch({1, 3, kFeaturePatchHeight, kFeaturePatchWidth}, zhulong::DataType::FLOAT32);
+    if (!hwc_to_nchw_normalized(patch_tensor.data<uint8_t>(), kFeaturePatchHeight, kFeaturePatchWidth,
+                                kEmbeddingMean, kEmbeddingInvStd, onnx_patch.data<float>())) {
+        return {};
     }
 
-    if (outputs.size() == 1 && outputs[0].element_count() == 512) {
-        std::vector<float> features(512);
-        const float* src = outputs[0].data<float>();
-        if (src) {
-            std::memcpy(features.data(), src, 512 * sizeof(float));
-
-            float norm_sq = 0.0f;
-            for (int i = 0; i < 512; ++i) {
-                norm_sq += features[i] * features[i];
-            }
-            float norm = std::sqrt(norm_sq);
-            if (norm < 1e-6f) norm = 1.0f;
-            for (int i = 0; i < 512; ++i) {
-                features[i] /= norm;
-            }
-            return features;
-        }
+    const std::vector<zhulong::Tensor> outputs = session.forward({onnx_patch});
+    if (outputs.size() != 1 || outputs[0].dtype() != zhulong::DataType::FLOAT32 ||
+        outputs[0].element_count() != kFeatureDimension) {
+        return {};
     }
 
-    return {};
+    const float* src = outputs[0].data<float>();
+    if (src == nullptr) {
+        return {};
+    }
+
+    std::vector<float> features(kFeatureDimension);
+    std::memcpy(features.data(), src, kFeatureDimension * sizeof(float));
+
+    float norm_sq = 0.0f;
+    for (const float value : features) {
+        norm_sq += value * value;
+    }
+    const float norm = std::sqrt(norm_sq);
+    if (!(norm > kMinimumFeatureNorm)) {
+        // 零向量 / NaN 输出不能冒充「有效的单位特征」：登记进底库后会永远匹配不上，
+        // 而且错因看起来像「底库照片质量差」。宁可返回空让上层报错。
+        return {};
+    }
+    for (float& value : features) {
+        value /= norm;
+    }
+    return features;
 }
 
 } // namespace zhulong::face
-

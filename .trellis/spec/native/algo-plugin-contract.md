@@ -41,7 +41,12 @@
    - 人脸中心落入人体框上半身（$y \le y_{top} + 0.45 \cdot h$）且人脸在人体内的交并覆盖比 $\text{IoF} \ge 0.50$ 时，该人脸挂载进对应人体的 `faces` 列表；
 3. **真实检测的结构化语义**：
    - **背身/无正脸人体**：模型检出的真实全身框可以生成 `faces` 为空的 `zhulong_person_item`，供宿主生成人员抓拍记录与周界报警；
-   - **近景特写人脸**：真实检出但未匹配人体框的人脸，可以生成 `body_box = face_box` 的 `zhulong_person_item`，保证人脸比对结果不丢失；
+   - **近景特写人脸**：真实检出但未匹配人体框的人脸，可以生成 `body_box = face_box` 的 `zhulong_person_item`，保证人脸比对结果不丢失。
+     ⚠️ 退化项必须**可识别**：`track_id = 0` 且 `body_box` **逐位等于** `faces[0].box`（不得外扩），
+     `body_score` 填**该人脸的质量分**——它描述的是「这个框里那张脸有多可信」，不是人体检出置信度。
+     **禁止填 `1.0f`**：那会让真实体项与退化项无法区分，宿主的抓拍记录只能显示一个假的 100%。
+     `zhulong_person_item` 没有「无人体」取值也没有预留位（40 字节紧密排列），因此别名是唯一表达方式；
+     要真正表达「有脸无人」需要 ABI v2 的平级对象模型（行业对标 NVIDIA DeepStream `NvDsObjectMeta.parent` 与 GA/T 1400.3 `SubRelatedID`：`persons[]` 与 `faces[]` 扁平双数组 + `person_index` 引用索引），不要在 v1 上塞布尔字段。
    - 人体/人脸会话缺失、预处理失败或输出形状不合法时返回空结果；不得由亮度、固定分数或外推坐标合成检测结果。
 
 交付形态是**包根可执行文件**（`<manifest.id>`，静态链接运行时），宿主不装载任何算法产物，因此没有「导出表白名单」这回事：门禁反过来断言**包可执行文件不得导出任何插件 C ABI 符号**。
@@ -78,7 +83,7 @@ native/tests/check_plugin_symbols.py --entry <包根可执行文件>
 - 包内骨架**不链接任何图像解码器**（它不属于推理链路）：它原生解码 netpbm（`P6`/`P5`）。
 - 包内约定文件是 `sample.jpg/png`，解码责任在调用侧：Go 验包门禁（`internal/algorithm`）用标准库解码后以 PPM 交给包入口，并以**包目录**为 CWD 启动它（复现部署布局：可执行文件与 `models/` 同级）。
 - 报告必须携带 `sample_decoded`：`false` 表示包入口回退到合成帧，此时准入**只**证明了 ABI 生命周期；验包门禁会把它记为告警，不得静默当作通过。
-- 算法包自身的准确率回归由 native 金标测试负责（如 `ZhulongPlateRecognitionPluginTests` 用 `native/tests/fixtures/onnx/plate_sample.ppm` 钉住车牌号与颜色），黑盒验包不重复承担该职责。
+- 算法包自身的准确率回归由 native 金标测试负责（如 `ZhulongPlateRecognitionPluginTests` 用 `native/tests/fixtures/onnx/plate_sample.ppm` 钉住车牌号与颜色），黑盒验包不重复承担该职责；不需要模型的纯逻辑自测留在包内 `tests/`，见 [§5.5 测试归属](#55-测试归属包内自测-vs-金标回归)。
 
 ---
 
@@ -341,6 +346,30 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 
 宿主侧实现与进程生命周期（并发 1、崩溃单帧重试 1 次、超时杀进程组、空闲回收、入口指纹失效）
 见 [CGO 契约 §6](./cgo-contract.md)。
+
+### 5.5 测试归属：包内自测 vs. 金标回归
+
+算法包是**独立交付物**：第三方只拿到「SDK 前缀 + 包目录」。因此测试按「能不能脱离仓库运行」
+分成两类，**不要**把所有算法测试都往 `native/tests/` 塞：
+
+| 类型 | 放哪 | 驱动方式 | 判据 |
+| :--- | :--- | :--- | :--- |
+| **包内自测** | `packages/<id>/<target>/tests/` | 包自己 `make unit-test`（并入 `make test`）；`make sdk-clean-check` 的干净容器覆盖 | 不加载模型、不需要会话与技术栈之外的依赖；纯几何/后处理/比对/协议数学 |
+| **金标回归** | `native/tests/` + `native/tests/fixtures/` | `make check` / `make native-test`（ctest） | 需要真实权重与金标样本，钉住准确率与结果语义（如车牌号、1:N 相似度基线） |
+
+- 包内自测源文件是**唯一事实源**：仓库门禁若要覆盖它，在 `native/CMakeLists.txt` 里直接编译
+  `${ZHULONG_FACE_IMPL_DIR}/tests/...`（现有 `ZhulongFaceGeometryTests` 即此形态），**不得**在
+  `native/tests/` 再放一份副本。
+- 包内自测不得依赖 `stb` 之外的额外第三方库，也不得 `#include` 仓库内路径（只有 `sdk/include`
+  与包自身目录可 include）。
+- ⚠️ 包内自测不要用 `assert()` 作为唯一判据：宿主与 CI 的 `RelWithDebInfo` 会定义 `NDEBUG` 把断言
+  整段编译掉（`native/CMakeLists.txt` 的 `-UNDEBUG` 列表就是为这个坑设的）。包内的做法是显式检查
+  + 非零退出码，失败时打印用例名。
+- 反过来，`native/tests/` 里的包测试只能证明「仓库内这套源码 + 这套夹具没问题」，**不能**证明包可
+  独立开发——那是 `make sdk-clean-check` 的职责。
+- **多 target 包必须过漂移检查**：`packages/<id>/<a>/` 与 `<id>/<b>/` 是两份自包含副本，同一处逻辑修复
+  容易只落到一侧。`make pkg-drift-check`（`native/scripts/check_package_drift.py`）比较各档位的
+  `src/**`、`tests/**`，只允许脚本里显式登记的差异；未登记的差异即门禁失败。已进 `make check`。
 
 ---
 

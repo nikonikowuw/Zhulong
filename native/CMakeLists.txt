@@ -635,6 +635,26 @@ if(BUILD_TESTING)
 
 
 
+    # 人脸几何对齐 + 1:N 比对自测。
+    #
+    # ⚠️ 源文件在**包内**（packages/face_recognition/<target>/tests/），这里只把它编进
+    #    ctest 以便 `make check` 覆盖：包内 `make unit-test` 与这里编译的是同一份文件，
+    #    不复制副本。归属理由见 .trellis/spec/native/algo-plugin-contract.md §5.5。
+    #    该测试不加载模型、不需要会话，因此两种推理后端档位都注册。
+    add_executable(ZhulongFaceGeometryTests
+        ${ZHULONG_FACE_IMPL_DIR}/tests/aligner_matcher_test.cpp
+        ${ZHULONG_FACE_IMPL_DIR}/src/alignment/aligner.cpp
+        ${ZHULONG_FACE_IMPL_DIR}/src/matching/matcher.cpp
+    )
+    target_compile_features(ZhulongFaceGeometryTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongFaceGeometryTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
+        ${ZHULONG_FACE_IMPL_DIR}/src
+    )
+    target_link_libraries(ZhulongFaceGeometryTests PRIVATE ZhulongAlgoRuntime Threads::Threads)
+    add_test(NAME ZhulongFaceGeometry COMMAND ZhulongFaceGeometryTests)
+    set_tests_properties(ZhulongFaceGeometry PROPERTIES TIMEOUT 10)
+
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongFaceRecognitionOnnxTests
             tests/face_recognition_onnx_test.cpp

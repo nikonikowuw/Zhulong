@@ -45,3 +45,13 @@ target_include_directories(face_recognition_devtest PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(face_recognition_devtest PRIVATE Zhulong::AlgoRuntime)
+
+# 包内自测：纯几何 / 比对数学，不加载模型、不需要会话。
+# 只依赖 SDK 前缀 + 包自身源码 → 第三方与 sdk-clean-check 的干净容器都能构建运行。
+add_executable(face_recognition_unittest EXCLUDE_FROM_ALL
+    tests/aligner_matcher_test.cpp
+    src/alignment/aligner.cpp
+    src/matching/matcher.cpp
+)
+target_include_directories(face_recognition_unittest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(face_recognition_unittest PRIVATE Zhulong::AlgoRuntime)

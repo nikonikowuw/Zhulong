@@ -1,6 +1,7 @@
 # 人脸识别算法包（onnx 档位）开发期命令
 #
-#   make test      读包根 sample.jpg → 跑本 target 产品代码 → build/out/result-*.jpg
+#   make test      包内自测（不需要模型）+ 读包根 sample.jpg 跑产品代码 → build/out/result-*.jpg
+#   make unit-test 只跑不需要模型的自测（几何对齐 / 1:N 比对）
 #   make verify    包根可执行文件的一次性验包（骨架只解 netpbm，jpg 会报 sample_decoded=false）
 #
 # ⚠️ 只依赖已安装的 SDK 前缀；把整个档位目录拷到任意位置都能跑：
@@ -19,13 +20,14 @@ OUT_DIR := $(BUILD_DIR)/out
 DEVTEST := $(BUILD_DIR)/face_recognition_devtest
 RESULT := $(OUT_DIR)/result-face_recognition-onnx.jpg
 EXE := $(BUILD_DIR)/face_recognition
+UNITTEST := $(BUILD_DIR)/face_recognition_unittest
 VERIFY_SAMPLE ?= $(CURDIR)/sample.jpg
 
 SRC_FILES := $(wildcard src/*.cpp src/*.hpp src/*/*.cpp src/*/*.hpp)
 
-.PHONY: all test verify clean
+.PHONY: all test unit-test verify clean
 
-all: $(EXE) $(DEVTEST)
+all: $(EXE) $(DEVTEST) $(UNITTEST)
 
 $(BUILD_DIR)/CMakeCache.txt: CMakeLists.txt
 	cmake -S $(CURDIR) -B $(BUILD_DIR) \
@@ -43,10 +45,17 @@ $(EXE): $(BUILD_DIR)/CMakeCache.txt $(SRC_FILES)
 $(DEVTEST): $(BUILD_DIR)/CMakeCache.txt tests/dev_infer.cpp $(SRC_FILES)
 	cmake --build $(BUILD_DIR) --target face_recognition_devtest
 
+$(UNITTEST): $(BUILD_DIR)/CMakeCache.txt tests/aligner_matcher_test.cpp $(SRC_FILES)
+	cmake --build $(BUILD_DIR) --target face_recognition_unittest
+
 verify: $(EXE)
 	@cd $(CURDIR) && $(EXE) --verify --sample $(VERIFY_SAMPLE)
 
-test: $(DEVTEST)
+# 不需要模型的那部分先跑：它失败时不该等到 devtest 出图才发现。
+unit-test: $(UNITTEST)
+	@$(UNITTEST)
+
+test: unit-test $(DEVTEST)
 	@mkdir -p $(OUT_DIR)
 	@# 模型在包根 models/，而二进制在 build/：用包作者也会用的 env 覆盖指明包根。
 	@ZHULONG_FACE_MODEL_DIR=$(CURDIR) \

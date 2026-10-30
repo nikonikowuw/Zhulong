@@ -65,11 +65,10 @@ int main() {
     frame.planes[0] = test_pixels.data();
     frame.strides[0] = 300;
 
-    // Bright pixels alone are not evidence of a face. The CPU stub returns an incompatible
-    // output shape, so both direct detection and the plugin must fail closed.
-    zhulong::face::FaceDetector detector;
-    zhulong::Image img_view(frame);
-    assert(detector.detect(img_view).empty());
+    // Bright pixels alone are not evidence of a face. The stub backend returns an incompatible
+    // output shape, so the plugin must fail closed: 没有合法模型输出 -> 空结果，
+    // 绝不由亮度/固定分数合成目标（见插件契约 §2）。这一断言只能走完整 ABI 链路，
+    // 直接调 detector 需要真实会话，在本测试里不存在。
 
     auto assert_no_detections = [&](const zhulong_frame_view& sample) {
         zhulong_inference_result* result = nullptr;

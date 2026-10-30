@@ -173,17 +173,19 @@ struct FaceItem {
 /**
  * @brief 结构化人体项 (1 个人体挂载 0~N 张人脸)
  *
- * 纯人脸场景退化语义说明：
+ * 纯人脸场景退化语义说明（本结构没有「无人体」取值，退化项用可识别的别名表达）：
  *   - 在纯人脸检测/识别场景下，每个检出人脸映射为一个 PersonItem；
- *   - track_id 填 0；
- *   - body_box 填对应 face_box 的归一化坐标；
- *   - body_score 填 1.0f；
+ *   - track_id 填 0（接入跟踪器后真人体项为非 0）；
+ *   - body_box 逐位等于对应 face_box 的归一化坐标（供宿主做区域过滤与抓拍裁剪）；
+ *   - body_score 填**该人脸的质量分**（与 vehicle_score 同理：退化项填真实来源的分数；
+ *     ⚠️ 不是人体检出置信度，不要填 1.0，否则真实体与退化项不可区分）；
  *   - faces 包含单张人脸项。
+ * 宿主识别退化项：track_id == 0 且 body_box == faces[0].box（插件必须原样别名，不得外扩）。
  */
 struct PersonItem {
     int64_t track_id{0};                       /**< 人体跟踪 ID (纯人脸场景填 0) */
-    float body_box[4]{0.0f, 0.0f, 0.0f, 0.0f}; /**< [x1, y1, x2, y2] 归一化坐标 (纯人脸场景同 face_box) */
-    float body_score{0.0f};                    /**< 人体检出置信度 (纯人脸场景填 1.0f) */
+    float body_box[4]{0.0f, 0.0f, 0.0f, 0.0f}; /**< [x1, y1, x2, y2] 归一化坐标 (纯人脸退化项逐位同 face_box) */
+    float body_score{0.0f};                    /**< 人体检出置信度 (纯人脸退化项填该人脸质量分) */
     std::vector<FaceItem> faces;               /**< 关联的人脸列表 (0~N 张) */
 };
 

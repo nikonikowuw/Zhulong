@@ -73,6 +73,23 @@ type PersonItem struct {
 	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
+// IsFaceCloseup 报告该人体项是否来自「纯人脸退化语义」（近景特写：有脸、没检出人体）。
+//
+// 判据由插件契约规定（native/sdk/include/zhulong/plugin.h 的退化语义约定）：
+//   - track_id == 0（接入跟踪器后真人体项为非 0）；
+//   - faces 恰好 1 项，且 body_box 与 faces[0].box **逐位相等**（插件必须原样别名，不得外扩）；
+//   - 此时 body_score 是**该人脸的质量分**，不是人体检出置信度。
+//
+// 这个判据存在的意义：v1 结果结构里没有「无人体」取值，退化项只能把人体框列成人脸框的别名。
+// 宿主据此把抓拍记成 face 而不是 person，避免在记录列表里把一张脸显示成「人体置信度」。
+// ⚠️ 不要把它当成「脸在人体框内」的通用检查：真人体的 body_box 与人脸框不相等。
+func (p PersonItem) IsFaceCloseup() bool {
+	if p.TrackID != 0 || len(p.Faces) != 1 {
+		return false
+	}
+	return p.BodyBox == p.Faces[0].Box
+}
+
 // PlateSubItem represents a license plate mounted onto a vehicle entity.
 // Box is [x1, y1, x2, y2] strictly normalized to [0.0, 1.0].
 type PlateSubItem struct {
