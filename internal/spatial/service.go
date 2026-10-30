@@ -72,12 +72,7 @@ func NewService(store *Store, mapsDir string, logger *zap.Logger) *Service {
 func (s *Service) ListMaps(ctx context.Context) ([]CanvasMapResponse, error) {
 	maps, err := s.store.ListMaps(ctx)
 	if err != nil {
-		return nil, apperr.New(
-			apperr.KindInternal,
-			"DATABASE_ERROR",
-			"failed to list canvas maps",
-			err,
-		)
+		return nil, databaseError("failed to list canvas maps", err)
 	}
 	resp := make([]CanvasMapResponse, 0, len(maps))
 	for _, m := range maps {
@@ -152,13 +147,13 @@ func (s *Service) CreateMap(
 	relPath := mapID + ext
 	fullPath := filepath.Join(s.mapsDir, relPath)
 
-	if err = s.writeMapFile(fullPath, file); err != nil {
+	if err := s.writeMapFile(fullPath, file); err != nil {
 		return nil, err
 	}
 
 	width, height, ok := readImageSize(fullPath, ext)
 	if !ok {
-		s.removeFile(fullPath, mapID)
+		s.removeFile(fullPath, zap.String("map_id", mapID))
 		return nil, apperr.New(
 			apperr.KindInvalid,
 			"IMAGE_SIZE_UNREADABLE",
@@ -175,13 +170,8 @@ func (s *Service) CreateMap(
 		Height:    height,
 	}
 	if err := s.store.CreateMap(ctx, entity); err != nil {
-		s.removeFile(fullPath, mapID)
-		return nil, apperr.New(
-			apperr.KindInternal,
-			"DATABASE_ERROR",
-			"failed to save canvas map",
-			err,
-		)
+		s.removeFile(fullPath, zap.String("map_id", mapID))
+		return nil, databaseError("failed to save canvas map", err)
 	}
 
 	resp := s.formatMapResponse(*entity)
@@ -198,12 +188,7 @@ func (s *Service) UpdateMapName(ctx context.Context, id, name string) (*CanvasMa
 		return nil, mapLookupError(err)
 	}
 	if err := s.store.UpdateMapName(ctx, id, name); err != nil {
-		return nil, apperr.New(
-			apperr.KindInternal,
-			"DATABASE_ERROR",
-			"failed to update map name",
-			err,
-		)
+		return nil, databaseError("failed to update map name", err)
 	}
 	return s.GetMap(ctx, id)
 }
@@ -215,14 +200,9 @@ func (s *Service) DeleteMap(ctx context.Context, id string) error {
 		return mapLookupError(err)
 	}
 	if err := s.store.DeleteMap(ctx, id); err != nil {
-		return apperr.New(
-			apperr.KindInternal,
-			"DATABASE_ERROR",
-			"failed to delete canvas map",
-			err,
-		)
+		return databaseError("failed to delete canvas map", err)
 	}
-	s.removeFile(filepath.Join(s.mapsDir, m.ImagePath), id)
+	s.removeFile(filepath.Join(s.mapsDir, m.ImagePath), zap.String("map_id", id))
 	return nil
 }
 
@@ -233,12 +213,7 @@ func (s *Service) GetPositions(ctx context.Context, mapID string) ([]CameraPosit
 	}
 	positions, err := s.store.GetPositionsByMap(ctx, mapID)
 	if err != nil {
-		return nil, apperr.New(
-			apperr.KindInternal,
-			"DATABASE_ERROR",
-			"failed to fetch camera positions",
-			err,
-		)
+		return nil, databaseError("failed to fetch camera positions", err)
 	}
 	return positions, nil
 }
@@ -267,7 +242,7 @@ func (s *Service) SavePositions(ctx context.Context, mapID string, req BatchSave
 			return 0, apperr.New(
 				apperr.KindInvalid,
 				"DUPLICATE_CAMERA_POSITION",
-				fmt.Sprintf("camera %s appears more than once in the batch", p.CameraID),
+				fmt.Sprintf("camera %q appears more than once in the batch", p.CameraID),
 				nil,
 			)
 		}
@@ -286,120 +261,38 @@ func (s *Service) SavePositions(ctx context.Context, mapID string, req BatchSave
 	// otherwise surface as a raw FK failure (HTTP 500). Name the offender instead.
 	missing, err := s.store.FindMissingCameraIDs(ctx, cameraIDs)
 	if err != nil {
-		return 0, apperr.New(
-			apperr.KindInternal,
-			"DATABASE_ERROR",
-			"failed to validate camera positions",
-			err,
-		)
+		return 0, databaseError("failed to validate camera positions", err)
 	}
 	if len(missing) > 0 {
 		return 0, apperr.New(
 			apperr.KindInvalid,
 			"CAMERA_NOT_FOUND",
-			fmt.Sprintf("unknown camera: %s", strings.Join(missing, ", ")),
+			fmt.Sprintf("unknown camera: %q", strings.Join(missing, ", ")),
 			nil,
 		)
 	}
 
 	if err := s.store.BatchSavePositions(ctx, mapID, entities); err != nil {
-		return 0, apperr.New(
-			apperr.KindInternal,
-			"DATABASE_ERROR",
-			"failed to save camera positions",
-			err,
-		)
+		return 0, databaseError("failed to save camera positions", err)
 	}
 	return len(entities), nil
 }
 
 // QueryTrajectory retrieves and reconstructs the cross-camera spatio-temporal trajectory.
 func (s *Service) QueryTrajectory(ctx context.Context, q TrajectoryQuery) (*TrajectoryResponse, error) {
-	start, end := q.StartTime.UTC(), q.EndTime.UTC()
-	if !end.After(start) {
-		return nil, apperr.New(
-			apperr.KindInvalid,
-			"INVALID_TIME_RANGE",
-			"endTime must be later than startTime",
-			nil,
-		)
-	}
-
-	if _, err := s.store.GetMap(ctx, q.MapID); err != nil {
-		return nil, mapLookupError(err)
-	}
-
-	positions, err := s.store.GetPositionsByMap(ctx, q.MapID)
+	window, err := parseTrajectoryWindow(q)
 	if err != nil {
-		return nil, apperr.New(
-			apperr.KindInternal,
-			"DATABASE_ERROR",
-			"failed to get map positions",
-			err,
-		)
+		return nil, err
 	}
 
-	posMap := make(map[string]CameraPositionInfo, len(positions))
-	cameraIDs := make([]string, 0, len(positions))
-	for _, p := range positions {
-		posMap[p.CameraID] = p
-		cameraIDs = append(cameraIDs, p.CameraID)
-	}
-
-	var targetKey string
-	rawPoints := []RawDetectionPoint{}
-
-	switch q.TargetType {
-	case "vehicle":
-		targetKey = strings.TrimSpace(q.Plate)
-		if targetKey == "" {
-			return nil, apperr.New(
-				apperr.KindInvalid,
-				"PLATE_REQUIRED",
-				"vehicle plate is required",
-				nil,
-			)
-		}
-		rawPoints, err = s.store.QueryVehicleCaptures(
-			ctx,
-			cameraIDs,
-			targetKey,
-			start,
-			end,
-		)
-	case "person":
-		targetKey = strings.TrimSpace(q.PersonID)
-		if targetKey == "" {
-			return nil, apperr.New(
-				apperr.KindInvalid,
-				"PERSON_ID_REQUIRED",
-				"person id is required",
-				nil,
-			)
-		}
-		rawPoints, err = s.store.QueryPersonRecognitions(
-			ctx,
-			cameraIDs,
-			targetKey,
-			start,
-			end,
-		)
-	default:
-		return nil, apperr.New(
-			apperr.KindInvalid,
-			"INVALID_TARGET_TYPE",
-			"targetType must be vehicle or person",
-			nil,
-		)
-	}
-
+	cameraIDs, posMap, err := s.mapPositions(ctx, q.MapID)
 	if err != nil {
-		return nil, apperr.New(
-			apperr.KindInternal,
-			"DATABASE_ERROR",
-			"failed to query detections",
-			err,
-		)
+		return nil, err
+	}
+
+	targetKey, rawPoints, err := s.queryDetections(ctx, q, cameraIDs, window)
+	if err != nil {
+		return nil, err
 	}
 
 	return &TrajectoryResponse{
@@ -408,6 +301,109 @@ func (s *Service) QueryTrajectory(ctx context.Context, q TrajectoryQuery) (*Traj
 		TargetKey:  targetKey,
 		Nodes:      s.aggregateDetections(rawPoints, posMap),
 	}, nil
+}
+
+// trajectoryWindow is the validated, UTC-normalised time range of a trajectory query.
+type trajectoryWindow struct {
+	start time.Time
+	end   time.Time
+}
+
+// parseTrajectoryWindow normalises the query range to UTC and rejects an inverted
+// window before any storage work happens.
+func parseTrajectoryWindow(q TrajectoryQuery) (trajectoryWindow, error) {
+	window := trajectoryWindow{start: q.StartTime.UTC(), end: q.EndTime.UTC()}
+	if !window.end.After(window.start) {
+		return trajectoryWindow{}, apperr.New(
+			apperr.KindInvalid,
+			"INVALID_TIME_RANGE",
+			"endTime must be later than startTime",
+			nil,
+		)
+	}
+	return window, nil
+}
+
+// mapPositions loads a map's calibrated positions, returning them both as the
+// coordinate lookup used for node placement and as the camera whitelist every
+// detection query is scoped to.
+func (s *Service) mapPositions(
+	ctx context.Context,
+	mapID string,
+) ([]string, map[string]CameraPositionInfo, error) {
+	if _, err := s.store.GetMap(ctx, mapID); err != nil {
+		return nil, nil, mapLookupError(err)
+	}
+
+	positions, err := s.store.GetPositionsByMap(ctx, mapID)
+	if err != nil {
+		return nil, nil, databaseError("failed to get map positions", err)
+	}
+
+	posMap := make(map[string]CameraPositionInfo, len(positions))
+	cameraIDs := make([]string, 0, len(positions))
+	for _, p := range positions {
+		posMap[p.CameraID] = p
+		cameraIDs = append(cameraIDs, p.CameraID)
+	}
+	return cameraIDs, posMap, nil
+}
+
+// queryDetections dispatches on the target type and returns the raw detections
+// together with the normalised target key echoed back to the caller.
+func (s *Service) queryDetections(
+	ctx context.Context,
+	q TrajectoryQuery,
+	cameraIDs []string,
+	window trajectoryWindow,
+) (string, []RawDetectionPoint, error) {
+	filter := TrajectoryFilter{
+		CameraIDs: cameraIDs,
+		Start:     window.start,
+		End:       window.end,
+	}
+
+	switch q.TargetType {
+	case "vehicle":
+		filter.MatchKey = strings.TrimSpace(q.Plate)
+		if filter.MatchKey == "" {
+			return "", nil, apperr.New(
+				apperr.KindInvalid,
+				"PLATE_REQUIRED",
+				"vehicle plate is required",
+				nil,
+			)
+		}
+		points, err := s.store.QueryVehicleCaptures(ctx, filter)
+		if err != nil {
+			return "", nil, databaseError("failed to query vehicle captures", err)
+		}
+		return filter.MatchKey, points, nil
+
+	case "person":
+		filter.MatchKey = strings.TrimSpace(q.PersonID)
+		if filter.MatchKey == "" {
+			return "", nil, apperr.New(
+				apperr.KindInvalid,
+				"PERSON_ID_REQUIRED",
+				"person id is required",
+				nil,
+			)
+		}
+		points, err := s.store.QueryPersonRecognitions(ctx, filter)
+		if err != nil {
+			return "", nil, databaseError("failed to query person recognitions", err)
+		}
+		return filter.MatchKey, points, nil
+
+	default:
+		return "", nil, apperr.New(
+			apperr.KindInvalid,
+			"INVALID_TARGET_TYPE",
+			"targetType must be vehicle or person",
+			nil,
+		)
+	}
 }
 
 // aggregateDetections performs spatio-temporal dwell window grouping and node creation.
@@ -477,21 +473,6 @@ func newNodeInfo(
 	}
 }
 
-// absorb folds one more detection of the same stay into the open node: the node
-// keeps its arrival time while the sharpest snapshot and the first non-empty
-// detail win.
-func (node *TrajectoryNodeInfo) absorb(pt RawDetectionPoint) {
-	if pt.Score > node.Score {
-		node.Score = pt.Score
-		if snapPath := snapshotOf(pt); snapPath != "" {
-			node.SnapshotPath = snapPath
-		}
-	}
-	if pt.Details != "" && node.Details == "" {
-		node.Details = pt.Details
-	}
-}
-
 // snapshotOf prefers the cropped thumbnail and falls back to the full frame.
 func snapshotOf(pt RawDetectionPoint) string {
 	if pt.CropPath != "" {
@@ -540,10 +521,16 @@ func mapLookupError(err error) error {
 			err,
 		)
 	}
+	return databaseError("failed to load canvas map", err)
+}
+
+// databaseError wraps a storage fault with the domain's stable code, so every store
+// failure reaches the caller as a 500 while the cause stays server-side.
+func databaseError(msg string, err error) error {
 	return apperr.New(
 		apperr.KindInternal,
 		"DATABASE_ERROR",
-		"failed to load canvas map",
+		msg,
 		err,
 	)
 }
@@ -562,7 +549,7 @@ func (s *Service) writeMapFile(fullPath string, src io.Reader) error {
 	}
 	if _, err := io.Copy(out, src); err != nil {
 		s.closeFile(out, fullPath)
-		s.removeFile(fullPath, "")
+		s.removeFile(fullPath)
 		return apperr.New(
 			apperr.KindInternal,
 			"MAP_STORAGE_ERROR",
@@ -571,7 +558,7 @@ func (s *Service) writeMapFile(fullPath string, src io.Reader) error {
 		)
 	}
 	if err := out.Close(); err != nil {
-		s.removeFile(fullPath, "")
+		s.removeFile(fullPath)
 		return apperr.New(
 			apperr.KindInternal,
 			"MAP_STORAGE_ERROR",
@@ -588,17 +575,20 @@ func (s *Service) closeFile(f *os.File, path string) {
 	}
 }
 
-func (s *Service) removeFile(path, mapID string) {
+// removeFile deletes a best-effort artefact. Cleanup happens on error paths where
+// the caller already reports a more specific failure, so a failed removal is only logged.
+func (s *Service) removeFile(path string, fields ...zap.Field) {
 	if path == "" {
 		return
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		s.logger.Warn("failed to remove canvas map image",
-			zap.String("map_id", mapID),
-			zap.String("path", path),
-			zap.Error(err),
-		)
+	err := os.Remove(path)
+	if err == nil || errors.Is(err, os.ErrNotExist) {
+		return
 	}
+	s.logger.Warn(
+		"failed to remove canvas map image",
+		append(fields, zap.String("path", path), zap.Error(err))...,
+	)
 }
 
 // readImageSize reports the intrinsic pixel size of a base map.
@@ -611,19 +601,7 @@ func readImageSize(path, ext string) (int, int, bool) {
 		return 0, 0, false
 	}
 
-	var width, height int
-	var ok bool
-
-	switch ext {
-	case ".svg":
-		width, height, ok = svgIntrinsicSize(f)
-	default:
-		cfg, _, decodeErr := image.DecodeConfig(f)
-		hasValidDimensions := decodeErr == nil && cfg.Width > 0 && cfg.Height > 0
-		if hasValidDimensions {
-			width, height, ok = cfg.Width, cfg.Height, true
-		}
-	}
+	width, height, ok := decodeIntrinsicSize(f, ext)
 	// 关闭失败按读取失败处理：一个读不全的文件尺寸不可信，不能拿它建底图。
 	if closeErr := f.Close(); closeErr != nil {
 		return 0, 0, false
@@ -631,8 +609,23 @@ func readImageSize(path, ext string) (int, int, bool) {
 	return width, height, ok
 }
 
+// decodeIntrinsicSize reads the size of an already-open base map.
+func decodeIntrinsicSize(r io.Reader, ext string) (int, int, bool) {
+	if ext == ".svg" {
+		return svgIntrinsicSize(r)
+	}
+	cfg, _, err := image.DecodeConfig(r)
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+		return 0, 0, false
+	}
+	return cfg.Width, cfg.Height, true
+}
+
 // svgIntrinsicSize extracts the root <svg> dimensions, falling back to the
 // viewBox aspect box when width/height are absent or expressed as percentages.
+//
+// Only the root element is considered: an inner <svg> belongs to the artwork, and
+// sizing the canvas from it would scale the map to whatever the author nested in it.
 func svgIntrinsicSize(r io.Reader) (width, height int, ok bool) {
 	decoder := xml.NewDecoder(r)
 	for {
@@ -640,9 +633,13 @@ func svgIntrinsicSize(r io.Reader) (width, height int, ok bool) {
 		if err != nil {
 			return 0, 0, false
 		}
+		// Comments, processing instructions and whitespace precede the root element.
 		start, isStart := token.(xml.StartElement)
-		if !isStart || start.Name.Local != "svg" {
+		if !isStart {
 			continue
+		}
+		if start.Name.Local != "svg" {
+			return 0, 0, false
 		}
 
 		var widthAttr, heightAttr, viewBox string

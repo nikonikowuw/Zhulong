@@ -126,6 +126,17 @@ func (s *Store) BatchSavePositions(ctx context.Context, mapID string, positions 
 	})
 }
 
+// TrajectoryFilter groups the constraints both trajectory queries share, so no
+// caller can forget the empty-camera guard or the inclusive time window.
+type TrajectoryFilter struct {
+	// CameraIDs scopes the query to the cameras calibrated on the map.
+	CameraIDs []string
+	// MatchKey is the plate substring for vehicles and the person ID for persons.
+	MatchKey string
+	Start    time.Time
+	End      time.Time
+}
+
 // escapeLike neutralises the LIKE metacharacters of a user-supplied substring.
 //
 // Without it a plate of "%" matches every vehicle capture, and "_" silently turns
@@ -135,18 +146,13 @@ func escapeLike(value string) string {
 	return replacer.Replace(value)
 }
 
-// QueryVehicleCaptures retrieves vehicle captures for the specified cameras and time range matching plate.
-func (s *Store) QueryVehicleCaptures(
-	ctx context.Context,
-	cameraIDs []string,
-	plate string,
-	start time.Time,
-	end time.Time,
-) ([]RawDetectionPoint, error) {
-	if len(cameraIDs) == 0 {
+// QueryVehicleCaptures retrieves vehicle captures for the filtered cameras and
+// time range whose plate contains the filter's match key.
+func (s *Store) QueryVehicleCaptures(ctx context.Context, f TrajectoryFilter) ([]RawDetectionPoint, error) {
+	if len(f.CameraIDs) == 0 {
 		return []RawDetectionPoint{}, nil
 	}
-	pattern := "%" + escapeLike(plate) + "%"
+	pattern := "%" + escapeLike(f.MatchKey) + "%"
 	points := []RawDetectionPoint{}
 	err := s.db(ctx).Table("captures").
 		Select(
@@ -154,28 +160,23 @@ func (s *Store) QueryVehicleCaptures(
 				"COALESCE(json_extract(attributes_json, '$.plate_number'), '') AS details, captured_at",
 		).
 		Where("target_type = 'vehicle'").
-		Where("camera_id IN (?)", cameraIDs).
-		Where("captured_at >= ? AND captured_at <= ?", start, end).
+		Where("camera_id IN (?)", f.CameraIDs).
+		Where("captured_at >= ? AND captured_at <= ?", f.Start, f.End).
 		Where(`json_extract(attributes_json, '$.plate_number') LIKE ? ESCAPE '\'`, pattern).
 		Order("captured_at ASC").
 		Scan(&points).Error
 	return points, err
 }
 
-// QueryPersonRecognitions retrieves recognition events for the specified cameras
-// and time range matching personID (internal ID or external business key).
+// QueryPersonRecognitions retrieves recognition events for the filtered cameras
+// and time range matching the filter's match key (internal ID or external business
+// key).
 //
 // matched = 1 is part of the contract: a recognition row carries person_id only
 // after a gallery hit, but an unmatched row must never contribute a trajectory
 // node even if it somehow inherited an ID.
-func (s *Store) QueryPersonRecognitions(
-	ctx context.Context,
-	cameraIDs []string,
-	personID string,
-	start time.Time,
-	end time.Time,
-) ([]RawDetectionPoint, error) {
-	if len(cameraIDs) == 0 {
+func (s *Store) QueryPersonRecognitions(ctx context.Context, f TrajectoryFilter) ([]RawDetectionPoint, error) {
+	if len(f.CameraIDs) == 0 {
 		return []RawDetectionPoint{}, nil
 	}
 	points := []RawDetectionPoint{}
@@ -184,9 +185,9 @@ func (s *Store) QueryPersonRecognitions(
 			"camera_id, similarity AS score, face_image_path AS crop_path, "+
 				"image_path, person_name AS details, captured_at",
 		).
-		Where("camera_id IN (?)", cameraIDs).
-		Where("captured_at >= ? AND captured_at <= ?", start, end).
-		Where("(person_id = ? OR person_external_id = ?)", personID, personID).
+		Where("camera_id IN (?)", f.CameraIDs).
+		Where("captured_at >= ? AND captured_at <= ?", f.Start, f.End).
+		Where("(person_id = ? OR person_external_id = ?)", f.MatchKey, f.MatchKey).
 		Where("matched = ?", true).
 		Order("captured_at ASC").
 		Scan(&points).Error

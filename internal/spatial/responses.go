@@ -61,6 +61,20 @@ type SaveCameraPositionsResponse struct {
 	Count int    `json:"count"`
 }
 
+// absorb folds one more detection of the same stay into the node: the node keeps
+// its arrival time while the sharpest snapshot and the first non-empty detail win.
+func (node *TrajectoryNodeInfo) absorb(pt RawDetectionPoint) {
+	if pt.Score > node.Score {
+		node.Score = pt.Score
+		if snapPath := snapshotOf(pt); snapPath != "" {
+			node.SnapshotPath = snapPath
+		}
+	}
+	if pt.Details != "" && node.Details == "" {
+		node.Details = pt.Details
+	}
+}
+
 // utc returns t in UTC without an empty value: API time fields are RFC3339 in UTC
 // (http-api-guidelines.md §2), and a zero time must stay zero instead of turning
 // into year 1 in a different zone.

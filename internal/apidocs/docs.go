@@ -3247,7 +3247,7 @@ const docTemplate = `{
         },
         "/spatial/maps/{id}/image": {
             "get": {
-                "description": "Returns the stored image as-is. The response carries sandboxing headers because the\noperator-supplied file may be an SVG, which can otherwise execute script on this origin.",
+                "description": "Returns the stored image as-is.\nThe response carries sandboxing headers because the operator-supplied file may be an SVG,\nwhich can otherwise execute script on this origin.",
                 "produces": [
                     "image/png",
                     " image/jpeg",

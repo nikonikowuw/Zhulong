@@ -40,38 +40,99 @@ func setupTestHandler(t *testing.T) (*gin.Engine, *spatial.Service, database.DBP
 	comp.UploadRoutes.RegisterRoutes(api)
 
 	cleanup := func() {
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Errorf("close test database: %v", err)
+		}
 	}
 	return r, comp.Service, dbStore, cleanup
 }
 
-func TestHandler_SpatialEndpoints(t *testing.T) {
-	router, _, dbProvider, cleanup := setupTestHandler(t)
-	defer cleanup()
+// doRequest fires one request through the router and returns the recorder.
+func doRequest(t *testing.T, router *gin.Engine, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
 
-	// Seed a camera
-	seedCamera := "INSERT INTO cameras (id, name, enabled) VALUES ('cam-test', '测试相机', 1)"
-	if err := dbProvider.DB().Exec(seedCamera).Error; err != nil {
+// doJSON fires one JSON request against the API group.
+func doJSON(t *testing.T, router *gin.Engine, method, url, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, url, bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	return doRequest(t, router, req)
+}
+
+// seedCamera inserts the camera every position test calibrates.
+func seedCamera(t *testing.T, dbProvider database.DBProvider) {
+	t.Helper()
+	seed := "INSERT INTO cameras (id, name, enabled) VALUES ('cam-test', '测试相机', 1)"
+	if err := dbProvider.DB().Exec(seed).Error; err != nil {
 		t.Fatalf("seed camera: %v", err)
 	}
+}
 
-	// 1. Upload map
+// uploadMapFile posts a multipart base map. An empty name omits the field entirely,
+// so a test can assert the missing-name contract.
+func uploadMapFile(
+	t *testing.T,
+	router *gin.Engine,
+	name string,
+	filename string,
+	content []byte,
+) *httptest.ResponseRecorder {
+	t.Helper()
+
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	_ = writer.WriteField("name", "西区园区图")
-	part, _ := writer.CreateFormFile("file", "west.png")
-	_, _ = part.Write(createTestPNG(1280, 720))
-	_ = writer.Close()
+	if name != "" {
+		if err := writer.WriteField("name", name); err != nil {
+			t.Fatalf("write name field: %v", err)
+		}
+	}
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write(content); err != nil {
+		t.Fatalf("write file part: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/spatial/maps", &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	return doRequest(t, router, req)
+}
 
+// uploadTestMap posts a valid PNG base map and returns its ID.
+func uploadTestMap(t *testing.T, router *gin.Engine) string {
+	t.Helper()
+
+	w := uploadMapFile(t, router, "校验底图", "check.png", createTestPNG(t, 64, 48))
 	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201 Created, got: %d: %s", w.Code, w.Body.String())
+		t.Fatalf("upload map: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
+	var resp struct {
+		Data spatial.CanvasMapResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal upload response: %v", err)
+	}
+	return resp.Data.ID
+}
 
+// TestHandler_UploadListAndRenameMap walks the map lifecycle: create one map through
+// the upload endpoint, see it in the list, rename it, then delete it.
+func TestHandler_UploadListAndRenameMap(t *testing.T) {
+	router, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	w := uploadMapFile(t, router, "西区园区图", "west.png", createTestPNG(t, 1280, 720))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("upload map: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
 	var uploadResp struct {
 		Data spatial.CanvasMapResponse `json:"data"`
 	}
@@ -83,79 +144,136 @@ func TestHandler_SpatialEndpoints(t *testing.T) {
 		t.Fatalf("unexpected upload data: %+v", uploadResp.Data)
 	}
 
-	// 2. List maps
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/spatial/maps", nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	w = doJSON(t, router, http.MethodGet, "/api/v1/spatial/maps", "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK, got: %d", w.Code)
+		t.Fatalf("list maps: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var listResp struct {
+		Data []spatial.CanvasMapResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal list response: %v", err)
+	}
+	if len(listResp.Data) != 1 || listResp.Data[0].ID != mapID {
+		t.Fatalf("unexpected map list: %+v", listResp.Data)
 	}
 
-	// 3. Get map image
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/spatial/maps/"+mapID+"/image", nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK for map image, got: %d", w.Code)
+	patchBody, err := json.Marshal(spatial.UpdateCanvasMapRequest{Name: "西区新图"})
+	if err != nil {
+		t.Fatalf("marshal patch body: %v", err)
 	}
-	if w.Header().Get("Content-Type") != "image/png" {
-		t.Errorf("expected image/png content type, got: %s", w.Header().Get("Content-Type"))
-	}
-
-	// 4. Update map name
-	patchBody, _ := json.Marshal(spatial.UpdateCanvasMapRequest{Name: "西区新图"})
-	req = httptest.NewRequest(http.MethodPatch, "/api/v1/spatial/maps/"+mapID, bytes.NewReader(patchBody))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	w = doJSON(t, router, http.MethodPatch, "/api/v1/spatial/maps/"+mapID, string(patchBody))
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK for patch name, got: %d", w.Code)
+		t.Fatalf("patch name: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var patchResp struct {
+		Data spatial.CanvasMapResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &patchResp); err != nil {
+		t.Fatalf("unmarshal patch response: %v", err)
+	}
+	if patchResp.Data.Name != "西区新图" {
+		t.Fatalf("rename did not persist: %+v", patchResp.Data)
 	}
 
-	// 5. Save positions
-	saveReq, _ := json.Marshal(spatial.BatchSavePositionsRequest{
-		Positions: []spatial.CameraPositionItem{
-			{CameraID: "cam-test", X: 0.3, Y: 0.4, Angle: 120},
-		},
-	})
-	req = httptest.NewRequest(http.MethodPut, "/api/v1/spatial/maps/"+mapID+"/positions", bytes.NewReader(saveReq))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	w = doJSON(t, router, http.MethodDelete, "/api/v1/spatial/maps/"+mapID, "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK for save positions, got: %d: %s", w.Code, w.Body.String())
+		t.Fatalf("delete map: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var delResp struct {
+		Data spatial.DeleteCanvasMapResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &delResp); err != nil {
+		t.Fatalf("unmarshal delete response: %v", err)
+	}
+	if delResp.Data.ID != mapID {
+		t.Fatalf("delete reported %q, want %q", delResp.Data.ID, mapID)
+	}
+}
+
+// TestHandler_UploadRejectsMissingName 守护名称校验的单点归属：handler 不再预检空名称，
+// 缺名上传必须仍由 service 的 normalizeMapName 拒成 422 INVALID_MAP_NAME。
+func TestHandler_UploadRejectsMissingName(t *testing.T) {
+	router, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	w := uploadMapFile(t, router, "", "west.png", createTestPNG(t, 32, 32))
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal error response: %v", err)
+	}
+	if resp.Code != "INVALID_MAP_NAME" {
+		t.Fatalf("expected INVALID_MAP_NAME, got %s", resp.Code)
+	}
+}
+
+// TestHandler_SaveAndGetPositions covers the calibration round trip.
+func TestHandler_SaveAndGetPositions(t *testing.T) {
+	router, _, dbProvider, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	seedCamera(t, dbProvider)
+	mapID := uploadTestMap(t, router)
+
+	w := doJSON(t, router, http.MethodPut, "/api/v1/spatial/maps/"+mapID+"/positions",
+		`{"positions":[{"cameraId":"cam-test","x":0.3,"y":0.4,"angle":120}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("save positions: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var saveResp struct {
+		Data spatial.SaveCameraPositionsResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &saveResp); err != nil {
+		t.Fatalf("unmarshal save response: %v", err)
+	}
+	if saveResp.Data.Count != 1 || saveResp.Data.MapID != mapID {
+		t.Fatalf("unexpected save response: %+v", saveResp.Data)
 	}
 
-	// 6. Get positions
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/spatial/maps/"+mapID+"/positions", nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	w = doJSON(t, router, http.MethodGet, "/api/v1/spatial/maps/"+mapID+"/positions", "")
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK for get positions, got: %d", w.Code)
+		t.Fatalf("get positions: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	var posResp struct {
 		Data []spatial.CameraPositionInfo `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &posResp); err != nil {
-		t.Fatalf("unmarshal pos response: %v", err)
+		t.Fatalf("unmarshal positions: %v", err)
 	}
 	if len(posResp.Data) != 1 || posResp.Data[0].CameraID != "cam-test" {
 		t.Fatalf("unexpected positions: %+v", posResp.Data)
 	}
+}
 
-	// 7. Query trajectory (empty result check)
-	now := time.Now().UTC()
-	startStr := now.Add(-time.Hour).Format(time.RFC3339)
-	endStr := now.Format(time.RFC3339)
-	trajURL := "/api/v1/spatial/trajectory?mapId=" + mapID +
-		"&targetType=vehicle&plate=粤B99999" +
-		"&startTime=" + startStr +
-		"&endTime=" + endStr
-	req = httptest.NewRequest(http.MethodGet, trajURL, nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+// TestHandler_QueryTrajectoryReturnsEmptyForUnknownPlate keeps the empty-result path
+// covered now that the monolithic endpoint test is gone: a calibrated map with no
+// matching capture must answer 200 with zero nodes, not 404.
+func TestHandler_QueryTrajectoryReturnsEmptyForUnknownPlate(t *testing.T) {
+	router, _, dbProvider, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	seedCamera(t, dbProvider)
+	mapID := uploadTestMap(t, router)
+	w := doJSON(t, router, http.MethodPut, "/api/v1/spatial/maps/"+mapID+"/positions",
+		`{"positions":[{"cameraId":"cam-test","x":0.5,"y":0.5,"angle":0}]}`)
 	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK for trajectory query, got: %d: %s", w.Code, w.Body.String())
+		t.Fatalf("save positions: %d: %s", w.Code, w.Body.String())
+	}
+
+	now := time.Now().UTC()
+	url := "/api/v1/spatial/trajectory?mapId=" + mapID +
+		"&targetType=vehicle&plate=粤B99999" +
+		"&startTime=" + now.Add(-time.Hour).Format(time.RFC3339) +
+		"&endTime=" + now.Format(time.RFC3339)
+
+	w = doJSON(t, router, http.MethodGet, url, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("trajectory query: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	var trajResp struct {
 		Data spatial.TrajectoryResponse `json:"data"`
@@ -166,51 +284,6 @@ func TestHandler_SpatialEndpoints(t *testing.T) {
 	if trajResp.Data.TargetKey != "粤B99999" || len(trajResp.Data.Nodes) != 0 {
 		t.Fatalf("unexpected empty trajectory response: %+v", trajResp.Data)
 	}
-
-	// 8. Delete map
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/spatial/maps/"+mapID, nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK for delete map, got: %d", w.Code)
-	}
-}
-
-// uploadTestMap posts a valid PNG base map and returns its ID.
-func uploadTestMap(t *testing.T, router *gin.Engine) string {
-	t.Helper()
-
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	if err := writer.WriteField("name", "校验底图"); err != nil {
-		t.Fatalf("write name field: %v", err)
-	}
-	part, err := writer.CreateFormFile("file", "check.png")
-	if err != nil {
-		t.Fatalf("create form file: %v", err)
-	}
-	if _, err := part.Write(createTestPNG(64, 48)); err != nil {
-		t.Fatalf("write png: %v", err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close writer: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/spatial/maps", &body)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("upload map: expected 201, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp struct {
-		Data spatial.CanvasMapResponse `json:"data"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal upload response: %v", err)
-	}
-	return resp.Data.ID
 }
 
 // TestHandler_ValidationRejectsOutOfRangePositions 守护 BatchSavePositionsRequest
@@ -245,11 +318,7 @@ func TestHandler_ValidationRejectsOutOfRangePositions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			url := "/api/v1/spatial/maps/" + mapID + "/positions"
-			req := httptest.NewRequest(http.MethodPut, url, bytes.NewBufferString(tc.body))
-			req.Header.Set("Content-Type", "application/json")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
+			w := doJSON(t, router, http.MethodPut, "/api/v1/spatial/maps/"+mapID+"/positions", tc.body)
 			if w.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
 			}
@@ -263,16 +332,11 @@ func TestHandler_SavePositionsDistinguishesAbsentFromEmpty(t *testing.T) {
 	router, _, dbProvider, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	seedCamera := "INSERT INTO cameras (id, name, enabled) VALUES ('cam-test', '测试相机', 1)"
-	if err := dbProvider.DB().Exec(seedCamera).Error; err != nil {
-		t.Fatalf("seed camera: %v", err)
-	}
+	seedCamera(t, dbProvider)
 	mapID := uploadTestMap(t, router)
+	positionsURL := "/api/v1/spatial/maps/" + mapID + "/positions"
 
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/spatial/maps/"+mapID+"/positions", bytes.NewBufferString(`{}`))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	w := doJSON(t, router, http.MethodPut, positionsURL, `{}`)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("absent positions must be rejected, got %d: %s", w.Code, w.Body.String())
 	}
@@ -287,20 +351,13 @@ func TestHandler_SavePositionsDistinguishesAbsentFromEmpty(t *testing.T) {
 	}
 
 	// Save one position, then explicitly unbind everything with an empty array.
-	req = httptest.NewRequest(http.MethodPut, "/api/v1/spatial/maps/"+mapID+"/positions",
-		bytes.NewBufferString(`{"positions":[{"cameraId":"cam-test","x":0.5,"y":0.5,"angle":90}]}`))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	w = doJSON(t, router, http.MethodPut, positionsURL,
+		`{"positions":[{"cameraId":"cam-test","x":0.5,"y":0.5,"angle":90}]}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("save one position: %d: %s", w.Code, w.Body.String())
 	}
 
-	req = httptest.NewRequest(http.MethodPut, "/api/v1/spatial/maps/"+mapID+"/positions",
-		bytes.NewBufferString(`{"positions":[]}`))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	w = doJSON(t, router, http.MethodPut, positionsURL, `{"positions":[]}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("empty array must be accepted, got %d: %s", w.Code, w.Body.String())
 	}
@@ -320,27 +377,8 @@ func TestHandler_MapImageCarriesSandboxHeaders(t *testing.T) {
 	router, _, _, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	if err := writer.WriteField("name", "矢量底图"); err != nil {
-		t.Fatalf("write name field: %v", err)
-	}
-	part, err := writer.CreateFormFile("file", "plan.svg")
-	if err != nil {
-		t.Fatalf("create form file: %v", err)
-	}
 	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"></svg>`)
-	if _, err := part.Write(svg); err != nil {
-		t.Fatalf("write svg: %v", err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close writer: %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/spatial/maps", &body)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	w := uploadMapFile(t, router, "矢量底图", "plan.svg", svg)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("upload svg: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
@@ -354,11 +392,12 @@ func TestHandler_MapImageCarriesSandboxHeaders(t *testing.T) {
 		t.Fatalf("svg intrinsic size not persisted: %+v", created.Data)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/spatial/maps/"+created.Data.ID+"/image", nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	w = doJSON(t, router, http.MethodGet, "/api/v1/spatial/maps/"+created.Data.ID+"/image", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("get image: expected 200, got %d", w.Code)
+	}
+	if got := w.Header().Get("Content-Type"); got != "image/svg+xml" {
+		t.Errorf("expected image/svg+xml content type, got %q", got)
 	}
 	if got := w.Header().Get("Content-Security-Policy"); got == "" {
 		t.Error("map image must be served with a sandboxing CSP")
@@ -379,8 +418,7 @@ func TestHandler_ErrorsAreLocalized(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/spatial/maps/missing-map", nil)
 	req.Header.Set("Accept-Language", "zh-Hans")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	w := doRequest(t, router, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
@@ -412,9 +450,7 @@ func TestHandler_TrajectoryRejectsInvertedRange(t *testing.T) {
 		"&startTime=" + now.Format(time.RFC3339) +
 		"&endTime=" + now.Add(-time.Hour).Format(time.RFC3339)
 
-	req := httptest.NewRequest(http.MethodGet, url, nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	w := doJSON(t, router, http.MethodGet, url, "")
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
 	}

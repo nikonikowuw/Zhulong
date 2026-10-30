@@ -22,12 +22,11 @@ func TestEscapeLikeNeutralisesWildcards(t *testing.T) {
 
 func TestSVGIntrinsicSize(t *testing.T) {
 	cases := []struct {
-		name     string
-		svg      string
-		wantW    int
-		wantH    int
-		wantOK   bool
-		skipTest bool
+		name   string
+		svg    string
+		wantW  int
+		wantH  int
+		wantOK bool
 	}{
 		{
 			name:   "width and height attributes",
@@ -53,6 +52,11 @@ func TestSVGIntrinsicSize(t *testing.T) {
 		{
 			name:   "no usable size",
 			svg:    `<svg width="100%" height="100%"></svg>`,
+			wantOK: false,
+		},
+		{
+			name:   "nested svg is not the canvas size",
+			svg:    `<html><svg width="10" height="10"></svg></html>`,
 			wantOK: false,
 		},
 	}

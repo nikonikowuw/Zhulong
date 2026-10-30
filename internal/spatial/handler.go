@@ -70,6 +70,10 @@ func (h *Handler) UploadRouteRegistrar() RouteRegistrar {
 // @Success      200  {object}  httputil.Response{data=[]CanvasMapResponse}
 // @Failure      500  {object}  httputil.Response
 // @Router       /spatial/maps [get]
+//
+// The payload is a bare array rather than the paginated envelope because an operator
+// calibrates a handful of floor plans and the whole set is one canvas picker; use
+// GET /spatial/maps/{id}/positions for the per-map list that can grow with the fleet.
 func (h *Handler) ListMaps(c *gin.Context) {
 	maps, err := h.service.ListMaps(c.Request.Context())
 	if err != nil {
@@ -143,8 +147,9 @@ func (h *Handler) DeleteMap(c *gin.Context) {
 
 // GetMapImage godoc
 // @Summary      Serve the canvas map image bytes
-// @Description  Returns the stored image as-is. The response carries sandboxing headers because the
-// @Description  operator-supplied file may be an SVG, which can otherwise execute script on this origin.
+// @Description  Returns the stored image as-is.
+// @Description  The response carries sandboxing headers because the operator-supplied file may be an SVG,
+// @Description  which can otherwise execute script on this origin.
 // @Tags         spatial
 // @Produce      image/png, image/jpeg, image/webp, image/svg+xml
 // @Param        id path string true "Canvas map ID"
@@ -183,38 +188,26 @@ func (h *Handler) GetMapImage(c *gin.Context) {
 // @Router       /spatial/maps [post]
 func (h *Handler) UploadMap(c *gin.Context) {
 	name := c.PostForm("name")
-	if name == "" {
-		err := apperr.New(
-			apperr.KindInvalid,
-			"INVALID_MAP_NAME",
-			"map name is required",
-			nil,
-		)
-		httputil.WriteErrorWithLogger(c, err, h.logger)
-		return
-	}
 
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
-		appErr := apperr.New(
+		httputil.WriteErrorWithLogger(c, apperr.New(
 			apperr.KindInvalid,
 			"MAP_FILE_REQUIRED",
 			"map image file is required",
 			err,
-		)
-		httputil.WriteErrorWithLogger(c, appErr, h.logger)
+		), h.logger)
 		return
 	}
 
 	src, err := fileHeader.Open()
 	if err != nil {
-		appErr := apperr.New(
+		httputil.WriteErrorWithLogger(c, apperr.New(
 			apperr.KindInternal,
 			"MAP_STORAGE_ERROR",
 			"failed to read the uploaded file",
 			err,
-		)
-		httputil.WriteErrorWithLogger(c, appErr, h.logger)
+		), h.logger)
 		return
 	}
 	defer func() {
@@ -223,6 +216,8 @@ func (h *Handler) UploadMap(c *gin.Context) {
 		}
 	}()
 
+	// The name is validated by the service, which owns the rune limit: pre-checking
+	// emptiness here would be a second copy of the same rule.
 	res, err := h.service.CreateMap(c.Request.Context(), name, src, fileHeader.Filename)
 	if err != nil {
 		httputil.WriteErrorWithLogger(c, err, h.logger)
@@ -241,6 +236,9 @@ func (h *Handler) UploadMap(c *gin.Context) {
 // @Failure      404  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /spatial/maps/{id}/positions [get]
+//
+// Bare array for the same reason as ListMaps: the set is bounded by the cameras an
+// operator placed on one canvas, and the calibration UI always needs all of them.
 func (h *Handler) GetPositions(c *gin.Context) {
 	positions, err := h.service.GetPositions(c.Request.Context(), c.Param("id"))
 	if err != nil {

@@ -3689,8 +3689,9 @@ paths:
   /spatial/maps/{id}/image:
     get:
       description: |-
-        Returns the stored image as-is. The response carries sandboxing headers because the
-        operator-supplied file may be an SVG, which can otherwise execute script on this origin.
+        Returns the stored image as-is.
+        The response carries sandboxing headers because the operator-supplied file may be an SVG,
+        which can otherwise execute script on this origin.
       parameters:
       - description: Canvas map ID
         in: path

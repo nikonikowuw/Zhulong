@@ -21,7 +21,9 @@ func setupTestStore(t *testing.T) (*spatial.Store, database.DBProvider, func()) 
 
 	store := spatial.NewStore(dbStore)
 	cleanup := func() {
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Errorf("close test database: %v", err)
+		}
 	}
 	return store, dbStore, cleanup
 }
@@ -146,25 +148,23 @@ func TestStore_QueryDetections(t *testing.T) {
 	store, _, cleanup := setupTestStore(t)
 	defer cleanup()
 
-	// Empty cameraIDs check
-	res, err := store.QueryVehicleCaptures(
-		ctx,
-		nil,
-		"粤B12345",
-		time.Now().Add(-time.Hour),
-		time.Now(),
-	)
+	now := time.Now().UTC()
+
+	// Empty cameraIDs short-circuits to an empty result instead of querying.
+	res, err := store.QueryVehicleCaptures(ctx, spatial.TrajectoryFilter{
+		MatchKey: "粤B12345",
+		Start:    now.Add(-time.Hour),
+		End:      now,
+	})
 	if err != nil || len(res) != 0 {
 		t.Errorf("expected empty result for empty cameras, got %v, %v", res, err)
 	}
 
-	resPerson, err := store.QueryPersonRecognitions(
-		ctx,
-		nil,
-		"person_1",
-		time.Now().Add(-time.Hour),
-		time.Now(),
-	)
+	resPerson, err := store.QueryPersonRecognitions(ctx, spatial.TrajectoryFilter{
+		MatchKey: "person_1",
+		Start:    now.Add(-time.Hour),
+		End:      now,
+	})
 	if err != nil || len(resPerson) != 0 {
 		t.Errorf("expected empty result for empty cameras, got %v, %v", resPerson, err)
 	}
@@ -177,7 +177,9 @@ func TestStore_VehiclePlateSearchEscapesWildcards(t *testing.T) {
 	store, dbProvider, cleanup := setupTestStore(t)
 	defer cleanup()
 
-	if err := dbProvider.DB().Exec(`INSERT INTO cameras (id, name, enabled) VALUES ('cam_a', '东门', 1)`).Error; err != nil {
+	if err := dbProvider.DB().Exec(
+		`INSERT INTO cameras (id, name, enabled) VALUES ('cam_a', '东门', 1)`,
+	).Error; err != nil {
 		t.Fatalf("seed camera: %v", err)
 	}
 	now := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
@@ -194,13 +196,12 @@ func TestStore_VehiclePlateSearchEscapesWildcards(t *testing.T) {
 
 	start, end := now.Add(-time.Hour), now.Add(time.Hour)
 
-	all, err := store.QueryVehicleCaptures(
-		ctx,
-		[]string{"cam_a"},
-		"%",
-		start,
-		end,
-	)
+	all, err := store.QueryVehicleCaptures(ctx, spatial.TrajectoryFilter{
+		CameraIDs: []string{"cam_a"},
+		MatchKey:  "%",
+		Start:     start,
+		End:       end,
+	})
 	if err != nil {
 		t.Fatalf("query with %%: %v", err)
 	}
@@ -208,13 +209,12 @@ func TestStore_VehiclePlateSearchEscapesWildcards(t *testing.T) {
 		t.Fatalf("a bare %% must not match every plate, got %d rows", len(all))
 	}
 
-	prefix, err := store.QueryVehicleCaptures(
-		ctx,
-		[]string{"cam_a"},
-		"粤B8",
-		start,
-		end,
-	)
+	prefix, err := store.QueryVehicleCaptures(ctx, spatial.TrajectoryFilter{
+		CameraIDs: []string{"cam_a"},
+		MatchKey:  "粤B8",
+		Start:     start,
+		End:       end,
+	})
 	if err != nil {
 		t.Fatalf("query prefix: %v", err)
 	}

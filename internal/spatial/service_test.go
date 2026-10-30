@@ -19,11 +19,14 @@ import (
 	"go.uber.org/zap"
 )
 
-func createTestPNG(width, height int) []byte {
+func createTestPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	img.Set(0, 0, color.RGBA{R: 255, A: 255})
 	var buf bytes.Buffer
-	_ = png.Encode(&buf, img)
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode test png: %v", err)
+	}
 	return buf.Bytes()
 }
 
@@ -53,7 +56,9 @@ func setupTestServiceWithDir(t *testing.T) (*spatial.Service, database.DBProvide
 	svc := spatial.NewService(store, mapsDir, zap.NewNop())
 
 	cleanup := func() {
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Errorf("close test database: %v", err)
+		}
 	}
 	return svc, dbStore, mapsDir, cleanup
 }
@@ -63,7 +68,7 @@ func TestService_CreateAndGetMap(t *testing.T) {
 	svc, _, cleanup := setupTestService(t)
 	defer cleanup()
 
-	pngBytes := createTestPNG(800, 600)
+	pngBytes := createTestPNG(t, 800, 600)
 
 	// 1. Invalid name
 	_, err := svc.CreateMap(ctx, "   ", bytes.NewReader(pngBytes), "map.png")
@@ -127,7 +132,7 @@ func TestService_PositionsAndTrajectory(t *testing.T) {
 	}
 
 	// Create map
-	pngBytes := createTestPNG(1920, 1080)
+	pngBytes := createTestPNG(t, 1920, 1080)
 	createdMap, err := svc.CreateMap(ctx, "全景图", bytes.NewReader(pngBytes), "plan.png")
 	if err != nil {
 		t.Fatalf("CreateMap failed: %v", err)
@@ -321,7 +326,7 @@ func TestService_SavePositionsSemantics(t *testing.T) {
 	if err := db.DB().Exec(seedCameras).Error; err != nil {
 		t.Fatalf("seed cameras: %v", err)
 	}
-	m, err := svc.CreateMap(ctx, "园区图", bytes.NewReader(createTestPNG(100, 80)), "a.png")
+	m, err := svc.CreateMap(ctx, "园区图", bytes.NewReader(createTestPNG(t, 100, 80)), "a.png")
 	if err != nil {
 		t.Fatalf("CreateMap: %v", err)
 	}
@@ -377,7 +382,7 @@ func TestService_QueryTrajectoryRejectsInvertedRange(t *testing.T) {
 	svc, _, cleanup := setupTestService(t)
 	defer cleanup()
 
-	m, err := svc.CreateMap(ctx, "园区图", bytes.NewReader(createTestPNG(10, 10)), "a.png")
+	m, err := svc.CreateMap(ctx, "园区图", bytes.NewReader(createTestPNG(t, 10, 10)), "a.png")
 	if err != nil {
 		t.Fatalf("CreateMap: %v", err)
 	}
@@ -401,7 +406,7 @@ func TestService_DwellWindowIsStrictlyBelowThreshold(t *testing.T) {
 	if err := db.DB().Exec(`INSERT INTO cameras (id, name, enabled) VALUES ('cam_a', '东门', 1)`).Error; err != nil {
 		t.Fatalf("seed camera: %v", err)
 	}
-	m, err := svc.CreateMap(ctx, "园区图", bytes.NewReader(createTestPNG(10, 10)), "a.png")
+	m, err := svc.CreateMap(ctx, "园区图", bytes.NewReader(createTestPNG(t, 10, 10)), "a.png")
 	if err != nil {
 		t.Fatalf("CreateMap: %v", err)
 	}
