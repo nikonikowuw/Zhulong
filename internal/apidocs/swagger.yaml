@@ -1163,6 +1163,122 @@ definitions:
       trackId:
         type: integer
     type: object
+  spatial.BatchSavePositionsRequest:
+    properties:
+      positions:
+        items:
+          $ref: '#/definitions/spatial.CameraPositionItem'
+        type: array
+    type: object
+  spatial.CameraPositionInfo:
+    properties:
+      angle:
+        type: number
+      cameraId:
+        type: string
+      cameraName:
+        type: string
+      x:
+        type: number
+      "y":
+        type: number
+    type: object
+  spatial.CameraPositionItem:
+    properties:
+      angle:
+        minimum: 0
+        type: number
+      cameraId:
+        maxLength: 64
+        minLength: 1
+        type: string
+      x:
+        maximum: 1
+        minimum: 0
+        type: number
+      "y":
+        maximum: 1
+        minimum: 0
+        type: number
+    required:
+    - cameraId
+    type: object
+  spatial.CanvasMapResponse:
+    properties:
+      createdAt:
+        type: string
+      height:
+        type: integer
+      id:
+        type: string
+      imageUrl:
+        type: string
+      name:
+        type: string
+      updatedAt:
+        type: string
+      width:
+        type: integer
+    type: object
+  spatial.DeleteCanvasMapResponse:
+    properties:
+      id:
+        type: string
+    type: object
+  spatial.SaveCameraPositionsResponse:
+    properties:
+      count:
+        type: integer
+      mapId:
+        type: string
+    type: object
+  spatial.TrajectoryNodeInfo:
+    properties:
+      cameraId:
+        type: string
+      cameraName:
+        type: string
+      details:
+        type: string
+      dwellSec:
+        type: integer
+      firstSeenAt:
+        type: string
+      lastSeenAt:
+        type: string
+      score:
+        type: number
+      seq:
+        type: integer
+      snapshotPath:
+        type: string
+      x:
+        type: number
+      "y":
+        type: number
+    type: object
+  spatial.TrajectoryResponse:
+    properties:
+      mapId:
+        type: string
+      nodes:
+        items:
+          $ref: '#/definitions/spatial.TrajectoryNodeInfo'
+        type: array
+      targetKey:
+        type: string
+      targetType:
+        type: string
+    type: object
+  spatial.UpdateCanvasMapRequest:
+    properties:
+      name:
+        maxLength: 64
+        minLength: 1
+        type: string
+    required:
+    - name
+    type: object
   storage.CleanupSummary:
     properties:
       deletedFiles:
@@ -3403,6 +3519,341 @@ paths:
       summary: Get a single recognition record by ID
       tags:
       - records
+  /spatial/maps:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/spatial.CanvasMapResponse'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: List canvas maps
+      tags:
+      - spatial
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: Canvas map name
+        in: formData
+        name: name
+        required: true
+        type: string
+      - description: Base map image (png, jpg, webp or svg)
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/spatial.CanvasMapResponse'
+              type: object
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Upload a canvas map image
+      tags:
+      - spatial
+  /spatial/maps/{id}:
+    delete:
+      parameters:
+      - description: Canvas map ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/spatial.DeleteCanvasMapResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Delete a canvas map and its camera positions
+      tags:
+      - spatial
+    get:
+      parameters:
+      - description: Canvas map ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/spatial.CanvasMapResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get canvas map metadata
+      tags:
+      - spatial
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: Canvas map ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: New map name
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/spatial.UpdateCanvasMapRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/spatial.CanvasMapResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Rename a canvas map
+      tags:
+      - spatial
+  /spatial/maps/{id}/image:
+    get:
+      description: |-
+        Returns the stored image as-is. The response carries sandboxing headers because the
+        operator-supplied file may be an SVG, which can otherwise execute script on this origin.
+      parameters:
+      - description: Canvas map ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - image/png
+      - ' image/jpeg'
+      - ' image/webp'
+      - ' image/svg+xml'
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Serve the canvas map image bytes
+      tags:
+      - spatial
+  /spatial/maps/{id}/positions:
+    get:
+      parameters:
+      - description: Canvas map ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/spatial.CameraPositionInfo'
+                  type: array
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: List calibrated camera positions on a canvas map
+      tags:
+      - spatial
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Canvas map ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Positions to store; an empty array unbinds every camera
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/spatial.BatchSavePositionsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/spatial.SaveCameraPositionsResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Replace all camera positions on a canvas map
+      tags:
+      - spatial
+  /spatial/trajectory:
+    get:
+      parameters:
+      - description: Canvas map ID
+        in: query
+        name: mapId
+        required: true
+        type: string
+      - description: Target type
+        enum:
+        - vehicle
+        - person
+        in: query
+        name: targetType
+        required: true
+        type: string
+      - description: Vehicle plate (required when targetType=vehicle)
+        in: query
+        name: plate
+        type: string
+      - description: Person ID or external person key (required when targetType=person)
+        in: query
+        name: personId
+        type: string
+      - description: Range start, RFC3339
+        in: query
+        name: startTime
+        required: true
+        type: string
+      - description: Range end, RFC3339
+        in: query
+        name: endTime
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/spatial.TrajectoryResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Query a cross-camera spatio-temporal trajectory
+      tags:
+      - spatial
   /system/network/confirm:
     post:
       consumes:

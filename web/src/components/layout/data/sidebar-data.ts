@@ -12,6 +12,7 @@ import {
   Cpu,
   Images,
   Workflow,
+  Map,
 } from 'lucide-react'
 import { ZhulongLogo } from '@/assets/zhulong-logo'
 import { type SidebarData } from '../types'
@@ -43,6 +44,11 @@ export const sidebarData: SidebarData = {
           title: 'Records',
           url: '/records',
           icon: Images,
+        },
+        {
+          title: 'E-Map',
+          url: '/spatial',
+          icon: Map,
         },
         {
           title: 'Cameras',

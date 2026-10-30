@@ -16,7 +16,11 @@ export default defineConfig({
     tailwindcss(),
   ],
   optimizeDeps: {
-    include: ['@radix-ui/react-avatar'],
+    include: [
+      '@radix-ui/react-avatar',
+      '@radix-ui/react-tabs',
+      '@radix-ui/react-slider',
+    ],
   },
   resolve: {
     alias: {

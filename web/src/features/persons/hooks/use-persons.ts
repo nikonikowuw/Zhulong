@@ -168,3 +168,40 @@ export function useSetPrimaryFace() {
     },
   })
 }
+
+/** 后端分页硬上限（`httputil.MaxPageSize`）。 */
+const PERSONS_FETCH_PAGE_SIZE = 100
+
+/**
+ * 获取全量人员列表（内部按分页上限逐页拉全）。
+ *
+ * 人员选择器需要的是完整候选集：直接传 `pageSize: 100` 会在超过上限时静默
+ * 丢掉其余人员，且与后端 `MaxPageSize` 一改就悄悄失真。
+ */
+export function useAllPersons(): UseQueryResult<PersonListResponse, Error> {
+  return useQuery({
+    queryKey: [...PERSONS_QUERY_KEY, 'all'],
+    queryFn: async () => {
+      const first = await personsApi.getPersons({
+        page: 1,
+        pageSize: PERSONS_FETCH_PAGE_SIZE,
+      })
+      if (first.items.length >= first.total) {
+        return first
+      }
+
+      const items = [...first.items]
+      const pageCount = Math.ceil(first.total / PERSONS_FETCH_PAGE_SIZE)
+      for (let page = 2; page <= pageCount; page += 1) {
+        const next = await personsApi.getPersons({
+          page,
+          pageSize: PERSONS_FETCH_PAGE_SIZE,
+        })
+        items.push(...next.items)
+      }
+
+      return { ...first, items, total: first.total }
+    },
+    staleTime: 60_000,
+  })
+}

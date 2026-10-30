@@ -93,6 +93,11 @@ type recordLifecycle interface {
 	Stop(context.Context) error
 }
 
+type spatialLifecycle interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
+
 // snapshotLifecycle 管理抓拍写盘 worker 的起停。
 //
 // ⚠️ 必须在 record 之前启动、在 record 之后停止：record 的 Stop 之后不再有新的
@@ -117,6 +122,7 @@ type lifecycleRuntime struct {
 	person      personLifecycle
 	record      recordLifecycle
 	snapshot    snapshotLifecycle
+	spatial     spatialLifecycle
 	configCache regionConfigReloader
 	server      *http.Server
 	logger      *zap.Logger
@@ -145,6 +151,7 @@ type lifecycleRuntime struct {
 	personReady         bool
 	recordReady         bool
 	snapshotReady       bool
+	spatialReady        bool
 	httpReady           bool
 	loggerSynced        bool
 	startAttempted      bool
@@ -170,6 +177,7 @@ type runtimeParams struct {
 	Person      personLifecycle      `optional:"true"`
 	Record      recordLifecycle      `optional:"true"`
 	Snapshot    snapshotLifecycle    `optional:"true"`
+	Spatial     spatialLifecycle     `optional:"true"`
 	ConfigCache regionConfigReloader `optional:"true"`
 	Server      *http.Server
 	Logger      *zap.Logger
@@ -198,6 +206,7 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		person:      p.Person,
 		record:      p.Record,
 		snapshot:    p.Snapshot,
+		spatial:     p.Spatial,
 		configCache: p.ConfigCache,
 		server:      p.Server,
 		logger:      p.Logger,
@@ -286,6 +295,15 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 			r.degradedStart("person", err)
 		}
 		r.personReady = true
+	}
+
+	// 底图目录的创建属于 spatial 的启动职责（构造函数保持纯粹）。失败降级而不是
+	// 阻断：控制台仍要能起来，上传与读图会各自返回 5xx 而不是整机不可用。
+	if r.spatial != nil {
+		if err := r.spatial.Start(ctx); err != nil {
+			r.degradedStart("spatial", err)
+		}
+		r.spatialReady = true
 	}
 
 	// 抓拍 worker 必须先于 record 启动：record 在 Start 之后就可能开始接收 AI 结果
@@ -418,6 +436,7 @@ func (r *lifecycleRuntime) stopSequence() []func(context.Context) error {
 		r.closeCamera,
 		r.closeAlgorithm,
 		r.closePerson,
+		r.closeSpatial,
 		r.closeRecordAndSnapshot,
 		r.closeStorage,
 		r.closeSystemTime,
@@ -610,6 +629,19 @@ func (r *lifecycleRuntime) closeAlgorithm(ctx context.Context) error {
 	if r.algorithm != nil {
 		if err := r.algorithm.Stop(ctx); err != nil {
 			return fmt.Errorf("stop algorithm service: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *lifecycleRuntime) closeSpatial(ctx context.Context) error {
+	if !r.spatialReady {
+		return nil
+	}
+	r.spatialReady = false
+	if r.spatial != nil {
+		if err := r.spatial.Stop(ctx); err != nil {
+			return fmt.Errorf("stop spatial service: %w", err)
 		}
 	}
 	return nil

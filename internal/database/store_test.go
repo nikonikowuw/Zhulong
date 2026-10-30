@@ -1678,3 +1678,110 @@ func TestGB28181MigrationUpAndDownSymmetry(t *testing.T) {
 		}
 	}
 }
+
+// TestSpatialCanvasTablesMigrationUpAndDownSymmetry pins migration 22:
+// canvas_maps and camera_canvas_positions tables must appear, enforce constraints,
+// and disappear cleanly on rollback.
+func TestSpatialCanvasTablesMigrationUpAndDownSymmetry(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "migration_symmetry_spatial.db")
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create iofs driver: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// Apply all migrations
+	if err := migrator.Up(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrator Up(): %v", err)
+	}
+
+	tableExists := func(name string) bool {
+		var count int
+		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&count); err != nil {
+			t.Fatalf("query sqlite_master for %s: %v", name, err)
+		}
+		return count > 0
+	}
+
+	for _, table := range []string{"canvas_maps", "camera_canvas_positions"} {
+		if !tableExists(table) {
+			t.Fatalf("expected table %s to exist after Up", table)
+		}
+	}
+
+	// Insert camera and map to test foreign keys and constraints
+	if _, err := db.Exec(`INSERT INTO cameras (id, name, enabled) VALUES ('cam-1', '测试相机', 1)`); err != nil {
+		t.Fatalf("insert camera: %v", err)
+	}
+	insertMap := `INSERT INTO canvas_maps (id, name, image_path, width, height)
+		VALUES ('map-1', '主底图', 'maps/map1.png', 1920, 1080)`
+	if _, err := db.Exec(insertMap); err != nil {
+		t.Fatalf("insert map: %v", err)
+	}
+	insertPos := `INSERT INTO camera_canvas_positions (camera_id, map_id, x, y, angle)
+		VALUES ('cam-1', 'map-1', 0.5, 0.5, 90.0)`
+	if _, err := db.Exec(insertPos); err != nil {
+		t.Fatalf("insert position: %v", err)
+	}
+
+	// Constraints check: x, y in [0.0, 1.0], angle in [0.0, 360.0]
+	posOverflowX := `INSERT INTO camera_canvas_positions (camera_id, map_id, x, y, angle)
+		VALUES ('cam-1', 'map-1', 1.5, 0.5, 90.0)`
+	if _, err := db.Exec(posOverflowX); err == nil {
+		t.Error("expected x > 1.0 to be rejected by CHECK constraint")
+	}
+	posUnderflowY := `INSERT INTO camera_canvas_positions (camera_id, map_id, x, y, angle)
+		VALUES ('cam-1', 'map-1', 0.5, -0.1, 90.0)`
+	if _, err := db.Exec(posUnderflowY); err == nil {
+		t.Error("expected y < 0.0 to be rejected by CHECK constraint")
+	}
+
+	// Cascade delete check: deleting map cascades positions
+	if _, err := db.Exec(`DELETE FROM canvas_maps WHERE id = 'map-1'`); err != nil {
+		t.Fatalf("delete map: %v", err)
+	}
+	var posCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM camera_canvas_positions WHERE map_id = 'map-1'").Scan(&posCount); err != nil {
+		t.Fatalf("count positions: %v", err)
+	}
+	if posCount != 0 {
+		t.Errorf("expected positions to cascade with map, got %d rows", posCount)
+	}
+
+	// Rollback must remove both tables
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator Steps(-1): %v", err)
+	}
+	for _, table := range []string{"camera_canvas_positions", "canvas_maps"} {
+		if tableExists(table) {
+			t.Fatalf("expected table %s to be dropped after Down", table)
+		}
+	}
+
+	// Re-Up
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator Steps(1): %v", err)
+	}
+	for _, table := range []string{"canvas_maps", "camera_canvas_positions"} {
+		if !tableExists(table) {
+			t.Fatalf("expected table %s after re-Up", table)
+		}
+	}
+}

@@ -19,6 +19,7 @@ import { Route as errors401RouteImport } from './routes/(errors)/401'
 import { Route as authSignInRouteImport } from './routes/(auth)/sign-in'
 import { Route as AuthenticatedSettingsRouteRouteImport } from './routes/_authenticated/settings/route'
 import { Route as AuthenticatedTasksIndexRouteImport } from './routes/_authenticated/tasks/index'
+import { Route as AuthenticatedSpatialIndexRouteImport } from './routes/_authenticated/spatial/index'
 import { Route as AuthenticatedSettingsIndexRouteImport } from './routes/_authenticated/settings/index'
 import { Route as AuthenticatedRecordsIndexRouteImport } from './routes/_authenticated/records/index'
 import { Route as AuthenticatedPersonsIndexRouteImport } from './routes/_authenticated/persons/index'
@@ -83,6 +84,12 @@ const AuthenticatedTasksIndexRoute = AuthenticatedTasksIndexRouteImport.update({
   path: '/tasks/',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedSpatialIndexRoute =
+  AuthenticatedSpatialIndexRouteImport.update({
+    id: '/spatial/',
+    path: '/spatial/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedSettingsIndexRoute =
   AuthenticatedSettingsIndexRouteImport.update({
     id: '/',
@@ -182,6 +189,7 @@ export interface FileRoutesByFullPath {
   '/persons/': typeof AuthenticatedPersonsIndexRoute
   '/records/': typeof AuthenticatedRecordsIndexRoute
   '/settings/': typeof AuthenticatedSettingsIndexRoute
+  '/spatial/': typeof AuthenticatedSpatialIndexRoute
   '/tasks/': typeof AuthenticatedTasksIndexRoute
 }
 export interface FileRoutesByTo {
@@ -205,6 +213,7 @@ export interface FileRoutesByTo {
   '/persons': typeof AuthenticatedPersonsIndexRoute
   '/records': typeof AuthenticatedRecordsIndexRoute
   '/settings': typeof AuthenticatedSettingsIndexRoute
+  '/spatial': typeof AuthenticatedSpatialIndexRoute
   '/tasks': typeof AuthenticatedTasksIndexRoute
 }
 export interface FileRoutesById {
@@ -231,6 +240,7 @@ export interface FileRoutesById {
   '/_authenticated/persons/': typeof AuthenticatedPersonsIndexRoute
   '/_authenticated/records/': typeof AuthenticatedRecordsIndexRoute
   '/_authenticated/settings/': typeof AuthenticatedSettingsIndexRoute
+  '/_authenticated/spatial/': typeof AuthenticatedSpatialIndexRoute
   '/_authenticated/tasks/': typeof AuthenticatedTasksIndexRoute
 }
 export interface FileRouteTypes {
@@ -257,6 +267,7 @@ export interface FileRouteTypes {
     | '/persons/'
     | '/records/'
     | '/settings/'
+    | '/spatial/'
     | '/tasks/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -280,6 +291,7 @@ export interface FileRouteTypes {
     | '/persons'
     | '/records'
     | '/settings'
+    | '/spatial'
     | '/tasks'
   id:
     | '__root__'
@@ -305,6 +317,7 @@ export interface FileRouteTypes {
     | '/_authenticated/persons/'
     | '/_authenticated/records/'
     | '/_authenticated/settings/'
+    | '/_authenticated/spatial/'
     | '/_authenticated/tasks/'
   fileRoutesById: FileRoutesById
 }
@@ -388,6 +401,13 @@ declare module '@tanstack/react-router' {
       path: '/tasks'
       fullPath: '/tasks/'
       preLoaderRoute: typeof AuthenticatedTasksIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/spatial/': {
+      id: '/_authenticated/spatial/'
+      path: '/spatial'
+      fullPath: '/spatial/'
+      preLoaderRoute: typeof AuthenticatedSpatialIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/settings/': {
@@ -518,6 +538,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedLiveIndexRoute: typeof AuthenticatedLiveIndexRoute
   AuthenticatedPersonsIndexRoute: typeof AuthenticatedPersonsIndexRoute
   AuthenticatedRecordsIndexRoute: typeof AuthenticatedRecordsIndexRoute
+  AuthenticatedSpatialIndexRoute: typeof AuthenticatedSpatialIndexRoute
   AuthenticatedTasksIndexRoute: typeof AuthenticatedTasksIndexRoute
 }
 
@@ -531,6 +552,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedLiveIndexRoute: AuthenticatedLiveIndexRoute,
   AuthenticatedPersonsIndexRoute: AuthenticatedPersonsIndexRoute,
   AuthenticatedRecordsIndexRoute: AuthenticatedRecordsIndexRoute,
+  AuthenticatedSpatialIndexRoute: AuthenticatedSpatialIndexRoute,
   AuthenticatedTasksIndexRoute: AuthenticatedTasksIndexRoute,
 }
 

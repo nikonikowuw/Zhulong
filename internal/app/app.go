@@ -23,6 +23,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/network"
 	"github.com/nikonikowuw/Zhulong/internal/person"
 	"github.com/nikonikowuw/Zhulong/internal/record"
+	"github.com/nikonikowuw/Zhulong/internal/spatial"
 	"github.com/nikonikowuw/Zhulong/internal/storage"
 	"github.com/nikonikowuw/Zhulong/internal/systemtime"
 	"github.com/nikonikowuw/Zhulong/internal/task"
@@ -666,6 +667,37 @@ var recordModule = fx.Module("record",
 	fx.Provide(provideRecord),
 )
 
+// --- Spatial Module ---
+
+// spatialOut exposes only what the runtime and router actually consume: the
+// domain has no server-side consumers of its store/service/handler beyond this
+// module, and unused Fx providers are dead weight in the graph.
+type spatialOut struct {
+	fx.Out
+
+	Lifecycle       spatialLifecycle
+	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+	UploadRoutes    RouteRegistrar `group:"upload_routes"`
+}
+
+func provideSpatial(
+	dbProvider database.DBProvider,
+	config Config,
+	logger *zap.Logger,
+) spatialOut {
+	mapsDir := filepath.Join(config.DataDir, "maps")
+	comps := spatial.NewSpatialComponents(dbProvider, mapsDir, logger)
+	return spatialOut{
+		Lifecycle:       comps.Lifecycle,
+		ProtectedRoutes: comps.ProtectedRoutes,
+		UploadRoutes:    comps.UploadRoutes,
+	}
+}
+
+var spatialModule = fx.Module("spatial",
+	fx.Provide(provideSpatial),
+)
+
 // --- HTTP Module ---
 
 var httpModule = fx.Module("http",
@@ -715,6 +747,7 @@ var Module = fx.Options(
 	personModule,
 	clientLogModule,
 	recordModule,
+	spatialModule,
 	httpModule,
 	runtimeModule,
 )

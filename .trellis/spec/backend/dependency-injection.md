@@ -18,8 +18,8 @@
 
 | 阶段 | 当前顺序 |
 | --- | --- |
-| **启动 (`lifecycleRuntime.Start`)** | 日志输出准备 ➔ 数据库打开与迁移（失败阻断）➔ 区域配置缓存重载（失败仅告警）➔ Audit ➔ Network ➔ SystemTime ➔ Storage ➔ Person ➔ Snapshot worker ➔ Record ➔ native 日志队列与回调注册 ➔ Native Engine ➔ Camera 密钥初始化与健康调度器 ➔ Algorithm ➔ TCP listener 与 HTTP Serve。Network、SystemTime、Storage、Person、Record、Algorithm 的启动错误当前记录告警后继续；Native、日志回调、Camera 初始化和 listener 等关键步骤失败会回滚已启动资源。
-| **停止 (`lifecycleRuntime.Stop`)** | HTTP 优雅关闭并等待 Serve ➔ Camera ➔ Algorithm ➔ Person ➔ Record ➔ Snapshot worker 排空并停止 ➔ Storage ➔ SystemTime ➔ Network ➔ Audit ➔ Native Engine / 日志回调 ➔ SQLite ➔ 同步并关闭日志资源。
+| **启动 (`lifecycleRuntime.Start`)** | 日志输出准备 ➔ 数据库打开与迁移（失败阻断）➔ 区域配置缓存重载（失败仅告警）➔ Audit ➔ Network ➔ SystemTime ➔ Storage ➔ Person ➔ Spatial（创建底图目录）➔ Snapshot worker ➔ Record ➔ native 日志队列与回调注册 ➔ Native Engine ➔ Camera 密钥初始化与健康调度器 ➔ Algorithm ➔ TCP listener 与 HTTP Serve。Network、SystemTime、Storage、Person、Spatial、Record、Algorithm 的启动错误当前记录告警后继续；Native、日志回调、Camera 初始化和 listener 等关键步骤失败会回滚已启动资源。
+| **停止 (`lifecycleRuntime.Stop`)** | HTTP 优雅关闭并等待 Serve ➔ Camera ➔ Algorithm ➔ Person ➔ Spatial ➔ Record ➔ Snapshot worker 排空并停止 ➔ Storage ➔ SystemTime ➔ Network ➔ Audit ➔ Native Engine / 日志回调 ➔ SQLite ➔ 同步并关闭日志资源。
 
 ⚠️ **停机顺序只有一份**：`Stop` 与 `Start` 失败回滚都遍历 `lifecycleRuntime.stopSequence()` 返回的同一个函数切片。两者曾经是两份手写清单，一次 listen 失败会把 `algorithm` 排在 `camera` 之前释放，而正常停机的顺序正好相反。新增或调整阶段时**只改 `stopSequence()`**，`internal/app/runtime_test.go` 的 `TestStartupRollbackSharesShutdownOrder` 会比对两条路径的事件轨迹是否一致。
 
@@ -29,6 +29,8 @@
 - `camera.Stop` 先于 `algorithm.Stop`：`camera.Stop` 会释放最后一个 AI 消费者，native 侧随之 `broker->stop()`；runner 的 `recv` 立刻拿到 EOF/POLLHUP，走 `broker_disconnected` 分支自行干净退出（`native/src/algorithm/runner/runner.cpp` 的退出门禁），随后的 `StopAll` 只是收尸。反向顺序也能跑通（先 SIGTERM 再拆流），但把 runner 推到信号退出路径上：每个进程最多等 3s 才强杀。这是本仓库选定的约定，由 `TestAIShutdownOrderPrecedesNativeClose` 固化；它**不是**“生产者必须先死”的一般律——runner 先停同样不会碰 native 内存。
 - `algorithm.Stop` 先于 `native.Close`：runner 作为 broker 客户端必须先消失，才能销毁 broker 宿主。
 - `record.Stop` 先于 Snapshot worker 停止，Snapshot worker 必须在 Storage 与 Native 仍可用时排空。
+- `spatial.Start` 负责创建 `<data-dir>/maps`，**构造函数不碰文件系统**；因此底图目录只能在 Start 之后才存在，
+  上传与读图都假定它已经就绪。
 
 不得仅凭 Fx 注册顺序推断这些依赖。
 

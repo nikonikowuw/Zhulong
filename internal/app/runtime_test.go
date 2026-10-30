@@ -221,6 +221,22 @@ func (p personLifecycleStub) Stop(context.Context) error {
 	return nil
 }
 
+// spatialLifecycleStub records spatial-domain start/stop: the maps directory is
+// created there rather than in a constructor, so both lifecycle paths must reach it.
+type spatialLifecycleStub struct {
+	events *eventLog
+}
+
+func (s spatialLifecycleStub) Start(context.Context) error {
+	s.events.add("spatial.start")
+	return nil
+}
+
+func (s spatialLifecycleStub) Stop(context.Context) error {
+	s.events.add("spatial.stop")
+	return nil
+}
+
 // TestAIShutdownOrderPrecedesNativeClose 守护跨层停机顺序：
 // camera（AI 消费者与 StreamHub）→ algorithm（runner 子进程）→ native（broker 宿主）。
 // 该顺序是「broker 先于 native 停止」的载体（见 dependency-injection.md §2 与 design.md §3.1）：
@@ -293,6 +309,7 @@ func TestStartupRollbackSharesShutdownOrder(t *testing.T) {
 			person:         personLifecycleStub{events: events},
 			record:         &recordContextStub{events: events},
 			snapshot:       snapshotLifecycleStub{events: events},
+			spatial:        spatialLifecycleStub{events: events},
 			logger:         zap.NewNop(),
 			databaseReady:  true,
 			nativeReady:    true,
@@ -303,6 +320,7 @@ func TestStartupRollbackSharesShutdownOrder(t *testing.T) {
 			personReady:    true,
 			recordReady:    true,
 			snapshotReady:  true,
+			spatialReady:   true,
 		}
 	}
 

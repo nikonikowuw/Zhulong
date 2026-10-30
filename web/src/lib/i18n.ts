@@ -37,6 +37,9 @@ import storageZhHant from '@/features/settings/storage/locales/zh-Hant.json'
 import timeEn from '@/features/settings/time/locales/en.json'
 import timeZhHans from '@/features/settings/time/locales/zh-Hans.json'
 import timeZhHant from '@/features/settings/time/locales/zh-Hant.json'
+import spatialEn from '@/features/spatial/locales/en.json'
+import spatialZhHans from '@/features/spatial/locales/zh-Hans.json'
+import spatialZhHant from '@/features/spatial/locales/zh-Hant.json'
 import tasksEn from '@/features/tasks/locales/en.json'
 import tasksZhHans from '@/features/tasks/locales/zh-Hans.json'
 import tasksZhHant from '@/features/tasks/locales/zh-Hant.json'
@@ -59,6 +62,7 @@ export const resources = {
     records: recordsZhHans,
     algorithms: algorithmsZhHans,
     tasks: tasksZhHans,
+    spatial: spatialZhHans,
   },
   'zh-Hant': {
     common: commonZhHant,
@@ -74,6 +78,7 @@ export const resources = {
     records: recordsZhHant,
     algorithms: algorithmsZhHant,
     tasks: tasksZhHant,
+    spatial: spatialZhHant,
   },
   en: {
     common: commonEn,
@@ -89,6 +94,7 @@ export const resources = {
     records: recordsEn,
     algorithms: algorithmsEn,
     tasks: tasksEn,
+    spatial: spatialEn,
   },
 } as const
 
