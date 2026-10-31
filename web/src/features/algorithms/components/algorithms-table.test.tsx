@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { CATEGORY_BADGE_CLASS, type CategoryHue } from '@/lib/category-palette'
 import { type Algorithm, type AlgorithmTaskType } from '../data/schema'
+import { AlgorithmsDialogs } from './algorithms-dialogs'
 import { AlgorithmsProvider } from './algorithms-provider'
 import { AlgorithmsTable } from './algorithms-table'
 
@@ -36,6 +37,14 @@ vi.mock('../hooks/use-algorithms', () => ({
     isPending: false,
   }),
   useResetAlgorithm: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+  useTrialAlgorithm: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+  useInstallAlgorithm: () => ({
     mutate: vi.fn(),
     isPending: false,
   }),
@@ -226,4 +235,40 @@ describe('AlgorithmsTable', () => {
       expect(badge.className).not.toMatch(/(bg|border|text)-(zinc|slate|gray)-/)
     }
   )
+
+  it('opens detail sheet when clicking on a table row', async () => {
+    const algos = [
+      makeAlgorithm({
+        id: 'face_recognition',
+        name: '人脸识别算法',
+        manifestJson: JSON.stringify({
+          id: 'face_recognition',
+          labels: ['face'],
+        }),
+      }),
+    ]
+
+    const { getByRole } = await render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AlgorithmsProvider>
+          <AlgorithmsTable
+            data={algos}
+            isLoading={false}
+            isError={false}
+            onRetry={vi.fn()}
+            search={{}}
+            navigate={vi.fn()}
+          />
+          <AlgorithmsDialogs />
+        </AlgorithmsProvider>
+      </QueryClientProvider>
+    )
+
+    const row = getByRole('row', { name: /face_recognition/i })
+    await row.click()
+
+    await expect
+      .element(getByRole('heading', { name: '人脸识别算法' }))
+      .toBeInTheDocument()
+  })
 })

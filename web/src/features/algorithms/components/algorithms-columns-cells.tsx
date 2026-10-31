@@ -16,6 +16,7 @@ import {
   useDisableAlgorithm,
 } from '../hooks/use-algorithms'
 import { AlgorithmStatusBadge } from './algorithm-status-badge'
+import { useAlgorithmsContext } from './algorithms-provider'
 
 export function AlgorithmColumnHeader({
   column,
@@ -41,6 +42,40 @@ const TASK_TYPE_BADGE: Record<
   classification: { labelKey: 'taskClassification', hue: 'violet' },
   person_structure: { labelKey: 'taskPersonStructure', hue: 'emerald' },
   vehicle_structure: { labelKey: 'taskVehicleStructure', hue: 'fuchsia' },
+}
+
+export function AlgorithmNameCell({ algo }: { algo: Algorithm }) {
+  const { setOpen, setCurrentRow } = useAlgorithmsContext()
+
+  const handleOpenDetail = () => {
+    setCurrentRow(algo)
+    setOpen('detail')
+  }
+
+  return (
+    <div className='flex flex-col items-start'>
+      <div className='flex items-center gap-1.5'>
+        <button
+          type='button'
+          onClick={handleOpenDetail}
+          className='cursor-pointer rounded-xs text-start text-sm font-semibold text-foreground hover:text-primary hover:underline focus:outline-none focus-visible:ring-1 focus-visible:ring-ring'
+        >
+          {algo.name}
+        </button>
+        <span className='font-mono text-xs text-muted-foreground'>
+          v{algo.version}
+        </span>
+      </div>
+      <span className='font-mono text-[11px] text-muted-foreground'>
+        {algo.id}
+      </span>
+      {algo.description && (
+        <span className='mt-0.5 line-clamp-1 text-xs text-muted-foreground/80'>
+          {algo.description}
+        </span>
+      )}
+    </div>
+  )
 }
 
 export function AlgorithmTaskTypeCell({

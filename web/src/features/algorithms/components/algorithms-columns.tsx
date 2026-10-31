@@ -4,6 +4,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { type Algorithm, type AlgorithmStatus } from '../data/schema'
 import {
   AlgorithmColumnHeader,
+  AlgorithmNameCell,
   AlgorithmPlatformCell,
   AlgorithmResourcesCell,
   AlgorithmStatusCell,
@@ -50,29 +51,7 @@ export const algorithmsColumns: ColumnDef<Algorithm>[] = [
         defaultTitle='算法名称与标识'
       />
     ),
-    cell: ({ row }) => {
-      const algo = row.original
-      return (
-        <div className='flex flex-col'>
-          <div className='flex items-center gap-1.5'>
-            <span className='text-sm font-semibold text-foreground'>
-              {algo.name}
-            </span>
-            <span className='font-mono text-xs text-muted-foreground'>
-              v{algo.version}
-            </span>
-          </div>
-          <span className='font-mono text-[11px] text-muted-foreground'>
-            {algo.id}
-          </span>
-          {algo.description && (
-            <span className='mt-0.5 line-clamp-1 text-xs text-muted-foreground/80'>
-              {algo.description}
-            </span>
-          )}
-        </div>
-      )
-    },
+    cell: ({ row }) => <AlgorithmNameCell algo={row.original} />,
     enableHiding: false,
   },
   {

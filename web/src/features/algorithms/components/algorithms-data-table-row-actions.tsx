@@ -1,5 +1,11 @@
 import { type Row } from '@tanstack/react-table'
-import { FlaskConical, MoreHorizontal, RotateCcw, Trash2 } from 'lucide-react'
+import {
+  FileText,
+  FlaskConical,
+  MoreHorizontal,
+  RotateCcw,
+  Trash2,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import {
@@ -30,6 +36,11 @@ export function AlgorithmsDataTableRowActions({
   const handleTrial = () => {
     setCurrentRow(algo)
     setOpen('trial')
+  }
+
+  const handleDetail = () => {
+    setCurrentRow(algo)
+    setOpen('detail')
   }
 
   const handleReset = () => {
@@ -68,6 +79,12 @@ export function AlgorithmsDataTableRowActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align='end' className='w-40'>
+          <DropdownMenuItem onClick={handleDetail}>
+            <FileText className='me-2 size-4' />
+            {t('viewDetails', '查看详情')}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+
           {isCrashLoop && (
             <>
               <DropdownMenuItem onClick={handleReset}>

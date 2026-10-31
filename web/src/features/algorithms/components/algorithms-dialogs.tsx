@@ -1,4 +1,5 @@
 import { AlgorithmDeleteDialog } from './algorithm-delete-dialog'
+import { AlgorithmDetailSheet } from './algorithm-detail-sheet'
 import { AlgorithmResetDialog } from './algorithm-reset-dialog'
 import { AlgorithmTrialDialog } from './algorithm-trial-dialog'
 import { AlgorithmUploadDialog } from './algorithm-upload-dialog'
@@ -9,6 +10,21 @@ export function AlgorithmsDialogs(): React.JSX.Element {
 
   return (
     <>
+      <AlgorithmDetailSheet
+        algorithm={currentRow}
+        open={open === 'detail'}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) {
+            setOpen(null)
+            setCurrentRow(null)
+          }
+        }}
+        onOpenTrial={(algo) => {
+          setCurrentRow(algo)
+          setOpen('trial')
+        }}
+      />
+
       <AlgorithmUploadDialog
         open={open === 'upload'}
         onOpenChange={(isOpen) => {

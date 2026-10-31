@@ -49,7 +49,7 @@ export function AlgorithmsTable({
   onOpenUpload,
 }: AlgorithmsTableProps): React.JSX.Element {
   const { t } = useTranslation('algorithms')
-  const { setOpen } = useAlgorithmsContext()
+  const { setOpen, setCurrentRow } = useAlgorithmsContext()
 
   const [rowSelection, setRowSelection] = useState({})
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
@@ -249,7 +249,19 @@ export function AlgorithmsTable({
                 <TableRow
                   key={row.original.id}
                   data-state={row.getIsSelected() && 'selected'}
-                  className='group'
+                  className='group cursor-pointer transition-colors hover:bg-muted/50'
+                  onClick={(e) => {
+                    const target = e.target as HTMLElement | null
+                    if (
+                      target?.closest(
+                        'button, input, [role="checkbox"], [role="switch"], a, [data-prevent-row-click]'
+                      )
+                    ) {
+                      return
+                    }
+                    setCurrentRow(row.original)
+                    setOpen('detail')
+                  }}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell
