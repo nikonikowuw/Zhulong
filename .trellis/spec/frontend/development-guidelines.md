@@ -247,3 +247,22 @@ export function CameraCreateForm({ onSubmit, isPending }: Props) {
    - 全局保留 `Ctrl+K`（或 `Cmd+K`）调起 `CommandMenu`，支持快速跳转至指定功能模块与摄像机频道。
 4. **设置子页面弹性视口适配 (`ContentSection`)**：
    - 设置分区组件默认保持 `lg:max-w-xl` 单栏表单排版，对于卡片矩阵（如多网卡看板、存储挂载看板）可显式指定 `className='max-w-5xl'` 展开为宽幅响应式网格。
+
+---
+
+## 5. 跨特性深链接与参数联动契约 (Cross-Feature Deep Linking)
+
+在工作台（如「以图搜图」）与具体业务模块（「抓拍记录」、「时空轨迹」、「人员底库」）之间进行跨路由跳转时，遵循以下深链接契约：
+
+1. **唯一业务标识传递**：
+   - 跨模块跳转人员对象时，统一传递内部人员 ID（`personId`），避免因同名或模糊名称导致目标定位失准。
+2. **目标路由的深链接消费规范**：
+   - **抓拍记录 (`/records`)**：
+     通过 Search 参数传入 `{ tab: 'recognitions', personId }`，确保进入页面时切换到「人脸比对」标签页且列表已自动按此人员过滤。
+   - **时空轨迹 (`/spatial`)**：
+     通过 Search 参数传入 `{ targetType: 'person', personId }`。当默认地图与人员底库缓存就绪后，页面必须自动以「今天」（`today`）为默认时间跨度发起一次轨迹检索，减少用户二次点击。
+   - **人员底库 (`/persons`)**：
+     通过 Search 参数传入 `{ personId }`。页面挂载后自动从后端获取该人员详情并弹出面容管理抽屉/弹窗（`faces` 弹窗）；用户关闭弹窗后，必须调用 `navigate` 清理该 URL 参数，防止用户刷新页面后反复自动弹窗。
+3. **参数清理与历史记录管理**：
+   - 驱动一次性弹窗打开的 Search 参数在弹窗关闭时必须通过 `navigate({ search: (prev) => ... })` 移除该参数，保持干净的分享 URL。
+

@@ -89,6 +89,39 @@ await vi.waitFor(() => {
 
 ⚠️ **不得用测试等待掩盖产品缺陷**：若某状态本可由 props 在 render 期间同步派生，却回传给了 `useEffect`，那应改渲染派生而非给测试加等待 —— 此时 `vi.waitFor` 才是掩盖问题。
 
+### 2.4 Vitest 浏览器模式下的路由 Mock 与端口竞争避坑指南
+
+真实无头浏览器模式（`vitest run --browser.headless` via Playwright）采用 iframe 承载测试组件与执行环境，具有跨文件共享 Vite Transform 缓存与端口编排机制的物理特性。
+
+#### 1. `@tanstack/react-router` Mock 的精准隔离
+- **必须使用 `importOriginal`**：严禁无脑覆盖所有导出的空对象；若只需 mock 单一能力（如 `useNavigate` 或特定 `getRouteApi`），必须解构 `actual` 原生实现。
+- **`getRouteApi` 必须基于 routeId 守卫**：若全局粗暴 mock `getRouteApi: () => ({ ... })`，会导致其他页面（如 `Records`、`Tasks`、`Cameras`）取到被污染的空 search 对象，引发不可预知的组件白屏或全量测试用例崩溃：
+  ```typescript
+  // ✅ 正确做法：只劫持当前测试涉及的路由，其余路径透传给真实实现
+  vi.mock('@tanstack/react-router', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+    return {
+      ...actual,
+      getRouteApi: (id: string) => {
+        if (id === '/_authenticated/spatial/') {
+          return {
+            useSearch: () => mockSearch,
+            useNavigate: () => vi.fn(),
+          }
+        }
+        return actual.getRouteApi(id as never)
+      },
+    }
+  })
+  ```
+- **Mock `<Link>` 组件时必须完整透传 `{...props}`**：
+  Radix UI 的 `asChild`（如 `<DropdownMenuItem asChild><Link to="..." /></DropdownMenuItem>`）依赖 `Slot` 机制将 `role="menuitem"`、`tabindex` 等无障碍属性注入子元素。若在测试中将 Link 简写为 `({ to, children }) => <a href={to}>{children}</a>` 而漏掉了 `{...props}`，会导致生成的 `<a>` 标签丢失 `menuitem` 角色，引发 `getByRole('menuitem')` 查找超时失败。
+
+#### 2. 测试编排端口竞争与 Linux Socket TIME-WAIT
+- Vitest Browser 默认使用 `127.0.0.1:63315`。当测试被异常终止、或在短时间内连续反复启动完整套件时，内核中的 TCP 连接会进入长达 30~60 秒的 `TIME-WAIT` 状态。
+- 若此时 Vitest 重新启动，无法复用 `63315` 端口，会输出 `Port 63315 is in use, trying another one...` 并动态绑定到 `63316`；此举极易导致部分先期加载的浏览器 iframe 跨域失效或断开连接（`Received URL: unknown due to CORS` / `Cannot connect to the iframe`）。
+- **排障路径**：当出现偶发 CORS 或连接中断时，运行 `ss -tan | grep 63315` 确认是否处于 `TIME-WAIT`；等待端口彻底释放或确保后台无残留 `vitest.mjs` 僵死进程后再重跑测试。
+
 ---
 
 ## 3. 严格类型约束与零 any 审计

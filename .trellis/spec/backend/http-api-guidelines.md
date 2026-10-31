@@ -192,3 +192,87 @@ apiClient.get('/audit/logs', {
 ### 7.2 Swagger 生成的 `--dir` 显式白名单
 
 `Makefile` 中 `make api-docs` 命令的 `--dir` 参数采用**显式目录白名单**。若新增了业务模块且包含 Swagger 注释端点，**必须同步在 `Makefile` 的 `api-docs` target 中追加该目录**；否则新端点不会被扫描，导致 Swagger 文档静默遗漏。
+
+---
+
+## 8. 以图搜图（人员底库 1:N 检索）契约 (Image-Based Face Search Contract)
+
+### 8.1 范围与触发 (Scope / Trigger)
+跨层人员底库图片相似度检索（1:N 查询）与多维业务（抓拍、时空轨迹、档案）联动。该端点涉及大尺寸图片上传、临时内存人脸检测与特征提取（512 维向量）、向量点积相似度计算，以及按人聚合最高相似度。
+
+### 8.2 签名与路由 (Signatures)
+- **HTTP 方法与路径**：`POST /api/v1/persons/search-by-image`
+- **路由分组**：`UploadRoutes`（要求 JWT 认证），限制最大请求体 `10 MiB`
+- **Go Handler 签名**：`func (h *Handler) SearchByImage(c *gin.Context)`
+- **Store 接口签名**：`ListSearchFaceItems(ctx context.Context) ([]SearchFaceItem, error)`
+- **Service 接口签名**：`SearchByImage(ctx context.Context, imgBytes []byte, threshold float32, topK int) ([]ImageSearchMatchInfo, error)`
+
+### 8.3 载荷契约 (Contracts)
+- **请求（`multipart/form-data`）**：
+  - `image`（file, 必填）：最大 10 MiB，单边最大 4096px，仅允许静态 JPEG / PNG / WebP（禁止 GIF/SVG/BMP）。
+  - `threshold`（float32, 可选）：相似度下限阈值，默认 `0.6`，有效范围 `[0.0, 1.0]`。
+  - `topK`（int, 可选）：返回人员匹配数量上限，默认 `10`，有效范围 `[1, 100]`。
+- **响应载荷（`ImageSearchResponse`，置于 `httputil.Response.data`）**：
+  ```json
+  {
+    "matches": [
+      {
+        "personId": "0194...",
+        "personExternalId": "EMP-001",
+        "personName": "张三",
+        "matchedFaceId": "0194...",
+        "similarity": 0.8854
+      }
+    ]
+  }
+  ```
+- **内存生命周期与隐私约束**：
+  - 查询图像字节流仅在单次请求内存中处理，**严禁持久化到磁盘或数据库**；
+  - 提取的 512 维特征向量即用即弃，**严禁写入日志或审计明细**；
+  - 审计动作 `person.search_by_image` 仅记录操作人、耗时、检索参数及命中人员数，禁止记录候选图像及人员完整列表。
+- **单人多面容聚合规则**：若同一人员在底库拥有多张面容模板，检索结果中该人员仅出现一次，其分值为该人所有模板中的最高分，且 `matchedFaceId` 必须严格指向产出该最高分的面容 ID。
+
+### 8.4 校验与错误矩阵 (Validation & Error Matrix)
+
+| 条件 | HTTP 状态码 | 业务 Code | 说明 |
+| --- | --- | --- | --- |
+| 上传文件缺失或表单字段名不为 `image` | 422 | `VALIDATION_FAILED` | 表单字段缺失 |
+| 文件大小超过 10 MiB | 413 | `FILE_TOO_LARGE` | 超过单文件上传体积上限 |
+| 非 JPEG/PNG/WebP 格式或尺寸超过 4096px | 400 | `UNSUPPORTED_IMAGE_FORMAT` | 图片无法解码或尺寸超限 |
+| 阈值或 Top-K 超出合法范围 | 422 | `VALIDATION_FAILED` | 参数校验不合法 |
+| 图片未检测到有效人脸 | 400 | `NO_FACE_DETECTED` | 无法提取人脸特征向量 |
+| 活动特征提取模型/算法未就绪或 IPC 异常 | 500 | `EXTRACTOR_ERROR` | 提取器崩溃或超时 |
+| 底库数据库查询失败 | 500 | `DATABASE_ERROR` | SQLite 底库读取异常 |
+
+### 8.5 典型案例 (Good / Base / Bad Cases)
+- **Good**：传入 2MB 静态 JPEG，人脸位于中央，底库存在对应员工；返回 HTTP 200，`matches` 按 `similarity` 降序排列，单人仅保留一个最高相似度匹配项。
+- **Base**：底库为空或所有人员相似度均低于 `threshold`；返回 HTTP 200，`matches: []`。
+- **Bad**：传入损坏图片或风景照；返回 HTTP 400 `NO_FACE_DETECTED`。
+
+### 8.6 必测断言点 (Tests Required)
+1. 校验同人多模版聚合：底库单人含多个模版（得分 0.85 与 0.92），断言仅返回 1 条结果，`similarity` 为 0.92，且 `matchedFaceId` 等于对应模版 ID。
+2. 过滤截断断言：低于 `threshold` 的匹配项被剔除，超出 `topK` 数量的尾部被丢弃。
+3. 向量异常值保护：向量长度不足 512 或含 `NaN`/`Inf` 时静默丢弃或报错，不导致服务 panic。
+
+### 8.7 错误 vs 正确对比 (Wrong vs Correct)
+#### Wrong
+```go
+// ❌ 错误：在客户端响应中暴露服务器内部文件路径，且对每个面容模板单独返回一条记录导致单人重复
+type WrongMatch struct {
+    PersonName string  `json:"personName"`
+    ImagePath  string  `json:"imagePath"` // 泄露磁盘私有路径
+    Similarity float32 `json:"similarity"`
+}
+```
+#### Correct
+```go
+// ✅ 正确：仅暴露人员外部/内部键与命中面容 ID；前端通过受保护端点按需获取预览；同人仅一条最高分
+type ImageSearchMatchInfo struct {
+    PersonID         string  `json:"personId"`
+    PersonExternalID string  `json:"personExternalId"`
+    PersonName       string  `json:"personName"`
+    MatchedFaceID    string  `json:"matchedFaceId"`
+    Similarity       float32 `json:"similarity"`
+}
+```
+
