@@ -20,6 +20,12 @@
     "search": "搜尋",
     "retry": "重試"
   },
+  "account": {
+    "fallbackName": "管理員",
+    "role": "系統管理員",
+    "signOut": "登出",
+    "signOutDescription": "確定要登出嗎？登出後需要重新登入才能繼續操作本機。"
+  },
   "nav": {
     "General": "常規",
     "Pages": "頁面",

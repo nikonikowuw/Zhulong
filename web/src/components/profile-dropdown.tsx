@@ -1,36 +1,34 @@
-import { Link } from '@tanstack/react-router'
-import { useAuthStore } from '@/stores/auth-store'
+import { useAccountIdentity } from '@/hooks/use-account-identity'
 import useDialogState from '@/hooks/use-dialog-state'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { AccountMenuItems } from '@/components/layout/account-menu-items'
 import { SignOutDialog } from '@/components/sign-out-dialog'
 
 export function ProfileDropdown() {
   const [open, setOpen] = useDialogState()
-  const { auth } = useAuthStore()
-
-  const displayName = auth.user?.username || 'Administrator'
-  const displayRole = auth.user ? '系统管理员' : 'admin@zhulong.local'
-  const fallback = displayName.slice(0, 2).toUpperCase()
+  const { displayName, displayRole, initials } = useAccountIdentity()
 
   return (
     <>
       <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
-          <Button variant='ghost' className='relative h-8 w-8 rounded-full'>
+          <Button
+            variant='ghost'
+            className='relative h-8 w-8 rounded-full'
+            aria-label={displayName}
+            title={displayName}
+          >
             <Avatar className='h-8 w-8'>
-              <AvatarImage src='/avatars/01.png' alt={displayName} />
-              <AvatarFallback>{fallback}</AvatarFallback>
+              <AvatarFallback className='bg-primary/10 text-xs font-semibold text-primary'>
+                {initials}
+              </AvatarFallback>
             </Avatar>
           </Button>
         </DropdownMenuTrigger>
@@ -43,22 +41,7 @@ export function ProfileDropdown() {
               </p>
             </div>
           </DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          <DropdownMenuGroup>
-            <DropdownMenuItem asChild>
-              <Link to='/settings/appearance'>
-                Settings
-                <DropdownMenuShortcut>⌘S</DropdownMenuShortcut>
-              </Link>
-            </DropdownMenuItem>
-          </DropdownMenuGroup>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem variant='destructive' onClick={() => setOpen(true)}>
-            Sign out
-            <DropdownMenuShortcut className='text-current'>
-              ⇧⌘Q
-            </DropdownMenuShortcut>
-          </DropdownMenuItem>
+          <AccountMenuItems onRequestSignOut={() => setOpen(true)} />
         </DropdownMenuContent>
       </DropdownMenu>
 

@@ -1,16 +1,12 @@
 import { type ReactElement } from 'react'
-import { Link } from '@tanstack/react-router'
-import { ChevronsUpDown, LogOut, Settings } from 'lucide-react'
-import { useAuthStore } from '@/stores/auth-store'
+import { ChevronsUpDown } from 'lucide-react'
+import { useAccountIdentity } from '@/hooks/use-account-identity'
 import useDialogState from '@/hooks/use-dialog-state'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
@@ -20,33 +16,25 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { SignOutDialog } from '@/components/sign-out-dialog'
-
-interface NavUserProps {
-  user: {
-    name: string
-    email: string
-    avatar: string
-  }
-}
+import { AccountMenuItems } from './account-menu-items'
 
 interface UserIdentityBlockProps {
-  avatar: string
   name: string
   role: string
-  fallback: string
+  initials: string
 }
 
 function UserIdentityBlock({
-  avatar,
   name,
   role,
-  fallback,
+  initials,
 }: UserIdentityBlockProps): ReactElement {
   return (
     <>
       <Avatar className='h-8 w-8 rounded-lg'>
-        <AvatarImage src={avatar} alt={name} />
-        <AvatarFallback className='rounded-lg'>{fallback}</AvatarFallback>
+        <AvatarFallback className='rounded-lg bg-primary/10 text-xs font-semibold text-primary'>
+          {initials}
+        </AvatarFallback>
       </Avatar>
       <div className='grid flex-1 text-start text-sm leading-tight'>
         <span className='truncate font-semibold'>{name}</span>
@@ -56,14 +44,10 @@ function UserIdentityBlock({
   )
 }
 
-export function NavUser({ user }: NavUserProps): ReactElement {
+export function NavUser(): ReactElement {
   const { isMobile } = useSidebar()
   const [open, setOpen] = useDialogState()
-  const { auth } = useAuthStore()
-
-  const displayName = auth.user?.username || user.name
-  const displayRole = auth.user ? '系统管理员' : user.email
-  const fallbackLetters = displayName.slice(0, 2).toUpperCase()
+  const { displayName, displayRole, initials } = useAccountIdentity()
 
   return (
     <>
@@ -76,10 +60,9 @@ export function NavUser({ user }: NavUserProps): ReactElement {
                 className='data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground'
               >
                 <UserIdentityBlock
-                  avatar={user.avatar}
                   name={displayName}
                   role={displayRole}
-                  fallback={fallbackLetters}
+                  initials={initials}
                 />
                 <ChevronsUpDown className='ms-auto size-4' />
               </SidebarMenuButton>
@@ -93,30 +76,13 @@ export function NavUser({ user }: NavUserProps): ReactElement {
               <DropdownMenuLabel className='p-0 font-normal'>
                 <div className='flex items-center gap-2 px-1 py-1.5 text-start text-sm'>
                   <UserIdentityBlock
-                    avatar={user.avatar}
                     name={displayName}
                     role={displayRole}
-                    fallback={fallbackLetters}
+                    initials={initials}
                   />
                 </div>
               </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuGroup>
-                <DropdownMenuItem asChild>
-                  <Link to='/settings/appearance'>
-                    <Settings className='me-2 size-4' />
-                    Settings
-                  </Link>
-                </DropdownMenuItem>
-              </DropdownMenuGroup>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant='destructive'
-                onClick={() => setOpen(true)}
-              >
-                <LogOut />
-                Sign out
-              </DropdownMenuItem>
+              <AccountMenuItems onRequestSignOut={() => setOpen(true)} />
             </DropdownMenuContent>
           </DropdownMenu>
         </SidebarMenuItem>

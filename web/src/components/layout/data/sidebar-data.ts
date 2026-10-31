@@ -18,11 +18,6 @@ import { ZhulongLogo } from '@/assets/zhulong-logo'
 import { type SidebarData } from '../types'
 
 export const sidebarData: SidebarData = {
-  user: {
-    name: 'Administrator',
-    email: 'admin@zhulong.local',
-    avatar: '',
-  },
   teams: [
     {
       name: 'Zhulong Edge',

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
+import i18n from '@/lib/i18n'
 import { SignOutDialog } from './sign-out-dialog'
 
 const navigate = vi.fn()
@@ -33,7 +34,9 @@ describe('SignOutDialog', () => {
       <SignOutDialog open onOpenChange={vi.fn()} />
     )
 
-    await userEvent.click(getByRole('button', { name: /^Sign out$/i }))
+    await userEvent.click(
+      getByRole('button', { name: i18n.t('account.signOut') })
+    )
 
     expect(reset).toHaveBeenCalledOnce()
     expect(navigate).toHaveBeenCalledWith({
@@ -48,7 +51,9 @@ describe('SignOutDialog', () => {
       <SignOutDialog open onOpenChange={vi.fn()} />
     )
 
-    await userEvent.click(getByRole('button', { name: /^Cancel$/i }))
+    await userEvent.click(
+      getByRole('button', { name: i18n.t('actions.cancel') })
+    )
 
     expect(reset).not.toHaveBeenCalled()
     expect(navigate).not.toHaveBeenCalled()

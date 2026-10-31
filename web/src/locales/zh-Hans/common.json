@@ -20,6 +20,12 @@
     "search": "搜索",
     "retry": "重试"
   },
+  "account": {
+    "fallbackName": "管理员",
+    "role": "系统管理员",
+    "signOut": "退出登录",
+    "signOutDescription": "确定要退出登录吗？退出后需要重新登录才能继续操作本机。"
+  },
   "nav": {
     "General": "常规",
     "Pages": "页面",

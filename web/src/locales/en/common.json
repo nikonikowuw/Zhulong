@@ -20,6 +20,12 @@
     "search": "Search",
     "retry": "Retry"
   },
+  "account": {
+    "fallbackName": "Administrator",
+    "role": "System Administrator",
+    "signOut": "Sign out",
+    "signOutDescription": "Are you sure you want to sign out? You will need to sign in again to access this host."
+  },
   "nav": {
     "General": "General",
     "Pages": "Pages",
