@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { CarFront, Loader2, RotateCcw, Search, User } from 'lucide-react'
@@ -27,6 +27,7 @@ import {
   type TrajectoryQueryParams,
   type TrajectorySearchFormValues,
 } from '../../data/schema'
+import { resolveTimeRange } from '../../utils/format'
 
 interface TrajectorySearchToolbarProps {
   mapId: string | null
@@ -35,42 +36,8 @@ interface TrajectorySearchToolbarProps {
   onSearch: (params: TrajectoryQueryParams) => void
   onClear: () => void
   disabled?: boolean
-}
-
-/** 时间预设 → 绝对区间（浏览器本地时区，发送前统一转 UTC RFC3339）。 */
-function resolveTimeRange(preset: TimeRangePreset): {
-  startTime: string
-  endTime: string
-} {
-  const now = new Date()
-  let start = new Date()
-
-  switch (preset) {
-    case '1h':
-      start = new Date(now.getTime() - 60 * 60 * 1000)
-      break
-    case 'today':
-      start = new Date(
-        now.getFullYear(),
-        now.getMonth(),
-        now.getDate(),
-        0,
-        0,
-        0
-      )
-      break
-    case '24h':
-      start = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-      break
-    case '7d':
-      start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-      break
-  }
-
-  return {
-    startTime: start.toISOString(),
-    endTime: now.toISOString(),
-  }
+  initialTargetType?: 'vehicle' | 'person'
+  initialPersonId?: string
 }
 
 const TIME_PRESET_LABEL_KEY: Record<TimeRangePreset, string> = {
@@ -89,6 +56,8 @@ export function TrajectorySearchToolbar({
   onSearch,
   onClear,
   disabled,
+  initialTargetType,
+  initialPersonId,
 }: TrajectorySearchToolbarProps) {
   const { t } = useTranslation('spatial')
 
@@ -96,12 +65,25 @@ export function TrajectorySearchToolbar({
   const form = useForm<TrajectorySearchFormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      targetType: 'vehicle',
+      targetType: initialTargetType ?? 'vehicle',
       plate: '',
-      personId: '',
+      personId: initialPersonId ?? '',
       timeRange: 'today',
     },
   })
+
+  // 同步外部传入的深链接初始参数
+  useEffect(() => {
+    if (
+      initialTargetType &&
+      form.getValues('targetType') !== initialTargetType
+    ) {
+      form.setValue('targetType', initialTargetType)
+    }
+    if (initialPersonId && form.getValues('personId') !== initialPersonId) {
+      form.setValue('personId', initialPersonId)
+    }
+  }, [initialTargetType, initialPersonId, form])
 
   const targetType = useWatch({ control: form.control, name: 'targetType' })
   const { data: personsData } = useAllPersons()

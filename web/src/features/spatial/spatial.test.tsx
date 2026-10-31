@@ -6,6 +6,55 @@ import { SearchProvider } from '@/context/search-provider'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { Spatial } from './index'
 
+let mockSearch: Record<string, unknown> = {}
+
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return {
+    ...actual,
+    getRouteApi: (id: string) => {
+      if (id === '/_authenticated/spatial/') {
+        return {
+          useSearch: () => mockSearch,
+          useNavigate: () => vi.fn(),
+        }
+      }
+      return actual.getRouteApi(id as never)
+    },
+  }
+})
+
+const mockTrajectoryMutateAsync = vi.fn().mockResolvedValue({
+  mapId: 'map-test-1',
+  targetType: 'person',
+  targetKey: 'p-deep',
+  nodes: [],
+})
+
+vi.mock('./hooks/use-trajectory', () => ({
+  useTrajectory: () => ({
+    mutateAsync: mockTrajectoryMutateAsync,
+    isPending: false,
+  }),
+}))
+
+vi.mock('@/features/persons/contract', () => ({
+  useAllPersons: () => ({
+    data: {
+      items: [
+        {
+          id: 'p-deep',
+          name: 'Deep Person',
+          personId: 'EXT-DEEP',
+          faces: [],
+        },
+      ],
+      total: 1,
+    },
+    isLoading: false,
+  }),
+}))
+
 vi.mock('./hooks/use-spatial-maps', () => ({
   useSpatialMaps: () => ({
     data: [
@@ -164,5 +213,36 @@ describe('Spatial feature component', () => {
     await expect
       .element(getByAltText('Zone A Ground Floor'))
       .toBeInTheDocument()
+  })
+
+  it('automatically queries trajectory when targetType=person and personId deep link parameters are present', async () => {
+    mockSearch = { targetType: 'person', personId: 'p-deep' }
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+
+    await render(
+      <QueryClientProvider client={queryClient}>
+        <SearchProvider>
+          <DirectionProvider>
+            <SidebarProvider>
+              <SidebarInset>
+                <Spatial />
+              </SidebarInset>
+            </SidebarProvider>
+          </DirectionProvider>
+        </SearchProvider>
+      </QueryClientProvider>
+    )
+
+    await expect
+      .poll(() => mockTrajectoryMutateAsync)
+      .toHaveBeenCalledWith(
+        expect.objectContaining({
+          mapId: 'map-test-1',
+          targetType: 'person',
+          personId: 'p-deep',
+        })
+      )
   })
 })

@@ -1388,3 +1388,184 @@ func TestServicePersonImportPreviewAndCommit(t *testing.T) {
 		t.Fatalf("expected one committed person, got %d", count)
 	}
 }
+
+func TestService_SearchByImage_ValidationAndErrors(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer dbStore.Close()
+
+	store := NewStore(dbStore)
+	ctx := context.Background()
+
+	// 1. Extractor nil
+	svcNilExtractor := NewService(store, tempDir, nil, nil, Options{}, zap.NewNop())
+	validPNG := createTestPNG(10, 10)
+	_, err := svcNilExtractor.SearchByImage(ctx, validPNG, 0.7, 10)
+	if err == nil {
+		t.Fatalf("expected error when extractor is nil")
+	}
+
+	// 2. Corrupt / empty image
+	extractor := &mockExtractor{features: make([]float32, 512)}
+	svc := NewService(store, tempDir, extractor, nil, Options{}, zap.NewNop())
+
+	_, err = svc.SearchByImage(ctx, nil, 0.7, 10)
+	if err == nil {
+		t.Fatalf("expected error on nil image bytes")
+	}
+	_, err = svc.SearchByImage(ctx, []byte("not-an-image"), 0.7, 10)
+	if err == nil {
+		t.Fatalf("expected error on invalid image bytes")
+	}
+
+	// 3. Oversized dimensions (> 4096)
+	oversizedPNG := createTestPNG(4097, 10)
+	_, err = svc.SearchByImage(ctx, oversizedPNG, 0.7, 10)
+	if err == nil {
+		t.Fatalf("expected error on image with width > 4096")
+	}
+
+	// 4. Extractor returns ErrNoFaceDetected
+	extractor.err = ErrNoFaceDetected
+	_, err = svc.SearchByImage(ctx, validPNG, 0.7, 10)
+	if err == nil {
+		t.Fatalf("expected error on ErrNoFaceDetected")
+	}
+
+	// 5. Extractor returns ErrUnsupportedImageFormat
+	extractor.err = ErrUnsupportedImageFormat
+	_, err = svc.SearchByImage(ctx, validPNG, 0.7, 10)
+	if err == nil {
+		t.Fatalf("expected error on ErrUnsupportedImageFormat")
+	}
+
+	// 6. Extractor returns unexpected dimension
+	extractor.err = nil
+	extractor.features = make([]float32, 256) // wrong dim
+	_, err = svc.SearchByImage(ctx, validPNG, 0.7, 10)
+	if err == nil {
+		t.Fatalf("expected error on wrong dimension vector")
+	}
+
+	// 7. Extractor returns NaN
+	nanFeats := make([]float32, 512)
+	nanFeats[0] = float32(math.NaN())
+	extractor.features = nanFeats
+	_, err = svc.SearchByImage(ctx, validPNG, 0.7, 10)
+	if err == nil {
+		t.Fatalf("expected error on NaN feature vector")
+	}
+}
+
+func TestService_SearchByImage_RankingAndAggregation(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer dbStore.Close()
+
+	store := NewStore(dbStore)
+	ctx := context.Background()
+
+	// Create persons
+	p1, _ := store.GetPerson(ctx, "p1")
+	if p1 == nil {
+		_ = store.CreatePerson(ctx, &Person{ID: "p1", PersonID: strPtr("EXT_ALICE"), Name: "Alice"})
+	}
+	_ = store.CreatePerson(ctx, &Person{ID: "p2", PersonID: strPtr("EXT_BOB"), Name: "Bob"})
+	_ = store.CreatePerson(ctx, &Person{ID: "p3", PersonID: nil, Name: "Charlie"})
+	_ = store.CreatePerson(ctx, &Person{ID: "p4", PersonID: nil, Name: "David"})
+
+	// Setup query vector: unit vector along dimension 0
+	queryVec := make([]float32, 512)
+	queryVec[0] = 1.0
+
+	// Helper to make vector with given sim on dimension 0 and orthogonal remaining
+	makeVector := func(sim float32) []byte {
+		v := make([]float32, 512)
+		v[0] = sim
+		rem := float32(math.Sqrt(float64(1.0 - sim*sim)))
+		v[1] = rem
+		return float32ToBytes(v)
+	}
+
+	// P1 (Alice) has 2 faces: 0.95 and 0.80
+	_ = store.AddFace(ctx, &Face{ID: "f1_high", PersonRowID: "p1", ImagePath: "f1h.jpg", FeatureVector: makeVector(0.95)})
+	_ = store.AddFace(ctx, &Face{ID: "f1_low", PersonRowID: "p1", ImagePath: "f1l.jpg", FeatureVector: makeVector(0.80)})
+
+	// P2 (Bob) has 1 face: 0.85
+	_ = store.AddFace(ctx, &Face{ID: "f2", PersonRowID: "p2", ImagePath: "f2.jpg", FeatureVector: makeVector(0.85)})
+
+	// P3 (Charlie) has 1 face: 0.60
+	_ = store.AddFace(ctx, &Face{ID: "f3", PersonRowID: "p3", ImagePath: "f3.jpg", FeatureVector: makeVector(0.60)})
+
+	// P4 (David) has invalid vector (corrupted / NaN / wrong size)
+	badVec := make([]byte, 512*4)
+	binary.LittleEndian.PutUint32(badVec[:4], math.Float32bits(float32(math.NaN())))
+	_ = store.AddFace(ctx, &Face{ID: "f4", PersonRowID: "p4", ImagePath: "f4.jpg", FeatureVector: badVec})
+
+	extractor := &mockExtractor{features: queryVec}
+	svc := NewService(store, tempDir, extractor, nil, Options{}, zap.NewNop())
+	validPNG := createTestPNG(20, 20)
+
+	// Search with threshold = 0.70, topK = 10
+	resp, err := svc.SearchByImage(ctx, validPNG, 0.70, 10)
+	if err != nil {
+		t.Fatalf("SearchByImage failed: %v", err)
+	}
+
+	// Expect Alice and Bob (2 matches, Charlie filtered out as 0.60 < 0.70, David skipped as NaN)
+	if len(resp.Matches) != 2 {
+		t.Fatalf("expected 2 matches, got %d", len(resp.Matches))
+	}
+
+	// First match must be Alice with highest face f1_high
+	if resp.Matches[0].PersonID != "p1" || resp.Matches[0].MatchedFaceID != "f1_high" {
+		t.Errorf("expected match 0 to be Alice with f1_high, got %+v", resp.Matches[0])
+	}
+	if math.Abs(float64(resp.Matches[0].Similarity-0.95)) > 1e-4 {
+		t.Errorf("expected sim ~0.95, got %f", resp.Matches[0].Similarity)
+	}
+	if resp.Matches[0].PersonExternalID == nil || *resp.Matches[0].PersonExternalID != "EXT_ALICE" {
+		t.Errorf("expected EXT_ALICE, got %v", resp.Matches[0].PersonExternalID)
+	}
+
+	// Second match must be Bob
+	if resp.Matches[1].PersonID != "p2" || resp.Matches[1].MatchedFaceID != "f2" {
+		t.Errorf("expected match 1 to be Bob with f2, got %+v", resp.Matches[1])
+	}
+	if math.Abs(float64(resp.Matches[1].Similarity-0.85)) > 1e-4 {
+		t.Errorf("expected sim ~0.85, got %f", resp.Matches[1].Similarity)
+	}
+
+	// Test topK = 1
+	respTop1, err := svc.SearchByImage(ctx, validPNG, 0.70, 1)
+	if err != nil {
+		t.Fatalf("SearchByImage topK=1 failed: %v", err)
+	}
+	if len(respTop1.Matches) != 1 || respTop1.Matches[0].PersonID != "p1" {
+		t.Errorf("expected 1 match (Alice), got %d", len(respTop1.Matches))
+	}
+
+	// Test threshold = 0.90 -> only Alice
+	respThresh90, err := svc.SearchByImage(ctx, validPNG, 0.90, 10)
+	if err != nil {
+		t.Fatalf("SearchByImage threshold=0.90 failed: %v", err)
+	}
+	if len(respThresh90.Matches) != 1 || respThresh90.Matches[0].PersonID != "p1" {
+		t.Errorf("expected 1 match (Alice), got %d", len(respThresh90.Matches))
+	}
+
+	// Test threshold = 0.99 -> empty
+	respEmpty, err := svc.SearchByImage(ctx, validPNG, 0.99, 10)
+	if err != nil {
+		t.Fatalf("SearchByImage threshold=0.99 failed: %v", err)
+	}
+	if respEmpty.Matches == nil || len(respEmpty.Matches) != 0 {
+		t.Errorf("expected empty non-nil slice, got %+v", respEmpty.Matches)
+	}
+}

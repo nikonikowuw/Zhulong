@@ -2,7 +2,9 @@ package person
 
 import (
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
@@ -59,6 +61,7 @@ func (h *Handler) RegisterUploadRoutes(rg *gin.RouterGroup) {
 	rg.POST("/persons/import/preview", h.PreviewImport)
 	rg.POST("/persons/import/commit", h.CommitImport)
 	rg.POST("/persons/import-face-jobs", h.CreateFaceImportJob)
+	rg.POST("/persons/search-by-image", h.SearchByImage)
 }
 
 type uploadRouteRegistrar struct {
@@ -503,4 +506,99 @@ func (h *Handler) GetFaceImportFailedReport(c *gin.Context) {
 	c.Header("Content-Type", "text/csv; charset=utf-8")
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="failed_report_%s.csv"`, jobID))
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", csvBytes)
+}
+
+// SearchByImage godoc
+// @Summary      Search enrolled persons by facial photo
+// @Tags         person
+// @Accept       multipart/form-data
+// @Produce      json
+// @Param        image formData file true "Face photo image file (JPG, PNG, WebP)"
+// @Param        threshold formData number false "Similarity threshold (0.0 to 1.0, default 0.70)"
+// @Param        topK formData int false "Maximum candidate count (1 to 50, default 10)"
+// @Success      200  {object}  httputil.Response{data=ImageSearchResponse}
+// @Failure      400  {object}  httputil.Response
+// @Failure      413  {object}  httputil.Response
+// @Failure      422  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/search-by-image [post]
+func (h *Handler) SearchByImage(c *gin.Context) {
+	audithttp.Tag(c, ActionPersonSearchByImage, "search_by_image", "Search persons by image")
+
+	threshold := float32(0.70)
+	rawThreshold := c.Request.FormValue("threshold")
+	if rawThreshold == "" {
+		rawThreshold = c.Query("threshold")
+	}
+	if rawThreshold != "" {
+		val, err := strconv.ParseFloat(rawThreshold, 32)
+		if err != nil {
+			httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
+				{Field: "threshold", Code: "INVALID_FORMAT"},
+			}))
+			return
+		}
+		if val < 0.0 || val > 1.0 {
+			httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
+				{Field: "threshold", Code: "INVALID_VALUE"},
+			}))
+			return
+		}
+		threshold = float32(val)
+	}
+
+	topK := 10
+	rawTopK := c.Request.FormValue("topK")
+	if rawTopK == "" {
+		rawTopK = c.Query("topK")
+	}
+	if rawTopK != "" {
+		val, err := strconv.Atoi(rawTopK)
+		if err != nil {
+			httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
+				{Field: "topK", Code: "INVALID_FORMAT"},
+			}))
+			return
+		}
+		if val < 1 || val > 50 {
+			httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
+				{Field: "topK", Code: "INVALID_VALUE"},
+			}))
+			return
+		}
+		topK = val
+	}
+
+	file, header, err := c.Request.FormFile("image")
+	if err != nil {
+		httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
+			{Field: "image", Code: "REQUIRED"},
+		}))
+		return
+	}
+	defer file.Close()
+
+	if header.Size > maxFaceImageBytes {
+		httputil.WriteError(c, httputil.NewError(http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "File size exceeds the 10MB limit", nil))
+		return
+	}
+
+	imgBytes, err := io.ReadAll(io.LimitReader(file, maxFaceImageBytes+1))
+	if err != nil {
+		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Failed to read image content", err))
+		return
+	}
+	if len(imgBytes) > maxFaceImageBytes {
+		httputil.WriteError(c, httputil.NewError(http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "File size exceeds the 10MB limit", nil))
+		return
+	}
+
+	resp, err := h.service.SearchByImage(c.Request.Context(), imgBytes, threshold, topK)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+
+	audithttp.TagDetail(c, fmt.Sprintf("Matches: %d", len(resp.Matches)))
+	httputil.Success(c, resp)
 }

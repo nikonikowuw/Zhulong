@@ -462,3 +462,92 @@ func TestStore_PrimaryFaceAutoPromotionAndFallback(t *testing.T) {
 		t.Fatalf("expected PrimaryFaceID to be nil when no faces remain, got %v", *got.PrimaryFaceID)
 	}
 }
+
+func TestStore_ListSearchFaceItems(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// 1. Empty database returns empty list
+	items, err := store.ListSearchFaceItems(ctx)
+	if err != nil {
+		t.Fatalf("ListSearchFaceItems on empty db failed: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items, got %d", len(items))
+	}
+
+	// 2. Add persons and faces
+	p1 := &person.Person{
+		ID:       "row_1",
+		PersonID: strPtr("EXT_1"),
+		Name:     "Alice",
+	}
+	if err := store.CreatePerson(ctx, p1); err != nil {
+		t.Fatalf("CreatePerson p1 failed: %v", err)
+	}
+	p2 := &person.Person{
+		ID:       "row_2",
+		PersonID: nil, // null external id
+		Name:     "Bob",
+	}
+	if err := store.CreatePerson(ctx, p2); err != nil {
+		t.Fatalf("CreatePerson p2 failed: %v", err)
+	}
+
+	vec1 := make([]byte, 2048)
+	vec1[0] = 0xAA
+	if err := store.AddFace(ctx, &person.Face{
+		ID:            "face_1a",
+		PersonRowID:   "row_1",
+		ImagePath:     "f1a.jpg",
+		FeatureVector: vec1,
+	}); err != nil {
+		t.Fatalf("AddFace 1a failed: %v", err)
+	}
+
+	vec2 := make([]byte, 100) // invalid length vector
+	if err := store.AddFace(ctx, &person.Face{
+		ID:            "face_2a",
+		PersonRowID:   "row_2",
+		ImagePath:     "f2a.jpg",
+		FeatureVector: vec2,
+	}); err != nil {
+		t.Fatalf("AddFace 2a failed: %v", err)
+	}
+
+	items, err = store.ListSearchFaceItems(ctx)
+	if err != nil {
+		t.Fatalf("ListSearchFaceItems failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+
+	foundMap := make(map[string]person.SearchFaceItem)
+	for _, it := range items {
+		foundMap[it.FaceID] = it
+	}
+
+	it1, ok := foundMap["face_1a"]
+	if !ok {
+		t.Fatalf("face_1a not found in results")
+	}
+	if it1.PersonRowID != "row_1" || it1.PersonName != "Alice" || it1.PersonExternalID == nil || *it1.PersonExternalID != "EXT_1" {
+		t.Errorf("unexpected it1 data: %+v", it1)
+	}
+	if len(it1.FeatureVector) != 2048 || it1.FeatureVector[0] != 0xAA {
+		t.Errorf("unexpected it1 vector")
+	}
+
+	it2, ok := foundMap["face_2a"]
+	if !ok {
+		t.Fatalf("face_2a not found in results")
+	}
+	if it2.PersonRowID != "row_2" || it2.PersonName != "Bob" || it2.PersonExternalID != nil {
+		t.Errorf("unexpected it2 data: %+v", it2)
+	}
+	if len(it2.FeatureVector) != 100 {
+		t.Errorf("unexpected it2 vector length: %d", len(it2.FeatureVector))
+	}
+}

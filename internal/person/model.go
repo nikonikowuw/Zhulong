@@ -13,6 +13,7 @@ const (
 	ActionPersonFaceAdd          = "person.face.add"
 	ActionPersonFaceDelete       = "person.face.delete"
 	ActionPersonPrimaryFaceSet   = "person.primary_face.set"
+	ActionPersonSearchByImage    = "person.search_by_image"
 	ActionPersonImportPreview    = "person.import.preview"
 	ActionPersonImportCommit     = "person.import.commit"
 	ActionPersonFaceImportCreate = "person.face_import.create"

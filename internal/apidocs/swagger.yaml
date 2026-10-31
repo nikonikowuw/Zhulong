@@ -1223,6 +1223,26 @@ definitions:
       ownerRowId:
         type: string
     type: object
+  person.ImageSearchMatchInfo:
+    properties:
+      matchedFaceId:
+        type: string
+      personExternalId:
+        type: string
+      personId:
+        type: string
+      personName:
+        type: string
+      similarity:
+        type: number
+    type: object
+  person.ImageSearchResponse:
+    properties:
+      matches:
+        items:
+          $ref: '#/definitions/person.ImageSearchMatchInfo'
+        type: array
+    type: object
   person.PersonImportCommitResponse:
     properties:
       failed:
@@ -3776,6 +3796,55 @@ paths:
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Preview a person CSV import
+      tags:
+      - person
+  /persons/search-by-image:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: Face photo image file (JPG, PNG, WebP)
+        in: formData
+        name: image
+        required: true
+        type: file
+      - description: Similarity threshold (0.0 to 1.0, default 0.70)
+        in: formData
+        name: threshold
+        type: number
+      - description: Maximum candidate count (1 to 50, default 10)
+        in: formData
+        name: topK
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/person.ImageSearchResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Search enrolled persons by facial photo
       tags:
       - person
   /records/alarms:

@@ -449,6 +449,35 @@ func (s *Store) ListFacesByPersonPaged(ctx context.Context, personID string, lim
 	return list, total, nil
 }
 
+// SearchFaceItem is the database projection loaded for 1:N face feature search.
+// It joins person_faces with persons to obtain template and owner metadata in a single pass.
+// image_path is deliberately excluded so internal filesystem paths are never read into search memory.
+type SearchFaceItem struct {
+	FaceID           string  `gorm:"column:face_id"`
+	PersonRowID      string  `gorm:"column:person_row_id"`
+	PersonExternalID *string `gorm:"column:person_external_id"`
+	PersonName       string  `gorm:"column:person_name"`
+	FeatureVector    []byte  `gorm:"column:feature_vector"`
+}
+
+// ListSearchFaceItems retrieves all enrolled face templates along with their owner's
+// identifiers and names for in-memory 1:N similarity search.
+func (s *Store) ListSearchFaceItems(ctx context.Context) ([]SearchFaceItem, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var items []SearchFaceItem
+	err = db.Table("person_faces f").
+		Select("f.id AS face_id, f.person_id AS person_row_id, p.person_id AS person_external_id, p.name AS person_name, f.feature_vector AS feature_vector").
+		Joins("INNER JOIN persons p ON f.person_id = p.id").
+		Find(&items).Error
+	if err != nil {
+		return nil, fmt.Errorf("list search face items: %w", err)
+	}
+	return items, nil
+}
+
 // DeleteFace deletes a specific face template, scoped to its owning person so
 // that a face cannot be removed through another person's path segment.
 // If the deleted face was the person's primary face, the earliest remaining

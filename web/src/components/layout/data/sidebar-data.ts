@@ -13,6 +13,7 @@ import {
   Images,
   Workflow,
   Map,
+  ScanFace,
 } from 'lucide-react'
 import { ZhulongLogo } from '@/assets/zhulong-logo'
 import { type SidebarData } from '../types'
@@ -39,6 +40,11 @@ export const sidebarData: SidebarData = {
           title: 'Records',
           url: '/records',
           icon: Images,
+        },
+        {
+          title: 'Visual Search',
+          url: '/image-search',
+          icon: ScanFace,
         },
         {
           title: 'E-Map',

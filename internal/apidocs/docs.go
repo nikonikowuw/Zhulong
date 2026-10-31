@@ -2386,6 +2386,85 @@ const docTemplate = `{
                 }
             }
         },
+        "/persons/search-by-image": {
+            "post": {
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "person"
+                ],
+                "summary": "Search enrolled persons by facial photo",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Face photo image file (JPG, PNG, WebP)",
+                        "name": "image",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "number",
+                        "description": "Similarity threshold (0.0 to 1.0, default 0.70)",
+                        "name": "threshold",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Maximum candidate count (1 to 50, default 10)",
+                        "name": "topK",
+                        "in": "formData"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/person.ImageSearchResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/persons/{id}": {
             "get": {
                 "produces": [
@@ -7011,6 +7090,37 @@ const docTemplate = `{
                 },
                 "ownerRowId": {
                     "type": "string"
+                }
+            }
+        },
+        "person.ImageSearchMatchInfo": {
+            "type": "object",
+            "properties": {
+                "matchedFaceId": {
+                    "type": "string"
+                },
+                "personExternalId": {
+                    "type": "string"
+                },
+                "personId": {
+                    "type": "string"
+                },
+                "personName": {
+                    "type": "string"
+                },
+                "similarity": {
+                    "type": "number"
+                }
+            }
+        },
+        "person.ImageSearchResponse": {
+            "type": "object",
+            "properties": {
+                "matches": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/person.ImageSearchMatchInfo"
+                    }
                 }
             }
         },

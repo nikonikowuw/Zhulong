@@ -35,3 +35,10 @@ type SetPrimaryFaceRequest struct {
 type CreateFaceImportJobRequest struct {
 	File *multipart.FileHeader `form:"file" binding:"required"`
 }
+
+// ImageSearchRequest represents the multipart form payload for 1:N facial search.
+type ImageSearchRequest struct {
+	Image     *multipart.FileHeader `form:"image" binding:"required"`
+	Threshold *float32              `form:"threshold"`
+	TopK      *int                  `form:"topK"`
+}

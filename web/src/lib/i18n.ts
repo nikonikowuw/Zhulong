@@ -19,6 +19,9 @@ import camerasZhHant from '@/features/cameras/locales/zh-Hant.json'
 import gb28181En from '@/features/gb28181/locales/en.json'
 import gb28181ZhHans from '@/features/gb28181/locales/zh-Hans.json'
 import gb28181ZhHant from '@/features/gb28181/locales/zh-Hant.json'
+import imageSearchEn from '@/features/image-search/locales/en.json'
+import imageSearchZhHans from '@/features/image-search/locales/zh-Hans.json'
+import imageSearchZhHant from '@/features/image-search/locales/zh-Hant.json'
 import liveEn from '@/features/live/locales/en.json'
 import liveZhHans from '@/features/live/locales/zh-Hans.json'
 import liveZhHant from '@/features/live/locales/zh-Hant.json'
@@ -63,6 +66,7 @@ export const resources = {
     algorithms: algorithmsZhHans,
     tasks: tasksZhHans,
     spatial: spatialZhHans,
+    imageSearch: imageSearchZhHans,
   },
   'zh-Hant': {
     common: commonZhHant,
@@ -79,6 +83,7 @@ export const resources = {
     algorithms: algorithmsZhHant,
     tasks: tasksZhHant,
     spatial: spatialZhHant,
+    imageSearch: imageSearchZhHant,
   },
   en: {
     common: commonEn,
@@ -95,6 +100,7 @@ export const resources = {
     algorithms: algorithmsEn,
     tasks: tasksEn,
     spatial: spatialEn,
+    imageSearch: imageSearchEn,
   },
 } as const
 

@@ -209,5 +209,10 @@ func init() {
 			"zh-Hans": "该人员底库人脸照片数量已达上限",
 			"zh-Hant": "該人員底庫人臉照片數量已達上限",
 		},
+		"EXTRACTOR_ERROR": {
+			"en":      "Facial feature extraction failed",
+			"zh-Hans": "人脸特征提取服务异常",
+			"zh-Hant": "人臉特徵提取服務異常",
+		},
 	})
 }

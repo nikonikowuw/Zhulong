@@ -24,6 +24,7 @@ import { Route as AuthenticatedSettingsIndexRouteImport } from './routes/_authen
 import { Route as AuthenticatedRecordsIndexRouteImport } from './routes/_authenticated/records/index'
 import { Route as AuthenticatedPersonsIndexRouteImport } from './routes/_authenticated/persons/index'
 import { Route as AuthenticatedLiveIndexRouteImport } from './routes/_authenticated/live/index'
+import { Route as AuthenticatedImageSearchIndexRouteImport } from './routes/_authenticated/image-search/index'
 import { Route as AuthenticatedCamerasIndexRouteImport } from './routes/_authenticated/cameras/index'
 import { Route as AuthenticatedAuditIndexRouteImport } from './routes/_authenticated/audit/index'
 import { Route as AuthenticatedAlgorithmsIndexRouteImport } from './routes/_authenticated/algorithms/index'
@@ -113,6 +114,12 @@ const AuthenticatedLiveIndexRoute = AuthenticatedLiveIndexRouteImport.update({
   path: '/live/',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedImageSearchIndexRoute =
+  AuthenticatedImageSearchIndexRouteImport.update({
+    id: '/image-search/',
+    path: '/image-search/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedCamerasIndexRoute =
   AuthenticatedCamerasIndexRouteImport.update({
     id: '/cameras/',
@@ -185,6 +192,7 @@ export interface FileRoutesByFullPath {
   '/algorithms/': typeof AuthenticatedAlgorithmsIndexRoute
   '/audit/': typeof AuthenticatedAuditIndexRoute
   '/cameras/': typeof AuthenticatedCamerasIndexRoute
+  '/image-search/': typeof AuthenticatedImageSearchIndexRoute
   '/live/': typeof AuthenticatedLiveIndexRoute
   '/persons/': typeof AuthenticatedPersonsIndexRoute
   '/records/': typeof AuthenticatedRecordsIndexRoute
@@ -209,6 +217,7 @@ export interface FileRoutesByTo {
   '/algorithms': typeof AuthenticatedAlgorithmsIndexRoute
   '/audit': typeof AuthenticatedAuditIndexRoute
   '/cameras': typeof AuthenticatedCamerasIndexRoute
+  '/image-search': typeof AuthenticatedImageSearchIndexRoute
   '/live': typeof AuthenticatedLiveIndexRoute
   '/persons': typeof AuthenticatedPersonsIndexRoute
   '/records': typeof AuthenticatedRecordsIndexRoute
@@ -236,6 +245,7 @@ export interface FileRoutesById {
   '/_authenticated/algorithms/': typeof AuthenticatedAlgorithmsIndexRoute
   '/_authenticated/audit/': typeof AuthenticatedAuditIndexRoute
   '/_authenticated/cameras/': typeof AuthenticatedCamerasIndexRoute
+  '/_authenticated/image-search/': typeof AuthenticatedImageSearchIndexRoute
   '/_authenticated/live/': typeof AuthenticatedLiveIndexRoute
   '/_authenticated/persons/': typeof AuthenticatedPersonsIndexRoute
   '/_authenticated/records/': typeof AuthenticatedRecordsIndexRoute
@@ -263,6 +273,7 @@ export interface FileRouteTypes {
     | '/algorithms/'
     | '/audit/'
     | '/cameras/'
+    | '/image-search/'
     | '/live/'
     | '/persons/'
     | '/records/'
@@ -287,6 +298,7 @@ export interface FileRouteTypes {
     | '/algorithms'
     | '/audit'
     | '/cameras'
+    | '/image-search'
     | '/live'
     | '/persons'
     | '/records'
@@ -313,6 +325,7 @@ export interface FileRouteTypes {
     | '/_authenticated/algorithms/'
     | '/_authenticated/audit/'
     | '/_authenticated/cameras/'
+    | '/_authenticated/image-search/'
     | '/_authenticated/live/'
     | '/_authenticated/persons/'
     | '/_authenticated/records/'
@@ -438,6 +451,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedLiveIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/image-search/': {
+      id: '/_authenticated/image-search/'
+      path: '/image-search'
+      fullPath: '/image-search/'
+      preLoaderRoute: typeof AuthenticatedImageSearchIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/cameras/': {
       id: '/_authenticated/cameras/'
       path: '/cameras'
@@ -535,6 +555,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedAlgorithmsIndexRoute: typeof AuthenticatedAlgorithmsIndexRoute
   AuthenticatedAuditIndexRoute: typeof AuthenticatedAuditIndexRoute
   AuthenticatedCamerasIndexRoute: typeof AuthenticatedCamerasIndexRoute
+  AuthenticatedImageSearchIndexRoute: typeof AuthenticatedImageSearchIndexRoute
   AuthenticatedLiveIndexRoute: typeof AuthenticatedLiveIndexRoute
   AuthenticatedPersonsIndexRoute: typeof AuthenticatedPersonsIndexRoute
   AuthenticatedRecordsIndexRoute: typeof AuthenticatedRecordsIndexRoute
@@ -549,6 +570,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAlgorithmsIndexRoute: AuthenticatedAlgorithmsIndexRoute,
   AuthenticatedAuditIndexRoute: AuthenticatedAuditIndexRoute,
   AuthenticatedCamerasIndexRoute: AuthenticatedCamerasIndexRoute,
+  AuthenticatedImageSearchIndexRoute: AuthenticatedImageSearchIndexRoute,
   AuthenticatedLiveIndexRoute: AuthenticatedLiveIndexRoute,
   AuthenticatedPersonsIndexRoute: AuthenticatedPersonsIndexRoute,
   AuthenticatedRecordsIndexRoute: AuthenticatedRecordsIndexRoute,

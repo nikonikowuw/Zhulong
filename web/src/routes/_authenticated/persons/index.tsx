@@ -7,6 +7,7 @@ const personsSearchSchema = z.object({
   page: z.number().optional().catch(1),
   pageSize: z.number().optional().catch(10),
   search: z.string().optional().catch(''),
+  personId: z.string().optional().catch(undefined),
 })
 
 export const Route = createFileRoute('/_authenticated/persons/')({

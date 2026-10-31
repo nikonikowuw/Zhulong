@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { getRouteApi } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { ConfigDrawer } from '@/components/config-drawer'
@@ -9,9 +10,12 @@ import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { PersonsDialogs } from './components/persons-dialogs'
 import { PersonsPrimaryButtons } from './components/persons-primary-buttons'
-import { PersonsProvider } from './components/persons-provider'
+import {
+  PersonsProvider,
+  usePersonsContext,
+} from './components/persons-provider'
 import { PersonsTable } from './components/persons-table'
-import { usePersons } from './hooks/use-persons'
+import { usePerson, usePersons } from './hooks/use-persons'
 
 const route = getRouteApi('/_authenticated/persons/')
 
@@ -32,6 +36,39 @@ function PersonsContent() {
     pageSize,
     search: searchQuery,
   })
+
+  const { open, setOpen, setCurrentRow } = usePersonsContext()
+  const targetPersonQuery = usePerson(search.personId)
+
+  // 当 URL 参数携带精确 personId 时，加载人员数据并打开面容档案弹窗
+  const hasOpenedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (
+      search.personId &&
+      targetPersonQuery.data &&
+      hasOpenedRef.current !== search.personId
+    ) {
+      hasOpenedRef.current = search.personId
+      setCurrentRow(targetPersonQuery.data)
+      setOpen('faces')
+    }
+  }, [search.personId, targetPersonQuery.data, setCurrentRow, setOpen])
+
+  // 弹窗关闭时清除 URL 中的 personId 参数
+  const prevOpenRef = useRef(open)
+  useEffect(() => {
+    if (prevOpenRef.current && !open && search.personId) {
+      hasOpenedRef.current = null
+      void navigate({
+        search: (prev) => {
+          const next = { ...prev }
+          delete next.personId
+          return next
+        },
+      })
+    }
+    prevOpenRef.current = open
+  }, [open, search.personId, navigate])
 
   const persons = data?.items ?? []
   const total = data?.total ?? 0

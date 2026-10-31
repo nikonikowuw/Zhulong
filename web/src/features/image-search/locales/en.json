@@ -1,0 +1,42 @@
+{
+  "title": "Visual Search",
+  "subtitle": "1:N facial search against enrolled personnel face templates",
+  "disclaimer": "Candidates are ranked by similarity and do not constitute confirmed identity. Manual verification is required.",
+  "dropzone": {
+    "title": "Upload Face Photo",
+    "prompt": "Drag & drop an image here, or click to select",
+    "formatHint": "Supports static JPG, PNG, and WebP (up to 10MB, max 4096px). Please upload a photo with a single clear face.",
+    "selected": "Selected file: {{name}} ({{size}})",
+    "change": "Change Image",
+    "clear": "Clear",
+    "previewAlt": "Uploaded query photo preview"
+  },
+  "controls": {
+    "threshold": "Similarity Threshold",
+    "thresholdValue": "{{value}}%",
+    "thresholdHint": "Candidates below this similarity are filtered out (default 70%)",
+    "topK": "Top-K Matches",
+    "search": "Search Gallery",
+    "searching": "Searching...",
+    "uploading": "Uploading {{progress}}%..."
+  },
+  "results": {
+    "title": "Search Results",
+    "count_one": "{{count}} candidate match found",
+    "count_other": "{{count}} candidate matches found",
+    "idleTitle": "Ready to Search",
+    "idleDescription": "Upload an image and click Search to look up matching face profiles in the database.",
+    "emptyTitle": "No Matching Personnel Found",
+    "emptyDescription": "No faces in the enrolled database met the similarity threshold. Try adjusting the threshold or providing a clearer front-facing photo.",
+    "errorTitle": "Search Failed",
+    "card": {
+      "similarity": "Similarity",
+      "externalId": "ID",
+      "unboundId": "Unbound",
+      "viewRecords": "Records",
+      "viewTrajectory": "Trajectory",
+      "viewProfile": "Profile",
+      "matchedFaceAlt": "Matched enrolled template photo"
+    }
+  }
+}

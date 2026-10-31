@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/png"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -1098,5 +1100,165 @@ func TestHandlerPersonImportPreviewAndCommit(t *testing.T) {
 	}
 	if commitEnvelope.Data.Imported != 1 || commitEnvelope.Data.Failed != 2 {
 		t.Fatalf("unexpected commit: %+v", commitEnvelope.Data)
+	}
+}
+
+func makeMultipartSearchRequest(url string, filename string, content []byte, threshold, topK string) *http.Request {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if filename != "" {
+		part, _ := writer.CreateFormFile("image", filename)
+		if content != nil {
+			_, _ = part.Write(content)
+		}
+	}
+	if threshold != "" {
+		_ = writer.WriteField("threshold", threshold)
+	}
+	if topK != "" {
+		_ = writer.WriteField("topK", topK)
+	}
+	_ = writer.Close()
+	req := httptest.NewRequest(http.MethodPost, url, &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return req
+}
+
+func createTestPNGBytes(w, h int) []byte {
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
+
+func TestHandler_SearchByImage(t *testing.T) {
+	router, svc, auditSvc := setupTestRouterWithAudit(t)
+	searchURL := "/api/v1/persons/search-by-image"
+
+	// 1. Missing image field -> 422 VALIDATION_FAILED
+	{
+		req := makeMultipartSearchRequest(searchURL, "", nil, "", "")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("expected 422 for missing image, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp httputil.Response
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp.Code != "VALIDATION_FAILED" {
+			t.Fatalf("expected VALIDATION_FAILED, got %s", resp.Code)
+		}
+	}
+
+	// 2. Invalid threshold format or out of bounds -> 422 VALIDATION_FAILED
+	validPNG := createTestPNGBytes(10, 10)
+	{
+		for _, invalidThresh := range []string{"abc", "-0.1", "1.1"} {
+			req := makeMultipartSearchRequest(searchURL, "test.png", validPNG, invalidThresh, "")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("threshold %q: expected 422, got %d: %s", invalidThresh, w.Code, w.Body.String())
+			}
+		}
+	}
+
+	// 3. Invalid topK format or out of bounds -> 422 VALIDATION_FAILED
+	{
+		for _, invalidTopK := range []string{"xyz", "0", "51", "-5"} {
+			req := makeMultipartSearchRequest(searchURL, "test.png", validPNG, "", invalidTopK)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("topK %q: expected 422, got %d: %s", invalidTopK, w.Code, w.Body.String())
+			}
+		}
+	}
+
+	// 4. File too large (> 10MB) -> 413 FILE_TOO_LARGE
+	{
+		largeBytes := make([]byte, 10*1024*1024+10)
+		req := makeMultipartSearchRequest(searchURL, "huge.png", largeBytes, "", "")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("expected 413 FILE_TOO_LARGE, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp httputil.Response
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp.Code != "FILE_TOO_LARGE" {
+			t.Fatalf("expected FILE_TOO_LARGE, got %s", resp.Code)
+		}
+	}
+
+	// 5. Corrupt / non-image file -> 400 UNSUPPORTED_IMAGE_FORMAT
+	{
+		req := makeMultipartSearchRequest(searchURL, "bad.png", []byte("plain text content"), "", "")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 UNSUPPORTED_IMAGE_FORMAT, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp httputil.Response
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if resp.Code != "UNSUPPORTED_IMAGE_FORMAT" {
+			t.Fatalf("expected UNSUPPORTED_IMAGE_FORMAT, got %s", resp.Code)
+		}
+	}
+
+	// 6. Successful search
+	{
+		// Enroll a person and a face first
+		ctx := context.Background()
+		p, err := svc.CreatePerson(ctx, person.CreatePersonRequest{
+			PersonID: strPtr("P_SEARCH_1"),
+			Name:     "Search Target",
+		})
+		if err != nil {
+			t.Fatalf("CreatePerson failed: %v", err)
+		}
+		// Enroll face with valid dummy JPEG
+		fakeJPEG := append([]byte{0xff, 0xd8, 0xff, 0xe0}, bytes.Repeat([]byte{0xaa}, 100)...)
+		_, err = svc.AddFaceWithReader(ctx, p.ID, "photo.jpg", bytes.NewReader(fakeJPEG))
+		if err != nil {
+			t.Fatalf("AddFaceWithReader failed: %v", err)
+		}
+
+		req := makeMultipartSearchRequest(searchURL, "query.png", validPNG, "0.5", "5")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var envelope struct {
+			Code string                     `json:"code"`
+			Data person.ImageSearchResponse `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
+			t.Fatalf("decode search response failed: %v", err)
+		}
+		if envelope.Code != "OK" {
+			t.Fatalf("expected code OK, got %s", envelope.Code)
+		}
+		if envelope.Data.Matches == nil {
+			t.Fatalf("expected matches slice to be non-nil")
+		}
+
+		// Drain audit and verify action
+		logs := drainAudit(t, auditSvc)
+		foundSearchAudit := false
+		for _, l := range logs {
+			if l.Action == person.ActionPersonSearchByImage {
+				foundSearchAudit = true
+				if l.Status != audit.StatusSuccess {
+					t.Errorf("expected audit status success, got %s", l.Status)
+				}
+				break
+			}
+		}
+		if !foundSearchAudit {
+			t.Fatalf("expected audit log with action %s", person.ActionPersonSearchByImage)
+		}
 	}
 }

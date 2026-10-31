@@ -139,6 +139,14 @@ function mapNameField(t?: TFunction) {
     .max(64, t ? t('validation.mapNameMax') : '底图名称不能超过 64 个字符')
 }
 
+export const spatialSearchSchema = z.object({
+  targetType: z.enum(['vehicle', 'person']).optional().catch(undefined),
+  personId: z.string().optional().catch(undefined),
+  mapId: z.string().optional().catch(undefined),
+})
+
+export type SpatialSearchParams = z.infer<typeof spatialSearchSchema>
+
 /**
  * 底图上传表单的校验 schema 工厂。
  */

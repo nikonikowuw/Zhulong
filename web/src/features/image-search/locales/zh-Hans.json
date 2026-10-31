@@ -1,0 +1,42 @@
+{
+  "title": "以图搜图",
+  "subtitle": "上传人脸图片，在已登记的人员底库模板中进行 1:N 相似度检索",
+  "disclaimer": "候选结果按相似度排序，不构成身份确认，需由人工核验。",
+  "dropzone": {
+    "title": "上传人脸照片",
+    "prompt": "拖拽人脸图片至此，或点击浏览选择",
+    "formatHint": "支持静态 JPG、PNG、WebP（文件最大 10MB，单边不超过 4096 像素）。请优先使用仅含一张清晰人脸的照片。",
+    "selected": "已选择文件：{{name}} ({{size}})",
+    "change": "更换图片",
+    "clear": "清除",
+    "previewAlt": "上传的检索原图预览"
+  },
+  "controls": {
+    "threshold": "相似度阈值",
+    "thresholdValue": "{{value}}%",
+    "thresholdHint": "低于该相似度的候选人员将被过滤（默认 70%）",
+    "topK": "候选上限 (Top-K)",
+    "search": "开始检索",
+    "searching": "正在检索...",
+    "uploading": "正在上传 {{progress}}%..."
+  },
+  "results": {
+    "title": "检索结果",
+    "count_one": "找到 {{count}} 位匹配候选人员",
+    "count_other": "找到 {{count}} 位匹配候选人员",
+    "idleTitle": "就绪",
+    "idleDescription": "上传人脸图片并点击“开始检索”即可在底库中查找相似人员。",
+    "emptyTitle": "未找到匹配的人员",
+    "emptyDescription": "底库中没有达到指定相似度的人员面容。可尝试调低阈值或上传更清晰的人脸正脸照片。",
+    "errorTitle": "检索失败",
+    "card": {
+      "similarity": "相似度",
+      "externalId": "编号",
+      "unboundId": "未绑定",
+      "viewRecords": "抓拍记录",
+      "viewTrajectory": "时空轨迹",
+      "viewProfile": "人员档案",
+      "matchedFaceAlt": "底库命中登记照"
+    }
+  }
+}

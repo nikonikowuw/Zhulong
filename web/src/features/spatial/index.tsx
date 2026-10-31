@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { getRouteApi } from '@tanstack/react-router'
 import { Loader2, MapPin, Route, Save, Undo2, Video } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -23,6 +24,7 @@ import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { useAllCameras } from '@/features/cameras/contract'
+import { useAllPersons } from '@/features/persons/contract'
 import { type StampingCamera } from './components/canvas/spatial-canvas'
 import { SpatialCanvasViewport } from './components/canvas/spatial-canvas-viewport'
 import { UnassignedCamerasPanel } from './components/sidebar/unassigned-cameras-panel'
@@ -40,11 +42,15 @@ import {
 } from './hooks/use-camera-positions'
 import { useSpatialMaps } from './hooks/use-spatial-maps'
 import { useTrajectory } from './hooks/use-trajectory'
+import { resolveTimeRange } from './utils/format'
 
 export type SpatialMode = 'trajectory' | 'calibration'
 
+const route = getRouteApi('/_authenticated/spatial/')
+
 export function Spatial() {
   const { t } = useTranslation('spatial')
+  const search = route.useSearch()
 
   const mapsQuery = useSpatialMaps()
   const maps = mapsQuery.data ?? []
@@ -56,6 +62,9 @@ export function Spatial() {
 
   const camerasQuery = useAllCameras()
   const allCameras = camerasQuery.data?.items ?? []
+
+  const { data: personsData } = useAllPersons()
+  const hasAutoSearchedRef = useRef(false)
 
   const positionsQuery = useCameraPositions(effectiveMapId)
   const serverPositions = positionsQuery.data ?? []
@@ -176,25 +185,59 @@ export function Spatial() {
     }
   }
 
-  const handleSearchTrajectory = async (params: TrajectoryQueryParams) => {
-    try {
-      const response = await trajectoryMutation.mutateAsync(params)
-      setTrajectory(response)
-      if (response.nodes.length === 0) {
-        toast.info(t('trajectory.noResults'))
-      } else {
-        toast.success(
-          t('trajectory.foundNodes', { count: response.nodes.length })
+  const handleSearchTrajectory = useCallback(
+    async (params: TrajectoryQueryParams) => {
+      try {
+        const response = await trajectoryMutation.mutateAsync(params)
+        setTrajectory(response)
+        if (response.nodes.length === 0) {
+          toast.info(t('trajectory.noResults'))
+        } else {
+          toast.success(
+            t('trajectory.foundNodes', { count: response.nodes.length })
+          )
+        }
+      } catch (err: unknown) {
+        toast.error(
+          err instanceof Error && err.message
+            ? err.message
+            : t('trajectory.searchFailed')
         )
       }
-    } catch (err: unknown) {
-      toast.error(
-        err instanceof Error && err.message
-          ? err.message
-          : t('trajectory.searchFailed')
-      )
+    },
+    [t, trajectoryMutation]
+  )
+
+  // 深链接自动查询：当 URL 携带目标人员且地图和人员底库就绪时，自动按今天范围检索一次
+  useEffect(() => {
+    if (hasAutoSearchedRef.current) return
+    if (
+      search.targetType === 'person' &&
+      search.personId &&
+      effectiveMapId &&
+      personsData
+    ) {
+      hasAutoSearchedRef.current = true
+      const { startTime, endTime } = resolveTimeRange('today')
+      const params: TrajectoryQueryParams = {
+        mapId: effectiveMapId,
+        targetType: 'person',
+        personId: search.personId,
+        startTime,
+        endTime,
+      }
+      const timer = setTimeout(() => {
+        void handleSearchTrajectory(params)
+      }, 0)
+      return () => clearTimeout(timer)
     }
-  }
+  }, [
+    search.targetType,
+    search.personId,
+    effectiveMapId,
+    personsData,
+    handleSearchTrajectory,
+  ])
 
   const handleClearTrajectory = () => {
     setTrajectory(null)
@@ -301,6 +344,8 @@ export function Spatial() {
             onSearch={(params) => void handleSearchTrajectory(params)}
             onClear={handleClearTrajectory}
             disabled={!currentMap}
+            initialTargetType={search.targetType}
+            initialPersonId={search.personId}
           />
         )}
 

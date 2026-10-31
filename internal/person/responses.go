@@ -125,6 +125,20 @@ type FaceImportJobResponse struct {
 	FinishedAt   *time.Time         `json:"finishedAt,omitempty"`
 }
 
+// ImageSearchMatchInfo represents a candidate person hit in an image-based facial search.
+type ImageSearchMatchInfo struct {
+	PersonID         string  `json:"personId"`
+	PersonExternalID *string `json:"personExternalId"`
+	PersonName       string  `json:"personName"`
+	MatchedFaceID    string  `json:"matchedFaceId"`
+	Similarity       float32 `json:"similarity"`
+}
+
+// ImageSearchResponse is the response payload for 1:N facial search.
+type ImageSearchResponse struct {
+	Matches []ImageSearchMatchInfo `json:"matches"`
+}
+
 func newFaceImportJobResponse(job *asyncjob.Job) FaceImportJobResponse {
 	return FaceImportJobResponse{
 		JobID:        job.ID,

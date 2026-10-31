@@ -7,18 +7,25 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"math"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 	"unsafe"
 
+	_ "golang.org/x/image/webp"
+
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
+	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
@@ -750,6 +757,132 @@ func (s *Service) OpenFaceImage(ctx context.Context, personID, faceID string) (*
 		return nil, nil, apperr.NotFound("IMAGE_NOT_FOUND", "Face image file not found on disk", nil)
 	}
 	return file, info, nil
+}
+
+func isFinite(f float32) bool {
+	return !math.IsNaN(float64(f)) && !math.IsInf(float64(f), 0)
+}
+
+// SearchByImage extracts an embedding vector from the uploaded face photo,
+// computes dot-product similarities against all valid enrolled face templates,
+// aggregates candidate scores per person taking the maximum similarity and its corresponding
+// face template, filters by threshold, and returns the top-K matches sorted descending by similarity.
+//
+// The query image resides strictly in ephemeral memory during request execution and is never persisted.
+func (s *Service) SearchByImage(ctx context.Context, imgBytes []byte, threshold float32, topK int) (*ImageSearchResponse, error) {
+	if len(imgBytes) == 0 {
+		return nil, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Image is empty", nil)
+	}
+	if len(imgBytes) > maxFaceImageBytes {
+		return nil, httputil.NewError(http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "File size exceeds 10MB limit", nil)
+	}
+
+	// Validate static JPEG, PNG, or WebP and dimension <= 4096.
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(imgBytes))
+	if err != nil {
+		return nil, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Unsupported image format or corrupt image", err)
+	}
+	if format != "jpeg" && format != "png" && format != "webp" {
+		return nil, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Only static JPEG, PNG, and WebP are allowed", nil)
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 4096 || cfg.Height > 4096 {
+		return nil, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Image dimensions exceed 4096px limit", nil)
+	}
+	// Full decode pass ensures payload is not corrupted and rejects animated WebP containers.
+	if _, _, err := image.Decode(bytes.NewReader(imgBytes)); err != nil {
+		return nil, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Failed to decode static image", err)
+	}
+
+	if s.extractor == nil {
+		return nil, httputil.NewError(http.StatusInternalServerError, "EXTRACTOR_ERROR", "Face feature extraction is not configured", nil)
+	}
+
+	features, err := s.extractor.ExtractFaceFeature(ctx, imgBytes)
+	if err != nil {
+		if errors.Is(err, ErrNoFaceDetected) {
+			return nil, httputil.NewError(http.StatusBadRequest, "NO_FACE_DETECTED", "No face detected in image", err)
+		}
+		if errors.Is(err, ErrUnsupportedImageFormat) {
+			return nil, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Unsupported image format or corrupt image", err)
+		}
+		return nil, httputil.NewError(http.StatusInternalServerError, "EXTRACTOR_ERROR", "Facial feature extraction failed", err)
+	}
+
+	if len(features) != faceFeatureDim {
+		return nil, httputil.NewError(http.StatusInternalServerError, "EXTRACTOR_ERROR", "Unexpected feature dimension", nil)
+	}
+	for _, v := range features {
+		if !isFinite(v) {
+			return nil, httputil.NewError(http.StatusInternalServerError, "EXTRACTOR_ERROR", "Feature vector contains invalid numbers", nil)
+		}
+	}
+
+	items, err := s.store.ListSearchFaceItems(ctx)
+	if err != nil {
+		return nil, httputil.NewError(http.StatusInternalServerError, "DATABASE_ERROR", "Failed to list face templates", err)
+	}
+
+	bestPerPerson := make(map[string]ImageSearchMatchInfo)
+	for _, item := range items {
+		if len(item.FeatureVector) != faceFeatureDim*4 {
+			continue
+		}
+		gf := bytesToFloat32(item.FeatureVector)
+		if len(gf) != faceFeatureDim {
+			continue
+		}
+		valid := true
+		for _, v := range gf {
+			if !isFinite(v) {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue
+		}
+
+		var sim float32
+		for i := 0; i < faceFeatureDim; i++ {
+			sim += features[i] * gf[i]
+		}
+		if sim > 1.0 {
+			sim = 1.0
+		} else if sim < -1.0 {
+			sim = -1.0
+		}
+
+		existing, ok := bestPerPerson[item.PersonRowID]
+		if !ok || sim > existing.Similarity || (sim == existing.Similarity && item.FaceID < existing.MatchedFaceID) {
+			bestPerPerson[item.PersonRowID] = ImageSearchMatchInfo{
+				PersonID:         item.PersonRowID,
+				PersonExternalID: item.PersonExternalID,
+				PersonName:       item.PersonName,
+				MatchedFaceID:    item.FaceID,
+				Similarity:       sim,
+			}
+		}
+	}
+
+	candidates := make([]ImageSearchMatchInfo, 0, len(bestPerPerson))
+	for _, match := range bestPerPerson {
+		if match.Similarity >= threshold {
+			candidates = append(candidates, match)
+		}
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].Similarity != candidates[j].Similarity {
+			return candidates[i].Similarity > candidates[j].Similarity
+		}
+		return candidates[i].PersonID < candidates[j].PersonID
+	})
+
+	if topK > 0 && len(candidates) > topK {
+		candidates = candidates[:topK]
+	}
+
+	return &ImageSearchResponse{Matches: candidates}, nil
 }
 
 // DeleteFace deletes a specific face template belonging to the given person.
