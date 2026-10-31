@@ -1799,3 +1799,42 @@ Implemented fourth vehicles tab in perception records reusing captures endpoint 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 92: 运动门禁分级治理与瞬态静止心跳保底巡检
+<!-- trellis-session: v=2 fp=ce73bac854541a72 -->
+
+**Date**: 2026-11-01
+**Task**: 运动门禁分级治理与瞬态静止心跳保底巡检
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+落地运动门禁分级治理体系与静止心跳保底巡检机制。Native 引擎支持 MOTION_HEARTBEAT_FRAMES 瞬态抽检且严防状态机污染；SDK 扩展 --disable-motion-gate 启动参数并阻断伪消失信标清零跟踪器；Go 宿主元数据扩充 supports_motion_gate 契约（迁移 000023）并自动透传 CLI 策略；完成全仓单测与归档。
+
+### Main Changes
+
+- Native MotionDetector 引入 still_frames_count_ 周期保底（50 帧 @ 5fps 约 10s），单帧放行且物理隔离 hold_frames_remaining_
+- SDK algo_main 支持 --disable-motion-gate，彻底旁路静止推理短路并阻断 count=0 伪消失信标回传
+- Go 算法模型与 Manifest 扩展 supports_motion_gate（默认 true），Supervisor 启动子进程按需透传
+- 新增数据库迁移 000023_add_supports_motion_gate 及其 Up/Down 对称性单元测试
+- Web 前端算法契约 schema 补齐 supportsMotionGate 字段
+- 完成 PRD 验收标准勾选并归档任务至 archive/2026-11/
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0b1886b` | feat(algo): 支持运动门禁分级治理与瞬态静止心跳保底巡检 |
+| `22ca516` | chore(task): archive 10-31-motion-gating-governance |
+
+### Testing
+
+- [OK] [OK] native-test: 27/27 全部通过（含 ZhulongMotionDetector 与 ZhulongMotionGate）
+- [OK] [OK] go test -race: internal/algorithm、internal/algorunner 及 internal/database 迁移单测全部通过
+- [OK] [OK] web: src/features/algorithms/data/schema.test.ts 全部通过
+
+### Status
+
+[OK] **Completed**
