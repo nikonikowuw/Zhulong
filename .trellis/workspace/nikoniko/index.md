@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 88
+- **Total Sessions**: 89
 - **Last Active**: 2026-10-31
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1731 | Active |
+| `journal-2.md` | ~1754 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 89 | 2026-10-31 | 算法包静态图片试跑、双轴代码审查与缺陷修复 | `584ab3a` | `dev` |
 | 88 | 2026-10-31 | 电子地图摄像头点位分配与时空轨迹查询收尾归档 | `58bddf1`, `1f125f4`, `d31358f`, `ff04f7f` | `dev` |
 | 87 | 2026-10-31 | Diagnose hidden algorithm install directory | - | `dev` |
 | 86 | 2026-10-26 | GB28181 目录同步与设备接入收尾 | `b7d0c68` | `dev` |

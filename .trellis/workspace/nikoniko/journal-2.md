@@ -1729,3 +1729,26 @@ Implemented fourth vehicles tab in perception records reusing captures endpoint 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 89: 算法包静态图片试跑、双轴代码审查与缺陷修复
+<!-- trellis-session: v=2 fp=876bdd0e0c9507ce -->
+
+**Date**: 2026-10-31
+**Task**: 算法包静态图片试跑、双轴代码审查与缺陷修复
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+完成已停用算法包静态单图试跑功能与端到端闭环（C++ SDK --verify 结构化报告、Go POST /algorithms/:id/trial 隔离子进程执行、React Canvas 自适应画框与 JPEG 导出）。执行 Standards 与 Spec 双轴深入代码审查，修复 sample_decoded 假阳性检查缺失、PackageSysProcAttr 防孤儿保护、DecodeConfig 像素炸弹防护、PPM 写入代码重构、纯人脸退化语义去重及关键点绘制等问题，通过全仓 go-check 与前端 756 项测试。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `584ab3a` | feat(algorithm): 支持已停用算法包单图试跑、结构化结果输出与前端 Canvas 标注 |
+
+### Status
+
+[OK] **Completed**
