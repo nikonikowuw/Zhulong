@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 86
-- **Last Active**: 2026-10-26
+- **Total Sessions**: 87
+- **Last Active**: 2026-10-31
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1665 | Active |
+| `journal-2.md` | ~1694 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 87 | 2026-10-31 | Diagnose hidden algorithm install directory | - | `dev` |
 | 86 | 2026-10-26 | GB28181 目录同步与设备接入收尾 | `b7d0c68` | `dev` |
 | 85 | 2026-10-25 | auth 模块硬化：多字节密码 500 与限流/会话契约 | `0379051` | `dev` |
 | 84 | 2026-10-22 | Add vehicle tab to records | `c96b6b8` | `dev` |

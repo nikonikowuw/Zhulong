@@ -1663,3 +1663,32 @@ Implemented fourth vehicles tab in perception records reusing captures endpoint 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 87: Diagnose hidden algorithm install directory
+<!-- trellis-session: v=2 fp=fc92b162962fe7e1 -->
+
+**Date**: 2026-10-31
+**Task**: Diagnose hidden algorithm install directory
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+定位算法安装冲突：当前数据库仅登记 plate_recognition，而 data/algorithms 下存在未登记的 face_recognition/1.0.0 旧 plugin.so 包目录；说明停机后可逆改名隔离的恢复方式。未修改代码或算法数据。
+
+### Main Changes
+
+- 确认安装器以磁盘版本目录判重、算法列表以 SQLite 登记项为准，解释列表不可见但安装冲突。
+
+### Git Commits
+
+(No commits - planning session)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 如需代码修复，阻止卸载流程在目录清理失败时删除数据库登记，并为历史孤儿目录增加显式恢复提示。
