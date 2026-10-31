@@ -35,7 +35,7 @@ export interface UseLiveGridReturn {
 }
 
 export function useLiveGrid(): UseLiveGridReturn {
-  const [layout, setLayout] = useState<GridLayout>(4)
+  const [layout, setLayout] = useState<GridLayout>(1)
   const [activeCellId, setActiveCellId] = useState<number>(0)
   const [maximizedCellId, setMaximizedCellId] = useState<number | null>(null)
   const [cells, setCells] = useState<LiveCellState[]>(INITIAL_CELLS)

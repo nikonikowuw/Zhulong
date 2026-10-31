@@ -13,9 +13,9 @@ describe('useLiveGrid', () => {
     codec: 'h264',
   }
 
-  it('初始状态为 4 宫格且 cellId 0 处于激活态', async () => {
+  it('初始状态为单窗口且 cellId 0 处于激活态', async () => {
     const { result } = await renderHook(() => useLiveGrid())
-    expect(result.current.layout).toBe(4)
+    expect(result.current.layout).toBe(1)
     expect(result.current.activeCellId).toBe(0)
     expect(result.current.maximizedCellId).toBeNull()
     expect(result.current.cells.length).toBe(16)
@@ -55,6 +55,9 @@ describe('useLiveGrid', () => {
     const { result, act } = await renderHook(() => useLiveGrid())
 
     await act(() => {
+      result.current.setLayout(4)
+    })
+    await act(() => {
       result.current.assignCamera(0, dummyCamera)
     })
     expect(result.current.cells[0].streamType).toBe('sub')
@@ -78,6 +81,9 @@ describe('useLiveGrid', () => {
     }
     const { result, act } = await renderHook(() => useLiveGrid())
 
+    await act(() => {
+      result.current.setLayout(4)
+    })
     await act(() => {
       result.current.assignCamera(0, singleStreamCamera)
     })
