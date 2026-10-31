@@ -11,12 +11,18 @@
     "clear": "Clear",
     "previewAlt": "Uploaded query photo preview",
     "fileSizeExceeded": "File size exceeds 10MB limit",
-    "unsupportedFormat": "Unsupported file format. Only JPG, PNG, and WebP are supported."
+    "unsupportedFormat": "Unsupported file format. Only JPG, PNG, and WebP are supported.",
+    "tagFormats": "JPG / PNG / WebP",
+    "tagMaxSize": "≤ 10MB",
+    "tagFaceReq": "Clear Face"
   },
   "controls": {
     "threshold": "Similarity Threshold",
     "thresholdValue": "{{value}}%",
     "thresholdHint": "Candidates below this similarity are filtered out (default 70%)",
+    "levelStrict": "Strict (Low FP)",
+    "levelBalanced": "Recommended",
+    "levelRelaxed": "Relaxed (High Recall)",
     "topK": "Top-K Matches",
     "topKOption": "Top {{count}}",
     "search": "Search Gallery",
@@ -34,6 +40,12 @@
     "emptyDescription": "No faces in the enrolled database met the similarity threshold. Try adjusting the threshold or providing a clearer front-facing photo.",
     "errorTitle": "Search Failed",
     "errorDescription": "An error occurred during search. Please check your network and try again.",
+    "workflowStep1": "Upload Target Face",
+    "workflowStep1Desc": "Upload a snapshot or portrait with a clear unobstructed face",
+    "workflowStep2": "Vector Comparison",
+    "workflowStep2Desc": "Extract 512-d embeddings and run instant cosine similarity search",
+    "workflowStep3": "Spatial Trajectory",
+    "workflowStep3Desc": "Jump straight into historical captures and cross-camera trajectory",
     "card": {
       "similarity": "Similarity",
       "externalId": "ID",
@@ -41,7 +53,10 @@
       "viewRecords": "Records",
       "viewTrajectory": "Trajectory",
       "viewProfile": "Profile",
-      "matchedFaceAlt": "Matched enrolled template photo"
+      "matchedFaceAlt": "Matched enrolled template photo",
+      "rankTop": "Top Match",
+      "highMatch": "High Match",
+      "moderateMatch": "Candidate"
     }
   }
 }

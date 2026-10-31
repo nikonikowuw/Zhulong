@@ -11,12 +11,18 @@
     "clear": "清除",
     "previewAlt": "上傳的檢索原圖預覽",
     "fileSizeExceeded": "檔案大小超過 10MB 限制",
-    "unsupportedFormat": "不支援的檔案格式，僅支援 JPG、PNG、WebP"
+    "unsupportedFormat": "不支援的檔案格式，僅支援 JPG、PNG、WebP",
+    "tagFormats": "JPG / PNG / WebP",
+    "tagMaxSize": "≤ 10MB",
+    "tagFaceReq": "清晰正臉"
   },
   "controls": {
     "threshold": "相似度閾值",
     "thresholdValue": "{{value}}%",
     "thresholdHint": "低於該相似度的候選人員將被過濾（預設 70%）",
+    "levelStrict": "高精嚴控 (減少誤報)",
+    "levelBalanced": "推薦平衡",
+    "levelRelaxed": "寬鬆召回 (提高檢出)",
     "topK": "候選上限 (Top-K)",
     "topKOption": "Top {{count}}",
     "search": "開始檢索",
@@ -34,6 +40,12 @@
     "emptyDescription": "底庫中沒有達到指定相似度的人員面容。可嘗試調低閾值或上傳更清晰的人臉正臉照片。",
     "errorTitle": "檢索失敗",
     "errorDescription": "檢索服務發生異常，請檢查網路或稍後重試。",
+    "workflowStep1": "上傳目標人臉",
+    "workflowStep1Desc": "支援抓拍截圖或正臉證件照，清晰度越高比對越精準",
+    "workflowStep2": "向量特徵比對",
+    "workflowStep2Desc": "毫秒級提取 512 維人臉特徵並在底庫快速餘弦檢索",
+    "workflowStep3": "時空軌跡聯動",
+    "workflowStep3Desc": "一鍵穿透抓拍檔案，復盤跨攝影機通行時空軌跡",
     "card": {
       "similarity": "相似度",
       "externalId": "編號",
@@ -41,7 +53,10 @@
       "viewRecords": "抓拍記錄",
       "viewTrajectory": "時空軌跡",
       "viewProfile": "人員檔案",
-      "matchedFaceAlt": "底庫命中登記照"
+      "matchedFaceAlt": "底庫命中登記照",
+      "rankTop": "最高匹配",
+      "highMatch": "極高匹配",
+      "moderateMatch": "相似候選"
     }
   }
 }

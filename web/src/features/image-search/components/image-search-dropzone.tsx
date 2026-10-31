@@ -1,7 +1,16 @@
 import { type DragEvent, useRef, useState } from 'react'
-import { RefreshCw, Trash2, UploadCloud } from 'lucide-react'
+import {
+  CheckCircle2,
+  FileImage,
+  RefreshCw,
+  Scan,
+  Sparkles,
+  Trash2,
+  UploadCloud,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 
@@ -97,7 +106,7 @@ export function ImageSearchDropzone({
   }
 
   return (
-    <Card className='relative overflow-hidden border-border/80 bg-card/60 p-4'>
+    <Card className='group relative overflow-hidden border-border/70 bg-card/60 p-4 shadow-xs backdrop-blur-xs transition-all duration-200 hover:border-primary/40 hover:shadow-md'>
       <input
         ref={fileInputRef}
         type='file'
@@ -108,45 +117,80 @@ export function ImageSearchDropzone({
       />
 
       {selectedFile && previewUrl ? (
-        <div className='flex flex-col items-center gap-3'>
-          <div className='relative max-h-72 w-full overflow-hidden rounded-lg border border-border bg-muted/30'>
+        <div className='flex flex-col gap-3.5'>
+          {/* 上传人脸预览框，附带 HUD 瞄准四角括号与微光扫描感 */}
+          <div className='relative mx-auto flex max-h-72 w-full items-center justify-center overflow-hidden rounded-xl border border-primary/20 bg-muted/40 p-2'>
+            {/* 背景科技微网格 */}
+            <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(var(--primary-rgb,59,130,246),0.06)_0,transparent_70%)]' />
+
+            {/* HUD 瞄准角标 */}
+            <div className='pointer-events-none absolute inset-2.5 z-10'>
+              <div className='absolute top-0 left-0 h-3 w-3 border-t-2 border-l-2 border-primary/70' />
+              <div className='absolute top-0 right-0 h-3 w-3 border-t-2 border-r-2 border-primary/70' />
+              <div className='absolute bottom-0 left-0 h-3 w-3 border-b-2 border-l-2 border-primary/70' />
+              <div className='absolute right-0 bottom-0 h-3 w-3 border-r-2 border-b-2 border-primary/70' />
+            </div>
+
             <img
               src={previewUrl}
               alt={t('dropzone.previewAlt')}
-              className='mx-auto max-h-72 w-auto object-contain'
+              className='relative z-0 mx-auto max-h-64 w-auto rounded-lg object-contain shadow-sm'
             />
+
+            {/* 瞄准中提示徽章 */}
+            <div className='pointer-events-none absolute bottom-4 left-4 z-10 flex items-center gap-1.5 rounded-full border border-primary/30 bg-background/85 px-2.5 py-0.5 text-[11px] font-medium text-foreground backdrop-blur-sm'>
+              <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500' />
+              <Scan className='h-3 w-3 text-primary' />
+              <span>{t('dropzone.tagFaceReq')}</span>
+            </div>
           </div>
 
-          <div className='flex w-full flex-wrap items-center justify-between gap-2 text-xs'>
-            <span className='truncate font-medium text-foreground'>
-              {t('dropzone.selected', {
-                name: selectedFile.name,
-                size: formatBytes(selectedFile.size),
-              })}
-            </span>
+          {/* 图像文件元信息与快捷操作 */}
+          <div className='flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/30 p-2.5 sm:flex-row sm:items-center sm:justify-between'>
+            <div className='flex min-w-0 items-center gap-2'>
+              <div className='flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary'>
+                <FileImage className='h-4 w-4' />
+              </div>
+              <div className='min-w-0 flex-1'>
+                <p className='truncate text-xs font-semibold text-foreground'>
+                  {t('dropzone.selected', {
+                    name: selectedFile.name,
+                    size: formatBytes(selectedFile.size),
+                  })}
+                </p>
+                <div className='flex items-center gap-1.5 text-[10px] text-muted-foreground'>
+                  <CheckCircle2 className='h-3 w-3 text-emerald-500' />
+                  <span>{formatBytes(selectedFile.size)}</span>
+                  <span>•</span>
+                  <span className='uppercase'>
+                    {selectedFile.type.replace('image/', '') || 'IMAGE'}
+                  </span>
+                </div>
+              </div>
+            </div>
 
-            <div className='flex items-center gap-1.5'>
+            <div className='flex items-center gap-1.5 self-end sm:self-center'>
               <Button
                 type='button'
                 variant='outline'
                 size='sm'
-                className='h-7 gap-1 text-xs'
+                className='h-7.5 gap-1.5 px-2.5 text-xs transition-colors hover:border-primary/50 hover:bg-primary/5'
                 disabled={disabled}
                 onClick={() => fileInputRef.current?.click()}
               >
-                <RefreshCw className='h-3.5 w-3.5' />
-                {t('dropzone.change')}
+                <RefreshCw className='h-3.5 w-3.5 text-muted-foreground' />
+                <span>{t('dropzone.change')}</span>
               </Button>
               <Button
                 type='button'
                 variant='ghost'
                 size='sm'
-                className='h-7 gap-1 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive'
+                className='h-7.5 gap-1.5 px-2.5 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive'
                 disabled={disabled}
                 onClick={() => onFileSelect(null)}
               >
                 <Trash2 className='h-3.5 w-3.5' />
-                {t('dropzone.clear')}
+                <span>{t('dropzone.clear')}</span>
               </Button>
             </div>
           </div>
@@ -158,12 +202,12 @@ export function ImageSearchDropzone({
           onDragOver={handleDragOver}
           onDrop={handleDrop}
           onClick={() => !disabled && fileInputRef.current?.click()}
-          className={`flex min-h-[220px] cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
+          className={`relative flex min-h-[240px] cursor-pointer flex-col items-center justify-center overflow-hidden rounded-xl border-2 border-dashed p-6 text-center transition-all duration-200 ${
             disabled
               ? 'cursor-not-allowed opacity-50'
               : isDragging
-                ? 'border-primary bg-primary/10'
-                : 'border-muted-foreground/30 hover:border-primary/60 hover:bg-muted/20'
+                ? 'border-primary bg-primary/10 ring-4 ring-primary/10'
+                : 'border-muted-foreground/25 hover:border-primary/60 hover:bg-muted/30'
           }`}
           role='button'
           aria-label={t('dropzone.title')}
@@ -177,15 +221,47 @@ export function ImageSearchDropzone({
             }
           }}
         >
-          <div className='mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary'>
-            <UploadCloud className='h-6 w-6' />
+          {/* 装饰性瞄准背景光 */}
+          <div className='pointer-events-none absolute inset-0 flex items-center justify-center opacity-40'>
+            <div className='h-36 w-36 rounded-full bg-primary/5 blur-2xl' />
           </div>
-          <p className='text-sm font-medium text-foreground'>
+
+          {/* 科技瞄准圆圈与图标 */}
+          <div className='relative mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-xs transition-transform duration-300 group-hover:scale-105'>
+            <UploadCloud className='h-7 w-7 transition-transform duration-200 group-hover:-translate-y-0.5' />
+            <div className='absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground'>
+              <Sparkles className='h-2.5 w-2.5' />
+            </div>
+          </div>
+
+          <p className='text-sm font-semibold text-foreground transition-colors group-hover:text-primary'>
             {t('dropzone.prompt')}
           </p>
-          <p className='mt-1 max-w-md text-xs text-muted-foreground'>
+          <p className='mt-1.5 max-w-xs text-xs leading-relaxed text-muted-foreground'>
             {t('dropzone.formatHint')}
           </p>
+
+          {/* 规范指南胶囊标签 */}
+          <div className='mt-4 flex flex-wrap items-center justify-center gap-1.5'>
+            <Badge
+              variant='secondary'
+              className='border border-border/50 bg-background/60 px-2 py-0.5 text-[10px] font-medium text-muted-foreground'
+            >
+              {t('dropzone.tagFormats')}
+            </Badge>
+            <Badge
+              variant='secondary'
+              className='border border-border/50 bg-background/60 px-2 py-0.5 text-[10px] font-medium text-muted-foreground'
+            >
+              {t('dropzone.tagMaxSize')}
+            </Badge>
+            <Badge
+              variant='secondary'
+              className='border border-border/50 bg-background/60 px-2 py-0.5 text-[10px] font-medium text-muted-foreground'
+            >
+              {t('dropzone.tagFaceReq')}
+            </Badge>
+          </div>
         </div>
       )}
     </Card>

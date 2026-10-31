@@ -11,12 +11,18 @@
     "clear": "清除",
     "previewAlt": "上传的检索原图预览",
     "fileSizeExceeded": "文件大小超过 10MB 限制",
-    "unsupportedFormat": "不支持的文件格式，仅支持 JPG、PNG、WebP"
+    "unsupportedFormat": "不支持的文件格式，仅支持 JPG、PNG、WebP",
+    "tagFormats": "JPG / PNG / WebP",
+    "tagMaxSize": "≤ 10MB",
+    "tagFaceReq": "清晰正脸"
   },
   "controls": {
     "threshold": "相似度阈值",
     "thresholdValue": "{{value}}%",
     "thresholdHint": "低于该相似度的候选人员将被过滤（默认 70%）",
+    "levelStrict": "高精严控 (减少误报)",
+    "levelBalanced": "推荐平衡",
+    "levelRelaxed": "宽松召回 (提高检出)",
     "topK": "候选上限 (Top-K)",
     "topKOption": "Top {{count}}",
     "search": "开始检索",
@@ -34,6 +40,12 @@
     "emptyDescription": "底库中没有达到指定相似度的人员面容。可尝试调低阈值或上传更清晰的人脸正脸照片。",
     "errorTitle": "检索失败",
     "errorDescription": "检索服务发生异常，请检查网络或稍后重试。",
+    "workflowStep1": "上传目标人脸",
+    "workflowStep1Desc": "支持抓拍截图或正脸证件照，清晰度越高比对越精准",
+    "workflowStep2": "向量特征比对",
+    "workflowStep2Desc": "毫秒级提取 512 维人脸特征并在底库快速余弦检索",
+    "workflowStep3": "时空轨迹联动",
+    "workflowStep3Desc": "一键穿透抓拍档案，复盘跨摄像头通行时空轨迹",
     "card": {
       "similarity": "相似度",
       "externalId": "编号",
@@ -41,7 +53,10 @@
       "viewRecords": "抓拍记录",
       "viewTrajectory": "时空轨迹",
       "viewProfile": "人员档案",
-      "matchedFaceAlt": "底库命中登记照"
+      "matchedFaceAlt": "底库命中登记照",
+      "rankTop": "最高匹配",
+      "highMatch": "极高匹配",
+      "moderateMatch": "相似候选"
     }
   }
 }
