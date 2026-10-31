@@ -1838,3 +1838,36 @@ Implemented fourth vehicles tab in perception records reusing captures endpoint 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 93: Migrate GORM Store implementations to GORM Generics API
+<!-- trellis-session: v=2 fp=484740ddb0bc5d3d -->
+
+**Date**: 2026-11-01
+**Task**: Migrate GORM Store implementations to GORM Generics API
+**Package**: backend
+**Branch**: `feat/gorm-generics-migration`
+
+### Summary
+
+Fully migrated backend store persistence operations to official GORM Generics API gorm.G[T]
+
+### Main Changes
+
+- Migrated 11 domain stores to gorm.G[T]
+- Refactored listInReadSnapshot into a generic query helper
+- Updated database-guidelines.md spec
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `357966d` | refactor(database): migrate stores to official GORM Generics API |
+
+### Testing
+
+- [OK] make go-check passed 100% including race detector and CGO bridge integration tests
+
+### Status
+
+[OK] **Completed**
