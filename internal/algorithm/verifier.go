@@ -554,21 +554,22 @@ func (v *Verifier) StageAndVerify(
 
 	now := time.Now().UTC()
 	algo = &Algorithm{
-		ID:               manifest.ID,
-		Name:             manifest.Name,
-		Version:          manifest.Version,
-		TaskType:         manifest.TaskType,
-		Category:         manifest.Category,
-		TargetArch:       manifest.Platform.Arch,
-		TargetDevice:     manifest.Platform.Target,
-		ComputeCost:      manifest.Resources.ComputeCost,
-		MemoryMB:         manifest.Resources.MemoryMB,
-		Description:      manifest.Description,
-		ManifestJSON:     string(manifestJSON),
-		ConfigSchemaJSON: verified.ConfigSchema,
-		Status:           StatusDisabled,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID:                 manifest.ID,
+		Name:               manifest.Name,
+		Version:            manifest.Version,
+		TaskType:           manifest.TaskType,
+		Category:           manifest.Category,
+		TargetArch:         manifest.Platform.Arch,
+		TargetDevice:       manifest.Platform.Target,
+		ComputeCost:        manifest.Resources.ComputeCost,
+		MemoryMB:           manifest.Resources.MemoryMB,
+		Description:        manifest.Description,
+		ManifestJSON:       string(manifestJSON),
+		ConfigSchemaJSON:   verified.ConfigSchema,
+		SupportsMotionGate: manifest.SupportsMotionGateOrDefault(),
+		Status:             StatusDisabled,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 	return algo, nil
 }

@@ -178,12 +178,13 @@ func (s *Supervisor) processConfig(algo PackageMeta, brokerSocks []string) (Proc
 		return ProcessConfig{}, err
 	}
 	return ProcessConfig{
-		AlgorithmID:    algo.ID,
-		AlgorithmName:  algo.Name,
-		ExecutablePath: entry,
-		BrokerSocks:    brokerSocks,
-		EnvFile:        s.rt.EnvPath(algo.ID, algo.Version),
-		Logger:         s.logger,
+		AlgorithmID:       algo.ID,
+		AlgorithmName:     algo.Name,
+		ExecutablePath:    entry,
+		BrokerSocks:       brokerSocks,
+		EnvFile:           s.rt.EnvPath(algo.ID, algo.Version),
+		Logger:            s.logger,
+		DisableMotionGate: algo.DisableMotionGate,
 	}, nil
 }
 

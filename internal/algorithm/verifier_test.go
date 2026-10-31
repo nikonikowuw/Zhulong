@@ -496,3 +496,75 @@ func TestStageAndVerifyDoesNotReplaceExistingVersion(t *testing.T) {
 		t.Fatalf("existing version was overwritten: got %q", got)
 	}
 }
+
+func TestVerifierSupportsMotionGate(t *testing.T) {
+	tests := []struct {
+		name             string
+		manifestJSON     string
+		wantSupportsGate bool
+		wantDisableGate  bool
+	}{
+		{
+			name: "explicitly disabled supports_motion_gate for temporal algorithms",
+			manifestJSON: `{
+				"id": "illegal_parking",
+				"version": "1.0.0",
+				"name": "illegal_parking",
+				"task_type": "detection",
+				"category": "traffic",
+				"platform": {"arch": "x86_64", "target": "onnx"},
+				"resources": {"compute_cost": 20, "memory_mb": 64},
+				"supports_motion_gate": false
+			}`,
+			wantSupportsGate: false,
+			wantDisableGate:  true,
+		},
+		{
+			name: "default omitted supports_motion_gate behaves as true",
+			manifestJSON: `{
+				"id": "normal_capture",
+				"version": "1.0.0",
+				"name": "normal_capture",
+				"task_type": "detection",
+				"category": "safety",
+				"platform": {"arch": "x86_64", "target": "onnx"},
+				"resources": {"compute_cost": 20, "memory_mb": 64}
+			}`,
+			wantSupportsGate: true,
+			wantDisableGate:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var m algorithm.Manifest
+			if err := json.Unmarshal([]byte(tt.manifestJSON), &m); err != nil {
+				t.Fatalf("unmarshal manifest: %v", err)
+			}
+			if got := m.SupportsMotionGateOrDefault(); got != tt.wantSupportsGate {
+				t.Errorf("SupportsMotionGateOrDefault() = %v, want %v", got, tt.wantSupportsGate)
+			}
+
+			archivePath := createTestTarGz(t, map[string][]byte{
+				"manifest.json": []byte(tt.manifestJSON),
+				m.ID:            []byte(verifyStubScript(1)),
+				"sample.jpg":    []byte("sample"),
+			})
+			t.Cleanup(func() { _ = os.Remove(archivePath) })
+
+			verifier := algorithm.NewVerifier(x86Host(), algorithm.VerifyOptions{SkipDynamic: true})
+			installDir := t.TempDir()
+			algo, err := verifier.StageAndVerify(context.Background(), archivePath, installDir)
+			if err != nil {
+				t.Fatalf("StageAndVerify() error = %v", err)
+			}
+			if algo.SupportsMotionGate != tt.wantSupportsGate {
+				t.Errorf("algo.SupportsMotionGate = %v, want %v", algo.SupportsMotionGate, tt.wantSupportsGate)
+			}
+			meta := algo.ToPackageMeta()
+			if meta.DisableMotionGate != tt.wantDisableGate {
+				t.Errorf("meta.DisableMotionGate = %v, want %v", meta.DisableMotionGate, tt.wantDisableGate)
+			}
+		})
+	}
+}

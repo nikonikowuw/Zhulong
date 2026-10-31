@@ -217,6 +217,71 @@ void test_reset() {
     std::cout << "[PASS] test_reset" << std::endl;
 }
 
+// 画面长时间静止时的心跳保底巡检 (Heartbeat Keep-Alive)
+void test_still_heartbeat_keepalive() {
+    MotionDetector detector;
+    auto base_frame = create_dummy_nv12(1920, 1080, 50);
+
+    MotionResult res{};
+    // 首帧：建立底图，无运动
+    assert(detector.detect(base_frame, res));
+    assert(!res.has_motion);
+
+    // 触发一次有效运动
+    auto moving = create_dummy_nv12(1920, 1080, 50);
+    paint_y_rect(moving, 600, 400, 800, 600, 220);
+    assert(detector.detect(moving, res));
+    assert(res.has_motion);
+
+    // 画面停止运动，进入保持期 (MOTION_HOLD_FRAMES = 10)
+    for (uint32_t i = 0; i < MotionDetector::MOTION_HOLD_FRAMES; ++i) {
+        auto after = create_dummy_nv12(1920, 1080, 50);
+        paint_y_rect(after, 600, 400, 800, 600, 220);
+        assert(detector.detect(after, res));
+        assert(res.has_motion);
+        assert(res.box_count == 0);
+    }
+
+    // 正式进入纯静止期：持续送入静止帧
+    // 第 1 ~ 49 帧静止：必须维持 has_motion == false
+    for (uint32_t i = 1; i < MotionDetector::MOTION_HEARTBEAT_FRAMES; ++i) {
+        auto still = create_dummy_nv12(1920, 1080, 50);
+        paint_y_rect(still, 600, 400, 800, 600, 220);
+        assert(detector.detect(still, res));
+        assert(!res.has_motion);
+        assert(res.box_count == 0);
+    }
+
+    // 第 50 帧：达到心跳阈值，强制瞬态放行 (has_motion = true, box_count = 0)
+    auto hb_frame = create_dummy_nv12(1920, 1080, 50);
+    paint_y_rect(hb_frame, 600, 400, 800, 600, 220);
+    assert(detector.detect(hb_frame, res));
+    assert(res.has_motion);
+    assert(res.box_count == 0);
+
+    // ⚠️ 核心断言：第 51 帧必须立即跌回静止（has_motion == false），绝不能连带触发 10 帧 hold-off！
+    auto next_frame = create_dummy_nv12(1920, 1080, 50);
+    paint_y_rect(next_frame, 600, 400, 800, 600, 220);
+    assert(detector.detect(next_frame, res));
+    assert(!res.has_motion);
+    assert(res.box_count == 0);
+
+    // 验证第二次心跳：再送 48 帧静止（累积 1 + 48 = 49 帧静止），仍为 false
+    for (uint32_t i = 0; i < MotionDetector::MOTION_HEARTBEAT_FRAMES - 2; ++i) {
+        auto still = create_dummy_nv12(1920, 1080, 50);
+        paint_y_rect(still, 600, 400, 800, 600, 220);
+        assert(detector.detect(still, res));
+        assert(!res.has_motion);
+    }
+
+    // 第 100 帧（第二次满 50 帧静止）：再次触发心跳
+    assert(detector.detect(hb_frame, res));
+    assert(res.has_motion);
+    assert(res.box_count == 0);
+
+    std::cout << "[PASS] test_still_heartbeat_keepalive" << std::endl;
+}
+
 // 非法输入必须返回 false，由调用方降级放行（fail-open）
 void test_unsupported_input_fails_open() {
     MotionDetector detector;
@@ -252,6 +317,7 @@ int main() {
     test_micro_noise_filtered();
     test_motion_hold_off();
     test_reset();
+    test_still_heartbeat_keepalive();
     test_unsupported_input_fails_open();
     std::cout << "All MotionDetector unit tests PASSED!" << std::endl;
     return 0;

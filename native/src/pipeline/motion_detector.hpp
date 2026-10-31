@@ -77,6 +77,13 @@ public:
      */
     static constexpr uint32_t MOTION_HOLD_FRAMES = 10;
 
+    /**
+     * @brief 画面持续静止时强制放行心跳巡检的帧数间隔（@5fps 约 10 秒）
+     *
+     * 解决长时间静止导致静态目标检出丢失或微动漏检的问题。
+     */
+    static constexpr uint32_t MOTION_HEARTBEAT_FRAMES = 50;
+
     MotionDetector();
     ~MotionDetector() = default;
 
@@ -116,6 +123,7 @@ private:
 
     bool initialized_{false};
     uint32_t hold_frames_remaining_{0};
+    uint32_t still_frames_count_{0};
     std::vector<uint8_t> prev_grid_;
     std::vector<uint8_t> curr_grid_;
 };

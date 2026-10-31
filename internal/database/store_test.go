@@ -1707,9 +1707,9 @@ func TestSpatialCanvasTablesMigrationUpAndDownSymmetry(t *testing.T) {
 	}
 	defer migrator.Close()
 
-	// Apply all migrations
-	if err := migrator.Up(); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrator Up(): %v", err)
+	// Apply migrations up to 22
+	if err := migrator.Migrate(22); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(22): %v", err)
 	}
 
 	tableExists := func(name string) bool {
@@ -1783,5 +1783,96 @@ func TestSpatialCanvasTablesMigrationUpAndDownSymmetry(t *testing.T) {
 		if !tableExists(table) {
 			t.Fatalf("expected table %s after re-Up", table)
 		}
+	}
+}
+
+// TestSupportsMotionGateMigrationUpAndDownSymmetry pins migration 23:
+// supports_motion_gate column in algorithms table must appear, default to 1,
+// and disappear cleanly on rollback.
+func TestSupportsMotionGateMigrationUpAndDownSymmetry(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "migration_symmetry_23.db")
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("create sqlite3 driver: %v", err)
+	}
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("create iofs driver: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("create migrator: %v", err)
+	}
+	defer migrator.Close()
+
+	// 1. Run migrations up to 23
+	if err := migrator.Migrate(23); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(23): %v", err)
+	}
+
+	hasColumn := func() bool {
+		rows, err := db.Query("PRAGMA table_info(algorithms)")
+		if err != nil {
+			t.Fatalf("query table_info(algorithms): %v", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var cid int
+			var name, ctype string
+			var notnull, pk int
+			var dfltValue sql.NullString
+			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+				t.Fatalf("scan pragma row: %v", err)
+			}
+			if name == "supports_motion_gate" {
+				return true
+			}
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate table_info: %v", err)
+		}
+		return false
+	}
+
+	if !hasColumn() {
+		t.Fatalf("expected supports_motion_gate column in algorithms table after Up(23)")
+	}
+
+	// Default value check
+	if _, err := db.Exec(`INSERT INTO algorithms (id, name, version, task_type, category, target_arch, target_device)
+		VALUES ('test_algo', '测试算法', '1.0.0', 'detection', 'safety', 'x86_64', 'onnx')`); err != nil {
+		t.Fatalf("insert algorithm: %v", err)
+	}
+	var supportsGate bool
+	if err := db.QueryRow("SELECT supports_motion_gate FROM algorithms WHERE id = 'test_algo'").Scan(&supportsGate); err != nil {
+		t.Fatalf("query supports_motion_gate: %v", err)
+	}
+	if !supportsGate {
+		t.Errorf("expected supports_motion_gate to default to true, got %v", supportsGate)
+	}
+
+	// 2. Rollback migration 23 (Down step 1)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("migrator Steps(-1): %v", err)
+	}
+	if hasColumn() {
+		t.Fatalf("expected supports_motion_gate column to be dropped after Steps(-1)")
+	}
+
+	// 3. Re-apply migration 23 (Up step 1)
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("migrator Steps(1): %v", err)
+	}
+	if !hasColumn() {
+		t.Fatalf("expected supports_motion_gate column after re-Up(1)")
 	}
 }

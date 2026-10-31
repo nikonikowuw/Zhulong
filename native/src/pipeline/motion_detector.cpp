@@ -89,6 +89,7 @@ MotionDetector::MotionDetector() {
 void MotionDetector::reset() noexcept {
     initialized_ = false;
     hold_frames_remaining_ = 0;
+    still_frames_count_ = 0;
     std::fill(prev_grid_.begin(), prev_grid_.end(), 0);
     std::fill(curr_grid_.begin(), curr_grid_.end(), 0);
 }
@@ -148,6 +149,18 @@ void MotionDetector::report_static(MotionResult& out_result) noexcept {
         --hold_frames_remaining_;
         out_result.has_motion = true;
         out_result.box_count = 0;
+        still_frames_count_ = 0;
+        return;
+    }
+
+    // 真正脱离 hold-off 的静止帧：累加静止帧数
+    ++still_frames_count_;
+    if (still_frames_count_ >= MOTION_HEARTBEAT_FRAMES) {
+        // 心跳保底巡检触发：单帧强制放行（box_count = 0），以刷新静态目标状态。
+        // ⚠️ 严禁设置 hold_frames_remaining_：心跳只是单帧抽检，不得连带触发 10 帧放行！
+        still_frames_count_ = 0;
+        out_result.has_motion = true;
+        out_result.box_count = 0;
         return;
     }
 
@@ -166,6 +179,7 @@ bool MotionDetector::detect(const HardwareFrame& frame, MotionResult& out_result
     if (!initialized_) {
         std::memcpy(prev_grid_.data(), curr_grid_.data(), GRID_SIZE);
         initialized_ = true;
+        still_frames_count_ = 0;
         out_result.has_motion = false;
         out_result.box_count = 0;
         return true;
@@ -269,6 +283,7 @@ bool MotionDetector::detect(const HardwareFrame& frame, MotionResult& out_result
 
     out_result.has_motion = true;
     hold_frames_remaining_ = MOTION_HOLD_FRAMES;
+    still_frames_count_ = 0;
 
     if (component_count > 0) {
         // 取面积最大的前 N 个连通域

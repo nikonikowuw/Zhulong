@@ -15,11 +15,12 @@ const (
 
 // PackageMeta represents the minimal algorithm package metadata needed by the runner supervisor.
 type PackageMeta struct {
-	ID              string
-	Name            string
-	Version         string
-	PreviousVersion string
-	Status          string
+	ID                string
+	Name              string
+	Version           string
+	PreviousVersion   string
+	Status            string
+	DisableMotionGate bool
 }
 
 // LifecycleStore provides package lookup and status updates for the supervisor.

@@ -44,8 +44,27 @@ describe('algorithm schema', () => {
     const parsed = algorithmSchema.parse(raw)
     expect(parsed.computeCost).toBe(10)
     expect(parsed.memoryMb).toBe(64)
+    expect(parsed.supportsMotionGate).toBe(true)
     expect(parsed.status).toBe('DISABLED')
     expect(parsed.description).toBe('')
+  })
+
+  it('supports explicit supportsMotionGate false', () => {
+    const raw = {
+      id: 'parking_detector',
+      name: '违停检测',
+      version: '1.0.0',
+      taskType: 'detection',
+      category: 'traffic',
+      targetArch: 'x86_64',
+      targetDevice: 'onnx',
+      supportsMotionGate: false,
+      createdAt: '2026-10-15T00:00:00Z',
+      updatedAt: '2026-10-15T00:00:00Z',
+    }
+
+    const parsed = algorithmSchema.parse(raw)
+    expect(parsed.supportsMotionGate).toBe(false)
   })
 
   it('parses array of algorithms', () => {

@@ -111,6 +111,20 @@ void test_skip_decision_is_strict() {
     std::cout << "[PASS] test_skip_decision_is_strict" << std::endl;
 }
 
+// 禁用门禁时（如违停、在岗等时序算法），即使 has_motion == 0 也绝对不短路
+void test_disable_motion_gate_always_runs() {
+    // 门禁启用：0 必定短路，非 0 放行
+    assert(gate::should_skip_inference(0, true));
+    assert(!gate::should_skip_inference(1, true));
+
+    // 门禁禁用：无论 has_motion 为何值，一律放行（should_skip_inference == false）
+    assert(!gate::should_skip_inference(0, false));
+    assert(!gate::should_skip_inference(1, false));
+    assert(!gate::should_skip_inference(2, false));
+
+    std::cout << "[PASS] test_disable_motion_gate_always_runs" << std::endl;
+}
+
 } // namespace
 
 int main() {
@@ -119,6 +133,7 @@ int main() {
     test_legacy_dispatch_fails_open();
     test_truncated_dispatch_rejected();
     test_skip_decision_is_strict();
+    test_disable_motion_gate_always_runs();
     std::cout << "All Runner motion gate unit tests PASSED!" << std::endl;
     return 0;
 }

@@ -57,10 +57,16 @@ inline bool decode_frame_dispatch(const void* payload, size_t size,
 /**
  * @brief 是否短路 `api.process()` 与模型前向
  *
- * ⚠️ 只有显式的 `has_motion == 0` 才跳过。其他任何取值（含未来新增值、半截报文带来的
- *    默认值）一律放行：漏检的代价远高于一次多余的推理。
+ * @param has_motion 帧分发报文中的运动标记（0 表示静止，1 表示有运动）
+ * @param motion_gate_enabled 算法/进程是否启用了运动门禁（默认启用；若被 --disable-motion-gate 禁用则恒不短路）
+ *
+ * ⚠️ 只有在门禁启用且显式 `has_motion == 0` 时才跳过。其他任何取值（含未来新增值、半截报文带来的
+ *    默认值或禁用门禁模式）一律放行：漏检的代价远高于一次多余的推理。
  */
-inline bool should_skip_inference(uint32_t has_motion) noexcept {
+inline bool should_skip_inference(uint32_t has_motion, bool motion_gate_enabled = true) noexcept {
+    if (!motion_gate_enabled) {
+        return false;
+    }
     return has_motion == 0;
 }
 

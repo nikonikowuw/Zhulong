@@ -77,11 +77,12 @@ type ProcessConfig struct {
 	// ExecutablePath is the package's own executable (resolved by ResolveEntry).
 	// The host passes no argument that selects an algorithm: the executable *is*
 	// the algorithm, so its argv only carries runtime plumbing.
-	ExecutablePath string
-	BrokerSocks    []string
-	EnvFile        string
-	ExtraEnv       map[string]string
-	Logger         *zap.Logger
+	ExecutablePath    string
+	BrokerSocks       []string
+	EnvFile           string
+	ExtraEnv          map[string]string
+	Logger            *zap.Logger
+	DisableMotionGate bool
 }
 
 // RunnerProcess supervises one algorithm package subprocess.
@@ -164,6 +165,9 @@ func (p *RunnerProcess) Start() error {
 	}
 	if p.config.AlgorithmID != "" {
 		args = append(args, "--algorithm-id", p.config.AlgorithmID)
+	}
+	if p.config.DisableMotionGate {
+		args = append(args, "--disable-motion-gate")
 	}
 
 	cmd := exec.Command(p.config.ExecutablePath, args...)

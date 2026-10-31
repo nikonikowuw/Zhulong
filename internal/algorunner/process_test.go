@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -649,6 +650,53 @@ func TestRunnerProcessMultipleBrokersArgs(t *testing.T) {
 		if strings.Contains(fmt.Sprint(entry.ContextMap()), "/tmp/sock") {
 			t.Fatalf("runner output leaked broker socket path: %+v", entry)
 		}
+	}
+}
+
+func TestRunnerProcessDisableMotionGateFlag(t *testing.T) {
+	for _, disable := range []bool{true, false} {
+		t.Run(fmt.Sprintf("disable=%v", disable), func(t *testing.T) {
+			dir := t.TempDir()
+			script := filepath.Join(dir, "echo_args.sh")
+			argsPath := filepath.Join(dir, "args.txt")
+			scriptBody := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGS_CAPTURE\"\nexit 0\n"
+			if err := os.WriteFile(script, []byte(scriptBody), 0o755); err != nil {
+				t.Fatalf("write script: %v", err)
+			}
+
+			cfg := algorunner.ProcessConfig{
+				AlgorithmID:       "temporal_pkg",
+				AlgorithmName:     "temporal_pkg",
+				ExecutablePath:    script,
+				BrokerSocks:       []string{"/tmp/sock.sock"},
+				DisableMotionGate: disable,
+				ExtraEnv:          map[string]string{"ARGS_CAPTURE": argsPath},
+				Logger:            zap.NewNop(),
+			}
+
+			proc := algorunner.NewRunnerProcess(cfg)
+			if err := proc.Start(); err != nil {
+				t.Fatalf("Start failed: %v", err)
+			}
+			defer proc.Stop(2 * time.Second)
+
+			select {
+			case <-proc.Done():
+			case <-time.After(15 * time.Second):
+				t.Fatal("timed out waiting for script to finish")
+			}
+
+			gotBytes, err := os.ReadFile(argsPath)
+			if err != nil {
+				t.Fatalf("read captured arguments: %v", err)
+			}
+			gotArgs := strings.Fields(string(gotBytes))
+			hasFlag := slices.Contains(gotArgs, "--disable-motion-gate")
+
+			if hasFlag != disable {
+				t.Errorf("gotArgs = %v, has --disable-motion-gate = %v, want %v", gotArgs, hasFlag, disable)
+			}
+		})
 	}
 }
 

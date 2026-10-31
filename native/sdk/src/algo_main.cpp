@@ -802,6 +802,7 @@ namespace detail
         const std::string &client_name = options.client_name;
         const int max_frames = options.max_frames;
         const std::string &algorithm_id = options.algorithm_id;
+        const bool disable_motion_gate = options.disable_motion_gate;
 
         if (broker_socks.empty())
         {
@@ -1052,7 +1053,7 @@ namespace detail
                     const int active_dma_fd = received_fd;
                     void* dma_mmap = nullptr;
 
-                    if (gate::should_skip_inference(dispatch.has_motion))
+                    if (gate::should_skip_inference(dispatch.has_motion, !disable_motion_gate))
                     {
                         // 画面完全静止：跳过模型前向推理，实现 0 NPU/GPU 算力开销
                         if (last_had_targets)
@@ -1349,6 +1350,10 @@ namespace detail
                     error = "--max-frames must be positive";
                     return false;
                 }
+            }
+            else if (arg == "--disable-motion-gate")
+            {
+                options.disable_motion_gate = true;
             }
             else
             {

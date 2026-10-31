@@ -43,6 +43,7 @@ struct Options {
     bool verify{false};                 /**< 单次验包模式（不连 broker） */
     bool extract_feature{false};        /**< `--extract-feature`：stdin 帧流 → stdout 特征行 */
     int max_frames{-1};                 /**< `--max-frames <N>`，<0 表示不限（联调/自测用） */
+    bool disable_motion_gate{false};    /**< `--disable-motion-gate`：禁用动检门禁（违停/在岗等时序算法全帧推理且永不发送伪消失信标） */
 };
 
 namespace detail {

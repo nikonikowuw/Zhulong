@@ -56,6 +56,7 @@ export const algorithmSchema = z.object({
   description: z.string().default(''),
   manifestJson: z.string().default('{}'),
   configSchemaJson: z.string().default('{}'),
+  supportsMotionGate: z.boolean().default(true),
   status: algorithmStatusSchema.default('DISABLED'),
   previousVersion: z.string().default(''),
   createdAt: z.string(),

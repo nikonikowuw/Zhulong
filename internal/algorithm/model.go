@@ -58,22 +58,23 @@ const (
 // - models: models/
 // - env: .env
 type Algorithm struct {
-	ID               string    `gorm:"primaryKey;column:id" json:"id"`
-	Name             string    `gorm:"column:name;uniqueIndex;not null" json:"name"`
-	Version          string    `gorm:"column:version;not null" json:"version"`
-	TaskType         string    `gorm:"column:task_type;not null" json:"taskType"`
-	Category         string    `gorm:"column:category;not null" json:"category"`
-	TargetArch       string    `gorm:"column:target_arch;not null" json:"targetArch"`
-	TargetDevice     string    `gorm:"column:target_device;not null" json:"targetDevice"`
-	ComputeCost      int       `gorm:"column:compute_cost;not null;default:10" json:"computeCost"`
-	MemoryMB         int       `gorm:"column:memory_mb;not null;default:64" json:"memoryMb"`
-	Description      string    `gorm:"column:description;not null;default:''" json:"description"`
-	ManifestJSON     string    `gorm:"column:manifest_json;not null;default:'{}'" json:"manifestJson"`
-	ConfigSchemaJSON string    `gorm:"column:config_schema_json;not null;default:'{}'" json:"configSchemaJson"`
-	Status           string    `gorm:"column:status;not null;default:'DISABLED'" json:"status"`
-	PreviousVersion  string    `gorm:"column:previous_version;not null;default:''" json:"previousVersion"`
-	CreatedAt        time.Time `gorm:"column:created_at;not null" json:"createdAt"`
-	UpdatedAt        time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
+	ID                 string    `gorm:"primaryKey;column:id" json:"id"`
+	Name               string    `gorm:"column:name;uniqueIndex;not null" json:"name"`
+	Version            string    `gorm:"column:version;not null" json:"version"`
+	TaskType           string    `gorm:"column:task_type;not null" json:"taskType"`
+	Category           string    `gorm:"column:category;not null" json:"category"`
+	TargetArch         string    `gorm:"column:target_arch;not null" json:"targetArch"`
+	TargetDevice       string    `gorm:"column:target_device;not null" json:"targetDevice"`
+	ComputeCost        int       `gorm:"column:compute_cost;not null;default:10" json:"computeCost"`
+	MemoryMB           int       `gorm:"column:memory_mb;not null;default:64" json:"memoryMb"`
+	Description        string    `gorm:"column:description;not null;default:''" json:"description"`
+	ManifestJSON       string    `gorm:"column:manifest_json;not null;default:'{}'" json:"manifestJson"`
+	ConfigSchemaJSON   string    `gorm:"column:config_schema_json;not null;default:'{}'" json:"configSchemaJson"`
+	SupportsMotionGate bool      `gorm:"column:supports_motion_gate;not null;default:true" json:"supportsMotionGate"`
+	Status             string    `gorm:"column:status;not null;default:'DISABLED'" json:"status"`
+	PreviousVersion    string    `gorm:"column:previous_version;not null;default:''" json:"previousVersion"`
+	CreatedAt          time.Time `gorm:"column:created_at;not null" json:"createdAt"`
+	UpdatedAt          time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
 }
 
 // ToPackageMeta converts an Algorithm domain model to a runner-facing PackageMeta.
@@ -82,11 +83,12 @@ func (a *Algorithm) ToPackageMeta() algorunner.PackageMeta {
 		return algorunner.PackageMeta{}
 	}
 	return algorunner.PackageMeta{
-		ID:              a.ID,
-		Name:            a.Name,
-		Version:         a.Version,
-		PreviousVersion: a.PreviousVersion,
-		Status:          a.Status,
+		ID:                a.ID,
+		Name:              a.Name,
+		Version:           a.Version,
+		PreviousVersion:   a.PreviousVersion,
+		Status:            a.Status,
+		DisableMotionGate: !a.SupportsMotionGate,
 	}
 }
 
@@ -109,14 +111,23 @@ type ManifestResources struct {
 
 // Manifest represents the metadata declaration in manifest.json.
 type Manifest struct {
-	ID          string            `json:"id"`
-	Version     string            `json:"version"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	TaskType    string            `json:"task_type"`
-	Category    string            `json:"category"`
-	Platform    ManifestPlatform  `json:"platform"`
-	Resources   ManifestResources `json:"resources"`
+	ID                 string            `json:"id"`
+	Version            string            `json:"version"`
+	Name               string            `json:"name"`
+	Description        string            `json:"description"`
+	TaskType           string            `json:"task_type"`
+	Category           string            `json:"category"`
+	Platform           ManifestPlatform  `json:"platform"`
+	Resources          ManifestResources `json:"resources"`
+	SupportsMotionGate *bool             `json:"supports_motion_gate,omitempty"`
+}
+
+// SupportsMotionGateOrDefault 返回算法包是否支持运动门禁。未显式声明时默认返回 true。
+func (m *Manifest) SupportsMotionGateOrDefault() bool {
+	if m == nil || m.SupportsMotionGate == nil {
+		return true
+	}
+	return *m.SupportsMotionGate
 }
 
 // AlgorithmTrialResponse models the output of a single static image trial inference.
