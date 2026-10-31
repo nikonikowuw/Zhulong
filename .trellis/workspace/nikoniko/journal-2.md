@@ -1692,3 +1692,40 @@ Implemented fourth vehicles tab in perception records reusing captures endpoint 
 ### Next Steps
 
 - 如需代码修复，阻止卸载流程在目录清理失败时删除数据库登记，并为历史孤儿目录增加显式恢复提示。
+
+
+## Session 88: 电子地图摄像头点位分配与时空轨迹查询收尾归档
+<!-- trellis-session: v=2 fp=9db683e0ecaa3a64 -->
+
+**Date**: 2026-10-31
+**Task**: 电子地图摄像头点位分配与时空轨迹查询收尾归档
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+收尾并归档 10-29-camera-spatial-trajectory。补齐 PRD 验收标准全部勾选，通过 --skip-branch-validation 成功归档至 archive/2026-10/。补录底图空间标定、时空轨迹引擎与双模式画布重构相关提交。
+
+### Main Changes
+
+- 补齐 10-29-camera-spatial-trajectory/prd.md 验收标准勾选
+- 归档 10-29-camera-spatial-trajectory 至 .trellis/tasks/archive/2026-10/
+- 补录电子地图与时空轨迹相关提交 (58bddf1, 1f125f4, d31358f) 及归档提交 (ff04f7f)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `58bddf1` | feat(spatial): 实现电子地图底图管理、摄像头点位标定与时空轨迹查询 |
+| `1f125f4` | refactor(spatial): 收敛数据库错误构造、拆分轨迹查询并重组 handler 测试 |
+| `d31358f` | refactor(spatial): 工作台重构为轨迹/标定双模式并拆分画布视图 |
+| `ff04f7f` | chore(task): archive 10-29-camera-spatial-trajectory |
+
+### Testing
+
+- [OK] [OK] task.py list 确认该任务已移出活跃任务列表
+- [OK] [OK] task.py list-archive 确认已进入 archive/2026-10/
+
+### Status
+
+[OK] **Completed**

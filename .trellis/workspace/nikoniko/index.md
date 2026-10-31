@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 87
+- **Total Sessions**: 88
 - **Last Active**: 2026-10-31
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1694 | Active |
+| `journal-2.md` | ~1731 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 88 | 2026-10-31 | 电子地图摄像头点位分配与时空轨迹查询收尾归档 | `58bddf1`, `1f125f4`, `d31358f`, `ff04f7f` | `dev` |
 | 87 | 2026-10-31 | Diagnose hidden algorithm install directory | - | `dev` |
 | 86 | 2026-10-26 | GB28181 目录同步与设备接入收尾 | `b7d0c68` | `dev` |
 | 85 | 2026-10-25 | auth 模块硬化：多字节密码 500 与限流/会话契约 | `0379051` | `dev` |
