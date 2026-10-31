@@ -13,6 +13,15 @@ interface ImageSearchResultsProps {
   topK: number
 }
 
+function getErrorMessage(error: Error | null, fallback: string): string {
+  if (!error) return fallback
+  const maybeAxios = error as { response?: { data?: { message?: string } } }
+  if (typeof maybeAxios.response?.data?.message === 'string') {
+    return maybeAxios.response.data.message
+  }
+  return error.message || fallback
+}
+
 export function ImageSearchResults({
   results,
   isSearching,
@@ -49,6 +58,7 @@ export function ImageSearchResults({
   }
 
   if (isError) {
+    const errorText = getErrorMessage(error, t('results.errorDescription'))
     return (
       <Card className='flex min-h-[260px] flex-col items-center justify-center border-destructive/30 bg-destructive/5 p-8 text-center'>
         <div className='mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10 text-destructive'>
@@ -58,7 +68,7 @@ export function ImageSearchResults({
           {t('results.errorTitle')}
         </h3>
         <p className='mt-1 max-w-md text-xs text-muted-foreground'>
-          {error?.message || t('results.emptyDescription')}
+          {errorText}
         </p>
       </Card>
     )

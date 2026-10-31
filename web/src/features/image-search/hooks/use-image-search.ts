@@ -12,27 +12,7 @@ export function useImageSearch() {
 
   const previewUrlRef = useRef<string | null>(null)
 
-  const clearPreview = useCallback(() => {
-    if (previewUrlRef.current) {
-      URL.revokeObjectURL(previewUrlRef.current)
-      previewUrlRef.current = null
-      setPreviewUrl(null)
-    }
-  }, [])
-
-  const setFile = useCallback(
-    (file: File | null) => {
-      clearPreview()
-      setSelectedFile(file)
-      if (file) {
-        const url = URL.createObjectURL(file)
-        previewUrlRef.current = url
-        setPreviewUrl(url)
-      }
-    },
-    [clearPreview]
-  )
-
+  // 卸载时回收可能存在的 ObjectURL
   useEffect(() => {
     return () => {
       if (previewUrlRef.current) {
@@ -74,10 +54,29 @@ export function useImageSearch() {
     },
   })
 
+  // 变更或清除图片时释放旧 ObjectURL 并联动重置旧检索结果，避免图文脱节
+  const setFile = useCallback(
+    (file: File | null) => {
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current)
+        previewUrlRef.current = null
+      }
+      setSelectedFile(file)
+      if (file) {
+        const url = URL.createObjectURL(file)
+        previewUrlRef.current = url
+        setPreviewUrl(url)
+      } else {
+        setPreviewUrl(null)
+      }
+      resetMutation()
+    },
+    [resetMutation]
+  )
+
   const reset = useCallback(() => {
     setFile(null)
-    resetMutation()
-  }, [setFile, resetMutation])
+  }, [setFile])
 
   return {
     selectedFile,
@@ -89,7 +88,7 @@ export function useImageSearch() {
     uploadProgress,
     setFile,
     reset,
-    search: executeSearch,
+    search: () => executeSearch(),
     isSearching,
     isSuccess,
     isError,

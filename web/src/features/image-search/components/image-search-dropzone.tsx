@@ -1,6 +1,7 @@
-import { type DragEvent, useRef } from 'react'
+import { type DragEvent, useRef, useState } from 'react'
 import { RefreshCw, Trash2, UploadCloud } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 
@@ -9,6 +10,17 @@ interface ImageSearchDropzoneProps {
   previewUrl: string | null
   onFileSelect: (file: File | null) => void
   disabled?: boolean
+}
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
+const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const ALLOWED_EXTENSIONS = /\.(jpe?g|png|webp)$/i
+
+function isAllowedImageFile(file: File): boolean {
+  if (file.type && ALLOWED_MIME_TYPES.has(file.type)) {
+    return true
+  }
+  return ALLOWED_EXTENSIONS.test(file.name)
 }
 
 function formatBytes(bytes: number): string {
@@ -25,6 +37,38 @@ export function ImageSearchDropzone({
 }: ImageSearchDropzoneProps) {
   const { t } = useTranslation('imageSearch')
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const dragDepthRef = useRef(0)
+
+  const handleValidateAndSelect = (file: File) => {
+    if (!isAllowedImageFile(file)) {
+      toast.error(t('dropzone.unsupportedFormat'))
+      return
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      toast.error(t('dropzone.fileSizeExceeded'))
+      return
+    }
+    onFileSelect(file)
+  }
+
+  const handleDragEnter = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (disabled) return
+    dragDepthRef.current += 1
+    setIsDragging(true)
+  }
+
+  const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragDepthRef.current -= 1
+    if (dragDepthRef.current <= 0) {
+      dragDepthRef.current = 0
+      setIsDragging(false)
+    }
+  }
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -34,17 +78,19 @@ export function ImageSearchDropzone({
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     e.stopPropagation()
+    dragDepthRef.current = 0
+    setIsDragging(false)
     if (disabled) return
     const files = e.dataTransfer.files
     if (files && files.length > 0) {
-      onFileSelect(files[0])
+      handleValidateAndSelect(files[0])
     }
   }
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (files && files.length > 0) {
-      onFileSelect(files[0])
+      handleValidateAndSelect(files[0])
     }
     // Reset value so re-selecting the same file fires onChange
     e.target.value = ''
@@ -107,17 +153,24 @@ export function ImageSearchDropzone({
         </div>
       ) : (
         <div
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
           onDragOver={handleDragOver}
           onDrop={handleDrop}
           onClick={() => !disabled && fileInputRef.current?.click()}
           className={`flex min-h-[220px] cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
             disabled
               ? 'cursor-not-allowed opacity-50'
-              : 'border-muted-foreground/30 hover:border-primary/60 hover:bg-muted/20'
+              : isDragging
+                ? 'border-primary bg-primary/10'
+                : 'border-muted-foreground/30 hover:border-primary/60 hover:bg-muted/20'
           }`}
           role='button'
+          aria-label={t('dropzone.title')}
+          aria-disabled={disabled}
           tabIndex={0}
           onKeyDown={(e) => {
+            if (disabled) return
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
               fileInputRef.current?.click()

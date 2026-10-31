@@ -59,6 +59,7 @@ export function ImageSearchControls({
           max={100}
           step={5}
           disabled={isSearching}
+          aria-label={t('controls.threshold')}
           onValueChange={(val) => {
             if (val[0] !== undefined) {
               onThresholdChange(val[0] / 100)
@@ -87,7 +88,7 @@ export function ImageSearchControls({
           <SelectContent>
             {TOP_K_OPTIONS.map((opt) => (
               <SelectItem key={opt} value={opt.toString()} className='text-xs'>
-                Top {opt}
+                {t('controls.topKOption', { count: opt })}
               </SelectItem>
             ))}
           </SelectContent>
@@ -100,7 +101,7 @@ export function ImageSearchControls({
           type='button'
           className='h-9 flex-1 gap-1.5 text-xs font-medium'
           disabled={!canSearch || isSearching}
-          onClick={onSearch}
+          onClick={() => onSearch()}
         >
           {isSearching ? (
             <>
@@ -123,10 +124,10 @@ export function ImageSearchControls({
           size='sm'
           className='h-9 gap-1 text-xs'
           disabled={isSearching}
-          onClick={onReset}
+          onClick={() => onReset()}
         >
           <RotateCcw className='h-3.5 w-3.5' />
-          {t('dropzone.clear')}
+          {t('controls.reset')}
         </Button>
       </div>
     </Card>

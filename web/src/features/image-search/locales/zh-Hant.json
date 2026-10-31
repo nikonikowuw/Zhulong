@@ -9,16 +9,20 @@
     "selected": "已選擇檔案：{{name}} ({{size}})",
     "change": "更換圖片",
     "clear": "清除",
-    "previewAlt": "上傳的檢索原圖預覽"
+    "previewAlt": "上傳的檢索原圖預覽",
+    "fileSizeExceeded": "檔案大小超過 10MB 限制",
+    "unsupportedFormat": "不支援的檔案格式，僅支援 JPG、PNG、WebP"
   },
   "controls": {
     "threshold": "相似度閾值",
     "thresholdValue": "{{value}}%",
     "thresholdHint": "低於該相似度的候選人員將被過濾（預設 70%）",
     "topK": "候選上限 (Top-K)",
+    "topKOption": "Top {{count}}",
     "search": "開始檢索",
     "searching": "正在檢索...",
-    "uploading": "正在上傳 {{progress}}%..."
+    "uploading": "正在上傳 {{progress}}%...",
+    "reset": "重置"
   },
   "results": {
     "title": "檢索結果",
@@ -29,6 +33,7 @@
     "emptyTitle": "未找到匹配的人員",
     "emptyDescription": "底庫中沒有達到指定相似度的人員面容。可嘗試調低閾值或上傳更清晰的人臉正臉照片。",
     "errorTitle": "檢索失敗",
+    "errorDescription": "檢索服務發生異常，請檢查網路或稍後重試。",
     "card": {
       "similarity": "相似度",
       "externalId": "編號",

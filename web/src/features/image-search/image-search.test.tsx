@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { DirectionProvider } from '@/context/direction-provider'
@@ -7,6 +8,13 @@ import { SearchProvider } from '@/context/search-provider'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { imageSearchApi } from './api/image-search-api'
 import { ImageSearch } from './index'
+
+vi.mock('sonner', () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+  },
+}))
 
 const mockNavigate = vi.fn()
 vi.mock('@tanstack/react-router', async (importOriginal) => {
@@ -205,5 +213,112 @@ describe('ImageSearch Workbench', () => {
       .element(getByText(/检索失败|Search Failed/))
       .toBeInTheDocument()
     await expect.element(getByText('人脸特征提取服务异常')).toBeInTheDocument()
+  })
+
+  it('resets previous search results when file is cleared', async () => {
+    const mockMatches = {
+      matches: [
+        {
+          personId: 'p-1',
+          personName: 'Alice',
+          matchedFaceId: 'f-1',
+          similarity: 0.95,
+        },
+      ],
+    }
+
+    vi.spyOn(imageSearchApi, 'searchByImage').mockResolvedValueOnce(mockMatches)
+
+    const { getByRole, getByText, container } = await renderWithProviders(
+      <ImageSearch />
+    )
+
+    const file = new File(['fake-png-content'], 'test.png', {
+      type: 'image/png',
+    })
+    const input = container.querySelector(
+      'input[type="file"]'
+    ) as HTMLInputElement
+    Object.defineProperty(input, 'files', { value: [file] })
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+
+    const searchBtn = getByRole('button', { name: /开始检索|Search Gallery/ })
+    await searchBtn.click()
+
+    await expect.element(getByText('Alice')).toBeInTheDocument()
+
+    // Clear the selected file
+    const clearBtn = getByRole('button', { name: /清除|Clear/ })
+    await clearBtn.click()
+
+    // Verify it returned to idle state rather than displaying stale matches
+    await expect.element(getByText(/就绪|Ready to Search/)).toBeInTheDocument()
+    await expect.element(getByText('Alice')).not.toBeInTheDocument()
+  })
+
+  it('rejects unsupported file formats and files exceeding 10MB', async () => {
+    const { container } = await renderWithProviders(<ImageSearch />)
+    const input = container.querySelector(
+      'input[type="file"]'
+    ) as HTMLInputElement
+
+    // 1. Unsupported extension/MIME
+    const badFile = new File(['bad'], 'test.pdf', { type: 'application/pdf' })
+    Object.defineProperty(input, 'files', {
+      value: [badFile],
+      configurable: true,
+    })
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringMatching(/不支持的文件格式|Unsupported file format/)
+    )
+
+    // 2. File exceeding 10MB
+    const bigFile = new File(['a'], 'huge.jpg', { type: 'image/jpeg' })
+    Object.defineProperty(bigFile, 'size', {
+      value: 11 * 1024 * 1024,
+      configurable: true,
+    })
+    Object.defineProperty(input, 'files', {
+      value: [bigFile],
+      configurable: true,
+    })
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringMatching(/超过 10MB 限制|exceeds 10MB limit/)
+    )
+  })
+
+  it('renders fallback error description when error message is empty', async () => {
+    vi.spyOn(imageSearchApi, 'searchByImage').mockRejectedValueOnce(
+      new Error('')
+    )
+
+    const { getByRole, getByText, container } = await renderWithProviders(
+      <ImageSearch />
+    )
+
+    const file = new File(['fake-png-content'], 'test.png', {
+      type: 'image/png',
+    })
+    const input = container.querySelector(
+      'input[type="file"]'
+    ) as HTMLInputElement
+    Object.defineProperty(input, 'files', { value: [file] })
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+
+    const searchBtn = getByRole('button', { name: /开始检索|Search Gallery/ })
+    await searchBtn.click()
+
+    await expect
+      .element(getByText(/检索失败|Search Failed/))
+      .toBeInTheDocument()
+    await expect
+      .element(
+        getByText(
+          /检索服务发生异常，请检查网络或稍后重试|An error occurred during search/
+        )
+      )
+      .toBeInTheDocument()
   })
 })
