@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
@@ -74,10 +75,12 @@ type VerificationReport struct {
 	// SampleDecoded reports whether the entry decoded the sample into a real frame.
 	// False means the run fell back to a synthetic frame, so passing verification
 	// proves the ABI lifecycle only — never that the packaged sample was inferred.
-	SampleDecoded bool   `json:"sample_decoded"`
-	Width         int    `json:"width"`
-	Height        int    `json:"height"`
-	Error         string `json:"error,omitempty"`
+	SampleDecoded bool                         `json:"sample_decoded"`
+	Width         int                          `json:"width"`
+	Height        int                          `json:"height"`
+	Error         string                       `json:"error,omitempty"`
+	CostMs        int64                        `json:"cost_ms,omitempty"`
+	Result        *aitypes.RawInferencePayload `json:"result,omitempty"`
 }
 
 // HostPlatform identifies the machine an algorithm package must match: the CPU

@@ -75,5 +75,22 @@
   "impactTasks": "{{count}} analysis task(s) will be unbound. Affected cameras: {{cameras}}. The tasks themselves are kept but lose this algorithm.",
   "impactNoTasks": "No analysis task is currently bound to this algorithm.",
   "impactEvidenceKept": "Historical evidence is preserved: {{recognitions}} recognition(s), {{alarms}} alarm(s) and {{captures}} capture(s) will remain, keeping their algorithm name and version snapshot, but they can no longer be filtered by this algorithm.",
-  "impactRequiresStop": "This algorithm is currently running; uninstalling will stop its process first."
+  "impactRequiresStop": "This algorithm is currently running; uninstalling will stop its process first.",
+  "trialAlgorithm": "Trial Inference",
+  "trialDialogTitle": "Algorithm Trial Inference",
+  "trialDialogDesc": "Upload a single static image (JPEG / PNG, ≤ 10MB) to run one-shot inference in an isolated process. Only available for disabled algorithms.",
+  "trialUploadHint": "Click or drag and drop an image here",
+  "trialSupportedFormats": "Supports JPG / JPEG / PNG, resolution ≤ 8192px, size ≤ 10MB",
+  "trialRunning": "Inferring...",
+  "trialStart": "Run Trial",
+  "trialCost": "Inference Cost",
+  "trialResolution": "Resolution",
+  "trialTargetCount": "Detected Targets",
+  "trialDownloadResult": "Download Result",
+  "trialReselect": "Choose Another Image",
+  "trialNoTargets": "No targets detected",
+  "trialErrorFileFormat": "Only JPEG or PNG images are supported",
+  "trialErrorFileSize": "Image file size cannot exceed 10MB",
+  "trialDisabledOnlyHint": "Algorithm must be disabled before running trial",
+  "classifications": "Classifications"
 }

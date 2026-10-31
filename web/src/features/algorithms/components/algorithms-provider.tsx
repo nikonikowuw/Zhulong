@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import useDialogState from '@/hooks/use-dialog-state'
 import { type Algorithm } from '../data/schema'
 
-export type AlgorithmsDialogType = 'upload' | 'delete' | 'reset'
+export type AlgorithmsDialogType = 'upload' | 'delete' | 'reset' | 'trial'
 
 interface AlgorithmsContextType {
   open: AlgorithmsDialogType | null

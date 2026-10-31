@@ -75,5 +75,22 @@
   "impactTasks": "將解綁 {{count}} 路分析任務，受影響的攝影機：{{cameras}}。任務本身保留，但會失去該演算法。",
   "impactNoTasks": "目前沒有分析任務綁定該演算法。",
   "impactEvidenceKept": "歷史證據不會被刪除：{{recognitions}} 條辨識、{{alarms}} 條告警、{{captures}} 條抓拍將繼續保留，並保留演算法名稱與版本快照，但無法再按該演算法篩選。",
-  "impactRequiresStop": "該演算法目前正在執行，卸載會先強制停止其行程。"
+  "impactRequiresStop": "該演算法目前正在執行，卸載會先強制停止其行程。",
+  "trialAlgorithm": "效果試跑",
+  "trialDialogTitle": "演算法效果試跑",
+  "trialDialogDesc": "上傳單張靜態圖片（JPEG / PNG，≤ 10MB），在獨立隔離處理程序中執行單次推論並直觀預覽檢測框與屬性。僅支援已停用的演算法套件。",
+  "trialUploadHint": "點擊選擇或將圖片拖曳至此處",
+  "trialSupportedFormats": "支援 JPG / JPEG / PNG 格式，解析度 ≤ 8192px，體積 ≤ 10MB",
+  "trialRunning": "正在推論中...",
+  "trialStart": "開始試跑",
+  "trialCost": "推論耗時",
+  "trialResolution": "圖片解析度",
+  "trialTargetCount": "檢出目標",
+  "trialDownloadResult": "下載標注圖",
+  "trialReselect": "重新選圖",
+  "trialNoTargets": "未檢出任何目標",
+  "trialErrorFileFormat": "僅支援 JPEG 或 PNG 格式圖片",
+  "trialErrorFileSize": "圖片大小不能超過 10MB",
+  "trialDisabledOnlyHint": "演算法必須處於停用狀態才能進行試跑",
+  "classifications": "分類結果"
 }

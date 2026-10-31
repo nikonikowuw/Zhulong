@@ -33,6 +33,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -632,7 +633,7 @@ namespace detail
         }
     }
 
-    int run_verify(const zhulong_plugin_api_v1 &api, const std::string &sample_path)
+    int run_verify(const zhulong_plugin_api_v1 &api, const std::string &sample_path, const std::string &algorithm_id = "")
     {
         std::cout << "{\"step\":\"abi_verified\",\"name\":"
                   << runner::json_quote(api.plugin_name ? api.plugin_name : "")
@@ -715,7 +716,12 @@ namespace detail
 
         // 5. 单次标准推理调用
         zhulong_inference_result *result = nullptr;
+        const auto started = std::chrono::steady_clock::now();
         rc = api.process(task, &frame, &result);
+        const double cost_ms_double =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        const int64_t cost_ms = static_cast<int64_t>(std::llround(cost_ms_double));
+
         if (rc != ZHULONG_PLUGIN_OK)
         {
             ZL_LOGE(0, "algorithm.runner", "plugin_process_failed rc=%d", static_cast<int>(rc));
@@ -728,6 +734,7 @@ namespace detail
 
         uint32_t count = result ? result->count : 0;
         int32_t res_type = result ? result->result_type : 0;
+        std::string result_json = serialize_inference_result(0, 1000, 0, cost_ms, result, algorithm_id);
 
         // 6. 释放结果
         if (result)
@@ -745,7 +752,9 @@ namespace detail
                   << ",\"width\":" << width
                   << ",\"height\":" << height
                   << ",\"result_type\":" << res_type
-                  << ",\"count\":" << count << "}" << std::endl;
+                  << ",\"count\":" << count
+                  << ",\"cost_ms\":" << cost_ms
+                  << ",\"result\":" << result_json << "}" << std::endl;
         return 0;
     }
 
@@ -1387,7 +1396,7 @@ namespace detail
         int rc = 0;
         if (options.verify)
         {
-            rc = run_verify(api, options.sample_path);
+            rc = run_verify(api, options.sample_path, options.algorithm_id);
         }
         else if (options.extract_feature)
         {

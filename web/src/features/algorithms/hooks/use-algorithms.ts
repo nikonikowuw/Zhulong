@@ -123,3 +123,16 @@ export function useResetAlgorithm() {
     },
   })
 }
+
+/**
+ * 单图试跑 Mutation Hook
+ */
+export function useTrialAlgorithm(options?: { suppressGlobalToast?: boolean }) {
+  return useMutation({
+    mutationFn: ({ id, file }: { id: string; file: File }) =>
+      algorithmsApi.trialAlgorithm(id, file),
+    meta: {
+      suppressGlobalToast: options?.suppressGlobalToast,
+    },
+  })
+}

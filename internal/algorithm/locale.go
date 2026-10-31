@@ -105,5 +105,25 @@ func init() {
 			"zh-Hans": "分析任务请求内容无效",
 			"zh-Hant": "分析任務請求內容無效",
 		},
+		"INVALID_IMAGE_FILE": {
+			"en":      "Invalid or unsupported image file, must be JPEG or PNG",
+			"zh-Hans": "图片文件无效或不受支持，必须为 JPEG 或 PNG 格式",
+			"zh-Hant": "圖片檔案無效或不受支援，必須為 JPEG 或 PNG 格式",
+		},
+		"IMAGE_DIMENSIONS_TOO_LARGE": {
+			"en":      "Image dimensions exceed 8192px limit",
+			"zh-Hans": "图片分辨率超过 8192 像素限制",
+			"zh-Hant": "圖片解析度超過 8192 像素限制",
+		},
+		"TRIAL_TIMEOUT": {
+			"en":      "Trial inference execution timed out",
+			"zh-Hans": "算法试跑推理超时",
+			"zh-Hant": "演算法試跑推論逾時",
+		},
+		"TRIAL_EXECUTION_FAILED": {
+			"en":      "Trial inference execution failed",
+			"zh-Hans": "算法试跑推理执行失败",
+			"zh-Hant": "演算法試跑推論執行失敗",
+		},
 	})
 }

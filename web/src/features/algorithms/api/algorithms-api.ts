@@ -3,9 +3,11 @@ import {
   algorithmActionResponseSchema,
   algorithmListResponseSchema,
   algorithmSchema,
+  algorithmTrialResultSchema,
   deletionImpactSchema,
   type Algorithm,
   type AlgorithmStatus,
+  type AlgorithmTrialResult,
   type DeletionImpact,
 } from '../data/schema'
 
@@ -115,5 +117,24 @@ export const algorithmsApi = {
       `/algorithms/${id}/reset`
     )
     return algorithmActionResponseSchema.parse(resp.data.data).status
+  },
+
+  /**
+   * 单图效果试跑
+   */
+  async trialAlgorithm(id: string, file: File): Promise<AlgorithmTrialResult> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const resp = await apiClient.post<ApiResponse<unknown>>(
+      `/algorithms/${id}/trial`,
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    )
+    return algorithmTrialResultSchema.parse(resp.data.data)
   },
 }

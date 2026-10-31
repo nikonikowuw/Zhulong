@@ -3,6 +3,7 @@ package algorithm
 import (
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 )
 
@@ -28,6 +29,7 @@ const (
 	ActionAlgorithmDisable    = "algorithm.disable"
 	ActionAlgorithmReset      = "algorithm.reset"
 	ActionAlgorithmDelete     = "algorithm.delete"
+	ActionAlgorithmTrial      = "algorithm.trial"
 	ActionAlgorithmTaskCreate = "algorithm.task.create"
 	ActionAlgorithmTaskDelete = "algorithm.task.delete"
 )
@@ -115,4 +117,17 @@ type Manifest struct {
 	Category    string            `json:"category"`
 	Platform    ManifestPlatform  `json:"platform"`
 	Resources   ManifestResources `json:"resources"`
+}
+
+// AlgorithmTrialResponse models the output of a single static image trial inference.
+type AlgorithmTrialResponse struct {
+	CostMs          int64                        `json:"costMs"`
+	Width           int                          `json:"width"`
+	Height          int                          `json:"height"`
+	TaskType        string                       `json:"taskType"`
+	Count           int                          `json:"count"`
+	Detections      []aitypes.DetectionItem      `json:"detections"`
+	Classifications []aitypes.ClassificationItem `json:"classifications"`
+	Persons         []aitypes.PersonItem         `json:"persons"`
+	Vehicles        []aitypes.VehicleItem        `json:"vehicles"`
 }

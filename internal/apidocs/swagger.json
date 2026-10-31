@@ -431,6 +431,93 @@
                 }
             }
         },
+        "/algorithms/{id}/trial": {
+            "post": {
+                "description": "Performs a one-shot inference using an uploaded static image against an installed, disabled algorithm. Returns structured detection/classification/structure results with bounding boxes and execution duration.",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "algorithm"
+                ],
+                "summary": "Run trial inference with a static image",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Algorithm ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "file",
+                        "description": "Static image (JPEG/PNG, at most 10 MB)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/algorithm.AlgorithmTrialResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "504": {
+                        "description": "Gateway Timeout",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/audit/logs": {
             "get": {
                 "produces": [
@@ -4822,6 +4909,38 @@
         }
     },
     "definitions": {
+        "aitypes.ClassificationItem": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string"
+                },
+                "score": {
+                    "type": "number"
+                }
+            }
+        },
+        "aitypes.DetectionItem": {
+            "type": "object",
+            "properties": {
+                "attributes": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "box": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "label": {
+                    "type": "string"
+                },
+                "score": {
+                    "type": "number"
+                }
+            }
+        },
         "aitypes.FaceCandidate": {
             "type": "object",
             "properties": {
@@ -4836,6 +4955,137 @@
                 },
                 "similarity": {
                     "type": "number"
+                }
+            }
+        },
+        "aitypes.FaceSubItem": {
+            "type": "object",
+            "properties": {
+                "box": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "candidates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/aitypes.FaceCandidate"
+                    }
+                },
+                "is_fused": {
+                    "type": "boolean"
+                },
+                "landmarks": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "number",
+                            "format": "float64"
+                        }
+                    }
+                },
+                "matched": {
+                    "type": "boolean"
+                },
+                "matched_face_id": {
+                    "type": "string"
+                },
+                "person_id": {
+                    "type": "string"
+                },
+                "person_name": {
+                    "type": "string"
+                },
+                "quality": {
+                    "type": "number"
+                },
+                "similarity": {
+                    "type": "number"
+                }
+            }
+        },
+        "aitypes.PersonItem": {
+            "type": "object",
+            "properties": {
+                "attributes": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "body_box": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "body_score": {
+                    "type": "number"
+                },
+                "faces": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/aitypes.FaceSubItem"
+                    }
+                },
+                "track_id": {
+                    "type": "integer"
+                }
+            }
+        },
+        "aitypes.PlateSubItem": {
+            "type": "object",
+            "properties": {
+                "box": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "plate_color": {
+                    "type": "string"
+                },
+                "plate_number": {
+                    "type": "string"
+                },
+                "plate_type": {
+                    "type": "integer"
+                },
+                "score": {
+                    "type": "number"
+                }
+            }
+        },
+        "aitypes.VehicleItem": {
+            "type": "object",
+            "properties": {
+                "attributes": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "plates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/aitypes.PlateSubItem"
+                    }
+                },
+                "track_id": {
+                    "type": "integer"
+                },
+                "vehicle_box": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "vehicle_color": {
+                    "type": "string"
+                },
+                "vehicle_score": {
+                    "type": "number"
+                },
+                "vehicle_type": {
+                    "type": "string"
                 }
             }
         },
@@ -4905,6 +5155,50 @@
             "properties": {
                 "status": {
                     "type": "string"
+                }
+            }
+        },
+        "algorithm.AlgorithmTrialResponse": {
+            "type": "object",
+            "properties": {
+                "classifications": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/aitypes.ClassificationItem"
+                    }
+                },
+                "costMs": {
+                    "type": "integer"
+                },
+                "count": {
+                    "type": "integer"
+                },
+                "detections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/aitypes.DetectionItem"
+                    }
+                },
+                "height": {
+                    "type": "integer"
+                },
+                "persons": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/aitypes.PersonItem"
+                    }
+                },
+                "taskType": {
+                    "type": "string"
+                },
+                "vehicles": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/aitypes.VehicleItem"
+                    }
+                },
+                "width": {
+                    "type": "integer"
                 }
             }
         },

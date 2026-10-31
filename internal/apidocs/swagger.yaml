@@ -1,5 +1,26 @@
 basePath: /api/v1
 definitions:
+  aitypes.ClassificationItem:
+    properties:
+      label:
+        type: string
+      score:
+        type: number
+    type: object
+  aitypes.DetectionItem:
+    properties:
+      attributes:
+        additionalProperties: {}
+        type: object
+      box:
+        items:
+          type: number
+        type: array
+      label:
+        type: string
+      score:
+        type: number
+    type: object
   aitypes.FaceCandidate:
     properties:
       face_id:
@@ -10,6 +31,93 @@ definitions:
         type: string
       similarity:
         type: number
+    type: object
+  aitypes.FaceSubItem:
+    properties:
+      box:
+        items:
+          type: number
+        type: array
+      candidates:
+        items:
+          $ref: '#/definitions/aitypes.FaceCandidate'
+        type: array
+      is_fused:
+        type: boolean
+      landmarks:
+        items:
+          items:
+            format: float64
+            type: number
+          type: array
+        type: array
+      matched:
+        type: boolean
+      matched_face_id:
+        type: string
+      person_id:
+        type: string
+      person_name:
+        type: string
+      quality:
+        type: number
+      similarity:
+        type: number
+    type: object
+  aitypes.PersonItem:
+    properties:
+      attributes:
+        additionalProperties: {}
+        type: object
+      body_box:
+        items:
+          type: number
+        type: array
+      body_score:
+        type: number
+      faces:
+        items:
+          $ref: '#/definitions/aitypes.FaceSubItem'
+        type: array
+      track_id:
+        type: integer
+    type: object
+  aitypes.PlateSubItem:
+    properties:
+      box:
+        items:
+          type: number
+        type: array
+      plate_color:
+        type: string
+      plate_number:
+        type: string
+      plate_type:
+        type: integer
+      score:
+        type: number
+    type: object
+  aitypes.VehicleItem:
+    properties:
+      attributes:
+        additionalProperties: {}
+        type: object
+      plates:
+        items:
+          $ref: '#/definitions/aitypes.PlateSubItem'
+        type: array
+      track_id:
+        type: integer
+      vehicle_box:
+        items:
+          type: number
+        type: array
+      vehicle_color:
+        type: string
+      vehicle_score:
+        type: number
+      vehicle_type:
+        type: string
     type: object
   algorithm.Algorithm:
     properties:
@@ -55,6 +163,35 @@ definitions:
     properties:
       status:
         type: string
+    type: object
+  algorithm.AlgorithmTrialResponse:
+    properties:
+      classifications:
+        items:
+          $ref: '#/definitions/aitypes.ClassificationItem'
+        type: array
+      costMs:
+        type: integer
+      count:
+        type: integer
+      detections:
+        items:
+          $ref: '#/definitions/aitypes.DetectionItem'
+        type: array
+      height:
+        type: integer
+      persons:
+        items:
+          $ref: '#/definitions/aitypes.PersonItem'
+        type: array
+      taskType:
+        type: string
+      vehicles:
+        items:
+          $ref: '#/definitions/aitypes.VehicleItem'
+        type: array
+      width:
+        type: integer
     type: object
   algorithm.DeletionImpact:
     properties:
@@ -1955,6 +2092,63 @@ paths:
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Reset an algorithm stuck in CRASH_LOOP
+      tags:
+      - algorithm
+  /algorithms/{id}/trial:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Performs a one-shot inference using an uploaded static image against
+        an installed, disabled algorithm. Returns structured detection/classification/structure
+        results with bounding boxes and execution duration.
+      parameters:
+      - description: Algorithm ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Static image (JPEG/PNG, at most 10 MB)
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/algorithm.AlgorithmTrialResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "504":
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Run trial inference with a static image
       tags:
       - algorithm
   /algorithms/install:

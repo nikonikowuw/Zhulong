@@ -172,4 +172,46 @@ describe('algorithms-api', () => {
     )
     expect(apiClient.post).toHaveBeenCalledWith('/algorithms/algo_1/reset')
   })
+
+  it('trialAlgorithm posts image file and returns parsed trial response', async () => {
+    const mockTrialResponse = {
+      costMs: 35,
+      width: 1280,
+      height: 720,
+      taskType: 'detection',
+      count: 1,
+      detections: [
+        {
+          box: [0.1, 0.2, 0.3, 0.4],
+          label: 'helmet',
+          score: 0.98,
+        },
+      ],
+      classifications: [],
+      persons: [],
+      vehicles: [],
+    }
+
+    vi.mocked(apiClient.post).mockResolvedValue({
+      data: { code: 'OK', message: 'success', data: mockTrialResponse },
+    } as never)
+
+    const file = new File(['fake-png-content'], 'test.png', {
+      type: 'image/png',
+    })
+    const result = await algorithmsApi.trialAlgorithm('algo_1', file)
+
+    expect(result.costMs).toBe(35)
+    expect(result.width).toBe(1280)
+    expect(result.height).toBe(720)
+    expect(result.detections).toHaveLength(1)
+    expect(result.detections[0].label).toBe('helmet')
+    expect(apiClient.post).toHaveBeenCalledWith(
+      '/algorithms/algo_1/trial',
+      expect.any(FormData),
+      expect.objectContaining({
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    )
+  })
 })

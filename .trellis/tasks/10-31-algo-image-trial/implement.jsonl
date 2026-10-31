@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "HTTP 端点命名与请求/响应信封契约"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "算法包黑盒可执行文件协议与生命周期约束"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "apperr 错误码与多语言映射规范"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "纯 C ABI 与四类推理结果序列化规范"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "前端特性切片、TanStack Query 与组件规范"}

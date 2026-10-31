@@ -111,3 +111,78 @@ export const deletionImpactSchema = z.object({
 })
 
 export type DeletionImpact = z.infer<typeof deletionImpactSchema>
+
+/**
+ * 试跑结果归一化坐标框 [x1, y1, x2, y2]，取值 [0.0, 1.0]
+ */
+export const normalizedBoxSchema = z.tuple([
+  z.number(),
+  z.number(),
+  z.number(),
+  z.number(),
+])
+
+export const detectionItemSchema = z.object({
+  box: normalizedBoxSchema,
+  label: z.string(),
+  score: z.number(),
+  attributes: z.record(z.string(), z.unknown()).optional(),
+})
+
+export const classificationItemSchema = z.object({
+  label: z.string(),
+  score: z.number(),
+})
+
+export const faceSubItemSchema = z.object({
+  box: normalizedBoxSchema,
+  quality: z.number().default(0),
+  landmarks: z.array(z.tuple([z.number(), z.number()])).default([]),
+  matched: z.boolean().default(false),
+  person_name: z.string().optional(),
+  similarity: z.number().default(0),
+})
+
+export const personItemSchema = z.object({
+  track_id: z.number().default(0),
+  body_box: normalizedBoxSchema,
+  body_score: z.number(),
+  faces: z.array(faceSubItemSchema).default([]),
+  attributes: z.record(z.string(), z.unknown()).optional(),
+})
+
+export const plateSubItemSchema = z.object({
+  box: normalizedBoxSchema,
+  score: z.number(),
+  plate_number: z.string(),
+  plate_color: z.string().default(''),
+  plate_type: z.number().default(0),
+})
+
+export const vehicleItemSchema = z.object({
+  track_id: z.number().default(0),
+  vehicle_box: normalizedBoxSchema,
+  vehicle_score: z.number(),
+  vehicle_type: z.string().default(''),
+  vehicle_color: z.string().default(''),
+  plates: z.array(plateSubItemSchema).default([]),
+  attributes: z.record(z.string(), z.unknown()).optional(),
+})
+
+export const algorithmTrialResultSchema = z.object({
+  costMs: z.number(),
+  width: z.number(),
+  height: z.number(),
+  taskType: z.string(),
+  count: z.number(),
+  detections: z.array(detectionItemSchema).default([]),
+  classifications: z.array(classificationItemSchema).default([]),
+  persons: z.array(personItemSchema).default([]),
+  vehicles: z.array(vehicleItemSchema).default([]),
+})
+
+export type AlgorithmTrialResult = z.infer<typeof algorithmTrialResultSchema>
+export type DetectionItem = z.infer<typeof detectionItemSchema>
+export type ClassificationItem = z.infer<typeof classificationItemSchema>
+export type PersonItem = z.infer<typeof personItemSchema>
+export type VehicleItem = z.infer<typeof vehicleItemSchema>

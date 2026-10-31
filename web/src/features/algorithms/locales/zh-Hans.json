@@ -75,5 +75,22 @@
   "impactTasks": "将解绑 {{count}} 路分析任务，受影响的摄像机：{{cameras}}。任务本身保留，但会失去该算法。",
   "impactNoTasks": "当前没有分析任务绑定该算法。",
   "impactEvidenceKept": "历史证据不会被删除：{{recognitions}} 条识别、{{alarms}} 条告警、{{captures}} 条抓拍将继续保留，并保留算法名称与版本快照，但无法再按该算法筛选。",
-  "impactRequiresStop": "该算法当前正在运行，卸载会先强制停止其进程。"
+  "impactRequiresStop": "该算法当前正在运行，卸载会先强制停止其进程。",
+  "trialAlgorithm": "效果试跑",
+  "trialDialogTitle": "算法效果试跑",
+  "trialDialogDesc": "上传单张静态图片（JPEG / PNG，≤ 10MB），在独立隔离进程中执行单次推理并直观预览检测框与属性。仅支持已停用的算法包。",
+  "trialUploadHint": "点击选择或将图片拖拽至此处",
+  "trialSupportedFormats": "支持 JPG / JPEG / PNG 格式，分辨率 ≤ 8192px，体积 ≤ 10MB",
+  "trialRunning": "正在推理中...",
+  "trialStart": "开始试跑",
+  "trialCost": "推理耗时",
+  "trialResolution": "图片分辨率",
+  "trialTargetCount": "检出目标",
+  "trialDownloadResult": "下载标注图",
+  "trialReselect": "重新选图",
+  "trialNoTargets": "未检出任何目标",
+  "trialErrorFileFormat": "仅支持 JPEG 或 PNG 格式图片",
+  "trialErrorFileSize": "图片大小不能超过 10MB",
+  "trialDisabledOnlyHint": "算法必须处于停用状态才能进行试跑",
+  "classifications": "分类结果"
 }

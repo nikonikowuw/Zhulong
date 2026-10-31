@@ -1,5 +1,5 @@
 import { type Row } from '@tanstack/react-table'
-import { MoreHorizontal, RotateCcw, Trash2 } from 'lucide-react'
+import { FlaskConical, MoreHorizontal, RotateCcw, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import {
@@ -25,6 +25,12 @@ export function AlgorithmsDataTableRowActions({
 
   const isEnabled = algo.status === 'ACTIVE' || algo.status === 'RUNNING'
   const isCrashLoop = algo.status === 'CRASH_LOOP'
+  const isTrialAllowed = algo.status === 'DISABLED'
+
+  const handleTrial = () => {
+    setCurrentRow(algo)
+    setOpen('trial')
+  }
 
   const handleReset = () => {
     setCurrentRow(algo)
@@ -71,6 +77,12 @@ export function AlgorithmsDataTableRowActions({
               <DropdownMenuSeparator />
             </>
           )}
+
+          <DropdownMenuItem disabled={!isTrialAllowed} onClick={handleTrial}>
+            <FlaskConical className='me-2 size-4' />
+            {t('trialAlgorithm', '效果试跑')}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
 
           <DropdownMenuItem
             className='text-destructive focus:text-destructive'

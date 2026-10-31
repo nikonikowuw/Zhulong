@@ -1,15 +1,20 @@
 package algorithm
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
@@ -512,4 +517,148 @@ func (s *Service) restartAlgorithmNow(algorithmID string) {
 // StopAll stops all active subprocesses.
 func (s *Service) StopAll(timeout time.Duration) {
 	s.supervisor.StopAll(timeout)
+}
+
+// TrialInference runs a one-shot inference on an uploaded static image against an installed, disabled algorithm.
+func (s *Service) TrialInference(
+	ctx context.Context,
+	algorithmID string,
+	r io.Reader,
+) (*AlgorithmTrialResponse, error) {
+	algo, err := s.loadAlgorithm(ctx, algorithmID)
+	if err != nil {
+		return nil, err
+	}
+
+	switch algo.Status {
+	case StatusDisabled:
+		// allowed
+	case StatusActive:
+		return nil, apperr.Conflict(
+			"ALGORITHM_IS_ACTIVE",
+			"Algorithm is active; please disable it before running trial",
+			nil,
+		)
+	case StatusCrashLoop:
+		return nil, apperr.Conflict(
+			"ALGORITHM_IN_CRASH_LOOP",
+			"Algorithm is in crash loop; please reset breaker before running trial",
+			nil,
+		)
+	default:
+		return nil, apperr.Conflict(
+			"ALGORITHM_IS_ACTIVE",
+			fmt.Sprintf("Algorithm status %s is not allowed for trial inference", algo.Status),
+			nil,
+		)
+	}
+
+	// Decode and convert image to temp PPM file
+	trialImg, err := writeTrialImagePPM(r)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrImageDimensionsTooLarge):
+			return nil, apperr.Invalid("IMAGE_DIMENSIONS_TOO_LARGE", err.Error(), err)
+		case errors.Is(err, ErrInvalidImageFile):
+			return nil, apperr.Invalid("INVALID_IMAGE_FILE", err.Error(), err)
+		default:
+			return nil, apperr.Internal(internalErrorCode, "Failed to prepare image for trial", err)
+		}
+	}
+	defer trialImg.Close()
+
+	pkgDir := s.rt.PackageDir(algo.ID, algo.Version)
+	entryPath, err := algorunner.ResolveEntry(pkgDir, algo.ID)
+	if err != nil {
+		return nil, apperr.Internal("ALGO_ENTRY_INVALID", "Algorithm entry executable not found", err)
+	}
+
+	timeout := 15 * time.Second
+	tCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(tCtx, entryPath, "--verify", "--sample", trialImg.Path)
+	cmd.Dir = pkgDir
+	cmd.SysProcAttr = algorunner.PackageSysProcAttr()
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	if err := cmd.Run(); err != nil {
+		if errors.Is(tCtx.Err(), context.DeadlineExceeded) {
+			return nil, httputil.NewError(
+				http.StatusGatewayTimeout,
+				"TRIAL_TIMEOUT",
+				"Trial inference execution timed out",
+				err,
+			)
+		}
+		return nil, apperr.Internal(
+			"TRIAL_EXECUTION_FAILED",
+			fmt.Sprintf("Trial execution failed: %v (%s)", err, stderrBuf.String()),
+			err,
+		)
+	}
+
+	output := strings.TrimSpace(stdoutBuf.String())
+	if output == "" {
+		return nil, apperr.Internal("TRIAL_EXECUTION_FAILED", "Empty output from algorithm entry", nil)
+	}
+	lines := strings.Split(output, "\n")
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+	var report VerificationReport
+	if err := json.Unmarshal([]byte(lastLine), &report); err != nil {
+		return nil, apperr.Internal(
+			"TRIAL_EXECUTION_FAILED",
+			fmt.Sprintf("Cannot parse trial report: %v", err),
+			err,
+		)
+	}
+
+	if report.Status != "passed" {
+		return nil, apperr.Internal(
+			"TRIAL_EXECUTION_FAILED",
+			fmt.Sprintf("Algorithm trial reported status %q: %s", report.Status, report.Error),
+			nil,
+		)
+	}
+	if !report.SampleDecoded {
+		return nil, apperr.Internal(
+			"TRIAL_EXECUTION_FAILED",
+			"Algorithm failed to decode trial image and fell back to synthetic frame",
+			nil,
+		)
+	}
+
+	resp := &AlgorithmTrialResponse{
+		CostMs:          report.CostMs,
+		Width:           trialImg.Width,
+		Height:          trialImg.Height,
+		TaskType:        algo.TaskType,
+		Count:           report.Count,
+		Detections:      make([]aitypes.DetectionItem, 0),
+		Classifications: make([]aitypes.ClassificationItem, 0),
+		Persons:         make([]aitypes.PersonItem, 0),
+		Vehicles:        make([]aitypes.VehicleItem, 0),
+	}
+
+	if report.Result != nil {
+		if report.Result.TaskType != "" {
+			resp.TaskType = report.Result.TaskType
+		}
+		if len(report.Result.Detections) > 0 {
+			resp.Detections = report.Result.Detections
+		}
+		if len(report.Result.Classifications) > 0 {
+			resp.Classifications = report.Result.Classifications
+		}
+		if len(report.Result.Persons) > 0 {
+			resp.Persons = report.Result.Persons
+		}
+		if len(report.Result.Vehicles) > 0 {
+			resp.Vehicles = report.Result.Vehicles
+		}
+	}
+
+	return resp, nil
 }

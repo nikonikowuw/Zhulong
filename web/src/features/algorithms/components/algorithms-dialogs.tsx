@@ -1,5 +1,6 @@
 import { AlgorithmDeleteDialog } from './algorithm-delete-dialog'
 import { AlgorithmResetDialog } from './algorithm-reset-dialog'
+import { AlgorithmTrialDialog } from './algorithm-trial-dialog'
 import { AlgorithmUploadDialog } from './algorithm-upload-dialog'
 import { useAlgorithmsContext } from './algorithms-provider'
 
@@ -29,6 +30,17 @@ export function AlgorithmsDialogs(): React.JSX.Element {
       <AlgorithmResetDialog
         algorithm={currentRow}
         open={open === 'reset'}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) {
+            setOpen(null)
+            setCurrentRow(null)
+          }
+        }}
+      />
+
+      <AlgorithmTrialDialog
+        algorithm={currentRow}
+        open={open === 'trial'}
         onOpenChange={(isOpen) => {
           if (!isOpen) {
             setOpen(null)

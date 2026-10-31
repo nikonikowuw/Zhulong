@@ -1,11 +1,14 @@
 package algorithm
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
@@ -73,6 +76,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // RegisterUploadRoutes registers large-body upload endpoints on the upload router group.
 func (h *Handler) RegisterUploadRoutes(rg *gin.RouterGroup) {
 	rg.POST("/algorithms/install", h.Install)
+	rg.POST("/algorithms/:id/trial", h.Trial)
 }
 
 type uploadRouteRegistrar struct {
@@ -124,6 +128,59 @@ func (h *Handler) Install(c *gin.Context) {
 	audithttp.TagDetail(c, algo.Name)
 
 	httputil.SuccessWithStatus(c, http.StatusCreated, algo)
+}
+
+// Trial godoc
+// @Summary      Run trial inference with a static image
+// @Description  Performs a one-shot inference using an uploaded static image against an installed, disabled algorithm. Returns structured detection/classification/structure results with bounding boxes and execution duration.
+// @Tags         algorithm
+// @Accept       multipart/form-data
+// @Produce      json
+// @Param        id   path     string true "Algorithm ID"
+// @Param        file formData file   true "Static image (JPEG/PNG, at most 10 MB)"
+// @Success      200  {object}  httputil.Response{data=AlgorithmTrialResponse}
+// @Failure      400  {object}  httputil.Response
+// @Failure      404  {object}  httputil.Response
+// @Failure      409  {object}  httputil.Response
+// @Failure      413  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Failure      504  {object}  httputil.Response
+// @Router       /algorithms/{id}/trial [post]
+func (h *Handler) Trial(c *gin.Context) {
+	id := c.Param("id")
+	audithttp.Tag(c, ActionAlgorithmTrial, "algorithm:"+id, "Trial algorithm "+id)
+
+	filePart, cleanup, err := ExtractMultipartFile(c.Request, "file")
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	defer cleanup()
+
+	limitedReader := io.LimitReader(filePart, MaxTrialUploadSize+1)
+	var buf bytes.Buffer
+	n, err := buf.ReadFrom(limitedReader)
+	if err != nil {
+		httputil.WriteError(c, apperr.Internal(internalErrorCode, "Failed to read image upload", err))
+		return
+	}
+	if n > MaxTrialUploadSize {
+		httputil.WriteError(c, httputil.NewError(
+			http.StatusRequestEntityTooLarge,
+			"FILE_TOO_LARGE",
+			"Uploaded file exceeds 10MB limit",
+			nil,
+		))
+		return
+	}
+
+	resp, err := h.service.TrialInference(c.Request.Context(), id, &buf)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+
+	httputil.Success(c, resp)
 }
 
 // List godoc
