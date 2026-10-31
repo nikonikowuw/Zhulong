@@ -96,7 +96,9 @@ func (s *Service) ExecuteFaceImportJob(ctx context.Context, job *asyncjob.Job, u
 
 	jobDir := meta.JobDir
 	defer func() {
-		_ = os.RemoveAll(jobDir)
+		if err := os.RemoveAll(jobDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.logger.Warn("failed to clean up job directory", zap.String("jobDir", jobDir), zap.Error(err))
+		}
 	}()
 
 	s.logger.Info("executing face import job", zap.String("jobId", job.ID))
@@ -141,8 +143,8 @@ func (s *Service) ExecuteFaceImportJob(ctx context.Context, job *asyncjob.Job, u
 
 	var succeeded int
 	var failed int
-	var failedItems []FaceImportFailedItem
-	var newGalleryItems []GalleryItem
+	failedItems := []FaceImportFailedItem{}
+	newGalleryItems := []GalleryItem{}
 
 	// 4. Sequential AI vetting with QoS yield
 	for i, entry := range entries {
@@ -175,7 +177,11 @@ func (s *Service) ExecuteFaceImportJob(ctx context.Context, job *asyncjob.Job, u
 			succeeded++
 		}
 
-		time.Sleep(qosYieldDuration)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(qosYieldDuration):
+		}
 	}
 
 	// 5. Save result summary into Job.ResultJSON
@@ -197,9 +203,9 @@ func (s *Service) ExecuteFaceImportJob(ctx context.Context, job *asyncjob.Job, u
 	})
 
 	// 6. Batched gallery synchronization
-	if len(newGalleryItems) > 0 && s.galleryNotifier != nil {
+	if len(newGalleryItems) > 0 {
 		for _, item := range newGalleryItems {
-			_ = s.galleryNotifier.BroadcastUpsert(ctx, item)
+			s.broadcastUpsert(ctx, item)
 		}
 		s.logger.Info("broadcasted batch gallery sync", zap.String("jobId", job.ID), zap.Int("items", len(newGalleryItems)))
 	}
@@ -318,7 +324,7 @@ func (s *Service) processOneFace(ctx context.Context, baseDir string, entry Face
 		return "DATABASE_ERROR", "查询人脸列表失败"
 	}
 	if len(faces) >= maxFacesPerPerson {
-		return "FACE_LIMIT_EXCEEDED", fmt.Sprintf("人员 %s 底库照片已达 %d 张上限", targetPerson.Name, maxFacesPerPerson)
+		return "FACE_LIMIT_EXCEEDED", fmt.Sprintf("人员 %q 底库照片已达 %d 张上限", targetPerson.Name, maxFacesPerPerson)
 	}
 
 	if err := os.MkdirAll(s.facesDir, 0755); err != nil {
@@ -347,14 +353,23 @@ func (s *Service) processOneFace(ctx context.Context, baseDir string, entry Face
 	}
 
 	if err := s.store.AddFace(ctx, face); err != nil {
-		_ = os.Remove(savePath)
+		if rmErr := os.Remove(savePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			s.logger.Warn("failed to clean up face image after enrollment failure",
+				zap.String("path", savePath), zap.Error(rmErr))
+		}
 		return "FACE_ADD_FAILED", "保存人脸底库数据失败"
 	}
 
 	shouldSetPrimary := entry.IsPrimary || targetPerson.PrimaryFaceID == nil || *targetPerson.PrimaryFaceID == ""
 	if shouldSetPrimary {
-		_ = s.store.SetPrimaryFace(ctx, targetPerson.ID, face.ID)
-		targetPerson.PrimaryFaceID = &face.ID
+		if err := s.store.SetPrimaryFace(ctx, targetPerson.ID, face.ID); err != nil {
+			s.logger.Warn("failed to set primary face during face import",
+				zap.String("person_id", targetPerson.ID),
+				zap.String("face_id", face.ID),
+				zap.Error(err))
+		} else {
+			targetPerson.PrimaryFaceID = &face.ID
+		}
 	}
 
 	*galleryItems = append(*galleryItems, newGalleryItem(*face, personIDKey, targetPerson.Name))
@@ -485,7 +500,7 @@ func parseManifestCSV(csvPath string) ([]FaceImportEntry, error) {
 		return nil, errors.New("manifest.csv 缺少必需列: name, imagePath")
 	}
 
-	var entries []FaceImportEntry
+	entries := []FaceImportEntry{}
 	lineNum := 1
 	for {
 		record, err := r.Read()
@@ -532,7 +547,7 @@ func parseManifestCSV(csvPath string) ([]FaceImportEntry, error) {
 var fileNameRegex = regexp.MustCompile(`(?i)^([^._]+)[._]([^.]+)\.(jpg|jpeg|png|webp)$`)
 
 func scanImagesFallback(destDir string) ([]FaceImportEntry, error) {
-	var entries []FaceImportEntry
+	entries := []FaceImportEntry{}
 	line := 1
 
 	err := filepath.Walk(destDir, func(path string, info os.FileInfo, err error) error {
@@ -562,10 +577,7 @@ func scanImagesFallback(destDir string) ([]FaceImportEntry, error) {
 			isAlphanumericP1 := isAlphaNum(p1)
 			isAlphanumericP2 := isAlphaNum(p2)
 
-			if isAlphanumericP1 && !isAlphanumericP2 {
-				personID = p1
-				name = p2
-			} else if !isAlphanumericP1 && isAlphanumericP2 {
+			if !isAlphanumericP1 && isAlphanumericP2 {
 				name = p1
 				personID = p2
 			} else {
@@ -630,17 +642,22 @@ func (s *Service) StartFaceImportJob(ctx context.Context, fileHeader *multipart.
 	if err := os.MkdirAll(jobDir, 0755); err != nil {
 		return nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to create temp job directory", err)
 	}
+	cleanupTemp := func() {
+		if rmErr := os.RemoveAll(jobDir); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			s.logger.Warn("failed to clean up temp job directory", zap.String("jobDir", jobDir), zap.Error(rmErr))
+		}
+	}
 
 	zipSavePath := filepath.Join(jobDir, "upload.zip")
 	dst, err := os.Create(zipSavePath)
 	if err != nil {
-		_ = os.RemoveAll(jobDir)
+		cleanupTemp()
 		return nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to save uploaded ZIP file", err)
 	}
 
 	if _, err := io.Copy(dst, src); err != nil {
 		dst.Close()
-		_ = os.RemoveAll(jobDir)
+		cleanupTemp()
 		return nil, apperr.Invalid("FILE_READ_FAILED", "Failed to copy uploaded ZIP content", err)
 	}
 	dst.Close()
@@ -654,7 +671,7 @@ func (s *Service) StartFaceImportJob(ctx context.Context, fileHeader *multipart.
 
 	job, err := s.asyncJobs.SubmitJob(ctx, FaceImportJobType, string(metaJSON))
 	if err != nil {
-		_ = os.RemoveAll(jobDir)
+		cleanupTemp()
 		return nil, err
 	}
 

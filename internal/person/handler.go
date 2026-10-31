@@ -1,6 +1,7 @@
 package person
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -508,6 +509,50 @@ func (h *Handler) GetFaceImportFailedReport(c *gin.Context) {
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", csvBytes)
 }
 
+func parseSearchThreshold(c *gin.Context) (float32, *httputil.AppError) {
+	raw := c.Request.FormValue("threshold")
+	if raw == "" {
+		raw = c.Query("threshold")
+	}
+	if raw == "" {
+		return 0.70, nil
+	}
+	val, err := strconv.ParseFloat(raw, 32)
+	if err != nil {
+		return 0, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
+			{Field: "threshold", Code: "INVALID_FORMAT"},
+		})
+	}
+	if val < 0.0 || val > 1.0 {
+		return 0, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
+			{Field: "threshold", Code: "INVALID_VALUE"},
+		})
+	}
+	return float32(val), nil
+}
+
+func parseSearchTopK(c *gin.Context) (int, *httputil.AppError) {
+	raw := c.Request.FormValue("topK")
+	if raw == "" {
+		raw = c.Query("topK")
+	}
+	if raw == "" {
+		return 10, nil
+	}
+	val, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
+			{Field: "topK", Code: "INVALID_FORMAT"},
+		})
+	}
+	if val < 1 || val > 50 {
+		return 0, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
+			{Field: "topK", Code: "INVALID_VALUE"},
+		})
+	}
+	return val, nil
+}
+
 // SearchByImage godoc
 // @Summary      Search enrolled persons by facial photo
 // @Tags         person
@@ -525,48 +570,16 @@ func (h *Handler) GetFaceImportFailedReport(c *gin.Context) {
 func (h *Handler) SearchByImage(c *gin.Context) {
 	audithttp.Tag(c, ActionPersonSearchByImage, "search_by_image", "Search persons by image")
 
-	threshold := float32(0.70)
-	rawThreshold := c.Request.FormValue("threshold")
-	if rawThreshold == "" {
-		rawThreshold = c.Query("threshold")
-	}
-	if rawThreshold != "" {
-		val, err := strconv.ParseFloat(rawThreshold, 32)
-		if err != nil {
-			httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-				{Field: "threshold", Code: "INVALID_FORMAT"},
-			}))
-			return
-		}
-		if val < 0.0 || val > 1.0 {
-			httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-				{Field: "threshold", Code: "INVALID_VALUE"},
-			}))
-			return
-		}
-		threshold = float32(val)
+	threshold, valErr := parseSearchThreshold(c)
+	if valErr != nil {
+		httputil.WriteError(c, valErr)
+		return
 	}
 
-	topK := 10
-	rawTopK := c.Request.FormValue("topK")
-	if rawTopK == "" {
-		rawTopK = c.Query("topK")
-	}
-	if rawTopK != "" {
-		val, err := strconv.Atoi(rawTopK)
-		if err != nil {
-			httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-				{Field: "topK", Code: "INVALID_FORMAT"},
-			}))
-			return
-		}
-		if val < 1 || val > 50 {
-			httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-				{Field: "topK", Code: "INVALID_VALUE"},
-			}))
-			return
-		}
-		topK = val
+	topK, valErr := parseSearchTopK(c)
+	if valErr != nil {
+		httputil.WriteError(c, valErr)
+		return
 	}
 
 	file, header, err := c.Request.FormFile("image")
@@ -595,6 +608,17 @@ func (h *Handler) SearchByImage(c *gin.Context) {
 
 	resp, err := h.service.SearchByImage(c.Request.Context(), imgBytes, threshold, topK)
 	if err != nil {
+		var ae *apperr.Error
+		if errors.As(err, &ae) {
+			switch ae.Code {
+			case "UNSUPPORTED_IMAGE_FORMAT", "NO_FACE_DETECTED":
+				httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, ae.Code, ae.Message, ae.Err))
+				return
+			case "FILE_TOO_LARGE":
+				httputil.WriteError(c, httputil.NewError(http.StatusRequestEntityTooLarge, ae.Code, ae.Message, ae.Err))
+				return
+			}
+		}
 		httputil.WriteError(c, err)
 		return
 	}

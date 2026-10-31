@@ -25,7 +25,6 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
-	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
@@ -176,7 +175,7 @@ func normalizeName(raw string) (string, error) {
 	if trimmed == "" {
 		return "", apperr.Invalid("NAME_REQUIRED", "Name is required", nil)
 	}
-	if len([]rune(trimmed)) > faceNameMaxLen {
+	if utf8.RuneCountInString(trimmed) > faceNameMaxLen {
 		return "", apperr.Invalid("NAME_TOO_LONG", "Name is too long", nil)
 	}
 	return trimmed, nil
@@ -771,55 +770,55 @@ func isFinite(f float32) bool {
 // The query image resides strictly in ephemeral memory during request execution and is never persisted.
 func (s *Service) SearchByImage(ctx context.Context, imgBytes []byte, threshold float32, topK int) (*ImageSearchResponse, error) {
 	if len(imgBytes) == 0 {
-		return nil, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Image is empty", nil)
+		return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "Image is empty", nil)
 	}
 	if len(imgBytes) > maxFaceImageBytes {
-		return nil, httputil.NewError(http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "File size exceeds 10MB limit", nil)
+		return nil, apperr.Invalid("FILE_TOO_LARGE", "File size exceeds 10MB limit", nil)
 	}
 
 	// Validate static JPEG, PNG, or WebP and dimension <= 4096.
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(imgBytes))
 	if err != nil {
-		return nil, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Unsupported image format or corrupt image", err)
+		return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "Unsupported image format or corrupt image", err)
 	}
 	if format != "jpeg" && format != "png" && format != "webp" {
-		return nil, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Only static JPEG, PNG, and WebP are allowed", nil)
+		return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "Only static JPEG, PNG, and WebP are allowed", nil)
 	}
 	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 4096 || cfg.Height > 4096 {
-		return nil, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Image dimensions exceed 4096px limit", nil)
+		return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "Image dimensions exceed 4096px limit", nil)
 	}
 	// Full decode pass ensures payload is not corrupted and rejects animated WebP containers.
 	if _, _, err := image.Decode(bytes.NewReader(imgBytes)); err != nil {
-		return nil, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Failed to decode static image", err)
+		return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "Failed to decode static image", err)
 	}
 
 	if s.extractor == nil {
-		return nil, httputil.NewError(http.StatusInternalServerError, "EXTRACTOR_ERROR", "Face feature extraction is not configured", nil)
+		return nil, apperr.Internal("EXTRACTOR_ERROR", "Face feature extraction is not configured", nil)
 	}
 
 	features, err := s.extractor.ExtractFaceFeature(ctx, imgBytes)
 	if err != nil {
 		if errors.Is(err, ErrNoFaceDetected) {
-			return nil, httputil.NewError(http.StatusBadRequest, "NO_FACE_DETECTED", "No face detected in image", err)
+			return nil, apperr.Invalid("NO_FACE_DETECTED", "No face detected in image", err)
 		}
 		if errors.Is(err, ErrUnsupportedImageFormat) {
-			return nil, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Unsupported image format or corrupt image", err)
+			return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "Unsupported image format or corrupt image", err)
 		}
-		return nil, httputil.NewError(http.StatusInternalServerError, "EXTRACTOR_ERROR", "Facial feature extraction failed", err)
+		return nil, apperr.Internal("EXTRACTOR_ERROR", "Facial feature extraction failed", err)
 	}
 
 	if len(features) != faceFeatureDim {
-		return nil, httputil.NewError(http.StatusInternalServerError, "EXTRACTOR_ERROR", "Unexpected feature dimension", nil)
+		return nil, apperr.Internal("EXTRACTOR_ERROR", "Unexpected feature dimension", nil)
 	}
 	for _, v := range features {
 		if !isFinite(v) {
-			return nil, httputil.NewError(http.StatusInternalServerError, "EXTRACTOR_ERROR", "Feature vector contains invalid numbers", nil)
+			return nil, apperr.Internal("EXTRACTOR_ERROR", "Feature vector contains invalid numbers", nil)
 		}
 	}
 
 	items, err := s.store.ListSearchFaceItems(ctx)
 	if err != nil {
-		return nil, httputil.NewError(http.StatusInternalServerError, "DATABASE_ERROR", "Failed to list face templates", err)
+		return nil, apperr.Internal("DATABASE_ERROR", "Failed to list face templates", err)
 	}
 
 	bestPerPerson := make(map[string]ImageSearchMatchInfo)

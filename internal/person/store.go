@@ -510,19 +510,18 @@ func (s *Store) DeleteFace(ctx context.Context, personID, id string) error {
 			var nextFace Face
 			now := time.Now().UTC()
 			err := tx.Where("person_id = ?", personID).Order("created_at ASC, id ASC").First(&nextFace).Error
-			if err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					// No more faces remain
-					if err := tx.Model(&Person{}).Where("id = ?", personID).Updates(map[string]any{
-						"primary_face_id": nil,
-						"updated_at":      now,
-					}).Error; err != nil {
-						return err
-					}
-				} else {
+			switch {
+			case errors.Is(err, gorm.ErrRecordNotFound):
+				// No more faces remain
+				if err := tx.Model(&Person{}).Where("id = ?", personID).Updates(map[string]any{
+					"primary_face_id": nil,
+					"updated_at":      now,
+				}).Error; err != nil {
 					return err
 				}
-			} else {
+			case err != nil:
+				return err
+			default:
 				// Promote earliest remaining face
 				if err := tx.Model(&Person{}).Where("id = ?", personID).Updates(map[string]any{
 					"primary_face_id": nextFace.ID,
