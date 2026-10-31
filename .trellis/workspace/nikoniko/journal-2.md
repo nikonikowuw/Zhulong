@@ -1752,3 +1752,66 @@ Implemented fourth vehicles tab in perception records reusing captures endpoint 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 90: 人员 CSV 批量导入双轴审查与缺陷修复
+<!-- trellis-session: v=2 fp=876bdd0e0c9507cf -->
+
+**Date**: 2026-10-31
+**Task**: 人员 CSV 批量导入双轴代码审查
+**Package**: web
+**Branch**: `dev`
+
+### Summary
+
+针对人员 CSV 批量导入功能执行 Standards 与 Spec 双轴深入代码审查并完成修复。消除冗余预览/提交 state 为基于 mutation 的派生状态，修正失败重传 CSV 表头与行数以契合后端严格校验合约，修正隐藏 `<input>` 嵌套在 `<button>` 的 HTML 规范违例，并加固 DOM 挂载下载清理与算法试跑对话框重置守卫。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `51fd378` | fix(web/persons): 修复批量导入派生状态、重传表头契约与下载生命周期 |
+| `80e867e` | chore(task): archive 10-31-person-bulk-import |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 91: 统一系统后台异步任务子系统与人员人脸批量导入
+<!-- trellis-session: v=2 fp=876bdd0e0c9507d0 -->
+
+**Date**: 2026-10-31
+**Task**: 统一系统后台异步任务子系统与人员人脸批量导入 (10-31-person-face-bulk-import)
+**Package**: backend, web
+**Branch**: `dev`
+
+### Summary
+
+针对业务烟囱式 Job 建模问题，践行架构解耦与平台化，从零设计并落地系统级统一后台异步任务子系统 (`internal/asyncjob` 与 `system_async_jobs` 数据表)。将人员人脸批量导入作为标准插件接入，实现高安全门禁（Zip Slip/Bomb 防御、像素防爆、合影严格拦截）、QoS 算力让渡调度、进程崩溃孤儿任务自动回收、增量底库批量热同步、诊断 CSV 导出及 React 实时轮询对话框。
+
+### Main Changes
+
+- asyncjob: 抽象通用后台异步任务调度器，支持 JobHandler 插件注册、受控并发调度、Store 进度持久化与系统级 HTTP API (`/system/jobs`)
+- database: 新增 `000024_create_system_async_jobs` 迁移，替换领域专属 Job 表
+- person: 废弃独立的领域 Job 表与私有 Worker，通过 `FaceImportJobHandler` 接入通用任务底座；集成 Zip Slip/Bomb 防御、自适应正则解析器、AI 视觉单人脸质检门禁与聚合底库热同步
+- web/persons: 实现 `PersonsFaceImportDialog`，支持文件拖拽、实时进度与状态展示、后台异步运行、错误指标卡片与 UTF-8 BOM 失败诊断报告下载
+- api-docs: 同步更新 Swagger 文档与 swag init 配置
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `522fcc5` | test(web): 补充算法与任务测试用例中缺失的 supportsMotionGate 属性 |
+| `b106365` | feat(asyncjob,person): 统一系统异步后台任务子系统并实现人员人脸批量导入 |
+
+### Testing
+
+- [OK] 运行 go test -race -v ./internal/asyncjob/... (端到端执行、取消、孤儿回收全部通过)
+- [OK] 运行 go test -race -v ./internal/person/... (解压安全、BOM 清单解析、正则提取、端到端导入全部通过)
+- [OK] 运行 pnpm --dir web vitest run src/features/persons/ (43/43 测试通过)
+- [OK] 运行全量 make check (前端 lint/type-check/763 项测试/生产构建 + native-test 27/27 + api-docs + go-check -race) 全绿通过
+
+### Status
+
+[OK] **Completed**
