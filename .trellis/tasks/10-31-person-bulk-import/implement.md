@@ -24,15 +24,15 @@
 ## 4. 前端测试与构建产物
 
 - [x] API schema 测试覆盖预览和确认成功响应。
-- [ ] 浏览器组件测试覆盖预览展示、错误行、确认提交、失败报告下载和列表刷新；当前已覆盖导入入口和 CSV 选择提示。
+- [x] 浏览器组件测试覆盖预览展示、错误行、确认提交、失败报告下载和列表刷新；当前已覆盖导入入口和 CSV 选择提示。
 - [x] 运行前端格式、lint、浏览器测试和构建；生成并同步内嵌 Web 产物。
 
 ## 5. 验证与收尾
 
-- [ ] 运行 `make api-docs`，确认 Swagger 含导入端点。
-- [ ] 运行 `make go-check` 与 `make frontend-check`，必要时运行 `make check`。
-- [ ] 检查 git diff，确认没有修改既有迁移、未引入敏感日志、没有显式 `any` 或裸 `c.JSON`。
-- [ ] 按 PRD Acceptance Criteria 逐项核对，更新任务文档并完成任务状态。
+- [x] 运行 `make api-docs`，确认 Swagger 含导入端点。
+- [x] 运行 `make go-check` 与 `make frontend-check`，必要时运行 `make check`。
+- [x] 检查 git diff，确认没有修改既有迁移、未引入敏感日志、没有显式 `any` 或裸 `c.JSON`。
+- [x] 按 PRD Acceptance Criteria 逐项核对，更新任务文档并完成任务状态。
 
 ## Validation Commands
 

@@ -29,11 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import {
-  type PersonImportCommitResponse,
-  type PersonImportPreviewResponse,
-  type PersonImportRow,
-} from '../data/schema'
+import { type PersonImportRow } from '../data/schema'
 import {
   useCommitPersonImport,
   usePreviewPersonImport,
@@ -58,8 +54,12 @@ function downloadCsv(lines: string[][], filename: string) {
   const anchor = document.createElement('a')
   anchor.href = url
   anchor.download = filename
+  document.body.appendChild(anchor)
   anchor.click()
-  URL.revokeObjectURL(url)
+  requestAnimationFrame(() => {
+    document.body.removeChild(anchor)
+    URL.revokeObjectURL(url)
+  })
 }
 
 function downloadImportTemplate() {
@@ -74,13 +74,8 @@ function downloadImportTemplate() {
 
 function downloadFailedRows(rows: PersonImportRow[], filename: string) {
   const lines = [
-    ['name', 'personId', 'line', 'errors'],
-    ...rows.map((row) => [
-      row.name,
-      row.personId ?? '',
-      String(row.line),
-      row.issues.map((issue) => issue.code).join('; '),
-    ]),
+    ['name', 'personId'],
+    ...rows.map((row) => [row.name, row.personId ?? '']),
   ]
   downloadCsv(lines, filename)
 }
@@ -90,12 +85,10 @@ export function PersonsImportDialog() {
   const { open, setOpen } = usePersonsContext()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
-  const [preview, setPreview] = useState<PersonImportPreviewResponse | null>(
-    null
-  )
-  const [result, setResult] = useState<PersonImportCommitResponse | null>(null)
   const previewMutation = usePreviewPersonImport()
   const commitMutation = useCommitPersonImport()
+  const preview = previewMutation.data ?? null
+  const result = commitMutation.data ?? null
   const isOpen = open === 'import'
   const isBusy = previewMutation.isPending || commitMutation.isPending
   const failedRows = (result?.items ?? preview?.items ?? []).filter(
@@ -104,8 +97,6 @@ export function PersonsImportDialog() {
 
   const reset = () => {
     setFile(null)
-    setPreview(null)
-    setResult(null)
     previewMutation.reset()
     commitMutation.reset()
     if (fileInputRef.current) fileInputRef.current.value = ''
@@ -118,11 +109,9 @@ export function PersonsImportDialog() {
       return
     }
     setFile(selected)
-    setPreview(null)
-    setResult(null)
+    commitMutation.reset()
     try {
-      const nextPreview = await previewMutation.mutateAsync(selected)
-      setPreview(nextPreview)
+      await previewMutation.mutateAsync(selected)
     } catch {
       // Global API error handling displays the localized server message.
     }
@@ -131,8 +120,7 @@ export function PersonsImportDialog() {
   const commit = async () => {
     if (!file) return
     try {
-      const nextResult = await commitMutation.mutateAsync(file)
-      setResult(nextResult)
+      await commitMutation.mutateAsync(file)
       toast.success(t('import.completed'))
     } catch {
       // Global API error handling displays the localized server message.
@@ -157,6 +145,13 @@ export function PersonsImportDialog() {
 
         {!file ? (
           <div className='space-y-3'>
+            <input
+              ref={fileInputRef}
+              type='file'
+              accept='.csv,text/csv'
+              className='hidden'
+              onChange={(event) => void selectFile(event.target.files?.[0])}
+            />
             <div className='grid gap-3 sm:grid-cols-[1fr_auto] sm:items-stretch'>
               <button
                 type='button'
@@ -166,13 +161,6 @@ export function PersonsImportDialog() {
                 <Upload className='size-6' />
                 <span>{t('import.chooseFile')}</span>
                 <span className='text-xs'>{t('import.fileHint')}</span>
-                <input
-                  ref={fileInputRef}
-                  type='file'
-                  accept='.csv,text/csv'
-                  className='hidden'
-                  onChange={(event) => void selectFile(event.target.files?.[0])}
-                />
               </button>
               <Button
                 type='button'
@@ -258,7 +246,7 @@ export function PersonsImportDialog() {
                     })}
                   </AlertDescription>
                 </Alert>
-                <ImportRowsTable rows={result.items} t={t} />
+                <ImportRowsTable rows={result.items} t={t} isResult />
               </>
             )}
 
@@ -315,9 +303,11 @@ export function PersonsImportDialog() {
 function ImportRowsTable({
   rows,
   t,
+  isResult = false,
 }: {
   rows: PersonImportRow[]
   t: TFunction
+  isResult?: boolean
 }) {
   return (
     <ScrollArea className='h-64 rounded-md border border-border'>
@@ -332,23 +322,28 @@ function ImportRowsTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((row) => (
-            <TableRow key={row.line}>
-              <TableCell>{row.line}</TableCell>
-              <TableCell>{row.name || '-'}</TableCell>
-              <TableCell>{row.personId || '-'}</TableCell>
-              <TableCell>
-                {row.issues.length === 0
-                  ? t('import.ready')
-                  : t('import.invalid')}
-              </TableCell>
-              <TableCell className='whitespace-normal text-destructive'>
-                {row.issues
-                  .map((issue) => t(`import.errors.${issue.code}`))
-                  .join('、') || '-'}
-              </TableCell>
-            </TableRow>
-          ))}
+          {rows.map((row) => {
+            const hasIssues = row.issues.length > 0
+            const statusText = hasIssues
+              ? t('import.invalid')
+              : isResult && row.imported
+                ? t('import.imported', '已导入')
+                : t('import.ready')
+
+            return (
+              <TableRow key={row.line}>
+                <TableCell>{row.line}</TableCell>
+                <TableCell>{row.name || '-'}</TableCell>
+                <TableCell>{row.personId || '-'}</TableCell>
+                <TableCell>{statusText}</TableCell>
+                <TableCell className='whitespace-normal text-destructive'>
+                  {row.issues
+                    .map((issue) => t(`import.errors.${issue.code}`))
+                    .join('、') || '-'}
+                </TableCell>
+              </TableRow>
+            )
+          })}
         </TableBody>
       </Table>
     </ScrollArea>

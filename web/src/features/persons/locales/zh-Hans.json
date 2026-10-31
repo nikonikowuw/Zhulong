@@ -137,6 +137,7 @@
     "status": "状态",
     "reason": "原因",
     "ready": "可导入",
+    "imported": "已导入",
     "invalid": "需修正",
     "confirm": "确认导入",
     "completed": "导入完成",

@@ -137,6 +137,7 @@
     "status": "狀態",
     "reason": "原因",
     "ready": "可匯入",
+    "imported": "已匯入",
     "invalid": "需要修正",
     "confirm": "確認匯入",
     "completed": "匯入完成",

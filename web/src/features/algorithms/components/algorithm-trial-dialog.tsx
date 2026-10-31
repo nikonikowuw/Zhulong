@@ -69,10 +69,12 @@ export function AlgorithmTrialDialog({
     }
   }, [])
 
+  const prevOpenRef = useRef(open)
   useEffect(() => {
-    if (!open) {
+    if (prevOpenRef.current && !open) {
       clearPreview()
     }
+    prevOpenRef.current = open
   }, [open, clearPreview])
 
   useEffect(() => {

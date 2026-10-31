@@ -198,7 +198,10 @@ export function ChannelTasksView({
                             ? t('table.statusStreamError', '视频流异常')
                             : group.camera.health === 'offline' ||
                                 group.camera.health !== 'online'
-                              ? t('table.statusStreamDisconnected', '视频流断开')
+                              ? t(
+                                  'table.statusStreamDisconnected',
+                                  '视频流断开'
+                                )
                               : t('channelCard.channelRunning', '通道已启用')}
                   </span>
                   <Switch

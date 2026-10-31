@@ -137,6 +137,7 @@
     "status": "Status",
     "reason": "Reason",
     "ready": "Ready",
+    "imported": "Imported",
     "invalid": "Needs attention",
     "confirm": "Confirm import",
     "completed": "Import completed",
