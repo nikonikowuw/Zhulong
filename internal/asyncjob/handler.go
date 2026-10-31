@@ -33,11 +33,6 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	}
 }
 
-type listJobsQuery struct {
-	httputil.PaginationQuery
-	Type string `form:"type"`
-}
-
 // List godoc
 // @Summary      List system asynchronous background jobs
 // @Tags         system
@@ -45,12 +40,12 @@ type listJobsQuery struct {
 // @Param        page query int false "Page number"
 // @Param        pageSize query int false "Page size"
 // @Param        type query string false "Job type filter"
-// @Success      200  {object}  httputil.Response{data=httputil.PaginatedData[Job]}
+// @Success      200  {object}  httputil.Response{data=httputil.PaginatedData[JobResponse]}
 // @Failure      422  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /system/jobs [get]
 func (h *Handler) List(c *gin.Context) {
-	var query listJobsQuery
+	var query ListJobsQuery
 	if err := c.ShouldBindQuery(&query); err != nil {
 		httputil.HandleBindError(c, err)
 		return
@@ -63,7 +58,7 @@ func (h *Handler) List(c *gin.Context) {
 		return
 	}
 
-	httputil.PaginatedSuccess(c, jobs, total, window)
+	httputil.PaginatedSuccess(c, toJobResponses(jobs), total, window)
 }
 
 // Get godoc
@@ -71,7 +66,7 @@ func (h *Handler) List(c *gin.Context) {
 // @Tags         system
 // @Produce      json
 // @Param        id path string true "Job ID"
-// @Success      200  {object}  httputil.Response{data=Job}
+// @Success      200  {object}  httputil.Response{data=JobResponse}
 // @Failure      404  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /system/jobs/{id} [get]
@@ -82,7 +77,7 @@ func (h *Handler) Get(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, job)
+	httputil.Success(c, toJobResponse(job))
 }
 
 // Cancel godoc
@@ -90,7 +85,7 @@ func (h *Handler) Get(c *gin.Context) {
 // @Tags         system
 // @Produce      json
 // @Param        id path string true "Job ID"
-// @Success      200  {object}  httputil.Response{data=object}
+// @Success      200  {object}  httputil.Response{data=CancelJobResponse}
 // @Failure      500  {object}  httputil.Response
 // @Router       /system/jobs/{id}/cancel [post]
 func (h *Handler) Cancel(c *gin.Context) {
@@ -99,5 +94,5 @@ func (h *Handler) Cancel(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, gin.H{"cancelled": true})
+	httputil.Success(c, CancelJobResponse{Cancelled: true})
 }

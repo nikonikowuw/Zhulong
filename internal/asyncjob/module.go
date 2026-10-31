@@ -38,12 +38,12 @@ func NewAsyncJobComponents(
 	}
 }
 
-// StartLifecycle starts the async job background queue and recovers orphan jobs.
+// Start starts the async job background queue and recovers orphan jobs.
 func (c *AsyncJobComponents) Start(ctx context.Context) error {
 	return c.Service.Start(ctx)
 }
 
-// StopLifecycle stops the worker queue and waits for in-flight tasks.
+// Stop stops the worker queue and waits for in-flight tasks.
 func (c *AsyncJobComponents) Stop(ctx context.Context) error {
 	return c.Service.Stop(ctx)
 }

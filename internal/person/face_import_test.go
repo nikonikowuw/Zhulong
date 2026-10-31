@@ -205,6 +205,9 @@ func TestFaceImportJob_EndToEnd(t *testing.T) {
 
 	asyncStore := asyncjob.NewStore(dbStore)
 	asyncSvc := asyncjob.NewService(asyncStore, zap.NewNop())
+	if err := asyncSvc.Start(context.Background()); err != nil {
+		t.Fatalf("asyncSvc.Start failed: %v", err)
+	}
 	t.Cleanup(func() { _ = asyncSvc.Stop(context.Background()) })
 
 	opts := Options{AsyncJobs: asyncSvc}

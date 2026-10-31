@@ -94,7 +94,7 @@ func (s *Store) ListJobs(ctx context.Context, jobType string, limit, offset int)
 		offset = 0
 	}
 
-	var list []Job
+	list := make([]Job, 0)
 	if err := query.Order("created_at DESC").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
 		return nil, 0, err
 	}
@@ -102,20 +102,20 @@ func (s *Store) ListJobs(ctx context.Context, jobType string, limit, offset int)
 }
 
 // UpdateProgress updates the live progress telemetry of a job.
-func (s *Store) UpdateProgress(ctx context.Context, id string, progress, total, processed, succeeded, failed int, stage, currentFile string) error {
+func (s *Store) UpdateProgress(ctx context.Context, id string, progressPercent int, p ProgressUpdate) error {
 	db, err := s.db(ctx)
 	if err != nil {
 		return err
 	}
 	updates := map[string]any{
 		"status":        StatusProcessing,
-		"progress":      progress,
-		"total":         total,
-		"processed":     processed,
-		"succeeded":     succeeded,
-		"failed":        failed,
-		"current_stage": stage,
-		"current_file":  currentFile,
+		"progress":      progressPercent,
+		"total":         p.Total,
+		"processed":     p.Processed,
+		"succeeded":     p.Succeeded,
+		"failed":        p.Failed,
+		"current_stage": p.Stage,
+		"current_file":  p.CurrentFile,
 		"updated_at":    time.Now().UTC(),
 	}
 	return db.Model(&Job{}).Where("id = ? AND status <> ?", id, StatusCancelled).Updates(updates).Error
@@ -130,12 +130,14 @@ func (s *Store) FinishJob(ctx context.Context, id string, status JobStatus, resu
 	now := time.Now().UTC()
 	updates := map[string]any{
 		"status":        status,
-		"progress":      100,
 		"current_file":  "",
 		"result_json":   resultJSON,
 		"error_message": errorMsg,
 		"updated_at":    now,
 		"finished_at":   now,
+	}
+	if status == StatusCompleted {
+		updates["progress"] = 100
 	}
 	return db.Model(&Job{}).Where("id = ?", id).Updates(updates).Error
 }

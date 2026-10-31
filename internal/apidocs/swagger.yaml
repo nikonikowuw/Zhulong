@@ -239,7 +239,12 @@ definitions:
       status:
         type: string
     type: object
-  asyncjob.Job:
+  asyncjob.CancelJobResponse:
+    properties:
+      cancelled:
+        type: boolean
+    type: object
+  asyncjob.JobResponse:
     properties:
       createdAt:
         type: string
@@ -828,11 +833,11 @@ definitions:
     - field
     - message
     type: object
-  httputil.PaginatedData-asyncjob_Job:
+  httputil.PaginatedData-asyncjob_JobResponse:
     properties:
       items:
         items:
-          $ref: '#/definitions/asyncjob.Job'
+          $ref: '#/definitions/asyncjob.JobResponse'
         type: array
       limit:
         description: |-
@@ -4461,7 +4466,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/httputil.PaginatedData-asyncjob_Job'
+                  $ref: '#/definitions/httputil.PaginatedData-asyncjob_JobResponse'
               type: object
         "422":
           description: Unprocessable Entity
@@ -4492,7 +4497,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/asyncjob.Job'
+                  $ref: '#/definitions/asyncjob.JobResponse'
               type: object
         "404":
           description: Not Found
@@ -4523,7 +4528,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  type: object
+                  $ref: '#/definitions/asyncjob.CancelJobResponse'
               type: object
         "500":
           description: Internal Server Error

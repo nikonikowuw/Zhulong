@@ -3989,7 +3989,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/httputil.PaginatedData-asyncjob_Job"
+                                            "$ref": "#/definitions/httputil.PaginatedData-asyncjob_JobResponse"
                                         }
                                     }
                                 }
@@ -4041,7 +4041,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/asyncjob.Job"
+                                            "$ref": "#/definitions/asyncjob.JobResponse"
                                         }
                                     }
                                 }
@@ -4093,7 +4093,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "object"
+                                            "$ref": "#/definitions/asyncjob.CancelJobResponse"
                                         }
                                     }
                                 }
@@ -5661,7 +5661,15 @@ const docTemplate = `{
                 }
             }
         },
-        "asyncjob.Job": {
+        "asyncjob.CancelJobResponse": {
+            "type": "object",
+            "properties": {
+                "cancelled": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "asyncjob.JobResponse": {
             "type": "object",
             "properties": {
                 "createdAt": {
@@ -6538,13 +6546,13 @@ const docTemplate = `{
                 }
             }
         },
-        "httputil.PaginatedData-asyncjob_Job": {
+        "httputil.PaginatedData-asyncjob_JobResponse": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/asyncjob.Job"
+                        "$ref": "#/definitions/asyncjob.JobResponse"
                     }
                 },
                 "limit": {
