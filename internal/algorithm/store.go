@@ -63,7 +63,7 @@ func (s *Store) CreateAlgorithm(ctx context.Context, algo *Algorithm) error {
 	} else {
 		algo.UpdatedAt = algo.UpdatedAt.UTC()
 	}
-	return db.Create(algo).Error
+	return gorm.G[Algorithm](db).Create(ctx, algo)
 }
 
 func (s *Store) GetAlgorithm(ctx context.Context, id string) (*Algorithm, error) {
@@ -90,8 +90,8 @@ func (s *Store) findAlgorithmBy(ctx context.Context, where string, arg any) (*Al
 	if err != nil {
 		return nil, err
 	}
-	var algo Algorithm
-	if err := db.Where(where, arg).First(&algo).Error; err != nil {
+	algo, err := gorm.G[Algorithm](db).Where(where, arg).First(ctx)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
 		}
@@ -106,9 +106,12 @@ func (s *Store) ListAlgorithms(ctx context.Context) ([]Algorithm, error) {
 		return nil, err
 	}
 	// Initialized, not nil: an empty list must serialize to [] rather than null.
-	list := make([]Algorithm, 0)
-	if err := db.Order("created_at ASC").Find(&list).Error; err != nil {
+	list, err := gorm.G[Algorithm](db).Order("created_at ASC").Find(ctx)
+	if err != nil {
 		return nil, err
+	}
+	if list == nil {
+		list = []Algorithm{}
 	}
 	return list, nil
 }
@@ -164,11 +167,11 @@ func (s *Store) DeleteAlgorithm(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	res := db.Where("id = ?", id).Delete(&Algorithm{})
-	if res.Error != nil {
-		return res.Error
+	rows, err := gorm.G[Algorithm](db).Where("id = ?", id).Delete(ctx)
+	if err != nil {
+		return err
 	}
-	if res.RowsAffected == 0 {
+	if rows == 0 {
 		return ErrNotFound
 	}
 	return nil

@@ -50,8 +50,8 @@ func (s *gormUserStore) HasUser(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	var count int64
-	if err := db.Model(&User{}).Count(&count).Error; err != nil {
+	count, err := gorm.G[User](db).Count(ctx, "*")
+	if err != nil {
 		return false, fmt.Errorf("count users: %w", err)
 	}
 	return count > 0, nil
@@ -62,8 +62,7 @@ func (s *gormUserStore) GetByUsername(ctx context.Context, username string) (*Us
 	if err != nil {
 		return nil, err
 	}
-	var user User
-	err = db.Where("username = ?", username).First(&user).Error
+	user, err := gorm.G[User](db).Where("username = ?", username).First(ctx)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrUserNotFound
@@ -78,8 +77,7 @@ func (s *gormUserStore) GetByID(ctx context.Context, id int64) (*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	var user User
-	err = db.Where("id = ?", id).First(&user).Error
+	user, err := gorm.G[User](db).Where("id = ?", id).First(ctx)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrUserNotFound
@@ -95,8 +93,8 @@ func (s *gormUserStore) Create(ctx context.Context, user *User) error {
 		return err
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&User{}).Count(&count).Error; err != nil {
+		count, err := gorm.G[User](tx).Count(ctx, "*")
+		if err != nil {
 			return fmt.Errorf("count existing users: %w", err)
 		}
 		if count > 0 {
@@ -105,7 +103,7 @@ func (s *gormUserStore) Create(ctx context.Context, user *User) error {
 		now := time.Now().UTC()
 		user.CreatedAt = now
 		user.UpdatedAt = now
-		if err := tx.Create(user).Error; err != nil {
+		if err := gorm.G[User](tx).Create(ctx, user); err != nil {
 			return fmt.Errorf("insert user: %w", err)
 		}
 		return nil

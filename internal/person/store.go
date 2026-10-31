@@ -91,16 +91,17 @@ func (s *Store) CreatePerson(ctx context.Context, p *Person) error {
 	}
 	// DO NOTHING keeps the duplicate-key detection inside SQLite (RowsAffected == 0)
 	// without enabling GORM's global TranslateError option or matching error strings.
-	res := db.Clauses(clause.OnConflict{DoNothing: true}).Create(p)
-	if res.Error != nil {
-		return fmt.Errorf("create person: %w", res.Error)
+	result := gorm.WithResult()
+	err = gorm.G[Person](db, clause.OnConflict{DoNothing: true}, result).Create(ctx, p)
+	if err != nil {
+		return fmt.Errorf("create person: %w", err)
 	}
-	if res.RowsAffected == 0 {
+	if result.RowsAffected == 0 {
 		// SQLite's unqualified ON CONFLICT DO NOTHING swallows every uniqueness
 		// violation, not just the primary key, so the conflict must be attributed by
 		// probing. persons has exactly two unique constraints: id and person_id.
-		var existing int64
-		if err := db.Model(&Person{}).Where("id = ?", p.ID).Count(&existing).Error; err != nil {
+		existing, err := gorm.G[Person](db).Where("id = ?", p.ID).Count(ctx, "*")
+		if err != nil {
 			return fmt.Errorf("resolve person conflict: %w", err)
 		}
 		if existing > 0 {
@@ -188,8 +189,11 @@ func (s *Store) GetPerson(ctx context.Context, id string) (*Person, error) {
 	if err != nil {
 		return nil, err
 	}
-	var p Person
-	if err := db.Preload("Faces", selectFaceSummary).Where("id = ?", id).First(&p).Error; err != nil {
+	p, err := gorm.G[Person](db).Preload("Faces", func(pb gorm.PreloadBuilder) error {
+		pb.Select("id", "person_id", "image_path", "created_at")
+		return nil
+	}).Where("id = ?", id).First(ctx)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
 		}
@@ -208,8 +212,8 @@ func (s *Store) GetPersonMeta(ctx context.Context, id string) (*Person, error) {
 	if err != nil {
 		return nil, err
 	}
-	var p Person
-	if err := db.Where("id = ?", id).First(&p).Error; err != nil {
+	p, err := gorm.G[Person](db).Where("id = ?", id).First(ctx)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
 		}
@@ -225,26 +229,32 @@ func (s *Store) ListPersons(ctx context.Context, limit, offset int, search strin
 		return nil, 0, err
 	}
 
-	query := db.Model(&Person{})
+	g := gorm.G[Person](db).Scopes()
 	search = strings.TrimSpace(search)
 	if search != "" {
 		// The keyword is data, not a pattern: % and _ must match themselves instead of
 		// turning a search for "50%" into a full-table wildcard.
 		likePattern := "%" + escapeLike(search) + "%"
-		query = query.Where(`name LIKE ? ESCAPE '\' OR (person_id IS NOT NULL AND person_id LIKE ? ESCAPE '\')`,
+		g = g.Where(`name LIKE ? ESCAPE '\' OR (person_id IS NOT NULL AND person_id LIKE ? ESCAPE '\')`,
 			likePattern, likePattern)
 	}
 
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
+	total, err := g.Count(ctx, "*")
+	if err != nil {
 		return nil, 0, fmt.Errorf("count persons: %w", err)
 	}
 
 	limit, offset = clampPagination(limit, offset)
 
-	var list []Person
-	if err := query.Preload("Faces", selectFaceSummary).Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
+	list, err := g.Preload("Faces", func(pb gorm.PreloadBuilder) error {
+		pb.Select("id", "person_id", "image_path", "created_at")
+		return nil
+	}).Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(ctx)
+	if err != nil {
 		return nil, 0, err
+	}
+	if list == nil {
+		list = []Person{}
 	}
 	return list, total, nil
 }
@@ -281,9 +291,12 @@ func (s *Store) ListPersonsForGallery(ctx context.Context, limit, offset int) ([
 	if offset < 0 {
 		offset = 0
 	}
-	var list []Person
-	if err := db.Preload("Faces").Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
+	list, err := gorm.G[Person](db).Preload("Faces", nil).Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(ctx)
+	if err != nil {
 		return nil, err
+	}
+	if list == nil {
+		list = []Person{}
 	}
 	return list, nil
 }
@@ -345,11 +358,11 @@ func (s *Store) DeletePerson(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	res := db.Where("id = ?", id).Delete(&Person{})
-	if res.Error != nil {
-		return res.Error
+	rows, err := gorm.G[Person](db).Where("id = ?", id).Delete(ctx)
+	if err != nil {
+		return err
 	}
-	if res.RowsAffected == 0 {
+	if rows == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -372,13 +385,13 @@ func (s *Store) AddFace(ctx context.Context, face *Face) error {
 	}
 
 	return db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(face).Error; err != nil {
+		if err := gorm.G[Face](tx).Create(ctx, face); err != nil {
 			return fmt.Errorf("create face template: %w", err)
 		}
 
 		// Proactively assign as primary face if person currently has none.
-		var p Person
-		if err := tx.Where("id = ?", face.PersonRowID).First(&p).Error; err != nil {
+		p, err := gorm.G[Person](tx).Where("id = ?", face.PersonRowID).First(ctx)
+		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNotFound
 			}
@@ -403,8 +416,8 @@ func (s *Store) GetFace(ctx context.Context, id string) (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
-	var f Face
-	if err := db.Where("id = ?", id).First(&f).Error; err != nil {
+	f, err := gorm.G[Face](db).Where("id = ?", id).First(ctx)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
 		}
@@ -419,9 +432,12 @@ func (s *Store) ListFacesByPerson(ctx context.Context, personID string) ([]Face,
 	if err != nil {
 		return nil, err
 	}
-	var list []Face
-	if err := db.Where("person_id = ?", personID).Order("created_at ASC, id ASC").Find(&list).Error; err != nil {
+	list, err := gorm.G[Face](db).Where("person_id = ?", personID).Order("created_at ASC, id ASC").Find(ctx)
+	if err != nil {
 		return nil, err
+	}
+	if list == nil {
+		list = []Face{}
 	}
 	return list, nil
 }
@@ -434,17 +450,19 @@ func (s *Store) ListFacesByPersonPaged(ctx context.Context, personID string, lim
 		return nil, 0, err
 	}
 
-	query := db.Model(&Face{}).Where("person_id = ?", personID)
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
+	total, err := gorm.G[Face](db).Where("person_id = ?", personID).Count(ctx, "*")
+	if err != nil {
 		return nil, 0, fmt.Errorf("count faces: %w", err)
 	}
 
 	limit, offset = clampPagination(limit, offset)
 
-	var list []Face
-	if err := query.Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
+	list, err := gorm.G[Face](db).Where("person_id = ?", personID).Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(ctx)
+	if err != nil {
 		return nil, 0, err
+	}
+	if list == nil {
+		list = []Face{}
 	}
 	return list, total, nil
 }
@@ -489,27 +507,26 @@ func (s *Store) DeleteFace(ctx context.Context, personID, id string) error {
 	}
 
 	return db.Transaction(func(tx *gorm.DB) error {
-		var p Person
-		if err := tx.Where("id = ?", personID).First(&p).Error; err != nil {
+		p, err := gorm.G[Person](tx).Where("id = ?", personID).First(ctx)
+		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNotFound
 			}
 			return err
 		}
 
-		res := tx.Where("id = ? AND person_id = ?", id, personID).Delete(&Face{})
-		if res.Error != nil {
-			return res.Error
+		rows, err := gorm.G[Face](tx).Where("id = ? AND person_id = ?", id, personID).Delete(ctx)
+		if err != nil {
+			return err
 		}
-		if res.RowsAffected == 0 {
+		if rows == 0 {
 			return ErrNotFound
 		}
 
 		// If the deleted face was the primary face, promote the next available or clear it.
 		if p.PrimaryFaceID != nil && *p.PrimaryFaceID == id {
-			var nextFace Face
 			now := time.Now().UTC()
-			err := tx.Where("person_id = ?", personID).Order("created_at ASC, id ASC").First(&nextFace).Error
+			nextFace, err := gorm.G[Face](tx).Where("person_id = ?", personID).Order("created_at ASC, id ASC").First(ctx)
 			switch {
 			case errors.Is(err, gorm.ErrRecordNotFound):
 				// No more faces remain
@@ -549,16 +566,16 @@ func (s *Store) SetPrimaryFace(ctx context.Context, personID, faceID string) err
 	}
 
 	return db.Transaction(func(tx *gorm.DB) error {
-		var p Person
-		if err := tx.Where("id = ?", personID).First(&p).Error; err != nil {
+		_, err := gorm.G[Person](tx).Where("id = ?", personID).First(ctx)
+		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrNotFound
 			}
 			return err
 		}
 
-		var count int64
-		if err := tx.Model(&Face{}).Where("id = ? AND person_id = ?", faceID, personID).Count(&count).Error; err != nil {
+		count, err := gorm.G[Face](tx).Where("id = ? AND person_id = ?", faceID, personID).Count(ctx, "*")
+		if err != nil {
 			return err
 		}
 		if count == 0 {
@@ -578,8 +595,8 @@ func (s *Store) GetPersonByExternalID(ctx context.Context, externalID string) (*
 	if err != nil {
 		return nil, err
 	}
-	var p Person
-	if err := db.Where("person_id = ?", externalID).First(&p).Error; err != nil {
+	p, err := gorm.G[Person](db).Where("person_id = ?", externalID).First(ctx)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
 		}

@@ -141,3 +141,31 @@ sqlDB.SetMaxIdleConns(1)
    - **严禁全表扫描伪自增**：严禁通过 `SELECT MAX(CAST(...))` 计算下一自增数字并持有应用层互斥锁；
    - **严禁伪语义拼接复合主键**：代理主键必须保持纯粹、不透明；实体间的约束与关联（如 `UNIQUE(camera_id, algorithm_id)`）交由唯一索引与外键保证，人类可读信息通过查询联合展示，严禁拼接形如 `task_{cam}_{algo}` 的超长混合串；
    - **内部高频追加表例外**：如 `audit_logs`、`camera_streams` 等纯内部流式追加表，继续使用 SQLite 原生 `INTEGER PRIMARY KEY AUTOINCREMENT`。
+
+---
+
+## 5. GORM 原生 Generics API (`gorm.G[T]`) 规范
+
+项目持久化层全面采用 GORM 官方原生的 **Generics API (`gorm.G[T]`)**，消除旧式基于反射指针的语法啰嗦与运行时隐患。
+
+### 核心守则
+
+1. **坚持领域专属 Store，拒绝大一统泛型 Repository**：
+   - 架构上依然保持 `type CameraStore interface`、`type UserStore interface` 等各领域的专属接口，由上层领域服务（Service）注入消费，严禁抽象无意义的 `BaseStore[T]`。
+   - GORM 内部具体实现（`internal/<domain>/store.go`）全面使用 `gorm.G[Model](db)`。
+2. **彻底杜绝 SQL 累加污染 (SQL Pollution)**：
+   - `gorm.G[T]` 采用不可变构建器模型，链式调用每次返回全新 `chainG[T]` 且不污染原始 Statement。
+   - 禁止在事务中为了防御子句污染而滥用 `tx.Session(&gorm.Session{})`；动态条件构造通过 `var g gorm.ChainInterface[T] = gorm.G[T](db).Scopes()` 优雅链式递推。
+3. **强制显式上下文传播**：
+   - `gorm.G[T]` 的所有终结方法（`First(ctx)`、`Find(ctx)`、`Create(ctx, ...)`、`Delete(ctx)`、`Update(ctx, ...)`）强制要求将 `ctx context.Context` 作为第一参数传入，必须从 HTTP/Service 入口全程透传，严禁传入 `context.Background()` 或遗漏超时约束。
+4. **编译期强类型返回值**：
+   - 单条查询 `m, err := gorm.G[Model](db).Where(...).First(ctx)` 直接返回强类型 `m (Model)`，无命中记录返回 `gorm.ErrRecordNotFound`，由 Store 统一使用 `errors.Is` 解包映射为领域 NotFound 错误；
+   - 列表查询 `list, err := gorm.G[Model](db).Where(...).Find(ctx)` 直接返回 `[]Model`，对空切片防御归一化为 `[]Model{}`，严禁返回 `nil` 切片以防序列化为 JSON `null`。
+5. **事务与高级子句范式**：
+   - 在 `db.Transaction(func(tx *gorm.DB) error { ... })` 内部直接传递 `tx`：`gorm.G[Model](tx)`；
+   - 冲突子句（`clause.OnConflict`）、查询提示（`hints`）直接作为变长表达式传入构造：`gorm.G[Model](db, clause.OnConflict{...})`；
+   - 带乐观锁（`Revision`）的行级锁查询统一使用：`gorm.G[Camera](tx, clause.Locking{Strength: "UPDATE"}).Where(...).First(ctx)`。
+6. **动态 Map 更新取舍**：
+   - 强类型实体更新或单列更新优先使用 `gorm.G[Model](db).Where(...).Update(ctx, "col", val)` 或 `.Updates(ctx, model)`；
+   - 对于包含 `gorm.Expr`（如自增/CASE WHEN 补丁）或带动态空值排除逻辑的复杂字典更新，保持 `tx.Model(&Model{}).Where(...).Updates(updates)`，确保 SQLite 表达式求值与字段选择语义清晰可控。
+

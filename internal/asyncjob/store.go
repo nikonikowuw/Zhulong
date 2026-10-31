@@ -52,7 +52,7 @@ func (s *Store) CreateJob(ctx context.Context, job *Job) error {
 	if job.UpdatedAt.IsZero() {
 		job.UpdatedAt = now
 	}
-	return db.Create(job).Error
+	return gorm.G[Job](db).Create(ctx, job)
 }
 
 // GetJob fetches a job by ID.
@@ -61,8 +61,8 @@ func (s *Store) GetJob(ctx context.Context, id string) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	var job Job
-	if err := db.Where("id = ?", id).First(&job).Error; err != nil {
+	job, err := gorm.G[Job](db).Where("id = ?", id).First(ctx)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
 		}
@@ -77,13 +77,14 @@ func (s *Store) ListJobs(ctx context.Context, jobType string, limit, offset int)
 	if err != nil {
 		return nil, 0, err
 	}
-	query := db.Model(&Job{})
+	g := gorm.G[Job](db).Scopes()
 	if jobType != "" {
-		query = query.Where("type = ?", jobType)
+		g = g.Where("type = ?", jobType)
 	}
 
 	var total int64
-	if err := query.Count(&total).Error; err != nil {
+	total, err = g.Count(ctx, "*")
+	if err != nil {
 		return nil, 0, fmt.Errorf("count jobs: %w", err)
 	}
 
@@ -94,9 +95,12 @@ func (s *Store) ListJobs(ctx context.Context, jobType string, limit, offset int)
 		offset = 0
 	}
 
-	list := make([]Job, 0)
-	if err := query.Order("created_at DESC").Limit(limit).Offset(offset).Find(&list).Error; err != nil {
+	list, err := g.Order("created_at DESC").Limit(limit).Offset(offset).Find(ctx)
+	if err != nil {
 		return nil, 0, err
+	}
+	if list == nil {
+		list = []Job{}
 	}
 	return list, total, nil
 }

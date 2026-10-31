@@ -63,8 +63,8 @@ func (s *gormCameraStore) Create(ctx context.Context, camera *Camera, streams []
 	}
 
 	return db.Transaction(func(tx *gorm.DB) error {
-		var existingCount int64
-		if err := tx.Model(&Camera{}).Where("id = ?", camera.ID).Count(&existingCount).Error; err != nil {
+		existingCount, err := gorm.G[Camera](tx).Where("id = ?", camera.ID).Count(ctx, "*")
+		if err != nil {
 			return fmt.Errorf("check existing camera: %w", err)
 		}
 		if existingCount > 0 {
@@ -78,7 +78,7 @@ func (s *gormCameraStore) Create(ctx context.Context, camera *Camera, streams []
 			camera.Revision = 1
 		}
 
-		if err := tx.Create(camera).Error; err != nil {
+		if err := gorm.G[Camera](tx).Create(ctx, camera); err != nil {
 			return fmt.Errorf("create camera record: %w", err)
 		}
 
@@ -89,7 +89,7 @@ func (s *gormCameraStore) Create(ctx context.Context, camera *Camera, streams []
 		}
 
 		if len(streams) > 0 {
-			if err := tx.Create(&streams).Error; err != nil {
+			if err := gorm.G[CameraStream](tx).CreateInBatches(ctx, &streams, len(streams)); err != nil {
 				return fmt.Errorf("create camera streams: %w", err)
 			}
 		}
@@ -104,8 +104,7 @@ func (s *gormCameraStore) GetByID(ctx context.Context, id string) (*Camera, erro
 		return nil, err
 	}
 
-	var camera Camera
-	err = db.Preload("Streams").Where("id = ?", id).First(&camera).Error
+	camera, err := gorm.G[Camera](db).Preload("Streams", nil).Where("id = ?", id).First(ctx)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrCameraNotFound
@@ -121,8 +120,8 @@ func (s *gormCameraStore) List(ctx context.Context, limit, offset int) ([]Camera
 		return nil, 0, err
 	}
 
-	var total int64
-	if err := db.Model(&Camera{}).Count(&total).Error; err != nil {
+	total, err := gorm.G[Camera](db).Count(ctx, "*")
+	if err != nil {
 		return nil, 0, fmt.Errorf("count cameras: %w", err)
 	}
 
@@ -136,14 +135,17 @@ func (s *gormCameraStore) List(ctx context.Context, limit, offset int) ([]Camera
 		offset = 0
 	}
 
-	var cameras []Camera
-	err = db.Preload("Streams").
+	cameras, err := gorm.G[Camera](db).
+		Preload("Streams", nil).
 		Order("created_at DESC, id ASC").
 		Limit(limit).
 		Offset(offset).
-		Find(&cameras).Error
+		Find(ctx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list cameras: %w", err)
+	}
+	if cameras == nil {
+		cameras = []Camera{}
 	}
 
 	return cameras, total, nil
@@ -157,8 +159,8 @@ func (s *gormCameraStore) Update(ctx context.Context, params UpdateCameraParams)
 
 	var updatedCamera Camera
 	err = db.Transaction(func(tx *gorm.DB) error {
-		var current Camera
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", params.ID).First(&current).Error; err != nil {
+		current, err := gorm.G[Camera](tx, clause.Locking{Strength: "UPDATE"}).Where("id = ?", params.ID).First(ctx)
+		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrCameraNotFound
 			}
@@ -189,7 +191,7 @@ func (s *gormCameraStore) Update(ctx context.Context, params UpdateCameraParams)
 		}
 
 		if params.Streams != nil {
-			if err := tx.Where("camera_id = ?", params.ID).Delete(&CameraStream{}).Error; err != nil {
+			if _, err := gorm.G[CameraStream](tx).Where("camera_id = ?", params.ID).Delete(ctx); err != nil {
 				return fmt.Errorf("delete old camera streams: %w", err)
 			}
 
@@ -200,13 +202,14 @@ func (s *gormCameraStore) Update(ctx context.Context, params UpdateCameraParams)
 				params.Streams[i].UpdatedAt = now
 			}
 			if len(params.Streams) > 0 {
-				if err := tx.Create(&params.Streams).Error; err != nil {
+				if err := gorm.G[CameraStream](tx).CreateInBatches(ctx, &params.Streams, len(params.Streams)); err != nil {
 					return fmt.Errorf("insert updated camera streams: %w", err)
 				}
 			}
 		}
 
-		return tx.Preload("Streams").Where("id = ?", params.ID).First(&updatedCamera).Error
+		updatedCamera, err = gorm.G[Camera](tx).Preload("Streams", nil).Where("id = ?", params.ID).First(ctx)
+		return err
 	})
 
 	if err != nil {
@@ -222,8 +225,8 @@ func (s *gormCameraStore) Delete(ctx context.Context, id string) error {
 	}
 
 	return db.Transaction(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&Camera{}).Where("id = ?", id).Count(&count).Error; err != nil {
+		count, err := gorm.G[Camera](tx).Where("id = ?", id).Count(ctx, "*")
+		if err != nil {
 			return fmt.Errorf("check camera existence: %w", err)
 		}
 		if count == 0 {
@@ -231,11 +234,11 @@ func (s *gormCameraStore) Delete(ctx context.Context, id string) error {
 		}
 
 		// Delete cascading streams first or rely on foreign key cascade
-		if err := tx.Where("camera_id = ?", id).Delete(&CameraStream{}).Error; err != nil {
+		if _, err := gorm.G[CameraStream](tx).Where("camera_id = ?", id).Delete(ctx); err != nil {
 			return fmt.Errorf("delete camera streams: %w", err)
 		}
 
-		if err := tx.Where("id = ?", id).Delete(&Camera{}).Error; err != nil {
+		if _, err := gorm.G[Camera](tx).Where("id = ?", id).Delete(ctx); err != nil {
 			return fmt.Errorf("delete camera: %w", err)
 		}
 		return nil
@@ -248,8 +251,7 @@ func (s *gormCameraStore) HasAnyEncryptedStreams(ctx context.Context) (bool, err
 		return false, err
 	}
 
-	var count int64
-	err = db.Model(&CameraStream{}).Where("encrypted_uri IS NOT NULL AND length(encrypted_uri) > 0").Count(&count).Error
+	count, err := gorm.G[CameraStream](db).Where("encrypted_uri IS NOT NULL AND length(encrypted_uri) > 0").Count(ctx, "*")
 	if err != nil {
 		return false, fmt.Errorf("count encrypted streams: %w", err)
 	}

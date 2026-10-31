@@ -123,8 +123,7 @@ func (r *repositoryImpl) GetConfig(ctx context.Context) (*StorageConfig, error) 
 		return nil, err
 	}
 
-	var row systemMetadataRow
-	err = db.Where("key = ?", metadataKeyStorageConfig).First(&row).Error
+	row, err := gorm.G[systemMetadataRow](db).Where("key = ?", metadataKeyStorageConfig).First(ctx)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return defaultConfig(), nil
@@ -185,13 +184,13 @@ func (r *repositoryImpl) UpdateConfig(ctx context.Context, cfg StorageConfig) (*
 		UpdatedAt: now,
 	}
 
-	err = db.Clauses(clause.OnConflict{
+	err = gorm.G[systemMetadataRow](db, clause.OnConflict{
 		Columns: []clause.Column{{Name: "key"}},
 		DoUpdates: clause.Assignments(map[string]any{
 			"value":      row.Value,
 			"updated_at": row.UpdatedAt,
 		}),
-	}).Create(&row).Error
+	}).Create(ctx, &row)
 	if err != nil {
 		return nil, fmt.Errorf("upsert storage_config metadata: %w", err)
 	}

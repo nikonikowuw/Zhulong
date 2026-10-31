@@ -41,15 +41,19 @@ func (s *Store) db(ctx context.Context) *gorm.DB {
 
 // ListMaps returns all canvas maps ordered by creation time ascending.
 func (s *Store) ListMaps(ctx context.Context) ([]CanvasMap, error) {
-	maps := []CanvasMap{}
-	err := s.db(ctx).Order("created_at ASC, id ASC").Find(&maps).Error
-	return maps, err
+	maps, err := gorm.G[CanvasMap](s.db(ctx)).Order("created_at ASC, id ASC").Find(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if maps == nil {
+		maps = []CanvasMap{}
+	}
+	return maps, nil
 }
 
 // GetMap returns a canvas map by ID. A missing row is reported as ErrMapNotFound.
 func (s *Store) GetMap(ctx context.Context, id string) (*CanvasMap, error) {
-	var m CanvasMap
-	err := s.db(ctx).Where("id = ?", id).First(&m).Error
+	m, err := gorm.G[CanvasMap](s.db(ctx)).Where("id = ?", id).First(ctx)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrMapNotFound
 	}
@@ -84,17 +88,19 @@ func (s *Store) FindMissingCameraIDs(ctx context.Context, cameraIDs []string) ([
 
 // CreateMap inserts a new canvas map record.
 func (s *Store) CreateMap(ctx context.Context, m *CanvasMap) error {
-	return s.db(ctx).Create(m).Error
+	return gorm.G[CanvasMap](s.db(ctx)).Create(ctx, m)
 }
 
 // UpdateMapName updates the name of an existing canvas map.
 func (s *Store) UpdateMapName(ctx context.Context, id, name string) error {
-	return s.db(ctx).Model(&CanvasMap{}).Where("id = ?", id).Update("name", name).Error
+	_, err := gorm.G[CanvasMap](s.db(ctx)).Where("id = ?", id).Update(ctx, "name", name)
+	return err
 }
 
 // DeleteMap deletes a canvas map. Database cascades will clean up camera_canvas_positions.
 func (s *Store) DeleteMap(ctx context.Context, id string) error {
-	return s.db(ctx).Where("id = ?", id).Delete(&CanvasMap{}).Error
+	_, err := gorm.G[CanvasMap](s.db(ctx)).Where("id = ?", id).Delete(ctx)
+	return err
 }
 
 // GetPositionsByMap returns all calibrated camera positions for a map with joined camera names.
@@ -116,13 +122,13 @@ func (s *Store) GetPositionsByMap(ctx context.Context, mapID string) ([]CameraPo
 // BatchSavePositions replaces all camera positions for a given map in a single transaction.
 func (s *Store) BatchSavePositions(ctx context.Context, mapID string, positions []CameraCanvasPosition) error {
 	return s.db(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("map_id = ?", mapID).Delete(&CameraCanvasPosition{}).Error; err != nil {
+		if _, err := gorm.G[CameraCanvasPosition](tx).Where("map_id = ?", mapID).Delete(ctx); err != nil {
 			return err
 		}
 		if len(positions) == 0 {
 			return nil
 		}
-		return tx.Create(&positions).Error
+		return gorm.G[CameraCanvasPosition](tx).CreateInBatches(ctx, &positions, len(positions))
 	})
 }
 

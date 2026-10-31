@@ -133,8 +133,7 @@ func (s *Store) GetConfig(ctx context.Context) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	var cfg Config
-	err = db.Where("id = ?", ConfigSingletonID).First(&cfg).Error
+	cfg, err := gorm.G[Config](db).Where("id = ?", ConfigSingletonID).First(ctx)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		fallback := DefaultConfig()
 		return &fallback, nil
@@ -182,7 +181,7 @@ func (s *Store) UpsertDevice(ctx context.Context, upd DeviceUpsert) (*Device, er
 
 	var saved Device
 	err = db.Transaction(func(tx *gorm.DB) error {
-		return s.upsertDeviceTx(tx, upd, &saved)
+		return s.upsertDeviceTx(ctx, tx, upd, &saved)
 	})
 	if err != nil {
 		return nil, err
@@ -210,9 +209,9 @@ func validateDeviceUpsert(upd DeviceUpsert) error {
 }
 
 // upsertDeviceTx reads, merges, and writes one device inside a transaction.
-func (s *Store) upsertDeviceTx(tx *gorm.DB, upd DeviceUpsert, saved *Device) error {
+func (s *Store) upsertDeviceTx(ctx context.Context, tx *gorm.DB, upd DeviceUpsert, saved *Device) error {
 	deviceID := strings.TrimSpace(upd.DeviceID)
-	existing, exists, err := readDeviceForUpdate(tx, deviceID)
+	existing, exists, err := readDeviceForUpdate(ctx, tx, deviceID)
 	if err != nil {
 		return err
 	}
@@ -228,9 +227,8 @@ func (s *Store) upsertDeviceTx(tx *gorm.DB, upd DeviceUpsert, saved *Device) err
 }
 
 // readDeviceForUpdate loads the current row, reporting whether it exists.
-func readDeviceForUpdate(tx *gorm.DB, deviceID string) (Device, bool, error) {
-	var existing Device
-	err := tx.Where("device_id = ?", deviceID).First(&existing).Error
+func readDeviceForUpdate(ctx context.Context, tx *gorm.DB, deviceID string) (Device, bool, error) {
+	existing, err := gorm.G[Device](tx).Where("device_id = ?", deviceID).First(ctx)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return Device{}, false, nil
 	}
@@ -308,8 +306,7 @@ func (s *Store) GetDevice(ctx context.Context, deviceID string) (*Device, error)
 	if err != nil {
 		return nil, err
 	}
-	var device Device
-	err = db.Where("device_id = ?", deviceID).First(&device).Error
+	device, err := gorm.G[Device](db).Where("device_id = ?", deviceID).First(ctx)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, apperr.NotFound(CodeDeviceNotFound, "GB28181 device not found", nil)
 	}
@@ -318,8 +315,8 @@ func (s *Store) GetDevice(ctx context.Context, deviceID string) (*Device, error)
 	}
 	device.EncryptedPass = nil
 
-	var count int64
-	if err := db.Model(&Channel{}).Where("device_id = ?", deviceID).Count(&count).Error; err != nil {
+	count, err := gorm.G[Channel](db).Where("device_id = ?", deviceID).Count(ctx, "*")
+	if err != nil {
 		return nil, fmt.Errorf("count gb channels for %s: %w", deviceID, err)
 	}
 	device.ChannelCount = int(count)
@@ -333,8 +330,8 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 	if err != nil {
 		return nil, err
 	}
-	devices := make([]Device, 0)
-	if err := db.Order("device_id ASC").Find(&devices).Error; err != nil {
+	devices, err := gorm.G[Device](db).Order("device_id ASC").Find(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("list gb devices: %w", err)
 	}
 
@@ -369,10 +366,9 @@ func (s *Store) HasExistingEncryptedData(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	var count int64
-	err = db.Model(&Device{}).
+	count, err := gorm.G[Device](db).
 		Where("encrypted_password IS NOT NULL AND length(encrypted_password) > 0").
-		Count(&count).Error
+		Count(ctx, "*")
 	if err != nil {
 		return false, fmt.Errorf("check gb device credentials: %w", err)
 	}
@@ -390,10 +386,12 @@ func (s *Store) DeviceCounts(ctx context.Context) (total, online int64, err erro
 	if err != nil {
 		return 0, 0, err
 	}
-	if err := db.Model(&Device{}).Count(&total).Error; err != nil {
+	total, err = gorm.G[Device](db).Count(ctx, "*")
+	if err != nil {
 		return 0, 0, fmt.Errorf("count gb devices: %w", err)
 	}
-	if err := db.Model(&Device{}).Where("state = ?", DeviceStateOnline).Count(&online).Error; err != nil {
+	online, err = gorm.G[Device](db).Where("state = ?", DeviceStateOnline).Count(ctx, "*")
+	if err != nil {
 		return 0, 0, fmt.Errorf("count online gb devices: %w", err)
 	}
 	return total, online, nil
@@ -565,11 +563,10 @@ func (s *Store) devicePassword(ctx context.Context, deviceID string) (string, er
 	if s.cipher == nil {
 		return "", apperr.Internal(CodeRuntimeNotReady, "encryption cipher is not initialized", nil)
 	}
-	var device Device
-	err = db.Model(&Device{}).
+	device, err := gorm.G[Device](db).
 		Select("device_id", "encrypted_password").
 		Where("device_id = ?", deviceID).
-		First(&device).Error
+		First(ctx)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", apperr.NotFound(CodeDeviceNotFound, "GB28181 device not found", nil)
 	}
@@ -681,16 +678,16 @@ func (s *Store) ListChannels(ctx context.Context, deviceID string) ([]Channel, e
 		return nil, err
 	}
 
-	var count int64
-	if err := db.Model(&Device{}).Where("device_id = ?", deviceID).Count(&count).Error; err != nil {
+	count, err := gorm.G[Device](db).Where("device_id = ?", deviceID).Count(ctx, "*")
+	if err != nil {
 		return nil, fmt.Errorf("check device %s: %w", deviceID, err)
 	}
 	if count == 0 {
 		return nil, apperr.NotFound(CodeDeviceNotFound, "GB28181 device not found", nil)
 	}
 
-	channels := make([]Channel, 0)
-	if err := db.Where("device_id = ?", deviceID).Order("channel_id ASC").Find(&channels).Error; err != nil {
+	channels, err := gorm.G[Channel](db).Where("device_id = ?", deviceID).Order("channel_id ASC").Find(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("list gb channels for %s: %w", deviceID, err)
 	}
 	return channels, nil
@@ -702,8 +699,7 @@ func (s *Store) GetChannel(ctx context.Context, deviceID, channelID string) (*Ch
 	if err != nil {
 		return nil, err
 	}
-	var ch Channel
-	err = db.Where("device_id = ? AND channel_id = ?", deviceID, channelID).First(&ch).Error
+	ch, err := gorm.G[Channel](db).Where("device_id = ? AND channel_id = ?", deviceID, channelID).First(ctx)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, apperr.NotFound(CodeChannelNotFound, "GB28181 channel not found", nil)
 	}
@@ -743,21 +739,21 @@ func (s *Store) DeleteDevice(ctx context.Context, deviceID string) error {
 		return err
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
-		var boundCount int64
-		if err := tx.Model(&Channel{}).
+		boundCount, err := gorm.G[Channel](tx).
 			Where("device_id = ? AND camera_id IS NOT NULL", deviceID).
-			Count(&boundCount).Error; err != nil {
+			Count(ctx, "*")
+		if err != nil {
 			return fmt.Errorf("check bound cameras for %s: %w", deviceID, err)
 		}
 		if boundCount > 0 {
 			return apperr.Conflict(CodeCameraBound, "device has bound cameras; unbind or delete cameras first", nil)
 		}
 
-		res := tx.Where("device_id = ?", deviceID).Delete(&Device{})
-		if res.Error != nil {
-			return fmt.Errorf("delete gb device %s: %w", deviceID, res.Error)
+		rows, err := gorm.G[Device](tx).Where("device_id = ?", deviceID).Delete(ctx)
+		if err != nil {
+			return fmt.Errorf("delete gb device %s: %w", deviceID, err)
 		}
-		if res.RowsAffected == 0 {
+		if rows == 0 {
 			return apperr.NotFound(CodeDeviceNotFound, "GB28181 device not found", nil)
 		}
 		return nil

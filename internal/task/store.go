@@ -92,7 +92,7 @@ func (s *Store) CreateTask(ctx context.Context, t *Task) error {
 	}
 	initTaskTimestamps(t)
 	assignIDs(t)
-	if err := db.Create(t).Error; err != nil {
+	if err := gorm.G[Task](db).Create(ctx, t); err != nil {
 		return fmt.Errorf("create analysis task: %w", err)
 	}
 	return nil
@@ -119,10 +119,10 @@ func (s *Store) CreateTaskWithinBudget(ctx context.Context, task *Task, maxPoint
 		); err != nil {
 			return err
 		}
-		if err := tx.Create(task).Error; err != nil {
+		if err := gorm.G[Task](tx).Create(ctx, task); err != nil {
 			// camera_id 唯一约束只有在并发建同摄像头任务时才会暴露：事务外的预检查不是权威，
 			// 这里靠一次探针查询归因，而不是匹配 SQLite 的错误字符串。
-			if taken, probeErr := cameraTaskTaken(tx, task.CameraID); probeErr == nil && taken {
+			if taken, probeErr := cameraTaskTaken(ctx, tx, task.CameraID); probeErr == nil && taken {
 				return ErrTaskAlreadyExists
 			}
 			return fmt.Errorf("create analysis task: %w", err)
@@ -147,11 +147,11 @@ func (s *Store) SaveTaskWithinBudget(ctx context.Context, task *Task, maxPoints 
 	initTaskTimestamps(task)
 
 	return db.Transaction(func(tx *gorm.DB) error {
-		existing, err := locateTask(tx, task)
+		existing, err := locateTask(ctx, tx, task)
 		if err != nil {
 			return err
 		}
-		if err := ensureCameraAvailable(tx, task, existing); err != nil {
+		if err := ensureCameraAvailable(ctx, tx, task, existing); err != nil {
 			return err
 		}
 
@@ -174,23 +174,22 @@ func (s *Store) SaveTaskWithinBudget(ctx context.Context, task *Task, maxPoints 
 
 		now := time.Now().UTC()
 		task.UpdatedAt = now
-		if err := writeTaskRow(tx, task, existing != nil); err != nil {
+		if err := writeTaskRow(ctx, tx, task, existing != nil); err != nil {
 			return err
 		}
-		return syncTaskAlgorithms(tx, task, now)
+		return syncTaskAlgorithms(ctx, tx, task, now)
 	})
 }
 
 // locateTask 按显式 ID（优先）或 camera_id 定位待更新的既有任务，未命中返回 (nil, nil)。
-func locateTask(tx *gorm.DB, task *Task) (*Task, error) {
-	var existing Task
-	query := tx
+func locateTask(ctx context.Context, tx *gorm.DB, task *Task) (*Task, error) {
+	g := gorm.G[Task](tx).Scopes()
 	if task.ID != "" {
-		query = query.Where("id = ?", task.ID)
+		g = g.Where("id = ?", task.ID)
 	} else {
-		query = query.Where("camera_id = ?", task.CameraID)
+		g = g.Where("camera_id = ?", task.CameraID)
 	}
-	err := query.First(&existing).Error
+	existing, err := g.First(ctx)
 	switch {
 	case err == nil:
 		return &existing, nil
@@ -201,9 +200,8 @@ func locateTask(tx *gorm.DB, task *Task) (*Task, error) {
 }
 
 // ensureCameraAvailable 拦住"一对多"写入：目标 camera_id 已被另一个任务占用。
-func ensureCameraAvailable(tx *gorm.DB, task *Task, existing *Task) error {
-	var owner Task
-	err := tx.Where("camera_id = ?", task.CameraID).First(&owner).Error
+func ensureCameraAvailable(ctx context.Context, tx *gorm.DB, task *Task, existing *Task) error {
+	owner, err := gorm.G[Task](tx).Where("camera_id = ?", task.CameraID).First(ctx)
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		return nil
@@ -216,11 +214,11 @@ func ensureCameraAvailable(tx *gorm.DB, task *Task, existing *Task) error {
 }
 
 // writeTaskRow 写主表行。更新走 map 形式，否则 enabled=false 会被 GORM 零值机制省略。
-func writeTaskRow(tx *gorm.DB, task *Task, update bool) error {
+func writeTaskRow(ctx context.Context, tx *gorm.DB, task *Task, update bool) error {
 	if !update {
 		parent := *task
 		parent.Algorithms = nil
-		if err := tx.Create(&parent).Error; err != nil {
+		if err := gorm.G[Task](tx).Create(ctx, &parent); err != nil {
 			return fmt.Errorf("insert analysis task: %w", err)
 		}
 		return nil
@@ -238,22 +236,22 @@ func writeTaskRow(tx *gorm.DB, task *Task, update bool) error {
 }
 
 // syncTaskAlgorithms 先删除已移除的算法子项，再 upsert 保留下来的与新增的子项。
-func syncTaskAlgorithms(tx *gorm.DB, task *Task, now time.Time) error {
+func syncTaskAlgorithms(ctx context.Context, tx *gorm.DB, task *Task, now time.Time) error {
 	keepIDs := make([]string, 0, len(task.Algorithms))
 	for _, sub := range task.Algorithms {
 		keepIDs = append(keepIDs, sub.AlgorithmID)
 	}
 
-	prune := tx.Where("task_id = ?", task.ID)
+	prune := gorm.G[TaskAlgorithm](tx).Where("task_id = ?", task.ID)
 	if len(keepIDs) > 0 {
 		prune = prune.Where("algorithm_id NOT IN ?", keepIDs)
 	}
-	if err := prune.Delete(&TaskAlgorithm{}).Error; err != nil {
+	if _, err := prune.Delete(ctx); err != nil {
 		return fmt.Errorf("prune removed task algorithms: %w", err)
 	}
 
 	for i := range task.Algorithms {
-		if err := upsertTaskAlgorithm(tx, &task.Algorithms[i], now); err != nil {
+		if err := upsertTaskAlgorithm(ctx, tx, &task.Algorithms[i], now); err != nil {
 			return err
 		}
 	}
@@ -261,10 +259,8 @@ func syncTaskAlgorithms(tx *gorm.DB, task *Task, now time.Time) error {
 }
 
 // upsertTaskAlgorithm 按 (task_id, algorithm_id) upsert 单条子项，并保留既有业务主键与创建时间。
-func upsertTaskAlgorithm(tx *gorm.DB, sub *TaskAlgorithm, now time.Time) error {
-	var existing TaskAlgorithm
-	err := tx.Where("task_id = ? AND algorithm_id = ?", sub.TaskID, sub.AlgorithmID).
-		First(&existing).Error
+func upsertTaskAlgorithm(ctx context.Context, tx *gorm.DB, sub *TaskAlgorithm, now time.Time) error {
+	existing, err := gorm.G[TaskAlgorithm](tx).Where("task_id = ? AND algorithm_id = ?", sub.TaskID, sub.AlgorithmID).First(ctx)
 	switch {
 	case err == nil:
 		sub.ID = existing.ID
@@ -286,7 +282,7 @@ func upsertTaskAlgorithm(tx *gorm.DB, sub *TaskAlgorithm, now time.Time) error {
 		// 主键已由 assignIDs 在事务开头补全（syncTaskAlgorithms 只处理已登记的子项）。
 		sub.CreatedAt = now
 		sub.UpdatedAt = now
-		if err := tx.Create(sub).Error; err != nil {
+		if err := gorm.G[TaskAlgorithm](tx).Create(ctx, sub); err != nil {
 			return fmt.Errorf("insert task algorithm %q: %w", sub.AlgorithmID, err)
 		}
 		return nil
@@ -295,9 +291,9 @@ func upsertTaskAlgorithm(tx *gorm.DB, sub *TaskAlgorithm, now time.Time) error {
 }
 
 // cameraTaskTaken 报告该摄像头是否已存在分析任务。
-func cameraTaskTaken(tx *gorm.DB, cameraID string) (bool, error) {
-	var count int64
-	if err := tx.Model(&Task{}).Where("camera_id = ?", cameraID).Count(&count).Error; err != nil {
+func cameraTaskTaken(ctx context.Context, tx *gorm.DB, cameraID string) (bool, error) {
+	count, err := gorm.G[Task](tx).Where("camera_id = ?", cameraID).Count(ctx, "*")
+	if err != nil {
 		return false, err
 	}
 	return count > 0, nil
@@ -408,8 +404,8 @@ func (s *Store) GetTask(ctx context.Context, id string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	var t Task
-	if err := db.Preload("Algorithms").Where("id = ?", id).First(&t).Error; err != nil {
+	t, err := gorm.G[Task](db).Preload("Algorithms", nil).Where("id = ?", id).First(ctx)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
 		}
@@ -424,8 +420,8 @@ func (s *Store) GetTaskByCamera(ctx context.Context, cameraID string) (*Task, er
 	if err != nil {
 		return nil, err
 	}
-	var t Task
-	if err := db.Preload("Algorithms").Where("camera_id = ?", cameraID).First(&t).Error; err != nil {
+	t, err := gorm.G[Task](db).Preload("Algorithms", nil).Where("camera_id = ?", cameraID).First(ctx)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrNotFound
 		}
@@ -440,9 +436,12 @@ func (s *Store) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	list := make([]Task, 0)
-	if err := db.Preload("Algorithms").Order("created_at ASC").Find(&list).Error; err != nil {
+	list, err := gorm.G[Task](db).Preload("Algorithms", nil).Order("created_at ASC").Find(ctx)
+	if err != nil {
 		return nil, err
+	}
+	if list == nil {
+		list = []Task{}
 	}
 	return list, nil
 }
@@ -453,13 +452,15 @@ func (s *Store) ListTasksByCamera(ctx context.Context, cameraID string) ([]Task,
 	if err != nil {
 		return nil, err
 	}
-	list := make([]Task, 0)
-	err = db.Preload("Algorithms").
+	list, err := gorm.G[Task](db).Preload("Algorithms", nil).
 		Where("camera_id = ?", cameraID).
 		Order("created_at ASC").
-		Find(&list).Error
+		Find(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if list == nil {
+		list = []Task{}
 	}
 	return list, nil
 }
@@ -489,11 +490,11 @@ func (s *Store) DeleteTask(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	res := db.Where("id = ?", id).Delete(&Task{})
-	if res.Error != nil {
-		return res.Error
+	rows, err := gorm.G[Task](db).Where("id = ?", id).Delete(ctx)
+	if err != nil {
+		return err
 	}
-	if res.RowsAffected == 0 {
+	if rows == 0 {
 		return ErrNotFound
 	}
 	return nil

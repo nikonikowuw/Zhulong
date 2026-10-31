@@ -47,7 +47,7 @@ func (s *Store) Create(ctx context.Context, log *AuditLog) error {
 		return err
 	}
 	log.CreatedAt = normalizeCreatedAt(log.CreatedAt, time.Now().UTC())
-	if err := db.Create(log).Error; err != nil {
+	if err := gorm.G[AuditLog](db).Create(ctx, log); err != nil {
 		return fmt.Errorf("create audit log: %w", err)
 	}
 	return nil
@@ -66,7 +66,7 @@ func (s *Store) CreateBatch(ctx context.Context, logs []*AuditLog) error {
 	for _, l := range logs {
 		l.CreatedAt = normalizeCreatedAt(l.CreatedAt, now)
 	}
-	if err := db.CreateInBatches(logs, 100).Error; err != nil {
+	if err := gorm.G[*AuditLog](db).CreateInBatches(ctx, &logs, 100); err != nil {
 		return fmt.Errorf("create audit log batch: %w", err)
 	}
 	return nil
@@ -87,38 +87,38 @@ func (s *Store) List(ctx context.Context, filter Filter) ([]AuditLog, int64, err
 	if err != nil {
 		return nil, 0, err
 	}
-	query := db.Model(&AuditLog{})
+	var g gorm.ChainInterface[AuditLog] = gorm.G[AuditLog](db).Scopes()
 
 	if len(filter.Actions) > 0 {
-		query = query.Where("action IN ?", filter.Actions)
+		g = g.Where("action IN ?", filter.Actions)
 	} else if filter.Action != "" {
-		query = query.Where("action = ?", filter.Action)
+		g = g.Where("action = ?", filter.Action)
 	}
 	if filter.Status != "" {
-		query = query.Where("status = ?", filter.Status)
+		g = g.Where("status = ?", filter.Status)
 	}
 	if filter.StartTime != nil {
-		query = query.Where("created_at >= ?", filter.StartTime.UTC())
+		g = g.Where("created_at >= ?", filter.StartTime.UTC())
 	}
 	if filter.EndTime != nil {
-		query = query.Where("created_at <= ?", filter.EndTime.UTC())
+		g = g.Where("created_at <= ?", filter.EndTime.UTC())
 	}
 
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
+	total, err := g.Count(ctx, "*")
+	if err != nil {
 		return nil, 0, fmt.Errorf("count audit logs: %w", err)
 	}
 
-	query = query.Order("created_at DESC, id DESC")
+	g = g.Order("created_at DESC, id DESC")
 	if filter.Limit > 0 {
-		query = query.Limit(filter.Limit)
+		g = g.Limit(filter.Limit)
 	}
 	if filter.Offset > 0 {
-		query = query.Offset(filter.Offset)
+		g = g.Offset(filter.Offset)
 	}
 
-	var items []AuditLog
-	if err := query.Find(&items).Error; err != nil {
+	items, err := g.Find(ctx)
+	if err != nil {
 		return nil, 0, fmt.Errorf("find audit logs: %w", err)
 	}
 	if items == nil {
@@ -134,8 +134,8 @@ func (s *Store) Count(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	var total int64
-	if err := db.Model(&AuditLog{}).Count(&total).Error; err != nil {
+	total, err := gorm.G[AuditLog](db).Count(ctx, "*")
+	if err != nil {
 		return 0, fmt.Errorf("count audit logs: %w", err)
 	}
 	return total, nil
@@ -163,8 +163,8 @@ func (s *Store) Prune(ctx context.Context, maxEntries int) (int64, error) {
 	// include the exempt audit.clear history, so the excess could exceed the
 	// number of deletable rows and the table would stay above the limit for
 	// good once clear records dominate.
-	var prunable int64
-	if err := db.Model(&AuditLog{}).Where("action != ?", ActionAuditClear).Count(&prunable).Error; err != nil {
+	prunable, err := gorm.G[AuditLog](db).Where("action != ?", ActionAuditClear).Count(ctx, "*")
+	if err != nil {
 		return 0, fmt.Errorf("count prunable audit logs: %w", err)
 	}
 
@@ -201,22 +201,22 @@ func (s *Store) ClearWithAudit(ctx context.Context, entry *AuditLog, before *tim
 
 	var cleared int64
 	err = db.Transaction(func(tx *gorm.DB) error {
-		query := tx.Where("action != ?", ActionAuditClear)
+		g := gorm.G[AuditLog](tx).Where("action != ?", ActionAuditClear)
 		if before != nil && !before.IsZero() {
-			query = query.Where("created_at < ?", before.UTC())
+			g = g.Where("created_at < ?", before.UTC())
 		}
-		res := query.Delete(&AuditLog{})
-		if res.Error != nil {
-			return fmt.Errorf("clear audit logs: %w", res.Error)
+		rows, err := g.Delete(ctx)
+		if err != nil {
+			return fmt.Errorf("clear audit logs: %w", err)
 		}
-		cleared = res.RowsAffected
+		cleared = int64(rows)
 
 		if entry == nil {
 			return nil
 		}
 		entry.Detail = fmt.Sprintf("deleted=%d", cleared)
 		entry.CreatedAt = normalizeCreatedAt(entry.CreatedAt, time.Now().UTC())
-		if err := tx.Create(entry).Error; err != nil {
+		if err := gorm.G[AuditLog](tx).Create(ctx, entry); err != nil {
 			return fmt.Errorf("persist audit clear record: %w", err)
 		}
 		return nil

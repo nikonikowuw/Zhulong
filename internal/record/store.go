@@ -47,17 +47,12 @@ func (s *Store) db(ctx context.Context) (*gorm.DB, error) {
 //
 // window 由调用方（HTTP 层）解析，这里只做零值/越界防御：GORM 的 Limit(0)
 // 表示**不加 LIMIT**，一个漏填的 window 会把整表读进内存，在边缘设备上直接 OOM。
-func (s *Store) listInReadSnapshot(
+func listInReadSnapshot[T any](
 	ctx context.Context,
-	build func(tx *gorm.DB) *gorm.DB,
+	db *gorm.DB,
+	build func(g gorm.ChainInterface[T]) gorm.ChainInterface[T],
 	window httputil.PageWindow,
-	dest any,
-) (int64, error) {
-	db, err := s.db(ctx)
-	if err != nil {
-		return 0, err
-	}
-
+) ([]T, int64, error) {
 	if window.PageSize <= 0 || window.PageSize > httputil.MaxPageSize {
 		window.PageSize = httputil.DefaultPageSize
 	}
@@ -66,23 +61,28 @@ func (s *Store) listInReadSnapshot(
 	}
 
 	var total int64
-	err = db.Transaction(func(tx *gorm.DB) error {
-		// 每条语句各用一份独立 Statement：tx 在事务里 clone=0，两次 build 直接复用
-		// 同一个 Statement 会把 WHERE 子句追加两遍（结果仍对，但 SQL 与参数翻倍，
-		// 也让「count 与 find 条件一致」变得依赖 GORM 的子句合并细节）。
-		if err := build(tx.Session(&gorm.Session{})).Count(&total).Error; err != nil {
+	var items []T
+	err := db.Transaction(func(tx *gorm.DB) error {
+		g := build(gorm.G[T](tx).Scopes())
+		var err error
+		total, err = g.Count(ctx, "*")
+		if err != nil {
 			return err
 		}
-		return build(tx.Session(&gorm.Session{})).
+		items, err = g.
 			Order("captured_at DESC, id DESC").
 			Offset(window.Offset).
 			Limit(window.PageSize).
-			Find(dest).Error
+			Find(ctx)
+		return err
 	})
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
-	return total, nil
+	if items == nil {
+		items = []T{}
+	}
+	return items, total, nil
 }
 
 // =========================================================================
@@ -108,7 +108,7 @@ func (s *Store) CreateRecognition(ctx context.Context, rec *Recognition) error {
 	} else {
 		rec.CreatedAt = rec.CreatedAt.UTC()
 	}
-	return db.Create(rec).Error
+	return gorm.G[Recognition](db).Create(ctx, rec)
 }
 
 // CreateRecognitionBatch inserts multiple recognition records in a batch.
@@ -141,38 +141,36 @@ func (s *Store) CreateRecognitionBatch(ctx context.Context, recs []*Recognition)
 	if len(valid) == 0 {
 		return nil
 	}
-	return db.CreateInBatches(valid, 100).Error
+	return gorm.G[*Recognition](db).CreateInBatches(ctx, &valid, 100)
 }
 
 // ListRecognitions returns filtered and paginated recognition records.
 func (s *Store) ListRecognitions(ctx context.Context, filter RecognitionFilter) ([]Recognition, int64, error) {
-	items := make([]Recognition, 0)
-	total, err := s.listInReadSnapshot(ctx, func(tx *gorm.DB) *gorm.DB {
-		query := tx.Model(&Recognition{})
-		if filter.CameraID != "" {
-			query = query.Where("camera_id = ?", filter.CameraID)
-		}
-		if filter.PersonID != "" {
-			query = query.Where("person_id = ?", filter.PersonID)
-		}
-		if filter.PersonExternalID != "" {
-			query = query.Where("person_external_id = ?", filter.PersonExternalID)
-		}
-		if filter.Matched != nil {
-			query = query.Where("matched = ?", *filter.Matched)
-		}
-		if filter.StartTime != nil {
-			query = query.Where("captured_at >= ?", filter.StartTime.UTC())
-		}
-		if filter.EndTime != nil {
-			query = query.Where("captured_at <= ?", filter.EndTime.UTC())
-		}
-		return query
-	}, filter.Window, &items)
+	db, err := s.db(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	return items, total, nil
+	return listInReadSnapshot(ctx, db, func(g gorm.ChainInterface[Recognition]) gorm.ChainInterface[Recognition] {
+		if filter.CameraID != "" {
+			g = g.Where("camera_id = ?", filter.CameraID)
+		}
+		if filter.PersonID != "" {
+			g = g.Where("person_id = ?", filter.PersonID)
+		}
+		if filter.PersonExternalID != "" {
+			g = g.Where("person_external_id = ?", filter.PersonExternalID)
+		}
+		if filter.Matched != nil {
+			g = g.Where("matched = ?", *filter.Matched)
+		}
+		if filter.StartTime != nil {
+			g = g.Where("captured_at >= ?", filter.StartTime.UTC())
+		}
+		if filter.EndTime != nil {
+			g = g.Where("captured_at <= ?", filter.EndTime.UTC())
+		}
+		return g
+	}, filter.Window)
 }
 
 // GetRecognitionByID retrieves a recognition by its primary key.
@@ -181,8 +179,8 @@ func (s *Store) GetRecognitionByID(ctx context.Context, id string) (*Recognition
 	if err != nil {
 		return nil, err
 	}
-	var rec Recognition
-	if err := db.Where("id = ?", id).First(&rec).Error; err != nil {
+	rec, err := gorm.G[Recognition](db).Where("id = ?", id).First(ctx)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -214,7 +212,7 @@ func (s *Store) CreateAlarm(ctx context.Context, alarm *Alarm) error {
 	} else {
 		alarm.CreatedAt = alarm.CreatedAt.UTC()
 	}
-	return db.Create(alarm).Error
+	return gorm.G[Alarm](db).Create(ctx, alarm)
 }
 
 // CreateAlarmBatch inserts multiple alarm records in a batch.
@@ -247,32 +245,30 @@ func (s *Store) CreateAlarmBatch(ctx context.Context, alarms []*Alarm) error {
 	if len(valid) == 0 {
 		return nil
 	}
-	return db.CreateInBatches(valid, 100).Error
+	return gorm.G[*Alarm](db).CreateInBatches(ctx, &valid, 100)
 }
 
 // ListAlarms returns filtered and paginated alarm records.
 func (s *Store) ListAlarms(ctx context.Context, filter AlarmFilter) ([]Alarm, int64, error) {
-	items := make([]Alarm, 0)
-	total, err := s.listInReadSnapshot(ctx, func(tx *gorm.DB) *gorm.DB {
-		query := tx.Model(&Alarm{})
-		if filter.CameraID != "" {
-			query = query.Where("camera_id = ?", filter.CameraID)
-		}
-		if filter.AlarmType != "" {
-			query = query.Where("alarm_type = ?", filter.AlarmType)
-		}
-		if filter.StartTime != nil {
-			query = query.Where("captured_at >= ?", filter.StartTime.UTC())
-		}
-		if filter.EndTime != nil {
-			query = query.Where("captured_at <= ?", filter.EndTime.UTC())
-		}
-		return query
-	}, filter.Window, &items)
+	db, err := s.db(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	return items, total, nil
+	return listInReadSnapshot(ctx, db, func(g gorm.ChainInterface[Alarm]) gorm.ChainInterface[Alarm] {
+		if filter.CameraID != "" {
+			g = g.Where("camera_id = ?", filter.CameraID)
+		}
+		if filter.AlarmType != "" {
+			g = g.Where("alarm_type = ?", filter.AlarmType)
+		}
+		if filter.StartTime != nil {
+			g = g.Where("captured_at >= ?", filter.StartTime.UTC())
+		}
+		if filter.EndTime != nil {
+			g = g.Where("captured_at <= ?", filter.EndTime.UTC())
+		}
+		return g
+	}, filter.Window)
 }
 
 // GetAlarmByID retrieves an alarm by its primary key.
@@ -281,8 +277,8 @@ func (s *Store) GetAlarmByID(ctx context.Context, id string) (*Alarm, error) {
 	if err != nil {
 		return nil, err
 	}
-	var alarm Alarm
-	if err := db.Where("id = ?", id).First(&alarm).Error; err != nil {
+	alarm, err := gorm.G[Alarm](db).Where("id = ?", id).First(ctx)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -314,7 +310,7 @@ func (s *Store) CreateCapture(ctx context.Context, cap *Capture) error {
 	} else {
 		cap.CreatedAt = cap.CreatedAt.UTC()
 	}
-	return db.Create(cap).Error
+	return gorm.G[Capture](db).Create(ctx, cap)
 }
 
 // CreateCaptureBatch inserts multiple capture records in a batch.
@@ -347,32 +343,30 @@ func (s *Store) CreateCaptureBatch(ctx context.Context, caps []*Capture) error {
 	if len(valid) == 0 {
 		return nil
 	}
-	return db.CreateInBatches(valid, 100).Error
+	return gorm.G[*Capture](db).CreateInBatches(ctx, &valid, 100)
 }
 
 // ListCaptures returns filtered and paginated capture records.
 func (s *Store) ListCaptures(ctx context.Context, filter CaptureFilter) ([]Capture, int64, error) {
-	items := make([]Capture, 0)
-	total, err := s.listInReadSnapshot(ctx, func(tx *gorm.DB) *gorm.DB {
-		query := tx.Model(&Capture{})
-		if filter.CameraID != "" {
-			query = query.Where("camera_id = ?", filter.CameraID)
-		}
-		if filter.TargetType != "" {
-			query = query.Where("target_type = ?", filter.TargetType)
-		}
-		if filter.StartTime != nil {
-			query = query.Where("captured_at >= ?", filter.StartTime.UTC())
-		}
-		if filter.EndTime != nil {
-			query = query.Where("captured_at <= ?", filter.EndTime.UTC())
-		}
-		return query
-	}, filter.Window, &items)
+	db, err := s.db(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	return items, total, nil
+	return listInReadSnapshot(ctx, db, func(g gorm.ChainInterface[Capture]) gorm.ChainInterface[Capture] {
+		if filter.CameraID != "" {
+			g = g.Where("camera_id = ?", filter.CameraID)
+		}
+		if filter.TargetType != "" {
+			g = g.Where("target_type = ?", filter.TargetType)
+		}
+		if filter.StartTime != nil {
+			g = g.Where("captured_at >= ?", filter.StartTime.UTC())
+		}
+		if filter.EndTime != nil {
+			g = g.Where("captured_at <= ?", filter.EndTime.UTC())
+		}
+		return g
+	}, filter.Window)
 }
 
 // GetCaptureByID retrieves a capture by its primary key.
@@ -381,8 +375,8 @@ func (s *Store) GetCaptureByID(ctx context.Context, id string) (*Capture, error)
 	if err != nil {
 		return nil, err
 	}
-	var cap Capture
-	if err := db.Where("id = ?", id).First(&cap).Error; err != nil {
+	cap, err := gorm.G[Capture](db).Where("id = ?", id).First(ctx)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -585,13 +579,13 @@ func (s *Store) BackfillPersonExternalID(ctx context.Context, personRowID, exter
 	if err != nil {
 		return 0, err
 	}
-	res := db.Model(&Recognition{}).
+	rows, err := gorm.G[Recognition](db).
 		Where("person_id = ? AND person_external_id = ?", personRowID, "").
-		Update("person_external_id", externalID)
-	if res.Error != nil {
-		return 0, fmt.Errorf("backfill recognition person_external_id: %w", res.Error)
+		Update(ctx, "person_external_id", externalID)
+	if err != nil {
+		return 0, fmt.Errorf("backfill recognition person_external_id: %w", err)
 	}
-	return res.RowsAffected, nil
+	return int64(rows), nil
 }
 
 // ClearRecordSnapshotPaths clears image_path, crop_path, and face_image_path for a record when snapshot generation fails.
