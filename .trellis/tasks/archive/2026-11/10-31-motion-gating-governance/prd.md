@@ -62,33 +62,33 @@
 ## 4. 详细需求清单 (Requirements)
 
 ### R1. Native 运动检测器静止心跳保底巡检 (MotionDetector Heartbeat Keep-Alive)
-- [ ] 在 `native/src/pipeline/motion_detector.hpp` / `.cpp` 增加静止心跳状态与计数器；
-- [ ] **周期判定**：
+- [x] 在 `native/src/pipeline/motion_detector.hpp` / `.cpp` 增加静止心跳状态与计数器；
+- [x] **周期判定**：
   - 定义静态心跳周期门槛（默认约 10 秒，对应 5fps 下 50 帧；常量 `MOTION_HEARTBEAT_FRAMES = 50`）；
   - 内部维护 `still_frames_count_`，每当帧被判定为无真实运动（非 hold-off 期间）时累加；
-- [ ] **瞬态放行契约**：
+- [x] **瞬态放行契约**：
   - 当 `still_frames_count_ >= MOTION_HEARTBEAT_FRAMES` 时：
     - 强制输出 `out_result.has_motion = true`，`out_result.box_count = 0`（全帧放行）；
     - `still_frames_count_` 归零；
     - **⚠️ 核心约束**：严禁修改 `hold_frames_remaining_`（必须保持为 0），确保心跳仅持续 1 帧，下一帧若仍无运动立即归回静止；
     - 正常滚动参考底图 `prev_grid_`，保证差分底图连续性；
-- [ ] 在视频流复位（`reset()`）时同步重置 `still_frames_count_`。
+- [x] 在视频流复位（`reset()`）时同步重置 `still_frames_count_`。
 
 ### R2. 算法包能力声明元数据契约 (`manifest.json`)
-- [ ] 扩展算法包元数据规范：
+- [x] 扩展算法包元数据规范：
   - `manifest.json` 新增顶层字段 `supports_motion_gate`（布尔值，可选，缺省默认为 `true`）；
   - 任何时序、在岗、滞留、违停、阴燃烟火等依赖连续静态分析的算法打包时显式声明为 `false`；
-- [ ] Go 宿主 `internal/algorithm/model.go`：
+- [x] Go 宿主 `internal/algorithm/model.go`：
   - `Manifest` 结构体新增 `SupportsMotionGate *bool` 字段；
   - 提供辅助方法 `Manifest.SupportsMotionGateOrDefault() bool`（空指针时返回 `true`）；
   - `Algorithm` 实体模型与 API 响应透出该能力字段；
-- [ ] Go 验包准入门禁（`internal/algorithm/verifier.go`）与单元测试增加该字段的校验覆盖。
+- [x] Go 验包准入门禁（`internal/algorithm/verifier.go`）与单元测试增加该字段的校验覆盖。
 
 ### R3. Runner 统一骨架命令行门禁策略 (`algo_main.cpp` / `motion_gate.hpp`)
-- [ ] **CLI 参数扩展**：
+- [x] **CLI 参数扩展**：
   - `native/sdk/include/zhulong/algo_main.hpp` 中 `Options` 增加 `bool disable_motion_gate{false}`；
   - `native/sdk/src/algo_main.cpp` 参数解析器（`parse_options`）支持解析 `--disable-motion-gate`；
-- [ ] **门禁纯函数升级**：
+- [x] **门禁纯函数升级**：
   - `native/sdk/src/internal/motion_gate.hpp` 的 `should_skip_inference` 升级支持入参控制：
     ```cpp
     inline bool should_skip_inference(uint32_t has_motion, bool motion_gate_enabled = true) noexcept {
@@ -96,43 +96,43 @@
         return has_motion == 0;
     }
     ```
-- [ ] **推理与消失信标彻底旁路**：
+- [x] **推理与消失信标彻底旁路**：
   - 在 `algo_main.cpp` 的 Worker 消息循环中，当 `options.disable_motion_gate == true` 时：
     - 无论 `dispatch.has_motion` 是 0 还是 1，**绝对不跳过推理**，正常执行 DMA-BUF 映射与 `api.process()`；
     - **绝对不进入消失信标发送分支**，杜绝伪信标向后端回传，彻底保护违停跟踪器的连续性。
 
 ### R4. Go 宿主进程级治理与参数注入 (`internal/algorunner`, `internal/app`)
-- [ ] 算法进程启动器 `internal/algorunner/process.go`：
+- [x] 算法进程启动器 `internal/algorunner/process.go`：
   - 在 `RunnerProcessConfig` 中新增 `DisableMotionGate bool` 字段；
   - `Start()` 组装子进程命令时，若 `DisableMotionGate == true`，向 `args` 追加 `--disable-motion-gate`；
-- [ ] 宿主调度联动：
+- [x] 宿主调度联动：
   - 监督器 `algorunner.Supervisor` 或服务层根据已加载算法的 `SupportsMotionGate` 属性，在构建进程配置时正确置位。
 
 ### R5. 前端展示与防呆契约 (Web / Phase 2 预留)
-- [ ] 前端 `Algorithm` 契约（`web/src/features/algorithms/data/schema.ts`）补齐 `supportsMotionGate` 字段；
-- [ ] （Phase 2）任务配置弹窗在选中 `supportsMotionGate === false` 的算法时，将动检节能模式锁定为关闭，置灰禁用并给出业务释义气泡。
+- [x] 前端 `Algorithm` 契约（`web/src/features/algorithms/data/schema.ts`）补齐 `supportsMotionGate` 字段；
+- [ ] （Phase 2 预留）任务配置弹窗在选中 `supportsMotionGate === false` 的算法时，将动检节能模式锁定为关闭，置灰禁用并给出业务释义气泡。
 
 ---
 
 ## 5. 验收标准 (Acceptance Criteria)
 
-- [ ] **AC-1 (心跳保底瞬态放行且不污染 hold-off)**：
+- [x] **AC-1 (心跳保底瞬态放行且不污染 hold-off)**：
   - 输入持续纯色静态视频序列（单测），采样率 5fps；
   - 前 10 帧（hold-off）放行；
   - 第 11~49 帧判定为静止（`has_motion == false`）；
   - 第 50 帧（心跳触发）必定放行（`has_motion == true, box_count == 0`）；
   - **第 51 帧立即恢复静止判定（`has_motion == false`）**，断言 `hold_frames_remaining_ == 0`，没有产生 10 帧扩散；
   - 全周期每 50 帧严格产生且仅产生 1 次心跳放行。
-- [ ] **AC-2 (Runner 命令行参数与门禁完全旁路)**：
+- [x] **AC-2 (Runner 命令行参数与门禁完全旁路)**：
   - 启动带 `--disable-motion-gate` 的 Runner；
   - 输入 `has_motion = 0` 的分发报文；
   - 断言 `gate::should_skip_inference` 返回 `false`；
   - 断言 `api.process()` 被 100% 正常调用，且不触发空结果消失信标。
-- [ ] **AC-3 (Go 宿主元数据与启动注入闭环)**：
+- [x] **AC-3 (Go 宿主元数据与启动注入闭环)**：
   - 算法包 `manifest.json` 声明 `"supports_motion_gate": false`，验包通过；
   - Go 宿主拉起该算法 Runner 进程，断言启动子进程的命令行参数列表中精确包含 `--disable-motion-gate`；
   - 缺省老包默认解析为 `true`，命令行不附加 `--disable-motion-gate`，保持向后兼容。
-- [ ] **AC-4 (工程全绿回归)**：
+- [x] **AC-4 (工程全绿回归)**：
   - `make native-test` 全部通过，包含新增的 `motion_detector_test` 心跳用例与 `motion_gate_test` 旁路用例；
   - `make go-check` 全部通过，无数据竞争与编译错误。
 
