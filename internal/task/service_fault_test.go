@@ -24,12 +24,17 @@ func TestServiceUpdateTaskPropagatesWriteFailure(t *testing.T) {
 	insertMockAlgorithm(t, db, "algo_fault", "fault_detector", 10)
 	seeded := seedTask(t, store, "cam_update_fault", "algo_fault")
 
-	svc := task.NewService(store, nil, nil, zap.NewNop())
+	svc := task.NewService(
+		store,
+		nil,
+		nil,
+		zap.NewNop(),
+	)
 
 	fault := errors.New("injected: update failure")
 	injectFault(t, db, faultUpdate, 1, fault)
 
-	_, err := svc.UpdateTask(ctx, seeded.ID, &task.UpdateTaskRequest{Name: "renamed"})
+	_, err := svc.UpdateTask(ctx, seeded.ID, &task.UpdateTaskRequest{Name: stringPtr("renamed")})
 	assertAppErrCode(t, err, "TASK_UPDATE_FAILED")
 	if !errors.Is(err, fault) {
 		t.Fatalf("expected the cause to stay in the error chain, got %v", err)
@@ -41,7 +46,12 @@ func TestServiceDeleteTaskPropagatesWriteFailure(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	svc := task.NewService(store, nil, nil, zap.NewNop())
+	svc := task.NewService(
+		store,
+		nil,
+		nil,
+		zap.NewNop(),
+	)
 
 	t.Run("driver failure", func(t *testing.T) {
 		seeded := seedTask(t, store, "cam_delete_fail")
@@ -71,7 +81,12 @@ func TestHandlerListTasksReportsStoreFailure(t *testing.T) {
 	store, db, cleanup := setupTestStore(t)
 	defer cleanup()
 
-	svc := task.NewService(store, nil, nil, zap.NewNop())
+	svc := task.NewService(
+		store,
+		nil,
+		nil,
+		zap.NewNop(),
+	)
 	handler := task.NewHandler(svc)
 
 	router := gin.New()

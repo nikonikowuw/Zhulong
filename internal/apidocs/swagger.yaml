@@ -1905,26 +1905,7 @@ definitions:
       sampleFps:
         type: integer
     type: object
-  task.Task:
-    properties:
-      algorithms:
-        items:
-          $ref: '#/definitions/task.TaskAlgorithm'
-        type: array
-      cameraId:
-        type: string
-      createdAt:
-        type: string
-      enabled:
-        type: boolean
-      id:
-        type: string
-      name:
-        type: string
-      updatedAt:
-        type: string
-    type: object
-  task.TaskAlgorithm:
+  task.TaskAlgorithmInfo:
     properties:
       algorithmId:
         type: string
@@ -1967,6 +1948,25 @@ definitions:
         type: integer
       sampleFps:
         type: integer
+    type: object
+  task.TaskResponse:
+    properties:
+      algorithms:
+        items:
+          $ref: '#/definitions/task.TaskAlgorithmInfo'
+        type: array
+      cameraId:
+        type: string
+      createdAt:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      name:
+        type: string
+      updatedAt:
+        type: string
     type: object
   task.UpdateTaskRequest:
     properties:
@@ -5039,7 +5039,7 @@ paths:
             - properties:
                 data:
                   items:
-                    $ref: '#/definitions/task.Task'
+                    $ref: '#/definitions/task.TaskResponse'
                   type: array
               type: object
         "500":
@@ -5071,7 +5071,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/task.Task'
+                  $ref: '#/definitions/task.TaskResponse'
               type: object
         "400":
           description: Bad Request
@@ -5140,7 +5140,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/task.Task'
+                  $ref: '#/definitions/task.TaskResponse'
               type: object
         "404":
           description: Not Found
@@ -5180,7 +5180,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/task.Task'
+                  $ref: '#/definitions/task.TaskResponse'
               type: object
         "400":
           description: Bad Request
@@ -5223,7 +5223,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/task.Task'
+                  $ref: '#/definitions/task.TaskResponse'
               type: object
         "404":
           description: Not Found
@@ -5261,7 +5261,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/task.Task'
+                  $ref: '#/definitions/task.TaskResponse'
               type: object
         "400":
           description: Bad Request

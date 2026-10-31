@@ -11,6 +11,11 @@ func boolPtr(v bool) *bool {
 	return &v
 }
 
+// stringPtr 返回指向 v 的指针，用于构造 *string 形式的可选字符串。
+func stringPtr(v string) *string {
+	return &v
+}
+
 func TestCreateTaskRequestToTask(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -150,7 +155,7 @@ func TestUpdateTaskRequestApplyTo(t *testing.T) {
 
 	t.Run("name only leaves everything else intact", func(t *testing.T) {
 		tsk := baseTask()
-		req := &task.UpdateTaskRequest{Name: "renamed"}
+		req := &task.UpdateTaskRequest{Name: stringPtr("renamed")}
 		req.ApplyTo(tsk)
 
 		if tsk.Name != "renamed" {
@@ -161,6 +166,26 @@ func TestUpdateTaskRequestApplyTo(t *testing.T) {
 		}
 		if len(tsk.Algorithms) != 1 || tsk.Algorithms[0].SampleFPS != 5 {
 			t.Errorf("algorithms must be untouched, got %+v", tsk.Algorithms)
+		}
+	})
+
+	t.Run("explicit empty name clears task name", func(t *testing.T) {
+		tsk := baseTask()
+		req := &task.UpdateTaskRequest{Name: stringPtr("")}
+		req.ApplyTo(tsk)
+
+		if tsk.Name != "" {
+			t.Errorf("expected name to be cleared to empty string, got %q", tsk.Name)
+		}
+	})
+
+	t.Run("nil name leaves task name untouched", func(t *testing.T) {
+		tsk := baseTask()
+		req := &task.UpdateTaskRequest{Name: nil}
+		req.ApplyTo(tsk)
+
+		if tsk.Name != "original" {
+			t.Errorf("expected name to stay original, got %q", tsk.Name)
 		}
 	})
 
@@ -222,6 +247,6 @@ func TestUpdateTaskRequestApplyTo(t *testing.T) {
 	})
 
 	t.Run("nil task is ignored", func(t *testing.T) {
-		(&task.UpdateTaskRequest{Name: "x"}).ApplyTo(nil)
+		(&task.UpdateTaskRequest{Name: stringPtr("x")}).ApplyTo(nil)
 	})
 }

@@ -62,7 +62,12 @@ func setupTestService(t *testing.T) (*task.Service, *mockTaskChangeListener, fun
 		},
 	}
 	listener := &mockTaskChangeListener{}
-	svc := task.NewService(store, provider, []task.TaskChangeListener{listener}, zap.NewNop())
+	svc := task.NewService(
+		store,
+		provider,
+		[]task.TaskChangeListener{listener},
+		zap.NewNop(),
+	)
 
 	return svc, listener, cleanup
 }
@@ -383,7 +388,7 @@ func TestServiceUpdateTaskPartialFields(t *testing.T) {
 	}
 
 	// 只改名字：算法配置必须原样保留。
-	renamed, err := svc.UpdateTask(ctx, tsk.ID, &task.UpdateTaskRequest{Name: "renamed"})
+	renamed, err := svc.UpdateTask(ctx, tsk.ID, &task.UpdateTaskRequest{Name: stringPtr("renamed")})
 	if err != nil {
 		t.Fatalf("rename failed: %v", err)
 	}
@@ -445,7 +450,12 @@ func TestServiceWithoutAlgorithmProvider(t *testing.T) {
 	ctx := context.Background()
 
 	// provider 为 nil 时不做规格校验，由 Store 的预算查询兜底认出"算法不存在"。
-	svc := task.NewService(store, nil, nil, nil)
+	svc := task.NewService(
+		store,
+		nil,
+		nil,
+		nil,
+	)
 
 	err := svc.CreateTask(ctx, &task.Task{
 		CameraID: "cam_no_provider",
@@ -462,7 +472,12 @@ func TestServiceMapsClosedStoreToInternalError(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	svc := task.NewService(store, nil, nil, zap.NewNop())
+	svc := task.NewService(
+		store,
+		nil,
+		nil,
+		zap.NewNop(),
+	)
 
 	closeUnderlyingDB(t, db)
 
@@ -636,7 +651,7 @@ func TestServiceRejectsIncompletePayloads(t *testing.T) {
 	})
 
 	t.Run("update without task id", func(t *testing.T) {
-		_, err := svc.UpdateTask(ctx, "", &task.UpdateTaskRequest{Name: "x"})
+		_, err := svc.UpdateTask(ctx, "", &task.UpdateTaskRequest{Name: stringPtr("x")})
 		assertAppErrCode(t, err, "VALIDATION_FAILED")
 	})
 

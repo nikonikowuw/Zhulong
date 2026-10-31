@@ -111,7 +111,12 @@ func (s *Store) CreateTaskWithinBudget(ctx context.Context, task *Task, maxPoint
 
 	return db.Transaction(func(tx *gorm.DB) error {
 		assignIDs(task)
-		if err := validateComputeBudget(tx, task, "", maxPoints); err != nil {
+		if err := validateComputeBudget(
+			tx,
+			task,
+			"",
+			maxPoints,
+		); err != nil {
 			return err
 		}
 		if err := tx.Create(task).Error; err != nil {
@@ -158,7 +163,12 @@ func (s *Store) SaveTaskWithinBudget(ctx context.Context, task *Task, maxPoints 
 		}
 		assignIDs(task)
 
-		if err := validateComputeBudget(tx, task, excludeID, maxPoints); err != nil {
+		if err := validateComputeBudget(
+			tx,
+			task,
+			excludeID,
+			maxPoints,
+		); err != nil {
 			return err
 		}
 
@@ -327,10 +337,17 @@ func otherTasksComputePoints(tx *gorm.DB, excludeTaskID string, maxPoints int64)
 		return 0, err
 	}
 
-	var total int64
+	var (
+		total int64
+		err   error
+	)
 	for _, allocation := range allocations {
-		var err error
-		total, err = addComputePoints(total, allocation.ComputeCost, allocation.SampleFPS, maxPoints)
+		total, err = addComputePoints(
+			total,
+			allocation.ComputeCost,
+			allocation.SampleFPS,
+			maxPoints,
+		)
 		if err != nil {
 			return 0, err
 		}
@@ -358,7 +375,12 @@ func addTaskComputePoints(tx *gorm.DB, task *Task, total int64, maxPoints int64)
 		case err != nil:
 			return err
 		}
-		total, err = addComputePoints(total, algorithm.ComputeCost, sub.SampleFPS, maxPoints)
+		total, err = addComputePoints(
+			total,
+			algorithm.ComputeCost,
+			sub.SampleFPS,
+			maxPoints,
+		)
 		if err != nil {
 			return err
 		}
@@ -367,7 +389,9 @@ func addTaskComputePoints(tx *gorm.DB, task *Task, total int64, maxPoints int64)
 }
 
 func addComputePoints(total int64, computeCost, sampleFPS int, maxPoints int64) (int64, error) {
-	if total < 0 || total > maxPoints || computeCost < 0 || sampleFPS < 0 {
+	isTotalOutOfRange := total < 0 || total > maxPoints
+	hasNegativeInputs := computeCost < 0 || sampleFPS < 0
+	if isTotalOutOfRange || hasNegativeInputs {
 		return 0, fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
 	}
 	cost := int64(computeCost)

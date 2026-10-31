@@ -176,7 +176,7 @@ func (req *CreateTaskRequest) legacyAlgorithmItem() *TaskAlgorithmItem {
 
 // UpdateTaskRequest is the request payload for updating an analysis task.
 type UpdateTaskRequest struct {
-	Name       string               `json:"name,omitempty"`
+	Name       *string              `json:"name,omitempty"`
 	Enabled    *bool                `json:"enabled,omitempty"`
 	Algorithms *[]TaskAlgorithmItem `json:"algorithms,omitempty"`
 	// Legacy single-algorithm update fields
@@ -193,8 +193,8 @@ func (req *UpdateTaskRequest) ApplyTo(t *Task) {
 	if t == nil {
 		return
 	}
-	if req.Name != "" {
-		t.Name = req.Name
+	if req.Name != nil {
+		t.Name = *req.Name
 	}
 	if req.Enabled != nil {
 		t.Enabled = *req.Enabled

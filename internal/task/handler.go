@@ -63,25 +63,19 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Produce      json
 // @Param        camera_id query string false "Filter by camera ID"
 // @Param        algorithm_id query string false "Filter by algorithm ID"
-// @Success      200  {object}  httputil.Response{data=[]Task}
+// @Success      200  {object}  httputil.Response{data=[]TaskResponse}
 // @Failure      500  {object}  httputil.Response
 // @Router       /tasks [get]
 func (h *Handler) ListTasks(c *gin.Context) {
-	cameraID := c.Query("camera_id")
-	if cameraID == "" {
-		cameraID = c.Query("cameraId")
-	}
-	algorithmID := c.Query("algorithm_id")
-	if algorithmID == "" {
-		algorithmID = c.Query("algorithmId")
-	}
+	cameraID := firstNonZero(c.Query("camera_id"), c.Query("cameraId"))
+	algorithmID := firstNonZero(c.Query("algorithm_id"), c.Query("algorithmId"))
 
 	tasks, err := h.service.ListTasks(c.Request.Context(), cameraID, algorithmID)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, tasks)
+	httputil.Success(c, ToTaskResponses(tasks))
 }
 
 // GetTask godoc
@@ -89,7 +83,7 @@ func (h *Handler) ListTasks(c *gin.Context) {
 // @Tags         tasks
 // @Produce      json
 // @Param        id path string true "Task ID"
-// @Success      200  {object}  httputil.Response{data=Task}
+// @Success      200  {object}  httputil.Response{data=TaskResponse}
 // @Failure      404  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /tasks/{id} [get]
@@ -100,7 +94,7 @@ func (h *Handler) GetTask(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, task)
+	httputil.Success(c, task.ToResponse())
 }
 
 // GetTaskByCamera godoc
@@ -108,7 +102,7 @@ func (h *Handler) GetTask(c *gin.Context) {
 // @Tags         tasks
 // @Produce      json
 // @Param        cameraId path string true "Camera ID"
-// @Success      200  {object}  httputil.Response{data=Task}
+// @Success      200  {object}  httputil.Response{data=TaskResponse}
 // @Failure      404  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /tasks/camera/{cameraId} [get]
@@ -119,7 +113,7 @@ func (h *Handler) GetTaskByCamera(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, task)
+	httputil.Success(c, task.ToResponse())
 }
 
 // CreateTask godoc
@@ -129,7 +123,7 @@ func (h *Handler) GetTaskByCamera(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Param        request body CreateTaskRequest true "Analysis task payload"
-// @Success      201  {object}  httputil.Response{data=Task}
+// @Success      201  {object}  httputil.Response{data=TaskResponse}
 // @Failure      400  {object}  httputil.Response
 // @Failure      409  {object}  httputil.Response
 // @Failure      422  {object}  httputil.Response
@@ -149,7 +143,7 @@ func (h *Handler) CreateTask(c *gin.Context) {
 		return
 	}
 
-	httputil.SuccessWithStatus(c, http.StatusCreated, task)
+	httputil.SuccessWithStatus(c, http.StatusCreated, task.ToResponse())
 }
 
 // UpdateTask godoc
@@ -160,7 +154,7 @@ func (h *Handler) CreateTask(c *gin.Context) {
 // @Produce      json
 // @Param        id path string true "Task ID"
 // @Param        request body UpdateTaskRequest true "Update payload"
-// @Success      200  {object}  httputil.Response{data=Task}
+// @Success      200  {object}  httputil.Response{data=TaskResponse}
 // @Failure      400  {object}  httputil.Response
 // @Failure      404  {object}  httputil.Response
 // @Failure      409  {object}  httputil.Response
@@ -182,7 +176,7 @@ func (h *Handler) UpdateTask(c *gin.Context) {
 		return
 	}
 
-	httputil.Success(c, task)
+	httputil.Success(c, task.ToResponse())
 }
 
 // SaveTaskByCamera godoc
@@ -192,7 +186,7 @@ func (h *Handler) UpdateTask(c *gin.Context) {
 // @Produce      json
 // @Param        cameraId path string true "Camera ID"
 // @Param        request body CreateTaskRequest true "Channel task payload"
-// @Success      200  {object}  httputil.Response{data=Task}
+// @Success      200  {object}  httputil.Response{data=TaskResponse}
 // @Failure      400  {object}  httputil.Response
 // @Failure      409  {object}  httputil.Response
 // @Failure      422  {object}  httputil.Response
@@ -214,7 +208,7 @@ func (h *Handler) SaveTaskByCamera(c *gin.Context) {
 		return
 	}
 
-	httputil.Success(c, task)
+	httputil.Success(c, task.ToResponse())
 }
 
 // DeleteTask godoc

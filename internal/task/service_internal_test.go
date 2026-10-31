@@ -97,7 +97,12 @@ func (l *recordingListener) OnTaskChanged(_ context.Context, algorithmID string)
 // TestNotifyTasksChangedFiltersEmptyAndDuplicateIDs 钉住广播契约：空 ID 不外发，重复 ID 只广播一次。
 func TestNotifyTasksChangedFiltersEmptyAndDuplicateIDs(t *testing.T) {
 	listener := &recordingListener{}
-	svc := NewService(nil, nil, []TaskChangeListener{listener, nil}, nil)
+	svc := NewService(
+		nil,
+		nil,
+		[]TaskChangeListener{listener, nil},
+		nil,
+	)
 
 	svc.notifyTasksChanged(context.Background(), []string{"algo_a", "", "algo_a", "algo_b", ""})
 
@@ -153,7 +158,12 @@ func TestAddComputePoints(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := addComputePoints(test.total, test.computeCost, test.sampleFPS, maxPoints)
+			got, err := addComputePoints(
+				test.total,
+				test.computeCost,
+				test.sampleFPS,
+				maxPoints,
+			)
 			if test.wantErr {
 				if !errors.Is(err, ErrComputeBudgetExceeded) {
 					t.Fatalf("expected ErrComputeBudgetExceeded, got %v", err)

@@ -4913,7 +4913,7 @@ const docTemplate = `{
                                         "data": {
                                             "type": "array",
                                             "items": {
-                                                "$ref": "#/definitions/task.Task"
+                                                "$ref": "#/definitions/task.TaskResponse"
                                             }
                                         }
                                     }
@@ -4964,7 +4964,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/task.Task"
+                                            "$ref": "#/definitions/task.TaskResponse"
                                         }
                                     }
                                 }
@@ -5028,7 +5028,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/task.Task"
+                                            "$ref": "#/definitions/task.TaskResponse"
                                         }
                                     }
                                 }
@@ -5090,7 +5090,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/task.Task"
+                                            "$ref": "#/definitions/task.TaskResponse"
                                         }
                                     }
                                 }
@@ -5154,7 +5154,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/task.Task"
+                                            "$ref": "#/definitions/task.TaskResponse"
                                         }
                                     }
                                 }
@@ -5217,7 +5217,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/task.Task"
+                                            "$ref": "#/definitions/task.TaskResponse"
                                         }
                                     }
                                 }
@@ -8073,36 +8073,7 @@ const docTemplate = `{
                 }
             }
         },
-        "task.Task": {
-            "type": "object",
-            "properties": {
-                "algorithms": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/task.TaskAlgorithm"
-                    }
-                },
-                "cameraId": {
-                    "type": "string"
-                },
-                "createdAt": {
-                    "type": "string"
-                },
-                "enabled": {
-                    "type": "boolean"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "updatedAt": {
-                    "type": "string"
-                }
-            }
-        },
-        "task.TaskAlgorithm": {
+        "task.TaskAlgorithmInfo": {
             "type": "object",
             "properties": {
                 "algorithmId": {
@@ -8166,6 +8137,35 @@ const docTemplate = `{
                 },
                 "sample_fps": {
                     "type": "integer"
+                }
+            }
+        },
+        "task.TaskResponse": {
+            "type": "object",
+            "properties": {
+                "algorithms": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/task.TaskAlgorithmInfo"
+                    }
+                },
+                "cameraId": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
                 }
             }
         },
