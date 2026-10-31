@@ -26,6 +26,7 @@
     "retry": "Retry",
     "refresh": "Refresh",
     "create": "Add Person",
+    "import": "Bulk Import",
     "edit": "Edit Person",
     "delete": "Delete Person",
     "manageFaces": "Manage Faces",
@@ -117,5 +118,40 @@
     "openOriginal": "View original in a new tab",
     "close": "Close (Esc)",
     "shortcutHint": "{{cancel}} (ESC) · Scroll to zoom · Double-click to toggle"
+  },
+  "import": {
+    "title": "Bulk Import Personnel",
+    "description": "Upload a UTF-8 CSV, review validation results, then confirm valid personnel. Columns: name and personId.",
+    "chooseFile": "Choose CSV file",
+    "chooseAnother": "Choose another",
+    "fileHint": "Max 2 MB and 1,000 records",
+    "downloadTemplate": "Download CSV template",
+    "formatTitle": "CSV format example",
+    "formatExample": "name,personId\nAlex,EMP-001\nSam,",
+    "formatHint": "First row is the header. Name is required; personnel ID is optional. Column order may vary.",
+    "validating": "Validating file...",
+    "total": "Total rows",
+    "importable": "Ready",
+    "failed": "Failed",
+    "line": "Line",
+    "status": "Status",
+    "reason": "Reason",
+    "ready": "Ready",
+    "invalid": "Needs attention",
+    "confirm": "Confirm import",
+    "completed": "Import completed",
+    "resultSummary": "{{imported}} imported, {{failed}} failed",
+    "failedTitle": "Import failed",
+    "retryHint": "Check the file and try again",
+    "downloadFailed": "Download failed rows",
+    "invalidFile": "Please choose a CSV file",
+    "errors": {
+      "NAME_REQUIRED": "Name is required",
+      "NAME_TOO_LONG": "Name is too long",
+      "PERSON_ID_TOO_LONG": "Personnel ID is too long",
+      "PERSON_ID_ALREADY_EXISTS": "Personnel ID already exists",
+      "IMPORT_DUPLICATE_PERSON_ID": "Personnel ID is duplicated in the file",
+      "IMPORT_COLUMN_COUNT": "Column count does not match the header"
+    }
   }
 }

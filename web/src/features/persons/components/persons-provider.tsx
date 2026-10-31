@@ -2,7 +2,12 @@ import React, { useState } from 'react'
 import useDialogState from '@/hooks/use-dialog-state'
 import { type Person } from '../data/schema'
 
-export type PersonsDialogType = 'create' | 'edit' | 'delete' | 'faces'
+export type PersonsDialogType =
+  | 'create'
+  | 'edit'
+  | 'delete'
+  | 'faces'
+  | 'import'
 
 export interface PreviewImageInfo {
   url: string

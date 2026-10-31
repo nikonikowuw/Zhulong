@@ -1044,3 +1044,59 @@ func TestHandler_SetPrimaryFace(t *testing.T) {
 	}
 	_ = face1ID
 }
+
+func makeMultipartCSVRequest(t *testing.T, url string, payload string) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "people.csv")
+	if err != nil {
+		t.Fatalf("create csv form file: %v", err)
+	}
+	if _, err := part.Write([]byte(payload)); err != nil {
+		t.Fatalf("write csv form file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close csv multipart: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, url, &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return req
+}
+
+func TestHandlerPersonImportPreviewAndCommit(t *testing.T) {
+	router, _ := setupTestRouter(t)
+	payload := "name,personId\nAlice,EMP-1\nDuplicate,EMP-1\nNo ID,\n"
+
+	previewRequest := makeMultipartCSVRequest(t, "/api/v1/persons/import/preview", payload)
+	previewWriter := httptest.NewRecorder()
+	router.ServeHTTP(previewWriter, previewRequest)
+	if previewWriter.Code != http.StatusOK {
+		t.Fatalf("preview status = %d, body = %s", previewWriter.Code, previewWriter.Body.String())
+	}
+	var previewEnvelope struct {
+		Data person.PersonImportPreviewResponse `json:"data"`
+	}
+	if err := json.Unmarshal(previewWriter.Body.Bytes(), &previewEnvelope); err != nil {
+		t.Fatalf("decode preview response: %v", err)
+	}
+	if previewEnvelope.Data.Total != 3 || previewEnvelope.Data.Importable != 1 || previewEnvelope.Data.Failed != 2 {
+		t.Fatalf("unexpected preview: %+v", previewEnvelope.Data)
+	}
+
+	commitRequest := makeMultipartCSVRequest(t, "/api/v1/persons/import/commit", payload)
+	commitWriter := httptest.NewRecorder()
+	router.ServeHTTP(commitWriter, commitRequest)
+	if commitWriter.Code != http.StatusOK {
+		t.Fatalf("commit status = %d, body = %s", commitWriter.Code, commitWriter.Body.String())
+	}
+	var commitEnvelope struct {
+		Data person.PersonImportCommitResponse `json:"data"`
+	}
+	if err := json.Unmarshal(commitWriter.Body.Bytes(), &commitEnvelope); err != nil {
+		t.Fatalf("decode commit response: %v", err)
+	}
+	if commitEnvelope.Data.Imported != 1 || commitEnvelope.Data.Failed != 2 {
+		t.Fatalf("unexpected commit: %+v", commitEnvelope.Data)
+	}
+}

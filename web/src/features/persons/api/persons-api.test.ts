@@ -50,6 +50,67 @@ describe('personsApi', () => {
     })
   })
 
+  it('previewImport uploads the CSV file as multipart form data', async () => {
+    const preview = {
+      items: [
+        {
+          line: 2,
+          name: 'Alice',
+          personId: 'EMP001',
+          canImport: true,
+          issues: [],
+        },
+      ],
+      total: 1,
+      importable: 1,
+      failed: 0,
+    }
+    const file = new File(['name,personId\nAlice,EMP001\n'], 'people.csv', {
+      type: 'text/csv',
+    })
+    const spy = vi
+      .spyOn(apiClient, 'post')
+      .mockResolvedValueOnce(mockResponse(preview))
+
+    await expect(personsApi.previewImport(file)).resolves.toEqual(preview)
+    expect(spy).toHaveBeenCalledWith(
+      '/persons/import/preview',
+      expect.any(FormData),
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    )
+  })
+
+  it('commitImport uploads the same CSV file as multipart form data', async () => {
+    const result = {
+      items: [
+        {
+          line: 2,
+          name: 'Alice',
+          personId: 'EMP001',
+          canImport: true,
+          imported: true,
+          issues: [],
+        },
+      ],
+      total: 1,
+      imported: 1,
+      failed: 0,
+    }
+    const file = new File(['name,personId\nAlice,EMP001\n'], 'people.csv', {
+      type: 'text/csv',
+    })
+    const spy = vi
+      .spyOn(apiClient, 'post')
+      .mockResolvedValueOnce(mockResponse(result))
+
+    await expect(personsApi.commitImport(file)).resolves.toEqual(result)
+    expect(spy).toHaveBeenCalledWith(
+      '/persons/import/commit',
+      expect.any(FormData),
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    )
+  })
+
   it('getPerson calls GET /persons/:id', async () => {
     const mockPerson = {
       id: 'p-01',

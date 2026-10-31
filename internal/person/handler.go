@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
@@ -50,6 +51,8 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // RegisterUploadRoutes registers large-body upload endpoints on the upload router group.
 func (h *Handler) RegisterUploadRoutes(rg *gin.RouterGroup) {
 	rg.POST("/persons/:id/faces", h.AddFace)
+	rg.POST("/persons/import/preview", h.PreviewImport)
+	rg.POST("/persons/import/commit", h.CommitImport)
 }
 
 type uploadRouteRegistrar struct {
@@ -351,4 +354,78 @@ func (h *Handler) SetPrimaryFace(c *gin.Context) {
 	}
 
 	httputil.Success(c, newPersonResponse(p))
+}
+
+// PreviewImport previews a CSV without creating person rows.
+// @Summary      Preview a person CSV import
+// @Tags         person
+// @Accept       multipart/form-data
+// @Produce      json
+// @Param        file formData file true "UTF-8 CSV file"
+// @Success      200  {object}  httputil.Response{data=PersonImportPreviewResponse}
+// @Failure      400  {object}  httputil.Response
+// @Failure      413  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/import/preview [post]
+func (h *Handler) PreviewImport(c *gin.Context) {
+	audithttp.Tag(c, ActionPersonImportPreview, "persons", "Preview person import")
+	file, err := c.FormFile("file")
+	if err != nil {
+		httpImportRequiredError(c, err)
+		return
+	}
+	reader, err := file.Open()
+	if err != nil {
+		httpImportReadError(c, err)
+		return
+	}
+	defer reader.Close()
+
+	result, err := h.service.PreviewPersonImport(c.Request.Context(), reader)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	httputil.Success(c, result)
+}
+
+// CommitImport imports valid rows from the uploaded CSV and reports row-level failures.
+// @Summary      Commit a person CSV import
+// @Tags         person
+// @Accept       multipart/form-data
+// @Produce      json
+// @Param        file formData file true "UTF-8 CSV file"
+// @Success      200  {object}  httputil.Response{data=PersonImportCommitResponse}
+// @Failure      400  {object}  httputil.Response
+// @Failure      413  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/import/commit [post]
+func (h *Handler) CommitImport(c *gin.Context) {
+	audithttp.Tag(c, ActionPersonImportCommit, "persons", "Commit person import")
+	file, err := c.FormFile("file")
+	if err != nil {
+		httpImportRequiredError(c, err)
+		return
+	}
+	reader, err := file.Open()
+	if err != nil {
+		httpImportReadError(c, err)
+		return
+	}
+	defer reader.Close()
+
+	result, err := h.service.CommitPersonImport(c.Request.Context(), reader)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	httputil.Success(c, result)
+}
+
+func httpImportRequiredError(c *gin.Context, err error) {
+	httputil.WriteError(c, apperr.Invalid("FILE_REQUIRED", "CSV file is required", err))
+}
+
+func httpImportReadError(c *gin.Context, err error) {
+	httputil.WriteError(c, apperr.Internal("FILE_READ_FAILED", "Failed to read uploaded file", err))
 }

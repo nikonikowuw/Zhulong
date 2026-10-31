@@ -986,6 +986,56 @@ definitions:
       ownerRowId:
         type: string
     type: object
+  person.PersonImportCommitResponse:
+    properties:
+      failed:
+        type: integer
+      imported:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/person.PersonImportRowResponse'
+        type: array
+      total:
+        type: integer
+    type: object
+  person.PersonImportIssueResponse:
+    properties:
+      code:
+        type: string
+      field:
+        type: string
+    type: object
+  person.PersonImportPreviewResponse:
+    properties:
+      failed:
+        type: integer
+      importable:
+        type: integer
+      items:
+        items:
+          $ref: '#/definitions/person.PersonImportRowResponse'
+        type: array
+      total:
+        type: integer
+    type: object
+  person.PersonImportRowResponse:
+    properties:
+      canImport:
+        type: boolean
+      imported:
+        type: boolean
+      issues:
+        items:
+          $ref: '#/definitions/person.PersonImportIssueResponse'
+        type: array
+      line:
+        type: integer
+      name:
+        type: string
+      personId:
+        type: string
+    type: object
   person.PersonResponse:
     properties:
       createdAt:
@@ -3264,6 +3314,80 @@ paths:
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Set primary face for a person
+      tags:
+      - person
+  /persons/import/commit:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: UTF-8 CSV file
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/person.PersonImportCommitResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Commit a person CSV import
+      tags:
+      - person
+  /persons/import/preview:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: UTF-8 CSV file
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/person.PersonImportPreviewResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Preview a person CSV import
       tags:
       - person
   /records/alarms:

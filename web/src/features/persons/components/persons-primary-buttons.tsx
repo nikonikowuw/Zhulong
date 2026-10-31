@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Plus, RefreshCw } from 'lucide-react'
+import { FileUp, Plus, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { PERSONS_QUERY_KEY } from '../hooks/use-persons'
@@ -19,6 +19,11 @@ export function PersonsPrimaryButtons() {
     setOpen('create')
   }
 
+  const handleImport = () => {
+    setCurrentRow(null)
+    setOpen('import')
+  }
+
   return (
     <div className='flex items-center gap-2'>
       <Button
@@ -32,6 +37,17 @@ export function PersonsPrimaryButtons() {
         <span className='hidden sm:inline'>
           {t('actions.refresh', { defaultValue: '刷新' })}
         </span>
+      </Button>
+
+      <Button
+        variant='outline'
+        size='sm'
+        className='h-8'
+        onClick={handleImport}
+        title={t('actions.import')}
+      >
+        <FileUp className='me-1 h-4 w-4' />
+        <span>{t('actions.import')}</span>
       </Button>
 
       <Button size='sm' className='h-8' onClick={handleCreate}>

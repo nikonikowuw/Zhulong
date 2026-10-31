@@ -26,6 +26,7 @@
     "retry": "重試",
     "refresh": "重新整理",
     "create": "新增人員",
+    "import": "批次匯入",
     "edit": "編輯人員",
     "delete": "刪除人員",
     "manageFaces": "人臉管理",
@@ -117,5 +118,40 @@
     "openOriginal": "在新分頁中檢視原圖",
     "close": "關閉 (Esc)",
     "shortcutHint": "{{cancel}} (ESC) · 滾輪縮放 · 雙擊快速放大/還原"
+  },
+  "import": {
+    "title": "批次匯入人員",
+    "description": "上傳 UTF-8 CSV，先預覽驗證，再確認匯入有效人員。支援 name、personId 兩欄。",
+    "chooseFile": "選擇 CSV 檔案",
+    "chooseAnother": "重新選擇",
+    "fileHint": "最大 2MB，最多 1000 筆記錄",
+    "downloadTemplate": "下載 CSV 範本",
+    "formatTitle": "CSV 格式範例",
+    "formatExample": "name,personId\n張三,EMP-001\n李四,",
+    "formatHint": "第一列為表頭，姓名必填，人員編號可留空；欄位順序可調整。",
+    "validating": "正在驗證檔案...",
+    "total": "總筆數",
+    "importable": "可匯入",
+    "failed": "失敗",
+    "line": "行號",
+    "status": "狀態",
+    "reason": "原因",
+    "ready": "可匯入",
+    "invalid": "需要修正",
+    "confirm": "確認匯入",
+    "completed": "匯入完成",
+    "resultSummary": "成功匯入 {{imported}} 筆，{{failed}} 筆失敗",
+    "failedTitle": "匯入失敗",
+    "retryHint": "請檢查檔案後重試",
+    "downloadFailed": "下載失敗列",
+    "invalidFile": "請選擇 CSV 檔案",
+    "errors": {
+      "NAME_REQUIRED": "姓名不能為空",
+      "NAME_TOO_LONG": "姓名長度超出限制",
+      "PERSON_ID_TOO_LONG": "人員編號長度超出限制",
+      "PERSON_ID_ALREADY_EXISTS": "人員編號已存在",
+      "IMPORT_DUPLICATE_PERSON_ID": "人員編號在檔案中重複",
+      "IMPORT_COLUMN_COUNT": "欄數與表頭不一致"
+    }
   }
 }

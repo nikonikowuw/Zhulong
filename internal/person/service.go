@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/csv"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"mime/multipart"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
@@ -848,4 +851,315 @@ func float32ToBytes(floats []float32) []byte {
 		binary.LittleEndian.PutUint32(buf[i*4:(i+1)*4], math.Float32bits(f))
 	}
 	return buf
+}
+
+// --- Bulk Person Import ---
+
+const (
+	// PersonImportMaxBytes bounds the CSV payload independent of the wider upload group limit.
+	PersonImportMaxBytes int64 = 2 * 1024 * 1024
+	// PersonImportMaxRows keeps preview and commit payloads bounded on the edge host.
+	PersonImportMaxRows = 1000
+)
+
+var (
+	errPersonImportEmpty       = errors.New("person import file is empty")
+	errPersonImportHeader      = errors.New("person import header is invalid")
+	errPersonImportTooLarge    = errors.New("person import file is too large")
+	errPersonImportTooManyRows = errors.New("person import has too many rows")
+)
+
+type personImportIssue struct {
+	Field string
+	Code  string
+}
+
+type personImportRow struct {
+	line     int
+	name     string
+	personID string
+	issues   []personImportIssue
+}
+
+type personImportEntry struct {
+	line     int
+	name     string
+	personID *string
+}
+
+type personImportCreateResult struct {
+	line int
+	err  error
+}
+
+// PreviewPersonImport parses and validates a CSV without creating person rows.
+func (s *Service) PreviewPersonImport(ctx context.Context, reader io.Reader) (*PersonImportPreviewResponse, error) {
+	rows, err := parsePersonImportCSV(reader)
+	if err != nil {
+		return nil, personImportFileError(err)
+	}
+	_, validated, err := s.validatePersonImport(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+
+	items := importRowResponses(validated)
+	var failed int
+	for _, item := range items {
+		if !item.CanImport {
+			failed++
+		}
+	}
+	return &PersonImportPreviewResponse{
+		Items:      items,
+		Total:      len(items),
+		Importable: len(items) - failed,
+		Failed:     failed,
+	}, nil
+}
+
+// CommitPersonImport parses and validates a CSV again, then creates valid rows in one transaction.
+func (s *Service) CommitPersonImport(ctx context.Context, reader io.Reader) (*PersonImportCommitResponse, error) {
+	rows, err := parsePersonImportCSV(reader)
+	if err != nil {
+		return nil, personImportFileError(err)
+	}
+	entries, validated, err := s.validatePersonImport(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
+
+	created, err := s.store.CreatePersonImport(ctx, entries)
+	if err != nil {
+		return nil, apperr.Internal("PERSON_IMPORT_FAILED", "Failed to import persons", err)
+	}
+	createdByLine := make(map[int]personImportCreateResult, len(created))
+	for _, result := range created {
+		createdByLine[result.line] = result
+	}
+
+	items := make([]PersonImportRowResponse, 0, len(validated))
+	var imported int
+	for _, row := range validated {
+		item := importRowResponse(row)
+		if len(row.issues) == 0 {
+			result := createdByLine[row.line]
+			switch {
+			case errors.Is(result.err, ErrDuplicatePersonID):
+				item.Issues = []PersonImportIssueResponse{{Field: "personId", Code: "PERSON_ID_ALREADY_EXISTS"}}
+				item.CanImport = false
+			case result.err != nil:
+				return nil, apperr.Internal("PERSON_IMPORT_FAILED", "Failed to import persons", result.err)
+			default:
+				item.CanImport = true
+				item.Imported = true
+				imported++
+			}
+		}
+		items = append(items, item)
+	}
+	return &PersonImportCommitResponse{
+		Items:    items,
+		Total:    len(items),
+		Imported: imported,
+		Failed:   len(items) - imported,
+	}, nil
+}
+
+func (s *Service) validatePersonImport(ctx context.Context, rows []personImportRow) ([]personImportEntry, []personImportRow, error) {
+	candidates := make([]string, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if row.personID == "" {
+			continue
+		}
+		if _, exists := seen[row.personID]; exists {
+			continue
+		}
+		seen[row.personID] = struct{}{}
+		candidates = append(candidates, row.personID)
+	}
+	existing, err := s.store.ListPersonIDs(ctx, candidates)
+	if err != nil {
+		return nil, nil, apperr.Internal("DATABASE_ERROR", "Failed to validate person import", err)
+	}
+	entries, validated := validatePersonImportRows(rows, existing)
+	return entries, validated, nil
+}
+
+func parsePersonImportCSV(reader io.Reader) ([]personImportRow, error) {
+	payload, err := io.ReadAll(io.LimitReader(reader, PersonImportMaxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read person import file: %w", err)
+	}
+	if int64(len(payload)) > PersonImportMaxBytes {
+		return nil, errPersonImportTooLarge
+	}
+
+	csvReader := csv.NewReader(bytes.NewReader(payload))
+	csvReader.FieldsPerRecord = -1
+	csvReader.ReuseRecord = false
+
+	headers, err := csvReader.Read()
+	if errors.Is(err, io.EOF) {
+		return nil, errPersonImportEmpty
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read person import header: %w", err)
+	}
+	if len(headers) > 0 {
+		headers[0] = strings.TrimPrefix(headers[0], "\uFEFF")
+	}
+	nameIndex, personIDIndex, err := personImportHeaderIndexes(headers)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := []personImportRow{}
+	for {
+		record, readErr := csvReader.Read()
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("read person import row: %w", readErr)
+		}
+		if len(record) == 0 {
+			continue
+		}
+		line, _ := csvReader.FieldPos(0)
+		if line == 0 {
+			line = len(rows) + 2
+		}
+
+		row := personImportRow{line: line}
+		if nameIndex < len(record) {
+			row.name = strings.TrimSpace(record[nameIndex])
+		}
+		if personIDIndex < len(record) {
+			row.personID = strings.TrimSpace(record[personIDIndex])
+		}
+		if len(record) != len(headers) {
+			row.issues = append(row.issues, personImportIssue{Code: "IMPORT_COLUMN_COUNT"})
+		}
+		rows = append(rows, row)
+		if len(rows) > PersonImportMaxRows {
+			return nil, errPersonImportTooManyRows
+		}
+	}
+	if len(rows) == 0 {
+		return nil, errPersonImportEmpty
+	}
+	return rows, nil
+}
+
+func personImportHeaderIndexes(headers []string) (int, int, error) {
+	if len(headers) != 2 {
+		return 0, 0, errPersonImportHeader
+	}
+	nameIndex := -1
+	personIDIndex := -1
+	seen := make(map[string]struct{}, len(headers))
+	for index, header := range headers {
+		if _, exists := seen[header]; exists {
+			return 0, 0, errPersonImportHeader
+		}
+		seen[header] = struct{}{}
+		switch header {
+		case "name":
+			nameIndex = index
+		case "personId":
+			personIDIndex = index
+		default:
+			return 0, 0, errPersonImportHeader
+		}
+	}
+	if nameIndex < 0 || personIDIndex < 0 {
+		return 0, 0, errPersonImportHeader
+	}
+	return nameIndex, personIDIndex, nil
+}
+
+func validatePersonImportRows(rows []personImportRow, existing map[string]struct{}) ([]personImportEntry, []personImportRow) {
+	counts := make(map[string]int)
+	for _, row := range rows {
+		if row.personID != "" {
+			counts[row.personID]++
+		}
+	}
+
+	entries := make([]personImportEntry, 0, len(rows))
+	validated := make([]personImportRow, 0, len(rows))
+	for _, row := range rows {
+		row.issues = append([]personImportIssue(nil), row.issues...)
+		switch {
+		case row.name == "":
+			row.issues = append(row.issues, personImportIssue{Field: "name", Code: "NAME_REQUIRED"})
+		case utf8.RuneCountInString(row.name) > faceNameMaxLen:
+			row.issues = append(row.issues, personImportIssue{Field: "name", Code: "NAME_TOO_LONG"})
+		}
+		if utf8.RuneCountInString(row.personID) > 64 {
+			row.issues = append(row.issues, personImportIssue{Field: "personId", Code: "PERSON_ID_TOO_LONG"})
+		}
+		if row.personID != "" {
+			if counts[row.personID] > 1 {
+				row.issues = append(row.issues, personImportIssue{Field: "personId", Code: "IMPORT_DUPLICATE_PERSON_ID"})
+			}
+			if _, exists := existing[row.personID]; exists {
+				row.issues = append(row.issues, personImportIssue{Field: "personId", Code: "PERSON_ID_ALREADY_EXISTS"})
+			}
+		}
+
+		validated = append(validated, row)
+		if len(row.issues) == 0 {
+			var personID *string
+			if row.personID != "" {
+				value := row.personID
+				personID = &value
+			}
+			entries = append(entries, personImportEntry{line: row.line, name: row.name, personID: personID})
+		}
+	}
+	return entries, validated
+}
+
+func personImportFileError(err error) error {
+	switch {
+	case errors.Is(err, errPersonImportEmpty):
+		return apperr.Invalid("IMPORT_FILE_EMPTY", "Person import file is empty", err)
+	case errors.Is(err, errPersonImportHeader):
+		return apperr.Invalid("IMPORT_HEADER_INVALID", "Person import header is invalid", err)
+	case errors.Is(err, errPersonImportTooLarge):
+		return apperr.Invalid("IMPORT_FILE_TOO_LARGE", "Person import file is too large", err)
+	case errors.Is(err, errPersonImportTooManyRows):
+		return apperr.Invalid("IMPORT_TOO_MANY_ROWS", "Person import has too many rows", err)
+	default:
+		return apperr.Invalid("IMPORT_CSV_INVALID", "Person import CSV is invalid", err)
+	}
+}
+
+func importRowResponse(row personImportRow) PersonImportRowResponse {
+	return PersonImportRowResponse{
+		Line:      row.line,
+		Name:      row.name,
+		PersonID:  row.personID,
+		CanImport: len(row.issues) == 0,
+		Issues:    importIssueResponses(row.issues),
+	}
+}
+
+func importRowResponses(rows []personImportRow) []PersonImportRowResponse {
+	items := make([]PersonImportRowResponse, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, importRowResponse(row))
+	}
+	return items
+}
+
+func importIssueResponses(issues []personImportIssue) []PersonImportIssueResponse {
+	out := make([]PersonImportIssueResponse, 0, len(issues))
+	for _, issue := range issues {
+		out = append(out, PersonImportIssueResponse{Field: issue.Field, Code: issue.Code})
+	}
+	return out
 }

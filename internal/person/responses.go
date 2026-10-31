@@ -71,3 +71,35 @@ func newPersonResponses(persons []Person) []PersonResponse {
 	}
 	return out
 }
+
+// PersonImportIssueResponse identifies one row validation problem.
+type PersonImportIssueResponse struct {
+	Field string `json:"field,omitempty"`
+	Code  string `json:"code"`
+}
+
+// PersonImportRowResponse reports the outcome for one source CSV record.
+type PersonImportRowResponse struct {
+	Line      int                         `json:"line"`
+	Name      string                      `json:"name"`
+	PersonID  string                      `json:"personId,omitempty"`
+	CanImport bool                        `json:"canImport"`
+	Imported  bool                        `json:"imported,omitempty"`
+	Issues    []PersonImportIssueResponse `json:"issues"`
+}
+
+// PersonImportPreviewResponse contains the validation preview without writing data.
+type PersonImportPreviewResponse struct {
+	Items      []PersonImportRowResponse `json:"items"`
+	Total      int                       `json:"total"`
+	Importable int                       `json:"importable"`
+	Failed     int                       `json:"failed"`
+}
+
+// PersonImportCommitResponse summarizes a confirmed import.
+type PersonImportCommitResponse struct {
+	Items    []PersonImportRowResponse `json:"items"`
+	Total    int                       `json:"total"`
+	Imported int                       `json:"imported"`
+	Failed   int                       `json:"failed"`
+}

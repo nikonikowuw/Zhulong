@@ -13,6 +13,8 @@ const (
 	ActionPersonFaceAdd        = "person.face.add"
 	ActionPersonFaceDelete     = "person.face.delete"
 	ActionPersonPrimaryFaceSet = "person.primary_face.set"
+	ActionPersonImportPreview  = "person.import.preview"
+	ActionPersonImportCommit   = "person.import.commit"
 )
 
 // Person represents a personnel profile entity in the personnel database.

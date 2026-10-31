@@ -1272,3 +1272,119 @@ func TestGetGallerySyncDataWalksEveryPage(t *testing.T) {
 		t.Fatalf("expected the face from the last page, got %d items: %+v", len(items), items)
 	}
 }
+
+func TestParsePersonImportCSV(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantRows  int
+		wantError error
+		wantLine  int
+	}{
+		{
+			name:     "BOM and reordered headers",
+			input:    "personId,name\nEMP-1,Alice\n",
+			wantRows: 1,
+			wantLine: 2,
+		},
+		{
+			name:      "empty file",
+			input:     "",
+			wantError: errPersonImportEmpty,
+		},
+		{
+			name:      "invalid header",
+			input:     "name\nAlice\n",
+			wantError: errPersonImportHeader,
+		},
+		{
+			name:      "empty data rows",
+			input:     "name,personId\n",
+			wantError: errPersonImportEmpty,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := tt.input
+			if tt.name == "BOM and reordered headers" {
+				input = "\uFEFF" + input
+			}
+			rows, err := parsePersonImportCSV(strings.NewReader(input))
+			if tt.wantError != nil {
+				if err != tt.wantError {
+					t.Fatalf("expected error %v, got %v", tt.wantError, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parse failed: %v", err)
+			}
+			if len(rows) != tt.wantRows || rows[0].line != tt.wantLine {
+				t.Fatalf("unexpected rows: %+v", rows)
+			}
+		})
+	}
+}
+
+func TestValidatePersonImportRows(t *testing.T) {
+	rows := []personImportRow{
+		{line: 2, name: "Alice", personID: "EMP-1"},
+		{line: 3, name: "Bob", personID: "EMP-1"},
+		{line: 4, name: "No ID"},
+		{line: 5, name: "", personID: "EMP-2"},
+	}
+	entries, validated := validatePersonImportRows(rows, map[string]struct{}{"EMP-2": {}})
+	if len(entries) != 1 || entries[0].line != 4 {
+		t.Fatalf("expected only empty-personId row to be importable, got %+v", entries)
+	}
+	if len(validated[0].issues) == 0 || validated[0].issues[0].Code != "IMPORT_DUPLICATE_PERSON_ID" {
+		t.Fatalf("expected duplicate issue on first row, got %+v", validated[0].issues)
+	}
+	if len(validated[3].issues) == 0 || validated[3].issues[0].Code != "NAME_REQUIRED" {
+		t.Fatalf("expected name issue on fourth row, got %+v", validated[3].issues)
+	}
+}
+
+func TestServicePersonImportPreviewAndCommit(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer dbStore.Close()
+
+	store := NewStore(dbStore)
+	service := NewService(store, tempDir, nil, nil, Options{}, zap.NewNop())
+	ctx := context.Background()
+	csv := "name,personId\nAlice,EMP-1\nBob,EMP-1\nNo ID,\n"
+
+	preview, err := service.PreviewPersonImport(ctx, strings.NewReader(csv))
+	if err != nil {
+		t.Fatalf("preview failed: %v", err)
+	}
+	if preview.Importable != 1 || preview.Failed != 2 {
+		t.Fatalf("unexpected preview summary: %+v", preview)
+	}
+	var count int64
+	if err := dbStore.DB().Model(&Person{}).Count(&count).Error; err != nil {
+		t.Fatalf("count persons: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("preview created %d persons", count)
+	}
+
+	result, err := service.CommitPersonImport(ctx, strings.NewReader(csv))
+	if err != nil {
+		t.Fatalf("commit failed: %v", err)
+	}
+	if result.Imported != 1 || result.Failed != 2 {
+		t.Fatalf("unexpected commit summary: %+v", result)
+	}
+	if err := dbStore.DB().Model(&Person{}).Count(&count).Error; err != nil {
+		t.Fatalf("count committed persons: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one committed person, got %d", count)
+	}
+}

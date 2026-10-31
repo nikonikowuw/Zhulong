@@ -9,6 +9,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
+	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -108,6 +109,73 @@ func (s *Store) CreatePerson(ctx context.Context, p *Person) error {
 		return ErrDuplicatePersonID
 	}
 	return nil
+}
+
+// ListPersonIDs returns the external keys from the supplied candidates that already exist.
+func (s *Store) ListPersonIDs(ctx context.Context, candidates []string) (map[string]struct{}, error) {
+	if len(candidates) == 0 {
+		return map[string]struct{}{}, nil
+	}
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var personIDs []string
+	if err := db.Model(&Person{}).
+		Where("person_id IN ?", candidates).
+		Pluck("person_id", &personIDs).Error; err != nil {
+		return nil, fmt.Errorf("list existing person ids: %w", err)
+	}
+	existing := make(map[string]struct{}, len(personIDs))
+	for _, personID := range personIDs {
+		existing[personID] = struct{}{}
+	}
+	return existing, nil
+}
+
+// CreatePersonImport inserts valid rows in one transaction and returns uniqueness conflicts per row.
+func (s *Store) CreatePersonImport(ctx context.Context, entries []personImportEntry) ([]personImportCreateResult, error) {
+	results := make([]personImportCreateResult, 0, len(entries))
+	if len(entries) == 0 {
+		return results, nil
+	}
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	err = db.Transaction(func(tx *gorm.DB) error {
+		for _, entry := range entries {
+			p := &Person{
+				ID:       idutil.New(),
+				PersonID: entry.personID,
+				Name:     entry.name,
+			}
+			res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(p)
+			if res.Error != nil {
+				return fmt.Errorf("create imported person: %w", res.Error)
+			}
+			if res.RowsAffected == 0 {
+				if entry.personID == nil {
+					return ErrDuplicateID
+				}
+				var count int64
+				if err := tx.Model(&Person{}).Where("person_id = ?", *entry.personID).Count(&count).Error; err != nil {
+					return fmt.Errorf("resolve imported person conflict: %w", err)
+				}
+				if count == 0 {
+					return ErrDuplicateID
+				}
+				results = append(results, personImportCreateResult{line: entry.line, err: ErrDuplicatePersonID})
+				continue
+			}
+			results = append(results, personImportCreateResult{line: entry.line})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create person import: %w", err)
+	}
+	return results, nil
 }
 
 // GetPerson fetches a person by ID along with all associated Face templates.

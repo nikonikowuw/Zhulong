@@ -9,6 +9,8 @@ import {
   type CreatePersonDto,
   type FaceListResponse,
   type Person,
+  type PersonImportCommitResponse,
+  type PersonImportPreviewResponse,
   type PersonListResponse,
   type UpdatePersonDto,
 } from '../data/schema'
@@ -25,6 +27,31 @@ export function usePersons(
     queryKey: [...PERSONS_QUERY_KEY, params],
     queryFn: () => personsApi.getPersons(params),
     placeholderData: (previousData) => previousData,
+  })
+}
+
+/**
+ * 预览人员 CSV 导入。
+ */
+export function usePreviewPersonImport() {
+  return useMutation<PersonImportPreviewResponse, Error, File>({
+    mutationFn: (file) => personsApi.previewImport(file),
+    meta: { suppressGlobalToast: true },
+  })
+}
+
+/**
+ * 确认人员 CSV 导入并刷新人员列表。
+ */
+export function useCommitPersonImport() {
+  const queryClient = useQueryClient()
+
+  return useMutation<PersonImportCommitResponse, Error, File>({
+    mutationFn: (file) => personsApi.commitImport(file),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
+    },
+    meta: { suppressGlobalToast: true },
   })
 }
 

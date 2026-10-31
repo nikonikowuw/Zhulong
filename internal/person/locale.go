@@ -109,5 +109,50 @@ func init() {
 			"zh-Hans": "请先为该人员绑定人员编号，再登记人脸照片",
 			"zh-Hant": "請先為該人員綁定人員編號，再登記人臉照片",
 		},
+		"IMPORT_FILE_EMPTY": {
+			"en":      "The person import file is empty",
+			"zh-Hans": "人员导入文件为空",
+			"zh-Hant": "人員匯入檔案為空",
+		},
+		"IMPORT_HEADER_INVALID": {
+			"en":      "The person import header must contain name and personId",
+			"zh-Hans": "人员导入表头必须包含 name 和 personId",
+			"zh-Hant": "人員匯入表頭必須包含 name 和 personId",
+		},
+		"IMPORT_CSV_INVALID": {
+			"en":      "The person import CSV is invalid",
+			"zh-Hans": "人员导入 CSV 格式无效",
+			"zh-Hant": "人員匯入 CSV 格式無效",
+		},
+		"IMPORT_FILE_TOO_LARGE": {
+			"en":      "The person import file is too large",
+			"zh-Hans": "人员导入文件超过 2 MB 限制",
+			"zh-Hant": "人員匯入檔案超過 2 MB 限制",
+		},
+		"IMPORT_TOO_MANY_ROWS": {
+			"en":      "The person import contains too many rows",
+			"zh-Hans": "人员导入记录超过 1000 行限制",
+			"zh-Hant": "人員匯入記錄超過 1000 行限制",
+		},
+		"PERSON_ID_TOO_LONG": {
+			"en":      "personId is too long",
+			"zh-Hans": "人员编号长度超出限制",
+			"zh-Hant": "人員編號長度超出限制",
+		},
+		"IMPORT_COLUMN_COUNT": {
+			"en":      "The number of columns does not match the header",
+			"zh-Hans": "列数与表头不一致",
+			"zh-Hant": "欄數與表頭不一致",
+		},
+		"IMPORT_DUPLICATE_PERSON_ID": {
+			"en":      "personId is duplicated in the import file",
+			"zh-Hans": "人员编号在导入文件中重复",
+			"zh-Hant": "人員編號在匯入檔案中重複",
+		},
+		"PERSON_IMPORT_FAILED": {
+			"en":      "Failed to import persons",
+			"zh-Hans": "批量导入人员失败",
+			"zh-Hant": "批量匯入人員失敗",
+		},
 	})
 }

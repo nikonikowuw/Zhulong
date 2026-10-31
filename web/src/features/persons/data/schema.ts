@@ -21,6 +21,46 @@ export const personSchema = z.object({
 
 export type Person = z.infer<typeof personSchema>
 
+export const personImportIssueSchema = z.object({
+  field: z.string().optional(),
+  code: z.string(),
+})
+
+export type PersonImportIssue = z.infer<typeof personImportIssueSchema>
+
+export const personImportRowSchema = z.object({
+  line: z.number(),
+  name: z.string(),
+  personId: z.string().optional(),
+  canImport: z.boolean(),
+  imported: z.boolean().optional(),
+  issues: z.array(personImportIssueSchema),
+})
+
+export type PersonImportRow = z.infer<typeof personImportRowSchema>
+
+export const personImportPreviewResponseSchema = z.object({
+  items: z.array(personImportRowSchema),
+  total: z.number(),
+  importable: z.number(),
+  failed: z.number(),
+})
+
+export type PersonImportPreviewResponse = z.infer<
+  typeof personImportPreviewResponseSchema
+>
+
+export const personImportCommitResponseSchema = z.object({
+  items: z.array(personImportRowSchema),
+  total: z.number(),
+  imported: z.number(),
+  failed: z.number(),
+})
+
+export type PersonImportCommitResponse = z.infer<
+  typeof personImportCommitResponseSchema
+>
+
 export const setPrimaryFaceSchema = z.object({
   faceId: z.string().min(1, 'validation.faceIdRequired'),
 })

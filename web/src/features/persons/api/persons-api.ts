@@ -8,8 +8,12 @@ import {
   type Face,
   type FaceListResponse,
   type Person,
+  type PersonImportCommitResponse,
+  type PersonImportPreviewResponse,
   type PersonListResponse,
   type UpdatePersonDto,
+  personImportCommitResponseSchema,
+  personImportPreviewResponseSchema,
 } from '../data/schema'
 
 export interface GetPersonsParams {
@@ -45,6 +49,34 @@ export const personsApi = {
       pageSize: params?.pageSize ?? 10,
     }
     return personListResponseSchema.parse(raw)
+  },
+
+  /**
+   * 预览人员 CSV 导入，不写入人员档案
+   */
+  async previewImport(file: File): Promise<PersonImportPreviewResponse> {
+    const formData = new FormData()
+    formData.append('file', file)
+    const resp = await apiClient.post<ApiResponse<PersonImportPreviewResponse>>(
+      '/persons/import/preview',
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    )
+    return personImportPreviewResponseSchema.parse(resp.data.data)
+  },
+
+  /**
+   * 确认人员 CSV 导入，服务端会重新解析上传文件
+   */
+  async commitImport(file: File): Promise<PersonImportCommitResponse> {
+    const formData = new FormData()
+    formData.append('file', file)
+    const resp = await apiClient.post<ApiResponse<PersonImportCommitResponse>>(
+      '/persons/import/commit',
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    )
+    return personImportCommitResponseSchema.parse(resp.data.data)
   },
 
   /**

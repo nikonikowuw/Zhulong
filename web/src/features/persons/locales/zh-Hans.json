@@ -26,6 +26,7 @@
     "retry": "重试",
     "refresh": "刷新",
     "create": "新增人员",
+    "import": "批量导入",
     "edit": "编辑人员",
     "delete": "删除人员",
     "manageFaces": "人脸管理",
@@ -117,5 +118,40 @@
     "openOriginal": "在新标签页中查看原图",
     "close": "关闭 (Esc)",
     "shortcutHint": "{{cancel}} (ESC) · 滚轮缩放 · 双击快速放大/还原"
+  },
+  "import": {
+    "title": "批量导入人员",
+    "description": "上传 UTF-8 CSV，先预览校验，再确认导入有效人员。支持 name、personId 两列。",
+    "chooseFile": "选择 CSV 文件",
+    "chooseAnother": "重新选择",
+    "fileHint": "最大 2MB，最多 1000 条记录",
+    "downloadTemplate": "下载 CSV 模板",
+    "formatTitle": "CSV 格式示例",
+    "formatExample": "name,personId\n张三,EMP-001\n李四,",
+    "formatHint": "首行为表头，姓名必填，人员编号可留空；列顺序可调整。",
+    "validating": "正在校验文件...",
+    "total": "总行数",
+    "importable": "可导入",
+    "failed": "失败",
+    "line": "行号",
+    "status": "状态",
+    "reason": "原因",
+    "ready": "可导入",
+    "invalid": "需修正",
+    "confirm": "确认导入",
+    "completed": "导入完成",
+    "resultSummary": "成功导入 {{imported}} 条，{{failed}} 条失败",
+    "failedTitle": "导入失败",
+    "retryHint": "请检查文件后重试",
+    "downloadFailed": "下载失败行",
+    "invalidFile": "请选择 CSV 文件",
+    "errors": {
+      "NAME_REQUIRED": "姓名不能为空",
+      "NAME_TOO_LONG": "姓名长度超出限制",
+      "PERSON_ID_TOO_LONG": "人员编号长度超出限制",
+      "PERSON_ID_ALREADY_EXISTS": "人员编号已存在",
+      "IMPORT_DUPLICATE_PERSON_ID": "人员编号在文件中重复",
+      "IMPORT_COLUMN_COUNT": "列数与表头不一致"
+    }
   }
 }
