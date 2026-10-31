@@ -289,3 +289,141 @@ python3 packages/face_recognition/scripts/build_package.py --target rk3568 \
    - `DELETE` 执行时后端会再取一次影响面并写入审计详情：卸载后 tasks 条目已删、记录已失去 algorithm_id，这些关联信息事后不可重建，只能靠这条审计追溯。
    - ⚠️ 刻意**不统计**抓拍图片字节数：扫描 `snapshots/` 需要目录遍历，几千个文件在 RK3568 上会明显拖慢接口，而图片不会因卸载消失，字节数不影响决策。
    - 回归门禁：`TestDeletionImpactReportsBindingsAndEvidence`（含「查询无副作用」断言）、`TestDeletionImpactZeroWhenClean`（空数组而非 null）、`TestDeleteAlgorithmKeepsEvidenceAfterImpact`（预览与真实后果一致）、`algorithm-delete-dialog.test.tsx` 的 7 个用例。
+
+---
+
+## 7. 算法包静态单图试跑与快速验证 (Algorithm Image Trial Inference)
+
+### 7.1 适用范围与触发条件 (Scope / Trigger)
+- **触发场景**：算法包安装后、未绑定摄像机或未配置实时分析任务前，运维与算法人员上传单张本地静态图片（JPEG/PNG），通过隔离子进程执行单次单帧推理，获取归一化目标框与结构化检测属性，并在前端通过 Canvas 自适应叠加绘制直观验证。
+- **状态守卫铁律**：仅允许对处于「已停用」（`DISABLED`）状态的算法执行试跑。严禁对 `ACTIVE`（实时流正在运行）或 `CRASH_LOOP`（熔断中）状态的算法试跑，避免在边缘芯片上与实时流水线争抢 NPU 内存与上下文。
+
+### 7.2 签名与调用契约 (Signatures)
+- **HTTP 接口**：`POST /api/v1/algorithms/:id/trial`（挂载于 `UploadRoutes`，享受鉴权与审计中间件保护）。
+- **Go 领域服务**：
+  ```go
+  func (s *Service) TrialInference(
+      ctx context.Context,
+      algorithmID string,
+      r io.Reader,
+  ) (*AlgorithmTrialResponse, error)
+  ```
+- **CLI 子进程协议**：
+  ```bash
+  <pkgDir>/<manifest.id> --verify --sample <temp_ppm_path>
+  ```
+  - `CWD`：必须设为算法包解压目录 `<pkgDir>`（确保相对路径 `models/` 能被正常加载）；
+  - `SysProcAttr`：必须显式注入 `algorunner.PackageSysProcAttr()`（具备 `Setpgid: true` 独立进程组与 Linux `Pdeathsig: SIGKILL` 契约，防孤儿逃逸）；
+  - 标准输出最后一行必须输出包含 `status`、`sample_decoded`、`cost_ms` 与 `result` 的 JSON 报告。
+
+### 7.3 数据契约与载荷结构 (Contracts)
+- **请求格式**：`multipart/form-data`，参数名 `file`；
+- **业务限制**：图片格式必须为 JPEG 或 PNG，单文件大小 ≤ 10MB（`MaxTrialUploadSize`），分辨率宽/高 ≤ 8192px（`MaxTrialImageDimension`）；
+- **响应载荷 (`AlgorithmTrialResponse`)**：
+  ```json
+  {
+    "costMs": 45,
+    "width": 1920,
+    "height": 1080,
+    "taskType": "detection",
+    "count": 1,
+    "detections": [
+      { "box": [0.1, 0.2, 0.3, 0.4], "label": "helmet", "score": 0.95 }
+    ],
+    "classifications": [],
+    "persons": [],
+    "vehicles": []
+  }
+  ```
+  - 坐标契约：`box: [x1, y1, x2, y2]` 恒定严格归一化到 `[0.0, 1.0]`，前端根据图片自然尺寸按比例等比映射。
+
+### 7.4 校验与错误矩阵 (Validation & Error Matrix)
+
+| 触发条件 | HTTP 状态码 | 业务错误码 | 说明 / 修复引导 |
+| :--- | :---: | :--- | :--- |
+| 指定算法 ID 不存在 | 404 | `ALGORITHM_NOT_FOUND` | 算法包未安装 |
+| 算法处于 `ACTIVE` 状态 | 409 | `ALGORITHM_IS_ACTIVE` | 算法正在运行，需先停用后再进行单次试跑 |
+| 算法处于 `CRASH_LOOP` 状态 | 409 | `ALGORITHM_IN_CRASH_LOOP` | 算法已熔断，需先重置故障计数器 |
+| 缺少 `file` 表单参数 | 400 | `INVALID_FILE` | 缺少上传文件流 |
+| 上传文件不是合法 JPEG/PNG | 400 | `INVALID_IMAGE_FILE` | 文件损坏或非支持格式 |
+| 图像分辨率 > 8192px | 400 | `IMAGE_DIMENSIONS_TOO_LARGE` | 分辨率超标（基于 DecodeConfig 预检拒绝） |
+| 文件体积 > 10MB | 413 | `FILE_TOO_LARGE` | 上传文件超限 |
+| 子进程推理超时 (>15s) | 504 | `TRIAL_TIMEOUT` | 单帧推理耗时过长，超时杀死进程 |
+| 算法无法解码样本 (`sample_decoded: false`) | 500 | `TRIAL_EXECUTION_FAILED` | 严防合成灰度帧假阳性：必须真实解码 |
+| 算法可执行文件退出码非 0 | 500 | `TRIAL_EXECUTION_FAILED` | 进程崩溃或模型推理报错（携带 stderr） |
+
+### 7.5 测试场景与断言要点 (Good/Base/Bad Cases & Tests Required)
+- **Good Case (成功闭环)**：上传 800×600 PNG，子进程以 `--verify --sample` 输出 `status: passed, sample_decoded: true`，接口返回 `code: OK`，且 `costMs`、`width`、`height` 与检测目标数组完整解析；
+- **Base Case (0 检出)**：上传背景图，算法正常推理但无目标检出，返回 `count: 0, detections: []`，前端显示「未检出任何目标」Badge；
+- **Bad Case 1 (合成帧降级假阳性防御)**：若算法输出 `status: passed` 但 `sample_decoded: false`，后端必须强制拦截并判定为 `TRIAL_EXECUTION_FAILED`，绝不可透传虚假的合成帧检测数据；
+- **Bad Case 2 (像素炸弹防御)**：上传高压缩比超大图（如 10000×10000 且仅 20KB 的恶意 PNG），必须由 `image.DecodeConfig` 先行拦截并返回 400 `IMAGE_DIMENSIONS_TOO_LARGE`，严禁直接 `image.Decode` 分配上百兆位图；
+- **Bad Case 3 (瞬态 PPM 清理)**：无论推理成功、超时失败或解析异常，生成的临时文件（`zhulong_trial_*.ppm`）必须由 `defer trialImg.Close()` 100% 物理清除，杜绝磁盘泄漏。
+- **断言门禁**：
+  - `TestTrialInference_StateValidation`：断言 404 / 409 ACTIVE / 409 CRASH_LOOP 状态拦截；
+  - `TestTrialInference_SampleDecodedFalseRejected`：断言 `sample_decoded: false` 拒绝并报错；
+  - `TestTrialInference_InvalidImage`：断言损坏字节返回 400；
+  - `TestTrialInference_SuccessWithDetections`：断言结构化结果正确解析；
+  - `TestHandlerTrial_Endpoints`：断言 HTTP 信封格式与车辆/车牌字段；
+  - 前端 `algorithm-trial-dialog.test.tsx`：验证弹窗挂载、取消关闭与受控状态清理。
+
+### 7.6 正误对比 (Wrong vs Correct)
+
+#### 错误 1：忽略 `sample_decoded` 导致静默降级假阳性
+```go
+// ❌ 错误：只校验 status == "passed"，算法在 PPM 损坏时会回退到 640x480 的全灰合成帧
+if report.Status != "passed" {
+    return nil, apperr.Internal("TRIAL_EXECUTION_FAILED", "trial failed", nil)
+}
+// 致命缺陷：把合成帧上的虚假结果当作用户上传图的推理结果返回！
+return resp, nil
+```
+```go
+// ✅ 正确：必须强制断言 sample_decoded 为 true，确保样本图真实输入了模型
+if report.Status != "passed" {
+    return nil, apperr.Internal("TRIAL_EXECUTION_FAILED", fmt.Sprintf("status %q: %s", report.Status, report.Error), nil)
+}
+if !report.SampleDecoded {
+    return nil, apperr.Internal("TRIAL_EXECUTION_FAILED", "Algorithm failed to decode trial image and fell back to synthetic frame", nil)
+}
+```
+
+#### 错误 2：子进程启动脱离系统进程组与防孤儿保护
+```go
+// ❌ 错误：使用裸 exec.CommandContext，若宿主遭遇 SIGKILL 或崩溃，试跑子进程会残留为孤儿进程
+cmd := exec.CommandContext(ctx, entryPath, "--verify", "--sample", ppmPath)
+cmd.Dir = pkgDir
+cmd.Run()
+```
+```go
+// ✅ 正确：统一配置 PackageSysProcAttr，拥有独立进程组并由 Linux 内核在父线程死亡时向子进程注入 SIGKILL
+cmd := exec.CommandContext(ctx, entryPath, "--verify", "--sample", ppmPath)
+cmd.Dir = pkgDir
+cmd.SysProcAttr = algorunner.PackageSysProcAttr()
+cmd.Run()
+```
+
+#### 错误 3：前端纯人脸退化语义重叠画框
+```tsx
+// ❌ 错误：盲目遍历 person 与 face，在纯人脸模型（退化语义：body_box == face.box）下叠画双框
+result.persons.forEach((person) => {
+  drawBox(person.body_box, 'green', 'Person')
+  person.faces.forEach((face) => drawBox(face.box, 'orange', 'Face'))
+})
+```
+```tsx
+// ✅ 正确：检测纯人脸退化语义（IsFaceCloseup），退化时跳过外层 Person 框只画 Face 框
+result.persons.forEach((person) => {
+  const isFaceCloseup =
+    person.faces.length === 1 &&
+    Math.abs(person.body_box[0] - person.faces[0].box[0]) < 1e-4 &&
+    Math.abs(person.body_box[1] - person.faces[0].box[1]) < 1e-4 &&
+    Math.abs(person.body_box[2] - person.faces[0].box[2]) < 1e-4 &&
+    Math.abs(person.body_box[3] - person.faces[0].box[3]) < 1e-4
+
+  if (!isFaceCloseup) {
+    drawBox(person.body_box, '#10b981', 'Person')
+  }
+  person.faces.forEach((face) => drawBox(face.box, '#f59e0b', 'Face'))
+})
+```
+

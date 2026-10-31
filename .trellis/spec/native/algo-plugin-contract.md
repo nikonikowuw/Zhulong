@@ -83,6 +83,11 @@ native/tests/check_plugin_symbols.py --entry <包根可执行文件>
 - 包内骨架**不链接任何图像解码器**（它不属于推理链路）：它原生解码 netpbm（`P6`/`P5`）。
 - 包内约定文件是 `sample.jpg/png`，解码责任在调用侧：Go 验包门禁（`internal/algorithm`）用标准库解码后以 PPM 交给包入口，并以**包目录**为 CWD 启动它（复现部署布局：可执行文件与 `models/` 同级）。
 - 报告必须携带 `sample_decoded`：`false` 表示包入口回退到合成帧，此时准入**只**证明了 ABI 生命周期；验包门禁会把它记为告警，不得静默当作通过。
+- 最终 JSON 报告格式（尾部追加 `cost_ms` 与完整的结构化 `result`，保持向下兼容）：
+  ```json
+  {"status":"passed","sample":"/tmp/test.ppm","sample_decoded":true,"width":1920,"height":1080,"result_type":1,"count":1,"cost_ms":28,"result":{"stream_id":0,"pts":1000,"cost_ms":28,"task_type":"detection","detections":[{"box":[0.1,0.2,0.3,0.4],"label":"helmet","score":0.95}],"classifications":[],"persons":[],"vehicles":[]}}
+  ```
+  该结果支持宿主「单图试跑（Trial Inference）」提取单帧检出与结构化目标。
 - 算法包自身的准确率回归由 native 金标测试负责（如 `ZhulongPlateRecognitionPluginTests` 用 `native/tests/fixtures/onnx/plate_sample.ppm` 钉住车牌号与颜色），黑盒验包不重复承担该职责；不需要模型的纯逻辑自测留在包内 `tests/`，见 [§5.5 测试归属](#55-测试归属包内自测-vs-金标回归)。
 
 ---

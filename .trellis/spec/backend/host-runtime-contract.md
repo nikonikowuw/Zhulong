@@ -11,7 +11,7 @@
 
 ### 2. Signatures
 
-- Configuration: `config.toml` 配置 `http.address` (默认 `127.0.0.1:8000`), `data.directory` (默认 `./data`), 和 `logging` 段（`level`/`format`/`output`/`sampling`/`rotation`）。
+- Configuration: `config.toml` 配置 `http.address` (默认 `127.0.0.1:8000`), `http.tls_mode` (`off` 默认纯明文 / `auto` 自动自签 / `manual` 手动指定), `http.cert_file` / `http.key_file`, `data.directory` (默认 `./data`), 和 `logging` 段（`level`/`format`/`output`/`sampling`/`rotation`）。当 `tls_mode = "auto"` 时，使用纯 Go 标准库动态生成包含局域网网卡 IP 与 localhost 的 SAN 自签证书并落盘缓存，通过 `tls.NewListener` 挂载安全监听。
 - CLI Flags: `Zhulong --reset-network` 紧急救援模式，在不启动主 Web 服务的情况下执行硬件主网口重置（`eth0` 强制重置为 `192.168.1.168/24` 维护 IP，其余物理网卡恢复 DHCP）并以状态码 0 退出。
 - Network Watchdog Lifecycle: 在 `lifecycleRuntime.Start` 中触发网络开机自检；若发现磁盘残留未确认的 `network_transaction.json`，无条件自动回滚至上一版本已知安全网络，防现场异常掉电变砖。
 - System Time & Clock Lifecycle: 在 `lifecycleRuntime.Start` 中触发时钟自检与自愈；若内核时钟早于 `2026-01-01` 且硬件 RTC 有效，自动从板载 RTC 同步并拉齐系统时钟，加载持久化时区并启动后台 SNTP 协程；`lifecycleRuntime.Stop` 优雅注销 Worker。
