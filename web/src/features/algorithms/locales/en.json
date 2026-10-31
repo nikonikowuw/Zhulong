@@ -15,6 +15,7 @@
   "uploadFailed": "Failed to install algorithm package",
   "fetchFailed": "Failed to fetch algorithm packages",
   "retry": "Retry",
+  "refresh": "Refresh",
   "emptyAlgorithmsTitle": "No Algorithm Packages Installed",
   "emptyAlgorithmsDesc": "Supports object detection, image classification, face recognition, and person structure packages. Upload a compliant archive to get started.",
   "uploadFirstAlgorithm": "Install First Algorithm",

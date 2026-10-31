@@ -15,6 +15,7 @@
   "uploadFailed": "算法包安装失败",
   "fetchFailed": "获取算法包列表失败",
   "retry": "重试",
+  "refresh": "刷新",
   "emptyAlgorithmsTitle": "尚未安装任何算法包",
   "emptyAlgorithmsDesc": "支持目标检测、图像分类、人脸与结构化算法包。上传符合规范的 .tar.gz 或 .zip 归档即可快速启用。",
   "uploadFirstAlgorithm": "安装第一个算法包",

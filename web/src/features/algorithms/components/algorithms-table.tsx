@@ -1,22 +1,21 @@
-import { useState, useMemo } from 'react'
+import { useEffect, useState } from 'react'
 import {
-  Cpu,
-  Layers,
-  Search,
-  Trash2,
-  UploadCloud,
-  HardDrive,
-  Activity,
-  RotateCcw,
-} from 'lucide-react'
+  type SortingState,
+  type VisibilityState,
+  flexRender,
+  getCoreRowModel,
+  getFacetedRowModel,
+  getFacetedUniqueValues,
+  getFilteredRowModel,
+  getPaginationRowModel,
+  getSortedRowModel,
+  useReactTable,
+} from '@tanstack/react-table'
+import { AlertCircle, Layers, RefreshCw, UploadCloud } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { categoryBadgeClass, type CategoryHue } from '@/lib/category-palette'
-import { cn } from '@/lib/utils'
-import { Badge } from '@/components/ui/badge'
+import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
 import {
   Table,
   TableBody,
@@ -25,391 +24,303 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { type Algorithm, type AlgorithmTaskType } from '../data/schema'
-import {
-  useAlgorithms,
-  useEnableAlgorithm,
-  useDisableAlgorithm,
-} from '../hooks/use-algorithms'
-import { AlgorithmDeleteDialog } from './algorithm-delete-dialog'
-import { AlgorithmResetDialog } from './algorithm-reset-dialog'
-import { AlgorithmStatusBadge } from './algorithm-status-badge'
-
-/** 任务类型 → §1.3.6 分类色板槽位（显式映射，避免新增分类时重排既有颜色）。 */
-const TASK_TYPE_BADGE: Record<
-  AlgorithmTaskType,
-  { labelKey: string; hue: CategoryHue }
-> = {
-  detection: { labelKey: 'taskDetection', hue: 'blue' },
-  classification: { labelKey: 'taskClassification', hue: 'violet' },
-  person_structure: { labelKey: 'taskPersonStructure', hue: 'emerald' },
-  vehicle_structure: { labelKey: 'taskVehicleStructure', hue: 'fuchsia' },
-}
+import { DataTablePagination, DataTableToolbar } from '@/components/data-table'
+import { type Algorithm } from '../data/schema'
+import { algorithmsColumns as columns } from './algorithms-columns'
+import { useAlgorithmsContext } from './algorithms-provider'
 
 interface AlgorithmsTableProps {
-  onOpenUpload: () => void
+  data: Algorithm[]
+  isLoading: boolean
+  isError: boolean
+  onRetry: () => void
+  search: Record<string, unknown>
+  navigate: NavigateFn
+  onOpenUpload?: () => void
 }
 
 export function AlgorithmsTable({
+  data,
+  isLoading,
+  isError,
+  onRetry,
+  search,
+  navigate,
   onOpenUpload,
 }: AlgorithmsTableProps): React.JSX.Element {
   const { t } = useTranslation('algorithms')
-  const { data: algorithms = [], isLoading, error, refetch } = useAlgorithms()
+  const { setOpen } = useAlgorithmsContext()
 
-  const [searchQuery, setSearchQuery] = useState('')
-  const [taskTypeFilter, setTaskTypeFilter] = useState<string>('all')
-  const [deletingAlgorithm, setDeletingAlgorithm] = useState<Algorithm | null>(
-    null
-  )
-  const [resettingAlgorithm, setResettingAlgorithm] =
-    useState<Algorithm | null>(null)
+  const [rowSelection, setRowSelection] = useState({})
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const [sorting, setSorting] = useState<SortingState>([])
 
-  const enableMutation = useEnableAlgorithm()
-  const disableMutation = useDisableAlgorithm()
+  const {
+    columnFilters,
+    onColumnFiltersChange,
+    pagination,
+    onPaginationChange,
+    globalFilter,
+    onGlobalFilterChange,
+    ensurePageInRange,
+  } = useTableUrlState({
+    search,
+    navigate,
+    pagination: { defaultPage: 1, defaultPageSize: 10 },
+    globalFilter: { enabled: true, key: 'search' },
+    columnFilters: [
+      { columnId: 'taskType', searchKey: 'taskType', type: 'array' },
+      { columnId: 'status', searchKey: 'status', type: 'array' },
+    ],
+  })
 
-  const filteredAlgorithms = useMemo(() => {
-    let result = algorithms
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const table = useReactTable({
+    data,
+    columns,
+    state: {
+      sorting,
+      columnVisibility,
+      rowSelection,
+      columnFilters,
+      pagination,
+      globalFilter,
+    },
+    enableRowSelection: true,
+    onRowSelectionChange: setRowSelection,
+    onSortingChange: setSorting,
+    onColumnFiltersChange,
+    onColumnVisibilityChange: setColumnVisibility,
+    onPaginationChange,
+    onGlobalFilterChange,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getFacetedRowModel: getFacetedRowModel(),
+    getFacetedUniqueValues: getFacetedUniqueValues(),
+  })
 
-    if (taskTypeFilter !== 'all') {
-      result = result.filter((a) => a.taskType === taskTypeFilter)
-    }
+  const pageCount = table.getPageCount()
+  useEffect(() => {
+    ensurePageInRange(pageCount)
+  }, [pageCount, ensurePageInRange])
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase()
-      result = result.filter(
-        (a) =>
-          a.name.toLowerCase().includes(q) ||
-          a.id.toLowerCase().includes(q) ||
-          a.description.toLowerCase().includes(q)
-      )
-    }
+  const taskTypeOptions = [
+    { label: t('taskDetection', '目标检测'), value: 'detection' },
+    { label: t('taskClassification', '图像分类'), value: 'classification' },
+    {
+      label: t('taskPersonStructure', '结构化人脸'),
+      value: 'person_structure',
+    },
+    {
+      label: t('taskVehicleStructure', '机动车结构化'),
+      value: 'vehicle_structure',
+    },
+  ]
 
-    return result
-  }, [algorithms, taskTypeFilter, searchQuery])
+  const statusOptions = [
+    { label: t('statusActive', '已激活'), value: 'ACTIVE' },
+    { label: t('statusRunning', '运行中'), value: 'RUNNING' },
+    { label: t('statusStarting', '启动中'), value: 'STARTING' },
+    { label: t('statusDisabled', '已停用'), value: 'DISABLED' },
+    { label: t('statusCrashed', '崩溃'), value: 'CRASHED' },
+    { label: t('statusCrashLoop', '反复崩溃'), value: 'CRASH_LOOP' },
+    { label: t('statusRollingBack', '回滚中'), value: 'ROLLING_BACK' },
+  ]
 
-  const handleToggleStatus = (algo: Algorithm) => {
-    // 熔断态由熔断器封禁，启用必然 409 ALGORITHM_IN_CRASH_LOOP；
-    // 开关已 disabled，这里再兜一层防御，避免后续改动绕过 UI 约束。
-    if (algo.status === 'CRASH_LOOP') return
+  const isFiltered =
+    Boolean(globalFilter) || (columnFilters && columnFilters.length > 0)
 
-    if (algo.status === 'ACTIVE' || algo.status === 'RUNNING') {
-      disableMutation.mutate(algo.id)
+  const handleOpenUpload = () => {
+    if (onOpenUpload) {
+      onOpenUpload()
     } else {
-      enableMutation.mutate(algo.id)
+      setOpen('upload')
     }
-  }
-
-  const getTaskTypeBadge = (taskType: AlgorithmTaskType) => {
-    /** 任务类型是「分类标签」，走 §1.3.6 分类色板；未声明的类型串回落中性兜底。 */
-    const item = TASK_TYPE_BADGE[taskType]
-    const labelKey = item?.labelKey ?? taskType
-    const className = categoryBadgeClass(item?.hue)
-    return (
-      <Badge variant='outline' className={cn('px-2 py-0.5 text-xs', className)}>
-        {t(labelKey, taskType)}
-      </Badge>
-    )
-  }
-
-  // 1. 错误态
-  if (error) {
-    return (
-      <div className='flex flex-1 flex-col items-center justify-center p-8 text-center'>
-        <p className='text-sm text-destructive'>
-          {t('fetchFailed', '获取算法包列表失败')}
-        </p>
-        <Button
-          variant='outline'
-          size='sm'
-          className='mt-3'
-          onClick={() => void refetch()}
-        >
-          {t('retry', '重试')}
-        </Button>
-      </div>
-    )
-  }
-
-  // 2. 加载骨架屏
-  if (isLoading) {
-    return (
-      <div className='flex flex-1 flex-col gap-3 p-4'>
-        <div className='flex gap-2'>
-          <Skeleton className='h-9 w-64' />
-          <Skeleton className='h-9 w-32' />
-        </div>
-        <div className='flex flex-col gap-2'>
-          {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className='h-16 w-full rounded-xl' />
-          ))}
-        </div>
-      </div>
-    )
-  }
-
-  // 3. 空资产态（没有任何算法）
-  if (algorithms.length === 0) {
-    return (
-      <div className='flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-border/80 p-12 text-center'>
-        <div className='mb-3 rounded-full bg-primary/10 p-4 text-primary'>
-          <Layers className='h-8 w-8' />
-        </div>
-        <h3 className='text-base font-semibold text-foreground'>
-          {t('emptyAlgorithmsTitle', '尚未安装任何算法包')}
-        </h3>
-        <p className='mt-1 max-w-sm text-xs text-muted-foreground'>
-          {t(
-            'emptyAlgorithmsDesc',
-            '支持目标检测、图像分类、人脸与结构化算法包。上传符合规范的 .tar.gz 或 .zip 归档即可快速启用。'
-          )}
-        </p>
-        <Button className='mt-4 gap-2' onClick={onOpenUpload}>
-          <UploadCloud className='h-4 w-4' />
-          {t('uploadFirstAlgorithm', '安装第一个算法包')}
-        </Button>
-      </div>
-    )
   }
 
   return (
     <div className='flex flex-1 flex-col gap-4'>
-      {/* 搜索与类型过滤工具栏 */}
-      <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div className='flex flex-wrap items-center gap-2'>
-          <div className='relative w-64'>
-            <Search className='absolute start-2.5 top-2.5 h-4 w-4 text-muted-foreground' />
-            <Input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={t('searchPlaceholder', '搜索算法名称或标识...')}
-              className='h-9 ps-8 text-xs'
-            />
-          </div>
+      <DataTableToolbar
+        table={table}
+        searchPlaceholder={t('searchPlaceholder', '搜索算法名称或标识...')}
+        filters={[
+          {
+            columnId: 'taskType',
+            title: t('thType', '任务形态'),
+            options: taskTypeOptions,
+          },
+          {
+            columnId: 'status',
+            title: t('thStatus', '运行状态'),
+            options: statusOptions,
+          },
+        ]}
+        columnLabels={{
+          name: t('thAlgorithm', '算法名称与标识'),
+          taskType: t('thType', '任务形态'),
+          platform: t('thPlatform', '目标平台'),
+          resources: t('thResources', '资源消耗'),
+          status: t('thStatus', '运行状态'),
+          enable: t('thEnable', '调度开关'),
+        }}
+      />
 
-          <div className='flex items-center rounded-lg border border-border bg-muted/40 p-0.5 text-xs font-medium'>
-            {[
-              { key: 'all', labelKey: 'filterAll' },
-              { key: 'detection', labelKey: 'taskDetection' },
-              { key: 'person_structure', labelKey: 'taskPersonStructure' },
-              { key: 'vehicle_structure', labelKey: 'taskVehicleStructure' },
-              { key: 'classification', labelKey: 'taskClassification' },
-            ].map((tab) => {
-              const isActive = taskTypeFilter === tab.key
-              return (
-                <button
-                  key={tab.key}
-                  type='button'
-                  onClick={() => setTaskTypeFilter(tab.key)}
-                  className={`rounded-md px-2.5 py-1 transition-all ${
-                    isActive
-                      ? 'bg-background font-semibold text-foreground shadow-xs'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
+      <div className='rounded-md border border-border bg-card'>
+        <Table className='border-separate border-spacing-0'>
+          <TableHeader>
+            {table.getHeaderGroups().map((headerGroup) => (
+              <TableRow key={headerGroup.id}>
+                {headerGroup.headers.map((header) => (
+                  <TableHead
+                    key={header.id}
+                    colSpan={header.colSpan}
+                    className={header.column.columnDef.meta?.className}
+                  >
+                    {header.isPlaceholder
+                      ? null
+                      : flexRender(
+                          header.column.columnDef.header,
+                          header.getContext()
+                        )}
+                  </TableHead>
+                ))}
+              </TableRow>
+            ))}
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              // 骨架屏加载态
+              Array.from({ length: 5 }).map((_, index) => (
+                <TableRow key={`skeleton-${index}`}>
+                  <TableCell className='w-12'>
+                    <Skeleton className='h-4 w-4' />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className='h-4 w-32' />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className='h-5 w-20 rounded-full' />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className='h-4 w-28' />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className='h-8 w-24' />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className='h-6 w-16 rounded-full' />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className='h-5 w-8 rounded-full' />
+                  </TableCell>
+                  <TableCell className='sticky inset-e-0 z-20 w-28 bg-card text-end'>
+                    <Skeleton className='ms-auto size-8 rounded-md' />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : isError ? (
+              // 请求失败态
+              <TableRow>
+                <TableCell
+                  colSpan={columns.length}
+                  className='h-48 text-center'
                 >
-                  {t(tab.labelKey, tab.key)}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        <div className='text-xs text-muted-foreground'>
-          {t('totalCount', '共 {{count}} 个算法包', {
-            count: filteredAlgorithms.length,
-          })}
-        </div>
+                  <div className='flex flex-col items-center justify-center gap-2 text-destructive'>
+                    <AlertCircle className='size-8' />
+                    <span className='font-medium'>
+                      {t('fetchFailed', '获取算法包列表失败')}
+                    </span>
+                    <Button
+                      variant='outline'
+                      size='sm'
+                      onClick={onRetry}
+                      className='mt-2'
+                    >
+                      <RefreshCw className='me-1 size-4' />
+                      {t('retry', '重试')}
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : table.getRowModel().rows?.length ? (
+              table.getRowModel().rows.map((row) => (
+                <TableRow
+                  key={row.original.id}
+                  data-state={row.getIsSelected() && 'selected'}
+                  className='group'
+                >
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell
+                      key={cell.id}
+                      className={cell.column.columnDef.meta?.className}
+                    >
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext()
+                      )}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))
+            ) : (
+              // 空数据态（区分全空 vs 筛选无结果）
+              <TableRow>
+                <TableCell
+                  colSpan={columns.length}
+                  className='h-64 text-center'
+                >
+                  {isFiltered ? (
+                    <div className='flex flex-col items-center justify-center gap-2'>
+                      <p className='text-sm text-muted-foreground'>
+                        {t('noMatchingAlgorithms', '没有找到符合条件的算法包')}
+                      </p>
+                      <Button
+                        variant='ghost'
+                        size='sm'
+                        onClick={() => {
+                          table.resetColumnFilters()
+                          table.resetGlobalFilter()
+                        }}
+                      >
+                        {t('clearFilter', '清空筛选条件')}
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className='flex flex-col items-center justify-center gap-3 p-8'>
+                      <div className='rounded-full bg-primary/10 p-4 text-primary'>
+                        <Layers className='size-8' />
+                      </div>
+                      <div className='space-y-1'>
+                        <h3 className='text-base font-semibold text-foreground'>
+                          {t('emptyAlgorithmsTitle', '尚未安装任何算法包')}
+                        </h3>
+                        <p className='max-w-sm text-xs text-muted-foreground'>
+                          {t(
+                            'emptyAlgorithmsDesc',
+                            '支持目标检测、图像分类、人脸与结构化算法包。上传符合规范的 .tar.gz 或 .zip 归档即可快速启用。'
+                          )}
+                        </p>
+                      </div>
+                      <Button
+                        className='mt-2 gap-2'
+                        size='sm'
+                        onClick={handleOpenUpload}
+                      >
+                        <UploadCloud className='size-4' />
+                        {t('uploadFirstAlgorithm', '安装第一个算法包')}
+                      </Button>
+                    </div>
+                  )}
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
       </div>
 
-      {/* 过滤无结果态 */}
-      {filteredAlgorithms.length === 0 ? (
-        <div className='flex flex-1 flex-col items-center justify-center rounded-xl border border-border/60 p-8 text-center'>
-          <p className='text-xs text-muted-foreground'>
-            {t('noMatchingAlgorithms', '没有找到符合条件的算法包')}
-          </p>
-          <Button
-            variant='ghost'
-            size='sm'
-            className='mt-2 text-xs'
-            onClick={() => {
-              setSearchQuery('')
-              setTaskTypeFilter('all')
-            }}
-          >
-            {t('clearFilter', '清空筛选条件')}
-          </Button>
-        </div>
-      ) : (
-        /* 算法包列表表格 */
-        <div className='overflow-hidden rounded-xl border border-border bg-card shadow-xs'>
-          <Table>
-            <TableHeader>
-              <TableRow className='bg-muted/40 hover:bg-muted/40'>
-                <TableHead>{t('thAlgorithm', '算法名称与标识')}</TableHead>
-                <TableHead>{t('thType', '任务形态')}</TableHead>
-                <TableHead>{t('thPlatform', '目标平台')}</TableHead>
-                <TableHead>{t('thResources', '资源消耗')}</TableHead>
-                <TableHead>{t('thStatus', '运行状态')}</TableHead>
-                <TableHead>{t('thEnable', '调度开关')}</TableHead>
-                <TableHead className='text-end'>
-                  {t('thActions', '操作')}
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredAlgorithms.map((algo) => {
-                const isOperating =
-                  enableMutation.isPending || disableMutation.isPending
-                const isEnabled =
-                  algo.status === 'ACTIVE' || algo.status === 'RUNNING'
-                const isCrashLoop = algo.status === 'CRASH_LOOP'
-
-                return (
-                  <TableRow key={algo.id} className='transition-colors'>
-                    {/* 名称与版本 */}
-                    <TableCell>
-                      <div className='flex flex-col'>
-                        <div className='flex items-center gap-1.5'>
-                          <span className='text-sm font-semibold text-foreground'>
-                            {algo.name}
-                          </span>
-                          <span className='font-mono text-xs text-muted-foreground'>
-                            v{algo.version}
-                          </span>
-                        </div>
-                        <span className='font-mono text-[11px] text-muted-foreground'>
-                          {algo.id}
-                        </span>
-                        {algo.description && (
-                          <span className='mt-0.5 line-clamp-1 text-xs text-muted-foreground/80'>
-                            {algo.description}
-                          </span>
-                        )}
-                      </div>
-                    </TableCell>
-
-                    {/* 任务形态 */}
-                    <TableCell>{getTaskTypeBadge(algo.taskType)}</TableCell>
-
-                    {/* 目标平台 */}
-                    <TableCell>
-                      <div className='flex items-center gap-1.5 font-mono text-xs text-foreground'>
-                        <Cpu className='h-3.5 w-3.5 text-muted-foreground' />
-                        <span>{algo.targetArch}</span>
-                        <span className='text-muted-foreground'>/</span>
-                        <span className='font-semibold text-primary uppercase'>
-                          {algo.targetDevice}
-                        </span>
-                      </div>
-                    </TableCell>
-
-                    {/* 资源消耗 */}
-                    <TableCell>
-                      <div className='flex flex-col gap-0.5 text-xs text-muted-foreground'>
-                        <div className='flex items-center gap-1'>
-                          <Activity className='h-3 w-3' />
-                          <span>
-                            {t('computeCostLabel', '算力:')}{' '}
-                            <strong className='font-mono font-semibold text-foreground'>
-                              {algo.computeCost}
-                            </strong>{' '}
-                            {t('points', '点')}
-                          </span>
-                        </div>
-                        <div className='flex items-center gap-1'>
-                          <HardDrive className='h-3 w-3' />
-                          <span>
-                            {t('memoryLabel', '内存:')}{' '}
-                            <strong className='font-mono font-semibold text-foreground'>
-                              {algo.memoryMb}
-                            </strong>{' '}
-                            MB
-                          </span>
-                        </div>
-                      </div>
-                    </TableCell>
-
-                    {/* 运行状态 */}
-                    <TableCell>
-                      <AlgorithmStatusBadge status={algo.status} />
-                    </TableCell>
-
-                    {/* 启停开关 */}
-                    <TableCell>
-                      <Switch
-                        checked={isEnabled}
-                        disabled={isOperating || isCrashLoop}
-                        onCheckedChange={() => handleToggleStatus(algo)}
-                        title={
-                          isCrashLoop
-                            ? t(
-                                'crashLoopSwitchHint',
-                                '算法处于熔断状态，请先重置熔断'
-                              )
-                            : isEnabled
-                              ? t('clickToDisable', '点击停用')
-                              : t('clickToEnable', '点击启用')
-                        }
-                      />
-                    </TableCell>
-
-                    {/* 操作 (熔断复位 / 卸载删除) */}
-                    <TableCell className='text-end'>
-                      <div className='flex items-center justify-end gap-1'>
-                        {isCrashLoop && (
-                          <Button
-                            variant='outline'
-                            size='sm'
-                            className='h-8 gap-1.5 text-xs'
-                            onClick={() => setResettingAlgorithm(algo)}
-                          >
-                            <RotateCcw className='h-3.5 w-3.5' />
-                            {t('resetCrashLoop', '重置熔断')}
-                          </Button>
-                        )}
-                        <Button
-                          variant='ghost'
-                          size='icon'
-                          className='h-8 w-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
-                          disabled={isEnabled || isOperating}
-                          title={
-                            isEnabled
-                              ? t(
-                                  'disableBeforeDelete',
-                                  '请先停用算法包后再执行卸载'
-                                )
-                              : t('deleteAlgorithm', '卸载算法包')
-                          }
-                          onClick={() => setDeletingAlgorithm(algo)}
-                        >
-                          <Trash2 className='h-4 w-4' />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-
-      {/* 删除确认弹窗 */}
-      <AlgorithmDeleteDialog
-        algorithm={deletingAlgorithm}
-        open={Boolean(deletingAlgorithm)}
-        onOpenChange={(open) => {
-          if (!open) setDeletingAlgorithm(null)
-        }}
-      />
-
-      {/* 熔断复位弹窗 */}
-      <AlgorithmResetDialog
-        algorithm={resettingAlgorithm}
-        open={Boolean(resettingAlgorithm)}
-        onOpenChange={(open) => {
-          if (!open) setResettingAlgorithm(null)
-        }}
-      />
+      <DataTablePagination table={table} />
     </div>
   )
 }

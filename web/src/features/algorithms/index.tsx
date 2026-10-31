@@ -1,7 +1,5 @@
-import { useState } from 'react'
-import { UploadCloud } from 'lucide-react'
+import { getRouteApi } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { Button } from '@/components/ui/button'
 import { ConfigDrawer } from '@/components/config-drawer'
 import { LanguageSwitch } from '@/components/language-switch'
 import { Header } from '@/components/layout/header'
@@ -9,12 +7,24 @@ import { Main } from '@/components/layout/main'
 import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
-import { AlgorithmUploadDialog } from './components/algorithm-upload-dialog'
+import { AlgorithmsDialogs } from './components/algorithms-dialogs'
+import { AlgorithmsPrimaryButtons } from './components/algorithms-primary-buttons'
+import {
+  AlgorithmsProvider,
+  useAlgorithmsContext,
+} from './components/algorithms-provider'
 import { AlgorithmsTable } from './components/algorithms-table'
+import { useAlgorithms } from './hooks/use-algorithms'
 
-export function Algorithms(): React.JSX.Element {
+const route = getRouteApi('/_authenticated/algorithms/')
+
+function AlgorithmsContent(): React.JSX.Element {
   const { t } = useTranslation('algorithms')
-  const [uploadDialogOpen, setUploadDialogOpen] = useState(false)
+  const search = route.useSearch()
+  const navigate = route.useNavigate()
+  const { setOpen } = useAlgorithmsContext()
+
+  const { data: algorithms = [], isLoading, isError, refetch } = useAlgorithms()
 
   return (
     <>
@@ -40,24 +50,31 @@ export function Algorithms(): React.JSX.Element {
               )}
             </p>
           </div>
-          <Button
-            className='gap-2 shadow-xs'
-            onClick={() => setUploadDialogOpen(true)}
-          >
-            <UploadCloud className='h-4 w-4' />
-            {t('uploadButton', '安装算法包')}
-          </Button>
+          <AlgorithmsPrimaryButtons />
         </div>
 
-        {/* 核心算法包列表 */}
-        <AlgorithmsTable onOpenUpload={() => setUploadDialogOpen(true)} />
+        {/* 核心算法包列表（TanStack Table 数据密集型工作区） */}
+        <AlgorithmsTable
+          data={algorithms}
+          isLoading={isLoading}
+          isError={isError}
+          onRetry={() => void refetch()}
+          search={search}
+          navigate={navigate}
+          onOpenUpload={() => setOpen('upload')}
+        />
       </Main>
 
-      {/* 上传安装弹窗 */}
-      <AlgorithmUploadDialog
-        open={uploadDialogOpen}
-        onOpenChange={setUploadDialogOpen}
-      />
+      {/* 集中式弹窗挂载 */}
+      <AlgorithmsDialogs />
     </>
+  )
+}
+
+export function Algorithms(): React.JSX.Element {
+  return (
+    <AlgorithmsProvider>
+      <AlgorithmsContent />
+    </AlgorithmsProvider>
   )
 }

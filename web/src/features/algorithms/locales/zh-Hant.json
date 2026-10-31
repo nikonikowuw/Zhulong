@@ -15,6 +15,7 @@
   "uploadFailed": "演算法包安裝失敗",
   "fetchFailed": "獲取演算法包列表失敗",
   "retry": "重試",
+  "refresh": "重新整理",
   "emptyAlgorithmsTitle": "尚未安裝任何演算法包",
   "emptyAlgorithmsDesc": "支援目標檢測、圖像分類、人臉與結構化演算法包。上傳符合規範的 .tar.gz 或 .zip 封存檔即可快速啟用。",
   "uploadFirstAlgorithm": "安裝第一個演算法包",
