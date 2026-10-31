@@ -1,5 +1,6 @@
 import { ChevronDown, Tv, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -31,25 +32,35 @@ export function LivePlayerCellHeader({
 
   return (
     <div
-      className={`absolute inset-x-2 top-2 z-20 flex items-center justify-between rounded-lg border border-border/40 bg-background/85 text-foreground opacity-0 shadow-xs backdrop-blur-md transition-all duration-200 group-hover:opacity-100 ${
-        isMicro ? 'px-1.5 py-0.5 text-[10px]' : 'px-2.5 py-1.5 text-xs'
-      }`}
+      className={cn(
+        'absolute inset-x-2 top-2 z-20 flex items-center justify-between rounded-lg border border-white/15 bg-black/70 text-white opacity-80 shadow-md backdrop-blur-md transition-all duration-200 select-none group-hover:opacity-100',
+        isMicro ? 'px-1.5 py-0.5 text-[10px]' : 'px-2.5 py-1 text-xs'
+      )}
     >
-      <div className='flex items-center gap-1 font-medium'>
-        <span className='h-2 w-2 animate-pulse rounded-full bg-emerald-500' />
+      {/* 左侧：在线指示点、摄像机名称、通道编号 */}
+      <div className='flex items-center gap-1.5 font-medium'>
+        <span className='relative flex h-2 w-2'>
+          <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75' />
+          <span className='relative inline-flex h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]' />
+        </span>
         <span
-          className={`truncate ${
+          className={cn(
+            'truncate font-medium text-white/95 drop-shadow-xs',
             isMicro ? 'max-w-[70px]' : 'max-w-[130px] sm:max-w-[180px]'
-          }`}
+          )}
         >
           {cell.cameraName || t('cameraFallback', { id: cell.cameraId })}
         </span>
-        <Badge variant='secondary' className='px-1 py-0 font-mono text-[9px]'>
+        <Badge
+          variant='secondary'
+          className='border border-white/10 bg-white/15 px-1 py-0 font-mono text-[9px] text-white/90'
+        >
           #{cell.cellId + 1}
         </Badge>
       </div>
 
-      <div className='flex items-center gap-0.5'>
+      {/* 右侧操作按钮组：hover 时高亮展开 */}
+      <div className='flex items-center gap-0.5 transition-opacity duration-200'>
         {/* 主/子流切换 */}
         {cell.hasSubStream ? (
           <DropdownMenu>
@@ -57,9 +68,10 @@ export function LivePlayerCellHeader({
               <Button
                 variant='ghost'
                 size='sm'
-                className={`gap-0.5 text-muted-foreground hover:text-foreground ${
+                className={cn(
+                  'gap-0.5 text-white/80 hover:bg-white/15 hover:text-white',
                   isMicro ? 'h-5 px-1 text-[10px]' : 'h-6 px-1.5 text-[11px]'
-                }`}
+                )}
                 onClick={(e) => e.stopPropagation()}
               >
                 <span>
@@ -67,10 +79,10 @@ export function LivePlayerCellHeader({
                     ? t('mainStream')
                     : t('subStream')}
                 </span>
-                <ChevronDown className='h-2.5 w-2.5 opacity-50' />
+                <ChevronDown className='h-2.5 w-2.5 opacity-60' />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align='end' className='min-w-[100px]'>
+            <DropdownMenuContent align='end' className='min-w-[110px]'>
               <DropdownMenuItem onClick={() => onSetStreamType('main')}>
                 {t('mainStreamHd')}
               </DropdownMenuItem>
@@ -81,9 +93,10 @@ export function LivePlayerCellHeader({
           </DropdownMenu>
         ) : (
           <span
-            className={`font-mono text-muted-foreground select-none ${
+            className={cn(
+              'font-mono text-white/50 select-none',
               isMicro ? 'px-1 text-[9px]' : 'px-1.5 text-[10px]'
-            }`}
+            )}
           >
             HD
           </span>
@@ -94,11 +107,12 @@ export function LivePlayerCellHeader({
           variant='ghost'
           size='icon'
           title={t('toggleMockStream')}
-          className={`${isMicro ? 'h-5 w-5' : 'h-6 w-6'} ${
+          className={cn(
+            isMicro ? 'h-5 w-5' : 'h-6 w-6',
             useMockCanvas
-              ? 'text-purple-500'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
+              ? 'bg-purple-500/25 text-purple-300 hover:bg-purple-500/35'
+              : 'text-white/70 hover:bg-white/15 hover:text-white'
+          )}
           onClick={(e) => {
             e.stopPropagation()
             onToggleMock()
@@ -112,9 +126,10 @@ export function LivePlayerCellHeader({
           variant='ghost'
           size='icon'
           title={t('closeStream')}
-          className={`${
-            isMicro ? 'h-5 w-5' : 'h-6 w-6'
-          } text-muted-foreground hover:bg-destructive/10 hover:text-destructive`}
+          className={cn(
+            isMicro ? 'h-5 w-5' : 'h-6 w-6',
+            'text-white/70 hover:bg-rose-500/25 hover:text-rose-300'
+          )}
           onClick={(e) => {
             e.stopPropagation()
             onClear()

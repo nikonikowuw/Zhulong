@@ -9,7 +9,6 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { statusLevelClass, statusTextClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -50,11 +49,13 @@ export function LiveRecognitionFeed({
   }
 
   return (
-    <div className='flex h-full w-80 animate-in flex-col rounded-xl border border-border/80 bg-card shadow-lg transition-all duration-200 slide-in-from-right'>
+    <div className='flex h-full w-80 animate-in flex-col rounded-xl border border-border/80 bg-card shadow-lg transition-all duration-200 select-none slide-in-from-right'>
       {/* 顶部标题栏 */}
-      <div className='flex items-center justify-between border-b border-border/60 p-3'>
+      <div className='flex items-center justify-between border-b border-border/70 px-3.5 py-3'>
         <div className='flex items-center gap-2'>
-          <Sparkles className='h-4 w-4 text-primary' />
+          <div className='flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary'>
+            <Sparkles className='h-4 w-4' />
+          </div>
           <h3 className='text-sm font-semibold tracking-tight text-foreground'>
             {t('recognitionFeedTitle', '实时识别流')}
           </h3>
@@ -63,11 +64,11 @@ export function LiveRecognitionFeed({
           </Badge>
         </div>
 
-        <div className='flex items-center gap-1'>
+        <div className='flex items-center gap-0.5'>
           <Button
             variant='ghost'
             size='icon'
-            className='h-7 w-7 text-muted-foreground hover:text-destructive'
+            className='h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
             onClick={clearRecords}
             title={t('clearRecords', '清空记录')}
           >
@@ -85,7 +86,7 @@ export function LiveRecognitionFeed({
       </div>
 
       {/* 搜索与过滤栏 */}
-      <div className='flex flex-col gap-2 border-b border-border/40 p-2.5'>
+      <div className='flex flex-col gap-2 border-b border-border/60 p-2.5'>
         <div className='relative'>
           <Search className='absolute start-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground' />
           <Input
@@ -96,7 +97,7 @@ export function LiveRecognitionFeed({
           />
         </div>
 
-        <div className='grid grid-cols-3 gap-1 rounded-lg bg-muted/60 p-0.5 text-center text-xs font-medium'>
+        <div className='grid grid-cols-3 gap-1 rounded-lg border border-border/60 bg-muted/50 p-0.5 text-center text-xs font-medium'>
           {(['all', 'matched', 'unmatched'] as RecordStatusFilter[]).map(
             (tab) => {
               const labelMap: Record<RecordStatusFilter, string> = {
@@ -110,11 +111,12 @@ export function LiveRecognitionFeed({
                   key={tab}
                   type='button'
                   onClick={() => setStatusFilter(tab)}
-                  className={`rounded-md py-1 transition-all ${
+                  className={cn(
+                    'rounded-md py-1 text-xs transition-all duration-150',
                     isActive
-                      ? 'bg-background text-foreground shadow-xs'
+                      ? 'bg-background font-semibold text-foreground shadow-xs'
                       : 'text-muted-foreground hover:text-foreground'
-                  }`}
+                  )}
                 >
                   {labelMap[tab]}
                 </button>
@@ -128,18 +130,18 @@ export function LiveRecognitionFeed({
       <ScrollArea className='flex-1 p-2.5'>
         {records.length === 0 ? (
           <div className='flex h-48 flex-col items-center justify-center p-4 text-center text-muted-foreground'>
-            <div className='mb-2 rounded-full bg-muted p-2.5'>
-              <UserCheck className='h-5 w-5 opacity-40' />
+            <div className='mb-2 rounded-full bg-muted/80 p-3 text-muted-foreground/60 shadow-inner'>
+              <UserCheck className='h-5 w-5' />
             </div>
-            <p className='text-xs font-medium'>
+            <p className='text-xs font-semibold text-foreground/80'>
               {t('noRecords', '暂无识别记录')}
             </p>
-            <p className='mt-1 text-[11px] text-muted-foreground/80'>
+            <p className='mt-1 max-w-[200px] text-[11px] leading-relaxed text-muted-foreground/80'>
               {t('noRecordsDesc', '视频检测到目标人脸时将实时在此展示')}
             </p>
           </div>
         ) : (
-          <div className='flex flex-col gap-2'>
+          <div className='flex flex-col gap-2 pb-2'>
             {records.map((item) => {
               const simPct = Math.round(item.similarity * 100)
               const cameraTitle = cameraNames[item.cameraId] || item.cameraId
@@ -148,17 +150,19 @@ export function LiveRecognitionFeed({
                 <div
                   key={item.id}
                   className={cn(
-                    'flex items-start gap-2.5 rounded-lg border p-2.5 transition-colors',
-                    statusLevelClass(item.matched ? 'active' : 'warning')
+                    'group flex items-start gap-2.5 rounded-lg border p-2.5 shadow-2xs transition-all duration-150',
+                    item.matched
+                      ? 'border-emerald-500/30 bg-emerald-500/[0.04] hover:border-emerald-500/50 hover:bg-emerald-500/[0.08]'
+                      : 'border-amber-500/30 bg-amber-500/[0.04] hover:border-amber-500/50 hover:bg-amber-500/[0.08]'
                   )}
                 >
                   {/* 头像/图标 */}
                   <div
                     className={cn(
-                      'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
+                      'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg shadow-2xs',
                       item.matched
-                        ? statusTextClass('active')
-                        : statusTextClass('warning')
+                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                        : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
                     )}
                   >
                     {item.matched ? (
@@ -184,7 +188,7 @@ export function LiveRecognitionFeed({
 
                     <div className='flex items-center justify-between gap-1 text-[11px]'>
                       <span
-                        className='flex items-center gap-1 truncate text-muted-foreground'
+                        className='flex items-center gap-1 truncate text-muted-foreground/80'
                         title={cameraTitle}
                       >
                         <Camera className='h-2.5 w-2.5 shrink-0' />
@@ -193,11 +197,12 @@ export function LiveRecognitionFeed({
 
                       <Badge
                         variant='outline'
-                        className={`h-4 shrink-0 px-1 py-0 font-mono text-[10px] ${
+                        className={cn(
+                          'h-4 shrink-0 px-1.5 py-0 font-mono text-[10px] font-semibold',
                           item.matched
-                            ? 'border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
-                            : 'border-amber-500/30 text-amber-600 dark:text-amber-400'
-                        }`}
+                            ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                            : 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                        )}
                       >
                         {simPct}%
                       </Badge>

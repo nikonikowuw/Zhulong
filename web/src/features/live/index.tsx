@@ -113,7 +113,7 @@ export function Live(): React.JSX.Element {
             onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
           />
 
-          <div className='flex flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card/40 p-1.5 shadow-xs sm:p-2'>
+          <div className='flex flex-1 flex-col overflow-hidden rounded-xl border border-border/80 bg-card/60 p-1.5 shadow-sm backdrop-blur-xs sm:p-2'>
             <LiveGrid
               layout={layout}
               activeCellId={activeCellId}

@@ -41,10 +41,13 @@ function getActiveCellBorderClass(
   isDragOver: boolean,
   isActive: boolean
 ): string {
-  if (isDragOver || isActive) {
-    return 'border-primary shadow-[inset_0_0_0_1px_hsl(var(--primary))]'
+  if (isDragOver) {
+    return 'border-primary shadow-[0_0_24px_rgba(var(--primary),0.35)] ring-2 ring-primary/40'
   }
-  return 'border-border/60 hover:border-border'
+  if (isActive) {
+    return 'border-primary/90 shadow-[0_0_16px_rgba(var(--primary),0.2)] ring-1 ring-primary/40'
+  }
+  return 'border-border/50 hover:border-border/80'
 }
 
 export const LivePlayerCell = memo(function LivePlayerCell({
@@ -198,18 +201,18 @@ export const LivePlayerCell = memo(function LivePlayerCell({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`group relative flex h-full w-full overflow-hidden rounded-xl border-2 bg-black text-white transition-all select-none ${getActiveCellBorderClass(
+      className={`group relative flex h-full w-full overflow-hidden rounded-xl border bg-black text-white transition-all select-none ${getActiveCellBorderClass(
         isDragOver,
         isActive
       )}`}
     >
       {/* 拖拽释放高亮指示浮层 */}
       {isDragOver && (
-        <div className='absolute inset-0 z-30 flex flex-col items-center justify-center bg-primary/20 backdrop-blur-xs'>
-          <div className='animate-bounce rounded-full bg-primary/90 p-3 text-primary-foreground shadow-lg'>
+        <div className='absolute inset-0 z-30 flex flex-col items-center justify-center bg-primary/25 backdrop-blur-xs'>
+          <div className='animate-bounce rounded-full bg-primary p-3 text-primary-foreground shadow-lg ring-4 ring-primary/30'>
             <Camera className='h-6 w-6' />
           </div>
-          <p className='mt-2 text-xs font-semibold text-white drop-shadow'>
+          <p className='mt-2 text-xs font-semibold text-white drop-shadow-md'>
             {t('releaseToPlay')}
           </p>
         </div>
@@ -251,9 +254,12 @@ export const LivePlayerCell = memo(function LivePlayerCell({
 
       {/* 状态与加载指示遮罩：连接中 / 重连中 / 已连上但首个画面还没出来 */}
       {waitingText !== null && (
-        <div className='absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/80 backdrop-blur-xs'>
-          <Loader2 className='h-6 w-6 animate-spin text-primary' />
-          <p className='mt-2 font-mono text-xs text-muted-foreground'>
+        <div className='absolute inset-0 z-10 flex flex-col items-center justify-center bg-neutral-950/80 backdrop-blur-xs'>
+          <div className='relative flex items-center justify-center'>
+            <div className='absolute h-10 w-10 animate-ping rounded-full bg-primary/20' />
+            <Loader2 className='relative h-6 w-6 animate-spin text-primary' />
+          </div>
+          <p className='mt-3 font-mono text-xs text-neutral-300 drop-shadow-xs'>
             {waitingText}
           </p>
         </div>
@@ -261,11 +267,11 @@ export const LivePlayerCell = memo(function LivePlayerCell({
 
       {/* 异常错误提示遮罩 */}
       {!useMockCanvas && status === 'error' && (
-        <div className='absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/90 p-4 text-center backdrop-blur-xs'>
-          <div className='rounded-full bg-destructive/10 p-2 text-destructive'>
+        <div className='absolute inset-0 z-10 flex flex-col items-center justify-center border border-rose-500/20 bg-neutral-950/90 p-4 text-center backdrop-blur-xs'>
+          <div className='rounded-full bg-rose-500/15 p-2.5 text-rose-400 shadow-sm'>
             <RotateCcw className='h-5 w-5' />
           </div>
-          <p className='mt-2 text-xs font-medium text-destructive'>
+          <p className='mt-2.5 text-xs font-medium text-rose-300'>
             {errorMessage || t('streamInterrupted')}
           </p>
           <Button
@@ -275,7 +281,7 @@ export const LivePlayerCell = memo(function LivePlayerCell({
               e.stopPropagation()
               retry()
             }}
-            className='mt-3 h-7 text-xs'
+            className='mt-3 h-7 border-white/20 bg-white/10 text-xs text-white hover:bg-white/20 hover:text-white'
           >
             {t('reconnect')}
           </Button>

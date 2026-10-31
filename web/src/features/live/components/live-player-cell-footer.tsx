@@ -1,5 +1,6 @@
 import { Camera, Maximize2, Minimize2, Volume2, VolumeX } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { type LiveCellState, type StreamStats } from '../types'
 import { LiveStreamStats } from './live-stream-stats'
@@ -37,21 +38,22 @@ export function LivePlayerCellFooter({
     : stats
 
   return (
-    <div className='pointer-events-none absolute inset-x-2 bottom-2 z-20 flex items-center justify-between opacity-0 transition-all duration-200 group-hover:opacity-100'>
-      {/* 左侧 OSD 胶囊 */}
-      <div className='pointer-events-auto'>
+    <div className='pointer-events-none absolute inset-x-2 bottom-2 z-20 flex items-center justify-between select-none'>
+      {/* 左侧 OSD 胶囊：始终保持半透明常驻，hover 时更加清晰 */}
+      <div className='pointer-events-auto opacity-75 transition-opacity duration-200 group-hover:opacity-100'>
         <LiveStreamStats compact={isMicro} stats={displayedStats} />
       </div>
 
-      {/* 右侧动作控制胶囊 */}
-      <div className='pointer-events-auto flex items-center gap-0.5 rounded-lg border border-border/40 bg-background/85 p-0.5 shadow-xs backdrop-blur-md'>
+      {/* 右侧动作控制胶囊：hover 时平滑淡入呈现 */}
+      <div className='pointer-events-auto flex items-center gap-0.5 rounded-lg border border-white/15 bg-black/70 p-0.5 opacity-0 shadow-md backdrop-blur-md transition-opacity duration-200 group-hover:opacity-100'>
         <Button
           variant='ghost'
           size='icon'
           title={t('screenshot')}
-          className={`${
-            isMicro ? 'h-5 w-5' : 'h-6 w-6'
-          } text-muted-foreground hover:text-foreground`}
+          className={cn(
+            isMicro ? 'h-5 w-5' : 'h-6 w-6',
+            'text-white/75 hover:bg-white/15 hover:text-white'
+          )}
           onClick={(e) => {
             e.stopPropagation()
             onScreenshot()
@@ -64,9 +66,10 @@ export function LivePlayerCellFooter({
           variant='ghost'
           size='icon'
           title={cell.isMuted ? t('unmute') : t('mute')}
-          className={`${
-            isMicro ? 'h-5 w-5' : 'h-6 w-6'
-          } text-muted-foreground hover:text-foreground`}
+          className={cn(
+            isMicro ? 'h-5 w-5' : 'h-6 w-6',
+            'text-white/75 hover:bg-white/15 hover:text-white'
+          )}
           onClick={(e) => {
             e.stopPropagation()
             onToggleMute()
@@ -76,9 +79,10 @@ export function LivePlayerCellFooter({
             <VolumeX className={isMicro ? 'h-3 w-3' : 'h-3.5 w-3.5'} />
           ) : (
             <Volume2
-              className={`${
-                isMicro ? 'h-3 w-3' : 'h-3.5 w-3.5'
-              } text-emerald-500`}
+              className={cn(
+                isMicro ? 'h-3 w-3' : 'h-3.5 w-3.5',
+                'text-emerald-400'
+              )}
             />
           )}
         </Button>
@@ -91,9 +95,10 @@ export function LivePlayerCellFooter({
               ? t('restoreGrid', { id: cell.cellId + 1 })
               : t('maximize')
           }
-          className={`${
-            isMicro ? 'h-5 w-5' : 'h-6 w-6'
-          } text-muted-foreground hover:text-foreground`}
+          className={cn(
+            isMicro ? 'h-5 w-5' : 'h-6 w-6',
+            'text-white/75 hover:bg-white/15 hover:text-white'
+          )}
           onClick={(e) => {
             e.stopPropagation()
             onToggleMaximize()

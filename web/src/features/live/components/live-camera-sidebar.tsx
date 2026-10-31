@@ -9,6 +9,7 @@ import {
   RotateCcw,
   Loader2,
   X,
+  GripVertical,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
@@ -57,13 +58,15 @@ export function LiveCameraSidebar({
       )
     : cameras
 
+  const onlineCount = cameras.filter((c) => c.status === 'online').length
+
   function renderSidebarContent(): React.JSX.Element | React.JSX.Element[] {
     // 1. 加载骨架屏
     if (isLoading) {
       return (
         <div className='space-y-2 py-2'>
           <div className='flex items-center justify-center gap-1.5 py-2 text-xs text-muted-foreground'>
-            <Loader2 className='h-3.5 w-3.5 animate-spin' />
+            <Loader2 className='h-3.5 w-3.5 animate-spin text-primary' />
             <span>{t('loadingCameras')}</span>
           </div>
           <Skeleton className='h-14 w-full rounded-lg' />
@@ -147,39 +150,50 @@ export function LiveCameraSidebar({
               e.dataTransfer.effectAllowed = 'copy'
             }}
             onDoubleClick={() => onAssignCamera(camera, 'main')}
-            className='group flex cursor-grab flex-col gap-1.5 rounded-lg border border-border/50 bg-card p-2.5 text-xs shadow-2xs transition-all hover:border-primary/50 hover:bg-accent/40 active:cursor-grabbing'
+            className='group relative flex cursor-grab flex-col gap-1.5 rounded-lg border border-border/60 bg-card p-2.5 text-xs shadow-2xs transition-all duration-150 hover:border-primary/50 hover:bg-accent/40 hover:shadow-xs active:cursor-grabbing'
           >
             <div className='flex items-center justify-between'>
-              <div className='flex max-w-[150px] items-center gap-1.5 truncate font-medium'>
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    camera.status === 'online'
-                      ? 'bg-emerald-500 shadow-xs shadow-emerald-500/50'
-                      : 'bg-destructive shadow-xs shadow-destructive/50'
-                  }`}
-                />
-                <span className='truncate'>{camera.name}</span>
+              <div className='flex max-w-[160px] items-center gap-2 truncate font-medium'>
+                {/* 在线/离线微脉冲状态点 */}
+                <span className='relative flex h-2 w-2 shrink-0'>
+                  {camera.status === 'online' ? (
+                    <>
+                      <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60' />
+                      <span className='relative inline-flex h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.7)]' />
+                    </>
+                  ) : (
+                    <span className='relative inline-flex h-2 w-2 rounded-full bg-destructive shadow-[0_0_6px_rgba(239,68,68,0.7)]' />
+                  )}
+                </span>
+                <span className='truncate text-foreground'>{camera.name}</span>
               </div>
 
-              <Button
-                variant='ghost'
-                size='icon'
-                className='h-6 w-6 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-primary/10 hover:text-primary'
-                title={t('dragOrClickTip', { id: activeCellId + 1 })}
-                onClick={() => onAssignCamera(camera, 'main')}
-              >
-                <Play className='h-3 w-3 fill-current' />
-              </Button>
+              <div className='flex items-center gap-1'>
+                {/* 悬停快速播放按钮 */}
+                <Button
+                  variant='ghost'
+                  size='icon'
+                  className='h-6 w-6 text-muted-foreground opacity-0 shadow-2xs transition-all duration-150 group-hover:opacity-100 hover:bg-primary hover:text-primary-foreground'
+                  title={t('dragOrClickTip', { id: activeCellId + 1 })}
+                  onClick={() => onAssignCamera(camera, 'main')}
+                >
+                  <Play className='h-3 w-3 fill-current' />
+                </Button>
+                {/* 拖拽手柄微图标暗示 */}
+                <GripVertical className='h-3.5 w-3.5 text-muted-foreground/40 opacity-0 transition-opacity group-hover:opacity-100' />
+              </div>
             </div>
 
             <div className='flex items-center justify-between text-[11px] text-muted-foreground'>
               {camera.resolution ? (
-                <span className='font-mono'>{camera.resolution}</span>
+                <span className='font-mono font-medium'>
+                  {camera.resolution}
+                </span>
               ) : null}
-              <div className='ms-auto flex gap-1'>
+              <div className='ms-auto flex items-center gap-1'>
                 <Badge
                   variant='outline'
-                  className='border-border/60 px-1 py-0 text-[10px] font-normal'
+                  className='border-border/60 bg-muted/40 px-1 py-0 font-mono text-[10px] font-normal tracking-wide'
                 >
                   {camera.codec.toUpperCase()}
                 </Badge>
@@ -195,7 +209,7 @@ export function LiveCameraSidebar({
             </div>
           </div>
         </TooltipTrigger>
-        <TooltipContent side='right' className='text-[11px]'>
+        <TooltipContent side='right' className='text-[11px] shadow-md'>
           <div className='space-y-0.5'>
             <div className='font-medium'>{camera.name}</div>
             <div className='font-mono text-muted-foreground'>
@@ -211,7 +225,7 @@ export function LiveCameraSidebar({
   }
 
   const sidebar = isCollapsed ? (
-    <div className='flex h-full w-12 flex-col items-center justify-between rounded-xl border border-border bg-card py-3 shadow-xs'>
+    <div className='flex h-full w-12 flex-col items-center justify-between rounded-xl border border-border/80 bg-card py-3 shadow-xs'>
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
@@ -227,10 +241,13 @@ export function LiveCameraSidebar({
       </Tooltip>
 
       <div className='flex flex-col items-center gap-2'>
-        <div className='rounded-full bg-muted p-2 text-muted-foreground'>
+        <div className='relative rounded-full bg-muted p-2 text-muted-foreground'>
           <Video className='h-4 w-4' />
+          {onlineCount > 0 && (
+            <span className='absolute top-1 right-1 h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]' />
+          )}
         </div>
-        <Badge variant='secondary' className='h-5 px-1.5 text-[10px]'>
+        <Badge variant='secondary' className='h-5 px-1.5 font-mono text-[10px]'>
           {cameras.length}
         </Badge>
       </div>
@@ -238,14 +255,16 @@ export function LiveCameraSidebar({
       <div className='h-4' />
     </div>
   ) : (
-    <div className='flex h-full w-64 flex-col rounded-xl border border-border bg-card shadow-xs sm:w-72'>
+    <div className='flex h-full w-64 flex-col rounded-xl border border-border/80 bg-card shadow-xs sm:w-72'>
       {/* 侧栏顶栏 */}
       <div className='flex items-center justify-between border-b border-border/80 px-3.5 py-3'>
         <div className='flex items-center gap-2 text-sm font-semibold tracking-tight'>
           <Video className='h-4 w-4 text-primary' />
           <span>{t('sidebarTitle')}</span>
           <Badge variant='secondary' className='font-mono text-xs'>
-            {cameras.length}
+            {cameras.length > 0
+              ? `${onlineCount}/${cameras.length}`
+              : cameras.length}
           </Badge>
         </div>
         <Button
@@ -262,19 +281,19 @@ export function LiveCameraSidebar({
       {/* 搜索框 */}
       <div className='p-3 pb-2'>
         <div className='relative'>
-          <Search className='absolute top-2.5 left-2.5 h-3.5 w-3.5 text-muted-foreground' />
+          <Search className='absolute start-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground' />
           <Input
             placeholder={t('searchPlaceholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className='h-8 pr-7 pl-8 text-xs'
+            className='h-8 ps-8 pe-7 text-xs focus-visible:ring-1'
           />
           {search && (
             <Button
               variant='ghost'
               size='icon'
               onClick={() => setSearch('')}
-              className='absolute top-1.5 right-1 h-5 w-5 text-muted-foreground hover:text-foreground'
+              className='absolute end-1 top-1.5 h-5 w-5 text-muted-foreground hover:text-foreground'
               title={t('clearSearch')}
             >
               <X className='h-3 w-3' />
