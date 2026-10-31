@@ -277,7 +277,7 @@ func (s *SnapshotStore) run(job snapshotJob) {
 				zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Error(err))
 			continue
 		}
-		s.logger.Info("snapshot file written successfully",
+		s.logger.Debug("snapshot file written successfully",
 			zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Int("bytes", len(img.JPEG)))
 		writtenCount++
 	}

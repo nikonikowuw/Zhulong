@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -104,139 +105,22 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 
 	for _, p := range res.Persons {
 		// 1. Process Face Recognition if faces exist
-		if len(p.Faces) > 0 {
-			for _, face := range p.Faces {
-				// Cooldown key for recognition
-				var recKey string
-				if p.TrackID > 0 {
-					recKey = fmt.Sprintf("rec:%s:%d", res.CameraID, p.TrackID)
-				} else if face.PersonID != "" {
-					recKey = fmt.Sprintf("rec:%s:%s", res.CameraID, face.PersonID)
-				} else {
-					recKey = fmt.Sprintf("rec:%s:unmatched:%.3f:%.3f", res.CameraID, face.Box[0], face.Box[1])
-				}
-
-				if s.cooldown.Allow(recKey, capturedAt) {
-					recID := idutil.New()
-
-					// 身份归属以本地底库为准：matched_face_id 落空（并发删除）时降级为
-					// 「未归属」记录，而不是把 runner 载荷里的业务键写进外键列。
-					ref := galleryFaces[face.MatchedFaceID]
-					personName := ref.PersonName
-					if personName == "" {
-						personName = face.PersonName
-					}
-					candidatesJSON := marshalSliceOrDefault(face.Candidates)
-					boxBytes, _ := json.Marshal(face.Box)
-					bodyBoxBytes, _ := json.Marshal(p.BodyBox)
-					attrsJSON := marshalMapOrDefault(p.Attributes)
-
-					// 两条证据图：全幅（imagePath）+ 人脸裁剪（faceImagePath）。
-					// 两者在一次抓拍里产出，避免为同一帧编码两次。
-					fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, recID)
-					facePath := fmt.Sprintf("snapshots/%s/%s/%s_face.jpg", res.CameraID, dateStr, recID)
-
-					rec := &Recognition{
-						ID:               recID,
-						CameraID:         res.CameraID,
-						AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
-						AlgorithmName:    algo.Name,
-						AlgorithmVersion: algo.Version,
-						PTS:              res.PTS,
-						TrackID:          p.TrackID,
-						PersonID:         optionalString(ref.PersonRowID),
-						PersonExternalID: ref.PersonExternalID,
-						PersonName:       personName,
-						MatchedFaceID:    face.MatchedFaceID,
-						Matched:          face.Matched,
-						Similarity:       face.Similarity,
-						CandidatesJSON:   candidatesJSON,
-						FaceImagePath:    facePath,
-						GalleryImagePath: ref.ImagePath,
-						ImagePath:        fullPath,
-						BoxJSON:          string(boxBytes),
-						BodyBoxJSON:      string(bodyBoxBytes),
-						AttributesJSON:   attrsJSON,
-						CapturedAt:       capturedAt,
-						CreatedAt:        time.Now().UTC(),
-					}
-					recognitions = append(recognitions, rec)
-
-					recognitionSnapshots = append(recognitionSnapshots, snapshotJob{
-						cameraID:    res.CameraID,
-						pts:         res.PTS,
-						targetTable: tableRecognitions,
-						targetID:    recID,
-						boxes: []engine.SnapshotBox{
-							{face.Box[0], face.Box[1], face.Box[2], face.Box[3]},
-						},
-						outputs: []snapshotOutput{
-							{boxIndex: -1, relPath: fullPath},
-							{boxIndex: 0, relPath: facePath},
-						},
-					})
-				}
+		for _, face := range p.Faces {
+			recKey := recognitionCooldownKey(res.CameraID, p.TrackID, face)
+			if s.cooldown.Allow(recKey, capturedAt) {
+				rec, job := buildRecognitionRecordAndJob(res, p, face, algo, galleryFaces[face.MatchedFaceID], dateStr, capturedAt)
+				recognitions = append(recognitions, rec)
+				recognitionSnapshots = append(recognitionSnapshots, job)
 			}
 		}
 
 		// 2. Process Capture for Person or Face Closeup
 		isCloseup := p.IsFaceCloseup()
-		targetType := "person"
-		if isCloseup {
-			targetType = "face"
-		}
-
-		var capKey string
-		if isCloseup {
-			// 纯人脸退化项（近景特写）：无跟踪 ID，按人脸空间位置降频，避免同一镜头内
-			// 多张不同特写人脸落到同一 "cap:cam:person:0" 导致互相抑制。
-			capKey = fmt.Sprintf("cap:%s:face:box:%.3f:%.3f", res.CameraID, p.BodyBox[0], p.BodyBox[1])
-		} else if p.TrackID > 0 {
-			capKey = fmt.Sprintf("cap:%s:person:%d", res.CameraID, p.TrackID)
-		} else {
-			capKey = fmt.Sprintf("cap:%s:person:box:%.3f:%.3f", res.CameraID, p.BodyBox[0], p.BodyBox[1])
-		}
-
+		capKey := personCaptureCooldownKey(res.CameraID, p.TrackID, isCloseup, p.BodyBox)
 		if s.cooldown.Allow(capKey, capturedAt) {
-			capID := idutil.New()
-			bodyBoxBytes, _ := json.Marshal(p.BodyBox)
-			attrsJSON := marshalMapOrDefault(p.Attributes)
-
-			fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, capID)
-			cropPath := fmt.Sprintf("snapshots/%s/%s/%s_crop.jpg", res.CameraID, dateStr, capID)
-
-			cap := &Capture{
-				ID:               capID,
-				CameraID:         res.CameraID,
-				AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
-				AlgorithmName:    algo.Name,
-				AlgorithmVersion: algo.Version,
-				TargetType:       targetType,
-				TrackID:          p.TrackID,
-				Score:            p.BodyScore,
-				BoxJSON:          string(bodyBoxBytes),
-				CropPath:         cropPath,
-				ImagePath:        fullPath,
-				AttributesJSON:   attrsJSON,
-				PTS:              res.PTS,
-				CapturedAt:       capturedAt,
-				CreatedAt:        time.Now().UTC(),
-			}
+			cap, job := buildPersonCaptureRecordAndJob(res, p, isCloseup, algo, dateStr, capturedAt)
 			captures = append(captures, cap)
-
-			captureSnapshots = append(captureSnapshots, snapshotJob{
-				cameraID:    res.CameraID,
-				pts:         res.PTS,
-				targetTable: tableCaptures,
-				targetID:    capID,
-				boxes: []engine.SnapshotBox{
-					{p.BodyBox[0], p.BodyBox[1], p.BodyBox[2], p.BodyBox[3]},
-				},
-				outputs: []snapshotOutput{
-					{boxIndex: -1, relPath: fullPath},
-					{boxIndex: 0, relPath: cropPath},
-				},
-			})
+			captureSnapshots = append(captureSnapshots, job)
 		}
 	}
 
@@ -244,18 +128,135 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 		if err := s.store.CreateRecognitionBatch(ctx, recognitions); err != nil {
 			s.logger.Error("failed to batch insert recognitions", zap.Error(err))
 		} else {
-			s.enqueueSnapshots(recognitionSnapshots)
+			s.enqueueSnapshots(ctx, recognitionSnapshots)
 		}
 	}
 	if len(captures) > 0 {
 		if err := s.store.CreateCaptureBatch(ctx, captures); err != nil {
 			s.logger.Error("failed to batch insert captures", zap.Error(err))
 		} else {
-			s.enqueueSnapshots(captureSnapshots)
+			s.enqueueSnapshots(ctx, captureSnapshots)
 		}
 	}
 
 	return nil
+}
+
+func buildRecognitionRecordAndJob(
+	res aitypes.InferenceResult,
+	p aitypes.PersonItem,
+	face aitypes.FaceSubItem,
+	algo AlgorithmSnapshot,
+	ref GalleryFaceRef,
+	dateStr string,
+	capturedAt time.Time,
+) (*Recognition, snapshotJob) {
+	recID := idutil.New()
+
+	// 身份归属以本地底库为准：matched_face_id 落空（并发删除）时降级为
+	// 「未归属」记录，而不是把 runner 载荷里的业务键写进外键列。
+	personName := ref.PersonName
+	if personName == "" {
+		personName = face.PersonName
+	}
+
+	// 两条证据图：全幅（imagePath）+ 人脸裁剪（faceImagePath）。
+	// 两者在一次抓拍里产出，避免为同一帧编码两次。
+	fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, recID)
+	facePath := fmt.Sprintf("snapshots/%s/%s/%s_face.jpg", res.CameraID, dateStr, recID)
+
+	rec := &Recognition{
+		ID:               recID,
+		CameraID:         res.CameraID,
+		AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
+		AlgorithmName:    algo.Name,
+		AlgorithmVersion: algo.Version,
+		PTS:              res.PTS,
+		TrackID:          p.TrackID,
+		PersonID:         optionalString(ref.PersonRowID),
+		PersonExternalID: ref.PersonExternalID,
+		PersonName:       personName,
+		MatchedFaceID:    face.MatchedFaceID,
+		Matched:          face.Matched,
+		Similarity:       face.Similarity,
+		CandidatesJSON:   marshalSliceOrDefault(face.Candidates),
+		FaceImagePath:    facePath,
+		GalleryImagePath: ref.ImagePath,
+		ImagePath:        fullPath,
+		BoxJSON:          marshalBox(face.Box),
+		BodyBoxJSON:      marshalBox(p.BodyBox),
+		AttributesJSON:   marshalMapOrDefault(p.Attributes),
+		CapturedAt:       capturedAt,
+		CreatedAt:        time.Now().UTC(),
+	}
+
+	job := snapshotJob{
+		cameraID:    res.CameraID,
+		pts:         res.PTS,
+		targetTable: tableRecognitions,
+		targetID:    recID,
+		boxes: []engine.SnapshotBox{
+			{face.Box[0], face.Box[1], face.Box[2], face.Box[3]},
+		},
+		outputs: []snapshotOutput{
+			{boxIndex: -1, relPath: fullPath},
+			{boxIndex: 0, relPath: facePath},
+		},
+	}
+
+	return rec, job
+}
+
+func buildPersonCaptureRecordAndJob(
+	res aitypes.InferenceResult,
+	p aitypes.PersonItem,
+	isCloseup bool,
+	algo AlgorithmSnapshot,
+	dateStr string,
+	capturedAt time.Time,
+) (*Capture, snapshotJob) {
+	capID := idutil.New()
+	targetType := "person"
+	if isCloseup {
+		targetType = "face"
+	}
+
+	fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, capID)
+	cropPath := fmt.Sprintf("snapshots/%s/%s/%s_crop.jpg", res.CameraID, dateStr, capID)
+
+	cap := &Capture{
+		ID:               capID,
+		CameraID:         res.CameraID,
+		AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
+		AlgorithmName:    algo.Name,
+		AlgorithmVersion: algo.Version,
+		TargetType:       targetType,
+		TrackID:          p.TrackID,
+		Score:            p.BodyScore,
+		BoxJSON:          marshalBox(p.BodyBox),
+		CropPath:         cropPath,
+		ImagePath:        fullPath,
+		AttributesJSON:   marshalMapOrDefault(p.Attributes),
+		PTS:              res.PTS,
+		CapturedAt:       capturedAt,
+		CreatedAt:        time.Now().UTC(),
+	}
+
+	job := snapshotJob{
+		cameraID:    res.CameraID,
+		pts:         res.PTS,
+		targetTable: tableCaptures,
+		targetID:    capID,
+		boxes: []engine.SnapshotBox{
+			{p.BodyBox[0], p.BodyBox[1], p.BodyBox[2], p.BodyBox[3]},
+		},
+		outputs: []snapshotOutput{
+			{boxIndex: -1, relPath: fullPath},
+			{boxIndex: 0, relPath: cropPath},
+		},
+	}
+
+	return cap, job
 }
 
 func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.InferenceResult, algo AlgorithmSnapshot, capturedAt time.Time, dateStr string) error {
@@ -263,20 +264,14 @@ func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.Infer
 	var snapshots []snapshotJob
 
 	for _, v := range res.Vehicles {
-		var capKey string
 		firstPlateNo := ""
 		if len(v.Plates) > 0 && v.Plates[0].PlateNumber != "" {
 			firstPlateNo = v.Plates[0].PlateNumber
-			capKey = fmt.Sprintf("cap:%s:vehicle:plate:%s", res.CameraID, firstPlateNo)
-		} else if v.TrackID > 0 {
-			capKey = fmt.Sprintf("cap:%s:vehicle:track:%d", res.CameraID, v.TrackID)
-		} else {
-			capKey = fmt.Sprintf("cap:%s:vehicle:box:%.3f:%.3f", res.CameraID, v.VehicleBox[0], v.VehicleBox[1])
 		}
+		capKey := vehicleCaptureCooldownKey(res.CameraID, v.TrackID, firstPlateNo, v.VehicleBox)
 
 		if s.cooldown.Allow(capKey, capturedAt) {
 			capID := idutil.New()
-			boxBytes, _ := json.Marshal(v.VehicleBox)
 
 			attrs := make(map[string]any)
 			for k, val := range v.Attributes {
@@ -313,7 +308,7 @@ func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.Infer
 				TargetType:       "vehicle",
 				TrackID:          v.TrackID,
 				Score:            v.VehicleScore,
-				BoxJSON:          string(boxBytes),
+				BoxJSON:          marshalBox(v.VehicleBox),
 				CropPath:         cropPath,
 				ImagePath:        fullPath,
 				AttributesJSON:   attrsJSON,
@@ -343,7 +338,7 @@ func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.Infer
 		if err := s.store.CreateCaptureBatch(ctx, captures); err != nil {
 			s.logger.Error("failed to batch insert vehicle captures", zap.Error(err))
 		} else {
-			s.enqueueSnapshots(snapshots)
+			s.enqueueSnapshots(ctx, snapshots)
 		}
 	}
 
@@ -363,7 +358,6 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 			alarmKey := fmt.Sprintf("alarm:%s:%s", res.CameraID, d.Label)
 			if s.cooldown.Allow(alarmKey, capturedAt) {
 				alarmID := idutil.New()
-				boxBytes, _ := json.Marshal(d.Box)
 				attrsJSON := marshalMapOrDefault(d.Attributes)
 
 				var cropPath string
@@ -382,7 +376,7 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 					AlgorithmVersion: algo.Version,
 					AlarmType:        d.Label,
 					Score:            d.Score,
-					BoxJSON:          string(boxBytes),
+					BoxJSON:          marshalBox(d.Box),
 					ImagePath:        fullPath,
 					CropPath:         cropPath,
 					ExtraJSON:        attrsJSON,
@@ -413,7 +407,6 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 			capKey := fmt.Sprintf("cap:%s:%s", res.CameraID, d.Label)
 			if s.cooldown.Allow(capKey, capturedAt) {
 				capID := idutil.New()
-				boxBytes, _ := json.Marshal(d.Box)
 				attrsJSON := marshalMapOrDefault(d.Attributes)
 
 				fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, capID)
@@ -428,7 +421,7 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 					TargetType:       d.Label,
 					TrackID:          0,
 					Score:            d.Score,
-					BoxJSON:          string(boxBytes),
+					BoxJSON:          marshalBox(d.Box),
 					CropPath:         cropPath,
 					ImagePath:        fullPath,
 					AttributesJSON:   attrsJSON,
@@ -459,14 +452,14 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 		if err := s.store.CreateAlarmBatch(ctx, alarms); err != nil {
 			s.logger.Error("failed to batch insert alarms", zap.Error(err))
 		} else {
-			s.enqueueSnapshots(alarmSnapshots)
+			s.enqueueSnapshots(ctx, alarmSnapshots)
 		}
 	}
 	if len(captures) > 0 {
 		if err := s.store.CreateCaptureBatch(ctx, captures); err != nil {
 			s.logger.Error("failed to batch insert captures", zap.Error(err))
 		} else {
-			s.enqueueSnapshots(captureSnapshots)
+			s.enqueueSnapshots(ctx, captureSnapshots)
 		}
 	}
 
@@ -516,7 +509,7 @@ func (s *Service) processClassification(ctx context.Context, res aitypes.Inferen
 		if err := s.store.CreateAlarmBatch(ctx, alarms); err != nil {
 			s.logger.Error("failed to batch insert classification alarms", zap.Error(err))
 		} else {
-			s.enqueueSnapshots(snapshots)
+			s.enqueueSnapshots(ctx, snapshots)
 		}
 	}
 	return nil
@@ -542,25 +535,30 @@ func optionalAlgorithmID(id string) *string {
 //
 // 写库失败的任务不得落盘，否则会产生没有数据库引用的孤儿图片；
 // 若抓拍队列不可用或丢弃任务，则清理已预填的虚假图片路径，避免死链。
-func (s *Service) enqueueSnapshots(jobs []snapshotJob) {
+func (s *Service) enqueueSnapshots(ctx context.Context, jobs []snapshotJob) {
 	if s.snapshots == nil {
 		return
 	}
 	for _, job := range jobs {
 		if !s.snapshots.Enqueue(job) {
-			s.clearJobPaths([]snapshotJob{job})
+			s.clearJobPaths(ctx, []snapshotJob{job})
 		}
 	}
 }
 
-func (s *Service) clearJobPaths(jobs []snapshotJob) {
+func (s *Service) clearJobPaths(ctx context.Context, jobs []snapshotJob) {
 	if s.store == nil {
 		return
 	}
-	ctx := context.Background()
 	for _, job := range jobs {
 		if job.targetTable != "" && job.targetID != "" {
-			_ = s.store.ClearRecordSnapshotPaths(ctx, job.targetTable, job.targetID)
+			if err := s.store.ClearRecordSnapshotPaths(ctx, job.targetTable, job.targetID); err != nil {
+				s.logger.Warn("failed to clear record snapshot paths",
+					zap.String("table", job.targetTable),
+					zap.String("id", job.targetID),
+					zap.Error(err),
+				)
+			}
 		}
 	}
 }
@@ -607,6 +605,18 @@ var nonAlarmSubstrings = []string{
 	"extinguisher",
 }
 
+var alarmKeywords = []string{
+	"alarm",
+	"no_helmet",
+	"without_helmet",
+	"smoke",
+	"fire",
+	"flame",
+	"intrusion",
+	"fall",
+	"danger",
+}
+
 func isAlarmLabel(label string) bool {
 	l := strings.ToLower(label)
 	for _, sub := range nonAlarmSubstrings {
@@ -618,15 +628,9 @@ func isAlarmLabel(label string) bool {
 	if l == "helmet" || l == "safety_helmet" || l == "wearing_helmet" {
 		return false
 	}
-	return strings.Contains(l, "alarm") ||
-		strings.Contains(l, "no_helmet") ||
-		strings.Contains(l, "without_helmet") ||
-		strings.Contains(l, "smoke") ||
-		strings.Contains(l, "fire") ||
-		strings.Contains(l, "flame") ||
-		strings.Contains(l, "intrusion") ||
-		strings.Contains(l, "fall") ||
-		strings.Contains(l, "danger")
+	return slices.ContainsFunc(alarmKeywords, func(kw string) bool {
+		return strings.Contains(l, kw)
+	})
 }
 
 func isSceneWideAlarm(label string) bool {
@@ -637,6 +641,44 @@ func isSceneWideAlarm(label string) bool {
 		}
 	}
 	return strings.Contains(l, "smoke") || strings.Contains(l, "fire") || strings.Contains(l, "flame")
+}
+
+func recognitionCooldownKey(cameraID string, trackID int64, face aitypes.FaceSubItem) string {
+	if trackID > 0 {
+		return fmt.Sprintf("rec:%s:%d", cameraID, trackID)
+	}
+	if face.PersonID != "" {
+		return fmt.Sprintf("rec:%s:%s", cameraID, face.PersonID)
+	}
+	return fmt.Sprintf("rec:%s:unmatched:%.3f:%.3f", cameraID, face.Box[0], face.Box[1])
+}
+
+func personCaptureCooldownKey(cameraID string, trackID int64, isCloseup bool, box [4]float64) string {
+	if isCloseup {
+		return fmt.Sprintf("cap:%s:face:box:%.3f:%.3f", cameraID, box[0], box[1])
+	}
+	if trackID > 0 {
+		return fmt.Sprintf("cap:%s:person:%d", cameraID, trackID)
+	}
+	return fmt.Sprintf("cap:%s:person:box:%.3f:%.3f", cameraID, box[0], box[1])
+}
+
+func vehicleCaptureCooldownKey(cameraID string, trackID int64, firstPlateNo string, box [4]float64) string {
+	if firstPlateNo != "" {
+		return fmt.Sprintf("cap:%s:vehicle:plate:%s", cameraID, firstPlateNo)
+	}
+	if trackID > 0 {
+		return fmt.Sprintf("cap:%s:vehicle:track:%d", cameraID, trackID)
+	}
+	return fmt.Sprintf("cap:%s:vehicle:box:%.3f:%.3f", cameraID, box[0], box[1])
+}
+
+func marshalBox(box [4]float64) string {
+	b, err := json.Marshal(box)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
 }
 
 func marshalSliceOrDefault[T any](items []T) string {

@@ -125,7 +125,8 @@ func (h *StreamHub) recordPacketActivity(cameraID, role string) {
 	}
 	var wasNonOnline bool
 	if st, ok := h.registry.GetState(cameraID); ok && st != nil {
-		if st.Health != HealthStateOnline || (st.Streams != nil && st.Streams[role] != nil && st.Streams[role].Health != HealthStateOnline) {
+		streamNonOnline := st.Streams != nil && st.Streams[role] != nil && st.Streams[role].Health != HealthStateOnline
+		if st.Health != HealthStateOnline || streamNonOnline {
 			wasNonOnline = true
 		}
 	}

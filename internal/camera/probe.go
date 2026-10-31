@@ -112,7 +112,7 @@ func (s *ProbeService) probeSingleStream(ctx context.Context, info *StreamConnec
 	}
 
 	// Validate codec
-	codecStr := ""
+	var codecStr string
 	switch infoResult.Codec {
 	case engine.CodecH264:
 		codecStr = "h264"

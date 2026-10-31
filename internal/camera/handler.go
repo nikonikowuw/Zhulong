@@ -123,7 +123,9 @@ func (h *Handler) Create(c *gin.Context) {
 // @Router       /cameras [get]
 func (h *Handler) List(c *gin.Context) {
 	var query httputil.PaginationQuery
-	_ = c.ShouldBindQuery(&query)
+	if err := c.ShouldBindQuery(&query); err != nil {
+		h.logger.Debug("bind pagination query failed, using defaults", zap.Error(err))
+	}
 	window := query.Normalize()
 
 	cameras, total, err := h.service.List(c.Request.Context(), window.PageSize, window.Offset)

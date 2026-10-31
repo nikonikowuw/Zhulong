@@ -10,9 +10,10 @@ const DefaultCooldown = 3 * time.Second
 
 // CooldownManager provides thread-safe target tracking cooldown and deduplication.
 type CooldownManager struct {
-	mu       sync.Mutex
-	cooldown time.Duration
-	records  map[string]time.Time
+	mu          sync.Mutex
+	cooldown    time.Duration
+	records     map[string]time.Time
+	lastCleaned time.Time
 }
 
 // NewCooldownManager creates a CooldownManager with the given cooldown window.
@@ -33,14 +34,15 @@ func (cm *CooldownManager) Allow(key string, now time.Time) bool {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// Lazy clean if map grows large (> 5000 items)
-	if len(cm.records) > 5000 {
+	// Lazy clean if map grows large (> 5000 items) with a 30s throttle to avoid lock contention
+	if len(cm.records) > 5000 && (cm.lastCleaned.IsZero() || now.Sub(cm.lastCleaned) >= 30*time.Second) {
 		cutoff := now.Add(-2 * cm.cooldown)
 		for k, t := range cm.records {
 			if t.Before(cutoff) {
 				delete(cm.records, k)
 			}
 		}
+		cm.lastCleaned = now
 	}
 
 	lastTime, exists := cm.records[key]
@@ -69,4 +71,5 @@ func (cm *CooldownManager) Reset() {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	cm.records = make(map[string]time.Time)
+	cm.lastCleaned = time.Time{}
 }

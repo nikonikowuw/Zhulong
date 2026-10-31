@@ -2,6 +2,7 @@ package record
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -100,7 +101,7 @@ func (r *AlgorithmResolver) resolveAlgorithmSnapshots(ctx context.Context, ids [
 	if err := db.Table("algorithms").
 		Select("id, name, version").
 		Where("id IN ?", missing).
-		Scan(&rows).Error; err != nil && err != gorm.ErrRecordNotFound {
+		Scan(&rows).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return result
 	}
 

@@ -48,34 +48,43 @@ func derefString(s *string) string {
 	return *s
 }
 
+func unmarshalSliceOrDefault[T any](raw string) []T {
+	fallback := make([]T, 0)
+	if raw == "" {
+		return fallback
+	}
+	var target []T
+	if err := json.Unmarshal([]byte(raw), &target); err != nil || target == nil {
+		return fallback
+	}
+	return target
+}
+
+func unmarshalMapOrDefault(raw string) map[string]any {
+	fallback := make(map[string]any)
+	if raw == "" {
+		return fallback
+	}
+	var target map[string]any
+	if err := json.Unmarshal([]byte(raw), &target); err != nil || target == nil {
+		return fallback
+	}
+	return target
+}
+
+func unmarshalBox(raw string) [4]float64 {
+	var box [4]float64
+	if raw == "" {
+		return box
+	}
+	if err := json.Unmarshal([]byte(raw), &box); err != nil {
+		return [4]float64{}
+	}
+	return box
+}
+
 // ToResponse converts a Recognition GORM model to RecognitionResponse.
 func (r *Recognition) ToResponse() RecognitionResponse {
-	candidates := make([]aitypes.FaceCandidate, 0)
-	if r.CandidatesJSON != "" {
-		_ = json.Unmarshal([]byte(r.CandidatesJSON), &candidates)
-	}
-	if candidates == nil {
-		candidates = make([]aitypes.FaceCandidate, 0)
-	}
-
-	var box [4]float64
-	if r.BoxJSON != "" {
-		_ = json.Unmarshal([]byte(r.BoxJSON), &box)
-	}
-
-	var bodyBox [4]float64
-	if r.BodyBoxJSON != "" {
-		_ = json.Unmarshal([]byte(r.BodyBoxJSON), &bodyBox)
-	}
-
-	attributes := make(map[string]any)
-	if r.AttributesJSON != "" {
-		_ = json.Unmarshal([]byte(r.AttributesJSON), &attributes)
-	}
-	if attributes == nil {
-		attributes = make(map[string]any)
-	}
-
 	return RecognitionResponse{
 		ID:               r.ID,
 		CameraID:         r.CameraID,
@@ -90,13 +99,13 @@ func (r *Recognition) ToResponse() RecognitionResponse {
 		MatchedFaceID:    r.MatchedFaceID,
 		Matched:          r.Matched,
 		Similarity:       r.Similarity,
-		Candidates:       candidates,
+		Candidates:       unmarshalSliceOrDefault[aitypes.FaceCandidate](r.CandidatesJSON),
 		FaceImagePath:    r.FaceImagePath,
 		GalleryImagePath: r.GalleryImagePath,
 		ImagePath:        r.ImagePath,
-		Box:              box,
-		BodyBox:          bodyBox,
-		Attributes:       attributes,
+		Box:              unmarshalBox(r.BoxJSON),
+		BodyBox:          unmarshalBox(r.BodyBoxJSON),
+		Attributes:       unmarshalMapOrDefault(r.AttributesJSON),
 		CapturedAt:       r.CapturedAt.UTC(),
 		CreatedAt:        r.CreatedAt.UTC(),
 	}
@@ -123,19 +132,6 @@ type AlarmResponse struct {
 
 // ToResponse converts an Alarm GORM model to AlarmResponse.
 func (a *Alarm) ToResponse() AlarmResponse {
-	var box [4]float64
-	if a.BoxJSON != "" {
-		_ = json.Unmarshal([]byte(a.BoxJSON), &box)
-	}
-
-	extra := make(map[string]any)
-	if a.ExtraJSON != "" {
-		_ = json.Unmarshal([]byte(a.ExtraJSON), &extra)
-	}
-	if extra == nil {
-		extra = make(map[string]any)
-	}
-
 	return AlarmResponse{
 		ID:               a.ID,
 		CameraID:         a.CameraID,
@@ -144,10 +140,10 @@ func (a *Alarm) ToResponse() AlarmResponse {
 		AlgorithmVersion: a.AlgorithmVersion,
 		AlarmType:        a.AlarmType,
 		Score:            a.Score,
-		Box:              box,
+		Box:              unmarshalBox(a.BoxJSON),
 		ImagePath:        a.ImagePath,
 		CropPath:         a.CropPath,
-		Extra:            extra,
+		Extra:            unmarshalMapOrDefault(a.ExtraJSON),
 		PTS:              a.PTS,
 		CapturedAt:       a.CapturedAt.UTC(),
 		CreatedAt:        a.CreatedAt.UTC(),
@@ -177,19 +173,6 @@ type CaptureResponse struct {
 
 // ToResponse converts a Capture GORM model to CaptureResponse.
 func (c *Capture) ToResponse() CaptureResponse {
-	var box [4]float64
-	if c.BoxJSON != "" {
-		_ = json.Unmarshal([]byte(c.BoxJSON), &box)
-	}
-
-	attributes := make(map[string]any)
-	if c.AttributesJSON != "" {
-		_ = json.Unmarshal([]byte(c.AttributesJSON), &attributes)
-	}
-	if attributes == nil {
-		attributes = make(map[string]any)
-	}
-
 	return CaptureResponse{
 		ID:               c.ID,
 		CameraID:         c.CameraID,
@@ -199,10 +182,10 @@ func (c *Capture) ToResponse() CaptureResponse {
 		TargetType:       c.TargetType,
 		TrackID:          c.TrackID,
 		Score:            c.Score,
-		Box:              box,
+		Box:              unmarshalBox(c.BoxJSON),
 		CropPath:         c.CropPath,
 		ImagePath:        c.ImagePath,
-		Attributes:       attributes,
+		Attributes:       unmarshalMapOrDefault(c.AttributesJSON),
 		PTS:              c.PTS,
 		CapturedAt:       c.CapturedAt.UTC(),
 		CreatedAt:        c.CreatedAt.UTC(),

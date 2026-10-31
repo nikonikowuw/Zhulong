@@ -361,8 +361,9 @@ func (d *StreamDispatcher) deliverLocked(client *StreamClient, frame outFrame) {
 
 	// 判据是「最新输入帧 DTS - 最近一次成功 WebSocket 写入帧 DTS」而不是队列长度：队列长度只说明包数，
 	// DTS 是解码包序的单调时间轴，可直接测量客户端实际发送进度；PTS 会因 B 帧重排而回退。
-	if client.hasProgressDTS && frame.dtsUS > client.lastProgressDTSUS &&
-		frame.dtsUS-client.lastProgressDTSUS > maxClientLagUS {
+	isLagging := client.hasProgressDTS && frame.dtsUS > client.lastProgressDTSUS &&
+		(frame.dtsUS-client.lastProgressDTSUS > maxClientLagUS)
+	if isLagging {
 		d.drainLocked(client)
 		client.hasProgressDTS = false
 		client.needsKey = frame.frame != WireFrameIDR

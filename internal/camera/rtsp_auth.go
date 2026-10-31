@@ -72,8 +72,7 @@ func NormalizeChallengeHeader(header string) (normalized string, hadEmptyOpaque 
 	// Tokenize parameters by comma, respecting quoted strings
 	var parts []string
 	var current strings.Builder
-	inQuote := false
-	escaped := false
+	var inQuote, escaped bool
 
 	for i := 0; i < len(params); i++ {
 		ch := params[i]
@@ -196,7 +195,7 @@ func SelectBestChallenge(challenges []string) (*ParsedChallenge, error) {
 
 			// Validate QOP if present
 			if len(chal.QOP) > 0 {
-				hasSupportedQOP := false
+				var hasSupportedQOP bool
 				for _, q := range chal.QOP {
 					qClean := strings.ToLower(strings.TrimSpace(q))
 					if qClean == "auth" || qClean == "auth-int" {

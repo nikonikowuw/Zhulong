@@ -24,7 +24,6 @@ const (
 type HealthScheduler struct {
 	store          CameraStore
 	cipher         Cipher
-	rootCtx        context.Context
 	inFlight       map[string]bool
 	describeClient *DescribeClient
 	logger         *zap.Logger
@@ -32,7 +31,6 @@ type HealthScheduler struct {
 	hub            *EventHub
 	stopCh         chan struct{}
 	registry       *StateRegistry
-	cancelRoot     context.CancelFunc
 	wg             sync.WaitGroup
 	interval       time.Duration
 	inFlightMu     sync.Mutex
@@ -55,7 +53,6 @@ func NewHealthScheduler(
 		describeClient = NewDescribeClient()
 	}
 
-	rootCtx, cancelRoot := context.WithCancel(context.Background())
 	return &HealthScheduler{
 		store:          store,
 		cipher:         cipher,
@@ -67,8 +64,6 @@ func NewHealthScheduler(
 		semaphore:      make(chan struct{}, DefaultProbeConcurrency),
 		inFlight:       make(map[string]bool),
 		stopCh:         make(chan struct{}),
-		rootCtx:        rootCtx,
-		cancelRoot:     cancelRoot,
 	}
 }
 
@@ -96,7 +91,6 @@ func (s *HealthScheduler) Stop() {
 	if !s.stopped.CompareAndSwap(false, true) {
 		return
 	}
-	s.cancelRoot()
 	close(s.stopCh)
 	s.wg.Wait()
 	s.logger.Info("camera health scheduler stopped")
@@ -154,8 +148,20 @@ func (s *HealthScheduler) activeMonitorLoop() {
 	}
 }
 
+func (s *HealthScheduler) newProbeContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	go func() {
+		select {
+		case <-s.stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
+}
+
 func (s *HealthScheduler) runScheduledChecks() {
-	ctx, cancel := context.WithTimeout(s.rootCtx, 15*time.Second)
+	ctx, cancel := s.newProbeContext(15 * time.Second)
 	defer cancel()
 
 	cameras, _, err := s.store.List(ctx, 100, 0)
@@ -238,7 +244,7 @@ func (s *HealthScheduler) checkStreamAsync(cam *Camera, stream *CameraStream) {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(s.rootCtx, DefaultProbeTimeout)
+		ctx, cancel := s.newProbeContext(DefaultProbeTimeout)
 		defer cancel()
 
 		s.checkStream(ctx, cam, stream)

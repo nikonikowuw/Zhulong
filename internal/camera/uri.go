@@ -26,9 +26,19 @@ type StreamConnectionInfo struct {
 	Transport     string // "tcp" or "udp"
 }
 
+// BuildRTSPURLParams encapsulates parameters required to construct a normalized RTSP URL.
+type BuildRTSPURLParams struct {
+	Query    url.Values
+	Host     string
+	Path     string
+	Username string
+	Password string
+	Port     int
+}
+
 // BuildRTSPURL constructs a normalized RTSP URL from individual connection components.
-func BuildRTSPURL(host string, port int, path string, query url.Values, username, password string) (string, error) {
-	host = strings.TrimSpace(host)
+func BuildRTSPURL(params BuildRTSPURLParams) (string, error) {
+	host := strings.TrimSpace(params.Host)
 	if host == "" {
 		return "", ErrEmptyHost
 	}
@@ -39,6 +49,7 @@ func BuildRTSPURL(host string, port int, path string, query url.Values, username
 		host = "[" + host + "]"
 	}
 
+	port := params.Port
 	if port <= 0 {
 		port = 554
 	}
@@ -54,7 +65,7 @@ func BuildRTSPURL(host string, port int, path string, query url.Values, username
 		}
 	}
 
-	path = strings.TrimSpace(path)
+	path := strings.TrimSpace(params.Path)
 	switch {
 	case path == "":
 		path = "/"
@@ -68,12 +79,12 @@ func BuildRTSPURL(host string, port int, path string, query url.Values, username
 		Path:   path,
 	}
 
-	if len(query) > 0 {
-		u.RawQuery = query.Encode()
+	if len(params.Query) > 0 {
+		u.RawQuery = params.Query.Encode()
 	}
 
-	if username != "" || password != "" {
-		u.User = url.UserPassword(username, password)
+	if params.Username != "" || params.Password != "" {
+		u.User = url.UserPassword(params.Username, params.Password)
 	}
 
 	return u.String(), nil
@@ -179,8 +190,8 @@ func IsGB28181ID(id string) bool {
 	if len(id) != 20 {
 		return false
 	}
-	for i := 0; i < len(id); i++ {
-		if id[i] < '0' || id[i] > '9' {
+	for _, b := range []byte(id) {
+		if b < '0' || b > '9' {
 			return false
 		}
 	}

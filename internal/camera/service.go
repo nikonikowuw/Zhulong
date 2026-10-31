@@ -355,7 +355,15 @@ func (s *CameraService) Update(ctx context.Context, id string, req UpdateCameraR
 			for _, st := range current.Streams {
 				if st.Role == StreamRoleSub {
 					if rawURI, decErr := s.decryptStreamURI(id, &st); decErr == nil {
-						subInfo, _ = ParseAndNormalizeRTSP(rawURI, st.Transport)
+						parsedSub, parseErr := ParseAndNormalizeRTSP(rawURI, st.Transport)
+						if parseErr != nil {
+							s.logger.Warn("failed to parse existing sub stream URI during update",
+								zap.String("camera_id", id),
+								zap.Error(parseErr),
+							)
+						} else {
+							subInfo = parsedSub
+						}
 					}
 					break
 				}
@@ -455,40 +463,56 @@ type buildStreamsParams struct {
 	subProbe  *StreamProbeResult
 }
 
-func (s *CameraService) encryptStream(
-	camID, role, proto string,
-	info *StreamConnectionInfo,
-	probe *StreamProbeResult,
-) (CameraStream, error) {
-	aad := MakeAAD(camID, role)
-	ciphertext, err := s.cipher.Encrypt([]byte(info.NormalizedURI), aad)
+type encryptStreamParams struct {
+	camID string
+	role  string
+	proto string
+	info  *StreamConnectionInfo
+	probe *StreamProbeResult
+}
+
+func (s *CameraService) encryptStream(params encryptStreamParams) (CameraStream, error) {
+	aad := MakeAAD(params.camID, params.role)
+	ciphertext, err := s.cipher.Encrypt([]byte(params.info.NormalizedURI), aad)
 	if err != nil {
-		return CameraStream{}, apperr.New(apperr.KindInternal, "ENCRYPTION_ERROR", fmt.Sprintf("Failed to encrypt %s stream credentials", role), err)
+		return CameraStream{}, apperr.New(apperr.KindInternal, "ENCRYPTION_ERROR", fmt.Sprintf("Failed to encrypt %s stream credentials", params.role), err)
 	}
 
 	return CameraStream{
-		CameraID:       camID,
-		Role:           role,
-		Protocol:       proto,
+		CameraID:       params.camID,
+		Role:           params.role,
+		Protocol:       params.proto,
 		EncryptedURI:   ciphertext,
-		Transport:      info.Transport,
-		Codec:          probe.Codec,
-		Width:          probe.Width,
-		Height:         probe.Height,
-		FPSNumerator:   probe.FPSNumerator,
-		FPSDenominator: probe.FPSDenominator,
+		Transport:      params.info.Transport,
+		Codec:          params.probe.Codec,
+		Width:          params.probe.Width,
+		Height:         params.probe.Height,
+		FPSNumerator:   params.probe.FPSNumerator,
+		FPSDenominator: params.probe.FPSDenominator,
 	}, nil
 }
 
 func (s *CameraService) buildEncryptedStreams(params buildStreamsParams) ([]CameraStream, error) {
-	mainStream, err := s.encryptStream(params.cameraID, StreamRoleMain, params.mainProto, params.mainInfo, params.mainProbe)
+	mainStream, err := s.encryptStream(encryptStreamParams{
+		camID: params.cameraID,
+		role:  StreamRoleMain,
+		proto: params.mainProto,
+		info:  params.mainInfo,
+		probe: params.mainProbe,
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	streams := []CameraStream{mainStream}
 	if params.subInfo != nil && params.subProbe != nil {
-		subStream, err := s.encryptStream(params.cameraID, StreamRoleSub, ProtocolRTSP, params.subInfo, params.subProbe)
+		subStream, err := s.encryptStream(encryptStreamParams{
+			camID: params.cameraID,
+			role:  StreamRoleSub,
+			proto: ProtocolRTSP,
+			info:  params.subInfo,
+			probe: params.subProbe,
+		})
 		if err != nil {
 			return nil, err
 		}

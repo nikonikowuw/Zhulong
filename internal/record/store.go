@@ -391,12 +391,15 @@ func (s *Store) ListDistinctAlarmTypes(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var types []string
-	if err := db.Model(&Alarm{}).Where("alarm_type != ''").Distinct("alarm_type").Order("alarm_type ASC").Pluck("alarm_type", &types).Error; err != nil {
+	types := []string{}
+	err = db.Model(&Alarm{}).
+		Where("alarm_type != ''").
+		Distinct("alarm_type").
+		Order("alarm_type ASC").
+		Pluck("alarm_type", &types).
+		Error
+	if err != nil {
 		return nil, err
-	}
-	if types == nil {
-		types = make([]string, 0)
 	}
 	return types, nil
 }
@@ -407,12 +410,15 @@ func (s *Store) ListDistinctTargetTypes(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var types []string
-	if err := db.Model(&Capture{}).Where("target_type != ''").Distinct("target_type").Order("target_type ASC").Pluck("target_type", &types).Error; err != nil {
+	types := []string{}
+	err = db.Model(&Capture{}).
+		Where("target_type != ''").
+		Distinct("target_type").
+		Order("target_type ASC").
+		Pluck("target_type", &types).
+		Error
+	if err != nil {
 		return nil, err
-	}
-	if types == nil {
-		types = make([]string, 0)
 	}
 	return types, nil
 }

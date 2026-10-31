@@ -201,7 +201,14 @@ func TestStreamHost(t *testing.T) {
 func TestBuildRTSPURL(t *testing.T) {
 	q := url.Values{}
 	q.Set("token", "123")
-	built, err := BuildRTSPURL("192.168.1.10", 8554, "live/main", q, "admin", "pass")
+	built, err := BuildRTSPURL(BuildRTSPURLParams{
+		Host:     "192.168.1.10",
+		Port:     8554,
+		Path:     "live/main",
+		Query:    q,
+		Username: "admin",
+		Password: "pass",
+	})
 	if err != nil {
 		t.Fatalf("BuildRTSPURL failed: %v", err)
 	}

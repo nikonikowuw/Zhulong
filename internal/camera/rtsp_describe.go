@@ -194,33 +194,9 @@ func (c *DescribeClient) Describe(ctx context.Context, info *StreamConnectionInf
 	}
 
 	if resp2.statusCode == 401 {
-		// Check for stale=true nonce refresh
+		// Check for stale=true nonce refresh (Single allowed stale retry: Request 3)
 		retriedChallenges := resp2.headers["www-authenticate"]
-		if len(retriedChallenges) > 0 {
-			staleChal, parseErr := SelectBestChallenge(retriedChallenges)
-			if parseErr == nil && staleChal.Type == AuthTypeDigest && staleChal.DigestChallenge != nil && staleChal.DigestChallenge.Stale {
-				// Single allowed stale retry (Request 3)
-				cseq++
-				nc++
-				cnonce, _ = GenerateCnonce()
-				staleAuthHeader, err := BuildAuthorizationHeader(AuthorizationParams{
-					Challenge: staleChal,
-					Method:    "DESCRIBE",
-					URI:       info.CleanURI,
-					Username:  info.Username,
-					Password:  info.Password,
-					NC:        nc,
-					Cnonce:    cnonce,
-				})
-				if err == nil {
-					resp3, err := c.sendDescribe(writer, reader, info.CleanURI, cseq, staleAuthHeader)
-					if err == nil && resp3.statusCode == 200 {
-						return c.parseAndVerifySDP(resp3.body)
-					}
-				}
-			}
-		}
-		return nil, ErrAuthRejected
+		return c.retryStaleDescribe(writer, reader, info, retriedChallenges, cseq+1, nc+1)
 	}
 
 	if resp2.statusCode == 404 {
@@ -231,6 +207,58 @@ func (c *DescribeClient) Describe(ctx context.Context, info *StreamConnectionInf
 	}
 
 	return nil, fmt.Errorf("%w: status %d %s", ErrRTSPProtocolViolation, resp2.statusCode, resp2.statusText)
+}
+
+func (c *DescribeClient) retryStaleDescribe(
+	w *bufio.Writer,
+	r *bufio.Reader,
+	info *StreamConnectionInfo,
+	challenges []string,
+	cseq, nc int,
+) (*DescribeResult, error) {
+	if len(challenges) == 0 {
+		return nil, ErrAuthRejected
+	}
+
+	staleChal, err := SelectBestChallenge(challenges)
+	if err != nil {
+		return nil, ErrAuthRejected
+	}
+
+	isStaleDigest := staleChal.Type == AuthTypeDigest &&
+		staleChal.DigestChallenge != nil &&
+		staleChal.DigestChallenge.Stale
+	if !isStaleDigest {
+		return nil, ErrAuthRejected
+	}
+
+	cnonce, err := GenerateCnonce()
+	if err != nil {
+		return nil, err
+	}
+
+	staleAuthHeader, err := BuildAuthorizationHeader(AuthorizationParams{
+		Challenge: staleChal,
+		Method:    "DESCRIBE",
+		URI:       info.CleanURI,
+		Username:  info.Username,
+		Password:  info.Password,
+		NC:        nc,
+		Cnonce:    cnonce,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	resp3, err := c.sendDescribe(w, r, info.CleanURI, cseq, staleAuthHeader)
+	if err != nil {
+		return nil, err
+	}
+	if resp3.statusCode == 200 {
+		return c.parseAndVerifySDP(resp3.body)
+	}
+
+	return nil, ErrAuthRejected
 }
 
 func (c *DescribeClient) sendDescribe(
@@ -276,7 +304,7 @@ func (c *DescribeClient) readResponse(r *bufio.Reader, expectedCSeq int) (*rtspR
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid status code in %q", ErrRTSPProtocolViolation, statusLine)
 	}
-	statusText := ""
+	var statusText string
 	if len(parts) >= 3 {
 		statusText = parts[2]
 	}
@@ -284,8 +312,7 @@ func (c *DescribeClient) readResponse(r *bufio.Reader, expectedCSeq int) (*rtspR
 	// 2. Read headers
 	headers := make(map[string][]string)
 	totalHeaderBytes := len(statusLine) + 2
-	lineCount := 0
-	contentLength := 0
+	var lineCount, contentLength int
 	respCSeq := -1
 
 	for {
@@ -365,8 +392,8 @@ func (c *DescribeClient) parseAndVerifySDP(body []byte) (*DescribeResult, error)
 		return nil, fmt.Errorf("unmarshal SDP: %w", err)
 	}
 
-	videoFound := false
-	detectedCodec := ""
+	var videoFound bool
+	var detectedCodec string
 
 	for _, media := range sess.MediaDescriptions {
 		if strings.ToLower(media.MediaName.Media) != "video" {
