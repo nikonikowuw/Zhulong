@@ -8,6 +8,7 @@ export type PersonsDialogType =
   | 'delete'
   | 'faces'
   | 'import'
+  | 'import-faces'
 
 export interface PreviewImageInfo {
   url: string

@@ -102,3 +102,32 @@ export const updatePersonSchema = z.object({
 })
 
 export type UpdatePersonDto = z.infer<typeof updatePersonSchema>
+
+export const faceImportJobStatusSchema = z.enum([
+  'PENDING',
+  'EXTRACTING',
+  'PROCESSING',
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED',
+])
+
+export type FaceImportJobStatus = z.infer<typeof faceImportJobStatusSchema>
+
+export const faceImportJobResponseSchema = z.object({
+  jobId: z.string(),
+  status: faceImportJobStatusSchema,
+  progress: z.number().optional().default(0),
+  total: z.number(),
+  processed: z.number(),
+  succeeded: z.number(),
+  failed: z.number(),
+  currentStage: z.string().optional().default(''),
+  currentFile: z.string().optional().default(''),
+  errorMessage: z.string().optional().default(''),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  finishedAt: z.string().nullable().optional(),
+})
+
+export type FaceImportJobResponse = z.infer<typeof faceImportJobResponseSchema>

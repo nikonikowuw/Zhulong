@@ -8,6 +8,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
+	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
@@ -521,6 +522,7 @@ func providePerson(
 	broadcaster *algorunner.GalleryBroadcaster,
 	supervisor *algorunner.Supervisor,
 	recordStore *record.Store,
+	asyncJobs *asyncjob.Service,
 	logger *zap.Logger,
 ) personOut {
 	facesDir := config.FacesDir
@@ -552,8 +554,12 @@ func providePerson(
 	opts := person.Options{
 		RequirePersonIDForEnrollment: config.RequirePersonIDForEnrollment,
 		RecognitionKeyBackfiller:     keyBackfiller,
+		AsyncJobs:                    asyncJobs,
 	}
 	comp := person.NewPersonComponents(dbProvider, facesDir, extractor, notifier, opts, logger)
+	if asyncJobs != nil && comp.JobHandler != nil {
+		asyncJobs.RegisterHandler(comp.JobHandler)
+	}
 	supervisor.SetGallerySync(&supervisorGallerySyncAdapter{service: comp.Service}, broadcaster)
 	return personOut{
 		Store:           comp.Store,
@@ -567,6 +573,39 @@ func providePerson(
 
 var personModule = fx.Module("person",
 	fx.Provide(providePerson),
+)
+
+// --- Async Job Module ---
+
+type asyncJobOut struct {
+	fx.Out
+
+	Store           *asyncjob.Store
+	Service         *asyncjob.Service
+	Handler         *asyncjob.Handler
+	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+}
+
+func provideAsyncJob(
+	lifecycle fx.Lifecycle,
+	dbProvider database.DBProvider,
+	logger *zap.Logger,
+) asyncJobOut {
+	comp := asyncjob.NewAsyncJobComponents(dbProvider, logger)
+	lifecycle.Append(fx.Hook{
+		OnStart: comp.Start,
+		OnStop:  comp.Stop,
+	})
+	return asyncJobOut{
+		Store:           comp.Store,
+		Service:         comp.Service,
+		Handler:         comp.Handler,
+		ProtectedRoutes: comp.ProtectedRoutes,
+	}
+}
+
+var asyncJobModule = fx.Module("asyncjob",
+	fx.Provide(provideAsyncJob),
 )
 
 // --- Client Log Module ---
@@ -744,6 +783,7 @@ var Module = fx.Options(
 	mediaFileModule,
 	algorithmModule,
 	taskModule,
+	asyncJobModule,
 	personModule,
 	clientLogModule,
 	recordModule,

@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { FileUp, Plus, RefreshCw } from 'lucide-react'
+import { FileUp, Images, Plus, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { PERSONS_QUERY_KEY } from '../hooks/use-persons'
@@ -22,6 +22,11 @@ export function PersonsPrimaryButtons() {
   const handleImport = () => {
     setCurrentRow(null)
     setOpen('import')
+  }
+
+  const handleImportFaces = () => {
+    setCurrentRow(null)
+    setOpen('import-faces')
   }
 
   return (
@@ -48,6 +53,19 @@ export function PersonsPrimaryButtons() {
       >
         <FileUp className='me-1 h-4 w-4' />
         <span>{t('actions.import')}</span>
+      </Button>
+
+      <Button
+        variant='outline'
+        size='sm'
+        className='h-8'
+        onClick={handleImportFaces}
+        title={t('actions.importFaces', { defaultValue: '人脸批量导入' })}
+      >
+        <Images className='me-1 h-4 w-4' />
+        <span>
+          {t('actions.importFaces', { defaultValue: '人脸批量导入' })}
+        </span>
       </Button>
 
       <Button size='sm' className='h-8' onClick={handleCreate}>

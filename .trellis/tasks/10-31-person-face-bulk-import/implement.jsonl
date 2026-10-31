@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "HTTP 异步任务路由、状态响应信封及命名规范"}
+{"file": ".trellis/spec/backend/storage-guidelines.md", "reason": "文件上传、ZIP 解压、临时目录 RAII 管理规范"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "人脸特征提取、SCRFD 门禁与底库热同步规范"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "业务错误码定义与多语言异常转换规范"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "React 前端异步任务状态追踪、对话框交互与 Query/Mutation 状态规范"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "前后端跨层数据流与契约一致性保障"}

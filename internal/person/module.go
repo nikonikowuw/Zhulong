@@ -13,6 +13,7 @@ type PersonComponents struct {
 	Store           *Store
 	Service         *Service
 	Handler         *Handler
+	JobHandler      *FaceImportJobHandler
 	Lifecycle       PersonLifecycle
 	ProtectedRoutes RouteRegistrar
 	UploadRoutes    RouteRegistrar
@@ -25,7 +26,8 @@ type PersonLifecycle interface {
 }
 
 type personLifecycleImpl struct {
-	logger *zap.Logger
+	service *Service
+	logger  *zap.Logger
 }
 
 func (l *personLifecycleImpl) Start(ctx context.Context) error {
@@ -34,6 +36,9 @@ func (l *personLifecycleImpl) Start(ctx context.Context) error {
 }
 
 func (l *personLifecycleImpl) Stop(ctx context.Context) error {
+	if l.service != nil {
+		l.service.Close()
+	}
 	l.logger.Info("person service stopped")
 	return nil
 }
@@ -59,12 +64,14 @@ func NewPersonComponents(
 	store := NewStore(dbProvider)
 	service := NewService(store, facesDir, extractor, notifier, opts, logger)
 	handler := NewHandler(service, logger)
+	jobHandler := NewFaceImportJobHandler(service)
 
 	return &PersonComponents{
 		Store:           store,
 		Service:         service,
 		Handler:         handler,
-		Lifecycle:       &personLifecycleImpl{logger: logger},
+		JobHandler:      jobHandler,
+		Lifecycle:       &personLifecycleImpl{service: service, logger: logger},
 		ProtectedRoutes: handler,
 		UploadRoutes:    handler.UploadRouteRegistrar(),
 	}

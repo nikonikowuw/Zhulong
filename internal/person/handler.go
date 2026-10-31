@@ -1,6 +1,7 @@
 package person
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -45,6 +46,10 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.GET("/:id/faces", h.ListFaces)
 		group.DELETE("/:id/faces/:face_id", h.DeleteFace)
 		group.GET("/:id/faces/:face_id/image", h.GetFaceImage)
+
+		// Face bulk import jobs
+		group.GET("/import-face-jobs/:jobId", h.GetFaceImportJob)
+		group.GET("/import-face-jobs/:jobId/failed-report", h.GetFaceImportFailedReport)
 	}
 }
 
@@ -53,6 +58,7 @@ func (h *Handler) RegisterUploadRoutes(rg *gin.RouterGroup) {
 	rg.POST("/persons/:id/faces", h.AddFace)
 	rg.POST("/persons/import/preview", h.PreviewImport)
 	rg.POST("/persons/import/commit", h.CommitImport)
+	rg.POST("/persons/import-face-jobs", h.CreateFaceImportJob)
 }
 
 type uploadRouteRegistrar struct {
@@ -428,4 +434,73 @@ func httpImportRequiredError(c *gin.Context, err error) {
 
 func httpImportReadError(c *gin.Context, err error) {
 	httputil.WriteError(c, apperr.Internal("FILE_READ_FAILED", "Failed to read uploaded file", err))
+}
+
+// CreateFaceImportJob godoc
+// @Summary      Create an asynchronous face bulk import job
+// @Tags         person
+// @Accept       multipart/form-data
+// @Produce      json
+// @Param        file formData file true "ZIP archive containing images and optional manifest.csv"
+// @Success      202  {object}  httputil.Response{data=FaceImportJobResponse}
+// @Failure      400  {object}  httputil.Response
+// @Failure      422  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/import-face-jobs [post]
+func (h *Handler) CreateFaceImportJob(c *gin.Context) {
+	audithttp.Tag(c, ActionPersonFaceImportCreate, "job:", "Create face bulk import job")
+
+	file, err := c.FormFile("file")
+	if err != nil {
+		httputil.WriteError(c, apperr.Invalid("FILE_REQUIRED", "ZIP file is required", err))
+		return
+	}
+
+	job, err := h.service.StartFaceImportJob(c.Request.Context(), file)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+
+	httputil.SuccessWithStatus(c, http.StatusAccepted, newFaceImportJobResponse(job))
+}
+
+// GetFaceImportJob godoc
+// @Summary      Get face import job progress and status
+// @Tags         person
+// @Produce      json
+// @Param        jobId path string true "Job ID"
+// @Success      200  {object}  httputil.Response{data=FaceImportJobResponse}
+// @Failure      404  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/import-face-jobs/{jobId} [get]
+func (h *Handler) GetFaceImportJob(c *gin.Context) {
+	jobID := c.Param("jobId")
+	job, err := h.service.GetFaceImportJob(c.Request.Context(), jobID)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	httputil.Success(c, newFaceImportJobResponse(job))
+}
+
+// GetFaceImportFailedReport godoc
+// @Summary      Download failed report CSV for a face import job
+// @Tags         person
+// @Produce      text/csv
+// @Param        jobId path string true "Job ID"
+// @Success      200  {file}    binary
+// @Failure      404  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/import-face-jobs/{jobId}/failed-report [get]
+func (h *Handler) GetFaceImportFailedReport(c *gin.Context) {
+	jobID := c.Param("jobId")
+	csvBytes, err := h.service.GetFaceImportFailedReportCSV(c.Request.Context(), jobID)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="failed_report_%s.csv"`, jobID))
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", csvBytes)
 }

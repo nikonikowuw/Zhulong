@@ -37,7 +37,8 @@
     "batchDelete": "Batch Delete",
     "saving": "Saving...",
     "deleting": "Deleting...",
-    "setPrimary": "Set Primary"
+    "setPrimary": "Set Primary",
+    "importFaces": "Bulk Import Faces"
   },
   "dialogs": {
     "createTitle": "Add Personnel Profile",
@@ -154,5 +155,38 @@
       "IMPORT_DUPLICATE_PERSON_ID": "Personnel ID is duplicated in the file",
       "IMPORT_COLUMN_COUNT": "Column count does not match the header"
     }
+  },
+  "faceImport": {
+    "title": "Bulk Import Person Faces",
+    "description": "Upload a ZIP archive with photos and optional manifest for AI quality-gated face feature extraction and gallery enrollment.",
+    "chooseZip": "Click to select or drag & drop ZIP archive",
+    "fileHint": "Standard ZIP format supported, up to 200MB",
+    "downloadTemplate": "Download manifest template",
+    "specTitle": "Archive Structure Standards",
+    "spec1": "Manifest-driven (recommended): Root contains manifest.csv and images/ directory.",
+    "spec2": "Adaptive mode: If manifest is omitted, files matching [personId]_[name].jpg are auto-enrolled.",
+    "spec3": "AI Quality Gate: Group photos (multiple faces), no face, and extreme side poses are rejected and logged in the failure report.",
+    "runningInBackground": "Task continues running in background",
+    "selectZipError": "Please select a ZIP archive file",
+    "jobStarted": "Import job created, background extraction started",
+    "statusPending": "Queued...",
+    "statusExtracting": "Unpacking and validating archive...",
+    "statusProcessing": "AI face vetting & feature extraction in progress...",
+    "statusCompleted": "Import completed",
+    "statusFailed": "Import failed",
+    "statusCancelled": "Cancelled",
+    "progressLabel": "Progress",
+    "currentFile": "Processing:",
+    "total": "Total",
+    "processed": "Processed",
+    "succeeded": "Enrolled",
+    "failed": "Vetting failed",
+    "errorTitle": "Job Execution Error",
+    "unknownError": "Unknown error",
+    "completeTitle": "Face Gallery Import Completed",
+    "completeSummary": "Successfully enrolled {{succeeded}} face templates; {{failed}} items failed quality gates.",
+    "downloadFailedReport": "Download Failure Report (CSV)",
+    "retryAnother": "Import another",
+    "runInBackground": "Run in background"
   }
 }

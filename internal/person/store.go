@@ -543,3 +543,19 @@ func (s *Store) SetPrimaryFace(ctx context.Context, personID, faceID string) err
 		}).Error
 	})
 }
+
+// GetPersonByExternalID retrieves a person by their external business key (person_id).
+func (s *Store) GetPersonByExternalID(ctx context.Context, externalID string) (*Person, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var p Person
+	if err := db.Where("person_id = ?", externalID).First(&p).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &p, nil
+}

@@ -37,7 +37,9 @@
     "batchDelete": "批量删除",
     "saving": "保存中...",
     "deleting": "删除中...",
-    "setPrimary": "设为主人脸"
+    "setPrimary": "设为主人脸",
+    "import": "批量导入",
+    "importFaces": "人脸批量导入"
   },
   "dialogs": {
     "createTitle": "新增人员档案",
@@ -154,5 +156,38 @@
       "IMPORT_DUPLICATE_PERSON_ID": "人员编号在文件中重复",
       "IMPORT_COLUMN_COUNT": "列数与表头不一致"
     }
+  },
+  "faceImport": {
+    "title": "人员人脸压缩包批量导入",
+    "description": "上传包含照片与可选清单的 ZIP 压缩包，自动进行 AI 质检建模并导入底库。",
+    "chooseZip": "点击选择或拖拽 ZIP 压缩包",
+    "fileHint": "支持标准 ZIP 格式，文件大小不超过 200MB",
+    "downloadTemplate": "下载清单模板",
+    "specTitle": "压缩包组织标准",
+    "spec1": "清单驱动（推荐）：根目录包含 manifest.csv 与 images/ 图片目录。",
+    "spec2": "自适应模式：无清单时，自动根据文件名匹配「工号_姓名.jpg」进行建档。",
+    "spec3": "AI 质检门禁：严禁合影照（多张人脸）、无脸照与大侧脸；不合格项将自动隔离并记入失败报告。",
+    "runningInBackground": "任务已在后台继续运行",
+    "selectZipError": "请选择 ZIP 压缩包文件",
+    "jobStarted": "导入任务已创建，后台开始解压处理",
+    "statusPending": "任务排队中...",
+    "statusExtracting": "正在安全解压与校验压缩包...",
+    "statusProcessing": "正在进行 AI 质检与特征提取...",
+    "statusCompleted": "导入完成",
+    "statusFailed": "导入失败",
+    "statusCancelled": "已取消",
+    "progressLabel": "处理进度",
+    "currentFile": "正在处理:",
+    "total": "总数",
+    "processed": "已处理",
+    "succeeded": "成功入库",
+    "failed": "质检失败",
+    "errorTitle": "任务执行异常",
+    "unknownError": "未知错误",
+    "completeTitle": "人脸底库批量处理完成",
+    "completeSummary": "成功入库 {{succeeded}} 条人脸特征；{{failed}} 条未达质检门禁。",
+    "downloadFailedReport": "下载失败报告 (CSV)",
+    "retryAnother": "重新导入",
+    "runInBackground": "后台运行"
   }
 }

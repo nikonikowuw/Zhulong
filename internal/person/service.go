@@ -18,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"go.uber.org/zap"
 )
@@ -87,6 +88,15 @@ type Options struct {
 	// RecognitionKeyBackfiller backfills historical recognitions when a person's
 	// business key is bound for the first time. Nil disables the backfill.
 	RecognitionKeyBackfiller RecognitionKeyBackfiller
+
+	// AsyncJobs is the system-wide background task runner.
+	AsyncJobs AsyncJobSubmitter
+}
+
+// AsyncJobSubmitter abstracts job submission to the system background task runner.
+type AsyncJobSubmitter interface {
+	SubmitJob(ctx context.Context, jobType string, metadataJSON string) (*asyncjob.Job, error)
+	GetJob(ctx context.Context, id string) (*asyncjob.Job, error)
 }
 
 // Service provides high-level business logic for personnel and face gallery.
@@ -95,7 +105,9 @@ type Service struct {
 	extractor                    FaceFeatureExtractor
 	galleryNotifier              GalleryNotifier
 	keyBackfiller                RecognitionKeyBackfiller
+	asyncJobs                    AsyncJobSubmitter
 	facesDir                     string
+	tempDir                      string
 	logger                       *zap.Logger
 	requirePersonIDForEnrollment bool
 }
@@ -113,14 +125,40 @@ func NewService(
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Service{
+	tempDir := filepath.Join(filepath.Dir(facesDir), "tmp")
+	_ = os.MkdirAll(tempDir, 0755)
+	cleanStaleFaceImportDirs(tempDir, logger)
+
+	s := &Service{
 		store:                        store,
 		extractor:                    extractor,
 		galleryNotifier:              notifier,
 		keyBackfiller:                opts.RecognitionKeyBackfiller,
+		asyncJobs:                    opts.AsyncJobs,
 		facesDir:                     facesDir,
+		tempDir:                      tempDir,
 		logger:                       logger.Named("person.service"),
 		requirePersonIDForEnrollment: opts.RequirePersonIDForEnrollment,
+	}
+	return s
+}
+
+// Close gracefully stops any internal resources.
+func (s *Service) Close() {
+}
+
+func cleanStaleFaceImportDirs(tempDir string, logger *zap.Logger) {
+	entries, err := os.ReadDir(tempDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "face_import_") {
+			fullPath := filepath.Join(tempDir, entry.Name())
+			if err := os.RemoveAll(fullPath); err != nil && logger != nil {
+				logger.Warn("failed to clean up stale face import directory", zap.String("path", fullPath), zap.Error(err))
+			}
+		}
 	}
 }
 

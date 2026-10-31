@@ -37,7 +37,9 @@
     "batchDelete": "批次刪除",
     "saving": "儲存中...",
     "deleting": "刪除中...",
-    "setPrimary": "設為主人臉"
+    "setPrimary": "設為主人臉",
+    "import": "批量匯入",
+    "importFaces": "人臉批量匯入"
   },
   "dialogs": {
     "createTitle": "新增人員檔案",
@@ -154,5 +156,38 @@
       "IMPORT_DUPLICATE_PERSON_ID": "人員編號在檔案中重複",
       "IMPORT_COLUMN_COUNT": "欄數與表頭不一致"
     }
+  },
+  "faceImport": {
+    "title": "人員人臉壓縮包批量匯入",
+    "description": "上傳包含照片與可選清單的 ZIP 壓縮包，自動進行 AI 質檢建模並匯入底庫。",
+    "chooseZip": "點擊選擇或拖曳 ZIP 壓縮包",
+    "fileHint": "支援標準 ZIP 格式，檔案大小不超過 200MB",
+    "downloadTemplate": "下載清單模板",
+    "specTitle": "壓縮包組織標準",
+    "spec1": "清單驅動（推薦）：根目錄包含 manifest.csv 與 images/ 圖片目錄。",
+    "spec2": "自適應模式：無清單時，自動根據檔名匹配「工號_姓名.jpg」進行建檔。",
+    "spec3": "AI 質檢門禁：嚴禁合影照（多張人臉）、無臉照與大側臉；不合格項將自動隔離並記入失敗報告。",
+    "runningInBackground": "任務已在後台繼續運行",
+    "selectZipError": "請選擇 ZIP 壓縮包檔案",
+    "jobStarted": "匯入任務已建立，後台開始解壓處理",
+    "statusPending": "任務排隊中...",
+    "statusExtracting": "正在安全解壓與校驗壓縮包...",
+    "statusProcessing": "正在進行 AI 質檢與特徵提取...",
+    "statusCompleted": "匯入完成",
+    "statusFailed": "匯入失敗",
+    "statusCancelled": "已取消",
+    "progressLabel": "處理進度",
+    "currentFile": "正在處理:",
+    "total": "總數",
+    "processed": "已處理",
+    "succeeded": "成功入庫",
+    "failed": "質檢失敗",
+    "errorTitle": "任務執行異常",
+    "unknownError": "未知錯誤",
+    "completeTitle": "人臉底庫批量處理完成",
+    "completeSummary": "成功入庫 {{succeeded}} 條人臉特徵；{{failed}} 條未達質檢門禁。",
+    "downloadFailedReport": "下載失敗報告 (CSV)",
+    "retryAnother": "重新匯入",
+    "runInBackground": "後台運行"
   }
 }

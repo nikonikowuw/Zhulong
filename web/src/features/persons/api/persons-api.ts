@@ -4,6 +4,7 @@ import {
   faceSchema,
   personListResponseSchema,
   personSchema,
+  faceImportJobResponseSchema,
   type CreatePersonDto,
   type Face,
   type FaceListResponse,
@@ -12,6 +13,7 @@ import {
   type PersonImportPreviewResponse,
   type PersonListResponse,
   type UpdatePersonDto,
+  type FaceImportJobResponse,
   personImportCommitResponseSchema,
   personImportPreviewResponseSchema,
 } from '../data/schema'
@@ -182,5 +184,36 @@ export const personsApi = {
       { faceId }
     )
     return personSchema.parse(resp.data.data)
+  },
+
+  /**
+   * 创建人脸批量导入异步任务
+   */
+  async createFaceImportJob(file: File): Promise<FaceImportJobResponse> {
+    const formData = new FormData()
+    formData.append('file', file)
+    const resp = await apiClient.post<ApiResponse<FaceImportJobResponse>>(
+      '/persons/import-face-jobs',
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    )
+    return faceImportJobResponseSchema.parse(resp.data.data)
+  },
+
+  /**
+   * 获取人脸批量导入任务进度状态
+   */
+  async getFaceImportJob(jobId: string): Promise<FaceImportJobResponse> {
+    const resp = await apiClient.get<ApiResponse<FaceImportJobResponse>>(
+      `/persons/import-face-jobs/${jobId}`
+    )
+    return faceImportJobResponseSchema.parse(resp.data.data)
+  },
+
+  /**
+   * 获取失败报告 CSV 下载地址
+   */
+  getFaceImportFailedReportUrl(jobId: string): string {
+    return `/api/v1/persons/import-face-jobs/${jobId}/failed-report`
   },
 }

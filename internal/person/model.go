@@ -7,14 +7,15 @@ import "time"
 // queried by exact action string, so bare verbs like "CREATE" cannot be grouped or
 // filtered alongside the other domains.
 const (
-	ActionPersonCreate         = "person.create"
-	ActionPersonUpdate         = "person.update"
-	ActionPersonDelete         = "person.delete"
-	ActionPersonFaceAdd        = "person.face.add"
-	ActionPersonFaceDelete     = "person.face.delete"
-	ActionPersonPrimaryFaceSet = "person.primary_face.set"
-	ActionPersonImportPreview  = "person.import.preview"
-	ActionPersonImportCommit   = "person.import.commit"
+	ActionPersonCreate           = "person.create"
+	ActionPersonUpdate           = "person.update"
+	ActionPersonDelete           = "person.delete"
+	ActionPersonFaceAdd          = "person.face.add"
+	ActionPersonFaceDelete       = "person.face.delete"
+	ActionPersonPrimaryFaceSet   = "person.primary_face.set"
+	ActionPersonImportPreview    = "person.import.preview"
+	ActionPersonImportCommit     = "person.import.commit"
+	ActionPersonFaceImportCreate = "person.face_import.create"
 )
 
 // Person represents a personnel profile entity in the personnel database.
@@ -78,4 +79,14 @@ type GalleryItem struct {
 	PersonName string    `json:"person_name"`
 	ImagePath  string    `json:"image_path,omitempty"`
 	Features   []float32 `json:"features,omitempty"`
+}
+
+// FaceImportFailedItem represents an item that failed validation or enrollment in a face import job.
+type FaceImportFailedItem struct {
+	Line      int    `json:"line"`
+	FilePath  string `json:"filePath"`
+	Name      string `json:"name"`
+	PersonID  string `json:"personId"`
+	ErrorCode string `json:"errorCode"`
+	Message   string `json:"message"`
 }

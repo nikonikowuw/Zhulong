@@ -232,3 +232,39 @@ export function useAllPersons(): UseQueryResult<PersonListResponse, Error> {
     staleTime: 60_000,
   })
 }
+
+/**
+ * 创建人脸批量导入任务
+ */
+export function useCreateFaceImportJob() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (file: File) => personsApi.createFaceImportJob(file),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
+    },
+  })
+}
+
+/**
+ * 轮询/查询人脸批量导入任务状态
+ */
+export function useFaceImportJob(jobId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['persons', 'face-import-job', jobId],
+    queryFn: () => (jobId ? personsApi.getFaceImportJob(jobId) : null),
+    enabled: Boolean(jobId && enabled),
+    refetchInterval: (query) => {
+      const data = query.state.data
+      if (!data) return 1000
+      if (
+        data.status === 'COMPLETED' ||
+        data.status === 'FAILED' ||
+        data.status === 'CANCELLED'
+      ) {
+        return false
+      }
+      return 1000
+    },
+  })
+}

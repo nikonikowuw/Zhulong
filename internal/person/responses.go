@@ -1,6 +1,10 @@
 package person
 
-import "time"
+import (
+	"time"
+
+	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
+)
 
 // PersonResponse is the HTTP projection of a Person.
 //
@@ -102,4 +106,39 @@ type PersonImportCommitResponse struct {
 	Total    int                       `json:"total"`
 	Imported int                       `json:"imported"`
 	Failed   int                       `json:"failed"`
+}
+
+// FaceImportJobResponse represents the HTTP status projection of an asynchronous face import job.
+type FaceImportJobResponse struct {
+	JobID        string             `json:"jobId"`
+	Status       asyncjob.JobStatus `json:"status"`
+	Progress     int                `json:"progress"`
+	Total        int                `json:"total"`
+	Processed    int                `json:"processed"`
+	Succeeded    int                `json:"succeeded"`
+	Failed       int                `json:"failed"`
+	CurrentStage string             `json:"currentStage,omitempty"`
+	CurrentFile  string             `json:"currentFile,omitempty"`
+	ErrorMessage string             `json:"errorMessage,omitempty"`
+	CreatedAt    time.Time          `json:"createdAt"`
+	UpdatedAt    time.Time          `json:"updatedAt"`
+	FinishedAt   *time.Time         `json:"finishedAt,omitempty"`
+}
+
+func newFaceImportJobResponse(job *asyncjob.Job) FaceImportJobResponse {
+	return FaceImportJobResponse{
+		JobID:        job.ID,
+		Status:       job.Status,
+		Progress:     job.Progress,
+		Total:        job.Total,
+		Processed:    job.Processed,
+		Succeeded:    job.Succeeded,
+		Failed:       job.Failed,
+		CurrentStage: job.CurrentStage,
+		CurrentFile:  job.CurrentFile,
+		ErrorMessage: job.ErrorMessage,
+		CreatedAt:    job.CreatedAt.UTC(),
+		UpdatedAt:    job.UpdatedAt.UTC(),
+		FinishedAt:   job.FinishedAt,
+	}
 }

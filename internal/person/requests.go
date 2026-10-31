@@ -30,3 +30,8 @@ type AddFaceRequest struct {
 type SetPrimaryFaceRequest struct {
 	FaceID string `json:"faceId" binding:"required"`
 }
+
+// CreateFaceImportJobRequest represents the multipart form payload to initiate an asynchronous face import job.
+type CreateFaceImportJobRequest struct {
+	File *multipart.FileHeader `form:"file" binding:"required"`
+}

@@ -154,5 +154,60 @@ func init() {
 			"zh-Hans": "批量导入人员失败",
 			"zh-Hant": "批量匯入人員失敗",
 		},
+		"MULTIPLE_FACES_DETECTED": {
+			"en":      "Multiple faces detected; group photos are rejected",
+			"zh-Hans": "检测到多张人脸（合影照拒绝录入）",
+			"zh-Hant": "檢測到多張人臉（合影照拒絕錄入）",
+		},
+		"CORRUPT_OR_OVERSIZED_IMAGE": {
+			"en":      "Image is corrupted or exceeds 4096px dimension limit",
+			"zh-Hans": "图片损坏或单边尺寸超出 4096 像素限制",
+			"zh-Hant": "圖片損壞或單邊尺寸超出 4096 像素限制",
+		},
+		"FACE_TOO_SMALL": {
+			"en":      "Detected face is too small (less than 80px)",
+			"zh-Hans": "检出人脸尺寸过小（短边小于 80 像素）",
+			"zh-Hant": "檢出人臉尺寸過小（短邊小於 80 像素）",
+		},
+		"FACE_POSE_EXCEED": {
+			"en":      "Face pose angle exceeds threshold",
+			"zh-Hans": "人脸偏角过大（侧脸角度超限）",
+			"zh-Hant": "人臉偏角過大（側臉角度超限）",
+		},
+		"PERSON_NAME_MISMATCH": {
+			"en":      "Person ID already exists but the name does not match",
+			"zh-Hans": "该人员编号已存在但姓名不一致",
+			"zh-Hant": "該人員編號已存在但姓名不一致",
+		},
+		"ZIP_SLIP_ATTEMPT": {
+			"en":      "Illegal file path escaping archive destination",
+			"zh-Hans": "压缩包内包含非法路径逃逸文件",
+			"zh-Hant": "壓縮包內包含非法路徑逃逸檔案",
+		},
+		"ZIP_BOMB_DETECTED": {
+			"en":      "Extracted contents exceed maximum allowed decompression limit",
+			"zh-Hans": "解压内容超出安全容量上限（疑似解压炸弹）",
+			"zh-Hant": "解壓內容超出安全容量上限（疑似解壓炸彈）",
+		},
+		"ZIP_TOO_MANY_FILES": {
+			"en":      "Archive contains too many files",
+			"zh-Hans": "压缩包内文件数量超出上限",
+			"zh-Hant": "壓縮包內檔案數量超出上限",
+		},
+		"ZIP_READ_FAILED": {
+			"en":      "Failed to read or unpack zip archive",
+			"zh-Hans": "解压读取压缩包失败",
+			"zh-Hant": "解壓讀取壓縮包失敗",
+		},
+		"FACE_IMPORT_JOB_NOT_FOUND": {
+			"en":      "Face import job not found",
+			"zh-Hans": "人脸批量导入任务不存在",
+			"zh-Hant": "人臉批量匯入任務不存在",
+		},
+		"FACE_LIMIT_EXCEEDED": {
+			"en":      "Face count limit exceeded for this person",
+			"zh-Hans": "该人员底库人脸照片数量已达上限",
+			"zh-Hant": "該人員底庫人臉照片數量已達上限",
+		},
 	})
 }
