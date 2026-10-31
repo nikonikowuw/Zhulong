@@ -1752,3 +1752,26 @@ Implemented fourth vehicles tab in perception records reusing captures endpoint 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 90: 人员 CSV 批量导入双轴审查与缺陷修复
+<!-- trellis-session: v=2 fp=7901b924aee78889 -->
+
+**Date**: 2026-11-01
+**Task**: 人员 CSV 批量导入双轴审查与缺陷修复
+**Package**: frontend
+**Branch**: `dev`
+
+### Summary
+
+针对人员 CSV 批量导入功能执行 Standards 与 Spec 双轴深入代码审查并完成修复。消除冗余预览/提交 state 为基于 mutation 的派生状态，修正失败重传 CSV 表头与行数以契合后端严格校验合约，修正隐藏 input 嵌套在 button 的 HTML 规范违例，并加固 DOM 挂载下载清理与算法试跑对话框重置守卫。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `51fd378` | fix(web/persons): 修复批量导入派生状态、重传表头契约与下载生命周期 |
+
+### Status
+
+[OK] **Completed**
