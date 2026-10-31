@@ -1775,3 +1775,27 @@ Implemented fourth vehicles tab in perception records reusing captures endpoint 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 91: 统一系统后台异步任务子系统与人员人脸批量导入
+<!-- trellis-session: v=2 fp=a6039116c460ce2b -->
+
+**Date**: 2026-11-01
+**Task**: 统一系统后台异步任务子系统与人员人脸批量导入
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+针对业务烟囱式 Job 建模问题，践行架构解耦与平台化，从零设计并落地系统级统一后台异步任务子系统 (internal/asyncjob 与 system_async_jobs 数据表)。将人员人脸批量导入作为标准插件接入，实现高安全门禁（Zip Slip/Bomb 防御、像素防爆、合影严格拦截）、QoS 算力让渡调度、进程崩溃孤儿任务自动回收、增量底库批量热同步、诊断 CSV 导出及 React 实时轮询对话框。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `522fcc5` | test(web): 补充算法与任务测试用例中缺失的 supportsMotionGate 属性 |
+| `b106365` | feat(asyncjob,person): 统一系统异步后台任务子系统并实现人员人脸批量导入 |
+
+### Status
+
+[OK] **Completed**
