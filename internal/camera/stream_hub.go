@@ -493,7 +493,15 @@ func (h *StreamHub) ResolveAIStreamBrokerPath(ctx context.Context, cameraID stri
 			return "", ErrStreamHubClosed
 		}
 		h.aiStreams[cameraID] = &aiStreamRef{stream: mediaStream, aiSub: aiSub, cancel: cancel}
+		var newState *CameraStateInfo
+		if h.registry != nil {
+			newState = h.registry.UpdateSessionState(cameraID, role, SessionStateRunning)
+		}
 		h.mu.Unlock()
+
+		if newState != nil {
+			h.broadcastState(newState)
+		}
 
 		return path, nil
 	})
@@ -542,6 +550,19 @@ func (h *StreamHub) ReleaseAIStreamSubscriber(cameraID, subscriberID string) {
 			}
 		}
 	}
+	var newState *CameraStateInfo
+	if toClose != nil && h.registry != nil {
+		hasDispatcher := false
+		for _, role := range []string{StreamRoleMain, StreamRoleSub} {
+			if _, ok := h.dispatchers[cameraID+":"+role]; ok {
+				hasDispatcher = true
+				break
+			}
+		}
+		if !hasDispatcher {
+			newState = h.registry.UpdateSessionState(cameraID, StreamRoleMain, SessionStateIdle)
+		}
+	}
 	h.mu.Unlock()
 
 	if toClose != nil {
@@ -549,6 +570,10 @@ func (h *StreamHub) ReleaseAIStreamSubscriber(cameraID, subscriberID string) {
 			h.logger.Warn("release AI stream after last subscriber left",
 				zap.String("camera_id", cameraID), zap.Error(err))
 		}
+	}
+
+	if newState != nil {
+		h.broadcastState(newState)
 	}
 }
 
@@ -665,17 +690,53 @@ func (h *StreamHub) Close() error {
 	return nil
 }
 
+func (h *StreamHub) handleAIStreamFailure(cameraID string, err error) {
+	h.mu.Lock()
+	var toClose MediaStream
+	if ref, ok := h.aiStreams[cameraID]; ok {
+		delete(h.aiStreams, cameraID)
+		toClose = ref.stream
+		if ref.cancel != nil {
+			ref.cancel()
+		}
+	}
+	h.mu.Unlock()
+
+	if toClose != nil {
+		if closeErr := toClose.Close(); closeErr != nil {
+			h.logger.Warn("close failed AI stream",
+				zap.String("camera_id", cameraID), zap.Error(closeErr))
+		}
+	}
+
+	if h.registry != nil {
+		newState := h.registry.RecordStreamFailure(StreamFailureParams{
+			CameraID:       cameraID,
+			Role:           StreamRoleMain,
+			Reason:         "ai_stream_failed",
+			ErrorMessage:   err.Error(),
+			IsMediaSession: true,
+		})
+		if newState != nil {
+			h.broadcastState(newState)
+		}
+	}
+}
+
 func (h *StreamHub) consumeAIResults(ctx context.Context, cameraID string, sub *engine.AIResultSubscription) {
 	defer sub.Close()
 	for {
 		data, err := sub.Next(ctx)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, engine.ErrClosed) {
-				h.logger.Debug("ai results consumer exiting",
+				h.logger.Warn("ai stream failed",
 					zap.String("camera_id", cameraID), zap.Error(err))
+				h.handleAIStreamFailure(cameraID, err)
 			}
 			return
 		}
+
+		h.recordPacketActivity(cameraID, StreamRoleMain)
 
 		// The AI stream is per-camera and shared by every algorithm runner attached to that
 		// camera, so this hub cannot attribute a result to one algorithm. The runner is the

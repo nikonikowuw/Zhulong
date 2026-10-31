@@ -85,7 +85,16 @@ export function ChannelCameraCell({ row }: { row: Row<ChannelTaskGroup> }) {
   const { t } = useTranslation('tasks')
   const group = row.original
   const isOnline = group.camera.health === 'online'
-  const healthLevel: StatusLevel = isOnline ? 'active' : 'inactive'
+  const isReconnecting = group.camera.session === 'reconnecting'
+  const isError =
+    group.camera.health === 'error' || group.camera.session === 'error'
+  const healthLevel: StatusLevel = isOnline
+    ? 'active'
+    : isReconnecting
+      ? 'warning'
+      : isError
+        ? 'destructive'
+        : 'inactive'
   const taskId = group.task?.id
 
   return (
@@ -113,7 +122,9 @@ export function ChannelCameraCell({ row }: { row: Row<ChannelTaskGroup> }) {
             />
             {isOnline
               ? t('channelCard.cameraOnline', '在线')
-              : t('channelCard.cameraOffline', '离线')}
+              : isReconnecting
+                ? t('channelCard.cameraReconnecting', '重连中')
+                : t('channelCard.cameraOffline', '离线')}
           </Badge>
         </div>
         <div className='flex items-center gap-2 text-[11px] text-muted-foreground'>
@@ -143,6 +154,7 @@ export function ChannelStatusCell({ row }: { row: Row<ChannelTaskGroup> }) {
   const { t } = useTranslation('tasks')
   const updateMutation = useUpdateTask()
   const task = row.original.task
+  const camera = row.original.camera
 
   if (!task) return null
 
@@ -167,6 +179,27 @@ export function ChannelStatusCell({ row }: { row: Row<ChannelTaskGroup> }) {
     )
   }
 
+  const isCameraDisabled = !camera.enabled
+  const isStreamOffline = camera.health === 'offline'
+  const isStreamReconnecting = camera.session === 'reconnecting'
+  const isStreamError = camera.health === 'error' || camera.session === 'error'
+
+  let statusText = task.enabled
+    ? t('channelCard.channelRunning', '通道已启用')
+    : t('channelCard.channelPaused', '通道已暂停')
+
+  if (task.enabled) {
+    if (isCameraDisabled) {
+      statusText = t('table.statusCameraDisabled', '摄像机已停用')
+    } else if (isStreamReconnecting) {
+      statusText = t('table.statusStreamReconnecting', '视频流重连中')
+    } else if (isStreamError) {
+      statusText = t('table.statusStreamError', '视频流异常')
+    } else if (isStreamOffline || camera.health !== 'online') {
+      statusText = t('table.statusStreamDisconnected', '视频流断开')
+    }
+  }
+
   return (
     <div className='flex items-center gap-2'>
       <Switch
@@ -175,10 +208,16 @@ export function ChannelStatusCell({ row }: { row: Row<ChannelTaskGroup> }) {
         onCheckedChange={handleToggle}
         aria-label={t('channelCard.toggleChannel', '切换通道分析状态')}
       />
-      <span className='text-xs text-muted-foreground'>
-        {task.enabled
-          ? t('channelCard.channelRunning', '通道已启用')
-          : t('channelCard.channelPaused', '通道已暂停')}
+      <span
+        className={cn(
+          'text-xs text-muted-foreground',
+          task.enabled &&
+            (isStreamOffline || camera.health !== 'online') &&
+            'font-medium text-destructive',
+          task.enabled && isStreamReconnecting && 'font-medium text-amber-500'
+        )}
+      >
+        {statusText}
       </span>
     </div>
   )

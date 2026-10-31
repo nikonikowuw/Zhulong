@@ -16,6 +16,8 @@ export { useAllCameras } from './hooks/use-cameras'
 export { useCameraEvents } from './hooks/use-camera-events'
 export {
   type Camera,
+  type CameraHealth,
   type CameraListResponse,
+  type CameraSession,
   type Stream,
 } from './data/schema'

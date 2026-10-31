@@ -67,7 +67,16 @@ export function ChannelTasksView({
     <div className='grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3'>
       {configuredGroups.map((group) => {
         const isOnline = group.camera.health === 'online'
-        const healthLevel: StatusLevel = isOnline ? 'active' : 'inactive'
+        const isReconnecting = group.camera.session === 'reconnecting'
+        const isError =
+          group.camera.health === 'error' || group.camera.session === 'error'
+        const healthLevel: StatusLevel = isOnline
+          ? 'active'
+          : isReconnecting
+            ? 'warning'
+            : isError
+              ? 'destructive'
+              : 'inactive'
         // 已过滤掉空通道，因此每个卡片必然至少有一个订阅项
         const primaryTask = group.items[0].task
 
@@ -114,7 +123,9 @@ export function ChannelTasksView({
                     />
                     {isOnline
                       ? t('channelCard.cameraOnline', '在线')
-                      : t('channelCard.cameraOffline', '离线')}
+                      : isReconnecting
+                        ? t('channelCard.cameraReconnecting', '重连中')
+                        : t('channelCard.cameraOffline', '离线')}
                   </Badge>
 
                   <DropdownMenu>
@@ -164,10 +175,31 @@ export function ChannelTasksView({
                 </div>
 
                 <div className='flex items-center gap-1.5'>
-                  <span className='text-xs text-muted-foreground'>
-                    {primaryTask.enabled
-                      ? t('channelCard.channelRunning', '通道已启用')
-                      : t('channelCard.channelPaused', '通道已暂停')}
+                  <span
+                    className={cn(
+                      'text-xs text-muted-foreground',
+                      primaryTask.enabled &&
+                        (group.camera.health === 'offline' ||
+                          group.camera.health !== 'online') &&
+                        'font-medium text-destructive',
+                      primaryTask.enabled &&
+                        group.camera.session === 'reconnecting' &&
+                        'font-medium text-amber-500'
+                    )}
+                  >
+                    {!primaryTask.enabled
+                      ? t('channelCard.channelPaused', '通道已暂停')
+                      : !group.camera.enabled
+                        ? t('table.statusCameraDisabled', '摄像机已停用')
+                        : group.camera.session === 'reconnecting'
+                          ? t('table.statusStreamReconnecting', '视频流重连中')
+                          : group.camera.health === 'error' ||
+                              group.camera.session === 'error'
+                            ? t('table.statusStreamError', '视频流异常')
+                            : group.camera.health === 'offline' ||
+                                group.camera.health !== 'online'
+                              ? t('table.statusStreamDisconnected', '视频流断开')
+                              : t('channelCard.channelRunning', '通道已启用')}
                   </span>
                   <Switch
                     checked={primaryTask.enabled}
@@ -194,6 +226,9 @@ export function ChannelTasksView({
                         }
                         isChannelEnabled={item.task.enabled}
                         algorithmStatus={item.algorithm?.status}
+                        cameraHealth={group.camera.health}
+                        cameraSession={group.camera.session}
+                        isCameraEnabled={group.camera.enabled}
                       />
                       <span className='truncate font-medium text-foreground'>
                         {item.algorithm?.name || item.algorithmItem.algorithmId}

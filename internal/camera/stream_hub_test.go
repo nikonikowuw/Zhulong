@@ -1110,6 +1110,84 @@ func TestStreamHubReleaseReleasesStreamWhenLastSubscriberLeaves(t *testing.T) {
 	}
 }
 
+func TestStreamHubAIStreamUpdatesRegistryState(t *testing.T) {
+	store, lazyCipher, camID, cleanup := setupTestStoreAndCipher(t)
+	defer cleanup()
+
+	registry := NewStateRegistry()
+	cam, err := store.GetByID(context.Background(), camID)
+	if err != nil || cam == nil {
+		t.Fatalf("failed to get camera: %v", err)
+	}
+	registry.InitCameraState(cam)
+
+	mockEngine := newMockMediaEngine()
+	hub := NewStreamHub(mockEngine, store, lazyCipher, registry, nil, zap.NewNop())
+	defer hub.Close()
+
+	ctx := context.Background()
+	_, err = hub.ResolveAIStreamBrokerPath(ctx, camID)
+	if err != nil {
+		t.Fatalf("ResolveAIStreamBrokerPath failed: %v", err)
+	}
+
+	st, ok := registry.GetState(camID)
+	if !ok || st.Streams[StreamRoleMain].Session != SessionStateRunning {
+		t.Fatalf("expected main stream session to be running, got %v", st)
+	}
+
+	hub.AttachAIStreamSubscriber(camID, "algo_1")
+	hub.ReleaseAIStreamSubscriber(camID, "algo_1")
+
+	st, ok = registry.GetState(camID)
+	if !ok || st.Streams[StreamRoleMain].Session != SessionStateIdle {
+		t.Fatalf("expected main stream session to return to idle, got %v", st)
+	}
+}
+
+func TestStreamHubHandleAIStreamFailure(t *testing.T) {
+	store, lazyCipher, camID, cleanup := setupTestStoreAndCipher(t)
+	defer cleanup()
+
+	registry := NewStateRegistry()
+	cam, err := store.GetByID(context.Background(), camID)
+	if err != nil || cam == nil {
+		t.Fatalf("failed to get camera: %v", err)
+	}
+	registry.InitCameraState(cam)
+
+	mockEngine := newMockMediaEngine()
+	hub := NewStreamHub(mockEngine, store, lazyCipher, registry, nil, zap.NewNop())
+	defer hub.Close()
+
+	ctx := context.Background()
+	_, err = hub.ResolveAIStreamBrokerPath(ctx, camID)
+	if err != nil {
+		t.Fatalf("ResolveAIStreamBrokerPath failed: %v", err)
+	}
+
+	hub.handleAIStreamFailure(camID, errors.New("rtsp connection reset by peer"))
+
+	st, ok := registry.GetState(camID)
+	if !ok {
+		t.Fatal("expected camera state to exist")
+	}
+	if st.Session != SessionStateReconnecting {
+		t.Fatalf("expected camera session to be reconnecting, got %s", st.Session)
+	}
+	if st.Health != HealthStateError {
+		t.Fatalf("expected camera health to be error, got %s", st.Health)
+	}
+
+	// Verify dead stream reference was cleaned up
+	hub.mu.Lock()
+	_, stillExists := hub.aiStreams[camID]
+	hub.mu.Unlock()
+	if stillExists {
+		t.Fatal("expected dead AI stream to be removed from aiStreams map")
+	}
+}
+
 func TestStreamHubAICameraIDs(t *testing.T) {
 	store, lazyCipher, camID, cleanup := setupTestStoreAndCipher(t)
 	defer cleanup()

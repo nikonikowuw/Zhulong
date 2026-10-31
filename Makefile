@@ -39,6 +39,8 @@ frontend-install:
 
 frontend-build: frontend-install
 	$(PNPM) --dir web run build
+	rm -rf internal/webui/dist
+	cp -r web/dist internal/webui/dist
 
 # 前端门禁：格式 + lint + 类型检查（含在 build 的 tsc -b 中）+ 真实无头浏览器测试 + 生产构建。
 # 说明：`type-check` 与 `audit` 不是 web/package.json 里的 script。

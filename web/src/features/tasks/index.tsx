@@ -8,7 +8,7 @@ import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { useAlgorithms } from '@/features/algorithms/hooks/use-algorithms'
-import { useCameras } from '@/features/cameras/hooks/use-cameras'
+import { useAllCameras, useCameraEvents } from '@/features/cameras/contract'
 import { TasksComputeBudgetCard } from './components/tasks-compute-budget-card'
 import { TasksDialogs } from './components/tasks-dialogs'
 import { TasksPrimaryButtons } from './components/tasks-primary-buttons'
@@ -24,15 +24,15 @@ function TasksContent() {
   const search = route.useSearch()
   const navigate = route.useNavigate()
 
+  useCameraEvents(true)
+
   const {
     data: tasks = [],
     isLoading: isTasksLoading,
     isError: isTasksError,
     refetch: refetchTasks,
   } = useTasks()
-  const { data: camerasData, isLoading: isCamerasLoading } = useCameras({
-    pageSize: 100,
-  })
+  const { data: camerasData, isLoading: isCamerasLoading } = useAllCameras()
   const { data: algorithms = [], isLoading: isAlgosLoading } = useAlgorithms()
 
   const cameras = camerasData?.items ?? []

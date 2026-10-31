@@ -140,13 +140,18 @@ export function TasksTable({
 
       if (
         statusFilter.length > 0 &&
-        !group.items.some((item) =>
-          statusFilter.includes(
-            item.task.enabled && item.algorithmItem.enabled
-              ? 'running'
-              : 'paused'
-          )
-        )
+        !group.items.some((item) => {
+          const isItemRunning =
+            item.task.enabled &&
+            item.algorithmItem.enabled &&
+            group.camera.enabled &&
+            group.camera.health !== 'offline' &&
+            group.camera.health !== 'error' &&
+            item.algorithm?.status !== 'DISABLED' &&
+            item.algorithm?.status !== 'CRASHED' &&
+            item.algorithm?.status !== 'CRASH_LOOP'
+          return statusFilter.includes(isItemRunning ? 'running' : 'paused')
+        })
       ) {
         return false
       }

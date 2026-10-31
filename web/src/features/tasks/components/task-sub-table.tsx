@@ -249,6 +249,9 @@ export function TaskSubTable({ group }: TaskSubTableProps): React.JSX.Element {
                       enabled={isItemEnabled}
                       isChannelEnabled={task.enabled}
                       algorithmStatus={item.algorithm?.status}
+                      cameraHealth={group.camera.health}
+                      cameraSession={group.camera.session}
+                      isCameraEnabled={group.camera.enabled}
                     />
                   </TableCell>
 

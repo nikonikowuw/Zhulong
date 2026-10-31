@@ -29,13 +29,15 @@ export const cameraHealthStatusSchema = z.enum([
 
 export type CameraHealth = z.infer<typeof cameraHealthStatusSchema>
 
-const cameraSessionStatusSchema = z.enum([
+export const cameraSessionStatusSchema = z.enum([
   'running',
   'idle',
   'starting',
   'error',
   'reconnecting',
 ])
+
+export type CameraSession = z.infer<typeof cameraSessionStatusSchema>
 
 export const cameraSchema = z.object({
   id: z.string(),
