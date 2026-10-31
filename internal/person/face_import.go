@@ -58,13 +58,18 @@ type FaceImportResult struct {
 	FailedItems []FaceImportFailedItem `json:"failedItems"`
 }
 
-// FaceImportEntry represents a normalized item to be enrolled.
-type FaceImportEntry struct {
+// faceImportEntry represents a normalized item to be enrolled.
+type faceImportEntry struct {
 	Line      int
 	Name      string
 	PersonID  string
 	ImagePath string
 	IsPrimary bool
+}
+
+type faceProcessError struct {
+	code    string
+	message string
 }
 
 // FaceImportJobHandler implements asyncjob.JobHandler for face bulk imports.
@@ -104,7 +109,7 @@ func (s *Service) ExecuteFaceImportJob(ctx context.Context, job *asyncjob.Job, u
 	s.logger.Info("executing face import job", zap.String("jobId", job.ID))
 
 	// 1. Stage: EXTRACTING
-	_ = updater.Update(ctx, asyncjob.ProgressUpdate{Stage: "EXTRACTING"})
+	s.updateImportProgress(ctx, updater, asyncjob.ProgressUpdate{Stage: "EXTRACTING"}, job.ID)
 
 	zipPath := meta.ZipPath
 	extractedDir := filepath.Join(jobDir, "extracted")
@@ -136,15 +141,18 @@ func (s *Service) ExecuteFaceImportJob(ctx context.Context, job *asyncjob.Job, u
 	}
 
 	total := len(entries)
-	_ = updater.Update(ctx, asyncjob.ProgressUpdate{
+	s.updateImportProgress(ctx, updater, asyncjob.ProgressUpdate{
 		Stage: "PROCESSING",
 		Total: total,
-	})
+	}, job.ID)
 
 	var succeeded int
 	var failed int
 	failedItems := []FaceImportFailedItem{}
 	newGalleryItems := []GalleryItem{}
+
+	timer := time.NewTimer(qosYieldDuration)
+	defer timer.Stop()
 
 	// 4. Sequential AI vetting with QoS yield
 	for i, entry := range entries {
@@ -153,34 +161,46 @@ func (s *Service) ExecuteFaceImportJob(ctx context.Context, job *asyncjob.Job, u
 		}
 
 		processed := i + 1
-		_ = updater.Update(ctx, asyncjob.ProgressUpdate{
+		s.updateImportProgress(ctx, updater, asyncjob.ProgressUpdate{
 			Stage:       "PROCESSING",
 			CurrentFile: entry.ImagePath,
 			Total:       total,
 			Processed:   processed,
 			Succeeded:   succeeded,
 			Failed:      failed,
-		})
+		}, job.ID)
 
-		itemErrCode, itemErrMsg := s.processOneFace(ctx, extractedDir, entry, &newGalleryItems)
-		if itemErrCode != "" {
+		procErr := s.processOneFace(
+			ctx,
+			extractedDir,
+			entry,
+			&newGalleryItems,
+		)
+		if procErr != nil {
 			failed++
 			failedItems = append(failedItems, FaceImportFailedItem{
 				Line:      entry.Line,
 				FilePath:  entry.ImagePath,
 				Name:      entry.Name,
 				PersonID:  entry.PersonID,
-				ErrorCode: itemErrCode,
-				Message:   itemErrMsg,
+				ErrorCode: procErr.code,
+				Message:   procErr.message,
 			})
 		} else {
 			succeeded++
 		}
 
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(qosYieldDuration)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(qosYieldDuration):
+		case <-timer.C:
 		}
 	}
 
@@ -194,13 +214,13 @@ func (s *Service) ExecuteFaceImportJob(ctx context.Context, job *asyncjob.Job, u
 	resBytes, _ := json.Marshal(res)
 	job.ResultJSON = string(resBytes)
 
-	_ = updater.Update(ctx, asyncjob.ProgressUpdate{
+	s.updateImportProgress(ctx, updater, asyncjob.ProgressUpdate{
 		Stage:     "COMPLETED",
 		Total:     total,
 		Processed: total,
 		Succeeded: succeeded,
 		Failed:    failed,
-	})
+	}, job.ID)
 
 	// 6. Batched gallery synchronization
 	if len(newGalleryItems) > 0 {
@@ -210,138 +230,233 @@ func (s *Service) ExecuteFaceImportJob(ctx context.Context, job *asyncjob.Job, u
 		s.logger.Info("broadcasted batch gallery sync", zap.String("jobId", job.ID), zap.Int("items", len(newGalleryItems)))
 	}
 
-	s.logger.Info("completed face import job", zap.String("jobId", job.ID), zap.Int("total", total), zap.Int("succeeded", succeeded), zap.Int("failed", failed))
+	s.logger.Info("completed face import job",
+		zap.String("jobId", job.ID),
+		zap.Int("total", total),
+		zap.Int("succeeded", succeeded),
+		zap.Int("failed", failed),
+	)
 	return nil
 }
 
+func (s *Service) updateImportProgress(
+	ctx context.Context,
+	updater asyncjob.ProgressUpdater,
+	update asyncjob.ProgressUpdate,
+	jobID string,
+) {
+	if err := updater.Update(ctx, update); err != nil {
+		s.logger.Warn("failed to update face import progress",
+			zap.String("jobId", jobID),
+			zap.String("stage", update.Stage),
+			zap.Error(err),
+		)
+	}
+}
+
 // processOneFace handles validation, decoding, AI gate, feature extraction and storage for one image.
-func (s *Service) processOneFace(ctx context.Context, baseDir string, entry FaceImportEntry, galleryItems *[]GalleryItem) (string, string) {
+func (s *Service) processOneFace(
+	ctx context.Context,
+	baseDir string,
+	entry faceImportEntry,
+	galleryItems *[]GalleryItem,
+) *faceProcessError {
 	name := strings.TrimSpace(entry.Name)
 	if name == "" {
-		return "NAME_REQUIRED", "姓名不能为空"
+		return &faceProcessError{code: "NAME_REQUIRED", message: "姓名不能为空"}
 	}
 	if len(name) > 64 {
-		return "NAME_TOO_LONG", "姓名长度超出 64 字符限制"
+		return &faceProcessError{code: "NAME_TOO_LONG", message: "姓名长度超出 64 字符限制"}
 	}
 
 	personIDKey := strings.TrimSpace(entry.PersonID)
 	if len(personIDKey) > 64 {
-		return "PERSON_ID_TOO_LONG", "人员编号超出 64 字符限制"
+		return &faceProcessError{code: "PERSON_ID_TOO_LONG", message: "人员编号超出 64 字符限制"}
 	}
 
-	relClean := filepath.Clean(entry.ImagePath)
+	imgBytes, loadErr := loadAndValidateFaceImage(baseDir, entry.ImagePath)
+	if loadErr != nil {
+		return loadErr
+	}
+
+	featBytes, extErr := s.extractFaceFeatures(ctx, imgBytes)
+	if extErr != nil {
+		return extErr
+	}
+
+	targetPerson, personErr := s.resolveOrCreateTargetPerson(ctx, name, personIDKey)
+	if personErr != nil {
+		return personErr
+	}
+
+	ext := strings.ToLower(filepath.Ext(entry.ImagePath))
+	face, enrollErr := s.enrollFaceRecord(
+		ctx,
+		targetPerson,
+		imgBytes,
+		featBytes,
+		ext,
+		entry.IsPrimary,
+	)
+	if enrollErr != nil {
+		return enrollErr
+	}
+
+	*galleryItems = append(*galleryItems, newGalleryItem(*face, personIDKey, targetPerson.Name))
+	return nil
+}
+
+func loadAndValidateFaceImage(baseDir, imgRelPath string) ([]byte, *faceProcessError) {
+	relClean := filepath.Clean(imgRelPath)
 	if strings.HasPrefix(relClean, "..") || filepath.IsAbs(relClean) {
-		return "INVALID_IMAGE_PATH", "图片路径非法"
+		return nil, &faceProcessError{code: "INVALID_IMAGE_PATH", message: "图片路径非法"}
 	}
 
 	absPath := filepath.Join(baseDir, relClean)
 	imgFile, err := os.Open(absPath)
 	if err != nil {
-		return "IMAGE_NOT_FOUND", "未找到图片文件"
+		return nil, &faceProcessError{code: "IMAGE_NOT_FOUND", message: "未找到图片文件"}
 	}
 	defer imgFile.Close()
 
 	cfg, _, err := image.DecodeConfig(imgFile)
 	if err != nil {
-		return "CORRUPT_OR_OVERSIZED_IMAGE", "图片损坏或格式不支持"
+		return nil, &faceProcessError{code: "CORRUPT_OR_OVERSIZED_IMAGE", message: "图片损坏或格式不支持"}
 	}
 	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > maxImageDimension || cfg.Height > maxImageDimension {
-		return "CORRUPT_OR_OVERSIZED_IMAGE", fmt.Sprintf("图片尺寸 (%dx%d) 超出 %d 像素限制", cfg.Width, cfg.Height, maxImageDimension)
+		return nil, &faceProcessError{
+			code: "CORRUPT_OR_OVERSIZED_IMAGE",
+			message: fmt.Sprintf(
+				"图片尺寸 (%dx%d) 超出 %d 像素限制",
+				cfg.Width,
+				cfg.Height,
+				maxImageDimension,
+			),
+		}
 	}
 
 	if _, err := imgFile.Seek(0, io.SeekStart); err != nil {
-		return "FILE_READ_FAILED", "读取图片文件失败"
+		return nil, &faceProcessError{code: "FILE_READ_FAILED", message: "读取图片文件失败"}
 	}
 
 	imgBytes, err := io.ReadAll(io.LimitReader(imgFile, maxFaceImageBytes+1))
 	if err != nil {
-		return "FILE_READ_FAILED", "读取图片文件失败"
+		return nil, &faceProcessError{code: "FILE_READ_FAILED", message: "读取图片文件失败"}
 	}
 	if len(imgBytes) > maxFaceImageBytes {
-		return "FILE_TOO_LARGE", "图片文件超出 10MB 大小限制"
+		return nil, &faceProcessError{code: "FILE_TOO_LARGE", message: "图片文件超出 10MB 大小限制"}
 	}
+	return imgBytes, nil
+}
 
+func (s *Service) extractFaceFeatures(ctx context.Context, imgBytes []byte) ([]byte, *faceProcessError) {
 	if s.extractor == nil {
-		return "FEATURE_EXTRACTOR_UNAVAILABLE", "人脸算法引擎未就绪"
+		return nil, &faceProcessError{code: "FEATURE_EXTRACTOR_UNAVAILABLE", message: "人脸算法引擎未就绪"}
 	}
 	features, err := s.extractor.ExtractFaceFeature(ctx, imgBytes)
 	if err != nil {
 		if errors.Is(err, ErrNoFaceDetected) {
-			return "NO_FACE_DETECTED", "上传的照片中未检测到清晰人脸"
+			return nil, &faceProcessError{code: "NO_FACE_DETECTED", message: "上传的照片中未检测到清晰人脸"}
 		}
 		if errors.Is(err, ErrUnsupportedImageFormat) {
-			return "CORRUPT_OR_OVERSIZED_IMAGE", "图片格式不支持或无法解码"
+			return nil, &faceProcessError{code: "CORRUPT_OR_OVERSIZED_IMAGE", message: "图片格式不支持或无法解码"}
 		}
 		errStr := err.Error()
 		if strings.Contains(errStr, "multiple faces") || strings.Contains(errStr, "MULTIPLE_FACES_DETECTED") {
-			return "MULTIPLE_FACES_DETECTED", "检测到多张人脸（合影照拒绝录入）"
+			return nil, &faceProcessError{
+				code:    "MULTIPLE_FACES_DETECTED",
+				message: "检测到多张人脸（合影照拒绝录入）",
+			}
 		}
-		return "FEATURE_EXTRACT_FAILED", "人脸特征提取失败: " + errStr
+		return nil, &faceProcessError{code: "FEATURE_EXTRACT_FAILED", message: "人脸特征提取失败: " + errStr}
 	}
 	if len(features) != faceFeatureDim {
-		return "FEATURE_DIM_MISMATCH", "特征维度与系统模型不匹配"
+		return nil, &faceProcessError{code: "FEATURE_DIM_MISMATCH", message: "特征维度与系统模型不匹配"}
 	}
-	featBytes := float32ToBytes(features)
+	return float32ToBytes(features), nil
+}
 
-	var targetPerson *Person
+func (s *Service) resolveOrCreateTargetPerson(
+	ctx context.Context,
+	name, personIDKey string,
+) (*Person, *faceProcessError) {
 	if personIDKey != "" {
 		existing, err := s.store.GetPersonByExternalID(ctx, personIDKey)
 		if err != nil && !errors.Is(err, ErrNotFound) {
-			return "DATABASE_ERROR", "查询已有人员失败"
+			return nil, &faceProcessError{code: "DATABASE_ERROR", message: "查询已有人员失败"}
 		}
 		if existing != nil {
 			if existing.Name != name {
-				return "PERSON_NAME_MISMATCH", fmt.Sprintf("该工号已绑定人员 %q，与导入姓名 %q 不一致", existing.Name, name)
+				return nil, &faceProcessError{
+					code: "PERSON_NAME_MISMATCH",
+					message: fmt.Sprintf(
+						"该工号已绑定人员 %q，与导入姓名 %q 不一致",
+						existing.Name,
+						name,
+					),
+				}
 			}
-			targetPerson = existing
+			return existing, nil
 		}
 	}
 
-	if targetPerson == nil {
-		newPersonID := idutil.New()
-		var pKey *string
-		if personIDKey != "" {
-			pKey = &personIDKey
-		}
-		newPerson := &Person{
-			ID:        newPersonID,
-			Name:      name,
-			PersonID:  pKey,
-			CreatedAt: time.Now().UTC(),
-			UpdatedAt: time.Now().UTC(),
-		}
-		if err := s.store.CreatePerson(ctx, newPerson); err != nil {
-			if errors.Is(err, ErrDuplicatePersonID) {
-				return "PERSON_ID_ALREADY_EXISTS", "人员编号已被占用"
-			}
-			return "PERSON_CREATE_FAILED", "创建人员档案失败"
-		}
-		targetPerson = newPerson
+	newPersonID := idutil.New()
+	var pKey *string
+	if personIDKey != "" {
+		pKey = &personIDKey
 	}
+	newPerson := &Person{
+		ID:        newPersonID,
+		Name:      name,
+		PersonID:  pKey,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := s.store.CreatePerson(ctx, newPerson); err != nil {
+		if errors.Is(err, ErrDuplicatePersonID) {
+			return nil, &faceProcessError{code: "PERSON_ID_ALREADY_EXISTS", message: "人员编号已被占用"}
+		}
+		return nil, &faceProcessError{code: "PERSON_CREATE_FAILED", message: "创建人员档案失败"}
+	}
+	return newPerson, nil
+}
 
+func (s *Service) enrollFaceRecord(
+	ctx context.Context,
+	targetPerson *Person,
+	imgBytes, featBytes []byte,
+	ext string,
+	isPrimary bool,
+) (*Face, *faceProcessError) {
 	faces, err := s.store.ListFacesByPerson(ctx, targetPerson.ID)
 	if err != nil {
-		return "DATABASE_ERROR", "查询人脸列表失败"
+		return nil, &faceProcessError{code: "DATABASE_ERROR", message: "查询人脸列表失败"}
 	}
 	if len(faces) >= maxFacesPerPerson {
-		return "FACE_LIMIT_EXCEEDED", fmt.Sprintf("人员 %q 底库照片已达 %d 张上限", targetPerson.Name, maxFacesPerPerson)
+		return nil, &faceProcessError{
+			code: "FACE_LIMIT_EXCEEDED",
+			message: fmt.Sprintf(
+				"人员 %q 底库照片已达 %d 张上限",
+				targetPerson.Name,
+				maxFacesPerPerson,
+			),
+		}
 	}
 
 	if err := os.MkdirAll(s.facesDir, 0755); err != nil {
-		return "STORAGE_ERROR", "创建人脸存储目录失败"
+		return nil, &faceProcessError{code: "STORAGE_ERROR", message: "创建人脸存储目录失败"}
 	}
-	ext := strings.ToLower(filepath.Ext(entry.ImagePath))
 	if ext == "" {
 		ext = ".jpg"
 	}
 	faceID := idutil.New()
 	fileName, err := faceFileName(targetPerson.ID, faceID, ext)
 	if err != nil {
-		return "STORAGE_ERROR", "生成人脸文件名失败"
+		return nil, &faceProcessError{code: "STORAGE_ERROR", message: "生成人脸文件名失败"}
 	}
 	savePath := filepath.Join(s.facesDir, fileName)
 	if err := os.WriteFile(savePath, imgBytes, 0644); err != nil {
-		return "STORAGE_ERROR", "写入人脸图片文件失败"
+		return nil, &faceProcessError{code: "STORAGE_ERROR", message: "写入人脸图片文件失败"}
 	}
 
 	face := &Face{
@@ -357,10 +472,10 @@ func (s *Service) processOneFace(ctx context.Context, baseDir string, entry Face
 			s.logger.Warn("failed to clean up face image after enrollment failure",
 				zap.String("path", savePath), zap.Error(rmErr))
 		}
-		return "FACE_ADD_FAILED", "保存人脸底库数据失败"
+		return nil, &faceProcessError{code: "FACE_ADD_FAILED", message: "保存人脸底库数据失败"}
 	}
 
-	shouldSetPrimary := entry.IsPrimary || targetPerson.PrimaryFaceID == nil || *targetPerson.PrimaryFaceID == ""
+	shouldSetPrimary := isPrimary || targetPerson.PrimaryFaceID == nil || *targetPerson.PrimaryFaceID == ""
 	if shouldSetPrimary {
 		if err := s.store.SetPrimaryFace(ctx, targetPerson.ID, face.ID); err != nil {
 			s.logger.Warn("failed to set primary face during face import",
@@ -371,9 +486,7 @@ func (s *Service) processOneFace(ctx context.Context, baseDir string, entry Face
 			targetPerson.PrimaryFaceID = &face.ID
 		}
 	}
-
-	*galleryItems = append(*galleryItems, newGalleryItem(*face, personIDKey, targetPerson.Name))
-	return "", ""
+	return face, nil
 }
 
 // safeExtractZip unpacks a zip archive into destDir with Zip Slip and Zip Bomb defenses.
@@ -393,10 +506,11 @@ func safeExtractZip(zipPath, destDir string) error {
 
 	for _, f := range r.File {
 		normName := filepath.ToSlash(f.Name)
-		if strings.HasPrefix(normName, "__MACOSX/") ||
+		isOSMetadata := strings.HasPrefix(normName, "__MACOSX/") ||
 			strings.HasSuffix(normName, ".DS_Store") ||
 			strings.HasSuffix(normName, "Thumbs.db") ||
-			strings.HasSuffix(normName, "desktop.ini") {
+			strings.HasSuffix(normName, "desktop.ini")
+		if isOSMetadata {
 			continue
 		}
 
@@ -453,7 +567,7 @@ func safeExtractZip(zipPath, destDir string) error {
 }
 
 // parseFaceImportManifest parses manifest.csv or falls back to scanning filenames.
-func parseFaceImportManifest(destDir string) ([]FaceImportEntry, error) {
+func parseFaceImportManifest(destDir string) ([]faceImportEntry, error) {
 	manifestPath := filepath.Join(destDir, "manifest.csv")
 	if _, err := os.Stat(manifestPath); err == nil {
 		return parseManifestCSV(manifestPath)
@@ -461,7 +575,7 @@ func parseFaceImportManifest(destDir string) ([]FaceImportEntry, error) {
 	return scanImagesFallback(destDir)
 }
 
-func parseManifestCSV(csvPath string) ([]FaceImportEntry, error) {
+func parseManifestCSV(csvPath string) ([]faceImportEntry, error) {
 	data, err := os.ReadFile(csvPath)
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
@@ -500,7 +614,7 @@ func parseManifestCSV(csvPath string) ([]FaceImportEntry, error) {
 		return nil, errors.New("manifest.csv 缺少必需列: name, imagePath")
 	}
 
-	entries := []FaceImportEntry{}
+	entries := []faceImportEntry{}
 	lineNum := 1
 	for {
 		record, err := r.Read()
@@ -532,7 +646,7 @@ func parseManifestCSV(csvPath string) ([]FaceImportEntry, error) {
 			isPrimary = val == "true" || val == "1" || val == "yes" || val == "是"
 		}
 
-		entries = append(entries, FaceImportEntry{
+		entries = append(entries, faceImportEntry{
 			Line:      lineNum,
 			Name:      name,
 			PersonID:  personID,
@@ -546,8 +660,8 @@ func parseManifestCSV(csvPath string) ([]FaceImportEntry, error) {
 
 var fileNameRegex = regexp.MustCompile(`(?i)^([^._]+)[._]([^.]+)\.(jpg|jpeg|png|webp)$`)
 
-func scanImagesFallback(destDir string) ([]FaceImportEntry, error) {
-	entries := []FaceImportEntry{}
+func scanImagesFallback(destDir string) ([]faceImportEntry, error) {
+	entries := []faceImportEntry{}
 	line := 1
 
 	err := filepath.Walk(destDir, func(path string, info os.FileInfo, err error) error {
@@ -588,7 +702,7 @@ func scanImagesFallback(destDir string) ([]FaceImportEntry, error) {
 			name = strings.TrimSuffix(baseName, ext)
 		}
 
-		entries = append(entries, FaceImportEntry{
+		entries = append(entries, faceImportEntry{
 			Line:      line,
 			Name:      name,
 			PersonID:  personID,
@@ -607,7 +721,10 @@ func isAlphaNum(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && r != '-' {
+		isDigit := r >= '0' && r <= '9'
+		isLower := r >= 'a' && r <= 'z'
+		isUpper := r >= 'A' && r <= 'Z'
+		if !isDigit && !isLower && !isUpper && r != '-' {
 			return false
 		}
 	}
@@ -697,24 +814,35 @@ func (s *Service) GetFaceImportFailedReportCSV(ctx context.Context, jobID string
 	w := csv.NewWriter(&buf)
 
 	buf.Write([]byte("\xef\xbb\xbf"))
-	_ = w.Write([]string{"line", "filePath", "name", "personId", "errorCode", "message"})
+	if err := w.Write([]string{"line", "filePath", "name", "personId", "errorCode", "message"}); err != nil {
+		return nil, fmt.Errorf("write csv header: %w", err)
+	}
 
 	if job.ResultJSON != "" && job.ResultJSON != "{}" {
 		var res FaceImportResult
 		if err := json.Unmarshal([]byte(job.ResultJSON), &res); err == nil {
 			for _, item := range res.FailedItems {
-				_ = w.Write([]string{
+				if err := w.Write([]string{
 					strconv.Itoa(item.Line),
 					item.FilePath,
 					item.Name,
 					item.PersonID,
 					item.ErrorCode,
 					item.Message,
-				})
+				}); err != nil {
+					s.logger.Warn("failed to write failed-report row",
+						zap.String("jobId", jobID),
+						zap.Error(err),
+					)
+					break
+				}
 			}
 		}
 	}
 
 	w.Flush()
+	if err := w.Error(); err != nil {
+		return nil, fmt.Errorf("flush csv writer: %w", err)
+	}
 	return buf.Bytes(), nil
 }

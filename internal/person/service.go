@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -132,7 +133,12 @@ func NewService(
 		logger = zap.NewNop()
 	}
 	tempDir := filepath.Join(filepath.Dir(facesDir), "tmp")
-	_ = os.MkdirAll(tempDir, 0755)
+	if err := os.MkdirAll(tempDir, 0755); err != nil {
+		logger.Warn("failed to create person service temp directory",
+			zap.String("dir", tempDir),
+			zap.Error(err),
+		)
+	}
 	cleanStaleFaceImportDirs(tempDir, logger)
 
 	s := &Service{
@@ -227,8 +233,17 @@ func (s *Service) GetPerson(ctx context.Context, id string) (*Person, error) {
 }
 
 // ListPersons returns one page of person profiles plus the total row count.
-func (s *Service) ListPersons(ctx context.Context, limit, offset int, search string) ([]Person, int64, error) {
-	list, total, err := s.store.ListPersons(ctx, limit, offset, search)
+func (s *Service) ListPersons(
+	ctx context.Context,
+	limit, offset int,
+	search string,
+) ([]Person, int64, error) {
+	list, total, err := s.store.ListPersons(
+		ctx,
+		limit,
+		offset,
+		search,
+	)
 	if err != nil {
 		return nil, 0, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to list persons", err)
 	}
@@ -648,7 +663,12 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 	// placeholder path: a zeroed vector is indistinguishable from a genuine
 	// enrollment in storage and would silently never match.
 	if s.extractor == nil {
-		return nil, apperr.New(apperr.KindInternal, "FEATURE_EXTRACTOR_UNAVAILABLE", "Face feature extraction is not configured", nil)
+		return nil, apperr.New(
+			apperr.KindInternal,
+			"FEATURE_EXTRACTOR_UNAVAILABLE",
+			"Face feature extraction is not configured",
+			nil,
+		)
 	}
 	features, err := s.extractor.ExtractFaceFeature(ctx, fullBytes)
 	if err != nil {
@@ -768,7 +788,12 @@ func isFinite(f float32) bool {
 // face template, filters by threshold, and returns the top-K matches sorted descending by similarity.
 //
 // The query image resides strictly in ephemeral memory during request execution and is never persisted.
-func (s *Service) SearchByImage(ctx context.Context, imgBytes []byte, threshold float32, topK int) (*ImageSearchResponse, error) {
+func (s *Service) SearchByImage(
+	ctx context.Context,
+	imgBytes []byte,
+	threshold float32,
+	topK int,
+) (*ImageSearchResponse, error) {
 	if len(imgBytes) == 0 {
 		return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "Image is empty", nil)
 	}
@@ -816,50 +841,58 @@ func (s *Service) SearchByImage(ctx context.Context, imgBytes []byte, threshold 
 		}
 	}
 
-	items, err := s.store.ListSearchFaceItems(ctx)
-	if err != nil {
-		return nil, apperr.Internal("DATABASE_ERROR", "Failed to list face templates", err)
-	}
+	const searchFaceBatchSize = 500
 
 	bestPerPerson := make(map[string]ImageSearchMatchInfo)
-	for _, item := range items {
-		if len(item.FeatureVector) != faceFeatureDim*4 {
-			continue
-		}
-		gf := bytesToFloat32(item.FeatureVector)
-		if len(gf) != faceFeatureDim {
-			continue
-		}
-		valid := true
-		for _, v := range gf {
-			if !isFinite(v) {
-				valid = false
-				break
-			}
-		}
-		if !valid {
-			continue
+	for offset := 0; ; offset += searchFaceBatchSize {
+		items, err := s.store.ListSearchFaceItemsPaged(ctx, searchFaceBatchSize, offset)
+		if err != nil {
+			return nil, apperr.Internal("DATABASE_ERROR", "Failed to list face templates", err)
 		}
 
-		var sim float32
-		for i := 0; i < faceFeatureDim; i++ {
-			sim += features[i] * gf[i]
-		}
-		if sim > 1.0 {
-			sim = 1.0
-		} else if sim < -1.0 {
-			sim = -1.0
+		for _, item := range items {
+			if len(item.FeatureVector) != faceFeatureDim*4 {
+				continue
+			}
+			gf := bytesToFloat32(item.FeatureVector)
+			if len(gf) != faceFeatureDim {
+				continue
+			}
+			valid := true
+			for _, v := range gf {
+				if !isFinite(v) {
+					valid = false
+					break
+				}
+			}
+			if !valid {
+				continue
+			}
+
+			var sim float32
+			for i := 0; i < faceFeatureDim; i++ {
+				sim += features[i] * gf[i]
+			}
+			if sim > 1.0 {
+				sim = 1.0
+			} else if sim < -1.0 {
+				sim = -1.0
+			}
+
+			existing, ok := bestPerPerson[item.PersonRowID]
+			if !ok || sim > existing.Similarity || (sim == existing.Similarity && item.FaceID < existing.MatchedFaceID) {
+				bestPerPerson[item.PersonRowID] = ImageSearchMatchInfo{
+					PersonID:         item.PersonRowID,
+					PersonExternalID: item.PersonExternalID,
+					PersonName:       item.PersonName,
+					MatchedFaceID:    item.FaceID,
+					Similarity:       sim,
+				}
+			}
 		}
 
-		existing, ok := bestPerPerson[item.PersonRowID]
-		if !ok || sim > existing.Similarity || (sim == existing.Similarity && item.FaceID < existing.MatchedFaceID) {
-			bestPerPerson[item.PersonRowID] = ImageSearchMatchInfo{
-				PersonID:         item.PersonRowID,
-				PersonExternalID: item.PersonExternalID,
-				PersonName:       item.PersonName,
-				MatchedFaceID:    item.FaceID,
-				Similarity:       sim,
-			}
+		if len(items) < searchFaceBatchSize {
+			break
 		}
 	}
 
@@ -1136,7 +1169,10 @@ func (s *Service) CommitPersonImport(ctx context.Context, reader io.Reader) (*Pe
 	}, nil
 }
 
-func (s *Service) validatePersonImport(ctx context.Context, rows []personImportRow) ([]personImportEntry, []personImportRow, error) {
+func (s *Service) validatePersonImport(
+	ctx context.Context,
+	rows []personImportRow,
+) ([]personImportEntry, []personImportRow, error) {
 	candidates := make([]string, 0, len(rows))
 	seen := make(map[string]struct{}, len(rows))
 	for _, row := range rows {
@@ -1250,7 +1286,10 @@ func personImportHeaderIndexes(headers []string) (int, int, error) {
 	return nameIndex, personIDIndex, nil
 }
 
-func validatePersonImportRows(rows []personImportRow, existing map[string]struct{}) ([]personImportEntry, []personImportRow) {
+func validatePersonImportRows(
+	rows []personImportRow,
+	existing map[string]struct{},
+) ([]personImportEntry, []personImportRow) {
 	counts := make(map[string]int)
 	for _, row := range rows {
 		if row.personID != "" {
@@ -1261,7 +1300,7 @@ func validatePersonImportRows(rows []personImportRow, existing map[string]struct
 	entries := make([]personImportEntry, 0, len(rows))
 	validated := make([]personImportRow, 0, len(rows))
 	for _, row := range rows {
-		row.issues = append([]personImportIssue(nil), row.issues...)
+		row.issues = slices.Clone(row.issues)
 		switch {
 		case row.name == "":
 			row.issues = append(row.issues, personImportIssue{Field: "name", Code: "NAME_REQUIRED"})

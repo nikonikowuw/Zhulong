@@ -592,17 +592,32 @@ func (h *Handler) SearchByImage(c *gin.Context) {
 	defer file.Close()
 
 	if header.Size > maxFaceImageBytes {
-		httputil.WriteError(c, httputil.NewError(http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "File size exceeds the 10MB limit", nil))
+		httputil.WriteError(c, httputil.NewError(
+			http.StatusRequestEntityTooLarge,
+			"FILE_TOO_LARGE",
+			"File size exceeds the 10MB limit",
+			nil,
+		))
 		return
 	}
 
 	imgBytes, err := io.ReadAll(io.LimitReader(file, maxFaceImageBytes+1))
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, "UNSUPPORTED_IMAGE_FORMAT", "Failed to read image content", err))
+		httputil.WriteError(c, httputil.NewError(
+			http.StatusBadRequest,
+			"UNSUPPORTED_IMAGE_FORMAT",
+			"Failed to read image content",
+			err,
+		))
 		return
 	}
 	if len(imgBytes) > maxFaceImageBytes {
-		httputil.WriteError(c, httputil.NewError(http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "File size exceeds the 10MB limit", nil))
+		httputil.WriteError(c, httputil.NewError(
+			http.StatusRequestEntityTooLarge,
+			"FILE_TOO_LARGE",
+			"File size exceeds the 10MB limit",
+			nil,
+		))
 		return
 	}
 

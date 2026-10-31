@@ -880,7 +880,9 @@ func TestHandlerListPersonsSearch(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &respBob); err != nil {
 		t.Fatalf("unmarshal search Bob response: %v", err)
 	}
-	if respBob.Data.Total != 1 || len(respBob.Data.Items) != 1 || respBob.Data.Items[0].PersonID == nil || *respBob.Data.Items[0].PersonID != "EMP_SEARCH_2" {
+	bobItems := respBob.Data.Items
+	if respBob.Data.Total != 1 || len(bobItems) != 1 ||
+		bobItems[0].PersonID == nil || *bobItems[0].PersonID != "EMP_SEARCH_2" {
 		t.Fatalf("expected 1 result for EMP_SEARCH_2, got total=%d items=%+v", respBob.Data.Total, respBob.Data.Items)
 	}
 

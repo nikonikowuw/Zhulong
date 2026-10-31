@@ -268,7 +268,8 @@ func TestDeleteFace_ScopedToOwningPerson(t *testing.T) {
 			t.Fatalf("CreatePerson %s failed: %v", p.id, err)
 		}
 	}
-	if err := store.AddFace(ctx, &person.Face{ID: "f2", PersonRowID: "p2", FeatureVector: make([]byte, 2048)}); err != nil {
+	face2 := &person.Face{ID: "f2", PersonRowID: "p2", FeatureVector: make([]byte, 2048)}
+	if err := store.AddFace(ctx, face2); err != nil {
 		t.Fatalf("AddFace failed: %v", err)
 	}
 
@@ -339,7 +340,8 @@ func TestUpdatePerson_DoesNotRewritePersonID(t *testing.T) {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
 
-	if err := store.UpdatePerson(ctx, &person.Person{ID: "p1", PersonID: strPtr("EMP_HIJACK"), Name: "张三"}); err != nil {
+	hijack := &person.Person{ID: "p1", PersonID: strPtr("EMP_HIJACK"), Name: "张三"}
+	if err := store.UpdatePerson(ctx, hijack); err != nil {
 		t.Fatalf("UpdatePerson failed: %v", err)
 	}
 
@@ -362,7 +364,8 @@ func TestGetPersonMeta_SkipsFacePreload(t *testing.T) {
 	if err := store.CreatePerson(ctx, &person.Person{ID: "p1", PersonID: strPtr("EMP_1"), Name: "张三"}); err != nil {
 		t.Fatalf("CreatePerson failed: %v", err)
 	}
-	if err := store.AddFace(ctx, &person.Face{ID: "f1", PersonRowID: "p1", FeatureVector: make([]byte, 2048)}); err != nil {
+	face1 := &person.Face{ID: "f1", PersonRowID: "p1", FeatureVector: make([]byte, 2048)}
+	if err := store.AddFace(ctx, face1); err != nil {
 		t.Fatalf("AddFace failed: %v", err)
 	}
 
@@ -533,7 +536,8 @@ func TestStore_ListSearchFaceItems(t *testing.T) {
 	if !ok {
 		t.Fatalf("face_1a not found in results")
 	}
-	if it1.PersonRowID != "row_1" || it1.PersonName != "Alice" || it1.PersonExternalID == nil || *it1.PersonExternalID != "EXT_1" {
+	if it1.PersonRowID != "row_1" || it1.PersonName != "Alice" ||
+		it1.PersonExternalID == nil || *it1.PersonExternalID != "EXT_1" {
 		t.Errorf("unexpected it1 data: %+v", it1)
 	}
 	if len(it1.FeatureVector) != 2048 || it1.FeatureVector[0] != 0xAA {

@@ -29,9 +29,10 @@ var (
 // 边界值直接引用 httputil 的常量而不是本地再抄一份：两处各写一份 20/100，
 // 一边改了另一边不动就会静默漂移。
 func clampPagination(limit, offset int) (int, int) {
-	if limit <= 0 {
+	switch {
+	case limit <= 0:
 		limit = httputil.DefaultPageSize
-	} else if limit > httputil.MaxPageSize {
+	case limit > httputil.MaxPageSize:
 		limit = httputil.MaxPageSize
 	}
 	if offset < 0 {
@@ -135,7 +136,10 @@ func (s *Store) ListPersonIDs(ctx context.Context, candidates []string) (map[str
 }
 
 // CreatePersonImport inserts valid rows in one transaction and returns uniqueness conflicts per row.
-func (s *Store) CreatePersonImport(ctx context.Context, entries []personImportEntry) ([]personImportCreateResult, error) {
+func (s *Store) CreatePersonImport(
+	ctx context.Context,
+	entries []personImportEntry,
+) ([]personImportCreateResult, error) {
 	results := make([]personImportCreateResult, 0, len(entries))
 	if len(entries) == 0 {
 		return results, nil
@@ -249,7 +253,10 @@ func (s *Store) ListPersons(ctx context.Context, limit, offset int, search strin
 	list, err := g.Preload("Faces", func(pb gorm.PreloadBuilder) error {
 		pb.Select("id", "person_id", "image_path", "created_at")
 		return nil
-	}).Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(ctx)
+	}).Order("created_at ASC, id ASC").
+		Limit(limit).
+		Offset(offset).
+		Find(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -291,7 +298,12 @@ func (s *Store) ListPersonsForGallery(ctx context.Context, limit, offset int) ([
 	if offset < 0 {
 		offset = 0
 	}
-	list, err := gorm.G[Person](db).Preload("Faces", nil).Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(ctx)
+	list, err := gorm.G[Person](db).
+		Preload("Faces", nil).
+		Order("created_at ASC, id ASC").
+		Limit(limit).
+		Offset(offset).
+		Find(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +338,10 @@ func (s *Store) UpdatePerson(ctx context.Context, p *Person) error {
 		"updated_at": now,
 	}
 	if p.PersonID != nil && *p.PersonID != "" {
-		updates["person_id"] = gorm.Expr("CASE WHEN person_id IS NULL OR person_id = '' THEN ? ELSE person_id END", *p.PersonID)
+		updates["person_id"] = gorm.Expr(
+			"CASE WHEN person_id IS NULL OR person_id = '' THEN ? ELSE person_id END",
+			*p.PersonID,
+		)
 	}
 	res := db.Model(&Person{}).Where("id = ?", p.ID).Updates(updates)
 	if res.Error != nil {
@@ -457,7 +472,12 @@ func (s *Store) ListFacesByPersonPaged(ctx context.Context, personID string, lim
 
 	limit, offset = clampPagination(limit, offset)
 
-	list, err := gorm.G[Face](db).Where("person_id = ?", personID).Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(ctx)
+	list, err := gorm.G[Face](db).
+		Where("person_id = ?", personID).
+		Order("created_at ASC, id ASC").
+		Limit(limit).
+		Offset(offset).
+		Find(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -478,6 +498,12 @@ type SearchFaceItem struct {
 	FeatureVector    []byte  `gorm:"column:feature_vector"`
 }
 
+const searchFaceColumns = "f.id AS face_id, " +
+	"f.person_id AS person_row_id, " +
+	"p.person_id AS person_external_id, " +
+	"p.name AS person_name, " +
+	"f.feature_vector AS feature_vector"
+
 // ListSearchFaceItems retrieves all enrolled face templates along with their owner's
 // identifiers and names for in-memory 1:N similarity search.
 func (s *Store) ListSearchFaceItems(ctx context.Context) ([]SearchFaceItem, error) {
@@ -487,11 +513,32 @@ func (s *Store) ListSearchFaceItems(ctx context.Context) ([]SearchFaceItem, erro
 	}
 	var items []SearchFaceItem
 	err = db.Table("person_faces f").
-		Select("f.id AS face_id, f.person_id AS person_row_id, p.person_id AS person_external_id, p.name AS person_name, f.feature_vector AS feature_vector").
+		Select(searchFaceColumns).
 		Joins("INNER JOIN persons p ON f.person_id = p.id").
 		Find(&items).Error
 	if err != nil {
 		return nil, fmt.Errorf("list search face items: %w", err)
+	}
+	return items, nil
+}
+
+// ListSearchFaceItemsPaged retrieves a paged chunk of enrolled face templates
+// to bound memory overhead during 1:N similarity search.
+func (s *Store) ListSearchFaceItemsPaged(ctx context.Context, limit, offset int) ([]SearchFaceItem, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var items []SearchFaceItem
+	err = db.Table("person_faces f").
+		Select(searchFaceColumns).
+		Joins("INNER JOIN persons p ON f.person_id = p.id").
+		Order("f.created_at ASC, f.id ASC").
+		Limit(limit).
+		Offset(offset).
+		Find(&items).Error
+	if err != nil {
+		return nil, fmt.Errorf("list search face items paged: %w", err)
 	}
 	return items, nil
 }

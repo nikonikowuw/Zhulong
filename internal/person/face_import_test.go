@@ -111,7 +111,9 @@ func TestSafeExtractZip(t *testing.T) {
 func TestParseManifestCSV(t *testing.T) {
 	t.Run("parses valid manifest with UTF-8 BOM", func(t *testing.T) {
 		tmpDir := t.TempDir()
-		manifestContent := "\xef\xbb\xbfname,person_id,image_path,is_primary\nAlice,EMP001,images/a.png,true\nBob,EMP002,images/b.png,0\n"
+		manifestContent := "\xef\xbb\xbfname,person_id,image_path,is_primary\n" +
+			"Alice,EMP001,images/a.png,true\n" +
+			"Bob,EMP002,images/b.png,0\n"
 		csvPath := filepath.Join(tmpDir, "manifest.csv")
 		_ = os.WriteFile(csvPath, []byte(manifestContent), 0644)
 
@@ -122,10 +124,12 @@ func TestParseManifestCSV(t *testing.T) {
 		if len(entries) != 2 {
 			t.Fatalf("expected 2 entries, got %d", len(entries))
 		}
-		if entries[0].Name != "Alice" || entries[0].PersonID != "EMP001" || entries[0].ImagePath != "images/a.png" || !entries[0].IsPrimary {
+		e0 := entries[0]
+		if e0.Name != "Alice" || e0.PersonID != "EMP001" || e0.ImagePath != "images/a.png" || !e0.IsPrimary {
 			t.Fatalf("unexpected entry 0: %+v", entries[0])
 		}
-		if entries[1].Name != "Bob" || entries[1].PersonID != "EMP002" || entries[1].ImagePath != "images/b.png" || entries[1].IsPrimary {
+		e1 := entries[1]
+		if e1.Name != "Bob" || e1.PersonID != "EMP002" || e1.ImagePath != "images/b.png" || e1.IsPrimary {
 			t.Fatalf("unexpected entry 1: %+v", entries[1])
 		}
 	})
@@ -221,8 +225,12 @@ func TestFaceImportJob_EndToEnd(t *testing.T) {
 	validPNG := createTestPNG(100, 100)
 	corruptBytes := []byte("not an image")
 
+	manifestData := []byte("name,personId,imagePath\n" +
+		"Alice,EMP001,images/alice.png\n" +
+		"Bob,EMP002,images/corrupt.png\n")
+
 	zipBytes, err := createZipArchive(map[string][]byte{
-		"manifest.csv":       []byte("name,personId,imagePath\nAlice,EMP001,images/alice.png\nBob,EMP002,images/corrupt.png\n"),
+		"manifest.csv":       manifestData,
 		"images/alice.png":   validPNG,
 		"images/corrupt.png": corruptBytes,
 	})
@@ -305,7 +313,12 @@ func TestFaceImportJob_EndToEnd(t *testing.T) {
 		t.Fatalf("expected job status COMPLETED, got %s (error: %s)", dbJob.Status, dbJob.ErrorMessage)
 	}
 	if dbJob.Total != 2 || dbJob.Succeeded != 1 || dbJob.Failed != 1 {
-		t.Fatalf("expected total 2, succeeded 1, failed 1; got total %d, succ %d, fail %d", dbJob.Total, dbJob.Succeeded, dbJob.Failed)
+		t.Fatalf(
+			"expected total 2, succeeded 1, failed 1; got total %d, succ %d, fail %d",
+			dbJob.Total,
+			dbJob.Succeeded,
+			dbJob.Failed,
+		)
 	}
 
 	// Download diagnostic report
