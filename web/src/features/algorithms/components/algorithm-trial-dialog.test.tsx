@@ -26,6 +26,7 @@ const mockAlgorithm: Algorithm = {
   description: '检测施工作业人员佩戴安全帽情况',
   manifestJson: '{}',
   configSchemaJson: '{}',
+  supportsMotionGate: true,
   status: 'DISABLED',
   previousVersion: '',
   createdAt: '2026-03-31T00:00:00Z',

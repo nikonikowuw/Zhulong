@@ -105,6 +105,7 @@ function buildAlgorithm(overrides: Partial<Algorithm> = {}): Algorithm {
     description: '',
     manifestJson: '{}',
     configSchemaJson: faceSchemaJson,
+    supportsMotionGate: true,
     status: 'ACTIVE',
     previousVersion: '',
     createdAt: '',

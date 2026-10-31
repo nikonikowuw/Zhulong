@@ -85,6 +85,7 @@ describe('AlgorithmsTable', () => {
     description: '高精度人脸检测与比对',
     manifestJson: '{}',
     configSchemaJson: '{}',
+    supportsMotionGate: true,
     status: 'DISABLED',
     previousVersion: '',
     createdAt: '2026-10-15T00:00:00Z',

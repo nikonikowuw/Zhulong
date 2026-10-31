@@ -60,6 +60,7 @@ const mockAlgorithms: Algorithm[] = [
     description: '',
     manifestJson: '{}',
     configSchemaJson: '{}',
+    supportsMotionGate: true,
     status: 'ACTIVE',
     previousVersion: '',
     createdAt: '',

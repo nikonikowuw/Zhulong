@@ -42,6 +42,7 @@ const crashLoopAlgorithm: Algorithm = {
   description: '',
   manifestJson: '{}',
   configSchemaJson: '{}',
+  supportsMotionGate: true,
   status: 'CRASH_LOOP',
   previousVersion: '',
   createdAt: '2026-10-15T00:00:00Z',
