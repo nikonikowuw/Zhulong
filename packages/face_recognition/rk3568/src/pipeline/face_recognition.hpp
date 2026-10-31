@@ -27,7 +27,13 @@ namespace zhulong::face {
 
 class FaceRecognitionPlugin {
 public:
-    FaceRecognitionPlugin() = default;
+    FaceRecognitionPlugin();
+
+    /** @brief 动态调整检测器输入分辨率（默认 CCTV 视频流场景为 640×384） */
+    void set_detection_input_size(int width, int height) noexcept {
+        detector_.set_input_size(width, height);
+        person_detector_.set_input_size(width, height);
+    }
 
     /**
      * @brief 加载模型权重并应用插件配置
@@ -131,7 +137,7 @@ private:
     zhulong::Model rec_model_;
     zhulong::Session det_session_;
     zhulong::Session rec_session_;
-    FaceDetector detector_;
+    FaceDetector detector_{kDefaultModelWidth, kDefaultModelHeight};
     FaceFeatureExtractor extractor_;
     std::vector<uint8_t> rgb_scratch_;
 };

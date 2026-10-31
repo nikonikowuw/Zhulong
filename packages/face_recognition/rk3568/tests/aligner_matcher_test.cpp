@@ -23,6 +23,7 @@
 
 #include "alignment/aligner.hpp"
 #include "common/face_association.hpp"
+#include "detection/detector.hpp"
 #include "matching/matcher.hpp"
 
 // HWC→NCHW 归一化只存在于「模型不自带归一化」的档位（ONNX）；RKNN 档位由模型自身
@@ -261,6 +262,26 @@ void test_crop_and_align_handles_yuv_gray() {
     std::vector<uint8_t> nv12_out(static_cast<size_t>(kSize) * kSize * 3, 0);
     check(zhulong::face::Aligner::crop_and_align_direct(nv12_image, identity, nv12_out.data(), kSize, kSize),
           "NV12 裁剪应成功");
+
+    // NV12 奇数宽（w=5 时 uv_w=3，UV 自然行宽 6 字节）且 strides[1]=0 必须正确以 2*uv_w 回退
+    constexpr int kOddW = 5;
+    constexpr int kOddH = 5;
+    constexpr int kOddUvW = (kOddW + 1) / 2;
+    constexpr int kOddUvH = (kOddH + 1) / 2;
+    std::vector<uint8_t> odd_y(kOddW * kOddH, 128);
+    std::vector<uint8_t> odd_uv(kOddUvW * kOddUvH * 2, 128);
+    zhulong_frame_view odd_nv12_view{};
+    odd_nv12_view.width = kOddW;
+    odd_nv12_view.height = kOddH;
+    odd_nv12_view.format = ZHULONG_PIXEL_FORMAT_NV12;
+    odd_nv12_view.planes[0] = odd_y.data();
+    odd_nv12_view.planes[1] = odd_uv.data();
+    odd_nv12_view.strides[0] = 0;
+    odd_nv12_view.strides[1] = 0;
+    const zhulong::Image odd_nv12_image(odd_nv12_view);
+    std::vector<uint8_t> odd_nv12_out(static_cast<size_t>(kOddW) * kOddH * 3, 0);
+    check(zhulong::face::Aligner::crop_and_align_direct(odd_nv12_image, identity, odd_nv12_out.data(), kOddW, kOddH),
+          "奇数宽且 zero stride 的 NV12 裁剪应成功");
 }
 
 void test_crop_and_align_rejects_bad_input() {
@@ -306,6 +327,33 @@ void test_crop_and_align_rejects_bad_input() {
     const zhulong::Image no_plane_image(no_plane);
     check(!zhulong::face::Aligner::crop_and_align_direct(no_plane_image, identity, out.data(), kSize, kSize),
           "空像素平面必须失败");
+
+    // YUV420P 缺少 U/V 平面必须显式失败
+    zhulong_frame_view yuv_missing_plane{};
+    yuv_missing_plane.width = kSize;
+    yuv_missing_plane.height = kSize;
+    yuv_missing_plane.format = ZHULONG_PIXEL_FORMAT_YUV420P;
+    yuv_missing_plane.planes[0] = pixels.data();
+    yuv_missing_plane.planes[1] = nullptr;
+    yuv_missing_plane.planes[2] = nullptr;
+    yuv_missing_plane.strides[0] = kSize;
+    const zhulong::Image yuv_missing_image(yuv_missing_plane);
+    check(!zhulong::face::Aligner::crop_and_align_direct(yuv_missing_image, identity, out.data(), kSize, kSize),
+          "YUV420P 缺少 U/V 平面必须显式失败");
+
+    // NV12 缺少 UV 平面必须显式失败
+    zhulong_frame_view nv12_missing_plane = yuv_missing_plane;
+    nv12_missing_plane.format = ZHULONG_PIXEL_FORMAT_NV12;
+    const zhulong::Image nv12_missing_image(nv12_missing_plane);
+    check(!zhulong::face::Aligner::crop_and_align_direct(nv12_missing_image, identity, out.data(), kSize, kSize),
+          "NV12 缺少 UV 平面必须显式失败");
+
+    // 正 stride 小于有效宽度的非法情况必须失败
+    zhulong_frame_view bad_stride = view;
+    bad_stride.strides[0] = kSize * 3 - 1;
+    const zhulong::Image bad_stride_image(bad_stride);
+    check(!zhulong::face::Aligner::crop_and_align_direct(bad_stride_image, identity, out.data(), kSize, kSize),
+          "Packed 格式 stride 小于 width*3 必须失败");
 }
 
 // ============================================================================
@@ -462,6 +510,40 @@ void test_hwc_to_nchw_normalized() {
 }
 #endif
 
+void test_detector_dimensions() {
+    using namespace zhulong::face;
+
+    static_assert(kCctvStreamModelWidth % 128 == 0, "CCTV 宽度必须能被人脸/人体最大步长 128 整除");
+    static_assert(kCctvStreamModelHeight % 128 == 0, "CCTV 高度必须能被人体最大步长 128 整除");
+    static_assert(kCctvStreamModelHeight % 32 == 0, "CCTV 高度必须能被人脸最大步长 32 整除");
+    static_assert(kDefaultModelWidth == 640 && kDefaultModelHeight == 640, "默认分辨率必须保持 640x640");
+    static_assert(kCctvStreamModelWidth == 640 && kCctvStreamModelHeight == 384, "CCTV 优化分辨率为 640x384");
+
+    FaceDetector default_face_detector;
+    check(default_face_detector.model_width() == 640, "FaceDetector 默认宽度必须为 640");
+    check(default_face_detector.model_height() == 640, "FaceDetector 默认高度必须为 640");
+
+    FaceDetector cctv_face_detector(kCctvStreamModelWidth, kCctvStreamModelHeight);
+    check(cctv_face_detector.model_width() == 640, "FaceDetector CCTV 宽度应为 640");
+    check(cctv_face_detector.model_height() == 384, "FaceDetector CCTV 高度应为 384");
+
+    cctv_face_detector.set_input_size(320, 192);
+    check(cctv_face_detector.model_width() == 320, "FaceDetector set_input_size 宽度应生效");
+    check(cctv_face_detector.model_height() == 192, "FaceDetector set_input_size 高度应生效");
+
+    PersonDetector default_person_detector;
+    check(default_person_detector.model_width() == 640, "PersonDetector 默认宽度必须为 640");
+    check(default_person_detector.model_height() == 640, "PersonDetector 默认高度必须为 640");
+
+    PersonDetector cctv_person_detector(kCctvStreamModelWidth, kCctvStreamModelHeight);
+    check(cctv_person_detector.model_width() == 640, "PersonDetector CCTV 宽度应为 640");
+    check(cctv_person_detector.model_height() == 384, "PersonDetector CCTV 高度应为 384");
+
+    cctv_person_detector.set_input_size(320, 192);
+    check(cctv_person_detector.model_width() == 320, "PersonDetector set_input_size 宽度应生效");
+    check(cctv_person_detector.model_height() == 192, "PersonDetector set_input_size 高度应生效");
+}
+
 } // namespace
 
 int main() {
@@ -473,6 +555,7 @@ int main() {
     test_matcher_returns_expected_top_k();
     test_matcher_threshold_boundary_and_degenerate_input();
     test_face_association();
+    test_detector_dimensions();
 #if defined(ZHULONG_FACE_HAS_PREPROCESS_HELPER)
     test_hwc_to_nchw_normalized();
 #endif

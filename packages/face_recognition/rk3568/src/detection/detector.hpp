@@ -19,6 +19,12 @@ namespace zhulong::face {
 inline constexpr float kDefaultDetectionScoreThreshold = 0.50f;
 /** @brief SCRFD 系列默认 NMS IoU 阈值 */
 inline constexpr float kDefaultNmsIouThreshold = 0.40f;
+/** @brief 默认通用检测输入分辨率（1:1 方形，用于底库静态单图特征提取等） */
+inline constexpr int kDefaultModelWidth = 640;
+inline constexpr int kDefaultModelHeight = 640;
+/** @brief 监控视频流优化输入分辨率（16:9 CCTV 场景，相比 640×640 减少 ~40% 计算量并保证 FPN 步长整除） */
+inline constexpr int kCctvStreamModelWidth = 640;
+inline constexpr int kCctvStreamModelHeight = 384;
 /** @brief 关键点个数（双眼、鼻尖、双嘴角），也是 ArcFace 对齐的输入点数 */
 inline constexpr size_t kLandmarkCount = 5;
 
@@ -60,6 +66,15 @@ inline std::array<Point2f, kLandmarkCount> pixel_landmarks(
 class FaceDetector {
 public:
     FaceDetector() = default;
+    FaceDetector(int model_width, int model_height) noexcept
+        : model_width_(model_width), model_height_(model_height) {}
+
+    int model_width() const noexcept { return model_width_; }
+    int model_height() const noexcept { return model_height_; }
+    void set_input_size(int w, int h) noexcept {
+        model_width_ = w;
+        model_height_ = h;
+    }
 
     /**
      * @brief 基于推理会话执行真实 NPU/ONNX 人脸检测 (SCRFD det_500m)
@@ -76,6 +91,8 @@ public:
     void set_nms_threshold(float threshold) noexcept { nms_threshold_ = threshold; }
 
 private:
+    int model_width_{kDefaultModelWidth};
+    int model_height_{kDefaultModelHeight};
     float score_threshold_{kDefaultDetectionScoreThreshold};
     float nms_threshold_{kDefaultNmsIouThreshold};
 };
@@ -92,6 +109,15 @@ struct PersonBodyDetection {
 class PersonDetector {
 public:
     PersonDetector() = default;
+    PersonDetector(int model_width, int model_height) noexcept
+        : model_width_(model_width), model_height_(model_height) {}
+
+    int model_width() const noexcept { return model_width_; }
+    int model_height() const noexcept { return model_height_; }
+    void set_input_size(int w, int h) noexcept {
+        model_width_ = w;
+        model_height_ = h;
+    }
 
     /**
      * @brief 基于推理会话执行真实 NPU/ONNX 人体检测 (SCRFD Person 2.5G)
@@ -106,6 +132,8 @@ public:
     void set_nms_threshold(float threshold) noexcept { nms_threshold_ = threshold; }
 
 private:
+    int model_width_{kDefaultModelWidth};
+    int model_height_{kDefaultModelHeight};
     float score_threshold_{kDefaultDetectionScoreThreshold};
     float nms_threshold_{kDefaultNmsIouThreshold};
 };

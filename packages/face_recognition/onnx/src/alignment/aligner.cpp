@@ -84,7 +84,7 @@ inline void sample_pixel_rgb(
     }
 
     if (raw.format == ZHULONG_PIXEL_FORMAT_NV12 && raw.planes[0] && raw.planes[1]) {
-        const int uv_stride = raw.strides[1] > 0 ? raw.strides[1] : w;
+        const int uv_stride = raw.strides[1] > 0 ? raw.strides[1] : (uv_w * 2);
 
         const float y_val = zhulong::sample_plane_bilinear(raw.planes[0], w, h, raw.strides[0] > 0 ? raw.strides[0] : w, fx, fy);
         float u_val = 128.0f;
@@ -94,19 +94,21 @@ inline void sample_pixel_rgb(
         return;
     }
 
-    const int stride = raw.strides[0] > 0 ? raw.strides[0] : w * 3;
-    float c0 = 0.0f;
-    float c1 = 0.0f;
-    float c2 = 0.0f;
-    sample_packed_channels(raw.planes[0], w, h, stride, fx, fy, c0, c1, c2);
-    if (raw.format == ZHULONG_PIXEL_FORMAT_BGR24) {
-        out_r = static_cast<uint8_t>(std::clamp(c2, 0.0f, 255.0f));
-        out_g = static_cast<uint8_t>(std::clamp(c1, 0.0f, 255.0f));
-        out_b = static_cast<uint8_t>(std::clamp(c0, 0.0f, 255.0f));
-    } else {
-        out_r = static_cast<uint8_t>(std::clamp(c0, 0.0f, 255.0f));
-        out_g = static_cast<uint8_t>(std::clamp(c1, 0.0f, 255.0f));
-        out_b = static_cast<uint8_t>(std::clamp(c2, 0.0f, 255.0f));
+    if (raw.format == ZHULONG_PIXEL_FORMAT_BGR24 || raw.format == ZHULONG_PIXEL_FORMAT_RGB24) {
+        const int stride = raw.strides[0] > 0 ? raw.strides[0] : w * 3;
+        float c0 = 0.0f;
+        float c1 = 0.0f;
+        float c2 = 0.0f;
+        sample_packed_channels(raw.planes[0], w, h, stride, fx, fy, c0, c1, c2);
+        if (raw.format == ZHULONG_PIXEL_FORMAT_BGR24) {
+            out_r = static_cast<uint8_t>(std::clamp(c2, 0.0f, 255.0f));
+            out_g = static_cast<uint8_t>(std::clamp(c1, 0.0f, 255.0f));
+            out_b = static_cast<uint8_t>(std::clamp(c0, 0.0f, 255.0f));
+        } else {
+            out_r = static_cast<uint8_t>(std::clamp(c0, 0.0f, 255.0f));
+            out_g = static_cast<uint8_t>(std::clamp(c1, 0.0f, 255.0f));
+            out_b = static_cast<uint8_t>(std::clamp(c2, 0.0f, 255.0f));
+        }
     }
 }
 
@@ -120,18 +122,21 @@ bool Aligner::estimate_similarity_transform(
 
     // 1. 计算质心
     Point2f src_mean{0.0f, 0.0f};
-    Point2f dst_mean{0.0f, 0.0f};
     for (size_t i = 0; i < kPointCount; ++i) {
         src_mean.x += src_points[i].x;
         src_mean.y += src_points[i].y;
-        dst_mean.x += kArcfaceRefPoints[i].x;
-        dst_mean.y += kArcfaceRefPoints[i].y;
     }
     constexpr float kCountAsFloat = static_cast<float>(kPointCount);
     src_mean.x /= kCountAsFloat;
     src_mean.y /= kCountAsFloat;
-    dst_mean.x /= kCountAsFloat;
-    dst_mean.y /= kCountAsFloat;
+
+    // ArcFace 5 点金标模板中心是恒定的，编译期常量化避免每次调用在循环里重复计算
+    constexpr Point2f dst_mean{
+        (kArcfaceRefPoints[0].x + kArcfaceRefPoints[1].x + kArcfaceRefPoints[2].x +
+         kArcfaceRefPoints[3].x + kArcfaceRefPoints[4].x) / 5.0f,
+        (kArcfaceRefPoints[0].y + kArcfaceRefPoints[1].y + kArcfaceRefPoints[2].y +
+         kArcfaceRefPoints[3].y + kArcfaceRefPoints[4].y) / 5.0f
+    };
 
     // 2. 去中心化并计算源点方差与协方差 Σ[j][k] = Σ dst_j * src_k
     float src_var = 0.0f;
@@ -226,6 +231,31 @@ bool Aligner::crop_and_align_direct(
     // 特征提取看起来成功但结果无意义。
     if (!is_supported_format(raw.format)) {
         return false;
+    }
+
+    const int uv_w = (raw.width + 1) / 2;
+    if (raw.format == ZHULONG_PIXEL_FORMAT_YUV420P) {
+        if (raw.planes[1] == nullptr || raw.planes[2] == nullptr) {
+            return false;
+        }
+        if ((raw.strides[0] > 0 && raw.strides[0] < raw.width) ||
+            (raw.strides[1] > 0 && raw.strides[1] < uv_w) ||
+            (raw.strides[2] > 0 && raw.strides[2] < uv_w)) {
+            return false;
+        }
+    } else if (raw.format == ZHULONG_PIXEL_FORMAT_NV12) {
+        if (raw.planes[1] == nullptr) {
+            return false;
+        }
+        if ((raw.strides[0] > 0 && raw.strides[0] < raw.width) ||
+            (raw.strides[1] > 0 && raw.strides[1] < uv_w * 2)) {
+            return false;
+        }
+    } else {
+        // Packed RGB24 / BGR24: 正 stride 必须至少为 width * 3
+        if (raw.strides[0] > 0 && raw.strides[0] < raw.width * 3) {
+            return false;
+        }
     }
 
     // 求解 2x3 相似变换的逆矩阵 M⁻¹ = [im0 im1 itx; im3 im4 ity]

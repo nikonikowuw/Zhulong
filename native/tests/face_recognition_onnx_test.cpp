@@ -148,6 +148,13 @@ int main() {
                   << det.face_box[0] << ", " << det.face_box[1] << ", "
                   << det.face_box[2] << ", " << det.face_box[3] << "]" << std::endl;
     }
+
+    // 验证 16:9 CCTV 分辨率模式 (640x384)
+    zhulong::face::FaceDetector cctv_detector(zhulong::face::kCctvStreamModelWidth, zhulong::face::kCctvStreamModelHeight);
+    auto cctv_detections = cctv_detector.detect(det_session, detect_img);
+    assert(!cctv_detections.empty() && "Expected at least 1 face detected by SCRFD in 640x384 CCTV mode");
+    std::cout << "  [CCTV 640x384] Detected " << cctv_detections.size() << " faces." << std::endl;
+
     std::cout << "[2] SCRFD detection passed." << std::endl;
 
     // =========================================================================
@@ -175,6 +182,13 @@ int main() {
                   << p.body_box[0] << ", " << p.body_box[1] << ", "
                   << p.body_box[2] << ", " << p.body_box[3] << "]" << std::endl;
     }
+
+    // 验证 16:9 CCTV 分辨率模式 (640x384)
+    zhulong::face::PersonDetector cctv_person_detector(zhulong::face::kCctvStreamModelWidth, zhulong::face::kCctvStreamModelHeight);
+    auto cctv_person_dets = cctv_person_detector.detect(person_session, detect_img);
+    assert(!cctv_person_dets.empty() && "Expected at least 1 person detected in 640x384 CCTV mode");
+    std::cout << "  [CCTV 640x384] Detected " << cctv_person_dets.size() << " persons." << std::endl;
+
     std::cout << "[2.5] SCRFD Person detection passed." << std::endl;
 
     // =========================================================================

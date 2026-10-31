@@ -1,6 +1,7 @@
 #include "detector.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -11,9 +12,6 @@ namespace zhulong::face {
 
 namespace {
 
-/** @brief SCRFD 输入分辨率（人脸与人体的导出版本都是 640×640） */
-constexpr int kModelWidth = 640;
-constexpr int kModelHeight = 640;
 /** @brief FPN 各层 stride；人脸 3 层、人体 5 层 */
 constexpr std::array<int, 3> kFaceFpnStrides{8, 16, 32};
 constexpr std::array<int, 5> kPersonFpnStrides{8, 16, 32, 64, 128};
@@ -76,18 +74,20 @@ size_t safe_element_count(const zhulong::Tensor& tensor) noexcept {
 template<size_t N>
 bool scrfd_outputs_match(const std::vector<zhulong::Tensor>& outputs,
                          const std::array<int, N>& strides,
-                         int anchors_per_cell) {
-    if (outputs.size() != N * 3 || anchors_per_cell <= 0) {
+                         int anchors_per_cell,
+                         int model_width,
+                         int model_height) {
+    if (outputs.size() != N * 3 || anchors_per_cell <= 0 || model_width <= 0 || model_height <= 0) {
         return false;
     }
 
     for (size_t idx = 0; idx < N; ++idx) {
         const int stride = strides[idx];
-        if (stride <= 0 || kModelHeight % stride != 0 || kModelWidth % stride != 0) {
+        if (stride <= 0 || model_height % stride != 0 || model_width % stride != 0) {
             return false;
         }
-        const size_t grid_h = static_cast<size_t>(kModelHeight / stride);
-        const size_t grid_w = static_cast<size_t>(kModelWidth / stride);
+        const size_t grid_h = static_cast<size_t>(model_height / stride);
+        const size_t grid_w = static_cast<size_t>(model_width / stride);
         const size_t anchors = grid_h * grid_w * static_cast<size_t>(anchors_per_cell);
 
         const std::array<size_t, 3> expected{
@@ -113,10 +113,13 @@ bool scrfd_outputs_match(const std::vector<zhulong::Tensor>& outputs,
  *
  * 空间几何参数（缩放比与补边）由 SDK 视觉后端回填，解码阶段据此把框映射回原帧。
  */
-bool preprocess_detector_input(const zhulong::Image& image, zhulong::Tensor& out_hwc,
-                               zhulong::LetterboxParams& out_params) {
-    out_params.target_width = kModelWidth;
-    out_params.target_height = kModelHeight;
+bool preprocess_detector_input(const zhulong::Image& image, int model_width, int model_height,
+                               zhulong::Tensor& out_hwc, zhulong::LetterboxParams& out_params) {
+    if (model_width <= 0 || model_height <= 0) {
+        return false;
+    }
+    out_params.target_width = model_width;
+    out_params.target_height = model_height;
     out_params.target_format = ZHULONG_PIXEL_FORMAT_RGB24;
     return zhulong::ops::letterbox(image, out_hwc, out_params) == ZHULONG_PLUGIN_OK;
 }
@@ -130,13 +133,15 @@ template<size_t N>
 std::vector<ScrfCandidate> decode_scrfd_candidates(const std::vector<zhulong::Tensor>& outputs,
                                                    const std::array<int, N>& strides,
                                                    int anchors_per_cell,
+                                                   int model_width,
+                                                   int model_height,
                                                    float score_threshold,
                                                    float nms_threshold,
                                                    size_t max_candidates,
                                                    int orig_w, int orig_h,
                                                    float det_scale, int pad_left, int pad_top) {
-    if (det_scale <= 0.0f || orig_w <= 0 || orig_h <= 0 ||
-        !scrfd_outputs_match(outputs, strides, anchors_per_cell)) {
+    if (det_scale <= 0.0f || orig_w <= 0 || orig_h <= 0 || model_width <= 0 || model_height <= 0 ||
+        !scrfd_outputs_match(outputs, strides, anchors_per_cell, model_width, model_height)) {
         return {};
     }
 
@@ -145,8 +150,8 @@ std::vector<ScrfCandidate> decode_scrfd_candidates(const std::vector<zhulong::Te
 
     for (size_t idx = 0; idx < N; ++idx) {
         const int stride = strides[idx];
-        const int grid_h = kModelHeight / stride;
-        const int grid_w = kModelWidth / stride;
+        const int grid_h = model_height / stride;
+        const int grid_w = model_width / stride;
 
         const float* scores = outputs[idx].data<float>();
         const float* bboxes = outputs[idx + N].data<float>();
@@ -180,16 +185,26 @@ std::vector<ScrfCandidate> decode_scrfd_candidates(const std::vector<zhulong::Te
                     candidate.box[3] = std::clamp((center_y + bboxes[index * 4 + 3] * stride - pad_y) / det_scale,
                                                   0.0f, static_cast<float>(orig_h));
 
-                    if (candidate.box[2] <= candidate.box[0] || candidate.box[3] <= candidate.box[1]) {
+                    if (!std::isfinite(candidate.box[0]) || !std::isfinite(candidate.box[1]) ||
+                        !std::isfinite(candidate.box[2]) || !std::isfinite(candidate.box[3]) ||
+                        candidate.box[2] <= candidate.box[0] || candidate.box[3] <= candidate.box[1]) {
                         continue;
                     }
                     candidate.score = score;
 
+                    bool kps_valid = true;
                     for (size_t k = 0; k < kLandmarkCount; ++k) {
                         const float kx = (center_x + kpss[index * 10 + static_cast<int>(k) * 2 + 0] * stride - pad_x) / det_scale;
                         const float ky = (center_y + kpss[index * 10 + static_cast<int>(k) * 2 + 1] * stride - pad_y) / det_scale;
+                        if (!std::isfinite(kx) || !std::isfinite(ky)) {
+                            kps_valid = false;
+                            break;
+                        }
                         candidate.kps[k].x = std::clamp(kx, 0.0f, static_cast<float>(orig_w));
                         candidate.kps[k].y = std::clamp(ky, 0.0f, static_cast<float>(orig_h));
+                    }
+                    if (!kps_valid) {
+                        continue;
                     }
 
                     candidates.push_back(candidate);
@@ -204,6 +219,9 @@ std::vector<ScrfCandidate> decode_scrfd_candidates(const std::vector<zhulong::Te
             if (candidates.size() >= max_candidates) {
                 break;
             }
+        }
+        if (candidates.size() >= max_candidates) {
+            break;
         }
     }
 
@@ -235,7 +253,12 @@ std::vector<ScrfCandidate> decode_scrfd_candidates(const std::vector<zhulong::Te
 std::array<float, 4> to_normalized_box(const std::array<float, 4>& pixels, int width, int height) {
     const float w = static_cast<float>(width);
     const float h = static_cast<float>(height);
-    return {pixels[0] / w, pixels[1] / h, pixels[2] / w, pixels[3] / h};
+    return {
+        std::clamp(pixels[0] / w, 0.0f, 1.0f),
+        std::clamp(pixels[1] / h, 0.0f, 1.0f),
+        std::clamp(pixels[2] / w, 0.0f, 1.0f),
+        std::clamp(pixels[3] / h, 0.0f, 1.0f)
+    };
 }
 
 /** @brief 像素关键点 → 严格归一化关键点 [0, 1] */
@@ -246,8 +269,8 @@ std::array<Point2f, kLandmarkCount> to_normalized_landmarks(
     const float h = static_cast<float>(height);
     std::array<Point2f, kLandmarkCount> normalized{};
     for (size_t i = 0; i < normalized.size(); ++i) {
-        normalized[i].x = pixels[i].x / w;
-        normalized[i].y = pixels[i].y / h;
+        normalized[i].x = std::clamp(pixels[i].x / w, 0.0f, 1.0f);
+        normalized[i].y = std::clamp(pixels[i].y / h, 0.0f, 1.0f);
     }
     return normalized;
 }
@@ -268,15 +291,18 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
     const auto& raw = image.raw_view();
     const int orig_w = raw.width;
     const int orig_h = raw.height;
+    const int model_w = model_width_;
+    const int model_h = model_height_;
 
-    zhulong::Tensor input_tensor({1, kModelHeight, kModelWidth, 3}, zhulong::DataType::UINT8);
+    zhulong::Tensor input_tensor({1, model_h, model_w, 3}, zhulong::DataType::UINT8);
     zhulong::LetterboxParams params;
-    if (!preprocess_detector_input(image, input_tensor, params)) {
+    if (!preprocess_detector_input(image, model_w, model_h, input_tensor, params)) {
         return {};
     }
 
     const std::vector<zhulong::Tensor> outputs = session.forward({input_tensor});
     const auto candidates = decode_scrfd_candidates(outputs, kFaceFpnStrides, kFaceAnchorsPerCell,
+                                                    model_w, model_h,
                                                     score_threshold_, nms_threshold_, kMaxFaceCandidates,
                                                     orig_w, orig_h, params.scale, params.pad_left, params.pad_top);
 
@@ -304,15 +330,18 @@ std::vector<PersonBodyDetection> PersonDetector::detect(zhulong::Session& sessio
     const auto& raw = image.raw_view();
     const int orig_w = raw.width;
     const int orig_h = raw.height;
+    const int model_w = model_width_;
+    const int model_h = model_height_;
 
-    zhulong::Tensor input_tensor({1, kModelHeight, kModelWidth, 3}, zhulong::DataType::UINT8);
+    zhulong::Tensor input_tensor({1, model_h, model_w, 3}, zhulong::DataType::UINT8);
     zhulong::LetterboxParams params;
-    if (!preprocess_detector_input(image, input_tensor, params)) {
+    if (!preprocess_detector_input(image, model_w, model_h, input_tensor, params)) {
         return {};
     }
 
     const std::vector<zhulong::Tensor> outputs = session.forward({input_tensor});
     const auto candidates = decode_scrfd_candidates(outputs, kPersonFpnStrides, kPersonAnchorsPerCell,
+                                                    model_w, model_h,
                                                     score_threshold_, nms_threshold_, kMaxPersonCandidates,
                                                     orig_w, orig_h, params.scale, params.pad_left, params.pad_top);
 

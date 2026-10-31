@@ -218,6 +218,10 @@ static_assert(std::string_view(zhulong::TARGET_MODEL_EXT) == kModelExtension,
 // FaceRecognitionPlugin
 // ============================================================================
 
+FaceRecognitionPlugin::FaceRecognitionPlugin()
+    : person_detector_(kDefaultModelWidth, kDefaultModelHeight),
+      detector_(kDefaultModelWidth, kDefaultModelHeight) {}
+
 zhulong_status_t FaceRecognitionPlugin::init(const std::string& config_json) {
     parse_config(config_json);
 
@@ -394,7 +398,7 @@ std::vector<zhulong::PersonItem> FaceRecognitionPlugin::detect_persons(zhulong::
                 continue;
             }
             if (face_belongs_to_person(processed_faces[face_index].face_box, person_detection.body_box)) {
-                person.faces.push_back(processed_faces[face_index].item);
+                person.faces.push_back(std::move(processed_faces[face_index].item));
                 face_matched[face_index] = true;
             }
         }
