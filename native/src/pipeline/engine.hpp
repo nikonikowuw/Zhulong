@@ -175,6 +175,16 @@ struct Engine {
      * @throws Failure Zhulong_ERR_NOT_RUNNING / Zhulong_ERR_NOT_FOUND
      */
     HardwareFrame::ConstPtr latest_frame(Zhulong_stream_id id);
+
+    /**
+     * @brief 获取指定流指定 PTS 对应的历史帧引用（抓拍专用）
+     *
+     * @param id 物理流 ID
+     * @param pts 目标帧时间戳 (pts <= 0 时等价于 latest_frame())
+     * @return 匹配帧只读指针；流存在但尚未发布过帧时返回空指针
+     * @throws Failure Zhulong_ERR_NOT_RUNNING / Zhulong_ERR_NOT_FOUND
+     */
+    HardwareFrame::ConstPtr find_frame(Zhulong_stream_id id, int64_t pts);
 };
 
 } // namespace zhulong

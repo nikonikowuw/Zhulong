@@ -13,8 +13,10 @@
 #include "Zhulong/engine.h"
 #include "Zhulong/frame.hpp"
 #include "nodes/snapshot/jpeg_encoder.hpp"
+#include "pipeline/frame_publisher.hpp"
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -292,6 +294,80 @@ void test_c_abi_handle_semantics() {
     std::vector<uint8_t> full_jpeg;
     CHECK(zhulong::encode_jpeg(full, 85, full_jpeg));
     check_jpeg_envelope(full_jpeg);
+
+    // 3. 校验 Zhulong_snapshot_request 结构体零初始化语义与 target_pts 字段
+    Zhulong_snapshot_request req{};
+    CHECK(req.quality == 0);
+    CHECK(req.box_count == 0);
+    CHECK(req.boxes == nullptr);
+    CHECK(req.target_pts == 0);
+}
+
+void test_frame_publisher_find_frame() {
+    using zhulong::HardwareFrame;
+    using zhulong::FramePublisher;
+
+    FramePublisher publisher(nullptr, nullptr);
+
+    // 1. 空缓存时查询返回空
+    CHECK(publisher.find_frame(0) == nullptr);
+    CHECK(publisher.find_frame(100) == nullptr);
+    CHECK(publisher.latest_frame() == nullptr);
+
+    std::atomic<int> release_count{0};
+    auto make_frame = [&](int64_t pts) -> HardwareFrame::ConstPtr {
+        auto frame = std::make_shared<HardwareFrame>();
+        frame->width = 1920;
+        frame->height = 1080;
+        frame->stride = 1920;
+        frame->has_pts = true;
+        frame->pts = pts;
+        frame->release_fn = [&release_count](HardwareFrame* /*self*/) {
+            release_count.fetch_add(1);
+        };
+        return frame;
+    };
+
+    // 2. 压入第一帧 (pts=1000)
+    publisher.push_frame(make_frame(1000));
+    CHECK(publisher.find_frame(1000) != nullptr);
+    CHECK(publisher.find_frame(1000)->pts == 1000);
+    // pts <= 0 回退最新帧
+    CHECK(publisher.find_frame(0) != nullptr && publisher.find_frame(0)->pts == 1000);
+    CHECK(publisher.find_frame(-1) != nullptr && publisher.find_frame(-1)->pts == 1000);
+    // 未匹配的 pts 也回退最新帧
+    CHECK(publisher.find_frame(9999) != nullptr && publisher.find_frame(9999)->pts == 1000);
+    CHECK(publisher.latest_frame() != nullptr && publisher.latest_frame()->pts == 1000);
+
+    // 3. 压入到容量上限 (容量固定为 4: 1000, 2000, 3000, 4000)
+    publisher.push_frame(make_frame(2000));
+    publisher.push_frame(make_frame(3000));
+    publisher.push_frame(make_frame(4000));
+    CHECK(release_count == 0); // 容量为 4 时不淘汰
+
+    // 验证精准匹配各个历史帧
+    CHECK(publisher.find_frame(1000)->pts == 1000);
+    CHECK(publisher.find_frame(2000)->pts == 2000);
+    CHECK(publisher.find_frame(3000)->pts == 3000);
+    CHECK(publisher.find_frame(4000)->pts == 4000);
+    CHECK(publisher.find_frame(0)->pts == 4000); // 最新帧
+
+    // 4. 压入第 5 帧 (pts=5000)，触发淘汰最旧帧 (pts=1000)
+    publisher.push_frame(make_frame(5000));
+    CHECK(release_count == 1); // pts=1000 被成功在锁外析构释放
+
+    // 1000 已被淘汰，查询 1000 应安全回退到当前最新帧 5000
+    CHECK(publisher.find_frame(1000)->pts == 5000);
+    // 其余未被淘汰的帧依然能精确命中
+    CHECK(publisher.find_frame(2000)->pts == 2000);
+    CHECK(publisher.find_frame(3000)->pts == 3000);
+    CHECK(publisher.find_frame(4000)->pts == 4000);
+    CHECK(publisher.find_frame(5000)->pts == 5000);
+
+    // 5. stop() 清理所有剩余帧，触发所有帧在锁外析构
+    publisher.stop();
+    CHECK(release_count == 5);
+    CHECK(publisher.find_frame(0) == nullptr);
 }
 
 } // namespace
@@ -302,6 +378,7 @@ int main() {
         test_extract_region_nv12_and_yuv420p();
         test_encode_jpeg_roundtrip();
         test_c_abi_handle_semantics();
+        test_frame_publisher_find_frame();
         std::cout << "snapshot_test: all checks passed" << std::endl;
         return 0;
     } catch (const std::exception &e) {

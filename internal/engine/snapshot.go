@@ -50,16 +50,19 @@ type SnapshotImage struct {
 type SnapshotOptions struct {
 	// Quality 为 JPEG 质量 1..100。0 表示使用 DefaultSnapshotQuality。
 	Quality int
+	// PTS 为目标帧的时间戳（单位为源流原生时基 ticks）；若 <= 0 则抓取当前最新帧，若 > 0 则优先在历史环形缓存中精确匹配。
+	PTS int64
 	// Boxes 为需要额外输出的裁剪框；为空表示只出全幅图。
 	// 上限为 MaxSnapshotBoxes。
 	Boxes []SnapshotBox
 }
 
-// Snapshot 对当前流的最新一帧执行抓拍（全幅 + 可选裁剪），返回完整 JPEG 字节流。
+// Snapshot 对指定流执行抓拍（全幅 + 可选裁剪），返回完整 JPEG 字节流。
 //
 // ⚠️ 语义与陷阱（与 C ABI 文档保持一致）：
-//   - 抓到的是**当前最新一帧**，不是产生某个推理结果的那一帧。二者存在固有延迟
-//     （实测约 1~4 帧），调用方应把它当作已知语义而非缺陷。
+//   - 若 options.PTS > 0，优先在 Native 历史环形缓存中精确匹配对应帧；若历史已淘汰或
+//     options.PTS <= 0，退回抓取当前最新的一帧。二者在历史未匹配时存在固有延迟
+//     （实测约 1~4 帧）。
 //   - 该流必须已有活跃的 AI 解码会话（即已有 AI 消费者），否则返回 StatusNotFound。
 //   - 本调用同步执行 JPEG 编码（RK3568 上 1080p 约 35~60ms），不可在热路径或
 //     Native 回调中调用。
@@ -98,6 +101,7 @@ func (s *Stream) Snapshot(ctx context.Context, options SnapshotOptions) ([]Snaps
 		req.boxes = (*C.float)(raw)
 	}
 	req.quality = C.int32_t(clampQuality(options.Quality))
+	req.target_pts = C.int64_t(options.PTS)
 
 	return s.engine.snapshot(ref.generation, ref.id, &req)
 }

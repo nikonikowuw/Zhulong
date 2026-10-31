@@ -594,8 +594,8 @@ func (h *StreamHub) AIStreamBrokerStats(ctx context.Context, cameraID string) ([
 // Snapshot 对指定相机的 AI 分析流执行抓拍（全幅 + 可选裁剪），返回 JPEG 字节流。
 //
 // 语义（⚠️ 调用方必须了解）：
-//   - 抓到的是该相机 AI 解码会话的**当前最新一帧**，不是产生某个推理结果的那一帧。
-//     抓拍在推理结果回传后的宿主侧发起，因此与结果之间有 1~4 帧的固有偏差。
+//   - 若 options.PTS > 0，优先在 Native 历史环形缓存中精确匹配对应帧；未指定（PTS <= 0）
+//     或历史已滑出时退回抓取当前最新的一帧。历史未命中时与结果之间存在固有延迟（实测约 1~4 帧）。
 //   - 相机当前没有活跃 AI 流时返回 ErrAIStreamInactive，不自行拉起拉流：
 //     默默拉流会引来无法解释的带宽消耗与运维困惑。
 //   - 本调用同步执行 JPEG 编码（RK3568 1080p 约 35~60ms），必须在独立 goroutine

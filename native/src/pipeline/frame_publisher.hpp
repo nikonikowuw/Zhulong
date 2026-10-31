@@ -62,18 +62,25 @@ public:
     /**
      * @brief 取出最近一次发布过的最新一帧（抓拍用），不阻塞
      *
-     * ⚠️ 该帧是「当前最新一帧」，不是「产生某个推理结果的那一帧」。抓拍在推理结果
-     * 回传后才发起，因此与结果之间存在固有延迟（实测约 1~4 帧）。调用方必须把
-     * 该偏差视为已知语义。
-     *
-     * ⚠️ 只保留 1 帧的理由：MPP 的 buffer group 在 1080p 下仅 16 个 buffer，
-     * 多保留几帧就会把解码器自己的缓冲耗尽。因此这里采用「新帧覆盖旧帧」语义，
-     * 绝不排队。
-     *
      * @return 最新帧的只读智能指针；尚未发布过任何帧时返回空指针。
      *         返回值的生命周期由 shared_ptr 决定，调用方持有期间底层 buffer 不会被复用。
      */
     HardwareFrame::ConstPtr latest_frame() const;
+
+    /**
+     * @brief 按 PTS 查询历史帧；若未匹配或 pts<=0 则退回最新帧
+     *
+     * @param pts 目标帧时间戳 (pts <= 0 时等价于 latest_frame())
+     * @return 匹配的帧；若历史缓存中已滑出则回退到 latest_frame()
+     */
+    HardwareFrame::ConstPtr find_frame(int64_t pts) const;
+
+    /**
+     * @brief 压入一帧到历史缓存（测试及内部调用）
+     *
+     * 淘汰旧帧时确保在互斥锁外执行析构，遵守 pipeline-guidelines 规则。
+     */
+    void push_frame(HardwareFrame::ConstPtr frame);
 
 private:
     void publish_loop() noexcept;
@@ -84,10 +91,12 @@ private:
     std::atomic<uint32_t> max_sample_fps_{0};
     std::thread worker_;
 
-    // 抓拍用的最新帧引用：新帧覆盖旧帧（不排队），因此最多只多占 1 个解码 buffer。
-    // ⚠️ mutable + mutex：latest_frame() 是 const 查询接口，但需要加锁读取。
+    // 抓拍用的历史帧环形缓存：容量固定为 4 帧（在 720p/1080p 解码池 10/16 帧限制下，
+    // 兼顾实测 1~4 帧回传延迟与解码器缓冲安全冗余）。
+    // ⚠️ mutable + mutex：查询接口是 const，但需要加锁读取。
+    static constexpr size_t kHistoryCapacity = 4;
     mutable std::mutex latest_mutex_;
-    HardwareFrame::ConstPtr latest_frame_;
+    std::vector<HardwareFrame::ConstPtr> history_frames_;
 
     MotionDetector motion_detector_;
 };

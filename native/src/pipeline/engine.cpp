@@ -515,6 +515,10 @@ void Engine::set_publish_rate(Zhulong_stream_id id, uint32_t max_sample_fps) {
 }
 
 HardwareFrame::ConstPtr Engine::latest_frame(Zhulong_stream_id id) {
+    return find_frame(id, 0);
+}
+
+HardwareFrame::ConstPtr Engine::find_frame(Zhulong_stream_id id, int64_t pts) {
     FramePublisher *publisher = nullptr;
     {
         std::lock_guard<std::mutex> lock(control);
@@ -527,8 +531,8 @@ HardwareFrame::ConstPtr Engine::latest_frame(Zhulong_stream_id id) {
         }
         publisher = it->second.get();
     }
-    // 锁外读取：latest_frame() 自身只拿 publisher 内部的短锁，不与 control 嵌套
-    return publisher->latest_frame();
+    // 锁外读取：find_frame() 自身只拿 publisher 内部的短锁，不与 control 嵌套
+    return publisher->find_frame(pts);
 }
 
 Zhulong_status_t Engine::broadcast_ai_message(Zhulong_stream_id stream_id, uint16_t msg_type, const void* payload, size_t payload_size) {

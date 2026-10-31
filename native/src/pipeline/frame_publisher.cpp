@@ -37,18 +37,54 @@ void FramePublisher::stop() {
         worker_.join();
         ZL_LOGI(stream_->id, "pipeline.frame_publisher", "frame_publisher_stopped");
     }
-    // ⚠️ 必须释放快照帧引用：即使 worker 已汇合，若这里不清空，最后一个
+    // ⚠️ 必须释放快照帧引用：即使 worker 已汇合，若这里不清空，
     // HardwareFrame 引用仍持有解码器 buffer，停流时会拖到宽限期超时。
+    // ⚠️ 丢弃对象的析构必须在互斥锁外执行，防止 release_fn 触发外部闭包时形成潜在死锁（.trellis/spec/native/pipeline-guidelines.md §3）。
+    std::vector<HardwareFrame::ConstPtr> frames_to_drop;
     {
         std::lock_guard<std::mutex> lock(latest_mutex_);
-        latest_frame_.reset();
+        frames_to_drop = std::move(history_frames_);
+        history_frames_.clear();
     }
+    frames_to_drop.clear();
     motion_detector_.reset();
 }
 
 HardwareFrame::ConstPtr FramePublisher::latest_frame() const {
+    return find_frame(0);
+}
+
+HardwareFrame::ConstPtr FramePublisher::find_frame(int64_t pts) const {
     std::lock_guard<std::mutex> lock(latest_mutex_);
-    return latest_frame_;
+    if (history_frames_.empty()) {
+        return nullptr;
+    }
+    if (pts > 0) {
+        // 从最新的帧往旧查找，优先匹配目标 PTS
+        for (auto it = history_frames_.rbegin(); it != history_frames_.rend(); ++it) {
+            if ((*it)->has_pts && (*it)->pts == pts) {
+                return *it;
+            }
+        }
+    }
+    // 未指定有效 PTS 或目标帧已被淘汰，回退为最新帧
+    return history_frames_.back();
+}
+
+void FramePublisher::push_frame(HardwareFrame::ConstPtr frame) {
+    if (!frame) {
+        return;
+    }
+    HardwareFrame::ConstPtr evicted_frame;
+    {
+        std::lock_guard<std::mutex> lock(latest_mutex_);
+        if (history_frames_.size() >= kHistoryCapacity) {
+            evicted_frame = std::move(history_frames_.front());
+            history_frames_.erase(history_frames_.begin());
+        }
+        history_frames_.push_back(std::move(frame));
+    }
+    evicted_frame.reset(); // 锁外析构底层 HardwareFrame
 }
 
 void FramePublisher::set_max_sample_fps(uint32_t fps) noexcept {
@@ -112,12 +148,9 @@ void FramePublisher::publish_loop() noexcept {
             broker_->publish_frame(*frame, motion_info);
         }
 
-        // 抓拍快照引用：新帧覆盖旧帧（不排队），最多只多占 1 个解码 buffer。
-        // ⚠️ 必须在 frame.reset() 之前赋值，否则只能拿到空指针。
-        {
-            std::lock_guard<std::mutex> lock(latest_mutex_);
-            latest_frame_ = frame;
-        }
+        // 抓拍快照历史引用：环形保留最近 kHistoryCapacity 帧，支持按 PTS 精确匹配。
+        // ⚠️ 必须在 frame.reset() 之前压入；淘汰帧析构在互斥锁外执行。
+        push_frame(frame);
 
         // ⚠️ 防慢算法拖垮解码器准则：
         // 帧复制进共享内存（或无客户端丢弃）后立即 reset 释放物理帧借用引用，绝不将 HardwareFrame 持有至推理阶段

@@ -541,11 +541,13 @@ extern "C" Zhulong_status_t Zhulong_stream_snapshot(Zhulong_engine_h engine, Zhu
         // 1. 参数解析与收敛：质量 0 走默认 85，越界夹到 [1,100]
         int32_t quality = 85;
         int32_t box_count = 0;
+        int64_t target_pts = 0;
         if (request != nullptr) {
             if (request->quality != 0) {
                 quality = request->quality < 1 ? 1 : (request->quality > 100 ? 100 : request->quality);
             }
             box_count = request->box_count;
+            target_pts = request->target_pts;
             require(box_count >= 0 && box_count <= ZHULONG_SNAPSHOT_MAX_BOXES);
             if (box_count > 0) {
                 require(request->boxes != nullptr);
@@ -566,8 +568,8 @@ extern "C" Zhulong_status_t Zhulong_stream_snapshot(Zhulong_engine_h engine, Zhu
             boxes.push_back({src[0], src[1], src[2], src[3]});
         }
 
-        // 3. 取最新帧（内部短锁），返回后锁已释放
-        zhulong::HardwareFrame::ConstPtr frame = engine->implementation.latest_frame(stream);
+        // 3. 取帧（优先按 target_pts 匹配历史帧，未匹配或未指定时退回最新帧，内部短锁），返回后锁已释放
+        zhulong::HardwareFrame::ConstPtr frame = engine->implementation.find_frame(stream, target_pts);
         if (!frame) {
             // 流存在但尚未发布过帧（刚接入/重建解码器）。这是暂时状态，不是配置错误。
             throw zhulong::Failure{Zhulong_ERR_NOT_FOUND};

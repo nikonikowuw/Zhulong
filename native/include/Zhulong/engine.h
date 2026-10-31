@@ -263,13 +263,13 @@ typedef void (*Zhulong_log_callback)(uintptr_t token, int32_t level, uint64_t st
 /* ========================================================================== */
 
 /**
- * @brief 当前 C ABI 版本号（v2 为追加帧分类、GOP 序号与微秒时间戳之前的版本）
+ * @brief 当前 C ABI 版本号（v4 为追加抓拍 target_pts 时间戳精确匹配支持）
  *
  * 演进约定：ABI 只允许在结构体**尾部追加**字段，绝不调整已有字段偏移或语义。
  * Go 侧在初始化后必须调用 Zhulong_engine_get_abi_version 校验，头文件与静态库不一致时
  * 直接拒绝启动，避免旧归档被语言层静默复用引发的内存越界。
  */
-#define ZHULONG_ABI_VERSION 3
+#define ZHULONG_ABI_VERSION 4
 
 /**
  * @brief 查询原生静态库编译时对应的 ABI 版本
@@ -526,22 +526,24 @@ typedef struct {
     int32_t quality;      /**< JPEG 质量 1..100（越界时收敛到 [1,100]，传 0 使用默认 85） */
     int32_t box_count;    /**< 裁剪框数量，范围 [0, ZHULONG_SNAPSHOT_MAX_BOXES]；0 表示只出全幅图 */
     const float *boxes;   /**< 长度为 box_count * 4 的归一化坐标数组；box_count 为 0 时可为 NULL */
+    int64_t target_pts;   /**< 目标帧 PTS 时间戳（单位为源流时间基下的原生滴答数 Ticks）；若 <= 0 则抓取当前最新帧，若 > 0 则优先在历史环形缓存中精确匹配 */
 } Zhulong_snapshot_request;
 
 /** @brief 抓拍结果的不透明句柄类型，由 Zhulong_stream_snapshot 分配 */
 typedef struct Zhulong_snapshot_result_t *Zhulong_snapshot_h;
 
 /**
- * @brief 对指定流的 AI 解码会话当前最新一帧执行抓拍（全幅 + 可选裁剪），输出 JPEG
+ * @brief 对指定流的 AI 解码会话执行抓拍（全幅 + 可选裁剪），输出 JPEG
  *
  * 语义与限制（⚠️ 请完整阅读后再使用）：
- *   - **帧来源**：取的是该流 AI 解码会话中**当前最新的一帧**，不是产生某个推理结果的那一帧。
- *     抓拍与推理结果之间存在「结果回传 + 宿主处理」的固有延迟，实测约 1~4 帧。
- *     调用方必须把该偏差视为已知语义，而不是缺陷。
+ *   - **帧来源**：若 request->target_pts > 0，优先在 Native 历史环形缓存中精确
+ *     匹配对应 PTS 的帧；若历史已淘汰或 target_pts <= 0，退回当前最新的一帧。
+ *   - **持帧上限与缓冲预算**：Native 侧为历史抓拍保留固定 4 帧借用引用（实测
+ *     推理结果回传延迟约 1~4 帧）。在 RK3568 硬解 720p（10 缓冲池）/ 1080p
+ *     （16 缓冲池）下，分别保留 6 / 12 个空闲缓冲供解码器参考帧与轮转，
+ *     确保不会耗尽 buffer group 导致解码卡顿。
  *   - **前置条件**：该流必须存在活跃的 AI 解码会话（即已有 AI 消费者挂载）。
  *     无解码会话时返回 Zhulong_ERR_NOT_FOUND，而不是自行拉起拉流。
- *   - **持帧上限**：Native 侧只为快照保留最后 1 帧引用。超过 1 帧会把解码器
- *     buffer group 耗尽（1080p 下仅 16 个 buffer）并导致画面卡顿。
  *   - **同步阻塞**：本函数执行 JPEG 编码，耗时与分辨率、裁剪框数量正相关
  *     （RK3568 上 1080p 单帧软编约 35~60ms）。严禁在数据包/AI 结果回调内调用，
  *     那样会触发 Zhulong_ERR_CALLBACK_CONTEXT。

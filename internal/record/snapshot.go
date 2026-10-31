@@ -56,6 +56,7 @@ type snapshotOutput struct {
 // snapshotJob 是一次待执行的抓拍写盘任务。
 type snapshotJob struct {
 	cameraID    string
+	pts         int64
 	targetTable string
 	targetID    string
 	// boxes 是归一化裁剪框，索引 i 对应 boxIndex == i 的输出。
@@ -221,6 +222,7 @@ func (s *SnapshotStore) run(job snapshotJob) {
 
 	images, err := s.provider.Snapshot(ctx, job.cameraID, engine.SnapshotOptions{
 		Quality: s.quality,
+		PTS:     job.pts,
 		Boxes:   job.boxes,
 	})
 	if err != nil {
@@ -303,6 +305,11 @@ type SnapshotOutputForTest struct {
 
 // NewSnapshotJobForTest 构造一个等价于内部 snapshotJob 的任务，仅供测试使用。
 func NewSnapshotJobForTest(cameraID string, boxes []engine.SnapshotBox, outputs []SnapshotOutputForTest) snapshotJob {
+	return NewSnapshotJobWithPTSForTest(cameraID, 0, boxes, outputs)
+}
+
+// NewSnapshotJobWithPTSForTest 构造携带指定 PTS 的测试抓拍任务。
+func NewSnapshotJobWithPTSForTest(cameraID string, pts int64, boxes []engine.SnapshotBox, outputs []SnapshotOutputForTest) snapshotJob {
 	converted := make([]snapshotOutput, 0, len(outputs))
 	for _, out := range outputs {
 		converted = append(converted, snapshotOutput{
@@ -311,5 +318,5 @@ func NewSnapshotJobForTest(cameraID string, boxes []engine.SnapshotBox, outputs 
 			protected: out.Protected,
 		})
 	}
-	return snapshotJob{cameraID: cameraID, boxes: boxes, outputs: converted}
+	return snapshotJob{cameraID: cameraID, pts: pts, boxes: boxes, outputs: converted}
 }

@@ -123,9 +123,11 @@ func TestSnapshotStoreWritesFullAndCrop(t *testing.T) {
 
 	fullRel := "snapshots/cam-01/2026-10-20/rec-1.jpg"
 	cropRel := "snapshots/cam-01/2026-10-20/rec-1_face.jpg"
+	const testTargetPTS = int64(987654321)
 
-	if ok := store.Enqueue(record.NewSnapshotJobForTest(
+	if ok := store.Enqueue(record.NewSnapshotJobWithPTSForTest(
 		"cam-01",
+		testTargetPTS,
 		[]engine.SnapshotBox{{0.1, 0.2, 0.4, 0.5}},
 		[]record.SnapshotOutputForTest{
 			{BoxIndex: -1, RelPath: fullRel},
@@ -157,10 +159,13 @@ func TestSnapshotStoreWritesFullAndCrop(t *testing.T) {
 		t.Errorf("crop image content mismatch: %x", cropBytes)
 	}
 
-	// 请求必须带上质量与裁剪框，否则原生层只会出全幅图。
+	// 请求必须带上质量与裁剪框，且必须正确透传 PTS。
 	opts := provider.lastOptions()
 	if opts.Quality != 85 {
 		t.Errorf("expected quality 85, got %d", opts.Quality)
+	}
+	if opts.PTS != testTargetPTS {
+		t.Errorf("expected PTS %d, got %d", testTargetPTS, opts.PTS)
 	}
 	if len(opts.Boxes) != 1 {
 		t.Errorf("expected 1 box, got %d", len(opts.Boxes))

@@ -164,6 +164,7 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 
 					recognitionSnapshots = append(recognitionSnapshots, snapshotJob{
 						cameraID:    res.CameraID,
+						pts:         res.PTS,
 						targetTable: tableRecognitions,
 						targetID:    recID,
 						boxes: []engine.SnapshotBox{
@@ -225,6 +226,7 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 
 			captureSnapshots = append(captureSnapshots, snapshotJob{
 				cameraID:    res.CameraID,
+				pts:         res.PTS,
 				targetTable: tableCaptures,
 				targetID:    capID,
 				boxes: []engine.SnapshotBox{
@@ -323,6 +325,7 @@ func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.Infer
 
 			snapshots = append(snapshots, snapshotJob{
 				cameraID:    res.CameraID,
+				pts:         res.PTS,
 				targetTable: tableCaptures,
 				targetID:    capID,
 				boxes: []engine.SnapshotBox{
@@ -398,6 +401,7 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 				}
 				alarmSnapshots = append(alarmSnapshots, snapshotJob{
 					cameraID:    res.CameraID,
+					pts:         res.PTS,
 					targetTable: tableAlarms,
 					targetID:    alarmID,
 					boxes:       boxList,
@@ -436,6 +440,7 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 
 				captureSnapshots = append(captureSnapshots, snapshotJob{
 					cameraID:    res.CameraID,
+					pts:         res.PTS,
 					targetTable: tableCaptures,
 					targetID:    capID,
 					boxes: []engine.SnapshotBox{
@@ -499,6 +504,7 @@ func (s *Service) processClassification(ctx context.Context, res aitypes.Inferen
 				// 分类结果没有检测框，只能出全幅图。
 				snapshots = append(snapshots, snapshotJob{
 					cameraID:    res.CameraID,
+					pts:         res.PTS,
 					targetTable: tableAlarms,
 					targetID:    alarmID,
 					outputs:     []snapshotOutput{{boxIndex: -1, relPath: fullPath, protected: true}},
