@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next'
 import { useWebCodecsRenderLoop } from '../hooks/use-webcodecs-render-loop'
 import { AIResultService } from '../services/ai-result-service'
 import { drawFaceOverlay } from '../services/face-overlay-renderer'
+import { drawPersonOverlay } from '../services/person-overlay-renderer'
 import { drawVehicleOverlay } from '../services/vehicle-overlay-renderer'
 import {
   isWebCodecsSupported,
@@ -17,6 +18,7 @@ import {
 } from '../services/webcodecs-decoder'
 import {
   type FaceSubItem,
+  type PersonItem,
   type VehicleItem,
   type ParsedPacket,
   type StreamStats,
@@ -64,6 +66,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
     const [isSupported] = useState(() => isWebCodecsSupported())
 
     const facesRef = useRef<FaceSubItem[]>([])
+    const personsRef = useRef<PersonItem[]>([])
     const vehiclesRef = useRef<VehicleItem[]>([])
     const lastEventTimeRef = useRef<number>(0)
     const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -82,16 +85,27 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
       if (!ctx) return
 
       const isExpired = Date.now() - lastEventTimeRef.current > 350
+      const currentPersons = isExpired ? [] : personsRef.current
       const currentFaces = isExpired ? [] : facesRef.current
       const currentVehicles = isExpired ? [] : vehiclesRef.current
 
+      // 绘制顺序即层级：人体框在底层，人脸/车牌框压在它上面。
+      // 只有第一个调用负责清屏，否则后画的会抹掉前一个。
+      drawPersonOverlay({
+        ctx,
+        width: overlay.width,
+        height: overlay.height,
+        persons: currentPersons,
+        personLabel: t('personLabel', '人体'),
+        clear: true,
+      })
       drawFaceOverlay({
         ctx,
         width: overlay.width,
         height: overlay.height,
         faces: currentFaces,
         unrecognizedLabel: t('unrecognizedFace', '未登记'),
-        clear: true,
+        clear: false,
       })
       drawVehicleOverlay({
         ctx,
@@ -104,7 +118,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
     }, [showAIOverlay, t])
 
     /**
-     * 每帧后处理：上报分辨率变化、同步叠加层画布尺寸并重绘人脸框。
+     * 每帧后处理：上报分辨率变化、同步叠加层画布尺寸并重绘目标框。
      * 叠加层画布尺寸跟随主画布，赋值会清空内容，因此随后必须重绘。
      */
     const handleFrameDrawn = useCallback(
@@ -156,6 +170,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
       const overlayCanvas = overlayCanvasRef.current
       if (!showAIOverlay || !cameraId) {
         facesRef.current = []
+        personsRef.current = []
         vehiclesRef.current = []
         if (overlayCanvas) {
           const ctx = overlayCanvas.getContext('2d')
@@ -180,6 +195,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
           extractedVehicles.push(...event.vehicles)
         }
 
+        personsRef.current = event.persons ?? []
         facesRef.current = extractedFaces
         vehiclesRef.current = extractedVehicles
         lastEventTimeRef.current = Date.now()
@@ -190,6 +206,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
         }
         fadeTimerRef.current = setTimeout(() => {
           facesRef.current = []
+          personsRef.current = []
           vehiclesRef.current = []
           redrawOverlay()
           fadeTimerRef.current = null
@@ -203,6 +220,7 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
         }
         unsubscribe()
         facesRef.current = []
+        personsRef.current = []
         vehiclesRef.current = []
         if (overlayCanvas) {
           const ctx = overlayCanvas.getContext('2d')
@@ -225,7 +243,9 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
           try {
             let dataUrl: string
             const hasPerception =
-              facesRef.current.length > 0 || vehiclesRef.current.length > 0
+              facesRef.current.length > 0 ||
+              vehiclesRef.current.length > 0 ||
+              personsRef.current.length > 0
             if (
               showAIOverlay &&
               overlayCanvas &&

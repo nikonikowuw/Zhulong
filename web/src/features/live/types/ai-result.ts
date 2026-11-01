@@ -127,6 +127,21 @@ export function createMockFace(
 }
 
 /**
+ * 创建人体项 Mock 辅助函数
+ */
+export function createMockPerson(
+  overrides: Partial<PersonItem> = {}
+): PersonItem {
+  return {
+    track_id: 0,
+    body_box: [0.05, 0.05, 0.6, 0.9],
+    body_score: 0.9,
+    faces: [],
+    ...overrides,
+  }
+}
+
+/**
  * 创建机动车项 Mock 辅助函数
  */
 export function createMockVehicle(

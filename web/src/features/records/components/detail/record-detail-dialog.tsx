@@ -18,6 +18,7 @@ import {
   Video,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { boxesCoincide } from '@/lib/box-geometry'
 import { copyToClipboard } from '@/lib/clipboard'
 import { statusDotClass, statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
@@ -101,6 +102,13 @@ export function RecordDetailDialog({
   const rec = isRecognition ? (record as Recognition) : null
   const alm = isAlarm ? (record as Alarm) : null
   const cap = isCapture ? (record as Capture) : null
+
+  // 识别记录的 body_box 在「纯人脸退化项」里是人脸框的别名（逐位相等，见插件契约）。
+  // 这种记录只画人脸框，否则同一张脸会叠出两个框。
+  const recognitionBodyBox =
+    isRecognition && rec && !boxesCoincide(rec.bodyBox, rec.box)
+      ? rec.bodyBox
+      : undefined
 
   const capturedTime = record.capturedAt
     ? format(new Date(record.capturedAt), 'yyyy-MM-dd HH:mm:ss')
@@ -333,11 +341,9 @@ export function RecordDetailDialog({
                         ? cap.targetType
                         : undefined
                 }
-                secondaryBox={isRecognition && rec ? rec.bodyBox : undefined}
+                secondaryBox={recognitionBodyBox}
                 secondaryLabel={
-                  isRecognition && rec?.bodyBox
-                    ? t('detail.bodyBoxLabel')
-                    : undefined
+                  recognitionBodyBox ? t('detail.bodyBoxLabel') : undefined
                 }
                 className='max-h-[560px]'
               />

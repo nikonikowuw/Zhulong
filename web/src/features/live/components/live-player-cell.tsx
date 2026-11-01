@@ -13,6 +13,7 @@ import {
   type StreamType,
 } from '../types'
 import { LiveFaceOverlay } from './live-face-overlay'
+import { LivePersonOverlay } from './live-person-overlay'
 import { LivePlayer, type LivePlayerRef } from './live-player'
 import { LivePlayerCellFooter } from './live-player-cell-footer'
 import { LivePlayerCellHeader } from './live-player-cell-header'
@@ -229,6 +230,10 @@ export const LivePlayerCell = memo(function LivePlayerCell({
             />
             {showAIOverlay && cell.cameraId && (
               <>
+                <LivePersonOverlay
+                  cameraId={cell.cameraId}
+                  enabled={showAIOverlay}
+                />
                 <LiveFaceOverlay
                   cameraId={cell.cameraId}
                   enabled={showAIOverlay}
