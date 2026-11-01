@@ -719,14 +719,14 @@ func TestBrokerResourceLock_BlocksConcurrentSweepWithoutFailingStartup(t *testin
 	brokerDir := t.TempDir()
 	t.Setenv("ZHULONG_FRAME_BROKER_SOCK", brokerDir)
 
-	locked, err := acquireBrokerResourceLock(brokerResourceDirs(), false)
+	locked, err := acquireBrokerResourceLock(brokerResourceDirs(), lockNonBlocking)
 	if err != nil {
 		t.Fatalf("acquire lock: %v", err)
 	}
 	defer locked.release()
 
 	// A second (sweep-side) acquire must fail fast instead of blocking startup.
-	second, err := acquireBrokerResourceLock(brokerResourceDirs(), false)
+	second, err := acquireBrokerResourceLock(brokerResourceDirs(), lockNonBlocking)
 	if err == nil {
 		second.release()
 		t.Fatal("second non-blocking acquire succeeded while the lock was held")
@@ -761,7 +761,7 @@ func TestReapOrphanRunners_SkipsCleanupWhenLockIsBusy(t *testing.T) {
 	if err := os.WriteFile(deadSock, nil, 0o755); err != nil {
 		t.Fatalf("recreate dead socket file: %v", err)
 	}
-	held, err := acquireBrokerResourceLock(brokerResourceDirs(), false)
+	held, err := acquireBrokerResourceLock(brokerResourceDirs(), lockNonBlocking)
 	if err != nil {
 		t.Fatalf("acquire lock: %v", err)
 	}
@@ -786,7 +786,7 @@ func TestBrokerResourceLock_DedupesAliasedDirectories(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 
-	lock, err := acquireBrokerResourceLock([]string{dir, alias, dir}, false)
+	lock, err := acquireBrokerResourceLock([]string{dir, alias, dir}, lockNonBlocking)
 	if err != nil {
 		t.Fatalf("acquire lock: %v", err)
 	}

@@ -3,10 +3,11 @@
 package algorunner
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"syscall"
 )
 
@@ -31,6 +32,24 @@ import (
 // *is* /dev/shm, a bind-mounted copy, a symlink) collapse to one lock and two
 // processes can never take the same pair in opposite orders.
 
+const (
+	// brokerSocketPrefix and brokerSocketSuffix delimit the broker socket file
+	// names inside the base directory (native frame_broker.cpp).
+	brokerSocketPrefix = "zhulong_broker_"
+	brokerSocketSuffix = ".sock"
+
+	// shmSegmentPrefix delimits the POSIX shm segment names frame_broker.cpp
+	// creates ("/zhulong_shm_<stream_id>").
+	shmSegmentPrefix = "zhulong_shm_"
+
+	// defaultBrokerSockBase is the broker socket base directory when the native
+	// side has no override; it mirrors pipeline/engine.cpp.
+	defaultBrokerSockBase = "/tmp"
+
+	// brokerSockOverrideEnv lets the native side relocate the broker socket dir.
+	brokerSockOverrideEnv = "ZHULONG_FRAME_BROKER_SOCK"
+)
+
 // fileID identifies a file by filesystem identity rather than by path. It is what
 // /proc/<pid>/maps reports (major:minor plus inode), so it can be compared
 // against a mapping without ever resolving the path.
@@ -46,8 +65,14 @@ func statFileID(path string) (fileID, error) {
 	if err := syscall.Stat(path, &st); err != nil {
 		return fileID{}, err
 	}
+	return fileIDFromStat(&st), nil
+}
+
+// fileIDFromStat converts a stat result to the kernel's (major, minor, inode)
+// identity.
+func fileIDFromStat(st *syscall.Stat_t) fileID {
 	major, minor := linuxDeviceParts(uint64(st.Dev))
-	return fileID{devMajor: major, devMinor: minor, ino: st.Ino}, nil
+	return fileID{devMajor: major, devMinor: minor, ino: st.Ino}
 }
 
 // linuxDeviceParts splits a glibc dev_t into the major/minor pair the kernel
@@ -62,20 +87,38 @@ func linuxDeviceParts(dev uint64) (major, minor uint32) {
 	return major, minor
 }
 
-// brokerResourceLock is a held set of directory locks.
-type brokerResourceLock struct {
-	files []*os.File
+// lockMode selects whether acquireBrokerResourceLock waits for the lock.
+//
+// It exists so call sites read as intent instead of as a bare bool literal: the
+// native creator must wait, the sweep must not. It is an int rather than a bool
+// so an accidental `false` argument does not compile.
+type lockMode int
+
+const (
+	// lockBlocking waits until every directory lock is held.
+	lockBlocking lockMode = iota
+	// lockNonBlocking fails with EWOULDBLOCK instead of waiting.
+	lockNonBlocking
+)
+
+// brokerSocketBaseDir is the directory holding broker socket files.
+func brokerSocketBaseDir() string {
+	if base := os.Getenv(brokerSockOverrideEnv); base != "" {
+		return base
+	}
+	return defaultBrokerSockBase
 }
 
 // brokerResourceDirs lists the directories the sweep and the native broker must
 // not mutate concurrently. The base dir mirrors pipeline/engine.cpp: the
 // ZHULONG_FRAME_BROKER_SOCK override, else /tmp.
 func brokerResourceDirs() []string {
-	base := os.Getenv("ZHULONG_FRAME_BROKER_SOCK")
-	if base == "" {
-		base = "/tmp"
-	}
-	return []string{base, shmRoot}
+	return []string{brokerSocketBaseDir(), shmRoot}
+}
+
+// brokerResourceLock is a held set of directory locks.
+type brokerResourceLock struct {
+	files []*os.File
 }
 
 // acquireBrokerResourceLock takes an exclusive flock on every directory in dirs.
@@ -84,7 +127,32 @@ func brokerResourceDirs() []string {
 //   - the native broker creator blocks: it must not skip its own setup.
 //   - the sweep is non-blocking: a busy lock means someone is creating a broker
 //     right now, and the only safe action is to leave everything alone.
-func acquireBrokerResourceLock(dirs []string, block bool) (*brokerResourceLock, error) {
+func acquireBrokerResourceLock(dirs []string, mode lockMode) (*brokerResourceLock, error) {
+	byID, err := uniqueDirsByID(dirs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Deterministic order: the lock set is unordered (a map), and two processes
+	// taking an unordered set can deadlock against each other.
+	ids := make([]fileID, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	slices.SortFunc(ids, compareFileIDs)
+
+	lock := &brokerResourceLock{}
+	for _, id := range ids {
+		if err := lock.acquireOne(byID[id], mode); err != nil {
+			lock.release()
+			return nil, err
+		}
+	}
+	return lock, nil
+}
+
+// uniqueDirsByID resolves dirs to their filesystem identity, collapsing aliases.
+func uniqueDirsByID(dirs []string) (map[fileID]string, error) {
 	byID := make(map[fileID]string, len(dirs))
 	for _, dir := range dirs {
 		if dir == "" {
@@ -97,60 +165,55 @@ func acquireBrokerResourceLock(dirs []string, block bool) (*brokerResourceLock, 
 		if st.Mode&syscall.S_IFMT != syscall.S_IFDIR {
 			return nil, fmt.Errorf("broker lock: %s is not a directory", dir)
 		}
-		major, minor := linuxDeviceParts(uint64(st.Dev))
-		id := fileID{devMajor: major, devMinor: minor, ino: st.Ino}
+		id := fileIDFromStat(&st)
 		if _, exists := byID[id]; !exists {
 			byID[id] = dir
 		}
 	}
+	return byID, nil
+}
 
-	ids := make([]fileID, 0, len(byID))
-	for id := range byID {
-		ids = append(ids, id)
-	}
-	// Deterministic order: the lock set is unordered (a map), and two processes
-	// taking an unordered set can deadlock against each other.
-	sort.Slice(ids, func(i, j int) bool {
-		if ids[i].devMajor != ids[j].devMajor {
-			return ids[i].devMajor < ids[j].devMajor
-		}
-		if ids[i].devMinor != ids[j].devMinor {
-			return ids[i].devMinor < ids[j].devMinor
-		}
-		return ids[i].ino < ids[j].ino
-	})
+func compareFileIDs(a, b fileID) int {
+	return cmp.Or(
+		cmp.Compare(a.devMajor, b.devMajor),
+		cmp.Compare(a.devMinor, b.devMinor),
+		cmp.Compare(a.ino, b.ino),
+	)
+}
 
-	lock := &brokerResourceLock{}
-	for _, id := range ids {
-		path := byID[id]
-		file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
-		if err != nil {
-			lock.release()
-			return nil, fmt.Errorf("broker lock: open %s: %w", path, err)
-		}
-		flags := syscall.LOCK_EX
-		if !block {
-			flags |= syscall.LOCK_NB
-		}
-		if err := syscall.Flock(int(file.Fd()), flags); err != nil {
-			file.Close()
-			lock.release()
-			return nil, fmt.Errorf("broker lock: %s: %w", path, err)
-		}
-		lock.files = append(lock.files, file)
+// acquireOne opens and flocks a single directory, appending it to the held set.
+func (l *brokerResourceLock) acquireOne(path string, mode lockMode) error {
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("broker lock: open %s: %w", path, err)
 	}
-	return lock, nil
+
+	flags := syscall.LOCK_EX
+	if mode == lockNonBlocking {
+		flags |= syscall.LOCK_NB
+	}
+	if err := syscall.Flock(int(file.Fd()), flags); err != nil {
+		closeFileBestEffort(file)
+		return fmt.Errorf("broker lock: %s: %w", path, err)
+	}
+
+	l.files = append(l.files, file)
+	return nil
 }
 
 // release drops every lock. Closing the descriptor releases the flock on its own;
 // the explicit LOCK_UN only makes the intent visible in strace.
+//
+// Both errors are ignored on purpose: release runs on success paths and on error
+// paths that are already returning a more specific failure, so there is nothing
+// useful left to do with "unlock failed on a descriptor we are about to close".
 func (l *brokerResourceLock) release() {
 	if l == nil {
 		return
 	}
 	for i := len(l.files) - 1; i >= 0; i-- {
-		_ = syscall.Flock(int(l.files[i].Fd()), syscall.LOCK_UN)
-		_ = l.files[i].Close()
+		_ = syscall.Flock(int(l.files[i].Fd()), syscall.LOCK_UN) // best effort: close() releases it anyway
+		closeFileBestEffort(l.files[i])
 	}
 	l.files = nil
 }

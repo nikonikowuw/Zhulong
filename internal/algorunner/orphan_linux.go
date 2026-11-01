@@ -3,7 +3,6 @@
 package algorunner
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -40,10 +39,18 @@ type OrphanCleanupReport struct {
 	UnverifiedSockets []string
 }
 
+// orphanExitTimeout bounds how long a SIGKILLed orphan may keep its resources.
+const orphanExitTimeout = 3 * time.Second
+
 // procRoot is /proc in production. It is a variable so tests can drive the
 // inspection logic against a synthetic process tree instead of depending on which
-// unrelated processes happen to be running on the machine.
+// unrelated processes happen to be running on the machine. It is a test seam only:
+// production code must never assign it.
 var procRoot = "/proc"
+
+// errMalformedProcStat marks a /proc/<pid>/stat line that cannot be parsed. It is
+// distinct from a read error: "gone" and "unparseable" lead to opposite decisions.
+var errMalformedProcStat = errors.New("malformed /proc stat line")
 
 // ReapOrphanRunners terminates runners left behind by a previous host process and
 // reclaims the broker sockets and shared-memory segments they were holding.
@@ -55,8 +62,9 @@ var procRoot = "/proc"
 // pinned to no supervisor, that only a manual kill can stop.
 //
 // Safety rules, in order of importance:
-//  1. A process is only considered if its argv[0] basename matches runnerPath, so
-//     unrelated processes are never candidates.
+//  1. A process is only considered if its executable resolves to
+//     <algorithmsRoot>/<id>/<version>/<id>, so unrelated processes are never
+//     candidates.
 //  2. A process is NEVER touched unless it has actually been reparented to an
 //     init/systemd reaper, so a runner still owned by a live host — including a
 //     second running Zhulong instance — is always left alone.
@@ -73,19 +81,15 @@ var procRoot = "/proc"
 // It is safe to call on every startup; a clean boot performs zero destructive
 // actions and reports an empty result.
 func ReapOrphanRunners(ctx context.Context, algorithmsDir string, logger *zap.Logger) (OrphanCleanupReport, error) {
-	report := OrphanCleanupReport{}
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	root, err := filepath.Abs(algorithmsDir)
-	if err != nil || algorithmsDir == "" || algorithmsDir == "." {
-		return report, fmt.Errorf("orphan sweep: algorithms directory %q is unusable", algorithmsDir)
-	}
-	// /proc/<pid>/exe is already symlink-free, so the root must be too — otherwise a
-	// data directory reached through a symlink (bind mount, relocated volume) never
-	// matches and the sweep silently stops working.
-	if resolved, evalErr := filepath.EvalSymlinks(root); evalErr == nil {
-		root = resolved
+
+	report := OrphanCleanupReport{}
+
+	root, err := resolveSweepRoot(algorithmsDir)
+	if err != nil {
+		return report, err
 	}
 
 	candidates, err := findOrphanCandidates(root)
@@ -93,16 +97,49 @@ func ReapOrphanRunners(ctx context.Context, algorithmsDir string, logger *zap.Lo
 		return report, fmt.Errorf("orphan sweep: scan /proc: %w", err)
 	}
 
+	failures := sweepOrphanProcesses(ctx, candidates, &report, logger)
+	failures = append(failures, sweepOrphanArtifacts(ctx, candidates, &report, logger)...)
+
+	logSweepOutcome(&report, logger)
+	return report, errors.Join(failures...)
+}
+
+// resolveSweepRoot validates the install root and makes it symlink-free.
+//
+// /proc/<pid>/exe is already symlink-free, so the root must be too — otherwise a
+// data directory reached through a symlink (bind mount, relocated volume) never
+// matches and the sweep silently stops working.
+func resolveSweepRoot(algorithmsDir string) (string, error) {
+	isEmpty := algorithmsDir == "" || algorithmsDir == "."
+	root, absErr := filepath.Abs(algorithmsDir)
+	if isEmpty || absErr != nil {
+		return "", fmt.Errorf("orphan sweep: algorithms directory %q is unusable", algorithmsDir)
+	}
+	if resolved, evalErr := filepath.EvalSymlinks(root); evalErr == nil {
+		return resolved, nil
+	}
+	return root, nil
+}
+
+// sweepOrphanProcesses kills the runners this sweep owns and reports the ones it
+// left alone.
+func sweepOrphanProcesses(
+	ctx context.Context,
+	candidates []orphanCandidate,
+	report *OrphanCleanupReport,
+	logger *zap.Logger,
+) []error {
 	var failures []error
 	for _, cand := range candidates {
 		if ctx.Err() != nil {
-			failures = append(failures, ctx.Err())
-			break
+			return append(failures, ctx.Err())
 		}
 		if !parentIsReaper(cand.PID) {
 			report.Skipped = append(report.Skipped, cand.PID)
 			logger.Warn("leaving runner alone: it still has a live supervisor",
-				zap.Int("pid", cand.PID), zap.Strings("broker_socks", cand.brokerSocks))
+				zap.Int("pid", cand.PID),
+				zap.Strings("broker_socks", cand.brokerSocks),
+			)
 			continue
 		}
 
@@ -120,64 +157,80 @@ func ReapOrphanRunners(ctx context.Context, algorithmsDir string, logger *zap.Lo
 		// The runner holds its shared-memory mapping and socket connection open
 		// until it actually dies, so wait for the kernel to retire it before
 		// deciding the files are reclaimable.
-		if waitForProcessExit(ctx, cand.PID, 3*time.Second) != nil {
+		if waitErr := waitForProcessExit(ctx, cand.PID, orphanExitTimeout); waitErr != nil {
 			failures = append(failures, fmt.Errorf("orphan runner %d did not exit after SIGKILL", cand.PID))
 		}
 	}
+	return failures
+}
 
-	// Process termination is independent of the artefact lock (a stuck lock must
-	// not leave an orphan burning a core), but every unlink below happens under
-	// the same directory lock native FrameBroker::start holds while creating
-	// shm segments and broker sockets.
-	lock, lockErr := acquireBrokerResourceLock(brokerResourceDirs(), false)
+// sweepOrphanArtifacts reclaims the socket files and shm segments nothing owns.
+//
+// Process termination is independent of the artefact lock (a stuck lock must not
+// leave an orphan burning a core), but every unlink here happens under the same
+// directory lock native FrameBroker::start holds while creating shm segments and
+// broker sockets.
+func sweepOrphanArtifacts(
+	ctx context.Context,
+	candidates []orphanCandidate,
+	report *OrphanCleanupReport,
+	logger *zap.Logger,
+) []error {
+	lock, lockErr := acquireBrokerResourceLock(brokerResourceDirs(), lockNonBlocking)
 	switch {
-	case lockErr == nil:
-		defer lock.release()
-		for _, cand := range candidates {
-			if ctx.Err() != nil {
-				break
-			}
-			if !slices.Contains(report.Killed, cand.PID) {
-				// Only sockets belonging to runners this sweep actually reaped are
-				// candidates; a supervised runner's socket must never be touched.
-				continue
-			}
-			for _, sock := range cand.brokerSocks {
-				outcome := removeStaleBrokerSocket(sock)
-				switch {
-				case outcome.removed:
-					report.RemovedSockets = append(report.RemovedSockets, sock)
-				case outcome.err != nil:
-					failures = append(failures, outcome.err)
-				case outcome.unverified:
-					report.UnverifiedSockets = append(report.UnverifiedSockets, sock)
-				}
-			}
-		}
-
-		// Second pass: artefacts left by a host whose runners were already reaped by
-		// Pdeathsig (or that never got as far as spawning one). These have no live
-		// candidate to derive paths from, so they are judged by their own liveness.
-		shmResult := removeUnheldShmSegments(ctx, logger)
-		report.RemovedShm = append(report.RemovedShm, shmResult.removed...)
-		report.UnverifiedShm = append(report.UnverifiedShm, shmResult.unverified...)
-		failures = append(failures, shmResult.failures...)
-
-		sockResult := removeAbandonedBrokerSockets(logger)
-		report.RemovedSockets = append(report.RemovedSockets, sockResult.removed...)
-		report.UnverifiedSockets = append(report.UnverifiedSockets, sockResult.unverified...)
-		failures = append(failures, sockResult.failures...)
 	case isResourceLockBusy(lockErr):
 		// A broker is being created right now, so every artefact under the lock is
 		// potentially in its create window. Skip reclamation entirely; the next
 		// boot will retry. Not a failure: the host is fully usable.
 		logger.Warn("skipping orphan artefact sweep: broker resources are being created",
-			zap.String("reason", "resource_lock_busy"))
-	default:
-		failures = append(failures, fmt.Errorf("orphan sweep: %w", lockErr))
+			zap.String("reason", "resource_lock_busy"),
+		)
+		return nil
+	case lockErr != nil:
+		return []error{fmt.Errorf("orphan sweep: %w", lockErr)}
 	}
+	defer lock.release()
 
-	reclaimedAnything := len(report.Killed) > 0 || len(report.RemovedShm) > 0 || len(report.RemovedSockets) > 0
+	failures := sweepReapedRunnerSockets(ctx, candidates, report)
+
+	// Second pass: artefacts left by a host whose runners were already reaped by
+	// Pdeathsig (or that never got as far as spawning one). These have no live
+	// candidate to derive paths from, so they are judged by their own liveness.
+	failures = append(failures, report.mergeShmBatch(removeUnheldShmSegments(ctx, logger))...)
+	failures = append(failures, report.mergeSocketBatch(removeAbandonedBrokerSockets())...)
+	return failures
+}
+
+// sweepReapedRunnerSockets removes the broker sockets that belonged to runners
+// this sweep actually killed. A supervised runner's socket must never be touched,
+// which is why the candidate set is filtered by report.Killed.
+func sweepReapedRunnerSockets(
+	ctx context.Context,
+	candidates []orphanCandidate,
+	report *OrphanCleanupReport,
+) []error {
+	var failures []error
+	for _, cand := range candidates {
+		if ctx.Err() != nil {
+			return failures
+		}
+		if !slices.Contains(report.Killed, cand.PID) {
+			continue
+		}
+		for _, sock := range cand.brokerSocks {
+			failures = append(failures, report.recordSocket(sock, removeStaleBrokerSocket(sock))...)
+		}
+	}
+	return failures
+}
+
+// logSweepOutcome reports what the sweep did, in the two categories an operator
+// needs to distinguish: reclaimed, and left in place because ownership was
+// undecidable.
+func logSweepOutcome(report *OrphanCleanupReport, logger *zap.Logger) {
+	reclaimedAnything := len(report.Killed) > 0 ||
+		len(report.RemovedShm) > 0 ||
+		len(report.RemovedSockets) > 0
 	if reclaimedAnything {
 		logger.Warn("startup orphan sweep reclaimed leaked algorithm resources",
 			zap.Ints("killed_pids", report.Killed),
@@ -192,7 +245,39 @@ func ReapOrphanRunners(ctx context.Context, algorithmsDir string, logger *zap.Lo
 			zap.Strings("unverified_sockets", report.UnverifiedSockets),
 		)
 	}
-	return report, errors.Join(failures...)
+}
+
+// sweepBatch is the outcome of one artefact batch sweep: what was removed, what
+// was left because ownership could not be proven, and what failed.
+type sweepBatch struct {
+	removed    []string
+	unverified []string
+	failures   []error
+}
+
+// recordSocket folds one socket decision into the report.
+func (r *OrphanCleanupReport) recordSocket(sock string, outcome socketSweepResult) []error {
+	switch {
+	case outcome.removed:
+		r.RemovedSockets = append(r.RemovedSockets, sock)
+	case outcome.err != nil:
+		return []error{outcome.err}
+	case outcome.unverified:
+		r.UnverifiedSockets = append(r.UnverifiedSockets, sock)
+	}
+	return nil
+}
+
+func (r *OrphanCleanupReport) mergeSocketBatch(batch sweepBatch) []error {
+	r.RemovedSockets = append(r.RemovedSockets, batch.removed...)
+	r.UnverifiedSockets = append(r.UnverifiedSockets, batch.unverified...)
+	return batch.failures
+}
+
+func (r *OrphanCleanupReport) mergeShmBatch(batch sweepBatch) []error {
+	r.RemovedShm = append(r.RemovedShm, batch.removed...)
+	r.UnverifiedShm = append(r.UnverifiedShm, batch.unverified...)
+	return batch.failures
 }
 
 type orphanCandidate struct {
@@ -276,25 +361,29 @@ func findOrphanCandidates(algorithmsRoot string) ([]orphanCandidate, error) {
 			// just without broker bookkeeping.
 			argv = nil
 		}
-
-		cand := orphanCandidate{PID: pid}
-		for i := 1; i < len(argv); i++ {
-			switch argv[i] {
-			case "--broker":
-				if i+1 < len(argv) && argv[i+1] != "" {
-					cand.brokerSocks = append(cand.brokerSocks, argv[i+1])
-					i++
-				}
-			case "--algorithm-id":
-				if i+1 < len(argv) {
-					cand.algorithmID = argv[i+1]
-					i++
-				}
-			}
-		}
-		candidates = append(candidates, cand)
+		candidates = append(candidates, candidateFromArgv(pid, argv))
 	}
 	return candidates, nil
+}
+
+// candidateFromArgv extracts the broker and algorithm bookkeeping from argv.
+func candidateFromArgv(pid int, argv []string) orphanCandidate {
+	cand := orphanCandidate{PID: pid}
+	for i := 1; i < len(argv); i++ {
+		switch argv[i] {
+		case "--broker":
+			if i+1 < len(argv) && argv[i+1] != "" {
+				cand.brokerSocks = append(cand.brokerSocks, argv[i+1])
+				i++
+			}
+		case "--algorithm-id":
+			if i+1 < len(argv) {
+				cand.algorithmID = argv[i+1]
+				i++
+			}
+		}
+	}
+	return cand
 }
 
 // readCmdline returns the NUL-separated argv of pid.
@@ -303,14 +392,35 @@ func readCmdline(pid int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) == 0 {
-		return nil, errors.New("empty cmdline")
-	}
 	trimmed := strings.TrimRight(string(raw), "\x00")
 	if trimmed == "" {
 		return nil, errors.New("empty cmdline")
 	}
 	return strings.Split(trimmed, "\x00"), nil
+}
+
+// procStatFields returns the /proc/<pid>/stat fields after the command name:
+// index 0 is the process state, index 1 is the parent pid.
+//
+// stat is "pid (comm) state ppid ..." and comm may contain spaces or parentheses,
+// so the line is parsed from the LAST ')' instead of being split: splitting would
+// shift every field after a comm such as "my (odd) name". This lives in one
+// function because the same parse decides both "is it a zombie" and "is it
+// reparented", and two copies drift.
+func procStatFields(pid int) ([]string, error) {
+	raw, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return nil, err
+	}
+	closeParen := strings.LastIndexByte(string(raw), ')')
+	if closeParen < 0 || closeParen+2 >= len(raw) {
+		return nil, errMalformedProcStat
+	}
+	fields := strings.Fields(string(raw[closeParen+2:]))
+	if len(fields) == 0 {
+		return nil, errMalformedProcStat
+	}
+	return fields, nil
 }
 
 // parentIsReaper reports whether pid was reparented to an init/systemd reaper,
@@ -325,19 +435,13 @@ func readCmdline(pid int) ([]string, error) {
 // Observed detail: on a systemd user session the reaper is `systemd --user`
 // (pid 2020 during development), not pid 1, so ppid == 1 alone is insufficient.
 func parentIsReaper(pid int) bool {
-	raw, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "stat"))
+	fields, err := procStatFields(pid)
 	if err != nil {
 		// The entry is gone. Whether it was a zombie or vanished, no supervisor
-		// remains to own this process, so the caller may reap it.
-		return true
+		// remains to own this process, so the caller may reap it. An unparseable
+		// line is not evidence of that, so it is treated as "not an orphan".
+		return !errors.Is(err, errMalformedProcStat)
 	}
-	// stat is "pid (comm) state ppid ..." and comm may contain spaces or parens,
-	// so parse from the last ')' instead of splitting the line.
-	closeParen := strings.LastIndexByte(string(raw), ')')
-	if closeParen < 0 || closeParen+2 >= len(raw) {
-		return false
-	}
-	fields := strings.Fields(string(raw[closeParen+2:]))
 	if len(fields) < 2 {
 		return false
 	}
@@ -426,419 +530,11 @@ func waitForProcessExit(ctx context.Context, pid int, timeout time.Duration) err
 // processIsZombie reports whether pid has already exited and is only waiting to
 // be reaped by its parent.
 func processIsZombie(pid int) bool {
-	raw, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "stat"))
+	fields, err := procStatFields(pid)
 	if err != nil {
-		// The entry is gone, which is the outcome the caller wants anyway.
-		return true
-	}
-	closeParen := strings.LastIndexByte(string(raw), ')')
-	if closeParen < 0 || closeParen+2 >= len(raw) {
-		return false
-	}
-	fields := strings.Fields(string(raw[closeParen+2:]))
-	if len(fields) == 0 {
-		return false
+		// The entry is gone, which is the outcome the caller wants anyway. An
+		// unparseable line proves nothing, so it is not reported as a zombie.
+		return !errors.Is(err, errMalformedProcStat)
 	}
 	return fields[0] == "Z" || fields[0] == "X"
-}
-
-// socketSweepResult is the outcome of one socket-file decision.
-type socketSweepResult struct {
-	removed    bool
-	unverified bool
-	err        error
-}
-
-// removeStaleBrokerSocket unlinks sockPath only when it can prove no process
-// still owns the socket.
-//
-// ⚠️ A connect probe alone is not proof of death. UnixSocketServer::start does
-// bind() then listen(), so between those two calls a LIVE broker answers
-// ECONNREFUSED exactly like an abandoned socket file. Liveness is therefore
-// decided primarily from /proc/net/unix, which lists a path from bind() onwards
-// regardless of listen state; the probe stays as a fallback for a broker that is
-// bound in a different network namespace (a container sharing /tmp), whose entry
-// this namespace's table cannot show.
-func removeStaleBrokerSocket(sockPath string) socketSweepResult {
-	if sockPath == "" {
-		return socketSweepResult{}
-	}
-	before, err := statFileID(sockPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return socketSweepResult{}
-		}
-		return socketSweepResult{err: err}
-	}
-
-	bound, err := unixSocketPaths()
-	if err != nil {
-		// Unknown ownership: leave the file for a later boot.
-		return socketSweepResult{unverified: true}
-	}
-	if _, listed := bound[sockPath]; listed {
-		return socketSweepResult{}
-	}
-
-	alive, probeErr := brokerSocketServing(sockPath)
-	if probeErr != nil {
-		return socketSweepResult{unverified: true} // Unclassifiable: leave it alone.
-	}
-	if alive {
-		return socketSweepResult{}
-	}
-
-	removed, err := removeIfUnchanged(sockPath, before)
-	if err != nil {
-		return socketSweepResult{err: err}
-	}
-	return socketSweepResult{removed: removed}
-}
-
-// removeIfUnchanged unlinks path only when it still identifies the object that was
-// inspected.
-//
-// Between the liveness probe and the unlink, another process can unlink the stale
-// file and bind a fresh broker at the same path. Unlinking by name would then
-// delete the NEW socket and leave a live broker unreachable, so the identity is
-// re-checked immediately before the removal.
-func removeIfUnchanged(path string, expected fileID) (bool, error) {
-	current, err := statFileID(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return false, err
-	}
-	if current != expected {
-		return false, nil
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, fmt.Errorf("remove stale broker socket %s: %w", path, err)
-	}
-	return true, nil
-}
-
-// brokerSocketServing reports whether something is accepting connections. A
-// missing or dead socket yields (false, nil); unix sockets use a lightweight
-// connect probe because the bind state has to be read out of /proc/net/unix.
-//
-// EAGAIN (backlog full) and EACCES mean "someone is there", not "dead", so they
-// are reported as errors and the caller leaves the file alone.
-func brokerSocketServing(sockPath string) (bool, error) {
-	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
-	if err != nil {
-		return false, err
-	}
-	defer syscall.Close(fd)
-
-	addr := &syscall.SockaddrUnix{Name: sockPath}
-	connErr := syscall.Connect(fd, addr)
-	if connErr == nil {
-		return true, nil
-	}
-	if errors.Is(connErr, syscall.ECONNREFUSED) || errors.Is(connErr, syscall.ENOENT) {
-		return false, nil
-	}
-	return false, connErr
-}
-
-// unixSocketPaths returns the set of filesystem paths with a live AF_UNIX
-// endpoint in this network namespace. The kernel publishes the path at bind()
-// time, so a socket that is bound but not yet listening is reported as live.
-//
-// An unreadable table is an error, not an empty set: "no endpoints" would make
-// every socket file look abandoned.
-func unixSocketPaths() (map[string]struct{}, error) {
-	raw, err := os.ReadFile(filepath.Join(procRoot, "net", "unix"))
-	if err != nil {
-		return nil, err
-	}
-	paths := make(map[string]struct{})
-	for _, line := range strings.Split(string(raw), "\n")[1:] {
-		fields := strings.Fields(line)
-		if len(fields) < 8 {
-			continue // Unnamed endpoint (no path column).
-		}
-		path := fields[7]
-		if strings.HasPrefix(path, "/") {
-			paths[path] = struct{}{}
-		}
-	}
-	return paths, nil
-}
-
-// shmRoot is where POSIX shm objects live on Linux. frame_broker.cpp builds the
-// names as "/zhulong_shm_<stream_id>", which shm_open maps to <shmRoot>.
-const shmRoot = "/dev/shm"
-
-// shmSweepResult is the outcome of one shm decision batch.
-type shmSweepResult struct {
-	removed    []string
-	unverified []string
-	failures   []error
-}
-
-// socketSweepBatch is the outcome of one socket-directory sweep.
-type socketSweepBatch struct {
-	removed    []string
-	unverified []string
-	failures   []error
-}
-
-// removeUnheldShmSegments unlinks zhulong shm segments that no live process still
-// holds. A segment is only reclaimable once its owner AND every reader are gone:
-// unlinking while mapped would not corrupt them (POSIX semantics keep the mapping
-// alive) but would make a running stream look broken on restart.
-func removeUnheldShmSegments(ctx context.Context, logger *zap.Logger) shmSweepResult {
-	var result shmSweepResult
-	entries, err := os.ReadDir(shmRoot)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return result
-		}
-		result.failures = append(result.failures, fmt.Errorf("orphan sweep: read %s: %w", shmRoot, err))
-		return result
-	}
-
-	for _, entry := range entries {
-		if ctx.Err() != nil {
-			result.failures = append(result.failures, ctx.Err())
-			break
-		}
-		name := entry.Name()
-		if !strings.HasPrefix(name, "zhulong_shm_") {
-			continue
-		}
-		full := filepath.Join(shmRoot, name)
-		state, stateErr := shmHoldState(full)
-		if stateErr != nil {
-			result.failures = append(result.failures, stateErr)
-			continue
-		}
-		switch state {
-		case holdLive:
-			logger.Debug("leaving shm segment alone: still held by a live process", zap.String("path", full))
-			continue
-		case holdUnknown:
-			// Ownership could not be verified; report it instead of deleting.
-			result.unverified = append(result.unverified, full)
-			continue
-		}
-		if rmErr := os.Remove(full); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-			result.failures = append(result.failures, fmt.Errorf("remove leaked shm segment %s: %w", full, rmErr))
-			continue
-		}
-		result.removed = append(result.removed, full)
-	}
-	return result
-}
-
-// shmHoldState reports whether any live process still maps or has open the shm
-// object at path.
-//
-// ⚠️ Fail-closed: an unreadable process (EACCES under hidepid or for another
-// uid, an I/O error mid-scan) is NOT evidence that the segment is free. Only a
-// process the kernel proves gone (ENOENT / ESRCH) is skipped. Getting this
-// backwards deletes a segment a live runner still maps, which surfaces as a
-// broken stream rather than a leaked file.
-func shmHoldState(path string) (holdState, error) {
-	id, err := statFileID(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return holdNone, nil // Already gone; nothing to decide.
-		}
-		return holdUnknown, fmt.Errorf("stat shm segment %s: %w", path, err)
-	}
-
-	entries, err := os.ReadDir(procRoot)
-	if err != nil {
-		return holdUnknown, fmt.Errorf("orphan sweep: read %s: %w", procRoot, err)
-	}
-	unknown := false
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		pid, convErr := strconv.Atoi(entry.Name())
-		if convErr != nil || pid <= 0 {
-			continue
-		}
-		switch processHoldsFile(pid, id, path) {
-		case holdLive:
-			return holdLive, nil
-		case holdUnknown:
-			// Keep scanning: a later process may prove the segment is live, which
-			// is the answer the caller acts on either way.
-			unknown = true
-		}
-	}
-	if unknown {
-		return holdUnknown, nil
-	}
-	return holdNone, nil
-}
-
-// holdState is the result of asking /proc whether a file is still in use.
-type holdState int
-
-const (
-	// holdNone: the kernel proves no live process maps or has the file open.
-	holdNone holdState = iota
-	// holdLive: a live process still maps or has the file open.
-	holdLive
-	// holdUnknown: at least one process could not be inspected, so ownership is
-	// undecidable. Callers must treat it as held.
-	holdUnknown
-)
-
-// processHoldsFile reports whether pid maps or has an open descriptor for the
-// file identified by id.
-//
-// Both questions matter:
-//   - maps covers a runner that already mmap'ed the segment.
-//   - open descriptors cover the shm_open → mmap window, where the object is
-//     published under its name but not yet mapped by anyone, so a maps-only check
-//     sees "free" for a broker that is one statement away from mapping it.
-//
-// A process that vanished between readdir and the read returns holdNone: the
-// kernel entry is gone, so it cannot be holding anything.
-func processHoldsFile(pid int, id fileID, path string) holdState {
-	procDir := filepath.Join(procRoot, strconv.Itoa(pid))
-
-	mapsFile, err := os.Open(filepath.Join(procDir, "maps"))
-	if err != nil {
-		if processVanished(err) {
-			return holdNone
-		}
-		return holdUnknown
-	}
-	mapped, readErr := mapsFileContains(mapsFile, id)
-	_ = mapsFile.Close()
-	if readErr != nil {
-		if processVanished(readErr) {
-			return holdNone
-		}
-		return holdUnknown
-	}
-	if mapped {
-		return holdLive
-	}
-
-	fdDir, err := os.Open(filepath.Join(procDir, "fd"))
-	if err != nil {
-		if processVanished(err) {
-			return holdNone
-		}
-		return holdUnknown
-	}
-	fds, err := fdDir.Readdirnames(-1)
-	_ = fdDir.Close()
-	if err != nil {
-		if processVanished(err) {
-			return holdNone
-		}
-		return holdUnknown
-	}
-	for _, fd := range fds {
-		target, err := os.Readlink(filepath.Join(procDir, "fd", fd))
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue // Descriptor closed between readdir and readlink.
-			}
-			return holdUnknown
-		}
-		if fdTargetsFile(target, id, path) {
-			return holdLive
-		}
-	}
-	return holdNone
-}
-
-// fdTargetsFile reports whether an /proc/<pid>/fd link target refers to the file
-// identified by id.
-//
-// The textual comparison is the common case (a descriptor opened on the very path
-// we are about to unlink). The identity comparison catches aliases — a bind
-// mount, a rename, a hardlink — and is only attempted for targets under shmRoot
-// so a process with thousands of unrelated descriptors stays cheap.
-func fdTargetsFile(target string, id fileID, path string) bool {
-	target = strings.TrimSuffix(target, " (deleted)")
-	if target == path {
-		return true
-	}
-	if !strings.HasPrefix(target, shmRoot+"/") {
-		return false
-	}
-	targetID, err := statFileID(target)
-	if err != nil {
-		// Vanished (deleted) or unreadable target: the textual comparison above is
-		// the only evidence available, and it did not match.
-		return false
-	}
-	return targetID == id
-}
-
-// processVanished reports whether err means the process (or its /proc entry)
-// disappeared, as opposed to existing but being unreadable.
-func processVanished(err error) bool {
-	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ESRCH)
-}
-
-// mapsFileContains streams a maps file looking for a mapping of the file
-// identified by id, stopping at the first hit.
-//
-// It matches on the kernel-reported identity (device major:minor plus inode,
-// columns 4 and 5) rather than on the pathname, because the pathname column is
-// unreliable exactly when it matters: it gains a " (deleted)" suffix once the
-// segment has been unlinked, and it is rewritten by a rename.
-func mapsFileContains(file *os.File, id fileID) (bool, error) {
-	wantDev := fmt.Sprintf("%02x:%02x", id.devMajor, id.devMinor)
-	wantIno := strconv.FormatUint(id.ino, 10)
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		// Format: addr perms offset dev inode [pathname]
-		fields := strings.Fields(scanner.Text())
-		if len(fields) < 5 {
-			continue
-		}
-		if fields[3] == wantDev && fields[4] == wantIno {
-			return true, nil
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return false, err
-	}
-	return false, nil
-}
-
-// removeAbandonedBrokerSockets sweeps broker directories for socket files that
-// nothing is bound to. The base directory mirrors pipeline/engine.cpp: the
-// ZHULONG_FRAME_BROKER_SOCK override, else /tmp.
-func removeAbandonedBrokerSockets(logger *zap.Logger) socketSweepBatch {
-	baseDir := brokerResourceDirs()[0]
-	entries, err := os.ReadDir(baseDir)
-	if err != nil {
-		return socketSweepBatch{} // Unreadable dir is not a sweep failure.
-	}
-
-	var result socketSweepBatch
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasPrefix(name, "zhulong_broker_") || !strings.HasSuffix(name, ".sock") {
-			continue
-		}
-		full := filepath.Join(baseDir, name)
-		outcome := removeStaleBrokerSocket(full)
-		switch {
-		case outcome.removed:
-			result.removed = append(result.removed, full)
-		case outcome.err != nil:
-			result.failures = append(result.failures, outcome.err)
-		case outcome.unverified:
-			result.unverified = append(result.unverified, full)
-		}
-	}
-	return result
 }

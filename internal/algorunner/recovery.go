@@ -40,11 +40,14 @@ func DefaultRecoveryOptions() RecoveryOptions {
 }
 
 // RecoveryStateMachine tracks crash history, exponential backoff, and circuit breakers.
+//
+// The crash count inside the sliding window is len(crashHistory): no separate
+// counter is kept, because a counter and the history it counts can drift apart
+// and the backoff ladder would then be computed from a number the circuit
+// breaker never saw.
 type RecoveryStateMachine struct {
 	opts           RecoveryOptions
-	consecutive    int
 	crashHistory   []time.Time
-	lastStableAt   time.Time
 	circuitTripped bool
 	mu             sync.Mutex
 }
@@ -86,8 +89,7 @@ func NewRecoveryStateMachine(opts RecoveryOptions) *RecoveryStateMachine {
 	opts = opts.normalize()
 
 	return &RecoveryStateMachine{
-		opts:         opts,
-		lastStableAt: time.Now(),
+		opts: opts,
 	}
 }
 
@@ -102,7 +104,9 @@ func NewRecoveryStateMachine(opts RecoveryOptions) *RecoveryStateMachine {
 // observable delays are 1s, 2s, 4s; the 8s tier (shift=3) is UNREACHABLE under
 // this quota because crash 4 trips the breaker instead of scheduling 8s. The
 // ladder describes the formula's shape, not a guarantee that every tier runs.
-func (sm *RecoveryStateMachine) RecordCrash(now time.Time) (shouldRestart bool, delay time.Duration, circuitBroken bool) {
+func (sm *RecoveryStateMachine) RecordCrash(
+	now time.Time,
+) (shouldRestart bool, delay time.Duration, circuitBroken bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -120,7 +124,6 @@ func (sm *RecoveryStateMachine) RecordCrash(now time.Time) (shouldRestart bool, 
 	}
 	validHistory = append(validHistory, now)
 	sm.crashHistory = validHistory
-	sm.consecutive = len(validHistory)
 
 	// Circuit breaker condition: crash count EXCEEDED the allowed quota within
 	// the sliding window (see RecordCrash for the quota semantics).
@@ -129,8 +132,8 @@ func (sm *RecoveryStateMachine) RecordCrash(now time.Time) (shouldRestart bool, 
 		return false, 0, true
 	}
 
-	// Calculate exponential backoff: base * 2^(consecutive - 1) capped at max
-	shift := sm.consecutive - 1
+	// Calculate exponential backoff: base * 2^(crashCount - 1) capped at max
+	shift := len(sm.crashHistory) - 1
 	if shift > 10 {
 		shift = 10
 	}
@@ -149,10 +152,8 @@ func (sm *RecoveryStateMachine) CheckStableReset(uptime time.Duration) bool {
 	defer sm.mu.Unlock()
 
 	if uptime >= sm.opts.StableRunningThreshold {
-		sm.consecutive = 0
 		sm.crashHistory = nil
 		sm.circuitTripped = false
-		sm.lastStableAt = time.Now()
 		return true
 	}
 	return false
@@ -162,10 +163,8 @@ func (sm *RecoveryStateMachine) CheckStableReset(uptime time.Duration) bool {
 func (sm *RecoveryStateMachine) Reset() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	sm.consecutive = 0
 	sm.crashHistory = nil
 	sm.circuitTripped = false
-	sm.lastStableAt = time.Now()
 }
 
 // IsCircuitBroken returns whether the circuit breaker has tripped.

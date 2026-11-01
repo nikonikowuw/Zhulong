@@ -4,6 +4,14 @@ package algorunner
 
 import "syscall"
 
+// PackageSysProcAttr is the SysProcAttr every package process must be started
+// with.
+//
+// It is exported so packages outside this one (faceextract) reuse the exact same
+// spawn contract instead of re-deriving it: two opinions about Pdeathsig is how
+// orphans survive.
+func PackageSysProcAttr() *syscall.SysProcAttr { return runnerSysProcAttr() }
+
 // runnerSysProcAttr returns the SysProcAttr used to launch a package process.
 //
 // Setpgid puts the runner in its own process group so Stop can signal the whole
@@ -22,13 +30,8 @@ import "syscall"
 // way), while a third-party plugin is free to install a TERM handler and
 // survive — reintroducing exactly the orphan this guards against.
 //
-// ⚠️ Requires the spawn to happen on a pinned OS thread; see
-// RunnerProcess.Start for the thread-lifetime contract.
-// PackageSysProcAttr is runnerSysProcAttr under an exported name, so packages
-// outside this one (faceextract) reuse the exact same spawn contract instead of
-// re-deriving it — two opinions about Pdeathsig is how orphans survive.
-func PackageSysProcAttr() *syscall.SysProcAttr { return runnerSysProcAttr() }
-
+// ⚠️ Requires the spawn to happen on a pinned OS thread; see RunnerProcess.Start
+// for the thread-lifetime contract.
 func runnerSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{
 		Setpgid:   true,

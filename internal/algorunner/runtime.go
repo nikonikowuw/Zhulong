@@ -3,6 +3,7 @@ package algorunner
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -107,21 +108,22 @@ func (r Runtime) EnvPath(id, version string) string {
 // the supervisor can call it on every start. The installer chmods after this
 // check succeeds (see verifier.VerifyDirectory).
 func ResolveEntry(pkgDir, id string) (string, error) {
-	if id == "" || id == LegacyEntryFileName || !entryIDPattern.MatchString(id) {
+	if !isSafePackageID(id) {
 		return "", fmt.Errorf("%w: illegal package id %q", ErrInvalidEntry, id)
 	}
 
 	legacy := filepath.Join(pkgDir, LegacyEntryFileName)
-	if _, err := os.Lstat(legacy); err == nil {
+	switch _, legacyErr := os.Lstat(legacy); {
+	case legacyErr == nil:
 		return "", fmt.Errorf("%w: %s", ErrLegacyEntry, legacy)
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("inspect legacy entry %s: %w", legacy, err)
+	case !errors.Is(legacyErr, fs.ErrNotExist):
+		return "", fmt.Errorf("inspect legacy entry %s: %w", legacy, legacyErr)
 	}
 
 	entry := filepath.Join(pkgDir, id)
 	info, err := os.Lstat(entry)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return "", fmt.Errorf("%w: %s", ErrMissingEntry, entry)
 		}
 		return "", fmt.Errorf("inspect package entry %s: %w", entry, err)
@@ -130,4 +132,13 @@ func ResolveEntry(pkgDir, id string) (string, error) {
 		return "", fmt.Errorf("%w: %s (mode %s)", ErrInvalidEntry, entry, info.Mode())
 	}
 	return entry, nil
+}
+
+// isSafePackageID reports whether id may be used as a path component and as an
+// executable name. It is named because the three conditions are one decision —
+// "is this id safe" — and a bare || chain of three operands hides that.
+func isSafePackageID(id string) bool {
+	isRetiredEntryName := id == LegacyEntryFileName
+	isWellFormed := id != "" && entryIDPattern.MatchString(id)
+	return !isRetiredEntryName && isWellFormed
 }

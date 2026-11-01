@@ -1,16 +1,13 @@
 package algorunner
 
 import (
-	"bufio"
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -34,40 +31,72 @@ const (
 	// runnerExitWorkerStalled is the runner's exit code when one per-stream worker
 	// stopped making progress and the skeleton's watchdog ended the process.
 	runnerExitWorkerStalled = algoipc.RunnerExitWorkerStalled
-
-	maxRunnerLogLine = 64 * 1024
-	runnerLogRate    = 100
 )
 
-// LoadDotEnv reads key-value environment variable pairs from a .env file.
-func LoadDotEnv(filePath string) (map[string]string, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return make(map[string]string), nil
-		}
-		return nil, err
-	}
-	defer file.Close()
+// exitDiagnosis is how a runner failure stage is reported.
+//
+// It is a table rather than an if/else chain because the same variable (the
+// process exit code, and later the failure stage it implied) used to be compared
+// three times in a row: a table cannot drift out of sync with the case list, and
+// a new stage means a new row.
+type exitDiagnosis struct {
+	// reason is the stable machine-readable log field.
+	reason string
+	// message is the human-readable log message.
+	message string
+	// level is the severity. A distinguishable failure (broker unreachable, a
+	// worker thread died) is an Error worth its own investigation; an ordinary
+	// non-zero exit is a Warn.
+	level zapcore.Level
+}
 
-	env := make(map[string]string)
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			val := strings.TrimSpace(parts[1])
-			val = strings.Trim(val, `"'`)
-			if key != "" {
-				env[key] = val
-			}
-		}
-	}
-	return env, scanner.Err()
+// exitFailureStages maps a runner exit code to the failure stage it implies.
+//
+// This is the secondary channel: the stderr stage record is primary, because exit
+// codes are more fragile to native changes.
+var exitFailureStages = map[int]string{
+	runnerExitBrokerUnavailable: algoipc.FailureStageBrokerConnect,
+	runnerExitWorkerCrashed:     algoipc.FailureStageWorkerException,
+	runnerExitWorkerStalled:     algoipc.FailureStageWorkerStalled,
+}
+
+// failureStageDiagnoses maps a failure stage to how it is logged. Both channels
+// (exit code and stderr marker) converge here, so the same failure never gets two
+// different explanations depending on which channel noticed it first.
+var failureStageDiagnoses = map[string]exitDiagnosis{
+	algoipc.FailureStageBrokerConnect: {
+		// The runner could not connect to every broker socket it was given. This is
+		// a distinguishable signal, NOT an ordinary plugin crash. We do not fake
+		// success or change watchdog restart/circuit-breaker behaviour.
+		reason:  "broker_unavailable",
+		message: "runner exited because it could not connect to its frame broker sockets",
+		level:   zapcore.ErrorLevel,
+	},
+	algoipc.FailureStageWorkerException: {
+		// One per-stream worker threw inside the package skeleton (typically an
+		// allocation failure while serializing a result). Same restart/rollback
+		// path as any other crash; reported apart so "the algorithm misbehaved"
+		// is not buried under "the process exited unexpectedly".
+		reason:  "worker_exception",
+		message: "runner worker thread failed with an uncaught exception",
+		level:   zapcore.ErrorLevel,
+	},
+	algoipc.FailureStageWorkerStalled: {
+		// One per-stream worker hung inside process() and the package watchdog
+		// ended the process. Same restart path as any other crash; reported apart
+		// because "the algorithm is too slow / deadlocked" is not the same
+		// investigation as "the algorithm crashed".
+		reason:  "worker_stalled",
+		message: "runner worker thread stopped making progress and was terminated by its watchdog",
+		level:   zapcore.ErrorLevel,
+	},
+}
+
+// unexpectedExit is the diagnosis for a non-zero exit code without a dedicated row.
+var unexpectedExit = exitDiagnosis{
+	reason:  "unexpected_exit",
+	message: "runner process exited unexpectedly",
+	level:   zapcore.WarnLevel,
 }
 
 // ProcessConfig defines options for launching a package process.
@@ -87,8 +116,11 @@ type ProcessConfig struct {
 
 // RunnerProcess supervises one algorithm package subprocess.
 type RunnerProcess struct {
-	config       ProcessConfig
-	logger       *zap.Logger
+	config ProcessConfig
+	logger *zap.Logger
+
+	// mu guards the process lifecycle fields below. It is never held while
+	// spawning or signalling: those do IO and belong outside the lock.
 	mu           sync.Mutex
 	cmd          *exec.Cmd
 	state        string
@@ -97,29 +129,14 @@ type RunnerProcess struct {
 	exitCode     int
 	failureStage string
 	startTime    time.Time
-	logRateMu    sync.Mutex
-	logRate      [2]runnerLogWindow
-	logStats     [2]runnerLogStats
-}
 
-type runnerLogWindow struct {
-	started time.Time
-	emitted int
-}
-
-type runnerLogStats struct {
-	rateLimited uint64
-	invalid     uint64
-	oversized   uint64
-	readErrors  uint64
-	reported    runnerLogStatsSnapshot
-}
-
-type runnerLogStatsSnapshot struct {
-	rateLimited uint64
-	invalid     uint64
-	oversized   uint64
-	readErrors  uint64
+	// logRateMu guards the runner output rate limiter and drop counters. It is
+	// separate from mu because the log path is a hot loop that must never contend
+	// with lifecycle calls.
+	logRateMu sync.Mutex
+	logRate   [runnerLogSourceCount]runnerLogWindow
+	logStats  [runnerLogSourceCount]runnerLogStats
+	reported  [runnerLogSourceCount]runnerLogStats
 }
 
 // NewRunnerProcess creates a new RunnerProcess instance.
@@ -135,29 +152,14 @@ func NewRunnerProcess(cfg ProcessConfig) *RunnerProcess {
 	}
 }
 
-// Start launches the runner subprocess with environment injection and output logging.
-func (p *RunnerProcess) Start() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.state == StatusRunning || p.state == StatusStarting {
-		return errors.New("process is already running")
-	}
-
-	p.state = StatusStarting
-	p.doneCh = make(chan struct{})
-	p.exitErr = nil
-	p.exitCode = 0
-	p.failureStage = ""
-
-	// No --plugin and no --max-workers: the executable carries its own algorithm
-	// class and its own worker pool configuration.
-	var args []string
-	if len(p.config.BrokerSocks) > 0 {
-		for _, sock := range p.config.BrokerSocks {
-			if sock != "" {
-				args = append(args, "--broker", sock)
-			}
+// runnerArgs builds the package's argv. No --plugin and no --max-workers: the
+// executable carries its own algorithm class and its own worker pool
+// configuration.
+func (p *RunnerProcess) runnerArgs() []string {
+	args := make([]string, 0, len(p.config.BrokerSocks)*2+4)
+	for _, sock := range p.config.BrokerSocks {
+		if sock != "" {
+			args = append(args, "--broker", sock)
 		}
 	}
 	if p.config.AlgorithmName != "" {
@@ -169,8 +171,144 @@ func (p *RunnerProcess) Start() error {
 	if p.config.DisableMotionGate {
 		args = append(args, "--disable-motion-gate")
 	}
+	return args
+}
 
-	cmd := exec.Command(p.config.ExecutablePath, args...)
+// runnerEnv builds the child environment: the host environment overlaid with the
+// package's .env values and then with the configured extras.
+//
+// Each key appears exactly once. Appending to os.Environ() instead would leave
+// duplicates, and which of the two values a library's getenv() returns then
+// depends on scan order rather than on the host's intent.
+func (p *RunnerProcess) runnerEnv() []string {
+	overlay := make(map[string]string)
+	if p.config.EnvFile != "" {
+		loaded, err := LoadDotEnv(p.config.EnvFile)
+		if err != nil {
+			// A missing file is optional (LoadDotEnv turns os.IsNotExist into an
+			// empty map + nil error), so any error here is a real read/parse
+			// failure (e.g. a line longer than bufio.Scanner's 64KB token limit).
+			// Log it and continue with the variables that were parsed: a broken
+			// .env must be observable without blocking the runner.
+			//
+			// The error is reduced to a stable reason instead of being logged
+			// verbatim: a read failure surfaces as *fs.PathError, and the package
+			// directory path must not reach the host log (same rule the runner
+			// output path follows).
+			p.logger.Warn("failed to load runner dotenv file",
+				zap.String("reason", envFailureReason(err)),
+			)
+		}
+		maps.Copy(overlay, loaded)
+	}
+	maps.Copy(overlay, p.config.ExtraEnv)
+
+	return mergeEnviron(os.Environ(), overlay)
+}
+
+// envFailureReason classifies an env-file error without exposing any path.
+//
+// The reason set is intentionally small and stable: operators alert on it, so it
+// must not become "the raw error text". A bufio.Scanner token-overflow (a line
+// longer than 64KB) is reported as parse_error.
+func envFailureReason(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "missing_file"
+	case errors.Is(err, fs.ErrPermission):
+		return "permission_denied"
+	}
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return "read_error"
+	}
+	return "parse_error"
+}
+
+// mergeEnviron overrides base with overlay, keeping one entry per key.
+func mergeEnviron(base []string, overlay map[string]string) []string {
+	merged := make(map[string]string, len(base)+len(overlay))
+	order := make([]string, 0, len(base)+len(overlay))
+	for _, kv := range base {
+		key, value, found := strings.Cut(kv, "=")
+		if !found {
+			continue
+		}
+		if _, seen := merged[key]; !seen {
+			order = append(order, key)
+		}
+		merged[key] = value
+	}
+	for key, value := range overlay {
+		if _, seen := merged[key]; !seen {
+			order = append(order, key)
+		}
+		merged[key] = value
+	}
+
+	env := make([]string, 0, len(order))
+	for _, key := range order {
+		env = append(env, key+"="+merged[key])
+	}
+	return env
+}
+
+// runnerPipes holds both output pipes of a spawn so every failure path can close
+// them through one call.
+type runnerPipes struct {
+	stdoutR *os.File
+	stdoutW *os.File
+	stderrR *os.File
+	stderrW *os.File
+}
+
+func openRunnerPipes() (*runnerPipes, error) {
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("create stdout pipe: %w", err)
+	}
+	stderrR, stderrW, err := os.Pipe()
+	if err != nil {
+		closePipes(stdoutR, stdoutW)
+		return nil, fmt.Errorf("create stderr pipe: %w", err)
+	}
+	return &runnerPipes{stdoutR: stdoutR, stdoutW: stdoutW, stderrR: stderrR, stderrW: stderrW}, nil
+}
+
+// closePipes closes whatever is non-nil. Close errors are deliberately ignored:
+// these descriptors belong to a spawn that is already failing, and a close error
+// cannot change that outcome.
+func closePipes(files ...*os.File) {
+	for _, file := range files {
+		closeFileBestEffort(file)
+	}
+}
+
+// closeFileBestEffort closes an inspection handle (a pipe end, a /proc read, a
+// lock descriptor).
+//
+// The close error is ignored and documented once here rather than at each call
+// site: the handle is read-only and its data is already consumed, so a close
+// failure cannot change any decision; callers are either on a path that already
+// has a more specific failure or on a success path with nothing left to do.
+func closeFileBestEffort(file *os.File) {
+	if file == nil {
+		return
+	}
+	_ = file.Close() // best effort: nothing left to flush, no decision depends on it
+}
+
+// Start launches the runner subprocess with environment injection and output logging.
+func (p *RunnerProcess) Start() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.state == StatusRunning || p.state == StatusStarting {
+		return errors.New("process is already running")
+	}
+	p.beginStart()
+
+	cmd := exec.Command(p.config.ExecutablePath, p.runnerArgs()...)
 
 	// Run the runner in its own process group. Stop signals the whole group, so
 	// grandchildren the runner spawns cannot leak while holding the broker socket
@@ -178,49 +316,16 @@ func (p *RunnerProcess) Start() error {
 	// arms Pdeathsig, the only defence that survives host death without Go code
 	// running (SIGKILL / OOM / native crash). See runnerSysProcAttr.
 	cmd.SysProcAttr = runnerSysProcAttr()
-
-	// Load and inject .env variables. A missing file is optional (LoadDotEnv
-	// turns os.IsNotExist into an empty map + nil error), so any error here is a
-	// real parse failure (e.g. a line longer than bufio.Scanner's 64KB token
-	// limit). Do not swallow it: log a Warn and continue with the variables that
-	// were parsed, so a broken .env is observable without blocking the runner.
-	envMap := make(map[string]string)
-	if p.config.EnvFile != "" {
-		loaded, err := LoadDotEnv(p.config.EnvFile)
-		if err != nil {
-			p.logger.Warn("failed to load runner dotenv file", zap.String("reason", "parse_error"))
-		}
-		for k, v := range loaded {
-			envMap[k] = v
-		}
-	}
-	for k, v := range p.config.ExtraEnv {
-		envMap[k] = v
-	}
-
-	cmd.Env = os.Environ()
-	for k, v := range envMap {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-	}
+	cmd.Env = p.runnerEnv()
 
 	// Create pipes manually so cmd.Wait() does not close them prematurely while scanning.
-	stdoutR, stdoutW, err := os.Pipe()
+	pipes, err := openRunnerPipes()
 	if err != nil {
-		p.state = StatusDisabled
-		close(p.doneCh)
-		return fmt.Errorf("create stdout pipe: %w", err)
+		p.failStart()
+		return err
 	}
-	stderrR, stderrW, err := os.Pipe()
-	if err != nil {
-		stdoutR.Close()
-		stdoutW.Close()
-		p.state = StatusDisabled
-		close(p.doneCh)
-		return fmt.Errorf("create stderr pipe: %w", err)
-	}
-
-	cmd.Stdout = stdoutW
-	cmd.Stderr = stderrW
+	cmd.Stdout = pipes.stdoutW
+	cmd.Stderr = pipes.stderrW
 
 	// ⚠️ Pdeathsig is delivered when the *OS thread* that forked the child exits,
 	// not when the process exits (go.dev/issue/27505). runtime.LockOSThread pins
@@ -251,22 +356,17 @@ func (p *RunnerProcess) Start() error {
 		// reaping: an immediately-exiting child would otherwise reach the state
 		// bookkeeping in watchExit while Start is still mutating the struct.
 		<-ready
-		p.watchExit(cmd, stdoutR, stderrR, &logWg)
+		p.watchExit(cmd, pipes, &logWg)
 	}()
 
 	if startErr := <-started; startErr != nil {
-		stdoutR.Close()
-		stdoutW.Close()
-		stderrR.Close()
-		stderrW.Close()
-		p.state = StatusDisabled
-		close(p.doneCh)
+		pipes.close()
+		p.failStart()
 		return fmt.Errorf("start runner process: %w", startErr)
 	}
 
 	// Close parent's write ends immediately so EOF propagates when child terminates
-	stdoutW.Close()
-	stderrW.Close()
+	closePipes(pipes.stdoutW, pipes.stderrW)
 
 	p.cmd = cmd
 	p.startTime = time.Now()
@@ -275,13 +375,13 @@ func (p *RunnerProcess) Start() error {
 	logWg.Add(2)
 	go func() {
 		defer logWg.Done()
-		p.streamLogs(stdoutR, zap.DebugLevel, false)
-		stdoutR.Close()
+		p.streamLogs(pipes.stdoutR, zapcore.DebugLevel, false)
+		closePipes(pipes.stdoutR)
 	}()
 	go func() {
 		defer logWg.Done()
-		p.streamLogs(stderrR, zap.WarnLevel, true)
-		stderrR.Close()
+		p.streamLogs(pipes.stderrR, zapcore.WarnLevel, true)
+		closePipes(pipes.stderrR)
 	}()
 
 	// Everything the watcher needs is now initialised; let it proceed to Wait.
@@ -289,351 +389,44 @@ func (p *RunnerProcess) Start() error {
 	return nil
 }
 
-func (p *RunnerProcess) streamLogs(r *os.File, level zapcore.Level, isStderr bool) {
-	source := "stdout"
-	if isStderr {
-		source = "stderr"
-	}
-	p.streamLogReader(r, source, level)
+// beginStart resets the lifecycle fields for a fresh child. Callers must hold mu.
+func (p *RunnerProcess) beginStart() {
+	p.state = StatusStarting
+	p.doneCh = make(chan struct{})
+	p.exitErr = nil
+	p.exitCode = 0
+	p.failureStage = ""
 }
 
-func (p *RunnerProcess) streamLogReader(reader io.Reader, source string, fallback zapcore.Level) {
-	buf := bufio.NewReaderSize(reader, 4096)
-	for {
-		line, lineBytes, oversized, err := readBoundedLine(buf, maxRunnerLogLine)
-		if err != nil && !errors.Is(err, io.EOF) {
-			p.countRunnerIssue(source, "read_error")
-			p.logger.Error("runner log reader stopped", zap.String("source", source), zap.String("reason", "read_error"))
-			break
-		}
-		if oversized {
-			p.countRunnerIssue(source, "oversized")
-			p.emitRunnerEvent(source, fallback, "runner output line exceeded limit",
-				zap.String("source", source), zap.Int64("line_bytes", lineBytes))
-		} else if len(line) != 0 {
-			parsed := classifyRunnerLine(line, source, fallback)
-			if parsed.invalid {
-				p.countRunnerIssue(source, "invalid")
-			}
-			if parsed.stage == algoipc.FailureStageBrokerConnect {
-				p.mu.Lock()
-				p.failureStage = algoipc.FailureStageBrokerConnect
-				p.mu.Unlock()
-			}
-			p.emitRunnerEvent(source, parsed.level, parsed.message, parsed.fields...)
-		}
-		if errors.Is(err, io.EOF) {
-			break
-		}
-	}
-	p.reportRunnerIssues(source)
+// failStart publishes "not running" after a spawn that never produced a child.
+// Callers must hold mu.
+func (p *RunnerProcess) failStart() {
+	p.state = StatusDisabled
+	close(p.doneCh)
 }
 
-type parsedRunnerLine struct {
-	message string
-	level   zapcore.Level
-	fields  []zap.Field
-	stage   string
-	invalid bool
+// close closes every pipe end of a spawn.
+func (pipes *runnerPipes) close() {
+	closePipes(pipes.stdoutR, pipes.stdoutW, pipes.stderrR, pipes.stderrW)
 }
 
-func classifyRunnerLine(line []byte, source string, fallback zapcore.Level) parsedRunnerLine {
-	base := []zap.Field{zap.String("source", source), zap.Int("line_bytes", len(line))}
-	parsed := parsedRunnerLine{level: fallback}
-	var object map[string]json.RawMessage
-	if json.Unmarshal(line, &object) != nil || object == nil {
-		parsed.message = "runner output ignored"
-		parsed.fields = base
-		return parsed
-	}
-
-	_, hasStatus := object["status"]
-	_, hasStage := object["stage"]
-	_, hasStep := object["step"]
-	hasProtocolEvent := hasStatus || hasStage || hasStep
-	if hasProtocolEvent {
-		parsed.message = "runner protocol event"
-		parsed.fields = base
-		for key, allowed := range map[string]func(string) bool{
-			"status": validRunnerStatus,
-			"stage":  validRunnerStage,
-			"step":   validRunnerStep,
-		} {
-			raw, exists := object[key]
-			if !exists {
-				continue
-			}
-			var value string
-			if json.Unmarshal(raw, &value) != nil || !allowed(value) {
-				parsed.invalid = true
-				parsed.message = "runner protocol record rejected"
-				parsed.fields = base
-				return parsed
-			}
-			parsed.fields = append(parsed.fields, zap.String(key, value))
-			if key == "stage" {
-				parsed.stage = value
-			}
-		}
-		if raw, exists := object["rc"]; exists {
-			code, err := strconv.ParseInt(string(raw), 10, 32)
-			if err != nil {
-				parsed.invalid = true
-				parsed.message = "runner protocol record rejected"
-				parsed.fields = base
-				return parsed
-			}
-			parsed.fields = append(parsed.fields, zap.Int64("rc", code))
-		}
-		_, errorExists := object["error"]
-		errorPresent := errorExists && string(object["error"]) != "null"
-		parsed.fields = append(parsed.fields, zap.Bool("error_present", errorPresent))
-		return parsed
-	}
-
-	nativeLog, ok := decodeLogFlag(object["zhulongLog"])
-	if ok && nativeLog {
-		module, level, message, fieldsOK := decodeNativeLogFields(object)
-		nativeLevel, levelOK := nativeZapLevel(level)
-		if !fieldsOK || !levelOK {
-			parsed.invalid = true
-			parsed.message = "runner native log rejected"
-			parsed.fields = base
-			return parsed
-		}
-		parsed.message = "runner native log"
-		parsed.level = nativeLevel
-		parsed.fields = append(base,
-			zap.String("module", module),
-			zap.String("level", level),
-			zap.Int("message_bytes", len(message)),
-		)
-		if rawStreamID, exists := object["streamId"]; exists {
-			streamID, err := strconv.ParseUint(string(rawStreamID), 10, 64)
-			if err != nil {
-				parsed.invalid = true
-				parsed.message = "runner native log rejected"
-				parsed.fields = base
-				return parsed
-			}
-			if streamID != 0 {
-				parsed.fields = append(parsed.fields, zap.Uint64("stream_id", streamID))
-			}
-		}
-		return parsed
-	}
-
-	parsed.message = "runner output ignored"
-	parsed.fields = base
-	return parsed
-}
-
-func validRunnerStatus(value string) bool {
-	switch value {
-	case "failed", "passed", "warning", "info":
-		return true
-	default:
-		return false
-	}
-}
-
-// validRunnerStage must stay in sync with the stages the package skeleton emits
-// (native/sdk/src/algo_main.cpp). A stage the runner emits but this
-// allowlist rejects is classified as "runner protocol record rejected", which
-// hides the real event: `broker_disconnected` is exactly the signal an operator
-// needs to tell "host died" apart from "plugin crashed".
-func validRunnerStage(value string) bool {
-	switch value {
-	// 注意：曾经还有 "dlopen"，随 dlopen 通道下线；包骨架不会再发这个 stage。
-	case "args", "model_create", "worker_create", "task_open", "process", "connect", "name_check", "shm_init", "gallery_sync", "broker_disconnected", "worker_exception", "worker_stalled":
-		return true
-	default:
-		return false
-	}
-}
-
-func validRunnerStep(value string) bool {
-	switch value {
-	case "start", "abi_verified":
-		return true
-	default:
-		return false
-	}
-}
-
-func validNativeModule(value string) bool {
-	if len(value) == 0 || len(value) > 128 {
-		return false
-	}
-	for _, char := range []byte(value) {
-		if !isNativeModuleChar(char) {
-			return false
-		}
-	}
-	return true
-}
-
-// isNativeModuleChar reports whether char may appear in a native module name
-// (C++ style identifiers plus the project's "_32" style suffixes).
-func isNativeModuleChar(char byte) bool {
-	switch {
-	case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9':
-		return true
-	case char == '_', char == '-', char == '.':
-		return true
-	}
-	return false
-}
-
-// decodeLogFlag decodes the optional zhulongLog marker of a native log record.
-// A missing or malformed marker is not an error: the line simply falls through
-// to the plain-text classification paths.
-func decodeLogFlag(raw json.RawMessage) (flag bool, ok bool) {
-	if raw == nil || json.Unmarshal(raw, &flag) != nil {
-		return false, false
-	}
-	return flag, true
-}
-
-// decodeNativeLogFields decodes the module/level/message triple of a native
-// runner log record and validates the module name, which ends up as a log field.
-func decodeNativeLogFields(object map[string]json.RawMessage) (module, level, message string, ok bool) {
-	if json.Unmarshal(object["module"], &module) != nil || !validNativeModule(module) {
-		return "", "", "", false
-	}
-	if json.Unmarshal(object["level"], &level) != nil || json.Unmarshal(object["message"], &message) != nil {
-		return "", "", "", false
-	}
-	return module, level, message, true
-}
-
-func nativeZapLevel(value string) (zapcore.Level, bool) {
-	switch value {
-	case "debug":
-		return zapcore.DebugLevel, true
-	case "info":
-		return zapcore.InfoLevel, true
-	case "warn":
-		return zapcore.WarnLevel, true
-	case "error":
-		return zapcore.ErrorLevel, true
-	default:
-		return 0, false
-	}
-}
-
-func readBoundedLine(reader *bufio.Reader, max int) ([]byte, int64, bool, error) {
-	line := make([]byte, 0, min(max, 4096))
-	var total int64
-	oversized := false
-	const maxInt64 = int64(1<<63 - 1)
-	for {
-		part, err := reader.ReadSlice('\n')
-		content := part
-		if len(content) > 0 && content[len(content)-1] == '\n' {
-			content = content[:len(content)-1]
-		}
-		if int64(len(content)) > maxInt64-total {
-			total = maxInt64
-		} else {
-			total += int64(len(content))
-		}
-		if !oversized {
-			if len(content) > max-len(line) {
-				oversized = true
-				line = nil
-			} else {
-				line = append(line, content...)
-			}
-		}
-		if err == nil {
-			return line, total, oversized, nil
-		}
-		if errors.Is(err, bufio.ErrBufferFull) {
-			continue
-		}
-		return line, total, oversized, err
-	}
-}
-
-func (p *RunnerProcess) emitRunnerEvent(source string, level zapcore.Level, message string, fields ...zap.Field) {
-	index := runnerSourceIndex(source)
-	p.logRateMu.Lock()
-	window := &p.logRate[index]
-	now := time.Now()
-	if window.started.IsZero() || now.Sub(window.started) >= time.Second {
-		window.started = now
-		window.emitted = 0
-	}
-	if window.emitted >= runnerLogRate {
-		p.logStats[index].rateLimited++
-		p.logRateMu.Unlock()
-		return
-	}
-	window.emitted++
-	p.logRateMu.Unlock()
-	p.reportRunnerIssues(source)
-	p.logger.Log(level, message, fields...)
-}
-
-func runnerSourceIndex(source string) int {
-	if source == "stderr" {
-		return 1
-	}
-	return 0
-}
-
-func (p *RunnerProcess) countRunnerIssue(source, kind string) {
-	p.logRateMu.Lock()
-	stats := &p.logStats[runnerSourceIndex(source)]
-	switch kind {
-	case "invalid":
-		stats.invalid++
-	case "oversized":
-		stats.oversized++
-	case "read_error":
-		stats.readErrors++
-	}
-	p.logRateMu.Unlock()
-}
-
-func (p *RunnerProcess) reportRunnerIssues(source string) {
-	p.logRateMu.Lock()
-	stats := &p.logStats[runnerSourceIndex(source)]
-	rateLimited := stats.rateLimited - stats.reported.rateLimited
-	invalid := stats.invalid - stats.reported.invalid
-	oversized := stats.oversized - stats.reported.oversized
-	readErrors := stats.readErrors - stats.reported.readErrors
-	stats.reported = runnerLogStatsSnapshot{
-		rateLimited: stats.rateLimited,
-		invalid:     stats.invalid,
-		oversized:   stats.oversized,
-		readErrors:  stats.readErrors,
-	}
-	p.logRateMu.Unlock()
-	if rateLimited+invalid+oversized+readErrors == 0 {
-		return
-	}
-	p.logger.Warn("runner output records dropped",
-		zap.String("source", source),
-		zap.Uint64("rate_limited", rateLimited),
-		zap.Uint64("invalid", invalid),
-		zap.Uint64("oversized", oversized),
-		zap.Uint64("read_errors", readErrors),
-	)
-}
-
-func (p *RunnerProcess) watchExit(cmd *exec.Cmd, stdoutR, stderrR *os.File, logWg *sync.WaitGroup) {
+// watchExit reaps the child and records how it ended. It runs on the goroutine
+// that called runtime.LockOSThread and cmd.Start (see Start).
+func (p *RunnerProcess) watchExit(cmd *exec.Cmd, pipes *runnerPipes, logWg *sync.WaitGroup) {
 	// Never release the spawn thread before the child is reaped, or Pdeathsig
-	// would fire on a healthy runner. This function runs on the goroutine that
-	// called runtime.LockOSThread and cmd.Start (see Start); it is the only
-	// unlock site, and only a goroutine that actually holds the lock may unlock it.
+	// would fire on a healthy runner. This is the only unlock site, and only a
+	// goroutine that actually holds the lock may unlock it.
 	defer runtime.UnlockOSThread()
 
 	err := cmd.Wait()
+	p.drainRunnerLogs(pipes, logWg)
+	p.recordExit(cmd, err)
+}
 
-	// Wait for pipe readers to consume all remaining buffered logs.
-	// If an orphaned child process keeps the write pipe open, unblock after 100ms.
+// drainRunnerLogs waits for the pipe readers to consume what the child already
+// wrote. If an orphaned grandchild keeps a write end open, the wait is bounded
+// and the read ends are closed to unblock the readers.
+func (p *RunnerProcess) drainRunnerLogs(pipes *runnerPipes, logWg *sync.WaitGroup) {
 	logDone := make(chan struct{})
 	go func() {
 		logWg.Wait()
@@ -643,75 +436,63 @@ func (p *RunnerProcess) watchExit(cmd *exec.Cmd, stdoutR, stderrR *os.File, logW
 	select {
 	case <-logDone:
 	case <-time.After(100 * time.Millisecond):
-		stdoutR.Close()
-		stderrR.Close()
+		closePipes(pipes.stdoutR, pipes.stderrR)
 		<-logDone
 	}
+}
 
+// recordExit publishes the exit status, diagnosis and state of a reaped child.
+func (p *RunnerProcess) recordExit(cmd *exec.Cmd, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	p.exitErr = err
-	if cmd.ProcessState != nil {
+	switch {
+	case cmd.ProcessState != nil:
 		p.exitCode = cmd.ProcessState.ExitCode()
-	} else if err != nil {
+	case err != nil:
 		p.exitCode = -1
 	}
 
-	// Secondary failure-stage channel: exit code 5 means the runner could not
-	// connect to the broker. Robustness note: the stderr marker above is the
-	// primary signal because exit codes are more fragile to native changes.
-	if p.exitCode == runnerExitBrokerUnavailable {
-		p.failureStage = algoipc.FailureStageBrokerConnect
-	} else if p.exitCode == runnerExitWorkerCrashed {
-		p.failureStage = algoipc.FailureStageWorkerException
-	} else if p.exitCode == runnerExitWorkerStalled {
-		p.failureStage = algoipc.FailureStageWorkerStalled
+	// Secondary failure-stage channel: exit codes are more fragile to native
+	// changes than the stderr marker, so the stderr marker is primary and an exit
+	// code only fills in or overrides the stage for codes the skeleton defines.
+	if stage, ok := exitFailureStages[p.exitCode]; ok {
+		p.failureStage = stage
 	}
 
 	if p.state == StatusRunning {
 		p.state = StatusCrashed
-
-		if p.failureStage == algoipc.FailureStageBrokerConnect {
-			// The runner could not connect to every broker socket it was given.
-			// This is a distinguishable signal, NOT an ordinary plugin crash. We do
-			// not fake success or change watchdog restart/circuit-breaker behaviour.
-			p.logger.Error("runner exited because it could not connect to its frame broker sockets",
-				zap.Int("exit_code", p.exitCode),
-				zap.String("reason", "broker_unavailable"),
-				zap.String("source", "process_exit"),
-			)
-		} else if p.failureStage == algoipc.FailureStageWorkerException {
-			// One per-stream worker threw inside the package skeleton (typically an
-			// allocation failure while serializing a result). Same restart/rollback
-			// path as any other crash; reported apart so "the algorithm misbehaved"
-			// is not buried under "the process exited unexpectedly".
-			p.logger.Error("runner worker thread failed with an uncaught exception",
-				zap.Int("exit_code", p.exitCode),
-				zap.String("reason", "worker_exception"),
-				zap.String("source", "process_exit"),
-			)
-		} else if p.failureStage == algoipc.FailureStageWorkerStalled {
-			// One per-stream worker hung inside process() and the package watchdog
-			// ended the process. Same restart path as any other crash; reported
-			// apart because "the algorithm is too slow / deadlocked" is not the
-			// same investigation as "the algorithm crashed".
-			p.logger.Error("runner worker thread stopped making progress and was terminated by its watchdog",
-				zap.Int("exit_code", p.exitCode),
-				zap.String("reason", "worker_stalled"),
-				zap.String("source", "process_exit"),
-			)
-		} else {
-			p.logger.Warn("runner process exited unexpectedly",
-				zap.Int("exit_code", p.exitCode),
-				zap.Bool("error_present", err != nil),
-				zap.String("reason", "unexpected_exit"),
-				zap.String("source", "process_exit"),
-			)
-		}
+		p.logCrashLocked(err)
 	}
 
 	close(p.doneCh)
+}
+
+// logCrashLocked reports how the runner ended, using the failure stage as the
+// single source of the explanation. Callers must hold mu.
+func (p *RunnerProcess) logCrashLocked(err error) {
+	diagnosis, known := failureStageDiagnoses[p.failureStage]
+	if !known {
+		diagnosis = unexpectedExit
+	}
+
+	fields := []zap.Field{
+		zap.Int("exit_code", p.exitCode),
+		zap.String("reason", diagnosis.reason),
+		zap.String("source", "process_exit"),
+	}
+	if !known {
+		fields = append(fields, zap.Bool("error_present", err != nil))
+	}
+	p.logger.Log(diagnosis.level, diagnosis.message, fields...)
+}
+
+// setFailureStage records a failure stage observed on the runner's stderr.
+func (p *RunnerProcess) setFailureStage(stage string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.failureStage = stage
 }
 
 // signalRunner sends sig to the runner's process group. The runner is started
@@ -740,19 +521,23 @@ func (p *RunnerProcess) Stop(timeout time.Duration) error {
 	cmd := p.cmd
 	state := p.state
 	doneCh := p.doneCh
+	noProcessHandle := cmd == nil || cmd.Process == nil
+	if !noProcessHandle && state != StatusDisabled {
+		// Mark target state as disabled to prevent treating clean stop as crash.
+		p.state = StatusDisabled
+	}
 	p.mu.Unlock()
 
-	noProcessHandle := cmd == nil || cmd.Process == nil
 	if noProcessHandle || state == StatusDisabled {
 		return nil
 	}
 
-	// Mark target state as disabled to prevent treating clean stop as crash
-	p.mu.Lock()
-	p.state = StatusDisabled
-	p.mu.Unlock()
+	return p.terminate(cmd, doneCh, timeout)
+}
 
-	// 1. Send SIGTERM to the whole process group.
+// terminate is Stop's signalling ladder, split out so Stop's locking stays
+// readable.
+func (p *RunnerProcess) terminate(cmd *exec.Cmd, doneCh <-chan struct{}, timeout time.Duration) error {
 	if err := p.signalRunner(cmd, syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		p.logger.Debug("signal SIGTERM to runner process", zap.Error(err))
 	}
@@ -762,25 +547,25 @@ func (p *RunnerProcess) Stop(timeout time.Duration) error {
 
 	select {
 	case <-doneCh:
-		// Clean exit
 		return nil
 	case <-termTimer.C:
-		// 2. Timeout: Force kill the whole process group with SIGKILL.
-		p.logger.Warn("runner process did not exit within timeout, killing with SIGKILL",
-			zap.Int("pid", cmd.Process.Pid),
-		)
-		if err := p.signalRunner(cmd, syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			p.logger.Warn("kill runner process with SIGKILL", zap.Error(err))
-		}
-		killTimer := time.NewTimer(timeout)
-		defer killTimer.Stop()
-		select {
-		case <-doneCh:
-			return nil
-		case <-killTimer.C:
-			p.logger.Error("runner process did not exit after SIGKILL timeout", zap.Int("pid", cmd.Process.Pid))
-			return errors.New("runner process failed to terminate after SIGKILL")
-		}
+	}
+
+	p.logger.Warn("runner process did not exit within timeout, killing with SIGKILL",
+		zap.Int("pid", cmd.Process.Pid),
+	)
+	if err := p.signalRunner(cmd, syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		p.logger.Warn("kill runner process with SIGKILL", zap.Error(err))
+	}
+
+	killTimer := time.NewTimer(timeout)
+	defer killTimer.Stop()
+	select {
+	case <-doneCh:
+		return nil
+	case <-killTimer.C:
+		p.logger.Error("runner process did not exit after SIGKILL timeout", zap.Int("pid", cmd.Process.Pid))
+		return errors.New("runner process failed to terminate after SIGKILL")
 	}
 }
 
@@ -812,234 +597,8 @@ func (p *RunnerProcess) PID() int {
 func (p *RunnerProcess) RunningDuration() time.Duration {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.state == StatusRunning {
-		return time.Since(p.startTime)
+	if p.state != StatusRunning {
+		return 0
 	}
-	return 0
-}
-
-// GallerySyncPayload represents the legacy data payload for MSG_GALLERY_SYNC.
-type GallerySyncPayload struct {
-	Items []GallerySyncItem `json:"items"`
-}
-
-// GallerySyncShardPayload represents a sharded MSG_GALLERY_SYNC payload safely bounded within 64KB.
-type GallerySyncShardPayload struct {
-	SyncID     string            `json:"sync_id"`
-	ShardIndex int               `json:"shard_index"`
-	ShardTotal int               `json:"shard_total"`
-	Items      []GallerySyncItem `json:"items"`
-}
-
-// GalleryAckPayload represents MSG_GALLERY_ACK.
-type GalleryAckPayload struct {
-	SyncID     string `json:"sync_id"`
-	Success    bool   `json:"success"`
-	TotalFaces int    `json:"total_faces"`
-	ErrorMsg   string `json:"error_msg,omitempty"`
-}
-
-// GalleryUpsertPayload represents MSG_GALLERY_UPSERT.
-type GalleryUpsertPayload struct {
-	FaceID     string    `json:"face_id"`
-	PersonID   string    `json:"person_id"`
-	PersonName string    `json:"person_name"`
-	ImagePath  string    `json:"image_path,omitempty"`
-	Features   []float32 `json:"features,omitempty"`
-}
-
-// GalleryDeletePayload represents MSG_GALLERY_DELETE.
-type GalleryDeletePayload struct {
-	FaceID   string `json:"face_id,omitempty"`
-	PersonID string `json:"person_id,omitempty"`
-}
-
-// shardBudget caps a single gallery sync shard at 90% of the protocol limit so
-// the shard header and marshalling drift cannot push a payload past
-// algoipc.MaxIpcPayloadSize. Measured sizes: a 512-dim L2-normalized float32 embedding
-// serializes to ~12.3 bytes per component (~6.3KB per item), so the old fixed
-// 10-items-per-shard packing left under 1% headroom on real data (10 items
-// measured at 64204~65373 bytes against the 65536 limit).
-const shardBudget = algoipc.MaxIpcPayloadSize * 9 / 10
-
-// CreateGallerySyncShards fragments gallery items into a sequence of JSON
-// payloads, each strictly within shardBudget (and therefore well under the 64KB
-// IPC limit).
-//
-// Items are packed by measured byte size, not by a fixed count: a shard is
-// closed as soon as adding the next item would exceed the budget. An empty
-// input still yields exactly one shard with no items (preserved for existing
-// callers). If a single item cannot fit on its own, an error naming that item's
-// face_id is returned rather than silently dropping it.
-func CreateGallerySyncShards(syncID string, items []GallerySyncItem) ([][]byte, error) {
-	if len(items) == 0 {
-		payload, err := json.Marshal(GallerySyncShardPayload{
-			SyncID:     syncID,
-			ShardIndex: 0,
-			ShardTotal: 1,
-			Items:      []GallerySyncItem{},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("marshal empty gallery sync shard: %w", err)
-		}
-		return [][]byte{payload}, nil
-	}
-
-	// Marshal each item exactly once. The JSON encoding of an item is identical
-	// whether it is serialized alone or inside a shard's items array, so these
-	// measured sizes can be summed arithmetically instead of re-marshalling the
-	// whole shard on every packing step (which would be O(n^2) on 10k faces).
-	itemSizes := make([]int, len(items))
-	for i, item := range items {
-		encoded, err := json.Marshal(item)
-		if err != nil {
-			return nil, fmt.Errorf("marshal gallery sync item %s: %w", item.FaceID, err)
-		}
-		itemSizes[i] = len(encoded)
-	}
-
-	// Measure the per-shard overhead with the widest header we can produce
-	// (6-digit shard numbers for both index and total) so the budget stays valid
-	// for any shard count.
-	overheadPayload, err := json.Marshal(GallerySyncShardPayload{
-		SyncID:     syncID,
-		ShardIndex: 999999,
-		ShardTotal: 999999,
-		Items:      []GallerySyncItem{},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshal gallery sync shard header: %w", err)
-	}
-	overhead := len(overheadPayload)
-
-	// Greedy packing: accumulate items while the projected shard size stays
-	// within budget. Each additional item costs its own bytes plus one comma.
-	type shardRange struct{ start, end int }
-	var ranges []shardRange
-	start := 0
-	used := 0
-	for i, size := range itemSizes {
-		if overhead+size > shardBudget {
-			return nil, fmt.Errorf("gallery sync item %s exceeds the shard budget (%d bytes > %d)",
-				items[i].FaceID, overhead+size, shardBudget)
-		}
-		additional := size
-		if i > start {
-			additional++ // comma separating this item from the previous one
-		}
-		if used+additional > shardBudget-overhead {
-			ranges = append(ranges, shardRange{start: start, end: i})
-			start = i
-			used = size
-			continue
-		}
-		used += additional
-	}
-	ranges = append(ranges, shardRange{start: start, end: len(items)})
-
-	shardTotal := len(ranges)
-	shards := make([][]byte, 0, shardTotal)
-	for i, r := range ranges {
-		payload, err := json.Marshal(GallerySyncShardPayload{
-			SyncID:     syncID,
-			ShardIndex: i,
-			ShardTotal: shardTotal,
-			Items:      items[r.start:r.end],
-		})
-		if err != nil {
-			return nil, fmt.Errorf("marshal gallery sync shard %d/%d: %w", i, shardTotal, err)
-		}
-		// Defensive gate: the packing math above should make this unreachable, but
-		// it is the last line of defence before the 64KB protocol limit.
-		if len(payload) > int(algoipc.MaxIpcPayloadSize) {
-			return nil, fmt.Errorf("gallery sync shard %d exceeds 64KB (%d bytes)", i, len(payload))
-		}
-		shards = append(shards, payload)
-	}
-	return shards, nil
-}
-
-// CreateGallerySyncMsg serializes a full gallery sync message into framed IPC bytes.
-func CreateGallerySyncMsg(seq uint32, items []GallerySyncItem) ([]byte, error) {
-	payload, err := json.Marshal(GallerySyncPayload{Items: items})
-	if err != nil {
-		return nil, fmt.Errorf("marshal gallery sync payload: %w", err)
-	}
-	return algoipc.EncodeIpcMessage(algoipc.MsgGallerySync, seq, payload)
-}
-
-// CreateGalleryUpsertMsg serializes an incremental face enrollment update into framed IPC bytes.
-func CreateGalleryUpsertMsg(seq uint32, item GalleryUpsertPayload) ([]byte, error) {
-	payload, err := json.Marshal(item)
-	if err != nil {
-		return nil, fmt.Errorf("marshal gallery upsert payload: %w", err)
-	}
-	return algoipc.EncodeIpcMessage(algoipc.MsgGalleryUpsert, seq, payload)
-}
-
-// CreateGalleryDeleteMsg serializes a delete face/person update into framed IPC bytes.
-func CreateGalleryDeleteMsg(seq uint32, faceID, personID string) ([]byte, error) {
-	payload, err := json.Marshal(GalleryDeletePayload{FaceID: faceID, PersonID: personID})
-	if err != nil {
-		return nil, fmt.Errorf("marshal gallery delete payload: %w", err)
-	}
-	return algoipc.EncodeIpcMessage(algoipc.MsgGalleryDelete, seq, payload)
-}
-
-// GalleryBroadcaster distributes full and incremental gallery updates to running algorithm processes.
-type GalleryBroadcaster struct {
-	broadcaster AIMessageBroadcaster
-	logger      *zap.Logger
-}
-
-// NewGalleryBroadcaster creates a GalleryBroadcaster instance.
-func NewGalleryBroadcaster(broadcaster AIMessageBroadcaster, logger *zap.Logger) *GalleryBroadcaster {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
-	return &GalleryBroadcaster{
-		broadcaster: broadcaster,
-		logger:      logger.Named("algorithm.gallery_broadcaster"),
-	}
-}
-
-// BroadcastSync performs cold-start or full synchronization of the face gallery to all active runners.
-func (b *GalleryBroadcaster) BroadcastSync(ctx context.Context, syncID string, items []GallerySyncItem) error {
-	if b.broadcaster == nil {
-		return nil
-	}
-	shards, err := CreateGallerySyncShards(syncID, items)
-	if err != nil {
-		return fmt.Errorf("create gallery sync shards: %w", err)
-	}
-	for i, shard := range shards {
-		if err := b.broadcaster.BroadcastAIMessage(ctx, 0, algoipc.MsgGallerySync, shard); err != nil {
-			return fmt.Errorf("broadcast sync shard %d/%d: %w", i, len(shards), err)
-		}
-	}
-	return nil
-}
-
-// BroadcastUpsert broadcasts an incremental face template enrollment or update.
-func (b *GalleryBroadcaster) BroadcastUpsert(ctx context.Context, item GalleryUpsertPayload) error {
-	if b.broadcaster == nil {
-		return nil
-	}
-	payload, err := json.Marshal(item)
-	if err != nil {
-		return fmt.Errorf("marshal gallery upsert: %w", err)
-	}
-	return b.broadcaster.BroadcastAIMessage(ctx, 0, algoipc.MsgGalleryUpsert, payload)
-}
-
-// BroadcastDelete broadcasts face or person deletion.
-func (b *GalleryBroadcaster) BroadcastDelete(ctx context.Context, faceID, personID string) error {
-	if b.broadcaster == nil {
-		return nil
-	}
-	payload, err := json.Marshal(GalleryDeletePayload{FaceID: faceID, PersonID: personID})
-	if err != nil {
-		return fmt.Errorf("marshal gallery delete: %w", err)
-	}
-	return b.broadcaster.BroadcastAIMessage(ctx, 0, algoipc.MsgGalleryDelete, payload)
+	return time.Since(p.startTime)
 }

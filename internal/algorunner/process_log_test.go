@@ -104,19 +104,19 @@ func TestReadBoundedLineDrainsAndRecovers(t *testing.T) {
 	input := long + "\n{\"status\":\"failed\",\"stage\":\"connect\"}\nfinal"
 	reader := bufio.NewReaderSize(strings.NewReader(input), 31)
 
-	line, count, oversized, err := readBoundedLine(reader, maxRunnerLogLine)
-	if !oversized || line != nil || count != int64(len(long)) || err != nil {
-		t.Fatalf("oversized read = (%d bytes, %d, %v, %v)", len(line), count, oversized, err)
+	line, err := readBoundedLine(reader, maxRunnerLogLine)
+	if !line.oversized || line.data != nil || line.bytes != int64(len(long)) || err != nil {
+		t.Fatalf("oversized read = (%d bytes, %d, %v, %v)", len(line.data), line.bytes, line.oversized, err)
 	}
-	line, count, oversized, err = readBoundedLine(reader, maxRunnerLogLine)
-	if oversized || string(line) != `{"status":"failed","stage":"connect"}` || count != int64(len(line)) || err != nil {
-		t.Fatalf("recovered line = (%q, %d, %v, %v)", line, count, oversized, err)
+	line, err = readBoundedLine(reader, maxRunnerLogLine)
+	if line.oversized || string(line.data) != `{"status":"failed","stage":"connect"}` || line.bytes != int64(len(line.data)) || err != nil {
+		t.Fatalf("recovered line = (%q, %d, %v, %v)", line.data, line.bytes, line.oversized, err)
 	}
-	line, count, oversized, err = readBoundedLine(reader, maxRunnerLogLine)
-	if oversized || string(line) != "final" || count != 5 || !errors.Is(err, io.EOF) {
-		t.Fatalf("unterminated EOF line = (%q, %d, %v, %v)", line, count, oversized, err)
+	line, err = readBoundedLine(reader, maxRunnerLogLine)
+	if line.oversized || string(line.data) != "final" || line.bytes != 5 || !errors.Is(err, io.EOF) {
+		t.Fatalf("unterminated EOF line = (%q, %d, %v, %v)", line.data, line.bytes, line.oversized, err)
 	}
-	if _, _, _, err := readBoundedLine(reader, maxRunnerLogLine); !errors.Is(err, io.EOF) {
+	if _, err := readBoundedLine(reader, maxRunnerLogLine); !errors.Is(err, io.EOF) {
 		t.Fatalf("terminal read = %v, want EOF", err)
 	}
 }

@@ -305,7 +305,7 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 - **状态位先于日志**：`on_error` 里先 `compare_exchange` 退出码、再 `stop_all.store`、最后才构造诊断字符串——日志构造本身可能再抛，而状态位必须准确。
 - **故障域语义不变**：仍是「一路失败整包退出」（D6）。区别只在**可诊断、可退避、可熔断**。不要把它改成「该路静默退出、其它路继续」：那会让宿主以为全路都在跑，比一次受控重启更糟。
 - **诊断**：每个 Worker 线程在入口设内核线程名 `algo-w<idx>`（`set_worker_thread_name`），`ps -L` / gdb / perf 可直接区分是哪一路。
-- **跨语言约束**：`kExitWorkerCrashed` 必须等于 Go 侧 `algoipc.RunnerExitWorkerCrashed`（`internal/algorithm/ipc_contract_test.go` 的 `TestRunnerExitCodeMatchesNativeSkeleton` 钉住）；`worker_exception` 必须留在 `internal/algorunner/process.go` 的 `validRunnerStage` allowlist 里，否则该记录会被判为 "runner protocol record rejected"，真实事件被吞掉。
+- **跨语言约束**：`kExitWorkerCrashed` 必须等于 Go 侧 `algoipc.RunnerExitWorkerCrashed`（`internal/algorithm/ipc_contract_test.go` 的 `TestRunnerExitCodeMatchesNativeSkeleton` 钉住）；`worker_exception` 必须留在 `internal/algorunner/runner_log.go` 的 `validRunnerStage` allowlist 里，否则该记录会被判为 "runner protocol record rejected"，真实事件被吞掉。
 
 ### 5.2.2 单路 Worker 无进展看门狗（退出码 `10`）
 

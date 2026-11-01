@@ -1,6 +1,7 @@
 package algorunner
 
 import (
+	"errors"
 	"os/exec"
 	"runtime"
 	"sync"
@@ -101,7 +102,7 @@ func (p *PinnedProcess) SignalGroup(sig syscall.Signal) error {
 // call, a protocol desync) must not be allowed to outlive the request.
 func (p *PinnedProcess) KillGroup() error {
 	err := p.SignalGroup(syscall.SIGKILL)
-	if err == syscall.ESRCH {
+	if errors.Is(err, syscall.ESRCH) {
 		return nil
 	}
 	return err
