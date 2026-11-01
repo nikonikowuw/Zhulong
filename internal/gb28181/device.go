@@ -79,23 +79,6 @@ func newDeviceStateMachine(options deviceStateOptions) *deviceStateMachine {
 	}
 }
 
-// Reset discards registrations left over from a previous process. It is called once
-// during ingress start, before any listener accepts traffic, so the runtime never
-// reports a device as online on the strength of a stale row.
-func (m *deviceStateMachine) Reset(ctx context.Context) (int64, error) {
-	m.forgetStates()
-
-	cleared, err := m.store.ResetOnlineStates(ctx, m.now())
-	if err != nil {
-		return 0, err
-	}
-	if cleared > 0 {
-		m.logger.Info("cleared stale gb28181 registrations", zap.Int64("devices", cleared))
-	}
-	m.refreshCounters(ctx)
-	return cleared, nil
-}
-
 // Registered applies an accepted REGISTER. Re-registration refreshes the lease and
 // the remote address, which is how a device behind NAT recovers from an address change.
 func (m *deviceStateMachine) Registered(ctx context.Context, registration Registration) error {

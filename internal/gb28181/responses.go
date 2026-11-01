@@ -1,6 +1,10 @@
 package gb28181
 
-import "time"
+import (
+	"time"
+
+	"github.com/nikonikowuw/Zhulong/internal/camera"
+)
 
 // ConfigInfo is the API projection of the singleton configuration.
 //
@@ -107,6 +111,13 @@ type SyncCatalogResponse struct {
 type DeleteDeviceResponse struct {
 	Deleted bool `json:"deleted"`
 }
+
+// AddChannelAsCameraResponse is the payload of the channel→camera endpoint.
+//
+// It is an alias rather than a copy: the camera domain owns that shape, and naming the
+// alias here is what lets the swagger annotation resolve from this package without a
+// swagger-only import.
+type AddChannelAsCameraResponse = camera.CameraResponse
 
 // toConfigInfo projects the persisted model onto the API shape.
 func toConfigInfo(cfg Config) ConfigInfo {

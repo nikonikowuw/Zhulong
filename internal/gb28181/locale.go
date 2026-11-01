@@ -87,6 +87,16 @@ func init() {
 			"zh-Hans": "目录同步超时",
 			"zh-Hant": "目錄同步逾時",
 		},
+		CodeOutboundRateLimited: {
+			"en":      "Too many platform requests to this device; retry later",
+			"zh-Hans": "对该设备的下发过于频繁，请稍后重试",
+			"zh-Hant": "對該裝置的下發過於頻繁，請稍後重試",
+		},
+		CodeDeviceChallenged: {
+			"en":      "The device requires credentials for platform requests; this build does not authenticate outbound requests",
+			"zh-Hans": "设备要求平台下发时携带凭据，当前版本不支持出站鉴权",
+			"zh-Hant": "裝置要求平台下發時攜帶憑據，目前版本不支援出站鑑別",
+		},
 		CodeChannelNotFound: {
 			"en":      "GB28181 channel not found",
 			"zh-Hans": "指定的 GB28181 通道不存在",

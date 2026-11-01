@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -24,34 +25,60 @@ var errMessageTooLarge = errors.New("gb28181 sip: inbound message exceeds the si
 //
 //   - a hard cap on concurrently accepted signalling connections, so a connection
 //     flood cannot exhaust file descriptors (UDP has no such resource per peer);
+//   - a per-peer-address cap, so one source cannot take every slot;
+//   - an idle deadline, so a device that loses power cannot hold a slot with a
+//     half-open connection: the kernel never gives up on a socket nobody writes to;
 //   - a per-message size cap. The transport hands the parser arbitrary read chunks,
 //     so a cap applied per chunk would let a 10 MiB message through in 8 KiB pieces;
 //     framedConn tracks SIP framing across reads instead.
 type ingressListener struct {
 	net.Listener
 
-	logger   *zap.Logger
-	slots    chan struct{}
-	maxBytes int
-	dropped  atomic.Uint64
+	logger      *zap.Logger
+	slots       chan struct{}
+	maxBytes    int
+	maxPerHost  int
+	idleTimeout time.Duration
+
+	mu     sync.Mutex
+	perSrc map[string]int
+
+	dropped atomic.Uint64
 }
 
-func newIngressListener(inner net.Listener, maxConnections, maxMessageBytes int, logger *zap.Logger) *ingressListener {
-	if maxConnections <= 0 {
-		maxConnections = defaultMaxSignallingConns
+type ingressListenerOptions struct {
+	MaxConnections  int
+	MaxPerSource    int
+	MaxMessageBytes int
+	IdleTimeout     time.Duration
+	Logger          *zap.Logger
+}
+
+func newIngressListener(inner net.Listener, options ingressListenerOptions) *ingressListener {
+	if options.MaxConnections <= 0 {
+		options.MaxConnections = defaultMaxSignallingConns
 	}
-	if logger == nil {
-		logger = zap.NewNop()
+	if options.MaxPerSource <= 0 {
+		options.MaxPerSource = defaultMaxConnsPerSource
+	}
+	if options.IdleTimeout <= 0 {
+		options.IdleTimeout = defaultSignallingIdleTimeout
+	}
+	if options.Logger == nil {
+		options.Logger = zap.NewNop()
 	}
 	return &ingressListener{
-		Listener: inner,
-		logger:   logger,
-		slots:    make(chan struct{}, maxConnections),
-		maxBytes: maxMessageBytes,
+		Listener:    inner,
+		logger:      options.Logger,
+		slots:       make(chan struct{}, options.MaxConnections),
+		maxBytes:    options.MaxMessageBytes,
+		maxPerHost:  options.MaxPerSource,
+		idleTimeout: options.IdleTimeout,
+		perSrc:      make(map[string]int),
 	}
 }
 
-// Accept drops connections beyond the cap instead of failing: returning an error
+// Accept drops connections beyond either cap instead of failing: returning an error
 // would stop the serve loop for everyone.
 func (l *ingressListener) Accept() (net.Conn, error) {
 	for {
@@ -59,23 +86,59 @@ func (l *ingressListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		select {
-		case l.slots <- struct{}{}:
-			return &guardedConn{
-				Conn: &framedConn{Conn: conn, max: l.maxBytes},
-				release: func() {
-					<-l.slots
-				},
-			}, nil
-		default:
+		host := hostOnly(conn.RemoteAddr().String())
+		if !l.reserve(host) {
 			l.dropped.Add(1)
 			closeQuietly(l.logger, conn, "rejected gb28181 signalling connection")
+			continue
 		}
+		return &guardedConn{
+			Conn: &framedConn{Conn: conn, max: l.maxBytes, idle: l.idleTimeout},
+			release: func() {
+				l.release(host)
+			},
+		}, nil
 	}
 }
 
-// Dropped counts connections refused because the cap was reached.
-func (l *ingressListener) Dropped() uint64 { return l.dropped.Load() }
+// reserve takes one slot for host, reporting whether both caps allowed it.
+func (l *ingressListener) reserve(host string) bool {
+	select {
+	case l.slots <- struct{}{}:
+	default:
+		return false
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.perSrc[host] >= l.maxPerHost {
+		<-l.slots
+		return false
+	}
+	l.perSrc[host]++
+	return true
+}
+
+// release returns a slot taken by reserve. It is called exactly once per accepted
+// connection (see guardedConn).
+func (l *ingressListener) release(host string) {
+	l.mu.Lock()
+	if count, ok := l.perSrc[host]; ok {
+		if count <= 1 {
+			delete(l.perSrc, host)
+		} else {
+			l.perSrc[host] = count - 1
+		}
+	}
+	l.mu.Unlock()
+	<-l.slots
+}
+
+// Rejected counts connections refused because a cap was reached.
+func (l *ingressListener) Rejected() uint64 { return l.dropped.Load() }
+
+// Active reports how many signalling connections are currently held.
+func (l *ingressListener) Active() int { return len(l.slots) }
 
 // guardedConn releases its slot exactly once, whatever closes it first.
 type guardedConn struct {
@@ -90,18 +153,30 @@ func (c *guardedConn) Close() error {
 	return err
 }
 
-// framedConn tracks SIP message boundaries so the size cap applies to whole messages.
+// framedConn tracks SIP message boundaries so the size cap applies to whole messages,
+// and puts a read deadline on the connection so silence eventually frees the slot.
 type framedConn struct {
 	net.Conn
-	max int
+	max  int
+	idle time.Duration
 
 	header    []byte
 	bodyBytes int
 }
 
 // Read passes bytes through unchanged and aborts the connection when one message
-// exceeds the cap.
+// exceeds the cap or the peer stays silent past the idle deadline.
+//
+// The deadline is refreshed per read rather than per message: any byte proves the
+// flow is alive, and a message split across a slow link must not be dropped halfway.
 func (c *framedConn) Read(p []byte) (int, error) {
+	if c.idle > 0 {
+		// A closed connection reports the error here; there is nothing to recover
+		// from, and reporting it makes the read loop exit with the real cause.
+		if err := c.Conn.SetReadDeadline(time.Now().Add(c.idle)); err != nil {
+			return 0, err
+		}
+	}
 	n, err := c.Conn.Read(p)
 	if n > 0 {
 		if observeErr := c.observe(p[:n]); observeErr != nil {

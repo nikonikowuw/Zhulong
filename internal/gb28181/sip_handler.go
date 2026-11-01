@@ -35,21 +35,28 @@ func (i *sipIngress) handleRegister(req *sip.Request, tx sip.ServerTransaction) 
 		return
 	}
 
-	expires, err := registrationExpires(req)
+	expires, requested, err := parseRegistrationExpires(req)
 	if err != nil {
 		i.respond(req, tx, sip.StatusBadRequest)
 		return
 	}
 
-	if !i.authorizeRegister(req, tx, deviceID, source) {
+	device, ok := i.authorizeRegister(req, tx, deviceID, source)
+	if !ok {
 		return
 	}
-	i.applyRegistration(req, tx, deviceID, expires)
+	i.applyRegistration(req, tx, deviceID, registrationLease(expires, requested, device))
 }
 
 // authorizeRegister runs the Digest handshake. It reports whether the request
-// authenticated; in every other case the response has already been sent.
-func (i *sipIngress) authorizeRegister(req *sip.Request, tx sip.ServerTransaction, deviceID, source string) bool {
+// authenticated, and on success also returns the provisioned device so the caller can
+// use its stored lease as the registration default. In every other case the response
+// has already been sent.
+func (i *sipIngress) authorizeRegister(
+	req *sip.Request,
+	tx sip.ServerTransaction,
+	deviceID, source string,
+) (*Device, bool) {
 	ctx := context.Background()
 	header := req.GetHeader("Authorization")
 	if header == nil {
@@ -57,44 +64,56 @@ func (i *sipIngress) authorizeRegister(req *sip.Request, tx sip.ServerTransactio
 		// and decrypting one for a device that has not authenticated yet is wasted work.
 		if _, err := i.store.GetDevice(ctx, deviceID); err != nil {
 			i.rejectStoreLookup(req, tx, deviceID, err)
-			return false
+			return nil, false
 		}
 		i.challenge(req, tx, false)
-		return false
+		return nil, false
 	}
 
 	credentials, parseErr := parseDigestCredentials(header.Value())
 	if parseErr != nil {
 		i.reject(req, tx, sip.StatusBadRequest, "gb28181 register with malformed authorization",
 			zap.String("device_id", deviceID), zap.String("source", source))
-		return false
+		return nil, false
 	}
 	if credentials.Username != deviceID {
-		i.logger.Warn("gb28181 register with mismatched authorization username",
-			zap.String("device_id", deviceID),
-			zap.String("username", credentials.Username),
-			zap.String("source", source))
+		// Throttled like every other refusal: a mismatched username is attacker
+		// controlled and must not multiply the log volume.
+		if log, suppressed := i.throttle.allow("register username mismatch|" + source); log {
+			i.logger.Warn("gb28181 register with mismatched authorization username",
+				zap.String("device_id", deviceID),
+				zap.String("username", credentials.Username),
+				zap.String("source", source),
+				zap.Int("suppressed", suppressed),
+			)
+		}
 		i.challenge(req, tx, false)
-		return false
+		return nil, false
 	}
 
 	// One row read that also settles existence, now that a credential is on the wire.
-	password, err := i.store.devicePassword(ctx, deviceID)
+	device, password, err := i.store.deviceForAuthentication(ctx, deviceID)
 	if err != nil {
 		i.rejectStoreLookup(req, tx, deviceID, err)
-		return false
+		return nil, false
 	}
-	if verifyErr := i.verifyCredentials(credentials, deviceID, password); verifyErr != nil {
+	if verifyErr := i.verifyCredentials(credentials, deviceID, req.Recipient.String(), password); verifyErr != nil {
 		stale := errors.Is(verifyErr, ErrDigestNonceStale)
-		i.logger.Warn("gb28181 register authentication failed",
-			zap.String("device_id", deviceID),
-			zap.String("source", source),
-			zap.Bool("stale_nonce", stale),
-			zap.Error(verifyErr))
+		// One 401 per attempt, never a second response on the same transaction: the
+		// challenge below *is* the answer.
+		if log, suppressed := i.throttle.allow("register auth failed|" + source); log {
+			i.logger.Warn("gb28181 register authentication failed",
+				zap.String("device_id", deviceID),
+				zap.String("source", source),
+				zap.Bool("stale_nonce", stale),
+				zap.Error(verifyErr),
+				zap.Int("suppressed", suppressed),
+			)
+		}
 		i.challenge(req, tx, stale)
-		return false
+		return nil, false
 	}
-	return true
+	return device, true
 }
 
 // applyRegistration persists the accepted lease, or clears it for EXPIRES=0.
@@ -252,7 +271,16 @@ func (i *sipIngress) messageContent(
 	return message, true
 }
 
+// handleOptions answers a liveness probe. It is rate limited like every other inbound
+// request but not checked against the allowlist: a device probes OPTIONS before it has
+// ever registered, and answering a probe is what RFC 3261 §11.2 asks of any UAS.
 func (i *sipIngress) handleOptions(req *sip.Request, tx sip.ServerTransaction) {
+	source := hostOnly(req.Source())
+	if !i.limiter.allow(source) {
+		i.reject(req, tx, sip.StatusServiceUnavailable, "gb28181 options rate limited",
+			zap.String("source", source))
+		return
+	}
 	i.respond(req, tx, sip.StatusOK)
 }
 
@@ -264,8 +292,14 @@ func (i *sipIngress) handleUnsupported(req *sip.Request, tx sip.ServerTransactio
 	i.respond(req, tx, sip.StatusNotImplemented)
 }
 
-// verifyCredentials checks the nonce and the digest response.
-func (i *sipIngress) verifyCredentials(credentials digestCredentials, deviceID, password string) error {
+// verifyCredentials checks the nonce and the digest response. requestURI is the
+// Request-URI the device authenticated against, which the digest must not contradict.
+func (i *sipIngress) verifyCredentials(
+	credentials digestCredentials,
+	deviceID string,
+	requestURI string,
+	password string,
+) error {
 	if err := i.nonces.Verify(credentials.Nonce); err != nil {
 		return err
 	}
@@ -275,7 +309,7 @@ func (i *sipIngress) verifyCredentials(credentials digestCredentials, deviceID, 
 	if credentials.Username != deviceID {
 		return ErrDigestUserMismatch
 	}
-	return verifyDigestResponse(credentials, string(sip.REGISTER), i.cfg.SIPRealm, password)
+	return verifyDigestResponse(credentials, string(sip.REGISTER), requestURI, i.cfg.SIPRealm, password)
 }
 
 // rejectStoreLookup maps a failed allowlist lookup onto a SIP status. An unknown
@@ -291,9 +325,13 @@ func (i *sipIngress) rejectStoreLookup(req *sip.Request, tx sip.ServerTransactio
 		zap.String("device_id", deviceID), zap.Error(err))
 }
 
-// registrationExpires resolves the requested lease from the Expires header, then the
-// Contact parameter (both are used in the field), clamped to a sane range.
-func registrationExpires(req *sip.Request) (int, error) {
+// parseRegistrationExpires resolves the lease the device asked for. It reports whether
+// the device actually asked (a provided lease wins over the provisioned default) and
+// clamps explicit values to a sane range; 0 means "unregister" and is passed through.
+//
+// Both the Expires header and the Contact parameter are used in the field, so both are
+// read. A malformed value is a device error, not something to silently repair.
+func parseRegistrationExpires(req *sip.Request) (expires int, requested bool, err error) {
 	var raw string
 	if header := req.GetHeader("Expires"); header != nil {
 		raw = strings.TrimSpace(header.Value())
@@ -306,22 +344,43 @@ func registrationExpires(req *sip.Request) (int, error) {
 		}
 	}
 	if raw == "" {
-		return DefaultExpiresSeconds, nil
+		return 0, false, nil
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil || value < 0 {
-		return 0, fmt.Errorf("invalid expires %q", raw)
+		return 0, false, fmt.Errorf("invalid expires %q", raw)
 	}
 	if value == 0 {
-		return 0, nil
+		return 0, true, nil
 	}
+	return clampRegistrationSeconds(value), true, nil
+}
+
+// registrationLease resolves the lease to grant: what the device asked for when it
+// asked, otherwise the operator's pre-provisioned value, otherwise the default.
+//
+// The provisioned value is a default, not a ceiling: a device owns its own renewal
+// rhythm, and the granted lease is what the sweeper enforces.
+func registrationLease(requested int, provided bool, device *Device) int {
+	if provided {
+		return requested
+	}
+	if device != nil && device.ExpiresSeconds > 0 {
+		return clampRegistrationSeconds(device.ExpiresSeconds)
+	}
+	return DefaultExpiresSeconds
+}
+
+// clampRegistrationSeconds keeps a lease inside the range the sweeper and the API both
+// assume.
+func clampRegistrationSeconds(value int) int {
 	if value < minRegistrationSeconds {
-		value = minRegistrationSeconds
+		return minRegistrationSeconds
 	}
 	if value > maxRegistrationSeconds {
-		value = maxRegistrationSeconds
+		return maxRegistrationSeconds
 	}
-	return value, nil
+	return value
 }
 
 // fromUser extracts the device identity from a From header.

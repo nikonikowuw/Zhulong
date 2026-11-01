@@ -54,8 +54,13 @@
       "ingressUnavailable": "SIP listener unavailable",
       "ingressStartFailed": "SIP listener failed to start",
       "ingressStopFailed": "SIP listener reported an error while stopping",
-      "ingressServeFailed": "SIP listener exited while running"
-    }
+      "ingressServeFailed": "SIP listener exited while running",
+      "registrationResetFailed": "Stale registrations from the previous process could not be cleared; the online column below may be out of date"
+    },
+    "ingressLimited": "Signalling rate-limited",
+    "ingressLimitedValue": "{{inbound}} in / {{outbound}} out",
+    "ingressDrops": "Dropped at the protection caps",
+    "ingressDropsValue": "{{oversized}} oversized / {{conns}} conns / {{active}} active"
   },
   "config": {
     "desc": "Saving only writes the target configuration; the SIP listener and media port pool switch over after a restart.",

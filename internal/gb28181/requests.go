@@ -45,6 +45,10 @@ func (r UpdateConfigRequest) ToConfig() Config {
 // Name and Password are pointers on purpose: omitting them keeps the stored value,
 // so renaming a device does not require retyping (or transmitting) its Digest
 // secret, and rotating the secret does not silently erase the name.
+//
+// ExpiresSeconds is the *default* lease: it is granted when the device omits Expires
+// from its REGISTER. A device that asks for its own lease gets that one instead, and
+// the stored value becomes the record of what was granted.
 type UpsertDeviceRequest struct {
 	Name           *string `json:"name" binding:"omitempty,max=128"`
 	Password       *string `json:"password" binding:"omitempty,max=128"`

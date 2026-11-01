@@ -11,7 +11,7 @@ import {
   type Gb28181Config,
   type Gb28181ConfigResponse,
   type Gb28181Device,
-  type Gb28181Snapshot,
+  type Gb28181RuntimeSnapshotStatus,
   type SyncCatalogResponse,
   type UpsertGb28181DeviceRequest,
 } from '../data/schema'
@@ -43,7 +43,10 @@ export function useGb28181Config(): UseQueryResult<
  * 这是现场排障入口，因此按固定间隔轮询；窗口隐藏时停止，
  * 避免无人查看时持续打后端。
  */
-export function useGb28181Runtime(): UseQueryResult<Gb28181Snapshot, Error> {
+export function useGb28181Runtime(): UseQueryResult<
+  Gb28181RuntimeSnapshotStatus,
+  Error
+> {
   return useQuery({
     queryKey: GB28181_QUERY_KEYS.runtime(),
     queryFn: () => gb28181Api.getRuntime(),

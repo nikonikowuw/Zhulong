@@ -54,8 +54,13 @@
       "ingressUnavailable": "SIP 監聽不可用",
       "ingressStartFailed": "SIP 監聽啟動失敗",
       "ingressStopFailed": "SIP 監聽停止時發生錯誤",
-      "ingressServeFailed": "SIP 監聽於執行中結束"
-    }
+      "ingressServeFailed": "SIP 監聽於執行中結束",
+      "registrationResetFailed": "無法清理前一程序遺留的註冊狀態，下方上線數可能不準確"
+    },
+    "ingressLimited": "信令限速",
+    "ingressLimitedValue": "入向 {{inbound}} / 出向 {{outbound}}",
+    "ingressDrops": "防護上限丟棄",
+    "ingressDropsValue": "超長 {{oversized}} / 連線 {{conns}} / 佔用 {{active}}"
   },
   "config": {
     "desc": "儲存只寫入目標設定；SIP 監聽與媒體埠池需重新啟動後才會切換。",

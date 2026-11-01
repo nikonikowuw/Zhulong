@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
-import { type Gb28181RuntimeInfo, type Gb28181Snapshot } from '../data/schema'
+import {
+  type Gb28181RuntimeInfo,
+  type Gb28181RuntimeSnapshotStatus,
+} from '../data/schema'
 import { Gb28181RuntimePanel } from './gb28181-runtime-panel'
 
 const mockRuntime: Gb28181RuntimeInfo = {
@@ -25,7 +28,7 @@ const mockRuntime: Gb28181RuntimeInfo = {
   mediaCapacity: 50,
 }
 
-const mockSnapshot: Gb28181Snapshot = {
+const mockSnapshot: Gb28181RuntimeSnapshotStatus = {
   state: 'running',
   restartRequired: false,
   devices: {
@@ -39,6 +42,13 @@ const mockSnapshot: Gb28181Snapshot = {
     pairsTotal: 50,
     pairsUsed: 6,
     exhaustedHits: 0,
+  },
+  ingress: {
+    oversizedMessages: 12,
+    rejectedConns: 2,
+    inboundLimited: 9,
+    outboundLimited: 7,
+    activeConns: 4,
   },
   generatedAt: '2026-10-25T08:00:00Z',
 }
@@ -59,7 +69,9 @@ describe('Gb28181RuntimePanel', () => {
     await expect.element(getByText('运行态')).toBeInTheDocument()
     await expect.element(getByText('运行中')).toBeInTheDocument()
     await expect.element(getByText('6 / 10')).toBeInTheDocument()
-    await expect.element(getByText('3')).toBeInTheDocument()
+    // exact: the protection counters render their own composite strings, and a loose
+    // match would also match the digits inside them.
+    await expect.element(getByText('3', { exact: true })).toBeInTheDocument()
     await expect.element(getByText('6 / 50')).toBeInTheDocument()
     await expect.element(getByText('192.168.1.10')).toBeInTheDocument()
     await expect.element(getByText(/50 路/)).toBeInTheDocument()

@@ -100,18 +100,14 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 
 // GetRuntime godoc
 // @Summary      Get GB28181 runtime snapshot
-// @Description  Reports live counters for operators: device totals, active sessions, media port pool usage and exhausted-port hits.
+// @Description  Reports live counters for operators: device totals, active sessions, media port pool usage, exhausted-port hits and the inbound/outbound signalling protection counters.
 // @Tags         gb28181
 // @Produce      json
-// @Success      200  {object}  httputil.Response{data=Snapshot}
+// @Success      200  {object}  httputil.Response{data=RuntimeSnapshotStatus}
+// @Failure      500  {object}  httputil.Response  "DATABASE_ERROR"
 // @Router       /gb28181/runtime [get]
 func (h *Handler) GetRuntime(c *gin.Context) {
-	snapshot, err := h.service.Snapshot(c.Request.Context())
-	if err != nil {
-		httputil.WriteError(c, err)
-		return
-	}
-	httputil.Success(c, snapshot)
+	httputil.Success(c, h.service.Snapshot(c.Request.Context()))
 }
 
 // ListDevices godoc
@@ -268,7 +264,7 @@ func (h *Handler) ListChannels(c *gin.Context) {
 // @Produce      json
 // @Param        deviceId   path      string  true  "20-digit device ID"
 // @Param        channelId  path      string  true  "20-digit channel ID"
-// @Success      200        {object}  httputil.Response
+// @Success      200        {object}  httputil.Response{data=AddChannelAsCameraResponse}
 // @Failure      404        {object}  httputil.Response  "GB28181_CHANNEL_NOT_FOUND"
 // @Failure      409        {object}  httputil.Response  "GB28181_CHANNEL_ALREADY_BOUND"
 // @Failure      422        {object}  httputil.Response  "GB28181_DEVICE_ID_INVALID, GB28181_CHANNEL_ID_INVALID, CAMERA_INVALID_PARAM, CAMERA_LIMIT_EXCEEDED"

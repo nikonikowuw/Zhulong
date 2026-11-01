@@ -39,27 +39,34 @@ type EncryptedDataProbe interface {
 }
 
 // Device is a pre-provisioned GB28181 device. The encrypted password is never part
-// of this struct: it does not cross the API boundary or reach logs.
+// of this struct's API projection: it does not cross the API boundary or reach logs.
+//
+// The GORM models in this package deliberately carry no json tags: the HTTP layer
+// answers with the *Response/*Info projections, and a tag would let someone serialize
+// a row — ciphertext included — straight onto the wire.
 type Device struct {
-	DeviceID       string  `gorm:"column:device_id;primaryKey" json:"deviceId"`
-	Name           string  `gorm:"column:name;type:text;not null;default:''" json:"name"`
-	Manufacturer   *string `gorm:"column:manufacturer;type:text" json:"manufacturer"`
-	Model          *string `gorm:"column:model;type:text" json:"model"`
-	Firmware       *string `gorm:"column:firmware;type:text" json:"firmware"`
-	Transport      string  `gorm:"column:transport;type:text;not null;default:'udp'" json:"transport"`
-	RemoteAddr     *string `gorm:"column:remote_addr;type:text" json:"remoteAddr"`
-	ExpiresSeconds int     `gorm:"column:expires_seconds;not null;default:3600" json:"expiresSeconds"`
-	State          string  `gorm:"column:state;type:text;not null;default:'offline'" json:"state"`
-	// ChannelCount is a projection, not a column: the store fills it from gb_channels so
-	// the API can show "N channels" without an N+1 query. A failed count is returned as
+	DeviceID     string  `gorm:"column:device_id;primaryKey"`
+	Name         string  `gorm:"column:name;type:text;not null;default:''"`
+	Manufacturer *string `gorm:"column:manufacturer;type:text"`
+	Model        *string `gorm:"column:model;type:text"`
+	Firmware     *string `gorm:"column:firmware;type:text"`
+	Transport    string  `gorm:"column:transport;type:text;not null;default:'udp'"`
+	RemoteAddr   *string `gorm:"column:remote_addr;type:text"`
+	// ExpiresSeconds is the lease in force: the pre-provisioned value acts as the
+	// default when a device omits Expires, and every accepted REGISTER overwrites it
+	// with what the device actually asked for (the sweeper enforces this value).
+	ExpiresSeconds int    `gorm:"column:expires_seconds;not null;default:3600"`
+	State          string `gorm:"column:state;type:text;not null;default:'offline'"`
+	// ChannelCount is a projection, not a column: only the list endpoint fills it, so
+	// the SIP path does not pay for a count nobody reads. A failed count is returned as
 	// an error rather than reported as 0, because "no channels" and "we could not count"
 	// must not look the same to an operator.
-	ChannelCount    int        `gorm:"-" json:"channelCount"`
-	LastKeepaliveAt *time.Time `gorm:"column:last_keepalive_at" json:"lastKeepaliveAt"`
-	RegisteredAt    *time.Time `gorm:"column:registered_at" json:"registeredAt"`
-	EncryptedPass   []byte     `gorm:"column:encrypted_password" json:"-"`
-	CreatedAt       time.Time  `gorm:"column:created_at;not null" json:"createdAt"`
-	UpdatedAt       time.Time  `gorm:"column:updated_at;not null" json:"updatedAt"`
+	ChannelCount    int        `gorm:"-"`
+	LastKeepaliveAt *time.Time `gorm:"column:last_keepalive_at"`
+	RegisteredAt    *time.Time `gorm:"column:registered_at"`
+	EncryptedPass   []byte     `gorm:"column:encrypted_password"`
+	CreatedAt       time.Time  `gorm:"column:created_at;not null"`
+	UpdatedAt       time.Time  `gorm:"column:updated_at;not null"`
 }
 
 // TableName pins the table so a future model rename cannot silently retarget it.
@@ -300,7 +307,9 @@ func (d *Device) applyDefaults() {
 	}
 }
 
-// GetDevice returns one device without its ciphertext.
+// GetDevice returns one device without its ciphertext. It is the read used by the SIP
+// path (every keepalive), so it stays a single row read: the channel count is a UI
+// projection and only the list endpoint pays for it.
 func (s *Store) GetDevice(ctx context.Context, deviceID string) (*Device, error) {
 	db, err := s.db(ctx)
 	if err != nil {
@@ -314,13 +323,6 @@ func (s *Store) GetDevice(ctx context.Context, deviceID string) (*Device, error)
 		return nil, fmt.Errorf("read gb device %s: %w", deviceID, err)
 	}
 	device.EncryptedPass = nil
-
-	count, err := gorm.G[Channel](db).Where("device_id = ?", deviceID).Count(ctx, "*")
-	if err != nil {
-		return nil, fmt.Errorf("count gb channels for %s: %w", deviceID, err)
-	}
-	device.ChannelCount = int(count)
-
 	return &device, nil
 }
 
@@ -550,37 +552,40 @@ func (s *Store) SweepStale(ctx context.Context, now time.Time, keepaliveTimeout,
 	return result.RowsAffected, nil
 }
 
-// devicePassword returns the plaintext Digest secret for one device.
+// deviceForAuthentication returns one provisioned device together with its plaintext
+// Digest secret.
 //
 // This is the only path that materialises the secret, it is called from the SIP
 // ingress on REGISTER, and the value never leaves this package: the API returns
-// DeviceResponse, which has no field for it.
-func (s *Store) devicePassword(ctx context.Context, deviceID string) (string, error) {
+// DeviceResponse, which has no field for it. The device row comes back with the
+// ciphertext cleared, because the caller only needs its provisioned lease.
+func (s *Store) deviceForAuthentication(ctx context.Context, deviceID string) (*Device, string, error) {
 	db, err := s.db(ctx)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if s.cipher == nil {
-		return "", apperr.Internal(CodeRuntimeNotReady, "encryption cipher is not initialized", nil)
+		return nil, "", apperr.Internal(CodeRuntimeNotReady, "encryption cipher is not initialized", nil)
 	}
 	device, err := gorm.G[Device](db).
-		Select("device_id", "encrypted_password").
+		Select("device_id", "expires_seconds", "encrypted_password").
 		Where("device_id = ?", deviceID).
 		First(ctx)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", apperr.NotFound(CodeDeviceNotFound, "GB28181 device not found", nil)
+		return nil, "", apperr.NotFound(CodeDeviceNotFound, "GB28181 device not found", nil)
 	}
 	if err != nil {
-		return "", fmt.Errorf("read gb device %s credential: %w", deviceID, err)
+		return nil, "", fmt.Errorf("read gb device %s credential: %w", deviceID, err)
 	}
 	if len(device.EncryptedPass) == 0 {
-		return "", apperr.Internal(CodePasswordRequired, "GB28181 device has no Digest password", nil)
+		return nil, "", apperr.Internal(CodePasswordRequired, "GB28181 device has no Digest password", nil)
 	}
 	plaintext, decErr := s.cipher.Decrypt(device.EncryptedPass, deviceCredentialsAAD(deviceID))
 	if decErr != nil {
-		return "", fmt.Errorf("decrypt gb device %s credential: %w", deviceID, decErr)
+		return nil, "", fmt.Errorf("decrypt gb device %s credential: %w", deviceID, decErr)
 	}
-	return string(plaintext), nil
+	device.EncryptedPass = nil
+	return &device, string(plaintext), nil
 }
 
 const (
@@ -710,6 +715,10 @@ func (s *Store) GetChannel(ctx context.Context, deviceID, channelID string) (*Ch
 }
 
 // BindChannelCamera associates a channel with a created camera record.
+//
+// The update is conditional on the channel still being unbound: the service already
+// serialises the read-then-write, and this makes the "one camera per channel"
+// invariant hold in SQL too, instead of resting on that serialisation alone.
 func (s *Store) BindChannelCamera(ctx context.Context, deviceID, channelID, cameraID string) error {
 	db, err := s.db(ctx)
 	if err != nil {
@@ -717,7 +726,7 @@ func (s *Store) BindChannelCamera(ctx context.Context, deviceID, channelID, came
 	}
 	now := time.Now().UTC()
 	res := db.Model(&Channel{}).
-		Where("device_id = ? AND channel_id = ?", deviceID, channelID).
+		Where("device_id = ? AND channel_id = ? AND camera_id IS NULL", deviceID, channelID).
 		Updates(map[string]any{
 			"camera_id":  cameraID,
 			"updated_at": now,
@@ -726,7 +735,19 @@ func (s *Store) BindChannelCamera(ctx context.Context, deviceID, channelID, came
 		return fmt.Errorf("bind gb channel camera: %w", res.Error)
 	}
 	if res.RowsAffected == 0 {
-		return apperr.NotFound(CodeChannelNotFound, "GB28181 channel not found", nil)
+		// Either the channel is gone or another writer bound it first. The two mean
+		// different things to the operator, so they are told apart with one extra read
+		// on the sad path only.
+		exists, countErr := gorm.G[Channel](db).
+			Where("device_id = ? AND channel_id = ?", deviceID, channelID).
+			Count(ctx, "*")
+		if countErr != nil {
+			return fmt.Errorf("check gb channel %s/%s before binding: %w", deviceID, channelID, countErr)
+		}
+		if exists == 0 {
+			return apperr.NotFound(CodeChannelNotFound, "GB28181 channel not found", nil)
+		}
+		return apperr.Conflict(CodeChannelAlreadyBound, "channel is already bound to a camera", nil)
 	}
 	return nil
 }

@@ -476,13 +476,13 @@ func TestChannelStoreOperations(t *testing.T) {
 		t.Errorf("expected channel order ASC: %+v", listed)
 	}
 
-	// 3. Verify ChannelCount on Device
+	// 3. GetDevice is the SIP-path read: it must not pay for the channel count.
 	dev1, err := store.GetDevice(ctx, devID1)
 	if err != nil {
 		t.Fatalf("get device: %v", err)
 	}
-	if dev1.ChannelCount != 2 {
-		t.Errorf("expected ChannelCount 2, got %d", dev1.ChannelCount)
+	if dev1.ChannelCount != 0 {
+		t.Errorf("GetDevice must not count channels, got ChannelCount %d", dev1.ChannelCount)
 	}
 
 	allDevs, err := store.ListDevices(ctx)

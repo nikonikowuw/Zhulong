@@ -91,6 +91,13 @@ describe('gb28181Api', () => {
       devices: { total: 2, online: 1 },
       sessions: { active: 0 },
       portPool: { pairsTotal: 50, pairsUsed: 0, exhaustedHits: 0 },
+      ingress: {
+        oversizedMessages: 4,
+        rejectedConns: 0,
+        inboundLimited: 7,
+        outboundLimited: 1,
+        activeConns: 2,
+      },
       generatedAt: '2026-10-25T08:00:00Z',
     }
     vi.spyOn(apiClient, 'get').mockResolvedValueOnce(mockResponse(snapshot))
@@ -98,6 +105,7 @@ describe('gb28181Api', () => {
     const res = await gb28181Api.getRuntime()
 
     expect(res.portPool.pairsTotal).toBe(50)
+    expect(res.ingress.inboundLimited).toBe(7)
     expect(apiClient.get).toHaveBeenCalledWith('/gb28181/runtime')
   })
 

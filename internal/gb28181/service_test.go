@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -207,3 +208,115 @@ func TestSyncCatalogRecordsRuntimeCounters(t *testing.T) {
 		t.Errorf("expected 1 timeout, got %d", snapshot.Catalog.Timeouts)
 	}
 }
+
+// blockingCatalogSyncer keeps the shared sync body running until the test releases it,
+// so a second caller is guaranteed to join instead of starting a second exchange.
+type blockingCatalogSyncer struct {
+	started chan struct{}
+	release chan struct{}
+	calls   int32
+}
+
+func (s *blockingCatalogSyncer) Sync(context.Context, Device) ([]Channel, error) {
+	atomic.AddInt32(&s.calls, 1)
+	s.started <- struct{}{}
+	<-s.release
+	return []Channel{}, nil
+}
+
+// A joined caller does not start an exchange, so it must not be counted as an attempt:
+// the counter answers "how many catalog queries left this box", not "how many times the
+// button was clicked".
+func TestSyncCatalogCountsOneAttemptPerExchange(t *testing.T) {
+	store, _, cleanup := setupStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	const deviceID = "34020000001180000002"
+	password := "testpass"
+	if _, err := store.UpsertDevice(ctx, DeviceUpsert{DeviceID: deviceID, Password: &password}); err != nil {
+		t.Fatalf("provision device: %v", err)
+	}
+	if err := store.dbProvider.DB().Model(&Device{}).
+		Where("device_id = ?", deviceID).
+		Update("state", DeviceStateOnline).Error; err != nil {
+		t.Fatalf("mark device online: %v", err)
+	}
+
+	syncer := &blockingCatalogSyncer{
+		started: make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+	runtime := NewRuntime()
+	service := NewService(ServiceOptions{
+		Devices:  store,
+		Channels: store,
+		Catalog:  syncer,
+		Runtime:  runtime,
+		Logger:   zap.NewNop(),
+	})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			if _, err := service.SyncCatalog(ctx, deviceID); err != nil {
+				t.Errorf("sync catalog: %v", err)
+			}
+		}()
+	}
+
+	<-syncer.started
+	// Give the second caller time to join the running exchange.
+	time.Sleep(50 * time.Millisecond)
+	close(syncer.release)
+	wg.Wait()
+
+	if calls := atomic.LoadInt32(&syncer.calls); calls != 1 {
+		t.Fatalf("expected the syncer to run once, got %d", calls)
+	}
+	if attempts := runtime.Snapshot().Catalog.Attempts; attempts != 1 {
+		t.Fatalf("expected 1 attempt for 2 callers, got %d", attempts)
+	}
+}
+
+// The snapshot endpoint is the operator's field diagnostic: the protection counters have
+// to reach it, otherwise a firing cap is invisible without reading the log.
+func TestSnapshotCarriesIngressProtectionCounters(t *testing.T) {
+	store, _, cleanup := setupStore(t)
+	defer cleanup()
+
+	runtime := NewRuntime()
+	provider := &stubIngressStats{stats: IngressStats{
+		OversizedMessages: 3,
+		RejectedConns:     2,
+		InboundLimited:    11,
+		OutboundLimited:   4,
+		ActiveConns:       1,
+	}}
+	service := NewService(ServiceOptions{
+		Devices: store,
+		Runtime: runtime,
+		Logger:  zap.NewNop(),
+		Ingress: provider,
+	})
+
+	snapshot := service.Snapshot(context.Background())
+	want := IngressCounters{
+		OversizedMessages: 3,
+		RejectedConns:     2,
+		InboundLimited:    11,
+		OutboundLimited:   4,
+		ActiveConns:       1,
+	}
+	if snapshot.Ingress != want {
+		t.Fatalf("expected %+v, got %+v", want, snapshot.Ingress)
+	}
+}
+
+type stubIngressStats struct {
+	stats IngressStats
+}
+
+func (s *stubIngressStats) Stats() IngressStats { return s.stats }

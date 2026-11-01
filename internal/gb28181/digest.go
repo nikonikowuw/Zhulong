@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/emiago/sipgo/sip"
 )
 
 // Nonce defaults. The nonce is deliberately *not* single-use: UDP REGISTER
@@ -26,6 +28,13 @@ const (
 	// nonceTimeHexLen is len(hex(UnixNano)): the fixed-width prefix that carries the
 	// issue time. It is parsed back by Verify, so the width is a wire contract.
 	nonceTimeHexLen = 16
+
+	// maxNonceClockSkew bounds how far in the future an issue time may look before it
+	// is treated as forged. A nonce is stamped with this process's clock, so a larger
+	// negative age can only mean the wall clock moved backwards — and a negative age
+	// would otherwise never exceed the TTL, turning the replay window into "until the
+	// clock catches up".
+	maxNonceClockSkew = 30 * time.Second
 )
 
 var (
@@ -94,8 +103,12 @@ func (m *nonceManager) Verify(nonce string) error {
 	if err != nil {
 		return ErrDigestNonceInvalid
 	}
-	if m.now().Sub(time.Unix(0, issuedAt)) > m.ttl {
+	age := m.now().Sub(time.Unix(0, issuedAt))
+	if age > m.ttl {
 		return ErrDigestNonceStale
+	}
+	if age < -maxNonceClockSkew {
+		return ErrDigestNonceInvalid
 	}
 	return nil
 }
@@ -212,9 +225,15 @@ func missingParam(params map[string]string, names ...string) string {
 // Supported algorithms are MD5 (what GB28181 devices use) and SHA-256 from RFC 7616.
 // MD5-sess is rejected rather than half-implemented: accepting a name we compute
 // differently from the device would lock the device out with a misleading 401.
-func verifyDigestResponse(credentials digestCredentials, method, realm, password string) error {
-	if credentials.Username == "" || credentials.Realm != realm {
+func verifyDigestResponse(credentials digestCredentials, method, requestURI, realm, password string) error {
+	if credentials.Username == "" {
+		return ErrDigestUserMismatch
+	}
+	if credentials.Realm != realm {
 		return ErrDigestRealmMismatch
+	}
+	if err := verifyDigestURI(credentials.URI, requestURI); err != nil {
+		return err
 	}
 	algorithm := credentials.Algorithm
 	if algorithm == "" {
@@ -246,6 +265,32 @@ func verifyDigestResponse(credentials digestCredentials, method, realm, password
 	}
 	if subtle.ConstantTimeCompare([]byte(expected), []byte(strings.ToLower(credentials.Response))) != 1 {
 		return ErrDigestMismatch
+	}
+	return nil
+}
+
+// verifyDigestURI is the request-target binding check.
+//
+// RFC 3261 §22.4 wants the digest-uri to be the Request-URI, but devices in the field
+// rewrite it (with or without the port, without the user part, sometimes with a
+// different host), and answering those with 401 would lock a working device out over a
+// formatting difference. What is enforced is the one thing that cannot be a format
+// variation: when both URIs name a user, they must name the same one. A digest that
+// points at another target is a replay against a different identity, not a quirk.
+func verifyDigestURI(digestURI, requestURI string) error {
+	var digest sip.Uri
+	if err := sip.ParseUri(strings.TrimSpace(digestURI), &digest); err != nil {
+		return fmt.Errorf("%w: digest uri %q", ErrDigestMalformed, digestURI)
+	}
+	var request sip.Uri
+	if err := sip.ParseUri(strings.TrimSpace(requestURI), &request); err != nil {
+		// Nothing to compare against. The request target itself is unparsable, which the
+		// SIP layer already answered; the digest is still bound to username/realm/nonce.
+		return nil
+	}
+	if digest.User != "" && request.User != "" && digest.User != request.User {
+		return fmt.Errorf("%w: digest uri user %q, request uri user %q",
+			ErrDigestUserMismatch, digest.User, request.User)
 	}
 	return nil
 }

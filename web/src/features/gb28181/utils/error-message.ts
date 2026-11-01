@@ -15,6 +15,7 @@ const RUNTIME_DETAIL_KEYS: Record<string, string> = {
   ingress_start_failed: 'runtime.detail.ingressStartFailed',
   ingress_stop_failed: 'runtime.detail.ingressStopFailed',
   ingress_serve_failed: 'runtime.detail.ingressServeFailed',
+  registration_reset_failed: 'runtime.detail.registrationResetFailed',
 }
 
 /**

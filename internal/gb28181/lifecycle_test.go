@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 )
 
 // stubRepo is a ConfigRepository whose read can be made to fail.
@@ -245,5 +246,104 @@ func TestLifecycleStopIsSafeBeforeStart(t *testing.T) {
 
 	if err := manager.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop before Start must be a no-op, got %v", err)
+	}
+}
+
+// stubResetter records the boot-time registration reset and can fail on demand.
+type stubResetter struct {
+	cleared int64
+	err     error
+	calls   int
+}
+
+func (r *stubResetter) ResetOnlineStates(context.Context, time.Time) (int64, error) {
+	r.calls++
+	return r.cleared, r.err
+}
+
+// A disabled subsystem must still clear the online rows a previous process left
+// behind: nothing is listening for REGISTERs, so a persisted "online" can only be a
+// lie in the console. Before this test the reset lived inside the SIP ingress, which a
+// disabled configuration never starts.
+func TestLifecycleClearsStaleRegistrationsEvenWhenDisabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "disabled", enabled: false},
+		{name: "enabled", enabled: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			if test.enabled {
+				cfg = enabledConfig()
+			}
+			repo := &stubRepo{cfg: cfg}
+			resetter := &stubResetter{cleared: 3}
+			manager := NewLifecycleManager(LifecycleOptions{
+				Repo:    repo,
+				Devices: resetter,
+				Runtime: NewRuntime(),
+				Ingress: &stubIngress{},
+				Addrs:   fixedAddrs("192.168.1.10"),
+			})
+
+			if err := manager.Start(context.Background()); err != nil {
+				t.Fatalf("Start failed: %v", err)
+			}
+			if resetter.calls != 1 {
+				t.Fatalf("expected exactly one boot-time reset, got %d", resetter.calls)
+			}
+		})
+	}
+}
+
+func TestLifecycleReportsRegistrationResetFailure(t *testing.T) {
+	repo := &stubRepo{cfg: DefaultConfig()}
+	runtime := NewRuntime()
+	manager := NewLifecycleManager(LifecycleOptions{
+		Repo:    repo,
+		Devices: &stubResetter{err: errors.New("database is locked")},
+		Runtime: runtime,
+		Ingress: &stubIngress{},
+		Addrs:   fixedAddrs("192.168.1.10"),
+	})
+
+	if err := manager.Start(context.Background()); err == nil {
+		t.Fatal("expected the reset failure to surface so the host records a degraded subsystem")
+	}
+	status := runtime.Status()
+	if status.State != RuntimeStateError || status.Detail != DetailRegistrationResetFailed {
+		t.Fatalf("expected %q/%q, got %q/%q",
+			RuntimeStateError, DetailRegistrationResetFailed, status.State, status.Detail)
+	}
+}
+
+// Validation runs before address resolution: an invalid stored configuration must be
+// reported as such, not as the address problem it happens to cause on the way.
+func TestLifecycleReportsConfigInvalidBeforeAddressResolution(t *testing.T) {
+	cfg := enabledConfig()
+	cfg.RTPPortMin = 30100
+	cfg.RTPPortMax = 30000 // inverted range: invalid regardless of the host's addrs
+
+	repo := &stubRepo{cfg: cfg}
+	runtime := NewRuntime()
+	manager := NewLifecycleManager(LifecycleOptions{
+		Repo:    repo,
+		Runtime: runtime,
+		Ingress: &stubIngress{},
+		// No candidates: if resolution ran first, the reported detail would be the
+		// address one.
+		Addrs: fixedAddrs(),
+	})
+
+	if err := manager.Start(context.Background()); err == nil {
+		t.Fatal("expected an invalid stored config to fail startup")
+	}
+	status := runtime.Status()
+	if status.Detail != DetailConfigInvalid {
+		t.Fatalf("expected detail %q, got %q", DetailConfigInvalid, status.Detail)
 	}
 }

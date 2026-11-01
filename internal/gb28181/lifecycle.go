@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -20,6 +21,13 @@ import (
 type Ingress interface {
 	Start(ctx context.Context, cfg Config, advertisedIP string) error
 	Stop(ctx context.Context) error
+}
+
+// RegistrationResetter clears the online state a previous process left in the
+// database. It is a lifecycle concern, not an ingress one: a disabled subsystem still
+// must not show devices as online after a restart.
+type RegistrationResetter interface {
+	ResetOnlineStates(ctx context.Context, at time.Time) (int64, error)
 }
 
 // InterfaceAddrs supplies the host's addresses for media_advertised_ip resolution.
@@ -49,10 +57,12 @@ func DefaultInterfaceAddrs() ([]net.IP, error) {
 // only way for an operator to fix the config.
 type LifecycleManager struct {
 	repo    ConfigRepository
+	devices RegistrationResetter
 	runtime *Runtime
 	ingress Ingress
 	addrs   InterfaceAddrs
 	logger  *zap.Logger
+	now     func() time.Time
 
 	// mu serializes Start and Stop. The host calls them from a single lifecycle
 	// goroutine, but the pair mutates one shared flag and the ingress socket: making
@@ -63,11 +73,15 @@ type LifecycleManager struct {
 
 // LifecycleOptions contains the dependencies used to construct a LifecycleManager.
 type LifecycleOptions struct {
-	Repo    ConfigRepository
+	Repo ConfigRepository
+	// Devices clears leftover registrations at boot. Omitting it keeps the previous
+	// behaviour (nothing is cleared), which only tests should want.
+	Devices RegistrationResetter
 	Runtime *Runtime
 	Ingress Ingress
 	Addrs   InterfaceAddrs
 	Logger  *zap.Logger
+	Now     func() time.Time
 }
 
 // NewLifecycleManager constructs the lifecycle without performing I/O.
@@ -78,12 +92,17 @@ func NewLifecycleManager(options LifecycleOptions) *LifecycleManager {
 	if options.Addrs == nil {
 		options.Addrs = DefaultInterfaceAddrs
 	}
+	if options.Now == nil {
+		options.Now = time.Now
+	}
 	return &LifecycleManager{
 		repo:    options.Repo,
+		devices: options.Devices,
 		runtime: options.Runtime,
 		ingress: options.Ingress,
 		addrs:   options.Addrs,
 		logger:  options.Logger,
+		now:     options.Now,
 	}
 }
 
@@ -99,10 +118,29 @@ func (m *LifecycleManager) Start(ctx context.Context) error {
 		return fmt.Errorf("load gb28181 config: %w", err)
 	}
 	cfg := stored.Normalize()
+	m.runtime.LoadStartup(cfg, "")
+
+	// Validation runs before address resolution, and only for an enabled target: an
+	// invalid stored config must be reported as such instead of as the address problem
+	// it also happens to cause, while a disabled config keeps the documented permission
+	// to be a half-filled draft.
+	if cfg.Enabled {
+		if err := cfg.Validate(); err != nil {
+			m.runtime.SetState(RuntimeStateError, DetailConfigInvalid)
+			return fmt.Errorf("stored gb28181 config is invalid: %w", err)
+		}
+	}
+
+	// Leftover registrations are cleared whether or not the subsystem is enabled: a
+	// persisted "online" is not evidence of liveness after a restart, and a disabled
+	// subsystem must not render devices as online with nothing listening for them.
+	if err := m.resetRegistrations(ctx); err != nil {
+		m.runtime.SetState(RuntimeStateError, DetailRegistrationResetFailed)
+		return err
+	}
 
 	advertised, resolveErr := m.resolveAdvertised(cfg)
 	if resolveErr != nil {
-		m.runtime.LoadStartup(cfg, "")
 		m.runtime.SetState(RuntimeStateError, DetailMediaAddressUnresolvable)
 		return fmt.Errorf("resolve media advertised address: %w", resolveErr)
 	}
@@ -112,10 +150,6 @@ func (m *LifecycleManager) Start(ctx context.Context) error {
 		m.runtime.SetState(RuntimeStateDisabled, "")
 		m.logger.Info("gb28181 ingress disabled by stored configuration")
 		return nil
-	}
-	if err := cfg.Validate(); err != nil {
-		m.runtime.SetState(RuntimeStateError, DetailConfigInvalid)
-		return fmt.Errorf("stored gb28181 config is invalid: %w", err)
 	}
 	if m.ingress == nil {
 		m.runtime.SetState(RuntimeStateError, DetailIngressUnavailable)
@@ -161,6 +195,26 @@ func (m *LifecycleManager) Stop(ctx context.Context) error {
 	}
 	m.started = false
 	m.runtime.SetState(RuntimeStateDisabled, "")
+	return nil
+}
+
+// resetRegistrations clears the online state left by a previous process and
+// republishes the counters, so the snapshot reflects an empty registration table
+// before the first REGISTER can arrive.
+func (m *LifecycleManager) resetRegistrations(ctx context.Context) error {
+	if m.devices == nil {
+		return nil
+	}
+	cleared, err := m.devices.ResetOnlineStates(ctx, m.now().UTC())
+	if err != nil {
+		return fmt.Errorf("clear stale gb28181 registrations: %w", err)
+	}
+	if cleared > 0 {
+		m.logger.Info("cleared stale gb28181 registrations", zap.Int64("devices", cleared))
+	}
+	if counts, ok := m.devices.(DeviceCounter); ok && m.runtime != nil {
+		publishDeviceCounters(ctx, counts, m.runtime, m.logger)
+	}
 	return nil
 }
 

@@ -64,6 +64,13 @@ const snapshotFixture = {
   devices: { total: 0, online: 0 },
   sessions: { active: 0 },
   portPool: { pairsTotal: 50, pairsUsed: 0, exhaustedHits: 0 },
+  ingress: {
+    oversizedMessages: 0,
+    rejectedConns: 0,
+    inboundLimited: 0,
+    outboundLimited: 0,
+    activeConns: 0,
+  },
   generatedAt: '2026-10-25T08:00:00Z',
 }
 

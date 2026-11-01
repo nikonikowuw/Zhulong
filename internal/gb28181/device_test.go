@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"go.uber.org/zap"
 )
 
 // testClock is a settable clock. It is a pointer type because the state machine
@@ -224,7 +225,11 @@ func TestDeviceStateMachineSweepsExpiredAndSilentDevices(t *testing.T) {
 	}
 }
 
-func TestDeviceStateMachineResetClearsStaleRegistrations(t *testing.T) {
+// Stale registrations are cleared by the lifecycle, not by the state machine, because
+// they must be cleared even when GB28181 is disabled (see
+// TestLifecycleClearsStaleRegistrationsEvenWhenDisabled). This test covers the store
+// side of that path.
+func TestStoreResetOnlineStatesClearsStaleRegistrations(t *testing.T) {
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	machine, store, runtime, clock, cleanup := newTestStateMachine(t, now)
 	defer cleanup()
@@ -242,9 +247,9 @@ func TestDeviceStateMachineResetClearsStaleRegistrations(t *testing.T) {
 		t.Fatalf("Registered failed: %v", err)
 	}
 
-	cleared, err := machine.Reset(ctx)
+	cleared, err := store.ResetOnlineStates(ctx, clock.now())
 	if err != nil {
-		t.Fatalf("Reset failed: %v", err)
+		t.Fatalf("ResetOnlineStates failed: %v", err)
 	}
 	if cleared != 1 {
 		t.Fatalf("expected one stale registration cleared, got %d", cleared)
@@ -253,6 +258,8 @@ func TestDeviceStateMachineResetClearsStaleRegistrations(t *testing.T) {
 	if device.State != DeviceStateOffline || device.RemoteAddr != nil {
 		t.Fatalf("expected a clean offline row, got state=%q remote=%v", device.State, device.RemoteAddr)
 	}
+	// The runtime counters are republished by the lifecycle after the reset.
+	publishDeviceCounters(ctx, store, runtime, zap.NewNop())
 	if snapshot := runtime.Snapshot(); snapshot.Devices.Online != 0 {
 		t.Fatalf("expected the runtime to report zero online devices, got %+v", snapshot.Devices)
 	}
@@ -266,15 +273,21 @@ func TestStoreDevicePasswordRoundTrip(t *testing.T) {
 	const deviceID = "34020000001320000007"
 	provisionDevice(t, store, deviceID, "分层密码")
 
-	password, err := store.devicePassword(ctx, deviceID)
+	device, password, err := store.deviceForAuthentication(ctx, deviceID)
 	if err != nil {
-		t.Fatalf("devicePassword failed: %v", err)
+		t.Fatalf("deviceForAuthentication failed: %v", err)
 	}
 	if password != "分层密码" {
 		t.Fatalf("expected the decrypted password, got %q", password)
 	}
+	if device.ExpiresSeconds != DefaultExpiresSeconds {
+		t.Fatalf("expected the provisioned lease to come back, got %d", device.ExpiresSeconds)
+	}
+	if device.EncryptedPass != nil {
+		t.Fatal("expected the ciphertext to be cleared before leaving the store")
+	}
 
-	_, err = store.devicePassword(ctx, "34020000001320000099")
+	_, _, err = store.deviceForAuthentication(ctx, "34020000001320000099")
 	var appErr *apperr.Error
 	if !errors.As(err, &appErr) || appErr.Code != CodeDeviceNotFound {
 		t.Fatalf("expected %s for an unknown device, got %v", CodeDeviceNotFound, err)

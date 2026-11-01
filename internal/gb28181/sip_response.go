@@ -43,6 +43,10 @@ func (i *sipIngress) respond(req *sip.Request, tx sip.ServerTransaction, status 
 
 // reject logs one security- or protocol-relevant refusal and answers it.
 //
+// The answer is sent every time; only the log line is sampled (one per source per
+// message per window, see logThrottle). A rejected flood is exactly when the log
+// must not reproduce the flood, and the counters in IngressStats stay exact.
+//
 // message is required; fields is variadic so the fixed argument count stays at four.
 func (i *sipIngress) reject(
 	req *sip.Request,
@@ -51,7 +55,13 @@ func (i *sipIngress) reject(
 	message string,
 	fields ...zap.Field,
 ) {
-	i.logger.Warn(message, fields...)
+	source := hostOnly(req.Source())
+	if log, suppressed := i.throttle.allow(message + "|" + source); log {
+		if suppressed > 0 {
+			fields = append(fields, zap.Int("suppressed", suppressed))
+		}
+		i.logger.Warn(message, fields...)
+	}
 	i.respond(req, tx, status)
 }
 

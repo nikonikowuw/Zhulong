@@ -54,8 +54,13 @@
       "ingressUnavailable": "SIP 监听不可用",
       "ingressStartFailed": "SIP 监听启动失败",
       "ingressStopFailed": "SIP 监听停止时出错",
-      "ingressServeFailed": "SIP 监听在运行中退出"
-    }
+      "ingressServeFailed": "SIP 监听在运行中退出",
+      "registrationResetFailed": "无法清理上一进程遗留的注册状态，下方在线数可能不准确"
+    },
+    "ingressLimited": "信令限速",
+    "ingressLimitedValue": "入向 {{inbound}} / 出向 {{outbound}}",
+    "ingressDrops": "防护上限丢弃",
+    "ingressDropsValue": "超长 {{oversized}} / 连接 {{conns}} / 占用 {{active}}"
   },
   "config": {
     "desc": "保存只写入目标配置；SIP 监听与媒体端口池要重启后才会切换。",

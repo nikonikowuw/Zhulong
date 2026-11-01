@@ -19,6 +19,10 @@ const (
 	// the ingress had started. It is distinct from a bind failure: the socket existed
 	// and then died, which is what an operator needs to know before trusting the state.
 	DetailIngressServeFailed = "ingress_serve_failed"
+	// DetailRegistrationResetFailed reports that the leftover online rows from the
+	// previous process could not be cleared. The snapshot would otherwise claim devices
+	// are online with no listener behind them.
+	DetailRegistrationResetFailed = "registration_reset_failed"
 )
 
 // RuntimeStatus is what GET /gb28181/config reports about the *current process*.
@@ -35,8 +39,9 @@ type RuntimeStatus struct {
 }
 
 // Counters is the observable surface for the runtime snapshot. P0 fills the device,
-// catalog and port-pool parts; session/media counters stay zero until S3/S4 wire the
-// media path, which keeps the API shape stable across the phase boundary.
+// catalog, ingress-protection and port-pool parts; session/media counters stay zero
+// until S3/S4 wire the media path, which keeps the API shape stable across the phase
+// boundary.
 type Counters struct {
 	DevicesTotal   int64
 	DevicesOnline  int64
@@ -45,6 +50,7 @@ type Counters struct {
 	PortPairsUsed  int64
 	PortExhausted  uint64
 	Catalog        CatalogCounts
+	Ingress        IngressStats
 }
 
 // CatalogCounts is the catalog-sync side of the snapshot. Without it an operator
@@ -58,15 +64,29 @@ type CatalogCounts struct {
 	LastSyncAt   *time.Time `json:"lastSyncAt"`
 }
 
-// Snapshot is the JSON-facing shape served by GET /gb28181/runtime.
-type Snapshot struct {
-	State           string         `json:"state"`
-	RestartRequired bool           `json:"restartRequired"`
-	Devices         DeviceCounters `json:"devices"`
-	Catalog         CatalogCounts  `json:"catalog"`
-	Sessions        SessionCounts  `json:"sessions"`
-	PortPool        PortPoolCounts `json:"portPool"`
-	GeneratedAt     time.Time      `json:"generatedAt"`
+// IngressCounters is the signalling-protection view. Every field is exact: only the
+// log lines are sampled (see logThrottle), so a firing cap is visible here even when
+// the log is quiet.
+type IngressCounters struct {
+	OversizedMessages uint64 `json:"oversizedMessages"`
+	RejectedConns     uint64 `json:"rejectedConns"`
+	InboundLimited    uint64 `json:"inboundLimited"`
+	OutboundLimited   uint64 `json:"outboundLimited"`
+	ActiveConns       int    `json:"activeConns"`
+}
+
+// RuntimeSnapshotStatus is the JSON-facing shape served by GET /gb28181/runtime. The
+// *Status suffix is the naming contract for a GET telemetry payload; the type used to
+// be called Snapshot, which made it indistinguishable from the internal counter set.
+type RuntimeSnapshotStatus struct {
+	State           string          `json:"state"`
+	RestartRequired bool            `json:"restartRequired"`
+	Devices         DeviceCounters  `json:"devices"`
+	Catalog         CatalogCounts   `json:"catalog"`
+	Sessions        SessionCounts   `json:"sessions"`
+	PortPool        PortPoolCounts  `json:"portPool"`
+	Ingress         IngressCounters `json:"ingress"`
+	GeneratedAt     time.Time       `json:"generatedAt"`
 }
 
 // DeviceCounters mirrors the allowlist side of the snapshot.
@@ -103,6 +123,7 @@ type Runtime struct {
 	exhausted   uint64
 	devices     DeviceCounters
 	catalog     CatalogCounts
+	ingress     IngressStats
 }
 
 // NewRuntime creates the runtime in the disabled state with default values, so a
@@ -158,6 +179,14 @@ func (r *Runtime) SetDeviceCounters(total, online int64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.devices = DeviceCounters{Total: total, Online: online}
+}
+
+// SetIngressStats feeds the signalling-protection counters. Callers refresh it when
+// they answer a snapshot, so the numbers are as fresh as the read that shows them.
+func (r *Runtime) SetIngressStats(stats IngressStats) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ingress = stats
 }
 
 // RecordCatalogAttempt counts one operator-triggered catalog query.
@@ -221,15 +250,16 @@ func (r *Runtime) statusLocked(desired Config) RuntimeStatus {
 			PortPairsUsed:  r.activePairs,
 			PortExhausted:  r.exhausted,
 			Catalog:        r.catalog,
+			Ingress:        r.ingress,
 		},
 	}
 }
 
 // Snapshot returns the runtime snapshot served to operators. It is derived from
 // Status so the two endpoints cannot disagree.
-func (r *Runtime) Snapshot() Snapshot {
+func (r *Runtime) Snapshot() RuntimeSnapshotStatus {
 	status := r.Status()
-	return Snapshot{
+	return RuntimeSnapshotStatus{
 		State:           status.State,
 		RestartRequired: status.RestartRequired,
 		Devices: DeviceCounters{
@@ -243,6 +273,7 @@ func (r *Runtime) Snapshot() Snapshot {
 			PairsUsed:     status.Counters.PortPairsUsed,
 			ExhaustedHits: status.Counters.PortExhausted,
 		},
+		Ingress:     IngressCounters(status.Counters.Ingress),
 		GeneratedAt: time.Now().UTC(),
 	}
 }

@@ -27,6 +27,12 @@ type CatalogSyncer interface {
 	Sync(ctx context.Context, device Device) ([]Channel, error)
 }
 
+// IngressStatsProvider exposes the ingress protection counters to the snapshot. It is
+// optional: a build without a SIP ingress (tests, stubs) simply reports zeros.
+type IngressStatsProvider interface {
+	Stats() IngressStats
+}
+
 // Service owns the rules that must not be duplicated between the HTTP layer and
 // the lifecycle: normalize → validate → resolve the advertised address → persist.
 //
@@ -42,6 +48,7 @@ type Service struct {
 	runtime       *Runtime
 	addrs         InterfaceAddrs
 	logger        *zap.Logger
+	ingress       IngressStatsProvider
 	// syncGroup collapses concurrent catalog queries for the same device: a second
 	// click must join the running exchange instead of sending a second SN.
 	syncGroup singleflight.Group
@@ -62,6 +69,7 @@ type ServiceOptions struct {
 	Runtime       *Runtime
 	Addrs         InterfaceAddrs
 	Logger        *zap.Logger
+	Ingress       IngressStatsProvider
 }
 
 // NewService wires the service. It performs no I/O.
@@ -88,6 +96,7 @@ func NewService(options ServiceOptions) *Service {
 		runtime:       options.Runtime,
 		addrs:         options.Addrs,
 		logger:        options.Logger,
+		ingress:       options.Ingress,
 	}
 }
 
@@ -170,11 +179,14 @@ func (s *Service) ListDevices(ctx context.Context) ([]Device, error) {
 	return devices, nil
 }
 
-// Snapshot returns the observability view. Counters are refreshed from the store
-// first so a polling dashboard never shows stale device totals.
-func (s *Service) Snapshot(ctx context.Context) (Snapshot, error) {
+// Snapshot returns the observability view. Counters are refreshed from the store and
+// from the ingress first, so a polling dashboard never shows stale totals.
+func (s *Service) Snapshot(ctx context.Context) RuntimeSnapshotStatus {
 	publishDeviceCounters(ctx, s.devices, s.runtime, s.logger)
-	return s.runtime.Snapshot(), nil
+	if s.ingress != nil {
+		s.runtime.SetIngressStats(s.ingress.Stats())
+	}
+	return s.runtime.Snapshot()
 }
 
 // SyncCatalog queries the device for its video channels and reconciles the catalog.
@@ -190,8 +202,11 @@ func (s *Service) SyncCatalog(ctx context.Context, deviceID string) (*SyncCatalo
 		return nil, apperr.Internal(CodeRuntimeNotReady, "catalog syncer is not ready", nil)
 	}
 
-	s.runtime.RecordCatalogAttempt()
 	res, err, _ := s.syncGroup.Do(deviceID, func() (any, error) {
+		// The attempt is counted inside the shared body: a second click joins the
+		// running exchange instead of starting one, so counting it here keeps
+		// "attempts" equal to the number of exchanges actually sent.
+		s.runtime.RecordCatalogAttempt()
 		// The shared body must not inherit the first caller's cancellation: closing the
 		// browser tab must not abort an exchange that other callers are waiting on.
 		// CatalogManager owns the deadline, so dropping the cancel signal lengthens

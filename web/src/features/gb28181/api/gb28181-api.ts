@@ -4,13 +4,13 @@ import {
   gb28181ConfigResponseSchema,
   gb28181DeviceListSchema,
   gb28181DeviceSchema,
-  gb28181SnapshotSchema,
+  gb28181RuntimeSnapshotStatusSchema,
   syncCatalogResponseSchema,
   type Gb28181Channel,
   type Gb28181Config,
   type Gb28181ConfigResponse,
   type Gb28181Device,
-  type Gb28181Snapshot,
+  type Gb28181RuntimeSnapshotStatus,
   type SyncCatalogResponse,
   type UpsertGb28181DeviceRequest,
 } from '../data/schema'
@@ -44,10 +44,12 @@ export const gb28181Api = {
   },
 
   /** 运行态快照：在线设备、活动会话、媒体端口池占用。 */
-  async getRuntime(): Promise<Gb28181Snapshot> {
+  async getRuntime(): Promise<Gb28181RuntimeSnapshotStatus> {
     const resp =
-      await apiClient.get<ApiResponse<Gb28181Snapshot>>('/gb28181/runtime')
-    return gb28181SnapshotSchema.parse(resp.data.data)
+      await apiClient.get<ApiResponse<Gb28181RuntimeSnapshotStatus>>(
+        '/gb28181/runtime'
+      )
+    return gb28181RuntimeSnapshotStatusSchema.parse(resp.data.data)
   },
 
   /** 设备 allowlist。后端明确不分页（单机上限为数百台）。 */

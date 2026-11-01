@@ -60,6 +60,12 @@ func NewComponents(options ComponentsOptions) Components {
 	} else if cs, ok := ingress.(CatalogSyncer); ok {
 		syncer = cs
 	}
+	// Optional capabilities: a stub ingress in tests exposes neither, and both paths
+	// degrade to "no stats" / "no reset" instead of failing the wiring.
+	var stats IngressStatsProvider
+	if provider, ok := ingress.(IngressStatsProvider); ok {
+		stats = provider
+	}
 
 	service := NewService(ServiceOptions{
 		Configs:       store,
@@ -71,10 +77,12 @@ func NewComponents(options ComponentsOptions) Components {
 		Runtime:       runtime,
 		Addrs:         options.Addrs,
 		Logger:        options.Logger,
+		Ingress:       stats,
 	})
 	handler := NewHandler(service, options.Logger)
 	lifecycle := NewLifecycleManager(LifecycleOptions{
 		Repo:    store,
+		Devices: store,
 		Runtime: runtime,
 		Ingress: ingress,
 		Addrs:   options.Addrs,

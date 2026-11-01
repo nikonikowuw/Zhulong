@@ -87,6 +87,13 @@ const (
 	CodeChannelIDInvalid         = "GB28181_CHANNEL_ID_INVALID"
 	CodeChannelAlreadyBound      = "GB28181_CHANNEL_ALREADY_BOUND"
 	CodeCameraBound              = "GB28181_CAMERA_BOUND"
+	// CodeOutboundRateLimited is per-device: the platform asked one device too many
+	// questions in too short a window. It is a 429, not a device failure.
+	CodeOutboundRateLimited = "GB28181_OUTBOUND_RATE_LIMITED"
+	// CodeDeviceChallenged means the device demanded credentials for a request the
+	// platform sent. P0 does not authenticate outbound requests, so this is a
+	// capability gap the operator has to see instead of a generic send failure.
+	CodeDeviceChallenged = "GB28181_DEVICE_CHALLENGED"
 
 	// CodeDatabaseError is the shared store-failure code owned by
 	// internal/httputil/locale.go. Store failures must not reuse a validation
@@ -97,27 +104,29 @@ const (
 
 // Channel represents an imported video channel of a GB28181 device.
 //
+// Like every model in this package it carries no json tags: the API answers with
+// ChannelResponse (see responses.go), so a row can never be serialized by accident.
 // The struct tags below exceed the 120-column guideline: a tag is one atomic literal,
 // and splitting it across lines would change its value. Do not reflow them.
 type Channel struct {
-	DeviceID         string    `gorm:"column:device_id;primaryKey" json:"deviceId"`
-	ChannelID        string    `gorm:"column:channel_id;primaryKey" json:"channelId"`
-	Name             string    `gorm:"column:name;type:text;not null;default:''" json:"name"`
-	Manufacturer     *string   `gorm:"column:manufacturer;type:text" json:"manufacturer"`
-	Model            *string   `gorm:"column:model;type:text" json:"model"`
-	Owner            *string   `gorm:"column:owner;type:text" json:"owner"`
-	CivilCode        *string   `gorm:"column:civil_code;type:text" json:"civilCode"`
-	Address          *string   `gorm:"column:address;type:text" json:"address"`
-	Parental         int       `gorm:"column:parental;not null;default:0" json:"parental"`
-	ParentID         *string   `gorm:"column:parent_id;type:text" json:"parentId"`
-	SafetyWay        *int      `gorm:"column:safety_way" json:"safetyWay"`
-	RegisterWay      *int      `gorm:"column:register_way" json:"registerWay"`
-	PTZType          *int      `gorm:"column:ptz_type" json:"ptzType"`
-	ResolutionWidth  *int      `gorm:"column:resolution_width" json:"resolutionWidth"`
-	ResolutionHeight *int      `gorm:"column:resolution_height" json:"resolutionHeight"`
-	CameraID         *string   `gorm:"column:camera_id;type:text" json:"cameraId"`
-	CreatedAt        time.Time `gorm:"column:created_at;not null" json:"createdAt"`
-	UpdatedAt        time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
+	DeviceID         string    `gorm:"column:device_id;primaryKey"`
+	ChannelID        string    `gorm:"column:channel_id;primaryKey"`
+	Name             string    `gorm:"column:name;type:text;not null;default:''"`
+	Manufacturer     *string   `gorm:"column:manufacturer;type:text"`
+	Model            *string   `gorm:"column:model;type:text"`
+	Owner            *string   `gorm:"column:owner;type:text"`
+	CivilCode        *string   `gorm:"column:civil_code;type:text"`
+	Address          *string   `gorm:"column:address;type:text"`
+	Parental         int       `gorm:"column:parental;not null;default:0"`
+	ParentID         *string   `gorm:"column:parent_id;type:text"`
+	SafetyWay        *int      `gorm:"column:safety_way"`
+	RegisterWay      *int      `gorm:"column:register_way"`
+	PTZType          *int      `gorm:"column:ptz_type"`
+	ResolutionWidth  *int      `gorm:"column:resolution_width"`
+	ResolutionHeight *int      `gorm:"column:resolution_height"`
+	CameraID         *string   `gorm:"column:camera_id;type:text"`
+	CreatedAt        time.Time `gorm:"column:created_at;not null"`
+	UpdatedAt        time.Time `gorm:"column:updated_at;not null"`
 }
 
 // TableName pins the table for GORM.
@@ -127,19 +136,19 @@ func (Channel) TableName() string { return "gb_channels" }
 // gb28181_configs is the only source of truth; config.toml deliberately does not
 // carry a duplicate [gb28181] section.
 type Config struct {
-	ID                      int64     `gorm:"column:id;primaryKey" json:"-"`
-	Enabled                 bool      `gorm:"column:enabled;not null;default:0" json:"enabled"`
-	SIPID                   string    `gorm:"column:sip_id;type:text;not null;default:''" json:"sipId"`
-	SIPRealm                string    `gorm:"column:sip_realm;type:text;not null;default:''" json:"sipRealm"`
-	SIPListen               string    `gorm:"column:sip_listen;type:text;not null;default:'0.0.0.0:5060'" json:"sipListen"`
-	SIPTransport            string    `gorm:"column:sip_transport;type:text;not null;default:'both'" json:"sipTransport"`
-	SecurityProfile         string    `gorm:"column:security_profile;type:text;not null;default:'standard'" json:"securityProfile"`
-	MediaBindAddress        string    `gorm:"column:media_bind_address;type:text;not null;default:'0.0.0.0'" json:"mediaBindAddress"`
-	MediaAdvertisedIP       string    `gorm:"column:media_advertised_ip;type:text;not null;default:''" json:"mediaAdvertisedIp"`
-	RTPPortMin              int       `gorm:"column:rtp_port_min;not null;default:30000" json:"rtpPortMin"`
-	RTPPortMax              int       `gorm:"column:rtp_port_max;not null;default:30100" json:"rtpPortMax"`
-	RequireRegisteredDevice bool      `gorm:"column:require_registered_device;not null;default:1" json:"requireRegisteredDevice"`
-	UpdatedAt               time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
+	ID                      int64     `gorm:"column:id;primaryKey"`
+	Enabled                 bool      `gorm:"column:enabled;not null;default:0"`
+	SIPID                   string    `gorm:"column:sip_id;type:text;not null;default:''"`
+	SIPRealm                string    `gorm:"column:sip_realm;type:text;not null;default:''"`
+	SIPListen               string    `gorm:"column:sip_listen;type:text;not null;default:'0.0.0.0:5060'"`
+	SIPTransport            string    `gorm:"column:sip_transport;type:text;not null;default:'both'"`
+	SecurityProfile         string    `gorm:"column:security_profile;type:text;not null;default:'standard'"`
+	MediaBindAddress        string    `gorm:"column:media_bind_address;type:text;not null;default:'0.0.0.0'"`
+	MediaAdvertisedIP       string    `gorm:"column:media_advertised_ip;type:text;not null;default:''"`
+	RTPPortMin              int       `gorm:"column:rtp_port_min;not null;default:30000"`
+	RTPPortMax              int       `gorm:"column:rtp_port_max;not null;default:30100"`
+	RequireRegisteredDevice bool      `gorm:"column:require_registered_device;not null;default:1"`
+	UpdatedAt               time.Time `gorm:"column:updated_at;not null"`
 }
 
 // TableName pins the singleton configuration table so GORM cannot infer a generic

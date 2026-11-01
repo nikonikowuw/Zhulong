@@ -108,7 +108,24 @@ export const gb28181ConfigResponseSchema = z.object({
 
 export type Gb28181ConfigResponse = z.infer<typeof gb28181ConfigResponseSchema>
 
-export const gb28181SnapshotSchema = z.object({
+/**
+ * 信令防护计数（对应 Go 的 `IngressCounters`）。
+ *
+ * 计数是精确的，只有日志行被采样：因此「上限是否在打人」以这里为准。
+ */
+export const gb28181IngressCountersSchema = z.object({
+  oversizedMessages: z.number(),
+  rejectedConns: z.number(),
+  inboundLimited: z.number(),
+  outboundLimited: z.number(),
+  activeConns: z.number(),
+})
+
+export type Gb28181IngressCounters = z.infer<
+  typeof gb28181IngressCountersSchema
+>
+
+export const gb28181RuntimeSnapshotStatusSchema = z.object({
   state: z.string(),
   restartRequired: z.boolean(),
   devices: z.object({
@@ -123,10 +140,13 @@ export const gb28181SnapshotSchema = z.object({
     pairsUsed: z.number(),
     exhaustedHits: z.number(),
   }),
+  ingress: gb28181IngressCountersSchema,
   generatedAt: z.string(),
 })
 
-export type Gb28181Snapshot = z.infer<typeof gb28181SnapshotSchema>
+export type Gb28181RuntimeSnapshotStatus = z.infer<
+  typeof gb28181RuntimeSnapshotStatusSchema
+>
 
 export const gb28181DeviceSchema = z.object({
   deviceId: z.string(),

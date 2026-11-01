@@ -327,8 +327,8 @@ func TestHandlerGetRuntimeCountsProvisionedDevices(t *testing.T) {
 		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
 	}
 	var env struct {
-		Code string   `json:"code"`
-		Data Snapshot `json:"data"`
+		Code string                `json:"code"`
+		Data RuntimeSnapshotStatus `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 		t.Fatalf("failed to decode runtime snapshot: %v", err)
@@ -342,6 +342,21 @@ func TestHandlerGetRuntimeCountsProvisionedDevices(t *testing.T) {
 	}
 	if env.Data.PortPool.PairsTotal != 50 {
 		t.Fatalf("expected 50 port pairs, got %d", env.Data.PortPool.PairsTotal)
+	}
+	// The protection counters are part of the contract the UI reads: an absent object
+	// would leave a firing cap invisible in the console.
+	var raw struct {
+		Data struct {
+			Ingress map[string]any `json:"ingress"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("failed to decode runtime snapshot: %v", err)
+	}
+	for _, key := range []string{"oversizedMessages", "rejectedConns", "inboundLimited", "outboundLimited", "activeConns"} {
+		if _, ok := raw.Data.Ingress[key]; !ok {
+			t.Fatalf("expected %q in the ingress counters, got %v", key, raw.Data.Ingress)
+		}
 	}
 }
 

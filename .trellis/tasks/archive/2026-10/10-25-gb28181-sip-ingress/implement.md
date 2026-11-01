@@ -46,8 +46,19 @@
 4. **抖动抑制落在日志与计数上**：状态机按设备缓存上一次状态，只有真实转移才 Info 级记账，keepalive 不发日志；
    上下线仍逐次落库，因为「离线」必须由 sweeper 的时钟判定而不是由日志策略决定。
 
-**剩余待办（S1 未完成项）**：TCP flow 断连后的出站路由清理验证、UAC 客户端对象（`sipgo.Client`）随 S2 目录查询一起建立、
-真实设备对端的 UDP/TCP 双栈联调。
+> **后续修复（review 收口，替代下列原待办中的三项）**：
+>
+> - 连接上限从 64 提到 256（低于 100 台设备容量就成了静默锁死），并新增**按来源地址上限**（8）与
+>   **空闲读超时**（3×keepalive=9 min）。没有读超时的时候，掉电设备的半开 TCP 会永久占用一个槽位 ——
+>   内核不会放弃一个没人写的 socket。`RejectedConns`/`ActiveConns` 进 `Snapshot.ingress`。
+> - 出站按**设备**限速（burst 5 / 1 s）并映射 `GB28181_OUTBOUND_RATE_LIMITED`（429）；设备回 401/407 映射
+>   `GB28181_DEVICE_CHALLENGED`（412），而不是伪装成「发送失败」。
+> - 限速/拒绝日志按「来源 + 消息」每 5 s 采样一条（计数仍精确），否则拒绝风暴会把日志变成二次故障。
+> - **遗留注册清理移到 `LifecycleManager.Start`**：原先在 `sipIngress.initialize` 里，`enabled=false`
+>   时根本不会执行，重启后控制台会在没有监听的情况下显示设备在线。
+> - 认证失败不再同时发 `401` 与 challenge（同一事务两个响应），只发一次带 `WWW-Authenticate` 的 401。
+
+**剩余待办（S1 未完成项）**：TCP flow 断连后的出站路由清理验证、真实设备对端的 UDP/TCP 双栈联调。
 
 - 选定并固定 `github.com/emiago/sipgo` 的精确版本；验证实际 UDP/TCP server、事务和 TCP connection routing API，不在计划中依赖未核对的 callback 名称。
 - SIP inbound UAS 处理 REGISTER/MESSAGE；UDP 与 TCP listener 共用业务 handler。TCP 注册设备必须保留有效连接路由；断线后清理 flow，禁止只依赖持久化 `remote_addr` 假设 TCP 出站可达。
@@ -75,7 +86,11 @@
   **进度（S1 阶段已落地）**：配置表单（含 desired/startup 差异表与 `restartRequired` 横幅）、运行态面板（在线设备／活动会话／端口池／耗尽计数）、设备白名单表与预置/凭据轮换弹窗、`/settings/gb28181` 导航与路由声明。
 
   **仍缺（随 S2 backend 落地）**：通道抽屉与“添加为摄像机”动作 —— 依赖 `gb_channels` 的目录同步（S2 `catalog.go`）先存在，否则界面只能显示空抽屉。此处刻意不提前实现，不是漏做。
-- 前端另需展示 `GET /api/v1/gb28181/runtime` 的关键计数（在线设备、活动会话、端口占用），作为现场排障入口。
+- 前端另需展示 `GET /api/v1/gb28181/runtime` 的关键计数（在线设备、活动会话、端口占用、信令防护），作为现场排障入口。
+
+> **后续修复（review 收口）**：出站 `MESSAGE` 的 Request-URI 原先用 realm 作 host，线上写出去的是
+> `sip:<device>@<platform-sip-id>`，无端口且不可解析；现改为设备实际地址（`From`/`To` 保持 realm 身份）。
+> 这个形式仍属**未验证假设**，见包注释 `doc.go` 与真机互通验收项。
 
 **验证**：分片响应乱序/重复/丢片/超时、多个 device 下相同 channel_id、重复添加与删除关联测试；API 用 fake SIP peer 集成；1600 条目录批量入库压测并记录管理 API 时延；真实无头浏览器覆盖配置读取/保存、desired/startup 对比、保存后重启提示与 runtime error 状态，以及「设备预置 → 刷新目录 → 通道显式添加」页面交互。
 

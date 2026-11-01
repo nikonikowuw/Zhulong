@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -513,6 +514,9 @@ func TestIngressServesREGISTEROverUDP(t *testing.T) {
 	}
 }
 
+// A second Start must be refused rather than silently accepted: the caller asked the
+// running process to adopt a configuration it cannot adopt, and answering "ok" would
+// hide the restart the operator still has to do. Stop stays idempotent.
 func TestIngressStartTwiceAndStopTwice(t *testing.T) {
 	store, _, cleanup := setupStore(t)
 	defer cleanup()
@@ -525,8 +529,10 @@ func TestIngressStartTwiceAndStopTwice(t *testing.T) {
 	if err := ingress.Start(context.Background(), cfg, "127.0.0.1"); err != nil {
 		t.Fatalf("start ingress: %v", err)
 	}
-	if err := ingress.Start(context.Background(), cfg, "127.0.0.1"); err != nil {
-		t.Fatalf("a second start must be a no-op: %v", err)
+	err := ingress.Start(context.Background(), cfg, "127.0.0.1")
+	var appErr *apperr.Error
+	if !errors.As(err, &appErr) || appErr.Code != CodeRuntimeNotReady {
+		t.Fatalf("expected %s for a second start, got %v", CodeRuntimeNotReady, err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -566,8 +572,8 @@ func TestReadFilterDropsOversizedDatagramWithoutStoppingUDP(t *testing.T) {
 	if len(filtered) != 0 {
 		t.Fatalf("an oversized datagram must be dropped, got %d bytes through", len(filtered))
 	}
-	if ingress.droppedOversized() != 1 {
-		t.Fatalf("expected the drop to be counted, got %d", ingress.droppedOversized())
+	if dropped := ingress.Stats().OversizedMessages; dropped != 1 {
+		t.Fatalf("expected the drop to be counted, got %d", dropped)
 	}
 
 	// TCP chunks are exempt: framedConn enforces the per-message cap there.
@@ -1167,4 +1173,234 @@ func freeTCPAddress(t *testing.T) string {
 		t.Fatalf("release tcp port: %v", err)
 	}
 	return addr
+}
+
+// newTestIngressWithClient wires the ingress internals plus a real sipgo client, which
+// SendMessage needs. Nothing is bound to a socket: the outbound path is exercised
+// against an explicit destination.
+func newTestIngressWithClient(t *testing.T) (*sipIngress, *Store, func()) {
+	t.Helper()
+	store, _, cleanup := setupStore(t)
+
+	ua, err := sipgo.NewUA()
+	if err != nil {
+		t.Fatalf("create ua: %v", err)
+	}
+	client, err := sipgo.NewClient(ua, sipgo.WithClientHostname("127.0.0.1"))
+	if err != nil {
+		closeQuietly(zap.NewNop(), ua, "test ua")
+		cleanup()
+		t.Fatalf("create client: %v", err)
+	}
+
+	ingress := newSIPIngress(store, NewRuntime(), zap.NewNop(), defaultIngressLimits())
+	ingress.cfg = enabledConfig()
+	if err := ingress.initialize(); err != nil {
+		closeQuietly(zap.NewNop(), ua, "test ua")
+		cleanup()
+		t.Fatalf("initialize ingress: %v", err)
+	}
+	ingress.ua, ingress.client = ua, client
+
+	return ingress, store, func() {
+		ingress.closeStack()
+		cleanup()
+	}
+}
+
+// The Request-URI must name the device's address, not the platform's realm: devices
+// route on the request line, and `sip:<device>@<platform-id>` is not an address any
+// peer can resolve.
+func TestBuildMessageRequestAddressesTheDevice(t *testing.T) {
+	const (
+		realm    = "3402000000"
+		serverID = "34020000002000000001"
+		dest     = "192.168.1.64:5060"
+	)
+	device := Device{DeviceID: testDeviceID, RemoteAddr: stringPtr(dest)}
+
+	recipient, err := recipientURI(device)
+	if err != nil {
+		t.Fatalf("recipientURI failed: %v", err)
+	}
+	req := buildMessageRequest(device, recipient, realm, serverID, []byte{1, 2, 3, 4, 5, 6, 7, 8}, []byte("<Query/>"))
+
+	startLine := strings.SplitN(req.String(), "\r\n", 2)[0]
+	want := "MESSAGE sip:" + testDeviceID + "@" + dest + " SIP/2.0"
+	if startLine != want {
+		t.Fatalf("expected request line %q, got %q", want, startLine)
+	}
+	if to := req.To().Address.String(); !strings.Contains(to, "@"+realm) {
+		t.Fatalf("the To header keeps the realm identity, got %q", to)
+	}
+	if from := req.From().Address.String(); !strings.Contains(from, serverID) {
+		t.Fatalf("expected the platform identity in From, got %q", from)
+	}
+}
+
+func TestRecipientURIRejectsAnUnusableRemoteAddress(t *testing.T) {
+	tests := []struct {
+		name string
+		addr *string
+	}{
+		{name: "missing", addr: nil},
+		{name: "empty", addr: stringPtr("")},
+		{name: "no port", addr: stringPtr("192.168.1.64")},
+		{name: "bad port", addr: stringPtr("192.168.1.64:not-a-port")},
+		{name: "port out of range", addr: stringPtr("192.168.1.64:0")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := recipientURI(Device{DeviceID: testDeviceID, RemoteAddr: test.addr}); err == nil {
+				t.Fatal("expected an error for an unusable remote address")
+			}
+		})
+	}
+}
+
+// A device that challenges a platform request is a capability gap, not a network
+// failure: the operator must be told which one it is.
+func TestSendMessageReportsAChallengingDeviceAndLimitsOutbound(t *testing.T) {
+	ingress, store, cleanup := newTestIngressWithClient(t)
+	defer cleanup()
+	provisionDevice(t, store, testDeviceID, testPassword)
+
+	// The device side: a real sipgo UAS that answers every MESSAGE with the status the
+	// current phase asks for.
+	var phase atomic.Int32
+	responded := make(chan int, 16)
+	peerUA, err := sipgo.NewUA()
+	if err != nil {
+		t.Fatalf("create peer ua: %v", err)
+	}
+	peerServer, err := sipgo.NewServer(peerUA)
+	if err != nil {
+		t.Fatalf("create peer server: %v", err)
+	}
+	peerServer.OnMessage(func(req *sip.Request, tx sip.ServerTransaction) {
+		status := int(phase.Load())
+		res := sip.NewResponseFromRequest(req, status, "test", nil)
+		if status == sip.StatusUnauthorized {
+			res.AppendHeader(sip.NewHeader("WWW-Authenticate", `Digest realm="3402000000", nonce="peer"`))
+		}
+		select {
+		case responded <- status:
+		default:
+		}
+		_ = tx.Respond(res)
+	})
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen peer: %v", err)
+	}
+	go func() { _ = peerServer.ServeUDP(conn) }()
+	defer func() {
+		closeQuietly(zap.NewNop(), conn, "peer udp")
+		closeQuietly(zap.NewNop(), peerUA, "peer ua")
+	}()
+
+	peerAddr := conn.LocalAddr().String()
+	device := Device{DeviceID: testDeviceID, Transport: TransportUDP, RemoteAddr: &peerAddr}
+	body := buildCatalogQuery(1, testDeviceID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 1. A 200 OK is a success.
+	phase.Store(sip.StatusOK)
+	if err := ingress.SendMessage(ctx, device, body); err != nil {
+		t.Fatalf("expected a successful MESSAGE, got %v", err)
+	}
+
+	// 2. A 401 is reported as "the device wants credentials", not as a send failure.
+	phase.Store(sip.StatusUnauthorized)
+	err = ingress.SendMessage(ctx, device, body)
+	var appErr *apperr.Error
+	if !errors.As(err, &appErr) || appErr.Code != CodeDeviceChallenged {
+		t.Fatalf("expected %s, got %v", CodeDeviceChallenged, err)
+	}
+
+	// 3. The outbound budget is per device: burst 5, so the sixth request is refused
+	// with a 429-shaped error instead of hammering the device.
+	phase.Store(sip.StatusOK)
+	var limited error
+	for i := 0; i < ingress.limits.OutboundBurst+2; i++ {
+		if sendErr := ingress.SendMessage(ctx, device, body); sendErr != nil {
+			limited = sendErr
+			break
+		}
+	}
+	if limited == nil {
+		t.Fatal("expected the outbound limiter to refuse eventually")
+	}
+	if !errors.As(limited, &appErr) || appErr.Code != CodeOutboundRateLimited {
+		t.Fatalf("expected %s, got %v", CodeOutboundRateLimited, limited)
+	}
+	if stats := ingress.Stats(); stats.OutboundLimited == 0 {
+		t.Fatal("the snapshot must show that outbound protection fired")
+	}
+}
+
+// The pre-provisioned lease is the default when the device omits Expires; before this
+// it was a stored value nothing read, and every default silently became 3600.
+func TestRegisterWithoutExpiresUsesTheProvisionedLease(t *testing.T) {
+	ingress, store, _, _, cleanup := newTestIngress(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	const deviceID = "34020000001320000011"
+	provisioned := 600
+	if _, err := store.UpsertDevice(ctx, DeviceUpsert{
+		DeviceID:       deviceID,
+		Password:       stringPtr(testPassword),
+		ExpiresSeconds: &provisioned,
+	}); err != nil {
+		t.Fatalf("provision device: %v", err)
+	}
+
+	req := newRegisterRequest(t, deviceID, nil)
+	nonce := ingress.nonces.Issue()
+	withAuthorization(t, req, testPassword, nonce)
+	tx := newRecordingTx()
+	ingress.handleRegister(req, tx)
+
+	responses := tx.Result()
+	if len(responses) != 1 || responses[0].StatusCode != sip.StatusOK {
+		t.Fatalf("expected a single 200 OK, got %+v", responses)
+	}
+	device := deviceState(t, store, deviceID)
+	if device.ExpiresSeconds != provisioned {
+		t.Fatalf("expected the provisioned lease %d, got %d", provisioned, device.ExpiresSeconds)
+	}
+	if device.State != DeviceStateOnline {
+		t.Fatalf("expected the device online, got %q", device.State)
+	}
+}
+
+func TestRegistrationLeaseResolution(t *testing.T) {
+	device := &Device{DeviceID: testDeviceID, ExpiresSeconds: 900}
+	tests := []struct {
+		name      string
+		requested int
+		provided  bool
+		device    *Device
+		want      int
+	}{
+		{name: "device asked", requested: 1200, provided: true, device: device, want: 1200},
+		{name: "device unregisters", requested: 0, provided: true, device: device, want: 0},
+		{name: "provisioned default", requested: 0, provided: false, device: device, want: 900},
+		{name: "no provisioned value", requested: 0, provided: false, device: &Device{}, want: DefaultExpiresSeconds},
+		{name: "no device", requested: 0, provided: false, device: nil, want: DefaultExpiresSeconds},
+		{
+			name: "provisioned value below the floor", requested: 0, provided: false,
+			device: &Device{ExpiresSeconds: 5}, want: minRegistrationSeconds,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := registrationLease(test.requested, test.provided, test.device); got != test.want {
+				t.Fatalf("expected lease %d, got %d", test.want, got)
+			}
+		})
+	}
 }

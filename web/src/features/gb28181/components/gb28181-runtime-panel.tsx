@@ -1,10 +1,20 @@
-import { AlertCircle, Activity, Network, RefreshCw, Server } from 'lucide-react'
+import {
+  AlertCircle,
+  Activity,
+  Network,
+  RefreshCw,
+  Server,
+  ShieldAlert,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { type Gb28181RuntimeInfo, type Gb28181Snapshot } from '../data/schema'
+import {
+  type Gb28181RuntimeInfo,
+  type Gb28181RuntimeSnapshotStatus,
+} from '../data/schema'
 import { describeRuntimeDetail } from '../utils/error-message'
 import {
   EMPTY_PLACEHOLDER,
@@ -15,7 +25,7 @@ import { Gb28181StatusBadge } from './gb28181-status-badge'
 
 interface Gb28181RuntimePanelProps {
   runtimeInfo?: Gb28181RuntimeInfo
-  snapshot?: Gb28181Snapshot
+  snapshot?: Gb28181RuntimeSnapshotStatus
   isLoading: boolean
   isError: boolean
   errorMessage?: string
@@ -82,6 +92,29 @@ export function Gb28181RuntimePanel({
       label: t('runtime.portExhausted'),
       value: snapshot
         ? String(snapshot.portPool.exhaustedHits)
+        : EMPTY_PLACEHOLDER,
+    },
+    {
+      key: 'signalling',
+      icon: ShieldAlert,
+      label: t('runtime.ingressLimited'),
+      value: snapshot
+        ? t('runtime.ingressLimitedValue', {
+            inbound: snapshot.ingress.inboundLimited,
+            outbound: snapshot.ingress.outboundLimited,
+          })
+        : EMPTY_PLACEHOLDER,
+    },
+    {
+      key: 'signallingDrops',
+      icon: ShieldAlert,
+      label: t('runtime.ingressDrops'),
+      value: snapshot
+        ? t('runtime.ingressDropsValue', {
+            oversized: snapshot.ingress.oversizedMessages,
+            conns: snapshot.ingress.rejectedConns,
+            active: snapshot.ingress.activeConns,
+          })
         : EMPTY_PLACEHOLDER,
     },
   ] as const
