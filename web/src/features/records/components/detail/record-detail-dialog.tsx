@@ -34,6 +34,7 @@ import {
 } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
+import { evidenceFileName } from '../../data/evidence-file-name'
 import {
   algorithmLabel,
   type Alarm,
@@ -313,7 +314,10 @@ export function RecordDetailDialog({
                     >
                       <a
                         href={getMediaUrl(record.imagePath)}
-                        download={`capture-${record.id}.jpg`}
+                        download={evidenceFileName(
+                          record.id,
+                          record.capturedAt
+                        )}
                         title={t('detail.downloadImage')}
                       >
                         <Download className='size-3.5' />

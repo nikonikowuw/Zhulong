@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
+import { evidenceFileName } from '../../data/evidence-file-name'
 import { type Alarm, type Capture, type Recognition } from '../../data/schema'
 import { RecordDetailDialog } from './record-detail-dialog'
 
@@ -213,6 +214,29 @@ describe('RecordDetailDialog', () => {
     const closeBtn = getByRole('button', { name: '关闭' })
     await userEvent.click(closeBtn)
     expect(handleOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('names the downloaded evidence file after its capture time', async () => {
+    // 磁盘名是裸 ULID，且后端刻意不下发 Content-Disposition，所以用户硬盘上
+    // 的文件名完全由这里决定。抓拍时刻写进文件名后，下载目录里才排得出先后。
+    const { getByRole } = await render(
+      <RecordDetailDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        record={mockCapture}
+        tab='captures'
+      />
+    )
+
+    // Radix 的 DialogContent 渲染在 body 的 portal 里，且挂载要等一帧，所以
+    // 不能查 render 容器的 container。
+    await expect.element(getByRole('dialog')).toBeInTheDocument()
+    const anchor = document.querySelector<HTMLAnchorElement>('a[download]')
+    expect(anchor).not.toBeNull()
+    const expected = evidenceFileName(mockCapture.id, mockCapture.capturedAt)
+    expect(anchor?.getAttribute('download')).toBe(expected)
+    // 回归：别再退回信息量为零的常量前缀。
+    expect(anchor?.getAttribute('download')).not.toContain('capture-')
   })
 
   it('supports toggling bounding box visibility', async () => {
