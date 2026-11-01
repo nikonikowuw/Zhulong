@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <queue>
 #include <utility>
 #include <vector>
 
@@ -44,6 +45,15 @@ struct ScrfCandidate {
     std::array<float, 4> box{0.0f, 0.0f, 0.0f, 0.0f}; /**< 原帧像素坐标 [x1, y1, x2, y2] */
     float score{0.0f};
     std::array<Point2f, kLandmarkCount> kps{};        /**< 原帧像素坐标关键点 */
+};
+
+/**
+ * @brief 候选收集用小顶堆比较器：堆顶恒为当前**最低分**，便于「满员后只顶替更低分者」
+ */
+struct ScrfCandidateMinScoreFirst {
+    bool operator()(const ScrfCandidate& a, const ScrfCandidate& b) const noexcept {
+        return a.score > b.score;
+    }
 };
 
 float calculate_iou(const ScrfCandidate& a, const ScrfCandidate& b) {
@@ -153,12 +163,16 @@ std::vector<ScrfCandidate> decode_scrfd_candidates(const std::vector<zhulong::Te
                                                    int orig_w, int orig_h,
                                                    float det_scale, int pad_left, int pad_top) {
     if (det_scale <= 0.0f || orig_w <= 0 || orig_h <= 0 || model_width <= 0 || model_height <= 0 ||
+        max_candidates == 0 ||
         !scrfd_outputs_match(outputs, strides, anchors_per_cell, model_width, model_height)) {
         return {};
     }
 
-    std::vector<ScrfCandidate> candidates;
-    candidates.reserve(max_candidates);
+    // 定长小顶堆按**分数**保留 top-max_candidates，而不是「边扫边截断」。
+    // 扫描顺序是 stride 由细到粗：一旦满员就 break，先扫到的细层会把粗层（大目标）的
+    // 高分框挤掉，而 NMS 是在截断之后才做的 —— 拥挤场景会表现为「远处小脸都在、近处
+    // 大脸丢了」。改为全网格扫描 + 定长堆，代价是多扫几千次浮点比较。
+    std::priority_queue<ScrfCandidate, std::vector<ScrfCandidate>, ScrfCandidateMinScoreFirst> top_candidates;
 
     for (size_t idx = 0; idx < N; ++idx) {
         const int stride = strides[idx];
@@ -219,26 +233,24 @@ std::vector<ScrfCandidate> decode_scrfd_candidates(const std::vector<zhulong::Te
                         continue;
                     }
 
-                    candidates.push_back(candidate);
-                    if (candidates.size() >= max_candidates) {
-                        break;
+                    top_candidates.push(candidate);
+                    if (top_candidates.size() > max_candidates) {
+                        top_candidates.pop();
                     }
                 }
-                if (candidates.size() >= max_candidates) {
-                    break;
-                }
             }
-            if (candidates.size() >= max_candidates) {
-                break;
-            }
-        }
-        if (candidates.size() >= max_candidates) {
-            break;
         }
     }
 
-    if (candidates.empty()) {
+    if (top_candidates.empty()) {
         return {};
+    }
+
+    std::vector<ScrfCandidate> candidates;
+    candidates.reserve(top_candidates.size());
+    while (!top_candidates.empty()) {
+        candidates.push_back(top_candidates.top());
+        top_candidates.pop();
     }
 
     std::sort(candidates.begin(), candidates.end(),

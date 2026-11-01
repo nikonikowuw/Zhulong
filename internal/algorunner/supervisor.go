@@ -2,8 +2,11 @@ package algorunner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +26,11 @@ const (
 	// gallerySyncTimeout bounds one cold-start gallery push, including the
 	// provider query, so the goroutine always has an exit.
 	gallerySyncTimeout = 10 * time.Second
+
+	// taskConfigPushTimeout bounds resolving + pushing the per-stream task config
+	// before a spawn. It sits on the start path, so it must be much shorter than
+	// the gallery's: a slow config query must never look like a hung start.
+	taskConfigPushTimeout = 5 * time.Second
 )
 
 // Supervisor oversees all algorithm runner subprocesses, watching for crashes,
@@ -42,6 +50,8 @@ type Supervisor struct {
 	resolver            BrokerSubscriptionResolver
 	gallerySyncProvider GallerySyncProvider
 	galleryBroadcaster  *GalleryBroadcaster
+	taskConfigProvider  TaskConfigProvider
+	taskConfigCast      *TaskConfigBroadcaster
 
 	// stopCh is closed by StopAll so background goroutines (gallery sync) have a
 	// deterministic exit instead of only their own timeout.
@@ -96,6 +106,61 @@ func (s *Supervisor) SetGallerySync(provider GallerySyncProvider, broadcaster *G
 	defer s.mu.Unlock()
 	s.gallerySyncProvider = provider
 	s.galleryBroadcaster = broadcaster
+}
+
+// SetTaskConfig wires the per-stream task configuration path: the provider turns
+// (algorithm, streams) into config JSON, the broadcaster pushes it to each
+// stream's FrameBroker, which replays it to every package that connects later.
+//
+// Like SetGallerySync it is late-bound and must be set before the first
+// StartAlgorithm call.
+func (s *Supervisor) SetTaskConfig(provider TaskConfigProvider, broadcaster *TaskConfigBroadcaster) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.taskConfigProvider = provider
+	s.taskConfigCast = broadcaster
+}
+
+// pushTaskConfigs seeds each stream's broker cache with the current task config.
+//
+// Called **before** the child is spawned: the package receives the configuration
+// as a handshake replay instead of racing its first frames against a push. A push
+// that fails is logged and ignored — the package then falls back to its compiled
+// defaults, which is exactly the pre-existing behaviour.
+func (s *Supervisor) pushTaskConfigs(algoID string) {
+	s.mu.RLock()
+	provider := s.taskConfigProvider
+	broadcaster := s.taskConfigCast
+	s.mu.RUnlock()
+	if provider == nil || broadcaster == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), taskConfigPushTimeout)
+	defer cancel()
+
+	configs, err := provider.TaskConfigsFor(ctx, algoID)
+	if err != nil {
+		s.logger.Warn("failed to resolve task configs for package",
+			zap.String("id", algoID),
+			zap.Error(err),
+		)
+		return
+	}
+	if err := broadcaster.BroadcastAlgorithm(ctx, algoID, configs); err != nil {
+		s.logger.Warn("failed to push task configs to brokers",
+			zap.String("id", algoID),
+			zap.Int("streams", len(configs)),
+			zap.Error(err),
+		)
+		return
+	}
+	if len(configs) > 0 {
+		s.logger.Debug("task configs pushed to brokers",
+			zap.String("id", algoID),
+			zap.Int("streams", len(configs)),
+		)
+	}
 }
 
 // triggerGallerySyncAsync pushes the face gallery to the runners, off the caller's
@@ -198,9 +263,41 @@ func (s *Supervisor) processConfig(algo PackageMeta, brokerSocks []string) (Proc
 		ExecutablePath:    entry,
 		BrokerSocks:       brokerSocks,
 		EnvFile:           s.rt.EnvPath(algo.ID, algo.Version),
+		ConfigJSON:        s.processConfigJSON(algo.ID),
 		Logger:            s.logger,
 		DisableMotionGate: algo.DisableMotionGate,
 	}, nil
+}
+
+// algoConfigEnv is the host-environment key carrying a package's process-level
+// configuration as inline JSON.
+//
+// It is deliberately the *only* source in this iteration: there is no
+// algorithm-level configuration record in the database yet, and inventing one
+// before the delivery channel existed would have meant shipping a schema with
+// nothing to verify it against. Because the value reaches the package as argv it
+// stays visible in `ps` — which is exactly why credentials must never go here.
+const algoConfigEnv = "ZHULONG_ALGO_CONFIG"
+
+// processConfigJSON resolves the inline JSON handed to `--config`. Invalid or
+// non-object values are dropped with a warning instead of being forwarded: a
+// typo in the host environment must fall back to the package defaults (one log
+// line), not become an UNDEFINED behaviour inside a package we cannot inspect.
+func (s *Supervisor) processConfigJSON(algoID string) string {
+	raw := strings.TrimSpace(os.Getenv(algoConfigEnv))
+	if raw == "" {
+		return ""
+	}
+	var probe map[string]any
+	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
+		s.logger.Warn("ignoring malformed process-level algorithm config",
+			zap.String("algorithm_id", algoID),
+			zap.String("env", algoConfigEnv),
+			zap.String("reason", "not a JSON object"),
+		)
+		return ""
+	}
+	return raw
 }
 
 // IsEntryError reports whether err came from entry resolution, i.e. the package
@@ -307,6 +404,11 @@ func (s *Supervisor) spawnWatcher(w *workerWatcher) error {
 	if s.watcherFor(w.algo.ID) != nil {
 		return ErrAlgorithmAlreadyRunning
 	}
+
+	// 先把任务级配置灌进各流的 FrameBroker 缓存，再拉起子进程：新进程握手时立刻收到
+	// 重放，不需要和首帧赛跑。放在 spawn 之前而不是进程起来之后，是因为「没有客户端在
+	// 监听」的广播会打到 0 个连接，只能靠 Broker 侧缓存兜住。
+	s.pushTaskConfigs(w.algo.ID)
 
 	process := NewRunnerProcess(cfg)
 	w.setProcess(process)

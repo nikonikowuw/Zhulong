@@ -106,6 +106,9 @@ int main(int argc, char** argv) {
     std::string sample_path = "sample.jpg";
     std::string output_path = "build/out/result.jpg";
     std::string config_json = "{}";
+    // 任务级配置原文：与宿主经 MSG_TASK_CONFIG 下发的内容等价，用来在本地验证
+    // 「每个 stream 一份配置」的解析路径（不需要跑 broker 与包进程）。
+    std::string task_config_json = "{}";
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--sample" && i + 1 < argc) {
@@ -114,6 +117,8 @@ int main(int argc, char** argv) {
             output_path = argv[++i];
         } else if (arg == "--config" && i + 1 < argc) {
             config_json = argv[++i];
+        } else if (arg == "--task-config" && i + 1 < argc) {
+            task_config_json = argv[++i];
         } else {
             std::fprintf(stderr, "unknown argument: %s\n", arg.c_str());
             return 2;
@@ -156,9 +161,11 @@ int main(int argc, char** argv) {
     frame.strides[0] = width * 3;
     frame.dma_buf_fd = -1;
 
-    // 与产品路径一致：算法方法需要 TaskContext（dev 环境只填 task_id，params 用默认值）
+    // 与产品路径一致：算法方法需要 TaskContext。params.json 在生产里由骨架的
+    // drain_control_messages 挂上（MSG_TASK_CONFIG），这里用 --task-config 直接注入。
     zhulong::TaskContext task_context;
     task_context.task_id = 1;
+    task_context.params.json = std::string_view(task_config_json);
 
     const auto started = std::chrono::steady_clock::now();
     const auto persons = plugin.detect_persons(session, zhulong::Image(frame), task_context);

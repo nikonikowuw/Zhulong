@@ -500,6 +500,17 @@ void FrameBroker::handle_handshake(uint32_t client_id, const HandshakeReq& req) 
     resp.slot_size = static_cast<uint32_t>(options_.slot_size);
 
     server_.send_msg(client_id, MSG_HANDSHAKE_RESP, &resp, sizeof(resp));
+
+    // 重放最近一次任务级配置：晚启动 / 崩溃重启的包进程必须能重新拿到它，否则会静默
+    // 回落到算法默认值（表现为「跑几天后阈值自己变回去了」）。拷贝一份再发，避免持锁做 IO。
+    std::vector<uint8_t> replay;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        replay = last_task_config_payload_;
+    }
+    if (!replay.empty()) {
+        server_.send_msg(client_id, MSG_TASK_CONFIG, replay.data(), replay.size());
+    }
 }
 
 bool FrameBroker::fail_publish(int slot_idx, const std::vector<uint32_t>& target_clients) {
@@ -598,6 +609,15 @@ size_t FrameBroker::broadcast_message(uint16_t msg_type, const void* payload, si
     if (!running_.load(std::memory_order_relaxed)) {
         return 0;
     }
+
+    // 任务级配置必须**先缓存再广播**：缓存是「晚连上 / 重连」的包进程唯一能拿到配置的途径，
+    // 而广播只覆盖此刻已连接的客户端。缓存在 running_ 之后做，停止中的 Broker 不会存半条。
+    if (msg_type == MSG_TASK_CONFIG && payload != nullptr && size > 0) {
+        const auto* bytes = static_cast<const uint8_t*>(payload);
+        std::lock_guard<std::mutex> lock(mutex_);
+        last_task_config_payload_.assign(bytes, bytes + size);
+    }
+
     return server_.broadcast(msg_type, payload, size);
 }
 

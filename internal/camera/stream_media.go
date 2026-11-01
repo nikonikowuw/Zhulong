@@ -17,6 +17,8 @@ type MediaStream interface {
 	Subscribe(ctx context.Context, options engine.SubscriptionOptions) (PacketSource, error)
 	SubscribeAIResults(ctx context.Context) (*engine.AIResultSubscription, error)
 	BrokerPath(ctx context.Context) (string, error)
+	// StreamID 返回该路物理流的引擎编号（按流寻址的控制报文用它指定目标）。
+	StreamID(ctx context.Context) (uint64, error)
 	// BrokerClients 返回该路 AI 流上各算法包的帧投递统计（只读快照）。
 	// 第二个返回值是当前客户端总数，大于 len(clients) 时表示结果被截断。
 	BrokerClients(ctx context.Context) ([]engine.BrokerClientStats, uint32, error)
@@ -71,6 +73,10 @@ func (s *streamAdapter) SubscribeAIResults(ctx context.Context) (*engine.AIResul
 
 func (s *streamAdapter) BrokerPath(ctx context.Context) (string, error) {
 	return s.stream.BrokerPath(ctx)
+}
+
+func (s *streamAdapter) StreamID(ctx context.Context) (uint64, error) {
+	return s.stream.ID(ctx)
 }
 
 func (s *streamAdapter) BrokerClients(ctx context.Context) ([]engine.BrokerClientStats, uint32, error) {

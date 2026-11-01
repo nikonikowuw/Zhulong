@@ -106,8 +106,13 @@ type ProcessConfig struct {
 	// ExecutablePath is the package's own executable (resolved by ResolveEntry).
 	// The host passes no argument that selects an algorithm: the executable *is*
 	// the algorithm, so its argv only carries runtime plumbing.
-	ExecutablePath    string
-	BrokerSocks       []string
+	ExecutablePath string
+	BrokerSocks    []string
+	// ConfigJSON is the package's **process-level** configuration, passed as
+	// `--config <inline json>`. Empty means "do not pass the flag" so the skeleton
+	// keeps its own `{}` default. Per-stream task configuration travels over
+	// MSG_TASK_CONFIG instead — argv cannot express a per-broker value.
+	ConfigJSON        string
 	EnvFile           string
 	ExtraEnv          map[string]string
 	Logger            *zap.Logger
@@ -167,6 +172,9 @@ func (p *RunnerProcess) runnerArgs() []string {
 	}
 	if p.config.AlgorithmID != "" {
 		args = append(args, "--algorithm-id", p.config.AlgorithmID)
+	}
+	if p.config.ConfigJSON != "" {
+		args = append(args, "--config", p.config.ConfigJSON)
 	}
 	if p.config.DisableMotionGate {
 		args = append(args, "--disable-motion-gate")

@@ -50,6 +50,19 @@ func (s *Stream) lease(ctx context.Context) (streamLease, error) {
 	return streamLease{generation: s.generation, id: s.id}, nil
 }
 
+// ID 返回引擎为该物理流分配的全局唯一编号。
+//
+// 宿主下发给算法包的控制报文按流寻址（如 MSG_TASK_CONFIG 指定某一路流的任务配置），
+// 因此这里必须是引擎的权威编号，而不是从 broker socket 名反解的字符串——
+// 后者会让「socket 命名规则」变成第二个事实来源。
+func (s *Stream) ID(ctx context.Context) (uint64, error) {
+	ref, err := s.lease(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return uint64(ref.id), nil
+}
+
 // BrokerPath 查询当前物理流关联的 FrameBroker Unix Domain Socket 路径。
 // 必须在 ConsumerAI 类型流上调用（且当前流仍有活跃 AI 消费者）。
 func (s *Stream) BrokerPath(ctx context.Context) (string, error) {

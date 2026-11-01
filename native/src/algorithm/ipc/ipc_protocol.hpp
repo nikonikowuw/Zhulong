@@ -48,7 +48,8 @@ enum MessageType : uint16_t {
     MSG_GALLERY_SYNC    = 10, /**< 底库全量同步通知包（Broker -> Client）：下发人员特征底库分片 */
     MSG_GALLERY_UPSERT  = 11, /**< 底库增量注册包（Broker -> Client）：下发单张新增/更新人脸特征 */
     MSG_GALLERY_DELETE  = 12, /**< 底库增量删除包（Broker -> Client）：通知删除指定人脸或人员特征 */
-    MSG_GALLERY_ACK     = 13  /**< 底库同步确认包（Client -> Broker）：全量底库分片聚合完成确认 */
+    MSG_GALLERY_ACK     = 13, /**< 底库同步确认包（Client -> Broker）：全量底库分片聚合完成确认 */
+    MSG_TASK_CONFIG     = 14  /**< 任务级配置下发包（Broker -> Client）：每路流一份，见 TaskConfigMsg */
 };
 
 #pragma pack(push, 1)
@@ -174,6 +175,21 @@ struct HeartbeatMsg {
     uint64_t timestamp_ms{0};    /**< 发送端单调毫秒时间戳 */
 };
 
+/**
+ * @brief 任务级配置下发负载头（MSG_TASK_CONFIG，变长 68 字节头 + 尾随 JSON）
+ *
+ * 负载 = 本结构后紧跟 config_json_len 字节 UTF-8 JSON（宿主侧已按 config.schema.json
+ * 校验过，骨架**不解析** JSON：原样交给算法侧，由算法自己的配置解析器消费）。
+ *
+ * ⚠️ algorithm_id 是唯一防线：FrameBroker 的广播会同时到达同一路流上的所有算法包
+ *    （人脸 + 车牌…），客户端必须与自己的 `--algorithm-id` 比对，不匹配即丢弃。
+ *    64 字节与 manifest.id 的 manifestTokenPattern 上限一致。
+ */
+struct TaskConfigMsg {
+    uint32_t config_json_len{0};   /**< 紧随其后的 JSON 字节数（头 + JSON ≤ MAX_IPC_PAYLOAD_SIZE） */
+    char     algorithm_id[64]{0};  /**< 目标算法包 ID；与骨架 --algorithm-id 不等则丢弃 */
+};
+
 #pragma pack(pop)
 
 static_assert(sizeof(IpcHeader) == 16, "IpcHeader must be 16 bytes");
@@ -182,6 +198,7 @@ static_assert(sizeof(HandshakeResp) == 80, "HandshakeResp size mismatch");
 static_assert(sizeof(IpcMotionBox) == 16, "IpcMotionBox size mismatch");
 static_assert(sizeof(FrameDispatchMsg) == 168, "FrameDispatchMsg size mismatch");
 static_assert(sizeof(FrameAckMsg) == 32, "FrameAckMsg size mismatch");
+static_assert(sizeof(TaskConfigMsg) == 68, "TaskConfigMsg size mismatch");
 
 static_assert(offsetof(FrameDispatchMsg, stream_id) % 8 == 0, "stream_id unaligned");
 static_assert(offsetof(FrameDispatchMsg, frame_id) % 8 == 0, "frame_id unaligned");

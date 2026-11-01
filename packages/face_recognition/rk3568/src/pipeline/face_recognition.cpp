@@ -13,13 +13,13 @@
 
 #include "alignment/aligner.hpp"
 #include "common/face_association.hpp"
+#include "common/match_config.hpp"
 
 #include <dlfcn.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -160,53 +160,6 @@ zhulong_status_t model_unavailable_status(std::string_view base_name) {
     return std::ifstream(path).good() ? ZHULONG_PLUGIN_ERR_NOT_SUPPORTED : ZHULONG_PLUGIN_ERR_NOT_FOUND;
 }
 
-/**
- * @brief 从扁平 JSON 对象里取一个数值字段
- *
- * 只处理 `{"key": 1.5}` 这种形态（config.schema.json 的全部字段都是扁平数值），
- * 但键必须是**完整成员名**：前一个非空白字符是 `{` 或 `,`。
- * 按子串找 `"threshold"` 会命中 `"my_threshold"`，把别人的值当成自己的。
- */
-bool find_json_number(const std::string& json, std::string_view key, double& out_value) {
-    const std::string quoted_key = "\"" + std::string(key) + "\"";
-    for (size_t pos = json.find(quoted_key); pos != std::string::npos;
-         pos = json.find(quoted_key, pos + 1)) {
-        size_t before = pos;
-        while (before > 0 && std::isspace(static_cast<unsigned char>(json[before - 1])) != 0) {
-            --before;
-        }
-        if (before == 0) {
-            continue;
-        }
-        const char preceding = json[before - 1];
-        if (preceding != '{' && preceding != ',') {
-            continue;
-        }
-
-        const size_t colon = json.find(':', pos + quoted_key.size());
-        if (colon == std::string::npos) {
-            continue;
-        }
-        const size_t value_start = json.find_first_not_of(" \t\r\n", colon + 1);
-        if (value_start == std::string::npos) {
-            continue;
-        }
-        try {
-            size_t parsed = 0;
-            const double value = std::stod(json.substr(value_start), &parsed);
-            if (parsed == 0 || !std::isfinite(value)) {
-                continue;
-            }
-            out_value = value;
-            return true;
-        } catch (const std::exception&) {
-            // 该键不是数值（例如布尔或字符串）：继续找同名成员的其他出现
-            continue;
-        }
-    }
-    return false;
-}
-
 } // namespace
 
 // 本档位目录只打包一种权重扩展名，且必须与 SDK 推理后端一致：用 onnx 前缀去编
@@ -281,6 +234,8 @@ bool FaceRecognitionPlugin::build_face_item(
     const std::shared_ptr<const std::vector<zhulong::FaceTemplate>>& gallery,
     zhulong::Session& rec_session,
     zhulong::Tensor& rec_input,
+    float match_threshold,
+    size_t match_top_k,
     zhulong::FaceItem& out_face) {
     if (!detection.is_real_detection) {
         return false;
@@ -301,7 +256,8 @@ bool FaceRecognitionPlugin::build_face_item(
         return false;
     }
 
-    MatchResult match_result = matcher_.match(probe_features.data(), kFeatureDimension, *gallery);
+    MatchResult match_result = matcher_.match(probe_features.data(), kFeatureDimension, *gallery,
+                                              match_threshold, match_top_k);
 
     out_face.box[0] = detection.face_box[0];
     out_face.box[1] = detection.face_box[1];
@@ -328,9 +284,10 @@ bool FaceRecognitionPlugin::build_face_item(
 std::vector<zhulong::PersonItem> FaceRecognitionPlugin::detect_persons(zhulong::Session& session,
                                                                       const zhulong::Image& image,
                                                                       zhulong::TaskContext& task_context) {
-    // 任务上下文是本路流的身份与运行参数；当前没有消费字段（见 TaskConfig 说明），
-    // 但它是插件契约的一部分，必须原样保留入参。
-    static_cast<void>(task_context);
+    // 任务级参数（宿主经 MSG_TASK_CONFIG 下发）只影响比对决策：每帧解析一次，
+    // 越界值回落进程级默认（见 common/match_config.hpp 的 resolve_match_params）。
+    const MatchParams match_params = resolve_match_params(
+        task_context.params.json, MatchParams{default_match_threshold_, default_match_top_k_});
 
     const uint32_t worker_id = session.worker_id();
     const std::shared_ptr<zhulong::Session> rec_session = lookup_session(rec_sessions_, worker_id);
@@ -362,7 +319,8 @@ std::vector<zhulong::PersonItem> FaceRecognitionPlugin::detect_persons(zhulong::
         for (const auto& detection : face_detections) {
             ProcessedFace processed;
             processed.face_box = detection.face_box;
-            if (build_face_item(image, detection, gallery, *rec_session, rec_input, processed.item)) {
+            if (build_face_item(image, detection, gallery, *rec_session, rec_input,
+                                match_params.threshold, match_params.top_k, processed.item)) {
                 processed_faces.push_back(std::move(processed));
             }
         }
@@ -422,13 +380,13 @@ void FaceRecognitionPlugin::parse_config(const std::string& config_json) {
     // 越界值保持默认：宿主可能下发老版本配置，宁可退化也不能让插件拒绝启动。
     double threshold = 0.0;
     if (find_json_number(config_json, "threshold", threshold) && threshold >= 0.0 && threshold <= 1.0) {
-        matcher_.set_threshold(static_cast<float>(threshold));
+        default_match_threshold_ = static_cast<float>(threshold);
     }
 
     double top_k = 0.0;
     if (find_json_number(config_json, "top_k", top_k) && top_k >= 1.0 &&
         top_k <= static_cast<double>(kMaxMatchTopK)) {
-        matcher_.set_top_k(static_cast<size_t>(std::lround(top_k)));
+        default_match_top_k_ = static_cast<size_t>(std::lround(top_k));
     }
 }
 

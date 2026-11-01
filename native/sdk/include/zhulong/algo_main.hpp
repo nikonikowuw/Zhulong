@@ -34,11 +34,14 @@ namespace sdk {
  *
  * 刻意不接受 `--config-file` 之类的旁路配置通道：算法包的运行参数必须全部来自
  * 宿主 `exec` 时的 argv，否则运维排查时「进程到底跑的是哪套配置」无法从命令行复原。
+ * `--config <json>` 是这条立场的具体形态：值是 inline JSON（argv 可见），**不是**文件路径。
+ * 它只承载**进程级**配置（一包一份）；任务级（逐路流）参数走 `MSG_TASK_CONFIG`。
  */
 struct Options {
     std::vector<std::string> brokers;   /**< `--broker <sock>` 可重复；一路 broker 一个 Worker 线程 */
     std::string client_name{"algo_worker"}; /**< `--name`，IPC 握手身份 */
-    std::string algorithm_id;           /**< `--algorithm-id`，写进结果载荷 */
+    std::string algorithm_id;           /**< `--algorithm-id`，写进结果载荷；也是 MSG_TASK_CONFIG 的过滤键 */
+    std::string config_json{"{}"};       /**< `--config <json>`，进程级配置，一次性传给 Plugin::init */
     std::string sample_path;            /**< `--verify --sample <path>`，PPM/PGM 才会被真实解码 */
     bool verify{false};                 /**< 单次验包模式（不连 broker） */
     bool extract_feature{false};        /**< `--extract-feature`：stdin 帧流 → stdout 特征行 */

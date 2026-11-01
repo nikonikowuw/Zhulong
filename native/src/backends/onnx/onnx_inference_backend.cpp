@@ -28,7 +28,10 @@ namespace {
  * ORT 内部维护全局 LoggingManager，进程内复用单一 Ort::Env 可避免多次创建/销毁环境引发状态冲突。
  */
 std::shared_ptr<Ort::Env> get_shared_ort_env() {
-    static auto env = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "ZhulongOnnx");
+    // ERROR 而不是 WARNING：ONNX Runtime 每次注册内嵌 ONNX schema 都会打一堆
+    // 「Schema error: ... already registered」到 stderr（一进程一次，但多 Worker 包会重复，
+    // 且宿主把它当运维噪音逐行采集）。这些是实现细节，不是本进程的配置问题。
+    static auto env = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_ERROR, "ZhulongOnnx");
     return env;
 }
 
@@ -65,6 +68,11 @@ std::shared_ptr<ModelAsset> OnnxInferenceBackend::load_model(const std::string& 
         opts.SetIntraOpNumThreads(1);
         opts.SetInterOpNumThreads(1);
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        // 静态元数据与动态轴模型：SCRFD 类模型的输出把空间维写死成 `[12800,1]` 等，
+        // 而插件按 640×384 推理（输入空间维本来就是动态轴 `[1,3,?,?]`）。ORT 会为此每条
+        // 输出打一行 VerifyOutputSizes 告警：24 行/帧 × 25fps 会直接刷爆宿主日志。
+        // 这个不匹配是**设计内行为**，只保留 ERROR 级日志。
+        opts.SetLogSeverityLevel(ORT_LOGGING_LEVEL_ERROR);
 
         asset->session = std::make_unique<Ort::Session>(*asset->env, model_path_or_config.c_str(), opts);
 

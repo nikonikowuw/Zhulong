@@ -433,10 +433,15 @@ func provideAlgorithm(
 		algorithm.DetectHostPlatform(config.AlgorithmTarget),
 		logger,
 	)
-	comp.Supervisor.SetBrokerSubscriptionResolver(&appBrokerPathResolver{
+	taskBrokerResolver := &appBrokerPathResolver{
 		taskStore: taskStore,
 		streamHub: streamHub,
-	})
+		logger:    logger,
+	}
+	comp.Supervisor.SetBrokerSubscriptionResolver(taskBrokerResolver)
+	// 任务级配置（逐路流的 task_algorithms.config_json）走 Broker 广播 + 握手重放，
+	// 进程级配置走 argv `--config`：argv 无法表达 per-stream 值。
+	comp.Supervisor.SetTaskConfig(taskBrokerResolver, algorunner.NewTaskConfigBroadcaster(eng, logger))
 	galleryBroadcaster := algorunner.NewGalleryBroadcaster(eng, logger)
 	return algorithmOut{
 		Store:              comp.Store,

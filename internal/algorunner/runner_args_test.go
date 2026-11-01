@@ -3,6 +3,8 @@ package algorunner
 import (
 	"slices"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 // TestRunnerArgs pins the argv contract of a package process.
@@ -54,17 +56,29 @@ func TestRunnerArgs(t *testing.T) {
 			want: []string{"--disable-motion-gate"},
 		},
 		{
+			name: "process config is an inline json flag",
+			cfg:  ProcessConfig{AlgorithmID: "pkg_id", ConfigJSON: `{"threshold":0.6}`},
+			want: []string{"--algorithm-id", "pkg_id", "--config", `{"threshold":0.6}`},
+		},
+		{
+			name: "empty process config omits the flag",
+			cfg:  ProcessConfig{AlgorithmID: "pkg_id"},
+			want: []string{"--algorithm-id", "pkg_id"},
+		},
+		{
 			name: "everything together",
 			cfg: ProcessConfig{
 				AlgorithmID:       "pkg_id",
 				AlgorithmName:     "pkg_name",
 				BrokerSocks:       []string{"/tmp/a.sock"},
+				ConfigJSON:        `{"threshold":0.6}`,
 				DisableMotionGate: true,
 			},
 			want: []string{
 				"--broker", "/tmp/a.sock",
 				"--name", "pkg_name",
 				"--algorithm-id", "pkg_id",
+				"--config", `{"threshold":0.6}`,
 				"--disable-motion-gate",
 			},
 		},
@@ -123,4 +137,32 @@ func cutKeyValue(kv string) (key, value string, found bool) {
 		}
 	}
 	return kv, "", false
+}
+
+// TestProcessConfigJSON pins the process-level config source: a valid JSON object
+// from ZHULONG_ALGO_CONFIG is forwarded verbatim, anything else is dropped so the
+// package falls back to its own defaults instead of receiving garbage on argv.
+func TestProcessConfigJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want string
+	}{
+		{name: "unset", env: "", want: ""},
+		{name: "blank", env: "   ", want: ""},
+		{name: "valid object", env: `{"threshold":0.55}`, want: `{"threshold":0.55}`},
+		{name: "valid object with padding", env: " {\"a\":1} ", want: `{"a":1}`},
+		{name: "not json", env: "threshold=0.55", want: ""},
+		{name: "json array is not an object", env: "[1,2]", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(algoConfigEnv, tt.env)
+			s := &Supervisor{logger: zap.NewNop()}
+			if got := s.processConfigJSON("face_recognition"); got != tt.want {
+				t.Fatalf("processConfigJSON() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }

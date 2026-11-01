@@ -192,14 +192,48 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 | 字段 | 语义 | 当前状态 |
 | :--- | :--- | :--- |
 | `task_id` | 该路流的任务身份（骨架按「一路 broker 一个 Worker」创建，取 `stream_id`） | 已生效 |
-| `params`（`TaskConfig`） | 任务级参数（区域掩码、阈值覆盖等） | **空值类型**，恒为默认值；`MSG_TASK_CONFIG` 是后续任务 |
+| `params.json`（`TaskConfig`） | 宿主下发的**配置原文**（`task_algorithms.config_json`） | 已生效，见 §「两层配置通道」 |
 
 铁律：
 
 - 算法侧**只读**：不得修改、不得保存该引用（只在本次调用期间有效），需要跨帧保留的自己拷贝。
 - 不得把 `task_id` 当作跟踪 ID 或数据库主键——它标识的是「宿主给这路流开的任务」。
-- 新增字段必须先改 `TaskConfig` 再改骨架的 `drain_control_messages(TaskContext&)`
-  （帧边界排控制消息），不能在 `process` 里直接读 socket。
+- 骨架**不解析** `params.json`：字段语义属于各算法自己的 `config.schema.json`。加一个配置字段
+  只改算法与 schema，不改 SDK。
+- 新增字段必须先改 `TaskConfig` 再改骨架的 `drain_control_messages(TaskContext&, ...)`
+  （帧边界挂视图），不能在 `process` 里直接读 socket。
+
+### 两层配置通道（一包一份 vs 一路流一份）
+
+一个包进程 = 一个 `ModelGroup`（`init` 只调一次）+ N 个 worker/task（一路 `--broker` 一个）。
+配置按粒度分两条通道，**不可互换**：
+
+| 层 | 粒度 | 通道 | 载体 |
+| :--- | :--- | :--- | :--- |
+| 进程级（模型路径、检测分辨率、检测/NMS 阈值） | 一包一份 | argv `--config <inline json>` | `sdk::Options::config_json` → `Plugin::init(config_json)` |
+| 任务级（比对阈值、Top-K、区域掩码） | 一路流一份 | IPC `MSG_TASK_CONFIG`（14） | 骨架搬运进 `TaskContext::params.json` |
+
+- `--config` **只接受 inline JSON**，不接受文件路径：argv 是运维复原「这个进程跑的是哪套配置」的
+  唯一依据（见 `algo.hpp` 的 `Options` 注释）。凭据类内容不得进 argv（`/proc/<pid>/cmdline` 同机可读）。
+- `MSG_TASK_CONFIG` 的负载 = `TaskConfigMsg`（68 字节头：`config_json_len` + `algorithm_id[64]`）+
+  UTF-8 JSON 原文。**`algorithm_id` 过滤是硬要求**：`FrameBroker::broadcast_message` 会打到该流上
+  所有算法包，不比对就会让车牌包收到人脸的阈值。
+- **Broker 必须缓存该报文并在握手后重放**：宿主推送时包可能还没连上，或崩溃重启后重连。
+  底库有全量 sync 兜底，任务级配置没有——漏掉重放的故障形态是「跑几天后突然回默认值」。
+- 缺省语义：未下发 = 空视图 = 算法用自己的默认值；越界值回落默认而不是报错（宿主与包分开交付，
+  版本偏斜真实存在）。
+
+### 检测输入分辨率：两档位默认值分叉 + fail fast
+
+`set_input_size` 带校验并返回 `bool`（人脸粒度 32、人体粒度 128）：
+
+- **不整除即拒绝**：布局不符时解码只会返回空结果、没有错误码，这就是一次静默零检出。
+- **静态形状档位（rk3568）只接受模型自带尺寸**：`.rknn` 是 `static_shape [1,3,640,640]`，
+  RKNN 后端按 `element_count` 校验，尺寸不符时 `forward` 直接失败。
+- 因此两档位的**默认流分辨率本就不同**（onnx 640×384 / rk3568 640×640）。`src/pipeline/*.cpp`
+  在 drift 白名单里（按 target 允许不同），**漂移检查看不到这处语义差异** —— 改默认值时必须两边一起看。
+  共享头文件里的分叉由 SDK 的 `INTERFACE_COMPILE_DEFINITIONS`（`ZHULONG_INFERENCE_RKNN` /
+  `_ONNX`）表达，与 `TARGET_MODEL_EXT` 用同一组定义，不按架构宏猜。
 
 ### 校验矩阵与错误码
 

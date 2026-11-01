@@ -20,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -29,10 +30,26 @@ class FaceRecognitionPlugin {
 public:
     FaceRecognitionPlugin();
 
-    /** @brief 动态调整检测器输入分辨率（默认 CCTV 视频流场景为 640×384） */
-    void set_detection_input_size(int width, int height) noexcept {
+    /**
+     * @brief 调整检测器输入分辨率（默认 CCTV 视频流场景为 640×384）
+     *
+     * @return false 表示该分辨率不可用，**两个检测器都没有被修改**（宁可保持原状，
+     *         也不能只生效一半）：要么没整除 FPN 粒度（人脸 32 / 人体 128），要么
+     *         本档位模型是静态形状（rk3568）。
+     *
+     * ⚠️ 必须先按更严的粒度（人体 128，是 32 的整数倍）预检再落值，否则会出现
+     *    「人脸已切到新分辨率、人体仍留在旧值」而调用方以为整体成功。
+     */
+    bool set_detection_input_size(int width, int height) noexcept {
+        const bool supported = kDetectionInputShapeIsStatic
+                                   ? (width == kDefaultModelWidth && height == kDefaultModelHeight)
+                                   : is_supported_detection_input(width, height, kPersonInputGranularity);
+        if (!supported) {
+            return false;
+        }
         detector_.set_input_size(width, height);
         person_detector_.set_input_size(width, height);
+        return true;
     }
 
     /**
@@ -81,6 +98,8 @@ private:
                          const std::shared_ptr<const std::vector<zhulong::FaceTemplate>>& gallery,
                          zhulong::Session& rec_session,
                          zhulong::Tensor& rec_input,
+                         float match_threshold,
+                         size_t match_top_k,
                          zhulong::FaceItem& out_face);
 
     zhulong::Model person_model_;
@@ -93,6 +112,9 @@ private:
     FaceDetector detector_;
     FaceFeatureExtractor extractor_;
     Matcher matcher_;
+    /** @brief 进程级默认比对参数（`--config` / init）；任务级配置在此之上覆盖 */
+    float default_match_threshold_{kDefaultMatchThreshold};
+    size_t default_match_top_k_{kDefaultMatchTopK};
 };
 
 /**

@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "核对 IPC 消息、骨架异常边界与兼容性约束是否被遵守"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Go 侧测试与质量门禁要求（-race、表驱动、无 panic）"}
+{"file": ".trellis/spec/native/index.md", "reason": "原生层开发前检查清单与质量检验基线"}

@@ -380,7 +380,9 @@ void test_matcher_returns_expected_top_k() {
 
     const float probe[] = {1.0f, 0.0f, 0.0f};
     const zhulong::face::Matcher matcher;
-    const zhulong::face::MatchResult result = matcher.match(probe, 3, gallery);
+    const zhulong::face::MatchResult result = matcher.match(probe, 3, gallery,
+                                                            zhulong::face::kDefaultMatchThreshold,
+                                                            zhulong::face::kDefaultMatchTopK);
 
     check(result.matched, "相似度 1.0 必须命中");
     check(nearly_equal(result.similarity, 1.0f, 1e-6f), "Top-1 相似度应为 1.0");
@@ -408,39 +410,104 @@ void test_matcher_threshold_boundary_and_degenerate_input() {
     std::vector<zhulong::FaceTemplate> gallery;
     gallery.push_back(make_template("f1", "p1", {0.6f, 0.8f, 0.0f}));
 
+    // 阈值与 top_k 逐次传入（Matcher 无状态）：同一路流的不同任务可以有不同阈值，
+    // 存进共享成员会在多路并发时互相覆盖。
     const float probe[] = {1.0f, 0.0f, 0.0f};
-    const zhulong::face::Matcher below(0.61f, 1);
-    const zhulong::face::Matcher at_threshold(0.6f, 1);
-    check(!below.match(probe, 3, gallery).matched, "相似度低于阈值不得命中");
-    check(at_threshold.match(probe, 3, gallery).matched, "相似度等于阈值应命中（>= 语义）");
+    const zhulong::face::Matcher matcher;
+    check(!matcher.match(probe, 3, gallery, 0.61f, 1).matched, "相似度低于阈值不得命中");
+    check(matcher.match(probe, 3, gallery, 0.6f, 1).matched, "相似度等于阈值应命中（>= 语义）");
 
     // 空底库
-    const zhulong::face::MatchResult empty_gallery = at_threshold.match(probe, 3, std::vector<zhulong::FaceTemplate>{});
+    const zhulong::face::MatchResult empty_gallery =
+        matcher.match(probe, 3, std::vector<zhulong::FaceTemplate>{}, 0.6f, 1);
     check(!empty_gallery.matched && empty_gallery.candidates.empty(), "空底库必须返回未命中且无候选人");
 
     // 探针非法
-    check(!at_threshold.match(nullptr, 3, gallery).matched, "空探针必须返回未命中");
-    check(!at_threshold.match(probe, 0, gallery).matched, "零维探针必须返回未命中");
+    check(!matcher.match(nullptr, 3, gallery, 0.6f, 1).matched, "空探针必须返回未命中");
+    check(!matcher.match(probe, 0, gallery, 0.6f, 1).matched, "零维探针必须返回未命中");
 
     // 维度不符的底库条目被跳过
     std::vector<zhulong::FaceTemplate> mixed;
     mixed.push_back(make_template("bad-dim", "p0", {1.0f, 0.0f}));
     mixed.push_back(make_template("f1", "p1", {0.6f, 0.8f, 0.0f}));
-    const zhulong::face::MatchResult mixed_result = at_threshold.match(probe, 3, mixed);
+    const zhulong::face::MatchResult mixed_result = matcher.match(probe, 3, mixed, 0.6f, 1);
     check(mixed_result.matched_face_id == "f1", "维度不符的底库条目必须被跳过");
     check(mixed_result.candidates.size() == 1, "维度不符的条目不计入候选人");
 
     // 反平行向量：余弦为 -1，截断到 0 ⇒ 未命中
     std::vector<zhulong::FaceTemplate> opposite;
     opposite.push_back(make_template("f-neg", "p-neg", {-1.0f, 0.0f, 0.0f}));
-    const zhulong::face::MatchResult negative = at_threshold.match(probe, 3, opposite);
+    const zhulong::face::MatchResult negative = matcher.match(probe, 3, opposite, 0.6f, 1);
     check(nearly_equal(negative.similarity, 0.0f, 1e-6f), "负相关相似度必须截断为 0");
     check(!negative.matched, "截断为 0 后不得命中");
 
     // top_k 大于底库规模 ⇒ 返回全部
-    const zhulong::face::Matcher big_top_k(0.4f, 100);
-    check(big_top_k.match(probe, 3, gallery).candidates.size() == gallery.size(),
+    check(matcher.match(probe, 3, gallery, 0.4f, 100).candidates.size() == gallery.size(),
           "top_k 超过底库规模时应返回全部条目");
+}
+
+// ============================================================================
+// 4b. 比对参数解析：任务级 JSON 覆盖进程级默认（两个来源必须共用一套规则）
+// ============================================================================
+
+void test_resolve_match_params() {
+    using zhulong::face::MatchParams;
+    using zhulong::face::resolve_match_params;
+
+    const MatchParams defaults{0.40f, 3};
+
+    // 未下发（空视图）= 原样使用默认值
+    const MatchParams untouched = resolve_match_params(std::string_view{}, defaults);
+    check(nearly_equal(untouched.threshold, 0.40f, 1e-6f), "未下发时阈值必须保持默认");
+    check(untouched.top_k == 3, "未下发时 top_k 必须保持默认");
+
+    // 只覆盖其中一项：另一项必须保持默认，而不是被清零
+    const MatchParams only_threshold = resolve_match_params(R"({"threshold":0.55})", defaults);
+    check(nearly_equal(only_threshold.threshold, 0.55f, 1e-6f), "任务级阈值应覆盖默认");
+    check(only_threshold.top_k == 3, "未声明的 top_k 必须保持默认");
+
+    const MatchParams only_top_k = resolve_match_params(R"({"top_k":7})", defaults);
+    check(only_top_k.top_k == 7, "任务级 top_k 应覆盖默认");
+    check(nearly_equal(only_top_k.threshold, 0.40f, 1e-6f), "未声明的阈值必须保持默认");
+
+    // 上下文里的空格 / 制表符不能影响解析
+    const MatchParams spaced = resolve_match_params("{\n  \"threshold\" : 0.65 , \"top_k\" : 2\n}", defaults);
+    check(nearly_equal(spaced.threshold, 0.65f, 1e-6f), "空白不应影响阈值解析");
+    check(spaced.top_k == 2, "空白不应影响 top_k 解析");
+
+    // 完整成员名匹配：my_threshold / top_kx 不得冒充
+    const MatchParams lookalike = resolve_match_params(R"({"my_threshold":0.9,"top_kx":9})", defaults);
+    check(nearly_equal(lookalike.threshold, 0.40f, 1e-6f), "相似键名不得被当成 threshold");
+    check(lookalike.top_k == 3, "相似键名不得被当成 top_k");
+
+    // 越界值回落默认（包比宿主 schema 新/旧时必须退化而不是拒绝工作）
+    const MatchParams bad_threshold_high = resolve_match_params(R"({"threshold":1.5})", defaults);
+    check(nearly_equal(bad_threshold_high.threshold, 0.40f, 1e-6f), "阈值 >1 必须回落默认");
+    const MatchParams bad_threshold_low = resolve_match_params(R"({"threshold":-0.2})", defaults);
+    check(nearly_equal(bad_threshold_low.threshold, 0.40f, 1e-6f), "负阈值必须回落默认");
+    const MatchParams bad_top_k_zero = resolve_match_params(R"({"top_k":0})", defaults);
+    check(bad_top_k_zero.top_k == 3, "top_k=0 必须回落默认");
+    const MatchParams bad_top_k_huge = resolve_match_params(R"({"top_k":21})", defaults);
+    check(bad_top_k_huge.top_k == 3, "top_k 超上限必须回落默认");
+
+    // 非数值（字符串/布尔/null）不得抛异常，直接回落默认
+    const MatchParams non_numeric = resolve_match_params(R"({"threshold":"high","top_k":true})", defaults);
+    check(nearly_equal(non_numeric.threshold, 0.40f, 1e-6f), "字符串阈值必须回落默认");
+    check(non_numeric.top_k == 3, "布尔 top_k 必须回落默认");
+
+    // 边界值本身合法：阈值 0.0 / 1.0，top_k 1 / 20
+    const MatchParams edge_low = resolve_match_params(R"({"threshold":0.0,"top_k":1})", defaults);
+    check(nearly_equal(edge_low.threshold, 0.0f, 1e-6f), "阈值 0.0 是合法配置（不是「未设置」）");
+    check(edge_low.top_k == 1, "top_k=1 是合法配置");
+    const MatchParams edge_high = resolve_match_params(R"({"threshold":1.0,"top_k":20})", defaults);
+    check(nearly_equal(edge_high.threshold, 1.0f, 1e-6f), "阈值 1.0 是合法配置");
+    check(edge_high.top_k == 20, "top_k=20 是合法配置");
+
+    // 进程级默认不是 0.40/3 时，任务级缺省必须跟着进程级走
+    const MatchParams custom_defaults{0.72f, 8};
+    const MatchParams inherits = resolve_match_params(R"({"top_k":2})", custom_defaults);
+    check(nearly_equal(inherits.threshold, 0.72f, 1e-6f), "任务级缺省阈值必须继承进程级默认");
+    check(inherits.top_k == 2, "声明的 top_k 覆盖进程级默认");
 }
 
 // ============================================================================
@@ -527,9 +594,14 @@ void test_detector_dimensions() {
     check(cctv_face_detector.model_width() == 640, "FaceDetector CCTV 宽度应为 640");
     check(cctv_face_detector.model_height() == 384, "FaceDetector CCTV 高度应为 384");
 
-    cctv_face_detector.set_input_size(320, 192);
+    // set_input_size 是**带校验**的：不合格的分辨率必须返回 false 且不改动实例状态。
+    // 这条是「静默零检出」的唯一防线 —— 布局不符时解码只会返回空结果，没有错误码可报。
+    check(cctv_face_detector.set_input_size(320, 192), "320x192 能被人脸粒度 32 整除，应接受");
     check(cctv_face_detector.model_width() == 320, "FaceDetector set_input_size 宽度应生效");
     check(cctv_face_detector.model_height() == 192, "FaceDetector set_input_size 高度应生效");
+    check(!cctv_face_detector.set_input_size(320, 200), "200 不能被人脸粒度 32 整除，应拒绝");
+    check(cctv_face_detector.model_width() == 320 && cctv_face_detector.model_height() == 192,
+          "被拒绝的 set_input_size 不得改动实例状态");
 
     PersonDetector default_person_detector;
     check(default_person_detector.model_width() == 640, "PersonDetector 默认宽度必须为 640");
@@ -539,9 +611,21 @@ void test_detector_dimensions() {
     check(cctv_person_detector.model_width() == 640, "PersonDetector CCTV 宽度应为 640");
     check(cctv_person_detector.model_height() == 384, "PersonDetector CCTV 高度应为 384");
 
-    cctv_person_detector.set_input_size(320, 192);
-    check(cctv_person_detector.model_width() == 320, "PersonDetector set_input_size 宽度应生效");
-    check(cctv_person_detector.model_height() == 192, "PersonDetector set_input_size 高度应生效");
+    check(cctv_person_detector.set_input_size(640, 256), "640x256 能被人体粒度 128 整除，应接受");
+    check(cctv_person_detector.model_width() == 640, "PersonDetector set_input_size 宽度应生效");
+    check(cctv_person_detector.model_height() == 256, "PersonDetector set_input_size 高度应生效");
+    check(!cctv_person_detector.set_input_size(640, 192), "192 不能被人体粒度 128 整除，应拒绝");
+    check(cctv_person_detector.model_width() == 640 && cctv_person_detector.model_height() == 256,
+          "被拒绝的 set_input_size 不得改动实例状态");
+
+    // 静态形状档位（rk3568 的 .rknn 是 static_shape [1,3,640,640]）：除模型自带尺寸外一律拒绝，
+    // 否则 RKNN 后端会在 forward 阶段返回空，表现为「检测恒为 0」。
+    if (kDetectionInputShapeIsStatic) {
+        check(cctv_face_detector.set_input_size(kDefaultModelWidth, kDefaultModelHeight),
+              "静态形状档位必须接受模型自带尺寸");
+        check(!cctv_face_detector.set_input_size(kCctvStreamModelWidth, kCctvStreamModelHeight),
+              "静态形状档位必须拒绝 16:9 分辨率（模型未重转前）");
+    }
 }
 
 } // namespace
@@ -554,6 +638,7 @@ int main() {
     test_crop_and_align_rejects_bad_input();
     test_matcher_returns_expected_top_k();
     test_matcher_threshold_boundary_and_degenerate_input();
+    test_resolve_match_params();
     test_face_association();
     test_detector_dimensions();
 #if defined(ZHULONG_FACE_HAS_PREPROCESS_HELPER)

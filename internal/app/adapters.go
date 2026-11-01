@@ -24,11 +24,83 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/schedule"
 	"github.com/nikonikowuw/Zhulong/internal/storage"
 	"github.com/nikonikowuw/Zhulong/internal/task"
+	"go.uber.org/zap"
 )
 
 type appBrokerPathResolver struct {
 	taskStore *task.Store
 	streamHub *camera.StreamHub
+	logger    *zap.Logger
+}
+
+// log returns the resolver's logger, tolerating the nil logger used by tests that
+// only exercise the pure filtering paths.
+func (r *appBrokerPathResolver) log() *zap.Logger {
+	if r.logger == nil {
+		return zap.NewNop()
+	}
+	return r.logger
+}
+
+// TaskConfigsFor 解析某个算法包在每一路流上的任务级配置（stream_id → config_json）。
+//
+// 与 SyncBrokerSubscriptions 的分工：那边决定「订阅哪些流」，这边只回答「每路流的算法
+// 配置是什么」。两者都按 enabled + 排程过滤，否则会给一个休眠中的流推配置：那条流的
+// broker 已经不存在，推送只会换来一条无意义的 NOT_FOUND 告警。
+//
+// ⚠️ 同一个相机 + 同一个算法在库中只应有一条 enabled 任务（子表 UNIQUE(task_id, algorithm_id)，
+//
+//	但不同 task 仍可指向同一相机）。真的出现两份时取任务顺序里的第一条并告警：静默挑一个
+//	会让「改了配置没生效」变成无解问题。
+func (r *appBrokerPathResolver) TaskConfigsFor(ctx context.Context, algorithmID string) (map[uint64]string, error) {
+	if r.taskStore == nil || r.streamHub == nil {
+		return nil, nil
+	}
+	tasks, err := r.taskStore.ListTasksByAlgorithm(ctx, algorithmID)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks for algorithm %s: %w", algorithmID, err)
+	}
+
+	configs := make(map[uint64]string, len(tasks))
+	owner := make(map[uint64]string, len(tasks))
+	for _, tsk := range tasks {
+		if !tsk.Enabled {
+			continue
+		}
+		for _, algo := range tsk.Algorithms {
+			if algo.AlgorithmID != algorithmID || !algo.Enabled {
+				continue
+			}
+			sched, err := schedule.Parse(algo.ScheduleJSON)
+			if err == nil && sched != nil && !sched.IsActiveAt(time.Now()) {
+				continue
+			}
+
+			streamID, err := r.streamHub.ResolveAIStreamID(ctx, tsk.CameraID)
+			if err != nil {
+				return nil, fmt.Errorf("resolve stream id for camera %s: %w", tsk.CameraID, err)
+			}
+
+			cfg := algo.ConfigJSON
+			if cfg == "" {
+				cfg = "{}"
+			}
+			if prev, ok := configs[streamID]; ok {
+				if prev != cfg {
+					r.log().Warn("duplicate task config for the same stream and algorithm; keeping the first",
+						zap.String("algorithm_id", algorithmID),
+						zap.Uint64("stream_id", streamID),
+						zap.String("kept_task_id", owner[streamID]),
+						zap.String("dropped_task_id", tsk.ID),
+					)
+				}
+				continue
+			}
+			configs[streamID] = cfg
+			owner[streamID] = tsk.ID
+		}
+	}
+	return configs, nil
 }
 
 // SyncBrokerSubscriptions 解析某个算法包当前应当订阅的全部 FrameBroker socket 路径，

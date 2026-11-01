@@ -633,7 +633,9 @@ namespace detail
         }
     }
 
-    int run_verify(const zhulong_plugin_api_v1 &api, const std::string &sample_path, const std::string &algorithm_id = "")
+    int run_verify(const zhulong_plugin_api_v1 &api, const std::string &sample_path,
+                   const std::string &config_json = "{}",
+                   const std::string &algorithm_id = "")
     {
         std::cout << "{\"step\":\"abi_verified\",\"name\":"
                   << runner::json_quote(api.plugin_name ? api.plugin_name : "")
@@ -642,7 +644,7 @@ namespace detail
 
         // 1. 创建模型
         zhulong_model_group_h model = nullptr;
-        zhulong_status_t rc = api.model_create("{}", &model);
+        zhulong_status_t rc = api.model_create(config_json.c_str(), &model);
         if (rc != ZHULONG_PLUGIN_OK || !model)
         {
             // 测试夹具后端（test_stub）按设计拒绝真实模型：这时的“模型加载失败”不是插件缺陷，
@@ -759,18 +761,19 @@ namespace detail
     }
 
     /**
-     * @brief 帧边界排出控制消息（**本任务为空实现**）
+     * @brief 帧边界把已收到的任务级配置挂到 `TaskContext` 上
      *
-     * 占位契约（design.md §10.8）：控制消息必须在**帧边界**消费，而不是与帧竞争同一
-     * 读取循环；这样 `MSG_TASK_CONFIG` 落地后可以直接改这里，算法侧的
-     * `detect(..., TaskContext&)` 签名不需要再动。
+     * 分工是刻意的：**读取**控制消息只发生在 Worker 自己的收包循环里（单读者，不与帧
+     * 竞争），这里只做「挂视图」，且**不解析 JSON** —— 字段语义属于各算法自己的
+     * `config.schema.json`，骨架对算法必须无知（见 `zhulong::TaskConfig`）。
      *
-     * ⚠️ 不要在这里读 socket：本任务连 `MSG_TASK_CONFIG` 都还没定义，凭空加协议会让
-     *    宿主与包两侧的消息编号假设分叉。等协议落地时由本函数负责从 socket 取消息。
+     * @param task_context 该路流的任务上下文（每次推理前刷新）
+     * @param task_config_json 该路流最近一次收到的配置原文（空表示未下发）
      */
-    void drain_control_messages(::zhulong::TaskContext &task_context)
+    void drain_control_messages(::zhulong::TaskContext &task_context, const std::string &task_config_json)
     {
-        (void)task_context;
+        // 每帧重挂视图：底层 string 可能刚被收包循环替换过内容，悬垂与半新半旧都不允许。
+        task_context.params.json = std::string_view(task_config_json);
     }
 
     /**
@@ -811,7 +814,7 @@ namespace detail
         }
 
         zhulong_model_group_h model = nullptr;
-        zhulong_status_t model_rc = api.model_create("{}", &model);
+        zhulong_status_t model_rc = api.model_create(options.config_json.c_str(), &model);
         if (model_rc != ZHULONG_PLUGIN_OK || !model)
         {
             ZL_LOGE(0, "algorithm.runner", "plugin_model_create_failed rc=%d model_present=%d backend=%s",
@@ -1005,6 +1008,9 @@ namespace detail
             // 同一个 Worker）。task_id 取该路的 stream_id，与 task_open 的入参一致。
             ::zhulong::TaskContext task_context;
             task_context.task_id = stream_id;
+            // 本路流的任务级配置原文（MSG_TASK_CONFIG）。生命周期覆盖整个 Worker 线程：
+            // TaskContext.params.json 只是指向它的视图。
+            std::string task_config_json;
 
             int frames_processed = 0;
             bool last_had_targets = false;
@@ -1111,7 +1117,7 @@ namespace detail
                             }
 
                             // 帧边界：先排控制消息，再推理（TaskContext 由骨架按流维护）
-                            drain_control_messages(task_context);
+                            drain_control_messages(task_context, task_config_json);
 
                             zhulong_inference_result *result = nullptr;
                             auto t0 = std::chrono::steady_clock::now();
@@ -1223,6 +1229,31 @@ namespace detail
                     ParsedDelete del = parse_delete_payload(payload.data(), payload.size());
                     gallery_index.remove(del.face_id, del.person_id);
                 }
+                else if (hdr.msg_type == ipc::MSG_TASK_CONFIG && payload.size() >= sizeof(ipc::TaskConfigMsg))
+                {
+                    // 任务级配置：只搬运 + 按 algorithm_id 过滤，**不解析 JSON**。
+                    // 广播（broadcast_message）会同时到达同一路流上的所有算法包，所以
+                    // 归属不匹配是**正常情况**，静默丢弃；只有长度自相矛盾才是协议故障。
+                    ipc::TaskConfigMsg cfg{};
+                    std::memcpy(&cfg, payload.data(), sizeof(cfg));
+                    const size_t json_len = payload.size() - sizeof(cfg);
+                    const size_t target_len = ::strnlen(cfg.algorithm_id, sizeof(cfg.algorithm_id));
+                    const bool for_me = !algorithm_id.empty() &&
+                                        target_len == algorithm_id.size() &&
+                                        std::memcmp(cfg.algorithm_id, algorithm_id.data(), target_len) == 0;
+                    if (for_me)
+                    {
+                        if (cfg.config_json_len != json_len)
+                        {
+                            write_runner_error_line("{\"status\":\"warning\",\"stage\":\"task_config\","
+                                                    "\"error\":\"config_json_len mismatch\"}");
+                        }
+                        else
+                        {
+                            task_config_json.assign(reinterpret_cast<const char *>(payload.data()) + sizeof(cfg), json_len);
+                        }
+                    }
+                }
 
                 if (received_fd >= 0)
                 {
@@ -1329,6 +1360,12 @@ namespace detail
             {
                 if (!take_value(options.algorithm_id)) return false;
             }
+            else if (arg == "--config")
+            {
+                // 进程级配置：inline JSON（不是文件路径）。值被原样交给 Plugin::init；
+                // 骨架不解析、不校验它的内容——那是算法自己的 config.schema.json 约定。
+                if (!take_value(options.config_json)) return false;
+            }
             else if (arg == "--sample")
             {
                 if (!take_value(options.sample_path)) return false;
@@ -1401,7 +1438,7 @@ namespace detail
         int rc = 0;
         if (options.verify)
         {
-            rc = run_verify(api, options.sample_path, options.algorithm_id);
+            rc = run_verify(api, options.sample_path, options.config_json, options.algorithm_id);
         }
         else if (options.extract_feature)
         {

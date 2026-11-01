@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "算法包 C ABI/SDK 契约：init(config_json)、TaskContext、IPC 控制消息、退出码与黑盒验包"}
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "ONNX Runtime / RKNN 后端行为：日志、输入形状与静态 shape 拒绝路径"}
+{"file": ".trellis/spec/architecture.md", "reason": "跨层边界：Go 宿主 → CGO → 原生引擎 → 算法包的调用与配置归属"}
+{"file": ".trellis/spec/backend/task-guidelines.md", "reason": "task_algorithms.config_json 的校验与持久化约定"}
+{"file": ".trellis/spec/backend/algorithm-guidelines.md", "reason": "算法包安装/验包/运行期 supervisor 与订阅契约"}

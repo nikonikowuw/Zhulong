@@ -1871,3 +1871,35 @@ Fully migrated backend store persistence operations to official GORM Generics AP
 ### Status
 
 [OK] **Completed**
+
+---
+
+## 2026-11-01 — 算法包配置下发链路（阈值真正生效）+ 静默失败消除
+
+### Context
+
+排查 `packages/face_recognition/onnx` 时确认：UI 里能配的 `threshold` / `top_k` 存进
+`task_algorithms.config_json` 后被**无人消费**——骨架两处 `model_create("{}")` 硬编码，
+`TaskConfig` 是空类型，`drain_control_messages` 是空实现。拓扑是「一个包进程多路 broker」，
+所以 argv 无法表达 per-stream 配置。
+
+### Main Changes
+
+- 协议：新增 `MSG_TASK_CONFIG=14`（68 字节头 + 尾随 JSON），Broker 侧缓存 + 握手重放
+- 骨架：`--config <inline json>` → `model_create`；收包循环搬运配置并按 `algorithm_id` 过滤
+- SDK：`TaskConfig{std::string_view json}`、`Options::config_json`、`abi.json` 1.0.0 → 1.1.0
+- 宿主：`TaskConfigProvider/Broadcaster`、spawn 前灌缓存、`ZHULONG_ALGO_CONFIG` 进程级配置
+- 算法包（双 target）：`Matcher` 去状态化（阈值逐次传入）、`common/match_config.hpp` 纯函数、
+  `set_input_size` fail-fast（32/128 粒度 + 静态形状档位）、候选改分数定长堆、ORT 日志降级
+
+### Testing
+
+- [OK] `make check` 的 go-check / native-test(28) / api-docs / pkg-drift-check 全绿
+- [OK] `packages/face_recognition/onnx`: `make unit-test` + `make test`（无回归：5 人 7 脸、~130ms）
+- [OK] `pnpm exec vitest run --retry=2`：135 files / 864 tests 全绿
+- [WARN] `make check` 的 frontend 步骤在本机偶发 iframe/CORS 加载失败（无 web 改动，retry 后全绿）
+- [TODO] `make board-check`（rk3568 实机）未跑；AC1（双流不同阈值）需真实底库
+
+### Status
+
+[OK] 代码与单测完成；板端验证与 e2e 双流验收待实机

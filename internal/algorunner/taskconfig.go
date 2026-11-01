@@ -1,0 +1,114 @@
+package algorunner
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/nikonikowuw/Zhulong/internal/algoipc"
+	"go.uber.org/zap"
+)
+
+// TaskConfigProvider resolves the **task-level** configuration of an algorithm
+// package, keyed by engine stream id.
+//
+// One package process serves many streams (one `--broker` each, one `task_id`
+// each), and every stream may carry a different `task_algorithms.config_json`.
+// That is why this cannot travel as argv: argv has exactly one slot for the whole
+// process. Process-level configuration uses `--config` instead.
+type TaskConfigProvider interface {
+	TaskConfigsFor(ctx context.Context, algorithmID string) (map[uint64]string, error)
+}
+
+// TaskConfigBroadcaster pushes per-stream configurations to the FrameBrokers.
+//
+// The Broker caches the last payload per stream and replays it on handshake, so a
+// push is durable for processes that start later or restart: they receive the
+// configuration before their first frame instead of waiting for the next push.
+type TaskConfigBroadcaster struct {
+	broadcaster AIMessageBroadcaster
+	logger      *zap.Logger
+}
+
+// NewTaskConfigBroadcaster creates a TaskConfigBroadcaster.
+func NewTaskConfigBroadcaster(broadcaster AIMessageBroadcaster, logger *zap.Logger) *TaskConfigBroadcaster {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &TaskConfigBroadcaster{
+		broadcaster: broadcaster,
+		logger:      logger.Named("algorithm.task_config_broadcaster"),
+	}
+}
+
+// BroadcastAlgorithm pushes one MSG_TASK_CONFIG per stream.
+//
+// Failures are collected rather than aborting on the first one: a single
+// stream whose broker is gone must not stop the other streams from receiving
+// their configuration. The aggregated error is returned so the caller can log it
+// once per algorithm instead of once per stream.
+func (b *TaskConfigBroadcaster) BroadcastAlgorithm(ctx context.Context, algorithmID string, configs map[uint64]string) error {
+	if b.broadcaster == nil || len(configs) == 0 {
+		return nil
+	}
+
+	// Deterministic order: map iteration order would make the log sequence (and
+	// any test asserting it) depend on the runtime's hash seed.
+	streamIDs := make([]uint64, 0, len(configs))
+	for streamID := range configs {
+		streamIDs = append(streamIDs, streamID)
+	}
+	sortUint64(streamIDs)
+
+	var firstErr error
+	for _, streamID := range streamIDs {
+		configJSON := configs[streamID]
+		if !json.Valid([]byte(configJSON)) {
+			// A malformed config would otherwise be applied by the package's own
+			// tolerant parser *or* silently ignored there. Reject it here, where the
+			// value originated from our own storage.
+			b.logger.Warn("skipping task config that is not valid JSON",
+				zap.String("algorithm_id", algorithmID),
+				zap.Uint64("stream_id", streamID),
+			)
+			continue
+		}
+
+		payload, err := algoipc.EncodeTaskConfigPayload(algorithmID, []byte(configJSON))
+		if err != nil {
+			err = fmt.Errorf("encode task config for stream %d: %w", streamID, err)
+			b.logger.Warn("failed to encode task config",
+				zap.String("algorithm_id", algorithmID),
+				zap.Uint64("stream_id", streamID),
+				zap.Error(err),
+			)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if err := b.broadcaster.BroadcastAIMessage(ctx, streamID, algoipc.MsgTaskConfig, payload); err != nil {
+			err = fmt.Errorf("broadcast task config for stream %d: %w", streamID, err)
+			b.logger.Warn("failed to broadcast task config",
+				zap.String("algorithm_id", algorithmID),
+				zap.Uint64("stream_id", streamID),
+				zap.Error(err),
+			)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+// sortUint64 is a tiny insertion sort: the slice is one entry per subscribed
+// stream (single digits in practice), so pulling in sort.Slice would cost more
+// indirection than it saves.
+func sortUint64(values []uint64) {
+	for i := 1; i < len(values); i++ {
+		for j := i; j > 0 && values[j] < values[j-1]; j-- {
+			values[j], values[j-1] = values[j-1], values[j]
+		}
+	}
+}

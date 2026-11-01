@@ -69,6 +69,10 @@ func (s *mockMediaStream) BrokerPath(ctx context.Context) (string, error) {
 	return "/tmp/zhulong_broker_test.sock", nil
 }
 
+func (s *mockMediaStream) StreamID(ctx context.Context) (uint64, error) {
+	return 42, nil
+}
+
 func (s *mockMediaStream) BrokerClients(ctx context.Context) ([]engine.BrokerClientStats, uint32, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

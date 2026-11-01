@@ -381,6 +381,23 @@ func (h *StreamHub) AICameraIDs() []string {
 	return ids
 }
 
+// ResolveAIStreamID 解析指定相机 AI 分析流的引擎流编号。
+//
+// 先走 ResolveAIStreamBrokerPath 确保 AI 流已激活（它同时负责拉起拉流与 flight 去重），
+// 再从已建立的引用上取编号：调用方拿到的编号与 broker socket 属于同一路流。
+func (h *StreamHub) ResolveAIStreamID(ctx context.Context, cameraID string) (uint64, error) {
+	if _, err := h.ResolveAIStreamBrokerPath(ctx, cameraID); err != nil {
+		return 0, err
+	}
+	h.mu.Lock()
+	ref, ok := h.aiStreams[cameraID]
+	h.mu.Unlock()
+	if !ok || ref.stream == nil {
+		return 0, ErrStreamHubClosed
+	}
+	return ref.stream.StreamID(ctx)
+}
+
 // ResolveAIStreamBrokerPath 解析指定相机 AI 分析流的 FrameBroker socket 路径，
 // 并在该流尚未激活时以 ConsumerAI 模式拉起物理拉流（固定 main 角色）。
 //

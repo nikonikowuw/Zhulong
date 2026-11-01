@@ -1257,6 +1257,66 @@ void test_frame_broker_control_broadcast() {
 }
 
 // =============================================================================
+// Test 12b: MSG_TASK_CONFIG 必须被缓存并在握手后重放
+//   真实故障形态：宿主在包进程还没连上（或崩溃重启期间）推送任务级配置，广播打到 0 个
+//   客户端；没有缓存 + 重放，那次配置就永久丢了，包进程只会跑在编译期默认值上。
+//   断言：
+//   - 先推（无客户端）再连，握手后收到同一条配置；
+//   - 推第二条后重连，重放的是**最新**那条；
+//   - 其他消息类型不参与重放（不能顺手把底库增量也重放一遍）。
+// =============================================================================
+void test_frame_broker_task_config_cache_replay() {
+    const uint64_t stream_id = 9003;
+    BrokerOptions opts;
+    opts.slot_count = 2;
+    opts.slot_size = 1024 * 1024;
+    FrameBroker broker;
+    std::string err;
+    assert(broker.start(stream_id, "/tmp", opts, &err));
+
+    // 1) 无客户端时推送：广播计数为 0，但必须被缓存
+    std::string config_v1 = R"({"threshold":0.55})";
+    assert(broker.broadcast_message(MSG_TASK_CONFIG, config_v1.data(), config_v1.size()) == 0);
+
+    // 底库消息不参与重放：它跟随自己的全量 sync 流程。
+    std::string gallery_json = R"({"face_id":"f1","person_id":"p1"})";
+    assert(broker.broadcast_message(MSG_GALLERY_UPSERT, gallery_json.data(), gallery_json.size()) == 0);
+
+    auto handshake_and_expect = [&](const std::string& expected) {
+        UnixSocketClient client;
+        assert(client.connect(broker.socket_path()));
+        HandshakeReq req{};
+        req.client_id = 1;
+        req.api_version = 1;
+        std::strncpy(req.client_name, "task_config_client", sizeof(req.client_name) - 1);
+        assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+        IpcHeader hdr{};
+        std::vector<uint8_t> payload;
+        assert(client.recv_msg(hdr, payload, 2000));
+        assert(hdr.msg_type == MSG_HANDSHAKE_RESP);
+
+        // 握手应答之后紧跟着就是重放的任务级配置
+        IpcHeader replay_hdr{};
+        std::vector<uint8_t> replay_payload;
+        assert(client.recv_msg(replay_hdr, replay_payload, 2000));
+        assert(replay_hdr.msg_type == MSG_TASK_CONFIG);
+        assert(std::string(replay_payload.begin(), replay_payload.end()) == expected);
+        client.disconnect();
+    };
+
+    handshake_and_expect(config_v1);
+
+    // 2) 更新后再连：重放的必须是最新值，而不是第一条
+    std::string config_v2 = R"({"threshold":0.80,"top_k":5})";
+    assert(broker.broadcast_message(MSG_TASK_CONFIG, config_v2.data(), config_v2.size()) == 0);
+    handshake_and_expect(config_v2);
+
+    broker.stop();
+    std::cout << "[PASS] test_frame_broker_task_config_cache_replay" << std::endl;
+}
+
+// =============================================================================
 // Test 13: REQ-1 槽位容量不足必须显式失败，禁止静默发旧帧
 //   构造 payload 超过 slot_size 的帧，断言：
 //   - publish_frame 返回 false；
@@ -1797,6 +1857,7 @@ int main(int argc, char* argv[]) {
     test_frame_broker_motion_dispatch();
     test_frame_broker_result_egress();
     test_frame_broker_control_broadcast();
+    test_frame_broker_task_config_cache_replay();
     test_frame_broker_start_waits_for_resource_lock();
     test_frame_broker_evicted_ack_does_not_double_deduct();
     test_frame_broker_options_validation();

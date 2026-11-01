@@ -60,7 +60,49 @@ const (
 	MsgGalleryUpsert uint16 = 11
 	MsgGalleryDelete uint16 = 12
 	MsgGalleryAck    uint16 = 13
+
+	// MsgTaskConfig delivers the per-stream algorithm configuration (the host's
+	// task_algorithms.config_json) to the runner. Payload layout lives in
+	// native/src/algorithm/ipc/ipc_protocol.hpp (TaskConfigMsg): a 68-byte header
+	// followed by raw UTF-8 JSON that the algorithm parses itself.
+	MsgTaskConfig uint16 = 14
 )
+
+// IPC control payload layouts.
+//
+// TaskConfigHeaderSize is sizeof(zhulong::ipc::TaskConfigMsg) in
+// native/src/algorithm/ipc/ipc_protocol.hpp: a uint32 length followed by a
+// 64-byte algorithm id. Keep both numbers in sync with that struct — the
+// cross-language contract test asserts it.
+const (
+	taskConfigAlgorithmIDMaxBytes = 64
+	// TaskConfigHeaderSize is the fixed prefix every MSG_TASK_CONFIG payload starts with.
+	TaskConfigHeaderSize = 4 + taskConfigAlgorithmIDMaxBytes
+)
+
+// EncodeTaskConfigPayload frames one MSG_TASK_CONFIG payload: the fixed header
+// (config length + target algorithm id) followed by the raw config JSON.
+//
+// The skeleton never parses the JSON: field semantics belong to each algorithm's
+// config.schema.json. It only filters by algorithm id, because a FrameBroker
+// broadcast reaches every package subscribed to that stream.
+func EncodeTaskConfigPayload(algorithmID string, configJSON []byte) ([]byte, error) {
+	if algorithmID == "" {
+		return nil, errors.New("task config payload requires an algorithm id")
+	}
+	if len(algorithmID) >= taskConfigAlgorithmIDMaxBytes {
+		return nil, fmt.Errorf("algorithm id %q exceeds the %d-byte IPC field", algorithmID, taskConfigAlgorithmIDMaxBytes)
+	}
+	if len(configJSON) > MaxIpcPayloadSize-TaskConfigHeaderSize {
+		return nil, ErrIpcPayloadTooLarge
+	}
+
+	payload := make([]byte, TaskConfigHeaderSize+len(configJSON))
+	binary.LittleEndian.PutUint32(payload[0:4], uint32(len(configJSON)))
+	copy(payload[4:4+taskConfigAlgorithmIDMaxBytes], algorithmID)
+	copy(payload[TaskConfigHeaderSize:], configJSON)
+	return payload, nil
+}
 
 // ErrIpcPayloadTooLarge is returned when a payload exceeds MaxIpcPayloadSize.
 var ErrIpcPayloadTooLarge = errors.New("IPC payload exceeds the 64KB protocol limit")

@@ -7,13 +7,12 @@
 
 namespace zhulong::face {
 
-Matcher::Matcher(float threshold, size_t top_k)
-    : threshold_(threshold), top_k_(top_k) {}
-
 MatchResult Matcher::match(
     const float* probe_features,
     size_t feature_dim,
-    const std::vector<FaceTemplate>& gallery
+    const std::vector<FaceTemplate>& gallery,
+    float threshold,
+    size_t top_k
 ) const {
     MatchResult result;
     if (probe_features == nullptr || feature_dim == 0 || gallery.empty()) {
@@ -44,7 +43,7 @@ MatchResult Matcher::match(
         return result;
     }
 
-    const size_t count = std::min(top_k_, scored.size());
+    const size_t count = std::min(top_k, scored.size());
     std::partial_sort(scored.begin(), scored.begin() + static_cast<std::ptrdiff_t>(count), scored.end(),
                       [](const std::pair<size_t, float>& a, const std::pair<size_t, float>& b) {
                           return a.second > b.second;
@@ -64,7 +63,7 @@ MatchResult Matcher::match(
     // Top-1 决策
     const auto& best = gallery[scored.front().first];
     result.similarity = scored.front().second;
-    if (result.similarity >= threshold_) {
+    if (result.similarity >= threshold) {
         result.matched = true;
         result.person_id = best.person_id;
         result.person_name = best.person_name;

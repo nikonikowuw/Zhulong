@@ -24,6 +24,7 @@
 #include <zhulong/runtime/gallery_registry.hpp>
 
 #include <string>
+#include <string_view>
 #include <vector>
 #include <memory>
 #include <cstring>
@@ -91,26 +92,32 @@ private:
 };
 
 /**
- * @brief 任务配置（当前为空值类型）
+ * @brief 任务配置：宿主逐路流下发的配置原文（`task_algorithms.config_json`）
  *
- * 预留位：`MSG_TASK_CONFIG` 落地后由宿主下发（如区域掩码、阈值覆盖）。
- * ⚠️ 本任务**不**定义任何业务字段：算法侧只接受它、不读它，输出必须与改造前一致。
+ * 通道：`MSG_TASK_CONFIG` → 骨架在帧边界 `drain_control_messages` 挂到本结构上。
+ *
+ * ⚠️ 骨架**不解析**这段 JSON：字段语义属于各算法自己的 `config.schema.json`，
+ *    骨架对它一无所知是刻意设计（否则每加一个算法就要改一次 SDK）。解析责任在算法侧。
+ * ⚠️ 生命周期：`json` 是**借用视图**，只在本次推理调用期间有效。需要跨帧保留必须
+ *    自己拷贝；空视图表示宿主没有下发任务级配置（算法应使用自己的默认值）。
  */
-struct TaskConfig {};
+struct TaskConfig {
+    std::string_view json{}; /**< 宿主下发的配置原文；空表示未下发 */
+};
 
 /**
  * @brief 任务上下文：一门任务的身份与运行参数
  *
  * 由骨架按「一路 broker 一个 Worker」创建并传递，算法只读：
  *   - `task_id` 是该路流的任务身份（当前等于 stream_id）；
- *   - `params` 见 `TaskConfig` 的说明，本任务恒为默认值。
+ *   - `params` 由宿主经 `MSG_TASK_CONFIG` 下发；未下发时 `params.json` 为空视图。
  *
  * ⚠️ 生命周期：引用只在 `detect` / `classify` / `detect_persons` / `detect_vehicles`
  *    调用期间有效。需要跨帧保留的内容必须自己拷贝，不得保存该引用。
  */
 struct TaskContext {
     uint64_t task_id{0};   /**< 任务身份（一路 broker 一个） */
-    TaskConfig params{};   /**< 任务参数（本任务恒为默认值） */
+    TaskConfig params{};   /**< 任务参数（未下发时为空视图） */
 };
 
 /**
