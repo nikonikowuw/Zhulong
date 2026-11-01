@@ -1903,3 +1903,41 @@ Fully migrated backend store persistence operations to official GORM Generics AP
 ### Status
 
 [OK] 代码与单测完成；板端验证与 e2e 双流验收待实机
+
+
+## Session 94: 宿主目标跟踪与抓拍身份去重
+<!-- trellis-session: v=2 fp=d772eb70256c88c8 -->
+
+**Date**: 2026-11-01
+**Task**: 宿主目标跟踪与抓拍身份去重
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+在宿主层引入独立目标跟踪器（IoU + 中心距匹配），并在 CooldownManager 增加原子 AllowAll 判定，统一使用 trk: 身份前缀做跨帧防抖与去重抓拍，完成 AC1-AC12 验证与规约更新。
+
+### Main Changes
+
+- 实现宿主独占的 TargetTracker（IoU 阈值 0.3 + 中心距加权关联），维护连续帧生命周期
+- 在 CooldownManager 扩展原子两级抑制 AllowAll，统一使用 trk: 命名空间管理去重键
+- Service 接入身份跟踪，消除检测抖动导致的重复抓拍并保障未冷却目标无饥饿产出
+- 更新 backend/record-guidelines 规约文档
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `695caab` | feat(record): introduce host target tracker and deduplicate captures by identity |
+
+### Testing
+
+- [OK] go test -race ./internal/record/...
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 结合真实摄像头视频流验证多目标密集重叠与遮挡场景下的跟踪去重表现

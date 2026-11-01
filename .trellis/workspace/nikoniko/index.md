@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 93
+- **Total Sessions**: 94
 - **Last Active**: 2026-11-01
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~1873 | Active |
+| `journal-2.md` | ~1943 | Active |
 | `journal-1.md` | ~1980 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 94 | 2026-11-01 | 宿主目标跟踪与抓拍身份去重 | `695caab` | `dev` |
 | 93 | 2026-11-01 | Migrate GORM Store implementations to GORM Generics API | `357966d` | `feat/gorm-generics-migration` |
 | 92 | 2026-11-01 | 运动门禁分级治理与瞬态静止心跳保底巡检 | `0b1886b`, `22ca516` | `dev` |
 | 91 | 2026-11-01 | 统一系统后台异步任务子系统与人员人脸批量导入 | `522fcc5`, `b106365` | `dev` |
