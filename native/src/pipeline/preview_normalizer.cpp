@@ -27,6 +27,13 @@ constexpr int64_t k_max_forward_jump_us = 5LL * 1000 * 1000;
 
 constexpr uint8_t k_annex_b_start_code[] = {0, 0, 0, 1};
 
+#if defined(__SIZEOF_INT128__)
+// __int128 是 GCC/Clang 扩展而非 ISO C++ 类型，-Wpedantic 会为此逐行告警。
+// __extension__ 在这里显式声明「扩展是有意为之」，让 -Wpedantic 继续对其它
+// 真正可疑的写法发声，而不是被这一处噪声淹没。
+__extension__ typedef __int128 wide_time_delta;
+#endif
+
 int64_t saturating_add(int64_t left, int64_t right) {
     if (right > 0 && left > std::numeric_limits<int64_t>::max() - right) {
         return std::numeric_limits<int64_t>::max();
@@ -302,8 +309,8 @@ int64_t PreviewNormalizer::rescale_delta_to_microseconds(int64_t ticks, int64_t 
     if (den <= 0) den = 90000;
     if (num <= 0) num = 1;
 #if defined(__SIZEOF_INT128__)
-    const __int128 delta = static_cast<__int128>(ticks) - origin;
-    const __int128 scaled = delta * num * 1000000 / den;
+    const wide_time_delta delta = static_cast<wide_time_delta>(ticks) - origin;
+    const wide_time_delta scaled = delta * num * 1000000 / den;
     if (scaled > std::numeric_limits<int64_t>::max()) {
         return std::numeric_limits<int64_t>::max();
     }
