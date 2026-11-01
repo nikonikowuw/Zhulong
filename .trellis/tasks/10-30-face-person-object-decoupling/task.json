@@ -20,7 +20,20 @@
   "subtasks": [],
   "children": [],
   "parent": null,
-  "relatedFiles": [],
+  "relatedFiles": [
+    "native/sdk/include/zhulong/plugin.h",
+    "native/sdk/include/zhulong/algo.hpp",
+    "native/sdk/src/algo_main.cpp",
+    "internal/aitypes/model.go",
+    "internal/region/filter.go",
+    "internal/record/service.go",
+    "packages/face_recognition/onnx/src/pipeline/face_recognition.cpp",
+    "packages/face_recognition/rk3568/src/pipeline/face_recognition.cpp",
+    "web/src/features/records/components/views/captures-view.tsx",
+    "web/src/features/records/components/captures/capture-card.tsx",
+    "web/src/features/records/components/detail/record-detail-dialog.tsx",
+    "web/src/features/records/components/records-toolbar.tsx"
+  ],
   "notes": "",
   "meta": {}
 }
