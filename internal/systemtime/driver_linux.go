@@ -116,11 +116,17 @@ func (d *linuxClockDriver) ReadRTC() (time.Time, error) {
 	if dev == "" {
 		return time.Time{}, errors.New("rtc device not found")
 	}
+	return readRTCOnce(dev)
+}
 
+// readRTCOnce reads the RTC through the device node, falling back to sysfs when
+// the node exists but is not accessible to this process.
+func readRTCOnce(dev string) (time.Time, error) {
 	fd, err := unix.Open(dev, unix.O_RDONLY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) {
-			if rtcTime, sysfsErr := readRTCFromSysfs(dev); sysfsErr == nil {
+			rtcTime, sysfsErr := readRTCFromSysfs(dev)
+			if sysfsErr == nil {
 				return rtcTime, nil
 			}
 		}
@@ -180,26 +186,17 @@ func (d *linuxClockDriver) GetRTCStatus() RTCStatus {
 		return RTCStatusMissing
 	}
 
-	fd, err := unix.Open(dev, unix.O_RDONLY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		// An unreadable device node is still a healthy RTC as long as sysfs
-		// exposes the time; only a failure of both paths is an error state.
-		if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) {
-			if _, sysfsErr := readRTCFromSysfs(dev); sysfsErr == nil {
-				return RTCStatusNormal
-			}
-		}
-		return RTCStatusError
+	// An unreadable device node is still a healthy RTC as long as sysfs exposes
+	// the time; only a failure of both paths is an error state. readRTCOnce
+	// already handles the permission fallback, and the extra probe also covers a
+	// node whose ioctl fails.
+	if _, err := readRTCOnce(dev); err == nil {
+		return RTCStatusNormal
 	}
-	defer unix.Close(fd)
-
-	if _, err := unix.IoctlGetRTCTime(fd); err != nil {
-		if _, sysfsErr := readRTCFromSysfs(dev); sysfsErr == nil {
-			return RTCStatusNormal
-		}
-		return RTCStatusError
+	if _, sysfsErr := readRTCFromSysfs(dev); sysfsErr == nil {
+		return RTCStatusNormal
 	}
-	return RTCStatusNormal
+	return RTCStatusError
 }
 
 // GetTimezone resolves the active system timezone from the files the platform

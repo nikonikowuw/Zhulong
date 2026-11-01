@@ -155,15 +155,18 @@ func (h *Handler) ManualSet(c *gin.Context) {
 	httputil.Success(c, status)
 }
 
-func parseTimestamp(ts string) (time.Time, error) {
-	formats := []string{
-		time.RFC3339Nano,
-		time.RFC3339,
-		"2006-01-02T15:04:05",
-		"2006-01-02 15:04:05",
-	}
+// timestampLayouts lists the accepted wire formats, most specific first.
+// RFC3339Nano precedes RFC3339 because time.Parse rejects the latter once
+// fractional seconds are present.
+var timestampLayouts = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02T15:04:05",
+	"2006-01-02 15:04:05",
+}
 
-	for _, layout := range formats {
+func parseTimestamp(ts string) (time.Time, error) {
+	for _, layout := range timestampLayouts {
 		if t, err := time.Parse(layout, ts); err == nil {
 			return t, nil
 		}

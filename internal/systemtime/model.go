@@ -4,26 +4,38 @@ import "time"
 
 // Mode constants
 const (
-	ModeNTP    = "ntp"
+	// ModeNTP keeps the clock disciplined by periodic NTP probes.
+	ModeNTP = "ntp"
+	// ModeManual only accepts explicit operator-set time; probes are skipped.
 	ModeManual = "manual"
 )
 
 // SyncState constants
 const (
-	SyncStateUnsynced     = "unsynced"
-	SyncStateSyncing      = "syncing"
+	// SyncStateUnsynced means no probe has settled the clock yet (cold boot).
+	SyncStateUnsynced = "unsynced"
+	// SyncStateSyncing means a probe is in flight.
+	SyncStateSyncing = "syncing"
+	// SyncStateSynchronized means the last applied correction succeeded.
 	SyncStateSynchronized = "synchronized"
-	SyncStatePanicReview  = "panic_review"
-	SyncStateFailed       = "failed"
+	// SyncStatePanicReview means a panic-level offset awaits consecutive
+	// confirmation and must not be reported as a success.
+	SyncStatePanicReview = "panic_review"
+	// SyncStateFailed means the last probe or clock write failed.
+	SyncStateFailed = "failed"
 )
 
 // RTCStatus represents the hardware RTC health state.
 type RTCStatus string
 
 const (
-	RTCStatusNormal  RTCStatus = "normal"
+	// RTCStatusNormal means the hardware RTC is present and readable.
+	RTCStatusNormal RTCStatus = "normal"
+	// RTCStatusMissing means no RTC device node and no sysfs entry were found.
 	RTCStatusMissing RTCStatus = "missing"
-	RTCStatusError   RTCStatus = "error"
+	// RTCStatusError means the device exists but neither the node nor sysfs
+	// yields a usable time.
+	RTCStatusError RTCStatus = "error"
 )
 
 // Audit actions
@@ -34,10 +46,14 @@ const (
 // only a real wall-clock step, a panic-threshold review, and the failure/recovery
 // edges are auditable.
 const (
+	// ActionTimeUpdateConfig records an accepted configuration change.
 	ActionTimeUpdateConfig = "time.update_config"
-	ActionTimeManualSet    = "time.manual_set"
-	ActionTimeNTPSync      = "time.ntp_sync"
-	ActionTimeRTCHeal      = "time.rtc_heal"
+	// ActionTimeManualSet records an explicit operator-set clock.
+	ActionTimeManualSet = "time.manual_set"
+	// ActionTimeNTPSync records a user-requested NTP probe.
+	ActionTimeNTPSync = "time.ntp_sync"
+	// ActionTimeRTCHeal records a cold-boot clock restore from the RTC chip.
+	ActionTimeRTCHeal = "time.rtc_heal"
 	// ActionTimeClockStep records a wheel-clock jump applied by the background
 	// worker (cold-boot step, moderate step, or a panic offset confirmed by
 	// consecutive probes). Steady-state slew never reaches the audit trail.
@@ -49,19 +65,23 @@ const (
 	ActionTimeNTPRecovered = "time.ntp_sync_recovered"
 )
 
-// SystemTimeConfig represents the persisted time configuration.
+// SystemTimeConfig is the persisted time configuration.
+//
+// It carries no json tags on purpose: it is a GORM model, and every response
+// shape is built from SystemTimeStatus instead. Tagging it for serialization
+// would invite leaking the primary key and the encoded server column.
 type SystemTimeConfig struct {
-	ID                  int64     `gorm:"primaryKey" json:"id"`
-	Mode                string    `gorm:"column:mode;type:text;not null;default:'ntp'" json:"mode"`
-	NTPServersJSON      string    `gorm:"column:ntp_servers;type:text;not null" json:"-"`
-	SyncIntervalSeconds int       `gorm:"column:sync_interval_seconds;not null;default:900" json:"syncIntervalSeconds"`
-	Timezone            string    `gorm:"column:timezone;type:text;not null;default:'Asia/Shanghai'" json:"timezone"`
-	UpdatedAt           time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
+	ID                  int64     `gorm:"primaryKey"`
+	Mode                string    `gorm:"column:mode;type:text;not null;default:'ntp'"`
+	NTPServersJSON      string    `gorm:"column:ntp_servers;type:text;not null"`
+	SyncIntervalSeconds int       `gorm:"column:sync_interval_seconds;not null;default:900"`
+	Timezone            string    `gorm:"column:timezone;type:text;not null;default:'Asia/Shanghai'"`
+	UpdatedAt           time.Time `gorm:"column:updated_at;not null"`
 
 	// NTPServers is the decoded form of NTPServersJSON so callers never have to
 	// carry a second return value around. GORM ignores it; the repository fills
 	// it on read.
-	NTPServers []string `gorm:"-" json:"ntpServers"`
+	NTPServers []string `gorm:"-"`
 }
 
 // TimeConfigUpdate is a validated time configuration write: the domain-level
@@ -83,8 +103,8 @@ type SyncStatus struct {
 	State          string     `json:"state"`
 	LastSyncTime   *time.Time `json:"lastSyncTime"`
 	LastSyncServer string     `json:"lastSyncServer"`
-	OffsetMs       float64    `json:"offsetMs"`
-	RttMs          float64    `json:"rttMs"`
+	OffsetMS       float64    `json:"offsetMs"`
+	RTTMS          float64    `json:"rttMs"`
 	ErrorMessage   string     `json:"errorMessage"`
 }
 

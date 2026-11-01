@@ -80,12 +80,14 @@ func (c *sntpClientImpl) Query(ctx context.Context, server string, timeout time.
 	}
 	defer conn.Close()
 
-	if deadline, ok := ctx.Deadline(); ok {
+	// The caller's deadline wins; otherwise bound the socket by the per-server
+	// timeout so a black-holed server cannot stall the probe pool.
+	deadline, hasDeadline := ctx.Deadline()
+	if !hasDeadline && timeout > 0 {
+		deadline, hasDeadline = time.Now().Add(timeout), true
+	}
+	if hasDeadline {
 		if err := conn.SetDeadline(deadline); err != nil {
-			return nil, fmt.Errorf("set ntp deadline for %s: %w", host, err)
-		}
-	} else if timeout > 0 {
-		if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 			return nil, fmt.Errorf("set ntp deadline for %s: %w", host, err)
 		}
 	}
@@ -109,64 +111,86 @@ func (c *sntpClientImpl) Query(ctx context.Context, server string, timeout time.
 	if err != nil {
 		return nil, fmt.Errorf("read ntp %s: %w", host, err)
 	}
-	if n < ntpPacketSize {
-		return nil, fmt.Errorf("short ntp response from %s: %d bytes", host, n)
-	}
 
-	li := (resp[0] >> 6) & 0x03
-	version := (resp[0] >> 3) & 0x07
-	mode := resp[0] & 0x07
-	stratum := resp[1]
-	precision := int8(resp[3])
-
-	// Validate Mode (4 = server, 5 = broadcast)
-	if mode != 4 && mode != 5 {
-		return nil, fmt.Errorf("invalid ntp mode %d from %s (expected 4/5)", mode, host)
+	header, err := parseSNTPResponse(host, resp[:n])
+	if err != nil {
+		return nil, err
 	}
-	if version < 3 || version > 4 {
-		return nil, fmt.Errorf("unsupported ntp version %d from %s", version, host)
-	}
-	// Stratum 0 = Kiss-o'-Death, 16 = unsynchronized
-	if stratum == 0 {
-		return nil, fmt.Errorf("server %s returned kiss-o'-death (stratum 0)", host)
-	}
-	if stratum >= 16 {
-		return nil, fmt.Errorf("server %s is unsynchronized (stratum %d)", host, stratum)
-	}
-	if li == 3 {
-		return nil, fmt.Errorf("server %s clock is unsynchronized (leap indicator 3)", host)
-	}
-
-	// T2: Server Receive Timestamp (bytes 32-39)
-	t2 := ntpToTime(
-		binary.BigEndian.Uint32(resp[32:36]),
-		binary.BigEndian.Uint32(resp[36:40]),
-	)
-
-	// T3: Server Transmit Timestamp (bytes 40-47)
-	t3 := ntpToTime(
-		binary.BigEndian.Uint32(resp[40:44]),
-		binary.BigEndian.Uint32(resp[44:48]),
-	)
 
 	// RFC 4330 math:
 	// delay = (T4 - T1) - (T3 - T2)
 	// offset = ((T2 - T1) + (T3 - T4)) / 2
-	rtt := max(t4.Sub(t1)-t3.Sub(t2), 0)
-	offset := (t2.Sub(t1) + t3.Sub(t4)) / 2
+	rtt := max(t4.Sub(t1)-header.T3.Sub(header.T2), 0)
+	offset := (header.T2.Sub(t1) + header.T3.Sub(t4)) / 2
 
 	return &SNTPResult{
 		Server:    server,
 		Offset:    offset,
 		RTT:       rtt,
-		Stratum:   stratum,
-		Leap:      li,
-		Precision: precision,
+		Stratum:   header.Stratum,
+		Leap:      header.Leap,
+		Precision: header.Precision,
 		T1:        t1,
-		T2:        t2,
-		T3:        t3,
+		T2:        header.T2,
+		T3:        header.T3,
 		T4:        t4,
 	}, nil
+}
+
+// ntpHeader is the validated subset of an RFC 4330 reply header plus the two
+// server-side timestamps the offset calculation needs.
+type ntpHeader struct {
+	Leap      uint8
+	Version   uint8
+	Mode      uint8
+	Stratum   uint8
+	Precision int8
+	T2        time.Time // Server receive time
+	T3        time.Time // Server transmit time
+}
+
+// parseSNTPResponse validates one server reply and extracts its header and
+// timestamps. host is only used to make the errors actionable.
+func parseSNTPResponse(host string, resp []byte) (ntpHeader, error) {
+	if len(resp) < ntpPacketSize {
+		return ntpHeader{}, fmt.Errorf("short ntp response from %s: %d bytes", host, len(resp))
+	}
+
+	header := ntpHeader{
+		Leap:      (resp[0] >> 6) & 0x03,
+		Version:   (resp[0] >> 3) & 0x07,
+		Mode:      resp[0] & 0x07,
+		Stratum:   resp[1],
+		Precision: int8(resp[3]),
+	}
+
+	// Mode 4 = server, 5 = broadcast.
+	if header.Mode != 4 && header.Mode != 5 {
+		return ntpHeader{}, fmt.Errorf("invalid ntp mode %d from %s (expected 4/5)", header.Mode, host)
+	}
+	if header.Version < 3 || header.Version > 4 {
+		return ntpHeader{}, fmt.Errorf("unsupported ntp version %d from %s", header.Version, host)
+	}
+	// Stratum 0 = Kiss-o'-Death, 16 = unsynchronized.
+	if header.Stratum == 0 {
+		return ntpHeader{}, fmt.Errorf("server %s returned kiss-o'-death (stratum 0)", host)
+	}
+	if header.Stratum >= 16 {
+		return ntpHeader{}, fmt.Errorf("server %s is unsynchronized (stratum %d)", host, header.Stratum)
+	}
+	if header.Leap == 3 {
+		return ntpHeader{}, fmt.Errorf("server %s clock is unsynchronized (leap indicator 3)", host)
+	}
+
+	header.T2 = ntpToTime(
+		binary.BigEndian.Uint32(resp[32:36]),
+		binary.BigEndian.Uint32(resp[36:40]),
+	)
+	header.T3 = ntpToTime(
+		binary.BigEndian.Uint32(resp[40:44]),
+		binary.BigEndian.Uint32(resp[44:48]),
+	)
+	return header, nil
 }
 
 // QueryPool tries servers sequentially with fallback until one succeeds or all fail.

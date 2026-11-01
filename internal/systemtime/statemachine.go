@@ -7,10 +7,11 @@ import (
 	"time"
 )
 
-// BuildEpoch is the boundary below which the system clock is treated as unsynced
+// buildEpoch is the boundary below which the system clock is treated as unsynced
 // (2026-01-01). It is a var rather than a const because time.Date is not a
-// constant expression, and it is not exported for writing by other packages.
-var BuildEpoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+// constant expression, and it stays unexported because it gates whether the
+// clock may be stepped: no other package needs to read or reassign it.
+var buildEpoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 const (
 	// SlewThreshold is the largest offset corrected by adjtime slew instead of a
@@ -81,13 +82,23 @@ type SyncOutcome struct {
 	RTCErr error
 }
 
+// clockController is the subset of ClockDriver the state machine needs: read the
+// kernel clock and apply corrections. RTC health probing and timezone handling
+// stay with the driver and the service.
+type clockController interface {
+	GetSystemTime() (time.Time, error)
+	SetRealtime(t time.Time) error
+	AdjTime(offset time.Duration) error
+	WriteRTC(t time.Time) error
+}
+
 // TimeStateMachine governs safe system time transitions and ensures monotonicity.
 //
 // All exported methods take the lock themselves; the Locked-suffixed helpers
 // assume the caller already holds it.
 type TimeStateMachine struct {
 	mu             sync.RWMutex
-	driver         ClockDriver
+	driver         clockController
 	state          string
 	initialSynced  bool
 	panicCount     int
@@ -100,12 +111,12 @@ type TimeStateMachine struct {
 	lastError      string
 }
 
-// NewTimeStateMachine constructs a state machine bound to a ClockDriver.
+// NewTimeStateMachine constructs a state machine bound to a clockController.
 //
 // It deliberately performs no driver I/O: the "is this clock already plausible?"
 // decision needs a syscall, and constructors in this codebase stay pure. The
 // first ProcessNTPResult call makes that decision instead.
-func NewTimeStateMachine(driver ClockDriver) *TimeStateMachine {
+func NewTimeStateMachine(driver clockController) *TimeStateMachine {
 	return &TimeStateMachine{
 		driver: driver,
 		state:  SyncStateUnsynced,
@@ -128,7 +139,7 @@ func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) (SyncOutcome, erro
 
 	// A device that boots with plausible time must not be stepped just because
 	// this process has never synced: adopt the running clock as the baseline.
-	if !sm.initialSynced && sysTime.After(BuildEpoch) {
+	if !sm.initialSynced && sysTime.After(buildEpoch) {
 		sm.initialSynced = true
 	}
 
@@ -136,7 +147,7 @@ func (sm *TimeStateMachine) ProcessNTPResult(res *SNTPResult) (SyncOutcome, erro
 
 	switch {
 	// Stage 1: cold boot / unsynchronized clock.
-	case !sm.initialSynced || sysTime.Before(BuildEpoch):
+	case !sm.initialSynced || sysTime.Before(buildEpoch):
 		return sm.stepLocked(sysTime.Add(res.Offset), res)
 
 	// Stage 2.1: micro-offset below SlewThreshold -> linear adjtime slew.
@@ -206,8 +217,8 @@ func (sm *TimeStateMachine) GetSyncStatus() SyncStatus {
 		State:          sm.state,
 		LastSyncTime:   sm.lastSyncTime,
 		LastSyncServer: sm.lastSyncServer,
-		OffsetMs:       float64(sm.lastOffset.Microseconds()) / 1000.0,
-		RttMs:          float64(sm.lastRTT.Microseconds()) / 1000.0,
+		OffsetMS:       float64(sm.lastOffset.Microseconds()) / 1000.0,
+		RTTMS:          float64(sm.lastRTT.Microseconds()) / 1000.0,
 		ErrorMessage:   sm.lastError,
 	}
 }
@@ -293,7 +304,7 @@ func (sm *TimeStateMachine) recordSyncSuccessLocked(res *SNTPResult) {
 // writeHardwareRTC mirrors the wall clock into the RTC chip. The error is
 // returned rather than dropped: the clock already moved, so it cannot fail the
 // operation, but a silent failure here is what makes the next cold boot wrong.
-func writeHardwareRTC(driver ClockDriver, t time.Time) error {
+func writeHardwareRTC(driver clockController, t time.Time) error {
 	if err := driver.WriteRTC(t); err != nil {
 		return fmt.Errorf("write hardware rtc: %w", err)
 	}

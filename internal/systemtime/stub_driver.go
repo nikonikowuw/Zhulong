@@ -33,6 +33,11 @@ func NewStubClockDriver() *StubClockDriver {
 		rtcStatus:     RTCStatusNormal,
 		timezone:      "Asia/Shanghai",
 		hasPermission: true,
+		// Initialised rather than nil so the accessors below return empty
+		// slices: a nil result trips DeepEqual-based assertions for no reason.
+		stepCalls:     make([]time.Time, 0),
+		slewCalls:     make([]time.Duration, 0),
+		rtcWriteCalls: make([]time.Time, 0),
 	}
 }
 
@@ -126,6 +131,23 @@ func (s *StubClockDriver) SetPermission(p bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.hasPermission = p
+}
+
+// SetSystemTime pins the simulated kernel clock to t instead of the host clock.
+// Tests must go through this (or SetOffset) rather than writing offset directly:
+// the field is guarded by the same mutex as the rest of the stub.
+func (s *StubClockDriver) SetSystemTime(t time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.offset = time.Until(t)
+}
+
+// SetOffset shifts the simulated kernel clock relative to the host clock; zero
+// means the host clock is the simulated clock.
+func (s *StubClockDriver) SetOffset(offset time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.offset = offset
 }
 
 func (s *StubClockDriver) SetRTCStatus(status RTCStatus) {

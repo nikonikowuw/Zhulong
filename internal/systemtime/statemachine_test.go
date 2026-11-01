@@ -9,9 +9,9 @@ import (
 
 func TestStateMachineColdBootStep(t *testing.T) {
 	driver := NewStubClockDriver()
-	// Set system time to year 2020 (before BuildEpoch 2026-01-01)
+	// Set system time to year 2020 (before buildEpoch 2026-01-01)
 	pastTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-	driver.offset = time.Until(pastTime)
+	driver.SetSystemTime(pastTime)
 
 	sm := NewTimeStateMachine(driver)
 
@@ -50,7 +50,7 @@ func TestStateMachineColdBootStep(t *testing.T) {
 func TestStateMachineSteadyStateSlew(t *testing.T) {
 	driver := NewStubClockDriver()
 	// Current time is in 2026
-	driver.offset = 0
+	driver.SetOffset(0)
 
 	sm := NewTimeStateMachine(driver)
 
@@ -83,7 +83,7 @@ func TestStateMachineSteadyStateSlew(t *testing.T) {
 
 func TestStateMachineSteadyStateModerateStep(t *testing.T) {
 	driver := NewStubClockDriver()
-	driver.offset = 0
+	driver.SetOffset(0)
 
 	sm := NewTimeStateMachine(driver)
 
@@ -110,7 +110,7 @@ func TestStateMachineSteadyStateModerateStep(t *testing.T) {
 
 func TestStateMachineSteadyStatePanicReview(t *testing.T) {
 	driver := NewStubClockDriver()
-	driver.offset = 0
+	driver.SetOffset(0)
 
 	sm := NewTimeStateMachine(driver)
 

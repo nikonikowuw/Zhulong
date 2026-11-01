@@ -77,22 +77,40 @@ func drainAudit(t *testing.T, svc *audit.Service) []audit.AuditLog {
 	return items
 }
 
-func doAuditRequest(t *testing.T, router *gin.Engine, method, path, body, remoteAddr string) *httptest.ResponseRecorder {
-	t.Helper()
-	var reader *bytes.Reader
-	if body == "" {
-		reader = bytes.NewReader(nil)
-	} else {
-		reader = bytes.NewReader([]byte(body))
-	}
-	req := httptest.NewRequest(method, path, reader)
-	if body != "" {
+// httpCall is one scripted HTTP call. It is a struct rather than a parameter
+// list because every field is a string: a swapped pair would still compile.
+type httpCall struct {
+	method         string
+	path           string
+	body           string
+	remoteAddr     string
+	acceptLanguage string
+}
+
+// send runs the call through the real router. Headers are only set when the call
+// asks for them, so a body-less call keeps the "no JSON payload" shape the
+// binding path relies on.
+func (c httpCall) send(router *gin.Engine) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(c.method, c.path, bytes.NewReader([]byte(c.body)))
+	if c.body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.RemoteAddr = remoteAddr
+	if c.acceptLanguage != "" {
+		req.Header.Set("Accept-Language", c.acceptLanguage)
+	}
+	if c.remoteAddr != "" {
+		req.RemoteAddr = c.remoteAddr
+	}
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	return w
+}
+
+// testConfigBody builds a config-update payload from its two varying fields, so
+// the accepted and rejected cases cannot drift apart.
+func testConfigBody(mode, timezone string) string {
+	return `{"mode":"` + mode + `","ntpServers":["ntp.aliyun.com"],` +
+		`"syncIntervalSeconds":600,"timezone":"` + timezone + `"}`
 }
 
 // TestHandlerAuditCoverage exercises every audited system time write operation
@@ -104,25 +122,45 @@ func TestHandlerAuditCoverage(t *testing.T) {
 	const clientAddr = "192.168.11.11:6666"
 
 	// 1. Update config
-	if w := doAuditRequest(t, router, http.MethodPut, "/api/v1/system/time/config",
-		`{"mode":"ntp","ntpServers":["ntp.aliyun.com"],"syncIntervalSeconds":600,"timezone":"Asia/Shanghai"}`,
-		clientAddr); w.Code != http.StatusOK {
+	updateConfig := httpCall{
+		method:     http.MethodPut,
+		path:       "/api/v1/system/time/config",
+		body:       testConfigBody(ModeNTP, "Asia/Shanghai"),
+		remoteAddr: clientAddr,
+	}
+	if w := updateConfig.send(router); w.Code != http.StatusOK {
 		t.Fatalf("update config failed: %d %s", w.Code, w.Body.String())
 	}
 
 	// 2. Manual set
-	if w := doAuditRequest(t, router, http.MethodPost, "/api/v1/system/time/manual",
-		`{"targetTime":"2026-10-07T16:45:00.000Z"}`, clientAddr); w.Code != http.StatusOK {
+	manualSet := httpCall{
+		method:     http.MethodPost,
+		path:       "/api/v1/system/time/manual",
+		body:       `{"targetTime":"2026-10-07T16:45:00.000Z"}`,
+		remoteAddr: clientAddr,
+	}
+	if w := manualSet.send(router); w.Code != http.StatusOK {
 		t.Fatalf("manual set failed: %d %s", w.Code, w.Body.String())
 	}
 
 	// 3. NTP sync with a healthy probe
-	if w := doAuditRequest(t, router, http.MethodPost, "/api/v1/system/time/sync", "", clientAddr); w.Code != http.StatusOK {
+	syncNow := httpCall{
+		method:     http.MethodPost,
+		path:       "/api/v1/system/time/sync",
+		remoteAddr: clientAddr,
+	}
+	if w := syncNow.send(router); w.Code != http.StatusOK {
 		t.Fatalf("sync failed: %d %s", w.Code, w.Body.String())
 	}
 
 	// 4. Validation failure on the config update must still be recorded.
-	if w := doAuditRequest(t, router, http.MethodPut, "/api/v1/system/time/config", `{}`, clientAddr); w.Code != http.StatusUnprocessableEntity {
+	invalidConfig := httpCall{
+		method:     http.MethodPut,
+		path:       "/api/v1/system/time/config",
+		body:       `{}`,
+		remoteAddr: clientAddr,
+	}
+	if w := invalidConfig.send(router); w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 for an empty config body, got %d %s", w.Code, w.Body.String())
 	}
 
@@ -188,7 +226,8 @@ func TestSyncNowDomainFailureIsAuditedAsFailed(t *testing.T) {
 	defer cleanup()
 
 	const clientAddr = "192.168.11.12:7777"
-	w := doAuditRequest(t, router, http.MethodPost, "/api/v1/system/time/sync", "", clientAddr)
+	syncNow := httpCall{method: http.MethodPost, path: "/api/v1/system/time/sync", remoteAddr: clientAddr}
+	w := syncNow.send(router)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected the 200 response contract to be preserved, got %d %s", w.Code, w.Body.String())
 	}
@@ -239,9 +278,13 @@ func TestBackgroundSystemEventsAreNotUserAudited(t *testing.T) {
 	defer cleanup()
 
 	const clientAddr = "192.168.11.13:8888"
-	if w := doAuditRequest(t, router, http.MethodPut, "/api/v1/system/time/config",
-		`{"mode":"ntp","ntpServers":["ntp.aliyun.com"],"syncIntervalSeconds":600,"timezone":"UTC"}`,
-		clientAddr); w.Code != http.StatusOK {
+	configUpdate := httpCall{
+		method:     http.MethodPut,
+		path:       "/api/v1/system/time/config",
+		body:       testConfigBody(ModeNTP, "UTC"),
+		remoteAddr: clientAddr,
+	}
+	if w := configUpdate.send(router); w.Code != http.StatusOK {
 		t.Fatalf("update config failed: %d %s", w.Code, w.Body.String())
 	}
 

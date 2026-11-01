@@ -15,7 +15,8 @@ import (
 const (
 	// configSingletonID is the only row the time configuration ever uses.
 	configSingletonID = 1
-	// defaultSyncIntervalSeconds matches the column default.
+	// defaultSyncIntervalSeconds matches the migration column default; the
+	// service derives its fallback probe interval from this value.
 	defaultSyncIntervalSeconds = 900
 	defaultTimezone            = "Asia/Shanghai"
 )
@@ -62,7 +63,7 @@ func (r *repositoryImpl) GetConfig(ctx context.Context) (*SystemTimeConfig, erro
 	var cfg SystemTimeConfig
 	if err := db.Where("id = ?", configSingletonID).First(&cfg).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return defaultConfig()
+			return defaultConfig(), nil
 		}
 		return nil, fmt.Errorf("query system_time_configs: %w", err)
 	}
@@ -88,15 +89,11 @@ func (r *repositoryImpl) UpdateConfig(ctx context.Context, update TimeConfigUpda
 	if len(servers) == 0 {
 		servers = defaultServers()
 	}
-	serversJSON, err := json.Marshal(servers)
-	if err != nil {
-		return nil, fmt.Errorf("marshal ntp servers: %w", err)
-	}
 
 	cfg := SystemTimeConfig{
 		ID:                  configSingletonID,
 		Mode:                update.Mode,
-		NTPServersJSON:      string(serversJSON),
+		NTPServersJSON:      encodeServers(servers),
 		SyncIntervalSeconds: update.SyncIntervalSeconds,
 		Timezone:            update.Timezone,
 		UpdatedAt:           time.Now().UTC(),
@@ -104,8 +101,10 @@ func (r *repositoryImpl) UpdateConfig(ctx context.Context, update TimeConfigUpda
 	}
 
 	err = db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"mode", "ntp_servers", "sync_interval_seconds", "timezone", "updated_at"}),
+		Columns: []clause.Column{{Name: "id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"mode", "ntp_servers", "sync_interval_seconds", "timezone", "updated_at",
+		}),
 	}).Create(&cfg).Error
 	if err != nil {
 		return nil, fmt.Errorf("save system_time_configs: %w", err)
@@ -114,21 +113,34 @@ func (r *repositoryImpl) UpdateConfig(ctx context.Context, update TimeConfigUpda
 	return &cfg, nil
 }
 
-func defaultConfig() (*SystemTimeConfig, error) {
+// defaultConfig returns the shipped configuration for a database that has no
+// row yet. It has no error return: encoding a fixed []string cannot fail.
+func defaultConfig() *SystemTimeConfig {
 	servers := defaultServers()
-	serversJSON, err := json.Marshal(servers)
-	if err != nil {
-		return nil, fmt.Errorf("marshal default ntp servers: %w", err)
-	}
 	return &SystemTimeConfig{
 		ID:                  configSingletonID,
 		Mode:                ModeNTP,
-		NTPServersJSON:      string(serversJSON),
+		NTPServersJSON:      encodeServers(servers),
 		SyncIntervalSeconds: defaultSyncIntervalSeconds,
 		Timezone:            defaultTimezone,
 		UpdatedAt:           time.Now().UTC(),
 		NTPServers:          servers,
-	}, nil
+	}
+}
+
+// encodeServers renders the server pool for the ntp_servers column.
+//
+// json.Marshal cannot fail for a []string (invalid UTF-8 is replaced, not
+// rejected), so the failure is confined to this one defensive branch instead of
+// adding an unreachable error path to every caller. "[]" keeps the column valid
+// JSON even if that ever stops being true; the read path repairs it to the
+// shipped pool.
+func encodeServers(servers []string) string {
+	encoded, err := json.Marshal(servers)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
 }
 
 func decodeServers(encoded string) ([]string, error) {

@@ -156,29 +156,35 @@ func TestHandlerErrorsAreLocalizedAndSanitized(t *testing.T) {
 	healthySNTP := &mockSNTPClient{
 		result: &SNTPResult{Server: "ntp.aliyun.com", Offset: 50 * time.Millisecond, Stratum: 2},
 	}
-	validConfig := `{"mode":"ntp","ntpServers":["ntp.aliyun.com"],"syncIntervalSeconds":600,"timezone":"Asia/Shanghai"}`
-
 	tests := []struct {
 		name        string
 		mutate      func(*StubClockDriver)
 		prepare     func(*testing.T, *TimeService)
-		requests    []string // method + path + body, applied in order, only the last is asserted
+		requests    []httpCall // applied in order, only the last is asserted
 		wantStatus  int
 		wantCode    string
 		wantMessage string
 		forbidden   []string
 	}{
 		{
-			name:        "invalid timezone",
-			requests:    []string{http.MethodPut + " /api/v1/system/time/config " + `{"mode":"ntp","ntpServers":["ntp.aliyun.com"],"syncIntervalSeconds":600,"timezone":"Mars/Olympus"}`},
+			name: "invalid timezone",
+			requests: []httpCall{{
+				method: http.MethodPut,
+				path:   "/api/v1/system/time/config",
+				body:   testConfigBody(ModeNTP, "Mars/Olympus"),
+			}},
 			wantStatus:  http.StatusUnprocessableEntity,
 			wantCode:    "INVALID_TIME_CONFIG",
 			wantMessage: "时间配置无效",
 			forbidden:   []string{"Mars/Olympus", "unknown time zone"},
 		},
 		{
-			name:        "invalid timestamp",
-			requests:    []string{http.MethodPost + " /api/v1/system/time/manual " + `{"targetTime":"yesterday"}`},
+			name: "invalid timestamp",
+			requests: []httpCall{{
+				method: http.MethodPost,
+				path:   "/api/v1/system/time/manual",
+				body:   `{"targetTime":"yesterday"}`,
+			}},
 			wantStatus:  http.StatusUnprocessableEntity,
 			wantCode:    "INVALID_TIMESTAMP",
 			wantMessage: "目标时间必须是合法的 ISO-8601 或 RFC3339 时间格式",
@@ -186,9 +192,13 @@ func TestHandlerErrorsAreLocalizedAndSanitized(t *testing.T) {
 		},
 		{
 			name: "manual mode active",
-			requests: []string{
-				http.MethodPut + " /api/v1/system/time/config " + `{"mode":"manual","ntpServers":["ntp.aliyun.com"],"syncIntervalSeconds":600,"timezone":"Asia/Shanghai"}`,
-				http.MethodPost + " /api/v1/system/time/sync ",
+			requests: []httpCall{
+				{
+					method: http.MethodPut,
+					path:   "/api/v1/system/time/config",
+					body:   testConfigBody(ModeManual, "Asia/Shanghai"),
+				},
+				{method: http.MethodPost, path: "/api/v1/system/time/sync"},
 			},
 			wantStatus:  http.StatusPreconditionFailed,
 			wantCode:    "MANUAL_MODE_ACTIVE",
@@ -200,7 +210,7 @@ func TestHandlerErrorsAreLocalizedAndSanitized(t *testing.T) {
 				svc.syncMu.Lock()
 				t.Cleanup(svc.syncMu.Unlock)
 			},
-			requests:    []string{http.MethodPost + " /api/v1/system/time/sync "},
+			requests:    []httpCall{{method: http.MethodPost, path: "/api/v1/system/time/sync"}},
 			wantStatus:  http.StatusConflict,
 			wantCode:    "SYNC_IN_PROGRESS",
 			wantMessage: "已有一次 NTP 对时正在进行",
@@ -210,24 +220,32 @@ func TestHandlerErrorsAreLocalizedAndSanitized(t *testing.T) {
 			prepare: func(_ *testing.T, svc *TimeService) {
 				svc.repo = failingRepository{err: errors.New("database is locked")}
 			},
-			requests:    []string{http.MethodPost + " /api/v1/system/time/sync "},
+			requests:    []httpCall{{method: http.MethodPost, path: "/api/v1/system/time/sync"}},
 			wantStatus:  http.StatusInternalServerError,
 			wantCode:    "DATABASE_ERROR",
 			wantMessage: "数据存储操作失败",
 			forbidden:   []string{"database is locked", "system_time_configs"},
 		},
 		{
-			name:        "clock permission missing",
-			mutate:      func(d *StubClockDriver) { d.SetPermission(false) },
-			requests:    []string{http.MethodPost + " /api/v1/system/time/manual " + `{"targetTime":"2026-10-07T16:45:00Z"}`},
+			name:   "clock permission missing",
+			mutate: func(d *StubClockDriver) { d.SetPermission(false) },
+			requests: []httpCall{{
+				method: http.MethodPost,
+				path:   "/api/v1/system/time/manual",
+				body:   `{"targetTime":"2026-10-07T16:45:00Z"}`,
+			}},
 			wantStatus:  http.StatusInternalServerError,
 			wantCode:    "SET_TIME_FAILED",
 			wantMessage: "设置系统时间失败",
 			forbidden:   []string{"operation not permitted"},
 		},
 		{
-			name:        "valid config keeps working",
-			requests:    []string{http.MethodPut + " /api/v1/system/time/config " + validConfig},
+			name: "valid config keeps working",
+			requests: []httpCall{{
+				method: http.MethodPut,
+				path:   "/api/v1/system/time/config",
+				body:   testConfigBody(ModeNTP, "Asia/Shanghai"),
+			}},
 			wantStatus:  http.StatusOK,
 			wantCode:    "OK",
 			wantMessage: "成功",
@@ -246,14 +264,9 @@ func TestHandlerErrorsAreLocalizedAndSanitized(t *testing.T) {
 			}
 
 			var w *httptest.ResponseRecorder
-			for _, raw := range tc.requests {
-				method, rest, _ := strings.Cut(raw, " ")
-				path, body, _ := strings.Cut(rest, " ")
-				w = httptest.NewRecorder()
-				req := httptest.NewRequest(method, path, bytes.NewReader([]byte(body)))
-				req.Header.Set("Content-Type", "application/json")
-				req.Header.Set("Accept-Language", "zh-CN")
-				router.ServeHTTP(w, req)
+			for _, call := range tc.requests {
+				call.acceptLanguage = "zh-CN"
+				w = call.send(router)
 			}
 
 			if w.Code != tc.wantStatus {

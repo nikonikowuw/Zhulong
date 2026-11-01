@@ -42,8 +42,8 @@ func TestTimeServiceBootCheckRTCHeal(t *testing.T) {
 	defer cleanup()
 
 	driver := NewStubClockDriver()
-	// Simulate cold boot: system time in 2020 (< BuildEpoch 2026-01-01)
-	driver.offset = time.Until(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
+	// Simulate cold boot: system time in 2020 (< buildEpoch 2026-01-01)
+	driver.SetSystemTime(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	// Hardware RTC holds valid 2026 time
 	validRTC := time.Date(2026, 10, 7, 18, 0, 0, 0, time.UTC)
