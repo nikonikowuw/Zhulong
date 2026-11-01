@@ -214,4 +214,51 @@ describe('RecordDetailDialog', () => {
     await userEvent.click(closeBtn)
     expect(handleOpenChange).toHaveBeenCalledWith(false)
   })
+
+  it('supports toggling bounding box visibility', async () => {
+    const { getByRole } = await render(
+      <RecordDetailDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        record={mockRecognition}
+        tab='recognitions'
+      />
+    )
+
+    const toggleBtn = getByRole('button', { name: '隐藏标注框' })
+    await expect.element(toggleBtn).toBeInTheDocument()
+    await userEvent.click(toggleBtn)
+
+    const showBtn = getByRole('button', { name: '显示标注框' })
+    await expect.element(showBtn).toBeInTheDocument()
+  })
+
+  it('supports toggling between structured and json code view in attributes panel', async () => {
+    const vehicleCapture: Capture = {
+      ...mockCapture,
+      attributes: {
+        plate_number: '粤B88888',
+        plate_color: 'blue',
+      },
+    }
+
+    const { getByRole, getByText } = await render(
+      <RecordDetailDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        record={vehicleCapture}
+        tab='vehicles'
+      />
+    )
+
+    const codeBtn = getByRole('button', { name: '代码视图' })
+    await userEvent.click(codeBtn)
+    await expect
+      .element(getByText(/"plate_number": "粤B88888"/))
+      .toBeInTheDocument()
+
+    const structBtn = getByRole('button', { name: '结构化视图' })
+    await userEvent.click(structBtn)
+    await expect.element(getByText('plate_number')).toBeInTheDocument()
+  })
 })

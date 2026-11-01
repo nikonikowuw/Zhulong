@@ -19,6 +19,10 @@ export interface BoundingBoxCanvasProps {
   secondaryLabel?: string
   className?: string
   imageClassName?: string
+  /** 控制是否渲染标注覆盖层，默认 true */
+  showBoxes?: boolean
+  /** 图像尺寸加载成功后的回调 */
+  onDimensionsLoaded?: (dimensions: { width: number; height: number }) => void
 }
 
 function isValidBox(box?: BoundingBox): boolean {
@@ -64,6 +68,8 @@ export function BoundingBoxCanvas({
   secondaryLabel,
   className,
   imageClassName,
+  showBoxes = true,
+  onDimensionsLoaded,
 }: BoundingBoxCanvasProps) {
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
   const [imgLoaded, setImgLoaded] = useState(false)
@@ -98,18 +104,20 @@ export function BoundingBoxCanvas({
           )}
           onLoad={(e) => {
             const img = e.currentTarget
-            setDimensions({
+            const dims = {
               width: img.naturalWidth,
               height: img.naturalHeight,
-            })
+            }
+            setDimensions(dims)
             setImgLoaded(true)
+            onDimensionsLoaded?.(dims)
           }}
           onError={() => setImgError(true)}
         />
       )}
 
       {/* 标注覆盖层 (基于百分比自适应吸附) */}
-      {imgLoaded && (
+      {imgLoaded && showBoxes && (
         <div className='pointer-events-none absolute inset-0 size-full'>
           {/* 次要标注框（如人体外框） */}
           {hasSecondary &&
