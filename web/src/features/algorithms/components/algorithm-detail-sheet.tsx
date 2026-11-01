@@ -38,6 +38,12 @@ interface AlgorithmDetailSheetProps {
   onOpenTrial?: (algorithm: Algorithm) => void
 }
 
+const formatDateTime = (dateStr?: string): string => {
+  if (!dateStr) return '-'
+  const d = new Date(dateStr)
+  return isNaN(d.getTime()) ? dateStr : d.toLocaleString()
+}
+
 export function AlgorithmDetailSheet({
   algorithm,
   open,
@@ -460,7 +466,7 @@ export function AlgorithmDetailSheet({
                     {t('installedAt', '安装时间')}
                   </span>
                   <span className='font-mono text-foreground'>
-                    {new Date(algorithm.createdAt).toLocaleString()}
+                    {formatDateTime(algorithm.createdAt)}
                   </span>
                 </div>
 
@@ -469,7 +475,7 @@ export function AlgorithmDetailSheet({
                     {t('updatedAt', '更新时间')}
                   </span>
                   <span className='font-mono text-foreground'>
-                    {new Date(algorithm.updatedAt).toLocaleString()}
+                    {formatDateTime(algorithm.updatedAt)}
                   </span>
                 </div>
               </div>

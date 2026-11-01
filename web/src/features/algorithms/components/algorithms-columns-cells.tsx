@@ -147,9 +147,12 @@ export function AlgorithmSwitchCell({ algo }: { algo: Algorithm }) {
   const isOperating = enableMutation.isPending || disableMutation.isPending
   const isEnabled = algo.status === 'ACTIVE' || algo.status === 'RUNNING'
   const isCrashLoop = algo.status === 'CRASH_LOOP'
+  const isTransitioning =
+    algo.status === 'STARTING' || algo.status === 'ROLLING_BACK'
+  const isDisabled = isOperating || isCrashLoop || isTransitioning
 
   const handleToggle = () => {
-    if (isCrashLoop || isOperating) return
+    if (isDisabled) return
     if (isEnabled) {
       disableMutation.mutate(algo.id)
     } else {
@@ -157,18 +160,21 @@ export function AlgorithmSwitchCell({ algo }: { algo: Algorithm }) {
     }
   }
 
+  const switchTitle = isCrashLoop
+    ? t('crashLoopSwitchHint', '算法处于熔断状态，请先重置熔断')
+    : isTransitioning
+      ? t('transitioningSwitchHint', '算法状态切换中，请稍候...')
+      : isEnabled
+        ? t('clickToDisable', '点击停用')
+        : t('clickToEnable', '点击启用')
+
   return (
     <Switch
       checked={isEnabled}
-      disabled={isOperating || isCrashLoop}
+      disabled={isDisabled}
       onCheckedChange={handleToggle}
-      title={
-        isCrashLoop
-          ? t('crashLoopSwitchHint', '算法处于熔断状态，请先重置熔断')
-          : isEnabled
-            ? t('clickToDisable', '点击停用')
-            : t('clickToEnable', '点击启用')
-      }
+      aria-label={`${algo.name} (${t(TASK_TYPE_BADGE[algo.taskType]?.labelKey ?? algo.taskType)})`}
+      title={switchTitle}
     />
   )
 }

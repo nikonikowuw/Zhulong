@@ -79,7 +79,10 @@ export function AlgorithmDeleteDialog({
                     '将解绑 {{count}} 路分析任务，受影响的摄像机：{{cameras}}。任务本身保留，但会失去该算法。',
                     {
                       count: impact.boundTaskCount,
-                      cameras: impact.affectedCameraIds.join('、'),
+                      cameras:
+                        impact.affectedCameraIds.length > 0
+                          ? impact.affectedCameraIds.join('、')
+                          : t('impactNoneCamera', '无/未指定'),
                     }
                   )
                 : t('impactNoTasks', '当前没有分析任务绑定该算法。')}

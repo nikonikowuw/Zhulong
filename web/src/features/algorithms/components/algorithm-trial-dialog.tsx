@@ -239,6 +239,13 @@ export function AlgorithmTrialDialog({
     []
   )
 
+  // 保证当 <canvas> 随着 selectedFile 挂载入 DOM 时，确定性绘制底图与最新试跑结果
+  useEffect(() => {
+    if (selectedFile && loadedImageRef.current && canvasRef.current) {
+      renderCanvas(loadedImageRef.current, trialResult)
+    }
+  }, [selectedFile, trialResult, renderCanvas])
+
   const handleFileSelect = (file: File) => {
     const validExtensions = ['.jpg', '.jpeg', '.png']
     const hasValidExt = validExtensions.some((ext) =>
@@ -270,7 +277,8 @@ export function AlgorithmTrialDialog({
         URL.revokeObjectURL(objectUrl)
         clearPreview()
         setErrorMessage(
-          t('IMAGE_DIMENSIONS_TOO_LARGE', {
+          t('trialErrorDimension', {
+            dimension: MAX_IMAGE_DIMENSION,
             defaultValue: `图片分辨率超过 ${MAX_IMAGE_DIMENSION}px 限制`,
           })
         )
@@ -283,8 +291,6 @@ export function AlgorithmTrialDialog({
       previewUrlRef.current = objectUrl
       loadedImageRef.current = img
       setSelectedFile(file)
-      // Render initial image to canvas
-      requestAnimationFrame(() => renderCanvas(img, null))
     }
     img.onerror = () => {
       URL.revokeObjectURL(objectUrl)
@@ -322,7 +328,7 @@ export function AlgorithmTrialDialog({
           const msg =
             err instanceof Error
               ? err.message
-              : t('TRIAL_EXECUTION_FAILED', '算法试跑推理执行失败')
+              : t('trialFailed', '算法试跑推理执行失败')
           setErrorMessage(msg)
         },
       }
@@ -341,7 +347,7 @@ export function AlgorithmTrialDialog({
         document.body.appendChild(link)
         link.click()
         document.body.removeChild(link)
-        URL.revokeObjectURL(url)
+        setTimeout(() => URL.revokeObjectURL(url), 1000)
       },
       'image/jpeg',
       0.92

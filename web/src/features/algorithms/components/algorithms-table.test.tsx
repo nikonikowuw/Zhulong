@@ -207,6 +207,26 @@ describe('AlgorithmsTable', () => {
     expect(toggle.element().getAttribute('title')).toContain('熔断')
   })
 
+  it('disables the scheduling switch for a starting algorithm', async () => {
+    const algos = [makeAlgorithm({ id: 'algo_starting', status: 'STARTING' })]
+
+    const { getByRole } = await renderTable({ data: algos })
+
+    const toggle = getByRole('switch')
+    await expect.element(toggle).toBeDisabled()
+    expect(toggle.element().getAttribute('title')).toContain('切换中')
+  })
+
+  it('disables the scheduling switch for a rolling-back algorithm', async () => {
+    const algos = [makeAlgorithm({ id: 'algo_rb', status: 'ROLLING_BACK' })]
+
+    const { getByRole } = await renderTable({ data: algos })
+
+    const toggle = getByRole('switch')
+    await expect.element(toggle).toBeDisabled()
+    expect(toggle.element().getAttribute('title')).toContain('切换中')
+  })
+
   const TASK_TYPE_HUE: Array<[AlgorithmTaskType, string, CategoryHue]> = [
     ['detection', '目标检测', 'blue'],
     ['classification', '图像分类', 'violet'],

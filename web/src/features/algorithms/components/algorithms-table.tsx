@@ -248,7 +248,7 @@ export function AlgorithmsTable({
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.original.id}
-                  data-state={row.getIsSelected() && 'selected'}
+                  data-state={row.getIsSelected() ? 'selected' : undefined}
                   className='group cursor-pointer transition-colors hover:bg-muted/50'
                   onClick={(e) => {
                     const target = e.target as HTMLElement | null

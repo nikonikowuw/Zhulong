@@ -33,6 +33,13 @@ export function AlgorithmUploadDialog({
 
   const installMutation = useInstallAlgorithm({ suppressGlobalToast: true })
 
+  const resetSelectedFile = () => {
+    setSelectedFile(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
   const handleFileSelect = (file: File) => {
     setErrorMessage(null)
     const validExtensions = ['.tar.gz', '.tgz', '.zip']
@@ -77,13 +84,9 @@ export function AlgorithmUploadDialog({
       },
       {
         onSuccess: () => {
-          setSelectedFile(null)
+          resetSelectedFile()
           setUploadProgress(null)
-          toast.success(
-            t('installSuccess', {
-              defaultValue: '算法包安装成功并完成黑盒验证',
-            })
-          )
+          toast.success(t('installSuccess', '算法包安装成功并完成黑盒验证'))
           onOpenChange(false)
         },
         onError: (err) => {
@@ -100,7 +103,7 @@ export function AlgorithmUploadDialog({
 
   const handleClose = () => {
     if (installMutation.isPending) return
-    setSelectedFile(null)
+    resetSelectedFile()
     setUploadProgress(null)
     setErrorMessage(null)
     onOpenChange(false)
@@ -177,7 +180,7 @@ export function AlgorithmUploadDialog({
                   className='h-6 w-6 text-muted-foreground hover:text-foreground'
                   onClick={(e) => {
                     e.stopPropagation()
-                    setSelectedFile(null)
+                    resetSelectedFile()
                   }}
                 >
                   <X className='h-3.5 w-3.5' />

@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { AxiosError } from 'axios'
 import { Copy, LifeBuoy, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -65,7 +64,7 @@ export function AlgorithmResetDialog({
       onError: (error: unknown) => {
         // api-client 的响应拦截器已把服务端已本地化的 message 覆写到 error.message。
         setFailureMessage(
-          error instanceof AxiosError && error.message.trim().length > 0
+          error instanceof Error && error.message.trim().length > 0
             ? error.message
             : t('resetFailedFallback', '重置失败，请稍后重试。')
         )
