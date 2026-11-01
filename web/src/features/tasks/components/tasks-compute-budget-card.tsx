@@ -67,10 +67,19 @@ export function TasksComputeBudgetCard({
       {/* 中部：微型利用率进度条与点数 */}
       <div className='flex min-w-[200px] flex-1 flex-col gap-1 sm:max-w-md'>
         <div className='flex items-center justify-between text-xs'>
-          <span className='font-medium text-foreground'>
-            {budget.totalUsedPoints} / {budget.maxPoints}{' '}
-            {t('channelCard.pointsSuffix', '点')}
-          </span>
+          <div className='flex items-center gap-1.5'>
+            <span className='font-medium text-foreground'>
+              {budget.peakUsedPoints ?? budget.totalUsedPoints} /{' '}
+              {budget.maxPoints} {t('channelCard.pointsSuffix', '点')}
+            </span>
+            <span className='text-[11px] text-muted-foreground'>
+              ({t('budgetCard.currentPoints', '瞬时')}:{' '}
+              <strong className='font-normal text-foreground'>
+                {budget.currentUsedPoints ?? budget.totalUsedPoints}
+              </strong>
+              )
+            </span>
+          </div>
           <span className='font-mono text-muted-foreground'>
             {budget.percent}%
           </span>

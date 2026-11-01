@@ -1702,7 +1702,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/httputil.Response"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/gb28181.AddChannelAsCameraResponse"
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     },
                     "404": {
@@ -1728,7 +1740,7 @@ const docTemplate = `{
         },
         "/gb28181/runtime": {
             "get": {
-                "description": "Reports live counters for operators: device totals, active sessions, media port pool usage and exhausted-port hits.",
+                "description": "Reports live counters for operators: device totals, active sessions, media port pool usage, exhausted-port hits and the inbound/outbound signalling protection counters.",
                 "produces": [
                     "application/json"
                 ],
@@ -1748,11 +1760,17 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/gb28181.Snapshot"
+                                            "$ref": "#/definitions/gb28181.RuntimeSnapshotStatus"
                                         }
                                     }
                                 }
                             ]
+                        }
+                    },
+                    "500": {
+                        "description": "DATABASE_ERROR",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
                         }
                     }
                 }
@@ -4455,13 +4473,13 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "Conflict",
+                        "description": "STORAGE_CLEANUP_IN_PROGRESS",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "STORAGE_CLEANUP_FAILED, DATABASE_ERROR",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -4499,7 +4517,7 @@ const docTemplate = `{
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "DATABASE_ERROR",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -4507,7 +4525,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Validates and updates media root directory, retention policies, and high/low watermarks with live hot switching.",
+                "description": "Validates and updates media root, retention policies, and watermarks with live hot switching.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4548,20 +4566,14 @@ const docTemplate = `{
                             ]
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/httputil.Response"
-                        }
-                    },
                     "422": {
-                        "description": "Unprocessable Entity",
+                        "description": "INVALID_STORAGE_CONFIG or VALIDATION_FAILED",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "DATABASE_ERROR, STORAGE_TELEMETRY_UNAVAILABLE",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -4599,7 +4611,7 @@ const docTemplate = `{
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "DATABASE_ERROR, STORAGE_TELEMETRY_UNAVAILABLE",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -4609,7 +4621,7 @@ const docTemplate = `{
         },
         "/system/storage/test": {
             "post": {
-                "description": "Performs write probe, filesystem detection, and external volume identity verification on candidate path.",
+                "description": "Runs a write probe, filesystem detection, and volume identity check on a candidate path.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4650,20 +4662,14 @@ const docTemplate = `{
                             ]
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/httputil.Response"
-                        }
-                    },
                     "422": {
-                        "description": "Unprocessable Entity",
+                        "description": "VALIDATION_FAILED",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "STORAGE_TELEMETRY_UNAVAILABLE",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
                         }
@@ -6154,6 +6160,56 @@ const docTemplate = `{
                 }
             }
         },
+        "gb28181.AddChannelAsCameraResponse": {
+            "type": "object",
+            "properties": {
+                "createdAt": {
+                    "type": "string"
+                },
+                "degraded": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "health": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "lastCheckedAt": {
+                    "type": "string"
+                },
+                "lastSuccessAt": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "integer"
+                },
+                "session": {
+                    "type": "string"
+                },
+                "stale": {
+                    "type": "boolean"
+                },
+                "streams": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/camera.StreamResponse"
+                    }
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
         "gb28181.CatalogCounts": {
             "type": "object",
             "properties": {
@@ -6362,6 +6418,26 @@ const docTemplate = `{
                 }
             }
         },
+        "gb28181.IngressCounters": {
+            "type": "object",
+            "properties": {
+                "activeConns": {
+                    "type": "integer"
+                },
+                "inboundLimited": {
+                    "type": "integer"
+                },
+                "outboundLimited": {
+                    "type": "integer"
+                },
+                "oversizedMessages": {
+                    "type": "integer"
+                },
+                "rejectedConns": {
+                    "type": "integer"
+                }
+            }
+        },
         "gb28181.PortPoolCounts": {
             "type": "object",
             "properties": {
@@ -6399,15 +6475,7 @@ const docTemplate = `{
                 }
             }
         },
-        "gb28181.SessionCounts": {
-            "type": "object",
-            "properties": {
-                "active": {
-                    "type": "integer"
-                }
-            }
-        },
-        "gb28181.Snapshot": {
+        "gb28181.RuntimeSnapshotStatus": {
             "type": "object",
             "properties": {
                 "catalog": {
@@ -6418,6 +6486,9 @@ const docTemplate = `{
                 },
                 "generatedAt": {
                     "type": "string"
+                },
+                "ingress": {
+                    "$ref": "#/definitions/gb28181.IngressCounters"
                 },
                 "portPool": {
                     "$ref": "#/definitions/gb28181.PortPoolCounts"
@@ -6430,6 +6501,14 @@ const docTemplate = `{
                 },
                 "state": {
                     "type": "string"
+                }
+            }
+        },
+        "gb28181.SessionCounts": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "integer"
                 }
             }
         },
@@ -7645,11 +7724,20 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "targetStatus": {
-                    "type": "string"
+                    "description": "\"completed\" or \"skipped_below_high_watermark\"",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/storage.PruneStatus"
+                        }
+                    ]
                 },
                 "triggerReason": {
-                    "description": "\"watermark\", \"scheduled\", \"manual\"",
-                    "type": "string"
+                    "description": "\"manual\" or \"watermark\"",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/storage.PruneTrigger"
+                        }
+                    ]
                 }
             }
         },
@@ -7702,27 +7790,49 @@ const docTemplate = `{
                 }
             }
         },
+        "storage.PruneStatus": {
+            "type": "string",
+            "enum": [
+                "completed",
+                "skipped_below_high_watermark"
+            ],
+            "x-enum-varnames": [
+                "PruneStatusCompleted",
+                "PruneStatusSkippedLow"
+            ]
+        },
+        "storage.PruneTrigger": {
+            "type": "string",
+            "enum": [
+                "manual",
+                "watermark"
+            ],
+            "x-enum-varnames": [
+                "PruneTriggerManual",
+                "PruneTriggerWatermark"
+            ]
+        },
         "storage.StorageConfig": {
             "type": "object",
             "properties": {
                 "emergencyStopMinMb": {
-                    "description": "Emergency minimum free space in megabytes (100..102400)",
+                    "description": "Write-stop free-space floor in MB",
                     "type": "integer"
                 },
                 "emergencyStopPercent": {
-                    "description": "Emergency write-stop percentage (90..99)",
+                    "description": "Write-stop usage (90..99)",
                     "type": "integer"
                 },
                 "exportsRetentionHours": {
-                    "description": "Exported clips retention in hours (1..168)",
+                    "description": "Export retention in hours (1..168)",
                     "type": "integer"
                 },
                 "highWatermarkPercent": {
-                    "description": "High watermark percentage triggering cleaner (50..95)",
+                    "description": "Cleaner wake-up usage (50..95)",
                     "type": "integer"
                 },
                 "lowWatermarkPercent": {
-                    "description": "Low watermark percentage where cleaner sleeps (40..85)",
+                    "description": "Cleaner sleep usage (40..85)",
                     "type": "integer"
                 },
                 "mediaDirectory": {
@@ -7730,11 +7840,11 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "recordingsRetentionDays": {
-                    "description": "Video recordings retention in days (1..365)",
+                    "description": "Recording retention in days (1..365)",
                     "type": "integer"
                 },
                 "snapshotsRetentionDays": {
-                    "description": "Snapshot captures retention in days (1..730)",
+                    "description": "Snapshot retention in days (1..730)",
                     "type": "integer"
                 }
             }
@@ -7747,20 +7857,6 @@ const docTemplate = `{
                 "cleaning",
                 "emergency_stopped",
                 "error"
-            ],
-            "x-enum-comments": {
-                "StatusCleaning": "Background cleaner is actively pruning expired/stale files",
-                "StatusEmergencyStopped": "Storage touched critical emergency line; writes suspended",
-                "StatusError": "Path missing, read-only, or external disk unmounted/fallen through",
-                "StatusHealthy": "Storage has plenty of space and read/write is normal",
-                "StatusWarning": "Storage usage touched high watermark threshold"
-            },
-            "x-enum-descriptions": [
-                "Storage has plenty of space and read/write is normal",
-                "Storage usage touched high watermark threshold",
-                "Background cleaner is actively pruning expired/stale files",
-                "Storage touched critical emergency line; writes suspended",
-                "Path missing, read-only, or external disk unmounted/fallen through"
             ],
             "x-enum-varnames": [
                 "StatusHealthy",
@@ -8097,6 +8193,9 @@ const docTemplate = `{
                 "sampleFps": {
                     "type": "integer"
                 },
+                "scheduleJson": {
+                    "type": "string"
+                },
                 "taskId": {
                     "type": "string"
                 },
@@ -8137,6 +8236,12 @@ const docTemplate = `{
                 },
                 "sample_fps": {
                     "type": "integer"
+                },
+                "scheduleJson": {
+                    "type": "string"
+                },
+                "schedule_json": {
+                    "type": "string"
                 }
             }
         },

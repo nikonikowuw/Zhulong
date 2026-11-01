@@ -18,5 +18,6 @@ export function taskAlgorithmsPayload(
       override && algo.id === override.id ? override.enabled : algo.enabled,
     configJson: algo.configJson,
     regionConfigJson: algo.regionConfigJson,
+    scheduleJson: algo.scheduleJson || '{}',
   }))
 }

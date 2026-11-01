@@ -471,6 +471,7 @@ func provideTaskStore(dbProvider database.DBProvider) *task.Store {
 }
 
 func provideTaskComponents(
+	lifecycle fx.Lifecycle,
 	store *task.Store,
 	algoService *algorithm.Service,
 	streamHub *camera.StreamHub,
@@ -481,10 +482,24 @@ func provideTaskComponents(
 
 	// Both the algorithm supervisor and the region config cache must react to task changes.
 	// The cache owns its own error handling, so no adapter is needed here.
-	service := task.NewService(store, algoService, []task.TaskChangeListener{
+	listeners := []task.TaskChangeListener{
 		algoService,
 		configCache,
-	}, logger)
+	}
+	service := task.NewService(store, algoService, listeners, logger)
+	scheduleWorker := task.NewScheduleWorker(store, listeners, logger, 30*time.Second)
+
+	lifecycle.Append(fx.Hook{
+		OnStart: func(ctx context.Context) error {
+			scheduleWorker.Start()
+			return nil
+		},
+		OnStop: func(ctx context.Context) error {
+			scheduleWorker.Stop()
+			return nil
+		},
+	})
+
 	handler := task.NewHandler(service)
 	return taskOut{
 		Service:         service,

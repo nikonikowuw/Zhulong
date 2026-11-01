@@ -37,6 +37,8 @@ export interface ChannelTaskBudgetConfig {
   channelPoints: number
   projectedPoints: number
   isOverBudget: boolean
+  channelCurrentPoints?: number
+  projectedCurrentPoints?: number
 }
 
 export interface ChannelTaskSwitchConfig {
@@ -159,6 +161,8 @@ export function ChannelTaskDialogHeader({
         <ChannelTaskBudgetMeter
           channelPoints={channelPoints}
           projectedPoints={projectedPoints}
+          channelCurrentPoints={budget.channelCurrentPoints}
+          projectedCurrentPoints={budget.projectedCurrentPoints}
           maxPoints={MAX_COMPUTE_POINTS}
           isOverBudget={isOverBudget}
         />

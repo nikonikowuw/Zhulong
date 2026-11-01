@@ -7,6 +7,8 @@
     "title": "算力配額與調度看板",
     "desc": "全平台共享 1,000 點 NPU 異構加速算力池，基於已啟用任務的採樣率與演算法成本即時累加。",
     "usedPoints": "已用算力",
+    "peakPoints": "峰值算力",
+    "currentPoints": "瞬時算力",
     "remainingPoints": "可用餘量",
     "utilizationRate": "利用率",
     "activeTasks": "活躍分析",
@@ -26,6 +28,8 @@
     "createdAt": "建立時間",
     "actions": "操作",
     "statusRunning": "運行中",
+    "statusRunningScheduled": "運行中 (計劃內)",
+    "statusScheduleDormant": "休眠中 (非計劃時段)",
     "statusStandby": "待命 (未激活)",
     "statusError": "異常",
     "statusPaused": "已暫停",
@@ -105,6 +109,8 @@
     "configJsonLabel": "演算法運行參數",
     "taskPointsPreview": "單項預估消耗",
     "channelPointsPreview": "本通道算力",
+    "channelCurrentPoints": "瞬時",
+    "projectedCurrentPoints": "瞬時",
     "globalPointsPreview": "全平台預算佔用",
     "budgetWarning": "⚠️ 當前配置將導致全平台算力超出 1,000 點總預算上限，請降低採樣幀率或取消部分演算法！",
     "invalidJsonError": "演算法「{{name}}」的高級參數不是合法的 JSON 格式，請修正後再儲存",
@@ -227,5 +233,25 @@
   "views": {
     "channel": "通道視圖",
     "table": "明細視圖"
+  },
+  "schedule": {
+    "title": "分時布防計劃",
+    "alwaysActive": "24×7 全天運行",
+    "enableSchedule": "啟用分時計劃",
+    "enableScheduleDesc": "按指定時間段啟用分析，非排程時段演算法自動休眠並釋放算力",
+    "presetAll": "全天",
+    "presetWorkdays": "工作日 (08:00-18:00)",
+    "presetNights": "夜間布防 (20:00-06:00)",
+    "presetClear": "清空",
+    "coverage": "每週運行 {{hours}} 小時 ({{percent}}% 覆蓋)",
+    "days": {
+      "monday": "週一",
+      "tuesday": "週二",
+      "wednesday": "週三",
+      "thursday": "週四",
+      "friday": "週五",
+      "saturday": "週六",
+      "sunday": "週日"
+    }
   }
 }

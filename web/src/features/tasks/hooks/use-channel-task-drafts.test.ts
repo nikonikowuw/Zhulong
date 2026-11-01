@@ -48,6 +48,7 @@ const tasks: Task[] = [
         sampleFps: 10,
         configJson: '{}',
         regionConfigJson: STORED_REGION,
+        scheduleJson: '{}',
         createdAt: '',
         updatedAt: '',
       },

@@ -13,6 +13,7 @@ export interface TaskAlgorithmItemDto {
   enabled?: boolean
   configJson?: string
   regionConfigJson?: string
+  scheduleJson?: string
 }
 
 export interface SaveChannelTaskDto {

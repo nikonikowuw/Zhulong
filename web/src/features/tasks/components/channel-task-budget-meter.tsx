@@ -7,12 +7,16 @@ import {
 import { cn } from '@/lib/utils'
 
 export interface ChannelTaskBudgetMeterProps {
-  /** 本通道当前占用点数。 */
+  /** 本通道峰值占用点数。 */
   channelPoints: number
-  /** 全平台预计占用（本通道 + 其它通道）。 */
+  /** 全平台预计峰值占用（本通道 + 其它通道）。 */
   projectedPoints: number
   maxPoints: number
   isOverBudget: boolean
+  /** 本通道当前瞬时占用点数。 */
+  channelCurrentPoints?: number
+  /** 全平台当前瞬时占用点数。 */
+  projectedCurrentPoints?: number
 }
 
 /** 顶部控制台的算力占用条：左侧本通道，右侧全平台预算。 */
@@ -21,6 +25,8 @@ export function ChannelTaskBudgetMeter({
   projectedPoints,
   maxPoints,
   isOverBudget,
+  channelCurrentPoints,
+  projectedCurrentPoints,
 }: ChannelTaskBudgetMeterProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
   const percent = Math.min(100, Math.round((projectedPoints / maxPoints) * 100))
@@ -36,7 +42,14 @@ export function ChannelTaskBudgetMeter({
       <div className='flex items-center justify-between font-mono text-xs'>
         <span className='text-muted-foreground'>
           {t('dialog.channelPointsPreview', '本通道算力')}:{' '}
-          <strong className='text-foreground'>{channelPoints}</strong>{' '}
+          <strong className='text-foreground'>{channelPoints}</strong>
+          {channelCurrentPoints !== undefined && (
+            <span className='font-normal text-muted-foreground'>
+              {' '}
+              ({t('dialog.channelCurrentPoints', '瞬时')}:{channelCurrentPoints}
+              )
+            </span>
+          )}{' '}
           {t('channelCard.pointsSuffix', '点')}
         </span>
         <span
@@ -49,7 +62,14 @@ export function ChannelTaskBudgetMeter({
                 : 'text-muted-foreground'
           )}
         >
-          {projectedPoints} / {maxPoints} {t('channelCard.pointsSuffix', '点')}{' '}
+          {projectedPoints} / {maxPoints} {t('channelCard.pointsSuffix', '点')}
+          {projectedCurrentPoints !== undefined && (
+            <span className='font-normal text-muted-foreground'>
+              {' '}
+              ({t('dialog.projectedCurrentPoints', '瞬时')}:
+              {projectedCurrentPoints})
+            </span>
+          )}{' '}
           <span className='text-[11px] font-normal'>({percent}%)</span>
         </span>
       </div>

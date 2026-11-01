@@ -138,6 +138,7 @@ function buildTask(
     sampleFps: sampleFps ?? 10,
     configJson: configJson ?? '{"threshold":0.6,"save_crop":false}',
     regionConfigJson: regionConfigJson ?? '{}',
+    scheduleJson: '{}',
     createdAt: '',
     updatedAt: '',
   }
@@ -364,6 +365,7 @@ describe('ChannelTaskDialog region editing', () => {
               sampleFps: 5,
               configJson: '{}',
               regionConfigJson: '{}',
+              scheduleJson: '{}',
               createdAt: '',
               updatedAt: '',
             },
@@ -375,6 +377,7 @@ describe('ChannelTaskDialog region editing', () => {
               sampleFps: 8,
               configJson: '{}',
               regionConfigJson: '{}',
+              scheduleJson: '{}',
               createdAt: '',
               updatedAt: '',
             },

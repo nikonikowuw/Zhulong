@@ -11,6 +11,11 @@ import {
   type CameraHealth,
   type CameraSession,
 } from '@/features/cameras/contract'
+import {
+  isScheduleActiveAt,
+  isScheduleAlwaysActive,
+  parseSchedule,
+} from '../data/schedule-config'
 
 export interface TaskStatusBadgeProps {
   enabled: boolean
@@ -19,6 +24,7 @@ export interface TaskStatusBadgeProps {
   cameraHealth?: CameraHealth
   cameraSession?: CameraSession
   isCameraEnabled?: boolean
+  scheduleJson?: string
   className?: string
 }
 
@@ -29,6 +35,7 @@ export function TaskStatusBadge({
   cameraHealth,
   cameraSession,
   isCameraEnabled,
+  scheduleJson,
   className = '',
 }: TaskStatusBadgeProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
@@ -42,7 +49,14 @@ export function TaskStatusBadge({
         : t('table.statusPaused', '已暂停')
 
   if (enabled && isChannelEnabled !== false && isCameraEnabled !== false) {
-    if (algorithmStatus === 'DISABLED') {
+    const sched = parseSchedule(scheduleJson)
+    const hasCustomSchedule = !isScheduleAlwaysActive(sched)
+    const inSchedule = isScheduleActiveAt(sched)
+
+    if (hasCustomSchedule && !inSchedule) {
+      level = 'inactive'
+      label = t('table.statusScheduleDormant', '休眠中 (非计划时段)')
+    } else if (algorithmStatus === 'DISABLED') {
       level = 'warning'
       label = t('table.statusStandby', '待命 (未激活)')
     } else if (
@@ -63,6 +77,9 @@ export function TaskStatusBadge({
     } else if (cameraHealth !== undefined && cameraHealth !== 'online') {
       level = 'destructive'
       label = t('table.statusStreamDisconnected', '视频流断开')
+    } else if (hasCustomSchedule) {
+      level = 'active'
+      label = t('table.statusRunningScheduled', '运行中 (计划内)')
     } else {
       level = 'active'
       label = t('table.statusRunning', '运行中')

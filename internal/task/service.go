@@ -7,6 +7,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/region"
+	"github.com/nikonikowuw/Zhulong/internal/schedule"
 	"go.uber.org/zap"
 )
 
@@ -149,12 +150,23 @@ func (s *Service) normalizeAndValidateAlgorithms(ctx context.Context, algorithms
 		if sub.RegionConfigJSON == "" {
 			sub.RegionConfigJSON = defaultConfigJSON
 		}
+		if sub.ScheduleJSON == "" {
+			sub.ScheduleJSON = defaultConfigJSON
+		}
 
 		if _, err := region.ParseConfig(sub.RegionConfigJSON); err != nil {
 			return apperr.Invalid(
 				"INVALID_REGION_CONFIG",
 				fmt.Sprintf("invalid region config for %q: %v", sub.AlgorithmID, err),
 				err,
+			)
+		}
+
+		if _, err := schedule.Parse(sub.ScheduleJSON); err != nil {
+			return apperr.Invalid(
+				"INVALID_SCHEDULE_CONFIG",
+				fmt.Sprintf("invalid schedule config for %q: %v", sub.AlgorithmID, err),
+				ErrInvalidScheduleConfig,
 			)
 		}
 

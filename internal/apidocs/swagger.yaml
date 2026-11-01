@@ -571,6 +571,39 @@ definitions:
     required:
     - revision
     type: object
+  gb28181.AddChannelAsCameraResponse:
+    properties:
+      createdAt:
+        type: string
+      degraded:
+        type: boolean
+      enabled:
+        type: boolean
+      health:
+        type: string
+      id:
+        type: string
+      lastCheckedAt:
+        type: string
+      lastSuccessAt:
+        type: string
+      name:
+        type: string
+      reason:
+        type: string
+      revision:
+        type: integer
+      session:
+        type: string
+      stale:
+        type: boolean
+      streams:
+        items:
+          $ref: '#/definitions/camera.StreamResponse'
+        type: array
+      updatedAt:
+        type: string
+    type: object
   gb28181.CatalogCounts:
     properties:
       attempts:
@@ -707,6 +740,19 @@ definitions:
       updatedAt:
         type: string
     type: object
+  gb28181.IngressCounters:
+    properties:
+      activeConns:
+        type: integer
+      inboundLimited:
+        type: integer
+      outboundLimited:
+        type: integer
+      oversizedMessages:
+        type: integer
+      rejectedConns:
+        type: integer
+    type: object
   gb28181.PortPoolCounts:
     properties:
       exhaustedHits:
@@ -731,12 +777,7 @@ definitions:
       state:
         type: string
     type: object
-  gb28181.SessionCounts:
-    properties:
-      active:
-        type: integer
-    type: object
-  gb28181.Snapshot:
+  gb28181.RuntimeSnapshotStatus:
     properties:
       catalog:
         $ref: '#/definitions/gb28181.CatalogCounts'
@@ -744,6 +785,8 @@ definitions:
         $ref: '#/definitions/gb28181.DeviceCounters'
       generatedAt:
         type: string
+      ingress:
+        $ref: '#/definitions/gb28181.IngressCounters'
       portPool:
         $ref: '#/definitions/gb28181.PortPoolCounts'
       restartRequired:
@@ -752,6 +795,11 @@ definitions:
         $ref: '#/definitions/gb28181.SessionCounts'
       state:
         type: string
+    type: object
+  gb28181.SessionCounts:
+    properties:
+      active:
+        type: integer
     type: object
   gb28181.SyncCatalogResponse:
     properties:
@@ -1602,10 +1650,13 @@ definitions:
       freedBytes:
         type: integer
       targetStatus:
-        type: string
+        allOf:
+        - $ref: '#/definitions/storage.PruneStatus'
+        description: '"completed" or "skipped_below_high_watermark"'
       triggerReason:
-        description: '"watermark", "scheduled", "manual"'
-        type: string
+        allOf:
+        - $ref: '#/definitions/storage.PruneTrigger'
+        description: '"manual" or "watermark"'
     type: object
   storage.PathTestRequest:
     properties:
@@ -1639,31 +1690,47 @@ definitions:
       writable:
         type: boolean
     type: object
+  storage.PruneStatus:
+    enum:
+    - completed
+    - skipped_below_high_watermark
+    type: string
+    x-enum-varnames:
+    - PruneStatusCompleted
+    - PruneStatusSkippedLow
+  storage.PruneTrigger:
+    enum:
+    - manual
+    - watermark
+    type: string
+    x-enum-varnames:
+    - PruneTriggerManual
+    - PruneTriggerWatermark
   storage.StorageConfig:
     properties:
       emergencyStopMinMb:
-        description: Emergency minimum free space in megabytes (100..102400)
+        description: Write-stop free-space floor in MB
         type: integer
       emergencyStopPercent:
-        description: Emergency write-stop percentage (90..99)
+        description: Write-stop usage (90..99)
         type: integer
       exportsRetentionHours:
-        description: Exported clips retention in hours (1..168)
+        description: Export retention in hours (1..168)
         type: integer
       highWatermarkPercent:
-        description: High watermark percentage triggering cleaner (50..95)
+        description: Cleaner wake-up usage (50..95)
         type: integer
       lowWatermarkPercent:
-        description: Low watermark percentage where cleaner sleeps (40..85)
+        description: Cleaner sleep usage (40..85)
         type: integer
       mediaDirectory:
         description: Root media path, e.g. "/mnt/storage/media"
         type: string
       recordingsRetentionDays:
-        description: Video recordings retention in days (1..365)
+        description: Recording retention in days (1..365)
         type: integer
       snapshotsRetentionDays:
-        description: Snapshot captures retention in days (1..730)
+        description: Snapshot retention in days (1..730)
         type: integer
     type: object
   storage.StorageHealthStatus:
@@ -1674,18 +1741,6 @@ definitions:
     - emergency_stopped
     - error
     type: string
-    x-enum-comments:
-      StatusCleaning: Background cleaner is actively pruning expired/stale files
-      StatusEmergencyStopped: Storage touched critical emergency line; writes suspended
-      StatusError: Path missing, read-only, or external disk unmounted/fallen through
-      StatusHealthy: Storage has plenty of space and read/write is normal
-      StatusWarning: Storage usage touched high watermark threshold
-    x-enum-descriptions:
-    - Storage has plenty of space and read/write is normal
-    - Storage usage touched high watermark threshold
-    - Background cleaner is actively pruning expired/stale files
-    - Storage touched critical emergency line; writes suspended
-    - Path missing, read-only, or external disk unmounted/fallen through
     x-enum-varnames:
     - StatusHealthy
     - StatusWarning
@@ -1921,6 +1976,8 @@ definitions:
         type: string
       sampleFps:
         type: integer
+      scheduleJson:
+        type: string
       taskId:
         type: string
       updatedAt:
@@ -1948,6 +2005,10 @@ definitions:
         type: integer
       sampleFps:
         type: integer
+      schedule_json:
+        type: string
+      scheduleJson:
+        type: string
     type: object
   task.TaskResponse:
     properties:
@@ -3052,7 +3113,12 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/httputil.Response'
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/gb28181.AddChannelAsCameraResponse'
+              type: object
         "404":
           description: GB28181_CHANNEL_NOT_FOUND
           schema:
@@ -3072,7 +3138,8 @@ paths:
   /gb28181/runtime:
     get:
       description: 'Reports live counters for operators: device totals, active sessions,
-        media port pool usage and exhausted-port hits.'
+        media port pool usage, exhausted-port hits and the inbound/outbound signalling
+        protection counters.'
       produces:
       - application/json
       responses:
@@ -3083,8 +3150,12 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/gb28181.Snapshot'
+                  $ref: '#/definitions/gb28181.RuntimeSnapshotStatus'
               type: object
+        "500":
+          description: DATABASE_ERROR
+          schema:
+            $ref: '#/definitions/httputil.Response'
       summary: Get GB28181 runtime snapshot
       tags:
       - gb28181
@@ -4755,11 +4826,11 @@ paths:
                   $ref: '#/definitions/storage.CleanupSummary'
               type: object
         "409":
-          description: Conflict
+          description: STORAGE_CLEANUP_IN_PROGRESS
           schema:
             $ref: '#/definitions/httputil.Response'
         "500":
-          description: Internal Server Error
+          description: STORAGE_CLEANUP_FAILED, DATABASE_ERROR
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Manually trigger storage prune cycle
@@ -4782,7 +4853,7 @@ paths:
                   $ref: '#/definitions/storage.StorageConfig'
               type: object
         "500":
-          description: Internal Server Error
+          description: DATABASE_ERROR
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Get media storage lifecycle configuration
@@ -4791,8 +4862,8 @@ paths:
     put:
       consumes:
       - application/json
-      description: Validates and updates media root directory, retention policies,
-        and high/low watermarks with live hot switching.
+      description: Validates and updates media root, retention policies, and watermarks
+        with live hot switching.
       parameters:
       - description: Storage configuration parameters
         in: body
@@ -4812,16 +4883,12 @@ paths:
                 data:
                   $ref: '#/definitions/storage.StorageStatus'
               type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/httputil.Response'
         "422":
-          description: Unprocessable Entity
+          description: INVALID_STORAGE_CONFIG or VALIDATION_FAILED
           schema:
             $ref: '#/definitions/httputil.Response'
         "500":
-          description: Internal Server Error
+          description: DATABASE_ERROR, STORAGE_TELEMETRY_UNAVAILABLE
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Update media storage lifecycle configuration
@@ -4844,7 +4911,7 @@ paths:
                   $ref: '#/definitions/storage.StorageStatus'
               type: object
         "500":
-          description: Internal Server Error
+          description: DATABASE_ERROR, STORAGE_TELEMETRY_UNAVAILABLE
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Get media storage status and volume telemetry
@@ -4854,8 +4921,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: Performs write probe, filesystem detection, and external volume
-        identity verification on candidate path.
+      description: Runs a write probe, filesystem detection, and volume identity check
+        on a candidate path.
       parameters:
       - description: Target directory path to test
         in: body
@@ -4875,16 +4942,12 @@ paths:
                 data:
                   $ref: '#/definitions/storage.PathTestResponse'
               type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/httputil.Response'
         "422":
-          description: Unprocessable Entity
+          description: VALIDATION_FAILED
           schema:
             $ref: '#/definitions/httputil.Response'
         "500":
-          description: Internal Server Error
+          description: STORAGE_TELEMETRY_UNAVAILABLE
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Test candidate storage directory

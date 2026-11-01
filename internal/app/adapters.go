@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
@@ -20,6 +21,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
 	"github.com/nikonikowuw/Zhulong/internal/person"
 	"github.com/nikonikowuw/Zhulong/internal/record"
+	"github.com/nikonikowuw/Zhulong/internal/schedule"
 	"github.com/nikonikowuw/Zhulong/internal/storage"
 	"github.com/nikonikowuw/Zhulong/internal/task"
 )
@@ -57,6 +59,10 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 		}
 		for _, algo := range tsk.Algorithms {
 			if algo.AlgorithmID == algorithmID && algo.Enabled {
+				sched, err := schedule.Parse(algo.ScheduleJSON)
+				if err == nil && sched != nil && !sched.IsActiveAt(time.Now()) {
+					continue
+				}
 				if _, err := task.ValidateSampleFPS(algo.SampleFPS); err != nil {
 					return nil, fmt.Errorf("task %s algo %s: %w", tsk.ID, algo.AlgorithmID, err)
 				}

@@ -252,6 +252,7 @@ export function TaskSubTable({ group }: TaskSubTableProps): React.JSX.Element {
                       cameraHealth={group.camera.health}
                       cameraSession={group.camera.session}
                       isCameraEnabled={group.camera.enabled}
+                      scheduleJson={item.algorithmItem.scheduleJson}
                     />
                   </TableCell>
 

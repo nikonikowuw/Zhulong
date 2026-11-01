@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/task-guidelines.md", "reason": "Task domain guidelines and compute budget rules"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Database migration and model conventions"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "Frontend component and form conventions"}

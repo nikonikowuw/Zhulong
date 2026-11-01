@@ -13,6 +13,7 @@ export const taskAlgorithmSchema = z.object({
   sampleFps: z.number().int().min(1).max(1000).default(5),
   configJson: z.string().default('{}'),
   regionConfigJson: z.string().default('{}'),
+  scheduleJson: z.string().default('{}'),
   createdAt: z.string(),
   updatedAt: z.string(),
 })
@@ -81,6 +82,7 @@ export interface AlgorithmConfigDraft {
   enabled: boolean
   configJson: string
   regionConfigJson?: string
+  scheduleJson?: string
 }
 
 /**

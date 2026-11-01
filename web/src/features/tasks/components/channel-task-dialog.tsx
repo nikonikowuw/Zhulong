@@ -13,6 +13,11 @@ import {
   isZeroConfig,
   parseSchema,
 } from '../data/algo-config-schema'
+import {
+  calculatePeakCompute,
+  isScheduleActiveAt,
+  type SchedulableItem,
+} from '../data/schedule-config'
 import { type Task } from '../data/schema'
 import { useChannelTaskDrafts } from '../hooks/use-channel-task-drafts'
 import { useSyncChannelAlgorithms } from '../hooks/use-sync-channel-algorithms'
@@ -69,6 +74,7 @@ function ChannelTaskDialogContent({
     selectActiveAlgo,
     updateFps,
     updateConfigJson,
+    updateScheduleJson,
     toPayloadDrafts,
   } = useChannelTaskDrafts({
     initialCameraId: defaultCamId,
@@ -100,24 +106,48 @@ function ChannelTaskDialogContent({
   const canEditRegion = showEditor && surfaceState === 'live'
 
   const points = useMemo(() => {
-    let otherCameras = 0
+    const thisCameraItems: SchedulableItem[] = []
+    let thisCameraCurrent = 0
+    for (const [algoId, draft] of Object.entries(drafts)) {
+      if (!draft.selected || !draft.enabled) continue
+      const cost = algoMap.get(algoId)?.computeCost ?? DEFAULT_COMPUTE_COST
+      const pts = cost * draft.sampleFps
+      thisCameraItems.push({
+        points: pts,
+        schedule: draft.scheduleJson,
+      })
+      if (isScheduleActiveAt(draft.scheduleJson)) {
+        thisCameraCurrent += pts
+      }
+    }
+
+    const allItems: SchedulableItem[] = [...thisCameraItems]
+    let projectedCurrent = thisCameraCurrent
     for (const task of allTasks) {
       if (task.cameraId === cameraId || !task.enabled) continue
       for (const sub of task.algorithms ?? []) {
         if (!sub.enabled) continue
-        otherCameras +=
-          (algoMap.get(sub.algorithmId)?.computeCost ?? DEFAULT_COMPUTE_COST) *
-          sub.sampleFps
+        const cost =
+          algoMap.get(sub.algorithmId)?.computeCost ?? DEFAULT_COMPUTE_COST
+        const pts = cost * sub.sampleFps
+        allItems.push({
+          points: pts,
+          schedule: sub.scheduleJson,
+        })
+        if (isScheduleActiveAt(sub.scheduleJson)) {
+          projectedCurrent += pts
+        }
       }
     }
-    let thisCamera = 0
-    for (const [algoId, draft] of Object.entries(drafts)) {
-      if (!draft.selected || !draft.enabled) continue
-      thisCamera +=
-        (algoMap.get(algoId)?.computeCost ?? DEFAULT_COMPUTE_COST) *
-        draft.sampleFps
+
+    const thisCamera = calculatePeakCompute(thisCameraItems)
+    const projected = calculatePeakCompute(allItems)
+    return {
+      thisCamera,
+      projected,
+      thisCameraCurrent,
+      projectedCurrent,
     }
-    return { thisCamera, projected: otherCameras + thisCamera }
   }, [allTasks, cameraId, drafts, algoMap])
 
   const isOverBudget = points.projected > MAX_COMPUTE_POINTS
@@ -294,6 +324,8 @@ function ChannelTaskDialogContent({
         budget={{
           channelPoints: points.thisCamera,
           projectedPoints: points.projected,
+          channelCurrentPoints: points.thisCameraCurrent,
+          projectedCurrentPoints: points.projectedCurrent,
           isOverBudget,
         }}
         switches={{
@@ -327,6 +359,7 @@ function ChannelTaskDialogContent({
           onSelectAlgo={selectActiveAlgo}
           onUpdateFps={updateFps}
           onUpdateConfigJson={updateConfigJson}
+          onUpdateScheduleJson={updateScheduleJson}
           regionEditor={regionEditor}
           canEditRegion={canEditRegion}
         />

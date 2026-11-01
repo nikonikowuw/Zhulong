@@ -232,6 +232,7 @@ export function ChannelTasksView({
                         cameraHealth={group.camera.health}
                         cameraSession={group.camera.session}
                         isCameraEnabled={group.camera.enabled}
+                        scheduleJson={item.algorithmItem.scheduleJson}
                       />
                       <span className='truncate font-medium text-foreground'>
                         {item.algorithm?.name || item.algorithmItem.algorithmId}

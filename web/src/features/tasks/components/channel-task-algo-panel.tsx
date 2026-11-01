@@ -17,6 +17,7 @@ import { type RegionEditorController } from '../hooks/use-region-editor'
 import { AlgoConfigDynamicForm } from './algo-config-dynamic-form'
 import { FpsStepper } from './fps-stepper'
 import { RegionRectList } from './region-rect-list'
+import { ScheduleGrid } from './schedule-grid'
 
 export interface ChannelTaskAlgoPanelProps {
   algorithms: Algorithm[]
@@ -26,6 +27,7 @@ export interface ChannelTaskAlgoPanelProps {
   onSelectAlgo: (algoId: string) => void
   onUpdateFps: (algoId: string, sampleFps: number) => void
   onUpdateConfigJson: (algoId: string, configJson: string) => void
+  onUpdateScheduleJson?: (algoId: string, scheduleJson: string) => void
   regionEditor: RegionEditorController
   canEditRegion: boolean
 }
@@ -39,6 +41,7 @@ export function ChannelTaskAlgoPanel({
   onSelectAlgo,
   onUpdateFps,
   onUpdateConfigJson,
+  onUpdateScheduleJson,
   regionEditor,
   canEditRegion,
 }: ChannelTaskAlgoPanelProps): React.JSX.Element {
@@ -246,6 +249,14 @@ export function ChannelTaskAlgoPanel({
               onDelete={regionEditor.deleteRect}
             />
           </div>
+
+          {/* 分时布防时间计划 */}
+          <ScheduleGrid
+            value={activeDraft.scheduleJson}
+            onChange={(nextScheduleJson) =>
+              onUpdateScheduleJson?.(activeAlgo.id, nextScheduleJson)
+            }
+          />
         </div>
       ) : (
         <div className='flex flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-card/60 p-8 text-center text-muted-foreground'>

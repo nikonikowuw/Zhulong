@@ -7,6 +7,8 @@
     "title": "算力配额与调度看板",
     "desc": "全平台共享 1,000 点 NPU 异构加速算力池，基于已启用任务的采样率与算法成本实时累加。",
     "usedPoints": "已用算力",
+    "peakPoints": "峰值算力",
+    "currentPoints": "瞬时算力",
     "remainingPoints": "可用余量",
     "utilizationRate": "利用率",
     "activeTasks": "活跃分析",
@@ -26,6 +28,8 @@
     "createdAt": "创建时间",
     "actions": "操作",
     "statusRunning": "运行中",
+    "statusRunningScheduled": "运行中 (计划内)",
+    "statusScheduleDormant": "休眠中 (非计划时段)",
     "statusStandby": "待命 (未激活)",
     "statusError": "异常",
     "statusPaused": "已暂停",
@@ -105,6 +109,8 @@
     "configJsonLabel": "算法运行参数",
     "taskPointsPreview": "单项预估消耗",
     "channelPointsPreview": "本通道算力",
+    "channelCurrentPoints": "瞬时",
+    "projectedCurrentPoints": "瞬时",
     "globalPointsPreview": "全平台预算占用",
     "budgetWarning": "⚠️ 当前配置将导致全平台算力超出 1,000 点总预算上限，请降低采样帧率或取消部分算法！",
     "invalidJsonError": "算法「{{name}}」的高级参数不是合法的 JSON 格式，请修正后再保存",
@@ -227,5 +233,25 @@
   "views": {
     "channel": "通道视图",
     "table": "明细视图"
+  },
+  "schedule": {
+    "title": "分时布防计划",
+    "alwaysActive": "24×7 全天运行",
+    "enableSchedule": "启用分时计划",
+    "enableScheduleDesc": "按指定时间段启用分析，非排程时段算法自动休眠并释放算力",
+    "presetAll": "全天",
+    "presetWorkdays": "工作日 (08:00-18:00)",
+    "presetNights": "夜间布防 (20:00-06:00)",
+    "presetClear": "清空",
+    "coverage": "每周运行 {{hours}} 小时 ({{percent}}% 覆盖)",
+    "days": {
+      "monday": "周一",
+      "tuesday": "周二",
+      "wednesday": "周三",
+      "thursday": "周四",
+      "friday": "周五",
+      "saturday": "周六",
+      "sunday": "周日"
+    }
   }
 }

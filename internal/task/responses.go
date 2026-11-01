@@ -11,6 +11,7 @@ type TaskAlgorithmInfo struct {
 	SampleFPS        int       `json:"sampleFps"`
 	ConfigJSON       string    `json:"configJson"`
 	RegionConfigJSON string    `json:"regionConfigJson"`
+	ScheduleJSON     string    `json:"scheduleJson"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
 }
@@ -36,6 +37,7 @@ func toTaskAlgorithmInfo(sub TaskAlgorithm) TaskAlgorithmInfo {
 		SampleFPS:        sub.SampleFPS,
 		ConfigJSON:       sub.ConfigJSON,
 		RegionConfigJSON: sub.RegionConfigJSON,
+		ScheduleJSON:     sub.ScheduleJSON,
 		CreatedAt:        sub.CreatedAt.UTC(),
 		UpdatedAt:        sub.UpdatedAt.UTC(),
 	}

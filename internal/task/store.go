@@ -8,6 +8,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
+	"github.com/nikonikowuw/Zhulong/internal/schedule"
 	"gorm.io/gorm"
 )
 
@@ -21,6 +22,9 @@ var (
 
 	// ErrComputeBudgetExceeded 表示本次写入后总算力点会超过预算池上限。
 	ErrComputeBudgetExceeded = errors.New("compute budget exceeded")
+
+	// ErrInvalidScheduleConfig 表示时间计划 JSON 解析失败或时间范围非法。
+	ErrInvalidScheduleConfig = errors.New("invalid schedule configuration")
 
 	errStoreUnavailable = errors.New("analysis task store database is unavailable")
 	errNilTask          = errors.New("analysis task is nil")
@@ -271,6 +275,7 @@ func upsertTaskAlgorithm(ctx context.Context, tx *gorm.DB, sub *TaskAlgorithm, n
 			"sample_fps":         sub.SampleFPS,
 			"config_json":        sub.ConfigJSON,
 			"region_config_json": sub.RegionConfigJSON,
+			"schedule_json":      sub.ScheduleJSON,
 			"updated_at":         sub.UpdatedAt,
 		}
 		err := tx.Model(&TaskAlgorithm{}).Where("id = ?", sub.ID).Updates(columns).Error
@@ -299,22 +304,56 @@ func cameraTaskTaken(ctx context.Context, tx *gorm.DB, cameraID string) (bool, e
 	return count > 0, nil
 }
 
-// validateComputeBudget 累加"其它启用中的任务"与"本次任务的启用子项"所需算力点。
+// validateComputeBudget 累加"其它启用中的任务"与"本次任务的启用子项"所需算力点，并按时间切片校验瞬时峰值。
 func validateComputeBudget(tx *gorm.DB, task *Task, excludeTaskID string, maxPoints int64) error {
-	total, err := otherTasksComputePoints(tx, excludeTaskID, maxPoints)
+	items, err := otherTasksSchedulableItems(tx, excludeTaskID)
 	if err != nil {
 		return err
 	}
-	if !task.Enabled {
-		return nil
+	if task.Enabled {
+		for _, sub := range task.Algorithms {
+			if !sub.Enabled {
+				continue
+			}
+			if sub.SampleFPS < 0 {
+				return fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
+			}
+			var algorithm struct {
+				ID          string `gorm:"column:id"`
+				ComputeCost int    `gorm:"column:compute_cost"`
+			}
+			err := tx.Table("algorithms").
+				Select("id, compute_cost").
+				Where("id = ?", sub.AlgorithmID).
+				First(&algorithm).Error
+			switch {
+			case errors.Is(err, gorm.ErrRecordNotFound):
+				return ErrNotFound
+			case err != nil:
+				return err
+			}
+			if algorithm.ComputeCost < 0 {
+				return fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
+			}
+			sched, _ := schedule.Parse(sub.ScheduleJSON)
+			items = append(items, schedule.SchedulableItem{
+				Points:   int64(algorithm.ComputeCost) * int64(sub.SampleFPS),
+				Schedule: sched,
+			})
+		}
 	}
-	return addTaskComputePoints(tx, task, total, maxPoints)
+
+	peak := schedule.CalculatePeakPoints(items)
+	if peak > maxPoints {
+		return fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
+	}
+	return nil
 }
 
-// otherTasksComputePoints 汇总除 excludeTaskID 之外、所有启用中任务的算力点。
-func otherTasksComputePoints(tx *gorm.DB, excludeTaskID string, maxPoints int64) (int64, error) {
+// otherTasksSchedulableItems 汇总除 excludeTaskID 之外、所有启用中任务的算力调度项。
+func otherTasksSchedulableItems(tx *gorm.DB, excludeTaskID string) ([]schedule.SchedulableItem, error) {
 	query := tx.Table("task_algorithms").
-		Select("task_algorithms.id AS sub_id, task_algorithms.sample_fps, algorithms.compute_cost").
+		Select("task_algorithms.id AS sub_id, task_algorithms.sample_fps, algorithms.compute_cost, task_algorithms.schedule_json").
 		Joins("JOIN analysis_tasks ON analysis_tasks.id = task_algorithms.task_id").
 		Joins("JOIN algorithms ON algorithms.id = task_algorithms.algorithm_id").
 		Where("analysis_tasks.enabled = ? AND task_algorithms.enabled = ?", true, true)
@@ -323,79 +362,25 @@ func otherTasksComputePoints(tx *gorm.DB, excludeTaskID string, maxPoints int64)
 		query = query.Where("analysis_tasks.id != ?", excludeTaskID)
 	}
 
-	// algorithms.compute_cost 是 NOT NULL，INNER JOIN 保证每行都有成本，无需再判空。
 	var allocations []struct {
-		SubID       string `gorm:"column:sub_id"`
-		SampleFPS   int    `gorm:"column:sample_fps"`
-		ComputeCost int    `gorm:"column:compute_cost"`
+		SubID        string `gorm:"column:sub_id"`
+		SampleFPS    int    `gorm:"column:sample_fps"`
+		ComputeCost  int    `gorm:"column:compute_cost"`
+		ScheduleJSON string `gorm:"column:schedule_json"`
 	}
 	if err := query.Scan(&allocations).Error; err != nil {
-		return 0, err
+		return nil, err
 	}
 
-	var (
-		total int64
-		err   error
-	)
+	items := make([]schedule.SchedulableItem, 0, len(allocations))
 	for _, allocation := range allocations {
-		total, err = addComputePoints(
-			total,
-			allocation.ComputeCost,
-			allocation.SampleFPS,
-			maxPoints,
-		)
-		if err != nil {
-			return 0, err
-		}
+		sched, _ := schedule.Parse(allocation.ScheduleJSON)
+		items = append(items, schedule.SchedulableItem{
+			Points:   int64(allocation.ComputeCost) * int64(allocation.SampleFPS),
+			Schedule: sched,
+		})
 	}
-	return total, nil
-}
-
-// addTaskComputePoints 在既有 total 上叠加本次任务启用子项的算力点。
-func addTaskComputePoints(tx *gorm.DB, task *Task, total int64, maxPoints int64) error {
-	for _, sub := range task.Algorithms {
-		if !sub.Enabled {
-			continue
-		}
-		var algorithm struct {
-			ID          string `gorm:"column:id"`
-			ComputeCost int    `gorm:"column:compute_cost"`
-		}
-		err := tx.Table("algorithms").
-			Select("id, compute_cost").
-			Where("id = ?", sub.AlgorithmID).
-			First(&algorithm).Error
-		switch {
-		case errors.Is(err, gorm.ErrRecordNotFound):
-			return ErrNotFound
-		case err != nil:
-			return err
-		}
-		total, err = addComputePoints(
-			total,
-			algorithm.ComputeCost,
-			sub.SampleFPS,
-			maxPoints,
-		)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func addComputePoints(total int64, computeCost, sampleFPS int, maxPoints int64) (int64, error) {
-	isTotalOutOfRange := total < 0 || total > maxPoints
-	hasNegativeInputs := computeCost < 0 || sampleFPS < 0
-	if isTotalOutOfRange || hasNegativeInputs {
-		return 0, fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
-	}
-	cost := int64(computeCost)
-	fps := int64(sampleFPS)
-	if fps > 0 && cost > (maxPoints-total)/fps {
-		return 0, fmt.Errorf("%w: budget limit is %d", ErrComputeBudgetExceeded, maxPoints)
-	}
-	return total + cost*fps, nil
+	return items, nil
 }
 
 // GetTask returns a task by its primary key ID with algorithms preloaded.

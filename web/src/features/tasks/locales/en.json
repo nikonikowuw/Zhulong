@@ -7,6 +7,8 @@
     "title": "Compute Budget & Scheduler",
     "desc": "Global shared 1,000-point NPU compute pool, dynamically calculated from sampling rates and algorithm weights.",
     "usedPoints": "Used Points",
+    "peakPoints": "Peak Points",
+    "currentPoints": "Current Points",
     "remainingPoints": "Available",
     "utilizationRate": "Utilization",
     "activeTasks": "Active",
@@ -26,6 +28,8 @@
     "createdAt": "Created At",
     "actions": "Actions",
     "statusRunning": "Running",
+    "statusRunningScheduled": "Running (Scheduled)",
+    "statusScheduleDormant": "Standby (Off Schedule)",
     "statusStandby": "Standby (Inactive)",
     "statusError": "Error",
     "statusPaused": "Paused",
@@ -105,6 +109,8 @@
     "configJsonLabel": "Algorithm Parameters",
     "taskPointsPreview": "Task Points",
     "channelPointsPreview": "Channel Total",
+    "channelCurrentPoints": "Current",
+    "projectedCurrentPoints": "Current",
     "globalPointsPreview": "Platform Budget Usage",
     "budgetWarning": "⚠️ Configuration will exceed the 1,000-point platform compute budget! Please lower FPS or disable algorithms.",
     "invalidJsonError": "Advanced config for \"{{name}}\" is not a valid JSON document. Please correct it before saving.",
@@ -227,5 +233,25 @@
   "views": {
     "channel": "Channel view",
     "table": "Detail view"
+  },
+  "schedule": {
+    "title": "Time Schedule",
+    "alwaysActive": "24/7 Always Active",
+    "enableSchedule": "Enable Time Schedule",
+    "enableScheduleDesc": "Run analysis during scheduled windows; standby and release NPU outside schedule",
+    "presetAll": "All Day",
+    "presetWorkdays": "Workdays (08:00-18:00)",
+    "presetNights": "Night Guard (20:00-06:00)",
+    "presetClear": "Clear",
+    "coverage": "{{hours}} hrs/week ({{percent}}% coverage)",
+    "days": {
+      "monday": "Mon",
+      "tuesday": "Tue",
+      "wednesday": "Wed",
+      "thursday": "Thu",
+      "friday": "Fri",
+      "saturday": "Sat",
+      "sunday": "Sun"
+    }
   }
 }

@@ -469,3 +469,75 @@ func TestStoreDeleteMissingTask(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestStoreDynamicPeakBudgetWithSchedule(t *testing.T) {
+	store, db, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	insertMockAlgorithm(t, db, "algo_day", "day_detector", 100)
+	insertMockAlgorithm(t, db, "algo_night", "night_detector", 100)
+
+	// 任务 1：白天运行 08:00 - 18:00，点数 100 * 6 = 600 点
+	t1 := &task.Task{
+		ID:       "task_day",
+		CameraID: "cam_day",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{
+				ID:           "sub_day",
+				AlgorithmID:  "algo_day",
+				Enabled:      true,
+				SampleFPS:    6,
+				ConfigJSON:   "{}",
+				ScheduleJSON: `{"enabled": true, "days": {"monday": [{"start": "08:00", "end": "18:00"}]}}`,
+			},
+		},
+	}
+	if err := store.CreateTaskWithinBudget(ctx, t1, 1000); err != nil {
+		t.Fatalf("CreateTaskWithinBudget t1 failed: %v", err)
+	}
+
+	// 任务 2（不重叠）：夜间运行 18:00 - 24:00，点数 100 * 6 = 600 点。
+	// 静态相加为 1200 > 1000，但分时峰值为 600 <= 1000，应允许成功！
+	t2NonOverlap := &task.Task{
+		ID:       "task_night",
+		CameraID: "cam_night",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{
+				ID:           "sub_night",
+				AlgorithmID:  "algo_night",
+				Enabled:      true,
+				SampleFPS:    6,
+				ConfigJSON:   "{}",
+				ScheduleJSON: `{"enabled": true, "days": {"monday": [{"start": "18:00", "end": "24:00"}]}}`,
+			},
+		},
+	}
+	if err := store.CreateTaskWithinBudget(ctx, t2NonOverlap, 1000); err != nil {
+		t.Fatalf("CreateTaskWithinBudget t2NonOverlap should succeed with peak 600, got: %v", err)
+	}
+
+	// 任务 3（重叠）：时段为 12:00 - 20:00，点数 100 * 5 = 500 点。
+	// 在 12:00 - 18:00 与任务 1 重叠，瞬间峰值为 600 + 500 = 1100 > 1000，应拒绝！
+	t3Overlap := &task.Task{
+		ID:       "task_overlap",
+		CameraID: "cam_overlap",
+		Enabled:  true,
+		Algorithms: []task.TaskAlgorithm{
+			{
+				ID:           "sub_overlap",
+				AlgorithmID:  "algo_night",
+				Enabled:      true,
+				SampleFPS:    5,
+				ConfigJSON:   "{}",
+				ScheduleJSON: `{"enabled": true, "days": {"monday": [{"start": "12:00", "end": "20:00"}]}}`,
+			},
+		},
+	}
+	err := store.CreateTaskWithinBudget(ctx, t3Overlap, 1000)
+	if !errors.Is(err, task.ErrComputeBudgetExceeded) {
+		t.Fatalf("expected ErrComputeBudgetExceeded for overlapping schedule, got %v", err)
+	}
+}

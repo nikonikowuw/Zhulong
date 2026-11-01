@@ -13,6 +13,7 @@ export interface AlgoDraftItem {
   enabled: boolean
   configJson: string
   regionConfigJson: string
+  scheduleJson: string
 }
 
 export function createDraftItem(
@@ -24,6 +25,7 @@ export function createDraftItem(
     enabled: true,
     configJson: EMPTY_CONFIG_JSON,
     regionConfigJson: EMPTY_CONFIG_JSON,
+    scheduleJson: EMPTY_CONFIG_JSON,
     ...overrides,
   }
 }
@@ -58,6 +60,7 @@ export function computeInitialDrafts(
           enabled: saved.enabled,
           configJson: resolveDraftConfigJson(algo, saved.configJson),
           regionConfigJson: saved.regionConfigJson || EMPTY_CONFIG_JSON,
+          scheduleJson: saved.scheduleJson || EMPTY_CONFIG_JSON,
         }
       : {
           selected: false,
@@ -65,6 +68,7 @@ export function computeInitialDrafts(
           enabled: true,
           configJson: resolveDraftConfigJson(algo),
           regionConfigJson: EMPTY_CONFIG_JSON,
+          scheduleJson: EMPTY_CONFIG_JSON,
         }
   }
   return drafts

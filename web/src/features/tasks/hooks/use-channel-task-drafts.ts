@@ -56,6 +56,7 @@ export interface ChannelTaskDraftsController {
   selectActiveAlgo: (algoId: string | null) => void
   updateFps: (algoId: string, sampleFps: number) => void
   updateConfigJson: (algoId: string, configJson: string) => void
+  updateScheduleJson: (algoId: string, scheduleJson: string) => void
   /**
    * 生成提交载荷。
    *
@@ -243,6 +244,13 @@ export function useChannelTaskDrafts({
     dispatch({ type: 'update-config-json', algoId, configJson })
   }, [])
 
+  const updateScheduleJson = useCallback(
+    (algoId: string, scheduleJson: string) => {
+      dispatch({ type: 'update-schedule-json', algoId, scheduleJson })
+    },
+    []
+  )
+
   const setChannelEnabled = useCallback((enabled: boolean) => {
     dispatch({ type: 'set-channel-enabled', enabled })
   }, [])
@@ -263,6 +271,9 @@ export function useChannelTaskDrafts({
             algoId === state.activeAlgoId && editedRegion !== null
               ? editedRegion
               : draft.regionConfigJson,
+          scheduleJson: draft.scheduleJson?.trim()
+            ? draft.scheduleJson
+            : EMPTY_CONFIG_JSON,
         }))
     },
     [drafts, state.activeAlgoId, currentRegionJson]
@@ -283,6 +294,7 @@ export function useChannelTaskDrafts({
     selectActiveAlgo,
     updateFps,
     updateConfigJson,
+    updateScheduleJson,
     toPayloadDrafts,
   }
 }

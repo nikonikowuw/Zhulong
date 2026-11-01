@@ -52,6 +52,7 @@ type TaskAlgorithm struct {
 	SampleFPS        int       `gorm:"column:sample_fps;not null;default:5" json:"sampleFps"`
 	ConfigJSON       string    `gorm:"column:config_json;not null;default:'{}'" json:"configJson"`
 	RegionConfigJSON string    `gorm:"column:region_config_json;not null;default:'{}'" json:"regionConfigJson"`
+	ScheduleJSON     string    `gorm:"column:schedule_json;not null;default:'{}'" json:"scheduleJson"`
 	CreatedAt        time.Time `gorm:"column:created_at;not null" json:"createdAt"`
 	UpdatedAt        time.Time `gorm:"column:updated_at;not null" json:"updatedAt"`
 }
@@ -89,6 +90,8 @@ type TaskAlgorithmItem struct {
 	ConfigJSONAlt       string `json:"config_json,omitempty"`
 	RegionConfigJSON    string `json:"regionConfigJson,omitempty"`
 	RegionConfigJSONAlt string `json:"region_config_json,omitempty"`
+	ScheduleJSON        string `json:"scheduleJson,omitempty"`
+	ScheduleJSONAlt     string `json:"schedule_json,omitempty"`
 }
 
 // ToEntity converts TaskAlgorithmItem to a TaskAlgorithm entity.
@@ -107,6 +110,7 @@ func (item TaskAlgorithmItem) ToEntity(taskID string) TaskAlgorithm {
 		SampleFPS:        firstNonZero(item.SampleFPS, item.SampleFPSAlt, DefaultSampleFPS),
 		ConfigJSON:       firstNonZero(item.ConfigJSON, item.ConfigJSONAlt, defaultConfigJSON),
 		RegionConfigJSON: firstNonZero(item.RegionConfigJSON, item.RegionConfigJSONAlt, defaultConfigJSON),
+		ScheduleJSON:     firstNonZero(item.ScheduleJSON, item.ScheduleJSONAlt, defaultConfigJSON),
 	}
 }
 

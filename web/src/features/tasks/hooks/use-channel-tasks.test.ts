@@ -95,6 +95,7 @@ describe('useTaskComputeBudget', () => {
             sampleFps: 10, // 20 cost * 10 = 200 points
             configJson: '{}',
             regionConfigJson: '{}',
+            scheduleJson: '{}',
             createdAt: '',
             updatedAt: '',
           },
@@ -106,6 +107,7 @@ describe('useTaskComputeBudget', () => {
             sampleFps: 5,
             configJson: '{}',
             regionConfigJson: '{}',
+            scheduleJson: '{}',
             createdAt: '',
             updatedAt: '',
           },
@@ -127,6 +129,7 @@ describe('useTaskComputeBudget', () => {
             sampleFps: 10, // 10 cost * 10 = 100 points
             configJson: '{}',
             regionConfigJson: '{}',
+            scheduleJson: '{}',
             createdAt: '',
             updatedAt: '',
           },
@@ -165,6 +168,7 @@ describe('useTaskComputeBudget', () => {
             sampleFps: 45, // 20 * 45 = 900 points
             configJson: '{}',
             regionConfigJson: '{}',
+            scheduleJson: '{}',
             createdAt: '',
             updatedAt: '',
           },
@@ -197,6 +201,7 @@ describe('useTaskComputeBudget', () => {
             sampleFps: 55, // 20 * 55 = 1100 points
             configJson: '{}',
             regionConfigJson: '{}',
+            scheduleJson: '{}',
             createdAt: '',
             updatedAt: '',
           },
@@ -230,6 +235,7 @@ describe('useChannelTasks', () => {
             sampleFps: 5, // 20 * 5 = 100
             configJson: '{}',
             regionConfigJson: '{}',
+            scheduleJson: '{}',
             createdAt: '',
             updatedAt: '',
           },
@@ -241,6 +247,7 @@ describe('useChannelTasks', () => {
             sampleFps: 10, // 10 * 10 = 100
             configJson: '{}',
             regionConfigJson: '{}',
+            scheduleJson: '{}',
             createdAt: '',
             updatedAt: '',
           },

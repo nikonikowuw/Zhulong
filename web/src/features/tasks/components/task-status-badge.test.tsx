@@ -97,4 +97,37 @@ describe('TaskStatusBadge', () => {
     await expect.element(getByText('运行中')).toBeInTheDocument()
     expect(getByText('视频流断开').query()).toBeNull()
   })
+
+  it('renders schedule dormant when enabled but outside schedule', async () => {
+    const dormantSchedule = JSON.stringify({
+      enabled: true,
+      days: {},
+    })
+    const { getByText } = await render(
+      <TaskStatusBadge enabled={true} scheduleJson={dormantSchedule} />
+    )
+
+    await expect.element(getByText('休眠中 (非计划时段)')).toBeInTheDocument()
+    expect(getByText('运行中').query()).toBeNull()
+  })
+
+  it('renders scheduled running when enabled and inside custom schedule', async () => {
+    const allDaySchedule = JSON.stringify({
+      enabled: true,
+      days: {
+        monday: [{ start: '00:00', end: '24:00' }],
+        tuesday: [{ start: '00:00', end: '24:00' }],
+        wednesday: [{ start: '00:00', end: '24:00' }],
+        thursday: [{ start: '00:00', end: '24:00' }],
+        friday: [{ start: '00:00', end: '24:00' }],
+        saturday: [{ start: '00:00', end: '24:00' }],
+        sunday: [{ start: '00:00', end: '24:00' }],
+      },
+    })
+    const { getByText } = await render(
+      <TaskStatusBadge enabled={true} scheduleJson={allDaySchedule} />
+    )
+
+    await expect.element(getByText('运行中 (计划内)')).toBeInTheDocument()
+  })
 })
