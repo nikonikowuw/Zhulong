@@ -13,6 +13,8 @@
 #include "rknn_error_map.hpp"
 #include "rknn_types.hpp"
 
+#include <common/path_utils.hpp>
+
 #include <rknn_api.h>
 
 #include <cstring>
@@ -22,21 +24,6 @@
 
 namespace zhulong {
 namespace {
-
-/**
- * @brief 取文件基名作为 model_id（不引入 <filesystem>，保持交叉工具链最小依赖）
- */
-std::string file_basename(const std::string& path) {
-    if (path.empty()) {
-        return "";
-    }
-    const auto end = path.find_last_not_of("/\\");
-    if (end == std::string::npos) {
-        return "";
-    }
-    const auto slash = path.find_last_of("/\\", end);
-    return slash == std::string::npos ? path.substr(0, end + 1) : path.substr(slash + 1, end - slash);
-}
 
 // rknn_outputs_release 的 RAII 守卫：保证所有路径（含异常）恰好释放一次。
 struct OutputsReleaseGuard {
@@ -79,8 +66,7 @@ struct ContextGuard {
  *
  * @param model_path_or_config 模型文件路径
  * @return std::shared_ptr<ModelAsset> 模型资产；失败返回 nullptr（不抛异常）
- */
-std::shared_ptr<ModelAsset> RknnInferenceBackend::load_model(const std::string& model_path_or_config) {
+ */std::shared_ptr<ModelAsset> RknnInferenceBackend::load_model(const std::string& model_path_or_config) {
     try {
         if (model_path_or_config.empty()) {
             return nullptr;
@@ -131,8 +117,11 @@ std::shared_ptr<ModelAsset> RknnInferenceBackend::load_model(const std::string& 
             }
         }
 
-        // SDK 版本查询是安全的（真机实测：查过 SDK_VERSION 后 dup 仍 ret=0）。
-        rknn_query(root, RKNN_QUERY_SDK_VERSION, &asset->sdk_version, sizeof(asset->sdk_version));
+        // SDK 版本查询只用于记录证据：失败不影响可用性（不查 MEM_SIZE，见下）。
+        ret = rknn_query(root, RKNN_QUERY_SDK_VERSION, &asset->sdk_version, sizeof(asset->sdk_version));
+        if (ret != RKNN_SUCC) {
+            std::memset(&asset->sdk_version, 0, sizeof(asset->sdk_version));
+        }
         // ⚠️ 关键缺陷规避（RK3568 真机实测，2026-10-14，librknnrt.so 2.3.2 + RKNPU 驱动 0.9.8）：
         // RKNN_QUERY_MEM_SIZE 会**污染上下文** —— 查过 MEM_SIZE 的上下文，其首次
         // rknn_dup_context 必定 SIGSEGV（崩在 librknnrt.so 内部）；未查过的上下文连续 3 次
@@ -195,15 +184,10 @@ std::unique_ptr<SessionContext> RknnInferenceBackend::create_session(std::shared
 }
 
 /**
- * @brief 执行 RKNN 硬件推理（输入 packed 设置 → 同步运行 → 输出拷贝回 Tensor）
+ * @brief zhulong::DataType → RKNN 张量类型
  *
- * ⚠️ 本实现接受拷贝，不得声称零拷贝：rknn_input 无 stride 字段，传入 buffer 必须 packed；
- * 输出经 want_float=1 转 float32 后 memcpy 进 Tensor。
- *
- * @param session 该 Worker 的独占执行会话
- * @param inputs 输入张量列表（必须 packed，数量与模型输入数一致）
- * @param[out] outputs 输出张量列表（失败时被清空）
- * @return zhulong_status_t ZHULONG_PLUGIN_OK 成功；其余为映射后的错误码
+ * ⚠️ 不写 `default`：DataType 新增枚举值时，`-Wswitch` 必须在编译期报错，
+ *    而不是静默把新类型当 UINT8 喂给 NPU。末尾的返回只是满足编译器的完整性要求。
  */
 static rknn_tensor_type to_rknn_tensor_type(DataType dt) {
     switch (dt) {
@@ -212,9 +196,21 @@ static rknn_tensor_type to_rknn_tensor_type(DataType dt) {
         case DataType::INT8:    return RKNN_TENSOR_INT8;
         case DataType::INT32:   return RKNN_TENSOR_INT32;
         case DataType::INT64:   return RKNN_TENSOR_INT64;
-        default:                return RKNN_TENSOR_UINT8;
     }
+    return RKNN_TENSOR_UINT8;
 }
+
+/**
+ * @brief 执行 RKNN 硬件推理（输入 packed 设置 → 同步运行 → 输出拷贝回 Tensor）
+ *
+ * ⚠️ 本实现接受拷贝，不得声称零拷贝：rknn_input 无 stride 字段，传入 buffer 必须 packed；
+ * 输出经 want_float=1 转 float32 后 memcpy 进 Tensor。真正的零拷贝是 DMA-BUF 输入路径。
+ *
+ * @param session 该 Worker 的独占执行会话
+ * @param inputs 输入张量列表（必须 packed，数量与模型输入数一致）
+ * @param[out] outputs 输出张量列表（失败时被清空）
+ * @return zhulong_status_t ZHULONG_PLUGIN_OK 成功；其余为映射后的错误码
+ */
 
 zhulong_status_t RknnInferenceBackend::forward(SessionContext* session,
                                                const std::vector<Tensor>& inputs,
@@ -269,54 +265,43 @@ zhulong_status_t RknnInferenceBackend::forward(SessionContext* session,
                 void* in_va = const_cast<void*>(inputs[i].raw_data());
                 const size_t in_size = inputs[i].byte_size();
 
-                if (cached.mem == nullptr || cached.fd != in_fd ||
-                    cached.va != in_va || cached.size != in_size) {
-
-                    // 准备阶段：释放旧映射
-                    cached.reset(state->ctx);
-
-                    // 校验输入尺寸是否满足模型要求
-                    if (in_size < attr.size) {
-                        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
-                    }
-
-                    rknn_tensor_mem* new_mem = rknn_create_mem_from_fd(
-                        state->ctx,
-                        in_fd,
-                        in_va,
-                        static_cast<uint32_t>(in_size),
-                        0
-                    );
-                    if (!new_mem) {
-                        return ZHULONG_PLUGIN_ERR_INTERNAL;
-                    }
-
-                    rknn_tensor_attr io_attr = attr;
-                    io_attr.index = i;
-                    io_attr.type = to_rknn_tensor_type(inputs[i].dtype());
-                    // 如果数据类型已与模型期望类型一致，pass_through 设为 1 避免二次转换
-                    io_attr.pass_through = (io_attr.type == attr.type) ? 1 : 0;
-
-                    int set_ret = rknn_set_io_mem(state->ctx, new_mem, &io_attr);
-                    if (set_ret != RKNN_SUCC) {
-                        // 事务回滚：立即销毁新句柄，不修改 cached 元数据
-                        rknn_destroy_mem(state->ctx, new_mem);
-                        return map_rknn_error(set_ret);
-                    }
-
-                    // 事务提交：仅在 set_io_mem 成功后提交凭据
-                    cached.mem = new_mem;
-                    cached.fd = in_fd;
-                    cached.va = in_va;
-                    cached.size = in_size;
+                if (cached.matches(in_fd, in_va, in_size)) {
+                    continue; // 凭据命中，本帧无需重新注册
                 }
+
+                // 先校验再动缓存：失败的输入不应该把上一个有效绑定拆掉。
+                if (in_size < attr.size) {
+                    return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+                }
+
+                // 事务开始：新句柄由 RAII 独占，任何提前返回都自动 rknn_destroy_mem。
+                RknnTensorMemPtr next_mem(
+                    rknn_create_mem_from_fd(state->ctx, in_fd, in_va,
+                                            static_cast<uint32_t>(in_size), 0),
+                    RknnTensorMemDeleter{state->ctx});
+                if (!next_mem) {
+                    return ZHULONG_PLUGIN_ERR_INTERNAL;
+                }
+
+                rknn_tensor_attr io_attr = attr;
+                io_attr.index = i;
+                io_attr.type = to_rknn_tensor_type(inputs[i].dtype());
+                // 如果数据类型已与模型期望类型一致，pass_through 设为 1 避免二次转换
+                io_attr.pass_through = (io_attr.type == attr.type) ? 1 : 0;
+
+                const int set_ret = rknn_set_io_mem(state->ctx, next_mem.get(), &io_attr);
+                if (set_ret != RKNN_SUCC) {
+                    // 事务回滚：next_mem 析构即销毁新句柄，不提交凭据（杜绝下帧幽灵缓存命中）
+                    return map_rknn_error(set_ret);
+                }
+
+                // 事务提交：旧绑定在此刻才被替换，只在 set_io_mem 成功后提交凭据。
+                cached.commit(std::move(next_mem), in_fd, in_va, in_size);
             }
         } else {
             // 全量常规 Host 内存路径：若此前会话曾绑定过 DMA 内存，先清理以防上下文冲突
+            // （unique_ptr 析构自动 rknn_destroy_mem，无需手工传 context）。
             if (!state->cached_input_mems.empty()) {
-                for (auto& item : state->cached_input_mems) {
-                    item.reset(state->ctx);
-                }
                 state->cached_input_mems.clear();
             }
 

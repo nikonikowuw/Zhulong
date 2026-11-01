@@ -5,8 +5,11 @@
  * 核心设计原则（对应 prd R1–R9 与 design §5/§7）：
  * 1. **组合而非继承** CPU 实现：任一 RGA 前置条件不满足时**透明回退**到 CPU，
  *    调用方只看到成功结果。回退是常态路径，不是异常路径。
- * 2. **对齐值运行期探测**，绝不硬编码 4 或 16：硬编码 4 会在 RGA3（RK3576/RK3588
- *    的 16）静默出错；硬编码 16 会浪费 RGA2 带宽。
+ * 2. **对齐值运行期探测**，绝不硬编码真值：硬编码 4 会在 RGA3（RK3576/RK3588
+ *    的 16）上白跑一次注定被 imcheck_t 拒掉的尝试；硬编码 16 会浪费 RGA2 带宽。
+ *    debugfs 不可读时回退到平台基准值（4，见 hardware-backends.md §3.1）——那是
+ *    「探测失败的安全假设」而不是平台真值，因此**失败事实必须可观测**（last_error()）
+ *    而不是静默降速。
  * 3. **只做「改参数」级适配（O(1)）**：源侧 stride 直接传实际 linesize；`srect`
  *    坐标按探测到的 offset 对齐取整。**任何需要重排内存（O(N)）的适配一律不做**
  *    —— CPU 都遍历全图了，RGA 的收益已归零，不如直接回退 CPU（design §5.3 判据）。
@@ -131,6 +134,18 @@ public:
         return stride_adapted_count_.load();
     }
 
+    /**
+     * @brief 最近一次 RGA 尝试失败的原因（RGA 成功则为 ZHULONG_PLUGIN_OK）
+     *
+     * ⚠️ 运行库刻意不链接 `ZhulongLog`（见 native/CMakeLists.txt），因此后端没有日志通道。
+     *    本字段就是「RGA 为何降级」的对外可观测面：NOT_SUPPORTED 表示前置条件不满足
+     *    （格式/对齐/不可用），其余码是 imcheck_t / improcess 映射后的结果。
+     *    `fallback_count()` 只回答「降级了多少次」，不回答「为何」。
+     */
+    [[nodiscard]] zhulong_status_t last_error() const noexcept {
+        return last_error_.load(std::memory_order_relaxed);
+    }
+
     // AC10：「裁剪坐标取整后成功」的计数 —— `srect.x/y` 被向上取整到
     // `offset_align()` 的倍数后 RGA 成功（形式 1，内存不动）。
     /**
@@ -144,14 +159,21 @@ private:
     // 探测 RGA 可用性：imcheckHeader() + /dev/rga 可访问性 + 版本与对齐值查询。
     void probe();
 
-    // 返回 true 表示 RGA 路径成功并已写入 dst；false 表示应回退 CPU。
-    bool try_rga_letterbox(const zhulong_frame_view& src, Tensor& dst, LetterboxParams& inout_params);
-    bool try_rga_resize(const uint8_t* src, int src_w, int src_h, int src_stride,
-                        zhulong_pixel_format_t src_format, uint8_t* dst, int dst_stride,
-                        int dst_w, int dst_h, zhulong_pixel_format_t dst_format);
-    bool try_rga_crop_scale(const zhulong_frame_view& src, const CropRect& roi,
-                            uint8_t* dst, int dst_stride, int dst_w, int dst_h,
-                            zhulong_pixel_format_t dst_format);
+    // 记录最近一次 RGA 尝试的失败原因（供 last_error() 观测）。
+    void record_rga_error(zhulong_status_t status) noexcept {
+        last_error_.store(status, std::memory_order_relaxed);
+    }
+
+    // 三个 try_* 的返回语义：OK = RGA 已完成；INVALID_ARGUMENT = 入参非法；
+    // OUT_OF_MEMORY = 目标缓冲分配失败；NOT_SUPPORTED = 前置条件不满足；
+    // 其余 = imcheck_t / improcess 映射后的错误码。非 OK 一律由调用方回退 CPU。
+    zhulong_status_t try_rga_letterbox(const zhulong_frame_view& src, Tensor& dst, LetterboxParams& inout_params);
+    zhulong_status_t try_rga_resize(const uint8_t* src, int src_w, int src_h, int src_stride,
+                                    zhulong_pixel_format_t src_format, uint8_t* dst, int dst_stride,
+                                    int dst_w, int dst_h, zhulong_pixel_format_t dst_format);
+    zhulong_status_t try_rga_crop_scale(const zhulong_frame_view& src, const CropRect& roi,
+                                        uint8_t* dst, int dst_stride, int dst_w, int dst_h,
+                                        zhulong_pixel_format_t dst_format);
 
     CpuVisionBackend fallback_;   /**< 组合：回退目标 */
     bool rga_usable_{false};      /**< 探测得到的 RGA 可用性 */
@@ -162,6 +184,7 @@ private:
     std::atomic<uint64_t> fallback_count_{0};        /**< CPU 回退计数（原子） */
     std::atomic<uint64_t> stride_adapted_count_{0};  /**< 非紧密 stride 适配成功计数（原子） */
     std::atomic<uint64_t> rect_adapted_count_{0};    /**< 裁剪坐标取整成功计数（原子） */
+    std::atomic<zhulong_status_t> last_error_{ZHULONG_PLUGIN_OK}; /**< 最近一次 RGA 失败原因（原子） */
 };
 
 } // namespace zhulong

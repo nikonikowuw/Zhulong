@@ -5,21 +5,15 @@
 
 #include "cpu_vision_backend.hpp"
 #include "letterbox_geometry.hpp"
+#include "letterbox_target.hpp"
 #include <zhulong/runtime/yuv_sampling.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
-#include <new>
-#include <stdexcept>
 
 namespace zhulong {
 namespace {
-
-/**
- * @brief Letterbox 补边灰度值（与训练侧预处理对齐，非 0）
- */
-constexpr uint8_t letterbox_pad_value = 114;
 
 /**
  * @brief 判断像素格式是否为 packed 24 位 RGB/BGR
@@ -267,31 +261,16 @@ zhulong_status_t CpuVisionBackend::letterbox(const zhulong_frame_view& src,
     const size_t required_bytes = static_cast<size_t>(target_h) * row_bytes;
 
     const std::vector<int64_t> target_shape{target_h, target_w, 3};
-    const bool dma_reusable = (dst.dma_buf_fd() >= 0 && dst.raw_data() != nullptr &&
-                               dst.byte_size() >= required_bytes);
-    const bool cpu_reusable = (dst.dma_buf_fd() < 0 && dst.byte_size() >= required_bytes &&
-                               dst.dtype() == DataType::UINT8 && dst.shape() == target_shape);
 
-    // ⚠️ Tensor 构造失败以异常报告。就地转成状态码，否则会一路冒泡到 C ABI 的
-    //    catch (...) 里变成无法区分的通用错误，「内存不足」对上层就永久不可观测。
-    try {
-        if (dma_reusable) {
-            if (dst.dtype() != DataType::UINT8 || dst.shape() != target_shape) {
-                dst = Tensor::from_dma_buf(dst.dma_buf_fd(), target_shape, DataType::UINT8, dst.raw_data());
-            }
-        } else if (!cpu_reusable) {
-            dst = Tensor(target_shape, DataType::UINT8);
-        }
-    } catch (const std::bad_alloc&) {
-        return ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY;
-    } catch (const std::length_error&) {
-        return ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY;
+    // 复用/重建决策与 RGA 后端共用同一份实现（letterbox_target.hpp）：两个后端对
+    // 「什么算可复用」必须给出同一答案，否则同一调用在 RGA 与 CPU 下的缓冲区所有权不同。
+    const zhulong_status_t prepare_status =
+        prepare_letterbox_target(dst, target_shape, required_bytes);
+    if (prepare_status != ZHULONG_PLUGIN_OK) {
+        return prepare_status;
     }
 
     uint8_t* dst_buf = dst.data<uint8_t>();
-    if (!dst_buf) {
-        return ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY;
-    }
     // Letterbox 补边值为 letterbox_pad_value（非 0），与训练预处理保持一致
     std::memset(dst_buf, letterbox_pad_value, required_bytes);
 

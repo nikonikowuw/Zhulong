@@ -58,7 +58,9 @@ struct OnnxModelAsset : public ModelAsset {
     std::vector<const char*> input_names_ptr; /**< 指向 inputs_meta[i].name.c_str() 的连续指针缓存 */
     std::vector<const char*> output_names_ptr;/**< 指向 outputs_meta[i].name.c_str() 的连续指针缓存 */
 
-    Ort::MemoryInfo memory_info{nullptr};     /**< CPU Arena 内存信息（供零拷贝包装输入 Tensor 复用） */
+    // ⚠️ 两处 NSDMI 已删除：这些成员在相应构造函数里**已**在初始化列表中初始化，
+    //    再写一份 {nullptr} 会让「到底哪个生效」变成需要点开 .cpp 才能回答的问题。
+    Ort::MemoryInfo memory_info;              /**< CPU Arena 内存信息（构造函数中初始化） */
 };
 
 /**
@@ -73,7 +75,7 @@ struct OnnxSessionContext : public SessionContext {
     OnnxSessionContext& operator=(OnnxSessionContext&&) = delete;
 
     std::shared_ptr<OnnxModelAsset> asset;    /**< 持有模型资产强引用，确保权重晚于所有会话销毁 */
-    Ort::RunOptions run_options{nullptr};     /**< 该 Worker 独占的运行期控制选项 */
+    Ort::RunOptions run_options;              /**< 该 Worker 独占的运行期控制选项（构造函数中初始化为空选项） */
 };
 
 } // namespace zhulong

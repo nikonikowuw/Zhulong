@@ -136,6 +136,18 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 3. **两阶段裁剪对齐适配 (`crop_scale`)**：当裁剪 ROI 坐标不满足 2 像素对齐时，采用**参数向外扩取整**适配，杜绝原地内存搬运。
 4. **滤波差异验收容差**：RGA 硬件双线性插值与 CPU 浮点中心双线性滤波核函数不同，下采样（如 1080P → 640x640）单像素极值差可达 119。测试断言采用 `worst <= 128` 判定一致性。
 5. **热路径 Tensor 原地复用**：`try_rga_letterbox` 传入容量充足且形状匹配的 CPU Tensor 时原地复用内存，禁止每帧重新执行 `dst = Tensor(...)` 堆分配。
+   - ⚠️ 「什么算可复用」只有一份实现：`src/algorithm/runtime/letterbox_target.hpp` 的
+     `prepare_letterbox_target()`，CPU 与 RGA 后端**必须**共用。两份实现意味着同一调用在
+     RGA 与 CPU 下得到不同的缓冲区所有权语义。
+6. ⚠️ **先预校验、再动调用方的缓冲区**：`imcheck_t` 通过之前不得执行 O(N) 的补边 `memset`
+   （见第 2 条的两阶段 `check` / `run` 拆分）。预先 memset 会让「注定回退 CPU」的帧白付
+   一次全图写入，并在失败后给调用方留下「新张量 + 已 memset」的半成品状态。
+7. ⚠️ **`target_width/height <= 0` 必须与 CPU 同口径拒绝**：`LetterboxParams` 自带 640 默认值，
+   后端**不得**再兜一次——那会产出 640×640 张量却不回写 `target_*`，让后处理按 0 反算坐标
+   （静默错结果，板端整机测试也看不见）。
+8. **降级必须可观测**：运行库刻意不链接 `ZhulongLog`（见 `native/CMakeLists.txt`），因此
+   RGA 后端以 `last_error()`（`zhulong_status_t`，原子）暴露「最近一次 RGA 尝试为何失败」，
+   与 `fallback_count()`（降级次数）互补。`map_rga_status()` 是唯一映射口径，不得只在测试里用。
 
 ---
 
@@ -176,10 +188,11 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
   Rockchip RKNPU2 底层驱动严禁同一 Context 混用常规拷贝 `rknn_inputs_set` 与零拷贝 `rknn_set_io_mem`。输入张量若存在部分提供 DMA-BUF 部分为 Host 内存，严格拦截并返回 `ZHULONG_STATUS_INVALID_ARGUMENT`；当从 DMA 模式切回 Host 模式时，主动清理会话缓存中残留的 `rknn_tensor_mem`。
 - **两阶段事务提交缓存机制**：
   会话中缓存已注册的 `CachedDmaMem`。当检测到 fd/va/size 变动时：
-  1. 调用 `reset()` 释放旧 `rknn_tensor_mem`；
-  2. 调用 `rknn_create_mem_from_fd` 创建新句柄；
+  1. 先校验尺寸（`in_size >= attr.size`）。⚠️ 校验必须在动旧绑定**之前**，否则一个非法输入就会把上一帧仍有效的注册拆掉；
+  2. 调用 `rknn_create_mem_from_fd` 创建新句柄，并立即移交 `RknnTensorMemPtr`（带上下文的自定义 deleter，析构即 `rknn_destroy_mem`）；
   3. 配置 `io_attr`（类型一致时设置 `pass_through = 1`）并执行 `rknn_set_io_mem`；
-  4. ⚠️ **失败事务回滚**：若 `rknn_set_io_mem` 失败，立即销毁新句柄且不更新缓存元数据，杜绝下帧幽灵缓存命中跳过绑定；只有绑定成功才正式提交凭据。
+  4. ⚠️ **失败事务回滚**：若 `rknn_set_io_mem` 失败，新句柄由 RAII 立即销毁且不更新缓存元数据，杜绝下帧幽灵缓存命中跳过绑定；只有绑定成功才 `commit()`（旧句柄在提交时释放，不在事务开头释放）。
+  - ⚠️ **不要手工 `reset(context)`**：外部注册句柄必须由创立它的上下文释放，靠调用点传参只能靠人保证；`RknnSessionContext` 析构时 `cached_input_mems.clear()` 就是全部释放。
 - **软硬件自动降级**：当所有输入张量均为常规 CPU 虚拟内存时，后端自动采用标准的 `rknn_inputs_set` 内存拷贝流程。
 
 ---
@@ -195,6 +208,11 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
   - 采用单例懒加载模式，运行时优先探测内核字符设备 `/dev/mpp_service` 是否存在且具备读写权限；
   - 探测成功后通过 `dlopen` 按顺序探测 `librockchip_mpp.so.1` 和 `librockchip_mpp.so`，并通过 `dlsym` 绑定核心 API 函数表（`mpp_create`, `mpp_init`, `mpp_destroy`, `mpp_packet_*`, `mpp_frame_*`, `mpp_buffer_*` 等）；
   - 若任一关键符号缺失或 `dlopen` 失败，`MppLoader::is_supported()` 返回 `false`，解码工厂透明回退至 `FFmpegDecodeNode` 软解。
+  - ⚠️ **装载器永不析构、库句柄永不 `dlclose`**：`HardwareFrame::release_fn` 持有 `MppLoader*`，
+    而帧可能比任何静态析构活得更久（停机顺序变更、成员帧晚释放）。`instance()` 因此用
+    「静态存储 + placement-new + `~MppLoader() = delete`」：既避免 unload 后调用，
+    又不产生堆分配（`new` 长寿单例会被 LSan 报泄漏）。符号探测失败时也不 `dlclose`，
+    只清空函数表——半卸载的库会让已缓存的指针全部悬空。
 
 ### 5.2 状态机配置与防死锁时序
 
@@ -240,6 +258,10 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
    - `MppDecodeNode` 构造函数必须接收 `stream_id` 并用于原生日志关联；
    - `mpi->control()` 的返回值必须校验：`MPP_DEC_SET_PARSER_SPLIT_MODE` 失败即判定初始化失败（会导致首帧滞留），其余纯性能开关（`FAST_MODE` / `FAST_PLAY` / `IMMEDIATE_OUT` / 超时）失败仅告警；
    - 日志只输出稳定 token + 数值上下文（`mpp_control_failed what=%s cmd=0x%08x ret=%d`），不得回写自由文本。
+- ⚠️ **extradata 入队失败按严重性分级，但不因此 fail closed**：Annex-B 码流的首个 IDR 自带
+  SPS/PPS，MPP 切分器（`PARSER_SPLIT_MODE`）会从码流重新取到参数集，所以初始化不抛错；
+  但背压/超时（`MPP_ERR_BUFFER_FULL` / `MPP_ERR_TIMEOUT`）记 `mpp_extradata_put_backpressure` WARN，
+  其余错误记 `mpp_extradata_put_failed` **ERROR** —— 否则「硬解整条流解不出图」会被一条 WARN 淹没。
 
 ---
 
@@ -281,6 +303,12 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
    - `ORT_NOT_IMPLEMENTED` / `ORT_EP_FAIL` ➔ `ZHULONG_PLUGIN_ERR_NOT_SUPPORTED`
    - `ORT_ENGINE_ERROR` / `ORT_RUNTIME_EXCEPTION` / `ORT_FAIL` 及未知码 ➔ `ZHULONG_PLUGIN_ERR_INTERNAL`
    - `std::bad_alloc` ➔ `ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY`
+   - ⚠️ **加载阶段没有状态码通道**：`IInferenceBackend::load_model` 返回 `shared_ptr`（且不得为此改虚表，
+     那是 plugin.so／运行库的内部 ABI），运行库也不链接 `ZhulongLog`。因此每个失败出口必须经
+     `OnnxInferenceBackend::last_load_status()`（非虚、原子）留下映射后的状态：模型不存在
+     （`NOT_FOUND`）与 protobuf 损坏（`INVALID_ARGUMENT`）必须可区分，否则上面这张映射表
+     在加载路径上就是死代码。成功加载会把状态复位为 `OK`。
+   - `forward` 的失败仍走返回值；深层的 `std::invalid_argument`（如张量 dtype 不匹配）归 `INTERNAL`。
 
 ### 6.4 跨后端算法包模型适配与单测 Mock 委派
 
@@ -335,7 +363,7 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 | 320×240 | **1.50 / 0.74 ms** | 2.12 / 2.11 ms | 硬编 1.4× |
 | 1920×1080 | **21.7 / 2.35 ms** | 53.0 / 52.98 ms | 硬编 **22.5× CPU** |
 
-- **分流规则**：`JpegBackend::prefer_hardware()` 以 `w*h > 16384`（128×128）为界。小图硬编的固定开销（上传拷贝 + ioctl ≈0.5ms）超过小面积 DCT，硬上只会拖慢 wall 并占住共享硬件。
+- **分流规则**：`JpegBackend::prefer_hardware()` 以 `w*h > JpegBackend::min_pixels_for_hardware`（16384 / 128×128）为界。小图硬编的固定开销（上传拷贝 + ioctl ≈0.5ms）超过小面积 DCT，硬上只会拖慢 wall 并占住共享硬件。
 - 人脸脸框量级（≤128×128）落在软件侧；人体框、全幅走硬件。
 
 ### 7.4 ⚠️ 强制启动自检（不可跳过）
@@ -350,9 +378,14 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 
 ### 7.5 会话池与内存所有权
 
-- 会话按 `(width, height)` 分桶，上限 8，满载按 LRU 淘汰；**绝不是每帧 `mpp_init`**（那是几十毫秒级）。
+- 会话按 **`(width, height, hor_stride, ver_stride)` 四元组**分桶（§7.6 的 stride 约束要求），上限 8，满载按 LRU 淘汰；**绝不是每帧 `mpp_init`**（那是几十毫秒级）。
 - 板端已验证：24 个不同尺寸连续编码（触发多轮淘汰与 `mpp_destroy`）不崩、不退化。
 - 所有权：会话/缓冲由 `MppJpegEncoder` 分配并释放；`MppFrame`/`MppPacket` 每次编码配平释放；JPEG 字节**拷贝**给调用方，packet 缓冲不外泄。
+- ⚠️ **会话必须自带 RAII 收尾**（`Session::~Session()` → `release()`），不能靠「每次都要记得调 `close_session`」：
+  初始化半途失败、LRU 淘汰、`sessions.emplace` 抛 `bad_alloc` 三条路径里漏一条就是 ctx/group/buffer 泄漏。
+  同理，`Impl::acquire()` **可以返回 `nullptr`**（建会话失败），所有调用方必须判空——`encode_dma` 曾在此直接解引用。
+- ⚠️ `encode_region` / `encode_dma_frame` / `self_test` 的公开契约是**绝不抛异常**：实现内部必须
+  把 `bad_alloc`（如 `out.assign`）接住并降级为「本帧失败 → 回退软件编码」，导入的 DMA-BUF 由栈上守卫配平。
 - ⚠️ **编码符号表与解码节点独立**：不得并入 `nodes/decode/mpp_loader`，否则一个缺失的 enc 符号会把硬件解码一并判为不支持。
 
 ### 7.6 DMA-BUF 直通（已启用，**仅整帧**）
@@ -371,6 +404,18 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 - ⚠️ **stride 必须原样取自帧**（`frame.stride` / `frame.vstride`），**绝不可**用 `align16(width)` 顶替 —— 解码器可能给 2048 这类行跨度，顶替会让 VEPU 按错行宽读取、产出斜切图。会话池的 key 因此升级为 `(w, h, hor_stride, ver_stride)` 四元组。
 - ⚠️ **缓存一致性**：直通路径的写者也是硬件（解码器），CPU 侧无脏行，**不需要** `DMA_BUF_IOCTL_SYNC`。一旦引入「CPU 写完再硬编」（OSD、水印、马赛克），必须显式 end-write 同步，否则表现为**静默灰图**而不是报错。
 - **运行期自证（不可省略）**：首次直通会对**同一帧**分别走直通与上传路径并逐字节比对 —— 相等才启用，不等即 `ERROR` 并**永久停用**。这条把「dma_heap 测试缓冲」的验证升级成「真实解码器帧的 fd 语义」验证，而后者只能在真机上完成。另外连续失败 3 次也永久停用，防止「每帧先付 import 开销再回退」的隐性退化。
+
+### 7.7 MPP 手工镜像的 ABI 一致性护栏
+
+- `native/src/common/mpp/mpp_api_types.hpp` 是**手写镜像**（不引用厂商头，以便 x86/macOS 零依赖编译）；
+  `MppBufferInfo` 字段序、`MppApi` 函数表偏移、编码/格式/缓冲类型枚举、`MpiCmd` 命令字、错误码
+  都必须与 BSP 头逐项一致。
+- ⚠️ 漂移的表现不是编译失败，而是板端「偶发斜切图 / fd 传错位 / control 打到相邻命令」。
+  因此 `native/tests/mpp_abi_conformance_test.cpp` **同时**引入镜像与 `native/vendor/mpp/include/rockchip/`
+  的厂商头，用 `static_assert(sizeof / offsetof / 枚举值)` 把差异变成编译错误（不链接 `librockchip_mpp`，
+  主机与交叉构建都参与编译）。
+- 升级 BSP 时的正确顺序：先更新 `native/vendor/mpp/include/rockchip/`，编译该测试；断言失败即修镜像，
+  而不是反过来改断言。
 
 ## 8. 验证命令
 

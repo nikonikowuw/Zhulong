@@ -20,6 +20,7 @@
 
 #include <algorithm/runtime/cpu_vision_backend.hpp>
 #include <algorithm/runtime/letterbox_geometry.hpp>
+#include <algorithm/runtime/letterbox_target.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -28,13 +29,38 @@
 #include <rga/im2d.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <vector>
 
 namespace zhulong {
 namespace {
+
+// ── 探测与硬件访问常量 ────────────────────────────────────────────────────
+/** @brief RGA 设备节点（root:video，运行用户必须在 video 组） */
+constexpr const char* kRgaDeviceNode = "/dev/rga";
+/** @brief 内核 debugfs：硬件能力（byte_stride_align 等） */
+constexpr const char* kRgaHardwareNode = "/sys/kernel/debug/rkrga/hardware";
+/** @brief 内核 debugfs：驱动版本 */
+constexpr const char* kRgaVersionNode = "/sys/kernel/debug/rkrga/version";
+/** @brief debugfs 单行读取缓冲（两处 debugfs 解析共用） */
+constexpr size_t kDebugfsLineBytes = 256;
+/**
+ * @brief debugfs 不可读时的行跨度对齐兜底值（RK 平台基准 4，见 hardware-backends.md §3.1）
+ *
+ * ⚠️ 这是「探测失败的安全假设」，不是「平台真值」：RGA3（RK3576/RK3588）实际为 16。
+ *    取偏小的值不会错图（imcheck_t 会拦住不满足硬件对齐的 stride → 回退 CPU），但会
+ *    静默降速，因此探测失败的事实必须可观测（last_error() / fallback_count()）。
+ */
+constexpr uint32_t kPlatformStrideAlignFallback = 4;
+/** @brief 偏移对齐探测用的合成缓冲边长（需大于 RGA3 的最小输入） */
+constexpr int kOffsetProbeWidth = 256;
+constexpr int kOffsetProbeHeight = 256;
+/** @brief 偏移对齐探测的 ROI 边长 */
+constexpr int kOffsetProbeRoi = 128;
+/** @brief 偏移对齐探测的搜索上界（RGA2 实测 2，RGA3 实测可达 64） */
+constexpr uint32_t kOffsetProbeMaxAlign = 64;
 
 // ── 格式映射 ──────────────────────────────────────────────────────────────
 // RGA 用 RK_FORMAT_* 表达通道顺序（rga.h 实测值）。
@@ -123,23 +149,49 @@ rga_buffer_t make_rga_buffer(int fd, void* vaddr, int w, int h, int format, int 
 }
 
 /**
- * @brief 校验并执行 RGA 图像处理（imcheck 预检 + improcess 执行）
+ * @brief 越界防御 + imcheck_t 预校验（本函数不执行）
  *
- * ⚠️ 严格执行 R12 防御：越界检查与 imcheck 预检失败时立即返回 false，避免驱动陷入死锁。
+ * ⚠️ 严格执行 R12 防御：越界与 imcheck 预检失败必须在 improcess 之前拦住，避免驱动陷入死锁。
+ *
+ * 拆成「校验」与「执行」两步，是为了让调用方在**确认硬件路径可行之后再动返回给调用方的
+ * 缓冲区**（如 letterbox 的 O(N) 补边 memset 不该为一次注定回退的尝试白付）。
+ *
+ * @return IM_STATUS 预校验状态（IM_STATUS_NOERROR / IM_STATUS_SUCCESS 视为通过）
  */
-bool execute_rga_process(const rga_buffer_t& src_buf, const rga_buffer_t& dst_buf,
-                         const im_rect& srect, const im_rect& drect,
-                         int src_w, int src_h, int dst_w, int dst_h) {
+IM_STATUS check_rga_process(const rga_buffer_t& src_buf, const rga_buffer_t& dst_buf,
+                            const im_rect& srect, const im_rect& drect,
+                            int src_w, int src_h, int dst_w, int dst_h) {
     if (!rect_within(srect, src_w, src_h) || !rect_within(drect, dst_w, dst_h)) {
-        return false;
+        return IM_STATUS_ILLEGAL_PARAM;
     }
     const im_rect prect{0, 0, 0, 0};
-    if (!imcheck_is_ok(imcheck_t(src_buf, dst_buf, rga_buffer_t{}, srect, drect, prect, 0))) {
-        return false;
+    return imcheck_t(src_buf, dst_buf, rga_buffer_t{}, srect, drect, prect, 0);
+}
+
+/**
+ * @brief 下发 improcess 并同步等待硬件完成
+ *
+ * ⚠️ 调用前必须已通过 `check_rga_process`：RGA 驱动对越界 DMA 不总是返回错误码。
+ */
+IM_STATUS run_rga_process(const rga_buffer_t& src_buf, const rga_buffer_t& dst_buf,
+                          const im_rect& srect, const im_rect& drect) {
+    const im_rect prect{0, 0, 0, 0};
+    return improcess(src_buf, dst_buf, rga_buffer_t{}, srect, drect, prect, -1,
+                     nullptr, nullptr, IM_SYNC);
+}
+
+/**
+ * @brief 校验 + 执行（不需要在两步之间插入动作的调用方使用）
+ */
+IM_STATUS execute_rga_process(const rga_buffer_t& src_buf, const rga_buffer_t& dst_buf,
+                              const im_rect& srect, const im_rect& drect,
+                              int src_w, int src_h, int dst_w, int dst_h) {
+    const IM_STATUS checked =
+        check_rga_process(src_buf, dst_buf, srect, drect, src_w, src_h, dst_w, dst_h);
+    if (!imcheck_is_ok(checked)) {
+        return checked;
     }
-    const IM_STATUS status = improcess(src_buf, dst_buf, rga_buffer_t{},
-                                       srect, drect, prect, -1, nullptr, nullptr, IM_SYNC);
-    return imcheck_is_ok(status);
+    return run_rga_process(src_buf, dst_buf, srect, drect);
 }
 
 /**
@@ -312,11 +364,13 @@ void RgaVisionBackend::probe() {
 
     // 3) 探测 byte_stride_align。
     //    优先读内核 debugfs 的 byte_stride_align（RK3568 实测 4）；
-    //    若 debugfs 不可读（如以非 root 用户 video 组运行），回退至 RK 平台基准行对齐保底值（4 字节）。
+    //    若 debugfs 不可读（如非 root 的 video 组运行），回退至平台基准行对齐保底值（4 字节，
+    //    见 hardware-backends.md §3.1）。该值小于真实对齐（如 RGA3 的 16）时不会错图：
+    //    imcheck_t 会拒绝不满足硬件对齐的 stride，随后透明回退 CPU（可经 last_error() 观测）。
     {
-        std::FILE* hardware = std::fopen("/sys/kernel/debug/rkrga/hardware", "r");
+        std::FILE* hardware = std::fopen(kRgaHardwareNode, "r");
         if (hardware) {
-            char line[256];
+            char line[kDebugfsLineBytes];
             while (std::fgets(line, sizeof(line), hardware)) {
                 unsigned value = 0;
                 if (std::sscanf(line, "byte_stride_align: %u", &value) == 1 && value > 0) {
@@ -329,15 +383,17 @@ void RgaVisionBackend::probe() {
     }
 
     if (stride_align_ == 0) {
-        stride_align_ = 4;
+        stride_align_ = kPlatformStrideAlignFallback;
     }
 
     // 4) 驱动版本（尽力而为，读不到不影响可用性）。
+    //    ⚠️ fgets 保留行尾换行：不去掉会让 driver_version() 的返回值把日志/证据行打断。
     {
-        std::FILE* version_node = std::fopen("/sys/kernel/debug/rkrga/version", "r");
+        std::FILE* version_node = std::fopen(kRgaVersionNode, "r");
         if (version_node) {
             char line[sizeof(driver_version_)];
             if (std::fgets(line, sizeof(line), version_node)) {
+                line[std::strcspn(line, "\r\n")] = '\0';
                 std::snprintf(driver_version_, sizeof(driver_version_), "%s", line);
             }
             std::fclose(version_node);
@@ -346,7 +402,7 @@ void RgaVisionBackend::probe() {
 
     // 5) /dev/rga 可访问性与真实读写权限校验：权限为 crw-rw---- root:video，进程须属 video 组。
     {
-        int fd = ::open("/dev/rga", O_RDWR | O_CLOEXEC);
+        int fd = ::open(kRgaDeviceNode, O_RDWR | O_CLOEXEC);
         if (fd < 0) {
             return;
         }
@@ -356,18 +412,19 @@ void RgaVisionBackend::probe() {
     // 6) 运行期探测 srect/drect 偏移对齐 (offset_align_)：
     //    利用 imcheck_t 在合成缓冲上测试不同偏移，避免硬编码 2 (RGA2) 或 64 (RGA3)。
     {
-        // RGA3 requires a larger minimum input than RGA2; keep the probe valid on both.
-        const int tw = 256, th = 256;
+        // RGA3 要求的最小输入比 RGA2 大；取 256×256 让本探测在两者上都成立。
+        const int tw = kOffsetProbeWidth;
+        const int th = kOffsetProbeHeight;
         std::vector<uint8_t> dummy_buf(static_cast<size_t>(tw) * th * 3, 0);
         rga_buffer_t s = wrapbuffer_virtualaddr(dummy_buf.data(), tw, th, RK_FORMAT_RGB_888, tw, th);
         rga_buffer_t d = wrapbuffer_virtualaddr(dummy_buf.data(), tw, th, RK_FORMAT_RGB_888, tw, th);
         const im_rect prect{0, 0, 0, 0};
 
         uint32_t detected = 0;
-        for (uint32_t a = 1; a <= 64; ++a) {
-            const im_rect xrect{static_cast<int>(a), 0, 128, 128};
-            const im_rect yrect{0, static_cast<int>(a), 128, 128};
-            const im_rect drect{0, 0, 128, 128};
+        for (uint32_t a = 1; a <= kOffsetProbeMaxAlign; ++a) {
+            const im_rect xrect{static_cast<int>(a), 0, kOffsetProbeRoi, kOffsetProbeRoi};
+            const im_rect yrect{0, static_cast<int>(a), kOffsetProbeRoi, kOffsetProbeRoi};
+            const im_rect drect{0, 0, kOffsetProbeRoi, kOffsetProbeRoi};
             if (imcheck_is_ok(imcheck_t(s, d, rga_buffer_t{}, xrect, drect, prect, 0)) &&
                 imcheck_is_ok(imcheck_t(s, d, rga_buffer_t{}, yrect, drect, prect, 0))) {
                 detected = a;
@@ -384,34 +441,45 @@ void RgaVisionBackend::probe() {
 }
 
 /**
- * @brief 尝试走 RGA 路径完成 Letterbox；返回 false 表示应回退 CPU
+ * @brief 尝试走 RGA 路径完成 Letterbox
  *
  * ⚠️ R12：目标 buffer 描述的是**完整 Tensor**（含 padding），内容区 ROI 仅通过
  * `drect` 表达。切勿将 dst_buf 指针偏移到内容区起点 —— 那会让驱动按完整
  * wstride × hstride 校验并越界（实测约 242KB），引发 RGA D 状态死锁与看门狗复位。
+ *
+ * @return ZHULONG_PLUGIN_OK RGA 已完成；INVALID_ARGUMENT 入参非法；OUT_OF_MEMORY
+ *         目标缓冲分配失败；NOT_SUPPORTED RGA 前置条件不满足（应回退 CPU）；
+ *         其余为 improcess/imcheck 映射后的错误码
  */
-bool RgaVisionBackend::try_rga_letterbox(const zhulong_frame_view& src, Tensor& dst,
-                                         LetterboxParams& inout_params) {
+zhulong_status_t RgaVisionBackend::try_rga_letterbox(const zhulong_frame_view& src, Tensor& dst,
+                                                     LetterboxParams& inout_params) {
     const int dst_format = rga_format_for_target_24bit(inout_params.target_format);
     if (dst_format == 0) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
 
     const ResolvedSource resolved = resolve_source(src, stride_align_);
     if (!resolved.valid) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
 
-    const int target_w = inout_params.target_width > 0 ? inout_params.target_width : 640;
-    const int target_h = inout_params.target_height > 0 ? inout_params.target_height : 640;
+    // ⚠️ target 尺寸必须由调用方显式给出正数：LetterboxParams 自带 640 默认值，
+    //    在这里再兜一次会把「传 0」静默变成 640×640 且**不回写** target_*，
+    //    让后处理按 0 反算坐标。CPU 后端已在同一位置拒绝（cpu_vision_backend.cpp），
+    //    两个后端的契约必须一致。
+    const int target_w = inout_params.target_width;
+    const int target_h = inout_params.target_height;
+    if (target_w <= 0 || target_h <= 0) {
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+    }
     if (target_w > std::numeric_limits<int>::max() / 3) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
 
     // 目标 buffer 的行跨度固定为 target_w * 3（Tensor 紧密排列）。
     const int dst_wstride_bytes = target_w * 3;
     if (!stride_aligned(dst_wstride_bytes)) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
 
     // 几何计算与 CPU 共用同一纯函数（design §6，不重复实现）。
@@ -420,28 +488,19 @@ bool RgaVisionBackend::try_rga_letterbox(const zhulong_frame_view& src, Tensor& 
 
     const size_t row_bytes = static_cast<size_t>(dst_wstride_bytes);
     if (static_cast<size_t>(target_h) > std::numeric_limits<size_t>::max() / row_bytes) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
     const size_t required_bytes = static_cast<size_t>(target_h) * row_bytes;
     const std::vector<int64_t> target_shape{target_h, target_w, 3};
 
-    const bool dma_reusable = (dst.dma_buf_fd() >= 0 && dst.raw_data() != nullptr &&
-                               dst.byte_size() >= required_bytes);
-    const bool cpu_reusable = (dst.dma_buf_fd() < 0 && dst.byte_size() >= required_bytes &&
-                               dst.dtype() == DataType::UINT8 && dst.shape() == target_shape);
+    // 复用/重建决策与 CPU 后端共用同一份实现（letterbox_target.hpp）。
+    const zhulong_status_t prepare_status =
+        prepare_letterbox_target(dst, target_shape, required_bytes);
+    if (prepare_status != ZHULONG_PLUGIN_OK) {
+        return prepare_status;
+    }
 
-    if (dma_reusable) {
-        if (dst.dtype() != DataType::UINT8 || dst.shape() != target_shape) {
-            dst = Tensor::from_dma_buf(dst.dma_buf_fd(), target_shape, DataType::UINT8, dst.raw_data());
-        }
-    } else if (!cpu_reusable) {
-        dst = Tensor(target_shape, DataType::UINT8);
-    }
     uint8_t* dst_buf = dst.data<uint8_t>();
-    if (!dst_buf) {
-        return false;
-    }
-    std::memset(dst_buf, 114, required_bytes);
 
     // ⚠️ 描述完整的 dst buffer（含 padding）；内容区偏移只能通过 drect 传递，
     // 绝不可把 dst_buf 指针偏移到内容区起点（R12）。
@@ -450,14 +509,26 @@ bool RgaVisionBackend::try_rga_letterbox(const zhulong_frame_view& src, Tensor& 
         dst.dma_buf_fd(), dst_buf, target_w, target_h, dst_format, target_w, target_h);
 
     if (dst_buffer.width <= 0) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
 
     const im_rect srect{0, 0, src.width, src.height};
     const im_rect drect{geometry.pad_left, geometry.pad_top, geometry.unpad_w, geometry.unpad_h};
 
-    if (!execute_rga_process(src_buffer, dst_buffer, srect, drect, src.width, src.height, target_w, target_h)) {
-        return false;
+    // 先硬件预校验、再做 O(N) 的补边 memset：`improcess` 只写 drect 内容区，padding 必须
+    // 预先填好，但这份开销不该为一次注定回退 CPU 的尝试白付，也不该在失败后给调用方
+    // 留下「新张量 + 已 memset」的半成品状态。
+    const IM_STATUS checked =
+        check_rga_process(src_buffer, dst_buffer, srect, drect, src.width, src.height, target_w, target_h);
+    if (!imcheck_is_ok(checked)) {
+        return map_rga_status(checked);
+    }
+
+    std::memset(dst_buf, letterbox_pad_value, required_bytes);
+
+    const IM_STATUS status = run_rga_process(src_buffer, dst_buffer, srect, drect);
+    if (!imcheck_is_ok(status)) {
+        return map_rga_status(status);
     }
 
     inout_params.scale = geometry.scale;
@@ -467,45 +538,52 @@ bool RgaVisionBackend::try_rga_letterbox(const zhulong_frame_view& src, Tensor& 
     if (resolved.is_stride_adapted) {
         stride_adapted_count_.fetch_add(1, std::memory_order_relaxed);
     }
-    return true;
+    return ZHULONG_PLUGIN_OK;
 }
 
 /**
- * @brief 尝试走 RGA 路径完成缩放；返回 false 表示应回退 CPU
+ * @brief 尝试走 RGA 路径完成缩放
  *
  * ⚠️ resize 接口使用平坦指针，只支持单平面格式（RGB24 / BGR24 / RGBA32）；
  * NV12 / YUV420P 等非连续内存格式安全回退 CPU 并返回 NOT_SUPPORTED。
+ *
+ * @return ZHULONG_PLUGIN_OK RGA 已完成；INVALID_ARGUMENT 入参非法；
+ *         NOT_SUPPORTED 前置条件不满足（应回退 CPU）；其余为映射后的错误码
  */
-bool RgaVisionBackend::try_rga_resize(const uint8_t* src, int src_w, int src_h, int src_stride,
-                                      zhulong_pixel_format_t src_format, uint8_t* dst, int dst_stride,
-                                      int dst_w, int dst_h, zhulong_pixel_format_t dst_format) {
+zhulong_status_t RgaVisionBackend::try_rga_resize(const uint8_t* src, int src_w, int src_h, int src_stride,
+                                                  zhulong_pixel_format_t src_format, uint8_t* dst, int dst_stride,
+                                                  int dst_w, int dst_h, zhulong_pixel_format_t dst_format) {
     if (!src || !dst || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
     const SourceFormatSpec src_spec = describe_source_format(src_format);
     const int rga_dst_format = rga_format_for_target_24bit(dst_format);
     // resize 接口使用平坦指针，只支持单平面格式（RGB24 / BGR24 / RGBA32）
     if (!src_spec.valid || src_spec.plane_count != 1 || rga_dst_format == 0) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
 
     const int64_t min_src_stride = static_cast<int64_t>(src_w) * src_spec.plane0_bpp;
     const int64_t min_dst_stride = static_cast<int64_t>(dst_w) * 3;
     if (min_src_stride > std::numeric_limits<int>::max() ||
         min_dst_stride > std::numeric_limits<int>::max()) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
-    if (src_stride == 0) src_stride = static_cast<int>(min_src_stride);
-    if (dst_stride == 0) dst_stride = static_cast<int>(min_dst_stride);
+    if (src_stride == 0) {
+        src_stride = static_cast<int>(min_src_stride);
+    }
+    if (dst_stride == 0) {
+        dst_stride = static_cast<int>(min_dst_stride);
+    }
     if (src_stride < min_src_stride || dst_stride < min_dst_stride) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
     if (src_stride % src_spec.plane0_bpp != 0 || dst_stride % 3 != 0) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
 
     if (!stride_aligned(src_stride) || !stride_aligned(dst_stride)) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
 
     const int src_wstride_px = src_stride / src_spec.plane0_bpp;
@@ -519,45 +597,52 @@ bool RgaVisionBackend::try_rga_resize(const uint8_t* src, int src_w, int src_h, 
         dst_wstride_px, dst_h);
 
     if (src_buffer.width <= 0 || dst_buffer.width <= 0) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
 
     const im_rect srect{0, 0, src_w, src_h};
     const im_rect drect{0, 0, dst_w, dst_h};
 
-    if (!execute_rga_process(src_buffer, dst_buffer, srect, drect, src_w, src_h, dst_w, dst_h)) {
-        return false;
+    const IM_STATUS status =
+        execute_rga_process(src_buffer, dst_buffer, srect, drect, src_w, src_h, dst_w, dst_h);
+    if (!imcheck_is_ok(status)) {
+        return map_rga_status(status);
     }
 
     if (src_stride != min_src_stride) {
         stride_adapted_count_.fetch_add(1, std::memory_order_relaxed);
     }
-    return true;
+    return ZHULONG_PLUGIN_OK;
 }
 
 /**
- * @brief 尝试走 RGA 路径完成「裁剪 + 缩放 + CSC」；返回 false 表示应回退 CPU
+ * @brief 尝试走 RGA 路径完成「裁剪 + 缩放 + CSC」
  *
  * ⚠️ 两阶段裁剪（形式 1）：ROI 坐标不满足 2 像素对齐时，**只改参数向外扩取整**
  * （srect 是参数，不是内存），避免 O(N) 内存搬移。
+ *
+ * @return ZHULONG_PLUGIN_OK RGA 已完成；NOT_SUPPORTED 前置条件不满足（应回退 CPU）；
+ *         其余为映射后的错误码
  */
-bool RgaVisionBackend::try_rga_crop_scale(const zhulong_frame_view& src, const CropRect& roi,
-                                          uint8_t* dst, int dst_stride, int dst_w, int dst_h,
-                                          zhulong_pixel_format_t dst_format) {
+zhulong_status_t RgaVisionBackend::try_rga_crop_scale(const zhulong_frame_view& src, const CropRect& roi,
+                                                      uint8_t* dst, int dst_stride, int dst_w, int dst_h,
+                                                      zhulong_pixel_format_t dst_format) {
     const int rga_dst_format = rga_format_for_target_24bit(dst_format);
     if (rga_dst_format == 0) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
 
     const ResolvedSource resolved = resolve_source(src, stride_align_);
     if (!resolved.valid) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
 
     const int64_t min_dst_stride = static_cast<int64_t>(dst_w) * 3;
-    if (dst_stride == 0) dst_stride = static_cast<int>(min_dst_stride);
+    if (dst_stride == 0) {
+        dst_stride = static_cast<int>(min_dst_stride);
+    }
     if (dst_stride < min_dst_stride || dst_stride % 3 != 0 || !stride_aligned(dst_stride)) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
 
     // srect 坐标按 offset_align_ 向外扩取整（形式 1：改参数，零内存重排）
@@ -571,7 +656,7 @@ bool RgaVisionBackend::try_rga_crop_scale(const zhulong_frame_view& src, const C
     int y1 = static_cast<int>(std::min<int64_t>(
         ((roi_bottom + align - 1) / align) * align, src.height));
     if (x1 <= x0 || y1 <= y0) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
 
     const bool rect_adapted = (x0 != roi.x || y0 != roi.y || (x1 - x0) != roi.width || (y1 - y0) != roi.height);
@@ -582,14 +667,16 @@ bool RgaVisionBackend::try_rga_crop_scale(const zhulong_frame_view& src, const C
         dst_stride / 3, dst_h);
 
     if (src_buffer.width <= 0 || dst_buffer.width <= 0) {
-        return false;
+        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
 
     const im_rect srect{x0, y0, x1 - x0, y1 - y0};
     const im_rect drect{0, 0, dst_w, dst_h};
 
-    if (!execute_rga_process(src_buffer, dst_buffer, srect, drect, src.width, src.height, dst_w, dst_h)) {
-        return false;
+    const IM_STATUS status =
+        execute_rga_process(src_buffer, dst_buffer, srect, drect, src.width, src.height, dst_w, dst_h);
+    if (!imcheck_is_ok(status)) {
+        return map_rga_status(status);
     }
 
     if (rect_adapted) {
@@ -598,7 +685,7 @@ bool RgaVisionBackend::try_rga_crop_scale(const zhulong_frame_view& src, const C
     if (resolved.is_stride_adapted) {
         stride_adapted_count_.fetch_add(1, std::memory_order_relaxed);
     }
-    return true;
+    return ZHULONG_PLUGIN_OK;
 }
 
 /**
@@ -636,18 +723,24 @@ zhulong_status_t RgaVisionBackend::crop_scale(const zhulong_frame_view& src, con
 
     if (rga_usable_) {
         try {
-            if (try_rga_crop_scale(src, roi, dst, dst_stride, dst_w, dst_h, dst_format)) {
+            const zhulong_status_t rga_status =
+                try_rga_crop_scale(src, roi, dst, dst_stride, dst_w, dst_h, dst_format);
+            if (rga_status == ZHULONG_PLUGIN_OK) {
                 return ZHULONG_PLUGIN_OK;
             }
+            record_rga_error(rga_status);
         } catch (...) {
-            // 异常不穿越 ABI
+            // 异常不穿越 ABI。RGA 是不是“失败”跟这里的回退无关，但失败原因必须可观测。
+            record_rga_error(ZHULONG_PLUGIN_ERR_INTERNAL);
         }
     }
 
-    fallback_count_.fetch_add(1, std::memory_order_relaxed);
     // ⚠️ IVisionBackend 无裁剪入口。当输入为单平面 24bit 格式时，可以通过指针偏移
     // 裁剪后透明交给 fallback_.resize 执行；不支持的格式返回 NOT_SUPPORTED。
+    // fallback_count_ 统计的是「真正回退到 CPU」，因此只在下面这条路径上累加：
+    // 计数被当作「适配后成功/回退成功」的证据使用，不能用“RGA 没接”米充。
     if (packed_source) {
+        fallback_count_.fetch_add(1, std::memory_order_relaxed);
         const size_t roi_offset = static_cast<size_t>(roi.y) * static_cast<size_t>(packed_stride) +
                                   static_cast<size_t>(roi.x) * 3;
         const uint8_t* roi_ptr = src.planes[0] + roi_offset;
@@ -665,11 +758,14 @@ zhulong_status_t RgaVisionBackend::letterbox(const zhulong_frame_view& src,
                                              LetterboxParams& inout_params) {
     if (rga_usable_) {
         try {
-            if (try_rga_letterbox(src, dst, inout_params)) {
+            const zhulong_status_t rga_status = try_rga_letterbox(src, dst, inout_params);
+            if (rga_status == ZHULONG_PLUGIN_OK) {
                 return ZHULONG_PLUGIN_OK;
             }
+            record_rga_error(rga_status);
         } catch (...) {
             // RGA 路径异常不向上传播：回退 CPU
+            record_rga_error(ZHULONG_PLUGIN_ERR_INTERNAL);
         }
     }
 
@@ -685,12 +781,15 @@ zhulong_status_t RgaVisionBackend::resize(const uint8_t* src, int src_w, int src
                                           int dst_w, int dst_h, zhulong_pixel_format_t dst_format) {
     if (rga_usable_) {
         try {
-            if (try_rga_resize(src, src_w, src_h, src_stride, src_format,
-                               dst, dst_stride, dst_w, dst_h, dst_format)) {
+            const zhulong_status_t rga_status = try_rga_resize(src, src_w, src_h, src_stride, src_format,
+                                                              dst, dst_stride, dst_w, dst_h, dst_format);
+            if (rga_status == ZHULONG_PLUGIN_OK) {
                 return ZHULONG_PLUGIN_OK;
             }
+            record_rga_error(rga_status);
         } catch (...) {
             // 同上：异常不穿越
+            record_rga_error(ZHULONG_PLUGIN_ERR_INTERNAL);
         }
     }
 

@@ -2,8 +2,8 @@
  * @file rga_error_map.hpp
  * @brief RGA 私有错误映射：IM_STATUS → zhulong_status_t
  *
- * ⚠️ 本文件是唯一允许 include RGA 头文件的头之一（另一个是 rga_types.hpp）。
- * 它只被 native/src/backends/rga/ 内的实现引用，不得泄漏到 runtime/ 或 sdk/include/。
+ * ⚠️ 本文件是唯一允许 include RGA 头文件的头（`rga_vision_backend.hpp` 刻意不碰厂商类型）；
+ * 它只被 native/src/backends/rga/ 内的实现与对应白盒测试引用，不得泄漏到 runtime/ 或 sdk/include/。
  *
  * ⚠️ 头文件包含顺序：RGA 的 im2d_single.h 使用了 NULL 但未包含 <cstddef>，
  * 必须先包含 <cstddef>，否则交叉编译报 `'NULL' was not declared in this scope`。

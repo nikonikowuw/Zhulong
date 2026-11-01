@@ -107,6 +107,11 @@ void case_load_and_forward(const std::string& model_path) {
         return;
     }
 
+    // 成功加载必须把上一次失败的诊断状态复位：否则运维看到的永远是历史失败原因。
+    const auto onnx_backend = std::dynamic_pointer_cast<zhulong::OnnxInferenceBackend>(backend);
+    require(onnx_backend != nullptr && onnx_backend->last_load_status() == ZHULONG_PLUGIN_OK,
+            "case2: last_load_status reset to OK after success");
+
     auto* onnx_asset = dynamic_cast<zhulong::OnnxModelAsset*>(asset.get());
     require(onnx_asset != nullptr, "case2: asset is OnnxModelAsset");
     if (!onnx_asset) {
@@ -271,10 +276,18 @@ void case_faults(const std::string& model_path) {
     zhulong::OnnxInferenceBackend backend;
 
     require(backend.load_model("") == nullptr, "case4: load_model(\"\") -> nullptr");
+    require(backend.last_load_status() == ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT,
+            "case4: empty path -> INVALID_ARGUMENT recorded");
+
     require(backend.load_model("/nonexistent/path/to/model.onnx") == nullptr,
             "case4: load_model(nonexistent) -> nullptr");
+    require(backend.last_load_status() == ZHULONG_PLUGIN_ERR_NOT_FOUND,
+            "case4: nonexistent path -> NOT_FOUND recorded");
+
     require(backend.load_model("/nonexistent/path/to/dir/") == nullptr,
             "case4: load_model(trailing slash) -> nullptr");
+    require(backend.last_load_status() == ZHULONG_PLUGIN_ERR_NOT_FOUND,
+            "case4: trailing-slash dir -> NOT_FOUND recorded");
 
     const std::string garbage_path = "/tmp/zhulong_onnx_garbage.onnx";
     {
@@ -283,6 +296,9 @@ void case_faults(const std::string& model_path) {
         out.write(bad_bytes, sizeof(bad_bytes));
     }
     require(backend.load_model(garbage_path) == nullptr, "case4: load_model(corrupted file) -> nullptr");
+    // 损坏文件必须能与「文件不存在」区分开：否则运维只知道失败，不知道修哪一边。
+    require(backend.last_load_status() == ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT,
+            "case4: corrupted file -> INVALID_ARGUMENT recorded");
     std::remove(garbage_path.c_str());
 
     require(backend.create_session(nullptr, 0) == nullptr, "case4: create_session(nullptr) -> nullptr");

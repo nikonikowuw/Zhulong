@@ -10,6 +10,8 @@
 #include "onnx_error_map.hpp"
 #include "onnx_types.hpp"
 
+#include <common/path_utils.hpp>
+
 #include <onnxruntime_cxx_api.h>
 
 #include <cstring>
@@ -19,20 +21,6 @@
 
 namespace zhulong {
 namespace {
-
-/**
- * @brief 取文件基名作为 model_id
- */
-std::string file_basename(const std::string& path) {
-    if (path.empty()) {
-        return "";
-    }
-    if (path.back() == '/' || path.back() == '\\') {
-        return "";
-    }
-    const auto slash = path.find_last_of("/\\");
-    return slash == std::string::npos ? path : path.substr(slash + 1);
-}
 
 /**
  * @brief 获取进程级共享的 Ort::Env 实例
@@ -46,22 +34,26 @@ std::shared_ptr<Ort::Env> get_shared_ort_env() {
 
 } // namespace
 
+// 成员初始化统一走构造函数的初始化列表（声明处不再写 {nullptr}），避免同一成员两处初始化：
+// 读代码时不必再推到「到底哪个生效」。
 OnnxModelAsset::OnnxModelAsset()
     : memory_info(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)) {}
 
 OnnxModelAsset::~OnnxModelAsset() = default;
 
-OnnxSessionContext::OnnxSessionContext() : run_options() {}
+OnnxSessionContext::OnnxSessionContext() : run_options(nullptr) {}
 
 OnnxSessionContext::~OnnxSessionContext() = default;
 
 std::shared_ptr<ModelAsset> OnnxInferenceBackend::load_model(const std::string& model_path_or_config) {
-    try {
-        const std::string basename = file_basename(model_path_or_config);
-        if (model_path_or_config.empty() || basename.empty()) {
-            return nullptr;
-        }
+    // ⚠️ 每个失败出口都必须经 fail_load() 留下原因：本函数返回 shared_ptr，没有状态码通道，
+    //    运行库也没有日志通道，last_load_status() 是唯一的诊断面。
+    const std::string basename = file_basename(model_path_or_config);
+    if (model_path_or_config.empty() || basename.empty()) {
+        return fail_load(ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT);
+    }
 
+    try {
         auto asset = std::make_shared<OnnxModelAsset>();
         asset->model_path = model_path_or_config;
         asset->config_json = model_path_or_config;
@@ -79,35 +71,36 @@ std::shared_ptr<ModelAsset> OnnxInferenceBackend::load_model(const std::string& 
         const size_t input_count = asset->session->GetInputCount();
         const size_t output_count = asset->session->GetOutputCount();
         if (input_count == 0 || output_count == 0) {
-            return nullptr;
+            return fail_load(ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT);
         }
 
         Ort::AllocatorWithDefaultOptions allocator;
 
+        // 返回状态码而不是 bool：这样才能把「不支持的张量类型」与「图结构非法」分开报告。
         auto parse_node_meta = [&](size_t count, auto get_name_fn, auto get_type_fn,
-                                   std::vector<TensorMeta>& target) -> bool {
+                                   std::vector<TensorMeta>& target) -> zhulong_status_t {
             target.reserve(count);
             for (size_t i = 0; i < count; ++i) {
                 auto name_alloc = get_name_fn(i);
                 if (!name_alloc || std::strlen(name_alloc.get()) == 0) {
-                    return false;
+                    return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
                 }
 
                 Ort::TypeInfo type_info = get_type_fn(i);
                 if (type_info.GetONNXType() != ONNX_TYPE_TENSOR) {
-                    return false;
+                    return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
                 }
 
                 auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
                 const ONNXTensorElementDataType onnx_type = tensor_info.GetElementType();
                 DataType zhulong_type = DataType::FLOAT32;
                 if (!map_onnx_tensor_type(onnx_type, zhulong_type)) {
-                    return false;
+                    return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
                 }
 
                 std::vector<int64_t> dims = tensor_info.GetShape();
                 if (dims.empty()) {
-                    return false;
+                    return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
                 }
 
                 TensorMeta meta;
@@ -117,23 +110,25 @@ std::shared_ptr<ModelAsset> OnnxInferenceBackend::load_model(const std::string& 
                 meta.zhulong_type = zhulong_type;
                 target.push_back(std::move(meta));
             }
-            return true;
+            return ZHULONG_PLUGIN_OK;
         };
 
-        if (!parse_node_meta(
-                input_count,
-                [&](size_t i) { return asset->session->GetInputNameAllocated(i, allocator); },
-                [&](size_t i) { return asset->session->GetInputTypeInfo(i); },
-                asset->inputs_meta)) {
-            return nullptr;
+        zhulong_status_t meta_status = parse_node_meta(
+            input_count,
+            [&](size_t i) { return asset->session->GetInputNameAllocated(i, allocator); },
+            [&](size_t i) { return asset->session->GetInputTypeInfo(i); },
+            asset->inputs_meta);
+        if (meta_status != ZHULONG_PLUGIN_OK) {
+            return fail_load(meta_status);
         }
 
-        if (!parse_node_meta(
-                output_count,
-                [&](size_t i) { return asset->session->GetOutputNameAllocated(i, allocator); },
-                [&](size_t i) { return asset->session->GetOutputTypeInfo(i); },
-                asset->outputs_meta)) {
-            return nullptr;
+        meta_status = parse_node_meta(
+            output_count,
+            [&](size_t i) { return asset->session->GetOutputNameAllocated(i, allocator); },
+            [&](size_t i) { return asset->session->GetOutputTypeInfo(i); },
+            asset->outputs_meta);
+        if (meta_status != ZHULONG_PLUGIN_OK) {
+            return fail_load(meta_status);
         }
 
         // 在 inputs_meta / outputs_meta 填充完毕后再缓存 const char* 指针，防止扩容导致悬垂指针
@@ -147,9 +142,14 @@ std::shared_ptr<ModelAsset> OnnxInferenceBackend::load_model(const std::string& 
         populate_name_ptrs(asset->inputs_meta, asset->input_names_ptr);
         populate_name_ptrs(asset->outputs_meta, asset->output_names_ptr);
 
+        last_load_status_.store(ZHULONG_PLUGIN_OK, std::memory_order_relaxed);
         return asset;
+    } catch (const Ort::Exception& e) {
+        return fail_load(map_onnx_error(e.GetOrtErrorCode()));
+    } catch (const std::bad_alloc&) {
+        return fail_load(ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY);
     } catch (...) {
-        return nullptr;
+        return fail_load(ZHULONG_PLUGIN_ERR_INTERNAL);
     }
 }
 

@@ -6,28 +6,27 @@
  * 它只被 native/src/backends/rknn/ 内的实现引用，不得泄露到 runtime/ 或 sdk/include/
  * （directory-structure.md 铁律 4：厂商 SDK 物理隔离）。
  *
- * 核心设计原则（资源生命周期，R5/R11）：
+ * 核心设计原则（资源生命周期，R.1/R.5/R.11）：
  * 1. RknnModelAsset 每模型一个、进程内共享，持有唯一根上下文（权重仅加载一次）。
  * 2. RknnSessionContext 每 Worker 一个、独占，上下文由 rknn_dup_context 派生。
  * 3. ⚠️ 失败路径不得 double-destroy：root_valid 只在全部查询成功后置 true，
  *    所有提前返回点的 rknn_destroy(root) 都在此之前，因此局部 asset 析构时
  *    root_valid == false，不会二次销毁。
  * 4. ⚠️ session 通过 shared_ptr 持有 asset，保证 session 一定早于 root 销毁。
+ * 5. ⚠️ DMA-BUF 注册句柄（rknn_tensor_mem）由带上下文的自定义 deleter 独占持有，
+ *    析构即释放：不再需要手工 `reset(context)`，也不会因新增使用点而漏释放。
  */
 
 #pragma once
-
-// RKNN 私有资源模型：ModelAsset（根上下文 + 权重）与 SessionContext（dup 派生上下文）。
-//
-// ⚠️ 本文件是唯一允许 include <rknn_api.h> 的头文件之一（另一个是 rknn_error_map.hpp）。
-// 它只被 native/src/backends/rknn/ 内的实现引用，不得泄漏到 runtime/ 或 sdk/include/。
 
 #include <rknn_api.h>
 
 #include <zhulong/runtime/inference_backend.hpp>
 
+#include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace zhulong {
@@ -69,21 +68,58 @@ struct RknnModelAsset : public ModelAsset {
     }
 };
 
-// 缓存已注册的外部 DMA-BUF 内存映射，避免热路径每帧调用 rknn_create_mem_from_fd
+/**
+ * @brief rknn_tensor_mem 的释放器：把上下文与句柄绑在一起，析构即 rknn_destroy_mem
+ *
+ * ⚠️ 为什么不是「手工 reset(context)」：外部注册句柄必须由创立它的上下文释放，
+ *    靠调用点传参就只能靠人来保证，任何新增使用点漏一次就是 N 帧的显存泄漏。
+ */
+struct RknnTensorMemDeleter {
+    rknn_context ctx{0};
+
+    void operator()(rknn_tensor_mem* mem) const noexcept {
+        if (mem != nullptr && ctx != 0) {
+            rknn_destroy_mem(ctx, mem);
+        }
+    }
+};
+
+/** @brief 独占所有权的 rknn_tensor_mem 句柄 */
+using RknnTensorMemPtr = std::unique_ptr<rknn_tensor_mem, RknnTensorMemDeleter>;
+
+// 缓存已注册的外部 DMA-BUF 内存映射，避免热路径每帧调用 rknn_create_mem_from_fd。
+// 值语义 + Rule of Zero：句柄随本结构析构自动归还，向量清空即全部释放。
 struct CachedDmaMem {
     int fd{-1};
     void* va{nullptr};
     size_t size{0};
-    rknn_tensor_mem* mem{nullptr};
+    RknnTensorMemPtr mem{nullptr, RknnTensorMemDeleter{}};
 
-    void reset(rknn_context context) {
-        if (mem != nullptr && context != 0) {
-            rknn_destroy_mem(context, mem);
-        }
-        mem = nullptr;
+    /**
+     * @brief 判断缓存是否与本次输入一致（fd/va/size 三元组命中即无需重建）
+     */
+    [[nodiscard]] bool matches(int candidate_fd, const void* candidate_va, size_t candidate_size) const noexcept {
+        return mem != nullptr && fd == candidate_fd && va == candidate_va && size == candidate_size;
+    }
+
+    /**
+     * @brief 释放当前注册并清空凭据
+     */
+    void reset() noexcept {
+        mem.reset();
         fd = -1;
         va = nullptr;
         size = 0;
+    }
+
+    /**
+     * @brief 事务提交：仅在 rknn_set_io_mem 成功之后调用
+     */
+    void commit(RknnTensorMemPtr next_mem, int next_fd, void* next_va, size_t next_size) noexcept {
+        mem = std::move(next_mem);
+        fd = next_fd;
+        va = next_va;
+        size = next_size;
     }
 };
 
@@ -108,11 +144,7 @@ struct RknnSessionContext : public SessionContext {
     RknnSessionContext& operator=(RknnSessionContext&&) = delete;
 
     ~RknnSessionContext() override {
-        if (valid && ctx != 0) {
-            for (auto& item : cached_input_mems) {
-                item.reset(ctx);
-            }
-        }
+        // ⚠️ 注册句柄必须在本上下文销毁之前归还（deleter 内部用 ctx）。
         cached_input_mems.clear();
         if (valid && ctx != 0) {
             rknn_destroy(ctx);

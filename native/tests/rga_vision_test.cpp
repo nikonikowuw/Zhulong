@@ -91,6 +91,11 @@ void case_probe() {
     std::cout << "RGA_OFFSET_ALIGN " << backend.offset_align() << "\n";
     std::cout << "RGA_API_VERSION " << backend.api_version() << "\n";
     std::cout << "RGA_DRIVER_VERSION " << backend.driver_version() << "\n";
+    // ⚠️ debugfs 的版本行带换行：驱动版本必须去掉行尾，否则证据行/日志会被打断。
+    require(std::strchr(backend.driver_version(), '\n') == nullptr,
+            "case1: driver_version has no trailing newline");
+    require(std::strchr(backend.api_version(), '\n') == nullptr,
+            "case1: api_version has no trailing newline");
     std::cout << "RGA_FALLBACK_COUNT " << backend.fallback_count() << "\n";
     if (backend.rga_usable()) {
         require(backend.stride_align() > 0, "case1: stride_align probed at runtime (non-zero)");
@@ -417,6 +422,32 @@ void case_faults_and_fallback() {
     require(zhulong::map_rga_status(IM_STATUS_ERROR_VERSION) == ZHULONG_PLUGIN_ERR_NOT_SUPPORTED, "case7: map ERROR_VERSION");
     require(zhulong::map_rga_status(IM_STATUS_FAILED) == ZHULONG_PLUGIN_ERR_INTERNAL, "case7: map FAILED");
     require(zhulong::map_rga_status(static_cast<IM_STATUS>(-999)) == ZHULONG_PLUGIN_ERR_INTERNAL, "case7: map unknown -> INTERNAL");
+
+    // ⚠️ target 尺寸 <= 0 必须与 CPU 后端同口径拒绝：不得静默兜成 640×640。
+    //    RGA 可用时 try_rga_letterbox 先拒，再由 CPU 回退给出同样的码；
+    //    RGA 不可用时直接是 CPU 的结论。两条路都必须一致。
+    zhulong::CpuVisionBackend cpu_ref;
+    const std::vector<uint8_t> tiny = make_image(64, 64, 3);
+    zhulong::Tensor zero_target;
+    zhulong::LetterboxParams zero_params;
+    rc = run_letterbox(rga, tiny.data(), 64, 64, 192, ZHULONG_PIXEL_FORMAT_RGB24,
+                       ZHULONG_PIXEL_FORMAT_RGB24, 0, 32, zero_target, &zero_params);
+    require(rc == ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT, "case7: target_width=0 -> INVALID_ARGUMENT");
+    require(zero_target.shape().empty() || zero_target.shape()[0] != 640,
+            "case7: target_width=0 must not silently become 640x640");
+    require(zero_params.target_width == 0, "case7: target_width not rewritten on failure");
+
+    zhulong::Tensor zero_target_cpu;
+    const zhulong_status_t cpu_zero_rc =
+        run_letterbox(cpu_ref, tiny.data(), 64, 64, 192, ZHULONG_PIXEL_FORMAT_RGB24,
+                      ZHULONG_PIXEL_FORMAT_RGB24, 32, 0, zero_target_cpu);
+    require(cpu_zero_rc == ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT, "case7: cpu target_height=0 -> INVALID_ARGUMENT");
+    require(rc == cpu_zero_rc, "case7: rga and cpu agree on zero target contract");
+
+    // 失败原因必须可观测（运行库不链 ZhulongLog，last_error() 是唯一诊断面）。
+    if (rga.rga_usable()) {
+        require(rga.last_error() != ZHULONG_PLUGIN_OK, "case7: last_error records rga failure reason");
+    }
 }
 
 // ── Case 8：重复调用无泄漏（AC7）────────────────────────────────────────
