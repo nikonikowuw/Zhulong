@@ -23,11 +23,11 @@ namespace zhulong {
 namespace {
 
 /** 前向时间轴跳变容忍上限：超过即视为不连续（相机重启 / RTSP 会话重建） */
-constexpr int64_t kMaxForwardJumpUs = 5LL * 1000 * 1000;
+constexpr int64_t k_max_forward_jump_us = 5LL * 1000 * 1000;
 
-constexpr uint8_t kAnnexBStartCode[] = {0, 0, 0, 1};
+constexpr uint8_t k_annex_b_start_code[] = {0, 0, 0, 1};
 
-int64_t SaturatingAdd(int64_t left, int64_t right) {
+int64_t saturating_add(int64_t left, int64_t right) {
     if (right > 0 && left > std::numeric_limits<int64_t>::max() - right) {
         return std::numeric_limits<int64_t>::max();
     }
@@ -37,32 +37,32 @@ int64_t SaturatingAdd(int64_t left, int64_t right) {
     return left + right;
 }
 
-int64_t NextTimestamp(int64_t value) {
+int64_t next_timestamp(int64_t value) {
     return value == std::numeric_limits<int64_t>::max() ? value : value + 1;
 }
 
-bool IsForwardJump(int64_t current, int64_t previous) {
-    return previous <= std::numeric_limits<int64_t>::max() - kMaxForwardJumpUs &&
-           current > previous + kMaxForwardJumpUs;
+bool is_forward_jump(int64_t current, int64_t previous) {
+    return previous <= std::numeric_limits<int64_t>::max() - k_max_forward_jump_us &&
+           current > previous + k_max_forward_jump_us;
 }
 
-bool IsBackwardJump(int64_t current, int64_t previous) {
-    return previous >= std::numeric_limits<int64_t>::min() + kMaxForwardJumpUs &&
-           current < previous - kMaxForwardJumpUs;
+bool is_backward_jump(int64_t current, int64_t previous) {
+    return previous >= std::numeric_limits<int64_t>::min() + k_max_forward_jump_us &&
+           current < previous - k_max_forward_jump_us;
 }
 
-void AppendNal(const uint8_t *nal, size_t length, std::vector<uint8_t> &out) {
-    out.insert(out.end(), kAnnexBStartCode, kAnnexBStartCode + 4);
+void append_nal(const uint8_t *nal, size_t length, std::vector<uint8_t> &out) {
+    out.insert(out.end(), k_annex_b_start_code, k_annex_b_start_code + 4);
     out.insert(out.end(), nal, nal + length);
 }
 
-uint16_t ReadU16(const uint8_t *data) {
+uint16_t read_u16(const uint8_t *data) {
     return static_cast<uint16_t>((static_cast<uint16_t>(data[0]) << 8) | data[1]);
 }
 
-bool AppendLengthPrefixedNals(const uint8_t *data, size_t size, size_t &offset,
-                              uint32_t count, size_t length_size,
-                              std::vector<uint8_t> &out) {
+bool append_length_prefixed_nals(const uint8_t *data, size_t size, size_t &offset,
+                                uint32_t count, size_t length_size,
+                                std::vector<uint8_t> &out) {
     for (uint32_t index = 0; index < count; ++index) {
         if (offset > size || length_size > size - offset) return false;
         uint32_t nal_length = 0;
@@ -70,14 +70,14 @@ bool AppendLengthPrefixedNals(const uint8_t *data, size_t size, size_t &offset,
             nal_length = (nal_length << 8) | data[offset++];
         }
         if (nal_length == 0 || nal_length > size - offset) return false;
-        AppendNal(data + offset, nal_length, out);
+        append_nal(data + offset, nal_length, out);
         offset += nal_length;
     }
     return true;
 }
 
-bool ParseAvcConfiguration(const uint8_t *data, size_t size,
-                           std::vector<uint8_t> &out) {
+bool parse_avc_configuration(const uint8_t *data, size_t size,
+                             std::vector<uint8_t> &out) {
     if (size < 7 || data[0] != 1 || (data[4] & 0xfc) != 0xfc ||
         (data[5] & 0xe0) != 0xe0) {
         return false;
@@ -85,19 +85,19 @@ bool ParseAvcConfiguration(const uint8_t *data, size_t size,
 
     size_t offset = 6;
     const uint32_t sps_count = data[5] & 0x1f;
-    if (!AppendLengthPrefixedNals(data, size, offset, sps_count, 2, out) ||
+    if (!append_length_prefixed_nals(data, size, offset, sps_count, 2, out) ||
         offset >= size) {
         return false;
     }
     const uint32_t pps_count = data[offset++];
-    if (!AppendLengthPrefixedNals(data, size, offset, pps_count, 2, out)) {
+    if (!append_length_prefixed_nals(data, size, offset, pps_count, 2, out)) {
         return false;
     }
     return !out.empty();
 }
 
-bool ParseHevcConfiguration(const uint8_t *data, size_t size,
-                            std::vector<uint8_t> &out) {
+bool parse_hevc_configuration(const uint8_t *data, size_t size,
+                              std::vector<uint8_t> &out) {
     if (size < 23 || data[0] != 1) return false;
 
     size_t offset = 23;
@@ -105,15 +105,15 @@ bool ParseHevcConfiguration(const uint8_t *data, size_t size,
     for (uint32_t array = 0; array < array_count; ++array) {
         if (offset > size || size - offset < 3) return false;
         const uint8_t nal_type = data[offset++] & 0x3f;
-        const uint32_t nal_count = ReadU16(data + offset);
+        const uint32_t nal_count = read_u16(data + offset);
         offset += 2;
         for (uint32_t index = 0; index < nal_count; ++index) {
             if (offset > size || size - offset < 2) return false;
-            const uint32_t nal_length = ReadU16(data + offset);
+            const uint32_t nal_length = read_u16(data + offset);
             offset += 2;
             if (nal_length == 0 || nal_length > size - offset) return false;
             if (nal_type >= 32 && nal_type <= 34) {
-                AppendNal(data + offset, nal_length, out);
+                append_nal(data + offset, nal_length, out);
             }
             offset += nal_length;
         }
@@ -121,8 +121,8 @@ bool ParseHevcConfiguration(const uint8_t *data, size_t size,
     return offset == size && !out.empty();
 }
 
-bool AppendFourByteLengthPrefixedNals(const uint8_t *data, size_t size,
-                                      std::vector<uint8_t> &out) {
+bool append_four_byte_length_prefixed_nals(const uint8_t *data, size_t size,
+                                        std::vector<uint8_t> &out) {
     size_t offset = 0;
     while (offset < size) {
         if (size - offset < 4) return false;
@@ -133,7 +133,7 @@ bool AppendFourByteLengthPrefixedNals(const uint8_t *data, size_t size,
             static_cast<uint32_t>(data[offset + 3]);
         offset += 4;
         if (nal_length == 0 || nal_length > size - offset) return false;
-        AppendNal(data + offset, nal_length, out);
+        append_nal(data + offset, nal_length, out);
         offset += nal_length;
     }
     return !out.empty();
@@ -148,7 +148,7 @@ bool AppendFourByteLengthPrefixedNals(const uint8_t *data, size_t size,
  * @param visit 回调接收 (NAL 起始偏移, NAL 长度)；返回 false 可提前终止遍历
  */
 template <typename Visitor>
-void ForEachNal(const uint8_t *data, size_t size, Visitor &&visit) {
+void for_each_nal(const uint8_t *data, size_t size, Visitor &&visit) {
     size_t i = 0;
     while (i + 3 <= size) {
         size_t start_code_len = 0;
@@ -184,7 +184,7 @@ void ForEachNal(const uint8_t *data, size_t size, Visitor &&visit) {
 
 } // namespace
 
-std::vector<uint8_t> ToAnnexB(int32_t codec, const uint8_t *extradata, size_t size) {
+std::vector<uint8_t> to_annex_b(int32_t codec, const uint8_t *extradata, size_t size) {
     if (extradata == nullptr || size == 0) return {};
 
     // Annex B already has the representation expected by the preview path.
@@ -195,28 +195,28 @@ std::vector<uint8_t> ToAnnexB(int32_t codec, const uint8_t *extradata, size_t si
 
     std::vector<uint8_t> out;
     if (codec == Zhulong_CODEC_H264 && extradata[0] == 1) {
-        return ParseAvcConfiguration(extradata, size, out) ? std::move(out)
-                                                            : std::vector<uint8_t>{};
+        return parse_avc_configuration(extradata, size, out) ? std::move(out)
+                                                             : std::vector<uint8_t>{};
     }
     if (codec == Zhulong_CODEC_H265 && extradata[0] == 1) {
-        return ParseHevcConfiguration(extradata, size, out) ? std::move(out)
-                                                             : std::vector<uint8_t>{};
+        return parse_hevc_configuration(extradata, size, out) ? std::move(out)
+                                                              : std::vector<uint8_t>{};
     }
 
     // Some demuxers provide a bare 4-byte length-prefixed NAL sequence instead
     // of a codec configuration record.
-    return AppendFourByteLengthPrefixedNals(extradata, size, out) ? std::move(out)
-                                                                  : std::vector<uint8_t>{};
+    return append_four_byte_length_prefixed_nals(extradata, size, out) ? std::move(out)
+                                                                   : std::vector<uint8_t>{};
 }
 
-bool HasCompleteParameterSets(int32_t codec, const uint8_t *data, size_t size) {
+bool has_complete_parameter_sets(int32_t codec, const uint8_t *data, size_t size) {
     if (data == nullptr || size == 0) return false;
 
     bool vps = false;
     bool sps = false;
     bool pps = false;
 
-    ForEachNal(data, size, [&](size_t offset, size_t length) {
+    for_each_nal(data, size, [&](size_t offset, size_t length) {
         if (length < 1) return true;
         const uint8_t header = data[offset];
         if (codec == Zhulong_CODEC_H265) {
@@ -240,13 +240,13 @@ bool HasCompleteParameterSets(int32_t codec, const uint8_t *data, size_t size) {
     return sps && pps;
 }
 
-bool IsNonReferenceFrame(int32_t codec, const uint8_t *data, size_t size) {
+bool is_non_reference_frame(int32_t codec, const uint8_t *data, size_t size) {
     if (data == nullptr || size == 0) return false;
 
     bool saw_slice = false;
     bool saw_reference = false;
 
-    ForEachNal(data, size, [&](size_t offset, size_t length) {
+    for_each_nal(data, size, [&](size_t offset, size_t length) {
         if (length < 1) return true;
         const uint8_t header = data[offset];
         if (codec == Zhulong_CODEC_H265) {
@@ -294,7 +294,7 @@ void PreviewNormalizer::update_metadata(int32_t codec, const uint8_t *extradata,
     codec_ = codec;
     time_base_num_ = time_base_num > 0 ? time_base_num : 1;
     time_base_den_ = time_base_den > 0 ? time_base_den : 90000;
-    parameter_sets_ = ToAnnexB(codec, extradata, extradata_size);
+    parameter_sets_ = to_annex_b(codec, extradata, extradata_size);
 }
 
 int64_t PreviewNormalizer::rescale_delta_to_microseconds(int64_t ticks, int64_t origin,
@@ -349,7 +349,7 @@ Zhulong_packet_view PreviewNormalizer::normalize(const Zhulong_packet_view &in) 
     int64_t source_dts_us = has_source_timestamp
                                 ? rescale_delta_to_microseconds(decode_ticks, origin_ticks_,
                                                                 tb_num, tb_den)
-                                : (has_last_source_clock_ ? NextTimestamp(last_source_clock_us_) : 0);
+                                : (has_last_source_clock_ ? next_timestamp(last_source_clock_us_) : 0);
     int64_t source_pts_us = has_pts
                                 ? rescale_delta_to_microseconds(in.pts, origin_ticks_, tb_num,
                                                                 tb_den)
@@ -364,9 +364,9 @@ Zhulong_packet_view PreviewNormalizer::normalize(const Zhulong_packet_view &in) 
     const bool went_backwards = comparable_clock &&
                                 (both_have_dts
                                      ? source_clock_us < last_source_clock_us_
-                                     : IsBackwardJump(source_clock_us, last_source_clock_us_));
+                                     : is_backward_jump(source_clock_us, last_source_clock_us_));
     const bool jumped_forward = comparable_clock &&
-                                IsForwardJump(source_clock_us, last_source_clock_us_);
+                                is_forward_jump(source_clock_us, last_source_clock_us_);
     if (went_backwards || jumped_forward) {
         origin_ticks_ = decode_ticks;
         source_dts_us = 0;
@@ -374,7 +374,7 @@ Zhulong_packet_view PreviewNormalizer::normalize(const Zhulong_packet_view &in) 
                             ? rescale_delta_to_microseconds(in.pts, origin_ticks_, tb_num,
                                                             tb_den)
                             : 0;
-        timestamp_shift_us_ = has_last_dts_ ? NextTimestamp(last_dts_us_) : 0;
+        timestamp_shift_us_ = has_last_dts_ ? next_timestamp(last_dts_us_) : 0;
         out.pkt_flags |= ZHULONG_PKT_FLAG_DISCONTINUITY;
         ++gop_id_;
         ++discontinuity_count_;
@@ -382,16 +382,16 @@ Zhulong_packet_view PreviewNormalizer::normalize(const Zhulong_packet_view &in) 
                source_dts_us <= last_source_clock_us_) {
         // Without source DTS, keep a synthetic decode clock monotonic without
         // rewriting the presentation timestamp of a reordered frame.
-        source_dts_us = NextTimestamp(last_source_clock_us_);
+        source_dts_us = next_timestamp(last_source_clock_us_);
     }
 
-    int64_t dts_us = SaturatingAdd(source_dts_us, timestamp_shift_us_);
-    int64_t pts_us = has_pts ? SaturatingAdd(source_pts_us, timestamp_shift_us_) : dts_us;
+    int64_t dts_us = saturating_add(source_dts_us, timestamp_shift_us_);
+    int64_t pts_us = has_pts ? saturating_add(source_pts_us, timestamp_shift_us_) : dts_us;
     if (has_last_dts_ && dts_us <= last_dts_us_) {
-        const int64_t next_dts_us = NextTimestamp(last_dts_us_);
+        const int64_t next_dts_us = next_timestamp(last_dts_us_);
         if (has_dts) {
             const int64_t adjustment = next_dts_us - dts_us;
-            pts_us = SaturatingAdd(pts_us, adjustment);
+            pts_us = saturating_add(pts_us, adjustment);
         }
         dts_us = next_dts_us;
     }
@@ -412,7 +412,7 @@ Zhulong_packet_view PreviewNormalizer::normalize(const Zhulong_packet_view &in) 
         out.frame_class = Zhulong_FRAME_IDR;
         out.gop_id = ++gop_id_;
         if (!parameter_sets_.empty() &&
-            !HasCompleteParameterSets(in.codec, in.data, in.size)) {
+            !has_complete_parameter_sets(in.codec, in.data, in.size)) {
             // 复用 stitch_ 缓冲：只在关键帧触发，容量一次长到最大帧后不再增长
             stitch_.resize(parameter_sets_.size() + in.size);
             std::memcpy(stitch_.data(), parameter_sets_.data(), parameter_sets_.size());
@@ -425,7 +425,7 @@ Zhulong_packet_view PreviewNormalizer::normalize(const Zhulong_packet_view &in) 
             ++injected_count_;
         }
     } else {
-        out.frame_class = IsNonReferenceFrame(in.codec, in.data, in.size)
+        out.frame_class = is_non_reference_frame(in.codec, in.data, in.size)
                               ? Zhulong_FRAME_NON_REFERENCE
                               : Zhulong_FRAME_PREDICTIVE;
         out.gop_id = gop_id_;

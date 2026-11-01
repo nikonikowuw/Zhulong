@@ -239,6 +239,22 @@ if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
 endif()
 
 # ==============================================================================
+#  4.0.8 运行时与平台统一日志抽象 (ZhulongLog)
+# ==============================================================================
+# ⚠️ 源文件只在 OBJECT 库里编译一次：宿主归档（ZhulongLog）与 SDK 归档
+#    （libzhulong_algo_sdk.a）都从同一批对象构建，避免同一 TU 两份定义。
+add_library(ZhulongLogObjects OBJECT src/common/log.cpp)
+target_compile_features(ZhulongLogObjects PRIVATE cxx_std_17)
+target_include_directories(ZhulongLogObjects PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+set_target_properties(ZhulongLogObjects PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+add_library(ZhulongLog STATIC $<TARGET_OBJECTS:ZhulongLogObjects>)
+target_compile_features(ZhulongLog PUBLIC cxx_std_17)
+target_include_directories(ZhulongLog PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(ZhulongLog PUBLIC Threads::Threads)
+set_target_properties(ZhulongLog PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# ==============================================================================
 #  4.1 公共算法运行库：OBJECT 单一归属 → SHARED（迁移基线）+ STATIC（交付形态）
 # ==============================================================================
 # 源文件只在 OBJECT 库声明一次，SHARED 与 STATIC 都从同一批对象构建。若两个目标各自
@@ -335,6 +351,7 @@ foreach(target ZhulongPlatformObjects ZhulongAlgoRuntimeObjects)
     )
     target_compile_definitions(${target} PRIVATE ${ZHULONG_ALGO_RUNTIME_PUBLIC_DEFS})
 endforeach()
+target_compile_definitions(ZhulongPlatformObjects PRIVATE ZHULONG_IPC_LOGGING=1)
 foreach(target ZhulongAlgoRuntime ZhulongAlgoRuntimeStatic)
     target_compile_features(${target} PUBLIC cxx_std_17)
     # ⚠️ 对外只暴露 sdk/include（阶段 2.3）：算法包 target 与第三方构建只允许这套头。
@@ -350,8 +367,8 @@ foreach(target ZhulongPlatformObjects ZhulongAlgoRuntimeObjects)
 endforeach()
 # 静态库不能「链接」依赖，只能把最终链接需求交给消费者；故 STATIC 用 PUBLIC，
 # SHARED 维持 PRIVATE（下游靠 .so 的 NEEDED 解析，不继承 ORT / RKNN 链接项）。
-target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS})
-target_link_libraries(ZhulongAlgoRuntimeStatic PUBLIC ${ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS})
+target_link_libraries(ZhulongAlgoRuntime PRIVATE ${ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS} ZhulongLog)
+target_link_libraries(ZhulongAlgoRuntimeStatic PUBLIC ${ZHULONG_ALGO_RUNTIME_PRIVATE_LIBS} ZhulongLog)
 
 # ==============================================================================
 #  4.0.9 迁移期：人脸包按 target 选源码目录（阶段 3.9 删掉这段桥接）
@@ -414,19 +431,6 @@ else()
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/VERSION" sdk/abi.json DESTINATION .)
 endif()
 # ==============================================================================
-# ⚠️ 源文件只在 OBJECT 库里编译一次：宿主归档（ZhulongLog）与 SDK 归档
-#    （libzhulong_algo_sdk.a）都从同一批对象构建，避免同一 TU 两份定义。
-add_library(ZhulongLogObjects OBJECT src/common/log.cpp)
-target_compile_features(ZhulongLogObjects PRIVATE cxx_std_17)
-target_include_directories(ZhulongLogObjects PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-set_target_properties(ZhulongLogObjects PROPERTIES POSITION_INDEPENDENT_CODE ON)
-
-add_library(ZhulongLog STATIC $<TARGET_OBJECTS:ZhulongLogObjects>)
-target_compile_features(ZhulongLog PUBLIC cxx_std_17)
-target_include_directories(ZhulongLog PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(ZhulongLog PUBLIC Threads::Threads)
-set_target_properties(ZhulongLog PROPERTIES POSITION_INDEPENDENT_CODE ON)
-
 # ⚠️ IPC 源同样先编进 OBJECT 库：宿主归档（ZhulongAlgoIpc）与 SDK 归档
 #    （libzhulong_algo_sdk.a）共享同一批对象，一个 TU 只编译一次。
 add_library(ZhulongAlgoIpcObjects OBJECT
@@ -559,7 +563,7 @@ if(BUILD_TESTING)
     # DMA-BUF 物理分配器单元测试
     add_executable(ZhulongDmaBufAllocatorTests tests/dmabuf_allocator_test.cpp)
     target_compile_features(ZhulongDmaBufAllocatorTests PRIVATE cxx_std_17)
-    target_include_directories(ZhulongDmaBufAllocatorTests PRIVATE src)
+    target_include_directories(ZhulongDmaBufAllocatorTests PRIVATE sdk/include include src)
     target_link_libraries(ZhulongDmaBufAllocatorTests PRIVATE ZhulongAlgoIpc)
     add_test(NAME ZhulongDmaBufAllocator COMMAND ZhulongDmaBufAllocatorTests)
     set_tests_properties(ZhulongDmaBufAllocator PROPERTIES TIMEOUT 10)

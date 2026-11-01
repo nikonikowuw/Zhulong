@@ -162,6 +162,22 @@ int main() {
             CHECK(!q.push(4));
         }
 
+        // 验证非默认可构造类型支持 (由 std::optional 消除对默认构造的硬依赖)
+        {
+            struct NonDefaultConstructible {
+                int value;
+                explicit NonDefaultConstructible(int v) : value(v) {}
+                NonDefaultConstructible() = delete;
+            };
+            BoundedQueue<NonDefaultConstructible> ndc_q(2, OverflowStrategy::DROP_OLDEST);
+            CHECK(ndc_q.push(NonDefaultConstructible(1)));
+            CHECK(ndc_q.push(NonDefaultConstructible(2)));
+            CHECK(ndc_q.push(NonDefaultConstructible(3))); // 淘汰 1
+            NonDefaultConstructible out(0);
+            CHECK(ndc_q.pop(out));
+            CHECK(out.value == 2);
+        }
+
         // ====================================================================
         // 2. FFmpegDecodeNode 真实 H.264 关键帧端到端解码测试
         // ====================================================================

@@ -306,6 +306,26 @@ void test_unsupported_input_fails_open() {
     std::cout << "[PASS] test_unsupported_input_fails_open" << std::endl;
 }
 
+void test_plane_stride_padded() {
+    MotionDetector detector;
+    uint32_t width = 1920;
+    uint32_t height = 1080;
+    uint32_t pitch = 2048;
+    HardwareFrame frame1{};
+    frame1.width = width;
+    frame1.height = height;
+    frame1.stride = width;
+    frame1.plane_strides[0] = pitch;
+    frame1.format = FRAME_FORMAT_NV12;
+    std::vector<uint8_t> buf1(pitch * height, 50);
+    frame1.host_planes[0] = buf1.data();
+    MotionResult res1{};
+    assert(detector.detect(frame1, res1));
+    assert(!res1.has_motion);
+
+    std::cout << "[PASS] test_plane_stride_padded" << std::endl;
+}
+
 } // namespace
 
 int main() {
@@ -319,6 +339,7 @@ int main() {
     test_reset();
     test_still_heartbeat_keepalive();
     test_unsupported_input_fails_open();
+    test_plane_stride_padded();
     std::cout << "All MotionDetector unit tests PASSED!" << std::endl;
     return 0;
 }

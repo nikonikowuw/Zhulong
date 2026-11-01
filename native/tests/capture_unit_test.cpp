@@ -102,6 +102,47 @@ int main() {
         throwing.disable_and_drain();
         CHECK(!zhulong::in_callback);
 
+        /* 8. 测试 InCallbackGuard 嵌套与恢复 */
+        {
+            CHECK(!zhulong::in_callback);
+            {
+                zhulong::InCallbackGuard outer;
+                CHECK(zhulong::in_callback);
+                {
+                    zhulong::InCallbackGuard inner;
+                    CHECK(zhulong::in_callback);
+                }
+                CHECK(zhulong::in_callback);
+            }
+            CHECK(!zhulong::in_callback);
+        }
+
+        /* 9. 测试 AISubscription 回调防重入标记与异常安全 */
+        {
+            bool cb_verified = false;
+            zhulong::AISubscription ai_sub(1, [](uintptr_t tok, Zhulong_stream_id, const char*, size_t) {
+                CHECK(zhulong::in_callback);
+                *reinterpret_cast<bool*>(tok) = true;
+            }, reinterpret_cast<uintptr_t>(&cb_verified));
+            ai_sub.invoke(1, "{}", 2);
+            CHECK(cb_verified);
+            CHECK(!zhulong::in_callback);
+
+            zhulong::AISubscription ai_throwing(1, [](uintptr_t, Zhulong_stream_id, const char*, size_t) {
+                CHECK(zhulong::in_callback);
+                throw std::runtime_error("ai cb error");
+            }, 0);
+            bool caught = false;
+            try {
+                ai_throwing.invoke(1, "{}", 2);
+            } catch (...) {
+                caught = true;
+            }
+            CHECK(caught);
+            CHECK(!zhulong::in_callback);
+            CHECK(!ai_throwing.enabled);
+        }
+
         std::cout << "URL/options/ownership/drain unit tests passed\n";
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';

@@ -4,9 +4,9 @@
  *
  * 核心设计原则：
  * 1. 硬件级零拷贝基石：首选 /dev/dma_heap 目录中的物理连续内存堆 (CMA)，次选系统散布堆 (system/sys/uncached)，
- *    备选 DRM Dumb Buffer (/dev/dri/card0 二维化步长映射)。
+ *    备选 DRM Dumb Buffer (/dev/dri/card0 与 /dev/dri/renderD128 二维化步长映射)。
  * 2. CPU Cache 同步保护：成对的 DMA_BUF_IOCTL_SYNC 调用（DMA_BUF_SYNC_START 与 DMA_BUF_SYNC_END），
- *    自动处理 -EINTR 与带退避重试的 -EAGAIN，杜绝紧凑忙轮询死循环。
+ *    自动处理 -EINTR 与有界退避重试的 -EAGAIN，杜绝紧凑忙轮询死循环。
  * 3. 完善的 RAII 语义：DmaBuffer 与 ScopedCpuSync 拥有独立且安全的资源描述符生命周期，杜绝 UAF。
  * 4. 优雅降级与跨平台：非 Linux 或无可用硬件 heap 时，is_supported() 为 false，
  *    allocate() 返回 nullptr，上层透明回退至常规堆/SHM 内存。
@@ -40,6 +40,18 @@ enum class DmaAllocatorType {
 };
 
 /**
+ * @brief DmaBuffer 构造规格参数（显式指定描述符所有权与几何尺寸）
+ */
+struct DmaBufferSpec {
+    int fd{-1};                 /**< 接管的 DMA-BUF 文件描述符（析构时 close） */
+    size_t size{0};             /**< 请求的缓冲区字节大小 */
+    void* mmap_addr{nullptr};   /**< 已映射的虚拟内存地址（析构时 munmap） */
+    int drm_fd{-1};             /**< DRM 设备描述符（若提供，内部 dup 持有独立副本） */
+    uint32_t dumb_handle{0};    /**< DRM Dumb 内存句柄（析构时通过 DRM ioctl 销毁） */
+    size_t mmap_size{0};        /**< 实际映射字节大小（若为 0 默认等于 size） */
+};
+
+/**
  * @brief 单个 DMA-BUF 缓冲区的 RAII 封装
  *
  * 管理 dma_buf fd、mmap 虚拟地址以及 CPU Cache 同步生命周期。
@@ -47,6 +59,7 @@ enum class DmaAllocatorType {
  */
 class DmaBuffer {
 public:
+    explicit DmaBuffer(const DmaBufferSpec& spec);
     DmaBuffer(int fd, size_t size, void* mmap_addr, int drm_fd = -1, uint32_t dumb_handle = 0, size_t mmap_size = 0);
     ~DmaBuffer();
 
@@ -74,16 +87,18 @@ public:
      * @param flags DMA_SYNC_READ, DMA_SYNC_WRITE 或 DMA_SYNC_RW
      * @return true 同步成功；false 失败
      */
-    bool sync_start(uint64_t flags = DMA_SYNC_RW);
+    bool sync_start(uint64_t flags = DMA_SYNC_RW) noexcept;
 
     /**
      * @brief 结束 CPU 访问（写回/同步 CPU Cache）
      * @param flags 与 sync_start 使用的标志严格对称
      * @return true 同步成功；false 失败
      */
-    bool sync_end(uint64_t flags = DMA_SYNC_RW);
+    bool sync_end(uint64_t flags = DMA_SYNC_RW) noexcept;
 
 private:
+    void release() noexcept;
+
     int fd_{-1};
     size_t size_{0};
     size_t mmap_size_{0};
@@ -104,10 +119,7 @@ public:
         : buffer_(&buffer), flags_(flags), active_(buffer_->sync_start(flags)) {}
 
     ~ScopedCpuSync() {
-        if (active_ && buffer_ != nullptr) {
-            buffer_->sync_end(flags_);
-            active_ = false;
-        }
+        reset();
     }
 
     // 禁用拷贝，允许移动
@@ -122,9 +134,7 @@ public:
 
     ScopedCpuSync& operator=(ScopedCpuSync&& other) noexcept {
         if (this != &other) {
-            if (active_ && buffer_ != nullptr) {
-                buffer_->sync_end(flags_);
-            }
+            reset();
             buffer_ = other.buffer_;
             flags_ = other.flags_;
             active_ = other.active_;
@@ -137,7 +147,18 @@ public:
     /** @brief 检查 CPU 同步是否成功上锁/失效 Cache */
     [[nodiscard]] bool is_locked() const noexcept { return active_; }
 
+    /** @brief 便捷条件判据（与 is_locked() 等价，支持 if (guard) 语法） */
+    explicit operator bool() const noexcept { return active_; }
+
 private:
+    void reset() noexcept {
+        if (active_ && buffer_ != nullptr) {
+            buffer_->sync_end(flags_);
+            active_ = false;
+            buffer_ = nullptr;
+        }
+    }
+
     DmaBuffer* buffer_{nullptr};
     uint64_t flags_{DMA_SYNC_RW};
     bool active_{false};
@@ -178,6 +199,7 @@ private:
 
     void probe();
     void set_error(std::string err);
+    void clear_error();
 
     DmaAllocatorType type_{DmaAllocatorType::NONE};
     std::string device_path_;

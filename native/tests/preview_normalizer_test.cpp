@@ -43,13 +43,19 @@ void TestAvcConfigurationRecord() {
         0, 2, 0x67, 0x64,
         1, 0, 2, 0x68, 0xee,
     };
-    const auto parameter_sets = zhulong::ToAnnexB(
+    const auto parameter_sets = zhulong::to_annex_b(
         Zhulong_CODEC_H264, avcc, sizeof(avcc));
     Check(StartsWith(parameter_sets, {0, 0, 0, 1}),
           "avcC parameters should be prefixed by an Annex B start code");
-    Check(zhulong::HasCompleteParameterSets(
+    Check(zhulong::has_complete_parameter_sets(
               Zhulong_CODEC_H264, parameter_sets.data(), parameter_sets.size()),
           "avcC SPS/PPS should be extracted into Annex B");
+    // 兼容别名验证
+    Check(zhulong::ToAnnexB(Zhulong_CODEC_H264, avcc, sizeof(avcc)) == parameter_sets,
+          "ToAnnexB alias must match to_annex_b");
+    Check(zhulong::HasCompleteParameterSets(
+              Zhulong_CODEC_H264, parameter_sets.data(), parameter_sets.size()),
+          "HasCompleteParameterSets alias must match has_complete_parameter_sets");
 
     zhulong::PreviewNormalizer normalizer;
     normalizer.update_metadata(Zhulong_CODEC_H264, avcc, sizeof(avcc), 1, 25);
@@ -76,11 +82,11 @@ void TestHevcConfigurationRecord() {
         hvcc.insert(hvcc.end(), std::begin(array), std::end(array));
     }
 
-    const auto parameter_sets = zhulong::ToAnnexB(
+    const auto parameter_sets = zhulong::to_annex_b(
         Zhulong_CODEC_H265, hvcc.data(), hvcc.size());
     Check(StartsWith(parameter_sets, {0, 0, 0, 1}),
           "hvcC parameters should be prefixed by an Annex B start code");
-    Check(zhulong::HasCompleteParameterSets(
+    Check(zhulong::has_complete_parameter_sets(
               Zhulong_CODEC_H265, parameter_sets.data(), parameter_sets.size()),
           "hvcC VPS/SPS/PPS should be extracted into Annex B");
 }

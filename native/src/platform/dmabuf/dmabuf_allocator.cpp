@@ -42,6 +42,15 @@ struct dma_heap_allocation_data {
 // <linux/dma-buf.h> 缺失时的 UAPI 兜底定义（全仓唯一来源）
 #include "platform/dmabuf/dmabuf_sync.hpp"
 
+#if defined(__has_include)
+#if __has_include(<drm/drm.h>) && __has_include(<drm/drm_mode.h>)
+#include <drm/drm.h>
+#include <drm/drm_mode.h>
+#define ZHULONG_HAVE_DRM_H 1
+#endif
+#endif
+
+#ifndef ZHULONG_HAVE_DRM_H
 #ifndef DRM_IOCTL_MODE_CREATE_DUMB
 struct drm_mode_create_dumb {
     __u32 height;
@@ -64,20 +73,22 @@ struct drm_prime_handle {
 #define DRM_IOCTL_MODE_CREATE_DUMB _IOWR(DRM_IOCTL_BASE, 0xB2, struct drm_mode_create_dumb)
 #define DRM_IOCTL_MODE_DESTROY_DUMB _IOWR(DRM_IOCTL_BASE, 0xB4, struct drm_mode_destroy_dumb)
 #define DRM_IOCTL_PRIME_HANDLE_TO_FD _IOWR(DRM_IOCTL_BASE, 0x2D, struct drm_prime_handle)
+#endif // DRM_IOCTL_MODE_CREATE_DUMB
+#endif // ZHULONG_HAVE_DRM_H
+
 #ifndef DRM_CLOEXEC
 #define DRM_CLOEXEC O_CLOEXEC
 #endif
 #ifndef DRM_RDWR
 #define DRM_RDWR O_RDWR
 #endif
-#endif // DRM_IOCTL_MODE_CREATE_DUMB
 
 #endif // __linux__
 
 namespace zhulong::platform {
 
-#if defined(ZHULONG_IPC_LOGGING)
 namespace {
+#if defined(ZHULONG_IPC_LOGGING)
 std::atomic<bool> allocation_failure_reported{false};
 
 void report_allocation_failure(const char* reason, int error_number, size_t size) noexcept {
@@ -87,12 +98,11 @@ void report_allocation_failure(const char* reason, int error_number, size_t size
     ZL_LOGE(0, "platform.dmabuf", "allocation_failed reason=%s errno=%d size_bytes=%zu",
             reason, error_number, size);
 }
-}
 #endif
 
 #if defined(__linux__)
-static void scan_dma_heaps(std::vector<std::string>& cma_candidates,
-                           std::vector<std::string>& sys_candidates) {
+void scan_dma_heaps(std::vector<std::string>& cma_candidates,
+                    std::vector<std::string>& sys_candidates) {
     DIR* dir = ::opendir("/dev/dma_heap");
     if (!dir) {
         return;
@@ -129,28 +139,75 @@ static void scan_dma_heaps(std::vector<std::string>& cma_candidates,
     }
     ::closedir(dir);
 }
+
+bool sync_dma_buf(int fd, uint64_t sync_flags) noexcept {
+    struct dma_buf_sync sync{};
+    sync.flags = sync_flags;
+
+    int retries = 0;
+    constexpr int MAX_ATTEMPTS = 50; // 最多重试 50 次 (最坏阻塞约 5ms)，杜绝发布线程永久阻塞
+    constexpr auto BACKOFF_TIME = std::chrono::microseconds(100);
+
+    for (;;) {
+        int ret = ::ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync);
+        if (ret == 0) {
+            return true;
+        }
+        const int err = errno;
+        if (err == EINTR) {
+            if (++retries > MAX_ATTEMPTS) {
+                return false;
+            }
+            continue;
+        }
+        if (err == EAGAIN) {
+            if (++retries > MAX_ATTEMPTS) {
+                return false;
+            }
+            std::this_thread::sleep_for(BACKOFF_TIME);
+            continue;
+        }
+        return false;
+    }
+}
 #endif
+} // namespace
 
 // =============================================================================
 // DmaBuffer Implementation
 // =============================================================================
 
-DmaBuffer::DmaBuffer(int fd, size_t size, void* mmap_addr, int drm_fd, uint32_t dumb_handle, size_t mmap_size)
-    : fd_(fd), size_(size), mmap_size_(mmap_size > 0 ? mmap_size : size),
-      mmap_addr_(mmap_addr), dumb_handle_(dumb_handle) {
+DmaBuffer::DmaBuffer(const DmaBufferSpec& spec)
+    : fd_(spec.fd), size_(spec.size),
+      mmap_size_(spec.mmap_size > 0 ? spec.mmap_size : spec.size),
+      mmap_addr_(spec.mmap_addr), dumb_handle_(spec.dumb_handle) {
 #if defined(__linux__)
-    if (drm_fd >= 0) {
-        drm_fd_ = ::dup(drm_fd);
+    if (spec.drm_fd >= 0) {
+        drm_fd_ = ::dup(spec.drm_fd);
+        if (drm_fd_ < 0 && dumb_handle_ > 0) {
+            // dup 失败：使用原始传入的 spec.drm_fd 尽力销毁 dumb handle，杜绝内核显存句柄泄漏
+            struct drm_mode_destroy_dumb destroy_req{};
+            destroy_req.handle = dumb_handle_;
+            ioctl(spec.drm_fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_req);
+            dumb_handle_ = 0;
+        }
     } else {
         drm_fd_ = -1;
     }
 #else
-    (void)drm_fd;
+    (void)spec.drm_fd;
     drm_fd_ = -1;
 #endif
 }
 
+DmaBuffer::DmaBuffer(int fd, size_t size, void* mmap_addr, int drm_fd, uint32_t dumb_handle, size_t mmap_size)
+    : DmaBuffer(DmaBufferSpec{fd, size, mmap_addr, drm_fd, dumb_handle, mmap_size}) {}
+
 DmaBuffer::~DmaBuffer() {
+    release();
+}
+
+void DmaBuffer::release() noexcept {
     if (mmap_addr_ && mmap_addr_ != MAP_FAILED) {
         ::munmap(mmap_addr_, mmap_size_);
         mmap_addr_ = nullptr;
@@ -171,6 +228,8 @@ DmaBuffer::~DmaBuffer() {
         drm_fd_ = -1;
     }
 #endif
+    size_ = 0;
+    mmap_size_ = 0;
 }
 
 DmaBuffer::DmaBuffer(DmaBuffer&& other) noexcept
@@ -186,22 +245,8 @@ DmaBuffer::DmaBuffer(DmaBuffer&& other) noexcept
 
 DmaBuffer& DmaBuffer::operator=(DmaBuffer&& other) noexcept {
     if (this != &other) {
-        if (mmap_addr_ && mmap_addr_ != MAP_FAILED) {
-            ::munmap(mmap_addr_, mmap_size_);
-        }
-        if (fd_ >= 0) {
-            ::close(fd_);
-        }
-#if defined(__linux__)
-        if (drm_fd_ >= 0 && dumb_handle_ > 0) {
-            struct drm_mode_destroy_dumb destroy_req{};
-            destroy_req.handle = dumb_handle_;
-            ioctl(drm_fd_, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_req);
-        }
-        if (drm_fd_ >= 0) {
-            ::close(drm_fd_);
-        }
-#endif
+        release();
+
         fd_ = other.fd_;
         size_ = other.size_;
         mmap_size_ = other.mmap_size_;
@@ -219,55 +264,23 @@ DmaBuffer& DmaBuffer::operator=(DmaBuffer&& other) noexcept {
     return *this;
 }
 
-bool DmaBuffer::sync_start(uint64_t flags) {
+bool DmaBuffer::sync_start(uint64_t flags) noexcept {
     // 空对象必须先拒绝：没有 fd 就没有可同步的缓冲。这个检查必须留在条件编译
     // 之外 —— 非 Linux 平台没有 ioctl 可用，但「不能对自己不拥有的 fd 报告成功」
     // 与平台无关。迁移到 sync_end 同理。
     if (fd_ < 0) return false;
 #if defined(__linux__)
-    struct dma_buf_sync sync{};
-    sync.flags = DMA_BUF_SYNC_START | (flags & DMA_BUF_SYNC_RW);
-    int ret = 0;
-    int retries = 0;
-    constexpr int MAX_RETRIES = 50;
-    constexpr auto BACKOFF_TIME = std::chrono::microseconds(100);
-
-    do {
-        ret = ioctl(fd_, DMA_BUF_IOCTL_SYNC, &sync);
-        if (ret == -1 && errno == EAGAIN) {
-            if (++retries > MAX_RETRIES) {
-                return false;
-            }
-            std::this_thread::sleep_for(BACKOFF_TIME);
-        }
-    } while (ret == -1 && (errno == EINTR || errno == EAGAIN));
-    return (ret == 0);
+    return sync_dma_buf(fd_, DMA_BUF_SYNC_START | (flags & DMA_BUF_SYNC_RW));
 #else
     (void)flags;
     return true;
 #endif
 }
 
-bool DmaBuffer::sync_end(uint64_t flags) {
+bool DmaBuffer::sync_end(uint64_t flags) noexcept {
     if (fd_ < 0) return false;
 #if defined(__linux__)
-    struct dma_buf_sync sync{};
-    sync.flags = DMA_BUF_SYNC_END | (flags & DMA_BUF_SYNC_RW);
-    int ret = 0;
-    int retries = 0;
-    constexpr int MAX_RETRIES = 50;
-    constexpr auto BACKOFF_TIME = std::chrono::microseconds(100);
-
-    do {
-        ret = ioctl(fd_, DMA_BUF_IOCTL_SYNC, &sync);
-        if (ret == -1 && errno == EAGAIN) {
-            if (++retries > MAX_RETRIES) {
-                return false;
-            }
-            std::this_thread::sleep_for(BACKOFF_TIME);
-        }
-    } while (ret == -1 && (errno == EINTR || errno == EAGAIN));
-    return (ret == 0);
+    return sync_dma_buf(fd_, DMA_BUF_SYNC_END | (flags & DMA_BUF_SYNC_RW));
 #else
     (void)flags;
     return true;
@@ -303,6 +316,11 @@ void DmaBufAllocator::set_error(std::string err) {
     last_error_ = std::move(err);
 }
 
+void DmaBufAllocator::clear_error() {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_.clear();
+}
+
 std::string DmaBufAllocator::last_error() const {
     std::lock_guard<std::mutex> lock(error_mutex_);
     return last_error_;
@@ -323,8 +341,15 @@ void DmaBufAllocator::probe() {
         if (heap_fd_ >= 0) {
             type_ = DmaAllocatorType::DMA_HEAP_CMA;
             device_path_ = path;
+#if defined(ZHULONG_IPC_LOGGING)
+            ZL_LOGI(0, "platform.dmabuf", "selected dma_heap CMA allocator: %s", path.c_str());
+#endif
             return;
         }
+#if defined(ZHULONG_IPC_LOGGING)
+        ZL_LOGD(0, "platform.dmabuf", "cma heap candidate %s open failed: %s (errno %d)",
+                path.c_str(), std::strerror(errno), errno);
+#endif
     }
 
     // 2. 次选系统散布内存堆 system
@@ -333,13 +358,29 @@ void DmaBufAllocator::probe() {
         if (heap_fd_ >= 0) {
             type_ = DmaAllocatorType::DMA_HEAP_SYS;
             device_path_ = path;
+#if defined(ZHULONG_IPC_LOGGING)
+            ZL_LOGI(0, "platform.dmabuf", "selected dma_heap system allocator: %s", path.c_str());
+#endif
             return;
         }
+#if defined(ZHULONG_IPC_LOGGING)
+        ZL_LOGD(0, "platform.dmabuf", "system heap candidate %s open failed: %s (errno %d)",
+                path.c_str(), std::strerror(errno), errno);
+#endif
     }
 
     // 3. 备选 DRM Dumb Buffer PRIME FD（使用 2D 几何步长真实探测）
-    drm_fd_ = ::open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
-    if (drm_fd_ >= 0) {
+    // 支持探测 /dev/dri/card0 与 /dev/dri/renderD128 等节点
+    const char* drm_candidates[] = {"/dev/dri/card0", "/dev/dri/renderD128"};
+    for (const char* drm_path : drm_candidates) {
+        drm_fd_ = ::open(drm_path, O_RDWR | O_CLOEXEC);
+        if (drm_fd_ < 0) {
+#if defined(ZHULONG_IPC_LOGGING)
+            ZL_LOGD(0, "platform.dmabuf", "drm candidate %s open failed: %s (errno %d)",
+                    drm_path, std::strerror(errno), errno);
+#endif
+            continue;
+        }
         // 动态探针校验：使用标准二维步长（4096 字节宽，1 行高）测试驱动真实支持情况
         struct drm_mode_create_dumb test_req{};
         test_req.width = 4096;
@@ -350,12 +391,18 @@ void DmaBufAllocator::probe() {
             destroy_req.handle = test_req.handle;
             ioctl(drm_fd_, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_req);
             type_ = DmaAllocatorType::DRM_DUMB;
-            device_path_ = "/dev/dri/card0";
+            device_path_ = drm_path;
+#if defined(ZHULONG_IPC_LOGGING)
+            ZL_LOGI(0, "platform.dmabuf", "selected drm_dumb allocator: %s", drm_path);
+#endif
             return;
         }
         ::close(drm_fd_);
         drm_fd_ = -1;
     }
+#if defined(ZHULONG_IPC_LOGGING)
+    ZL_LOGI(0, "platform.dmabuf", "no hardware dma allocator available; falling back to none");
+#endif
 #endif
 }
 
@@ -370,7 +417,12 @@ const char* DmaBufAllocator::type_name() const noexcept {
 }
 
 std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
-    if (size == 0 || !is_supported()) {
+    if (size == 0) {
+        set_error("requested allocation size is 0");
+        return nullptr;
+    }
+    if (!is_supported()) {
+        set_error("DMA-BUF allocator is not supported on this platform/environment");
         return nullptr;
     }
 
@@ -411,6 +463,7 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
 #if defined(ZHULONG_IPC_LOGGING)
         allocation_failure_reported.store(false, std::memory_order_relaxed);
 #endif
+        clear_error();
         return std::make_unique<DmaBuffer>(dma_fd, size, ptr);
     }
 
@@ -436,6 +489,19 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
             return nullptr;
         }
 
+        if (create_req.size < size) {
+            int err = EINVAL;
+#if defined(ZHULONG_IPC_LOGGING)
+            report_allocation_failure("drm_create_dumb_truncated", err, size);
+#endif
+            set_error("DRM_IOCTL_MODE_CREATE_DUMB buffer size smaller than requested: " +
+                      std::to_string(create_req.size) + " < " + std::to_string(size));
+            struct drm_mode_destroy_dumb destroy_req{};
+            destroy_req.handle = create_req.handle;
+            ioctl(drm_fd_, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_req);
+            return nullptr;
+        }
+
         struct drm_prime_handle prime_req{};
         prime_req.handle = create_req.handle;
         prime_req.flags = DRM_CLOEXEC | DRM_RDWR;
@@ -454,10 +520,6 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
         }
 
         size_t actual_mmap_size = static_cast<size_t>(create_req.size);
-        if (actual_mmap_size < size) {
-            actual_mmap_size = size;
-        }
-
         void* ptr = ::mmap(nullptr, actual_mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, prime_req.fd, 0);
         if (ptr == MAP_FAILED) {
             int err = errno;
@@ -475,6 +537,7 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
 #if defined(ZHULONG_IPC_LOGGING)
         allocation_failure_reported.store(false, std::memory_order_relaxed);
 #endif
+        clear_error();
         return std::make_unique<DmaBuffer>(prime_req.fd, size, ptr, drm_fd_, create_req.handle, actual_mmap_size);
     }
 #endif

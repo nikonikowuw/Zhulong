@@ -41,19 +41,29 @@ int main() {
         {
             ScopedCpuSync write_guard(*buf, DMA_SYNC_WRITE);
             assert(write_guard.is_locked());
+            assert(static_cast<bool>(write_guard));
             std::memset(buf->mmap_addr(), 0xA5, 4096);
         } // 离开作用域自动执行 sync_end
 
         {
             ScopedCpuSync read_guard(*buf, DMA_SYNC_READ);
             assert(read_guard.is_locked());
+            assert(static_cast<bool>(read_guard));
             assert(rptr[0] == 0xA5);
             assert(rptr[4095] == 0xA5);
 
-            // 测试 ScopedCpuSync 移动语义
+            // 测试 ScopedCpuSync 移动构造
             ScopedCpuSync moved_guard = std::move(read_guard);
             assert(!read_guard.is_locked());
+            assert(!static_cast<bool>(read_guard));
             assert(moved_guard.is_locked());
+            assert(static_cast<bool>(moved_guard));
+
+            // 测试 ScopedCpuSync 移动赋值
+            ScopedCpuSync assigned_guard(*buf, DMA_SYNC_WRITE);
+            assigned_guard = std::move(moved_guard);
+            assert(assigned_guard.is_locked());
+            assert(!moved_guard.is_locked());
         }
 
         // 3. 测试大尺寸二维几何分配（16MB 4K 帧缓冲），验证 DRM Dumb 步长二维化
@@ -92,6 +102,18 @@ int main() {
         assert(moved.size() == test_size);
         assert(moved.mmap_size() == old_mmap_sz);
 
+        // 测试 DmaBuffer 移动赋值
+        DmaBuffer moved2(-1, 0, nullptr);
+        moved2 = std::move(moved);
+        assert(moved.fd() == -1);
+        assert(moved.size() == 0);
+        assert(moved2.fd() == old_fd);
+        assert(moved2.size() == test_size);
+        assert(moved2.mmap_size() == old_mmap_sz);
+
+        // 验证分配成功后 last_error 为空
+        assert(allocator.last_error().empty());
+
         std::cout << "[Test] DmaBufAllocator hardware allocation & ScopedCpuSync verified." << std::endl;
     } else {
         // 在不支持 DMA-BUF 的环境（如 macOS 或普通容器）下，断言优雅降级
@@ -100,10 +122,18 @@ int main() {
         assert(allocator.device_path().empty());
         auto buf = allocator.allocate(4096);
         assert(buf == nullptr);
+        assert(allocator.last_error() == "DMA-BUF allocator is not supported on this platform/environment");
         std::cout << "[Test] DmaBufAllocator graceful fallback verified." << std::endl;
     }
 
-    // 5. 验证 RAII 保护与空对象安全性
+    // 5. 验证参数校验与错误记录
+    {
+        auto zero_buf = allocator.allocate(0);
+        assert(zero_buf == nullptr);
+        assert(allocator.last_error() == "requested allocation size is 0");
+    }
+
+    // 6. 验证 RAII 保护、DmaBufferSpec 构造与空对象安全性
     {
         DmaBuffer dummy(-1, 0, nullptr);
         assert(dummy.fd() == -1);
@@ -115,6 +145,16 @@ int main() {
 
         ScopedCpuSync dummy_guard(dummy);
         assert(!dummy_guard.is_locked());
+        assert(!static_cast<bool>(dummy_guard));
+
+        // 显式 DmaBufferSpec 构造
+        DmaBufferSpec spec{};
+        spec.fd = -1;
+        spec.size = 0;
+        DmaBuffer spec_dummy(spec);
+        assert(spec_dummy.fd() == -1);
+        assert(spec_dummy.size() == 0);
+        assert(!spec_dummy.sync_start());
     }
 
     std::cout << "[Test] ZhulongDmaBufAllocatorTests PASSED" << std::endl;

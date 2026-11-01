@@ -57,12 +57,15 @@ public:
         if (addr == MAP_FAILED || addr == nullptr) {
             return nullptr;
         }
+        struct dma_buf_sync sync{};
+        sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ;
+        if (::ioctl(dma_fd, DMA_BUF_IOCTL_SYNC, &sync) < 0) {
+            ::munmap(addr, map_size);
+            return nullptr;
+        }
         ptr_ = static_cast<const uint8_t*>(addr);
         size_ = map_size;
         fd_ = dma_fd;
-        struct dma_buf_sync sync{};
-        sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ;
-        (void)::ioctl(dma_fd, DMA_BUF_IOCTL_SYNC, &sync);
         return ptr_;
 #else
         (void)dma_fd;
@@ -70,8 +73,6 @@ public:
         return nullptr;
 #endif
     }
-
-    const uint8_t* ptr() const noexcept { return ptr_; }
 
 private:
     const uint8_t* ptr_{nullptr};
@@ -98,7 +99,8 @@ bool MotionDetector::sample_y_plane(const HardwareFrame& frame, uint8_t* out_gri
     if (frame.format != FRAME_FORMAT_NV12 && frame.format != FRAME_FORMAT_YUV420P) {
         return false;
     }
-    if (frame.width < 16 || frame.height < 16 || frame.stride < frame.width) {
+    const uint32_t stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
+    if (frame.width < 16 || frame.height < 16 || stride < frame.width) {
         return false;
     }
 
@@ -112,7 +114,7 @@ bool MotionDetector::sample_y_plane(const HardwareFrame& frame, uint8_t* out_gri
     } else if (frame.dma_fd >= 0) {
         size_t map_size = frame.y_plane_size();
         if (map_size == 0) {
-            map_size = static_cast<size_t>(frame.stride) * frame.height;
+            map_size = static_cast<size_t>(stride) * frame.height;
         }
         y_src = dma_reader.open(frame.dma_fd, map_size);
     }
@@ -121,7 +123,6 @@ bool MotionDetector::sample_y_plane(const HardwareFrame& frame, uint8_t* out_gri
         return false;
     }
 
-    const uint32_t stride = frame.stride;
     const uint32_t src_w = frame.width;
     const uint32_t src_h = frame.height;
 

@@ -5,8 +5,8 @@
  * 核心设计与职责：
  * 1. 物理发布侧节流：根据当前所有连接的算法 Runner 的 max(sample_fps) 在 Native 侧直接丢弃未到期帧，
  *    避免无谓的共享内存写入与 IPC 广播，零像素数据进入 Go GC 堆；
- * 2. 帧生命周期闭环：从 Stream 拉取的只读硬件帧在写入共享内存后立即 drop 释放引用，
- *    严防将底层硬件帧持有至推理阶段，防止解码器缓冲区耗尽。
+ * 2. 帧生命周期闭环：从 Stream 拉取的只读硬件帧在写入共享内存并压入抓拍历史环（上限 4 帧）后，
+ *    发布工作线程立即 drop 本地借用引用，严防将底层硬件帧持有至推理阶段，防止解码器缓冲区耗尽。
  */
 
 #pragma once
@@ -95,6 +95,7 @@ private:
     // 兼顾实测 1~4 帧回传延迟与解码器缓冲安全冗余）。
     // ⚠️ mutable + mutex：查询接口是 const，但需要加锁读取。
     static constexpr size_t kHistoryCapacity = 4;
+    static constexpr size_t history_capacity = kHistoryCapacity;
     mutable std::mutex latest_mutex_;
     std::vector<HardwareFrame::ConstPtr> history_frames_;
 

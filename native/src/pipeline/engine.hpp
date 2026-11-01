@@ -59,11 +59,12 @@ struct Engine {
 
     // per-stream FrameBroker 与 FramePublisher 池 (受 control 互斥锁保护)
     std::map<Zhulong_stream_id, std::unique_ptr<ipc::FrameBroker>> brokers; /**< AI 帧分发 Broker 实例池 */
-    std::map<Zhulong_stream_id, std::unique_ptr<FramePublisher>> publishers; /**< AI 帧发布线程池 */
+    std::map<Zhulong_stream_id, std::shared_ptr<FramePublisher>> publishers; /**< AI 帧发布线程池 */
     std::string broker_base_dir{"/tmp"};        /**< Broker socket 存放目录 (读取环境变量覆写) */
 
     std::mutex ai_sub_mutex;                    /**< 保护 AI 结果订阅池 */
     std::map<Zhulong_subscription_id, std::shared_ptr<AISubscription>> ai_subscriptions; /**< AI 结果订阅池 */
+    std::atomic<uint64_t> ai_callback_exceptions_{0}; /**< 被隔离的 AI 结果回调异常累计次数 */
 
     std::thread reaper;                         /**< 定期回收宽限期到期流的清理线程 */
     std::atomic<bool> reaper_stop{true};        /**< 清理线程停止控制信号 */
@@ -115,6 +116,11 @@ struct Engine {
 
     /** @brief 分发 AI 推理结果至已注册的回调 */
     void dispatch_ai_result(Zhulong_stream_id stream_id, const char* payload, size_t size);
+
+    /** @brief 获取被隔离的 AI 结果回调异常累计次数 (无锁，relaxed 读取) */
+    uint64_t ai_callback_exception_count() const noexcept {
+        return ai_callback_exceptions_.load(std::memory_order_relaxed);
+    }
 
     /** @brief 独立同步探测指定 RTSP 流的视频元数据 */
     Video probe(const std::string &url, const Options &options);

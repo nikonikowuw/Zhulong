@@ -45,7 +45,7 @@ namespace zhulong {
  * @param size 字节长度
  * @return Annex B 形式的参数集；输入为空或格式非法时返回空
  */
-std::vector<uint8_t> ToAnnexB(int32_t codec, const uint8_t *extradata, size_t size);
+std::vector<uint8_t> to_annex_b(int32_t codec, const uint8_t *extradata, size_t size);
 
 /**
  * @brief 判断 Annex B 载荷内是否已自包含解码所需的参数集
@@ -58,7 +58,7 @@ std::vector<uint8_t> ToAnnexB(int32_t codec, const uint8_t *extradata, size_t si
  * @param size 载荷长度
  * @return true 表示已完整具备，无需注入
  */
-bool HasCompleteParameterSets(int32_t codec, const uint8_t *data, size_t size);
+bool has_complete_parameter_sets(int32_t codec, const uint8_t *data, size_t size);
 
 /**
  * @brief 判断一个非关键帧是否为非参考帧（可安全丢弃）
@@ -71,7 +71,18 @@ bool HasCompleteParameterSets(int32_t codec, const uint8_t *data, size_t size);
  * @param size 载荷长度
  * @return true 表示可安全丢弃
  */
-bool IsNonReferenceFrame(int32_t codec, const uint8_t *data, size_t size);
+bool is_non_reference_frame(int32_t codec, const uint8_t *data, size_t size);
+
+// 兼容别名 (对齐 naming-guidelines §4 规范化)
+inline std::vector<uint8_t> ToAnnexB(int32_t codec, const uint8_t *extradata, size_t size) {
+    return to_annex_b(codec, extradata, size);
+}
+inline bool HasCompleteParameterSets(int32_t codec, const uint8_t *data, size_t size) {
+    return has_complete_parameter_sets(codec, data, size);
+}
+inline bool IsNonReferenceFrame(int32_t codec, const uint8_t *data, size_t size) {
+    return is_non_reference_frame(codec, data, size);
+}
 
 /**
  * @brief 预览契约整形器

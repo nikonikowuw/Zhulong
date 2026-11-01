@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <utility>
 
 namespace zhulong {
@@ -64,7 +65,7 @@ public:
      * @return true 成功入队；false 队列已被取消或因 DROP_NEWEST 策略被拒绝
      */
     bool push(T item) {
-        T discarded;
+        std::optional<T> discarded;
         {
             std::unique_lock<std::mutex> lock(mutex_);
             if (cancelled_) return false;
@@ -108,7 +109,7 @@ public:
         }
 
         if (queue_.empty()) {
-            return false; // 队列已被取消且已无残余数据
+            return false; // 队列已被取消或当前为空
         }
 
         item = std::move(queue_.front());

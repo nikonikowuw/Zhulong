@@ -28,6 +28,20 @@ namespace zhulong {
 extern thread_local bool in_callback;
 
 /**
+ * @brief 回调重入防御 RAII 守卫：在生命周期内置位 in_callback，析构时自动恢复此前状态
+ */
+class InCallbackGuard {
+public:
+    InCallbackGuard() noexcept;
+    ~InCallbackGuard() noexcept;
+    InCallbackGuard(const InCallbackGuard&) = delete;
+    InCallbackGuard& operator=(const InCallbackGuard&) = delete;
+
+private:
+    bool previous_{false};
+};
+
+/**
  * @brief 数据包订阅通道上下文
  *
  * 维护用户注册的回调函数与状态，支持在单生产者模型下的安全调用与同步排空。

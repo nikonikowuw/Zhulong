@@ -6,6 +6,7 @@
 #pragma once
 
 #include "Zhulong/engine.h"
+#include "pipeline/subscription.hpp"
 
 #include <condition_variable>
 #include <cstdint>
@@ -29,16 +30,24 @@ struct AISubscription {
         : stream_id(s_id), callback(cb), token(tok) {}
 
     void invoke(Zhulong_stream_id s_id, const char* json_payload, size_t payload_len) {
-        std::unique_lock<std::mutex> lock(mutex);
-        if (!enabled || !callback) return;
-        active = true;
-        lock.unlock();
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!enabled || !callback) return;
+            active = true;
+        }
 
         try {
+            InCallbackGuard guard;
             callback(token, s_id, json_payload, payload_len);
-        } catch (...) {}
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(mutex);
+            active = false;
+            enabled = false;
+            drained.notify_all();
+            throw;
+        }
 
-        lock.lock();
+        std::lock_guard<std::mutex> lock(mutex);
         active = false;
         drained.notify_all();
     }

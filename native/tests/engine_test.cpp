@@ -25,6 +25,10 @@ int main() {
     if (Zhulong_stream_get_broker_clients(engine, 999, client_buf, 4, &client_count) != Zhulong_ERR_NOT_FOUND) return 12;
     if (client_count != 0) return 13;
 
+    // AI 结果订阅在流不存在时返回 NOT_FOUND
+    Zhulong_subscription_id sub_id = 0;
+    if (Zhulong_stream_subscribe_ai_results(engine, 999, [](uintptr_t, Zhulong_stream_id, const char*, size_t) {}, 0, &sub_id) != Zhulong_ERR_NOT_FOUND) return 14;
+
     Zhulong_engine_destroy(engine);
     Zhulong_engine_destroy(nullptr);
     return 0;

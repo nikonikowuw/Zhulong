@@ -27,7 +27,9 @@ void FramePublisher::start() {
     if (!worker_.joinable()) {
         stop_.store(false, std::memory_order_relaxed);
         worker_ = std::thread(&FramePublisher::publish_loop, this);
-        ZL_LOGI(stream_->id, "pipeline.frame_publisher", "frame_publisher_started");
+        if (stream_) {
+            ZL_LOGI(stream_->id, "pipeline.frame_publisher", "frame_publisher_started");
+        }
     }
 }
 
@@ -35,7 +37,9 @@ void FramePublisher::stop() {
     stop_.store(true, std::memory_order_relaxed);
     if (worker_.joinable()) {
         worker_.join();
-        ZL_LOGI(stream_->id, "pipeline.frame_publisher", "frame_publisher_stopped");
+        if (stream_) {
+            ZL_LOGI(stream_->id, "pipeline.frame_publisher", "frame_publisher_stopped");
+        }
     }
     // ⚠️ 必须释放快照帧引用：即使 worker 已汇合，若这里不清空，
     // HardwareFrame 引用仍持有解码器 buffer，停流时会拖到宽限期超时。
@@ -89,7 +93,7 @@ void FramePublisher::push_frame(HardwareFrame::ConstPtr frame) {
 
 void FramePublisher::set_max_sample_fps(uint32_t fps) noexcept {
     const uint32_t previous = max_sample_fps_.exchange(fps, std::memory_order_relaxed);
-    if (previous != fps) {
+    if (previous != fps && stream_) {
         ZL_LOGI(stream_->id, "pipeline.frame_publisher", "publish_rate_changed fps=%u", fps);
     }
 }
@@ -99,7 +103,9 @@ uint32_t FramePublisher::max_sample_fps() const noexcept {
 }
 
 void FramePublisher::publish_loop() noexcept {
+    if (!stream_) return;
     auto next_due = std::chrono::steady_clock::now();
+    auto last_drop_warn = std::chrono::steady_clock::time_point::min();
 
     while (!stop_.load(std::memory_order_relaxed)) {
         HardwareFrame::ConstPtr frame;
@@ -145,7 +151,12 @@ void FramePublisher::publish_loop() noexcept {
                 motion_info.motion_box_count = motion_res.box_count;
                 std::copy_n(motion_res.boxes, motion_res.box_count, motion_info.motion_boxes);
             }
-            broker_->publish_frame(*frame, motion_info);
+            if (!broker_->publish_frame(*frame, motion_info)) {
+                if (now - last_drop_warn > std::chrono::seconds(1)) {
+                    ZL_LOGW(stream_->id, "pipeline.frame_publisher", "frame_publish_failed");
+                    last_drop_warn = now;
+                }
+            }
         }
 
         // 抓拍快照历史引用：环形保留最近 kHistoryCapacity 帧，支持按 PTS 精确匹配。
