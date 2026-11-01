@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { getRouteApi } from '@tanstack/react-router'
 import { CarFront, AlertTriangle, Camera, UserCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -21,7 +21,10 @@ import {
   type RecordsSearchParams,
   type RecordsTab,
 } from './data/schema'
-import { type RecordsDateRange } from './data/time-presets'
+import {
+  type RecordsDateRange,
+  resolveRecordsWindow,
+} from './data/time-presets'
 import { useAlarms } from './hooks/use-alarms'
 import { useCameraNames } from './hooks/use-camera-names'
 import { useCaptures } from './hooks/use-captures'
@@ -43,6 +46,13 @@ export function Records() {
   const preset = search.preset
   const startTime = search.startTime
   const endTime = search.endTime
+
+  // 生效中的时间窗口：URL 只记意图（预设）或自定义绝对时间，缺省时落到「今日全天」。
+  // memo 必须存在：相对预设内部取 now()，每次渲染重算会让 react-query 的 key 抖动。
+  const activeRange = useMemo(
+    () => resolveRecordsWindow({ preset, startTime, endTime }),
+    [preset, startTime, endTime]
+  )
 
   // 细项过滤
   const matched = search.matched
@@ -83,8 +93,8 @@ export function Records() {
           personId,
           matched:
             matched === 'true' ? true : matched === 'false' ? false : undefined,
-          startTime,
-          endTime,
+          startTime: activeRange.startTime,
+          endTime: activeRange.endTime,
         }
       : undefined
   )
@@ -97,8 +107,8 @@ export function Records() {
           pageSize,
           cameraId,
           alarmType,
-          startTime,
-          endTime,
+          startTime: activeRange.startTime,
+          endTime: activeRange.endTime,
         }
       : undefined
   )
@@ -111,8 +121,8 @@ export function Records() {
           pageSize,
           cameraId,
           targetType: tab === 'vehicles' ? 'vehicle' : targetType,
-          startTime,
-          endTime,
+          startTime: activeRange.startTime,
+          endTime: activeRange.endTime,
         }
       : undefined
   )
@@ -200,9 +210,7 @@ export function Records() {
               tab={tab}
               view={view}
               cameraId={cameraId}
-              preset={preset}
-              startTime={startTime}
-              endTime={endTime}
+              dateRange={activeRange}
               matched={matched}
               personId={personId}
               alarmType={alarmType}

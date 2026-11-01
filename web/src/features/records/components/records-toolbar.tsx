@@ -14,7 +14,10 @@ import {
 } from '@/components/ui/select'
 import { useAllCameras } from '@/features/cameras/contract'
 import { type RecordsTab } from '../data/schema'
-import { type RecordsDateRange, type TimePresetKey } from '../data/time-presets'
+import {
+  type RecordsDateRange,
+  type ResolvedRecordsWindow,
+} from '../data/time-presets'
 import { useAlarmTypes } from '../hooks/use-alarm-types'
 import { useCaptureTargetTypes } from '../hooks/use-capture-target-types'
 import { RecordsDateRangePicker } from './records-date-range-picker'
@@ -23,9 +26,8 @@ export interface RecordsToolbarProps {
   tab: RecordsTab
   view: 'grid' | 'table'
   cameraId?: string
-  preset?: TimePresetKey
-  startTime?: string
-  endTime?: string
+  /** 已解析的生效时间窗口（含默认「今日全天」），标签与实际查询同源 */
+  dateRange: ResolvedRecordsWindow
   matched?: 'all' | 'true' | 'false'
   personId?: string
   alarmType?: string
@@ -47,9 +49,7 @@ export function RecordsToolbar({
   tab,
   view,
   cameraId,
-  preset,
-  startTime,
-  endTime,
+  dateRange,
   matched,
   personId,
   alarmType,
@@ -88,9 +88,7 @@ export function RecordsToolbar({
 
   const isFiltered = Boolean(
     cameraId ||
-    preset ||
-    startTime ||
-    endTime ||
+    !dateRange.isDefaultWindow ||
     (matched && matched !== 'all') ||
     personId ||
     alarmType ||
@@ -177,9 +175,10 @@ export function RecordsToolbar({
 
         {/* 3. 时间范围选择器 */}
         <RecordsDateRangePicker
-          preset={preset}
-          startTime={startTime}
-          endTime={endTime}
+          preset={dateRange.preset}
+          startTime={dateRange.startTime}
+          endTime={dateRange.endTime}
+          isDefaultWindow={dateRange.isDefaultWindow}
           onRangeChange={onDateRangeChange}
         />
 

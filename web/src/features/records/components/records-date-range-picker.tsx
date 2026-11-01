@@ -13,16 +13,14 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
-import {
-  computeRangeFromPreset,
-  type RecordsDateRange,
-  type TimePresetKey,
-} from '../data/time-presets'
+import { type RecordsDateRange, type TimePresetKey } from '../data/time-presets'
 
 interface RecordsDateRangePickerProps {
   preset?: TimePresetKey
   startTime?: string
   endTime?: string
+  /** 当前窗口就是默认「今日全天」：不算用户筛选，不提供无意义的清空按钮 */
+  isDefaultWindow?: boolean
   onRangeChange: (params: RecordsDateRange) => void
 }
 
@@ -69,6 +67,7 @@ export function RecordsDateRangePicker({
   preset,
   startTime,
   endTime,
+  isDefaultWindow = false,
   onRangeChange,
 }: RecordsDateRangePickerProps) {
   const { t } = useTranslation('records')
@@ -104,12 +103,8 @@ export function RecordsDateRangePicker({
   }
 
   const handlePresetSelect = (key: TimePresetKey) => {
-    const computed = computeRangeFromPreset(key)
-    onRangeChange({
-      preset: key,
-      startTime: computed.startTime,
-      endTime: computed.endTime,
-    })
+    // 只提交预设本身，由 resolveRecordsWindow 现算窗口：URL 不存会过期的绝对时间戳。
+    onRangeChange({ preset: key })
     setOpen(false)
   }
 
@@ -226,7 +221,7 @@ export function RecordsDateRangePicker({
 
             {/* 底部操作底栏 */}
             <div className='mt-2 flex items-center justify-between border-t border-border pt-2.5'>
-              {hasRange && (
+              {hasRange && !isDefaultWindow && (
                 <Button
                   variant='ghost'
                   size='sm'
