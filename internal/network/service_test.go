@@ -445,4 +445,3 @@ func TestPingProbeTargetValidation(t *testing.T) {
 		})
 	}
 }
-
