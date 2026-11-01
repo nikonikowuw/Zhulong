@@ -18,7 +18,7 @@ const pingProbeTimeout = 2 * time.Second
 
 var (
 	rttRegex      = regexp.MustCompile(`(?:rtt|round-trip)[^=]*=\s*[\d.]+/([\d.]+)/`)
-	hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
+	hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$`)
 )
 
 // PingProbe performs a lightweight reachability test to the specified target.
@@ -26,6 +26,11 @@ func PingProbe(ctx context.Context, target string) (*PingResponse, error) {
 	cleanTarget := strings.TrimSpace(target)
 	if cleanTarget == "" {
 		return nil, apperr.New(apperr.KindInvalid, "INVALID_TARGET", "Target host or IP address is required", nil)
+	}
+
+	// Reject flags or leading/trailing dots/hyphens before command invocation.
+	if strings.HasPrefix(cleanTarget, "-") {
+		return nil, apperr.New(apperr.KindInvalid, "INVALID_TARGET", "Invalid target format", nil)
 	}
 
 	// Accept an IP literal or a plain hostname; anything else could reach the shell as an argument.

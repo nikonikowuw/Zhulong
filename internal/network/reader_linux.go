@@ -46,21 +46,22 @@ func readPhysicalInterfaces(ctx context.Context) ([]InterfaceInfo, error) {
 			continue
 		}
 
-		result = append(result, readLinuxInterface(name, defaultRoutes[name], dnsServers))
+		route := defaultRoutes[name]
+		result = append(result, readLinuxInterface(name, route.gateway, route.isDefaultGW, dnsServers))
 	}
 
 	return result, nil
 }
 
 // readLinuxInterface collects the runtime state of a single physical interface.
-func readLinuxInterface(name, gateway string, dnsServers []string) InterfaceInfo {
+func readLinuxInterface(name, gateway string, isDefaultGW bool, dnsServers []string) InterfaceInfo {
 	info := InterfaceInfo{
 		Name:        name,
 		Mode:        modeDHCP, // default unless a static configuration is detected
 		DNS:         dnsServers,
 		IPAddresses: make([]string, 0),
 		Gateway:     gateway,
-		IsDefaultGW: gateway != "",
+		IsDefaultGW: isDefaultGW,
 	}
 
 	if macBytes, err := os.ReadFile(filepath.Join("/sys/class/net", name, "address")); err == nil {
@@ -116,9 +117,14 @@ func isVirtualOrIgnored(name string) bool {
 	return false
 }
 
+type linuxDefaultRoute struct {
+	gateway     string
+	isDefaultGW bool
+}
+
 // parseLinuxDefaultRoutes parses /proc/net/route to find interfaces carrying default route 0.0.0.0/0.
-func parseLinuxDefaultRoutes() map[string]string {
-	result := make(map[string]string)
+func parseLinuxDefaultRoutes() map[string]linuxDefaultRoute {
+	result := make(map[string]linuxDefaultRoute)
 
 	f, err := os.Open("/proc/net/route")
 	if err != nil {
@@ -139,7 +145,14 @@ func parseLinuxDefaultRoutes() map[string]string {
 
 		iface, dest, gwHex, mask := fields[0], fields[1], fields[2], fields[7]
 		if dest == "00000000" && mask == "00000000" {
-			result[iface] = parseHexIP(gwHex)
+			gw := parseHexIP(gwHex)
+			if gw == "0.0.0.0" {
+				gw = ""
+			}
+			result[iface] = linuxDefaultRoute{
+				gateway:     gw,
+				isDefaultGW: true,
+			}
 		}
 	}
 	return result

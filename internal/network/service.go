@@ -432,7 +432,7 @@ func validateStaticConfig(cfg InterfaceConfig) error {
 			return apperr.New(
 				apperr.KindInvalid,
 				"GATEWAY_OUT_OF_SUBNET",
-				fmt.Sprintf("Gateway %s does not belong to subnet %s/%d", cfg.Gateway, ip.String(), ones),
+				fmt.Sprintf("Gateway %s does not belong to subnet %s", cfg.Gateway, ipNet.String()),
 				nil,
 			)
 		}

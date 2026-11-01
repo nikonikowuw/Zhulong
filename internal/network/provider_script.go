@@ -72,7 +72,15 @@ func (p *ScriptProvider) ApplyInterfaceConfig(ctx context.Context, iface string,
 		setDefault = "1"
 	}
 
-	args := []string{"apply", iface, cfg.Mode, cidr, cfg.Gateway, strings.Join(cfg.DNS, ","), setDefault}
+	args := []string{
+		"apply",
+		iface,
+		cfg.Mode,
+		cidr,
+		cfg.Gateway,
+		strings.Join(cfg.DNS, ","),
+		setDefault,
+	}
 
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, p.scriptPath, args...)

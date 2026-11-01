@@ -403,3 +403,46 @@ func TestServiceStopLifecycle(t *testing.T) {
 		}
 	}
 }
+
+func TestPingProbeTargetValidation(t *testing.T) {
+	ctx := context.Background()
+
+	invalidTargets := []string{
+		"",
+		"   ",
+		"-c",
+		"--help",
+		"-i",
+		".invalid",
+		"host name",
+		"bad;rm -rf",
+		"192.168.1.1/24",
+	}
+
+	for _, target := range invalidTargets {
+		t.Run("invalid_"+target, func(t *testing.T) {
+			resp, err := PingProbe(ctx, target)
+			if err == nil {
+				t.Errorf("expected error for target %q, got resp: %+v", target, resp)
+			}
+		})
+	}
+
+	validTargets := []string{
+		"127.0.0.1",
+		"localhost",
+	}
+
+	for _, target := range validTargets {
+		t.Run("valid_"+target, func(t *testing.T) {
+			resp, err := PingProbe(ctx, target)
+			if err != nil {
+				t.Errorf("unexpected validation error for %q: %v", target, err)
+			}
+			if resp == nil {
+				t.Fatalf("expected non-nil response for %q", target)
+			}
+		})
+	}
+}
+

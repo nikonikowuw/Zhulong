@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 )
 
@@ -138,8 +139,8 @@ func requireTokenOrSession(c *gin.Context, token string) error {
 		return nil
 	}
 
-	return httputil.NewError(
-		http.StatusForbidden,
+	return apperr.New(
+		apperr.KindPermissionDenied,
 		"TOKEN_REQUIRED",
 		"Authentication or valid confirmation token required",
 		nil,

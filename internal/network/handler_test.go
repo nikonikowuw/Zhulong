@@ -222,4 +222,44 @@ func TestHandlerPing(t *testing.T) {
 	if resp.Code != "OK" {
 		t.Fatalf("expected code OK, got %s", resp.Code)
 	}
+
+	// Invalid ping target should return 422
+	badPing := PingRequest{Target: "-c 2 127.0.0.1"}
+	badBytes, _ := json.Marshal(badPing)
+	req2, _ := http.NewRequest(http.MethodPost, "/api/v1/system/network/ping", bytes.NewReader(badBytes))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for invalid ping target, got %d: %s", w2.Code, w2.Body.String())
+	}
+}
+
+func TestHandlerConfirmRollbackTokenRequired(t *testing.T) {
+	router, _, _, _ := setupTestNetworkHandler(t)
+
+	// Confirm without token or session
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/system/network/confirm", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for confirm without token, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp httputil.Response
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Code != "TOKEN_REQUIRED" {
+		t.Fatalf("expected code TOKEN_REQUIRED, got %s", resp.Code)
+	}
+
+	// Rollback without token or session
+	req2, _ := http.NewRequest(http.MethodPost, "/api/v1/system/network/rollback", nil)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for rollback without token, got %d: %s", w2.Code, w2.Body.String())
+	}
 }

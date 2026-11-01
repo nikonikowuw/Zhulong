@@ -17,14 +17,11 @@ func writeFileSynced(path string, data []byte, perm os.FileMode) error {
 	}
 
 	if _, err := file.Write(data); err != nil {
-		// The write error is the root cause; a close error adds no information here.
-		_ = file.Close()
-		return fmt.Errorf("write %s: %w", path, err)
+		return fmt.Errorf("write %s: %w", path, errors.Join(err, file.Close()))
 	}
 
 	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("fsync %s: %w", path, err)
+		return fmt.Errorf("fsync %s: %w", path, errors.Join(err, file.Close()))
 	}
 
 	if err := file.Close(); err != nil {
