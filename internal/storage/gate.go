@@ -20,6 +20,49 @@ type EmergencyGate struct {
 	observers         []func(blocked bool)
 }
 
+// gateTransition carries the state changes one evaluation produced.
+//
+// Evaluation mutates the gate under its mutex, but callbacks and observers must
+// run with the mutex released: a listener is allowed to call back into the gate.
+// Collecting the edges into a value keeps that ordering explicit instead of
+// relying on the registration order of defers.
+type gateTransition struct {
+	writeBlocked *bool
+	stopReason   string
+	onStop       func(string)
+	onResume     func()
+}
+
+// markBlocked latches a write-block edge. Only a gate that was previously
+// writable produces one, so steady state reports nothing.
+func (t *gateTransition) markBlocked(canWrite *atomic.Bool) {
+	if canWrite.Swap(false) {
+		blocked := true
+		t.writeBlocked = &blocked
+	}
+}
+
+// markAllowed latches a write-resume edge for a previously blocked gate.
+func (t *gateTransition) markAllowed(canWrite *atomic.Bool) {
+	if !canWrite.Swap(true) {
+		blocked := false
+		t.writeBlocked = &blocked
+	}
+}
+
+// fire delivers the collected edges. Callers must hold no gate lock.
+func (t gateTransition) fire(g *EmergencyGate) {
+	if t.onStop != nil {
+		t.onStop(t.stopReason)
+	}
+	if t.onResume != nil {
+		t.onResume()
+	}
+	if t.writeBlocked != nil {
+		g.publishWriteState(*t.writeBlocked)
+	}
+}
+
 // NewEmergencyGate creates an EmergencyGate instance initially allowing writes.
 func NewEmergencyGate(logger *zap.Logger) *EmergencyGate {
 	if logger == nil {
@@ -83,19 +126,18 @@ func (g *EmergencyGate) Reason() string {
 func (g *EmergencyGate) BlockWrites(reason string) {
 	g.mu.Lock()
 	prevEmergency := g.isEmergency.Swap(true)
-	wasWritable := g.canWrite.Swap(false)
+
+	var transition gateTransition
+	transition.markBlocked(&g.canWrite)
 	g.reason = reason
-	onStop := g.onEmergencyStop
+	if !prevEmergency {
+		transition.onStop = g.onEmergencyStop
+		transition.stopReason = reason
+	}
 	g.mu.Unlock()
 
 	g.logger.Error("storage gate: writes blocked; telemetry unavailable", zap.String("reason", reason))
-
-	if !prevEmergency && onStop != nil {
-		onStop(reason)
-	}
-	if wasWritable {
-		g.publishWriteState(true)
-	}
+	transition.fire(g)
 }
 
 // publishWriteState reports a write-block transition. It must be called with the
@@ -111,67 +153,44 @@ func (g *EmergencyGate) publishWriteState(blocked bool) {
 
 // Evaluate checks the current filesystem stats against configured emergency thresholds.
 func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounted bool) StorageHealthStatus {
-	var stopCallback func(string)
-	var resumeCallback func()
-	var stopReason string
-	var writeState *bool
+	health, transition := g.evaluateLocked(stats, cfg, isDismounted)
+	transition.fire(g)
 
-	// block and allow latch the write-block state so observers hear about edges
-	// only. Evaluate runs on every storage tick; a record per tick would be the
-	// volume the logger is being asked to shed.
-	block := func() {
-		if g.canWrite.Swap(false) {
-			value := true
-			writeState = &value
-		}
-	}
-	allow := func() {
-		// Swap returns the previous value: only a previously blocked gate is a
-		// transition worth reporting.
-		if !g.canWrite.Swap(true) {
-			value := false
-			writeState = &value
-		}
-	}
+	return health
+}
 
-	// This defer is registered before the unlock defer so listeners run after the
-	// lock is released; reordering the two would deadlock any listener that calls
-	// back into the gate.
-	defer func() {
-		if stopCallback != nil {
-			stopCallback(stopReason)
-		}
-		if resumeCallback != nil {
-			resumeCallback()
-		}
-		if writeState != nil {
-			g.publishWriteState(*writeState)
-		}
-	}()
+// evaluateLocked mutates the gate and reports which edges fired. The caller owns
+// delivering them after the mutex is released.
+func (g *EmergencyGate) evaluateLocked(
+	stats *FSStats,
+	cfg *StorageConfig,
+	isDismounted bool,
+) (StorageHealthStatus, gateTransition) {
+	var transition gateTransition
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	if stats == nil || cfg == nil {
-		block()
+		transition.markBlocked(&g.canWrite)
 		g.reason = "storage telemetry unavailable"
-		return StatusError
+		return StatusError, transition
 	}
 	if isDismounted {
-		block()
+		transition.markBlocked(&g.canWrite)
 		g.reason = "external mount point disconnected (fallthrough hazard)"
 		g.logger.Error("storage gate: dismount fallthrough hazard detected; writes blocked",
 			zap.String("path", stats.MountPoint),
 			zap.Uint64("device_id", stats.DeviceID),
 		)
-		return StatusError
+		return StatusError, transition
 	}
 
 	if stats.IsReadOnly {
-		block()
+		transition.markBlocked(&g.canWrite)
 		g.reason = "filesystem is mounted read-only"
 		g.logger.Error("storage gate: filesystem is read-only", zap.String("mount", stats.MountPoint))
-		return StatusError
+		return StatusError, transition
 	}
 
 	usage := percentUsed(stats.UsedBytes, stats.TotalBytes)
@@ -181,7 +200,7 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 
 	if emergencyTriggered {
 		prevEmergency := g.isEmergency.Swap(true)
-		block()
+		transition.markBlocked(&g.canWrite)
 
 		reason := "insufficient disk space: free space below minimum safe margin"
 		if usage >= cfg.EmergencyStopPercent {
@@ -195,15 +214,15 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 				zap.Uint64("free_bytes", stats.FreeBytes),
 				zap.Int64("min_free_mb", cfg.EmergencyStopMinMB),
 			)
-			stopCallback = g.onEmergencyStop
-			stopReason = reason
+			transition.onStop = g.onEmergencyStop
+			transition.stopReason = reason
 		}
-		return StatusEmergencyStopped
+		return StatusEmergencyStopped, transition
 	}
 
 	// Space is within safe zone; check if we are recovering from emergency stop
 	wasEmergency := g.isEmergency.Swap(false)
-	allow()
+	transition.markAllowed(&g.canWrite)
 	g.reason = ""
 
 	if wasEmergency {
@@ -211,12 +230,12 @@ func (g *EmergencyGate) Evaluate(stats *FSStats, cfg *StorageConfig, isDismounte
 			zap.Int("usage_percent", usage),
 			zap.Uint64("free_bytes", stats.FreeBytes),
 		)
-		resumeCallback = g.onEmergencyResume
+		transition.onResume = g.onEmergencyResume
 	}
 
 	if usage >= cfg.HighWatermarkPercent {
-		return StatusWarning
+		return StatusWarning, transition
 	}
 
-	return StatusHealthy
+	return StatusHealthy, transition
 }

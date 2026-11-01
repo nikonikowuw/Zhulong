@@ -11,6 +11,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// batchSleep builds the pointer CleanerOptions uses to tell "not set" from an
+// explicit zero.
+func batchSleep(d time.Duration) *time.Duration {
+	return &d
+}
+
 type mockInspector struct {
 	mu           sync.Mutex
 	stats        FSStats
@@ -60,7 +66,7 @@ func TestCleaner_WatermarkHysteresisSkippedWhenLow(t *testing.T) {
 
 	cleaner := NewCleanerEngine(mock, zap.NewNop(), CleanerOptions{
 		BatchSize:  5,
-		BatchSleep: 0,
+		BatchSleep: batchSleep(0),
 	})
 
 	cfg := &StorageConfig{
@@ -139,7 +145,7 @@ func TestCleaner_CascadeOrderAndLockedFileProtection(t *testing.T) {
 
 	cleaner := NewCleanerEngine(mock, zap.NewNop(), CleanerOptions{
 		BatchSize:  1,
-		BatchSleep: 0,
+		BatchSleep: batchSleep(0),
 	})
 
 	// Run manual prune
@@ -199,7 +205,7 @@ func TestCleaner_PreservesSnapshotsWithLockSidecars(t *testing.T) {
 		TotalBytes: 100 * 1024 * 1024,
 		UsedBytes:  95 * 1024 * 1024,
 	}}
-	cleaner := NewCleanerEngine(inspector, zap.NewNop(), CleanerOptions{BatchSize: 1, BatchSleep: 0})
+	cleaner := NewCleanerEngine(inspector, zap.NewNop(), CleanerOptions{BatchSize: 1, BatchSleep: batchSleep(0)})
 	summary, err := cleaner.RunPrune(context.Background(), mediaDir, &StorageConfig{
 		LowWatermarkPercent:    80,
 		SnapshotsRetentionDays: 1,
@@ -267,4 +273,31 @@ func TestCleaner_ConcurrentPrevention(t *testing.T) {
 	}
 
 	close(blockCh)
+}
+
+// TestCleanerOptions_BatchSizeOnlyKeepsDefaultThrottle is the regression guard
+// for the option trap: tuning BatchSize alone used to reset BatchSleep to zero,
+// silently removing the ext4 journal-friendly yield between batches.
+func TestCleanerOptions_BatchSizeOnlyKeepsDefaultThrottle(t *testing.T) {
+	engine := NewCleanerEngine(&mockInspector{}, zap.NewNop(), CleanerOptions{BatchSize: 7})
+
+	if engine.batchSize != 7 {
+		t.Errorf("expected batch size 7, got %d", engine.batchSize)
+	}
+	if engine.batchSleep != defaultPruneBatchSleep {
+		t.Errorf("expected the default throttle %v, got %v", defaultPruneBatchSleep, engine.batchSleep)
+	}
+}
+
+// TestCleanerOptions_ExplicitZeroDisablesThrottle pins the other half of the
+// contract: an explicit zero is still how a caller turns the throttle off.
+func TestCleanerOptions_ExplicitZeroDisablesThrottle(t *testing.T) {
+	engine := NewCleanerEngine(&mockInspector{}, zap.NewNop(), CleanerOptions{BatchSleep: batchSleep(0)})
+
+	if engine.batchSleep != 0 {
+		t.Errorf("expected the throttle to be disabled, got %v", engine.batchSleep)
+	}
+	if engine.batchSize != defaultPruneBatchSize {
+		t.Errorf("expected the default batch size %d, got %d", defaultPruneBatchSize, engine.batchSize)
+	}
 }

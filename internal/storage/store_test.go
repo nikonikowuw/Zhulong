@@ -16,7 +16,7 @@ func setupTestRepo(t *testing.T) (Repository, func()) {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
 
-	repo := NewRepository(dbStore)
+	repo := NewRepository(dbStore, zap.NewNop())
 	cleanup := func() {
 		_ = dbStore.Close()
 	}
@@ -155,7 +155,7 @@ func TestStore_ValidateConfigConstraints(t *testing.T) {
 }
 
 func TestStore_NilDBProvider(t *testing.T) {
-	repo := NewRepository(nil)
+	repo := NewRepository(nil, zap.NewNop())
 	ctx := context.Background()
 
 	_, err := repo.GetConfig(ctx)

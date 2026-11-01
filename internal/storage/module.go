@@ -63,11 +63,17 @@ func NewStorageComponents(
 		logger = zap.NewNop()
 	}
 
-	repo := NewRepository(dbProvider)
+	repo := NewRepository(dbProvider, logger)
 	inspector := NewDefaultPathInspector()
 	gate := NewEmergencyGate(logger)
 	cleaner := NewCleanerEngine(inspector, logger)
-	svc := NewService(repo, inspector, gate, cleaner, logger)
+	svc := NewService(ServiceDeps{
+		Repo:      repo,
+		Inspector: inspector,
+		Gate:      gate,
+		Cleaner:   cleaner,
+		Logger:    logger,
+	})
 	if auditor != nil {
 		svc.SetAuditor(auditor)
 	}

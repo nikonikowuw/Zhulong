@@ -5,9 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
@@ -23,7 +25,7 @@ func newTestRepository(t *testing.T) (*database.Store, Repository, func()) {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
 
-	return dbStore, NewRepository(dbStore), func() { _ = dbStore.Close() }
+	return dbStore, NewRepository(dbStore, zap.NewNop()), func() { _ = dbStore.Close() }
 }
 
 // errorInspector is a PathInspector whose every probe fails, standing in for a
@@ -75,7 +77,13 @@ func setupTestService(t *testing.T) (*Service, string, func()) {
 	auditStore := audit.NewStore(dbStore)
 	auditSvc := audit.NewService(auditStore, zap.NewNop())
 
-	svc := NewService(repo, inspector, gate, cleaner, zap.NewNop())
+	svc := NewService(ServiceDeps{
+		Repo:      repo,
+		Inspector: inspector,
+		Gate:      gate,
+		Cleaner:   cleaner,
+		Logger:    zap.NewNop(),
+	})
 	svc.SetAuditor(auditSvc)
 
 	return svc, mediaDir, closeDB
@@ -247,7 +255,12 @@ func TestService_RefreshStatusBlocksWritesWhenTelemetryFails(t *testing.T) {
 
 	probeErr := errors.New("mount point vanished")
 	gate := NewEmergencyGate(zap.NewNop())
-	svc := NewService(repo, errorInspector{err: probeErr}, gate, nil, zap.NewNop())
+	svc := NewService(ServiceDeps{
+		Repo:      repo,
+		Inspector: errorInspector{err: probeErr},
+		Gate:      gate,
+		Logger:    zap.NewNop(),
+	})
 
 	status, err := svc.RefreshStatus(context.Background())
 	if err == nil {
@@ -275,7 +288,7 @@ func TestService_RefreshStatusBlocksWritesWhenTelemetryFails(t *testing.T) {
 // path report isExternal=true.
 func TestService_TestPathFailsWhenRootDeviceUnavailable(t *testing.T) {
 	inspector := mockRootDevErrorInspector{mockInspector: &mockInspector{}}
-	svc := NewService(nil, inspector, nil, nil, zap.NewNop())
+	svc := NewService(ServiceDeps{Inspector: inspector, Logger: zap.NewNop()})
 
 	res, err := svc.TestPath(context.Background(), t.TempDir(), "admin", "127.0.0.1")
 	if err == nil {
@@ -312,7 +325,7 @@ func TestService_StopIsIdempotent(t *testing.T) {
 }
 
 func TestService_StopWithoutSuccessfulStart(t *testing.T) {
-	svc := NewService(NewRepository(nil), nil, nil, nil, zap.NewNop())
+	svc := NewService(ServiceDeps{Repo: NewRepository(nil, zap.NewNop()), Logger: zap.NewNop()})
 	if err := svc.Start(context.Background()); err == nil {
 		t.Fatal("expected Start to fail without a database provider")
 	}
@@ -326,5 +339,133 @@ func TestService_StopWithoutSuccessfulStart(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Errorf("Stop blocked for %v after a failed Start", elapsed)
+	}
+}
+
+// flakyRepository fails GetConfig until healthy is set, standing in for a
+// database that is not ready on the first boot attempt.
+type flakyRepository struct {
+	mu      sync.Mutex
+	healthy bool
+	cfg     StorageConfig
+}
+
+func (r *flakyRepository) GetConfig(context.Context) (*StorageConfig, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.healthy {
+		return nil, errors.New("database is not ready")
+	}
+
+	cfg := r.cfg
+	return &cfg, nil
+}
+
+func (r *flakyRepository) UpdateConfig(_ context.Context, cfg StorageConfig) (*StorageConfig, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cfg = cfg
+
+	return &cfg, nil
+}
+
+func (r *flakyRepository) recover() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.healthy = true
+}
+
+// failingRepository stands in for a store outage: every access fails.
+type failingRepository struct{}
+
+func (failingRepository) GetConfig(context.Context) (*StorageConfig, error) {
+	return nil, errors.New("database unavailable")
+}
+
+func (failingRepository) UpdateConfig(context.Context, StorageConfig) (*StorageConfig, error) {
+	return nil, errors.New("database unavailable")
+}
+
+// TestService_StartIsRetryableAfterInitialLoadFailure pins the retry contract: a
+// first Start that fails while the database is still warming up must not latch
+// the service into a permanent "already started" state.
+func TestService_StartIsRetryableAfterInitialLoadFailure(t *testing.T) {
+	cfg := DefaultStorageConfig()
+	cfg.MediaDirectory = t.TempDir()
+
+	repo := &flakyRepository{cfg: cfg}
+	svc := NewService(ServiceDeps{Repo: repo, Logger: zap.NewNop()})
+	defer func() { _ = svc.Stop(context.Background()) }()
+
+	if err := svc.Start(context.Background()); err == nil {
+		t.Fatal("expected Start to fail while the repository is unavailable")
+	}
+
+	repo.recover()
+
+	if err := svc.Start(context.Background()); err != nil {
+		t.Fatalf("expected the retry to succeed, got %v", err)
+	}
+	if err := svc.Start(context.Background()); !errors.Is(err, errServiceAlreadyStarted) {
+		t.Fatalf("expected errServiceAlreadyStarted, got %v", err)
+	}
+}
+
+// TestService_StartAfterStopReportsAlreadyStopped pins the terminal state: the
+// error must distinguish a stopped service from a running one.
+func TestService_StartAfterStopReportsAlreadyStopped(t *testing.T) {
+	svc := NewService(ServiceDeps{Repo: NewRepository(nil, zap.NewNop()), Logger: zap.NewNop()})
+
+	if err := svc.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop before Start failed: %v", err)
+	}
+	if err := svc.Start(context.Background()); !errors.Is(err, errServiceAlreadyStopped) {
+		t.Fatalf("expected errServiceAlreadyStopped, got %v", err)
+	}
+}
+
+// TestService_UpdateConfigDatabaseFailureIsInternal pins the error classification:
+// a store outage is a server fault, not a rejected configuration.
+func TestService_UpdateConfigDatabaseFailureIsInternal(t *testing.T) {
+	svc := NewService(ServiceDeps{Repo: failingRepository{}, Logger: zap.NewNop()})
+
+	cfg := DefaultStorageConfig()
+	cfg.MediaDirectory = t.TempDir()
+
+	_, err := svc.UpdateConfig(context.Background(), cfg, "admin", "127.0.0.1")
+
+	var appErr *apperr.Error
+	if !errors.As(err, &appErr) {
+		t.Fatalf("expected an *apperr.Error, got %T: %v", err, err)
+	}
+	if appErr.Kind != apperr.KindInternal {
+		t.Errorf("expected KindInternal, got %v", appErr.Kind)
+	}
+	if appErr.Code != codeDatabaseError {
+		t.Errorf("expected %s, got %s", codeDatabaseError, appErr.Code)
+	}
+}
+
+// TestService_UpdateConfigRejectsInvalidPolicy pins that domain validation runs
+// before any filesystem probe or store access.
+func TestService_UpdateConfigRejectsInvalidPolicy(t *testing.T) {
+	svc := NewService(ServiceDeps{Repo: failingRepository{}, Logger: zap.NewNop()})
+
+	cfg := DefaultStorageConfig()
+	cfg.MediaDirectory = t.TempDir()
+	cfg.LowWatermarkPercent = cfg.HighWatermarkPercent
+
+	_, err := svc.UpdateConfig(context.Background(), cfg, "admin", "127.0.0.1")
+
+	var appErr *apperr.Error
+	if !errors.As(err, &appErr) {
+		t.Fatalf("expected an *apperr.Error, got %T: %v", err, err)
+	}
+	if appErr.Kind != apperr.KindInvalid {
+		t.Errorf("expected KindInvalid, got %v", appErr.Kind)
+	}
+	if appErr.Code != codeInvalidStorageConfig {
+		t.Errorf("expected %s, got %s", codeInvalidStorageConfig, appErr.Code)
 	}
 }

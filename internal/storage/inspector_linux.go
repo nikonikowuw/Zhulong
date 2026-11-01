@@ -31,7 +31,7 @@ func (p *DefaultPathInspector) GetRootDeviceID() (uint64, error) {
 
 	var stat unix.Stat_t
 	if err := unix.Stat("/", &stat); err != nil {
-		return 0, fmt.Errorf("stat rootfs /: %w", err)
+		return 0, fmt.Errorf("stat rootfs: %w", err)
 	}
 	p.rootDevID = stat.Dev
 	p.hasRootDev = true
@@ -41,18 +41,22 @@ func (p *DefaultPathInspector) GetRootDeviceID() (uint64, error) {
 // InspectFS queries kernel VFS telemetry for the given directory path.
 func (p *DefaultPathInspector) InspectFS(path string) (*FSStats, error) {
 	cleanPath := filepath.Clean(path)
+	// The media root may legitimately not exist yet right after a hot switch to a
+	// fresh mount. Creating it here keeps the probe honest: statfs on a missing
+	// path fails with ENOENT and the status would flap to "error" until the first
+	// recording happened to create the tree.
 	if err := os.MkdirAll(cleanPath, 0o750); err != nil && !os.IsExist(err) {
-		return nil, fmt.Errorf("ensure directory %s: %w", cleanPath, err)
+		return nil, fmt.Errorf("ensure directory %q: %w", cleanPath, err)
 	}
 
 	var stat unix.Stat_t
 	if err := unix.Stat(cleanPath, &stat); err != nil {
-		return nil, fmt.Errorf("stat path %s: %w", cleanPath, err)
+		return nil, fmt.Errorf("stat path %q: %w", cleanPath, err)
 	}
 
 	var statfs unix.Statfs_t
 	if err := unix.Statfs(cleanPath, &statfs); err != nil {
-		return nil, fmt.Errorf("statfs path %s: %w", cleanPath, err)
+		return nil, fmt.Errorf("statfs path %q: %w", cleanPath, err)
 	}
 
 	rootDev, err := p.GetRootDeviceID()
@@ -64,12 +68,18 @@ func (p *DefaultPathInspector) InspectFS(path string) (*FSStats, error) {
 	totalBytes := statfs.Blocks * bsize
 	freeBytes := statfs.Bavail * bsize
 
+	// Used bytes follow the kernel's own accounting (Blocks-Bfree, which includes
+	// reserved blocks and matches `df`), falling back to the Bavail-based figure
+	// only if a filesystem reports Bfree > Blocks. Reporting 0 beats underflowing
+	// into a near-2^64 percentage.
 	var usedBytes uint64
 	switch {
 	case statfs.Blocks >= statfs.Bfree:
 		usedBytes = (statfs.Blocks - statfs.Bfree) * bsize
 	case totalBytes >= freeBytes:
 		usedBytes = totalBytes - freeBytes
+	default:
+		usedBytes = 0
 	}
 
 	mountPoint, fsName := findMountInfoLinux(cleanPath)
@@ -149,16 +159,15 @@ func findMountInfoLinux(targetPath string) (string, string) {
 	return bestMount, bestFSType
 }
 
-// mountPointCovers reports whether targetPath lives at or below mountPoint.
+// mountPointCovers reports whether an absolute targetPath lives at or below
+// mountPoint. The root mount covers every absolute path, so it is handled first
+// instead of relying on a trailing-slash prefix that would never match.
 func mountPointCovers(targetPath, mountPoint string) bool {
-	if targetPath == mountPoint {
-		return true
-	}
 	if mountPoint == "/" {
 		return strings.HasPrefix(targetPath, "/")
 	}
 
-	return strings.HasPrefix(targetPath, mountPoint+"/")
+	return targetPath == mountPoint || strings.HasPrefix(targetPath, mountPoint+"/")
 }
 
 // unescapeMountField decodes the octal escapes (\040 for a space, \011 for a

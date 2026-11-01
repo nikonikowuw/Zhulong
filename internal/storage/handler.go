@@ -2,9 +2,9 @@ package storage
 
 import (
 	"errors"
-	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
@@ -50,13 +50,28 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // configurable account, so a hardcoded name would fabricate an identity on every
 // record. An unauthenticated caller is reported as anonymous instead, and the
 // connection source IP remains the primary attribution field.
-func (h *Handler) currentActor(c *gin.Context) (username, ip string) {
-	ip = c.ClientIP()
+func (h *Handler) currentActor(c *gin.Context) (string, string) {
+	ip := c.ClientIP()
 	actor, ok := audit.FromContext(c.Request.Context())
 	if !ok || actor.Username == "" {
 		return audit.UsernameAnonymous, ip
 	}
 	return actor.Username, ip
+}
+
+// logClientError records the concrete reason behind a 4xx rejection. WriteError
+// keeps that reason out of the response and only logs 5xx, but "which path was
+// rejected and why" is the first thing an operator asks about a storage change.
+func (h *Handler) logClientError(err error) {
+	var appErr *apperr.Error
+	if !errors.As(err, &appErr) || appErr.Kind == apperr.KindInternal || appErr.Kind == apperr.KindUnspecified {
+		return
+	}
+
+	h.logger.Warn("storage request rejected",
+		zap.String("code", appErr.Code),
+		zap.Error(err),
+	)
 }
 
 // GetStatus godoc
@@ -65,17 +80,12 @@ func (h *Handler) currentActor(c *gin.Context) (username, ip string) {
 // @Tags         system
 // @Produce      json
 // @Success      200  {object}  httputil.Response{data=StorageStatus}
-// @Failure      500  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response  "DATABASE_ERROR, STORAGE_TELEMETRY_UNAVAILABLE"
 // @Router       /system/storage/status [get]
 func (h *Handler) GetStatus(c *gin.Context) {
 	status, err := h.service.GetStatus(c.Request.Context())
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to retrieve storage status",
-			err,
-		))
+		httputil.WriteErrorWithLogger(c, err, h.logger)
 		return
 	}
 	httputil.Success(c, status)
@@ -87,17 +97,12 @@ func (h *Handler) GetStatus(c *gin.Context) {
 // @Tags         system
 // @Produce      json
 // @Success      200  {object}  httputil.Response{data=StorageConfig}
-// @Failure      500  {object}  httputil.Response
+// @Failure      500  {object}  httputil.Response  "DATABASE_ERROR"
 // @Router       /system/storage/config [get]
 func (h *Handler) GetConfig(c *gin.Context) {
 	cfg, err := h.service.GetConfig(c.Request.Context())
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to retrieve storage config",
-			err,
-		))
+		httputil.WriteErrorWithLogger(c, err, h.logger)
 		return
 	}
 	httputil.Success(c, cfg)
@@ -105,15 +110,14 @@ func (h *Handler) GetConfig(c *gin.Context) {
 
 // UpdateConfig godoc
 // @Summary      Update media storage lifecycle configuration
-// @Description  Validates and updates media root directory, retention policies, and high/low watermarks with live hot switching.
+// @Description  Validates and updates media root, retention policies, and watermarks with live hot switching.
 // @Tags         system
 // @Accept       json
 // @Produce      json
 // @Param        body body      UpdateConfigRequest  true  "Storage configuration parameters"
 // @Success      200  {object}  httputil.Response{data=StorageStatus}
-// @Failure      400  {object}  httputil.Response
-// @Failure      422  {object}  httputil.Response
-// @Failure      500  {object}  httputil.Response
+// @Failure      422  {object}  httputil.Response  "INVALID_STORAGE_CONFIG or VALIDATION_FAILED"
+// @Failure      500  {object}  httputil.Response  "DATABASE_ERROR, STORAGE_TELEMETRY_UNAVAILABLE"
 // @Router       /system/storage/config [put]
 func (h *Handler) UpdateConfig(c *gin.Context) {
 	var req UpdateConfigRequest
@@ -137,15 +141,8 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 
 	status, err := h.service.UpdateConfig(c.Request.Context(), cfg, username, clientIP)
 	if err != nil {
-		// The response carries only the localized message registered for the code,
-		// so the concrete rejection reason goes to the server log instead.
-		h.logger.Warn("storage config rejected", zap.Error(err))
-		httputil.WriteError(c, httputil.NewError(
-			http.StatusBadRequest,
-			"INVALID_STORAGE_CONFIG",
-			"Invalid storage configuration",
-			err,
-		))
+		h.logClientError(err)
+		httputil.WriteErrorWithLogger(c, err, h.logger)
 		return
 	}
 	httputil.Success(c, status)
@@ -153,15 +150,14 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 
 // TestPath godoc
 // @Summary      Test candidate storage directory
-// @Description  Performs write probe, filesystem detection, and external volume identity verification on candidate path.
+// @Description  Runs a write probe, filesystem detection, and volume identity check on a candidate path.
 // @Tags         system
 // @Accept       json
 // @Produce      json
 // @Param        body body      PathTestRequest  true  "Target directory path to test"
 // @Success      200  {object}  httputil.Response{data=PathTestResponse}
-// @Failure      400  {object}  httputil.Response
-// @Failure      422  {object}  httputil.Response
-// @Failure      500  {object}  httputil.Response
+// @Failure      422  {object}  httputil.Response  "VALIDATION_FAILED"
+// @Failure      500  {object}  httputil.Response  "STORAGE_TELEMETRY_UNAVAILABLE"
 // @Router       /system/storage/test [post]
 func (h *Handler) TestPath(c *gin.Context) {
 	var req PathTestRequest
@@ -174,13 +170,7 @@ func (h *Handler) TestPath(c *gin.Context) {
 
 	res, err := h.service.TestPath(c.Request.Context(), req.Path, username, clientIP)
 	if err != nil {
-		h.logger.Warn("storage path test failed", zap.String("path", req.Path), zap.Error(err))
-		httputil.WriteError(c, httputil.NewError(
-			http.StatusBadRequest,
-			"STORAGE_PATH_INVALID",
-			"Storage path is invalid or not writable",
-			err,
-		))
+		httputil.WriteErrorWithLogger(c, err, h.logger)
 		return
 	}
 	httputil.Success(c, res)
@@ -192,30 +182,16 @@ func (h *Handler) TestPath(c *gin.Context) {
 // @Tags         system
 // @Produce      json
 // @Success      200  {object}  httputil.Response{data=CleanupSummary}
-// @Failure      409  {object}  httputil.Response
-// @Failure      500  {object}  httputil.Response
+// @Failure      409  {object}  httputil.Response  "STORAGE_CLEANUP_IN_PROGRESS"
+// @Failure      500  {object}  httputil.Response  "STORAGE_CLEANUP_FAILED, DATABASE_ERROR"
 // @Router       /system/storage/cleanup [post]
 func (h *Handler) TriggerCleanup(c *gin.Context) {
 	username, clientIP := h.currentActor(c)
 
 	summary, err := h.service.TriggerManualCleanup(c.Request.Context(), username, clientIP)
 	if err != nil {
-		if errors.Is(err, ErrCleanupInProgress) {
-			httputil.WriteError(c, httputil.NewError(
-				http.StatusConflict,
-				"STORAGE_CLEANUP_IN_PROGRESS",
-				"Cleanup cycle is already in progress",
-				err,
-			))
-			return
-		}
-
-		httputil.WriteError(c, httputil.NewError(
-			http.StatusInternalServerError,
-			"INTERNAL_ERROR",
-			"Failed to execute cleanup",
-			err,
-		))
+		h.logClientError(err)
+		httputil.WriteErrorWithLogger(c, err, h.logger)
 		return
 	}
 	httputil.Success(c, summary)

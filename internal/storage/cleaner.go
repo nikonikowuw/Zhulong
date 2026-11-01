@@ -7,7 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -18,17 +18,24 @@ import (
 // ErrCleanupInProgress is returned when a cleanup cycle is already running.
 var ErrCleanupInProgress = errors.New("cleanup is already in progress")
 
-// Prune trigger reasons. They are recorded in CleanupSummary.TriggerReason and
-// decide whether the high watermark gate is bypassed.
+// PruneTrigger names why a cleanup cycle started. It decides whether the high
+// watermark gate applies: a manual run proceeds unconditionally, an automatic
+// one only when usage has reached the high watermark.
+type PruneTrigger string
+
+// Prune triggers recorded in CleanupSummary.TriggerReason.
 const (
-	PruneTriggerManual    = "manual"
-	PruneTriggerWatermark = "watermark"
+	PruneTriggerManual    PruneTrigger = "manual"
+	PruneTriggerWatermark PruneTrigger = "watermark"
 )
 
-// Prune outcome codes reported in CleanupSummary.TargetStatus.
+// PruneStatus is the outcome code reported in CleanupSummary.TargetStatus.
+type PruneStatus string
+
+// Prune outcomes reported in CleanupSummary.TargetStatus.
 const (
-	PruneStatusCompleted  = "completed"
-	PruneStatusSkippedLow = "skipped_below_high_watermark"
+	PruneStatusCompleted  PruneStatus = "completed"
+	PruneStatusSkippedLow PruneStatus = "skipped_below_high_watermark"
 )
 
 const (
@@ -72,9 +79,13 @@ type CleanerEngine struct {
 }
 
 // CleanerOptions allows customization of batching and throttling.
+//
+// The zero value keeps every default. BatchSleep is a pointer so "not set" (nil)
+// can be told apart from an explicit disable (0): a caller that only tunes
+// BatchSize must not silently lose the ext4 journal-friendly throttle.
 type CleanerOptions struct {
 	BatchSize  int
-	BatchSleep time.Duration
+	BatchSleep *time.Duration
 }
 
 // NewCleanerEngine creates a new hysteresis cleaner engine.
@@ -91,12 +102,12 @@ func NewCleanerEngine(inspector PathInspector, logger *zap.Logger, opts ...Clean
 		fileRemover: os.Remove,
 	}
 
-	if len(opts) > 0 {
-		if opts[0].BatchSize > 0 {
-			engine.batchSize = opts[0].BatchSize
+	for _, opt := range opts {
+		if opt.BatchSize > 0 {
+			engine.batchSize = opt.BatchSize
 		}
-		if opts[0].BatchSleep >= 0 {
-			engine.batchSleep = opts[0].BatchSleep
+		if opt.BatchSleep != nil {
+			engine.batchSleep = *opt.BatchSleep
 		}
 	}
 
@@ -111,14 +122,14 @@ func (c *CleanerEngine) IsCleaning() bool {
 // RunPrune executes a prune cycle based on the configured watermarks and
 // retention policies.
 //
-// triggerReason decides whether the high watermark gate applies: a manual run
-// proceeds unconditionally, an automatic one only when usage has reached the
-// high watermark.
+// trigger decides whether the high watermark gate applies: a manual run proceeds
+// unconditionally, an automatic one only when usage has reached the high
+// watermark.
 func (c *CleanerEngine) RunPrune(
 	ctx context.Context,
 	mediaDir string,
 	cfg *StorageConfig,
-	triggerReason string,
+	trigger PruneTrigger,
 ) (*CleanupSummary, error) {
 	if !c.running.CompareAndSwap(false, true) {
 		return nil, ErrCleanupInProgress
@@ -126,7 +137,7 @@ func (c *CleanerEngine) RunPrune(
 	defer c.running.Store(false)
 
 	startTime := time.Now()
-	summary := &CleanupSummary{TriggerReason: triggerReason}
+	summary := &CleanupSummary{TriggerReason: trigger}
 
 	stats, err := c.inspector.InspectFS(mediaDir)
 	if err != nil {
@@ -134,7 +145,7 @@ func (c *CleanerEngine) RunPrune(
 	}
 
 	usage := percentUsed(stats.UsedBytes, stats.TotalBytes)
-	isManual := triggerReason == PruneTriggerManual
+	isManual := trigger == PruneTriggerManual
 
 	// Automatic watermark triggers must not delete anything below the high mark.
 	if !isManual && usage < cfg.HighWatermarkPercent {
@@ -142,7 +153,7 @@ func (c *CleanerEngine) RunPrune(
 	}
 
 	c.logger.Info("starting storage cleanup cycle",
-		zap.String("reason", triggerReason),
+		zap.String("reason", string(trigger)),
 		zap.Int("current_usage", usage),
 		zap.Int("target_low", cfg.LowWatermarkPercent),
 	)
@@ -155,7 +166,7 @@ func (c *CleanerEngine) RunPrune(
 	recordingsCandidates := c.collectRecordings(mediaDir, time.Duration(cfg.RecordingsRetentionDays)*24*time.Hour)
 
 	// Step 2: expired exports first.
-	result := c.deleteBatch(ctx, exportsCandidates, scope)
+	result := c.deleteCandidates(ctx, exportsCandidates, scope)
 	summary.DeletedFiles += result.deleted
 	summary.FreedBytes += result.freed
 
@@ -163,14 +174,16 @@ func (c *CleanerEngine) RunPrune(
 	// 「证据价值」排序上低于导出（人工产物）而高于常规录像，与 storage-guidelines
 	// §4 的删除顺序一致。
 	if ctx.Err() == nil {
-		result = c.deleteBatch(ctx, snapshotsCandidates, scope)
+		result = c.deleteCandidates(ctx, snapshotsCandidates, scope)
 		summary.DeletedFiles += result.deleted
 		summary.FreedBytes += result.freed
 	}
 
 	// Step 4: only fall back to recordings while still above the low watermark.
-	if ctx.Err() == nil && (isManual || c.isAboveLowWatermark(mediaDir, cfg.LowWatermarkPercent)) {
-		result = c.deleteBatch(ctx, recordingsCandidates, scope)
+	shouldPruneRecordings := ctx.Err() == nil &&
+		(isManual || c.isAboveLowWatermark(mediaDir, cfg.LowWatermarkPercent))
+	if shouldPruneRecordings {
+		result = c.deleteCandidates(ctx, recordingsCandidates, scope)
 		summary.DeletedFiles += result.deleted
 		summary.FreedBytes += result.freed
 	}
@@ -187,7 +200,7 @@ func (c *CleanerEngine) RunPrune(
 }
 
 // finishSummary stamps the cycle outcome, duration, and completion time.
-func finishSummary(summary *CleanupSummary, startTime time.Time, status string) *CleanupSummary {
+func finishSummary(summary *CleanupSummary, startTime time.Time, status PruneStatus) *CleanupSummary {
 	summary.DurationMs = time.Since(startTime).Milliseconds()
 	summary.FinishedAt = time.Now().UTC()
 	summary.TargetStatus = status
@@ -204,7 +217,10 @@ func (c *CleanerEngine) isAboveLowWatermark(mediaDir string, lowWatermark int) b
 	return percentUsed(stats.UsedBytes, stats.TotalBytes) > lowWatermark
 }
 
-func (c *CleanerEngine) deleteBatch(ctx context.Context, files []candidateFile, scope pruneScope) pruneResult {
+// deleteCandidates removes the given candidates in order, yielding every
+// batchSize files and stopping as soon as the volume falls below the low
+// watermark.
+func (c *CleanerEngine) deleteCandidates(ctx context.Context, files []candidateFile, scope pruneScope) pruneResult {
 	var result pruneResult
 
 	for i, f := range files {
@@ -255,6 +271,10 @@ func (c *CleanerEngine) deleteBatch(ctx context.Context, files []candidateFile, 
 }
 
 // collectExports collects exports older than ttl, oldest first.
+//
+// Exports are the first tier of the cascade and are deliberately exempt from
+// isCleanupProtected: they are user-requested temporary clips, so a stray .lock
+// sidecar must not pin disk usage above the hard limit (storage-guidelines §2.2).
 func (c *CleanerEngine) collectExports(mediaDir string, ttl time.Duration) []candidateFile {
 	threshold := time.Now().Add(-ttl)
 
@@ -371,9 +391,12 @@ func walkMediaFiles(root string, visit func(path string, d fs.DirEntry)) {
 }
 
 // sortOldestFirst orders candidates so the oldest file is evicted first.
+//
+// The sort is stable so files sharing a modification time keep the walk order,
+// which keeps deletion order reproducible across runs and tests.
 func sortOldestFirst(candidates []candidateFile) []candidateFile {
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].modTime.Before(candidates[j].modTime)
+	slices.SortStableFunc(candidates, func(a, b candidateFile) int {
+		return a.modTime.Compare(b.modTime)
 	})
 
 	return candidates

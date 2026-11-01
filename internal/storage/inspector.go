@@ -26,6 +26,11 @@ type FSStats struct {
 }
 
 // PathInspector defines filesystem querying and telemetry probe operations.
+//
+// InspectFS and ProbeWritable deliberately take no context: they are built on
+// stat/statfs and a tiny write-read roundtrip, none of which Go can interrupt.
+// Callers bound them with their own timeout instead of passing a context the
+// syscalls would ignore.
 type PathInspector interface {
 	InspectFS(path string) (*FSStats, error)
 	ProbeWritable(path string) error
@@ -48,17 +53,19 @@ func NewDefaultPathInspector() *DefaultPathInspector {
 // ProbeWritable performs an actual write-read-delete roundtrip with a hidden probe file.
 func (p *DefaultPathInspector) ProbeWritable(path string) error {
 	cleanPath := filepath.Clean(path)
+
 	info, err := os.Stat(cleanPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			if mkErr := os.MkdirAll(cleanPath, 0o750); mkErr != nil {
-				return fmt.Errorf("create directory %s: %w", cleanPath, mkErr)
-			}
-		} else {
-			return fmt.Errorf("stat directory %s: %w", cleanPath, err)
+	switch {
+	case err != nil && !os.IsNotExist(err):
+		return fmt.Errorf("stat directory %q: %w", cleanPath, err)
+	case err != nil:
+		// A missing candidate directory is created here: the operator is allowed
+		// to point storage at a path that does not exist yet.
+		if mkErr := os.MkdirAll(cleanPath, 0o750); mkErr != nil {
+			return fmt.Errorf("create directory %q: %w", cleanPath, mkErr)
 		}
-	} else if !info.IsDir() {
-		return fmt.Errorf("path %s is not a directory", cleanPath)
+	case !info.IsDir():
+		return fmt.Errorf("path %q is not a directory", cleanPath)
 	}
 
 	// Generate random probe file name. crypto/rand.Read never returns an error on
@@ -72,18 +79,20 @@ func (p *DefaultPathInspector) ProbeWritable(path string) error {
 
 	payload := []byte("zhulong_storage_probe_check")
 	if err := os.WriteFile(probeFileName, payload, 0o600); err != nil {
-		return fmt.Errorf("write test file in %s: %w", cleanPath, err)
+		return fmt.Errorf("write test file in %q: %w", cleanPath, err)
 	}
 	defer func() {
+		// Best effort: the probe already delivered its verdict, and a leftover
+		// file is harmless next to a failed cleanup.
 		_ = os.Remove(probeFileName)
 	}()
 
 	readBack, err := os.ReadFile(probeFileName)
 	if err != nil {
-		return fmt.Errorf("read back test file in %s: %w", cleanPath, err)
+		return fmt.Errorf("read back test file in %q: %w", cleanPath, err)
 	}
 	if !bytes.Equal(readBack, payload) {
-		return fmt.Errorf("corrupted test file content in %s", cleanPath)
+		return fmt.Errorf("corrupted test file content in %q", cleanPath)
 	}
 
 	return nil
@@ -106,7 +115,7 @@ func (p *DefaultPathInspector) ScanBreakdown(ctx context.Context, mediaDir strin
 	for _, target := range targets {
 		size, err := dirSize(ctx, filepath.Join(cleanRoot, target.dir))
 		if err != nil && !os.IsNotExist(err) {
-			return breakdown, fmt.Errorf("scan %s dir: %w", target.dir, err)
+			return breakdown, fmt.Errorf("scan %q dir: %w", target.dir, err)
 		}
 		*target.dst = size
 	}
@@ -114,6 +123,7 @@ func (p *DefaultPathInspector) ScanBreakdown(ctx context.Context, mediaDir strin
 	return breakdown, nil
 }
 
+// dirSize sums the size of every regular file under root.
 func dirSize(ctx context.Context, root string) (int64, error) {
 	info, err := os.Stat(root)
 	if err != nil {

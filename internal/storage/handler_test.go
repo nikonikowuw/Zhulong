@@ -26,7 +26,7 @@ func setupTestHandler(t *testing.T) (*gin.Engine, *Service, string, func()) {
 		t.Fatalf("OpenAndMigrate failed: %v", err)
 	}
 
-	repo := NewRepository(dbStore)
+	repo := NewRepository(dbStore, zap.NewNop())
 	mediaDir := filepath.Join(tempDir, "media")
 	mustMkdirAll(t, mediaDir)
 
@@ -43,7 +43,13 @@ func setupTestHandler(t *testing.T) (*gin.Engine, *Service, string, func()) {
 	auditStore := audit.NewStore(dbStore)
 	auditSvc := audit.NewService(auditStore, zap.NewNop())
 
-	svc := NewService(repo, inspector, gate, cleaner, zap.NewNop())
+	svc := NewService(ServiceDeps{
+		Repo:      repo,
+		Inspector: inspector,
+		Gate:      gate,
+		Cleaner:   cleaner,
+		Logger:    zap.NewNop(),
+	})
 	svc.SetAuditor(auditSvc)
 	if err := svc.Start(context.Background()); err != nil {
 		t.Fatalf("start storage service: %v", err)
@@ -148,9 +154,10 @@ func TestHandler_UpdateConfig(t *testing.T) {
 		t.Errorf("expected updated media dir %q, got %v", newMedia, dataMap["mediaDirectory"])
 	}
 
-	// Test invalid payload (low watermark >= high watermark)
+	// Test invalid payload: both watermarks are inside their binding ranges but
+	// low >= high, so only the domain validator can reject it.
 	invalidPayload := payload
-	invalidPayload.LowWatermarkPercent = 90
+	invalidPayload.LowWatermarkPercent = 85
 	invalidPayload.HighWatermarkPercent = 80
 	invBody, _ := json.Marshal(invalidPayload)
 
@@ -159,8 +166,14 @@ func TestHandler_UpdateConfig(t *testing.T) {
 	reqInv.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(wInv, reqInv)
 
-	if wInv.Code != http.StatusBadRequest && wInv.Code != http.StatusUnprocessableEntity {
-		t.Errorf("expected error status for invalid config, got %d", wInv.Code)
+	if wInv.Code != http.StatusUnprocessableEntity {
+		t.Errorf("expected 422 for an invalid config, got %d: %s", wInv.Code, wInv.Body.String())
+	}
+
+	var invResp httputil.Response
+	mustUnmarshalJSON(t, wInv.Body.Bytes(), &invResp)
+	if invResp.Code != "INVALID_STORAGE_CONFIG" {
+		t.Errorf("expected INVALID_STORAGE_CONFIG, got %s", invResp.Code)
 	}
 }
 
@@ -221,7 +234,7 @@ func TestHandler_UserAuditUsesAuthenticatedActor(t *testing.T) {
 	}
 	defer dbStore.Close()
 
-	repo := NewRepository(dbStore)
+	repo := NewRepository(dbStore, zap.NewNop())
 	mediaDir := filepath.Join(tempDir, "media")
 	if err := os.MkdirAll(mediaDir, 0o750); err != nil {
 		t.Fatalf("mkdir media: %v", err)
@@ -240,8 +253,13 @@ func TestHandler_UserAuditUsesAuthenticatedActor(t *testing.T) {
 	}
 	defer func() { _ = auditSvc.Stop(context.Background()) }()
 
-	svc := NewService(repo, NewDefaultPathInspector(), NewEmergencyGate(zap.NewNop()),
-		NewCleanerEngine(NewDefaultPathInspector(), zap.NewNop()), zap.NewNop())
+	svc := NewService(ServiceDeps{
+		Repo:      repo,
+		Inspector: NewDefaultPathInspector(),
+		Gate:      NewEmergencyGate(zap.NewNop()),
+		Cleaner:   NewCleanerEngine(NewDefaultPathInspector(), zap.NewNop()),
+		Logger:    zap.NewNop(),
+	})
 	svc.SetAuditor(auditSvc)
 	if err := svc.Start(context.Background()); err != nil {
 		t.Fatalf("start storage service: %v", err)
@@ -318,7 +336,7 @@ func TestHandler_UserAuditWithoutActorIsAnonymous(t *testing.T) {
 	}
 	defer dbStore.Close()
 
-	repo := NewRepository(dbStore)
+	repo := NewRepository(dbStore, zap.NewNop())
 	mediaDir := filepath.Join(tempDir, "media")
 	if err := os.MkdirAll(mediaDir, 0o750); err != nil {
 		t.Fatalf("mkdir media: %v", err)
@@ -337,8 +355,13 @@ func TestHandler_UserAuditWithoutActorIsAnonymous(t *testing.T) {
 	}
 	defer func() { _ = auditSvc.Stop(context.Background()) }()
 
-	svc := NewService(repo, NewDefaultPathInspector(), NewEmergencyGate(zap.NewNop()),
-		NewCleanerEngine(NewDefaultPathInspector(), zap.NewNop()), zap.NewNop())
+	svc := NewService(ServiceDeps{
+		Repo:      repo,
+		Inspector: NewDefaultPathInspector(),
+		Gate:      NewEmergencyGate(zap.NewNop()),
+		Cleaner:   NewCleanerEngine(NewDefaultPathInspector(), zap.NewNop()),
+		Logger:    zap.NewNop(),
+	})
 	svc.SetAuditor(auditSvc)
 	if err := svc.Start(context.Background()); err != nil {
 		t.Fatalf("start storage service: %v", err)
@@ -389,5 +412,47 @@ func TestHandler_UserAuditWithoutActorIsAnonymous(t *testing.T) {
 	}
 	if entries[0].Username == "admin" {
 		t.Error("an unattributed request must not be recorded as admin")
+	}
+}
+
+// TestHandler_UpdateConfigDatabaseOutageIsInternal is the regression guard for
+// the blanket 400 INVALID_STORAGE_CONFIG mapping: a database outage must surface
+// as 500 DATABASE_ERROR so the SPA does not blame the operator's input.
+func TestHandler_UpdateConfigDatabaseOutageIsInternal(t *testing.T) {
+	svc := NewService(ServiceDeps{Repo: failingRepository{}, Logger: zap.NewNop()})
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler := NewHandler(svc, zap.NewNop())
+	handler.RegisterRoutes(router.Group("/api/v1"))
+
+	payload := UpdateConfigRequest{
+		MediaDirectory:          t.TempDir(),
+		RecordingsRetentionDays: 20,
+		SnapshotsRetentionDays:  100,
+		ExportsRetentionHours:   36,
+		HighWatermarkPercent:    85,
+		LowWatermarkPercent:     70,
+		EmergencyStopPercent:    95,
+		EmergencyStopMinMB:      2048,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/system/storage/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp httputil.Response
+	mustUnmarshalJSON(t, w.Body.Bytes(), &resp)
+	if resp.Code != "DATABASE_ERROR" {
+		t.Errorf("expected DATABASE_ERROR, got %s", resp.Code)
 	}
 }

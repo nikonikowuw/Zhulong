@@ -5,12 +5,18 @@ import "time"
 // StorageHealthStatus represents the health and operating state of the storage subsystem.
 type StorageHealthStatus string
 
+// Values of StorageStatus.Status.
 const (
-	StatusHealthy          StorageHealthStatus = "healthy"           // Storage has plenty of space and read/write is normal
-	StatusWarning          StorageHealthStatus = "warning"           // Storage usage touched high watermark threshold
-	StatusCleaning         StorageHealthStatus = "cleaning"          // Background cleaner is actively pruning expired/stale files
-	StatusEmergencyStopped StorageHealthStatus = "emergency_stopped" // Storage touched critical emergency line; writes suspended
-	StatusError            StorageHealthStatus = "error"             // Path missing, read-only, or external disk unmounted/fallen through
+	// StatusHealthy means there is plenty of space and read/write is normal.
+	StatusHealthy StorageHealthStatus = "healthy"
+	// StatusWarning means usage touched the high watermark and the cleaner may wake up.
+	StatusWarning StorageHealthStatus = "warning"
+	// StatusCleaning means the background cleaner is actively pruning files.
+	StatusCleaning StorageHealthStatus = "cleaning"
+	// StatusEmergencyStopped means the emergency line was hit and writes are suspended.
+	StatusEmergencyStopped StorageHealthStatus = "emergency_stopped"
+	// StatusError means the path is missing, read-only, or an external disk fell through.
+	StatusError StorageHealthStatus = "error"
 )
 
 // Audit actions for storage lifecycle events.
@@ -25,13 +31,13 @@ const (
 // StorageConfig holds the persistent media storage lifecycle and watermark configuration.
 type StorageConfig struct {
 	MediaDirectory          string `json:"mediaDirectory"`          // Root media path, e.g. "/mnt/storage/media"
-	RecordingsRetentionDays int    `json:"recordingsRetentionDays"` // Video recordings retention in days (1..365)
-	SnapshotsRetentionDays  int    `json:"snapshotsRetentionDays"`  // Snapshot captures retention in days (1..730)
-	ExportsRetentionHours   int    `json:"exportsRetentionHours"`   // Exported clips retention in hours (1..168)
-	HighWatermarkPercent    int    `json:"highWatermarkPercent"`    // High watermark percentage triggering cleaner (50..95)
-	LowWatermarkPercent     int    `json:"lowWatermarkPercent"`     // Low watermark percentage where cleaner sleeps (40..85)
-	EmergencyStopPercent    int    `json:"emergencyStopPercent"`    // Emergency write-stop percentage (90..99)
-	EmergencyStopMinMB      int64  `json:"emergencyStopMinMb"`      // Emergency minimum free space in megabytes (100..102400)
+	RecordingsRetentionDays int    `json:"recordingsRetentionDays"` // Recording retention in days (1..365)
+	SnapshotsRetentionDays  int    `json:"snapshotsRetentionDays"`  // Snapshot retention in days (1..730)
+	ExportsRetentionHours   int    `json:"exportsRetentionHours"`   // Export retention in hours (1..168)
+	HighWatermarkPercent    int    `json:"highWatermarkPercent"`    // Cleaner wake-up usage (50..95)
+	LowWatermarkPercent     int    `json:"lowWatermarkPercent"`     // Cleaner sleep usage (40..85)
+	EmergencyStopPercent    int    `json:"emergencyStopPercent"`    // Write-stop usage (90..99)
+	EmergencyStopMinMB      int64  `json:"emergencyStopMinMb"`      // Write-stop free-space floor in MB
 }
 
 // percentUsed converts byte counts into a 0..100 usage percentage, reporting 0
@@ -117,10 +123,10 @@ type UpdateConfigRequest struct {
 
 // CleanupSummary details the execution metrics of a triggered prune cycle.
 type CleanupSummary struct {
-	TriggerReason string    `json:"triggerReason"` // "watermark", "scheduled", "manual"
-	DeletedFiles  int       `json:"deletedFiles"`
-	FreedBytes    int64     `json:"freedBytes"`
-	DurationMs    int64     `json:"durationMs"`
-	TargetStatus  string    `json:"targetStatus"`
-	FinishedAt    time.Time `json:"finishedAt"`
+	TriggerReason PruneTrigger `json:"triggerReason"` // "manual" or "watermark"
+	DeletedFiles  int          `json:"deletedFiles"`
+	FreedBytes    int64        `json:"freedBytes"`
+	DurationMs    int64        `json:"durationMs"`
+	TargetStatus  PruneStatus  `json:"targetStatus"` // "completed" or "skipped_below_high_watermark"
+	FinishedAt    time.Time    `json:"finishedAt"`
 }

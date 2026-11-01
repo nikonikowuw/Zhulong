@@ -60,13 +60,11 @@ func TestMediaRoutesProduceNoAuditRecords(t *testing.T) {
 		t.Fatalf("write media fixture: %v", err)
 	}
 
-	storageSvc := storage.NewService(
-		storage.NewRepository(dbStore),
-		storage.NewDefaultPathInspector(),
-		nil,
-		nil,
-		zap.NewNop(),
-	)
+	storageSvc := storage.NewService(storage.ServiceDeps{
+		Repo:      storage.NewRepository(dbStore, zap.NewNop()),
+		Inspector: storage.NewDefaultPathInspector(),
+		Logger:    zap.NewNop(),
+	})
 	// Point the single source of truth for the media root at the fixture.
 	cfg := storage.DefaultStorageConfig()
 	cfg.MediaDirectory = mediaRoot
