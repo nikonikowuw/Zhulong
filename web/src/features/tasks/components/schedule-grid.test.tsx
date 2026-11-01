@@ -71,7 +71,7 @@ describe('ScheduleGrid', () => {
     expect(parsed.days?.monday).toBeUndefined()
   })
 
-  it('toggles a whole day when clicking day label button', async () => {
+  it('toggles a whole day when clicking day label button in daily mode', async () => {
     const handleChange = vi.fn()
     const activeValue = JSON.stringify({
       enabled: true,
@@ -81,11 +81,98 @@ describe('ScheduleGrid', () => {
       <ScheduleGrid value={activeValue} onChange={handleChange} />
     )
 
+    await userEvent.click(getByText('按天明细'))
     await userEvent.click(getByText('周一'))
 
     expect(handleChange).toHaveBeenCalled()
     const emitted = handleChange.mock.calls[0][0]
     const parsed = parseSchedule(emitted)
     expect(parsed.days?.monday).toEqual([{ start: '00:00', end: '24:00' }])
+  })
+
+  it('switches between grouped and daily mode seamlessly', async () => {
+    const activeValue = JSON.stringify({
+      enabled: true,
+      days: {
+        monday: [{ start: '08:00', end: '18:00' }],
+      },
+    })
+    const { getByText } = await render(
+      <ScheduleGrid value={activeValue} onChange={vi.fn()} />
+    )
+
+    await expect.element(getByText(/工作日 \(周一至周五\)/)).toBeInTheDocument()
+    await userEvent.click(getByText('按天明细'))
+    await expect.element(getByText('周一')).toBeInTheDocument()
+    await expect.element(getByText('周日')).toBeInTheDocument()
+  })
+
+  it('removes an interval when clicking remove button on pill', async () => {
+    const handleChange = vi.fn()
+    const activeValue = JSON.stringify({
+      enabled: true,
+      days: {
+        monday: [
+          { start: '08:00', end: '12:00' },
+          { start: '14:00', end: '18:00' },
+        ],
+      },
+    })
+    const { getByTitle } = await render(
+      <ScheduleGrid value={activeValue} onChange={handleChange} />
+    )
+
+    // In grouped mode, workday reflects monday
+    const removeBtns = getByTitle('删除时段')
+    await userEvent.click(removeBtns.first())
+
+    expect(handleChange).toHaveBeenCalled()
+    const emitted = handleChange.mock.calls[0][0]
+    const parsed = parseSchedule(emitted)
+    expect(parsed.days?.monday).toEqual([{ start: '14:00', end: '18:00' }])
+  })
+
+  it('adds an interval inline directly when clicking add button', async () => {
+    const handleChange = vi.fn()
+    const activeValue = JSON.stringify({
+      enabled: true,
+      days: {},
+    })
+    const { getByRole } = await render(
+      <ScheduleGrid value={activeValue} onChange={handleChange} />
+    )
+
+    // Click inline add button directly without popover
+    await userEvent.click(getByRole('button', { name: /添加.*时段/ }).first())
+
+    expect(handleChange).toHaveBeenCalled()
+    const emitted = handleChange.mock.calls[0][0]
+    const parsed = parseSchedule(emitted)
+    expect(parsed.days?.monday).toEqual([{ start: '08:00', end: '18:00' }])
+    expect(parsed.days?.friday).toEqual([{ start: '08:00', end: '18:00' }])
+  })
+
+  it('updates precise minute in time input and commits changes', async () => {
+    const handleChange = vi.fn()
+    const activeValue = JSON.stringify({
+      enabled: true,
+      days: {
+        monday: [{ start: '08:00', end: '18:00' }],
+      },
+    })
+    const { getByPlaceholder } = await render(
+      <ScheduleGrid value={activeValue} onChange={handleChange} />
+    )
+
+    const startInput = getByPlaceholder('08:00').first()
+    await userEvent.clear(startInput)
+    await userEvent.type(startInput, '08:45')
+    const endInput = getByPlaceholder('08:00').nth(1)
+    await userEvent.click(endInput)
+
+    expect(handleChange).toHaveBeenCalled()
+    const emitted = handleChange.mock.calls[0][0]
+    const parsed = parseSchedule(emitted)
+    expect(parsed.days?.monday).toEqual([{ start: '08:45', end: '18:00' }])
   })
 })

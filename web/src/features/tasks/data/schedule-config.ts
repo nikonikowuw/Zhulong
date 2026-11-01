@@ -15,6 +15,25 @@ export const DAY_KEYS = [
 
 export type DayKey = (typeof DAY_KEYS)[number]
 
+export const WORKDAY_KEYS: readonly DayKey[] = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+] as const
+
+export const WEEKEND_KEYS: readonly DayKey[] = ['saturday', 'sunday'] as const
+
+export const HALF_HOUR_OPTIONS: readonly string[] = Array.from(
+  { length: 49 },
+  (_, i) => {
+    const h = Math.floor(i / 2)
+    const m = i % 2 === 0 ? '00' : '30'
+    return `${h.toString().padStart(2, '0')}:${m}`
+  }
+)
+
 export interface TimeRange {
   start: string // "08:30"
   end: string // "17:30"
@@ -161,6 +180,169 @@ export function slotsToIntervals(slots: boolean[]): TimeRange[] {
   }
 
   return ranges
+}
+
+export function copyDaySchedule(
+  schedule: WeekSchedule,
+  fromDay: DayKey,
+  targetDays: DayKey[]
+): WeekSchedule {
+  const sourceRanges = schedule.days?.[fromDay] ?? []
+  const newDays = { ...schedule.days }
+  for (const target of targetDays) {
+    if (sourceRanges.length === 0) {
+      delete newDays[target]
+    } else {
+      newDays[target] = sourceRanges.map((r) => ({ ...r }))
+    }
+  }
+  return {
+    ...schedule,
+    days: newDays,
+  }
+}
+
+export function clearDaySchedule(
+  schedule: WeekSchedule,
+  day: DayKey
+): WeekSchedule {
+  const newDays = { ...schedule.days }
+  delete newDays[day]
+  return {
+    ...schedule,
+    days: newDays,
+  }
+}
+
+export function mergeTimeRanges(ranges: TimeRange[]): TimeRange[] {
+  if (!ranges || ranges.length === 0) return []
+  const intervals = ranges
+    .map((r) => ({
+      start: timeStringToMinutes(r.start),
+      end: timeStringToMinutes(r.end),
+    }))
+    .filter((iv) => iv.end > iv.start)
+
+  if (intervals.length === 0) return []
+
+  intervals.sort((a, b) => a.start - b.start)
+
+  const merged: Array<{ start: number; end: number }> = [intervals[0]]
+  for (let i = 1; i < intervals.length; i++) {
+    const current = intervals[i]
+    const last = merged[merged.length - 1]
+
+    if (current.start <= last.end) {
+      last.end = Math.max(last.end, current.end)
+    } else {
+      merged.push(current)
+    }
+  }
+
+  return merged.map((iv) => ({
+    start: minutesToTimeString(iv.start),
+    end: minutesToTimeString(iv.end),
+  }))
+}
+
+export function addIntervalToDay(
+  schedule: WeekSchedule,
+  day: DayKey,
+  newRange: TimeRange
+): WeekSchedule {
+  const currentRanges = schedule.days?.[day] ?? []
+  const startMin = timeStringToMinutes(newRange.start)
+  const endMin = timeStringToMinutes(newRange.end)
+
+  let addedRanges: TimeRange[]
+  if (startMin < endMin) {
+    addedRanges = [
+      ...currentRanges,
+      { start: newRange.start, end: newRange.end },
+    ]
+  } else if (startMin > endMin) {
+    // 跨天支持：例如 20:45 - 06:15
+    addedRanges = [
+      ...currentRanges,
+      { start: newRange.start, end: '24:00' },
+      { start: '00:00', end: newRange.end },
+    ]
+  } else {
+    return schedule
+  }
+
+  const merged = mergeTimeRanges(addedRanges)
+  const newDays = { ...schedule.days }
+  if (merged.length > 0) {
+    newDays[day] = merged
+  } else {
+    delete newDays[day]
+  }
+  return {
+    ...schedule,
+    days: newDays,
+  }
+}
+
+export function updateIntervalInDay(
+  schedule: WeekSchedule,
+  day: DayKey,
+  index: number,
+  updatedRange: TimeRange
+): WeekSchedule {
+  const currentRanges = schedule.days?.[day] ?? []
+  if (index < 0 || index >= currentRanges.length) return schedule
+  const nextRanges = currentRanges.filter((_, idx) => idx !== index)
+  const startMin = timeStringToMinutes(updatedRange.start)
+  const endMin = timeStringToMinutes(updatedRange.end)
+
+  let addedRanges: TimeRange[]
+  if (startMin < endMin) {
+    addedRanges = [
+      ...nextRanges,
+      { start: updatedRange.start, end: updatedRange.end },
+    ]
+  } else if (startMin > endMin) {
+    addedRanges = [
+      ...nextRanges,
+      { start: updatedRange.start, end: '24:00' },
+      { start: '00:00', end: updatedRange.end },
+    ]
+  } else {
+    addedRanges = nextRanges
+  }
+
+  const merged = mergeTimeRanges(addedRanges)
+  const newDays = { ...schedule.days }
+  if (merged.length > 0) {
+    newDays[day] = merged
+  } else {
+    delete newDays[day]
+  }
+  return {
+    ...schedule,
+    days: newDays,
+  }
+}
+
+export function removeIntervalFromDay(
+  schedule: WeekSchedule,
+  day: DayKey,
+  index: number
+): WeekSchedule {
+  const currentRanges = schedule.days?.[day] ?? []
+  if (index < 0 || index >= currentRanges.length) return schedule
+  const nextRanges = currentRanges.filter((_, idx) => idx !== index)
+  const newDays = { ...schedule.days }
+  if (nextRanges.length > 0) {
+    newDays[day] = nextRanges
+  } else {
+    delete newDays[day]
+  }
+  return {
+    ...schedule,
+    days: newDays,
+  }
 }
 
 const DAY_INDEX_MAP: Record<DayKey, number> = {

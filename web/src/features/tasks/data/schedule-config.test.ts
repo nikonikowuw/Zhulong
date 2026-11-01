@@ -1,12 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import {
+  addIntervalToDay,
   calculatePeakCompute,
+  clearDaySchedule,
+  copyDaySchedule,
   intervalsToSlots,
+  mergeTimeRanges,
   minutesToTimeString,
   parseSchedule,
+  removeIntervalFromDay,
   serializeSchedule,
   slotsToIntervals,
   timeStringToMinutes,
+  updateIntervalInDay,
+  WORKDAY_KEYS,
+  type WeekSchedule,
 } from './schedule-config'
 
 describe('schedule-config', () => {
@@ -74,5 +82,88 @@ describe('schedule-config', () => {
         { points: 500, schedule: schedNight },
       ])
     ).toBe(1000)
+  })
+
+  it('copies day schedule to target days correctly', () => {
+    const initial: WeekSchedule = {
+      enabled: true,
+      days: {
+        monday: [{ start: '09:00', end: '17:00' }],
+      },
+    }
+    const copied = copyDaySchedule(initial, 'monday', [...WORKDAY_KEYS])
+    expect(copied.days?.tuesday).toEqual([{ start: '09:00', end: '17:00' }])
+    expect(copied.days?.friday).toEqual([{ start: '09:00', end: '17:00' }])
+    expect(copied.days?.saturday).toBeUndefined()
+  })
+
+  it('clears day schedule correctly', () => {
+    const initial: WeekSchedule = {
+      enabled: true,
+      days: {
+        monday: [{ start: '09:00', end: '17:00' }],
+        tuesday: [{ start: '10:00', end: '12:00' }],
+      },
+    }
+    const cleared = clearDaySchedule(initial, 'monday')
+    expect(cleared.days?.monday).toBeUndefined()
+    expect(cleared.days?.tuesday).toEqual([{ start: '10:00', end: '12:00' }])
+  })
+
+  it('adds and merges interval to day correctly', () => {
+    const initial: WeekSchedule = {
+      enabled: true,
+      days: {
+        monday: [{ start: '09:00', end: '12:00' }],
+      },
+    }
+    // Add overlapping interval 11:00 - 15:00
+    const merged = addIntervalToDay(initial, 'monday', {
+      start: '11:00',
+      end: '15:00',
+    })
+    expect(merged.days?.monday).toEqual([{ start: '09:00', end: '15:00' }])
+  })
+
+  it('removes interval from day correctly', () => {
+    const initial: WeekSchedule = {
+      enabled: true,
+      days: {
+        monday: [
+          { start: '09:00', end: '12:00' },
+          { start: '14:00', end: '18:00' },
+        ],
+      },
+    }
+    const removed = removeIntervalFromDay(initial, 'monday', 0)
+    expect(removed.days?.monday).toEqual([{ start: '14:00', end: '18:00' }])
+  })
+
+  it('preserves exact minute precision without 30-min quantization', () => {
+    const initial: WeekSchedule = {
+      enabled: true,
+      days: {},
+    }
+    // Add 08:45 ~ 17:15
+    const updated = addIntervalToDay(initial, 'monday', {
+      start: '08:45',
+      end: '17:15',
+    })
+    expect(updated.days?.monday).toEqual([{ start: '08:45', end: '17:15' }])
+
+    // Update interval to 09:10 ~ 18:20
+    const modified = updateIntervalInDay(updated, 'monday', 0, {
+      start: '09:10',
+      end: '18:20',
+    })
+    expect(modified.days?.monday).toEqual([{ start: '09:10', end: '18:20' }])
+  })
+
+  it('merges overlapping minute-level intervals accurately', () => {
+    const merged = mergeTimeRanges([
+      { start: '08:45', end: '12:15' },
+      { start: '11:30', end: '17:45' },
+    ])
+    expect(merged).toEqual([{ start: '08:45', end: '17:45' }])
   })
 })

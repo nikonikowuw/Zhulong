@@ -1,12 +1,14 @@
-import { AlertTriangle, Layers, Sliders } from 'lucide-react'
+import { AlertTriangle, CalendarClock, Layers, Sliders } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { STATUS_LEVEL_CLASS } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { type Algorithm } from '@/features/algorithms/data/schema'
 import { MAX_RECTS_PER_CATEGORY } from '../data/region-config'
+import { isScheduleAlwaysActive, parseSchedule } from '../data/schedule-config'
 import {
   DEFAULT_COMPUTE_COST,
   MAX_SAMPLE_FPS,
@@ -182,81 +184,120 @@ export function ChannelTaskAlgoPanel({
             </div>
           )}
 
-          {/* 通用采样帧率与算力联动卡片（合并原冗余摘要，精简垂直高度） */}
-          <div className='flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3 shadow-xs'>
-            <div className='flex flex-col gap-0.5'>
-              <div className='flex items-center gap-2'>
-                <Label className='text-xs font-semibold text-foreground'>
-                  {t('dialog.fpsLabel', '采样帧率')}
-                </Label>
-                <Badge
-                  variant='secondary'
-                  className='h-5 px-1.5 font-mono text-[10px] font-semibold text-foreground'
-                >
-                  {costPerFrame * activeDraft.sampleFps}{' '}
-                  {t('channelCard.pointsSuffix', '点')}
-                </Badge>
-                <span className='font-mono text-[10px] text-muted-foreground'>
-                  ({costPerFrame} 点/帧)
-                </span>
+          {/* 深度配置选项卡：参数与区域 / 分时布防计划 */}
+          <Tabs defaultValue='params' className='flex flex-1 flex-col gap-3'>
+            <TabsList className='grid w-full grid-cols-2'>
+              <TabsTrigger value='params' className='gap-1.5 text-xs'>
+                <Sliders className='size-3.5' />
+                {t('dialog.tabParams', '运行参数与区域')}
+              </TabsTrigger>
+              <TabsTrigger value='schedule' className='gap-1.5 text-xs'>
+                <CalendarClock className='size-3.5' />
+                {t('dialog.tabSchedule', '分时布防计划')}
+                {!isScheduleAlwaysActive(
+                  parseSchedule(activeDraft.scheduleJson)
+                ) ? (
+                  <Badge
+                    variant='secondary'
+                    className='h-4 px-1 font-mono text-[9px]'
+                  >
+                    已排程
+                  </Badge>
+                ) : (
+                  <Badge
+                    variant='outline'
+                    className='h-4 px-1 text-[9px] font-normal text-muted-foreground'
+                  >
+                    24×7
+                  </Badge>
+                )}
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value='params' className='mt-0 flex flex-col gap-3.5'>
+              {/* 通用采样帧率与算力联动卡片（合并原冗余摘要，精简垂直高度） */}
+              <div className='flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3 shadow-xs'>
+                <div className='flex flex-col gap-0.5'>
+                  <div className='flex items-center gap-2'>
+                    <Label className='text-xs font-semibold text-foreground'>
+                      {t('dialog.fpsLabel', '采样帧率')}
+                    </Label>
+                    <Badge
+                      variant='secondary'
+                      className='h-5 px-1.5 font-mono text-[10px] font-semibold text-foreground'
+                    >
+                      {costPerFrame * activeDraft.sampleFps}{' '}
+                      {t('channelCard.pointsSuffix', '点')}
+                    </Badge>
+                    <span className='font-mono text-[10px] text-muted-foreground'>
+                      ({costPerFrame} 点/帧)
+                    </span>
+                  </div>
+                  <span className='font-mono text-[10px] text-muted-foreground'>
+                    {t('dialog.fpsRange', {
+                      min: MIN_SAMPLE_FPS,
+                      max: MAX_SAMPLE_FPS,
+                    })}
+                  </span>
+                </div>
+                <FpsStepper
+                  value={activeDraft.sampleFps}
+                  min={MIN_SAMPLE_FPS}
+                  max={MAX_SAMPLE_FPS}
+                  onChange={(fps) => onUpdateFps(activeAlgo.id, fps)}
+                />
               </div>
-              <span className='font-mono text-[10px] text-muted-foreground'>
-                {t('dialog.fpsRange', {
-                  min: MIN_SAMPLE_FPS,
-                  max: MAX_SAMPLE_FPS,
-                })}
-              </span>
-            </div>
-            <FpsStepper
-              value={activeDraft.sampleFps}
-              min={MIN_SAMPLE_FPS}
-              max={MAX_SAMPLE_FPS}
-              onChange={(fps) => onUpdateFps(activeAlgo.id, fps)}
-            />
-          </div>
 
-          {/* 算法运行参数表单 */}
-          <div className='rounded-xl border border-border bg-card p-4 shadow-xs'>
-            <AlgoConfigDynamicForm
-              key={activeAlgo.id}
-              schemaJson={activeAlgo.configSchemaJson}
-              value={activeDraft.configJson}
-              onChange={(nextJson) =>
-                onUpdateConfigJson(activeAlgo.id, nextJson)
-              }
-            />
-          </div>
-
-          <div className='space-y-3 rounded-xl border border-border bg-card p-4 shadow-xs'>
-            <div className='flex items-center justify-between'>
-              <div className='flex items-center gap-1.5'>
-                <Sliders className='size-3.5 text-muted-foreground' />
-                <Label className='text-xs font-semibold text-foreground'>
-                  {t('region.entryLabel', '区域过滤策略 (ROI / MASK)')}
-                </Label>
+              {/* 算法运行参数表单 */}
+              <div className='rounded-xl border border-border bg-card p-4 shadow-xs'>
+                <AlgoConfigDynamicForm
+                  key={activeAlgo.id}
+                  schemaJson={activeAlgo.configSchemaJson}
+                  value={activeDraft.configJson}
+                  onChange={(nextJson) =>
+                    onUpdateConfigJson(activeAlgo.id, nextJson)
+                  }
+                />
               </div>
-              <span className='font-mono text-[10px] text-muted-foreground'>
-                ROI: {regionEditor.counts.roi}/{MAX_RECTS_PER_CATEGORY} · MASK:{' '}
-                {regionEditor.counts.mask}/{MAX_RECTS_PER_CATEGORY}
-              </span>
-            </div>
 
-            <RegionRectList
-              draft={regionEditor.draft}
-              selected={regionEditor.selected}
-              disabled={!canEditRegion}
-              onSelect={regionEditor.select}
-              onDelete={regionEditor.deleteRect}
-            />
-          </div>
+              {/* 区域过滤策略 */}
+              <div className='space-y-3 rounded-xl border border-border bg-card p-4 shadow-xs'>
+                <div className='flex items-center justify-between'>
+                  <div className='flex items-center gap-1.5'>
+                    <Sliders className='size-3.5 text-muted-foreground' />
+                    <Label className='text-xs font-semibold text-foreground'>
+                      {t('region.entryLabel', '区域过滤策略 (ROI / MASK)')}
+                    </Label>
+                  </div>
+                  <span className='font-mono text-[10px] text-muted-foreground'>
+                    ROI: {regionEditor.counts.roi}/{MAX_RECTS_PER_CATEGORY} ·
+                    MASK: {regionEditor.counts.mask}/{MAX_RECTS_PER_CATEGORY}
+                  </span>
+                </div>
 
-          {/* 分时布防时间计划 */}
-          <ScheduleGrid
-            value={activeDraft.scheduleJson}
-            onChange={(nextScheduleJson) =>
-              onUpdateScheduleJson?.(activeAlgo.id, nextScheduleJson)
-            }
-          />
+                <RegionRectList
+                  draft={regionEditor.draft}
+                  selected={regionEditor.selected}
+                  disabled={!canEditRegion}
+                  onSelect={regionEditor.select}
+                  onDelete={regionEditor.deleteRect}
+                />
+              </div>
+            </TabsContent>
+
+            <TabsContent
+              value='schedule'
+              className='mt-0 flex flex-1 flex-col gap-3'
+            >
+              {/* 分时布防时间计划独占完整高度 */}
+              <ScheduleGrid
+                value={activeDraft.scheduleJson}
+                onChange={(nextScheduleJson) =>
+                  onUpdateScheduleJson?.(activeAlgo.id, nextScheduleJson)
+                }
+              />
+            </TabsContent>
+          </Tabs>
         </div>
       ) : (
         <div className='flex flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-card/60 p-8 text-center text-muted-foreground'>
