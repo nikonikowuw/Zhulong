@@ -25,6 +25,13 @@ export function AuditClearDialog() {
   )
   const clearMutation = useClearAuditLogs()
 
+  const handleOpenChange = (open: boolean) => {
+    setIsClearOpen(open)
+    if (!open) {
+      setRangeType('7days')
+    }
+  }
+
   const handleConfirm = async () => {
     let before: string | undefined
 
@@ -42,13 +49,14 @@ export function AuditClearDialog() {
       const res = await clearMutation.mutateAsync({ before })
       toast.success(t('toast.clearSuccess', { count: res.cleared }))
       setIsClearOpen(false)
+      setRangeType('7days')
     } catch {
       // 全局 mutationCache 已统一弹出服务端错误提示
     }
   }
 
   return (
-    <Dialog open={isClearOpen} onOpenChange={setIsClearOpen}>
+    <Dialog open={isClearOpen} onOpenChange={handleOpenChange}>
       <DialogContent className='sm:max-w-md'>
         <DialogHeader className='text-start'>
           <DialogTitle className='flex items-center gap-2 text-destructive'>

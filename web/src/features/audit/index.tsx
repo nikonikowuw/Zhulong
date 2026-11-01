@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useMemo } from 'react'
 import { getRouteApi } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { ConfigDrawer } from '@/components/config-drawer'
@@ -40,24 +40,15 @@ function AuditContent() {
       : []
   const status = selectedStatuses.length === 1 ? selectedStatuses[0] : undefined
   const preset = search.preset
-  const startTime = search.startTime
-  const endTime = search.endTime
 
-  // 如果 URL 只有 preset 而没有具体 startTime/endTime（例如手动输入 ?preset=1h 访问）
-  // 在当前挂载时计算一次并同步写入 URL，确保 queryKey 在重渲染过程中完全稳定，避免无限 fetch 循环
-  useEffect(() => {
+  // 纯声明式派生有效时间窗口：如果仅指定 preset 而未提供绝对时间戳，在渲染期即刻计算，
+  // 杜绝 useEffect 回写导致的「先发全量查、再发范围查」的首屏级联 Fetch 与画面闪烁
+  const effectiveRange = useMemo(() => {
     if (preset && (!search.startTime || !search.endTime)) {
-      const computed = computeRangeFromPreset(preset)
-      void navigate({
-        search: (prev) => ({
-          ...prev,
-          startTime: computed.startTime,
-          endTime: computed.endTime,
-        }),
-        replace: true,
-      })
+      return computeRangeFromPreset(preset)
     }
-  }, [preset, search.startTime, search.endTime, navigate])
+    return { startTime: search.startTime, endTime: search.endTime }
+  }, [preset, search.startTime, search.endTime])
 
   const handleRangeChange = (params: AuditDateRange) => {
     void navigate({
@@ -76,8 +67,8 @@ function AuditContent() {
     pageSize,
     actions: actions.length > 0 ? actions : undefined,
     status,
-    startTime,
-    endTime,
+    startTime: effectiveRange.startTime,
+    endTime: effectiveRange.endTime,
   })
 
   const handleRefresh = () => {
@@ -90,8 +81,9 @@ function AuditContent() {
           endTime: fresh.endTime,
         }),
       })
+    } else {
+      void refetch()
     }
-    void refetch()
   }
 
   const logs = data?.items ?? []
@@ -130,8 +122,8 @@ function AuditContent() {
           search={search}
           navigate={navigate}
           preset={preset}
-          startTime={startTime}
-          endTime={endTime}
+          startTime={effectiveRange.startTime}
+          endTime={effectiveRange.endTime}
           onDateRangeChange={handleRangeChange}
         />
       </Main>

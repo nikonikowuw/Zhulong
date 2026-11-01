@@ -1,11 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-  type SortingState,
   type VisibilityState,
   flexRender,
   getCoreRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table'
 import { AlertCircle, RefreshCw, ScrollText } from 'lucide-react'
@@ -67,9 +64,7 @@ export function AuditTable({
   const { t } = useTranslation('audit')
   const { openDetail } = useAuditContext()
 
-  const [rowSelection, setRowSelection] = useState({})
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
-  const [sorting, setSorting] = useState<SortingState>([])
 
   const {
     columnFilters,
@@ -92,21 +87,15 @@ export function AuditTable({
     data,
     columns: auditColumns,
     state: {
-      sorting,
       columnVisibility,
-      rowSelection,
       columnFilters,
       pagination,
     },
     enableRowSelection: false,
-    onRowSelectionChange: setRowSelection,
-    onSortingChange: setSorting,
     onColumnFiltersChange,
     onColumnVisibilityChange: setColumnVisibility,
     onPaginationChange,
     getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    getSortedRowModel: getSortedRowModel(),
     getRowId: (row) => String(row.id),
     pageCount: Math.ceil(total / pagination.pageSize) || 1,
     manualFiltering: true,
@@ -118,72 +107,78 @@ export function AuditTable({
     ensurePageInRange(pageCount)
   }, [total, pagination.pageSize, ensurePageInRange])
 
-  const actionOptions = [
-    { label: t('actionNames.auth.login'), value: 'auth.login' },
-    { label: t('actionNames.auth.logout'), value: 'auth.logout' },
-    { label: t('actionNames.auth.init'), value: 'auth.init' },
-    { label: t('actionNames.camera.create'), value: 'camera.create' },
-    { label: t('actionNames.camera.update'), value: 'camera.update' },
-    { label: t('actionNames.camera.delete'), value: 'camera.delete' },
-    { label: t('actionNames.camera.toggle'), value: 'camera.toggle' },
-    {
-      label: t('actionNames.storage.update_config'),
-      value: 'storage.update_config',
-    },
-    {
-      label: t('actionNames.storage.manual_cleanup'),
-      value: 'storage.manual_cleanup',
-    },
-    {
-      label: t('actionNames.storage.test_path'),
-      value: 'storage.test_path',
-    },
-    {
-      label: t('actionNames.storage.emergency_stop'),
-      value: 'storage.emergency_stop',
-    },
-    {
-      label: t('actionNames.storage.emergency_resume'),
-      value: 'storage.emergency_resume',
-    },
-    {
-      label: t('actionNames.time.update_config'),
-      value: 'time.update_config',
-    },
-    {
-      label: t('actionNames.time.ntp_sync'),
-      value: 'time.ntp_sync',
-    },
-    {
-      label: t('actionNames.time.manual_set'),
-      value: 'time.manual_set',
-    },
-    {
-      label: t('actionNames.time.rtc_heal'),
-      value: 'time.rtc_heal',
-    },
-    {
-      label: t('actionNames.time.clock_step'),
-      value: 'time.clock_step',
-    },
-    {
-      label: t('actionNames.time.ntp_sync_failed'),
-      value: 'time.ntp_sync_failed',
-    },
-    {
-      label: t('actionNames.time.ntp_sync_recovered'),
-      value: 'time.ntp_sync_recovered',
-    },
-    {
-      label: t('actionNames.audit.clear'),
-      value: 'audit.clear',
-    },
-  ]
+  const actionOptions = useMemo(
+    () => [
+      { label: t('actionNames.auth.login'), value: 'auth.login' },
+      { label: t('actionNames.auth.logout'), value: 'auth.logout' },
+      { label: t('actionNames.auth.init'), value: 'auth.init' },
+      { label: t('actionNames.camera.create'), value: 'camera.create' },
+      { label: t('actionNames.camera.update'), value: 'camera.update' },
+      { label: t('actionNames.camera.delete'), value: 'camera.delete' },
+      { label: t('actionNames.camera.toggle'), value: 'camera.toggle' },
+      {
+        label: t('actionNames.storage.update_config'),
+        value: 'storage.update_config',
+      },
+      {
+        label: t('actionNames.storage.manual_cleanup'),
+        value: 'storage.manual_cleanup',
+      },
+      {
+        label: t('actionNames.storage.test_path'),
+        value: 'storage.test_path',
+      },
+      {
+        label: t('actionNames.storage.emergency_stop'),
+        value: 'storage.emergency_stop',
+      },
+      {
+        label: t('actionNames.storage.emergency_resume'),
+        value: 'storage.emergency_resume',
+      },
+      {
+        label: t('actionNames.time.update_config'),
+        value: 'time.update_config',
+      },
+      {
+        label: t('actionNames.time.ntp_sync'),
+        value: 'time.ntp_sync',
+      },
+      {
+        label: t('actionNames.time.manual_set'),
+        value: 'time.manual_set',
+      },
+      {
+        label: t('actionNames.time.rtc_heal'),
+        value: 'time.rtc_heal',
+      },
+      {
+        label: t('actionNames.time.clock_step'),
+        value: 'time.clock_step',
+      },
+      {
+        label: t('actionNames.time.ntp_sync_failed'),
+        value: 'time.ntp_sync_failed',
+      },
+      {
+        label: t('actionNames.time.ntp_sync_recovered'),
+        value: 'time.ntp_sync_recovered',
+      },
+      {
+        label: t('actionNames.audit.clear'),
+        value: 'audit.clear',
+      },
+    ],
+    [t]
+  )
 
-  const statusOptions = [
-    { label: t('status.success'), value: 'success' },
-    { label: t('status.failed'), value: 'failed' },
-  ]
+  const statusOptions = useMemo(
+    () => [
+      { label: t('status.success'), value: 'success' },
+      { label: t('status.failed'), value: 'failed' },
+    ],
+    [t]
+  )
 
   return (
     <div className='flex flex-1 flex-col gap-4'>
@@ -231,31 +226,23 @@ export function AuditTable({
           <TableBody>
             {isLoading ? (
               auditSkeletonRows.map((skeletonRow) => (
-                <TableRow key={skeletonRow}>
-                  <TableCell className='py-3'>
-                    <Skeleton className='h-4 w-12' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-32' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-16' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-28' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-20' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-4 w-24' />
-                  </TableCell>
-                  <TableCell>
-                    <Skeleton className='h-5 w-16 rounded-full' />
-                  </TableCell>
-                  <TableCell className='text-end'>
-                    <Skeleton className='ms-auto h-7 w-16' />
-                  </TableCell>
+                <TableRow key={skeletonRow} className='group'>
+                  {table.getVisibleLeafColumns().map((column) => (
+                    <TableCell
+                      key={column.id}
+                      className={column.columnDef.meta?.className}
+                    >
+                      <Skeleton
+                        className={
+                          column.id === 'actions'
+                            ? 'ms-auto h-7 w-8'
+                            : column.id === 'status'
+                              ? 'h-5 w-16 rounded-full'
+                              : 'h-4 w-full max-w-24'
+                        }
+                      />
+                    </TableCell>
+                  ))}
                 </TableRow>
               ))
             ) : isError ? (
@@ -286,7 +273,7 @@ export function AuditTable({
                 <TableRow
                   key={row.id}
                   data-state={row.getIsSelected() && 'selected'}
-                  className='cursor-pointer transition-colors hover:bg-muted/50'
+                  className='group cursor-pointer transition-colors hover:bg-muted/50'
                   onClick={() => openDetail(row.original)}
                 >
                   {row.getVisibleCells().map((cell) => (

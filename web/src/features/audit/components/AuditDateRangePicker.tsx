@@ -120,14 +120,18 @@ export function AuditDateRangePicker({
       return
     }
 
-    const startDateStr = format(selectedRange.from, 'yyyy-MM-dd')
-    const endDateStr = format(
-      selectedRange.to || selectedRange.from,
-      'yyyy-MM-dd'
-    )
+    const startDate = new Date(selectedRange.from)
+    const [startH = 0, startM = 0, startS = 0] = (startTimePart || '00:00:00')
+      .split(':')
+      .map(Number)
+    startDate.setHours(startH, startM, startS, 0)
 
-    const startDate = new Date(`${startDateStr}T${startTimePart || '00:00:00'}`)
-    const endDate = new Date(`${endDateStr}T${endTimePart || '23:59:59'}`)
+    const toDateBase = selectedRange.to || selectedRange.from
+    const endDate = new Date(toDateBase)
+    const [endH = 23, endM = 59, endS = 59] = (endTimePart || '23:59:59')
+      .split(':')
+      .map(Number)
+    endDate.setHours(endH, endM, endS, 999)
 
     onRangeChange({
       startTime: startDate.toISOString(),

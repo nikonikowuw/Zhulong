@@ -1,4 +1,5 @@
 import { DotsHorizontalIcon } from '@radix-ui/react-icons'
+import { type Column } from '@tanstack/react-table'
 import { Copy, Eye } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -13,8 +14,20 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { DataTableColumnHeader } from '@/components/data-table'
 import { type AuditLog } from '../data/schema'
 import { useAuditContext } from './AuditProvider'
+
+export function AuditColumnHeader({
+  column,
+  titleKey,
+}: {
+  column: Column<AuditLog, unknown>
+  titleKey: string
+}) {
+  const { t } = useTranslation('audit')
+  return <DataTableColumnHeader column={column} title={t(titleKey)} />
+}
 
 export function StatusBadge({ status }: { status: string }) {
   const { t } = useTranslation('audit')
@@ -131,6 +144,26 @@ export function ActionCell({ log }: { log: AuditLog }) {
   )
 }
 
+const dateTimeFormatCache = new Map<string, Intl.DateTimeFormat>()
+
+function getDateTimeFormatter(language: string): Intl.DateTimeFormat {
+  const key = language || 'zh-Hans'
+  let formatter = dateTimeFormatCache.get(key)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(key, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    })
+    dateTimeFormatCache.set(key, formatter)
+  }
+  return formatter
+}
+
 export function FormattedTimeCell({ isoTime }: { isoTime: string }) {
   const { i18n } = useTranslation()
 
@@ -138,15 +171,7 @@ export function FormattedTimeCell({ isoTime }: { isoTime: string }) {
   try {
     const d = new Date(isoTime)
     if (!isNaN(d.getTime())) {
-      formatted = new Intl.DateTimeFormat(i18n.language || 'zh-Hans', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false,
-      }).format(d)
+      formatted = getDateTimeFormatter(i18n.language).format(d)
     }
   } catch {
     // Keep raw string fallback

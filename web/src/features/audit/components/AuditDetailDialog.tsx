@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertCircle, Check, Copy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -12,22 +12,29 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { type AuditLog } from '../data/schema'
 import { StatusBadge } from './AuditColumnsCells'
 import { AuditJsonViewer } from './AuditJsonViewer'
 import { useAuditContext } from './AuditProvider'
 
-export function AuditDetailDialog() {
+interface AuditDetailContentProps {
+  log: AuditLog
+}
+
+function AuditDetailContent({ log }: AuditDetailContentProps) {
   const { t, i18n } = useTranslation('audit')
-  const { selectedLog, isDetailOpen, setIsDetailOpen } = useAuditContext()
   const [copied, setCopied] = useState(false)
 
-  if (!selectedLog) {
-    return null
-  }
+  // 定时还原复制按钮态，并确保在卸载或连续触发时正确注销定时器
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 2000)
+    return () => clearTimeout(timer)
+  }, [copied])
 
-  let formattedDate = selectedLog.createdAt
+  let formattedDate = log.createdAt
   try {
-    const d = new Date(selectedLog.createdAt)
+    const d = new Date(log.createdAt)
     if (!isNaN(d.getTime())) {
       formattedDate = new Intl.DateTimeFormat(i18n.language || 'zh-Hans', {
         year: 'numeric',
@@ -43,11 +50,11 @@ export function AuditDetailDialog() {
     // fallback
   }
 
-  let detailText = selectedLog.detail
+  let detailText = log.detail
   let detailIsJson = false
-  if (selectedLog.detail) {
+  if (log.detail) {
     try {
-      detailText = JSON.stringify(JSON.parse(selectedLog.detail), null, 2)
+      detailText = JSON.stringify(JSON.parse(log.detail), null, 2)
       detailIsJson = true
     } catch {
       // Keep raw string fallback
@@ -55,15 +62,141 @@ export function AuditDetailDialog() {
   }
 
   const handleCopy = async () => {
-    // 只在真正复制成功后才置 copied / 报成功，失败时给出可操作的提示
     if (!(await copyToClipboard(detailText))) {
       toast.error(t('toast.copyFailed'))
       return
     }
     setCopied(true)
     toast.success(t('toast.copySuccess'))
-    setTimeout(() => setCopied(false), 2000)
   }
+
+  return (
+    <>
+      <SheetHeader className='border-b border-border p-6 text-start'>
+        <SheetTitle className='flex items-center gap-2'>
+          <span>{t('dialog.detailTitle')}</span>
+          <span className='font-mono text-sm font-normal text-muted-foreground'>
+            #{log.id}
+          </span>
+        </SheetTitle>
+        <SheetDescription>{t('dialog.detailDesc')}</SheetDescription>
+      </SheetHeader>
+
+      <div className='flex flex-1 flex-col gap-6 overflow-y-auto p-6'>
+        {/* 核心元数据概览 */}
+        <div className='grid grid-cols-2 gap-4 rounded-lg border border-border bg-muted/30 p-4 text-xs sm:grid-cols-3'>
+          <div>
+            <span className='text-muted-foreground'>
+              {t('table.columns.createdAt')}
+            </span>
+            <p className='mt-1 font-mono font-medium text-foreground'>
+              {formattedDate}
+            </p>
+          </div>
+          <div>
+            <span className='text-muted-foreground'>
+              {t('table.columns.username')}
+            </span>
+            <p className='mt-1 font-medium text-foreground'>
+              {log.username || '-'}
+            </p>
+          </div>
+          <div>
+            <span className='text-muted-foreground'>
+              {t('table.columns.status')}
+            </span>
+            <div className='mt-1'>
+              <StatusBadge status={log.status} />
+            </div>
+          </div>
+          <div>
+            <span className='text-muted-foreground'>
+              {t('table.columns.action')}
+            </span>
+            <div className='mt-1 flex flex-col gap-0.5'>
+              <p className='text-xs font-medium text-foreground'>
+                {t(`actionNames.${log.action}`, {
+                  defaultValue: log.action,
+                })}
+              </p>
+              {t(`actionNames.${log.action}`, {
+                defaultValue: log.action,
+              }) !== log.action && (
+                <span className='font-mono text-[11px] text-muted-foreground'>
+                  {log.action}
+                </span>
+              )}
+            </div>
+          </div>
+          <div>
+            <span className='text-muted-foreground'>
+              {t('table.columns.target')}
+            </span>
+            <p className='mt-1 font-mono font-medium text-foreground'>
+              {log.target || '-'}
+            </p>
+          </div>
+          <div>
+            <span className='text-muted-foreground'>
+              {t('table.columns.ip')}
+            </span>
+            <p className='mt-1 font-mono font-medium text-foreground'>
+              {log.ip || '-'}
+            </p>
+          </div>
+        </div>
+
+        {/* 异常错误信息警示 */}
+        {log.errorMsg && (
+          <Alert variant='destructive'>
+            <AlertCircle className='h-4 w-4' />
+            <AlertTitle>{t('dialog.errorMsgTitle')}</AlertTitle>
+            <AlertDescription className='mt-1 font-mono text-xs break-all'>
+              {log.errorMsg}
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* 变更详情或请求负载 */}
+        <div className='flex flex-1 flex-col gap-2'>
+          <div className='flex items-center justify-between'>
+            <span className='text-sm font-semibold text-foreground'>
+              {t('dialog.detailPayload')}
+            </span>
+            {detailText && (
+              <Button
+                variant='ghost'
+                size='sm'
+                className='h-7 gap-1.5 px-2 text-xs'
+                onClick={handleCopy}
+              >
+                {copied ? (
+                  <Check className='h-3.5 w-3.5 text-emerald-500' />
+                ) : (
+                  <Copy className='h-3.5 w-3.5' />
+                )}
+                {copied ? t('actions.copied') : t('actions.copyJson')}
+              </Button>
+            )}
+          </div>
+
+          {detailText ? (
+            <pre className='flex-1 overflow-x-auto rounded-lg border border-border bg-muted/40 p-4 font-mono text-xs leading-relaxed text-foreground'>
+              <AuditJsonViewer value={detailText} highlighted={detailIsJson} />
+            </pre>
+          ) : (
+            <div className='flex h-32 items-center justify-center rounded-lg border border-dashed border-border bg-muted/10 text-xs text-muted-foreground'>
+              {t('dialog.noDetail')}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+
+export function AuditDetailDialog() {
+  const { selectedLog, isDetailOpen, setIsDetailOpen } = useAuditContext()
 
   return (
     <Sheet open={isDetailOpen} onOpenChange={setIsDetailOpen}>
@@ -71,128 +204,9 @@ export function AuditDetailDialog() {
         side='right'
         className='flex w-full flex-col gap-0 p-0 sm:max-w-xl'
       >
-        <SheetHeader className='border-b border-border p-6 text-start'>
-          <SheetTitle className='flex items-center gap-2'>
-            <span>{t('dialog.detailTitle')}</span>
-            <span className='font-mono text-sm font-normal text-muted-foreground'>
-              #{selectedLog.id}
-            </span>
-          </SheetTitle>
-          <SheetDescription>{t('dialog.detailDesc')}</SheetDescription>
-        </SheetHeader>
-
-        <div className='flex flex-1 flex-col gap-6 overflow-y-auto p-6'>
-          {/* 核心元数据概览 */}
-          <div className='grid grid-cols-2 gap-4 rounded-lg border border-border bg-muted/30 p-4 text-xs sm:grid-cols-3'>
-            <div>
-              <span className='text-muted-foreground'>
-                {t('table.columns.createdAt')}
-              </span>
-              <p className='mt-1 font-mono font-medium text-foreground'>
-                {formattedDate}
-              </p>
-            </div>
-            <div>
-              <span className='text-muted-foreground'>
-                {t('table.columns.username')}
-              </span>
-              <p className='mt-1 font-medium text-foreground'>
-                {selectedLog.username || '-'}
-              </p>
-            </div>
-            <div>
-              <span className='text-muted-foreground'>
-                {t('table.columns.status')}
-              </span>
-              <div className='mt-1'>
-                <StatusBadge status={selectedLog.status} />
-              </div>
-            </div>
-            <div>
-              <span className='text-muted-foreground'>
-                {t('table.columns.action')}
-              </span>
-              <div className='mt-1 flex flex-col gap-0.5'>
-                <p className='text-xs font-medium text-foreground'>
-                  {t(`actionNames.${selectedLog.action}`, {
-                    defaultValue: selectedLog.action,
-                  })}
-                </p>
-                {t(`actionNames.${selectedLog.action}`, {
-                  defaultValue: selectedLog.action,
-                }) !== selectedLog.action && (
-                  <span className='font-mono text-[11px] text-muted-foreground'>
-                    {selectedLog.action}
-                  </span>
-                )}
-              </div>
-            </div>
-            <div>
-              <span className='text-muted-foreground'>
-                {t('table.columns.target')}
-              </span>
-              <p className='mt-1 font-mono font-medium text-foreground'>
-                {selectedLog.target || '-'}
-              </p>
-            </div>
-            <div>
-              <span className='text-muted-foreground'>
-                {t('table.columns.ip')}
-              </span>
-              <p className='mt-1 font-mono font-medium text-foreground'>
-                {selectedLog.ip || '-'}
-              </p>
-            </div>
-          </div>
-
-          {/* 异常错误信息警示 */}
-          {selectedLog.errorMsg && (
-            <Alert variant='destructive'>
-              <AlertCircle className='h-4 w-4' />
-              <AlertTitle>{t('dialog.errorMsgTitle')}</AlertTitle>
-              <AlertDescription className='mt-1 font-mono text-xs break-all'>
-                {selectedLog.errorMsg}
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {/* 变更详情或请求负载 */}
-          <div className='flex flex-1 flex-col gap-2'>
-            <div className='flex items-center justify-between'>
-              <span className='text-sm font-semibold text-foreground'>
-                {t('dialog.detailPayload')}
-              </span>
-              {detailText && (
-                <Button
-                  variant='ghost'
-                  size='sm'
-                  className='h-7 gap-1.5 px-2 text-xs'
-                  onClick={handleCopy}
-                >
-                  {copied ? (
-                    <Check className='h-3.5 w-3.5 text-emerald-500' />
-                  ) : (
-                    <Copy className='h-3.5 w-3.5' />
-                  )}
-                  {copied ? t('actions.copied') : t('actions.copyJson')}
-                </Button>
-              )}
-            </div>
-
-            {detailText ? (
-              <pre className='flex-1 overflow-x-auto rounded-lg border border-border bg-muted/40 p-4 font-mono text-xs leading-relaxed text-foreground'>
-                <AuditJsonViewer
-                  value={detailText}
-                  highlighted={detailIsJson}
-                />
-              </pre>
-            ) : (
-              <div className='flex h-32 items-center justify-center rounded-lg border border-dashed border-border bg-muted/10 text-xs text-muted-foreground'>
-                {t('dialog.noDetail')}
-              </div>
-            )}
-          </div>
-        </div>
+        {selectedLog && (
+          <AuditDetailContent key={selectedLog.id} log={selectedLog} />
+        )}
       </SheetContent>
     </Sheet>
   )
