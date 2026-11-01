@@ -675,6 +675,24 @@ if(BUILD_TESTING)
         set_tests_properties(ZhulongFaceRecognitionOnnx PROPERTIES TIMEOUT 20)
     endif()
 
+    # ⚠️ MPP 手工镜像 ↔ 厂商头一致性（编译期断言）。
+    #    native/src/common/mpp/mpp_api_types.hpp 是手写镜像（不依赖厂商 SDK 也能编译），
+    #    而仓库内带着 vendored 头（native/vendor/mpp/include/rockchip）。两边一旦漂移，
+    #    板端表现为「偶发斜切图 / fd 传错位 / control 打到别的命令」，不是编译失败。
+    #    本目标把这些差异变成编译期错误，且不链接 librockchip_mpp。
+    add_executable(ZhulongMppAbiTests tests/mpp_abi_conformance_test.cpp)
+    target_compile_features(ZhulongMppAbiTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongMppAbiTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/vendor/mpp/include/rockchip
+    )
+    # 厂商头是 C 头（柔性数组/匿名结构），不该用宿主的 -Wpedantic 去要求它
+    target_compile_options(ZhulongMppAbiTests PRIVATE
+        $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wno-pedantic>
+    )
+    add_test(NAME ZhulongMppAbi COMMAND ZhulongMppAbiTests)
+    set_tests_properties(ZhulongMppAbi PROPERTIES TIMEOUT 10)
+
     # 运动区域检测算法单元测试（纯合成帧与宏块聚类）
     add_executable(ZhulongMotionDetectorTests tests/motion_detector_test.cpp)
     target_compile_features(ZhulongMotionDetectorTests PRIVATE cxx_std_17)

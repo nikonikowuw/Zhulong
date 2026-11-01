@@ -38,15 +38,18 @@ struct YuvFrame {
 /**
  * @brief 由解码器产出帧转换而来的 CPU 可见视图
  *
- * planes/strides 的语义与 zhulong_frame_view 一致：strides[0] 为 0 表示紧凑排列。
+ * planes/strides 的语义与 `zhulong_frame_view` 一致：strides[0] 为 0 表示紧凑排列。
  * 两种已知格式：
  *   - FRAME_FORMAT_NV12：planes[0]=Y，planes[1]=UV（交错），stride 对两平面通用；
  *   - FRAME_FORMAT_YUV420P：planes[0]=Y，planes[1]=U，planes[2]=V，各自有 stride。
+ *
+ * ⚠️ 本视图**只**用 planes/strides 寻址：色度平面基址由调用方算好（NV12 的
+ *    `Y + stride * vstride`、YUV420P 的各平面起点）。因此这里不需要 vstride 字段——
+ *    它曾经存在但没人读，反而让“UV 偏移到底谁算”变得模糊。
  */
 struct CpuFrameView {
     const uint8_t *planes[4]{nullptr, nullptr, nullptr, nullptr};
     uint32_t strides[4]{0, 0, 0, 0};
-    uint32_t vstride{0};   /**< 垂直步长（行数），NV12 定位 UV 偏移必需；0 表示等于 height */
     uint32_t width{0};
     uint32_t height{0};
     uint32_t format{0};    /**< FRAME_FORMAT_NV12 或 FRAME_FORMAT_YUV420P */
@@ -89,6 +92,10 @@ bool normalized_box_to_pixels(const float box[4], uint32_t width, uint32_t heigh
 
 /**
  * @brief 将紧凑 YUV 帧编码为完整 JPEG 字节流
+ *
+ * ⚠️ `quality` 只在**本后端内部**有意义，与硬件（MPP `jpeg:q_factor`）的取值不可比：
+ *    软编把 quality 线性映到 `FF_QP2LAMBDA` 量化参数，硬编用 VEPU 自己的 q_factor。
+ *    同一个 quality 值两条路径产出的体积/画质并不相同，跨后端比较请用产物实测。
  *
  * @param frame 待编码图像
  * @param quality JPEG 质量，范围 [1, 100]；调用方负责收敛（本函数不做默认值替换）

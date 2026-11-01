@@ -213,7 +213,7 @@ void DecodeSession::decode_loop() noexcept {
                     meta.extradata.size(),
                     final_tb_num,
                     final_tb_den,
-                    DecoderBackend::AUTO,
+                    DecoderBackend::automatic,
                     stream_id_
                 );
                 if (decoder) {

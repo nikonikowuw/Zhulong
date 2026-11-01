@@ -98,7 +98,7 @@ int main() {
         CHECK(zhulong::set_log_sink(capture_native_log, reinterpret_cast<uintptr_t>(&captured_log)));
         bool invalid_decoder_rejected = false;
         try {
-            IDecodeNode::create(999, nullptr, 0, 1, 90000, zhulong::DecoderBackend::FFMPEG_SW, 42);
+            IDecodeNode::create(999, nullptr, 0, 1, 90000, zhulong::DecoderBackend::ffmpeg_sw, 42);
         } catch (const std::invalid_argument &) {
             invalid_decoder_rejected = true;
         }
@@ -166,7 +166,7 @@ int main() {
         // 2. FFmpegDecodeNode 真实 H.264 关键帧端到端解码测试
         // ====================================================================
         {
-            auto decoder = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, zhulong::DecoderBackend::FFMPEG_SW);
+            auto decoder = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, zhulong::DecoderBackend::ffmpeg_sw);
             CHECK(decoder != nullptr);
 
             // 来自 tests/fixtures/rtp_frames.json 的真实 64x48 合成帧 NALU
@@ -221,7 +221,7 @@ int main() {
         // 3. FFmpegDecodeNode 真实 H.265 (HEVC) 解码测试
         // ====================================================================
         {
-            auto decoder = IDecodeNode::create(Zhulong_CODEC_H265, nullptr, 0, 1, 90000, zhulong::DecoderBackend::FFMPEG_SW);
+            auto decoder = IDecodeNode::create(Zhulong_CODEC_H265, nullptr, 0, 1, 90000, zhulong::DecoderBackend::ffmpeg_sw);
             CHECK(decoder != nullptr);
 
             std::vector<std::string> h265_nalus = {
@@ -284,7 +284,7 @@ int main() {
                 Zhulong_CODEC_H264,
                 extradata.data(), extradata.size(),
                 1, 90000,
-                zhulong::DecoderBackend::FFMPEG_SW
+                zhulong::DecoderBackend::ffmpeg_sw
             );
             CHECK(decoder != nullptr);
 
@@ -335,7 +335,7 @@ int main() {
                     Zhulong_CODEC_H264,
                     extradata.data(), extradata.size(),
                     1, 90000,
-                    zhulong::DecoderBackend::FFMPEG_SW
+                    zhulong::DecoderBackend::ffmpeg_sw
                 );
                 CHECK(dec != nullptr);
                 CHECK(dec->send_packet(slice_packet.data(), slice_packet.size(), 0, 0) >= 0);
@@ -353,7 +353,7 @@ int main() {
                     Zhulong_CODEC_H264,
                     extradata.data(), extradata.size(),
                     1, 90000,
-                    zhulong::DecoderBackend::FFMPEG_SW
+                    zhulong::DecoderBackend::ffmpeg_sw
                 );
                 CHECK(dec != nullptr);
                 CHECK(dec->send_packet(slice_packet.data(), slice_packet.size(), kNoPts, kNoPts) >= 0);
@@ -581,30 +581,30 @@ int main() {
         }
 
         // ====================================================================
-        // 9. 解码器后端工厂与自动降级测试 (DecoderBackend::AUTO / FFMPEG_SW / MPP_HW)
+        // 9. 解码器后端工厂与自动降级测试 (DecoderBackend::automatic / ffmpeg_sw / mpp_hw)
         // ====================================================================
         {
             using zhulong::DecoderBackend;
-            // 9.1 AUTO 模式：在非 RK 硬件上平滑回退至 FFmpeg 软解
-            auto auto_dec = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, DecoderBackend::AUTO);
+            // 9.1 automatic 模式：在非 RK 硬件上平滑回退至 FFmpeg 软解
+            auto auto_dec = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, DecoderBackend::automatic);
             CHECK(auto_dec != nullptr);
 
-            // 9.2 FFMPEG_SW 模式：显式创建 FFmpeg 软解
-            auto sw_dec = IDecodeNode::create(Zhulong_CODEC_H265, nullptr, 0, 1, 90000, DecoderBackend::FFMPEG_SW);
+            // 9.2 ffmpeg_sw 模式：显式创建 FFmpeg 软解
+            auto sw_dec = IDecodeNode::create(Zhulong_CODEC_H265, nullptr, 0, 1, 90000, DecoderBackend::ffmpeg_sw);
             CHECK(sw_dec != nullptr);
 
-            // 9.3 MPP_HW 模式：若当前环境不支持 MPP，应显式抛出异常
+            // 9.3 mpp_hw 模式：若当前环境不支持 MPP，应显式抛出异常
             if (!zhulong::MppDecodeNode::is_supported()) {
                 bool threw = false;
                 try {
-                    auto mpp_dec = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, DecoderBackend::MPP_HW);
+                    auto mpp_dec = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, DecoderBackend::mpp_hw);
                     (void)mpp_dec;
                 } catch (const std::runtime_error &) {
                     threw = true;
                 }
                 CHECK(threw);
             } else {
-                auto mpp_dec = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, DecoderBackend::MPP_HW);
+                auto mpp_dec = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, DecoderBackend::mpp_hw);
                 CHECK(mpp_dec != nullptr);
             }
         }
@@ -616,7 +616,7 @@ int main() {
             std::cout << "Testing MppDecodeNode on hardware accelerator..." << std::endl;
             // 10.1 真实 H.264 硬解测试
             {
-                auto decoder = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, zhulong::DecoderBackend::MPP_HW);
+                auto decoder = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, zhulong::DecoderBackend::mpp_hw);
                 CHECK(decoder != nullptr);
 
                 std::vector<std::string> h264_nalus = {
@@ -664,7 +664,7 @@ int main() {
 
                 // 10.1.1 覆盖 MPP 硬件解码 PTS=0 (首帧) 契约保真
                 {
-                    auto dec_zero = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, zhulong::DecoderBackend::MPP_HW);
+                    auto dec_zero = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, zhulong::DecoderBackend::mpp_hw);
                     CHECK(dec_zero != nullptr);
                     CHECK(dec_zero->send_packet(annex_b.data(), annex_b.size(), 0, 0) >= 0);
                     dec_zero->send_packet(nullptr, 0, 0, 0);
@@ -681,7 +681,7 @@ int main() {
 
                 // 10.1.2 覆盖 MPP 硬件解码缺失 PTS (AV_NOPTS_VALUE) 契约保真
                 {
-                    auto dec_nopts = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, zhulong::DecoderBackend::MPP_HW);
+                    auto dec_nopts = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000, zhulong::DecoderBackend::mpp_hw);
                     CHECK(dec_nopts != nullptr);
                     CHECK(dec_nopts->send_packet(annex_b.data(), annex_b.size(), kNoPts, kNoPts) >= 0);
                     dec_nopts->send_packet(nullptr, 0, 0, 0);
@@ -699,7 +699,7 @@ int main() {
 
             // 10.2 真实 H.265 (HEVC) 硬解测试
             {
-                auto decoder = IDecodeNode::create(Zhulong_CODEC_H265, nullptr, 0, 1, 90000, zhulong::DecoderBackend::MPP_HW);
+                auto decoder = IDecodeNode::create(Zhulong_CODEC_H265, nullptr, 0, 1, 90000, zhulong::DecoderBackend::mpp_hw);
                 CHECK(decoder != nullptr);
 
                 std::vector<std::string> h265_nalus = {
@@ -747,7 +747,7 @@ int main() {
                 HardwareFrame::Ptr survivor;
                 {
                     auto decoder = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000,
-                                                       zhulong::DecoderBackend::MPP_HW);
+                                                       zhulong::DecoderBackend::mpp_hw);
                     CHECK(decoder != nullptr);
                     std::vector<std::string> h264_nalus = {
                         "Z0LACtxHsBEAAAMAAQAAAwAyjxIngA==",
@@ -787,7 +787,7 @@ int main() {
             static_assert(zhulong::decode_ok == 0, "decode_ok must be 0");
 
             auto decoder = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000,
-                                               zhulong::DecoderBackend::FFMPEG_SW);
+                                               zhulong::DecoderBackend::ffmpeg_sw);
             CHECK(decoder != nullptr);
 
             HardwareFrame::Ptr frame;
@@ -817,7 +817,7 @@ int main() {
             CHECK(!main10.empty());
 
             auto decoder = IDecodeNode::create(Zhulong_CODEC_H265, nullptr, 0, 1, 90000,
-                                               zhulong::DecoderBackend::FFMPEG_SW);
+                                               zhulong::DecoderBackend::ffmpeg_sw);
             CHECK(decoder != nullptr);
             CHECK(decoder->send_packet(main10.data(), main10.size(), 7000, 7000) >= 0);
             CHECK(decoder->send_packet(nullptr, 0, 0, 0) >= 0);
@@ -857,7 +857,7 @@ int main() {
                 }
 
                 auto decoder = IDecodeNode::create(Zhulong_CODEC_H264, nullptr, 0, 1, 90000,
-                                                   zhulong::DecoderBackend::FFMPEG_SW);
+                                                   zhulong::DecoderBackend::ffmpeg_sw);
                 CHECK(decoder != nullptr);
                 CHECK(decoder->send_packet(annex_b.data(), annex_b.size(), 9000, 9000) >= 0);
                 CHECK(decoder->send_packet(nullptr, 0, 0, 0) >= 0);

@@ -72,6 +72,7 @@ private:
     int32_t time_base_den_{90000};       /**< 源流时间基分母 */
     uint64_t stream_id_{0};              /**< 原生日志关联的流 ID */
     bool unsupported_format_logged_{false}; /**< 未知像素格式仅告警一次，避免低帧率流刷屏 */
+    bool negative_linesize_logged_{false}; /**< 负 linesize（垂直翻转帧）仅告警一次 */
 };
 
 } // namespace zhulong

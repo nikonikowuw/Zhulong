@@ -46,6 +46,24 @@ using MppBufferMode = int32_t;
 constexpr MppBufferMode MPP_BUFFER_INTERNAL = 0;
 constexpr MppBufferMode MPP_BUFFER_EXTERNAL = 1;
 
+/**
+ * @brief `MppBufferInfo_t` 的本地镜像（供 `mpp_buffer_import_with_tag` 使用）
+ *
+ * ⚠️ 字段顺序必须与厂商 `mpp_buffer.h` 的 `MppBufferInfo` **逐个一致**：
+ *    `type, size, ptr, hnd, fd, index`（x86_64/aarch64 下为 int32 + pad + size_t + 3 x (ptr/int)）。
+ *    错一位，`mpp_buffer_import` 就会从 `hnd` 槽位读 fd。
+ *    该约束由 `native/tests/mpp_abi_conformance_test.cpp` 的编译期断言守护，
+ *    不要在没跑那个测试的构建里“顺手调字段”。
+ */
+struct BufferInfo {
+    int32_t type{0};
+    size_t size{0};
+    void *ptr{nullptr};
+    void *hnd{nullptr};
+    int fd{-1};
+    int index{0};
+};
+
 // MPP 命令字定义
 constexpr int32_t CMD_MODULE_MPP   = 0x00200000;
 constexpr int32_t MPP_CMD_BASE     = CMD_MODULE_MPP;

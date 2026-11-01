@@ -29,8 +29,8 @@ class MppJpegEncoder;
 
 /** @brief 实际生效的编码后端 */
 enum class JpegBackendKind {
-    kSoftware, /**< 静态 FFmpeg 的 mjpeg 编码器 */
-    kMpp,      /**< Rockchip VEPU 硬件编码 */
+    software, /**< 静态 FFmpeg 的 mjpeg 编码器 */
+    hardware, /**< Rockchip VEPU 硬件编码 */
 };
 
 class JpegBackend {
@@ -66,7 +66,7 @@ public:
         if (hw_ == nullptr || w <= 0 || h <= 0) {
             return false;
         }
-        return static_cast<long long>(w) * h > kMinPixelsForHardware;
+        return static_cast<long long>(w) * h > min_pixels_for_hardware;
     }
 
     /**
@@ -87,7 +87,8 @@ public:
      *
      * 下列任一情况返回 false（调用方回退 `encode`，语义等价）：
      *   - 硬件未启用 / 矩形未达分流阈值 / 非 NV12 / 无 `dma_fd`；
-     *   - 直通连续失败达 `kMaxDmaFailures` 后**永久停用**该路径；
+     *   - 会话池无法新建会话（VPU 被占、buffer_group 申请失败）；
+     *   - 直通连续失败达 `max_dma_failures` 后**永久停用**该路径；
      *   - **首次自证失败**（见下）。
      *
      * ⚠️ 首次调用会做一次性自证：对**同一帧**分别用直通与上传路径编码，产物必须
@@ -106,10 +107,10 @@ public:
     static const char *kind_name(JpegBackendKind kind) noexcept;
 
     /** @brief 硬编分流阈值（像素面积），见 `prefer_hardware` */
-    static constexpr long long kMinPixelsForHardware = 128 * 128;
+    static constexpr long long min_pixels_for_hardware = 128 * 128;
 
     /** @brief 直通路径连续失败多少次后永久停用 */
-    static constexpr int kMaxDmaFailures = 3;
+    static constexpr int max_dma_failures = 3;
 
 private:
     JpegBackend();
@@ -117,16 +118,16 @@ private:
     JpegBackend &operator=(const JpegBackend &) = delete;
 
     std::unique_ptr<MppJpegEncoder> hw_;
-    JpegBackendKind kind_{JpegBackendKind::kSoftware};
+    JpegBackendKind kind_{JpegBackendKind::software};
     bool software_available_{false};
     enum class DmaState {
-        kUnverified, /**< 尚未用真实解码器帧自证 */
-        kValidated,  /**< 已自证与上传路径字节级一致 */
-        kDisabled,   /**< 自证失败或连续失败，永久停用 */
+        unverified, /**< 尚未用真实解码器帧自证 */
+        validated,  /**< 已自证与上传路径字节级一致 */
+        disabled,   /**< 自证失败或连续失败，永久停用 */
     };
 
     std::atomic<int> dma_failures_{0};
-    std::atomic<DmaState> dma_state_{DmaState::kUnverified};
+    std::atomic<DmaState> dma_state_{DmaState::unverified};
 };
 
 } // namespace zhulong

@@ -126,21 +126,42 @@ int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
 
     int ret = avcodec_receive_frame(codec_ctx_, av_frame);
     if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-        return decode_again; // 暂无输出，需继续喂入下一个数据包
+        // ⚠️ EAGAIN（暂无输出）与 AVERROR_EOF（drain 已排空）共用 decode_again：
+        //    receive 侧不区分两者，语义见 decoder.hpp 的契约。drain 之后要继续送包，
+        //    必须先 flush() 复位 draining 状态，否则 send_packet 恒返 AVERROR_EOF。
+        return decode_again;
     }
     if (ret < 0) {
         return ret; // 解码器内部严重错误（已是 AVERROR 命名空间）
+    }
+
+    // ⚠️ 负 linesize 表示垂直翻转输出（data[i] 指向该平面最后一行）。HardwareFrame 没有翻转
+    //    语义，把 stride 归零只会让下游按「紧凑、从上到下」读到错行——宁可显式判为不支持，
+    //    也不能静默错帧。仅在真正出现的平面上判定，避开未使用平面的 -1 哨兵。
+    bool negative_linesize = false;
+    for (int i = 0; i < frame_plane_count; ++i) {
+        if (av_frame->data[i] != nullptr && av_frame->linesize[i] < 0) {
+            negative_linesize = true;
+        }
     }
 
     // 成功解出一帧，装配至跨层统一 HardwareFrame 对象
     auto frame = std::make_shared<HardwareFrame>();
     frame->width = static_cast<uint32_t>(av_frame->width);
     frame->height = static_cast<uint32_t>(av_frame->height);
-    // ⚠️ linesize 允许为负（垂直翻转），负值不得窄化为巨大无符号数值
+    // linesize 已排除负值分支（那种帧在下面整体判为 UNKNOWN），这里只剩正数与零两种
     frame->stride = av_frame->linesize[0] > 0 ? static_cast<uint32_t>(av_frame->linesize[0]) : 0;
     frame->vstride = static_cast<uint32_t>(av_frame->height);
     // ⚠️ 明确标记多平面格式：软解输出标准为 YUV420P（含 Full Range YUVJ420P），严禁外部当作单平面连续 NV12 解析
-    if (av_frame->format == AV_PIX_FMT_YUV420P || av_frame->format == AV_PIX_FMT_YUVJ420P) {
+    if (negative_linesize) {
+        // 不填任何平面指针：下游按 format 拒绝的同时，也拿不到「指针有效但步长为 0」的半成品
+        frame->format = FRAME_FORMAT_UNKNOWN;
+        if (!negative_linesize_logged_) {
+            negative_linesize_logged_ = true;
+            ZL_LOGW(stream_id_, "nodes.decode", "ffmpeg_negative_linesize luma=%d chroma_u=%d chroma_v=%d",
+                    av_frame->linesize[0], av_frame->linesize[1], av_frame->linesize[2]);
+        }
+    } else if (av_frame->format == AV_PIX_FMT_YUV420P || av_frame->format == AV_PIX_FMT_YUVJ420P) {
         frame->format = FRAME_FORMAT_YUV420P;
     } else if (av_frame->format == AV_PIX_FMT_NV12) {
         frame->format = FRAME_FORMAT_NV12;
@@ -153,13 +174,15 @@ int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
             ZL_LOGW(stream_id_, "nodes.decode", "ffmpeg_unsupported_pix_fmt fmt=%d", av_frame->format);
         }
     }
-    frame->host_ptr = av_frame->data[0];
-    for (int i = 0; i < frame_plane_count; ++i) {
-        if (av_frame->data[i]) {
-            frame->host_planes[i] = av_frame->data[i];
-            frame->plane_strides[i] = av_frame->linesize[i] > 0
-                                          ? static_cast<uint32_t>(av_frame->linesize[i])
-                                          : 0;
+    if (!negative_linesize) {
+        frame->host_ptr = av_frame->data[0];
+        for (int i = 0; i < frame_plane_count; ++i) {
+            if (av_frame->data[i]) {
+                frame->host_planes[i] = av_frame->data[i];
+                frame->plane_strides[i] = av_frame->linesize[i] > 0
+                                              ? static_cast<uint32_t>(av_frame->linesize[i])
+                                              : 0;
+            }
         }
     }
     // ⚠️ 时间戳保真透传：严禁将没有 PTS 的帧直接当作 PTS=0 处理

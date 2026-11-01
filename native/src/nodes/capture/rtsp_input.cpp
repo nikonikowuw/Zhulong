@@ -268,7 +268,7 @@ std::string lower(std::string value) {
  * ⚠️ 安全：请求行里带完整 URL（含 user:pass@）。全局静默 FFmpeg 日志正是为了
  *    不泄露凭据，本类是那条策略下唯一允许放行的通道，因此必须脱敏后才能转出。
  */
-constexpr size_t kMaxTxnLine = 200;
+constexpr size_t max_txn_line = 200;
 
 } // namespace
 
@@ -296,9 +296,12 @@ std::string redact_credentials(std::string text) {
         const size_t authority_start = position + scheme_length;
         // authority 结束于路径 / 查询 / 空白
         const size_t authority_end = text.find_first_of("/?# \t\r\n", authority_start);
-        // ⚠️ 取 authority 内**最后**一个 '@'，而不是第一个：密码本身可能含 '@'
-        //    （很多相机接受未转义的 p@ss）。取第一个只会把前半段替成 ***，
-        //    尾部仍以明文落盘 —— 而本函数是静默策略下唯一放行通道，不能尽力而为。
+        // ⚠️ 取 authority 内**最后**一个 '@'，而不是第一个：本函数是防御性的，
+        //    不能假设上游一定拒绝了含 '@' 的密码。`normalize_rtsp_url` 会直接
+        //    拒绝多 '@' 的 URL（RFC 要求转义），但：
+        //      - 相机厂商常用未转义的 `p@ss`，将来放宽校验时这里不能是漏洞；
+        //      - 本通道会转发 FFmpeg 自己打印的 URL，不经过我们的校验器。
+        //    取第一个只会把前半段替成 ***，尾部仍以明文落盘。
         size_t at = std::string::npos;
         const size_t scan_end = authority_end == std::string::npos ? text.size() : authority_end;
         for (size_t index = authority_start; index < scan_end; ++index) {
@@ -338,8 +341,8 @@ std::string summarize_rtsp_block(const std::string &block) {
         if (end == std::string::npos) break;
         position = end + 1;
     }
-    if (summary.size() > kMaxTxnLine) {
-        summary.resize(kMaxTxnLine);
+    if (summary.size() > max_txn_line) {
+        summary.resize(max_txn_line);
         summary += "...";
     }
     return summary;
@@ -506,6 +509,10 @@ std::string normalize_rtsp_url(const char *raw) {
     std::string authority = url.substr(scheme_length, authority_end - scheme_length);
 
     // 提取 userinfo（用户名:密码）
+    // ⚠️ 校验器比 `redact_credentials` **严格**：这里拒绝多个 '@'（RFC 3986 要求转义），
+    //    因为规范化结果会直接交给 FFmpeg 建连，容忍未转义的 '@' 会把 host 解析歧义
+    //    带进真实网络请求。脱敏侧的宽松（取最后一个 '@'）是防御性的，不反过来
+    //    授权校验器放宽 —— 两边假设不同是有意为之。
     std::string userinfo;
     const auto at = authority.find('@');
     if (at != std::string::npos) {
@@ -544,7 +551,9 @@ std::string normalize_rtsp_url(const char *raw) {
             port = authority.substr(colon + 1);
             if (port.empty()) throw Failure{Zhulong_ERR_INVALID_ARGUMENT};
         }
-        for (unsigned char character : host) {
+        // 主机名只允许字母/数字/点/横线（IPv6 字面量在上一分支单独校验）
+        for (char raw_character : host) {
+            const auto character = static_cast<unsigned char>(raw_character);
             if (!std::isalnum(character) && character != '.' && character != '-') {
                 throw Failure{Zhulong_ERR_INVALID_ARGUMENT};
             }
@@ -812,9 +821,6 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
                     static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - read_started).count()),
                     probe_analyze_duration_us, probe_fallback ? 1 : 0);
             }
-            // 每收到一个目标视频数据包，刷新空闲超时倒计时
-            cancel.expire_after(options.idle_timeout_ms);
-
             // ⚠️ 时间戳保真透传：保留原流时间戳有效性标记，禁止将缺失时间戳默认视为 0
             Zhulong_packet_view view{};
             view.codec = video.view.codec;
@@ -830,6 +836,11 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
 
             // 以借用指针封装为视图结构体派发给同步消费回调（回调执行期间有效）
             consume(view);
+
+            // ⚠️ 空闲超时在**回调返回之后**刷新：consume 是同步扇出，慢订阅者/慢 normalizer
+            //    一旦耗时超过 idle_timeout_ms，若在回调前刷新，下一次 av_read_frame 的
+            //    interrupt 就会看到已过期 deadline，把「下游慢」误判成「相机断流」。
+            cancel.expire_after(options.idle_timeout_ms);
         }
         av_packet_unref(packet.get());
     }

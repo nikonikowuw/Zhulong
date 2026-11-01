@@ -17,7 +17,7 @@
 
 #include "Zhulong/frame.hpp"
 #include "common/log.hpp"
-#include "nodes/decode/mpp_api_types.hpp"
+#include "common/mpp/mpp_api_types.hpp"
 
 #include <dlfcn.h>
 #include <unistd.h>
@@ -35,34 +35,20 @@ namespace {
 
 using namespace zhulong::mpp;
 
-constexpr const char *kModule = "nodes.snapshot.jpeg";
-constexpr const char *kCaller = "ZhulongJpeg";
-constexpr const char *kTag = "ZhulongJpeg";
+constexpr const char *log_module = "nodes.snapshot.jpeg";
+constexpr const char *caller_name = "ZhulongJpeg";
+constexpr const char *group_tag = "ZhulongJpeg";
 
 /** @brief 会话池容量上限：抓拍单事件最多 9 张图，8 个桶足够覆盖常见尺寸组合 */
-constexpr size_t kMaxSessions = 8;
+constexpr size_t max_sessions = 8;
 
 /** @brief 每次编码最多等待 200 x 5ms = 1s，超时即判失败回退软件编码 */
-constexpr int kPacketRetryCount = 200;
-constexpr unsigned kPacketRetrySleepUs = 5000;
+constexpr int packet_retry_count = 200;
+constexpr unsigned packet_retry_sleep_us = 5000;
 
 /** @brief MPP 的 `jpeg:q_factor` 取值范围，与 `quality` 的 [1,100] 不同 */
-constexpr int kQFactorMin = 1;
-constexpr int kQFactorMax = 99;
-
-/**
- * @brief `MppBufferInfo_t` 的本地镜像（aarch64 布局：int32 + pad + size_t + 3 x ptr/int）
- *
- * 厂商头文件不进入本节点，故按 ABI 手工镜像；字段顺序必须与 `mpp_buffer.h` 一致。
- */
-struct BufferInfo {
-    int32_t type{0};
-    size_t size{0};
-    void *ptr{nullptr};
-    void *hnd{nullptr};
-    int fd{-1};
-    int index{0};
-};
+constexpr int q_factor_min = 1;
+constexpr int q_factor_max = 99;
 
 /**
  * @brief MPP 符号表（dlopen 装载）
@@ -113,20 +99,24 @@ struct Symbols {
         }
 
         // 2. 库名按板端实际存在顺序尝试（Debian 包为 librockchip_mpp.so.1）
-        static const char *kLibNames[] = {"librockchip_mpp.so.1", "librockchip_mpp.so",
+        static const char *lib_names[] = {"librockchip_mpp.so.1", "librockchip_mpp.so",
                                           "librockchip_mpp.so.0", "libmpp.so.1",
                                           "libmpp.so", nullptr};
-        for (int i = 0; kLibNames[i] != nullptr && out.handle == nullptr; ++i) {
-            out.handle = dlopen(kLibNames[i], RTLD_NOW | RTLD_LOCAL);
+        for (int i = 0; lib_names[i] != nullptr && out.handle == nullptr; ++i) {
+            out.handle = dlopen(lib_names[i], RTLD_NOW | RTLD_LOCAL);
         }
         if (out.handle == nullptr) {
             return false;
         }
 
-        // 3. 解析全部必需符号；任一缺失即整体判为不支持（fail closed）
+        // 3. 解析全部必需符号；任一缺失即整体判为不支持（fail closed）。
+        // ⚠️ 不用 `ok && load(...)` 短路：那样第一个缺失符号之后就不再 dlsym，
+        //    日志里永远只有「symbols_or_device_missing」而无法定位到底缺哪几个。
+        //    与 nodes/decode/mpp_loader.cpp 同名宏的写法保持一致。
         bool ok = true;
 #define ZL_LOAD_SYM(field) \
-    ok = ok && ((out.field = reinterpret_cast<decltype(out.field)>(dlsym(out.handle, #field))) != nullptr)
+    out.field = reinterpret_cast<decltype(out.field)>(dlsym(out.handle, #field)); \
+    ok = (out.field != nullptr) && ok
         ZL_LOAD_SYM(mpp_create);
         ZL_LOAD_SYM(mpp_init);
         ZL_LOAD_SYM(mpp_destroy);
@@ -160,7 +150,8 @@ struct Symbols {
 
         if (!ok) {
             dlclose(out.handle);
-            out.handle = nullptr;
+            // 整体重置：半解析的函数表不得留在调用方手里
+            out = Symbols{};
         }
         return ok;
     }
@@ -204,10 +195,13 @@ bool normalize_rect(int x, int y, int w, int h, uint32_t frame_w, uint32_t frame
     if (w <= 0 || h <= 0 || frame_w < 2 || frame_h < 2) {
         return false;
     }
+    // ⚠️ 用 64 位中间量算右/下边界：x + w 的 int 溢出是 UB，而本函数对任意调用方开放。
     int x0 = floor_even(x < 0 ? 0 : x);
     int y0 = floor_even(y < 0 ? 0 : y);
-    int x1 = ceil_even(x + w);
-    int y1 = ceil_even(y + h);
+    int x1 = ceil_even(static_cast<int>(std::min<long long>(static_cast<long long>(x) + w,
+                                                            frame_w)));
+    int y1 = ceil_even(static_cast<int>(std::min<long long>(static_cast<long long>(y) + h,
+                                                            frame_h)));
     if (x1 > static_cast<int>(frame_w)) {
         x1 = floor_even(static_cast<int>(frame_w));
     }
@@ -273,7 +267,13 @@ bool jpeg_envelope_ok(const std::vector<uint8_t> &jpeg) {
 // ============================================================================
 
 struct MppJpegEncoder::Impl {
-    /** @brief 一个编码会话及其专属输出缓冲（像素上传目标） */
+    /**
+     * @brief 一个编码会话及其专属输出缓冲（像素上传目标）
+     *
+     * ⚠️ 裸句柄由析构函数统一收尾（Core Guidelines R.1/R.11）：会话可能在任何一步初始化
+     *    失败、被 LRU 淘汰、或 `sessions.emplace` 抛 `bad_alloc` 时被丢弃。用「每次都要
+     *    记得手工释放」的配平方式，上述三条路径任一漏掉就是 ctx/group/buffer 泄漏。
+     */
     struct Session {
         MppCtx ctx{nullptr};
         MppApi *mpi{nullptr};
@@ -284,27 +284,47 @@ struct MppJpegEncoder::Impl {
         int hor_stride{0};
         int ver_stride{0};
         uint64_t last_use{0};
+        Symbols *sym{nullptr}; /**< 收尾所需；必须在开始分配资源前就填好 */
+
+        Session() = default;
+        Session(const Session &) = delete;
+        Session &operator=(const Session &) = delete;
+        Session(Session &&) = delete;
+        Session &operator=(Session &&) = delete;
+        ~Session() { release(); }
+
+        /** @brief 幂等收尾：归还缓冲 → 归还缓冲组 → 销毁上下文 */
+        void release() noexcept {
+            if (sym == nullptr) {
+                return;
+            }
+            if (buffer != nullptr && sym->mpp_buffer_put_with_caller != nullptr) {
+                sym->mpp_buffer_put_with_caller(buffer, caller_name);
+                buffer = nullptr;
+            }
+            if (group != nullptr && sym->mpp_buffer_group_put != nullptr) {
+                sym->mpp_buffer_group_put(group);
+                group = nullptr;
+            }
+            if (ctx != nullptr && sym->mpp_destroy != nullptr) {
+                sym->mpp_destroy(ctx);
+                ctx = nullptr;
+            }
+            mpi = nullptr;
+        }
     };
 
     Symbols sym;
     std::mutex mutex;
-    std::map<std::tuple<int, int, int, int>, Session> sessions;
+    /**
+     * @brief 会话池：`unique_ptr` 保证指针稳定，且淘汰/异常路径由 `Session` 析构统一收尾
+     */
+    std::map<std::tuple<int, int, int, int>, std::unique_ptr<Session>> sessions;
     uint64_t use_counter{0};
 
     ~Impl() {
-        // 显式释放顺序：先归还缓冲，再销毁上下文；异常/崩溃都不能穿越到调用方
-        for (auto &entry : sessions) {
-            Session &s = entry.second;
-            if (s.buffer != nullptr && sym.mpp_buffer_put_with_caller != nullptr) {
-                sym.mpp_buffer_put_with_caller(s.buffer, kCaller);
-            }
-            if (s.group != nullptr && sym.mpp_buffer_group_put != nullptr) {
-                sym.mpp_buffer_group_put(s.group);
-            }
-            if (s.ctx != nullptr && sym.mpp_destroy != nullptr) {
-                sym.mpp_destroy(s.ctx);
-            }
-        }
+        // ⚠️ 顺序关键：先把会话全部销毁（dtor 还要回调 MPP 函数），最后才 dlclose。
+        //    反过来会让“最后一批会话”调进已卸载的库。
         sessions.clear();
         sym.close();
     }
@@ -315,25 +335,28 @@ struct MppJpegEncoder::Impl {
      * ⚠️ key 必须含 stride：DMA-BUF 直通时 stride 由解码器决定（可能 2048），
      * 与 `align16(w)` 不同；把这两种配置混进同一个会话会让 VEPU 用错行宽，
      * 产出斜切/花屏图。
+     *
+     * @return 可用会话；**失败返回 nullptr**（调用方必须判空，不得直接解引用）
      */
     Session *acquire(int w, int h, int hor_stride, int ver_stride) {
         const auto key = std::make_tuple(w, h, hor_stride, ver_stride);
         auto it = sessions.find(key);
         if (it != sessions.end()) {
-            it->second.last_use = ++use_counter;
-            return &it->second;
+            it->second->last_use = ++use_counter;
+            return it->second.get();
         }
-        if (sessions.size() >= kMaxSessions && !evict_oldest()) {
+        if (sessions.size() >= max_sessions && !evict_oldest()) {
             return nullptr;
         }
-        Session session;
-        if (!open_session(session, w, h, hor_stride, ver_stride)) {
-            close_session(session);
-            return nullptr;
+        auto session = std::make_unique<Session>();
+        if (!open_session(*session, w, h, hor_stride, ver_stride)) {
+            return nullptr; // 半初始化的句柄由 Session 析构回收
         }
-        session.last_use = ++use_counter;
-        auto inserted = sessions.emplace(key, session);
-        return &inserted.first->second;
+        session->last_use = ++use_counter;
+        Session *raw = session.get();
+        // emplace 抛 bad_alloc 时 unique_ptr 析构仍会配平资源
+        sessions.emplace(key, std::move(session));
+        return raw;
     }
 
     bool evict_oldest() {
@@ -342,32 +365,17 @@ struct MppJpegEncoder::Impl {
         }
         auto oldest = sessions.begin();
         for (auto it = sessions.begin(); it != sessions.end(); ++it) {
-            if (it->second.last_use < oldest->second.last_use) {
+            if (it->second->last_use < oldest->second->last_use) {
                 oldest = it;
             }
         }
-        close_session(oldest->second);
-        sessions.erase(oldest);
+        sessions.erase(oldest); // Session 析构完成归还
         return true;
     }
 
-    void close_session(Session &s) noexcept {
-        if (s.buffer != nullptr && sym.mpp_buffer_put_with_caller != nullptr) {
-            sym.mpp_buffer_put_with_caller(s.buffer, kCaller);
-            s.buffer = nullptr;
-        }
-        if (s.group != nullptr && sym.mpp_buffer_group_put != nullptr) {
-            sym.mpp_buffer_group_put(s.group);
-            s.group = nullptr;
-        }
-        if (s.ctx != nullptr && sym.mpp_destroy != nullptr) {
-            sym.mpp_destroy(s.ctx);
-            s.ctx = nullptr;
-        }
-        s.mpi = nullptr;
-    }
-
     bool open_session(Session &s, int w, int h, int hor_stride, int ver_stride) {
+        // 先挂上收尾所需的符号表：后面任何一步失败，析构都能正确归还未 fully-built 的句柄
+        s.sym = &sym;
         s.width = w;
         s.height = h;
         s.hor_stride = hor_stride;
@@ -387,15 +395,15 @@ struct MppJpegEncoder::Impl {
         // 失败则退到 ION 以兼容老 BSP。
         size_t size = static_cast<size_t>(s.hor_stride) * static_cast<size_t>(s.ver_stride) * 3 / 2;
         if (sym.mpp_buffer_group_get(&s.group, MPP_BUFFER_TYPE_DMA_HEAP, MPP_BUFFER_INTERNAL,
-                                     kTag, kCaller) != MPP_OK ||
+                                     group_tag, caller_name) != MPP_OK ||
             s.group == nullptr) {
-            if (sym.mpp_buffer_group_get(&s.group, MPP_BUFFER_TYPE_ION, MPP_BUFFER_INTERNAL, kTag,
-                                         kCaller) != MPP_OK ||
+            if (sym.mpp_buffer_group_get(&s.group, MPP_BUFFER_TYPE_ION, MPP_BUFFER_INTERNAL, group_tag,
+                                         caller_name) != MPP_OK ||
                 s.group == nullptr) {
                 return false;
             }
         }
-        if (sym.mpp_buffer_get_with_tag(s.group, &s.buffer, size, kTag, kCaller) != MPP_OK ||
+        if (sym.mpp_buffer_get_with_tag(s.group, &s.buffer, size, group_tag, caller_name) != MPP_OK ||
             s.buffer == nullptr) {
             return false;
         }
@@ -408,7 +416,7 @@ struct MppJpegEncoder::Impl {
         if (sym.mpp_enc_cfg_init(&cfg) != MPP_OK || cfg == nullptr) {
             return false;
         }
-        const int q = std::min(kQFactorMax, std::max(kQFactorMin, quality));
+        const int q = std::min(q_factor_max, std::max(q_factor_min, quality));
         bool ok = true;
         ok = ok && sym.mpp_enc_cfg_set_s32(cfg, "prep:width", w) == MPP_OK;
         ok = ok && sym.mpp_enc_cfg_set_s32(cfg, "prep:height", h) == MPP_OK;
@@ -426,11 +434,12 @@ struct MppJpegEncoder::Impl {
     /**
      * @brief 把源帧的矩形区域按 NV12 紧凑布局上传到会话的 mpp_buffer
      *
-     * ⚠️ DMA-BUF 直通（`mpp_buffer_import`）未启用：API 已验证可用，但像素
-     *    正确性待板端复核，此处优先保证正确性。上传是唯一的一次 CPU 拷贝。
+     * 这是上传（兼容）路径：整帧直通走 `encode_dma`（见 §7.6），但**裁剪框与软解帧**
+     * 只能走这里，因为 MPP 没有可靠的源偏移语义，而软解帧根本没有 `dma_fd`。
+     * CPU 拷贝只发生在本路径。
      */
     bool upload(Session &s, const CpuFrameView &src, const Rect &r) {
-        auto *dst = static_cast<uint8_t *>(sym.mpp_buffer_get_ptr_with_caller(s.buffer, kCaller));
+        auto *dst = static_cast<uint8_t *>(sym.mpp_buffer_get_ptr_with_caller(s.buffer, caller_name));
         if (dst == nullptr) {
             return false;
         }
@@ -512,7 +521,7 @@ struct MppJpegEncoder::Impl {
         }
 
         // 有界等待：绝不无限阻塞抓拍 worker（软件编码是兜底，不是死等硬件）
-        for (int i = 0; i < kPacketRetryCount; ++i) {
+        for (int i = 0; i < packet_retry_count; ++i) {
             MppPacket packet = nullptr;
             const int rc = s.mpi->encode_get_packet(s.ctx, &packet);
             if (rc == MPP_OK && packet != nullptr) {
@@ -530,7 +539,7 @@ struct MppJpegEncoder::Impl {
                 }
                 return false;
             }
-            usleep(kPacketRetrySleepUs);
+            usleep(packet_retry_sleep_us);
         }
         return false;
     }
@@ -567,16 +576,33 @@ struct MppJpegEncoder::Impl {
         info.size = size;
         info.fd = frame.dma_fd;
         MppBuffer imported = nullptr;
-        if (sym.mpp_buffer_import_with_tag(nullptr, &info, &imported, kTag, kCaller) != MPP_OK ||
+        if (sym.mpp_buffer_import_with_tag(nullptr, &info, &imported, group_tag, caller_name) != MPP_OK ||
             imported == nullptr) {
             return false;
         }
 
-        const bool ok = encode_buffer(*acquire(w, h, hor_stride, ver_stride), imported, w, h,
-                                      hor_stride, ver_stride, quality, out);
-        // 谁导入谁归还：必须在帧返回解码器缓冲池之前配平
-        sym.mpp_buffer_put_with_caller(imported, kCaller);
-        return ok;
+        // ⚠️ 导入的缓冲由栈上守卫配平：无论 encode_buffer 正常返回、提前失败
+        //    还是抛 std::bad_alloc（out.assign），都不会把导入的 DMA-BUF 留在 MPP 里。
+        struct ImportGuard {
+            Symbols *sym{nullptr};
+            MppBuffer buffer{nullptr};
+            ~ImportGuard() {
+                if (buffer != nullptr && sym != nullptr &&
+                    sym->mpp_buffer_put_with_caller != nullptr) {
+                    sym->mpp_buffer_put_with_caller(buffer, caller_name);
+                }
+            }
+        } guard{&sym, imported};
+
+        // ⚠️ acquire() 在建会话失败时返回 nullptr（VPU 被占 / buffer_group 申请失败等），
+        //    这里绝不能直接解引用：那会把“抓拍降级”变成进程段错误。
+        Session *session = acquire(w, h, hor_stride, ver_stride);
+        if (session == nullptr) {
+            ZL_LOGW(0, log_module, "jpeg_dmabuf_session_unavailable: %dx%d", w, h);
+            return false;
+        }
+        // 谁导入谁归还：ImportGuard 在本函数返回前（帧回解码器缓冲池之前）完成配平
+        return encode_buffer(*session, imported, w, h, hor_stride, ver_stride, quality, out);
     }
 };
 
@@ -591,7 +617,7 @@ MppJpegEncoder::~MppJpegEncoder() = default;
 std::unique_ptr<MppJpegEncoder> MppJpegEncoder::create() {
     Symbols sym;
     if (!Symbols::load(sym)) {
-        ZL_LOGI(0, kModule, "mpp_jpeg_encoder_unavailable: symbols_or_device_missing");
+        ZL_LOGI(0, log_module, "mpp_jpeg_encoder_unavailable: symbols_or_device_missing");
         return nullptr;
     }
 
@@ -604,15 +630,14 @@ std::unique_ptr<MppJpegEncoder> MppJpegEncoder::create() {
     {
         Impl &inner = *encoder->impl_;
         std::lock_guard<std::mutex> lock(inner.mutex);
+        // 栈上会话：无论探针成功与否，离开作用域都会由 Session 析构归还句柄
         Impl::Session probe;
         if (!inner.open_session(probe, 64, 64, align_stride(64), align_stride(64))) {
-            inner.close_session(probe);
-            ZL_LOGW(0, kModule, "mpp_jpeg_encoder_unavailable: session_probe_failed");
+            ZL_LOGW(0, log_module, "mpp_jpeg_encoder_unavailable: session_probe_failed");
             return nullptr;
         }
-        inner.close_session(probe);
     }
-    ZL_LOGI(0, kModule, "mpp_jpeg_encoder_ready");
+    ZL_LOGI(0, log_module, "mpp_jpeg_encoder_ready");
     return encoder;
 }
 
@@ -632,8 +657,16 @@ bool MppJpegEncoder::encode_dma_frame(const HardwareFrame &frame, int quality,
     const int ver_stride =
         frame.vstride >= static_cast<uint32_t>(h) ? static_cast<int>(frame.vstride) : h;
 
-    std::lock_guard<std::mutex> lock(impl_->mutex);
-    return impl_->encode_dma(frame, w, h, hor_stride, ver_stride, quality, out_jpeg);
+    try {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        return impl_->encode_dma(frame, w, h, hor_stride, ver_stride, quality, out_jpeg);
+    } catch (...) {
+        // ⚠️ 实现契约（mpp_jpeg_encoder.hpp）：绝不抛异常。out.assign 等堆分配失败
+        //    在这里降级为「本帧失败」，由 JpegBackend 回退软件编码；
+        //    资源配平由栈上 RAII 守卫完成。
+        out_jpeg.clear();
+        return false;
+    }
 }
 
 bool MppJpegEncoder::encode_region(const CpuFrameView &src, int x, int y, int w, int h,
@@ -647,32 +680,47 @@ bool MppJpegEncoder::encode_region(const CpuFrameView &src, int x, int y, int w,
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(impl_->mutex);
-    Impl::Session *session = impl_->acquire(rect.w, rect.h, align_stride(rect.w),
-                                            align_stride(rect.h));
-    if (session == nullptr) {
+    try {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        Impl::Session *session = impl_->acquire(rect.w, rect.h, align_stride(rect.w),
+                                                align_stride(rect.h));
+        if (session == nullptr) {
+            return false;
+        }
+        return impl_->encode_locked(*session, src, rect, quality, out_jpeg);
+    } catch (...) {
+        // 同 encode_dma_frame：不得让 bad_alloc 穿过本类的公开接口
+        out_jpeg.clear();
         return false;
     }
-    return impl_->encode_locked(*session, src, rect, quality, out_jpeg);
 }
 
 bool MppJpegEncoder::self_test() {
+    try {
+        return self_test_impl();
+    } catch (...) {
+        // 自检只回答「该 BSP 的硬编路是否可信」；分配失败一律视为不可信
+        return false;
+    }
+}
+
+bool MppJpegEncoder::self_test_impl() {
     // 两张 32x32 合成 NV12：仅亮度不同，色度同为中性 128。
-    constexpr int kSize = 32;
-    constexpr size_t kY = static_cast<size_t>(kSize) * kSize;
-    std::vector<uint8_t> dark(kY + kY / 2, 128);
-    std::vector<uint8_t> bright(kY + kY / 2, 128);
-    std::memset(dark.data(), 16, kY);
-    std::memset(bright.data(), 235, kY);
+    constexpr int size = 32;
+    constexpr size_t luma_bytes = static_cast<size_t>(size) * size;
+    std::vector<uint8_t> dark(luma_bytes + luma_bytes / 2, 128);
+    std::vector<uint8_t> bright(luma_bytes + luma_bytes / 2, 128);
+    std::memset(dark.data(), 16, luma_bytes);
+    std::memset(bright.data(), 235, luma_bytes);
 
     auto make_view = [](std::vector<uint8_t> &storage) {
         CpuFrameView view{};
-        view.width = static_cast<uint32_t>(kSize);
-        view.height = static_cast<uint32_t>(kSize);
+        view.width = static_cast<uint32_t>(size);
+        view.height = static_cast<uint32_t>(size);
         view.format = FRAME_FORMAT_NV12;
         view.planes[0] = storage.data();
-        view.planes[1] = storage.data() + kY;
-        view.strides[0] = static_cast<uint32_t>(kSize);
+        view.planes[1] = storage.data() + luma_bytes;
+        view.strides[0] = static_cast<uint32_t>(size);
         return view;
     };
 
@@ -683,7 +731,7 @@ bool MppJpegEncoder::self_test() {
         CpuFrameView dark_view = make_view(dark);
         CpuFrameView bright_view = make_view(bright);
         Rect rect;
-        if (!normalize_rect(0, 0, kSize, kSize, dark_view.width, dark_view.height, rect)) {
+        if (!normalize_rect(0, 0, size, size, dark_view.width, dark_view.height, rect)) {
             return false;
         }
         Impl::Session *dark_session = impl_->acquire(rect.w, rect.h, align_stride(rect.w),
@@ -707,7 +755,7 @@ bool MppJpegEncoder::self_test() {
     // 2. 尺寸就是请求尺寸（后端差异不能改变产物几何）
     int w = 0;
     int h = 0;
-    if (!read_jpeg_sof_size(dark_jpeg, w, h) || w != kSize || h != kSize) {
+    if (!read_jpeg_sof_size(dark_jpeg, w, h) || w != size || h != size) {
         return false;
     }
     // 3. 亮度敏感性：若编码器忽略 Y 平面（某些 BSP 上出现「恒定灰图」），

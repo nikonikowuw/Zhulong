@@ -9,11 +9,13 @@
  *    要求「全部符号必须就绪」，若把编码符号混进去，一个缺失的 enc 符号会把
  *    硬件解码一并判为不支持 —— 两个能力的可用性必须彼此独立。
  * 2. **会话池化**：`mpp_init(MPP_CTX_ENC)` 是几十毫秒级操作，绝不可每张图重建。
- *    池按 `(width, height)` 分桶复用，满载时按 LRU 淘汰空闲会话。
- * 3. **上传而非零拷贝**：像素由 CPU 侧一次性写入 `mpp_buffer`（NV12 布局），
- *    再由 VEPU 编码。DMA-BUF 直通（`mpp_buffer_import`）已验证 API 可用，
- *    但像素正确性仍需板端复核，故不在此处启用 —— 见
- *    `.trellis/spec/native/hardware-backends.md` 的 JPEG 小节。
+ *    池按 `(width, height, hor_stride, ver_stride)` 四元组分桶复用（stride 必须进 key，
+ *    否则 DMA-BUF 直通与上传路径会共用错行宽的会话），满载时按 LRU 淘汰空闲会话。
+ * 3. **两条像素通路，上传是兼容路**：上传路径由 CPU 一次性写入 `mpp_buffer`（NV12 布局）；
+ *    直通路径（`encode_dma_frame`）把解码器 DMA-BUF 直接 `import` 成 `MppBuffer`，零 CPU 拷贝。
+ *    直通仅用于整帧（MPP 没有可靠的源偏移语义），且必须先由 `JpegBackend` 用同帧上传产物
+ *    做一次字节级自证；裁剪框恒走上传。详见
+ *    `.trellis/spec/native/hardware-backends.md` §7.6。
  * 4. **静默错误自检**：`self_test()` 用两张仅亮度不同的合成帧证明「亮度真的进了
  *    编码器」。某些 BSP 上曾观察到「编码成功但恒为纯灰图且不报错」，自检是唯一
  *    能在启动期拦住这类错误的机制。
@@ -105,6 +107,9 @@ public:
 private:
     struct Impl;
     explicit MppJpegEncoder(std::unique_ptr<Impl> impl);
+
+    /** @brief self_test 的实际实现；异常拦截在公开入口完成 */
+    bool self_test_impl();
 
     std::unique_ptr<Impl> impl_;
 };

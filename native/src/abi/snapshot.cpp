@@ -154,8 +154,9 @@ public:
         out = CpuFrameView{};
         out.width = frame_.width;
         out.height = frame_.height;
-        out.vstride = frame_.vstride;
         out.format = frame_.format;
+        // 注：CpuFrameView 不带 vstride —— 硬解分支已在这里按 stride × vstride 把
+        // UV 平面基址算好写进 planes[1]，下游只按 planes/strides 寻址。
 
         if (frame_.format != FRAME_FORMAT_NV12 && frame_.format != FRAME_FORMAT_YUV420P) {
             return false;

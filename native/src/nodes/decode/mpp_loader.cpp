@@ -8,18 +8,18 @@
 #include <dlfcn.h>
 #include <unistd.h>
 
+#include <new>
+
 namespace zhulong::mpp {
 
 MppLoader &MppLoader::instance() {
-    static MppLoader loader;
-    return loader;
-}
-
-MppLoader::~MppLoader() {
-    if (lib_handle_) {
-        dlclose(lib_handle_);
-        lib_handle_ = nullptr;
-    }
+    // ⚠️ 静态存储 + placement-new，且**永不析构**（析构函数已 = delete）：
+    //    HardwareFrame::release_fn 持有本对象裸指针，帧可能比静态析构活得更久，
+    //    一旦析构就会 `dlclose` 掉它正在使用的函数指针。堆分配（new）会让 LSan 报泄漏，
+    //    静态存储既没有堆分配也不会被注册进 atexit 析构链。
+    alignas(MppLoader) static unsigned char storage[sizeof(MppLoader)];
+    static MppLoader *const loader = ::new (static_cast<void *>(storage)) MppLoader();
+    return *loader;
 }
 
 bool MppLoader::is_supported() {
@@ -46,7 +46,7 @@ void MppLoader::load_symbols() {
     }
 
     // 2. 搜索并加载 MPP 动态共享库
-    static const char *kLibNames[] = {
+    static const char *lib_names[] = {
         "librockchip_mpp.so.1",
         "librockchip_mpp.so",
         "librockchip_mpp.so.0",
@@ -55,8 +55,8 @@ void MppLoader::load_symbols() {
         nullptr
     };
 
-    for (int i = 0; kLibNames[i] != nullptr; ++i) {
-        lib_handle_ = dlopen(kLibNames[i], RTLD_NOW | RTLD_LOCAL);
+    for (int i = 0; lib_names[i] != nullptr; ++i) {
+        lib_handle_ = dlopen(lib_names[i], RTLD_NOW | RTLD_LOCAL);
         if (lib_handle_) {
             break;
         }
@@ -109,9 +109,9 @@ void MppLoader::load_symbols() {
     if (ok) {
         is_supported_ = true;
     } else {
+        // ⚠️ 不 dlclose：符号表与库必须整进程保持一致，否则任何已缓存的函数指针
+        //    都会在下一次 `is_supported()` 之后变成悬空指针（见 instance() 的文档）。
         api_ = Api{};
-        dlclose(lib_handle_);
-        lib_handle_ = nullptr;
     }
 }
 

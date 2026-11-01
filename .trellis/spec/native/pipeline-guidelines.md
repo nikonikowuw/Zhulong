@@ -20,8 +20,8 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
 - **原生 C++ 帧消费通道**：
   - `Stream::acquire_frame(HardwareFrame::ConstPtr &out_frame, timeout)` 提供线程安全的原生帧借用通道，下游模块以只读共享所有权并发消费，由底层闭包安全保活。
 - **单流确定性线程模型与双后端自适应路由**：
-  - 解码节点通过 `IDecodeNode::create` 统一抽象，提供 `DecoderBackend::AUTO`、`DecoderBackend::FFMPEG_SW` 与 `DecoderBackend::MPP_HW` 三种分流策略。
-  - 在 `AUTO` 模式下，系统动态探测硬件加速能力（`MppDecodeNode::is_supported()`），若支持且码流为 H.264/H.265 则自动启用 MPP 硬件解码并直出 DMA-BUF；环境不支持或解码异常时透明回退至 FFmpeg 软解。
+  - 解码节点通过 `IDecodeNode::create` 统一抽象，提供 `DecoderBackend::automatic`、`DecoderBackend::ffmpeg_sw` 与 `DecoderBackend::mpp_hw` 三种分流策略。
+  - 在 `automatic` 模式下，系统动态探测硬件加速能力（`MppDecodeNode::is_supported()`），若支持且码流为 H.264/H.265 则自动启用 MPP 硬件解码并直出 DMA-BUF；环境不支持或解码异常时透明回退至 FFmpeg 软解。
   - 解码器单实例单线程运行，并发由多流模型（多 stream）承载，杜绝底层多线程竞争与线程爆炸。
   - 解码会话工作循环 (`DecodeSession::decode_loop`) 在待解包队列为空发生超时（idle timeout 50ms）时，主动执行 `drain_frames(dec)` 排空解码器内部已就绪帧，防止低帧率或测试单包场景下画面在底层 DPB 发生不必要滞留。
 - **零拷贝帧封装与异常安全守护**：
@@ -30,7 +30,8 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
   - ⚠️ `mpp_buffer_inc_ref()` 的返回值**必须校验**：加引用失败时立即 `close(fd)` 并返回错误，不得进入装配流程 —— 否则 `release_fn` 中的 `mpp_buffer_put` 会造成净减引用与显存提前回收。
   - ⚠️ 帧的底层资源（`AVFrame` / `MppBuffer` / `MppBufferGroup`）生命周期**必须与解码器实例解耦**：解码器可能在帧尚未归还时被销毁（停机）或重新配置（分辨率切换）。硬解的外部缓冲组由 `MppDecodeNode::BufferGroup` 引用计数持有，`release_fn` 必须捕获该持有者的 `shared_ptr` 保活；解码器析构/`info_change` 只解除本地引用，**严禁**就地 `mpp_buffer_group_clear/put`。
 - **解码节点返回码契约（单一值域）**：
-  - `send_packet()` 与 `receive_frame()` 共用 `decoder.hpp` 的具名常量：`decode_ok`(0)、`decode_again`(== `AVERROR(EAGAIN)`)、`decode_backend_failure`(== `AVERROR(EIO)`)，另可透出 `AVERROR_EOF`。
+  - `send_packet()` 与 `receive_frame()` 共用 `decoder.hpp` 的具名常量：`decode_ok`(0)、`decode_again`(== `AVERROR(EAGAIN)`)、`decode_backend_failure`(== `AVERROR(EIO)`)，`send_packet` 另可透出 `AVERROR_EOF`。
+  - ⚠️ `receive_frame()` **不区分**「暂无输出」(EAGAIN) 与「drain 已排空」(EOF)：两者都返回 `decode_again`（FFmpeg 软解与 MPP 硬解在这一点上必须一致）。因此 `send_packet(nullptr, 0, ...)` 之后若要继续送包，调用方**必须先 `flush()`** 复位 draining 状态，否则底层 `send_packet` 会恒返 `AVERROR_EOF`。
   - 硬件后端私有错误码（`MPP_ERR_BUFFER_FULL=-1012`、`MPP_NOK=-1` 等）**必须在后端内部归一化**为上述常量，严禁外溢 —— 否则与 AVERROR 值域语义混淆，调用方无法区分背压与损坏。
   - ⚠️ 禁止再用魔法值 `1` 表达「暂无输出」；`IDecodeNode` 同时禁止拷贝与移动（副本会共享同一份解码器上下文导致重复释放）。
   - 统一背压契约：后端在待解包缓冲满时统一返回 `decode_again`，驱动调用方排空已就绪帧后重发当前包；排空后二次仍背压即记 `decode_backpressure_drop` 告警，严禁静默吞包。
@@ -72,6 +73,9 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
 2. **硬件级零拷贝与格式/时间戳保真**：
    - 包含标准格式常量（`FRAME_FORMAT_YUV420P`、`FRAME_FORMAT_NV12` 等），与 Linux DRM / V4L2 FourCC 语义对齐；
    - 软解节点兼容 Full Range `AV_PIX_FMT_YUVJ420P` 并统一对齐为 `FRAME_FORMAT_YUV420P`；
+   - ⚠️ **负 `linesize`（垂直翻转输出）必须整帧判为 `FRAME_FORMAT_UNKNOWN` 且不填任何平面指针**：
+     `HardwareFrame` 没有翻转语义，把 `stride` 归零会让下游按「紧凑、从上到下」读到错行，
+     属于静默错帧；软解因此在 `ffmpeg_negative_linesize` 告警一次后交给下游显式拒绝。
    - 时间戳有效性契约：严格以 `(raw_pts != AV_NOPTS_VALUE)` 判定 `has_pts`，首帧 `pts = 0` 必须标定为有效 `has_pts = true`，上游缺失 PTS（`AV_NOPTS_VALUE`）置 `has_pts = false` 并回退 `pts = 0`，杜绝时间戳极小负数畸变与首帧丢时间戳；
    - 严格包含 `stride` 与 `vstride`（垂直对齐步长），NV12 UV 平面偏移计算必须遵循 `y_plane_size() = stride * (vstride > 0 ? vstride : height)`，防止色度错位。
 3. **安全 Deleter 守护与生命周期解耦**：

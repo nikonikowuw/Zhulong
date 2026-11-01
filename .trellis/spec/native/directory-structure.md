@@ -19,8 +19,10 @@
   - `decoder_factory.cpp`：`IDecodeNode::create` 后端分流与透明回退，不寄生在任何具体后端里；
   - `ffmpeg_decoder.hpp / .cpp`：单流确定性软解实现 (`FFmpegDecodeNode`)，产出带 RAII `release_fn` 的 `HardwareFrame`；
   - `mpp_loader.hpp / .cpp`：Rockchip MPP 动态装载器与只读符号表 (`MppLoader::Api`)；
-  - `mpp_decoder.hpp / .cpp`：Rockchip MPP 硬解实现 (`MppDecodeNode`) 与外部缓冲组引用计数持有者 (`BufferGroup`)；
-  - `mpp_api_types.hpp`：无编译期 SDK 依赖的 MPP 类型/枚举/函数表声明。
+  - `mpp_decoder.hpp / .cpp`：Rockchip MPP 硬解实现 (`MppDecodeNode`) 与外部缓冲组引用计数持有者 (`BufferGroup`)。
+- `src/common/mpp/mpp_api_types.hpp`：无编译期 SDK 依赖的 MPP 类型/枚举/函数表声明（含 `MppBufferInfo` 镜像）。
+  它是**跨节点共享契约**（`nodes/decode` 与 `nodes/snapshot` 都用），因此不放在任何一个节点目录里；
+  镜像与厂商头的一致性由 `native/tests/mpp_abi_conformance_test.cpp` 的编译期断言守护。
 - `scripts/build.py` 负责依赖、目标和最终 Go 链接；`tests/` 包含 Native、纯 C、真实 loopback RTSP、硬件帧生命周期与解码节点回归。当前基础构建与主机测试不要求厂商 SDK；可选硬件后端及其专有头文件由 `src/backends/` 隔离，并由对应 profile、SDK/BSP 和目标板环境单独启用与验证。
 
 以下仍是后续完整节点架构的规划，功能未开始前严禁创建空目录。
@@ -64,3 +66,22 @@ native/
 2. **ABI 异常防爆门**：`src/abi` 必须在最外层以 `try { ... } catch (...) { return Zhulong_ERR_INTERNAL; }` 包覆，严禁 C++ 异常穿越到 CGO。
 3. **节点解耦流转**：未来异步处理节点不得直接窥探其他节点状态，应通过有界队列传递不可变包/帧。当前只有采集层与同步包回调，没有解码队列；详见 [接入合同](./ingestion-contract.md)。
 4. **厂商 SDK 物理隔离**：特定 NPU/GPU 专有头文件只能在 `src/backends/` 内引用，严禁污染核心流水线契约。
+
+---
+
+## 3. 节点层命名约定（常量与枚举）
+
+`src/nodes/**` 内部统一使用 `snake_case`，与节点层契约头 `decoder.hpp` 的 `decode_ok` /
+`decode_again` / `decode_backend_failure` 以及 `frame.hpp` 的 `frame_plane_count` 保持一致：
+
+| 种类 | 规则 | 示例 |
+| --- | --- | --- |
+| 常量 | `snake_case`，`constexpr` | `max_sessions`、`packet_retry_sleep_us`、`stride_align` |
+| 枚举值（`enum class`） | `snake_case` | `DecoderBackend::automatic`、`JpegBackendKind::hardware`、`DmaState::validated` |
+| 类型 / 成员 | `PascalCase` / `trailing_underscore_` | `MppDecodeNode`、`stream_id_` |
+| 厂商 ABI 名 | **沿用原名**，不改写 | `MPP_FMT_YUV420SP`、`MPP_ERR_BUFFER_FULL`、`MPP_VIDEO_CodingHEVC` |
+
+- ⚠️ **厂商 ABI 常量必须与 BSP 头逐字一致**（枚举名/数值都对）：它们是指令字，不是风格选择。
+  这条与「统一 snake_case」不冲突——`MPP_*` 属于镜像面，不是我们自己起的名字。
+- `src/pipeline/**`、`src/common/**`、`src/algorithm/**` 仍有历史 `kCamelCase` / `ALL_CAPS` 常量；
+  迁移不强制一次做完，但**新增/重写代码一律按本表**，不要在一个目录里再混出第三种风格。

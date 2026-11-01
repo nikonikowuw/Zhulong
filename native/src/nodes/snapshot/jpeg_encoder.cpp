@@ -85,10 +85,13 @@ bool extract_yuv_region(const CpuFrameView &src, int x, int y, int w, int h, Yuv
     }
 
     // 1. 裁剪矩形 clamp 并 2 像素对齐（色度下采样要求）
+    // ⚠️ 右/下边界用 64 位中间量：x + w 的 int 溢出是 UB，而本函数对外部调用方完全开放
     int x0 = floor_even(x < 0 ? 0 : x);
     int y0 = floor_even(y < 0 ? 0 : y);
-    int x1 = ceil_even(x + w);
-    int y1 = ceil_even(y + h);
+    int x1 = ceil_even(static_cast<int>(
+        std::min<long long>(static_cast<long long>(x) + w, static_cast<long long>(src.width))));
+    int y1 = ceil_even(static_cast<int>(
+        std::min<long long>(static_cast<long long>(y) + h, static_cast<long long>(src.height))));
     if (x1 > static_cast<int>(src.width)) x1 = floor_even(static_cast<int>(src.width));
     if (y1 > static_cast<int>(src.height)) y1 = floor_even(static_cast<int>(src.height));
     if (x1 <= x0 || y1 <= y0) {
@@ -129,7 +132,8 @@ bool extract_yuv_region(const CpuFrameView &src, int x, int y, int w, int h, Yuv
         copy_plane_strided(out.v.data(), src.planes[2] + v_stride * static_cast<size_t>(cy),
                            dw / 2, dh / 2, v_stride, cx);
     } else {
-        // NV12：UV 交错且共用 Y 的 stride，UV 起点为 y_stride * vstride
+        // NV12：UV 交错，planes[1] 已由调用方定位到 UV 平面首字节（Y + stride * vstride），
+        // 交错行内一个色度样本占 2 字节，因此 x 偏移的字节数等于像素偏移。
         if (!src.planes[1]) {
             return false;
         }

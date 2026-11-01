@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "nodes/decode/mpp_api_types.hpp"
+#include "common/mpp/mpp_api_types.hpp"
 
 #include <mutex>
 
@@ -57,6 +57,15 @@ public:
         int (*buffer_get_fd)(MppBuffer buffer, const char *caller){nullptr};
     };
 
+    /**
+     * @brief 进程级唯一装载器（**永不析构**）
+     *
+     * ⚠️ `HardwareFrame::release_fn` 持有的是本对象的裸指针，而帧可能比任何静态析构活得更久
+     * （停机顺序变更、成员帧晚释放）。因此这里用静态存储 + placement-new 构造且从不析构：
+     *   - 正常析构会让后续 `loader->put()` 调进已 `dlclose` 的库（UAF）；
+     *   - 用 `new` 换长寿又会让 LSan 报泄漏，因此刻意走静态存储而不是堆分配。
+     * 库句柄因此整个进程生命周期都保持映射，这是有意为之。
+     */
     static MppLoader &instance();
 
     /**
@@ -85,7 +94,9 @@ public:
 
 private:
     MppLoader() = default;
-    ~MppLoader();
+    // 析构函数不存在：instance() 从不销毁实例（见其文档）。若将来需要显式卸载，
+    // 必须同时保证没有任何在途 HardwareFrame —— 当前没有任何合法时机。
+    ~MppLoader() = delete;
 
     MppLoader(const MppLoader &) = delete;
     MppLoader &operator=(const MppLoader &) = delete;

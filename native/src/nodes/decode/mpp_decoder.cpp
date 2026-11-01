@@ -27,30 +27,30 @@ namespace zhulong {
 
 namespace {
 
-constexpr const char *kLogModule = "nodes.decode";
+constexpr const char *log_module = "nodes.decode";
 
 /** @brief 外部缓冲组分配器探测顺序：DMA_HEAP -> DRM -> ION */
-constexpr mpp::MppBufferType kBufferTypes[] = {
+constexpr mpp::MppBufferType buffer_types[] = {
     mpp::MPP_BUFFER_TYPE_DMA_HEAP,
     mpp::MPP_BUFFER_TYPE_DRM,
     mpp::MPP_BUFFER_TYPE_ION,
 };
 
 /** @brief 缓冲池容量分级（720P 及以下 / 1080P 及以下 / 4K） */
-constexpr int32_t kBufferCountSd = 10;
-constexpr int32_t kBufferCountHd = 16;
-constexpr int32_t kBufferCountUhd = 20;
-constexpr uint64_t kSdPixelLimit = 1280ULL * 720ULL;
-constexpr uint64_t kHdPixelLimit = 1920ULL * 1080ULL;
+constexpr int32_t buffer_count_sd = 10;
+constexpr int32_t buffer_count_hd = 16;
+constexpr int32_t buffer_count_uhd = 20;
+constexpr uint64_t sd_pixel_limit = 1280ULL * 720ULL;
+constexpr uint64_t hd_pixel_limit = 1920ULL * 1080ULL;
 
 /** @brief 硬件步长对齐粒度：水平 16 字节、垂直 16 行 */
-constexpr uint32_t kStrideAlign = 16;
+constexpr uint32_t stride_align = 16;
 
 int32_t buffer_count_for(uint32_t width, uint32_t height) {
     const uint64_t pixels = static_cast<uint64_t>(width) * height;
-    if (pixels <= kSdPixelLimit) return kBufferCountSd;
-    if (pixels <= kHdPixelLimit) return kBufferCountHd;
-    return kBufferCountUhd;
+    if (pixels <= sd_pixel_limit) return buffer_count_sd;
+    if (pixels <= hd_pixel_limit) return buffer_count_hd;
+    return buffer_count_uhd;
 }
 
 uint32_t align_up(uint32_t value, uint32_t alignment) {
@@ -68,10 +68,10 @@ MppDecodeNode::BufferGroup::~BufferGroup() {
 
     const auto &api = loader->api();
     if (api.buffer_group_clear && api.buffer_group_clear(raw) != mpp::MPP_OK) {
-        ZL_LOGW(stream_id, kLogModule, "mpp_buffer_group_clear_failed");
+        ZL_LOGW(stream_id, log_module, "mpp_buffer_group_clear_failed");
     }
     if (api.buffer_group_put && api.buffer_group_put(raw) != mpp::MPP_OK) {
-        ZL_LOGW(stream_id, kLogModule, "mpp_buffer_group_put_failed");
+        ZL_LOGW(stream_id, log_module, "mpp_buffer_group_put_failed");
     }
     raw = nullptr;
 }
@@ -153,7 +153,16 @@ void MppDecodeNode::setup_mpp(int32_t codec, const uint8_t *extradata, size_t ex
         const int put_ret = mpi_->decode_put_packet ? mpi_->decode_put_packet(ctx_, packet) : mpp::MPP_NOK;
         api.packet_deinit(&packet);
         if (put_ret != mpp::MPP_OK) {
-            ZL_LOGW(stream_id_, kLogModule, "mpp_extradata_put_failed ret=%d", put_ret);
+            // ⚠️ 不因参数集入队失败而 fail closed：Annex-B 码流的首个 IDR 自带 SPS/PPS，
+            //    MPP 的切分器（PARSER_SPLIT_MODE）会从码流里重新取到参数集。但两种失败的
+            //    严重性必须区分开，否则「硬解整条流解不出图」会被一条 WARN 淹没：
+            //      - 背压/超时：初始化阶段队列异常，属于可恢复情形，WARN；
+            //      - 其他错误：包格式或上下文状态不可用，ERROR（调用方据此可判后端异常）。
+            if (put_ret == mpp::MPP_ERR_BUFFER_FULL || put_ret == mpp::MPP_ERR_TIMEOUT) {
+                ZL_LOGW(stream_id_, log_module, "mpp_extradata_put_backpressure ret=%d", put_ret);
+            } else {
+                ZL_LOGE(stream_id_, log_module, "mpp_extradata_put_failed ret=%d", put_ret);
+            }
         }
     }
 
@@ -164,7 +173,7 @@ void MppDecodeNode::destroy_mpp() noexcept {
     if (ctx_ && loader_.api().destroy) {
         const int ret = loader_.api().destroy(ctx_);
         if (ret != mpp::MPP_OK) {
-            ZL_LOGW(stream_id_, kLogModule, "mpp_destroy_failed ret=%d", ret);
+            ZL_LOGW(stream_id_, log_module, "mpp_destroy_failed ret=%d", ret);
         }
     }
     ctx_ = nullptr;
@@ -177,12 +186,12 @@ void MppDecodeNode::destroy_mpp() noexcept {
 
 int MppDecodeNode::control(int32_t cmd, void *param, const char *what) noexcept {
     if (!mpi_ || !mpi_->control) {
-        ZL_LOGE(stream_id_, kLogModule, "mpp_control_unavailable what=%s", what);
+        ZL_LOGE(stream_id_, log_module, "mpp_control_unavailable what=%s", what);
         return decode_backend_failure;
     }
     const int ret = mpi_->control(ctx_, cmd, param);
     if (ret != mpp::MPP_OK) {
-        ZL_LOGW(stream_id_, kLogModule, "mpp_control_failed what=%s cmd=0x%08x ret=%d", what,
+        ZL_LOGW(stream_id_, log_module, "mpp_control_failed what=%s cmd=0x%08x ret=%d", what,
                 static_cast<unsigned>(cmd), ret);
         return decode_backend_failure;
     }
@@ -198,8 +207,8 @@ int MppDecodeNode::configure_buffer_group(mpp::MppFrame frame) {
     const uint32_t ver_stride_in = api.frame_get_ver_stride(frame);
     const size_t raw_buf_size = api.frame_get_buf_size ? api.frame_get_buf_size(frame) : 0;
 
-    const uint32_t hor_stride = hor_stride_in > 0 ? hor_stride_in : align_up(width, kStrideAlign);
-    const uint32_t ver_stride = ver_stride_in > 0 ? ver_stride_in : align_up(height, kStrideAlign);
+    const uint32_t hor_stride = hor_stride_in > 0 ? hor_stride_in : align_up(width, stride_align);
+    const uint32_t ver_stride = ver_stride_in > 0 ? ver_stride_in : align_up(height, stride_align);
     const size_t buf_size =
         raw_buf_size > 0 ? raw_buf_size : static_cast<size_t>(hor_stride) * ver_stride * 3 / 2;
     const int32_t count = buffer_count_for(width, height);
@@ -211,7 +220,7 @@ int MppDecodeNode::configure_buffer_group(mpp::MppFrame frame) {
     holder->stream_id = stream_id_;
 
     int ret = mpp::MPP_NOK;
-    for (const auto type : kBufferTypes) {
+    for (const auto type : buffer_types) {
         holder->raw = nullptr;
         ret = api.buffer_group_get(&holder->raw, type, mpp::MPP_BUFFER_INTERNAL, "ZhulongBufGrp", "info_change");
         if (ret == mpp::MPP_OK && holder->raw) {
@@ -219,12 +228,12 @@ int MppDecodeNode::configure_buffer_group(mpp::MppFrame frame) {
         }
     }
     if (ret != mpp::MPP_OK || !holder->raw) {
-        ZL_LOGE(stream_id_, kLogModule, "mpp_buffer_group_get_failed ret=%d", ret);
+        ZL_LOGE(stream_id_, log_module, "mpp_buffer_group_get_failed ret=%d", ret);
         return decode_backend_failure;
     }
 
     if (api.buffer_group_limit_config && api.buffer_group_limit_config(holder->raw, buf_size, count) != mpp::MPP_OK) {
-        ZL_LOGW(stream_id_, kLogModule, "mpp_buffer_group_limit_failed size=%zu count=%d", buf_size, count);
+        ZL_LOGW(stream_id_, log_module, "mpp_buffer_group_limit_failed size=%zu count=%d", buf_size, count);
     }
 
     // 绑定外部缓冲池并通知解除挂起
@@ -235,7 +244,7 @@ int MppDecodeNode::configure_buffer_group(mpp::MppFrame frame) {
         return decode_backend_failure;
     }
 
-    ZL_LOGI(stream_id_, kLogModule, "mpp_info_change width=%u height=%u stride=%u vstride=%u buffers=%d", width,
+    ZL_LOGI(stream_id_, log_module, "mpp_info_change width=%u height=%u stride=%u vstride=%u buffers=%d", width,
             height, hor_stride, ver_stride, count);
 
     // 旧组不在此销毁：仍持有它的在途帧会在释放时把引用计数降为 0
@@ -257,7 +266,7 @@ int MppDecodeNode::send_packet(const uint8_t *data, size_t size, int64_t pts, in
         }
         mpp::MppPacket packet = nullptr;
         if (!api.packet_init || api.packet_init(&packet, nullptr, 0) != mpp::MPP_OK || !packet) {
-            ZL_LOGE(stream_id_, kLogModule, "mpp_eos_packet_init_failed");
+            ZL_LOGE(stream_id_, log_module, "mpp_eos_packet_init_failed");
             return decode_backend_failure;
         }
         if (api.packet_set_eos) {
@@ -270,7 +279,7 @@ int MppDecodeNode::send_packet(const uint8_t *data, size_t size, int64_t pts, in
             return decode_again;
         }
         if (put_ret != mpp::MPP_OK) {
-            ZL_LOGW(stream_id_, kLogModule, "mpp_eos_put_failed ret=%d", put_ret);
+            ZL_LOGW(stream_id_, log_module, "mpp_eos_put_failed ret=%d", put_ret);
             return decode_backend_failure;
         }
         eos_sent_ = true;
@@ -281,7 +290,7 @@ int MppDecodeNode::send_packet(const uint8_t *data, size_t size, int64_t pts, in
     mpp::MppPacket packet = nullptr;
     // 借用入参缓冲区构造 MppPacket：仅在 decode_put_packet 同步调用期间有效，返回后立即 deinit
     if (api.packet_init(&packet, const_cast<uint8_t *>(data), size) != mpp::MPP_OK || !packet) {
-        ZL_LOGE(stream_id_, kLogModule, "mpp_packet_init_failed size=%zu", size);
+        ZL_LOGE(stream_id_, log_module, "mpp_packet_init_failed size=%zu", size);
         return decode_backend_failure;
     }
     if (api.packet_set_pts) {
@@ -298,7 +307,7 @@ int MppDecodeNode::send_packet(const uint8_t *data, size_t size, int64_t pts, in
     if (put_ret == mpp::MPP_ERR_BUFFER_FULL || put_ret == mpp::MPP_ERR_TIMEOUT) {
         return decode_again;
     }
-    ZL_LOGW(stream_id_, kLogModule, "mpp_put_packet_failed ret=%d", put_ret);
+    ZL_LOGW(stream_id_, log_module, "mpp_put_packet_failed ret=%d", put_ret);
     return decode_backend_failure;
 }
 
@@ -321,7 +330,7 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
             if (eos_sent_) {
                 return decode_again;
             }
-            ZL_LOGW(stream_id_, kLogModule, "mpp_decode_get_frame_failed ret=%d", ret);
+            ZL_LOGW(stream_id_, log_module, "mpp_decode_get_frame_failed ret=%d", ret);
             return decode_backend_failure;
         }
 
@@ -359,7 +368,7 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
         if (format != mpp::MPP_FMT_YUV420SP) {
             if (!unsupported_format_logged_) {
                 unsupported_format_logged_ = true;
-                ZL_LOGW(stream_id_, kLogModule, "mpp_unsupported_frame_format fmt=%u",
+                ZL_LOGW(stream_id_, log_module, "mpp_unsupported_frame_format fmt=%u",
                         static_cast<unsigned>(format));
             }
             continue;
@@ -373,14 +382,14 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
 
         const int raw_fd = loader_.fd(mpp_buf);
         if (raw_fd < 0) {
-            ZL_LOGE(stream_id_, kLogModule, "mpp_buffer_get_fd_failed");
+            ZL_LOGE(stream_id_, log_module, "mpp_buffer_get_fd_failed");
             return decode_backend_failure;
         }
 
         // dup 独立文件描述符以与 HardwareFrame 生命周期解耦
         const int owned_fd = ::dup(raw_fd);
         if (owned_fd < 0) {
-            ZL_LOGE(stream_id_, kLogModule, "mpp_dma_fd_dup_failed errno=%d", errno);
+            ZL_LOGE(stream_id_, log_module, "mpp_dma_fd_dup_failed errno=%d", errno);
             return decode_backend_failure;
         }
 
@@ -388,7 +397,7 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
         //    否则 release_fn 中的 mpp_buffer_put 会造成净减引用并提前回收显存
         if (loader_.inc_ref(mpp_buf) != mpp::MPP_OK) {
             ::close(owned_fd);
-            ZL_LOGE(stream_id_, kLogModule, "mpp_buffer_inc_ref_failed");
+            ZL_LOGE(stream_id_, log_module, "mpp_buffer_inc_ref_failed");
             return decode_backend_failure;
         }
 
@@ -450,7 +459,7 @@ void MppDecodeNode::flush() {
         return;
     }
     if (mpi_->reset(ctx_) != mpp::MPP_OK) {
-        ZL_LOGW(stream_id_, kLogModule, "mpp_reset_failed");
+        ZL_LOGW(stream_id_, log_module, "mpp_reset_failed");
     }
     eos_sent_ = false;
 }

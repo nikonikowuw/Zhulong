@@ -20,9 +20,9 @@ namespace zhulong {
 
 /** @brief 解码器后端类型 */
 enum class DecoderBackend {
-    AUTO = 0,       /**< 自动选择后端 (优先硬件加速，无硬件时回退软解) */
-    FFMPEG_SW = 1,  /**< 静态 FFmpeg 软解 (通用 CPU 保底) */
-    MPP_HW = 2,     /**< Rockchip MPP 硬件解码器 (RK3568/RK3588 专用) */
+    automatic = 0, /**< 自动选择后端 (优先硬件加速，无硬件时回退软解) */
+    ffmpeg_sw = 1, /**< 静态 FFmpeg 软解 (通用 CPU 保底) */
+    mpp_hw = 2,    /**< Rockchip MPP 硬件解码器 (RK3568/RK3588 专用) */
 };
 
 /**
@@ -87,6 +87,9 @@ public:
      *   - 返回 decode_ok (0) 表示成功获取一帧，调用方应在循环中继续调用直至返回 decode_again，
      *     彻底排空当前就绪的所有帧；
      *   - 返回 decode_again (AVERROR(EAGAIN)) 表示当前输入已被消化但暂无新帧产出，需继续喂入下一个数据包；
+     *   - ⚠️ 本接口**不区分**「暂无输出」(EAGAIN) 与「drain 已排空」(AVERROR_EOF)，两者都返回
+     *     decode_again：drain（`send_packet(nullptr, 0, ...)`）之后若要继续送包，调用方**必须**
+     *     先 flush() 复位 draining 状态，否则底层 send_packet 会恒返 AVERROR_EOF；
      *   - 返回其他 <0 表示不可恢复的解码错误。
      *
      * @param[out] out_frame 输出装配完成的硬件帧对象指针 (包含专属 release_fn)；失败时被置空
@@ -117,7 +120,7 @@ public:
      */
     static Ptr create(int32_t codec, const uint8_t *extradata = nullptr, size_t extradata_size = 0,
                       int32_t time_base_num = 1, int32_t time_base_den = 90000,
-                      DecoderBackend backend = DecoderBackend::AUTO, uint64_t stream_id = 0);
+                      DecoderBackend backend = DecoderBackend::automatic, uint64_t stream_id = 0);
 
 protected:
     /** @brief 仅允许派生类构造（拷贝/移动已显式删除） */

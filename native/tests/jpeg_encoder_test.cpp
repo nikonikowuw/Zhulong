@@ -201,7 +201,7 @@ void test_backend_selection() {
     const bool explicit_cpu = raw != nullptr && std::strcmp(raw, "cpu") == 0;
     if (explicit_cpu) {
         // 显式关闭硬件时，硬件绝不能被静默打开（CI / 宿主机的确定性保障）
-        CHECK(backend.kind() == JpegBackendKind::kSoftware);
+        CHECK(backend.kind() == JpegBackendKind::software);
         CHECK(!backend.hardware());
     }
     std::cout << "  backend = " << JpegBackend::kind_name(backend.kind())
@@ -286,7 +286,7 @@ void test_hardware_routing() {
     CHECK(!backend.prefer_hardware(66, 66));    // 人脸脸框量级
     CHECK(!backend.prefer_hardware(0, 100));
     CHECK(!backend.prefer_hardware(100, -1));
-    std::cout << "  routing: hw>& " << JpegBackend::kMinPixelsForHardware << " px\n";
+    std::cout << "  routing: hw>& " << JpegBackend::min_pixels_for_hardware << " px\n";
 }
 
 /**

@@ -69,7 +69,6 @@ struct Nv12Source {
         v.planes[1] = storage.data() + static_cast<size_t>(stride) * vstride;
         v.strides[0] = stride;
         v.strides[1] = stride;
-        v.vstride = vstride;
         v.width = kWidth;
         v.height = kHeight;
         v.format = zhulong::FRAME_FORMAT_NV12;
@@ -105,7 +104,6 @@ struct Yuv420pSource {
         frame.strides[0] = kWidth;
         frame.strides[1] = kWidth / 2;
         frame.strides[2] = kWidth / 2;
-        frame.vstride = kHeight;
         frame.width = kWidth;
         frame.height = kHeight;
         frame.format = zhulong::FRAME_FORMAT_YUV420P;
