@@ -14,6 +14,15 @@ Runner MSG_RESULT
 - 区域过滤由 `internal/region.Config.Filter` 实现，并在 `StreamHub` 向持久化 consumer 和 EventHub fan-out 前执行。ROI 是 allowlist（未配置时全放行），MASK 命中优先拒绝；检测框、人体框、车辆框分别取底部中心判定，分类没有框、不参与过滤，人体内人脸和车辆内车牌不单独判定。
 - AI 流按相机共享，Hub 不得猜测结果属于哪个算法。Runner 应在结果载荷中提供 `algorithm_id`；缺失时保留为未知。
 - `record.Service` 负责把推理结果映射为识别、告警和目标抓拍记录，并按 cooldown 去重。相机流管理与区域策略属于 camera/region 域；文件清理属于 storage 域。
+- **目标跟踪与身份去重契约**：
+  - `track_id` 归**宿主独占**：由宿主关联器在 `(camera_id, algorithm_id, kind)` 命名空间内单点生成，语义为「仅进程运行期内可比、进程内单调自增」；算法包内部的跟踪 ID 不得经 IPC 载荷出口。载荷里的 `track_id` 仅用于 `IsFaceCloseup()` 退化判据，不进库、不参与去重键、不回写进模型载荷或事件载荷。
+  - **去重键格式**：统一使用 `trk:` 前缀区分身份键与回落键：
+    - 识别：`rec:{camera}:trk:{id}`；有已登记人员时与 `rec:{camera}:person:{person_id}` 组成两级抑制，必须通过原子 `AllowAll` 判定。
+    - 人体/近景抓拍：`cap:{camera}:person:trk:{id}`；无身份回落时近景用 `face:box`、人体用 `person:box`。
+    - 车辆抓拍：`cap:{camera}:vehicle:trk:{id}`；有车牌时与 `cap:{camera}:vehicle:plate:{plate_no}` 组成两级抑制，必须通过原子 `AllowAll` 判定。
+    - 通用检测：`cap:{camera}:{label}:trk:{id}`；无身份回落保持 `cap:{camera}:{label}`。
+    - 告警：保持动作语义粗键 `alarm:{camera}:{label}`。
+  - 匹配算法采用 IoU (≥ 0.2) 主判据 + 中心距与高度比兜底；`lastSeen` 命中更新强制单调防倒退；TTL 动态绑定 2 × CooldownWindow。
 
 参考实现与测试：`internal/camera/stream_hub.go`、`internal/region/filter.go`、`internal/camera/stream_hub_test.go`。
 
@@ -30,7 +39,7 @@ Runner MSG_RESULT
 ## 3. 证据图生命周期
 
 - 抓拍是记录的补充，不是记录写入的前置条件；图像生成和写盘在 `SnapshotStore` 后台 worker 执行，不阻塞推理结果消费路径。
-- 队列有界（当前容量 32），提交非阻塞；依赖缺失、队列满或存储写门关闭时允许丢弃抓拍任务。已接收任务在 `Stop` 时排空。需要观测丢弃时读取 `SnapshotStore.Dropped()`。
+- 队列有界（当前容量 32），提交非阻塞；依赖缺失、队列满或存储写门关闭时允许丢弃抓拍任务。已接收任务在 `Stop` 时排空。需要观测丢弃时读取 `SnapshotStore.Dropped()`。感知层不设单帧人工截断（杜绝冷却饥饿），多目标瞬时并发直接由队列容量与 `Dropped()` 观测承接。
 - 每个任务执行时重新读取媒体根目录，并检查 storage 写门；路径存为媒体根内的相对路径（`snapshots/...`），媒体读取仍走 `internal/mediafile`，不能自行拼接绝对路径对外暴露。
 - C ABI 抓拍支持透传目标帧 `PTS` 时间戳，Native 侧历史环形缓存（4 帧容量）优先精确匹配目标帧；若历史已淘汰或未指定有效 PTS，退回读取当前最新帧。图像生成和写盘在 `SnapshotStore` 后台 worker 执行，不阻塞推理结果消费路径。
 - 数据库记录先写入，之后才提交抓拍任务。因此路径字段可能在图像生成前已写入，非空路径不保证文件已存在。任务队列拒绝时，调用方会尝试清空对应记录路径；后台遇到写门关闭、媒体根解析失败、抓拍失败或零张图片写入时，也会尝试清空该记录的抓拍路径。**这些清理是尽力而为，可能异步失败；若一个任务部分写入成功，当前实现不会逐输出项清理未写入路径。**依赖缺失导致 `SnapshotStore` 不可用时，服务也可能无法执行队列后的路径清理。调用方必须容忍媒体读取返回缺失。

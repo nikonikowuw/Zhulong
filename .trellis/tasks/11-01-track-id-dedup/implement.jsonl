@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/record-guidelines.md", "reason": "记录域去重、证据图生命周期、批量写入失败语义与保留清理契约"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Go 后端开发前检查清单与质量验证命令"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试门禁：-race、表驱动、审计接线与竞态约定"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流排查：身份 ID 作用域与副作用边界"}

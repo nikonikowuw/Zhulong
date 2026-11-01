@@ -31,19 +31,13 @@ func NewCooldownManager(cooldown time.Duration) *CooldownManager {
 // If the key was seen within the cooldown window, it returns false.
 // Otherwise, it records the event time and returns true.
 func (cm *CooldownManager) Allow(key string, now time.Time) bool {
+	if key == "" {
+		return true
+	}
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// Lazy clean if map grows large (> 5000 items) with a 30s throttle to avoid lock contention
-	if len(cm.records) > 5000 && (cm.lastCleaned.IsZero() || now.Sub(cm.lastCleaned) >= 30*time.Second) {
-		cutoff := now.Add(-2 * cm.cooldown)
-		for k, t := range cm.records {
-			if t.Before(cutoff) {
-				delete(cm.records, k)
-			}
-		}
-		cm.lastCleaned = now
-	}
+	cm.lazyCleanLocked(now)
 
 	lastTime, exists := cm.records[key]
 	if exists {
@@ -55,6 +49,73 @@ func (cm *CooldownManager) Allow(key string, now time.Time) bool {
 
 	cm.records[key] = now
 	return true
+}
+
+// AllowAll checks if all given keys are allowed to trigger a persistent event.
+// If ANY key was seen within the cooldown window, it atomically rejects and
+// returns false without updating any timestamps.
+// Otherwise, it records now for all keys and returns true.
+func (cm *CooldownManager) AllowAll(keys []string, now time.Time) bool {
+	if len(keys) == 0 {
+		return true
+	}
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	cm.lazyCleanLocked(now)
+
+	// Filter and deduplicate valid keys
+	validKeys := make([]string, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		if k == "" {
+			continue
+		}
+		if _, ok := seen[k]; !ok {
+			seen[k] = struct{}{}
+			validKeys = append(validKeys, k)
+		}
+	}
+
+	if len(validKeys) == 0 {
+		return true
+	}
+
+	// Atomic check: any key in cooldown causes rejection
+	for _, k := range validKeys {
+		if lastTime, exists := cm.records[k]; exists {
+			diff := now.Sub(lastTime)
+			if diff >= 0 && diff < cm.cooldown {
+				return false
+			}
+		}
+	}
+
+	// Atomic update: only when all keys passed
+	for _, k := range validKeys {
+		cm.records[k] = now
+	}
+	return true
+}
+
+// Window returns the current cooldown duration in a thread-safe manner.
+func (cm *CooldownManager) Window() time.Duration {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return cm.cooldown
+}
+
+func (cm *CooldownManager) lazyCleanLocked(now time.Time) {
+	// Lazy clean if map grows large (> 5000 items) with a 30s throttle to avoid lock contention
+	if len(cm.records) > 5000 && (cm.lastCleaned.IsZero() || now.Sub(cm.lastCleaned) >= 30*time.Second) {
+		cutoff := now.Add(-2 * cm.cooldown)
+		for k, t := range cm.records {
+			if t.Before(cutoff) {
+				delete(cm.records, k)
+			}
+		}
+		cm.lastCleaned = now
+	}
 }
 
 // SetCooldown updates the cooldown window in a thread-safe manner.

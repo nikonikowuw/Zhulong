@@ -73,6 +73,42 @@ func TestCooldownManager_SetCooldownAndReset(t *testing.T) {
 	}
 }
 
+func TestCooldownManager_AllowAll_Atomicity(t *testing.T) {
+	cm := record.NewCooldownManager(3 * time.Second)
+	base := time.Date(2026, 10, 17, 10, 0, 0, 0, time.UTC)
+
+	// 1. Initial AllowAll on two keys should succeed
+	if !cm.AllowAll([]string{"keyA", "keyB"}, base) {
+		t.Fatalf("expected initial AllowAll to succeed")
+	}
+
+	// 2. Partial collision: keyA is in cooldown (1s later), keyC is brand new.
+	// AllowAll MUST return false and MUST NOT record keyC!
+	tPartial := base.Add(1 * time.Second)
+	if cm.AllowAll([]string{"keyA", "keyC"}, tPartial) {
+		t.Fatalf("expected AllowAll to fail when keyA is in cooldown")
+	}
+
+	// 3. Verify keyC was NOT recorded by testing it individually at tPartial.
+	// Since keyC was never recorded, Allow("keyC", tPartial) should succeed!
+	if !cm.Allow("keyC", tPartial) {
+		t.Fatalf("expected keyC to not have been consumed by failed AllowAll")
+	}
+
+	// 4. Empty or invalid keys should succeed
+	if !cm.AllowAll(nil, base) {
+		t.Fatalf("expected nil keys to succeed")
+	}
+	if !cm.AllowAll([]string{"", ""}, base) {
+		t.Fatalf("expected empty string keys to succeed")
+	}
+
+	// 5. Window method
+	if cm.Window() != 3*time.Second {
+		t.Fatalf("expected Window() 3s, got %v", cm.Window())
+	}
+}
+
 func TestCooldownManager_ConcurrentAccess(t *testing.T) {
 	cm := record.NewCooldownManager(100 * time.Millisecond)
 	var wg sync.WaitGroup

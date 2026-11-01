@@ -69,8 +69,9 @@ func TestProcessVehicleStructureCapture(t *testing.T) {
 	if cap.TargetType != "vehicle" {
 		t.Errorf("expected TargetType 'vehicle', got %q", cap.TargetType)
 	}
-	if cap.TrackID != 108 {
-		t.Errorf("expected TrackID 108, got %d", cap.TrackID)
+	// D3 契约：track_id 由宿主独占，载荷 108 不进库，落库为宿主有效身份 ID
+	if cap.TrackID <= 0 {
+		t.Errorf("expected positive TrackID from host tracker, got %d", cap.TrackID)
 	}
 	if cap.Score != 0.94 {
 		t.Errorf("expected Score 0.94, got %f", cap.Score)

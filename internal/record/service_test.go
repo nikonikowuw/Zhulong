@@ -100,7 +100,8 @@ func TestServiceProcessPersonStructureAndCooldown(t *testing.T) {
 	if err != nil || totalCaps != 1 || len(caps) != 1 {
 		t.Fatalf("expected 1 capture, got %d, err=%v", totalCaps, err)
 	}
-	if caps[0].TrackID != 1001 || !caps[0].CapturedAt.Equal(captureTime) {
+	// D3 契约：track_id 由宿主关联器生产并独占，载荷 1001 不进库，落库为宿主正数身份 ID
+	if caps[0].TrackID <= 0 || !caps[0].CapturedAt.Equal(captureTime) {
 		t.Errorf("unexpected capture: %+v", caps[0])
 	}
 

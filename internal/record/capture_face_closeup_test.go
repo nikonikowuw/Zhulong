@@ -56,7 +56,7 @@ func TestProcessFaceCloseupCapture(t *testing.T) {
 		},
 	}
 
-	// 让两次抓拍都落在不同 cooldown key 上：退化项 TrackID=0，真人体项 TrackID=42
+	// D3 契约：宿主关联器为两目标分配独立身份（两项均有独立有效 TrackID，载荷 42 不进库），退化项根据 IsFaceCloseup() 识别为 face
 	if err := svc.ProcessInferenceResult(ctx, res); err != nil {
 		t.Fatalf("ProcessInferenceResult failed: %v", err)
 	}
@@ -77,13 +77,19 @@ func TestProcessFaceCloseupCapture(t *testing.T) {
 	if closeup.Score != 0.838 {
 		t.Errorf("退化项 Score 应沿用人脸质量分 0.838，实际 %f", closeup.Score)
 	}
+	if closeup.TrackID <= 0 {
+		t.Errorf("退化项应由宿主分配正数 TrackID，实际 %d", closeup.TrackID)
+	}
 
 	realPerson := captures[1]
 	if realPerson.TargetType != "person" {
 		t.Errorf("真人体项应记为 TargetType 'person'，实际 %q", realPerson.TargetType)
 	}
-	if realPerson.TrackID != 42 {
-		t.Errorf("真人体项 TrackID 应为 42，实际 %d", realPerson.TrackID)
+	if realPerson.TrackID <= 0 || realPerson.TrackID == 42 {
+		t.Errorf("真人体项 TrackID 应由宿主分配且不等于载荷值 42，实际 %d", realPerson.TrackID)
+	}
+	if realPerson.TrackID == closeup.TrackID {
+		t.Errorf("退化项与真人体项的宿主 TrackID 不应相同，实际 %d", realPerson.TrackID)
 	}
 }
 

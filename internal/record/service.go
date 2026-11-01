@@ -19,6 +19,7 @@ import (
 type Service struct {
 	store      *Store
 	cooldown   *CooldownManager
+	tracker    *targetTracker
 	snapshots  *SnapshotStore
 	algorithms *AlgorithmResolver
 	logger     *zap.Logger
@@ -32,9 +33,18 @@ func NewService(store *Store, logger *zap.Logger) *Service {
 	return &Service{
 		store:      store,
 		cooldown:   NewCooldownManager(DefaultCooldown),
+		tracker:    newTargetTracker(defaultTrackerConfig()),
 		algorithms: NewAlgorithmResolver(store),
 		logger:     logger,
 	}
+}
+
+// TrackerStats returns read-only operational metrics of the target identity tracker.
+func (s *Service) TrackerStats() TrackerStats {
+	if s.tracker == nil {
+		return TrackerStats{}
+	}
+	return s.tracker.Stats()
 }
 
 // SetCooldownWindow sets the deduplication window for tracking cooldowns.
@@ -95,6 +105,15 @@ func (s *Service) resolveAlgorithm(ctx context.Context, algorithmID string) Algo
 	return resolved[algorithmID]
 }
 
+// resolveIdentities maps target bounding boxes to stable host-exclusive tracking identities.
+func (s *Service) resolveIdentities(b bucketKey, obs []observation, at time.Time) []int64 {
+	if s.tracker == nil {
+		return make([]int64, len(obs))
+	}
+	ttl := 2 * s.cooldown.Window()
+	return s.tracker.resolveFrame(b, obs, at, ttl)
+}
+
 func (s *Service) processPersonStructure(ctx context.Context, res aitypes.InferenceResult, algo AlgorithmSnapshot, capturedAt time.Time, dateStr string) error {
 	var recognitions []*Recognition
 	var captures []*Capture
@@ -103,12 +122,32 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 
 	galleryFaces := s.resolveGalleryFaces(ctx, collectMatchedFaceIDs(res.Persons))
 
-	for _, p := range res.Persons {
+	// Observation observations for host tracker
+	obs := make([]observation, len(res.Persons))
+	for i, p := range res.Persons {
+		obs[i] = observation{box: p.BodyBox, score: p.BodyScore}
+		if p.TrackID != 0 {
+			s.logger.Debug("payload track_id ignored; host maintains exclusive tracking identities",
+				zap.String("camera_id", res.CameraID),
+				zap.Int64("payload_track_id", p.TrackID))
+		}
+	}
+
+	b := bucketKey{camera: res.CameraID, algorithm: res.AlgorithmID, kind: "person"}
+	identities := s.resolveIdentities(b, obs, capturedAt)
+
+	for i, p := range res.Persons {
+		trackID := identities[i]
+
 		// 1. Process Face Recognition if faces exist
 		for _, face := range p.Faces {
-			recKey := recognitionCooldownKey(res.CameraID, p.TrackID, face)
-			if s.cooldown.Allow(recKey, capturedAt) {
-				rec, job := buildRecognitionRecordAndJob(res, p, face, algo, galleryFaces[face.MatchedFaceID], dateStr, capturedAt)
+			identityKey := recognitionCooldownKey(res.CameraID, trackID, face)
+			keys := []string{identityKey}
+			if face.PersonID != "" {
+				keys = append(keys, fmt.Sprintf("rec:%s:person:%s", res.CameraID, face.PersonID))
+			}
+			if s.cooldown.AllowAll(keys, capturedAt) {
+				rec, job := buildRecognitionRecordAndJob(res, p, trackID, face, algo, galleryFaces[face.MatchedFaceID], dateStr, capturedAt)
 				recognitions = append(recognitions, rec)
 				recognitionSnapshots = append(recognitionSnapshots, job)
 			}
@@ -116,9 +155,9 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 
 		// 2. Process Capture for Person or Face Closeup
 		isCloseup := p.IsFaceCloseup()
-		capKey := personCaptureCooldownKey(res.CameraID, p.TrackID, isCloseup, p.BodyBox)
+		capKey := personCaptureCooldownKey(res.CameraID, trackID, isCloseup, p.BodyBox)
 		if s.cooldown.Allow(capKey, capturedAt) {
-			cap, job := buildPersonCaptureRecordAndJob(res, p, isCloseup, algo, dateStr, capturedAt)
+			cap, job := buildPersonCaptureRecordAndJob(res, p, trackID, isCloseup, algo, dateStr, capturedAt)
 			captures = append(captures, cap)
 			captureSnapshots = append(captureSnapshots, job)
 		}
@@ -145,6 +184,7 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 func buildRecognitionRecordAndJob(
 	res aitypes.InferenceResult,
 	p aitypes.PersonItem,
+	trackID int64,
 	face aitypes.FaceSubItem,
 	algo AlgorithmSnapshot,
 	ref GalleryFaceRef,
@@ -172,7 +212,7 @@ func buildRecognitionRecordAndJob(
 		AlgorithmName:    algo.Name,
 		AlgorithmVersion: algo.Version,
 		PTS:              res.PTS,
-		TrackID:          p.TrackID,
+		TrackID:          trackID,
 		PersonID:         optionalString(ref.PersonRowID),
 		PersonExternalID: ref.PersonExternalID,
 		PersonName:       personName,
@@ -210,6 +250,7 @@ func buildRecognitionRecordAndJob(
 func buildPersonCaptureRecordAndJob(
 	res aitypes.InferenceResult,
 	p aitypes.PersonItem,
+	trackID int64,
 	isCloseup bool,
 	algo AlgorithmSnapshot,
 	dateStr string,
@@ -231,7 +272,7 @@ func buildPersonCaptureRecordAndJob(
 		AlgorithmName:    algo.Name,
 		AlgorithmVersion: algo.Version,
 		TargetType:       targetType,
-		TrackID:          p.TrackID,
+		TrackID:          trackID,
 		Score:            p.BodyScore,
 		BoxJSON:          marshalBox(p.BodyBox),
 		CropPath:         cropPath,
@@ -263,14 +304,32 @@ func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.Infer
 	var captures []*Capture
 	var snapshots []snapshotJob
 
-	for _, v := range res.Vehicles {
+	obs := make([]observation, len(res.Vehicles))
+	for i, v := range res.Vehicles {
+		obs[i] = observation{box: v.VehicleBox, score: v.VehicleScore}
+		if v.TrackID != 0 {
+			s.logger.Debug("payload track_id ignored; host maintains exclusive tracking identities",
+				zap.String("camera_id", res.CameraID),
+				zap.Int64("payload_track_id", v.TrackID))
+		}
+	}
+
+	b := bucketKey{camera: res.CameraID, algorithm: res.AlgorithmID, kind: "vehicle"}
+	identities := s.resolveIdentities(b, obs, capturedAt)
+
+	for i, v := range res.Vehicles {
+		trackID := identities[i]
 		firstPlateNo := ""
 		if len(v.Plates) > 0 && v.Plates[0].PlateNumber != "" {
 			firstPlateNo = v.Plates[0].PlateNumber
 		}
-		capKey := vehicleCaptureCooldownKey(res.CameraID, v.TrackID, firstPlateNo, v.VehicleBox)
+		identityKey := vehicleCaptureCooldownKey(res.CameraID, trackID, firstPlateNo, v.VehicleBox)
+		keys := []string{identityKey}
+		if firstPlateNo != "" {
+			keys = append(keys, fmt.Sprintf("cap:%s:vehicle:plate:%s", res.CameraID, firstPlateNo))
+		}
 
-		if s.cooldown.Allow(capKey, capturedAt) {
+		if s.cooldown.AllowAll(keys, capturedAt) {
 			capID := idutil.New()
 
 			attrs := make(map[string]any)
@@ -306,7 +365,7 @@ func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.Infer
 				AlgorithmName:    algo.Name,
 				AlgorithmVersion: algo.Version,
 				TargetType:       "vehicle",
-				TrackID:          v.TrackID,
+				TrackID:          trackID,
 				Score:            v.VehicleScore,
 				BoxJSON:          marshalBox(v.VehicleBox),
 				CropPath:         cropPath,
@@ -351,10 +410,9 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 	var alarmSnapshots []snapshotJob
 	var captureSnapshots []snapshotJob
 
+	// 1. Process alarms directly (scene-wide or target alarms)
 	for _, d := range res.Detections {
-		// Detect whether this is an alarm category (e.g. helmet, smoke, fire, intrusion, etc.)
-		isAlarm := isAlarmLabel(d.Label)
-		if isAlarm {
+		if isAlarmLabel(d.Label) {
 			alarmKey := fmt.Sprintf("alarm:%s:%s", res.CameraID, d.Label)
 			if s.cooldown.Allow(alarmKey, capturedAt) {
 				alarmID := idutil.New()
@@ -402,12 +460,32 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 					outputs:     outs,
 				})
 			}
-		} else {
-			// Regular object capture
-			capKey := fmt.Sprintf("cap:%s:%s", res.CameraID, d.Label)
+		}
+	}
+
+	// 2. Process regular object captures grouped by label with stable identity tracking
+	labelGroups := make(map[string][]aitypes.DetectionItem)
+	for _, d := range res.Detections {
+		if !isAlarmLabel(d.Label) {
+			labelGroups[d.Label] = append(labelGroups[d.Label], d)
+		}
+	}
+
+	for label, items := range labelGroups {
+		obs := make([]observation, len(items))
+		for i, it := range items {
+			obs[i] = observation{box: it.Box, score: it.Score}
+		}
+
+		b := bucketKey{camera: res.CameraID, algorithm: res.AlgorithmID, kind: "detection:" + label}
+		identities := s.resolveIdentities(b, obs, capturedAt)
+
+		for i, it := range items {
+			trackID := identities[i]
+			capKey := fmt.Sprintf("cap:%s:%s:trk:%d", res.CameraID, label, trackID)
 			if s.cooldown.Allow(capKey, capturedAt) {
 				capID := idutil.New()
-				attrsJSON := marshalMapOrDefault(d.Attributes)
+				attrsJSON := marshalMapOrDefault(it.Attributes)
 
 				fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, capID)
 				cropPath := fmt.Sprintf("snapshots/%s/%s/%s_crop.jpg", res.CameraID, dateStr, capID)
@@ -418,10 +496,10 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 					AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
 					AlgorithmName:    algo.Name,
 					AlgorithmVersion: algo.Version,
-					TargetType:       d.Label,
-					TrackID:          0,
-					Score:            d.Score,
-					BoxJSON:          marshalBox(d.Box),
+					TargetType:       label,
+					TrackID:          trackID,
+					Score:            it.Score,
+					BoxJSON:          marshalBox(it.Box),
 					CropPath:         cropPath,
 					ImagePath:        fullPath,
 					AttributesJSON:   attrsJSON,
@@ -437,7 +515,7 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 					targetTable: tableCaptures,
 					targetID:    capID,
 					boxes: []engine.SnapshotBox{
-						{d.Box[0], d.Box[1], d.Box[2], d.Box[3]},
+						{it.Box[0], it.Box[1], it.Box[2], it.Box[3]},
 					},
 					outputs: []snapshotOutput{
 						{boxIndex: -1, relPath: fullPath},
@@ -645,30 +723,30 @@ func isSceneWideAlarm(label string) bool {
 
 func recognitionCooldownKey(cameraID string, trackID int64, face aitypes.FaceSubItem) string {
 	if trackID > 0 {
-		return fmt.Sprintf("rec:%s:%d", cameraID, trackID)
+		return fmt.Sprintf("rec:%s:trk:%d", cameraID, trackID)
 	}
 	if face.PersonID != "" {
-		return fmt.Sprintf("rec:%s:%s", cameraID, face.PersonID)
+		return fmt.Sprintf("rec:%s:person:%s", cameraID, face.PersonID)
 	}
 	return fmt.Sprintf("rec:%s:unmatched:%.3f:%.3f", cameraID, face.Box[0], face.Box[1])
 }
 
 func personCaptureCooldownKey(cameraID string, trackID int64, isCloseup bool, box [4]float64) string {
+	if trackID > 0 {
+		return fmt.Sprintf("cap:%s:person:trk:%d", cameraID, trackID)
+	}
 	if isCloseup {
 		return fmt.Sprintf("cap:%s:face:box:%.3f:%.3f", cameraID, box[0], box[1])
-	}
-	if trackID > 0 {
-		return fmt.Sprintf("cap:%s:person:%d", cameraID, trackID)
 	}
 	return fmt.Sprintf("cap:%s:person:box:%.3f:%.3f", cameraID, box[0], box[1])
 }
 
 func vehicleCaptureCooldownKey(cameraID string, trackID int64, firstPlateNo string, box [4]float64) string {
+	if trackID > 0 {
+		return fmt.Sprintf("cap:%s:vehicle:trk:%d", cameraID, trackID)
+	}
 	if firstPlateNo != "" {
 		return fmt.Sprintf("cap:%s:vehicle:plate:%s", cameraID, firstPlateNo)
-	}
-	if trackID > 0 {
-		return fmt.Sprintf("cap:%s:vehicle:track:%d", cameraID, trackID)
 	}
 	return fmt.Sprintf("cap:%s:vehicle:box:%.3f:%.3f", cameraID, box[0], box[1])
 }
