@@ -43,9 +43,13 @@ func zhulongGoPacketCallback(token C.uintptr_t, packet *C.Zhulong_packet_view) {
 
 	// 回调解引用链（含 cgo.Handle.Value）全部发生在 defer 之后，
 	// 保证任何 panic 都在 ABI 边界内被拦住。
+	//
+	// ⚠️ sub 为 nil 时 recover 分支必须直接放弃：句柄已删除会让
+	// cgo.Handle.Value 自己 panic，此时再调 nil 接收者的方法就是二次 panic，
+	// 而它发生在 deferred 函数里，会直接冲出 ABI 边界。
 	var sub *Subscription
 	defer func() {
-		if recovered := recover(); recovered != nil {
+		if recovered := recover(); recovered != nil && sub != nil {
 			sub.reportCallbackPanic(recovered)
 		}
 	}()
@@ -60,14 +64,20 @@ func zhulongGoPacketCallback(token C.uintptr_t, packet *C.Zhulong_packet_view) {
 }
 
 //export zhulongGoAIResultCallback
-func zhulongGoAIResultCallback(token C.uintptr_t, stream C.Zhulong_stream_id, jsonPayload *C.char, payloadLen C.size_t) {
+func zhulongGoAIResultCallback(
+	token C.uintptr_t,
+	stream C.Zhulong_stream_id,
+	jsonPayload *C.char,
+	payloadLen C.size_t,
+) {
 	if token == 0 || jsonPayload == nil || payloadLen == 0 {
 		return
 	}
 
+	// 同 zhulongGoPacketCallback：nil 接收者上的二次 panic 绝不允许出口。
 	var sub *AIResultSubscription
 	defer func() {
-		if recovered := recover(); recovered != nil {
+		if recovered := recover(); recovered != nil && sub != nil {
 			sub.reportCallbackPanic(recovered)
 		}
 	}()

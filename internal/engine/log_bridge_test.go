@@ -70,20 +70,52 @@ func TestNativeLogTrampolineCopiesAndValidatesBounds(t *testing.T) {
 	handle := cgo.NewHandle(&nativeLogBridge{queue: queue})
 	defer handle.Delete()
 
-	invokeNativeLogCallbackForTest(uintptr(handle), 1, 42, []byte("unit.module"), false, []byte("copied text"), false, 11)
-	invokeNativeLogCallbackForTest(uintptr(handle), 1, 1, nil, false, nil, false, 0) // empty module is invalid
-	invokeNativeLogCallbackForTest(uintptr(handle), 1, 1, []byte(strings.Repeat("m", 129)), false, nil, false, 0)
-	invokeNativeLogCallbackForTest(uintptr(handle), 1, 1, []byte("unit.module"), false, []byte(strings.Repeat("x", 2049)), false, 2049)
-	invokeNativeLogCallbackForTest(uintptr(handle), 1, 1, nil, true, nil, false, 0)
-	invokeNativeLogCallbackForTest(uintptr(handle), 1, 1, []byte("unit.module"), false, []byte("x"), true, 1)
-	invokeNativeLogCallbackForTest(uintptr(handle), 1, 1, []byte("unit.module"), false, []byte{0xff}, false, 1)
-
 	module128 := strings.Repeat("m", 128)
 	text2048 := strings.Repeat("x", 2048)
-	invokeNativeLogCallbackForTest(uintptr(handle), 3, 99, []byte(module128), false, []byte(text2048), false, 2048)
-	invokeNativeLogCallbackForTest(uintptr(handle), 1, 100, []byte("unit.module"), false, nil, false, 0)
-	invokeNativeLogCallbackForTest(uintptr(handle), 1, 101, []byte("unit.module"), false, nil, true, 0)
-	invokeNativeLogCallbackForTest(uintptr(handle), 1, 102, []byte("x"), false, []byte("y"), false, 1)
+
+	// 以下 6 条都必须在跨界边界被拦下并计为 drop。
+	invalidCalls := []struct {
+		reason string
+		call   logCallbackCall
+	}{
+		{"empty module", logCallbackCall{}},
+		{"module exceeds maxLogModuleBytes", logCallbackCall{Module: []byte(strings.Repeat("m", 129))}},
+		{
+			"text exceeds maxLogTextBytes",
+			logCallbackCall{Module: []byte("unit.module"), Text: []byte(strings.Repeat("x", 2049)), TextLen: 2049},
+		},
+		{"null module pointer", logCallbackCall{NullModule: true}},
+		{
+			"null text pointer with non-zero length",
+			logCallbackCall{Module: []byte("unit.module"), Text: []byte("x"), NullText: true, TextLen: 1},
+		},
+		{"non utf8 text", logCallbackCall{Module: []byte("unit.module"), Text: []byte{0xff}, TextLen: 1}},
+	}
+	for _, test := range invalidCalls {
+		t.Logf("invalid call: %s", test.reason)
+		call := test.call
+		call.Token = uintptr(handle)
+		if call.Level == 0 {
+			call.Level = 1
+		}
+		if call.StreamID == 0 {
+			call.StreamID = 1
+		}
+		invokeNativeLogCallbackForTest(call)
+	}
+
+	// 以下 5 条应当入队。
+	validCalls := []logCallbackCall{
+		{Level: 1, StreamID: 42, Module: []byte("unit.module"), Text: []byte("copied text"), TextLen: 11},
+		{Level: 3, StreamID: 99, Module: []byte(module128), Text: []byte(text2048), TextLen: 2048},
+		{Level: 1, StreamID: 100, Module: []byte("unit.module")},
+		{Level: 1, StreamID: 101, Module: []byte("unit.module"), NullText: true},
+		{Level: 1, StreamID: 102, Module: []byte("x"), Text: []byte("y"), TextLen: 1},
+	}
+	for _, call := range validCalls {
+		call.Token = uintptr(handle)
+		invokeNativeLogCallbackForTest(call)
+	}
 
 	if got, want := queue.Dropped(), uint64(6); got != want {
 		t.Fatalf("invalid native callback records dropped = %d, want %d", got, want)

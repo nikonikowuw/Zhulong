@@ -9,6 +9,7 @@ import "C"
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -126,6 +127,9 @@ func (s *Stream) Subscribe(ctx context.Context, options SubscriptionOptions) (*S
 		cancelControl: cancelCtrl,
 	}
 
+	// 此处持有 s.mu 做一次 CGO 调用，与 Engine 的「mu 下不做 CGO」不矛盾：
+	// 原生 subscribe 只是注册回调表项，不阻塞拉流；而「closed 判定 + 单订阅不变量 +
+	// 句柄发布」必须原子，拆锁反而要引入回滚分支。
 	subID, token, err := s.engine.subscribe(s.generation, s.id, s.consumerID, sub)
 	if err != nil {
 		cancelCtrl()
@@ -144,6 +148,9 @@ func (s *Stream) Subscribe(ctx context.Context, options SubscriptionOptions) (*S
 }
 
 // Close 释放消费者对底层物理流的引用。若存在活跃订阅，会先自动安全退订。
+//
+// 退订错误不会被吞掉：它们与 release 错误一起用 errors.Join 返回，由调用方决定是否上报。
+// 停机排空路径（Engine.stopLocked）显式忽略返回值 —— 此时流的终态已由各自的订阅通道保证可见。
 func (s *Stream) Close() error {
 	var closeErr error
 	s.closeOnce.Do(func() {
@@ -155,14 +162,20 @@ func (s *Stream) Close() error {
 		s.activeAISub = nil
 		s.mu.Unlock()
 
+		var unsubscribeErrs []error
 		if sub != nil {
-			_ = sub.Close()
+			if err := sub.Close(); err != nil {
+				unsubscribeErrs = append(unsubscribeErrs, err)
+			}
 		}
 		if aiSub != nil {
-			_ = aiSub.Close()
+			if err := aiSub.Close(); err != nil {
+				unsubscribeErrs = append(unsubscribeErrs, err)
+			}
 		}
 
-		closeErr = s.engine.releaseStream(s.generation, s.id, s.consumerID)
+		releaseErr := s.engine.releaseStream(s.generation, s.id, s.consumerID)
+		closeErr = errors.Join(append(unsubscribeErrs, releaseErr)...)
 		s.engine.onStreamClosed(s)
 	})
 	return closeErr
@@ -186,6 +199,11 @@ func (s *Stream) onAISubClosed(sub *AIResultSubscription) {
 
 // SubscribeAIResults 订阅当前物理流关联的 AI 推理结果事件流。
 func (s *Stream) SubscribeAIResults(ctx context.Context) (*AIResultSubscription, error) {
+	// 与 Subscribe 对齐：先判 ctx 再上锁，避免已取消的 ctx 仍然走完注册流程。
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()

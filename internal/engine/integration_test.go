@@ -160,14 +160,24 @@ func TestBridgeIntegration_SubscriptionAndBackpressure(t *testing.T) {
 	liveURL := baseURL + "/live"
 
 	// 创建正常消费者
-	sFast, err := e.Acquire(ctx, liveURL, Consumer{ID: 2001, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
+	sFast, err := e.Acquire(
+		ctx,
+		liveURL,
+		Consumer{ID: 2001, Kind: ConsumerPreview},
+		StreamOptions{Transport: TransportTCP},
+	)
 	if err != nil {
 		t.Fatalf("Acquire sFast failed: %v", err)
 	}
 	defer sFast.Close()
 
 	// 创建慢消费者
-	sSlow, err := e.Acquire(ctx, liveURL, Consumer{ID: 2002, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
+	sSlow, err := e.Acquire(
+		ctx,
+		liveURL,
+		Consumer{ID: 2002, Kind: ConsumerPreview},
+		StreamOptions{Transport: TransportTCP},
+	)
 	if err != nil {
 		t.Fatalf("Acquire sSlow failed: %v", err)
 	}
@@ -250,7 +260,12 @@ func TestBridgeIntegration_UDPStream(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	s, err := e.Acquire(ctx, baseURL+"/live", Consumer{ID: 3001, Kind: ConsumerPreview}, StreamOptions{Transport: TransportUDP})
+	s, err := e.Acquire(
+		ctx,
+		baseURL+"/live",
+		Consumer{ID: 3001, Kind: ConsumerPreview},
+		StreamOptions{Transport: TransportUDP},
+	)
 	if err != nil {
 		t.Fatalf("Acquire UDP stream failed: %v", err)
 	}
@@ -288,7 +303,12 @@ func TestBridgeIntegration_ProbeDoesNotAffectActiveStream(t *testing.T) {
 	defer cancel()
 
 	// 1. 启动正常流预览
-	s, err := e.Acquire(ctx, baseURL+"/live", Consumer{ID: 4001, Kind: ConsumerPreview}, StreamOptions{Transport: TransportTCP})
+	s, err := e.Acquire(
+		ctx,
+		baseURL+"/live",
+		Consumer{ID: 4001, Kind: ConsumerPreview},
+		StreamOptions{Transport: TransportTCP},
+	)
 	if err != nil {
 		t.Fatalf("Acquire failed: %v", err)
 	}

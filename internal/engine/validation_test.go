@@ -105,21 +105,21 @@ func TestNormalizeTimeoutMs(t *testing.T) {
 
 func TestClampToDeadline(t *testing.T) {
 	// 无 deadline 的 ctx 保持原值。
-	if got, err := clampToDeadline(5000, context.Background()); err != nil || got != 5000 {
+	if got, err := clampToDeadline(context.Background(), 5000); err != nil || got != 5000 {
 		t.Fatalf("expected 5000ms for ctx without deadline, got %d (err: %v)", got, err)
 	}
 
 	// deadline 比设置更短时收敛。
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	if got, err := clampToDeadline(5_000, ctx); err != nil || got > 250 {
+	if got, err := clampToDeadline(ctx, 5_000); err != nil || got > 250 {
 		t.Fatalf("expected clamped timeout <= 250ms, got %d (err: %v)", got, err)
 	}
 
 	// deadline 比设置更宽时不得放大。
 	wideCtx, cancelWide := context.WithTimeout(context.Background(), time.Minute)
 	defer cancelWide()
-	if got, err := clampToDeadline(300, wideCtx); err != nil || got != 300 {
+	if got, err := clampToDeadline(wideCtx, 300); err != nil || got != 300 {
 		t.Fatalf("expected 300ms preserved, got %d (err: %v)", got, err)
 	}
 
@@ -127,7 +127,7 @@ func TestClampToDeadline(t *testing.T) {
 	expired, cancelExpired := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancelExpired()
 	time.Sleep(time.Millisecond)
-	if _, err := clampToDeadline(5_000, expired); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := clampToDeadline(expired, 5_000); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected DeadlineExceeded for expired ctx, got %v", err)
 	}
 }

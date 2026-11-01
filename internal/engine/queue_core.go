@@ -30,7 +30,7 @@ type queueCore[T any] struct {
 
 func newQueueCore[T any](cost func(T) int) *queueCore[T] {
 	if cost == nil {
-		cost = func(T) int { return 0 }
+		cost = zeroCost[T]
 	}
 	return &queueCore[T]{
 		cost:   cost,
@@ -39,23 +39,39 @@ func newQueueCore[T any](cost func(T) int) *queueCore[T] {
 	}
 }
 
+// zeroCost 是未指定 cost 时的默认算法：所有元素都视为零开销。
+func zeroCost[T any](T) int {
+	return 0
+}
+
+// queueBudget 是一次入队的双重上限：元素个数与字节总量。
+//
+// 字节记账只走 queueCore.cost 这一个来源 —— 入队时由内核按 cost(item) 累计，
+// 出队时同样按 cost(item) 扣减，任何调用方自报的字节数都不会参与记账。
+type queueBudget struct {
+	maxItems int
+	maxBytes int
+}
+
 // zeroOf 返回 T 的零值，用于错误返回路径。
 func zeroOf[T any]() T {
 	var zero T
 	return zero
 }
 
-// pushBounded 在有界预算内入队；包数或字节超限时以 overflow 终止队列。
+// pushBounded 在双预算内入队；元素数或字节数超限时以 overflow 终止队列。
 //
 // 返回 overflow 时表示「本次未入队且订阅已终止」，调用方无需再唤醒读者。
 // 队列已终止时静默丢弃并返回 nil —— 晚到的回调不该再制造错误。
-func (q *queueCore[T]) pushBounded(item T, cost, maxItems, maxBytes int, overflow error) error {
+func (q *queueCore[T]) pushBounded(item T, budget queueBudget, overflow error) error {
+	cost := q.cost(item)
+
 	q.mu.Lock()
 	if q.closed {
 		q.mu.Unlock()
 		return nil
 	}
-	if len(q.queue) >= maxItems || q.buffered+cost > maxBytes {
+	if len(q.queue) >= budget.maxItems || q.buffered+cost > budget.maxBytes {
 		q.closeErrLocked(overflow)
 		q.mu.Unlock()
 		q.signal()

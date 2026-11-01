@@ -126,29 +126,43 @@ func TestEngineAcquireValidation(t *testing.T) {
 	defer e.Close()
 
 	ctx := context.Background()
+	const validURI = "rtsp://127.0.0.1:8554/live"
 
-	// 非法 URL
-	_, err := e.Acquire(ctx, "http://invalid", Consumer{ID: 1, Kind: ConsumerPreview}, StreamOptions{})
-	if !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("expected ErrInvalidArgument for non-rtsp url, got %v", err)
+	tests := []struct {
+		name     string
+		uri      string
+		consumer Consumer
+		options  StreamOptions
+	}{
+		{
+			name:     "non-rtsp url",
+			uri:      "http://invalid",
+			consumer: Consumer{ID: 1, Kind: ConsumerPreview},
+		},
+		{
+			name:     "zero consumer id",
+			uri:      validURI,
+			consumer: Consumer{ID: 0, Kind: ConsumerPreview},
+		},
+		{
+			name:     "unknown consumer kind",
+			uri:      validURI,
+			consumer: Consumer{ID: 1, Kind: ConsumerKind(42)},
+		},
+		{
+			name:     "unknown transport",
+			uri:      validURI,
+			consumer: Consumer{ID: 1, Kind: ConsumerPreview},
+			options:  StreamOptions{Transport: Transport(5)},
+		},
 	}
 
-	// 零 consumerID
-	_, err = e.Acquire(ctx, "rtsp://127.0.0.1:8554/live", Consumer{ID: 0, Kind: ConsumerPreview}, StreamOptions{})
-	if !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("expected ErrInvalidArgument for consumerID=0, got %v", err)
-	}
-
-	// 非法 kind
-	_, err = e.Acquire(ctx, "rtsp://127.0.0.1:8554/live", Consumer{ID: 1, Kind: ConsumerKind(42)}, StreamOptions{})
-	if !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("expected ErrInvalidArgument for invalid kind, got %v", err)
-	}
-
-	// 非法 Transport
-	_, err = e.Acquire(ctx, "rtsp://127.0.0.1:8554/live", Consumer{ID: 1, Kind: ConsumerPreview}, StreamOptions{Transport: Transport(5)})
-	if !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("expected ErrInvalidArgument for invalid transport, got %v", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := e.Acquire(ctx, test.uri, test.consumer, test.options); !errors.Is(err, ErrInvalidArgument) {
+				t.Fatalf("Acquire(%s) error = %v, want ErrInvalidArgument", test.uri, err)
+			}
+		})
 	}
 }
 
@@ -242,7 +256,7 @@ func TestEngineBrokerPathAndPublishRateValidation(t *testing.T) {
 
 // TestEngineStopRacesInFlightProbe 覆盖「停机快照 vs 探测自行销毁」的竞态窗口。
 //
-// 历史缺陷：stopInternal 把 activeProbes 快照出锁后裸调 Zhulong_engine_stop，
+// 历史缺陷：stopLocked 把 activeProbes 快照出锁后裸调 Zhulong_engine_stop，
 // 而探测 goroutine 同时会 stop 并在返回时 destroy 同一个私有引擎 ——
 // 快照晚用一步就是对已释放句柄调 stop（Use-After-Free）。
 // 窗口靠调度，因此这里用「不可路由地址 + 立即 Stop/Close」反复冲击它。
@@ -278,7 +292,7 @@ func TestEngineStopRacesInFlightProbe(t *testing.T) {
 
 // TestProbeContextStopDestroyAreSerialized 验证私有探测上下文的 stop/destroy 互斥。
 //
-// 这是 UAF 防护的最小可测单元：stopInternal 拿着 activeProbes 的快照调 stop，
+// 这是 UAF 防护的最小可测单元：stopLocked 拿着 activeProbes 的快照调 stop，
 // 而探测 goroutine 自己会 destroy 同一个上下文。两者若不在同一把锁下串行，
 // 快照晚用的那一步就会对已释放句柄调用 Zhulong_engine_stop。
 // 用空句柄（不碰 C 内存）只验证 destroyed 标志的读写被串行化 —— 裸读写会被 -race 抓到。

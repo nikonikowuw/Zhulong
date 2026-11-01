@@ -149,6 +149,14 @@ var (
 	ErrInternal        = sentinel(StatusInternal)
 )
 
+// ErrSnapshotUnavailable 表示原生侧不具备抓拍能力（静态 FFmpeg 未编译 mjpeg
+// 编码器，或目标平台不支持）。它与「本次抓拍失败」不同：重试永远不会成功。
+//
+// ⚠️ 独占 StatusSnapshotUnavailable：不能复用 StatusUnsupported，否则
+// errors.Is(err, ErrUnsupported) 与 errors.Is(err, ErrSnapshotUnavailable)
+// 会在彼此的错误上互相为真。
+var ErrSnapshotUnavailable = sentinel(StatusSnapshotUnavailable)
+
 // ErrABIMismatch 表示 Go 侧编译所用头文件与原生静态库的 ABI 版本不一致。
 //
 // 这是构建期错配而非运行时故障：Make 与 wrapper 已对 Engine 归档做内容寻址，

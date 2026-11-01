@@ -22,14 +22,6 @@ const MaxSnapshotBoxes = 8
 // DefaultSnapshotQuality 是 JPEG 质量的默认值（0 表示「使用默认」）。
 const DefaultSnapshotQuality = 85
 
-// ErrSnapshotUnavailable 表示原生侧不具备抓拍能力（静态 FFmpeg 未编译 mjpeg
-// 编码器，或目标平台不支持）。它与「本次抓拍失败」不同：重试永远不会成功。
-//
-// ⚠️ 独占 StatusSnapshotUnavailable：不能复用 StatusUnsupported，否则
-// errors.Is(err, ErrUnsupported) 与 errors.Is(err, ErrSnapshotUnavailable)
-// 会在彼此的错误上互相为真。
-var ErrSnapshotUnavailable = sentinel(StatusSnapshotUnavailable)
-
 // SnapshotBox 是一个归一化裁剪框，坐标语义与 aitypes.DetectionItem.Box 完全一致：
 // [x1, y1, x2, y2] ∈ [0.0, 1.0]，x1<=x2，y1<=y2。
 type SnapshotBox [4]float64
@@ -70,7 +62,13 @@ type SnapshotOptions struct {
 // 返回的 JPEG 切片已深拷贝进 Go 堆，与原生句柄生命周期无关，调用方可以自由持有。
 func (s *Stream) Snapshot(ctx context.Context, options SnapshotOptions) ([]SnapshotImage, error) {
 	if len(options.Boxes) > MaxSnapshotBoxes {
-		return nil, nativeErrorf("snapshot", StatusInvalidArgument, "too many snapshot boxes: %d > %d", len(options.Boxes), MaxSnapshotBoxes)
+		return nil, nativeErrorf(
+			"snapshot",
+			StatusInvalidArgument,
+			"too many snapshot boxes: %d > %d",
+			len(options.Boxes),
+			MaxSnapshotBoxes,
+		)
 	}
 
 	// lease 同时校验 ctx 与关闭态，因此不需要在入参校验阶段重复 ctx.Err()。
@@ -111,13 +109,7 @@ func clampQuality(quality int) int {
 	if quality == 0 {
 		return DefaultSnapshotQuality
 	}
-	if quality < 1 {
-		return 1
-	}
-	if quality > 100 {
-		return 100
-	}
-	return quality
+	return min(max(quality, 1), 100)
 }
 
 // snapshot 执行一次原生抓拍调用，并把结果深拷贝到 Go 堆。
@@ -125,7 +117,11 @@ func clampQuality(quality int) int {
 // ⚠️ 内存所有权：结果句柄由 C 侧分配，必须由 Zhulong_snapshot_destroy 释放。
 // 每张图的 JPEG 字节在 destroy 之前用 C.GoBytes 深拷贝出来，绝不把原生指针
 // 交给 Go 长期持有。
-func (e *Engine) snapshot(gen uint64, streamID C.Zhulong_stream_id, req *C.Zhulong_snapshot_request) ([]SnapshotImage, error) {
+func (e *Engine) snapshot(
+	gen uint64,
+	streamID C.Zhulong_stream_id,
+	req *C.Zhulong_snapshot_request,
+) ([]SnapshotImage, error) {
 	lease, release, err := e.borrowHandle(handleRequirement{
 		requireRunning:    true,
 		requireGeneration: &gen,
@@ -159,11 +155,8 @@ func (e *Engine) snapshot(gen uint64, streamID C.Zhulong_stream_id, req *C.Zhulo
 	images := make([]SnapshotImage, 0, count)
 	for i := range count {
 		view := C.Zhulong_snapshot_at(result, C.int32_t(i))
-		if view == nil {
-			// 索引区间由 count 保证，取不到说明原生侧违反了契约，跳过而不是崩。
-			continue
-		}
-		if view.data == nil || view.size == 0 {
+		// 索引区间由 count 保证；取不到或空图说明原生侧违反了契约，跳过而不是崩。
+		if view == nil || view.data == nil || view.size == 0 {
 			continue
 		}
 		images = append(images, SnapshotImage{

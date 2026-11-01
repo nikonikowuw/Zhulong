@@ -45,10 +45,10 @@ var nativeSeverities = [...]struct {
 	zap    zapcore.Level
 	native nativelog.Level
 }{
-	{zapcore.DebugLevel, nativelog.Debug},
-	{zapcore.InfoLevel, nativelog.Info},
-	{zapcore.WarnLevel, nativelog.Warn},
-	{zapcore.ErrorLevel, nativelog.Error},
+	{zap: zapcore.DebugLevel, native: nativelog.Debug},
+	{zap: zapcore.InfoLevel, native: nativelog.Info},
+	{zap: zapcore.WarnLevel, native: nativelog.Warn},
+	{zap: zapcore.ErrorLevel, native: nativelog.Error},
 }
 
 // zapLevel 把 C 侧等级映射为 zap 等级；越界值收敛到 INFO。
@@ -91,7 +91,8 @@ func (e *Engine) SetNativeLogSink(queue *nativelog.Queue) error {
 	}
 
 	handle := cgo.NewHandle(&nativeLogBridge{queue: queue})
-	if status := C.Zhulong_set_log_callback(C.Zhulong_log_callback(C.zhulongLogCallbackBridge), C.uintptr_t(handle)); status != C.Zhulong_OK {
+	callback := C.Zhulong_log_callback(C.zhulongLogCallbackBridge)
+	if status := C.Zhulong_set_log_callback(callback, C.uintptr_t(handle)); status != C.Zhulong_OK {
 		handle.Delete()
 		return mapNativeStatus("set_log_callback", int32(status))
 	}
@@ -158,8 +159,9 @@ func zhulongLogTrampoline(token C.uintptr_t, level C.int32_t, streamID C.uint64_
 
 	moduleSize := uint64(moduleLen)
 	textSize := uint64(textLen)
-	if module == nil || moduleSize == 0 || moduleSize > maxLogModuleBytes ||
-		textSize > maxLogTextBytes || (text == nil && textSize != 0) {
+	moduleInvalid := module == nil || moduleSize == 0 || moduleSize > maxLogModuleBytes
+	textInvalid := textSize > maxLogTextBytes || (text == nil && textSize != 0)
+	if moduleInvalid || textInvalid {
 		queue.RecordDrop()
 		return
 	}
@@ -183,20 +185,41 @@ func zhulongLogTrampoline(token C.uintptr_t, level C.int32_t, streamID C.uint64_
 	})
 }
 
+// logCallbackCall 描述一次模拟的原生日志回调载荷。
+//
+// 用结构体而不是 8 个位置参数：`nullModule bool` / `nullText bool` / `textLen`
+// 这类位置布尔与裸长度在调用点无法自证含义，错位也不会编译报错。
+type logCallbackCall struct {
+	Token      uintptr
+	Level      int32
+	StreamID   uint64
+	Module     []byte
+	NullModule bool
+	Text       []byte
+	NullText   bool
+	TextLen    uint64
+}
+
 // invokeNativeLogCallbackForTest 从 C 侧模拟一次日志回调，用来验证跨界边界检查。
-func invokeNativeLogCallbackForTest(token uintptr, level int32, streamID uint64,
-	module []byte, nullModule bool, text []byte, nullText bool, textLen uint64) {
-	modulePointer := allocNativeBytes(module, nullModule)
+func invokeNativeLogCallbackForTest(call logCallbackCall) {
+	modulePointer := allocNativeBytes(call.Module, call.NullModule)
 	if modulePointer != nil {
 		defer C.free(unsafe.Pointer(modulePointer))
 	}
-	textPointer := allocNativeBytes(text, nullText)
+	textPointer := allocNativeBytes(call.Text, call.NullText)
 	if textPointer != nil {
 		defer C.free(unsafe.Pointer(textPointer))
 	}
 
-	C.zhulongInvokeLogCallback(C.uintptr_t(token), C.int32_t(level), C.uint64_t(streamID),
-		modulePointer, C.size_t(len(module)), textPointer, C.size_t(textLen))
+	C.zhulongInvokeLogCallback(
+		C.uintptr_t(call.Token),
+		C.int32_t(call.Level),
+		C.uint64_t(call.StreamID),
+		modulePointer,
+		C.size_t(len(call.Module)),
+		textPointer,
+		C.size_t(call.TextLen),
+	)
 }
 
 // invokeNativeLogCallbackStaticForBenchmark 走静态载荷的 C 跳板，避免把分配算进基准。

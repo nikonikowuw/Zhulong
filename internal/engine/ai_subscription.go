@@ -50,6 +50,7 @@ func newAIResultSubscription(s *Stream, streamID C.Zhulong_stream_id, gen uint64
 //
 // ⚠️ 仅供测试：生产路径必须通过 Stream.SubscribeAIResults 取得实例，
 // 否则拿不到 generation / streamID，也就无法安全注销。
+// 导出是为了让 internal/camera 的 hub 测试能注入假结果流，本包不应在运行时路径上引用它。
 func NewAIResultSubscriptionForTest(capacity int) (*AIResultSubscription, func(data []byte)) {
 	sub := newAIResultSubscription(nil, 1, 1, capacity)
 	return sub, func(data []byte) { sub.onResult(1, data) }

@@ -126,7 +126,11 @@ func (s *Subscription) onPacketData(in inboundPacket) {
 	if s.core.isClosed() {
 		return
 	}
-	s.core.pushBounded(in.toPacket(), in.Size, s.limits.maxPackets, s.limits.maxBufferedBytes, ErrBackpressure)
+	s.core.pushBounded(
+		in.toPacket(),
+		queueBudget{maxItems: s.limits.maxPackets, maxBytes: s.limits.maxBufferedBytes},
+		ErrBackpressure,
+	)
 }
 
 // Next 阻塞等待获取下一个视频压缩包，支持 Context 取消。
@@ -160,7 +164,7 @@ func (s *Subscription) Close() error {
 			s.cancelControl()
 		}
 
-		if s.stream != nil && s.stream.engine != nil {
+		if s.stream != nil && s.stream.engine != nil && s.id > 0 {
 			closeErr = s.stream.engine.unsubscribeWith(
 				s.generation,
 				"unsubscribe",

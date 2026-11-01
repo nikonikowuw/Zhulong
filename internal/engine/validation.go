@@ -60,34 +60,42 @@ type subscriptionLimits struct {
 
 // validate 把调用方给出的上限收敛成确定值：0 取默认值，超过硬上限即拒绝。
 func (l subscriptionLimits) validate() (subscriptionLimits, error) {
-	limits := subscriptionLimits{
-		maxPackets:       DefaultMaxPackets,
-		maxPacketBytes:   DefaultMaxPacketBytes,
-		maxBufferedBytes: DefaultMaxBufferedBytes,
+	maxPackets, err := resolveLimit(l.maxPackets, DefaultMaxPackets, HardLimitMaxPackets, "MaxPackets")
+	if err != nil {
+		return subscriptionLimits{}, err
+	}
+	maxPacketBytes, err := resolveLimit(l.maxPacketBytes, DefaultMaxPacketBytes, HardLimitMaxPacketBytes, "MaxPacketBytes")
+	if err != nil {
+		return subscriptionLimits{}, err
+	}
+	maxBufferedBytes, err := resolveLimit(
+		l.maxBufferedBytes,
+		DefaultMaxBufferedBytes,
+		HardLimitMaxBufferedBytes,
+		"MaxBufferedBytes",
+	)
+	if err != nil {
+		return subscriptionLimits{}, err
 	}
 
-	if l.maxPackets < 0 || l.maxPackets > HardLimitMaxPackets {
-		return subscriptionLimits{}, fmt.Errorf("%w: MaxPackets must be within [1, %d]", ErrInvalidArgument, HardLimitMaxPackets)
-	}
-	if l.maxPacketBytes < 0 || l.maxPacketBytes > HardLimitMaxPacketBytes {
-		return subscriptionLimits{}, fmt.Errorf("%w: MaxPacketBytes must be within [1, %d]", ErrInvalidArgument, HardLimitMaxPacketBytes)
-	}
-	if l.maxBufferedBytes < 0 || l.maxBufferedBytes > HardLimitMaxBufferedBytes {
-		return subscriptionLimits{}, fmt.Errorf("%w: MaxBufferedBytes must be within [1, %d]", ErrInvalidArgument, HardLimitMaxBufferedBytes)
-	}
-
-	if l.maxPackets > 0 {
-		limits.maxPackets = l.maxPackets
-	}
-	if l.maxPacketBytes > 0 {
-		limits.maxPacketBytes = l.maxPacketBytes
-	}
-	if l.maxBufferedBytes > 0 {
-		limits.maxBufferedBytes = l.maxBufferedBytes
-	}
 	// 注意：MaxBufferedBytes < MaxPacketBytes 是合法配置 —— 它等价于
 	// 「单个包超过总字节预算就立即触发背压」，用于按总字节强制限流。
-	return limits, nil
+	return subscriptionLimits{
+		maxPackets:       maxPackets,
+		maxPacketBytes:   maxPacketBytes,
+		maxBufferedBytes: maxBufferedBytes,
+	}, nil
+}
+
+// resolveLimit 收敛单项预设：0 表示「用默认值」，负值与超过硬上限一律拒绝。
+func resolveLimit(value, defaultValue, hardLimit int, name string) (int, error) {
+	if value < 0 || value > hardLimit {
+		return 0, fmt.Errorf("%w: %s must be within [1, %d]", ErrInvalidArgument, name, hardLimit)
+	}
+	if value == 0 {
+		return defaultValue, nil
+	}
+	return value, nil
 }
 
 const (
@@ -131,7 +139,7 @@ func normalizeTimeoutMs(d time.Duration) (uint32, error) {
 // 199ms），此时 ctx.Err() 仍为 nil，调用返回的是引擎的 TIMEOUT 而非
 // context.DeadlineExceeded —— 取消语义退化为调度时序竞态。那种场景下 ctx 取消是唯一
 // 权威，native 超时只作兜底。
-func clampToDeadline(timeoutMs uint32, ctx context.Context) (uint32, error) {
+func clampToDeadline(ctx context.Context, timeoutMs uint32) (uint32, error) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		return timeoutMs, nil
