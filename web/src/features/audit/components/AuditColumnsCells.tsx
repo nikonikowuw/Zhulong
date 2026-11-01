@@ -184,16 +184,11 @@ export function FormattedTimeCell({ isoTime }: { isoTime: string }) {
   )
 }
 
+// 列表只显示本地化文案：动作 key 是排障信息，归详情弹窗（AuditDetailDialog）负责，
+// 主列表里再挂一行裸 key 只会把噪声塞进表格。未登记的 key 仍回退成 key 本身。
 export function ActionNameCell({ action }: { action: string }) {
   const { t } = useTranslation('audit')
   const label = t(`actionNames.${action}`, { defaultValue: action })
 
-  return (
-    <div className='flex flex-col'>
-      <span className='text-xs font-medium text-foreground'>{label}</span>
-      <span className='hidden font-mono text-[11px] text-muted-foreground/70 lg:inline'>
-        {action}
-      </span>
-    </div>
-  )
+  return <span className='text-xs font-medium text-foreground'>{label}</span>
 }

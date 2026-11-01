@@ -19,6 +19,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { DataTablePagination } from '@/components/data-table'
+import { AUDIT_ACTION_KEYS } from '../data/audit-actions'
 import { type AuditLog } from '../data/schema'
 import { type AuditDateRange, type TimePresetKey } from '../data/time-presets'
 import { auditColumns } from './AuditColumns'
@@ -108,67 +109,11 @@ export function AuditTable({
   }, [total, pagination.pageSize, ensurePageInRange])
 
   const actionOptions = useMemo(
-    () => [
-      { label: t('actionNames.auth.login'), value: 'auth.login' },
-      { label: t('actionNames.auth.logout'), value: 'auth.logout' },
-      { label: t('actionNames.auth.init'), value: 'auth.init' },
-      { label: t('actionNames.camera.create'), value: 'camera.create' },
-      { label: t('actionNames.camera.update'), value: 'camera.update' },
-      { label: t('actionNames.camera.delete'), value: 'camera.delete' },
-      { label: t('actionNames.camera.toggle'), value: 'camera.toggle' },
-      {
-        label: t('actionNames.storage.update_config'),
-        value: 'storage.update_config',
-      },
-      {
-        label: t('actionNames.storage.manual_cleanup'),
-        value: 'storage.manual_cleanup',
-      },
-      {
-        label: t('actionNames.storage.test_path'),
-        value: 'storage.test_path',
-      },
-      {
-        label: t('actionNames.storage.emergency_stop'),
-        value: 'storage.emergency_stop',
-      },
-      {
-        label: t('actionNames.storage.emergency_resume'),
-        value: 'storage.emergency_resume',
-      },
-      {
-        label: t('actionNames.time.update_config'),
-        value: 'time.update_config',
-      },
-      {
-        label: t('actionNames.time.ntp_sync'),
-        value: 'time.ntp_sync',
-      },
-      {
-        label: t('actionNames.time.manual_set'),
-        value: 'time.manual_set',
-      },
-      {
-        label: t('actionNames.time.rtc_heal'),
-        value: 'time.rtc_heal',
-      },
-      {
-        label: t('actionNames.time.clock_step'),
-        value: 'time.clock_step',
-      },
-      {
-        label: t('actionNames.time.ntp_sync_failed'),
-        value: 'time.ntp_sync_failed',
-      },
-      {
-        label: t('actionNames.time.ntp_sync_recovered'),
-        value: 'time.ntp_sync_recovered',
-      },
-      {
-        label: t('actionNames.audit.clear'),
-        value: 'audit.clear',
-      },
-    ],
+    () =>
+      AUDIT_ACTION_KEYS.map((action) => ({
+        label: t(`actionNames.${action}`),
+        value: action,
+      })),
     [t]
   )
 

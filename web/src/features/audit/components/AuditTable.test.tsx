@@ -53,7 +53,7 @@ describe('AuditTable', () => {
   it('renders table headers and audit rows properly', async () => {
     const queryClient = new QueryClient()
 
-    const { getByText, getByRole } = await render(
+    const { container, getByText, getByRole } = await render(
       <QueryClientProvider client={queryClient}>
         <AuditProvider>
           <AuditTable
@@ -78,6 +78,9 @@ describe('AuditTable', () => {
     await expect.element(getByText('添加摄像机')).toBeInTheDocument()
     await expect.element(getByText('#102')).toBeInTheDocument()
     await expect.element(getByText('管理员登录')).toBeInTheDocument()
+    // 动作 key 只属于详情弹窗，主列表不得再露出裸 key 副行。
+    expect(container.textContent).not.toContain('camera.create')
+    expect(container.textContent).not.toContain('auth.login')
   })
 
   it('renders empty state when there are no logs', async () => {
