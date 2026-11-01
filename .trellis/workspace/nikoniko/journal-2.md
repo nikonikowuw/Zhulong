@@ -1872,38 +1872,6 @@ Fully migrated backend store persistence operations to official GORM Generics AP
 
 [OK] **Completed**
 
----
-
-## 2026-11-01 — 算法包配置下发链路（阈值真正生效）+ 静默失败消除
-
-### Context
-
-排查 `packages/face_recognition/onnx` 时确认：UI 里能配的 `threshold` / `top_k` 存进
-`task_algorithms.config_json` 后被**无人消费**——骨架两处 `model_create("{}")` 硬编码，
-`TaskConfig` 是空类型，`drain_control_messages` 是空实现。拓扑是「一个包进程多路 broker」，
-所以 argv 无法表达 per-stream 配置。
-
-### Main Changes
-
-- 协议：新增 `MSG_TASK_CONFIG=14`（68 字节头 + 尾随 JSON），Broker 侧缓存 + 握手重放
-- 骨架：`--config <inline json>` → `model_create`；收包循环搬运配置并按 `algorithm_id` 过滤
-- SDK：`TaskConfig{std::string_view json}`、`Options::config_json`、`abi.json` 1.0.0 → 1.1.0
-- 宿主：`TaskConfigProvider/Broadcaster`、spawn 前灌缓存、`ZHULONG_ALGO_CONFIG` 进程级配置
-- 算法包（双 target）：`Matcher` 去状态化（阈值逐次传入）、`common/match_config.hpp` 纯函数、
-  `set_input_size` fail-fast（32/128 粒度 + 静态形状档位）、候选改分数定长堆、ORT 日志降级
-
-### Testing
-
-- [OK] `make check` 的 go-check / native-test(28) / api-docs / pkg-drift-check 全绿
-- [OK] `packages/face_recognition/onnx`: `make unit-test` + `make test`（无回归：5 人 7 脸、~130ms）
-- [OK] `pnpm exec vitest run --retry=2`：135 files / 864 tests 全绿
-- [WARN] `make check` 的 frontend 步骤在本机偶发 iframe/CORS 加载失败（无 web 改动，retry 后全绿）
-- [TODO] `make board-check`（rk3568 实机）未跑；AC1（双流不同阈值）需真实底库
-
-### Status
-
-[OK] 代码与单测完成；板端验证与 e2e 双流验收待实机
-
 
 ## Session 94: 宿主目标跟踪与抓拍身份去重
 <!-- trellis-session: v=2 fp=d772eb70256c88c8 -->
@@ -1941,3 +1909,46 @@ Fully migrated backend store persistence operations to official GORM Generics AP
 ### Next Steps
 
 - 结合真实摄像头视频流验证多目标密集重叠与遮挡场景下的跟踪去重表现
+
+
+## Session 95: 算法包配置下发链路与识别参数生效
+<!-- trellis-session: v=2 fp=ddcb75b3d554c61c -->
+
+**Date**: 2026-11-01
+**Task**: 算法包配置下发链路与识别参数生效
+**Package**: native
+**Branch**: `dev`
+
+### Summary
+
+打通进程级与任务级算法配置下发链路：argv --config 传入 Plugin::init，新增 MSG_TASK_CONFIG=14 协议并由 FrameBroker 缓存重放；算法去状态化支持逐流独立比对；消除分辨率不整除静默归零与 ORT 告警；升级 SDK 至 1.1.0
+
+### Main Changes
+
+- 协议新增 MSG_TASK_CONFIG=14（68B 头 + 尾随 JSON 原文），FrameBroker 负责按流缓存并在握手后重放
+- 骨架收包循环识别 14 号消息并按 algorithm_id 过滤，TaskContext::params.json 挂载配置原文
+- 进程级配置支持 argv --config <inline json> 并在 spawn 时从 ZHULONG_ALGO_CONFIG 解析注入
+- 算法侧 Matcher 去状态化，common/match_config.hpp 纯函数实现配置解析、任务级覆盖与越界回落
+- set_input_size 增加 32/128 整除校验；ORT 日志降级至 ERROR 消除 VerifyOutputSizes 告警；SCRFD 候选按分数定长小顶堆截断
+- SDK abi.json sdk_version 升级至 1.1.0 并更新 algo-plugin-contract 规范
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f0bf81e` | feat(algo)!: 算法配置真正下发到包进程并按流生效 |
+
+### Testing
+
+- [OK] make native-test：28/28 测试全部通过（含 FrameBroker 任务配置缓存重放单测）
+- [OK] go test -race ./internal/algorunner ./internal/algorithm ./internal/task ./internal/algoipc 全部通过
+- [OK] packages/face_recognition/onnx：unit-test + dev_infer 全部通过（5 人 7 脸，无 ORT 日志洪泛）
+- [OK] make pkg-drift-check：face_recognition 与 plate_recognition 源码漂移检查通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 结合真实摄像头视频流与底库进行多流不同阈值端到端黑盒验证（AC1）及 rk3568 板端验证
