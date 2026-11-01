@@ -51,7 +51,7 @@ float calc_iou(const zhulong_bbox& a, const zhulong_bbox& b) {
 std::vector<zhulong_bbox> nms(const std::vector<zhulong_bbox>& boxes, float iou_threshold) {
     if (boxes.empty()) return {};
 
-    // ⚠️ 必须先剔除非有限的置信度（NaN / ±Inf）。
+    // ⚠️ 必须先剔除非有限的置信度或坐标（NaN / ±Inf）。
     //    NaN 会让 `a.confidence > b.confidence` 不满足**严格弱序**，而 std::sort 在该
     //    谓词下是未定义行为（libstdc++ 的 introsort 可能越界读）；即便侥幸不崩，NaN 框
     //    也会被保留并落在排序结果的任意位置，破坏「按置信度降序」这条下游依赖的不变量。
@@ -59,7 +59,11 @@ std::vector<zhulong_bbox> nms(const std::vector<zhulong_bbox>& boxes, float iou_
     std::vector<zhulong_bbox> sorted_boxes;
     sorted_boxes.reserve(boxes.size());
     for (const auto& box : boxes) {
-        if (!std::isfinite(box.confidence)) continue;
+        if (!std::isfinite(box.confidence) ||
+            !std::isfinite(box.box[0]) || !std::isfinite(box.box[1]) ||
+            !std::isfinite(box.box[2]) || !std::isfinite(box.box[3])) {
+            continue;
+        }
         sorted_boxes.push_back(box);
     }
     if (sorted_boxes.empty()) return {};

@@ -61,11 +61,12 @@ private:
     GalleryRegistry(const GalleryRegistry&) = delete;
     GalleryRegistry& operator=(const GalleryRegistry&) = delete;
 
-    void rebuild_snapshot_locked();
+    void rebuild_snapshot_locked() const;
 
     mutable std::mutex mutex_;
+    mutable bool dirty_{false};
     std::unordered_map<std::string, FaceTemplate> faces_;
-    std::shared_ptr<const std::vector<FaceTemplate>> snapshot_{std::make_shared<std::vector<FaceTemplate>>()};
+    mutable std::shared_ptr<const std::vector<FaceTemplate>> snapshot_{std::make_shared<std::vector<FaceTemplate>>()};
 };
 
 } // namespace zhulong::runtime

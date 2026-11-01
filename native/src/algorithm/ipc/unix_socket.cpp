@@ -79,7 +79,7 @@ bool write_all(int fd, const void* data, size_t size, int timeout_ms = 50) {
 bool write_msg_with_fd(int fd, const IpcHeader& header, const void* payload, size_t payload_size, int fd_to_send) {
     struct msghdr msg{};
     struct iovec iov[2];
-    iov[0].iov_base = const_cast<void*>(static_cast<const void*>(&header));
+    iov[0].iov_base = const_cast<IpcHeader*>(&header);
     iov[0].iov_len = sizeof(header);
     int iovcnt = 1;
     if (payload && payload_size > 0) {
@@ -206,9 +206,21 @@ UnixSocketServer::~UnixSocketServer() {
     stop();
 }
 
+namespace {
+
+thread_local bool g_is_worker_thread = false;
+
+} // namespace
+
 bool UnixSocketServer::start(const std::string& socket_path, std::string* error_msg) {
     stop();
     socket_path_ = socket_path;
+
+    struct sockaddr_un addr{};
+    if (socket_path_.size() >= sizeof(addr.sun_path)) {
+        if (error_msg) *error_msg = "socket path too long (exceeds sun_path): " + socket_path_;
+        return false;
+    }
 
     ::unlink(socket_path_.c_str());
 
@@ -218,9 +230,8 @@ bool UnixSocketServer::start(const std::string& socket_path, std::string* error_
         return false;
     }
 
-    struct sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, socket_path_.c_str(), sizeof(addr.sun_path) - 1);
+    std::memcpy(addr.sun_path, socket_path_.c_str(), socket_path_.size() + 1);
 
     if (::bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
         if (error_msg) *error_msg = std::string("bind() failed: ") + std::strerror(errno);
@@ -269,9 +280,12 @@ void UnixSocketServer::stop() {
         client_channels_.clear();
     }
 
-    // 等待所有读取工作线程完全退出
-    while (active_workers_.load() > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    // 等待所有读取工作线程完全退出（有界等待最多 2000ms，防死锁；若当前线程即 worker 则不自等）
+    if (!g_is_worker_thread) {
+        std::unique_lock<std::mutex> lock(workers_mutex_);
+        workers_cv_.wait_for(lock, std::chrono::milliseconds(2000), [this] {
+            return active_workers_.load() == 0;
+        });
     }
 
     // 此时所有工作线程均已安全退出，安全关闭剩余套接字
@@ -339,12 +353,31 @@ void UnixSocketServer::listen_loop() {
             on_connect_(cid);
         }
 
-        std::thread(&UnixSocketServer::client_read_loop, this, cid, channel).detach();
+        // ⚠️ 在 spawn 之前预先递增活跃计数，防止 detached 线程首行尚未执行时 stop() 误判为 0
+        active_workers_.fetch_add(1);
+        try {
+            std::thread(&UnixSocketServer::client_read_loop, this, cid, channel).detach();
+        } catch (...) {
+            active_workers_.fetch_sub(1);
+            remove_client(cid);
+        }
     }
 }
 
 void UnixSocketServer::client_read_loop(uint32_t client_id, std::shared_ptr<ClientChannel> channel) {
-    active_workers_.fetch_add(1);
+    g_is_worker_thread = true;
+
+    // RAII 守卫：无论循环正常结束还是 catch 异常跳出，均可靠递减活跃计数并唤醒等待中的 stop()
+    struct WorkerGuard {
+        std::atomic<size_t>& count;
+        std::mutex& mtx;
+        std::condition_variable& cv;
+        ~WorkerGuard() {
+            count.fetch_sub(1);
+            std::lock_guard<std::mutex> lk(mtx);
+            cv.notify_all();
+        }
+    } guard{active_workers_, workers_mutex_, workers_cv_};
 
     // ⚠️ R1 异常防爆门：本线程为 detach 的后台线程，未捕获的异常会直接
     // 触发 std::terminate() 终止整个进程。因此必须捕获全部异常（含未知异常），
@@ -365,6 +398,10 @@ void UnixSocketServer::client_read_loop(uint32_t client_id, std::shared_ptr<Clie
             }
 
             if (header.magic != IPC_MAGIC) {
+                break;
+            }
+
+            if (header.version != IPC_VERSION) {
                 break;
             }
 
@@ -391,7 +428,6 @@ void UnixSocketServer::client_read_loop(uint32_t client_id, std::shared_ptr<Clie
     }
 
     remove_client(client_id);
-    active_workers_.fetch_sub(1);
 }
 
 void UnixSocketServer::remove_client(uint32_t client_id) {
@@ -495,15 +531,20 @@ bool UnixSocketClient::connect(const std::string& socket_path, std::string* erro
     //    写入），因此这里显式复位，否则同一对象重连后 is_connected() 会永远为假。
     peer_closed_.store(false);
 
+    struct sockaddr_un addr{};
+    if (socket_path_.size() >= sizeof(addr.sun_path)) {
+        if (error_msg) *error_msg = "socket path too long (exceeds sun_path): " + socket_path_;
+        return false;
+    }
+
     int sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
     if (sock < 0) {
         if (error_msg) *error_msg = std::string("socket() failed: ") + std::strerror(errno);
         return false;
     }
 
-    struct sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, socket_path_.c_str(), sizeof(addr.sun_path) - 1);
+    std::memcpy(addr.sun_path, socket_path_.c_str(), socket_path_.size() + 1);
 
     if (::connect(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
         if (error_msg) *error_msg = std::string("connect() failed: ") + std::strerror(errno);
@@ -646,7 +687,7 @@ bool UnixSocketClient::recv_msg_with_fd(IpcHeader& out_header, std::vector<uint8
         }
     }
 
-    if (out_header.magic != IPC_MAGIC || out_header.payload_size > MAX_IPC_PAYLOAD_SIZE) {
+    if (out_header.magic != IPC_MAGIC || out_header.version != IPC_VERSION || out_header.payload_size > MAX_IPC_PAYLOAD_SIZE) {
         if (out_fd >= 0) { ::close(out_fd); out_fd = -1; }
         // 协议失步是本端/对端流的契约破裂，重试不可能自愈。
         mark_peer_closed();

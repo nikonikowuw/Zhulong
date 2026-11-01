@@ -1567,6 +1567,216 @@ void test_frame_broker_start_waits_for_resource_lock() {
     std::cout << "[PASS] test_frame_broker_start_waits_for_resource_lock" << std::endl;
 }
 
+// =============================================================================
+// Test 18: 驱逐后的迟到 ACK 与重复 ACK 不得重复扣减客户端配额
+// =============================================================================
+void test_frame_broker_evicted_ack_does_not_double_deduct() {
+    const uint64_t stream_id = 1018;
+    FrameBroker broker;
+    BrokerOptions opt;
+    opt.slot_count = 1; // 仅 1 个槽位
+    opt.slot_size = 1024 * 1024;
+    opt.max_in_flight_per_client = 2;
+    opt.lease_timeout = std::chrono::milliseconds(80); // 80ms 快速超时
+    assert(broker.start(stream_id, "/tmp", opt));
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path()));
+    HandshakeReq req{};
+    req.api_version = 1;
+    std::strncpy(req.client_name, "eviction_ack_client", sizeof(req.client_name) - 1);
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> p;
+    assert(client.recv_msg(resp_hdr, p, 1000));
+    HandshakeResp resp{};
+    std::memcpy(&resp, p.data(), sizeof(resp));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    std::vector<uint8_t> dummy(640 * 480 * 3, 0);
+    HardwareFrame frame;
+    frame.width = 640;
+    frame.height = 480;
+    frame.stride = 640 * 3;
+    frame.format = FRAME_FORMAT_UNKNOWN;
+    frame.pts = 100;
+    frame.host_ptr = dummy.data();
+
+    // 1. 发布第一帧
+    assert(broker.publish_frame(frame));
+    IpcHeader d1_hdr{};
+    std::vector<uint8_t> d1_payload;
+    assert(client.recv_msg(d1_hdr, d1_payload, 1000));
+    FrameDispatchMsg disp1{};
+    std::memcpy(&disp1, d1_payload.data(), sizeof(disp1));
+
+    ClientInfo cinfo{};
+    assert(broker.get_client_info(resp.client_id, cinfo));
+    assert(cinfo.in_flight_count == 1);
+
+    // 等待 120ms 超过 lease_timeout (80ms)
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+
+    // 2. 发布第二帧：触发超时驱逐，在途计数由 1 扣为 0，随后第二帧分配给 client 使在途计数再次为 1
+    frame.pts = 101;
+    assert(broker.publish_frame(frame));
+    IpcHeader d2_hdr{};
+    std::vector<uint8_t> d2_payload;
+    assert(client.recv_msg(d2_hdr, d2_payload, 1000));
+    FrameDispatchMsg disp2{};
+    std::memcpy(&disp2, d2_payload.data(), sizeof(disp2));
+    assert(disp2.generation > disp1.generation);
+
+    assert(broker.get_client_info(resp.client_id, cinfo));
+    assert(cinfo.in_flight_count == 1);
+
+    // 3. 客户端发送针对已驱逐帧（disp1）的历史迟到 ACK
+    FrameAckMsg stale_ack{};
+    stale_ack.stream_id = stream_id;
+    stale_ack.frame_id = disp1.frame_id;
+    stale_ack.slot_index = disp1.slot_index;
+    stale_ack.generation = disp1.generation; // 旧代次
+    stale_ack.client_id = resp.client_id;
+    assert(client.send_msg(MSG_FRAME_ACK, &stale_ack, sizeof(stale_ack)));
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+    // ⚠️ 核心断言：迟到 ACK 必须被丢弃，不得把第二帧的在途计数扣减！
+    assert(broker.get_client_info(resp.client_id, cinfo));
+    assert(cinfo.in_flight_count == 1);
+
+    // 4. 客户端确认第二帧
+    FrameAckMsg valid_ack{};
+    valid_ack.stream_id = stream_id;
+    valid_ack.frame_id = disp2.frame_id;
+    valid_ack.slot_index = disp2.slot_index;
+    valid_ack.generation = disp2.generation;
+    valid_ack.client_id = resp.client_id;
+    assert(client.send_msg(MSG_FRAME_ACK, &valid_ack, sizeof(valid_ack)));
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+    assert(broker.get_client_info(resp.client_id, cinfo));
+    assert(cinfo.in_flight_count == 0);
+
+    // 5. 重复发送同一次 ACK，配额不得再次被扣减
+    assert(client.send_msg(MSG_FRAME_ACK, &valid_ack, sizeof(valid_ack)));
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    assert(broker.get_client_info(resp.client_id, cinfo));
+    assert(cinfo.in_flight_count == 0);
+
+    client.disconnect();
+    broker.stop();
+    std::cout << "[PASS] test_frame_broker_evicted_ack_does_not_double_deduct" << std::endl;
+}
+
+// =============================================================================
+// Test 19: BrokerOptions 参数校验防御
+// =============================================================================
+void test_frame_broker_options_validation() {
+    FrameBroker broker;
+    std::string err;
+
+    BrokerOptions bad1;
+    bad1.slot_count = 0;
+    assert(!broker.start(1019, "/tmp", bad1, &err));
+    assert(!err.empty());
+
+    BrokerOptions bad2;
+    bad2.slot_size = 0;
+    assert(!broker.start(1019, "/tmp", bad2, &err));
+
+    BrokerOptions bad3;
+    bad3.max_in_flight_per_client = 0;
+    assert(!broker.start(1019, "/tmp", bad3, &err));
+
+    std::cout << "[PASS] test_frame_broker_options_validation" << std::endl;
+}
+
+// =============================================================================
+// Test 20: 握手请求非 \0 结尾客户端名字的安全边界
+// =============================================================================
+void test_frame_broker_handshake_non_null_terminated_name() {
+    const uint64_t stream_id = 1020;
+    FrameBroker broker;
+    assert(broker.start(stream_id, "/tmp"));
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path()));
+
+    HandshakeReq req{};
+    req.api_version = 1;
+    // 故意填满整个 32 字节，不保留末尾 '\0'
+    std::memset(req.client_name, 'X', sizeof(req.client_name));
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> p;
+    assert(client.recv_msg(resp_hdr, p, 1000));
+    HandshakeResp resp{};
+    std::memcpy(&resp, p.data(), sizeof(resp));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    ClientInfo info{};
+    assert(broker.get_client_info(resp.client_id, info));
+    assert(info.name.size() == sizeof(req.client_name));
+    assert(info.name == std::string(sizeof(req.client_name), 'X'));
+
+    client.disconnect();
+    broker.stop();
+    std::cout << "[PASS] test_frame_broker_handshake_non_null_terminated_name" << std::endl;
+}
+
+// =============================================================================
+// Test 21: NV12 格式下 vstride < height 的归一化防御
+// =============================================================================
+void test_frame_broker_nv12_vstride_normalization() {
+    const uint64_t stream_id = 1021;
+    FrameBroker broker;
+    assert(broker.start(stream_id, "/tmp"));
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path()));
+    HandshakeReq req{};
+    req.api_version = 1;
+    std::strncpy(req.client_name, "nv12_norm_client", sizeof(req.client_name) - 1);
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> p;
+    assert(client.recv_msg(resp_hdr, p, 1000));
+    HandshakeResp resp{};
+    std::memcpy(&resp, p.data(), sizeof(resp));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    std::vector<uint8_t> dummy_y(640 * 480, 0x12);
+    std::vector<uint8_t> dummy_uv(640 * 240, 0x34);
+
+    HardwareFrame frame;
+    frame.width = 640;
+    frame.height = 480;
+    frame.stride = 640;
+    // ⚠️ 模拟解码器输出异常元数据：vstride 给出 320（小于 height 480）
+    frame.vstride = 320;
+    frame.format = FRAME_FORMAT_NV12;
+    frame.host_planes[0] = dummy_y.data();
+    frame.host_planes[1] = dummy_uv.data();
+
+    assert(broker.publish_frame(frame));
+
+    IpcHeader d_hdr{};
+    std::vector<uint8_t> d_payload;
+    assert(client.recv_msg(d_hdr, d_payload, 1000));
+    FrameDispatchMsg disp{};
+    std::memcpy(&disp, d_payload.data(), sizeof(disp));
+
+    // ⚠️ 核心断言：offsets[1] 必须至少是 stride * height = 640 * 480，绝不能是 640 * 320
+    assert(disp.offsets[1] == 640 * 480);
+
+    client.disconnect();
+    broker.stop();
+    std::cout << "[PASS] test_frame_broker_nv12_vstride_normalization" << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     // 子进程是「包形态」的桩算法可执行文件：自带算法类，argv 只有 broker 相关参数。
     const char* consumer_bin = (argc > 1) ? argv[1] : nullptr;
@@ -1588,6 +1798,10 @@ int main(int argc, char* argv[]) {
     test_frame_broker_result_egress();
     test_frame_broker_control_broadcast();
     test_frame_broker_start_waits_for_resource_lock();
+    test_frame_broker_evicted_ack_does_not_double_deduct();
+    test_frame_broker_options_validation();
+    test_frame_broker_handshake_non_null_terminated_name();
+    test_frame_broker_nv12_vstride_normalization();
     if (consumer_bin) {
         test_consumer_subprocess_e2e(consumer_bin);
         test_consumer_multi_broker_e2e(consumer_bin);

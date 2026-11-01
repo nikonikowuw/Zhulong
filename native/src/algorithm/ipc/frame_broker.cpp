@@ -7,7 +7,7 @@
 #include "broker_resource_lock.hpp"
 #include <algorithm>
 #include <cstring>
-#include <iostream>
+#include <cassert>
 
 namespace zhulong::ipc {
 
@@ -28,9 +28,11 @@ namespace {
  */
 size_t frame_payload_bytes(const HardwareFrame& frame) {
     switch (frame.format) {
-        case FRAME_FORMAT_NV12:
-            return frame.y_plane_size() +
+        case FRAME_FORMAT_NV12: {
+            const uint32_t eff_vstride = (frame.vstride > 0) ? std::max(frame.vstride, frame.height) : frame.height;
+            return static_cast<size_t>(frame.stride) * eff_vstride +
                    static_cast<size_t>(frame.stride) * ((frame.height + 1) / 2);
+        }
         case FRAME_FORMAT_YUV420P: {
             const size_t y_size = static_cast<size_t>(frame.stride) * frame.height;
             const size_t u_stride = (static_cast<size_t>(frame.stride) + 1) / 2;
@@ -52,6 +54,10 @@ FrameBroker::~FrameBroker() {
 bool FrameBroker::start(uint64_t stream_id, const std::string& base_dir,
                         BrokerOptions options, std::string* error_msg) {
     stop();
+    if (options.slot_count == 0 || options.slot_size == 0 || options.max_in_flight_per_client == 0) {
+        if (error_msg) *error_msg = "invalid broker options: slot_count, slot_size, and max_in_flight must be positive";
+        return false;
+    }
     stream_id_ = stream_id;
     options_ = options;
 
@@ -135,8 +141,16 @@ bool FrameBroker::start(uint64_t stream_id, const std::string& base_dir,
 }
 
 void FrameBroker::stop() {
-    if (!running_.exchange(false)) {
+    if (!running_.exchange(false, std::memory_order_acq_rel)) {
         return;
+    }
+
+    // 等待所有在途的 publish_frame 完成，杜绝与 shm_pool_.close() 的 munmap 发生竞态
+    {
+        std::unique_lock<std::mutex> lk(publish_mutex_);
+        publish_cv_.wait_for(lk, std::chrono::seconds(2), [this] {
+            return publishing_count_.load(std::memory_order_acquire) == 0;
+        });
     }
 
     server_.stop();
@@ -149,7 +163,8 @@ void FrameBroker::stop() {
     has_dma_slots_ = false;
 }
 
-int FrameBroker::find_or_evict_free_slot(std::unique_lock<std::mutex>& /*lock*/) {
+int FrameBroker::find_or_evict_free_slot(std::unique_lock<std::mutex>& lock) {
+    assert(lock.owns_lock());
     // 1. 查找空闲槽位
     for (size_t i = 0; i < slots_.size(); ++i) {
         if (slots_[i].state == SlotState::FREE) {
@@ -193,7 +208,21 @@ int FrameBroker::find_or_evict_free_slot(std::unique_lock<std::mutex>& /*lock*/)
 }
 
 bool FrameBroker::publish_frame(const HardwareFrame& frame, const FrameMotionInfo& motion) {
-    if (!running_.load()) return false;
+    if (!running_.load(std::memory_order_acquire)) return false;
+
+    struct PublishGuard {
+        std::atomic<uint32_t>& count;
+        std::mutex& mtx;
+        std::condition_variable& cv;
+        ~PublishGuard() {
+            count.fetch_sub(1, std::memory_order_release);
+            std::lock_guard<std::mutex> lk(mtx);
+            cv.notify_all();
+        }
+    } guard{publishing_count_, publish_mutex_, publish_cv_};
+
+    publishing_count_.fetch_add(1, std::memory_order_acquire);
+    if (!running_.load(std::memory_order_acquire)) return false;
 
     int slot_idx = -1;
     uint64_t generation = 0;
@@ -286,12 +315,16 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const FrameMotionInf
     for (size_t i = 0; i < msg.motion_box_count; ++i) {
         msg.motion_boxes[i] = motion.motion_boxes[i];
     }
+    if (is_zero_copy_frame) {
+        msg.flags |= FRAME_DISPATCH_FLAG_DMA_FD;
+    }
 
     if (frame.format == FRAME_FORMAT_NV12) {
         msg.format = ZHULONG_PIXEL_FORMAT_NV12;
         msg.strides[1] = static_cast<int32_t>(frame.stride);
         msg.offsets[0] = 0;
-        msg.offsets[1] = static_cast<uint32_t>(frame.y_plane_size());
+        const uint32_t eff_vstride = (frame.vstride > 0) ? std::max(frame.vstride, frame.height) : frame.height;
+        msg.offsets[1] = static_cast<uint32_t>(frame.stride * eff_vstride);
 
         if (!is_zero_copy_frame) {
             if (frame.host_planes[0] && frame.host_planes[1]) {
@@ -443,13 +476,20 @@ void FrameBroker::handle_client_message(uint32_t client_id, const IpcHeader& hea
 void FrameBroker::handle_handshake(uint32_t client_id, const HandshakeReq& req) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        ClientInfo info{};
-        info.client_id = client_id;
-        info.name = req.client_name;
-        info.in_flight_count = 0;
-        info.dropped_frames = 0;
-        info.delivered_frames = 0;
-        clients_[client_id] = info;
+        // 限制字符串最大拷贝长度，防止客户端发送未以 \0 结尾的畸形名字导致越界读
+        const size_t name_len = ::strnlen(req.client_name, sizeof(req.client_name));
+        auto it = clients_.find(client_id);
+        if (it != clients_.end()) {
+            it->second.name.assign(req.client_name, name_len);
+        } else {
+            ClientInfo info{};
+            info.client_id = client_id;
+            info.name.assign(req.client_name, name_len);
+            info.in_flight_count = 0;
+            info.dropped_frames = 0;
+            info.delivered_frames = 0;
+            clients_[client_id] = std::move(info);
+        }
     }
 
     HandshakeResp resp{};
@@ -489,19 +529,23 @@ void FrameBroker::handle_ack(uint32_t client_id, const FrameAckMsg& ack) {
         return;
     }
 
-    // 递减客户端在途计数
+    auto& slot = slots_[ack.slot_index];
+    // 只有处于 LEASED 状态且 generation 完全匹配的租约才被接受；
+    // 杜绝过期/驱逐后的迟到 ACK 破坏槽位状态与配额，并防止对处于 WRITING 状态的槽位提前释放
+    if (slot.state != SlotState::LEASED || slot.generation != ack.generation) {
+        return;
+    }
+
+    // 只有该客户端确实持有该槽位的租约，才扣减在途计数并释放租约
+    if (slot.active_leases.erase(client_id) == 0) {
+        return;
+    }
+
     auto cit = clients_.find(client_id);
     if (cit != clients_.end() && cit->second.in_flight_count > 0) {
         cit->second.in_flight_count--;
     }
 
-    auto& slot = slots_[ack.slot_index];
-    if (slot.generation != ack.generation) {
-        // 过期的历史 ACK，忽略
-        return;
-    }
-
-    slot.active_leases.erase(client_id);
     if (slot.active_leases.empty()) {
         slot.state = SlotState::FREE;
     }

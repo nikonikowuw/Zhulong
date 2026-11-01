@@ -11,7 +11,7 @@ GalleryRegistry& GalleryRegistry::instance() {
     return registry;
 }
 
-void GalleryRegistry::rebuild_snapshot_locked() {
+void GalleryRegistry::rebuild_snapshot_locked() const {
     auto vec = std::make_shared<std::vector<FaceTemplate>>();
     vec->reserve(faces_.size());
     for (const auto& entry : faces_) {
@@ -24,6 +24,7 @@ void GalleryRegistry::rebuild_snapshot_locked() {
         return a.face_id < b.face_id;
     });
     snapshot_ = std::move(vec);
+    dirty_ = false;
 }
 
 void GalleryRegistry::reset(std::vector<FaceTemplate> items) {
@@ -34,7 +35,7 @@ void GalleryRegistry::reset(std::vector<FaceTemplate> items) {
             faces_[item.face_id] = std::move(item);
         }
     }
-    rebuild_snapshot_locked();
+    dirty_ = true;
 }
 
 void GalleryRegistry::upsert(FaceTemplate item) {
@@ -43,7 +44,7 @@ void GalleryRegistry::upsert(FaceTemplate item) {
     }
     std::lock_guard<std::mutex> lock(mutex_);
     faces_[item.face_id] = std::move(item);
-    rebuild_snapshot_locked();
+    dirty_ = true;
 }
 
 void GalleryRegistry::remove(const std::string& face_id, const std::string& person_id) {
@@ -59,11 +60,14 @@ void GalleryRegistry::remove(const std::string& face_id, const std::string& pers
             }
         }
     }
-    rebuild_snapshot_locked();
+    dirty_ = true;
 }
 
 std::shared_ptr<const std::vector<FaceTemplate>> GalleryRegistry::snapshot() const {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (dirty_) {
+        rebuild_snapshot_locked();
+    }
     return snapshot_;
 }
 
@@ -75,8 +79,8 @@ size_t GalleryRegistry::size() const {
 void GalleryRegistry::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     faces_.clear();
-    // 复用 rebuild_snapshot_locked 而不是另写一份空快照，避免两条路径的语义漂移。
-    rebuild_snapshot_locked();
+    snapshot_ = std::make_shared<std::vector<FaceTemplate>>();
+    dirty_ = false;
 }
 
 } // namespace zhulong::runtime

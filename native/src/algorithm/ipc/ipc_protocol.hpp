@@ -90,6 +90,11 @@ struct HandshakeResp {
 constexpr size_t MAX_IPC_MOTION_BOXES = 4;
 
 /**
+ * @brief 帧分发标志位枚举
+ */
+constexpr uint32_t FRAME_DISPATCH_FLAG_DMA_FD = (1U << 0); /**< 载荷由 SCM_RIGHTS 传输的 DMA-BUF 文件描述符承载，不得回退读取 SHM 槽位 */
+
+/**
  * @brief 归一化运动外接矩形 [x1, y1, x2, y2] ∈ [0.0, 1.0]（定长 16 字节）
  */
 struct IpcMotionBox {
@@ -133,7 +138,7 @@ struct FrameDispatchMsg {
                               *   ⚠️ 严禁写入宿主进程的 dma_fd：fd 号是进程本地句柄，
                               *   跨进程传值会让接收端对无关资源执行 mmap/ioctl。
                               *   真实句柄只经 SCM_RIGHTS 传递。 */
-    uint32_t reserved_pad{0};    /**< 结构体中间对齐填充字段（保持 8 字节对齐） */
+    uint32_t flags{0};           /**< 帧属性标志位（低位扩展，保持 8 字节对齐；如 FRAME_DISPATCH_FLAG_DMA_FD） */
 
     /* ---------------- 运动检测扩展字段 (定长 72 字节) ---------------- */
     uint32_t has_motion{1};       /**< 1 表示有运动或未启用检测（默认放行）；0 表示画面静止 */
@@ -183,6 +188,7 @@ static_assert(offsetof(FrameDispatchMsg, frame_id) % 8 == 0, "frame_id unaligned
 static_assert(offsetof(FrameDispatchMsg, generation) % 8 == 0, "generation unaligned");
 static_assert(offsetof(FrameDispatchMsg, pts) % 8 == 0, "pts unaligned");
 static_assert(offsetof(FrameDispatchMsg, capture_time_ms) % 8 == 0, "capture_time_ms unaligned");
+static_assert(offsetof(FrameDispatchMsg, flags) % 4 == 0, "flags unaligned");
 static_assert(offsetof(FrameDispatchMsg, has_motion) % 8 == 0, "has_motion unaligned");
 static_assert(offsetof(FrameDispatchMsg, motion_boxes) % 8 == 0, "motion_boxes unaligned");
 static_assert(LEGACY_FRAME_DISPATCH_SIZE == offsetof(FrameDispatchMsg, has_motion),

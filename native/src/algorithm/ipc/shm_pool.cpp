@@ -67,7 +67,7 @@ bool ShmPool::init(const std::string& name, ShmMode mode,
         // 预防残留，先 unlink
         shm_unlink(name_.c_str());
 
-        fd_ = shm_open(name_.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0666);
+        fd_ = shm_open(name_.c_str(), O_CREAT | O_RDWR | O_TRUNC, 0600);
         if (fd_ < 0) {
             if (error_msg) *error_msg = std::string("shm_open create failed: ") + std::strerror(errno);
             return false;
@@ -129,6 +129,19 @@ bool ShmPool::init(const std::string& name, ShmMode mode,
         auto* header = reinterpret_cast<const ShmHeader*>(mapped_ptr_);
         if (header->magic != SHM_MAGIC || header->version != SHM_VERSION) {
             if (error_msg) *error_msg = "invalid shm header magic or version";
+            close();
+            return false;
+        }
+
+        if (header->slot_size == 0 || header->slot_count == 0) {
+            if (error_msg) *error_msg = "invalid shm slot count or size in header";
+            close();
+            return false;
+        }
+
+        // 防溢出与越界校验：sizeof(ShmHeader) + slot_count * slot_size 不得超出 total_size_
+        if (static_cast<size_t>(header->slot_count) > (total_size_ - sizeof(ShmHeader)) / header->slot_size) {
+            if (error_msg) *error_msg = "shm header geometry exceeds mapped file size";
             close();
             return false;
         }

@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <atomic>
 #include <thread>
+#include <condition_variable>
 
 namespace zhulong::ipc {
 
@@ -137,6 +138,9 @@ private:
     mutable std::mutex clients_mutex_;                                            /**< 客户端集合互斥锁 */
     std::unordered_map<uint32_t, std::shared_ptr<ClientChannel>> client_channels_; /**< 客户端 ID 到通道实体的映射 */
     std::thread accept_thread_;                                                   /**< 监听接收连接的独立线程 */
+
+    std::mutex workers_mutex_;                                                    /**< 工作线程生命周期同步锁 */
+    std::condition_variable workers_cv_;                                          /**< 工作线程退出通知条件变量 */
 
     MessageCallback on_message_;                                                  /**< 消息接收回调 */
     ConnectCallback on_connect_;                                                  /**< 连接建立回调 */

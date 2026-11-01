@@ -27,6 +27,7 @@
 #include <mutex>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 
 namespace zhulong::ipc {
 
@@ -213,9 +214,13 @@ private:
     std::atomic<uint64_t> total_published_{0};
     std::atomic<uint64_t> total_dropped_{0};
 
+    std::atomic<uint32_t> publishing_count_{0};
+    mutable std::mutex publish_mutex_;
+    std::condition_variable publish_cv_;
+
     ShmPool shm_pool_;
     UnixSocketServer server_;
-    bool has_dma_slots_{false};
+    std::atomic<bool> has_dma_slots_{false};
     std::vector<std::unique_ptr<zhulong::platform::DmaBuffer>> dma_slots_;
 
     mutable std::mutex mutex_;
