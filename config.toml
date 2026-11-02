@@ -49,3 +49,10 @@ target = "onnx"
 # Defaults to "24h".
 session_ttl = "24h"
 
+# Hardware video decoding policy and admission control.
+[decode]
+backend = "auto"                 # "auto" | "mpp" | "ffmpeg"
+allow_software_fallback = true   # Board deployment profiles must set false (fail-closed)
+max_sessions = 8                 # Maximum concurrent physical decode streams (0 = no limit)
+
+

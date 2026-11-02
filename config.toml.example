@@ -44,3 +44,9 @@ faces_directory = ""
 # Must match manifest.json platform.target for algorithm packages.
 [algorithm]
 target = "cpu"
+
+# Hardware video decoding policy and admission control.
+[decode]
+backend = "auto"                 # "auto" | "mpp" | "ffmpeg"
+allow_software_fallback = true   # Board deployment profiles must set false (fail-closed)
+max_sessions = 8                 # Maximum concurrent physical decode streams (0 = no limit)

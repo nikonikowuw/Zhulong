@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -300,7 +301,15 @@ func TestAccessLogWebSocketEstablishedAndFailedHandshake(t *testing.T) {
 	_ = conn.Close()
 	server.Close()
 
-	entries := observed.All()
+	var entries []observer.LoggedEntry
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		entries = observed.All()
+		if len(entries) >= 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if len(entries) != 2 || entries[0].Message != "stream.started" || entries[1].Message != "stream.closed" {
 		t.Fatalf("unexpected WebSocket events: %+v", entries)
 	}

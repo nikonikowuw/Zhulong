@@ -583,3 +583,21 @@ extern "C" Zhulong_status_t Zhulong_stream_snapshot(Zhulong_engine_h engine, Zhu
     });
 }
 
+Zhulong_status_t Zhulong_engine_configure_decode(Zhulong_engine_h engine, const Zhulong_decode_policy_t *policy) {
+    return boundary([&] {
+        require(engine != nullptr);
+        require(policy != nullptr);
+        require(policy->backend >= 0 && policy->backend <= 2);
+        require(policy->max_sessions >= 0);
+        engine->implementation.configure_decode(*policy);
+    });
+}
+
+Zhulong_status_t Zhulong_engine_get_decode_stats(Zhulong_engine_h engine, Zhulong_decode_stats_t *out_stats) {
+    return boundary([&] {
+        require(engine != nullptr);
+        require(out_stats != nullptr);
+        engine->implementation.get_decode_stats(*out_stats);
+    });
+}
+

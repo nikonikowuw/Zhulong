@@ -76,7 +76,17 @@ struct Engine {
     std::condition_variable probes_drained;     /**< 探测任务全部排空信号 */
     std::map<Cancellation *, std::shared_ptr<Cancellation>> probes; /**< 活跃中的探测取消对象 */
 
+    Zhulong_decode_policy_t decode_policy_{Zhulong_DECODE_BACKEND_AUTO, 1, 0}; /**< 全局解码策略 */
+    std::atomic<uint32_t> active_decode_sessions_{0}; /**< 处于解码状态的物理解码流计数 */
+    std::atomic<uint32_t> rejected_requests_{0};      /**< 累计被拒绝的拉流请求计数 */
+
     ~Engine();
+
+    /** @brief 配置全局解码策略 */
+    void configure_decode(const Zhulong_decode_policy_t &policy);
+
+    /** @brief 查询解码器运行态统计信息 */
+    void get_decode_stats(Zhulong_decode_stats_t &out_stats);
 
     /** @brief 启动引擎流池与后台清理线程 */
     void start();

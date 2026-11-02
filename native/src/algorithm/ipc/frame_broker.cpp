@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cassert>
+#include "common/log.hpp"
 
 namespace zhulong::ipc {
 
@@ -89,24 +90,42 @@ bool FrameBroker::start(uint64_t stream_id, const std::string& base_dir,
     }
 
     // 1.1 尝试探测并初始化硬件 DMA-BUF 槽位池
+    //
+    // ⚠️ 这是**允许降级但绝不允许静默**的一步：槽位池是 slot_count × slot_size
+    //    （默认 8 × 4MB = 32MB）一次性向 CMA dma_heap 申请的。RK3568 实测
+    //    CmaTotal≈16MB 且已被占用，必然分配失败 → 退回纯共享内存路径（帧要多一次
+    //    拷贝），功能不受影响但性能/时延特性变了。没有这行日志，板端排查会误以为
+    //    自己在零拷贝路径上跑（reference: hardware-backends §MPP/零拷贝）。
     dma_slots_.clear();
     has_dma_slots_ = false;
-    if (zhulong::platform::DmaBufAllocator::instance().is_supported()) {
+    auto& dma_allocator = zhulong::platform::DmaBufAllocator::instance();
+    if (dma_allocator.is_supported()) {
         bool dma_ok = true;
+        size_t allocated = 0;
         for (size_t i = 0; i < options_.slot_count; ++i) {
-            auto buf = zhulong::platform::DmaBufAllocator::instance().allocate(options_.slot_size);
+            auto buf = dma_allocator.allocate(options_.slot_size);
             if (!buf) {
                 dma_ok = false;
                 break;
             }
             dma_slots_.push_back(std::move(buf));
+            ++allocated;
         }
         if (dma_ok && dma_slots_.size() == options_.slot_count) {
             has_dma_slots_ = true;
+            ZL_LOGI(0, "ipc.broker", "dma-buf slot pool ready: allocator=%s slots=%zu slot_size=%zu",
+                    dma_allocator.type_name(), dma_slots_.size(), options_.slot_size);
         } else {
+            ZL_LOGW(0, "ipc.broker",
+                    "dma-buf slot pool unavailable (%zu/%zu slots of %zu bytes allocated): %s; "
+                    "falling back to shared-memory frames (extra copy per frame)",
+                    allocated, options_.slot_count, options_.slot_size,
+                    dma_allocator.last_error().c_str());
             dma_slots_.clear();
             has_dma_slots_ = false;
         }
+    } else {
+        ZL_LOGI(0, "ipc.broker", "dma-buf allocator unsupported on this host; shared-memory frames only");
     }
 
     // 2. 初始化槽位状态

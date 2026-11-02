@@ -102,6 +102,17 @@ int main(void) {
     if (Zhulong_stream_get_broker_clients(engine, 1, 0, 0, &client_count) != Zhulong_ERR_NOT_RUNNING) return 31;
     if (client_count != 0) return 32;
 
+    /* 7c. 解码策略配置与统计 ABI 边界检查 */
+    if (Zhulong_engine_configure_decode(0, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 33;
+    if (Zhulong_engine_configure_decode(engine, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 34;
+    Zhulong_decode_policy_t dec_policy = {0, 1, 8};
+    if (Zhulong_engine_configure_decode(engine, &dec_policy) != Zhulong_OK) return 35;
+
+    if (Zhulong_engine_get_decode_stats(0, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 36;
+    if (Zhulong_engine_get_decode_stats(engine, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 37;
+    Zhulong_decode_stats_t dec_stats;
+    if (Zhulong_engine_get_decode_stats(engine, &dec_stats) != Zhulong_OK) return 38;
+
     /* 8. 销毁安全测试：传入 NULL 指针必须保证安全无崩溃 */
     Zhulong_probe_result_destroy(0);
     Zhulong_engine_destroy(engine);

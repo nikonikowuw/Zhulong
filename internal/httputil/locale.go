@@ -120,6 +120,16 @@ var (
 			"zh-Hans": "人脸特征提取失败",
 			"zh-Hant": "人臉特徵提取失敗",
 		},
+		"HARDWARE_DECODE_UNAVAILABLE": {
+			"en":      "Hardware video decoder is unavailable and software fallback is disabled",
+			"zh-Hans": "硬件视频解码器不可用且已禁止软解兜底",
+			"zh-Hant": "硬體視訊解碼器無法使用且已停用軟解兜底",
+		},
+		"DECODE_CAPACITY_EXCEEDED": {
+			"en":      "Maximum concurrent hardware decode capacity exceeded",
+			"zh-Hans": "并发硬件解码路数已达系统上限",
+			"zh-Hant": "並行硬體解碼路數已達系統上限",
+		},
 	}
 )
 

@@ -414,7 +414,7 @@ else()
         VERSION ${ZHULONG_SDK_VERSION}
         COMPATIBILITY SameMajorVersion)
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/VERSION"
-         "sdk_version=${ZHULONG_SDK_VERSION}\napi_version=${ZHULONG_SDK_API_VERSION}\nprotocol=${ZHULONG_SDK_PROTOCOL}\nbackend=${ZHULONG_SDK_BACKEND}\n")
+         "sdk_version=${ZHULONG_SDK_VERSION}\napi_version=${ZHULONG_SDK_API_VERSION}\nprotocol=${ZHULONG_SDK_PROTOCOL}\nbackend=${ZHULONG_SDK_BACKEND}\nvision=${ZHULONG_VISION_BACKEND}\n")
 
     install(TARGETS ZhulongAlgoRuntimeStatic ARCHIVE DESTINATION lib)
     install(DIRECTORY sdk/include/ DESTINATION include)
@@ -545,6 +545,11 @@ if(BUILD_TESTING)
     add_executable(ZhulongEngineTests tests/engine_test.cpp)
     target_link_libraries(ZhulongEngineTests PRIVATE ZhulongEngine)
     add_test(NAME ZhulongEngineLifecycle COMMAND ZhulongEngineTests)
+
+    # 解码准入控制与 Fail-Closed 测试
+    add_executable(ZhulongDecodeAdmissionTests tests/decode_admission_test.cpp)
+    target_link_libraries(ZhulongDecodeAdmissionTests PRIVATE ZhulongEngine Threads::Threads)
+    add_test(NAME ZhulongDecodeAdmission COMMAND ZhulongDecodeAdmissionTests)
 
     # 纯 C11 兼容性与 ABI 防御边界测试
     add_executable(ZhulongCAbiTests tests/engine_abi_test.c)

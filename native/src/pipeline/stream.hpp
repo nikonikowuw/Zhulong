@@ -72,8 +72,12 @@ public:
      * @brief 构造解码会话并启动解码工作线程
      * @param stream_id 关联的物理流 ID
      * @param video_meta 初始视频元数据
+     * @param policy 全局解码策略
+     * @param on_fatal_error 致命硬件/解码错误回调 (熔断通知)
      */
-    DecodeSession(uint64_t stream_id, Video video_meta);
+    DecodeSession(uint64_t stream_id, Video video_meta,
+                  Zhulong_decode_policy_t policy = {Zhulong_DECODE_BACKEND_AUTO, 1, 0},
+                  std::function<void(Zhulong_status_t)> on_fatal_error = nullptr);
 
     /** @brief 析构函数，请求停止并汇合解码工作线程 */
     ~DecodeSession();
@@ -151,6 +155,9 @@ private:
     std::atomic<uint64_t> decoder_unavailable_drops_{0};
     std::atomic<uint64_t> keyframe_gate_drops_{0};
     std::atomic<uint64_t> congestion_resyncs_{0};
+
+    Zhulong_decode_policy_t policy_{Zhulong_DECODE_BACKEND_AUTO, 1, 0};
+    std::function<void(Zhulong_status_t)> on_fatal_error_{nullptr};
 
     BoundedQueue<QueuedPacket> packet_queue_{60, OverflowStrategy::DROP_NEWEST};
     BoundedQueue<HardwareFrame::ConstPtr> frame_queue_{3, OverflowStrategy::DROP_OLDEST};
@@ -234,9 +241,14 @@ struct Stream {
 
     /**
      * @brief 根据当前消费者列表动态调整解码会话启停
+     * @param policy 解码策略
      * @return 若需要休眠，返回需要停止的旧会话对象 (调用方须在锁外调用 stop_decode_session)
      */
-    std::shared_ptr<DecodeSession> sync_decode_pipeline();
+    std::shared_ptr<DecodeSession> sync_decode_pipeline(
+        const Zhulong_decode_policy_t &policy = {Zhulong_DECODE_BACKEND_AUTO, 1, 0});
+
+    /** @brief 致命不可逆解码错误回调 (Fail-Closed 熔断当前物理流) */
+    void on_decode_fatal_error(Zhulong_status_t fatal_err);
 
     /** @brief 在锁外安全停止并汇合指定的解码会话 */
     static void stop_decode_session(std::shared_ptr<DecodeSession> session);

@@ -17,8 +17,8 @@ namespace zhulong::ipc {
 
 constexpr uint32_t SHM_MAGIC = 0x5A485348; /**< 共享内存段魔数：ASCII 'ZHSH' (0x5A485348) */
 constexpr uint32_t SHM_VERSION = 1;        /**< 共享内存协议主版本号 */
-constexpr size_t   DEFAULT_SLOT_COUNT = 8; /**< 默认共享内存槽位总数（满足 8 帧并发与缓冲池循环） */
-constexpr size_t   DEFAULT_SLOT_SIZE  = 4 * 1024 * 1024; /**< 默认单个槽位字节容量（4MB，满足 1080P NV12/RGB/YUV420P 及 4K 压缩格式） */
+constexpr size_t   DEFAULT_SLOT_COUNT = 3; /**< 默认共享内存槽位总数（与视频帧队列表头深度严格对齐） */
+constexpr size_t   DEFAULT_SLOT_SIZE  = 3584 * 1024; /**< 默认单个槽位字节容量（3.5MB，满足 1080P NV12 1920x1088 对齐规格） */
 
 #pragma pack(push, 1)
 

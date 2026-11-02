@@ -71,6 +71,8 @@ func KindToHTTPStatus(k apperr.Kind) int {
 		return http.StatusPreconditionFailed
 	case apperr.KindRateLimited:
 		return http.StatusTooManyRequests
+	case apperr.KindUnavailable:
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}

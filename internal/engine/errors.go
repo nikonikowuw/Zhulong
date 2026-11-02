@@ -12,22 +12,24 @@ import (
 type StatusCode int32
 
 const (
-	StatusOK              StatusCode = 0
-	StatusInvalidArgument StatusCode = -1
-	StatusOutOfMemory     StatusCode = -2
-	StatusUnsupported     StatusCode = -3
-	StatusNotFound        StatusCode = -4
-	StatusDuplicate       StatusCode = -5
-	StatusConfigConflict  StatusCode = -6
-	StatusTimeout         StatusCode = -7
-	StatusCallbackContext StatusCode = -8
-	StatusNotRunning      StatusCode = -9
-	StatusBusy            StatusCode = -10
-	StatusIO              StatusCode = -11
-	StatusCancelled       StatusCode = -12
-	StatusEOF             StatusCode = -13
-	StatusBufferTooSmall  StatusCode = -14
-	StatusInternal        StatusCode = -99
+	StatusOK                  StatusCode = 0
+	StatusInvalidArgument     StatusCode = -1
+	StatusOutOfMemory         StatusCode = -2
+	StatusUnsupported         StatusCode = -3
+	StatusNotFound            StatusCode = -4
+	StatusDuplicate           StatusCode = -5
+	StatusConfigConflict      StatusCode = -6
+	StatusTimeout             StatusCode = -7
+	StatusCallbackContext     StatusCode = -8
+	StatusNotRunning          StatusCode = -9
+	StatusBusy                StatusCode = -10
+	StatusIO                  StatusCode = -11
+	StatusCancelled           StatusCode = -12
+	StatusEOF                 StatusCode = -13
+	StatusBufferTooSmall      StatusCode = -14
+	StatusHardwareUnavailable StatusCode = -15
+	StatusCapacityExceeded    StatusCode = -16
+	StatusInternal            StatusCode = -99
 
 	// Go 桥接特有状态码
 	StatusClosed              StatusCode = -100
@@ -43,22 +45,24 @@ const (
 // 共用同一份文案，避免两处措辞漂移；每个哨兵码必须唯一，
 // 否则 errors.Is 会在不相干的两类失败之间互相为真。
 var statusMessages = map[StatusCode]string{
-	StatusOK:              "ok",
-	StatusInvalidArgument: "invalid argument",
-	StatusOutOfMemory:     "out of memory",
-	StatusUnsupported:     "unsupported codec or format",
-	StatusNotFound:        "resource not found",
-	StatusDuplicate:       "duplicate resource or consumer",
-	StatusConfigConflict:  "stream configuration conflict",
-	StatusTimeout:         "operation timed out",
-	StatusCallbackContext: "cannot call control API inside callback context",
-	StatusNotRunning:      "engine is not running",
-	StatusBusy:            "resource is busy",
-	StatusIO:              "I/O communication error",
-	StatusCancelled:       "operation cancelled",
-	StatusEOF:             "end of stream",
-	StatusBufferTooSmall:  "buffer too small",
-	StatusInternal:        "internal engine error",
+	StatusOK:                  "ok",
+	StatusInvalidArgument:     "invalid argument",
+	StatusOutOfMemory:         "out of memory",
+	StatusUnsupported:         "unsupported codec or format",
+	StatusNotFound:            "resource not found",
+	StatusDuplicate:           "duplicate resource or consumer",
+	StatusConfigConflict:      "stream configuration conflict",
+	StatusTimeout:             "operation timed out",
+	StatusCallbackContext:     "cannot call control API inside callback context",
+	StatusNotRunning:          "engine is not running",
+	StatusBusy:                "resource is busy",
+	StatusIO:                  "I/O communication error",
+	StatusCancelled:           "operation cancelled",
+	StatusEOF:                 "end of stream",
+	StatusBufferTooSmall:      "buffer too small",
+	StatusHardwareUnavailable: "hardware decoder is unavailable and software fallback is disabled",
+	StatusCapacityExceeded:    "maximum concurrent decode sessions exceeded",
+	StatusInternal:            "internal engine error",
 
 	StatusClosed:              "engine or resource is closed",
 	StatusBackpressure:        "subscription queue backpressure limit exceeded",
@@ -130,23 +134,25 @@ func nativeErrorf(op string, code StatusCode, format string, args ...any) *Nativ
 }
 
 var (
-	ErrClosed          = sentinel(StatusClosed)
-	ErrBackpressure    = sentinel(StatusBackpressure)
-	ErrPacketTooLarge  = sentinel(StatusPacketTooLarge)
-	ErrStaleResource   = sentinel(StatusStaleResource)
-	ErrInvalidArgument = sentinel(StatusInvalidArgument)
-	ErrTimeout         = sentinel(StatusTimeout)
-	ErrCancelled       = sentinel(StatusCancelled)
-	ErrNotRunning      = sentinel(StatusNotRunning)
-	ErrDuplicate       = sentinel(StatusDuplicate)
-	ErrConfigConflict  = sentinel(StatusConfigConflict)
-	ErrBusy            = sentinel(StatusBusy)
-	ErrNotFound        = sentinel(StatusNotFound)
-	ErrUnsupported     = sentinel(StatusUnsupported)
-	ErrIO              = sentinel(StatusIO)
-	ErrOutOfMemory     = sentinel(StatusOutOfMemory)
-	ErrBufferTooSmall  = sentinel(StatusBufferTooSmall)
-	ErrInternal        = sentinel(StatusInternal)
+	ErrClosed              = sentinel(StatusClosed)
+	ErrBackpressure        = sentinel(StatusBackpressure)
+	ErrPacketTooLarge      = sentinel(StatusPacketTooLarge)
+	ErrStaleResource       = sentinel(StatusStaleResource)
+	ErrInvalidArgument     = sentinel(StatusInvalidArgument)
+	ErrTimeout             = sentinel(StatusTimeout)
+	ErrCancelled           = sentinel(StatusCancelled)
+	ErrNotRunning          = sentinel(StatusNotRunning)
+	ErrDuplicate           = sentinel(StatusDuplicate)
+	ErrConfigConflict      = sentinel(StatusConfigConflict)
+	ErrBusy                = sentinel(StatusBusy)
+	ErrNotFound            = sentinel(StatusNotFound)
+	ErrUnsupported         = sentinel(StatusUnsupported)
+	ErrIO                  = sentinel(StatusIO)
+	ErrOutOfMemory         = sentinel(StatusOutOfMemory)
+	ErrBufferTooSmall      = sentinel(StatusBufferTooSmall)
+	ErrHardwareUnavailable = sentinel(StatusHardwareUnavailable)
+	ErrCapacityExceeded    = sentinel(StatusCapacityExceeded)
+	ErrInternal            = sentinel(StatusInternal)
 )
 
 // ErrSnapshotUnavailable 表示原生侧不具备抓拍能力（静态 FFmpeg 未编译 mjpeg

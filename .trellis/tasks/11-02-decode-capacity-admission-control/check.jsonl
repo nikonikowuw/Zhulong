@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "Verify MPP decode and admission compliance"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "Verify stream acquire error codes and invariants"}
+{"file": "native/include/Zhulong/engine.h", "reason": "Ensure C ABI error codes, enums, structs and function signatures maintain binary compatibility"}
+{"file": "internal/engine/errors.go", "reason": "Ensure Go status codes and sentinel errors strictly map to C ABI"}
+{"file": "internal/httputil/locale.go", "reason": "Ensure HTTP status codes and tri-lingual messages for decode errors are registered"}

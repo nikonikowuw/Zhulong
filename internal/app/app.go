@@ -65,12 +65,29 @@ type engineOut struct {
 	Lifecycle engineLifecycle
 }
 
-func provideEngine() engineOut {
+func provideEngine(cfg Config) (engineOut, error) {
 	eng := engine.New()
+	var backend engine.DecodeBackend
+	switch cfg.Decode.Backend {
+	case "mpp":
+		backend = engine.DecodeBackendMPP
+	case "ffmpeg":
+		backend = engine.DecodeBackendFFmpeg
+	default:
+		backend = engine.DecodeBackendAuto
+	}
+	policy := engine.DecodePolicy{
+		Backend:               backend,
+		AllowSoftwareFallback: cfg.Decode.AllowSoftwareFallback,
+		MaxSessions:           cfg.Decode.MaxSessions,
+	}
+	if err := eng.ConfigureDecode(policy); err != nil {
+		return engineOut{}, fmt.Errorf("configure decode policy: %w", err)
+	}
 	return engineOut{
 		Engine:    eng,
 		Lifecycle: eng,
-	}
+	}, nil
 }
 
 var engineModule = fx.Module("engine",

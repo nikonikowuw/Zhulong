@@ -204,6 +204,7 @@ func TestSentinelCodesAreUnique(t *testing.T) {
 		ErrInvalidArgument, ErrTimeout, ErrCancelled, ErrNotRunning,
 		ErrDuplicate, ErrConfigConflict, ErrBusy, ErrNotFound,
 		ErrUnsupported, ErrIO, ErrOutOfMemory, ErrBufferTooSmall,
+		ErrHardwareUnavailable, ErrCapacityExceeded,
 		ErrInternal, ErrSnapshotUnavailable,
 	}
 

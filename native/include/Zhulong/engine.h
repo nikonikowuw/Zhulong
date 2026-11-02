@@ -60,6 +60,8 @@ enum {
     Zhulong_ERR_CANCELLED         = -12,  /**< 操作被显式取消或引擎停止 */
     Zhulong_ERR_EOF               = -13,  /**< 流遇到文件末尾或对端已关闭 */
     Zhulong_ERR_BUFFER_TOO_SMALL  = -14,  /**< 提供的缓冲区容量不足 */
+    Zhulong_ERR_HARDWARE_UNAVAILABLE = -15, /**< 硬件加速器不可用且禁止软解 */
+    Zhulong_ERR_CAPACITY_EXCEEDED    = -16, /**< 并发解码路数已达系统声明的上限 */
     Zhulong_ERR_INTERNAL          = -99   /**< 引擎内部未知未捕获错误 */
 };
 
@@ -105,6 +107,28 @@ typedef struct {
     uint32_t open_timeout_ms;    /**< 连接与解析流信息的超时时间（毫秒），传 0 则默认为 5000ms */
     uint32_t idle_timeout_ms;    /**< 读取数据包的空闲超时时间（毫秒），传 0 则默认为 5000ms；仅选中的有效视频包刷新此计时器 */
 } Zhulong_stream_options;
+
+/** @brief 解码后端选择枚举 */
+typedef enum {
+    Zhulong_DECODE_BACKEND_AUTO   = 0, /**< 优先硬件解码，不可用时降级为软解（开发环境默认） */
+    Zhulong_DECODE_BACKEND_MPP    = 1, /**< 强制 Rockchip MPP 硬件解码，不可用时拒绝 */
+    Zhulong_DECODE_BACKEND_FFMPEG = 2  /**< 强制 FFmpeg 软解（仅供调试或无硬件环境） */
+} Zhulong_decode_backend_t;
+
+/** @brief 全局解码策略配置结构体 */
+typedef struct {
+    int32_t backend;                 /**< Zhulong_decode_backend_t 枚举 */
+    int32_t allow_software_fallback; /**< 0: 严禁软解降级 (fail-closed); 1: 允许软解降级 */
+    int32_t max_sessions;            /**< 最大并发物理解码流路数（>0 生效；0 为不限） */
+} Zhulong_decode_policy_t;
+
+/** @brief 解码器运行态统计结构体（16字节紧凑对齐，跨平台 ABI 稳定） */
+typedef struct {
+    int32_t active_sessions;         /**< 当前活跃的物理解码流数 */
+    int32_t max_sessions;            /**< 允许的最大并发物理解码流数 */
+    int32_t rejected_requests;       /**< 历史累计被准入拒绝或降级拒绝的请求次数 */
+    int32_t hardware_available;      /**< 硬件解码器底层是否就绪（1=可用, 0=不可用） */
+} Zhulong_decode_stats_t;
 
 /**
  * @brief 视频流元数据视图（借用结构，由探测结果借出）
@@ -332,6 +356,26 @@ Zhulong_status_t Zhulong_engine_stop(Zhulong_engine_h engine);
  * @param engine 待销毁的引擎句柄
  */
 void Zhulong_engine_destroy(Zhulong_engine_h engine);
+
+/**
+ * @brief 配置引擎全局解码策略
+ *
+ * 必须在 Zhulong_engine_create 之后、拉流之前调用；支持在运行期间动态更新策略。
+ *
+ * @param engine 引擎句柄
+ * @param policy 解码策略指针
+ * @return Zhulong_status_t 操作状态码
+ */
+Zhulong_status_t Zhulong_engine_configure_decode(Zhulong_engine_h engine, const Zhulong_decode_policy_t *policy);
+
+/**
+ * @brief 查询引擎解码器运行态统计信息
+ *
+ * @param engine 引擎句柄
+ * @param[out] out_stats 统计信息输出缓冲区
+ * @return Zhulong_status_t 操作状态码
+ */
+Zhulong_status_t Zhulong_engine_get_decode_stats(Zhulong_engine_h engine, Zhulong_decode_stats_t *out_stats);
 
 /* ========================================================================== */
 /*                             流池与流生命周期管理                              */

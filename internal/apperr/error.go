@@ -18,6 +18,7 @@ const (
 	KindConflict
 	KindPrecondition
 	KindRateLimited
+	KindUnavailable
 )
 
 // String returns a human-readable representation of Kind.
@@ -39,6 +40,8 @@ func (k Kind) String() string {
 		return "precondition_failed"
 	case KindRateLimited:
 		return "rate_limited"
+	case KindUnavailable:
+		return "unavailable"
 	default:
 		return "unspecified"
 	}
@@ -145,6 +148,11 @@ func Precondition(code, message string, err error) *Error {
 // RateLimited creates a rate-limiting or too-many-attempts error.
 func RateLimited(code, message string, err error) *Error {
 	return New(KindRateLimited, code, message, err)
+}
+
+// Unavailable creates a service-unavailable error (e.g. hardware unavailable, dependency down).
+func Unavailable(code, message string, err error) *Error {
+	return New(KindUnavailable, code, message, err)
 }
 
 // Internal creates a server-side unexpected error.

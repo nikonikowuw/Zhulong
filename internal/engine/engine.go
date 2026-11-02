@@ -72,7 +72,33 @@ type Engine struct {
 	streamsMu     sync.Mutex
 	activeStreams map[*Stream]struct{}
 
+	decodePolicy *DecodePolicy // 缓存配置的全局解码策略
+
 	logHandle cgo.Handle
+}
+
+// DecodeBackend 定义原生解码后端类型。
+type DecodeBackend int32
+
+const (
+	DecodeBackendAuto   DecodeBackend = 0
+	DecodeBackendMPP    DecodeBackend = 1
+	DecodeBackendFFmpeg DecodeBackend = 2
+)
+
+// DecodePolicy 定义全局硬件解码策略。
+type DecodePolicy struct {
+	Backend               DecodeBackend
+	AllowSoftwareFallback bool
+	MaxSessions           int
+}
+
+// DecodeStats 定义原生解码器运行态统计。
+type DecodeStats struct {
+	ActiveSessions    int
+	MaxSessions       int
+	RejectedRequests  int
+	HardwareAvailable bool
 }
 
 // New 创建一个未初始化的 Native 引擎包装实例。
@@ -173,6 +199,26 @@ func (e *Engine) Start() error {
 		return mapNativeStatus("start", int32(status))
 	}
 
+	if e.decodePolicy != nil {
+		var allowFallback int32
+		if e.decodePolicy.AllowSoftwareFallback {
+			allowFallback = 1
+		}
+		cPolicy := C.Zhulong_decode_policy_t{
+			backend:                 C.int32_t(e.decodePolicy.Backend),
+			allow_software_fallback: C.int32_t(allowFallback),
+			max_sessions:            C.int32_t(e.decodePolicy.MaxSessions),
+		}
+		if status := C.Zhulong_engine_configure_decode(e.handle, &cPolicy); status != C.Zhulong_OK {
+			C.Zhulong_engine_stop(e.handle)
+			C.Zhulong_engine_destroy(e.handle)
+			e.handle = nil
+			e.running = false
+			e.mu.Unlock()
+			return mapNativeStatus("configure_decode", int32(status))
+		}
+	}
+
 	e.running = true
 	e.stopping = false
 	e.nativeStopped = false
@@ -241,6 +287,65 @@ func (e *Engine) Ready() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.running && !e.stopping
+}
+
+// ConfigureDecode 配置全局解码策略。
+func (e *Engine) ConfigureDecode(policy DecodePolicy) error {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+
+	e.mu.Lock()
+	e.decodePolicy = &policy
+	handle := e.handle
+	running := e.running
+	e.mu.Unlock()
+
+	if !running || handle == nil {
+		return nil
+	}
+
+	var allowFallback int32
+	if policy.AllowSoftwareFallback {
+		allowFallback = 1
+	}
+
+	cPolicy := C.Zhulong_decode_policy_t{
+		backend:                 C.int32_t(policy.Backend),
+		allow_software_fallback: C.int32_t(allowFallback),
+		max_sessions:            C.int32_t(policy.MaxSessions),
+	}
+
+	if status := C.Zhulong_engine_configure_decode(handle, &cPolicy); status != C.Zhulong_OK {
+		return mapNativeStatus("configure_decode", int32(status))
+	}
+	return nil
+}
+
+// GetDecodeStats 查询原生解码器运行态统计。
+func (e *Engine) GetDecodeStats() (DecodeStats, error) {
+	e.handleMu.RLock()
+	defer e.handleMu.RUnlock()
+
+	e.mu.Lock()
+	handle := e.handle
+	running := e.running
+	e.mu.Unlock()
+
+	if !running || handle == nil {
+		return DecodeStats{}, ErrNotRunning
+	}
+
+	var cStats C.Zhulong_decode_stats_t
+	if status := C.Zhulong_engine_get_decode_stats(handle, &cStats); status != C.Zhulong_OK {
+		return DecodeStats{}, mapNativeStatus("get_decode_stats", int32(status))
+	}
+
+	return DecodeStats{
+		ActiveSessions:    int(cStats.active_sessions),
+		MaxSessions:       int(cStats.max_sessions),
+		RejectedRequests:  int(cStats.rejected_requests),
+		HardwareAvailable: cStats.hardware_available == 1,
+	}, nil
 }
 
 // Close 完全停止并销毁底层 C++ 引擎实例。

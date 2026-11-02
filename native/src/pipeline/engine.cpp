@@ -15,6 +15,7 @@
 
 #include "common/log.hpp"
 #include "pipeline/engine.hpp"
+#include "nodes/decode/mpp_decoder.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -114,7 +115,23 @@ void Engine::stop() {
 
     std::unique_lock<std::mutex> lock(probe_mutex);
     probes_drained.wait(lock, [this] { return probes.empty(); });
+    active_decode_sessions_.store(0);
     ZL_LOGI(0, "pipeline.engine", "engine_stopped");
+}
+
+void Engine::configure_decode(const Zhulong_decode_policy_t &policy) {
+    std::lock_guard<std::mutex> operation(control);
+    decode_policy_ = policy;
+    ZL_LOGI(0, "pipeline.engine", "decode_policy_configured backend=%d allow_sw_fallback=%d max_sessions=%d",
+            policy.backend, policy.allow_software_fallback, policy.max_sessions);
+}
+
+void Engine::get_decode_stats(Zhulong_decode_stats_t &out_stats) {
+    std::lock_guard<std::mutex> operation(control);
+    out_stats.active_sessions = static_cast<int32_t>(active_decode_sessions_.load());
+    out_stats.max_sessions = decode_policy_.max_sessions;
+    out_stats.rejected_requests = static_cast<int32_t>(rejected_requests_.load());
+    out_stats.hardware_available = MppDecodeNode::is_supported() ? 1 : 0;
 }
 
 void Engine::wake_reaper() {
@@ -188,6 +205,18 @@ std::shared_ptr<Stream> Engine::find_stream(Zhulong_stream_id id) {
 
 Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options, uint64_t consumer, int32_t kind) {
     std::unique_lock<std::mutex> operation(control);
+
+    // 1. 静态前置门控：若为 AI 消费且强制要求硬解，前置探测硬件是否就绪
+    const bool requires_mpp = (decode_policy_.backend == Zhulong_DECODE_BACKEND_MPP) ||
+                              (decode_policy_.backend == Zhulong_DECODE_BACKEND_AUTO && decode_policy_.allow_software_fallback == 0);
+    if (kind == Zhulong_CONSUMER_AI && requires_mpp) {
+        if (!MppDecodeNode::is_supported()) {
+            rejected_requests_.fetch_add(1, std::memory_order_relaxed);
+            ZL_LOGE(0, "pipeline.engine", "acquire_hardware_unavailable fail_closed url=%s", url.c_str());
+            throw Failure{Zhulong_ERR_HARDWARE_UNAVAILABLE};
+        }
+    }
+
     for (;;) {
         if (!running) throw Failure{Zhulong_ERR_NOT_RUNNING};
 
@@ -211,7 +240,23 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
 
         if (!(existing->options == options)) throw Failure{Zhulong_ERR_CONFIG_CONFLICT};
 
+        const bool was_decoding = existing->has_ai_consumer();
+        const bool will_start_decode = (kind == Zhulong_CONSUMER_AI && !was_decoding);
+
+        if (will_start_decode) {
+            if (decode_policy_.max_sessions > 0 && active_decode_sessions_.load() >= static_cast<uint32_t>(decode_policy_.max_sessions)) {
+                rejected_requests_.fetch_add(1, std::memory_order_relaxed);
+                ZL_LOGW(existing->id, "pipeline.engine", "decode_capacity_exceeded upgrade active=%u max=%d",
+                        active_decode_sessions_.load(), decode_policy_.max_sessions);
+                throw Failure{Zhulong_ERR_CAPACITY_EXCEEDED};
+            }
+            active_decode_sessions_.fetch_add(1, std::memory_order_relaxed);
+        }
+
         if (!existing->consumers.emplace(consumer, kind).second) {
+            if (will_start_decode) {
+                active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
+            }
             throw Failure{Zhulong_ERR_DUPLICATE};
         }
 
@@ -219,16 +264,22 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
         // 动态同步解码节点状态 (若新加入 AI 消费者则拉起解码器)
         std::shared_ptr<DecodeSession> session_to_stop;
         try {
-            session_to_stop = existing->sync_decode_pipeline();
+            session_to_stop = existing->sync_decode_pipeline(decode_policy_);
         } catch (...) {
             existing->consumers.erase(consumer);
+            if (will_start_decode) {
+                active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
+            }
             throw;
         }
 
         // 若当前流包含 AI 消费且尚未创建 FrameBroker，则按需实例化并启动发布线程
         if (!ensure_frame_broker(existing, kind, [&] {
                 existing->consumers.erase(consumer);
-                session_to_stop = existing->sync_decode_pipeline();
+                if (will_start_decode) {
+                    active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
+                }
+                session_to_stop = existing->sync_decode_pipeline(decode_policy_);
             })) {
             operation.unlock();
             Stream::stop_decode_session(std::move(session_to_stop));
@@ -240,7 +291,21 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
         return existing->id;
     }
 
-    if (!next_stream) throw Failure{Zhulong_ERR_INTERNAL};
+    const bool is_new_decode = (kind == Zhulong_CONSUMER_AI);
+    if (is_new_decode) {
+        if (decode_policy_.max_sessions > 0 && active_decode_sessions_.load() >= static_cast<uint32_t>(decode_policy_.max_sessions)) {
+            rejected_requests_.fetch_add(1, std::memory_order_relaxed);
+            ZL_LOGW(0, "pipeline.engine", "decode_capacity_exceeded new_stream active=%u max=%d",
+                    active_decode_sessions_.load(), decode_policy_.max_sessions);
+            throw Failure{Zhulong_ERR_CAPACITY_EXCEEDED};
+        }
+        active_decode_sessions_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    if (!next_stream) {
+        if (is_new_decode) active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
+        throw Failure{Zhulong_ERR_INTERNAL};
+    }
     auto stream = std::make_shared<Stream>(next_stream++, url, options);
     stream->consumers.emplace(consumer, kind);
     streams.emplace(stream->id, stream);
@@ -251,6 +316,7 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
     } catch (...) {
         ZL_LOGE(stream->id, "pipeline.engine", "stream_start_failed");
         streams.erase(stream->id);
+        if (is_new_decode) active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
         stream_to_stop = stream;
         operation.unlock();
         if (stream_to_stop) {
@@ -262,6 +328,7 @@ Zhulong_stream_id Engine::acquire(const std::string &url, const Options &options
 
     if (!ensure_frame_broker(stream, kind, [&] {
             streams.erase(stream->id);
+            if (is_new_decode) active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
             stream_to_stop = stream;
         })) {
         operation.unlock();
@@ -344,9 +411,16 @@ void Engine::release(Zhulong_stream_id id, uint64_t consumer) {
             }
         }
 
+        const bool was_decoding = stream->has_ai_consumer();
         stream->consumers.erase(consumer);
+        const bool still_decoding = stream->has_ai_consumer();
+        if (was_decoding && !still_decoding) {
+            if (active_decode_sessions_ > 0) {
+                active_decode_sessions_.fetch_sub(1, std::memory_order_relaxed);
+            }
+        }
         // 动态同步解码节点状态 (获取需停止的会话指针，在锁外 join)
-        session_to_stop = stream->sync_decode_pipeline();
+        session_to_stop = stream->sync_decode_pipeline(decode_policy_);
 
         // 当该流的全部 AI 消费者均已注销时，销毁其 FramePublisher 与 FrameBroker
         if (!stream->has_ai_consumer()) {

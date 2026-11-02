@@ -201,6 +201,42 @@ func TestLoadConfigParsesTLSConfig(t *testing.T) {
 	}
 }
 
+func TestLoadConfigDecodeSection(t *testing.T) {
+	// 1. 默认值
+	path := writeConfig(t, "[http]\naddress = '127.0.0.1:8000'\n")
+	got, err := loadConfigFile(path)
+	if err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+	if got.Decode.Backend != "auto" || !got.Decode.AllowSoftwareFallback || got.Decode.MaxSessions != 8 {
+		t.Fatalf("unexpected default decode config: %+v", got.Decode)
+	}
+
+	// 2. 自定义有效配置
+	path = writeConfig(t, "[http]\naddress = '127.0.0.1:8000'\n[decode]\nbackend = 'mpp'\nallow_software_fallback = false\nmax_sessions = 4\n")
+	got, err = loadConfigFile(path)
+	if err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+	if got.Decode.Backend != "mpp" || got.Decode.AllowSoftwareFallback || got.Decode.MaxSessions != 4 {
+		t.Fatalf("unexpected custom decode config: %+v", got.Decode)
+	}
+
+	// 3. 非法 backend
+	path = writeConfig(t, "[http]\naddress = '127.0.0.1:8000'\n[decode]\nbackend = 'cuda'\n")
+	_, err = loadConfigFile(path)
+	if err == nil || !strings.Contains(err.Error(), "backend") {
+		t.Fatalf("expected invalid backend error, got %v", err)
+	}
+
+	// 4. 负数 max_sessions
+	path = writeConfig(t, "[http]\naddress = '127.0.0.1:8000'\n[decode]\nmax_sessions = -1\n")
+	_, err = loadConfigFile(path)
+	if err == nil || !strings.Contains(err.Error(), "max_sessions") {
+		t.Fatalf("expected negative max_sessions error, got %v", err)
+	}
+}
+
 func writeConfig(t *testing.T, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")

@@ -36,6 +36,13 @@ type RotationConfig struct {
 	MaxTotalSizeMB int64 `mapstructure:"max_total_size_mb"`
 }
 
+// DecodeConfig contains video decoding policy and admission limits.
+type DecodeConfig struct {
+	Backend               string `mapstructure:"backend"`
+	AllowSoftwareFallback bool   `mapstructure:"allow_software_fallback"`
+	MaxSessions           int    `mapstructure:"max_sessions"`
+}
+
 // Config contains host-level settings supplied before Fx constructs the application.
 type Config struct {
 	HTTPAddress     string
@@ -43,6 +50,7 @@ type Config struct {
 	FacesDir        string
 	AlgorithmTarget string
 	Logging         LoggingConfig
+	Decode          DecodeConfig
 	ConfigPath      string
 	CustomScript    string
 	SessionTTL      time.Duration
@@ -79,6 +87,20 @@ func ValidateTLSConfig(mode, certFile, keyFile string) error {
 	default:
 		return fmt.Errorf("invalid tls_mode %q: must be off, auto, or manual", mode)
 	}
+}
+
+// ValidateDecodeConfig validates the decode configuration section.
+func ValidateDecodeConfig(cfg DecodeConfig) error {
+	switch cfg.Backend {
+	case "", "auto", "mpp", "ffmpeg":
+		// valid
+	default:
+		return fmt.Errorf("invalid decode.backend %q: must be auto, mpp, or ffmpeg", cfg.Backend)
+	}
+	if cfg.MaxSessions < 0 {
+		return fmt.Errorf("invalid decode.max_sessions %d: must not be negative", cfg.MaxSessions)
+	}
+	return nil
 }
 
 func validateHTTPAddress(address string) error {
@@ -144,6 +166,11 @@ func DefaultConfig() Config {
 		Logging: LoggingConfig{
 			Level:  "info",
 			Output: "stderr",
+		},
+		Decode: DecodeConfig{
+			Backend:               "auto",
+			AllowSoftwareFallback: true,
+			MaxSessions:           8,
 		},
 		SessionTTL:         24 * time.Hour,
 		ExtractorAlgorithm: "face_recognition",

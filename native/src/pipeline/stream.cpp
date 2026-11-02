@@ -42,8 +42,11 @@ constexpr size_t kMaxPooledBuffers = 16;
 constexpr size_t kMaxPooledCapacity = 4u * 1024u * 1024u;
 }
 
-DecodeSession::DecodeSession(uint64_t stream_id, Video video_meta)
-    : stream_id_(stream_id), video_meta_(std::move(video_meta)) {
+DecodeSession::DecodeSession(uint64_t stream_id, Video video_meta,
+                             Zhulong_decode_policy_t policy,
+                             std::function<void(Zhulong_status_t)> on_fatal_error)
+    : stream_id_(stream_id), video_meta_(std::move(video_meta)),
+      policy_(policy), on_fatal_error_(std::move(on_fatal_error)) {
     time_base_num_.store(video_meta_.view.time_base_num, std::memory_order_relaxed);
     time_base_den_.store(video_meta_.view.time_base_den, std::memory_order_relaxed);
     worker_ = std::thread(&DecodeSession::decode_loop, this);
@@ -194,6 +197,20 @@ void DecodeSession::decode_loop() noexcept {
     auto create_or_get_decoder = [&](int32_t codec_hint, int32_t tb_num, int32_t tb_den) -> IDecodeNode * {
         if (decoder) return decoder.get();
         if (SteadyClock::now() < next_create_attempt) return nullptr;
+
+        DecoderBackend target_backend = DecoderBackend::automatic;
+        if (policy_.backend == Zhulong_DECODE_BACKEND_MPP) {
+            target_backend = DecoderBackend::mpp_hw;
+        } else if (policy_.backend == Zhulong_DECODE_BACKEND_FFMPEG) {
+            target_backend = DecoderBackend::ffmpeg_sw;
+        } else {
+            if (policy_.allow_software_fallback == 0) {
+                target_backend = DecoderBackend::mpp_hw;
+            } else {
+                target_backend = DecoderBackend::automatic;
+            }
+        }
+
         try {
             Video meta;
             uint64_t generation = 0;
@@ -213,7 +230,7 @@ void DecodeSession::decode_loop() noexcept {
                     meta.extradata.size(),
                     final_tb_num,
                     final_tb_den,
-                    DecoderBackend::automatic,
+                    target_backend,
                     stream_id_
                 );
                 if (decoder) {
@@ -227,8 +244,30 @@ void DecodeSession::decode_loop() noexcept {
                         static_cast<long long>(retry_delay.count()));
                 }
             }
+        } catch (const std::exception &ex) {
+            decoder.reset();
+            if (target_backend == DecoderBackend::mpp_hw) {
+                ZL_LOGE(stream_id_, "pipeline.stream", "hardware_decode_fail_closed ex=%s", ex.what());
+                if (on_fatal_error_) {
+                    on_fatal_error_(Zhulong_ERR_HARDWARE_UNAVAILABLE);
+                }
+                active_.store(false, std::memory_order_relaxed);
+                return nullptr;
+            }
+            next_create_attempt = SteadyClock::now() + retry_delay;
+            retry_delay = std::min(retry_delay * 2, kMaxRetryDelay);
+            ZL_LOGW(stream_id_, "pipeline.stream", "decoder_create_failed retry_delay_ms=%lld",
+                static_cast<long long>(retry_delay.count()));
         } catch (...) {
             decoder.reset();
+            if (target_backend == DecoderBackend::mpp_hw) {
+                ZL_LOGE(stream_id_, "pipeline.stream", "hardware_decode_fail_closed unknown_error");
+                if (on_fatal_error_) {
+                    on_fatal_error_(Zhulong_ERR_HARDWARE_UNAVAILABLE);
+                }
+                active_.store(false, std::memory_order_relaxed);
+                return nullptr;
+            }
             next_create_attempt = SteadyClock::now() + retry_delay;
             retry_delay = std::min(retry_delay * 2, kMaxRetryDelay);
             ZL_LOGW(stream_id_, "pipeline.stream", "decoder_create_failed retry_delay_ms=%lld",
@@ -392,13 +431,17 @@ bool Stream::has_ai_consumer() const {
     return false;
 }
 
-std::shared_ptr<DecodeSession> Stream::sync_decode_pipeline() {
+std::shared_ptr<DecodeSession> Stream::sync_decode_pipeline(const Zhulong_decode_policy_t &policy) {
     std::lock_guard<std::mutex> lock(mutex);
     const bool should_decode = has_ai_consumer();
 
     if (should_decode && !decode_session_) {
         // 创建全新独立会话并启动工作线程，队列初始状态未取消
-        decode_session_ = std::make_shared<DecodeSession>(id, video_meta_);
+        decode_session_ = std::make_shared<DecodeSession>(
+            id, video_meta_, policy,
+            [this](Zhulong_status_t fatal_err) {
+                this->on_decode_fatal_error(fatal_err);
+            });
         return nullptr;
     } else if (!should_decode && decode_session_) {
         // 移出会话指针，以便调用方在锁外调用 stop 与 join
@@ -406,6 +449,14 @@ std::shared_ptr<DecodeSession> Stream::sync_decode_pipeline() {
         return retiring;
     }
     return nullptr;
+}
+
+void Stream::on_decode_fatal_error(Zhulong_status_t fatal_err) {
+    std::lock_guard<std::mutex> lock(mutex);
+    status.state = Zhulong_STREAM_FAILED;
+    status.error = fatal_err;
+    ZL_LOGE(id, "pipeline.stream", "fatal_decode_error fail_closed status=%d", fatal_err);
+    request_stop();
 }
 
 void Stream::stop_decode_session(std::shared_ptr<DecodeSession> session) {

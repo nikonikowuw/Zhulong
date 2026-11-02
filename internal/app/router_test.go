@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/clientlog"
 	"github.com/nikonikowuw/Zhulong/internal/database"
+	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/fx"
@@ -506,5 +508,86 @@ func TestRouterMountsClientLogsAsPublicRoute(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("unauthenticated POST /api/v1/client-logs = %d, want 200; body=%s",
 			recorder.Code, recorder.Body.String())
+	}
+}
+
+type stubDecodeStatsProvider struct {
+	stats engine.DecodeStats
+	err   error
+}
+
+func (s stubDecodeStatsProvider) GetDecodeStats() (engine.DecodeStats, error) {
+	return s.stats, s.err
+}
+
+func TestHealthReportsDecodeStatsAndDegradedHardware(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name          string
+		cfg           Config
+		stats         engine.DecodeStats
+		wantEngine    string
+		wantAvailable bool
+	}{
+		{
+			name: "normal auto with hardware",
+			cfg: Config{
+				Decode: DecodeConfig{Backend: "auto", AllowSoftwareFallback: true, MaxSessions: 8},
+			},
+			stats:         engine.DecodeStats{HardwareAvailable: true, ActiveSessions: 2, MaxSessions: 8},
+			wantEngine:    "ready",
+			wantAvailable: true,
+		},
+		{
+			name: "strict mpp without hardware degrades engine component",
+			cfg: Config{
+				Decode: DecodeConfig{Backend: "mpp", AllowSoftwareFallback: false, MaxSessions: 4},
+			},
+			stats:         engine.DecodeStats{HardwareAvailable: false, ActiveSessions: 0, MaxSessions: 4},
+			wantEngine:    "degraded",
+			wantAvailable: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := newRouter(RouterParams{
+				Logger:        zap.NewNop(),
+				Config:        tt.cfg,
+				DatabaseReady: readinessStub(true),
+				NativeReady:   readinessStub(true),
+				DecodeStats:   stubDecodeStatsProvider{stats: tt.stats},
+				Assets: http.FS(fstest.MapFS{
+					"index.html": &fstest.MapFile{Data: []byte("shell")},
+				}),
+			})
+
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("GET /api/v1/health status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+			}
+
+			var payload struct {
+				Code string     `json:"code"`
+				Data HealthData `json:"data"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("unmarshal response: %v", err)
+			}
+			if payload.Data.Status != "ready" {
+				t.Fatalf("overall status = %q, want ready", payload.Data.Status)
+			}
+			if got := payload.Data.Components["engine"]; got != tt.wantEngine {
+				t.Fatalf("components[engine] = %q, want %q", got, tt.wantEngine)
+			}
+			if payload.Data.Decode == nil {
+				t.Fatal("expected decode node in health payload, got nil")
+			}
+			if payload.Data.Decode.HardwareAvailable != tt.wantAvailable {
+				t.Fatalf("decode.hardware_available = %v, want %v", payload.Data.Decode.HardwareAvailable, tt.wantAvailable)
+			}
+		})
 	}
 }

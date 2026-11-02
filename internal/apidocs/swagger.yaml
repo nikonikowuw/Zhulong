@@ -230,12 +230,27 @@ definitions:
       version:
         type: string
     type: object
+  app.DecodeStatus:
+    properties:
+      active_sessions:
+        type: integer
+      backend:
+        type: string
+      hardware_available:
+        type: boolean
+      max_sessions:
+        type: integer
+      rejected_requests:
+        type: integer
+    type: object
   app.HealthData:
     properties:
       components:
         additionalProperties:
           type: string
         type: object
+      decode:
+        $ref: '#/definitions/app.DecodeStatus'
       status:
         type: string
     type: object

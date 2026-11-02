@@ -23,10 +23,25 @@ import (
 	"go.uber.org/zap"
 )
 
+// DecodeStatus describes current video decoder metrics and admission state.
+type DecodeStatus struct {
+	Backend           string `json:"backend"`
+	HardwareAvailable bool   `json:"hardware_available"`
+	ActiveSessions    int    `json:"active_sessions"`
+	MaxSessions       int    `json:"max_sessions"`
+	RejectedRequests  int    `json:"rejected_requests"`
+}
+
+// DecodeStatsProvider provides decode metrics and hardware readiness.
+type DecodeStatsProvider interface {
+	GetDecodeStats() (engine.DecodeStats, error)
+}
+
 // HealthData describes the components required before the host serves requests.
 type HealthData struct {
 	Status     string            `json:"status"`
 	Components map[string]string `json:"components"`
+	Decode     *DecodeStatus     `json:"decode,omitempty"`
 }
 
 // ServiceReadiness represents a component reporting readiness for health checks.
@@ -46,12 +61,14 @@ type RouterParams struct {
 	fx.In
 
 	Logger        *zap.Logger
-	Database      *database.Store  `optional:"true"`
-	Native        *engine.Engine   `optional:"true"`
-	DatabaseReady ServiceReadiness `optional:"true" name:"db_ready"`
-	NativeReady   ServiceReadiness `optional:"true" name:"native_ready"`
-	AuthService   auth.AuthService `optional:"true"`
-	AuditService  *audit.Service   `optional:"true"`
+	Config        Config              `optional:"true"`
+	Database      *database.Store     `optional:"true"`
+	Native        *engine.Engine      `optional:"true"`
+	DecodeStats   DecodeStatsProvider `optional:"true"`
+	DatabaseReady ServiceReadiness    `optional:"true" name:"db_ready"`
+	NativeReady   ServiceReadiness    `optional:"true" name:"native_ready"`
+	AuthService   auth.AuthService    `optional:"true"`
+	AuditService  *audit.Service      `optional:"true"`
 	Assets        http.FileSystem
 	// LogSink lets /health name a degraded log destination. Readiness itself stays
 	// database + engine: a host whose log file is unwritable still records video.
@@ -99,7 +116,15 @@ func newRouter(p RouterParams) *gin.Engine {
 	} else if p.NativeReady != nil {
 		nativeReady = p.NativeReady
 	}
-	api.GET("/health", healthHandler(dbReady, nativeReady, p.LogSink))
+
+	var decodeStatsProvider DecodeStatsProvider
+	if p.Native != nil {
+		decodeStatsProvider = p.Native
+	} else if p.DecodeStats != nil {
+		decodeStatsProvider = p.DecodeStats
+	}
+
+	api.GET("/health", healthHandler(dbReady, nativeReady, decodeStatsProvider, p.LogSink, p.Config))
 
 	// Mount public routes (e.g. auth login, status, init)
 	for _, r := range p.PublicRoutes {
@@ -178,7 +203,7 @@ func newRouter(p RouterParams) *gin.Engine {
 // @Success      200  {object}  httputil.Response{data=HealthData}
 // @Failure      503  {object}  httputil.Response
 // @Router       /health [get]
-func healthHandler(database ServiceReadiness, native ServiceReadiness, logSink loggerOutput) gin.HandlerFunc {
+func healthHandler(database ServiceReadiness, native ServiceReadiness, decodeStats DecodeStatsProvider, logSink loggerOutput, cfg Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		dbReady := database != nil && database.Ready()
 		nativeReady := native != nil && native.Ready()
@@ -200,9 +225,31 @@ func healthHandler(database ServiceReadiness, native ServiceReadiness, logSink l
 				components["logging"] = "degraded"
 			}
 		}
+
+		var decode *DecodeStatus
+		if decodeStats != nil {
+			if stats, err := decodeStats.GetDecodeStats(); err == nil {
+				backend := cfg.Decode.Backend
+				if backend == "" {
+					backend = "auto"
+				}
+				decode = &DecodeStatus{
+					Backend:           backend,
+					HardwareAvailable: stats.HardwareAvailable,
+					ActiveSessions:    stats.ActiveSessions,
+					MaxSessions:       stats.MaxSessions,
+					RejectedRequests:  stats.RejectedRequests,
+				}
+				if (backend == "mpp" || !cfg.Decode.AllowSoftwareFallback) && !stats.HardwareAvailable {
+					components["engine"] = "degraded"
+				}
+			}
+		}
+
 		httputil.Success(c, HealthData{
 			Status:     "ready",
 			Components: components,
+			Decode:     decode,
 		})
 	}
 }

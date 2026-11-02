@@ -5653,6 +5653,26 @@ const docTemplate = `{
                 }
             }
         },
+        "app.DecodeStatus": {
+            "type": "object",
+            "properties": {
+                "active_sessions": {
+                    "type": "integer"
+                },
+                "backend": {
+                    "type": "string"
+                },
+                "hardware_available": {
+                    "type": "boolean"
+                },
+                "max_sessions": {
+                    "type": "integer"
+                },
+                "rejected_requests": {
+                    "type": "integer"
+                }
+            }
+        },
         "app.HealthData": {
             "type": "object",
             "properties": {
@@ -5661,6 +5681,9 @@ const docTemplate = `{
                     "additionalProperties": {
                         "type": "string"
                     }
+                },
+                "decode": {
+                    "$ref": "#/definitions/app.DecodeStatus"
                 },
                 "status": {
                     "type": "string"
