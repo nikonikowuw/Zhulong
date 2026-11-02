@@ -4,10 +4,18 @@
 #include <cstring>
 #include <memory>
 #include <utility>
+#include <type_traits>
+#include <fcntl.h>
 
 using namespace zhulong::platform;
 
 int main() {
+    // 0. 静态类型语义约束验证（禁止拷贝与移动单例）
+    static_assert(!std::is_copy_constructible_v<DmaBufAllocator>, "DmaBufAllocator must not be copy-constructible");
+    static_assert(!std::is_copy_assignable_v<DmaBufAllocator>, "DmaBufAllocator must not be copy-assignable");
+    static_assert(!std::is_move_constructible_v<DmaBufAllocator>, "DmaBufAllocator must not be move-constructible");
+    static_assert(!std::is_move_assignable_v<DmaBufAllocator>, "DmaBufAllocator must not be move-assignable");
+
     auto& allocator = DmaBufAllocator::instance();
     std::cout << "[Test] DmaBufAllocator type: " << allocator.type_name()
               << ", device_path: " << allocator.device_path()
@@ -25,6 +33,13 @@ int main() {
         assert(buf->size() == test_size);
         assert(buf->mmap_size() >= test_size);
         assert(buf->mmap_addr() != nullptr);
+
+#if defined(__linux__)
+        // 校验分配出的 DMA-BUF 文件描述符是否具备 FD_CLOEXEC 标志
+        int fd_flags = ::fcntl(buf->fd(), F_GETFD);
+        assert(fd_flags != -1);
+        assert((fd_flags & FD_CLOEXEC) != 0);
+#endif
 
         // 测试直接 CPU 写同步
         assert(buf->sync_start(DMA_SYNC_WRITE));
@@ -153,6 +168,12 @@ int main() {
         auto zero_buf = allocator.allocate(0);
         assert(zero_buf == nullptr);
         assert(allocator.last_error() == "requested allocation size is 0");
+
+        if (allocator.type() == DmaAllocatorType::DRM_DUMB) {
+            auto oversized = allocator.allocate(size_t{512} << 20); // 512MB
+            assert(oversized == nullptr);
+            assert(allocator.last_error().find("256MB") != std::string::npos);
+        }
     }
 
     // 6. 验证 RAII 保护、DmaBufferSpec 构造与空对象安全性

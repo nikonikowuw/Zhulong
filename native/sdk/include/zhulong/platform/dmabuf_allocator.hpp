@@ -4,7 +4,7 @@
  *
  * 核心设计原则：
  * 1. 硬件级零拷贝基石：首选 /dev/dma_heap 目录中的物理连续内存堆 (CMA)，次选系统散布堆 (system/sys/uncached)，
- *    备选 DRM Dumb Buffer (/dev/dri/card0 与 /dev/dri/renderD128 二维化步长映射)。
+ *    备选 DRM Dumb Buffer (/dev/dri/card0 等主节点二维化步长映射)。
  * 2. CPU Cache 同步保护：成对的 DMA_BUF_IOCTL_SYNC 调用（DMA_BUF_SYNC_START 与 DMA_BUF_SYNC_END），
  *    自动处理 -EINTR 与有界退避重试的 -EAGAIN，杜绝紧凑忙轮询死循环。
  * 3. 完善的 RAII 语义：DmaBuffer 与 ScopedCpuSync 拥有独立且安全的资源描述符生命周期，杜绝 UAF。
@@ -170,6 +170,12 @@ private:
 class DmaBufAllocator {
 public:
     static DmaBufAllocator& instance();
+
+    // 禁用拷贝与移动（Rule of Five / C.21）
+    DmaBufAllocator(const DmaBufAllocator&) = delete;
+    DmaBufAllocator& operator=(const DmaBufAllocator&) = delete;
+    DmaBufAllocator(DmaBufAllocator&&) = delete;
+    DmaBufAllocator& operator=(DmaBufAllocator&&) = delete;
 
     /**
      * @brief 分配物理 DMA-BUF 缓冲区

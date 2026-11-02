@@ -101,15 +101,23 @@ void report_allocation_failure(const char* reason, int error_number, size_t size
 #endif
 
 #if defined(__linux__)
+struct DirDeleter {
+    void operator()(DIR* dir) const noexcept {
+        if (dir) {
+            ::closedir(dir);
+        }
+    }
+};
+
 void scan_dma_heaps(std::vector<std::string>& cma_candidates,
                     std::vector<std::string>& sys_candidates) {
-    DIR* dir = ::opendir("/dev/dma_heap");
+    std::unique_ptr<DIR, DirDeleter> dir(::opendir("/dev/dma_heap"));
     if (!dir) {
         return;
     }
 
     struct dirent* entry = nullptr;
-    while ((entry = ::readdir(dir)) != nullptr) {
+    while ((entry = ::readdir(dir.get())) != nullptr) {
         if (entry->d_name[0] == '.') {
             continue;
         }
@@ -137,7 +145,6 @@ void scan_dma_heaps(std::vector<std::string>& cma_candidates,
             sys_candidates.push_back(full_path);
         }
     }
-    ::closedir(dir);
 }
 
 bool sync_dma_buf(int fd, uint64_t sync_flags) noexcept {
@@ -183,7 +190,8 @@ DmaBuffer::DmaBuffer(const DmaBufferSpec& spec)
       mmap_addr_(spec.mmap_addr), dumb_handle_(spec.dumb_handle) {
 #if defined(__linux__)
     if (spec.drm_fd >= 0) {
-        drm_fd_ = ::dup(spec.drm_fd);
+        // 使用 F_DUPFD_CLOEXEC 复制描述符，杜绝向子进程泄漏未带 CLOEXEC 标志的设备 fd
+        drm_fd_ = ::fcntl(spec.drm_fd, F_DUPFD_CLOEXEC, 0);
         if (drm_fd_ < 0 && dumb_handle_ > 0) {
             // dup 失败：使用原始传入的 spec.drm_fd 尽力销毁 dumb handle，杜绝内核显存句柄泄漏
             struct drm_mode_destroy_dumb destroy_req{};
@@ -370,8 +378,8 @@ void DmaBufAllocator::probe() {
     }
 
     // 3. 备选 DRM Dumb Buffer PRIME FD（使用 2D 几何步长真实探测）
-    // 支持探测 /dev/dri/card0 与 /dev/dri/renderD128 等节点
-    const char* drm_candidates[] = {"/dev/dri/card0", "/dev/dri/renderD128"};
+    // 支持探测 /dev/dri/card0 与 /dev/dri/card1 等主节点（严禁使用 /dev/dri/renderD* 节点创建 Dumb Buffer）
+    const char* drm_candidates[] = {"/dev/dri/card0", "/dev/dri/card1"};
     for (const char* drm_path : drm_candidates) {
         drm_fd_ = ::open(drm_path, O_RDWR | O_CLOEXEC);
         if (drm_fd_ < 0) {
@@ -468,6 +476,13 @@ std::unique_ptr<DmaBuffer> DmaBufAllocator::allocate(size_t size) {
     }
 
     if (type_ == DmaAllocatorType::DRM_DUMB) {
+        // 单个 Dumb Buffer 最大上限防御（防止整型溢出及超过显存控制器 2D 尺寸物理极限）
+        constexpr size_t MAX_DRM_DUMB_SIZE = 256 * 1024 * 1024; // 256MB
+        if (size > MAX_DRM_DUMB_SIZE) {
+            set_error("requested DRM dumb buffer size exceeds maximum supported limit (256MB)");
+            return nullptr;
+        }
+
         // 2D 尺寸二维化计算：固定 4096 步长宽度（对齐 4KB 页面与 max_width 约束），折算高度
         constexpr __u32 DUMB_STRIDE_WIDTH = 4096;
         __u32 calculated_height = static_cast<__u32>((size + DUMB_STRIDE_WIDTH - 1) / DUMB_STRIDE_WIDTH);
