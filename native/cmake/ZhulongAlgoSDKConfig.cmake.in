@@ -129,6 +129,55 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# 视觉前处理后端（编译期绑定，与推理后端正交）
+# ---------------------------------------------------------------------------
+# ⚠️ 前缀只导出推理后端是不够的：`vision_backend=rga` 的前缀里
+#    libZhulongAlgoRuntime.a 会把 rga_vision_backend.cpp.o 拖进最终可执行文件，
+#    而该对象引用 imcheckHeader/improcess/wrapbuffer_virtualaddr_t。不在这里补
+#    librga.so.2，消费方（算法包工程）会得到一堆 undefined reference —— 而且包工程
+#    手里没有任何线索能猜到“缺的是视觉后端”。
+set(ZhulongAlgoSDK_VISION_BACKEND "@ZHULONG_VISION_BACKEND@")
+if("${ZhulongAlgoSDK_VISION_BACKEND}" STREQUAL "rga")
+    set(_zhulong_rga_dir "${ZHULONG_SDK_PREFIX}/third_party/rga/lib")
+    set(_zhulong_rga_library "")
+    # 与 RKNN 同构的查找顺序：前缀自带（可搬迁）→ 使用端 RGA_ROOT → 系统默认。
+    # 先按显式路径找：交叉工具链的 FIND_ROOT_PATH_MODE_LIBRARY=ONLY 会拦住 find_library。
+    foreach(_candidate IN ITEMS
+            "${_zhulong_rga_dir}/librga.so.2"
+            "${RGA_ROOT}/lib/librga.so.2"
+            "${RGA_ROOT}/librga.so.2")
+        if(EXISTS "${_candidate}")
+            set(_zhulong_rga_library "${_candidate}")
+            break()
+        endif()
+    endforeach()
+    if(NOT _zhulong_rga_library)
+        # ⚠️ 不要在调用前 `set(ZHULONG_RGA_LIBRARY "")`：空普通变量会遮蔽同名 cache 项，
+        #    find_library 会直接跳过搜索而不报错（实测：板端
+        #    /usr/lib/aarch64-linux-gnu/librga.so 明明存在，仍然报找不到）。
+        find_library(ZHULONG_RGA_LIBRARY NAMES rga
+            HINTS "${_zhulong_rga_dir}" "${RGA_ROOT}/lib")
+        if(ZHULONG_RGA_LIBRARY)
+            set(_zhulong_rga_library "${ZHULONG_RGA_LIBRARY}")
+        endif()
+    endif()
+    if(NOT _zhulong_rga_library)
+        message(FATAL_ERROR
+            "本 SDK 前缀的视觉后端是 rga，但找不到 librga.so.2。三条路选一条：\n"
+            "  1) 设置 -DRGA_ROOT=<rga 前缀>（须含 lib/librga.so.2）；\n"
+            "  2) 让板端 BSP 提供 /usr/lib/librga.so.2；\n"
+            "  3) 改用 CPU 前处理档位的前缀（vision_backend=cpu）。")
+    endif()
+    set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
+        INTERFACE_LINK_LIBRARIES "${_zhulong_rga_library}")
+    get_filename_component(_zhulong_rga_link_dir "${_zhulong_rga_library}" DIRECTORY)
+    set_property(TARGET Zhulong::AlgoRuntime APPEND PROPERTY
+        INTERFACE_LINK_OPTIONS "-Wl,-rpath-link,${_zhulong_rga_link_dir}")
+elseif(NOT "${ZhulongAlgoSDK_VISION_BACKEND}" STREQUAL "cpu")
+    message(FATAL_ERROR "未知的 SDK 视觉后端档位: '${ZhulongAlgoSDK_VISION_BACKEND}'")
+endif()
+
+# ---------------------------------------------------------------------------
 # 包入口可执行文件的骨架（阶段 3.1/3.2 产出；缺失时显式报错而不是静默跳过）
 # ---------------------------------------------------------------------------
 if(EXISTS "${ZHULONG_SDK_PREFIX}/lib/libzhulong_algo_sdk.a")

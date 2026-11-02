@@ -67,6 +67,57 @@ namespace detail
     }
 
     /**
+     * @brief 协议写端（`--verify` / `--extract-feature` / broker 首行 JSON）
+     *
+     * 为何不直接用 `std::cout`：stdout 是宿主按行解析的**协议通道**，而厂商运行库会
+     * 往里打启动横幅 —— 实测 librga 在建后端时打印 `rga_api version 1.10.1_[10]`，
+     * 宿主读到非 JSON 行就判 `errProtocolDesync` 并杀掉热进程，最终表现为
+     * 「算法包 --extract-feature 永远失败」（`internal/faceextract/client.go` 的 parseReply）。
+     *
+     * 因此启动时先 dup 一份 fd 专供协议，再把 fd1 改道 stderr：C 层 `printf`、厂商库
+     * 横幅、误用的 `std::cout` 全部归日志（宿主 `cmd.Stderr = os.Stderr` 会继承并落盘），
+     * 协议与噪声物理隔离，不再靠「库应该守规矩」这种假设。
+     */
+    std::FILE *g_protocol_stream = nullptr;
+
+    bool install_protocol_channel()
+    {
+        if (g_protocol_stream != nullptr)
+        {
+            return true;
+        }
+        const int protocol_fd = ::dup(STDOUT_FILENO);
+        if (protocol_fd < 0)
+        {
+            return false;
+        }
+        std::FILE *stream = ::fdopen(protocol_fd, "w");
+        if (stream == nullptr)
+        {
+            ::close(protocol_fd);
+            return false;
+        }
+        // 行缓冲：每条结果行立即送达宿主，不等 4KB 缓冲满。
+        std::setvbuf(stream, nullptr, _IOLBF, 0);
+        if (::dup2(STDERR_FILENO, STDOUT_FILENO) < 0)
+        {
+            std::fclose(stream);
+            return false;
+        }
+        g_protocol_stream = stream;
+        return true;
+    }
+
+    /** @brief 往协议通道写一整行（自带换行与 flush）；未初始化时退回 stdout） */
+    void write_protocol_line(const std::string &line)
+    {
+        std::FILE *stream = g_protocol_stream != nullptr ? g_protocol_stream : stdout;
+        std::fwrite(line.data(), 1, line.size(), stream);
+        std::fputc('\n', stream);
+        std::fflush(stream);
+    }
+
+    /**
      * @brief 给当前线程设一个可分辨的内核线程名（`ps -L` / gdb / perf 用）
      *
      * 平台差异收敛在这里：Linux 的 `pthread_setname_np` 作用于**指定**线程（需显式传
@@ -509,9 +560,10 @@ namespace detail
 
         void emit_extract_failure(uint32_t request_id, const char *code, const std::string &error)
         {
-            std::cout << "{\"request_id\":" << request_id << ",\"status\":\"failed\",\"code\":"
-                      << runner::json_quote(code) << ",\"error\":" << runner::json_quote(error) << "}"
-                      << std::endl;
+            std::ostringstream output;
+            output << "{\"request_id\":" << request_id << ",\"status\":\"failed\",\"code\":"
+                   << runner::json_quote(code) << ",\"error\":" << runner::json_quote(error) << "}";
+            write_protocol_line(output.str());
         }
 
         void emit_extract_result(uint32_t request_id, const float *features, uint32_t dim)
@@ -530,7 +582,7 @@ namespace detail
                 output << std::setprecision(9) << features[i];
             }
             output << "]}";
-            std::cout << output.str() << std::endl;
+            write_protocol_line(output.str());
         }
 
         /** @brief zhulong_status_t → 协议 code；失败语义见 design §11.8 */
@@ -629,7 +681,6 @@ namespace detail
             }
 
             emit_extract_result(header.request_id, features, dim);
-            std::cout.flush();
         }
     }
 
@@ -637,10 +688,12 @@ namespace detail
                    const std::string &config_json = "{}",
                    const std::string &algorithm_id = "")
     {
-        std::cout << "{\"step\":\"abi_verified\",\"name\":"
-                  << runner::json_quote(api.plugin_name ? api.plugin_name : "")
-                  << ",\"version\":" << runner::json_quote(api.plugin_version ? api.plugin_version : "")
-                  << "}" << std::endl;
+        std::ostringstream verified;
+        verified << "{\"step\":\"abi_verified\",\"name\":"
+                 << runner::json_quote(api.plugin_name ? api.plugin_name : "")
+                 << ",\"version\":" << runner::json_quote(api.plugin_version ? api.plugin_version : "")
+                 << "}";
+        write_protocol_line(verified.str());
 
         // 1. 创建模型
         zhulong_model_group_h model = nullptr;
@@ -749,14 +802,16 @@ namespace detail
         api.worker_destroy(worker);
         api.model_destroy(model);
 
-        std::cout << "{\"status\":\"passed\",\"sample\":" << runner::json_quote(sample_path)
-                  << ",\"sample_decoded\":" << (sample_decoded ? "true" : "false")
-                  << ",\"width\":" << width
-                  << ",\"height\":" << height
-                  << ",\"result_type\":" << res_type
-                  << ",\"count\":" << count
-                  << ",\"cost_ms\":" << cost_ms
-                  << ",\"result\":" << result_json << "}" << std::endl;
+        std::ostringstream passed;
+        passed << "{\"status\":\"passed\",\"sample\":" << runner::json_quote(sample_path)
+               << ",\"sample_decoded\":" << (sample_decoded ? "true" : "false")
+               << ",\"width\":" << width
+               << ",\"height\":" << height
+               << ",\"result_type\":" << res_type
+               << ",\"count\":" << count
+               << ",\"cost_ms\":" << cost_ms
+               << ",\"result\":" << result_json << "}";
+        write_protocol_line(passed.str());
         return 0;
     }
 
@@ -1328,7 +1383,9 @@ namespace detail
 
     void print_start_line(const std::string &plugin_label)
     {
-        std::cout << "{\"step\":\"start\",\"plugin\":" << runner::json_quote(plugin_label) << "}" << std::endl;
+        std::ostringstream line;
+        line << "{\"step\":\"start\",\"plugin\":" << runner::json_quote(plugin_label) << "}";
+        write_protocol_line(line.str());
     }
 
 

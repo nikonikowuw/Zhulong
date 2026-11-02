@@ -78,6 +78,15 @@ Every cross profile **must** declare `"inference_backend"` (`rknn` for the board
 and CMake fails closed rather than silently linking a stub.
 
 ```sh
+# Host artifact for the board. ONE tag: it already carries both RKNN inference and
+# RGA preprocessing in libZhulongAlgoRuntime (the host binary itself links neither).
+make cross-board          # → build/targets/rk3568-rknn-rga/Zhulong
+
+# Algorithm package (where RKNN/RGA actually land): SDK prefix + package archive.
+make pkg-rk3568           # rga preprocessing by default; PKG_VISION=cpu for the control
+
+# Low-level entries (any tag / any external profile):
+make cross CROSS_TARGET=<tag>
 make native-cross-build CROSS_PROFILE=/path/to/target.json \
   CROSS_OUTPUT=build/targets/PROFILE_NAME/Zhulong
 # Compile Native test programs, but do not execute them on the host:

@@ -58,6 +58,18 @@ bool parse_options(int argc, char** argv, Options& options, std::string& error);
 void print_start_line(const std::string& plugin_label);
 
 /**
+ * @brief 把协议通道从 stdout 的噪声里隔离出来（幂等）
+ *
+ * 必须在任何厂商运行库初始化之前调用：厂商库会往 stdout 打启动横幅（实测 librga
+ * 打印 `rga_api version ...`），而 stdout 是宿主按行解析的协议通道，一行噪声就会
+ * 被判成 `protocol desync` 并杀掉热进程。做法是 dup 一份 fd 专供协议，再把 fd1
+ * 改道 stderr（噪声归日志）。
+ *
+ * @return false 表示 dup/fdopen/dup2 失败（此时进程不能再安全地输出协议）
+ */
+bool install_protocol_channel();
+
+/**
  * @brief 用已构造好的 C ABI 表执行骨架
  *
  * verify 模式：model_create → worker_create → task_open → process → release 一次，
@@ -78,6 +90,14 @@ int run_api(const zhulong_plugin_api_v1& api, const Options& options);
  */
 template<typename PluginClass, typename ResultAdapter>
 int run(int argc, char** argv, const char* plugin_name, const char* plugin_version) {
+    // ⚠️ 协议通道必须最先建立：它只依赖 fd，不依赖任何插件/模型状态；放在 get_api 之前
+    //    也能覆盖「API 表构造期间厂商库就已打横幅」的情况。
+    if (!detail::install_protocol_channel()) {
+        std::fprintf(stderr,
+                     "{\"status\":\"failed\",\"stage\":\"protocol\",\"error\":\"cannot isolate stdout\"}\n");
+        return 5;
+    }
+
     zhulong_plugin_api_v1 api{};
     const zhulong_status_t rc = zhulong::detail::PluginApi<PluginClass, ResultAdapter>::get_api(
         1, &api, sizeof(api), plugin_name, plugin_version);

@@ -154,6 +154,13 @@ func (s *Subscription) Close() error
 | 退出码 | `0` = stdin 正常 EOF；`5` = 能力缺失 / 帧头帧体截断 |
 | 帧级错误 | 无脸、输入非法**不退出进程**——一张坏图不该毁掉热进程 |
 
+- ⚠️ **stdout 的行协议必顶住厂商库的噪声**：实测 librga 在 RGA 后端初始化时往 stdout 打
+  `rga_api version 1.10.1_[10]`，宿主读到非 JSON 行即判 `errProtocolDesync`、杀死热进程，
+  表现为「登记永远 `FEATURE_EXTRACT_FAILED`」（而 `--verify` 看起来正常）。因此骨架在
+  `ZHULONG_ALGO_MAIN` 生成的 `run()` 最开头调用 `install_protocol_channel()`：dup 一份 fd
+  专供协议，再把 fd1 改用 stderr（噪声归日志）。新增厂商后端时不得假设它守规矩——
+  这是每一条新增硬件库都会再碰一次的坑。
+
 - 能力用**弱符号**提供：骨架 `extern "C" __attribute__((weak)) zhulong_face_extract_feature(...)`，face 包定义、静态链入即解析；plate 包不定义 → 如实回 `UNSUPPORTED`。
 - ⚠️ 弱引用**不会**让 ld 抽取静态归档成员：定义必须来自包内直接编译的源文件，搬进 `.a` 会让能力静默消失（表现为「底库登记功能没了且没有错误日志」）。
 

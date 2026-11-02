@@ -167,6 +167,16 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 - **FrameBroker 双轨分发与零拷贝穿透**：
   - 当上游硬件帧具备有效 `HardwareFrame::dma_fd >= 0` 时，`publish_frame` 直接分发该文件描述符，**完全杜绝任何 CPU `std::memcpy` 与 Cache 刷新**；
   - 当为 CPU 软解帧时（`dma_fd < 0`），写入 POSIX 共享内存池（`shm_pool_`）以兼容标准 SHM 客户端；若硬件环境激活了 `dma_slots_`，则同步写入 DMA-BUF 槽位并由 `ScopedCpuSync` RAII 守卫刷出 Cache，供下游加速插件直绑。
+  - ⚠️ **槽位池是 `slot_count × slot_size` 一次性申请的（默认 8 × 4MB = 32MB）**，要的是物理连续的 CMA。
+    实测 RK3568 的 `CmaTotal` 只有 **16MB** 且长期被占满，`DMA_HEAP_IOCTL_ALLOC` 直接 `ENOMEM`，
+    于是零拷贝槽位池建不起来、退回纯共享内存路径（每帧多一次拷贝）。这是**允许的降级**，
+    但**不允许静默**：`FrameBroker::start` 现在会打 WARN（含需求尺寸 + `DmaBufAllocator::last_error()`），
+    否则板端排查会误以为自己在零拷贝路径上。要真开零拷贝，先调小 `broker_options` 的
+    `slot_count`/`slot_size`，或改板端 DTS 的 CMA 分区。
+  - 不靠日志的诊断三件套：`/proc/interrupts` 里 `rkvdec` 计数是否增长（硬解）、
+    `/sys/kernel/debug/rkrga/load` 是否出现包进程条目（RGA 真在跑）、
+    `/sys/kernel/debug/rknpu/load` 是否非零（NPU 真在算）。三者全静默而 `--verify` 仍能出结果，
+    说明整条链路都退化成 CPU 了。
 - **CPU Cache 同步括号与 RAII 守卫 (ScopedCpuSync)**：
   - CPU 读写前：调用 `sync_start(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE)` 触发 `DMA_BUF_IOCTL_SYNC`；
   - 硬件外设介入前：调用 `sync_end(DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE)` 刷回 Cache Line；
@@ -474,8 +484,9 @@ make board-check BOARD_HOST=<ssh 主机别名>
 ```bash
 make -C packages/face_recognition/rk3568 \
     SDK_PREFIX=<aarch64 前缀> \
-    TOOLCHAIN=build/native/cross-rk3568-rknn/toolchain.cmake \
-    RKNN_ROOT=native/vendor/rknpu2
+    TOOLCHAIN=build/native/cross-rk3568-rknn-rga/toolchain.cmake \
+    RKNN_ROOT=native/vendor/rknpu2 \
+    RGA_ROOT=native/vendor/rga        # 前缀的视觉后端是 rga 时必须给
 ```
 
 - **工具链文件由 `native/scripts/build.py` 生成时就要写全**（编译器 + `CMAKE_*_FLAGS_INIT`），
@@ -485,6 +496,15 @@ make -C packages/face_recognition/rk3568 \
   限制在 sysroot 内搜索，表现是「明明给了前缀却找不到包」；
 - `RKNN_ROOT` 在 SDK 配置里改成**先按显式路径**找 `librknnrt.so`，再退回 `find_library`：
   同上，`FIND_ROOT_PATH_MODE_LIBRARY ONLY` 会让 `find_library` 看不见厂商 SDK 目录。
+- ⚠️ **SDK 前缀必须同时导出版本与视觉后端**：`VERSION` 里有 `backend=` 与 `vision=`，
+  `ZhulongAlgoSDKConfig.cmake` 里 `ZhulongAlgoSDK_VISION_BACKEND` 与 `ZhulongAlgoSDK_BACKEND` 并列。
+  漏掉视觉后端时，`vision_backend=rga` 的前缀会把 `rga_vision_backend.cpp.o` 拖进包入口，
+  却在链接期报一串 `undefined reference to imcheckHeader/improcess/wrapbuffer_virtualaddr_t`
+  —— 而包工程手里没有任何线索能猜到「缺的是视觉后端」。消费侧只能通过 `RGA_ROOT` 或
+  前缀自带的 `third_party/rga/lib` 补 `librga.so.2`。
+- ⚠️ **包 Makefile 的 cmake 配置必须对参数敏感**：只依赖 `CMakeLists.txt` 的 mtime，会让上一次的
+  `-DCMAKE_TOOLCHAIN_FILE` / `-DRGA_ROOT` 静默沿用，症状是「换了档位编出来的包还是旧后端」。
+  现在的做法是 `.configure-args` 指纹文件，参数变了才重跑 cmake。
 
 实测：交叉产物与板端自建产物对同一张脸给出**逐位相同**的 512 维向量
 （`head=[0.02589, -0.06186, 0.05486, 0.00463]`，`norm=1.000000`）—— 同源同权重，确定性推理。

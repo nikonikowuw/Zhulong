@@ -13,12 +13,13 @@
 #
 # 用法：
 #   native/scripts/board_host_check.sh
-#   BOARD_HOST=rk3568 PROFILE=native/profiles/rk3568-rknn.json native/scripts/board_host_check.sh
+#   BOARD_HOST=rk3568 PROFILE=native/profiles/rk3568-rknn-rga.json native/scripts/board_host_check.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BOARD_HOST="${BOARD_HOST:-rk3568}"
-PROFILE="${PROFILE:-native/profiles/rk3568-rknn.json}"
+# 默认档位是 rk3568-rknn-rga（NPU 推理 + RGA 前处理都开）。
+PROFILE="${PROFILE:-native/profiles/rk3568-rknn-rga.json}"
 REMOTE_DIR="${REMOTE_DIR:-/root/zhulong-host-check}"
 # 端口刻意不用 8000：板上可能还跑着上一次手工起的实例，撞端口会让本脚本的 curl 打到
 # **旧实例**上（症状是「全新 data 目录却报算法已安装」这种莫名其妙的失败）。
@@ -49,7 +50,8 @@ if [ -z "${PKG_ARCHIVE}" ]; then
     python3 packages/face_recognition/scripts/build_package.py --target rk3568 \
         --sdk-prefix "${SDK_LOCAL}" \
         --toolchain "build/native/cross-${PROFILE_NAME}/toolchain.cmake" \
-        --rknn-root native/vendor/rknpu2 > board-host-pkg.log 2>&1 \
+        --rknn-root native/vendor/rknpu2 --rga-root native/vendor/rga \
+        > board-host-pkg.log 2>&1 \
         || { tail -20 board-host-pkg.log; exit 1; }
     PKG_ARCHIVE="$(ls -t build/packages/face_recognition-*-rk3568.tar.gz | head -1)"
 fi
@@ -81,9 +83,11 @@ cd '${REMOTE_DIR}'
 # 先确认端口上没有旧实例：否则 wait_ready 会打到**上一个实例**上，
 # 症状是「刚删了 data 目录却报算法/人员已存在」这种说不通的失败。
 #
-# 按 /proc/<pid>/exe 认亲，不按命令行：脚本用相对路径 `./Zhulong` 启动，argv[0] 里
-# 没有目录，pkill -f 之类根本匹配不到（而且 pkill -f 还会匹配到自己的 ssh 命令行、
-# 把自己杀掉 → ssh 255）。
+# 按 /proc/<pid>/exe 认亲，不按命令行：启动用的是相对路径（argv[0] 里没有目录），
+# pkill -f 之类根本匹配不到（而且 pkill -f 还会匹配到自己的 ssh 命令行、把自己杀掉 → ssh 255）。
+# ⚠️ 本 heredoc 是 <<REMOTE（未加引号），整个正文都会做参数/命令替换——**注释里的反引号
+#    和 $() 同样会被执行**。这里曾经用反引号标出可执行文件名，结果在宿主机上凭空跑了
+#    一次 ./Zhulong 并报 No such file。要写示例命令就加反斜杠转义，或者干脆不用反引号。
 [ -f pid ] && kill "\$(cat pid)" 2>/dev/null || true
 python3 - <<'PYEOF' || true
 import glob, os, signal

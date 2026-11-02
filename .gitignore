@@ -69,6 +69,10 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# 板端验收脚本在仓库根落的日志（make board-check / board_host_check.sh）
+board-cross-build.log
+board-host-pkg.log
+
 # 前端构建产物与缓存
 webui/dist/
 dist/

@@ -242,11 +242,25 @@ CMake 3.31.6、Go 1.27.1）。Darwin 链接路径保留但未经 macOS 验证。
 不允许执行测试**：
 
 ```bash
+# 宿主交叉产物（板端）：一个档位同时含 RKNN 推理与 RGA 前处理
+make cross-board          # → build/targets/rk3568-rknn-rga/Zhulong
+
+# 算法包交叉产物：RKNN / RGA 真正落地的地方（SDK 前缀 + 包归档）
+make pkg-rk3568           # 默认 rga 前处理；PKG_VISION=cpu 出对照档位
+
+# 底层入口（任意档位/任意 profile）
+make cross CROSS_TARGET=<档位名>
 make native-cross-build CROSS_PROFILE=<profile> CROSS_OUTPUT=build/targets/<name>/Zhulong
 ```
 
-实际的目标链接与 RK3568 兼容性仍待匹配的工具链/sysroot 与板端实测证据。
-详见 [`native/README.md`](native/README.md)。
+⚠️ 推理后端（rknn/onnx）与视觉后端（cpu/rga）是**编译期**开关，且只作用于
+`libZhulongAlgoRuntime`（→ SDK 前缀 → 算法包）。宿主 `Zhulong` 两者都不链（实测 NEEDED
+无 `librknnrt.so` / `librga.so.2`），所以不存在「宿主 rknn 版 / 宿主 rga 版」这种产物。
+
+交叉构建不重建前端，发版前先 `make frontend-build`。实际兼容性证据来自
+`native/scripts/board_host_check.sh`（交叉产物上板跑完启动 → 迁移 → 引擎 → 算法包 → NPU 推理全链路）
+与 `board_check.sh`（算法包支线）；两个脚本的默认档位都是 `rk3568-rknn-rga`（NPU 推理 + RGA 前处理），
+`PROFILE=` 可换档。详见 [`native/README.md`](native/README.md)。
 
 ## 许可证
 

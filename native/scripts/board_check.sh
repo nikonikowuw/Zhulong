@@ -22,7 +22,11 @@ PKG="${PKG:-packages/face_recognition/rk3568}"
 # 出货形态由包自己的打包脚本产出（交叉构建 + 归档），板端自建那条路只是「SDK 可用性」证据。
 BUILD_SCRIPT="${BUILD_SCRIPT:-packages/face_recognition/scripts/build_package.py}"
 RKNN_ROOT="${RKNN_ROOT:-${REPO_ROOT}/native/vendor/rknpu2}"
-PROFILE="${PROFILE:-native/profiles/rk3568-rknn.json}"
+# rga 档位的前缀会把 librga.so.2 传给消费方；非 rga 档位传了也无害。
+RGA_ROOT="${RGA_ROOT:-${REPO_ROOT}/native/vendor/rga}"
+# 默认档位是 rk3568-rknn-rga：板端两个硬件后端（NPU 推理 + RGA 前处理）都要，
+# 二者是编译期互斥开关，但同一个档位里可以同时打开。
+PROFILE="${PROFILE:-native/profiles/rk3568-rknn-rga.json}"
 SDK_LOCAL="${SDK_LOCAL:-/tmp/zhulong-sdk-aarch64}"
 
 cd "${REPO_ROOT}"
@@ -78,7 +82,8 @@ echo "[5/6] 交叉构建出货形态（归档）并在板上验同一份产物"
 TARGET_NAME="$(basename "${PKG}")"
 TOOLCHAIN="${REPO_ROOT}/build/native/cross-$(python3 -c "import json;print(json.load(open('${PROFILE}'))['name'])")/toolchain.cmake"
 python3 "${BUILD_SCRIPT}" --target "${TARGET_NAME}" --sdk-prefix "${SDK_LOCAL}" \
-    --toolchain "${TOOLCHAIN}" --rknn-root "${RKNN_ROOT}" > board-cross-build.log 2>&1 \
+    --toolchain "${TOOLCHAIN}" --rknn-root "${RKNN_ROOT}" \
+    --rga-root "${RGA_ROOT}" > board-cross-build.log 2>&1 \
     || { tail -20 board-cross-build.log; exit 1; }
 ARCHIVE="$(ls -t build/packages/*-"${TARGET_NAME}".tar.gz | head -1)"
 echo "    归档: ${ARCHIVE}"

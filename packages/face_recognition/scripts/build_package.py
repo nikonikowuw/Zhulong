@@ -29,6 +29,9 @@ def main():
                                             "build/native/cross-rk3568-rknn/toolchain.cmake）；"
                                             "给了就跳过验包（交叉产物本机不能执行）")
     parser.add_argument("--rknn-root", help="RKNN 前缀（交叉构建 rknn 档位时必需）")
+    parser.add_argument("--rga-root",
+                        help="RGA 前缀（SDK 前缀的视觉后端是 rga 时必需：前缀会把"
+                             "librga.so.2 传给消费方，交叉链接需要能解析它）")
     parser.add_argument("--onnxruntime-root", help="ONNX Runtime 前缀（交叉构建 onnx 档位时用）")
     args = parser.parse_args()
     if args.toolchain and not args.no_verify:
@@ -76,6 +79,8 @@ def main():
             make_args.append("TOOLCHAIN=" + str(Path(args.toolchain).resolve()))
         if args.rknn_root:
             make_args.append("RKNN_ROOT=" + str(Path(args.rknn_root).resolve()))
+        if args.rga_root:
+            make_args.append("RGA_ROOT=" + str(Path(args.rga_root).resolve()))
         if args.onnxruntime_root:
             make_args.append("ONNXRUNTIME_ROOT=" + str(Path(args.onnxruntime_root).resolve()))
         res = subprocess.run(make_args)

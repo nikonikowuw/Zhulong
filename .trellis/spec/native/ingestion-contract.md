@@ -14,7 +14,9 @@
 - **流会话生命周期**：`Zhulong_stream_acquire`、`release`、`get_status`
 - **帧包订阅通道**：`Zhulong_stream_subscribe`、`unsubscribe`
 - **构建入口**：`make native-deps`（联网拉取固定依赖）、`make native-build`、`make native-test`、`make go-check`
-- **交叉编译**：`make native-cross-build CROSS_PROFILE=... CROSS_OUTPUT=build/targets/NAME/Zhulong`
+- **交叉编译**：`make cross-board`（宿主，默认档位 `rk3568-rknn-rga`）、`make pkg-rk3568`（算法包）、
+  `make cross CROSS_TARGET=...`（底层入口）或
+  `make native-cross-build CROSS_PROFILE=... CROSS_OUTPUT=build/targets/NAME/Zhulong`（任意 profile）
 
 ---
 
