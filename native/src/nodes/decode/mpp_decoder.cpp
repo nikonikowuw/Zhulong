@@ -257,13 +257,14 @@ int MppDecodeNode::send_packet(const uint8_t *data, size_t size, int64_t pts, in
     if (!initialized_ || !mpi_ || !mpi_->decode_put_packet) {
         return decode_backend_failure;
     }
+    // ⚠️ 排空状态契约：若已发送 EOS，继续送包无效，必须先 flush() 复位 draining 状态（与软解行为对齐）
+    if (eos_sent_) {
+        return AVERROR_EOF;
+    }
     const auto &api = loader_.api();
 
     // 排空 (Drain) 信号：data 为 nullptr 或 size 为 0
     if (!data || size == 0) {
-        if (eos_sent_) {
-            return decode_ok;
-        }
         mpp::MppPacket packet = nullptr;
         if (!api.packet_init || api.packet_init(&packet, nullptr, 0) != mpp::MPP_OK || !packet) {
             ZL_LOGE(stream_id_, log_module, "mpp_eos_packet_init_failed");
@@ -286,7 +287,6 @@ int MppDecodeNode::send_packet(const uint8_t *data, size_t size, int64_t pts, in
         return decode_ok;
     }
 
-    eos_sent_ = false;
     mpp::MppPacket packet = nullptr;
     // 借用入参缓冲区构造 MppPacket：仅在 decode_put_packet 同步调用期间有效，返回后立即 deinit
     if (api.packet_init(&packet, const_cast<uint8_t *>(data), size) != mpp::MPP_OK || !packet) {

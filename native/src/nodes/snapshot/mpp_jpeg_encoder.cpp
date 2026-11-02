@@ -166,7 +166,7 @@ struct Symbols {
 
 /** @brief 16 字节对齐（VEPU 的行/垂直 stride 要求），并对齐到偶数以满足 4:2:0 下采样 */
 int align_stride(int value) {
-    return (value + 15) / 16 * 16;
+    return (value + 15) & ~15;
 }
 
 int floor_even(int value) {
@@ -525,12 +525,21 @@ struct MppJpegEncoder::Impl {
             MppPacket packet = nullptr;
             const int rc = s.mpi->encode_get_packet(s.ctx, &packet);
             if (rc == MPP_OK && packet != nullptr) {
+                struct PacketGuard {
+                    Symbols *sym{nullptr};
+                    MppPacket pkt{nullptr};
+                    ~PacketGuard() {
+                        if (pkt != nullptr && sym != nullptr && sym->mpp_packet_deinit != nullptr) {
+                            sym->mpp_packet_deinit(&pkt);
+                        }
+                    }
+                } guard{&sym, packet};
+
                 void *pos = sym.mpp_packet_get_pos(packet);
                 const size_t len = sym.mpp_packet_get_length(packet);
                 if (pos != nullptr && len > 0) {
                     out.assign(static_cast<uint8_t *>(pos), static_cast<uint8_t *>(pos) + len);
                 }
-                sym.mpp_packet_deinit(&packet);
                 return !out.empty();
             }
             if (rc != MPP_OK && rc != MPP_NOK && rc != MPP_ERR_TIMEOUT) {

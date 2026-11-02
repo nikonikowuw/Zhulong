@@ -74,6 +74,27 @@ void copy_plane_from_nv12(uint8_t *dst, const uint8_t *uv, uint32_t dst_w, uint3
     }
 }
 
+struct CodecContextDeleter {
+    void operator()(AVCodecContext *c) const noexcept {
+        avcodec_free_context(&c);
+    }
+};
+
+struct FrameDeleter {
+    void operator()(AVFrame *f) const noexcept {
+        av_frame_free(&f);
+    }
+};
+
+struct PacketDeleter {
+    void operator()(AVPacket *p) const noexcept {
+        av_packet_free(&p);
+    }
+};
+
+/** @brief FFmpeg MJPEG qscale 缩放系数（将 quality [1,100] 映射至 FF_QP2LAMBDA 范围） */
+constexpr int quality_scale_factor = 5;
+
 } // namespace
 
 bool extract_yuv_region(const CpuFrameView &src, int x, int y, int w, int h, YuvFrame &out) {
@@ -205,7 +226,7 @@ bool encode_jpeg(const YuvFrame &frame, int quality, std::vector<uint8_t> &out_j
         return false;
     }
 
-    AVCodecContext *ctx = avcodec_alloc_context3(codec);
+    std::unique_ptr<AVCodecContext, CodecContextDeleter> ctx(avcodec_alloc_context3(codec));
     if (!ctx) {
         return false;
     }
@@ -220,16 +241,14 @@ bool encode_jpeg(const YuvFrame &frame, int quality, std::vector<uint8_t> &out_j
     ctx->color_range = AVCOL_RANGE_JPEG;
     const int clamped_quality = quality < 1 ? 1 : (quality > 100 ? 100 : quality);
     ctx->flags |= AV_CODEC_FLAG_QSCALE;
-    ctx->global_quality = FF_QP2LAMBDA * (100 - clamped_quality) / 5;
+    ctx->global_quality = FF_QP2LAMBDA * (100 - clamped_quality) / quality_scale_factor;
 
-    if (avcodec_open2(ctx, codec, nullptr) < 0) {
-        avcodec_free_context(&ctx);
+    if (avcodec_open2(ctx.get(), codec, nullptr) < 0) {
         return false;
     }
 
-    AVFrame *av_frame = av_frame_alloc();
+    std::unique_ptr<AVFrame, FrameDeleter> av_frame(av_frame_alloc());
     if (!av_frame) {
-        avcodec_free_context(&ctx);
         return false;
     }
     av_frame->format = ctx->pix_fmt;
@@ -240,9 +259,7 @@ bool encode_jpeg(const YuvFrame &frame, int quality, std::vector<uint8_t> &out_j
 
     // 使用 FFmpeg 自己的对齐分配，而不是把我们的 vector 指针挂上去：
     // avcodec 可能按 SIMD 要求访问 padding，挂裸指针会越界读。
-    if (av_frame_get_buffer(av_frame, 32) < 0) {
-        av_frame_free(&av_frame);
-        avcodec_free_context(&ctx);
+    if (av_frame_get_buffer(av_frame.get(), 32) < 0) {
         return false;
     }
 
@@ -259,24 +276,26 @@ bool encode_jpeg(const YuvFrame &frame, int quality, std::vector<uint8_t> &out_j
         std::memcpy(av_frame->data[2] + row * dst_c_stride, frame.v.data() + src_off, frame.width / 2);
     }
 
-    bool ok = false;
-    if (avcodec_send_frame(ctx, av_frame) >= 0) {
-        AVPacket *pkt = av_packet_alloc();
-        if (pkt) {
-            // MJPEG 是帧内编码：送一帧必然产出一包，无需 flush 循环
-            if (avcodec_receive_packet(ctx, pkt) >= 0) {
-                if (pkt->size > 0 && pkt->data) {
-                    out_jpeg.assign(pkt->data, pkt->data + pkt->size);
-                    ok = !out_jpeg.empty();
-                }
-            }
-            av_packet_free(&pkt);
-        }
+    if (avcodec_send_frame(ctx.get(), av_frame.get()) < 0) {
+        return false;
     }
 
-    av_frame_free(&av_frame);
-    avcodec_free_context(&ctx);
-    return ok;
+    std::unique_ptr<AVPacket, PacketDeleter> pkt(av_packet_alloc());
+    if (!pkt) {
+        return false;
+    }
+
+    // MJPEG 是帧内编码：送一帧必然产出一包，无需 flush 循环
+    if (avcodec_receive_packet(ctx.get(), pkt.get()) < 0) {
+        return false;
+    }
+
+    if (pkt->size > 0 && pkt->data) {
+        out_jpeg.assign(pkt->data, pkt->data + pkt->size);
+        return !out_jpeg.empty();
+    }
+
+    return false;
 }
 
 } // namespace zhulong
