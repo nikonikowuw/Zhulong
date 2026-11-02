@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { type Algorithm } from '@/features/algorithms/data/schema'
 import {
   calculatePeakCompute,
@@ -25,12 +25,26 @@ export interface TaskComputeBudget {
 
 /**
  * 纯计算派生全局算力预算消费情况（支持峰值与当前瞬时双指标）
+ * 包含低频心跳（默认 60 秒刷新内部刻度），避免页面长期驻留时当前瞬时算力无法随时间推移更新。
  */
 export function useTaskComputeBudget(
   tasks: Task[],
-  algorithms: Algorithm[]
+  algorithms: Algorithm[],
+  refreshIntervalMs = 60_000
 ): TaskComputeBudget {
+  const [tick, setTick] = useState(0)
+
+  useEffect(() => {
+    if (refreshIntervalMs <= 0) return
+    const timer = setInterval(() => {
+      setTick((prev) => (prev + 1) % 1_000_000)
+    }, refreshIntervalMs)
+    return () => clearInterval(timer)
+  }, [refreshIntervalMs])
+
   return useMemo(() => {
+    // 引用 tick 使得定时器触发时能重新评估 isScheduleActiveAt
+    void tick
     const algoMap = new Map(algorithms.map((a) => [a.id, a]))
 
     let enabledCount = 0
@@ -77,5 +91,5 @@ export function useTaskComputeBudget(
       enabledCount,
       totalCount: totalAlgoCount,
     }
-  }, [tasks, algorithms])
+  }, [tasks, algorithms, tick])
 }

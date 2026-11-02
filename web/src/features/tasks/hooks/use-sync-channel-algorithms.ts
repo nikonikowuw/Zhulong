@@ -31,6 +31,7 @@ export function useSyncChannelAlgorithms() {
           enabled: d.enabled,
           configJson: d.configJson,
           regionConfigJson: d.regionConfigJson,
+          scheduleJson: d.scheduleJson,
         })),
       })
     },

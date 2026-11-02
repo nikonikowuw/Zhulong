@@ -78,6 +78,7 @@ describe('useSyncChannelAlgorithms', () => {
           enabled: true,
           configJson: '{}',
           regionConfigJson: undefined,
+          scheduleJson: undefined,
         },
         {
           algorithmId: 'algo-smoking',
@@ -85,6 +86,57 @@ describe('useSyncChannelAlgorithms', () => {
           enabled: true,
           configJson: '{}',
           regionConfigJson: undefined,
+          scheduleJson: undefined,
+        },
+      ],
+    })
+  })
+
+  it('preserves scheduleJson when saving channel algorithms', async () => {
+    vi.mocked(tasksApi.saveChannelTask).mockResolvedValue({
+      id: 'task-1',
+      cameraId: 'cam-01',
+      name: '',
+      enabled: true,
+      algorithms: [],
+      createdAt: '',
+      updatedAt: '',
+    })
+
+    const { result } = await renderHook(() => useSyncChannelAlgorithms(), {
+      wrapper: createWrapper(),
+    })
+
+    const schedule = JSON.stringify({
+      enabled: true,
+      days: { monday: [{ start: '08:00', end: '18:00' }] },
+    })
+
+    await result.current.mutateAsync({
+      cameraId: 'cam-01',
+      drafts: [
+        {
+          algorithmId: 'algo-fire',
+          sampleFps: 5,
+          enabled: true,
+          configJson: '{}',
+          regionConfigJson: '{}',
+          scheduleJson: schedule,
+        },
+      ],
+    })
+
+    expect(tasksApi.saveChannelTask).toHaveBeenCalledWith({
+      cameraId: 'cam-01',
+      enabled: true,
+      algorithms: [
+        {
+          algorithmId: 'algo-fire',
+          sampleFps: 5,
+          enabled: true,
+          configJson: '{}',
+          regionConfigJson: '{}',
+          scheduleJson: schedule,
         },
       ],
     })

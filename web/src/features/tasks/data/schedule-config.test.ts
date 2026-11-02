@@ -4,6 +4,7 @@ import {
   calculatePeakCompute,
   clearDaySchedule,
   copyDaySchedule,
+  formatDuration,
   intervalsToSlots,
   mergeTimeRanges,
   minutesToTimeString,
@@ -165,5 +166,12 @@ describe('schedule-config', () => {
       { start: '11:30', end: '17:45' },
     ])
     expect(merged).toEqual([{ start: '08:45', end: '17:45' }])
+  })
+
+  it('formats duration correctly with hours or cross-day', () => {
+    expect(formatDuration('08:00', '18:00')).toBe('10.0h')
+    expect(formatDuration('09:30', '11:00')).toBe('1.5h')
+    expect(formatDuration('20:00', '06:00')).toBe('跨天')
+    expect(formatDuration('12:00', '12:00')).toBe('跨天')
   })
 })

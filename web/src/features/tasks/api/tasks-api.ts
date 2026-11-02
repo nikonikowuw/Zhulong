@@ -6,7 +6,7 @@ export interface GetTasksParams {
   algorithmId?: string
 }
 
-export interface TaskAlgorithmItemDto {
+export interface TaskAlgorithmItemInfo {
   id?: string
   algorithmId: string
   sampleFps?: number
@@ -16,14 +16,18 @@ export interface TaskAlgorithmItemDto {
   scheduleJson?: string
 }
 
-export interface SaveChannelTaskDto {
+export type TaskAlgorithmItemDto = TaskAlgorithmItemInfo
+
+export interface SaveChannelTaskRequest {
   cameraId: string
   name?: string
   enabled?: boolean
-  algorithms: TaskAlgorithmItemDto[]
+  algorithms: TaskAlgorithmItemInfo[]
 }
 
-export interface CreateTaskDto {
+export type SaveChannelTaskDto = SaveChannelTaskRequest
+
+export interface CreateTaskRequest {
   cameraId: string
   algorithmId?: string
   sampleFps?: number
@@ -31,17 +35,21 @@ export interface CreateTaskDto {
   configJson?: string
   regionConfigJson?: string
   name?: string
-  algorithms?: TaskAlgorithmItemDto[]
+  algorithms?: TaskAlgorithmItemInfo[]
 }
 
-export interface UpdateTaskDto {
+export type CreateTaskDto = CreateTaskRequest
+
+export interface UpdateTaskRequest {
   name?: string
   enabled?: boolean
   sampleFps?: number
   configJson?: string
   regionConfigJson?: string
-  algorithms?: TaskAlgorithmItemDto[]
+  algorithms?: TaskAlgorithmItemInfo[]
 }
+
+export type UpdateTaskDto = UpdateTaskRequest
 
 export const tasksApi = {
   /**

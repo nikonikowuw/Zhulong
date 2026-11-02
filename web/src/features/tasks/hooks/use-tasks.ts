@@ -34,7 +34,8 @@ export function useTasks(
 export function useTask(id?: string): UseQueryResult<Task, Error> {
   return useQuery({
     queryKey: [...TASKS_QUERY_KEY, 'detail', id],
-    queryFn: () => (id ? tasksApi.getTask(id) : Promise.reject('No id')),
+    queryFn: () =>
+      id ? tasksApi.getTask(id) : Promise.reject(new Error('No id')),
     enabled: Boolean(id),
   })
 }

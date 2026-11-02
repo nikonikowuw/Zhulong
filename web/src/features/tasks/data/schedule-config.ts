@@ -410,3 +410,11 @@ export function calculatePeakCompute(items: SchedulableItem[]): number {
 
   return peak
 }
+
+export function formatDuration(start: string, end: string): string {
+  const s = timeStringToMinutes(start)
+  const e = timeStringToMinutes(end)
+  if (e <= s) return '跨天'
+  const diffHours = ((e - s) / 60).toFixed(1)
+  return `${diffHours}h`
+}
