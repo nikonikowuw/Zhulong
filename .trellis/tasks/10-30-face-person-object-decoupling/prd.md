@@ -81,24 +81,27 @@ v1 里不存在「有脸、无人」的表达，近景特写只能把**人脸框
 
 - **R1 新增载荷类型**：`ZHULONG_RESULT_TYPE_SCENE_STRUCTURE = 5`。v1 函数表布局不变
   （新增运行时判别值，不新增函数指针、不改既有结构体尺寸）。
-- **R2 独立人脸结构体**：新增 `zhulong_face_structure_item`，尺寸固定为 **288 字节**，严格满足 8 字节整除自然对齐：
+- **R2 独立人脸结构体**：新增 `zhulong_face_structure_item`，尺寸固定为 **288 字节**，严格满足 8 字节自然对齐，零隐式编译器填充：
   ```c
   typedef struct zhulong_face_structure_item {
-      float    box[4];                                   /* 16 B: [x1, y1, x2, y2] 严格归一化坐标 [0.0, 1.0] */
-      float    quality;                                  /*  4 B: 人脸质量分 (0.0 ~ 1.0) */
-      float    landmarks[ZHULONG_FACE_LANDMARK_COUNT][2];/* 40 B: 5 点关键点 (x, y)，归一化 [0.0, 1.0] */
-      int32_t  matched;                                 /*  4 B: 1=命中底库，0=未命中 */
-      float    similarity;                               /*  4 B: Top-1 匹配置信度 (0.0 ~ 1.0) */
-      int32_t  is_fused;                                /*  4 B: 是否多帧融合结果 (预留) */
-      int32_t  person_index;                             /*  4 B: 关联同载荷内 persons[i]；-1 = 无关联孤立脸 */
-      char     person_id[ZHULONG_PERSON_ID_MAX_LEN];      /* 64 B: 底库人员 ID (未命中为空串) */
-      char     person_name[ZHULONG_PERSON_NAME_MAX_LEN];  /* 64 B: 底库人员姓名 (未命中为空串) */
-      char     matched_face_id[ZHULONG_FACE_ID_MAX_LEN];  /* 64 B: 底库人脸照片 ID (未命中为空串) */
-      uint32_t candidate_count;                          /*  4 B: candidates 数组元素数 */
-      uint32_t reserved_;                                /*  4 B: 64 位指针前置填充对齐 (8 字节对齐) */
-      const zhulong_face_candidate* candidates;          /*  8 B: 指向候选人数组借用指针 (指向同一 Arena) */
-  } zhulong_face_structure_item;                         /* 288 字节，满足 8 字节整除 */
+      float    box[4];                                   /* 16 B: [0..16]   [x1, y1, x2, y2] 严格归一化坐标 [0.0, 1.0] */
+      float    quality;                                  /*  4 B: [16..20]  人脸质量分 (0.0 ~ 1.0) */
+      float    landmarks[ZHULONG_FACE_LANDMARK_COUNT][2];/* 40 B: [20..60]  5 点关键点 (x, y)，归一化 [0.0, 1.0] */
+      int32_t  matched;                                 /*  4 B: [60..64]  1=命中底库，0=未命中 */
+      float    similarity;                               /*  4 B: [64..68]  Top-1 匹配置信度 (0.0 ~ 1.0) */
+      int32_t  is_fused;                                /*  4 B: [68..72]  是否多帧融合结果 (预留) */
+      int32_t  person_index;                             /*  4 B: [72..76]  关联同载荷内 persons[i]；-1 = 无关联孤立脸 */
+      char     person_id[ZHULONG_PERSON_ID_MAX_LEN];      /* 64 B: [76..140] 底库人员 ID (未命中为空串) */
+      char     person_name[ZHULONG_PERSON_NAME_MAX_LEN];  /* 64 B: [140..204]底库人员姓名 (未命中为空串) */
+      char     matched_face_id[ZHULONG_FACE_ID_MAX_LEN];  /* 64 B: [204..268]底库人脸照片 ID (未命中为空串) */
+      uint32_t candidate_count;                          /*  4 B: [268..272]candidates 数组元素数 */
+      uint32_t reserved_[2];                             /*  8 B: [272..280]显式对齐填充位，确保随后指针 8 字节自然对齐 (消除隐式空洞) */
+      const zhulong_face_candidate* candidates;          /*  8 B: [280..288]指向候选人数组借用指针 (指向同一 Arena) */
+  } zhulong_face_structure_item;                         /* 288 字节，自然对齐，零隐式 padding，288 % 8 == 0 */
   ```
+  - **内存对齐静态断言**：在测试与头文件中显式增加编译期断言：
+    `static_assert(sizeof(zhulong_face_structure_item) == 288, "size mismatch");`
+    `static_assert(offsetof(zhulong_face_structure_item, candidates) == 280, "candidates offset mismatch");`
   - `person_index`：关联到同一载荷内 `persons[i]`；`-1` = 无关联（近景特写 / 身体未检出）；
   - `person_id` / `person_name` / `matched_face_id`：**底库身份**，与 `person_index` 是两个不同概念，
     命名与文档必须区分（前者是"挂在哪个检出人体"，后者是"这是底库里的谁"）。
@@ -108,19 +111,22 @@ v1 里不存在「有脸、无人」的表达，近景特写只能把**人脸框
   typedef struct zhulong_scene_structure {
       uint32_t person_count;                             /* 4 B: 真人体数量 */
       uint32_t face_count;                               /* 4 B: 检出人脸数量 (含关联与孤立脸) */
-      const zhulong_person_item* persons;                /* 8 B: 真人体数组指针 (face_count 恒填 0, faces=NULL) */
-      const zhulong_face_structure_item* faces;          /* 8 B: 独立人脸数组指针 */
+      const zhulong_person_item* persons;                /* 8 B: 真人体数组指针 (person_count == 0 时恒填 NULL) */
+      const zhulong_face_structure_item* faces;          /* 8 B: 独立人脸数组指针 (face_count == 0 时恒填 NULL) */
       uint64_t reserved_;                                /* 8 B: 尾部对齐预留位 */
   } zhulong_scene_structure;                             /* 32 字节，满足 8 字节整除 */
   ```
-  - **内存布局**：单块连续 Arena 依次存放 `zhulong_scene_structure` + `persons[]` + `faces[]` + `candidates[]`；
+  - **内存布局与空指针安全**：单块连续 Arena 依次存放 `zhulong_scene_structure` + `persons[]` + `faces[]` + `candidates[]`；
+    当 `person_count == 0` 时 `persons = nullptr`；当 `face_count == 0` 时 `faces = nullptr`；当 `candidate_count == 0` 时 `candidates = nullptr`；
     `out.internal_token` 记录 Arena 首地址，由 `result_release` 单次 `free`，生命周期契约不变。
-  - **`out.count` 语义**：`out.count` 严格定义为 `person_count + face_count`（场景内总目标数）。
+  - **容器多态与 `out.count` 契约**：
+    `out.count` 严格定义为 `person_count + face_count`（场景内总目标数）。
     当且仅当 `person_count == 0 && face_count == 0` 时，`out.count = 0`，`out.data = nullptr`；
-    只要有人或脸，`out.count > 0` 且 `out.data` 指向 `zhulong_scene_structure*`。
+    只要有人或脸，`out.count > 0` 且 `out.data` 指向单体结构体 `zhulong_scene_structure*`。
+    ⚠️ **禁止外部任何代码将 `out.data` 按 `out.count` 步进遍历**，子数组遍历必须分别依循 `person_count` 与 `face_count`。
   - `persons` 只装**真人体**，永不含占位框；人脸只在 `faces` 里出现一次（不在 `persons[i].faces` 重复挂载）。
-- **R4 索引合法性断言**：`person_index` 必须满足 `-1 或 [0, person_count)`。适配层打包时断言，
-  宿主解析时丢弃非法索引（fail closed，不得按越界索引取 person）。
+- **R4 索引合法性断言与 Fail-Closed 防护**：`person_index` 必须满足 `-1 或 [0, person_count)`。
+  适配层打包时断言校验；宿主反序列化入口与区域过滤重映射时，若遇到非法索引（`< -1` 或 `>= person_count`），必须作为畸形载荷直接丢弃该脸并记录 warning 日志（fail closed），严禁因切片越界引发 panic 或错误挂载。
 - **R5 关联判据唯一实现**：沿用 `packages/face_recognition/*/src/common/face_association.hpp` 的纯函数，
   v2 不重写几何逻辑（`make unit-test` 已覆盖上半身/IoF/零尺寸/NaN）。
 
@@ -137,27 +143,30 @@ v1 里不存在「有脸、无人」的表达，近景特写只能把**人脸框
     ```
   - Go 宿主领域模型（`internal/aitypes`）扩充：
     `InferenceResult` 与 `RawInferencePayload` 新增平级字段 `Faces []FaceStructureItem`。
-  - **宿主反序列化入口单向归一化**：
-    在 `aitypes.ParseInferenceResult` 入口层做平级化归一：若收到旧包的 `TaskTypePersonStructure` (type 3)，
-    自动将其嵌套的 `p.Faces` 提取到顶层 `res.Faces` 并回填 `PersonIndex = i`；
-    下游所有领域模块（Region Filter、Record Service、Host Tracker、WebSocket 推流）**统一面向平级结构编码**，
-    杜绝在各领域层散落 `if-type-3-else-type-5` 分支。兼容期结束后仅需移除入口转换逻辑。
+  - **宿主反序列化入口单向归一化与退化项物理剔除**：
+    在 `aitypes.ParseInferenceResult` 入口层做平级化归一：
+    - 若收到新包的 `TaskTypeSceneStructure` (type 5)：直接反序列化为顶层 `res.Persons` 和 `res.Faces`；
+    - 若收到旧包的 `TaskTypePersonStructure` (type 3)：
+      - 遍历旧包 `payload.Persons`：
+        - 若 `p.IsFaceCloseup() == true`（退化伪人体项）：将其唯一内嵌人脸提取至顶层 `res.Faces`，显式设置 `face.PersonIndex = -1`（孤立人脸），**并物理丢弃该伪人体，绝不追加至 `res.Persons`**；
+        - 若 `p.IsFaceCloseup() == false`（真实人体）：将该人体（清空其内嵌 faces）追加至 `res.Persons`，将其内嵌的所有人脸提取至顶层 `res.Faces`，并设置 `face.PersonIndex = personIdx`（对应其在 `res.Persons` 中的真实新下标）；
+    - **归一化收益**：经入口处理后，`res.Persons` 保证 100% 为真人体，下游所有领域模块（Region Filter、Record Service、Host Tracker、WebSocket 推流）**统一面向纯净平级结构编码**，彻底杜绝下游散落 `IsFaceCloseup` 兜底和 `if-type-3-else-type-5` 分支。
 - **R7 区域过滤联动与索引重映射安全 (Index Remapping Guard)**：
   - **框判据定稿（闭环 Q1）**：维持人体框判定策略（人站在 ROI 外脸探入不单独记警报，避免误报）；孤立人脸使用人脸框底边中点（BottomCenter）独立做 ROI/MASK 判定。
   - **索引重映射保护**：`internal/region/filter.go` 过滤 `res.Persons` 时，必须维护旧下标到新下标的映射表 `oldIdx -> newIdx`（被过滤者映射为 `-1`）：
     - 对于 `face.PersonIndex >= 0`：若其父人体保留，更新 `face.PersonIndex = newIdx`；若其父人体被过滤，人脸联动丢弃（遵循 DeepStream 锚定实体生命周期规范）；
     - 对于 `face.PersonIndex == -1`（孤立人脸）：独立按人脸框底边中点执行 ROI/MASK 过滤。
-    - 绝不允许未重映射的原始 `person_index` 流入下游导致越界 panic 或跨目标误挂。
-- **R8 记录映射与 Host Target Tracking 分桶**：
+    - 结合 R4 进行越界防御，非法索引人脸直接剔除，绝不允许越界索引流入下游导致 panic 或跨目标误挂。
+- **R8 记录映射与 Host Target Tracking 分桶及冷却隔离**：
   - **宿主跟踪器分桶**：
     - 真人体（`res.Persons`）送入 `bucketKey{kind: "person"}`，分配宿主人体 `track_id`；
     - 孤立人脸（`face.PersonIndex == -1`）送入独立跟踪桶 `bucketKey{kind: "face"}`，
       分配专属宿主人脸 `track_id`，告别脆弱的坐标哈希冷却，近景抓拍平滑去重；
     - 关联人脸（`face.PersonIndex >= 0`）直接继承其父人体的 `track_id`。
-  - **落库写入**：
+  - **落库写入与冷却键前缀隔离**：
     - 人脸对象落 `recognitions`（每脸一条，含 face 裁剪 + 全幅图，`TrackID` 继承人体或使用人脸 track_id）；
-    - 人体对象落 `captures`（`target_type="person"`、`Score` = `body_score`）；
-    - 孤立人脸落 `captures`（`target_type="face"`、`Score` = 人脸质量分、`box` = 人脸框、裁剪图为人脸）。
+    - 人体对象落 `captures`（`target_type="person"`、`Score` = `body_score`），抓拍冷却键为 `cap:%s:person:trk:%d`（无 track 时 `cap:%s:person:box:%.3f:%.3f`）；
+    - 孤立人脸落 `captures`（`target_type="face"`、`Score` = 人脸质量分、`box` = 人脸框、裁剪图为人脸），抓拍冷却键为 `cap:%s:face:trk:%d`（无 track 时 `cap:%s:face:box:%.3f:%.3f`），**严禁共用 person 冷却前缀，杜绝两套独立递增的 track_id 发生键碰撞误抑制**。
     - 历史方法 `aitypes.PersonItem.IsFaceCloseup()` 仅在入口归一化兼容期保留，兼容期结束后删除。
 
 ### 2.3 算法包侧
@@ -171,12 +180,15 @@ v1 里不存在「有脸、无人」的表达，近景特写只能把**人脸框
 
 ### 2.4 同目标下的收尾
 
-- **R10 目标类型本地化与前端全覆盖**：
+- **R10 目标类型本地化与前端工具封装**：
   前端记录模块对 `target_type` 进行全局本地化显示（「人脸 / 人体 / 车辆」），中性兜底长尾未知类型：
-  1. `web/src/features/records/components/views/captures-view.tsx`（表格列 Badge）
-  2. `web/src/features/records/components/captures/capture-card.tsx`（卡片视图 Badge）
-  3. `web/src/features/records/components/detail/record-detail-dialog.tsx`（详情抽屉标题与徽标）
-  4. `web/src/features/records/components/records-toolbar.tsx`（筛选下拉项 Option 文案）
+  1. 在 `web/src/features/records/data/target-type.ts` 封装 `formatTargetType(t, targetType)` 帮助函数，支持开放集合未命中时原样中性展示；
+  2. 多语言字典（`locales/{zh-Hans,en,zh-Hant}.json`）补充对应翻译键；
+  3. 四大呈现组件接入工具函数：
+     - `web/src/features/records/components/views/captures-view.tsx`（表格列 Badge）
+     - `web/src/features/records/components/captures/capture-card.tsx`（卡片视图 Badge）
+     - `web/src/features/records/components/detail/record-detail-dialog.tsx`（详情抽屉标题与徽标）
+     - `web/src/features/records/components/records-toolbar.tsx`（筛选下拉项 Option 文案）
 - **R11 文档收敛**：`plugin.h` / `algo.hpp` / `.trellis/spec/native/algo-plugin-contract.md` 的
   「退化语义」段落改为"v1 历史兼容说明"，并指向 type 5 的新语义。
 
@@ -196,6 +208,7 @@ v1 里不存在「有脸、无人」的表达，近景特写只能把**人脸框
    - 区域过滤触发人脸/人体切片重排时，保留人脸的 `person_index` 正确更新，父人体被过滤的人脸连带过滤，绝无越界 panic 或目标错挂。
 5. **记录层与宿主追踪**：
    - 孤立人脸 → `captures.target_type="face"`、`Score` = 人脸质量分、裁剪图为人脸，在宿主 tracker 中分配独立 `track_id`，告别坐标哈希去重；
+   - 抓拍冷却键前缀隔离：真人体使用 `cap:%s:person:trk:%d`，孤立人脸使用 `cap:%s:face:trk:%d`，两套独立自增 track_id 不发生键碰撞误抑制；
    - 真人体 → `captures.target_type="person"` 且 `track_id` 非 0；
    - 关联人脸产出 `recognitions`，其 `TrackID` 继承父人体 `track_id`。
 6. **区域过滤**：配置 ROI 后孤立人脸按自身人脸框底边中点判定，关联人脸随父人体联动，单测全覆盖。
@@ -231,9 +244,10 @@ v1 里不存在「有脸、无人」的表达，近景特写只能把**人脸框
 | D7 | 兼容期一个版本周期，宿主双类型 | 旧包（type 3）不可强升；超期后删分支 |
 | D8 | **架构模式选型：对标 DeepStream / GA/T 1400（模式 A）** | 扁平数组 + 引用索引（`faces[].person_index`）。对比模式 B（ONVIF 实体+多部件），无需在 C 结构体内维护昂贵的 Optional/NaN 填充，内存紧密且天生匹配宿主平级落库表 |
 | D9 | **`out.count` 必须严格等于 `person_count + face_count`** | 杜绝 Runner 在无身体特写帧（`person_count==0`）因 `count==0` 误判为空结果将帧吞没 |
-| D10 | **宿主反序列化入口单向归一化 (Host Normalizer)** | 在 `ParseInferenceResult` 将旧包 type 3 自动平级化，使下游业务层仅维护一套平级数据逻辑，避免在 Record/Region/Socket 处散落双重分支 |
+| D10 | **宿主反序列化入口单向归一化 (Host Normalizer)** | 在 `ParseInferenceResult` 将旧包 type 3 自动平级化，并将退化伪人体在入口处物理消灭，使下游业务层（Region/Record/Socket）仅维护一套 100% 真实纯净的平级数据逻辑 |
 | D11 | **ROI 过滤实行联动丢弃与索引重映射 (闭环 Q1)** | 区域判定锚定人体；人体丢弃则人脸连带丢弃；人体保留则更新索引映射表；孤立人脸独立按脸框中点判定，杜绝下标错位与 panic |
-| D12 | **宿主 Tracker 为孤立人脸开辟独立跟踪桶** | 孤立人脸走 `bucketKey{kind: "face"}` 获得真实 `track_id`，告别坐标哈希去重在移动中的重复抓拍 |
+| D12 | **宿主 Tracker 为孤立人脸开辟独立跟踪桶并隔离冷却键** | 孤立人脸走 `bucketKey{kind: "face"}` 获得真实 `track_id`；冷却键严格隔离为 `person:trk` 与 `face:trk`，杜绝不同分桶相同 track_id 碰撞互斥 |
+| D13 | **C ABI 结构体显式 8 字节自然对齐** | `zhulong_face_structure_item` 在偏移 272 处采用显式 8 字节填充（`uint32_t reserved_[2]`），消除随后的 64 位指针隐式编译器 padding，测试增加 `static_assert` 约束 |
 
 ---
 

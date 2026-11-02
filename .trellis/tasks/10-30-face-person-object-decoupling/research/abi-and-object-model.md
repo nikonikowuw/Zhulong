@@ -126,12 +126,18 @@ Zhulong 是 C ABI 静态链接 + Go 宿主：
  76   char     person_id[64]                 64   Top-1 人员 ID（未命中为空串）
 140   char     person_name[64]               64   Top-1 人员姓名（未命中为空串）
 204   char     matched_face_id[64]           64   Top-1 底库照片 ID（未命中为空串）
-268   uint32_t candidate_count                4   候选人数量
-272   uint32_t reserved_                      4   显式对齐填充位（使随后的 64 位指针 8 字节自然对齐）
-276   const zhulong_face_candidate*           8   指向同一 Arena 内候选人数组的只读借用指针
+268   uint32_t candidate_count                4   候选人数量（268..272，到达 8 字节边界）
+272   uint32_t reserved_[2]                   8   显式 8 字节对齐填充位（272..280，消除 64 位指针前隐式空洞）
+280   const zhulong_face_candidate*           8   指向同一 Arena 内候选人数组的只读借用指针（280..288）
 ---------------------------------------------------------------------------------
-总计：284 + 4(padding) = 288 字节（288 % 8 == 0）
+总计：288 字节（288 % 8 == 0，严格自然对齐，零隐式 padding）
 ```
+
+- **编译期静态断言保障**：
+  ```c
+  static_assert(sizeof(zhulong_face_structure_item) == 288, "zhulong_face_structure_item size must be 288");
+  static_assert(offsetof(zhulong_face_structure_item, candidates) == 280, "candidates offset must be 280");
+  ```
 
 ### 7.2 `zhulong_scene_structure` 容器（32 字节，置于 Arena 首部）
 
@@ -140,8 +146,8 @@ Zhulong 是 C ABI 静态链接 + Go 宿主：
 ---------------------------------------------------------------------------------
   0   uint32_t person_count                   4   真人体数量
   4   uint32_t face_count                     4   检出人脸数量（含关联人脸与孤立特写人脸）
-  8   const zhulong_person_item*              8   指向真人体数组指针（face_count 恒为 0，faces 恒为 NULL）
- 16   const zhulong_face_structure_item*      8   指向独立人脸数组指针
+  8   const zhulong_person_item*              8   指向真人体数组指针（person_count == 0 时恒为 NULL）
+ 16   const zhulong_face_structure_item*      8   指向独立人脸数组指针（face_count == 0 时恒为 NULL）
  24   uint64_t reserved_                      8   尾随预留位（8 字节对齐保底）
 ---------------------------------------------------------------------------------
 总计：32 字节（32 % 8 == 0）
@@ -151,15 +157,17 @@ Zhulong 是 C ABI 静态链接 + Go 宿主：
 
 - **单块连续内存分配**：
   `total_bytes = sizeof(zhulong_scene_structure) + n_persons * sizeof(zhulong_person_item) + n_faces * sizeof(zhulong_face_structure_item) + n_candidates * sizeof(zhulong_face_candidate)`；
-- **指针分配基准**：
+- **指针分配与空指针契约**：
   - `scene = (zhulong_scene_structure*)arena;`
-  - `scene->persons = (zhulong_person_item*)(arena + sizeof(zhulong_scene_structure));`
-  - `scene->faces = (zhulong_face_structure_item*)((uint8_t*)scene->persons + persons_bytes);`
-  - `candidates = (zhulong_face_candidate*)((uint8_t*)scene->faces + faces_bytes);`
+  - `scene->persons = (n_persons > 0) ? (zhulong_person_item*)(arena + sizeof(zhulong_scene_structure)) : nullptr;`
+  - `scene->faces = (n_faces > 0) ? (zhulong_face_structure_item*)((uint8_t*)arena + sizeof(zhulong_scene_structure) + persons_bytes) : nullptr;`
+  - 若 `face.candidate_count == 0`，`face.candidates` 必须恒填 `nullptr`；
 - **判空与吞帧防御**：
-  `out.count` 必须恒等于 `person_count + face_count`。当且仅当 `n_persons == 0 && n_faces == 0` 时，
+  `out.count` 严格定义为 `person_count + face_count`。当且仅当 `n_persons == 0 && n_faces == 0` 时，
   `out.count = 0` 且 `out.data = nullptr`；只有这样才能确保近景特写人脸（`n_persons == 0, n_faces > 0`）
   不会被 `algo_main.cpp` 的 `if (!result || result->count == 0)` 误吞。
+- **容器多态安全**：
+  `out.data` 指向的是单体 `zhulong_scene_structure*` 结构体，**严禁外部任何代码按 `out.count` 步进遍历 `out.data`**。
 
 ## 8. Runner JSON 契约与宿主单向归一化
 
@@ -202,18 +210,23 @@ Zhulong 是 C ABI 静态链接 + Go 宿主：
 ### 8.2 宿主反序列化入口归一化 (`internal/aitypes/model.go`)
 
 在 `ParseInferenceResult` 入口层屏蔽兼容期双格式：
-- 若载荷 `task_type == "person_structure"`（type 3 旧包）：解析出 `Persons`，自动将所有 `p.Faces` 提取至顶层 `res.Faces`，并将 `face.PersonIndex` 置为对应 `person` 下标；
 - 若载荷 `task_type == "scene_structure"`（type 5 新包）：直接反序列化为顶层 `res.Persons` 和 `res.Faces`；
-- **下游收益**：`internal/region`、`internal/record`、`internal/camera` 全链路只认知一套平级的 `Persons` 与 `Faces` 模型，无需随处编写兼容分支。
+- 若载荷 `task_type == "person_structure"`（type 3 旧包）：
+  - 遍历 `payload.Persons`：
+    - 若 `p.IsFaceCloseup() == true`（退化项）：提取其人脸至顶层 `res.Faces`，标记为孤立人脸 `face.PersonIndex = -1`，**并物理丢弃该伪人体（绝不入 `res.Persons`）**；
+    - 若 `p.IsFaceCloseup() == false`（真实人体）：将该人体（清空内嵌 faces）追加至 `res.Persons`，将其内嵌的所有人脸提取至顶层 `res.Faces`，回填 `face.PersonIndex = personIdx`（对应在 `res.Persons` 中的有效下标）；
+- **下游收益**：`internal/region`、`internal/record`、`internal/camera` 全链路认知且仅认知 100% 真人体与独立平级人脸，彻底移除 `IsFaceCloseup` 补丁分支。
 
 ## 9. 区域过滤与宿主跟踪的协同规范
 
-1. **区域过滤索引重映射（Index Remapping）**：
+1. **区域过滤索引重映射（Index Remapping）与越界防御**：
    `region.Filter` 过滤 `Persons` 时维护旧到新下标映射 `oldIdx -> newIdx`（淘汰者为 -1）：
    - `face.PersonIndex >= 0`：若父人体淘汰，人脸连带丢弃；若父人体保留，`face.PersonIndex = newIdx`；
-   - `face.PersonIndex == -1`：孤立人脸按人脸框底边中点（BottomCenter）独立做 ROI/MASK 判定。
-2. **Host Target Tracker 分桶**：
+   - `face.PersonIndex == -1`：孤立人脸按人脸框底边中点（BottomCenter）独立做 ROI/MASK 判定；
+   - **越界防御 (Fail-Closed)**：若 `face.PersonIndex >= len(res.Persons) || face.PersonIndex < -1`，作为畸形载荷直接剔除人脸并记录日志，严禁 slice 越界 panic。
+2. **Host Target Tracker 分桶与冷却隔离**：
    - 真人体：送入 `bucketKey{camera, algorithm, kind: "person"}`，分配人体 `track_id`；
    - 孤立人脸：送入 `bucketKey{camera, algorithm, kind: "face"}`，分配独立人脸 `track_id`，告别坐标哈希抖动；
-   - 关联人脸：其识别记录 `Recognition.TrackID` 继承父人体 `track_id`。
+   - 关联人脸：其识别记录 `Recognition.TrackID` 继承父人体 `track_id`；
+   - **冷却键前缀隔离**：人体抓拍冷却使用 `cap:%s:person:trk:%d`；孤立人脸抓拍冷却使用 `cap:%s:face:trk:%d`，杜绝不同分桶相同整数 track_id 相互抑制。
 
