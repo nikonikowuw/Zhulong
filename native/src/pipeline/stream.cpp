@@ -211,6 +211,7 @@ void DecodeSession::decode_loop() noexcept {
             }
         }
 
+        int32_t selected_codec = codec_hint;
         try {
             Video meta;
             uint64_t generation = 0;
@@ -219,7 +220,7 @@ void DecodeSession::decode_loop() noexcept {
                 generation = meta_generation_.load(std::memory_order_acquire);
                 meta = video_meta_;
             }
-            const int32_t selected_codec = meta.view.codec > 0 ? meta.view.codec : codec_hint;
+            selected_codec = meta.view.codec > 0 ? meta.view.codec : codec_hint;
             const int32_t final_tb_num = tb_num > 0 ? tb_num : (meta.view.time_base_num > 0 ? meta.view.time_base_num : 1);
             const int32_t final_tb_den = tb_den > 0 ? tb_den : (meta.view.time_base_den > 0 ? meta.view.time_base_den : 90000);
 
@@ -244,10 +245,10 @@ void DecodeSession::decode_loop() noexcept {
                         static_cast<long long>(retry_delay.count()));
                 }
             }
-        } catch (const std::exception &ex) {
+        } catch (const std::exception &) {
             decoder.reset();
             if (target_backend == DecoderBackend::mpp_hw) {
-                ZL_LOGE(stream_id_, "pipeline.stream", "hardware_decode_fail_closed ex=%s", ex.what());
+                ZL_LOGE(stream_id_, "pipeline.stream", "hardware_decode_fail_closed codec=%d", selected_codec);
                 if (on_fatal_error_) {
                     on_fatal_error_(Zhulong_ERR_HARDWARE_UNAVAILABLE);
                 }
@@ -261,7 +262,7 @@ void DecodeSession::decode_loop() noexcept {
         } catch (...) {
             decoder.reset();
             if (target_backend == DecoderBackend::mpp_hw) {
-                ZL_LOGE(stream_id_, "pipeline.stream", "hardware_decode_fail_closed unknown_error");
+                ZL_LOGE(stream_id_, "pipeline.stream", "hardware_decode_fail_closed codec=%d", selected_codec);
                 if (on_fatal_error_) {
                     on_fatal_error_(Zhulong_ERR_HARDWARE_UNAVAILABLE);
                 }
@@ -415,6 +416,7 @@ void Stream::join() {
         session = std::move(decode_session_);
     }
     if (session) {
+        session->request_stop();
         session->join();
     }
     if (worker.joinable()) {

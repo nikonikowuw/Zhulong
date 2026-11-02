@@ -35,14 +35,16 @@ public:
     ScopedDmaReader() = default;
     ScopedDmaReader(const ScopedDmaReader&) = delete;
     ScopedDmaReader& operator=(const ScopedDmaReader&) = delete;
+    ScopedDmaReader(ScopedDmaReader&&) = delete;
+    ScopedDmaReader& operator=(ScopedDmaReader&&) = delete;
 
     ~ScopedDmaReader() {
 #if defined(__linux__)
-        if (ptr_ != nullptr) {
+        if (addr_ != nullptr) {
             struct dma_buf_sync sync{};
             sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
             (void)::ioctl(fd_, DMA_BUF_IOCTL_SYNC, &sync);
-            ::munmap(const_cast<uint8_t*>(ptr_), size_);
+            ::munmap(addr_, size_);
         }
 #endif
     }
@@ -63,10 +65,10 @@ public:
             ::munmap(addr, map_size);
             return nullptr;
         }
-        ptr_ = static_cast<const uint8_t*>(addr);
+        addr_ = addr;
         size_ = map_size;
         fd_ = dma_fd;
-        return ptr_;
+        return static_cast<const uint8_t*>(addr_);
 #else
         (void)dma_fd;
         (void)map_size;
@@ -75,7 +77,7 @@ public:
     }
 
 private:
-    const uint8_t* ptr_{nullptr};
+    void* addr_{nullptr};
     size_t size_{0};
     int fd_{-1};
 };

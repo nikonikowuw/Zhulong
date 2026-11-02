@@ -55,6 +55,11 @@ public:
         cancel();
     }
 
+    BoundedQueue(const BoundedQueue&) = delete;
+    BoundedQueue& operator=(const BoundedQueue&) = delete;
+    BoundedQueue(BoundedQueue&&) = delete;
+    BoundedQueue& operator=(BoundedQueue&&) = delete;
+
     /**
      * @brief 数据入队
      *

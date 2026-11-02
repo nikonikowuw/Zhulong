@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -97,7 +98,7 @@ private:
     static constexpr size_t kHistoryCapacity = 4;
     static constexpr size_t history_capacity = kHistoryCapacity;
     mutable std::mutex latest_mutex_;
-    std::vector<HardwareFrame::ConstPtr> history_frames_;
+    std::deque<HardwareFrame::ConstPtr> history_frames_;
 
     MotionDetector motion_detector_;
 };

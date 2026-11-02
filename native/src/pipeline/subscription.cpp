@@ -26,33 +26,14 @@ InCallbackGuard::~InCallbackGuard() noexcept {
 }
 
 void Subscription::invoke(const Zhulong_packet_view &packet) {
-    // 快速加锁检查状态并标记 active
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (!enabled) return;
-        active = true;
-    }
-
-    try {
-        InCallbackGuard guard;
+    if (!callback) return;
+    execute_callback([&] {
         // 在锁外调用用户注册的回调函数，避免用户代码耗时阻塞分发通道
         callback(token, &packet);
-    } catch (...) {
-        // 异常防御：即使异常的用户回调抛出了 C++ 异常，也必须恢复状态并唤醒等待排空的线程
-        std::lock_guard<std::mutex> lock(mutex);
-        active = false;
-        enabled = false;
-        drained.notify_all();
-        throw;
-    }
-
-    // 正常退出：清理回调标记并通知排空条件变量
-    std::lock_guard<std::mutex> lock(mutex);
-    active = false;
-    drained.notify_all();
+    });
 }
 
-void Subscription::disable_and_drain() {
+void SubscriptionBase::disable_and_drain() {
     std::unique_lock<std::mutex> lock(mutex);
     // 禁用后续派发
     enabled = false;

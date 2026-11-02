@@ -44,7 +44,7 @@ void FramePublisher::stop() {
     // ⚠️ 必须释放快照帧引用：即使 worker 已汇合，若这里不清空，
     // HardwareFrame 引用仍持有解码器 buffer，停流时会拖到宽限期超时。
     // ⚠️ 丢弃对象的析构必须在互斥锁外执行，防止 release_fn 触发外部闭包时形成潜在死锁（.trellis/spec/native/pipeline-guidelines.md §3）。
-    std::vector<HardwareFrame::ConstPtr> frames_to_drop;
+    std::deque<HardwareFrame::ConstPtr> frames_to_drop;
     {
         std::lock_guard<std::mutex> lock(latest_mutex_);
         frames_to_drop = std::move(history_frames_);
@@ -84,7 +84,7 @@ void FramePublisher::push_frame(HardwareFrame::ConstPtr frame) {
         std::lock_guard<std::mutex> lock(latest_mutex_);
         if (history_frames_.size() >= kHistoryCapacity) {
             evicted_frame = std::move(history_frames_.front());
-            history_frames_.erase(history_frames_.begin());
+            history_frames_.pop_front();
         }
         history_frames_.push_back(std::move(frame));
     }
