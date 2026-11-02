@@ -11,7 +11,7 @@ GalleryRegistry& GalleryRegistry::instance() {
     return registry;
 }
 
-void GalleryRegistry::rebuild_snapshot_locked() const {
+void GalleryRegistry::rebuild_snapshot_locked() {
     auto vec = std::make_shared<std::vector<FaceTemplate>>();
     vec->reserve(faces_.size());
     for (const auto& entry : faces_) {
@@ -24,7 +24,6 @@ void GalleryRegistry::rebuild_snapshot_locked() const {
         return a.face_id < b.face_id;
     });
     snapshot_ = std::move(vec);
-    dirty_ = false;
 }
 
 void GalleryRegistry::reset(std::vector<FaceTemplate> items) {
@@ -35,7 +34,7 @@ void GalleryRegistry::reset(std::vector<FaceTemplate> items) {
             faces_[item.face_id] = std::move(item);
         }
     }
-    dirty_ = true;
+    rebuild_snapshot_locked();
 }
 
 void GalleryRegistry::upsert(FaceTemplate item) {
@@ -44,30 +43,31 @@ void GalleryRegistry::upsert(FaceTemplate item) {
     }
     std::lock_guard<std::mutex> lock(mutex_);
     faces_[item.face_id] = std::move(item);
-    dirty_ = true;
+    rebuild_snapshot_locked();
 }
 
 void GalleryRegistry::remove(const std::string& face_id, const std::string& person_id) {
     std::lock_guard<std::mutex> lock(mutex_);
+    bool changed = false;
     if (!face_id.empty()) {
-        faces_.erase(face_id);
+        changed = (faces_.erase(face_id) > 0);
     } else if (!person_id.empty()) {
         for (auto it = faces_.begin(); it != faces_.end();) {
             if (it->second.person_id == person_id) {
                 it = faces_.erase(it);
+                changed = true;
             } else {
                 ++it;
             }
         }
     }
-    dirty_ = true;
+    if (changed) {
+        rebuild_snapshot_locked();
+    }
 }
 
 std::shared_ptr<const std::vector<FaceTemplate>> GalleryRegistry::snapshot() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (dirty_) {
-        rebuild_snapshot_locked();
-    }
     return snapshot_;
 }
 
@@ -80,7 +80,6 @@ void GalleryRegistry::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     faces_.clear();
     snapshot_ = std::make_shared<std::vector<FaceTemplate>>();
-    dirty_ = false;
 }
 
 } // namespace zhulong::runtime

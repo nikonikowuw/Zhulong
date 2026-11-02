@@ -19,11 +19,19 @@ namespace zhulong {
 namespace {
 
 /**
- * @brief 基于归一化两点坐标 [x1,y1,x2,y2] 计算交并比（IoU）
+ * @brief 计算单个框的面积
+ */
+inline float box_area(const zhulong_bbox& b) {
+    return std::max(0.0f, b.box[2] - b.box[0]) * std::max(0.0f, b.box[3] - b.box[1]);
+}
+
+/**
+ * @brief 基于归一化两点坐标 [x1,y1,x2,y2] 与预计算的单框面积计算交并比（IoU）
  *
  * 使用 std::max(0.0f, ...) 防御越界或坐标倒置导致的负面积。
  */
-float calc_iou(const zhulong_bbox& a, const zhulong_bbox& b) {
+inline float calc_iou_with_areas(const zhulong_bbox& a, float area_a,
+                                 const zhulong_bbox& b, float area_b) {
     const float x1 = std::max(a.box[0], b.box[0]);
     const float y1 = std::max(a.box[1], b.box[1]);
     const float x2 = std::min(a.box[2], b.box[2]);
@@ -33,8 +41,6 @@ float calc_iou(const zhulong_bbox& a, const zhulong_bbox& b) {
     const float inter_h = std::max(0.0f, y2 - y1);
     const float inter_area = inter_w * inter_h;
 
-    const float area_a = std::max(0.0f, a.box[2] - a.box[0]) * std::max(0.0f, a.box[3] - a.box[1]);
-    const float area_b = std::max(0.0f, b.box[2] - b.box[0]) * std::max(0.0f, b.box[3] - b.box[1]);
     const float union_area = area_a + area_b - inter_area;
 
     if (union_area <= 0.0f) return 0.0f;
@@ -77,13 +83,20 @@ std::vector<zhulong_bbox> nms(const std::vector<zhulong_bbox>& boxes, float iou_
     std::vector<zhulong_bbox> keep;
     keep.reserve(sorted_boxes.size());
 
+    // 预计算所有候选框的单框面积，避免内层循环 O(N^2) 次重复计算
+    std::vector<float> areas(sorted_boxes.size());
+    for (size_t i = 0; i < sorted_boxes.size(); ++i) {
+        areas[i] = box_area(sorted_boxes[i]);
+    }
+
     for (size_t i = 0; i < sorted_boxes.size(); ++i) {
         if (suppressed[i]) continue;
         keep.push_back(sorted_boxes[i]);
 
+        const float area_i = areas[i];
         for (size_t j = i + 1; j < sorted_boxes.size(); ++j) {
             if (suppressed[j]) continue;
-            if (calc_iou(sorted_boxes[i], sorted_boxes[j]) > iou_threshold) {
+            if (calc_iou_with_areas(sorted_boxes[i], area_i, sorted_boxes[j], areas[j]) > iou_threshold) {
                 suppressed[j] = true;
             }
         }
