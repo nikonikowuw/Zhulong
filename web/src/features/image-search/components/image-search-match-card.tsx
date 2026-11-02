@@ -210,7 +210,9 @@ export function ImageSearchMatchCard({
                         ? 'bg-gradient-to-r from-primary/80 to-primary'
                         : 'bg-gradient-to-r from-amber-500 to-amber-400'
                   }`}
-                  style={{ width: `${Math.max(0, Math.min(similarityNum, 100))}%` }}
+                  style={{
+                    width: `${Math.max(0, Math.min(similarityNum, 100))}%`,
+                  }}
                 />
               </div>
             </div>

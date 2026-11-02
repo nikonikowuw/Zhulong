@@ -40,6 +40,7 @@ func TestResultConstructorsInitializeEmptySlices(t *testing.T) {
 		{"detection", aitypes.TaskTypeDetection, aitypes.NewDetectionResult},
 		{"classification", aitypes.TaskTypeClassification, aitypes.NewClassificationResult},
 		{"person_structure", aitypes.TaskTypePersonStructure, aitypes.NewPersonStructureResult},
+		{"scene_structure", aitypes.TaskTypeSceneStructure, aitypes.NewSceneStructureResult},
 		{"vehicle_structure", aitypes.TaskTypeVehicleStructure, aitypes.NewVehicleStructureResult},
 	}
 
@@ -49,7 +50,7 @@ func TestResultConstructorsInitializeEmptySlices(t *testing.T) {
 			if res.TaskType != constructor.taskType {
 				t.Fatalf("expected task type %q, got %q", constructor.taskType, res.TaskType)
 			}
-			if res.Detections == nil || res.Classifications == nil || res.Persons == nil || res.Vehicles == nil {
+			if res.Detections == nil || res.Classifications == nil || res.Persons == nil || res.Faces == nil || res.Vehicles == nil {
 				t.Fatalf("expected all result slices to be initialized: %+v", res)
 			}
 		})
@@ -149,26 +150,56 @@ func TestParseInferenceResult(t *testing.T) {
 	}
 
 	// 3. Person structure with capture_time_ms, matched_face_id and candidates face_id
+	// 入口单向归一化：TaskTypePersonStructure 转换为 TaskTypeSceneStructure，faces 提取至顶层，回填 PersonIndex
 	captureMs := int64(1729000000123)
 	psJSON := []byte(`{"stream_id":1,"pts":3000,"capture_time_ms":1729000000123,"cost_ms":25,"task_type":"person_structure","detections":[],"classifications":[],"persons":[{"track_id":10,"body_box":[0.1,0.1,0.5,0.8],"body_score":0.9,"faces":[{"box":[0.2,0.2,0.3,0.3],"quality":0.95,"landmarks":[[0.22,0.25],[0.28,0.25],[0.25,0.27],[0.23,0.29],[0.27,0.29]],"matched":true,"similarity":0.91,"person_id":"user_1","person_name":"Bob","matched_face_id":"face_bob_01","candidates":[{"person_id":"user_1","person_name":"Bob","face_id":"face_bob_01","similarity":0.91}]}]}]}`)
 	psRes, err := aitypes.ParseInferenceResult("cam_1", "algo_face", psJSON)
 	if err != nil {
 		t.Fatalf("ParseInferenceResult person structure failed: %v", err)
 	}
-	if psRes.TaskType != aitypes.TaskTypePersonStructure || len(psRes.Persons) != 1 {
-		t.Fatalf("unexpected person structure result: %+v", psRes)
+	if psRes.TaskType != aitypes.TaskTypeSceneStructure || len(psRes.Persons) != 1 || len(psRes.Faces) != 1 {
+		t.Fatalf("unexpected person structure normalized result: %+v", psRes)
 	}
 	if psRes.Timestamp.UnixMilli() != captureMs {
 		t.Errorf("expected Timestamp UnixMilli to match capture_time_ms %d, got %d", captureMs, psRes.Timestamp.UnixMilli())
 	}
-	if psRes.Persons[0].TrackID != 10 || len(psRes.Persons[0].Faces) != 1 || psRes.Persons[0].Faces[0].PersonID != "user_1" {
-		t.Errorf("unexpected person content: %+v", psRes.Persons[0])
+	if psRes.Persons[0].TrackID != 10 || len(psRes.Persons[0].Faces) != 0 {
+		t.Errorf("expected clean person without nested faces: %+v", psRes.Persons[0])
 	}
-	if psRes.Persons[0].Faces[0].MatchedFaceID != "face_bob_01" {
-		t.Errorf("expected matched_face_id 'face_bob_01', got %s", psRes.Persons[0].Faces[0].MatchedFaceID)
+	if psRes.Faces[0].PersonIndex != 0 || psRes.Faces[0].PersonID != "user_1" {
+		t.Errorf("unexpected normalized face content: %+v", psRes.Faces[0])
 	}
-	if len(psRes.Persons[0].Faces[0].Candidates) != 1 || psRes.Persons[0].Faces[0].Candidates[0].FaceID != "face_bob_01" {
-		t.Errorf("unexpected candidates in parsed result: %+v", psRes.Persons[0].Faces[0].Candidates)
+	if psRes.Faces[0].MatchedFaceID != "face_bob_01" {
+		t.Errorf("expected matched_face_id 'face_bob_01', got %s", psRes.Faces[0].MatchedFaceID)
+	}
+	if len(psRes.Faces[0].Candidates) != 1 || psRes.Faces[0].Candidates[0].FaceID != "face_bob_01" {
+		t.Errorf("unexpected candidates in parsed result: %+v", psRes.Faces[0].Candidates)
+	}
+
+	// 3b. Person structure 退化伪人体物理剔除测试
+	degenJSON := []byte(`{"stream_id":1,"pts":3050,"task_type":"person_structure","persons":[{"track_id":0,"body_box":[0.2,0.2,0.3,0.3],"body_score":0.92,"faces":[{"box":[0.2,0.2,0.3,0.3],"quality":0.92,"matched":false}]}]}`)
+	degenRes, err := aitypes.ParseInferenceResult("cam_1", "algo_face", degenJSON)
+	if err != nil {
+		t.Fatalf("ParseInferenceResult degen failed: %v", err)
+	}
+	if len(degenRes.Persons) != 0 {
+		t.Errorf("expected degen pseudo-person to be physically eliminated, got %d persons", len(degenRes.Persons))
+	}
+	if len(degenRes.Faces) != 1 || degenRes.Faces[0].PersonIndex != -1 {
+		t.Errorf("expected isolated face with PersonIndex=-1, got: %+v", degenRes.Faces)
+	}
+
+	// 3c. Scene structure (Type 5) 原生平级解析
+	sceneJSON := []byte(`{"stream_id":1,"pts":3100,"task_type":"scene_structure","persons":[{"track_id":101,"body_box":[0.1,0.2,0.5,0.9],"body_score":0.88}],"faces":[{"box":[0.2,0.25,0.35,0.45],"quality":0.96,"person_index":0,"matched":true,"person_name":"Alice"}]}`)
+	sceneRes, err := aitypes.ParseInferenceResult("cam_1", "algo_face", sceneJSON)
+	if err != nil {
+		t.Fatalf("ParseInferenceResult scene structure failed: %v", err)
+	}
+	if sceneRes.TaskType != aitypes.TaskTypeSceneStructure || len(sceneRes.Persons) != 1 || len(sceneRes.Faces) != 1 {
+		t.Fatalf("unexpected scene structure result: %+v", sceneRes)
+	}
+	if sceneRes.Persons[0].TrackID != 101 || sceneRes.Faces[0].PersonName != "Alice" || sceneRes.Faces[0].PersonIndex != 0 {
+		t.Errorf("unexpected scene fields: %+v", sceneRes)
 	}
 
 	// 4. Algorithm ID resolution from payload or fallback

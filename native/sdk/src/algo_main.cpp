@@ -246,6 +246,7 @@ namespace detail
                << ",\"detections\":[]"
                << ",\"classifications\":[]"
                << ",\"persons\":[]"
+               << ",\"faces\":[]"
                << ",\"vehicles\":[]}";
             return ss.str();
         }
@@ -263,7 +264,7 @@ namespace detail
                    << ",\"label\":" << runner::json_quote(boxes[i].label)
                    << ",\"score\":" << boxes[i].confidence << "}";
             }
-            ss << "],\"classifications\":[],\"persons\":[],\"vehicles\":[]}";
+            ss << "],\"classifications\":[],\"persons\":[],\"faces\":[],\"vehicles\":[]}";
         }
         else if (result->result_type == ZHULONG_RESULT_TYPE_CLASSIFICATION)
         {
@@ -276,7 +277,7 @@ namespace detail
                 ss << "{\"label\":" << runner::json_quote(items[i].label)
                    << ",\"score\":" << items[i].confidence << "}";
             }
-            ss << "],\"persons\":[],\"vehicles\":[]}";
+            ss << "],\"persons\":[],\"faces\":[],\"vehicles\":[]}";
         }
         else if (result->result_type == ZHULONG_RESULT_TYPE_PERSON_STRUCTURE)
         {
@@ -324,12 +325,12 @@ namespace detail
                 }
                 ss << "]}";
             }
-            ss << "],\"vehicles\":[]}";
+            ss << "],\"faces\":[],\"vehicles\":[]}";
         }
         else if (result->result_type == ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE)
         {
             ss << ",\"task_type\":\"vehicle_structure\""
-               << ",\"detections\":[],\"classifications\":[],\"persons\":[]"
+               << ",\"detections\":[],\"classifications\":[],\"persons\":[],\"faces\":[]"
                << ",\"vehicles\":[";
             const auto* vehicles = static_cast<const zhulong_vehicle_item*>(result->data);
             for (uint32_t i = 0; i < result->count; ++i)
@@ -358,9 +359,65 @@ namespace detail
             }
             ss << "]}";
         }
+        else if (result->result_type == ZHULONG_RESULT_TYPE_SCENE_STRUCTURE)
+        {
+            ss << ",\"task_type\":\"scene_structure\""
+               << ",\"detections\":[],\"classifications\":[],\"vehicles\":[]"
+               << ",\"persons\":[";
+            const auto* scene = static_cast<const zhulong_scene_structure*>(result->data);
+            if (scene && scene->persons && scene->person_count > 0)
+            {
+                for (uint32_t i = 0; i < scene->person_count; ++i)
+                {
+                    if (i > 0) ss << ",";
+                    const auto& p = scene->persons[i];
+                    ss << "{\"track_id\":" << p.track_id
+                       << ",\"body_box\":[" << p.body_box[0] << "," << p.body_box[1] << ","
+                       << p.body_box[2] << "," << p.body_box[3] << "]"
+                       << ",\"body_score\":" << p.body_score
+                       << ",\"faces\":[]}";
+                }
+            }
+            ss << "],\"faces\":[";
+            if (scene && scene->faces && scene->face_count > 0)
+            {
+                for (uint32_t i = 0; i < scene->face_count; ++i)
+                {
+                    if (i > 0) ss << ",";
+                    const auto& f = scene->faces[i];
+                    ss << "{\"box\":[" << f.box[0] << "," << f.box[1] << ","
+                       << f.box[2] << "," << f.box[3] << "]"
+                       << ",\"quality\":" << f.quality
+                       << ",\"landmarks\":[";
+                    for (size_t k = 0; k < ZHULONG_FACE_LANDMARK_COUNT; ++k)
+                    {
+                        if (k > 0) ss << ",";
+                        ss << "[" << f.landmarks[k][0] << "," << f.landmarks[k][1] << "]";
+                    }
+                    ss << "],\"matched\":" << (f.matched ? "true" : "false")
+                       << ",\"similarity\":" << f.similarity
+                       << ",\"person_index\":" << f.person_index
+                       << ",\"person_id\":" << runner::json_quote(f.person_id)
+                       << ",\"person_name\":" << runner::json_quote(f.person_name)
+                       << ",\"matched_face_id\":" << runner::json_quote(f.matched_face_id)
+                       << ",\"candidates\":[";
+                    for (uint32_t k = 0; k < f.candidate_count && f.candidates; ++k)
+                    {
+                        if (k > 0) ss << ",";
+                        const auto& c = f.candidates[k];
+                        ss << "{\"person_id\":" << runner::json_quote(c.person_id)
+                           << ",\"person_name\":" << runner::json_quote(c.person_name)
+                           << ",\"face_id\":" << runner::json_quote(c.face_id)
+                           << ",\"similarity\":" << c.similarity << "}";
+                    }
+                    ss << "]}";
+                }
+            }
+            ss << "]}";
+        }
         else
         {
-            ss << ",\"task_type\":\"custom\",\"detections\":[],\"classifications\":[],\"persons\":[],\"vehicles\":[]}";
+            ss << ",\"task_type\":\"custom\",\"detections\":[],\"classifications\":[],\"persons\":[],\"faces\":[],\"vehicles\":[]}";
         }
 
         return ss.str();

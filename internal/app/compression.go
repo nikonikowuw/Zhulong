@@ -237,12 +237,14 @@ func (s *boundedFileSink) finishCompression(job *compressionJob, temporary strin
 	}
 
 	destination := job.archive.path + ".gz"
-	if _, err := os.Lstat(destination); err == nil {
+	_, err := os.Lstat(destination)
+	if err == nil {
 		_ = os.Remove(temporary)
 		s.releaseLocked(job)
 		s.reportDiagnosticLocked("compression skipped for %s: destination already exists", job.archive.path)
 		return
-	} else if !errors.Is(err, os.ErrNotExist) {
+	}
+	if !errors.Is(err, os.ErrNotExist) {
 		_ = os.Remove(temporary)
 		s.releaseLocked(job)
 		s.reportDiagnosticLocked("compression failed for %s: inspect destination: %v", job.archive.path, err)

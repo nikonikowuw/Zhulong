@@ -9,7 +9,9 @@ const DEFAULT_IMAGE_SEARCH_TOP_K = 10
 export function useImageSearch() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [threshold, setThreshold] = useState<number>(DEFAULT_IMAGE_SEARCH_THRESHOLD)
+  const [threshold, setThreshold] = useState<number>(
+    DEFAULT_IMAGE_SEARCH_THRESHOLD
+  )
   const [topK, setTopK] = useState<number>(DEFAULT_IMAGE_SEARCH_TOP_K)
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
 

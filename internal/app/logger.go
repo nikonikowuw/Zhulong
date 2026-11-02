@@ -177,17 +177,11 @@ func buildLogger(config Config) (builtLogger, error) {
 		EncodeDuration: zapcore.MillisDurationEncoder,
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
+	encoderConfig.EncodeLevel = zapcore.LowercaseLevelEncoder
+	var encoder zapcore.Encoder = zapcore.NewJSONEncoder(encoderConfig)
 	if format == "console" {
 		encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-	} else {
-		encoderConfig.EncodeLevel = zapcore.LowercaseLevelEncoder
-	}
-
-	var encoder zapcore.Encoder
-	if format == "console" {
 		encoder = zapcore.NewConsoleEncoder(encoderConfig)
-	} else {
-		encoder = zapcore.NewJSONEncoder(encoderConfig)
 	}
 
 	atomicLevel := zap.NewAtomicLevelAt(level)

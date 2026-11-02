@@ -1,9 +1,10 @@
+import { type TFunction } from 'i18next'
 import { describe, expect, it } from 'vitest'
 import {
   CATEGORY_BADGE_CLASS,
   CATEGORY_NEUTRAL_BADGE_CLASS,
 } from '@/lib/category-palette'
-import { targetTypeBadgeClass } from './target-type'
+import { formatTargetType, targetTypeBadgeClass } from './target-type'
 
 describe('targetTypeBadgeClass (§1.3.6)', () => {
   it.each([
@@ -36,5 +37,37 @@ describe('targetTypeBadgeClass (§1.3.6)', () => {
       targetTypeBadgeClass(v)
     )
     expect(new Set(classes).size).toBe(3)
+  })
+})
+
+describe('formatTargetType', () => {
+  it('formats known target types using i18n keys', () => {
+    const t = ((k: string, options?: { defaultValue?: string }) => {
+      const dict: Record<string, string> = {
+        'targetTypes.person': '人体',
+        'targetTypes.face': '人脸',
+        'targetTypes.vehicle': '机动车',
+        'targetTypes.unknown': '未知目标',
+      }
+      return dict[k] ?? options?.defaultValue ?? k
+    }) as unknown as TFunction
+    expect(formatTargetType(t, 'person')).toBe('人体')
+    expect(formatTargetType(t, 'face')).toBe('人脸')
+    expect(formatTargetType(t, 'vehicle')).toBe('机动车')
+  })
+
+  it('falls back to raw string for unknown long-tail target types', () => {
+    const t = ((k: string, options?: { defaultValue?: string }) =>
+      options?.defaultValue ?? k) as unknown as TFunction
+    expect(formatTargetType(t, 'robot')).toBe('robot')
+  })
+
+  it('falls back to unknown placeholder when targetType is empty', () => {
+    const t = ((k: string, options?: { defaultValue?: string }) =>
+      k === 'targetTypes.unknown'
+        ? '未知目标'
+        : (options?.defaultValue ?? k)) as unknown as TFunction
+    expect(formatTargetType(t, undefined)).toBe('未知目标')
+    expect(formatTargetType(t, '')).toBe('未知目标')
   })
 })

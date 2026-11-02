@@ -47,5 +47,6 @@ func (t *TargetTrackerForTest) Stats() TrackerStats {
 var (
 	RecognitionCooldownKeyForTest    = recognitionCooldownKey
 	PersonCaptureCooldownKeyForTest  = personCaptureCooldownKey
+	FaceCaptureCooldownKeyForTest    = faceCaptureCooldownKey
 	VehicleCaptureCooldownKeyForTest = vehicleCaptureCooldownKey
 )

@@ -67,7 +67,18 @@ public:
     zhulong::Session create_session(uint32_t worker_id);
 
     /**
-     * @brief 人体/人脸结构化推理入口
+     * @brief 场景结构化独立目标推理入口 (SCENE_STRUCTURE v2)
+     *
+     * @param session create_session 返回的主检测器会话
+     * @param image 输入只读帧视图（仅在本次调用期间有效）
+     * @param task_context 本路流的任务上下文
+     * @return 真人体与独立人脸平级结构化结果；无目标时返回空
+     */
+    zhulong::SceneStructure detect_scene_structure(zhulong::Session& session, const zhulong::Image& image,
+                                                   zhulong::TaskContext& task_context);
+
+    /**
+     * @brief 历史兼容人体/人脸结构化推理入口
      *
      * @param session create_session 返回的主检测器会话
      * @param image 输入只读帧视图（仅在本次调用期间有效）

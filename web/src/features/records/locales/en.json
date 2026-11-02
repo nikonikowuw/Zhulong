@@ -18,6 +18,12 @@
     "grid": "Grid View",
     "table": "Table View"
   },
+  "targetTypes": {
+    "person": "Person",
+    "face": "Face",
+    "vehicle": "Vehicle",
+    "unknown": "Unknown"
+  },
   "filters": {
     "allCameras": "All Cameras",
     "cameraPlaceholder": "Select Camera",

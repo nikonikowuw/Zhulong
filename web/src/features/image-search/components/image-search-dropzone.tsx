@@ -138,7 +138,7 @@ export function ImageSearchDropzone({
             />
 
             {/* 瞄准中提示徽章 */}
-            <div className='pointer-events-none absolute bottom-4 start-4 z-10 flex items-center gap-1.5 rounded-full border border-primary/30 bg-background/85 px-2.5 py-0.5 text-[11px] font-medium text-foreground backdrop-blur-sm'>
+            <div className='pointer-events-none absolute start-4 bottom-4 z-10 flex items-center gap-1.5 rounded-full border border-primary/30 bg-background/85 px-2.5 py-0.5 text-[11px] font-medium text-foreground backdrop-blur-sm'>
               <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500' />
               <Scan className='h-3 w-3 text-primary' />
               <span>{t('dropzone.tagFaceReq')}</span>
@@ -229,7 +229,7 @@ export function ImageSearchDropzone({
           {/* 科技瞄准圆圈与图标 */}
           <div className='relative mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-xs transition-transform duration-300 group-hover:scale-105'>
             <UploadCloud className='h-7 w-7 transition-transform duration-200 group-hover:-translate-y-0.5' />
-            <div className='absolute -top-1 -end-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground'>
+            <div className='absolute -end-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground'>
               <Sparkles className='h-2.5 w-2.5' />
             </div>
           </div>

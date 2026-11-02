@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/select'
 import { useAllCameras } from '@/features/cameras/contract'
 import { type RecordsTab } from '../data/schema'
+import { formatTargetType } from '../data/target-type'
 import {
   type RecordsDateRange,
   type ResolvedRecordsWindow,
@@ -146,7 +147,7 @@ export function RecordsToolbar({
               <SelectItem value='all'>{t('filters.allTargetTypes')}</SelectItem>
               {targetTypes.map((type) => (
                 <SelectItem key={type} value={type}>
-                  {type}
+                  {formatTargetType(t, type)}
                 </SelectItem>
               ))}
             </SelectContent>

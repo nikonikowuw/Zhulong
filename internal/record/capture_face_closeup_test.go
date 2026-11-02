@@ -187,3 +187,105 @@ func TestProcessMultipleFaceCloseupsDistinctCooldown(t *testing.T) {
 		t.Fatalf("expected 2 face captures, got %d", len(captures))
 	}
 }
+
+// TestProcessSceneStructureDecoupledObjects 验证 SCENE_STRUCTURE v2 原生平级对象的入库与跟踪契约：
+// 1. 真人体落 captures (target_type="person", body_score)
+// 2. 孤立人脸落 captures (target_type="face", face quality, 独立 track_id)
+// 3. 关联人脸落 recognitions，继承父人体的 track_id 与 body_box
+func TestProcessSceneStructureDecoupledObjects(t *testing.T) {
+	store, dbStore, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	svc := record.NewService(store, zap.NewNop())
+	ts := time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC)
+
+	res := aitypes.InferenceResult{
+		CameraID:    "cam_01",
+		AlgorithmID: "algo_01",
+		PTS:         1000,
+		Timestamp:   ts,
+		TaskType:    aitypes.TaskTypeSceneStructure,
+		Persons: []aitypes.PersonItem{
+			{
+				TrackID:   0,
+				BodyBox:   [4]float64{0.10, 0.10, 0.50, 0.90},
+				BodyScore: 0.93,
+			},
+		},
+		Faces: []aitypes.FaceStructureItem{
+			{
+				// 关联到 Person 0
+				Box:           [4]float64{0.20, 0.15, 0.35, 0.30},
+				Quality:       0.95,
+				PersonIndex:   0,
+				Matched:       true,
+				PersonID:      "emp_001",
+				PersonName:    "Alice",
+				MatchedFaceID: "face_alice",
+				Similarity:    0.91,
+			},
+			{
+				// 孤立人脸特写
+				Box:           [4]float64{0.65, 0.20, 0.85, 0.40},
+				Quality:       0.89,
+				PersonIndex:   -1,
+				Matched:       false,
+				MatchedFaceID: "",
+			},
+		},
+	}
+
+	if err := svc.ProcessInferenceResult(ctx, res); err != nil {
+		t.Fatalf("ProcessInferenceResult failed: %v", err)
+	}
+
+	// 1. 验证 captures 表
+	var captures []record.Capture
+	if err := dbStore.DB().Order("target_type").Find(&captures).Error; err != nil {
+		t.Fatalf("query captures failed: %v", err)
+	}
+	if len(captures) != 2 {
+		t.Fatalf("expected 2 captures (1 face + 1 person), got %d", len(captures))
+	}
+
+	faceCap := captures[0]
+	if faceCap.TargetType != "face" || faceCap.Score != 0.89 {
+		t.Errorf("unexpected face capture: %+v", faceCap)
+	}
+	if faceCap.TrackID <= 0 {
+		t.Errorf("isolated face must be assigned positive host TrackID, got %d", faceCap.TrackID)
+	}
+
+	personCap := captures[1]
+	if personCap.TargetType != "person" || personCap.Score != 0.93 {
+		t.Errorf("unexpected person capture: %+v", personCap)
+	}
+	if personCap.TrackID <= 0 {
+		t.Errorf("person must be assigned positive host TrackID, got %d", personCap.TrackID)
+	}
+
+	// 2. 验证 recognitions 表
+	var recs []record.Recognition
+	if err := dbStore.DB().Order("id").Find(&recs).Error; err != nil {
+		t.Fatalf("query recognitions failed: %v", err)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("expected 2 recognition records, got %d", len(recs))
+	}
+
+	// 关联人脸应该继承真人体 track_id
+	var associatedRec *record.Recognition
+	for i := range recs {
+		if recs[i].PersonName == "Alice" {
+			associatedRec = &recs[i]
+			break
+		}
+	}
+	if associatedRec == nil {
+		t.Fatalf("expected to find Alice recognition record")
+	}
+	if associatedRec.TrackID != personCap.TrackID {
+		t.Errorf("associated face must inherit person track_id %d, got %d", personCap.TrackID, associatedRec.TrackID)
+	}
+}

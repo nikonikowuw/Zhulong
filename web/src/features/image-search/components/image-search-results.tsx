@@ -124,7 +124,7 @@ export function ImageSearchResults({
         {/* 科技扫描雷达光环 */}
         <div className='relative mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-xs'>
           <ScanFace className='h-8 w-8 transition-transform duration-300 hover:scale-110' />
-          <div className='absolute -top-1 -end-1 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground shadow-xs'>
+          <div className='absolute -end-1 -top-1 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground shadow-xs'>
             <Sparkles className='h-2.5 w-2.5' />
           </div>
         </div>

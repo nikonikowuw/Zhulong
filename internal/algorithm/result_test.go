@@ -120,27 +120,30 @@ func TestParseInferenceResult(t *testing.T) {
 		t.Fatalf("unexpected classification result: %+v", clsRes)
 	}
 
-	// 3. Person structure with capture_time_ms, matched_face_id and candidates face_id
+	// 3. Person structure normalized to flat SceneStructure
 	captureMs := int64(1729000000123)
 	psJSON := []byte(`{"stream_id":1,"pts":3000,"capture_time_ms":1729000000123,"cost_ms":25,"task_type":"person_structure","detections":[],"classifications":[],"persons":[{"track_id":10,"body_box":[0.1,0.1,0.5,0.8],"body_score":0.9,"faces":[{"box":[0.2,0.2,0.3,0.3],"quality":0.95,"landmarks":[[0.22,0.25],[0.28,0.25],[0.25,0.27],[0.23,0.29],[0.27,0.29]],"matched":true,"similarity":0.91,"person_id":"user_1","person_name":"Bob","matched_face_id":"face_bob_01","candidates":[{"person_id":"user_1","person_name":"Bob","face_id":"face_bob_01","similarity":0.91}]}]}]}`)
 	psRes, err := algorithm.ParseInferenceResult("cam_1", "algo_face", psJSON)
 	if err != nil {
 		t.Fatalf("ParseInferenceResult person structure failed: %v", err)
 	}
-	if psRes.TaskType != algorithm.TaskTypePersonStructure || len(psRes.Persons) != 1 {
+	if psRes.TaskType != algorithm.TaskTypeSceneStructure || len(psRes.Persons) != 1 || len(psRes.Faces) != 1 {
 		t.Fatalf("unexpected person structure result: %+v", psRes)
 	}
 	if psRes.Timestamp.UnixMilli() != captureMs {
 		t.Errorf("expected Timestamp UnixMilli to match capture_time_ms %d, got %d", captureMs, psRes.Timestamp.UnixMilli())
 	}
-	if psRes.Persons[0].TrackID != 10 || len(psRes.Persons[0].Faces) != 1 || psRes.Persons[0].Faces[0].PersonID != "user_1" {
+	if psRes.Persons[0].TrackID != 10 {
 		t.Errorf("unexpected person content: %+v", psRes.Persons[0])
 	}
-	if psRes.Persons[0].Faces[0].MatchedFaceID != "face_bob_01" {
-		t.Errorf("expected matched_face_id 'face_bob_01', got %s", psRes.Persons[0].Faces[0].MatchedFaceID)
+	if psRes.Faces[0].PersonID != "user_1" || psRes.Faces[0].PersonIndex != 0 {
+		t.Errorf("unexpected face content: %+v", psRes.Faces[0])
 	}
-	if len(psRes.Persons[0].Faces[0].Candidates) != 1 || psRes.Persons[0].Faces[0].Candidates[0].FaceID != "face_bob_01" {
-		t.Errorf("unexpected candidates in parsed result: %+v", psRes.Persons[0].Faces[0].Candidates)
+	if psRes.Faces[0].MatchedFaceID != "face_bob_01" {
+		t.Errorf("expected matched_face_id 'face_bob_01', got %s", psRes.Faces[0].MatchedFaceID)
+	}
+	if len(psRes.Faces[0].Candidates) != 1 || psRes.Faces[0].Candidates[0].FaceID != "face_bob_01" {
+		t.Errorf("unexpected candidates in parsed result: %+v", psRes.Faces[0].Candidates)
 	}
 
 	// 4. Invalid or empty

@@ -76,8 +76,9 @@ enum {
     ZHULONG_RESULT_TYPE_UNKNOWN           = 0,  /**< 未知结果类型 */
     ZHULONG_RESULT_TYPE_DETECTION         = 1,  /**< 通用目标检测结果（载荷为 zhulong_bbox[]） */
     ZHULONG_RESULT_TYPE_CLASSIFICATION    = 2,  /**< 图像分类结果（载荷为 zhulong_classification_item[]） */
-    ZHULONG_RESULT_TYPE_PERSON_STRUCTURE  = 3,  /**< 结构化人体/人脸结果（载荷为 zhulong_person_item[]） */
+    ZHULONG_RESULT_TYPE_PERSON_STRUCTURE  = 3,  /**< 结构化人体/人脸结果（载荷为 zhulong_person_item[]，v1 历史兼容） */
     ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE = 4,  /**< 结构化机动车/车牌结果（载荷为 zhulong_vehicle_item[]） */
+    ZHULONG_RESULT_TYPE_SCENE_STRUCTURE   = 5,  /**< 结构化场景独立目标结果（真人体与独立人脸平级，载荷为 zhulong_scene_structure*） */
     ZHULONG_RESULT_TYPE_CUSTOM            = 99  /**< 自定义私有载荷类型 */
 };
 
@@ -202,6 +203,55 @@ typedef struct zhulong_plate_item {
 } zhulong_plate_item;
 
 /**
+ * @brief 结构化场景独立人脸项 (SCENE_STRUCTURE v2)
+ *
+ * 坐标与对齐约定：
+ *   - box 必须为严格归一化坐标 [x1, y1, x2, y2] ∈ [0.0, 1.0]；
+ *   - quality 为人脸质量分 (0.0 ~ 1.0)；
+ *   - landmarks 为 5 点归一化关键点坐标 [x, y] ∈ [0.0, 1.0]；
+ *   - person_index 关联到同一载荷内 persons[i]；-1 表示孤立人脸（近景特写 / 身体未检出）；
+ *   - person_id / person_name / matched_face_id 为底库匹配命中身份信息（未命中为空字符串）；
+ *   - candidates 指针指向同一 Arena 内存块内的候选人数组，禁止单独 free；candidate_count 为 0 时填 NULL；
+ *   - reserved_[2] 显式占用 8 字节（偏移 272..280），确保随后的 64 位指针 8 字节自然对齐，零隐式编译器填充；
+ *   - 结构体总尺寸严格为 288 字节，满足 8 字节自然对齐。
+ */
+typedef struct zhulong_face_structure_item {
+    float    box[4];                                   /* [x1, y1, x2, y2] 严格归一化坐标 [0.0, 1.0] (0..16) */
+    float    quality;                                  /* 人脸质量分 (0.0 ~ 1.0) (16..20) */
+    float    landmarks[ZHULONG_FACE_LANDMARK_COUNT][2];/* 5点关键点 (x, y)，归一化 [0.0, 1.0] (20..60) */
+    int32_t  matched;                                 /* 1=命中底库，0=未命中 (60..64) */
+    float    similarity;                               /* Top-1 匹配置信度 (0.0 ~ 1.0) (64..68) */
+    int32_t  is_fused;                                /* 是否多帧融合结果 (预留) (68..72) */
+    int32_t  person_index;                             /* 关联同载荷内 persons[i]；-1 = 孤立人脸 (72..76) */
+    char     person_id[ZHULONG_PERSON_ID_MAX_LEN];      /* Top-1 底库人员 ID (76..140) */
+    char     person_name[ZHULONG_PERSON_NAME_MAX_LEN];  /* Top-1 底库人员姓名 (140..204) */
+    char     matched_face_id[ZHULONG_FACE_ID_MAX_LEN];  /* Top-1 底库人脸照片 ID (204..268) */
+    uint32_t candidate_count;                          /* candidates 数组元素数 (268..272) */
+    uint32_t reserved_[2];                             /* 显式填充对齐位，确保随后的 64 位指针自然 8 字节对齐 (272..280) */
+    const zhulong_face_candidate* candidates;          /* 指向候选人数组借用指针 (只读，指向同一 Arena) (280..288) */
+} zhulong_face_structure_item;
+
+/**
+ * @brief 结构化场景独立目标容器 (SCENE_STRUCTURE v2，单块 Arena 容器首部)
+ *
+ * 内存与遍历契约：
+ *   - 本结构体位于单块 Arena 内存首部，总尺寸为 32 字节，满足 8 字节自然对齐；
+ *   - persons 指向真人体数组；person_count == 0 时恒为 NULL（真人体项中 face_count 恒填 0，faces 恒为 NULL）；
+ *   - faces 指向独立人脸数组；face_count == 0 时恒为 NULL；
+ *   - 当且仅当 person_count == 0 && face_count == 0 时，zhulong_inference_result.count = 0 且 data = NULL；
+ *   - 只要有人或脸，zhulong_inference_result.count 严格等于 person_count + face_count，
+ *     zhulong_inference_result.data 指向本容器单个实例（zhulong_scene_structure*）；
+ *   - ⚠️ 外部调用方严禁将 data 视作连续数组按 count 步进遍历，必须分别依循 person_count 与 face_count 访问。
+ */
+typedef struct zhulong_scene_structure {
+    uint32_t person_count;                             /* 真人体数量 */
+    uint32_t face_count;                               /* 独立人脸数量 (含关联与孤立人脸) */
+    const zhulong_person_item* persons;                /* 真人体数组指针 (person_count == 0 时为 NULL) */
+    const zhulong_face_structure_item* faces;          /* 独立人脸数组指针 (face_count == 0 时为 NULL) */
+    uint64_t reserved_;                                /* 尾部对齐预留位 (8 字节对齐保底) */
+} zhulong_scene_structure;
+
+/**
  * @brief 结构化机动车项 (1 辆机动车挂载 0~N 块车牌)
  *
  * 纯车牌场景退化语义约定：
@@ -239,7 +289,7 @@ typedef struct zhulong_inference_result {
     uint64_t task_id;                  /**< 对应的摄像机任务 ID */
     zhulong_result_type_t result_type; /**< 结果载荷类型标识 */
     uint32_t count;                    /**< 顶层结果数组元素数量（如检出的检测框数或人体数） */
-    void* data;                        /**< 指向结果元素数组的指针 (zhulong_bbox[] / zhulong_classification_item[] / zhulong_person_item[]) */
+    void* data;                        /**< 指向结果元素数组或容器结构体的指针 (zhulong_bbox[] / zhulong_classification_item[] / zhulong_person_item[] / zhulong_vehicle_item[] / zhulong_scene_structure*) */
     void* internal_token;              /**< 插件内部私有销毁凭据（释放时交由 result_release 处理） */
 } zhulong_inference_result;
 

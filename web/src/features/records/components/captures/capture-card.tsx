@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { type Capture } from '../../data/schema'
-import { targetTypeBadgeClass } from '../../data/target-type'
+import { formatTargetType, targetTypeBadgeClass } from '../../data/target-type'
 import { MediaImage } from '../common/media-image'
 
 interface CaptureCardProps {
@@ -35,7 +35,7 @@ export function CaptureCard({ item, cameraName, onSelect }: CaptureCardProps) {
       <div className='relative aspect-square w-full overflow-hidden bg-muted/40'>
         <MediaImage
           path={item.cropPath || item.imagePath}
-          alt={item.targetType}
+          alt={formatTargetType(t, item.targetType)}
           className='size-full transition-transform duration-300 group-hover:scale-105'
           imageClassName='object-contain p-2'
           fallbackText='Target Crop'
@@ -51,7 +51,7 @@ export function CaptureCard({ item, cameraName, onSelect }: CaptureCardProps) {
             )}
           >
             <Camera className='size-3' />
-            {item.targetType}
+            {formatTargetType(t, item.targetType)}
           </Badge>
         </div>
 
@@ -73,7 +73,7 @@ export function CaptureCard({ item, cameraName, onSelect }: CaptureCardProps) {
       <CardContent className='space-y-1.5 p-3'>
         <div className='flex items-center justify-between text-xs'>
           <span className='max-w-[120px] truncate font-semibold text-foreground capitalize'>
-            {item.targetType}
+            {formatTargetType(t, item.targetType)}
           </span>
           <span className='font-mono text-[11px] text-muted-foreground'>
             {formattedTime}

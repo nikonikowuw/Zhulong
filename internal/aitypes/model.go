@@ -13,6 +13,7 @@ const (
 	TaskTypeClassification   = "classification"
 	TaskTypePersonStructure  = "person_structure"
 	TaskTypeVehicleStructure = "vehicle_structure"
+	TaskTypeSceneStructure   = "scene_structure"
 )
 
 // ResultType corresponds to native zhulong_result_type_t in zhulong/plugin.h.
@@ -24,6 +25,7 @@ const (
 	ResultTypeClassification   ResultType = 2
 	ResultTypePersonStructure  ResultType = 3
 	ResultTypeVehicleStructure ResultType = 4
+	ResultTypeSceneStructure   ResultType = 5
 	ResultTypeCustom           ResultType = 99
 )
 
@@ -62,6 +64,21 @@ type FaceSubItem struct {
 	Similarity    float64         `json:"similarity"`
 	IsFused       bool            `json:"is_fused"`
 	Candidates    []FaceCandidate `json:"candidates"`
+}
+
+// FaceStructureItem represents an independent face object in SCENE_STRUCTURE v2.
+type FaceStructureItem struct {
+	Box           [4]float64      `json:"box"`
+	Quality       float64         `json:"quality"`
+	Landmarks     [][2]float64    `json:"landmarks"`
+	Matched       bool            `json:"matched"`
+	Similarity    float64         `json:"similarity"`
+	PersonIndex   int32           `json:"person_index"` // -1 for isolated face; >= 0 for associated person
+	PersonID      string          `json:"person_id"`
+	PersonName    string          `json:"person_name"`
+	MatchedFaceID string          `json:"matched_face_id"`
+	IsFused       bool            `json:"is_fused,omitempty"`
+	Candidates    []FaceCandidate `json:"candidates,omitempty"`
 }
 
 // PersonItem represents a detected person with body box and mounted face items (1:N).
@@ -122,6 +139,7 @@ type InferenceResult struct {
 	Detections      []DetectionItem      `json:"detections"`
 	Classifications []ClassificationItem `json:"classifications"`
 	Persons         []PersonItem         `json:"persons"`
+	Faces           []FaceStructureItem  `json:"faces"`
 	Vehicles        []VehicleItem        `json:"vehicles"`
 }
 
@@ -140,6 +158,11 @@ func NewPersonStructureResult(cameraID, algorithmID string, pts, costMs int64) I
 	return newInferenceResult(cameraID, algorithmID, pts, costMs, TaskTypePersonStructure)
 }
 
+// NewSceneStructureResult creates an empty scene-structure inference result.
+func NewSceneStructureResult(cameraID, algorithmID string, pts, costMs int64) InferenceResult {
+	return newInferenceResult(cameraID, algorithmID, pts, costMs, TaskTypeSceneStructure)
+}
+
 // NewVehicleStructureResult creates an empty vehicle-structure inference result.
 func NewVehicleStructureResult(cameraID, algorithmID string, pts, costMs int64) InferenceResult {
 	return newInferenceResult(cameraID, algorithmID, pts, costMs, TaskTypeVehicleStructure)
@@ -156,6 +179,7 @@ func newInferenceResult(cameraID, algorithmID string, pts, costMs int64, taskTyp
 		Detections:      make([]DetectionItem, 0),
 		Classifications: make([]ClassificationItem, 0),
 		Persons:         make([]PersonItem, 0),
+		Faces:           make([]FaceStructureItem, 0),
 		Vehicles:        make([]VehicleItem, 0),
 	}
 }
@@ -171,6 +195,7 @@ type RawInferencePayload struct {
 	Detections      []DetectionItem      `json:"detections"`
 	Classifications []ClassificationItem `json:"classifications"`
 	Persons         []PersonItem         `json:"persons"`
+	Faces           []FaceStructureItem  `json:"faces,omitempty"`
 	Vehicles        []VehicleItem        `json:"vehicles"`
 }
 
@@ -209,11 +234,64 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 		if len(payload.Classifications) > 0 {
 			res.Classifications = payload.Classifications
 		}
-	case TaskTypePersonStructure:
-		res = NewPersonStructureResult(cameraID, effectiveAlgoID, payload.PTS, payload.CostMs)
+	case TaskTypeSceneStructure:
+		res = NewSceneStructureResult(cameraID, effectiveAlgoID, payload.PTS, payload.CostMs)
 		res.Timestamp = captureTime
 		if len(payload.Persons) > 0 {
-			res.Persons = payload.Persons
+			cleanPersons := make([]PersonItem, len(payload.Persons))
+			for i, p := range payload.Persons {
+				p.Faces = nil
+				cleanPersons[i] = p
+			}
+			res.Persons = cleanPersons
+		}
+		if len(payload.Faces) > 0 {
+			res.Faces = payload.Faces
+		}
+	case TaskTypePersonStructure:
+		// 宿主反序列化入口单向归一化 (兼容期旧包 type 3)：
+		// 1. 若 p.IsFaceCloseup() == true（退化伪人体）：仅提取其人脸为孤立人脸（PersonIndex = -1），物理剔除伪人体；
+		// 2. 若 p.IsFaceCloseup() == false（真实人体）：保留进入 res.Persons，人脸提取至顶层并关联真实 personIndex。
+		res = NewSceneStructureResult(cameraID, effectiveAlgoID, payload.PTS, payload.CostMs)
+		res.Timestamp = captureTime
+		for _, p := range payload.Persons {
+			if p.IsFaceCloseup() {
+				if len(p.Faces) > 0 {
+					f := p.Faces[0]
+					res.Faces = append(res.Faces, FaceStructureItem{
+						Box:           f.Box,
+						Quality:       f.Quality,
+						Landmarks:     f.Landmarks,
+						Matched:       f.Matched,
+						Similarity:    f.Similarity,
+						PersonIndex:   -1,
+						PersonID:      f.PersonID,
+						PersonName:    f.PersonName,
+						MatchedFaceID: f.MatchedFaceID,
+						IsFused:       f.IsFused,
+						Candidates:    f.Candidates,
+					})
+				}
+			} else {
+				personIdx := int32(len(res.Persons))
+				for _, f := range p.Faces {
+					res.Faces = append(res.Faces, FaceStructureItem{
+						Box:           f.Box,
+						Quality:       f.Quality,
+						Landmarks:     f.Landmarks,
+						Matched:       f.Matched,
+						Similarity:    f.Similarity,
+						PersonIndex:   personIdx,
+						PersonID:      f.PersonID,
+						PersonName:    f.PersonName,
+						MatchedFaceID: f.MatchedFaceID,
+						IsFused:       f.IsFused,
+						Candidates:    f.Candidates,
+					})
+				}
+				p.Faces = nil
+				res.Persons = append(res.Persons, p)
+			}
 		}
 	case TaskTypeVehicleStructure:
 		res = NewVehicleStructureResult(cameraID, effectiveAlgoID, payload.PTS, payload.CostMs)
@@ -232,6 +310,7 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 			Detections:      payload.Detections,
 			Classifications: payload.Classifications,
 			Persons:         payload.Persons,
+			Faces:           payload.Faces,
 			Vehicles:        payload.Vehicles,
 		}
 		if res.Detections == nil {
@@ -242,6 +321,9 @@ func ParseInferenceResult(cameraID, algorithmID string, data []byte) (InferenceR
 		}
 		if res.Persons == nil {
 			res.Persons = make([]PersonItem, 0)
+		}
+		if res.Faces == nil {
+			res.Faces = make([]FaceStructureItem, 0)
 		}
 		if res.Vehicles == nil {
 			res.Vehicles = make([]VehicleItem, 0)

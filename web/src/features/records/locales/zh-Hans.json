@@ -18,6 +18,12 @@
     "grid": "画廊卡片",
     "table": "密集表格"
   },
+  "targetTypes": {
+    "person": "人体",
+    "face": "人脸",
+    "vehicle": "机动车",
+    "unknown": "未知目标"
+  },
   "filters": {
     "allCameras": "全部摄像机",
     "cameraPlaceholder": "选择摄像机",

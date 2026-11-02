@@ -209,7 +209,7 @@ describe('RecordDetailDialog', () => {
     )
 
     await expect.element(getByRole('dialog')).toBeInTheDocument()
-    await expect.element(getByText('vehicle')).toBeInTheDocument()
+    await expect.element(getByText('机动车')).toBeInTheDocument()
 
     const closeBtn = getByRole('button', { name: '关闭' })
     await userEvent.click(closeBtn)

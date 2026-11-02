@@ -11,5 +11,5 @@
 #include "pipeline/face_recognition.hpp"
 
 ZHULONG_ALGO_MAIN(zhulong::face::FaceRecognitionPlugin,
-                  zhulong::sdk::PersonStructureResultAdapter,
+                  zhulong::sdk::SceneStructureResultAdapter,
                   "FaceRecognition", "1.0.0")

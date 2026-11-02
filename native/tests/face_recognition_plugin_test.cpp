@@ -14,7 +14,7 @@
 static zhulong_status_t build_api(zhulong_plugin_api_v1* out_api) {
     std::memset(out_api, 0, sizeof(*out_api));
     return zhulong::detail::PluginApi<zhulong::face::FaceRecognitionPlugin,
-                                      zhulong::sdk::PersonStructureResultAdapter>::get_api(
+                                      zhulong::sdk::SceneStructureResultAdapter>::get_api(
         1, out_api, sizeof(*out_api), "FaceRecognition", "1.0.0");
 }
 
@@ -74,7 +74,7 @@ int main() {
         zhulong_inference_result* result = nullptr;
         zhulong_status_t process_rc = api.process(task, &sample, &result);
         assert(process_rc == ZHULONG_PLUGIN_OK && result != nullptr);
-        assert(result->result_type == ZHULONG_RESULT_TYPE_PERSON_STRUCTURE);
+        assert(result->result_type == ZHULONG_RESULT_TYPE_SCENE_STRUCTURE);
         assert(result->count == 0);
         api.result_release(result);
     };

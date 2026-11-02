@@ -24,7 +24,7 @@ import { DataTableColumnHeader } from '@/components/data-table/column-header'
 import { DataTablePagination } from '@/components/data-table/pagination'
 import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { algorithmLabel, type Capture } from '../../data/schema'
-import { targetTypeBadgeClass } from '../../data/target-type'
+import { formatTargetType, targetTypeBadgeClass } from '../../data/target-type'
 import { CaptureCard } from '../captures/capture-card'
 import { MediaImage } from '../common/media-image'
 import { VehicleCaptureCard } from '../vehicles/vehicle-capture-card'
@@ -89,7 +89,7 @@ export function CapturesView({
             <div className='h-10 w-16 overflow-hidden rounded-md border border-border bg-muted/40'>
               <MediaImage
                 path={row.original.cropPath || row.original.imagePath}
-                alt={row.original.targetType}
+                alt={formatTargetType(t, row.original.targetType)}
                 className='size-full'
                 imageClassName='object-contain p-0.5'
                 fallbackText='Capture'
@@ -179,7 +179,7 @@ export function CapturesView({
             )}
           >
             <Camera className='me-1 size-3' />
-            {row.original.targetType}
+            {formatTargetType(t, row.original.targetType)}
           </Badge>
         ),
       })

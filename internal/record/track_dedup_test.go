@@ -404,7 +404,7 @@ func TestTrackDeduplication_CooldownKeyContract(t *testing.T) {
 				trackID:   8,
 				isCloseup: true,
 				box:       [4]float64{0.1, 0.2, 0.3, 0.4},
-				expected:  "cap:cam_01:person:trk:8",
+				expected:  "cap:cam_01:face:trk:8",
 			},
 			{
 				name:      "fallback closeup to face box",

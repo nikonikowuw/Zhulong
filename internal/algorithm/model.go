@@ -40,6 +40,7 @@ const (
 	TaskTypeClassification   = "classification"
 	TaskTypePersonStructure  = "person_structure"
 	TaskTypeVehicleStructure = "vehicle_structure"
+	TaskTypeSceneStructure   = "scene_structure"
 )
 
 // Category enum

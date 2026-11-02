@@ -1,3 +1,4 @@
+import { type TFunction } from 'i18next'
 import { categoryBadgeClass, type CategoryHue } from '@/lib/category-palette'
 
 /**
@@ -19,4 +20,18 @@ export function targetTypeBadgeClass(targetType?: string): string {
   return categoryBadgeClass(
     targetType ? TARGET_TYPE_HUE[targetType] : undefined
   )
+}
+
+/**
+ * 本地化格式化目标类型名称。
+ *
+ * 优先从 `records.targetTypes.<type>` 获取翻译，若未配置或为长尾未知类型，
+ * 则直接原样返回该类型字符串（或回落至未知占位）。
+ */
+export function formatTargetType(t: TFunction, targetType?: string): string {
+  if (!targetType || !targetType.trim()) {
+    return t('targetTypes.unknown', { defaultValue: '未知目标' })
+  }
+  const key = `targetTypes.${targetType}`
+  return t(key, { defaultValue: targetType })
 }

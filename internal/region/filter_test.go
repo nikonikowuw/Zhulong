@@ -211,4 +211,91 @@ func TestConfig_Apply(t *testing.T) {
 			t.Errorf("expected vehicle plate kept intact, got %+v", out.Vehicles[0].Plates)
 		}
 	})
+
+	t.Run("scene structure faces filtering, index remapping, and fail-closed guard", func(t *testing.T) {
+		// ROI covers [0.0, 0.0, 0.5, 0.5]
+		cfg := Config{
+			ROI: []Rect{{0.0, 0.0, 0.5, 0.5}},
+		}
+
+		res := aitypes.InferenceResult{
+			CameraID: "cam-1",
+			TaskType: aitypes.TaskTypeSceneStructure,
+			Persons: []aitypes.PersonItem{
+				{
+					TrackID:   1,
+					BodyBox:   [4]float64{0.7, 0.7, 0.9, 0.9}, // (0.8, 0.9) Outside ROI -> will be dropped
+					BodyScore: 0.9,
+				},
+				{
+					TrackID:   2,
+					BodyBox:   [4]float64{0.1, 0.1, 0.3, 0.3}, // (0.2, 0.3) Inside ROI -> kept, newIdx = 0
+					BodyScore: 0.95,
+				},
+			},
+			Faces: []aitypes.FaceStructureItem{
+				{
+					// Associated to Person 0 (Outside ROI) -> should be dropped
+					Box:         [4]float64{0.1, 0.1, 0.2, 0.2}, // Even if face box is inside ROI!
+					PersonIndex: 0,
+					PersonName:  "FaceOfPerson0",
+				},
+				{
+					// Associated to Person 1 (Inside ROI) -> kept, PersonIndex remapped 1 -> 0
+					Box:         [4]float64{0.15, 0.12, 0.25, 0.22},
+					PersonIndex: 1,
+					PersonName:  "FaceOfPerson1",
+				},
+				{
+					// Isolated face inside ROI -> kept, PersonIndex stays -1
+					Box:         [4]float64{0.2, 0.2, 0.3, 0.3}, // bottom center: (0.25, 0.3)
+					PersonIndex: -1,
+					PersonName:  "IsolatedInside",
+				},
+				{
+					// Isolated face outside ROI -> dropped
+					Box:         [4]float64{0.6, 0.6, 0.8, 0.8}, // bottom center: (0.7, 0.8)
+					PersonIndex: -1,
+					PersonName:  "IsolatedOutside",
+				},
+				{
+					// Malformed index out of bounds (person_index = 99) -> fail-closed dropped
+					Box:         [4]float64{0.2, 0.2, 0.3, 0.3},
+					PersonIndex: 99,
+					PersonName:  "MalformedOutOfBounds",
+				},
+				{
+					// Malformed negative index (person_index = -5) -> fail-closed dropped
+					Box:         [4]float64{0.2, 0.2, 0.3, 0.3},
+					PersonIndex: -5,
+					PersonName:  "MalformedNegative",
+				},
+			},
+		}
+
+		out := cfg.Filter(res)
+
+		// 1. Person verification
+		if len(out.Persons) != 1 {
+			t.Fatalf("expected 1 person kept, got %d", len(out.Persons))
+		}
+		if out.Persons[0].TrackID != 2 {
+			t.Errorf("expected Person 2 kept, got trackID %d", out.Persons[0].TrackID)
+		}
+
+		// 2. Face verification
+		if len(out.Faces) != 2 {
+			t.Fatalf("expected exactly 2 faces kept, got %d: %+v", len(out.Faces), out.Faces)
+		}
+
+		// Face 1: FaceOfPerson1 remapped to PersonIndex 0
+		if out.Faces[0].PersonName != "FaceOfPerson1" || out.Faces[0].PersonIndex != 0 {
+			t.Errorf("expected FaceOfPerson1 remapped to index 0, got %+v", out.Faces[0])
+		}
+
+		// Face 2: IsolatedInside with PersonIndex -1
+		if out.Faces[1].PersonName != "IsolatedInside" || out.Faces[1].PersonIndex != -1 {
+			t.Errorf("expected IsolatedInside kept with index -1, got %+v", out.Faces[1])
+		}
+	})
 }

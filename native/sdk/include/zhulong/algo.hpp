@@ -230,6 +230,31 @@ struct VehicleItem {
 };
 
 /**
+ * @brief 结构化场景独立人脸项 (SCENE_STRUCTURE v2)
+ */
+struct FaceStructureItem {
+    float box[4]{0.0f, 0.0f, 0.0f, 0.0f}; /**< [x1, y1, x2, y2] 归一化坐标 [0.0, 1.0] */
+    float quality{0.0f};                   /**< 人脸质量分 (0.0 ~ 1.0) */
+    std::vector<Landmark> landmarks;       /**< 5 点关键点坐标 */
+    bool matched{false};                   /**< 是否命中底库 */
+    float similarity{0.0f};                /**< Top-1 匹配相似度 (0.0 ~ 1.0) */
+    bool is_fused{false};                  /**< 是否多帧融合结果 (预留) */
+    int32_t person_index{-1};              /**< 关联人体下标；-1 为无关联孤立脸 */
+    std::string person_id;                 /**< Top-1 人员唯一标识符 (未命中为空字符串) */
+    std::string person_name;               /**< Top-1 人员姓名 (未命中为空字符串) */
+    std::string matched_face_id;           /**< Top-1 命中的底照 ID (未命中为空字符串) */
+    std::vector<FaceCandidate> candidates; /**< Top-K 候选人列表 */
+};
+
+/**
+ * @brief 结构化场景独立结果容器 (SCENE_STRUCTURE v2)
+ */
+struct SceneStructure {
+    std::vector<PersonItem> persons;       /**< 真人体列表 (内部 faces 必须为空) */
+    std::vector<FaceStructureItem> faces;  /**< 独立人脸列表 (含关联与孤立人脸) */
+};
+
+/**
  * @brief 推理会话 (单 Worker 独占执行)
  *
  * 封装底层的硬件执行上下文（SessionContext），负责在单线程内驱动硬件加速推理。
@@ -780,6 +805,148 @@ struct VehicleStructureResultAdapter {
 };
 
 /**
+ * @brief 结构化场景独立目标结果适配器 (SCENE_STRUCTURE v2，真人体与独立人脸平级)
+ */
+struct SceneStructureResultAdapter {
+    using item_type = zhulong_scene_structure;
+    static constexpr zhulong_result_type_t result_type = ZHULONG_RESULT_TYPE_SCENE_STRUCTURE;
+
+    /** @brief 调用插件类的 detect_scene_structure 方法执行推理 */
+    template<typename PluginClass>
+    static SceneStructure infer(PluginClass& plugin, Session& session, const Image& image,
+                                TaskContext& task_context) {
+        return plugin.detect_scene_structure(session, image, task_context);
+    }
+
+    /** @brief 将平级场景结构以单块连续 Arena 内存打包输出至 zhulong_inference_result */
+    template<typename PluginClass>
+    static void pack(PluginClass& plugin, Session& session, const Image& image,
+                     TaskContext& task_context, zhulong_inference_result& out) {
+        auto scene = infer(plugin, session, image, task_context);
+        size_t n_persons = scene.persons.size();
+        size_t n_faces = scene.faces.size();
+        size_t n_candidates = 0;
+
+        for (const auto& f : scene.faces) {
+            n_candidates += f.candidates.size();
+        }
+
+        if (n_persons == 0 && n_faces == 0) {
+            out.count = 0;
+            out.data = nullptr;
+            out.internal_token = nullptr;
+            return;
+        }
+
+        size_t scene_bytes = sizeof(zhulong_scene_structure);
+        size_t persons_bytes = n_persons * sizeof(zhulong_person_item);
+        size_t faces_bytes = n_faces * sizeof(zhulong_face_structure_item);
+        size_t candidates_bytes = n_candidates * sizeof(zhulong_face_candidate);
+        size_t total_bytes = scene_bytes + persons_bytes + faces_bytes + candidates_bytes;
+
+        uint8_t* arena = static_cast<uint8_t*>(std::malloc(total_bytes));
+        if (!arena) {
+            throw std::bad_alloc();
+        }
+        std::memset(arena, 0, total_bytes);
+
+        auto* out_scene = reinterpret_cast<zhulong_scene_structure*>(arena);
+        out_scene->person_count = static_cast<uint32_t>(n_persons);
+        out_scene->face_count = static_cast<uint32_t>(n_faces);
+        out_scene->reserved_ = 0;
+
+        auto* out_persons = n_persons > 0
+            ? reinterpret_cast<zhulong_person_item*>(arena + scene_bytes)
+            : nullptr;
+        auto* out_faces = n_faces > 0
+            ? reinterpret_cast<zhulong_face_structure_item*>(arena + scene_bytes + persons_bytes)
+            : nullptr;
+        auto* out_candidates = n_candidates > 0
+            ? reinterpret_cast<zhulong_face_candidate*>(arena + scene_bytes + persons_bytes + faces_bytes)
+            : nullptr;
+
+        out_scene->persons = out_persons;
+        out_scene->faces = out_faces;
+
+        // 填充真人体 (真人体项内 faces 恒为空)
+        for (size_t i = 0; i < n_persons; ++i) {
+            const auto& src_p = scene.persons[i];
+            auto& dst_p = out_persons[i];
+
+            dst_p.track_id = src_p.track_id;
+            dst_p.body_box[0] = src_p.body_box[0];
+            dst_p.body_box[1] = src_p.body_box[1];
+            dst_p.body_box[2] = src_p.body_box[2];
+            dst_p.body_box[3] = src_p.body_box[3];
+            dst_p.body_score = src_p.body_score;
+            dst_p.face_count = 0;
+            dst_p.faces = nullptr;
+        }
+
+        // 填充独立人脸
+        size_t cand_idx = 0;
+        for (size_t i = 0; i < n_faces; ++i) {
+            const auto& src_f = scene.faces[i];
+            auto& dst_f = out_faces[i];
+
+            dst_f.box[0] = src_f.box[0];
+            dst_f.box[1] = src_f.box[1];
+            dst_f.box[2] = src_f.box[2];
+            dst_f.box[3] = src_f.box[3];
+            dst_f.quality = src_f.quality;
+
+            size_t n_lm = std::min<size_t>(src_f.landmarks.size(), ZHULONG_FACE_LANDMARK_COUNT);
+            for (size_t k = 0; k < n_lm; ++k) {
+                dst_f.landmarks[k][0] = src_f.landmarks[k].x;
+                dst_f.landmarks[k][1] = src_f.landmarks[k].y;
+            }
+
+            dst_f.matched = src_f.matched ? 1 : 0;
+            dst_f.similarity = src_f.similarity;
+            dst_f.is_fused = src_f.is_fused ? 1 : 0;
+            dst_f.person_index = src_f.person_index;
+
+            std::strncpy(dst_f.person_id, src_f.person_id.c_str(), sizeof(dst_f.person_id) - 1);
+            dst_f.person_id[sizeof(dst_f.person_id) - 1] = '\0';
+            std::strncpy(dst_f.person_name, src_f.person_name.c_str(), sizeof(dst_f.person_name) - 1);
+            dst_f.person_name[sizeof(dst_f.person_name) - 1] = '\0';
+            std::strncpy(dst_f.matched_face_id, src_f.matched_face_id.c_str(), sizeof(dst_f.matched_face_id) - 1);
+            dst_f.matched_face_id[sizeof(dst_f.matched_face_id) - 1] = '\0';
+
+            dst_f.candidate_count = static_cast<uint32_t>(src_f.candidates.size());
+            if (dst_f.candidate_count > 0 && out_candidates) {
+                dst_f.candidates = &out_candidates[cand_idx];
+                for (size_t k = 0; k < src_f.candidates.size(); ++k) {
+                    const auto& src_c = src_f.candidates[k];
+                    auto& dst_c = out_candidates[cand_idx++];
+
+                    std::strncpy(dst_c.person_id, src_c.person_id.c_str(), sizeof(dst_c.person_id) - 1);
+                    dst_c.person_id[sizeof(dst_c.person_id) - 1] = '\0';
+                    std::strncpy(dst_c.person_name, src_c.person_name.c_str(), sizeof(dst_c.person_name) - 1);
+                    dst_c.person_name[sizeof(dst_c.person_name) - 1] = '\0';
+                    std::strncpy(dst_c.face_id, src_c.face_id.c_str(), sizeof(dst_c.face_id) - 1);
+                    dst_c.face_id[sizeof(dst_c.face_id) - 1] = '\0';
+                    dst_c.similarity = src_c.similarity;
+                }
+            } else {
+                dst_f.candidates = nullptr;
+            }
+        }
+
+        out.count = static_cast<uint32_t>(n_persons + n_faces);
+        out.data = out_scene;
+        out.internal_token = arena;
+    }
+
+    /** @brief 释放单块连续 Arena 内存 */
+    static void release(void* token) {
+        if (token) {
+            std::free(token);
+        }
+    }
+};
+
+/**
  * @brief 插件 C ABI 桥接模板类
  *
  * 将开发者编写的 C++ 插件类（PluginClass）与结果序列化适配器（ResultAdapter）
@@ -956,6 +1123,7 @@ using DetectionResultAdapter = ::zhulong::detail::DetectionResultAdapter;
 using ClassificationResultAdapter = ::zhulong::detail::ClassificationResultAdapter;
 using PersonStructureResultAdapter = ::zhulong::detail::PersonStructureResultAdapter;
 using VehicleStructureResultAdapter = ::zhulong::detail::VehicleStructureResultAdapter;
+using SceneStructureResultAdapter = ::zhulong::detail::SceneStructureResultAdapter;
 } // namespace sdk
 
 } // namespace zhulong
@@ -1019,5 +1187,17 @@ extern "C" ZHULONG_PLUGIN_EXPORT zhulong_status_t zhulong_plugin_get_api( \
 #define ZHULONG_REGISTER_VEHICLE_STRUCTURE_PLUGIN(PluginClass, PluginNameStr, PluginVersionStr) \
     ZHULONG_REGISTER_PLUGIN_WITH_ADAPTER(PluginClass, PluginNameStr, PluginVersionStr, \
                                          ::zhulong::detail::VehicleStructureResultAdapter)
+
+/**
+ * @brief 注册结构化场景独立目标插件 (SCENE_STRUCTURE v2)
+ *
+ * 约定 PluginClass 类必须提供以下公共成员方法：
+ *   - zhulong_status_t init(const std::string& config_json);
+ *   - zhulong::Session create_session(uint32_t worker_id);
+ *   - zhulong::SceneStructure detect_scene_structure(zhulong::Session& session, const zhulong::Image& image, zhulong::TaskContext& task_context);
+ */
+#define ZHULONG_REGISTER_SCENE_STRUCTURE_PLUGIN(PluginClass, PluginNameStr, PluginVersionStr) \
+    ZHULONG_REGISTER_PLUGIN_WITH_ADAPTER(PluginClass, PluginNameStr, PluginVersionStr, \
+                                         ::zhulong::detail::SceneStructureResultAdapter)
 
 #endif /* ZHULONG_ALGO_HPP */

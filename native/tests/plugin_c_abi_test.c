@@ -100,12 +100,24 @@ int main(void) {
     assert(ZHULONG_FACE_LANDMARK_COUNT == 5);
     assert(ZHULONG_RESULT_TYPE_PERSON_STRUCTURE == 3);
     assert(ZHULONG_RESULT_TYPE_VEHICLE_STRUCTURE == 4);
+    assert(ZHULONG_RESULT_TYPE_SCENE_STRUCTURE == 5);
 
     _Static_assert(sizeof(zhulong_face_candidate) == 200, "zhulong_face_candidate must be 200 bytes");
     _Static_assert(sizeof(zhulong_face_candidate) % 8 == 0, "zhulong_face_candidate must be 8-byte aligned");
 
     _Static_assert(sizeof(zhulong_face_item) == 280, "zhulong_face_item must be 280 bytes");
     _Static_assert(sizeof(zhulong_face_item) % 8 == 0, "zhulong_face_item must be 8-byte aligned");
+
+    _Static_assert(sizeof(zhulong_face_structure_item) == 288, "zhulong_face_structure_item must be 288 bytes");
+    _Static_assert(sizeof(zhulong_face_structure_item) % 8 == 0, "zhulong_face_structure_item must be 8-byte aligned");
+    _Static_assert(offsetof(zhulong_face_structure_item, person_index) == 72, "person_index offset mismatch");
+    _Static_assert(offsetof(zhulong_face_structure_item, reserved_) == 272, "reserved_ offset mismatch");
+    _Static_assert(offsetof(zhulong_face_structure_item, candidates) == 280, "candidates offset mismatch");
+
+    _Static_assert(sizeof(zhulong_scene_structure) == 32, "zhulong_scene_structure must be 32 bytes");
+    _Static_assert(sizeof(zhulong_scene_structure) % 8 == 0, "zhulong_scene_structure must be 8-byte aligned");
+    _Static_assert(offsetof(zhulong_scene_structure, persons) == 8, "persons offset mismatch");
+    _Static_assert(offsetof(zhulong_scene_structure, faces) == 16, "faces offset mismatch");
 
     _Static_assert(sizeof(zhulong_person_item) == 40, "zhulong_person_item must be 40 bytes");
     _Static_assert(sizeof(zhulong_person_item) % 8 == 0, "zhulong_person_item must be 8-byte aligned");

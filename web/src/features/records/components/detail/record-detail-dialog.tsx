@@ -43,7 +43,7 @@ import {
   type RecordItem,
   type RecordsTab,
 } from '../../data/schema'
-import { targetTypeBadgeClass } from '../../data/target-type'
+import { formatTargetType, targetTypeBadgeClass } from '../../data/target-type'
 import { BoundingBoxCanvas } from '../common/bounding-box-canvas'
 import { MediaImage } from '../common/media-image'
 import { getGalleryImageUrl, getMediaUrl } from '../common/media-utils'
@@ -228,7 +228,7 @@ export function RecordDetailDialog({
                     )}
                   >
                     <Camera className='size-3' />
-                    {cap.targetType}
+                    {formatTargetType(t, cap.targetType)}
                   </Badge>
                 )}
               </DialogTitle>
@@ -342,7 +342,7 @@ export function RecordDetailDialog({
                     : isAlarm && alm
                       ? alm.alarmType
                       : isCapture && cap
-                        ? cap.targetType
+                        ? formatTargetType(t, cap.targetType)
                         : undefined
                 }
                 secondaryBox={recognitionBodyBox}
@@ -664,7 +664,7 @@ export function RecordDetailDialog({
                   <div className='flex h-36 w-full items-center justify-center overflow-hidden rounded-md border border-border bg-muted/40 p-2'>
                     <MediaImage
                       path={cap.cropPath}
-                      alt={cap.targetType}
+                      alt={formatTargetType(t, cap.targetType)}
                       className='size-full'
                       imageClassName='object-contain'
                     />

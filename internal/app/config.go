@@ -118,13 +118,7 @@ func validateHTTPAddress(address string) error {
 	if host == "" {
 		return errors.New("host must be explicit; use 0.0.0.0 to bind all interfaces")
 	}
-	for _, digit := range port {
-		if digit < '0' || digit > '9' {
-			return errors.New("port must be a number between 0 and 65535")
-		}
-	}
-	portNumber, err := strconv.Atoi(port)
-	if err != nil || portNumber < 0 || portNumber > 65535 {
+	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
 		return errors.New("port must be a number between 0 and 65535")
 	}
 	return nil

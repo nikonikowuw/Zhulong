@@ -13,6 +13,7 @@ const (
 	ResultTypeClassification   = aitypes.ResultTypeClassification
 	ResultTypePersonStructure  = aitypes.ResultTypePersonStructure
 	ResultTypeVehicleStructure = aitypes.ResultTypeVehicleStructure
+	ResultTypeSceneStructure   = aitypes.ResultTypeSceneStructure
 	ResultTypeCustom           = aitypes.ResultTypeCustom
 )
 
@@ -30,6 +31,9 @@ type FaceSubItem = aitypes.FaceSubItem
 
 // PersonItem represents a detected person with body box and mounted face items (1:N).
 type PersonItem = aitypes.PersonItem
+
+// FaceStructureItem represents a face item in a flat scene structure.
+type FaceStructureItem = aitypes.FaceStructureItem
 
 // PlateSubItem represents a license plate mounted onto a vehicle entity.
 type PlateSubItem = aitypes.PlateSubItem
@@ -49,5 +53,6 @@ var (
 	NewClassificationResult   = aitypes.NewClassificationResult
 	NewPersonStructureResult  = aitypes.NewPersonStructureResult
 	NewVehicleStructureResult = aitypes.NewVehicleStructureResult
+	NewSceneStructureResult   = aitypes.NewSceneStructureResult
 	ParseInferenceResult      = aitypes.ParseInferenceResult
 )

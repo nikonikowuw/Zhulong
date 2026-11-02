@@ -53,19 +53,6 @@ struct ProcessedFace {
     zhulong::FaceItem item;
 };
 
-/** @brief 从孤立/退化人脸构造别名 PersonItem（body_box = face_box, body_score = face.quality） */
-zhulong::PersonItem make_degenerate_person_item(ProcessedFace&& processed) {
-    zhulong::PersonItem person;
-    person.track_id = 0;
-    person.body_box[0] = processed.face_box[0];
-    person.body_box[1] = processed.face_box[1];
-    person.body_box[2] = processed.face_box[2];
-    person.body_box[3] = processed.face_box[3];
-    person.body_score = processed.item.quality;
-    person.faces.push_back(std::move(processed.item));
-    return person;
-}
-
 /**
  * @brief 当前进程自身所在目录（不含结尾斜杠）；取不到时返回空串
  *
@@ -281,7 +268,7 @@ bool FaceRecognitionPlugin::build_face_item(
     return true;
 }
 
-std::vector<zhulong::PersonItem> FaceRecognitionPlugin::detect_persons(zhulong::Session& session,
+zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::Session& session,
                                                                       const zhulong::Image& image,
                                                                       zhulong::TaskContext& task_context) {
     // 任务级参数（宿主经 MSG_TASK_CONFIG 下发）只影响比对决策：每帧解析一次，
@@ -326,22 +313,11 @@ std::vector<zhulong::PersonItem> FaceRecognitionPlugin::detect_persons(zhulong::
         }
     }
 
-    // 4. 没有真实人体检出（近景特写人脸或纯人脸场景）：纯人脸退化语义，
-    //    每张人脸直接对应一个 PersonItem，body_box = face_box、body_score = face_score。
-    if (person_detections.empty()) {
-        std::vector<zhulong::PersonItem> results;
-        results.reserve(processed_faces.size());
-        for (auto& processed : processed_faces) {
-            results.push_back(make_degenerate_person_item(std::move(processed)));
-        }
-        return results;
-    }
+    zhulong::SceneStructure scene;
+    scene.persons.reserve(person_detections.size());
+    scene.faces.reserve(processed_faces.size());
 
-    // 5. 真实人体检出：把人脸挂载到对应人体框上
-    std::vector<bool> face_matched(processed_faces.size(), false);
-    std::vector<zhulong::PersonItem> results;
-    results.reserve(person_detections.size() + processed_faces.size());
-
+    // 4. 真人体构造（face_count 恒为 0，faces 恒为空）
     for (const auto& person_detection : person_detections) {
         zhulong::PersonItem person;
         person.track_id = 0;
@@ -350,28 +326,77 @@ std::vector<zhulong::PersonItem> FaceRecognitionPlugin::detect_persons(zhulong::
         person.body_box[2] = person_detection.body_box[2];
         person.body_box[3] = person_detection.body_box[3];
         person.body_score = person_detection.score;
-
-        for (size_t face_index = 0; face_index < processed_faces.size(); ++face_index) {
-            if (face_matched[face_index]) {
-                continue;
-            }
-            if (face_belongs_to_person(processed_faces[face_index].face_box, person_detection.body_box)) {
-                person.faces.push_back(std::move(processed_faces[face_index].item));
-                face_matched[face_index] = true;
-            }
-        }
-        results.push_back(std::move(person));
+        scene.persons.push_back(std::move(person));
     }
 
-    // 6. 孤立人脸兜底：未匹配到任何人体框的人脸（近距离大头特写或身体未检出），
-    //    生成 body_box = face_box 的 PersonItem，保证比对结果不丢失。
-    for (size_t face_index = 0; face_index < processed_faces.size(); ++face_index) {
-        if (face_matched[face_index]) {
-            continue;
+    // 5. 独立人脸构造与空间几何关联（person_index: -1 为孤立人脸）
+    std::vector<bool> person_taken(scene.persons.size(), false);
+    for (auto& processed : processed_faces) {
+        zhulong::FaceStructureItem face;
+        face.box[0] = processed.item.box[0];
+        face.box[1] = processed.item.box[1];
+        face.box[2] = processed.item.box[2];
+        face.box[3] = processed.item.box[3];
+        face.quality = processed.item.quality;
+        face.landmarks = std::move(processed.item.landmarks);
+        face.matched = processed.item.matched;
+        face.similarity = processed.item.similarity;
+        face.is_fused = processed.item.is_fused;
+        face.person_id = std::move(processed.item.person_id);
+        face.person_name = std::move(processed.item.person_name);
+        face.matched_face_id = std::move(processed.item.matched_face_id);
+        face.candidates = std::move(processed.item.candidates);
+        face.person_index = -1;
+
+        for (size_t p_idx = 0; p_idx < person_detections.size(); ++p_idx) {
+            if (face_belongs_to_person(processed.face_box, person_detections[p_idx].body_box)) {
+                face.person_index = static_cast<int32_t>(p_idx);
+                person_taken[p_idx] = true;
+                break;
+            }
         }
-        results.push_back(make_degenerate_person_item(std::move(processed_faces[face_index])));
+        scene.faces.push_back(std::move(face));
     }
 
+    return scene;
+}
+
+std::vector<zhulong::PersonItem> FaceRecognitionPlugin::detect_persons(zhulong::Session& session,
+                                                                      const zhulong::Image& image,
+                                                                      zhulong::TaskContext& task_context) {
+    auto scene = detect_scene_structure(session, image, task_context);
+    std::vector<zhulong::PersonItem> results = std::move(scene.persons);
+
+    for (auto& f : scene.faces) {
+        zhulong::FaceItem fi;
+        fi.box[0] = f.box[0];
+        fi.box[1] = f.box[1];
+        fi.box[2] = f.box[2];
+        fi.box[3] = f.box[3];
+        fi.quality = f.quality;
+        fi.landmarks = std::move(f.landmarks);
+        fi.matched = f.matched;
+        fi.similarity = f.similarity;
+        fi.is_fused = f.is_fused;
+        fi.person_id = std::move(f.person_id);
+        fi.person_name = std::move(f.person_name);
+        fi.matched_face_id = std::move(f.matched_face_id);
+        fi.candidates = std::move(f.candidates);
+
+        if (f.person_index >= 0 && static_cast<size_t>(f.person_index) < results.size()) {
+            results[static_cast<size_t>(f.person_index)].faces.push_back(std::move(fi));
+        } else {
+            zhulong::PersonItem degen;
+            degen.track_id = 0;
+            degen.body_box[0] = fi.box[0];
+            degen.body_box[1] = fi.box[1];
+            degen.body_box[2] = fi.box[2];
+            degen.body_box[3] = fi.box[3];
+            degen.body_score = fi.quality;
+            degen.faces.push_back(std::move(fi));
+            results.push_back(std::move(degen));
+        }
+    }
     return results;
 }
 

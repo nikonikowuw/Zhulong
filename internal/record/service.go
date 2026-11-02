@@ -80,7 +80,7 @@ func (s *Service) ProcessInferenceResult(ctx context.Context, res aitypes.Infere
 	algo := s.resolveAlgorithm(ctx, res.AlgorithmID)
 
 	switch res.TaskType {
-	case aitypes.TaskTypePersonStructure:
+	case aitypes.TaskTypePersonStructure, aitypes.TaskTypeSceneStructure:
 		return s.processPersonStructure(ctx, res, algo, capturedAt, dateStr)
 	case aitypes.TaskTypeVehicleStructure:
 		return s.processVehicleStructure(ctx, res, algo, capturedAt, dateStr)
@@ -120,46 +120,149 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 	var recognitionSnapshots []snapshotJob
 	var captureSnapshots []snapshotJob
 
-	galleryFaces := s.resolveGalleryFaces(ctx, collectMatchedFaceIDs(res.Persons))
+	// 1. 数据防守性展平 (兼容性：若载荷未通过 ParseInferenceResult 归一化，如直接构造结构体的测试)
+	persons := make([]aitypes.PersonItem, 0, len(res.Persons))
+	faces := make([]aitypes.FaceStructureItem, 0, len(res.Faces))
+	faces = append(faces, res.Faces...)
 
-	// Observation observations for host tracker
-	obs := make([]observation, len(res.Persons))
-	for i, p := range res.Persons {
-		obs[i] = observation{box: p.BodyBox, score: p.BodyScore}
+	if len(res.Faces) == 0 && len(res.Persons) > 0 {
+		for _, p := range res.Persons {
+			if p.IsFaceCloseup() {
+				if len(p.Faces) > 0 {
+					f := p.Faces[0]
+					faces = append(faces, aitypes.FaceStructureItem{
+						Box:           f.Box,
+						Quality:       f.Quality,
+						Landmarks:     f.Landmarks,
+						Matched:       f.Matched,
+						Similarity:    f.Similarity,
+						PersonIndex:   -1,
+						PersonID:      f.PersonID,
+						PersonName:    f.PersonName,
+						MatchedFaceID: f.MatchedFaceID,
+						IsFused:       f.IsFused,
+						Candidates:    f.Candidates,
+					})
+				}
+			} else {
+				personIdx := int32(len(persons))
+				for _, f := range p.Faces {
+					faces = append(faces, aitypes.FaceStructureItem{
+						Box:           f.Box,
+						Quality:       f.Quality,
+						Landmarks:     f.Landmarks,
+						Matched:       f.Matched,
+						Similarity:    f.Similarity,
+						PersonIndex:   personIdx,
+						PersonID:      f.PersonID,
+						PersonName:    f.PersonName,
+						MatchedFaceID: f.MatchedFaceID,
+						IsFused:       f.IsFused,
+						Candidates:    f.Candidates,
+					})
+				}
+				p.Faces = nil
+				persons = append(persons, p)
+			}
+		}
+	} else {
+		persons = res.Persons
+	}
+
+	// 2. 收集底库匹配 Face IDs
+	matchedIDs := make([]string, 0, len(faces))
+	for _, f := range faces {
+		if f.MatchedFaceID != "" {
+			matchedIDs = append(matchedIDs, f.MatchedFaceID)
+		}
+	}
+	galleryFaces := s.resolveGalleryFaces(ctx, matchedIDs)
+
+	// 3. 真人体跟踪与抓拍 (kind: "person")
+	personObs := make([]observation, len(persons))
+	for i, p := range persons {
+		personObs[i] = observation{box: p.BodyBox, score: p.BodyScore}
 		if p.TrackID != 0 {
 			s.logger.Debug("payload track_id ignored; host maintains exclusive tracking identities",
 				zap.String("camera_id", res.CameraID),
 				zap.Int64("payload_track_id", p.TrackID))
 		}
 	}
+	bPerson := bucketKey{camera: res.CameraID, algorithm: res.AlgorithmID, kind: "person"}
+	personIdentities := s.resolveIdentities(bPerson, personObs, capturedAt)
 
-	b := bucketKey{camera: res.CameraID, algorithm: res.AlgorithmID, kind: "person"}
-	identities := s.resolveIdentities(b, obs, capturedAt)
-
-	for i, p := range res.Persons {
-		trackID := identities[i]
-
-		// 1. Process Face Recognition if faces exist
-		for _, face := range p.Faces {
-			identityKey := recognitionCooldownKey(res.CameraID, trackID, face)
-			keys := []string{identityKey}
-			if face.PersonID != "" {
-				keys = append(keys, fmt.Sprintf("rec:%s:person:%s", res.CameraID, face.PersonID))
-			}
-			if s.cooldown.AllowAll(keys, capturedAt) {
-				rec, job := buildRecognitionRecordAndJob(res, p, trackID, face, algo, galleryFaces[face.MatchedFaceID], dateStr, capturedAt)
-				recognitions = append(recognitions, rec)
-				recognitionSnapshots = append(recognitionSnapshots, job)
-			}
-		}
-
-		// 2. Process Capture for Person or Face Closeup
-		isCloseup := p.IsFaceCloseup()
-		capKey := personCaptureCooldownKey(res.CameraID, trackID, isCloseup, p.BodyBox)
+	for i, p := range persons {
+		trackID := personIdentities[i]
+		capKey := personCaptureCooldownKey(res.CameraID, trackID, false, p.BodyBox)
 		if s.cooldown.Allow(capKey, capturedAt) {
-			cap, job := buildPersonCaptureRecordAndJob(res, p, trackID, isCloseup, algo, dateStr, capturedAt)
+			cap, job := buildPersonCaptureRecordAndJob(res, p, trackID, false, algo, dateStr, capturedAt)
 			captures = append(captures, cap)
 			captureSnapshots = append(captureSnapshots, job)
+		}
+	}
+
+	// 4. 孤立人脸独立跟踪与抓拍 (kind: "face")
+	var isolatedFaceIndices []int
+	var faceObs []observation
+	for i, f := range faces {
+		if f.PersonIndex == -1 {
+			isolatedFaceIndices = append(isolatedFaceIndices, i)
+			faceObs = append(faceObs, observation{box: f.Box, score: f.Quality})
+		}
+	}
+	bFace := bucketKey{camera: res.CameraID, algorithm: res.AlgorithmID, kind: "face"}
+	faceIdentities := s.resolveIdentities(bFace, faceObs, capturedAt)
+
+	for k, faceIdx := range isolatedFaceIndices {
+		trackID := faceIdentities[k]
+		f := faces[faceIdx]
+		capKey := faceCaptureCooldownKey(res.CameraID, trackID, f.Box)
+		if s.cooldown.Allow(capKey, capturedAt) {
+			cap, job := buildFaceCaptureRecordAndJob(res, f, trackID, algo, dateStr, capturedAt)
+			captures = append(captures, cap)
+			captureSnapshots = append(captureSnapshots, job)
+		}
+	}
+
+	// 5. 人脸识别记录 (Recognitions)
+	isolatedCounter := 0
+	for _, f := range faces {
+		var trackID int64
+		var bodyBox [4]float64
+		var personAttrs map[string]any
+
+		if f.PersonIndex >= 0 && int(f.PersonIndex) < len(personIdentities) {
+			trackID = personIdentities[f.PersonIndex]
+			bodyBox = persons[f.PersonIndex].BodyBox
+			personAttrs = persons[f.PersonIndex].Attributes
+		} else {
+			if isolatedCounter < len(faceIdentities) {
+				trackID = faceIdentities[isolatedCounter]
+				isolatedCounter++
+			}
+			bodyBox = [4]float64{0, 0, 0, 0}
+		}
+
+		subItem := aitypes.FaceSubItem{
+			Box:           f.Box,
+			Quality:       f.Quality,
+			Matched:       f.Matched,
+			PersonID:      f.PersonID,
+			PersonName:    f.PersonName,
+			MatchedFaceID: f.MatchedFaceID,
+			Similarity:    f.Similarity,
+			IsFused:       f.IsFused,
+			Candidates:    f.Candidates,
+		}
+		identityKey := recognitionCooldownKey(res.CameraID, trackID, subItem)
+		keys := []string{identityKey}
+		if f.PersonID != "" {
+			keys = append(keys, fmt.Sprintf("rec:%s:person:%s", res.CameraID, f.PersonID))
+		}
+		if s.cooldown.AllowAll(keys, capturedAt) {
+			rec, job := buildRecognitionRecordAndJobFromFace(res, f, bodyBox, personAttrs, trackID, algo, galleryFaces[f.MatchedFaceID], dateStr, capturedAt)
+			recognitions = append(recognitions, rec)
+			recognitionSnapshots = append(recognitionSnapshots, job)
 		}
 	}
 
@@ -179,6 +282,117 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 	}
 
 	return nil
+}
+
+func buildRecognitionRecordAndJobFromFace(
+	res aitypes.InferenceResult,
+	face aitypes.FaceStructureItem,
+	bodyBox [4]float64,
+	personAttrs map[string]any,
+	trackID int64,
+	algo AlgorithmSnapshot,
+	ref GalleryFaceRef,
+	dateStr string,
+	capturedAt time.Time,
+) (*Recognition, snapshotJob) {
+	recID := idutil.New()
+
+	personName := ref.PersonName
+	if personName == "" {
+		personName = face.PersonName
+	}
+
+	fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, recID)
+	facePath := fmt.Sprintf("snapshots/%s/%s/%s_face.jpg", res.CameraID, dateStr, recID)
+
+	rec := &Recognition{
+		ID:               recID,
+		CameraID:         res.CameraID,
+		AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
+		AlgorithmName:    algo.Name,
+		AlgorithmVersion: algo.Version,
+		PTS:              res.PTS,
+		TrackID:          trackID,
+		PersonID:         optionalString(ref.PersonRowID),
+		PersonExternalID: ref.PersonExternalID,
+		PersonName:       personName,
+		MatchedFaceID:    face.MatchedFaceID,
+		Matched:          face.Matched,
+		Similarity:       face.Similarity,
+		CandidatesJSON:   marshalSliceOrDefault(face.Candidates),
+		FaceImagePath:    facePath,
+		GalleryImagePath: ref.ImagePath,
+		ImagePath:        fullPath,
+		BoxJSON:          marshalBox(face.Box),
+		BodyBoxJSON:      marshalBox(bodyBox),
+		AttributesJSON:   marshalMapOrDefault(personAttrs),
+		CapturedAt:       capturedAt,
+		CreatedAt:        time.Now().UTC(),
+	}
+
+	job := snapshotJob{
+		cameraID:    res.CameraID,
+		pts:         res.PTS,
+		targetTable: tableRecognitions,
+		targetID:    recID,
+		boxes: []engine.SnapshotBox{
+			{face.Box[0], face.Box[1], face.Box[2], face.Box[3]},
+		},
+		outputs: []snapshotOutput{
+			{boxIndex: -1, relPath: fullPath},
+			{boxIndex: 0, relPath: facePath},
+		},
+	}
+
+	return rec, job
+}
+
+func buildFaceCaptureRecordAndJob(
+	res aitypes.InferenceResult,
+	f aitypes.FaceStructureItem,
+	trackID int64,
+	algo AlgorithmSnapshot,
+	dateStr string,
+	capturedAt time.Time,
+) (*Capture, snapshotJob) {
+	capID := idutil.New()
+
+	fullPath := fmt.Sprintf("snapshots/%s/%s/%s.jpg", res.CameraID, dateStr, capID)
+	cropPath := fmt.Sprintf("snapshots/%s/%s/%s_crop.jpg", res.CameraID, dateStr, capID)
+
+	cap := &Capture{
+		ID:               capID,
+		CameraID:         res.CameraID,
+		AlgorithmID:      optionalAlgorithmID(res.AlgorithmID),
+		AlgorithmName:    algo.Name,
+		AlgorithmVersion: algo.Version,
+		TargetType:       "face",
+		TrackID:          trackID,
+		Score:            f.Quality,
+		BoxJSON:          marshalBox(f.Box),
+		CropPath:         cropPath,
+		ImagePath:        fullPath,
+		AttributesJSON:   "{}",
+		PTS:              res.PTS,
+		CapturedAt:       capturedAt,
+		CreatedAt:        time.Now().UTC(),
+	}
+
+	job := snapshotJob{
+		cameraID:    res.CameraID,
+		pts:         res.PTS,
+		targetTable: tableCaptures,
+		targetID:    capID,
+		boxes: []engine.SnapshotBox{
+			{f.Box[0], f.Box[1], f.Box[2], f.Box[3]},
+		},
+		outputs: []snapshotOutput{
+			{boxIndex: -1, relPath: fullPath},
+			{boxIndex: 0, relPath: cropPath},
+		},
+	}
+
+	return cap, job
 }
 
 func buildRecognitionRecordAndJob(
@@ -731,12 +945,19 @@ func recognitionCooldownKey(cameraID string, trackID int64, face aitypes.FaceSub
 	return fmt.Sprintf("rec:%s:unmatched:%.3f:%.3f", cameraID, face.Box[0], face.Box[1])
 }
 
+func faceCaptureCooldownKey(cameraID string, trackID int64, box [4]float64) string {
+	if trackID > 0 {
+		return fmt.Sprintf("cap:%s:face:trk:%d", cameraID, trackID)
+	}
+	return fmt.Sprintf("cap:%s:face:box:%.3f:%.3f", cameraID, box[0], box[1])
+}
+
 func personCaptureCooldownKey(cameraID string, trackID int64, isCloseup bool, box [4]float64) string {
+	if isCloseup {
+		return faceCaptureCooldownKey(cameraID, trackID, box)
+	}
 	if trackID > 0 {
 		return fmt.Sprintf("cap:%s:person:trk:%d", cameraID, trackID)
-	}
-	if isCloseup {
-		return fmt.Sprintf("cap:%s:face:box:%.3f:%.3f", cameraID, box[0], box[1])
 	}
 	return fmt.Sprintf("cap:%s:person:box:%.3f:%.3f", cameraID, box[0], box[1])
 }
