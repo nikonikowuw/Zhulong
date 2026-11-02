@@ -116,6 +116,11 @@
     "verificationSuccess": "底庫核驗命中",
     "verificationUnmatched": "未比對到底庫",
     "resolution": "解析度",
+    "loadingImage": "正在載入全景圖像...",
+    "loadingImageHint": "正在傳輸原始畫面幀",
+    "imageLoadError": "全景圖像載入失敗",
+    "imageLoadErrorHint": "請檢查網絡連線或媒體檔案",
+    "retry": "重試",
     "close": "關閉"
   },
   "toolbar": {

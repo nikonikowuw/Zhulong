@@ -93,6 +93,13 @@ export function RecordDetailDialog({
     height: number
   } | null>(null)
 
+  // 切换记录时重置当前图像分辨率尺寸，防止标题栏残留上个记录的数据
+  const [prevRecordId, setPrevRecordId] = useState(record?.id)
+  if (record?.id !== prevRecordId) {
+    setPrevRecordId(record?.id)
+    setDimensions(null)
+  }
+
   if (!record) return null
 
   const isRecognition = tab === 'recognitions'
@@ -328,8 +335,9 @@ export function RecordDetailDialog({
               </div>
             </div>
 
-            <div className='flex flex-1 items-center justify-center overflow-hidden rounded-lg border border-neutral-800 bg-black/90 p-2'>
+            <div className='relative flex flex-1 items-center justify-center overflow-hidden rounded-lg border border-neutral-800 bg-black/90 p-2'>
               <BoundingBoxCanvas
+                key={record.imagePath}
                 imagePath={record.imagePath}
                 alt={t('detail.fullImage')}
                 showBoxes={showBoxes}
@@ -349,7 +357,7 @@ export function RecordDetailDialog({
                 secondaryLabel={
                   recognitionBodyBox ? t('detail.bodyBoxLabel') : undefined
                 }
-                className='max-h-[560px]'
+                className='max-h-[540px]'
               />
             </div>
             <div className='mt-2 flex items-center justify-between text-[11px] text-neutral-500'>

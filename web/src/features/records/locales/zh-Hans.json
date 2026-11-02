@@ -116,6 +116,11 @@
     "verificationSuccess": "底库核验命中",
     "verificationUnmatched": "未比中底库",
     "resolution": "分辨率",
+    "loadingImage": "正在加载全景图像...",
+    "loadingImageHint": "正在传输原始画面帧",
+    "imageLoadError": "全景图像加载失败",
+    "imageLoadErrorHint": "请检查网络连接或媒体文件",
+    "retry": "重试",
     "close": "关闭"
   },
   "toolbar": {

@@ -25,6 +25,14 @@ export function MediaImage({
 
   const resolvedUrl = path ? getMediaUrl(path) : (src ?? '')
 
+  // 当路径变动时在 render 阶段同步重置状态，避免多记录切换时残留上一张的视图
+  const [prevUrl, setPrevUrl] = useState(resolvedUrl)
+  if (resolvedUrl !== prevUrl) {
+    setPrevUrl(resolvedUrl)
+    setLoaded(false)
+    setError(false)
+  }
+
   if (!resolvedUrl || error) {
     return (
       <div
@@ -47,8 +55,14 @@ export function MediaImage({
 
   return (
     <div className={cn('relative overflow-hidden bg-muted/30', className)}>
-      {!loaded && showLoadingSkeleton && (
-        <div className='absolute inset-0 animate-pulse bg-muted/70' />
+      {showLoadingSkeleton && (
+        <div
+          className={cn(
+            'pointer-events-none absolute inset-0 animate-pulse bg-muted/70 transition-opacity duration-300',
+            loaded ? 'opacity-0' : 'opacity-100'
+          )}
+          aria-hidden={loaded}
+        />
       )}
       <img
         src={resolvedUrl}
@@ -58,7 +72,7 @@ export function MediaImage({
         onLoad={() => setLoaded(true)}
         onError={() => setError(true)}
         className={cn(
-          'size-full object-cover transition-opacity duration-300',
+          'size-full object-cover transition-opacity duration-300 ease-out',
           loaded ? 'opacity-100' : 'opacity-0',
           imageClassName
         )}

@@ -116,6 +116,11 @@
     "verificationSuccess": "Gallery Matched",
     "verificationUnmatched": "Unmatched Stranger",
     "resolution": "Resolution",
+    "loadingImage": "Loading scene image...",
+    "loadingImageHint": "Transferring original frame",
+    "imageLoadError": "Failed to load scene image",
+    "imageLoadErrorHint": "Please check network connection or media file",
+    "retry": "Retry",
     "close": "Close"
   },
   "toolbar": {
