@@ -23,6 +23,13 @@ namespace zhulong {
  */
 class OnnxInferenceBackend : public IInferenceBackend {
 public:
+    OnnxInferenceBackend() = default;
+    ~OnnxInferenceBackend() override = default;
+    OnnxInferenceBackend(const OnnxInferenceBackend&) = delete;
+    OnnxInferenceBackend& operator=(const OnnxInferenceBackend&) = delete;
+    OnnxInferenceBackend(OnnxInferenceBackend&&) = delete;
+    OnnxInferenceBackend& operator=(OnnxInferenceBackend&&) = delete;
+
     std::shared_ptr<ModelAsset> load_model(const std::string& model_path_or_config) override;
 
     std::unique_ptr<SessionContext> create_session(std::shared_ptr<ModelAsset> model,

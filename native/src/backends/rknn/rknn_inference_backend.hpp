@@ -24,6 +24,13 @@ namespace zhulong {
  */
 class RknnInferenceBackend : public IInferenceBackend {
 public:
+    RknnInferenceBackend() = default;
+    ~RknnInferenceBackend() override = default;
+    RknnInferenceBackend(const RknnInferenceBackend&) = delete;
+    RknnInferenceBackend& operator=(const RknnInferenceBackend&) = delete;
+    RknnInferenceBackend(RknnInferenceBackend&&) = delete;
+    RknnInferenceBackend& operator=(RknnInferenceBackend&&) = delete;
+
     std::shared_ptr<ModelAsset> load_model(const std::string& model_path_or_config) override;
     std::unique_ptr<SessionContext> create_session(std::shared_ptr<ModelAsset> model,
                                                    uint32_t worker_id) override;

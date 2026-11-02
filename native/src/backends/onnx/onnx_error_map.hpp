@@ -20,7 +20,7 @@ namespace zhulong {
  * @param code ORT 错误码枚举
  * @return zhulong_status_t 统一插件状态码
  */
-inline zhulong_status_t map_onnx_error(OrtErrorCode code) {
+inline zhulong_status_t map_onnx_error(OrtErrorCode code) noexcept {
     switch (code) {
         case ORT_OK:
             return ZHULONG_PLUGIN_OK;
@@ -51,7 +51,7 @@ inline zhulong_status_t map_onnx_error(OrtErrorCode code) {
  * @param[out] out_dtype 转换后的 zhulong::DataType
  * @return bool 支持该类型返回 true，不支持返回 false
  */
-inline bool map_onnx_tensor_type(ONNXTensorElementDataType onnx_type, DataType& out_dtype) {
+inline bool map_onnx_tensor_type(ONNXTensorElementDataType onnx_type, DataType& out_dtype) noexcept {
     switch (onnx_type) {
         case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
             out_dtype = DataType::FLOAT32;

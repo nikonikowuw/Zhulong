@@ -57,6 +57,10 @@ class RgaVisionBackend : public IVisionBackend {
 public:
     RgaVisionBackend();
     ~RgaVisionBackend() override = default;
+    RgaVisionBackend(const RgaVisionBackend&) = delete;
+    RgaVisionBackend& operator=(const RgaVisionBackend&) = delete;
+    RgaVisionBackend(RgaVisionBackend&&) = delete;
+    RgaVisionBackend& operator=(RgaVisionBackend&&) = delete;
 
     /**
      * @brief 图像 Letterbox 预处理；RGA 路径不满足前置条件时透明回退 CPU

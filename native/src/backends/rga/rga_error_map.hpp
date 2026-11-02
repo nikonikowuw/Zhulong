@@ -37,7 +37,7 @@ namespace zhulong {
  * @param status RGA 返回状态（IM_STATUS）
  * @return zhulong_status_t 统一状态码（未知值归为 INTERNAL）
  */
-inline zhulong_status_t map_rga_status(IM_STATUS status) {
+inline zhulong_status_t map_rga_status(IM_STATUS status) noexcept {
     switch (status) {
         case IM_STATUS_SUCCESS:
         case IM_STATUS_NOERROR:

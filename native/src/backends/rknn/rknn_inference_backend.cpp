@@ -27,15 +27,23 @@ namespace {
 
 // rknn_outputs_release 的 RAII 守卫：保证所有路径（含异常）恰好释放一次。
 struct OutputsReleaseGuard {
-    rknn_context ctx;
+    rknn_context ctx{0};
     std::vector<rknn_output>& outputs;
     bool armed{false};
 
+    OutputsReleaseGuard(rknn_context context, std::vector<rknn_output>& outs, bool active) noexcept
+        : ctx(context), outputs(outs), armed(active) {}
+
     ~OutputsReleaseGuard() {
-        if (armed) {
+        if (armed && ctx != 0) {
             rknn_outputs_release(ctx, static_cast<uint32_t>(outputs.size()), outputs.data());
         }
     }
+
+    OutputsReleaseGuard(const OutputsReleaseGuard&) = delete;
+    OutputsReleaseGuard& operator=(const OutputsReleaseGuard&) = delete;
+    OutputsReleaseGuard(OutputsReleaseGuard&&) = delete;
+    OutputsReleaseGuard& operator=(OutputsReleaseGuard&&) = delete;
 };
 
 // rknn_destroy 的 RAII 守卫：保证 load_model 的失败返回与异常路径都恰好销毁一次根上下文。
@@ -45,14 +53,19 @@ struct ContextGuard {
     rknn_context ctx{0};
     bool armed{false};
 
-    ContextGuard(rknn_context context, bool active) : ctx(context), armed(active) {}
+    ContextGuard(rknn_context context, bool active) noexcept : ctx(context), armed(active) {}
 
     ~ContextGuard() {
-        if (armed && ctx) {
+        if (armed && ctx != 0) {
             rknn_destroy(ctx);
             armed = false;
         }
     }
+
+    ContextGuard(const ContextGuard&) = delete;
+    ContextGuard& operator=(const ContextGuard&) = delete;
+    ContextGuard(ContextGuard&&) = delete;
+    ContextGuard& operator=(ContextGuard&&) = delete;
 };
 
 } // namespace
@@ -66,7 +79,8 @@ struct ContextGuard {
  *
  * @param model_path_or_config 模型文件路径
  * @return std::shared_ptr<ModelAsset> 模型资产；失败返回 nullptr（不抛异常）
- */std::shared_ptr<ModelAsset> RknnInferenceBackend::load_model(const std::string& model_path_or_config) {
+ */
+std::shared_ptr<ModelAsset> RknnInferenceBackend::load_model(const std::string& model_path_or_config) {
     try {
         if (model_path_or_config.empty()) {
             return nullptr;
@@ -132,8 +146,8 @@ struct ContextGuard {
         {
             rknn_context probe = 0;
             if (rknn_init(&probe, const_cast<char*>(model_path_or_config.c_str()), 0, 0, nullptr) == RKNN_SUCC) {
+                ContextGuard probe_guard(probe, true);
                 rknn_query(probe, RKNN_QUERY_MEM_SIZE, &asset->mem_size, sizeof(asset->mem_size));
-                rknn_destroy(probe);
             }
         }
 
@@ -189,7 +203,7 @@ std::unique_ptr<SessionContext> RknnInferenceBackend::create_session(std::shared
  * ⚠️ 不写 `default`：DataType 新增枚举值时，`-Wswitch` 必须在编译期报错，
  *    而不是静默把新类型当 UINT8 喂给 NPU。末尾的返回只是满足编译器的完整性要求。
  */
-static rknn_tensor_type to_rknn_tensor_type(DataType dt) {
+static rknn_tensor_type to_rknn_tensor_type(DataType dt) noexcept {
     switch (dt) {
         case DataType::FLOAT32: return RKNN_TENSOR_FLOAT32;
         case DataType::UINT8:   return RKNN_TENSOR_UINT8;
@@ -232,9 +246,13 @@ zhulong_status_t RknnInferenceBackend::forward(SessionContext* session,
             return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
         }
 
-        // 统一校验输入元素数与模型期望一致（支持不同精度输入如 UINT8 -> FP16 由 Runtime 自动转换）
+        // 统一校验输入元素数与内存有效性（支持不同精度输入如 UINT8 -> FP16 由 Runtime 自动转换）
         for (uint32_t i = 0; i < asset.io_num.n_input; ++i) {
-            if (inputs[i].element_count() != asset.input_attrs[i].n_elems) {
+            const auto& in = inputs[i];
+            if (in.byte_size() == 0 || in.element_count() != asset.input_attrs[i].n_elems) {
+                return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+            }
+            if (in.dma_buf_fd() < 0 && in.raw_data() == nullptr) {
                 return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
             }
         }

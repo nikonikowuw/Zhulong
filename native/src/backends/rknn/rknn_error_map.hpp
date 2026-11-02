@@ -26,7 +26,7 @@ namespace zhulong {
  * @param ret RKNN 返回码（RKNN_SUCC / RKNN_ERR_*）
  * @return zhulong_status_t 统一状态码（未知值归为 INTERNAL）
  */
-inline zhulong_status_t map_rknn_error(int ret) {
+inline zhulong_status_t map_rknn_error(int ret) noexcept {
     switch (ret) {
         case RKNN_SUCC:
             return ZHULONG_PLUGIN_OK;

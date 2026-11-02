@@ -638,6 +638,9 @@ zhulong_status_t RgaVisionBackend::try_rga_crop_scale(const zhulong_frame_view& 
     }
 
     const int64_t min_dst_stride = static_cast<int64_t>(dst_w) * 3;
+    if (min_dst_stride > std::numeric_limits<int>::max()) {
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+    }
     if (dst_stride == 0) {
         dst_stride = static_cast<int>(min_dst_stride);
     }
