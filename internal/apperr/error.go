@@ -1,7 +1,6 @@
 package apperr
 
 import (
-	"errors"
 	"fmt"
 )
 
@@ -61,22 +60,17 @@ func (e *Error) Error() string {
 	if e == nil {
 		return ""
 	}
-	if e.Message != "" {
-		if e.Err != nil {
-			return fmt.Sprintf("%s: %v", e.Message, e.Err)
-		}
-		return e.Message
-	}
-	if e.Code != "" {
-		if e.Err != nil {
-			return fmt.Sprintf("%s: %v", e.Code, e.Err)
-		}
-		return e.Code
+	base := e.Kind.String()
+	switch {
+	case e.Message != "":
+		base = e.Message
+	case e.Code != "":
+		base = e.Code
 	}
 	if e.Err != nil {
-		return fmt.Sprintf("%s: %v", e.Kind.String(), e.Err)
+		return fmt.Sprintf("%s: %v", base, e.Err)
 	}
-	return e.Kind.String()
+	return base
 }
 
 // Unwrap exposes the internal cause for errors.Is and errors.As.
@@ -88,21 +82,22 @@ func (e *Error) Unwrap() error {
 }
 
 // Is reports whether this error matches target.
+// Zero-value fields in target (KindUnspecified, empty Code) act as wildcards.
 func (e *Error) Is(target error) bool {
 	if e == nil {
 		return target == nil
 	}
-	var t *Error
-	if errors.As(target, &t) {
-		if t.Kind != KindUnspecified && t.Kind != e.Kind {
-			return false
-		}
-		if t.Code != "" && t.Code != e.Code {
-			return false
-		}
-		return true
+	t, ok := target.(*Error)
+	if !ok || t == nil {
+		return false
 	}
-	return false
+	if t.Kind != KindUnspecified && t.Kind != e.Kind {
+		return false
+	}
+	if t.Code != "" && t.Code != e.Code {
+		return false
+	}
+	return true
 }
 
 // New constructs an Error with the specified Kind, Code, fallback Message, and underlying cause.
