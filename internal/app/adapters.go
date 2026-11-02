@@ -58,7 +58,7 @@ func (r *appBrokerPathResolver) TaskConfigsFor(ctx context.Context, algorithmID 
 	}
 	tasks, err := r.taskStore.ListTasksByAlgorithm(ctx, algorithmID)
 	if err != nil {
-		return nil, fmt.Errorf("list tasks for algorithm %s: %w", algorithmID, err)
+		return nil, fmt.Errorf("list tasks for algorithm %q: %w", algorithmID, err)
 	}
 
 	configs := make(map[uint64]string, len(tasks))
@@ -78,7 +78,7 @@ func (r *appBrokerPathResolver) TaskConfigsFor(ctx context.Context, algorithmID 
 
 			streamID, err := r.streamHub.ResolveAIStreamID(ctx, tsk.CameraID)
 			if err != nil {
-				return nil, fmt.Errorf("resolve stream id for camera %s: %w", tsk.CameraID, err)
+				return nil, fmt.Errorf("resolve stream id for camera %q: %w", tsk.CameraID, err)
 			}
 
 			cfg := algo.ConfigJSON
@@ -119,7 +119,7 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 	}
 	tasks, err := r.taskStore.ListTasksByAlgorithm(ctx, algorithmID)
 	if err != nil {
-		return nil, fmt.Errorf("list tasks for algorithm %s: %w", algorithmID, err)
+		return nil, fmt.Errorf("list tasks for algorithm %q: %w", algorithmID, err)
 	}
 
 	// 该包要求订阅的相机及其本包内的最大采样率；order 保持 DB 的稳定顺序。
@@ -136,7 +136,7 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 					continue
 				}
 				if _, err := task.ValidateSampleFPS(algo.SampleFPS); err != nil {
-					return nil, fmt.Errorf("task %s algo %s: %w", tsk.ID, algo.AlgorithmID, err)
+					return nil, fmt.Errorf("task %q algo %q: %w", tsk.ID, algo.AlgorithmID, err)
 				}
 				if _, ok := wanted[tsk.CameraID]; !ok {
 					wanted[tsk.CameraID] = struct{}{}
@@ -151,7 +151,7 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 	for _, cameraID := range order {
 		path, err := r.streamHub.ResolveAIStreamBrokerPath(ctx, cameraID)
 		if err != nil {
-			return nil, fmt.Errorf("resolve broker path for camera %s: %w", cameraID, err)
+			return nil, fmt.Errorf("resolve broker path for camera %q: %w", cameraID, err)
 		}
 		paths = append(paths, path)
 	}
@@ -176,7 +176,7 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 	}
 	for cameraID, fps := range rateByCamera {
 		if err := r.streamHub.SetAIPublishRate(ctx, cameraID, fps); err != nil {
-			return nil, fmt.Errorf("set AI publish rate for camera %s: %w", cameraID, err)
+			return nil, fmt.Errorf("set AI publish rate for camera %q: %w", cameraID, err)
 		}
 	}
 
@@ -200,7 +200,7 @@ func (r *appBrokerPathResolver) publishRateByCamera(ctx context.Context) (map[st
 			}
 			fps, err := task.ValidateSampleFPS(algo.SampleFPS)
 			if err != nil {
-				return nil, fmt.Errorf("task %s algo %s: %w", tsk.ID, algo.AlgorithmID, err)
+				return nil, fmt.Errorf("task %q algo %q: %w", tsk.ID, algo.AlgorithmID, err)
 			}
 			if fps > rates[tsk.CameraID] {
 				rates[tsk.CameraID] = fps

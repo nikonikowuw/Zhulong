@@ -25,8 +25,10 @@ const (
 // exist under dataDir/certs and are valid for at least another 30 days.
 // If valid files exist, their paths are returned immediately. Otherwise, a new certificate
 // with SANs including localhost, loopback IPs, and all active host network interfaces is created.
-func EnsureSelfSignedCert(dataDir string) (certFile, keyFile string, err error) {
-	if stringsTrim := filepath.Clean(dataDir); stringsTrim == "" || stringsTrim == "." && dataDir == "" {
+func EnsureSelfSignedCert(dataDir string) (string, string, error) {
+	cleaned := filepath.Clean(dataDir)
+	isDefaultPath := cleaned == "" || (cleaned == "." && dataDir == "")
+	if isDefaultPath {
 		dataDir = "./data"
 	}
 	certsDir := filepath.Join(dataDir, "certs")
@@ -134,16 +136,16 @@ func isValidCertAndKey(certPath, keyPath string) bool {
 }
 
 func collectHostIPAddresses() []net.IP {
-	seen := make(map[string]bool)
-	var ips []net.IP
+	seen := make(map[string]struct{})
+	ips := []net.IP{}
 
 	addIP := func(ip net.IP) {
 		if ip == nil {
 			return
 		}
 		str := ip.String()
-		if !seen[str] {
-			seen[str] = true
+		if _, exists := seen[str]; !exists {
+			seen[str] = struct{}{}
 			ips = append(ips, ip)
 		}
 	}

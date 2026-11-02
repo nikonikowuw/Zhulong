@@ -1,13 +1,14 @@
 package app
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -154,16 +155,18 @@ func (s *boundedFileSink) prepareLocked() error {
 			s.sequence = archive.sequence
 		}
 	}
-	if info, err := os.Lstat(s.path); err == nil && !info.Mode().IsRegular() {
+	info, err := os.Lstat(s.path)
+	if err == nil && !info.Mode().IsRegular() {
 		return s.failLocked(fmt.Errorf("log output %q is not a regular file", s.path))
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return s.failLocked(fmt.Errorf("inspect log output: %w", err))
 	}
 	file, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
 	if err != nil {
 		return s.failLocked(fmt.Errorf("open log output: %w", err))
 	}
-	info, err := file.Stat()
+	info, err = file.Stat()
 	if err != nil {
 		_ = file.Close()
 		return s.failLocked(fmt.Errorf("stat log output: %w", err))
@@ -310,9 +313,11 @@ func (s *boundedFileSink) nextArchivePathLocked() (string, time.Time, uint64, er
 	for attempts := 0; attempts < 1_000_000; attempts++ {
 		s.sequence++
 		name := fmt.Sprintf("%s.%s.%06d", s.path, created.Format("20060102T150405Z"), s.sequence)
-		if _, err := os.Lstat(name); errors.Is(err, os.ErrNotExist) {
+		_, err := os.Lstat(name)
+		if errors.Is(err, os.ErrNotExist) {
 			return name, created, s.sequence, nil
-		} else if err != nil {
+		}
+		if err != nil {
 			return "", time.Time{}, 0, fmt.Errorf("check archive path: %w", err)
 		}
 	}
@@ -376,14 +381,17 @@ func (s *boundedFileSink) readArchivesLocked() ([]rotatedArchive, error) {
 }
 
 func sortArchivesLocked(archives []rotatedArchive) {
-	sort.Slice(archives, func(i, j int) bool {
-		if archives[i].sequence != archives[j].sequence {
-			return archives[i].sequence < archives[j].sequence
+	slices.SortFunc(archives, func(a, b rotatedArchive) int {
+		if a.sequence != b.sequence {
+			return cmp.Compare(a.sequence, b.sequence)
 		}
-		if !archives[i].created.Equal(archives[j].created) {
-			return archives[i].created.Before(archives[j].created)
+		if !a.created.Equal(b.created) {
+			if a.created.Before(b.created) {
+				return -1
+			}
+			return 1
 		}
-		return archives[i].path < archives[j].path
+		return strings.Compare(a.path, b.path)
 	})
 }
 
@@ -459,7 +467,7 @@ func (s *boundedFileSink) removeArchiveLocked(index int) error {
 	if err := syncDirectory(filepath.Dir(s.path)); err != nil {
 		return fmt.Errorf("sync log directory after archive removal: %w", err)
 	}
-	s.archives = append(s.archives[:index], s.archives[index+1:]...)
+	s.archives = slices.Delete(s.archives, index, index+1)
 	return nil
 }
 

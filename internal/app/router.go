@@ -103,28 +103,28 @@ func newRouter(p RouterParams) *gin.Engine {
 		api.Use(audithttp.Middleware(p.AuditService))
 	}
 
-	var dbReady ServiceReadiness
+	var dbReady ServiceReadiness = p.DatabaseReady
 	if p.Database != nil {
 		dbReady = p.Database
-	} else if p.DatabaseReady != nil {
-		dbReady = p.DatabaseReady
 	}
 
-	var nativeReady ServiceReadiness
+	var nativeReady ServiceReadiness = p.NativeReady
 	if p.Native != nil {
 		nativeReady = p.Native
-	} else if p.NativeReady != nil {
-		nativeReady = p.NativeReady
 	}
 
-	var decodeStatsProvider DecodeStatsProvider
+	var decodeStatsProvider DecodeStatsProvider = p.DecodeStats
 	if p.Native != nil {
 		decodeStatsProvider = p.Native
-	} else if p.DecodeStats != nil {
-		decodeStatsProvider = p.DecodeStats
 	}
 
-	api.GET("/health", healthHandler(dbReady, nativeReady, decodeStatsProvider, p.LogSink, p.Config))
+	api.GET("/health", healthHandler(healthParams{
+		Database:    dbReady,
+		Native:      nativeReady,
+		DecodeStats: decodeStatsProvider,
+		LogSink:     p.LogSink,
+		Config:      p.Config,
+	}))
 
 	// Mount public routes (e.g. auth login, status, init)
 	for _, r := range p.PublicRoutes {
@@ -196,6 +196,14 @@ func newRouter(p RouterParams) *gin.Engine {
 	return router
 }
 
+type healthParams struct {
+	Database    ServiceReadiness
+	Native      ServiceReadiness
+	DecodeStats DecodeStatsProvider
+	LogSink     loggerOutput
+	Config      Config
+}
+
 // healthHandler godoc
 // @Summary      Get host health
 // @Tags         system
@@ -203,10 +211,10 @@ func newRouter(p RouterParams) *gin.Engine {
 // @Success      200  {object}  httputil.Response{data=HealthData}
 // @Failure      503  {object}  httputil.Response
 // @Router       /health [get]
-func healthHandler(database ServiceReadiness, native ServiceReadiness, decodeStats DecodeStatsProvider, logSink loggerOutput, cfg Config) gin.HandlerFunc {
+func healthHandler(p healthParams) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		dbReady := database != nil && database.Ready()
-		nativeReady := native != nil && native.Ready()
+		dbReady := p.Database != nil && p.Database.Ready()
+		nativeReady := p.Native != nil && p.Native.Ready()
 		if !dbReady || !nativeReady {
 			httputil.WriteError(c, httputil.NewError(http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "Service is not ready", nil))
 			return
@@ -219,17 +227,17 @@ func healthHandler(database ServiceReadiness, native ServiceReadiness, decodeSta
 		// host's job is recording, and refusing /health 200 over a log file would
 		// take a working NVR out of rotation. Health must stay cheap — the sink
 		// contract forbids touching the file here.
-		if logSink != nil {
+		if p.LogSink != nil {
 			components["logging"] = "ready"
-			if sinkErr, dropped := logSink.Health(); sinkErr != nil || dropped > 0 {
+			if sinkErr, dropped := p.LogSink.Health(); sinkErr != nil || dropped > 0 {
 				components["logging"] = "degraded"
 			}
 		}
 
 		var decode *DecodeStatus
-		if decodeStats != nil {
-			if stats, err := decodeStats.GetDecodeStats(); err == nil {
-				backend := cfg.Decode.Backend
+		if p.DecodeStats != nil {
+			if stats, err := p.DecodeStats.GetDecodeStats(); err == nil {
+				backend := p.Config.Decode.Backend
 				if backend == "" {
 					backend = "auto"
 				}
@@ -240,7 +248,7 @@ func healthHandler(database ServiceReadiness, native ServiceReadiness, decodeSta
 					MaxSessions:       stats.MaxSessions,
 					RejectedRequests:  stats.RejectedRequests,
 				}
-				if (backend == "mpp" || !cfg.Decode.AllowSoftwareFallback) && !stats.HardwareAvailable {
+				if (backend == "mpp" || !p.Config.Decode.AllowSoftwareFallback) && !stats.HardwareAvailable {
 					components["engine"] = "degraded"
 				}
 			}

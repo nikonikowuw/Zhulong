@@ -180,33 +180,37 @@ type cameraOut struct {
 	CameraRoutes RouteRegistrar `group:"protected_routes"`
 }
 
-func provideCamera(
-	config Config,
-	dbProvider database.DBProvider,
-	eng *engine.Engine,
-	authSvc auth.AuthService,
-	auditSvc *audit.Service,
-	logger *zap.Logger,
-) cameraOut {
-	camStore := camera.NewCameraStore(dbProvider)
-	keyMgr := camera.NewKeyManager(config.DataDir)
+type cameraParams struct {
+	fx.In
+
+	Config       Config
+	DBProvider   database.DBProvider
+	Engine       *engine.Engine
+	AuthService  auth.AuthService
+	AuditService *audit.Service
+	Logger       *zap.Logger
+}
+
+func provideCamera(p cameraParams) cameraOut {
+	camStore := camera.NewCameraStore(p.DBProvider)
+	keyMgr := camera.NewKeyManager(p.Config.DataDir)
 	lazyC := camera.NewLazyCipher()
 	reg := camera.NewStateRegistry()
 	hub := camera.NewEventHub(reg)
 
-	engAdapter := camera.NewEngineMediaAdapter(eng)
-	streamHub := camera.NewStreamHub(engAdapter, camStore, lazyC, reg, hub, logger)
-	prober := camera.NewProbeService(eng)
+	engAdapter := camera.NewEngineMediaAdapter(p.Engine)
+	streamHub := camera.NewStreamHub(engAdapter, camStore, lazyC, reg, hub, p.Logger)
+	prober := camera.NewProbeService(p.Engine)
 	describeClient := camera.NewDescribeClient()
-	scheduler := camera.NewHealthScheduler(camStore, lazyC, reg, hub, describeClient, logger)
-	camSvc := camera.NewCameraService(camStore, lazyC, prober, reg, hub, scheduler, logger)
+	scheduler := camera.NewHealthScheduler(camStore, lazyC, reg, hub, describeClient, p.Logger)
+	camSvc := camera.NewCameraService(camStore, lazyC, prober, reg, hub, scheduler, p.Logger)
 	// authSvc is a required dependency of this provider (provideAuth always
 	// supplies it), so the handler gets a real predicate rather than a nil one.
 	validateSession := func(token string) bool {
-		_, ok := authSvc.ValidateSession(token)
+		_, ok := p.AuthService.ValidateSession(token)
 		return ok
 	}
-	camHandler := camera.NewHandler(camSvc, hub, streamHub, logger, validateSession)
+	camHandler := camera.NewHandler(camSvc, hub, streamHub, p.Logger, validateSession)
 
 	camMgr := camera.NewLifecycleManager(camStore, keyMgr, lazyC, scheduler, hub, streamHub)
 
@@ -239,27 +243,31 @@ type gb28181Out struct {
 	GBRoutes  RouteRegistrar `group:"protected_routes"`
 }
 
-func provideGB28181(
-	dbProvider database.DBProvider,
-	cameraCipher *camera.LazyCipher,
-	cameraManager *camera.LifecycleManager,
-	cameraService *camera.CameraService,
-	logger *zap.Logger,
-) gb28181Out {
+type gb28181Params struct {
+	fx.In
+
+	DBProvider    database.DBProvider
+	CameraCipher  *camera.LazyCipher
+	CameraManager *camera.LifecycleManager
+	CameraService *camera.CameraService
+	Logger        *zap.Logger
+}
+
+func provideGB28181(p gb28181Params) gb28181Out {
 	// The domain builds its own SIP ingress (S1); passing no override keeps the
 	// production wiring out of this provider.
 	comp := gb28181.NewComponents(gb28181.ComponentsOptions{
-		DBProvider:    dbProvider,
-		Cipher:        cameraCipher,
-		CameraCreator: cameraService,
-		CameraDeleter: cameraService,
-		Logger:        logger,
+		DBProvider:    p.DBProvider,
+		Cipher:        p.CameraCipher,
+		CameraCreator: p.CameraService,
+		CameraDeleter: p.CameraService,
+		Logger:        p.Logger,
 	})
 	// The probe is registered on the camera lifecycle manager directly: that is the
 	// only consumer, so it must not be published as a second fx value that nothing
 	// reads (a reader could then believe the wiring happens through the graph).
-	if cameraManager != nil {
-		cameraManager.AddEncryptedDataProbe(comp.Store)
+	if p.CameraManager != nil {
+		p.CameraManager.AddEncryptedDataProbe(comp.Store)
 	}
 	return gb28181Out{
 		Store:     comp.Store,
@@ -436,30 +444,34 @@ func newAlgorithmRuntime(dataDir string) algorunner.Runtime {
 	return algorunner.Runtime{AlgorithmsDir: filepath.Join(root, "algorithms")}
 }
 
-func provideAlgorithm(
-	dbProvider database.DBProvider,
-	streamHub *camera.StreamHub,
-	eng *engine.Engine,
-	config Config,
-	taskStore *task.Store,
-	logger *zap.Logger,
-) algorithmOut {
+type algorithmParams struct {
+	fx.In
+
+	DBProvider database.DBProvider
+	StreamHub  *camera.StreamHub
+	Engine     *engine.Engine
+	Config     Config
+	TaskStore  *task.Store
+	Logger     *zap.Logger
+}
+
+func provideAlgorithm(p algorithmParams) algorithmOut {
 	comp := algorithm.NewAlgorithmComponents(
-		dbProvider,
-		newAlgorithmRuntime(config.DataDir),
-		algorithm.DetectHostPlatform(config.AlgorithmTarget),
-		logger,
+		p.DBProvider,
+		newAlgorithmRuntime(p.Config.DataDir),
+		algorithm.DetectHostPlatform(p.Config.AlgorithmTarget),
+		p.Logger,
 	)
 	taskBrokerResolver := &appBrokerPathResolver{
-		taskStore: taskStore,
-		streamHub: streamHub,
-		logger:    logger,
+		taskStore: p.TaskStore,
+		streamHub: p.StreamHub,
+		logger:    p.Logger,
 	}
 	comp.Supervisor.SetBrokerSubscriptionResolver(taskBrokerResolver)
 	// 任务级配置（逐路流的 task_algorithms.config_json）走 Broker 广播 + 握手重放，
 	// 进程级配置走 argv `--config`：argv 无法表达 per-stream 值。
-	comp.Supervisor.SetTaskConfig(taskBrokerResolver, algorunner.NewTaskConfigBroadcaster(eng, logger))
-	galleryBroadcaster := algorunner.NewGalleryBroadcaster(eng, logger)
+	comp.Supervisor.SetTaskConfig(taskBrokerResolver, algorunner.NewTaskConfigBroadcaster(p.Engine, p.Logger))
+	galleryBroadcaster := algorunner.NewGalleryBroadcaster(p.Engine, p.Logger)
 	return algorithmOut{
 		Store:              comp.Store,
 		Verifier:           comp.Verifier,
@@ -492,26 +504,30 @@ func provideTaskStore(dbProvider database.DBProvider) *task.Store {
 	return task.NewStore(dbProvider)
 }
 
-func provideTaskComponents(
-	lifecycle fx.Lifecycle,
-	store *task.Store,
-	algoService *algorithm.Service,
-	streamHub *camera.StreamHub,
-	logger *zap.Logger,
-) taskOut {
-	configCache := task.NewRegionConfigCache(store, logger)
-	streamHub.SetRegionConfigProvider(configCache)
+type taskParams struct {
+	fx.In
+
+	Lifecycle   fx.Lifecycle
+	Store       *task.Store
+	AlgoService *algorithm.Service
+	StreamHub   *camera.StreamHub
+	Logger      *zap.Logger
+}
+
+func provideTaskComponents(p taskParams) taskOut {
+	configCache := task.NewRegionConfigCache(p.Store, p.Logger)
+	p.StreamHub.SetRegionConfigProvider(configCache)
 
 	// Both the algorithm supervisor and the region config cache must react to task changes.
 	// The cache owns its own error handling, so no adapter is needed here.
 	listeners := []task.TaskChangeListener{
-		algoService,
+		p.AlgoService,
 		configCache,
 	}
-	service := task.NewService(store, algoService, listeners, logger)
-	scheduleWorker := task.NewScheduleWorker(store, listeners, logger, 30*time.Second)
+	service := task.NewService(p.Store, p.AlgoService, listeners, p.Logger)
+	scheduleWorker := task.NewScheduleWorker(p.Store, listeners, p.Logger, 30*time.Second)
 
-	lifecycle.Append(fx.Hook{
+	p.Lifecycle.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			scheduleWorker.Start()
 			return nil
@@ -552,19 +568,23 @@ type personOut struct {
 	UploadRoutes    RouteRegistrar `group:"upload_routes"`
 }
 
-func providePerson(
-	dbProvider database.DBProvider,
-	config Config,
-	algStore *algorithm.Store,
-	broadcaster *algorunner.GalleryBroadcaster,
-	supervisor *algorunner.Supervisor,
-	recordStore *record.Store,
-	asyncJobs *asyncjob.Service,
-	logger *zap.Logger,
-) personOut {
-	facesDir := config.FacesDir
+type personParams struct {
+	fx.In
+
+	DBProvider  database.DBProvider
+	Config      Config
+	AlgStore    *algorithm.Store
+	Broadcaster *algorunner.GalleryBroadcaster
+	Supervisor  *algorunner.Supervisor
+	RecordStore *record.Store
+	AsyncJobs   *asyncjob.Service
+	Logger      *zap.Logger
+}
+
+func providePerson(p personParams) personOut {
+	facesDir := p.Config.FacesDir
 	if facesDir == "" {
-		facesDir = filepath.Join(config.DataDir, "faces")
+		facesDir = filepath.Join(p.Config.DataDir, "faces")
 	}
 	// Collaborators are resolved before construction: the person components capture
 	// their dependencies once and never swap them afterwards. All three are
@@ -573,31 +593,31 @@ func providePerson(
 	// The face provider is resolved *per request* through the algorithm store: the
 	// package can be upgraded, rolled back or reinstalled while the host runs, and a
 	// client pinned to one path would keep enrolling with the old model.
-	rt := newAlgorithmRuntime(config.DataDir)
-	providerID := config.ExtractorAlgorithm
+	rt := newAlgorithmRuntime(p.Config.DataDir)
+	providerID := p.Config.ExtractorAlgorithm
 	extractor := &faceFeatureExtractorAdapter{client: faceextract.New(faceextract.Options{
-		Logger: logger,
+		Logger: p.Logger,
 		Entry: func(ctx context.Context) (string, error) {
-			installed, err := algStore.GetAlgorithm(ctx, providerID)
+			installed, err := p.AlgStore.GetAlgorithm(ctx, providerID)
 			if err != nil {
 				return "", fmt.Errorf("face provider %q: %w", providerID, err)
 			}
 			return algorunner.ResolveEntry(rt.PackageDir(installed.ID, installed.Version), installed.ID)
 		},
 	})}
-	notifier := &personGalleryAdapter{broadcaster: broadcaster}
-	keyBackfiller := &personKeyBackfillerAdapter{store: recordStore}
+	notifier := &personGalleryAdapter{broadcaster: p.Broadcaster}
+	keyBackfiller := &personKeyBackfillerAdapter{store: p.RecordStore}
 
 	opts := person.Options{
-		RequirePersonIDForEnrollment: config.RequirePersonIDForEnrollment,
+		RequirePersonIDForEnrollment: p.Config.RequirePersonIDForEnrollment,
 		RecognitionKeyBackfiller:     keyBackfiller,
-		AsyncJobs:                    asyncJobs,
+		AsyncJobs:                    p.AsyncJobs,
 	}
-	comp := person.NewPersonComponents(dbProvider, facesDir, extractor, notifier, opts, logger)
-	if asyncJobs != nil && comp.JobHandler != nil {
-		asyncJobs.RegisterHandler(comp.JobHandler)
+	comp := person.NewPersonComponents(p.DBProvider, facesDir, extractor, notifier, opts, p.Logger)
+	if p.AsyncJobs != nil && comp.JobHandler != nil {
+		p.AsyncJobs.RegisterHandler(comp.JobHandler)
 	}
-	supervisor.SetGallerySync(&supervisorGallerySyncAdapter{service: comp.Service}, broadcaster)
+	p.Supervisor.SetGallerySync(&supervisorGallerySyncAdapter{service: comp.Service}, p.Broadcaster)
 	return personOut{
 		Store:           comp.Store,
 		Service:         comp.Service,
@@ -690,27 +710,31 @@ type recordOut struct {
 	ProtectedRoutes   RouteRegistrar `group:"protected_routes"`
 }
 
-func provideRecord(
-	dbProvider database.DBProvider,
-	streamHub *camera.StreamHub,
-	storageSvc *storage.Service,
-	mediaFiles *mediafile.Service,
-	logger *zap.Logger,
-) recordOut {
-	comp := record.NewRecordComponents(dbProvider, logger)
+type recordParams struct {
+	fx.In
+
+	DBProvider database.DBProvider
+	StreamHub  *camera.StreamHub
+	Storage    *storage.Service
+	MediaFiles *mediafile.Service
+	Logger     *zap.Logger
+}
+
+func provideRecord(p recordParams) recordOut {
+	comp := record.NewRecordComponents(p.DBProvider, p.Logger)
 
 	// 感知记录库表行的保留期与抓拍图 TTL 同源：图没了，行就只剩指向空文件的悬空引用。
 	// 保留天数由 storage 域持有（用户在存储设置里改的就是这个值），这里只做转译。
-	comp.Pruner.SetRetentionDaysProvider(recordRetentionDaysProvider{storage: storageSvc})
-	comp.Pruner.SetSnapshotFileChecker(recordSnapshotFileChecker{media: mediaFiles})
-	storageSvc.SetAfterPrune(func(ctx context.Context) {
+	comp.Pruner.SetRetentionDaysProvider(recordRetentionDaysProvider{storage: p.Storage})
+	comp.Pruner.SetSnapshotFileChecker(recordSnapshotFileChecker{media: p.MediaFiles})
+	p.Storage.SetAfterPrune(func(ctx context.Context) {
 		result, err := comp.Pruner.PruneNow(ctx)
 		if err != nil {
-			logger.Warn("reconcile perception records after storage cleanup failed", zap.Error(err))
+			p.Logger.Warn("reconcile perception records after storage cleanup failed", zap.Error(err))
 			return
 		}
 		if result.Total() > 0 {
-			logger.Info("reconciled perception records after storage cleanup",
+			p.Logger.Info("reconciled perception records after storage cleanup",
 				zap.Int64("deleted_rows", result.Total()))
 		}
 	})
@@ -718,16 +742,16 @@ func provideRecord(
 	// 抓拍落盘组件：把 StreamHub（抓拍源）与 storage（媒体根 + 写入门闸）接进
 	// record 域。两者都是窄接口，record 不认识 camera / storage 的内部类型。
 	snapshots := record.NewSnapshotStore(
-		streamHub,
-		mediafile.NewMediaRootProvider(storageSvc),
-		storageSvc,
+		p.StreamHub,
+		mediafile.NewMediaRootProvider(p.Storage),
+		p.Storage,
 		0, // 0 = 使用 engine.DefaultSnapshotQuality
-		logger,
+		p.Logger,
 	)
 	snapshots.SetPathCleaner(comp.Store)
 	comp.Service.SetSnapshotStore(snapshots)
 
-	streamHub.SetAIConsumer(comp.Service)
+	p.StreamHub.SetAIConsumer(comp.Service)
 	return recordOut{
 		Store:             comp.Store,
 		Service:           comp.Service,
