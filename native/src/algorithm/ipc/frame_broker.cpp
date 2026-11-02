@@ -7,6 +7,7 @@
 #include "broker_resource_lock.hpp"
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 #include <cassert>
 #include "common/log.hpp"
 
@@ -514,7 +515,7 @@ void FrameBroker::handle_handshake(uint32_t client_id, const HandshakeReq& req) 
     HandshakeResp resp{};
     resp.client_id = client_id;
     resp.status = 0;
-    std::strncpy(resp.shm_name, shm_name_.c_str(), sizeof(resp.shm_name) - 1);
+    std::snprintf(resp.shm_name, sizeof(resp.shm_name), "%s", shm_name_.c_str());
     resp.slot_count = static_cast<uint32_t>(options_.slot_count);
     resp.slot_size = static_cast<uint32_t>(options_.slot_size);
 

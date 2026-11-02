@@ -34,6 +34,19 @@ struct ClientChannel {
 };
 
 /**
+ * @brief 服务端工作读取线程的共享生命周期与同步控制块
+ *
+ * 即使 UnixSocketServer 先于某个工作线程完成析构（如遭遇 stop() 等待超时），
+ * 工作线程退出时的计数递减与条件变量通知依然作用于有效的堆内存，彻底杜绝 UAF。
+ */
+struct ServerWorkerSync {
+    std::atomic<bool> server_alive{false};
+    std::atomic<size_t> active_workers{0};
+    std::mutex workers_mutex;
+    std::condition_variable workers_cv;
+};
+
+/**
  * @brief 基于 Unix Domain Socket 的 IPC 服务端（FrameBroker 宿主角色）
  *
  * 监听指定文件路径，接收来自各算法 Runner 子进程的连接请求；
@@ -126,21 +139,18 @@ public:
 
 private:
     void listen_loop();
-    void client_read_loop(uint32_t client_id, std::shared_ptr<ClientChannel> channel);
+    void client_read_loop(uint32_t client_id, std::shared_ptr<ClientChannel> channel, std::shared_ptr<ServerWorkerSync> sync);
     void remove_client(uint32_t client_id);
 
     std::string socket_path_;                                                     /**< 套接字文件绑定路径 */
     std::atomic<int> listen_fd_{-1};                                              /**< 监听套接字描述符 */
     std::atomic<bool> running_{false};                                            /**< 服务端运行状态标志 */
     std::atomic<uint32_t> next_client_id_{1};                                     /**< 客户端自增 ID 分配器 */
-    std::atomic<size_t> active_workers_{0};                                       /**< 活跃的工作读取线程计数 */
+    std::shared_ptr<ServerWorkerSync> worker_sync_{std::make_shared<ServerWorkerSync>()}; /**< 工作线程生命周期同步块 */
 
     mutable std::mutex clients_mutex_;                                            /**< 客户端集合互斥锁 */
     std::unordered_map<uint32_t, std::shared_ptr<ClientChannel>> client_channels_; /**< 客户端 ID 到通道实体的映射 */
     std::thread accept_thread_;                                                   /**< 监听接收连接的独立线程 */
-
-    std::mutex workers_mutex_;                                                    /**< 工作线程生命周期同步锁 */
-    std::condition_variable workers_cv_;                                          /**< 工作线程退出通知条件变量 */
 
     MessageCallback on_message_;                                                  /**< 消息接收回调 */
     ConnectCallback on_connect_;                                                  /**< 连接建立回调 */

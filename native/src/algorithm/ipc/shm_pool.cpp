@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <cerrno>
+#include <limits>
 
 namespace zhulong::ipc {
 
@@ -59,6 +60,10 @@ bool ShmPool::init(const std::string& name, ShmMode mode,
 
     if (mode == ShmMode::CREATE_READ_WRITE) {
         // 主进程创建模式：独占拥有该段，预先 unlink 清理可能残留的同名旧段
+        if (slot_size > 0 && slot_count > (std::numeric_limits<size_t>::max() - sizeof(ShmHeader)) / slot_size) {
+            if (error_msg) *error_msg = "slot_count and slot_size exceed maximum addressable size";
+            return false;
+        }
         is_owner_ = true;
         slot_count_ = slot_count;
         slot_size_ = slot_size;
