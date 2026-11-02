@@ -387,6 +387,33 @@ func TestVerifierDynamicVerificationAndResultTypeMismatch(t *testing.T) {
 	if verifiedPerson.Manifest.ID != "valid_person_plugin" {
 		t.Errorf("expected manifest ID valid_person_plugin, got: %s", verifiedPerson.Manifest.ID)
 	}
+
+	// v2 SceneStructure 适配器（result_type=5）兼容声明为 person_structure 的算法包
+	sceneStructureStub := "#!/bin/sh\n" +
+		"printf '%s\\n' '{\"step\":\"verify\",\"status\":\"passed\",\"sample_decoded\":false,\"width\":0,\"height\":0,\"result_type\":5,\"count\":0}'\n" +
+		"printf '%s\\n' 'rga_api version 1.10.1_[10]'\n" +
+		"exit 0\n"
+	personWithSceneResultDir := writePackage(t, validPersonManifest, sceneStructureStub)
+	verifiedScenePerson, err := verifier.VerifyDirectory(ctx, personWithSceneResultDir)
+	if err != nil {
+		t.Fatalf("VerifyDirectory for person_structure accepting scene_structure report failed: %v", err)
+	}
+	if verifiedScenePerson.Manifest.ID != "valid_person_plugin" {
+		t.Errorf("expected manifest ID valid_person_plugin, got: %s", verifiedScenePerson.Manifest.ID)
+	}
+
+	// 显式声明 task_type: scene_structure 也能正常准入
+	sceneManifest := validPersonManifest
+	sceneManifest.ID = "valid_scene_plugin"
+	sceneManifest.TaskType = algorithm.TaskTypeSceneStructure
+	sceneDir := writePackage(t, sceneManifest, sceneStructureStub)
+	verifiedScene, err := verifier.VerifyDirectory(ctx, sceneDir)
+	if err != nil {
+		t.Fatalf("VerifyDirectory for scene_structure failed: %v", err)
+	}
+	if verifiedScene.Manifest.ID != "valid_scene_plugin" {
+		t.Errorf("expected manifest ID valid_scene_plugin, got: %s", verifiedScene.Manifest.ID)
+	}
 }
 
 func TestStageAndVerifyEndToEnd(t *testing.T) {

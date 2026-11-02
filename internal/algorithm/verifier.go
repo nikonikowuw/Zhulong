@@ -302,7 +302,7 @@ func validateIdentity(manifest *Manifest) error {
 
 func validateEnums(manifest *Manifest) error {
 	switch manifest.TaskType {
-	case TaskTypeDetection, TaskTypeClassification, TaskTypePersonStructure, TaskTypeVehicleStructure:
+	case TaskTypeDetection, TaskTypeClassification, TaskTypePersonStructure, TaskTypeVehicleStructure, TaskTypeSceneStructure:
 	default:
 		return fmt.Errorf("%w: invalid task_type %q", ErrInvalidManifest, manifest.TaskType)
 	}
@@ -407,6 +407,7 @@ var expectedResultType = map[string]ResultType{
 	TaskTypeClassification:   ResultTypeClassification,
 	TaskTypePersonStructure:  ResultTypePersonStructure,
 	TaskTypeVehicleStructure: ResultTypeVehicleStructure,
+	TaskTypeSceneStructure:   ResultTypeSceneStructure,
 }
 
 func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, samplePath, taskType string) error {
@@ -439,17 +440,42 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, sample
 		return fmt.Errorf("%w: execution failed (%v): %s", ErrVerificationFailed, err, stderrBuf.String())
 	}
 
-	// Parse the final JSON line (the skeleton prints its report last)
+	// Parse the JSON report. Many vendor libraries (e.g. librga / rknpu) print banners
+	// or diagnostics upon process exit, so search backwards for the final JSON report line.
 	output := strings.TrimSpace(stdoutBuf.String())
 	lines := strings.Split(output, "\n")
 	if len(lines) == 0 {
 		return fmt.Errorf("%w: empty output from package entry", ErrVerificationFailed)
 	}
 
-	lastLine := strings.TrimSpace(lines[len(lines)-1])
 	var report VerificationReport
-	if err := json.Unmarshal([]byte(lastLine), &report); err != nil {
-		return fmt.Errorf("%w: cannot parse package report (%s): %v", ErrVerificationFailed, lastLine, err)
+	var parsed bool
+	var parseErr error
+	var candidateLine string
+
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if candidateLine == "" {
+			candidateLine = line
+		}
+		if strings.HasPrefix(line, "{") && strings.Contains(line, `"status"`) {
+			if err := json.Unmarshal([]byte(line), &report); err == nil && report.Status != "" {
+				parsed = true
+				break
+			} else if err != nil && parseErr == nil {
+				parseErr = err
+			}
+		}
+	}
+
+	if !parsed {
+		if parseErr != nil {
+			return fmt.Errorf("%w: cannot parse package report (%s): %v", ErrVerificationFailed, candidateLine, parseErr)
+		}
+		return fmt.Errorf("%w: no valid verification report found in output (%s)", ErrVerificationFailed, candidateLine)
 	}
 
 	if report.Status != "passed" {
@@ -469,10 +495,16 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, sample
 			zap.Int("height", report.Height))
 	}
 
-	// Cross-check result_type against manifest task_type
-	if expected, ok := expectedResultType[taskType]; ok && report.ResultType != int(expected) {
-		return fmt.Errorf("%w: expected result_type %d for %s, got %d",
-			ErrResultTypeMismatch, expected, taskType, report.ResultType)
+	// Cross-check result_type against manifest task_type.
+	// TaskTypePersonStructure allows either ResultTypePersonStructure (v1) or
+	// ResultTypeSceneStructure (v2 decoupled scene structure).
+	if expected, ok := expectedResultType[taskType]; ok {
+		matches := report.ResultType == int(expected) ||
+			(taskType == TaskTypePersonStructure && report.ResultType == int(ResultTypeSceneStructure))
+		if !matches {
+			return fmt.Errorf("%w: expected result_type %d for %s, got %d",
+				ErrResultTypeMismatch, expected, taskType, report.ResultType)
+		}
 	}
 
 	return nil
