@@ -11,13 +11,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Slider } from '@/components/ui/slider'
 
 interface ImageSearchControlsProps {
@@ -116,12 +109,13 @@ export function ImageSearchControls({
         {/* 快捷刻度预设与说明 */}
         <div className='flex items-center justify-between text-[11px] text-muted-foreground'>
           <span className='truncate'>{t('controls.thresholdHint')}</span>
-          <div className='flex shrink-0 items-center gap-1 pl-1'>
+          <div className='flex shrink-0 items-center gap-1 ps-1'>
             {PRESET_THRESHOLDS.map((preset) => (
               <button
                 key={preset}
                 type='button'
                 disabled={isSearching}
+                aria-pressed={thresholdPercent === preset}
                 onClick={() => onThresholdChange(preset / 100)}
                 className={`rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors ${
                   thresholdPercent === preset
@@ -145,50 +139,29 @@ export function ImageSearchControls({
           </Label>
         </div>
 
-        <div className='flex items-center gap-2'>
-          {/* 快捷 Segmented Pills */}
-          <div className='flex items-center rounded-lg border border-border/60 bg-muted/40 p-0.5'>
-            {TOP_K_OPTIONS.map((opt) => (
-              <button
-                key={opt}
-                type='button'
-                disabled={isSearching}
-                onClick={() => onTopKChange(opt)}
-                className={`rounded-md px-2 py-0.5 font-mono text-xs transition-all ${
-                  topK === opt
-                    ? 'bg-background font-semibold text-foreground shadow-xs'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {opt}
-              </button>
-            ))}
-          </div>
-
-          {/* 兼容 Select 下拉框 */}
-          <Select
-            value={topK.toString()}
-            disabled={isSearching}
-            onValueChange={(val) => onTopKChange(parseInt(val, 10))}
-          >
-            <SelectTrigger
-              className='h-7.5 w-24 text-xs'
-              aria-label={t('controls.topK')}
+        {/* 快捷 Segmented Pills */}
+        <div
+          role='radiogroup'
+          aria-label={t('controls.topK')}
+          className='flex items-center rounded-lg border border-border/60 bg-muted/40 p-0.5'
+        >
+          {TOP_K_OPTIONS.map((opt) => (
+            <button
+              key={opt}
+              type='button'
+              role='radio'
+              aria-checked={topK === opt}
+              disabled={isSearching}
+              onClick={() => onTopKChange(opt)}
+              className={`rounded-md px-2.5 py-0.5 font-mono text-xs transition-all ${
+                topK === opt
+                  ? 'bg-background font-semibold text-foreground shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
             >
-              <SelectValue placeholder='10' />
-            </SelectTrigger>
-            <SelectContent>
-              {TOP_K_OPTIONS.map((opt) => (
-                <SelectItem
-                  key={opt}
-                  value={opt.toString()}
-                  className='text-xs'
-                >
-                  {t('controls.topKOption', { count: opt })}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              {opt}
+            </button>
+          ))}
         </div>
       </div>
 

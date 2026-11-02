@@ -121,7 +121,7 @@ export function ImageSearchDropzone({
           {/* 上传人脸预览框，附带 HUD 瞄准四角括号与微光扫描感 */}
           <div className='relative mx-auto flex max-h-72 w-full items-center justify-center overflow-hidden rounded-xl border border-primary/20 bg-muted/40 p-2'>
             {/* 背景科技微网格 */}
-            <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(var(--primary-rgb,59,130,246),0.06)_0,transparent_70%)]' />
+            <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,color-mix(in_oklch,var(--primary)_6%,transparent)_0,transparent_70%)]' />
 
             {/* HUD 瞄准角标 */}
             <div className='pointer-events-none absolute inset-2.5 z-10'>
@@ -138,7 +138,7 @@ export function ImageSearchDropzone({
             />
 
             {/* 瞄准中提示徽章 */}
-            <div className='pointer-events-none absolute bottom-4 left-4 z-10 flex items-center gap-1.5 rounded-full border border-primary/30 bg-background/85 px-2.5 py-0.5 text-[11px] font-medium text-foreground backdrop-blur-sm'>
+            <div className='pointer-events-none absolute bottom-4 start-4 z-10 flex items-center gap-1.5 rounded-full border border-primary/30 bg-background/85 px-2.5 py-0.5 text-[11px] font-medium text-foreground backdrop-blur-sm'>
               <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500' />
               <Scan className='h-3 w-3 text-primary' />
               <span>{t('dropzone.tagFaceReq')}</span>
@@ -229,7 +229,7 @@ export function ImageSearchDropzone({
           {/* 科技瞄准圆圈与图标 */}
           <div className='relative mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-xs transition-transform duration-300 group-hover:scale-105'>
             <UploadCloud className='h-7 w-7 transition-transform duration-200 group-hover:-translate-y-0.5' />
-            <div className='absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground'>
+            <div className='absolute -top-1 -end-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground'>
               <Sparkles className='h-2.5 w-2.5' />
             </div>
           </div>

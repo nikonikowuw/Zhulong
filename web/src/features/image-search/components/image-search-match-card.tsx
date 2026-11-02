@@ -116,10 +116,10 @@ export function ImageSearchMatchCard({
           <div className='relative h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-border/80 bg-muted/40 shadow-xs'>
             {/* HUD 四角瞄准线条 */}
             <div className='pointer-events-none absolute inset-1 z-10 opacity-70'>
-              <div className='border-t-1.5 border-l-1.5 absolute top-0 left-0 h-2 w-2 border-primary/60' />
-              <div className='border-t-1.5 border-r-1.5 absolute top-0 right-0 h-2 w-2 border-primary/60' />
-              <div className='border-b-1.5 border-l-1.5 absolute bottom-0 left-0 h-2 w-2 border-primary/60' />
-              <div className='border-b-1.5 border-r-1.5 absolute right-0 bottom-0 h-2 w-2 border-primary/60' />
+              <div className='absolute top-0 left-0 h-2 w-2 border-t-2 border-l-2 border-primary/60' />
+              <div className='absolute top-0 right-0 h-2 w-2 border-t-2 border-r-2 border-primary/60' />
+              <div className='absolute bottom-0 left-0 h-2 w-2 border-b-2 border-l-2 border-primary/60' />
+              <div className='absolute right-0 bottom-0 h-2 w-2 border-r-2 border-b-2 border-primary/60' />
             </div>
 
             <Avatar className='h-full w-full rounded-xl'>
@@ -139,7 +139,7 @@ export function ImageSearchMatchCard({
             {/* 高置信度状态标记 */}
             {isHighMatch && (
               <div
-                className='absolute right-1 bottom-1 z-20 h-2 w-2 rounded-full bg-emerald-500 shadow-xs ring-2 ring-background'
+                className='absolute end-1 bottom-1 z-20 h-2 w-2 rounded-full bg-emerald-500 shadow-xs ring-2 ring-background'
                 title={t('results.card.highMatch')}
               />
             )}
@@ -182,7 +182,7 @@ export function ImageSearchMatchCard({
                 </span>
                 <div className='flex items-center gap-1.5'>
                   {isHighMatch && (
-                    <span className='py-0.2 hidden rounded bg-emerald-500/10 px-1 font-sans text-[10px] font-medium text-emerald-600 sm:inline-block dark:text-emerald-400'>
+                    <span className='hidden rounded bg-emerald-500/10 px-1 py-0.5 font-sans text-[10px] font-medium text-emerald-600 sm:inline-block dark:text-emerald-400'>
                       {t('results.card.highMatch')}
                     </span>
                   )}
@@ -210,7 +210,7 @@ export function ImageSearchMatchCard({
                         ? 'bg-gradient-to-r from-primary/80 to-primary'
                         : 'bg-gradient-to-r from-amber-500 to-amber-400'
                   }`}
-                  style={{ width: `${Math.min(similarityNum, 100)}%` }}
+                  style={{ width: `${Math.max(0, Math.min(similarityNum, 100))}%` }}
                 />
               </div>
             </div>
@@ -224,7 +224,7 @@ export function ImageSearchMatchCard({
           type='button'
           variant='outline'
           size='sm'
-          className='h-7.5 gap-1 border-border/60 bg-muted/20 px-1.5 text-[11px] font-medium transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
+          className='group/btn h-7.5 gap-1 border-border/60 bg-muted/20 px-1.5 text-[11px] font-medium transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
           onClick={handleGoRecords}
           title={t('results.card.viewRecords')}
         >
@@ -235,7 +235,7 @@ export function ImageSearchMatchCard({
           type='button'
           variant='outline'
           size='sm'
-          className='h-7.5 gap-1 border-border/60 bg-muted/20 px-1.5 text-[11px] font-medium transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
+          className='group/btn h-7.5 gap-1 border-border/60 bg-muted/20 px-1.5 text-[11px] font-medium transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
           onClick={handleGoSpatial}
           title={t('results.card.viewTrajectory')}
         >
@@ -246,7 +246,7 @@ export function ImageSearchMatchCard({
           type='button'
           variant='outline'
           size='sm'
-          className='h-7.5 gap-1 border-border/60 bg-muted/20 px-1.5 text-[11px] font-medium transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
+          className='group/btn h-7.5 gap-1 border-border/60 bg-muted/20 px-1.5 text-[11px] font-medium transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground'
           onClick={handleGoProfile}
           title={t('results.card.viewProfile')}
         >

@@ -3,11 +3,14 @@ import { useMutation } from '@tanstack/react-query'
 import { imageSearchApi } from '../api/image-search-api'
 import { type ImageSearchResponse } from '../data/schema'
 
+const DEFAULT_IMAGE_SEARCH_THRESHOLD = 0.7
+const DEFAULT_IMAGE_SEARCH_TOP_K = 10
+
 export function useImageSearch() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [threshold, setThreshold] = useState<number>(0.7)
-  const [topK, setTopK] = useState<number>(10)
+  const [threshold, setThreshold] = useState<number>(DEFAULT_IMAGE_SEARCH_THRESHOLD)
+  const [topK, setTopK] = useState<number>(DEFAULT_IMAGE_SEARCH_TOP_K)
   const [uploadProgress, setUploadProgress] = useState<number | null>(null)
 
   const previewUrlRef = useRef<string | null>(null)
@@ -76,6 +79,8 @@ export function useImageSearch() {
 
   const reset = useCallback(() => {
     setFile(null)
+    setThreshold(DEFAULT_IMAGE_SEARCH_THRESHOLD)
+    setTopK(DEFAULT_IMAGE_SEARCH_TOP_K)
   }, [setFile])
 
   return {

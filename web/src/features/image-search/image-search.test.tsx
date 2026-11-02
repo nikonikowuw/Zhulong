@@ -321,4 +321,45 @@ describe('ImageSearch Workbench', () => {
       )
       .toBeInTheDocument()
   })
+
+  it('resets controls to default threshold and top-k when reset button is clicked', async () => {
+    const { getByRole, getByText, container } = await renderWithProviders(
+      <ImageSearch />
+    )
+
+    const file = new File(['fake-png-content'], 'test.png', {
+      type: 'image/png',
+    })
+    const input = container.querySelector(
+      'input[type="file"]'
+    ) as HTMLInputElement
+    Object.defineProperty(input, 'files', { value: [file] })
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+
+    // Change preset threshold to 85%
+    const preset85Btn = getByRole('button', { name: '85%' })
+    await preset85Btn.click()
+    expect(preset85Btn.element().getAttribute('aria-pressed')).toBe('true')
+
+    // Change Top-K to 50
+    const top50Btn = getByRole('radio', { name: '50' })
+    await top50Btn.click()
+    expect(top50Btn.element().getAttribute('aria-checked')).toBe('true')
+
+    // Click controls reset button
+    const resetBtn = getByRole('button', { name: /重置|Reset/ })
+    await resetBtn.click()
+
+    // Threshold should revert to 70% and Top-K to 10
+    const preset70Btn = getByRole('button', { name: '70%' })
+    expect(preset70Btn.element().getAttribute('aria-pressed')).toBe('true')
+    expect(preset85Btn.element().getAttribute('aria-pressed')).toBe('false')
+
+    const top10Btn = getByRole('radio', { name: '10' })
+    expect(top10Btn.element().getAttribute('aria-checked')).toBe('true')
+    expect(top50Btn.element().getAttribute('aria-checked')).toBe('false')
+
+    // Dropped image and results should be reset to idle
+    await expect.element(getByText(/就绪|Ready to Search/)).toBeInTheDocument()
+  })
 })

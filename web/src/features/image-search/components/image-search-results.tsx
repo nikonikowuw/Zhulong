@@ -99,7 +99,7 @@ export function ImageSearchResults({
     const errorText = getErrorMessage(error, t('results.errorDescription'))
     return (
       <Card className='relative flex h-full min-h-[420px] flex-1 flex-col items-center justify-center overflow-hidden rounded-2xl border border-destructive/30 bg-destructive/5 p-8 text-center shadow-xs backdrop-blur-xs lg:min-h-full'>
-        <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(var(--destructive-rgb,239,68,68),0.08),transparent_70%)]' />
+        <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,color-mix(in_oklch,var(--destructive)_8%,transparent),transparent_70%)]' />
         <div className='relative mb-3.5 flex h-14 w-14 items-center justify-center rounded-2xl border border-destructive/30 bg-destructive/10 text-destructive shadow-xs'>
           <AlertCircle className='h-7 w-7' />
         </div>
@@ -118,13 +118,13 @@ export function ImageSearchResults({
     return (
       <Card className='relative flex h-full min-h-[420px] flex-1 flex-col items-center justify-center overflow-hidden rounded-2xl border border-border/70 bg-card/60 p-8 text-center shadow-xs backdrop-blur-xs lg:min-h-full'>
         {/* 背景科技星芒微网格 */}
-        <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(var(--primary-rgb,59,130,246),0.06),transparent_70%)]' />
+        <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,color-mix(in_oklch,var(--primary)_6%,transparent),transparent_70%)]' />
         <div className='pointer-events-none absolute inset-0 [background-image:linear-gradient(to_right,currentColor_1px,transparent_1px),linear-gradient(to_bottom,currentColor_1px,transparent_1px)] [background-size:24px_24px] opacity-[0.02] dark:opacity-[0.05]' />
 
         {/* 科技扫描雷达光环 */}
         <div className='relative mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary shadow-xs'>
           <ScanFace className='h-8 w-8 transition-transform duration-300 hover:scale-110' />
-          <div className='absolute -top-1 -right-1 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground shadow-xs'>
+          <div className='absolute -top-1 -end-1 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-primary text-[10px] text-primary-foreground shadow-xs'>
             <Sparkles className='h-2.5 w-2.5' />
           </div>
         </div>
