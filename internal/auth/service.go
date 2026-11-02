@@ -21,6 +21,10 @@ var (
 	ErrTooManyAttempts    = apperr.RateLimited("TOO_MANY_ATTEMPTS", "too many failed login attempts", nil)
 )
 
+// rateLimiterCleanupInterval bounds how often the limiter sweeps expired IPs:
+// every login would otherwise walk the whole map.
+const rateLimiterCleanupInterval = time.Minute
+
 // AuthService defines the business operations for user authentication and session management.
 type AuthService interface {
 	GetStatus(ctx context.Context) (AuthStatusResponse, error)
@@ -31,8 +35,6 @@ type AuthService interface {
 	ValidateSession(token string) (SessionItem, bool)
 	SessionTTL() time.Duration
 }
-
-const rateLimiterCleanupInterval = time.Minute
 
 // RateLimiter tracks failed authentication attempts by client IP.
 type RateLimiter struct {
@@ -111,7 +113,9 @@ func (a *Attempt) Cancel() {
 }
 
 func (a *Attempt) finish(record func(*RateLimiter, string)) {
-	if a == nil {
+	// The zero value is inert rather than fatal: Attempt is exported but only
+	// Reserve can build a usable one, and a stray literal must not panic a request.
+	if a == nil || a.limiter == nil {
 		return
 	}
 
@@ -300,6 +304,8 @@ func (s *authService) Logout(token string) {
 	}
 }
 
+// The store error already names the query, and the handler maps ErrUserNotFound,
+// so it is returned unchanged instead of being wrapped a second time.
 func (s *authService) GetCurrentUser(ctx context.Context, userID int64) (UserResponse, error) {
 	user, err := s.userStore.GetByID(ctx, userID)
 	if err != nil {
@@ -312,6 +318,9 @@ func (s *authService) ValidateSession(token string) (SessionItem, bool) {
 	return s.sessionStore.Get(token)
 }
 
+// SessionTTL reports the configured session duration. An absent store falls back
+// to the default so the cookie lifetime can always be computed, even for a
+// partially wired service; every other method requires the store.
 func (s *authService) SessionTTL() time.Duration {
 	if s.sessionStore != nil {
 		return s.sessionStore.TTL()

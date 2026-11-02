@@ -66,11 +66,7 @@ func (s *MemorySessionStore) Create(userID int64, username string) (string, erro
 	defer s.mu.Unlock()
 
 	now := s.nowFunc()
-	for k, v := range s.sessions {
-		if now.After(v.ExpiresAt) {
-			delete(s.sessions, k)
-		}
-	}
+	s.pruneExpiredLocked(now)
 
 	s.sessions[token] = SessionItem{
 		UserID:    userID,
@@ -113,6 +109,16 @@ func (s *MemorySessionStore) Delete(token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, token)
+}
+
+// pruneExpiredLocked drops every session past its expiry. Creating a session
+// sweeps the map so a token that is never presented again still disappears.
+func (s *MemorySessionStore) pruneExpiredLocked(now time.Time) {
+	for token, item := range s.sessions {
+		if now.After(item.ExpiresAt) {
+			delete(s.sessions, token)
+		}
+	}
 }
 
 // TTL returns the configured session duration.

@@ -19,6 +19,10 @@ const (
 	// host must flip this to true.
 	sessionCookieSecure   = false
 	sessionCookieHTTPOnly = true
+
+	// sessionCookieDeleteMaxAge is the MaxAge that tells the browser to drop the
+	// cookie immediately instead of storing it.
+	sessionCookieDeleteMaxAge = -1
 )
 
 // sessionCookieMaxAge derives the browser-visible cookie lifetime from the
@@ -34,7 +38,11 @@ func sessionCookieMaxAge(service AuthService) int {
 	return int(ttl / time.Second)
 }
 
-func setSessionCookie(c *gin.Context, token string, maxAge int) {
+// writeSessionCookie is the single place that knows the cookie's attribute set,
+// so set and clear can never disagree on Path, Domain or SameSite.
+func writeSessionCookie(c *gin.Context, token string, maxAge int) {
+	// SameSite must be set before SetCookie, otherwise the header would not match
+	// the stored cookie.
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(
 		SessionCookieName,
@@ -47,17 +55,7 @@ func setSessionCookie(c *gin.Context, token string, maxAge int) {
 	)
 }
 
-// clearSessionCookie expires the cookie. SameSite must be set before SetCookie,
-// otherwise the deletion header would not match the stored cookie.
+// clearSessionCookie expires the cookie so the browser drops it immediately.
 func clearSessionCookie(c *gin.Context) {
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(
-		SessionCookieName,
-		"",
-		-1,
-		sessionCookiePath,
-		sessionCookieDomain,
-		sessionCookieSecure,
-		sessionCookieHTTPOnly,
-	)
+	writeSessionCookie(c, "", sessionCookieDeleteMaxAge)
 }

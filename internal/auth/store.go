@@ -58,31 +58,26 @@ func (s *gormUserStore) HasUser(ctx context.Context) (bool, error) {
 }
 
 func (s *gormUserStore) GetByUsername(ctx context.Context, username string) (*User, error) {
-	db, err := s.db(ctx)
-	if err != nil {
-		return nil, err
-	}
-	user, err := gorm.G[User](db).Where("username = ?", username).First(ctx)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrUserNotFound
-		}
-		return nil, fmt.Errorf("get user by username: %w", err)
-	}
-	return &user, nil
+	return s.firstUser(ctx, "username = ?", username)
 }
 
 func (s *gormUserStore) GetByID(ctx context.Context, id int64) (*User, error) {
+	return s.firstUser(ctx, "id = ?", id)
+}
+
+// firstUser runs a single-row lookup and translates GORM's sentinel into
+// ErrUserNotFound, so callers never import gorm just to classify a miss.
+func (s *gormUserStore) firstUser(ctx context.Context, where string, args ...any) (*User, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return nil, err
 	}
-	user, err := gorm.G[User](db).Where("id = ?", id).First(ctx)
+	user, err := gorm.G[User](db).Where(where, args...).First(ctx)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrUserNotFound
+	}
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrUserNotFound
-		}
-		return nil, fmt.Errorf("get user by id: %w", err)
+		return nil, fmt.Errorf("get user where %s: %w", where, err)
 	}
 	return &user, nil
 }

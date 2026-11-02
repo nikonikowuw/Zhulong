@@ -17,7 +17,12 @@ func newTestService(t *testing.T) (AuthService, *database.Store, *RateLimiter) {
 	t.Helper()
 	dbStore := setupTestDB(t)
 	limiter := NewRateLimiter(15*time.Minute, 5)
-	service := NewAuthService(NewUserStore(dbStore), NewMemorySessionStore(1*time.Hour), limiter, zap.NewNop())
+	service := NewAuthService(
+		NewUserStore(dbStore),
+		NewMemorySessionStore(1*time.Hour),
+		limiter,
+		zap.NewNop(),
+	)
 	return service, dbStore, limiter
 }
 
@@ -292,7 +297,12 @@ func TestAuthService_LoginPropagatesUserStoreFailures(t *testing.T) {
 func TestAuthService_UnknownUsernameConsumesAttempt(t *testing.T) {
 	limiter := NewRateLimiter(time.Minute, 2)
 	dbStore := setupTestDB(t)
-	svc := NewAuthService(NewUserStore(dbStore), NewMemorySessionStore(time.Hour), limiter, zap.NewNop())
+	svc := NewAuthService(
+		NewUserStore(dbStore),
+		NewMemorySessionStore(time.Hour),
+		limiter,
+		zap.NewNop(),
+	)
 	ctx := context.Background()
 
 	if _, _, err := svc.InitAdmin(ctx, InitAdminRequest{
@@ -313,7 +323,10 @@ func TestAuthService_UnknownUsernameConsumesAttempt(t *testing.T) {
 		}
 	}
 
-	if _, _, err := svc.Login(ctx, "192.0.2.9", LoginRequest{Username: "admin", Password: "password123"}); !errors.Is(err, ErrTooManyAttempts) {
+	if _, _, err := svc.Login(ctx, "192.0.2.9", LoginRequest{
+		Username: "admin",
+		Password: "password123",
+	}); !errors.Is(err, ErrTooManyAttempts) {
 		t.Fatalf("expected ErrTooManyAttempts after both failures, got %v", err)
 	}
 }
@@ -323,7 +336,12 @@ func TestAuthService_LoginAndRateLimiter(t *testing.T) {
 	userStore := NewUserStore(dbStore)
 	sessionStore := NewMemorySessionStore(1 * time.Hour)
 	limiter := NewRateLimiter(15*time.Minute, 3) // 3 attempts for test
-	svc := NewAuthService(userStore, sessionStore, limiter, zap.NewNop())
+	svc := NewAuthService(
+		userStore,
+		sessionStore,
+		limiter,
+		zap.NewNop(),
+	)
 	ctx := context.Background()
 
 	if _, _, err := svc.Login(ctx, "127.0.0.1", LoginRequest{

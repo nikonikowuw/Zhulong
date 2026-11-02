@@ -1,8 +1,6 @@
 package auth
 
-import (
-	"time"
-)
+import "time"
 
 // User represents the persisted single-user account in SQLite.
 type User struct {

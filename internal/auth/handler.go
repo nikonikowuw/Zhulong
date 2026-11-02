@@ -73,9 +73,7 @@ func (h *Handler) initHandler(c *gin.Context, req InitAdminRequest) (UserRespons
 	if err != nil {
 		return UserResponse{}, err
 	}
-	audithttp.TagActor(c, user.Username)
-	audithttp.TagTarget(c, "user:"+user.Username)
-	setSessionCookie(c, token, sessionCookieMaxAge(h.service))
+	h.completeAuthSession(c, user, token)
 	return user, nil
 }
 
@@ -99,10 +97,17 @@ func (h *Handler) loginHandler(c *gin.Context, req LoginRequest) (UserResponse, 
 	if err != nil {
 		return UserResponse{}, err
 	}
+	h.completeAuthSession(c, user, token)
+	return user, nil
+}
+
+// completeAuthSession records the now-authenticated identity and hands the
+// session cookie to the client. Shared by init and login so the audit tags cannot
+// drift apart: a missing TagActor is a silent gap in the audit trail.
+func (h *Handler) completeAuthSession(c *gin.Context, user UserResponse, token string) {
 	audithttp.TagActor(c, user.Username)
 	audithttp.TagTarget(c, "user:"+user.Username)
-	setSessionCookie(c, token, sessionCookieMaxAge(h.service))
-	return user, nil
+	writeSessionCookie(c, token, sessionCookieMaxAge(h.service))
 }
 
 // logoutHandler godoc

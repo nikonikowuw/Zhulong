@@ -52,12 +52,19 @@ func GetSessionToken(c *gin.Context) string {
 	if !ok {
 		return ""
 	}
-	token, _ := value.(string)
+	token, ok := value.(string)
+	if !ok {
+		return ""
+	}
 	return token
 }
 
-func writeUnauthorized(c *gin.Context) {
+// abortUnauthorized is the single exit for every unauthenticated request: it
+// writes the error envelope and stops the chain in one step, so no call site can
+// answer 401 and then keep running handlers.
+func abortUnauthorized(c *gin.Context) {
 	httputil.WriteError(c, errUnauthorized)
+	c.Abort()
 }
 
 // withoutCookieRenewal marks a route whose handler clears the session cookie
@@ -76,39 +83,28 @@ func renewsSessionCookie(c *gin.Context) bool {
 	if !ok {
 		return true
 	}
-	skipped, _ := value.(bool)
+	skipped, ok := value.(bool)
+	if !ok {
+		return true
+	}
 	return !skipped
 }
 
-// RequireAuth middleware verifies the session cookie and injects CurrentUser into context.
-//
-// It also attaches the authenticated actor to the standard request context, so
-// downstream audit records resolve the configured account name. The request IP
-// set by the audit middleware is preserved: authentication refines the
-// identity but never replaces the connection source.
+// RequireAuth middleware verifies the session cookie, injects CurrentUser into
+// the context, attaches the authenticated audit actor and keeps the sliding
+// cookie expiry in step with the session.
 func RequireAuth(service AuthService) gin.HandlerFunc {
 	if service == nil {
 		// Fail closed: a router wired without an auth service must expose no
 		// protected route, not panic on the first request.
-		return func(c *gin.Context) {
-			writeUnauthorized(c)
-			c.Abort()
-		}
+		return abortUnauthorized
 	}
 
 	maxAge := sessionCookieMaxAge(service)
 	return func(c *gin.Context) {
-		token, err := c.Cookie(SessionCookieName)
-		if err != nil || token == "" {
-			writeUnauthorized(c)
-			c.Abort()
-			return
-		}
-
-		sessionItem, ok := service.ValidateSession(token)
+		token, sessionItem, ok := authenticate(c, service)
 		if !ok {
-			writeUnauthorized(c)
-			c.Abort()
+			abortUnauthorized(c)
 			return
 		}
 
@@ -117,22 +113,47 @@ func RequireAuth(service AuthService) gin.HandlerFunc {
 			ID:       sessionItem.UserID,
 			Username: sessionItem.Username,
 		})
-
-		actor, found := audit.FromContext(c.Request.Context())
-		if !found {
-			actor = audit.Actor{IP: c.ClientIP(), Source: audit.SourceWeb}
-		}
-		if sessionItem.Username != "" {
-			actor.Username = sessionItem.Username
-		}
-		c.Request = c.Request.WithContext(audit.WithActor(c.Request.Context(), actor))
+		injectAuditActor(c, sessionItem)
 
 		// Valid sessions slide on access, so keep the cookie's browser lifetime in
 		// step with the server-side expiry.
 		if renewsSessionCookie(c) {
-			setSessionCookie(c, token, maxAge)
+			writeSessionCookie(c, token, maxAge)
 		}
 
 		c.Next()
 	}
+}
+
+// authenticate resolves the session cookie into a validated session. A missing
+// cookie and an unknown or expired token are reported identically, because the
+// client must not learn which of the two it holds.
+func authenticate(c *gin.Context, service AuthService) (string, SessionItem, bool) {
+	token, err := c.Cookie(SessionCookieName)
+	if err != nil || token == "" {
+		return "", SessionItem{}, false
+	}
+
+	sessionItem, ok := service.ValidateSession(token)
+	if !ok {
+		return "", SessionItem{}, false
+	}
+	return token, sessionItem, true
+}
+
+// injectAuditActor attaches the authenticated actor to the standard request
+// context, so downstream audit records resolve the configured account name. The
+// request IP set by the audit middleware is preserved: authentication refines the
+// identity but never replaces the connection source.
+func injectAuditActor(c *gin.Context, sessionItem SessionItem) {
+	ctx := c.Request.Context()
+
+	actor, found := audit.FromContext(ctx)
+	if !found {
+		actor = audit.Actor{IP: c.ClientIP(), Source: audit.SourceWeb}
+	}
+	if sessionItem.Username != "" {
+		actor.Username = sessionItem.Username
+	}
+	c.Request = c.Request.WithContext(audit.WithActor(ctx, actor))
 }

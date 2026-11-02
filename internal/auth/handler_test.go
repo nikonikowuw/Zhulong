@@ -20,10 +20,7 @@ import (
 func setupTestRouter(t *testing.T) (*gin.Engine, AuthService) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	dbStore := setupTestDB(t)
-	userStore := NewUserStore(dbStore)
-	sessionStore := NewMemorySessionStore(1 * time.Hour)
-	svc := NewAuthService(userStore, sessionStore, nil, zap.NewNop())
+	svc, _, _ := newTestService(t)
 	handler := NewHandler(svc)
 
 	router := gin.New()
@@ -43,7 +40,7 @@ func TestAuthHandler_Status(t *testing.T) {
 	router, _ := setupTestRouter(t)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodGet, "/api/v1/auth/status", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/status", nil)
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -112,8 +109,16 @@ func TestAuthHandler_ValidationDetailsUseJSONFieldsAndLocalizedCodes(t *testing.
 			if recorder.Code != http.StatusUnprocessableEntity || response.Code != "VALIDATION_FAILED" {
 				t.Fatalf("unexpected response status/code: %d %+v", recorder.Code, response)
 			}
-			if len(response.Details) != 1 || response.Details[0].Field != test.field || response.Details[0].Code != test.code || response.Details[0].Message != test.message {
-				t.Fatalf("unexpected validation details: %+v", response.Details)
+			if len(response.Details) != 1 {
+				t.Fatalf("expected exactly one detail, got %+v", response.Details)
+			}
+
+			detail := response.Details[0]
+			matchesExpected := detail.Field == test.field &&
+				detail.Code == test.code &&
+				detail.Message == test.message
+			if !matchesExpected {
+				t.Fatalf("unexpected validation detail: %+v", detail)
 			}
 		})
 	}
@@ -128,18 +133,33 @@ func findSessionCookie(cookies []*http.Cookie) *http.Cookie {
 	return nil
 }
 
-func postJSON(t *testing.T, router *gin.Engine, path string, payload any, language string) *httptest.ResponseRecorder {
+// jsonPost describes a JSON body request. Language and RemoteAddr are optional:
+// the former drives error localization, the latter is the connection source the
+// audit middleware records instead of a header.
+type jsonPost struct {
+	path       string
+	payload    any
+	language   string
+	remoteAddr string
+}
+
+func postJSON(t *testing.T, router *gin.Engine, post jsonPost) *httptest.ResponseRecorder {
 	t.Helper()
-	body, err := json.Marshal(payload)
+	body, err := json.Marshal(post.payload)
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
 	}
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+
+	request := httptest.NewRequest(http.MethodPost, post.path, bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
-	if language != "" {
-		request.Header.Set("Accept-Language", language)
+	if post.language != "" {
+		request.Header.Set("Accept-Language", post.language)
 	}
+	if post.remoteAddr != "" {
+		request.RemoteAddr = post.remoteAddr
+	}
+
+	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	return recorder
 }
@@ -174,14 +194,14 @@ func TestAuthHandler_InitAndLoginFlow(t *testing.T) {
 	t.Run("init rejects a password mismatch", func(t *testing.T) {
 		mismatch := credentials
 		mismatch.ConfirmPassword = "otherPassword"
-		w := postJSON(t, router, "/api/v1/auth/init", mismatch, "")
+		w := postJSON(t, router, jsonPost{path: "/api/v1/auth/init", payload: mismatch})
 		if w.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("expected 422 for mismatch, got %d", w.Code)
 		}
 	})
 
 	t.Run("init succeeds and issues a hardened cookie", func(t *testing.T) {
-		w := postJSON(t, router, "/api/v1/auth/init", credentials, "")
+		w := postJSON(t, router, jsonPost{path: "/api/v1/auth/init", payload: credentials})
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 		}
@@ -206,7 +226,7 @@ func TestAuthHandler_InitAndLoginFlow(t *testing.T) {
 	})
 
 	t.Run("second init is rejected", func(t *testing.T) {
-		w := postJSON(t, router, "/api/v1/auth/init", credentials, "")
+		w := postJSON(t, router, jsonPost{path: "/api/v1/auth/init", payload: credentials})
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("expected 403 for duplicate init, got %d", w.Code)
 		}
@@ -289,10 +309,13 @@ func TestAuthHandler_InitAndLoginFlow(t *testing.T) {
 	})
 
 	t.Run("login succeeds with the configured credentials", func(t *testing.T) {
-		w := postJSON(t, router, "/api/v1/auth/login", LoginRequest{
-			Username: credentials.Username,
-			Password: credentials.Password,
-		}, "")
+		w := postJSON(t, router, jsonPost{
+			path: "/api/v1/auth/login",
+			payload: LoginRequest{
+				Username: credentials.Username,
+				Password: credentials.Password,
+			},
+		})
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200 on login, got %d: %s", w.Code, w.Body.String())
 		}
@@ -308,11 +331,15 @@ func TestAuthHandler_InitRejectsPasswordBeyondBcryptLimit(t *testing.T) {
 	router, _ := setupTestRouter(t)
 	password := strings.Repeat("密", 64) // 64 runes, 192 bytes
 
-	w := postJSON(t, router, "/api/v1/auth/init", InitAdminRequest{
-		Username:        "admin",
-		Password:        password,
-		ConfirmPassword: password,
-	}, "zh-Hans")
+	w := postJSON(t, router, jsonPost{
+		path: "/api/v1/auth/init",
+		payload: InitAdminRequest{
+			Username:        "admin",
+			Password:        password,
+			ConfirmPassword: password,
+		},
+		language: "zh-Hans",
+	})
 
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
@@ -335,21 +362,25 @@ func TestAuthHandler_InitRejectsPasswordBeyondBcryptLimit(t *testing.T) {
 
 func TestAuthHandler_AuditLogging(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	dbStore := setupTestDB(t)
-	userStore := NewUserStore(dbStore)
-	sessionStore := NewMemorySessionStore(1 * time.Hour)
-	svc := NewAuthService(userStore, sessionStore, nil, zap.NewNop())
+	svc, dbStore, _ := newTestService(t)
 	handler := NewHandler(svc)
 
 	// Wire the real audit middleware so the assertions cover the actual
 	// declarative path rather than a test double.
 	auditSvc := audit.NewService(audit.NewStore(dbStore), zap.NewNop(), audit.Config{
-		BufferSize: 100, BatchSize: 10, FlushInterval: 5 * time.Millisecond, MaxEntries: 1000,
+		BufferSize:    100,
+		BatchSize:     10,
+		FlushInterval: 5 * time.Millisecond,
+		MaxEntries:    1000,
 	})
 	if err := auditSvc.Start(context.Background()); err != nil {
 		t.Fatalf("start audit service: %v", err)
 	}
-	t.Cleanup(func() { _ = auditSvc.Stop(context.Background()) })
+	t.Cleanup(func() {
+		if err := auditSvc.Stop(context.Background()); err != nil {
+			t.Errorf("stop audit service: %v", err)
+		}
+	})
 
 	router := gin.New()
 	if err := router.SetTrustedProxies(nil); err != nil {
@@ -359,50 +390,39 @@ func TestAuthHandler_AuditLogging(t *testing.T) {
 	api.Use(audithttp.Middleware(auditSvc))
 	handler.RegisterRoutes(api)
 
-	// 1. InitAdmin
-	initBody, _ := json.Marshal(InitAdminRequest{
+	const clientAddr = "192.168.7.7:5555"
+	credentials := InitAdminRequest{
 		Username:        "admin",
 		Password:        "password123",
 		ConfirmPassword: "password123",
+	}
+
+	initResponse := postJSON(t, router, jsonPost{
+		path:       "/api/v1/auth/init",
+		payload:    credentials,
+		remoteAddr: clientAddr,
 	})
-	// A real connection always carries a remote address; the audit IP comes from
-	// it, so the test sets one explicitly.
-	const clientAddr = "192.168.7.7:5555"
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/auth/init", bytes.NewReader(initBody))
-	req.Header.Set("Content-Type", "application/json")
-	req.RemoteAddr = clientAddr
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if initResponse.Code != http.StatusOK {
+		t.Fatalf("expected 200 on init, got %d", initResponse.Code)
 	}
 
-	// 2. Failed Login
-	badLogin, _ := json.Marshal(LoginRequest{Username: "admin", Password: "wrong"})
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(badLogin))
-	req.Header.Set("Content-Type", "application/json")
-	req.RemoteAddr = clientAddr
-	router.ServeHTTP(w, req)
+	postJSON(t, router, jsonPost{
+		path:       "/api/v1/auth/login",
+		payload:    LoginRequest{Username: "admin", Password: "wrong"},
+		remoteAddr: clientAddr,
+	})
+	loginResponse := postJSON(t, router, jsonPost{
+		path:       "/api/v1/auth/login",
+		payload:    LoginRequest{Username: "admin", Password: "password123"},
+		remoteAddr: clientAddr,
+	})
 
-	// 3. Successful Login
-	goodLogin, _ := json.Marshal(LoginRequest{Username: "admin", Password: "password123"})
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(goodLogin))
-	req.Header.Set("Content-Type", "application/json")
-	req.RemoteAddr = clientAddr
-	router.ServeHTTP(w, req)
-	cookies := w.Result().Cookies()
-
-	// 4. Logout
-	w = httptest.NewRecorder()
-	req, _ = http.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
-	req.RemoteAddr = clientAddr
-	for _, c := range cookies {
-		req.AddCookie(c)
+	logoutRequest := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	logoutRequest.RemoteAddr = clientAddr
+	for _, cookie := range loginResponse.Result().Cookies() {
+		logoutRequest.AddCookie(cookie)
 	}
-	router.ServeHTTP(w, req)
+	router.ServeHTTP(httptest.NewRecorder(), logoutRequest)
 
 	// Drain the asynchronous queue before asserting.
 	stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -419,10 +439,18 @@ func TestAuthHandler_AuditLogging(t *testing.T) {
 		t.Fatalf("expected 4 audit entries, got %d", total)
 	}
 
-	// Entries are returned newest first, so compare by action.
+	assertAuditEntries(t, entries)
+}
+
+// assertAuditEntries checks the four entries the auth routes must produce. The
+// failed login shares its action with the successful one, so both are located by
+// status instead of by a map key.
+func assertAuditEntries(t *testing.T, entries []audit.AuditLog) {
+	t.Helper()
+
 	byAction := make(map[string]audit.AuditLog, len(entries))
-	for _, e := range entries {
-		byAction[e.Action] = e
+	for _, entry := range entries {
+		byAction[entry.Action] = entry
 	}
 
 	initEntry, ok := byAction[audit.ActionAuthInit]
@@ -436,17 +464,18 @@ func TestAuthHandler_AuditLogging(t *testing.T) {
 		t.Errorf("expected the connection source IP, got %q", initEntry.IP)
 	}
 
-	// The failed login is overwritten by the successful one in the map, so
-	// assert both explicitly.
 	var failedLogin, okLogin bool
-	for _, e := range entries {
-		switch {
-		case e.Action == audit.ActionAuthLogin && e.Status == audit.StatusFailed:
+	for _, entry := range entries {
+		if entry.Action != audit.ActionAuthLogin {
+			continue
+		}
+		switch entry.Status {
+		case audit.StatusFailed:
 			failedLogin = true
-			if e.Username != audit.UsernameAnonymous {
-				t.Errorf("failed login must stay anonymous, got %q", e.Username)
+			if entry.Username != audit.UsernameAnonymous {
+				t.Errorf("failed login must stay anonymous, got %q", entry.Username)
 			}
-		case e.Action == audit.ActionAuthLogin && e.Status == audit.StatusSuccess:
+		case audit.StatusSuccess:
 			okLogin = true
 		}
 	}
