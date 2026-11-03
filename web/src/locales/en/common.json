@@ -96,5 +96,22 @@
     "user": "user",
     "task": "task",
     "camera": "camera"
+  },
+  "appearance": {
+    "title": "Appearance & Display",
+    "desc": "Customize the console theme mode and primary typography for day and darkroom operation environments.",
+    "themeTitle": "Theme Mode",
+    "themeDesc": "Select light or dark styling for the console interface. Dark mode is recommended for night monitoring and server room environments.",
+    "light": "Light",
+    "lightHint": "Daylight",
+    "dark": "Dark",
+    "darkHint": "Darkroom",
+    "fontTitle": "Console Typography",
+    "fontDesc": "Choose the typeface used across dashboard displays. Preview metrics and glyph legibility in real time on the right.",
+    "fontSelectLabel": "Select Font Family",
+    "fontNote": "Manrope and Inter are recommended for optimal tabular numbers and crisp engineering readability.",
+    "previewTitle": "Typographic Preview",
+    "submit": "Save Preferences",
+    "saveSuccess": "Appearance preferences updated successfully"
   }
 }

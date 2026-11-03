@@ -120,7 +120,7 @@ export function SettingsNetwork() {
     <ContentSection
       title={t('title')}
       desc={t('description')}
-      className='max-w-5xl'
+      className='w-full'
     >
       <div className='space-y-4'>
         {/* 工具栏与操作入口 */}

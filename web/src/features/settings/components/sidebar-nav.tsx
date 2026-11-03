@@ -57,28 +57,35 @@ export function SidebarNav({ className, items, ...props }: SidebarNavProps) {
         className='hidden w-full min-w-40 bg-background px-1 py-2 md:block'
       >
         <nav
-          className={cn(
-            'flex space-x-2 py-1 lg:flex-col lg:space-y-1 lg:space-x-0',
-            className
-          )}
+          className={cn('flex gap-1 py-1 lg:flex-col', className)}
           {...props}
         >
-          {items.map((item) => (
-            <Link
-              key={item.href}
-              to={item.href}
-              className={cn(
-                buttonVariants({ variant: 'ghost' }),
-                pathname === item.href
-                  ? 'bg-muted hover:bg-accent'
-                  : 'hover:bg-accent hover:underline',
-                'justify-start'
-              )}
-            >
-              <span className='me-2'>{item.icon}</span>
-              {item.title}
-            </Link>
-          ))}
+          {items.map((item) => {
+            const isActive = pathname === item.href
+            return (
+              <Link
+                key={item.href}
+                to={item.href}
+                className={cn(
+                  buttonVariants({ variant: 'ghost' }),
+                  isActive
+                    ? 'bg-muted font-medium text-foreground shadow-2xs'
+                    : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                  'justify-start gap-2.5 px-3 py-2 text-sm transition-colors'
+                )}
+              >
+                <span
+                  className={cn(
+                    'shrink-0',
+                    isActive ? 'text-primary' : 'text-muted-foreground'
+                  )}
+                >
+                  {item.icon}
+                </span>
+                <span>{item.title}</span>
+              </Link>
+            )
+          })}
         </nav>
       </ScrollArea>
     </>

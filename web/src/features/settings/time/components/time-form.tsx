@@ -456,17 +456,19 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
 
           {/* 手动模式特有表单项 */}
           {selectedMode === 'manual' && (
-            <div className='space-y-4 pt-2'>
+            <div className='grid grid-cols-1 gap-4 pt-2 lg:grid-cols-2'>
               {/* 一键同步浏览器时间操作横幅 */}
-              <div className='flex flex-col items-start justify-between gap-4 rounded-lg border border-primary/20 bg-primary/5 p-4 sm:flex-row sm:items-center'>
-                <div className='space-y-1'>
+              <div className='flex flex-col justify-between gap-4 rounded-lg border border-primary/20 bg-primary/5 p-4'>
+                <div className='space-y-1.5'>
                   <div className='flex items-center gap-2 text-sm font-semibold text-primary'>
-                    <Laptop className='h-4 w-4' />
-                    {t('manual.browserSyncTitle', {
-                      defaultValue: '一键同步浏览器时间 (离线推荐)',
-                    })}
+                    <Laptop className='h-4 w-4 shrink-0' />
+                    <span>
+                      {t('manual.browserSyncTitle', {
+                        defaultValue: '一键同步浏览器时间 (离线推荐)',
+                      })}
+                    </span>
                   </div>
-                  <p className='text-xs text-muted-foreground'>
+                  <p className='text-xs leading-relaxed text-muted-foreground'>
                     {t('manual.browserSyncDesc', {
                       defaultValue:
                         '现场工程人员电脑直连边缘设备时，以毫秒级精度同步当前客户端时间并写入硬件 RTC。',
@@ -479,7 +481,7 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
                   size='sm'
                   onClick={handleSyncBrowserTime}
                   disabled={isManualSyncing}
-                  className='shrink-0 gap-1.5'
+                  className='w-full shrink-0 gap-1.5 sm:w-auto'
                 >
                   <Clock className='h-3.5 w-3.5' />
                   {t('manual.syncBrowserBtn', {
@@ -489,37 +491,39 @@ function TimeFormInner({ status, onRefresh }: TimeFormInnerProps) {
               </div>
 
               {/* 手动输入指定时间 */}
-              <div className='space-y-2 rounded-lg border p-4'>
-                <FormLabel className='text-sm font-medium'>
-                  {t('manual.customTimeLabel', {
-                    defaultValue: '手动输入指定时间',
-                  })}
-                </FormLabel>
-                <div className='flex flex-wrap items-center gap-2'>
-                  <Input
-                    type='datetime-local'
-                    value={customTime}
-                    onChange={(e) => setCustomTime(e.target.value)}
-                    className='max-w-xs'
-                  />
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='sm'
-                    onClick={handleApplyCustomTime}
-                    disabled={isManualSyncing || !customTime}
-                  >
-                    {t('manual.applyCustomBtn', {
-                      defaultValue: '应用指定时间',
+              <div className='flex flex-col justify-between gap-4 rounded-lg border p-4'>
+                <div className='space-y-2'>
+                  <FormLabel className='text-sm font-medium'>
+                    {t('manual.customTimeLabel', {
+                      defaultValue: '手动输入指定时间',
                     })}
-                  </Button>
+                  </FormLabel>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <Input
+                      type='datetime-local'
+                      value={customTime}
+                      onChange={(e) => setCustomTime(e.target.value)}
+                      className='max-w-xs'
+                    />
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      onClick={handleApplyCustomTime}
+                      disabled={isManualSyncing || !customTime}
+                    >
+                      {t('manual.applyCustomBtn', {
+                        defaultValue: '应用指定时间',
+                      })}
+                    </Button>
+                  </div>
+                  <p className='text-xs leading-relaxed text-muted-foreground'>
+                    {t('manual.desc', {
+                      defaultValue:
+                        '手动设定的时间将无视 Panic 门限以 Step 阶跃方式直接写入系统内核并回写 RTC。',
+                    })}
+                  </p>
                 </div>
-                <p className='text-xs text-muted-foreground'>
-                  {t('manual.desc', {
-                    defaultValue:
-                      '手动设定的时间将无视 Panic 门限以 Step 阶跃方式直接写入系统内核并回写 RTC。',
-                  })}
-                </p>
               </div>
             </div>
           )}

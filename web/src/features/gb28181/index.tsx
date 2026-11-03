@@ -122,7 +122,7 @@ export function SettingsGb28181() {
     <ContentSection
       title={t('title')}
       desc={t('description')}
-      className='max-w-5xl'
+      className='w-full'
     >
       <div className='space-y-6'>
         <Gb28181RuntimePanel

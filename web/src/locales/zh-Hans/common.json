@@ -96,5 +96,22 @@
     "user": "位用户",
     "task": "个任务",
     "camera": "台摄像机"
+  },
+  "appearance": {
+    "title": "外观与显示",
+    "desc": "定制边缘运维控制台的主题视觉模式与核心排版字体，适配日间明亮与暗光机房运维场景。",
+    "themeTitle": "主题模式",
+    "themeDesc": "选择控制台界面的明暗风格，暗色模式推荐在机房或夜间监控环境中使用。",
+    "light": "浅色明亮 (Light)",
+    "lightHint": "日间环境",
+    "dark": "暗色深邃 (Dark)",
+    "darkHint": "机房暗光",
+    "fontTitle": "控制台排版字体",
+    "fontDesc": "选择控制台显示采用的字体族，右侧可即时预览字形质感与数字等宽效果。",
+    "fontSelectLabel": "界面字体选择",
+    "fontNote": "建议选用 Manrope 或 Inter 以获得最佳的数字辨识度与现代工程仪表质感。",
+    "previewTitle": "即时排版效果预览",
+    "submit": "保存外观偏好",
+    "saveSuccess": "外观偏好设置已更新并生效"
   }
 }

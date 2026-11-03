@@ -96,5 +96,22 @@
     "user": "位使用者",
     "task": "個任務",
     "camera": "台攝影機"
+  },
+  "appearance": {
+    "title": "外觀與顯示",
+    "desc": "自訂邊緣維運主控台的主題視覺模式與核心排版字型，適配日間明亮與暗光機房維運場景。",
+    "themeTitle": "主題模式",
+    "themeDesc": "選擇主控台介面的明暗風格，暗色模式推薦在機房或夜間監控環境中使用。",
+    "light": "淺色明亮 (Light)",
+    "lightHint": "日間環境",
+    "dark": "暗色深邃 (Dark)",
+    "darkHint": "機房暗光",
+    "fontTitle": "主控台排版字型",
+    "fontDesc": "選擇主控台顯示採用的字型族，右側可即時預覽字形質感與數字等寬效果。",
+    "fontSelectLabel": "介面字型選擇",
+    "fontNote": "建議選用 Manrope 或 Inter 以獲得最佳的數字辨識度與現代工程儀表質感。",
+    "previewTitle": "即時排版效果預覽",
+    "submit": "儲存外觀偏好",
+    "saveSuccess": "外觀偏好設定已更新並生效"
   }
 }
