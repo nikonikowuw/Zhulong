@@ -1,0 +1,105 @@
+import { z } from 'zod'
+
+export const hostInfoSchema = z.object({
+  hostname: z.string(),
+  os: z.string(),
+  arch: z.string(),
+  kernelVersion: z.string(),
+  uptimeSeconds: z.number(),
+  bootTime: z.string(),
+  loadAvg: z.tuple([z.number(), z.number(), z.number()]),
+})
+
+export const cpuStatusSchema = z.object({
+  modelName: z.string(),
+  cores: z.number(),
+  usagePercent: z.number(),
+  coreUsages: z.array(z.number()),
+  temperature: z.number(),
+})
+
+export const memoryStatusSchema = z.object({
+  totalBytes: z.number(),
+  usedBytes: z.number(),
+  availableBytes: z.number(),
+  freeBytes: z.number(),
+  buffersBytes: z.number(),
+  cachedBytes: z.number(),
+  usedPercent: z.number(),
+  swapTotalBytes: z.number(),
+  swapUsedBytes: z.number(),
+  swapUsedPercent: z.number(),
+})
+
+export const storageMountStatusSchema = z.object({
+  mountPoint: z.string(),
+  device: z.string(),
+  fsType: z.string(),
+  totalBytes: z.number(),
+  usedBytes: z.number(),
+  freeBytes: z.number(),
+  usedPercent: z.number(),
+})
+
+export const networkInterfaceStatusSchema = z.object({
+  interface: z.string(),
+  rxBytesRate: z.number(),
+  txBytesRate: z.number(),
+  rxTotalBytes: z.number(),
+  txTotalBytes: z.number(),
+  isUp: z.boolean(),
+})
+
+export const npuStatusSchema = z.object({
+  supported: z.boolean(),
+  name: z.string(),
+  loadPercent: z.number(),
+  coreLoads: z.array(z.number()),
+  temperature: z.number(),
+})
+
+export const temperatureInfoSchema = z.object({
+  label: z.string(),
+  temperature: z.number(),
+})
+
+export const heterogeneousStatusSchema = z.object({
+  npu: npuStatusSchema,
+  temperatures: z.array(temperatureInfoSchema),
+})
+
+export const hardwareHistoryPointSchema = z.object({
+  timestamp: z.string(),
+  cpuUsagePercent: z.number(),
+  memUsagePercent: z.number(),
+  npuLoadPercent: z.number(),
+  netRxRate: z.number(),
+  netTxRate: z.number(),
+  temperature: z.number(),
+})
+
+export const systemHardwareResponseSchema = z.object({
+  updatedAt: z.string(),
+  host: hostInfoSchema,
+  cpu: cpuStatusSchema,
+  memory: memoryStatusSchema,
+  storage: z.array(storageMountStatusSchema),
+  network: z.array(networkInterfaceStatusSchema),
+  heterogeneous: heterogeneousStatusSchema,
+  history: z.array(hardwareHistoryPointSchema),
+})
+
+export type HostInfo = z.infer<typeof hostInfoSchema>
+export type CPUStatus = z.infer<typeof cpuStatusSchema>
+export type MemoryStatus = z.infer<typeof memoryStatusSchema>
+export type StorageMountStatus = z.infer<typeof storageMountStatusSchema>
+export type NetworkInterfaceStatus = z.infer<
+  typeof networkInterfaceStatusSchema
+>
+export type NPUStatus = z.infer<typeof npuStatusSchema>
+export type TemperatureInfo = z.infer<typeof temperatureInfoSchema>
+export type HeterogeneousStatus = z.infer<typeof heterogeneousStatusSchema>
+export type HardwareHistoryPoint = z.infer<typeof hardwareHistoryPointSchema>
+export type SystemHardwareResponse = z.infer<
+  typeof systemHardwareResponseSchema
+>

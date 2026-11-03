@@ -14,6 +14,7 @@ import {
   Workflow,
   Map,
   ScanFace,
+  Activity,
 } from 'lucide-react'
 import { ZhulongLogo } from '@/assets/zhulong-logo'
 import { type SidebarData } from '../types'
@@ -104,6 +105,11 @@ export const sidebarData: SidebarData = {
               title: 'Storage',
               url: '/settings/storage',
               icon: HardDrive,
+            },
+            {
+              title: 'Hardware',
+              url: '/settings/system',
+              icon: Activity,
             },
             {
               title: 'GB28181',

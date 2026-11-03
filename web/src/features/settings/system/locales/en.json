@@ -1,0 +1,64 @@
+{
+  "page": {
+    "title": "System & Hardware Telemetry",
+    "desc": "Real-time monitoring of CPU, RAM, disk storage, network throughput, NPU acceleration, and thermal trends."
+  },
+  "header": {
+    "hostname": "Hostname",
+    "osArch": "OS & Architecture",
+    "kernel": "Kernel",
+    "uptime": "Uptime",
+    "loadAvg": "Load Average (1/5/15m)",
+    "refresh": "Refresh",
+    "refreshing": "Refreshing...",
+    "autoRefreshing": "Live updating (2.5s)"
+  },
+  "cards": {
+    "cpu": "CPU Utilization",
+    "cpuDesc": "{{cores}} Cores | {{temp}}°C",
+    "memory": "Physical RAM",
+    "memoryDesc": "Used {{used}} / Total {{total}}",
+    "npu": "NPU Accelerator",
+    "npuDesc": "{{name}} | {{temp}}°C",
+    "npuUnsupported": "No NPU coprocessor detected",
+    "npuNoLoad": "Idle (No active inference models)",
+    "network": "Network Throughput",
+    "networkDesc": "↓ {{rx}} | ↑ {{tx}}",
+    "storage": "Primary Storage",
+    "storageDesc": "Used {{used}} / Free {{free}}"
+  },
+  "charts": {
+    "title": "Short-term Historical Trends",
+    "tabCompute": "Compute Load (CPU / NPU)",
+    "tabMemory": "Memory Usage",
+    "tabNetwork": "Network Throughput",
+    "tabTemperature": "Thermometer",
+    "cpuLoad": "CPU Total Load",
+    "npuLoad": "NPU Compute Load",
+    "memoryUsage": "RAM Usage",
+    "rxRate": "Download (Rx)",
+    "txRate": "Upload (Tx)",
+    "temperature": "Peak Temperature",
+    "emptyHistory": "Accumulating telemetry history..."
+  },
+  "details": {
+    "storageTitle": "Filesystem Mounts",
+    "storageColMount": "Mount Path",
+    "storageColDevice": "Block Device",
+    "storageColFSType": "FS Type",
+    "storageColTotal": "Capacity",
+    "storageColUsed": "Used",
+    "storageColFree": "Free",
+    "storageColPercent": "Usage",
+    "networkTitle": "Network Interfaces",
+    "networkColIface": "Interface",
+    "networkColStatus": "Link State",
+    "networkColRxRate": "Download Rate",
+    "networkColTxRate": "Upload Rate",
+    "networkColRxTotal": "Total Received",
+    "networkColTxTotal": "Total Transmitted",
+    "thermalTitle": "Thermal Zones & Sensors",
+    "up": "Connected (UP)",
+    "down": "Down (DOWN)"
+  }
+}

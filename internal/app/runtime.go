@@ -73,6 +73,11 @@ type systemTimeLifecycle interface {
 	Stop(context.Context) error
 }
 
+type systemInfoLifecycle interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
+
 type storageLifecycle interface {
 	Start(context.Context) error
 	Stop(context.Context) error
@@ -117,6 +122,7 @@ type lifecycleRuntime struct {
 	audit       auditLifecycle
 	network     networkLifecycle
 	systemTime  systemTimeLifecycle
+	systemInfo  systemInfoLifecycle
 	storage     storageLifecycle
 	algorithm   algorithmLifecycle
 	person      personLifecycle
@@ -146,6 +152,7 @@ type lifecycleRuntime struct {
 	auditReady          bool
 	networkReady        bool
 	systemTimeReady     bool
+	systemInfoReady     bool
 	storageReady        bool
 	algorithmReady      bool
 	personReady         bool
@@ -172,6 +179,7 @@ type runtimeParams struct {
 	Audit       auditLifecycle       `optional:"true"`
 	Network     networkLifecycle     `optional:"true"`
 	SystemTime  systemTimeLifecycle  `optional:"true"`
+	SystemInfo  systemInfoLifecycle  `optional:"true"`
 	Storage     storageLifecycle     `optional:"true"`
 	Algorithm   algorithmLifecycle   `optional:"true"`
 	Person      personLifecycle      `optional:"true"`
@@ -201,6 +209,7 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		audit:       p.Audit,
 		network:     p.Network,
 		systemTime:  p.SystemTime,
+		systemInfo:  p.SystemInfo,
 		storage:     p.Storage,
 		algorithm:   p.Algorithm,
 		person:      p.Person,
@@ -276,6 +285,13 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 			r.degradedStart("system_time", err)
 		}
 		r.systemTimeReady = true
+	}
+
+	if r.systemInfo != nil {
+		if err := r.systemInfo.Start(ctx); err != nil {
+			r.degradedStart("system_info", err)
+		}
+		r.systemInfoReady = true
 	}
 
 	if r.storage != nil {
@@ -439,6 +455,7 @@ func (r *lifecycleRuntime) stopSequence() []func(context.Context) error {
 		r.closeSpatial,
 		r.closeRecordAndSnapshot,
 		r.closeStorage,
+		r.closeSystemInfo,
 		r.closeSystemTime,
 		r.closeNetwork,
 		r.closeAudit,
@@ -692,6 +709,19 @@ func (r *lifecycleRuntime) closeSnapshot() {
 	if r.snapshot != nil {
 		r.snapshot.Stop()
 	}
+}
+
+func (r *lifecycleRuntime) closeSystemInfo(ctx context.Context) error {
+	if !r.systemInfoReady {
+		return nil
+	}
+	r.systemInfoReady = false
+	if r.systemInfo != nil {
+		if err := r.systemInfo.Stop(ctx); err != nil {
+			return fmt.Errorf("stop system info service: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *lifecycleRuntime) closeSystemTime(ctx context.Context) error {

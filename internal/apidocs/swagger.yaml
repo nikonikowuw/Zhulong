@@ -1863,6 +1863,168 @@ definitions:
     - recordingsRetentionDays
     - snapshotsRetentionDays
     type: object
+  systeminfo.CPUStatus:
+    properties:
+      coreUsages:
+        items:
+          type: number
+        type: array
+      cores:
+        type: integer
+      modelName:
+        type: string
+      temperature:
+        type: number
+      usagePercent:
+        type: number
+    type: object
+  systeminfo.HardwareHistoryPoint:
+    properties:
+      cpuUsagePercent:
+        type: number
+      memUsagePercent:
+        type: number
+      netRxRate:
+        type: integer
+      netTxRate:
+        type: integer
+      npuLoadPercent:
+        type: number
+      temperature:
+        type: number
+      timestamp:
+        type: string
+    type: object
+  systeminfo.HeterogeneousStatus:
+    properties:
+      npu:
+        $ref: '#/definitions/systeminfo.NPUStatus'
+      temperatures:
+        items:
+          $ref: '#/definitions/systeminfo.TemperatureInfo'
+        type: array
+    type: object
+  systeminfo.HostInfo:
+    properties:
+      arch:
+        type: string
+      bootTime:
+        type: string
+      hostname:
+        type: string
+      kernelVersion:
+        type: string
+      loadAvg:
+        items:
+          type: number
+        type: array
+      os:
+        type: string
+      uptimeSeconds:
+        type: integer
+    type: object
+  systeminfo.MemoryStatus:
+    properties:
+      availableBytes:
+        type: integer
+      buffersBytes:
+        type: integer
+      cachedBytes:
+        type: integer
+      freeBytes:
+        type: integer
+      swapTotalBytes:
+        type: integer
+      swapUsedBytes:
+        type: integer
+      swapUsedPercent:
+        type: number
+      totalBytes:
+        type: integer
+      usedBytes:
+        type: integer
+      usedPercent:
+        type: number
+    type: object
+  systeminfo.NPUStatus:
+    properties:
+      coreLoads:
+        items:
+          type: number
+        type: array
+      loadPercent:
+        type: number
+      name:
+        type: string
+      supported:
+        type: boolean
+      temperature:
+        type: number
+    type: object
+  systeminfo.NetworkInterfaceStatus:
+    properties:
+      interface:
+        type: string
+      isUp:
+        type: boolean
+      rxBytesRate:
+        type: integer
+      rxTotalBytes:
+        type: integer
+      txBytesRate:
+        type: integer
+      txTotalBytes:
+        type: integer
+    type: object
+  systeminfo.StorageMountStatus:
+    properties:
+      device:
+        type: string
+      freeBytes:
+        type: integer
+      fsType:
+        type: string
+      mountPoint:
+        type: string
+      totalBytes:
+        type: integer
+      usedBytes:
+        type: integer
+      usedPercent:
+        type: number
+    type: object
+  systeminfo.SystemHardwareResponse:
+    properties:
+      cpu:
+        $ref: '#/definitions/systeminfo.CPUStatus'
+      heterogeneous:
+        $ref: '#/definitions/systeminfo.HeterogeneousStatus'
+      history:
+        items:
+          $ref: '#/definitions/systeminfo.HardwareHistoryPoint'
+        type: array
+      host:
+        $ref: '#/definitions/systeminfo.HostInfo'
+      memory:
+        $ref: '#/definitions/systeminfo.MemoryStatus'
+      network:
+        items:
+          $ref: '#/definitions/systeminfo.NetworkInterfaceStatus'
+        type: array
+      storage:
+        items:
+          $ref: '#/definitions/systeminfo.StorageMountStatus'
+        type: array
+      updatedAt:
+        type: string
+    type: object
+  systeminfo.TemperatureInfo:
+    properties:
+      label:
+        type: string
+      temperature:
+        type: number
+    type: object
   systemtime.ManualTimeRequest:
     properties:
       targetTime:
@@ -4527,6 +4689,30 @@ paths:
       summary: Query a cross-camera spatio-temporal trajectory
       tags:
       - spatial
+  /system/hardware:
+    get:
+      description: |-
+        Retrieves current CPU, memory, storage, network rates, NPU load,
+        temperatures, and recent time-series history points.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/systeminfo.SystemHardwareResponse'
+              type: object
+        "500":
+          description: INTERNAL_ERROR
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Get system hardware telemetry and trend history
+      tags:
+      - system
   /system/jobs:
     get:
       parameters:

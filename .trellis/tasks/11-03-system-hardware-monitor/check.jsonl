@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Ensure race-free Go test and vet pass"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Ensure frontend lint, typecheck and test pass"}

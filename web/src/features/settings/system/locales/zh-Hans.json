@@ -1,0 +1,64 @@
+{
+  "page": {
+    "title": "系统硬件与算力状态",
+    "desc": "实时监测边缘主机 CPU、内存、磁盘存储、网络速率以及 NPU 异构加速算力与核心温度趋势。"
+  },
+  "header": {
+    "hostname": "主机名",
+    "osArch": "系统架构",
+    "kernel": "内核版本",
+    "uptime": "开机时长",
+    "loadAvg": "系统平均负载 (1/5/15m)",
+    "refresh": "立即刷新",
+    "refreshing": "刷新中...",
+    "autoRefreshing": "自动刷新中 (2.5s)"
+  },
+  "cards": {
+    "cpu": "CPU 使用率",
+    "cpuDesc": "{{cores}} 核 | {{temp}}°C",
+    "memory": "系统物理内存",
+    "memoryDesc": "已用 {{used}} / 总计 {{total}}",
+    "npu": "NPU 异构算力",
+    "npuDesc": "{{name}} | {{temp}}°C",
+    "npuUnsupported": "未检测到 NPU 加速硬件",
+    "npuNoLoad": "当前无加速模型负载",
+    "network": "实时网络吞吐",
+    "networkDesc": "↓ {{rx}} | ↑ {{tx}}",
+    "storage": "系统主存储",
+    "storageDesc": "已用 {{used}} / 余量 {{free}}"
+  },
+  "charts": {
+    "title": "短期时序走势",
+    "tabCompute": "计算负载 (CPU / NPU)",
+    "tabMemory": "内存走势",
+    "tabNetwork": "网络吞吐速率",
+    "tabTemperature": "芯片温度",
+    "cpuLoad": "CPU 总体负载",
+    "npuLoad": "NPU 算力负载",
+    "memoryUsage": "物理内存占用率",
+    "rxRate": "下行吞吐 (Rx)",
+    "txRate": "上行吞吐 (Tx)",
+    "temperature": "芯片最高温",
+    "emptyHistory": "历史时序数据采集积累中..."
+  },
+  "details": {
+    "storageTitle": "存储挂载分区详情",
+    "storageColMount": "挂载路径",
+    "storageColDevice": "底层设备",
+    "storageColFSType": "文件系统",
+    "storageColTotal": "总容量",
+    "storageColUsed": "已用容量",
+    "storageColFree": "可用余量",
+    "storageColPercent": "使用率",
+    "networkTitle": "网络接口流量与状态",
+    "networkColIface": "网络接口",
+    "networkColStatus": "连接状态",
+    "networkColRxRate": "当前下行速率",
+    "networkColTxRate": "当前上行速率",
+    "networkColRxTotal": "累计接收流量",
+    "networkColTxTotal": "累计发送流量",
+    "thermalTitle": "各芯片与测温传感器点位",
+    "up": "已连接 (UP)",
+    "down": "未连接 (DOWN)"
+  }
+}

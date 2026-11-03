@@ -211,7 +211,7 @@ pkg-drift-check:
 	python3 native/scripts/check_package_drift.py packages/plate_recognition
 
 api-docs:
-	$(GO) run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init --dir cmd/Zhulong,internal/app,internal/httputil,internal/auth,internal/audit,internal/asyncjob,internal/camera,internal/network,internal/systemtime,internal/storage,internal/algorithm,internal/person,internal/mediafile,internal/record,internal/task,internal/gb28181,internal/aitypes,internal/spatial --generalInfo main.go --output internal/apidocs --parseInternal
+	$(GO) run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init --dir cmd/Zhulong,internal/app,internal/httputil,internal/auth,internal/audit,internal/asyncjob,internal/camera,internal/network,internal/systemtime,internal/systeminfo,internal/storage,internal/algorithm,internal/person,internal/mediafile,internal/record,internal/task,internal/gb28181,internal/aitypes,internal/spatial --generalInfo main.go --output internal/apidocs --parseInternal
 
 go-check: native-build
 	test -z "$$(gofmt -l cmd internal)"

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "Follow HTTP API response envelope and naming guidelines"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Follow Uber Fx module assembly and lifecycle"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "Follow React 19 and TanStack Query state guidelines"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "Follow OKLCH colors, dark mode and i18n guidelines"}

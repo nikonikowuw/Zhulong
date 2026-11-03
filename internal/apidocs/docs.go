@@ -3966,6 +3966,44 @@ const docTemplate = `{
                 }
             }
         },
+        "/system/hardware": {
+            "get": {
+                "description": "Retrieves current CPU, memory, storage, network rates, NPU load,\ntemperatures, and recent time-series history points.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Get system hardware telemetry and trend history",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/systeminfo.SystemHardwareResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "INTERNAL_ERROR",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/system/jobs": {
             "get": {
                 "produces": [
@@ -8025,6 +8063,254 @@ const docTemplate = `{
                     "type": "integer",
                     "maximum": 730,
                     "minimum": 1
+                }
+            }
+        },
+        "systeminfo.CPUStatus": {
+            "type": "object",
+            "properties": {
+                "coreUsages": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "cores": {
+                    "type": "integer"
+                },
+                "modelName": {
+                    "type": "string"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "usagePercent": {
+                    "type": "number"
+                }
+            }
+        },
+        "systeminfo.HardwareHistoryPoint": {
+            "type": "object",
+            "properties": {
+                "cpuUsagePercent": {
+                    "type": "number"
+                },
+                "memUsagePercent": {
+                    "type": "number"
+                },
+                "netRxRate": {
+                    "type": "integer"
+                },
+                "netTxRate": {
+                    "type": "integer"
+                },
+                "npuLoadPercent": {
+                    "type": "number"
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "systeminfo.HeterogeneousStatus": {
+            "type": "object",
+            "properties": {
+                "npu": {
+                    "$ref": "#/definitions/systeminfo.NPUStatus"
+                },
+                "temperatures": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/systeminfo.TemperatureInfo"
+                    }
+                }
+            }
+        },
+        "systeminfo.HostInfo": {
+            "type": "object",
+            "properties": {
+                "arch": {
+                    "type": "string"
+                },
+                "bootTime": {
+                    "type": "string"
+                },
+                "hostname": {
+                    "type": "string"
+                },
+                "kernelVersion": {
+                    "type": "string"
+                },
+                "loadAvg": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "os": {
+                    "type": "string"
+                },
+                "uptimeSeconds": {
+                    "type": "integer"
+                }
+            }
+        },
+        "systeminfo.MemoryStatus": {
+            "type": "object",
+            "properties": {
+                "availableBytes": {
+                    "type": "integer"
+                },
+                "buffersBytes": {
+                    "type": "integer"
+                },
+                "cachedBytes": {
+                    "type": "integer"
+                },
+                "freeBytes": {
+                    "type": "integer"
+                },
+                "swapTotalBytes": {
+                    "type": "integer"
+                },
+                "swapUsedBytes": {
+                    "type": "integer"
+                },
+                "swapUsedPercent": {
+                    "type": "number"
+                },
+                "totalBytes": {
+                    "type": "integer"
+                },
+                "usedBytes": {
+                    "type": "integer"
+                },
+                "usedPercent": {
+                    "type": "number"
+                }
+            }
+        },
+        "systeminfo.NPUStatus": {
+            "type": "object",
+            "properties": {
+                "coreLoads": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "loadPercent": {
+                    "type": "number"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "supported": {
+                    "type": "boolean"
+                },
+                "temperature": {
+                    "type": "number"
+                }
+            }
+        },
+        "systeminfo.NetworkInterfaceStatus": {
+            "type": "object",
+            "properties": {
+                "interface": {
+                    "type": "string"
+                },
+                "isUp": {
+                    "type": "boolean"
+                },
+                "rxBytesRate": {
+                    "type": "integer"
+                },
+                "rxTotalBytes": {
+                    "type": "integer"
+                },
+                "txBytesRate": {
+                    "type": "integer"
+                },
+                "txTotalBytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "systeminfo.StorageMountStatus": {
+            "type": "object",
+            "properties": {
+                "device": {
+                    "type": "string"
+                },
+                "freeBytes": {
+                    "type": "integer"
+                },
+                "fsType": {
+                    "type": "string"
+                },
+                "mountPoint": {
+                    "type": "string"
+                },
+                "totalBytes": {
+                    "type": "integer"
+                },
+                "usedBytes": {
+                    "type": "integer"
+                },
+                "usedPercent": {
+                    "type": "number"
+                }
+            }
+        },
+        "systeminfo.SystemHardwareResponse": {
+            "type": "object",
+            "properties": {
+                "cpu": {
+                    "$ref": "#/definitions/systeminfo.CPUStatus"
+                },
+                "heterogeneous": {
+                    "$ref": "#/definitions/systeminfo.HeterogeneousStatus"
+                },
+                "history": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/systeminfo.HardwareHistoryPoint"
+                    }
+                },
+                "host": {
+                    "$ref": "#/definitions/systeminfo.HostInfo"
+                },
+                "memory": {
+                    "$ref": "#/definitions/systeminfo.MemoryStatus"
+                },
+                "network": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/systeminfo.NetworkInterfaceStatus"
+                    }
+                },
+                "storage": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/systeminfo.StorageMountStatus"
+                    }
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
+        "systeminfo.TemperatureInfo": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string"
+                },
+                "temperature": {
+                    "type": "number"
                 }
             }
         },

@@ -37,6 +37,9 @@ import networkZhHant from '@/features/settings/network/locales/zh-Hant.json'
 import storageEn from '@/features/settings/storage/locales/en.json'
 import storageZhHans from '@/features/settings/storage/locales/zh-Hans.json'
 import storageZhHant from '@/features/settings/storage/locales/zh-Hant.json'
+import systemEn from '@/features/settings/system/locales/en.json'
+import systemZhHans from '@/features/settings/system/locales/zh-Hans.json'
+import systemZhHant from '@/features/settings/system/locales/zh-Hant.json'
 import timeEn from '@/features/settings/time/locales/en.json'
 import timeZhHans from '@/features/settings/time/locales/zh-Hans.json'
 import timeZhHant from '@/features/settings/time/locales/zh-Hant.json'
@@ -57,6 +60,7 @@ export const resources = {
     network: networkZhHans,
     time: timeZhHans,
     storage: storageZhHans,
+    system: systemZhHans,
     live: liveZhHans,
     cameras: camerasZhHans,
     gb28181: gb28181ZhHans,
@@ -74,6 +78,7 @@ export const resources = {
     network: networkZhHant,
     time: timeZhHant,
     storage: storageZhHant,
+    system: systemZhHant,
     live: liveZhHant,
     cameras: camerasZhHant,
     gb28181: gb28181ZhHant,
@@ -91,6 +96,7 @@ export const resources = {
     network: networkEn,
     time: timeEn,
     storage: storageEn,
+    system: systemEn,
     live: liveEn,
     cameras: camerasEn,
     gb28181: gb28181En,

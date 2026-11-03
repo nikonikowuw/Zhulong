@@ -29,6 +29,7 @@ import { Route as AuthenticatedCamerasIndexRouteImport } from './routes/_authent
 import { Route as AuthenticatedAuditIndexRouteImport } from './routes/_authenticated/audit/index'
 import { Route as AuthenticatedAlgorithmsIndexRouteImport } from './routes/_authenticated/algorithms/index'
 import { Route as AuthenticatedSettingsTimeRouteImport } from './routes/_authenticated/settings/time'
+import { Route as AuthenticatedSettingsSystemRouteImport } from './routes/_authenticated/settings/system'
 import { Route as AuthenticatedSettingsStorageRouteImport } from './routes/_authenticated/settings/storage'
 import { Route as AuthenticatedSettingsNetworkRouteImport } from './routes/_authenticated/settings/network'
 import { Route as AuthenticatedSettingsGb28181RouteImport } from './routes/_authenticated/settings/gb28181'
@@ -143,6 +144,12 @@ const AuthenticatedSettingsTimeRoute =
     path: '/time',
     getParentRoute: () => AuthenticatedSettingsRouteRoute,
   } as any)
+const AuthenticatedSettingsSystemRoute =
+  AuthenticatedSettingsSystemRouteImport.update({
+    id: '/system',
+    path: '/system',
+    getParentRoute: () => AuthenticatedSettingsRouteRoute,
+  } as any)
 const AuthenticatedSettingsStorageRoute =
   AuthenticatedSettingsStorageRouteImport.update({
     id: '/storage',
@@ -188,6 +195,7 @@ export interface FileRoutesByFullPath {
   '/settings/gb28181': typeof AuthenticatedSettingsGb28181Route
   '/settings/network': typeof AuthenticatedSettingsNetworkRoute
   '/settings/storage': typeof AuthenticatedSettingsStorageRoute
+  '/settings/system': typeof AuthenticatedSettingsSystemRoute
   '/settings/time': typeof AuthenticatedSettingsTimeRoute
   '/algorithms/': typeof AuthenticatedAlgorithmsIndexRoute
   '/audit/': typeof AuthenticatedAuditIndexRoute
@@ -213,6 +221,7 @@ export interface FileRoutesByTo {
   '/settings/gb28181': typeof AuthenticatedSettingsGb28181Route
   '/settings/network': typeof AuthenticatedSettingsNetworkRoute
   '/settings/storage': typeof AuthenticatedSettingsStorageRoute
+  '/settings/system': typeof AuthenticatedSettingsSystemRoute
   '/settings/time': typeof AuthenticatedSettingsTimeRoute
   '/algorithms': typeof AuthenticatedAlgorithmsIndexRoute
   '/audit': typeof AuthenticatedAuditIndexRoute
@@ -241,6 +250,7 @@ export interface FileRoutesById {
   '/_authenticated/settings/gb28181': typeof AuthenticatedSettingsGb28181Route
   '/_authenticated/settings/network': typeof AuthenticatedSettingsNetworkRoute
   '/_authenticated/settings/storage': typeof AuthenticatedSettingsStorageRoute
+  '/_authenticated/settings/system': typeof AuthenticatedSettingsSystemRoute
   '/_authenticated/settings/time': typeof AuthenticatedSettingsTimeRoute
   '/_authenticated/algorithms/': typeof AuthenticatedAlgorithmsIndexRoute
   '/_authenticated/audit/': typeof AuthenticatedAuditIndexRoute
@@ -269,6 +279,7 @@ export interface FileRouteTypes {
     | '/settings/gb28181'
     | '/settings/network'
     | '/settings/storage'
+    | '/settings/system'
     | '/settings/time'
     | '/algorithms/'
     | '/audit/'
@@ -294,6 +305,7 @@ export interface FileRouteTypes {
     | '/settings/gb28181'
     | '/settings/network'
     | '/settings/storage'
+    | '/settings/system'
     | '/settings/time'
     | '/algorithms'
     | '/audit'
@@ -321,6 +333,7 @@ export interface FileRouteTypes {
     | '/_authenticated/settings/gb28181'
     | '/_authenticated/settings/network'
     | '/_authenticated/settings/storage'
+    | '/_authenticated/settings/system'
     | '/_authenticated/settings/time'
     | '/_authenticated/algorithms/'
     | '/_authenticated/audit/'
@@ -486,6 +499,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsTimeRouteImport
       parentRoute: typeof AuthenticatedSettingsRouteRoute
     }
+    '/_authenticated/settings/system': {
+      id: '/_authenticated/settings/system'
+      path: '/system'
+      fullPath: '/settings/system'
+      preLoaderRoute: typeof AuthenticatedSettingsSystemRouteImport
+      parentRoute: typeof AuthenticatedSettingsRouteRoute
+    }
     '/_authenticated/settings/storage': {
       id: '/_authenticated/settings/storage'
       path: '/storage'
@@ -529,6 +549,7 @@ interface AuthenticatedSettingsRouteRouteChildren {
   AuthenticatedSettingsGb28181Route: typeof AuthenticatedSettingsGb28181Route
   AuthenticatedSettingsNetworkRoute: typeof AuthenticatedSettingsNetworkRoute
   AuthenticatedSettingsStorageRoute: typeof AuthenticatedSettingsStorageRoute
+  AuthenticatedSettingsSystemRoute: typeof AuthenticatedSettingsSystemRoute
   AuthenticatedSettingsTimeRoute: typeof AuthenticatedSettingsTimeRoute
   AuthenticatedSettingsIndexRoute: typeof AuthenticatedSettingsIndexRoute
 }
@@ -539,6 +560,7 @@ const AuthenticatedSettingsRouteRouteChildren: AuthenticatedSettingsRouteRouteCh
     AuthenticatedSettingsGb28181Route: AuthenticatedSettingsGb28181Route,
     AuthenticatedSettingsNetworkRoute: AuthenticatedSettingsNetworkRoute,
     AuthenticatedSettingsStorageRoute: AuthenticatedSettingsStorageRoute,
+    AuthenticatedSettingsSystemRoute: AuthenticatedSettingsSystemRoute,
     AuthenticatedSettingsTimeRoute: AuthenticatedSettingsTimeRoute,
     AuthenticatedSettingsIndexRoute: AuthenticatedSettingsIndexRoute,
   }

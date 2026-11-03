@@ -1,0 +1,64 @@
+{
+  "page": {
+    "title": "系統硬體與算力狀態",
+    "desc": "即時監測邊緣主機 CPU、記憶體、磁碟儲存、網路速率以及 NPU 異構加速算力與核心溫度趨勢。"
+  },
+  "header": {
+    "hostname": "主機名稱",
+    "osArch": "系統架構",
+    "kernel": "核心版本",
+    "uptime": "開機時長",
+    "loadAvg": "系統平均負載 (1/5/15m)",
+    "refresh": "立即重新整理",
+    "refreshing": "重新整理中...",
+    "autoRefreshing": "自動重新整理中 (2.5s)"
+  },
+  "cards": {
+    "cpu": "CPU 使用率",
+    "cpuDesc": "{{cores}} 核 | {{temp}}°C",
+    "memory": "系統實體記憶體",
+    "memoryDesc": "已用 {{used}} / 總計 {{total}}",
+    "npu": "NPU 異構算力",
+    "npuDesc": "{{name}} | {{temp}}°C",
+    "npuUnsupported": "未偵測到 NPU 加速硬體",
+    "npuNoLoad": "目前無加速模型負載",
+    "network": "即時網路輸送量",
+    "networkDesc": "↓ {{rx}} | ↑ {{tx}}",
+    "storage": "系統主儲存",
+    "storageDesc": "已用 {{used}} / 餘量 {{free}}"
+  },
+  "charts": {
+    "title": "短期時序趨勢",
+    "tabCompute": "計算負載 (CPU / NPU)",
+    "tabMemory": "記憶體趨勢",
+    "tabNetwork": "網路輸送速率",
+    "tabTemperature": "晶片溫度",
+    "cpuLoad": "CPU 總體負載",
+    "npuLoad": "NPU 算力負載",
+    "memoryUsage": "實體記憶體佔用率",
+    "rxRate": "下行速率 (Rx)",
+    "txRate": "上行速率 (Tx)",
+    "temperature": "晶片最高溫",
+    "emptyHistory": "歷史時序資料採集累積中..."
+  },
+  "details": {
+    "storageTitle": "儲存掛載分割區詳情",
+    "storageColMount": "掛載路徑",
+    "storageColDevice": "底層裝置",
+    "storageColFSType": "檔案系統",
+    "storageColTotal": "總容量",
+    "storageColUsed": "已用容量",
+    "storageColFree": "可用餘量",
+    "storageColPercent": "使用率",
+    "networkTitle": "網路介面流量與狀態",
+    "networkColIface": "網路介面",
+    "networkColStatus": "連線狀態",
+    "networkColRxRate": "目前下行速率",
+    "networkColTxRate": "目前上行速率",
+    "networkColRxTotal": "累計接收流量",
+    "networkColTxTotal": "累計發送流量",
+    "thermalTitle": "各晶片與測溫感測器點位",
+    "up": "已連線 (UP)",
+    "down": "未連線 (DOWN)"
+  }
+}

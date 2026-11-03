@@ -26,6 +26,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/record"
 	"github.com/nikonikowuw/Zhulong/internal/spatial"
 	"github.com/nikonikowuw/Zhulong/internal/storage"
+	"github.com/nikonikowuw/Zhulong/internal/systeminfo"
 	"github.com/nikonikowuw/Zhulong/internal/systemtime"
 	"github.com/nikonikowuw/Zhulong/internal/task"
 	"github.com/nikonikowuw/Zhulong/internal/webui"
@@ -345,6 +346,33 @@ func provideSystemTime(dbProvider database.DBProvider, auditSvc *audit.Service, 
 
 var systemTimeModule = fx.Module("systemtime",
 	fx.Provide(provideSystemTime),
+)
+
+// --- System Info Module ---
+
+type systemInfoOut struct {
+	fx.Out
+
+	Collector       systeminfo.Collector
+	Service         *systeminfo.Service
+	Handler         *systeminfo.Handler
+	Lifecycle       systemInfoLifecycle
+	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+}
+
+func provideSystemInfo(logger *zap.Logger) systemInfoOut {
+	comp := systeminfo.NewSystemInfoComponents(logger)
+	return systemInfoOut{
+		Collector:       comp.Collector,
+		Service:         comp.Service,
+		Handler:         comp.Handler,
+		Lifecycle:       comp.Lifecycle,
+		ProtectedRoutes: comp.ProtectedRoutes,
+	}
+}
+
+var systemInfoModule = fx.Module("systeminfo",
+	fx.Provide(provideSystemInfo),
 )
 
 // --- Storage Module ---
@@ -840,6 +868,7 @@ var Module = fx.Options(
 	gb28181Module,
 	networkModule,
 	systemTimeModule,
+	systemInfoModule,
 	storageModule,
 	mediaFileModule,
 	algorithmModule,
