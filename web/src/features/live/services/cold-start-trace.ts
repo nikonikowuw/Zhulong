@@ -58,10 +58,10 @@ function writeTraceLog(
 }
 
 export function logColdStart(
-  event: string,
-  details: Record<string, unknown>
+  _event: string,
+  _details: Record<string, unknown>
 ): void {
-  writeTraceLog('ColdStart', event, details)
+  // 冷启动日志已从控制台移除
 }
 
 /** 首个关键帧迟迟不来时的兜底上报窗口。RTSP 冷建连实测可达 4 秒，不能报太早。 */
