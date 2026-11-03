@@ -741,6 +741,22 @@ namespace detail
         }
     }
 
+    /**
+     * @brief 帧边界把已收到的任务级配置挂到 `TaskContext` 上
+     *
+     * 分工是刻意的：**读取**控制消息只发生在 Worker 自己的收包循环里（单读者，不与帧
+     * 竞争），这里只做「挂视图」，且**不解析 JSON** —— 字段语义属于各算法自己的
+     * `config.schema.json`，骨架对算法必须无知（见 `zhulong::TaskConfig`）。
+     *
+     * @param task_context 该路流的任务上下文（每次推理前刷新）
+     * @param task_config_json 该路流最近一次收到的配置原文（空表示未下发）
+     */
+    void drain_control_messages(::zhulong::TaskContext &task_context, const std::string &task_config_json)
+    {
+        // 每帧重挂视图：底层 string 可能刚被收包循环替换过内容，悬垂与半新半旧都不允许。
+        task_context.params.json = std::string_view(task_config_json);
+    }
+
     int run_verify(const zhulong_plugin_api_v1 &api, const std::string &sample_path,
                    const std::string &config_json = "{}",
                    const std::string &algorithm_id = "")
@@ -789,6 +805,10 @@ namespace detail
             api.model_destroy(model);
             write_runner_error_line("{\"status\":\"failed\",\"stage\":\"task_open\",\"rc\":", rc, "}");
             return 4;
+        }
+        if (task)
+        {
+            drain_control_messages(task->user, config_json);
         }
 
         // 4. 准备样本帧：`--sample` 为 PPM/PGM 时真实解码，否则回退合成帧并如实标记
@@ -870,22 +890,6 @@ namespace detail
                << ",\"result\":" << result_json << "}";
         write_protocol_line(passed.str());
         return 0;
-    }
-
-    /**
-     * @brief 帧边界把已收到的任务级配置挂到 `TaskContext` 上
-     *
-     * 分工是刻意的：**读取**控制消息只发生在 Worker 自己的收包循环里（单读者，不与帧
-     * 竞争），这里只做「挂视图」，且**不解析 JSON** —— 字段语义属于各算法自己的
-     * `config.schema.json`，骨架对算法必须无知（见 `zhulong::TaskConfig`）。
-     *
-     * @param task_context 该路流的任务上下文（每次推理前刷新）
-     * @param task_config_json 该路流最近一次收到的配置原文（空表示未下发）
-     */
-    void drain_control_messages(::zhulong::TaskContext &task_context, const std::string &task_config_json)
-    {
-        // 每帧重挂视图：底层 string 可能刚被收包循环替换过内容，悬垂与半新半旧都不允许。
-        task_context.params.json = std::string_view(task_config_json);
     }
 
     /**
@@ -1118,8 +1122,6 @@ namespace detail
 
             // 3.0d：一路 broker 一个 Worker 一个 TaskContext（不做 task map，也不多路复用
             // 同一个 Worker）。task_id 取该路的 stream_id，与 task_open 的入参一致。
-            ::zhulong::TaskContext task_context;
-            task_context.task_id = stream_id;
             // 本路流的任务级配置原文（MSG_TASK_CONFIG）。生命周期覆盖整个 Worker 线程：
             // TaskContext.params.json 只是指向它的视图。
             std::string task_config_json;
@@ -1229,7 +1231,10 @@ namespace detail
                             }
 
                             // 帧边界：先排控制消息，再推理（TaskContext 由骨架按流维护）
-                            drain_control_messages(task_context, task_config_json);
+                            if (task)
+                            {
+                                drain_control_messages(task->user, task_config_json);
+                            }
 
                             zhulong_inference_result *result = nullptr;
                             auto t0 = std::chrono::steady_clock::now();

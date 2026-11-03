@@ -120,6 +120,20 @@ struct TaskContext {
     TaskConfig params{};   /**< 任务参数（未下发时为空视图） */
 };
 
+} // namespace zhulong
+
+/**
+ * @brief C ABI 任务状态句柄基础结构
+ *
+ * 挂接 TaskContext，使骨架 (algo_main.cpp) 经由 IPC 接收到的任务级配置在每帧前
+ * 直接写入 user.params，供 process -> infer -> 业务插件读取。
+ */
+struct zhulong_task_ctx_t {
+    ::zhulong::TaskContext user;
+};
+
+namespace zhulong {
+
 /**
  * @brief 目标检测结果项
  *
@@ -972,11 +986,10 @@ struct PluginApi {
      * @brief 宿主不透明句柄 zhulong_task_ctx_h 对应的内部包装类型
      *
      * ⚠️ 与公开的 `zhulong::TaskContext` 不是同一个东西：本结构是 C ABI 句柄的
-     *    C++ 载体（持有 worker 指针），`user` 才是交给算法的那份只读上下文。
+     *    C++ 载体（持有 worker 指针），`user` 继承自 zhulong_task_ctx_t。
      */
-    struct TaskState {
+    struct TaskState : public zhulong_task_ctx_t {
         WorkerContext* worker{nullptr};
-        ::zhulong::TaskContext user;
     };
 
     /** @brief 创建插件模型资源组，调用 PluginClass::init(config_json) */
@@ -1035,7 +1048,7 @@ struct PluginApi {
             auto task = std::make_unique<TaskState>();
             task->worker = reinterpret_cast<WorkerContext*>(worker);
             task->user.task_id = task_id;
-            *out_task = reinterpret_cast<zhulong_task_ctx_h>(task.release());
+            *out_task = task.release();
             return ZHULONG_PLUGIN_OK;
         } catch (...) {
             return ZHULONG_PLUGIN_ERR_INTERNAL;
@@ -1045,7 +1058,7 @@ struct PluginApi {
     /** @brief 关闭摄像机任务状态 */
     static void task_close(zhulong_task_ctx_h task) {
         try {
-            delete reinterpret_cast<TaskState*>(task);
+            delete static_cast<TaskState*>(task);
         } catch (...) {}
     }
 
@@ -1055,7 +1068,7 @@ struct PluginApi {
         if (!task || !frame || !out_result) return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
         *out_result = nullptr;
         try {
-            auto* task_state = reinterpret_cast<TaskState*>(task);
+            auto* task_state = static_cast<TaskState*>(task);
             Image image(*frame);
             auto result = std::make_unique<zhulong_inference_result>();
             result->frame_id = frame->frame_id;
