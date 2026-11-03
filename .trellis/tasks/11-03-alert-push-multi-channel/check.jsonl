@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量标准与测试覆盖规范"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端测试与无头浏览器验证规范"}
+{"file": ".trellis/spec/backend/record-guidelines.md", "reason": "告警生命周期与不破坏既有落库逻辑核验"}
+{"file": ".trellis/spec/backend/mediafile-guidelines.md", "reason": "核验取图路径与签名路由没有绕过四层防护"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核验信封、稳定错误码与三语文案"}
+{"file": ".trellis/spec/backend/authentication-guidelines.md", "reason": "核验公开签名路由与受保护内容路由的边界"}

@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/architecture.md", "reason": "跨层边界：AI 流/主码流、宿主媒体层与算法包的分工、交付矩阵"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "Stream/FramePublisher/FrameBroker 帧路径、有界队列与零拷贝契约"}
+{"file": ".trellis/spec/native/hardware-backends.md", "reason": "宿主侧 RGA dlopen 同格式拷贝、紧打包 stride 与缓存一致性"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "新增 Zhulong_stream_set_view/get_view 的句柄、失败语义与指针生命周期"}
+{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "帧视图可能是裁剪后的分析视图：像素阈值以 image 尺寸为基准"}
+{"file": ".trellis/spec/backend/camera-guidelines.md", "reason": "StreamHub/AI 流生命周期、视图应用点与非 acquire 禁令"}
+{"file": ".trellis/spec/backend/task-guidelines.md", "reason": "crop_json 存储、三态更新与 writeTaskRow 列"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "Request/Response 命名与 null/缺省语义"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "crop 分类色 cyan 与三语 i18n 键对齐"}

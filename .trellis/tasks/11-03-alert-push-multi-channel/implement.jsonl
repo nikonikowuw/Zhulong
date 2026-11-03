@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/record-guidelines.md", "reason": "契约与告警落盘生命周期规范"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "HTTP 命名、响应信封与错误处理规范"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite 迁移与 Store 访问规范"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Uber Fx 模块化与生命周期管理规范"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "前端特性切片、TanStack Router 与表单规范"}
+{"file": ".trellis/spec/backend/mediafile-guidelines.md", "reason": "取图必须经 OpenContent、URL 不入库、签名路由复用 ServeContent"}
+{"file": ".trellis/spec/backend/authentication-guidelines.md", "reason": "媒体内容端点仅 Cookie 鉴权，url 模式需签名 URL"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "模块错误码三语注册与 apperr 语义"}
+
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "三语命名空间注册与状态徽章范式"}

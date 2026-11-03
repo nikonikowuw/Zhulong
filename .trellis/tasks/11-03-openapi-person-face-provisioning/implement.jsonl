@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/architecture.md", "reason": "跨层边界：Go 宿主、HTTP 层、持久化与原生引擎的职责划分"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "路由组、响应信封、分页与 *Request/*Response/*Info 命名规范"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "版本化迁移、GORM 零值、UTC 时间与 SQLite 单写者约束"}
+{"file": ".trellis/spec/backend/authentication-guidelines.md", "reason": "现有 Cookie Session 边界；M2M Bearer 必须独立于 RequireAuth"}
+{"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "上传组隔离、中间件时序、Context 类型化存取与 1 MiB body limit 陷阱"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "apperr.Kind、422/409/429 映射与三语错误文案注册"}
+{"file": ".trellis/spec/backend/dependency-injection.md", "reason": "Fx 纯构造函数、路由值组扩展与启停顺序"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "React 特性切片、TanStack Router/Query 与组件测试约定"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "三语资源注册、来源徽标与设置页交互规范"}

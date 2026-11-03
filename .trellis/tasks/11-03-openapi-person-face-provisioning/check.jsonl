@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Go 表驱动测试、-race、构造期依赖捕获与测试接线"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端 lint/format/真实无头浏览器测试门禁"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核验 401/404/409/422/429 状态码与稳定错误码矩阵"}
+{"file": ".trellis/spec/backend/authentication-guidelines.md", "reason": "核验 Bearer 与 Session 的边界、401 响应与 Token 不落库明文"}
+{"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "核验 OpenAPI 独立路由组、body limit 与审计中间件没有被漏挂"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "核验三语 key、复制/吊销交互与来源徽标"}
+{"file": ".trellis/spec/architecture.md", "reason": "核验新增包依赖方向：openapi → person/apitoken，未反向依赖 app"}
