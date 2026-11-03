@@ -278,13 +278,13 @@ bool Aligner::crop_and_align_direct(
     const float im4 = m0 * inv_det;
 
     for (int dy = 0; dy < dst_h; ++dy) {
+        const float oy = static_cast<float>(dy) - m5;
+        const float row_sx = im1 * oy - im0 * m2;
+        const float row_sy = im4 * oy - im3 * m2;
         uint8_t* dst_row = dst_buf + static_cast<size_t>(dy) * static_cast<size_t>(dst_w) * 3;
         for (int dx = 0; dx < dst_w; ++dx) {
-            const float ox = static_cast<float>(dx) - m2;
-            const float oy = static_cast<float>(dy) - m5;
-
-            const float sx = im0 * ox + im1 * oy;
-            const float sy = im3 * ox + im4 * oy;
+            const float sx = static_cast<float>(dx) * im0 + row_sx;
+            const float sy = static_cast<float>(dx) * im3 + row_sy;
 
             uint8_t r = 0;
             uint8_t g = 0;
