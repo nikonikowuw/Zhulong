@@ -23,6 +23,8 @@ const mockPersons: Person[] = [
     id: 'p_test_01',
     personId: 'EMP-001',
     name: 'Alice Cooper',
+    source: 'LOCAL',
+    sourceName: '',
     primaryFaceId: 'f_test_01',
     faces: [
       {
@@ -133,6 +135,8 @@ describe('PersonsTable', () => {
         id: 'p_unbound',
         personId: null,
         name: 'Bob Unbound',
+        source: 'LOCAL',
+        sourceName: '',
         createdAt: '2026-10-14T08:00:00Z',
         updatedAt: '2026-10-14T08:00:00Z',
         faces: [],

@@ -65,6 +65,10 @@ export const AUDIT_ACTION_KEYS = [
   'time.ntp_sync_recovered',
   // 审计自身
   'audit.clear',
+  // 机器间认证 (API Token)
+  'api_token.create',
+  'api_token.revoke',
+  'api_token.auth_rejected',
 ] as const
 
 export type AuditActionKey = (typeof AUDIT_ACTION_KEYS)[number]

@@ -2,33 +2,25 @@
 
 ---
 
-## 1. 挂载隔离三原则（四层级）
+## 1. 挂载隔离三原则（五层级）
 
 严禁在全局 `engine.Use()` 滥挂业务中间件，按路由严格隔离：
 
 | 挂载层级 | 适用路径 | 允许挂载的中间件 | 核心禁忌 |
 | --- | --- | --- | --- |
 | **全局引擎** | `/*` 通用 | `Recovery`、`RequestID` | 严禁挂业务鉴权、AccessLog、CORS |
-| **API 业务组** | `/api/v1/*` | `CORS`、`AccessLog`、`MaxBodyLimit`、`Auth` | 错误必须返统一 JSON，禁止 Fallback 静态页 |
+| **API 业务组** | `/api/v1/*` | `CORS`、`AccessLog`、`MaxBodyLimit`、`Auth` (Cookie/Session) | 错误必须返统一 JSON，禁止 Fallback 静态页 |
 | **上传业务组** | `/api/v1/*`（独立 `Group`） | `AccessLog`、**放宽的** `MaxBodyLimitWithLimitAndCode`、`Auth` | 严禁复用默认 `MaxBodyLimit()`（1 MiB 会直接毙掉合法上传） |
+| **机器间 OpenAPI 组** | `/api/v1/openapi/*`（独立 `Group`） | `AccessLog`、`MaxBodyLimit(11 MiB)`、`Audit`、`RequireBearer` | 严禁套用 Cookie Session；JSON 子端点必须叠 1 MiB 限制 |
 | **静态与文档** | `/swagger/*`, `SPA` | 仅专用 Handler | 严禁挂日志、鉴权、限流，保障流式并发 |
 
-> ⚠️ **上传端点必须另起一个 Group，而不是挂在 API 业务组下面。** Gin 中间件在 `Group()` 调用时即被求值，无法在事后「放宽」已挂载的 `MaxBodyLimit()`；因此在受保护组下声明的上传路由会**永久继承 1 MiB 的 `MaxAPIRequestBodyBytes`**，体积合法的上传被 413 直接拒绝。
+> ⚠️ **上传端点与 OpenAPI 端点必须另起独立的 Group，而不是挂在受保护 API 业务组下面。** Gin 中间件在 `Group()` 调用时即被求值，无法在事后「放宽」已挂载的 `MaxBodyLimit()`；因此在受保护组下声明的上传路由会**永久继承 1 MiB 的 `MaxAPIRequestBodyBytes`**，体积合法的上传被 413 直接拒绝。
 >
-> 正确做法是在 `internal/app/router.go` 里单独建一个同前缀的组，只挂上传端点，并对其单独施加放宽的限额（当前 `algorithm.MaxUploadRequestBodySize` = 500 MiB 归档 + 1 MiB multipart 框架开销）、独立的 `AccessLog` 与 `Audit`（该组不会继承 API 业务组的中间件）、以及 `RequireAuth`：
->
-> ```go
-> upload := router.Group("/api/v1")
-> upload.Use(httpmiddleware.AccessLog(p.Logger),
->     httpmiddleware.MaxBodyLimitWithLimitAndCode(algorithm.MaxUploadRequestBodySize, "FILE_TOO_LARGE"))
-> if p.AuditService != nil { upload.Use(audithttp.Middleware(p.AuditService)) }
-> if p.AuthService != nil { upload.Use(auth.RequireAuth(p.AuthService)) }
-> for _, r := range p.UploadRoutes { r.RegisterRoutes(upload) }
-> ```
+> 此外，`/api/v1/openapi` 面档上传端点支持 10 MiB 单张照片（配置 11 MiB 组限额），但其余 JSON 端点（如人员创建/查询）必须在根组下嵌套子组并施加 `httpmiddleware.MaxBodyLimit(1 MiB)`，防止恶意大 JSON 消耗边缘宿主内存，且保证错误码与标准 API 保持一致（超大 JSON 返 `PAYLOAD_TOO_LARGE`，超大文件返 `FILE_TOO_LARGE`）。
 >
 > 回归护栏：`internal/app/upload_router_test.go` 会走**真实 router** 上传一份 > 1 MiB 的归档并断言 `201 Created` 而非 413；只测 handler 的单元测试永远发现不了这个坑。
 >
-> 当前挂载在 `upload_routes` 组的端点：`POST /api/v1/persons/{id}/faces`（10 MiB 登记照）、算法包安装归档。
+> 当前挂载在 `upload_routes` 组的端点：`POST /api/v1/persons/{id}/faces`（10 MiB 登记照）、算法包安装归档。挂载在 `openapi_routes` 组的端点：`/api/v1/openapi/persons/...`。
 
 ---
 

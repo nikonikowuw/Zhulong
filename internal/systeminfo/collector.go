@@ -3,6 +3,7 @@ package systeminfo
 import (
 	"context"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -85,4 +86,36 @@ type Collector interface {
 // NewDefaultCollector returns the platform-appropriate Collector.
 func NewDefaultCollector() Collector {
 	return newPlatformCollector()
+}
+
+func formatThermalLabel(rawType string) string {
+	rawType = strings.TrimSpace(rawType)
+	lower := strings.ToLower(rawType)
+	switch {
+	case strings.Contains(lower, "cpu"):
+		return "CPU"
+	case strings.Contains(lower, "npu"):
+		return "NPU"
+	case strings.Contains(lower, "gpu"):
+		return "GPU"
+	case strings.Contains(lower, "soc"):
+		return "SoC"
+	case strings.Contains(lower, "tsadc"):
+		return "TSADC"
+	default:
+		if rawType == "" {
+			return "Thermal"
+		}
+		return strings.ToUpper(rawType)
+	}
+}
+
+func findThermalByPattern(thermals []TemperatureInfo, keyword string) float64 {
+	lowerKey := strings.ToLower(keyword)
+	for _, t := range thermals {
+		if strings.Contains(strings.ToLower(t.Label), lowerKey) {
+			return t.Temperature
+		}
+	}
+	return 0
 }

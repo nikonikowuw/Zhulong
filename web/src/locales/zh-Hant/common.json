@@ -64,6 +64,7 @@
     "Time": "系統對時",
     "Hardware": "硬體狀態",
     "GB28181": "GB28181 接入",
+    "APITokens": "API 憑證",
     "Help Center": "說明中心",
     "settingsTitle": "系統設定",
     "settingsDesc": "管理系統各項服務參數、外觀偏好與網路介面。"

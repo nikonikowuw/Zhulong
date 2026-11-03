@@ -68,7 +68,10 @@
     "time.clock_step": "时钟跳变校正",
     "time.ntp_sync_failed": "NTP 对时失败",
     "time.ntp_sync_recovered": "NTP 对时恢复",
-    "audit.clear": "清理审计日志"
+    "audit.clear": "清理审计日志",
+    "api_token.create": "创建 API 访问凭据",
+    "api_token.revoke": "吊销 API 访问凭据",
+    "api_token.auth_rejected": "API 访问鉴权拒绝"
   },
   "actions": {
     "viewDetail": "查看明细",

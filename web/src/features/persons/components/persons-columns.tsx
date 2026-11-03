@@ -7,6 +7,7 @@ import { type Person } from '../data/schema'
 import {
   PersonAvatarCell,
   PersonNameCell,
+  PersonSourceCell,
   PersonsFacesCell,
 } from './persons-columns-cells'
 import { PersonsDataTableRowActions } from './persons-data-table-row-actions'
@@ -94,6 +95,21 @@ export const personsColumns: ColumnDef<Person>[] = [
         </span>
       )
     },
+    enableSorting: false,
+  },
+  {
+    accessorKey: 'source',
+    header: ({ column }) => {
+      // eslint-disable-next-line react-hooks/rules-of-hooks
+      const { t } = useTranslation('persons')
+      return (
+        <DataTableColumnHeader
+          column={column}
+          title={t('table.columns.source')}
+        />
+      )
+    },
+    cell: ({ row }) => <PersonSourceCell person={row.original} />,
     enableSorting: false,
   },
   {

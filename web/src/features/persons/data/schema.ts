@@ -13,6 +13,8 @@ export const personSchema = z.object({
   id: z.string(),
   personId: z.string().nullable().optional(),
   name: z.string(),
+  source: z.enum(['LOCAL', 'API']).default('LOCAL'),
+  sourceName: z.string().default(''),
   primaryFaceId: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),

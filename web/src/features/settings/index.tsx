@@ -7,6 +7,7 @@ import {
   HardDrive,
   RadioTower,
   Activity,
+  Key,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Separator } from '@/components/ui/separator'
@@ -53,6 +54,11 @@ export function Settings() {
         title: t('nav.GB28181', { defaultValue: 'GB28181 Ingress' }),
         href: '/settings/gb28181',
         icon: <RadioTower size={18} />,
+      },
+      {
+        title: t('nav.APITokens', { defaultValue: 'API Tokens' }),
+        href: '/settings/api-tokens',
+        icon: <Key size={18} />,
       },
     ],
     [t]

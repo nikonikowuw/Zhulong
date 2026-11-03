@@ -15,6 +15,8 @@ type PersonResponse struct {
 	ID            string         `json:"id"`
 	PersonID      *string        `json:"personId"`
 	Name          string         `json:"name"`
+	Source        string         `json:"source"`
+	SourceName    string         `json:"sourceName"`
 	PrimaryFaceID *string        `json:"primaryFaceId,omitempty"`
 	CreatedAt     time.Time      `json:"createdAt"`
 	UpdatedAt     time.Time      `json:"updatedAt"`
@@ -56,6 +58,8 @@ func newPersonResponse(p *Person) PersonResponse {
 		ID:            p.ID,
 		PersonID:      p.PersonID,
 		Name:          p.Name,
+		Source:        p.Source,
+		SourceName:    p.SourceName,
 		PrimaryFaceID: p.PrimaryFaceID,
 		CreatedAt:     p.CreatedAt.UTC(),
 		UpdatedAt:     p.UpdatedAt.UTC(),

@@ -10,6 +10,8 @@ const mockPerson: Person = {
   id: 'p-01',
   personId: 'EMP001',
   name: 'Alice Cooper',
+  source: 'LOCAL',
+  sourceName: '',
   faces: [],
   createdAt: '2026-10-14T00:00:00Z',
   updatedAt: '2026-10-14T00:00:00Z',

@@ -12,6 +12,9 @@
       "avatar": "人脸照片",
       "name": "姓名",
       "personId": "工号 / 唯一标识",
+      "source": "来源",
+      "sourceLocal": "本地录入",
+      "sourceAPI": "第三方 OpenAPI",
       "faceCount": "人脸底库",
       "createdAt": "录入时间",
       "actions": "操作"

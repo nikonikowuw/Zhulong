@@ -1,0 +1,43 @@
+{
+  "title": "API 訪問憑證",
+  "description": "管理供第三方系統調用 OpenAPI 介面的機器訪問憑證（Bearer Token）。",
+  "securityNotice": "安全提示：OpenAPI 僅供受信任的區域網路或內部專網通訊使用。本系統未啟用傳輸層加密，請勿將介面直接暴露至公網。",
+  "limitTip": "當前已啟用 {{count}}/10 個憑證",
+  "showRevoked": "顯示已吊銷憑證",
+  "createButton": "建立憑證",
+  "table": {
+    "name": "憑證名稱 / 調用方",
+    "maskedKey": "令牌前綴",
+    "status": "狀態",
+    "statusActive": "生效中",
+    "statusRevoked": "已吊銷",
+    "lastUsedAt": "最近使用時間",
+    "createdAt": "建立時間",
+    "actions": "操作",
+    "neverUsed": "從未調用",
+    "empty": "暫無 API 訪問憑證",
+    "emptyDesc": "點擊「建立憑證」建立第一個第三方調用令牌"
+  },
+  "dialogs": {
+    "createTitle": "建立 API 訪問憑證",
+    "createDesc": "為第三方系統或腳本分配機器間訪問令牌。每個系統最多可同時啟用 10 個憑證。",
+    "nameLabel": "調用方名稱",
+    "namePlaceholder": "例如：DoorAccess-System、HR-Sync",
+    "cancel": "取消",
+    "confirmCreate": "生成憑證",
+    "showSecretTitle": "憑證已生成（僅顯示一次）",
+    "showSecretDesc": "請妥善複製並保存下方完整的 API Token。離開此頁面後，系統將無法再次顯示該密鑰！",
+    "tokenLabel": "API 密鑰",
+    "copy": "複製密鑰",
+    "copied": "已複製到剪貼簿",
+    "close": "我已妥善保存",
+    "revokeTitle": "確認吊銷憑證？",
+    "revokeDesc": "吊銷後，使用憑證「{{name}}」的所有第三方系統調用將被立即拒絕（HTTP 401）。此操作不可撤銷！",
+    "confirmRevoke": "確認吊銷"
+  },
+  "messages": {
+    "createSuccess": "API 憑證建立成功",
+    "revokeSuccess": "憑證已吊銷",
+    "loadFailed": "載入 API 憑證失敗"
+  }
+}

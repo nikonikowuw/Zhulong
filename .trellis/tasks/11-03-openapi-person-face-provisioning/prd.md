@@ -17,6 +17,22 @@
 7. **来源语义**：`source` / `source_name` 记录**首次录入来源**，创建后不可变；「谁最后修改」由审计日志承担。
 8. **ID 类型**：内部人员/人脸 ID 是 ULID，不是 UUID；删除 PRD 中的 `UUID` 与 `fc_xxx` 示例。
 
+### 第二轮评审修订（二次收敛）
+
+1. **{"personId"} 是资源锚点**：`POST /persons` 是唯一创建路径，因此平台推送必然带 `personId`，`PERSON_ID_REQUIRED_FOR_ENROLLMENT` 在 OpenAPI 面**不可达**，从错误矩阵中移除。
+2. **Token 名称全表唯一**：原「生效令牌内唯一」会让吊销后重建的同名 Token 与历史 `source_name` 混淆，溯源断链。改为名称在**全表**唯一（含已吊销），名称一旦用过即被占用。
+3. **不做姓名合并**：平台下发 `personId` 与本地无 `personId` 的同名档案不自动合并，明确写入 Out of Scope。
+4. **扩展名校验策略定型**：OpenAPI 面档以**内容魔数**为唯一判据，不因缺少文件后缀拒收（对齐 R3.2 原意）；Web UI 上传保持现有「扩展名 + 魔数」双检。
+5. **响应类型补全**：`GET /api-tokens` 用 `*ListResponse`，`DELETE` 用 `*RevokeResponse`，与 `*Request/*Response/*Info` 命名约定对齐。
+
+### 第三轮评审修订（架构与并发深度收敛）
+
+1. **限流器精准修饰，保全删除通道**：过载限流器（全局 3 / 单 Token 1）必须**精准仅修饰 `POST /persons/:personId/faces` 录脸端点**，绝不能作为 `faces` 组的通用中间件，确保人员/人脸清空与单删端点在面档上传打满时依然可用，杜绝 429 误杀逃生通道。
+2. **异步落库生命周期治理**：`last_used_at` 异步落库引入 `sync.WaitGroup` 追踪并在服务停止时优雅排空，停机顺序排在数据库关闭之前，杜绝 Goroutine 逃逸与竞态。
+3. **原子换脸底库广播优化**：原子换脸由单次清空底库 `BroadcastDelete("", externalID)` 紧跟单次 `BroadcastUpsert(new)` 承担，降低 IPC 开销并杜绝残留。
+4. **同名冲突 UI 指引与历史查看**：创建同名冲突时明确提示被历史凭据占用，设置面板支持查看已吊销凭据。
+5. **前端 Schema 韧性**：`source` 与 `sourceName` 补上默认值，提升容错。
+
 ## Background and Confirmed Facts
 
 - **边缘算力与硬件约束**：人脸建模包含「图片解码 $\to$ 人脸检测与对齐 $\to$ 512 维 ArcFace 特征提取」流水线。`internal/faceextract.Client` 是 **concurrency-1** 的串行客户端（请求互斥 + 有界等待），单张在 RK3568 NPU 或 CPU 上的耗时取决于算法包与输入尺寸，PRD 不再把 100~300ms 当作既定事实，改为可测指标。大批量 Base64 JSON 传输会造成内存压力与网关超时；本任务采用**平台侧后台任务排队 + 边缘单人 `multipart/form-data` 推送**。
@@ -54,14 +70,15 @@
 #### R1.3 令牌生命周期与免重启热吊销
 
 - Web UI 支持创建/查看/吊销 API Token；**最多 10 个生效（未吊销）令牌**，已吊销记录保留用于溯源，不计入上限。
-- 备注名 `name`：必填，trim 后 1–48 个字符（保证 `api_token:` 前缀 + 名称不超过审计 `username` 的 64 字符契约），在生效令牌中唯一。
+- 备注名 `name`：必填，trim 后 1–48 个字符（保证 `api_token:` 前缀 + 名称不超过审计 `username` 的 64 字符契约），**全表唯一（含已吊销记录）**。名称是 `persons.source_name` 与审计 Actor 的溯源依据，可复用会让历史来源指向错误的 Token；吊销后如需复用名称，请先确认历史溯源记录不再需要区分。
 - 吊销采用软删除：写 `revoked_at`，记录保留；重复吊销幂等返回成功。
 - 鉴权每次请求查库（`token_hash` 唯一索引 + `revoked_at IS NULL`），不做进程内缓存；吊销在下一次请求立即生效，无需重启，不影响视频流分析。
 
 #### R1.4 活跃度审计
 
 - 每次 Bearer 鉴权成功后刷新 `last_used_at`，但**不得每个请求同步写库**：同一 Token 最多每 60 秒落库一次，使用 `context.WithoutCancel` + 短超时，避免阻塞请求和 SQLite 单写者。
-- 刷新失败只记日志，不影响请求结果。
+- **优雅排空与停机安全**：异步落库 goroutine 必须受 `apitoken.Service` 的 `sync.WaitGroup` 管控；服务关闭时等待在途落库排空，且在停机序列中排在 SQLite 关闭之前，杜绝 Goroutine 逃逸和向已关闭数据库发送 SQL 的竞态。
+- 刷新失败只记日志，不影响请求结果；进程停机后触发的刷新属于预期内失败，不得输出告警级日志。
 
 #### R1.5 OpenAPI 鉴权中间件
 
@@ -71,11 +88,12 @@
 - 数据库故障返回 500 `INTERNAL_ERROR`，不得伪装成 401。
 - 鉴权成功后将 **Token ID、Token 名称** 通过私有类型化 key 注入 Gin 上下文，并提供导出 accessor；禁止裸字符串 `c.Set/c.Get`。
 - 鉴权成功同时升级审计 Actor 为 `api_token:<token_name>`，IP 取 TCP 连接源地址。
+- 鉴权失败（缺失/格式错误/不存在/已吊销）额外记录一条 `api_token.auth_rejected` 审计，只含 IP 与失败类别，**不含任何凭据片段、哈希或原始 Header**，用于发现伪造尝试。
 
 #### R1.6 令牌管理 API（Web UI 后端）
 
-- `GET /api/v1/api-tokens`：返回生效令牌列表 `{items: APITokenInfo[]}`，按创建时间倒序；字段：`id`、`name`、`maskedKey`、`createdAt`、`lastUsedAt`（可空，未使用为 `null`）。
-- `POST /api/v1/api-tokens`：请求 `{name}`；返回 201 `{id, name, maskedKey, token, createdAt}`，`Cache-Control: no-store`。触发上限或名称冲突返回 409。
+- `GET /api/v1/api-tokens`：返回生效令牌列表 `{items: APITokenInfo[]}`，按创建时间倒序；字段：`id`、`name`、`maskedKey`、`createdAt`、`lastUsedAt`（可空，未使用为 `null`）。支持通过参数或前端切换查看已吊销凭据，消除视觉信息差。
+- `POST /api/v1/api-tokens`：请求 `{name}`；返回 201 `{id, name, maskedKey, token, createdAt}`，`Cache-Control: no-store`。触发上限或名称冲突返回 409（名称冲突时前端明确提示被历史凭据占用，含已吊销）。
 - `DELETE /api/v1/api-tokens/:id`：吊销指定令牌，返回 200 `{revoked: true}`；不存在返回 404 `API_TOKEN_NOT_FOUND`；已吊销幂等返回 200。
 - 三个端点挂在 protected（Cookie Session）路由组，仅管理员可操作；创建/吊销写审计。
 - 列表接口属于「严格极小上限」场景（≤10），不分页，但仍返回 `{items: []}` 结构。
@@ -137,7 +155,8 @@
   - `true`：原子替换该人员全部历史人脸。**必须先把新图校验、解码、特征提取、落盘全部完成，再在单个数据库事务中删除旧脸并写入新脸**；任一步失败都不得删除旧脸。事务提交后再删旧文件并广播底库变更。
 - 即时特征建模：调用 `FaceFeatureExtractor` 抽取 512 维特征，写入 `person_faces.feature_vector`，并调用 `GalleryNotifier.BroadcastUpsert`。
 - 响应 201：`{ "faceId": "<ULID>", "isPrimary": true|false, "createdAt": "..." }`；`isPrimary` 以事务提交后的 `primary_face_id` 为准（首个脸自动成为主照）。
-- 人员不存在返回 404 `PERSON_NOT_FOUND`；人员存在但未绑定 `person_id` 时按现有人事策略返回 409 `PERSON_ID_REQUIRED_FOR_ENROLLMENT`。
+- 人员不存在返回 404 `PERSON_NOT_FOUND`。
+- 本接口按 `personId` 定位人员，因此 `PERSON_ID_REQUIRED_FOR_ENROLLMENT` 分支**在 OpenAPI 面不可达**（该分支只影响 Web UI 按内部 ID 录脸的路径），不出现在错误矩阵与映射表中。
 
 #### R3.2 图片校验与异常防御
 
@@ -147,7 +166,7 @@
 | --- | ---: | --- |
 | 缺 `image` 字段 | 422 | `VALIDATION_FAILED`（details: `image/REQUIRED`） |
 | `replace` 不是布尔值 | 422 | `VALIDATION_FAILED`（details: `replace/INVALID_FORMAT`） |
-| 扩展名或魔数不支持 | 422 | `INVALID_FILE_TYPE` |
+| 内容魔数不支持 | 422 | `INVALID_FILE_TYPE` |
 | 图片损坏/无法解码 | 422 | `UNSUPPORTED_IMAGE_FORMAT` |
 | 未检出有效人脸 | 422 | `NO_FACE_DETECTED` |
 | 文件超过 10 MB | 413 | `FILE_TOO_LARGE` |
@@ -156,7 +175,9 @@
 | 提取器内部错误/超时 | 500 | `FEATURE_EXTRACT_FAILED` |
 | 提取器过载（并发上限） | 429 | `TOO_MANY_REQUESTS` |
 
-- 扩展名校验只作辅助：优先按内容魔数/`http.DetectContentType` 判断，避免第三方客户端上传无后缀文件被误拒。
+- **OpenAPI 面档只按内容魔数判定**（JPEG `FF D8 FF` / PNG `89 50 4E 47` / WebP `RIFF....WEBP`，辅以 `http.DetectContentType`）。第三方用 `curl -F image=@photo`（无后缀）或管道上传时文件名常常没有扩展名，扩展名硬门禁会把合法照片误拒。
+- 现有 `AddFaceWithReader` 在嗅探**之前**就做扩展名校验（`allowedFaceImageExts`），OpenAPI 路径不得直接复用该前置判断；需抽出可按策略关闭扩展名检查的录制入口，或在 `openapi` 侧用 `sniff-face` 变体。Web UI 上传的「扩展名 + 魔数」双检保持不变。
+- 文件名仅用于决定落盘扩展名：无后缀时按嗅探结果补 `.jpg` / `.png` / `.webp`。
 - 现有 `SearchByImage` 对坏图返回 400 的历史行为不在本任务范围内；本任务只保证人员/人脸下发接口内部一致。
 
 #### R3.3 人脸一键清空
@@ -188,8 +209,11 @@
 
 #### R3.7 过载保护
 
-- OpenAPI 路由组限制单 Token 同时最多 4 个面档请求、全局最多 8 个；超限返回 429 `TOO_MANY_REQUESTS` + `Retry-After: 1`。
-- 该限制不阻断 Web UI 与批量导入；但人脸提取器是串行客户端，OpenAPI 请求会与导入任务竞争，文档需说明吞吐上限。
+- OpenAPI 面档录入请求限制为**全局同时 3 个、单 Token 1 个**；超限返回 429 `TOO_MANY_REQUESTS` + `Retry-After: 1`。
+- 限流必须做成**精准修饰 `POST .../faces` 端点的中间件**，在 multipart 解析之前生效——`c.ShouldBind` 就会把 11 MiB 请求体落进内存，限流写在 handler 第一行已经晚了；**同时严禁挂在包含 DELETE 的整个子组上，避免清空人脸与单删人脸操作被 429 连带误杀**。
+- 额度取 3/1 而非更大的 8/4，是因为人脸提取器 `internal/faceextract.Client` 是并发 1 且**排队不可取消**（串行点在 `c.mu.Lock()`，锁等待不看 `ctx`），加大并发只会把请求堆在不可取消的锁队列上，平台侧看到的是连接悬挂；同时单请求峰值内存约 65 MiB，3 并发约 195 MiB，已经接近 RK3568 2 GiB 的安全边界。
+- 该限制不阻断 Web UI 与批量导入；但人脸提取器是串行客户端，OpenAPI 请求会与导入任务竞争，文档需说明**不承诺吞吐，只承诺并发上限**。
+- 提取调用额外包 30s 超时，超时映射 429（对平台而言“稍后重试”是正确指令，而非服务端故障）。
 
 ### R4. 数据溯源与操作审计
 
@@ -242,7 +266,7 @@
 
 #### R5.4 前端实现约束
 
-- 新增设置页路由后运行生成器更新 `web/src/routeTree.gen.ts`，不手改生成物。
+- 新增设置页路由后运行生成器更新 `web/src/routeTree.gen.ts`，不手改生成物。`pnpm build` 是 `tsc -b && vite build`，`tsc -b` 会先于 vite 的路由树生成执行，新 route 文件的 `createFileRoute(...)` 字面量可能因不在已知 union 中而类型报错；**必须先 `pnpm dev` 起一次（或单独跑路由生成）产出 `routeTree.gen.ts`，再 `pnpm build`**。
 - API 响应必须用 Zod 解析（`z.object` + 显式字段），不可断言类型。
 - 组件测试跑真实无头浏览器；剪贴板测试需覆盖非安全上下文降级路径。
 - `make api-docs` 的 `--dir` 白名单必须加入新的 OpenAPI / Token handler 包，否则 Swagger 静默缺项。
@@ -259,27 +283,35 @@
 | DELETE | `/api/v1/openapi/persons/{personId}/faces` | 200 | 404 |
 | DELETE | `/api/v1/openapi/persons/{personId}/faces/{faceId}` | 200 | 404 |
 | PUT | `/api/v1/openapi/persons/{personId}/primary-face` | 200 | 404 |
-| GET | `/api/v1/api-tokens` | 200 | — |
+| GET | `/api/v1/api-tokens` | 200 | `APITokenListResponse{items: APITokenInfo[]}` |
 | POST | `/api/v1/api-tokens` | 201 | 409, 422 |
 | DELETE | `/api/v1/api-tokens/{id}` | 200 | 404 |
 
 所有响应使用统一信封 `{code, message, data, details?}`；成功恒为 `code: "OK"`。
 
+补充约定：
+
+- `PUT /api/v1/openapi/persons/{personId}` 的请求体**允许**携带 `personId` 字段，但值必须与路径一致；不一致返回 409 `PERSON_ID_IMMUTABLE`，不得静默忽略（见 `http-api-guidelines.md` §4.4）。
+- 响应类型各归其位：`APITokenListResponse`（顶层列表）、`APITokenCreateResponse`（顶层创建）、`APITokenRevokeResponse`（顶层吊销）、`APITokenInfo`（嵌套条目）、`PersonInfo`（嵌套投影）、`PersonDetailResponse` / `UpsertPersonResponse` / `FaceResponse`（顶层载荷）。
+
 ## Acceptance Criteria
 
-- [ ] **AC1（Token 生命周期与存储安全）**：管理员可在 Web 端创建 `sk-<64hex>` 令牌；数据库仅存 SHA-256 哈希与脱敏 Key，无明文；最多 10 个生效令牌；名称 1–48 字符且生效令牌内唯一；吊销为软删除且立即生效。
+- [ ] **AC1（Token 生命周期与存储安全）**：管理员可在 Web 端创建 `sk-<64hex>` 令牌；数据库仅存 SHA-256 哈希与脱敏 Key，无明文；最多 10 个生效令牌；名称 1–48 字符且**全表唯一（含已吊销）**；吊销为软删除且立即生效。
 - [ ] **AC2（OpenAPI 鉴权）**：有效 Bearer Token 能访问 `/api/v1/openapi/*` 并合并刷新 `last_used_at`；缺失/格式错误/伪造/已吊销统一 401 `UNAUTHORIZED`；数据库故障返回 500；Session Cookie 不能替代 Bearer。
 - [ ] **AC3（人员 Upsert 与来源）**：新 `personId` 创建返回 201，`source='API'`、`source_name=<token.Name>`；已存在人员只更新姓名并返回 200，来源字段不变；并发 upsert 不返回 500。
 - [ ] **AC4（单人流式录脸）**：合法人脸返回 201 与 `faceId`，数据库有 512 维特征，`BroadcastUpsert` 被调用；在 mock extractor 下端到端测试可稳定通过；板端 p95 作为实测指标记录，不作为 CI 门禁。
 - [ ] **AC5（换头像原子性）**：`?replace=true` 在提取失败/写盘失败时保留全部旧脸；在成功时旧脸及旧文件全部清除，新脸成为主照，底库无孤儿特征。
-- [ ] **AC6（坏图防御）**：损坏/不支持/无人脸分别返回 422 `UNSUPPORTED_IMAGE_FORMAT` / `INVALID_FILE_TYPE` / `NO_FACE_DETECTED`；超限 413；超 10 张 409。
+- [ ] **AC6（坏图防御）**：损坏/不支持/无人脸分别返回 422 `UNSUPPORTED_IMAGE_FORMAT` / `INVALID_FILE_TYPE` / `NO_FACE_DETECTED`；超限 413；超 10 张 409；**无后缀合法照片（`curl -F image=@photo`）必须被接受**。
 - [ ] **AC7（删除语义）**：单张删除、清空人脸、注销人员均同步删除文件与算法底库；人员删除后算法停止识别；跨人员 faceId 返回 404。
 - [ ] **AC8（Web UI）**：令牌列表、创建、复制、吊销在真实浏览器测试中通过；复制在非安全上下文走降级；人员表格/网格对 API 人员显示来源徽标。
-- [ ] **AC9（安全与审计）**：原始 Token 不出现在数据库、日志、审计 detail/target；OpenAPI 写操作 Actor 为 `api_token:<name>`；令牌创建/吊销有审计记录；撤销后下一次请求即 401。
-- [ ] **AC10（工程门禁）**：表驱动 Go 测试（含 `-race`）、真实浏览器前端测试、迁移 up/down 往返测试、Swagger 生成包含新端点；`make go-check`、`make frontend-check`、`make api-docs` 通过，最终 `make check` 通过。
+- [ ] **AC9（安全与审计）**：原始 Token 不出现在数据库、日志、审计 detail/target；OpenAPI 写操作 Actor 为 `api_token:<name>`；令牌创建/吊销有审计记录；鉴权失败有 `api_token.auth_rejected` 审计（不含凭据片段）；撤销后下一次请求即 401。
+- [ ] **AC10（工程门禁）**：表驱动 Go 测试（含 `-race`）、真实浏览器前端测试、迁移 up/down 往返测试、Swagger 生成包含新端点**且带 `securityDefinitions.BearerAuth`**；`make go-check`、`make frontend-check`、`make api-docs` 通过，最终 `make check` 通过。
+- [ ] **AC11（对接交付物）**：仓内存在面向第三方平台的对接文档（建议 `docs/openapi/person-face.md`），内容至少覆盖：鉴权方式与 `WWW-Authenticate` 行为、`personId` 锚点与不可变语义、`POST`/`PUT`/`DELETE` 的幂等约定、`?replace=true` 语义与失败不丢旧脸保证、完整错误码表（含 413 与既有 422 的区分）、并发/排队限制与推荐重试策略、仅限可信专网的部署约束、板端 p95 实测位。UI 侧设置页也需有同样的“仅限可信专网 / Token 泄露即视为凭据外泄”提示文案。
 
 ## Out of Scope
 
+- **本地同名档案的自动合并**：平台下发 `EMP001/张三` 时，即使本地已存在一个无 `personId` 的同名「张三」，也只新建一条档案，不做姓名匹配合并、不迁移历史人脸、不删除本地记录。同名去重由管理员在 Web UI 手工完成。理由：姓名不是唯一键，自动合并会把两个真实不同的人（重名）的人脸混进同一底库，且不可逆；宁可留下待清理的重复档案。
+- `PERSON_ID_REQUIRED_FOR_ENROLLMENT` 在 OpenAPI 面的可达性：接口按 `personId` 定位人员，该分支永不触发，不在错误矩阵内。
 - 边缘端反向调用外部 Webhook 回调（采用单次 HTTP 同步响应 + 平台侧任务队列管理）。
 - 基于云端长连接（如 MQTT / WebSocket 反向 RPC）的双向指令通道。
 - 细粒度的 API Token 接口级权限分配（当前所有生效 Token 具备统一的 OpenAPI 人员/人脸维护权限）。
@@ -298,3 +330,6 @@
 - **错误语义**：客户端输入问题统一 422；资源不存在 404；冲突 409；过载 429；服务端故障 500。OpenAPI 与内部人员接口保持一致。
 - **审计闭环**：Token 名称直接反哺人员 `source_name` 与审计 Actor；名称上限 48 以守住 `username` 64 字符契约。
 - **路由隔离**：OpenAPI 独立路由组 + 独立 body limit + 独立 Token 鉴权，不复用 Session 保护组。
+- **名称即溯源键**：Token 名称全表唯一且不可回收，用作 `persons.source_name` 与审计 Actor，避免吊销重建后历史来源指向错误凭据。
+- **宁可留下重复档案**：不做姓名合并，因为姓名不是唯一键，自动合并不可逆地污染底库。
+- **不承诺吞吐，只承诺边界**：提取器是并发 1 的串行客户端且排队不可取消，本任务用并发门限 + 429 把排队深度按住，并把真实 p95 记为实测指标。

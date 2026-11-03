@@ -70,6 +70,30 @@ export function PersonNameCell({ person }: { person: Person }) {
   )
 }
 
+export function PersonSourceCell({ person }: { person: Person }) {
+  const { t } = useTranslation('persons')
+  if (person.source === 'API') {
+    return (
+      <Badge
+        variant='outline'
+        className='gap-1 border-blue-500/30 bg-blue-500/10 text-[11px] text-blue-600 dark:text-blue-400'
+        title={person.sourceName ? `API: ${person.sourceName}` : 'API'}
+      >
+        <span className='h-1.5 w-1.5 rounded-full bg-blue-500' />
+        {person.sourceName ? person.sourceName : t('table.columns.sourceAPI')}
+      </Badge>
+    )
+  }
+  return (
+    <Badge
+      variant='secondary'
+      className='text-[11px] font-normal text-muted-foreground'
+    >
+      {t('table.columns.sourceLocal')}
+    </Badge>
+  )
+}
+
 export function PersonsFacesCell({ person }: { person: Person }) {
   const { t } = useTranslation('persons')
   const { setOpen, setCurrentRow } = usePersonsContext()

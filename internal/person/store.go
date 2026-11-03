@@ -21,6 +21,8 @@ var (
 	// ErrDuplicatePersonID reports a collision on the external business key, which is
 	// distinct from ErrDuplicateID so callers can name the offending field.
 	ErrDuplicatePersonID = errors.New("person with this person_id already exists")
+	// ErrFaceLimitExceeded is returned when adding a face would exceed the per-person template limit.
+	ErrFaceLimitExceeded = errors.New("face limit exceeded")
 )
 
 // clampPagination applies the shared page bounds as a second line of defence
@@ -151,9 +153,11 @@ func (s *Store) CreatePersonImport(
 	err = db.Transaction(func(tx *gorm.DB) error {
 		for _, entry := range entries {
 			p := &Person{
-				ID:       idutil.New(),
-				PersonID: entry.personID,
-				Name:     entry.name,
+				ID:         idutil.New(),
+				PersonID:   entry.personID,
+				Name:       entry.name,
+				Source:     PersonSourceLocal,
+				SourceName: "",
 			}
 			res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(p)
 			if res.Error != nil {
@@ -385,6 +389,7 @@ func (s *Store) DeletePerson(ctx context.Context, id string) error {
 
 // AddFace inserts a new Face template for a person. If the person has no primary
 // face assigned, the new face is automatically designated as primary.
+// Note: callers that enforce maximum enrollment limits should use AddFaceWithLimit.
 func (s *Store) AddFace(ctx context.Context, face *Face) error {
 	if face == nil {
 		return errors.New("face is nil")
@@ -423,6 +428,155 @@ func (s *Store) AddFace(ctx context.Context, face *Face) error {
 		}
 		return nil
 	})
+}
+
+// AddFaceWithLimit inserts a new Face template for a person inside a transaction,
+// checking that the current face count has not reached or exceeded limit.
+func (s *Store) AddFaceWithLimit(ctx context.Context, face *Face, limit int) error {
+	if face == nil {
+		return errors.New("face is nil")
+	}
+	db, err := s.db(ctx)
+	if err != nil {
+		return err
+	}
+	if face.CreatedAt.IsZero() {
+		face.CreatedAt = time.Now().UTC()
+	} else {
+		face.CreatedAt = face.CreatedAt.UTC()
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		p, err := gorm.G[Person](tx).Where("id = ?", face.PersonRowID).First(ctx)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		if limit > 0 {
+			var count int64
+			if err := tx.Model(&Face{}).Where("person_id = ?", face.PersonRowID).Count(&count).Error; err != nil {
+				return err
+			}
+			if int(count) >= limit {
+				return ErrFaceLimitExceeded
+			}
+		}
+
+		if err := gorm.G[Face](tx).Create(ctx, face); err != nil {
+			return fmt.Errorf("create face template: %w", err)
+		}
+
+		if p.PrimaryFaceID == nil || *p.PrimaryFaceID == "" {
+			now := time.Now().UTC()
+			if err := tx.Model(&Person{}).Where("id = ?", face.PersonRowID).Updates(map[string]any{
+				"primary_face_id": face.ID,
+				"updated_at":      now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// ReplaceFaces atomically replaces all existing face templates of a person with a single new face,
+// setting the person's primary_face_id to the new face.
+// It returns the list of removed Face records so callers can clean up the corresponding files on disk.
+func (s *Store) ReplaceFaces(ctx context.Context, personRowID string, face *Face) ([]Face, error) {
+	if face == nil {
+		return nil, errors.New("face is nil")
+	}
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if face.CreatedAt.IsZero() {
+		face.CreatedAt = time.Now().UTC()
+	} else {
+		face.CreatedAt = face.CreatedAt.UTC()
+	}
+
+	var removed []Face
+	err = db.Transaction(func(tx *gorm.DB) error {
+		_, err := gorm.G[Person](tx).Where("id = ?", personRowID).First(ctx)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		if err := tx.Model(&Face{}).Where("person_id = ?", personRowID).Find(&removed).Error; err != nil {
+			return err
+		}
+
+		if len(removed) > 0 {
+			if err := tx.Where("person_id = ?", personRowID).Delete(&Face{}).Error; err != nil {
+				return err
+			}
+		}
+
+		face.PersonRowID = personRowID
+		if err := gorm.G[Face](tx).Create(ctx, face); err != nil {
+			return fmt.Errorf("create replacement face: %w", err)
+		}
+
+		now := time.Now().UTC()
+		if err := tx.Model(&Person{}).Where("id = ?", personRowID).Updates(map[string]any{
+			"primary_face_id": face.ID,
+			"updated_at":      now,
+		}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return removed, nil
+}
+
+// ClearFaces deletes all face templates associated with personRowID and clears the primary_face_id pointer.
+// It returns the list of removed Face records for caller disk cleanup.
+func (s *Store) ClearFaces(ctx context.Context, personRowID string) ([]Face, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var removed []Face
+	err = db.Transaction(func(tx *gorm.DB) error {
+		_, err := gorm.G[Person](tx).Where("id = ?", personRowID).First(ctx)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+
+		if err := tx.Model(&Face{}).Where("person_id = ?", personRowID).Find(&removed).Error; err != nil {
+			return err
+		}
+
+		if len(removed) > 0 {
+			if err := tx.Where("person_id = ?", personRowID).Delete(&Face{}).Error; err != nil {
+				return err
+			}
+		}
+
+		now := time.Now().UTC()
+		return tx.Model(&Person{}).Where("id = ?", personRowID).Updates(map[string]any{
+			"primary_face_id": nil,
+			"updated_at":      now,
+		}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return removed, nil
 }
 
 // GetFace fetches a face template by ID.
@@ -636,8 +790,31 @@ func (s *Store) SetPrimaryFace(ctx context.Context, personID, faceID string) err
 	})
 }
 
-// GetPersonByExternalID retrieves a person by their external business key (person_id).
+// GetPersonByExternalID retrieves a person by their external business key (person_id),
+// preloading their face template summaries.
 func (s *Store) GetPersonByExternalID(ctx context.Context, externalID string) (*Person, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p, err := gorm.G[Person](db).
+		Preload("Faces", func(pb gorm.PreloadBuilder) error {
+			pb.Select("id", "person_id", "image_path", "created_at")
+			return nil
+		}).
+		Where("person_id = ?", externalID).
+		First(ctx)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &p, nil
+}
+
+// GetPersonMetaByExternalID retrieves a person's row by external business key without preloading Faces.
+func (s *Store) GetPersonMetaByExternalID(ctx context.Context, externalID string) (*Person, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return nil, err

@@ -7,6 +7,9 @@ import { initReactI18next } from 'react-i18next'
 import algorithmsEn from '@/features/algorithms/locales/en.json'
 import algorithmsZhHans from '@/features/algorithms/locales/zh-Hans.json'
 import algorithmsZhHant from '@/features/algorithms/locales/zh-Hant.json'
+import apiTokensEn from '@/features/api-tokens/locales/en.json'
+import apiTokensZhHans from '@/features/api-tokens/locales/zh-Hans.json'
+import apiTokensZhHant from '@/features/api-tokens/locales/zh-Hant.json'
 import auditEn from '@/features/audit/locales/en.json'
 import auditZhHans from '@/features/audit/locales/zh-Hans.json'
 import auditZhHant from '@/features/audit/locales/zh-Hant.json'
@@ -71,6 +74,7 @@ export const resources = {
     tasks: tasksZhHans,
     spatial: spatialZhHans,
     imageSearch: imageSearchZhHans,
+    apiTokens: apiTokensZhHans,
   },
   'zh-Hant': {
     common: commonZhHant,
@@ -89,6 +93,7 @@ export const resources = {
     tasks: tasksZhHant,
     spatial: spatialZhHant,
     imageSearch: imageSearchZhHant,
+    apiTokens: apiTokensZhHant,
   },
   en: {
     common: commonEn,
@@ -107,6 +112,7 @@ export const resources = {
     tasks: tasksEn,
     spatial: spatialEn,
     imageSearch: imageSearchEn,
+    apiTokens: apiTokensEn,
   },
 } as const
 

@@ -387,7 +387,8 @@ func TestNewID_IsUnique(t *testing.T) {
 }
 
 // TestAddFace_IDsAreUniqueUnderConcurrency exercises the case the nanosecond clock could
-// not survive: simultaneous enrolments racing for the same primary key.
+// TestAddFace_IDsAreUniqueUnderConcurrency verifies that concurrent inserts
+// through Store.AddFace always generate unique primary key IDs.
 func TestAddFace_IDsAreUniqueUnderConcurrency(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
@@ -405,12 +406,18 @@ func TestAddFace_IDsAreUniqueUnderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			face, err := svc.AddFaceWithReader(ctx, created.ID, fmt.Sprintf("enroll_%d.jpg", i), bytes.NewReader(testJPEGBytes))
-			if err != nil {
+			faceID := idutil.New()
+			face := &Face{
+				ID:            faceID,
+				PersonRowID:   created.ID,
+				ImagePath:     fmt.Sprintf("mock_%d.jpg", i),
+				FeatureVector: make([]byte, faceFeatureDim*4),
+			}
+			if err := svc.store.AddFace(ctx, face); err != nil {
 				errs[i] = err
 				return
 			}
-			ids[i] = face.ID
+			ids[i] = faceID
 		}(i)
 	}
 	wg.Wait()
@@ -418,12 +425,59 @@ func TestAddFace_IDsAreUniqueUnderConcurrency(t *testing.T) {
 	seen := make(map[string]struct{}, workers)
 	for i := 0; i < workers; i++ {
 		if errs[i] != nil {
-			t.Fatalf("concurrent AddFace #%d failed: %v", i, errs[i])
+			t.Fatalf("concurrent store.AddFace #%d failed: %v", i, errs[i])
 		}
 		if _, dup := seen[ids[i]]; dup {
 			t.Fatalf("concurrent enrolments produced duplicate face id %q", ids[i])
 		}
 		seen[ids[i]] = struct{}{}
+	}
+}
+
+// TestAddFace_EnforcesMaxLimitUnderConcurrency verifies that concurrent AddFaceWithReader
+// calls strictly respect the 10-face maximum per person.
+func TestAddFace_EnforcesMaxLimitUnderConcurrency(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("EMP_LIMIT"), Name: "李四"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+
+	const workers = 20
+	errs := make([]error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := svc.AddFaceWithReader(ctx, created.ID, fmt.Sprintf("enroll_%d.jpg", i), bytes.NewReader(testJPEGBytes))
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	successCount := 0
+	limitCount := 0
+	for i := 0; i < workers; i++ {
+		if errs[i] == nil {
+			successCount++
+			continue
+		}
+		var appErr *apperr.Error
+		if errors.As(errs[i], &appErr) && appErr.Code == "FACE_LIMIT_EXCEEDED" {
+			limitCount++
+		} else {
+			t.Errorf("unexpected error on concurrent enroll #%d: %v", i, errs[i])
+		}
+	}
+
+	if successCount != MaxFacesPerPerson {
+		t.Errorf("expected %d successful enrollments, got %d", MaxFacesPerPerson, successCount)
+	}
+	if limitCount != workers-MaxFacesPerPerson {
+		t.Errorf("expected %d limit exceeded errors, got %d", workers-MaxFacesPerPerson, limitCount)
 	}
 }
 

@@ -5,3 +5,5 @@
 {"file": ".trellis/spec/backend/middleware-guidelines.md", "reason": "核验 OpenAPI 独立路由组、body limit 与审计中间件没有被漏挂"}
 {"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "核验三语 key、复制/吊销交互与来源徽标"}
 {"file": ".trellis/spec/architecture.md", "reason": "核验新增包依赖方向：openapi → person/apitoken，未反向依赖 app"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "核验 *Request/*Response/*Info 命名、顶层载荷必须是 *Response、不可变字段必须显式拒绝（409 PERSON_ID_IMMUTABLE）"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "核验迁移成对、编号不跳号、短事务铁律（事务内禁止 CGO/网络），以及 MaxOpenConns=1 下的事务使用方式"}

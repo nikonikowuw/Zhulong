@@ -1876,3 +1876,89 @@ func TestSupportsMotionGateMigrationUpAndDownSymmetry(t *testing.T) {
 		t.Fatalf("expected supports_motion_gate column after re-Up(1)")
 	}
 }
+
+// TestPersonSourceAndAPITokensMigrationSymmetry pins migrations 27 and 28:
+// adding source/source_name to persons and creating api_tokens table.
+func TestPersonSourceAndAPITokensMigrationSymmetry(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "symmetry_27_28.db")
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("sqlite3 instance: %v", err)
+	}
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("iofs driver: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("migrator: %v", err)
+	}
+	t.Cleanup(func() { _, _ = migrator.Close() })
+
+	// 1. Run all migrations through 28
+	if err := migrator.Up(); err != nil {
+		t.Fatalf("migrator Up(): %v", err)
+	}
+
+	// Verify persons source columns and defaults
+	if _, err := db.Exec(`INSERT INTO persons (id, name, created_at, updated_at)
+		VALUES ('p_test', '测试人员', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatalf("insert person: %v", err)
+	}
+	var src, srcName string
+	if err := db.QueryRow("SELECT source, source_name FROM persons WHERE id = 'p_test'").Scan(&src, &srcName); err != nil {
+		t.Fatalf("query person source: %v", err)
+	}
+	if src != "LOCAL" {
+		t.Errorf("expected source to default to 'LOCAL', got %q", src)
+	}
+	if srcName != "" {
+		t.Errorf("expected source_name to default to '', got %q", srcName)
+	}
+
+	// Verify api_tokens table and unique constraints
+	if _, err := db.Exec(`INSERT INTO api_tokens (id, name, token_hash, masked_key)
+		VALUES ('tok_1', 'platform-token', 'hash1', 'sk-123...456')`); err != nil {
+		t.Fatalf("insert api_token: %v", err)
+	}
+	// Duplicate name should fail
+	if _, err := db.Exec(`INSERT INTO api_tokens (id, name, token_hash, masked_key)
+		VALUES ('tok_2', 'platform-token', 'hash2', 'sk-789...012')`); err == nil {
+		t.Fatalf("expected duplicate api_token name to violate unique constraint")
+	}
+
+	// 2. Rollback migration 28 (api_tokens)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("rollback 28: %v", err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='api_tokens'").Scan(&count); err != nil {
+		t.Fatalf("check api_tokens dropped: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected api_tokens table to be dropped after rollback")
+	}
+
+	// 3. Rollback migration 27 (persons columns)
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("rollback 27: %v", err)
+	}
+	if err := db.QueryRow("SELECT source FROM persons WHERE id = 'p_test'").Scan(&src); err == nil {
+		t.Fatalf("expected source column to be dropped after rollback of 27")
+	}
+
+	// 4. Re-apply both
+	if err := migrator.Steps(2); err != nil {
+		t.Fatalf("re-apply 27 & 28: %v", err)
+	}
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='api_tokens'").Scan(&count); err != nil || count == 0 {
+		t.Fatalf("expected api_tokens table after re-Up")
+	}
+}

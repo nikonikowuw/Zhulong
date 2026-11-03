@@ -68,6 +68,10 @@ type networkLifecycle interface {
 	Stop(context.Context) error
 }
 
+type apiTokenLifecycle interface {
+	Close() error
+}
+
 type systemTimeLifecycle interface {
 	Start(context.Context) error
 	Stop(context.Context) error
@@ -129,6 +133,7 @@ type lifecycleRuntime struct {
 	record      recordLifecycle
 	snapshot    snapshotLifecycle
 	spatial     spatialLifecycle
+	apiToken    apiTokenLifecycle
 	configCache regionConfigReloader
 	server      *http.Server
 	logger      *zap.Logger
@@ -186,6 +191,7 @@ type runtimeParams struct {
 	Record      recordLifecycle      `optional:"true"`
 	Snapshot    snapshotLifecycle    `optional:"true"`
 	Spatial     spatialLifecycle     `optional:"true"`
+	APIToken    apiTokenLifecycle    `optional:"true"`
 	ConfigCache regionConfigReloader `optional:"true"`
 	Server      *http.Server
 	Logger      *zap.Logger
@@ -216,6 +222,7 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		record:      p.Record,
 		snapshot:    p.Snapshot,
 		spatial:     p.Spatial,
+		apiToken:    p.APIToken,
 		configCache: p.ConfigCache,
 		server:      p.Server,
 		logger:      p.Logger,
@@ -459,6 +466,7 @@ func (r *lifecycleRuntime) stopSequence() []func(context.Context) error {
 		r.closeSystemTime,
 		r.closeNetwork,
 		r.closeAudit,
+		r.closeAPIToken,
 		r.closeNative,
 		r.closeDatabase,
 	}
@@ -746,6 +754,18 @@ func (r *lifecycleRuntime) closeAudit(ctx context.Context) error {
 		if err := r.audit.Stop(ctx); err != nil {
 			return fmt.Errorf("stop audit service: %w", err)
 		}
+	}
+	return nil
+}
+
+func (r *lifecycleRuntime) closeAPIToken(context.Context) error {
+	if r.apiToken == nil {
+		return nil
+	}
+	r.logger.Info("draining API token in-flight updates")
+	if err := r.apiToken.Close(); err != nil {
+		r.logger.Warn("failed to close API token service gracefully", zap.Error(err))
+		return err
 	}
 	return nil
 }

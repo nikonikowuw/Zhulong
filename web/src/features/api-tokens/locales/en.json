@@ -1,0 +1,43 @@
+{
+  "title": "API Access Tokens",
+  "description": "Manage machine-to-machine Bearer authentication credentials for third-party OpenAPI provisioning.",
+  "securityNotice": "Security Notice: OpenAPI is intended solely for trusted local area networks or dedicated private network communications. Do not expose this service directly to the public internet.",
+  "limitTip": "Active tokens: {{count}}/10",
+  "showRevoked": "Show revoked tokens",
+  "createButton": "Create Token",
+  "table": {
+    "name": "Token Name / System",
+    "maskedKey": "Key Prefix",
+    "status": "Status",
+    "statusActive": "Active",
+    "statusRevoked": "Revoked",
+    "lastUsedAt": "Last Used",
+    "createdAt": "Created At",
+    "actions": "Actions",
+    "neverUsed": "Never",
+    "empty": "No API tokens found",
+    "emptyDesc": "Click 'Create Token' to generate your first OpenAPI credential"
+  },
+  "dialogs": {
+    "createTitle": "Create API Access Token",
+    "createDesc": "Allocate an M2M bearer token for external integrations. Up to 10 active tokens can exist simultaneously.",
+    "nameLabel": "Caller / Integration Name",
+    "namePlaceholder": "e.g. DoorAccess-System, HR-Sync",
+    "cancel": "Cancel",
+    "confirmCreate": "Generate Token",
+    "showSecretTitle": "API Token Generated (Shown Once)",
+    "showSecretDesc": "Make sure to copy and securely store this token now. It will never be displayed again after closing this dialog!",
+    "tokenLabel": "API Token Secret",
+    "copy": "Copy Token",
+    "copied": "Copied to clipboard",
+    "close": "I have stored this token",
+    "revokeTitle": "Confirm Token Revocation?",
+    "revokeDesc": "Any third-party integration using '{{name}}' will immediately receive HTTP 401 Unauthorized errors. This cannot be undone!",
+    "confirmRevoke": "Revoke Token"
+  },
+  "messages": {
+    "createSuccess": "API token created successfully",
+    "revokeSuccess": "Token revoked successfully",
+    "loadFailed": "Failed to load API tokens"
+  }
+}

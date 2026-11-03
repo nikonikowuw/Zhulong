@@ -8,6 +8,7 @@ import (
 
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
+	"github.com/nikonikowuw/Zhulong/internal/apitoken"
 	"github.com/nikonikowuw/Zhulong/internal/asyncjob"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
@@ -22,6 +23,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/mediafile"
 	"github.com/nikonikowuw/Zhulong/internal/nativelog"
 	"github.com/nikonikowuw/Zhulong/internal/network"
+	"github.com/nikonikowuw/Zhulong/internal/openapi"
 	"github.com/nikonikowuw/Zhulong/internal/person"
 	"github.com/nikonikowuw/Zhulong/internal/record"
 	"github.com/nikonikowuw/Zhulong/internal/spatial"
@@ -828,6 +830,59 @@ var spatialModule = fx.Module("spatial",
 	fx.Provide(provideSpatial),
 )
 
+// --- API Token Module ---
+
+type apiTokenOut struct {
+	fx.Out
+
+	Store           *apitoken.Store
+	Service         *apitoken.Service
+	Lifecycle       apiTokenLifecycle
+	Handler         *apitoken.Handler
+	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
+}
+
+func provideAPIToken(provider database.DBProvider, logger *zap.Logger) apiTokenOut {
+	store := apitoken.NewStore(provider)
+	svc := apitoken.NewService(store, logger)
+	handler := apitoken.NewHandler(svc, logger)
+	return apiTokenOut{
+		Store:           store,
+		Service:         svc,
+		Lifecycle:       svc,
+		Handler:         handler,
+		ProtectedRoutes: handler,
+	}
+}
+
+var apiTokenModule = fx.Module("apitoken",
+	fx.Provide(provideAPIToken),
+)
+
+// --- OpenAPI Module ---
+
+type openAPIOut struct {
+	fx.Out
+
+	Limiter       *openapi.UploadLimiter
+	Handler       *openapi.Handler
+	OpenAPIRoutes RouteRegistrar `group:"openapi_routes"`
+}
+
+func provideOpenAPI(personSvc *person.Service, logger *zap.Logger) openAPIOut {
+	limiter := openapi.NewUploadLimiter()
+	handler := openapi.NewHandler(personSvc, limiter, logger)
+	return openAPIOut{
+		Limiter:       limiter,
+		Handler:       handler,
+		OpenAPIRoutes: handler,
+	}
+}
+
+var openAPIModule = fx.Module("openapi",
+	fx.Provide(provideOpenAPI),
+)
+
 // --- HTTP Module ---
 
 var httpModule = fx.Module("http",
@@ -880,6 +935,8 @@ var Module = fx.Options(
 	clientLogModule,
 	recordModule,
 	spatialModule,
+	apiTokenModule,
+	openAPIModule,
 	httpModule,
 	runtimeModule,
 )

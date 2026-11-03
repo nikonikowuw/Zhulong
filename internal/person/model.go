@@ -19,6 +19,13 @@ const (
 	ActionPersonFaceImportCreate = "person.face_import.create"
 )
 
+// Person source values. Source is immutable once written and records where the
+// profile originated.
+const (
+	PersonSourceLocal = "LOCAL"
+	PersonSourceAPI   = "API"
+)
+
 // Person represents a personnel profile entity in the personnel database.
 //
 // Person is a persistence model, not an API contract: every field is tagged
@@ -31,6 +38,8 @@ type Person struct {
 	// optional, unique when assigned, and immutable once set.
 	PersonID      *string   `gorm:"column:person_id" json:"-"`
 	Name          string    `gorm:"column:name;not null" json:"-"`
+	Source        string    `gorm:"column:source;not null" json:"-"`
+	SourceName    string    `gorm:"column:source_name;not null" json:"-"`
 	PrimaryFaceID *string   `gorm:"column:primary_face_id" json:"-"`
 	CreatedAt     time.Time `gorm:"column:created_at;not null" json:"-"`
 	UpdatedAt     time.Time `gorm:"column:updated_at;not null" json:"-"`

@@ -33,7 +33,7 @@ const (
 	maxDecompressedBytes int64 = 1024 * 1024 * 1024 // 1 GiB
 	maxZipFiles          int   = 1000
 	maxImageDimension    int   = 4096
-	maxFacesPerPerson    int   = 10
+	maxFacesPerPerson          = MaxFacesPerPerson
 	qosYieldDuration           = 5 * time.Millisecond
 )
 
@@ -406,11 +406,13 @@ func (s *Service) resolveOrCreateTargetPerson(
 		pKey = &personIDKey
 	}
 	newPerson := &Person{
-		ID:        newPersonID,
-		Name:      name,
-		PersonID:  pKey,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
+		ID:         newPersonID,
+		Name:       name,
+		PersonID:   pKey,
+		Source:     PersonSourceLocal,
+		SourceName: "",
+		CreatedAt:  time.Now().UTC(),
+		UpdatedAt:  time.Now().UTC(),
 	}
 	if err := s.store.CreatePerson(ctx, newPerson); err != nil {
 		if errors.Is(err, ErrDuplicatePersonID) {
@@ -467,10 +469,20 @@ func (s *Service) enrollFaceRecord(
 		CreatedAt:     time.Now().UTC(),
 	}
 
-	if err := s.store.AddFace(ctx, face); err != nil {
+	if err := s.store.AddFaceWithLimit(ctx, face, MaxFacesPerPerson); err != nil {
 		if rmErr := os.Remove(savePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			s.logger.Warn("failed to clean up face image after enrollment failure",
 				zap.String("path", savePath), zap.Error(rmErr))
+		}
+		if errors.Is(err, ErrFaceLimitExceeded) {
+			return nil, &faceProcessError{
+				code: "FACE_LIMIT_EXCEEDED",
+				message: fmt.Sprintf(
+					"人员 %q 底库照片已达 %d 张上限",
+					targetPerson.Name,
+					MaxFacesPerPerson,
+				),
+			}
 		}
 		return nil, &faceProcessError{code: "FACE_ADD_FAILED", message: "保存人脸底库数据失败"}
 	}

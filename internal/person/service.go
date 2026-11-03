@@ -19,6 +19,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 	"unsafe"
 
@@ -31,8 +32,11 @@ import (
 )
 
 const (
-	// maxFaceImageBytes caps an uploaded enrollment photo.
-	maxFaceImageBytes = 10 * 1024 * 1024 // 10MB
+	// MaxFaceImageBytes caps an uploaded enrollment photo.
+	MaxFaceImageBytes = 10 * 1024 * 1024 // 10MB
+	maxFaceImageBytes = MaxFaceImageBytes
+	// MaxFacesPerPerson is the maximum number of enrolled face templates per person.
+	MaxFacesPerPerson = 10
 	// faceFeatureDim is the embedding width every face extractor must produce.
 	// It is persisted as faceFeatureDim*4 Little-Endian bytes.
 	faceFeatureDim = 512
@@ -202,9 +206,11 @@ func (s *Service) CreatePerson(ctx context.Context, req CreatePersonRequest) (*P
 	}
 
 	p := &Person{
-		ID:       idutil.New(),
-		PersonID: personID,
-		Name:     name,
+		ID:         idutil.New(),
+		PersonID:   personID,
+		Name:       name,
+		Source:     PersonSourceLocal,
+		SourceName: "",
 	}
 
 	if err := s.store.CreatePerson(ctx, p); err != nil {
@@ -632,84 +638,20 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 			"Person must be assigned a personId before faces can be enrolled", nil)
 	}
 
-	ext := strings.ToLower(filepath.Ext(filename))
-	if _, ok := allowedFaceImageExts[ext]; !ok {
-		return nil, invalidFileTypeError()
-	}
-
-	headerBuf := make([]byte, 512)
-	nHeader, err := io.ReadFull(r, headerBuf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
-		return nil, apperr.Invalid("FILE_READ_FAILED", "Failed to read file content", err)
-	}
-	if nHeader == 0 {
-		return nil, apperr.Invalid("FILE_REQUIRED", "file is required", nil)
-	}
-	if !isSupportedImageContent(headerBuf[:nHeader]) {
-		return nil, invalidFileTypeError()
-	}
-
-	combinedReader := io.MultiReader(bytes.NewReader(headerBuf[:nHeader]), r)
-	lr := io.LimitReader(combinedReader, maxFaceImageBytes+1)
-	fullBytes, err := io.ReadAll(lr)
-	if err != nil {
-		return nil, apperr.Invalid("FILE_READ_FAILED", "Failed to read file content", err)
-	}
-	if len(fullBytes) > maxFaceImageBytes {
-		return nil, apperr.Invalid("FILE_TOO_LARGE", "file size exceeds 10MB limit", nil)
-	}
-
-	// A face template is only ever enrolled with a real embedding. There is no
-	// placeholder path: a zeroed vector is indistinguishable from a genuine
-	// enrollment in storage and would silently never match.
-	if s.extractor == nil {
-		return nil, apperr.New(
-			apperr.KindInternal,
-			"FEATURE_EXTRACTOR_UNAVAILABLE",
-			"Face feature extraction is not configured",
-			nil,
-		)
-	}
-	features, err := s.extractor.ExtractFaceFeature(ctx, fullBytes)
-	if err != nil {
-		if errors.Is(err, ErrNoFaceDetected) {
-			return nil, apperr.Invalid("NO_FACE_DETECTED", "No detectable face found in the uploaded photo", err)
-		}
-		if errors.Is(err, ErrUnsupportedImageFormat) {
-			return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "The uploaded image could not be decoded", err)
-		}
-		return nil, apperr.New(apperr.KindInternal, "FEATURE_EXTRACT_FAILED", "Failed to extract facial features", err)
-	}
-	if len(features) != faceFeatureDim {
-		return nil, apperr.New(apperr.KindInternal, "FEATURE_DIM_MISMATCH", "Unexpected feature dimension", nil)
-	}
-	featBytes := float32ToBytes(features)
-
-	if err := os.MkdirAll(s.facesDir, 0755); err != nil {
-		return nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to create faces directory", err)
-	}
-
-	faceID := idutil.New()
-	fileName, err := faceFileName(personID, faceID, ext)
+	face, savePath, err := s.enrollFace(ctx, personMeta, filename, r, true)
 	if err != nil {
 		return nil, err
 	}
-	savePath := filepath.Join(s.facesDir, fileName)
-	if err := os.WriteFile(savePath, fullBytes, 0644); err != nil {
-		return nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to save face image", err)
-	}
 
-	face := &Face{
-		ID:            faceID,
-		PersonRowID:   personID,
-		ImagePath:     fileName,
-		FeatureVector: featBytes,
-	}
-
-	if err := s.store.AddFace(ctx, face); err != nil {
-		if err := os.Remove(savePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := s.store.AddFaceWithLimit(ctx, face, MaxFacesPerPerson); err != nil {
+		if rmErr := os.Remove(savePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			s.logger.Warn("failed to clean up face image after enrollment failure",
-				zap.String("path", savePath), zap.Error(err))
+				zap.String("path", savePath), zap.Error(rmErr))
+		}
+		if errors.Is(err, ErrFaceLimitExceeded) {
+			return nil, apperr.Conflict("FACE_LIMIT_EXCEEDED",
+				fmt.Sprintf("Person %q has reached the maximum of %d enrolled faces", personMeta.Name, MaxFacesPerPerson),
+				err)
 		}
 		return nil, apperr.New(apperr.KindInternal, "FACE_ADD_FAILED", "Failed to add face template", err)
 	}
@@ -721,6 +663,366 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 	s.broadcastUpsert(ctx, newGalleryItem(*face, personIDKey, personMeta.Name))
 
 	return face, nil
+}
+
+func inferImageExt(data []byte) string {
+	if len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff {
+		return ".jpg"
+	}
+	if len(data) >= 8 && bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n")) {
+		return ".png"
+	}
+	if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
+		return ".webp"
+	}
+	return ""
+}
+
+// NormalizeExternalPersonID validates and trims an external person ID.
+// It enforces 1-64 characters and rejects URI delimiters and control characters.
+func NormalizeExternalPersonID(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return "", apperr.Invalid("PERSON_ID_REQUIRED", "person_id is required", nil)
+	}
+	if len(trimmed) > 64 {
+		return "", apperr.Invalid("PERSON_ID_TOO_LONG", "person_id exceeds maximum length of 64 characters", nil)
+	}
+	for i := 0; i < len(trimmed); i++ {
+		b := trimmed[i]
+		if b < 32 || b == 127 {
+			return "", apperr.Invalid("PERSON_ID_INVALID_CHARS", "person_id cannot contain control characters", nil)
+		}
+		if b == '/' || b == '\\' || b == '?' || b == '#' || b == '%' {
+			return "", apperr.Invalid("PERSON_ID_INVALID_CHARS", "person_id cannot contain URI path or query delimiters", nil)
+		}
+	}
+	return trimmed, nil
+}
+
+func (s *Service) enrollFace(ctx context.Context, personMeta *Person, filename string, r io.Reader, requireExt bool) (*Face, string, error) {
+	ext := strings.ToLower(filepath.Ext(filename))
+	if requireExt {
+		if _, ok := allowedFaceImageExts[ext]; !ok {
+			return nil, "", invalidFileTypeError()
+		}
+	}
+
+	headerBuf := make([]byte, 512)
+	nHeader, err := io.ReadFull(r, headerBuf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return nil, "", apperr.Invalid("FILE_READ_FAILED", "Failed to read file content", err)
+	}
+	if nHeader == 0 {
+		return nil, "", apperr.Invalid("FILE_REQUIRED", "file is required", nil)
+	}
+	if !isSupportedImageContent(headerBuf[:nHeader]) {
+		return nil, "", invalidFileTypeError()
+	}
+
+	if !requireExt {
+		if _, ok := allowedFaceImageExts[ext]; !ok {
+			ext = inferImageExt(headerBuf[:nHeader])
+			if ext == "" {
+				return nil, "", invalidFileTypeError()
+			}
+		}
+	}
+
+	combinedReader := io.MultiReader(bytes.NewReader(headerBuf[:nHeader]), r)
+	lr := io.LimitReader(combinedReader, maxFaceImageBytes+1)
+	fullBytes, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, "", apperr.Invalid("FILE_READ_FAILED", "Failed to read file content", err)
+	}
+	if len(fullBytes) > maxFaceImageBytes {
+		return nil, "", apperr.Invalid("FILE_TOO_LARGE", "file size exceeds 10MB limit", nil)
+	}
+
+	if s.extractor == nil {
+		return nil, "", apperr.New(
+			apperr.KindInternal,
+			"FEATURE_EXTRACTOR_UNAVAILABLE",
+			"Face feature extraction is not configured",
+			nil,
+		)
+	}
+	features, err := s.extractor.ExtractFaceFeature(ctx, fullBytes)
+	if err != nil {
+		if errors.Is(err, ErrNoFaceDetected) {
+			return nil, "", apperr.Invalid("NO_FACE_DETECTED", "No detectable face found in the uploaded photo", err)
+		}
+		if errors.Is(err, ErrUnsupportedImageFormat) {
+			return nil, "", apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "The uploaded image could not be decoded", err)
+		}
+		return nil, "", apperr.New(apperr.KindInternal, "FEATURE_EXTRACT_FAILED", "Failed to extract facial features", err)
+	}
+	if len(features) != faceFeatureDim {
+		return nil, "", apperr.New(apperr.KindInternal, "FEATURE_DIM_MISMATCH", "Unexpected feature dimension", nil)
+	}
+	featBytes := float32ToBytes(features)
+
+	if err := os.MkdirAll(s.facesDir, 0755); err != nil {
+		return nil, "", apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to create faces directory", err)
+	}
+
+	faceID := idutil.New()
+	fileName, err := faceFileName(personMeta.ID, faceID, ext)
+	if err != nil {
+		return nil, "", err
+	}
+	savePath := filepath.Join(s.facesDir, fileName)
+	if err := os.WriteFile(savePath, fullBytes, 0644); err != nil {
+		return nil, "", apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to save face image", err)
+	}
+
+	face := &Face{
+		ID:            faceID,
+		PersonRowID:   personMeta.ID,
+		ImagePath:     fileName,
+		FeatureVector: featBytes,
+	}
+	return face, savePath, nil
+}
+
+// UpsertPersonByExternalID provisions a person by their external business key.
+// If the person exists, their name is updated (if changed) without touching source tracking.
+// If the person does not exist, a new person is created with Source=API and SourceName=tokenName.
+// Returns the person model, a boolean indicating whether a new row was created, and an error.
+func (s *Service) UpsertPersonByExternalID(ctx context.Context, externalID, name, tokenName string) (*Person, bool, error) {
+	normID, err := NormalizeExternalPersonID(externalID)
+	if err != nil {
+		return nil, false, err
+	}
+	trimmedName := strings.TrimSpace(name)
+	if len(trimmedName) == 0 {
+		return nil, false, apperr.Invalid("NAME_REQUIRED", "name is required", nil)
+	}
+	if len(trimmedName) > faceNameMaxLen {
+		return nil, false, apperr.Invalid("NAME_TOO_LONG", "name exceeds maximum length of 64 characters", nil)
+	}
+
+	p, err := s.store.GetPersonMetaByExternalID(ctx, normID)
+	switch {
+	case err == nil:
+		if p.Name == trimmedName {
+			return p, false, nil
+		}
+		updated, upErr := s.UpdatePerson(ctx, p.ID, UpdatePersonRequest{Name: &trimmedName})
+		if upErr != nil {
+			return nil, false, upErr
+		}
+		return updated, false, nil
+
+	case errors.Is(err, ErrNotFound):
+		now := time.Now().UTC()
+		newPerson := &Person{
+			ID:         idutil.New(),
+			PersonID:   &normID,
+			Name:       trimmedName,
+			Source:     PersonSourceAPI,
+			SourceName: strings.TrimSpace(tokenName),
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+		createErr := s.store.CreatePerson(ctx, newPerson)
+		if createErr != nil {
+			if errors.Is(createErr, ErrDuplicatePersonID) {
+				// Retry query in case of concurrent insert
+				existing, getErr := s.store.GetPersonMetaByExternalID(ctx, normID)
+				if getErr == nil {
+					if existing.Name == trimmedName {
+						return existing, false, nil
+					}
+					updated, upErr := s.UpdatePerson(ctx, existing.ID, UpdatePersonRequest{Name: &trimmedName})
+					if upErr != nil {
+						return nil, false, upErr
+					}
+					return updated, false, nil
+				}
+			}
+			return nil, false, apperr.New(apperr.KindInternal, "PERSON_CREATE_FAILED", "Failed to create person", createErr)
+		}
+		return newPerson, true, nil
+
+	default:
+		return nil, false, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to query person", err)
+	}
+}
+
+// AddFaceByExternalID enrolls a face for the person identified by externalID.
+// If replace is true, all existing faces are atomically replaced with the new one.
+// Returns the enrolled Face, a boolean indicating if it was a replacement, and an error.
+func (s *Service) AddFaceByExternalID(ctx context.Context, externalID, filename string, r io.Reader, replace bool) (*Face, bool, error) {
+	normID, err := NormalizeExternalPersonID(externalID)
+	if err != nil {
+		return nil, false, err
+	}
+	personMeta, err := s.store.GetPersonMetaByExternalID(ctx, normID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, false, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
+		}
+		return nil, false, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+	}
+
+	face, savePath, err := s.enrollFace(ctx, personMeta, filename, r, false)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if replace {
+		removed, err := s.store.ReplaceFaces(ctx, personMeta.ID, face)
+		if err != nil {
+			if rmErr := os.Remove(savePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				s.logger.Warn("failed to clean up face image after replace failure",
+					zap.String("path", savePath), zap.Error(rmErr))
+			}
+			return nil, false, apperr.New(apperr.KindInternal, "FACE_REPLACE_FAILED", "Failed to replace face templates", err)
+		}
+
+		for _, f := range removed {
+			s.removeFaceFile(f.ImagePath)
+		}
+
+		// Atomic IPC notification: broadcast delete for externalID, followed by upsert for new face
+		s.broadcastDelete(ctx, "", normID)
+		s.broadcastUpsert(ctx, newGalleryItem(*face, normID, personMeta.Name))
+		return face, true, nil
+	}
+
+	// Normal append enrollment
+	if err := s.store.AddFaceWithLimit(ctx, face, MaxFacesPerPerson); err != nil {
+		if rmErr := os.Remove(savePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			s.logger.Warn("failed to clean up face image after enrollment failure",
+				zap.String("path", savePath), zap.Error(rmErr))
+		}
+		if errors.Is(err, ErrFaceLimitExceeded) {
+			return nil, false, apperr.Conflict("FACE_LIMIT_EXCEEDED",
+				fmt.Sprintf("Person %q has reached the maximum of %d enrolled faces", personMeta.Name, MaxFacesPerPerson),
+				err)
+		}
+		return nil, false, apperr.New(apperr.KindInternal, "FACE_ADD_FAILED", "Failed to add face template", err)
+	}
+
+	s.broadcastUpsert(ctx, newGalleryItem(*face, normID, personMeta.Name))
+	return face, false, nil
+}
+
+// ClearFacesByExternalID deletes all enrolled faces for the given externalID.
+func (s *Service) ClearFacesByExternalID(ctx context.Context, externalID string) (int, error) {
+	normID, err := NormalizeExternalPersonID(externalID)
+	if err != nil {
+		return 0, err
+	}
+	personMeta, err := s.store.GetPersonMetaByExternalID(ctx, normID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return 0, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
+		}
+		return 0, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+	}
+
+	removed, err := s.store.ClearFaces(ctx, personMeta.ID)
+	if err != nil {
+		return 0, apperr.New(apperr.KindInternal, "FACE_CLEAR_FAILED", "Failed to clear faces", err)
+	}
+
+	for _, f := range removed {
+		s.removeFaceFile(f.ImagePath)
+	}
+	if len(removed) > 0 {
+		s.broadcastDelete(ctx, "", normID)
+	}
+	return len(removed), nil
+}
+
+// DeletePersonByExternalID deletes a person and all their faces using the external business key.
+func (s *Service) DeletePersonByExternalID(ctx context.Context, externalID string) error {
+	normID, err := NormalizeExternalPersonID(externalID)
+	if err != nil {
+		return err
+	}
+	personMeta, err := s.store.GetPersonMetaByExternalID(ctx, normID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
+		}
+		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+	}
+	return s.DeletePerson(ctx, personMeta.ID)
+}
+
+// DeleteFaceByExternalID deletes a specific face template under the person identified by externalID.
+func (s *Service) DeleteFaceByExternalID(ctx context.Context, externalID, faceID string) error {
+	normID, err := NormalizeExternalPersonID(externalID)
+	if err != nil {
+		return err
+	}
+	personMeta, err := s.store.GetPersonMetaByExternalID(ctx, normID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
+		}
+		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+	}
+
+	face, err := s.store.GetFace(ctx, faceID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return apperr.NotFound("FACE_NOT_FOUND", "Face not found", err)
+		}
+		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify face", err)
+	}
+	if face.PersonRowID != personMeta.ID {
+		return apperr.NotFound("FACE_NOT_FOUND", "Face does not belong to this person", nil)
+	}
+
+	return s.DeleteFace(ctx, personMeta.ID, faceID)
+}
+
+// SetPrimaryFaceByExternalID designates faceID as the primary face for the person identified by externalID.
+func (s *Service) SetPrimaryFaceByExternalID(ctx context.Context, externalID, faceID string) (*Person, error) {
+	normID, err := NormalizeExternalPersonID(externalID)
+	if err != nil {
+		return nil, err
+	}
+	personMeta, err := s.store.GetPersonMetaByExternalID(ctx, normID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
+		}
+		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+	}
+
+	face, err := s.store.GetFace(ctx, faceID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, apperr.NotFound("FACE_NOT_FOUND", "Face not found", err)
+		}
+		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify face", err)
+	}
+	if face.PersonRowID != personMeta.ID {
+		return nil, apperr.NotFound("FACE_NOT_FOUND", "Face does not belong to this person", nil)
+	}
+
+	return s.SetPrimaryFace(ctx, personMeta.ID, faceID)
+}
+
+// GetPersonByExternalID retrieves a person and their faces by external business key.
+func (s *Service) GetPersonByExternalID(ctx context.Context, externalID string) (*Person, error) {
+	normID, err := NormalizeExternalPersonID(externalID)
+	if err != nil {
+		return nil, err
+	}
+	p, err := s.store.GetPersonByExternalID(ctx, normID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
+		}
+		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to get person", err)
+	}
+	return p, nil
 }
 
 // OpenFaceImage resolves the stored photo of a face template and returns it opened for

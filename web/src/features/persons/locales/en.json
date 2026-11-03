@@ -12,6 +12,9 @@
       "avatar": "Photo",
       "name": "Name",
       "personId": "Personnel ID",
+      "source": "Source",
+      "sourceLocal": "Local",
+      "sourceAPI": "OpenAPI",
       "faceCount": "Faces Enrolled",
       "createdAt": "Enrolled At",
       "actions": "Actions"

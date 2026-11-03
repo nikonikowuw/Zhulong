@@ -1,0 +1,43 @@
+{
+  "title": "API 访问凭据",
+  "description": "管理供第三方系统调用 OpenAPI 接口的机器访问凭据（Bearer Token）。",
+  "securityNotice": "安全提示：OpenAPI 仅供受信任的局域网或内部专网通信使用。本系统未启用传输层加密，请勿将接口直接暴露至公网。",
+  "limitTip": "当前已激活 {{count}}/10 个凭据",
+  "showRevoked": "显示已吊销凭据",
+  "createButton": "新建凭据",
+  "table": {
+    "name": "凭据名称 / 调用方",
+    "maskedKey": "令牌前缀",
+    "status": "状态",
+    "statusActive": "生效中",
+    "statusRevoked": "已吊销",
+    "lastUsedAt": "最近使用时间",
+    "createdAt": "创建时间",
+    "actions": "操作",
+    "neverUsed": "从未调用",
+    "empty": "暂无 API 访问凭据",
+    "emptyDesc": "点击「新建凭据」创建第一个第三方调用令牌"
+  },
+  "dialogs": {
+    "createTitle": "新建 API 访问凭据",
+    "createDesc": "为第三方系统或脚本分配机器间访问令牌。每个系统最多可同时激活 10 个凭据。",
+    "nameLabel": "调用方名称",
+    "namePlaceholder": "例如：DoorAccess-System、HR-Sync",
+    "cancel": "取消",
+    "confirmCreate": "生成凭据",
+    "showSecretTitle": "凭据已生成（仅显示一次）",
+    "showSecretDesc": "请妥善复制并保存下方完整的 API Token。离开此页面后，系统将无法再次显示该密钥！",
+    "tokenLabel": "API 密钥",
+    "copy": "复制密钥",
+    "copied": "已复制到剪贴板",
+    "close": "我已妥善保存",
+    "revokeTitle": "确认吊销凭据？",
+    "revokeDesc": "吊销后，使用凭据「{{name}}」的所有第三方系统调用将被立即拒绝（HTTP 401）。此操作不可撤销！",
+    "confirmRevoke": "确认吊销"
+  },
+  "messages": {
+    "createSuccess": "API 凭据生成成功",
+    "revokeSuccess": "凭据已吊销",
+    "loadFailed": "加载 API 凭据失败"
+  }
+}

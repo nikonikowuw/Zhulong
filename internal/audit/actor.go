@@ -33,6 +33,8 @@ const (
 	UsernameSystem = "system"
 	// SourceWeb marks an HTTP-originated actor.
 	SourceWeb = "web"
+	// SourceAPI marks an OpenAPI Bearer token authenticated caller.
+	SourceAPI = "api"
 	// SourceSystem marks an explicitly recorded system event.
 	SourceSystem = "system"
 )

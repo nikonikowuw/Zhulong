@@ -42,6 +42,8 @@ function EditTestComponent({
         onClick={() => {
           setCurrentRow({
             ...person,
+            source: 'LOCAL',
+            sourceName: '',
             createdAt: '2026-10-14T00:00:00Z',
             updatedAt: '2026-10-14T00:00:00Z',
             faces: [],

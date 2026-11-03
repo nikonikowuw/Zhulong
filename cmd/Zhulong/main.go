@@ -15,6 +15,10 @@ import (
 // @version         1.0
 // @description     Local API for the Zhulong edge operations host.
 // @BasePath        /api/v1
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Enter Bearer [token]
 func main() {
 	resetNetwork := flag.Bool("reset-network", false, "Emergency recovery: reset primary network interface to factory maintenance IP (192.168.1.168/24) and all others to DHCP")
 	flag.Parse()

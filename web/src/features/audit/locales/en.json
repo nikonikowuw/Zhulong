@@ -68,7 +68,10 @@
     "time.clock_step": "Clock Step Correction",
     "time.ntp_sync_failed": "NTP Sync Failed",
     "time.ntp_sync_recovered": "NTP Sync Recovered",
-    "audit.clear": "Clear Audit Logs"
+    "audit.clear": "Clear Audit Logs",
+    "api_token.create": "Create API Token",
+    "api_token.revoke": "Revoke API Token",
+    "api_token.auth_rejected": "API Token Auth Rejected"
   },
   "actions": {
     "viewDetail": "View Details",

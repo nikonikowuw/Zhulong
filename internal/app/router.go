@@ -10,6 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	_ "github.com/nikonikowuw/Zhulong/internal/apidocs"
+	"github.com/nikonikowuw/Zhulong/internal/apitoken"
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/auth"
@@ -72,10 +74,12 @@ type RouterParams struct {
 	Assets        http.FileSystem
 	// LogSink lets /health name a degraded log destination. Readiness itself stays
 	// database + engine: a host whose log file is unwritable still records video.
-	LogSink         loggerOutput     `optional:"true"`
-	PublicRoutes    []RouteRegistrar `group:"public_routes"`
-	ProtectedRoutes []RouteRegistrar `group:"protected_routes"`
-	UploadRoutes    []RouteRegistrar `group:"upload_routes"`
+	LogSink         loggerOutput      `optional:"true"`
+	PublicRoutes    []RouteRegistrar  `group:"public_routes"`
+	ProtectedRoutes []RouteRegistrar  `group:"protected_routes"`
+	UploadRoutes    []RouteRegistrar  `group:"upload_routes"`
+	APITokenService *apitoken.Service `optional:"true"`
+	OpenAPIRoutes   []RouteRegistrar  `group:"openapi_routes"`
 }
 
 func newRouter(p RouterParams) *gin.Engine {
@@ -161,6 +165,28 @@ func newRouter(p RouterParams) *gin.Engine {
 	}
 	for _, r := range p.UploadRoutes {
 		r.RegisterRoutes(upload)
+	}
+
+	// Mount OpenAPI routes for M2M provisioning with dedicated Bearer authentication
+	// and an 11 MiB ceiling for enrollment photo uploads.
+	openapi := router.Group("/api/v1/openapi")
+	openapi.Use(
+		httpmiddleware.AccessLog(p.Logger),
+		httpmiddleware.MaxBodyLimitWithLimit(11*1024*1024),
+	)
+	if p.AuditService != nil {
+		openapi.Use(audithttp.Middleware(p.AuditService))
+	}
+	if p.APITokenService != nil {
+		openapi.Use(apitoken.RequireBearer(p.APITokenService, p.Logger, p.AuditService))
+	} else {
+		openapi.Use(func(c *gin.Context) {
+			httputil.WriteError(c, apperr.New(apperr.KindInternal, "INTERNAL_ERROR", "API token service is not initialized", nil))
+			c.Abort()
+		})
+	}
+	for _, r := range p.OpenAPIRoutes {
+		r.RegisterRoutes(openapi)
 	}
 
 	swaggerHandler := ginSwagger.WrapHandler(swaggerFiles.Handler)
