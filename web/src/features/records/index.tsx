@@ -279,6 +279,10 @@ export function Records() {
               onTargetTypeChange={(nextTt) =>
                 updateSearch({ targetType: nextTt, page: 1 })
               }
+              onExport={() => {
+                setExportDialogMode('batch')
+                setExportDialogOpen(true)
+              }}
               onResetFilters={() =>
                 updateSearch({
                   cameraId: undefined,

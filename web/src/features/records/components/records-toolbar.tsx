@@ -1,6 +1,11 @@
 import { useMemo } from 'react'
 import { Cross2Icon } from '@radix-ui/react-icons'
-import { LayoutGrid, RotateCcw, Table as TableIcon } from 'lucide-react'
+import {
+  Download,
+  LayoutGrid,
+  RotateCcw,
+  Table as TableIcon,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -44,6 +49,7 @@ export interface RecordsToolbarProps {
   onResetFilters: () => void
   onRefresh?: () => void
   isFetching?: boolean
+  onExport?: () => void
 }
 
 export function RecordsToolbar({
@@ -65,6 +71,7 @@ export function RecordsToolbar({
   onResetFilters,
   onRefresh,
   isFetching = false,
+  onExport,
 }: RecordsToolbarProps) {
   const { t } = useTranslation('records')
   const { data: cameraData } = useAllCameras()
@@ -220,8 +227,20 @@ export function RecordsToolbar({
         )}
       </div>
 
-      {/* 右侧：视图切换与可选刷新 */}
+      {/* 右侧：视图切换、可选导出与可选刷新 */}
       <div className='flex items-center gap-2'>
+        {onExport && (
+          <Button
+            variant='outline'
+            size='sm'
+            onClick={onExport}
+            className='h-8 gap-1.5 text-xs'
+          >
+            <Download className='size-3.5' />
+            <span>{t('export.button', { defaultValue: '批量导出' })}</span>
+          </Button>
+        )}
+
         <div className='flex items-center rounded-md border border-border bg-muted/30 p-0.5'>
           <Button
             variant={view === 'grid' ? 'secondary' : 'ghost'}

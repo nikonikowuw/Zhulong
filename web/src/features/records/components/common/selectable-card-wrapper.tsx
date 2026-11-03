@@ -23,13 +23,13 @@ export function SelectableCardWrapper({
         className
       )}
     >
-      {/* 勾选复选框：选中时常驻高亮，未选中时 hover 浮现 */}
+      {/* 勾选复选框：选中时常驻高亮，未选中时轻度半透明常驻、hover 完全显现 */}
       <div
         className={cn(
-          'absolute start-2 top-2 z-30 flex size-6 items-center justify-center rounded-md bg-background/90 shadow-md backdrop-blur-xs transition-opacity',
+          'absolute start-2 top-2 z-30 flex size-6 items-center justify-center rounded-md bg-background/80 shadow-md backdrop-blur-xs transition-all',
           selected
-            ? 'opacity-100 ring-1 ring-primary'
-            : 'opacity-0 group-hover/selectable:opacity-100'
+            ? 'bg-background opacity-100 ring-2 ring-primary'
+            : 'opacity-70 group-hover/selectable:opacity-100 hover:bg-background'
         )}
         onClick={(e) => {
           e.stopPropagation()
@@ -40,7 +40,7 @@ export function SelectableCardWrapper({
         <Checkbox
           checked={selected}
           onCheckedChange={() => onToggle()}
-          className='size-4 bg-background data-[state=checked]:bg-primary'
+          className='size-4 bg-background/90 data-[state=checked]:bg-primary'
         />
       </div>
 
