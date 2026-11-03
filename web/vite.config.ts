@@ -20,6 +20,7 @@ export default defineConfig({
       '@radix-ui/react-avatar',
       '@radix-ui/react-tabs',
       '@radix-ui/react-slider',
+      'fflate',
     ],
   },
   resolve: {

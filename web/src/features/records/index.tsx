@@ -11,6 +11,8 @@ import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
 import { RecordDetailDialog } from './components/detail/record-detail-dialog'
+import { RecordsExportDialog } from './components/export/records-export-dialog'
+import { RecordsSelectionBar } from './components/export/records-selection-bar'
 import { RecordsPrimaryButtons } from './components/records-primary-buttons'
 import { RecordsToolbar } from './components/records-toolbar'
 import { AlarmsView } from './components/views/alarms-view'
@@ -29,6 +31,7 @@ import { useAlarms } from './hooks/use-alarms'
 import { useCameraNames } from './hooks/use-camera-names'
 import { useCaptures } from './hooks/use-captures'
 import { useRecognitions } from './hooks/use-recognitions'
+import { useRecordsSelection } from './hooks/use-records-selection'
 
 const route = getRouteApi('/_authenticated/records/')
 
@@ -63,6 +66,12 @@ export function Records() {
   // 详情弹窗状态
   const [detailOpen, setDetailOpen] = useState(false)
   const [selectedRecord, setSelectedRecord] = useState<RecordItem | null>(null)
+
+  // 导出弹窗状态
+  const [exportDialogOpen, setExportDialogOpen] = useState(false)
+  const [exportDialogMode, setExportDialogMode] = useState<
+    'selection' | 'batch'
+  >('batch')
 
   // 记录行只存 cameraId，展示时必须解析成摄像机名称
   const cameraName = useCameraNames()
@@ -155,6 +164,32 @@ export function Records() {
     alarmsQuery.isFetching ||
     capturesQuery.isFetching
 
+  // 当前列表行与总条数计算
+  const currentItems = useMemo<RecordItem[]>(() => {
+    if (tab === 'recognitions') return recognitionsQuery.data?.items ?? []
+    if (tab === 'alarms') return alarmsQuery.data?.items ?? []
+    return capturesQuery.data?.items ?? []
+  }, [
+    tab,
+    recognitionsQuery.data?.items,
+    alarmsQuery.data?.items,
+    capturesQuery.data?.items,
+  ])
+
+  const currentTotal = useMemo<number>(() => {
+    if (tab === 'recognitions') return recognitionsQuery.data?.total ?? 0
+    if (tab === 'alarms') return alarmsQuery.data?.total ?? 0
+    return capturesQuery.data?.total ?? 0
+  }, [
+    tab,
+    recognitionsQuery.data?.total,
+    alarmsQuery.data?.total,
+    capturesQuery.data?.total,
+  ])
+
+  // 单 Tab 隔离多选状态
+  const selection = useRecordsSelection(tab, currentItems)
+
   return (
     <>
       <Header fixed>
@@ -176,6 +211,10 @@ export function Records() {
           <RecordsPrimaryButtons
             onRefresh={handleRefresh}
             isRefreshing={isFetching}
+            onExport={() => {
+              setExportDialogMode('batch')
+              setExportDialogOpen(true)
+            }}
           />
         </div>
 
@@ -272,6 +311,11 @@ export function Records() {
                 }
                 onSelect={handleOpenDetail}
                 onRetry={() => void recognitionsQuery.refetch()}
+                isSelected={selection.isSelected}
+                onToggleSelect={selection.toggleItem}
+                isAllPageSelected={selection.isAllPageSelected}
+                isPartiallySelected={selection.isPartiallySelected}
+                onToggleSelectAll={selection.toggleSelectAllCurrentPage}
               />
             )}
 
@@ -291,6 +335,11 @@ export function Records() {
                 }
                 onSelect={handleOpenDetail}
                 onRetry={() => void alarmsQuery.refetch()}
+                isSelected={selection.isSelected}
+                onToggleSelect={selection.toggleItem}
+                isAllPageSelected={selection.isAllPageSelected}
+                isPartiallySelected={selection.isPartiallySelected}
+                onToggleSelectAll={selection.toggleSelectAllCurrentPage}
               />
             )}
 
@@ -311,6 +360,11 @@ export function Records() {
                 }
                 onSelect={handleOpenDetail}
                 onRetry={() => void capturesQuery.refetch()}
+                isSelected={selection.isSelected}
+                onToggleSelect={selection.toggleItem}
+                isAllPageSelected={selection.isAllPageSelected}
+                isPartiallySelected={selection.isPartiallySelected}
+                onToggleSelectAll={selection.toggleSelectAllCurrentPage}
               />
             )}
           </div>
@@ -324,6 +378,37 @@ export function Records() {
         open={detailOpen}
         cameraName={cameraName}
         onOpenChange={setDetailOpen}
+      />
+
+      {/* 底部多选浮动操作条 */}
+      <RecordsSelectionBar
+        selectedCount={selection.selectedCount}
+        onExportSelected={() => {
+          setExportDialogMode('selection')
+          setExportDialogOpen(true)
+        }}
+        onClearSelection={selection.clearSelection}
+      />
+
+      {/* 导出配置与进度弹窗 */}
+      <RecordsExportDialog
+        open={exportDialogOpen}
+        onOpenChange={setExportDialogOpen}
+        activeTab={tab}
+        mode={exportDialogMode}
+        selectedItems={selection.selectedItems}
+        queryParams={{
+          cameraId,
+          startTime: activeRange.startTime,
+          endTime: activeRange.endTime,
+          matched:
+            matched === 'true' ? true : matched === 'false' ? false : undefined,
+          personId,
+          alarmType,
+          targetType: tab === 'vehicles' ? 'vehicle' : targetType,
+        }}
+        estimatedTotal={currentTotal}
+        cameraName={cameraName}
       />
     </>
   )

@@ -148,5 +148,43 @@
     "cancel": "取消",
     "apply": "应用",
     "reset": "重置筛选"
+  },
+  "selection": {
+    "ariaLabel": "批量多选操作",
+    "selectedCount": "已选择 {{count}} 项",
+    "exportSelected": "导出选中项",
+    "clearSelection": "清空"
+  },
+  "export": {
+    "button": "批量导出",
+    "titleSelection": "导出选中感知记录",
+    "titleBatch": "批量导出感知记录",
+    "descSelection": "已锁定勾选的 {{count}} 条记录",
+    "descBatch": "基于当前筛选条件导出（当前 Tab 预估匹配 {{total}} 条）",
+    "dimensionScope": "导出维度范围",
+    "contentOptions": "导出内容格式",
+    "csvReport": "结构化数据报表 (CSV)",
+    "csvDesc": "带 UTF-8 BOM，兼容 Windows Excel / WPS 无乱码",
+    "imageEvidence": "抓拍图片证据包 (ZIP)",
+    "imageDesc": "打包原始画面与特写，可自由选择是否合成目标框",
+    "burnOverlay": "在图片上绘制目标检测框与标签",
+    "burnOverlayDesc": "由浏览器端离屏绘制目标框、置信度与姓名，零消耗边缘算力",
+    "imageKind": "导出图片视角",
+    "sceneOnly": "仅全景大图",
+    "closeupOnly": "仅特写抠图",
+    "bothImages": "两者均导出",
+    "limitImages": "限制最大导出图片数",
+    "unitSheets": "张",
+    "largeVolumeWarning": "当前匹配图片较多，批量抓取与打包可能需要数十秒，建议保持限额以快速下载。",
+    "inProgress": "正在生成导出文件...",
+    "preparing": "正在准备导出任务...",
+    "offloadHint": "提示：目标检测框正由前端离屏 Canvas 实时合成，零占用边缘宿主算力。",
+    "selectAtLeastOneFormat": "请至少选择一种导出内容（报表或图片）",
+    "cancelBtn": "取消导出",
+    "cancelled": "已取消导出",
+    "cancel": "取消",
+    "confirmBtn": "开始导出",
+    "success": "导出完成，文件已开始下载",
+    "failed": "导出失败，请检查网络或稍后重试"
   }
 }

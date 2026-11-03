@@ -1,0 +1,11 @@
+{"file": ".trellis/spec/frontend/index.md", "reason": "前端开发规范总览与开发前检查清单"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "TanStack Table URL 状态机、TanStack Query 服务端状态管理及表单与弹窗契约"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "features/ 业务切片与 routes/ 组织规范"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "OKLCH 语义主题与中英三语国际化规范"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Vitest 真实浏览器测试与代码质量门禁"}
+{"file": "web/src/features/records/lib/export-csv.ts", "reason": "RFC 4180 CSV 序列化与 UTF-8 BOM 注入"}
+{"file": "web/src/features/records/lib/canvas-overlay-drawer.ts", "reason": "离屏 Canvas 检测框与标签烧录引擎"}
+{"file": "web/src/features/records/lib/export-zip-pipeline.ts", "reason": "受控并发流式 ZIP 归档流水线"}
+{"file": "web/src/features/records/hooks/use-records-selection.ts", "reason": "单 Tab 隔离多选状态管理 Hook"}
+{"file": "web/src/features/records/components/export/records-selection-bar.tsx", "reason": "悬浮多选操作栏"}
+{"file": "web/src/features/records/components/export/records-export-dialog.tsx", "reason": "导出配置对话框"}

@@ -465,4 +465,60 @@ describe('Records Views', () => {
       expect(onPageSizeChange).not.toHaveBeenCalled()
     })
   })
+
+  describe('Selection Support', () => {
+    it('triggers onToggleSelect when row checkbox is clicked without triggering onSelect', async () => {
+      const handleToggleSelect = vi.fn()
+      const handleSelect = vi.fn()
+      const { getByRole } = await render(
+        <RecognitionsView
+          items={sampleRecognitions}
+          total={1}
+          page={1}
+          pageSize={20}
+          view='table'
+          isLoading={false}
+          isError={false}
+          onPageChange={vi.fn()}
+          onPageSizeChange={vi.fn()}
+          onSelect={handleSelect}
+          onRetry={vi.fn()}
+          isSelected={(id) => id === 'rec-1'}
+          onToggleSelect={handleToggleSelect}
+        />
+      )
+
+      const rowCheckbox = getByRole('checkbox', { name: 'Select row rec-1' })
+      await expect.element(rowCheckbox).toBeInTheDocument()
+      await userEvent.click(rowCheckbox)
+
+      expect(handleToggleSelect).toHaveBeenCalledWith(sampleRecognitions[0])
+      expect(handleSelect).not.toHaveBeenCalled()
+    })
+
+    it('triggers onToggleSelectAll when header checkbox is clicked', async () => {
+      const handleToggleSelectAll = vi.fn()
+      const { getByRole } = await render(
+        <AlarmsView
+          items={sampleAlarms}
+          total={1}
+          page={1}
+          pageSize={20}
+          view='table'
+          isLoading={false}
+          isError={false}
+          onPageChange={vi.fn()}
+          onPageSizeChange={vi.fn()}
+          onSelect={vi.fn()}
+          onRetry={vi.fn()}
+          onToggleSelectAll={handleToggleSelectAll}
+        />
+      )
+
+      const selectAll = getByRole('checkbox', { name: 'Select all' })
+      await userEvent.click(selectAll)
+
+      expect(handleToggleSelectAll).toHaveBeenCalled()
+    })
+  })
 })

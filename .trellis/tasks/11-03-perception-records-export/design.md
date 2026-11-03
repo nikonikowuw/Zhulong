@@ -76,24 +76,32 @@ export interface OverlayBurnOptions {
   /** 归一化人体框 (识别记录特有) */
   secondaryBox?: [number, number, number, number]
   secondaryLabel?: string
-  /** 颜色风格: emerald (人脸/命中), amber (告警), sky (抓拍), violet (陌生人) */
-  palette?: 'emerald' | 'amber' | 'sky' | 'violet'
+  /** 颜色风格: emerald (人脸命中), rose (人脸未命中/陌生人), amber (告警), sky (抓拍), violet (人体外框) */
+  palette?: 'emerald' | 'rose' | 'amber' | 'sky' | 'violet'
+  /** 取消信号 */
+  signal?: AbortSignal
 }
 
 export async function burnOverlayOnImage(
-  imageUrl: string,
+  imageSource: string | Blob,
   options: OverlayBurnOptions
 ): Promise<Blob>
 ```
 
+- **安全网络加载与防跨域污染机制**：
+  - 若 `imageSource` 为图片 URL，统一使用同源携带 Cookie 的请求：
+    `fetch(url, { credentials: 'same-origin', signal: options.signal })` 先行拉取为二进制 `Blob`；
+  - 再通过 `createImageBitmap(blob)` 或 Object URL 载入离屏 Canvas；
+  - 彻底规避直接设置 `img.crossOrigin = 'anonymous'` 时丢失 HTTPOnly Cookie 鉴权（401）或缺失 CORS 响应头触发的 Canvas 画布污染（Tainted Canvas）崩溃。
 - **分辨率自适应缩放**：
   - 边框宽度：`lineWidth = Math.max(2, Math.round(naturalWidth / 600))`；
   - 字体大小：`fontSize = Math.max(12, Math.round(naturalWidth / 80))`；
   - 标签内边距与圆角：根据 `fontSize` 等比自适应计算。
-- **坐标换算**：
-  - 若 `x2 <= 1.05 && y2 <= 1.05`，按归一化乘 `naturalWidth`/`naturalHeight`；若原坐标已是像素绝对值则直接使用并做边界 clamp 限制。
+- **坐标换算与顶边碰撞翻转**：
+  - 若 `x2 <= 1.05 && y2 <= 1.05`，按归一化乘 `naturalWidth`/`naturalHeight`；若原坐标已是像素绝对值则直接使用并做边界 clamp 限制；
+  - **顶边防截断（Top Collision Flip）**：若目标框上沿距离画布顶端不足以容纳标签胶囊高度（$y_1 - \text{labelHeight} < 0$），标签胶囊自动翻转绘制在目标框内侧上沿，防止文字被画布视口截断。
 - **内存回收机制**：
-  - 在完成 `toBlob()` 后，主动清空 canvas 上下文及解除 Image 引用，确保垃圾回收器立刻回收像素缓冲区。
+  - 在完成 `toBlob()` 后，主动清空 canvas 上下文、显式执行 `canvas.width = canvas.height = 0`，并释放 `ImageBitmap`，促使浏览器立即回收 GPU 显存与像素缓冲区。
 
 ### 3.2 CSV 序列化与 BOM 注入 (`export-csv.ts`)
 
@@ -110,11 +118,14 @@ export async function burnOverlayOnImage(
 - **依赖轻量化**：引入极轻量无依赖的 `fflate`（纯 JS、仅 ~8KB，支持流式 zip 压缩，无任何外部二进制或复杂 DOM 依赖）；
 - **受控并发执行器**：
   - 并发度限制为 3~4，避免同时发出大量 HTTP GET 击垮边缘宿主或浏览器内存；
+- **全量分页拉取与时间快照防漂移**：
+  - 后端接口每页上限受 `httputil.MaxPageSize = 100` 约束，分页拉取采用 `pageSize = 100` 批量受控迭代；
+  - **固定时间窗口快照**：批量导出启动瞬间，将过滤条件中的 `endTime` 固化为绝对 RFC3339 字符串，规避边缘持续写入导致的分页滑动与记录重复；
 - **流水线步骤**：
-  1. 收集目标记录列表（多选勾选记录直接传入，全量批量记录则按分页逐页拉取）；
+  1. 收集目标记录列表（多选勾选记录直接传入，全量批量记录则按分页受控拉取）；
   2. 生成各维度的 `.csv`，直接写入 zip 根目录；
   3. 若开启图片导出：
-     - 并发拉取对应图片；
+     - 受控并发拉取对应图片（走鉴权 fetch 管道）；
      - 若开启画框烧录：调用 `burnOverlayOnImage` 输出合成后图片；若未开启：直接获取原图字节；
      - 压入 zip 文件的 `images/{tab}/{record_id}.jpg` 目录；
      - 每处理完一张立即清理临时对象；
@@ -124,21 +135,22 @@ export async function burnOverlayOnImage(
 ### 3.4 交互与状态设计
 
 - **多选管理 (`use-records-selection.ts`)**：
-  - 使用 `Map<string, RecordItem>` 存储，具备 `O(1)` 的增删改查；
+  - 使用 `Map<string, RecordItem>` 存储当前 Tab 选中的记录，具备 `O(1)` 的增删改查；
   - 支持单选反选、全选当前页、跨页累计多选、一键清空；
-  - 切换 Tab 时保留或者提供清空提示，保持体验可预期。
+  - **Tab 隔离策略**：各 Tab 实体数据结构完全不同，多选状态绑定于当前 Tab；当用户主动切换 Tab 时，自动清空勾选项并收起浮动操作条，彻底避免跨 Schema 实体混合导出带来的错乱。
 - **多选操作条 (`records-selection-bar.tsx`)**：
   - 悬浮于页面底端居中，具有毛玻璃质感与过渡动画；
   - 显示“已选择 X 条感知记录”；
   - 提供「导出所选项」、「清空选择」按钮。
 - **导出对话框 (`records-export-dialog.tsx`)**：
   - 智能感知当前触发场景：
-    - 多选触发：显示 `导出范围：已选中的 X 条记录`；
+    - 多选触发：显示 `导出范围：已选中的 X 条记录`（锁定为当前 Tab 勾选数据）；
     - 全局触发：显示 `导出范围：当前筛选结果（包含自由勾选的 Tab 维度）`；
   - 勾选控制：
     - 数据格式：CSV 报表（默认开）、图片证据（可选）；
     - 画框控制：在图片中烧录检测框与研判标签（图片开启时可选，默认开启）；
-  - 导出过程中，按钮变成取消按钮，并显示清晰阶段性进度条。
+    - 图片数量限制：勾选导出图片且匹配数量较多时，允许指定最大导出图片数（默认前 200 张或全部）；
+  - 导出过程中，按钮变成取消按钮，并显示清晰阶段性进度条与中断信号传播。
 
 ---
 
@@ -146,7 +158,8 @@ export async function burnOverlayOnImage(
 
 | 风险项 | 风险等级 | 控制措施 |
 |---|---|---|
-| 大量图片导致前端内存泄漏 / OOM | **高** | 引入流式受控并发池（并发 3），图片处理完单张立即释放 Blob 和 Canvas，内存峰值恒定 < 50MB |
-| 跨域污染导致 Canvas 导出图片失败 | **中** | 静态图片接口同源代理 (`/api/v1/media/content/*`)，设置 `crossOrigin = 'anonymous'` |
-| 极端分辨率图片（如 4K）画框过细或文字过小 | **中** | 动态分辨率等比映射算法，根据画布实际物理像素自适应缩放边框厚度与字体大小 |
+| 大量图片导致前端内存泄漏 / OOM | **高** | 引入流式受控并发池（并发 3），图片处理完单张立即释放 Blob 和 Canvas，显式置零尺寸，内存峰值恒定 < 50MB |
+| 跨域污染导致 Canvas 导出失败或 Cookie 丢失 | **高** | 严禁裸 `img.crossOrigin`，改用同源 `fetch(..., { credentials: 'same-origin' })` 拉取 Blob 再转 `createImageBitmap` |
+| 全量导出分页期间新抓拍入库导致数据漂移 | **中** | 触发导出时固化当前 `endTime` 绝对时间戳快照，保证分页遍历期间数据集合稳定不变 |
+| 极端分辨率图片（如 4K）画框过细或文字贴顶被截断 | **中** | 动态物理分辨率等比换算边框与字体，并实现顶边碰撞翻转（$y_1$ 贴顶时向下翻转至框内上沿） |
 | 中文字符在 Excel 中显示为乱码 | **低** | CSV 文件头硬性注入 `\uFEFF` UTF-8 BOM |

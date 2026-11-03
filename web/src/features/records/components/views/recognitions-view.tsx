@@ -12,6 +12,7 @@ import { statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
@@ -26,6 +27,7 @@ import { DataTablePagination } from '@/components/data-table/pagination'
 import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { type Recognition } from '../../data/schema'
 import { MediaImage } from '../common/media-image'
+import { SelectableCardWrapper } from '../common/selectable-card-wrapper'
 import { RecognitionCard } from '../recognitions/recognition-card'
 import { createPaginationChangeHandler } from './pagination'
 
@@ -43,6 +45,12 @@ export interface RecognitionsViewProps {
   onPageSizeChange: (pageSize: number) => void
   onSelect: (item: Recognition) => void
   onRetry: () => void
+  /** 多选支持 */
+  isSelected?: (id: string) => boolean
+  onToggleSelect?: (item: Recognition) => void
+  isAllPageSelected?: boolean
+  isPartiallySelected?: boolean
+  onToggleSelectAll?: () => void
 }
 
 export function RecognitionsView({
@@ -58,6 +66,11 @@ export function RecognitionsView({
   onPageSizeChange,
   onSelect,
   onRetry,
+  isSelected,
+  onToggleSelect,
+  isAllPageSelected,
+  isPartiallySelected,
+  onToggleSelectAll,
 }: RecognitionsViewProps) {
   const { t } = useTranslation('records')
 
@@ -66,6 +79,40 @@ export function RecognitionsView({
 
   const columns = useMemo<ColumnDef<Recognition>[]>(
     () => [
+      {
+        id: 'select',
+        header: () => (
+          <div className='flex items-center justify-center px-1'>
+            <Checkbox
+              checked={
+                isAllPageSelected
+                  ? true
+                  : isPartiallySelected
+                    ? 'indeterminate'
+                    : false
+              }
+              onCheckedChange={() => onToggleSelectAll?.()}
+              aria-label='Select all'
+              className='size-4'
+            />
+          </div>
+        ),
+        cell: ({ row }) => (
+          <div
+            className='flex items-center justify-center px-1'
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Checkbox
+              checked={isSelected?.(row.original.id) ?? false}
+              onCheckedChange={() => onToggleSelect?.(row.original)}
+              aria-label={`Select row ${row.original.id}`}
+              className='size-4'
+            />
+          </div>
+        ),
+        size: 40,
+        enableSorting: false,
+      },
       {
         accessorKey: 'faceImagePath',
         header: ({ column }) => (
@@ -173,7 +220,15 @@ export function RecognitionsView({
         ),
       },
     ],
-    [t, cameraName]
+    [
+      t,
+      cameraName,
+      isSelected,
+      onToggleSelect,
+      isAllPageSelected,
+      isPartiallySelected,
+      onToggleSelectAll,
+    ]
   )
 
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -255,12 +310,17 @@ export function RecognitionsView({
       <div className='space-y-4'>
         <div className='grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'>
           {items.map((item) => (
-            <RecognitionCard
+            <SelectableCardWrapper
               key={item.id}
-              item={item}
-              cameraName={cameraName}
-              onSelect={onSelect}
-            />
+              selected={isSelected?.(item.id) ?? false}
+              onToggle={() => onToggleSelect?.(item)}
+            >
+              <RecognitionCard
+                item={item}
+                cameraName={cameraName}
+                onSelect={onSelect}
+              />
+            </SelectableCardWrapper>
           ))}
         </div>
         <DataTablePagination table={table} />
@@ -333,7 +393,13 @@ export function RecognitionsView({
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.original.id}
-                  className='cursor-pointer hover:bg-muted/50'
+                  data-state={
+                    isSelected?.(row.original.id) ? 'selected' : undefined
+                  }
+                  className={cn(
+                    'cursor-pointer hover:bg-muted/50',
+                    isSelected?.(row.original.id) && 'bg-muted/60'
+                  )}
                   onClick={() => onSelect(row.original)}
                 >
                   {row.getVisibleCells().map((cell) => (

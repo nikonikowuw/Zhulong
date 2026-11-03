@@ -8,8 +8,10 @@ import {
 } from '@tanstack/react-table'
 import { AlertCircle, Bell, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
@@ -25,6 +27,7 @@ import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { algorithmLabel, type Alarm } from '../../data/schema'
 import { AlarmCard } from '../alarms/alarm-card'
 import { MediaImage } from '../common/media-image'
+import { SelectableCardWrapper } from '../common/selectable-card-wrapper'
 import { createPaginationChangeHandler } from './pagination'
 
 export interface AlarmsViewProps {
@@ -41,6 +44,12 @@ export interface AlarmsViewProps {
   onPageSizeChange: (pageSize: number) => void
   onSelect: (item: Alarm) => void
   onRetry: () => void
+  /** 多选支持 */
+  isSelected?: (id: string) => boolean
+  onToggleSelect?: (item: Alarm) => void
+  isAllPageSelected?: boolean
+  isPartiallySelected?: boolean
+  onToggleSelectAll?: () => void
 }
 
 export function AlarmsView({
@@ -56,6 +65,11 @@ export function AlarmsView({
   onPageSizeChange,
   onSelect,
   onRetry,
+  isSelected,
+  onToggleSelect,
+  isAllPageSelected,
+  isPartiallySelected,
+  onToggleSelectAll,
 }: AlarmsViewProps) {
   const { t } = useTranslation('records')
 
@@ -64,6 +78,40 @@ export function AlarmsView({
 
   const columns = useMemo<ColumnDef<Alarm>[]>(
     () => [
+      {
+        id: 'select',
+        header: () => (
+          <div className='flex items-center justify-center px-1'>
+            <Checkbox
+              checked={
+                isAllPageSelected
+                  ? true
+                  : isPartiallySelected
+                    ? 'indeterminate'
+                    : false
+              }
+              onCheckedChange={() => onToggleSelectAll?.()}
+              aria-label='Select all'
+              className='size-4'
+            />
+          </div>
+        ),
+        cell: ({ row }) => (
+          <div
+            className='flex items-center justify-center px-1'
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Checkbox
+              checked={isSelected?.(row.original.id) ?? false}
+              onCheckedChange={() => onToggleSelect?.(row.original)}
+              aria-label={`Select row ${row.original.id}`}
+              className='size-4'
+            />
+          </div>
+        ),
+        size: 40,
+        enableSorting: false,
+      },
       {
         accessorKey: 'cropPath',
         header: ({ column }) => (
@@ -156,7 +204,15 @@ export function AlarmsView({
         ),
       },
     ],
-    [t, cameraName]
+    [
+      t,
+      cameraName,
+      isSelected,
+      onToggleSelect,
+      isAllPageSelected,
+      isPartiallySelected,
+      onToggleSelectAll,
+    ]
   )
 
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -238,12 +294,17 @@ export function AlarmsView({
       <div className='space-y-4'>
         <div className='grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6'>
           {items.map((item) => (
-            <AlarmCard
+            <SelectableCardWrapper
               key={item.id}
-              item={item}
-              cameraName={cameraName}
-              onSelect={onSelect}
-            />
+              selected={isSelected?.(item.id) ?? false}
+              onToggle={() => onToggleSelect?.(item)}
+            >
+              <AlarmCard
+                item={item}
+                cameraName={cameraName}
+                onSelect={onSelect}
+              />
+            </SelectableCardWrapper>
           ))}
         </div>
         <DataTablePagination table={table} />
@@ -316,7 +377,13 @@ export function AlarmsView({
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.original.id}
-                  className='cursor-pointer hover:bg-muted/50'
+                  data-state={
+                    isSelected?.(row.original.id) ? 'selected' : undefined
+                  }
+                  className={cn(
+                    'cursor-pointer hover:bg-muted/50',
+                    isSelected?.(row.original.id) && 'bg-muted/60'
+                  )}
                   onClick={() => onSelect(row.original)}
                 >
                   {row.getVisibleCells().map((cell) => (

@@ -148,5 +148,43 @@
     "cancel": "Cancel",
     "apply": "Apply",
     "reset": "Reset Filters"
+  },
+  "selection": {
+    "ariaLabel": "Bulk selection actions",
+    "selectedCount": "{{count}} selected",
+    "exportSelected": "Export Selected",
+    "clearSelection": "Clear"
+  },
+  "export": {
+    "button": "Batch Export",
+    "titleSelection": "Export Selected Records",
+    "titleBatch": "Batch Export Records",
+    "descSelection": "Locked to the selected {{count}} records",
+    "descBatch": "Export based on active filters (~{{total}} matches for current tab)",
+    "dimensionScope": "Dimensions",
+    "contentOptions": "Format Options",
+    "csvReport": "Structured Data Report (CSV)",
+    "csvDesc": "UTF-8 BOM included, seamless Excel / WPS compatibility",
+    "imageEvidence": "Snapshot Evidence Archive (ZIP)",
+    "imageDesc": "Archive scenes and closeups with optional bounding box overlay",
+    "burnOverlay": "Burn Bounding Boxes and Labels on Images",
+    "burnOverlayDesc": "Rendered offscreen in browser Canvas with zero edge compute footprint",
+    "imageKind": "Image Perspective",
+    "sceneOnly": "Scene Only",
+    "closeupOnly": "Closeup Only",
+    "bothImages": "Both Images",
+    "limitImages": "Limit Maximum Export Images",
+    "unitSheets": "images",
+    "largeVolumeWarning": "Large volume of matching images detected. Exporting may take tens of seconds; keeping a quota is recommended.",
+    "inProgress": "Generating export package...",
+    "preparing": "Preparing export task...",
+    "offloadHint": "Note: Bounding boxes are composited in browser Canvas to preserve edge CPU/NPU pipelines.",
+    "selectAtLeastOneFormat": "Please select at least one format option (CSV or images)",
+    "cancelBtn": "Cancel Export",
+    "cancelled": "Export cancelled",
+    "cancel": "Cancel",
+    "confirmBtn": "Start Export",
+    "success": "Export completed, download started",
+    "failed": "Export failed. Please check your connection or retry later."
   }
 }
