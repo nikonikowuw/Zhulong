@@ -50,9 +50,13 @@ type mockMediaStream struct {
 	aiSub         *engine.AIResultSubscription
 	brokerClients []engine.BrokerClientStats
 	brokerTotal   uint32
-	closeOnce     sync.Once
-	closed        bool
-	mu            sync.Mutex
+	failed        atomic.Bool
+	// stateSeq 按顺序返回的状态，用于模拟「刚受理时还在 STARTING、随后才 FAILED」。
+	stateSeq  []engine.StreamState
+	stateIdx  int
+	closeOnce sync.Once
+	closed    bool
+	mu        sync.Mutex
 }
 
 func (s *mockMediaStream) Subscribe(ctx context.Context, options engine.SubscriptionOptions) (PacketSource, error) {
@@ -71,6 +75,25 @@ func (s *mockMediaStream) BrokerPath(ctx context.Context) (string, error) {
 
 func (s *mockMediaStream) StreamID(ctx context.Context) (uint64, error) {
 	return 42, nil
+}
+
+func (s *mockMediaStream) Status(ctx context.Context) (engine.StreamStatus, error) {
+	s.mu.Lock()
+	if s.stateIdx < len(s.stateSeq) {
+		state := s.stateSeq[s.stateIdx]
+		s.stateIdx++
+		s.mu.Unlock()
+		if state == engine.StreamFailed {
+			return engine.StreamStatus{State: state, Error: engine.ErrIO}, nil
+		}
+		return engine.StreamStatus{State: state}, nil
+	}
+	s.mu.Unlock()
+
+	if s.failed.Load() {
+		return engine.StreamStatus{State: engine.StreamFailed, Error: engine.ErrIO}, nil
+	}
+	return engine.StreamStatus{State: engine.StreamRunning}, nil
 }
 
 func (s *mockMediaStream) BrokerClients(ctx context.Context) ([]engine.BrokerClientStats, uint32, error) {

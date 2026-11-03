@@ -64,14 +64,16 @@ CREATE TABLE camera_streams (
 
 | 流状态 | 探活方式 | 频次 / 阈值 | 失败判定行为 |
 | --- | --- | --- | --- |
-| **活跃流 (Session=Running)** | 媒体包到达监听 | 每 250ms 轮询检测 | 连续 4s 无视频包判超时，触发 `reconnecting` 与 `error` 状态 |
+| **活跃预览流 (Session=Running 且有分发器)** | 媒体包到达监听（Go 侧逐包可见） | 每 250ms 轮询检测 | 连续 4s 无视频包判超时，触发 `reconnecting` 与 `error` 状态 |
+| **活跃 AI 分析流 (Session=Running，无分发器)** | Native 流状态（read-idle 失败 → `FAILED`） | Native 侧 5s 读空闲 | 订阅报错后进入 `reconnecting`，由 `StreamHub` 的指数退避重连接管 |
 | **空闲流 (Session=Idle)** | 轻量 RTSP DESCRIBE | 60s 周期，±20% 随机抖动 | 连续 1～2 次失败标记 `error`（瞬态）；连续 3 次失败标记 `offline` |
-
 1. **轻量 DESCRIBE 铁律**：空闲探活仅发送 DESCRIBE 校验状态码 200 与视频 SDP，**绝对禁止发送 SETUP、PLAY 或拉取 RTP 数据**，避免无谓消耗网络与摄像机编码器资源。
 2. **Digest 认证适配**：集成 `icholy/digest` 低层 API，支持 MD5/SHA-256、`qop=auth` 与参数规范化，单连接完成挑战与重试，限制单次探测总预算 ≤5s。
 3. **有界调度与并发控制**：后台调度器使用带权信号量（默认并发上限 4～8），对同一摄像机的同一流去重避免并发重复探测。
 4. **收包证据节流与活跃判定**：活跃流推流期间，分发器在遇到关键帧或时间间隔 ≥1s 时节流上报 `EvidencePacketActivity` 刷新 `LastCheckedAt`，保证 250ms 轮询检测准确反映物理收包真实性，避免误判超时。
-5. **调度器快速优雅停机**：调度器内部维护随 `Stop()` 级联取消的根 Context；轻量 DESCRIBE 客户端通过监听上下文取消触发 `conn.SetDeadline(time.Now())` 立即打断网络阻塞，实现停机时延 <100ms。
+5. ⚠️ **4 秒包超时只能用于 Go 侧逐包可见的流**（`PacketActivitySource`）：AI 分析流在 Go 侧只暴露**推理结果**，而结果会被运动门控吞掉（画面没动静就没有结果）。把「结果到达」当成收包证据等于给完全健康的流定时判死刑——实测表现是每 4 秒一次假超时、`session` 永久钉在 `reconnecting`，而同一时刻 broker 仍在按 `sample_fps` 稳定投递帧。AI 流的活性以 Native 流状态为准：read-idle 失败会让流进入 `FAILED`，订阅随即报错，那是可复现的证据。
+6. **失败必须能自愈**：Native 契约里没有隐式重连（`native/README.md`），所以业务层必须接手。失败后的重连节奏受 Native 8 秒宽限期约束：宽限期内重新 acquire 会原样交回**同一具**失败流，且每次 acquire 都会把它的 `expiry` 推回 max（等于续命）。因此宽限期内禁止任何 acquire，`ResolveAIStreamBrokerPath` 必须先等 `recoveryGrace` 过去；连算法包重启路径也不例外，否则会拿到死 socket → runner 退出 5 → CRASH_LOOP，视频流恢复了算法却停了。
+6. **调度器快速优雅停机**：调度器内部维护随 `Stop()` 级联取消的根 Context；轻量 DESCRIBE 客户端通过监听上下文取消触发 `conn.SetDeadline(time.Now())` 立即打断网络阻塞，实现停机时延 <100ms。
 
 ---
 

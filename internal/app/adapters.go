@@ -25,6 +25,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/storage"
 	"github.com/nikonikowuw/Zhulong/internal/task"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 type appBrokerPathResolver struct {
@@ -146,14 +147,25 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 		}
 	}
 
-	// 阶段 1：解析全部路径。任一路失败则整体失败，不触碰订阅关系。
-	paths := make([]string, 0, len(order))
-	for _, cameraID := range order {
-		path, err := r.streamHub.ResolveAIStreamBrokerPath(ctx, cameraID)
-		if err != nil {
-			return nil, fmt.Errorf("resolve broker path for camera %q: %w", cameraID, err)
-		}
-		paths = append(paths, path)
+	// 阶段 1：并发解析全部路径。任一路失败则整体失败，不触碰订阅关系。
+	//
+	// 并发不是「顺手优化」：解析可能为了等 Native 8 秒宽限期结束而阻塞（相机掉线后的
+	// 重连窗口），串行解析会把 N 台掉线相机的等待时间叠加成 N×10 秒，
+	// 而算法包重启路径就在这条链上。
+	paths := make([]string, len(order))
+	group, groupCtx := errgroup.WithContext(ctx)
+	for i, cameraID := range order {
+		group.Go(func() error {
+			path, err := r.streamHub.ResolveAIStreamBrokerPath(groupCtx, cameraID)
+			if err != nil {
+				return fmt.Errorf("resolve broker path for camera %q: %w", cameraID, err)
+			}
+			paths[i] = path
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
 	}
 
 	// 阶段 2：提交订阅关系。

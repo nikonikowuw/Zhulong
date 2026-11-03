@@ -59,6 +59,13 @@ func TestHealthSchedulerActivePacketTimeout(t *testing.T) {
 		t.Fatalf("expected packet timeout to trigger reconnecting & error, got session=%s health=%s",
 			mainStream.Session, mainStream.Health)
 	}
+
+	// When new video packets arrive, session must recover to running and health to online.
+	recoveredState := registry.RecordStreamSuccess("cam_active_test", 0, StreamRoleMain, EvidencePacketActivity)
+	if recoveredState.Health != HealthStateOnline || recoveredState.Session != SessionStateRunning {
+		t.Fatalf("expected packet arrival to recover to online & running, got health=%s session=%s",
+			recoveredState.Health, recoveredState.Session)
+	}
 }
 
 func TestHealthSchedulerTriggerCheck(t *testing.T) {
@@ -246,5 +253,105 @@ func TestHealthSchedulerSkipsDescribeForGB28181Streams(t *testing.T) {
 	}
 	if streamState.Reason == "uri_error" {
 		t.Error("the RTSP describe path must not run for a gb28181 stream")
+	}
+}
+
+// packetActivityStub 是 PacketActivitySource 的固定答案版本。
+type packetActivityStub struct {
+	visible bool
+}
+
+func (s packetActivityStub) HasPacketActivitySource(cameraID, role string) bool {
+	return s.visible
+}
+
+// TestHealthSchedulerSkipsPacketTimeoutWithoutPacketVisibility 守住现场根因：
+// AI 分析流在 Go 侧只暴露推理结果（且被运动门控吞掉），不能按「4 秒没结果」判超时。
+// 同一时刻 broker 其实还在按 sample_fps 投帧 —— 假超时会把会话永久钉在 reconnecting。
+func TestHealthSchedulerSkipsPacketTimeoutWithoutPacketVisibility(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	_ = dbStore.OpenAndMigrate(context.Background())
+	defer dbStore.Close()
+
+	km := NewKeyManager(tempDir)
+	cipher, _ := km.InitOrLoadKey(false)
+	store := NewCameraStore(dbStore)
+	registry := NewStateRegistry()
+	hub := NewEventHub(registry)
+	defer hub.Close()
+
+	cam := &Camera{ID: "cam_ai_only", Name: "AI Only", Enabled: true}
+	if err := store.Create(context.Background(), cam, nil); err != nil {
+		t.Fatalf("create camera: %v", err)
+	}
+	registry.InitCameraState(cam)
+
+	scheduler := NewHealthScheduler(store, cipher, registry, hub, nil, zap.NewNop())
+	scheduler.SetPacketActivitySource(packetActivityStub{visible: false})
+
+	registry.UpdateSessionState("cam_ai_only", StreamRoleMain, SessionStateRunning)
+	registry.RecordStreamSuccess("cam_ai_only", 0, StreamRoleMain, EvidencePacketActivity)
+
+	oldTime := time.Now().UTC().Add(-30 * time.Second)
+	registry.mu.Lock()
+	registry.states["cam_ai_only"].Streams[StreamRoleMain].LastCheckedAt = &oldTime
+	registry.mu.Unlock()
+
+	scheduler.monitorActiveStreams()
+
+	state, ok := registry.GetState("cam_ai_only")
+	if !ok {
+		t.Fatal("state not found")
+	}
+	mainStream := state.Streams[StreamRoleMain]
+	if mainStream.Session != SessionStateRunning || mainStream.Health != HealthStateOnline {
+		t.Fatalf("AI-only stream must not be failed on result silence, got session=%s health=%s",
+			mainStream.Session, mainStream.Health)
+	}
+}
+
+// TestHealthSchedulerMonitorsStreamsWithPacketVisibility 确认放行条件没有把预览流一起放过：
+// 有 Go 侧收包通道时，4 秒静默仍然要判超时。
+func TestHealthSchedulerMonitorsStreamsWithPacketVisibility(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	_ = dbStore.OpenAndMigrate(context.Background())
+	defer dbStore.Close()
+
+	km := NewKeyManager(tempDir)
+	cipher, _ := km.InitOrLoadKey(false)
+	store := NewCameraStore(dbStore)
+	registry := NewStateRegistry()
+	hub := NewEventHub(registry)
+	defer hub.Close()
+
+	cam := &Camera{ID: "cam_preview", Name: "Preview", Enabled: true}
+	if err := store.Create(context.Background(), cam, nil); err != nil {
+		t.Fatalf("create camera: %v", err)
+	}
+	registry.InitCameraState(cam)
+
+	scheduler := NewHealthScheduler(store, cipher, registry, hub, nil, zap.NewNop())
+	scheduler.SetPacketActivitySource(packetActivityStub{visible: true})
+
+	registry.UpdateSessionState("cam_preview", StreamRoleMain, SessionStateRunning)
+	registry.RecordStreamSuccess("cam_preview", 0, StreamRoleMain, EvidencePacketActivity)
+
+	oldTime := time.Now().UTC().Add(-5 * time.Second)
+	registry.mu.Lock()
+	registry.states["cam_preview"].Streams[StreamRoleMain].LastCheckedAt = &oldTime
+	registry.mu.Unlock()
+
+	scheduler.monitorActiveStreams()
+
+	state, ok := registry.GetState("cam_preview")
+	if !ok {
+		t.Fatal("state not found")
+	}
+	mainStream := state.Streams[StreamRoleMain]
+	if mainStream.Session != SessionStateReconnecting || mainStream.Health != HealthStateError {
+		t.Fatalf("expected a real packet timeout for a preview stream, got session=%s health=%s",
+			mainStream.Session, mainStream.Health)
 	}
 }

@@ -161,6 +161,12 @@ func (r *StateRegistry) RecordStreamSuccess(cameraID string, expectedRevision in
 	stream.LastCheckedAt = &now
 	stream.LastSuccessAt = &now
 
+	// 收到真实的视频包到达证据，证明媒体会话活跃运行中。
+	// 若之前处于 reconnecting（如偶发包超时）或 error，恢复为 running。
+	if evidenceType == EvidencePacketActivity && (stream.Session == SessionStateReconnecting || stream.Session == SessionStateError) {
+		stream.Session = SessionStateRunning
+	}
+
 	r.aggregateCameraStateLocked(state, now)
 	return r.cloneState(state)
 }

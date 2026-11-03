@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/aitypes"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
@@ -22,6 +23,13 @@ var (
 	// ErrAIStreamInactive 表示该相机当前没有活跃的 AI 分析流，因而没有可用的
 	// 解码会话可供抓拍。这是暂时状态（任务停用 / 算法未启动），不是配置错误。
 	ErrAIStreamInactive = errors.New("camera has no active AI stream")
+
+	// ErrStreamRecovering 表示引擎交回的是一路**已经失败**的物理流。
+	//
+	// Native 的 acquire 按 URL 复用：只要旧流还有消费者或仍处于 8 秒宽限期，
+	// 它就把同一具失败流原样还回来。把这种引用当成新流交付，等于向调用方
+	// 承诺一个永远不会出帧的 broker 路径，所以当场拒绝并交给重连协程接管。
+	ErrStreamRecovering = errors.New("stream is recovering from a failure")
 )
 
 // defaultMaxWarmStreamDispatchers 是空闲热保留窗口内允许同时存活的分发器数量上限。
@@ -45,12 +53,24 @@ type StreamHub struct {
 	aiStreams      map[string]*aiStreamRef
 	aiSubscribers  map[string]map[string]struct{}
 	// warmOrder 记录处于空闲热保留窗口的分发器 key，最早进入的在前。
-	warmOrder      []string
-	warmStreamCap  int
-	cipher         *LazyCipher
-	nextConsumerID atomic.Uint64
-	mu             sync.Mutex
-	closed         bool
+	warmOrder     []string
+	warmStreamCap int
+	cipher        *LazyCipher
+	// recoveries 记录每路相机当前在跑的重连协程（按 cameraID）。
+	recoveries map[string]*aiRecovery
+	// recoveryCtx 是所有重连协程的根上下文，Hub 关闭时统一取消。
+	recoveryCtx    context.Context
+	cancelRecovery context.CancelFunc
+	// reconnectMinDelay / reconnectMaxDelay / recoveryGrace 是重连节奏；
+	// 字段化以便测试缩短，生产默认值不变（见 reconnect.go 的常量说明）。
+	reconnectMinDelay  time.Duration
+	reconnectMaxDelay  time.Duration
+	recoveryGrace      time.Duration
+	streamReadyTimeout time.Duration
+	recoverySeq        uint64
+	nextConsumerID     atomic.Uint64
+	mu                 sync.Mutex
+	closed             bool
 }
 
 // aiStreamRef 表示一路相机的 AI 分析流（ConsumerAI 物理拉流 + FrameBroker）。
@@ -98,19 +118,42 @@ func NewStreamHub(
 		logger = zap.NewNop()
 	}
 	hub := &StreamHub{
-		engine:        engine,
-		store:         store,
-		cipher:        cipher,
-		registry:      registry,
-		eventHub:      eventHub,
-		logger:        logger.Named("camera.stream_hub"),
-		dispatchers:   make(map[string]*StreamDispatcher),
-		aiStreams:     make(map[string]*aiStreamRef),
-		aiSubscribers: make(map[string]map[string]struct{}),
-		warmStreamCap: defaultMaxWarmStreamDispatchers,
+		engine:             engine,
+		store:              store,
+		cipher:             cipher,
+		registry:           registry,
+		eventHub:           eventHub,
+		logger:             logger.Named("camera.stream_hub"),
+		dispatchers:        make(map[string]*StreamDispatcher),
+		aiStreams:          make(map[string]*aiStreamRef),
+		aiSubscribers:      make(map[string]map[string]struct{}),
+		recoveries:         make(map[string]*aiRecovery),
+		warmStreamCap:      defaultMaxWarmStreamDispatchers,
+		reconnectMinDelay:  defaultReconnectMinDelay,
+		reconnectMaxDelay:  defaultReconnectMaxDelay,
+		recoveryGrace:      defaultRecoveryGrace,
+		streamReadyTimeout: defaultStreamReadyTimeout,
 	}
+	hub.recoveryCtx, hub.cancelRecovery = context.WithCancel(context.Background())
 	hub.nextConsumerID.Store(1000)
 	return hub
+}
+
+// HasPacketActivitySource 报告该相机这一路流是否有 Go 侧可见的收包通道。
+//
+// 预览分发器在 Go 侧逐包可观测；AI 分析流只有推理结果，而结果是运动门控之后的产物，
+// 不能当作「视频包还在到达」的证据（见 PacketActivitySource）。
+func (h *StreamHub) HasPacketActivitySource(cameraID, role string) bool {
+	h.mu.Lock()
+	d, ok := h.dispatchers[streamKey(cameraID, role)]
+	h.mu.Unlock()
+	if !ok {
+		return false
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return !d.closed
 }
 
 func (h *StreamHub) broadcastState(state *CameraStateInfo) {
@@ -123,16 +166,17 @@ func (h *StreamHub) recordPacketActivity(cameraID, role string) {
 	if h.registry == nil {
 		return
 	}
-	var wasNonOnline bool
+	var wasAbnormal bool
 	if st, ok := h.registry.GetState(cameraID); ok && st != nil {
-		streamNonOnline := st.Streams != nil && st.Streams[role] != nil && st.Streams[role].Health != HealthStateOnline
-		if st.Health != HealthStateOnline || streamNonOnline {
-			wasNonOnline = true
+		streamAbnormal := st.Streams != nil && st.Streams[role] != nil &&
+			(st.Streams[role].Health != HealthStateOnline || st.Streams[role].Session == SessionStateReconnecting || st.Streams[role].Session == SessionStateError)
+		if st.Health != HealthStateOnline || st.Session == SessionStateReconnecting || st.Session == SessionStateError || streamAbnormal {
+			wasAbnormal = true
 		}
 	}
 
 	state := h.registry.RecordStreamSuccess(cameraID, 0, role, EvidencePacketActivity)
-	if wasNonOnline && state != nil {
+	if wasAbnormal && state != nil {
 		h.broadcastState(state)
 	}
 }
@@ -404,6 +448,15 @@ func (h *StreamHub) ResolveAIStreamID(ctx context.Context, cameraID string) (uin
 // ⚠️ 本方法只负责「解析」，不建立订阅关系。调用方拿到路径后必须在同一次解析流程内
 // 调用 AttachAIStreamSubscriber，否则该流会在下一次 ResolveAIStream 时被回收。
 func (h *StreamHub) ResolveAIStreamBrokerPath(ctx context.Context, cameraID string) (string, error) {
+	if err := h.waitForRecoveryGate(ctx, cameraID); err != nil {
+		return "", err
+	}
+	return h.acquireAIStreamBrokerPath(ctx, cameraID)
+}
+
+// acquireAIStreamBrokerPath 是 ResolveAIStreamBrokerPath 的无门禁版本：
+// 调用方（重连协程）自己已经等过宽限期，再走一遍门禁只会重复等待。
+func (h *StreamHub) acquireAIStreamBrokerPath(ctx context.Context, cameraID string) (string, error) {
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
@@ -469,6 +522,28 @@ func (h *StreamHub) ResolveAIStreamBrokerPath(ctx context.Context, cameraID stri
 			Transport: transport,
 		})
 		if err != nil {
+			return "", err
+		}
+
+		// 引擎按 URL 复用物理流：旧流仍在宽限期或还有其它消费者时，交回的可能是
+		// 同一路已经失败的流。交给调用方前必须认出来，否则它会拿到一个永远不出帧的 broker。
+		if status, failed := streamIsFailed(ctx, mediaStream); failed {
+			if closeErr := mediaStream.Close(); closeErr != nil {
+				h.logger.Warn("close failed AI stream after detection",
+					zap.String("camera_id", cameraID), zap.Error(closeErr))
+			}
+			if status.Error != nil {
+				return "", fmt.Errorf("%w: %v", ErrStreamRecovering, status.Error)
+			}
+			return "", ErrStreamRecovering
+		}
+
+		// 受理 ≠ 可用：等它真的跑起来再交付 broker 路径。
+		if err := h.awaitStreamReady(ctx, mediaStream); err != nil {
+			if closeErr := mediaStream.Close(); closeErr != nil {
+				h.logger.Warn("close AI stream after it never became ready",
+					zap.String("camera_id", cameraID), zap.Error(closeErr))
+			}
 			return "", err
 		}
 
@@ -556,6 +631,11 @@ func (h *StreamHub) ReleaseAIStreamSubscriber(cameraID, subscriberID string) {
 		delete(subs, subscriberID)
 		if len(subs) == 0 {
 			delete(h.aiSubscribers, cameraID)
+			// 没人再要这一路流：立刻停掉在跑的重连，别为已停用的任务持续拉流。
+			if rec, ok := h.recoveries[cameraID]; ok {
+				rec.cancel()
+				delete(h.recoveries, cameraID)
+			}
 			if ref, ok := h.aiStreams[cameraID]; ok {
 				delete(h.aiStreams, cameraID)
 				toClose = ref.stream
@@ -680,6 +760,12 @@ func (h *StreamHub) Close() error {
 	}
 	h.dispatchers = make(map[string]*StreamDispatcher)
 
+	// 先停重连：否则停机过程中仍会有协程去 acquire 新流。
+	if h.cancelRecovery != nil {
+		h.cancelRecovery()
+	}
+	h.recoveries = make(map[string]*aiRecovery)
+
 	aiList := make([]*aiStreamRef, 0, len(h.aiStreams))
 	for _, ref := range h.aiStreams {
 		aiList = append(aiList, ref)
@@ -739,6 +825,10 @@ func (h *StreamHub) handleAIStreamFailure(cameraID string, err error) {
 			h.broadcastState(newState)
 		}
 	}
+
+	// 失败不会自愈是 Native 层的契约（无隐式重连），所以业务层必须接住：
+	// 只要还有算法包想要这一路流，就按指数退避重建。
+	h.scheduleAIRecovery(cameraID)
 }
 
 func (h *StreamHub) consumeAIResults(ctx context.Context, cameraID string, sub *engine.AIResultSubscription) {
@@ -747,6 +837,13 @@ func (h *StreamHub) consumeAIResults(ctx context.Context, cameraID string, sub *
 		data, err := sub.Next(ctx)
 		if err != nil {
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, engine.ErrClosed) {
+				// 错误可能来自上一代流：重连或任务同步已经重建了新流时，
+				// 一条迟到的旧错误不得把刚建好的新流拆掉。
+				if !h.aiSubscriptionIsCurrent(cameraID, sub) {
+					h.logger.Debug("ignoring failure from a superseded AI stream subscription",
+						zap.String("camera_id", cameraID), zap.Error(err))
+					return
+				}
 				h.logger.Warn("ai stream failed",
 					zap.String("camera_id", cameraID), zap.Error(err))
 				h.handleAIStreamFailure(cameraID, err)

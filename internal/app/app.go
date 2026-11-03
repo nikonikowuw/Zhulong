@@ -204,6 +204,8 @@ func provideCamera(p cameraParams) cameraOut {
 	prober := camera.NewProbeService(p.Engine)
 	describeClient := camera.NewDescribeClient()
 	scheduler := camera.NewHealthScheduler(camStore, lazyC, reg, hub, describeClient, p.Logger)
+	// 活跃流 4 秒超时判定只对 Go 侧逐包可见的预览流成立（见 PacketActivitySource）。
+	scheduler.SetPacketActivitySource(streamHub)
 	camSvc := camera.NewCameraService(camStore, lazyC, prober, reg, hub, scheduler, p.Logger)
 	// authSvc is a required dependency of this provider (provideAuth always
 	// supplies it), so the handler gets a real predicate rather than a nil one.

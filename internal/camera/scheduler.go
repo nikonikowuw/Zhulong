@@ -20,6 +20,16 @@ const (
 	ActiveMonitorInterval    = 250 * time.Millisecond
 )
 
+// PacketActivitySource 报告某一路流的收包节拍是否由 Go 侧直接观测。
+//
+// 只有预览分发器在 Go 侧逐包可见。AI 分析流暴露给 Go 的是**推理结果**，
+// 而结果会被运动门控吞掉（画面没动静就没有结果）——把「结果到达」当成收包证据，
+// 等于给一个完全健康的流定时判死刑：现场实测 4 秒一次假超时，会话永远停在
+// reconnecting，而同一时刻 broker 仍在按 sample_fps 稳定投递帧。
+type PacketActivitySource interface {
+	HasPacketActivitySource(cameraID, role string) bool
+}
+
 // HealthScheduler runs periodic lightweight health checks on idle streams and monitors packet health on active streams.
 type HealthScheduler struct {
 	store          CameraStore
@@ -29,6 +39,7 @@ type HealthScheduler struct {
 	logger         *zap.Logger
 	semaphore      chan struct{}
 	hub            *EventHub
+	activitySource PacketActivitySource
 	stopCh         chan struct{}
 	registry       *StateRegistry
 	wg             sync.WaitGroup
@@ -65,6 +76,14 @@ func NewHealthScheduler(
 		inFlight:       make(map[string]bool),
 		stopCh:         make(chan struct{}),
 	}
+}
+
+// SetPacketActivitySource wires the authority that knows which streams expose a
+// Go-side packet arrival signal. Without it the active-stream monitor falls back
+// to treating every running stream as packet-driven, which misfires on AI-only
+// cameras (see PacketActivitySource).
+func (s *HealthScheduler) SetPacketActivitySource(src PacketActivitySource) {
+	s.activitySource = src
 }
 
 // Start loads persisted cameras, initializes their state, and begins the scheduling and monitoring loops.
@@ -195,6 +214,13 @@ func (s *HealthScheduler) monitorActiveStreams() {
 		for role, streamState := range camState.Streams {
 			// Only monitor active streams with session running
 			if streamState.Session != SessionStateRunning {
+				continue
+			}
+
+			// 只有 Go 侧真能看见包节拍的流才做 4 秒超时判定。
+			// AI 分析流的活性由 Native 流状态负责：read idle 超时会把流置为 FAILED，
+			// 订阅随即报错并触发重连——那是可复现的证据，不是猜。
+			if s.activitySource != nil && !s.activitySource.HasPacketActivitySource(camState.CameraID, role) {
 				continue
 			}
 
