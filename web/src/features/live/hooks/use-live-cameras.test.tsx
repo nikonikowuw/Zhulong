@@ -148,7 +148,9 @@ describe('useLiveCameras', () => {
   // 按数组解析会让每一条快照被静默丢弃：重连后补不到断连期间的状态变化，
   // 任务页永久停在断线前那一帧（「一直显示视频流重连中」）。
   it('applies the reconnect snapshot delivered as a cameraId-keyed map', async () => {
-    mockCameras(listResponse([camera({ health: 'error', session: 'reconnecting' })]))
+    mockCameras(
+      listResponse([camera({ health: 'error', session: 'reconnecting' })])
+    )
 
     const { result } = await renderLiveCameras()
     await vi.waitFor(() => {
