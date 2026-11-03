@@ -13,7 +13,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { type ImageSearchMatchInfo } from '../data/schema'
-import { ImageSearchMatchCard } from './image-search-match-card'
+import { ImageSearchMatchRow } from './image-search-match-row'
 
 interface ImageSearchResultsProps {
   results: ImageSearchMatchInfo[] | null
@@ -56,37 +56,35 @@ export function ImageSearchResults({
         </div>
 
         <div className='flex h-full min-h-[420px] flex-1 flex-col rounded-2xl border border-border/70 bg-card/40 p-4 shadow-xs backdrop-blur-xs lg:min-h-full'>
-          <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'>
-            {Array.from({ length: Math.min(topK, 8) }).map((_, i) => (
-              <Card
+          <div className='flex flex-col gap-2.5'>
+            {Array.from({ length: Math.min(topK, 6) }).map((_, i) => (
+              <div
                 key={i}
-                className='flex flex-col justify-between overflow-hidden rounded-xl border border-border/70 bg-card/60 p-4 shadow-xs'
+                className='flex flex-col gap-3 rounded-xl border border-border/70 bg-card/60 p-3 shadow-2xs md:flex-row md:items-center md:justify-between md:gap-4'
               >
-                <div className='flex gap-3.5'>
-                  <Skeleton className='h-20 w-20 shrink-0 rounded-xl' />
-                  <div className='flex min-w-0 flex-1 flex-col justify-between py-0.5'>
-                    <div className='flex flex-col gap-1.5'>
-                      <div className='flex items-center justify-between'>
-                        <Skeleton className='h-4 w-24' />
-                        <Skeleton className='h-3.5 w-6' />
-                      </div>
-                      <Skeleton className='h-3 w-16' />
-                    </div>
-                    <div className='mt-2 flex flex-col gap-1.5 border-t border-border/40 pt-1.5'>
-                      <div className='flex items-center justify-between'>
-                        <Skeleton className='h-3 w-12' />
-                        <Skeleton className='h-3.5 w-10' />
-                      </div>
-                      <Skeleton className='h-1.5 w-full rounded-full' />
-                    </div>
+                <div className='flex items-center gap-3'>
+                  <Skeleton className='h-6 w-9 rounded-md' />
+                  <Skeleton className='h-13 w-13 shrink-0 rounded-xl' />
+                  <div className='flex flex-col gap-1.5'>
+                    <Skeleton className='h-4 w-24' />
+                    <Skeleton className='h-3.5 w-16' />
                   </div>
                 </div>
-                <div className='mt-3.5 grid grid-cols-3 gap-1.5 border-t border-border/50 pt-2.5'>
-                  <Skeleton className='h-7.5 w-full rounded-md' />
-                  <Skeleton className='h-7.5 w-full rounded-md' />
-                  <Skeleton className='h-7.5 w-full rounded-md' />
+                <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between md:justify-end md:gap-5'>
+                  <div className='flex min-w-[170px] flex-col gap-1.5 md:min-w-[200px]'>
+                    <div className='flex items-center justify-between'>
+                      <Skeleton className='h-3 w-12' />
+                      <Skeleton className='h-3.5 w-12' />
+                    </div>
+                    <Skeleton className='h-1.5 w-full rounded-full' />
+                  </div>
+                  <div className='flex items-center gap-1.5'>
+                    <Skeleton className='h-8 w-20 rounded-md' />
+                    <Skeleton className='h-8 w-20 rounded-md' />
+                    <Skeleton className='h-8 w-20 rounded-md' />
+                  </div>
                 </div>
-              </Card>
+              </div>
             ))}
           </div>
         </div>
@@ -225,11 +223,11 @@ export function ImageSearchResults({
         </div>
       </div>
 
-      {/* 结果卡片画廊画布底托（确保高度自适应并与左侧底部平齐） */}
+      {/* 结果列表画布底托（纵向列表流式排列，高度自适应） */}
       <div className='flex h-full min-h-[420px] flex-1 flex-col rounded-2xl border border-border/70 bg-card/40 p-4 shadow-xs backdrop-blur-xs lg:min-h-full'>
-        <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'>
+        <div className='flex flex-col gap-2.5'>
           {results.map((match, idx) => (
-            <ImageSearchMatchCard
+            <ImageSearchMatchRow
               key={`${match.personId}-${match.matchedFaceId}`}
               match={match}
               rank={idx + 1}
