@@ -409,7 +409,10 @@ export function Records() {
             matched === 'true' ? true : matched === 'false' ? false : undefined,
           personId,
           alarmType,
-          targetType: tab === 'vehicles' ? 'vehicle' : targetType,
+          // 只传用户显式选择的目标类型；`vehicles` 维度的 Tab 语义由
+          // export pipeline 统一决定，否则从车辆 Tab 打开批量导出时
+          // 抓拍维度会被悄悄过滤成车辆。
+          targetType,
         }}
         estimatedTotal={currentTotal}
         cameraName={cameraName}

@@ -133,6 +133,22 @@ function dataUriToBlob(dataUri: string): Blob {
 }
 
 /**
+ * 媒体拉取失败，保留 HTTP 状态码。
+ *
+ * 批量导出需要区分「重试有意义」（5xx / 408 / 429）与「重试纯属浪费」
+ * （404 说明快照已经不在了，再试三次只会把 3 张图的窗口拖成 3 秒）。
+ */
+export class MediaFetchError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'MediaFetchError'
+    this.status = status
+  }
+}
+
+/**
  * 带有凭据与取消信号的安全图片拉取（转 Blob）
  */
 export async function fetchImageAsBlob(
@@ -146,7 +162,10 @@ export async function fetchImageAsBlob(
   if (imagePathOrUrl.startsWith('blob:')) {
     const res = await fetch(imagePathOrUrl, { signal })
     if (!res.ok) {
-      throw new Error(`Failed to load blob image: HTTP ${res.status}`)
+      throw new MediaFetchError(
+        res.status,
+        `Failed to load blob image: HTTP ${res.status}`
+      )
     }
     return res.blob()
   }
@@ -158,7 +177,10 @@ export async function fetchImageAsBlob(
   })
 
   if (!res.ok) {
-    throw new Error(`Failed to fetch media image: HTTP ${res.status}`)
+    throw new MediaFetchError(
+      res.status,
+      `Failed to fetch media image: HTTP ${res.status}`
+    )
   }
 
   return res.blob()

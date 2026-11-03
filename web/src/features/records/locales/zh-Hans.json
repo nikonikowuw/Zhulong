@@ -190,6 +190,18 @@
     "draftFoundDesc": "已在本地缓存 {{current}} / {{total}} 项证据图片",
     "discardDraft": "放弃",
     "resumeDraft": "继续断点导出",
-    "draftDiscarded": "已清除历史未完成草稿"
+    "draftDiscarded": "已清除历史未完成草稿",
+    "overlayMatched": "{{name}} ({{percent}}%)",
+    "overlayKnown": "已命中 ({{percent}}%)",
+    "overlayStranger": "陌生人 ({{percent}}%)",
+    "overlayPerson": "人体",
+    "overRecordBudget": "当前 Tab 已匹配 {{total}} 条，超过单次导出的 {{limit}} 条上限，请缩小时间或摄像头范围",
+    "tooManyRecords": "匹配记录 {{total}} 条，超过单次导出上限 {{limit}} 条，请缩小时间或摄像头范围",
+    "failedWithReason": "导出失败：{{reason}}",
+    "partialFailure": "{{count}} 项图片未能打包，明细见 manifest.json",
+    "emptySelection": "尚未勾选任何记录",
+    "hardCapHint": "取消限额时仍受单次 {{limit}} 张上限保护",
+    "progressLabel": "导出进度",
+    "resumeHint": "续传沿用上次任务的报表与图片清单，当前筛选条件不参与"
   }
 }

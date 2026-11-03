@@ -190,6 +190,18 @@
     "draftFoundDesc": "已在本地快取 {{current}} / {{total}} 項證據圖片",
     "discardDraft": "放棄",
     "resumeDraft": "繼續斷點匯出",
-    "draftDiscarded": "已清除歷史未完成草稿"
+    "draftDiscarded": "已清除歷史未完成草稿",
+    "overlayMatched": "{{name}} ({{percent}}%)",
+    "overlayKnown": "已命中 ({{percent}}%)",
+    "overlayStranger": "陌生人 ({{percent}}%)",
+    "overlayPerson": "人體",
+    "overRecordBudget": "目前 Tab 已匹配 {{total}} 筆，超過單次匯出的 {{limit}} 筆上限，請縮小時間或攝影機範圍",
+    "tooManyRecords": "匹配記錄 {{total}} 筆，超過單次匯出上限 {{limit}} 筆，請縮小時間或攝影機範圍",
+    "failedWithReason": "匯出失敗：{{reason}}",
+    "partialFailure": "{{count}} 張圖片未能打包，明細見 manifest.json",
+    "emptySelection": "尚未勾選任何記錄",
+    "hardCapHint": "取消限額時仍受單次 {{limit}} 張上限保護",
+    "progressLabel": "匯出進度",
+    "resumeHint": "續傳沿用上次任務的報表與圖片清單，目前篩選條件不參與"
   }
 }

@@ -22,13 +22,13 @@ export function RecordsSelectionBar({
   return (
     <div
       role='region'
-      aria-live='polite'
       aria-label={t('selection.ariaLabel', { defaultValue: '批量多选操作' })}
       className='fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 animate-in items-center gap-3 rounded-full border border-border/80 bg-background/90 px-4 py-2 shadow-xl backdrop-blur-md duration-200 slide-in-from-bottom-5 fade-in'
     >
       <div className='flex items-center gap-2 text-xs font-medium'>
         <span className='flex size-2 animate-pulse rounded-full bg-primary' />
-        <span>
+        {/* live region 只包计数：挂在容器上会让读屏每次变化重复朗读所有按钮 */}
+        <span aria-live='polite'>
           {t('selection.selectedCount', {
             count: selectedCount,
             defaultValue: `已选择 ${selectedCount} 项`,

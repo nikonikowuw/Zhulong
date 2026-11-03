@@ -78,14 +78,55 @@ describe('RecordsExportDialog', () => {
     expect(handleOpenChange).toHaveBeenCalledWith(false)
   })
 
+  it('exposes accessible names for the export switches', async () => {
+    const screen = await render(
+      <RecordsExportDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        activeTab='recognitions'
+        mode='batch'
+      />
+    )
+
+    await expect
+      .element(screen.getByRole('switch', { name: '结构化数据报表 (CSV)' }))
+      .toBeChecked()
+    await expect
+      .element(screen.getByRole('switch', { name: '抓拍图片证据包 (ZIP)' }))
+      .not.toBeChecked()
+  })
+
+  it('toggles the CSV switch from its label text', async () => {
+    const screen = await render(
+      <RecordsExportDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        activeTab='recognitions'
+        mode='batch'
+      />
+    )
+
+    await userEvent.click(screen.getByText('结构化数据报表 (CSV)'))
+    await expect
+      .element(screen.getByRole('switch', { name: '结构化数据报表 (CSV)' }))
+      .not.toBeChecked()
+  })
+
   it('detects pending draft and allows discarding it', async () => {
     await exportDb.saveTaskDraft({
       taskId: 'draft-detect-01',
       mode: 'selection',
       activeTab: 'recognitions',
+      tabs: ['recognitions'],
+      recordCount: 100,
       totalCount: 100,
       completedKeys: ['k1', 'k2', 'k3'],
-      options: {},
+      options: {
+        exportCsv: true,
+        exportImages: true,
+        burnOverlay: true,
+        imageKind: 'scene',
+      },
       status: 'paused',
       createdAt: Date.now(),
       updatedAt: Date.now(),

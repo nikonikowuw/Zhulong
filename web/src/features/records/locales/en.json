@@ -190,6 +190,18 @@
     "draftFoundDesc": "Cached {{current}} / {{total}} evidence images locally",
     "discardDraft": "Discard",
     "resumeDraft": "Resume Export",
-    "draftDiscarded": "Cached task draft discarded"
+    "draftDiscarded": "Cached task draft discarded",
+    "overlayMatched": "{{name}} ({{percent}}%)",
+    "overlayKnown": "Matched ({{percent}}%)",
+    "overlayStranger": "Stranger ({{percent}}%)",
+    "overlayPerson": "Person",
+    "overRecordBudget": "Current tab already matched {{total}} records, above the per-export limit of {{limit}}. Narrow the time range or cameras.",
+    "tooManyRecords": "{{total}} matching records exceed the per-export limit of {{limit}}. Narrow the time range or cameras.",
+    "failedWithReason": "Export failed: {{reason}}",
+    "partialFailure": "{{count}} image(s) could not be archived; see manifest.json for details",
+    "emptySelection": "No records selected yet",
+    "hardCapHint": "Even without a quota, a single export is capped at {{limit}} images",
+    "progressLabel": "Export progress",
+    "resumeHint": "Resume uses the previous task's report and image list; current filters are ignored"
   }
 }

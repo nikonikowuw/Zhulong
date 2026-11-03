@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Download,
@@ -28,7 +28,11 @@ import { type CameraNameLookup } from '../../data/camera-label'
 import { type RecordItem, type RecordsTab } from '../../data/schema'
 import { exportDb, type ExportTaskDraft } from '../../lib/export-db'
 import {
+  DEFAULT_MAX_RECORDS,
   executeRecordsExport,
+  ExportLimitError,
+  HARD_MAX_IMAGES,
+  type ExportLabels,
   type ExportProgress,
   triggerDownload,
 } from '../../lib/export-zip-pipeline'
@@ -56,6 +60,13 @@ export interface RecordsExportDialogProps {
   estimatedTotal?: number
   /** 相机名称解析器 */
   cameraName?: CameraNameLookup
+}
+
+const DEFAULT_MAX_IMAGES = 200
+
+function clampMaxImages(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_MAX_IMAGES
+  return Math.min(HARD_MAX_IMAGES, Math.max(1, Math.trunc(value)))
 }
 
 export function RecordsExportDialog({
@@ -94,7 +105,10 @@ export function RecordsExportDialog({
     'scene'
   )
   const [limitImages, setLimitImages] = useState(true)
-  const [maxImages, setMaxImages] = useState(200)
+  // 文本态而不是 number 态：number 输入框在清空时会被 parseInt 立刻重置成 1，
+  // 用户根本没法把 200 改成 50（中间要经过空串）。
+  const [maxImagesText, setMaxImagesText] = useState(String(DEFAULT_MAX_IMAGES))
+  const maxImages = clampMaxImages(Number.parseInt(maxImagesText, 10))
 
   // 导出运行态
   const [isExporting, setIsExporting] = useState(false)
@@ -104,14 +118,52 @@ export function RecordsExportDialog({
   // 未完成任务草稿
   const [pendingDraft, setPendingDraft] = useState<ExportTaskDraft | null>(null)
 
-  // 弹窗展开时探测是否存在未完成的导出草稿
+  // 弹窗展开时清理超期草稿并探测是否存在可恢复任务
   useEffect(() => {
-    if (open) {
-      void exportDb.getLatestPendingTask().then((draft) => {
-        setPendingDraft(draft)
-      })
+    if (!open) return
+    let cancelled = false
+    void (async () => {
+      await exportDb.pruneExpiredTasks().catch(() => undefined)
+      const draft = await exportDb.getLatestPendingTask().catch(() => null)
+      if (!cancelled) setPendingDraft(draft)
+    })()
+    return () => {
+      cancelled = true
     }
   }, [open])
+
+  // 烧录进证据图的标签跟随界面语言
+  const overlayLabels = useMemo<ExportLabels>(
+    () => ({
+      scene: (ctx) => {
+        const percent = Math.round((ctx.similarity ?? ctx.score ?? 0) * 100)
+        if (ctx.tab === 'recognitions') {
+          if (!ctx.matched) {
+            return t('export.overlayStranger', {
+              percent,
+              defaultValue: `陌生人 (${percent}%)`,
+            })
+          }
+          if (ctx.personName) {
+            return t('export.overlayMatched', {
+              name: ctx.personName,
+              percent,
+              defaultValue: `${ctx.personName} (${percent}%)`,
+            })
+          }
+          return t('export.overlayKnown', {
+            percent,
+            defaultValue: `已命中 (${percent}%)`,
+          })
+        }
+        const subject =
+          ctx.tab === 'alarms' ? (ctx.alarmType ?? '') : (ctx.targetType ?? '')
+        return `${subject} (${percent}%)`
+      },
+      person: t('export.overlayPerson', { defaultValue: '人体' }),
+    }),
+    [t]
+  )
 
   const handleDiscardDraft = async () => {
     if (pendingDraft) {
@@ -146,6 +198,13 @@ export function RecordsExportDialog({
   }
 
   const handleStartExport = async (resumeTaskId?: string) => {
+    if (mode === 'selection' && selectedItems.length === 0 && !resumeTaskId) {
+      toast.error(
+        t('export.emptySelection', { defaultValue: '尚未勾选任何记录' })
+      )
+      return
+    }
+
     if (!exportCsv && !exportImages) {
       toast.error(
         t('export.selectAtLeastOneFormat', {
@@ -162,6 +221,7 @@ export function RecordsExportDialog({
       phase: 'preparing',
       current: 0,
       total: 100,
+      percent: 0,
       message: t('export.preparing', { defaultValue: '正在准备导出任务...' }),
     })
 
@@ -193,29 +253,49 @@ export function RecordsExportDialog({
         burnOverlay,
         imageKind,
         maxImages: limitImages ? maxImages : undefined,
+        labels: overlayLabels,
         signal: controller.signal,
         resolveCameraName: cameraName,
         onProgress: setProgress,
       })
 
       triggerDownload(result.blob, result.filename)
-      toast.success(
-        t('export.success', {
-          defaultValue: '导出完成，文件已开始下载',
-        })
-      )
       setPendingDraft(null)
+
+      if (result.failedImages > 0) {
+        toast.warning(
+          t('export.partialFailure', {
+            count: result.failedImages,
+            defaultValue: `${result.failedImages} 项图片未能打包，明细见 manifest.json`,
+          })
+        )
+      } else {
+        toast.success(
+          t('export.success', {
+            defaultValue: '导出完成，文件已开始下载',
+          })
+        )
+      }
       onOpenChange(false)
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         // 用户主动取消，不报系统异常
         return
       }
-      // eslint-disable-next-line no-console
-      console.error('[Export Error]', err)
+      if (err instanceof ExportLimitError) {
+        toast.error(
+          t('export.tooManyRecords', {
+            total: err.actual,
+            limit: err.limit,
+            defaultValue: `匹配记录 ${err.actual} 条，超过单次导出上限 ${err.limit} 条，请缩小时间或摄像头范围`,
+          })
+        )
+        return
+      }
       toast.error(
-        t('export.failed', {
-          defaultValue: '导出失败，请检查网络或稍后重试',
+        t('export.failedWithReason', {
+          reason: err instanceof Error ? err.message : String(err),
+          defaultValue: `导出失败：${err instanceof Error ? err.message : String(err)}`,
         })
       )
     } finally {
@@ -225,10 +305,15 @@ export function RecordsExportDialog({
     }
   }
 
-  const percent =
-    progress && progress.total > 0
-      ? Math.min(100, Math.round((progress.current / progress.total) * 100))
-      : 0
+  const percent = progress
+    ? (progress.percent ??
+      (progress.total > 0
+        ? Math.min(100, Math.round((progress.current / progress.total) * 100))
+        : 0))
+    : 0
+
+  const overRecordBudget =
+    mode === 'batch' && estimatedTotal > DEFAULT_MAX_RECORDS
 
   return (
     <Dialog
@@ -283,6 +368,12 @@ export function RecordsExportDialog({
                     defaultValue: `已处理 ${pendingDraft.completedKeys.length} / ${pendingDraft.totalCount} 项证据图片`,
                   })}
                 </div>
+                <div className='text-[11px] text-muted-foreground'>
+                  {t('export.resumeHint', {
+                    defaultValue:
+                      '续传沿用上次任务的报表与图片清单，当前筛选条件不参与',
+                  })}
+                </div>
               </div>
             </div>
 
@@ -314,7 +405,11 @@ export function RecordsExportDialog({
         {/* 正在导出时的进度态 */}
         {isExporting ? (
           <div className='my-4 space-y-4 rounded-lg border border-border bg-muted/20 p-4'>
-            <div className='flex items-center justify-between text-xs font-medium'>
+            <div
+              role='status'
+              aria-live='polite'
+              className='flex items-center justify-between text-xs font-medium'
+            >
               <span className='flex items-center gap-2'>
                 <Loader2 className='size-3.5 animate-spin text-primary' />
                 <span>
@@ -327,7 +422,16 @@ export function RecordsExportDialog({
               <span className='font-mono'>{percent}%</span>
             </div>
 
-            <div className='h-2 w-full overflow-hidden rounded-full bg-secondary'>
+            <div
+              role='progressbar'
+              aria-label={t('export.progressLabel', {
+                defaultValue: '导出进度',
+              })}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={percent}
+              className='h-2 w-full overflow-hidden rounded-full bg-secondary'
+            >
               <div
                 className='h-full bg-primary transition-all duration-300'
                 style={{ width: `${percent}%` }}
@@ -354,22 +458,20 @@ export function RecordsExportDialog({
                     {
                       key: 'recognitions',
                       label: t('tabs.recognitions', {
-                        defaultValue: '人脸识别记录',
+                        defaultValue: '识别记录',
                       }),
                     },
                     {
                       key: 'alarms',
-                      label: t('tabs.alarms', { defaultValue: '安全告警记录' }),
+                      label: t('tabs.alarms', { defaultValue: '告警记录' }),
                     },
                     {
                       key: 'captures',
-                      label: t('tabs.captures', {
-                        defaultValue: '目标抓拍记录',
-                      }),
+                      label: t('tabs.captures', { defaultValue: '抓拍记录' }),
                     },
                     {
                       key: 'vehicles',
-                      label: t('tabs.vehicles', { defaultValue: '机动车抓拍' }),
+                      label: t('tabs.vehicles', { defaultValue: '车辆记录' }),
                     },
                   ].map(({ key, label }) => (
                     <label
@@ -384,6 +486,21 @@ export function RecordsExportDialog({
                     </label>
                   ))}
                 </div>
+                {overRecordBudget && (
+                  <div
+                    role='alert'
+                    className='flex items-start gap-2 rounded bg-destructive/10 p-2 text-[11px] text-destructive'
+                  >
+                    <AlertTriangle className='mt-0.5 size-3.5 shrink-0' />
+                    <span>
+                      {t('export.overRecordBudget', {
+                        total: estimatedTotal,
+                        limit: DEFAULT_MAX_RECORDS,
+                        defaultValue: `当前 Tab 已匹配 ${estimatedTotal} 条，超过单次导出的 ${DEFAULT_MAX_RECORDS} 条上限，请缩小时间或摄像头范围`,
+                      })}
+                    </span>
+                  </div>
+                )}
               </div>
             )}
 
@@ -399,11 +516,14 @@ export function RecordsExportDialog({
                   <div className='flex items-center gap-2'>
                     <FileSpreadsheet className='size-4 text-emerald-500' />
                     <div>
-                      <div className='text-xs font-medium'>
+                      <Label
+                        htmlFor='export-csv'
+                        className='cursor-pointer text-xs font-medium'
+                      >
                         {t('export.csvReport', {
                           defaultValue: '结构化数据报表 (CSV)',
                         })}
-                      </div>
+                      </Label>
                       <div className='text-[11px] text-muted-foreground'>
                         {t('export.csvDesc', {
                           defaultValue:
@@ -412,7 +532,11 @@ export function RecordsExportDialog({
                       </div>
                     </div>
                   </div>
-                  <Switch checked={exportCsv} onCheckedChange={setExportCsv} />
+                  <Switch
+                    id='export-csv'
+                    checked={exportCsv}
+                    onCheckedChange={setExportCsv}
+                  />
                 </div>
 
                 <div className='h-px bg-border/60' />
@@ -422,11 +546,14 @@ export function RecordsExportDialog({
                   <div className='flex items-center gap-2'>
                     <FileArchive className='size-4 text-sky-500' />
                     <div>
-                      <div className='text-xs font-medium'>
+                      <Label
+                        htmlFor='export-images'
+                        className='cursor-pointer text-xs font-medium'
+                      >
                         {t('export.imageEvidence', {
                           defaultValue: '抓拍图片证据包 (ZIP)',
                         })}
-                      </div>
+                      </Label>
                       <div className='text-[11px] text-muted-foreground'>
                         {t('export.imageDesc', {
                           defaultValue:
@@ -436,6 +563,7 @@ export function RecordsExportDialog({
                     </div>
                   </div>
                   <Switch
+                    id='export-images'
                     checked={exportImages}
                     onCheckedChange={setExportImages}
                   />
@@ -449,11 +577,14 @@ export function RecordsExportDialog({
                 {/* 检测框烧录开关 */}
                 <div className='flex items-center justify-between'>
                   <div>
-                    <div className='text-xs font-medium text-foreground'>
+                    <Label
+                      htmlFor='export-burn-overlay'
+                      className='cursor-pointer text-xs font-medium text-foreground'
+                    >
                       {t('export.burnOverlay', {
                         defaultValue: '在图片上绘制目标检测框与标签',
                       })}
-                    </div>
+                    </Label>
                     <div className='text-[11px] text-muted-foreground'>
                       {t('export.burnOverlayDesc', {
                         defaultValue:
@@ -462,6 +593,7 @@ export function RecordsExportDialog({
                     </div>
                   </div>
                   <Switch
+                    id='export-burn-overlay'
                     checked={burnOverlay}
                     onCheckedChange={setBurnOverlay}
                   />
@@ -528,12 +660,14 @@ export function RecordsExportDialog({
                       <Input
                         type='number'
                         min={1}
-                        max={1000}
-                        value={maxImages}
-                        onChange={(e) =>
-                          setMaxImages(
-                            Math.max(1, parseInt(e.target.value) || 1)
-                          )
+                        max={HARD_MAX_IMAGES}
+                        aria-label={t('export.limitImages', {
+                          defaultValue: '限制最大导出图片数',
+                        })}
+                        value={maxImagesText}
+                        onChange={(e) => setMaxImagesText(e.target.value)}
+                        onBlur={() =>
+                          setMaxImagesText(String(clampMaxImages(maxImages)))
                         }
                         className='h-7 w-20 font-mono text-xs'
                       />
@@ -543,6 +677,13 @@ export function RecordsExportDialog({
                     </div>
                   )}
                 </div>
+
+                <p className='text-[11px] text-muted-foreground'>
+                  {t('export.hardCapHint', {
+                    limit: HARD_MAX_IMAGES,
+                    defaultValue: `取消限额时仍受单次 ${HARD_MAX_IMAGES} 张上限保护`,
+                  })}
+                </p>
 
                 {/* 耗时与体积提示 */}
                 {estimatedTotal > 200 && (

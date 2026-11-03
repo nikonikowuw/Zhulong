@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { type RecordsTab } from '../data/schema'
 
 export interface Identifiable {
@@ -13,14 +13,15 @@ export function useRecordsSelection<T extends Identifiable>(
     () => new Map()
   )
 
-  // 监听 Tab 变动，Tab 切换时主动清空勾选，遵循单 Tab 隔离原则
-  const prevTabRef = useRef(currentTab)
-  useEffect(() => {
-    if (prevTabRef.current !== currentTab) {
-      prevTabRef.current = currentTab
-      setSelectedMap(new Map())
-    }
-  }, [currentTab])
+  // Tab 切换时清空勾选（单 Tab 隔离原则）。
+  //
+  // 在 render 阶段同步重置而不是放进 useEffect：effect 在提交之后才跑，
+  // 切换 Tab 的第一帧会带着上一页的计数渲染一次浮动条，视觉上就是闪一下。
+  const [prevTab, setPrevTab] = useState(currentTab)
+  if (prevTab !== currentTab) {
+    setPrevTab(currentTab)
+    setSelectedMap(new Map())
+  }
 
   const selectedCount = selectedMap.size
   const selectedItems = useMemo(

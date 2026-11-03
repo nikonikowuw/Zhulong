@@ -34,6 +34,18 @@ describe('export-csv', () => {
         '"{""a"":1,""b"":""two""}"'
       )
     })
+
+    it('neutralises spreadsheet formula injection', () => {
+      expect(escapeCsvField('=1+1')).toBe("'=1+1")
+      expect(escapeCsvField('@SUM(A1)')).toBe("'@SUM(A1)")
+      expect(escapeCsvField('+8613800000000')).toBe("'+8613800000000")
+      expect(escapeCsvField('-12:30')).toBe("'-12:30")
+    })
+
+    it('never prefixes plain numbers (would turn them into text)', () => {
+      expect(escapeCsvField(-0.5)).toBe('-0.5')
+      expect(escapeCsvField(-12345)).toBe('-12345')
+    })
   })
 
   describe('exportRecognitionsCsv', () => {
@@ -78,6 +90,19 @@ describe('export-csv', () => {
       expect(csv).toContain('EXT-1001')
       expect(csv).toContain('0.9456')
       expect(csv).toContain('01JH0000000000000000000001')
+    })
+
+    it('writes both local time and ISO UTC (never a UTC-only timestamp)', () => {
+      const capturedAt = '2026-11-03T08:30:00.000Z'
+      const csv = exportRecognitionsCsv([mockRecognition])
+      const local = new Date(capturedAt)
+      const pad = (n: number) => String(n).padStart(2, '0')
+      const expectedLocal = `${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())}`
+
+      expect(csv).toContain('Captured At, Local')
+      expect(csv).toContain('UTC ISO8601')
+      expect(csv).toContain(capturedAt)
+      expect(csv).toContain(expectedLocal)
     })
   })
 
