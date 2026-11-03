@@ -291,4 +291,47 @@ describe('AlgorithmsTable', () => {
       .element(getByRole('heading', { name: '人脸识别算法' }))
       .toBeInTheDocument()
   })
+
+  it('opens delete dialog and not detail sheet when clicking delete in actions menu', async () => {
+    const algos = [
+      makeAlgorithm({
+        id: 'face_recognition',
+        name: '人脸识别算法',
+        status: 'DISABLED',
+        manifestJson: JSON.stringify({
+          id: 'face_recognition',
+          labels: ['face'],
+        }),
+      }),
+    ]
+
+    const { getByRole } = await render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AlgorithmsProvider>
+          <AlgorithmsTable
+            data={algos}
+            isLoading={false}
+            isError={false}
+            onRetry={vi.fn()}
+            search={{}}
+            navigate={vi.fn()}
+          />
+          <AlgorithmsDialogs />
+        </AlgorithmsProvider>
+      </QueryClientProvider>
+    )
+
+    const actionBtn = getByRole('button', { name: /操作/i })
+    await actionBtn.click()
+
+    const deleteItem = getByRole('menuitem', { name: /卸载算法包/i })
+    await deleteItem.click()
+
+    // 应该弹出卸载确认弹窗（alertdialog），而不是算法详情（dialog）
+    await expect.element(getByRole('alertdialog')).toBeInTheDocument()
+    await expect
+      .element(getByRole('button', { name: '确认卸载' }))
+      .toBeInTheDocument()
+    await expect.element(getByRole('dialog')).not.toBeInTheDocument()
+  })
 })

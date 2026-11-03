@@ -33,28 +33,36 @@ export function AlgorithmsDataTableRowActions({
   const isCrashLoop = algo.status === 'CRASH_LOOP'
   const isTrialAllowed = algo.status === 'DISABLED'
 
-  const handleTrial = () => {
+  const handleTrial = (e?: React.SyntheticEvent) => {
+    e?.stopPropagation()
     setCurrentRow(algo)
     setOpen('trial')
   }
 
-  const handleDetail = () => {
+  const handleDetail = (e?: React.SyntheticEvent) => {
+    e?.stopPropagation()
     setCurrentRow(algo)
     setOpen('detail')
   }
 
-  const handleReset = () => {
+  const handleReset = (e?: React.SyntheticEvent) => {
+    e?.stopPropagation()
     setCurrentRow(algo)
     setOpen('reset')
   }
 
-  const handleDelete = () => {
+  const handleDelete = (e?: React.SyntheticEvent) => {
+    e?.stopPropagation()
     setCurrentRow(algo)
     setOpen('delete')
   }
 
   return (
-    <div className='flex items-center justify-end gap-1'>
+    <div
+      className='flex items-center justify-end gap-1'
+      data-prevent-row-click
+      onClick={(e) => e.stopPropagation()}
+    >
       {isCrashLoop && (
         <Button
           variant='outline'
@@ -78,7 +86,11 @@ export function AlgorithmsDataTableRowActions({
             <span className='sr-only'>{t('thActions', '操作')}</span>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align='end' className='w-40'>
+        <DropdownMenuContent
+          align='end'
+          className='w-40'
+          onClick={(e) => e.stopPropagation()}
+        >
           <DropdownMenuItem onClick={handleDetail}>
             <FileText className='me-2 size-4' />
             {t('viewDetails', '查看详情')}

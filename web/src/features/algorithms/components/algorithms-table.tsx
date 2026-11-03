@@ -254,7 +254,7 @@ export function AlgorithmsTable({
                     const target = e.target as HTMLElement | null
                     if (
                       target?.closest(
-                        'button, input, [role="checkbox"], [role="switch"], a, [data-prevent-row-click]'
+                        'button, input, [role="checkbox"], [role="switch"], a, [data-prevent-row-click], [role="menuitem"], [role="menu"], [data-slot*="dropdown-menu"]'
                       )
                     ) {
                       return
@@ -267,6 +267,13 @@ export function AlgorithmsTable({
                     <TableCell
                       key={cell.id}
                       className={cell.column.columnDef.meta?.className}
+                      data-prevent-row-click={
+                        cell.column.id === 'actions' ||
+                        cell.column.id === 'select' ||
+                        cell.column.id === 'enable'
+                          ? ''
+                          : undefined
+                      }
                     >
                       {flexRender(
                         cell.column.columnDef.cell,
