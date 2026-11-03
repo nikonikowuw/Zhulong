@@ -130,6 +130,15 @@ public:
     /** @brief 时间轴跳变累计次数（仅诊断与测试使用） */
     uint64_t discontinuity_count() const { return discontinuity_count_; }
 
+    /** @brief 视频原点是否已建立（供 AudioNormalizer 查询） */
+    bool origin_ready() const { return origin_set_; }
+
+    /** @brief 当前视频时间轴偏移（微秒，供 AudioNormalizer 逐包读取） */
+    int64_t timestamp_shift_us() const { return timestamp_shift_us_; }
+
+    /** @brief 单调递增的不连续代数（discontinuity generation，每次跳变 +1） */
+    uint64_t discontinuity_generation() const { return discontinuity_count_; }
+
 private:
     /** @brief 将相对源时间戳换算为微秒，使用 128 位中间量防溢出 */
     static int64_t rescale_delta_to_microseconds(int64_t ticks, int64_t origin,

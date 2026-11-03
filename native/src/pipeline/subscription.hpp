@@ -106,15 +106,18 @@ struct Subscription : public SubscriptionBase {
     uint64_t consumer{0};                       /**< 关联的预览消费者 ID */
     Zhulong_packet_callback callback{nullptr};  /**< 用户提供的包回调函数指针 */
     uintptr_t token{0};                         /**< 用户上下文令牌（Go 侧为 cgo.Handle 整数，不可保留裸 Go 指针） */
+    uint32_t track_mask{ZHULONG_TRACK_MASK_VIDEO}; /**< 订阅轨道掩码 (v5) */
 
     /**
      * @brief 构造函数
      * @param consumer_id 消费者唯一标识
      * @param function 用户回调函数指针
      * @param value 上下文令牌
+     * @param tracks 订阅轨道掩码（默认为仅视频）
      */
-    Subscription(uint64_t consumer_id, Zhulong_packet_callback function, uintptr_t value)
-        : consumer(consumer_id), callback(function), token(value) {}
+    Subscription(uint64_t consumer_id, Zhulong_packet_callback function, uintptr_t value,
+                 uint32_t tracks = ZHULONG_TRACK_MASK_VIDEO)
+        : consumer(consumer_id), callback(function), token(value), track_mask(tracks) {}
 
     /**
      * @brief 派发数据包给回调函数（在锁外调用，具备异常安全防护）

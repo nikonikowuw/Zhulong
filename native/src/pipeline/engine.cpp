@@ -465,7 +465,11 @@ Zhulong_stream_status Engine::status(Zhulong_stream_id id) {
 }
 
 Zhulong_subscription_id Engine::subscribe(Zhulong_stream_id id, uint64_t consumer,
-                                          Zhulong_packet_callback callback, uintptr_t token) {
+                                          Zhulong_packet_callback callback, uintptr_t token,
+                                          uint32_t track_mask) {
+    if ((track_mask & (ZHULONG_TRACK_MASK_VIDEO | ZHULONG_TRACK_MASK_AUDIO)) == 0) {
+        throw Failure{Zhulong_ERR_INVALID_ARGUMENT};
+    }
     std::lock_guard<std::mutex> operation(control);
     auto stream = find_stream(id);
 
@@ -476,17 +480,45 @@ Zhulong_subscription_id Engine::subscribe(Zhulong_stream_id id, uint64_t consume
 
     std::lock_guard<std::mutex> lock(stream->mutex);
     for (const auto &entry : stream->subscriptions) {
-        if (entry.second->consumer == consumer) {
+        // 去重粒度是「消费者 + 轨道掩码」：同一预览消费者可以分别订阅视频与音频，
+        // 但同一轨道集不能注册两条（那才是真正的重复，只会造成双份回调）。
+        if (entry.second->consumer == consumer && entry.second->track_mask == track_mask) {
             throw Failure{Zhulong_ERR_DUPLICATE};
         }
     }
 
     if (!next_subscription) throw Failure{Zhulong_ERR_INTERNAL};
     const auto subscription = next_subscription++;
-    stream->subscriptions.emplace(subscription, std::make_shared<Subscription>(consumer, callback, token));
+    stream->subscriptions.emplace(subscription, std::make_shared<Subscription>(consumer, callback, token, track_mask));
     stream->rebuild_subscribers();
-    ZL_LOGI(id, "pipeline.engine", "packet_subscription_attached");
+    ZL_LOGI(id, "pipeline.engine", "packet_subscription_attached track_mask=%u", track_mask);
     return subscription;
+}
+
+void Engine::audio_info(Zhulong_stream_id id, Zhulong_audio_view *out_view) {
+    if (!out_view) throw Failure{Zhulong_ERR_INVALID_ARGUMENT};
+    std::shared_ptr<Stream> stream;
+    {
+        std::lock_guard<std::mutex> operation(control);
+        stream = find_stream(id);
+    }
+    std::lock_guard<std::mutex> lock(stream->mutex);
+    if (stream->status.state != Zhulong_STREAM_RUNNING) {
+        throw Failure{Zhulong_ERR_NOT_RUNNING};
+    }
+    out_view->has_audio = stream->audio_meta_.has_audio ? 1 : 0;
+    out_view->codec = stream->audio_meta_.codec;
+    out_view->sample_rate = stream->audio_meta_.sample_rate;
+    out_view->channels = stream->audio_meta_.channels;
+
+    const size_t req_size = out_view->has_audio ? stream->audio_meta_.extradata.size() : 0;
+    out_view->extradata_size = req_size;
+    if (req_size > 0) {
+        if (!out_view->extradata || out_view->extradata_capacity < req_size) {
+            throw Failure{Zhulong_ERR_BUFFER_TOO_SMALL};
+        }
+        std::memcpy(out_view->extradata, stream->audio_meta_.extradata.data(), req_size);
+    }
 }
 
 void Engine::unsubscribe(Zhulong_stream_id id, Zhulong_subscription_id subscription) {

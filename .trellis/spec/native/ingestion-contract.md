@@ -78,13 +78,45 @@
 调用 `Zhulong_engine_get_abi_version` 校验，不一致直接拒绝启动（`ErrABIMismatch`）。
 这类错配在链接期不报错，只会让 cgo 按错误偏移读内存。
 
-### 3.6 内存所有权与 CGO 指针合规
+### 3.6 双轨音频接入与 ABI v5
+
+拉流模式**一律**申请音频（`allowed_media_types="video+audio"`，Probe 模式仍为 `"video"`，不拉长探测预算）。
+音频不是预览流的一部分：它有独立的归一化器、独立的订阅轨道掩码与独立的下游通道。
+
+- **选项串语法**：`allowed_media_types` 是 AVOption **flags 串**，分隔符是 `+`/`-`。写 `"video,audio"`
+  会让 `avformat_open_input` 直接失败（`Invalid chars ',audio'`）——不要照抄 SDP 习惯。
+- **音频可接受性**：`av_find_best_stream(AUDIO, -1, video_index)` 取一条；codec ∈ {AAC, PCMA, PCMU}、
+  采样率白名单、声道 ∈ {1,2}、`time_base` 有效。任一不满足即「该路无音频」并记一条 WARN。
+  AAC 的采样率/声道必须从 **AudioSpecificConfig** 解析：`mpeg4-generic/90000` 会让
+  `codecpar->sample_rate` 报 90000，直接透传会让浏览器按 90 kHz 解码。
+- **AAC-LATM**：固定 FFmpeg 7.1.5 的 `libavformat/rtpdec_latm.c` 声明 `AV_CODEC_ID_AAC`，
+  `latm_parse_packet` 把 LATM 帧剥成裸 AU、`parse_fmtp_config` 把 ASC 写进 extradata ⇒ MP4A-LATM 相机
+  在本引擎上是**可播的裸 AAC**。保留 `AV_CODEC_ID_AAC_LATM` 的拒绝分支只作防御（真报成它说明不可解封装）。
+- **失败不黑屏**：申请音频后建连/SETUP 失败 → 关 ctx，以 `"video"` **只重开一次**，日志记
+  `rtsp_audio_open_failed rc=`。物理证据是 `/audio-broken` 桩的连接计数恰为 2（`rtsp_fixture.py` 断言）。
+- **音频归一化**（`pipeline/audio_normalizer.*`）：锚点 `base = a - V`（视频原点到达时刻 + 首枚有效音频包到达时延），
+  逐包读视频 `timestamp_shift_us` 与 discontinuity generation：
+  `audio_out_us = (audio_abs_us - A) + base + video_shift_us`。纯算术、不读钟、不加锁。
+  - 视频原点未建立 → 音频包**一律丢弃**并计数，绝不自行建原点（否则等于拿音频造了一条假时间轴）；
+  - 缺失 PTS 按 codec/sample_rate 递推并置 `TIMESTAMP_SYNTHETIC`；32 位 RTP 回绕要展开；
+  - 输出非单调时截平并置 `DISCONTINUITY`，绝不静默回拨。
+- **音频不进视频路径**：`Stream::dispatch()` 入口断言 `track_type == VIDEO`，音频走 `dispatch_audio()`；
+  音频永不经过 `PreviewNormalizer`、`DecodeSession`、GOP 缓存。
+- **空闲超时只由视频刷新**：音频持续到达而视频停了，仍然要按 `idle_timeout_ms` 判 `TIMEOUT`；
+  否则相机画面卡死会永远“看起来活着”（桩位 `/audio-pcma-stop-video` 钉住）。
+- **ABI v5**：`Zhulong_packet_view` 尾部追加 `track_type` + 3×`reserved`；
+  `Zhulong_stream_subscribe_track(..., track_mask, ...)`（旧 `Zhulong_stream_subscribe` 等价于 `TRACK_MASK_VIDEO`）；
+  `Zhulong_stream_audio_info` 由调用方提供缓冲区（详见 [cgo-contract.md](./cgo-contract.md)）。
+- **订阅去重粒度是「消费者 + 轨道掩码」**：同一预览消费者可以分别订阅视频与音频；
+  同一轨道集重复订阅仍 `Zhulong_ERR_DUPLICATE`。
+
+### 3.7 内存所有权与 CGO 指针合规
 
 - **包视图即时有效**：回调传递的 `Zhulong_packet_view` 仅在回调同步执行期间有效，下游需要保留数据必须深拷贝；
   参数集注入时 `data` 指向整形器内部缓冲，同样只在下一次 `normalize` 之前有效；
 - **禁止传递 Go 指针**：回调令牌 `token` 必须通过 `uintptr_t`（`cgo.Handle` 转换的整数）传递，严禁向 C 暴露 Go 堆指针；Go 侧必须在 `unsubscribe` 彻底排空（drain）并确认无在途回调后，方可注销句柄。
 
-### 3.7 静态构建与跨平台链接门禁
+### 3.8 静态构建与跨平台链接门禁
 
 - **FFmpeg 静态绑定**：全仓使用固定的 FFmpeg 7.1.5（SHA-256: `de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f`），构建期严禁动态联网下载，绝不回退到系统共享库。
 - **内容寻址归档**：使用基于内容摘要命名引擎静态归档，使 C++ 源码改动能准确使 Go 侧 CGO 缓存失效，杜绝陈旧库静默复用。

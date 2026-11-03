@@ -134,6 +134,7 @@ add_library(ZhulongEngine STATIC
     src/pipeline/engine.cpp
     src/pipeline/stream.cpp
     src/pipeline/preview_normalizer.cpp
+    src/pipeline/audio_normalizer.cpp
     src/pipeline/subscription.cpp
     src/pipeline/frame_publisher.cpp
     src/pipeline/motion_detector.cpp
@@ -785,6 +786,17 @@ if(BUILD_TESTING)
     target_link_libraries(ZhulongPreviewNormalizerTests PRIVATE Threads::Threads)
     add_test(NAME ZhulongPreviewNormalizer COMMAND ZhulongPreviewNormalizerTests)
     set_tests_properties(ZhulongPreviewNormalizer PROPERTIES TIMEOUT 10)
+
+    # 音频归一化器单元测试（锚点对齐、PTS 递推、跳变与单调性保护）
+    add_executable(ZhulongAudioNormalizerTests
+        tests/audio_normalizer_test.cpp
+        src/pipeline/audio_normalizer.cpp
+    )
+    target_compile_features(ZhulongAudioNormalizerTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongAudioNormalizerTests PRIVATE src include)
+    target_link_libraries(ZhulongAudioNormalizerTests PRIVATE Threads::Threads)
+    add_test(NAME ZhulongAudioNormalizer COMMAND ZhulongAudioNormalizerTests)
+    set_tests_properties(ZhulongAudioNormalizer PROPERTIES TIMEOUT 10)
 
     # RTSP 采集节点单元测试（URL 规范化、选项、排空）
     add_executable(ZhulongCaptureUnitTests tests/capture_unit_test.cpp)

@@ -83,11 +83,14 @@ enum {
 };
 
 /**
- * @brief 视频编解码器枚举
+ * @brief 视频/音频编解码器枚举
  */
 enum {
     Zhulong_CODEC_H264 = 1,               /**< H.264 / AVC */
-    Zhulong_CODEC_H265 = 2                /**< H.265 / HEVC */
+    Zhulong_CODEC_H265 = 2,               /**< H.265 / HEVC */
+    Zhulong_CODEC_AAC  = 16,              /**< AAC (raw AU) */
+    Zhulong_CODEC_PCMA = 17,              /**< G.711 A-law */
+    Zhulong_CODEC_PCMU = 18               /**< G.711 mu-law */
 };
 
 /**
@@ -179,7 +182,25 @@ typedef struct {
     int32_t frame_class;         /**< 帧类型，取值见 Zhulong_FRAME_*；决定接收方可否安全丢弃 */
     uint32_t gop_id;             /**< GOP 序号：每遇到关键帧或时间轴跳变时自增，跨值即代表可重建解码器 */
     uint32_t pkt_flags;          /**< 包属性位，取值见 ZHULONG_PKT_FLAG_* */
+
+    /* ---------------- v5 追加：双轨按需音频字段 ---------------- */
+    uint32_t track_type;         /**< 轨道类型：ZHULONG_TRACK_VIDEO(0) 或 ZHULONG_TRACK_AUDIO(1) */
+    uint32_t reserved0;          /**< 预留对齐填充，恒为 0 */
+    uint32_t reserved1;          /**< 预留对齐填充，恒为 0 */
+    uint32_t reserved2;          /**< 预留对齐填充，恒为 0 */
 } Zhulong_packet_view;
+
+/** @brief 轨道类型枚举（v5） */
+enum {
+    ZHULONG_TRACK_VIDEO = 0,
+    ZHULONG_TRACK_AUDIO = 1
+};
+
+/** @brief 订阅轨道掩码（v5） */
+enum {
+    ZHULONG_TRACK_MASK_VIDEO = 1u << 0,
+    ZHULONG_TRACK_MASK_AUDIO = 1u << 1
+};
 
 /**
  * @brief 预览帧类型枚举（v3）
@@ -287,13 +308,13 @@ typedef void (*Zhulong_log_callback)(uintptr_t token, int32_t level, uint64_t st
 /* ========================================================================== */
 
 /**
- * @brief 当前 C ABI 版本号（v4 为追加抓拍 target_pts 时间戳精确匹配支持）
+ * @brief 当前 C ABI 版本号（v5 为双轨按需音频与按轨订阅支持）
  *
  * 演进约定：ABI 只允许在结构体**尾部追加**字段，绝不调整已有字段偏移或语义。
  * Go 侧在初始化后必须调用 Zhulong_engine_get_abi_version 校验，头文件与静态库不一致时
  * 直接拒绝启动，避免旧归档被语言层静默复用引发的内存越界。
  */
-#define ZHULONG_ABI_VERSION 4
+#define ZHULONG_ABI_VERSION 5
 
 /**
  * @brief 查询原生静态库编译时对应的 ABI 版本
@@ -501,7 +522,55 @@ Zhulong_status_t Zhulong_stream_set_publish_rate(Zhulong_engine_h engine,
     Zhulong_stream_id stream, uint32_t max_sample_fps);
 
 /**
- * @brief 订阅物理流的实时数据包派发
+ * @brief 音频流元数据视图（v5）
+ *
+ * 由调用方分配结构体并提供 extradata 缓冲区，ABI 调用期间深拷贝复制，不返回内部借用指针。
+ * 若 extradata 缓冲区容量不足，返回 Zhulong_ERR_BUFFER_TOO_SMALL，并在 extradata_size 中写入所需字节数。
+ */
+typedef struct {
+    int32_t  has_audio;           /**< 是否包含有效音频轨（1 为有，0 为无） */
+    int32_t  codec;               /**< 音频编码格式：Zhulong_CODEC_AAC / PCMA / PCMU */
+    int32_t  sample_rate;         /**< 采样率（Hz），如 8000, 16000, 44100, 48000 */
+    int32_t  channels;            /**< 声道数，1 为单声道，2 为立体声 */
+    uint8_t *extradata;           /**< 调用方提供的 extradata 缓冲区；AAC 为 AudioSpecificConfig (ASC) */
+    size_t   extradata_capacity;  /**< extradata 缓冲区容量（字节） */
+    size_t   extradata_size;      /**< 实际写入字节数（或容量不足时所需的字节数） */
+} Zhulong_audio_view;
+
+/**
+ * @brief 查询指定物理流的音频流元数据（v5）
+ *
+ * @param engine 引擎句柄
+ * @param stream 物理流 ID
+ * @param[in,out] out_view 指向调用方提供的音频元数据视图结构体
+ * @return Zhulong_status_t Zhulong_OK 成功；
+ *                          Zhulong_ERR_INVALID_ARGUMENT 参数空；
+ *                          Zhulong_ERR_BUFFER_TOO_SMALL extradata 缓冲区容量不足；
+ *                          Zhulong_ERR_NOT_FOUND 流不存在；
+ *                          Zhulong_ERR_NOT_RUNNING 流未在运行中
+ */
+Zhulong_status_t Zhulong_stream_audio_info(Zhulong_engine_h engine, Zhulong_stream_id stream,
+                                           Zhulong_audio_view *out_view);
+
+/**
+ * @brief 按轨订阅流的数据包通道（v5）
+ *
+ * @param engine 引擎句柄
+ * @param stream 物理流 ID
+ * @param preview_consumer_id 预览消费者 ID（> 0）
+ * @param track_mask 订阅轨道掩码（ZHULONG_TRACK_MASK_VIDEO, ZHULONG_TRACK_MASK_AUDIO 或其按位或）
+ * @param callback 接收数据包的回调函数
+ * @param token 传递给回调函数的上下文令牌
+ * @param[out] out_subscription 输出订阅 ID
+ * @return Zhulong_status_t 操作状态码
+ */
+Zhulong_status_t Zhulong_stream_subscribe_track(Zhulong_engine_h engine, Zhulong_stream_id stream,
+    uint64_t preview_consumer_id, uint32_t track_mask,
+    Zhulong_packet_callback callback, uintptr_t token,
+    Zhulong_subscription_id *out_subscription);
+
+/**
+ * @brief 订阅物理流的实时数据包派发（保持仅视频订阅语义）
  *
  * @param engine 引擎句柄
  * @param stream 流 ID

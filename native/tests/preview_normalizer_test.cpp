@@ -168,6 +168,22 @@ void TestMissingDtsGetsSyntheticDecodeClock() {
           "synthetic DTS must increase in packet order");
 }
 
+void TestClockStateAndDiscontinuityGeneration() {
+    zhulong::PreviewNormalizer normalizer;
+    Check(!normalizer.origin_ready(), "origin must not be ready initially");
+    Check(normalizer.discontinuity_generation() == 0, "discontinuity generation must be 0 initially");
+
+    normalizer.update_metadata(Zhulong_CODEC_H264, nullptr, 0, 1, 25);
+    normalizer.normalize(Packet(0, 0, true));
+    Check(normalizer.origin_ready(), "origin must be ready after first normalized packet");
+    Check(normalizer.discontinuity_generation() == 0, "no discontinuity yet");
+
+    // 触发跳变（PTS 回退）
+    normalizer.normalize(Packet(100, 100));
+    normalizer.normalize(Packet(0, 0));
+    Check(normalizer.discontinuity_generation() == 1, "generation must increment after discontinuity");
+}
+
 } // namespace
 
 int main() {
@@ -176,6 +192,7 @@ int main() {
     TestBFrameTimestampsAndDiscontinuity();
     TestDtsAvailabilityTransitionDoesNotSignalDiscontinuity();
     TestMissingDtsGetsSyntheticDecodeClock();
+    TestClockStateAndDiscontinuityGeneration();
     std::cout << "Preview normalizer tests passed\n";
     return 0;
 }

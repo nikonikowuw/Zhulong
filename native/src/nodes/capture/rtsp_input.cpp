@@ -635,9 +635,57 @@ struct ProbeSession {
     int64_t open_ms = 0;
     int64_t info_ms = 0;
     int index = -1;
+    int audio_index = -1;
     int info_rc = 0;
     bool info_ok = false;
 };
+
+bool is_supported_audio_sample_rate(int rate) {
+    switch (rate) {
+        case 8000:
+        case 11025:
+        case 16000:
+        case 22050:
+        case 24000:
+        case 32000:
+        case 44100:
+        case 48000:
+            return true;
+        default:
+            return false;
+    }
+}
+
+int32_t audio_codec_id(AVCodecID id) {
+    switch (id) {
+        case AV_CODEC_ID_AAC: return Zhulong_CODEC_AAC;
+        case AV_CODEC_ID_PCM_ALAW: return Zhulong_CODEC_PCMA;
+        case AV_CODEC_ID_PCM_MULAW: return Zhulong_CODEC_PCMU;
+        default: return 0;
+    }
+}
+
+/**
+ * @brief 从 AAC AudioSpecificConfig 前两字节解析真实采样率与声道数
+ *
+ * ⚠️ 不能直接信任 `codecpar->sample_rate` / `ch_layout.nb_channels`：RTSP 的 RTP 时钟
+ *    与容器音频道并不等价，`mpeg4-generic/90000` 这种写法会让 FFmpeg 报出 90000Hz，
+ *    而 ASC 里的 samplingFrequencyIndex 才是解码器真正需要的采样率。解析失败时保留原值。
+ */
+void apply_aac_asc(const uint8_t *asc, int asc_size, int &sample_rate, int &channels) {
+    if (!asc || asc_size < 2) return;
+    static const int aac_sample_rates[] = {
+        96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350
+    };
+    const int frequency_index = ((asc[0] & 0x07) << 1) | ((asc[1] & 0x80) >> 7);
+    if (frequency_index >= 0 && frequency_index < static_cast<int>(sizeof(aac_sample_rates) / sizeof(aac_sample_rates[0]))) {
+        sample_rate = aac_sample_rates[frequency_index];
+    }
+    const int channel_config = (asc[1] >> 3) & 0x0f;
+    if (channel_config >= 1 && channel_config <= 2) {
+        channels = channel_config;
+    }
+}
 
 /**
  * @brief 用给定探测预算完成 open + find_stream_info（可重试一次）。
@@ -649,14 +697,15 @@ struct ProbeSession {
  * @throws Failure 建连失败 / 取消 / 超时 / 不支持的编解码
  */
 ProbeSession open_and_probe(Input &input, const std::string &url, const Options &options,
-                            Cancellation &cancel, uint64_t stream_id, const ProbeLimits &limits) {
+                            Cancellation &cancel, uint64_t stream_id, const ProbeLimits &limits,
+                            bool request_audio = false) {
     Dictionary dictionary;
     dictionary.set("rtsp_transport", options.transport == Zhulong_TRANSPORT_TCP ? "tcp" : "udp");
     if (options.transport == Zhulong_TRANSPORT_TCP) {
         dictionary.set("rtsp_flags", "prefer_tcp");
     }
     dictionary.set("timeout", std::to_string(static_cast<int64_t>(std::max(options.open_timeout_ms, options.idle_timeout_ms)) * 1000));
-    dictionary.set("allowed_media_types", "video");
+    dictionary.set("allowed_media_types", request_audio ? "video+audio" : "video");
     dictionary.set("analyzeduration", std::to_string(limits.analyzeduration_us));
     dictionary.set("probesize", std::to_string(limits.probesize_bytes));
     dictionary.set("fflags", "nobuffer");
@@ -682,6 +731,10 @@ ProbeSession open_and_probe(Input &input, const std::string &url, const Options 
         throw Failure{Zhulong_ERR_UNSUPPORTED};
     }
 
+    if (request_audio && session.index >= 0) {
+        session.audio_index = av_find_best_stream(input.context, AVMEDIA_TYPE_AUDIO, -1, session.index, nullptr, 0);
+    }
+
     // 快速前置编解码格式检查（在解析深度流信息前拒绝不支持的格式）
     // ⚠️ RTSP 的 SDP 可能尚未解析出 codec（AV_CODEC_ID_NONE），此时不得过早拒绝；
     //    权威判定在 avformat_find_stream_info 之后使用 codecpar->codec_id 完成。
@@ -696,6 +749,10 @@ ProbeSession open_and_probe(Input &input, const std::string &url, const Options 
     session.info_rc = avformat_find_stream_info(input.context, nullptr);
     session.info_ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - info_started).count();
     session.info_ok = session.info_rc >= 0;
+
+    if (request_audio && session.index >= 0) {
+        session.audio_index = av_find_best_stream(input.context, AVMEDIA_TYPE_AUDIO, -1, session.index, nullptr, 0);
+    }
     return session;
 }
 
@@ -719,7 +776,8 @@ bool probe_metadata_usable(const AVFormatContext *context, int index, bool requi
 
 Video read_rtsp(const std::string &url, const Options &options, Cancellation &cancel,
                 const std::function<void(const Zhulong_packet_view &)> &consume,
-                const std::function<void(const Video &)> &ready, uint64_t stream_id) {
+                const std::function<void(const Zhulong_packet_view &)> &consume_audio,
+                const std::function<void(const Media &)> &ready, uint64_t stream_id) {
     // 设置建连超时；入口处仅判定取消，不伪造结果码
     cancel.expire_after(options.open_timeout_ms);
     throw_if_cancelled(cancel);
@@ -727,8 +785,22 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
     Input input(cancel);
 
     const bool is_probe_only = !consume;
+    bool request_audio = !is_probe_only;
     const ProbeLimits fast_limits{probe_analyze_duration_us, probe_size_bytes};
-    ProbeSession session = open_and_probe(input, url, options, cancel, stream_id, fast_limits);
+    ProbeSession session;
+    try {
+        session = open_and_probe(input, url, options, cancel, stream_id, fast_limits, request_audio);
+    } catch (const Failure &f) {
+        if (request_audio && !cancel.stopped.load(std::memory_order_relaxed) && f.status != Zhulong_ERR_CANCELLED) {
+            ZL_LOGW(stream_id, "nodes.capture", "rtsp_audio_open_failed rc=%d falling back to video-only", f.status);
+            request_audio = false;
+            cancel.expire_after(options.open_timeout_ms);
+            input.reopen();
+            session = open_and_probe(input, url, options, cancel, stream_id, fast_limits, false);
+        } else {
+            throw;
+        }
+    }
     bool probe_fallback = false;
     // 「探测不足」有两种形态：find_stream_info 直接报错，以及它「成功」但元数据不可用。
     // 两者都只能用兼容档重试一次来判断，绝不能直接判成相机不支持。
@@ -748,7 +820,7 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
         cancel.expire_after(options.open_timeout_ms);
         input.reopen();
         const ProbeLimits legacy_limits{legacy_probe_analyze_duration_us, legacy_probe_size_bytes};
-        session = open_and_probe(input, url, options, cancel, stream_id, legacy_limits);
+        session = open_and_probe(input, url, options, cancel, stream_id, legacy_limits, request_audio);
         check(session.info_rc, cancel, stream_id, "stream_info");
     }
 
@@ -783,11 +855,57 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
         video.extradata.assign(parameters->extradata, parameters->extradata + parameters->extradata_size);
     }
 
+    // 提取并校验音频流元数据 (v5)
+    Audio audio;
+    const int audio_index = session.audio_index;
+    const AVStream *audio_stream = nullptr;
+    if (request_audio && audio_index >= 0 && static_cast<size_t>(audio_index) < input.context->nb_streams) {
+        const auto *a_stream = input.context->streams[audio_index];
+        const auto *a_par = a_stream->codecpar;
+        if (a_par->codec_id == AV_CODEC_ID_AAC_LATM) {
+            // ⚠️ 防御性分支：实测（固定 FFmpeg 7.1.5 libavformat/rtpdec_latm.c）
+            //    MP4A-LATM 的 dynamic handler 声明的是 AV_CODEC_ID_AAC，并把 LATM 帧
+            //    拆成裸 AAC AU、把 ASC 写进 extradata，因此正常相机走不到这里。
+            //    若真被报成 AAC_LATM，说明是浏览器无法解码的封装，明确拒绝并单列一条 WARN。
+            ZL_LOGW(stream_id, "nodes.capture", "rtsp_audio_latm_unsupported");
+        } else {
+            const int32_t a_codec = audio_codec_id(a_par->codec_id);
+            int sample_rate = a_par->sample_rate;
+            int channels = a_par->ch_layout.nb_channels;
+            if (a_codec == Zhulong_CODEC_AAC) {
+                apply_aac_asc(a_par->extradata, a_par->extradata_size, sample_rate, channels);
+            }
+            if (a_codec != 0 &&
+                is_supported_audio_sample_rate(sample_rate) &&
+                (channels == 1 || channels == 2) &&
+                a_stream->time_base.num > 0 && a_stream->time_base.den > 0) {
+                audio.has_audio = true;
+                audio.codec = a_codec;
+                audio.sample_rate = sample_rate;
+                audio.channels = channels;
+                audio.time_base_num = a_stream->time_base.num;
+                audio.time_base_den = a_stream->time_base.den;
+                if (a_par->extradata_size > 0 && a_par->extradata_size <= 256) {
+                    audio.extradata.assign(a_par->extradata, a_par->extradata + a_par->extradata_size);
+                }
+                audio_stream = a_stream;
+                // 首次建流必可见的能力日志（AC-6：定位“这路到底有没有音频、是什么音频”）
+                ZL_LOGI(stream_id, "nodes.capture", "rtsp_audio_detected codec=%d rate=%d channels=%d tb=%d/%d extradata=%zu",
+                        audio.codec, audio.sample_rate, audio.channels,
+                        audio.time_base_num, audio.time_base_den, audio.extradata.size());
+            } else {
+                ZL_LOGW(stream_id, "nodes.capture", "rtsp_audio_rejected codec_id=%d rate=%d channels=%d tb_num=%d tb_den=%d",
+                        static_cast<int>(a_par->codec_id), sample_rate,
+                        channels, a_stream->time_base.num, a_stream->time_base.den);
+            }
+        }
+    }
+
     // 若无消费回调，说明仅执行探测（Probe），直接返回元数据
     if (!consume) return video;
 
-    // 通知外部调用方流已就绪（状态变更为 RUNNING），并传递元数据
-    if (ready) ready(video);
+    // 通知外部调用方流已就绪（状态变更为 RUNNING），并传递复合媒体元数据
+    if (ready) ready(Media{video, audio});
 
     std::unique_ptr<AVPacket, PacketDeleter> packet(av_packet_alloc());
     if (!packet) throw std::bad_alloc();
@@ -811,7 +929,7 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
         // 成功读取的包不再参与超时判定：否则恰好跨越截止点的合法帧会被当作超时丢弃
         if (result < 0) check(result, cancel, stream_id, "read");
 
-        // 仅处理所选视频轨道的有效数据包
+        // 双 sink 分发：仅处理所选视频轨道或音频轨道
         if (packet->stream_index == index && packet->size > 0) {
             if (!logged_first_packet) {
                 logged_first_packet = true;
@@ -823,6 +941,7 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
             }
             // ⚠️ 时间戳保真透传：保留原流时间戳有效性标记，禁止将缺失时间戳默认视为 0
             Zhulong_packet_view view{};
+            view.track_type = ZHULONG_TRACK_VIDEO;
             view.codec = video.view.codec;
             view.has_pts = packet->pts != AV_NOPTS_VALUE;
             view.has_dts = packet->dts != AV_NOPTS_VALUE;
@@ -841,6 +960,27 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
             //    一旦耗时超过 idle_timeout_ms，若在回调前刷新，下一次 av_read_frame 的
             //    interrupt 就会看到已过期 deadline，把「下游慢」误判成「相机断流」。
             cancel.expire_after(options.idle_timeout_ms);
+        } else if (consume_audio && audio.has_audio && audio_stream && packet->stream_index == audio_index && packet->size > 0) {
+            if (packet->size <= 8192) {
+                Zhulong_packet_view view{};
+                view.track_type = ZHULONG_TRACK_AUDIO;
+                view.codec = audio.codec;
+                view.has_pts = packet->pts != AV_NOPTS_VALUE;
+                view.has_dts = packet->dts != AV_NOPTS_VALUE;
+                view.pts = view.has_pts ? packet->pts : 0;
+                view.dts = view.has_dts ? packet->dts : 0;
+                view.time_base_num = audio_stream->time_base.num;
+                view.time_base_den = audio_stream->time_base.den;
+                view.key_frame = 0;
+                view.frame_class = Zhulong_FRAME_UNKNOWN;
+                view.data = packet->data;
+                view.size = static_cast<size_t>(packet->size);
+
+                consume_audio(view);
+            } else {
+                ZL_LOGW(stream_id, "nodes.capture", "rtsp_audio_packet_too_large size=%d", packet->size);
+            }
+            // ⚠️ 音频包不刷新空闲超时：空闲监测专用于视频活性
         }
         av_packet_unref(packet.get());
     }

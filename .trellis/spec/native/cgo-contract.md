@@ -115,14 +115,34 @@ func (s *Subscription) Close() error
 
 ---
 
-## 4. 线程绑定与异步回调守则
+## 4. 调用方缓冲区元数据与按轨订阅（ABI v5）
+
+`Zhulong_stream_audio_info` 返回的是**流级常量**（codec / 采样率 / 声道 / extradata），刻意不进包视图：
+每包都带一份采样率只会让热路径白白变大。
+
+- **调用方分配、调用期间复制**：`Zhulong_audio_view` 由 Go 侧栈上分配，`extradata` 指向 Go 分配的
+  `[]byte`（`&buf[0]`），容量写在 `extradata_capacity`。C 侧只在调用期间 `memcpy`，**不得**保存该指针。
+  Go 侧调用后紧跟 `runtime.KeepAlive(buf)`，保证 GC 不会在 CGO 期间回收。
+- **容量不足是正常路径，不是错误**：返回 `Zhulong_ERR_BUFFER_TOO_SMALL`，并把实际所需长度写进
+  `extradata_size`；调用方据此扩容重试。不要写“先查一次大小再取一次”的双调用协议 —— 流可能在两次调用间重建。
+- **不返回内部借用指针**：绝不把 `audio_meta_.extradata` 的地址交出去，否则流销毁后就是悬垂指针；
+  也不允许用“反正是立即深拷贝”当借口省掉缓冲区协议。
+- **按轨订阅**：`Zhulong_stream_subscribe_track(..., track_mask, ...)`，视频/音频各自一条订阅、各自独立队列与
+  独立取消；`Zhulong_stream_subscribe` 等价于 `TRACK_MASK_VIDEO`。同一预览消费者可同时持有视频与音频两条订阅，
+  但同一 `track_mask` 重复订阅仍返回 `ERR_DUPLICATE`（去重粒度 = 消费者 + 轨道掩码）。
+- **音频回调的包视图契约不变**：`data` 仍只在同步回调期间有效，`pts_us/dts_us` 已是视频输出时间轴上的微秒值；
+  再往上一层（Go 的音频通道）必须复制成自持缓冲才能入队。
+
+---
+
+## 5. 线程绑定与异步回调守则
 
 1. **线程绑定 API (`runtime.LockOSThread`)**：若底层涉及对线程局部存储（TLS）敏感的 NPU/GPU 上下文，调用该 CGO 接口的 goroutine 必须在调用前执行 `runtime.LockOSThread()`，退出时 `defer runtime.UnlockOSThread()`。
 2. **异步回调使用 `cgo.Handle`**：若 C 侧需要异步上报事件，在 Go 侧通过 `cgo.NewHandle(obj)` 创建安全令牌并传给 C，回调时通过 `//export` 函数传回并由 Go 解析，完成后显式 `handle.Delete()`，严禁在 C 侧缓存 Go 原生指针。
 
 ---
 
-## 5. 当前接入实现的验证边界
+## 6. 当前接入实现的验证边界
 
 - `make native-test` 运行 C++17 生命周期、纯 C ABI、真实本地 RTSP/RTP 和构建合同测试；`make go-check` 包含 Go vet/race 与真实 loopback RTSP 桥接门禁（`run_go_bridge_tests.py`）。
 - Go Engine wrapper 已完整实现 Probe 探测（独立私有 Engine 隔离取消）、Stream 物理流复用/宽限期管理、有界深拷贝包订阅（Subscription）、同步排空后释放 `cgo.Handle`。
@@ -134,7 +154,7 @@ func (s *Subscription) Close() error
 
 ---
 
-## 6. 单次人脸特征提取（离线录入通道）
+## 7. 单次人脸特征提取（离线录入通道）
 
 底库登记需要「一张照片 → 一个 512 维特征」，这是宿主唯一需要算法能力却不走视频流的场景。
 
@@ -143,7 +163,7 @@ func (s *Subscription) Close() error
 - **业务解耦**：`internal/person` 仍只认 `FaceFeatureExtractor` 接口（`ExtractFaceFeature(ctx, imageBytes)`），由 Uber Fx 注入 `internal/app` 的适配器；领域包不 import 进程/管道/解码细节。
 - **提供者包可配**：`[person].extractor_algorithm`（默认 `face_recognition`）。包入口在**每次请求**时按当前安装版本解析，升级/回滚/重装立即生效。
 
-### 6.1 协议与进程形态
+### 7.1 协议与进程形态
 
 | 项 | 约定 |
 | :--- | :--- |
@@ -164,7 +184,7 @@ func (s *Subscription) Close() error
 - 能力用**弱符号**提供：骨架 `extern "C" __attribute__((weak)) zhulong_face_extract_feature(...)`，face 包定义、静态链入即解析；plate 包不定义 → 如实回 `UNSUPPORTED`。
 - ⚠️ 弱引用**不会**让 ld 抽取静态归档成员：定义必须来自包内直接编译的源文件，搬进 `.a` 会让能力静默消失（表现为「底库登记功能没了且没有错误日志」）。
 
-### 6.2 Fail-Closed 闭环报错（严禁静默退化）
+### 7.2 Fail-Closed 闭环报错（严禁静默退化）
 
 | 场景 | 包进程输出 | Go 侧错误 | HTTP |
 | :--- | :--- | :--- | :--- |
@@ -178,7 +198,7 @@ func (s *Subscription) Close() error
 
 ⚠️ **严禁任何失败路径写零向量**：零向量与真实登记在库里不可区分，会静默永不匹配。
 
-### 6.3 进程生命周期与并发
+### 7.3 进程生命周期与并发
 
 - **并发 1、一问一答**：与旧的插件互斥锁语义等价；请求排队由 30s 超时兜底，不引入无界并发 spawn。
 - **只对「流失步」换进程**：写失败 / 读失败 / 超时 / 非 JSON / `request_id` 错配 / 维度非法 → 杀进程组 + `Wait()` → 重建 → 重发该帧，第二次失败 fail-closed。**帧级裁决（`NO_FACE_DETECTED` / `INVALID_INPUT`）不回显错误但换了进程**：包进程是健康的，换掉它只会让下一帧再付一次模型冷加载（见 §6.1「一张坏图不该毁掉热进程」）。`request_id` 必须回显并校验——错配等于把别人的特征写进底库。
@@ -191,7 +211,7 @@ func (s *Subscription) Close() error
 - **缓存 key 含包身份**：`<entry 路径>` + `(dev, ino, size, mtime)`。包被原地替换后必须换进程，否则新登记的底照由旧模型产出，与流式识别不同源（表现是识别率莫名下降，且没有任何错误）。
 - **spawn 复用** `algorunner.StartPinned`：`Pdeathsig` 挂在 fork 的那个 OS 线程上，必须 pin→spawn→`Wait`→unlock 在同一 goroutine 内完成。
 
-### 6.4 验证边界
+### 7.4 验证边界
 
 - Go 侧单测（`internal/faceextract`）用**桩 provider 可执行文件**驱动，覆盖：happy path、复用只起一个进程、五类失败码、`feature_dim` 0/513、`request_id` 错配、崩溃后重试一次、二次失败即终、超时杀组、stdout 非 JSON、包原地替换、空闲回收、坏帧不进进程；外加**帧级裁决不换进程**、**失步才换进程**、**取消不重试**、**带 padding 的 stride**、**超长单行**、**Close 幂等且不再 spawn**。
 - `packRGB24` 的方向映射与旧逐像素 switch 实现逐字节等价（5 类 image × 8 个方向），防止仿射系数写错导致「行列对调但顺序错」的静默错图；`BenchmarkPackRGB24` 给定 1920x1080 量化基线（当前约 39 ms/帧，登记是人速操作，未做类型特化）。

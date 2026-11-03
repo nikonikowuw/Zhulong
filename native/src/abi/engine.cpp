@@ -349,7 +349,21 @@ extern "C" Zhulong_status_t Zhulong_stream_set_publish_rate(Zhulong_engine_h eng
 }
 
 /**
- * @brief 注册视频压缩数据包订阅回调（用于 Preview 预览）
+ * @brief 按轨订阅流的数据包通道（v5）
+ */
+extern "C" Zhulong_status_t Zhulong_stream_subscribe_track(Zhulong_engine_h engine, Zhulong_stream_id stream,
+    uint64_t preview_consumer_id, uint32_t track_mask,
+    Zhulong_packet_callback callback, uintptr_t token,
+    Zhulong_subscription_id *out_subscription) {
+    if (out_subscription) *out_subscription = 0;
+    return boundary([&] {
+        require(engine && stream && preview_consumer_id && callback && out_subscription);
+        *out_subscription = engine->implementation.subscribe(stream, preview_consumer_id, callback, token, track_mask);
+    });
+}
+
+/**
+ * @brief 注册视频压缩数据包订阅回调（保持仅视频订阅语义）
  *
  * ⚠️ 失败安全保证：
  *   - 进入时若 out_subscription 非空，先置 0。
@@ -365,10 +379,18 @@ extern "C" Zhulong_status_t Zhulong_stream_set_publish_rate(Zhulong_engine_h eng
 extern "C" Zhulong_status_t Zhulong_stream_subscribe(Zhulong_engine_h engine, Zhulong_stream_id stream,
     uint64_t preview_consumer_id, Zhulong_packet_callback callback, uintptr_t token,
     Zhulong_subscription_id *out_subscription) {
-    if (out_subscription) *out_subscription = 0;
+    return Zhulong_stream_subscribe_track(engine, stream, preview_consumer_id, ZHULONG_TRACK_MASK_VIDEO,
+                                         callback, token, out_subscription);
+}
+
+/**
+ * @brief 查询指定物理流的音频元数据（v5）
+ */
+extern "C" Zhulong_status_t Zhulong_stream_audio_info(Zhulong_engine_h engine, Zhulong_stream_id stream,
+                                                      Zhulong_audio_view *out_view) {
     return boundary([&] {
-        require(engine && stream && preview_consumer_id && callback && out_subscription);
-        *out_subscription = engine->implementation.subscribe(stream, preview_consumer_id, callback, token);
+        require(engine && stream && out_view);
+        engine->implementation.audio_info(stream, out_view);
     });
 }
 

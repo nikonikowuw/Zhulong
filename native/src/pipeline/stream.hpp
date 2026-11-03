@@ -25,6 +25,7 @@
 #include "nodes/decode/decoder.hpp"
 #include "pipeline/bounded_queue.hpp"
 #include "pipeline/preview_normalizer.hpp"
+#include "pipeline/audio_normalizer.hpp"
 #include "pipeline/subscription.hpp"
 
 #include <atomic>
@@ -185,6 +186,7 @@ struct Stream {
     Zhulong_stream_status status{Zhulong_STREAM_STARTING, Zhulong_OK};              /**< 流当前运行状态 */
 
     Video video_meta_{};                        /**< 缓存的 RTSP 视频流元数据 */
+    Audio audio_meta_{};                        /**< 缓存的 RTSP 音频流元数据 (v5) */
     std::shared_ptr<DecodeSession> decode_session_{nullptr}; /**< 动态解码会话 (按需激活) */
 
     /**
@@ -194,6 +196,8 @@ struct Stream {
      * 本层平台无关：RK3568 与 RK3588 共用同一实现，平台差异仅体现在 Go 侧的资源配额。
      */
     PreviewNormalizer preview_normalizer_{};
+    AudioNormalizer audio_normalizer_{};        /**< 音频时间戳归一化器 (v5) */
+    int64_t video_origin_arrival_us_{0};        /**< 视频首帧到达时的单调微秒时间戳 */
 
     // 被逐订阅者隔离的回调异常累计次数 (仅统计用途，relaxed 原子)
     std::atomic<uint64_t> callback_exceptions_{0};
@@ -221,8 +225,8 @@ struct Stream {
     /** @brief Worker 线程入口函数，负责调用底层 FFmpeg 循环拉流 */
     void capture() noexcept;
 
-    /** @brief 流就绪时回调，接收视频元数据 */
-    void on_ready(const Video &video);
+    /** @brief 流就绪时回调，接收复合媒体元数据 */
+    void on_ready(const Media &media);
 
     /** @brief 将 subscriptions 重新发布为不可变快照 (调用方必须持有 mutex) */
     void rebuild_subscribers();
@@ -235,6 +239,13 @@ struct Stream {
      * 订阅回调与解码队列拿到的都是整形后的视图（pts/dts/time_base 仍为源流原值）。
      */
     void dispatch(const Zhulong_packet_view &packet);
+
+    /**
+     * @brief 将音频数据包整形后派发至订阅了音频轨的活跃订阅者 (v5)
+     *
+     * 结构上杜绝音频进入 PreviewNormalizer 与 DecodeSession。
+     */
+    void dispatch_audio(const Zhulong_packet_view &packet);
 
     /** @brief 检查当前是否有 AI 消费者 */
     bool has_ai_consumer() const;

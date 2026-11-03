@@ -12,6 +12,13 @@
      - /stall-read：播放后断流；
      - /large-extra：超大 SPS/PPS 参数集；
      - /unsupported：不支持的编码格式（如 VP8）；
+     - 双轨音频档位（v5）：
+         * /audio-pcma、/audio-pcmu：G.711 每 20ms 160 采样 / 8kHz；
+         * /audio-aac：mpeg4-generic + AAC-hbr AU header（视频仍 m=video）；
+         * /audio-latm：MP4A-LATM（固定 FFmpeg 会将其解包为裸 AAC）；
+         * /audio-broken：音频 SETUP 返回失败，用于验证“退纯视频只重试一次”；
+         * /stop-audio、/stop-video：只停音频 / 只停视频（验证空闲超时仍只由视频刷新）；
+     - 音频轨 SETUP 按 trackID 分配交织通道（视频 0-1、音频 2-3），UDP 模式按轨各开一对端口；
      - 凭据安全性：校验标准输出与错误输出中是否泄露 URL 敏感账号密码。
 """
 import base64
@@ -55,8 +62,12 @@ class Handler(socketserver.BaseRequestHandler):
         self.send_lock = threading.Lock()
         self.path = None
         self.sender = None
+        self.audio_sender = None
         self.udp = None
         self.target = None
+        self.audio_udp = None
+        self.audio_target = None
+        self.audio_type = None
         self.request.settimeout(0.2)
 
     def reply(self, sequence, headers="", body=b"", code="200 OK"):
@@ -134,33 +145,95 @@ class Handler(socketserver.BaseRequestHandler):
             if "stall-info" in path or "late-probe" in path:
                 fmtp = "packetization-mode=1"
 
+            self.audio_type = None
+            audio_sdp = ""
+            if "audio-pcma" in path:
+                self.audio_type = "pcma"
+                audio_sdp = (
+                    "m=audio 0 RTP/AVP 8\r\n"
+                    "a=rtpmap:8 PCMA/8000/1\r\n"
+                    "a=control:trackID=1\r\n"
+                )
+            elif "audio-pcmu" in path:
+                self.audio_type = "pcmu"
+                audio_sdp = (
+                    "m=audio 0 RTP/AVP 0\r\n"
+                    "a=rtpmap:0 PCMU/8000/1\r\n"
+                    "a=control:trackID=1\r\n"
+                )
+            elif "audio-aac" in path:
+                self.audio_type = "aac"
+                audio_sdp = (
+                    "m=audio 0 RTP/AVP 97\r\n"
+                    "a=rtpmap:97 mpeg4-generic/44100/2\r\n"
+                    "a=fmtp:97 streamtype=5;profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210\r\n"
+                    "a=control:trackID=1\r\n"
+                )
+            elif "audio-latm" in path:
+                self.audio_type = "latm"
+                audio_sdp = (
+                    "m=audio 0 RTP/AVP 97\r\n"
+                    "a=rtpmap:97 MP4A-LATM/90000\r\n"
+                    "a=fmtp:97 cpresent=0;config=40002410adca00\r\n"
+                    "a=control:trackID=1\r\n"
+                )
+            elif "audio-broken" in path:
+                self.audio_type = "broken"
+                audio_sdp = (
+                    "m=audio 0 RTP/AVP 8\r\n"
+                    "a=rtpmap:8 PCMA/8000/1\r\n"
+                    "a=control:trackID=1\r\n"
+                )
+
             sdp = ("v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=fixture\r\n"
                    "c=IN IP4 127.0.0.1\r\nt=0 0\r\na=control:*\r\n"
                    f"m=video 0 RTP/AVP 96\r\na=rtpmap:96 {name}/90000\r\n"
-                   f"a=fmtp:96 {fmtp}\r\na=control:trackID=0\r\n").encode()
+                   f"a=fmtp:96 {fmtp}\r\na=control:trackID=0\r\n"
+                   f"{audio_sdp}").encode()
             self.reply(sequence, f"Content-Type: application/sdp\r\nContent-Base: {url}/\r\n", sdp)
         elif method == "SETUP":
+            is_audio_track = "trackID=1" in url or (self.path and "trackID=1" in path)
+            if self.audio_type == "broken" and is_audio_track:
+                self.reply(sequence, code="454 Session Not Found")
+                return
+
             transport = headers["transport"]
             if "TCP" in transport:
-                value = "RTP/AVP/TCP;unicast;interleaved=0-1"
+                if is_audio_track:
+                    value = "RTP/AVP/TCP;unicast;interleaved=2-3"
+                else:
+                    value = "RTP/AVP/TCP;unicast;interleaved=0-1"
                 key = "tcp"
             else:
                 # 解析客户端 UDP 端口并绑定本地发送套接字
                 ports = re.search(r"client_port=(\d+)-(\d+)", transport)
-                self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                self.udp.bind(("127.0.0.1", 0))
-                self.target = (self.client_address[0], int(ports[1]))
-                port = self.udp.getsockname()[1]
+                udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                udp_sock.bind(("127.0.0.1", 0))
+                target = (self.client_address[0], int(ports[1]))
+                port = udp_sock.getsockname()[1]
                 value = f"RTP/AVP;unicast;client_port={ports[1]}-{ports[2]};server_port={port}-{port + 1}"
+                if is_audio_track:
+                    self.audio_udp = udp_sock
+                    self.audio_target = target
+                else:
+                    self.udp = udp_sock
+                    self.target = target
                 key = "udp"
             with self.server.lock:
                 self.server.transports[key] += 1
             self.reply(sequence, f"Transport: {value}\r\n")
         elif method == "PLAY":
-            self.reply(sequence, f"Range: npt=0.000-\r\nRTP-Info: url={url}/trackID=0;seq=1;rtptime=0\r\n")
+            rtp_infos = [f"url={url}/trackID=0;seq=1;rtptime=0"]
+            if self.audio_type and self.audio_type != "broken":
+                rtp_infos.append(f"url={url}/trackID=1;seq=1;rtptime=0")
+            self.reply(sequence, f"Range: npt=0.000-\r\nRTP-Info: {','.join(rtp_infos)}\r\n")
             # 启动推流线程
-            self.sender = threading.Thread(target=self.send_frames, daemon=True)
-            self.sender.start()
+            if "stop-video" not in self.path:
+                self.sender = threading.Thread(target=self.send_frames, daemon=True)
+                self.sender.start()
+            if self.audio_type in ("pcma", "pcmu", "aac", "latm") and "stop-audio" not in self.path:
+                self.audio_sender = threading.Thread(target=self.send_audio_frames, daemon=True)
+                self.audio_sender.start()
         elif method == "TEARDOWN" and "stall-close" in path:
             # 故意不回复 TEARDOWN，用于验证客户端是否具备优雅超时关闭保护
             pass
@@ -198,12 +271,73 @@ class Handler(socketserver.BaseRequestHandler):
         except (ConnectionError, OSError):
             pass
 
+    def send_audio_frames(self):
+        """向客户端发送封装后的 RTP 音频数据包"""
+        sequence = 1
+        frame = 0
+        raw_aac = bytes.fromhex("de02004c61766336312e31392e31303100422008c11838")
+        # AAC-hbr：2 字节 AU-headers-length + 每 AU 13-bit size/index header + 裸 AU
+        aac_payload = struct.pack("!H", 16) + struct.pack("!H", len(raw_aac) << 3) + raw_aac
+        # MP4A-LATM（RFC 3016）：length-prefixed 子帧序列，无 AU header
+        latm_payload = bytes([len(raw_aac)]) + raw_aac
+
+        try:
+            while not self.done.is_set():
+                if "stop-audio" in self.path:
+                    self.done.wait(0.04)
+                    continue
+
+                if self.audio_type == "pcma":
+                    pt = 8
+                    payload = b"\xd5" * 160
+                    ts_step = 160
+                    sleep_sec = 0.02
+                elif self.audio_type == "pcmu":
+                    pt = 0
+                    payload = b"\xff" * 160
+                    ts_step = 160
+                    sleep_sec = 0.02
+                elif self.audio_type == "aac":
+                    pt = 97
+                    payload = aac_payload
+                    ts_step = 1024
+                    sleep_sec = 0.023
+                elif self.audio_type == "latm":
+                    pt = 97
+                    payload = latm_payload
+                    ts_step = 1024
+                    sleep_sec = 0.023
+                else:
+                    break
+
+                marker = 128 if self.audio_type in ("aac", "latm") else 0
+                packet = struct.pack("!BBHII", 128, marker | pt, sequence % 65536,
+                                     (frame * ts_step) % 2**32, 54321) + payload
+                sequence += 1
+
+                if self.audio_udp:
+                    self.audio_udp.sendto(packet, self.audio_target)
+                else:
+                    with self.send_lock:
+                        # TCP 交织模式：$ + channel (2) + 2字节长度 + RTP负载
+                        self.request.sendall(b"$\x02" + struct.pack("!H", len(packet)) + packet)
+
+                frame += 1
+                interval = 0.001 if frame < 25 else sleep_sec
+                self.done.wait(interval)
+        except (ConnectionError, OSError):
+            pass
+
     def finish(self):
         self.done.set()
         if self.sender:
             self.sender.join(timeout=1)
+        if self.audio_sender:
+            self.audio_sender.join(timeout=1)
         if self.udp:
             self.udp.close()
+        if self.audio_udp:
+            self.audio_udp.close()
         if self.path:
             with self.server.lock:
                 self.server.active[self.path] -= 1
@@ -236,6 +370,16 @@ def main():
             assert server.connections["/pool"] == 2, "duplicate connection or failed grace expiry"
             assert server.maximum["/pool"] == 1, "overlapping physical connections"
             assert server.transports["tcp"] and server.transports["udp"]
+
+            # 双轨（v5）连接次数断言：
+            # - /audio-broken 必须是 2 次（先 video+audio 建连失败，再纯视频重开一次），
+            #   这是“音频失败不得拖垮视频”的物理证据，不是日志自证；
+            # - /audio-pcmu 必须仍是 1 次：音频正常时绝不能多付一次重连。
+            assert server.connections["/audio-broken"] == 2, \
+                f"audio SETUP failure must reopen exactly once, got {server.connections['/audio-broken']}"
+            assert server.connections["/audio-pcmu"] == 1, \
+                f"working audio must not reconnect, got {server.connections['/audio-pcmu']}"
+
             assert not any(server.active.values()), "socket left open after engine destruction"
     finally:
         server.shutdown()

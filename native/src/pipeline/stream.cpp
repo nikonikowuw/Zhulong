@@ -500,27 +500,37 @@ uint64_t Stream::callback_exception_count() const {
     return callback_exceptions_.load(std::memory_order_relaxed);
 }
 
-void Stream::on_ready(const Video &video) {
+void Stream::on_ready(const Media &media) {
     std::shared_ptr<DecodeSession> session;
     {
         std::lock_guard<std::mutex> lock(mutex);
-        video_meta_ = video;
+        video_meta_ = media.video;
+        audio_meta_ = media.audio;
         status.state = Zhulong_STREAM_RUNNING;
         session = decode_session_;
     }
     // 参数集在此完成 Annex B 归一化；放在锁外，不与 dispatch 热路径争锁
     preview_normalizer_.update_metadata(
-        video.view.codec,
-        video.extradata.empty() ? nullptr : video.extradata.data(),
-        video.extradata.size(),
-        video.view.time_base_num,
-        video.view.time_base_den);
-    if (session) {
-        session->update_metadata(video);
+        media.video.view.codec,
+        media.video.extradata.empty() ? nullptr : media.video.extradata.data(),
+        media.video.extradata.size(),
+        media.video.view.time_base_num,
+        media.video.view.time_base_den);
+    if (media.audio.has_audio) {
+        audio_normalizer_.update_metadata(
+            media.audio.codec,
+            media.audio.sample_rate,
+            media.audio.channels,
+            media.audio.time_base_num,
+            media.audio.time_base_den);
     }
-    ZL_LOGI(id, "pipeline.stream", "stream_ready codec=%d width=%d height=%d extradata=%zu tb=%d/%d",
-        video.view.codec, video.view.width, video.view.height, video.extradata.size(),
-        video.view.time_base_num, video.view.time_base_den);
+    if (session) {
+        session->update_metadata(media.video);
+    }
+    ZL_LOGI(id, "pipeline.stream", "stream_ready video: codec=%d width=%d height=%d extradata=%zu tb=%d/%d audio: has=%d codec=%d rate=%d ch=%d",
+        media.video.view.codec, media.video.view.width, media.video.view.height, media.video.extradata.size(),
+        media.video.view.time_base_num, media.video.view.time_base_den,
+        media.audio.has_audio ? 1 : 0, media.audio.codec, media.audio.sample_rate, media.audio.channels);
 }
 
 void Stream::rebuild_subscribers() {
@@ -533,6 +543,16 @@ void Stream::rebuild_subscribers() {
 }
 
 void Stream::dispatch(const Zhulong_packet_view &packet) {
+    if (packet.track_type != ZHULONG_TRACK_VIDEO) {
+        ZL_LOGE(id, "pipeline.stream", "dispatch_track_type_mismatch expected_video track=%u", packet.track_type);
+        return;
+    }
+
+    if (!preview_normalizer_.origin_ready()) {
+        video_origin_arrival_us_ = std::chrono::duration_cast<std::chrono::microseconds>(
+            Clock::now().time_since_epoch()).count();
+    }
+
     // 预览契约整形：单调微秒时间戳 + 帧分类 + 参数集注入。
     // 返回值中的 data 可能借用整形器内部缓冲，仅在下一次 dispatch 前有效，
     // 与 engine.h 的「回调期间借用」契约一致；解码队列会在 push_packet 内深拷贝。
@@ -552,15 +572,55 @@ void Stream::dispatch(const Zhulong_packet_view &packet) {
         session->push_packet(shaped);
     }
 
-    // 2. 在锁外逐个调用订阅回调
+    // 2. 在锁外逐个调用订阅回调（按轨过滤仅接收视频轨的订阅者）
     //    逐订阅者隔离异常：抛异常是调用方违约 (engine.h)，不得中断同流其他订阅者的数据供给
     for (const auto &subscription : *subscribers) {
         if (cancel.stopped.load()) break;
+        if ((subscription->track_mask & ZHULONG_TRACK_MASK_VIDEO) == 0) continue;
         try {
             subscription->invoke(shaped);
         } catch (...) {
             // invoke 已在抛出前恢复 in_callback 并置 enabled=false，此处仅计数：
             // 违约订阅者静默失效，流状态保持 RUNNING，其他订阅者不受影响
+            callback_exceptions_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
+void Stream::dispatch_audio(const Zhulong_packet_view &packet) {
+    if (packet.track_type != ZHULONG_TRACK_AUDIO) {
+        ZL_LOGE(id, "pipeline.stream", "dispatch_audio_track_type_mismatch expected_audio track=%u", packet.track_type);
+        return;
+    }
+
+    const int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        Clock::now().time_since_epoch()).count();
+
+    const Zhulong_packet_view shaped = audio_normalizer_.normalize(
+        packet,
+        preview_normalizer_.origin_ready(),
+        video_origin_arrival_us_,
+        preview_normalizer_.timestamp_shift_us(),
+        preview_normalizer_.discontinuity_generation(),
+        now_us);
+
+    if (shaped.size == 0) {
+        // 在视频原点建立前被丢弃，不向下分发
+        return;
+    }
+
+    std::shared_ptr<const SubscriberList> subscribers;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        subscribers = subscriber_snapshot_;
+    }
+
+    for (const auto &subscription : *subscribers) {
+        if (cancel.stopped.load()) break;
+        if ((subscription->track_mask & ZHULONG_TRACK_MASK_AUDIO) == 0) continue;
+        try {
+            subscription->invoke(shaped);
+        } catch (...) {
             callback_exceptions_.fetch_add(1, std::memory_order_relaxed);
         }
     }
@@ -573,8 +633,11 @@ void Stream::capture() noexcept {
             [this](const Zhulong_packet_view &packet) {
                 dispatch(packet);
             },
-            [this](const Video &video) {
-                on_ready(video);
+            [this](const Zhulong_packet_view &packet) {
+                dispatch_audio(packet);
+            },
+            [this](const Media &media) {
+                on_ready(media);
             },
             id);
     } catch (const Failure &failure) {

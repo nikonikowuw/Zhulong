@@ -153,20 +153,44 @@ struct Video {
 };
 
 /**
+ * @brief 探测到的音频流元数据容器 (v5)
+ */
+struct Audio {
+    bool has_audio{false};
+    int32_t codec{0};               /**< Zhulong_CODEC_AAC / PCMA / PCMU */
+    int32_t sample_rate{0};
+    int32_t channels{0};
+    int32_t time_base_num{1};
+    int32_t time_base_den{8000};
+    std::vector<uint8_t> extradata; /**< ASC / 音频配置，深拷贝保留 */
+};
+
+/**
+ * @brief 复合媒体元数据 (视频 + 音频，v5)
+ */
+struct Media {
+    Video video;
+    Audio audio;
+};
+
+/**
  * @brief 同步读取 RTSP 流的核心驱动函数
  *
  * 工作模式：
  * 1. 探测模式（consume 为空）：
  *    - 仅打开连接、解析流信息并提取视频元数据，随后立即优雅断开并返回 Video。
  * 2. 持续拉流模式（consume 提供了回调函数）：
- *    - 打开连接后触发 ready 回调；
- *    - 进入帧循环读取 av_read_frame，并将视频包通过 consume 回调派发；
- *    - 被取消时抛出 Zhulong_ERR_CANCELLED，元数据以 ready 回调为准，返回值不应被使用。
+ *    - 一律申请音频 (allowed_media_types="video+audio")；
+ *    - 打开连接后触发 ready(Media) 回调；
+ *    - 进入帧循环读取 av_read_frame，并将视频包送入 consume，音频包送入 consume_audio；
+ *    - 音频建连/SETUP 失败时自动退回纯视频重试一次，绝不拖垮视频；
+ *    - 被取消时抛出 Zhulong_ERR_CANCELLED。
  *
  * @param url 规范化后的 RTSP URL
  * @param options 拉流选项
  * @param cancel 协作式取消与超时控制器（生命周期必须覆盖整个读取过程与清理阶段）
- * @param consume 数据包派发回调（可选）
+ * @param consume 视频数据包派发回调（可选）
+ * @param consume_audio 音频数据包派发回调（可选）
  * @param ready 连接建立就绪回调（可选）
  * @param stream_id 用于原生日志关联的稳定流 ID；探测模式默认使用 0
  * @return Video 视频元数据
@@ -174,7 +198,8 @@ struct Video {
  */
 Video read_rtsp(const std::string &url, const Options &options, Cancellation &cancel,
                 const std::function<void(const Zhulong_packet_view &)> &consume = {},
-                const std::function<void(const Video &)> &ready = {}, uint64_t stream_id = 0);
+                const std::function<void(const Zhulong_packet_view &)> &consume_audio = {},
+                const std::function<void(const Media &)> &ready = {}, uint64_t stream_id = 0);
 
 /**
  * @brief 全局初始化 FFmpeg 库环境（网络模块与静默日志配置，具备进程全局单次执行保证）

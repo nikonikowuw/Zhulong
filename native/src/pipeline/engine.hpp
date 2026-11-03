@@ -112,8 +112,13 @@ struct Engine {
     /** @brief 查询指定流的当前运行状态 */
     Zhulong_stream_status status(Zhulong_stream_id id);
 
-    /** @brief 注册数据包回调订阅 */
-    Zhulong_subscription_id subscribe(Zhulong_stream_id id, uint64_t consumer, Zhulong_packet_callback callback, uintptr_t token);
+    /** @brief 注册数据包回调订阅 (v5 支持按轨订阅) */
+    Zhulong_subscription_id subscribe(Zhulong_stream_id id, uint64_t consumer,
+                                      Zhulong_packet_callback callback, uintptr_t token,
+                                      uint32_t track_mask = ZHULONG_TRACK_MASK_VIDEO);
+
+    /** @brief 查询指定流的音频流元数据 (v5) */
+    void audio_info(Zhulong_stream_id id, Zhulong_audio_view *out_view);
 
     /** @brief 取消数据包订阅（执行同步排空） */
     void unsubscribe(Zhulong_stream_id id, Zhulong_subscription_id subscription);

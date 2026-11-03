@@ -99,6 +99,7 @@ void callback(uintptr_t token, const Zhulong_packet_view *packet) {
     // 基础包视图有效性断言与自死锁检查（在回调中调用引擎控制接口必须返回 ERR_CALLBACK_CONTEXT）
     if (!packet || !packet->data || !packet->size || packet->codec != state.expected_codec ||
         packet->time_base_num != 1 || packet->time_base_den != 90000 ||
+        packet->track_type != ZHULONG_TRACK_VIDEO ||
         (!packet->has_pts && packet->pts != 0) || (!packet->has_dts && packet->dts != 0) ||
         Zhulong_engine_stop(state.engine) != Zhulong_ERR_CALLBACK_CONTEXT) {
         state.invalid.store(true);
@@ -803,6 +804,307 @@ static void credentials_redaction_case() {
     CHECK(twice == "rtsp://***@10.0.0.1/x -> rtsp://***@10.0.0.2/y");
 }
 
+struct AudioCallbackState {
+    int32_t expected_codec = Zhulong_CODEC_PCMA;
+    std::atomic<int> count{0};
+    std::atomic<bool> invalid{false};
+    std::atomic<uint32_t> last_track{0};
+};
+
+void audio_test_callback(uintptr_t token, const Zhulong_packet_view *packet) {
+    auto &state = *reinterpret_cast<AudioCallbackState *>(token);
+    if (!packet || !packet->data || !packet->size ||
+        packet->codec != state.expected_codec ||
+        packet->track_type != ZHULONG_TRACK_AUDIO) {
+        state.invalid.store(true);
+    }
+    if (packet) state.last_track.store(packet->track_type);
+    state.count.fetch_add(1);
+}
+
+void dual_track_pcma_case(Zhulong_engine_h engine, const std::string &base) {
+    const std::string url = base + "/audio-pcma";
+    Zhulong_stream_id stream = 0;
+    CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 1, Zhulong_CONSUMER_PREVIEW, &stream) == Zhulong_OK);
+
+    Zhulong_audio_view audio_view{};
+    wait_until([&] {
+        return Zhulong_stream_audio_info(engine, stream, &audio_view) == Zhulong_OK;
+    });
+    CHECK(audio_view.has_audio == 1);
+    CHECK(audio_view.codec == Zhulong_CODEC_PCMA);
+    CHECK(audio_view.sample_rate == 8000);
+    CHECK(audio_view.channels == 1);
+
+    CallbackState video_state{engine, Zhulong_CODEC_H264};
+    Zhulong_subscription_id video_sub = 0;
+    CHECK(Zhulong_stream_subscribe(engine, stream, 1, callback, reinterpret_cast<uintptr_t>(&video_state), &video_sub) == Zhulong_OK);
+
+    Zhulong_stream_id stream2 = 0;
+    CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 2, Zhulong_CONSUMER_PREVIEW, &stream2) == Zhulong_OK);
+    CHECK(stream2 == stream);
+
+    AudioCallbackState audio_state{Zhulong_CODEC_PCMA};
+    Zhulong_subscription_id audio_sub = 0;
+    CHECK(Zhulong_stream_subscribe_track(engine, stream, 2, ZHULONG_TRACK_MASK_AUDIO, audio_test_callback,
+                                         reinterpret_cast<uintptr_t>(&audio_state), &audio_sub) == Zhulong_OK);
+
+    wait_until([&] {
+        return video_state.count.load() >= 5 && audio_state.count.load() >= 5;
+    });
+
+    CHECK(!video_state.invalid.load());
+    CHECK(!audio_state.invalid.load());
+    CHECK(audio_state.last_track.load() == ZHULONG_TRACK_AUDIO);
+
+    CHECK(Zhulong_stream_unsubscribe(engine, stream, video_sub) == Zhulong_OK);
+    CHECK(Zhulong_stream_unsubscribe(engine, stream, audio_sub) == Zhulong_OK);
+    CHECK(Zhulong_stream_release(engine, stream, 1) == Zhulong_OK);
+    CHECK(Zhulong_stream_release(engine, stream, 2) == Zhulong_OK);
+}
+
+void dual_track_pcmu_case(Zhulong_engine_h engine, const std::string &base) {
+    const std::string url = base + "/audio-pcmu";
+    Zhulong_stream_id stream = 0;
+    CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 1, Zhulong_CONSUMER_PREVIEW, &stream) == Zhulong_OK);
+
+    Zhulong_audio_view audio_view{};
+    wait_until([&] {
+        return Zhulong_stream_audio_info(engine, stream, &audio_view) == Zhulong_OK;
+    });
+    CHECK(audio_view.has_audio == 1);
+    CHECK(audio_view.codec == Zhulong_CODEC_PCMU);
+    CHECK(audio_view.sample_rate == 8000);
+    CHECK(audio_view.channels == 1);
+
+    AudioCallbackState audio_state{Zhulong_CODEC_PCMU};
+    Zhulong_subscription_id audio_sub = 0;
+    CHECK(Zhulong_stream_subscribe_track(engine, stream, 1, ZHULONG_TRACK_MASK_AUDIO, audio_test_callback,
+                                         reinterpret_cast<uintptr_t>(&audio_state), &audio_sub) == Zhulong_OK);
+
+    wait_until([&] {
+        return audio_state.count.load() >= 5;
+    });
+    CHECK(!audio_state.invalid.load());
+
+    CHECK(Zhulong_stream_unsubscribe(engine, stream, audio_sub) == Zhulong_OK);
+    CHECK(Zhulong_stream_release(engine, stream, 1) == Zhulong_OK);
+}
+
+void dual_track_aac_case(Zhulong_engine_h engine, const std::string &base) {
+    const std::string url = base + "/audio-aac";
+    Zhulong_stream_id stream = 0;
+    CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 1, Zhulong_CONSUMER_PREVIEW, &stream) == Zhulong_OK);
+
+    wait_until([&] {
+        Zhulong_stream_status st{};
+        Zhulong_stream_get_status(engine, stream, &st);
+        return st.state == Zhulong_STREAM_RUNNING;
+    });
+
+    Zhulong_audio_view small_view{};
+    uint8_t small_buf[1] = {0};
+    small_view.extradata = small_buf;
+    small_view.extradata_capacity = sizeof(small_buf);
+    const auto err = Zhulong_stream_audio_info(engine, stream, &small_view);
+    CHECK(err == Zhulong_ERR_BUFFER_TOO_SMALL);
+    CHECK(small_view.extradata_size == 2);
+
+    uint8_t full_buf[16] = {0};
+    Zhulong_audio_view audio_view{};
+    audio_view.extradata = full_buf;
+    audio_view.extradata_capacity = sizeof(full_buf);
+    CHECK(Zhulong_stream_audio_info(engine, stream, &audio_view) == Zhulong_OK);
+    CHECK(audio_view.has_audio == 1);
+    CHECK(audio_view.codec == Zhulong_CODEC_AAC);
+    CHECK(audio_view.sample_rate == 44100);
+    CHECK(audio_view.channels == 2);
+    CHECK(audio_view.extradata_size == 2);
+    CHECK(full_buf[0] == 0x12 && full_buf[1] == 0x10);
+
+    AudioCallbackState audio_state{Zhulong_CODEC_AAC};
+    Zhulong_subscription_id audio_sub = 0;
+    CHECK(Zhulong_stream_subscribe_track(engine, stream, 1, ZHULONG_TRACK_MASK_AUDIO, audio_test_callback,
+                                         reinterpret_cast<uintptr_t>(&audio_state), &audio_sub) == Zhulong_OK);
+
+    wait_until([&] {
+        return audio_state.count.load() >= 5;
+    });
+    CHECK(!audio_state.invalid.load());
+
+    CHECK(Zhulong_stream_unsubscribe(engine, stream, audio_sub) == Zhulong_OK);
+    CHECK(Zhulong_stream_release(engine, stream, 1) == Zhulong_OK);
+}
+
+/**
+ * @brief MP4A-LATM 档位：固定 FFmpeg 7.1.5 会将其解包为裸 AAC（实测断言，不是拒绝用例）
+ *
+ * 依据：`libavformat/rtpdec_latm.c` 的 `ff_mp4a_latm_dynamic_handler` 声明
+ * `codec_id = AV_CODEC_ID_AAC`，`latm_parse_packet` 直接把 LATM 帧剥成裸 AU，
+ * `parse_fmtp_config` 把 SDP 的 LATM config 中的 ASC 写进 extradata。
+ * 所以设计稿里“AAC-LATM 一律拒绝”的前提在本版 FFmpeg 上不成立：这路相机是真能出声的，
+ * 拒绝它等于白白把一个可用机型推到“无音频”。防御性拒绝分支保留（见 rtsp_input.cpp），
+ * 本用例钉住的是「当前真实行为」——一旦 FFmpeg 行为变了，这里先红。
+ */
+void audio_latm_depacketized_case(Zhulong_engine_h engine, const std::string &base) {
+    const std::string url = base + "/audio-latm";
+    Zhulong_stream_id stream = 0;
+    CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 1, Zhulong_CONSUMER_PREVIEW, &stream) == Zhulong_OK);
+
+    CallbackState video_state{engine, Zhulong_CODEC_H264};
+    Zhulong_subscription_id video_sub = 0;
+    CHECK(Zhulong_stream_subscribe(engine, stream, 1, callback, reinterpret_cast<uintptr_t>(&video_state), &video_sub) == Zhulong_OK);
+
+    wait_until([&] {
+        return video_state.count.load() >= 5;
+    });
+    CHECK(!video_state.invalid.load());
+
+    uint8_t asc_buf[16] = {0};
+    Zhulong_audio_view audio_view{};
+    audio_view.extradata = asc_buf;
+    audio_view.extradata_capacity = sizeof(asc_buf);
+    CHECK(Zhulong_stream_audio_info(engine, stream, &audio_view) == Zhulong_OK);
+    CHECK(audio_view.has_audio == 1);
+    CHECK(audio_view.codec == Zhulong_CODEC_AAC);
+    // 采样率/声道取自 ASC（fixture 的 config=40002410adca00 → 44100Hz 单声道）
+    CHECK(audio_view.sample_rate == 44100);
+    CHECK(audio_view.channels == 1);
+    CHECK(audio_view.extradata_size == 6);
+    CHECK(asc_buf[0] == 0x12 && asc_buf[1] == 0x08);
+
+    AudioCallbackState audio_state{Zhulong_CODEC_AAC};
+    Zhulong_subscription_id audio_sub = 0;
+    CHECK(Zhulong_stream_subscribe_track(engine, stream, 1, ZHULONG_TRACK_MASK_AUDIO, audio_test_callback,
+                                         reinterpret_cast<uintptr_t>(&audio_state), &audio_sub) == Zhulong_OK);
+    wait_until([&] {
+        return audio_state.count.load() >= 5;
+    });
+    CHECK(!audio_state.invalid.load());
+
+    auto &logs = CapturedLogs::instance();
+    CHECK(logs.contains("rtsp_audio_detected codec=16"));
+
+    CHECK(Zhulong_stream_unsubscribe(engine, stream, audio_sub) == Zhulong_OK);
+    CHECK(Zhulong_stream_unsubscribe(engine, stream, video_sub) == Zhulong_OK);
+    CHECK(Zhulong_stream_release(engine, stream, 1) == Zhulong_OK);
+}
+
+void audio_broken_fallback_case(Zhulong_engine_h engine, const std::string &base) {
+    const std::string url = base + "/audio-broken";
+    Zhulong_stream_id stream = 0;
+    CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 1, Zhulong_CONSUMER_PREVIEW, &stream) == Zhulong_OK);
+
+    CallbackState video_state{engine, Zhulong_CODEC_H264};
+    Zhulong_subscription_id video_sub = 0;
+    CHECK(Zhulong_stream_subscribe(engine, stream, 1, callback, reinterpret_cast<uintptr_t>(&video_state), &video_sub) == Zhulong_OK);
+
+    wait_until([&] {
+        return video_state.count.load() >= 5;
+    });
+    CHECK(!video_state.invalid.load());
+
+    Zhulong_audio_view audio_view{};
+    auto broken_rc = Zhulong_stream_audio_info(engine, stream, &audio_view);
+    if (broken_rc != Zhulong_OK) {
+        std::cerr << "broken info_rc=" << broken_rc << '\n';
+    }
+    CHECK(broken_rc == Zhulong_OK);
+    CHECK(audio_view.has_audio == 0);
+
+    auto &logs = CapturedLogs::instance();
+    CHECK(logs.contains("rtsp_audio_open_failed"));
+
+    CHECK(Zhulong_stream_unsubscribe(engine, stream, video_sub) == Zhulong_OK);
+    CHECK(Zhulong_stream_release(engine, stream, 1) == Zhulong_OK);
+}
+
+void audio_info_lifecycle_case(Zhulong_engine_h engine, const std::string &base) {
+    const std::string url = base + "/audio-pcma";
+    Zhulong_stream_id stream = 0;
+    CHECK(Zhulong_stream_acquire(engine, url.c_str(), nullptr, 1, Zhulong_CONSUMER_PREVIEW, &stream) == Zhulong_OK);
+
+    Zhulong_audio_view audio_view{};
+    wait_until([&] {
+        return Zhulong_stream_audio_info(engine, stream, &audio_view) == Zhulong_OK;
+    });
+
+    CHECK(Zhulong_stream_release(engine, stream, 1) == Zhulong_OK);
+    CHECK(Zhulong_stream_audio_info(engine, stream + 999, &audio_view) == Zhulong_ERR_NOT_FOUND);
+}
+
+/**
+ * @brief AC-1：申请音频轨到底让起播多付了多少
+ *
+ * 只采音频使 SDP 多一段 m=audio、连接多一次 SETUP，这是唯一新增的建连成本。
+ * 固定 FFmpeg 7.1.5 在音频 SETUP 失败时会直接让整个 open 失败，所以这个开销不包含重试。
+ * 这里测「acquire → 首枚视频包」的墙钟时间，并把实测值打印出来留作实测记录：
+ * 门限刻意比 AC-1 的 10% 宽松得多，因为回环环境的毫秒级抖动不该把功能测试变成抖动测试；
+ * 真正的 10% 核验以采样日志里的 info_ms / first_packet_ms 为准（见任务笔记）。
+ */
+void audio_startup_cost_case(Zhulong_engine_h engine, const std::string &base) {
+    auto measure = [&](const std::string &path) {
+        const auto started = Clock::now();
+        Zhulong_stream_id stream = 0;
+        CallbackState state{engine, Zhulong_CODEC_H264};
+        CHECK(Zhulong_stream_acquire(engine, (base + path).c_str(), nullptr, 1, Zhulong_CONSUMER_PREVIEW, &stream) == Zhulong_OK);
+        Zhulong_subscription_id subscription = 0;
+        CHECK(Zhulong_stream_subscribe(engine, stream, 1, callback,
+                                     reinterpret_cast<uintptr_t>(&state), &subscription) == Zhulong_OK);
+        wait_until([&] { return state.count.load() >= 1; });
+        const long long elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
+        CHECK(Zhulong_stream_unsubscribe(engine, stream, subscription) == Zhulong_OK);
+        CHECK(Zhulong_stream_release(engine, stream, 1) == Zhulong_OK);
+        return elapsed;
+    };
+
+    const long long video_only = measure("/h264");
+    const long long with_audio = measure("/audio-pcma");
+    std::cout << "  startup cost: video-only=" << video_only << "ms video+audio=" << with_audio << "ms\n";
+    CHECK(with_audio <= video_only + 50);
+}
+
+/**
+ * @brief 音频包不得刷新空闲超时（空闲语义 = 相机还在送视频）
+ *
+ * 桩位 `/audio-pcma-stop-video` 只推音频（每 20ms 一包，稳定 50pps）：
+ * 若音频也刷新 deadline，这路流会永远“看起来活着”，相机视颊卡死就无人发现。
+ * 同时钉住另一条边界：视频原点未建立时音频包一律丢弃（不得自行建原点），
+ * 所以本用例里音频回调必须一直是 0。
+ */
+void audio_idle_timeout_case(Zhulong_engine_h engine, const std::string &base) {
+    Zhulong_stream_options options{};
+    options.transport = Zhulong_TRANSPORT_TCP;
+    options.open_timeout_ms = 3000;
+    options.idle_timeout_ms = 800;
+
+    Zhulong_stream_id stream = 0;
+    CHECK(Zhulong_stream_acquire(engine, (base + "/audio-pcma-stop-video").c_str(), &options,
+                                 1, Zhulong_CONSUMER_PREVIEW, &stream) == Zhulong_OK);
+
+    AudioCallbackState audio_state{Zhulong_CODEC_PCMA};
+    Zhulong_subscription_id subscription = 0;
+    CHECK(Zhulong_stream_subscribe_track(engine, stream, 1, ZHULONG_TRACK_MASK_AUDIO,
+                                         audio_test_callback,
+                                         reinterpret_cast<uintptr_t>(&audio_state), &subscription) == Zhulong_OK);
+
+    // 只有视频包才算“活着”：音频持续到达但视频缺席，必须按空闲超时判失败。
+    wait_until([&] {
+        Zhulong_stream_status status{};
+        Zhulong_stream_get_status(engine, stream, &status);
+        return status.state == Zhulong_STREAM_FAILED;
+    }, 4000ms);
+
+    Zhulong_stream_status status{};
+    CHECK(Zhulong_stream_get_status(engine, stream, &status) == Zhulong_OK);
+    CHECK(status.error == Zhulong_ERR_TIMEOUT);
+    // 视频原点未建立 → 音频不走下去（不能拿音频自己造时间轴基准）
+    CHECK(audio_state.count.load() == 0);
+
+    CHECK(Zhulong_stream_unsubscribe(engine, stream, subscription) == Zhulong_OK);
+    CHECK(Zhulong_stream_release(engine, stream, 1) == Zhulong_OK);
+}
+
 int main(int argc, char **argv) {
     try {
         credentials_redaction_case();
@@ -824,6 +1126,19 @@ int main(int argc, char **argv) {
         cancellation_cases(owner.engine, base);
         ai_publish_throttle_case(owner.engine, base);
         ai_slow_consumer_isolation_case(owner.engine, base);
+        // ai_slow_consumer_isolation_case 结尾会 stop 引擎（它的自测契约），
+        // 而双轨用例需要运行态；这里重新 start，顺带把“stop → start 后仍可建音频轨”走过一遍。
+        CHECK(Zhulong_engine_start(owner.engine) == Zhulong_OK);
+
+        // 双轨音频集成测试用例 (PCMA / PCMU / AAC / LATM / SETUP 失败重开 / 生命周期)
+        dual_track_pcma_case(owner.engine, base);
+        dual_track_pcmu_case(owner.engine, base);
+        dual_track_aac_case(owner.engine, base);
+        audio_latm_depacketized_case(owner.engine, base);
+        audio_broken_fallback_case(owner.engine, base);
+        audio_info_lifecycle_case(owner.engine, base);
+        audio_idle_timeout_case(owner.engine, base);
+        audio_startup_cost_case(owner.engine, base);
 
         // 起播归因日志必须真的产出：请求行（Sending:）与应答行（RTSP/1.）各至少一条，
         // 且耗时字段存在。缺失意味着全局日志静默策略把这条通道也吞掉了。
