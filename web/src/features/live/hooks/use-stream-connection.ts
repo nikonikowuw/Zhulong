@@ -3,6 +3,7 @@ import { createPoolColdStartTrace } from '../services/cold-start-trace'
 import { StreamConnectionPool } from '../services/stream-pool'
 import {
   type ParsedPacket,
+  type StreamInfo,
   type StreamStats,
   type StreamStatus,
   type StreamType,
@@ -14,12 +15,15 @@ interface UseStreamConnectionOptions {
   enabled?: boolean
   onFrame?: (frame: Uint8Array) => void
   onPacket?: (packet: ParsedPacket) => void
+  onStreamInfo?: (info: StreamInfo) => void
 }
 
 export interface UseStreamConnectionReturn {
   status: StreamStatus
   errorMessage: string | undefined
   stats: StreamStats
+  /** 建连后的一次性能力帧；未收到时为 null（UI 据此决定喇叭是否置灰）。 */
+  streamInfo: StreamInfo | null
   retry: () => void
 }
 
@@ -29,10 +33,12 @@ export function useStreamConnection({
   enabled = true,
   onFrame,
   onPacket,
+  onStreamInfo,
 }: UseStreamConnectionOptions): UseStreamConnectionReturn {
   const subscriberId = useId()
   const [status, setStatus] = useState<StreamStatus>('idle')
   const [errorMessage, setErrorMessage] = useState<string | undefined>()
+  const [streamInfo, setStreamInfo] = useState<StreamInfo | null>(null)
   const [stats, setStats] = useState<StreamStats>({
     fps: 0,
     resolution: '1920x1080',
@@ -50,6 +56,11 @@ export function useStreamConnection({
   useEffect(() => {
     onPacketRef.current = onPacket
   }, [onPacket])
+
+  const onStreamInfoRef = useRef(onStreamInfo)
+  useEffect(() => {
+    onStreamInfoRef.current = onStreamInfo
+  }, [onStreamInfo])
 
   useEffect(() => {
     if (!enabled || !cameraId) {
@@ -74,11 +85,17 @@ export function useStreamConnection({
         trace.observePacket(packet)
         onPacketRef.current?.(packet)
       },
+      onStreamInfo: (info) => {
+        setStreamInfo(info)
+        onStreamInfoRef.current?.(info)
+      },
     })
 
     return () => {
       unsubscribe()
       trace.dispose()
+      // 换机 / 切码流：能力帧属于上一条流，留着会让新格子的喇叭状态错一轮。
+      setStreamInfo(null)
     }
   }, [cameraId, streamType, enabled, subscriberId])
 
@@ -94,6 +111,7 @@ export function useStreamConnection({
     status: isActive ? status : 'idle',
     errorMessage: isActive ? errorMessage : undefined,
     stats,
+    streamInfo: isActive ? streamInfo : null,
     retry,
   }
 }

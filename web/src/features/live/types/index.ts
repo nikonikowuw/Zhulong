@@ -84,6 +84,33 @@ export interface StreamSubscriber {
   onStatsUpdate: (stats: StreamStats) => void
   onFrame?: (frame: Uint8Array) => void
   onPacket?: (packet: ParsedPacket) => void
+  /** 能力帧（`stream_info`）。与二进制帧无关，不参与 fps/码率统计。 */
+  onStreamInfo?: (info: StreamInfo) => void
+}
+
+/**
+ * 一路预览流的音频能力（预览 WS 建连后的一次性文本帧）。
+ *
+ * `config` 是 AudioSpecificConfig 的 base64（G.711 为空串），
+ * **不是** SDP `fmtp` 里的十六进制 `config=`。
+ */
+export interface StreamAudioCapability {
+  present: boolean
+  /** `'aac'` | `'pcma'` | `'pcmu'` | `'codec(N)'`，与后端 `engine.Codec.String()` 一致。 */
+  codec: string
+  sampleRate: number
+  channels: number
+  /** base64 ASC，G.711 为空串。 */
+  config: string
+  reason?: string
+}
+
+export interface StreamInfo {
+  type: 'stream_info'
+  cameraId: string
+  role: string
+  v: number
+  audio: StreamAudioCapability
 }
 
 export interface ManagedStream {
@@ -102,6 +129,8 @@ export interface ManagedStream {
   reconnectAttempts: number
   reconnectTimer: ReturnType<typeof setTimeout> | null
   cleanupTimer: ReturnType<typeof setTimeout> | null
+  /** 最近一次能力帧：后挂的订阅者需要补发，否则「先连上、后挂订阅者」会永远等不到它。 */
+  lastStreamInfo?: StreamInfo
 }
 
 export * from './ai-result'

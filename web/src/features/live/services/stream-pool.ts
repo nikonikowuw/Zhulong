@@ -2,6 +2,7 @@ import { getCameraStreamWsUrl } from '../api/live-camera-api'
 import {
   type ManagedStream,
   type ParsedPacket,
+  type StreamInfo,
   type StreamStats,
   type StreamStatus,
   type StreamSubscriber,
@@ -65,6 +66,11 @@ export class StreamConnectionPool {
     // 向新订阅者同步当前最新状态与统计
     subscriber.onStatusChange(stream.status, stream.lastError)
     subscriber.onStatsUpdate(stream.stats)
+    // 能力帧只在建连时下发一次：不补发的话，建连之后才挂上来的订阅者
+    // （React 挂着 StrictMode 双重挂载、或分屏切格重建）永远收不到它。
+    if (stream.lastStreamInfo) {
+      subscriber.onStreamInfo?.(stream.lastStreamInfo)
+    }
 
     // 0 -> 1 真正激活连接。
     // 除 connected / connecting 之外的所有状态都要重连：尤其是 'error'
@@ -145,6 +151,18 @@ export class StreamConnectionPool {
       }
 
       ws.onmessage = (event) => {
+        // 文本帧 = 能力帧（`stream_info`）。
+        //
+        // ⚠️ 必须在这里 `return`：掉进下面的二进制分支会把一条 JSON 当成视频帧
+        // 计入 fps 与码率，并在解析失败后把 JSON 字节当成「原始视频负载」广播出去。
+        if (typeof event.data === 'string') {
+          const info = parseStreamInfo(event.data)
+          if (!info) return // 非 JSON / 不是 stream_info：静默忽略，不动任何状态
+          stream.lastStreamInfo = info
+          stream.subscribers.forEach((sub) => sub.onStreamInfo?.(info))
+          return
+        }
+
         if (event.data instanceof ArrayBuffer) {
           const buffer = event.data
           const now = Date.now()
@@ -315,5 +333,52 @@ export class StreamConnectionPool {
   public getStreamRefCount(cameraId: string, streamType: StreamType): number {
     const stream = this.streams.get(this.getStreamKey(cameraId, streamType))
     return stream ? stream.refCount : 0
+  }
+}
+
+/** 能力帧类型字面量：只在文本帧里出现，与二进制帧的 magic 无任何关系。 */
+const STREAM_INFO_TYPE = 'stream_info'
+
+/**
+ * 解析预览 WS 的能力帧（`stream_info`）。
+ *
+ * 任何不合规的输入都返回 `null` 而不是抛出：这里的文本帧是**新增的旁路信息**，
+ * 一条脏帧把整条连接搞成错误态，等于用能力帧弄坏了本来正常的视频。
+ * 同理，不能只验 `type` 就把 `audio` 当真 —— `present` 直接决定 UI 是否把
+ * 喇叭点亮，缺字段时宁可不认这张帧。
+ */
+function parseStreamInfo(raw: string): StreamInfo | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null
+
+  const candidate = parsed as Partial<StreamInfo>
+  if (candidate.type !== STREAM_INFO_TYPE) return null
+
+  const audio = candidate.audio as Partial<StreamInfo['audio']> | undefined
+  if (typeof audio !== 'object' || audio === null) return null
+  if (typeof audio.present !== 'boolean' || typeof audio.codec !== 'string') {
+    return null
+  }
+
+  return {
+    type: STREAM_INFO_TYPE,
+    cameraId: typeof candidate.cameraId === 'string' ? candidate.cameraId : '',
+    role: typeof candidate.role === 'string' ? candidate.role : '',
+    v: typeof candidate.v === 'number' ? candidate.v : 0,
+    audio: {
+      present: audio.present,
+      codec: audio.codec,
+      sampleRate: typeof audio.sampleRate === 'number' ? audio.sampleRate : 0,
+      channels: typeof audio.channels === 'number' ? audio.channels : 0,
+      config: typeof audio.config === 'string' ? audio.config : '',
+      ...(typeof audio.reason === 'string' && audio.reason
+        ? { reason: audio.reason }
+        : {}),
+    },
   }
 }

@@ -2,21 +2,47 @@ import { type Camera } from '@/features/cameras/contract'
 import { type LiveCameraItem } from '../types'
 
 /**
- * 生成相机的 WebSocket 流地址
+ * 推导当前页面的 WebSocket 基地址（协议 + 主机）。
+ *
+ * 视频与音频两条 WS 必须落在同一个源上：同源才能带 cookie，也才能让
+ * 后面的网关鉴权/限流按同一条会话计数。因此协议与主机的推导只许有一份。
  */
-export function getCameraStreamWsUrl(
-  cameraId: string,
-  streamType: 'main' | 'sub' = 'main'
-): string {
+function wsBase(): string {
   const protocol =
     typeof window !== 'undefined' && window.location.protocol === 'https:'
       ? 'wss:'
       : 'ws:'
   const host =
     typeof window !== 'undefined' ? window.location.host : 'localhost'
-  return `${protocol}//${host}/api/v1/cameras/${encodeURIComponent(
+  return `${protocol}//${host}`
+}
+
+/**
+ * 生成相机的 WebSocket 流地址
+ */
+export function getCameraStreamWsUrl(
+  cameraId: string,
+  streamType: 'main' | 'sub' = 'main'
+): string {
+  return `${wsBase()}/api/v1/cameras/${encodeURIComponent(
     cameraId
   )}/streams/${streamType}/ws`
+}
+
+/**
+ * 生成相机的按需音频通道地址。
+ *
+ * 音频是**独立连接**而不是预览 WS 上的第二条轨：预览 WS 的二进制帧必须逐字节
+ * 保持不变（旧 bundle 不能因为「多了一条音轨」而黑屏），而且音频的背压、重连节奏
+ * 与视频完全不同，混在一条连接上只会互相拖累。
+ */
+export function getCameraAudioWsUrl(
+  cameraId: string,
+  streamType: 'main' | 'sub' = 'main'
+): string {
+  return `${wsBase()}/api/v1/cameras/${encodeURIComponent(
+    cameraId
+  )}/streams/${streamType}/audio/ws`
 }
 
 function resolveCameraStatus(
