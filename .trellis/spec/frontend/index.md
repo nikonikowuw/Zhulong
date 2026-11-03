@@ -10,9 +10,9 @@
 | --- | --- |
 | [目录架构](./directory-structure.md) | `shadcn-admin` 拓扑、TanStack Router 文件路由、`features/` 业务切片、`components/` 分层与定制组件维护 |
 | [跨语言命名规范](../naming-guidelines.md) | 文件名、React 组件、Hook、函数、变量和领域术语 |
-| [编码原则与开发指南](./development-guidelines.md) | React 组件、TanStack Query 服务端状态、TanStack Table URL 驱动、表单/弹窗契约、流媒体监控 UX |
+| [编码原则与开发指南](./development-guidelines.md) | React 组件、TanStack Query 服务端状态、TanStack Table URL 驱动、表单/弹窗契约、流媒体监控 UX、**按需音频与音画同步契约（§3.7）** |
 | [主题与三语国际化契约](./theme-and-i18n.md) | Tailwind v4 + OKLCH 语义主题、Light/Dark/System 模式、Font/Direction (RTL) 支持与英/简/繁三语契约 |
-| [质量检验与测试规范](./quality-guidelines.md) | Vitest + Playwright 浏览器测试、TypeScript 强类型与零 any、Knip 死代码检测、Vite 构建与 Go 嵌入对接 |
+| [质量检验与测试规范](./quality-guidelines.md) | Vitest + Playwright 浏览器测试、TypeScript 强类型与零 any、Knip 死代码检测、Vite 构建与 Go 嵌入对接、**伪断言自检与音视频 API 可测边界（§2.5–§2.7）** |
 
 ---
 

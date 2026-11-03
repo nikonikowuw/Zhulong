@@ -233,6 +233,44 @@ export function CameraCreateForm({ onSubmit, isPending }: Props) {
    - **自动防残留消退**：感知事件流设置合理的 TTL（如 350ms），当无新事件到达时立即清理 Canvas 绘图上下文，避免画面静止或目标离开视线时残留幽灵框；
    - **抓拍流防抖节流**：全局实时识别流（Recognition Feed）需引入防抖冷却机制（如同一人 3s 冷却），避免同一目标在同一摄像头前触发无意义刷屏。
 
+7. **按需音频与音画同步 (On-demand Audio & A/V Sync)**：
+
+   音频**不走预览 WS**，走独立按需通道（`/cameras/:id/streams/:role/audio/ws`，ZLA1 20 字节头 + 裸负载）。
+   预览 WS 只多一条一次性**文本**能力帧（`stream_info`）；二进制帧与 `wire-parser` 逐字节不变。
+   实现位于 `features/live/services/{audio-channel,g711-decoder,aac-decoder,audio-frame-decoder,live-audio-player}.ts`
+   与 `hooks/use-live-audio.ts`。
+
+   - **音画同步只有一条时钟**：音频的 `due` 与视频逐字同式，
+     `dueMs = clock.wallMs + (ptsUs - clock.ptsUs) / 1000 + clock.targetLatencyMs`，
+     时钟来自 `PresentationScheduler.clockSnapshot()`，经 `useWebCodecsRenderLoop().getPresentationClock()` 取得。
+     **严禁**音频另建时钟或加偏移常数 —— 两条时钟各自的抖动量无法用常数修正，任何一次重锚都会变成可闻的音画错位；
+   - **`pts_us` 必须以 int64 解析**：`DataView.getBigInt64` 后 `Number()`。
+     用 `getUint32` 只取低 32 位会在 71.6 分钟后静默回绕，表现为「音频时钟突然跳回起点」，且不会有任何报错；
+   - **解码帧必须显式释放**：`AudioData.copyTo()` 之后立即 `audioData.close()`，与 `VideoFrame.close()` 同理，
+     不关会持续占用音频缓冲；
+   - **不要每包新建 `AudioBufferSourceNode`**：8 kHz / 20 ms = 50 个节点/秒，节点创建与排期抖动直接变成咔哒声，
+     且主线程被 React 渲染占住就整段断音。统一用一个 `AudioWorklet` + 环形缓冲，主线程只做投递（约 50 次/秒）；
+   - **AudioWorklet 的加载形态**（Vite 8 下只有一种可用写法，已在真实无头 Chromium 验证）：
+     `?raw` 导入 `.js` 源文本 → `new Blob([src], {type:'text/javascript'})` → `URL.createObjectURL` → `addModule()` → `finally revoke`。
+     ❌ `new URL('./x-worklet.ts', import.meta.url)` 会被 Vite **原样复制 .ts 文件**；
+     ❌ `?worker&inline` 产出 `data:video/mp2t`，两者都被 `addModule` 以 `AbortError` 拒绝。
+     worklet 源**必须是 `.js`**（中间无编译步骤，写 TS 会运行时语法错误）；
+   - **严禁 `await ctx.resume()`**：无用户手势时该 Promise **既不 resolve 也不 reject**，`await` 它会永久挂起。
+     用 `ctx.state` / `statechange` 观察即可；`addModule()` 在 `suspended` 状态下本就可用；
+   - **`ctx.currentTime` 在 `suspended` 时不推进**（恒为 0）：投递侧必须自己维护一条只增不减的**帧游标**
+     （`max(currentTime 推算值, 游标)`，重锚时作废），否则解禁到 `resume()` 生效之间的窗口里连投数包会全部落在同一帧，
+     后包覆盖前包起点 —— 表现为起播瞬间的咔哒声与丢音，且只在真机上出现；
+   - **「还不知道」与「确定没有」必须是两种 UI 状态**：能力帧在建连后几帧才到，
+     把 `streamInfo == null` 归成「该路无音频」会让正常相机在首帧期间弹出一条设备故障。
+     三态：`audioChecking`（未收到能力帧）/ `noAudio`（`present=false`）/ `audioUnsupported`（解码器降级）；
+   - **降级一律静默**：无音轨、codec 不认识、ASC 缺失、`isConfigSupported()` 为 false、非安全上下文、
+     AudioWorklet 不可用 —— 全部退化为无声视频 + 文案，不黑屏、不进报错循环；
+   - **服务端关闭码决定是否重连**：`4404`（无音频）禁止重连；`4001/4002/4003/4500` 退避重连（100ms→1s）。
+     把所有断开都当网络问题会变成报错循环；
+   - **默认全静音 + 按需建连**：`AudioContext` 只在首次解禁手势里创建，不点喇叭就不建 WS、不建上下文。
+     单 tab 最多一路出声（`cells[].isMuted` 是唯一真相源），同一 stream key 的多个格子也只算一路。
+
+
 ---
 
 ## 4. 控制台架构与流式大视口规范 (Console Architecture)

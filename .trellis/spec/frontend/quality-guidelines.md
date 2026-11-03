@@ -122,6 +122,66 @@ await vi.waitFor(() => {
 - 若此时 Vitest 重新启动，无法复用 `63315` 端口，会输出 `Port 63315 is in use, trying another one...` 并动态绑定到 `63316`；此举极易导致部分先期加载的浏览器 iframe 跨域失效或断开连接（`Received URL: unknown due to CORS` / `Cannot connect to the iframe`）。
 - **排障路径**：当出现偶发 CORS 或连接中断时，运行 `ss -tan | grep 63315` 确认是否处于 `TIME-WAIT`；等待端口彻底释放或确保后台无残留 `vitest.mjs` 僵死进程后再重跑测试。
 
+### 2.5 断言必须能真的失败：先破坏实现，再信任用例
+
+⚠️ **症状**：一组用例全绿，但把被测逻辑故意改错（交换两行、把 `>` 改成 `<`）后**仍然全绿**。
+
+**典型伪断言**：
+
+```typescript
+// ❌ 只验证「三个对象都调了 close」，顺序错了照样通过
+order.push(a.closed ? 'a' : '', b.closed ? 'b' : '', c.closed ? 'c' : '')
+```
+
+这类断言在**有序/互斥/顺序敏感**的逻辑上尤其多：清理顺序、互斥释放、焦点回收、连接接管。
+它们的共同特征是用「最终状态」代替「过程顺序」。
+
+**做法**：在 mock 的每个分支上向同一个记录器 `push` 名字，断言**完整序列**：
+
+```typescript
+const order: string[] = []
+// mock 里： close: () => { order.push('channel') }
+expect(order).toEqual(['channel', 'decoder', 'player'])
+```
+
+**自检方式**：写完顺序/互斥类断言后，**临时破坏实现跑一次**，确认用例失败，再还原。
+没失败过的断言等于没有断言 —— 这类问题不会在 CI 里变红，只会在现场变成偶发 bug。
+
+### 2.6 React 19：不得在 render 期间写 `ref.current`
+
+⚠️ **症状**：`eslint` 报 `Cannot access refs during render`（`react-hooks` 插件）；或并发渲染下行为诡异。
+
+```typescript
+// ❌ render 期间产生副作用：并发渲染下会写进一个不会提交的渲染
+const cbRef = useRef(callback)
+cbRef.current = callback
+
+// ✅ 用 effect 同步
+const cbRef = useRef(callback)
+useEffect(() => {
+  cbRef.current = callback
+}, [callback])
+```
+
+**何时不能用这个修法**：若某项值必须在**首次 effect 运行时**就已是正确值（而不是晚一个 tick），
+就不能靠「effect 同步 ref」补 ——— 应该把它放进依赖数组，或改用 `useCallback` 恒定引用。
+判断标准：依赖它的逻辑是否也跑在 effect 里、且两者先后顺序是否要紧。
+
+### 2.7 浏览器音视频 API 的可测边界
+
+真实无头 Chromium 里这几条行为**与直觉相反**，写测试时必须预先知道：
+
+| API | 实际行为 | 后果 |
+| :--- | :--- | :--- |
+| `ctx.resume()`（无用户手势） | Promise **既不 resolve 也不 reject** | `await` 它会直接吃满 `testTimeout`（默认 15s）把用例杀掉，报「timed out」而非「resume 失败」 |
+| `ctx.currentTime`（`suspended`） | 恒定 0，不推进 | 依赖它推算帧号的逻辑在解禁窗口内全挤在同一帧；**这类 bug 纯算术可测**，不要归入「仅真机验证」 |
+| `AudioWorklet.addModule` | 在 `suspended` 下即可成功 | 不需要先 resume 才能装配 |
+| `?worker&inline` 产出的 `data:video/mp2t` | 被 `addModule` 以 `AbortError` 拒绝 | 不能复用到 worklet |
+
+**单元测试时一律替身**：`vi.stubGlobal('AudioContext', FakeCtx)` / `vi.stubGlobal('AudioDecoder', FakeDecoder)`，
+并把 `now` 做成可注入参数（`options.now?: () => number`）而不是用 fake timers ——
+排期类逻辑全是纯算术，注入墙钟比操纵全局定时器确定得多。
+
 ---
 
 ## 3. 严格类型约束与零 any 审计
