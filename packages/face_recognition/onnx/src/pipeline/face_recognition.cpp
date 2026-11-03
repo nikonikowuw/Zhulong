@@ -13,6 +13,7 @@
 
 #include "alignment/aligner.hpp"
 #include "common/face_association.hpp"
+#include "common/face_quality.hpp"
 #include "common/match_config.hpp"
 
 #include <dlfcn.h>
@@ -221,10 +222,18 @@ bool FaceRecognitionPlugin::build_face_item(
     const std::shared_ptr<const std::vector<zhulong::FaceTemplate>>& gallery,
     zhulong::Session& rec_session,
     zhulong::Tensor& rec_input,
-    float match_threshold,
-    size_t match_top_k,
+    const MatchParams& match_params,
     zhulong::FaceItem& out_face) {
     if (!detection.is_real_detection) {
+        return false;
+    }
+
+    // 纯数据逻辑人脸质量评估 (尺寸硬门槛、宽高比、偏航对称性、俯仰结构比)
+    const FaceQualityAssessment quality = assess_face_quality(
+        detection, image.width(), image.height(),
+        match_params.min_face_size, match_params.min_face_quality);
+    if (!quality.pass) {
+        // 未通过质量门禁：拒绝进入特征提取流水线，直接丢弃该目标（阻断低质/假人脸，保护 NPU 算力）
         return false;
     }
 
@@ -244,13 +253,17 @@ bool FaceRecognitionPlugin::build_face_item(
     }
 
     MatchResult match_result = matcher_.match(probe_features.data(), kFeatureDimension, *gallery,
-                                              match_threshold, match_top_k);
+                                              match_params.threshold, match_params.top_k);
+
+    if (match_params.filter_unmatched && !match_result.matched) {
+        return false;
+    }
 
     out_face.box[0] = detection.face_box[0];
     out_face.box[1] = detection.face_box[1];
     out_face.box[2] = detection.face_box[2];
     out_face.box[3] = detection.face_box[3];
-    out_face.quality = detection.face_score;
+    out_face.quality = quality.quality_score;
 
     out_face.landmarks.clear();
     out_face.landmarks.reserve(kLandmarkCount);
@@ -274,7 +287,7 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
     // 任务级参数（宿主经 MSG_TASK_CONFIG 下发）只影响比对决策：每帧解析一次，
     // 越界值回落进程级默认（见 common/match_config.hpp 的 resolve_match_params）。
     const MatchParams match_params = resolve_match_params(
-        task_context.params.json, MatchParams{default_match_threshold_, default_match_top_k_});
+        task_context.params.json, default_match_params_);
 
     const uint32_t worker_id = session.worker_id();
     const std::shared_ptr<zhulong::Session> rec_session = lookup_session(rec_sessions_, worker_id);
@@ -283,7 +296,7 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
     // 1. 人体目标检测 (SCRFD Person 2.5G)；无人体会话 = 该包未装人体模型，走纯人脸语义
     std::vector<PersonBodyDetection> person_detections;
     if (person_session && person_session->valid()) {
-        person_detections = person_detector_.detect(*person_session, image);
+        person_detections = person_detector_.detect(*person_session, image, match_params.person_det_threshold);
         // 只承认真实神经网络检出：降级桩不得生成人体目标（见插件契约 §2）
         person_detections.erase(
             std::remove_if(person_detections.begin(), person_detections.end(),
@@ -292,7 +305,7 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
     }
 
     // 2. 人脸检测与 5 点关键点定位 (SCRFD det_500m)
-    const std::vector<FaceDetection> face_detections = detector_.detect(session, image);
+    const std::vector<FaceDetection> face_detections = detector_.detect(session, image, match_params.face_det_threshold);
     if (person_detections.empty() && face_detections.empty()) {
         return {};
     }
@@ -307,7 +320,7 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
             ProcessedFace processed;
             processed.face_box = detection.face_box;
             if (build_face_item(image, detection, gallery, *rec_session, rec_input,
-                                match_params.threshold, match_params.top_k, processed.item)) {
+                                match_params, processed.item)) {
                 processed_faces.push_back(std::move(processed));
             }
         }
@@ -401,12 +414,9 @@ std::vector<zhulong::PersonItem> FaceRecognitionPlugin::detect_persons(zhulong::
 }
 
 void FaceRecognitionPlugin::parse_config(const std::string& config_json) {
-    // 字段与取值范围见 config.schema.json（threshold ∈ [0,1]、top_k ∈ [1,20]）。
+    // 字段与取值范围见 config.schema.json。
     // 统一复用 resolve_match_params：越界值保持默认，宁可退化也不能让插件拒绝启动。
-    const MatchParams params = resolve_match_params(
-        config_json, MatchParams{default_match_threshold_, default_match_top_k_});
-    default_match_threshold_ = params.threshold;
-    default_match_top_k_ = params.top_k;
+    default_match_params_ = resolve_match_params(config_json, default_match_params_);
 }
 
 // ============================================================================

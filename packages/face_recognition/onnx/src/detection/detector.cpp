@@ -307,7 +307,10 @@ bool image_view_usable(const zhulong::Image& image) {
 
 } // namespace
 
-std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const zhulong::Image& image) const {
+std::vector<FaceDetection> FaceDetector::detect(
+    zhulong::Session& session,
+    const zhulong::Image& image,
+    float custom_score_threshold) const {
     if (!session.valid() || !image_view_usable(image)) {
         return {};
     }
@@ -324,10 +327,11 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
         return {};
     }
 
+    const float effective_threshold = (custom_score_threshold >= 0.0f) ? custom_score_threshold : score_threshold_;
     const std::vector<zhulong::Tensor> outputs = session.forward({onnx_input});
     const auto candidates = decode_scrfd_candidates(outputs, kFaceFpnStrides, kFaceAnchorsPerCell,
                                                     model_w, model_h,
-                                                    score_threshold_, nms_threshold_, kMaxFaceCandidates,
+                                                    effective_threshold, nms_threshold_, kMaxFaceCandidates,
                                                     orig_w, orig_h, params.scale, params.pad_left, params.pad_top);
 
     std::vector<FaceDetection> results;
@@ -345,8 +349,10 @@ std::vector<FaceDetection> FaceDetector::detect(zhulong::Session& session, const
     return results;
 }
 
-std::vector<PersonBodyDetection> PersonDetector::detect(zhulong::Session& session,
-                                                        const zhulong::Image& image) const {
+std::vector<PersonBodyDetection> PersonDetector::detect(
+    zhulong::Session& session,
+    const zhulong::Image& image,
+    float custom_score_threshold) const {
     if (!session.valid() || !image_view_usable(image)) {
         return {};
     }
@@ -363,10 +369,11 @@ std::vector<PersonBodyDetection> PersonDetector::detect(zhulong::Session& sessio
         return {};
     }
 
+    const float effective_threshold = (custom_score_threshold >= 0.0f) ? custom_score_threshold : score_threshold_;
     const std::vector<zhulong::Tensor> outputs = session.forward({onnx_input});
     const auto candidates = decode_scrfd_candidates(outputs, kPersonFpnStrides, kPersonAnchorsPerCell,
                                                     model_w, model_h,
-                                                    score_threshold_, nms_threshold_, kMaxPersonCandidates,
+                                                    effective_threshold, nms_threshold_, kMaxPersonCandidates,
                                                     orig_w, orig_h, params.scale, params.pad_left, params.pad_top);
 
     std::vector<PersonBodyDetection> results;

@@ -23,6 +23,7 @@
 
 #include "alignment/aligner.hpp"
 #include "common/face_association.hpp"
+#include "common/face_quality.hpp"
 #include "detection/detector.hpp"
 #include "matching/matcher.hpp"
 
@@ -508,6 +509,97 @@ void test_resolve_match_params() {
     const MatchParams inherits = resolve_match_params(R"({"top_k":2})", custom_defaults);
     check(nearly_equal(inherits.threshold, 0.72f, 1e-6f), "任务级缺省阈值必须继承进程级默认");
     check(inherits.top_k == 2, "声明的 top_k 覆盖进程级默认");
+
+    // 扩展参数与别名解析
+    const MatchParams full_config = resolve_match_params(
+        R"({
+            "match_threshold": 0.82,
+            "det_threshold": 0.62,
+            "person_det_threshold": 0.55,
+            "min_face_size": 48,
+            "face_quality_threshold": 0.65,
+            "filter_unmatched": true
+        })",
+        defaults);
+    check(nearly_equal(full_config.threshold, 0.82f, 1e-6f), "match_threshold 别名解析成功");
+    check(nearly_equal(full_config.face_det_threshold, 0.62f, 1e-6f), "det_threshold 别名解析成功");
+    check(nearly_equal(full_config.person_det_threshold, 0.55f, 1e-6f), "person_det_threshold 解析成功");
+    check(full_config.min_face_size == 48, "min_face_size 解析成功");
+    check(nearly_equal(full_config.min_face_quality, 0.65f, 1e-6f), "face_quality_threshold 别名解析成功");
+    check(full_config.filter_unmatched == true, "filter_unmatched 布尔解析成功");
+
+    // 越界值回落测试
+    const MatchParams out_of_bounds = resolve_match_params(
+        R"({
+            "face_det_threshold": 0.05,
+            "min_face_size": 1000,
+            "min_face_quality": 1.5,
+            "filter_unmatched": false
+        })",
+        defaults);
+    check(nearly_equal(out_of_bounds.face_det_threshold, defaults.face_det_threshold, 1e-6f),
+          "越界 face_det_threshold 必须回落");
+    check(out_of_bounds.min_face_size == defaults.min_face_size, "越界 min_face_size 必须回落");
+    check(nearly_equal(out_of_bounds.min_face_quality, defaults.min_face_quality, 1e-6f),
+          "越界 min_face_quality 必须回落");
+    check(out_of_bounds.filter_unmatched == false, "filter_unmatched 为 false 应生效");
+}
+
+void test_face_quality_assessment() {
+    using namespace zhulong::face;
+
+    // 1. 标准正面人脸 (1920x1080 画面，中心人脸，置信度 0.95)
+    FaceDetection frontal;
+    frontal.face_box = {0.45f, 0.20f, 0.55f, 0.38f}; // 宽 192px, 高 194px, ar ~ 1.01
+    frontal.face_score = 0.95f;
+    frontal.landmarks = {
+        Point2f{0.48f, 0.25f}, // 左眼
+        Point2f{0.52f, 0.25f}, // 右眼
+        Point2f{0.50f, 0.29f}, // 鼻尖 (中心)
+        Point2f{0.485f, 0.34f},// 左嘴
+        Point2f{0.515f, 0.34f} // 右嘴
+    };
+
+    const auto frontal_res = assess_face_quality(frontal, 1920, 1080, 32, 0.40f);
+    check(frontal_res.pass, "标准正面人脸必须通过质量评估");
+    check(frontal_res.quality_score >= 0.80f, "正面人脸质量分应 >= 0.80");
+    check(frontal_res.yaw_score >= 0.90f, "正面人脸偏航对称分应 >= 0.90");
+    check(frontal_res.pitch_score >= 0.90f, "正面人脸俯仰结构分应 >= 0.90");
+
+    // 2. 严重侧脸 (鼻尖显著偏向右眼，偏航角严重不对称)
+    FaceDetection side_face = frontal;
+    side_face.landmarks[2] = Point2f{0.518f, 0.29f}; // 鼻尖极度右偏
+    const auto side_res = assess_face_quality(side_face, 1920, 1080, 32, 0.40f);
+    check(side_res.yaw_score < 0.40f, "严重侧脸偏航对称分应明显衰减");
+    check(side_res.quality_score < frontal_res.quality_score, "侧脸综合质量分应低于正脸");
+
+    // 3. 尺寸过小 (宽 20px, 低于 min_face_size=32)
+    FaceDetection tiny_face = frontal;
+    tiny_face.face_box = {0.495f, 0.295f, 0.505f, 0.305f}; // 宽 19.2px, 高 10.8px
+    const auto tiny_res = assess_face_quality(tiny_face, 1920, 1080, 32, 0.40f);
+    check(!tiny_res.pass, "低于最小像素尺寸的人脸必须被拒绝");
+    check(tiny_res.quality_score == 0.0f, "尺寸不达标时质量分应为 0");
+
+    // 4. 关键点倒立/紊乱 (嘴巴比眼睛高)
+    FaceDetection inverted = frontal;
+    inverted.landmarks[0] = Point2f{0.48f, 0.35f}; // 眼睛在下方
+    inverted.landmarks[1] = Point2f{0.52f, 0.35f};
+    inverted.landmarks[3] = Point2f{0.485f, 0.25f}; // 嘴巴在上方
+    inverted.landmarks[4] = Point2f{0.515f, 0.25f};
+    const auto inv_res = assess_face_quality(inverted, 1920, 1080, 32, 0.40f);
+    check(inv_res.pitch_score == 0.0f, "倒立或垂直结构错乱时俯仰分必须为 0");
+
+    // 5. 宽高比畸变 (极端扁脸，宽 400px，高 40px)
+    FaceDetection distorted = frontal;
+    distorted.face_box = {0.3f, 0.2f, 0.7f, 0.22f};
+    const auto dist_res = assess_face_quality(distorted, 1000, 1000, 32, 0.40f);
+    check(dist_res.aspect_score < 0.30f, "畸变扁脸长宽比得分应极低");
+
+    // 6. 异常输入防守 (0宽、负高、0分辨率)
+    check(!assess_face_quality(frontal, 0, 1080, 32, 0.40f).pass, "0分辨率必须安全返回未通过");
+    FaceDetection degenerate = frontal;
+    degenerate.face_box = {0.5f, 0.5f, 0.5f, 0.5f};
+    check(!assess_face_quality(degenerate, 1920, 1080, 32, 0.40f).pass, "退化0面积框必须安全返回未通过");
 }
 
 // ============================================================================
@@ -658,6 +750,7 @@ int main() {
     test_crop_and_align_rejects_bad_input();
     test_matcher_returns_expected_top_k();
     test_matcher_threshold_boundary_and_degenerate_input();
+    test_face_quality_assessment();
     test_resolve_match_params();
     test_face_association();
     test_detector_dimensions();

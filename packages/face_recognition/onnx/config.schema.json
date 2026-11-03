@@ -4,17 +4,57 @@
   "properties": {
     "threshold": {
       "type": "number",
-      "description": "人脸比对余弦相似度命中阈值",
+      "title": "人脸比对相似度阈值",
+      "description": "人脸 1:N 余弦相似度命中阈值 (高于此值判定为已登记人员)",
       "minimum": 0.0,
       "maximum": 1.0,
       "default": 0.40
     },
     "top_k": {
       "type": "integer",
+      "title": "Top-K 候选人上限",
       "description": "候选人返回上限",
       "minimum": 1,
       "maximum": 20,
       "default": 3
+    },
+    "face_det_threshold": {
+      "type": "number",
+      "title": "人脸检测置信度",
+      "description": "SCRFD 人脸检出置信度阈值 (低于此值的人脸不检出)",
+      "minimum": 0.1,
+      "maximum": 1.0,
+      "default": 0.50
+    },
+    "person_det_threshold": {
+      "type": "number",
+      "title": "人体检测置信度",
+      "description": "SCRFD 人体检出置信度阈值",
+      "minimum": 0.1,
+      "maximum": 1.0,
+      "default": 0.50
+    },
+    "min_face_size": {
+      "type": "integer",
+      "title": "最小人脸像素尺寸",
+      "description": "人脸最小像素宽或高 (低于此尺寸不送入识别与质量评估，单位: 像素)",
+      "minimum": 16,
+      "maximum": 512,
+      "default": 32
+    },
+    "min_face_quality": {
+      "type": "number",
+      "title": "人脸质量综合阈值",
+      "description": "基于几何拓扑与姿态的纯数据综合质量门槛 (0.0~1.0，低于此值不送入比对)",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "default": 0.40
+    },
+    "filter_unmatched": {
+      "type": "boolean",
+      "title": "过滤未识别目标",
+      "description": "仅输出匹配成功的已登记人员 (开启后陌生人不产生结果与抓拍)",
+      "default": false
     }
   },
   "additionalProperties": false

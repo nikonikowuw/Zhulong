@@ -13,6 +13,7 @@
 #include "detection/detector.hpp"
 #include "feature/extractor.hpp"
 #include "matching/matcher.hpp"
+#include "common/match_config.hpp"
 
 #include <zhulong/algo.hpp>
 
@@ -108,8 +109,7 @@ private:
                          const std::shared_ptr<const std::vector<zhulong::FaceTemplate>>& gallery,
                          zhulong::Session& rec_session,
                          zhulong::Tensor& rec_input,
-                         float match_threshold,
-                         size_t match_top_k,
+                         const MatchParams& match_params,
                          zhulong::FaceItem& out_face);
 
     zhulong::Model person_model_;
@@ -122,9 +122,8 @@ private:
     FaceDetector detector_;
     FaceFeatureExtractor extractor_;
     Matcher matcher_;
-    /** @brief 进程级默认比对参数（`--config` / init）；任务级配置在此之上覆盖 */
-    float default_match_threshold_{kDefaultMatchThreshold};
-    size_t default_match_top_k_{kDefaultMatchTopK};
+    /** @brief 进程级默认算法参数（`--config` / init）；任务级配置在此之上覆盖 */
+    MatchParams default_match_params_{};
 };
 
 /**

@@ -130,7 +130,10 @@ public:
      * @param image 输入只读帧视图
      * @return 检出的结构化目标列表 (会话缺失、预处理失败、输出形状不合法或全黑图时返回空)
      */
-    std::vector<FaceDetection> detect(zhulong::Session& session, const zhulong::Image& image) const;
+    std::vector<FaceDetection> detect(
+        zhulong::Session& session,
+        const zhulong::Image& image,
+        float custom_score_threshold = -1.0f) const;
 
     void set_score_threshold(float threshold) noexcept { score_threshold_ = threshold; }
     void set_nms_threshold(float threshold) noexcept { nms_threshold_ = threshold; }
@@ -187,7 +190,10 @@ public:
      * @param image 输入只读帧视图
      * @return 检出的人体目标列表
      */
-    std::vector<PersonBodyDetection> detect(zhulong::Session& session, const zhulong::Image& image) const;
+    std::vector<PersonBodyDetection> detect(
+        zhulong::Session& session,
+        const zhulong::Image& image,
+        float custom_score_threshold = -1.0f) const;
 
     void set_score_threshold(float threshold) noexcept { score_threshold_ = threshold; }
     void set_nms_threshold(float threshold) noexcept { nms_threshold_ = threshold; }
