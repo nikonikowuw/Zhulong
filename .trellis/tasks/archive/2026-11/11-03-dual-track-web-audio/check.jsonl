@@ -1,2 +1,3 @@
 {"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint/test/build 门禁"}
 {"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "状态流转与音频焦点归属"}
+{"file": ".trellis/tasks/11-03-dual-track-web-audio/research/worklet-loading.md", "reason": "核对 worklet 装配是否走了可加载的 ?raw+Blob 路径"}

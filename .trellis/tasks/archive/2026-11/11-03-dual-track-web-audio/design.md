@@ -29,7 +29,9 @@ audioDueMs(ptsUs) = videoDueMs(ptsUs)   // 同一条时间轴，无额外偏移
 ## 播放后端
 
 - 统一 AudioWorklet 环形缓冲，**不要**每包新建 `AudioBufferSourceNode`（50 节点/秒）。
-- Worklet 用 `new URL('./xxx-worklet.ts', import.meta.url)`；`addModule()` 异步，首帧投递等它就绪。
+- Worklet 用 **`?raw` 导入 `.js` 源 + `Blob` + `createObjectURL`** 后 `addModule()`；`addModule()` 异步，首帧投递等它就绪。
+  ⚠️ `new URL('./xxx-worklet.ts', import.meta.url)` 与 `?worker&inline` 在 Vite 8 下都会被 `addModule` 拒绝（实测，见 `research/worklet-loading.md`）。
+- **不要** `await ctx.resume()`：无手势时该 Promise 永不落地，会永久挂起。用 `ctx.state` 观察。
 - G.711 直接在 Worklet 内做线性重采样到 `AudioContext.sampleRate`。
 - AAC 必须带 `description = audioInfo.config`（RTSP 送裸 AU，无 ADTS 头）。
 

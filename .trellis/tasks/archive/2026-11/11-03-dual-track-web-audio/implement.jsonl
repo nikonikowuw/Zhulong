@@ -1,3 +1,4 @@
 {"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "React 19 Hooks 与流媒体 UX 契约"}
 {"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "真实浏览器测试基线"}
 {"file": ".trellis/spec/architecture.md", "reason": "预览链路跨层边界"}
+{"file": ".trellis/tasks/11-03-dual-track-web-audio/research/worklet-loading.md", "reason": "AudioWorklet 加载形态实测结论（Vite 8 + headless Chromium），避免重复探测"}
