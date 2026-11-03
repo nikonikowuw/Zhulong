@@ -144,6 +144,35 @@ describe('useLiveCameras', () => {
     expect(MockEventSource.instances[0].url).toBe('/api/v1/cameras/events')
   })
 
+  // 后端 `snapshot` 载荷是 { cameraId: state } 的对象，不是数组。
+  // 按数组解析会让每一条快照被静默丢弃：重连后补不到断连期间的状态变化，
+  // 任务页永久停在断线前那一帧（「一直显示视频流重连中」）。
+  it('applies the reconnect snapshot delivered as a cameraId-keyed map', async () => {
+    mockCameras(listResponse([camera({ health: 'error', session: 'reconnecting' })]))
+
+    const { result } = await renderLiveCameras()
+    await vi.waitFor(() => {
+      expect(result.current.data[0]?.status).toBe('error')
+    })
+
+    MockEventSource.instances[0].emit('snapshot', {
+      'cam-01': {
+        cameraId: 'cam-01',
+        enabled: true,
+        revision: 1,
+        health: 'online',
+        session: 'running',
+        degraded: false,
+        stale: false,
+        reason: '',
+      },
+    })
+
+    await vi.waitFor(() => {
+      expect(result.current.data[0]?.status).toBe('online')
+    })
+  })
+
   it('patches status from an SSE change event without refetching', async () => {
     mockCameras(listResponse([camera()]))
 

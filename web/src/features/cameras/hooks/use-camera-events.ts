@@ -16,6 +16,19 @@ const sseMessageSchema = z.object({
 })
 
 /**
+ * `snapshot` 载荷是**以 cameraId 为键的对象**（Go 侧 `map[string]*CameraStateInfo`）。
+ *
+ * 历史实现按数组解析，于是每一条快照都被 safeParse 静默丢弃：
+ * 页面重连（后端重启、网络抖动）后补不到断连期间的状态变化，
+ * 任务页就会永久停在断线前的那一帧——「一直显示视频流重连中」正是这么来的。
+ * 数组形态保留兼容，避免后端哪天改回列表时再次静默失效。
+ */
+const snapshotPayloadSchema = z.union([
+  z.record(z.string(), cameraStateInfoSchema),
+  z.array(cameraStateInfoSchema),
+])
+
+/**
  * 监听后端 /api/v1/cameras/events SSE 实时状态事件
  * 实现零轮询的在线/推流/降级毫秒级实时响应
  */
@@ -47,16 +60,19 @@ export function useCameraEvents(enabled = true) {
         es.addEventListener('snapshot', (e: MessageEvent) => {
           try {
             const json = JSON.parse(e.data)
-            const parseResult = z.array(cameraStateInfoSchema).safeParse(json)
+            const parseResult = snapshotPayloadSchema.safeParse(json)
             if (!parseResult.success) return
-            const rawData = parseResult.data
 
             const stateMap = new Map<string, CameraStateInfo>()
-            rawData.forEach((item) => {
-              if (item.cameraId) {
-                stateMap.set(item.cameraId, item)
+            if (Array.isArray(parseResult.data)) {
+              for (const item of parseResult.data) {
+                if (item.cameraId) stateMap.set(item.cameraId, item)
               }
-            })
+            } else {
+              for (const [key, item] of Object.entries(parseResult.data)) {
+                stateMap.set(item.cameraId || key, item)
+              }
+            }
 
             // 更新缓存中的所有匹配相机状态
             queryClient.setQueriesData<CameraListResponse>(
