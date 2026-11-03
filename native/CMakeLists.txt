@@ -664,6 +664,25 @@ if(BUILD_TESTING)
     add_test(NAME ZhulongFaceGeometry COMMAND ZhulongFaceGeometryTests)
     set_tests_properties(ZhulongFaceGeometry PROPERTIES TIMEOUT 10)
 
+    # 人员聚集算法包的纯逻辑自测（配置解析 / 透视自适应聚类几何 / 时序防抖）。
+    #
+    # ⚠️ 源文件同样在**包内**（packages/crowd_gathering/onnx/tests/unit_test.cpp），这里只把
+    #    它编进 ctest 以便 `make check` 覆盖：包内 `make unit-test` 与这里编译的是同一份文件。
+    #    该测试不加载模型、不需要会话、不碰硬件后端，因此任何档位都注册。
+    add_executable(ZhulongCrowdGatheringTests
+        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/crowd_gathering/onnx/tests/unit_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/crowd_gathering/onnx/src/analysis/spatial_clustering.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/crowd_gathering/onnx/src/analysis/temporal_tracker.cpp
+    )
+    target_compile_features(ZhulongCrowdGatheringTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongCrowdGatheringTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/sdk/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../packages/crowd_gathering/onnx/src
+    )
+    target_link_libraries(ZhulongCrowdGatheringTests PRIVATE ZhulongAlgoRuntime Threads::Threads)
+    add_test(NAME ZhulongCrowdGathering COMMAND ZhulongCrowdGatheringTests)
+    set_tests_properties(ZhulongCrowdGathering PROPERTIES TIMEOUT 10)
+
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "onnx")
         add_executable(ZhulongFaceRecognitionOnnxTests
             tests/face_recognition_onnx_test.cpp

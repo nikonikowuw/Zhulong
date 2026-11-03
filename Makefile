@@ -127,7 +127,8 @@ sdk-clean-check:
 	CONTAINER_RUNTIME=$(or $(CONTAINER_RUNTIME),docker) \
 	SDK_PREFIX=$(SDK_PREFIX) \
 	native/scripts/sdk_clean_check.sh \
-		packages/plate_recognition/onnx packages/face_recognition/onnx
+		packages/plate_recognition/onnx packages/face_recognition/onnx \
+		packages/crowd_gathering/onnx
 
 # 交叉编译目标二进制（严格要求指定目标板 Profile 与输出路径，防 Host/Cross 产物混淆）
 native-cross-build:
@@ -209,6 +210,7 @@ pkg-rk3568:
 pkg-drift-check:
 	python3 native/scripts/check_package_drift.py packages/face_recognition
 	python3 native/scripts/check_package_drift.py packages/plate_recognition
+	python3 native/scripts/check_package_drift.py packages/crowd_gathering
 
 api-docs:
 	$(GO) run github.com/swaggo/swag/cmd/swag@$(SWAG_VERSION) init --dir cmd/Zhulong,internal/app,internal/httputil,internal/auth,internal/audit,internal/asyncjob,internal/camera,internal/network,internal/systemtime,internal/systeminfo,internal/storage,internal/algorithm,internal/person,internal/mediafile,internal/record,internal/task,internal/gb28181,internal/aitypes,internal/spatial --generalInfo main.go --output internal/apidocs --parseInternal
