@@ -31,20 +31,17 @@ inline constexpr int kFaceInputGranularity = 32;
 inline constexpr int kPersonInputGranularity = 128;
 
 /**
- * @brief 本档位后端是否只接受模型自带的输入尺寸（静态 shape 模型）
+ * @brief 人脸与人体检测输入尺寸支持策略
  *
- * rk3568 的 `.rknn` 是 `static_shape [1,3,640,640]`（`dynamic_shapes` 为空）；RKNN 后端
- * 按 `element_count` 校验输入，尺寸不符时 `forward` 直接返回空 —— 故障表现是「检测恒为 0」
- * 且没有任何错误码。onnx 档位的 det_500m / scrfd_person_2.5g 输入空间维是动态轴
- * （`[1,3,?,?]`），因此可以按流调整分辨率（如 16:9 的 640×384）。
- *
- * ⚠️ 由 SDK 前缀的 `INTERFACE_COMPILE_DEFINITIONS` 区分（`ZHULONG_INFERENCE_RKNN` /
- *    `_ONNX`），与 `zhulong::TARGET_MODEL_EXT` 用同一组定义，不按架构宏猜。
+ * rk3568 的人脸检测采用动态双 shape 模型（支持 640×640 与 640×384），人体检测仍为
+ * 静态 shape [1,3,640,640]；onnx 档位 det_500m / scrfd_person_2.5g 均为动态轴。
  */
 #if defined(ZHULONG_INFERENCE_RKNN)
-inline constexpr bool kDetectionInputShapeIsStatic = true;
+inline constexpr bool kFaceDetectionInputShapeIsDynamic = true;
+inline constexpr bool kPersonDetectionInputShapeIsStatic = true;
 #else
-inline constexpr bool kDetectionInputShapeIsStatic = false;
+inline constexpr bool kFaceDetectionInputShapeIsDynamic = true;
+inline constexpr bool kPersonDetectionInputShapeIsStatic = false;
 #endif
 
 /**
@@ -110,13 +107,15 @@ public:
      *         调用方必须把它当失败处理，不能假定「已生效」
      */
     bool set_input_size(int w, int h) noexcept {
-        if (kDetectionInputShapeIsStatic) {
-            if (w != kDefaultModelWidth || h != kDefaultModelHeight) {
-                return false;
-            }
-        } else if (!is_supported_detection_input(w, h, kFaceInputGranularity)) {
+        if (!is_supported_detection_input(w, h, kFaceInputGranularity)) {
             return false;
         }
+#if defined(ZHULONG_INFERENCE_RKNN)
+        // rk3568 动态人脸模型支持标准 640×640 与 CCTV 640×384
+        if (w != kDefaultModelWidth || (h != kDefaultModelHeight && h != kCctvStreamModelHeight)) {
+            return false;
+        }
+#endif
         model_width_ = w;
         model_height_ = h;
         return true;
@@ -166,13 +165,16 @@ public:
      * @return false 表示该分辨率不可用（未整除 128，或本档位模型为静态形状）
      */
     bool set_input_size(int w, int h) noexcept {
-        if (kDetectionInputShapeIsStatic) {
-            if (w != kDefaultModelWidth || h != kDefaultModelHeight) {
-                return false;
-            }
-        } else if (!is_supported_detection_input(w, h, kPersonInputGranularity)) {
+#if defined(ZHULONG_INFERENCE_RKNN)
+        // rk3568 人体检测模型为静态 shape [1,3,640,640]
+        if (w != kDefaultModelWidth || h != kDefaultModelHeight) {
             return false;
         }
+#else
+        if (!is_supported_detection_input(w, h, kPersonInputGranularity)) {
+            return false;
+        }
+#endif
         model_width_ = w;
         model_height_ = h;
         return true;

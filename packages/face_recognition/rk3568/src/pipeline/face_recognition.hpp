@@ -41,14 +41,13 @@ public:
      *    「人脸已切到新分辨率、人体仍留在旧值」而调用方以为整体成功。
      */
     bool set_detection_input_size(int width, int height) noexcept {
-        const bool supported = kDetectionInputShapeIsStatic
-                                   ? (width == kDefaultModelWidth && height == kDefaultModelHeight)
-                                   : is_supported_detection_input(width, height, kPersonInputGranularity);
-        if (!supported) {
+        FaceDetector temp_det = detector_;
+        PersonDetector temp_person = person_detector_;
+        if (!temp_det.set_input_size(width, height) || !temp_person.set_input_size(width, height)) {
             return false;
         }
-        detector_.set_input_size(width, height);
-        person_detector_.set_input_size(width, height);
+        detector_ = temp_det;
+        person_detector_ = temp_person;
         return true;
     }
 

@@ -160,7 +160,7 @@ static_assert(std::string_view(zhulong::TARGET_MODEL_EXT) == kModelExtension,
 
 FaceRecognitionPlugin::FaceRecognitionPlugin()
     : person_detector_(kDefaultModelWidth, kDefaultModelHeight),
-      detector_(kDefaultModelWidth, kDefaultModelHeight) {}
+      detector_(kCctvStreamModelWidth, kCctvStreamModelHeight) {}
 
 zhulong_status_t FaceRecognitionPlugin::init(const std::string& config_json) {
     parse_config(config_json);
@@ -402,17 +402,11 @@ std::vector<zhulong::PersonItem> FaceRecognitionPlugin::detect_persons(zhulong::
 
 void FaceRecognitionPlugin::parse_config(const std::string& config_json) {
     // 字段与取值范围见 config.schema.json（threshold ∈ [0,1]、top_k ∈ [1,20]）。
-    // 越界值保持默认：宿主可能下发老版本配置，宁可退化也不能让插件拒绝启动。
-    double threshold = 0.0;
-    if (find_json_number(config_json, "threshold", threshold) && threshold >= 0.0 && threshold <= 1.0) {
-        default_match_threshold_ = static_cast<float>(threshold);
-    }
-
-    double top_k = 0.0;
-    if (find_json_number(config_json, "top_k", top_k) && top_k >= 1.0 &&
-        top_k <= static_cast<double>(kMaxMatchTopK)) {
-        default_match_top_k_ = static_cast<size_t>(std::lround(top_k));
-    }
+    // 统一复用 resolve_match_params：越界值保持默认，宁可退化也不能让插件拒绝启动。
+    const MatchParams params = resolve_match_params(
+        config_json, MatchParams{default_match_threshold_, default_match_top_k_});
+    default_match_threshold_ = params.threshold;
+    default_match_top_k_ = params.top_k;
 }
 
 // ============================================================================

@@ -51,6 +51,8 @@ struct RknnModelAsset : public ModelAsset {
     rknn_input_output_num io_num{};                /**< 输入/输出张量数量（从 Runtime 查询，不猜） */
     std::vector<rknn_tensor_attr> input_attrs;     /**< 输入张量属性（从 Runtime 查询） */
     std::vector<rknn_tensor_attr> output_attrs;    /**< 输出张量属性（从 Runtime 查询） */
+    bool is_dynamic{false};                        /**< 是否为动态 shape 模型 */
+    std::vector<rknn_input_range> dynamic_ranges;  /**< 动态输入 shape 范围（从 Runtime 查询） */
     rknn_mem_size mem_size{};                      /**< ⚠️ 必须由独立的一次性上下文查询（见 .cpp 的 R10 说明） */
     rknn_sdk_version sdk_version{};                /**< 运行库版本（证据记录） */
 
@@ -136,6 +138,10 @@ struct RknnSessionContext : public SessionContext {
     std::shared_ptr<RknnModelAsset> model;
 
     std::vector<CachedDmaMem> cached_input_mems;
+
+    bool shapes_set{false};                                      /**< 当前上下文是否已配置 dynamic shape */
+    std::vector<std::vector<int64_t>> current_input_shapes;      /**< 当前生效的输入 shape */
+    std::vector<rknn_tensor_attr> current_output_attrs;          /**< 当前生效的输出属性 */
 
     RknnSessionContext() = default;
     RknnSessionContext(const RknnSessionContext&) = delete;

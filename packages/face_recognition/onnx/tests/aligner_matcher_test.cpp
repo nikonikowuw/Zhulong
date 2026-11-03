@@ -596,25 +596,19 @@ void test_detector_dimensions() {
 
     // set_input_size 是**带校验**的：不合格的分辨率必须返回 false 且不改动实例状态。
     // 这条是「静默零检出」的唯一防线 —— 布局不符时解码只会返回空结果，没有错误码可报。
-    //
-    // ⚠️ 「能整除粒度就接受」只在**动态形状**档位成立。rk3568 的 .rknn 是 static_shape
-    //    [1,3,640,640]，该档位下除模型自带尺寸外一律拒绝（见 detector.hpp 的
-    //    kDetectionInputShapeIsStatic）。把期望按档位分叉，否则 rknn 档位的自测必然红，
-    //    而红的原因与真缺陷无关 —— 反而会掩盖真正的静默零检出。
-    if (kDetectionInputShapeIsStatic) {
-        check(!cctv_face_detector.set_input_size(320, 192),
-              "静态形状档位必须拒绝非模型自带分辨率");
-        check(cctv_face_detector.model_width() == kCctvStreamModelWidth &&
-              cctv_face_detector.model_height() == kCctvStreamModelHeight,
-              "被拒绝的 set_input_size 不得改动实例状态");
-    } else {
-        check(cctv_face_detector.set_input_size(320, 192), "320x192 能被人脸粒度 32 整除，应接受");
-        check(cctv_face_detector.model_width() == 320, "FaceDetector set_input_size 宽度应生效");
-        check(cctv_face_detector.model_height() == 192, "FaceDetector set_input_size 高度应生效");
-        check(!cctv_face_detector.set_input_size(320, 200), "200 不能被人脸粒度 32 整除，应拒绝");
-        check(cctv_face_detector.model_width() == 320 && cctv_face_detector.model_height() == 192,
-              "被拒绝的 set_input_size 不得改动实例状态");
-    }
+#if defined(ZHULONG_INFERENCE_RKNN)
+    // rk3568 档位：人脸模型为动态双 shape (640x640 与 640x384)
+    check(cctv_face_detector.set_input_size(kDefaultModelWidth, kDefaultModelHeight),
+          "人脸检测器必须支持 640x640");
+    check(cctv_face_detector.set_input_size(kCctvStreamModelWidth, kCctvStreamModelHeight),
+          "人脸检测器必须支持 640x384 实时推理");
+    check(!cctv_face_detector.set_input_size(320, 192),
+          "动态双 shape 档位必须拒绝未量化包含的分辨率");
+    check(!cctv_face_detector.set_input_size(640, 200),
+          "不能被 32 整除的尺寸必须被拒绝");
+    check(cctv_face_detector.model_width() == kCctvStreamModelWidth &&
+          cctv_face_detector.model_height() == kCctvStreamModelHeight,
+          "被拒绝的 set_input_size 不得改动实例状态");
 
     PersonDetector default_person_detector;
     check(default_person_detector.model_width() == 640, "PersonDetector 默认宽度必须为 640");
@@ -624,29 +618,34 @@ void test_detector_dimensions() {
     check(cctv_person_detector.model_width() == 640, "PersonDetector CCTV 宽度应为 640");
     check(cctv_person_detector.model_height() == 384, "PersonDetector CCTV 高度应为 384");
 
-    if (kDetectionInputShapeIsStatic) {
-        check(!cctv_person_detector.set_input_size(640, 256),
-              "静态形状档位必须拒绝非模型自带分辨率");
-        check(cctv_person_detector.model_width() == kCctvStreamModelWidth &&
-              cctv_person_detector.model_height() == kCctvStreamModelHeight,
-              "被拒绝的 set_input_size 不得改动实例状态");
-    } else {
-        check(cctv_person_detector.set_input_size(640, 256), "640x256 能被人体粒度 128 整除，应接受");
-        check(cctv_person_detector.model_width() == 640, "PersonDetector set_input_size 宽度应生效");
-        check(cctv_person_detector.model_height() == 256, "PersonDetector set_input_size 高度应生效");
-        check(!cctv_person_detector.set_input_size(640, 192), "192 不能被人体粒度 128 整除，应拒绝");
-        check(cctv_person_detector.model_width() == 640 && cctv_person_detector.model_height() == 256,
-              "被拒绝的 set_input_size 不得改动实例状态");
-    }
+    // 人体模型仍为静态 640x640
+    check(!cctv_person_detector.set_input_size(640, 256),
+          "静态人体模型档位必须拒绝非 640x640 分辨率");
+    check(cctv_person_detector.set_input_size(kDefaultModelWidth, kDefaultModelHeight),
+          "静态人体模型必须接受 640x640");
+#else
+    check(cctv_face_detector.set_input_size(320, 192), "320x192 能被人脸粒度 32 整除，应接受");
+    check(cctv_face_detector.model_width() == 320, "FaceDetector set_input_size 宽度应生效");
+    check(cctv_face_detector.model_height() == 192, "FaceDetector set_input_size 高度应生效");
+    check(!cctv_face_detector.set_input_size(320, 200), "200 不能被人脸粒度 32 整除，应拒绝");
+    check(cctv_face_detector.model_width() == 320 && cctv_face_detector.model_height() == 192,
+          "被拒绝的 set_input_size 不得改动实例状态");
 
-    // 静态形状档位（rk3568 的 .rknn 是 static_shape [1,3,640,640]）：除模型自带尺寸外一律拒绝，
-    // 否则 RKNN 后端会在 forward 阶段返回空，表现为「检测恒为 0」。
-    if (kDetectionInputShapeIsStatic) {
-        check(cctv_face_detector.set_input_size(kDefaultModelWidth, kDefaultModelHeight),
-              "静态形状档位必须接受模型自带尺寸");
-        check(!cctv_face_detector.set_input_size(kCctvStreamModelWidth, kCctvStreamModelHeight),
-              "静态形状档位必须拒绝 16:9 分辨率（模型未重转前）");
-    }
+    PersonDetector default_person_detector;
+    check(default_person_detector.model_width() == 640, "PersonDetector 默认宽度必须为 640");
+    check(default_person_detector.model_height() == 640, "PersonDetector 默认高度必须为 640");
+
+    PersonDetector cctv_person_detector(kCctvStreamModelWidth, kCctvStreamModelHeight);
+    check(cctv_person_detector.model_width() == 640, "PersonDetector CCTV 宽度应为 640");
+    check(cctv_person_detector.model_height() == 384, "PersonDetector CCTV 高度应为 384");
+
+    check(cctv_person_detector.set_input_size(640, 256), "640x256 能被人体粒度 128 整除，应接受");
+    check(cctv_person_detector.model_width() == 640, "PersonDetector set_input_size 宽度应生效");
+    check(cctv_person_detector.model_height() == 256, "PersonDetector set_input_size 高度应生效");
+    check(!cctv_person_detector.set_input_size(640, 192), "192 不能被人体粒度 128 整除，应拒绝");
+    check(cctv_person_detector.model_width() == 640 && cctv_person_detector.model_height() == 256,
+          "被拒绝的 set_input_size 不得改动实例状态");
+#endif
 }
 
 } // namespace
