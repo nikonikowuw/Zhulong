@@ -302,6 +302,27 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 
 输出严格 JSON 行。所有字符串字段均转义；退出码 `0` 表示模型加载、Worker 创建、Task 打开、单次推理与内存释放全部符合规范。
 
+#### 5.0.1 资源路径的锚点是**可执行文件目录**，不是 CWD
+
+包内的模型/权重路径解析必须以 `/proc/self/exe`（无 procfs 平台退回 `dladdr`）所在目录为第一顺位，
+env 覆盖与「开发期源码树候选」只能排在后面。原因不是洁癖：
+
+- `--verify` 由 `internal/algorithm` 以**包目录**为 CWD 启动（`cmd.Dir = filepath.Dir(entryPath)`），
+  而运行期 `--broker` 由 `internal/algorunner` 启动，**从不设置 `cmd.Dir`** —— 子进程继承宿主的 CWD；
+- 于是「只按 CWD 找 `models/`」的包会得到最难查的故障形态：验包绿、装机后 `Model::load` 失败、
+  退出码 `2`、宿主把它当启动失败进 CRASH_LOOP，而包里明明有模型。
+
+同一条边界上还有两处只按 CWD 会静默失败的地方：包的 `.env` 路径与 `sample.jpg`。参照实现见
+`packages/face_recognition/onnx/src/pipeline/face_recognition.cpp` 的 `executable_directory()`。
+
+#### 5.0.2 包内诊断必须走 `zhulongLog` 记录，裸 stderr 文本会被丢弃
+
+宿主 `internal/algorunner/runner_log.go` 只认三类行：骨架协议事件（`status`/`stage`/`step`）、
+`{"zhulongLog":true,"level":...,"module":...,"message":...}` 原生日志、以及**被丢弃**的其它文本（只留
+`line_bytes`）。因此 `fprintf(stderr, "...")` 在运维看到的宿主日志里等于没写。包侧需要留痕时按
+`packages/crowd_gathering/onnx/src/common/runner_log.hpp` 的形状输出单行 JSON：`module` 只允许
+`[A-Za-z0-9_.-]`，`level` 必须是 debug/info/warn/error，否则会被判 `runner native log rejected`。
+
 ### 5.1 运行期命令契约：`--broker` 参数语义
 
 - **`--broker` 的语义为字面 socket 路径**：客户端直接执行 `connect(path)`，不做目录派生。支持重复传入多个 `--broker` 参数以订阅多路相机流。
