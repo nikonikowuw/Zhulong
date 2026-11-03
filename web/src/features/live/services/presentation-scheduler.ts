@@ -79,6 +79,21 @@ export interface ScheduledPresentation<T> {
   pending: number
 }
 
+/**
+ * 呈现时钟的只读快照：`PTS → 墙钟` 的当前映射。
+ *
+ * 音频侧靠它把自己的 PTS 折算到同一条时间轴上（音画同步的唯一依据）。
+ * 刻意只读：调度器的时钟由队列自己维护，外部改写会让「队列跑空即作废」的语义失效。
+ */
+export interface PresentationClockSnapshot {
+  /** 建立映射时的墙钟时刻（performance 时间轴，毫秒）。 */
+  wallMs: number
+  /** 建立映射时的媒体时刻（微秒）。 */
+  ptsUS: number
+  /** 目标延迟（毫秒）。 */
+  targetLatencyMs: number
+}
+
 export interface ScheduledPush<T> {
   /** 本次是否因队列上限或时间轴回退被丢弃的帧，必须由调用方释放。 */
   dropped: T[]
@@ -223,6 +238,23 @@ export class PresentationScheduler<T> {
   /** 当前等待呈现的帧数。 */
   get pending(): number {
     return this.queue.length
+  }
+
+  /**
+   * 只读时钟快照。
+   *
+   * `clock === null` 时返回 null —— 这**不是**错误状态：队列跑空后时钟有意作废，
+   * 下一帧进来会重新建立映射。调用方（音频侧）必须把 null 当作「视频尚未建立映射」，
+   * 而不是「延迟为 0」。
+   */
+  clockSnapshot(): PresentationClockSnapshot | null {
+    const clock = this.clock
+    if (!clock) return null
+    return {
+      wallMs: clock.wallMs,
+      ptsUS: clock.ptsUS,
+      targetLatencyMs: this.targetLatencyMs,
+    }
   }
 
   private dueOf(ptsUS: number): number {

@@ -162,3 +162,89 @@ describe('PresentationScheduler', () => {
     expect(scheduler.takeDue(600).present).toBe('c')
   })
 })
+
+/**
+ * `clockSnapshot()` 是音频侧唯一的同步依据，因此它的契约必须钉死：
+ * 返回的就是 `dueOf()` 用的那一份映射，且「队列跑空即作废」的语义不能因此改变。
+ */
+describe('PresentationScheduler.clockSnapshot', () => {
+  it('未入队时返回 null（时钟尚未建立）', () => {
+    const scheduler = createScheduler()
+    expect(scheduler.clockSnapshot()).toBeNull()
+  })
+
+  it('返回建立映射时的 wallMs / ptsUS 与目标延迟', () => {
+    const scheduler = createScheduler()
+    scheduler.push(500_000, 'a', 1234)
+
+    expect(scheduler.clockSnapshot()).toEqual({
+      wallMs: 1234,
+      ptsUS: 500_000,
+      targetLatencyMs: 100,
+    })
+  })
+
+  it('快照与 dueOf 同源：用它算出的 due 与 takeDue 的呈现时刻一致', () => {
+    const scheduler = createScheduler()
+    scheduler.push(0, 'a', 0)
+    scheduler.push(40_000, 'b', 5)
+
+    const clock = scheduler.clockSnapshot()
+    expect(clock).not.toBeNull()
+    if (!clock) throw new Error('clock must exist')
+    const dueOf = (ptsUs: number) =>
+      clock.wallMs + (ptsUs - clock.ptsUS) / 1000 + clock.targetLatencyMs
+
+    expect(dueOf(0)).toBe(100)
+    expect(dueOf(40_000)).toBe(140)
+    expect(scheduler.takeDue(99).present).toBeNull()
+    expect(scheduler.takeDue(100).present).toBe('a')
+    expect(scheduler.takeDue(140).present).toBe('b')
+  })
+
+  it('队列跑空后时钟作废 → 返回 null（音频侧据此暂停对齐）', () => {
+    const scheduler = createScheduler()
+    scheduler.push(0, 'a', 0)
+    expect(scheduler.clockSnapshot()).not.toBeNull()
+
+    expect(scheduler.takeDue(100).present).toBe('a')
+    expect(scheduler.clockSnapshot()).toBeNull()
+  })
+
+  it('返回的是副本：改写它不影响调度器内部时钟', () => {
+    const scheduler = createScheduler()
+    scheduler.push(0, 'a', 0)
+
+    const snapshot = scheduler.clockSnapshot()
+    if (!snapshot) throw new Error('clock must exist')
+    snapshot.wallMs = 99_999
+    snapshot.ptsUS = 99_999
+    snapshot.targetLatencyMs = 9999
+
+    expect(scheduler.clockSnapshot()).toEqual({
+      wallMs: 0,
+      ptsUS: 0,
+      targetLatencyMs: 100,
+    })
+  })
+
+  it('clear() 之后返回 null', () => {
+    const scheduler = createScheduler()
+    scheduler.push(0, 'a', 0)
+    scheduler.clear()
+    expect(scheduler.clockSnapshot()).toBeNull()
+  })
+
+  it('时间轴整段回退重建时钟后，快照反映新映射', () => {
+    const scheduler = createScheduler({ maxBackwardJumpUs: 1_000_000 })
+    scheduler.push(0, 'a', 0)
+    // 回退 > 1s：重建时钟到 (now, pts)
+    scheduler.push(-5_000_000, 'b', 700)
+
+    expect(scheduler.clockSnapshot()).toEqual({
+      wallMs: 700,
+      ptsUS: -5_000_000,
+      targetLatencyMs: 100,
+    })
+  })
+})

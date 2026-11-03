@@ -254,9 +254,28 @@ export function extractH265Codec(payload: Uint8Array): string {
 type FrameOutputCallback = (frame: VideoFrame) => void
 type DecoderErrorCallback = (error: DOMException | Error) => void
 
+/**
+ * 视频侧重同步原因。
+ *
+ * 音频侧靠它决定「什么时候必须 flush」：画面跳变后如果音频还在播旧位置的样本，
+ * 就是一段可闻的音画错位，而且不会自己恢复。
+ */
+export type DecoderResyncReason =
+  | 'stream_discontinuity'
+  | 'decode_queue_rebuild'
+  | 'frame_skip'
+
+type DecoderResyncCallback = (reason: DecoderResyncReason) => void
+
 export interface StreamDecoderOptions {
   onFrame: FrameOutputCallback
   onError?: DecoderErrorCallback
+  /**
+   * 解码器发生重同步（时间轴跳变 / 队列积压跳关键帧 / 错误后等关键帧）。
+   *
+   * 可选且只读：加它的唯一目的是让音频侧知道「画面刚刚跳了」，不改任何现有行为。
+   */
+  onResync?: DecoderResyncCallback
 }
 
 export class StreamDecoder {
@@ -305,6 +324,7 @@ export class StreamDecoder {
 
   private readonly onFrame: FrameOutputCallback
   private readonly onError?: DecoderErrorCallback
+  private readonly onResync?: DecoderResyncCallback
   private stats: StreamDecoderStats = { resyncs: 0, rebuilds: 0, errors: 0 }
   private diagnosticWindowStart = 0
   private diagnosticCounters = emptyDiagnosticCounters()
@@ -314,6 +334,7 @@ export class StreamDecoder {
   constructor(options: StreamDecoderOptions) {
     this.onFrame = options.onFrame
     this.onError = options.onError
+    this.onResync = options.onResync
     this.initDecoder()
   }
 
@@ -450,6 +471,7 @@ export class StreamDecoder {
         ptsUs: packet.ptsUs,
         dtsUs: packet.dtsUs,
       })
+      this.notifyResync('stream_discontinuity')
       this.rebuild()
     }
 
@@ -493,6 +515,7 @@ export class StreamDecoder {
         framesSinceConfigure: this.framesSinceConfigure,
         resyncs: this.stats.resyncs,
       })
+      this.notifyResync('decode_queue_rebuild')
       this.resyncToKeyframe()
       return false
     }
@@ -518,6 +541,7 @@ export class StreamDecoder {
               : Math.round(performance.now() - this.configuredAtMs),
           resyncs: this.stats.resyncs + 1,
         })
+        this.notifyResync('frame_skip')
         this.resyncToKeyframe()
         return false
       }
@@ -725,6 +749,20 @@ export class StreamDecoder {
       config.hevc = { format: 'annexb' }
     }
     return config
+  }
+
+  /**
+   * 通知上层「画面刚刚跳了」。
+   *
+   * 只转发、不做任何状态变更：重同步的判定与记账留在各自分支里，
+   * 这里多一层抽象只为让音频侧有一个统一的入口（且不改变任何现有行为）。
+   */
+  private notifyResync(reason: DecoderResyncReason): void {
+    try {
+      this.onResync?.(reason)
+    } catch {
+      // 回调是外部代码（音频侧 close()），它抛错不能把解码循环带走。
+    }
   }
 
   /**

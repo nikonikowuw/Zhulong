@@ -369,4 +369,56 @@ describe('StreamDecoder 重同步语义', () => {
       decoder.close()
     }
   })
+
+  it('onResync：时间轴跳变时以 stream_discontinuity 通知一次（音频侧据此 flush）', () => {
+    const reasons: string[] = []
+    const decoder = new StreamDecoder({
+      onFrame: () => {},
+      onResync: (reason) => reasons.push(reason),
+    })
+    try {
+      decoder.decode(packet({ isKeyFrame: true, ptsUs: 0 }))
+      expect(reasons).toEqual([])
+
+      decoder.decode(
+        packet({ isKeyFrame: false, ptsUs: 40000, discontinuity: true })
+      )
+      expect(reasons).toEqual(['stream_discontinuity'])
+    } finally {
+      decoder.close()
+    }
+  })
+
+  it('onResync：回调抛错不能打断解码循环', () => {
+    const decoder = new StreamDecoder({
+      onFrame: () => {},
+      onResync: () => {
+        throw new Error('audio side blew up')
+      },
+    })
+    try {
+      expect(() =>
+        decoder.decode(
+          packet({ isKeyFrame: false, ptsUs: 40000, discontinuity: true })
+        )
+      ).not.toThrow()
+      expect(decoder.isSkipping()).toBe(true)
+    } finally {
+      decoder.close()
+    }
+  })
+
+  it('未提供 onResync 时一切照旧（可选回调不改变既有行为）', () => {
+    const decoder = new StreamDecoder({ onFrame: () => {} })
+    try {
+      expect(() =>
+        decoder.decode(
+          packet({ isKeyFrame: false, ptsUs: 40000, discontinuity: true })
+        )
+      ).not.toThrow()
+      expect(decoder.isSkipping()).toBe(true)
+    } finally {
+      decoder.close()
+    }
+  })
 })

@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useRef, type RefObject } from 'react'
-import { PresentationScheduler } from '../services/presentation-scheduler'
+import {
+  PresentationScheduler,
+  type PresentationClockSnapshot,
+} from '../services/presentation-scheduler'
 import { createRenderDiagnosticSession } from '../services/render-diagnostics'
 import { createPreviewTelemetry } from '../services/render-telemetry'
 import {
   isWebCodecsDiagnosticsEnabled,
   logWebCodecsDiagnostic,
   StreamDecoder,
+  type DecoderResyncReason,
 } from '../services/webcodecs-decoder'
 
 export interface UseWebCodecsRenderLoopOptions {
@@ -20,6 +24,11 @@ export interface UseWebCodecsRenderLoopOptions {
    */
   onFrameDrawn?: (frame: VideoFrame, canvas: HTMLCanvasElement) => void
   onDecodeError?: (error: unknown) => void
+  /**
+   * 视频侧发生重同步时回调（时间轴跳变 / 解码队列积压跳关键帧 / 错误后等关键帧）。
+   * 音频侧挂在这里做 `flush()`：画面跳了，声音必须跟着重锚。
+   */
+  onResync?: (reason: DecoderResyncReason) => void
   /**
    * 首个画面真正画到 canvas 时回调一次（每次重建渲染循环最多一次）。
    * 上层用它把「黑屏等待」换成明确的等待态 —— 起播前 RTSP 建连耗时 1~2 秒，
@@ -42,6 +51,13 @@ export interface UseWebCodecsRenderLoopResult {
   decoderRef: RefObject<StreamDecoder | null>
   /** 丢弃待渲染帧并重置解码器（切换码流时使用）。 */
   reset: () => void
+  /**
+   * 当前呈现时钟的只读快照；`null` 表示队列已跑空、视频尚未建立映射。
+   *
+   * 音频侧用它把自己的 PTS 折算到与画面同一条时间轴（音画同步的唯一依据）。
+   * 读的是 ref，因此调用它不会导致重渲染，也不该被放进任何依赖数组。
+   */
+  getPresentationClock: () => PresentationClockSnapshot | null
 }
 
 /**
@@ -62,6 +78,7 @@ export function useWebCodecsRenderLoop({
   isPaused,
   onFrameDrawn,
   onDecodeError,
+  onResync,
   onFirstFrame,
   restartKey = '',
   traceId = 'unknown',
@@ -88,6 +105,10 @@ export function useWebCodecsRenderLoop({
   useEffect(() => {
     onDecodeErrorRef.current = onDecodeError
   }, [onDecodeError])
+  const onResyncRef = useRef(onResync)
+  useEffect(() => {
+    onResyncRef.current = onResync
+  }, [onResync])
   const onFirstFrameRef = useRef(onFirstFrame)
   useEffect(() => {
     onFirstFrameRef.current = onFirstFrame
@@ -99,6 +120,17 @@ export function useWebCodecsRenderLoop({
     if (!scheduler) return
     for (const frame of scheduler.clear()) frame.close()
   }, [])
+
+  /**
+   * 呈现时钟快照。
+   *
+   * 从 schedulerRef 读而不是从 state：调用方是每秒 50 次的音频投递路径，
+   * 任何一次重渲染都是白费。`clockSnapshot()` 自己会在 `clock === null` 时返回 null。
+   */
+  const getPresentationClock = useCallback(
+    () => schedulerRef.current?.clockSnapshot() ?? null,
+    []
+  )
 
   const reset = useCallback(() => {
     if (rafIdRef.current !== null) {
@@ -250,6 +282,9 @@ export function useWebCodecsRenderLoop({
       onError: (error: unknown) => {
         onDecodeErrorRef.current?.(error)
       },
+      onResync: (reason: DecoderResyncReason) => {
+        onResyncRef.current?.(reason)
+      },
     })
     decoderRef.current = decoder
     telemetry.attach(decoder)
@@ -268,5 +303,5 @@ export function useWebCodecsRenderLoop({
     }
   }, [enabled, restartKey, canvasRef, reset])
 
-  return { decoderRef, reset }
+  return { decoderRef, reset, getPresentationClock }
 }
