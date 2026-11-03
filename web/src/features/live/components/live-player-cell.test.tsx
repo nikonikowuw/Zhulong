@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   status: 'connected' as string,
   /** 是否支持 WebCodecs：false 代表局域网 HTTP（非安全上下文）。 */
   supportsWebCodecs: false,
+  /** 能力帧（`stream_info`）；null 模拟旧后端不发能力帧。 */
+  streamInfo: null as unknown,
 }))
 
 vi.mock('../hooks/use-stream-connection', () => ({
@@ -17,6 +19,7 @@ vi.mock('../hooks/use-stream-connection', () => ({
     errorMessage: null,
     stats: {},
     retry: vi.fn(),
+    streamInfo: mocks.streamInfo,
   }),
 }))
 
@@ -35,6 +38,7 @@ describe('LivePlayerCell 交互测试', () => {
   beforeEach(() => {
     mocks.status = 'connected'
     mocks.supportsWebCodecs = false
+    mocks.streamInfo = null
   })
 
   const dummyCamera: LiveCameraItem = {
@@ -139,5 +143,106 @@ describe('LivePlayerCell 交互测试', () => {
     expect(text).not.toContain('等待首帧渲染')
     expect(text).toContain('WebCodecs 需要安全上下文')
     expect(text).toContain('切换至 HTTPS')
+  })
+})
+
+/**
+ * 喇叭的能力门控。
+ *
+ * 两种置灰的语义完全不同，用户能做的事也不同：
+ *   - 该路无音频（`present=false` / 旧后端不发能力帧）→ 找设备管理员；
+ *   - 浏览器不支持该音频格式 → 换浏览器 / 上 HTTPS。
+ * 因此按钮必须 disabled，且 title/aria-label 要能说明原因。
+ */
+describe('LivePlayerCell 音频能力', () => {
+  const cameraCell: LiveCellState = {
+    cellId: 0,
+    cameraId: 'cam-audio',
+    cameraName: '带麦克风的枪机',
+    hasSubStream: true,
+    streamType: 'main',
+    isMuted: true,
+  }
+
+  function makeStreamInfo(present: boolean, codec = 'pcma') {
+    return {
+      type: 'stream_info' as const,
+      cameraId: 'cam-audio',
+      role: 'main',
+      v: 1,
+      audio: { present, codec, sampleRate: 8000, channels: 1, config: '' },
+    }
+  }
+
+  function renderCell(onSetMute = vi.fn()) {
+    return render(
+      <LivePlayerCell
+        cell={cameraCell}
+        isActive={false}
+        isMaximized={false}
+        onSelect={vi.fn()}
+        onClear={vi.fn()}
+        onToggleMaximize={vi.fn()}
+        onSetMute={onSetMute}
+        onSetStreamType={vi.fn()}
+      />
+    )
+  }
+
+  /** 找到喇叭按钮：底部控制岛里 title/aria-label 命中静音相关文案的那个。 */
+  function findMuteButton(container: HTMLElement): HTMLButtonElement | null {
+    const buttons = Array.from(container.querySelectorAll('button'))
+    return (
+      (buttons.find((button) => {
+        const label = `${button.getAttribute('title') ?? ''} ${button.getAttribute('aria-label') ?? ''}`
+        return (
+          label.includes('静音') ||
+          label.includes('开启声音') ||
+          label.includes('该路无音频') ||
+          label.includes('正在确认该路音频能力') ||
+          label.includes('浏览器不支持该音频格式')
+        )
+      }) as HTMLButtonElement | undefined) ?? null
+    )
+  }
+
+  it('present=false：喇叭 disabled 且提示「该路无音频」', async () => {
+    mocks.streamInfo = makeStreamInfo(false)
+    const { container } = await renderCell()
+
+    const button = findMuteButton(container)
+    expect(button).not.toBeNull()
+    expect(button?.disabled).toBe(true)
+    expect(button?.getAttribute('title')).toBe('该路无音频')
+  })
+
+  it('streamInfo=null（能力帧还没到 / 旧后端）：置灰但不报「无音频」', async () => {
+    // 「还不知道」与「确定没有」必须分开：能力帧在建连后几帧才到，
+    // 归成 noAudio 会让正常相机在首帧期间弹出一条设备故障。
+    mocks.streamInfo = null
+    const { container } = await renderCell()
+
+    const button = findMuteButton(container)
+    expect(button?.disabled).toBe(true)
+    expect(button?.getAttribute('title')).toBe('正在确认该路音频能力')
+  })
+
+  it('present=true：喇叭可用，title 为「开启声音」', async () => {
+    mocks.streamInfo = makeStreamInfo(true)
+    const { container } = await renderCell()
+
+    const button = findMuteButton(container)
+    expect(button?.disabled).toBe(false)
+    expect(button?.getAttribute('title')).toBe('开启声音')
+  })
+
+  it('disabled 的喇叭点击不产生焦点（onSetMute 不被调用）', async () => {
+    mocks.streamInfo = makeStreamInfo(false)
+    const onSetMute = vi.fn()
+    const { container } = await renderCell(onSetMute)
+
+    const button = findMuteButton(container)
+    button?.click()
+    expect(onSetMute).not.toHaveBeenCalled()
   })
 })

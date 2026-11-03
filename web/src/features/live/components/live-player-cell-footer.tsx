@@ -11,6 +11,10 @@ interface LivePlayerCellFooterProps {
   isMicro: boolean
   isMaximized: boolean
   useMockCanvas: boolean
+  /** 喇叭置灰（该路无音频 / 浏览器不支持该音频格式）。 */
+  audioDisabled?: boolean
+  /** 置灰时展示的说明文案（作为 title，禁用状态下用户也能知道原因）。 */
+  audioDisabledReason?: string | null
   onScreenshot: () => void
   onToggleMute: () => void
   onToggleMaximize: () => void
@@ -22,6 +26,8 @@ export function LivePlayerCellFooter({
   isMicro,
   isMaximized,
   useMockCanvas,
+  audioDisabled = false,
+  audioDisabledReason = null,
   onScreenshot,
   onToggleMute,
   onToggleMaximize,
@@ -65,10 +71,28 @@ export function LivePlayerCellFooter({
         <Button
           variant='ghost'
           size='icon'
-          title={cell.isMuted ? t('unmute') : t('mute')}
+          // 置灰时文案优先：禁用状态的按钮拿不到 hover，title 是用户唯一能看到原因的地方。
+          title={
+            audioDisabled
+              ? (audioDisabledReason ?? t('noAudio'))
+              : cell.isMuted
+                ? t('unmute')
+                : t('mute')
+          }
+          aria-label={
+            audioDisabled
+              ? (audioDisabledReason ?? t('noAudio'))
+              : cell.isMuted
+                ? t('unmute')
+                : t('mute')
+          }
+          aria-pressed={!cell.isMuted}
+          disabled={audioDisabled}
           className={cn(
             isMicro ? 'h-5 w-5' : 'h-6 w-6',
-            'text-white/75 hover:bg-white/15 hover:text-white'
+            'text-white/75 hover:bg-white/15 hover:text-white',
+            audioDisabled &&
+              'cursor-not-allowed opacity-40 hover:bg-transparent'
           )}
           onClick={(e) => {
             e.stopPropagation()

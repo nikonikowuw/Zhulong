@@ -14,7 +14,11 @@ import {
 } from '../types'
 import { LiveFaceOverlay } from './live-face-overlay'
 import { LivePersonOverlay } from './live-person-overlay'
-import { LivePlayer, type LivePlayerRef } from './live-player'
+import {
+  LivePlayer,
+  type LivePlayerAudioStatus,
+  type LivePlayerRef,
+} from './live-player'
 import { LivePlayerCellFooter } from './live-player-cell-footer'
 import { LivePlayerCellHeader } from './live-player-cell-header'
 import { LivePlayerEmptyCell } from './live-player-empty-cell'
@@ -36,6 +40,8 @@ interface LivePlayerCellProps {
   onSetMute: (isMuted: boolean) => void
   onSetStreamType: (streamType: StreamType) => void
   onDropCamera?: (camera: LiveCameraItem) => void
+  /** 全局音量 0..1，只在解禁后、有音的格子上生效。 */
+  volume?: number
 }
 
 function getActiveCellBorderClass(
@@ -63,6 +69,7 @@ export const LivePlayerCell = memo(function LivePlayerCell({
   onSetMute,
   onSetStreamType,
   onDropCamera,
+  volume = 1,
 }: LivePlayerCellProps): React.JSX.Element {
   const { t } = useTranslation('live')
   const [useMockCanvas, setUseMockCanvas] = useState(false)
@@ -92,19 +99,58 @@ export const LivePlayerCell = memo(function LivePlayerCell({
     playerRef.current?.decode(packet)
   }, [])
 
+  /**
+   * 音频可播性（由 `LivePlayer` 回报 + 能力帧共同决定）。
+   *
+   * 声明在 `cellSourceKey` 那条复位 effect 之前：换机 / 切码流时它必须一起复位，
+   * 否则新格子会顶着上一路流的「无音频」结论，喇叭一直灰着。
+   */
+  const [audioStatus, setAudioStatus] = useState<LivePlayerAudioStatus>('idle')
+
   // 切换机位或码流即视为重新起播，等待遮罩重新出现
   const handleFirstFrame = useCallback(() => setHasFirstFrame(true), [])
   const cellSourceKey = `${cell.cameraId ?? ''}:${cell.streamType}`
   useEffect(() => {
     setHasFirstFrame(false)
+    // 换机 / 切码流：音频能力属于上一条流，音频降级/无音频的状态也要跟着复位。
+    setAudioStatus('idle')
   }, [cellSourceKey])
 
-  const { status, errorMessage, stats, retry } = useStreamConnection({
-    cameraId: cell.cameraId,
-    streamType: cell.streamType,
-    enabled: !useMockCanvas && Boolean(cell.cameraId),
-    onPacket: handlePacket,
-  })
+  const { status, errorMessage, stats, retry, streamInfo } =
+    useStreamConnection({
+      cameraId: cell.cameraId,
+      streamType: cell.streamType,
+      enabled: !useMockCanvas && Boolean(cell.cameraId),
+      onPacket: handlePacket,
+    })
+
+  /**
+   * 本格的音频可播性。
+   *
+   * 直接就近取 `streamInfo`（同一个 hook 就在本组件里调），**不**从 `live-grid` /
+   * 日志层一路穿 16 个格子：`streamInfo` 是每条流自己的属性，穿层只会在中间某一层
+   * 漏传时静默退化成「全都不出声」。
+   *
+   * 两种置灰：
+   *   - `streamInfo == null`（旧后端不发能力帧 / 还没收到）→ `audioChecking`（**尚不确定**）；
+   *   - `audio.present === false` → `noAudio`（已确定性：这路就是没声音）；
+   *   - 有音轨但格式浏览器不支持（解码器降级）→ `audioUnsupported`。
+   *
+   * ⚠️ 「还不知道」和「确定没有」必须是两种文案：
+   * 能力帧只在建连时下发一次，从点开到收到有几帧的延迟。若把它归成 `noAudio`，
+   * 一个**完全正常**的相机在首帧期间就会弹「该路无音频」，用户看到的是设备故障。
+   */
+  const capabilityAudioAvailable = streamInfo?.audio.present === true
+  const audioDisabledReason: string | null = capabilityAudioAvailable
+    ? audioStatus === 'unsupported'
+      ? t('audioUnsupported')
+      : audioStatus === 'no_audio'
+        ? t('noAudio')
+        : null
+    : streamInfo == null
+      ? t('audioChecking')
+      : t('noAudio')
+  const audioDisabled = audioDisabledReason !== null
 
   /**
    * 等待遮罩的文案；null 表示不需要遮罩。
@@ -145,6 +191,9 @@ export const LivePlayerCell = memo(function LivePlayerCell({
   }
 
   const handleToggleMute = () => {
+    // 无音频的格子：按钮是 disabled，但在 disabled 属性被间隙性绕过（键盘/title 点击）
+    // 的情况下也不应该产生焦点 —— 焦点一旦落地，下一格再点解禁就会被互斥逻辑挤掉。
+    if (audioDisabled) return
     const nextMute = !cell.isMuted
     onSetMute(nextMute)
     playerRef.current?.setMute(nextMute)
@@ -249,8 +298,12 @@ export const LivePlayerCell = memo(function LivePlayerCell({
           <LivePlayer
             ref={playerRef}
             cameraId={cell.cameraId}
+            streamType={cell.streamType}
             showAIOverlay={showAIOverlay}
             isMuted={cell.isMuted}
+            hasAudio={capabilityAudioAvailable}
+            volume={volume}
+            onAudioStatusChange={setAudioStatus}
             onStatsChange={handlePlayerStatsChange}
             onFirstFrame={handleFirstFrame}
           />
@@ -313,6 +366,8 @@ export const LivePlayerCell = memo(function LivePlayerCell({
         onScreenshot={handleScreenshot}
         onToggleMute={handleToggleMute}
         onToggleMaximize={onToggleMaximize}
+        audioDisabledReason={audioDisabledReason}
+        audioDisabled={audioDisabled}
       />
     </div>
   )

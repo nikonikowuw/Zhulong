@@ -7,6 +7,10 @@ import {
   useCallback,
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import {
+  useLiveAudio,
+  type LivePlayerAudioStatus,
+} from '../hooks/use-live-audio'
 import { useWebCodecsRenderLoop } from '../hooks/use-webcodecs-render-loop'
 import { AIResultService } from '../services/ai-result-service'
 import { drawFaceOverlay } from '../services/face-overlay-renderer'
@@ -19,10 +23,14 @@ import {
 import {
   type FaceSubItem,
   type PersonItem,
+  type StreamType,
   type VehicleItem,
   type ParsedPacket,
   type StreamStats,
 } from '../types'
+
+/** 音频状态类型转发（实现在 `use-live-audio`，组件只做展示）。 */
+export type { LivePlayerAudioStatus }
 
 export interface LivePlayerRef {
   decode: (packet: ParsedPacket) => void
@@ -37,7 +45,20 @@ export interface LivePlayerProps {
   onError?: (error: string) => void
   className?: string
   cameraId?: string | null
+  /** 当前播放的码流（决定音频 WS 的 role）。缺省按主流。 */
+  streamType?: StreamType
   showAIOverlay?: boolean
+  /**
+   * 该路流是否有可播的音频。
+   *
+   * `false` 时**不建立任何音频连接**（不建 WS、不建 AudioContext）——
+   * 这是能力帧说"这路没有声音"时唯一正确的行为。默认 `true` 保持对旧调用的兼容。
+   */
+  hasAudio?: boolean
+  /** 出声音量 0..1（不持久化）。只在解禁时读一次 + 变化时实时下发。 */
+  volume?: number
+  /** 音频状态变化（供格子的喇叭按钮置灰 / 换文案）。 */
+  onAudioStatusChange?: (status: LivePlayerAudioStatus) => void
   /** 首个画面画到 canvas 时回调一次，供上层收起「等待首帧」遮罩。 */
   onFirstFrame?: () => void
 }
@@ -49,12 +70,16 @@ export interface LivePlayerProps {
 export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
   function LivePlayer(
     {
-      isMuted: _isMuted = true,
+      isMuted = true,
       onStatsChange,
       onError,
       className = '',
       cameraId,
+      streamType = 'main',
       showAIOverlay = true,
+      hasAudio = true,
+      volume = 1,
+      onAudioStatusChange,
       onFirstFrame,
     },
     ref
@@ -76,6 +101,26 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
     onStatsChangeRef.current = onStatsChange
     const onErrorRef = useRef(onError)
     onErrorRef.current = onError
+    const onAudioStatusChangeRef = useRef(onAudioStatusChange)
+    onAudioStatusChangeRef.current = onAudioStatusChange
+
+    /**
+     * 静音状态：prop 是权威（`useLiveGrid.cells[].isMuted` 是唯一真相源），
+     * 命令式 `setMute` 只在同一个值上镜像。
+     *
+     * prop 变化时在渲染期同步过来（React 官方推荐的「用 prop 调整 state」写法），
+     * 这样 `muteAll()` 这种从外部一次性置全静音的路径也能生效 —— 若只保留一个
+     * 「override 优先」的内部值，`muteAll` 之后 override 仍为 false，声音会继续响。
+     */
+    const [muted, setMuted] = useState(isMuted)
+    const [lastMutedProp, setLastMutedProp] = useState(isMuted)
+    if (lastMutedProp !== isMuted) {
+      setLastMutedProp(isMuted)
+      setMuted(isMuted)
+    }
+
+    /** `useLiveAudio` 的 `flush` 经 ref 暴露，避免进渲染循环的依赖数组。 */
+    const flushAudioRef = useRef<() => void>(() => {})
 
     const redrawOverlay = useCallback(() => {
       if (!showAIOverlay) return
@@ -144,7 +189,11 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
       [redrawOverlay]
     )
 
-    const { decoderRef, reset: resetRenderLoop } = useWebCodecsRenderLoop({
+    const {
+      decoderRef,
+      reset: resetRenderLoop,
+      getPresentationClock,
+    } = useWebCodecsRenderLoop({
       enabled: isSupported,
       canvasRef,
       traceId: cameraId ?? 'live-player',
@@ -155,6 +204,11 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
         )
       },
       onFirstFrame,
+      // 画面跳了，声音必须跟着重锚：丢掉环形缓冲里按旧时间轴排期的样本。
+      // 走 ref 中的 `flush`，不进依赖数组（`onResync` 每秒可能触发多次）。
+      onResync: () => {
+        flushAudioRef.current()
+      },
       // ⚠️ 不要用 showAIOverlay 当 restartKey。
       //
       // restartKey 变化会销毁并重建解码器，而重建后必须等下一个 IDR 才能出画
@@ -164,6 +218,23 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
       // 也会触发一次重建，这正是「刚开始播放总卡几帧」的来源之一。
       restartKey: '',
     })
+
+    /**
+     * 音频通道生命周期交给 `useLiveAudio`：**只有 `!muted && hasAudio && cameraId`
+     * 时才建任何东西**（不点喇叭就不建 WS、不建 AudioContext）。
+     */
+    const { flush: flushAudio } = useLiveAudio({
+      cameraId,
+      streamType,
+      hasAudio,
+      muted,
+      volume,
+      getClock: getPresentationClock,
+      onStatusChange: onAudioStatusChange,
+    })
+
+    // 渲染循环的 `onResync` 是创建时代入的闭包：经 ref 拿到最新的 `flush`。
+    flushAudioRef.current = flushAudio
 
     // 订阅 AI 推理结果事件流（零 React 重渲染，直接驱动 Canvas 2D）
     useEffect(() => {
@@ -277,15 +348,19 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
             onErrorRef.current?.('画面抓拍截图失败')
           }
         },
-        setMute: (_mute: boolean) => {
-          // 当前 ZLM2 视频流为纯图像流，预留音频轨道支持
+        setMute: (next: boolean) => {
+          // 保留命令式接口（测试与 mock 在用）：只镜像到内部状态，
+          // 真实的建连/断连全部由 `muted` 驱动的那条 effect 决定。
+          // 无音频（`hasAudio === false`）时不建任何连接，因此 setMute 就是 no-op。
+          if (!hasAudio) return
+          setMuted(next)
         },
         reset: () => {
           resetRenderLoop()
           lastResolutionRef.current = null
         },
       }),
-      [showAIOverlay, resetRenderLoop, decoderRef]
+      [showAIOverlay, resetRenderLoop, decoderRef, hasAudio]
     )
 
     if (!isSupported) {

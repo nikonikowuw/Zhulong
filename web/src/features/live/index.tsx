@@ -48,6 +48,8 @@ export function Live(): React.JSX.Element {
     setCellMute,
     setCellStreamType,
     muteAll,
+    volume,
+    setVolume,
   } = useLiveGrid()
 
   // 绑定键盘快捷键守卫 (1, 4, 9, Esc)
@@ -91,6 +93,8 @@ export function Live(): React.JSX.Element {
             onMuteAll={muteAll}
             onClearAll={() => setIsClearConfirmOpen(true)}
             activeStreamsCount={activeStreamsCount}
+            volume={volume}
+            onVolumeChange={setVolume}
             showAIOverlay={showAIOverlay}
             onToggleAIOverlay={() => setShowAIOverlay(!showAIOverlay)}
             isFeedOpen={isFeedOpen}
@@ -125,6 +129,7 @@ export function Live(): React.JSX.Element {
               onToggleMaximizeCell={toggleMaximizeCell}
               onSetCellMute={setCellMute}
               onSetCellStreamType={setCellStreamType}
+              volume={volume}
               onDropCameraToCell={(cellId, cam) => {
                 assignCamera(cellId, cam, 'main')
                 setActiveCellId(cellId)

@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import { Slider } from '@/components/ui/slider'
 import {
   Tooltip,
   TooltipContent,
@@ -31,6 +32,9 @@ interface LiveToolbarProps {
   onMuteAll: () => void
   onClearAll: () => void
   activeStreamsCount: number
+  /** 出声音量 0..1（不持久化）。 */
+  volume?: number
+  onVolumeChange?: (volume: number) => void
   showAIOverlay?: boolean
   onToggleAIOverlay?: () => void
   isFeedOpen?: boolean
@@ -55,6 +59,8 @@ export function LiveToolbar({
   onMuteAll,
   onClearAll,
   activeStreamsCount,
+  volume = 1,
+  onVolumeChange,
   showAIOverlay = true,
   onToggleAIOverlay,
   isFeedOpen = false,
@@ -214,6 +220,29 @@ export function LiveToolbar({
             </TooltipTrigger>
             <TooltipContent side='bottom'>{t('muteAll')}</TooltipContent>
           </Tooltip>
+
+          {/* 出声音量：只在某一路解禁后才有实际效果，因此不做额外置灰 */}
+          {onVolumeChange && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className='flex h-8 w-24 items-center px-1'>
+                  <Slider
+                    aria-label={t('volume')}
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={[Math.round(volume * 100)]}
+                    onValueChange={(next) =>
+                      onVolumeChange((next[0] ?? 0) / 100)
+                    }
+                  />
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side='bottom'>
+                {t('volume')} {Math.round(volume * 100)}%
+              </TooltipContent>
+            </Tooltip>
+          )}
 
           {/* 清空所有窗口 */}
           <Tooltip>

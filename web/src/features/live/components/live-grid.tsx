@@ -26,6 +26,7 @@ interface LiveGridCellItemProps {
   onSetCellMute: (cellId: number, isMuted: boolean) => void
   onSetCellStreamType: (cellId: number, streamType: StreamType) => void
   onDropCameraToCell?: (cellId: number, camera: LiveCameraItem) => void
+  volume: number
 }
 
 /**
@@ -45,6 +46,7 @@ const LiveGridCellItem = memo(function LiveGridCellItem({
   onSetCellMute,
   onSetCellStreamType,
   onDropCameraToCell,
+  volume,
 }: LiveGridCellItemProps): React.JSX.Element {
   const handleSelect = useCallback(
     () => onSelectCell(cell.cellId),
@@ -84,6 +86,7 @@ const LiveGridCellItem = memo(function LiveGridCellItem({
       onSetMute={handleSetMute}
       onSetStreamType={handleSetStreamType}
       onDropCamera={handleDropCamera}
+      volume={volume}
     />
   )
 })
@@ -100,6 +103,8 @@ interface LiveGridProps {
   onSetCellMute: (cellId: number, isMuted: boolean) => void
   onSetCellStreamType: (cellId: number, streamType: StreamType) => void
   onDropCameraToCell?: (cellId: number, camera: LiveCameraItem) => void
+  /** 出声音量 0..1，透传给真正出声的那一格。 */
+  volume?: number
 }
 
 export function LiveGrid({
@@ -114,6 +119,7 @@ export function LiveGrid({
   onSetCellMute,
   onSetCellStreamType,
   onDropCameraToCell,
+  volume = 1,
 }: LiveGridProps): React.JSX.Element {
   // 单窗最大化展示
   if (maximizedCellId !== null) {
@@ -132,6 +138,7 @@ export function LiveGrid({
           onSetMute={(muted) => onSetCellMute(cell.cellId, muted)}
           onSetStreamType={(type) => onSetCellStreamType(cell.cellId, type)}
           onDropCamera={(cam) => onDropCameraToCell?.(cell.cellId, cam)}
+          volume={volume}
         />
       </div>
     )
@@ -159,6 +166,10 @@ export function LiveGrid({
               onSetCellMute={onSetCellMute}
               onSetCellStreamType={onSetCellStreamType}
               onDropCameraToCell={onDropCameraToCell}
+              // 只有**正在出声**的格（`isMuted === false`，且全局最多一个）需要音量。
+              // 其它格固定传 1：`LiveGridCellItem` 是 memo 的，音量变化时（拖滑杆）
+              // 这样不会把 16 个格子的 `LivePlayer` 全部重渲染一遍。
+              volume={cell.isMuted ? 1 : volume}
             />
           </div>
         ))}
