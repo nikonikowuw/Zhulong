@@ -31,10 +31,11 @@ export function SettingsSystem() {
           defaultValue:
             '实时监测边缘主机 CPU、内存、磁盘存储、网络速率以及 NPU 异构加速算力与核心温度趋势。',
         })}
+        className='w-full max-w-none'
       >
         <div className='space-y-6'>
           <Skeleton className='h-16 w-full rounded-xl' />
-          <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5'>
+          <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5'>
             {Array.from({ length: 5 }).map((_, i) => (
               <Skeleton key={i} className='h-32 rounded-xl' />
             ))}
@@ -54,6 +55,7 @@ export function SettingsSystem() {
           defaultValue:
             '实时监测边缘主机 CPU、内存、磁盘存储、网络速率以及 NPU 异构加速算力与核心温度趋势。',
         })}
+        className='w-full max-w-none'
       >
         <div className='flex flex-col items-center justify-center gap-3 rounded-xl border border-destructive/20 bg-destructive/5 p-12 text-center'>
           <AlertCircle className='size-8 text-destructive' />
@@ -83,6 +85,7 @@ export function SettingsSystem() {
         defaultValue:
           '实时监测边缘主机 CPU、内存、磁盘存储、网络速率以及 NPU 异构加速算力与核心温度趋势。',
       })}
+      className='w-full max-w-none'
     >
       <div className='space-y-6'>
         {/* 1. Host identity & live refresh bar */}

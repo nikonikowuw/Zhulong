@@ -8,7 +8,7 @@
     "osArch": "系统架构",
     "kernel": "内核版本",
     "uptime": "开机时长",
-    "loadAvg": "系统平均负载 (1/5/15m)",
+    "loadAvg": "系统负载 (1/5/15m)",
     "refresh": "立即刷新",
     "refreshing": "刷新中...",
     "autoRefreshing": "自动刷新中 (2.5s)",

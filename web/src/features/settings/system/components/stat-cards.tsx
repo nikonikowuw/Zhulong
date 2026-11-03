@@ -47,25 +47,25 @@ export function StatCards({
     storage.find((s) => s.mountPoint === '/') || storage[0] || null
 
   return (
-    <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5'>
+    <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5'>
       {/* 1. CPU Card */}
       <Card className='gap-3 p-4'>
-        <CardHeader className='flex-row items-center justify-between space-y-0 p-0'>
-          <CardTitle className='text-sm font-medium text-muted-foreground'>
+        <CardHeader className='flex-row items-center justify-between gap-2 space-y-0 p-0'>
+          <CardTitle className='truncate text-sm font-medium text-muted-foreground'>
             {t('cards.cpu', { defaultValue: 'CPU Utilization' })}
           </CardTitle>
-          <Cpu className='size-4 text-muted-foreground' />
+          <Cpu className='size-4 shrink-0 text-muted-foreground' />
         </CardHeader>
         <CardContent className='space-y-2 p-0'>
-          <div className='flex items-baseline justify-between'>
+          <div className='flex items-baseline justify-between gap-2'>
             <span
-              className={`font-mono text-2xl font-bold tracking-tight ${getUsageStatusColor(
+              className={`truncate font-mono text-2xl font-bold tracking-tight ${getUsageStatusColor(
                 cpu.usagePercent
               )}`}
             >
               {cpu.usagePercent.toFixed(1)}%
             </span>
-            <span className='text-xs text-muted-foreground'>
+            <span className='shrink-0 font-mono text-xs text-muted-foreground'>
               {cpu.temperature > 0 ? `${cpu.temperature.toFixed(1)}°C` : ''}
             </span>
           </div>
@@ -123,22 +123,22 @@ export function StatCards({
 
       {/* 2. Memory Card */}
       <Card className='gap-3 p-4'>
-        <CardHeader className='flex-row items-center justify-between space-y-0 p-0'>
-          <CardTitle className='text-sm font-medium text-muted-foreground'>
+        <CardHeader className='flex-row items-center justify-between gap-2 space-y-0 p-0'>
+          <CardTitle className='truncate text-sm font-medium text-muted-foreground'>
             {t('cards.memory', { defaultValue: 'Physical RAM' })}
           </CardTitle>
-          <MemoryStick className='size-4 text-muted-foreground' />
+          <MemoryStick className='size-4 shrink-0 text-muted-foreground' />
         </CardHeader>
         <CardContent className='space-y-2 p-0'>
-          <div className='flex items-baseline justify-between'>
+          <div className='flex items-baseline justify-between gap-2'>
             <span
-              className={`font-mono text-2xl font-bold tracking-tight ${getUsageStatusColor(
+              className={`truncate font-mono text-2xl font-bold tracking-tight ${getUsageStatusColor(
                 memory.usedPercent
               )}`}
             >
               {memory.usedPercent.toFixed(1)}%
             </span>
-            <span className='text-xs text-muted-foreground'>
+            <span className='shrink-0 font-mono text-xs text-muted-foreground'>
               {formatBytes(memory.usedBytes)}
             </span>
           </div>
@@ -173,24 +173,24 @@ export function StatCards({
 
       {/* 3. NPU Card */}
       <Card className='gap-3 p-4'>
-        <CardHeader className='flex-row items-center justify-between space-y-0 p-0'>
-          <CardTitle className='text-sm font-medium text-muted-foreground'>
+        <CardHeader className='flex-row items-center justify-between gap-2 space-y-0 p-0'>
+          <CardTitle className='truncate text-sm font-medium text-muted-foreground'>
             {t('cards.npu', { defaultValue: 'NPU Coprocessor' })}
           </CardTitle>
-          <Zap className='size-4 text-muted-foreground' />
+          <Zap className='size-4 shrink-0 text-muted-foreground' />
         </CardHeader>
         <CardContent className='space-y-2 p-0'>
-          <div className='flex items-baseline justify-between'>
+          <div className='flex items-baseline justify-between gap-2'>
             {npu.supported ? (
               <>
                 <span
-                  className={`font-mono text-2xl font-bold tracking-tight ${getUsageStatusColor(
+                  className={`truncate font-mono text-2xl font-bold tracking-tight ${getUsageStatusColor(
                     npu.loadPercent
                   )}`}
                 >
                   {npu.loadPercent.toFixed(1)}%
                 </span>
-                <span className='text-xs text-muted-foreground'>
+                <span className='shrink-0 font-mono text-xs text-muted-foreground'>
                   {npu.temperature > 0 ? `${npu.temperature.toFixed(1)}°C` : ''}
                 </span>
               </>
@@ -268,18 +268,18 @@ export function StatCards({
 
       {/* 4. Network Card */}
       <Card className='gap-3 p-4'>
-        <CardHeader className='flex-row items-center justify-between space-y-0 p-0'>
-          <CardTitle className='text-sm font-medium text-muted-foreground'>
+        <CardHeader className='flex-row items-center justify-between gap-2 space-y-0 p-0'>
+          <CardTitle className='truncate text-sm font-medium text-muted-foreground'>
             {t('cards.network', { defaultValue: 'Network Rates' })}
           </CardTitle>
-          <Network className='size-4 text-muted-foreground' />
+          <Network className='size-4 shrink-0 text-muted-foreground' />
         </CardHeader>
         <CardContent className='space-y-2 p-0'>
-          <div className='flex items-baseline justify-between'>
-            <span className='font-mono text-2xl font-bold tracking-tight text-primary'>
+          <div className='flex items-baseline justify-between gap-2'>
+            <span className='truncate font-mono text-2xl font-bold tracking-tight text-primary'>
               {formatRate(totalRxRate)}
             </span>
-            <span className='text-xs text-muted-foreground'>
+            <span className='shrink-0 font-mono text-xs text-muted-foreground'>
               ↑ {formatRate(totalTxRate)}
             </span>
           </div>
@@ -332,22 +332,22 @@ export function StatCards({
 
       {/* 5. Storage Card */}
       <Card className='gap-3 p-4'>
-        <CardHeader className='flex-row items-center justify-between space-y-0 p-0'>
-          <CardTitle className='text-sm font-medium text-muted-foreground'>
+        <CardHeader className='flex-row items-center justify-between gap-2 space-y-0 p-0'>
+          <CardTitle className='truncate text-sm font-medium text-muted-foreground'>
             {t('cards.storage', { defaultValue: 'Primary Storage' })}
           </CardTitle>
-          <HardDrive className='size-4 text-muted-foreground' />
+          <HardDrive className='size-4 shrink-0 text-muted-foreground' />
         </CardHeader>
         <CardContent className='space-y-2 p-0'>
-          <div className='flex items-baseline justify-between'>
+          <div className='flex items-baseline justify-between gap-2'>
             <span
-              className={`font-mono text-2xl font-bold tracking-tight ${getUsageStatusColor(
+              className={`truncate font-mono text-2xl font-bold tracking-tight ${getUsageStatusColor(
                 rootStorage?.usedPercent ?? 0
               )}`}
             >
               {(rootStorage?.usedPercent ?? 0).toFixed(1)}%
             </span>
-            <span className='text-xs text-muted-foreground'>
+            <span className='shrink-0 font-mono text-xs text-muted-foreground'>
               {rootStorage ? formatBytes(rootStorage.usedBytes) : '-'}
             </span>
           </div>

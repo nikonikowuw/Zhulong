@@ -33,12 +33,12 @@ export function SystemHeader({
   return (
     <div className='flex flex-col gap-4 rounded-xl border bg-card/60 p-4 shadow-xs backdrop-blur-xs md:flex-row md:items-center md:justify-between'>
       <div className='flex flex-wrap items-center gap-x-6 gap-y-2 text-sm'>
-        <div className='flex items-center gap-2 font-medium'>
+        <div className='flex shrink-0 items-center gap-2 font-medium'>
           <Server className='size-4 text-primary' />
           <span>{host.hostname || 'Edge-Host'}</span>
         </div>
 
-        <div className='flex items-center gap-1.5 text-muted-foreground'>
+        <div className='flex shrink-0 items-center gap-1.5 text-muted-foreground'>
           <Cpu className='size-3.5' />
           <span>
             {host.os}/{host.arch}
@@ -48,7 +48,7 @@ export function SystemHeader({
           </Badge>
         </div>
 
-        <div className='flex items-center gap-1.5 text-muted-foreground'>
+        <div className='flex shrink-0 items-center gap-1.5 text-muted-foreground'>
           <Clock className='size-3.5' />
           <span>{t('header.uptime', { defaultValue: 'Uptime' })}:</span>
           <span className='font-mono font-medium text-foreground'>
@@ -56,17 +56,19 @@ export function SystemHeader({
           </span>
         </div>
 
-        <div className='flex items-center gap-1.5 text-muted-foreground'>
+        <div className='flex shrink-0 items-center gap-1.5 text-muted-foreground'>
           <Activity className='size-3.5' />
-          <span>{t('header.loadAvg', { defaultValue: 'Load Avg' })}:</span>
-          <span className='font-mono text-xs'>
+          <span className='whitespace-nowrap'>
+            {t('header.loadAvg', { defaultValue: 'Load Avg' })}:
+          </span>
+          <span className='font-mono text-xs text-foreground'>
             {host.loadAvg[0]?.toFixed(2)} / {host.loadAvg[1]?.toFixed(2)} /{' '}
             {host.loadAvg[2]?.toFixed(2)}
           </span>
         </div>
       </div>
 
-      <div className='flex items-center gap-2'>
+      <div className='flex shrink-0 items-center gap-2 self-end md:self-auto'>
         <Button
           variant='ghost'
           size='sm'
