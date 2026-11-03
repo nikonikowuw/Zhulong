@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -13,13 +14,14 @@ import { useSystemHardware } from './hooks/use-system'
 
 export function SettingsSystem() {
   const { t } = useTranslation('system')
+  const [isPaused, setIsPaused] = useState(false)
   const {
     data: hardware,
     isLoading,
     isRefetching,
     error,
     refetch,
-  } = useSystemHardware()
+  } = useSystemHardware({ isPaused })
 
   if (isLoading) {
     return (
@@ -87,6 +89,8 @@ export function SettingsSystem() {
         <SystemHeader
           host={hardware.host}
           isRefetching={isRefetching}
+          isPaused={isPaused}
+          onTogglePause={() => setIsPaused((prev) => !prev)}
           onRefresh={() => void refetch()}
         />
 
@@ -100,7 +104,10 @@ export function SettingsSystem() {
         />
 
         {/* 3. Short-term Trend Charts (Recharts) */}
-        <TrendCharts history={hardware.history} />
+        <TrendCharts
+          history={hardware.history}
+          npuSupported={hardware.heterogeneous.npu.supported}
+        />
 
         {/* 4. Hardware Detail Tables (Mounts & Network) */}
         <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>

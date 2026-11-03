@@ -11,7 +11,10 @@
     "loadAvg": "系統平均負載 (1/5/15m)",
     "refresh": "立即重新整理",
     "refreshing": "重新整理中...",
-    "autoRefreshing": "自動重新整理中 (2.5s)"
+    "autoRefreshing": "自動重新整理中 (2.5s)",
+    "paused": "已暫停重新整理",
+    "pause": "暫停自動重新整理",
+    "resume": "恢復自動重新整理"
   },
   "cards": {
     "cpu": "CPU 使用率",

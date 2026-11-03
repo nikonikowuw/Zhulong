@@ -95,7 +95,14 @@ export function StorageTable({ storage }: StorageTableProps) {
                   </TableCell>
                   <TableCell>
                     <div className='flex items-center gap-2'>
-                      <div className='h-2 w-24 overflow-hidden rounded-full bg-muted'>
+                      <div
+                        role='progressbar'
+                        aria-valuenow={m.usedPercent}
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-label={m.mountPoint}
+                        className='h-2 w-24 overflow-hidden rounded-full bg-muted'
+                      >
                         <div
                           className={`h-full transition-all duration-500 ${getProgressIndicatorClass(
                             m.usedPercent

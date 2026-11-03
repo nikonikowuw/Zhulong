@@ -19,9 +19,13 @@ import { formatRate } from '../utils/format'
 
 interface TrendChartsProps {
   history: HardwareHistoryPoint[]
+  npuSupported?: boolean
 }
 
-export function TrendCharts({ history }: TrendChartsProps) {
+export function TrendCharts({
+  history,
+  npuSupported = true,
+}: TrendChartsProps) {
   const { t } = useTranslation('system')
 
   const chartData = useMemo(() => {
@@ -129,15 +133,17 @@ export function TrendCharts({ history }: TrendChartsProps) {
                       dot={false}
                       isAnimationActive={false}
                     />
-                    <Line
-                      type='monotone'
-                      dataKey='npu'
-                      name={t('charts.npuLoad', { defaultValue: 'NPU Load' })}
-                      stroke='#10b981'
-                      strokeWidth={2}
-                      dot={false}
-                      isAnimationActive={false}
-                    />
+                    {npuSupported && (
+                      <Line
+                        type='monotone'
+                        dataKey='npu'
+                        name={t('charts.npuLoad', { defaultValue: 'NPU Load' })}
+                        stroke='#10b981'
+                        strokeWidth={2}
+                        dot={false}
+                        isAnimationActive={false}
+                      />
+                    )}
                   </LineChart>
                 </ResponsiveContainer>
               </TabsContent>

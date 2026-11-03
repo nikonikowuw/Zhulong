@@ -3,11 +3,17 @@ import { systemApi } from '../api/system-api'
 
 export const SYSTEM_HARDWARE_QUERY_KEY = ['system', 'hardware']
 
-export function useSystemHardware() {
+export interface UseSystemHardwareOptions {
+  isPaused?: boolean
+}
+
+export function useSystemHardware(options: UseSystemHardwareOptions = {}) {
+  const { isPaused = false } = options
+
   return useQuery({
     queryKey: SYSTEM_HARDWARE_QUERY_KEY,
     queryFn: () => systemApi.getHardware(),
-    refetchInterval: 2500,
+    refetchInterval: isPaused ? false : 2500,
     staleTime: 1000,
   })
 }

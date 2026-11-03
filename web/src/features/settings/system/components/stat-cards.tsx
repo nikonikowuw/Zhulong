@@ -70,7 +70,14 @@ export function StatCards({
             </span>
           </div>
 
-          <div className='h-2 w-full overflow-hidden rounded-full bg-muted'>
+          <div
+            role='progressbar'
+            aria-valuenow={cpu.usagePercent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={t('cards.cpu', { defaultValue: 'CPU Utilization' })}
+            className='h-2 w-full overflow-hidden rounded-full bg-muted'
+          >
             <div
               className={`h-full transition-all duration-500 ${getProgressIndicatorClass(
                 cpu.usagePercent
@@ -80,6 +87,29 @@ export function StatCards({
               }}
             />
           </div>
+
+          {cpu.coreUsages && cpu.coreUsages.length > 1 && (
+            <div
+              className='flex items-center gap-1 pt-0.5'
+              title={`Cores: ${cpu.coreUsages.map((u, i) => `#${i}: ${u.toFixed(0)}%`).join(' | ')}`}
+            >
+              {cpu.coreUsages.map((usage, idx) => (
+                <div
+                  key={idx}
+                  className='h-1.5 flex-1 overflow-hidden rounded-full bg-muted/60'
+                >
+                  <div
+                    className={`h-full transition-all duration-300 ${getProgressIndicatorClass(
+                      usage
+                    )}`}
+                    style={{
+                      width: `${Math.min(100, Math.max(0, usage))}%`,
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
 
           <CardDescription className='truncate text-xs'>
             {t('cards.cpuDesc', {
@@ -113,7 +143,14 @@ export function StatCards({
             </span>
           </div>
 
-          <div className='h-2 w-full overflow-hidden rounded-full bg-muted'>
+          <div
+            role='progressbar'
+            aria-valuenow={memory.usedPercent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={t('cards.memory', { defaultValue: 'Physical RAM' })}
+            className='h-2 w-full overflow-hidden rounded-full bg-muted'
+          >
             <div
               className={`h-full transition-all duration-500 ${getProgressIndicatorClass(
                 memory.usedPercent
@@ -164,7 +201,14 @@ export function StatCards({
             )}
           </div>
 
-          <div className='h-2 w-full overflow-hidden rounded-full bg-muted'>
+          <div
+            role='progressbar'
+            aria-valuenow={npu.supported ? npu.loadPercent : 0}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={t('cards.npu', { defaultValue: 'NPU Coprocessor' })}
+            className='h-2 w-full overflow-hidden rounded-full bg-muted'
+          >
             <div
               className={`h-full transition-all duration-500 ${
                 npu.supported
@@ -181,16 +225,43 @@ export function StatCards({
             />
           </div>
 
+          {npu.supported && npu.coreLoads && npu.coreLoads.length > 1 && (
+            <div
+              className='flex items-center gap-1 pt-0.5'
+              title={`NPU Cores: ${npu.coreLoads.map((l, i) => `Core${i}: ${l.toFixed(0)}%`).join(' | ')}`}
+            >
+              {npu.coreLoads.map((load, idx) => (
+                <div
+                  key={idx}
+                  className='h-1.5 flex-1 overflow-hidden rounded-full bg-muted/60'
+                >
+                  <div
+                    className={`h-full transition-all duration-300 ${getProgressIndicatorClass(
+                      load
+                    )}`}
+                    style={{
+                      width: `${Math.min(100, Math.max(0, load))}%`,
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
           <CardDescription className='truncate text-xs'>
-            {npu.supported
-              ? t('cards.npuDesc', {
-                  name: npu.name || 'NPU',
-                  temp: npu.temperature.toFixed(1),
-                  defaultValue: `${npu.name} | ${npu.temperature.toFixed(1)}°C`,
-                })
-              : t('cards.npuUnsupported', {
+            {!npu.supported
+              ? t('cards.npuUnsupported', {
                   defaultValue: 'No NPU coprocessor detected',
-                })}
+                })
+              : npu.loadPercent === 0
+                ? t('cards.npuNoLoad', {
+                    defaultValue: 'Idle (No active inference models)',
+                  })
+                : t('cards.npuDesc', {
+                    name: npu.name || 'NPU',
+                    temp: npu.temperature.toFixed(1),
+                    defaultValue: `${npu.name} | ${npu.temperature.toFixed(1)}°C`,
+                  })}
           </CardDescription>
         </CardContent>
       </Card>
@@ -213,19 +284,40 @@ export function StatCards({
             </span>
           </div>
 
-          <div className='flex h-2 w-full gap-1 overflow-hidden rounded-full bg-muted'>
-            <div
-              className='h-full bg-primary transition-all duration-500'
-              style={{
-                width: `${Math.min(50, (totalRxRate / (10 * 1024 * 1024)) * 50)}%`,
-              }}
-            />
-            <div
-              className='h-full bg-emerald-500 transition-all duration-500'
-              style={{
-                width: `${Math.min(50, (totalTxRate / (10 * 1024 * 1024)) * 50)}%`,
-              }}
-            />
+          <div
+            role='progressbar'
+            aria-valuenow={totalRxRate + totalTxRate > 0 ? 100 : 0}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={t('cards.network', { defaultValue: 'Network Rates' })}
+            className='flex h-2 w-full gap-1 overflow-hidden rounded-full bg-muted'
+          >
+            {totalRxRate + totalTxRate > 0 ? (
+              <>
+                <div
+                  className='h-full bg-primary transition-all duration-500'
+                  style={{
+                    width: `${Math.max(
+                      10,
+                      (totalRxRate / (totalRxRate + totalTxRate)) * 100
+                    )}%`,
+                  }}
+                  title={`Rx: ${formatRate(totalRxRate)}`}
+                />
+                <div
+                  className='h-full bg-emerald-500 transition-all duration-500'
+                  style={{
+                    width: `${Math.max(
+                      10,
+                      (totalTxRate / (totalRxRate + totalTxRate)) * 100
+                    )}%`,
+                  }}
+                  title={`Tx: ${formatRate(totalTxRate)}`}
+                />
+              </>
+            ) : (
+              <div className='h-full w-full bg-muted' />
+            )}
           </div>
 
           <CardDescription className='truncate text-xs'>
@@ -260,7 +352,14 @@ export function StatCards({
             </span>
           </div>
 
-          <div className='h-2 w-full overflow-hidden rounded-full bg-muted'>
+          <div
+            role='progressbar'
+            aria-valuenow={rootStorage?.usedPercent ?? 0}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={t('cards.storage', { defaultValue: 'Primary Storage' })}
+            className='h-2 w-full overflow-hidden rounded-full bg-muted'
+          >
             <div
               className={`h-full transition-all duration-500 ${getProgressIndicatorClass(
                 rootStorage?.usedPercent ?? 0

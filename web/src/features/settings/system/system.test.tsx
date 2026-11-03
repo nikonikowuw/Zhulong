@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { NetworkTable } from './components/network-table'
 import { StatCards } from './components/stat-cards'
 import { StorageTable } from './components/storage-table'
+import { SystemHeader } from './components/system-header'
 import { ThermalList } from './components/thermal-list'
+import { TrendCharts } from './components/trend-charts'
 import {
   type CPUStatus,
+  type HostInfo,
   type MemoryStatus,
   type NPUStatus,
   type NetworkInterfaceStatus,
@@ -103,6 +106,119 @@ describe('StatCards Component', () => {
     await expect.element(screen.getByText('50.0%')).toBeVisible()
     await expect.element(screen.getByText('43.8%')).toBeVisible()
     await expect.element(screen.getByText('18.0%')).toBeVisible()
+  })
+
+  it('renders idle message when NPU is supported but has 0% load', async () => {
+    const idleNPU: NPUStatus = {
+      ...mockNPU,
+      loadPercent: 0,
+      coreLoads: [0],
+    }
+
+    const screen = await render(
+      <StatCards
+        cpu={mockCPU}
+        memory={mockMemory}
+        npu={idleNPU}
+        network={mockNet}
+        storage={mockStorage}
+      />
+    )
+
+    await expect
+      .element(screen.getByText(/当前无加速模型负载|Idle/))
+      .toBeVisible()
+  })
+
+  it('renders unsupported message when NPU is not supported', async () => {
+    const unsupportedNPU: NPUStatus = {
+      supported: false,
+      name: 'None',
+      loadPercent: 0,
+      coreLoads: [],
+      temperature: 0,
+    }
+
+    const screen = await render(
+      <StatCards
+        cpu={mockCPU}
+        memory={mockMemory}
+        npu={unsupportedNPU}
+        network={mockNet}
+        storage={mockStorage}
+      />
+    )
+
+    await expect.element(screen.getByText('N/A')).toBeVisible()
+    await expect
+      .element(screen.getByText(/未检测到 NPU 加速硬件|No NPU/))
+      .toBeVisible()
+  })
+})
+
+describe('SystemHeader Component', () => {
+  const mockHost: HostInfo = {
+    hostname: 'edge-gateway-01',
+    os: 'linux',
+    arch: 'aarch64',
+    kernelVersion: '5.10.160-rockchip',
+    uptimeSeconds: 7200,
+    bootTime: new Date().toISOString(),
+    loadAvg: [0.35, 0.42, 0.5],
+  }
+
+  it('renders host info and handles live pause toggling', async () => {
+    const togglePause = vi.fn()
+    const refresh = vi.fn()
+
+    const screen = await render(
+      <SystemHeader
+        host={mockHost}
+        isRefetching={false}
+        isPaused={false}
+        onTogglePause={togglePause}
+        onRefresh={refresh}
+      />
+    )
+
+    await expect.element(screen.getByText('edge-gateway-01')).toBeVisible()
+    await expect.element(screen.getByText(/自动刷新中|Live/)).toBeVisible()
+
+    const pauseBtn = screen.getByRole('button', {
+      name: /暂停自动刷新|Pause live telemetry/i,
+    })
+    await pauseBtn.click()
+    expect(togglePause).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders paused state when isPaused is true', async () => {
+    const screen = await render(
+      <SystemHeader
+        host={mockHost}
+        isRefetching={false}
+        isPaused={true}
+        onTogglePause={vi.fn()}
+        onRefresh={vi.fn()}
+      />
+    )
+
+    await expect.element(screen.getByText(/已暂停刷新|Paused/)).toBeVisible()
+  })
+})
+
+describe('TrendCharts Component', () => {
+  it('renders empty history guidance when history is empty', async () => {
+    const screen = await render(
+      <TrendCharts history={[]} npuSupported={false} />
+    )
+
+    await expect
+      .element(
+        screen.getByText(
+          /历史时序数据采集积累中|Accumulating telemetry history/
+        )
+      )
+      .toBeVisible()
   })
 })
 

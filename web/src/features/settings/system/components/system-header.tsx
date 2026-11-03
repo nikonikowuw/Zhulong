@@ -1,4 +1,12 @@
-import { RefreshCw, Server, Cpu, Clock, Activity } from 'lucide-react'
+import {
+  Activity,
+  Clock,
+  Cpu,
+  Pause,
+  Play,
+  RefreshCw,
+  Server,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -8,12 +16,16 @@ import { formatUptime } from '../utils/format'
 interface SystemHeaderProps {
   host: HostInfo
   isRefetching: boolean
+  isPaused: boolean
+  onTogglePause: () => void
   onRefresh: () => void
 }
 
 export function SystemHeader({
   host,
   isRefetching,
+  isPaused,
+  onTogglePause,
   onRefresh,
 }: SystemHeaderProps) {
   const { t } = useTranslation('system')
@@ -54,16 +66,43 @@ export function SystemHeader({
         </div>
       </div>
 
-      <div className='flex items-center gap-3'>
-        <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>
-          <span className='relative flex size-2'>
-            <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75' />
-            <span className='relative inline-flex size-2 rounded-full bg-emerald-500' />
-          </span>
-          <span>
-            {t('header.autoRefreshing', { defaultValue: 'Live (2.5s)' })}
-          </span>
-        </div>
+      <div className='flex items-center gap-2'>
+        <Button
+          variant='ghost'
+          size='sm'
+          onClick={onTogglePause}
+          className='h-8 gap-1.5 px-2.5 text-xs text-muted-foreground hover:text-foreground'
+          title={
+            isPaused
+              ? t('header.resume', { defaultValue: 'Resume live telemetry' })
+              : t('header.pause', { defaultValue: 'Pause live telemetry' })
+          }
+          aria-label={
+            isPaused
+              ? t('header.resume', { defaultValue: 'Resume live telemetry' })
+              : t('header.pause', { defaultValue: 'Pause live telemetry' })
+          }
+        >
+          {isPaused ? (
+            <>
+              <Play className='size-3 fill-amber-500 text-amber-500' />
+              <span className='font-medium text-amber-600 dark:text-amber-400'>
+                {t('header.paused', { defaultValue: 'Paused' })}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className='relative flex size-2' aria-hidden='true'>
+                <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75' />
+                <span className='relative inline-flex size-2 rounded-full bg-emerald-500' />
+              </span>
+              <span>
+                {t('header.autoRefreshing', { defaultValue: 'Live (2.5s)' })}
+              </span>
+              <Pause className='size-3 opacity-60' />
+            </>
+          )}
+        </Button>
 
         <Button
           variant='outline'

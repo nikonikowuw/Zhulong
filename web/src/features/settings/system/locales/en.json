@@ -11,7 +11,10 @@
     "loadAvg": "Load Average (1/5/15m)",
     "refresh": "Refresh",
     "refreshing": "Refreshing...",
-    "autoRefreshing": "Live updating (2.5s)"
+    "autoRefreshing": "Live updating (2.5s)",
+    "paused": "Paused",
+    "pause": "Pause live telemetry",
+    "resume": "Resume live telemetry"
   },
   "cards": {
     "cpu": "CPU Utilization",
