@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/algoipc"
 	"go.uber.org/zap"
 )
 
@@ -28,6 +29,13 @@ type workerWatcher struct {
 	// same process group twice.
 	stopMu   sync.Mutex
 	stopOnce sync.Once
+
+	// dependencyRetries counts consecutive "the frame broker is gone" exits.
+	//
+	// Only the supervise loop goroutine touches it, so it needs no lock. It is
+	// deliberately NOT the crash counter: a camera reconnect makes the broker
+	// socket disappear, which is an environment condition, not a package defect.
+	dependencyRetries int
 }
 
 // newWorkerWatcher creates an unsupervised watcher for a package.
@@ -165,6 +173,41 @@ func (w *workerWatcher) markGuardStable() {
 	}
 }
 
+// exitFailureStage reports the failure stage recorded for the process that
+// just exited, so the loop can tell an unusable dependency apart from a broken
+// package.
+func (w *workerWatcher) exitFailureStage() string {
+	process := w.currentProcess()
+	if process == nil {
+		return ""
+	}
+	return process.FailureStage()
+}
+
+// isDependencyFailure reports whether this exit means "something the package
+// depends on is unavailable" rather than "the package is broken".
+func isDependencyFailure(stage string) bool {
+	return stage == algoipc.FailureStageBrokerConnect ||
+		stage == algoipc.FailureStageBrokerLost
+}
+
+// dependencyBackoff is the restart ladder for an unavailable dependency:
+// 5s, 10s, 20s, 40s … capped at max.
+//
+// It never trips the circuit breaker: the camera coming back must be enough to
+// bring the algorithm back, without an operator resetting the crash counter.
+func dependencyBackoff(attempt int, max time.Duration) time.Duration {
+	const base = 5 * time.Second
+	delay := base
+	for i := 1; i < attempt && (max <= 0 || delay < max); i++ {
+		delay *= 2
+	}
+	if max > 0 && delay > max {
+		delay = max
+	}
+	return delay
+}
+
 // handleExit reacts to one process exit, reporting whether supervision must end.
 func (w *workerWatcher) handleExit() bool {
 	crashTime := time.Now()
@@ -174,6 +217,29 @@ func (w *workerWatcher) handleExit() bool {
 		w.setStatus(StatusDisabled)
 		return true
 	}
+
+	// 依赖不可用（broker socket 没了）不是包缺陷。
+	//
+	// broker socket 由相机流侧创建：相机掉线/重连时它必然消失，runner 拿着旧路径
+	// 连接失败后按契约退出 5。把它算成崩溃，一次 20 秒网络抖动就会把算法固化成
+	// CRASH_LOOP；落在升级观察窗内还会把刚装的版本回滚掉。这与规格中「缺 --broker
+	// 宁可待命，也不要虚假熔断」是同一条原则。
+	if isDependencyFailure(w.exitFailureStage()) {
+		// 上一轮跑够久说明依赖是刚断的，重新起算阶梯；否则继续沿用。
+		if w.runningDuration() >= w.supervisor.opts.MaxBackoff {
+			w.dependencyRetries = 0
+		}
+		w.dependencyRetries++
+		delay := dependencyBackoff(w.dependencyRetries, w.supervisor.opts.MaxBackoff)
+		w.setStatus(StatusCrashed)
+		w.supervisor.logger.Warn("runner lost its frame broker; restarting without tripping the crash breaker",
+			zap.String("algorithm", w.algo.ID),
+			zap.Int("consecutive", w.dependencyRetries),
+			zap.Duration("delay", delay),
+		)
+		return !w.restartAfterBackoff(delay)
+	}
+	w.dependencyRetries = 0
 
 	// A crash inside the observation window means the new version is not fit to
 	// run: roll back instead of restarting it.

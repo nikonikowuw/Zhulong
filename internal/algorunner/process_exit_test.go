@@ -30,6 +30,7 @@ func TestExitFailureStagesHaveDiagnoses(t *testing.T) {
 func TestFailureStageDiagnosesCoverSkeletonStages(t *testing.T) {
 	skeletonStages := []string{
 		algoipc.FailureStageBrokerConnect,
+		algoipc.FailureStageBrokerLost,
 		algoipc.FailureStageWorkerException,
 		algoipc.FailureStageWorkerStalled,
 	}

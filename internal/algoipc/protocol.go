@@ -21,6 +21,16 @@ const (
 	// connect to at least one frame broker socket.
 	FailureStageBrokerConnect = "connect"
 
+	// FailureStageBrokerLost marks a runner whose frame broker connection dropped
+	// while it was running. The skeleton already emits it as
+	// {"stage":"broker_disconnected"} (native/sdk/src/algo_main.cpp) and then exits
+	// cleanly, so the exit code alone cannot tell this apart from a plugin crash.
+	//
+	// For the host's recovery policy it is the same situation as
+	// FailureStageBrokerConnect: a dependency disappeared, the package did not
+	// misbehave.
+	FailureStageBrokerLost = "broker_disconnected"
+
 	// FailureStageWorkerException marks a runner that exited because one per-stream
 	// worker thread failed (uncaught exception inside the package skeleton itself).
 	// The skeleton catches it at the thread boundary instead of letting std::terminate

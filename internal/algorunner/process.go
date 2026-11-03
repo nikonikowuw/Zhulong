@@ -72,6 +72,13 @@ var failureStageDiagnoses = map[string]exitDiagnosis{
 		message: "runner exited because it could not connect to its frame broker sockets",
 		level:   zapcore.ErrorLevel,
 	},
+	algoipc.FailureStageBrokerLost: {
+		// broker 在半途断开：相机掉线/重连会把 socket 连同流一起回收。
+		// 这不是包缺陷，与 connect 失败归为同一类环境故障（见 isDependencyFailure）。
+		reason:  "broker_lost",
+		message: "runner lost its frame broker connection",
+		level:   zapcore.ErrorLevel,
+	},
 	algoipc.FailureStageWorkerException: {
 		// One per-stream worker threw inside the package skeleton (typically an
 		// allocation failure while serializing a result). Same restart/rollback
@@ -494,6 +501,16 @@ func (p *RunnerProcess) logCrashLocked(err error) {
 		fields = append(fields, zap.Bool("error_present", err != nil))
 	}
 	p.logger.Log(diagnosis.level, diagnosis.message, fields...)
+}
+
+// FailureStage 返回本次退出的失败阶段诊断（空字符串表示未识别）。
+//
+// 看护循环用它区分「环境依赖不可用」与「算法包缺陷」：两者的自愈策略必须不同，
+// 把相机掉线算成包崩溃会让一次网络抖动固化成 CRASH_LOOP。
+func (p *RunnerProcess) FailureStage() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failureStage
 }
 
 // setFailureStage records a failure stage observed on the runner's stderr.

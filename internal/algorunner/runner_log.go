@@ -134,7 +134,10 @@ func (p *RunnerProcess) emitLogLine(source string, fallback zapcore.Level, line 
 	if parsed.invalid {
 		p.countRunnerIssue(source, runnerIssueInvalid)
 	}
-	if parsed.stage == algoipc.FailureStageBrokerConnect {
+	// 两条「依赖没了」的信号都要记录：connect 失败带退出码 5，而 mid-run 断连
+	// 是干净退出（码 0），只有 stage 标记才能把它与真正的插件崩溃区分开。
+	if parsed.stage == algoipc.FailureStageBrokerConnect ||
+		parsed.stage == algoipc.FailureStageBrokerLost {
 		p.setFailureStage(parsed.stage)
 	}
 	p.emitRunnerEvent(source, parsed.level, parsed.message, parsed.fields...)
@@ -305,6 +308,7 @@ func validRunnerStage(value string) bool {
 		"name_check",
 		"shm_init",
 		"gallery_sync",
+		// 与 algoipc.FailureStageBrokerLost 同值，保留字面量方便对照包骨架源码。
 		"broker_disconnected",
 		"worker_exception",
 		"worker_stalled":
