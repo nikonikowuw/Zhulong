@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/architecture.md", "reason": "跨层数据流拓扑：RTSP→Native→CGO→ZLM2→React 的责任边界"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "RTSP 接入、ABI 尾部追加演进、PreviewNormalizer 预览整形契约（音频需共享时间轴）"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "借用视图所有权、回调 drain、Go 指针规则（音频 extradata 与 packet 视图）"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "节点职责与有界队列背压（音频不得进入视频解码队列）"}
+{"file": ".trellis/spec/backend/camera-guidelines.md", "reason": "ZLM2 协议规约、GOP 补发、分发器背压与空闲热保留"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "React 19 Hooks、状态流转与流媒体 UX 契约"}

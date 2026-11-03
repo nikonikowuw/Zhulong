@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/camera-guidelines.md", "reason": "ZLM2 协议、GOP 补发、分发器背压"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Go 质量门禁：race、错误处理、测试"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "AudioInfo 调用方缓冲区与指针生命周期"}
+{"file": ".trellis/spec/architecture.md", "reason": "跨层数据流拓扑与责任边界"}

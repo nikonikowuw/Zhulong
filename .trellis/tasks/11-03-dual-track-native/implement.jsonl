@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/native/index.md", "reason": "Native 开发前清单与 native-test/ASan 基线"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "ABI 尾部追加、RTSP 接入与 PreviewNormalizer 契约"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "借用视图所有权与回调 drain 规则"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "节点职责与有界队列背压"}

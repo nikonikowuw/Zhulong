@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/native/index.md", "reason": "Native 开发前清单与质量检验基线（native-test / ASan）"}
+{"file": ".trellis/spec/native/ingestion-contract.md", "reason": "ABI 版本一致性、陈旧归档伪绿与交叉链接门禁"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Go 质量门禁：race、错误处理、测试约定"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端 lint/type-check/真实浏览器测试基线"}
+{"file": ".trellis/spec/backend/camera-guidelines.md", "reason": "ZLM2 协议与分发器契约校验"}
