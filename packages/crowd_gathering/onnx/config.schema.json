@@ -22,7 +22,7 @@
       "minimum": 0.5,
       "maximum": 3.0,
       "default": 1.2,
-      "description": "聚集空间相对距离倍数（基于平均身高的比值）"
+      "description": "聚集空间相对距离倍数（基于平均身高与帧宽高比折算后的像素距离比值）"
     },
     "gather_duration_seconds": {
       "type": "number",
@@ -35,6 +35,22 @@
       "type": "boolean",
       "default": false,
       "description": "是否同时上报单人检测框（用于前端画框与调试）"
+    },
+    "detect_input_width": {
+      "type": "integer",
+      "minimum": 128,
+      "maximum": 1280,
+      "multipleOf": 128,
+      "default": 640,
+      "description": "检测模型输入宽度（进程级参数，仅 --config 生效；必须是 128 的整数倍）"
+    },
+    "detect_input_height": {
+      "type": "integer",
+      "minimum": 128,
+      "maximum": 1280,
+      "multipleOf": 128,
+      "default": 384,
+      "description": "检测模型输入高度（进程级参数，仅 --config 生效；必须是 128 的整数倍。默认 384 = 16:9 CCTV 档位）"
     }
   }
 }

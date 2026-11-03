@@ -42,6 +42,19 @@ target_include_directories(crowd_gathering PRIVATE
 target_link_options(crowd_gathering PRIVATE "LINKER:--exclude-libs,ALL")
 target_link_libraries(crowd_gathering PRIVATE Zhulong::AlgoSDK Zhulong::AlgoRuntime)
 
+# 包内自测：纯逻辑（配置解析 / 聚类几何 / 时序防抖），不加载模型、不需要会话。
+# 只依赖 SDK 前缀 + 包自身源码 → 第三方与 sdk-clean-check 的干净容器都能构建运行。
+# ⚠️ 判定不得用 assert()：RelWithDebInfo 定义 NDEBUG 会把断言整段编译掉（见 §5.5）。
+add_executable(crowd_gathering_unittest EXCLUDE_FROM_ALL
+    tests/unit_test.cpp
+    src/analysis/spatial_clustering.cpp
+    src/analysis/temporal_tracker.cpp
+)
+target_include_directories(crowd_gathering_unittest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(crowd_gathering_unittest PRIVATE Zhulong::AlgoRuntime)
+
 # 开发期自测（EXCLUDE_FROM_ALL、无安装规则 → 物理上进不了归档）
 add_executable(crowd_gathering_devtest EXCLUDE_FROM_ALL
     tests/dev_infer.cpp

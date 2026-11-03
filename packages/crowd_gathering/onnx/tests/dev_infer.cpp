@@ -1,6 +1,10 @@
 /**
  * @file dev_infer.cpp
  * @brief 开发期自测：读 sample.jpg -> 执行聚集检测 -> 画框 -> result.jpg + stdout 明细表
+ *
+ * 纯逻辑单测在 `tests/unit_test.cpp`（`make unit-test`）。两者刻意分开：本文件要加载
+ * 真实权重与会话，而单测必须能在没有模型、没有运行时的环境里跑，且**不得**用
+ * `assert()` 判定（RelWithDebInfo 的 NDEBUG 会把它整段编译掉）。
  */
 
 #include <zhulong/algo.hpp>
@@ -15,7 +19,6 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-#include <cassert>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -80,55 +83,9 @@ void print_table(const std::string& sample, uint32_t count, double cost_ms, cons
     }
 }
 
-void run_internal_unit_tests() {
-    using namespace zhulong::crowd;
-
-    // 1. JSON 解析单测
-    std::string json = R"({"score_threshold": 0.45, "gather_count_threshold": 4, "report_person_boxes": true})";
-    CrowdConfig cfg = resolve_crowd_config(json, CrowdConfig{});
-    assert(std::abs(cfg.score_threshold - 0.45f) < 1e-4f);
-    assert(cfg.gather_count_threshold == 4);
-    assert(cfg.report_person_boxes == true);
-
-    // 2. 空间聚类几何单测
-    std::vector<DetectedPerson> test_persons;
-    // 3 个人站在一起（接地点 x=0.2, 0.25, 0.3，高度 0.5）
-    test_persons.push_back({{0.15f, 0.5f, 0.25f, 1.0f}, 0.9f});
-    test_persons.push_back({{0.20f, 0.5f, 0.30f, 1.0f}, 0.9f});
-    test_persons.push_back({{0.25f, 0.5f, 0.35f, 1.0f}, 0.9f});
-    // 1 个人离得极远（x=0.85）
-    test_persons.push_back({{0.80f, 0.5f, 0.90f, 1.0f}, 0.9f});
-
-    auto clusters = SpatialClusterer::cluster(test_persons, 1.2f, 3);
-    assert(clusters.size() == 1);
-    assert(clusters[0].person_count == 3);
-    assert(clusters[0].enclosing_box[0] <= 0.16f);
-    assert(clusters[0].enclosing_box[2] >= 0.34f);
-
-    // 人数阈值设为 4 时应当为空
-    auto clusters_empty = SpatialClusterer::cluster(test_persons, 1.2f, 4);
-    assert(clusters_empty.empty());
-
-    // 3. 时序状态机防抖单测
-    TaskStreamTracker tracker;
-    auto now = std::chrono::steady_clock::now();
-    // 第一次出现，持续时间阈值 1.0s，此时未满 1 秒，不应告警
-    auto alarms1 = tracker.update(clusters, 1.0f, now);
-    assert(alarms1.empty());
-
-    // 跨越 1.1 秒后再次进入
-    auto alarms2 = tracker.update(clusters, 1.0f, now + std::chrono::milliseconds(1100));
-    assert(alarms2.size() == 1);
-    assert(alarms2[0].person_count == 3);
-
-    std::printf("[✓] crowd gathering internal unit tests passed!\n");
-}
-
 } // namespace
 
 int main(int argc, char** argv) {
-    run_internal_unit_tests();
-
     std::string sample_path = "sample.jpg";
     std::string output_path = "build/out/result.jpg";
     std::string config_json = "{}";

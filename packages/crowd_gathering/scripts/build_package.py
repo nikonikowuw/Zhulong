@@ -142,8 +142,27 @@ def main():
         if proc.returncode != 0:
             print(proc.stderr, file=sys.stderr)
             sys.exit(f"错误: 黑盒验包未通过 (退出码 {proc.returncode})")
-        report = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else "{}"
-        print(f"[✓] 黑盒验包通过！{report}")
+
+        last_line = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+        if not last_line:
+            sys.exit("错误: 黑盒验包没有输出 JSON 报告")
+        try:
+            report = json.loads(last_line)
+        except json.JSONDecodeError as error:
+            sys.exit(f"错误: 验包报告不是合法 JSON ({error}): {last_line}")
+
+        if report.get("status") != "passed":
+            print(last_line, file=sys.stderr)
+            sys.exit(f"错误: 验包报告 status={report.get('status')!r}（期望 passed）")
+
+        # sample_decoded=false 表示包入口回退到合成帧：这时准入只证明了 ABI 生命周期，
+        # 真实推理路径一次都没走。按契约必须如实记为告警，不得静默当成通过。
+        if not report.get("sample_decoded", False):
+            print("[!] 警告: 验包未解码真实样本 (sample_decoded=false)，本次只证明 ABI 生命周期；"
+                  "请安装 ffmpeg 或用 PPM 样本复验", file=sys.stderr)
+            print(f"[!] 黑盒验包（仅 ABI 冒烟）: {report.get('count', 0)} 条结果，cost_ms={report.get('cost_ms')}")
+        else:
+            print(f"[✓] 黑盒验包通过！{last_line}")
 
     # 7. 打包成 .tar.gz
     out_dir = repo_root / args.output_dir
