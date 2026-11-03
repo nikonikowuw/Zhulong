@@ -1,0 +1,16 @@
+{
+  "id": "crowd_gathering",
+  "name": "人员非法聚集检测算法",
+  "version": "1.0.0",
+  "description": "基于 SCRFD 人体检测与空间自适应聚类、时序防抖状态机的人员非法聚集研判算法包",
+  "task_type": "detection",
+  "category": "safety",
+  "platform": {
+    "arch": "x86_64",
+    "target": "onnx"
+  },
+  "resources": {
+    "compute_cost": 20,
+    "memory_mb": 128
+  }
+}

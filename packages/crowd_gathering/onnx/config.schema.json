@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CrowdGatheringConfig",
+  "type": "object",
+  "properties": {
+    "score_threshold": {
+      "type": "number",
+      "minimum": 0.1,
+      "maximum": 1.0,
+      "default": 0.5,
+      "description": "人体检测置信度阈值"
+    },
+    "gather_count_threshold": {
+      "type": "integer",
+      "minimum": 2,
+      "maximum": 20,
+      "default": 3,
+      "description": "聚集最小人数阈值"
+    },
+    "gather_distance_ratio": {
+      "type": "number",
+      "minimum": 0.5,
+      "maximum": 3.0,
+      "default": 1.2,
+      "description": "聚集空间相对距离倍数（基于平均身高的比值）"
+    },
+    "gather_duration_seconds": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 60.0,
+      "default": 5.0,
+      "description": "聚集持续告警时长（秒，0 表示单帧命中即告警）"
+    },
+    "report_person_boxes": {
+      "type": "boolean",
+      "default": false,
+      "description": "是否同时上报单人检测框（用于前端画框与调试）"
+    }
+  }
+}
