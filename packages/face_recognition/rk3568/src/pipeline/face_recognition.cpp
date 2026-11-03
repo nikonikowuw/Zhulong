@@ -243,6 +243,7 @@ bool FaceRecognitionPlugin::build_face_item(
         return false;
     }
     if (!Aligner::crop_and_align_direct(image, affine_mat, rec_input.data<uint8_t>(),
+                                        rec_input.element_count(),
                                         kFeaturePatchWidth, kFeaturePatchHeight)) {
         return false;
     }
@@ -293,10 +294,18 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
     const std::shared_ptr<zhulong::Session> rec_session = lookup_session(rec_sessions_, worker_id);
     const std::shared_ptr<zhulong::Session> person_session = lookup_session(person_sessions_, worker_id);
 
+    FaceDetector det_snapshot;
+    PersonDetector person_det_snapshot;
+    {
+        std::lock_guard<std::mutex> lock(detector_mu_);
+        det_snapshot = detector_;
+        person_det_snapshot = person_detector_;
+    }
+
     // 1. 人体目标检测 (SCRFD Person 2.5G)；无人体会话 = 该包未装人体模型，走纯人脸语义
     std::vector<PersonBodyDetection> person_detections;
     if (person_session && person_session->valid()) {
-        person_detections = person_detector_.detect(*person_session, image, match_params.person_det_threshold);
+        person_detections = person_det_snapshot.detect(*person_session, image, match_params.person_det_threshold);
         // 只承认真实神经网络检出：降级桩不得生成人体目标（见插件契约 §2）
         person_detections.erase(
             std::remove_if(person_detections.begin(), person_detections.end(),
@@ -305,7 +314,7 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
     }
 
     // 2. 人脸检测与 5 点关键点定位 (SCRFD det_500m)
-    const std::vector<FaceDetection> face_detections = detector_.detect(session, image, match_params.face_det_threshold);
+    const std::vector<FaceDetection> face_detections = det_snapshot.detect(session, image, match_params.face_det_threshold);
     if (person_detections.empty() && face_detections.empty()) {
         return {};
     }
@@ -362,7 +371,7 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
         face.person_index = -1;
 
         for (size_t p_idx = 0; p_idx < person_detections.size(); ++p_idx) {
-            if (face_belongs_to_person(processed.face_box, person_detections[p_idx].body_box)) {
+            if (!person_taken[p_idx] && face_belongs_to_person(processed.face_box, person_detections[p_idx].body_box)) {
                 face.person_index = static_cast<int32_t>(p_idx);
                 person_taken[p_idx] = true;
                 break;
@@ -582,6 +591,7 @@ zhulong_status_t FaceExtractorContext::extract(
 
     zhulong::Tensor rec_input({1, kFeaturePatchHeight, kFeaturePatchWidth, 3}, zhulong::DataType::UINT8);
     if (!Aligner::crop_and_align_direct(image, affine_mat, rec_input.data<uint8_t>(),
+                                        rec_input.element_count(),
                                         kFeaturePatchWidth, kFeaturePatchHeight)) {
         return ZHULONG_PLUGIN_ERR_INTERNAL;
     }
@@ -592,7 +602,7 @@ zhulong_status_t FaceExtractorContext::extract(
     }
 
     // 特征抽取器已保证返回 512 维 L2 归一化单位向量
-    std::memcpy(out_features, features.data(), kFeatureDimension * sizeof(float));
+    std::copy_n(features.data(), kFeatureDimension, out_features);
     *feature_dim = static_cast<uint32_t>(kFeatureDimension);
     return ZHULONG_PLUGIN_OK;
 }

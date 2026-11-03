@@ -50,10 +50,23 @@ public:
      * @brief 基于 2x3 仿射矩阵对原图执行双线性插值采样与重对齐，直接写入目标缓冲区（零堆分配）
      * @param image 原图只读视图
      * @param affine_mat 2x3 相似变换仿射矩阵 (src -> dst)
-     * @param dst_buf 目标缓冲区指针 (容量需至少为 dst_w * dst_h * 3 字节)
+     * @param dst_buf 目标缓冲区指针
+     * @param dst_capacity 目标缓冲区容量字节数（>0 时开启防溢出边界校验；0 表示调用方已自行保证容量足够）
      * @param dst_w 输出宽度 (默认 112)
      * @param dst_h 输出高度 (默认 112)
-     * @return true 采样成功；false 表示原图/矩阵/像素格式非法（fail closed，绝不返回半成品）
+     * @return true 采样成功；false 表示原图/矩阵/像素格式非法或缓冲区容量不足（fail closed，绝不返回半成品）
+     */
+    static bool crop_and_align_direct(
+        const zhulong::Image& image,
+        const std::array<float, 6>& affine_mat,
+        uint8_t* dst_buf,
+        size_t dst_capacity,
+        int dst_w = 112,
+        int dst_h = 112
+    );
+
+    /**
+     * @brief 兼容无显式容量形参的重载（内部转发，保持现有接口调用兼容）
      */
     static bool crop_and_align_direct(
         const zhulong::Image& image,
@@ -61,7 +74,9 @@ public:
         uint8_t* dst_buf,
         int dst_w = 112,
         int dst_h = 112
-    );
+    ) {
+        return crop_and_align_direct(image, affine_mat, dst_buf, 0, dst_w, dst_h);
+    }
 };
 
 } // namespace zhulong::face

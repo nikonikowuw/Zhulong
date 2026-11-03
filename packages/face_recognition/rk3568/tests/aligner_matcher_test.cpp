@@ -355,6 +355,10 @@ void test_crop_and_align_rejects_bad_input() {
     const zhulong::Image bad_stride_image(bad_stride);
     check(!zhulong::face::Aligner::crop_and_align_direct(bad_stride_image, identity, out.data(), kSize, kSize),
           "Packed 格式 stride 小于 width*3 必须失败");
+
+    // 显式传入目标容量过小时必须失败（防缓冲区溢出）
+    check(!zhulong::face::Aligner::crop_and_align_direct(image, identity, out.data(), out.size() - 1, kSize, kSize),
+          "目标缓冲容量不足时必须显式失败");
 }
 
 // ============================================================================
@@ -445,6 +449,15 @@ void test_matcher_threshold_boundary_and_degenerate_input() {
     // top_k 大于底库规模 ⇒ 返回全部
     check(matcher.match(probe, 3, gallery, 0.4f, 100).candidates.size() == gallery.size(),
           "top_k 超过底库规模时应返回全部条目");
+
+    // top_k == 0 时：候选人列表必须为空，但 Top-1 决策仍能正确取出全局最高分（而不是未排序的第一项）
+    std::vector<zhulong::FaceTemplate> multi_gallery;
+    multi_gallery.push_back(make_template("f_low", "p_low", {0.1f, 0.994987f, 0.0f}));
+    multi_gallery.push_back(make_template("f_high", "p_high", {0.95f, 0.31225f, 0.0f}));
+    const zhulong::face::MatchResult zero_top_k = matcher.match(probe, 3, multi_gallery, 0.5f, 0);
+    check(zero_top_k.candidates.empty(), "top_k=0 时候选人列表必须为空");
+    check(zero_top_k.matched, "top_k=0 时若最高分达标仍应命中 Top-1");
+    check(zero_top_k.matched_face_id == "f_high", "top_k=0 时 Top-1 必须取到真实的最高分条目");
 }
 
 // ============================================================================
@@ -543,6 +556,10 @@ void test_resolve_match_params() {
     check(nearly_equal(out_of_bounds.min_face_quality, defaults.min_face_quality, 1e-6f),
           "越界 min_face_quality 必须回落");
     check(out_of_bounds.filter_unmatched == false, "filter_unmatched 为 false 应生效");
+
+    // 带有 true 前缀的非法标识符不得误判为 true
+    const MatchParams invalid_bool = resolve_match_params(R"({"filter_unmatched": true_story})", defaults);
+    check(!invalid_bool.filter_unmatched, "带有 true 前缀的非法字符串不得误判为 true");
 }
 
 void test_face_quality_assessment() {

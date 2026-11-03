@@ -42,6 +42,7 @@ public:
      *    「人脸已切到新分辨率、人体仍留在旧值」而调用方以为整体成功。
      */
     bool set_detection_input_size(int width, int height) noexcept {
+        std::lock_guard<std::mutex> lock(detector_mu_);
         FaceDetector temp_det = detector_;
         PersonDetector temp_person = person_detector_;
         if (!temp_det.set_input_size(width, height) || !temp_person.set_input_size(width, height)) {
@@ -116,6 +117,7 @@ private:
     zhulong::Model det_model_;
     zhulong::Model rec_model_;
     std::mutex sessions_mu_;
+    mutable std::mutex detector_mu_;
     SessionTable person_sessions_;
     SessionTable rec_sessions_;
     PersonDetector person_detector_;

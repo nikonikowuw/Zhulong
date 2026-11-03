@@ -1,7 +1,6 @@
 #include "extractor.hpp"
 
 #include <cmath>
-#include <cstring>
 #include <vector>
 
 namespace zhulong::face {
@@ -37,8 +36,7 @@ std::vector<float> FaceFeatureExtractor::extract(
         return {};
     }
 
-    std::vector<float> features(kFeatureDimension);
-    std::memcpy(features.data(), src, kFeatureDimension * sizeof(float));
+    std::vector<float> features(src, src + kFeatureDimension);
 
     float norm_sq = 0.0f;
     for (const float value : features) {
