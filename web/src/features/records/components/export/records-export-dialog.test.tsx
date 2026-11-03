@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render } from 'vitest-browser-react'
 import { userEvent } from 'vitest/browser'
+import { exportDb } from '../../lib/export-db'
 import { RecordsExportDialog } from './records-export-dialog'
 
 describe('RecordsExportDialog', () => {
@@ -75,5 +76,39 @@ describe('RecordsExportDialog', () => {
     const cancelBtn = getByRole('button', { name: '取消' })
     await userEvent.click(cancelBtn)
     expect(handleOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('detects pending draft and allows discarding it', async () => {
+    await exportDb.saveTaskDraft({
+      taskId: 'draft-detect-01',
+      mode: 'selection',
+      activeTab: 'recognitions',
+      totalCount: 100,
+      completedKeys: ['k1', 'k2', 'k3'],
+      options: {},
+      status: 'paused',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+
+    const { getByText } = await render(
+      <RecordsExportDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        activeTab='recognitions'
+        mode='selection'
+      />
+    )
+
+    await expect
+      .element(getByText('发现上次未完成的导出任务'))
+      .toBeInTheDocument()
+    await expect.element(getByText(/3 \/ 100/)).toBeInTheDocument()
+
+    const discardBtn = getByText('放弃')
+    await userEvent.click(discardBtn)
+
+    const draftAfter = await exportDb.getTaskDraft('draft-detect-01')
+    expect(draftAfter).toBeNull()
   })
 })

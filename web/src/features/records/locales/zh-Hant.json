@@ -185,6 +185,11 @@
     "cancel": "取消",
     "confirmBtn": "開始匯出",
     "success": "匯出完成，檔案已開始下載",
-    "failed": "匯出失敗，請檢查網路或稍後重試"
+    "failed": "匯出失敗，請檢查網路或稍後重試",
+    "draftFoundTitle": "發現上次未完成的匯出任務",
+    "draftFoundDesc": "已在本地快取 {{current}} / {{total}} 項證據圖片",
+    "discardDraft": "放棄",
+    "resumeDraft": "繼續斷點匯出",
+    "draftDiscarded": "已清除歷史未完成草稿"
   }
 }

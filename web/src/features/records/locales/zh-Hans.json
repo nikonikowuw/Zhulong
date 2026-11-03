@@ -185,6 +185,11 @@
     "cancel": "取消",
     "confirmBtn": "开始导出",
     "success": "导出完成，文件已开始下载",
-    "failed": "导出失败，请检查网络或稍后重试"
+    "failed": "导出失败，请检查网络或稍后重试",
+    "draftFoundTitle": "发现上次未完成的导出任务",
+    "draftFoundDesc": "已在本地缓存 {{current}} / {{total}} 项证据图片",
+    "discardDraft": "放弃",
+    "resumeDraft": "继续断点导出",
+    "draftDiscarded": "已清除历史未完成草稿"
   }
 }

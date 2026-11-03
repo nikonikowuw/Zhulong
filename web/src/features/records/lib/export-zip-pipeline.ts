@@ -13,6 +13,7 @@ import {
   type OverlayBurnOptions,
 } from './canvas-overlay-drawer'
 import { type CameraNameResolver, exportRecordsToCsv } from './export-csv'
+import { exportDb } from './export-db'
 
 export type ExportPhase =
   | 'preparing'
@@ -56,6 +57,8 @@ export interface ExportOptions {
   imageKind?: 'scene' | 'closeup' | 'both'
   /** 最大导出图片张数限制，避免大图压垮浏览器或传输太慢 */
   maxImages?: number
+  /** 断点续传任务 ID */
+  resumeTaskId?: string
   /** 取消信号 */
   signal?: AbortSignal
   /** 摄像机名称解析函数 */
@@ -76,6 +79,30 @@ interface ImageJob {
   kind: 'scene' | 'closeup'
   imagePath: string
   overlayOptions: OverlayBurnOptions
+}
+
+/**
+ * 单操作网络指数退避重试执行器
+ */
+async function retryAsync<T>(
+  fn: () => Promise<T>,
+  retries = 3,
+  delayMs = 300
+): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      lastError = err
+      if (attempt < retries - 1) {
+        await new Promise((res) =>
+          setTimeout(res, delayMs * Math.pow(2, attempt))
+        )
+      }
+    }
+  }
+  throw lastError
 }
 
 /**
@@ -420,50 +447,139 @@ export async function executeRecordsExport(
     const totalJobs = allJobs.length
     let completedJobs = 0
 
-    onProgress?.({
-      phase: 'processing_images',
-      current: 0,
-      total: totalJobs,
-      message: `Processing images: 0 / ${totalJobs}`,
+    // 初始化或复用任务 ID
+    const taskId =
+      options.resumeTaskId ||
+      `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+
+    // 读取已有草稿
+    const existingDraft = await exportDb.getTaskDraft(taskId)
+    const completedSet = new Set<string>(existingDraft?.completedKeys || [])
+
+    await exportDb.saveTaskDraft({
+      taskId,
+      mode: selectedRecords ? 'selection' : 'batch',
+      activeTab:
+        selectedRecords?.tab || (queryConfig?.tabs[0] ?? 'recognitions'),
+      totalCount: totalJobs,
+      completedKeys: Array.from(completedSet),
+      options,
+      status: 'in_progress',
+      createdAt: existingDraft?.createdAt || Date.now(),
+      updatedAt: Date.now(),
     })
 
-    await runConcurrentPool(
-      allJobs,
-      3, // 并发数限制为 3
-      signal,
-      async (job) => {
-        try {
-          let imageBlob: Blob
-          if (burnOverlay && Object.keys(job.overlayOptions).length > 0) {
-            imageBlob = await burnOverlayOnImage(job.imagePath, {
-              ...job.overlayOptions,
-              signal,
-            })
-          } else {
-            imageBlob = await fetchImageAsBlob(job.imagePath, signal)
-          }
+    onProgress?.({
+      phase: 'processing_images',
+      current: completedSet.size,
+      total: totalJobs,
+      message: `Processing images: ${completedSet.size} / ${totalJobs}`,
+    })
 
-          const arrayBuf = await imageBlob.arrayBuffer()
+    try {
+      await runConcurrentPool(
+        allJobs,
+        3, // 并发数限制为 3
+        signal,
+        async (job) => {
           const filePath = `images/${job.tab}/${job.recordId}_${job.kind}.jpg`
-          zipFiles[filePath] = new Uint8Array(arrayBuf)
-        } catch (err) {
-          // 单张图片下载或解码失败时不中断整个流水线，记录错误并跳过
-          // eslint-disable-next-line no-console
-          console.warn(
-            `[Export Pipeline] Failed to process image ${job.imagePath}:`,
-            err
-          )
-        } finally {
-          completedJobs++
-          onProgress?.({
-            phase: 'processing_images',
-            current: completedJobs,
-            total: totalJobs,
-            message: `Processing images: ${completedJobs} / ${totalJobs}`,
-          })
+
+          try {
+            // 1. 优先从 IndexedDB 本地缓存中读取（断点接力续传）
+            const cachedBytes = await exportDb.getArtifact(taskId, filePath)
+            if (cachedBytes) {
+              zipFiles[filePath] = cachedBytes
+              return
+            }
+
+            // 2. 本地无缓存，走网络拉取并带自动重试
+            let imageBlob: Blob
+            if (burnOverlay && Object.keys(job.overlayOptions).length > 0) {
+              imageBlob = await retryAsync(() =>
+                burnOverlayOnImage(job.imagePath, {
+                  ...job.overlayOptions,
+                  signal,
+                })
+              )
+            } else {
+              imageBlob = await retryAsync(() =>
+                fetchImageAsBlob(job.imagePath, signal)
+              )
+            }
+
+            const arrayBuf = await imageBlob.arrayBuffer()
+            const bytes = new Uint8Array(arrayBuf)
+            zipFiles[filePath] = bytes
+
+            // 3. 及时持久化到 IndexedDB
+            await exportDb.saveArtifact(taskId, filePath, bytes)
+            completedSet.add(filePath)
+            void exportDb.saveTaskDraft({
+              taskId,
+              mode: selectedRecords ? 'selection' : 'batch',
+              activeTab:
+                selectedRecords?.tab ||
+                (queryConfig?.tabs[0] ?? 'recognitions'),
+              totalCount: totalJobs,
+              completedKeys: Array.from(completedSet),
+              options,
+              status: 'in_progress',
+              createdAt: existingDraft?.createdAt || Date.now(),
+              updatedAt: Date.now(),
+            })
+          } catch (err) {
+            // 单张图片下载或解码失败时不中断整个流水线，记录错误并跳过
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[Export Pipeline] Failed to process image ${job.imagePath}:`,
+              err
+            )
+          } finally {
+            completedJobs++
+            onProgress?.({
+              phase: 'processing_images',
+              current: Math.max(completedJobs, completedSet.size),
+              total: totalJobs,
+              message: `Processing images: ${Math.max(completedJobs, completedSet.size)} / ${totalJobs}`,
+            })
+          }
         }
-      }
-    )
+      )
+    } catch (poolErr) {
+      // 若中途被 Abort 取消或暂停，更新任务状态为 paused，保留已有草稿供下次恢复
+      await exportDb.saveTaskDraft({
+        taskId,
+        mode: selectedRecords ? 'selection' : 'batch',
+        activeTab:
+          selectedRecords?.tab || (queryConfig?.tabs[0] ?? 'recognitions'),
+        totalCount: totalJobs,
+        completedKeys: Array.from(completedSet),
+        options,
+        status: 'paused',
+        createdAt: existingDraft?.createdAt || Date.now(),
+        updatedAt: Date.now(),
+      })
+      throw poolErr
+    }
+
+    // 成功完成全部图片处理
+    await exportDb.saveTaskDraft({
+      taskId,
+      mode: selectedRecords ? 'selection' : 'batch',
+      activeTab:
+        selectedRecords?.tab || (queryConfig?.tabs[0] ?? 'recognitions'),
+      totalCount: totalJobs,
+      completedKeys: Array.from(completedSet),
+      options,
+      status: 'completed',
+      createdAt: existingDraft?.createdAt || Date.now(),
+      updatedAt: Date.now(),
+    })
+
+    // 全量打包触发下载后自动清理 IndexedDB 临时数据
+    setTimeout(() => {
+      void exportDb.clearTaskDraft(taskId)
+    }, 1500)
   }
 
   // 3.3 打包生成 ZIP

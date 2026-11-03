@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { type Recognition } from '../data/schema'
+import { exportDb } from './export-db'
 import {
   executeRecordsExport,
   type ExportProgress,
@@ -81,5 +82,28 @@ describe('export-zip-pipeline', () => {
         signal: controller.signal,
       })
     ).rejects.toThrow()
+  })
+
+  it('resumes export using pre-cached artifacts from IndexedDB', async () => {
+    const resumeTaskId = 'test-resume-task'
+    const filePath = 'images/recognitions/rec-001_scene.jpg'
+    const preCachedBytes = new Uint8Array([10, 20, 30, 40])
+
+    // 预注入缓存
+    await exportDb.saveArtifact(resumeTaskId, filePath, preCachedBytes)
+
+    const result = await executeRecordsExport({
+      resumeTaskId,
+      selectedRecords: {
+        tab: 'recognitions',
+        items: [mockRecognition],
+      },
+      exportCsv: false,
+      exportImages: true,
+      burnOverlay: false,
+    })
+
+    expect(result.isZip).toBe(true)
+    expect(result.blob.size).toBeGreaterThan(0)
   })
 })

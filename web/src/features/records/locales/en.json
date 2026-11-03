@@ -185,6 +185,11 @@
     "cancel": "Cancel",
     "confirmBtn": "Start Export",
     "success": "Export completed, download started",
-    "failed": "Export failed. Please check your connection or retry later."
+    "failed": "Export failed. Please check your connection or retry later.",
+    "draftFoundTitle": "Incomplete Export Task Detected",
+    "draftFoundDesc": "Cached {{current}} / {{total}} evidence images locally",
+    "discardDraft": "Discard",
+    "resumeDraft": "Resume Export",
+    "draftDiscarded": "Cached task draft discarded"
   }
 }

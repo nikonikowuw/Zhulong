@@ -1,10 +1,11 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Download,
   FileSpreadsheet,
   FileArchive,
   Loader2,
+  RotateCcw,
   X,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -25,6 +26,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Switch } from '@/components/ui/switch'
 import { type CameraNameLookup } from '../../data/camera-label'
 import { type RecordItem, type RecordsTab } from '../../data/schema'
+import { exportDb, type ExportTaskDraft } from '../../lib/export-db'
 import {
   executeRecordsExport,
   type ExportProgress,
@@ -99,6 +101,26 @@ export function RecordsExportDialog({
   const [progress, setProgress] = useState<ExportProgress | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
+  // 未完成任务草稿
+  const [pendingDraft, setPendingDraft] = useState<ExportTaskDraft | null>(null)
+
+  // 弹窗展开时探测是否存在未完成的导出草稿
+  useEffect(() => {
+    if (open) {
+      void exportDb.getLatestPendingTask().then((draft) => {
+        setPendingDraft(draft)
+      })
+    }
+  }, [open])
+
+  const handleDiscardDraft = async () => {
+    if (pendingDraft) {
+      await exportDb.clearTaskDraft(pendingDraft.taskId)
+      setPendingDraft(null)
+      toast.info(t('export.draftDiscarded', { defaultValue: '已清除历史草稿' }))
+    }
+  }
+
   const toggleTab = (tabKey: RecordsTab) => {
     setSelectedTabs((prev) => {
       const next = new Set(prev)
@@ -123,7 +145,7 @@ export function RecordsExportDialog({
     toast.info(t('export.cancelled', { defaultValue: '已取消导出' }))
   }
 
-  const handleStartExport = async () => {
+  const handleStartExport = async (resumeTaskId?: string) => {
     if (!exportCsv && !exportImages) {
       toast.error(
         t('export.selectAtLeastOneFormat', {
@@ -145,6 +167,7 @@ export function RecordsExportDialog({
 
     try {
       const result = await executeRecordsExport({
+        resumeTaskId,
         selectedRecords:
           mode === 'selection'
             ? {
@@ -181,6 +204,7 @@ export function RecordsExportDialog({
           defaultValue: '导出完成，文件已开始下载',
         })
       )
+      setPendingDraft(null)
       onOpenChange(false)
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === 'AbortError') {
@@ -240,6 +264,52 @@ export function RecordsExportDialog({
                 })}
           </DialogDescription>
         </DialogHeader>
+
+        {/* 历史未完成任务断点恢复提示条 */}
+        {pendingDraft && !isExporting && (
+          <div className='flex animate-in items-center justify-between gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs duration-200 fade-in'>
+            <div className='flex items-center gap-2'>
+              <RotateCcw className='size-4 shrink-0 animate-pulse text-primary' />
+              <div>
+                <div className='font-semibold text-foreground'>
+                  {t('export.draftFoundTitle', {
+                    defaultValue: '发现上次未完成的导出任务',
+                  })}
+                </div>
+                <div className='text-[11px] text-muted-foreground'>
+                  {t('export.draftFoundDesc', {
+                    current: pendingDraft.completedKeys.length,
+                    total: pendingDraft.totalCount,
+                    defaultValue: `已处理 ${pendingDraft.completedKeys.length} / ${pendingDraft.totalCount} 项证据图片`,
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className='flex items-center gap-1.5'>
+              <Button
+                type='button'
+                variant='ghost'
+                size='sm'
+                className='h-7 px-2 text-xs text-muted-foreground hover:text-foreground'
+                onClick={handleDiscardDraft}
+              >
+                {t('export.discardDraft', { defaultValue: '放弃' })}
+              </Button>
+              <Button
+                type='button'
+                size='sm'
+                className='h-7 gap-1 px-2.5 text-xs'
+                onClick={() => handleStartExport(pendingDraft.taskId)}
+              >
+                <RotateCcw className='size-3' />
+                <span>
+                  {t('export.resumeDraft', { defaultValue: '继续断点导出' })}
+                </span>
+              </Button>
+            </div>
+          </div>
+        )}
 
         {/* 正在导出时的进度态 */}
         {isExporting ? (
@@ -516,7 +586,7 @@ export function RecordsExportDialog({
               <Button
                 type='button'
                 size='sm'
-                onClick={handleStartExport}
+                onClick={() => handleStartExport()}
                 className='gap-1.5'
               >
                 <Download className='size-3.5' />
