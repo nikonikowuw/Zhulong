@@ -120,9 +120,12 @@ func (s *Subscription) Close() error
 `Zhulong_stream_audio_info` 返回的是**流级常量**（codec / 采样率 / 声道 / extradata），刻意不进包视图：
 每包都带一份采样率只会让热路径白白变大。
 
-- **调用方分配、调用期间复制**：`Zhulong_audio_view` 由 Go 侧栈上分配，`extradata` 指向 Go 分配的
-  `[]byte`（`&buf[0]`），容量写在 `extradata_capacity`。C 侧只在调用期间 `memcpy`，**不得**保存该指针。
-  Go 侧调用后紧跟 `runtime.KeepAlive(buf)`，保证 GC 不会在 CGO 期间回收。
+- **缓冲区由 C 侧分配**：`extradata` 必须指向 `C.malloc` 得到的内存（容量写进 `extradata_capacity`），
+  返回后用 `C.GoBytes` 复制成 Go 副本，再 `C.free`。
+  ⚠️ 不要把 `&goBuf[0]` 塞进 `Zhulong_audio_view` 再传 `&view`：cgo 的指针检查禁止
+  「Go 指针指向的 Go 内存里还含 Go 指针」，即使目标是无指针的 `[]byte` 也会在运行时
+  panic（`argument of cgo function has Go pointer to unpinned Go pointer`，已实测踩到）。
+  真要用 Go 缓冲就先 `runtime.Pinner.Pin`，否则一律 C 分配。C 侧只在调用期间写入，**不得**保存该指针。
 - **容量不足是正常路径，不是错误**：返回 `Zhulong_ERR_BUFFER_TOO_SMALL`，并把实际所需长度写进
   `extradata_size`；调用方据此扩容重试。不要写“先查一次大小再取一次”的双调用协议 —— 流可能在两次调用间重建。
 - **不返回内部借用指针**：绝不把 `audio_meta_.extradata` 的地址交出去，否则流销毁后就是悬垂指针；

@@ -490,3 +490,129 @@ func TestBridgeIntegration_AIConsumerAndBrokerPath(t *testing.T) {
 		t.Fatalf("expected ErrClosed after stream closed, got %v", err)
 	}
 }
+
+// TestBridgeIntegration_AudioTrack 验证双轨（ABI v5）：音频元数据、按轨订阅与关闭后的 NOT_FOUND。
+func TestBridgeIntegration_AudioTrack(t *testing.T) {
+	baseURL := getTestRTSPBaseURL(t)
+
+	e := New()
+	if err := e.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer e.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	audioURL := baseURL + "/audio-pcma"
+	s, err := e.Acquire(ctx, audioURL, Consumer{ID: 3001, Kind: ConsumerPreview},
+		StreamOptions{Transport: TransportTCP})
+	if err != nil {
+		t.Fatalf("Acquire failed: %v", err)
+	}
+
+	// 1. 音频元数据：查询可能早于 on_ready，用轮询等它变成 running
+	info := waitForAudioInfo(t, ctx, s)
+	if !info.HasAudio {
+		t.Fatal("expected audio track on /audio-pcma")
+	}
+	if info.Codec != CodecPCMA {
+		t.Fatalf("expected CodecPCMA, got %v", info.Codec)
+	}
+	if info.SampleRate != 8000 || info.Channels != 1 {
+		t.Fatalf("unexpected rate/channels: %d/%d", info.SampleRate, info.Channels)
+	}
+
+	// 2. 混合轨道订阅必须被拒绝：两条轨的生命周期与预算是分开的
+	if _, err := s.Subscribe(ctx, SubscriptionOptions{TrackMask: TrackMaskVideo | TrackMaskAudio}); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("expected ErrInvalidArgument for mixed track mask, got %v", err)
+	}
+
+	// 3. 音频订阅只收音频包，且 codec 与 PtsUS 都已归一化到视频输出时间轴
+	sub, err := s.Subscribe(ctx, SubscriptionOptions{
+		TrackMask:        TrackMaskAudio,
+		MaxPackets:       48,
+		MaxPacketBytes:   8 * 1024,
+		MaxBufferedBytes: 512 * 1024,
+	})
+	if err != nil {
+		t.Fatalf("Subscribe audio failed: %v", err)
+	}
+	defer sub.Close()
+
+	pkt, err := sub.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next audio failed: %v", err)
+	}
+	if pkt.TrackType != TrackAudio {
+		t.Fatalf("expected audio track packet, got %v", pkt.TrackType)
+	}
+	if pkt.Codec != CodecPCMA {
+		t.Fatalf("expected PCMA audio, got %v", pkt.Codec)
+	}
+	if len(pkt.Data) != 160 {
+		t.Fatalf("expected 160-byte G.711 payload, got %d", len(pkt.Data))
+	}
+	if pkt.KeyFrame || pkt.FrameClass != FrameUnknown || pkt.GOPID != 0 {
+		t.Fatalf("audio packet must not carry video framing: key=%v class=%v gop=%d",
+			pkt.KeyFrame, pkt.FrameClass, pkt.GOPID)
+	}
+
+	// 4. 关流后元数据不悬垂：Go 侧句柄失效返回 ErrClosed，绝不回读已释放的原生存储
+	if err := sub.Close(); err != nil {
+		t.Fatalf("sub.Close failed: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	if _, err := s.AudioInfo(ctx); !errors.Is(err, ErrClosed) {
+		t.Fatalf("expected ErrClosed after close, got %v", err)
+	}
+
+}
+
+// TestBridgeIntegration_AudioAbsent 验证纯视频相机不会被误判为「有音频」。
+func TestBridgeIntegration_AudioAbsent(t *testing.T) {
+	baseURL := getTestRTSPBaseURL(t)
+
+	e := New()
+	if err := e.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer e.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	s, err := e.Acquire(ctx, baseURL+"/live", Consumer{ID: 3101, Kind: ConsumerPreview},
+		StreamOptions{Transport: TransportTCP})
+	if err != nil {
+		t.Fatalf("Acquire failed: %v", err)
+	}
+	defer s.Close()
+
+	info := waitForAudioInfo(t, ctx, s)
+	if info.HasAudio {
+		t.Fatalf("expected no audio on a video-only fixture, got codec=%v", info.Codec)
+	}
+}
+
+// waitForAudioInfo 轮询音频元数据直到流进入 RUNNING。
+//
+// acquire 是异步的：on_ready 之前查询会拿到 NOT_RUNNING，这属于正常时序而非失败。
+func waitForAudioInfo(t *testing.T, ctx context.Context, s *Stream) AudioInfo {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		info, err := s.AudioInfo(ctx)
+		if err == nil {
+			return info
+		}
+		lastErr = err
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("audio info never became available: %v", lastErr)
+	return AudioInfo{}
+}

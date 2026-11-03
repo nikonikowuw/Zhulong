@@ -20,7 +20,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func setupTestCameraApp(t *testing.T) (*gin.Engine, *CameraService, *EventHub, *mockMediaEngine, func()) {
+func setupTestCameraApp(t *testing.T, middlewares ...gin.HandlerFunc) (*gin.Engine, *CameraService, *EventHub, *mockMediaEngine, func()) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -54,6 +54,9 @@ func setupTestCameraApp(t *testing.T) (*gin.Engine, *CameraService, *EventHub, *
 	handler := NewHandler(service, hub, streamHub, zap.NewNop())
 
 	router := gin.New()
+	// 中间件必须在注册路由**之前**挂上：gin 只把 Use 之后的中间件编进路由链，
+	// 顺序反了会得到一个「测试里认证永远缺失」的假象。
+	router.Use(middlewares...)
 	apiGroup := router.Group("/api/v1")
 	handler.RegisterRoutes(apiGroup)
 
@@ -296,13 +299,56 @@ func TestCameraHandlerStreamWS(t *testing.T) {
 	}
 	activeStream.source.packets <- testPkt
 
+	// 3.1 建连后第一条必须是文本能力帧，且只发一次。
+	//     老前端按 `instanceof ArrayBuffer` 判据忽略它，所以它绝不能出现在二进制帧之后
+	//     ——那会让旧 bundle 把文本当帧解析，直接黑屏。
 	_ = wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	msgType, msgData, err := wsConn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read capability frame failed: %v", err)
+	}
+	if msgType != websocket.TextMessage {
+		t.Fatalf("expected the capability text frame first, got message type %d", msgType)
+	}
+	var capability StreamInfoMessage
+	if err := json.Unmarshal(msgData, &capability); err != nil {
+		t.Fatalf("decode capability frame failed: %v", err)
+	}
+	if capability.Type != StreamFrameTypeInfo || capability.Version != int(WireProtocolVersion) {
+		t.Fatalf("unexpected capability frame: %s", string(msgData))
+	}
+	if capability.CameraID != "cam_ws_play" || capability.Role != "main" {
+		t.Fatalf("capability frame must address the same stream, got %+v", capability)
+	}
+	// 这个 mock 相机没有音频，能力帧必须如实说"没有"，而不是让前端去猜
+	if capability.Audio.Present {
+		t.Fatalf("expected Present=false for a video-only stream, got %+v", capability.Audio)
+	}
+
+	_ = wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	msgType, msgData, err = wsConn.ReadMessage()
 	if err != nil {
 		t.Fatalf("read ws message failed: %v", err)
 	}
 	if msgType != websocket.BinaryMessage {
 		t.Fatalf("expected binary message, got %d", msgType)
+	}
+
+	// 3.2 二进制帧逐字节黄金对比：头 32 字节是写死的期望值，不调用 PackPacket 反推自己。
+	expectedHeader := []byte{
+		0x5A, 0x4C, 0x4D, 0x32, // "ZLM2"
+		0x02,                            // version 2
+		WireCodecH264,                   // codec
+		WireFrameIDR,                    // frame_class
+		WireFlagKeyFrame,                // flags
+		0, 0, 0, 0, 0, 0x0F, 0x42, 0x40, // pts_us = 1_000_000
+		0, 0, 0, 0, 0, 0x0F, 0x42, 0x40, // dts_us = 1_000_000
+		0, 0, 0, 0, // seq（流级帧序号，首帧为 0）
+		0, 0, 0, 1, // gop_id = 1
+	}
+	expected := append(expectedHeader, testPkt.Data...)
+	if !bytes.Equal(msgData, expected) {
+		t.Fatalf("binary frame changed byte-for-byte:\n got %x\nwant %x", msgData, expected)
 	}
 
 	header, payload, err := UnpackPacket(msgData)

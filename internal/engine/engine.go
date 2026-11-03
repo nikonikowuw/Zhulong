@@ -486,24 +486,101 @@ func (e *Engine) getStreamStatus(gen uint64, streamID C.Zhulong_stream_id) (Stre
 	}, nil
 }
 
-// subscribe 注册视频包订阅。
+// subscribe 注册指定轨道的压缩包订阅。
 func (e *Engine) subscribe(
 	gen uint64,
 	streamID C.Zhulong_stream_id,
 	consumerID uint64,
+	mask TrackMask,
 	sub *Subscription,
 ) (C.Zhulong_subscription_id, uintptr, error) {
 	return e.subscribeWith(gen, "subscribe", sub,
 		func(handle C.Zhulong_engine_h, token C.uintptr_t, out *C.Zhulong_subscription_id) C.Zhulong_status_t {
-			return C.Zhulong_stream_subscribe(
+			return C.Zhulong_stream_subscribe_track(
 				handle,
 				streamID,
 				C.uint64_t(consumerID),
+				C.uint32_t(mask),
 				C.Zhulong_packet_callback(C.zhulongPacketCallbackBridge),
 				token,
 				out,
 			)
 		})
+}
+
+// audioInfoBufferBytes 是 audio_info 的一次性缓冲区大小。
+//
+// 原生侧把 extradata 上限定在 256 字节（AAC 的 ASC 只有 2~5 字节），因此一次就够；
+// 万一将来上限变化，ERR_BUFFER_TOO_SMALL 分支会按回报的所需长度重试一次。
+const audioInfoBufferBytes = 256
+
+// getAudioInfo 查询音频元数据。
+//
+// ⚠️ 借用契约：extradata 由本函数提供缓冲区接收，原生侧只在该次调用期间写入，
+// 返回后立刻复制成 Go 副本 —— 绝不保留 C 指针，也不依赖原生内部存储的生命周期。
+func (e *Engine) getAudioInfo(gen uint64, streamID uint64) (AudioInfo, error) {
+	lease, release, err := e.borrowHandle(handleRequirement{
+		requireGeneration: &gen,
+		deniedError:       ErrStaleResource,
+	})
+	if err != nil {
+		return AudioInfo{}, err
+	}
+	defer release()
+
+	info, st := callAudioInfo(lease.handle, C.Zhulong_stream_id(streamID), audioInfoBufferBytes)
+	if int32(st) == int32(C.Zhulong_ERR_BUFFER_TOO_SMALL) && info.configSize > audioInfoBufferBytes {
+		// 容量不足是协议内的正常路径：按回报的所需长度再来一次。
+		info, st = callAudioInfo(lease.handle, C.Zhulong_stream_id(streamID), info.configSize)
+	}
+	if st != C.Zhulong_OK {
+		return AudioInfo{}, mapNativeStatus("audio_info", int32(st))
+	}
+	return info.AudioInfo, nil
+}
+
+type audioInfoResult struct {
+	AudioInfo
+	configSize int
+}
+
+// callAudioInfo 用指定容量发起一次 audio_info 查询，并把 extradata 复制成 Go 副本。
+//
+// ⚠️ 缓冲区必须由 C 侧分配：cgo 的指针检查禁止「把内含 Go 指针的结构体指针交给 C」
+//
+//	（panic: argument of cgo function has Go pointer to unpinned Go pointer），
+//	即使它指向的是无指针的 []byte。用 C.malloc + C.GoBytes 既满足检查，
+//	也让「谁分配谁释放」在代码里一眼可见。
+func callAudioInfo(handle C.Zhulong_engine_h, streamID C.Zhulong_stream_id, capacity int) (audioInfoResult, C.Zhulong_status_t) {
+	if capacity <= 0 {
+		capacity = audioInfoBufferBytes
+	}
+	buffer := C.malloc(C.size_t(capacity))
+	defer C.free(buffer)
+
+	result := audioInfoResult{}
+	view := C.Zhulong_audio_view{
+		extradata:          (*C.uint8_t)(buffer),
+		extradata_capacity: C.size_t(capacity),
+	}
+	st := C.Zhulong_stream_audio_info(handle, streamID, &view)
+	result.configSize = int(view.extradata_size)
+	result.AudioInfo = AudioInfo{
+		HasAudio:   view.has_audio != 0,
+		Codec:      Codec(view.codec),
+		SampleRate: int(view.sample_rate),
+		Channels:   int(view.channels),
+	}
+	if st == C.Zhulong_OK && result.HasAudio {
+		size := result.configSize
+		if size > capacity {
+			size = capacity
+		}
+		if size > 0 {
+			result.Config = C.GoBytes(buffer, C.int(size))
+		}
+	}
+	return result, st
 }
 
 // subscribeAIResults 注册 AI 推理结果订阅。

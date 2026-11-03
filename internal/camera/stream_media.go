@@ -19,6 +19,8 @@ type MediaStream interface {
 	BrokerPath(ctx context.Context) (string, error)
 	// StreamID 返回该路物理流的引擎编号（按流寻址的控制报文用它指定目标）。
 	StreamID(ctx context.Context) (uint64, error)
+	// AudioInfo 返回该路物理流的音频元数据；无音频时 HasAudio=false 且 err 为 nil。
+	AudioInfo(ctx context.Context) (engine.AudioInfo, error)
 	// Status 返回该路物理流的运行状态。
 	//
 	// Native 的 acquire 按 URL 复用：旧流尚有消费者或仍在宽限期内时，交回的仍是
@@ -82,6 +84,10 @@ func (s *streamAdapter) BrokerPath(ctx context.Context) (string, error) {
 
 func (s *streamAdapter) StreamID(ctx context.Context) (uint64, error) {
 	return s.stream.ID(ctx)
+}
+
+func (s *streamAdapter) AudioInfo(ctx context.Context) (engine.AudioInfo, error) {
+	return s.stream.AudioInfo(ctx)
 }
 
 func (s *streamAdapter) Status(ctx context.Context) (engine.StreamStatus, error) {

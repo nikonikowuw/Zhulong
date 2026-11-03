@@ -121,6 +121,17 @@ func (s *Stream) Subscribe(ctx context.Context, options SubscriptionOptions) (*S
 		return nil, err
 	}
 
+	// 零值保持 ABI v4 语义（仅视频）；音频订阅必须自己带上 TrackMaskAudio。
+	mask := options.TrackMask
+	if mask == 0 {
+		mask = TrackMaskVideo
+	}
+	if mask.Has(TrackMaskAudio) && mask.Has(TrackMaskVideo) {
+		// 两条轨的生命周期、队列预算与消费节奏都不同，混订等于把「音频挤掉视频」
+		// 这个必须排除的故障模式重新引回来。需要两条就开两条订阅。
+		return nil, fmt.Errorf("%w: subscribe one track per subscription", ErrInvalidArgument)
+	}
+
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -133,9 +144,11 @@ func (s *Stream) Subscribe(ctx context.Context, options SubscriptionOptions) (*S
 
 	ctrlCtx, cancelCtrl := context.WithCancel(ctx)
 	sub := &Subscription{
-		stream:        s,
-		generation:    s.generation,
-		limits:        limits,
+		stream:     s,
+		generation: s.generation,
+		limits:     limits,
+		// mask 必须在注册前就位：原生订阅一旦生效，回调可能在任何时刻开始读它。
+		mask:          mask,
 		core:          newQueueCore[Packet](func(pkt Packet) int { return len(pkt.Data) }),
 		cancelControl: cancelCtrl,
 	}
@@ -143,7 +156,7 @@ func (s *Stream) Subscribe(ctx context.Context, options SubscriptionOptions) (*S
 	// 此处持有 s.mu 做一次 CGO 调用，与 Engine 的「mu 下不做 CGO」不矛盾：
 	// 原生 subscribe 只是注册回调表项，不阻塞拉流；而「closed 判定 + 单订阅不变量 +
 	// 句柄发布」必须原子，拆锁反而要引入回滚分支。
-	subID, token, err := s.engine.subscribe(s.generation, s.id, s.consumerID, sub)
+	subID, token, err := s.engine.subscribe(s.generation, s.id, s.consumerID, mask, sub)
 	if err != nil {
 		cancelCtrl()
 		s.mu.Unlock()
@@ -158,6 +171,18 @@ func (s *Stream) Subscribe(ctx context.Context, options SubscriptionOptions) (*S
 	go sub.runControlLoop(ctrlCtx)
 
 	return sub, nil
+}
+
+// AudioInfo 查询该路物理流的音频元数据。
+//
+// 无音频的相机同样返回成功（HasAudio=false），只有流本身不存在/未就绪才是错误：
+// 「这路没有声音」是正常状态，不该让调用方去区分「查询失败」和「确实没有」。
+func (s *Stream) AudioInfo(ctx context.Context) (AudioInfo, error) {
+	ref, err := s.lease(ctx)
+	if err != nil {
+		return AudioInfo{}, err
+	}
+	return s.engine.getAudioInfo(ref.generation, uint64(ref.id))
 }
 
 // Close 释放消费者对底层物理流的引用。若存在活跃订阅，会先自动安全退订。

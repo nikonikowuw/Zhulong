@@ -167,6 +167,56 @@ CREATE TABLE camera_streams (
 
 ---
 
+## 5.1 按需音频通道与 ZLA1 协议
+
+音频是**独立通道**，不是预览流的一部分：预览 WS 的二进制帧逐字节不变，协议版本仍是 ZLM2 v2。
+
+1. **能力帧（预览 WS，一次性文本帧）**：建连后、注册客户端与启动写协程**之前**同步写一条
+   `{"type":"stream_info","v":2,"cameraId":…,"role":…,"audio":{present,codec,sampleRate,channels,config,reason?}}`。
+   - `config` 是 AudioSpecificConfig 的 **base64**（G.711 为空串）；它不是 SDP `fmtp` 里那个十六进制 `config=`。
+   - 为什么必须是文本帧且在二进制帧之前：旧 bundle 用 `event.data instanceof ArrayBuffer` 判据，
+     会天然忽略它；一旦排在二进制帧之后，老前端会把文本当帧解析，直接黑屏。
+   - 查询失败不产生错误路径，只写 `present=false` + `reason`：一次探测失败不能影响视频建连。
+
+2. **音频通道**：`GET /api/v1/cameras/:id/streams/:role/audio/ws`（同受 `auth.RequireAuth` 保护）。
+   - 帧格式 ZLA1，20 字节大端头 + 裸负载：
+
+     | 偏移 | 长度 | 字段 | 说明 |
+     | --- | --- | --- | --- |
+     | 0 | 4 | Magic | `0x5A4C4131` ("ZLA1") |
+     | 4 | 1 | Codec | 与 C ABI 一致（`0x10`=AAC, `0x11`=PCMA, `0x12`=PCMU） |
+     | 5 | 1 | Flags | Bit0 Discontinuity / Bit1 PtsSynthetic |
+     | 6 | 2 | Reserved | 恒为 0 |
+     | 8 | 4 | `seq` | 音频轨独立计数 |
+     | 12 | 8 | `pts_us` | 与视频**同一条**输出时间轴（Native 已归一化，前端不得重算） |
+     | 20 | N | Payload | G.711 原始采样 / AAC raw AU |
+
+   - 不复用 ZLM2 头：`frame_class` / `gop_id` 对音频没有语义，塞进去只会制造歧义。
+
+3. **每客户端（登录会话）一条**，不是全局一条：
+   - 键是 `sha256(sessionToken)` 的前 16 位十六进制；**日志中绝不允许出现 token 原文**。
+   - 同一会话开第二条 → 旧连接以 **4001 superseded** 关闭；不同会话互不影响。
+   - 全局硬上限 `AudioChannelMaxCount = 8`，超限 → **4002** 拒绝。它是防滥用常量，不是配置项：
+     已有会话的「接管」不受上限影响，否则刷新页面就再也接不回来。
+
+4. **隔离是硬约束**：
+   - 音频用自己的消费者 ID + 自己的 `engine.Stream` 句柄（Native 按 URL 去重，不多开 RTSP 连接），
+     因此音频订阅的失败、背压、关流都碰不到视频订阅、GOP 与健康态。
+   - `Stream.Subscribe` 拒绝同时订阅两条轨（`TrackMaskVideo|TrackMaskAudio`）：要两条就开两条订阅。
+     「混订」等于把「音频挤掉视频」这个必须排除的故障模式重新引回来。
+   - 音频不刷新 Native 空闲超时：相机画面卡死但音频还在流时，必须照常判 `TIMEOUT`。
+
+5. **关闭与背压**：写队列 48 帧（≈0.96 s）。队列满 → 关闭该通道并上报 **4003 backpressure**，
+   绝不阻塞原生回调、绝不触碰视频订阅。关闭顺序固定为
+   `连接 → 订阅（同步排空）→ 流引用 → 注册表`；注册表必须在 `unsubscribe` 返回后才移除，
+   否则会出现「注册表里没有、原生回调还在跑」的窗口。无音轨时先发 `{"type":"error","code":"NO_AUDIO"}`
+   再以 **4404** 关闭，前端据此置灰而不是重试。
+
+6. **可观测性**：`AudioChannelRegistry.Stats()` 给出 opened / superseded / rejected；
+   通道建立、接管、溢出、关闭各一条日志（含 session 哈希前缀、camera、role、codec、seq、dropped）。
+
+---
+
 ## 6. 前端摄像机配置与状态大盘规范
 
 1. **业务域分层架构 (`web/src/features/camera/`)**：

@@ -1,6 +1,7 @@
 package camera
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
+	"github.com/nikonikowuw/Zhulong/internal/auth"
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
@@ -30,6 +32,7 @@ type Handler struct {
 	service    *CameraService
 	hub        *EventHub
 	streamHub  *StreamHub
+	audio      *AudioChannelRegistry
 	sessionVal func(token string) bool
 	logger     *zap.Logger
 }
@@ -53,6 +56,7 @@ func NewHandler(
 		service:    service,
 		hub:        hub,
 		streamHub:  streamHub,
+		audio:      NewAudioChannelRegistry(logger),
 		sessionVal: valFn,
 		logger:     logger.Named("camera.handler"),
 	}
@@ -78,6 +82,8 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 		group.GET("/:id/ws", h.StreamWS)
 		group.GET("/:id/stream/ws", h.StreamWS)
 		group.GET("/:id/streams/:role/ws", h.StreamWS)
+		// 按需音频通道：只在用户解禁某个格子时建立，与预览二进制帧完全独立
+		group.GET("/:id/streams/:role/audio/ws", h.StreamAudioWS)
 	}
 }
 
@@ -401,19 +407,7 @@ func (h *Handler) StreamWS(c *gin.Context) {
 	// 1. 获取或拉起流分发器（若相机不存在、被禁用或流不存在，返回对应语义错误）
 	disp, err := h.streamHub.GetOrCreateDispatcher(c.Request.Context(), cameraID, role)
 	if err != nil {
-		if errors.Is(err, ErrCameraNotFound) {
-			httputil.WriteError(c, apperr.New(apperr.KindNotFound, "CAMERA_NOT_FOUND", "Camera not found", err))
-			return
-		}
-		if errors.Is(err, ErrCameraDisabled) {
-			httputil.WriteError(c, apperr.New(apperr.KindPermissionDenied, "CAMERA_DISABLED", "Camera is disabled", err))
-			return
-		}
-		if errors.Is(err, ErrCameraStreamNotFound) {
-			httputil.WriteError(c, apperr.New(apperr.KindNotFound, "STREAM_NOT_FOUND", "Camera stream not found", err))
-			return
-		}
-		httputil.WriteError(c, apperr.New(apperr.KindInternal, "STREAM_ACQUIRE_FAILED", "Failed to acquire camera stream", err))
+		writeStreamAcquireError(c, err)
 		return
 	}
 
@@ -424,19 +418,210 @@ func (h *Handler) StreamWS(c *gin.Context) {
 		return
 	}
 
-	// 3. 创建客户端会话并登记
+	// 3. 一次性能力帧必须在任何二进制帧之前、且只有一个写者时写出。
+	//
+	// 此处尚未注册客户端、也未启动写协程：GOP 补发还在后面，连接上只有本协程在写，
+	// 因此既不会与补发交错，也不需要锁。老前端按 `instanceof ArrayBuffer` 判据忽略
+	// 文本帧，协议版本与二进制布局都没有变化。
+	h.writeStreamInfo(c, conn, disp, cameraID, role)
+
+	// 4. 创建客户端会话并登记
 	client := NewStreamClient(conn, disp, h.logger)
 	disp.RegisterClient(client)
 
-	// 4. 运行写循环与读循环（阻塞当前 handler 协程直到客户端断开）
+	// 5. 运行写循环与读循环（阻塞当前 handler 协程直到客户端断开）
 	go client.WritePump()
 	client.ReadPump()
+}
+
+// writeStreamAcquireError 把拉流错误映射成统一的 HTTP 错误信封。
+//
+// 视频与音频两条 WS 共用同一套语义：同一个 vhost 上出现「视频报 404、音频报 500」
+// 这种差异只会让前端为同一件事写两套分支。
+func writeStreamAcquireError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, ErrCameraNotFound):
+		httputil.WriteError(c, apperr.New(apperr.KindNotFound, "CAMERA_NOT_FOUND", "Camera not found", err))
+	case errors.Is(err, ErrCameraDisabled):
+		httputil.WriteError(c, apperr.New(apperr.KindPermissionDenied, "CAMERA_DISABLED", "Camera is disabled", err))
+	case errors.Is(err, ErrCameraStreamNotFound):
+		httputil.WriteError(c, apperr.New(apperr.KindNotFound, "STREAM_NOT_FOUND", "Camera stream not found", err))
+	case errors.Is(err, ErrStreamHubClosed):
+		httputil.WriteError(c, apperr.New(apperr.KindUnavailable, "STREAM_HUB_CLOSED", "Stream hub is shutting down", err))
+	default:
+		httputil.WriteError(c, apperr.New(apperr.KindInternal, "STREAM_ACQUIRE_FAILED", "Failed to acquire camera stream", err))
+	}
+}
+
+// writeStreamInfo 写出预览 WS 的一次性能力帧。
+//
+// 写失败只记日志：能力帧丢失的后果是「前端听不到声音」，而让整条预览断掉
+// 会把「没声音」升级成「黑屏」，与 I5（任一环不支持都退化为无声视频）相反。
+func (h *Handler) writeStreamInfo(c *gin.Context, conn *websocket.Conn, disp *StreamDispatcher, cameraID, role string) {
+	message := StreamInfoMessage{
+		Type:     StreamFrameTypeInfo,
+		Version:  int(WireProtocolVersion),
+		CameraID: cameraID,
+		Role:     role,
+		Audio:    disp.AudioCapability(c.Request.Context()),
+	}
+	payload, err := json.Marshal(message)
+	if err != nil {
+		h.logger.Debug("marshal stream info failed", zap.Error(err))
+		return
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+		h.logger.Debug("write stream info failed", zap.Error(err))
+	}
+}
+
+// StreamAudioWS 提供按需音频通道。
+//
+// 与预览 WS 的关系是「同一路流的两种视图」：预览照旧只发视频二进制帧，
+// 音频走这条独立连接，因此视频的背压、GOP、健康态与协议版本都不受音频影响。
+func (h *Handler) StreamAudioWS(c *gin.Context) {
+	if h.streamHub == nil {
+		httputil.WriteError(c, apperr.New(apperr.KindInternal, "STREAM_HUB_NOT_INITIALIZED", "Stream hub not available", nil))
+		return
+	}
+
+	cameraID := c.Param("id")
+	role := c.Param("role")
+	if role == "" {
+		role = c.DefaultQuery("role", "main")
+	}
+
+	sessionKey := sessionChannelKey(auth.GetSessionToken(c))
+	if sessionKey == "" {
+		httputil.WriteError(c, apperr.Unauthenticated("UNAUTHORIZED", "Authentication required", nil))
+		return
+	}
+
+	// 1. 先解析相机与流并拿到音频能力：这些错误应当在协议升级**之前**以 HTTP 信封返回，
+	//    否则前端拿到的是一个「连上了又立刻被关」的 WebSocket，无法区分原因。
+	acquired, err := h.streamHub.AcquireAudioStream(c.Request.Context(), cameraID, role)
+	if err != nil {
+		writeStreamAcquireError(c, err)
+		return
+	}
+
+	// 2. 协议升级
+	conn, err := wsUpgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		h.logger.Debug("audio websocket upgrade failed", zap.Error(err))
+		_ = acquired.Stream.Close()
+		return
+	}
+
+	// 3. 无音频：明确告知并关闭，不订阅、不注册
+	if !acquired.Info.HasAudio {
+		writeAudioTerminalFrame(conn, AudioErrorMessage{
+			Type:   AudioFrameTypeError,
+			Code:   AudioErrorNoAudio,
+			Reason: "camera reports no playable audio track",
+		})
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(AudioCloseNoAudio, "no audio"), time.Now().Add(time.Second))
+		_ = conn.Close()
+		_ = acquired.Stream.Close()
+		h.logger.Info("audio channel rejected: no audio",
+			zap.String("session", sessionKey), zap.String("camera_id", cameraID), zap.String("role", role))
+		return
+	}
+
+	// 4. 音频订阅（先订阅成功再注册，避免订阅失败把健康的旧通道顶掉）
+	sub, err := acquired.Stream.Subscribe(c.Request.Context(), engine.SubscriptionOptions{
+		TrackMask:        engine.TrackMaskAudio,
+		MaxPackets:       audioChannelQueueFrames,
+		MaxPacketBytes:   8 * 1024,
+		MaxBufferedBytes: 512 * 1024,
+	})
+	if err != nil {
+		writeAudioTerminalFrame(conn, AudioErrorMessage{
+			Type:   AudioFrameTypeError,
+			Code:   AudioErrorSubscribeFailed,
+			Reason: "failed to subscribe camera audio",
+		})
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(AudioCloseInternal, "subscribe failed"), time.Now().Add(time.Second))
+		_ = conn.Close()
+		_ = acquired.Stream.Close()
+		h.logger.Warn("audio subscribe failed",
+			zap.String("session", sessionKey), zap.String("camera_id", cameraID),
+			zap.String("role", role), zap.Error(err))
+		return
+	}
+
+	channel := NewAudioChannel(h.audio, conn, acquired.Stream, sub, sessionKey, cameraID, role, h.logger)
+
+	previous, err := h.audio.Open(sessionKey, channel)
+	if err != nil {
+		writeAudioTerminalFrame(conn, AudioErrorMessage{
+			Type:   AudioFrameTypeError,
+			Code:   AudioErrorLimit,
+			Reason: "too many audio channels",
+		})
+		channel.closeWithReason(AudioCloseTooManyChannels, "too_many_channels")
+		return
+	}
+	// 5. 先顶掉同一会话的旧连接，再开始推送：否则两个连接会同时出声
+	if previous != nil {
+		h.logger.Info("audio channel superseded",
+			zap.String("session", sessionKey), zap.String("camera_id", cameraID), zap.String("role", role))
+		previous.Supersede()
+	}
+
+	// 6. 文本帧 → 写协程 → 读协程（阻塞到客户端断开）
+	if err := channel.SendInfo(AudioInfoMessage{
+		Type:       AudioFrameTypeInfo,
+		HasAudio:   true,
+		Codec:      acquired.Info.Codec.String(),
+		SampleRate: acquired.Info.SampleRate,
+		Channels:   acquired.Info.Channels,
+		Config:     audioCapability(acquired.Info, "").Config,
+	}); err != nil {
+		channel.closeWithReason(AudioCloseInternal, "info frame failed")
+		return
+	}
+
+	h.logger.Info("audio channel opened",
+		zap.String("session", sessionKey),
+		zap.String("camera_id", cameraID),
+		zap.String("role", role),
+		zap.String("codec", acquired.Info.Codec.String()),
+		zap.Int("sample_rate", acquired.Info.SampleRate),
+		zap.Int("channels", acquired.Info.Channels),
+		zap.Int("channels_total", h.audio.Len()),
+	)
+
+	pumpCtx, cancelPump := context.WithCancel(context.Background())
+	defer cancelPump()
+	go func() {
+		defer cancelPump()
+		channel.Pump(pumpCtx)
+	}()
+	go channel.WritePump()
+	channel.ReadPump()
+}
+
+// writeAudioTerminalFrame 尽力写一条终止性文本帧；失败无所谓，连接马上要关。
+func writeAudioTerminalFrame(conn *websocket.Conn, message AudioErrorMessage) {
+	payload, err := json.Marshal(message)
+	if err != nil {
+		return
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+	_ = conn.WriteMessage(websocket.TextMessage, payload)
 }
 
 // Ensure interface compliance
 var _ io.Closer = (*Handler)(nil)
 
 func (h *Handler) Close() error {
+	// 先收音频通道：它们各自持有一条流引用与订阅，必须在事件总线停掉之前排空，
+	// 否则写协程会对着已关闭的 hub 继续等数据。
+	h.audio.CloseAll()
 	return h.hub.Close()
 }
 

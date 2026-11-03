@@ -107,6 +107,21 @@ func NewStreamDispatcher(
 	}
 }
 
+// AudioCapability 查询该路流的音频能力，供预览 WebSocket 的一次性能力帧使用。
+//
+// 查询失败不当作错误向外抛：能力帧的语义是「告诉你这路能不能听」，查不到就是
+// 「现在不知道/不能听」，前端置灰即可，绝不能让一次探测失败影响视频建连。
+func (d *StreamDispatcher) AudioCapability(ctx context.Context) AudioCapabilityInfo {
+	if d.stream == nil {
+		return audioCapability(engine.AudioInfo{}, "stream handle unavailable")
+	}
+	info, err := d.stream.AudioInfo(ctx)
+	if err != nil {
+		return audioCapability(engine.AudioInfo{}, "audio info unavailable")
+	}
+	return audioCapability(info, "")
+}
+
 // RegisterClient 注册新的 WebSocket 订阅者，并在持有锁的情况下补齐整个 GOP。
 //
 // 补发必须在锁内完成，原因有二：

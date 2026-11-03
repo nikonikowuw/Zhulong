@@ -233,46 +233,59 @@ func (h *StreamHub) GetOrCreateDispatcher(ctx context.Context, cameraID, role st
 	return val.(*StreamDispatcher), nil
 }
 
-func (h *StreamHub) createDispatcher(ctx context.Context, cameraID, role, key string) (*StreamDispatcher, error) {
-	// 1. 查询摄像机与流信息
+// streamTarget 是一路相机流解析后的拉流目标。
+//
+// 抽出来是因为视频分发器与音频通道都要走「查相机 → 选 role → 解密 URI → 定传输协议」
+// 这同一段；复制两份的代价不是多几十行，而是某天只改了其中一份。
+type streamTarget struct {
+	RawURI    string
+	Transport engine.Transport
+}
+
+func (h *StreamHub) resolveStreamTarget(ctx context.Context, cameraID, role string) (streamTarget, error) {
 	cam, err := h.store.GetByID(ctx, cameraID)
 	if err != nil {
-		return nil, err
+		return streamTarget{}, err
 	}
 	if cam == nil {
-		return nil, ErrCameraNotFound
+		return streamTarget{}, ErrCameraNotFound
 	}
 	if !cam.Enabled {
-		return nil, ErrCameraDisabled
+		return streamTarget{}, ErrCameraDisabled
 	}
 
 	var targetStream *CameraStream
-	for _, s := range cam.Streams {
-		if s.Role == role {
-			targetStream = &s
+	for i := range cam.Streams {
+		if cam.Streams[i].Role == role {
+			targetStream = &cam.Streams[i]
 			break
 		}
 	}
 	if targetStream == nil {
-		return nil, ErrCameraStreamNotFound
+		return streamTarget{}, ErrCameraStreamNotFound
 	}
 
-	// 2. 解密明文 RTSP 地址
 	rawBytes, err := h.cipher.Decrypt(targetStream.EncryptedURI, MakeAAD(cameraID, role))
 	if err != nil {
-		return nil, fmt.Errorf("decrypt stream uri: %w", err)
+		return streamTarget{}, fmt.Errorf("decrypt stream uri: %w", err)
 	}
-	rawURI := string(rawBytes)
 
-	// 3. 准备底层拉流选项
 	transport := engine.TransportTCP
 	if targetStream.Transport == "udp" {
 		transport = engine.TransportUDP
 	}
+	return streamTarget{RawURI: string(rawBytes), Transport: transport}, nil
+}
+
+func (h *StreamHub) createDispatcher(ctx context.Context, cameraID, role, key string) (*StreamDispatcher, error) {
+	target, err := h.resolveStreamTarget(ctx, cameraID, role)
+	if err != nil {
+		return nil, err
+	}
 
 	consumerID := h.nextConsumerID.Add(1)
-	mediaStream, err := h.engine.AcquireStream(ctx, rawURI, consumerID, engine.ConsumerPreview, engine.StreamOptions{
-		Transport: transport,
+	mediaStream, err := h.engine.AcquireStream(ctx, target.RawURI, consumerID, engine.ConsumerPreview, engine.StreamOptions{
+		Transport: target.Transport,
 	})
 	if err != nil {
 		h.logger.Warn("acquire media stream failed",
@@ -335,6 +348,76 @@ func (h *StreamHub) createDispatcher(ctx context.Context, cameraID, role, key st
 	)
 
 	return dispatcher, nil
+}
+
+// AcquiredAudioStream 是音频通道专用的流引用与元数据快照。
+type AcquiredAudioStream struct {
+	Stream MediaStream
+	Info   engine.AudioInfo
+}
+
+// AcquireAudioStream 为一条按需音频通道获取独立流引用。
+//
+// ⚠️ 刻意不复用视频分发器的 MediaStream：那个句柄上已经挂着视频订阅，而单句柄单订阅
+// 是既有不变量。音频用**自己的消费者 ID + 自己的 Stream 句柄**，原生侧按 URL 去重，
+// 因此不会多开一条 RTSP 连接，但音频订阅的任何故障（失败、背压、关流）都不会碰到
+// 视频订阅与健康态 —— 这正是本任务最重要的一条隔离。
+func (h *StreamHub) AcquireAudioStream(ctx context.Context, cameraID, role string) (*AcquiredAudioStream, error) {
+	target, err := h.resolveStreamTarget(ctx, cameraID, role)
+	if err != nil {
+		return nil, err
+	}
+
+	consumerID := h.nextConsumerID.Add(1)
+	mediaStream, err := h.engine.AcquireStream(ctx, target.RawURI, consumerID, engine.ConsumerPreview, engine.StreamOptions{
+		Transport: target.Transport,
+	})
+	if err != nil {
+		h.logger.Warn("acquire audio media stream failed",
+			zap.String("camera_id", cameraID),
+			zap.String("role", role),
+			zap.Error(err),
+		)
+		return nil, err
+	}
+
+	info, err := waitAudioInfo(ctx, mediaStream)
+	if err != nil {
+		_ = mediaStream.Close()
+		h.logger.Warn("query audio info failed",
+			zap.String("camera_id", cameraID),
+			zap.String("role", role),
+			zap.Error(err),
+		)
+		return nil, err
+	}
+	return &AcquiredAudioStream{Stream: mediaStream, Info: info}, nil
+}
+
+// audioInfoReadyTimeout 是等流进入 running 后查询音频元数据的预算。
+//
+// acquire 是异步的：on_ready 之前音频元数据还是空的。这里必须等，否则「刚点开喇叭
+// 就被告知无音频」这种误判会变成偶发现象，比彻底不支持更难排查。
+const audioInfoReadyTimeout = 5 * time.Second
+
+func waitAudioInfo(ctx context.Context, stream MediaStream) (engine.AudioInfo, error) {
+	deadline := time.Now().Add(audioInfoReadyTimeout)
+	var lastErr error
+	for {
+		info, err := stream.AudioInfo(ctx)
+		if err == nil {
+			return info, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return engine.AudioInfo{}, lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return engine.AudioInfo{}, ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 func (h *StreamHub) removeDispatcher(cameraID, role string) {

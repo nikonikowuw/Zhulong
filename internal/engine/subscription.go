@@ -24,6 +24,8 @@ type Subscription struct {
 	generation uint64
 
 	limits subscriptionLimits
+	// mask 是订阅的轨道掩码，仅用于诊断与断言；路由本身由原生侧按轨道完成。
+	mask TrackMask
 
 	core          *queueCore[Packet]
 	closeOnce     sync.Once
@@ -35,6 +37,7 @@ type Subscription struct {
 // 之所以用结构体而不是继续加位置参数：ABI v3 之后字段已达 13 个，长参数表一旦错序
 // （例如把 dts_us 传成 pts_us）编译期不会报错，只会让预览端时间戳静默错乱。
 type inboundPacket struct {
+	TrackType  TrackType
 	Codec      Codec
 	PTS        int64
 	DTS        int64
@@ -61,6 +64,7 @@ func (in inboundPacket) toPacket() Packet {
 		copy(data, in.Data)
 	}
 	return Packet{
+		TrackType:  in.TrackType,
 		Codec:      in.Codec,
 		PTS:        in.PTS,
 		DTS:        in.DTS,
@@ -95,6 +99,7 @@ func (s *Subscription) onPacket(packet *C.Zhulong_packet_view) {
 	}
 
 	s.onPacketData(inboundPacket{
+		TrackType:  TrackType(packet.track_type),
 		Codec:      Codec(packet.codec),
 		PTS:        int64(packet.pts),
 		DTS:        int64(packet.dts),
@@ -113,6 +118,11 @@ func (s *Subscription) onPacket(packet *C.Zhulong_packet_view) {
 }
 
 func (s *Subscription) onPacketData(in inboundPacket) {
+	// 双保险：原生侧已按 track_mask 分流，这里再拦一次，因为串轨的后果是
+	// 音频包被当成视频喂给解码器（黑屏/花屏），而这类错位极难从现象反推。
+	if !s.mask.Accepts(in.TrackType) {
+		return
+	}
 	if in.Size < 0 || in.Size > s.limits.maxPacketBytes {
 		s.core.closeWithErr(ErrPacketTooLarge)
 		return

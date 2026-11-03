@@ -52,11 +52,13 @@ type mockMediaStream struct {
 	brokerTotal   uint32
 	failed        atomic.Bool
 	// stateSeq 按顺序返回的状态，用于模拟「刚受理时还在 STARTING、随后才 FAILED」。
-	stateSeq  []engine.StreamState
-	stateIdx  int
-	closeOnce sync.Once
-	closed    bool
-	mu        sync.Mutex
+	stateSeq     []engine.StreamState
+	stateIdx     int
+	audioInfo    engine.AudioInfo
+	audioInfoErr error
+	closeOnce    sync.Once
+	closed       bool
+	mu           sync.Mutex
 }
 
 func (s *mockMediaStream) Subscribe(ctx context.Context, options engine.SubscriptionOptions) (PacketSource, error) {
@@ -75,6 +77,15 @@ func (s *mockMediaStream) BrokerPath(ctx context.Context) (string, error) {
 
 func (s *mockMediaStream) StreamID(ctx context.Context) (uint64, error) {
 	return 42, nil
+}
+
+func (s *mockMediaStream) AudioInfo(ctx context.Context) (engine.AudioInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.audioInfoErr != nil {
+		return engine.AudioInfo{}, s.audioInfoErr
+	}
+	return s.audioInfo, nil
 }
 
 func (s *mockMediaStream) Status(ctx context.Context) (engine.StreamStatus, error) {
@@ -128,7 +139,9 @@ type mockMediaEngine struct {
 	nextStream   *mockMediaStream
 	streams      []*mockMediaStream
 	acquireCount int
-	mu           sync.Mutex
+	// audioInfo 是新建 mock 流的默认音频元数据（测试按需覆盖）。
+	audioInfo engine.AudioInfo
+	mu        sync.Mutex
 }
 
 func newMockMediaEngine() *mockMediaEngine {
@@ -153,7 +166,7 @@ func (e *mockMediaEngine) AcquireStream(
 		return s, nil
 	}
 
-	stream := &mockMediaStream{source: newMockPacketSource(16)}
+	stream := &mockMediaStream{source: newMockPacketSource(16), audioInfo: e.audioInfo}
 	e.streams = append(e.streams, stream)
 	return stream, nil
 }
