@@ -211,10 +211,16 @@ bool Aligner::crop_and_align_direct(
     const zhulong::Image& image,
     const std::array<float, 6>& affine_mat,
     uint8_t* dst_buf,
+    size_t dst_capacity,
     int dst_w,
     int dst_h
 ) {
     if (dst_buf == nullptr || dst_w <= 0 || dst_h <= 0) {
+        return false;
+    }
+
+    const size_t required_bytes = static_cast<size_t>(dst_w) * static_cast<size_t>(dst_h) * 3;
+    if (dst_capacity > 0 && dst_capacity < required_bytes) {
         return false;
     }
 

@@ -112,6 +112,10 @@ inline bool find_json_number(const std::string& json, std::string_view key, doub
     return false;
 }
 
+inline bool is_json_delimiter(char ch) noexcept {
+    return ch == ',' || ch == '}' || ch == ']' || static_cast<unsigned char>(ch) <= ' ';
+}
+
 /**
  * @brief 从扁平 JSON 对象里取一个布尔字段
  */
@@ -139,12 +143,18 @@ inline bool find_json_bool(const std::string& json, std::string_view key, bool& 
             continue;
         }
         if (json.compare(value_start, 4, "true") == 0) {
-            out_value = true;
-            return true;
+            const size_t end_pos = value_start + 4;
+            if (end_pos == json.size() || is_json_delimiter(json[end_pos])) {
+                out_value = true;
+                return true;
+            }
         }
         if (json.compare(value_start, 5, "false") == 0) {
-            out_value = false;
-            return true;
+            const size_t end_pos = value_start + 5;
+            if (end_pos == json.size() || is_json_delimiter(json[end_pos])) {
+                out_value = false;
+                return true;
+            }
         }
     }
     return false;

@@ -43,12 +43,14 @@ MatchResult Matcher::match(
         return result;
     }
 
-    const size_t count = std::min(top_k, scored.size());
-    std::partial_sort(scored.begin(), scored.begin() + static_cast<std::ptrdiff_t>(count), scored.end(),
+    // 保证即使 top_k == 0，也至少对前 1 个元素做堆排序，确保 scored.front() 恒为全局最高分
+    const size_t sort_count = std::min(std::max(top_k, size_t{1}), scored.size());
+    std::partial_sort(scored.begin(), scored.begin() + static_cast<std::ptrdiff_t>(sort_count), scored.end(),
                       [](const std::pair<size_t, float>& a, const std::pair<size_t, float>& b) {
                           return a.second > b.second;
                       });
 
+    const size_t count = std::min(top_k, scored.size());
     result.candidates.reserve(count);
     for (size_t i = 0; i < count; ++i) {
         const auto& item = gallery[scored[i].first];
@@ -60,7 +62,7 @@ MatchResult Matcher::match(
         result.candidates.push_back(std::move(candidate));
     }
 
-    // Top-1 决策
+    // Top-1 决策（经至少 partial_sort(1) 排序后，scored.front() 必然是全局最高分）
     const auto& best = gallery[scored.front().first];
     result.similarity = scored.front().second;
     if (result.similarity >= threshold) {
