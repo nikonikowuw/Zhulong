@@ -53,3 +53,26 @@
 - 可信专网部署约束落地；TLS/网关作为后续部署选项，不在本期
 - faceextract 串行点不可取消（c.mu.Lock 等待不看 ctx），若需让排队本身可取消应另立任务
 - Web UI 的 SearchByImage 坏图仍返回 400，与 OpenAPI 422 不一致，另立任务统一
+
+
+## Session 97: Storage emergency self-heal and RK3568 verification
+<!-- trellis-session: v=2 fp=e09a827a3551e8e8 -->
+
+**Date**: 2026-11-04
+**Task**: Storage emergency self-heal and RK3568 verification
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+Implemented the storage emergency self-heal fix: used/(used+free) usage accounting, two-phase TTL/capacity pruning with an emergency target, grouped snapshot eviction with lock/alarm protection, pending_snapshot_deletes outbox plus record cascade, cleanup backoff/audit, and matching UI copy. make check passed. Deployed the aarch64 build (19e982fe) to the RK3568 board, migrated schema 28->29, and verified emergency cleanup: 14,608 files/2.65GB freed, then watermark cleanup to 71% freed another 4.02GB; pending rows drained to 0 and writes resumed.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0ab2ad7` | fix(storage): self-heal emergency cleanup and cascade snapshot deletes |
+
+### Status
+
+[OK] **Completed**
