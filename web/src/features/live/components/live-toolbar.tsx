@@ -9,7 +9,6 @@ import {
   VolumeX,
   Trash2,
   ScanFace,
-  Sparkles,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { statusDotClass, statusLevelClass } from '@/lib/status-palette'
@@ -37,8 +36,6 @@ interface LiveToolbarProps {
   onVolumeChange?: (volume: number) => void
   showAIOverlay?: boolean
   onToggleAIOverlay?: () => void
-  isFeedOpen?: boolean
-  onToggleFeed?: () => void
 }
 
 const LAYOUT_OPTIONS: Array<{
@@ -63,8 +60,6 @@ export function LiveToolbar({
   onVolumeChange,
   showAIOverlay = true,
   onToggleAIOverlay,
-  isFeedOpen = false,
-  onToggleFeed,
 }: LiveToolbarProps): React.JSX.Element {
   const { t } = useTranslation('live')
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -172,31 +167,6 @@ export function LiveToolbar({
                 {showAIOverlay
                   ? t('disableAIOverlay', '关闭人脸框叠加')
                   : t('enableAIOverlay', '开启人脸框叠加')}
-              </TooltipContent>
-            </Tooltip>
-          )}
-
-          {onToggleFeed && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant='outline'
-                  size='icon'
-                  className={cn(
-                    'h-8 w-8 shadow-2xs transition-all duration-150',
-                    isFeedOpen
-                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.15)] hover:bg-amber-500/20 dark:text-amber-400'
-                      : 'text-muted-foreground hover:text-foreground'
-                  )}
-                  onClick={onToggleFeed}
-                >
-                  <Sparkles className='h-4 w-4' />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side='bottom'>
-                {isFeedOpen
-                  ? t('hideRecognitionFeed', '隐藏实时识别流')
-                  : t('showRecognitionFeed', '显示实时识别流')}
               </TooltipContent>
             </Tooltip>
           )}

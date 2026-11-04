@@ -159,22 +159,6 @@ export function createMockVehicle(
 }
 
 /**
- * 实时抓拍卡片条目（用于实时识别记录流）
- */
-export interface RecognitionRecordItem {
-  id: string
-  cameraId: string
-  cameraName?: string
-  personId: string
-  personName: string
-  matched: boolean
-  similarity: number
-  box: [number, number, number, number]
-  timestamp: number
-  pts: number
-}
-
-/**
  * 安全解析 AI 感知事件
  */
 export function parseAIResultEvent(data: unknown): AIResultEvent | null {

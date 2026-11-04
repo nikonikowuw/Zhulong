@@ -1,32 +1,22 @@
 import {
   type AIResultEvent,
   type AIResultEventInput,
-  type RecognitionRecordItem,
   aiResultEventSchema,
   parseAIResultEvent,
 } from '../types/ai-result'
 
 type CameraSubscriber = (event: AIResultEvent) => void
-type RecordSubscriber = (record: RecognitionRecordItem) => void
 
 /**
- * AI 感知推理结果与实时抓拍流单例管理服务 (AIResultService)
- * 采用浏览器端单例 EventSource 订阅 /api/v1/cameras/events，按 camera_id 派发事件，
- * 并维持实时抓拍流记录环形缓冲区与防抖节流。
+ * AI 感知推理结果单例分发服务 (AIResultService)
+ * 采用浏览器端单例 EventSource 订阅 /api/v1/cameras/events，按 camera_id 派发事件。
+ * 识别记录的持久化与检索属于 records 特性，本服务不再维护前端环形缓冲区。
  */
 export class AIResultService {
   private static instance: AIResultService | null = null
 
   private eventSource: EventSource | null = null
   private cameraSubscribers = new Map<string, Set<CameraSubscriber>>()
-  private recordSubscribers = new Set<RecordSubscriber>()
-
-  private recentRecords: RecognitionRecordItem[] = []
-  private readonly maxRecords = 100
-
-  // 抓拍记录防抖冷却表：key = `${cameraId}:${personId || 'unknown'}`，value = 上次入库时间戳
-  private recordCooldowns = new Map<string, number>()
-  private readonly cooldownMs = 3000
 
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private cleanupTimer: ReturnType<typeof setTimeout> | null = null
@@ -76,99 +66,20 @@ export class AIResultService {
   }
 
   /**
-   * 订阅全局实时识别抓拍卡片流
-   */
-  public subscribeRecords(callback: RecordSubscriber): () => void {
-    if (this.cleanupTimer) {
-      clearTimeout(this.cleanupTimer)
-      this.cleanupTimer = null
-    }
-
-    this.recordSubscribers.add(callback)
-    this.ensureConnected()
-
-    return () => {
-      this.recordSubscribers.delete(callback)
-      this.checkAutoDisconnect()
-    }
-  }
-
-  /**
-   * 获取最近的历史抓拍记录
-   */
-  public getRecentRecords(): RecognitionRecordItem[] {
-    return [...this.recentRecords]
-  }
-
-  /**
-   * 清空实时抓拍记录
-   */
-  public clearRecords(): void {
-    this.recentRecords = []
-    this.recordCooldowns.clear()
-  }
-
-  /**
    * 派发 AI 结果（可用于外部或者测试注入）
    */
   public dispatchEvent(rawEvent: AIResultEvent | AIResultEventInput): void {
     const event = aiResultEventSchema.parse(rawEvent)
     const subs = this.cameraSubscribers.get(event.camera_id)
-    if (subs) {
-      subs.forEach((cb) => {
-        try {
-          cb(event)
-        } catch {
-          // 保护派发安全
-        }
-      })
-    }
+    if (!subs) return
 
-    // 处理实时抓拍卡片生成
-    this.extractAndEmitRecords(event)
-  }
-
-  private extractAndEmitRecords(event: AIResultEvent): void {
-    if (!event.persons || event.persons.length === 0) return
-
-    const now = Date.now()
-    for (const person of event.persons) {
-      for (const face of person.faces) {
-        const dedupeKey = `${event.camera_id}:${face.person_id || face.person_name || 'unknown'}`
-        const lastTime = this.recordCooldowns.get(dedupeKey) || 0
-
-        // 3秒内同一人/未识别目标不重复刷屏
-        if (now - lastTime < this.cooldownMs) {
-          continue
-        }
-        this.recordCooldowns.set(dedupeKey, now)
-
-        const record: RecognitionRecordItem = {
-          id: `rec_${now}_${Math.random().toString(36).slice(2, 7)}`,
-          cameraId: event.camera_id,
-          personId: face.person_id,
-          personName: face.person_name,
-          matched: face.matched,
-          similarity: face.similarity,
-          box: face.box,
-          timestamp: now,
-          pts: event.pts,
-        }
-
-        this.recentRecords.unshift(record)
-        if (this.recentRecords.length > this.maxRecords) {
-          this.recentRecords.pop()
-        }
-
-        this.recordSubscribers.forEach((cb) => {
-          try {
-            cb(record)
-          } catch {
-            // 保护通知安全
-          }
-        })
+    subs.forEach((cb) => {
+      try {
+        cb(event)
+      } catch {
+        // 保护派发安全
       }
-    }
+    })
   }
 
   private ensureConnected(): void {
@@ -210,9 +121,7 @@ export class AIResultService {
 
   private scheduleReconnect(): void {
     if (this.reconnectTimer) return
-    const totalSubscribers =
-      this.cameraSubscribers.size + this.recordSubscribers.size
-    if (totalSubscribers === 0) return
+    if (this.cameraSubscribers.size === 0) return
 
     const delay = Math.min(1000 * Math.pow(2, this.retryAttempts), 15000)
     this.retryAttempts++
@@ -224,15 +133,11 @@ export class AIResultService {
   }
 
   private checkAutoDisconnect(): void {
-    const totalSubscribers =
-      this.cameraSubscribers.size + this.recordSubscribers.size
-    if (totalSubscribers === 0 && !this.cleanupTimer) {
+    if (this.cameraSubscribers.size === 0 && !this.cleanupTimer) {
       // 5秒优雅防抖：若所有窗口关闭订阅，断开 SSE 节省资源
       this.cleanupTimer = setTimeout(() => {
         this.cleanupTimer = null
-        const currentTotal =
-          this.cameraSubscribers.size + this.recordSubscribers.size
-        if (currentTotal === 0 && this.eventSource) {
+        if (this.cameraSubscribers.size === 0 && this.eventSource) {
           this.eventSource.close()
           this.eventSource = null
           if (this.reconnectTimer) {
@@ -253,9 +158,6 @@ export class AIResultService {
     if (this.eventSource) this.eventSource.close()
     this.eventSource = null
     this.cameraSubscribers.clear()
-    this.recordSubscribers.clear()
-    this.recentRecords = []
-    this.recordCooldowns.clear()
     this.retryAttempts = 0
     this.isConnecting = false
   }
