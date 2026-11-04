@@ -96,15 +96,15 @@ std::vector<ClusterCandidate> SpatialClusterer::cluster(
 
     DisjointSet dsu(n);
 
-    // 两两计算透视自适应相对距离
+    // 两两计算透视自适应相对距离（基于平方距离比较，消除 O(N^2) 的 std::sqrt 开方）
     for (size_t i = 0; i < n; ++i) {
         for (size_t j = i + 1; j < n; ++j) {
             const float dx = geoms[i].foot_x - geoms[j].foot_x;
             const float dy = geoms[i].foot_y - geoms[j].foot_y;
-            const float dist = std::sqrt(dx * dx + dy * dy);
+            const float dist_sq = dx * dx + dy * dy;
             const float avg_height = (geoms[i].height + geoms[j].height) * 0.5f;
-            const float rel_dist = dist / avg_height;
-            if (rel_dist <= distance_ratio) {
+            const float max_dist = distance_ratio * avg_height;
+            if (dist_sq <= max_dist * max_dist) {
                 dsu.unite(i, j);
             }
         }
