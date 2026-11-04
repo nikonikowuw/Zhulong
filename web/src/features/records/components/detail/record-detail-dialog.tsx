@@ -37,9 +37,9 @@ import { cameraLabel, type CameraNameLookup } from '../../data/camera-label'
 import { evidenceFileName } from '../../data/evidence-file-name'
 import {
   algorithmLabel,
-  type Alarm,
-  type Capture,
-  type Recognition,
+  isAlarmRecord,
+  isCaptureRecord,
+  isRecognitionRecord,
   type RecordItem,
   type RecordsTab,
 } from '../../data/schema'
@@ -102,14 +102,17 @@ export function RecordDetailDialog({
 
   if (!record) return null
 
-  const isRecognition = tab === 'recognitions'
-  const isAlarm = tab === 'alarms'
-  const isVehicleCapture = tab === 'vehicles'
-  const isCapture = tab === 'captures' || isVehicleCapture
+  // 渲染分支由记录自身的形状决定，`tab` 只用来区分抓拍/车辆两种版式。
+  // 本组件在 `open=false` 时也会执行（父组件保留着上一条记录）：若按 `tab` 强转，
+  // 关闭弹窗后切 Tab 或浏览器前进/后退，就会把 Alarm 当 Recognition 读 `bodyBox`。
+  const rec = isRecognitionRecord(record) ? record : null
+  const alm = isAlarmRecord(record) ? record : null
+  const cap = isCaptureRecord(record) ? record : null
 
-  const rec = isRecognition ? (record as Recognition) : null
-  const alm = isAlarm ? (record as Alarm) : null
-  const cap = isCapture ? (record as Capture) : null
+  const isRecognition = rec !== null
+  const isAlarm = alm !== null
+  const isVehicleCapture = cap !== null && tab === 'vehicles'
+  const isCapture = cap !== null
 
   // 识别记录的 body_box 在「纯人脸退化项」里是人脸框的别名（逐位相等，见插件契约）。
   // 这种记录只画人脸框，否则同一张脸会叠出两个框。

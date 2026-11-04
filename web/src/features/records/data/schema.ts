@@ -134,6 +134,28 @@ export type CaptureListResponse = z.infer<typeof captureListResponseSchema>
 
 export type RecordItem = Recognition | Alarm | Capture
 
+/**
+ * 记录类型判别。
+ *
+ * 三种记录在 JSON 里字段集互不重叠，因此按「判别字段是否存在」分派，
+ * 而不是按 URL 里的 `tab` 或 `as` 断言 —— 二者都可能与手里这条记录不一致：
+ * 关闭详情弹窗后切 Tab、浏览器前进/后退都会留下跨 Tab 的残留记录。
+ * 断言失败时会去读别的类型上根本不存在的字段（例如 Alarm 上的 `bodyBox`）。
+ */
+export function isRecognitionRecord(item: RecordItem): item is Recognition {
+  return (
+    'bodyBox' in item && Array.isArray(item.bodyBox) && 'candidates' in item
+  )
+}
+
+export function isAlarmRecord(item: RecordItem): item is Alarm {
+  return 'alarmType' in item
+}
+
+export function isCaptureRecord(item: RecordItem): item is Capture {
+  return 'targetType' in item
+}
+
 export interface GetRecognitionsParams {
   page?: number
   pageSize?: number

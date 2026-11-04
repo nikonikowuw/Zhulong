@@ -5,6 +5,9 @@ import {
   captureListResponseSchema,
   captureSchema,
   faceCandidateSchema,
+  isAlarmRecord,
+  isCaptureRecord,
+  isRecognitionRecord,
   recognitionListResponseSchema,
   recognitionSchema,
   recordsSearchSchema,
@@ -229,6 +232,43 @@ describe('Records Schemas', () => {
       expect(parsed.preset).toBe('24h')
       expect(parsed.matched).toBe('true')
       expect(parsed.alarmType).toBe('invasion')
+    })
+  })
+
+  describe('记录类型判别', () => {
+    const recognition = recognitionSchema.parse({
+      id: 'rec-1',
+      cameraId: 'cam-1',
+      capturedAt: '2026-03-31T12:00:00Z',
+      createdAt: '2026-03-31T12:00:01Z',
+    })
+    const alarm = alarmSchema.parse({
+      id: 'alarm-1',
+      cameraId: 'cam-1',
+      alarmType: 'tripwire',
+      capturedAt: '2026-03-31T12:30:00Z',
+      createdAt: '2026-03-31T12:30:01Z',
+    })
+    const capture = captureSchema.parse({
+      id: 'cap-1',
+      cameraId: 'cam-1',
+      targetType: 'vehicle',
+      capturedAt: '2026-03-31T13:00:00Z',
+      createdAt: '2026-03-31T13:00:01Z',
+    })
+
+    it('按判别字段区分三种记录', () => {
+      expect(isRecognitionRecord(recognition)).toBe(true)
+      expect(isAlarmRecord(recognition)).toBe(false)
+      expect(isCaptureRecord(recognition)).toBe(false)
+
+      expect(isAlarmRecord(alarm)).toBe(true)
+      expect(isRecognitionRecord(alarm)).toBe(false)
+      expect(isCaptureRecord(alarm)).toBe(false)
+
+      expect(isCaptureRecord(capture)).toBe(true)
+      expect(isRecognitionRecord(capture)).toBe(false)
+      expect(isAlarmRecord(capture)).toBe(false)
     })
   })
 })

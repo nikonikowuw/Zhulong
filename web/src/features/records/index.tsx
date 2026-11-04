@@ -66,6 +66,9 @@ export function Records() {
   // 详情弹窗状态
   const [detailOpen, setDetailOpen] = useState(false)
   const [selectedRecord, setSelectedRecord] = useState<RecordItem | null>(null)
+  // 打开详情时的 Tab。记录可能来自抓拍/告警 Tab，而 `tab` 跟着 URL 走：
+  // 浏览器前进/后退会让两者错位，届时无法判断该按哪种版式渲染这条记录。
+  const [selectedTab, setSelectedTab] = useState<RecordsTab>('recognitions')
 
   // 导出弹窗状态
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
@@ -156,6 +159,7 @@ export function Records() {
 
   const handleOpenDetail = (item: RecordItem) => {
     setSelectedRecord(item)
+    setSelectedTab(tab)
     setDetailOpen(true)
   }
 
@@ -377,7 +381,7 @@ export function Records() {
 
       {/* 研判详情弹窗 */}
       <RecordDetailDialog
-        tab={tab}
+        tab={selectedTab}
         record={selectedRecord}
         open={detailOpen}
         cameraName={cameraName}

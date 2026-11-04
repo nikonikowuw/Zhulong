@@ -168,6 +168,27 @@ describe('RecordDetailDialog', () => {
     await expect.element(getByText('tripwire')).toBeInTheDocument()
   })
 
+  it('dispatches on the record shape even when tab points at another kind', async () => {
+    // 回归用例：父组件关闭弹窗后仍保留上一条记录，而 `tab` 跟着 URL 走，
+    // 切 Tab 或浏览器前进/后退都会让两者错位。曾经这里按 `tab` 强转成 Recognition，
+    // 把 Alarm 上不存在的 `bodyBox` 传给 boxesCoincide，渲染期直接抛
+    // "Cannot read properties of undefined (reading '0')"，整页白屏。
+    // 注意 open=false 也会执行组件体，所以错位不需要弹窗开着就能触发。
+    const { getByRole, getByText } = await render(
+      <RecordDetailDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        record={mockAlarm}
+        tab='recognitions'
+      />
+    )
+
+    await expect
+      .element(getByRole('heading', { name: /事件告警研判详情/ }))
+      .toBeInTheDocument()
+    await expect.element(getByText('tripwire')).toBeInTheDocument()
+  })
+
   it('renders vehicle details with full scene, crop, and structured attributes', async () => {
     const vehicleCapture: Capture = {
       ...mockCapture,
