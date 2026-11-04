@@ -193,7 +193,7 @@ func (g *EmergencyGate) evaluateLocked(
 		return StatusError, transition
 	}
 
-	usage := percentUsed(stats.UsedBytes, stats.TotalBytes)
+	usage := usagePercent(stats)
 
 	minFreeBytes := uint64(cfg.EmergencyStopMinMB) * 1024 * 1024
 	emergencyTriggered := usage >= cfg.EmergencyStopPercent || stats.FreeBytes < minFreeBytes

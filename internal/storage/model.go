@@ -23,6 +23,7 @@ const (
 const (
 	ActionStorageUpdateConfig    = "storage.update_config"
 	ActionStorageManualCleanup   = "storage.manual_cleanup"
+	ActionStorageAutoCleanup     = "storage.auto_cleanup"
 	ActionStoragePathTest        = "storage.test_path"
 	ActionStorageEmergencyStop   = "storage.emergency_stop"
 	ActionStorageEmergencyResume = "storage.emergency_resume"
@@ -40,14 +41,26 @@ type StorageConfig struct {
 	EmergencyStopMinMB      int64  `json:"emergencyStopMinMb"`      // Write-stop free-space floor in MB
 }
 
-// percentUsed converts byte counts into a 0..100 usage percentage, reporting 0
-// when the volume geometry is unknown.
-func percentUsed(used, total uint64) int {
-	if total == 0 {
+// usagePercent converts byte counts into the user-available usage percentage,
+// rounding up and matching `df`'s Use%: used / (used + available).
+//
+// Ext4 reserved blocks are only unavailable to unprivileged processes, so
+// dividing by TotalBytes systematically underestimates pressure for a non-root
+// daemon. Rounding up avoids 89.9% being truncated to 89% at high=90.
+//
+// On a root daemon Bavail usually equals Bfree, making this collapse to
+// used/total; callers still need the min-free emergency gate as the backstop.
+func usagePercent(stats *FSStats) int {
+	if stats == nil {
 		return 0
 	}
 
-	return int((used * 100) / total)
+	available := stats.UsedBytes + stats.FreeBytes
+	if available == 0 {
+		return 0
+	}
+
+	return int((stats.UsedBytes*100 + available - 1) / available)
 }
 
 // DefaultStorageConfig returns safe default settings tuned for edge NVR/AI boxes.
@@ -80,7 +93,7 @@ type StorageStatus struct {
 	TotalBytes     uint64                `json:"totalBytes"`     // Total capacity in bytes
 	UsedBytes      uint64                `json:"usedBytes"`      // Used capacity in bytes
 	FreeBytes      uint64                `json:"freeBytes"`      // Available capacity for non-root users in bytes
-	UsagePercent   int                   `json:"usagePercent"`   // Volume usage percentage (0..100)
+	UsagePercent   int                   `json:"usagePercent"`   // User-available usage percentage (0..100): used/(used+free)
 	Breakdown      StorageUsageBreakdown `json:"breakdown"`      // Categorized usage breakdown
 	Status         StorageHealthStatus   `json:"status"`         // Current health status
 	DeviceID       uint64                `json:"deviceId"`       // Associated filesystem device ID (st_dev)
@@ -123,10 +136,18 @@ type UpdateConfigRequest struct {
 
 // CleanupSummary details the execution metrics of a triggered prune cycle.
 type CleanupSummary struct {
-	TriggerReason PruneTrigger `json:"triggerReason"` // "manual" or "watermark"
-	DeletedFiles  int          `json:"deletedFiles"`
-	FreedBytes    int64        `json:"freedBytes"`
-	DurationMs    int64        `json:"durationMs"`
-	TargetStatus  PruneStatus  `json:"targetStatus"` // "completed" or "skipped_below_high_watermark"
-	FinishedAt    time.Time    `json:"finishedAt"`
+	TriggerReason  PruneTrigger    `json:"triggerReason"` // manual, watermark, or emergency
+	DeletedFiles   int             `json:"deletedFiles"`
+	FreedBytes     int64           `json:"freedBytes"`
+	ProtectedFiles int             `json:"protectedFiles"`
+	ProtectedBytes int64           `json:"protectedBytes"`
+	DurationMs     int64           `json:"durationMs"`
+	TargetStatus   PruneStatus     `json:"targetStatus"` // completed or skipped_below_high_watermark
+	StopReason     PruneStopReason `json:"stopReason"`
+	FinishedAt     time.Time       `json:"finishedAt"`
+
+	// DeletedSnapshotIDs carries the snapshot IDs whose media files were fully
+	// removed. It is internal transport to the record reconciler and must never
+	// be serialized into the manual-cleanup API response.
+	DeletedSnapshotIDs []string `json:"-"`
 }

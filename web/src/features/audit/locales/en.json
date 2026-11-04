@@ -58,6 +58,7 @@
     "gb28181.channel_bind_camera": "Bind GB28181 Channel as Camera",
     "storage.update_config": "Update Storage Config",
     "storage.manual_cleanup": "Manual Storage Cleanup",
+    "storage.auto_cleanup": "Automatic Storage Cleanup",
     "storage.test_path": "Storage Path Test",
     "storage.emergency_stop": "Storage Emergency Stop",
     "storage.emergency_resume": "Storage Emergency Resume",

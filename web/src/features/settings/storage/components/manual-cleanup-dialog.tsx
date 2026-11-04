@@ -77,7 +77,7 @@ export function ManualCleanupDialog({ onSuccess }: ManualCleanupDialogProps) {
             <p>
               {t('dialog.desc1', {
                 defaultValue:
-                  '系统将立即启动双水位回差引擎，依照阶梯优先级清理过期临时导出和最早的未加锁常规录像，直到磁盘使用率回落至低水位线以下。',
+                  '系统将立即启动双水位回差引擎：先全量清理过期临时导出、录像与抓拍；空间仍有压力时，再按最旧优先淘汰未过期录像与未锁定抓拍，直到回落到低水位线以下。',
               })}
             </p>
             <p className='text-xs text-muted-foreground'>

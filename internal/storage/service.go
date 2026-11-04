@@ -24,6 +24,15 @@ const (
 	breakdownScanTimeout = 3 * time.Second
 	// pruneRunTimeout bounds one automatic prune cycle.
 	pruneRunTimeout = 5 * time.Minute
+	// pruneCallbackTimeout bounds the record reconciliation callback after a
+	// prune. It is deliberately independent of pruneRunTimeout: a long cleanup
+	// must not cancel the durable DB cascade.
+	pruneCallbackTimeout = 30 * time.Second
+	// autoCleanupAuditInterval is the minimum gap between audits for cycles that
+	// actually deleted files; autoCleanupIdleAuditInterval is the slower cadence
+	// for zero-progress cycles.
+	autoCleanupAuditInterval     = 5 * time.Minute
+	autoCleanupIdleAuditInterval = time.Hour
 	// tickTimeout bounds one status refresh inside the background loop.
 	tickTimeout = 10 * time.Second
 )
@@ -68,7 +77,12 @@ type Service struct {
 	lastStatus       *StorageStatus
 	lastBreakdown    StorageUsageBreakdown
 	lastBreakdownAt  time.Time
-	afterPrune       func(context.Context)
+	afterPrune       func(context.Context, []string)
+
+	backoffMu            sync.Mutex
+	nextAutoPrune        time.Time
+	lastAutoCleanupAudit time.Time
+	autoPruneFailCount   int
 
 	stopCh   chan struct{}
 	drained  chan struct{}
@@ -97,7 +111,7 @@ func NewService(deps ServiceDeps) *Service {
 
 	cleaner := deps.Cleaner
 	if cleaner == nil {
-		cleaner = NewCleanerEngine(inspector, logger)
+		cleaner = NewCleanerEngine(inspector, logger, CleanerOptions{CapacityProbe: probeCapacity})
 	}
 
 	repo := deps.Repo
@@ -157,12 +171,22 @@ func (s *Service) SetAuditor(auditor *audit.Service) {
 }
 
 // SetAfterPrune registers the callback the record domain uses to reconcile rows
-// after files were deleted. Like SetAuditor it is a setter because the callback
-// closes over components that do not exist yet at construction time.
-func (s *Service) SetAfterPrune(callback func(context.Context)) {
+// after files were deleted. IDs are the snapshot units whose files are fully
+// gone; the callback must enqueue them durably before attempting DB deletion.
+func (s *Service) SetAfterPrune(callback func(context.Context, []string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.afterPrune = callback
+}
+
+// SetEvidenceGuard installs the optional alarm-evidence guard used before
+// deleting snapshot units. The guard is fail-closed: an error protects the
+// batch rather than risking historical alarm evidence.
+func (s *Service) SetEvidenceGuard(guard EvidenceGuard) {
+	if s == nil || s.cleaner == nil {
+		return
+	}
+	s.cleaner.SetEvidenceGuard(guard)
 }
 
 // auditLog returns the configured auditor, if any. Auditors are installed at
@@ -175,12 +199,12 @@ func (s *Service) auditLog() *audit.Service {
 	return s.auditor
 }
 
-func (s *Service) notifyAfterPrune(ctx context.Context) {
+func (s *Service) notifyAfterPrune(ctx context.Context, deletedSnapshotIDs []string) {
 	s.mu.RLock()
 	callback := s.afterPrune
 	s.mu.RUnlock()
 	if callback != nil {
-		callback(ctx)
+		callback(ctx, deletedSnapshotIDs)
 	}
 }
 
@@ -215,8 +239,19 @@ func (s *Service) Start(ctx context.Context) error {
 	s.mu.Unlock()
 
 	// Initial probe and status refresh
-	if _, err := s.RefreshStatus(ctx); err != nil {
+	status, err := s.RefreshStatus(ctx)
+	if err != nil {
 		s.logger.Warn("initial storage status inspection encountered warning", zap.Error(err))
+	}
+	if status != nil && status.TotalBytes > 0 {
+		freeTarget := uint64(cfg.EmergencyStopMinMB) * 1024 * 1024 * 5 / 4
+		if freeTarget >= status.TotalBytes {
+			s.logger.Warn("storage emergency reserve is too large for this volume; emergency stop may stay latched",
+				zap.Uint64("reserve_bytes", freeTarget),
+				zap.Uint64("volume_total_bytes", status.TotalBytes),
+				zap.Int64("emergency_stop_min_mb", cfg.EmergencyStopMinMB),
+			)
+		}
 	}
 
 	s.wg.Add(1)
@@ -264,7 +299,8 @@ func (s *Service) runLoop() {
 	}
 }
 
-// tick refreshes the status once and kicks off a watermark prune when needed.
+// tick refreshes the status once and kicks off a watermark or emergency prune
+// when needed.
 //
 // The prune runs in its own tracked goroutine so Stop can wait for it; the
 // cleaner's own in-progress flag makes a duplicate start a no-op error.
@@ -277,8 +313,32 @@ func (s *Service) tick() {
 		return
 	}
 
-	if status.Status != StatusWarning || s.cleaner.IsCleaning() {
+	switch status.Status {
+	case StatusWarning, StatusEmergencyStopped:
+	case StatusCleaning:
+		// An in-flight cleanup is already the throttle. Do not reset the
+		// backoff just because the status payload says "cleaning".
 		return
+	default:
+		// Only a healthy state resets the backoff. Resetting on every warning
+		// tick would defeat the zero-progress throttle entirely.
+		s.resetAutoPruneBackoff()
+		return
+	}
+	if s.cleaner.IsCleaning() {
+		return
+	}
+
+	s.backoffMu.Lock()
+	shouldSkip := time.Now().Before(s.nextAutoPrune)
+	s.backoffMu.Unlock()
+	if shouldSkip {
+		return
+	}
+
+	trigger := PruneTriggerWatermark
+	if status.Status == StatusEmergencyStopped {
+		trigger = PruneTriggerEmergency
 	}
 
 	s.wg.Add(1)
@@ -291,22 +351,123 @@ func (s *Service) tick() {
 		cfg, err := s.repo.GetConfig(pruneCtx)
 		if err != nil {
 			s.logger.Warn("automatic storage cleanup skipped: config unavailable", zap.Error(err))
+			s.recordAutoCleanupFailure()
 			return
 		}
 
-		_, err = s.cleaner.RunPrune(pruneCtx, status.MediaDirectory, cfg, PruneTriggerWatermark)
+		summary, err := s.cleaner.RunPrune(pruneCtx, status.MediaDirectory, cfg, trigger)
 		if err != nil {
 			if !errors.Is(err, ErrCleanupInProgress) {
 				s.logger.Warn("automatic storage cleanup failed", zap.Error(err))
 			}
+			s.recordAutoCleanupFailure()
 			return
 		}
 
-		s.notifyAfterPrune(pruneCtx)
-		if _, err := s.RefreshStatus(pruneCtx); err != nil {
+		// The DB cascade must not be canceled by a 5-minute prune timeout. The
+		// IDs are already durable in the record outbox before deletion is tried.
+		callbackCtx, callbackCancel := context.WithTimeout(context.WithoutCancel(pruneCtx), pruneCallbackTimeout)
+		s.notifyAfterPrune(callbackCtx, summary.DeletedSnapshotIDs)
+		callbackCancel()
+
+		// RefreshStatus must not inherit a prune context that may be canceled
+		// right after a long cleanup; otherwise the gate can stay latched until
+		// the next tick. Use a fresh bounded context.
+		refreshCtx, refreshCancel := context.WithTimeout(context.Background(), tickTimeout)
+		if _, err := s.RefreshStatus(refreshCtx); err != nil {
 			s.logger.Warn("storage status refresh after automatic cleanup failed", zap.Error(err))
 		}
+		refreshCancel()
+
+		s.recordAutoCleanupResult(summary)
+		s.writeAutoCleanupAudit(summary)
 	}()
+}
+
+func (s *Service) resetAutoPruneBackoff() {
+	s.backoffMu.Lock()
+	s.nextAutoPrune = time.Time{}
+	s.autoPruneFailCount = 0
+	s.backoffMu.Unlock()
+}
+
+func (s *Service) recordAutoCleanupFailure() {
+	s.backoffMu.Lock()
+	s.autoPruneFailCount++
+	s.nextAutoPrune = time.Now().Add(autoPruneBackoff(s.autoPruneFailCount))
+	s.backoffMu.Unlock()
+}
+
+func (s *Service) recordAutoCleanupResult(summary *CleanupSummary) {
+	if summary == nil {
+		return
+	}
+
+	s.backoffMu.Lock()
+	defer s.backoffMu.Unlock()
+
+	switch {
+	case summary.StopReason == PruneStopTargetReached,
+		summary.StopReason == PruneStopSkippedBelowHigh,
+		summary.DeletedFiles > 0 && summary.StopReason != PruneStopCandidatesExhausted && summary.StopReason != PruneStopContextCanceled:
+		s.nextAutoPrune = time.Time{}
+		s.autoPruneFailCount = 0
+	default:
+		s.autoPruneFailCount++
+		s.nextAutoPrune = time.Now().Add(autoPruneBackoff(s.autoPruneFailCount))
+	}
+}
+
+func autoPruneBackoff(failCount int) time.Duration {
+	switch {
+	case failCount <= 1:
+		return time.Minute
+	case failCount == 2:
+		return 5 * time.Minute
+	default:
+		return 15 * time.Minute
+	}
+}
+
+func (s *Service) writeAutoCleanupAudit(summary *CleanupSummary) {
+	if summary == nil {
+		return
+	}
+	auditor := s.auditLog()
+	if auditor == nil {
+		return
+	}
+
+	interval := autoCleanupIdleAuditInterval
+	if summary.DeletedFiles > 0 {
+		interval = autoCleanupAuditInterval
+	}
+	now := time.Now()
+
+	s.backoffMu.Lock()
+	if !s.lastAutoCleanupAudit.IsZero() && now.Sub(s.lastAutoCleanupAudit) < interval {
+		s.backoffMu.Unlock()
+		return
+	}
+	s.lastAutoCleanupAudit = now
+	s.backoffMu.Unlock()
+
+	auditor.RecordSystem(
+		ActionStorageAutoCleanup,
+		"media_storage",
+		fmt.Sprintf(
+			"trigger=%s, deleted=%d, freed=%d, protectedFiles=%d, protectedBytes=%d, target=%s, stopReason=%s, durationMs=%d",
+			summary.TriggerReason,
+			summary.DeletedFiles,
+			summary.FreedBytes,
+			summary.ProtectedFiles,
+			summary.ProtectedBytes,
+			summary.TargetStatus,
+			summary.StopReason,
+			summary.DurationMs,
+		),
+		nil,
+	)
 }
 
 // GetStatus returns the current storage telemetry snapshot.

@@ -38,6 +38,17 @@ func (s *Service) UpdateConfig(
 		return nil, telemetryUnavailable(fmt.Errorf("inspect root device ID: %w", err))
 	}
 
+	if stats.TotalBytes > 0 {
+		freeTarget := uint64(cfg.EmergencyStopMinMB) * 1024 * 1024 * 5 / 4
+		if freeTarget >= stats.TotalBytes {
+			return nil, invalidStorageConfig(fmt.Errorf(
+				"emergency stop min size %d MB × 1.25 must be smaller than volume capacity %d bytes",
+				cfg.EmergencyStopMinMB,
+				stats.TotalBytes,
+			))
+		}
+	}
+
 	saved, err := s.repo.UpdateConfig(ctx, cfg)
 	if err != nil {
 		return nil, databaseFailure(fmt.Errorf("persist storage config: %w", err))
@@ -163,11 +174,17 @@ func (s *Service) TriggerManualCleanup(ctx context.Context, username, ip string)
 
 		return nil, cleanupFailed(err)
 	}
-	s.notifyAfterPrune(ctx)
 
-	if _, err := s.RefreshStatus(ctx); err != nil {
+	callbackCtx, callbackCancel := context.WithTimeout(context.WithoutCancel(ctx), pruneCallbackTimeout)
+	s.notifyAfterPrune(callbackCtx, summary.DeletedSnapshotIDs)
+	callbackCancel()
+
+	refreshCtx, refreshCancel := context.WithTimeout(context.Background(), tickTimeout)
+	if _, err := s.RefreshStatus(refreshCtx); err != nil {
 		s.logger.Warn("storage status refresh after manual cleanup failed", zap.Error(err))
 	}
+	refreshCancel()
+	s.resetAutoPruneBackoff()
 
 	if auditor := s.auditLog(); auditor != nil {
 		auditor.Record(audit.Entry{
@@ -176,9 +193,12 @@ func (s *Service) TriggerManualCleanup(ctx context.Context, username, ip string)
 			Action:   ActionStorageManualCleanup,
 			Target:   mediaDir,
 			Detail: fmt.Sprintf(
-				"deleted=%d, freedBytes=%d, durationMs=%d",
+				"deleted=%d, freedBytes=%d, protectedFiles=%d, protectedBytes=%d, stopReason=%s, durationMs=%d",
 				summary.DeletedFiles,
 				summary.FreedBytes,
+				summary.ProtectedFiles,
+				summary.ProtectedBytes,
+				summary.StopReason,
 				summary.DurationMs,
 			),
 			Status: audit.StatusSuccess,

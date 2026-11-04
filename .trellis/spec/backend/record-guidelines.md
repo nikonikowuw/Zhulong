@@ -49,9 +49,12 @@ Runner MSG_RESULT
 ## 4. 文件与数据库行清理
 
 - storage 域负责按存储策略删除媒体文件；record 域不绕过 storage 清理器直接删除证据文件。
-- `RetentionPruner` 只考虑超过配置保留期的 `recognitions` 与 `captures`。只有当一行引用的所有非空快照路径均确认不存在时才删除该行；任一文件仍存在则保留整行。文件检查出错时应中止本轮，不得按“文件不存在”处理。
+- `RetentionPruner` 的 TTL 巡检只考虑超过配置保留期的 `recognitions` 与 `captures`。只有当一行引用的所有非空快照路径均确认不存在时才删除该行；任一文件仍存在则保留整行。文件检查出错时应中止本轮，不得按“文件不存在”处理。
+- **容量淘汰是 TTL 巡检的唯一例外**：storage 删除未过期快照后，app 层把已删除的基名 ID 写入 `pending_snapshot_deletes` outbox，再由 `RetentionPruner` 按主键批量删除 `captures` / `recognitions`。正常路径必须先落 pending 再删行；删除成功后才清 pending。失败/进程重启后由 `Start` 与每轮 `sweep` 重试。若 enqueue 本身失败（SQLite 短暂不可用），app 可退化为直接按主键删除并记录 error；直接删除仍失败时由 TTL 巡检兜底。禁止用「未过期全表扫描 + `os.Stat`」代替，因为记录先落库、图异步写盘，扫描会误删正在写的新抓拍。
+- `DeleteBySnapshotIDs` 只删 `captures` / `recognitions`，绝不删 `alarms`；`alarms` 是告警元数据，其图片由 storage 的 `.lock`/`EvidenceGuard` 保护。
+- **历史告警补锁**：升级时 `EnsureAlarmEvidenceLocks` 扫描 `alarms.image_path` / `crop_path`，对存在的图片幂等补写 `.lock`；storage 另以 `EvidenceGuard` 按 alarm ID 查询兜底，guard 出错时失败关闭（跳过删除）。
 - 告警行不由自动保留清理删除。高价值告警证据文件由 storage 使用保护标记防止自动淘汰；清理策略详见 [Storage 规范](./storage-guidelines.md)。
-- 清理器按批次执行并支持取消；没有有效保留策略或文件检查器时不删除记录。清理是幂等的，测试需覆盖文件先删、数据库行后删的顺序。
+- 清理器按批次执行并支持取消；没有有效保留策略或文件检查器时不删除记录。清理是幂等的，测试需覆盖文件先删、数据库行后删的顺序，以及 pending 失败/取消后重试。
 
 实现/测试：`internal/record/retention.go`、`internal/record/retention_test.go`、`internal/storage/cleaner.go`。
 

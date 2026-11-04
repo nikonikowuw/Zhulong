@@ -761,16 +761,44 @@ func provideRecord(p recordParams) recordOut {
 	// 保留天数由 storage 域持有（用户在存储设置里改的就是这个值），这里只做转译。
 	comp.Pruner.SetRetentionDaysProvider(recordRetentionDaysProvider{storage: p.Storage})
 	comp.Pruner.SetSnapshotFileChecker(recordSnapshotFileChecker{media: p.MediaFiles})
-	p.Storage.SetAfterPrune(func(ctx context.Context) {
-		result, err := comp.Pruner.PruneNow(ctx)
-		if err != nil {
-			p.Logger.Warn("reconcile perception records after storage cleanup failed", zap.Error(err))
-			return
+	p.Storage.SetAfterPrune(func(ctx context.Context, prunedUnitIDs []string) {
+		// 1. 先把已删文件的 ID 落到 pending 表，保证崩溃/ctx 取消后仍可重试。
+		if len(prunedUnitIDs) > 0 {
+			if _, err := comp.Pruner.EnqueueSnapshotDeletes(ctx, prunedUnitIDs); err != nil {
+				// Durable outbox first. If SQLite is transiently unavailable, try
+				// the direct primary-key delete as a best-effort fallback; if that
+				// also fails, the TTL sweep remains the final safety net.
+				p.Logger.Warn("enqueue pending snapshot deletes failed; trying direct delete",
+					zap.Error(err),
+					zap.Int("ids", len(prunedUnitIDs)),
+				)
+				if deleted, directErr := comp.Pruner.DeleteBySnapshotIDs(ctx, prunedUnitIDs); directErr != nil {
+					p.Logger.Warn("direct snapshot row delete after enqueue failure failed", zap.Error(directErr))
+				} else if deleted > 0 {
+					p.Logger.Info("deleted snapshot rows without durable outbox", zap.Int64("deleted_rows", deleted))
+				}
+			}
 		}
-		if result.Total() > 0 {
+		// 2. 原有超期 TTL 对账；失败不阻断第 3 步。
+		if result, err := comp.Pruner.PruneNow(ctx); err != nil {
+			p.Logger.Warn("reconcile perception records after storage cleanup failed", zap.Error(err))
+		} else if result.Total() > 0 {
 			p.Logger.Info("reconciled perception records after storage cleanup",
 				zap.Int64("deleted_rows", result.Total()))
 		}
+		// 3. 消费 pending（含本轮与历史残留）。
+		if deleted, err := comp.Pruner.ProcessPendingSnapshotDeletes(ctx, 0); err != nil {
+			p.Logger.Warn("process pending snapshot deletes failed", zap.Error(err))
+		} else if deleted > 0 {
+			p.Logger.Info("deleted pending snapshot records",
+				zap.Int64("deleted_rows", deleted))
+		}
+	})
+
+	// 历史 alarm 图可能没有 .lock；即使补锁尚未完成，storage 也按 alarm ID
+	// 做最后一道失败关闭的保护。
+	p.Storage.SetEvidenceGuard(func(ctx context.Context, ids []string) (map[string]bool, error) {
+		return comp.Store.ExistingAlarmIDs(ctx, ids)
 	})
 
 	// 抓拍落盘组件：把 StreamHub（抓拍源）与 storage（媒体根 + 写入门闸）接进

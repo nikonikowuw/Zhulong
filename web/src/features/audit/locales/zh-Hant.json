@@ -58,6 +58,7 @@
     "gb28181.channel_bind_camera": "綁定 GB28181 通道為攝影機",
     "storage.update_config": "更新儲存設定",
     "storage.manual_cleanup": "手動清理儲存",
+    "storage.auto_cleanup": "自動清理儲存",
     "storage.test_path": "儲存路徑測試",
     "storage.emergency_stop": "儲存緊急停止",
     "storage.emergency_resume": "儲存恢復運行",

@@ -9,6 +9,7 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // 感知记录的三张表名。保留清理会直接拼进 SQL，因此必须是常量而非外部输入。
@@ -471,6 +472,190 @@ func (s *Store) retentionCandidatesBatch(
 		return nil, err
 	}
 	return rows, nil
+}
+
+// pendingSnapshotDelete is the durable outbox entry for a snapshot whose media
+// files were deleted by the storage cleaner. The row is removed only after the
+// corresponding captures/recognitions rows are gone.
+type pendingSnapshotDelete struct {
+	ID       string    `gorm:"primaryKey;column:id"`
+	QueuedAt time.Time `gorm:"column:queued_at;not null;default:CURRENT_TIMESTAMP"`
+}
+
+func (pendingSnapshotDelete) TableName() string {
+	return "pending_snapshot_deletes"
+}
+
+// enqueuePendingSnapshotDeletes records deleted snapshot IDs before the DB
+// cascade is attempted. Duplicate IDs are ignored, so retries are idempotent.
+func (s *Store) enqueuePendingSnapshotDeletes(ctx context.Context, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	db, err := s.db(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	rows := make([]pendingSnapshotDelete, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		rows = append(rows, pendingSnapshotDelete{ID: id})
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+
+	res := db.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(rows, 200)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+
+	return res.RowsAffected, nil
+}
+
+func (s *Store) pendingSnapshotDeleteIDs(ctx context.Context, limit int) ([]string, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var ids []string
+	query := db.Model(&pendingSnapshotDelete{}).Order("queued_at ASC, id ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+
+	return ids, nil
+}
+
+func (s *Store) clearPendingSnapshotDeletes(ctx context.Context, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	db, err := s.db(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	res := db.Where("id IN ?", ids).Delete(&pendingSnapshotDelete{})
+	if res.Error != nil {
+		return 0, res.Error
+	}
+
+	return res.RowsAffected, nil
+}
+
+// deleteRecordsByIDs removes captures and recognitions rows by primary key.
+// The two deletes share one transaction so a failure cannot leave only one
+// table cleaned.
+func (s *Store) deleteRecordsByIDs(ctx context.Context, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	db, err := s.db(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	var total int64
+	err = db.Transaction(func(tx *gorm.DB) error {
+		for _, table := range []string{tableCaptures, tableRecognitions} {
+			stmt := fmt.Sprintf("DELETE FROM %s WHERE id IN ?", table)
+			res := tx.Exec(stmt, ids)
+			if res.Error != nil {
+				return res.Error
+			}
+			total += res.RowsAffected
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return total, nil
+}
+
+// ExistingAlarmIDs reports which IDs belong to alarm records. The storage
+// evidence guard uses this to protect historical alarm images that predate the
+// .lock sidecar convention.
+func (s *Store) ExistingAlarmIDs(ctx context.Context, ids []string) (map[string]bool, error) {
+	found := make(map[string]bool)
+	if len(ids) == 0 {
+		return found, nil
+	}
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	unique := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return found, nil
+	}
+
+	var rows []string
+	if err := db.Model(&Alarm{}).Where("id IN ?", unique).Pluck("id", &rows).Error; err != nil {
+		return nil, err
+	}
+	for _, id := range rows {
+		found[id] = true
+	}
+
+	return found, nil
+}
+
+// AlarmEvidencePaths returns every non-empty alarm image/crop path, for the
+// one-time lock backfill on upgrade.
+func (s *Store) AlarmEvidencePaths(ctx context.Context) ([]string, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var rows []Alarm
+	if err := db.Model(&Alarm{}).Select("image_path, crop_path").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]struct{}, len(rows)*2)
+	paths := make([]string, 0, len(rows)*2)
+	for _, row := range rows {
+		for _, path := range []string{row.ImagePath, row.CropPath} {
+			if path == "" {
+				continue
+			}
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+	}
+
+	return paths, nil
 }
 
 func (s *Store) deleteRetentionRows(ctx context.Context, table string, cutoff time.Time, ids []string) (int64, error) {

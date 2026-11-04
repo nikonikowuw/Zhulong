@@ -178,7 +178,7 @@ func (h *Handler) TestPath(c *gin.Context) {
 
 // TriggerCleanup godoc
 // @Summary      Manually trigger storage prune cycle
-// @Description  Forces an immediate pruning cycle across expired exports and recordings according to lifecycle policy.
+// @Description  Forces an immediate pruning cycle: all expired exports/recordings/snapshots first, then capacity eviction of unexpired recordings and unlocked snapshots until the target watermark.
 // @Tags         system
 // @Produce      json
 // @Success      200  {object}  httputil.Response{data=CleanupSummary}

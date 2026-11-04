@@ -210,7 +210,7 @@ func TestService_TriggerManualCleanup(t *testing.T) {
 		_ = svc.Stop(ctx)
 	}()
 	pruned := make(chan struct{}, 1)
-	svc.SetAfterPrune(func(context.Context) { pruned <- struct{}{} })
+	svc.SetAfterPrune(func(context.Context, []string) { pruned <- struct{}{} })
 
 	// Put an expired export
 	expDir := filepath.Join(mediaDir, "exports")

@@ -1777,14 +1777,20 @@ definitions:
         type: string
       freedBytes:
         type: integer
+      protectedBytes:
+        type: integer
+      protectedFiles:
+        type: integer
+      stopReason:
+        $ref: '#/definitions/storage.PruneStopReason'
       targetStatus:
         allOf:
         - $ref: '#/definitions/storage.PruneStatus'
-        description: '"completed" or "skipped_below_high_watermark"'
+        description: completed or skipped_below_high_watermark
       triggerReason:
         allOf:
         - $ref: '#/definitions/storage.PruneTrigger'
-        description: '"manual" or "watermark"'
+        description: manual, watermark, or emergency
     type: object
   storage.PathTestRequest:
     properties:
@@ -1826,14 +1832,28 @@ definitions:
     x-enum-varnames:
     - PruneStatusCompleted
     - PruneStatusSkippedLow
+  storage.PruneStopReason:
+    enum:
+    - target_reached
+    - candidates_exhausted
+    - context_canceled
+    - skipped_below_high_watermark
+    type: string
+    x-enum-varnames:
+    - PruneStopTargetReached
+    - PruneStopCandidatesExhausted
+    - PruneStopContextCanceled
+    - PruneStopSkippedBelowHigh
   storage.PruneTrigger:
     enum:
     - manual
     - watermark
+    - emergency
     type: string
     x-enum-varnames:
     - PruneTriggerManual
     - PruneTriggerWatermark
+    - PruneTriggerEmergency
   storage.StorageConfig:
     properties:
       emergencyStopMinMb:
@@ -1913,7 +1933,7 @@ definitions:
         description: Metric collection timestamp (UTC)
         type: string
       usagePercent:
-        description: Volume usage percentage (0..100)
+        description: 'User-available usage percentage (0..100): used/(used+free)'
         type: integer
       usedBytes:
         description: Used capacity in bytes
@@ -5559,8 +5579,9 @@ paths:
       - network
   /system/storage/cleanup:
     post:
-      description: Forces an immediate pruning cycle across expired exports and recordings
-        according to lifecycle policy.
+      description: 'Forces an immediate pruning cycle: all expired exports/recordings/snapshots
+        first, then capacity eviction of unexpired recordings and unlocked snapshots
+        until the target watermark.'
       produces:
       - application/json
       responses:

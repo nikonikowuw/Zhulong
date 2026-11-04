@@ -66,7 +66,7 @@ func NewStorageComponents(
 	repo := NewRepository(dbProvider, logger)
 	inspector := NewDefaultPathInspector()
 	gate := NewEmergencyGate(logger)
-	cleaner := NewCleanerEngine(inspector, logger)
+	cleaner := NewCleanerEngine(inspector, logger, CleanerOptions{CapacityProbe: probeCapacity})
 	svc := NewService(ServiceDeps{
 		Repo:      repo,
 		Inspector: inspector,

@@ -287,6 +287,70 @@ func (s *SnapshotStore) run(job snapshotJob) {
 	}
 }
 
+// EnsureEvidenceLocks writes missing .lock sidecars for existing evidence
+// images. It is used once at startup to protect historical alarm images that
+// predate the current "write lock before image" convention. The operation is
+// idempotent and uses os.Root so a poisoned DB path cannot escape the media root.
+func (s *SnapshotStore) EnsureEvidenceLocks(ctx context.Context, relPaths []string) (int, error) {
+	if s == nil || s.media == nil {
+		return 0, errors.New("snapshot media root is unavailable")
+	}
+	if len(relPaths) == 0 {
+		return 0, nil
+	}
+
+	rootPath, err := s.media.MediaRoot(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("resolve media root: %w", err)
+	}
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return 0, fmt.Errorf("open media root %q: %w", rootPath, err)
+	}
+	defer func() {
+		// The root is only a handle; a close failure must not turn a completed
+		// backfill into an error.
+		_ = root.Close()
+	}()
+
+	written := 0
+	for _, rel := range relPaths {
+		if rel == "" {
+			continue
+		}
+		rel = filepath.FromSlash(rel)
+
+		info, err := root.Stat(rel)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return written, fmt.Errorf("stat evidence %q: %w", rel, err)
+		}
+		if info.IsDir() {
+			continue
+		}
+
+		marker := rel + ".lock"
+		if _, err := root.Lstat(marker); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return written, fmt.Errorf("stat evidence lock %q: %w", marker, err)
+		}
+
+		file, err := root.OpenFile(marker, os.O_CREATE|os.O_WRONLY, 0o640)
+		if err != nil {
+			return written, fmt.Errorf("write evidence lock %q: %w", marker, err)
+		}
+		if err := file.Close(); err != nil {
+			return written, fmt.Errorf("close evidence lock %q: %w", marker, err)
+		}
+		written++
+	}
+
+	return written, nil
+}
+
 // snapshotRelDir 生成 snapshots/{cameraID}/{YYYY-MM-DD} 形式的相对目录，
 // 与 mediafile 的路径契约以及 storage-guidelines 的目录布局保持一致。
 func snapshotRelDir(cameraID string, capturedAt time.Time) string {

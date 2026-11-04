@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/storage-guidelines.md", "reason": "水位清理、熔断、快照与保护标记的直接规范来源"}
+{"file": ".trellis/spec/backend/record-guidelines.md", "reason": "证据图生命周期、.lock 保护、pending 表与 DB 行清理边界"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "容量条分母、手动清理弹窗与配置文案"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "审计 action 与存储文案三语同步"}

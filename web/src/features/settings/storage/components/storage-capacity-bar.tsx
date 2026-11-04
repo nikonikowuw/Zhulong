@@ -68,6 +68,10 @@ export function StorageCapacityBar({
   const free = status?.freeBytes ?? 0
   const used = status?.usedBytes ?? 0
   const usagePercent = status?.usagePercent ?? 0
+  // UsagePercent is used/(used+free), which excludes filesystem-reserved blocks.
+  // The segmented bar must use the same denominator or the label and segments
+  // tell two different stories on ext4.
+  const capacityTotal = used + free > 0 ? used + free : total
 
   const recordings = status?.breakdown.recordingsBytes ?? 0
   const snapshots = status?.breakdown.snapshotsBytes ?? 0
@@ -75,14 +79,15 @@ export function StorageCapacityBar({
   const other = status?.breakdown.otherBytes ?? 0
 
   const percentages = useMemo(() => {
-    if (total <= 0) return { recordings: 0, snapshots: 0, exports: 0, other: 0 }
+    if (capacityTotal <= 0)
+      return { recordings: 0, snapshots: 0, exports: 0, other: 0 }
     return {
-      recordings: Math.max(0, (recordings / total) * 100),
-      snapshots: Math.max(0, (snapshots / total) * 100),
-      exports: Math.max(0, (exportsBytes / total) * 100),
-      other: Math.max(0, (other / total) * 100),
+      recordings: Math.max(0, (recordings / capacityTotal) * 100),
+      snapshots: Math.max(0, (snapshots / capacityTotal) * 100),
+      exports: Math.max(0, (exportsBytes / capacityTotal) * 100),
+      other: Math.max(0, (other / capacityTotal) * 100),
     }
-  }, [total, recordings, snapshots, exportsBytes, other])
+  }, [capacityTotal, recordings, snapshots, exportsBytes, other])
 
   const renderStatusBadge = (healthStatus?: StorageHealthStatus) => {
     const item = healthStatus ? HEALTH_BADGE[healthStatus] : undefined

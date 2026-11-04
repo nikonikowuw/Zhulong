@@ -404,7 +404,8 @@ export function StorageConfigForm({
                     </FormControl>
                     <FormDescription>
                       {t('form.snapshots_days_desc', {
-                        defaultValue: '告警事件图最大留存（默认 90 天）',
+                        defaultValue:
+                          'AI 抓拍最大留存（默认 90 天）；空间不足时会提前回收未锁定抓拍，告警/锁定图除外',
                       })}
                     </FormDescription>
                     <FormMessage />

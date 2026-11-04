@@ -72,7 +72,10 @@ export interface CleanupSummary {
   triggerReason: string
   deletedFiles: number
   freedBytes: number
+  protectedFiles?: number
+  protectedBytes?: number
   durationMs: number
   targetStatus: string
+  stopReason?: string
   finishedAt: string
 }

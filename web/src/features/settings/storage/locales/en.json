@@ -42,7 +42,7 @@
     "recordings_days": "Recordings Retention (Days)",
     "recordings_days_desc": "Regular video recordings retention period (Default: 15 days)",
     "snapshots_days": "AI Snapshots Retention (Days)",
-    "snapshots_days_desc": "AI alarm snapshot retention period (Default: 90 days)",
+    "snapshots_days_desc": "AI snapshot maximum retention (Default: 90 days). Under capacity pressure, unlocked snapshots may be reclaimed earlier; alarm/locked evidence is excluded.",
     "exports_hours": "Exports Retention (Hours)",
     "exports_hours_desc": "Exported clips TTL survival time (Default: 48 hours)",
     "btn_reset": "Reset Changes",
@@ -63,7 +63,7 @@
   },
   "dialog": {
     "title": "Trigger Storage Prune Cycle",
-    "desc1": "The system will immediately initiate the hysteresis cleaner to prune expired exports and oldest unpreserved recordings until below low watermark.",
+    "desc1": "The system will first prune all expired exports, recordings, and snapshots, then evict the oldest unexpired recordings and unlocked snapshots while capacity pressure remains, until below the low watermark.",
     "desc2": "Recordings and snapshots marked with AI alarms or locked by users will never be deleted prematurely. Throttled sleep ensures 0 dropped frames.",
     "cancel": "Cancel",
     "confirm": "Execute Prune",

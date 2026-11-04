@@ -1902,7 +1902,7 @@ func TestPersonSourceAndAPITokensMigrationSymmetry(t *testing.T) {
 	}
 	t.Cleanup(func() { _, _ = migrator.Close() })
 
-	// 1. Run all migrations through 28
+	// 1. Run all migrations through 29 (29 is rolled back first below)
 	if err := migrator.Up(); err != nil {
 		t.Fatalf("migrator Up(): %v", err)
 	}
@@ -1934,11 +1934,23 @@ func TestPersonSourceAndAPITokensMigrationSymmetry(t *testing.T) {
 		t.Fatalf("expected duplicate api_token name to violate unique constraint")
 	}
 
-	// 2. Rollback migration 28 (api_tokens)
+	// 2. Rollback migration 29 (pending_snapshot_deletes) first so the
+	// 27/28 symmetry assertions below keep targeting the intended versions.
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("rollback 29: %v", err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='pending_snapshot_deletes'").Scan(&count); err != nil {
+		t.Fatalf("check pending_snapshot_deletes dropped: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected pending_snapshot_deletes table to be dropped after rollback")
+	}
+
+	// 3. Rollback migration 28 (api_tokens)
 	if err := migrator.Steps(-1); err != nil {
 		t.Fatalf("rollback 28: %v", err)
 	}
-	var count int
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='api_tokens'").Scan(&count); err != nil {
 		t.Fatalf("check api_tokens dropped: %v", err)
 	}
@@ -1946,7 +1958,7 @@ func TestPersonSourceAndAPITokensMigrationSymmetry(t *testing.T) {
 		t.Fatalf("expected api_tokens table to be dropped after rollback")
 	}
 
-	// 3. Rollback migration 27 (persons columns)
+	// 4. Rollback migration 27 (persons columns)
 	if err := migrator.Steps(-1); err != nil {
 		t.Fatalf("rollback 27: %v", err)
 	}
@@ -1954,9 +1966,9 @@ func TestPersonSourceAndAPITokensMigrationSymmetry(t *testing.T) {
 		t.Fatalf("expected source column to be dropped after rollback of 27")
 	}
 
-	// 4. Re-apply both
-	if err := migrator.Steps(2); err != nil {
-		t.Fatalf("re-apply 27 & 28: %v", err)
+	// 5. Re-apply 27, 28 and 29
+	if err := migrator.Steps(3); err != nil {
+		t.Fatalf("re-apply 27, 28 & 29: %v", err)
 	}
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='api_tokens'").Scan(&count); err != nil || count == 0 {
 		t.Fatalf("expected api_tokens table after re-Up")

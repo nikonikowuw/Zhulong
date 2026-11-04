@@ -30,6 +30,9 @@ const (
 	// 与 storage.CleanerEngine 的批次让步同源：不让长期占用 SQLite 写锁。
 	retentionBatchPause = 20 * time.Millisecond
 
+	// pendingSnapshotDeleteBatchSize 是 pending outbox 单批处理上限。
+	pendingSnapshotDeleteBatchSize = 200
+
 	// retentionSweepTimeout 是单轮清理的总超时。
 	retentionSweepTimeout = 5 * time.Minute
 
@@ -254,6 +257,80 @@ func (p *RetentionPruner) PruneNow(ctx context.Context) (PruneResult, error) {
 	return result, nil
 }
 
+// EnqueueSnapshotDeletes durably records snapshot IDs whose media files were
+// deleted by storage. The IDs are consumed by ProcessPendingSnapshotDeletes;
+// enqueue-before-delete failure is safe because processing is idempotent.
+func (p *RetentionPruner) EnqueueSnapshotDeletes(ctx context.Context, ids []string) (int64, error) {
+	if p == nil || p.store == nil {
+		return 0, nil
+	}
+
+	return p.store.enqueuePendingSnapshotDeletes(ctx, ids)
+}
+
+// DeleteBySnapshotIDs removes captures/recognitions rows by primary key in
+// bounded batches. It does not clear the pending outbox; callers that need
+// retry semantics should use ProcessPendingSnapshotDeletes instead.
+func (p *RetentionPruner) DeleteBySnapshotIDs(ctx context.Context, ids []string) (int64, error) {
+	if p == nil || p.store == nil {
+		return 0, nil
+	}
+
+	var total int64
+	for start := 0; start < len(ids); start += pendingSnapshotDeleteBatchSize {
+		end := start + pendingSnapshotDeleteBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+
+		deleted, err := p.store.deleteRecordsByIDs(ctx, ids[start:end])
+		if err != nil {
+			return total, err
+		}
+		total += deleted
+	}
+
+	return total, nil
+}
+
+// ProcessPendingSnapshotDeletes drains the durable outbox. Rows are removed
+// from the outbox only after the DB delete succeeds; a crash between the two
+// steps is harmless because the delete is idempotent.
+func (p *RetentionPruner) ProcessPendingSnapshotDeletes(ctx context.Context, limit int) (int64, error) {
+	if p == nil || p.store == nil {
+		return 0, nil
+	}
+
+	batchSize := limit
+	if batchSize <= 0 {
+		batchSize = pendingSnapshotDeleteBatchSize
+	}
+
+	var total int64
+	for {
+		ids, err := p.store.pendingSnapshotDeleteIDs(ctx, batchSize)
+		if err != nil {
+			return total, err
+		}
+		if len(ids) == 0 {
+			return total, nil
+		}
+
+		deleted, err := p.store.deleteRecordsByIDs(ctx, ids)
+		if err != nil {
+			return total, err
+		}
+		total += deleted
+
+		if _, err := p.store.clearPendingSnapshotDeletes(ctx, ids); err != nil {
+			return total, err
+		}
+		if len(ids) < batchSize {
+			return total, nil
+		}
+	}
+}
+
 func (p *RetentionPruner) deleteExpiredRows(
 	ctx context.Context,
 	table string,
@@ -319,6 +396,18 @@ func (p *RetentionPruner) deleteExpiredRows(
 func (p *RetentionPruner) run(ctx context.Context) {
 	defer p.wg.Done()
 
+	// Drain a pending outbox from a previous process before the normal delay:
+	// those files are already gone, so their DB rows should not stay visible.
+	pendingCtx, pendingCancel := context.WithTimeout(ctx, 30*time.Second)
+	if deleted, err := p.ProcessPendingSnapshotDeletes(pendingCtx, 0); err != nil {
+		if ctx.Err() == nil {
+			p.logger.Warn("pending snapshot delete drain failed", zap.Error(err))
+		}
+	} else if deleted > 0 {
+		p.logger.Info("drained pending snapshot deletes", zap.Int64("deleted_rows", deleted))
+	}
+	pendingCancel()
+
 	if p.delay > 0 {
 		if err := sleepCtx(ctx, p.delay); err != nil {
 			return
@@ -343,6 +432,12 @@ func (p *RetentionPruner) run(ctx context.Context) {
 func (p *RetentionPruner) sweep(parent context.Context) {
 	ctx, cancel := context.WithTimeout(parent, retentionSweepTimeout)
 	defer cancel()
+
+	if deleted, err := p.ProcessPendingSnapshotDeletes(ctx, 0); err != nil {
+		p.logger.Warn("pending snapshot delete sweep failed", zap.Error(err))
+	} else if deleted > 0 {
+		p.logger.Info("drained pending snapshot deletes", zap.Int64("deleted_rows", deleted))
+	}
 
 	result, err := p.PruneNow(ctx)
 	if err != nil {

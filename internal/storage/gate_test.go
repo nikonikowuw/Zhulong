@@ -48,6 +48,15 @@ func TestEmergencyGate_Evaluate(t *testing.T) {
 			wantCanWrite: true,
 		},
 		{
+			// ext4 reserved blocks: used/total is 75%, but used/(used+avail) is
+			// 93.75% → 94%, so the high watermark must wake before an emergency.
+			name:         "warning uses user-available space",
+			usedGB:       75,
+			freeGB:       5,
+			want:         StatusWarning,
+			wantCanWrite: true,
+		},
+		{
 			name:         "emergency above usage percent",
 			usedGB:       96,
 			freeGB:       4,

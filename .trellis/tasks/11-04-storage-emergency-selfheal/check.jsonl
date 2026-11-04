@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/storage-guidelines.md", "reason": "验收删除顺序、止点与保护规则"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试与 -race 质量门槛"}
+{"file": ".trellis/spec/backend/record-guidelines.md", "reason": "核对 .lock 写入、RetentionPruner 边界与新增 pending 级联契约"}
+{"file": ".trellis/spec/frontend/development-guidelines.md", "reason": "审计 action、存储配置与容量条前端契约"}
+{"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "三语 locale 与文案一致性"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端真实浏览器测试与容量条断言"}

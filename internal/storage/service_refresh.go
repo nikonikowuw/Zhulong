@@ -97,7 +97,7 @@ func (s *Service) RefreshStatus(ctx context.Context) (*StorageStatus, error) {
 		TotalBytes:     stats.TotalBytes,
 		UsedBytes:      stats.UsedBytes,
 		FreeBytes:      stats.FreeBytes,
-		UsagePercent:   percentUsed(stats.UsedBytes, stats.TotalBytes),
+		UsagePercent:   usagePercent(stats),
 		Breakdown:      breakdown,
 		Status:         health,
 		DeviceID:       stats.DeviceID,

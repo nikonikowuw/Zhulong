@@ -54,26 +54,38 @@
 - **低水位休眠 (Low Watermark)**：默认 80%（范围 40%~85%）。清理协程持续淘汰旧文件，直到磁盘使用率降低至低水位以下，协程安全休眠；
 - **缓冲带保护**：低水位与高水位之间至少保留 5%~10% 的缓冲带，彻底消灭“刚降 0.1% 又反复唤醒清理”的磁盘 I/O 剧烈震荡。
 
-### 2.2 三级阶梯级联淘汰 (Priority Cascade)
+### 2.2 两阶段阶梯级联淘汰 (Two-Phase Priority Cascade)
 
-触碰高水位或手动触发清理时，必须严格按优先级顺序淘汰：
+触碰高水位、熔断或手动触发清理时，必须按两阶段顺序执行：
 
-1. **第一级（过期临时导出）**：创建时间超过 `ExportsRetentionHours`（默认 48h）的 `exports/` 切片全量删除；
-2. **第二级（超期常规录像）**：创建时间超过 `RecordingsRetentionDays`（默认 15 天）的常规视频文件；
-3. **第三级（FIFO 阶梯淘汰）**：若容量仍高于低水位，按文件修改时间排序，由远及近 FIFO 淘汰最早的未加锁常规录像；
-4. **铁律保护**：告警抓拍的图片旁必须有 `.lock` 保护标记；带有 AI 告警事件标记、或带有 `.lock` / `_locked` 保护标记的高价值证据录像与抓拍，**严禁自动 TTL 或水位清理删除**。若常规媒体已排空仍无法降至低水位，必须触发告警并停止进一步误杀。
+1. **Phase 1（TTL 超期负债出清，不受容量止点限制）**：
+   1. `exports/` 中超过 `ExportsRetentionHours`（默认 48h）的切片；
+   2. `recordings/` 中超过 `RecordingsRetentionDays`（默认 15 天）的录像；
+   3. `snapshots/` 中超过 `SnapshotsRetentionDays`（默认 90 天）的普通快照。
+   - 超期即出清；`SnapshotsRetentionDays` 是**上限**，不是「到点必删」。低于高水位时自动清理不启动，超期文件可以继续占用。
+2. **Phase 2（容量压力阶梯淘汰，进入前先检查止点）**：
+   4. 未过期录像按 mtime 由远及近 FIFO 淘汰；
+   5. 未过期普通快照按 mtime 由远及近淘汰。
+   - 每删除一个 unit 后检查止点；达到即退出。
+   - `manual` 在健康盘（usage ≤ low）上不得先删一批未过期文件：Phase 2 进入前的预检查必须直接返回。
+3. **记录组粒度**：快照按 `{dir}/{基名前缀}` 聚组（主图、`_crop`、`_face` 与 sidecar），整组原子删除；只有全部媒体文件都已删除或原本不存在时，才把前缀 ID 交给 DB 级联。组内任一文件删除失败时保留 DB 行并记 warn。
+4. **铁律保护**：告警抓拍的图片旁必须有 `.lock` 保护标记；带有 AI 告警事件标记、或带有 `.lock` / `_locked` 保护标记的高价值证据录像与抓拍，**严禁自动 TTL 或水位清理删除**。历史 alarm 图必须在升级时补锁；storage 另通过可选 `EvidenceGuard` 按 alarm ID 失败关闭保护。
+5. **无法回收时**：候选耗尽仍无法达到止点，必须记录 `stop_reason=candidates_exhausted` 与审计；emergency 下保持熔断是正确行为，不能假装恢复。
 
 ### 2.3 批次步进流控与礼貌避让 (Throttled Batch Deletion)
 
 - 避免批量 `os.Remove` 持续持有 ext4 `jbd2` 日志锁导致视频写盘丢帧；
-- 每次删除一个 Batch（如 20~30 个文件）后，主动执行毫秒级让渡休眠（`time.Sleep(50ms)`）；
-- 每批次让渡前重新检查 `isAboveLowWatermark()`，一旦落回低水位立即退出，杜绝过度删除。
+- 每次删除一个 Batch（如 20~30 个 unit）后，主动执行毫秒级让渡休眠（`time.Sleep(50ms)`）；
+- Phase 2 的止点检查只能走**轻量 `statfs`**（`probeCapacity`），严禁每批调用完整 `InspectFS` 重新扫描 `/proc/mounts`；
+- 每删除一个 unit 后检查止点，一旦达到立即退出，杜绝过度删除。
 
 ### 2.4 库表行的保留清理（不在本引擎内）
 
-- 本引擎**只删文件**。告警图片由 `.lock` 保护标记跳过自动 TTL/水位清理；告警行也不由自动 pruner 删除。
-- `recognitions` / `captures` 普通行由 `internal/record.RetentionPruner` 处理，但仅在超过配置保留期且其所有快照引用（全幅、裁剪/人脸图）均不存在时删除。现存图片不会因删除数据库行变成孤儿。
-- storage 清理成功后由 app 层立即触发 record 对账；进程中断或对账失败时，record 后台巡检幂等恢复。找不到文件的旧记录会被移除，避免长期悬空引用。
+- 本引擎**只删文件**。告警图片由 `.lock`/`EvidenceGuard` 保护；告警行也不由自动 pruner 删除。
+- `recognitions` / `captures` 普通行由 `internal/record.RetentionPruner` 处理：
+  - TTL 巡检只在超过配置保留期且所有快照引用（全幅、裁剪/人脸图）均不存在时删除行；
+  - 容量提前淘汰的快照由 app 层把已删除 ID 写入 `pending_snapshot_deletes` outbox，再由 record 按主键批量删除；成功后清 pending，失败/重启后由巡检重试。若 enqueue 失败，app 可退化为直接按主键删除并记录 error，TTL 巡检是最后兜底。不得用「未过期全表扫描 + os.Stat」代替，否则会误删「记录已建、图还没写完」的新抓拍。
+- storage 清理成功后由 app 层触发 record 对账；找不到文件的旧记录会被移除，避免长期悬空引用。
 - 行删除仍由 record 域执行，storage 不依赖 record；媒体删除仍由 storage 执行，record 不绕过其水位与锁保护策略。
 
 ---
@@ -84,16 +96,27 @@
 
 任何视频写入协程在创建新切片前，必须调用 `storage.CanWrite() bool`：
 
-- 使用率达到 `EmergencyStopPercent`（默认 95%）；或
+- 用户可用空间占用 `usage = used / (used + free)` 达到 `EmergencyStopPercent`（默认 95%）；或
 - 磁盘可用空间低于 `EmergencyStopMinMB`（默认 2048 MB，2GB）；或
 - 发生只读挂载或外挂盘掉线。
+
+口径说明：
+
+- `free` 取 `statfs.Bavail`，`used` 取 `Blocks - Bfree`，因此 `used + free` 与 `df` 的 `Used + Avail` 同义；`TotalBytes` 只用于展示与安全上限封顶。
+- 百分比向上取整，避免 `89.9%` 截断成 `89%` 错过 `high=90`。
+- ⚠️ root 运行时 ext4 通常令 `Bavail == Bfree`，公式退化为 `used/total`；此时仍必须依赖 `EmergencyStopMinMB` 熔断与清理兜底，不能宣称高水位死区已消除。
+- `EmergencyStopMinMB × 1.25` 必须在运行时小于卷容量；配置保存时必须拒绝，启动自检发现既有配置不满足时应记录告警。运行时若仍不可行（reserve ≥ 卷容量），Phase 2 直接停止并记 `candidates_exhausted`，**不得为了一个永远满足不了的 free 目标清空未过期媒体**；gate 保持熔断等待配置修正。
 
 ### 3.2 熔断后行为
 
 - `CanWrite()` 立即返回 `false`，停止视频落盘写入；
 - 记录 `STORAGE_EMERGENCY_STOP` 审计事件，状态切换为 `emergency_stopped`；
 - 保护底层 SQLite WAL 数据库和操作系统关键进程免遭 `ENOSPC` 崩溃；
-- 同一份预算也供运行日志使用：宿主通过 `EmergencyGate.RegisterObserver` 订阅 `canWrite` 翻转，熔断期间把运行日志地板抬到 `warn`，恢复时撤销（见 `logging-guidelines.md` §3.0.2）；
+- **熔断期间仍执行清理**：`Service.tick()` 在 `warning` 与 `emergency_stopped` 都会启动 prune；emergency 使用 `PruneTriggerEmergency`，不走高水位门槛。
+- **应急止点必须同时覆盖两个触发分支**：`free >= EmergencyStopMinMB × 1.25` **且** `usagePercent < HighWatermarkPercent`。只满足 free 条件时若 usage 仍高于 emergency 百分比，gate 不会解除；只满足 usage 条件时若 free 仍低于 min-free，同样不会解除。
+- 进入 Phase 2 前先检查止点；若已满足则只记审计，不先删一批文件。
+- 清理结束后 `RefreshStatus`，由 gate 产生 resume 边沿；若候选耗尽仍无法同时满足两个止点，保持熔断并记录 `stop_reason=candidates_exhausted`，不得假装恢复。
+- 同一份预算也供运行日志使用：宿主通过 `EmergencyGate.RegisterObserver` 订阅 `canWrite` 翻转，熔断期间把运行日志地板抬到 `warn`，恢复时撤销（见 `logging-guidelines.md` §3.0.2）。
 - 当清理协程或运维清理使可用空间恢复安全水位后，自动解除熔断并恢复录像。
 
 `RegisterObserver` 是**追加式**观察者，只能观察 `canWrite` 的**边沿**：`Evaluate` 每个轮询周期都会执行，每次翻转各上报一次，稳定态零上报。`SetCallbacks` 仍只服务审计，不得被第二个消费者覆盖。观察者在门锁释放后调用，允许回调进入门（审计路径即如此）。

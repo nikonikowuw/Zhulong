@@ -62,6 +62,34 @@ func (s *Service) SetSnapshotStore(store *SnapshotStore) {
 	s.snapshots = store
 }
 
+// EnsureAlarmEvidenceLocks backfills .lock sidecars for historical alarm images.
+// It is best-effort at startup: a failure is logged by the lifecycle, and the
+// storage evidence guard still fails closed for any alarm IDs it can query.
+func (s *Service) EnsureAlarmEvidenceLocks(ctx context.Context) error {
+	if s == nil || s.store == nil || s.snapshots == nil {
+		return nil
+	}
+
+	paths, err := s.store.AlarmEvidencePaths(ctx)
+	if err != nil {
+		return fmt.Errorf("list alarm evidence paths: %w", err)
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+
+	written, err := s.snapshots.EnsureEvidenceLocks(ctx, paths)
+	if err != nil {
+		return fmt.Errorf("backfill alarm evidence locks: %w", err)
+	}
+	s.logger.Info("alarm evidence lock backfill completed",
+		zap.Int("paths", len(paths)),
+		zap.Int("written", written),
+	)
+
+	return nil
+}
+
 // ProcessInferenceResult consumes an inference result from StreamHub, applies
 // tracking cooldowns, resolves enrolled face gallery images, and persists records.
 func (s *Service) ProcessInferenceResult(ctx context.Context, res aitypes.InferenceResult) error {

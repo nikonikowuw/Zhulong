@@ -5189,7 +5189,7 @@ const docTemplate = `{
         },
         "/system/storage/cleanup": {
             "post": {
-                "description": "Forces an immediate pruning cycle across expired exports and recordings according to lifecycle policy.",
+                "description": "Forces an immediate pruning cycle: all expired exports/recordings/snapshots first, then capacity eviction of unexpired recordings and unlocked snapshots until the target watermark.",
                 "produces": [
                     "application/json"
                 ],
@@ -8664,8 +8664,17 @@ const docTemplate = `{
                 "freedBytes": {
                     "type": "integer"
                 },
+                "protectedBytes": {
+                    "type": "integer"
+                },
+                "protectedFiles": {
+                    "type": "integer"
+                },
+                "stopReason": {
+                    "$ref": "#/definitions/storage.PruneStopReason"
+                },
                 "targetStatus": {
-                    "description": "\"completed\" or \"skipped_below_high_watermark\"",
+                    "description": "completed or skipped_below_high_watermark",
                     "allOf": [
                         {
                             "$ref": "#/definitions/storage.PruneStatus"
@@ -8673,7 +8682,7 @@ const docTemplate = `{
                     ]
                 },
                 "triggerReason": {
-                    "description": "\"manual\" or \"watermark\"",
+                    "description": "manual, watermark, or emergency",
                     "allOf": [
                         {
                             "$ref": "#/definitions/storage.PruneTrigger"
@@ -8742,15 +8751,32 @@ const docTemplate = `{
                 "PruneStatusSkippedLow"
             ]
         },
+        "storage.PruneStopReason": {
+            "type": "string",
+            "enum": [
+                "target_reached",
+                "candidates_exhausted",
+                "context_canceled",
+                "skipped_below_high_watermark"
+            ],
+            "x-enum-varnames": [
+                "PruneStopTargetReached",
+                "PruneStopCandidatesExhausted",
+                "PruneStopContextCanceled",
+                "PruneStopSkippedBelowHigh"
+            ]
+        },
         "storage.PruneTrigger": {
             "type": "string",
             "enum": [
                 "manual",
-                "watermark"
+                "watermark",
+                "emergency"
             ],
             "x-enum-varnames": [
                 "PruneTriggerManual",
-                "PruneTriggerWatermark"
+                "PruneTriggerWatermark",
+                "PruneTriggerEmergency"
             ]
         },
         "storage.StorageConfig": {
@@ -8863,7 +8889,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "usagePercent": {
-                    "description": "Volume usage percentage (0..100)",
+                    "description": "User-available usage percentage (0..100): used/(used+free)",
                     "type": "integer"
                 },
                 "usedBytes": {
