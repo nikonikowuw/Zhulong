@@ -27,6 +27,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import socket
 import socketserver
 import struct
@@ -40,18 +41,98 @@ from urllib.parse import urlsplit
 FRAMES = json.loads((Path(__file__).parent / "fixtures/rtp_frames.json").read_text())
 
 
+class SyncClip:
+    """同步测量素材：白闪 H.264（Annex-B）+ 1 kHz beep 的裸 G.711 μ-law。
+
+    为什么不把这套素材写进 ``fixtures/rtp_frames.json``：那段 JSON 是**协议**夹具，
+    几 KB、可读、只关心 NAL 结构；同步素材是几分钟的码流（数百 KB），每次生成的
+    比特流都随本机 x264 版本变化，塞进版本库只会变成一个没人敢动的二进制包袱。
+    生成命令见 ``native/tests/make_sync_clip.sh``，两边（宿主机 / 板端）都能现场生成。
+    """
+
+    def __init__(self, video_path, audio_path):
+        nals = parse_annex_b(Path(video_path).read_bytes())
+        if not nals:
+            raise ValueError(f"no Annex-B NAL units in {video_path}")
+        self.sps = next((nal for nal in nals if nal[0] & 0x1F == 7), None)
+        self.pps = next((nal for nal in nals if nal[0] & 0x1F == 8), None)
+        if self.sps is None or self.pps is None:
+            raise ValueError("sync clip must carry in-band SPS/PPS (x264 repeat-headers)")
+        self.aus = split_access_units(nals)
+        self.audio = Path(audio_path).read_bytes()
+        if not self.audio:
+            raise ValueError(f"empty audio payload in {audio_path}")
+
+    @property
+    def profile_level_id(self):
+        """SPS 里的 profile / constraint / level 三元组（fmtp 的 profile-level-id）。"""
+        return self.sps[1:4].hex()
+
+    @property
+    def sprop(self):
+        return ",".join(base64.b64encode(nal).decode() for nal in (self.sps, self.pps))
+
+
+def parse_annex_b(data):
+    """把 Annex-B 字节流切成 NAL 单元（去掉起始码）。"""
+    units = []
+    offset = 0
+    length = len(data)
+    while offset < length:
+        start = data.find(b"\x00\x00\x01", offset)
+        if start < 0:
+            break
+        begin = start + 3
+        end = data.find(b"\x00\x00\x01", begin)
+        if end < 0:
+            end = length
+        # 四字节起始码 00 00 00 01 会在上一段尾部留下一个 0，属于分隔符而不是负载
+        while end > begin and data[end - 1] == 0:
+            end -= 1
+        if end > begin:
+            units.append(data[begin:end])
+        offset = begin
+    return units
+
+
+def split_access_units(nals):
+    """按「已有一帧片（slice）后遇到新的 slice」切分访问单元。
+
+    只看 slice 而不看 SPS/PPS/SEI：带内参数集一般紧跟在一个 IDR 前面，跟上一个
+    访问单元共用 RTP 时间戳也不会破坏解码（它仍然在 IDR 之前到达）。反过来，
+    按 SPS 切反而会把同一帧的参数集和 slice 分成两帧。
+    """
+    units = []
+    current = []
+    has_slice = False
+    for nal in nals:
+        nal_type = nal[0] & 0x1F
+        is_slice = nal_type in (1, 5)
+        if is_slice and has_slice:
+            units.append(current)
+            current = []
+            has_slice = False
+        current.append(nal)
+        if is_slice:
+            has_slice = True
+    if current:
+        units.append(current)
+    return units
+
+
 class Server(socketserver.ThreadingTCPServer):
     """支持多线程并发连接的本地 RTSP 测试服务器"""
     allow_reuse_address = True
     daemon_threads = True
 
-    def __init__(self):
-        super().__init__(("127.0.0.1", 0), Handler)
+    def __init__(self, host="127.0.0.1", port=0, sync_clip=None):
+        super().__init__((host, port), Handler)
         self.lock = threading.Lock()
         self.connections = collections.Counter()  # 记录各路径总连接数
         self.active = collections.Counter()       # 记录各路径活跃连接数
         self.maximum = collections.Counter()      # 记录各路径最大并发连接数
         self.transports = collections.Counter()   # 记录使用的传输协议统计 (tcp/udp)
+        self.sync_clip = sync_clip                # 可选：白闪 + beep 素材（--sync-clip）
 
 
 class Handler(socketserver.BaseRequestHandler):
@@ -130,9 +211,15 @@ class Handler(socketserver.BaseRequestHandler):
 
             self.codec = "h265" if "h265" in path else "h264"
             self.nals = [base64.b64decode(nal) for nal in FRAMES[self.codec]]
+            # sync 档位：真正的白闪画面 + 1 kHz beep（素材由 make_sync_clip.sh 生成）
+            self.sync_clip = self.server.sync_clip if "sync" in path else None
 
             # 构造 SDP 媒体描述
-            if self.codec == "h264":
+            if self.sync_clip is not None:
+                name = "H264"
+                fmtp = (f"packetization-mode=1;profile-level-id={self.sync_clip.profile_level_id};"
+                        f"sprop-parameter-sets={self.sync_clip.sprop}")
+            elif self.codec == "h264":
                 name = "H264"
                 parameters = ",".join(FRAMES[self.codec][:2] * (24 if "large-extra" in path else 1))
                 fmtp = f"packetization-mode=1;sprop-parameter-sets={parameters}"
@@ -147,7 +234,16 @@ class Handler(socketserver.BaseRequestHandler):
 
             self.audio_type = None
             audio_sdp = ""
-            if "audio-pcma" in path:
+            if self.sync_clip is not None:
+                # 同步档位的音频固定为 PCMU：素材是同一次 ffmpeg 生成的裸 μ-law，
+                # beep 起点与白闪起点在媒体时间上精确对齐。
+                self.audio_type = "pcmu"
+                audio_sdp = (
+                    "m=audio 0 RTP/AVP 0\r\n"
+                    "a=rtpmap:0 PCMU/8000/1\r\n"
+                    "a=control:trackID=1\r\n"
+                )
+            elif "audio-pcma" in path:
                 self.audio_type = "pcma"
                 audio_sdp = (
                     "m=audio 0 RTP/AVP 8\r\n"
@@ -185,8 +281,11 @@ class Handler(socketserver.BaseRequestHandler):
                     "a=control:trackID=1\r\n"
                 )
 
-            sdp = ("v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=fixture\r\n"
-                   "c=IN IP4 127.0.0.1\r\nt=0 0\r\na=control:*\r\n"
+            # 监听地址就是客户端将回连的地址：绑 127.0.0.1 时行为与以前逐字一致，
+            # 绑 0.0.0.0（板端压测）时相机看到的是它的对端地址，而不是“去连自己”。
+            origin = self.client_address[0]
+            sdp = (f"v=0\r\no=- 1 1 IN IP4 {origin}\r\ns=fixture\r\n"
+                   f"c=IN IP4 {origin}\r\nt=0 0\r\na=control:*\r\n"
                    f"m=video 0 RTP/AVP 96\r\na=rtpmap:96 {name}/90000\r\n"
                    f"a=fmtp:96 {fmtp}\r\na=control:trackID=0\r\n"
                    f"{audio_sdp}").encode()
@@ -208,7 +307,7 @@ class Handler(socketserver.BaseRequestHandler):
                 # 解析客户端 UDP 端口并绑定本地发送套接字
                 ports = re.search(r"client_port=(\d+)-(\d+)", transport)
                 udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                udp_sock.bind(("127.0.0.1", 0))
+                udp_sock.bind((self.server.server_address[0], 0))
                 target = (self.client_address[0], int(ports[1]))
                 port = udp_sock.getsockname()[1]
                 value = f"RTP/AVP;unicast;client_port={ports[1]}-{ports[2]};server_port={port}-{port + 1}"
@@ -242,6 +341,9 @@ class Handler(socketserver.BaseRequestHandler):
 
     def send_frames(self):
         """向客户端发送封装后的 RTP 视频数据包（前 25 帧极短间隔加速 FFmpeg 探测，随后 25fps 稳态推流）"""
+        if self.sync_clip is not None:
+            self.send_sync_video()
+            return
         sequence = 1
         frame = 0
         try:
@@ -273,6 +375,9 @@ class Handler(socketserver.BaseRequestHandler):
 
     def send_audio_frames(self):
         """向客户端发送封装后的 RTP 音频数据包"""
+        if self.sync_clip is not None:
+            self.send_sync_audio()
+            return
         sequence = 1
         frame = 0
         raw_aac = bytes.fromhex("de02004c61766336312e31392e31303100422008c11838")
@@ -328,6 +433,64 @@ class Handler(socketserver.BaseRequestHandler):
         except (ConnectionError, OSError):
             pass
 
+    def send_rtp(self, channel, packet, udp_sock, target):
+        """按当前传输模式发出一枚 RTP 包：TCP 用交织通道，UDP 用对应套接字。"""
+        if udp_sock:
+            udp_sock.sendto(packet, target)
+            return
+        with self.send_lock:
+            # TCP 交织模式：$ + channel + 2 字节长度 + RTP 负载
+            self.request.sendall(bytes([36, channel]) + struct.pack("!H", len(packet)) + packet)
+
+    def send_sync_video(self):
+        """按 25 fps 发送白闪码流，时间戳直接由帧号推出。
+
+        用「绝对截止时刻」而不是每帧 ``sleep(0.04)``：后者把调度抖动量累加成
+        真正的时钟漂移，几分钟后视频相对音频整体偏掉 —— 而这次测的就是音画偏差。
+        落后时立即追赶（不补睡），媒体时间由帧号保证，不靠墙钟。
+        """
+        sequence = 1
+        frame = 0
+        started = time.monotonic()
+        try:
+            while not self.done.is_set():
+                access_unit = self.sync_clip.aus[frame % len(self.sync_clip.aus)]
+                for index, nal in enumerate(access_unit):
+                    marker = 128 if index == len(access_unit) - 1 else 0
+                    packet = struct.pack("!BBHII", 128, marker | 96, sequence % 65536,
+                                         (frame * 3600) % 2**32, 12345) + nal
+                    sequence += 1
+                    self.send_rtp(0, packet, self.udp, self.target)
+                frame += 1
+                delay = started + frame * 0.04 - time.monotonic()
+                if delay > 0:
+                    self.done.wait(delay)
+        except (ConnectionError, OSError):
+            pass
+
+    def send_sync_audio(self):
+        """按 50 pps 发送 beep 音频（每包 160 样本 = 20 ms），与视频同一条媒体时间轴。"""
+        sequence = 1
+        frame = 0
+        chunk = 160
+        packets = [self.sync_clip.audio[offset:offset + chunk]
+                   for offset in range(0, len(self.sync_clip.audio), chunk)]
+        packets = [payload for payload in packets if payload]
+        started = time.monotonic()
+        try:
+            while not self.done.is_set():
+                payload = packets[frame % len(packets)]
+                packet = struct.pack("!BBHII", 128, 0, sequence % 65536,
+                                     (frame * chunk) % 2**32, 54321) + payload
+                sequence += 1
+                self.send_rtp(2, packet, self.audio_udp, self.audio_target)
+                frame += 1
+                delay = started + frame * 0.02 - time.monotonic()
+                if delay > 0:
+                    self.done.wait(delay)
+        except (ConnectionError, OSError):
+            pass
+
     def finish(self):
         self.done.set()
         if self.sender:
@@ -343,7 +506,60 @@ class Handler(socketserver.BaseRequestHandler):
                 self.server.active[self.path] -= 1
 
 
+def serve(host, port, sync_clip):
+    """独立监听模式：给宿主机 / 板端压测与浏览器同步实测当相机用。
+
+    为什么需要它：默认入口是「开一个临时端口、拉起一个测试程序、结束后断言」，
+    而压测要的是反过来的——服务先活下来，几十个客户端陆续连进来，人在外面看指标。
+    两者共用同一个 Handler，不再另写一套桩。
+    """
+    server = Server(host=host, port=port, sync_clip=sync_clip)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    bound_host, bound_port = server.server_address[:2]
+    print(f"RTSP fixture listening on rtsp://{bound_host}:{bound_port}", flush=True)
+    if sync_clip is not None:
+        print(f"sync stream: /sync  ({len(sync_clip.aus)} video AUs, "
+              f"{len(sync_clip.audio) / 8000:.1f}s audio)", flush=True)
+
+    stopping = threading.Event()
+
+    def stop(_signum, _frame):
+        stopping.set()
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    try:
+        while not stopping.wait(1):
+            pass
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        with server.lock:
+            print("RTSP fixture connections:", dict(server.connections), flush=True)
+            print("RTSP fixture maximum:", dict(server.maximum), flush=True)
+            print("RTSP fixture transports:", dict(server.transports), flush=True)
+            print("RTSP fixture active:", dict(server.active), flush=True)
+    return 0
+
+
 def main():
+    if "--serve" in sys.argv[1:]:
+        import argparse
+
+        parser = argparse.ArgumentParser(description="Loopback RTSP fixture")
+        parser.add_argument("--serve", action="store_true", help="run standalone instead of driving a test binary")
+        parser.add_argument("--host", default="127.0.0.1")
+        parser.add_argument("--port", type=int, default=8554)
+        parser.add_argument("--sync-clip", metavar="PREFIX",
+                            help="enable the /sync stream from PREFIX.h264 + PREFIX.pcmu")
+        args = parser.parse_args()
+        clip = None
+        if args.sync_clip:
+            clip = SyncClip(f"{args.sync_clip}.h264", f"{args.sync_clip}.pcmu")
+        return serve(args.host, args.port, clip)
+
     server = Server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
