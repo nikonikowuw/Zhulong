@@ -127,3 +127,75 @@ attempt.Reset() // successful authentication clears the IP's history
 ```
 
 The service must also call `Reset(ip)` after successful authentication and must not persist the session token.
+
+---
+
+## Scenario: M2M Bearer Token（OpenAPI 机器鉴权）
+
+### 1. Scope / Trigger
+
+- Trigger：新增/修改面向外部平台的 OpenAPI 鉴权（`internal/apitoken`、`/api/v1/openapi/*`）。
+- 它与单用户 Session 认证是**两条互斥通道**：同一个路由组只能挂其中一条。OpenAPI 组挂 `RequireAuth` 会让所有 M2M 请求 401，隐蔽且无日志。
+
+### 2. Signatures
+
+- `apitoken.GenerateToken() (raw, hash, masked string, err error)`
+- `apitoken.Service.CreateToken(ctx, rawName string) (*APIToken, plain string, err error)`
+- `apitoken.Service.Authenticate(ctx, rawToken string) (Identity, error)`
+- `apitoken.RequireBearer(svc *Service, logger *zap.Logger, auditSvc *audit.Service) gin.HandlerFunc`
+- `apitoken.SetIdentity(c, id)` / `apitoken.GetIdentity(c) (Identity, bool)`
+
+### 3. Contracts
+
+- **明文只出现一次**：32 字节 CSPRNG，`sk-` + hex；只在创建响应里返回，且响应头 `Cache-Control: no-store`。持久化只存 SHA-256 哈希与 masked 前缀。
+- **任何出口都不得带明文**：数据库、日志、审计 `detail`/`target`、错误响应、前端持久化存储都禁止出现原始 Token、`token_hash`、`Authorization` 头。
+- **名称 1–48 字符、全表唯一（含已吊销）**：上限 48 是审计契约倒推的——`api_token:` 前缀 10 字符 + 名称 ≤ 64；吊销后名称不回收，UI 必须把冲突解释为“已被历史令牌占用”。
+- **生效上限 10 个**，吊销是软删且立即生效。
+- **`last_used_at` 合并写**：60 秒窗口 + 后台 context（2s 超时）；`Close()` 用 `sync.WaitGroup` 排空在途落库（500ms），且必须排在 SQLite 关闭之前。
+- **失败语义**：鉴权失败一律 401 + `WWW-Authenticate: Bearer`；数据库故障返回 500，不得降级成 401（那会把基础设施故障说成“凭据错”）。
+- **审计**：成功时 Actor 升级为 Token 身份（`api_token:<name>`、`SourceAPI`）；失败写 `api_token.auth_rejected`，`detail` 只放枚举原因（`malformed` / `unknown_or_revoked`）。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 结果 |
+| --- | --- |
+| 头缺失 / 非 `Bearer` / 空值 / 多值 | 401 `UNAUTHORIZED` |
+| 未知或已吊销 Token | 401 `UNAUTHORIZED` + `api_token.auth_rejected(unknown_or_revoked)` |
+| Token 格式合法但库查询失败 | 500 `INTERNAL_ERROR` |
+| 名称重复（含已吊销） | 409 `API_TOKEN_NAME_ALREADY_EXISTS` |
+| 名称缺失 / 超长 / 含控制字符 | 422 `API_TOKEN_NAME_REQUIRED` / `API_TOKEN_NAME_TOO_LONG` |
+| 生效 Token 已达 10 | 409 `API_TOKEN_LIMIT_REACHED` |
+
+### 5. Good / Base / Bad Cases
+
+- Good：M2M 请求走 `openapi_routes` 独立组，`RequireBearer` 在责任链最前，审计中间件随后拿到升级后的 Actor。
+- Base：未配置 `APITokenService`（测试或裁剪构建）时用 500 阻断中间件，**绝不免密放行**。
+- Bad：把 `RequireAuth`（Cookie Session）挂到 OpenAPI 组 → M2M 全灭，且表现为“凭据无效”。
+- Bad：每个请求同步 `UPDATE last_used_at` → SQLite 单写者下把整个读请求队列拖垮。
+
+### 6. Tests Required
+
+- 生成格式、哈希不可逆、masked 前缀不含完整明文。
+- 并发创建第 11 个 → 409；同名（含已吊销）→ 409；吊销幂等。
+- 鉴权矩阵：有效 / 未知 / 已吊销 / 格式坏 / 库故障；全程 `-race`。
+- `last_used_at` 60s 合并窗口；`Close()` 排空后无遗留 goroutine。
+- 在日志与审计 detail 中搜索原始 Token 字符串 → 零命中。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```go
+// 请求路径上同步写库：SQLite 单写者 + 响应后 ctx 立刻取消，
+// 每次请求都排队一次写，且大部分写入被 ctx 取消浪费。
+if err := s.store.TouchLastUsed(c.Request.Context(), id); err != nil {
+    s.logger.Warn("touch failed", zap.Error(err))
+}
+```
+
+#### Correct
+
+```go
+// 合并写入：60s 窗口内的重复命中直接丢弃，退役时由 Close() 排空。
+s.touchLastUsed(id) // 内部用 context.WithoutCancel + WithTimeout 2s
+```
