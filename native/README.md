@@ -1,13 +1,15 @@
 # Native RTSP ingestion
 
 This component is C++17 + pinned static FFmpeg behind the sole public C header,
-`include/Zhulong/engine.h`. It probes and captures compressed H.264/H.265 packets,
-and provides an on-demand CPU decoding pipeline (FFmpeg SW decoder) producing
-`HardwareFrame` representations for native AI consumption while strictly preserving
-100% C ABI backward compatibility behind `include/Zhulong/engine.h`. It does **not**
-implement Go camera/subscription API, recording, preview transport, MPP/RGA/RKNN,
-or hardware acceleration. The Go host still uses only engine lifecycle calls; health
-readiness does not imply a connected camera.
+`include/Zhulong/engine.h`. It probes and captures compressed H.264/H.265 packets
+and (since ABI v5) one optional audio track, and provides an on-demand CPU decoding
+pipeline (FFmpeg SW decoder) producing `HardwareFrame` representations for native AI
+consumption while strictly preserving 100% C ABI backward compatibility behind
+`include/Zhulong/engine.h`. It does **not** implement the Go camera/subscription API,
+recording, preview transport or audio playback; hardware acceleration lives behind
+compile-time profiles (`native/profiles/`, see
+`.trellis/spec/native/hardware-backends.md`). The Go host still uses only engine
+lifecycle calls; health readiness does not imply a connected camera.
 
 ## Host builds
 
@@ -139,9 +141,23 @@ See `engine.h` for exact signatures, structs, units and status constants.
 - Consumers are nonzero IDs scoped to a stream. Duplicate acquire returns
   `DUPLICATE` without incrementing references. Conflicting transport/timeouts for
   one URL return `CONFIG_CONFLICT`. TCP is default; UDP is explicit, not fallback.
-- `stream_subscribe` requires an existing Preview consumer, one subscription per
-  consumer, and does not add a consumer reference. No subscription means no packet
-  callback. Recording/AI references do not imply recording/inference implementation.
+- `stream_subscribe_track` requires an existing Preview consumer and a nonzero
+  `track_mask`; deduplication is per **(consumer, track_mask)**, so one consumer may
+  hold a video subscription and an audio subscription at once. `stream_subscribe` is
+  the exact `TRACK_MASK_VIDEO` alias. Neither adds a consumer reference. No
+  subscription means no packet callback. Recording/AI references do not imply
+  recording/inference implementation.
+- Audio is requested on every capture open (`allowed_media_types="video+audio"`;
+  probe stays video-only). `stream_audio_info` copies the stream-level codec, sample
+  rate, channels and extradata into a **caller-owned** buffer (`BUFFER_TOO_SMALL`
+  reports the required size); it never lends internal pointers. Audio packets carry
+  `track_type=AUDIO`, `frame_class=UNKNOWN`, `key_frame=0`, are capped at 8 KiB and
+  never refresh the idle timeout. Their `pts_us/dts_us` are already on the video
+  output timeline and may be negative.
+- If the audio track makes the whole open fail (`ERR_IO`), capture reopens once with
+  `video` only, **inside the remaining `open_timeout_ms` budget** — the retry never
+  re-arms the deadline, so a synchronous CGO `Acquire` cannot exceed the caller's
+  context deadline. `TIMEOUT` and `UNSUPPORTED` are not retried (see `Clocks`).
 - `stream_unsubscribe` removes registration, prevents new callback admission, then
   drains a possible in-flight callback before returning. Release with an attached subscription is
   `BUSY`; use **unsubscribe → release**. After the last release, an 8-second steady
@@ -164,10 +180,11 @@ See `engine.h` for exact signatures, structs, units and status constants.
 
 ### Clocks and interruption
 
-`open_timeout_ms` covers both open and stream-info using one absolute monotonic
-clock deadline. `idle_timeout_ms` defaults to 5000 and is refreshed only by selected
-video packets. The socket timeout uses the larger configured limit while the
-interrupt callback enforces the current phase's tighter deadline. Successful
+`open_timeout_ms` covers open, stream-info and the video-only fallback retry using
+one absolute monotonic clock deadline. `idle_timeout_ms` defaults to 5000 and is
+refreshed only by selected video packets. The socket timeout uses the larger
+configured limit while the interrupt callback enforces the current phase's tighter
+deadline. Successful
 FFmpeg stream-info can still be partial after interruption, so deadlines are checked
 after successful calls too. Cleanup signals cancellation **before** closing the
 input (including normal probe completion/TEARDOWN). Only the owning worker touches

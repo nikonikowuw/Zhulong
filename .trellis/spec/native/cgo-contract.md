@@ -128,6 +128,10 @@ func (s *Subscription) Close() error
   真要用 Go 缓冲就先 `runtime.Pinner.Pin`，否则一律 C 分配。C 侧只在调用期间写入，**不得**保存该指针。
 - **容量不足是正常路径，不是错误**：返回 `Zhulong_ERR_BUFFER_TOO_SMALL`，并把实际所需长度写进
   `extradata_size`；调用方据此扩容重试。不要写“先查一次大小再取一次”的双调用协议 —— 流可能在两次调用间重建。
+- **运行态与宽限期**：`state != RUNNING`（启动中/已失败）返回 `Zhulong_ERR_NOT_RUNNING`；
+  流被**回收**后返回 `Zhulong_ERR_NOT_FOUND`。已 `release` 但仍在 8 秒宽限期的流**仍可查询**（物理连接还在），
+  这是有意为之：`audio_info` 只写调用方缓冲区，不借出内部指针，宽限期内查询不会造成悬垂。
+  父 PRD 里「流关闭后返回 NOT_FOUND」的措辞应按此口径修正。
 - **不返回内部借用指针**：绝不把 `audio_meta_.extradata` 的地址交出去，否则流销毁后就是悬垂指针；
   也不允许用“反正是立即深拷贝”当借口省掉缓冲区协议。
 - **按轨订阅**：`Zhulong_stream_subscribe_track(..., track_mask, ...)`，视频/音频各自一条订阅、各自独立队列与
@@ -135,6 +139,10 @@ func (s *Subscription) Close() error
   但同一 `track_mask` 重复订阅仍返回 `ERR_DUPLICATE`（去重粒度 = 消费者 + 轨道掩码）。
 - **音频回调的包视图契约不变**：`data` 仍只在同步回调期间有效，`pts_us/dts_us` 已是视频输出时间轴上的微秒值；
   再往上一层（Go 的音频通道）必须复制成自持缓冲才能入队。
+  - 音频 `pts_us` **可能为负**（首枚音频包比视频原点更早到达），接收方必须接受而不做 clamp；
+  - 源流缺 DTS 时 `has_dts=0` 且置 `ZHULONG_PKT_FLAG_DTS_SYNTHETIC`，`dts_us` 已由 `pts_us` 合成；
+  - 视频 discontinuity generation 变化或重锚后的首包会置 `ZHULONG_PKT_FLAG_DISCONTINUITY`，
+    接收方必须按「时间轴离开上一段」处理（丢弃陈旧音频并重锚），不能只当作告警位。
 
 ---
 

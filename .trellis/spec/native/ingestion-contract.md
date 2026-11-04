@@ -94,12 +94,26 @@
   在本引擎上是**可播的裸 AAC**。保留 `AV_CODEC_ID_AAC_LATM` 的拒绝分支只作防御（真报成它说明不可解封装）。
 - **失败不黑屏**：申请音频后建连/SETUP 失败 → 关 ctx，以 `"video"` **只重开一次**，日志记
   `rtsp_audio_open_failed rc=`。物理证据是 `/audio-broken` 桩的连接计数恰为 2（`rtsp_fixture.py` 断言）。
+  - ⚠️ **降级不刷新 open 预算**：重开只允许消耗首次 open 的剩余时间（单一绝对截止点），
+    绝不重新 `expire_after`。Go 侧 `Acquire` 已把 ctx deadline 折进 `open_timeout_ms`，
+    原生再计时一次就等于让同步 CGO 调用花 2×预算。`/stall-open` + 1s 预算的用例钉住
+    「acquire → FAILED < 1.8s」（旧行为实测 2006ms）。
+  - ⚠️ **只对 `ERR_IO` 降级**：`TIMEOUT` 且截止点已过 = 预算用尽，重试只会让调用方多等一轮；
+    `UNSUPPORTED`（视频编码不支持）换纯视频也一样失败，重试白付一次握手并把原因错记成音频。
 - **音频归一化**（`pipeline/audio_normalizer.*`）：锚点 `base = a - V`（视频原点到达时刻 + 首枚有效音频包到达时延），
   逐包读视频 `timestamp_shift_us` 与 discontinuity generation：
   `audio_out_us = (audio_abs_us - A) + base + video_shift_us`。纯算术、不读钟、不加锁。
   - 视频原点未建立 → 音频包**一律丢弃**并计数，绝不自行建原点（否则等于拿音频造了一条假时间轴）；
   - 缺失 PTS 按 codec/sample_rate 递推并置 `TIMESTAMP_SYNTHETIC`；32 位 RTP 回绕要展开；
-  - 输出非单调时截平并置 `DISCONTINUITY`，绝不静默回拨。
+  - ⚠️ **首包缺 PTS 时锚点建在合成轴上**，首枚真实 PTS 到达必须以它**重锚一次**并置 `DISCONTINUITY`，
+    否则输出会变成「真实 PTS 的绝对值 + base」（前跳数十分钟），而单调保护只拦回拨、拦不住前跳；
+  - 源流缺 DTS 时置 `DTS_SYNTHETIC`（`dts_us` 由 `pts_us` 合成），不留「`has_dts=0` 却带有效 `dts_us`」的矛盾视图；
+  - 输出非单调时截平并置 `DISCONTINUITY`，绝不静默回拨；
+  - **锚点一次性日志**：`audio_anchor_established base_us=<i64> dropped_before_origin=<u64>`，
+    每路流一行。「有音轨却没声音」时这两个数就是第一现场。
+- **音频资源上限**：单包 ≤ 8 KiB（`max_audio_packet_bytes`，与 Go 通道 `MaxPacketBytes` 对齐）、
+  extradata ≤ 256 B（`max_audio_extradata_bytes`）。超限丢弃必须落日志，
+  不得静默吞 config（否则「有音轨无声音」既无日志也无错误码）。
 - **音频不进视频路径**：`Stream::dispatch()` 入口断言 `track_type == VIDEO`，音频走 `dispatch_audio()`；
   音频永不经过 `PreviewNormalizer`、`DecodeSession`、GOP 缓存。
 - **空闲超时只由视频刷新**：音频持续到达而视频停了，仍然要按 `idle_timeout_ms` 判 `TIMEOUT`；
@@ -107,6 +121,9 @@
 - **ABI v5**：`Zhulong_packet_view` 尾部追加 `track_type` + 3×`reserved`；
   `Zhulong_stream_subscribe_track(..., track_mask, ...)`（旧 `Zhulong_stream_subscribe` 等价于 `TRACK_MASK_VIDEO`）；
   `Zhulong_stream_audio_info` 由调用方提供缓冲区（详见 [cgo-contract.md](./cgo-contract.md)）。
+  - 布局门禁在**纯 C** 侧：`native/tests/engine_abi_test.c` 用 `_Static_assert` 钉住
+    `pkt_flags`/`track_type` 偏移与结构大小，并覆盖 `subscribe_track` / `audio_info` 的
+    空参数与未运行状态（错误码在编译期与运行期各钉一次，不靠 Go 侧偏移读错内存来暴露）。
 - **订阅去重粒度是「消费者 + 轨道掩码」**：同一预览消费者可以分别订阅视频与音频；
   同一轨道集重复订阅仍 `Zhulong_ERR_DUPLICATE`。
 
