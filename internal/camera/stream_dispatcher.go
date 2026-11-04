@@ -32,6 +32,14 @@ const (
 	// 这段时间没有任何东西可以掩盖。窗口越短，用户切几次页就要付几次这笔钱。
 	// 现场按 NVR 的常态理解——相机本来就该常连——10 分钟空闲才释放是可以接受的。
 	defaultIdleCloseDelay = 10 * time.Minute
+
+	// counterReportInterval 是分发器计数向日志的周期上报间隔。
+	//
+	// 计数本身是累计值，只在关闭时打一行也能拿到总数；周期上报是为了拿「趋势」，
+	// 而压测与现场排障真正要找的恰恰是趋势：30 分钟里 `GOPTruncations` 一直涨
+	// 与“结束时刚好 3 次”是两个完全不同的结论。5 分钟一次在本仓的 16 路规模下
+	// 是 0.05 行/秒，不至于把日志淹掉。
+	counterReportInterval = 5 * time.Minute
 )
 
 // gopCache 是从最近一个关键帧到当前时刻的**完整**帧窗口。
@@ -78,7 +86,16 @@ type StreamDispatcher struct {
 	// 「是流本身丢了包」还是「是我这边主动丢的」，这是定位问题的关键分界。
 	seq    atomic.Uint32
 	closed bool
+	// capabilityLogged 保证能力相关的日志每路流只打一次：能力是流级常量，
+	// 每个预览客户端建连都打一遍只会在 16 宫格下淹掉真正的新信息。
+	capabilityLogged bool
 }
+
+// capabilityReadyTimeout 是预览能力帧等待「流就绪」的预算。
+//
+// 上限取得比音频通道的 5 s 小：它摆在 WS 握手的路径上，等太久会让一个打不开的相机
+// 看起来像“网页卡了”。2 s 覆盖了实测的冷建连（300~800 ms），又远小于人能忍受的阈值。
+const capabilityReadyTimeout = 2 * time.Second
 
 // NewStreamDispatcher 构造单流分发器。
 func NewStreamDispatcher(
@@ -111,15 +128,55 @@ func NewStreamDispatcher(
 //
 // 查询失败不当作错误向外抛：能力帧的语义是「告诉你这路能不能听」，查不到就是
 // 「现在不知道/不能听」，前端置灰即可，绝不能让一次探测失败影响视频建连。
+//
+// ⚠️ 必须等一小段（{@link capabilityReadyTimeout}）：acquire 是异步的，流还没 ready 时
+// `audio_info` 一律报错。此时照实写 `present=false` 会把一台**有音频**的相机永久标成
+// 哑巴——能力帧只发一次，前端不会重试。板端 16 路压测里正是这个形态：全部 16 路都被
+// 记成 `audio info unavailable`，而其中 4 路的音频通道实际工作正常。健康流上这段等待
+// 与「第一帧视频到达」本来就是同一个时间点，不额外增加首帧延迟。
 func (d *StreamDispatcher) AudioCapability(ctx context.Context) AudioCapabilityInfo {
+	return d.audioCapabilityWithin(ctx, capabilityReadyTimeout)
+}
+
+// audioCapabilityWithin 是 AudioCapability 的可调预算版本，测试用它把失败路径缩短到毫秒级。
+func (d *StreamDispatcher) audioCapabilityWithin(ctx context.Context, timeout time.Duration) AudioCapabilityInfo {
 	if d.stream == nil {
+		d.logCapability(AudioCapabilityInfo{Reason: "stream handle unavailable"})
 		return audioCapability(engine.AudioInfo{}, "stream handle unavailable")
 	}
-	info, err := d.stream.AudioInfo(ctx)
+	info, err := waitAudioInfoWithin(ctx, d.stream, timeout)
 	if err != nil {
+		d.logCapability(AudioCapabilityInfo{Reason: "audio info unavailable"})
 		return audioCapability(engine.AudioInfo{}, "audio info unavailable")
 	}
-	return audioCapability(info, "")
+	capability := audioCapability(info, "")
+	d.logCapability(capability)
+	return capability
+}
+
+// logCapability 把这一路流的音频能力打一次到日志。
+//
+// 为什么值得一条 Info：现场「这个相机到底有没有声音」目前只能靠翻 SDP，
+// 而能力帧只发给浏览器、不落盘。有了这一行，`has=false` 时能直接看到原因
+// （探测失败 / 无音轨 / 不支持的编码），不必再回溯 Native 的 `stream_ready`。
+func (d *StreamDispatcher) logCapability(capability AudioCapabilityInfo) {
+	d.mu.Lock()
+	already := d.capabilityLogged
+	d.capabilityLogged = true
+	d.mu.Unlock()
+	if already {
+		return
+	}
+	d.logger.Info("preview audio capability",
+		zap.String("camera_id", d.cameraID),
+		zap.String("role", d.role),
+		zap.Bool("has_audio", capability.Present),
+		zap.String("codec", capability.Codec),
+		zap.Int("sample_rate", capability.SampleRate),
+		zap.Int("channels", capability.Channels),
+		zap.Int("config_bytes", len(capability.Config)),
+		zap.String("reason", capability.Reason),
+	)
 }
 
 // RegisterClient 注册新的 WebSocket 订阅者，并在持有锁的情况下补齐整个 GOP。
@@ -475,6 +532,24 @@ func (d *StreamDispatcher) Counters() DispatchCounters {
 	}
 }
 
+// logCounters 把计数快照写进日志。
+//
+// 没有这行出口，`Counters()` 就只是死代码：现场「谁跟不上」「相机 GOP 是不是太长」
+// 只能靠 CPU 曲线猜。字段名与 DispatchCounters 一一对应，便于 grep 后直接画曲线。
+func (d *StreamDispatcher) logCounters(message string) {
+	counters := d.Counters()
+	d.logger.Info(message,
+		zap.String("camera_id", d.cameraID),
+		zap.String("role", d.role),
+		zap.Int("subscribers", counters.Subscribers),
+		zap.Uint64("keyframe_injected", counters.KeyframeInjected),
+		zap.Uint64("lag_resyncs", counters.LagResyncs),
+		zap.Uint64("queue_resyncs", counters.QueueResyncs),
+		zap.Uint64("resync_skips", counters.ResyncSkips),
+		zap.Uint64("gop_truncations", counters.GOPTruncations),
+	)
+}
+
 // RunPumpLoop 持续从底层包源读取数据并广播，直到上下文取消或流出错。
 func (d *StreamDispatcher) RunPumpLoop(ctx context.Context) {
 	// 与 idle/running 的其它转换串行：拉流启动也是一次会话状态迁移。
@@ -485,6 +560,7 @@ func (d *StreamDispatcher) RunPumpLoop(ctx context.Context) {
 	}()
 
 	var lastReport time.Time
+	var lastCounterReport time.Time
 	for {
 		pkt, err := d.sub.Next(ctx)
 		if err != nil {
@@ -502,6 +578,10 @@ func (d *StreamDispatcher) RunPumpLoop(ctx context.Context) {
 			if d.hub != nil {
 				d.hub.recordPacketActivity(d.cameraID, d.role)
 			}
+		}
+		if now.Sub(lastCounterReport) >= counterReportInterval {
+			lastCounterReport = now
+			d.logCounters("stream dispatcher counters")
 		}
 
 		d.Broadcast(pkt)
@@ -560,5 +640,8 @@ func (d *StreamDispatcher) Close() {
 			zap.String("camera_id", d.cameraID),
 			zap.String("role", d.role),
 		)
+		// 累计计数的最终快照：压测与「跑了一夜才出问题」的现场都靠这一行收口。
+		// 放在 Close 末尾而不是开头：此时订阅者已全部断开，`subscribers` 记为 0 是预期值。
+		d.logCounters("stream dispatcher counters final")
 	})
 }

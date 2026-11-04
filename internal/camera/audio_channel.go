@@ -329,6 +329,10 @@ func (c *AudioChannel) closeWithReason(code int, reason string) {
 		if c.registry != nil {
 			c.registry.Remove(c.key, c)
 		}
+		var opened, superseded, rejected uint64
+		if c.registry != nil {
+			opened, superseded, rejected = c.registry.Stats()
+		}
 		c.logger.Info("audio channel closed",
 			zap.String("session", c.key),
 			zap.String("camera_id", c.cameraID),
@@ -337,6 +341,11 @@ func (c *AudioChannel) closeWithReason(code int, reason string) {
 			zap.String("reason", reason),
 			zap.Uint32("seq", c.seq.Load()),
 			zap.Uint64("dropped", c.dropped.Load()),
+			// 注册表累计值：一次关闭就是一次可观测快照，「现在一共有几条在听」
+			// 不必另建指标端点也能从最后一行日志读出。
+			zap.Uint64("opened_total", opened),
+			zap.Uint64("superseded_total", superseded),
+			zap.Uint64("rejected_total", rejected),
 		)
 	})
 }

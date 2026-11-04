@@ -401,7 +401,12 @@ func (h *StreamHub) AcquireAudioStream(ctx context.Context, cameraID, role strin
 const audioInfoReadyTimeout = 5 * time.Second
 
 func waitAudioInfo(ctx context.Context, stream MediaStream) (engine.AudioInfo, error) {
-	deadline := time.Now().Add(audioInfoReadyTimeout)
+	return waitAudioInfoWithin(ctx, stream, audioInfoReadyTimeout)
+}
+
+// waitAudioInfoWithin 带预算的版本：预览能力帧只需要一个很短的上限。
+func waitAudioInfoWithin(ctx context.Context, stream MediaStream, timeout time.Duration) (engine.AudioInfo, error) {
+	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for {
 		info, err := stream.AudioInfo(ctx)

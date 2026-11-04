@@ -1,7 +1,10 @@
 package camera
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"go.uber.org/zap"
@@ -117,5 +120,72 @@ func TestRegisterClientDropsWholeGOPWhenQueueTooSmall(t *testing.T) {
 	}
 	if client.hasProgressDTS {
 		t.Fatal("abandoned priming must not leave a progress anchor behind")
+	}
+}
+
+// lateAudioStream 模拟「acquire 已返回、但流还没 ready」：前 N 次 audio_info 报错。
+type lateAudioStream struct {
+	mockMediaStream
+	attempts atomic.Int32
+	failures int32
+}
+
+func (s *lateAudioStream) AudioInfo(ctx context.Context) (engine.AudioInfo, error) {
+	if int(s.attempts.Add(1)) <= int(s.failures) {
+		return engine.AudioInfo{}, engine.ErrNotRunning
+	}
+	return s.mockMediaStream.AudioInfo(ctx)
+}
+
+// 能力帧必须等流就绪，而不是把「还没 ready」当成「没有音频」。
+//
+// 这条用例来自板端 16 路压测的实测：全部 16 路都被记成 audio info unavailable，
+// 其中 4 路的音频通道其实工作正常。能力帧只发一次、前端不重试，所以误判是永久的。
+func TestAudioCapabilityWaitsForStreamReady(t *testing.T) {
+	stream := &lateAudioStream{failures: 3}
+	stream.audioInfo = engine.AudioInfo{
+		HasAudio:   true,
+		Codec:      engine.CodecPCMU,
+		SampleRate: 8000,
+		Channels:   1,
+	}
+	d := NewStreamDispatcher(nil, "cam-1", StreamRoleMain, stream, nil, nil, zap.NewNop())
+
+	started := time.Now()
+	capability := d.AudioCapability(context.Background())
+	elapsed := time.Since(started)
+
+	if !capability.Present {
+		t.Fatalf("capability = %+v, want present: the stream only needed a moment to become ready", capability)
+	}
+	if capability.Codec != "pcmu" || capability.SampleRate != 8000 {
+		t.Fatalf("capability = %+v, want pcmu/8000", capability)
+	}
+	if elapsed >= capabilityReadyTimeout {
+		t.Fatalf("elapsed = %v, want < %v (must return as soon as info is available)", elapsed, capabilityReadyTimeout)
+	}
+	if attempts := stream.attempts.Load(); attempts < 4 {
+		t.Fatalf("audio_info attempts = %d, want >= 4: the wait must actually retry", attempts)
+	}
+}
+
+// 真的查不到时仍要给出 present=false + reason，且不超过预算。
+func TestAudioCapabilityReportsUnavailableAfterBudget(t *testing.T) {
+	stream := &lateAudioStream{failures: 1 << 30}
+	d := NewStreamDispatcher(nil, "cam-1", StreamRoleMain, stream, nil, nil, zap.NewNop())
+
+	budget := 80 * time.Millisecond
+	started := time.Now()
+	capability := d.audioCapabilityWithin(context.Background(), budget)
+	elapsed := time.Since(started)
+
+	if capability.Present {
+		t.Fatal("capability must be absent when audio info never becomes available")
+	}
+	if capability.Reason == "" {
+		t.Fatal("absent capability must carry a reason for the frontend tooltip")
+	}
+	if elapsed < budget/2 || elapsed > budget+time.Second {
+		t.Fatalf("elapsed = %v, want roughly the %v budget", elapsed, budget)
 	}
 }

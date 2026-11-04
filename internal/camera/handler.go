@@ -480,6 +480,15 @@ func (h *Handler) writeStreamInfo(c *gin.Context, conn *websocket.Conn, disp *St
 //
 // 与预览 WS 的关系是「同一路流的两种视图」：预览照旧只发视频二进制帧，
 // 音频走这条独立连接，因此视频的背压、GOP、健康态与协议版本都不受音频影响。
+//
+// @Summary      按需音频通道（ZLA1）
+// @Description  首个文本帧为 audio_info；随后为 20 字节 ZLA1 头 + 裸负载的二进制帧。
+// @Description  同一登录会话只允许一条：新连接以 4001 接管旧的；全局上限 8 条（4002）；
+// @Description  无音轨时先发 error 文本帧再以 4404 关闭；队列溢出以 4003 关闭。
+// @Tags         camera
+// @Param        id   path   string  true  "摄像机 ID"
+// @Param        role path   string  false "码流类型 (main 或 sub，默认 main)"
+// @Router       /cameras/{id}/streams/{role}/audio/ws [get]
 func (h *Handler) StreamAudioWS(c *gin.Context) {
 	if h.streamHub == nil {
 		httputil.WriteError(c, apperr.New(apperr.KindInternal, "STREAM_HUB_NOT_INITIALIZED", "Stream hub not available", nil))

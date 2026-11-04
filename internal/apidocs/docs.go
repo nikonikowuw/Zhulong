@@ -1987,6 +1987,31 @@ const docTemplate = `{
                 }
             }
         },
+        "/cameras/{id}/streams/{role}/audio/ws": {
+            "get": {
+                "description": "首个文本帧为 audio_info；随后为 20 字节 ZLA1 头 + 裸负载的二进制帧。\n同一登录会话只允许一条：新连接以 4001 接管旧的；全局上限 8 条（4002）；\n无音轨时先发 error 文本帧再以 4404 关闭；队列溢出以 4003 关闭。",
+                "tags": [
+                    "camera"
+                ],
+                "summary": "按需音频通道（ZLA1）",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "摄像机 ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "码流类型 (main 或 sub，默认 main)",
+                        "name": "role",
+                        "in": "path"
+                    }
+                ],
+                "responses": {}
+            }
+        },
         "/cameras/{id}/streams/{role}/ws": {
             "get": {
                 "tags": [
