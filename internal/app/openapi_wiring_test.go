@@ -34,7 +34,7 @@ func TestOpenAPIAndTokenWiring(t *testing.T) {
 	defer tokenSvc.Close()
 
 	personStore := person.NewStore(dbStore)
-	personSvc := person.NewService(personStore, tempDir, dummyExtractor{}, nil, person.Options{}, zap.NewNop())
+	personSvc := person.NewService(personStore, tempDir, zap.NewNop(), person.Options{Extractor: dummyExtractor{}})
 
 	limiter := openapi.NewUploadLimiter()
 	openAPIHandler := openapi.NewHandler(personSvc, limiter, zap.NewNop())

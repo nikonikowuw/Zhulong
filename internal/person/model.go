@@ -83,6 +83,9 @@ func (Face) TableName() string {
 // and incremental changes (GalleryNotifier.BroadcastUpsert). Its snake_case JSON
 // names are the IPC wire contract and deliberately differ from the camelCase
 // names used by the HTTP API.
+// Features may alias the stored feature bytes: bytesToFloat32 returns a zero-copy view
+// on little-endian hosts. Treat the slice as read-only and do not retain it past the
+// call that produced the item.
 type GalleryItem struct {
 	FaceID     string    `json:"face_id"`
 	PersonID   string    `json:"person_id"`
@@ -91,7 +94,11 @@ type GalleryItem struct {
 	Features   []float32 `json:"features,omitempty"`
 }
 
-// FaceImportFailedItem represents an item that failed validation or enrollment in a face import job.
+// FaceImportFailedItem represents an item that failed validation or enrollment in a face
+// import job.
+//
+// ErrorCode is the machine contract; Message is diagnostic detail rendered verbatim in
+// the failed report (it carries values that do not fit a static catalogue entry).
 type FaceImportFailedItem struct {
 	Line      int    `json:"line"`
 	FilePath  string `json:"filePath"`

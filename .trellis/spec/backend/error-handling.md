@@ -157,6 +157,8 @@ httputil.Success(c, result)
 1. **平台通用字典**：`internal/httputil/locale.go` 仅保留通用 HTTP 状态与表单校验码（`INTERNAL_ERROR`、`ROUTE_NOT_FOUND`、`VALIDATION_FAILED`、`REQUIRED` 等），并通过读写锁保证并发安全。
 2. **业务专属字典**：各业务模块（如 `internal/auth`、`internal/camera`）在自己的 `locale.go` 中维护本模块的错误码三语映射，并在 `init()` 阶段调用 `httputil.RegisterMessages(map[string]map[string]string{...})`。
 3. **高内聚与自包含**：业务模块重构或废弃时，对应语言字典随包一并删除，杜绝平台基础包遗留死文案。
+4. **一个 code 只有一个归属模块**：`RegisterMessages` 是全局注册表，**后注册者静默覆盖先注册者**，而 `init()` 顺序取决于 import 图，不可依赖。凡是某个领域 service 自己产出的 code（例如 `PERSON_ID_TOO_LONG`、`FACE_LIMIT_EXCEEDED` 由 `internal/person` 产出），字典就必须只在该领域注册；跨领域复用的入口（`internal/openapi`）不得再抄一份，否则文案会随链接顺序漂移。
+5. **跨领域同名 code 必须改名**：两个领域各自表达不同语义却共用同一 code（如 spatial 的"查询轨迹必须选人员"与 person 的"person_id 不能为空"）时，后来者改名（`SPATIAL_PERSON_ID_REQUIRED`），不要靠注册顺序碰运气。
 
 ---
 
@@ -172,4 +174,17 @@ httputil.Success(c, result)
    - 使用 `httputil.HandleJSON[Req, Resp]` 与 `httputil.Handle[Resp]` 挂载路由。
    - 统一自动处理 `ShouldBindJSON`、413 Payload 超限、422 字段校验转换与 `Success` 响应信封。
    - `httputil.WriteError` 自动识别 `*apperr.Error`，将 `Kind` 映射为对应的 HTTP 状态码并联动 i18n 消息。
+3. **状态码由 `Kind` 决定，Handler 不做二次映射**：
+   - 禁止在 Handler 里 `switch ae.Code { case "FILE_TOO_LARGE": ... }` 重算状态码——那等于把 HTTP 语义从 `Kind` 搬到字符串匹配上，同一个 code 在两条路径上会给出不同状态。
+   - 需要非默认状态时新增/选用对应 `Kind`，并同步 `httputil.KindToHTTPStatus`。
+
+   | Kind | HTTP | 典型用途 |
+   | --- | --- | --- |
+   | `KindBadRequest` | 400 | 载荷格式坏了但字段级细节无意义（图片无法解码、`NO_FACE_DETECTED`） |
+   | `KindInvalid` | 422 | 字段校验（携带 `details`），如 `INVALID_FILE_TYPE` |
+   | `KindPayloadTooLarge` | 413 | 单文件或请求体超限（`FILE_TOO_LARGE`） |
+   | `KindNotFound` / `KindConflict` / `KindPrecondition` | 404 / 409 / 412 | 资源缺失 / 幂等键冲突 / 状态前置条件不满足 |
+   | `KindInternal` | 500 | 存储、IPC、算法引擎故障 |
+
+   **注意**：字段级 `details` 只有 `httputil.AppError` 携带，因此 422 字段校验仍由 Handler 用 `httputil.NewValidationError` 构造；其余错误一律返回 `apperr.Error`。
 

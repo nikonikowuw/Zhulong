@@ -25,6 +25,8 @@ type PersonLifecycle interface {
 	Stop(ctx context.Context) error
 }
 
+// personLifecycleImpl satisfies the Fx lifecycle contract for the person domain.
+// Ephemeral directory creation and stale artifact cleanup are executed during Start.
 type personLifecycleImpl struct {
 	service *Service
 	logger  *zap.Logger
@@ -32,13 +34,15 @@ type personLifecycleImpl struct {
 
 func (l *personLifecycleImpl) Start(ctx context.Context) error {
 	l.logger.Info("person service started")
+	if l.service != nil {
+		if err := l.service.Start(ctx); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func (l *personLifecycleImpl) Stop(ctx context.Context) error {
-	if l.service != nil {
-		l.service.Close()
-	}
+func (l *personLifecycleImpl) Stop(_ context.Context) error {
 	l.logger.Info("person service stopped")
 	return nil
 }
@@ -51,18 +55,16 @@ type RouteRegistrar interface {
 // NewPersonComponents constructs all person domain singletons.
 //
 // Every collaborator — including the optional gallery notifier and the record-domain
-// key backfiller — is captured here. Nothing in this package supports swapping a
-// dependency after construction.
+// key backfiller — arrives in Options and is captured here. Nothing in this package
+// supports swapping a dependency after construction.
 func NewPersonComponents(
 	dbProvider database.DBProvider,
 	facesDir string,
-	extractor FaceFeatureExtractor,
-	notifier GalleryNotifier,
-	opts Options,
 	logger *zap.Logger,
+	opts Options,
 ) *PersonComponents {
 	store := NewStore(dbProvider)
-	service := NewService(store, facesDir, extractor, notifier, opts, logger)
+	service := NewService(store, facesDir, logger, opts)
 	handler := NewHandler(service, logger)
 	jobHandler := NewFaceImportJobHandler(service)
 

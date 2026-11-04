@@ -169,7 +169,7 @@ func TestGetGallerySyncData(t *testing.T) {
 	defer dbStore.Close()
 
 	store := NewStore(dbStore)
-	svc := NewService(store, tempDir, nil, nil, Options{}, zap.NewNop())
+	svc := NewService(store, tempDir, zap.NewNop(), Options{})
 	ctx := context.Background()
 
 	p := &Person{
@@ -236,7 +236,7 @@ func newTestService(t *testing.T) *Service {
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	return NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), nil, Options{}, zap.NewNop())
+	return NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: defaultTestExtractor()})
 }
 
 func requireDomainError(t *testing.T, err error, kind apperr.Kind, code string) {
@@ -786,7 +786,7 @@ func TestAddFace_WithExtractor_Success(t *testing.T) {
 	}
 
 	extractor := &mockExtractor{features: expectedFeats}
-	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, Options{}, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: extractor})
 	ctx := context.Background()
 
 	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("P_EXTRACT_1"), Name: "特征提取测试员"})
@@ -844,7 +844,7 @@ func TestAddFace_WithExtractor_NoFaceDetected(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	extractor := &mockExtractor{err: fmt.Errorf("%w: mock extractor", ErrNoFaceDetected)}
-	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, Options{}, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: extractor})
 	ctx := context.Background()
 
 	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("P_EXTRACT_2"), Name: "失败测试员"})
@@ -858,7 +858,8 @@ func TestAddFace_WithExtractor_NoFaceDetected(t *testing.T) {
 		t.Fatal("expected error when no face is detected")
 	}
 
-	requireDomainError(t, err, apperr.KindInvalid, "NO_FACE_DETECTED")
+	// A photo with no usable face is a client-side payload problem: 400, not 422.
+	requireDomainError(t, err, apperr.KindBadRequest, "NO_FACE_DETECTED")
 
 	// 验证磁盘上不得残留任何图片文件
 	entries, _ := os.ReadDir(tempDir)
@@ -887,7 +888,7 @@ func TestAddFace_WithExtractor_DimMismatch(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	extractor := &mockExtractor{features: make([]float32, 256)} // 维度不符
-	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, Options{}, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: extractor})
 	ctx := context.Background()
 
 	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("P_EXTRACT_3"), Name: "维度测试员"})
@@ -915,7 +916,7 @@ func TestAddFace_WithoutExtractorFails(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	svc := NewService(NewStore(dbStore), tempDir, nil, nil, Options{}, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{})
 	ctx := context.Background()
 
 	p, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "无提取器"})
@@ -946,7 +947,7 @@ func TestAddFace_ExtractorFailureIsNotBlamedOnThePhoto(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	extractor := &mockExtractor{err: errors.New("engine crashed")}
-	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, Options{}, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: extractor})
 	ctx := context.Background()
 
 	p, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "引擎故障"})
@@ -969,7 +970,7 @@ func TestAddFace_UndecodableImageIsAClientError(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	extractor := &mockExtractor{err: fmt.Errorf("%w: image: unknown format", ErrUnsupportedImageFormat)}
-	svc := NewService(NewStore(dbStore), tempDir, extractor, nil, Options{}, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: extractor})
 	ctx := context.Background()
 
 	p, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "格式错误"})
@@ -978,7 +979,7 @@ func TestAddFace_UndecodableImageIsAClientError(t *testing.T) {
 	}
 
 	_, err = svc.AddFaceWithReader(ctx, p.ID, "photo.webp", bytes.NewReader(testJPEGBytes))
-	requireDomainError(t, err, apperr.KindInvalid, "UNSUPPORTED_IMAGE_FORMAT")
+	requireDomainError(t, err, apperr.KindBadRequest, "UNSUPPORTED_IMAGE_FORMAT")
 
 	faces, total, err := svc.ListFaces(ctx, p.ID, 0, 0)
 	if err != nil {
@@ -1023,7 +1024,7 @@ func TestGalleryNotifier_AddUpdateDelete(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	notifier := &mockGalleryNotifier{}
-	svc := NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), notifier, Options{}, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: defaultTestExtractor(), GalleryNotifier: notifier})
 	ctx := context.Background()
 
 	// 1. Create Person
@@ -1093,7 +1094,7 @@ func TestUpdatePersonNoOpIsNotAWrite(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	notifier := &mockGalleryNotifier{}
-	svc := NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), notifier, Options{}, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: defaultTestExtractor(), GalleryNotifier: notifier})
 	ctx := context.Background()
 
 	created, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("EMP_SAME"), Name: "同名"})
@@ -1186,8 +1187,7 @@ func TestUpdatePersonBackfillsRecognitionKeysWhenBinding(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	backfiller := &stubKeyBackfiller{}
-	svc := NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), nil,
-		Options{RecognitionKeyBackfiller: backfiller}, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: defaultTestExtractor(), RecognitionKeyBackfiller: backfiller})
 	ctx := context.Background()
 
 	created, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "未绑定"})
@@ -1228,8 +1228,7 @@ func TestAddFaceRequiresBusinessKeyWhenPolicyEnabled(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = dbStore.Close() })
 
-	svc := NewService(NewStore(dbStore), tempDir, defaultTestExtractor(), nil,
-		Options{RequirePersonIDForEnrollment: true}, zap.NewNop())
+	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: defaultTestExtractor(), RequirePersonIDForEnrollment: true})
 	ctx := context.Background()
 
 	unkeyed, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "未绑定"})
@@ -1295,7 +1294,7 @@ func TestGetGallerySyncDataWalksEveryPage(t *testing.T) {
 	t.Cleanup(func() { _ = dbStore.Close() })
 
 	store := NewStore(dbStore)
-	svc := NewService(store, tempDir, nil, nil, Options{}, zap.NewNop())
+	svc := NewService(store, tempDir, zap.NewNop(), Options{})
 	ctx := context.Background()
 
 	// One more person than a single page holds, with the only face on the last one:
@@ -1409,7 +1408,7 @@ func TestServicePersonImportPreviewAndCommit(t *testing.T) {
 	defer dbStore.Close()
 
 	store := NewStore(dbStore)
-	service := NewService(store, tempDir, nil, nil, Options{}, zap.NewNop())
+	service := NewService(store, tempDir, zap.NewNop(), Options{})
 	ctx := context.Background()
 	csv := "name,personId\nAlice,EMP-1\nBob,EMP-1\nNo ID,\n"
 
@@ -1455,7 +1454,7 @@ func TestService_SearchByImage_ValidationAndErrors(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Extractor nil
-	svcNilExtractor := NewService(store, tempDir, nil, nil, Options{}, zap.NewNop())
+	svcNilExtractor := NewService(store, tempDir, zap.NewNop(), Options{})
 	validPNG := createTestPNG(10, 10)
 	_, err := svcNilExtractor.SearchByImage(ctx, validPNG, 0.7, 10)
 	if err == nil {
@@ -1464,7 +1463,7 @@ func TestService_SearchByImage_ValidationAndErrors(t *testing.T) {
 
 	// 2. Corrupt / empty image
 	extractor := &mockExtractor{features: make([]float32, 512)}
-	svc := NewService(store, tempDir, extractor, nil, Options{}, zap.NewNop())
+	svc := NewService(store, tempDir, zap.NewNop(), Options{Extractor: extractor})
 
 	_, err = svc.SearchByImage(ctx, nil, 0.7, 10)
 	if err == nil {
@@ -1563,7 +1562,7 @@ func TestService_SearchByImage_RankingAndAggregation(t *testing.T) {
 	_ = store.AddFace(ctx, &Face{ID: "f4", PersonRowID: "p4", ImagePath: "f4.jpg", FeatureVector: badVec})
 
 	extractor := &mockExtractor{features: queryVec}
-	svc := NewService(store, tempDir, extractor, nil, Options{}, zap.NewNop())
+	svc := NewService(store, tempDir, zap.NewNop(), Options{Extractor: extractor})
 	validPNG := createTestPNG(20, 20)
 
 	// Search with threshold = 0.70, topK = 10

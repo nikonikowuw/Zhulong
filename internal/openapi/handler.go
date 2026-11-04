@@ -167,8 +167,10 @@ func (h *Handler) UploadFace(c *gin.Context) {
 		return
 	}
 
+	// The same 413 the person service answers with: this early check only avoids
+	// buffering an obviously oversized upload.
 	if file.Size > person.MaxFaceImageBytes {
-		httputil.WriteError(c, apperr.Invalid("FILE_TOO_LARGE", "File size exceeds 10MB limit", nil))
+		httputil.WriteError(c, apperr.PayloadTooLarge("FILE_TOO_LARGE", "File size exceeds the 10MB limit", nil))
 		return
 	}
 
@@ -179,8 +181,11 @@ func (h *Handler) UploadFace(c *gin.Context) {
 	}
 	defer src.Close()
 
-	replace := c.Query("replace") == "true"
-	face, wasReplaced, err := h.personService.AddFaceByExternalID(c.Request.Context(), personID, file.Filename, src, replace)
+	face, wasReplaced, err := h.personService.AddFaceByExternalID(c.Request.Context(), personID, person.FaceUpload{
+		Filename: file.Filename,
+		Content:  src,
+		Replace:  c.Query("replace") == "true",
+	})
 	if err != nil {
 		httputil.WriteError(c, err)
 		return

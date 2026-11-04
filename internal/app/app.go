@@ -641,11 +641,13 @@ func providePerson(p personParams) personOut {
 	keyBackfiller := &personKeyBackfillerAdapter{store: p.RecordStore}
 
 	opts := person.Options{
+		Extractor:                    extractor,
+		GalleryNotifier:              notifier,
 		RequirePersonIDForEnrollment: p.Config.RequirePersonIDForEnrollment,
 		RecognitionKeyBackfiller:     keyBackfiller,
 		AsyncJobs:                    p.AsyncJobs,
 	}
-	comp := person.NewPersonComponents(p.DBProvider, facesDir, extractor, notifier, opts, p.Logger)
+	comp := person.NewPersonComponents(p.DBProvider, facesDir, p.Logger, opts)
 	if p.AsyncJobs != nil && comp.JobHandler != nil {
 		p.AsyncJobs.RegisterHandler(comp.JobHandler)
 	}

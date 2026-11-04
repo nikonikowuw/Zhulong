@@ -1,6 +1,7 @@
 package apperr
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -18,6 +19,13 @@ const (
 	KindPrecondition
 	KindRateLimited
 	KindUnavailable
+	// KindBadRequest is a malformed request payload that is not a field-validation
+	// failure: an undecodable image, a body the decoder rejects. It maps to 400,
+	// where KindInvalid maps to 422 and carries field-level details.
+	KindBadRequest
+	// KindPayloadTooLarge is a request body that exceeds the endpoint's size limit.
+	// It maps to 413 so clients can tell "too big" from "not understood".
+	KindPayloadTooLarge
 )
 
 // String returns a human-readable representation of Kind.
@@ -41,6 +49,10 @@ func (k Kind) String() string {
 		return "rate_limited"
 	case KindUnavailable:
 		return "unavailable"
+	case KindBadRequest:
+		return "bad_request"
+	case KindPayloadTooLarge:
+		return "payload_too_large"
 	default:
 		return "unspecified"
 	}
@@ -153,4 +165,25 @@ func Unavailable(code, message string, err error) *Error {
 // Internal creates a server-side unexpected error.
 func Internal(code, message string, err error) *Error {
 	return New(KindInternal, code, message, err)
+}
+
+// BadRequest creates a malformed-request error that carries no field-level details.
+func BadRequest(code, message string, err error) *Error {
+	return New(KindBadRequest, code, message, err)
+}
+
+// PayloadTooLarge creates a request-body-too-large error.
+func PayloadTooLarge(code, message string, err error) *Error {
+	return New(KindPayloadTooLarge, code, message, err)
+}
+
+// CodeOf returns the stable machine code carried by err, or "" when err carries no
+// application code. Callers that only need to translate between error shapes (an async
+// job report, for instance) use it instead of matching error strings.
+func CodeOf(err error) string {
+	var appError *Error
+	if errors.As(err, &appError) {
+		return appError.Code
+	}
+	return ""
 }

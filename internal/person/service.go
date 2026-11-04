@@ -34,14 +34,24 @@ import (
 const (
 	// MaxFaceImageBytes caps an uploaded enrollment photo.
 	MaxFaceImageBytes = 10 * 1024 * 1024 // 10MB
-	maxFaceImageBytes = MaxFaceImageBytes
 	// MaxFacesPerPerson is the maximum number of enrolled face templates per person.
 	MaxFacesPerPerson = 10
 	// faceFeatureDim is the embedding width every face extractor must produce.
 	// It is persisted as faceFeatureDim*4 Little-Endian bytes.
 	faceFeatureDim = 512
-	// faceNameMaxLen mirrors the max=64 binding on the create/update payloads.
-	faceNameMaxLen = 64
+	// personNameMaxLen mirrors the max=64 binding on the create/update payloads. It is
+	// compared against rune counts, so a CJK name is measured the way the user sees it.
+	personNameMaxLen = 64
+	// personExternalIDMaxLen mirrors the max=64 binding on the external business key.
+	personExternalIDMaxLen = 64
+	// searchFaceBatchSize bounds how many feature vectors one 1:N search query loads.
+	searchFaceBatchSize = 500
+	// gallerySyncPageSize bounds how many persons (each with every feature vector) are
+	// materialised per query during a cold-start gallery sync. The assembled item slice is
+	// inherently whole — sharding needs all of it — but the database round trip does not
+	// have to be, and on an edge box with tens of thousands of faces that is the difference
+	// between one 40MB read and a stream of small ones.
+	gallerySyncPageSize = 200
 )
 
 // allowedFaceImageExts lists the accepted enrollment photo file extensions.
@@ -87,6 +97,15 @@ type RecognitionKeyBackfiller interface {
 // Options carries deployment policy and the cross-domain collaborator that the person
 // domain cannot construct itself. Both are captured at construction time.
 type Options struct {
+	// Extractor turns an enrollment photo into the embedding that is persisted with the
+	// face row. Nil disables every path that needs features (enrollment and search) and
+	// surfaces FEATURE_EXTRACTOR_UNAVAILABLE instead of a generic failure.
+	Extractor FaceFeatureExtractor
+
+	// GalleryNotifier publishes gallery changes to the running algorithm runners. Nil
+	// means "no runner to notify": every broadcast becomes a no-op.
+	GalleryNotifier GalleryNotifier
+
 	// RequirePersonIDForEnrollment rejects face enrollment for a person that has no
 	// external business key yet.
 	//
@@ -125,30 +144,16 @@ type Service struct {
 
 // NewService creates a Service instance. Every collaborator and policy flag is
 // captured here and never swapped afterwards.
-func NewService(
-	store *Store,
-	facesDir string,
-	extractor FaceFeatureExtractor,
-	notifier GalleryNotifier,
-	opts Options,
-	logger *zap.Logger,
-) *Service {
+func NewService(store *Store, facesDir string, logger *zap.Logger, opts Options) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	tempDir := filepath.Join(filepath.Dir(facesDir), "tmp")
-	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		logger.Warn("failed to create person service temp directory",
-			zap.String("dir", tempDir),
-			zap.Error(err),
-		)
-	}
-	cleanStaleFaceImportDirs(tempDir, logger)
 
-	s := &Service{
+	return &Service{
 		store:                        store,
-		extractor:                    extractor,
-		galleryNotifier:              notifier,
+		extractor:                    opts.Extractor,
+		galleryNotifier:              opts.GalleryNotifier,
 		keyBackfiller:                opts.RecognitionKeyBackfiller,
 		asyncJobs:                    opts.AsyncJobs,
 		facesDir:                     facesDir,
@@ -156,11 +161,19 @@ func NewService(
 		logger:                       logger.Named("person.service"),
 		requirePersonIDForEnrollment: opts.RequirePersonIDForEnrollment,
 	}
-	return s
 }
 
-// Close gracefully stops any internal resources.
-func (s *Service) Close() {
+// Start prepares filesystem prerequisites and cleans up stale artifacts left by prior runs.
+func (s *Service) Start(_ context.Context) error {
+	if err := os.MkdirAll(s.tempDir, 0755); err != nil {
+		s.logger.Warn("failed to create person service temp directory",
+			zap.String("dir", s.tempDir),
+			zap.Error(err),
+		)
+		return err
+	}
+	cleanStaleFaceImportDirs(s.tempDir, s.logger)
+	return nil
 }
 
 func cleanStaleFaceImportDirs(tempDir string, logger *zap.Logger) {
@@ -178,22 +191,50 @@ func cleanStaleFaceImportDirs(tempDir string, logger *zap.Logger) {
 	}
 }
 
-// normalizeName trims a display name and rejects the blank result, so a name made
-// only of whitespace cannot be persisted.
-func normalizeName(raw string) (string, error) {
+// normalizePersonName trims a display name and rejects the blank or over-long result.
+//
+// Every entry point that writes a person name goes through it, so the CSV import, the
+// REST handler and the machine API cannot disagree about what a valid name is (they did:
+// one path counted bytes, the others counted runes).
+func normalizePersonName(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return "", apperr.Invalid("NAME_REQUIRED", "Name is required", nil)
 	}
-	if utf8.RuneCountInString(trimmed) > faceNameMaxLen {
+	if utf8.RuneCountInString(trimmed) > personNameMaxLen {
 		return "", apperr.Invalid("NAME_TOO_LONG", "Name is too long", nil)
 	}
 	return trimmed, nil
 }
 
+// storeError converts a Store failure into the error the caller must return.
+//
+// notFoundCode/notFoundMessage describe the missing row, so callers keep naming the
+// resource the user asked for; every other failure is a DATABASE_ERROR whose text is
+// only ever seen in the server log. It exists because the same five-line mapping was
+// repeated at every store call in this file, and a mapping that is copied is a mapping
+// that drifts.
+func storeError(err error, notFoundCode, notFoundMessage, operation string) error {
+	if errors.Is(err, ErrNotFound) {
+		return apperr.NotFound(notFoundCode, notFoundMessage, err)
+	}
+	return apperr.Internal("DATABASE_ERROR", operation, err)
+}
+
+// personLookupError maps a failed person lookup, the most common store failure in
+// this service.
+func personLookupError(err error, operation string) error {
+	return storeError(err, "PERSON_NOT_FOUND", "Person not found", operation)
+}
+
+// faceLookupError maps a failed face lookup.
+func faceLookupError(err error, operation string) error {
+	return storeError(err, "FACE_NOT_FOUND", "Face not found", operation)
+}
+
 // CreatePerson creates a new person profile.
 func (s *Service) CreatePerson(ctx context.Context, req CreatePersonRequest) (*Person, error) {
-	name, err := normalizeName(req.Name)
+	name, err := normalizePersonName(req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +261,7 @@ func (s *Service) CreatePerson(ctx context.Context, req CreatePersonRequest) (*P
 		if errors.Is(err, ErrDuplicatePersonID) {
 			return nil, apperr.Conflict("PERSON_ID_ALREADY_EXISTS", "Person with this personId already exists", err)
 		}
-		return nil, apperr.New(apperr.KindInternal, "PERSON_CREATE_FAILED", "Failed to create person", err)
+		return nil, apperr.Internal("PERSON_CREATE_FAILED", "Failed to create person", err)
 	}
 
 	return p, nil
@@ -230,10 +271,7 @@ func (s *Service) CreatePerson(ctx context.Context, req CreatePersonRequest) (*P
 func (s *Service) GetPerson(ctx context.Context, id string) (*Person, error) {
 	p, err := s.store.GetPerson(ctx, id)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to get person", err)
+		return nil, personLookupError(err, "Failed to get person")
 	}
 	return p, nil
 }
@@ -251,7 +289,7 @@ func (s *Service) ListPersons(
 		search,
 	)
 	if err != nil {
-		return nil, 0, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to list persons", err)
+		return nil, 0, apperr.Internal("DATABASE_ERROR", "Failed to list persons", err)
 	}
 	return list, total, nil
 }
@@ -260,10 +298,7 @@ func (s *Service) ListPersons(
 func (s *Service) UpdatePerson(ctx context.Context, id string, req UpdatePersonRequest) (*Person, error) {
 	p, err := s.store.GetPersonMeta(ctx, id)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to get person", err)
+		return nil, personLookupError(err, "Failed to get person")
 	}
 
 	nameChanged := false
@@ -284,7 +319,7 @@ func (s *Service) UpdatePerson(ctx context.Context, id string, req UpdatePersonR
 		}
 	}
 	if req.Name != nil {
-		name, err := normalizeName(*req.Name)
+		name, err := normalizePersonName(*req.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -302,13 +337,12 @@ func (s *Service) UpdatePerson(ctx context.Context, id string, req UpdatePersonR
 	}
 
 	if err := s.store.UpdatePerson(ctx, p); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		if errors.Is(err, ErrDuplicatePersonID) {
+		switch {
+		case errors.Is(err, ErrDuplicatePersonID):
 			return nil, apperr.Conflict("PERSON_ID_ALREADY_EXISTS", "Person with this personId already exists", err)
+		default:
+			return nil, personLookupError(err, "Failed to update person")
 		}
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to update person", err)
 	}
 
 	// Binding the business key also retro-fills the identity snapshot of records that
@@ -390,37 +424,25 @@ func (s *Service) SetPrimaryFace(ctx context.Context, id, faceID string) (*Perso
 	}
 
 	if _, err := s.store.GetPersonMeta(ctx, id); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+		return nil, personLookupError(err, "Failed to verify person")
 	}
 
 	face, err := s.store.GetFace(ctx, faceID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, apperr.NotFound("FACE_NOT_FOUND", "Face not found", err)
-		}
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to load face", err)
+		return nil, faceLookupError(err, "Failed to load face")
 	}
 	if face.PersonRowID != id {
 		return nil, apperr.Invalid("INVALID_FACE_OWNER", "Face does not belong to this person", nil)
 	}
 
 	if err := s.store.SetPrimaryFace(ctx, id, faceID); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to set primary face", err)
+		return nil, personLookupError(err, "Failed to set primary face")
 	}
 
 	// Reload so the caller sees the pointer as persisted, not the pre-update copy.
 	p, err := s.store.GetPerson(ctx, id)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to reload person", err)
+		return nil, personLookupError(err, "Failed to reload person")
 	}
 	return p, nil
 }
@@ -429,10 +451,7 @@ func (s *Service) SetPrimaryFace(ctx context.Context, id, faceID string) (*Perso
 func (s *Service) DeletePerson(ctx context.Context, id string) error {
 	p, err := s.store.GetPerson(ctx, id)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+		return personLookupError(err, "Failed to verify person")
 	}
 
 	// GetPerson preloads the face rows, so the enrolled photos are known without a
@@ -440,10 +459,7 @@ func (s *Service) DeletePerson(ctx context.Context, id string) error {
 	faces := p.Faces
 
 	if err := s.store.DeletePerson(ctx, id); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to delete person", err)
+		return personLookupError(err, "Failed to delete person")
 	}
 
 	for _, f := range faces {
@@ -587,20 +603,80 @@ func invalidFileTypeError() error {
 	return apperr.Invalid("INVALID_FILE_TYPE", "only jpg, jpeg, png and webp images are allowed", nil)
 }
 
-// isSupportedImageContent checks whether data starts with known JPEG, PNG, or WebP magic bytes,
-// or is recognized as such by http.DetectContentType.
+// sniffImageExt identifies a supported image container from its leading bytes and
+// returns the canonical extension, or "" when the bytes are none of them. The
+// extension check and the content check therefore share one definition of
+// "supported image" instead of two copies of the same magic numbers.
+func sniffImageExt(data []byte) string {
+	switch {
+	case len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff:
+		return ".jpg" // JPEG
+	case len(data) >= 8 && bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n")):
+		return ".png" // PNG
+	case len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP":
+		return ".webp" // WebP
+	default:
+		return ""
+	}
+}
+
+// isSupportedImageContent reports whether data is a JPEG, PNG or WebP payload. The
+// magic bytes come first because they are exact; http.DetectContentType is only the
+// fallback for payloads whose leading bytes alone are inconclusive.
 func isSupportedImageContent(data []byte) bool {
-	if len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff {
-		return true // JPEG
+	if sniffImageExt(data) != "" {
+		return true
 	}
-	if len(data) >= 8 && bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n")) {
-		return true // PNG
+	switch http.DetectContentType(data) {
+	case "image/jpeg", "image/png", "image/webp":
+		return true
+	default:
+		return false
 	}
-	if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
-		return true // WebP
+}
+
+// isSearchableImageFormat reports whether a decoded container may be searched. Animated
+// containers are excluded: a single embedding cannot describe a moving subject.
+func isSearchableImageFormat(format string) bool {
+	switch format {
+	case "jpeg", "png", "webp":
+		return true
+	default:
+		return false
 	}
-	sniffed := http.DetectContentType(data)
-	return sniffed == "image/jpeg" || sniffed == "image/png" || sniffed == "image/webp"
+}
+
+// tooLargeError reports an upload over MaxFaceImageBytes. It is shared so every
+// enrollment path answers 413 with the same code instead of one path saying 413 and
+// another saying 422.
+func tooLargeError() error {
+	return apperr.PayloadTooLarge("FILE_TOO_LARGE", "file size exceeds the 10MB limit", nil)
+}
+
+// addFaceRowWithLimit persists an enrolled face row and removes the image file it was
+// written from when the row cannot be created. Writing the file and writing the row are
+// two separate steps, so the compensating delete belongs with the step that failed —
+// every enrollment path shares it instead of repeating the same five lines.
+func (s *Service) addFaceRowWithLimit(ctx context.Context, face *Face, savePath string) error {
+	err := s.store.AddFaceWithLimit(ctx, face, MaxFacesPerPerson)
+	if err == nil {
+		return nil
+	}
+	if rmErr := os.Remove(savePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+		s.logger.Warn("failed to clean up face image after enrollment failure",
+			zap.String("path", savePath), zap.Error(rmErr))
+	}
+	return err
+}
+
+// faceEnrollError maps a failed face insert onto the API contract.
+func faceEnrollError(err error, personName string) error {
+	if errors.Is(err, ErrFaceLimitExceeded) {
+		return apperr.Conflict("FACE_LIMIT_EXCEEDED",
+			fmt.Sprintf("Person %q has reached the maximum of %d enrolled faces", personName, MaxFacesPerPerson),
+			err)
+	}
+	return apperr.Internal("FACE_ADD_FAILED", "Failed to add face template", err)
 }
 
 // AddFace validates and enrolls a face template from an uploaded multipart file header.
@@ -608,8 +684,8 @@ func (s *Service) AddFace(ctx context.Context, personID string, file *multipart.
 	if file == nil {
 		return nil, apperr.Invalid("FILE_REQUIRED", "file is required", nil)
 	}
-	if file.Size > maxFaceImageBytes {
-		return nil, apperr.Invalid("FILE_TOO_LARGE", "file size exceeds 10MB limit", nil)
+	if file.Size > MaxFaceImageBytes {
+		return nil, tooLargeError()
 	}
 	src, err := file.Open()
 	if err != nil {
@@ -624,10 +700,7 @@ func (s *Service) AddFace(ctx context.Context, personID string, file *multipart.
 func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filename string, r io.Reader) (*Face, error) {
 	personMeta, err := s.store.GetPersonMeta(ctx, personID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+		return nil, personLookupError(err, "Failed to verify person")
 	}
 
 	// An enrolled photo is the anchor a recognition is attributed by, and attribution
@@ -638,22 +711,17 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 			"Person must be assigned a personId before faces can be enrolled", nil)
 	}
 
-	face, savePath, err := s.enrollFace(ctx, personMeta, filename, r, true)
+	face, savePath, err := s.enrollFace(ctx, personMeta, FaceUpload{
+		Filename:   filename,
+		Content:    r,
+		RequireExt: true,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	if err := s.store.AddFaceWithLimit(ctx, face, MaxFacesPerPerson); err != nil {
-		if rmErr := os.Remove(savePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-			s.logger.Warn("failed to clean up face image after enrollment failure",
-				zap.String("path", savePath), zap.Error(rmErr))
-		}
-		if errors.Is(err, ErrFaceLimitExceeded) {
-			return nil, apperr.Conflict("FACE_LIMIT_EXCEEDED",
-				fmt.Sprintf("Person %q has reached the maximum of %d enrolled faces", personMeta.Name, MaxFacesPerPerson),
-				err)
-		}
-		return nil, apperr.New(apperr.KindInternal, "FACE_ADD_FAILED", "Failed to add face template", err)
+	if err := s.addFaceRowWithLimit(ctx, face, savePath); err != nil {
+		return nil, faceEnrollError(err, personMeta.Name)
 	}
 
 	personIDKey := ""
@@ -665,19 +733,6 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 	return face, nil
 }
 
-func inferImageExt(data []byte) string {
-	if len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff {
-		return ".jpg"
-	}
-	if len(data) >= 8 && bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n")) {
-		return ".png"
-	}
-	if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
-		return ".webp"
-	}
-	return ""
-}
-
 // NormalizeExternalPersonID validates and trims an external person ID.
 // It enforces 1-64 characters and rejects URI delimiters and control characters.
 func NormalizeExternalPersonID(raw string) (string, error) {
@@ -685,7 +740,7 @@ func NormalizeExternalPersonID(raw string) (string, error) {
 	if len(trimmed) == 0 {
 		return "", apperr.Invalid("PERSON_ID_REQUIRED", "person_id is required", nil)
 	}
-	if len(trimmed) > 64 {
+	if len(trimmed) > personExternalIDMaxLen {
 		return "", apperr.Invalid("PERSON_ID_TOO_LONG", "person_id exceeds maximum length of 64 characters", nil)
 	}
 	for i := 0; i < len(trimmed); i++ {
@@ -700,9 +755,29 @@ func NormalizeExternalPersonID(raw string) (string, error) {
 	return trimmed, nil
 }
 
-func (s *Service) enrollFace(ctx context.Context, personMeta *Person, filename string, r io.Reader, requireExt bool) (*Face, string, error) {
-	ext := strings.ToLower(filepath.Ext(filename))
-	if requireExt {
+// FaceUpload is one enrollment photo plus the policy its entry point applies.
+//
+// The entry points disagree about the client-supplied filename: a multipart upload must
+// carry an accepted extension, while the machine API only promises image bytes and gets
+// its extension sniffed from the content. Grouping the payload with that policy keeps
+// the signature readable instead of adding another positional bool.
+type FaceUpload struct {
+	// Filename is the name the client sent; only its extension is used.
+	Filename string
+	// Content is the image bytes. The reader is consumed once and not retained.
+	Content io.Reader
+	// Replace asks the machine API to drop the person's existing templates. It is
+	// ignored by the multipart enrollment path, which always appends.
+	Replace bool
+	// RequireExt trusts the client extension instead of sniffing the content. Only the
+	// multipart path sets it.
+	RequireExt bool
+}
+
+func (s *Service) enrollFace(ctx context.Context, personMeta *Person, upload FaceUpload) (*Face, string, error) {
+	r := upload.Content
+	ext := strings.ToLower(filepath.Ext(upload.Filename))
+	if upload.RequireExt {
 		if _, ok := allowedFaceImageExts[ext]; !ok {
 			return nil, "", invalidFileTypeError()
 		}
@@ -720,9 +795,9 @@ func (s *Service) enrollFace(ctx context.Context, personMeta *Person, filename s
 		return nil, "", invalidFileTypeError()
 	}
 
-	if !requireExt {
+	if !upload.RequireExt {
 		if _, ok := allowedFaceImageExts[ext]; !ok {
-			ext = inferImageExt(headerBuf[:nHeader])
+			ext = sniffImageExt(headerBuf[:nHeader])
 			if ext == "" {
 				return nil, "", invalidFileTypeError()
 			}
@@ -730,19 +805,17 @@ func (s *Service) enrollFace(ctx context.Context, personMeta *Person, filename s
 	}
 
 	combinedReader := io.MultiReader(bytes.NewReader(headerBuf[:nHeader]), r)
-	lr := io.LimitReader(combinedReader, maxFaceImageBytes+1)
+	lr := io.LimitReader(combinedReader, MaxFaceImageBytes+1)
 	fullBytes, err := io.ReadAll(lr)
 	if err != nil {
 		return nil, "", apperr.Invalid("FILE_READ_FAILED", "Failed to read file content", err)
 	}
-	if len(fullBytes) > maxFaceImageBytes {
-		return nil, "", apperr.Invalid("FILE_TOO_LARGE", "file size exceeds 10MB limit", nil)
+	if len(fullBytes) > MaxFaceImageBytes {
+		return nil, "", tooLargeError()
 	}
 
 	if s.extractor == nil {
-		return nil, "", apperr.New(
-			apperr.KindInternal,
-			"FEATURE_EXTRACTOR_UNAVAILABLE",
+		return nil, "", apperr.Internal("FEATURE_EXTRACTOR_UNAVAILABLE",
 			"Face feature extraction is not configured",
 			nil,
 		)
@@ -750,20 +823,20 @@ func (s *Service) enrollFace(ctx context.Context, personMeta *Person, filename s
 	features, err := s.extractor.ExtractFaceFeature(ctx, fullBytes)
 	if err != nil {
 		if errors.Is(err, ErrNoFaceDetected) {
-			return nil, "", apperr.Invalid("NO_FACE_DETECTED", "No detectable face found in the uploaded photo", err)
+			return nil, "", apperr.BadRequest("NO_FACE_DETECTED", "No detectable face found in the uploaded photo", err)
 		}
 		if errors.Is(err, ErrUnsupportedImageFormat) {
-			return nil, "", apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "The uploaded image could not be decoded", err)
+			return nil, "", apperr.BadRequest("UNSUPPORTED_IMAGE_FORMAT", "The uploaded image could not be decoded", err)
 		}
-		return nil, "", apperr.New(apperr.KindInternal, "FEATURE_EXTRACT_FAILED", "Failed to extract facial features", err)
+		return nil, "", apperr.Internal("FEATURE_EXTRACT_FAILED", "Failed to extract facial features", err)
 	}
 	if len(features) != faceFeatureDim {
-		return nil, "", apperr.New(apperr.KindInternal, "FEATURE_DIM_MISMATCH", "Unexpected feature dimension", nil)
+		return nil, "", apperr.Internal("FEATURE_DIM_MISMATCH", "Unexpected feature dimension", nil)
 	}
 	featBytes := float32ToBytes(features)
 
 	if err := os.MkdirAll(s.facesDir, 0755); err != nil {
-		return nil, "", apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to create faces directory", err)
+		return nil, "", apperr.Internal("STORAGE_ERROR", "Failed to create faces directory", err)
 	}
 
 	faceID := idutil.New()
@@ -773,7 +846,7 @@ func (s *Service) enrollFace(ctx context.Context, personMeta *Person, filename s
 	}
 	savePath := filepath.Join(s.facesDir, fileName)
 	if err := os.WriteFile(savePath, fullBytes, 0644); err != nil {
-		return nil, "", apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to save face image", err)
+		return nil, "", apperr.Internal("STORAGE_ERROR", "Failed to save face image", err)
 	}
 
 	face := &Face{
@@ -789,30 +862,24 @@ func (s *Service) enrollFace(ctx context.Context, personMeta *Person, filename s
 // If the person exists, their name is updated (if changed) without touching source tracking.
 // If the person does not exist, a new person is created with Source=API and SourceName=tokenName.
 // Returns the person model, a boolean indicating whether a new row was created, and an error.
-func (s *Service) UpsertPersonByExternalID(ctx context.Context, externalID, name, tokenName string) (*Person, bool, error) {
+func (s *Service) UpsertPersonByExternalID(
+	ctx context.Context,
+	externalID, name, tokenName string,
+) (*Person, bool, error) {
 	normID, err := NormalizeExternalPersonID(externalID)
 	if err != nil {
 		return nil, false, err
 	}
-	trimmedName := strings.TrimSpace(name)
-	if len(trimmedName) == 0 {
-		return nil, false, apperr.Invalid("NAME_REQUIRED", "name is required", nil)
-	}
-	if len(trimmedName) > faceNameMaxLen {
-		return nil, false, apperr.Invalid("NAME_TOO_LONG", "name exceeds maximum length of 64 characters", nil)
+	trimmedName, err := normalizePersonName(name)
+	if err != nil {
+		return nil, false, err
 	}
 
 	p, err := s.store.GetPersonMetaByExternalID(ctx, normID)
 	switch {
 	case err == nil:
-		if p.Name == trimmedName {
-			return p, false, nil
-		}
-		updated, upErr := s.UpdatePerson(ctx, p.ID, UpdatePersonRequest{Name: &trimmedName})
-		if upErr != nil {
-			return nil, false, upErr
-		}
-		return updated, false, nil
+		updated, upErr := s.renameProvisionedPerson(ctx, p, trimmedName)
+		return updated, false, upErr
 
 	case errors.Is(err, ErrNotFound):
 		now := time.Now().UTC()
@@ -826,59 +893,62 @@ func (s *Service) UpsertPersonByExternalID(ctx context.Context, externalID, name
 			UpdatedAt:  now,
 		}
 		createErr := s.store.CreatePerson(ctx, newPerson)
-		if createErr != nil {
-			if errors.Is(createErr, ErrDuplicatePersonID) {
-				// Retry query in case of concurrent insert
-				existing, getErr := s.store.GetPersonMetaByExternalID(ctx, normID)
-				if getErr == nil {
-					if existing.Name == trimmedName {
-						return existing, false, nil
-					}
-					updated, upErr := s.UpdatePerson(ctx, existing.ID, UpdatePersonRequest{Name: &trimmedName})
-					if upErr != nil {
-						return nil, false, upErr
-					}
-					return updated, false, nil
-				}
-			}
-			return nil, false, apperr.New(apperr.KindInternal, "PERSON_CREATE_FAILED", "Failed to create person", createErr)
+		if createErr == nil {
+			return newPerson, true, nil
 		}
-		return newPerson, true, nil
+		// A concurrent provision of the same key may have won the insert: re-read and
+		// fall back to the update path instead of reporting a spurious failure.
+		if errors.Is(createErr, ErrDuplicatePersonID) {
+			existing, getErr := s.store.GetPersonMetaByExternalID(ctx, normID)
+			if getErr == nil {
+				updated, upErr := s.renameProvisionedPerson(ctx, existing, trimmedName)
+				return updated, false, upErr
+			}
+		}
+		return nil, false, apperr.Internal("PERSON_CREATE_FAILED", "Failed to create person", createErr)
 
 	default:
-		return nil, false, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to query person", err)
+		return nil, false, apperr.Internal("DATABASE_ERROR", "Failed to query person", err)
 	}
 }
 
-// AddFaceByExternalID enrolls a face for the person identified by externalID.
-// If replace is true, all existing faces are atomically replaced with the new one.
-// Returns the enrolled Face, a boolean indicating if it was a replacement, and an error.
-func (s *Service) AddFaceByExternalID(ctx context.Context, externalID, filename string, r io.Reader, replace bool) (*Face, bool, error) {
+// renameProvisionedPerson brings an existing provisioned person's name in line with the
+// caller's, reusing the ordinary update path so the gallery re-publish and the audit of
+// a rename happen exactly once, wherever the rename came from.
+func (s *Service) renameProvisionedPerson(ctx context.Context, p *Person, name string) (*Person, error) {
+	if p.Name == name {
+		return p, nil
+	}
+	return s.UpdatePerson(ctx, p.ID, UpdatePersonRequest{Name: &name})
+}
+
+// AddFaceByExternalID enrolls a face for the person identified by externalID. When
+// upload.Replace is set, all existing faces are atomically replaced with the new one.
+// Returns the enrolled Face, a boolean indicating whether it was a replacement, and an
+// error.
+func (s *Service) AddFaceByExternalID(ctx context.Context, externalID string, upload FaceUpload) (*Face, bool, error) {
 	normID, err := NormalizeExternalPersonID(externalID)
 	if err != nil {
 		return nil, false, err
 	}
 	personMeta, err := s.store.GetPersonMetaByExternalID(ctx, normID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, false, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return nil, false, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+		return nil, false, personLookupError(err, "Failed to verify person")
 	}
 
-	face, savePath, err := s.enrollFace(ctx, personMeta, filename, r, false)
+	face, savePath, err := s.enrollFace(ctx, personMeta, upload)
 	if err != nil {
 		return nil, false, err
 	}
 
-	if replace {
+	if upload.Replace {
 		removed, err := s.store.ReplaceFaces(ctx, personMeta.ID, face)
 		if err != nil {
 			if rmErr := os.Remove(savePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 				s.logger.Warn("failed to clean up face image after replace failure",
 					zap.String("path", savePath), zap.Error(rmErr))
 			}
-			return nil, false, apperr.New(apperr.KindInternal, "FACE_REPLACE_FAILED", "Failed to replace face templates", err)
+			return nil, false, apperr.Internal("FACE_REPLACE_FAILED", "Failed to replace face templates", err)
 		}
 
 		for _, f := range removed {
@@ -892,17 +962,8 @@ func (s *Service) AddFaceByExternalID(ctx context.Context, externalID, filename 
 	}
 
 	// Normal append enrollment
-	if err := s.store.AddFaceWithLimit(ctx, face, MaxFacesPerPerson); err != nil {
-		if rmErr := os.Remove(savePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-			s.logger.Warn("failed to clean up face image after enrollment failure",
-				zap.String("path", savePath), zap.Error(rmErr))
-		}
-		if errors.Is(err, ErrFaceLimitExceeded) {
-			return nil, false, apperr.Conflict("FACE_LIMIT_EXCEEDED",
-				fmt.Sprintf("Person %q has reached the maximum of %d enrolled faces", personMeta.Name, MaxFacesPerPerson),
-				err)
-		}
-		return nil, false, apperr.New(apperr.KindInternal, "FACE_ADD_FAILED", "Failed to add face template", err)
+	if err := s.addFaceRowWithLimit(ctx, face, savePath); err != nil {
+		return nil, false, faceEnrollError(err, personMeta.Name)
 	}
 
 	s.broadcastUpsert(ctx, newGalleryItem(*face, normID, personMeta.Name))
@@ -917,15 +978,12 @@ func (s *Service) ClearFacesByExternalID(ctx context.Context, externalID string)
 	}
 	personMeta, err := s.store.GetPersonMetaByExternalID(ctx, normID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return 0, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return 0, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+		return 0, personLookupError(err, "Failed to verify person")
 	}
 
 	removed, err := s.store.ClearFaces(ctx, personMeta.ID)
 	if err != nil {
-		return 0, apperr.New(apperr.KindInternal, "FACE_CLEAR_FAILED", "Failed to clear faces", err)
+		return 0, apperr.Internal("FACE_CLEAR_FAILED", "Failed to clear faces", err)
 	}
 
 	for _, f := range removed {
@@ -945,10 +1003,7 @@ func (s *Service) DeletePersonByExternalID(ctx context.Context, externalID strin
 	}
 	personMeta, err := s.store.GetPersonMetaByExternalID(ctx, normID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+		return personLookupError(err, "Failed to verify person")
 	}
 	return s.DeletePerson(ctx, personMeta.ID)
 }
@@ -961,18 +1016,12 @@ func (s *Service) DeleteFaceByExternalID(ctx context.Context, externalID, faceID
 	}
 	personMeta, err := s.store.GetPersonMetaByExternalID(ctx, normID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+		return personLookupError(err, "Failed to verify person")
 	}
 
 	face, err := s.store.GetFace(ctx, faceID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("FACE_NOT_FOUND", "Face not found", err)
-		}
-		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify face", err)
+		return faceLookupError(err, "Failed to verify face")
 	}
 	if face.PersonRowID != personMeta.ID {
 		return apperr.NotFound("FACE_NOT_FOUND", "Face does not belong to this person", nil)
@@ -989,18 +1038,12 @@ func (s *Service) SetPrimaryFaceByExternalID(ctx context.Context, externalID, fa
 	}
 	personMeta, err := s.store.GetPersonMetaByExternalID(ctx, normID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+		return nil, personLookupError(err, "Failed to verify person")
 	}
 
 	face, err := s.store.GetFace(ctx, faceID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, apperr.NotFound("FACE_NOT_FOUND", "Face not found", err)
-		}
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify face", err)
+		return nil, faceLookupError(err, "Failed to verify face")
 	}
 	if face.PersonRowID != personMeta.ID {
 		return nil, apperr.NotFound("FACE_NOT_FOUND", "Face does not belong to this person", nil)
@@ -1017,10 +1060,7 @@ func (s *Service) GetPersonByExternalID(ctx context.Context, externalID string) 
 	}
 	p, err := s.store.GetPersonByExternalID(ctx, normID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to get person", err)
+		return nil, personLookupError(err, "Failed to get person")
 	}
 	return p, nil
 }
@@ -1035,10 +1075,7 @@ func (s *Service) GetPersonByExternalID(ctx context.Context, externalID string) 
 func (s *Service) OpenFaceImage(ctx context.Context, personID, faceID string) (*os.File, os.FileInfo, error) {
 	face, err := s.store.GetFace(ctx, faceID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, nil, apperr.NotFound("FACE_NOT_FOUND", "Face not found", err)
-		}
-		return nil, nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to load face", err)
+		return nil, nil, faceLookupError(err, "Failed to load face")
 	}
 	if face.PersonRowID != personID {
 		return nil, nil, apperr.NotFound("FACE_NOT_FOUND", "Face not found", nil)
@@ -1054,7 +1091,7 @@ func (s *Service) OpenFaceImage(ctx context.Context, personID, faceID string) (*
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil, apperr.NotFound("IMAGE_NOT_FOUND", "Face image file not found on disk", err)
 		}
-		return nil, nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to open faces directory", err)
+		return nil, nil, apperr.Internal("STORAGE_ERROR", "Failed to open faces directory", err)
 	}
 	// Files opened through the root stay valid after it is closed.
 	defer root.Close()
@@ -1070,7 +1107,7 @@ func (s *Service) OpenFaceImage(ctx context.Context, personID, faceID string) (*
 	info, err := file.Stat()
 	if err != nil {
 		file.Close()
-		return nil, nil, apperr.New(apperr.KindInternal, "STORAGE_ERROR", "Failed to stat face image", err)
+		return nil, nil, apperr.Internal("STORAGE_ERROR", "Failed to stat face image", err)
 	}
 	if info.IsDir() {
 		// os.Root.Open succeeds on a directory; a face image never is one.
@@ -1097,26 +1134,22 @@ func (s *Service) SearchByImage(
 	topK int,
 ) (*ImageSearchResponse, error) {
 	if len(imgBytes) == 0 {
-		return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "Image is empty", nil)
+		return nil, apperr.BadRequest("UNSUPPORTED_IMAGE_FORMAT", "Image is empty", nil)
 	}
-	if len(imgBytes) > maxFaceImageBytes {
-		return nil, apperr.Invalid("FILE_TOO_LARGE", "File size exceeds 10MB limit", nil)
+	if len(imgBytes) > MaxFaceImageBytes {
+		return nil, tooLargeError()
 	}
 
 	// Validate static JPEG, PNG, or WebP and dimension <= 4096.
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(imgBytes))
 	if err != nil {
-		return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "Unsupported image format or corrupt image", err)
+		return nil, apperr.BadRequest("UNSUPPORTED_IMAGE_FORMAT", "Unsupported image format or corrupt image", err)
 	}
-	if format != "jpeg" && format != "png" && format != "webp" {
-		return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "Only static JPEG, PNG, and WebP are allowed", nil)
+	if !isSearchableImageFormat(format) {
+		return nil, apperr.BadRequest("UNSUPPORTED_IMAGE_FORMAT", "Only static JPEG, PNG, and WebP are allowed", nil)
 	}
-	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 4096 || cfg.Height > 4096 {
-		return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "Image dimensions exceed 4096px limit", nil)
-	}
-	// Full decode pass ensures payload is not corrupted and rejects animated WebP containers.
-	if _, _, err := image.Decode(bytes.NewReader(imgBytes)); err != nil {
-		return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "Failed to decode static image", err)
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > maxImageDimension || cfg.Height > maxImageDimension {
+		return nil, apperr.BadRequest("UNSUPPORTED_IMAGE_FORMAT", "Image dimensions exceed the size limit", nil)
 	}
 
 	if s.extractor == nil {
@@ -1126,10 +1159,10 @@ func (s *Service) SearchByImage(
 	features, err := s.extractor.ExtractFaceFeature(ctx, imgBytes)
 	if err != nil {
 		if errors.Is(err, ErrNoFaceDetected) {
-			return nil, apperr.Invalid("NO_FACE_DETECTED", "No face detected in image", err)
+			return nil, apperr.BadRequest("NO_FACE_DETECTED", "No face detected in image", err)
 		}
 		if errors.Is(err, ErrUnsupportedImageFormat) {
-			return nil, apperr.Invalid("UNSUPPORTED_IMAGE_FORMAT", "Unsupported image format or corrupt image", err)
+			return nil, apperr.BadRequest("UNSUPPORTED_IMAGE_FORMAT", "Unsupported image format or corrupt image", err)
 		}
 		return nil, apperr.Internal("EXTRACTOR_ERROR", "Facial feature extraction failed", err)
 	}
@@ -1142,8 +1175,6 @@ func (s *Service) SearchByImage(
 			return nil, apperr.Internal("EXTRACTOR_ERROR", "Feature vector contains invalid numbers", nil)
 		}
 	}
-
-	const searchFaceBatchSize = 500
 
 	bestPerPerson := make(map[string]ImageSearchMatchInfo)
 	for offset := 0; ; offset += searchFaceBatchSize {
@@ -1175,11 +1206,7 @@ func (s *Service) SearchByImage(
 			for i := 0; i < faceFeatureDim; i++ {
 				sim += features[i] * gf[i]
 			}
-			if sim > 1.0 {
-				sim = 1.0
-			} else if sim < -1.0 {
-				sim = -1.0
-			}
+			sim = max(-1, min(1, sim))
 
 			existing, ok := bestPerPerson[item.PersonRowID]
 			if !ok || sim > existing.Similarity || (sim == existing.Similarity && item.FaceID < existing.MatchedFaceID) {
@@ -1223,10 +1250,7 @@ func (s *Service) SearchByImage(
 func (s *Service) DeleteFace(ctx context.Context, personID, faceID string) error {
 	face, err := s.store.GetFace(ctx, faceID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("FACE_NOT_FOUND", "Face not found", err)
-		}
-		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to load face", err)
+		return faceLookupError(err, "Failed to load face")
 	}
 	// Scoping to the owning person keeps the nested resource path meaningful: a
 	// face is not addressable through another person's path segment.
@@ -1236,17 +1260,11 @@ func (s *Service) DeleteFace(ctx context.Context, personID, faceID string) error
 
 	person, err := s.store.GetPersonMeta(ctx, personID)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to load person", err)
+		return personLookupError(err, "Failed to load person")
 	}
 
 	if err := s.store.DeleteFace(ctx, personID, faceID); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return apperr.NotFound("FACE_NOT_FOUND", "Face not found", err)
-		}
-		return apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to delete face", err)
+		return faceLookupError(err, "Failed to delete face")
 	}
 
 	s.removeFaceFile(face.ImagePath)
@@ -1268,25 +1286,15 @@ func (s *Service) DeleteFace(ctx context.Context, personID, faceID string) error
 // person does not exist", and would disagree with GET /persons/{id} and POST .../faces.
 func (s *Service) ListFaces(ctx context.Context, personID string, limit, offset int) ([]Face, int64, error) {
 	if _, err := s.store.GetPersonMeta(ctx, personID); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, 0, apperr.NotFound("PERSON_NOT_FOUND", "Person not found", err)
-		}
-		return nil, 0, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to verify person", err)
+		return nil, 0, personLookupError(err, "Failed to verify person")
 	}
 
 	faces, total, err := s.store.ListFacesByPersonPaged(ctx, personID, limit, offset)
 	if err != nil {
-		return nil, 0, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to list faces", err)
+		return nil, 0, apperr.Internal("DATABASE_ERROR", "Failed to list faces", err)
 	}
 	return faces, total, nil
 }
-
-// gallerySyncPageSize bounds how many persons (each with every feature vector) are
-// materialised per query during a cold-start gallery sync. The assembled item slice is
-// inherently whole — sharding needs all of it — but the database round trip does not
-// have to be, and on an edge box with tens of thousands of faces that is the difference
-// between one 40MB read and a stream of small ones.
-const gallerySyncPageSize = 200
 
 // GetGallerySyncData prepares all enrolled face templates for IPC downlinking to algorithm runners.
 func (s *Service) GetGallerySyncData(ctx context.Context) ([]GalleryItem, error) {
@@ -1294,7 +1302,7 @@ func (s *Service) GetGallerySyncData(ctx context.Context) ([]GalleryItem, error)
 	for offset := 0; ; offset += gallerySyncPageSize {
 		persons, err := s.store.ListPersonsForGallery(ctx, gallerySyncPageSize, offset)
 		if err != nil {
-			return nil, apperr.New(apperr.KindInternal, "DATABASE_ERROR", "Failed to list gallery persons", err)
+			return nil, apperr.Internal("DATABASE_ERROR", "Failed to list gallery persons", err)
 		}
 		for _, p := range persons {
 			personID := ""
@@ -1535,12 +1543,14 @@ func parsePersonImportCSV(reader io.Reader) ([]personImportRow, error) {
 		if len(record) == 0 {
 			continue
 		}
-		line, _ := csvReader.FieldPos(0)
-		if line == 0 {
-			line = len(rows) + 2
+		// FieldPos returns (line, column) and reports 0/0 only when the record has no
+		// field 0 — impossible here, because an empty record is skipped above — so the
+		// arithmetic fallback is a belt-and-braces default rather than a real branch.
+		row := personImportRow{line: len(rows) + 2}
+		if line, _ := csvReader.FieldPos(0); line > 0 {
+			row.line = line
 		}
 
-		row := personImportRow{line: line}
 		if nameIndex < len(record) {
 			row.name = strings.TrimSpace(record[nameIndex])
 		}
@@ -1606,10 +1616,10 @@ func validatePersonImportRows(
 		switch {
 		case row.name == "":
 			row.issues = append(row.issues, personImportIssue{Field: "name", Code: "NAME_REQUIRED"})
-		case utf8.RuneCountInString(row.name) > faceNameMaxLen:
+		case utf8.RuneCountInString(row.name) > personNameMaxLen:
 			row.issues = append(row.issues, personImportIssue{Field: "name", Code: "NAME_TOO_LONG"})
 		}
-		if utf8.RuneCountInString(row.personID) > 64 {
+		if utf8.RuneCountInString(row.personID) > personExternalIDMaxLen {
 			row.issues = append(row.issues, personImportIssue{Field: "personId", Code: "PERSON_ID_TOO_LONG"})
 		}
 		if row.personID != "" {

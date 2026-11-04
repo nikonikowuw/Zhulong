@@ -238,8 +238,8 @@
 | **413** | `FILE_TOO_LARGE` | 上传的人脸图片单文件超过 10 MiB（请求体超过 11 MiB 阈值）。 |
 | **413** | `PAYLOAD_TOO_LARGE` | JSON 接口请求体超过 1 MiB。 |
 | **422** | `INVALID_FILE_TYPE` | 上传的文件不是支持的图片类型。 |
-| **422** | `UNSUPPORTED_IMAGE_FORMAT` | 图片文件头魔数解析失败或损坏。仅支持标准 JPEG、PNG、WebP 格式。 |
-| **422** | `NO_FACE_DETECTED` | 算法未能在图片中检测到有效人脸，请提供清晰正面人脸图像。 |
+| **400** | `UNSUPPORTED_IMAGE_FORMAT` | 图片文件头魔数解析失败或损坏。仅支持标准 JPEG、PNG、WebP 格式。 |
+| **400** | `NO_FACE_DETECTED` | 算法未能在图片中检测到有效人脸，请提供清晰正面人脸图像。 |
 | **422** | `MULTIPLE_FACES_DETECTED` | 图片中检测到多张人脸，底库人脸仅支持单人特写照。 |
 | **429** | `TOO_MANY_REQUESTS` | 触发并发阈值（全局 3 或单 Token 1）。请依据 `Retry-After: 1` 进行退避重试。 |
 | **500** | `INTERNAL_SERVER_ERROR` | 边缘宿主内部错误（如持久化异常）。请联系管理员检查边缘设备日志。 |

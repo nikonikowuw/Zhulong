@@ -1,7 +1,6 @@
 package person
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -499,7 +498,7 @@ func (h *Handler) GetFaceImportJob(c *gin.Context) {
 // @Router       /persons/import-face-jobs/{jobId}/failed-report [get]
 func (h *Handler) GetFaceImportFailedReport(c *gin.Context) {
 	jobID := c.Param("jobId")
-	csvBytes, err := h.service.GetFaceImportFailedReportCSV(c.Request.Context(), jobID)
+	csvBytes, err := h.service.GetFaceImportFailedReportCSV(c.Request.Context(), jobID, c.GetHeader("Accept-Language"))
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
@@ -509,48 +508,61 @@ func (h *Handler) GetFaceImportFailedReport(c *gin.Context) {
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", csvBytes)
 }
 
+// Search tuning defaults and bounds. They live here because the handler is what
+// documents (and clamps) the public form contract.
+const (
+	defaultSearchThreshold = 0.70
+	defaultSearchTopK      = 10
+	maxSearchTopK          = 50
+)
+
+// searchParam reads an optional search parameter from the multipart form, falling back
+// to the query string: gin's multipart binder only sees form values, and this endpoint
+// accepts both.
+func searchParam(c *gin.Context, field string) string {
+	if raw := c.Request.FormValue(field); raw != "" {
+		return raw
+	}
+	return c.Query(field)
+}
+
+// invalidSearchParam builds the 422 field detail for a bad search parameter. Field
+// validation is the one case that cannot go through apperr: only httputil.AppError
+// carries the details list.
+func invalidSearchParam(field, code string) *httputil.AppError {
+	return httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
+		{Field: field, Code: code},
+	})
+}
+
 func parseSearchThreshold(c *gin.Context) (float32, *httputil.AppError) {
-	raw := c.Request.FormValue("threshold")
+	raw := searchParam(c, "threshold")
 	if raw == "" {
-		raw = c.Query("threshold")
+		return defaultSearchThreshold, nil
 	}
-	if raw == "" {
-		return 0.70, nil
-	}
-	val, err := strconv.ParseFloat(raw, 32)
+	value, err := strconv.ParseFloat(raw, 32)
 	if err != nil {
-		return 0, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-			{Field: "threshold", Code: "INVALID_FORMAT"},
-		})
+		return 0, invalidSearchParam("threshold", "INVALID_FORMAT")
 	}
-	if val < 0.0 || val > 1.0 {
-		return 0, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-			{Field: "threshold", Code: "INVALID_VALUE"},
-		})
+	if value < 0 || value > 1 {
+		return 0, invalidSearchParam("threshold", "INVALID_VALUE")
 	}
-	return float32(val), nil
+	return float32(value), nil
 }
 
 func parseSearchTopK(c *gin.Context) (int, *httputil.AppError) {
-	raw := c.Request.FormValue("topK")
+	raw := searchParam(c, "topK")
 	if raw == "" {
-		raw = c.Query("topK")
+		return defaultSearchTopK, nil
 	}
-	if raw == "" {
-		return 10, nil
-	}
-	val, err := strconv.Atoi(raw)
+	value, err := strconv.Atoi(raw)
 	if err != nil {
-		return 0, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-			{Field: "topK", Code: "INVALID_FORMAT"},
-		})
+		return 0, invalidSearchParam("topK", "INVALID_FORMAT")
 	}
-	if val < 1 || val > 50 {
-		return 0, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-			{Field: "topK", Code: "INVALID_VALUE"},
-		})
+	if value < 1 || value > maxSearchTopK {
+		return 0, invalidSearchParam("topK", "INVALID_VALUE")
 	}
-	return val, nil
+	return value, nil
 }
 
 // SearchByImage godoc
@@ -582,58 +594,24 @@ func (h *Handler) SearchByImage(c *gin.Context) {
 		return
 	}
 
-	file, header, err := c.Request.FormFile("image")
+	file, _, err := c.Request.FormFile("image")
 	if err != nil {
-		httputil.WriteError(c, httputil.NewValidationError("Validation failed", []httputil.FieldDetail{
-			{Field: "image", Code: "REQUIRED"},
-		}))
+		httputil.WriteError(c, invalidSearchParam("image", "REQUIRED"))
 		return
 	}
 	defer file.Close()
 
-	if header.Size > maxFaceImageBytes {
-		httputil.WriteError(c, httputil.NewError(
-			http.StatusRequestEntityTooLarge,
-			"FILE_TOO_LARGE",
-			"File size exceeds the 10MB limit",
-			nil,
-		))
-		return
-	}
-
-	imgBytes, err := io.ReadAll(io.LimitReader(file, maxFaceImageBytes+1))
+	// Neither the size limit nor the image validation is re-done here: the service
+	// already answers 413/400 for them, and a second copy in the handler is how the two
+	// answers drift apart. The limit only bounds what this read buffers.
+	imgBytes, err := io.ReadAll(io.LimitReader(file, MaxFaceImageBytes+1))
 	if err != nil {
-		httputil.WriteError(c, httputil.NewError(
-			http.StatusBadRequest,
-			"UNSUPPORTED_IMAGE_FORMAT",
-			"Failed to read image content",
-			err,
-		))
-		return
-	}
-	if len(imgBytes) > maxFaceImageBytes {
-		httputil.WriteError(c, httputil.NewError(
-			http.StatusRequestEntityTooLarge,
-			"FILE_TOO_LARGE",
-			"File size exceeds the 10MB limit",
-			nil,
-		))
+		httputil.WriteError(c, apperr.BadRequest("UNSUPPORTED_IMAGE_FORMAT", "Failed to read image content", err))
 		return
 	}
 
 	resp, err := h.service.SearchByImage(c.Request.Context(), imgBytes, threshold, topK)
 	if err != nil {
-		var ae *apperr.Error
-		if errors.As(err, &ae) {
-			switch ae.Code {
-			case "UNSUPPORTED_IMAGE_FORMAT", "NO_FACE_DETECTED":
-				httputil.WriteError(c, httputil.NewError(http.StatusBadRequest, ae.Code, ae.Message, ae.Err))
-				return
-			case "FILE_TOO_LARGE":
-				httputil.WriteError(c, httputil.NewError(http.StatusRequestEntityTooLarge, ae.Code, ae.Message, ae.Err))
-				return
-			}
-		}
 		httputil.WriteError(c, err)
 		return
 	}

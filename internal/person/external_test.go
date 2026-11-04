@@ -161,7 +161,11 @@ func TestExternalPersonFlow_FaceReplaceAndLimit(t *testing.T) {
 	}
 
 	// 1. Add first face with inferred extension (no extension provided in filename)
-	face1, replaced, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", "rawphoto", bytes.NewReader(testJPEGBytes), false)
+	face1, replaced, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
+		Filename: "rawphoto",
+		Content:  bytes.NewReader(testJPEGBytes),
+		Replace:  false,
+	})
 	if err != nil {
 		t.Fatalf("AddFaceByExternalID 1 failed: %v", err)
 	}
@@ -174,7 +178,11 @@ func TestExternalPersonFlow_FaceReplaceAndLimit(t *testing.T) {
 	}
 
 	// 2. Add second face
-	face2, _, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", "photo2.jpg", bytes.NewReader(testJPEGBytes), false)
+	face2, _, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
+		Filename: "photo2.jpg",
+		Content:  bytes.NewReader(testJPEGBytes),
+		Replace:  false,
+	})
 	if err != nil {
 		t.Fatalf("AddFaceByExternalID 2 failed: %v", err)
 	}
@@ -190,7 +198,11 @@ func TestExternalPersonFlow_FaceReplaceAndLimit(t *testing.T) {
 	}
 
 	// 3. Atomic replacement: replace=true
-	faceRepl, replaced, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", "new_single.png", bytes.NewReader(testPNGBytes), true)
+	faceRepl, replaced, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
+		Filename: "new_single.png",
+		Content:  bytes.NewReader(testPNGBytes),
+		Replace:  true,
+	})
 	if err != nil {
 		t.Fatalf("AddFaceByExternalID replace failed: %v", err)
 	}
@@ -238,20 +250,32 @@ func TestExternalPersonFlow_FaceReplaceAndLimit(t *testing.T) {
 
 	// 4. Add until 10 faces
 	for i := 2; i <= MaxFacesPerPerson; i++ {
-		_, _, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", fmt.Sprintf("face_%d.jpg", i), bytes.NewReader(testJPEGBytes), false)
+		_, _, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
+			Filename: fmt.Sprintf("face_%d.jpg", i),
+			Content:  bytes.NewReader(testJPEGBytes),
+			Replace:  false,
+		})
 		if err != nil {
 			t.Fatalf("AddFaceByExternalID #%d failed: %v", i, err)
 		}
 	}
 	// 11th should fail
-	_, _, err = svc.AddFaceByExternalID(ctx, "EXT-REPLACE", "overflow.jpg", bytes.NewReader(testJPEGBytes), false)
+	_, _, err = svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
+		Filename: "overflow.jpg",
+		Content:  bytes.NewReader(testJPEGBytes),
+		Replace:  false,
+	})
 	var appErr *apperr.Error
 	if !errors.As(err, &appErr) || appErr.Code != "FACE_LIMIT_EXCEEDED" {
 		t.Fatalf("expected FACE_LIMIT_EXCEEDED on 11th face, got %v", err)
 	}
 
 	// 5. Replace when at 10 faces should succeed and reset to 1
-	faceReset, replacedReset, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", "reset.jpg", bytes.NewReader(testJPEGBytes), true)
+	faceReset, replacedReset, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
+		Filename: "reset.jpg",
+		Content:  bytes.NewReader(testJPEGBytes),
+		Replace:  true,
+	})
 	if err != nil {
 		t.Fatalf("replace at limit failed: %v", err)
 	}
@@ -276,8 +300,16 @@ func TestExternalPersonFlow_ClearAndDelete(t *testing.T) {
 		t.Fatalf("upsert person failed: %v", err)
 	}
 
-	f1, _, _ := svc.AddFaceByExternalID(ctx, "EXT-CLEAR", "1.jpg", bytes.NewReader(testJPEGBytes), false)
-	f2, _, _ := svc.AddFaceByExternalID(ctx, "EXT-CLEAR", "2.jpg", bytes.NewReader(testJPEGBytes), false)
+	f1, _, _ := svc.AddFaceByExternalID(ctx, "EXT-CLEAR", FaceUpload{
+		Filename: "1.jpg",
+		Content:  bytes.NewReader(testJPEGBytes),
+		Replace:  false,
+	})
+	f2, _, _ := svc.AddFaceByExternalID(ctx, "EXT-CLEAR", FaceUpload{
+		Filename: "2.jpg",
+		Content:  bytes.NewReader(testJPEGBytes),
+		Replace:  false,
+	})
 	p1Path := filepath.Join(svc.facesDir, f1.ImagePath)
 	p2Path := filepath.Join(svc.facesDir, f2.ImagePath)
 

@@ -164,6 +164,16 @@ func requestLocale(acceptLanguage string) string {
 	}
 }
 
+// LookupMessage returns the localized message for code and locale if registered.
+func LookupMessage(code, locale string) (string, bool) {
+	return lookupMessage(code, locale)
+}
+
+// ResolveLocale maps an Accept-Language header onto the closest supported locale.
+func ResolveLocale(acceptLanguage string) string {
+	return requestLocale(acceptLanguage)
+}
+
 func localizedMessage(code, locale string) string {
 	messagesMu.RLock()
 	defer messagesMu.RUnlock()

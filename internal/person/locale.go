@@ -44,6 +44,16 @@ func init() {
 			"zh-Hans": "添加人脸模板失败",
 			"zh-Hant": "添加人臉模板失敗",
 		},
+		"FACE_REPLACE_FAILED": {
+			"en":      "Failed to replace face templates",
+			"zh-Hans": "替换人员底库人脸失败",
+			"zh-Hant": "替換人員底庫人臉失敗",
+		},
+		"FACE_CLEAR_FAILED": {
+			"en":      "Failed to clear enrolled faces",
+			"zh-Hans": "清空人员底库人脸失败",
+			"zh-Hant": "清空人員底庫人臉失敗",
+		},
 		"INVALID_IMAGE_PATH": {
 			"en":      "imagePath must resolve inside the face storage directory",
 			"zh-Hans": "登记照路径必须位于人脸存储目录内",
@@ -134,10 +144,20 @@ func init() {
 			"zh-Hans": "人员导入记录超过 1000 行限制",
 			"zh-Hant": "人員匯入記錄超過 1000 行限制",
 		},
+		"PERSON_ID_REQUIRED": {
+			"en":      "Person ID is required",
+			"zh-Hans": "人员编号不能为空",
+			"zh-Hant": "人員編號不能為空",
+		},
 		"PERSON_ID_TOO_LONG": {
 			"en":      "personId is too long",
 			"zh-Hans": "人员编号长度超出限制",
 			"zh-Hant": "人員編號長度超出限制",
+		},
+		"PERSON_ID_INVALID_CHARS": {
+			"en":      "personId contains characters that are not allowed in an identifier",
+			"zh-Hans": "人员编号包含非法字符或路径分隔符",
+			"zh-Hant": "人員編號包含非法字元或路徑分隔符",
 		},
 		"IMPORT_COLUMN_COUNT": {
 			"en":      "The number of columns does not match the header",
@@ -203,6 +223,21 @@ func init() {
 			"en":      "Face import job not found",
 			"zh-Hans": "人脸批量导入任务不存在",
 			"zh-Hant": "人臉批量匯入任務不存在",
+		},
+		"FACE_IMPORT_ARCHIVE_EMPTY": {
+			"en":      "No usable image or manifest was found in the archive",
+			"zh-Hans": "未在压缩包中找到有效图片或清单",
+			"zh-Hant": "未在壓縮包中找到有效圖片或清單",
+		},
+		"FACE_IMPORT_MANIFEST_INVALID": {
+			"en":      "manifest.csv must contain the name and imagePath columns",
+			"zh-Hans": "manifest.csv 缺少必需列: name, imagePath",
+			"zh-Hant": "manifest.csv 缺少必需欄位: name, imagePath",
+		},
+		"ASYNC_JOB_UNAVAILABLE": {
+			"en":      "Background task runner is not available",
+			"zh-Hans": "后台任务服务不可用",
+			"zh-Hant": "後台任務服務不可用",
 		},
 		"FACE_LIMIT_EXCEEDED": {
 			"en":      "Face count limit exceeded for this person",

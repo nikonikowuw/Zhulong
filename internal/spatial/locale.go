@@ -65,7 +65,7 @@ func init() {
 			"zh-Hans": "查询车辆轨迹必须提供车牌号",
 			"zh-Hant": "查詢車輛軌跡必須提供車牌號",
 		},
-		"PERSON_ID_REQUIRED": {
+		"SPATIAL_PERSON_ID_REQUIRED": {
 			"en":      "A person ID is required for a person trajectory",
 			"zh-Hans": "查询人员轨迹必须选择人员",
 			"zh-Hant": "查詢人員軌跡必須選擇人員",

@@ -33,7 +33,7 @@ func setupTestOpenAPIEnv(t *testing.T) (*gin.Engine, *person.Service, func()) {
 	}
 
 	personStore := person.NewStore(dbStore)
-	personSvc := person.NewService(personStore, tempDir, mockExtractor{}, nil, person.Options{}, zap.NewNop())
+	personSvc := person.NewService(personStore, tempDir, zap.NewNop(), person.Options{Extractor: mockExtractor{}})
 	limiter := NewUploadLimiter()
 	handler := NewHandler(personSvc, limiter, zap.NewNop())
 

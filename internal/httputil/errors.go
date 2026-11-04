@@ -57,8 +57,12 @@ func WritePayloadTooLarge(c *gin.Context) {
 // KindToHTTPStatus maps an apperr.Kind to its standard HTTP status code.
 func KindToHTTPStatus(k apperr.Kind) int {
 	switch k {
+	case apperr.KindBadRequest:
+		return http.StatusBadRequest
 	case apperr.KindInvalid:
 		return http.StatusUnprocessableEntity
+	case apperr.KindPayloadTooLarge:
+		return http.StatusRequestEntityTooLarge
 	case apperr.KindUnauthenticated:
 		return http.StatusUnauthorized
 	case apperr.KindPermissionDenied:

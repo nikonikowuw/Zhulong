@@ -385,7 +385,7 @@ func (s *Service) queryDetections(
 		if filter.MatchKey == "" {
 			return "", nil, apperr.New(
 				apperr.KindInvalid,
-				"PERSON_ID_REQUIRED",
+				"SPATIAL_PERSON_ID_REQUIRED",
 				"person id is required",
 				nil,
 			)

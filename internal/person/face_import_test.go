@@ -214,9 +214,8 @@ func TestFaceImportJob_EndToEnd(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = asyncSvc.Stop(context.Background()) })
 
-	opts := Options{AsyncJobs: asyncSvc}
-	svc := NewService(NewStore(dbStore), filepath.Join(tempDir, "faces"), extractor, nil, opts, zap.NewNop())
-	t.Cleanup(func() { svc.Close() })
+	opts := Options{AsyncJobs: asyncSvc, Extractor: extractor}
+	svc := NewService(NewStore(dbStore), filepath.Join(tempDir, "faces"), zap.NewNop(), opts)
 
 	jobHandler := NewFaceImportJobHandler(svc)
 	asyncSvc.RegisterHandler(jobHandler)
@@ -334,5 +333,54 @@ func TestFaceImportJob_EndToEnd(t *testing.T) {
 		t.Fatalf("report CSV should contain Bob and error: %s", reportCSV)
 	}
 
+	// Download diagnostic report with English locale
+	reportReqEn, _ := http.NewRequest(http.MethodGet, "/api/v1/persons/import-face-jobs/"+jobID+"/failed-report", nil)
+	reportReqEn.Header.Set("Accept-Language", "en")
+	reportWEn := httptest.NewRecorder()
+	router.ServeHTTP(reportWEn, reportReqEn)
+	if reportWEn.Code != http.StatusOK {
+		t.Fatalf("expected english report 200 OK, got %d: %s", reportWEn.Code, reportWEn.Body.String())
+	}
+	reportCSVEn := reportWEn.Body.String()
+	if !strings.Contains(reportCSVEn, "Image is corrupted") {
+		t.Fatalf("expected localized english message in CSV, got: %s", reportCSVEn)
+	}
+
 	_ = fh
+}
+
+func TestService_StartLifecycle(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	defer dbStore.Close()
+
+	facesDir := filepath.Join(tempDir, "faces")
+	svc := NewService(NewStore(dbStore), facesDir, zap.NewNop(), Options{})
+
+	// Pre-create a stale import directory in tmpDir
+	staleDir := filepath.Join(svc.tempDir, "face_import_stale123")
+	if err := os.MkdirAll(staleDir, 0755); err != nil {
+		t.Fatalf("create stale dir: %v", err)
+	}
+	otherDir := filepath.Join(svc.tempDir, "keep_other_dir")
+	if err := os.MkdirAll(otherDir, 0755); err != nil {
+		t.Fatalf("create other dir: %v", err)
+	}
+
+	// Execute Start lifecycle hook
+	if err := svc.Start(context.Background()); err != nil {
+		t.Fatalf("svc.Start failed: %v", err)
+	}
+
+	// Stale face import directory should have been cleaned up
+	if _, err := os.Stat(staleDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected stale directory to be removed")
+	}
+	// Other directory should remain
+	if _, err := os.Stat(otherDir); err != nil {
+		t.Fatalf("expected other directory to be kept: %v", err)
+	}
 }

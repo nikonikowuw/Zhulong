@@ -22,6 +22,8 @@ func TestKind_String(t *testing.T) {
 		{name: "Precondition", kind: KindPrecondition, want: "precondition_failed"},
 		{name: "RateLimited", kind: KindRateLimited, want: "rate_limited"},
 		{name: "Unavailable", kind: KindUnavailable, want: "unavailable"},
+		{name: "BadRequest", kind: KindBadRequest, want: "bad_request"},
+		{name: "PayloadTooLarge", kind: KindPayloadTooLarge, want: "payload_too_large"},
 		{name: "Unknown", kind: Kind(255), want: "unspecified"},
 	}
 
