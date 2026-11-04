@@ -32,8 +32,10 @@
 
 ### R1. Native 引擎与 C ABI
 
-1. **一律申请音频**：拉流模式固定 `allowed_media_types="video,audio"`，不再有开关。独立探测（Probe）模式保持纯视频，不延长建连耗时。
-2. **探测与可接受性**：`av_find_best_stream(AVMEDIA_TYPE_AUDIO, -1, video_index)`，每路流最多一条音轨；codec ∈ {AAC, PCMA, PCMU}，采样率与声道在白名单内，`time_base` 有效；`AAC_LATM` 明确拒绝并记 WARN。任一不满足即"该路无音频"。
+1. **一律申请音频**：拉流模式固定 `allowed_media_types="video+audio"`，不再有开关。独立探测（Probe）模式保持纯视频，不延长建连耗时。
+   > ⚠️ 实测修正：该 AVOption 是 **flags 串**（只认 `+`/`-` 前缀），写成 `"video,audio"` 会让 `avformat_open_input` 直接失败。
+2. **探测与可接受性**：`av_find_best_stream(AVMEDIA_TYPE_AUDIO, -1, video_index)`，每路流最多一条音轨；codec ∈ {AAC, PCMA, PCMU}，采样率与声道在白名单内，`time_base` 有效。任一不满足即"该路无音频"。
+   > 口径修正（D 阶段落实）：`AAC_LATM` **不再判为不可接受**。固定 FFmpeg 7.1.5 的 `rtpdec_latm.c` 声明 `AV_CODEC_ID_AAC` 并把 LATM 剥成裸 AU，实测 MP4A-LATM 相机可直接放行（见 `11-03-dual-track-native/progress.md` §3）。原「明确拒绝 + WARN」只剩防御性分支：解封装后仍不是可接受的 AAC、或 extradata > 256 B 时判为无音频并 WARN。
 3. **失败不得拖垮视频**：申请音频后若建连/SETUP 失败，关闭并以 `allowed_media_types="video"` 重开一次；失败原因在物理流生命周期内缓存，只重试一次。
 4. **双 sink 与共享时间轴**：音频与视频走两条独立回调，音频在结构上不经过 `PreviewNormalizer` 与 `DecodeSession`；音频 PTS 锚定到视频输出时间轴（锚点由视频原点到达时刻 + 首枚有效音频包到达时延构造），每包读取当前视频跳变偏移与 discontinuity generation。
 5. **音频元数据出口**：一次性查询（codec / 采样率 / 声道 / extradata），由调用方提供缓冲区，ABI 调用期间复制；容量不足返回所需长度。
@@ -91,44 +93,55 @@
 - 音频 AI 分析；
 - GB28181 通道音频；
 - Probe API 暴露音频能力（能力走实时流通告）；
-- AAC-LATM；
+- AAC-LATM 的**专门**支持（不裁剪/不转封装，依赖固定 FFmpeg 的解封装行为，不作为承诺）；
 - 多音轨混音与声道矩阵。
 
 ## Acceptance Criteria
 
-- [ ] **AC-1（Native）**
-  - 三档音频桩（PCMA / PCMU / AAC）均探测到音轨并派发音频包；`audio-latm` 无音频 + WARN；纯视频桩无音频无报错；
+- [x] **AC-1（Native）**
+  - 三档音频桩（PCMA / PCMU / AAC）均探测到音轨并派发音频包；`audio-latm` 按裸 AAC 放行（固定 FFmpeg 7.1.5 的解封装结果），无法接受时降级为无音频 + WARN；纯视频桩无音频无报错；
   - `audio-broken` 桩（音频 SETUP 失败）仍能出视频，日志可见降级原因；
   - 音频包不改变 `PreviewNormalizer::gop_id()` 与视频时钟，也不进入 `DecodeSession`；
   - 预览订阅（视频轨道掩码）在音频存在与否时行为与今日逐字节一致；
   - `make native-test` 通过 ASan / TSan；`rtsp_startup_timing` 劣化 ≤ 10%。
 
-- [ ] **AC-2（传输与 Go）**
+- [x] **AC-2（传输与 Go）**
   - 预览 WS 二进制帧与改造前逐字节一致（golden 对比）；文本能力帧只在建连时发送一次；
   - 音频通道：同一会话第二条连接接管旧连接；不同会话互不影响；总数超过硬上限时明确拒绝；
   - 关闭音频通道后 native 订阅同步排空、无泄漏、无遗留回调；
   - 慢客户端导致的音频队列溢出只关闭音频通道，视频订阅与健康态不受影响；
   - 音频帧头封包/解包往返测试通过。
 
-- [ ] **AC-3（前端解码与同步）**
+- [x] **AC-3（前端解码与同步）**
   - G.711 查表对 A-law / μ-law 的静音码、0、满幅输出期望 PCM；
   - 时钟单测：`due` 计算、陈旧丢弃、前后大跳重锚；
   - AAC：有 ASC 能解帧；ASC 缺失或 `isConfigSupported()=false` 时降级且视频继续；
   - 同步测量（白闪 + 1kHz beep，240fps）：稳态 ≤ 80ms；视频重同步后 500ms 内回收；10 分钟不发散；
   - 解禁瞬间不播放积压音频，起播 ≤ 200ms。
 
-- [ ] **AC-4（交互与合规）**
+- [x] **AC-4（交互与合规）**
   - 默认全静音，`AudioContext` 只在用户手势后创建/恢复；
   - 单 tab 最多一路出声；同一路流被多个格子显示时仍只一路；
   - 两个登录会话同时收听互不影响（各自一路）；
   - 拖拽换机 / 清空格子 / 主↔子码流切换后焦点回收、旧通道关闭；
   - 无音频相机按钮置灰并说明。
 
-- [ ] **AC-5（回归与门禁）**
+- [x] **AC-5（回归与门禁）**
   - `make check` 全绿、无数据竞争；`make cross-board` 通过；
   - RK3568 16 路连续 30 分钟，其中 1~4 路音频通道处于收听状态：无断链、无 RSS 持续增长、CPU 与基线有量化对照；
   - 不收听任何音频时，预览链路行为与改造前一致。
 
-- [ ] **AC-6（可运维性）**
+- [x] **AC-6（可运维性）**
   - 首次建流日志可见 `hasAudio / codec / sampleRate / 降级原因`；
   - 音频通道建立/关闭/接管/溢出都有日志与计数，能定位"谁在听哪一路"。
+
+### 证据索引（D 阶段收口）
+
+| AC | 直接证据 |
+| :--- | :--- |
+| AC-1 | `review-fixes.md` §1/§4（native 31/31 + ASan/TSan 各 31/31、`audio_fallback_budget_case` 实测 1010 ms）；板端 `/audio-latm`、`/audio-broken` 演练（`11-03-dual-track-soak/research/rollback-drill.md`） |
+| AC-2 | `internal/camera/audio_channel_test.go`（4001/4002/4003、同步排空、并发 race）、`wire_test.go`（ZLA1 往返）、`audio_handler_test.go`（端到端 + 文本帧先于二进制帧）；旧客户端演练解析出 ZLM2 v2 帧且忽略文本帧 |
+| AC-3 | `11-03-dual-track-soak/research/sync-measurement.md`（294 对样本：稳态 28.9 ms / 重同步后 30.7 ms / 漂移 4 ms）；`g711-decoder`、`aac-decoder`、`live-audio-player` 单测 |
+| AC-4 | `live-player-cell.test.tsx`（无音频置灰、旧后端「未知」不报故障）、`use-live-grid.test.ts`（焦点互斥/同流去重/muteAll）、板端双会话演练 |
+| AC-5 | `make check` exit 0；`make cross-board` exit 0；`webui-dist-check` 正/负向各一次 |
+| AC-6 | `11-03-dual-track-soak/research/board-soak.md`（16 路 30 min × 2 轮对照，零丢帧、零断链、RSS 无增长、+4.4 pp 单核 / 4 条收听通道） |

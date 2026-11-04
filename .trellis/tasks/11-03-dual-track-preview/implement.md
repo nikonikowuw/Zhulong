@@ -95,24 +95,24 @@ python3 native/scripts/build.py --sanitizer thread  test
 
 ## Phase 2：Go 音频通道与能力通告
 
-- [ ] **2.1 CGO 桥接**（`internal/engine/{types.go,subscription.go,engine.go,stream.go}`）
+- [x] **2.1 CGO 桥接**（`internal/engine/{types.go,subscription.go,engine.go,stream.go}`）
   - `Packet.TrackType` / `TrackType` 枚举 / `inboundPacket` 映射；
   - `AudioInfo{HasAudio, Codec, SampleRate, Channels, Config []byte}` + `Engine.AudioInfo(ctx, streamID)`（ABI 写入 Go 提供的 C 缓冲区 → Go 复制 → 释放）；
   - `SubscriptionOptions.TrackMask` + `SubscribeTrack`；现有 `Subscribe` 保持视频语义。
-- [ ] **2.2 预览 WS 能力帧**（`internal/camera/handler.go`）
+- [x] **2.2 预览 WS 能力帧**（`internal/camera/handler.go`）
   - `/cameras/:id/.../ws` 建连后、启动写协程**之前**同步写一条 `stream_info` 文本帧；
   - `AudioInfo` 查询失败或未就绪 → `present=false` + `reason`，不影响视频；
   - `WritePump` 与 `StreamDispatcher` **不改**。
-- [ ] **2.3 音频通道注册表**（`internal/camera/audio_channel.go` 新增）
+- [x] **2.3 音频通道注册表**（`internal/camera/audio_channel.go` 新增）
   - 键 = `auth.GetSessionToken(c)` 的哈希前缀；同会话接管旧连接（4001），跨会话独立；
   - 全局硬上限（常量 8），超出拒绝（4002）；
   - 生命周期：`AudioInfo → 无音频则 4404 → SubscribeTrack(AUDIO) → 写协程 → 关闭/溢出 → unsubscribe（同步排空）→ 注册表移除`；
   - 日志：会话哈希前缀、camera、role、建立/关闭原因、接管与溢出计数。**不落 token 原文。**
-- [ ] **2.4 音频 WS**（`internal/camera/handler.go` 新路由 `/cameras/:id/streams/:role/audio/ws`）
+- [x] **2.4 音频 WS**（`internal/camera/handler.go` 新路由 `/cameras/:id/streams/:role/audio/ws`）
   - 建连先发 `audio_info` 文本帧；随后二进制 20 字节头（magic `ZLA1` / codec / flags / reserved / seq / pts_us）；
   - 队列满 → 关闭通道并记 `backpressure`；写超时 → 关闭；
   - 不做任何视频相关的刷新与统计。
-- [ ] **2.5 Go 测试**
+- [x] **2.5 Go 测试**
   - `audio_channel_test.go`：同会话接管、跨会话独立、硬上限、并发 race、`unsubscribe` 后注册表才为空；
   - `wire_test.go`：音频帧头封包/解包往返、discontinuity 标志；
   - 预览 WS 二进制帧 golden 对比（文本帧不改变二进制字节与顺序）；
@@ -133,25 +133,25 @@ make go-check
 
 ## Phase 3：前端 G.711 全链路（先出声）
 
-- [ ] **3.1 能力帧与按需连接**（`stream-pool.ts`、`hooks/use-stream-connection.ts`）
+- [x] **3.1 能力帧与按需连接**（`stream-pool.ts`、`hooks/use-stream-connection.ts`）
   - 文本帧分支 → `onStreamInfo`；`ArrayBuffer` 分支与统计逻辑不动；
   - 新增 `services/audio-channel.ts`：连接/重连/关闭音频 WS、解析 20 字节头、错误帧；
   - `wire-parser.ts` 不动。
-- [ ] **3.2 G.711 解码**（`services/g711-decoder.ts`）
+- [x] **3.2 G.711 解码**（`services/g711-decoder.ts`）
   - A-law / μ-law 256 项静态表 → Float32；表驱动单测。
-- [ ] **3.3 呈现时钟快照**（`presentation-scheduler.ts`、`webcodecs-decoder.ts`、`use-webcodecs-render-loop.ts`）
+- [x] **3.3 呈现时钟快照**（`presentation-scheduler.ts`、`webcodecs-decoder.ts`、`use-webcodecs-render-loop.ts`）
   - `clockSnapshot()`；`onResync` 回调（discontinuity / queue rebuild / 跳帧重同步三处）；
   - `useWebCodecsRenderLoop` 暴露 `getPresentationClock()`。
-- [ ] **3.4 音频播放器**（`services/live-audio-player.ts` + AudioWorklet）
+- [x] **3.4 音频播放器**（`services/live-audio-player.ts` + AudioWorklet）
   - 环形缓冲 + 线性重采样 + `GainNode`；
   - 投递策略：无 clock 缓存 ≤100 ms、陈旧丢弃、超前重锚、环深抖动控制；
   - `flush()` / `setMuted()` / `setVolume()` / `start(clock)`；
   - Worklet 用 `new URL('./xxx-worklet.ts', import.meta.url)` 引入；`addModule()` 就绪后再投递首帧。
-- [ ] **3.5 接线**（`components/live-player.tsx`）
+- [x] **3.5 接线**（`components/live-player.tsx`）
   - 接 `isMuted` / `hasAudio` / `volume` prop；解禁时建音频通道 + 创建/`resume()` `AudioContext`；
   - 静音、切格、卸载时关闭通道并 `flush()`；
   - 视频 `onResync` → `audio.flush()` + 重锚。
-- [ ] **3.6 单测**
+- [x] **3.6 单测**
   - `g711-decoder.test.ts`（静音码、0、满幅）；
   - `live-audio-player.test.ts`（due 计算、陈旧丢弃、大跳重锚、flush）；
   - `audio-channel.test.ts`（20B 头、错误帧、断开重连）；
@@ -172,18 +172,18 @@ make frontend-check
 
 ## Phase 4：AAC、能力 UI 与音频焦点
 
-- [ ] **4.1 AAC 解码路径**（`live-audio-player.ts`）
+- [x] **4.1 AAC 解码路径**（`live-audio-player.ts`）
   - `AudioDecoder` + `description = audioInfo.config`；codec 串由 ASC 的 `audioObjectType` 推导；
   - `isConfigSupported()` 失败 → 本路禁用音频 + 文案，视频继续。
-- [ ] **4.2 能力通告到 UI**（`types`、`use-stream-connection`、`live-player-cell`）
+- [x] **4.2 能力通告到 UI**（`types`、`use-stream-connection`、`live-player-cell`）
   - `stream_info.audio.present` → cell 状态；无音频/不支持 → 置灰 + tooltip。
-- [ ] **4.3 音频焦点**（`hooks/use-live-grid.ts`、`live-grid.tsx`、`live-player-cell.tsx`）
+- [x] **4.3 音频焦点**（`hooks/use-live-grid.ts`、`live-grid.tsx`、`live-player-cell.tsx`）
   - `activeCellId` / `volume` 进 `useLiveGrid`；
   - 互斥（含同一 stream key）、`muteAll()`、换机/清空/切码流回收；
   - `LivePlayer` 由 prop 驱动。
-- [ ] **4.4 i18n 文案**（`locales/{zh-Hans,zh-Hant,en}.json`）
+- [x] **4.4 i18n 文案**（`locales/{zh-Hans,zh-Hant,en}.json`）
   - `unmute` / `mute` / `volume` / `noAudio` / `audioUnsupported`。
-- [ ] **4.5 测试**
+- [x] **4.5 测试**
   - `use-live-grid.test.ts`（焦点互斥、同流去重、换机回收、muteAll）；
   - `live-player-cell.test.tsx`（无音频置灰、解禁手势创建 AudioContext、卸载关闭通道）。
 

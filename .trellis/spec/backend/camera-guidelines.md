@@ -150,6 +150,8 @@ CREATE TABLE camera_streams (
 
 5. **观测计数**：`StreamDispatcher.Counters()` 暴露 `KeyframeInjected / LagResyncs / QueueResyncs / ResyncSkips /
    GOPTruncations / Subscribers`。现场排障优先看 `GOPTruncations`（相机 GOP 过长）与 `LagResyncs`（客户端跟不上）。
+   计数每 5 分钟以 `stream dispatcher counters` 落一条，关闭时再落一条 `stream dispatcher counters final`：
+   只有「关闭时一行」拿不到**趋势**，而压测与「跑了一夜才出问题」的现场要找的恰恰是趋势。
 
 6. **起播耗时必须可拆分测量**：起播 1~2 秒是典型投诉，它可能来自四个完全不同的阶段，
    不拆开就只能猜。固定两端各一条日志：
@@ -177,6 +179,13 @@ CREATE TABLE camera_streams (
    - 为什么必须是文本帧且在二进制帧之前：旧 bundle 用 `event.data instanceof ArrayBuffer` 判据，
      会天然忽略它；一旦排在二进制帧之后，老前端会把文本当帧解析，直接黑屏。
    - 查询失败不产生错误路径，只写 `present=false` + `reason`：一次探测失败不能影响视频建连。
+   - ⚠️ **但必须先等一小段再回答**（`capabilityReadyTimeout = 2s`）。`acquire` 是异步的：
+     流还没 `ready` 时 `audio_info` 一律报错，此时照实写 `present=false` 会把一台**有音频**的相机
+     永久标成哑巴（能力帧只发一次，前端不重试）。板端 16 路压测里全部 16 路都被记成
+     `audio info unavailable`，而其中 4 路的音频通道实际工作正常 —— 这就是漏等的代价。
+     健康流上这段等待与「第一帧视频到达」本来就是同一时刻，不额外增加首帧延迟。
+   - 能力结论每路流只打一条 `preview audio capability`（`has_audio/codec/sample_rate/channels/reason`）：
+     现场「这个相机到底有没有声音」目前只能靠翻 SDP，而能力帧只发给浏览器、不落盘。
 
 2. **音频通道**：`GET /api/v1/cameras/:id/streams/:role/audio/ws`（同受 `auth.RequireAuth` 保护）。
    - 帧格式 ZLA1，20 字节大端头 + 裸负载：

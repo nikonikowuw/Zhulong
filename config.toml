@@ -50,6 +50,12 @@ target = "onnx"
 session_ttl = "24h"
 
 # Hardware video decoding policy and admission control.
+#
+# Preview audio is deliberately absent from this section: the native layer only
+# demuxes audio (G.711 and AAC AUs pass through untouched), so an audio channel
+# never consumes a decode session and never competes with `max_sessions`.
+# Whether a stream has audio is discovered by probing, not configured; whether it
+# is heard is a user gesture. Both mean there is no switch to add here.
 [decode]
 backend = "auto"                 # "auto" | "mpp" | "ffmpeg"
 allow_software_fallback = true   # Board deployment profiles must set false (fail-closed)

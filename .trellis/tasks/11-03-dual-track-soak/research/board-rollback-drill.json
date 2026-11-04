@@ -1,0 +1,128 @@
+{
+  "base_url": "http://192.168.19.71:8000",
+  "cameras": {
+    "plain": "01M6JA3T05K2QYFYCXWZHNXKPX",
+    "audio": "01M6JA3TSX0HJQB8QBN23J4PN5",
+    "audio2": "01M6JA3TVEPHRCX02CDD3ZPFVF",
+    "latm": "01M6JEBAGM31R0APEA25Z896QP",
+    "broken": "01M6JEBAJPH3NBZS3KZKXMBHDA"
+  },
+  "cases": [
+    {
+      "case": "no_audio",
+      "ok": true,
+      "detail": {
+        "capability": {
+          "reason": "camera reports no audio track",
+          "codec": "codec(0)",
+          "config": "",
+          "sampleRate": 0,
+          "channels": 0,
+          "present": false
+        },
+        "error_frame": {
+          "type": "error",
+          "code": "NO_AUDIO",
+          "reason": "camera reports no playable audio track"
+        },
+        "close": {
+          "code": 4404,
+          "reason": "no audio"
+        },
+        "video_frames": 3
+      },
+      "elapsed_ms": 131
+    },
+    {
+      "case": "latm",
+      "ok": true,
+      "detail": {
+        "audio_info": {
+          "type": "audio_info",
+          "codec": "aac",
+          "config": "EghW5QAA",
+          "sampleRate": 44100,
+          "channels": 1,
+          "hasAudio": true
+        },
+        "frames": 5,
+        "close": null
+      },
+      "elapsed_ms": 82
+    },
+    {
+      "case": "broken",
+      "ok": true,
+      "detail": {
+        "capability": {
+          "reason": "camera reports no audio track",
+          "codec": "codec(0)",
+          "config": "",
+          "sampleRate": 0,
+          "channels": 0,
+          "present": false
+        },
+        "video_frames": 5
+      },
+      "elapsed_ms": 213
+    },
+    {
+      "case": "supersede",
+      "ok": true,
+      "detail": {
+        "first_close": {
+          "code": 4001,
+          "reason": "superseded"
+        },
+        "second_frames": 2
+      },
+      "elapsed_ms": 128
+    },
+    {
+      "case": "dual_session",
+      "ok": true,
+      "detail": {
+        "left_frames": 5,
+        "right_frames": 5,
+        "left_info": {
+          "type": "audio_info",
+          "codec": "pcmu",
+          "config": "",
+          "sampleRate": 8000,
+          "channels": 1,
+          "hasAudio": true
+        },
+        "right_info": {
+          "type": "audio_info",
+          "codec": "pcmu",
+          "config": "",
+          "sampleRate": 8000,
+          "channels": 1,
+          "hasAudio": true
+        }
+      },
+      "elapsed_ms": 349
+    },
+    {
+      "case": "channel_limit",
+      "ok": true,
+      "detail": {
+        "ninth_close": {
+          "code": 4002,
+          "reason": "too_many_channels"
+        },
+        "established": 8
+      },
+      "elapsed_ms": 6375
+    },
+    {
+      "case": "old_client",
+      "ok": true,
+      "detail": {
+        "text_frames_ignored": 1,
+        "binary_frames": 10
+      },
+      "elapsed_ms": 400
+    }
+  ]
+}

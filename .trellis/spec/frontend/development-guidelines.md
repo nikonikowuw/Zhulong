@@ -269,6 +269,16 @@ export function CameraCreateForm({ onSubmit, isPending }: Props) {
      把所有断开都当网络问题会变成报错循环；
    - **默认全静音 + 按需建连**：`AudioContext` 只在首次解禁手势里创建，不点喇叭就不建 WS、不建上下文。
      单 tab 最多一路出声（`cells[].isMuted` 是唯一真相源），同一 stream key 的多个格子也只算一路。
+   - **音画同步是跳模块观测量，必须留有出口**：`createLiveAudioPlayer({ onScheduled })` 在**每帧真正入环**时
+     报告 `{ptsUs, startDueMs, nowMs, reanchored}`。被丢弃/暂存的帧不报告 —— 它们不会出声，
+     报出来只会让「应当听到的时刻」里混进不存在的样本。测量方（`sync-measure.test.ts`、现场诊断）
+     把音频入环时刻与视频绘制时刻拼起来才能算偏差，任何一侧都拿不到全貌；
+   - **WebCodecs 的 `prefer-hardware` 不是「硬件优先、软件兜底」而是硬条件**：无硬件解码器的环境
+     （无头 Chromium、纯软件桌面、部分 WebView）会让解码器进入错误回调
+     `Unsupported configuration. Check isConfigSupported() prior to calling configure()`。
+     ⚠️ 它是**异步**错误：`configure()` 不抛异常，`try/catch` 抳不住；必须在错误回调里降级到
+     `no-preference` 并重建，否则会「用同一份配置反复重建解码器」而无任何报错循环上限。
+     预览宁可软件解码，也不能因为「没有硬件」而黑屏。
 
 
 ---

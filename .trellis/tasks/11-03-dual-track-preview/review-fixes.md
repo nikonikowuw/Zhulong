@@ -26,10 +26,15 @@
 
 ## 3. 未闭环（不在本次范围）
 
-- **父 PRD 的 AAC-LATM 口径**：`11-03-dual-track-preview/prd.md` R1.2 与 AC-1 仍写“明确拒绝 + WARN”，
-  实现与测试钉的是“当裸 AAC 放行”。`11-03-dual-track-native/progress.md §3` 已记录，D 阶段必须改 AC。
+- ~~**父 PRD 的 AAC-LATM 口径**：`11-03-dual-track-preview/prd.md` R1.2 与 AC-1 仍写“明确拒绝 + WARN”，
+  实现与测试钉的是“当裸 AAC 放行”。~~ **已闭环（D 阶段）**：`prd.md` R1.1/R1.2、Out of Scope 与 AC-1
+  已改为“按固定 FFmpeg 7.1.5 的解封装结果当裸 AAC 放行，非 AAC 时降级 + WARN”；
+  板端 `/audio-latm` 演练实测 `audio_info.codec=aac` 且持续出帧（见 `11-03-dual-track-soak/research/rollback-drill.md`）。
 - **`Stream::on_decode_fatal_error` 自死锁**（持 `Stream::mutex` 调 `request_stop()`，后者重入同一非递归 mutex）：
-  非双轨、pre-existing，建议单开一条 bug 任务。
+  非双轨、pre-existing，建议单开一条 bug 任务（D 阶段未动；与音频链路无关）。
+- **warm 分发器上限的实际行为**：`defaultMaxWarmStreamDispatchers = 4`，但板端 16 路客户端同时断开时
+  16 条分发器在同一秒全部释放（`stream dispatcher closed` ×16 @ 04:14:31），而不是只淘汰 12 条。
+  证据与影响见 `11-03-dual-track-soak/research/board-soak.md` §4，建议单开任务核对 `warmOrder` 的重复入列。
 - **音频“宣告但从不发 RTP”**：目前只有人工看日志能发现，暂无看门狗。
 - **`audio_startup_cost_case` 的 `+50ms` 墙钟门限**：仍是抖动风险，本次未动（回环两次均通过）。
 
