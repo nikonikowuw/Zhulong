@@ -5,31 +5,20 @@
 
 #include "pipeline/audio_normalizer.hpp"
 
-#include <algorithm>
-
 namespace zhulong {
+namespace {
 
-void AudioNormalizer::reset() {
-    codec_ = 0;
-    sample_rate_ = 8000;
-    channels_ = 1;
-    time_base_num_ = 1;
-    time_base_den_ = 8000;
+/** @brief 单个 AAC 帧的采样数（AAC-LC 缺省 1024；LD 为 960，缺 PTS 时按缺省推算） */
+constexpr int64_t aac_frame_samples = 1024;
 
-    anchor_established_ = false;
-    anchor_abs_us_ = 0;
-    base_offset_us_ = 0;
+/** @brief 无法推算帧长时的合成步长（20 ms，对应 8 kHz 下 160 样本） */
+constexpr int64_t default_audio_step_us = 20000;
 
-    has_last_abs_ = false;
-    last_abs_us_ = 0;
-    wrap_offset_us_ = 0;
+/** @brief RTP 时间戳的 32 位回绕周期与判定半周期（滴答） */
+constexpr int64_t rtp_tick_period = 1LL << 32;
+constexpr int64_t rtp_half_period = 1LL << 31;
 
-    last_video_gen_ = 0;
-    has_last_out_ = false;
-    last_out_us_ = 0;
-
-    dropped_before_origin_ = 0;
-}
+} // namespace
 
 void AudioNormalizer::update_metadata(int32_t codec, int32_t sample_rate, int32_t channels,
                                      int32_t time_base_num, int32_t time_base_den) {
@@ -42,8 +31,12 @@ void AudioNormalizer::update_metadata(int32_t codec, int32_t sample_rate, int32_
 
 int64_t AudioNormalizer::rescale_to_microseconds(int64_t ticks, int32_t num, int32_t den) {
     if (den <= 0) return 0;
+#if defined(__SIZEOF_INT128__)
     const __int128_t scaled = static_cast<__int128_t>(ticks) * 1000000 * num;
     return static_cast<int64_t>(scaled / den);
+#else
+    return static_cast<int64_t>(static_cast<long double>(ticks) * 1000000.0L * num / den);
+#endif
 }
 
 Zhulong_packet_view AudioNormalizer::normalize(const Zhulong_packet_view &in,
@@ -70,8 +63,8 @@ Zhulong_packet_view AudioNormalizer::normalize(const Zhulong_packet_view &in,
         // 32 位 RTP 滴答回绕检测与展开 (约 2^31 滴答突降)
         if (has_last_abs_) {
             const int64_t diff = audio_abs_us - (last_abs_us_ - wrap_offset_us_);
-            const int64_t half_period_us = rescale_to_microseconds(1LL << 31, time_base_num_, time_base_den_);
-            const int64_t full_period_us = rescale_to_microseconds(1LL << 32, time_base_num_, time_base_den_);
+            const int64_t half_period_us = rescale_to_microseconds(rtp_half_period, time_base_num_, time_base_den_);
+            const int64_t full_period_us = rescale_to_microseconds(rtp_tick_period, time_base_num_, time_base_den_);
             if (half_period_us > 0 && diff < -half_period_us) {
                 wrap_offset_us_ += full_period_us;
             }
@@ -82,12 +75,12 @@ Zhulong_packet_view AudioNormalizer::normalize(const Zhulong_packet_view &in,
         // 缺失 PTS 时按格式步长递推
         int64_t step_us = 0;
         if (codec_ == Zhulong_CODEC_AAC) {
-            step_us = 1024LL * 1000000 / sample_rate_;
+            step_us = aac_frame_samples * 1000000 / sample_rate_;
         } else {
             // PCMA / PCMU: 每采样 1 字节
             step_us = static_cast<int64_t>(in.size) * 1000000 / sample_rate_;
         }
-        if (step_us <= 0) step_us = 20000; // 默认 20ms
+        if (step_us <= 0) step_us = default_audio_step_us; // 默认 20ms
 
         if (has_last_abs_) {
             audio_abs_us = last_abs_us_ + step_us;
@@ -96,14 +89,29 @@ Zhulong_packet_view AudioNormalizer::normalize(const Zhulong_packet_view &in,
         }
     }
 
+    // 源流缺 DTS：dts_us 由 pts 合成，与视频路径同构地打标。
+    // 不打标就会留下「has_dts=0 却带着有效 dts_us」这种自相矛盾的包视图。
+    if (in.has_dts == 0) flags |= ZHULONG_PKT_FLAG_DTS_SYNTHETIC;
+
     // 3. 首次进入时建立对齐锚点
     if (!anchor_established_) {
         anchor_established_ = true;
+        anchor_from_real_pts_ = in.has_pts != 0;
         anchor_abs_us_ = audio_abs_us;
         // base 允许为负：音频包可能比视频原点更早到达（交织顺序），此时它本来就该输出在 0 之前。
         // 夹到 0 会变成一个最多半帧的系统性滞后，不如保留真实值——老的包由前端按 `due` 丢弃。
         base_offset_us_ = audio_arrival_us - video_origin_arrival_us;
         last_video_gen_ = video_discontinuity_gen;
+    } else if (!anchor_from_real_pts_ && in.has_pts) {
+        // 首枚音频包缺 PTS 时锚点落在合成时间轴（0 起算）上。若后续恢复了真实 PTS，
+        // 继续用旧锚点会把输出推到「真实 PTS 的绝对值 + base」——凭空前移数十分钟，
+        // 而单调保护只拦回拨、拦不住前跳，音频会整场不再响。首枚真实 PTS 只重锚一次。
+        anchor_from_real_pts_ = true;
+        anchor_abs_us_ = audio_abs_us;
+        base_offset_us_ = audio_arrival_us - video_origin_arrival_us;
+        // 重锚允许一次回拨（合成轴可能已涨到数十毫秒），故清掉单调基准。
+        has_last_out_ = false;
+        flags |= ZHULONG_PKT_FLAG_DISCONTINUITY;
     }
 
     // 4. 检测视频时间轴跳变（discontinuity generation 递增）

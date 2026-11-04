@@ -198,6 +198,7 @@ struct Stream {
     PreviewNormalizer preview_normalizer_{};
     AudioNormalizer audio_normalizer_{};        /**< 音频时间戳归一化器 (v5) */
     int64_t video_origin_arrival_us_{0};        /**< 视频首帧到达时的单调微秒时间戳 */
+    bool audio_anchor_logged_{false};           /**< 音频锚点一次性日志门闸（只由拉流线程置位） */
 
     // 被逐订阅者隔离的回调异常累计次数 (仅统计用途，relaxed 原子)
     std::atomic<uint64_t> callback_exceptions_{0};

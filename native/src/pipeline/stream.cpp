@@ -609,6 +609,15 @@ void Stream::dispatch_audio(const Zhulong_packet_view &packet) {
         return;
     }
 
+    // 锚点一次性日志：音频“有音轨但没声音”时，base 与丢包数就是第一现场。
+    // 每路流只打一行，不参与热路径。
+    if (!audio_anchor_logged_ && audio_normalizer_.anchor_established()) {
+        audio_anchor_logged_ = true;
+        ZL_LOGI(id, "pipeline.stream", "audio_anchor_established base_us=%lld dropped_before_origin=%llu",
+                static_cast<long long>(audio_normalizer_.base_offset_us()),
+                static_cast<unsigned long long>(audio_normalizer_.dropped_before_origin()));
+    }
+
     std::shared_ptr<const SubscriberList> subscribers;
     {
         std::lock_guard<std::mutex> lock(mutex);

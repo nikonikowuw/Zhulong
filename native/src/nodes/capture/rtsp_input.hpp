@@ -128,6 +128,13 @@ public:
     /** @brief 从当前时刻起设置指定毫秒后的超时截止点（任何线程可调用） */
     void expire_after(uint32_t milliseconds) noexcept;
 
+    /**
+     * @brief 设置绝对超时截止点（任何线程可调用）
+     *
+     * 用于「多次尝试共享同一份预算」：降级重试只能消耗剩余时间，不能重新计时。
+     */
+    void expire_at(Clock::time_point deadline) noexcept;
+
     /** @brief 检查是否已被外部中断或已超过设定的截止时间 */
     bool interrupted() const noexcept;
 
@@ -184,6 +191,7 @@ struct Media {
  *    - 打开连接后触发 ready(Media) 回调；
  *    - 进入帧循环读取 av_read_frame，并将视频包送入 consume，音频包送入 consume_audio；
  *    - 音频建连/SETUP 失败时自动退回纯视频重试一次，绝不拖垮视频；
+ *      重试**共享**首次 open 的绝对截止点，不重新计时（见 read_rtsp 的预算注释）；
  *    - 被取消时抛出 Zhulong_ERR_CANCELLED。
  *
  * @param url 规范化后的 RTSP URL

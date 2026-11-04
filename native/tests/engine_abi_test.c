@@ -12,6 +12,16 @@
 #include "Zhulong/engine.h"
 #include <string.h>
 
+/*
+ * ABI v5 布局门禁：track_type 只能追加在 pkt_flags 之后。
+ * 若将来误在中间插字段，这里先坏在**编译期**，而不是等 Go 按错偏移读内存。
+ */
+#if UINTPTR_MAX == UINT64_MAX
+_Static_assert(offsetof(Zhulong_packet_view, pkt_flags) == 88, "pkt_flags offset drift");
+_Static_assert(offsetof(Zhulong_packet_view, track_type) == 92, "track_type offset drift");
+_Static_assert(sizeof(Zhulong_packet_view) == 112, "Zhulong_packet_view size drift");
+#endif
+
 static int callback_count;
 static int32_t callback_level;
 static uint64_t callback_stream_id;
@@ -35,8 +45,18 @@ static void capture_log(uintptr_t token, int32_t level, uint64_t stream_id,
     ++callback_count;
 }
 
+static void packet_callback(uintptr_t token, const Zhulong_packet_view *packet) {
+    (void)token;
+    (void)packet;
+}
+
 int main(void) {
     Zhulong_engine_h engine = 0;
+
+    /* ABI 版本必须与头文件同步：Go 侧 Start 会先校验该项，错配直接拒绝启动。 */
+    uint32_t abi_version = 0;
+    if (Zhulong_engine_get_abi_version(&abi_version) != Zhulong_OK || abi_version != ZHULONG_ABI_VERSION) return 40;
+    if (Zhulong_engine_get_abi_version(0) != Zhulong_ERR_INVALID_ARGUMENT) return 41;
 
     /* Logging must be registered before even the first engine create attempt. */
     if (Zhulong_set_log_callback(capture_log, (uintptr_t)123) != Zhulong_OK) return 1;
@@ -112,6 +132,28 @@ int main(void) {
     if (Zhulong_engine_get_decode_stats(engine, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 37;
     Zhulong_decode_stats_t dec_stats;
     if (Zhulong_engine_get_decode_stats(engine, &dec_stats) != Zhulong_OK) return 38;
+
+    /* 7d. v5 双轨 ABI 边界：按轨订阅与音频元数据查询 */
+    Zhulong_audio_view audio_view = {0};
+    if (Zhulong_stream_audio_info(0, 1, &audio_view) != Zhulong_ERR_INVALID_ARGUMENT) return 42;
+    if (Zhulong_stream_audio_info(engine, 1, 0) != Zhulong_ERR_INVALID_ARGUMENT) return 43;
+    /* 引擎已停止：流不存在，必须先报 NOT_RUNNING 而不是 NOT_FOUND。 */
+    if (Zhulong_stream_audio_info(engine, 1, &audio_view) != Zhulong_ERR_NOT_RUNNING) return 44;
+
+    Zhulong_subscription_id track_sub = 123;
+    if (Zhulong_stream_subscribe_track(0, 1, 1, ZHULONG_TRACK_MASK_AUDIO, packet_callback, 0, &track_sub) !=
+        Zhulong_ERR_INVALID_ARGUMENT || track_sub != 0) return 45;
+    if (Zhulong_stream_subscribe_track(engine, 0, 1, ZHULONG_TRACK_MASK_AUDIO, packet_callback, 0, &track_sub) !=
+        Zhulong_ERR_INVALID_ARGUMENT) return 46;
+    if (Zhulong_stream_subscribe_track(engine, 1, 0, ZHULONG_TRACK_MASK_AUDIO, packet_callback, 0, &track_sub) !=
+        Zhulong_ERR_INVALID_ARGUMENT) return 47;
+    if (Zhulong_stream_subscribe_track(engine, 1, 1, ZHULONG_TRACK_MASK_AUDIO, 0, 0, &track_sub) !=
+        Zhulong_ERR_INVALID_ARGUMENT) return 48;
+    if (Zhulong_stream_subscribe_track(engine, 1, 1, ZHULONG_TRACK_MASK_AUDIO, packet_callback, 0, 0) !=
+        Zhulong_ERR_INVALID_ARGUMENT) return 49;
+    /* 参数齐全但引擎已停止：必须拒绝而不是悄悄注册回调。 */
+    if (Zhulong_stream_subscribe_track(engine, 1, 1, ZHULONG_TRACK_MASK_AUDIO, packet_callback, 0, &track_sub) !=
+        Zhulong_ERR_NOT_RUNNING) return 50;
 
     /* 8. 销毁安全测试：传入 NULL 指针必须保证安全无崩溃 */
     Zhulong_probe_result_destroy(0);

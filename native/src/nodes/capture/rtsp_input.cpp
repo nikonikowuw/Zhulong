@@ -96,9 +96,6 @@ constexpr int legacy_probe_size_bytes = 1048576;
 /** @brief 表示「未设置截止时间」的纳秒滴答值 */
 constexpr int64_t never_expires_at = std::numeric_limits<int64_t>::max();
 
-/** @brief 每毫秒对应的纳秒数 */
-constexpr int64_t nanoseconds_per_millisecond = 1000000;
-
 /** @brief 当前单调时钟时刻的纳秒滴答值 */
 int64_t now_ticks() noexcept {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
@@ -142,8 +139,9 @@ struct Input {
     /**
      * @brief 丢弃当前上下文并重新分配，供「换探测预算重试」使用。
      *
-     * 重试是重新建连，因此不能置 cancel.stopped（那是终态取消）；
-     * 调用方必须在调用前刷新 open 截止时间，否则 TEARDOWN 可能碰到已过期的 deadline。
+     * 重试是重新建连，因此不能置 cancel.stopped（那是终态取消）。
+     * ⚠️ 截止点由调用方决定：音频降级重试**不**刷新预算（open 截止点保留），
+     *    兼容档重试是既有的补偿机制、仍需完整预算（见 read_rtsp）。
      */
     void reopen() {
         if (context) avformat_close_input(&context);
@@ -579,9 +577,14 @@ std::string normalize_rtsp_url(const char *raw) {
 //                               Cancellation 实现
 // ============================================================================
 
-void Cancellation::expire_after(uint32_t milliseconds) noexcept {
-    deadline_ticks_.store(now_ticks() + static_cast<int64_t>(milliseconds) * nanoseconds_per_millisecond,
+void Cancellation::expire_at(Clock::time_point deadline) noexcept {
+    deadline_ticks_.store(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(deadline.time_since_epoch()).count(),
         std::memory_order_relaxed);
+}
+
+void Cancellation::expire_after(uint32_t milliseconds) noexcept {
+    expire_at(Clock::now() + std::chrono::milliseconds(milliseconds));
 }
 
 bool Cancellation::expired() const noexcept {
@@ -629,6 +632,18 @@ struct ProbeLimits {
     int analyzeduration_us;
     int probesize_bytes;
 };
+
+/**
+ * @brief 单枚音频包的最大字节数；超限丢包并落日志。
+ *
+ * 与 Go 侧音频通道的 `MaxPacketBytes: 8 * 1024` 对齐：原生若放行更大的包，
+ * 上层订阅会以 ERR_PACKET_TOO_LARGE 整条断开，反而把“声音没了”变成“通道没了”。
+ * 实测 G.711（160 B/20 ms）与 AAC（约 300 B/23 ms）都远小于此值。
+ */
+constexpr int max_audio_packet_bytes = 8192;
+
+/** @brief 音频 extradata（AAC 的 ASC / LATM 的 config）最大保留字节数 */
+constexpr size_t max_audio_extradata_bytes = 256;
 
 /** @brief 一次 open + find_stream_info 的产物。 */
 struct ProbeSession {
@@ -778,8 +793,14 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
                 const std::function<void(const Zhulong_packet_view &)> &consume,
                 const std::function<void(const Zhulong_packet_view &)> &consume_audio,
                 const std::function<void(const Media &)> &ready, uint64_t stream_id) {
-    // 设置建连超时；入口处仅判定取消，不伪造结果码
-    cancel.expire_after(options.open_timeout_ms);
+    // 打开阶段的**绝对**预算：音频降级只允许在这条预算内重开，绝不重新计时。
+    //
+    // Go 侧 Acquire 是同步阻塞的 CGO 调用，已把 ctx deadline 折叠进 open_timeout_ms
+    // （internal/engine/engine.go: convertStreamOptions）。原生若在降级分支里再来一次
+    // expire_after，就变成「原生最多花 2 × open_timeout_ms」，直接超出调用方预算——
+    // 现场表现是点开预览等了两倍超时才报错。
+    const auto open_deadline = Clock::now() + std::chrono::milliseconds(options.open_timeout_ms);
+    cancel.expire_at(open_deadline);
     throw_if_cancelled(cancel);
 
     Input input(cancel);
@@ -791,10 +812,19 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
     try {
         session = open_and_probe(input, url, options, cancel, stream_id, fast_limits, request_audio);
     } catch (const Failure &f) {
-        if (request_audio && !cancel.stopped.load(std::memory_order_relaxed) && f.status != Zhulong_ERR_CANCELLED) {
+        // 只有「IO 失败且预算还没花完」才值得换纯视频重开：
+        //   - SETUP 被拒在 FFmpeg 里就是 avformat_open_input 失败，映射为 IO；
+        //   - TIMEOUT 且 cancel 已过期 = 我们自己的 open 截止点到了，重试只会把
+        //     调用方多等一轮；
+        //   - UNSUPPORTED 是编码不支持，换纯视频也一样失败，重试只是白付一次握手
+        //     并把原因错记成“音频建连失败”，让现场排障跑偏。
+        const bool audio_fallback_worthwhile = f.status == Zhulong_ERR_IO &&
+                                               !cancel.stopped.load(std::memory_order_relaxed) &&
+                                               !cancel.expired();
+        if (request_audio && audio_fallback_worthwhile) {
             ZL_LOGW(stream_id, "nodes.capture", "rtsp_audio_open_failed rc=%d falling back to video-only", f.status);
             request_audio = false;
-            cancel.expire_after(options.open_timeout_ms);
+            // 注意：不调 expire_after——第二次握手只能消耗首次剩余的预算。
             input.reopen();
             session = open_and_probe(input, url, options, cancel, stream_id, fast_limits, false);
         } else {
@@ -816,7 +846,10 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
             probe_size_bytes, probe_analyze_duration_us);
         probe_fallback = true;
 
-        // 重连会重走 TEARDOWN + DESCRIBE + SETUP + PLAY，必须重新给足预算
+        // 重连会重走 TEARDOWN + DESCRIBE + SETUP + PLAY；兼容档探测比快档慢一个
+        // 数量级（1 MiB / 1 s），必须在完整预算下跑，否则 <late-probe> 这类相机
+        // 会被“预算不够”误判成不可用。这是既有补偿机制，与音频降级的取舍不同：
+        // 音频降级是**新增失败面**，只能消耗首次 open 的剩余预算。
         cancel.expire_after(options.open_timeout_ms);
         input.reopen();
         const ProbeLimits legacy_limits{legacy_probe_analyze_duration_us, legacy_probe_size_bytes};
@@ -885,8 +918,17 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
                 audio.channels = channels;
                 audio.time_base_num = a_stream->time_base.num;
                 audio.time_base_den = a_stream->time_base.den;
-                if (a_par->extradata_size > 0 && a_par->extradata_size <= 256) {
-                    audio.extradata.assign(a_par->extradata, a_par->extradata + a_par->extradata_size);
+                if (a_par->extradata_size > 0) {
+                    if (static_cast<size_t>(a_par->extradata_size) <= max_audio_extradata_bytes) {
+                        audio.extradata.assign(a_par->extradata, a_par->extradata + a_par->extradata_size);
+                    } else {
+                        // 刻意**不**因此把 has_audio 判成 0：G.711 本来就没有 extradata，
+                        // “降级成无声”的决定权在前端（缺 ASC 时 AudioDecoder 配置不出来）。
+                        // 但静默丢 config 会让“有音轨却没声音”既无日志也无错误码，
+                        // 因此至少把丢弃原因落一条日志。
+                        ZL_LOGW(stream_id, "nodes.capture", "rtsp_audio_extradata_too_large size=%d limit=%zu",
+                                a_par->extradata_size, max_audio_extradata_bytes);
+                    }
                 }
                 audio_stream = a_stream;
                 // 首次建流必可见的能力日志（AC-6：定位“这路到底有没有音频、是什么音频”）
@@ -961,7 +1003,7 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
             //    interrupt 就会看到已过期 deadline，把「下游慢」误判成「相机断流」。
             cancel.expire_after(options.idle_timeout_ms);
         } else if (consume_audio && audio.has_audio && audio_stream && packet->stream_index == audio_index && packet->size > 0) {
-            if (packet->size <= 8192) {
+            if (packet->size <= max_audio_packet_bytes) {
                 Zhulong_packet_view view{};
                 view.track_type = ZHULONG_TRACK_AUDIO;
                 view.codec = audio.codec;
@@ -978,7 +1020,8 @@ Video read_rtsp(const std::string &url, const Options &options, Cancellation &ca
 
                 consume_audio(view);
             } else {
-                ZL_LOGW(stream_id, "nodes.capture", "rtsp_audio_packet_too_large size=%d", packet->size);
+                ZL_LOGW(stream_id, "nodes.capture", "rtsp_audio_packet_too_large size=%d limit=%d",
+                        packet->size, max_audio_packet_bytes);
             }
             // ⚠️ 音频包不刷新空闲超时：空闲监测专用于视频活性
         }

@@ -164,6 +164,50 @@ void TestTimestampWrapAround() {
           "pts_us must seamlessly unwrap across 32-bit boundary");
 }
 
+/** @brief 源流缺 DTS 时必须打 DTS_SYNTHETIC，与视频路径同构 */
+void TestDtsSyntheticFlag() {
+    zhulong::AudioNormalizer normalizer;
+    normalizer.update_metadata(Zhulong_CODEC_PCMA, 8000, 1, 1, 8000);
+
+    const int64_t v_arr = 1000000;
+    auto out1 = normalizer.normalize(AudioPacket(0), true, v_arr, 0, 0, v_arr);
+    Check((out1.pkt_flags & ZHULONG_PKT_FLAG_DTS_SYNTHETIC) == 0,
+          "real dts must not be flagged synthetic");
+
+    Zhulong_packet_view no_dts = AudioPacket(160);
+    no_dts.has_dts = 0;
+    no_dts.dts = 0;
+    auto out2 = normalizer.normalize(no_dts, true, v_arr, 0, 0, v_arr + 20000);
+    Check((out2.pkt_flags & ZHULONG_PKT_FLAG_DTS_SYNTHETIC) != 0,
+          "missing dts must set ZHULONG_PKT_FLAG_DTS_SYNTHETIC");
+    Check(out2.dts_us == out2.pts_us, "audio dts_us is derived from pts");
+}
+
+/**
+ * @brief 首包缺 PTS 时锚点建在合成轴上，首枚真实 PTS 必须重锚而不是跳到绝对值
+ *
+ * 不重锚的后果：输出直接变成「真实 PTS + base」（用例里是 200s），
+ * 而单调保护只拦回拨、拦不住前跳，音频整场不再响。
+ */
+void TestReanchorOnFirstRealPts() {
+    zhulong::AudioNormalizer normalizer;
+    normalizer.update_metadata(Zhulong_CODEC_PCMA, 8000, 1, 1, 8000);
+
+    const int64_t v_arr = 1000000;
+    auto out1 = normalizer.normalize(AudioPacket(0, false, 160), true, v_arr, 0, 0, v_arr);
+    Check(out1.pts_us == 0, "synthetic anchor must start at zero");
+
+    // 1600000 ticks @ 1/8000 = 200s
+    auto out2 = normalizer.normalize(AudioPacket(1600000), true, v_arr, 0, 0, v_arr + 20000);
+    Check(out2.pts_us == 20000, "re-anchor must rebase on the first real pts");
+    Check((out2.pkt_flags & ZHULONG_PKT_FLAG_DISCONTINUITY) != 0,
+          "re-anchor must set ZHULONG_PKT_FLAG_DISCONTINUITY");
+
+    // 1600160 ticks = 200.02s，重锚后应只前进 20ms
+    auto out3 = normalizer.normalize(AudioPacket(1600160), true, v_arr, 0, 0, v_arr + 40000);
+    Check(out3.pts_us == 40000, "timeline must advance normally after re-anchor");
+}
+
 } // namespace
 
 int main() {
@@ -174,6 +218,8 @@ int main() {
     TestSyntheticPts();
     TestMonotonicityProtection();
     TestTimestampWrapAround();
+    TestDtsSyntheticFlag();
+    TestReanchorOnFirstRealPts();
     std::cout << "AudioNormalizer tests passed.\n";
     return 0;
 }

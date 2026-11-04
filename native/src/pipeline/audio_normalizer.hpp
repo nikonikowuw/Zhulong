@@ -13,7 +13,10 @@
  * 3. 边界鲁棒性：
  *    - 视频首帧未到（origin_ready == false）前到达的音频包一律丢弃并计数；
  *    - 缺失 PTS 时按音频格式与采样率合成递推时间戳，并置 ZHULONG_PKT_FLAG_TIMESTAMP_SYNTHETIC；
+ *    - 锚点若建在合成时间轴上（首包缺 PTS），首枚真实 PTS 到达时以它重锚一次，
+ *      绝不把输出推到「真实 PTS 的绝对值」——否则时间轴会前跳整场；
  *    - 检测视频 discontinuity generation 跳变时置 ZHULONG_PKT_FLAG_DISCONTINUITY；
+ *    - 源流缺少 DTS 时置 ZHULONG_PKT_FLAG_DTS_SYNTHETIC（dts_us 由 pts 合成）；
  *    - 强制单调性保护：若媒体 PTS 发生负向回退，标记 DISCONTINUITY 且绝不回拨时间轴。
  */
 
@@ -28,9 +31,6 @@ namespace zhulong {
 class AudioNormalizer {
 public:
     AudioNormalizer() = default;
-
-    /** @brief 重置全部归一化状态 */
-    void reset();
 
     /**
      * @brief 更新音频流元数据配置
@@ -75,6 +75,8 @@ private:
     int32_t time_base_den_{8000};
 
     bool anchor_established_{false};
+    /** 锚点是否取自真实 PTS（false = 建在合成时钟上，等待首枚真实 PTS 重锚一次） */
+    bool anchor_from_real_pts_{false};
     int64_t anchor_abs_us_{0};
     int64_t base_offset_us_{0};
 

@@ -1105,6 +1105,43 @@ void audio_idle_timeout_case(Zhulong_engine_h engine, const std::string &base) {
     CHECK(Zhulong_stream_release(engine, stream, 1) == Zhulong_OK);
 }
 
+/**
+ * @brief 音频降级不得刷新 open 预算（防「同步 CGO 调用超出调用方 ctx deadline」）
+ *
+ * /stall-open 永远不回 OPTIONS：第一次 open 只会在 open_timeout_ms 到点后以 TIMEOUT 失败。
+ * Go 侧 Acquire 已把 ctx deadline 折进 open_timeout_ms（engine.go convertStreamOptions），
+ * 原生若在音频降级分支里重新 expire_after，整条失败链就会花 2×open_timeout：
+ * 现场表现是「点开预览等两倍超时才报错」。这里直接量 acquire → FAILED 的墙钟。
+ */
+void audio_fallback_budget_case(Zhulong_engine_h engine, const std::string &base) {
+    Zhulong_stream_options options{};
+    options.transport = Zhulong_TRANSPORT_TCP;
+    options.open_timeout_ms = 1000;
+    options.idle_timeout_ms = 5000;
+
+    const auto started = Clock::now();
+    Zhulong_stream_id stream = 0;
+    CHECK(Zhulong_stream_acquire(engine, (base + "/stall-open").c_str(), &options, 1,
+                                 Zhulong_CONSUMER_PREVIEW, &stream) == Zhulong_OK);
+
+    wait_until([&] {
+        Zhulong_stream_status status{};
+        if (Zhulong_stream_get_status(engine, stream, &status) != Zhulong_OK) return false;
+        return status.state == Zhulong_STREAM_FAILED;
+    }, 5000ms);
+    const auto elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
+    std::cout << "  audio fallback budget: stream failed in " << elapsed_ms
+              << "ms (open_timeout=1000ms)\n";
+
+    Zhulong_stream_status status{};
+    CHECK(Zhulong_stream_get_status(engine, stream, &status) == Zhulong_OK);
+    CHECK(status.error == Zhulong_ERR_TIMEOUT);
+    // 修复前：1000 + 1000 ≈ 2000ms+；修复后：≈ 1000ms。留 800ms 余量吸收回环抖动。
+    CHECK(elapsed_ms < 1800);
+    CHECK(Zhulong_stream_release(engine, stream, 1) == Zhulong_OK);
+}
+
 int main(int argc, char **argv) {
     try {
         credentials_redaction_case();
@@ -1138,6 +1175,7 @@ int main(int argc, char **argv) {
         audio_broken_fallback_case(owner.engine, base);
         audio_info_lifecycle_case(owner.engine, base);
         audio_idle_timeout_case(owner.engine, base);
+        audio_fallback_budget_case(owner.engine, base);
         audio_startup_cost_case(owner.engine, base);
 
         // 起播归因日志必须真的产出：请求行（Sending:）与应答行（RTSP/1.）各至少一条，
