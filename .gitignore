@@ -73,6 +73,10 @@ pnpm-debug.log*
 board-cross-build.log
 board-host-pkg.log
 
+# Python 脚本的字节码缓存（scripts/*.py 会被压测/演练脚本以 importlib 互相导入）
+__pycache__/
+*.pyc
+
 # 前端构建产物与缓存
 webui/dist/
 dist/

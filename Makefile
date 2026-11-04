@@ -23,7 +23,7 @@ BINARY := $(BUILD_DIR)/Zhulong
 SWAG_VERSION := v1.16.6
 AIR ?= $(shell command -v air 2>/dev/null || (test -x "$$(go env GOPATH 2>/dev/null)/bin/air" && echo "$$(go env GOPATH)/bin/air") || echo air)
 
-.PHONY: all build go-build check frontend-install frontend-build frontend-check native-deps native-configure native-build native-test native-cross-build cross cross-board pkg-rk3568 sdk-install sdk-dist sdk-clean-check board-check api-docs go-check pkg-drift-check smoke run web-dev dev-backend dev-frontend dev
+.PHONY: all build go-build check frontend-install frontend-build frontend-check webui-dist-check native-deps native-configure native-build native-test native-cross-build cross cross-board pkg-rk3568 sdk-install sdk-dist sdk-clean-check board-check api-docs go-check pkg-drift-check smoke run web-dev dev-backend dev-frontend dev
 
 all: build
 
@@ -41,6 +41,17 @@ frontend-build: frontend-install
 	$(PNPM) --dir web run build
 	rm -rf internal/webui/dist
 	cp -r web/dist internal/webui/dist
+	@# `.keep` 是版本库为了留住 embed 目录而放的占位文件，`cp -r` 不会带过来。
+	@# 不补回去的话每次构建都会多出一条「deleted: .keep」，真正的改动就藏不住了。
+	@touch internal/webui/dist/.keep
+
+# 内嵌 SPA 新鲜度门禁：`web/dist` 与 `internal/webui/dist` 必须逐文件同内容。
+# 动机见 scripts/check_webui_dist.sh 头部；`web/dist` 不存在时只告警。
+#
+# 为什么单独立一个目标而不写成两处 `test -z`：`cross` 与 `cross-board`（后者会转调
+# 前者）都要用它，而 Makefile 里重复的判据会在一次修改后只剩一处是对的。
+webui-dist-check:
+	@bash scripts/check_webui_dist.sh
 
 # 前端门禁：格式 + lint + 类型检查（含在 build 的 tsc -b 中）+ 真实无头浏览器测试 + 生产构建。
 # 说明：`type-check` 与 `audit` 不是 web/package.json 里的 script。
@@ -153,10 +164,11 @@ native-cross-build:
 #    否则 shell 里遗留的 ZHULONG_INFERENCE_BACKEND=onnx 会经 NATIVE_BUILD 覆盖 rknn 选择，
 #    产出「编译成功但上板不推理」的产物。
 # ⚠️ 这些目标不重建前端：要发版先跑 `make frontend-build`，否则内嵌 SPA 是旧的。
+#    `webui-dist-check` 会把「忘了重建」变成硬失败，而不是带着旧控制台交叉编译。
 CROSS_TARGET ?=
 CROSS_BOARD ?= rk3568-rknn-rga
 
-cross:
+cross: webui-dist-check
 	@test -n "$(CROSS_TARGET)" || { \
 		echo "用法: make cross CROSS_TARGET=<档位名>；可用档位：" >&2; \
 		ls native/profiles/*.json | sed 's|.*/||;s|\.json$$||;s|^|  |' >&2; \
