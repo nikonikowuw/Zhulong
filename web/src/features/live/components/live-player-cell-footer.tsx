@@ -10,7 +10,6 @@ interface LivePlayerCellFooterProps {
   stats: StreamStats
   isMicro: boolean
   isMaximized: boolean
-  useMockCanvas: boolean
   /** 喇叭置灰（该路无音频 / 浏览器不支持该音频格式）。 */
   audioDisabled?: boolean
   /** 置灰时展示的说明文案（作为 title，禁用状态下用户也能知道原因）。 */
@@ -25,7 +24,6 @@ export function LivePlayerCellFooter({
   stats,
   isMicro,
   isMaximized,
-  useMockCanvas,
   audioDisabled = false,
   audioDisabledReason = null,
   onScreenshot,
@@ -34,20 +32,11 @@ export function LivePlayerCellFooter({
 }: LivePlayerCellFooterProps): React.JSX.Element {
   const { t } = useTranslation('live')
 
-  const displayedStats: StreamStats = useMockCanvas
-    ? {
-        fps: 25,
-        resolution: '1280x720',
-        bitrateKbps: 1536,
-        decoderMode: 'Mock',
-      }
-    : stats
-
   return (
     <div className='pointer-events-none absolute inset-x-2 bottom-2 z-20 flex items-center justify-between select-none'>
       {/* 左侧 OSD 胶囊：始终保持半透明常驻，hover 时更加清晰 */}
       <div className='pointer-events-auto opacity-75 transition-opacity duration-200 group-hover:opacity-100'>
-        <LiveStreamStats compact={isMicro} stats={displayedStats} />
+        <LiveStreamStats compact={isMicro} stats={stats} />
       </div>
 
       {/* 右侧动作控制胶囊：hover 时平滑淡入呈现 */}

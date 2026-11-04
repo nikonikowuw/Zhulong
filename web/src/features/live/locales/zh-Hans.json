@@ -49,7 +49,6 @@
   "fullscreen": "全屏显示",
   "exitFullscreen": "退出全屏",
   "closeStream": "关闭视频",
-  "toggleMockStream": "切换测试彩条/真实流",
   "cameraFallback": "摄像机 {{id}}",
   "networkError": "网络连接异常",
   "unrecognizedFace": "未登记",

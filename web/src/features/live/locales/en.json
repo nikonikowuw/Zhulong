@@ -49,7 +49,6 @@
   "fullscreen": "Fullscreen",
   "exitFullscreen": "Exit Fullscreen",
   "closeStream": "Close stream",
-  "toggleMockStream": "Toggle SMPTE / Live Stream",
   "cameraFallback": "Camera {{id}}",
   "networkError": "Network connection error",
   "unrecognizedFace": "Unregistered",

@@ -12,8 +12,6 @@ import {
   type ParsedPacket,
   type StreamType,
 } from '../types'
-import { LiveFaceOverlay } from './live-face-overlay'
-import { LivePersonOverlay } from './live-person-overlay'
 import {
   LivePlayer,
   type LivePlayerAudioStatus,
@@ -22,11 +20,6 @@ import {
 import { LivePlayerCellFooter } from './live-player-cell-footer'
 import { LivePlayerCellHeader } from './live-player-cell-header'
 import { LivePlayerEmptyCell } from './live-player-empty-cell'
-import { LiveVehicleOverlay } from './live-vehicle-overlay'
-import {
-  MockStreamCanvas,
-  type MockStreamCanvasRef,
-} from './mock-stream-canvas'
 
 interface LivePlayerCellProps {
   cell: LiveCellState
@@ -72,7 +65,6 @@ export const LivePlayerCell = memo(function LivePlayerCell({
   volume = 1,
 }: LivePlayerCellProps): React.JSX.Element {
   const { t } = useTranslation('live')
-  const [useMockCanvas, setUseMockCanvas] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
   /**
    * 是否已经出过首个画面。
@@ -92,7 +84,6 @@ export const LivePlayerCell = memo(function LivePlayerCell({
    */
   const [supportsWebCodecs] = useState(() => isWebCodecsSupported())
   const playerRef = useRef<LivePlayerRef | null>(null)
-  const mockCanvasRef = useRef<MockStreamCanvasRef | null>(null)
 
   // 单例单次订阅：数据包由 useStreamConnection 接收并分发给渲染器
   const handlePacket = useCallback((packet: ParsedPacket) => {
@@ -120,7 +111,7 @@ export const LivePlayerCell = memo(function LivePlayerCell({
     useStreamConnection({
       cameraId: cell.cameraId,
       streamType: cell.streamType,
-      enabled: !useMockCanvas && Boolean(cell.cameraId),
+      enabled: Boolean(cell.cameraId),
       onPacket: handlePacket,
     })
 
@@ -159,7 +150,7 @@ export const LivePlayerCell = memo(function LivePlayerCell({
    * 重连时即使没有错误文案也要保留遮罩（转圈本身就是反馈）。
    */
   const waitingText = ((): string | null => {
-    if (useMockCanvas || !supportsWebCodecs) return null
+    if (!supportsWebCodecs) return null
     if (status === 'connecting') return t('connecting')
     if (status === 'reconnecting') return errorMessage ?? ''
     if (status === 'connected' && !hasFirstFrame) {
@@ -183,11 +174,7 @@ export const LivePlayerCell = memo(function LivePlayerCell({
   )
 
   const handleScreenshot = () => {
-    if (useMockCanvas) {
-      mockCanvasRef.current?.screenshot(cell.cameraName)
-    } else {
-      playerRef.current?.screenshot(cell.cameraName)
-    }
+    playerRef.current?.screenshot(cell.cameraName)
   }
 
   const handleToggleMute = () => {
@@ -270,44 +257,18 @@ export const LivePlayerCell = memo(function LivePlayerCell({
 
       {/* 视频画面主体 */}
       <div className='relative h-full w-full'>
-        {useMockCanvas ? (
-          <>
-            <MockStreamCanvas
-              ref={mockCanvasRef}
-              cameraName={cell.cameraName}
-              streamType={cell.streamType}
-            />
-            {showAIOverlay && cell.cameraId && (
-              <>
-                <LivePersonOverlay
-                  cameraId={cell.cameraId}
-                  enabled={showAIOverlay}
-                />
-                <LiveFaceOverlay
-                  cameraId={cell.cameraId}
-                  enabled={showAIOverlay}
-                />
-                <LiveVehicleOverlay
-                  cameraId={cell.cameraId}
-                  enabled={showAIOverlay}
-                />
-              </>
-            )}
-          </>
-        ) : (
-          <LivePlayer
-            ref={playerRef}
-            cameraId={cell.cameraId}
-            streamType={cell.streamType}
-            showAIOverlay={showAIOverlay}
-            isMuted={cell.isMuted}
-            hasAudio={capabilityAudioAvailable}
-            volume={volume}
-            onAudioStatusChange={setAudioStatus}
-            onStatsChange={handlePlayerStatsChange}
-            onFirstFrame={handleFirstFrame}
-          />
-        )}
+        <LivePlayer
+          ref={playerRef}
+          cameraId={cell.cameraId}
+          streamType={cell.streamType}
+          showAIOverlay={showAIOverlay}
+          isMuted={cell.isMuted}
+          hasAudio={capabilityAudioAvailable}
+          volume={volume}
+          onAudioStatusChange={setAudioStatus}
+          onStatsChange={handlePlayerStatsChange}
+          onFirstFrame={handleFirstFrame}
+        />
       </div>
 
       {/* 状态与加载指示遮罩：连接中 / 重连中 / 已连上但首个画面还没出来 */}
@@ -324,7 +285,7 @@ export const LivePlayerCell = memo(function LivePlayerCell({
       )}
 
       {/* 异常错误提示遮罩 */}
-      {!useMockCanvas && status === 'error' && (
+      {status === 'error' && (
         <div className='absolute inset-0 z-10 flex flex-col items-center justify-center border border-rose-500/20 bg-neutral-950/90 p-4 text-center backdrop-blur-xs'>
           <div className='rounded-full bg-rose-500/15 p-2.5 text-rose-400 shadow-sm'>
             <RotateCcw className='h-5 w-5' />
@@ -350,8 +311,6 @@ export const LivePlayerCell = memo(function LivePlayerCell({
       <LivePlayerCellHeader
         cell={cell}
         isMicro={isMicro}
-        useMockCanvas={useMockCanvas}
-        onToggleMock={() => setUseMockCanvas(!useMockCanvas)}
         onSetStreamType={onSetStreamType}
         onClear={onClear}
       />
@@ -362,7 +321,6 @@ export const LivePlayerCell = memo(function LivePlayerCell({
         stats={stats}
         isMicro={isMicro}
         isMaximized={isMaximized}
-        useMockCanvas={useMockCanvas}
         onScreenshot={handleScreenshot}
         onToggleMute={handleToggleMute}
         onToggleMaximize={onToggleMaximize}

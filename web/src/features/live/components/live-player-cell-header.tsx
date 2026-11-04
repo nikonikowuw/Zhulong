@@ -1,4 +1,4 @@
-import { ChevronDown, Tv, X } from 'lucide-react'
+import { ChevronDown, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -14,8 +14,6 @@ import { type LiveCellState, type StreamType } from '../types'
 interface LivePlayerCellHeaderProps {
   cell: LiveCellState
   isMicro: boolean
-  useMockCanvas: boolean
-  onToggleMock: () => void
   onSetStreamType: (streamType: StreamType) => void
   onClear: () => void
 }
@@ -23,8 +21,6 @@ interface LivePlayerCellHeaderProps {
 export function LivePlayerCellHeader({
   cell,
   isMicro,
-  useMockCanvas,
-  onToggleMock,
   onSetStreamType,
   onClear,
 }: LivePlayerCellHeaderProps): React.JSX.Element {
@@ -101,25 +97,6 @@ export function LivePlayerCellHeader({
             HD
           </span>
         )}
-
-        {/* 彩条测试图切换 */}
-        <Button
-          variant='ghost'
-          size='icon'
-          title={t('toggleMockStream')}
-          className={cn(
-            isMicro ? 'h-5 w-5' : 'h-6 w-6',
-            useMockCanvas
-              ? 'bg-purple-500/25 text-purple-300 hover:bg-purple-500/35'
-              : 'text-white/70 hover:bg-white/15 hover:text-white'
-          )}
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggleMock()
-          }}
-        >
-          <Tv className={isMicro ? 'h-3 w-3' : 'h-3.5 w-3.5'} />
-        </Button>
 
         {/* 关闭当前视频 */}
         <Button

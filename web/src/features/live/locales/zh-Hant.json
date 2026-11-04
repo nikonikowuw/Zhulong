@@ -49,7 +49,6 @@
   "fullscreen": "全螢幕顯示",
   "exitFullscreen": "結束全螢幕",
   "closeStream": "關閉視訊",
-  "toggleMockStream": "切換測試彩條/真實串流",
   "cameraFallback": "攝影機 {{id}}",
   "networkError": "網路連線異常",
   "unrecognizedFace": "未登記",
