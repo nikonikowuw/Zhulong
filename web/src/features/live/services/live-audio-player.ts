@@ -73,9 +73,34 @@ const UNMAPPED_HOLD_MS = 100
 /** 环形缓冲采样率未知时的兜底输出采样率（绝大多数浏览器是 48000）。 */
 const FALLBACK_SAMPLE_RATE = 48_000
 
+/**
+ * 一帧音频「真正入环」时会话快照。
+ *
+ * 存在的理由只有一个：音画同步是**跨模块**的观测量（音频入环时刻 vs 视频绘制时刻），
+ * 任何一侧都拿不到全貌。播放器不自己算偏差，只把事实报出来，由测量方（浏览器里的
+ * 同步实测用例、现场诊断脚本）把两边拼起来。
+ */
+export interface AudioScheduleEvent {
+  /** 该帧在视频呈现时间轴上的 PTS（微秒）。 */
+  ptsUs: number
+  /** 该帧**应当开始出声**的墙钟时刻（毫秒，`performance.now()` 域）。 */
+  startDueMs: number
+  /** 本次入环时的墙钟时刻（毫秒）。 */
+  nowMs: number
+  /** 该帧是否为一条新时间轴的首帧（含 {@link PRE_ROLL_MS} 预滚）。 */
+  reanchored: boolean
+}
+
 export interface LiveAudioPlayerOptions {
   /** 拉取当前视频呈现时钟；返回 null 表示视频尚未建立映射。 */
   getClock: () => PresentationClockSnapshot | null
+  /**
+   * 观测钩子：每帧真正入环时报告一次（默认无操作）。
+   *
+   * 只在**入环**时报告，不报告被丢弃/暂存的帧 —— 那些帧不会出声，报出来只会让
+   * 「应该有声音的时刻」里混进一堆不存在的样本。
+   */
+  onScheduled?: (event: AudioScheduleEvent) => void
   /** 默认音量 0..1（不持久化）。 */
   volume?: number
   /**
@@ -263,7 +288,9 @@ export function createLiveAudioPlayer(
   function deliver(
     pcm: Float32Array,
     inputRate: number,
-    startDueMs: number
+    startDueMs: number,
+    ptsUs: number,
+    reanchored: boolean
   ): void {
     if (!node) return
     // startDueMs 是墙钟时刻，worklet 要的是**输出时间轴的绝对帧号**：
@@ -279,6 +306,12 @@ export function createLiveAudioPlayer(
     nextFrameCursor =
       startDueFrame + Math.round((pcm.length / inputRate) * outputRate)
     stats.played++
+    options.onScheduled?.({
+      ptsUs,
+      startDueMs,
+      nowMs: now(),
+      reanchored,
+    })
   }
 
   /** 清掉暂存队列里超时（> {@link UNMAPPED_HOLD_MS}）的帧。 */
@@ -311,10 +344,11 @@ export function createLiveAudioPlayer(
     pcm: Float32Array,
     inputRate: number,
     durationMs: number,
-    wall: number
+    wall: number,
+    ptsUs: number
   ): void {
     const startDue = wall + PRE_ROLL_MS
-    deliver(pcm, inputRate, startDue)
+    deliver(pcm, inputRate, startDue, ptsUs, true)
     endDueMs = startDue + durationMs
   }
 
@@ -342,27 +376,27 @@ export function createLiveAudioPlayer(
       // 继续投递只会让延迟单向累积，然后一次性爆掉。
       stats.droppedAhead++
       reanchor()
-      beginTimeline(pcm, inputRate, durationMs, wall)
+      beginTimeline(pcm, inputRate, durationMs, wall, frame.ptsUs)
       return
     }
 
     if (endDueMs === null) {
       // 首包（或刚重锚过）：没有播放位置可比较，直接以本帧起播。
-      beginTimeline(pcm, inputRate, durationMs, wall)
+      beginTimeline(pcm, inputRate, durationMs, wall, frame.ptsUs)
       return
     }
 
     if (endDueMs + durationMs > wall + RING_HIGH_WATER_MS) {
       // 环深超限：整段重锚而不是逐帧丢旧（理由见 RING_HIGH_WATER_MS 注释）。
       reanchor()
-      beginTimeline(pcm, inputRate, durationMs, wall)
+      beginTimeline(pcm, inputRate, durationMs, wall, frame.ptsUs)
       return
     }
 
     // 正常：接着上一帧的尾部排下去。已落后于墙钟（欠载已发生）就从现在另起，
     // 否则延迟会一帧一帧地累积下去。
     const startDue = Math.max(endDueMs, wall)
-    deliver(pcm, inputRate, startDue)
+    deliver(pcm, inputRate, startDue, frame.ptsUs, false)
     endDueMs = startDue + durationMs
   }
 
@@ -379,7 +413,13 @@ export function createLiveAudioPlayer(
       // 源流时间轴刚跳变（DISCONTINUITY）：旧时钟映射对新包已经没意义，
       // 直接以本包建立新时间轴 —— 既不看陈旧、也不看超前，否则重锚帧本身
       // 会被它触发的那次跳变判定成「陈旧」然后丢掉，等于永远等不到新起点。
-      beginTimeline(pcm, inputRate, (pcm.length / inputRate) * 1000, now())
+      beginTimeline(
+        pcm,
+        inputRate,
+        (pcm.length / inputRate) * 1000,
+        now(),
+        frame.ptsUs
+      )
       return
     }
 

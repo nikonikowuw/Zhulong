@@ -4,6 +4,7 @@ import {
   AUDIO_WORKLET_PROCESSOR_NAME,
   audioDueMs,
   createLiveAudioPlayer,
+  type AudioScheduleEvent,
   type PresentationClockSnapshot,
 } from './live-audio-player'
 
@@ -634,6 +635,74 @@ describe('createLiveAudioPlayer · suspended 期间的投递游标', () => {
         expect(frames[i]).toBeGreaterThan(frames[i - 1])
       }
       expect(frames[1] - frames[0]).toBe(960)
+    } finally {
+      await player.close()
+    }
+  })
+})
+
+describe('onScheduled 观测钩子', () => {
+  let clock: ReturnType<typeof createClock>
+
+  beforeEach(() => {
+    clock = createClock()
+    installFakes()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('每帧入环报告一次：起播墙钟、PTS、是否重锚', async () => {
+    const events: AudioScheduleEvent[] = []
+    const player = createLiveAudioPlayer({
+      getClock: () => snapshot(1000, 0, 100),
+      now: clock.now,
+      onScheduled: (event) => events.push(event),
+    })
+    try {
+      await player.start()
+
+      clock.set(1000)
+      player.push(makeFrame(0), pcm(), 8000)
+      // 首帧走 beginTimeline：起播 = now + PRE_ROLL(120)
+      expect(events).toHaveLength(1)
+      expect(events[0]).toMatchObject({
+        ptsUs: 0,
+        startDueMs: 1120,
+        reanchored: true,
+      })
+
+      clock.set(1030)
+      player.push(makeFrame(20_000), pcm(), 8000)
+      expect(events).toHaveLength(2)
+      expect(events[1]).toMatchObject({ ptsUs: 20_000, reanchored: false })
+      // 顺排：接在上一帧尾部，20 ms
+      expect(events[1].startDueMs).toBe(events[0].startDueMs + 20)
+      expect(events[1].nowMs).toBe(1030)
+    } finally {
+      await player.close()
+    }
+  })
+
+  it('被丢弃的帧不产生事件（否则“应当出声的时刻”里会混进不存在的样本）', async () => {
+    const events: AudioScheduleEvent[] = []
+    const player = createLiveAudioPlayer({
+      getClock: () => snapshot(10_000, 0, 100),
+      now: clock.now,
+      onScheduled: (event) => events.push(event),
+    })
+    try {
+      await player.start()
+      clock.set(10_000)
+      player.push(makeFrame(20_000), pcm(), 8000)
+      const before = events.length
+
+      // 落后 250 ms 以上：陈旧丢弃
+      clock.set(11_000)
+      player.push(makeFrame(20_000), pcm(), 8000)
+      expect(events).toHaveLength(before)
+      expect(player.stats.droppedStale).toBeGreaterThan(0)
     } finally {
       await player.close()
     }
