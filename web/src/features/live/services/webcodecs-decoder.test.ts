@@ -193,6 +193,133 @@ describe('StreamDecoder 重同步语义', () => {
     }
   })
 
+  it('prefer-hardware 被拒时回退 no-preference：没有硬件解码器也必须出画', () => {
+    // 实测（无头 Chromium / 纯软件桌面）：`prefer-hardware` 不是「软降级」而是让
+    // configure() 直接抛 Unsupported configuration。预览宁可软件解码，也不能黑屏。
+    class HardwareRejectingDecoder {
+      static instances: HardwareRejectingDecoder[] = []
+      state = 'unconfigured'
+      decodeQueueSize = 0
+      readonly accepted: VideoDecoderConfig[] = []
+
+      constructor(_callbacks: VideoDecoderInit) {
+        HardwareRejectingDecoder.instances.push(this)
+      }
+
+      configure(config: VideoDecoderConfig): void {
+        if (config.hardwareAcceleration === 'prefer-hardware') {
+          throw new DOMException(
+            'Unsupported configuration',
+            'NotSupportedError'
+          )
+        }
+        this.accepted.push(config)
+        this.state = 'configured'
+      }
+
+      decode(_chunk: EncodedVideoChunk): void {
+        if (this.state !== 'configured')
+          throw new Error('decoder not configured')
+      }
+
+      reset(): void {
+        this.state = 'unconfigured'
+      }
+
+      close(): void {
+        this.state = 'closed'
+      }
+    }
+
+    class FakeEncodedVideoChunk {
+      constructor(_init: EncodedVideoChunkInit) {}
+    }
+
+    vi.stubGlobal('VideoDecoder', HardwareRejectingDecoder)
+    vi.stubGlobal('EncodedVideoChunk', FakeEncodedVideoChunk)
+    HardwareRejectingDecoder.instances = []
+
+    const decoder = new StreamDecoder({ onFrame: () => {} })
+    try {
+      expect(decoder.decode(packet({ isKeyFrame: true, ptsUs: 0 }))).toBe(true)
+      const instance = HardwareRejectingDecoder.instances[0]
+      expect(instance.accepted).toHaveLength(1)
+      expect(instance.accepted[0].hardwareAcceleration).toBe('no-preference')
+      // 回退成功不是错误：报错计数会让人误判成「解码器坏了」。
+      expect(decoder.getStats().errors).toBe(0)
+      expect(decoder.isSkipping()).toBe(false)
+    } finally {
+      decoder.close()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('Chrome 式的异步「Unsupported configuration」也会降级硬件偏好，且不无限重试', () => {
+    // 真实 Chrome 对不支持的配置**不抛同步异常**：configure() 接受，随后 error 回调
+    // 报 Unsupported configuration。不处理这条路径就会「同一份配置反复重建解码器」。
+    class AsyncRejectingDecoder {
+      static instances: AsyncRejectingDecoder[] = []
+      state = 'unconfigured'
+      decodeQueueSize = 0
+      readonly configs: VideoDecoderConfig[] = []
+
+      constructor(private readonly callbacks: VideoDecoderInit) {
+        AsyncRejectingDecoder.instances.push(this)
+      }
+
+      configure(config: VideoDecoderConfig): void {
+        this.configs.push(config)
+        this.state = 'configured'
+      }
+
+      decode(_chunk: EncodedVideoChunk): void {
+        this.state = 'closed'
+        this.callbacks.error(
+          new DOMException(
+            'Unsupported configuration. Check isConfigSupported() prior to calling configure().',
+            'OperationError'
+          )
+        )
+      }
+
+      reset(): void {
+        this.state = 'unconfigured'
+      }
+
+      close(): void {
+        this.state = 'closed'
+      }
+    }
+
+    class FakeEncodedVideoChunk {
+      constructor(_init: EncodedVideoChunkInit) {}
+    }
+
+    vi.stubGlobal('VideoDecoder', AsyncRejectingDecoder)
+    vi.stubGlobal('EncodedVideoChunk', FakeEncodedVideoChunk)
+    AsyncRejectingDecoder.instances = []
+
+    const decoder = new StreamDecoder({ onFrame: () => {} })
+    try {
+      expect(decoder.decode(packet({ isKeyFrame: true, ptsUs: 0 }))).toBe(true)
+      expect(AsyncRejectingDecoder.instances).toHaveLength(2)
+      expect(
+        AsyncRejectingDecoder.instances[0].configs[0].hardwareAcceleration
+      ).toBe('prefer-hardware')
+      // 降级后仍以关键帧重建，不进入 skipping 死等。
+      expect(decoder.decode(packet({ isKeyFrame: true, ptsUs: 40_000 }))).toBe(
+        true
+      )
+      // 第二个解码器必须换配置，而不是把 prefer-hardware 再送一遍。
+      expect(
+        AsyncRejectingDecoder.instances[1].configs[0].hardwareAcceleration
+      ).toBe('no-preference')
+    } finally {
+      decoder.close()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('拒绝未知 codec，避免以 H.264 配置送入解码器', () => {
     const decoder = new StreamDecoder({ onFrame: () => {} })
     try {

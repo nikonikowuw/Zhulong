@@ -164,6 +164,19 @@ export function getWebCodecsSupportIssue(): WebCodecsSupportIssue {
  * x265 Main profile 的原始值是 0x60000000，标准写法是 `hvc1.1.6.L93.B0`。
  * 直接输出原始值会得到 `hvc1.1.60000000...`，浏览器解析出的 profile 与实际不符。
  */
+/**
+ * 判断「这条错误是不是环境压根不支持这套配置」。
+ *
+ * 只认这两种形态（Chrome/Firefox 都以异步错误回调报告）：
+ *   - `NotSupportedError`；
+ *   - 文案含 `Unsupported configuration`（Chrome 原文，带 isConfigSupported 提示）。
+ * 把真正的解码错误也当成配置问题，会让每次解码失败都白建一个软件解码器。
+ */
+function isUnsupportedConfigError(error: DOMException | Error): boolean {
+  if (error.name === 'NotSupportedError') return true
+  return /unsupported configuration/i.test(error.message ?? '')
+}
+
 export function reverseBits32(value: number): number {
   let v = value >>> 0
   v = ((v & 0x55555555) << 1) | ((v >>> 1) & 0x55555555)
@@ -295,6 +308,15 @@ export class StreamDecoder {
 
   /** configure 之后已成功送入解码器的帧数，仅用于诊断输出。 */
   private framesSinceConfigure = 0
+  /**
+   * 当前的硬件加速偏好。
+   *
+   * 起始值 prefer-hardware；一旦环境以「配置不支持」拒绝，就永久降为 no-preference。
+   * 为什么要有这个状态：Chrome 的 `configure()` **不会**为不支持的配置同步抛错，而是
+   * 先接受、再异步回调 `Unsupported configuration…`。只靠 try/catch 兜不住，必须
+   * 在错误回调里降级，否则会陷入「用同一份配置反复重建解码器」的死循环。
+   */
+  private hardwareAcceleration: HardwareAcceleration = 'prefer-hardware'
   /**
    * 解码队列首次超阈值的单调时钟；null 表示当前未超阈值。
    * 只有持续超过 CONGESTION_SUSTAINED_MS 才认定过载。
@@ -699,56 +721,79 @@ export class StreamDecoder {
       return false
     }
 
-    const config = this.buildConfig(codecStr)
     this.countDiagnostic('configureAttempts')
-    try {
-      this.decoder.configure(config)
-      this.configuredCodec = codecStr
-      this.isConfigured = true
-      this.needsReconfigure = false
-      this.framesSinceConfigure = 0
-      this.congestionSinceMs = null
-      this.configuredAtMs = performance.now()
-      return true
-    } catch (err) {
-      this.stats.errors++
-      this.isConfigured = false
-      this.skipping = frameClass !== 'idr'
-      this.configuredAtMs = null
-      logWebCodecsDiagnostic('error', 'decoder_configure_failed', {
-        seq: packet.seq,
-        gopId: packet.gopId,
-        codec: packet.codec,
-        codecString: codecStr,
-        frameClass: packet.frameClass,
-        keyFrame: packet.isKeyFrame,
-        keyFlag: (packet.flags & WIRE_FLAG_KEYFRAME) !== 0,
-        hasInjectedParamSets: packet.hasInjectedParamSets,
-        errorName: err instanceof Error ? err.name : 'UnknownError',
-        errorMessage: err instanceof Error ? err.message : String(err),
-      })
-      if (this.onError && err instanceof Error) {
-        this.onError(err)
+    let lastError: unknown = null
+    for (const config of this.buildConfigs(codecStr)) {
+      try {
+        this.decoder.configure(config)
+        this.configuredCodec = codecStr
+        this.isConfigured = true
+        this.needsReconfigure = false
+        this.framesSinceConfigure = 0
+        this.congestionSinceMs = null
+        this.configuredAtMs = performance.now()
+        return true
+      } catch (err) {
+        lastError = err
       }
-      return false
     }
+
+    this.stats.errors++
+    this.isConfigured = false
+    this.skipping = frameClass !== 'idr'
+    this.configuredAtMs = null
+    logWebCodecsDiagnostic('error', 'decoder_configure_failed', {
+      seq: packet.seq,
+      gopId: packet.gopId,
+      codec: packet.codec,
+      codecString: codecStr,
+      frameClass: packet.frameClass,
+      keyFrame: packet.isKeyFrame,
+      keyFlag: (packet.flags & WIRE_FLAG_KEYFRAME) !== 0,
+      hasInjectedParamSets: packet.hasInjectedParamSets,
+      errorName: lastError instanceof Error ? lastError.name : 'UnknownError',
+      errorMessage:
+        lastError instanceof Error ? lastError.message : String(lastError),
+    })
+    if (this.onError && lastError instanceof Error) {
+      this.onError(lastError)
+    }
+    return false
   }
 
-  private buildConfig(codecStr: string): AnnexBDecoderConfig {
-    const config: AnnexBDecoderConfig = {
-      codec: codecStr,
-      optimizeForLatency: true,
-      hardwareAcceleration: 'prefer-hardware',
+  /**
+   * 构造候选解码配置，按优先级排列。
+   *
+   * 为什么要有第二个候选：`hardwareAcceleration: 'prefer-hardware'` 在**天生没有**
+   * 硬件解码器的环境里不是「回落到软件」而是直接让 `configure()` 抛
+   * `Unsupported configuration` —— 实测无头 Chromium、纯软件桌面与部分 Android
+   * WebView 都是这个行为。预览宁可用软件解码出画，也不能因为「没有硬件」而黑屏；
+   * 这条路径是纯降级，硬件可用时第一个候选就成功，不影响正常机器的功耗表现。
+   */
+  private buildConfigs(codecStr: string): AnnexBDecoderConfig[] {
+    const build = (
+      hardwareAcceleration: HardwareAcceleration
+    ): AnnexBDecoderConfig => {
+      const config: AnnexBDecoderConfig = {
+        codec: codecStr,
+        optimizeForLatency: true,
+        hardwareAcceleration,
+      }
+      // ⚠️ 规范中 AvcDecoderConfig.format 默认是 "avc"（AVCC 长度前缀），
+      // 而我们送的是 Annex B（起始码分隔）。Chrome 有启发式容错，Safari 严格按规范
+      // 实现会直接 DecodingError；显式声明是唯一可靠做法。HEVC 同理。
+      if (codecStr.startsWith('avc1') || codecStr.startsWith('avc3')) {
+        config.avc = { format: 'annexb' }
+      } else if (codecStr.startsWith('hvc1') || codecStr.startsWith('hev1')) {
+        config.hevc = { format: 'annexb' }
+      }
+      return config
     }
-    // ⚠️ 规范中 AvcDecoderConfig.format 默认是 "avc"（AVCC 长度前缀），
-    // 而我们送的是 Annex B（起始码分隔）。Chrome 有启发式容错，Safari 严格按规范
-    // 实现会直接 DecodingError；显式声明是唯一可靠做法。HEVC 同理。
-    if (codecStr.startsWith('avc1') || codecStr.startsWith('avc3')) {
-      config.avc = { format: 'annexb' }
-    } else if (codecStr.startsWith('hvc1') || codecStr.startsWith('hev1')) {
-      config.hevc = { format: 'annexb' }
-    }
-    return config
+
+    const preferred = this.hardwareAcceleration
+    const fallback: HardwareAcceleration =
+      preferred === 'no-preference' ? 'prefer-software' : 'no-preference'
+    return [build(preferred), build(fallback)]
   }
 
   /**
@@ -807,6 +852,14 @@ export class StreamDecoder {
     error: DOMException | Error,
     source: 'async' | 'decode'
   ): void {
+    if (
+      isUnsupportedConfigError(error) &&
+      this.hardwareAcceleration !== 'no-preference'
+    ) {
+      // 这个环境没有可用的硬件 H.264/H.265 解码器（无头 Chromium、纯软件桌面、
+      // 部分 WebView）。软件解码出画远好过黑屏，且不必每次都再试一遍硬件。
+      this.hardwareAcceleration = 'no-preference'
+    }
     this.stats.errors++
     this.stats.rebuilds++
     logWebCodecsDiagnostic('error', 'decoder_error', {
