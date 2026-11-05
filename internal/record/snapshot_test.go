@@ -35,7 +35,11 @@ type fakeSnapshotProvider struct {
 	delay time.Duration
 }
 
-func (p *fakeSnapshotProvider) Snapshot(_ context.Context, cameraID string, options engine.SnapshotOptions) ([]engine.SnapshotImage, error) {
+func (p *fakeSnapshotProvider) Snapshot(
+	_ context.Context,
+	cameraID string,
+	options engine.SnapshotOptions,
+) ([]engine.SnapshotImage, error) {
 	if p.delay > 0 {
 		time.Sleep(p.delay)
 	}
@@ -231,6 +235,33 @@ func TestSnapshotStoreStopDrainsQueue(t *testing.T) {
 	}
 }
 
+// TestSnapshotStoreRejectsEnqueueAfterStop 钉住「停机后不得再入队」。
+//
+// 只靠 select 里的 <-s.stop 判定是不够的：队列有空位时两个 case 同时就绪，
+// Go 会随机选一个，于是 Stop 之后仍可能入队成功，而 worker 已经退出 ——
+// 记录里就留下一条永不落盘的路径。
+func TestSnapshotStoreRejectsEnqueueAfterStop(t *testing.T) {
+	root := t.TempDir()
+	store := record.NewSnapshotStore(
+		&fakeSnapshotProvider{},
+		&fakeMediaRoot{root: root},
+		&fakeGate{allow: true},
+		85,
+		zap.NewNop(),
+	)
+	store.Start()
+	store.Stop()
+	store.Stop() // 幂等：重复 Stop 不得 panic 或阻塞
+
+	job := record.NewSnapshotJobForTest("cam-01", nil,
+		[]record.SnapshotOutputForTest{{BoxIndex: -1, RelPath: "snapshots/cam-01/2026-10-20/late.jpg"}})
+	for i := 0; i < 64; i++ {
+		if store.Enqueue(job) {
+			t.Fatalf("enqueue #%d accepted after Stop; the job would never be written", i)
+		}
+	}
+}
+
 func TestSnapshotStoreUnavailableWhenDependenciesMissing(t *testing.T) {
 	store := record.NewSnapshotStore(nil, nil, nil, 85, zap.NewNop())
 	if store.Available() {
@@ -262,15 +293,18 @@ func TestServiceDoesNotWriteSnapshotsWhenRecordBatchInsertFails(t *testing.T) {
 			{Box: [4]float64{0.1, 0.1, 0.5, 0.8}, Label: "person", Score: 0.9},
 		},
 	}
-	if err := svc.ProcessInferenceResult(context.Background(), res); err != nil {
-		t.Fatalf("ProcessInferenceResult: %v", err)
+	// 写库失败必须上抛：调用方（StreamHub）会连同 camera_id 记一条 Warn，
+	// 这比 record 域内部悄悄记一行更有用。
+	err := svc.ProcessInferenceResult(context.Background(), res)
+	if err == nil {
+		t.Fatal("expected persistence error for unknown algorithm foreign key")
 	}
 
 	if provider.snapshotCalls() != 0 {
 		t.Fatalf("snapshot provider called despite failed record batch: %d", provider.snapshotCalls())
 	}
-	if _, err := os.Stat(filepath.Join(root, "snapshots")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("unexpected snapshot output after failed record batch, err=%v", err)
+	if _, statErr := os.Stat(filepath.Join(root, "snapshots")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unexpected snapshot output after failed record batch, err=%v", statErr)
 	}
 }
 

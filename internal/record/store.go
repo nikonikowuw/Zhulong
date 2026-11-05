@@ -19,6 +19,10 @@ const (
 	tableCaptures     = "captures"
 )
 
+// batchInsertSize 是单条 INSERT 多值的行数上限。SQLite 的变量上限是 32766，
+// 100 行足够摊薄事务开销，又不会让单条语句过长。
+const batchInsertSize = 100
+
 // Store provides persistence operations for perception and alarm records.
 type Store struct {
 	dbProvider database.DBProvider
@@ -86,6 +90,19 @@ func listInReadSnapshot[T any](
 	return items, total, nil
 }
 
+// normalizeTimestamps 把可空的写入时间补成 UTC：零值表示「现在就写」，
+// 非零值必须归一成 UTC，否则 SQLite 里会混进本地时区的时间戳。
+// 抽成一个函数是因为三张表 × 单条/批量共六处都走同一规则。
+func normalizeTimestamps(capturedAt, createdAt, now time.Time) (time.Time, time.Time) {
+	if capturedAt.IsZero() {
+		capturedAt = now
+	}
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	return capturedAt.UTC(), createdAt.UTC()
+}
+
 // =========================================================================
 // Recognition Operations
 // =========================================================================
@@ -99,50 +116,22 @@ func (s *Store) CreateRecognition(ctx context.Context, rec *Recognition) error {
 	if err != nil {
 		return err
 	}
-	if rec.CapturedAt.IsZero() {
-		rec.CapturedAt = time.Now().UTC()
-	} else {
-		rec.CapturedAt = rec.CapturedAt.UTC()
-	}
-	if rec.CreatedAt.IsZero() {
-		rec.CreatedAt = time.Now().UTC()
-	} else {
-		rec.CreatedAt = rec.CreatedAt.UTC()
-	}
+	rec.CapturedAt, rec.CreatedAt = normalizeTimestamps(rec.CapturedAt, rec.CreatedAt, time.Now().UTC())
 	return gorm.G[Recognition](db).Create(ctx, rec)
 }
 
 // CreateRecognitionBatch inserts multiple recognition records in a batch.
 func (s *Store) CreateRecognitionBatch(ctx context.Context, recs []*Recognition) error {
-	if len(recs) == 0 {
-		return nil
-	}
-	db, err := s.db(ctx)
-	if err != nil {
-		return err
-	}
 	valid := make([]*Recognition, 0, len(recs))
 	now := time.Now().UTC()
 	for _, r := range recs {
 		if r == nil {
 			continue
 		}
-		if r.CapturedAt.IsZero() {
-			r.CapturedAt = now
-		} else {
-			r.CapturedAt = r.CapturedAt.UTC()
-		}
-		if r.CreatedAt.IsZero() {
-			r.CreatedAt = now
-		} else {
-			r.CreatedAt = r.CreatedAt.UTC()
-		}
+		r.CapturedAt, r.CreatedAt = normalizeTimestamps(r.CapturedAt, r.CreatedAt, now)
 		valid = append(valid, r)
 	}
-	if len(valid) == 0 {
-		return nil
-	}
-	return gorm.G[*Recognition](db).CreateInBatches(ctx, &valid, 100)
+	return s.createInBatches(ctx, valid)
 }
 
 // ListRecognitions returns filtered and paginated recognition records.
@@ -203,50 +192,22 @@ func (s *Store) CreateAlarm(ctx context.Context, alarm *Alarm) error {
 	if err != nil {
 		return err
 	}
-	if alarm.CapturedAt.IsZero() {
-		alarm.CapturedAt = time.Now().UTC()
-	} else {
-		alarm.CapturedAt = alarm.CapturedAt.UTC()
-	}
-	if alarm.CreatedAt.IsZero() {
-		alarm.CreatedAt = time.Now().UTC()
-	} else {
-		alarm.CreatedAt = alarm.CreatedAt.UTC()
-	}
+	alarm.CapturedAt, alarm.CreatedAt = normalizeTimestamps(alarm.CapturedAt, alarm.CreatedAt, time.Now().UTC())
 	return gorm.G[Alarm](db).Create(ctx, alarm)
 }
 
 // CreateAlarmBatch inserts multiple alarm records in a batch.
 func (s *Store) CreateAlarmBatch(ctx context.Context, alarms []*Alarm) error {
-	if len(alarms) == 0 {
-		return nil
-	}
-	db, err := s.db(ctx)
-	if err != nil {
-		return err
-	}
 	valid := make([]*Alarm, 0, len(alarms))
 	now := time.Now().UTC()
 	for _, a := range alarms {
 		if a == nil {
 			continue
 		}
-		if a.CapturedAt.IsZero() {
-			a.CapturedAt = now
-		} else {
-			a.CapturedAt = a.CapturedAt.UTC()
-		}
-		if a.CreatedAt.IsZero() {
-			a.CreatedAt = now
-		} else {
-			a.CreatedAt = a.CreatedAt.UTC()
-		}
+		a.CapturedAt, a.CreatedAt = normalizeTimestamps(a.CapturedAt, a.CreatedAt, now)
 		valid = append(valid, a)
 	}
-	if len(valid) == 0 {
-		return nil
-	}
-	return gorm.G[*Alarm](db).CreateInBatches(ctx, &valid, 100)
+	return s.createInBatches(ctx, valid)
 }
 
 // ListAlarms returns filtered and paginated alarm records.
@@ -301,50 +262,34 @@ func (s *Store) CreateCapture(ctx context.Context, cap *Capture) error {
 	if err != nil {
 		return err
 	}
-	if cap.CapturedAt.IsZero() {
-		cap.CapturedAt = time.Now().UTC()
-	} else {
-		cap.CapturedAt = cap.CapturedAt.UTC()
-	}
-	if cap.CreatedAt.IsZero() {
-		cap.CreatedAt = time.Now().UTC()
-	} else {
-		cap.CreatedAt = cap.CreatedAt.UTC()
-	}
+	cap.CapturedAt, cap.CreatedAt = normalizeTimestamps(cap.CapturedAt, cap.CreatedAt, time.Now().UTC())
 	return gorm.G[Capture](db).Create(ctx, cap)
 }
 
 // CreateCaptureBatch inserts multiple capture records in a batch.
 func (s *Store) CreateCaptureBatch(ctx context.Context, caps []*Capture) error {
-	if len(caps) == 0 {
-		return nil
-	}
-	db, err := s.db(ctx)
-	if err != nil {
-		return err
-	}
 	valid := make([]*Capture, 0, len(caps))
 	now := time.Now().UTC()
 	for _, c := range caps {
 		if c == nil {
 			continue
 		}
-		if c.CapturedAt.IsZero() {
-			c.CapturedAt = now
-		} else {
-			c.CapturedAt = c.CapturedAt.UTC()
-		}
-		if c.CreatedAt.IsZero() {
-			c.CreatedAt = now
-		} else {
-			c.CreatedAt = c.CreatedAt.UTC()
-		}
+		c.CapturedAt, c.CreatedAt = normalizeTimestamps(c.CapturedAt, c.CreatedAt, now)
 		valid = append(valid, c)
 	}
-	if len(valid) == 0 {
+	return s.createInBatches(ctx, valid)
+}
+
+// createInBatches 是批量写入的唯一入口：空集合直接返回，避免为一个空事务去取连接。
+func (s *Store) createInBatches[T any](ctx context.Context, rows []*T) error {
+	if len(rows) == 0 {
 		return nil
 	}
-	return gorm.G[*Capture](db).CreateInBatches(ctx, &valid, 100)
+	db, err := s.db(ctx)
+	if err != nil {
+		return err
+	}
+	return gorm.G[*T](db).CreateInBatches(ctx, &rows, batchInsertSize)
 }
 
 // ListCaptures returns filtered and paginated capture records.
@@ -779,7 +724,8 @@ func (s *Store) BackfillPersonExternalID(ctx context.Context, personRowID, exter
 	return int64(rows), nil
 }
 
-// ClearRecordSnapshotPaths clears image_path, crop_path, and face_image_path for a record when snapshot generation fails.
+// ClearRecordSnapshotPaths clears image_path, crop_path, and face_image_path for a
+// record when snapshot generation fails.
 func (s *Store) ClearRecordSnapshotPaths(ctx context.Context, table, id string) error {
 	if id == "" {
 		return nil

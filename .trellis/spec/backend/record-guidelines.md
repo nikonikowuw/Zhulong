@@ -32,7 +32,9 @@ Runner MSG_RESULT
 - `algorithm_id` 缺失时写 SQL `NULL`，不要写空字符串。SQLite 外键对空字符串仍要求存在父行，空字符串会导致记录插入失败。
 - `algorithm_name` 与 `algorithm_version` 是写入时快照。算法卸载后，外键按 `ON DELETE SET NULL` 保留记录；读取时不得 join 已卸载的算法表来“补回”快照。
 - 新增记录使用推理时间戳转 UTC；时间戳缺失时才使用宿主当前 UTC 时间。
-- 记录批量写入失败时记录错误，不得继续排入对应证据图任务，避免创建无数据库引用的孤儿图片。
+- 记录批量写入失败时不得继续排入对应证据图任务，避免创建无数据库引用的孤儿图片。
+  `ProcessInferenceResult` 会把首个持久化错误连同层信息返回给调用方（StreamHub 按 camera_id 记一条 Warn），
+  抓拍落盘失败不上抛 —— 那是后台 worker 的事，与「这条结果是否被消费」无关。
 
 实现/迁移：`internal/record/service.go`、`internal/record/model.go`、`internal/database/migrations/000015_algorithm_delete_set_null.up.sql`、`000016_capture_algorithm_ref.up.sql`。算法卸载保留历史记录由 `internal/record/algorithm_uninstall_test.go` 覆盖。
 
@@ -42,7 +44,7 @@ Runner MSG_RESULT
 - 队列有界（当前容量 32），提交非阻塞；依赖缺失、队列满或存储写门关闭时允许丢弃抓拍任务。已接收任务在 `Stop` 时排空。需要观测丢弃时读取 `SnapshotStore.Dropped()`。感知层不设单帧人工截断（杜绝冷却饥饿），多目标瞬时并发直接由队列容量与 `Dropped()` 观测承接。
 - 每个任务执行时重新读取媒体根目录，并检查 storage 写门；路径存为媒体根内的相对路径（`snapshots/...`），媒体读取仍走 `internal/mediafile`，不能自行拼接绝对路径对外暴露。
 - C ABI 抓拍支持透传目标帧 `PTS` 时间戳，Native 侧历史环形缓存（4 帧容量）优先精确匹配目标帧；若历史已淘汰或未指定有效 PTS，退回读取当前最新帧。图像生成和写盘在 `SnapshotStore` 后台 worker 执行，不阻塞推理结果消费路径。
-- 数据库记录先写入，之后才提交抓拍任务。因此路径字段可能在图像生成前已写入，非空路径不保证文件已存在。任务队列拒绝时，调用方会尝试清空对应记录路径；后台遇到写门关闭、媒体根解析失败、抓拍失败或零张图片写入时，也会尝试清空该记录的抓拍路径。**这些清理是尽力而为，可能异步失败；若一个任务部分写入成功，当前实现不会逐输出项清理未写入路径。**依赖缺失导致 `SnapshotStore` 不可用时，服务也可能无法执行队列后的路径清理。调用方必须容忍媒体读取返回缺失。
+- 数据库记录先写入，之后才提交抓拍任务。因此路径字段可能在图像生成前已写入，非空路径不保证文件已存在。任务队列拒绝时，调用方会尝试清空对应记录路径；后台遇到写门关闭、媒体根解析失败、抓拍失败或零张图片写入时，也会尝试清空该记录的抓拍路径。**这些清理是尽力而为，可能异步失败；若一个任务部分写入成功，当前实现不会逐输出项清理未写入路径。**`SnapshotStore` 未注入（`Available() == false`）时，告警/识别/车辆抓拍三条分发路径都会先尝试清空记录路径再分发事件，不允许出现「服务不知道自己没有抓拍能力，却留下非空路径」的记录。调用方仍必须容忍媒体读取返回缺失。
 
 参考实现：`internal/record/service.go`、`internal/record/snapshot.go`、`internal/engine/engine.go`、`native/src/abi/engine.cpp`。测试：`internal/record/snapshot_test.go`。
 

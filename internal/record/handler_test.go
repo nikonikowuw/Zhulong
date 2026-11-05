@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"github.com/nikonikowuw/Zhulong/internal/record"
@@ -20,31 +19,13 @@ func newRecordHandlerHarness(t *testing.T) (*gin.Engine, *record.Service, *recor
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	tempDir := t.TempDir()
-	dbStore := database.New(tempDir, zap.NewNop())
-	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
-		t.Fatalf("OpenAndMigrate failed: %v", err)
-	}
-
-	db := dbStore.DB()
-	if err := db.Exec(`INSERT INTO cameras (id, name, enabled, revision, created_at, updated_at) 
-		VALUES ('cam_01', 'Cam 1', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error; err != nil {
-		t.Fatalf("insert camera: %v", err)
-	}
-	if err := db.Exec(`INSERT INTO algorithms (id, name, version, task_type, category, target_arch, target_device, compute_cost, memory_mb, description, manifest_json, config_schema_json, status, previous_version, created_at, updated_at)
-		VALUES ('algo_01', 'TestAlgo', '1.0.0', 'person_structure', 'face', 'x86_64', 'cpu', 10, 64, 'test', '{}', '{}', 'ENABLED', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error; err != nil {
-		t.Fatalf("insert algorithm: %v", err)
-	}
-
+	// 开库与外键父行统一交给 testenv_test.go 的共享夹具。
+	store, dbStore, cleanup := setupTestStore(t)
 	comps := record.NewRecordComponents(dbStore, zap.NewNop())
 	router := gin.New()
-	api := router.Group("/api/v1")
-	comps.ProtectedRoutes.RegisterRoutes(api)
+	comps.ProtectedRoutes.RegisterRoutes(router.Group("/api/v1"))
 
-	cleanup := func() {
-		_ = dbStore.Close()
-	}
-	return router, comps.Service, comps.Store, cleanup
+	return router, comps.Service, store, cleanup
 }
 
 func TestHandlerListAndGetRecognitions(t *testing.T) {

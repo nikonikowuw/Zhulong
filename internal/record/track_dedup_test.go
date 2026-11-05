@@ -383,50 +383,33 @@ func TestTrackDeduplication_CooldownKeyContract(t *testing.T) {
 
 	t.Run("person capture keys", func(t *testing.T) {
 		tests := []struct {
-			name      string
-			cam       string
-			trackID   int64
-			isCloseup bool
-			box       [4]float64
-			expected  string
+			name     string
+			cam      string
+			trackID  int64
+			box      [4]float64
+			expected string
 		}{
 			{
-				name:      "with positive track ID (normal person)",
-				cam:       "cam_01",
-				trackID:   7,
-				isCloseup: false,
-				box:       [4]float64{0.1, 0.2, 0.3, 0.4},
-				expected:  "cap:cam_01:person:trk:7",
+				name:     "with positive track ID",
+				cam:      "cam_01",
+				trackID:  7,
+				box:      [4]float64{0.1, 0.2, 0.3, 0.4},
+				expected: "cap:cam_01:person:trk:7",
 			},
 			{
-				name:      "with positive track ID (closeup face)",
-				cam:       "cam_01",
-				trackID:   8,
-				isCloseup: true,
-				box:       [4]float64{0.1, 0.2, 0.3, 0.4},
-				expected:  "cap:cam_01:face:trk:8",
-			},
-			{
-				name:      "fallback closeup to face box",
-				cam:       "cam_01",
-				trackID:   0,
-				isCloseup: true,
-				box:       [4]float64{0.1234, 0.5678, 0.3, 0.4},
-				expected:  "cap:cam_01:face:box:0.123:0.568",
-			},
-			{
-				name:      "fallback normal person to body box",
-				cam:       "cam_01",
-				trackID:   0,
-				isCloseup: false,
-				box:       [4]float64{0.1234, 0.5678, 0.3, 0.4},
-				expected:  "cap:cam_01:person:box:0.123:0.568",
+				name:     "fallback to body box",
+				cam:      "cam_01",
+				trackID:  0,
+				box:      [4]float64{0.1234, 0.5678, 0.3, 0.4},
+				expected: "cap:cam_01:person:box:0.123:0.568",
 			},
 		}
 
+		// 近景人脸不走这条键：它在 planPersonStructure 里被降级为孤立人脸，
+		// 由 faceCaptureCooldownKey 负责（契约见 record-guidelines §1）。
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				k := record.PersonCaptureCooldownKeyForTest(tt.cam, tt.trackID, tt.isCloseup, tt.box)
+				k := record.PersonCaptureCooldownKeyForTest(tt.cam, tt.trackID, tt.box)
 				if k != tt.expected {
 					t.Errorf("got %q, want %q", k, tt.expected)
 				}

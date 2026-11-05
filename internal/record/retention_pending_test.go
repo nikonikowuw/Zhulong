@@ -29,7 +29,7 @@ func TestRetentionPrunerPendingOutboxRetriesAndClears(t *testing.T) {
 	// Fresh rows: the TTL pruner would never touch them. The outbox must.
 	ids := seedRecordRows(t, store, "cam_01", time.Now().UTC().Add(-time.Hour))
 
-	pruner := record.NewRetentionPruner(store, zap.NewNop())
+	pruner := record.NewRetentionPruner(store, zap.NewNop(), record.RetentionOptions{})
 	if _, err := pruner.EnqueueSnapshotDeletes(ctx, []string{ids.recID, ids.capID, ids.recID}); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}

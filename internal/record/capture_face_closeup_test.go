@@ -56,7 +56,8 @@ func TestProcessFaceCloseupCapture(t *testing.T) {
 		},
 	}
 
-	// D3 契约：宿主关联器为两目标分配独立身份（两项均有独立有效 TrackID，载荷 42 不进库），退化项根据 IsFaceCloseup() 识别为 face
+	// D3 契约：宿主关联器为两目标分配独立身份（两项均有独立有效 TrackID，载荷 42
+	// 不进库），退化项根据 IsFaceCloseup() 识别为 face
 	if err := svc.ProcessInferenceResult(ctx, res); err != nil {
 		t.Fatalf("ProcessInferenceResult failed: %v", err)
 	}

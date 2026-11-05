@@ -151,7 +151,7 @@ func TestRetentionPrunerDeletesRowsOnlyAfterSnapshotFilesAreRemoved(t *testing.T
 		fresh.captureImagePath:   true,
 	}}
 
-	pruner := record.NewRetentionPruner(store, zap.NewNop())
+	pruner := record.NewRetentionPruner(store, zap.NewNop(), record.RetentionOptions{})
 	pruner.SetRetentionDaysProvider(&stubRetentionDays{days: 30})
 	pruner.SetSnapshotFileChecker(checker)
 
@@ -159,7 +159,7 @@ func TestRetentionPrunerDeletesRowsOnlyAfterSnapshotFilesAreRemoved(t *testing.T
 	if err != nil {
 		t.Fatalf("PruneNow with existing images: %v", err)
 	}
-	if first.Total() != 0 || first.Alarms != 0 {
+	if first.Total() != 0 {
 		t.Fatalf("existing image references must be retained and alarms untouched: %+v", first)
 	}
 	assertRecordRows(t, store, expired, true, true, true)
@@ -172,7 +172,7 @@ func TestRetentionPrunerDeletesRowsOnlyAfterSnapshotFilesAreRemoved(t *testing.T
 	if err != nil {
 		t.Fatalf("PruneNow after partial image cleanup: %v", err)
 	}
-	if partial.Recognitions != 0 || partial.Captures != 1 || partial.Alarms != 0 {
+	if partial.Recognitions != 0 || partial.Captures != 1 {
 		t.Fatalf("recognition must survive while its face image exists: %+v", partial)
 	}
 	assertRecordRows(t, store, expired, true, true, false)
@@ -182,7 +182,7 @@ func TestRetentionPrunerDeletesRowsOnlyAfterSnapshotFilesAreRemoved(t *testing.T
 	if err != nil {
 		t.Fatalf("PruneNow after all image cleanup: %v", err)
 	}
-	if result.Recognitions != 1 || result.Alarms != 0 || result.Captures != 0 || result.Total() != 1 {
+	if result.Recognitions != 1 || result.Captures != 0 || result.Total() != 1 {
 		t.Fatalf("unexpected prune counts: %+v", result)
 	}
 	if result.Cutoff.Before(expiredAt) || result.Cutoff.After(freshAt) {
@@ -219,7 +219,7 @@ func TestRetentionPrunerNoOpWithoutPolicy(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			pruner := record.NewRetentionPruner(store, zap.NewNop())
+			pruner := record.NewRetentionPruner(store, zap.NewNop(), record.RetentionOptions{})
 			pruner.SetRetentionDaysProvider(tc.provider)
 
 			result, err := pruner.PruneNow(ctx)
@@ -250,7 +250,7 @@ func TestRetentionPrunerPropagatesProviderError(t *testing.T) {
 	old := seedRecordRows(t, store, "cam_01", time.Now().UTC().Add(-1000*24*time.Hour))
 
 	boom := errors.New("storage config unavailable")
-	pruner := record.NewRetentionPruner(store, zap.NewNop())
+	pruner := record.NewRetentionPruner(store, zap.NewNop(), record.RetentionOptions{})
 	pruner.SetRetentionDaysProvider(&stubRetentionDays{days: 30, err: boom})
 
 	if _, err := pruner.PruneNow(ctx); !errors.Is(err, boom) {
@@ -274,7 +274,7 @@ func TestRetentionPrunerDoesNotDeleteRowsWhenSnapshotCheckFails(t *testing.T) {
 	old := seedRecordRows(t, store, "cam_01", time.Now().UTC().Add(-1000*24*time.Hour))
 
 	boom := errors.New("media root unavailable")
-	pruner := record.NewRetentionPruner(store, zap.NewNop())
+	pruner := record.NewRetentionPruner(store, zap.NewNop(), record.RetentionOptions{})
 	pruner.SetRetentionDaysProvider(&stubRetentionDays{days: 30})
 	pruner.SetSnapshotFileChecker(&snapshotFileChecker{err: boom})
 	if _, err := pruner.PruneNow(ctx); !errors.Is(err, boom) {
@@ -359,7 +359,7 @@ func TestRetentionPrunerStopIsSafeWithoutStart(t *testing.T) {
 	store, _, cleanup := setupTestStore(t)
 	defer cleanup()
 
-	pruner := record.NewRetentionPruner(store, zap.NewNop())
+	pruner := record.NewRetentionPruner(store, zap.NewNop(), record.RetentionOptions{})
 	// 不 Start 直接 Stop 不得 panic / 死锁（Fx 启动失败回滚路径会走到这里）。
 	pruner.Stop()
 	pruner.Stop()

@@ -78,14 +78,25 @@ type SnapshotStore struct {
 	provider SnapshotProvider
 	media    MediaRootProvider
 	gate     WriteGate
-	cleaner  SnapshotPathCleaner
-	observer SnapshotJobObserver
 	logger   *zap.Logger
 
-	queue    chan snapshotJob
-	stop     chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	// depsMu 保护装配期注入的清理器与观察者：worker goroutine 读、接线期写。
+	depsMu   sync.RWMutex
+	cleaner  SnapshotPathCleaner
+	observer SnapshotJobObserver
+
+	queue     chan snapshotJob
+	stop      chan struct{}
+	startOnce sync.Once
+	wg        sync.WaitGroup
+
+	// enqMu 让「关闭」与「入队」互斥。
+	//
+	// 只靠 select 里的 <-s.stop 不够：队列有空间时两个 case 同时就绪，Go 会随机
+	// 选一个，于是 Stop 之后仍可能入队成功，而 worker 已经退出 —— 记录里就留下
+	// 一条永不落盘的路径。
+	enqMu   sync.RWMutex
+	stopped bool
 
 	quality int
 	dropped int64
@@ -121,26 +132,56 @@ func NewSnapshotStore(
 	}
 }
 
-// Start 拉起写盘 worker。
+// Start 拉起写盘 worker。（幂等：重复调用只启动一个 goroutine）
 func (s *SnapshotStore) Start() {
-	s.wg.Add(1)
-	go s.worker()
+	if s == nil {
+		return
+	}
+	s.startOnce.Do(func() {
+		s.wg.Add(1)
+		go s.worker()
+	})
 }
 
-// Stop 关闭队列，并把已接收的任务做完后返回。
+// Stop 关闭队列，并把已接收的任务做完后返回。（幂等）
 func (s *SnapshotStore) Stop() {
-	s.stopOnce.Do(func() { close(s.stop) })
+	if s == nil {
+		return
+	}
+	s.enqMu.Lock()
+	if !s.stopped {
+		s.stopped = true
+		close(s.stop)
+	}
+	s.enqMu.Unlock()
+
 	s.wg.Wait()
 }
 
 // SetPathCleaner 注入落盘失败时的路径清理器。
 func (s *SnapshotStore) SetPathCleaner(cleaner SnapshotPathCleaner) {
+	s.depsMu.Lock()
 	s.cleaner = cleaner
+	s.depsMu.Unlock()
 }
 
 // SetJobObserver 注入写盘完成观察者，用于异步告警事件分发。
 func (s *SnapshotStore) SetJobObserver(observer SnapshotJobObserver) {
+	s.depsMu.Lock()
 	s.observer = observer
+	s.depsMu.Unlock()
+}
+
+func (s *SnapshotStore) pathCleaner() SnapshotPathCleaner {
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.cleaner
+}
+
+func (s *SnapshotStore) jobObserver() SnapshotJobObserver {
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.observer
 }
 
 // Available 报告抓拍能力是否可用（依赖注入是否齐备）。
@@ -157,24 +198,30 @@ func (s *SnapshotStore) Dropped() int64 {
 
 // Enqueue 提交一次抓拍写盘任务，非阻塞。
 //
-// 返回 false 表示任务被丢弃（不可用或队列已满），调用方应让路径字段留空。
+// 返回 false 表示任务被丢弃（不可用、已停机或队列已满），调用方应让路径字段留空。
 func (s *SnapshotStore) Enqueue(job snapshotJob) bool {
-	if !s.Available() || len(job.outputs) == 0 {
+	if s == nil || !s.Available() || len(job.outputs) == 0 {
 		return false
 	}
-	select {
-	case s.queue <- job:
-		return true
-	case <-s.stop:
-		return false
-	default:
-		s.dropMu.Lock()
-		s.dropped++
-		s.dropMu.Unlock()
-		s.logger.Warn("snapshot queue full, dropping snapshot",
-			zap.String("camera_id", job.cameraID))
-		return false
+
+	s.enqMu.RLock()
+	if !s.stopped {
+		select {
+		case s.queue <- job:
+			s.enqMu.RUnlock()
+			return true
+		default:
+		}
 	}
+	s.enqMu.RUnlock()
+
+	s.dropMu.Lock()
+	s.dropped++
+	s.dropMu.Unlock()
+	s.logger.Warn("snapshot queue full or store stopped, dropping snapshot",
+		zap.String("camera_id", job.cameraID))
+
+	return false
 }
 
 func (s *SnapshotStore) worker() {
@@ -200,35 +247,27 @@ func (s *SnapshotStore) worker() {
 
 // run 执行一次抓拍 + 写盘。所有错误只记日志，不向上传播。
 func (s *SnapshotStore) run(job snapshotJob) {
-	notifyObserver := func(written map[string]bool) {
-		if s.observer != nil && job.targetTable != "" && job.targetID != "" {
-			outs := make([]SnapshotJobOutput, len(job.outputs))
-			for i, out := range job.outputs {
-				outs[i] = SnapshotJobOutput{
-					RelPath: out.relPath,
-					Written: written != nil && written[out.relPath],
-				}
-			}
-			s.observer.OnSnapshotJobDone(job.targetTable, job.targetID, SnapshotJobResult{Outputs: outs})
-		}
+	root, images, ok := s.capture(job)
+	if !ok {
+		s.clearRecordPaths(job)
+		s.notifyObserver(job, nil)
+		return
 	}
 
-	clearOnFailure := func() {
-		if s.cleaner != nil && job.targetTable != "" && job.targetID != "" {
-			if err := s.cleaner.ClearRecordSnapshotPaths(context.Background(), job.targetTable, job.targetID); err != nil {
-				s.logger.Warn("clear snapshot paths on failure failed",
-					zap.String("table", job.targetTable), zap.String("id", job.targetID), zap.Error(err))
-			}
-		}
+	written := s.writeOutputs(job, root, images)
+	if len(written) == 0 {
+		s.clearRecordPaths(job)
 	}
+	s.notifyObserver(job, written)
+}
 
+// capture 依次做写入门闸、媒体根解析与原生抓拍。返回 false 表示本次什么都没写。
+func (s *SnapshotStore) capture(job snapshotJob) (string, map[int]engine.SnapshotImage, bool) {
 	// 存储熔断时不写：写满的盘会让整机录像停摆，抓拍没有资格抢占。
 	if s.gate != nil && !s.gate.CanWrite() {
 		s.logger.Warn("storage gate is closed, skipping snapshot",
 			zap.String("camera_id", job.cameraID))
-		clearOnFailure()
-		notifyObserver(nil)
-		return
+		return "", nil, false
 	}
 
 	ctx := context.Background()
@@ -236,9 +275,7 @@ func (s *SnapshotStore) run(job snapshotJob) {
 	if err != nil {
 		s.logger.Warn("resolve media root for snapshot failed",
 			zap.String("camera_id", job.cameraID), zap.Error(err))
-		clearOnFailure()
-		notifyObserver(nil)
-		return
+		return "", nil, false
 	}
 
 	images, err := s.provider.Snapshot(ctx, job.cameraID, engine.SnapshotOptions{
@@ -249,9 +286,7 @@ func (s *SnapshotStore) run(job snapshotJob) {
 	if err != nil {
 		s.logger.Warn("snapshot capture failed",
 			zap.String("camera_id", job.cameraID), zap.Error(err))
-		clearOnFailure()
-		notifyObserver(nil)
-		return
+		return "", nil, false
 	}
 
 	// 按 boxIndex 建索引：原生层可能跳过退化框，不能按位置对应。
@@ -260,56 +295,106 @@ func (s *SnapshotStore) run(job snapshotJob) {
 		byIndex[img.BoxIndex] = img
 	}
 
-	writtenCount := 0
-	writtenMap := make(map[string]bool, len(job.outputs))
+	return root, byIndex, true
+}
+
+// writeOutputs 把抓拍结果写到各自的目标路径，返回「哪些相对路径确实写成了」。
+func (s *SnapshotStore) writeOutputs(
+	job snapshotJob,
+	root string,
+	byIndex map[int]engine.SnapshotImage,
+) map[string]bool {
+	written := make(map[string]bool, len(job.outputs))
+
 	for _, out := range job.outputs {
 		img, ok := byIndex[out.boxIndex]
 		if !ok {
 			s.logger.Warn("snapshot image for output not found in result",
 				zap.Int("box_index", out.boxIndex),
 				zap.String("rel_path", out.relPath),
-				zap.Int("total_images", len(images)))
+				zap.Int("total_images", len(byIndex)))
 			continue
 		}
-		abs := filepath.Join(root, out.relPath)
-		if err := os.MkdirAll(filepath.Dir(abs), 0o750); err != nil {
-			s.logger.Warn("create snapshot directory failed",
-				zap.String("camera_id", job.cameraID), zap.String("dir", filepath.Dir(abs)), zap.Error(err))
-			continue
+		if s.writeOutput(job, root, out, img) {
+			written[out.relPath] = true
 		}
-		marker := abs + ".lock"
-		if out.protected {
-			// Write the marker before the image so a concurrent cleaner cannot
-			// collect the file between its creation and protection.
-			if err := os.WriteFile(marker, nil, 0o640); err != nil {
-				s.logger.Warn("protect snapshot file failed",
-					zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Error(err))
-				continue
-			}
-		}
-		// 0o640：证据图需要被服务进程之外的只读消费者（巡检脚本、导出工具）读取，
-		// 因此保留组读权限；但不给其他用户，避免多租户宿主上的越权读取。
-		if err := os.WriteFile(abs, img.JPEG, 0o640); err != nil {
-			if out.protected {
-				if removeErr := os.Remove(marker); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-					s.logger.Warn("remove snapshot protection marker after write failure",
-						zap.String("path", marker), zap.Error(removeErr))
-				}
-			}
-			s.logger.Warn("write snapshot file failed",
-				zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Error(err))
-			continue
-		}
-		s.logger.Debug("snapshot file written successfully",
-			zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Int("bytes", len(img.JPEG)))
-		writtenCount++
-		writtenMap[out.relPath] = true
 	}
 
-	if writtenCount == 0 && len(job.outputs) > 0 {
-		clearOnFailure()
+	return written
+}
+
+// writeOutput 写一张图。返回 false 表示该图未落盘（调用方据此清空对应路径）。
+func (s *SnapshotStore) writeOutput(
+	job snapshotJob,
+	root string,
+	out snapshotOutput,
+	img engine.SnapshotImage,
+) bool {
+	abs := filepath.Join(root, out.relPath)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o750); err != nil {
+		s.logger.Warn("create snapshot directory failed",
+			zap.String("camera_id", job.cameraID), zap.String("dir", filepath.Dir(abs)), zap.Error(err))
+		return false
 	}
-	notifyObserver(writtenMap)
+
+	marker := abs + ".lock"
+	if out.protected {
+		// Write the marker before the image so a concurrent cleaner cannot
+		// collect the file between its creation and protection.
+		if err := os.WriteFile(marker, nil, 0o640); err != nil {
+			s.logger.Warn("protect snapshot file failed",
+				zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Error(err))
+			return false
+		}
+	}
+
+	// 0o640：证据图需要被服务进程之外的只读消费者（巡检脚本、导出工具）读取，
+	// 因此保留组读权限；但不给其他用户，避免多租户宿主上的越权读取。
+	if err := os.WriteFile(abs, img.JPEG, 0o640); err != nil {
+		if out.protected {
+			if removeErr := os.Remove(marker); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				s.logger.Warn("remove snapshot protection marker after write failure",
+					zap.String("path", marker), zap.Error(removeErr))
+			}
+		}
+		s.logger.Warn("write snapshot file failed",
+			zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Error(err))
+		return false
+	}
+
+	s.logger.Debug("snapshot file written successfully",
+		zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Int("bytes", len(img.JPEG)))
+
+	return true
+}
+
+// clearRecordPaths 尽力清空记录里预填的快照路径。失败只记 Warn。
+func (s *SnapshotStore) clearRecordPaths(job snapshotJob) {
+	cleaner := s.pathCleaner()
+	if cleaner == nil || job.targetTable == "" || job.targetID == "" {
+		return
+	}
+	if err := cleaner.ClearRecordSnapshotPaths(context.Background(), job.targetTable, job.targetID); err != nil {
+		s.logger.Warn("clear snapshot paths on failure failed",
+			zap.String("table", job.targetTable), zap.String("id", job.targetID), zap.Error(err))
+	}
+}
+
+// notifyObserver 把每个输出路径的写入结果回报给观察者（用于异步告警事件分发）。
+func (s *SnapshotStore) notifyObserver(job snapshotJob, written map[string]bool) {
+	observer := s.jobObserver()
+	if observer == nil || job.targetTable == "" || job.targetID == "" {
+		return
+	}
+
+	outs := make([]SnapshotJobOutput, len(job.outputs))
+	for i, out := range job.outputs {
+		outs[i] = SnapshotJobOutput{
+			RelPath: out.relPath,
+			Written: written[out.relPath],
+		}
+	}
+	observer.OnSnapshotJobDone(job.targetTable, job.targetID, SnapshotJobResult{Outputs: outs})
 }
 
 // EnsureEvidenceLocks writes missing .lock sidecars for existing evidence
@@ -340,72 +425,58 @@ func (s *SnapshotStore) EnsureEvidenceLocks(ctx context.Context, relPaths []stri
 
 	written := 0
 	for _, rel := range relPaths {
-		if rel == "" {
-			continue
-		}
-		rel = filepath.FromSlash(rel)
-
-		info, err := root.Stat(rel)
+		ok, err := ensureEvidenceLock(root, rel)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return written, fmt.Errorf("stat evidence %q: %w", rel, err)
+			return written, err
 		}
-		if info.IsDir() {
-			continue
+		if ok {
+			written++
 		}
-
-		marker := rel + ".lock"
-		if _, err := root.Lstat(marker); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return written, fmt.Errorf("stat evidence lock %q: %w", marker, err)
-		}
-
-		file, err := root.OpenFile(marker, os.O_CREATE|os.O_WRONLY, 0o640)
-		if err != nil {
-			return written, fmt.Errorf("write evidence lock %q: %w", marker, err)
-		}
-		if err := file.Close(); err != nil {
-			return written, fmt.Errorf("close evidence lock %q: %w", marker, err)
-		}
-		written++
 	}
 
 	return written, nil
 }
 
+// ensureEvidenceLock 为一个已存在的证据图补写 .lock 旁车文件。
+// 返回 false 表示该条目被跳过（路径为空、不存在或是目录）。
+func ensureEvidenceLock(root *os.Root, rel string) (bool, error) {
+	if rel == "" {
+		return false, nil
+	}
+	rel = filepath.FromSlash(rel)
+
+	info, err := root.Stat(rel)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat evidence %q: %w", rel, err)
+	}
+	if info.IsDir() {
+		return false, nil
+	}
+
+	marker := rel + ".lock"
+	if _, err := root.Lstat(marker); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("stat evidence lock %q: %w", marker, err)
+	}
+
+	file, err := root.OpenFile(marker, os.O_CREATE|os.O_WRONLY, 0o640)
+	if err != nil {
+		return false, fmt.Errorf("write evidence lock %q: %w", marker, err)
+	}
+	if err := file.Close(); err != nil {
+		return false, fmt.Errorf("close evidence lock %q: %w", marker, err)
+	}
+
+	return true, nil
+}
+
 // snapshotRelDir 生成 snapshots/{cameraID}/{YYYY-MM-DD} 形式的相对目录，
 // 与 mediafile 的路径契约以及 storage-guidelines 的目录布局保持一致。
+// 抓拍相对路径的唯一构造点：service 侧一律经 ingestFrame.relPath 调用它。
 func snapshotRelDir(cameraID string, capturedAt time.Time) string {
 	return fmt.Sprintf("snapshots/%s/%s", cameraID, capturedAt.UTC().Format("2006-01-02"))
-}
-
-// SnapshotOutputForTest 是 snapshotOutput 的对外镜像，仅供同目录测试构造用例。
-//
-// ⚠️ 生产代码不应引用本类型：它存在只是因为 Go 的 external test package
-// （record_test）无法访问未导出字段，而 Enqueue 需要一个可构造的任务描述。
-type SnapshotOutputForTest struct {
-	BoxIndex  int
-	RelPath   string
-	Protected bool
-}
-
-// NewSnapshotJobForTest 构造一个等价于内部 snapshotJob 的任务，仅供测试使用。
-func NewSnapshotJobForTest(cameraID string, boxes []engine.SnapshotBox, outputs []SnapshotOutputForTest) snapshotJob {
-	return NewSnapshotJobWithPTSForTest(cameraID, 0, boxes, outputs)
-}
-
-// NewSnapshotJobWithPTSForTest 构造携带指定 PTS 的测试抓拍任务。
-func NewSnapshotJobWithPTSForTest(cameraID string, pts int64, boxes []engine.SnapshotBox, outputs []SnapshotOutputForTest) snapshotJob {
-	converted := make([]snapshotOutput, 0, len(outputs))
-	for _, out := range outputs {
-		converted = append(converted, snapshotOutput{
-			boxIndex:  out.BoxIndex,
-			relPath:   out.RelPath,
-			protected: out.Protected,
-		})
-	}
-	return snapshotJob{cameraID: cameraID, pts: pts, boxes: boxes, outputs: converted}
 }

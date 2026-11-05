@@ -123,7 +123,8 @@ func TestTargetTracker_MonotonicTimestampGuard(t *testing.T) {
 	}
 
 	// Next normal frame at 12:00:06 (only 1s after base):
-	// If lastSeen was erroneously regressed to 12:00:01, 12:00:06 - 12:00:01 = 5s > 3s ttl, which would cause false expiration!
+	// If lastSeen was erroneously regressed to 12:00:01, 12:00:06 - 12:00:01 = 5s
+	// > 3s ttl, which would cause false expiration!
 	// With monotonic lastSeen guard, track 1 must NOT be expired.
 	normal := base.Add(1 * time.Second)
 	idNormal := tr.ResolveFrame(b, []record.ObservationForTest{{Box: box}}, normal, ttl)[0]

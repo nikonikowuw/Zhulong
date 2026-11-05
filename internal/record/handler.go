@@ -3,24 +3,19 @@ package record
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	"go.uber.org/zap"
 )
 
 // Handler exposes RESTful HTTP endpoints for perception records and alarms.
+//
+// 不持有 logger：本层只做参数绑定与信封映射，错误一律交给 httputil.WriteError
+// 落服务端日志 —— handler 自己再记一遍只会重复且拿不到 cause。
 type Handler struct {
 	service *Service
-	logger  *zap.Logger
 }
 
 // NewHandler constructs a record Handler.
-func NewHandler(service *Service, logger *zap.Logger) *Handler {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
-	return &Handler{
-		service: service,
-		logger:  logger.Named("record.handler"),
-	}
+func NewHandler(service *Service) *Handler {
+	return &Handler{service: service}
 }
 
 // RegisterRoutes registers record routes onto the protected router group.

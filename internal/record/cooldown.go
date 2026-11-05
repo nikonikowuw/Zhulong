@@ -1,6 +1,7 @@
 package record
 
 import (
+	"slices"
 	"sync"
 	"time"
 )
@@ -64,17 +65,14 @@ func (cm *CooldownManager) AllowAll(keys []string, now time.Time) bool {
 
 	cm.lazyCleanLocked(now)
 
-	// Filter and deduplicate valid keys
+	// 过滤空键并去重。键数极少（识别最多 2 个、车辆 2 个），线性扫描比额外
+	// 维护一张 map 更省 —— 这条路径每帧每个目标都会走一次。
 	validKeys := make([]string, 0, len(keys))
-	seen := make(map[string]struct{}, len(keys))
 	for _, k := range keys {
-		if k == "" {
+		if k == "" || slices.Contains(validKeys, k) {
 			continue
 		}
-		if _, ok := seen[k]; !ok {
-			seen[k] = struct{}{}
-			validKeys = append(validKeys, k)
-		}
+		validKeys = append(validKeys, k)
 	}
 
 	if len(validKeys) == 0 {

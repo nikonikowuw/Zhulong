@@ -58,24 +58,24 @@ type SnapshotFileChecker interface {
 type PruneResult struct {
 	// Cutoff 是本次生效的截止时间（captured_at 早于它的普通识别/抓拍行可被清理）。
 	Cutoff time.Time
-	// 告警行属于高价值证据，不由自动保留清理删除；Alarms 始终为 0。
+	// 告警行属于高价值证据，不由自动保留清理删除，因此这里只有两张表。
 	Recognitions int64
-	Alarms       int64
 	Captures     int64
 }
 
 // Total 返回本轮共删除的行数。
 func (r PruneResult) Total() int64 {
-	return r.Recognitions + r.Alarms + r.Captures
+	return r.Recognitions + r.Captures
 }
 
 // RetentionOptions 允许调用方覆盖巡检间隔与批量大小（主要用于测试）。
+//
+// ⚠️ 零值含义是「全部用默认值」而不是「立即」：配置项忘记填写时不得让启动瞬间
+// 跑清理。测试要即时巡检请传一个极小正值（如 time.Nanosecond）。
 type RetentionOptions struct {
 	// Interval 为两次巡检的间隔，<= 0 时使用 DefaultRetentionSweepInterval。
 	Interval time.Duration
 	// InitialDelay 为首轮巡检前的延迟，<= 0 时使用 DefaultRetentionInitialDelay。
-	// ⚠️ 零值含义是「用默认值」而不是「立即」：配置项忘记填写时不得让启动瞬间跑清理。
-	// 测试要即时巡检请传一个极小正值（如 time.Nanosecond）。
 	InitialDelay time.Duration
 	// BatchSize 为单条 DELETE 的上限，<= 0 时使用 DefaultRetentionBatchSize。
 	BatchSize int
@@ -100,29 +100,30 @@ type RetentionPruner struct {
 	started     bool
 }
 
-// NewRetentionPruner 构造保留清理组件。
+// NewRetentionPruner 构造保留清理组件。零值 opts 表示全部使用默认值。
 //
 // ⚠️ 纯构造函数：不启动 goroutine、不读配置、不碰数据库。由 Start 拉起后台巡检，
 // 与 Fx「构造函数必须纯粹」的约定一致。
-func NewRetentionPruner(store *Store, logger *zap.Logger, opts ...RetentionOptions) *RetentionPruner {
+func NewRetentionPruner(
+	store *Store,
+	logger *zap.Logger,
+	opts RetentionOptions,
+) *RetentionPruner {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 
 	interval := DefaultRetentionSweepInterval
+	if opts.Interval > 0 {
+		interval = opts.Interval
+	}
 	delay := DefaultRetentionInitialDelay
+	if opts.InitialDelay > 0 {
+		delay = opts.InitialDelay
+	}
 	batch := DefaultRetentionBatchSize
-
-	if len(opts) > 0 {
-		if opts[0].Interval > 0 {
-			interval = opts[0].Interval
-		}
-		if opts[0].InitialDelay > 0 {
-			delay = opts[0].InitialDelay
-		}
-		if opts[0].BatchSize > 0 {
-			batch = opts[0].BatchSize
-		}
+	if opts.BatchSize > 0 {
+		batch = opts.BatchSize
 	}
 
 	return &RetentionPruner{
@@ -182,7 +183,7 @@ func (p *RetentionPruner) Start(parent context.Context) {
 
 // Stop 终止后台巡检并等待正在进行的批次收尾。（幂等）
 //
-// ⚠️ 被中断时已删除的行不会回滚（每批都是独立事务），这是可接受的：保留清理本来
+// ⚠️ 被中断时已删除的行不会回滚（每批都是独立事务），这是可接受的：保留清理本身
 // 就是幂等的，下轮会从剩下的过期行继续。
 func (p *RetentionPruner) Stop() {
 	if p == nil {
@@ -238,6 +239,13 @@ func (p *RetentionPruner) PruneNow(ctx context.Context) (PruneResult, error) {
 	cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
 	result := PruneResult{Cutoff: cutoff}
 
+	// 防御：构造期已归一过，这里仍不能退化成 Limit(0)——GORM 的 Limit(0)
+	// 表示不加 LIMIT，会把整表读进内存。
+	batch := p.batch
+	if batch <= 0 {
+		batch = DefaultRetentionBatchSize
+	}
+
 	targets := []struct {
 		table string
 		count *int64
@@ -247,7 +255,7 @@ func (p *RetentionPruner) PruneNow(ctx context.Context) (PruneResult, error) {
 	}
 
 	for _, target := range targets {
-		deleted, pruneErr := p.deleteExpiredRows(ctx, target.table, cutoff, fileChecker)
+		deleted, pruneErr := p.deleteExpiredRows(ctx, target.table, cutoff, fileChecker, batch)
 		*target.count = deleted
 		if pruneErr != nil {
 			return result, fmt.Errorf("prune %s: %w", target.table, pruneErr)
@@ -336,6 +344,7 @@ func (p *RetentionPruner) deleteExpiredRows(
 	table string,
 	cutoff time.Time,
 	checker SnapshotFileChecker,
+	batch int,
 ) (int64, error) {
 	var total int64
 	var cursor *retentionCursor
@@ -345,7 +354,7 @@ func (p *RetentionPruner) deleteExpiredRows(
 			return total, err
 		}
 
-		rows, err := p.store.retentionCandidatesBatch(ctx, table, cutoff, cursor, p.batch)
+		rows, err := p.store.retentionCandidatesBatch(ctx, table, cutoff, cursor, batch)
 		if err != nil {
 			return total, err
 		}
@@ -355,22 +364,11 @@ func (p *RetentionPruner) deleteExpiredRows(
 
 		ids := make([]string, 0, len(rows))
 		for _, row := range rows {
-			paths := []string{row.ImagePath, row.SecondaryPath}
-			allMissing := true
-			for _, path := range paths {
-				if path == "" {
-					continue
-				}
-				exists, err := checker.SnapshotFileExists(ctx, path)
-				if err != nil {
-					return total, fmt.Errorf("check snapshot %q for row %s: %w", path, row.ID, err)
-				}
-				if exists {
-					allMissing = false
-					break
-				}
+			missing, err := allSnapshotsMissing(ctx, checker, row.ImagePath, row.SecondaryPath)
+			if err != nil {
+				return total, err
 			}
-			if allMissing {
+			if missing {
 				ids = append(ids, row.ID)
 			}
 		}
@@ -383,13 +381,34 @@ func (p *RetentionPruner) deleteExpiredRows(
 		last := rows[len(rows)-1]
 		cursor = &retentionCursor{CapturedAt: last.CapturedAt, ID: last.ID}
 
-		if len(rows) < p.batch {
+		if len(rows) < batch {
 			return total, nil
 		}
 		if err := sleepCtx(ctx, retentionBatchPause); err != nil {
 			return total, err
 		}
 	}
+}
+
+// allSnapshotsMissing 报告一行引用的所有非空快照是否都确认不存在。
+//
+// 任一路径存在即保留整行（行引用的证据还没删完）；检查出错时必须中止本轮，
+// 不得按「文件不存在」处理 —— 那是把删除权限交给一个失败的 stat。
+func allSnapshotsMissing(ctx context.Context, checker SnapshotFileChecker, paths ...string) (bool, error) {
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		exists, err := checker.SnapshotFileExists(ctx, path)
+		if err != nil {
+			return false, fmt.Errorf("check snapshot %q: %w", path, err)
+		}
+		if exists {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 // run 是后台巡检循环。首轮延迟后立即跑一次，之后按 interval 周期执行。
@@ -455,7 +474,6 @@ func (p *RetentionPruner) sweep(parent context.Context) {
 	p.logger.Info("pruned expired perception records",
 		zap.Time("cutoff", result.Cutoff),
 		zap.Int64("recognitions", result.Recognitions),
-		zap.Int64("alarms", result.Alarms),
 		zap.Int64("captures", result.Captures),
 		zap.Int64("total", result.Total()),
 	)

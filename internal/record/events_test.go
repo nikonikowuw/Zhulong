@@ -94,6 +94,11 @@ func TestAlarmListenerSnapshotJobObserver(t *testing.T) {
 	if ev.AlarmType != "no_helmet_alarm" || ev.CameraID != "cam_01" {
 		t.Fatalf("unexpected alarm properties: %+v", ev)
 	}
+	// Extra/Attributes 必须是空 map 而不是 nil：下游（alertpush / SSE）不该
+	// 为 null 与 {} 写两套分支，两者在 JSON 里是不同形状。
+	if ev.Alarm == nil || ev.Alarm.Extra == nil {
+		t.Fatalf("alarm extra must be a non-nil map, got %+v", ev.Alarm)
+	}
 }
 
 func TestAlarmListenerPartialSnapshotFailure(t *testing.T) {
@@ -169,7 +174,13 @@ func TestAlarmListenerSweeperTimeoutFallback(t *testing.T) {
 
 	// 模拟抓拍挂起（不启动 SnapshotStore 的 worker，导致任务永远停留在队列中）
 	provider := &fakeSnapshotProvider{}
-	snapshots := record.NewSnapshotStore(provider, &fakeMediaRoot{root: t.TempDir()}, &fakeGate{allow: true}, 85, zap.NewNop())
+	snapshots := record.NewSnapshotStore(
+		provider,
+		&fakeMediaRoot{root: t.TempDir()},
+		&fakeGate{allow: true},
+		85,
+		zap.NewNop(),
+	)
 	// 刻意不调 snapshots.Start()
 	svc.SetSnapshotStore(snapshots)
 
@@ -200,6 +211,7 @@ func TestAlarmListenerSweeperTimeoutFallback(t *testing.T) {
 
 	ev := collector.get(0)
 	if ev.ImageReady || ev.CropReady {
-		t.Fatalf("expected both ready to be false on sweeper timeout, got ImageReady=%v, CropReady=%v", ev.ImageReady, ev.CropReady)
+		t.Fatalf("expected both ready to be false on sweeper timeout, got ImageReady=%v, CropReady=%v",
+			ev.ImageReady, ev.CropReady)
 	}
 }

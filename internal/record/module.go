@@ -74,8 +74,8 @@ func NewRecordComponents(
 	}
 	store := NewStore(dbProvider)
 	service := NewService(store, logger)
-	handler := NewHandler(service, logger)
-	pruner := NewRetentionPruner(store, logger)
+	handler := NewHandler(service)
+	pruner := NewRetentionPruner(store, logger, RetentionOptions{})
 
 	return RecordComponents{
 		Store:           store,

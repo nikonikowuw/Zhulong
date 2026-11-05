@@ -5,58 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nikonikowuw/Zhulong/internal/database"
 	"github.com/nikonikowuw/Zhulong/internal/idutil"
 	"github.com/nikonikowuw/Zhulong/internal/record"
-	"go.uber.org/zap"
 )
-
-func setupTestStore(t *testing.T) (*record.Store, *database.Store, func()) {
-	t.Helper()
-	tempDir := t.TempDir()
-
-	dbStore := database.New(tempDir, zap.NewNop())
-	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
-		t.Fatalf("OpenAndMigrate failed: %v", err)
-	}
-
-	db := dbStore.DB()
-	// Insert prerequisite dummy camera
-	if err := db.Exec(`INSERT INTO cameras (id, name, enabled, revision, created_at, updated_at) 
-		VALUES ('cam_01', 'Test Camera 1', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error; err != nil {
-		t.Fatalf("insert dummy camera: %v", err)
-	}
-	if err := db.Exec(`INSERT INTO cameras (id, name, enabled, revision, created_at, updated_at) 
-		VALUES ('cam_02', 'Test Camera 2', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error; err != nil {
-		t.Fatalf("insert dummy camera 2: %v", err)
-	}
-
-	// Insert prerequisite dummy algorithm
-	if err := db.Exec(`INSERT INTO algorithms (id, name, version, task_type, category, target_arch, target_device, compute_cost, memory_mb, description, manifest_json, config_schema_json, status, previous_version, created_at, updated_at)
-		VALUES ('algo_01', 'FaceReID', '1.0.0', 'person_structure', 'face', 'x86_64', 'cpu', 10, 64, 'test algo', '{}', '{}', 'ENABLED', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error; err != nil {
-		t.Fatalf("insert dummy algorithm: %v", err)
-	}
-
-	// Insert prerequisite dummy person
-	if err := db.Exec(`INSERT INTO persons (id, name, created_at, updated_at)
-		VALUES ('person_alice', 'Alice', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error; err != nil {
-		t.Fatalf("insert dummy person: %v", err)
-	}
-
-	store := record.NewStore(dbStore)
-	cleanup := func() {
-		_ = dbStore.Close()
-	}
-	return store, dbStore, cleanup
-}
-
-func strPtr(s string) *string {
-	return &s
-}
-
-func boolPtr(b bool) *bool {
-	return &b
-}
 
 func TestStoreRecognitionCRUDAndFilters(t *testing.T) {
 	store, dbStore, cleanup := setupTestStore(t)
@@ -363,10 +314,14 @@ func TestStoreResolveGalleryFaces(t *testing.T) {
 		t.Fatalf("expected 2 resolved faces (duplicates collapsed, unknown skipped), got %d: %+v", len(refs), refs)
 	}
 
-	if got := refs["face_01"]; got.PersonRowID != "person_alice" || got.PersonExternalID != "" || got.ImagePath != "faces/alice.jpg" || got.PersonName != "Alice" {
+	got := refs["face_01"]
+	if got.PersonRowID != "person_alice" || got.PersonExternalID != "" ||
+		got.ImagePath != "faces/alice.jpg" || got.PersonName != "Alice" {
 		t.Errorf("unexpected ref for an unkeyed person: %+v", got)
 	}
-	if got := refs["face_02"]; got.PersonRowID != "person_keyed" || got.PersonExternalID != "EMP-1" || got.ImagePath != "faces/keyed.jpg" || got.PersonName != "Keyed" {
+	got = refs["face_02"]
+	if got.PersonRowID != "person_keyed" || got.PersonExternalID != "EMP-1" ||
+		got.ImagePath != "faces/keyed.jpg" || got.PersonName != "Keyed" {
 		t.Errorf("unexpected ref for a keyed person: %+v", got)
 	}
 }

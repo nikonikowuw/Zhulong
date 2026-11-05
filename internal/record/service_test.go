@@ -17,7 +17,8 @@ func TestServiceProcessPersonStructureAndCooldown(t *testing.T) {
 
 	// Insert dummy person face photo in person_faces for gallery resolution
 	if err := dbStore.DB().Exec(`INSERT INTO person_faces (id, person_id, image_path, feature_vector, created_at)
-		VALUES ('face_alice_01', 'person_alice', 'faces/person_alice_face_alice_01.jpg', X'00', CURRENT_TIMESTAMP)`).Error; err != nil {
+		VALUES ('face_alice_01', 'person_alice',
+		        'faces/person_alice_face_alice_01.jpg', X'00', CURRENT_TIMESTAMP)`).Error; err != nil {
 		t.Fatalf("insert dummy person_face: %v", err)
 	}
 
