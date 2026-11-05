@@ -38,6 +38,13 @@ interface StatCardsProps {
   storage: StorageMountStatus[]
 }
 
+/**
+ * 卡片角标统一走中性容器：图标只负责「这块是什么」，不承担任何状态语义。
+ * 一旦给角标染色，用户会开始猜「蓝色 CPU 是不是代表某种告警」—— 那是状态色的活儿。
+ */
+const ICON_TILE_CLASS =
+  'flex size-7 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/40 text-muted-foreground'
+
 export function StatCards({
   cpu,
   memory,
@@ -63,7 +70,7 @@ export function StatCards({
           <CardTitle className='truncate text-xs font-medium tracking-tight text-muted-foreground'>
             {t('cards.cpu', { defaultValue: 'CPU 使用率' })}
           </CardTitle>
-          <div className='flex size-7 shrink-0 items-center justify-center rounded-lg border border-sky-500/20 bg-sky-500/10 text-sky-500 shadow-2xs'>
+          <div className={ICON_TILE_CLASS}>
             <Cpu className='size-3.5' />
           </div>
         </CardHeader>
@@ -78,7 +85,7 @@ export function StatCards({
             </span>
             {cpu.temperature > 0 && (
               <span className='flex shrink-0 items-center gap-0.5 font-mono text-xs font-medium text-muted-foreground'>
-                <Thermometer className='size-3 text-amber-500' />
+                <Thermometer className='size-3' />
                 {cpu.temperature.toFixed(1)}°C
               </span>
             )}
@@ -142,7 +149,7 @@ export function StatCards({
           <CardTitle className='truncate text-xs font-medium tracking-tight text-muted-foreground'>
             {t('cards.memory', { defaultValue: '系统物理内存' })}
           </CardTitle>
-          <div className='flex size-7 shrink-0 items-center justify-center rounded-lg border border-purple-500/20 bg-purple-500/10 text-purple-500 shadow-2xs'>
+          <div className={ICON_TILE_CLASS}>
             <MemoryStick className='size-3.5' />
           </div>
         </CardHeader>
@@ -194,7 +201,7 @@ export function StatCards({
           <CardTitle className='truncate text-xs font-medium tracking-tight text-muted-foreground'>
             {t('cards.npu', { defaultValue: 'NPU 异构算力' })}
           </CardTitle>
-          <div className='flex size-7 shrink-0 items-center justify-center rounded-lg border border-amber-500/20 bg-amber-500/10 text-amber-500 shadow-2xs'>
+          <div className={ICON_TILE_CLASS}>
             <Zap className='size-3.5' />
           </div>
         </CardHeader>
@@ -211,7 +218,7 @@ export function StatCards({
                 </span>
                 {npu.temperature > 0 && (
                   <span className='flex shrink-0 items-center gap-0.5 font-mono text-xs font-medium text-muted-foreground'>
-                    <Thermometer className='size-3 text-amber-500' />
+                    <Thermometer className='size-3' />
                     {npu.temperature.toFixed(1)}°C
                   </span>
                 )}
@@ -295,20 +302,20 @@ export function StatCards({
           <CardTitle className='truncate text-xs font-medium tracking-tight text-muted-foreground'>
             {t('cards.network', { defaultValue: '实时网络吞吐' })}
           </CardTitle>
-          <div className='flex size-7 shrink-0 items-center justify-center rounded-lg border border-emerald-500/20 bg-emerald-500/10 text-emerald-500 shadow-2xs'>
+          <div className={ICON_TILE_CLASS}>
             <Network className='size-3.5' />
           </div>
         </CardHeader>
         <CardContent className='space-y-2.5 p-0'>
           <div className='flex items-baseline justify-between gap-2'>
-            <div className='flex items-center gap-1 truncate text-primary'>
-              <ArrowDownToLine className='size-3.5 shrink-0 opacity-80' />
-              <span className='truncate font-mono text-2xl font-bold tracking-tight'>
+            <div className='flex min-w-0 items-center gap-1'>
+              <ArrowDownToLine className='size-3.5 shrink-0 text-muted-foreground' />
+              <span className='truncate font-mono text-2xl font-bold tracking-tight text-foreground'>
                 {formatRate(totalRxRate)}
               </span>
             </div>
-            <div className='flex shrink-0 items-center gap-0.5 font-mono text-xs font-medium text-emerald-600 dark:text-emerald-400'>
-              <ArrowUpFromLine className='size-3 opacity-80' />
+            <div className='flex shrink-0 items-center gap-0.5 font-mono text-xs font-medium text-muted-foreground'>
+              <ArrowUpFromLine className='size-3' />
               <span>{formatRate(totalTxRate)}</span>
             </div>
           </div>
@@ -334,7 +341,7 @@ export function StatCards({
                   title={`Rx: ${formatRate(totalRxRate)}`}
                 />
                 <div
-                  className='h-full bg-emerald-500 transition-all duration-500'
+                  className='h-full bg-muted-foreground/40 transition-all duration-500'
                   style={{
                     width: `${Math.max(
                       10,
@@ -365,7 +372,7 @@ export function StatCards({
           <CardTitle className='truncate text-xs font-medium tracking-tight text-muted-foreground'>
             {t('cards.storage', { defaultValue: '系统主存储' })}
           </CardTitle>
-          <div className='flex size-7 shrink-0 items-center justify-center rounded-lg border border-cyan-500/20 bg-cyan-500/10 text-cyan-500 shadow-2xs'>
+          <div className={ICON_TILE_CLASS}>
             <HardDrive className='size-3.5' />
           </div>
         </CardHeader>

@@ -116,13 +116,13 @@ export function SettingsSystem() {
           npuSupported={hardware.heterogeneous.npu.supported}
         />
 
-        {/* 5. Hardware Detail Tables (Mounts & Network) */}
-        <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
-          <StorageTable storage={hardware.storage} />
-          <NetworkTable network={hardware.network} />
-        </div>
+        {/* 5. Storage mounts — 7 列，必须占满整行宽度 */}
+        <StorageTable storage={hardware.storage} />
 
-        {/* 6. Thermal Sensors */}
+        {/* 6. Network interfaces — 6 列，必须占满整行宽度 */}
+        <NetworkTable network={hardware.network} />
+
+        {/* 7. Thermal Sensors */}
         <ThermalList thermals={hardware.heterogeneous.temperatures} />
       </div>
     </ContentSection>

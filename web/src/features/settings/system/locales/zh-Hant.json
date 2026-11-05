@@ -46,6 +46,7 @@
   },
   "details": {
     "storageTitle": "儲存掛載分割區詳情",
+    "storageSubtitle": "各檔案系統卷的容量、餘量與使用率",
     "storageColMount": "掛載路徑",
     "storageColDevice": "底層裝置",
     "storageColFSType": "檔案系統",
@@ -54,6 +55,7 @@
     "storageColFree": "可用餘量",
     "storageColPercent": "使用率",
     "networkTitle": "網路介面流量與狀態",
+    "networkSubtitle": "各介面連線狀態、即時速率與累計流量",
     "networkColIface": "網路介面",
     "networkColStatus": "連線狀態",
     "networkColRxRate": "目前下行速率",
@@ -62,7 +64,14 @@
     "networkColTxTotal": "累計發送流量",
     "thermalTitle": "各晶片與測溫感測器點位",
     "up": "已連線 (UP)",
-    "down": "未連線 (DOWN)"
+    "down": "未連線 (DOWN)",
+    "thermalSubtitle": "閾值：≥60°C 警戒、≥75°C 過熱",
+    "thermalNormal": "正常",
+    "thermalWarm": "警戒",
+    "thermalHot": "過熱",
+    "tagRoot": "根分割區",
+    "tagData": "資料碟",
+    "tagExternal": "外接碟"
   },
   "identity": {
     "title": "裝置標識",
@@ -74,6 +83,7 @@
     "saved": "裝置標識已儲存，新推送立即生效",
     "saveFailed": "裝置標識儲存失敗",
     "loadFailed": "裝置標識讀取失敗",
-    "hint": "僅支援字母、數字、點、底線、連字號，長度 1-64；儲存後無需重啟。"
+    "hint": "僅支援字母、數字、點、底線、連字號，長度 1-64；儲存後無需重啟。",
+    "unsaved": "* 未儲存變更"
   }
 }

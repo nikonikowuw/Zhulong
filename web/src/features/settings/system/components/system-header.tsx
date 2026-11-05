@@ -8,6 +8,8 @@ import {
   Server,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { type HostInfo } from '../types'
@@ -21,6 +23,10 @@ interface SystemHeaderProps {
   onRefresh: () => void
 }
 
+/** 元信息胶囊：中性底色 + 中性图标，避免四行参数各自染一种颜色。 */
+const META_PILL_CLASS =
+  'flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-xs text-muted-foreground'
+
 export function SystemHeader({
   host,
   isRefetching,
@@ -33,29 +39,35 @@ export function SystemHeader({
   return (
     <div className='flex flex-col gap-4 rounded-xl border border-border/80 bg-card/75 p-4 shadow-xs backdrop-blur-md transition-all md:flex-row md:items-center md:justify-between'>
       <div className='flex flex-wrap items-center gap-x-5 gap-y-2.5 text-sm'>
-        {/* Node Name & Health Dot */}
+        {/* 节点名 + 在线指示（active 档圆点，规范 §1.3.3） */}
         <div className='flex shrink-0 items-center gap-2.5'>
-          <div className='flex size-8 shrink-0 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 text-primary shadow-2xs'>
+          <div className='flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/40 text-muted-foreground'>
             <Server className='size-4' />
           </div>
           <div className='flex items-center gap-2'>
             <span className='font-semibold tracking-tight text-foreground'>
               {host.hostname || 'Edge-Host'}
             </span>
-            <span
-              className='relative flex size-2'
-              title='Node Active'
-              aria-hidden='true'
-            >
-              <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60' />
-              <span className='relative inline-flex size-2 rounded-full bg-emerald-500' />
+            <span className='relative flex size-2' aria-hidden='true'>
+              <span
+                className={cn(
+                  'absolute inline-flex h-full w-full animate-ping rounded-full opacity-60',
+                  STATUS_DOT_CLASS.active
+                )}
+              />
+              <span
+                className={cn(
+                  'relative inline-flex size-2 rounded-full',
+                  STATUS_DOT_CLASS.active
+                )}
+              />
             </span>
           </div>
         </div>
 
-        {/* OS & Kernel Badge */}
-        <div className='flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-xs text-muted-foreground'>
-          <Cpu className='size-3.5 text-sky-500' />
+        {/* OS & Kernel */}
+        <div className={META_PILL_CLASS}>
+          <Cpu className='size-3.5' />
           <span className='font-mono font-medium text-foreground'>
             {host.os}/{host.arch}
           </span>
@@ -68,8 +80,8 @@ export function SystemHeader({
         </div>
 
         {/* Uptime */}
-        <div className='flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-xs text-muted-foreground'>
-          <Clock className='size-3.5 text-amber-500' />
+        <div className={META_PILL_CLASS}>
+          <Clock className='size-3.5' />
           <span>{t('header.uptime', { defaultValue: 'Uptime' })}:</span>
           <span className='font-mono font-medium text-foreground'>
             {formatUptime(host.uptimeSeconds)}
@@ -77,8 +89,8 @@ export function SystemHeader({
         </div>
 
         {/* Load Average */}
-        <div className='flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-xs text-muted-foreground'>
-          <Activity className='size-3.5 text-emerald-500' />
+        <div className={META_PILL_CLASS}>
+          <Activity className='size-3.5' />
           <span className='whitespace-nowrap'>
             {t('header.loadAvg', { defaultValue: 'Load Avg' })}:
           </span>
@@ -92,14 +104,15 @@ export function SystemHeader({
       {/* Control Buttons */}
       <div className='flex shrink-0 items-center gap-2 self-end md:self-auto'>
         <Button
-          variant='ghost'
+          variant='outline'
           size='sm'
           onClick={onTogglePause}
-          className={`h-8 gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-all ${
+          className={cn(
+            'h-8 gap-1.5 rounded-lg px-2.5 text-xs font-medium shadow-2xs transition-all',
             isPaused
-              ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 dark:text-amber-400'
-              : 'border-border/60 bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground'
-          }`}
+              ? STATUS_LEVEL_CLASS.warning
+              : 'border-border/80 bg-background text-foreground hover:bg-muted/60'
+          )}
           title={
             isPaused
               ? t('header.resume', { defaultValue: 'Resume live telemetry' })
@@ -113,18 +126,26 @@ export function SystemHeader({
         >
           {isPaused ? (
             <>
-              <Play className='size-3 fill-amber-500 text-amber-500' />
-              <span className='font-medium text-amber-600 dark:text-amber-400'>
-                {t('header.paused', { defaultValue: 'Paused' })}
-              </span>
+              <Play className='size-3 fill-current' />
+              <span>{t('header.paused', { defaultValue: 'Paused' })}</span>
             </>
           ) : (
             <>
               <span className='relative flex size-2' aria-hidden='true'>
-                <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75' />
-                <span className='relative inline-flex size-2 rounded-full bg-emerald-500' />
+                <span
+                  className={cn(
+                    'absolute inline-flex h-full w-full animate-ping rounded-full opacity-75',
+                    STATUS_DOT_CLASS.active
+                  )}
+                />
+                <span
+                  className={cn(
+                    'relative inline-flex size-2 rounded-full',
+                    STATUS_DOT_CLASS.active
+                  )}
+                />
               </span>
-              <span className='text-foreground'>
+              <span>
                 {t('header.autoRefreshing', { defaultValue: 'Live (2.5s)' })}
               </span>
               <Pause className='size-3 opacity-60' />
@@ -140,7 +161,7 @@ export function SystemHeader({
           className='h-8 gap-1.5 rounded-lg border-border/80 shadow-2xs hover:bg-muted/60'
         >
           <RefreshCw
-            className={`size-3.5 ${isRefetching ? 'animate-spin' : ''}`}
+            className={cn('size-3.5', isRefetching && 'animate-spin')}
           />
           <span>{t('header.refresh', { defaultValue: 'Refresh' })}</span>
         </Button>

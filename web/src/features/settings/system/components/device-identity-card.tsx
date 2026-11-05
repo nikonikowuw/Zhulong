@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Fingerprint, Loader2, Save } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { statusTextClass } from '@/lib/status-palette'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,7 +29,7 @@ export function DeviceIdentityCard() {
     <div className='rounded-xl border border-border/80 bg-card/75 p-4 shadow-xs backdrop-blur-md transition-all'>
       <div className='flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between'>
         <div className='flex items-start gap-3'>
-          <div className='flex size-8 shrink-0 items-center justify-center rounded-lg border border-sky-500/20 bg-sky-500/10 text-sky-500 shadow-2xs'>
+          <div className='flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/40 text-muted-foreground'>
             <Fingerprint className='size-4' />
           </div>
           <div className='space-y-1'>
@@ -112,8 +113,10 @@ function IdentityForm({ identity }: { identity: SystemIdentity }) {
           {t('identity.label', { defaultValue: '设备 ID' })}
         </Label>
         {dirty && (
-          <span className='font-mono text-[10px] text-amber-500'>
-            * 未保存更改
+          <span
+            className={`font-mono text-[10px] ${statusTextClass('warning')}`}
+          >
+            {t('identity.unsaved', { defaultValue: '* 未保存更改' })}
           </span>
         )}
       </div>

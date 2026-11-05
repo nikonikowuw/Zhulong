@@ -46,6 +46,7 @@
   },
   "details": {
     "storageTitle": "Filesystem Mounts",
+    "storageSubtitle": "Capacity, free space and usage per filesystem volume",
     "storageColMount": "Mount Path",
     "storageColDevice": "Block Device",
     "storageColFSType": "FS Type",
@@ -54,6 +55,7 @@
     "storageColFree": "Free",
     "storageColPercent": "Usage",
     "networkTitle": "Network Interfaces",
+    "networkSubtitle": "Link state, live rates and cumulative traffic per interface",
     "networkColIface": "Interface",
     "networkColStatus": "Link State",
     "networkColRxRate": "Download Rate",
@@ -62,7 +64,14 @@
     "networkColTxTotal": "Total Transmitted",
     "thermalTitle": "Thermal Zones & Sensors",
     "up": "Connected (UP)",
-    "down": "Down (DOWN)"
+    "down": "Down (DOWN)",
+    "thermalSubtitle": "Thresholds: ≥60°C warning, ≥75°C critical",
+    "thermalNormal": "Normal",
+    "thermalWarm": "Warm",
+    "thermalHot": "Hot",
+    "tagRoot": "ROOT",
+    "tagData": "DATA",
+    "tagExternal": "EXTERNAL"
   },
   "identity": {
     "title": "Device Identity",
@@ -74,6 +83,7 @@
     "saved": "Device identity saved; new pushes take effect immediately",
     "saveFailed": "Failed to save device identity",
     "loadFailed": "Failed to load device identity",
-    "hint": "Letters, digits, dot, underscore or hyphen, 1-64 characters; no restart required."
+    "hint": "Letters, digits, dot, underscore or hyphen, 1-64 characters; no restart required.",
+    "unsaved": "* Unsaved changes"
   }
 }

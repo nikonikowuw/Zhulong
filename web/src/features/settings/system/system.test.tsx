@@ -8,6 +8,7 @@ import { ThermalList } from './components/thermal-list'
 import { TrendCharts } from './components/trend-charts'
 import {
   type CPUStatus,
+  type HardwareHistoryPoint,
   type HostInfo,
   type MemoryStatus,
   type NPUStatus,
@@ -219,6 +220,132 @@ describe('TrendCharts Component', () => {
         )
       )
       .toBeVisible()
+  })
+
+  /**
+   * 回归「刻度被挤出图表容器」。
+   *
+   * 病根有两层，都是实测出来的：
+   *  1. 绘图区 `margin.left` 取负值 → 整个绘图区左移，刻度画到容器外；
+   *  2. `className` 传 `text-[10px]` 不生效 —— Recharts v3 把 className 加在轴的
+   *     `<g>` 上，SVG `<text>` 回落到浏览器默认 16px，`100%` 宽 38px 撑爆 40px 的
+   *     Y 轴槽，时间标签也顶出 X 轴行高。修法是用 `tick` prop 下发字号。
+   *
+   * 这里在真实浏览器里量 `getBoundingClientRect()`，把四个页签的每个刻度文字都
+   * 卡在 `.recharts-wrapper` 边界内；任何一处回退都会立刻变红。
+   */
+  it('keeps every axis tick inside the chart wrapper across all tabs', async () => {
+    const history: HardwareHistoryPoint[] = Array.from(
+      { length: 30 },
+      (_, i) => ({
+        timestamp: new Date(Date.UTC(2026, 10, 5, 12, 0, i * 3)).toISOString(),
+        cpuUsagePercent: 20 + (i % 15),
+        memUsagePercent: 45 + (i % 10),
+        npuLoadPercent: 95,
+        netRxRate: 1024 * 1024 * (1 + (i % 5)),
+        netTxRate: 512 * 1024,
+        temperature: 55 + (i % 8),
+      })
+    )
+
+    const screen = await render(
+      <div data-testid='host' style={{ width: '900px' }}>
+        <TrendCharts history={history} npuSupported />
+      </div>
+    )
+    const host = screen.getByTestId('host').element()
+
+    const TABS = [
+      /计算负载|Compute/,
+      /内存|Memory/,
+      /网络|Network/,
+      /温度|Thermal/,
+    ]
+
+    for (const tabPattern of TABS) {
+      const tab = await vi.waitFor(() => {
+        const found = Array.from(
+          host.querySelectorAll<HTMLElement>('[role="tab"]')
+        ).find((el) => tabPattern.test(el.textContent ?? ''))
+        if (!found) {
+          throw new Error(
+            `找不到页签 ${tabPattern}；实际 = ${JSON.stringify(
+              Array.from(
+                host.querySelectorAll<HTMLElement>('[role="tab"]')
+              ).map((el) => el.textContent)
+            )}`
+          )
+        }
+        return found
+      })
+      tab.click()
+
+      const wrapper = await vi.waitFor(() => {
+        const el = host.querySelector('.recharts-wrapper')
+        if (!el) throw new Error('recharts wrapper 尚未挂载')
+        return el as HTMLElement
+      })
+
+      // 等 Recharts 把刻度注进 DOM
+      await vi.waitFor(() => {
+        if (wrapper.querySelectorAll('svg text').length === 0) {
+          throw new Error('轴刻度尚未渲染')
+        }
+      })
+
+      const wRect = wrapper.getBoundingClientRect()
+      expect(wRect.width).toBeGreaterThan(0)
+
+      for (const node of Array.from(wrapper.querySelectorAll('svg text'))) {
+        const box = node.getBoundingClientRect()
+        const tag = `"${node.textContent?.trim()}"`
+        expect(box.left, `${tag} 左溢出`).toBeGreaterThanOrEqual(
+          wRect.left - 0.5
+        )
+        expect(box.right, `${tag} 右溢出`).toBeLessThanOrEqual(
+          wRect.right + 0.5
+        )
+        expect(box.top, `${tag} 上溢出`).toBeGreaterThanOrEqual(wRect.top - 0.5)
+        expect(box.bottom, `${tag} 下溢出`).toBeLessThanOrEqual(
+          wRect.bottom + 0.5
+        )
+      }
+    }
+  })
+
+  it('renders Y axis ticks at a legible axis font size', async () => {
+    const history: HardwareHistoryPoint[] = [
+      {
+        timestamp: new Date(Date.UTC(2026, 10, 5, 12, 0, 0)).toISOString(),
+        cpuUsagePercent: 42,
+        memUsagePercent: 50,
+        npuLoadPercent: 10,
+        netRxRate: 1024,
+        netTxRate: 512,
+        temperature: 55,
+      },
+    ]
+
+    const screen = await render(
+      <div data-testid='host' style={{ width: '900px' }}>
+        <TrendCharts history={history} npuSupported />
+      </div>
+    )
+    const host = screen.getByTestId('host').element()
+
+    const topTick = await vi.waitFor(() => {
+      const node = Array.from(host.querySelectorAll('svg text')).find(
+        (n) => n.textContent?.trim() === '100%'
+      )
+      if (!node) throw new Error('Y 轴 100% 刻度尚未渲染')
+      return node as SVGTextElement
+    })
+
+    // 字号由 `tick` prop 下发（12px 图表刻度常规尺寸）。
+    // 退回 className 继承会变成浏览器默认的 16px；误改成 10px 则过小难读。
+    expect(getComputedStyle(topTick).fontSize).toBe('12px')
+    expect(getComputedStyle(topTick).fontWeight).toBe('500')
+    expect(topTick.getBoundingClientRect().width).toBeGreaterThan(0)
   })
 })
 

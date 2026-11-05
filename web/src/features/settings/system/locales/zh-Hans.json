@@ -46,6 +46,7 @@
   },
   "details": {
     "storageTitle": "存储挂载分区详情",
+    "storageSubtitle": "各文件系统卷的容量、余量与使用率",
     "storageColMount": "挂载路径",
     "storageColDevice": "底层设备",
     "storageColFSType": "文件系统",
@@ -54,6 +55,7 @@
     "storageColFree": "可用余量",
     "storageColPercent": "使用率",
     "networkTitle": "网络接口流量与状态",
+    "networkSubtitle": "各接口链路状态、即时速率与累计流量",
     "networkColIface": "网络接口",
     "networkColStatus": "连接状态",
     "networkColRxRate": "当前下行速率",
@@ -62,7 +64,14 @@
     "networkColTxTotal": "累计发送流量",
     "thermalTitle": "各芯片与测温传感器点位",
     "up": "已连接 (UP)",
-    "down": "未连接 (DOWN)"
+    "down": "未连接 (DOWN)",
+    "thermalSubtitle": "阈值：≥60°C 警戒、≥75°C 过热",
+    "thermalNormal": "正常",
+    "thermalWarm": "警戒",
+    "thermalHot": "过热",
+    "tagRoot": "根分区",
+    "tagData": "数据盘",
+    "tagExternal": "外接盘"
   },
   "identity": {
     "title": "设备标识",
@@ -74,6 +83,7 @@
     "saved": "设备标识已保存，新推送立即生效",
     "saveFailed": "设备标识保存失败",
     "loadFailed": "设备标识读取失败",
-    "hint": "仅支持字母、数字、点、下划线、连字符，长度 1-64；保存后无需重启。"
+    "hint": "仅支持字母、数字、点、下划线、连字符，长度 1-64；保存后无需重启。",
+    "unsaved": "* 未保存更改"
   }
 }
