@@ -69,7 +69,11 @@ type AlarmEvent struct {
 	Extra     map[string]any `json:"-"`
 }
 
-// AlarmListener receives finalized events asynchronously.
+// AlarmListener receives finalized events.
+//
+// ctx 的生命周期不保证等于推理请求：同步分发（dispatchCreated）传入当次
+// ProcessInferenceResult 的 ctx，异步路径（sweeper 超时降级、快照完成回调）传入
+// 后台 context。实现方不得把 ctx 取消当成「事件被撤销」的信号，也不得把它存进结构体。
 type AlarmListener interface {
 	OnAlarm(ctx context.Context, ev AlarmEvent)
 }

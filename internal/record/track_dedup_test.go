@@ -2,6 +2,7 @@ package record_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -459,6 +460,71 @@ func TestTrackDeduplication_CooldownKeyContract(t *testing.T) {
 					t.Errorf("got %q, want %q", k, tt.expected)
 				}
 			})
+		}
+	})
+}
+
+// TestTrackDeduplication_MultiKeyContract 守住两级抑制键的「无重复」不变量。
+//
+// AllowAll 内部会去重，所以重复键不会表现为 bug，只会表现为白付一次键构造；
+// 真正的契约是「回落键与人员/车牌键同源时必须只出现一次」。
+func TestTrackDeduplication_MultiKeyContract(t *testing.T) {
+	t.Run("recognition two-level keys", func(t *testing.T) {
+		tracked := record.RecognitionCooldownKeysForTest(
+			"cam_01",
+			12,
+			aitypes.FaceSubItem{Box: [4]float64{0.1, 0.2, 0.3, 0.4}, PersonID: "person_1"},
+		)
+		wantTracked := []string{"rec:cam_01:trk:12", "rec:cam_01:person:person_1"}
+		if !slices.Equal(tracked, wantTracked) {
+			t.Errorf("tracked keys = %v, want %v", tracked, wantTracked)
+		}
+
+		fallback := record.RecognitionCooldownKeysForTest(
+			"cam_01",
+			0,
+			aitypes.FaceSubItem{Box: [4]float64{0.1, 0.2, 0.3, 0.4}, PersonID: "person_1"},
+		)
+		wantFallback := []string{"rec:cam_01:person:person_1"}
+		if !slices.Equal(fallback, wantFallback) {
+			t.Errorf("fallback keys = %v, want %v (回落键不得重复)", fallback, wantFallback)
+		}
+	})
+
+	t.Run("vehicle two-level keys", func(t *testing.T) {
+		tracked := record.VehicleCaptureCooldownKeysForTest(
+			"cam_01",
+			42,
+			"粤B12345",
+			[4]float64{0.1, 0.2, 0.3, 0.4},
+		)
+		wantTracked := []string{"cap:cam_01:vehicle:trk:42", "cap:cam_01:vehicle:plate:粤B12345"}
+		if !slices.Equal(tracked, wantTracked) {
+			t.Errorf("tracked keys = %v, want %v", tracked, wantTracked)
+		}
+
+		fallback := record.VehicleCaptureCooldownKeysForTest(
+			"cam_01",
+			0,
+			"粤B12345",
+			[4]float64{0.1, 0.2, 0.3, 0.4},
+		)
+		wantFallback := []string{"cap:cam_01:vehicle:plate:粤B12345"}
+		if !slices.Equal(fallback, wantFallback) {
+			t.Errorf("fallback keys = %v, want %v (回落键不得重复)", fallback, wantFallback)
+		}
+	})
+
+	t.Run("detection and alarm keys", func(t *testing.T) {
+		if got, want := record.DetectionCaptureCooldownKeyForTest("cam_01", "person", 9), "cap:cam_01:person:trk:9"; got != want {
+			t.Errorf("detection tracked key = %q, want %q", got, want)
+		}
+		// spec §1：无身份回落保持 cap:{camera}:{label}。
+		if got, want := record.DetectionCaptureCooldownKeyForTest("cam_01", "person", 0), "cap:cam_01:person"; got != want {
+			t.Errorf("detection fallback key = %q, want %q", got, want)
+		}
+		if got, want := record.AlarmCooldownKeyForTest("cam_01", "smoke"), "alarm:cam_01:smoke"; got != want {
+			t.Errorf("alarm key = %q, want %q", got, want)
 		}
 	})
 }

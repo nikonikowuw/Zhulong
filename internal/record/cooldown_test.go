@@ -119,7 +119,7 @@ func TestCooldownManager_ConcurrentAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				_ = cm.Allow("shared_key", now.Add(time.Duration(j)*time.Millisecond))
+				cm.Allow("shared_key", now.Add(time.Duration(j)*time.Millisecond))
 				if j%10 == 0 {
 					cm.SetCooldown(time.Duration(id+1) * 10 * time.Millisecond)
 				}

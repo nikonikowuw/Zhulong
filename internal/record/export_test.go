@@ -87,9 +87,13 @@ func NewSnapshotJobWithPTSForTest(
 }
 
 var (
-	RecognitionCooldownKeyForTest    = recognitionCooldownKey
-	PersonCaptureCooldownKeyForTest  = personCaptureCooldownKey
-	FaceCaptureCooldownKeyForTest    = faceCaptureCooldownKey
-	VehicleCaptureCooldownKeyForTest = vehicleCaptureCooldownKey
-	SnapshotRelDirForTest            = snapshotRelDir
+	RecognitionCooldownKeyForTest      = recognitionCooldownKey
+	RecognitionCooldownKeysForTest     = recognitionCooldownKeys
+	PersonCaptureCooldownKeyForTest    = personCaptureCooldownKey
+	FaceCaptureCooldownKeyForTest      = faceCaptureCooldownKey
+	VehicleCaptureCooldownKeyForTest   = vehicleCaptureCooldownKey
+	VehicleCaptureCooldownKeysForTest  = vehicleCaptureCooldownKeys
+	DetectionCaptureCooldownKeyForTest = detectionCaptureCooldownKey
+	AlarmCooldownKeyForTest            = alarmCooldownKey
+	SnapshotRelDirForTest              = snapshotRelDir
 )

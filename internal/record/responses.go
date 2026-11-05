@@ -73,11 +73,12 @@ func unmarshalMapOrDefault(raw string) map[string]any {
 }
 
 func unmarshalBox(raw string) [4]float64 {
-	var box [4]float64
 	if raw == "" {
-		return box
+		return [4]float64{}
 	}
+	var box [4]float64
 	if err := json.Unmarshal([]byte(raw), &box); err != nil {
+		// 坏 JSON 可能已部分写入 box；对外必须是零框，不能把半个坐标泄漏出去。
 		return [4]float64{}
 	}
 	return box

@@ -381,3 +381,16 @@ func TestStoreBackfillPersonExternalID(t *testing.T) {
 		t.Errorf("expected no-op for a missing person, got n=%d err=%v", n, err)
 	}
 }
+
+// TestClearRecordSnapshotPathsRejectsUnknownTable 守住「未知表不得静默成功」。
+//
+// 该函数曾经对未知表直接返回 nil：调用方会认为预填的路径已经清空，而记录里
+// 仍留着指向不存在文件的引用。表名来自 snapshotJob，写错一次就只会表现为死链。
+func TestClearRecordSnapshotPathsRejectsUnknownTable(t *testing.T) {
+	store, _, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	if err := store.ClearRecordSnapshotPaths(context.Background(), "not_a_records_table", "row_1"); err == nil {
+		t.Fatal("expected an error for an unsupported table, got nil")
+	}
+}

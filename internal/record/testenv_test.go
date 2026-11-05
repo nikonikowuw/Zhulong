@@ -62,7 +62,9 @@ func setupTestStore(t *testing.T) (*record.Store, *database.Store, func()) {
 	}
 
 	cleanup := func() {
-		_ = dbStore.Close()
+		if err := dbStore.Close(); err != nil {
+			t.Errorf("close test database: %v", err)
+		}
 	}
 	return record.NewStore(dbStore), dbStore, cleanup
 }

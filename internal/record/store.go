@@ -458,7 +458,7 @@ func (s *Store) enqueuePendingSnapshotDeletes(ctx context.Context, ids []string)
 		return 0, nil
 	}
 
-	res := db.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(rows, 200)
+	res := db.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(rows, pendingSnapshotDeleteBatchSize)
 	if res.Error != nil {
 		return 0, res.Error
 	}
@@ -751,6 +751,8 @@ func (s *Store) ClearRecordSnapshotPaths(ctx context.Context, table, id string) 
 			"face_image_path": "",
 		}).Error
 	default:
-		return nil
+		// 未知表名曾经静默返回 nil，等于「路径清空成功了」；调用方据此认为
+		// 已没有悬空引用。这里必须报错，让误传的表名在日志里暴露。
+		return fmt.Errorf("clear snapshot paths: unsupported table %q", table)
 	}
 }

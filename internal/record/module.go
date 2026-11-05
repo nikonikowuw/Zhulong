@@ -51,7 +51,7 @@ func (l *recordLifecycleImpl) Stop(ctx context.Context) error {
 	if l.service != nil {
 		l.service.Stop()
 	}
-	// 先停清理：它要写 SQLite，必须在 native/数据库关闭之前退出。
+	// 清理器是这里唯一还要写 SQLite 的组件：它必须在 native/数据库关闭之前退出。
 	if l.pruner != nil {
 		l.pruner.Stop()
 	}
@@ -76,13 +76,18 @@ func NewRecordComponents(
 	service := NewService(store, logger)
 	handler := NewHandler(service)
 	pruner := NewRetentionPruner(store, logger, RetentionOptions{})
+	lifecycle := &recordLifecycleImpl{
+		logger:  logger.Named("record.lifecycle"),
+		pruner:  pruner,
+		service: service,
+	}
 
 	return RecordComponents{
 		Store:           store,
 		Service:         service,
 		Handler:         handler,
 		Pruner:          pruner,
-		Lifecycle:       &recordLifecycleImpl{logger: logger.Named("record.lifecycle"), pruner: pruner, service: service},
+		Lifecycle:       lifecycle,
 		ProtectedRoutes: handler,
 	}
 }

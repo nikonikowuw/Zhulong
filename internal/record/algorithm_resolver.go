@@ -2,11 +2,10 @@ package record
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
-	"gorm.io/gorm"
+	"go.uber.org/zap"
 )
 
 // AlgorithmSnapshot 是算法身份在感知记录里的冗余快照。
@@ -37,7 +36,8 @@ const algorithmCacheTTL = 5 * time.Second
 // 反过来注入 algorithm 域会让 record 依赖算法监督者的生命周期顺序，把两个
 // 本可独立启停的域绑死。
 type AlgorithmResolver struct {
-	store *Store
+	store  *Store
+	logger *zap.Logger
 
 	mu       sync.RWMutex
 	cached   map[string]AlgorithmSnapshot
@@ -45,8 +45,11 @@ type AlgorithmResolver struct {
 }
 
 // NewAlgorithmResolver 构造算法身份解析器。纯构造函数，不查库。
-func NewAlgorithmResolver(store *Store) *AlgorithmResolver {
-	return &AlgorithmResolver{store: store}
+func NewAlgorithmResolver(store *Store, logger *zap.Logger) *AlgorithmResolver {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &AlgorithmResolver{store: store, logger: logger}
 }
 
 // resolveAlgorithmSnapshots 批量解析算法 ID → 快照。
@@ -91,6 +94,9 @@ func (r *AlgorithmResolver) resolveAlgorithmSnapshots(ctx context.Context, ids [
 	// 缓存未命中：查库（只取不可变的三列）
 	db, err := r.store.db(ctx)
 	if err != nil {
+		// 查询失败只降级不报错（记录必须落库），但不能完全无声：用 Debug 是因为
+		// 这条路径按帧触发，DB 真不可用时其它写路径会先喊出来。
+		r.logger.Debug("algorithm snapshot lookup skipped: database unavailable", zap.Error(err))
 		return result
 	}
 	var rows []struct {
@@ -98,10 +104,12 @@ func (r *AlgorithmResolver) resolveAlgorithmSnapshots(ctx context.Context, ids [
 		Name    string
 		Version string
 	}
+	// Scan 不返回 ErrRecordNotFound（空结果就是零行），因此这里只需处理真实错误。
 	if err := db.Table("algorithms").
 		Select("id, name, version").
 		Where("id IN ?", missing).
-		Scan(&rows).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		Scan(&rows).Error; err != nil {
+		r.logger.Debug("algorithm snapshot query failed", zap.Error(err))
 		return result
 	}
 

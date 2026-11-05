@@ -35,7 +35,9 @@ func TestResponses_NullJSONBecomesEmptySliceAndMap(t *testing.T) {
 		t.Fatalf("marshal recResp: %v", err)
 	}
 	var rawRec map[string]any
-	_ = json.Unmarshal(bytesRec, &rawRec)
+	if err := json.Unmarshal(bytesRec, &rawRec); err != nil {
+		t.Fatalf("unmarshal recResp: %v", err)
+	}
 	if rawRec["candidates"] == nil {
 		t.Errorf("expected candidates to serialize to [], got null in JSON: %s", string(bytesRec))
 	}
@@ -57,9 +59,14 @@ func TestResponses_NullJSONBecomesEmptySliceAndMap(t *testing.T) {
 	if alarmResp.Extra == nil {
 		t.Errorf("expected non-nil Extra map")
 	}
-	bytesAlarm, _ := json.Marshal(alarmResp)
+	bytesAlarm, err := json.Marshal(alarmResp)
+	if err != nil {
+		t.Fatalf("marshal alarmResp: %v", err)
+	}
 	var rawAlarm map[string]any
-	_ = json.Unmarshal(bytesAlarm, &rawAlarm)
+	if err := json.Unmarshal(bytesAlarm, &rawAlarm); err != nil {
+		t.Fatalf("unmarshal alarmResp: %v", err)
+	}
 	if rawAlarm["extra"] == nil {
 		t.Errorf("expected extra to serialize to {}, got null in JSON: %s", string(bytesAlarm))
 	}
@@ -77,9 +84,14 @@ func TestResponses_NullJSONBecomesEmptySliceAndMap(t *testing.T) {
 	if capResp.Attributes == nil {
 		t.Errorf("expected non-nil Attributes map")
 	}
-	bytesCap, _ := json.Marshal(capResp)
+	bytesCap, err := json.Marshal(capResp)
+	if err != nil {
+		t.Fatalf("marshal capResp: %v", err)
+	}
 	var rawCap map[string]any
-	_ = json.Unmarshal(bytesCap, &rawCap)
+	if err := json.Unmarshal(bytesCap, &rawCap); err != nil {
+		t.Fatalf("unmarshal capResp: %v", err)
+	}
 	if rawCap["attributes"] == nil {
 		t.Errorf("expected attributes to serialize to {}, got null in JSON: %s", string(bytesCap))
 	}

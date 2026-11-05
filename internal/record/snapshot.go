@@ -99,8 +99,10 @@ type SnapshotStore struct {
 	stopped bool
 
 	quality int
-	dropped int64
+
+	// dropMu 保护 dropped：入队失败发生在调用方 goroutine，读侧是运维接口。
 	dropMu  sync.Mutex
+	dropped int64
 }
 
 // NewSnapshotStore 构造抓拍落盘组件，quality 为 JPEG 质量（0 表示使用默认值）。
@@ -303,8 +305,8 @@ func (s *SnapshotStore) writeOutputs(
 	job snapshotJob,
 	root string,
 	byIndex map[int]engine.SnapshotImage,
-) map[string]bool {
-	written := make(map[string]bool, len(job.outputs))
+) map[string]struct{} {
+	written := make(map[string]struct{}, len(job.outputs))
 
 	for _, out := range job.outputs {
 		img, ok := byIndex[out.boxIndex]
@@ -316,7 +318,7 @@ func (s *SnapshotStore) writeOutputs(
 			continue
 		}
 		if s.writeOutput(job, root, out, img) {
-			written[out.relPath] = true
+			written[out.relPath] = struct{}{}
 		}
 	}
 
@@ -381,7 +383,7 @@ func (s *SnapshotStore) clearRecordPaths(job snapshotJob) {
 }
 
 // notifyObserver 把每个输出路径的写入结果回报给观察者（用于异步告警事件分发）。
-func (s *SnapshotStore) notifyObserver(job snapshotJob, written map[string]bool) {
+func (s *SnapshotStore) notifyObserver(job snapshotJob, written map[string]struct{}) {
 	observer := s.jobObserver()
 	if observer == nil || job.targetTable == "" || job.targetID == "" {
 		return
@@ -389,9 +391,10 @@ func (s *SnapshotStore) notifyObserver(job snapshotJob, written map[string]bool)
 
 	outs := make([]SnapshotJobOutput, len(job.outputs))
 	for i, out := range job.outputs {
+		_, ok := written[out.relPath]
 		outs[i] = SnapshotJobOutput{
 			RelPath: out.relPath,
-			Written: written[out.relPath],
+			Written: ok,
 		}
 	}
 	observer.OnSnapshotJobDone(job.targetTable, job.targetID, SnapshotJobResult{Outputs: outs})

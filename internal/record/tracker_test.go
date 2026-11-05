@@ -156,7 +156,7 @@ func TestTargetTracker_EmptyAndConcurrentAccess(t *testing.T) {
 				obs := []record.ObservationForTest{
 					{Box: [4]float64{0.1, 0.1, 0.3, 0.3}},
 				}
-				_ = tr.ResolveFrame(bucket, obs, base.Add(time.Duration(j)*100*time.Millisecond), ttl)
+				tr.ResolveFrame(bucket, obs, base.Add(time.Duration(j)*100*time.Millisecond), ttl)
 			}
 		}(i)
 	}

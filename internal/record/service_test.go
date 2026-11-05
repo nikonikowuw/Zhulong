@@ -233,11 +233,13 @@ func TestServiceAlarmLabelDiscrimination(t *testing.T) {
 	if totalAlarms != 2 {
 		t.Fatalf("expected 2 alarms (no_helmet, real_fire), got %d: %+v", totalAlarms, alarms)
 	}
-	alarmTypes := map[string]bool{}
+	alarmTypes := map[string]struct{}{}
 	for _, a := range alarms {
-		alarmTypes[a.AlarmType] = true
+		alarmTypes[a.AlarmType] = struct{}{}
 	}
-	if !alarmTypes["no_helmet"] || !alarmTypes["real_fire"] {
+	_, hasNoHelmet := alarmTypes["no_helmet"]
+	_, hasRealFire := alarmTypes["real_fire"]
+	if !hasNoHelmet || !hasRealFire {
 		t.Errorf("unexpected alarm types: %+v", alarmTypes)
 	}
 
