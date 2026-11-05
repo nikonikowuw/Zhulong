@@ -49,27 +49,29 @@ func (l *algorithmLifecycleImpl) Start(ctx context.Context) error {
 
 	// Auto-start active algorithms on host boot
 	algos, err := l.service.ListAlgorithms(ctx)
-	if err == nil {
-		for _, algo := range algos {
-			if algo.Status == StatusActive {
-				l.logger.Info("auto-starting active algorithm", zap.String("id", algo.ID))
-				if startErr := l.service.supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); startErr != nil {
-					if errors.Is(startErr, algorunner.ErrNoBrokerSockets) {
-						l.logger.Info(
-							"active algorithm held in standby state on host startup (no active tasks)",
-							zap.String("id", algo.ID),
-						)
-					} else {
-						l.logger.Error("failed to auto-start active algorithm",
-							zap.String("id", algo.ID),
-							zap.Error(startErr),
-						)
-					}
-				}
+	if err != nil {
+		l.logger.Error("failed to list algorithms on lifecycle startup", zap.Error(err))
+		return nil
+	}
+
+	for _, algo := range algos {
+		if algo.Status != StatusActive {
+			continue
+		}
+		l.logger.Info("auto-starting active algorithm", zap.String("id", algo.ID))
+		if startErr := l.service.supervisor.StartAlgorithm(ctx, algo.ToPackageMeta()); startErr != nil {
+			if errors.Is(startErr, algorunner.ErrNoBrokerSockets) {
+				l.logger.Info(
+					"active algorithm held in standby state on host startup (no active tasks)",
+					zap.String("id", algo.ID),
+				)
+			} else {
+				l.logger.Error("failed to auto-start active algorithm",
+					zap.String("id", algo.ID),
+					zap.Error(startErr),
+				)
 			}
 		}
-	} else {
-		l.logger.Error("failed to list algorithms on lifecycle startup", zap.Error(err))
 	}
 	return nil
 }

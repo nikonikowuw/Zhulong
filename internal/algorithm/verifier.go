@@ -440,42 +440,9 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, sample
 		return fmt.Errorf("%w: execution failed (%v): %s", ErrVerificationFailed, err, stderrBuf.String())
 	}
 
-	// Parse the JSON report. Many vendor libraries (e.g. librga / rknpu) print banners
-	// or diagnostics upon process exit, so search backwards for the final JSON report line.
-	output := strings.TrimSpace(stdoutBuf.String())
-	lines := strings.Split(output, "\n")
-	if len(lines) == 0 {
-		return fmt.Errorf("%w: empty output from package entry", ErrVerificationFailed)
-	}
-
-	var report VerificationReport
-	var parsed bool
-	var parseErr error
-	var candidateLine string
-
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
-		if candidateLine == "" {
-			candidateLine = line
-		}
-		if strings.HasPrefix(line, "{") && strings.Contains(line, `"status"`) {
-			if err := json.Unmarshal([]byte(line), &report); err == nil && report.Status != "" {
-				parsed = true
-				break
-			} else if err != nil && parseErr == nil {
-				parseErr = err
-			}
-		}
-	}
-
-	if !parsed {
-		if parseErr != nil {
-			return fmt.Errorf("%w: cannot parse package report (%s): %v", ErrVerificationFailed, candidateLine, parseErr)
-		}
-		return fmt.Errorf("%w: no valid verification report found in output (%s)", ErrVerificationFailed, candidateLine)
+	report, err := parseVerificationReport(stdoutBuf.String())
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrVerificationFailed, err)
 	}
 
 	if report.Status != "passed" {
@@ -508,6 +475,48 @@ func (v *Verifier) runDynamicVerification(ctx context.Context, entryPath, sample
 	}
 
 	return nil
+}
+
+// parseVerificationReport extracts and parses the final VerificationReport JSON from entry output.
+// Many vendor libraries (e.g. librga / rknpu) print diagnostic banners upon exit,
+// so it searches backwards for the final valid JSON report line.
+func parseVerificationReport(output string) (*VerificationReport, error) {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return nil, errors.New("empty output from package entry")
+	}
+	lines := strings.Split(trimmed, "\n")
+
+	var report VerificationReport
+	var parsed bool
+	var parseErr error
+	var candidateLine string
+
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if candidateLine == "" {
+			candidateLine = line
+		}
+		if strings.HasPrefix(line, "{") && strings.Contains(line, `"status"`) {
+			if err := json.Unmarshal([]byte(line), &report); err == nil && report.Status != "" {
+				parsed = true
+				break
+			} else if err != nil && parseErr == nil {
+				parseErr = err
+			}
+		}
+	}
+
+	if !parsed {
+		if parseErr != nil {
+			return nil, fmt.Errorf("cannot parse package report (%s): %w", candidateLine, parseErr)
+		}
+		return nil, fmt.Errorf("no valid verification report found in output (%s)", candidateLine)
+	}
+	return &report, nil
 }
 
 // StageAndVerify extracts an archive into a temporary folder, verifies it,

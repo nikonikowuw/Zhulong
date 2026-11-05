@@ -131,6 +131,66 @@ func (m *Manifest) SupportsMotionGateOrDefault() bool {
 	return *m.SupportsMotionGate
 }
 
+// AlgorithmResponse models the external HTTP response payload for an algorithm package.
+// GORM 模型必须与对外 API 响应载荷严格隔离（.trellis/spec/backend/http-api-guidelines.md §4）。
+type AlgorithmResponse struct {
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Version            string    `json:"version"`
+	TaskType           string    `json:"taskType"`
+	Category           string    `json:"category"`
+	TargetArch         string    `json:"targetArch"`
+	TargetDevice       string    `json:"targetDevice"`
+	ComputeCost        int       `json:"computeCost"`
+	MemoryMB           int       `json:"memoryMb"`
+	Description        string    `json:"description"`
+	ManifestJSON       string    `json:"manifestJson"`
+	ConfigSchemaJSON   string    `json:"configSchemaJson"`
+	SupportsMotionGate bool      `json:"supportsMotionGate"`
+	Status             string    `json:"status"`
+	PreviousVersion    string    `json:"previousVersion"`
+	CreatedAt          time.Time `json:"createdAt"`
+	UpdatedAt          time.Time `json:"updatedAt"`
+}
+
+// ToResponse converts an Algorithm domain model to an external AlgorithmResponse.
+func (a *Algorithm) ToResponse() AlgorithmResponse {
+	if a == nil {
+		return AlgorithmResponse{}
+	}
+	return AlgorithmResponse{
+		ID:                 a.ID,
+		Name:               a.Name,
+		Version:            a.Version,
+		TaskType:           a.TaskType,
+		Category:           a.Category,
+		TargetArch:         a.TargetArch,
+		TargetDevice:       a.TargetDevice,
+		ComputeCost:        a.ComputeCost,
+		MemoryMB:           a.MemoryMB,
+		Description:        a.Description,
+		ManifestJSON:       a.ManifestJSON,
+		ConfigSchemaJSON:   a.ConfigSchemaJSON,
+		SupportsMotionGate: a.SupportsMotionGate,
+		Status:             a.Status,
+		PreviousVersion:    a.PreviousVersion,
+		CreatedAt:          a.CreatedAt.UTC(),
+		UpdatedAt:          a.UpdatedAt.UTC(),
+	}
+}
+
+// ToAlgorithmResponseList converts a slice of Algorithm to AlgorithmResponse.
+func ToAlgorithmResponseList(algos []Algorithm) []AlgorithmResponse {
+	if algos == nil {
+		return []AlgorithmResponse{}
+	}
+	res := make([]AlgorithmResponse, len(algos))
+	for i := range algos {
+		res[i] = algos[i].ToResponse()
+	}
+	return res
+}
+
 // AlgorithmTrialResponse models the output of a single static image trial inference.
 type AlgorithmTrialResponse struct {
 	CostMs          int64                        `json:"costMs"`

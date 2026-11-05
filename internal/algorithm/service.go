@@ -3,14 +3,12 @@ package algorithm
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"time"
 
@@ -150,7 +148,7 @@ func (s *Service) InstallAlgorithmFromStream(ctx context.Context, r io.Reader, l
 		if errors.Is(err, ErrFileTooLarge) || errors.As(err, &maxBytesErr) {
 			return nil, httputil.NewError(http.StatusRequestEntityTooLarge, "FILE_TOO_LARGE", "Uploaded file exceeds 500MB", err)
 		}
-		return nil, apperr.Internal("INTERNAL_ERROR", "Failed to save upload", err)
+		return nil, apperr.Internal(internalErrorCode, "Failed to save upload", err)
 	}
 	defer func() {
 		if rmErr := os.Remove(tmpPath); rmErr != nil && !os.IsNotExist(rmErr) {
@@ -241,10 +239,12 @@ func (s *Service) ListAlgorithms(ctx context.Context) ([]Algorithm, error) {
 		return nil, apperr.Internal(internalErrorCode, "Failed to list algorithms", err)
 	}
 	// Enrich with live supervisor status
-	for i := range algos {
-		liveStatus := s.supervisor.GetStatus(algos[i].ID)
-		if liveStatus != StatusDisabled {
-			algos[i].Status = liveStatus
+	if s.supervisor != nil {
+		for i := range algos {
+			liveStatus := s.supervisor.GetStatus(algos[i].ID)
+			if liveStatus != StatusDisabled {
+				algos[i].Status = liveStatus
+			}
 		}
 	}
 	return algos, nil
@@ -256,9 +256,11 @@ func (s *Service) GetAlgorithm(ctx context.Context, id string) (*Algorithm, erro
 	if err != nil {
 		return nil, err
 	}
-	liveStatus := s.supervisor.GetStatus(algo.ID)
-	if liveStatus != StatusDisabled {
-		algo.Status = liveStatus
+	if s.supervisor != nil {
+		liveStatus := s.supervisor.GetStatus(algo.ID)
+		if liveStatus != StatusDisabled {
+			algo.Status = liveStatus
+		}
 	}
 	return algo, nil
 }
@@ -268,6 +270,9 @@ func (s *Service) EnableAlgorithm(ctx context.Context, id string) error {
 	algo, err := s.loadAlgorithm(ctx, id)
 	if err != nil {
 		return err
+	}
+	if s.supervisor == nil {
+		return apperr.Internal(internalErrorCode, "Runner supervisor is not initialized", nil)
 	}
 
 	liveStatus := s.supervisor.GetStatus(id)
@@ -332,6 +337,9 @@ func (s *Service) DisableAlgorithm(ctx context.Context, id string) error {
 	if _, err := s.loadAlgorithm(ctx, id); err != nil {
 		return err
 	}
+	if s.supervisor == nil {
+		return apperr.Internal(internalErrorCode, "Runner supervisor is not initialized", nil)
+	}
 
 	if err := s.supervisor.StopAlgorithm(ctx, id); err != nil {
 		return apperr.Internal(internalErrorCode, "Failed to stop runner supervisor", err)
@@ -344,6 +352,9 @@ func (s *Service) DisableAlgorithm(ctx context.Context, id string) error {
 
 // ResetAlgorithm resets an algorithm from CRASH_LOOP back to DISABLED so it can be re-enabled.
 func (s *Service) ResetAlgorithm(ctx context.Context, id string) error {
+	if s.supervisor == nil {
+		return apperr.Internal(internalErrorCode, "Runner supervisor is not initialized", nil)
+	}
 	if err := s.supervisor.ResetAlgorithm(ctx, id); err != nil {
 		if errors.Is(err, algorunner.ErrAlgorithmNotInCrashLoop) {
 			return apperr.Conflict("ALGORITHM_NOT_IN_CRASH_LOOP", "Algorithm is not in CRASH_LOOP", err)
@@ -360,13 +371,15 @@ func (s *Service) DeleteAlgorithm(ctx context.Context, id string) error {
 		return err
 	}
 
-	status := s.supervisor.GetStatus(id)
-	switch status {
-	case StatusRunning, StatusStarting, StatusRollingBack:
-		return apperr.Conflict("ALGORITHM_IS_ACTIVE", "Algorithm is active", ErrAlgorithmActive)
-	}
-	if err := s.supervisor.StopAlgorithm(ctx, id); err != nil {
-		return apperr.Internal(internalErrorCode, "Failed to stop algorithm before deletion", err)
+	if s.supervisor != nil {
+		status := s.supervisor.GetStatus(id)
+		switch status {
+		case StatusRunning, StatusStarting, StatusRollingBack:
+			return apperr.Conflict("ALGORITHM_IS_ACTIVE", "Algorithm is active", ErrAlgorithmActive)
+		}
+		if err := s.supervisor.StopAlgorithm(ctx, id); err != nil {
+			return apperr.Internal(internalErrorCode, "Failed to stop algorithm before deletion", err)
+		}
 	}
 
 	// Delete associated analysis tasks
@@ -404,11 +417,14 @@ func (s *Service) OnTaskChanged(ctx context.Context, algorithmID string) {
 func (s *Service) GetAlgorithmSpec(ctx context.Context, idOrName string) (*task.AlgorithmSpec, error) {
 	algo, err := s.store.GetAlgorithm(ctx, idOrName)
 	if err != nil {
-		if algoByName, errName := s.store.GetAlgorithmByName(ctx, idOrName); errName == nil {
-			algo = algoByName
-		} else {
+		if !errors.Is(err, ErrNotFound) {
 			return nil, err
 		}
+		algoByName, errName := s.store.GetAlgorithmByName(ctx, idOrName)
+		if errName != nil {
+			return nil, errName
+		}
+		algo = algoByName
 	}
 	return &task.AlgorithmSpec{
 		ID:               algo.ID,
@@ -514,9 +530,26 @@ func (s *Service) restartAlgorithmNow(algorithmID string) {
 	}
 }
 
-// StopAll stops all active subprocesses.
+// CancelPendingRestarts cancels all pending debounce restart timers.
+func (s *Service) CancelPendingRestarts() {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+
+	for id, timer := range s.restartTimers {
+		if timer != nil {
+			timer.Stop()
+		}
+		delete(s.restartTimers, id)
+	}
+	s.restartPending = make(map[string]struct{})
+}
+
+// StopAll stops all active subprocesses and cancels pending restart timers.
 func (s *Service) StopAll(timeout time.Duration) {
-	s.supervisor.StopAll(timeout)
+	s.CancelPendingRestarts()
+	if s.supervisor != nil {
+		s.supervisor.StopAll(timeout)
+	}
 }
 
 // TrialInference runs a one-shot inference on an uploaded static image against an installed, disabled algorithm.
@@ -600,19 +633,9 @@ func (s *Service) TrialInference(
 		)
 	}
 
-	output := strings.TrimSpace(stdoutBuf.String())
-	if output == "" {
-		return nil, apperr.Internal("TRIAL_EXECUTION_FAILED", "Empty output from algorithm entry", nil)
-	}
-	lines := strings.Split(output, "\n")
-	lastLine := strings.TrimSpace(lines[len(lines)-1])
-	var report VerificationReport
-	if err := json.Unmarshal([]byte(lastLine), &report); err != nil {
-		return nil, apperr.Internal(
-			"TRIAL_EXECUTION_FAILED",
-			fmt.Sprintf("Cannot parse trial report: %v", err),
-			err,
-		)
+	report, err := parseVerificationReport(stdoutBuf.String())
+	if err != nil {
+		return nil, apperr.Internal("TRIAL_EXECUTION_FAILED", err.Error(), err)
 	}
 
 	if report.Status != "passed" {

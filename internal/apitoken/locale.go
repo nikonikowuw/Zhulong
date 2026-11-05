@@ -34,5 +34,10 @@ func init() {
 			"zh-Hans": "令牌名称不能超过 48 个字符",
 			"zh-Hant": "令牌名稱不能超過 48 個字符",
 		},
+		"API_TOKEN_NAME_INVALID": {
+			"en":      "Token name contains invalid characters",
+			"zh-Hans": "令牌名称包含非法控制字符",
+			"zh-Hant": "令牌名稱包含非法控制字符",
+		},
 	})
 }

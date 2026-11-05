@@ -305,8 +305,6 @@ func writeArchiveFile(targetPath string, r io.Reader, remaining int64) (int64, e
 	return written, nil
 }
 
-// ExtractMultipartFile extracts a specific form file part from an incoming multipart HTTP request.
-// It returns the part ReadCloser and a cleanup closure to close the part.
 // isZipSlipPath reports whether a filepath.Clean-ed archive entry name would
 // land outside the extraction directory. Archive entry names use forward
 // slashes regardless of host OS, so the separator check is a literal "/".
@@ -317,6 +315,8 @@ func isZipSlipPath(relPath string) bool {
 	return strings.HasPrefix(relPath, "..") || strings.HasPrefix(relPath, "/")
 }
 
+// ExtractMultipartFile extracts a specific form file part from an incoming multipart HTTP request.
+// It returns the part ReadCloser and a cleanup closure to close the part.
 func ExtractMultipartFile(r *http.Request, fieldName string) (io.ReadCloser, func(), error) {
 	reader, err := r.MultipartReader()
 	if err != nil {

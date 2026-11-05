@@ -270,7 +270,12 @@ definitions:
       secret:
         $ref: '#/definitions/alertpush.AlertDestinationSecretInfo'
     type: object
-  algorithm.Algorithm:
+  algorithm.AlgorithmDeleteResponse:
+    properties:
+      deleted:
+        type: boolean
+    type: object
+  algorithm.AlgorithmResponse:
     properties:
       category:
         type: string
@@ -306,11 +311,6 @@ definitions:
         type: string
       version:
         type: string
-    type: object
-  algorithm.AlgorithmDeleteResponse:
-    properties:
-      deleted:
-        type: boolean
     type: object
   algorithm.AlgorithmStatusResponse:
     properties:
@@ -2792,7 +2792,7 @@ paths:
             - properties:
                 data:
                   items:
-                    $ref: '#/definitions/algorithm.Algorithm'
+                    $ref: '#/definitions/algorithm.AlgorithmResponse'
                   type: array
               type: object
         "500":
@@ -2857,7 +2857,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/algorithm.Algorithm'
+                  $ref: '#/definitions/algorithm.AlgorithmResponse'
               type: object
         "404":
           description: Not Found
@@ -3082,7 +3082,7 @@ paths:
             - $ref: '#/definitions/httputil.Response'
             - properties:
                 data:
-                  $ref: '#/definitions/algorithm.Algorithm'
+                  $ref: '#/definitions/algorithm.AlgorithmResponse'
               type: object
         "400":
           description: Bad Request

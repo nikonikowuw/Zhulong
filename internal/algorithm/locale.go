@@ -125,5 +125,10 @@ func init() {
 			"zh-Hans": "算法试跑推理执行失败",
 			"zh-Hant": "演算法試跑推論執行失敗",
 		},
+		"IMPACT_QUERY_FAILED": {
+			"en":      "Failed to calculate deletion impact",
+			"zh-Hans": "获取算法卸载影响面失败",
+			"zh-Hant": "取得演算法卸載影響面失敗",
+		},
 	})
 }

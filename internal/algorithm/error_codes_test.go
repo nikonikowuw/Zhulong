@@ -19,6 +19,7 @@ var algorithmErrorCodes = []string{
 	"INVALID_REQUEST",
 	"PLATFORM_TARGET_CPU_RETIRED",
 	"ALGO_ENTRY_INVALID",
+	"IMPACT_QUERY_FAILED",
 }
 
 // TestAlgorithmErrorCodesAreLocalized asserts the previously unregistered codes

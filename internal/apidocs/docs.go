@@ -400,7 +400,7 @@ const docTemplate = `{
                                         "data": {
                                             "type": "array",
                                             "items": {
-                                                "$ref": "#/definitions/algorithm.Algorithm"
+                                                "$ref": "#/definitions/algorithm.AlgorithmResponse"
                                             }
                                         }
                                     }
@@ -451,7 +451,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/algorithm.Algorithm"
+                                            "$ref": "#/definitions/algorithm.AlgorithmResponse"
                                         }
                                     }
                                 }
@@ -521,7 +521,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/algorithm.Algorithm"
+                                            "$ref": "#/definitions/algorithm.AlgorithmResponse"
                                         }
                                     }
                                 }
@@ -7014,7 +7014,15 @@ const docTemplate = `{
                 }
             }
         },
-        "algorithm.Algorithm": {
+        "algorithm.AlgorithmDeleteResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "algorithm.AlgorithmResponse": {
             "type": "object",
             "properties": {
                 "category": {
@@ -7067,14 +7075,6 @@ const docTemplate = `{
                 },
                 "version": {
                     "type": "string"
-                }
-            }
-        },
-        "algorithm.AlgorithmDeleteResponse": {
-            "type": "object",
-            "properties": {
-                "deleted": {
-                    "type": "boolean"
                 }
             }
         },

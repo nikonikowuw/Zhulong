@@ -20,6 +20,12 @@ const (
 	RejectUnknownOrRevoked = "unknown_or_revoked"
 )
 
+// Domain limits and lengths.
+const (
+	MaxActiveTokens = 10
+	MaxTokenNameLen = 48
+)
+
 // Domain sentinel errors.
 var (
 	ErrTokenNotFound     = errors.New("api token not found")
@@ -28,22 +34,19 @@ var (
 	ErrUnauthorized      = errors.New("unauthorized")
 	ErrTokenNameRequired = errors.New("api token name is required")
 	ErrTokenNameTooLong  = errors.New("api token name is too long")
-)
-
-const (
-	MaxActiveTokens = 10
-	MaxTokenNameLen = 48
+	ErrTokenNameInvalid  = errors.New("api token name contains invalid characters")
 )
 
 // APIToken is the persistence model for M2M API tokens in the api_tokens table.
+// Outward serialization is handled exclusively by APITokenInfo.
 type APIToken struct {
-	ID         string     `gorm:"primaryKey;column:id" json:"id"`
-	Name       string     `gorm:"column:name;not null" json:"name"`
-	TokenHash  string     `gorm:"column:token_hash;not null" json:"-"`
-	MaskedKey  string     `gorm:"column:masked_key;not null" json:"maskedKey"`
-	CreatedAt  time.Time  `gorm:"column:created_at;not null" json:"createdAt"`
-	LastUsedAt *time.Time `gorm:"column:last_used_at" json:"lastUsedAt"`
-	RevokedAt  *time.Time `gorm:"column:revoked_at" json:"-"`
+	ID         string     `gorm:"primaryKey;column:id"`
+	Name       string     `gorm:"column:name;not null"`
+	TokenHash  string     `gorm:"column:token_hash;not null"`
+	MaskedKey  string     `gorm:"column:masked_key;not null"`
+	CreatedAt  time.Time  `gorm:"column:created_at;not null"`
+	LastUsedAt *time.Time `gorm:"column:last_used_at"`
+	RevokedAt  *time.Time `gorm:"column:revoked_at"`
 }
 
 // TableName returns the SQLite table name for APIToken.

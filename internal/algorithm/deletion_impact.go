@@ -82,10 +82,12 @@ func (s *Service) GetDeletionImpact(ctx context.Context, id string) (*DeletionIm
 	impact.CaptureCount = counts.Captures
 
 	// 运行状态决定是否需要先停进程。GetStatus 返回 DISABLED 表示没有 watcher。
-	status := s.supervisor.GetStatus(id)
-	switch status {
-	case StatusRunning, StatusStarting, StatusRollingBack:
-		impact.RequiresStop = true
+	if s.supervisor != nil {
+		status := s.supervisor.GetStatus(id)
+		switch status {
+		case StatusRunning, StatusStarting, StatusRollingBack:
+			impact.RequiresStop = true
+		}
 	}
 
 	return impact, nil

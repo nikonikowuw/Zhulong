@@ -38,7 +38,7 @@ while [ $# -gt 0 ]; do
     *) shift ;;
   esac
 done
-pwd > "$CAPTURE_META"
+pwd -P > "$CAPTURE_META"
 printf '%s\n' "$sample" >> "$CAPTURE_META"
 cp "$sample" "$CAPTURE_PPM"
 printf '{"status":"passed","sample":"%s","sample_decoded":%s,"width":%s,"height":%s,"result_type":1,"count":%s}\n' \

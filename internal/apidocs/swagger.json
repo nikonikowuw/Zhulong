@@ -393,7 +393,7 @@
                                         "data": {
                                             "type": "array",
                                             "items": {
-                                                "$ref": "#/definitions/algorithm.Algorithm"
+                                                "$ref": "#/definitions/algorithm.AlgorithmResponse"
                                             }
                                         }
                                     }
@@ -444,7 +444,7 @@
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/algorithm.Algorithm"
+                                            "$ref": "#/definitions/algorithm.AlgorithmResponse"
                                         }
                                     }
                                 }
@@ -514,7 +514,7 @@
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/algorithm.Algorithm"
+                                            "$ref": "#/definitions/algorithm.AlgorithmResponse"
                                         }
                                     }
                                 }
@@ -7007,7 +7007,15 @@
                 }
             }
         },
-        "algorithm.Algorithm": {
+        "algorithm.AlgorithmDeleteResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "algorithm.AlgorithmResponse": {
             "type": "object",
             "properties": {
                 "category": {
@@ -7060,14 +7068,6 @@
                 },
                 "version": {
                     "type": "string"
-                }
-            }
-        },
-        "algorithm.AlgorithmDeleteResponse": {
-            "type": "object",
-            "properties": {
-                "deleted": {
-                    "type": "boolean"
                 }
             }
         },

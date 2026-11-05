@@ -11,14 +11,14 @@ import (
 
 // GenerateToken produces a high-entropy bearer token, its SHA-256 hash for database
 // lookup, and a masked key representation safe for display in administrative UI.
-func GenerateToken() (raw, hash, masked string, err error) {
+func GenerateToken() (string, string, string, error) {
 	buf := make([]byte, 32)
-	if _, err = rand.Read(buf); err != nil {
+	if _, err := rand.Read(buf); err != nil {
 		return "", "", "", fmt.Errorf("read token entropy: %w", err)
 	}
-	raw = "sk-" + hex.EncodeToString(buf)
-	hash = HashToken(raw)
-	masked = MaskToken(raw)
+	raw := "sk-" + hex.EncodeToString(buf)
+	hash := HashToken(raw)
+	masked := MaskToken(raw)
 	return raw, hash, masked, nil
 }
 
@@ -48,7 +48,7 @@ func normalizeTokenName(name string) (string, error) {
 	}
 	for _, r := range trimmed {
 		if unicode.IsControl(r) {
-			return "", ErrTokenNameRequired
+			return "", ErrTokenNameInvalid
 		}
 	}
 	return trimmed, nil

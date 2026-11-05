@@ -99,7 +99,7 @@ func (h *Handler) UploadRouteRegistrar() RouteRegistrar {
 // @Accept       multipart/form-data
 // @Produce      json
 // @Param        file formData file true "Algorithm package archive (at most 500 MB)"
-// @Success      201  {object}  httputil.Response{data=Algorithm}
+// @Success      201  {object}  httputil.Response{data=AlgorithmResponse}
 // @Failure      400  {object}  httputil.Response
 // @Failure      409  {object}  httputil.Response
 // @Failure      413  {object}  httputil.Response
@@ -127,7 +127,7 @@ func (h *Handler) Install(c *gin.Context) {
 	audithttp.TagTarget(c, "algorithm:"+algo.ID)
 	audithttp.TagDetail(c, algo.Name)
 
-	httputil.SuccessWithStatus(c, http.StatusCreated, algo)
+	httputil.SuccessWithStatus(c, http.StatusCreated, algo.ToResponse())
 }
 
 // Trial godoc
@@ -187,7 +187,7 @@ func (h *Handler) Trial(c *gin.Context) {
 // @Summary      List registered algorithms
 // @Tags         algorithm
 // @Produce      json
-// @Success      200  {object}  httputil.Response{data=[]Algorithm}
+// @Success      200  {object}  httputil.Response{data=[]AlgorithmResponse}
 // @Failure      500  {object}  httputil.Response
 // @Router       /algorithms [get]
 func (h *Handler) List(c *gin.Context) {
@@ -196,7 +196,7 @@ func (h *Handler) List(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, algos)
+	httputil.Success(c, ToAlgorithmResponseList(algos))
 }
 
 // Get godoc
@@ -204,7 +204,7 @@ func (h *Handler) List(c *gin.Context) {
 // @Tags         algorithm
 // @Produce      json
 // @Param        id path string true "Algorithm ID"
-// @Success      200  {object}  httputil.Response{data=Algorithm}
+// @Success      200  {object}  httputil.Response{data=AlgorithmResponse}
 // @Failure      404  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
 // @Router       /algorithms/{id} [get]
@@ -215,7 +215,7 @@ func (h *Handler) Get(c *gin.Context) {
 		httputil.WriteError(c, err)
 		return
 	}
-	httputil.Success(c, algo)
+	httputil.Success(c, algo.ToResponse())
 }
 
 // Enable godoc
