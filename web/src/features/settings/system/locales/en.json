@@ -1,7 +1,7 @@
 {
   "page": {
-    "title": "System & Hardware Telemetry",
-    "desc": "Real-time monitoring of CPU, RAM, disk storage, network throughput, NPU acceleration, and thermal trends."
+    "title": "System Status & Telemetry",
+    "desc": "Real-time monitoring of host CPU, memory, disk storage, network throughput, NPU acceleration, and thermal trends."
   },
   "header": {
     "hostname": "Hostname",

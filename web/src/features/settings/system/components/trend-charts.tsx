@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { Activity, Cpu, MemoryStick, Network, Thermometer } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   Area,
@@ -12,6 +13,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { type HardwareHistoryPoint } from '../types'
@@ -48,35 +50,73 @@ export function TrendCharts({
   }, [history])
 
   return (
-    <Card className='gap-4 p-4'>
+    <Card className='gap-4 border-border/80 bg-card/75 p-4.5 shadow-xs backdrop-blur-md transition-all'>
       <Tabs defaultValue='compute' className='w-full'>
-        <CardHeader className='flex flex-col gap-2 p-0 sm:flex-row sm:items-center sm:justify-between'>
-          <CardTitle className='text-base font-semibold'>
-            {t('charts.title', {
-              defaultValue: 'Short-term Historical Trends',
-            })}
-          </CardTitle>
-          <TabsList className='grid grid-cols-2 sm:flex sm:h-8'>
-            <TabsTrigger value='compute' className='text-xs'>
-              {t('charts.tabCompute', { defaultValue: 'Compute (CPU/NPU)' })}
+        <CardHeader className='flex flex-col gap-3 p-0 sm:flex-row sm:items-center sm:justify-between'>
+          <div className='flex items-center gap-2.5'>
+            <div className='flex size-7 shrink-0 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 text-primary shadow-2xs'>
+              <Activity className='size-3.5' />
+            </div>
+            <div className='flex items-center gap-2'>
+              <CardTitle className='text-sm font-semibold tracking-tight text-foreground'>
+                {t('charts.title', {
+                  defaultValue: '短期时序走势',
+                })}
+              </CardTitle>
+              {chartData.length > 0 && (
+                <Badge
+                  variant='outline'
+                  className='h-5 border-border/60 bg-muted/30 px-1.5 py-0 font-mono text-[10px] text-muted-foreground'
+                >
+                  {chartData.length} pts
+                </Badge>
+              )}
+            </div>
+          </div>
+
+          <TabsList className='grid grid-cols-2 rounded-lg bg-muted/60 p-1 sm:flex sm:h-8'>
+            <TabsTrigger
+              value='compute'
+              className='h-6 gap-1 px-2.5 text-xs font-medium'
+            >
+              <Cpu className='size-3' />
+              <span>
+                {t('charts.tabCompute', { defaultValue: '算力 (CPU/NPU)' })}
+              </span>
             </TabsTrigger>
-            <TabsTrigger value='memory' className='text-xs'>
-              {t('charts.tabMemory', { defaultValue: 'Memory' })}
+            <TabsTrigger
+              value='memory'
+              className='h-6 gap-1 px-2.5 text-xs font-medium'
+            >
+              <MemoryStick className='size-3' />
+              <span>{t('charts.tabMemory', { defaultValue: '内存走势' })}</span>
             </TabsTrigger>
-            <TabsTrigger value='network' className='text-xs'>
-              {t('charts.tabNetwork', { defaultValue: 'Network' })}
+            <TabsTrigger
+              value='network'
+              className='h-6 gap-1 px-2.5 text-xs font-medium'
+            >
+              <Network className='size-3' />
+              <span>
+                {t('charts.tabNetwork', { defaultValue: '网络吞吐' })}
+              </span>
             </TabsTrigger>
-            <TabsTrigger value='temperature' className='text-xs'>
-              {t('charts.tabTemperature', { defaultValue: 'Thermal' })}
+            <TabsTrigger
+              value='temperature'
+              className='h-6 gap-1 px-2.5 text-xs font-medium'
+            >
+              <Thermometer className='size-3' />
+              <span>
+                {t('charts.tabTemperature', { defaultValue: '芯片温度' })}
+              </span>
             </TabsTrigger>
           </TabsList>
         </CardHeader>
 
-        <CardContent className='p-0 pt-3'>
+        <CardContent className='p-0 pt-4'>
           {chartData.length === 0 ? (
-            <div className='flex h-[240px] items-center justify-center text-sm text-muted-foreground'>
+            <div className='flex h-[240px] items-center justify-center rounded-lg border border-dashed border-border/60 bg-muted/20 text-xs text-muted-foreground'>
               {t('charts.emptyHistory', {
-                defaultValue: 'Accumulating telemetry history...',
+                defaultValue: '历史时序数据采集积累中...',
               })}
             </div>
           ) : (
@@ -90,20 +130,20 @@ export function TrendCharts({
                   >
                     <CartesianGrid
                       strokeDasharray='3 3'
-                      className='stroke-border/40'
+                      className='stroke-border/30'
                     />
                     <XAxis
                       dataKey='time'
                       tickLine={false}
                       axisLine={false}
-                      className='fill-muted-foreground text-[10px]'
+                      className='fill-muted-foreground font-mono text-[10px]'
                       interval='preserveStartEnd'
                     />
                     <YAxis
                       domain={[0, 100]}
                       tickLine={false}
                       axisLine={false}
-                      className='fill-muted-foreground text-[10px]'
+                      className='fill-muted-foreground font-mono text-[10px]'
                       tickFormatter={(v) => `${v}%`}
                     />
                     <Tooltip
@@ -113,6 +153,7 @@ export function TrendCharts({
                         borderRadius: '8px',
                         border: '1px solid var(--border)',
                         fontSize: '12px',
+                        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
                       }}
                       formatter={(value: unknown) => [
                         `${Number(value).toFixed(1)}%`,
@@ -122,13 +163,15 @@ export function TrendCharts({
                       verticalAlign='top'
                       align='right'
                       iconType='circle'
-                      wrapperStyle={{ fontSize: '11px', top: -8 }}
+                      wrapperStyle={{ fontSize: '11px', top: -10 }}
                     />
                     <Line
                       type='monotone'
                       dataKey='cpu'
-                      name={t('charts.cpuLoad', { defaultValue: 'CPU Load' })}
-                      stroke='#3b82f6'
+                      name={t('charts.cpuLoad', {
+                        defaultValue: 'CPU 总体负载',
+                      })}
+                      stroke='#0ea5e9'
                       strokeWidth={2}
                       dot={false}
                       isAnimationActive={false}
@@ -137,8 +180,10 @@ export function TrendCharts({
                       <Line
                         type='monotone'
                         dataKey='npu'
-                        name={t('charts.npuLoad', { defaultValue: 'NPU Load' })}
-                        stroke='#10b981'
+                        name={t('charts.npuLoad', {
+                          defaultValue: 'NPU 算力负载',
+                        })}
+                        stroke='#f59e0b'
                         strokeWidth={2}
                         dot={false}
                         isAnimationActive={false}
@@ -159,32 +204,32 @@ export function TrendCharts({
                       <linearGradient id='memGrad' x1='0' y1='0' x2='0' y2='1'>
                         <stop
                           offset='5%'
-                          stopColor='#8b5cf6'
-                          stopOpacity={0.4}
+                          stopColor='#a855f7'
+                          stopOpacity={0.35}
                         />
                         <stop
                           offset='95%'
-                          stopColor='#8b5cf6'
+                          stopColor='#a855f7'
                           stopOpacity={0.0}
                         />
                       </linearGradient>
                     </defs>
                     <CartesianGrid
                       strokeDasharray='3 3'
-                      className='stroke-border/40'
+                      className='stroke-border/30'
                     />
                     <XAxis
                       dataKey='time'
                       tickLine={false}
                       axisLine={false}
-                      className='fill-muted-foreground text-[10px]'
+                      className='fill-muted-foreground font-mono text-[10px]'
                       interval='preserveStartEnd'
                     />
                     <YAxis
                       domain={[0, 100]}
                       tickLine={false}
                       axisLine={false}
-                      className='fill-muted-foreground text-[10px]'
+                      className='fill-muted-foreground font-mono text-[10px]'
                       tickFormatter={(v) => `${v}%`}
                     />
                     <Tooltip
@@ -194,6 +239,7 @@ export function TrendCharts({
                         borderRadius: '8px',
                         border: '1px solid var(--border)',
                         fontSize: '12px',
+                        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
                       }}
                       formatter={(value: unknown) => [
                         `${Number(value).toFixed(1)}%`,
@@ -203,9 +249,9 @@ export function TrendCharts({
                       type='monotone'
                       dataKey='memory'
                       name={t('charts.memoryUsage', {
-                        defaultValue: 'RAM Usage',
+                        defaultValue: '物理内存占用率',
                       })}
-                      stroke='#8b5cf6'
+                      stroke='#a855f7'
                       fillOpacity={1}
                       fill='url(#memGrad)'
                       strokeWidth={2}
@@ -227,7 +273,7 @@ export function TrendCharts({
                         <stop
                           offset='5%'
                           stopColor='#0ea5e9'
-                          stopOpacity={0.4}
+                          stopOpacity={0.35}
                         />
                         <stop
                           offset='95%'
@@ -239,7 +285,7 @@ export function TrendCharts({
                         <stop
                           offset='5%'
                           stopColor='#10b981'
-                          stopOpacity={0.4}
+                          stopOpacity={0.35}
                         />
                         <stop
                           offset='95%'
@@ -250,19 +296,19 @@ export function TrendCharts({
                     </defs>
                     <CartesianGrid
                       strokeDasharray='3 3'
-                      className='stroke-border/40'
+                      className='stroke-border/30'
                     />
                     <XAxis
                       dataKey='time'
                       tickLine={false}
                       axisLine={false}
-                      className='fill-muted-foreground text-[10px]'
+                      className='fill-muted-foreground font-mono text-[10px]'
                       interval='preserveStartEnd'
                     />
                     <YAxis
                       tickLine={false}
                       axisLine={false}
-                      className='fill-muted-foreground text-[10px]'
+                      className='fill-muted-foreground font-mono text-[10px]'
                       tickFormatter={(v) => formatRate(v)}
                     />
                     <Tooltip
@@ -272,6 +318,7 @@ export function TrendCharts({
                         borderRadius: '8px',
                         border: '1px solid var(--border)',
                         fontSize: '12px',
+                        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
                       }}
                       formatter={(value: unknown, name?: unknown) => [
                         formatRate(Number(value)),
@@ -282,13 +329,13 @@ export function TrendCharts({
                       verticalAlign='top'
                       align='right'
                       iconType='circle'
-                      wrapperStyle={{ fontSize: '11px', top: -8 }}
+                      wrapperStyle={{ fontSize: '11px', top: -10 }}
                     />
                     <Area
                       type='monotone'
                       dataKey='netRx'
                       name={t('charts.rxRate', {
-                        defaultValue: 'Download (Rx)',
+                        defaultValue: '下行吞吐 (Rx)',
                       })}
                       stroke='#0ea5e9'
                       fillOpacity={1}
@@ -299,7 +346,9 @@ export function TrendCharts({
                     <Area
                       type='monotone'
                       dataKey='netTx'
-                      name={t('charts.txRate', { defaultValue: 'Upload (Tx)' })}
+                      name={t('charts.txRate', {
+                        defaultValue: '上行吞吐 (Tx)',
+                      })}
                       stroke='#10b981'
                       fillOpacity={1}
                       fill='url(#txGrad)'
@@ -322,20 +371,20 @@ export function TrendCharts({
                   >
                     <CartesianGrid
                       strokeDasharray='3 3'
-                      className='stroke-border/40'
+                      className='stroke-border/30'
                     />
                     <XAxis
                       dataKey='time'
                       tickLine={false}
                       axisLine={false}
-                      className='fill-muted-foreground text-[10px]'
+                      className='fill-muted-foreground font-mono text-[10px]'
                       interval='preserveStartEnd'
                     />
                     <YAxis
                       domain={[20, 100]}
                       tickLine={false}
                       axisLine={false}
-                      className='fill-muted-foreground text-[10px]'
+                      className='fill-muted-foreground font-mono text-[10px]'
                       tickFormatter={(v) => `${v}°C`}
                     />
                     <Tooltip
@@ -345,6 +394,7 @@ export function TrendCharts({
                         borderRadius: '8px',
                         border: '1px solid var(--border)',
                         fontSize: '12px',
+                        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
                       }}
                       formatter={(value: unknown) => [
                         `${Number(value).toFixed(1)}°C`,
@@ -354,7 +404,7 @@ export function TrendCharts({
                       type='monotone'
                       dataKey='temp'
                       name={t('charts.temperature', {
-                        defaultValue: 'Temperature',
+                        defaultValue: '芯片最高温',
                       })}
                       stroke='#f59e0b'
                       strokeWidth={2}

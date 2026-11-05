@@ -1,4 +1,13 @@
-import { Cpu, HardDrive, Network, Zap, MemoryStick } from 'lucide-react'
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Cpu,
+  HardDrive,
+  MemoryStick,
+  Network,
+  Thermometer,
+  Zap,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   Card,
@@ -49,14 +58,16 @@ export function StatCards({
   return (
     <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5'>
       {/* 1. CPU Card */}
-      <Card className='gap-3 p-4'>
+      <Card className='gap-3 border-border/80 bg-card/75 p-4 shadow-xs backdrop-blur-md transition-all hover:border-border'>
         <CardHeader className='flex-row items-center justify-between gap-2 space-y-0 p-0'>
-          <CardTitle className='truncate text-sm font-medium text-muted-foreground'>
-            {t('cards.cpu', { defaultValue: 'CPU Utilization' })}
+          <CardTitle className='truncate text-xs font-medium tracking-tight text-muted-foreground'>
+            {t('cards.cpu', { defaultValue: 'CPU 使用率' })}
           </CardTitle>
-          <Cpu className='size-4 shrink-0 text-muted-foreground' />
+          <div className='flex size-7 shrink-0 items-center justify-center rounded-lg border border-sky-500/20 bg-sky-500/10 text-sky-500 shadow-2xs'>
+            <Cpu className='size-3.5' />
+          </div>
         </CardHeader>
-        <CardContent className='space-y-2 p-0'>
+        <CardContent className='space-y-2.5 p-0'>
           <div className='flex items-baseline justify-between gap-2'>
             <span
               className={`truncate font-mono text-2xl font-bold tracking-tight ${getUsageStatusColor(
@@ -65,9 +76,12 @@ export function StatCards({
             >
               {cpu.usagePercent.toFixed(1)}%
             </span>
-            <span className='shrink-0 font-mono text-xs text-muted-foreground'>
-              {cpu.temperature > 0 ? `${cpu.temperature.toFixed(1)}°C` : ''}
-            </span>
+            {cpu.temperature > 0 && (
+              <span className='flex shrink-0 items-center gap-0.5 font-mono text-xs font-medium text-muted-foreground'>
+                <Thermometer className='size-3 text-amber-500' />
+                {cpu.temperature.toFixed(1)}°C
+              </span>
+            )}
           </div>
 
           <div
@@ -75,8 +89,8 @@ export function StatCards({
             aria-valuenow={cpu.usagePercent}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-label={t('cards.cpu', { defaultValue: 'CPU Utilization' })}
-            className='h-2 w-full overflow-hidden rounded-full bg-muted'
+            aria-label={t('cards.cpu', { defaultValue: 'CPU 使用率' })}
+            className='h-1.5 w-full overflow-hidden rounded-full bg-muted/80'
           >
             <div
               className={`h-full transition-all duration-500 ${getProgressIndicatorClass(
@@ -97,6 +111,7 @@ export function StatCards({
                 <div
                   key={idx}
                   className='h-1.5 flex-1 overflow-hidden rounded-full bg-muted/60'
+                  title={`Core ${idx}: ${usage.toFixed(1)}%`}
                 >
                   <div
                     className={`h-full transition-all duration-300 ${getProgressIndicatorClass(
@@ -111,7 +126,7 @@ export function StatCards({
             </div>
           )}
 
-          <CardDescription className='truncate text-xs'>
+          <CardDescription className='truncate text-[11px] text-muted-foreground'>
             {t('cards.cpuDesc', {
               cores: cpu.cores || 1,
               temp: cpu.temperature.toFixed(1),
@@ -122,14 +137,16 @@ export function StatCards({
       </Card>
 
       {/* 2. Memory Card */}
-      <Card className='gap-3 p-4'>
+      <Card className='gap-3 border-border/80 bg-card/75 p-4 shadow-xs backdrop-blur-md transition-all hover:border-border'>
         <CardHeader className='flex-row items-center justify-between gap-2 space-y-0 p-0'>
-          <CardTitle className='truncate text-sm font-medium text-muted-foreground'>
-            {t('cards.memory', { defaultValue: 'Physical RAM' })}
+          <CardTitle className='truncate text-xs font-medium tracking-tight text-muted-foreground'>
+            {t('cards.memory', { defaultValue: '系统物理内存' })}
           </CardTitle>
-          <MemoryStick className='size-4 shrink-0 text-muted-foreground' />
+          <div className='flex size-7 shrink-0 items-center justify-center rounded-lg border border-purple-500/20 bg-purple-500/10 text-purple-500 shadow-2xs'>
+            <MemoryStick className='size-3.5' />
+          </div>
         </CardHeader>
-        <CardContent className='space-y-2 p-0'>
+        <CardContent className='space-y-2.5 p-0'>
           <div className='flex items-baseline justify-between gap-2'>
             <span
               className={`truncate font-mono text-2xl font-bold tracking-tight ${getUsageStatusColor(
@@ -138,7 +155,7 @@ export function StatCards({
             >
               {memory.usedPercent.toFixed(1)}%
             </span>
-            <span className='shrink-0 font-mono text-xs text-muted-foreground'>
+            <span className='shrink-0 font-mono text-xs font-medium text-muted-foreground'>
               {formatBytes(memory.usedBytes)}
             </span>
           </div>
@@ -148,8 +165,8 @@ export function StatCards({
             aria-valuenow={memory.usedPercent}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-label={t('cards.memory', { defaultValue: 'Physical RAM' })}
-            className='h-2 w-full overflow-hidden rounded-full bg-muted'
+            aria-label={t('cards.memory', { defaultValue: '系统物理内存' })}
+            className='h-1.5 w-full overflow-hidden rounded-full bg-muted/80'
           >
             <div
               className={`h-full transition-all duration-500 ${getProgressIndicatorClass(
@@ -161,25 +178,27 @@ export function StatCards({
             />
           </div>
 
-          <CardDescription className='truncate text-xs'>
+          <CardDescription className='truncate text-[11px] text-muted-foreground'>
             {t('cards.memoryDesc', {
               used: formatBytes(memory.usedBytes),
               total: formatBytes(memory.totalBytes),
-              defaultValue: `Used ${formatBytes(memory.usedBytes)} / ${formatBytes(memory.totalBytes)}`,
+              defaultValue: `已用 ${formatBytes(memory.usedBytes)} / ${formatBytes(memory.totalBytes)}`,
             })}
           </CardDescription>
         </CardContent>
       </Card>
 
       {/* 3. NPU Card */}
-      <Card className='gap-3 p-4'>
+      <Card className='gap-3 border-border/80 bg-card/75 p-4 shadow-xs backdrop-blur-md transition-all hover:border-border'>
         <CardHeader className='flex-row items-center justify-between gap-2 space-y-0 p-0'>
-          <CardTitle className='truncate text-sm font-medium text-muted-foreground'>
-            {t('cards.npu', { defaultValue: 'NPU Coprocessor' })}
+          <CardTitle className='truncate text-xs font-medium tracking-tight text-muted-foreground'>
+            {t('cards.npu', { defaultValue: 'NPU 异构算力' })}
           </CardTitle>
-          <Zap className='size-4 shrink-0 text-muted-foreground' />
+          <div className='flex size-7 shrink-0 items-center justify-center rounded-lg border border-amber-500/20 bg-amber-500/10 text-amber-500 shadow-2xs'>
+            <Zap className='size-3.5' />
+          </div>
         </CardHeader>
-        <CardContent className='space-y-2 p-0'>
+        <CardContent className='space-y-2.5 p-0'>
           <div className='flex items-baseline justify-between gap-2'>
             {npu.supported ? (
               <>
@@ -190,12 +209,15 @@ export function StatCards({
                 >
                   {npu.loadPercent.toFixed(1)}%
                 </span>
-                <span className='shrink-0 font-mono text-xs text-muted-foreground'>
-                  {npu.temperature > 0 ? `${npu.temperature.toFixed(1)}°C` : ''}
-                </span>
+                {npu.temperature > 0 && (
+                  <span className='flex shrink-0 items-center gap-0.5 font-mono text-xs font-medium text-muted-foreground'>
+                    <Thermometer className='size-3 text-amber-500' />
+                    {npu.temperature.toFixed(1)}°C
+                  </span>
+                )}
               </>
             ) : (
-              <span className='text-lg font-medium text-muted-foreground'>
+              <span className='font-mono text-2xl font-bold tracking-tight text-muted-foreground'>
                 N/A
               </span>
             )}
@@ -206,8 +228,8 @@ export function StatCards({
             aria-valuenow={npu.supported ? npu.loadPercent : 0}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-label={t('cards.npu', { defaultValue: 'NPU Coprocessor' })}
-            className='h-2 w-full overflow-hidden rounded-full bg-muted'
+            aria-label={t('cards.npu', { defaultValue: 'NPU 异构算力' })}
+            className='h-1.5 w-full overflow-hidden rounded-full bg-muted/80'
           >
             <div
               className={`h-full transition-all duration-500 ${
@@ -234,6 +256,7 @@ export function StatCards({
                 <div
                   key={idx}
                   className='h-1.5 flex-1 overflow-hidden rounded-full bg-muted/60'
+                  title={`Core ${idx}: ${load.toFixed(1)}%`}
                 >
                   <div
                     className={`h-full transition-all duration-300 ${getProgressIndicatorClass(
@@ -248,14 +271,14 @@ export function StatCards({
             </div>
           )}
 
-          <CardDescription className='truncate text-xs'>
+          <CardDescription className='truncate text-[11px] text-muted-foreground'>
             {!npu.supported
               ? t('cards.npuUnsupported', {
-                  defaultValue: 'No NPU coprocessor detected',
+                  defaultValue: '未检测到 NPU 加速硬件',
                 })
               : npu.loadPercent === 0
                 ? t('cards.npuNoLoad', {
-                    defaultValue: 'Idle (No active inference models)',
+                    defaultValue: '当前无加速模型负载',
                   })
                 : t('cards.npuDesc', {
                     name: npu.name || 'NPU',
@@ -267,21 +290,27 @@ export function StatCards({
       </Card>
 
       {/* 4. Network Card */}
-      <Card className='gap-3 p-4'>
+      <Card className='gap-3 border-border/80 bg-card/75 p-4 shadow-xs backdrop-blur-md transition-all hover:border-border'>
         <CardHeader className='flex-row items-center justify-between gap-2 space-y-0 p-0'>
-          <CardTitle className='truncate text-sm font-medium text-muted-foreground'>
-            {t('cards.network', { defaultValue: 'Network Rates' })}
+          <CardTitle className='truncate text-xs font-medium tracking-tight text-muted-foreground'>
+            {t('cards.network', { defaultValue: '实时网络吞吐' })}
           </CardTitle>
-          <Network className='size-4 shrink-0 text-muted-foreground' />
+          <div className='flex size-7 shrink-0 items-center justify-center rounded-lg border border-emerald-500/20 bg-emerald-500/10 text-emerald-500 shadow-2xs'>
+            <Network className='size-3.5' />
+          </div>
         </CardHeader>
-        <CardContent className='space-y-2 p-0'>
+        <CardContent className='space-y-2.5 p-0'>
           <div className='flex items-baseline justify-between gap-2'>
-            <span className='truncate font-mono text-2xl font-bold tracking-tight text-primary'>
-              {formatRate(totalRxRate)}
-            </span>
-            <span className='shrink-0 font-mono text-xs text-muted-foreground'>
-              ↑ {formatRate(totalTxRate)}
-            </span>
+            <div className='flex items-center gap-1 truncate text-primary'>
+              <ArrowDownToLine className='size-3.5 shrink-0 opacity-80' />
+              <span className='truncate font-mono text-2xl font-bold tracking-tight'>
+                {formatRate(totalRxRate)}
+              </span>
+            </div>
+            <div className='flex shrink-0 items-center gap-0.5 font-mono text-xs font-medium text-emerald-600 dark:text-emerald-400'>
+              <ArrowUpFromLine className='size-3 opacity-80' />
+              <span>{formatRate(totalTxRate)}</span>
+            </div>
           </div>
 
           <div
@@ -289,8 +318,8 @@ export function StatCards({
             aria-valuenow={totalRxRate + totalTxRate > 0 ? 100 : 0}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-label={t('cards.network', { defaultValue: 'Network Rates' })}
-            className='flex h-2 w-full gap-1 overflow-hidden rounded-full bg-muted'
+            aria-label={t('cards.network', { defaultValue: '实时网络吞吐' })}
+            className='flex h-1.5 w-full gap-1 overflow-hidden rounded-full bg-muted/80'
           >
             {totalRxRate + totalTxRate > 0 ? (
               <>
@@ -320,7 +349,7 @@ export function StatCards({
             )}
           </div>
 
-          <CardDescription className='truncate text-xs'>
+          <CardDescription className='truncate text-[11px] text-muted-foreground'>
             {t('cards.networkDesc', {
               rx: formatRate(totalRxRate),
               tx: formatRate(totalTxRate),
@@ -331,14 +360,16 @@ export function StatCards({
       </Card>
 
       {/* 5. Storage Card */}
-      <Card className='gap-3 p-4'>
+      <Card className='gap-3 border-border/80 bg-card/75 p-4 shadow-xs backdrop-blur-md transition-all hover:border-border'>
         <CardHeader className='flex-row items-center justify-between gap-2 space-y-0 p-0'>
-          <CardTitle className='truncate text-sm font-medium text-muted-foreground'>
-            {t('cards.storage', { defaultValue: 'Primary Storage' })}
+          <CardTitle className='truncate text-xs font-medium tracking-tight text-muted-foreground'>
+            {t('cards.storage', { defaultValue: '系统主存储' })}
           </CardTitle>
-          <HardDrive className='size-4 shrink-0 text-muted-foreground' />
+          <div className='flex size-7 shrink-0 items-center justify-center rounded-lg border border-cyan-500/20 bg-cyan-500/10 text-cyan-500 shadow-2xs'>
+            <HardDrive className='size-3.5' />
+          </div>
         </CardHeader>
-        <CardContent className='space-y-2 p-0'>
+        <CardContent className='space-y-2.5 p-0'>
           <div className='flex items-baseline justify-between gap-2'>
             <span
               className={`truncate font-mono text-2xl font-bold tracking-tight ${getUsageStatusColor(
@@ -347,7 +378,7 @@ export function StatCards({
             >
               {(rootStorage?.usedPercent ?? 0).toFixed(1)}%
             </span>
-            <span className='shrink-0 font-mono text-xs text-muted-foreground'>
+            <span className='shrink-0 font-mono text-xs font-medium text-muted-foreground'>
               {rootStorage ? formatBytes(rootStorage.usedBytes) : '-'}
             </span>
           </div>
@@ -357,8 +388,8 @@ export function StatCards({
             aria-valuenow={rootStorage?.usedPercent ?? 0}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-label={t('cards.storage', { defaultValue: 'Primary Storage' })}
-            className='h-2 w-full overflow-hidden rounded-full bg-muted'
+            aria-label={t('cards.storage', { defaultValue: '系统主存储' })}
+            className='h-1.5 w-full overflow-hidden rounded-full bg-muted/80'
           >
             <div
               className={`h-full transition-all duration-500 ${getProgressIndicatorClass(
@@ -373,12 +404,12 @@ export function StatCards({
             />
           </div>
 
-          <CardDescription className='truncate text-xs'>
+          <CardDescription className='truncate text-[11px] text-muted-foreground'>
             {rootStorage
               ? t('cards.storageDesc', {
                   used: formatBytes(rootStorage.usedBytes),
                   free: formatBytes(rootStorage.freeBytes),
-                  defaultValue: `Used ${formatBytes(rootStorage.usedBytes)} / Free ${formatBytes(rootStorage.freeBytes)}`,
+                  defaultValue: `已用 ${formatBytes(rootStorage.usedBytes)} / 余量 ${formatBytes(rootStorage.freeBytes)}`,
                 })
               : '-'}
           </CardDescription>

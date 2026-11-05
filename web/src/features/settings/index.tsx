@@ -47,7 +47,7 @@ export function Settings() {
         icon: <HardDrive size={18} />,
       },
       {
-        title: t('nav.Hardware', { defaultValue: 'System & Hardware' }),
+        title: t('nav.System', { defaultValue: 'System Status' }),
         href: '/settings/system',
         icon: <Activity size={18} />,
       },

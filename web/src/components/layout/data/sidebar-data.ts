@@ -15,6 +15,8 @@ import {
   Map,
   ScanFace,
   Activity,
+  BellRing,
+  Key,
 } from 'lucide-react'
 import { ZhulongLogo } from '@/assets/zhulong-logo'
 import { type SidebarData } from '../types'
@@ -107,7 +109,7 @@ export const sidebarData: SidebarData = {
               icon: HardDrive,
             },
             {
-              title: 'Hardware',
+              title: 'System',
               url: '/settings/system',
               icon: Activity,
             },
@@ -115,6 +117,16 @@ export const sidebarData: SidebarData = {
               title: 'GB28181',
               url: '/settings/gb28181',
               icon: RadioTower,
+            },
+            {
+              title: 'AlertPush',
+              url: '/settings/alert-push',
+              icon: BellRing,
+            },
+            {
+              title: 'APITokens',
+              url: '/settings/api-tokens',
+              icon: Key,
             },
           ],
         },

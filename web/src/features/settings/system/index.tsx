@@ -27,10 +27,10 @@ export function SettingsSystem() {
   if (isLoading) {
     return (
       <ContentSection
-        title={t('page.title', { defaultValue: '系统硬件与算力状态' })}
+        title={t('page.title', { defaultValue: '系统状态与算力遥测' })}
         desc={t('page.desc', {
           defaultValue:
-            '实时监测边缘主机 CPU、内存、磁盘存储、网络速率以及 NPU 异构加速算力与核心温度趋势。',
+            '实时监测边缘主机 CPU、物理内存、磁盘存储、网络速率以及 NPU 异构加速算力与核心温度趋势。',
         })}
         className='w-full max-w-none'
       >
@@ -51,10 +51,10 @@ export function SettingsSystem() {
   if (error || !hardware) {
     return (
       <ContentSection
-        title={t('page.title', { defaultValue: '系统硬件与算力状态' })}
+        title={t('page.title', { defaultValue: '系统状态与算力遥测' })}
         desc={t('page.desc', {
           defaultValue:
-            '实时监测边缘主机 CPU、内存、磁盘存储、网络速率以及 NPU 异构加速算力与核心温度趋势。',
+            '实时监测边缘主机 CPU、物理内存、磁盘存储、网络速率以及 NPU 异构加速算力与核心温度趋势。',
         })}
         className='w-full max-w-none'
       >
@@ -81,10 +81,10 @@ export function SettingsSystem() {
 
   return (
     <ContentSection
-      title={t('page.title', { defaultValue: '系统硬件与算力状态' })}
+      title={t('page.title', { defaultValue: '系统状态与算力遥测' })}
       desc={t('page.desc', {
         defaultValue:
-          '实时监测边缘主机 CPU、内存、磁盘存储、网络速率以及 NPU 异构加速算力与核心温度趋势。',
+          '实时监测边缘主机 CPU、物理内存、磁盘存储、网络速率以及 NPU 异构加速算力与核心温度趋势。',
       })}
       className='w-full max-w-none'
     >
