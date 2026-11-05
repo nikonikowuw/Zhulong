@@ -30,11 +30,9 @@ func NewHandler(service *Service, logger *zap.Logger) *Handler {
 // RegisterRoutes registers endpoints to the Gin router group (intended for protected group).
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	group := rg.Group("/api-tokens")
-	{
-		group.GET("", h.List)
-		group.POST("", h.Create)
-		group.DELETE("/:id", h.Revoke)
-	}
+	group.GET("", h.List)
+	group.POST("", h.Create)
+	group.DELETE("/:id", h.Revoke)
 }
 
 // List returns active tokens (or all tokens if includeRevoked=true).
@@ -54,8 +52,8 @@ func (h *Handler) List(c *gin.Context) {
 	}
 
 	items := make([]APITokenInfo, 0, len(tokens))
-	for _, t := range tokens {
-		items = append(items, newAPITokenInfo(t))
+	for i := range tokens {
+		items = append(items, newAPITokenInfo(&tokens[i]))
 	}
 
 	httputil.Success(c, APITokenListResponse{Items: items})
@@ -89,7 +87,7 @@ func (h *Handler) Create(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 
 	httputil.SuccessWithStatus(c, http.StatusCreated, APITokenCreateResponse{
-		APITokenInfo: newAPITokenInfo(*token),
+		APITokenInfo: newAPITokenInfo(token),
 		Token:        rawToken,
 	})
 }

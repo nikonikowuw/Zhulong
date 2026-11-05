@@ -25,6 +25,7 @@ type Service struct {
 	closeOnce   sync.Once
 	wg          sync.WaitGroup
 	mu          sync.Mutex
+	closed      bool
 	lastUsedMap map[string]time.Time
 }
 
@@ -51,38 +52,36 @@ func (s *Service) CreateToken(ctx context.Context, rawName string) (*APIToken, s
 		if errors.Is(err, ErrTokenNameTooLong) {
 			return nil, "", apperr.Invalid("API_TOKEN_NAME_TOO_LONG", "Token name exceeds 48 characters", err)
 		}
+		if errors.Is(err, ErrTokenNameInvalid) {
+			return nil, "", apperr.Invalid("API_TOKEN_NAME_INVALID", "Token name contains invalid characters", err)
+		}
 		return nil, "", apperr.Invalid("VALIDATION_FAILED", "Invalid token name", err)
 	}
 
-	const maxAttempts = 3
-	for i := 0; i < maxAttempts; i++ {
-		raw, hash, masked, err := GenerateToken()
-		if err != nil {
-			return nil, "", apperr.Internal("INTERNAL_ERROR", "Failed to generate token", err)
-		}
+	raw, hash, masked, err := GenerateToken()
+	if err != nil {
+		return nil, "", apperr.Internal("INTERNAL_ERROR", "Failed to generate token", err)
+	}
 
-		token := &APIToken{
-			ID:        idutil.New(),
-			Name:      cleanName,
-			TokenHash: hash,
-			MaskedKey: masked,
-			CreatedAt: time.Now().UTC(),
-		}
+	token := &APIToken{
+		ID:        idutil.New(),
+		Name:      cleanName,
+		TokenHash: hash,
+		MaskedKey: masked,
+		CreatedAt: time.Now().UTC(),
+	}
 
-		err = s.store.CreateToken(ctx, token)
-		if err == nil {
-			return token, raw, nil
-		}
-
+	if err := s.store.CreateToken(ctx, token); err != nil {
 		if errors.Is(err, ErrTokenLimitReached) {
 			return nil, "", apperr.Conflict("API_TOKEN_LIMIT_REACHED", "Active API token limit (10) reached", err)
 		}
 		if errors.Is(err, ErrTokenNameConflict) {
 			return nil, "", apperr.Conflict("API_TOKEN_NAME_ALREADY_EXISTS", "API token name already exists (including revoked tokens)", err)
 		}
-		// Hash collision retry
+		return nil, "", apperr.Internal("INTERNAL_ERROR", "Failed to persist API token", err)
 	}
-	return nil, "", apperr.Internal("INTERNAL_ERROR", "Failed to generate a unique token after multiple attempts", nil)
+
+	return token, raw, nil
 }
 
 // ListTokens returns tokens. If includeRevoked is false, only active tokens are returned.
@@ -125,21 +124,20 @@ func (s *Service) Authenticate(ctx context.Context, rawToken string) (Identity, 
 // touchLastUsed initiates an asynchronous update of last_used_at, coalesced to at most once per 60s per token.
 func (s *Service) touchLastUsed(id string) {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+
 	last, ok := s.lastUsedMap[id]
 	if ok && time.Since(last) < 60*time.Second {
 		s.mu.Unlock()
 		return
 	}
 	s.lastUsedMap[id] = time.Now()
+	s.wg.Add(1)
 	s.mu.Unlock()
 
-	select {
-	case <-s.stopCh:
-		return
-	default:
-	}
-
-	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		select {
@@ -161,9 +159,16 @@ func (s *Service) touchLastUsed(id string) {
 
 // Close gracefully stops the service and waits for in-flight touchLastUsed writes to drain.
 func (s *Service) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
 	s.closeOnce.Do(func() {
 		close(s.stopCh)
 	})
+	s.mu.Unlock()
 
 	waitDone := make(chan struct{})
 	go func() {

@@ -12,7 +12,10 @@ type APITokenInfo struct {
 	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
 }
 
-func newAPITokenInfo(t APIToken) APITokenInfo {
+func newAPITokenInfo(t *APIToken) APITokenInfo {
+	if t == nil {
+		return APITokenInfo{}
+	}
 	var lastUsed *time.Time
 	if t.LastUsedAt != nil {
 		utc := t.LastUsedAt.UTC()

@@ -1,6 +1,7 @@
 package apitoken
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -29,25 +30,29 @@ func TestGenerateToken(t *testing.T) {
 
 func TestNormalizeTokenName(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		want    string
-		wantErr bool
+		name      string
+		input     string
+		want      string
+		targetErr error
 	}{
-		{name: "valid normal", input: "Platform-A", want: "Platform-A", wantErr: false},
-		{name: "valid trimmed", input: "  Platform-B  ", want: "Platform-B", wantErr: false},
-		{name: "empty", input: "   ", want: "", wantErr: true},
-		{name: "too long", input: strings.Repeat("a", 49), want: "", wantErr: true},
-		{name: "max length", input: strings.Repeat("a", 48), want: strings.Repeat("a", 48), wantErr: false},
-		{name: "control char", input: "abc\n123", want: "", wantErr: true},
-		{name: "null byte", input: "abc\x00123", want: "", wantErr: true},
+		{name: "valid normal", input: "Platform-A", want: "Platform-A", targetErr: nil},
+		{name: "valid trimmed", input: "  Platform-B  ", want: "Platform-B", targetErr: nil},
+		{name: "empty", input: "   ", want: "", targetErr: ErrTokenNameRequired},
+		{name: "too long", input: strings.Repeat("a", 49), want: "", targetErr: ErrTokenNameTooLong},
+		{name: "max length", input: strings.Repeat("a", 48), want: strings.Repeat("a", 48), targetErr: nil},
+		{name: "control char", input: "abc\n123", want: "", targetErr: ErrTokenNameInvalid},
+		{name: "null byte", input: "abc\x00123", want: "", targetErr: ErrTokenNameInvalid},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := normalizeTokenName(tc.input)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("normalizeTokenName(%q) error = %v, wantErr = %v", tc.input, err, tc.wantErr)
+			if tc.targetErr != nil {
+				if !errors.Is(err, tc.targetErr) {
+					t.Fatalf("normalizeTokenName(%q) expected error %v, got %v", tc.input, tc.targetErr, err)
+				}
+			} else if err != nil {
+				t.Fatalf("normalizeTokenName(%q) unexpected error: %v", tc.input, err)
 			}
 			if got != tc.want {
 				t.Errorf("normalizeTokenName(%q) = %q, want %q", tc.input, got, tc.want)

@@ -12,18 +12,16 @@ import (
 	"go.uber.org/zap"
 )
 
-type identityKeyType struct{}
-
-var identityKey = identityKeyType{}
+const identityContextKey = "\x00apitoken:identity"
 
 // SetIdentity stores the authenticated Identity into the Gin context.
 func SetIdentity(c *gin.Context, id Identity) {
-	c.Set(string(rune(0))+"apitoken:identity", id)
+	c.Set(identityContextKey, id)
 }
 
 // GetIdentity retrieves the authenticated Identity from the Gin context.
 func GetIdentity(c *gin.Context) (Identity, bool) {
-	val, ok := c.Get(string(rune(0)) + "apitoken:identity")
+	val, ok := c.Get(identityContextKey)
 	if !ok {
 		return Identity{}, false
 	}
@@ -31,16 +29,13 @@ func GetIdentity(c *gin.Context) (Identity, bool) {
 	return id, ok
 }
 
-// parseBearer extracts the token string from an Authorization header.
-func parseBearer(authHeader string, headerValues []string) (string, bool) {
+// parseBearer extracts the token string from Authorization header values.
+func parseBearer(headerValues []string) (string, bool) {
 	if len(headerValues) != 1 {
 		return "", false
 	}
-	trimmed := strings.TrimSpace(authHeader)
-	if len(trimmed) < 7 {
-		return "", false
-	}
-	if !strings.EqualFold(trimmed[:7], "Bearer ") {
+	trimmed := strings.TrimSpace(headerValues[0])
+	if len(trimmed) < 7 || !strings.EqualFold(trimmed[:7], "Bearer ") {
 		return "", false
 	}
 	token := strings.TrimSpace(trimmed[7:])
@@ -74,7 +69,7 @@ func recordRejected(auditSvc *audit.Service, c *gin.Context, reason string) {
 // RequireBearer returns a Gin middleware that enforces Bearer token authentication for OpenAPI routes.
 func RequireBearer(svc *Service, logger *zap.Logger, auditSvc *audit.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		rawToken, ok := parseBearer(c.GetHeader("Authorization"), c.Request.Header.Values("Authorization"))
+		rawToken, ok := parseBearer(c.Request.Header.Values("Authorization"))
 		if !ok {
 			recordRejected(auditSvc, c, RejectMalformed)
 			writeUnauthorized(c)

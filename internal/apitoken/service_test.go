@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/database"
@@ -179,5 +180,56 @@ func TestService_Close_GracefulDrain(t *testing.T) {
 	}
 	if err := svc.Close(); err != nil {
 		t.Fatalf("second Close failed: %v", err)
+	}
+}
+
+func TestService_ConcurrentCloseRace(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, raw, err := svc.CreateToken(ctx, "Race-Token")
+	if err != nil {
+		t.Fatalf("CreateToken failed: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	stopCallers := make(chan struct{})
+
+	// Spawn continuous authentication callers to aggressively trigger touchLastUsed
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stopCallers:
+					return
+				default:
+					_, _ = svc.Authenticate(ctx, raw)
+				}
+			}
+		}()
+	}
+
+	// Concurrently close the service while callers are active
+	time.Sleep(10 * time.Millisecond)
+	if err := svc.Close(); err != nil {
+		t.Errorf("Close failed: %v", err)
+	}
+
+	close(stopCallers)
+	wg.Wait()
+}
+
+func TestService_InvalidTokenName(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	_, _, err := svc.CreateToken(ctx, "Bad\nName")
+	var appErr *apperr.Error
+	if !errors.As(err, &appErr) || appErr.Code != "API_TOKEN_NAME_INVALID" {
+		t.Fatalf("expected API_TOKEN_NAME_INVALID, got %v", err)
 	}
 }

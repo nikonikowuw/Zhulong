@@ -73,7 +73,7 @@ func (s *Store) ListTokens(ctx context.Context, includeRevoked bool) ([]APIToken
 		query = query.Where("revoked_at IS NULL")
 	}
 
-	var items []APIToken
+	items := []APIToken{}
 	if err := query.Find(&items).Error; err != nil {
 		return nil, err
 	}
