@@ -337,6 +337,10 @@ func (c *LinuxCollector) collectStorage() []StorageMountStatus {
 
 func (c *LinuxCollector) collectNetwork() map[string]RawNetworkInterface {
 	result := make(map[string]RawNetworkInterface)
+	// hidden keeps kernel/container plumbing aside so we can fall back to it when
+	// the host exposes no physical link at all (Zhulong running inside a container).
+	hidden := make(map[string]RawNetworkInterface)
+
 	file, err := os.Open("/proc/net/dev")
 	if err != nil {
 		return result
@@ -355,6 +359,7 @@ func (c *LinuxCollector) collectNetwork() map[string]RawNetworkInterface {
 			continue
 		}
 		iface := strings.TrimSpace(parts[0])
+		// 回环永远不是有效链路：它没有硬件 backing，也从不承载业务流量。
 		if iface == "lo" {
 			continue
 		}
@@ -369,12 +374,24 @@ func (c *LinuxCollector) collectNetwork() map[string]RawNetworkInterface {
 		operstate := readSingleLine(fmt.Sprintf("/sys/class/net/%s/operstate", iface))
 		isUp := strings.ToLower(operstate) == "up"
 
-		result[iface] = RawNetworkInterface{
+		entry := RawNetworkInterface{
 			Interface:    iface,
 			RxTotalBytes: rxBytes,
 			TxTotalBytes: txBytes,
 			IsUp:         isUp,
 		}
+
+		if isVirtualNetworkInterface(iface) {
+			hidden[iface] = entry
+			continue
+		}
+		result[iface] = entry
+	}
+
+	// 兜底：Zhulong 跑在容器里时 eth0 本身就是 veth，过滤后一空如洗。
+	// 此时宁可展示实现细节，也不要给运维一个没有任何网卡的仪表盘。
+	if len(result) == 0 {
+		return hidden
 	}
 
 	return result
