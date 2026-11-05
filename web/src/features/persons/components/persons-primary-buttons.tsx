@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   FileSpreadsheet,
@@ -19,7 +20,7 @@ import {
   PERSONS_QUERY_KEY,
   useExportPersonsManifest,
 } from '../hooks/use-persons'
-import { usePersonsContext } from './persons-provider'
+import { usePersonsActions } from './persons-provider'
 
 interface PersonsPrimaryButtonsProps {
   /** 当前 URL 搜索关键词，导出时保持一致，避免「看到的」和「导出的」不是同一批人。 */
@@ -28,12 +29,12 @@ interface PersonsPrimaryButtonsProps {
   faceStatus?: string
 }
 
-export function PersonsPrimaryButtons({
+export const PersonsPrimaryButtons = memo(function PersonsPrimaryButtons({
   search,
   faceStatus,
 }: PersonsPrimaryButtonsProps) {
   const { t } = useTranslation('persons')
-  const { setOpen, setCurrentRow } = usePersonsContext()
+  const { setOpen, setCurrentRow } = usePersonsActions()
   const queryClient = useQueryClient()
   const exportMutation = useExportPersonsManifest()
 
@@ -142,4 +143,4 @@ export function PersonsPrimaryButtons({
       </Button>
     </div>
   )
-}
+})

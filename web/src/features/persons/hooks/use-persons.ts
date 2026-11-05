@@ -61,7 +61,8 @@ export function useCommitPersonImport() {
 export function usePerson(id?: string): UseQueryResult<Person, Error> {
   return useQuery({
     queryKey: [...PERSONS_QUERY_KEY, 'detail', id],
-    queryFn: () => (id ? personsApi.getPerson(id) : Promise.reject('No id')),
+    queryFn: () =>
+      id ? personsApi.getPerson(id) : Promise.reject(new Error('No id')),
     enabled: Boolean(id),
   })
 }
@@ -77,7 +78,7 @@ export function usePersonFaces(
     queryFn: () =>
       personId
         ? personsApi.listFaces(personId, { pageSize: 100 })
-        : Promise.reject('No personId'),
+        : Promise.reject(new Error('No personId')),
     enabled: Boolean(personId),
   })
 }
@@ -117,13 +118,18 @@ export function useUpdatePerson() {
 /**
  * 删除人员 Mutation
  */
-export function useDeletePerson(options?: { suppressGlobalToast?: boolean }) {
+export function useDeletePerson(options?: {
+  suppressGlobalToast?: boolean
+  suppressInvalidate?: boolean
+}) {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: (id: string) => personsApi.deletePerson(id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
+      if (!options?.suppressInvalidate) {
+        void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
+      }
     },
     meta: {
       suppressGlobalToast: options?.suppressGlobalToast,
@@ -134,7 +140,10 @@ export function useDeletePerson(options?: { suppressGlobalToast?: boolean }) {
 /**
  * 录入人脸 Mutation（图片文件直传）
  */
-export function useAddFace(options?: { suppressGlobalToast?: boolean }) {
+export function useAddFace(options?: {
+  suppressGlobalToast?: boolean
+  suppressInvalidate?: boolean
+}) {
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -146,10 +155,12 @@ export function useAddFace(options?: { suppressGlobalToast?: boolean }) {
       data: File | FormData
     }) => personsApi.addFace(personId, data),
     onSuccess: (_data, variables) => {
-      void queryClient.invalidateQueries({
-        queryKey: [...PERSONS_QUERY_KEY, variables.personId, 'faces'],
-      })
-      void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
+      if (!options?.suppressInvalidate) {
+        void queryClient.invalidateQueries({
+          queryKey: [...PERSONS_QUERY_KEY, variables.personId, 'faces'],
+        })
+        void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
+      }
     },
     meta: {
       suppressGlobalToast: options?.suppressGlobalToast,
@@ -217,14 +228,23 @@ export function useAllPersons(): UseQueryResult<PersonListResponse, Error> {
         return first
       }
 
-      const items = [...first.items]
       const pageCount = Math.ceil(first.total / PERSONS_FETCH_PAGE_SIZE)
-      for (let page = 2; page <= pageCount; page += 1) {
-        const next = await personsApi.getPersons({
-          page,
-          pageSize: PERSONS_FETCH_PAGE_SIZE,
-        })
-        items.push(...next.items)
+      const remainingPages = Array.from(
+        { length: pageCount - 1 },
+        (_, i) => i + 2
+      )
+      const restResults = await Promise.all(
+        remainingPages.map((page) =>
+          personsApi.getPersons({
+            page,
+            pageSize: PERSONS_FETCH_PAGE_SIZE,
+          })
+        )
+      )
+
+      const items = [...first.items]
+      for (const res of restResults) {
+        items.push(...res.items)
       }
 
       return { ...first, items, total: first.total }
@@ -263,7 +283,7 @@ export function useExportPersonsManifest() {
  */
 export function useFaceImportJob(jobId: string | null, enabled: boolean) {
   return useQuery({
-    queryKey: ['persons', 'face-import-job', jobId],
+    queryKey: [...PERSONS_QUERY_KEY, 'face-import-job', jobId],
     queryFn: () => (jobId ? personsApi.getFaceImportJob(jobId) : null),
     enabled: Boolean(jobId && enabled),
     refetchInterval: (query) => {

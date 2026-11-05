@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { type Row, type Table } from '@tanstack/react-table'
 import {
   AlertCircle,
@@ -17,7 +17,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { personsApi } from '../api/persons-api'
 import { type Person } from '../data/schema'
 import { PersonsDataTableRowActions } from './persons-data-table-row-actions'
-import { usePersonsContext } from './persons-provider'
+import { usePersonsActions } from './persons-provider'
 
 interface PersonsGridProps {
   table: Table<Person>
@@ -26,9 +26,9 @@ interface PersonsGridProps {
   onRetry: () => void
 }
 
-function PersonCard({ row }: { row: Row<Person> }) {
+const PersonCard = memo(function PersonCard({ row }: { row: Row<Person> }) {
   const { t } = useTranslation('persons')
-  const { setOpen, setCurrentRow, setPreviewImage } = usePersonsContext()
+  const { setOpen, setCurrentRow, setPreviewImage } = usePersonsActions()
   const [imgError, setImgError] = useState(false)
   const person = row.original
 
@@ -76,6 +76,8 @@ function PersonCard({ row }: { row: Row<Person> }) {
               alt={person.name}
               onError={() => setImgError(true)}
               className='h-full w-full object-cover transition-transform duration-500 group-hover:scale-105'
+              loading='lazy'
+              decoding='async'
             />
             {/* 渐变遮罩与快捷放大 */}
             <div className='absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-black/20 opacity-30 transition-opacity duration-300 group-hover:opacity-60' />
@@ -171,6 +173,8 @@ function PersonCard({ row }: { row: Row<Person> }) {
                   src={personsApi.getFaceImageUrl(person.id, face.id)}
                   alt=''
                   className='h-5 w-5 rounded-full border-2 border-card object-cover shadow-2xs'
+                  loading='lazy'
+                  decoding='async'
                 />
               ))}
               {faceCount > 3 && (
@@ -204,7 +208,7 @@ function PersonCard({ row }: { row: Row<Person> }) {
       </div>
     </div>
   )
-}
+})
 
 export function PersonsGrid({
   table,
@@ -213,7 +217,7 @@ export function PersonsGrid({
   onRetry,
 }: PersonsGridProps) {
   const { t } = useTranslation('persons')
-  const { setOpen } = usePersonsContext()
+  const { setOpen } = usePersonsActions()
 
   const rows = table.getRowModel().rows
   const isFiltered =

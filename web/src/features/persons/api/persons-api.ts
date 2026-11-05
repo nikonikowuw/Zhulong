@@ -239,22 +239,29 @@ export const personsApi = {
       | undefined
     let filename = 'person_photo_manifest.csv'
     if (disposition) {
-      const match = /filename=["']?([^"';]+)["']?/.exec(disposition)
-      if (match && match[1]) {
-        filename = match[1]
+      const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(disposition)
+      if (utf8Match && utf8Match[1]) {
+        filename = decodeURIComponent(utf8Match[1])
+      } else {
+        const match = /filename=["']?([^"';]+)["']?/.exec(disposition)
+        if (match && match[1]) {
+          filename = match[1]
+        }
       }
     }
 
-    const blob = new Blob([resp.data], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = filename
-    document.body.appendChild(anchor)
-    anchor.click()
-    requestAnimationFrame(() => {
-      document.body.removeChild(anchor)
-      URL.revokeObjectURL(url)
-    })
+    if (typeof document !== 'undefined') {
+      const blob = new Blob([resp.data], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      requestAnimationFrame(() => {
+        document.body.removeChild(anchor)
+        URL.revokeObjectURL(url)
+      })
+    }
   },
 }

@@ -3,11 +3,12 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { useDeletePerson } from '../hooks/use-persons'
-import { usePersonsContext } from './persons-provider'
+import { usePersonsActions, usePersonsState } from './persons-provider'
 
 export function PersonsDeleteDialog() {
   const { t } = useTranslation('persons')
-  const { open, setOpen, currentRow } = usePersonsContext()
+  const { open, currentRow } = usePersonsState()
+  const { setOpen } = usePersonsActions()
   const deleteMutation = useDeletePerson()
 
   const isOpen = open === 'delete' && Boolean(currentRow)

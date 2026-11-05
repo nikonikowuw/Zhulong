@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { type TFunction } from 'i18next'
 import {
   AlertCircle,
@@ -34,7 +34,7 @@ import {
   useCommitPersonImport,
   usePreviewPersonImport,
 } from '../hooks/use-persons'
-import { usePersonsContext } from './persons-provider'
+import { usePersonsActions, usePersonsState } from './persons-provider'
 
 function escapeCsvCell(value: string): string {
   const safeValue = /^[=+\-@]/.test(value) ? `'${value}` : value
@@ -82,7 +82,8 @@ function downloadFailedRows(rows: PersonImportRow[], filename: string) {
 
 export function PersonsImportDialog() {
   const { t } = useTranslation('persons')
-  const { open, setOpen } = usePersonsContext()
+  const { open } = usePersonsState()
+  const { setOpen } = usePersonsActions()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
   const previewMutation = usePreviewPersonImport()
@@ -91,8 +92,13 @@ export function PersonsImportDialog() {
   const result = commitMutation.data ?? null
   const isOpen = open === 'import'
   const isBusy = previewMutation.isPending || commitMutation.isPending
-  const failedRows = (result?.items ?? preview?.items ?? []).filter(
-    (row) => row.issues.length > 0
+
+  const failedRows = useMemo(
+    () =>
+      (result?.items ?? preview?.items ?? []).filter(
+        (row) => row.issues.length > 0
+      ),
+    [result?.items, preview?.items]
   )
 
   const reset = () => {

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { type Table } from '@tanstack/react-table'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -7,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { type Person } from '../data/schema'
-import { useDeletePerson } from '../hooks/use-persons'
+import { PERSONS_QUERY_KEY, useDeletePerson } from '../hooks/use-persons'
 
 type PersonsMultiDeleteDialogProps = {
   open: boolean
@@ -25,7 +26,11 @@ export function PersonsMultiDeleteDialog({
   const { t } = useTranslation('persons')
   const [value, setValue] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
-  const deleteMutation = useDeletePerson({ suppressGlobalToast: true })
+  const queryClient = useQueryClient()
+  const deleteMutation = useDeletePerson({
+    suppressGlobalToast: true,
+    suppressInvalidate: true,
+  })
 
   const selectedRows = table.getFilteredSelectedRowModel().rows
   const selectedPersons = selectedRows.map((row) => row.original)
@@ -38,17 +43,39 @@ export function PersonsMultiDeleteDialog({
 
     setIsDeleting(true)
     try {
-      await Promise.all(
+      const results = await Promise.allSettled(
         selectedPersons.map((p) => deleteMutation.mutateAsync(p.id))
       )
-      toast.success(
-        t('notifications.batchDeleteSuccess', { count: selectedPersons.length })
-      )
+      const successCount = results.filter(
+        (r) => r.status === 'fulfilled'
+      ).length
+      const failedCount = results.length - successCount
+
+      if (successCount > 0) {
+        void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
+      }
+
+      if (failedCount === 0) {
+        toast.success(
+          t('notifications.batchDeleteSuccess', {
+            count: selectedPersons.length,
+          })
+        )
+      } else if (successCount > 0) {
+        toast.warning(
+          t('notifications.batchDeletePartial', {
+            defaultValue: `成功删除 ${successCount} 人，失败 ${failedCount} 人`,
+            success: successCount,
+            failed: failedCount,
+          })
+        )
+      } else {
+        toast.error(t('notifications.batchDeleteError'))
+      }
+
       setValue('')
       table.resetRowSelection()
       onOpenChange(false)
-    } catch {
-      toast.error(t('notifications.batchDeleteError'))
     } finally {
       setIsDeleting(false)
     }

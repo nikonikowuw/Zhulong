@@ -11,11 +11,12 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
-import { usePersonsContext } from './persons-provider'
+import { usePersonsActions, usePersonsState } from './persons-provider'
 
 export function PersonsImagePreviewDialog() {
   const { t } = useTranslation('persons')
-  const { previewImage, setPreviewImage } = usePersonsContext()
+  const { previewImage } = usePersonsState()
+  const { setPreviewImage } = usePersonsActions()
   const containerRef = useRef<HTMLDivElement>(null)
 
   const [scale, setScale] = useState(1)

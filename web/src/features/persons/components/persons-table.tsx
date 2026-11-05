@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   type SortingState,
   type VisibilityState,
@@ -39,7 +39,7 @@ import { type Person } from '../data/schema'
 import { personsColumns as columns } from './persons-columns'
 import { PersonsDataTableBulkActions } from './persons-data-table-bulk-actions'
 import { PersonsGrid } from './persons-grid'
-import { usePersonsContext } from './persons-provider'
+import { usePersonsActions } from './persons-provider'
 
 const viewModeOptions = [
   { value: 'table', label: 'views.table', icon: List },
@@ -66,7 +66,7 @@ export function PersonsTable({
   navigate,
 }: PersonsTableProps) {
   const { t } = useTranslation('persons')
-  const { setOpen } = usePersonsContext()
+  const { setOpen } = usePersonsActions()
 
   const [rowSelection, setRowSelection] = useState({})
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
@@ -139,16 +139,51 @@ export function PersonsTable({
   const isFiltered =
     Boolean(globalFilter) || (columnFilters && columnFilters.length > 0)
 
-  const faceStatusOptions = [
-    {
-      label: t('table.filterFaceStatus.enrolled', { defaultValue: '已建模' }),
-      value: 'enrolled',
-    },
-    {
-      label: t('table.filterFaceStatus.missing', { defaultValue: '未录入' }),
-      value: 'missing',
-    },
-  ]
+  const faceStatusOptions = useMemo(
+    () => [
+      {
+        label: t('table.filterFaceStatus.enrolled', { defaultValue: '已建模' }),
+        value: 'enrolled',
+      },
+      {
+        label: t('table.filterFaceStatus.missing', { defaultValue: '未录入' }),
+        value: 'missing',
+      },
+    ],
+    [t]
+  )
+
+  const filters = useMemo(
+    () => [
+      {
+        columnId: 'faces',
+        title: t('table.filterFaceStatus.title', {
+          defaultValue: '人脸底库',
+        }),
+        options: faceStatusOptions,
+      },
+    ],
+    [t, faceStatusOptions]
+  )
+
+  const columnLabels = useMemo(
+    () => ({
+      name: t('table.columns.name'),
+      personId: t('table.columns.personId'),
+      faces: t('table.columns.faceCount'),
+      createdAt: t('table.columns.createdAt'),
+    }),
+    [t]
+  )
+
+  const viewModeSwitchOptions = useMemo(
+    () =>
+      viewModeOptions.map((option) => ({
+        ...option,
+        label: t(option.label),
+      })),
+    [t]
+  )
 
   return (
     <div className='flex flex-1 flex-col gap-4'>
@@ -157,30 +192,14 @@ export function PersonsTable({
           <DataTableToolbar
             table={table}
             searchPlaceholder={t('table.searchPlaceholder')}
-            filters={[
-              {
-                columnId: 'faces',
-                title: t('table.filterFaceStatus.title', {
-                  defaultValue: '人脸底库',
-                }),
-                options: faceStatusOptions,
-              },
-            ]}
-            columnLabels={{
-              name: t('table.columns.name'),
-              personId: t('table.columns.personId'),
-              faces: t('table.columns.faceCount'),
-              createdAt: t('table.columns.createdAt'),
-            }}
+            filters={filters}
+            columnLabels={columnLabels}
           />
         </div>
         <ViewModeSwitch
           value={viewMode}
           onChange={handleViewModeChange}
-          options={viewModeOptions.map((option) => ({
-            ...option,
-            label: t(option.label),
-          }))}
+          options={viewModeSwitchOptions}
         />
       </div>
 

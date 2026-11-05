@@ -1,15 +1,35 @@
+import { memo } from 'react'
 import { Eye, Image as ImageIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { DataTableColumnHeader } from '@/components/data-table'
 import { personsApi } from '../api/persons-api'
 import { type Person } from '../data/schema'
-import { usePersonsContext } from './persons-provider'
+import { usePersonsActions } from './persons-provider'
 
-export function PersonAvatarCell({ person }: { person: Person }) {
-  const { setPreviewImage } = usePersonsContext()
+export interface PersonColumnHeaderProps {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  column: any
+  titleKey: string
+}
+
+export function PersonColumnHeader({
+  column,
+  titleKey,
+}: PersonColumnHeaderProps) {
+  const { t } = useTranslation('persons')
+  return <DataTableColumnHeader column={column} title={t(titleKey)} />
+}
+
+export const PersonAvatarCell = memo(function PersonAvatarCell({
+  person,
+}: {
+  person: Person
+}) {
+  const { setPreviewImage } = usePersonsActions()
   const primaryFaceId = person.primaryFaceId || person.faces?.[0]?.id
   const avatarUrl = primaryFaceId
     ? personsApi.getFaceImageUrl(person.id, primaryFaceId)
@@ -52,6 +72,8 @@ export function PersonAvatarCell({ person }: { person: Person }) {
             src={avatarUrl}
             alt={person.name}
             className='object-cover'
+            loading='lazy'
+            decoding='async'
           />
           <AvatarFallback className='bg-primary/10 text-xs font-semibold text-primary'>
             {fallbackChar}
@@ -63,15 +85,23 @@ export function PersonAvatarCell({ person }: { person: Person }) {
       </button>
     </div>
   )
-}
+})
 
-export function PersonNameCell({ person }: { person: Person }) {
+export const PersonNameCell = memo(function PersonNameCell({
+  person,
+}: {
+  person: Person
+}) {
   return (
     <span className='truncate font-medium text-foreground'>{person.name}</span>
   )
-}
+})
 
-export function PersonSourceCell({ person }: { person: Person }) {
+export const PersonSourceCell = memo(function PersonSourceCell({
+  person,
+}: {
+  person: Person
+}) {
   const { t } = useTranslation('persons')
   if (person.source === 'API') {
     return (
@@ -93,11 +123,15 @@ export function PersonSourceCell({ person }: { person: Person }) {
       {t('table.columns.sourceLocal')}
     </Badge>
   )
-}
+})
 
-export function PersonsFacesCell({ person }: { person: Person }) {
+export const PersonsFacesCell = memo(function PersonsFacesCell({
+  person,
+}: {
+  person: Person
+}) {
   const { t } = useTranslation('persons')
-  const { setOpen, setCurrentRow } = usePersonsContext()
+  const { setOpen, setCurrentRow } = usePersonsActions()
   const faceCount = person.faces ? person.faces.length : 0
 
   const handleOpenFaces = () => {
@@ -132,4 +166,4 @@ export function PersonsFacesCell({ person }: { person: Person }) {
       )}
     </Button>
   )
-}
+})

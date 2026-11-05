@@ -1,11 +1,10 @@
 import { type ColumnDef } from '@tanstack/react-table'
-import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
-import { DataTableColumnHeader } from '@/components/data-table'
 import { type Person } from '../data/schema'
 import {
   PersonAvatarCell,
+  PersonColumnHeader,
   PersonNameCell,
   PersonSourceCell,
   PersonsFacesCell,
@@ -44,16 +43,9 @@ export const personsColumns: ColumnDef<Person>[] = [
   },
   {
     id: 'avatar',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('persons')
-      return (
-        <DataTableColumnHeader
-          column={column}
-          title={t('table.columns.avatar')}
-        />
-      )
-    },
+    header: ({ column }) => (
+      <PersonColumnHeader column={column} titleKey='table.columns.avatar' />
+    ),
     cell: ({ row }) => <PersonAvatarCell person={row.original} />,
     enableSorting: false,
     meta: {
@@ -62,31 +54,17 @@ export const personsColumns: ColumnDef<Person>[] = [
   },
   {
     accessorKey: 'name',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('persons')
-      return (
-        <DataTableColumnHeader
-          column={column}
-          title={t('table.columns.name')}
-        />
-      )
-    },
+    header: ({ column }) => (
+      <PersonColumnHeader column={column} titleKey='table.columns.name' />
+    ),
     cell: ({ row }) => <PersonNameCell person={row.original} />,
     enableSorting: false,
   },
   {
     accessorKey: 'personId',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('persons')
-      return (
-        <DataTableColumnHeader
-          column={column}
-          title={t('table.columns.personId')}
-        />
-      )
-    },
+    header: ({ column }) => (
+      <PersonColumnHeader column={column} titleKey='table.columns.personId' />
+    ),
     cell: ({ row }) => {
       const pid = row.original.personId
       return (
@@ -99,16 +77,9 @@ export const personsColumns: ColumnDef<Person>[] = [
   },
   {
     accessorKey: 'source',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('persons')
-      return (
-        <DataTableColumnHeader
-          column={column}
-          title={t('table.columns.source')}
-        />
-      )
-    },
+    header: ({ column }) => (
+      <PersonColumnHeader column={column} titleKey='table.columns.source' />
+    ),
     cell: ({ row }) => <PersonSourceCell person={row.original} />,
     enableSorting: false,
   },
@@ -116,31 +87,17 @@ export const personsColumns: ColumnDef<Person>[] = [
     id: 'faces',
     accessorFn: (row) =>
       row.faces && row.faces.length > 0 ? 'enrolled' : 'missing',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('persons')
-      return (
-        <DataTableColumnHeader
-          column={column}
-          title={t('table.columns.faceCount')}
-        />
-      )
-    },
+    header: ({ column }) => (
+      <PersonColumnHeader column={column} titleKey='table.columns.faceCount' />
+    ),
     cell: ({ row }) => <PersonsFacesCell person={row.original} />,
     enableSorting: false,
   },
   {
     accessorKey: 'createdAt',
-    header: ({ column }) => {
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const { t } = useTranslation('persons')
-      return (
-        <DataTableColumnHeader
-          column={column}
-          title={t('table.columns.createdAt')}
-        />
-      )
-    },
+    header: ({ column }) => (
+      <PersonColumnHeader column={column} titleKey='table.columns.createdAt' />
+    ),
     cell: ({ row }) => {
       const raw = row.getValue('createdAt') as string
       if (!raw) return <span className='text-xs text-muted-foreground'>-</span>

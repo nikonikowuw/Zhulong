@@ -28,7 +28,7 @@ import {
   useCreateFaceImportJob,
   useFaceImportJob,
 } from '../hooks/use-persons'
-import { usePersonsContext } from './persons-provider'
+import { usePersonsActions, usePersonsState } from './persons-provider'
 
 function downloadCsv(lines: string[][], filename: string) {
   const content = '\uFEFF' + lines.map((row) => row.join(',')).join('\r\n')
@@ -57,7 +57,8 @@ function downloadManifestTemplate() {
 
 export function PersonsFaceImportDialog() {
   const { t } = useTranslation('persons')
-  const { open, setOpen } = usePersonsContext()
+  const { open } = usePersonsState()
+  const { setOpen } = usePersonsActions()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
 

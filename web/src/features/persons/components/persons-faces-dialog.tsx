@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react'
+import { memo, useCallback, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   Check,
   Copy,
@@ -28,6 +29,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { personsApi } from '../api/persons-api'
 import { type Face } from '../data/schema'
 import {
+  PERSONS_QUERY_KEY,
   useAddFace,
   useDeleteFace,
   usePersonFaces,
@@ -49,7 +51,7 @@ interface FaceCardProps {
   onPreview: (imageUrl: string, title: string) => void
 }
 
-function FaceCard({
+const FaceCard = memo(function FaceCard({
   face,
   personId,
   isPrimary,
@@ -89,6 +91,8 @@ function FaceCard({
             alt={displayName}
             onError={() => setImgError(true)}
             className='h-full w-full object-cover transition-transform duration-300 group-hover:scale-105'
+            loading='lazy'
+            decoding='async'
           />
         ) : (
           <div className='flex h-full w-full flex-col items-center justify-center gap-1.5 p-2 text-center text-muted-foreground'>
@@ -200,7 +204,7 @@ function FaceCard({
       </div>
     </div>
   )
-}
+})
 
 export function PersonsFacesDialog() {
   const { t } = useTranslation('persons')
@@ -227,7 +231,11 @@ export function PersonsFacesDialog() {
   const faces = facePage?.items ?? []
   const faceTotal = facePage?.total ?? 0
 
-  const addFaceMutation = useAddFace({ suppressGlobalToast: true })
+  const queryClient = useQueryClient()
+  const addFaceBatchMutation = useAddFace({
+    suppressGlobalToast: true,
+    suppressInvalidate: true,
+  })
   const deleteFaceMutation = useDeleteFace()
   const setPrimaryMutation = useSetPrimaryFace()
 
@@ -239,7 +247,7 @@ export function PersonsFacesDialog() {
     }
   }
 
-  // 批量文件上传处理
+  // 批量文件上传处理（整批完成统一刷新 Query，避免 Invalidation 洪水）
   const handleFilesUpload = async (files: FileList | File[]) => {
     if (!personId || files.length === 0) return
 
@@ -267,7 +275,7 @@ export function PersonsFacesDialog() {
       const file = validFiles[i]
       setBatchProgress({ current: i + 1, total: validFiles.length })
       try {
-        const enrolled = await addFaceMutation.mutateAsync({
+        const enrolled = await addFaceBatchMutation.mutateAsync({
           personId,
           data: file,
         })
@@ -285,6 +293,10 @@ export function PersonsFacesDialog() {
     setBatchProgress(null)
 
     if (successCount > 0) {
+      void queryClient.invalidateQueries({
+        queryKey: [...PERSONS_QUERY_KEY, personId, 'faces'],
+      })
+      void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
       toast.success(t('notifications.addFaceSuccess'))
     }
   }
@@ -304,40 +316,53 @@ export function PersonsFacesDialog() {
     }
   }
 
-  const handleSetPrimary = async (faceId: string) => {
-    if (!personId) return
-    setSettingPrimaryId(faceId)
-    try {
-      await setPrimaryMutation.mutateAsync({
-        personId,
-        faceId,
-      })
-      if (currentRow) {
-        setCurrentRow({ ...currentRow, primaryFaceId: faceId })
+  const handleSetPrimary = useCallback(
+    async (faceId: string) => {
+      if (!personId) return
+      setSettingPrimaryId(faceId)
+      try {
+        await setPrimaryMutation.mutateAsync({
+          personId,
+          faceId,
+        })
+        if (currentRow) {
+          setCurrentRow({ ...currentRow, primaryFaceId: faceId })
+        }
+        toast.success(t('notifications.setPrimarySuccess'))
+      } catch {
+        // 错误由全局 mutation 处理
+      } finally {
+        setSettingPrimaryId(null)
       }
-      toast.success(t('notifications.setPrimarySuccess'))
-    } catch {
-      // 错误由全局 mutation 处理
-    } finally {
-      setSettingPrimaryId(null)
-    }
-  }
+    },
+    [personId, setPrimaryMutation, currentRow, setCurrentRow, t]
+  )
 
-  const handleDeleteFace = async (faceId: string) => {
-    if (!personId) return
-    setDeletingId(faceId)
-    try {
-      await deleteFaceMutation.mutateAsync({
-        personId,
-        faceId,
-      })
-      toast.success(t('notifications.deleteFaceSuccess'))
-    } catch {
-      // 错误由全局 mutation 处理
-    } finally {
-      setDeletingId(null)
-    }
-  }
+  const handleDeleteFace = useCallback(
+    async (faceId: string) => {
+      if (!personId) return
+      setDeletingId(faceId)
+      try {
+        await deleteFaceMutation.mutateAsync({
+          personId,
+          faceId,
+        })
+        toast.success(t('notifications.deleteFaceSuccess'))
+      } catch {
+        // 错误由全局 mutation 处理
+      } finally {
+        setDeletingId(null)
+      }
+    },
+    [personId, deleteFaceMutation, t]
+  )
+
+  const handlePreview = useCallback(
+    (url: string, title: string) => {
+      setPreviewImage({ url, title })
+    },
+    [setPreviewImage]
+  )
 
   const handleClose = () => {
     if (isUploadingBatch || deletingId) return
@@ -549,7 +574,7 @@ export function PersonsFacesDialog() {
                     isSettingPrimary={settingPrimaryId === face.id}
                     onDelete={handleDeleteFace}
                     onSetPrimary={handleSetPrimary}
-                    onPreview={(url, title) => setPreviewImage({ url, title })}
+                    onPreview={handlePreview}
                   />
                 )
               })}

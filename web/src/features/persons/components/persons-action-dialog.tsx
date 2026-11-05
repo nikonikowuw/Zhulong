@@ -32,7 +32,7 @@ import {
   useCreatePerson,
   useUpdatePerson,
 } from '../hooks/use-persons'
-import { usePersonsContext } from './persons-provider'
+import { usePersonsActions, usePersonsState } from './persons-provider'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
@@ -47,7 +47,8 @@ type PersonFormValues = z.infer<ReturnType<typeof createPersonFormSchema>>
 
 export function PersonsActionDialog() {
   const { t } = useTranslation('persons')
-  const { open, setOpen, currentRow } = usePersonsContext()
+  const { open, currentRow } = usePersonsState()
+  const { setOpen } = usePersonsActions()
 
   const isEdit = open === 'edit' && Boolean(currentRow)
   const isPersonIdBound = Boolean(
