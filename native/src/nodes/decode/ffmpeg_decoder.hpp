@@ -68,6 +68,7 @@ public:
 private:
     AVCodecContext *codec_ctx_{nullptr}; /**< FFmpeg 解码器上下文 */
     AVPacket *packet_{nullptr};          /**< 复用的输入包容器句柄 */
+    AVFrame *cached_frame_{nullptr};     /**< 复用的临时接收帧句柄，避免 EAGAIN 轮询反复堆分配 */
     int32_t time_base_num_{1};           /**< 源流时间基分子 */
     int32_t time_base_den_{90000};       /**< 源流时间基分母 */
     uint64_t stream_id_{0};              /**< 原生日志关联的流 ID */

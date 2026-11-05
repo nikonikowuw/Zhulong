@@ -560,8 +560,14 @@ struct MppJpegEncoder::Impl {
         if (!upload(s, src, r)) {
             return false;
         }
-        return encode_buffer(s, s.buffer, s.width, s.height, s.hor_stride, s.ver_stride, quality,
-                             out);
+        const auto key = std::make_tuple(s.width, s.height, s.hor_stride, s.ver_stride);
+        const bool ok = encode_buffer(s, s.buffer, s.width, s.height, s.hor_stride, s.ver_stride, quality,
+                                      out);
+        if (!ok) {
+            // ⚠️ 只要下发了 frame 但未能正常取出 packet，会话状态即被污染，必须强制淘汰，杜绝串包与死锁
+            sessions.erase(key);
+        }
+        return ok;
     }
 
     /**
@@ -611,7 +617,13 @@ struct MppJpegEncoder::Impl {
             return false;
         }
         // 谁导入谁归还：ImportGuard 在本函数返回前（帧回解码器缓冲池之前）完成配平
-        return encode_buffer(*session, imported, w, h, hor_stride, ver_stride, quality, out);
+        const auto key = std::make_tuple(w, h, hor_stride, ver_stride);
+        const bool ok = encode_buffer(*session, imported, w, h, hor_stride, ver_stride, quality, out);
+        if (!ok) {
+            // ⚠️ 直通失败时同步淘汰，防止会话残留未消费的 frame 导致后续错帧
+            sessions.erase(key);
+        }
+        return ok;
     }
 };
 

@@ -161,6 +161,11 @@ void test_rejects_invalid_inputs() {
     // 目标缓冲不足
     assert(!crop.copy(src.frame, ViewWindow{true, 0, 0, 64, 64}, dst.data(), dst.size() - 1,
                       static_cast<int>(layout.stride), -1));
+    // 目标跨度与紧打包布局不匹配（偏小或偏大）
+    assert(!crop.copy(src.frame, ViewWindow{true, 0, 0, 64, 64}, dst.data(), dst.size(),
+                      static_cast<int>(layout.stride) + 16, -1));
+    assert(!crop.copy(src.frame, ViewWindow{true, 0, 0, 64, 64}, dst.data(), dst.size(),
+                      static_cast<int>(layout.stride) - 1, -1));
     // 空目标
     assert(!crop.copy(src.frame, ViewWindow{true, 0, 0, 64, 64}, nullptr, dst.size(),
                       static_cast<int>(layout.stride), -1));

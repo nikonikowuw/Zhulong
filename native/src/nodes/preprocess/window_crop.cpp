@@ -151,7 +151,7 @@ bool WindowCrop::copy(const HardwareFrame& frame, const ViewWindow& view, uint8_
                       size_t dst_size, int dst_stride, int dst_dma_fd) noexcept {
     const PackedLayout layout = packed_layout_for(view, frame.format);
     if (!layout.valid || dst == nullptr || dst_size < layout.bytes ||
-        dst_stride < static_cast<int>(layout.stride)) {
+        dst_stride != static_cast<int>(layout.stride)) {
         return false;
     }
     if (view.x < 0 || view.y < 0) {

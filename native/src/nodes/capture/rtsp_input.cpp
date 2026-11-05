@@ -34,6 +34,7 @@ extern "C" {
 #include <map>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <thread>
 
 namespace zhulong {
@@ -361,7 +362,7 @@ struct TraceEntry {
 std::atomic<uint64_t> trace_token_source{0};
 
 struct TraceRegistry {
-    std::mutex mutex;
+    std::shared_mutex mutex;
     std::map<AVFormatContext *, TraceEntry> active;
     int saved_level = AV_LOG_QUIET;
     size_t users = 0;
@@ -379,7 +380,7 @@ void trace_log_callback(void *avcl, int /*level*/, const char *format, va_list a
     uint64_t stream_id = 0;
     {
         auto &registry = trace_registry();
-        std::lock_guard<std::mutex> lock(registry.mutex);
+        std::shared_lock<std::shared_mutex> lock(registry.mutex);
         const auto found = registry.active.find(static_cast<AVFormatContext *>(avcl));
         if (found == registry.active.end()) return;
         stream_id = found->second.stream_id;
@@ -409,7 +410,7 @@ public:
     RtspTransactionTrace(AVFormatContext *context, uint64_t stream_id) : context_(context) {
         if (!context_) return;
         auto &registry = trace_registry();
-        std::lock_guard<std::mutex> lock(registry.mutex);
+        std::unique_lock<std::shared_mutex> lock(registry.mutex);
         token_ = ++trace_token_source;
         registry.active[context_] = TraceEntry{Clock::now().time_since_epoch().count(), stream_id, token_};
         if (registry.users++ == 0) {
@@ -424,7 +425,7 @@ public:
     ~RtspTransactionTrace() {
         if (!installed_) return;
         auto &registry = trace_registry();
-        std::lock_guard<std::mutex> lock(registry.mutex);
+        std::unique_lock<std::shared_mutex> lock(registry.mutex);
         const auto found = registry.active.find(context_);
         if (found != registry.active.end() && found->second.token == token_) {
             registry.active.erase(found);

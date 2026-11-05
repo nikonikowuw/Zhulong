@@ -265,15 +265,16 @@ bool encode_jpeg(const YuvFrame &frame, int quality, std::vector<uint8_t> &out_j
 
     // 逐行拷贝到 AVFrame（AVFrame 的 linesize 可能大于 width）
     const size_t dst_y_stride = static_cast<size_t>(av_frame->linesize[0]);
-    const size_t dst_c_stride = static_cast<size_t>(av_frame->linesize[1]);
+    const size_t dst_u_stride = static_cast<size_t>(av_frame->linesize[1]);
+    const size_t dst_v_stride = static_cast<size_t>(av_frame->linesize[2]);
     for (uint32_t row = 0; row < frame.height; ++row) {
         std::memcpy(av_frame->data[0] + row * dst_y_stride,
                     frame.y.data() + static_cast<size_t>(row) * frame.width, frame.width);
     }
     for (uint32_t row = 0; row < frame.height / 2; ++row) {
         const size_t src_off = static_cast<size_t>(row) * (frame.width / 2);
-        std::memcpy(av_frame->data[1] + row * dst_c_stride, frame.u.data() + src_off, frame.width / 2);
-        std::memcpy(av_frame->data[2] + row * dst_c_stride, frame.v.data() + src_off, frame.width / 2);
+        std::memcpy(av_frame->data[1] + row * dst_u_stride, frame.u.data() + src_off, frame.width / 2);
+        std::memcpy(av_frame->data[2] + row * dst_v_stride, frame.v.data() + src_off, frame.width / 2);
     }
 
     if (avcodec_send_frame(ctx.get(), av_frame.get()) < 0) {

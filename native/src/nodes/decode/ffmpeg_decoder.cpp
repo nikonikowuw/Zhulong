@@ -74,6 +74,9 @@ FFmpegDecodeNode::FFmpegDecodeNode(int32_t codec, const uint8_t *extradata, size
 }
 
 FFmpegDecodeNode::~FFmpegDecodeNode() {
+    if (cached_frame_) {
+        av_frame_free(&cached_frame_);
+    }
     if (packet_) {
         av_packet_free(&packet_);
     }
@@ -112,8 +115,27 @@ int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
     out_frame = nullptr;
     if (!codec_ctx_) return decode_backend_failure;
 
-    AVFrame *av_frame = av_frame_alloc();
-    if (!av_frame) return AVERROR(ENOMEM);
+    if (!cached_frame_) {
+        cached_frame_ = av_frame_alloc();
+        if (!cached_frame_) return AVERROR(ENOMEM);
+    }
+
+    int ret = avcodec_receive_frame(codec_ctx_, cached_frame_);
+    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+        // ⚠️ EAGAIN（暂无输出）与 AVERROR_EOF（drain 已排空）共用 decode_again：
+        //    receive 侧不区分两者，语义见 decoder.hpp 的契约。drain 之后要继续送包，
+        //    必须先 flush() 复位 draining 状态，否则 send_packet 恒返 AVERROR_EOF。
+        //    此时 cached_frame_ 保留复用，杜绝轮询中每帧产生无谓的 alloc/free 堆颠簸。
+        return decode_again;
+    }
+    if (ret < 0) {
+        av_frame_unref(cached_frame_);
+        return ret; // 解码器内部严重错误（已是 AVERROR 命名空间）
+    }
+
+    // 成功取出有效帧：转移给局部 av_frame，cached_frame_ 置空在下一轮按需补充分配
+    AVFrame *av_frame = cached_frame_;
+    cached_frame_ = nullptr;
 
     struct FrameGuard {
         AVFrame *f{nullptr};
@@ -123,17 +145,6 @@ int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
             }
         }
     } guard{av_frame};
-
-    int ret = avcodec_receive_frame(codec_ctx_, av_frame);
-    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-        // ⚠️ EAGAIN（暂无输出）与 AVERROR_EOF（drain 已排空）共用 decode_again：
-        //    receive 侧不区分两者，语义见 decoder.hpp 的契约。drain 之后要继续送包，
-        //    必须先 flush() 复位 draining 状态，否则 send_packet 恒返 AVERROR_EOF。
-        return decode_again;
-    }
-    if (ret < 0) {
-        return ret; // 解码器内部严重错误（已是 AVERROR 命名空间）
-    }
 
     // ⚠️ 负 linesize 表示垂直翻转输出（data[i] 指向该平面最后一行）。HardwareFrame 没有翻转
     //    语义，把 stride 归零只会让下游按「紧凑、从上到下」读到错行——宁可显式判为不支持，
@@ -203,6 +214,9 @@ int FFmpegDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
 }
 
 void FFmpegDecodeNode::flush() {
+    if (cached_frame_) {
+        av_frame_unref(cached_frame_);
+    }
     if (codec_ctx_) {
         // 清空 DPB 参考帧缓冲，同时复位内部 draining 状态（后续仍可继续送包）
         avcodec_flush_buffers(codec_ctx_);

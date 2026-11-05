@@ -36,6 +36,7 @@ public:
      * @brief 把 `view` 指定的窗口以下列紧打包布局写入 `dst`。
      *
      * 支持 NV12 / YUV420P；未知格式返回 false（调用方必须 fail_publish，不得按 BGR24 猜）。
+     * `dst_stride` 必须与 `packed_layout_for(view, frame.format).stride` 严格一致；
      * `dst_dma_fd >= 0` 表示目标为 DMA 槽位，写入期间做 `DMA_SYNC_WRITE`；`-1` 表示 shm。
      */
     bool copy(const HardwareFrame& frame, const ViewWindow& view, uint8_t* dst,

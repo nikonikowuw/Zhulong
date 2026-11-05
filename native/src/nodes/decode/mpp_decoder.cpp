@@ -346,6 +346,14 @@ int MppDecodeNode::receive_frame(HardwareFrame::Ptr &out_frame) {
             }
         } frame_guard{frame, loader_ptr};
 
+        // 0. 处理 EOS 标记（排空完成信号）
+        if (api.frame_get_eos && api.frame_get_eos(frame)) {
+            // EOS 帧若不携带物理缓冲，说明排空已彻底完成，直接返回 decode_again
+            if (!api.frame_get_buffer || !api.frame_get_buffer(frame)) {
+                return decode_again;
+            }
+        }
+
         // 1. 处理 info_change 事件 (流参数更新或首次解析出 SPS/PPS)
         if (api.frame_get_info_change(frame)) {
             const int info_ret = configure_buffer_group(frame);
