@@ -43,18 +43,37 @@ export interface DestinationStatus {
   state: 'idle' | 'running' | 'degraded' | 'disabled'
 }
 
-export interface AlertDestination {
+export interface WebhookAlertDestination {
   id: string
   name: string
-  channelType: ChannelType
+  channelType: 'webhook'
   enabled: boolean
   imageMode: ImageMode
-  config: WebhookConfig & MQTTConfig
+  config: WebhookConfig
   filter: DestinationFilter
   secretSet: boolean
   headerNames?: string[]
   status: DestinationStatus
 }
+
+export interface MQTTAlertDestination {
+  id: string
+  name: string
+  channelType: 'mqtt'
+  enabled: boolean
+  imageMode: ImageMode
+  config: MQTTConfig
+  filter: DestinationFilter
+  secretSet: boolean
+  headerNames?: string[]
+  status: DestinationStatus
+}
+
+/** 辨识联合类型：以 channelType 作为判别式标签 */
+export type AlertDestination = WebhookAlertDestination | MQTTAlertDestination
+
+/** 通用或未分流时的配置投影类型 */
+export type DestinationConfig = WebhookConfig & Partial<MQTTConfig>
 
 export interface CreateAlertDestinationInput {
   name: string

@@ -1,13 +1,13 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  AlertCircle,
   BellRing,
+  CheckCircle2,
+  Loader2,
+  Play,
   Plus,
   RefreshCw,
-  Loader2,
-  AlertCircle,
-  Play,
-  CheckCircle2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Badge } from '@/components/ui/badge'
@@ -91,6 +91,10 @@ export function AlertPushPage() {
     setDialogOpen(true)
   }
 
+  const handleDeletePrompt = (dest: AlertDestination) => {
+    setDeletingDest(dest)
+  }
+
   const handleToggle = (dest: AlertDestination, enabled: boolean) => {
     if (enabled) {
       enableMutation.mutate(dest.id)
@@ -112,7 +116,6 @@ export function AlertPushPage() {
       setQuickTestResult({ ok: false, latencyMs: 0, reason: msg })
     } finally {
       setTestingQuick(false)
-      // Refresh list to show updated status
       void queryClient.invalidateQueries({ queryKey: ['alert-destinations'] })
     }
   }
@@ -178,14 +181,14 @@ export function AlertPushPage() {
           </div>
         </div>
 
-        {error && (
+        {error ? (
           <div className='flex items-center gap-2 rounded-xl border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive'>
             <AlertCircle className='size-5 shrink-0' />
             <span>
               {error instanceof Error ? error.message : String(error)}
             </span>
           </div>
-        )}
+        ) : null}
 
         {/* Main Content */}
         {isLoading ? (
@@ -210,7 +213,7 @@ export function AlertPushPage() {
           <AlertDestinationsTable
             destinations={destinations}
             onEdit={handleEdit}
-            onDelete={(dest) => setDeletingDest(dest)}
+            onDelete={handleDeletePrompt}
             onToggle={handleToggle}
             onTest={handleQuickTest}
           />
@@ -229,18 +232,18 @@ export function AlertPushPage() {
         {/* Delete Confirmation Dialog */}
         <Dialog
           open={Boolean(deletingDest)}
-          onOpenChange={(open) => !open && setDeletingDest(null)}
+          onOpenChange={(open) => (!open ? setDeletingDest(null) : undefined)}
         >
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{t('deleteConfirmTitle')}</DialogTitle>
               <DialogDescription>
                 {t('deleteConfirmDesc')}
-                {deletingDest && (
+                {deletingDest ? (
                   <span className='mt-2 block font-medium text-foreground'>
                     {deletingDest.name}
                   </span>
-                )}
+                ) : null}
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
@@ -254,13 +257,15 @@ export function AlertPushPage() {
               <Button
                 variant='destructive'
                 onClick={() =>
-                  deletingDest && deleteMutation.mutate(deletingDest.id)
+                  deletingDest
+                    ? deleteMutation.mutate(deletingDest.id)
+                    : undefined
                 }
                 disabled={deleteMutation.isPending}
               >
-                {deleteMutation.isPending && (
+                {deleteMutation.isPending ? (
                   <Loader2 className='mr-1.5 size-4 animate-spin' />
-                )}
+                ) : null}
                 {t('delete')}
               </Button>
             </DialogFooter>
@@ -270,7 +275,7 @@ export function AlertPushPage() {
         {/* Quick Test Feedback Dialog */}
         <Dialog
           open={Boolean(testModalDest)}
-          onOpenChange={(open) => !open && setTestModalDest(null)}
+          onOpenChange={(open) => (!open ? setTestModalDest(null) : undefined)}
         >
           <DialogContent className='sm:max-w-md'>
             <DialogHeader>

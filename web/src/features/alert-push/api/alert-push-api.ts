@@ -8,7 +8,7 @@ import type {
   UpdateAlertDestinationInput,
 } from '../types'
 
-const destinationStatusSchema = z.object({
+export const destinationStatusSchema = z.object({
   lastAttemptAt: z.string().optional(),
   lastSuccessAt: z.string().optional(),
   lastFailureAt: z.string().optional(),
@@ -20,16 +20,19 @@ const destinationStatusSchema = z.object({
   state: z.enum(['idle', 'running', 'degraded', 'disabled']).default('idle'),
 })
 
-const destinationFilterSchema = z.object({
+export const destinationFilterSchema = z.object({
   eventTypes: z.array(z.string()).default([]),
   algorithmIds: z.array(z.string()).default([]),
   cameraIds: z.array(z.string()).default([]),
 })
 
-const destinationConfigSchema = z.object({
+export const webhookConfigSchema = z.object({
   url: z.string().optional(),
   authType: z.enum(['none', 'bearer', 'basic']).default('none'),
   timeoutSeconds: z.number().optional(),
+})
+
+export const mqttConfigSchema = z.object({
   broker: z.string().default(''),
   clientId: z.string().optional(),
   username: z.string().optional(),
@@ -39,24 +42,39 @@ const destinationConfigSchema = z.object({
   tlsSkipVerify: z.boolean().default(false),
 })
 
-const alertDestinationSchema = z.object({
+const baseDestinationSchema = {
   id: z.string(),
   name: z.string(),
-  channelType: z.enum(['webhook', 'mqtt']),
   enabled: z.boolean(),
   imageMode: z.enum(['url', 'multipart', 'base64']),
-  config: destinationConfigSchema,
   filter: destinationFilterSchema,
   secretSet: z.boolean().default(false),
   headerNames: z.array(z.string()).optional(),
   status: destinationStatusSchema,
+}
+
+export const webhookDestinationSchema = z.object({
+  ...baseDestinationSchema,
+  channelType: z.literal('webhook'),
+  config: webhookConfigSchema,
 })
 
-const alertDestinationListResponseSchema = z.object({
+export const mqttDestinationSchema = z.object({
+  ...baseDestinationSchema,
+  channelType: z.literal('mqtt'),
+  config: mqttConfigSchema,
+})
+
+export const alertDestinationSchema = z.discriminatedUnion('channelType', [
+  webhookDestinationSchema,
+  mqttDestinationSchema,
+])
+
+export const alertDestinationListResponseSchema = z.object({
   items: z.array(alertDestinationSchema),
 })
 
-const testResponseSchema = z.object({
+export const testResponseSchema = z.object({
   ok: z.boolean(),
   latencyMs: z.number(),
   reason: z.string().optional(),
@@ -71,7 +89,7 @@ export const alertPushApi = {
         data: alertDestinationListResponseSchema,
       })
       .parse(resp.data)
-    return parsed.data.items as unknown as AlertDestination[]
+    return parsed.data.items
   },
 
   async create(input: CreateAlertDestinationInput): Promise<AlertDestination> {
@@ -82,7 +100,7 @@ export const alertPushApi = {
         data: alertDestinationSchema,
       })
       .parse(resp.data)
-    return parsed.data as unknown as AlertDestination
+    return parsed.data
   },
 
   async update(
@@ -99,7 +117,7 @@ export const alertPushApi = {
         data: alertDestinationSchema,
       })
       .parse(resp.data)
-    return parsed.data as unknown as AlertDestination
+    return parsed.data
   },
 
   async delete(id: string): Promise<void> {
@@ -116,7 +134,7 @@ export const alertPushApi = {
         data: alertDestinationSchema,
       })
       .parse(resp.data)
-    return parsed.data as unknown as AlertDestination
+    return parsed.data
   },
 
   async disable(id: string): Promise<AlertDestination> {
@@ -129,7 +147,7 @@ export const alertPushApi = {
         data: alertDestinationSchema,
       })
       .parse(resp.data)
-    return parsed.data as unknown as AlertDestination
+    return parsed.data
   },
 
   async test(input: TestDestinationInput): Promise<TestDestinationResult> {

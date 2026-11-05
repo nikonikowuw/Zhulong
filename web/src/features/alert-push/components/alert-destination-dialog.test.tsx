@@ -45,8 +45,6 @@ const mockDestination: AlertDestination = {
     url: 'https://api.example.com/alerts/webhook',
     authType: 'none',
     timeoutSeconds: 5,
-    broker: '',
-    topic: '',
   },
   filter: {
     eventTypes: ['alarm'],
