@@ -16,7 +16,8 @@
     "actions": "操作",
     "neverUsed": "从未调用",
     "empty": "暂无 API 访问凭据",
-    "emptyDesc": "点击「新建凭据」创建第一个第三方调用令牌"
+    "emptyDesc": "点击「新建凭据」创建第一个第三方调用令牌",
+    "loading": "正在加载凭据…"
   },
   "dialogs": {
     "createTitle": "新建 API 访问凭据",

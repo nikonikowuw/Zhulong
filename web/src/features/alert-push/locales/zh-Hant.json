@@ -12,6 +12,7 @@
   "empty": "尚未設定告警推送目標",
   "emptyHint": "點擊上方“新增推送目標”按鈕新增 Webhook 或 MQTT 推送通道。",
   "maxLimitReached": "推送目標數量已達上限 (32/32)",
+  "limitUsage": "已配置 {{count}}/{{max}} 個推送目標",
   "deleteConfirmTitle": "確認刪除推送目標？",
   "deleteConfirmDesc": "刪除後系統將停止向該目標分發告警事件，此操作不可撤銷。",
   "fields": {

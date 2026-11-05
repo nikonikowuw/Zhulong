@@ -16,7 +16,8 @@
     "actions": "Actions",
     "neverUsed": "Never",
     "empty": "No API tokens found",
-    "emptyDesc": "Click 'Create Token' to generate your first OpenAPI credential"
+    "emptyDesc": "Click 'Create Token' to generate your first OpenAPI credential",
+    "loading": "Loading tokens…"
   },
   "dialogs": {
     "createTitle": "Create API Access Token",

@@ -16,7 +16,8 @@
     "actions": "操作",
     "neverUsed": "從未調用",
     "empty": "暫無 API 訪問憑證",
-    "emptyDesc": "點擊「建立憑證」建立第一個第三方調用令牌"
+    "emptyDesc": "點擊「建立憑證」建立第一個第三方調用令牌",
+    "loading": "正在載入憑證…"
   },
   "dialogs": {
     "createTitle": "建立 API 訪問憑證",

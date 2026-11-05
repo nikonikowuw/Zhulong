@@ -11,6 +11,8 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { STATUS_DOT_CLASS, STATUS_LEVEL_CLASS } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -33,8 +35,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { ContentSection } from '@/components/layout/content-section'
 import { apiTokensApi } from '../api/api-tokens-api'
 import { type APIToken, type APITokenCreateResponse } from '../data/schema'
+
+const MAX_ACTIVE_TOKENS = 10
 
 export function APITokensPage() {
   const { t, i18n } = useTranslation('apiTokens')
@@ -57,6 +62,7 @@ export function APITokensPage() {
   })
 
   const activeCount = tokens.filter((t) => !t.revokedAt).length
+  const atLimit = activeCount >= MAX_ACTIVE_TOKENS
 
   const createMutation = useMutation({
     mutationFn: (name: string) => apiTokensApi.createToken(name),
@@ -105,156 +111,218 @@ export function APITokensPage() {
   }
 
   return (
-    <div className='space-y-6'>
-      {/* Header section */}
-      <div className='flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
-        <div className='space-y-1'>
-          <div className='flex items-center gap-3'>
-            <h2 className='text-2xl font-bold tracking-tight'>{t('title')}</h2>
+    <ContentSection
+      title={t('title')}
+      desc={t('description')}
+      className='w-full'
+    >
+      <div className='space-y-5'>
+        {/* 工具栏：配额 + 过滤 + 动作 */}
+        <div className='flex flex-col gap-3 rounded-xl border border-border/80 bg-card/75 p-3 shadow-xs backdrop-blur-md sm:flex-row sm:items-center sm:justify-between'>
+          <div className='flex flex-wrap items-center gap-3'>
             <Badge
-              variant={activeCount >= 10 ? 'destructive' : 'secondary'}
-              className='text-xs'
+              variant='outline'
+              className={cn(
+                'h-6 gap-1.5 px-2 text-xs font-normal',
+                atLimit
+                  ? STATUS_LEVEL_CLASS.destructive
+                  : STATUS_LEVEL_CLASS.active
+              )}
             >
+              <span
+                className={cn(
+                  'size-1.5 rounded-full',
+                  atLimit
+                    ? STATUS_DOT_CLASS.destructive
+                    : STATUS_DOT_CLASS.active
+                )}
+              />
               {t('limitTip', { count: activeCount })}
             </Badge>
+
+            <div className='flex items-center gap-2'>
+              <Checkbox
+                id='show-revoked'
+                checked={includeRevoked}
+                onCheckedChange={(checked) => setIncludeRevoked(!!checked)}
+              />
+              <Label
+                htmlFor='show-revoked'
+                className='cursor-pointer text-xs font-normal text-muted-foreground'
+              >
+                {t('showRevoked')}
+              </Label>
+            </div>
           </div>
-          <p className='text-sm text-muted-foreground'>{t('description')}</p>
+
+          <div className='flex items-center gap-2 self-end sm:self-auto'>
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={() => void refetch()}
+              disabled={isLoading}
+              className='h-8 gap-1.5 rounded-lg border-border/80 shadow-2xs'
+              aria-label={t('common:actions.refresh', {
+                defaultValue: '刷新',
+              })}
+            >
+              <RefreshCw
+                className={cn('size-3.5', isLoading && 'animate-spin')}
+              />
+              <span>
+                {t('common:actions.refresh', { defaultValue: '刷新' })}
+              </span>
+            </Button>
+
+            <Button
+              size='sm'
+              onClick={() => setCreateDialogOpen(true)}
+              disabled={atLimit}
+              className='h-8 gap-1.5 rounded-lg shadow-2xs'
+            >
+              <Plus className='size-3.5' />
+              {t('createButton')}
+            </Button>
+          </div>
         </div>
 
-        <div className='flex items-center gap-3'>
-          <Button
-            variant='outline'
-            size='sm'
-            onClick={() => void refetch()}
-            disabled={isLoading}
-            className='gap-1.5'
-          >
-            <RefreshCw
-              className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`}
-            />
-          </Button>
+        {/* 安全提示 */}
+        <Alert className='border-amber-500/30 bg-amber-500/5 text-amber-900 dark:text-amber-200'>
+          <ShieldAlert className='size-4 text-amber-600 dark:text-amber-400' />
+          <AlertDescription className='text-xs leading-relaxed'>
+            {t('securityNotice')}
+          </AlertDescription>
+        </Alert>
 
-          <Button
-            onClick={() => setCreateDialogOpen(true)}
-            disabled={activeCount >= 10}
-            className='gap-1.5'
-          >
-            <Plus className='h-4 w-4' />
-            {t('createButton')}
-          </Button>
-        </div>
-      </div>
-
-      {/* Security Warning Notice */}
-      <Alert className='border-amber-500/30 bg-amber-500/5 text-amber-900 dark:text-amber-200'>
-        <ShieldAlert className='h-4 w-4 text-amber-600 dark:text-amber-400' />
-        <AlertDescription className='text-xs'>
-          {t('securityNotice')}
-        </AlertDescription>
-      </Alert>
-
-      {/* Filter Toolbar */}
-      <div className='flex items-center space-x-2'>
-        <Checkbox
-          id='show-revoked'
-          checked={includeRevoked}
-          onCheckedChange={(checked) => setIncludeRevoked(!!checked)}
-        />
-        <Label
-          htmlFor='show-revoked'
-          className='cursor-pointer text-sm font-normal text-muted-foreground'
-        >
-          {t('showRevoked')}
-        </Label>
-      </div>
-
-      {/* Table Section */}
-      <div className='rounded-md border border-border bg-card'>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className='w-[200px]'>{t('table.name')}</TableHead>
-              <TableHead>{t('table.maskedKey')}</TableHead>
-              <TableHead>{t('table.status')}</TableHead>
-              <TableHead>{t('table.lastUsedAt')}</TableHead>
-              <TableHead>{t('table.createdAt')}</TableHead>
-              <TableHead className='text-right'>{t('table.actions')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {tokens.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={6}
-                  className='h-32 text-center text-muted-foreground'
-                >
-                  <div className='flex flex-col items-center justify-center gap-1.5'>
-                    <Key className='h-6 w-6 text-muted-foreground/60' />
-                    <p className='text-sm font-medium'>{t('table.empty')}</p>
-                    <p className='text-xs text-muted-foreground'>
-                      {t('table.emptyDesc')}
-                    </p>
-                  </div>
-                </TableCell>
+        {/* 凭据列表 */}
+        <div className='rounded-xl border border-border/80 bg-card/75 shadow-xs backdrop-blur-md'>
+          <Table>
+            <TableHeader>
+              <TableRow className='border-border/60 bg-muted/40 hover:bg-muted/40'>
+                <TableHead className='h-9 ps-4 text-xs font-medium text-muted-foreground'>
+                  {t('table.name')}
+                </TableHead>
+                <TableHead className='h-9 text-xs font-medium text-muted-foreground'>
+                  {t('table.maskedKey')}
+                </TableHead>
+                <TableHead className='h-9 text-xs font-medium text-muted-foreground'>
+                  {t('table.status')}
+                </TableHead>
+                <TableHead className='h-9 text-xs font-medium text-muted-foreground'>
+                  {t('table.lastUsedAt')}
+                </TableHead>
+                <TableHead className='h-9 text-xs font-medium text-muted-foreground'>
+                  {t('table.createdAt')}
+                </TableHead>
+                <TableHead className='h-9 pe-4 text-end text-xs font-medium text-muted-foreground'>
+                  {t('table.actions')}
+                </TableHead>
               </TableRow>
-            ) : (
-              tokens.map((token) => {
-                const isRevoked = !!token.revokedAt
-                return (
-                  <TableRow key={token.id}>
-                    <TableCell className='font-medium text-foreground'>
-                      {token.name}
-                    </TableCell>
-                    <TableCell>
-                      <code className='rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground'>
-                        {token.maskedKey}
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      {isRevoked ? (
+            </TableHeader>
+            <TableBody>
+              {isLoading ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={6}
+                    className='h-32 text-center text-xs text-muted-foreground'
+                  >
+                    <RefreshCw className='mx-auto mb-2 size-4 animate-spin opacity-60' />
+                    {t('table.loading', { defaultValue: '正在加载凭据…' })}
+                  </TableCell>
+                </TableRow>
+              ) : tokens.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={6}
+                    className='h-40 text-center text-muted-foreground'
+                  >
+                    <div className='flex flex-col items-center justify-center gap-2'>
+                      <div className='flex size-10 items-center justify-center rounded-xl border border-border/60 bg-muted/40'>
+                        <Key className='size-5 text-muted-foreground/70' />
+                      </div>
+                      <p className='text-sm font-medium text-foreground'>
+                        {t('table.empty')}
+                      </p>
+                      <p className='text-xs text-muted-foreground'>
+                        {t('table.emptyDesc')}
+                      </p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                tokens.map((token) => {
+                  const isRevoked = !!token.revokedAt
+                  return (
+                    <TableRow
+                      key={token.id}
+                      className='border-border/50 transition-colors hover:bg-muted/30'
+                    >
+                      <TableCell className='py-3 ps-4 font-medium text-foreground'>
+                        {token.name}
+                      </TableCell>
+                      <TableCell className='py-3'>
+                        <code className='rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 font-mono text-xs text-muted-foreground'>
+                          {token.maskedKey}
+                        </code>
+                      </TableCell>
+                      <TableCell className='py-3'>
                         <Badge
                           variant='outline'
-                          className='text-xs text-muted-foreground'
+                          className={cn(
+                            'h-5 gap-1.5 px-1.5 text-[11px] font-normal',
+                            isRevoked
+                              ? STATUS_LEVEL_CLASS.inactive
+                              : STATUS_LEVEL_CLASS.active
+                          )}
                         >
-                          {t('table.statusRevoked')}
+                          <span
+                            className={cn(
+                              'size-1.5 rounded-full',
+                              isRevoked
+                                ? STATUS_DOT_CLASS.inactive
+                                : STATUS_DOT_CLASS.active
+                            )}
+                          />
+                          {isRevoked
+                            ? t('table.statusRevoked')
+                            : t('table.statusActive')}
                         </Badge>
-                      ) : (
-                        <Badge
-                          variant='outline'
-                          className='border-green-500/30 bg-green-500/10 text-xs text-green-600 dark:text-green-400'
-                        >
-                          {t('table.statusActive')}
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className='text-sm text-muted-foreground'>
-                      {token.lastUsedAt
-                        ? formatDate(token.lastUsedAt)
-                        : t('table.neverUsed')}
-                    </TableCell>
-                    <TableCell className='text-sm text-muted-foreground'>
-                      {formatDate(token.createdAt)}
-                    </TableCell>
-                    <TableCell className='text-right'>
-                      {isRevoked ? (
-                        <span className='text-xs text-muted-foreground'>-</span>
-                      ) : (
-                        <Button
-                          variant='ghost'
-                          size='sm'
-                          onClick={() => setRevokingToken(token)}
-                          className='text-xs text-destructive hover:bg-destructive/10 hover:text-destructive'
-                        >
-                          {t('dialogs.confirmRevoke')}
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                )
-              })
-            )}
-          </TableBody>
-        </Table>
+                      </TableCell>
+                      <TableCell className='py-3 font-mono text-xs text-muted-foreground'>
+                        {token.lastUsedAt ? (
+                          formatDate(token.lastUsedAt)
+                        ) : (
+                          <span className='text-muted-foreground/70 italic'>
+                            {t('table.neverUsed')}
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className='py-3 font-mono text-xs text-muted-foreground'>
+                        {formatDate(token.createdAt)}
+                      </TableCell>
+                      <TableCell className='py-3 pe-4 text-end'>
+                        {isRevoked ? (
+                          <span className='text-xs text-muted-foreground/60'>
+                            -
+                          </span>
+                        ) : (
+                          <Button
+                            variant='ghost'
+                            size='sm'
+                            onClick={() => setRevokingToken(token)}
+                            className='h-7 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive'
+                          >
+                            {t('dialogs.confirmRevoke')}
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </div>
 
       {/* Create Dialog */}
@@ -308,7 +376,7 @@ export function APITokensPage() {
         <DialogContent className='sm:max-w-[550px]'>
           <DialogHeader>
             <div className='flex items-center gap-2 text-amber-500'>
-              <AlertTriangle className='h-5 w-5' />
+              <AlertTriangle className='size-5' />
               <DialogTitle className='text-foreground'>
                 {t('dialogs.showSecretTitle')}
               </DialogTitle>
@@ -336,9 +404,9 @@ export function APITokensPage() {
                 className='shrink-0'
               >
                 {copied ? (
-                  <Check className='h-4 w-4 text-green-500' />
+                  <Check className='size-4 text-emerald-500' />
                 ) : (
-                  <Copy className='h-4 w-4' />
+                  <Copy className='size-4' />
                 )}
               </Button>
             </div>
@@ -362,7 +430,7 @@ export function APITokensPage() {
         <DialogContent className='sm:max-w-[425px]'>
           <DialogHeader>
             <div className='flex items-center gap-2 text-destructive'>
-              <ShieldAlert className='h-5 w-5' />
+              <ShieldAlert className='size-5' />
               <DialogTitle>{t('dialogs.revokeTitle')}</DialogTitle>
             </div>
             <DialogDescription>
@@ -389,6 +457,6 @@ export function APITokensPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </ContentSection>
   )
 }

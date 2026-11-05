@@ -12,6 +12,7 @@
   "empty": "No alert destinations configured",
   "emptyHint": "Click 'New Destination' above to create a Webhook or MQTT forwarding channel.",
   "maxLimitReached": "Maximum destination limit reached (32/32)",
+  "limitUsage": "{{count}}/{{max}} destinations configured",
   "deleteConfirmTitle": "Delete destination?",
   "deleteConfirmDesc": "The system will stop dispatching alarms to this target. This action cannot be undone.",
   "fields": {
