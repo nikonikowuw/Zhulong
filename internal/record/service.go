@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/aitypes"
@@ -15,6 +16,11 @@ import (
 	"go.uber.org/zap"
 )
 
+type pendingAlarmEntry struct {
+	alarm     AlarmEvent
+	createdAt time.Time
+}
+
 // Service coordinates perception records, alarms, cooldown deduplication, and persistence.
 type Service struct {
 	store      *Store
@@ -23,6 +29,13 @@ type Service struct {
 	snapshots  *SnapshotStore
 	algorithms *AlgorithmResolver
 	logger     *zap.Logger
+
+	alarmListener AlarmListener
+	pendingMu     sync.Mutex
+	pendingAlarms map[string]*pendingAlarmEntry
+	sweeperStop   chan struct{}
+	sweeperDone   chan struct{}
+	accepting     bool
 }
 
 // NewService creates a new record Service.
@@ -31,11 +44,13 @@ func NewService(store *Store, logger *zap.Logger) *Service {
 		logger = zap.NewNop()
 	}
 	return &Service{
-		store:      store,
-		cooldown:   NewCooldownManager(DefaultCooldown),
-		tracker:    newTargetTracker(defaultTrackerConfig()),
-		algorithms: NewAlgorithmResolver(store),
-		logger:     logger,
+		store:         store,
+		cooldown:      NewCooldownManager(DefaultCooldown),
+		tracker:       newTargetTracker(defaultTrackerConfig()),
+		algorithms:    NewAlgorithmResolver(store),
+		logger:        logger,
+		pendingAlarms: make(map[string]*pendingAlarmEntry),
+		accepting:     false,
 	}
 }
 
@@ -60,6 +75,124 @@ func (s *Service) SetCooldownWindow(d time.Duration) {
 // 未注入时进程仍能正常落库，只是路径字段留空（与「抓拍失败」表现一致）。
 func (s *Service) SetSnapshotStore(store *SnapshotStore) {
 	s.snapshots = store
+	if store != nil {
+		store.SetJobObserver(s)
+	}
+}
+
+// SetAlarmListener 注入告警事件监听器。
+func (s *Service) SetAlarmListener(l AlarmListener) {
+	s.alarmListener = l
+}
+
+// Start 启动 5s 兜底 sweeper 协程。
+func (s *Service) Start(ctx context.Context) {
+	s.pendingMu.Lock()
+	if s.sweeperStop != nil {
+		s.pendingMu.Unlock()
+		return
+	}
+	s.sweeperStop = make(chan struct{})
+	s.sweeperDone = make(chan struct{})
+	s.accepting = true
+	stopCh := s.sweeperStop
+	doneCh := s.sweeperDone
+	s.pendingMu.Unlock()
+
+	go func() {
+		defer close(doneCh)
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopCh:
+				return
+			case now := <-ticker.C:
+				var expired []AlarmEvent
+				s.pendingMu.Lock()
+				for id, entry := range s.pendingAlarms {
+					if now.Sub(entry.createdAt) > 5*time.Second {
+						delete(s.pendingAlarms, id)
+						ev := entry.alarm
+						ev.ImageReady = false
+						ev.CropReady = false
+						ev.ImagePath = ""
+						ev.CropPath = ""
+						expired = append(expired, ev)
+					}
+				}
+				s.pendingMu.Unlock()
+
+				for _, ev := range expired {
+					if s.alarmListener != nil {
+						s.alarmListener.OnAlarm(context.Background(), ev)
+					}
+				}
+			}
+		}
+	}()
+}
+
+// Stop 停止 sweeper 并丢弃未完成条目。
+func (s *Service) Stop() {
+	s.pendingMu.Lock()
+	s.accepting = false
+	stopCh := s.sweeperStop
+	doneCh := s.sweeperDone
+	s.sweeperStop = nil
+	s.sweeperDone = nil
+	clear(s.pendingAlarms)
+	s.pendingMu.Unlock()
+
+	if stopCh != nil {
+		close(stopCh)
+		<-doneCh
+	}
+}
+
+// OnSnapshotJobDone 实现 SnapshotJobObserver 接口。
+func (s *Service) OnSnapshotJobDone(targetTable, targetID string, result SnapshotJobResult) {
+	if targetTable != tableAlarms && targetTable != tableRecognitions && targetTable != tableCaptures {
+		return
+	}
+
+	s.pendingMu.Lock()
+	if !s.accepting {
+		s.pendingMu.Unlock()
+		return
+	}
+	entry, ok := s.pendingAlarms[targetID]
+	if !ok {
+		s.pendingMu.Unlock()
+		return
+	}
+	delete(s.pendingAlarms, targetID)
+	s.pendingMu.Unlock()
+
+	ev := entry.alarm
+	ev.ImageReady = false
+	ev.CropReady = false
+
+	writtenMap := make(map[string]bool, len(result.Outputs))
+	for _, out := range result.Outputs {
+		writtenMap[out.RelPath] = out.Written
+	}
+
+	if ev.ImagePath != "" && writtenMap[ev.ImagePath] {
+		ev.ImageReady = true
+	} else {
+		ev.ImagePath = ""
+	}
+
+	if ev.CropPath != "" && writtenMap[ev.CropPath] {
+		ev.CropReady = true
+	} else {
+		ev.CropPath = ""
+	}
+
+	if s.alarmListener != nil {
+		s.alarmListener.OnAlarm(context.Background(), ev)
+	}
 }
 
 // EnsureAlarmEvidenceLocks backfills .lock sidecars for historical alarm images.
@@ -298,7 +431,7 @@ func (s *Service) processPersonStructure(ctx context.Context, res aitypes.Infere
 		if err := s.store.CreateRecognitionBatch(ctx, recognitions); err != nil {
 			s.logger.Error("failed to batch insert recognitions", zap.Error(err))
 		} else {
-			s.enqueueSnapshots(ctx, recognitionSnapshots)
+			s.handleRecognitionsCreated(ctx, recognitions, recognitionSnapshots)
 		}
 	}
 	if len(captures) > 0 {
@@ -639,7 +772,7 @@ func (s *Service) processVehicleStructure(ctx context.Context, res aitypes.Infer
 		if err := s.store.CreateCaptureBatch(ctx, captures); err != nil {
 			s.logger.Error("failed to batch insert vehicle captures", zap.Error(err))
 		} else {
-			s.enqueueSnapshots(ctx, snapshots)
+			s.handleVehicleCapturesCreated(ctx, captures, snapshots)
 		}
 	}
 
@@ -772,7 +905,7 @@ func (s *Service) processDetection(ctx context.Context, res aitypes.InferenceRes
 		if err := s.store.CreateAlarmBatch(ctx, alarms); err != nil {
 			s.logger.Error("failed to batch insert alarms", zap.Error(err))
 		} else {
-			s.enqueueSnapshots(ctx, alarmSnapshots)
+			s.handleAlarmsCreated(ctx, alarms, alarmSnapshots)
 		}
 	}
 	if len(captures) > 0 {
@@ -829,10 +962,236 @@ func (s *Service) processClassification(ctx context.Context, res aitypes.Inferen
 		if err := s.store.CreateAlarmBatch(ctx, alarms); err != nil {
 			s.logger.Error("failed to batch insert classification alarms", zap.Error(err))
 		} else {
-			s.enqueueSnapshots(ctx, snapshots)
+			s.handleAlarmsCreated(ctx, alarms, snapshots)
 		}
 	}
 	return nil
+}
+
+func unmarshalMap(extraJSON string) map[string]any {
+	var extra map[string]any
+	_ = json.Unmarshal([]byte(extraJSON), &extra)
+	return extra
+}
+
+func (s *Service) handleAlarmsCreated(ctx context.Context, alarms []*Alarm, snapshots []snapshotJob) {
+	if s.alarmListener == nil {
+		s.enqueueSnapshots(ctx, snapshots)
+		return
+	}
+	if s.snapshots == nil {
+		if s.alarmListener != nil {
+			for _, alarm := range alarms {
+				algoID := ""
+				if alarm.AlgorithmID != nil {
+					algoID = *alarm.AlgorithmID
+				}
+				extra := unmarshalMap(alarm.ExtraJSON)
+				box := unmarshalBox(alarm.BoxJSON)
+				ev := AlarmEvent{
+					ID:          alarm.ID,
+					EventType:   EventTypeAlarm,
+					CameraID:    alarm.CameraID,
+					AlgorithmID: algoID,
+					CapturedAt:  alarm.CapturedAt,
+					ImagePath:   "",
+					CropPath:    "",
+					ImageReady:  false,
+					CropReady:   false,
+					Alarm: &AlarmEventData{
+						AlarmType: alarm.AlarmType,
+						Score:     alarm.Score,
+						Box:       box,
+						Extra:     extra,
+					},
+					AlarmType: alarm.AlarmType,
+					Score:     alarm.Score,
+					Box:       box,
+					Extra:     extra,
+				}
+				s.alarmListener.OnAlarm(ctx, ev)
+			}
+		}
+		return
+	}
+
+	jobMap := make(map[string]snapshotJob, len(snapshots))
+	for _, job := range snapshots {
+		jobMap[job.targetID] = job
+	}
+
+	for _, alarm := range alarms {
+		job, hasJob := jobMap[alarm.ID]
+		algoID := ""
+		if alarm.AlgorithmID != nil {
+			algoID = *alarm.AlgorithmID
+		}
+		extra := unmarshalMap(alarm.ExtraJSON)
+		box := unmarshalBox(alarm.BoxJSON)
+		ev := AlarmEvent{
+			ID:          alarm.ID,
+			EventType:   EventTypeAlarm,
+			CameraID:    alarm.CameraID,
+			AlgorithmID: algoID,
+			CapturedAt:  alarm.CapturedAt,
+			ImagePath:   alarm.ImagePath,
+			CropPath:    alarm.CropPath,
+			Alarm: &AlarmEventData{
+				AlarmType: alarm.AlarmType,
+				Score:     alarm.Score,
+				Box:       box,
+				Extra:     extra,
+			},
+			AlarmType: alarm.AlarmType,
+			Score:     alarm.Score,
+			Box:       box,
+			Extra:     extra,
+		}
+
+		s.dispatchOrEnqueueEvent(ctx, ev, job, hasJob)
+	}
+}
+
+func (s *Service) handleRecognitionsCreated(ctx context.Context, recognitions []*Recognition, snapshots []snapshotJob) {
+	if s.alarmListener == nil {
+		s.enqueueSnapshots(ctx, snapshots)
+		return
+	}
+
+	jobMap := make(map[string]snapshotJob, len(snapshots))
+	for _, job := range snapshots {
+		jobMap[job.targetID] = job
+	}
+
+	for _, rec := range recognitions {
+		job, hasJob := jobMap[rec.ID]
+		algoID := ""
+		if rec.AlgorithmID != nil {
+			algoID = *rec.AlgorithmID
+		}
+		ev := AlarmEvent{
+			ID:          rec.ID,
+			EventType:   EventTypeFaceRecognition,
+			CameraID:    rec.CameraID,
+			AlgorithmID: algoID,
+			CapturedAt:  rec.CapturedAt,
+			ImagePath:   rec.ImagePath,
+			CropPath:    rec.FaceImagePath,
+			Face: &FaceEventData{
+				Matched:          rec.Matched,
+				PersonName:       rec.PersonName,
+				PersonID:         rec.PersonExternalID,
+				Similarity:       rec.Similarity,
+				Box:              unmarshalBox(rec.BoxJSON),
+				GalleryImagePath: rec.GalleryImagePath,
+				Attributes:       unmarshalMapOrDefault(rec.AttributesJSON),
+			},
+		}
+
+		s.dispatchOrEnqueueEvent(ctx, ev, job, hasJob)
+	}
+}
+
+func (s *Service) handleVehicleCapturesCreated(ctx context.Context, captures []*Capture, snapshots []snapshotJob) {
+	if s.alarmListener == nil {
+		s.enqueueSnapshots(ctx, snapshots)
+		return
+	}
+
+	jobMap := make(map[string]snapshotJob, len(snapshots))
+	for _, job := range snapshots {
+		jobMap[job.targetID] = job
+	}
+
+	for _, cap := range captures {
+		job, hasJob := jobMap[cap.ID]
+		algoID := ""
+		if cap.AlgorithmID != nil {
+			algoID = *cap.AlgorithmID
+		}
+		attrs := unmarshalMapOrDefault(cap.AttributesJSON)
+		ev := AlarmEvent{
+			ID:          cap.ID,
+			EventType:   EventTypePlateRecognition,
+			CameraID:    cap.CameraID,
+			AlgorithmID: algoID,
+			CapturedAt:  cap.CapturedAt,
+			ImagePath:   cap.ImagePath,
+			CropPath:    cap.CropPath,
+			Vehicle: &VehicleEventData{
+				PlateNumber:  stringFromMap(attrs, "plate_number"),
+				PlateColor:   stringFromMap(attrs, "plate_color"),
+				VehicleType:  stringFromMap(attrs, "vehicle_type"),
+				VehicleColor: stringFromMap(attrs, "vehicle_color"),
+				Score:        cap.Score,
+				Box:          unmarshalBox(cap.BoxJSON),
+				Attributes:   attrs,
+			},
+		}
+
+		s.dispatchOrEnqueueEvent(ctx, ev, job, hasJob)
+	}
+}
+
+func (s *Service) dispatchOrEnqueueEvent(ctx context.Context, ev AlarmEvent, job snapshotJob, hasJob bool) {
+	if !s.snapshots.Available() || !hasJob {
+		if hasJob {
+			s.clearJobPaths(ctx, []snapshotJob{job})
+		}
+		if s.alarmListener != nil {
+			ev.ImageReady = false
+			ev.CropReady = false
+			ev.ImagePath = ""
+			ev.CropPath = ""
+			s.alarmListener.OnAlarm(ctx, ev)
+		}
+		return
+	}
+
+	if s.alarmListener == nil {
+		s.snapshots.Enqueue(job)
+		return
+	}
+
+	s.pendingMu.Lock()
+	if !s.accepting || len(s.pendingAlarms) >= 256 {
+		s.pendingMu.Unlock()
+		s.snapshots.Enqueue(job)
+		ev.ImageReady = false
+		ev.CropReady = false
+		ev.ImagePath = ""
+		ev.CropPath = ""
+		s.alarmListener.OnAlarm(ctx, ev)
+		return
+	}
+
+	s.pendingAlarms[ev.ID] = &pendingAlarmEntry{
+		alarm:     ev,
+		createdAt: time.Now(),
+	}
+	s.pendingMu.Unlock()
+
+	if !s.snapshots.Enqueue(job) {
+		s.pendingMu.Lock()
+		delete(s.pendingAlarms, ev.ID)
+		s.pendingMu.Unlock()
+
+		s.clearJobPaths(ctx, []snapshotJob{job})
+		ev.ImageReady = false
+		ev.CropReady = false
+		ev.ImagePath = ""
+		ev.CropPath = ""
+		s.alarmListener.OnAlarm(ctx, ev)
+	}
+}
+
+func stringFromMap(m map[string]any, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
 }
 
 // optionalAlgorithmID 把推理结果里的算法标识转换成可空列值。

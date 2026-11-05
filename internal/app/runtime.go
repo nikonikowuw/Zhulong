@@ -72,6 +72,11 @@ type apiTokenLifecycle interface {
 	Close() error
 }
 
+type alertPushLifecycle interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
+
 type systemTimeLifecycle interface {
 	Start(context.Context) error
 	Stop(context.Context) error
@@ -133,6 +138,7 @@ type lifecycleRuntime struct {
 	record      recordLifecycle
 	snapshot    snapshotLifecycle
 	spatial     spatialLifecycle
+	alertPush   alertPushLifecycle
 	apiToken    apiTokenLifecycle
 	configCache regionConfigReloader
 	server      *http.Server
@@ -164,6 +170,7 @@ type lifecycleRuntime struct {
 	recordReady         bool
 	snapshotReady       bool
 	spatialReady        bool
+	alertPushReady      bool
 	httpReady           bool
 	loggerSynced        bool
 	startAttempted      bool
@@ -191,6 +198,7 @@ type runtimeParams struct {
 	Record      recordLifecycle      `optional:"true"`
 	Snapshot    snapshotLifecycle    `optional:"true"`
 	Spatial     spatialLifecycle     `optional:"true"`
+	AlertPush   alertPushLifecycle   `optional:"true"`
 	APIToken    apiTokenLifecycle    `optional:"true"`
 	ConfigCache regionConfigReloader `optional:"true"`
 	Server      *http.Server
@@ -222,6 +230,7 @@ func newLifecycleRuntime(p runtimeParams) *lifecycleRuntime {
 		record:      p.Record,
 		snapshot:    p.Snapshot,
 		spatial:     p.Spatial,
+		alertPush:   p.AlertPush,
 		apiToken:    p.APIToken,
 		configCache: p.ConfigCache,
 		server:      p.Server,
@@ -385,6 +394,14 @@ func (r *lifecycleRuntime) Start(ctx context.Context) error {
 		r.gb28181Ready = true
 	}
 
+	if r.alertPush != nil {
+		if err := r.alertPush.Start(ctx); err != nil {
+			r.degradedStart("alertpush", err)
+		} else {
+			r.alertPushReady = true
+		}
+	}
+
 	// 算法管理必须在 native 引擎启动与 camera 初始化之后启动：
 	// 这样开机自动拉起 active 算法时，能够成功解密 URI 并通过 Engine.AcquireStream 建立 AI 物理流。
 	if r.algorithm != nil {
@@ -460,6 +477,7 @@ func (r *lifecycleRuntime) stopSequence() []func(context.Context) error {
 		r.closeAlgorithm,
 		r.closePerson,
 		r.closeSpatial,
+		r.closeAlertPush,
 		r.closeRecordAndSnapshot,
 		r.closeStorage,
 		r.closeSystemInfo,
@@ -667,6 +685,19 @@ func (r *lifecycleRuntime) closeSpatial(ctx context.Context) error {
 	if r.spatial != nil {
 		if err := r.spatial.Stop(ctx); err != nil {
 			return fmt.Errorf("stop spatial service: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *lifecycleRuntime) closeAlertPush(ctx context.Context) error {
+	if !r.alertPushReady {
+		return nil
+	}
+	r.alertPushReady = false
+	if r.alertPush != nil {
+		if err := r.alertPush.Stop(ctx); err != nil {
+			return fmt.Errorf("stop alert push dispatcher: %w", err)
 		}
 	}
 	return nil

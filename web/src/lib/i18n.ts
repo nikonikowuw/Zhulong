@@ -4,6 +4,9 @@ import commonZhHant from '@/locales/zh-Hant/common.json'
 import i18n from 'i18next'
 import LanguageDetector from 'i18next-browser-languagedetector'
 import { initReactI18next } from 'react-i18next'
+import alertPushEn from '@/features/alert-push/locales/en.json'
+import alertPushZhHans from '@/features/alert-push/locales/zh-Hans.json'
+import alertPushZhHant from '@/features/alert-push/locales/zh-Hant.json'
 import algorithmsEn from '@/features/algorithms/locales/en.json'
 import algorithmsZhHans from '@/features/algorithms/locales/zh-Hans.json'
 import algorithmsZhHant from '@/features/algorithms/locales/zh-Hant.json'
@@ -74,6 +77,7 @@ export const resources = {
     tasks: tasksZhHans,
     spatial: spatialZhHans,
     imageSearch: imageSearchZhHans,
+    alertPush: alertPushZhHans,
     apiTokens: apiTokensZhHans,
   },
   'zh-Hant': {
@@ -93,6 +97,7 @@ export const resources = {
     tasks: tasksZhHant,
     spatial: spatialZhHant,
     imageSearch: imageSearchZhHant,
+    alertPush: alertPushZhHant,
     apiTokens: apiTokensZhHant,
   },
   en: {
@@ -112,6 +117,7 @@ export const resources = {
     tasks: tasksEn,
     spatial: spatialEn,
     imageSearch: imageSearchEn,
+    alertPush: alertPushEn,
     apiTokens: apiTokensEn,
   },
 } as const

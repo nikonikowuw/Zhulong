@@ -1,0 +1,148 @@
+import { z } from 'zod'
+import { apiClient } from '@/lib/api-client'
+import type {
+  AlertDestination,
+  CreateAlertDestinationInput,
+  TestDestinationInput,
+  TestDestinationResult,
+  UpdateAlertDestinationInput,
+} from '../types'
+
+const destinationStatusSchema = z.object({
+  lastAttemptAt: z.string().optional(),
+  lastSuccessAt: z.string().optional(),
+  lastFailureAt: z.string().optional(),
+  lastFailureReason: z.string().optional(),
+  consecutiveFailures: z.number().default(0),
+  totalDispatched: z.number().default(0),
+  queueLength: z.number().default(0),
+  queueCapacity: z.number().default(32),
+  state: z.enum(['idle', 'running', 'degraded', 'disabled']).default('idle'),
+})
+
+const destinationFilterSchema = z.object({
+  eventTypes: z.array(z.string()).default([]),
+  algorithmIds: z.array(z.string()).default([]),
+  cameraIds: z.array(z.string()).default([]),
+})
+
+const destinationConfigSchema = z.object({
+  url: z.string().optional(),
+  authType: z.enum(['none', 'bearer', 'basic']).default('none'),
+  timeoutSeconds: z.number().optional(),
+  broker: z.string().default(''),
+  clientId: z.string().optional(),
+  username: z.string().optional(),
+  topic: z.string().default(''),
+  qos: z.number().optional(),
+  keepAliveSeconds: z.number().optional(),
+  tlsSkipVerify: z.boolean().default(false),
+})
+
+const alertDestinationSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  channelType: z.enum(['webhook', 'mqtt']),
+  enabled: z.boolean(),
+  imageMode: z.enum(['url', 'multipart', 'base64']),
+  config: destinationConfigSchema,
+  filter: destinationFilterSchema,
+  secretSet: z.boolean().default(false),
+  headerNames: z.array(z.string()).optional(),
+  status: destinationStatusSchema,
+})
+
+const alertDestinationListResponseSchema = z.object({
+  items: z.array(alertDestinationSchema),
+})
+
+const testResponseSchema = z.object({
+  ok: z.boolean(),
+  latencyMs: z.number(),
+  reason: z.string().optional(),
+})
+
+export const alertPushApi = {
+  async list(): Promise<AlertDestination[]> {
+    const resp = await apiClient.get<unknown>('/alert-destinations')
+    const parsed = z
+      .object({
+        code: z.literal('OK'),
+        data: alertDestinationListResponseSchema,
+      })
+      .parse(resp.data)
+    return parsed.data.items as unknown as AlertDestination[]
+  },
+
+  async create(input: CreateAlertDestinationInput): Promise<AlertDestination> {
+    const resp = await apiClient.post<unknown>('/alert-destinations', input)
+    const parsed = z
+      .object({
+        code: z.literal('OK'),
+        data: alertDestinationSchema,
+      })
+      .parse(resp.data)
+    return parsed.data as unknown as AlertDestination
+  },
+
+  async update(
+    id: string,
+    input: UpdateAlertDestinationInput
+  ): Promise<AlertDestination> {
+    const resp = await apiClient.put<unknown>(
+      `/alert-destinations/${id}`,
+      input
+    )
+    const parsed = z
+      .object({
+        code: z.literal('OK'),
+        data: alertDestinationSchema,
+      })
+      .parse(resp.data)
+    return parsed.data as unknown as AlertDestination
+  },
+
+  async delete(id: string): Promise<void> {
+    await apiClient.delete<unknown>(`/alert-destinations/${id}`)
+  },
+
+  async enable(id: string): Promise<AlertDestination> {
+    const resp = await apiClient.post<unknown>(
+      `/alert-destinations/${id}/enable`
+    )
+    const parsed = z
+      .object({
+        code: z.literal('OK'),
+        data: alertDestinationSchema,
+      })
+      .parse(resp.data)
+    return parsed.data as unknown as AlertDestination
+  },
+
+  async disable(id: string): Promise<AlertDestination> {
+    const resp = await apiClient.post<unknown>(
+      `/alert-destinations/${id}/disable`
+    )
+    const parsed = z
+      .object({
+        code: z.literal('OK'),
+        data: alertDestinationSchema,
+      })
+      .parse(resp.data)
+    return parsed.data as unknown as AlertDestination
+  },
+
+  async test(input: TestDestinationInput): Promise<TestDestinationResult> {
+    const resp = await apiClient.post<unknown>(
+      '/alert-destinations/test',
+      input
+    )
+    const parsed = z
+      .object({
+        code: z.literal('OK'),
+        data: testResponseSchema,
+      })
+      .parse(resp.data)
+    return parsed.data
+  },
+}

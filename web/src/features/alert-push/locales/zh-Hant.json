@@ -1,0 +1,87 @@
+{
+  "title": "告警多渠道推送",
+  "description": "配置感知事件分發通道（Webhook 與 MQTT）：支援行為告警、人臉辨識、車輛車牌辨識三類事件，依事件類型/演算法/攝影機過濾、圖片附帶及連通性探測。推送載荷統一攜帶裝置標識 device_id。",
+  "create": "新增推送目標",
+  "edit": "編輯推送目標",
+  "delete": "刪除目標",
+  "test": "測試連通性",
+  "testing": "探測中...",
+  "testSuccess": "探測成功 ({{latency}}ms)",
+  "testFailed": "探測失敗: {{reason}}",
+  "refresh": "重新整理",
+  "empty": "尚未設定告警推送目標",
+  "emptyHint": "點擊上方“新增推送目標”按鈕新增 Webhook 或 MQTT 推送通道。",
+  "maxLimitReached": "推送目標數量已達上限 (32/32)",
+  "deleteConfirmTitle": "確認刪除推送目標？",
+  "deleteConfirmDesc": "刪除後系統將停止向該目標分發告警事件，此操作不可撤銷。",
+  "fields": {
+    "name": "通道名稱",
+    "channelType": "協定類型",
+    "imageMode": "圖片附帶模式",
+    "enabled": "啟用狀態",
+    "status": "運作狀態",
+    "queue": "佇列堆疊",
+    "lastAttempt": "最近推送",
+    "actions": "操作",
+    "webhookUrl": "Webhook URL",
+    "authType": "鑑權方式",
+    "bearerToken": "Bearer Token",
+    "basicUsername": "Basic 使用者名稱",
+    "basicPassword": "Basic 密碼",
+    "timeout": "逾時時間 (秒)",
+    "customHeaders": "自訂請求標頭",
+    "headerKey": "Header 名稱",
+    "headerValue": "Header 取值",
+    "addHeader": "新增 Header",
+    "mqttBroker": "Broker 位址 (如 tcp://10.0.0.1:1883)",
+    "mqttClientId": "Client ID (留空自動衍生)",
+    "mqttUsername": "MQTT 使用者名稱 (選填)",
+    "mqttPassword": "MQTT 密碼 (選填)",
+    "mqttTopic": "發布 Topic",
+    "mqttQoS": "QoS 品質等級",
+    "mqttKeepAlive": "心跳週期 (秒)",
+    "tlsSkipVerify": "略過 TLS 憑證校驗",
+    "filterEvents": "事件類型訂閱 (留空為全部)",
+    "filterAlgorithms": "演算法過濾 (留空為全部)",
+    "filterCameras": "攝像機過濾 (留空為全部)",
+    "secretRetained": "憑證已儲存，留空表示維持不變"
+  },
+  "eventTypes": {
+    "all": "全部事件",
+    "alarm": "行為與安全告警",
+    "face_recognition": "人臉辨識比對",
+    "plate_recognition": "車輛與車牌辨識"
+  },
+  "channelTypes": {
+    "webhook": "HTTP Webhook",
+    "mqtt": "MQTT 訊息匯流排"
+  },
+  "imageModes": {
+    "url": "安全簽名 URL (支援時效性校驗)",
+    "multipart": "Multipart 附件 (二進位同包上傳)",
+    "base64": "Base64 內嵌編碼 (≤500KB)"
+  },
+  "authTypes": {
+    "none": "無鑑權",
+    "bearer": "Bearer Token",
+    "basic": "HTTP Basic Auth"
+  },
+  "states": {
+    "idle": "就緒閒置",
+    "running": "正在推送",
+    "degraded": "異常降級",
+    "disabled": "已停用"
+  },
+  "failureReasons": {
+    "timeout": "網路請求逾時",
+    "refused": "連線被拒絕",
+    "tls": "TLS 握手失敗",
+    "auth": "鑑權失敗 (401/403)",
+    "dns": "DNS 解析失敗",
+    "not_found": "目標端點不存在 (404)",
+    "http_error": "目標服務回傳 HTTP 錯誤",
+    "mqtt_connect": "MQTT 握手失敗",
+    "config_invalid": "目標設定無效",
+    "unsupported_channel": "不支援的協定"
+  }
+}

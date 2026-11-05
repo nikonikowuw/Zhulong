@@ -35,6 +35,7 @@ import { Route as AuthenticatedSettingsNetworkRouteImport } from './routes/_auth
 import { Route as AuthenticatedSettingsGb28181RouteImport } from './routes/_authenticated/settings/gb28181'
 import { Route as AuthenticatedSettingsAppearanceRouteImport } from './routes/_authenticated/settings/appearance'
 import { Route as AuthenticatedSettingsApiTokensRouteImport } from './routes/_authenticated/settings/api-tokens'
+import { Route as AuthenticatedSettingsAlertPushRouteImport } from './routes/_authenticated/settings/alert-push'
 import { Route as AuthenticatedErrorsErrorRouteImport } from './routes/_authenticated/errors/$error'
 
 const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
@@ -181,6 +182,12 @@ const AuthenticatedSettingsApiTokensRoute =
     path: '/api-tokens',
     getParentRoute: () => AuthenticatedSettingsRouteRoute,
   } as any)
+const AuthenticatedSettingsAlertPushRoute =
+  AuthenticatedSettingsAlertPushRouteImport.update({
+    id: '/alert-push',
+    path: '/alert-push',
+    getParentRoute: () => AuthenticatedSettingsRouteRoute,
+  } as any)
 const AuthenticatedErrorsErrorRoute =
   AuthenticatedErrorsErrorRouteImport.update({
     id: '/errors/$error',
@@ -198,6 +205,7 @@ export interface FileRoutesByFullPath {
   '/500': typeof errors500Route
   '/503': typeof errors503Route
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
+  '/settings/alert-push': typeof AuthenticatedSettingsAlertPushRoute
   '/settings/api-tokens': typeof AuthenticatedSettingsApiTokensRoute
   '/settings/appearance': typeof AuthenticatedSettingsAppearanceRoute
   '/settings/gb28181': typeof AuthenticatedSettingsGb28181Route
@@ -225,6 +233,7 @@ export interface FileRoutesByTo {
   '/503': typeof errors503Route
   '/': typeof AuthenticatedIndexRoute
   '/errors/$error': typeof AuthenticatedErrorsErrorRoute
+  '/settings/alert-push': typeof AuthenticatedSettingsAlertPushRoute
   '/settings/api-tokens': typeof AuthenticatedSettingsApiTokensRoute
   '/settings/appearance': typeof AuthenticatedSettingsAppearanceRoute
   '/settings/gb28181': typeof AuthenticatedSettingsGb28181Route
@@ -255,6 +264,7 @@ export interface FileRoutesById {
   '/(errors)/503': typeof errors503Route
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/errors/$error': typeof AuthenticatedErrorsErrorRoute
+  '/_authenticated/settings/alert-push': typeof AuthenticatedSettingsAlertPushRoute
   '/_authenticated/settings/api-tokens': typeof AuthenticatedSettingsApiTokensRoute
   '/_authenticated/settings/appearance': typeof AuthenticatedSettingsAppearanceRoute
   '/_authenticated/settings/gb28181': typeof AuthenticatedSettingsGb28181Route
@@ -285,6 +295,7 @@ export interface FileRouteTypes {
     | '/500'
     | '/503'
     | '/errors/$error'
+    | '/settings/alert-push'
     | '/settings/api-tokens'
     | '/settings/appearance'
     | '/settings/gb28181'
@@ -312,6 +323,7 @@ export interface FileRouteTypes {
     | '/503'
     | '/'
     | '/errors/$error'
+    | '/settings/alert-push'
     | '/settings/api-tokens'
     | '/settings/appearance'
     | '/settings/gb28181'
@@ -341,6 +353,7 @@ export interface FileRouteTypes {
     | '/(errors)/503'
     | '/_authenticated/'
     | '/_authenticated/errors/$error'
+    | '/_authenticated/settings/alert-push'
     | '/_authenticated/settings/api-tokens'
     | '/_authenticated/settings/appearance'
     | '/_authenticated/settings/gb28181'
@@ -554,6 +567,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsApiTokensRouteImport
       parentRoute: typeof AuthenticatedSettingsRouteRoute
     }
+    '/_authenticated/settings/alert-push': {
+      id: '/_authenticated/settings/alert-push'
+      path: '/alert-push'
+      fullPath: '/settings/alert-push'
+      preLoaderRoute: typeof AuthenticatedSettingsAlertPushRouteImport
+      parentRoute: typeof AuthenticatedSettingsRouteRoute
+    }
     '/_authenticated/errors/$error': {
       id: '/_authenticated/errors/$error'
       path: '/errors/$error'
@@ -565,6 +585,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AuthenticatedSettingsRouteRouteChildren {
+  AuthenticatedSettingsAlertPushRoute: typeof AuthenticatedSettingsAlertPushRoute
   AuthenticatedSettingsApiTokensRoute: typeof AuthenticatedSettingsApiTokensRoute
   AuthenticatedSettingsAppearanceRoute: typeof AuthenticatedSettingsAppearanceRoute
   AuthenticatedSettingsGb28181Route: typeof AuthenticatedSettingsGb28181Route
@@ -577,6 +598,7 @@ interface AuthenticatedSettingsRouteRouteChildren {
 
 const AuthenticatedSettingsRouteRouteChildren: AuthenticatedSettingsRouteRouteChildren =
   {
+    AuthenticatedSettingsAlertPushRoute: AuthenticatedSettingsAlertPushRoute,
     AuthenticatedSettingsApiTokensRoute: AuthenticatedSettingsApiTokensRoute,
     AuthenticatedSettingsAppearanceRoute: AuthenticatedSettingsAppearanceRoute,
     AuthenticatedSettingsGb28181Route: AuthenticatedSettingsGb28181Route,

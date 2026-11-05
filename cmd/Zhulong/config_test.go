@@ -237,6 +237,49 @@ func TestLoadConfigDecodeSection(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAlertPush(t *testing.T) {
+	// 1. Defaults
+	path := writeConfig(t, "[http]\naddress = '127.0.0.1:8000'\n")
+	got, err := loadConfigFile(path)
+	if err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+	if got.AlertPushPublicBaseURL != "" || got.AlertPushSignedURLTTL != 24*time.Hour {
+		t.Fatalf("unexpected alert push defaults: url=%q, ttl=%v", got.AlertPushPublicBaseURL, got.AlertPushSignedURLTTL)
+	}
+
+	// 2. Custom valid config
+	path = writeConfig(t, "[http]\naddress = '127.0.0.1:8000'\n[alertpush]\npublic_base_url = 'http://192.168.1.50:8000/'\nsigned_url_ttl = '12h'\n")
+	got, err = loadConfigFile(path)
+	if err != nil {
+		t.Fatalf("loadConfigFile: %v", err)
+	}
+	if got.AlertPushPublicBaseURL != "http://192.168.1.50:8000" || got.AlertPushSignedURLTTL != 12*time.Hour {
+		t.Fatalf("unexpected custom alertpush config: url=%q, ttl=%v", got.AlertPushPublicBaseURL, got.AlertPushSignedURLTTL)
+	}
+
+	// 3. Invalid scheme
+	path = writeConfig(t, "[http]\naddress = '127.0.0.1:8000'\n[alertpush]\npublic_base_url = 'ftp://192.168.1.50:8000'\n")
+	_, err = loadConfigFile(path)
+	if err == nil || !strings.Contains(err.Error(), "scheme") {
+		t.Fatalf("expected scheme error, got %v", err)
+	}
+
+	// 4. TTL too short
+	path = writeConfig(t, "[http]\naddress = '127.0.0.1:8000'\n[alertpush]\nsigned_url_ttl = '10s'\n")
+	_, err = loadConfigFile(path)
+	if err == nil || !strings.Contains(err.Error(), "out of bounds") {
+		t.Fatalf("expected out of bounds error for short TTL, got %v", err)
+	}
+
+	// 5. TTL too long
+	path = writeConfig(t, "[http]\naddress = '127.0.0.1:8000'\n[alertpush]\nsigned_url_ttl = '200h'\n")
+	_, err = loadConfigFile(path)
+	if err == nil || !strings.Contains(err.Error(), "out of bounds") {
+		t.Fatalf("expected out of bounds error for long TTL, got %v", err)
+	}
+}
+
 func writeConfig(t *testing.T, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")

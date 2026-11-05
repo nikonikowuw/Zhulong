@@ -69,6 +69,34 @@ type Config struct {
 	TLSMode     string
 	TLSCertFile string
 	TLSKeyFile  string
+
+	// AlertPushPublicBaseURL is the externally reachable base URL of the host used for signed image URLs.
+	AlertPushPublicBaseURL string
+	// AlertPushSignedURLTTL is the validity duration for signed media URLs (1m..168h).
+	AlertPushSignedURLTTL time.Duration
+}
+
+// ValidateAlertPushConfig validates public_base_url and signed_url_ttl.
+func ValidateAlertPushConfig(rawBaseURL, rawTTL string) (string, time.Duration, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(rawBaseURL), "/")
+	if baseURL != "" {
+		if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+			return "", 0, fmt.Errorf("alertpush.public_base_url %q must have http:// or https:// scheme", rawBaseURL)
+		}
+	}
+
+	ttlStr := strings.TrimSpace(rawTTL)
+	if ttlStr == "" {
+		ttlStr = "24h"
+	}
+	ttl, err := time.ParseDuration(ttlStr)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid alertpush.signed_url_ttl %q: %w", rawTTL, err)
+	}
+	if ttl < 1*time.Minute || ttl > 168*time.Hour {
+		return "", 0, fmt.Errorf("alertpush.signed_url_ttl %v out of bounds (must be 1m..168h)", ttl)
+	}
+	return baseURL, ttl, nil
 }
 
 // ValidateTLSConfig ensures the requested TLS mode and certificate paths are valid.
@@ -166,8 +194,10 @@ func DefaultConfig() Config {
 			AllowSoftwareFallback: true,
 			MaxSessions:           8,
 		},
-		SessionTTL:         24 * time.Hour,
-		ExtractorAlgorithm: "face_recognition",
-		TLSMode:            "off",
+		SessionTTL:             24 * time.Hour,
+		ExtractorAlgorithm:     "face_recognition",
+		TLSMode:                "off",
+		AlertPushPublicBaseURL: "",
+		AlertPushSignedURLTTL:  24 * time.Hour,
 	}
 }

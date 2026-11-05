@@ -72,7 +72,14 @@
     "audit.clear": "Clear Audit Logs",
     "api_token.create": "Create API Token",
     "api_token.revoke": "Revoke API Token",
-    "api_token.auth_rejected": "API Token Auth Rejected"
+    "api_token.auth_rejected": "API Token Auth Rejected",
+    "alertpush.create": "Create Alert Destination",
+    "alertpush.update": "Update Alert Destination",
+    "alertpush.delete": "Delete Alert Destination",
+    "alertpush.enable": "Enable Alert Destination",
+    "alertpush.disable": "Disable Alert Destination",
+    "alertpush.test": "Test Alert Destination",
+    "system.identity.update": "Update device identity"
   },
   "actions": {
     "viewDetail": "View Details",

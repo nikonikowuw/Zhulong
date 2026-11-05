@@ -8,6 +8,368 @@
     },
     "basePath": "/api/v1",
     "paths": {
+        "/alert-destinations": {
+            "get": {
+                "description": "Returns list of configured alert push destinations with real-time operational status.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alertpush"
+                ],
+                "summary": "List alert destinations",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/alertpush.AlertDestinationListResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Creates a new webhook or mqtt alert destination.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alertpush"
+                ],
+                "summary": "Create alert destination",
+                "parameters": [
+                    {
+                        "description": "Destination configuration",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/alertpush.CreateAlertDestinationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/alertpush.AlertDestinationResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/alert-destinations/test": {
+            "post": {
+                "description": "Validates connectivity for draft or saved destinations.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alertpush"
+                ],
+                "summary": "Test alert destination connectivity",
+                "parameters": [
+                    {
+                        "description": "Test parameters",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/alertpush.TestAlertDestinationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/alertpush.TestAlertDestinationResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/alert-destinations/{id}": {
+            "put": {
+                "description": "Updates an existing destination configuration.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alertpush"
+                ],
+                "summary": "Update alert destination",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Destination ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Update payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/alertpush.UpdateAlertDestinationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/alertpush.AlertDestinationResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Removes an alert destination by ID.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alertpush"
+                ],
+                "summary": "Delete alert destination",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Destination ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/alert-destinations/{id}/disable": {
+            "post": {
+                "description": "Disables an alert destination.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alertpush"
+                ],
+                "summary": "Disable alert destination",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Destination ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/alertpush.AlertDestinationResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/alert-destinations/{id}/enable": {
+            "post": {
+                "description": "Enables an alert destination.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "alertpush"
+                ],
+                "summary": "Enable alert destination",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Destination ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/alertpush.AlertDestinationResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/algorithms": {
             "get": {
                 "produces": [
@@ -2686,6 +3048,62 @@
                 }
             }
         },
+        "/media/signed/{path}": {
+            "get": {
+                "description": "Streams snapshot bytes verified by HMAC signature without cookie authentication.",
+                "produces": [
+                    "image/jpeg"
+                ],
+                "tags": [
+                    "media"
+                ],
+                "summary": "Serve signed media content",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Relative media path, e.g. snapshots/cam_01/2026-11-03/01J8Z.jpg",
+                        "name": "path",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "Expiration Unix timestamp",
+                        "name": "exp",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Base64URL HMAC signature",
+                        "name": "sig",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/persons": {
             "get": {
                 "produces": [
@@ -4703,6 +5121,88 @@
                 }
             }
         },
+        "/system/identity": {
+            "get": {
+                "description": "Returns the stable device_id stamped onto every dispatched webhook / MQTT\npayload, plus whether the current value is the auto-generated fallback.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Get this host's device identity",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/systeminfo.SystemIdentityResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Persists a new device_id and publishes it to in-flight dispatchers without a restart.\nThe value is stamped onto every subsequent webhook / MQTT payload.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Update this host's device identity",
+                "parameters": [
+                    {
+                        "description": "Device identity",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/systeminfo.UpdateSystemIdentityRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/httputil.Response"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/systeminfo.SystemIdentityResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "422": {
+                        "description": "SYSTEM_IDENTITY_INVALID",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
         "/system/jobs": {
             "get": {
                 "produces": [
@@ -6229,6 +6729,236 @@
                 },
                 "vehicle_type": {
                     "type": "string"
+                }
+            }
+        },
+        "alertpush.AlertDestinationConfigInfo": {
+            "type": "object",
+            "properties": {
+                "authType": {
+                    "type": "string"
+                },
+                "broker": {
+                    "type": "string"
+                },
+                "clientId": {
+                    "type": "string"
+                },
+                "keepAliveSeconds": {
+                    "type": "integer"
+                },
+                "qos": {
+                    "type": "integer"
+                },
+                "timeoutSeconds": {
+                    "type": "integer"
+                },
+                "tlsSkipVerify": {
+                    "type": "boolean"
+                },
+                "topic": {
+                    "type": "string"
+                },
+                "url": {
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "alertpush.AlertDestinationFilterInfo": {
+            "type": "object",
+            "properties": {
+                "algorithmIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "cameraIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "eventTypes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "alertpush.AlertDestinationListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/alertpush.AlertDestinationResponse"
+                    }
+                }
+            }
+        },
+        "alertpush.AlertDestinationResponse": {
+            "type": "object",
+            "properties": {
+                "channelType": {
+                    "type": "string"
+                },
+                "config": {
+                    "$ref": "#/definitions/alertpush.AlertDestinationConfigInfo"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "filter": {
+                    "$ref": "#/definitions/alertpush.AlertDestinationFilterInfo"
+                },
+                "headerNames": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "imageMode": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "secretSet": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "$ref": "#/definitions/alertpush.AlertDestinationStatus"
+                }
+            }
+        },
+        "alertpush.AlertDestinationSecretInfo": {
+            "type": "object",
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "password": {
+                    "type": "string"
+                },
+                "token": {
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "alertpush.AlertDestinationStatus": {
+            "type": "object",
+            "properties": {
+                "dropped": {
+                    "type": "integer"
+                },
+                "lastError": {
+                    "type": "string"
+                },
+                "lastSuccessAt": {
+                    "type": "string"
+                },
+                "queued": {
+                    "type": "integer"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "alertpush.CreateAlertDestinationRequest": {
+            "type": "object",
+            "required": [
+                "channelType",
+                "config",
+                "imageMode",
+                "name"
+            ],
+            "properties": {
+                "channelType": {
+                    "type": "string"
+                },
+                "config": {
+                    "$ref": "#/definitions/alertpush.AlertDestinationConfigInfo"
+                },
+                "filter": {
+                    "$ref": "#/definitions/alertpush.AlertDestinationFilterInfo"
+                },
+                "imageMode": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "secret": {
+                    "$ref": "#/definitions/alertpush.AlertDestinationSecretInfo"
+                }
+            }
+        },
+        "alertpush.TestAlertDestinationRequest": {
+            "type": "object",
+            "properties": {
+                "channelType": {
+                    "type": "string"
+                },
+                "config": {
+                    "$ref": "#/definitions/alertpush.AlertDestinationConfigInfo"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "imageMode": {
+                    "type": "string"
+                },
+                "secret": {
+                    "$ref": "#/definitions/alertpush.AlertDestinationSecretInfo"
+                }
+            }
+        },
+        "alertpush.TestAlertDestinationResponse": {
+            "type": "object",
+            "properties": {
+                "latencyMs": {
+                    "type": "integer"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "alertpush.UpdateAlertDestinationRequest": {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "$ref": "#/definitions/alertpush.AlertDestinationConfigInfo"
+                },
+                "filter": {
+                    "$ref": "#/definitions/alertpush.AlertDestinationFilterInfo"
+                },
+                "imageMode": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "secret": {
+                    "$ref": "#/definitions/alertpush.AlertDestinationSecretInfo"
                 }
             }
         },
@@ -9202,6 +9932,21 @@
                 }
             }
         },
+        "systeminfo.SystemIdentityResponse": {
+            "type": "object",
+            "properties": {
+                "autoGenerated": {
+                    "description": "AutoGenerated reports that the current value is the fallback this host\ngenerated on first boot, not a name an operator chose.",
+                    "type": "boolean"
+                },
+                "deviceId": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                }
+            }
+        },
         "systeminfo.TemperatureInfo": {
             "type": "object",
             "properties": {
@@ -9210,6 +9955,17 @@
                 },
                 "temperature": {
                     "type": "number"
+                }
+            }
+        },
+        "systeminfo.UpdateSystemIdentityRequest": {
+            "type": "object",
+            "required": [
+                "deviceId"
+            ],
+            "properties": {
+                "deviceId": {
+                    "type": "string"
                 }
             }
         },

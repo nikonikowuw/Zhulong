@@ -1,0 +1,87 @@
+{
+  "title": "Alert Push & Multi-Channel Dispatch",
+  "description": "Configure perception event dispatch channels (Webhook & MQTT) for alarms, face recognition and plate recognition, with event-type/algorithm/camera filtering, image delivery and connectivity probes. Every payload carries the host device_id.",
+  "create": "New Destination",
+  "edit": "Edit Destination",
+  "delete": "Delete Destination",
+  "test": "Test Connection",
+  "testing": "Testing...",
+  "testSuccess": "Connected ({{latency}}ms)",
+  "testFailed": "Connection failed: {{reason}}",
+  "refresh": "Refresh",
+  "empty": "No alert destinations configured",
+  "emptyHint": "Click 'New Destination' above to create a Webhook or MQTT forwarding channel.",
+  "maxLimitReached": "Maximum destination limit reached (32/32)",
+  "deleteConfirmTitle": "Delete destination?",
+  "deleteConfirmDesc": "The system will stop dispatching alarms to this target. This action cannot be undone.",
+  "fields": {
+    "name": "Channel Name",
+    "channelType": "Protocol Type",
+    "imageMode": "Image Delivery Mode",
+    "enabled": "Enabled",
+    "status": "Operational Status",
+    "queue": "Queue In-Flight",
+    "lastAttempt": "Last Attempt",
+    "actions": "Actions",
+    "webhookUrl": "Webhook URL",
+    "authType": "Auth Type",
+    "bearerToken": "Bearer Token",
+    "basicUsername": "Basic Username",
+    "basicPassword": "Basic Password",
+    "timeout": "Timeout (seconds)",
+    "customHeaders": "Custom Headers",
+    "headerKey": "Header Key",
+    "headerValue": "Header Value",
+    "addHeader": "Add Header",
+    "mqttBroker": "Broker URL (e.g. tcp://10.0.0.1:1883)",
+    "mqttClientId": "Client ID (leave blank to derive)",
+    "mqttUsername": "MQTT Username (optional)",
+    "mqttPassword": "MQTT Password (optional)",
+    "mqttTopic": "Publish Topic",
+    "mqttQoS": "QoS Level",
+    "mqttKeepAlive": "KeepAlive (seconds)",
+    "tlsSkipVerify": "Skip TLS Certificate Verification",
+    "filterEvents": "Event Type Subscription (Empty for all)",
+    "filterAlgorithms": "Algorithm Filter (empty for all)",
+    "filterCameras": "Camera Filter (empty for all)",
+    "secretRetained": "Credential saved; leave empty to keep unchanged"
+  },
+  "eventTypes": {
+    "all": "All Events",
+    "alarm": "Safety & Behavior Alarms",
+    "face_recognition": "Face Recognition",
+    "plate_recognition": "Vehicle & Plate Recognition"
+  },
+  "channelTypes": {
+    "webhook": "HTTP Webhook",
+    "mqtt": "MQTT Message Bus"
+  },
+  "imageModes": {
+    "url": "Signed URL (HMAC verified & TTL bounded)",
+    "multipart": "Multipart Attachment (same request)",
+    "base64": "Base64 Inline (≤500KB)"
+  },
+  "authTypes": {
+    "none": "None",
+    "bearer": "Bearer Token",
+    "basic": "HTTP Basic Auth"
+  },
+  "states": {
+    "idle": "Idle",
+    "running": "Dispatching",
+    "degraded": "Degraded",
+    "disabled": "Disabled"
+  },
+  "failureReasons": {
+    "timeout": "Network Timeout",
+    "refused": "Connection Refused",
+    "tls": "TLS Handshake Failed",
+    "auth": "Authentication Failed (401/403)",
+    "dns": "DNS Resolution Failed",
+    "not_found": "Endpoint Not Found (404)",
+    "http_error": "HTTP Error Returned",
+    "mqtt_connect": "MQTT Connect Failed",
+    "config_invalid": "Configuration Invalid",
+    "unsupported_channel": "Unsupported Protocol"
+  }
+}

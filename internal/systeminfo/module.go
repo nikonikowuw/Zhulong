@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/gin-gonic/gin"
+	"github.com/nikonikowuw/Zhulong/internal/database"
 	"go.uber.org/zap"
 )
 
@@ -14,11 +15,19 @@ type SystemInfoLifecycle interface {
 }
 
 type systemInfoLifecycleImpl struct {
-	service *Service
-	logger  *zap.Logger
+	service  *Service
+	identity *IdentityService
+	logger   *zap.Logger
 }
 
 func (l *systemInfoLifecycleImpl) Start(ctx context.Context) error {
+	// Identity loads first: dispatchers read it right after startup and a late load
+	// would leave the first pushed events unattributable.
+	if l.identity != nil {
+		if err := l.identity.Start(ctx); err != nil {
+			return err
+		}
+	}
 	l.logger.Info("Starting system hardware telemetry service...")
 	return l.service.Start(ctx)
 }
@@ -37,28 +46,32 @@ type RouteRegistrar interface {
 type SystemInfoComponents struct {
 	Collector       Collector
 	Service         *Service
+	Identity        *IdentityService
 	Handler         *Handler
 	Lifecycle       SystemInfoLifecycle
 	ProtectedRoutes RouteRegistrar
 }
 
 // NewSystemInfoComponents instantiates and wires systeminfo components.
-func NewSystemInfoComponents(logger *zap.Logger) SystemInfoComponents {
+func NewSystemInfoComponents(dbProvider database.DBProvider, logger *zap.Logger) SystemInfoComponents {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 
 	collector := NewDefaultCollector()
 	svc := NewService(collector, logger)
-	handler := NewHandler(svc, logger)
+	identity := NewIdentityService(dbProvider, logger)
+	handler := NewHandler(svc, identity, logger)
 	lifecycle := &systemInfoLifecycleImpl{
-		service: svc,
-		logger:  logger,
+		service:  svc,
+		identity: identity,
+		logger:   logger,
 	}
 
 	return SystemInfoComponents{
 		Collector:       collector,
 		Service:         svc,
+		Identity:        identity,
 		Handler:         handler,
 		Lifecycle:       lifecycle,
 		ProtectedRoutes: handler,

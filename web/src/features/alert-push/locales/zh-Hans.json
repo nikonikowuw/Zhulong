@@ -1,0 +1,87 @@
+{
+  "title": "告警多渠道推送",
+  "description": "配置感知事件分发通道（Webhook 与 MQTT）：支持行为告警、人脸识别、车辆车牌识别三类事件，按事件类型/算法/摄像机过滤、图片附带及连通性探测。推送载荷统一携带设备标识 device_id。",
+  "create": "新建推送目标",
+  "edit": "编辑推送目标",
+  "delete": "删除目标",
+  "test": "测试连通性",
+  "testing": "探测中...",
+  "testSuccess": "探测成功 ({{latency}}ms)",
+  "testFailed": "探测失败: {{reason}}",
+  "refresh": "刷新",
+  "empty": "暂无配置告警推送目标",
+  "emptyHint": "点击上方“新建推送目标”按钮添加 Webhook 或 MQTT 推送通道。",
+  "maxLimitReached": "推送目标数量已达到上限 (32/32)",
+  "deleteConfirmTitle": "确认删除推送目标？",
+  "deleteConfirmDesc": "删除后系统将停止向该目标分发告警事件，此操作不可撤销。",
+  "fields": {
+    "name": "通道名称",
+    "channelType": "协议类型",
+    "imageMode": "图片附带模式",
+    "enabled": "启用状态",
+    "status": "运行状态",
+    "queue": "队列堆叠",
+    "lastAttempt": "最近推送",
+    "actions": "操作",
+    "webhookUrl": "Webhook URL",
+    "authType": "鉴权方式",
+    "bearerToken": "Bearer Token",
+    "basicUsername": "Basic 用户名",
+    "basicPassword": "Basic 密码",
+    "timeout": "超时时间 (秒)",
+    "customHeaders": "自定义请求头",
+    "headerKey": "Header 名称",
+    "headerValue": "Header 取值",
+    "addHeader": "添加 Header",
+    "mqttBroker": "Broker 地址 (如 tcp://10.0.0.1:1883)",
+    "mqttClientId": "Client ID (留空自动派生)",
+    "mqttUsername": "MQTT 用户名 (可选)",
+    "mqttPassword": "MQTT 密码 (可选)",
+    "mqttTopic": "发布 Topic",
+    "mqttQoS": "QoS 质量等级",
+    "mqttKeepAlive": "心跳周期 (秒)",
+    "tlsSkipVerify": "跳过 TLS 证书校验",
+    "filterEvents": "事件类型订阅 (留空为全部)",
+    "filterAlgorithms": "算法过滤 (留空为全部)",
+    "filterCameras": "摄像机过滤 (留空为全部)",
+    "secretRetained": "凭据已保存，留空表示保持不变"
+  },
+  "eventTypes": {
+    "all": "全部事件",
+    "alarm": "行为与安全告警",
+    "face_recognition": "人脸识别比对",
+    "plate_recognition": "车辆与车牌识别"
+  },
+  "channelTypes": {
+    "webhook": "HTTP Webhook",
+    "mqtt": "MQTT 消息总线"
+  },
+  "imageModes": {
+    "url": "安全签名 URL (支持时效性校验)",
+    "multipart": "Multipart 附件 (二进制同包上传)",
+    "base64": "Base64 内联编码 (≤500KB)"
+  },
+  "authTypes": {
+    "none": "无鉴权",
+    "bearer": "Bearer Token",
+    "basic": "HTTP Basic Auth"
+  },
+  "states": {
+    "idle": "就绪空闲",
+    "running": "正在推送",
+    "degraded": "异常降级",
+    "disabled": "已禁用"
+  },
+  "failureReasons": {
+    "timeout": "网络请求超时",
+    "refused": "连接被拒绝",
+    "tls": "TLS 握手失败",
+    "auth": "鉴权失败 (401/403)",
+    "dns": "DNS 解析失败",
+    "not_found": "目标端点不存在 (404)",
+    "http_error": "目标服务返回 HTTP 错误",
+    "mqtt_connect": "MQTT 握手失败",
+    "config_invalid": "目标配置无效",
+    "unsupported_channel": "不支持的协议"
+  }
+}

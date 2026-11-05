@@ -31,8 +31,9 @@ type recordLifecycleImpl struct {
 }
 
 func (l *recordLifecycleImpl) Start(ctx context.Context) error {
-	// 历史告警图可能早于「先写锁再写图」的约定；优先补锁，guard 仍作为兜底。
 	if l.service != nil {
+		l.service.Start(ctx)
+		// 历史告警图可能早于「先写锁再写图」的约定；优先补锁，guard 仍作为兜底。
 		if err := l.service.EnsureAlarmEvidenceLocks(ctx); err != nil {
 			l.logger.Warn("alarm evidence lock backfill failed; storage evidence guard remains the fallback",
 				zap.Error(err))
@@ -47,6 +48,9 @@ func (l *recordLifecycleImpl) Start(ctx context.Context) error {
 }
 
 func (l *recordLifecycleImpl) Stop(ctx context.Context) error {
+	if l.service != nil {
+		l.service.Stop()
+	}
 	// 先停清理：它要写 SQLite，必须在 native/数据库关闭之前退出。
 	if l.pruner != nil {
 		l.pruner.Stop()

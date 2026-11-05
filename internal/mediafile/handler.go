@@ -118,10 +118,16 @@ func (h *Handler) GetEntry(c *gin.Context) {
 // @Failure      503  {object}  httputil.Response
 // @Router       /media/content/{path} [get]
 func (h *Handler) GetContent(c *gin.Context) {
+	h.ServeContent(c, relativeMediaPath(c.Param("path")))
+}
+
+// ServeContent streams raw bytes for a relative media path with range and HEAD support.
+// It applies mediafile's four-layer path protection and deterministic content typing.
+func (h *Handler) ServeContent(c *gin.Context, relPath string) {
 	// Every validation happens before ServeContent is called. Once it starts
 	// writing, it owns the status line and Content-Length, so an error written
 	// afterwards would corrupt the response instead of replacing it.
-	file, info, err := h.service.OpenContent(c.Request.Context(), relativeMediaPath(c.Param("path")))
+	file, info, err := h.service.OpenContent(c.Request.Context(), relPath)
 	if err != nil {
 		writeMediaError(c, err)
 		return

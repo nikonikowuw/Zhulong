@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ContentSection } from '../components/content-section'
+import { DeviceIdentityCard } from './components/device-identity-card'
 import { NetworkTable } from './components/network-table'
 import { StatCards } from './components/stat-cards'
 import { StorageTable } from './components/storage-table'
@@ -88,7 +89,10 @@ export function SettingsSystem() {
       className='w-full max-w-none'
     >
       <div className='space-y-6'>
-        {/* 1. Host identity & live refresh bar */}
+        {/* 1. Device identity (device_id stamped onto every pushed event) */}
+        <DeviceIdentityCard />
+
+        {/* 2. Host identity & live refresh bar */}
         <SystemHeader
           host={hardware.host}
           isRefetching={isRefetching}
@@ -97,7 +101,7 @@ export function SettingsSystem() {
           onRefresh={() => void refetch()}
         />
 
-        {/* 2. Top Metric Cards (CPU, RAM, NPU, Network, Storage) */}
+        {/* 3. Top Metric Cards (CPU, RAM, NPU, Network, Storage) */}
         <StatCards
           cpu={hardware.cpu}
           memory={hardware.memory}
@@ -106,19 +110,19 @@ export function SettingsSystem() {
           storage={hardware.storage}
         />
 
-        {/* 3. Short-term Trend Charts (Recharts) */}
+        {/* 4. Short-term Trend Charts (Recharts) */}
         <TrendCharts
           history={hardware.history}
           npuSupported={hardware.heterogeneous.npu.supported}
         />
 
-        {/* 4. Hardware Detail Tables (Mounts & Network) */}
+        {/* 5. Hardware Detail Tables (Mounts & Network) */}
         <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
           <StorageTable storage={hardware.storage} />
           <NetworkTable network={hardware.network} />
         </div>
 
-        {/* 5. Thermal Sensors */}
+        {/* 6. Thermal Sensors */}
         <ThermalList thermals={hardware.heterogeneous.temperatures} />
       </div>
     </ContentSection>

@@ -64,6 +64,7 @@
     "Time": "Time & Clock",
     "Hardware": "Hardware",
     "GB28181": "GB28181 Ingress",
+    "AlertPush": "Alert Push",
     "APITokens": "API Tokens",
     "Help Center": "Help Center",
     "settingsTitle": "Settings",

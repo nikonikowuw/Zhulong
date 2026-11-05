@@ -72,7 +72,14 @@
     "audit.clear": "清理审计日志",
     "api_token.create": "创建 API 访问凭据",
     "api_token.revoke": "吊销 API 访问凭据",
-    "api_token.auth_rejected": "API 访问鉴权拒绝"
+    "api_token.auth_rejected": "API 访问鉴权拒绝",
+    "alertpush.create": "创建告警推送目标",
+    "alertpush.update": "更新告警推送目标",
+    "alertpush.delete": "删除告警推送目标",
+    "alertpush.enable": "启用告警推送目标",
+    "alertpush.disable": "禁用告警推送目标",
+    "alertpush.test": "测试告警推送连通性",
+    "system.identity.update": "修改设备标识"
   },
   "actions": {
     "viewDetail": "查看明细",

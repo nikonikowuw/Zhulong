@@ -1902,9 +1902,9 @@ func TestPersonSourceAndAPITokensMigrationSymmetry(t *testing.T) {
 	}
 	t.Cleanup(func() { _, _ = migrator.Close() })
 
-	// 1. Run all migrations through 29 (29 is rolled back first below)
-	if err := migrator.Up(); err != nil {
-		t.Fatalf("migrator Up(): %v", err)
+	// 1. Run migrations through 29 (29 is rolled back first below)
+	if err := migrator.Migrate(29); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(29): %v", err)
 	}
 
 	// Verify persons source columns and defaults
@@ -1972,5 +1972,134 @@ func TestPersonSourceAndAPITokensMigrationSymmetry(t *testing.T) {
 	}
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='api_tokens'").Scan(&count); err != nil || count == 0 {
 		t.Fatalf("expected api_tokens table after re-Up")
+	}
+}
+
+// TestAlertDestinationsMigrationSymmetry pins migration 30.
+func TestAlertDestinationsMigrationSymmetry(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "migration_symmetry_30.db")
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("sqlite3 instance: %v", err)
+	}
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("iofs driver: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("migrator: %v", err)
+	}
+	t.Cleanup(func() { _, _ = migrator.Close() })
+
+	// 1. Run migrations through 30
+	if err := migrator.Migrate(30); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(30): %v", err)
+	}
+
+	// Verify alert_destinations table exists and accepts insertion
+	if _, err := db.Exec(`INSERT INTO alert_destinations (id, name, channel_type, enabled, image_mode, config_json, filter_json, secret_ciphertext, created_at, updated_at)
+		VALUES ('dest_1', 'webhook_test', 'webhook', 1, 'url', '{}', '{}', X'010203', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatalf("insert alert_destination: %v", err)
+	}
+
+	// Duplicate name must violate UNIQUE constraint
+	if _, err := db.Exec(`INSERT INTO alert_destinations (id, name, channel_type, enabled, image_mode, config_json, filter_json, secret_ciphertext, created_at, updated_at)
+		VALUES ('dest_2', 'webhook_test', 'webhook', 1, 'url', '{}', '{}', X'010203', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err == nil {
+		t.Fatalf("expected duplicate name to violate unique constraint")
+	}
+
+	// 2. Rollback migration 30
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("rollback 30: %v", err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='alert_destinations'").Scan(&count); err != nil {
+		t.Fatalf("check alert_destinations dropped: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected alert_destinations table to be dropped after rollback")
+	}
+
+	// 3. Re-apply 30
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("re-apply 30: %v", err)
+	}
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='alert_destinations'").Scan(&count); err != nil || count == 0 {
+		t.Fatalf("expected alert_destinations table after re-Up")
+	}
+}
+
+// TestSystemSettingsMigrationSymmetry pins migration 31: the singleton
+// system_settings row that carries the host device identity.
+func TestSystemSettingsMigrationSymmetry(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "migration_symmetry_31.db")
+	dsn := fmt.Sprintf("%s?_busy_timeout=5000&_foreign_keys=on&_journal_mode=WAL", dbPath)
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		t.Fatalf("open sqlite3: %v", err)
+	}
+	defer db.Close()
+
+	dbDriver, err := migratesqlite3.WithInstance(db, &migratesqlite3.Config{})
+	if err != nil {
+		t.Fatalf("sqlite3 instance: %v", err)
+	}
+	srcDriver, err := iofs.New(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("iofs driver: %v", err)
+	}
+	migrator, err := migrate.NewWithInstance("iofs", srcDriver, "sqlite3", dbDriver)
+	if err != nil {
+		t.Fatalf("migrator: %v", err)
+	}
+	t.Cleanup(func() { _, _ = migrator.Close() })
+
+	if err := migrator.Migrate(31); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrator Migrate(31): %v", err)
+	}
+
+	// The seed row must exist with an empty id and the auto flag set.
+	var deviceID string
+	var auto bool
+	if err := db.QueryRow(`SELECT device_id, device_id_auto FROM system_settings WHERE id = 1`).
+		Scan(&deviceID, &auto); err != nil {
+		t.Fatalf("select seeded row: %v", err)
+	}
+	if deviceID != "" || !auto {
+		t.Fatalf("unexpected seed values: device_id=%q auto=%v", deviceID, auto)
+	}
+
+	// The CHECK constraint is what keeps this a singleton table.
+	if _, err := db.Exec(`INSERT INTO system_settings (id, device_id) VALUES (2, 'second')`); err == nil {
+		t.Fatal("expected id != 1 to violate the singleton CHECK constraint")
+	}
+
+	if err := migrator.Steps(-1); err != nil {
+		t.Fatalf("rollback 31: %v", err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='system_settings'`).
+		Scan(&count); err != nil {
+		t.Fatalf("check system_settings dropped: %v", err)
+	}
+	if count != 0 {
+		t.Fatal("expected system_settings table to be dropped after rollback")
+	}
+
+	if err := migrator.Steps(1); err != nil {
+		t.Fatalf("re-apply 31: %v", err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM system_settings`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("expected exactly one seeded row after re-Up, got %d (err %v)", count, err)
 	}
 }

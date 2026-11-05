@@ -61,4 +61,13 @@ backend = "auto"                 # "auto" | "mpp" | "ffmpeg"
 allow_software_fallback = true   # Board deployment profiles must set false (fail-closed)
 max_sessions = 8                 # Maximum concurrent physical decode streams (0 = no limit)
 
+# Alert push and multi-channel dispatch configuration.
+[alertpush]
+# Externally reachable host base URL, e.g. "http://10.0.0.12:8000".
+# When left empty, targets configured with image_mode = "url" are rejected on save.
+public_base_url = ""
+# Signed media URL expiration TTL (1m..168h).
+signed_url_ttl = "24h"
+
+
 

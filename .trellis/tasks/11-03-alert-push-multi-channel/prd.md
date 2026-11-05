@@ -4,7 +4,7 @@
 
 在 Zhulong 边缘智能宿主中构建高性能、高可靠的告警推送模块（`internal/alertpush`），支持在 Web 管理界面可视化配置多个上报目标（HTTP Webhook 与 MQTT），按算法包与相机维度细粒度分流，提供「局域网签名 URL」与「跨网随包图片（Multipart 文件流 / Base64 内嵌）」两种图片传输方式，目标增删改零重启热重载，并支持一键连通性测试。
 
-本阶段**只推送 `alarms` 表的告警**（`detection` / `classification` 两类推理任务产生），不推送识别记录与普通抓拍，也不做历史补发。
+推送的是**统一感知事件**：`alarms` 的行为/安全告警（`detection` / `classification`）、`recognitions` 的人脸识别、`captures` 的车辆/车牌识别（`target_type = vehicle`）。三类事件共用同一条队列、重试、签名 URL 与过滤链路，不做历史补发。
 
 ---
 
@@ -28,7 +28,7 @@
    - `camera.LifecycleManager.AddEncryptedDataProbe` 用于阻止「密钥缺失但仍有密文」时重建密钥毁数据；
    - GB28181 的对外响应**从不返回**密码，更新请求用 `*string` 区分「未提供=保持」。
 5. **工程约束**：
-   - 数据库迁移版本目前至 `000025`，新增表必须写 `000026_create_alert_destinations.up.sql` / `.down.sql`，严禁 AutoMigrate；
+   - 数据库迁移版本目前至 `000029`（历史提交中 `000026` 被跳过），新增表必须写 `000030_create_alert_destinations.up.sql` / `.down.sql`，严禁 AutoMigrate；
    - 长驻子系统必须接入 `internal/app/runtime.go` 的显式启停序列（`stopSequence` 唯一真源），构造期保持纯粹；
    - 严格配置（`UnmarshalExact`）：新增 `config.toml` 键必须同步 `cmd/Zhulong/config.go` 与 `internal/app/config.go`；
    - 外部接口遵守 `httputil` 信封、`apperr` 错误码与三语本地化；类型名用 `*Request` / `*Response` / `*Info` / `*Status`。
@@ -38,7 +38,7 @@
 ## Requirements
 
 ### R1: 持久化与数据模型
-- 新增 `alert_destinations` 表（迁移 `000026`），字段：ULID 主键（`TEXT`，26 字符）、`name`（唯一）、`channel_type`（`webhook`/`mqtt`）、`enabled`、`image_mode`（`url`/`multipart`/`base64`）、`mqtt_client_id`（仅 MQTT，持久化且唯一）、`config_json`（非敏感配置：鉴权方式、超时等）、`secret_ciphertext`（敏感密文：Webhook URL、鉴权凭据、附加 Header 值、MQTT 密码）、`filter_json`、`created_at` / `updated_at`（UTC `DATETIME`）。
+- 新增 `alert_destinations` 表（迁移 `000030`），字段：ULID 主键（`TEXT`，26 字符）、`name`（唯一）、`channel_type`（`webhook`/`mqtt`）、`enabled`、`image_mode`（`url`/`multipart`/`base64`）、`mqtt_client_id`（仅 MQTT，持久化且唯一）、`config_json`（非敏感配置：鉴权方式、超时等）、`secret_ciphertext`（敏感密文：Webhook URL、鉴权凭据、附加 Header 值、MQTT 密码）、`filter_json`、`created_at` / `updated_at`（UTC `DATETIME`）。
 - 敏感凭据（MQTT 密码、Webhook 鉴权 token/密码、附加 Header 值、**Webhook URL**）**加密落库**：复用 `camera.LazyCipher` 的 AES-256-GCM，AAD 绑定 `alert-destination:<id>`；装配期注册 `AddEncryptedDataProbe`，`HasExistingEncryptedData` 覆盖本表。Webhook URL 之所以加密：钉钉/飞书/企微等平台把 token 直接内嵌在 URL 查询串里。
 - 查询接口**永不返回**凭据明文或掩码：只返回 `secretSet`（webhook 另给 header 名称列表）；URL 例外——返回给已认证管理员用于编辑（口径同相机 `rtspUrl`），响应加 `Cache-Control: no-store`。
 - 更新语义：字段**缺省=保持**、显式空值=清除、非空=替换；切换鉴权方式时按合并后的生效值校验。
@@ -46,15 +46,15 @@
 
 ### R2: 告警事件与异步分发中枢
 - 在 `internal/record` 定义只读事件与监听者接口（避免 `record` 反向依赖 `alertpush`）：
-  - `AlarmEvent`：告警 ID、相机、算法 ID/名称/版本、类型、分数、归一化框、额外属性、PTS、抓拍时间、全幅图与裁剪图相对路径，以及分别表示两者就绪状态的 `ImageReady` / `CropReady`；
+  - `AlarmEvent`：事件 ID、`EventType`（`alarm` / `face_recognition` / `plate_recognition`）、相机、算法 ID、抓拍时间、全幅图与裁剪图相对路径、`ImageReady` / `CropReady`，以及与类型对应的子载荷（`Alarm` / `Face` / `Vehicle`；人脸子载荷含人员业务键与底库参考图路径，车辆子载荷含车牌与 `attributes`）；
   - `AlarmListener { OnAlarm(ctx, AlarmEvent) }`；`record.Service.SetAlarmListener` 在装配期设置，启动后不可变，未设置时为零开销。
 - **事件只在 `CreateAlarmBatch` 成功后发出，且每条告警恰好一次**；发出时机由抓拍完成信号决定（`SnapshotStore` 增加逐输出结果观察者）。`ImageReady` 专指全幅图，`CropReady` 专指裁剪图；每个标记只由对应文件写入结果决定，未就绪的对应路径必须清空，不能因另一张图写成功而生成死链。队列满、写门关闭、存储不可用或 5s 等待超时均按两张图都未就绪发出。
-- 监听回调不得在推理消费 goroutine 上执行阻塞操作；`Dispatcher.Dispatch` 只做规则匹配与非阻塞入队。
+- 监听回调不得在推理消费 goroutine 或抓拍 worker goroutine 上执行任何耗时/阻塞操作；`Dispatcher.Dispatch` 必须是纯内存非阻塞入队（`select-default` 丢最旧并累加计数），凭据解密、读图与网络 I/O 严格在目标独立的 worker goroutine 中执行，绝不反压或阻塞全局单 worker 抓拍队列。
 - 每个启用的目标拥有独立有界队列与工作协程，目标间彻底故障隔离；队列满时丢弃最旧消息并计数，绝不反压主流水线。
 - 停机时禁止在关闭后的 Dispatcher 上 panic 或阻塞；未等到抓拍完成的告警允许丢弃（库中记录与图片仍在）。
 
 ### R3: 细粒度过滤引擎
-- 每个目标支持 `algorithm_ids` / `camera_ids`，留空表示全量匹配。
+- 每个目标支持 `event_types` / `algorithm_ids` / `camera_ids`，留空表示全量匹配；三者同时存在时按 AND 组合。
 - `algorithm_ids` 匹配算法包 ID（非版本号）。告警的 `algorithm_id` 可能为 NULL（算法已卸载），NULL 只命中空过滤器；`filter_json` 中已不存在的相机/算法 ID 永不命中，且不自动清理。
 
 ### R4: HTTP Webhook 发送器
@@ -68,7 +68,7 @@
 
 ### R5: MQTT 发送器
 - 客户端库固定 `github.com/eclipse/paho.mqtt.golang` **≥ v1.5.1**（v1.5.0 含 GO-2025-4173 / CVE-2025-10543）。
-- 支持 Broker URL、ClientID（缺省生成 23 字符 ASCII 字母数字 ID，值为 `"z" + ULID[4:]` 并持久化；唯一索引冲突时重新生成目标 ULID。自定义值限制为 1–23 位 ASCII 字母数字，所有 MQTT 目标含禁用目标均唯一，冲突返回 422）、用户名/密码、Topic（禁止 `+`/`#`）、QoS 0/1、KeepAlive、可选 TLS 跳过校验（默认关闭并告警）。
+- 支持 Broker URL、ClientID（缺省生成 23 字符 ASCII 字母数字 ID，值为 `"z" + ULID[4:]` 并持久化；创建时唯一索引冲突重新生成目标 ULID 重试；更新时若显式置空 `clientId` 导致派生默认值与已有其他 MQTT 目标冲突，校验层返回 422 `ALERT_DESTINATION_CONFIG_INVALID`。自定义值限制为 1–23 位 ASCII 字母数字，所有 MQTT 目标含禁用目标均唯一，冲突返回 422）、用户名/密码、Topic（禁止 `+`/`#`）、QoS 0/1、KeepAlive、可选 TLS 跳过校验（默认关闭并告警）。
 - 仅支持 `url` 与 `base64` 两种图片模式；`base64` 全幅图上限 500KB，超出时不附加 Base64、将外部载荷的 `image_ready` 置为 `false` 并计数；内部 `AlarmEvent.ImageReady` 仍表示磁盘上的全幅图写入成功。
 - 断线重连期间的离线策略显式定义（有界队列、丢最旧、计数），不得假定客户端库自动缓冲；QoS1 为至少一次投递，用 `alarm_id` 作为幂等键并写入契约文档。
 
@@ -77,7 +77,7 @@
 - 保存/开关**立即返回**，后台异步 reconcile；目标状态（`unverified`/`connecting`/`connected`/`failed`/`disabled`）与 `lastError`、`lastSuccessAt`、`dropped`、`queued` 随列表返回。Webhook 是无状态 HTTP 目标：配置变更后为 `unverified`，首次成功测试或实际投递后为 `connected`；MQTT 建连期间为 `connecting`，连接成功后为 `connected`。失败后为 `failed`，恢复成功后更新为 `connected`。已禁用目标始终显示 `disabled`；对其执行测试只返回测试结果，不启用目标或改变该状态。
 - reconcile 串行化、在锁外建立连接；按「解密后的完整配置」指纹判定变更，变更/删除的旧连接优雅关闭，新增/变更的目标重建。
 - `POST /alert-destinations/test` 支持「草稿配置」与「已保存目标 + 不重传凭据」，超时上限 10s，返回稳定原因码（`dns` / `connection_refused` / `timeout` / `tls` / `auth` / `http_status` / `not_connected` / `publish_failed`），不泄露目标响应体。
-- 写操作纳入审计（`alertpush.create|update|delete|enable|disable|test`），新增错误码进模块 `locale.go`（三语）。
+- 写操作纳入审计（`alertpush.create|update|delete|enable|disable|test`），常量定义在 `internal/alertpush/model.go` 保持模块内聚，新增错误码进模块 `locale.go`（三语）。
 
 ### R7: 对外图片访问（签名 URL，新增，属本任务范围）
 - 新增公开只读路由 `GET|HEAD /api/v1/media/signed/*path?exp=<unix>&sig=<base64url>`：HMAC-SHA256（key = `<data-dir>/media_url.key`，32 字节，0600，首次启动生成；丢失只影响未过期 URL，不影响数据），签名覆盖 `v1\n<相对路径>\n<exp>`，常量时间比较；过期返回 403 `MEDIA_URL_EXPIRED`，伪造返回 403 `MEDIA_URL_INVALID`。
@@ -101,15 +101,22 @@
 - 三语（zh-Hans / zh-Hant / en），依次注册 `web/src/lib/i18n.ts` 命名空间与 `web/src/locales/*/common.json` 导航文案；所有目标状态（含 `unverified`）均有三语文案。
 - 状态徽章必须使用 `@/lib/status-palette` 的 Dot-Indicator Outline 范式。
 
+### R9: 主机设备标识（`device_id`）
+- 新增单行表 `system_settings`（迁移 `000031`）：`device_id`、`device_id_auto`、`updated_at`，`CHECK (id = 1)` 保证单例，迁移写入种子行。
+- 首次启动若 `device_id` 为空，生成 `zhulong-<12 hex>` 并落库：主机名在批量刷机镜像中会重复，不能作为来源键。
+- 每条对外推送载荷顶层携带 `device_id`；发送端**每次发送**读取内存缓存，改号后新事件立即生效，无需重建目标或重启。
+- 接口：`GET /api/v1/system/identity`、`PUT /api/v1/system/identity`；校验 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`，失败返回 `SYSTEM_IDENTITY_INVALID`（422）；审计动作 `system.identity.update`。
+- 前端在「设置 → 系统」页顶部提供设备标识卡片（显示自动生成/自定义，可编辑保存）。
+
 ---
 
 ## Acceptance Criteria
 
-- [ ] **AC1（迁移与 CRUD）**：`000026` up 建表、down 清空；表内 `name` 唯一，`mqtt_client_id` 对所有 MQTT 目标（含禁用目标）唯一；缺省 ClientID 为 23 位 ASCII 字母数字，非法长度/字符或自定义 ID 冲突返回 422；CRUD 全部走信封，非法协议/图片模式组合返回 422。
+- [ ] **AC1（迁移与 CRUD）**：`000030` up 建表、down 清空；表内 `name` 唯一，`mqtt_client_id` 对所有 MQTT 目标（含禁用目标）唯一；缺省 ClientID 为 23 位 ASCII 字母数字，非法长度/字符、自定义 ID 冲突或更新重置派生 ClientID 冲突均返回 422；CRUD 全部走信封，非法协议/图片模式组合返回 422。
 - [ ] **AC2（URL 模式）**：触发告警后目标收到 `application/json`；全幅图与裁剪图分别仅在各自就绪时带绝对签名 URL，接收方无需 Cookie 即可取到对应磁盘字节；全幅图失败但裁剪图成功时只返回 `crop_url`，反向部分失败也不返回死链；篡改签名与过期 URL 均返回 403。
 - [ ] **AC3（Multipart 模式）**：`payload` + 全幅 `image` 两段；`image` 字节与磁盘全幅 JPEG 完全一致，抓拍延迟 1s 的用例仍成立；全幅图未就绪或读取失败时只发送 `payload`、不发送裁剪图或死链，并令 `image_ready=false`。
 - [ ] **AC4（MQTT Base64 模式）**：目标 Topic 收到消息；全幅 `image_base64` 解码后与磁盘 JPEG 完全一致；全幅图未就绪或超过 500KB 时 `image_ready=false` 且无 `image_base64`。裁剪图不通过 base64 传输。
-- [ ] **AC5（细粒度过滤）**：目标 A 绑定算法 1、目标 B 绑定算法 2；算法 1 告警只到 A；算法已卸载（`algorithm_id` 为 NULL）的告警只命中空过滤器目标。
+- [ ] **AC5（细粒度过滤）**：目标 A 绑定算法 1、目标 B 绑定算法 2；算法 1 告警只到 A；算法已卸载（`algorithm_id` 为 NULL）的告警只命中空过滤器目标；`event_types` 只勾人脸的目标不会收到告警或车辆事件，留空则三类事件全收。
 - [ ] **AC6（故障隔离）**：配置一个挂起 5s 的 Webhook 与一个不可达 Broker，主推理落库耗时不受影响（对照基线），另一正常目标仍在 100ms 内收到。
 - [ ] **AC7（热重载与测试）**：修改配置/开关后保存接口在 500ms 内返回（即使 Broker 不可达），新配置立即生效；Webhook 在首次成功测试或投递前显示 `unverified`，MQTT 建连时显示 `connecting`，失败显示 `failed` 并带稳定原因；已启用目标测试成功/失败会同步更新状态，已禁用目标测试不改变 `disabled`；测试在 10s 内返回明确原因码。
 - [ ] **AC8（凭据安全）**：数据库内 URL 与凭据均为密文；API 不返回 token/密码/Header 值；所有返回 Webhook URL 的响应（列表、创建、更新、启用、禁用）均有 `Cache-Control: no-store`；更新时缺省字段保持原值、显式空值清除；日志中无凭据与完整 URL。
@@ -120,7 +127,8 @@
 
 - 私有非标硬件协议（海康 ISUP / 大华主动注册）；
 - C++ 原生引擎层的任何网络推送（纯 Go 宿主层 + React 前端）；
-- 识别记录 / 普通抓拍的推送，以及历史告警补发；
+- 历史事件补发（三类实时事件都会推送，但不回溯已落库的历史记录）；
+- 主从/集群级设备身份同步（`device_id` 只是本机标识，不做跨机下发）；
 - 外部重型消息队列（Kafka / RabbitMQ 集群）；
 - Webhook 请求体 HMAC 签名、OAuth2 client credentials、mTLS（本阶段只做静态凭据：none/bearer/basic/附加 Header）；
-- 推送内容模板化 / 可编排规则引擎（本阶段载荷结构固定并带 `schema_version`）。
+- 推送内容模板化 / 可编排规则引擎（本阶段载荷结构固定，统一信封 + 业务子对象 + 开放 `attributes` 字典）。

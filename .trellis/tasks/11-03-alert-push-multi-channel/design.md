@@ -71,7 +71,7 @@
 
 ## 2. 持久化契约
 
-### 2.1 迁移 `000026_create_alert_destinations`
+### 2.1 迁移 `000030_create_alert_destinations`
 
 ```sql
 -- up
@@ -134,7 +134,9 @@ type DestinationFilter struct {
 }
 ```
 
-保存前归一化默认值（webhook `auth_type=none`、超时 5s；MQTT QoS 0、KeepAlive 30s、`tls_skip_verify=false`），保证库内配置、UI 与发送行为一致。MQTT `client_id` 单独存入 `mqtt_client_id`，缺省值为 `"z" + ULID[4:]`（23 位 ASCII 字母数字）；如果唯一索引冲突，则为创建操作重新生成 ULID 并重试。自定义 ClientID 限 1–23 位 ASCII 字母数字，与所有已保存 MQTT 目标（包括禁用目标）唯一；更新时排除当前目标，冲突返回 422 `ALERT_DESTINATION_CONFIG_INVALID`。更新请求中 `config` / `filter` 为指针：缺省=保持，提供=整体替换（不做字段级合并）；更新时 `config.clientId` 缺省或为空表示重置为该目标的派生默认值。
+保存前归一化默认值（webhook `auth_type=none`、超时 5s；MQTT QoS 0、KeepAlive 30s、`tls_skip_verify=false`），保证库内配置、UI 与发送行为一致。MQTT `client_id` 单独存入 `mqtt_client_id`，缺省值为 `"z" + ULID[4:]`（23 位 ASCII 字母数字）；如果创建时唯一索引冲突，则重新生成目标 ULID 并重试。自定义 ClientID 限 1–23 位 ASCII 字母数字，与所有已保存 MQTT 目标（包括禁用目标）唯一；更新时排除当前目标，冲突返回 422 `ALERT_DESTINATION_CONFIG_INVALID`。更新请求中 `config` / `filter` 为指针：缺省=保持，提供=整体替换（不做字段级合并）；更新时若 `config.clientId` 缺省或显式置空，表示重置为该目标的派生默认值 `"z" + target.ID[4:]`，若该派生值与其他 MQTT 目标冲突，校验层直接返回 422 `ALERT_DESTINATION_CONFIG_INVALID`（更新操作不可变更目标 ULID 主键）。
+
+Store 层的持久化更新严格遵循 `database-guidelines.md`：GORM 更新布尔字段必须通过 `Select("enabled", ...)` 或显式 `map[string]any`，严防零值 `enabled: false` 被静默丢弃。
 
 **存储布局 ≠ API 形状**：对外的 `config.url` 在落库时拆进 `secret_ciphertext`（与凭据同密文），读取时拼回响应；`config_json` 只保存 `auth_type` 与超时等非敏感项。
 
@@ -206,25 +208,34 @@ signed_url_ttl = "24h"
 
 ## 3. 事件与对外载荷契约
 
-### 3.1 `record.AlarmEvent`
+### 3.1 `record.AlarmEvent`（统一事件）
+
+一条事件可以是行为告警、人脸识别或车辆/车牌识别。三者共用同一套队列、重试、签名 URL
+与过滤逻辑，**不允许为每种业务再造一条推送链路**。
 
 ```go
+type EventType string
+
+const (
+    EventTypeAlarm            EventType = "alarm"
+    EventTypeFaceRecognition  EventType = "face_recognition"
+    EventTypePlateRecognition EventType = "plate_recognition"
+)
+
 type AlarmEvent struct {
-    ID               string
-    CameraID         string
-    AlgorithmID      string // 可能为空（来源未标注/算法已卸载）
-    AlgorithmName    string
-    AlgorithmVersion string
-    AlarmType        string
-    Score            float64
-    Box              [4]float64 // 归一化
-    Extra            map[string]any
-    PTS              int64
-    CapturedAt       time.Time // UTC
-    ImagePath        string    // 全幅图相对路径；ImageReady=false 时为空
-    CropPath         string    // 裁剪图相对路径；CropReady=false 时为空
-    ImageReady       bool      // 仅表示全幅图已完整写入
-    CropReady        bool      // 仅表示裁剪图已完整写入
+    ID          string
+    EventType   EventType
+    CameraID    string
+    AlgorithmID string // 可能为空（来源未标注/算法已卸载）
+    CapturedAt  time.Time
+    ImagePath   string // 全幅图相对路径；ImageReady=false 时为空
+    CropPath    string // 裁剪图相对路径；CropReady=false 时为空
+    ImageReady  bool   // 仅表示全幅图已完整写入
+    CropReady   bool   // 仅表示裁剪图已完整写入
+
+    Alarm   *AlarmEventData   // EventType == alarm
+    Face    *FaceEventData    // EventType == face_recognition
+    Vehicle *VehicleEventData // EventType == plate_recognition
 }
 
 type AlarmListener interface {
@@ -233,38 +244,82 @@ type AlarmListener interface {
 ```
 
 - `ImageReady=false` / `CropReady=false` 时由 `record` 分别清空对应路径。两张图的状态独立；不得用 job 的 `writtenCount > 0` 推导两条路径都有效。
+- **人脸**事件对应 `recognitions` 行（`CropPath` = 人脸特写，另带底库参考图 `GalleryImagePath`）；
+  **车辆**事件对应 `captures` 行（`target_type = vehicle`，`CropPath` = 车牌/车辆特写）。
+  三张表统一走 `pendingAlarms` + `SnapshotJobObserver`，写盘完成后才投递。
 - 事件是值拷贝，监听者可以保留；不暴露 GORM 模型。
 
 ### 3.2 对外载荷（外部契约，snake_case，独立于内部 API）
 
+顶层只保留「任一业务系统都会用」的公共信封，业务差异放进与 `event_type` 同名的子对象；
+子对象内的 `attributes` 是**开放字典**，算法升级新增的检测项原样透传，宿主不为此改协议。
+
 ```json
 {
-  "schema_version": 1,
-  "event": "alarm",
-  "hostname": "zhulong-edge-01",
-  "alarm_id": "01J8Z...",
+  "id": "01J8Z...",
+  "device_id": "site-a-gate-01",
+  "event_type": "alarm",
   "camera_id": "cam_01",
-  "algorithm_id": "safety_helmet",
-  "algorithm_name": "安全帽佩戴检测",
-  "algorithm_version": "1.2.0",
-  "alarm_type": "no_helmet",
-  "score": 0.94,
-  "box": [0.32, 0.15, 0.45, 0.38],
-  "pts": 128491024,
-  "captured_at": "2026-11-03T08:30:15.123Z",
-  "extra": {},
+  "captured_at": "2026-11-03T08:30:15.123456789Z",
   "image_ready": true,
   "image_url": "http://10.0.0.12:8000/api/v1/media/signed/snapshots/cam_01/2026-11-03/01J8Z.jpg?exp=1762248000&sig=...",
   "crop_url": "http://10.0.0.12:8000/api/v1/media/signed/snapshots/cam_01/2026-11-03/01J8Z_crop.jpg?exp=1762248000&sig=...",
-  "image_base64": null
+  "image_base64": null,
+  "alarm": {
+    "alarm_type": "no_helmet",
+    "score": 0.94,
+    "box": [0.32, 0.15, 0.45, 0.38],
+    "extra": {}
+  }
 }
 ```
 
-- `hostname` 由推送进程 `os.Hostname()` 取得（与 `systeminfo` 同源），不引入对 `systeminfo` 服务的依赖；取得失败时为空串。
+`event_type = "face_recognition"` 时子对象为：
+
+```json
+"face": {
+  "matched": true,
+  "person_name": "张三",
+  "person_id": "EMP_10086",
+  "similarity": 0.94,
+  "box": [0.35, 0.20, 0.45, 0.35],
+  "gallery_url": "http://10.0.0.12:8000/api/v1/media/signed/..._ref.jpg?exp=...&sig=...",
+  "attributes": {}
+}
+```
+
+`event_type = "plate_recognition"` 时子对象为：
+
+```json
+"vehicle": {
+  "plate_number": "粤BD12345",
+  "plate_color": "green",
+  "vehicle_type": "suv",
+  "vehicle_color": "white",
+  "score": 0.985,
+  "box": [0.20, 0.40, 0.70, 0.85],
+  "attributes": { "plate_type": 5 }
+}
+```
+
+- **不再上报** `hostname`、`pts`、`algorithm_id/name/version`、`schema_version`、`event`：
+  这些是宿主内部实现细节，业务平台既无数据字典也无从校验；来源区分改由 `device_id`
+  承担（见 §3.4）。算法扩展项统一进各子对象的 `attributes`。
 - `image_ready` 表示外部载荷能否通过当前图片模式提供全幅图，不是内部文件写入标志。`url` 模式下仅在全幅图就绪时签发 `image_url`；`multipart` 模式下仅在 image part 成功构造时为 true；MQTT `base64` 模式下仅在读取成功且不超过 500KB 时为 true。`crop_url` 独立按裁剪图就绪状态签发，不得由 `image_ready` 推导；未提供的图片字段为 `null`。
 - `image_base64` 仅在 MQTT `base64` 模式且读取成功、大小不超过 500KB 时填充；缺图、读取失败或超限时不附加 Base64 且将外部载荷 `image_ready` 置为 `false`。multipart 模式的 JSON `payload` 中 `image_base64` 始终为 `null`。multipart 与 MQTT base64 均只传全幅图，裁剪图只在 `url` 模式下作为 `crop_url` 提供。
-- `captured_at` 统一 UTC RFC3339Nano；`box` 为归一化坐标；`algorithm_id` 为空时序列化为 `""`。
-- 载荷结构变更必须递增 `schema_version` 并在本文档记录。
+- `captured_at` 统一 UTC RFC3339Nano；`box` 为归一化坐标；`person_id` 取 `persons.person_id` 业务键（不是内部主键）。
+- 载荷结构变更必须同步更新本节与前端的载荷说明；`schema_version` 已移除，兼容性由「只增不改」的字段策略保证。
+
+### 3.4 设备标识（`device_id`）
+
+- 单行表 `system_settings`（migration 000031）保存 `device_id` / `device_id_auto`；**不放 config.toml**，
+  因为现场编号必须能在 Web UI 改完即时生效，而配置文件是启动期只读。
+- 首次启动若为空，生成 `zhulong-<12 hex>` 并落库：主机名在批量刷机镜像里往往重复，
+  不能用它当来源键。
+- `internal/systeminfo.IdentityService` 持有内存缓存，满足 `alertpush.DeviceIDProvider`；
+  发送端**每次发送时**取一次，改完编号后新事件立即带上新值，无需重建目标或重启。
+- 修改通过 `PUT /api/v1/system/identity`，校验 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`，
+  失败返回 `SYSTEM_IDENTITY_INVALID`（422）；审计动作 `system.identity.update`。
 
 ### 3.3 签名 URL
 
@@ -294,6 +349,8 @@ GET|HEAD /api/v1/media/signed/<相对媒体路径>?exp=<unix 秒>&sig=<base64url
 5. `Stop` 取消 sweeper 并把 `accepting` 置 false；此后 `OnSnapshotJobDone` 变为空操作，未完成条目直接丢弃（此时 Dispatcher 已先停，库与图片仍在）。
 
 热路径成本：一次 map 写入 + 一次非阻塞入队，无 JSON 序列化、无文件 I/O。
+
+**关键并发边界**：`SnapshotStore` 为**单 worker 协程**（容量 32）。`OnSnapshotJobDone` 直接在抓拍 worker 线程上同步触发 `OnAlarm`；`Dispatcher.Dispatch` 必须是**纯内存、纳秒级**的快速操作，**严禁**在回调路径上执行凭据解密、加长锁、读图或网络 I/O，否则将直接拖垮全局唯一的抓拍队列导致大面积丢图。凭据解密与 I/O 必须 100% 隔离在每目标独立的 worker goroutine 中执行。
 
 ### 4.2 Dispatcher
 
@@ -341,7 +398,8 @@ type MediaReader interface {
 }
 ```
 
-- Webhook 重试矩阵：网络错误 / 5xx / 429 → 最多 3 次发送尝试（首次 + 至多 2 次重试），退避间隔 0.2s、0.8s 并带抖动；4xx 立即失败；`ctx.Done()` 中止。multipart 每次尝试重新 `OpenContent`。
+- Webhook 重试矩阵：网络错误 / 5xx / 429 → 最多 3 次发送尝试（首次 + 至多 2 次重试），退避间隔 0.2s、0.8s 并带抖动；4xx 立即失败；`ctx.Done()` 中止。multipart 每次尝试重新 `OpenContent`，且必须显式 `defer file.Close()` 确保重试期间不泄漏系统文件描述符（FD）。
+- 流式 Multipart 传输与网关兼容性：在调用 `OpenContent` 后利用 `fs.FileInfo.Size()` 结合边界头预先计算确切的 `Content-Length` 并显式设置，严防无长度退化为 `Transfer-Encoding: chunked`（局域网与私有网关常不兼容 chunked POST）。
 - HTTP 客户端每目标独立 `http.Transport`（连接池上限 4）、禁用 `http.DefaultClient`；重定向最多 3 跳；跨主机重定向 Go 自动剥离敏感头；响应体 `io.Copy(io.Discard, io.LimitReader(...))` 后关闭以复用连接。
 - MQTT：`SetAutoReconnect(true)` + `SetConnectRetry(true)` + `SetConnectRetryInterval(2s)`；发布用 `token.WaitTimeout(publishTimeout)`；离线写队列入有界 ring（丢最旧、计数），不得依赖库的隐式缓冲（行为以测试为准）。QoS1 为至少一次，`alarm_id` 幂等键写入载荷说明。
 - 图片读取：url 模式分别按 `ImageReady` / `CropReady` 签发全幅图和裁剪图 URL；multipart 与 MQTT base64 固定只传全幅图，裁剪图不随包传输。multipart 仅在全幅图成功打开并可附加时添加 `image` part，否则只发 `payload` 并将外部 `image_ready=false`；base64 用 `io.LimitReader(f, 500KB+1)`，超限则不附加 Base64、将外部 `image_ready=false` 并计数。对应文件未就绪或读取失败时不得生成其 URL / 文件部分 / Base64。
@@ -441,7 +499,7 @@ type TestAlertDestinationRequest struct {
 - 列表沿用「极小上限不分页」特例，但结构保持 `{items: [...]}`，空数组不为 `null`。
 - 测试接口返回 200 + `{ok, latencyMs, reason}`；`reason` 是固定枚举（`dns`/`connection_refused`/`timeout`/`tls`/`auth`/`http_status`/`not_connected`/`publish_failed`），UI 负责本地化；服务端不返回目标响应体与原始错误。
 - 错误码：`ALERT_DESTINATION_NOT_FOUND`、`ALERT_DESTINATION_NAME_CONFLICT`、`ALERT_DESTINATION_CONFIG_INVALID`、`ALERT_IMAGE_MODE_UNSUPPORTED`、`ALERT_PUBLIC_BASE_URL_MISSING`、`MEDIA_URL_INVALID`、`MEDIA_URL_EXPIRED`，三语注册在 `internal/alertpush/locale.go`。
-- 写操作 `audithttp.Tag` 动作：`alertpush.create|update|delete|enable|disable|test`（`internal/audit/model.go` 增加常量）。
+- 写操作 `audithttp.Tag` 动作：`alertpush.create|update|delete|enable|disable|test`。常量定义在 `internal/alertpush/model.go`（保持领域内聚，`internal/audit/action_locales_test.go` 的正则 `auditActionPattern` 会自动跨包扫描）。
 - 审计动作是**跨层契约**：新增动作必须同时登记 `web/src/features/audit/data/audit-actions.ts` 与 `web/src/features/audit/locales/{zh-Hans,zh-Hant,en}.json` 的 `actionNames`；Go 侧与前端各有守卫测试，漏一处会让审计列表回退成裸 key。
 
 ---
@@ -509,7 +567,7 @@ func provideAlertPush(p alertPushParams) alertPushOut {
 
 - 目录：`web/src/features/settings/alert-push/{api,hooks,components,locales,index.tsx}`；路由 `web/src/routes/_authenticated/settings/alert-push.tsx`；侧边栏项加在 `web/src/features/settings/index.tsx`（`BellRing`）。
 - i18n：`web/src/lib/i18n.ts` 注册 `alertPush` 命名空间（三语 import），`web/src/locales/{zh-Hans,zh-Hant,en}/common.json` 增加 `nav.AlertPush`；`SUPPORTED_LANGUAGES` 不变。
-- 列表：目标数 ≤32，声明为不分页特例；`@/components/ui/card` 或 `@/components/ui/table` 组合，状态/协议/图片模式徽章统一用 `@/lib/status-palette` 的 Dot-Indicator Outline 范式（含 `dark:`）；实现 `unverified`、`connecting`、`connected`、`failed`、`disabled` 状态文案。
+- 列表：目标数 ≤32，声明为不分页特例；`@/components/ui/card` 或 `@/components/ui/table` 组合，状态/协议/图片模式徽章统一用 `@/lib/status-palette` 的 Dot-Indicator Outline 范式（含 `dark:`）；实现 `unverified`、`connecting`、`connected`、`failed`、`disabled` 状态文案。5 个状态显式映射到 4 级调色板语义（`connected` ➔ `active`，`connecting`/`unverified` ➔ `warning`，`failed` ➔ `destructive`，`disabled` ➔ `inactive`），使用 `statusLevelClass(level)` 与 `statusDotClass(level)`。
 - 表单：`react-hook-form` + `@hookform/resolvers/zod` + `@/components/ui/form`，zod 判别联合按 `channelType` 校验；`imageMode` 选项按协议过滤；Webhook 鉴权方式为 `none|bearer|basic` 单选，`bearer` 显示 token、`basic` 显示用户名/密码；附加 Header 编辑器禁止 `Authorization` 等保留头；密码/token/Header 值为写密字段（占位显示「已设置」），留空表示保持、勾选「清除」显式清除。
 - 「测试连接」：保存前可用草稿配置测试；pending 期间禁用按钮；失败展示本地化原因码；不关闭对话框。
 - 交互三态（loading/error/empty）与删除二次确认遵循现有 `confirm-dialog` 模式。
@@ -550,5 +608,5 @@ func provideAlertPush(p alertPushParams) alertPushOut {
 - **内存**：事件只含路径；每目标队列 16；base64 单张 ≤500KB，目标数 ≤32。
 - **移动网络流量**：base64 模式单条约 667KB，建议在 UI 提示；不提供自动降采样（保真优先）。
 - **Broker 限制**：base64 载荷可能超过 Broker 默认 1MB 包上限，测试与文档中说明。
-- **时钟**：签名 URL 依赖宿主时钟；`systemtime` 未同步时 URL 可能提前过期，NTP 未同步时 UI 提示。
-- **回滚**：前端一键禁用目标；必要时执行 `000026` down；删除 `media_url.key` 仅使未过期 URL 失效。
+- **时钟**：签名 URL 依赖宿主时钟；边缘设备断电冷启动若无电池 RTC，系统时间可能重置在 1970 或构建时间，NTP 阶跃同步会导致同步前签发的 URL 突变过期；UI 与文档需标注 NTP 同步强依赖。
+- **回滚**：前端一键禁用目标；必要时执行 `000030` down；删除 `media_url.key` 仅使未过期 URL 失效。

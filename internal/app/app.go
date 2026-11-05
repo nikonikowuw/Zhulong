@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nikonikowuw/Zhulong/internal/alertpush"
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
 	"github.com/nikonikowuw/Zhulong/internal/algorunner"
 	"github.com/nikonikowuw/Zhulong/internal/apitoken"
@@ -359,16 +360,18 @@ type systemInfoOut struct {
 
 	Collector       systeminfo.Collector
 	Service         *systeminfo.Service
+	Identity        *systeminfo.IdentityService
 	Handler         *systeminfo.Handler
 	Lifecycle       systemInfoLifecycle
 	ProtectedRoutes RouteRegistrar `group:"protected_routes"`
 }
 
-func provideSystemInfo(logger *zap.Logger) systemInfoOut {
-	comp := systeminfo.NewSystemInfoComponents(logger)
+func provideSystemInfo(dbProvider database.DBProvider, logger *zap.Logger) systemInfoOut {
+	comp := systeminfo.NewSystemInfoComponents(dbProvider, logger)
 	return systemInfoOut{
 		Collector:       comp.Collector,
 		Service:         comp.Service,
+		Identity:        comp.Identity,
 		Handler:         comp.Handler,
 		Lifecycle:       comp.Lifecycle,
 		ProtectedRoutes: comp.ProtectedRoutes,
@@ -913,6 +916,69 @@ var openAPIModule = fx.Module("openapi",
 	fx.Provide(provideOpenAPI),
 )
 
+// --- AlertPush Module ---
+
+type alertPushOut struct {
+	fx.Out
+
+	Store             *alertpush.Store
+	Service           *alertpush.Service
+	Dispatcher        *alertpush.Dispatcher
+	Handler           *alertpush.Handler
+	SignedMedia       *alertpush.SignedMediaHandler
+	Lifecycle         alertPushLifecycle
+	ProtectedRoutes   RouteRegistrar `group:"protected_routes"`
+	SignedMediaRoutes RouteRegistrar `group:"public_routes"`
+}
+
+type alertPushParams struct {
+	fx.In
+
+	DBProvider    database.DBProvider
+	CameraCipher  *camera.LazyCipher
+	CameraManager *camera.LifecycleManager
+	MediaService  *mediafile.Service
+	MediaHandler  *mediafile.Handler
+	RecordService *record.Service
+	SystemInfo    *systeminfo.IdentityService
+	Config        Config
+	Logger        *zap.Logger
+}
+
+func provideAlertPush(p alertPushParams) alertPushOut {
+	comp := alertpush.NewComponents(alertpush.Options{
+		DBProvider:   p.DBProvider,
+		Cipher:       p.CameraCipher,
+		MediaService: p.MediaService,
+		MediaHandler: p.MediaHandler,
+		DataDir:      p.Config.DataDir,
+		Config: alertpush.Config{
+			PublicBaseURL: p.Config.AlertPushPublicBaseURL,
+			SignedURLTTL:  p.Config.AlertPushSignedURLTTL,
+			DeviceID:      p.SystemInfo,
+		},
+		Logger: p.Logger,
+	})
+
+	p.CameraManager.AddEncryptedDataProbe(comp.Store)
+	p.RecordService.SetAlarmListener(comp.Dispatcher)
+
+	return alertPushOut{
+		Store:             comp.Store,
+		Service:           comp.Service,
+		Dispatcher:        comp.Dispatcher,
+		Handler:           comp.Handler,
+		SignedMedia:       comp.SignedMediaHandler,
+		Lifecycle:         comp.Lifecycle,
+		ProtectedRoutes:   comp.ProtectedRoutes,
+		SignedMediaRoutes: comp.SignedMediaRoutes,
+	}
+}
+
+var alertPushModule = fx.Module("alertpush",
+	fx.Provide(provideAlertPush),
+)
+
 // --- HTTP Module ---
 
 var httpModule = fx.Module("http",
@@ -967,6 +1033,7 @@ var Module = fx.Options(
 	spatialModule,
 	apiTokenModule,
 	openAPIModule,
+	alertPushModule,
 	httpModule,
 	runtimeModule,
 )

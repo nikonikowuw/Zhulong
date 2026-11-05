@@ -33,6 +33,10 @@ type fileConfig struct {
 	Auth struct {
 		SessionTTL string `mapstructure:"session_ttl"`
 	} `mapstructure:"auth"`
+	AlertPush struct {
+		PublicBaseURL string `mapstructure:"public_base_url"`
+		SignedURLTTL  string `mapstructure:"signed_url_ttl"`
+	} `mapstructure:"alertpush"`
 	Decode app.DecodeConfig `mapstructure:"decode"`
 }
 
@@ -67,6 +71,8 @@ func loadConfigFile(path string) (app.Config, error) {
 	settings.SetDefault("logging.rotation.max_total_size_mb", defaults.Logging.Rotation.MaxTotalSizeMB)
 	settings.SetDefault("algorithm.target", defaults.AlgorithmTarget)
 	settings.SetDefault("auth.session_ttl", "24h")
+	settings.SetDefault("alertpush.public_base_url", defaults.AlertPushPublicBaseURL)
+	settings.SetDefault("alertpush.signed_url_ttl", "24h")
 	settings.SetDefault("decode.backend", defaults.Decode.Backend)
 	settings.SetDefault("decode.allow_software_fallback", defaults.Decode.AllowSoftwareFallback)
 	settings.SetDefault("decode.max_sessions", defaults.Decode.MaxSessions)
@@ -107,6 +113,11 @@ func loadConfigFile(path string) (app.Config, error) {
 		return app.Config{}, fmt.Errorf("decode configuration %q: %w", path, err)
 	}
 
+	alertBaseURL, alertTTL, err := app.ValidateAlertPushConfig(values.AlertPush.PublicBaseURL, values.AlertPush.SignedURLTTL)
+	if err != nil {
+		return app.Config{}, fmt.Errorf("decode configuration %q: %w", path, err)
+	}
+
 	return app.Config{
 		HTTPAddress:                  values.HTTP.Address,
 		TLSMode:                      values.HTTP.TLSMode,
@@ -122,5 +133,7 @@ func loadConfigFile(path string) (app.Config, error) {
 		SessionTTL:                   sessionTTL,
 		RequirePersonIDForEnrollment: values.Person.RequirePersonIDForEnrollment,
 		ExtractorAlgorithm:           values.Person.ExtractorAlgorithm,
+		AlertPushPublicBaseURL:       alertBaseURL,
+		AlertPushSignedURLTTL:        alertTTL,
 	}, nil
 }

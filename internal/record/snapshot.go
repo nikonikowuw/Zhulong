@@ -79,6 +79,7 @@ type SnapshotStore struct {
 	media    MediaRootProvider
 	gate     WriteGate
 	cleaner  SnapshotPathCleaner
+	observer SnapshotJobObserver
 	logger   *zap.Logger
 
 	queue    chan snapshotJob
@@ -135,6 +136,11 @@ func (s *SnapshotStore) Stop() {
 // SetPathCleaner 注入落盘失败时的路径清理器。
 func (s *SnapshotStore) SetPathCleaner(cleaner SnapshotPathCleaner) {
 	s.cleaner = cleaner
+}
+
+// SetJobObserver 注入写盘完成观察者，用于异步告警事件分发。
+func (s *SnapshotStore) SetJobObserver(observer SnapshotJobObserver) {
+	s.observer = observer
 }
 
 // Available 报告抓拍能力是否可用（依赖注入是否齐备）。
@@ -194,6 +200,19 @@ func (s *SnapshotStore) worker() {
 
 // run 执行一次抓拍 + 写盘。所有错误只记日志，不向上传播。
 func (s *SnapshotStore) run(job snapshotJob) {
+	notifyObserver := func(written map[string]bool) {
+		if s.observer != nil && job.targetTable != "" && job.targetID != "" {
+			outs := make([]SnapshotJobOutput, len(job.outputs))
+			for i, out := range job.outputs {
+				outs[i] = SnapshotJobOutput{
+					RelPath: out.relPath,
+					Written: written != nil && written[out.relPath],
+				}
+			}
+			s.observer.OnSnapshotJobDone(job.targetTable, job.targetID, SnapshotJobResult{Outputs: outs})
+		}
+	}
+
 	clearOnFailure := func() {
 		if s.cleaner != nil && job.targetTable != "" && job.targetID != "" {
 			if err := s.cleaner.ClearRecordSnapshotPaths(context.Background(), job.targetTable, job.targetID); err != nil {
@@ -208,6 +227,7 @@ func (s *SnapshotStore) run(job snapshotJob) {
 		s.logger.Warn("storage gate is closed, skipping snapshot",
 			zap.String("camera_id", job.cameraID))
 		clearOnFailure()
+		notifyObserver(nil)
 		return
 	}
 
@@ -217,6 +237,7 @@ func (s *SnapshotStore) run(job snapshotJob) {
 		s.logger.Warn("resolve media root for snapshot failed",
 			zap.String("camera_id", job.cameraID), zap.Error(err))
 		clearOnFailure()
+		notifyObserver(nil)
 		return
 	}
 
@@ -229,6 +250,7 @@ func (s *SnapshotStore) run(job snapshotJob) {
 		s.logger.Warn("snapshot capture failed",
 			zap.String("camera_id", job.cameraID), zap.Error(err))
 		clearOnFailure()
+		notifyObserver(nil)
 		return
 	}
 
@@ -239,6 +261,7 @@ func (s *SnapshotStore) run(job snapshotJob) {
 	}
 
 	writtenCount := 0
+	writtenMap := make(map[string]bool, len(job.outputs))
 	for _, out := range job.outputs {
 		img, ok := byIndex[out.boxIndex]
 		if !ok {
@@ -280,11 +303,13 @@ func (s *SnapshotStore) run(job snapshotJob) {
 		s.logger.Debug("snapshot file written successfully",
 			zap.String("camera_id", job.cameraID), zap.String("path", abs), zap.Int("bytes", len(img.JPEG)))
 		writtenCount++
+		writtenMap[out.relPath] = true
 	}
 
 	if writtenCount == 0 && len(job.outputs) > 0 {
 		clearOnFailure()
 	}
+	notifyObserver(writtenMap)
 }
 
 // EnsureEvidenceLocks writes missing .lock sidecars for existing evidence

@@ -56,6 +56,8 @@ export const AUDIT_ACTION_KEYS = [
   'storage.test_path',
   'storage.emergency_stop',
   'storage.emergency_resume',
+  // 系统标识
+  'system.identity.update',
   // 系统时间
   'time.update_config',
   'time.ntp_sync',
@@ -70,6 +72,13 @@ export const AUDIT_ACTION_KEYS = [
   'api_token.create',
   'api_token.revoke',
   'api_token.auth_rejected',
+  // 告警推送
+  'alertpush.create',
+  'alertpush.update',
+  'alertpush.delete',
+  'alertpush.enable',
+  'alertpush.disable',
+  'alertpush.test',
 ] as const
 
 export type AuditActionKey = (typeof AUDIT_ACTION_KEYS)[number]

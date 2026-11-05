@@ -6,6 +6,7 @@ import {
   Clock,
   HardDrive,
   RadioTower,
+  BellRing,
   Activity,
   Key,
 } from 'lucide-react'
@@ -54,6 +55,11 @@ export function Settings() {
         title: t('nav.GB28181', { defaultValue: 'GB28181 Ingress' }),
         href: '/settings/gb28181',
         icon: <RadioTower size={18} />,
+      },
+      {
+        title: t('nav.AlertPush', { defaultValue: 'Alert Push' }),
+        href: '/settings/alert-push',
+        icon: <BellRing size={18} />,
       },
       {
         title: t('nav.APITokens', { defaultValue: 'API Tokens' }),
