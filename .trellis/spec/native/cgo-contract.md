@@ -146,6 +146,21 @@ func (s *Subscription) Close() error
 
 ---
 
+## 4.1 AI 分析视图（ABI v6）
+
+- `Zhulong_stream_set_view(engine, stream, const Zhulong_view_rect *view, Zhulong_view_state *out)`：
+  `view == NULL` 或 `{0,0,1,1}` 表示清除（**永远成功**）；非空窗口在流还没有解码帧尺寸时返回
+  `Zhulong_ERR_NOT_READY(-17)` —— 配置已登记，首个解码帧后自动生效。**不要**把这个错误当成失败上报给用户。
+- `Zhulong_stream_get_view(...)`：只读，未设置时返回 `{0,0,1,1}` + `effective_since_ms = 0`；流不存在返回 `NOT_FOUND`。
+- **最小边长阈值只在 Go 侧**（`region.MinCropSide = 0.02`）：C ABI 只做「有限、`[0,1]`、非退化」结构校验。
+  `0.02f` 实际是 `0.0199999996`，在 C 侧比较 `>= 0.02` 会把边界值误拒。
+- Go 侧映射：`engine.ViewState{Rect [4]float64, Since int64(ms)}` → `region.ViewState{Rect, time.Time}`；
+  `Since == 0` 必须映射成 `time.Time{}` 而不是 Unix epoch，否则「从未切换」会被当成「1970 年切换过」。
+- `Zhulong_ERR_NOT_READY` 需要 `engine.StatusNotReady` 与 `errors.go` 的 `ErrStreamNotReady` 同步，
+  不得复用 `ErrNotFound`（一个哨兵一个状态码，`TestSentinelCodesAreUnique` 会抓）。
+
+---
+
 ## 5. 线程绑定与异步回调守则
 
 1. **线程绑定 API (`runtime.LockOSThread`)**：若底层涉及对线程局部存储（TLS）敏感的 NPU/GPU 上下文，调用该 CGO 接口的 goroutine 必须在调用前执行 `runtime.LockOSThread()`，退出时 `defer runtime.UnlockOSThread()`。

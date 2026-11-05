@@ -62,6 +62,7 @@ enum {
     Zhulong_ERR_BUFFER_TOO_SMALL  = -14,  /**< 提供的缓冲区容量不足 */
     Zhulong_ERR_HARDWARE_UNAVAILABLE = -15, /**< 硬件加速器不可用且禁止软解 */
     Zhulong_ERR_CAPACITY_EXCEEDED    = -16, /**< 并发解码路数已达系统声明的上限 */
+    Zhulong_ERR_NOT_READY         = -17,  /**< 资源尚未就绪（如视图已登记但还没有解码帧尺寸） */
     Zhulong_ERR_INTERNAL          = -99   /**< 引擎内部未知未捕获错误 */
 };
 
@@ -308,13 +309,13 @@ typedef void (*Zhulong_log_callback)(uintptr_t token, int32_t level, uint64_t st
 /* ========================================================================== */
 
 /**
- * @brief 当前 C ABI 版本号（v5 为双轨按需音频与按轨订阅支持）
+ * @brief 当前 C ABI 版本号（v6 为 AI 流分析视图 / 任务级裁剪支持）
  *
  * 演进约定：ABI 只允许在结构体**尾部追加**字段，绝不调整已有字段偏移或语义。
  * Go 侧在初始化后必须调用 Zhulong_engine_get_abi_version 校验，头文件与静态库不一致时
  * 直接拒绝启动，避免旧归档被语言层静默复用引发的内存越界。
  */
-#define ZHULONG_ABI_VERSION 5
+#define ZHULONG_ABI_VERSION 6
 
 /**
  * @brief 查询原生静态库编译时对应的 ABI 版本
@@ -520,6 +521,55 @@ Zhulong_status_t Zhulong_stream_get_broker_clients(Zhulong_engine_h engine,
  */
 Zhulong_status_t Zhulong_stream_set_publish_rate(Zhulong_engine_h engine,
     Zhulong_stream_id stream, uint32_t max_sample_fps);
+
+/* ========================================================================== */
+/*                        AI 流分析视图（任务级裁剪，v6）                        */
+/* ========================================================================== */
+
+/** @brief 归一化窗口矩形：严格 [0,1] 且 x1 < x2、y1 < y2；{0,0,1,1} 表示全幅/未设置。 */
+typedef struct {
+    float x1;
+    float y1;
+    float x2;
+    float y2;
+} Zhulong_view_rect;
+
+/** @brief 引擎回报的生效窗口：>= effective_since_ms 的帧使用 rect。 */
+typedef struct {
+    Zhulong_view_rect rect;          /**< 生效 E（按解码帧尺寸归一化） */
+    int64_t effective_since_ms;      /**< 宿主 UTC 毫秒；0 表示尚未发生过窗口切换 */
+} Zhulong_view_state;
+
+/**
+ * @brief 设置指定 AI 流的分析视图（任务级裁剪窗口）。
+ *
+ * 语义：
+ *  - **非 acquire**：流不存在返回 `Zhulong_ERR_NOT_FOUND`，绝不顺手拉起拉流；
+ *  - `view == NULL` 或 `{0,0,1,1}` 表示清除，**永远成功**（即使还没有解码帧）；
+ *  - 非空窗口但还拿不到解码帧尺寸 → `Zhulong_ERR_NOT_READY`：配置已保存、视图暂不生效，
+ *    首个解码帧到达后由引擎自动计算并推进 `effective_since_ms`；
+ *  - 非法坐标（非有限、越界、退化）→ `Zhulong_ERR_INVALID_ARGUMENT`。
+ *    ⚠️ 最小边长（Go 侧 MinCropSide）**不在 C 侧校验**：0.02 过 float32 会舍入成
+ *    0.0199999996，边界值会被误拒；阈值权威只在宿主 Go 层。
+ *  - 幂等：同值重复设置不改变 E，也不推进 `effective_since_ms`。
+ *
+ * @param engine        引擎句柄
+ * @param stream        物理流 ID（必须是 AI 消费流）
+ * @param view          目标窗口；NULL 表示清除
+ * @param[out] out_effective 可为 NULL；成功时返回本次生效的 E 与切换点
+ * @return Zhulong_status_t
+ */
+Zhulong_status_t Zhulong_stream_set_view(Zhulong_engine_h engine, Zhulong_stream_id stream,
+    const Zhulong_view_rect *view, Zhulong_view_state *out_effective);
+
+/**
+ * @brief 查询当前生效 E 与生效起点。
+ *
+ * 未设置视图或尚无解码帧时返回 `rect={0,0,1,1}`、`effective_since_ms=0`。
+ * 流不存在返回 `Zhulong_ERR_NOT_FOUND`；本接口只读，不会拉起拉流。
+ */
+Zhulong_status_t Zhulong_stream_get_view(Zhulong_engine_h engine, Zhulong_stream_id stream,
+    Zhulong_view_state *out_effective);
 
 /**
  * @brief 音频流元数据视图（v5）

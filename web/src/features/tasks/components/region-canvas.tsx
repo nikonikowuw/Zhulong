@@ -7,7 +7,9 @@ import {
 } from '@/lib/category-palette'
 import { cn } from '@/lib/utils'
 import {
+  MIN_CROP_SIDE,
   REGION_CATEGORY_HUE,
+  isFullFrame,
   type Rect,
   type RegionCategory,
   type RegionDraft,
@@ -28,6 +30,10 @@ export interface RegionCanvasProps {
   onCreate: (category: RegionCategory, rect: Rect) => void
   onSelect: (selection: RegionSelection | null) => void
   onBeforeChange?: () => void
+  /** 任务级裁剪窗口；`null` 表示全幅。crop 与 ROI/MASK 各自独立，互不影响选中项。 */
+  crop?: Rect | null
+  onCropChange?: (rect: Rect | null) => void
+  cropMinSide?: number
   className?: string
 }
 
@@ -58,6 +64,9 @@ export function RegionCanvas({
   onCreate,
   onSelect,
   onBeforeChange,
+  crop = null,
+  onCropChange,
+  cropMinSide = MIN_CROP_SIDE,
   className = '',
 }: RegionCanvasProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
@@ -65,9 +74,12 @@ export function RegionCanvas({
   const {
     containerRef,
     creatingPreview,
+    creatingCrop,
     handleBackgroundMouseDown,
     startMove,
     startResize,
+    startCropMove,
+    startCropResize,
   } = useRegionDrag({
     draft,
     tool,
@@ -76,7 +88,13 @@ export function RegionCanvas({
     onCreate,
     onSelect,
     onBeforeChange,
+    crop,
+    onCropChange,
+    cropMinSide,
   })
+
+  const cropRect = crop && !isFullFrame(crop) ? crop : null
+  const cropEditable = tool === 'crop' && !disabled
 
   const renderItem = (
     item: RegionItem,
@@ -152,6 +170,87 @@ export function RegionCanvas({
     )
   }
 
+  const renderCrop = (rect: Rect) => {
+    const [x1, y1, x2, y2] = rect
+    return (
+      <div
+        style={{
+          left: `${x1 * 100}%`,
+          top: `${y1 * 100}%`,
+          width: `${(x2 - x1) * 100}%`,
+          height: `${(y2 - y1) * 100}%`,
+        }}
+        className={cn(
+          'absolute border-2 transition-shadow',
+          categoryRegionClass('cyan'),
+          cropEditable
+            ? 'cursor-move shadow-lg ring-2 ring-cyan-400/60'
+            : 'pointer-events-none'
+        )}
+        onMouseDown={startCropMove(rect)}
+      >
+        <span
+          className={cn(
+            'absolute top-0 left-0 -translate-y-full rounded-t-sm px-1.5 py-0.5 font-mono text-[10px] leading-none font-bold text-white shadow-xs',
+            categorySolidClass('cyan')
+          )}
+        >
+          CROP
+        </span>
+
+        {cropEditable && (
+          <>
+            {RESIZE_HANDLES.map((handle) => (
+              <div
+                key={handle}
+                className={`absolute size-3 rounded-full border-2 border-cyan-400 bg-white shadow-md transition-transform hover:scale-125 ${
+                  HANDLE_POSITION_CLASS[handle]
+                }`}
+                onMouseDown={startCropResize(handle, rect)}
+              />
+            ))}
+          </>
+        )}
+      </div>
+    )
+  }
+
+  /** 窗口外的压暗层：四块矩形拼出“洞”，比 clip-path 更易读且不影响命中测试。 */
+  const renderCropDim = (rect: Rect) => {
+    const [x1, y1, x2, y2] = rect
+    const dimClass = 'pointer-events-none absolute bg-black/50'
+    return (
+      <>
+        <div
+          className={dimClass}
+          style={{ left: 0, right: 0, top: 0, height: `${y1 * 100}%` }}
+        />
+        <div
+          className={dimClass}
+          style={{ left: 0, right: 0, top: `${y2 * 100}%`, bottom: 0 }}
+        />
+        <div
+          className={dimClass}
+          style={{
+            left: 0,
+            width: `${x1 * 100}%`,
+            top: `${y1 * 100}%`,
+            height: `${(y2 - y1) * 100}%`,
+          }}
+        />
+        <div
+          className={dimClass}
+          style={{
+            left: `${x2 * 100}%`,
+            right: 0,
+            top: `${y1 * 100}%`,
+            height: `${(y2 - y1) * 100}%`,
+          }}
+        />
+      </>
+    )
+  }
+
   const previewHue =
     tool === 'roi' || tool === 'mask' ? REGION_CATEGORY_HUE[tool] : undefined
 
@@ -162,13 +261,18 @@ export function RegionCanvas({
       className={`relative h-full w-full overflow-hidden select-none ${
         disabled
           ? 'cursor-not-allowed'
-          : tool === 'roi' || tool === 'mask'
+          : tool === 'roi' || tool === 'mask' || tool === 'crop'
             ? 'cursor-crosshair'
             : 'cursor-default'
       } ${className}`}
     >
+      {/* 压暗层必须在图元之前渲染，否则会把 ROI/MASK 一起盖住。 */}
+      {cropRect && renderCropDim(cropRect)}
+
       {draft.roi.map((item, i) => renderItem(item, 'roi', i))}
       {draft.mask.map((item, i) => renderItem(item, 'mask', i))}
+
+      {cropRect && renderCrop(cropRect)}
 
       {creatingPreview && (
         <div
@@ -178,9 +282,11 @@ export function RegionCanvas({
             width: `${(creatingPreview[2] - creatingPreview[0]) * 100}%`,
             height: `${(creatingPreview[3] - creatingPreview[1]) * 100}%`,
           }}
-          className={`pointer-events-none absolute border-2 border-dashed shadow-xs ${categoryRegionPreviewClass(
-            previewHue
-          )}`}
+          className={`pointer-events-none absolute border-2 border-dashed shadow-xs ${
+            creatingCrop
+              ? categoryRegionPreviewClass('cyan')
+              : categoryRegionPreviewClass(previewHue)
+          }`}
         />
       )}
     </div>

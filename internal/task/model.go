@@ -1,10 +1,13 @@
 package task
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
+	"github.com/nikonikowuw/Zhulong/internal/region"
 )
 
 // Audit action constants for task operations.
@@ -33,6 +36,7 @@ type Task struct {
 	CameraID   string          `gorm:"column:camera_id;not null;uniqueIndex" json:"cameraId"`
 	Enabled    bool            `gorm:"column:enabled;not null" json:"enabled"`
 	Name       string          `gorm:"column:name;not null;default:''" json:"name"`
+	CropJSON   string          `gorm:"column:crop_json;not null;default:'{}'" json:"cropJson"`
 	CreatedAt  time.Time       `gorm:"column:created_at;not null" json:"createdAt"`
 	UpdatedAt  time.Time       `gorm:"column:updated_at;not null" json:"updatedAt"`
 	Algorithms []TaskAlgorithm `gorm:"foreignKey:TaskID;constraint:OnDelete:CASCADE" json:"algorithms"`
@@ -122,6 +126,7 @@ type CreateTaskRequest struct {
 	CameraIDAlt string              `json:"camera_id,omitempty"`
 	Name        string              `json:"name,omitempty"`
 	Enabled     *bool               `json:"enabled,omitempty"`
+	Crop        *region.Rect        `json:"crop,omitempty"`
 	Algorithms  []TaskAlgorithmItem `json:"algorithms,omitempty"`
 	// Legacy single-algorithm fields for backward compatibility
 	AlgorithmID         string `json:"algorithmId,omitempty"`
@@ -146,6 +151,7 @@ func (req *CreateTaskRequest) ToTask() *Task {
 		CameraID: firstNonZero(req.CameraID, req.CameraIDAlt),
 		Name:     req.Name,
 		Enabled:  enabled,
+		CropJSON: serializeCrop(req.Crop),
 	}
 
 	items := req.Algorithms
@@ -183,6 +189,11 @@ type UpdateTaskRequest struct {
 	Name       *string              `json:"name,omitempty"`
 	Enabled    *bool                `json:"enabled,omitempty"`
 	Algorithms *[]TaskAlgorithmItem `json:"algorithms,omitempty"`
+	// Crop 是三态合并字段：省略=不改、null/[]/{}=清除、[x1,y1,x2,y2]=设置。
+	//
+	// 用 json.RawMessage 而不是 *region.Rect：后者无法区分“字段缺省”与“显式 null”，
+	// 而 PUT /tasks/:id 的合并语义必须区分这两者（缺省不得清空已保存的裁剪）。
+	Crop json.RawMessage `json:"crop,omitempty" swaggertype:"array,number"`
 	// Legacy single-algorithm update fields
 	SampleFPS           int    `json:"sampleFps,omitempty"`
 	SampleFPSAlt        int    `json:"sample_fps,omitempty"`
@@ -190,6 +201,47 @@ type UpdateTaskRequest struct {
 	ConfigJSONAlt       string `json:"config_json,omitempty"`
 	RegionConfigJSON    string `json:"regionConfigJson,omitempty"`
 	RegionConfigJSONAlt string `json:"region_config_json,omitempty"`
+}
+
+// ApplyCrop 应用三态 crop 字段。
+//
+// 单独成方法而不是塞进 ApplyTo：ApplyTo 没有返回值，而且会在 req.Algorithms != nil
+// 时提前 return，无法承载 INVALID_CROP_CONFIG 的 400。Service.UpdateTask 必须先调本方法、
+// 再调 ApplyTo（先校验后改内存）。
+func (req *UpdateTaskRequest) ApplyCrop(t *Task) error {
+	if t == nil || len(req.Crop) == 0 {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(req.Crop)
+	if len(trimmed) == 0 {
+		return nil
+	}
+	// 显式清空：null / [] / {}。
+	if bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("[]")) || bytes.Equal(trimmed, []byte("{}")) {
+		t.CropJSON = defaultConfigJSON
+		return nil
+	}
+	crop, err := region.ParseCrop(string(trimmed))
+	if err != nil {
+		return apperr.Invalid("INVALID_CROP_CONFIG", fmt.Sprintf("invalid crop config: %v", err), err)
+	}
+	t.CropJSON = serializeCrop(crop)
+	return nil
+}
+
+// serializeCrop 把裁剪矩形序列化为存储形态；nil / 整帧统一为 '{}'。
+func serializeCrop(crop *region.Rect) string {
+	if crop == nil || crop.IsIdentity() {
+		return defaultConfigJSON
+	}
+	payload, err := json.Marshal(struct {
+		Crop *region.Rect `json:"crop"`
+	}{Crop: crop})
+	if err != nil {
+		// 不可能发生：Rect 只含 float64，json.Marshal 不会失败。保留分支以避免吞错。
+		return defaultConfigJSON
+	}
+	return string(payload)
 }
 
 // ApplyTo applies the update fields onto the target task entity.

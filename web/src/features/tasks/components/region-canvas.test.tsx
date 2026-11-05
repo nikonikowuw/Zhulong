@@ -176,6 +176,91 @@ describe('RegionCanvas', () => {
     expect(onBeforeChange).not.toHaveBeenCalled()
   })
 
+  it('renders the task-level crop window with a CROP label', async () => {
+    const { screen } = await renderCanvas({ crop: [0.2, 0.2, 0.8, 0.8] })
+
+    await expect.element(screen.getByText('CROP')).toBeInTheDocument()
+  })
+
+  it('replaces the crop window when dragging with the crop tool', async () => {
+    const onCropChange = vi.fn()
+    const onBeforeChange = vi.fn()
+    await renderCanvas({
+      tool: 'crop',
+      crop: [0.2, 0.2, 0.4, 0.4],
+      onCropChange,
+      onBeforeChange,
+      draft: emptyDraft(),
+    })
+
+    await dispatchDrag({ x: 0.1, y: 0.1 }, { x: 0.6, y: 0.7 })
+
+    // 裁剪窗口同样只压一次快照（与区域共用撤销栈）。
+    expect(onBeforeChange).toHaveBeenCalledTimes(1)
+    expect(onCropChange).toHaveBeenCalledTimes(1)
+    const rect = onCropChange.mock.calls[0][0]
+    expect(rect[0]).toBeCloseTo(0.1, 2)
+    expect(rect[1]).toBeCloseTo(0.1, 2)
+    expect(rect[2]).toBeCloseTo(0.6, 2)
+    expect(rect[3]).toBeCloseTo(0.7, 2)
+  })
+
+  it('moves an existing crop window without changing its size', async () => {
+    const onCropChange = vi.fn()
+    const { screen } = await renderCanvas({
+      tool: 'crop',
+      crop: [0.2, 0.2, 0.6, 0.6],
+      onCropChange,
+      draft: emptyDraft(),
+    })
+
+    const label = screen.getByText('CROP').element()
+    const rect = canvasRoot().getBoundingClientRect()
+    const at = (x: number, y: number) => ({
+      clientX: rect.left + rect.width * x,
+      clientY: rect.top + rect.height * y,
+    })
+
+    await act(async () => {
+      label.dispatchEvent(
+        new MouseEvent('mousedown', {
+          bubbles: true,
+          button: 0,
+          ...at(0.4, 0.4),
+        })
+      )
+    })
+    await act(async () => {
+      window.dispatchEvent(
+        new MouseEvent('mousemove', { bubbles: true, ...at(0.5, 0.5) })
+      )
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+    })
+
+    expect(onCropChange).toHaveBeenCalled()
+    const calls = onCropChange.mock.calls
+    const next = calls[calls.length - 1][0] as number[]
+    expect(next[0]).toBeCloseTo(0.3, 2)
+    expect(next[1]).toBeCloseTo(0.3, 2)
+    expect(next[2]).toBeCloseTo(0.7, 2)
+    expect(next[3]).toBeCloseTo(0.7, 2)
+  })
+
+  it('rejects a crop drag smaller than MIN_CROP_SIDE', async () => {
+    const onCropChange = vi.fn()
+    await renderCanvas({
+      tool: 'crop',
+      crop: null,
+      onCropChange,
+      draft: emptyDraft(),
+    })
+
+    // 0.01 < MIN_CROP_SIDE (0.02)
+    await dispatchDrag({ x: 0.5, y: 0.5 }, { x: 0.51, y: 0.51 })
+
+    expect(onCropChange).not.toHaveBeenCalled()
+  })
+
   it('does not select or create anything while disabled', async () => {
     const onSelect = vi.fn()
     const onCreate = vi.fn()

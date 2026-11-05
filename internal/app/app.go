@@ -559,7 +559,11 @@ func provideTaskComponents(p taskParams) taskOut {
 		p.AlgoService,
 		configCache,
 	}
+	// 任务级裁剪：Store 直接满足 camera.TaskCropProvider；保存后由监听器刷新媒体层。
+	// 必须在 Service 构造后注册（保存事件在 UpdateTask/SaveTask 内同步广播）。
+	p.StreamHub.SetTaskCropProvider(p.Store)
 	service := task.NewService(p.Store, p.AlgoService, listeners, p.Logger)
+	service.SetTaskSavedListener(taskCropListener{hub: p.StreamHub, logger: p.Logger})
 	scheduleWorker := task.NewScheduleWorker(p.Store, listeners, p.Logger, 30*time.Second)
 
 	p.Lifecycle.Append(fx.Hook{

@@ -224,7 +224,11 @@
     "maskDesc": "Denylist mode with the highest priority: drops false positives from swaying branches, passing vehicles and similar noise.",
     "judgementTitle": "Anchor & evaluation",
     "judgementDesc": "Region membership is decided by the bottom-center point of the target bounding box: anything inside a MASK is dropped, and when an ROI is configured the target must also fall inside an ROI to be reported.",
-    "resetHint": "Clear every region of the current algorithm"
+    "resetHint": "Clear every region of the current algorithm",
+    "toolCrop": "Crop window",
+    "cropHint": "Drag on the frame to set a task-level crop window (only that area is sent to AI)",
+    "cropClear": "Clear crop",
+    "cropClearHint": "Clear the task-level crop window (restore full-frame inference)"
   },
   "actions": {
     "refresh": "Refresh",

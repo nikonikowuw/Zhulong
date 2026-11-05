@@ -192,4 +192,24 @@ func TestParseConfig(t *testing.T) {
 		assertError(t, err)
 		assertTrue(t, errors.Is(err, ErrDegenerateRect))
 	})
+
+	// ROI/MASK 与裁剪窗口共用 Rect 解码，但错误哨兵必须各归各位：
+	// 区域配置报错时出现 “crop must be ...” 会把排查方向直接带偏。
+	t.Run("malformed rect reports the generic shape error", func(t *testing.T) {
+		tests := []string{
+			`{"roi": [[0.1, 0.2, 0.3]]}`,
+			`{"mask": [[0.1, 0.2, 0.3, 0.4, 0.5]]}`,
+			`{"roi": [null]}`,
+		}
+		for _, raw := range tests {
+			_, err := ParseConfig(raw)
+			assertError(t, err)
+			if !errors.Is(err, ErrRectShape) {
+				t.Fatalf("expected ErrRectShape for %s, got %v", raw, err)
+			}
+			if errors.Is(err, ErrCropShape) {
+				t.Fatalf("region config must not report a crop-specific error: %v", err)
+			}
+		}
+	})
 }

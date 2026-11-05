@@ -59,6 +59,11 @@ type mockMediaStream struct {
 	closeOnce    sync.Once
 	closed       bool
 	mu           sync.Mutex
+	// view 模拟引擎的生效窗口语义（幂等、不倒退、可注入 NOT_READY）。
+	view         region.ViewState
+	viewCalls    int
+	viewNotReady bool
+	viewSeq      int64
 }
 
 func (s *mockMediaStream) Subscribe(ctx context.Context, options engine.SubscriptionOptions) (PacketSource, error) {
@@ -119,6 +124,49 @@ func (s *mockMediaStream) BrokerClients(ctx context.Context) ([]engine.BrokerCli
 
 func (s *mockMediaStream) SetPublishRate(ctx context.Context, fps uint32) error {
 	return nil
+}
+
+func (s *mockMediaStream) SetView(ctx context.Context, crop *region.Rect) (region.ViewState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.viewCalls++
+	if s.viewNotReady {
+		return region.ViewState{}, engine.ErrStreamNotReady
+	}
+	if s.closed {
+		return region.ViewState{}, engine.ErrNotFound
+	}
+	target := region.Identity()
+	if crop != nil {
+		target = *crop
+	}
+	// 与原生一致：同值幂等（不推进切换点）；从未配置过的流上清除也不推进边界
+	// （native set_view 的 was_configured 判据），否则每次 acquire 都会造一个假切换点。
+	if target == s.view.Rect {
+		return s.view, nil
+	}
+	if target.IsIdentity() && s.view.Since.IsZero() {
+		return region.ViewState{Rect: region.Identity()}, nil
+	}
+	s.viewSeq++
+	s.view = region.ViewState{
+		Rect:  target,
+		Since: time.UnixMilli(1_000 + s.viewSeq).UTC(),
+	}
+	return s.view, nil
+}
+
+func (s *mockMediaStream) GetView(ctx context.Context) (region.ViewState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return region.ViewState{}, engine.ErrNotFound
+	}
+	// 原生对「从未设置过」返回全幅 + since=0；零值 {0,0,0,0} 会把逆映射压成一个点。
+	if s.view.Since.IsZero() && s.view.Rect == (region.Rect{}) {
+		return region.ViewState{Rect: region.Identity()}, nil
+	}
+	return s.view, nil
 }
 
 func (s *mockMediaStream) Snapshot(ctx context.Context, options engine.SnapshotOptions) ([]engine.SnapshotImage, error) {

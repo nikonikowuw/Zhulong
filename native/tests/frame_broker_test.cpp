@@ -4,6 +4,7 @@
 #include "../src/algorithm/ipc/frame_broker.hpp"
 #include "../src/algorithm/ipc/broker_resource_lock.hpp"
 #include <Zhulong/frame.hpp>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -1837,6 +1838,140 @@ void test_frame_broker_nv12_vstride_normalization() {
     std::cout << "[PASS] test_frame_broker_nv12_vstride_normalization" << std::endl;
 }
 
+// =============================================================================
+// 视图窗口发布：窗口激活时必须物化到 slot（紧打包），绝不转发全幅 fd
+// =============================================================================
+void test_frame_broker_windowed_publish() {
+    const uint64_t stream_id = 1901;
+    FrameBroker broker;
+    BrokerOptions opt;
+    opt.slot_count = 4;
+    opt.slot_size = 1024 * 1024;
+    opt.max_in_flight_per_client = 2;
+    opt.lease_timeout = std::chrono::milliseconds(300);
+
+    std::string err;
+    assert(broker.start(stream_id, "/tmp", opt, &err));
+
+    UnixSocketClient client;
+    assert(client.connect(broker.socket_path(), &err));
+    HandshakeReq req{};
+    req.api_version = 1;
+    std::strncpy(req.client_name, "window_client", sizeof(req.client_name) - 1);
+    assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
+
+    IpcHeader resp_hdr{};
+    std::vector<uint8_t> resp_payload;
+    assert(client.recv_msg(resp_hdr, resp_payload, 1000));
+    assert(resp_hdr.msg_type == MSG_HANDSHAKE_RESP);
+    HandshakeResp resp{};
+    std::memcpy(&resp, resp_payload.data(), sizeof(resp));
+    ShmPool shm;
+    assert(shm.init(resp.shm_name, ShmMode::OPEN_READ_ONLY, 0, 0, &err));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // 源帧：320×240 NV12，stride 320，vstride 240（单块连续）。
+    const int src_w = 320;
+    const int src_h = 240;
+    std::vector<uint8_t> src(static_cast<size_t>(src_w) * src_h * 3 / 2, 0);
+    for (int r = 0; r < src_w * src_h; ++r) {
+        src[static_cast<size_t>(r)] = static_cast<uint8_t>(r & 0xFF);
+    }
+
+    HardwareFrame frame;
+    frame.width = src_w;
+    frame.height = src_h;
+    frame.stride = src_w;
+    frame.vstride = src_h;
+    frame.format = FRAME_FORMAT_NV12;
+    frame.pts = 4242;
+    frame.host_ptr = src.data();
+
+    const ViewWindow view{true, 32, 16, 128, 64};
+    CropCopyFn crop = [](const HardwareFrame& f, const ViewWindow& v, uint8_t* dst,
+                         size_t dst_size, int dst_stride, int /*dst_fd*/) {
+        const PackedLayout layout = packed_layout_for(v, f.format);
+        if (!layout.valid || dst == nullptr || dst_size < layout.bytes) {
+            return false;
+        }
+        const uint8_t* y = f.host_ptr;
+        for (int r = 0; r < v.h; ++r) {
+            std::memcpy(dst + static_cast<size_t>(r) * dst_stride,
+                        y + static_cast<size_t>(v.y + r) * f.stride + v.x, v.w);
+        }
+        const uint8_t* uv_src = y + static_cast<size_t>(f.stride) * f.vstride;
+        uint8_t* uv_dst = dst + layout.offsets[1];
+        for (int r = 0; r < v.h / 2; ++r) {
+            std::memcpy(uv_dst + static_cast<size_t>(r) * dst_stride,
+                        uv_src + static_cast<size_t>(v.y / 2 + r) * f.stride + v.x, v.w);
+        }
+        return true;
+    };
+
+    ipc::FrameMotionInfo motion{};
+    assert(broker.publish_frame(frame, view, motion, crop, 1700000000123LL));
+
+    IpcHeader dispatch_hdr{};
+    std::vector<uint8_t> dispatch_payload;
+    int dispatched_fd = -1;
+    assert(client.recv_msg_with_fd(dispatch_hdr, dispatch_payload, dispatched_fd, 1000));
+    assert(dispatch_hdr.msg_type == MSG_FRAME_DISPATCH);
+
+    FrameDispatchMsg dispatch{};
+    std::memcpy(&dispatch, dispatch_payload.data(), sizeof(dispatch));
+    assert(dispatch.width == view.w);
+    assert(dispatch.height == view.h);
+    assert(dispatch.format == ZHULONG_PIXEL_FORMAT_NV12);
+    assert(dispatch.strides[0] == 128);           // align_up(128, 64) = 128
+    assert(dispatch.offsets[1] == 128u * 64u);    // 紧打包：UV 紧随 Y
+    assert(dispatch.capture_time_ms == 1700000000123LL);
+    assert(dispatch.reserved_fd == -1);
+
+    // 有 dma-heap 的机器走 DMA 槽位（只会写一个目标）；否则走 shm 槽位。
+    const PackedLayout layout = packed_layout_for(view, FRAME_FORMAT_NV12);
+    void* dma_map = nullptr;
+    const uint8_t* slot = nullptr;
+    if (dispatched_fd >= 0) {
+        assert((dispatch.flags & FRAME_DISPATCH_FLAG_DMA_FD) != 0);
+        dma_map = ::mmap(nullptr, layout.bytes, PROT_READ, MAP_SHARED, dispatched_fd, 0);
+        assert(dma_map != MAP_FAILED);
+        slot = static_cast<const uint8_t*>(dma_map);
+    } else {
+        slot = shm.slot_read_ptr(dispatch.slot_index);
+    }
+    assert(slot != nullptr);
+
+    const uint8_t* src_y = src.data() + static_cast<size_t>(view.y) * src_w + view.x;
+    assert(slot[0] == src_y[0]);
+    assert(slot[1] == src_y[1]);
+    const uint8_t* row1 = slot + dispatch.strides[0];
+    assert(row1[0] == src_y[src_w]);
+    const uint8_t* uv_slot = slot + dispatch.offsets[1];
+    const uint8_t* uv_src = src.data() + static_cast<size_t>(src_w) * src_h +
+                            static_cast<size_t>(view.y / 2) * src_w + view.x;
+    assert(uv_slot[0] == uv_src[0]);
+
+    // 回调失败必须 fail_publish：绝不能把半张帧发给算法。
+    bool called = false;
+    CropCopyFn failing = [&called](const HardwareFrame&, const ViewWindow&, uint8_t*, size_t,
+                                   int, int) {
+        called = true;
+        return false;
+    };
+    assert(!broker.publish_frame(frame, view, motion, failing, 0));
+    assert(called);
+
+    if (dma_map != nullptr) {
+        ::munmap(dma_map, layout.bytes);
+    }
+    if (dispatched_fd >= 0) {
+        ::close(dispatched_fd);
+    }
+    client.disconnect();
+    broker.stop();
+    std::cout << "[PASS] test_frame_broker_windowed_publish" << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     // 子进程是「包形态」的桩算法可执行文件：自带算法类，argv 只有 broker 相关参数。
     const char* consumer_bin = (argc > 1) ? argv[1] : nullptr;
@@ -1863,6 +1998,7 @@ int main(int argc, char* argv[]) {
     test_frame_broker_options_validation();
     test_frame_broker_handshake_non_null_terminated_name();
     test_frame_broker_nv12_vstride_normalization();
+    test_frame_broker_windowed_publish();
     if (consumer_bin) {
         test_consumer_subprocess_e2e(consumer_bin);
         test_consumer_multi_broker_e2e(consumer_bin);

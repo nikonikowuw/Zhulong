@@ -50,11 +50,16 @@ export function rectFromCorners(
   )
 }
 
-/** 矩形是否达到最小边长；小于该值的拖拽视为误触。 */
-export function isLargeEnough(rect: Rect): boolean {
-  return (
-    rect[2] - rect[0] >= MIN_SIDE_LENGTH && rect[3] - rect[1] >= MIN_SIDE_LENGTH
-  )
+/**
+ * 矩形是否达到最小边长；小于该值的拖拽视为误触。
+ *
+ * `minSide` 可覆盖：任务级裁剪窗口的阈值更严（`MIN_CROP_SIDE`），且权威在 Go 侧。
+ */
+export function isLargeEnough(
+  rect: Rect,
+  minSide: number = MIN_SIDE_LENGTH
+): boolean {
+  return rect[2] - rect[0] >= minSide && rect[3] - rect[1] >= minSide
 }
 
 /** 整体平移，宽高保持不变。 */
@@ -84,7 +89,8 @@ export function moveRect(originRect: Rect, dx: number, dy: number): Rect {
 export function resizeRect(
   originRect: Rect,
   handle: DragHandle,
-  pos: Point
+  pos: Point,
+  minSide: number = MIN_SIDE_LENGTH
 ): Rect {
   const [x1, y1, x2, y2] = originRect
   let nx1 = x1
@@ -93,17 +99,17 @@ export function resizeRect(
   let ny2 = y2
 
   if (handle === 'tl') {
-    nx1 = Math.min(pos.x, x2 - MIN_SIDE_LENGTH)
-    ny1 = Math.min(pos.y, y2 - MIN_SIDE_LENGTH)
+    nx1 = Math.min(pos.x, x2 - minSide)
+    ny1 = Math.min(pos.y, y2 - minSide)
   } else if (handle === 'tr') {
-    nx2 = Math.max(pos.x, x1 + MIN_SIDE_LENGTH)
-    ny1 = Math.min(pos.y, y2 - MIN_SIDE_LENGTH)
+    nx2 = Math.max(pos.x, x1 + minSide)
+    ny1 = Math.min(pos.y, y2 - minSide)
   } else if (handle === 'bl') {
-    nx1 = Math.min(pos.x, x2 - MIN_SIDE_LENGTH)
-    ny2 = Math.max(pos.y, y1 + MIN_SIDE_LENGTH)
+    nx1 = Math.min(pos.x, x2 - minSide)
+    ny2 = Math.max(pos.y, y1 + minSide)
   } else {
-    nx2 = Math.max(pos.x, x1 + MIN_SIDE_LENGTH)
-    ny2 = Math.max(pos.y, y1 + MIN_SIDE_LENGTH)
+    nx2 = Math.max(pos.x, x1 + minSide)
+    ny2 = Math.max(pos.y, y1 + minSide)
   }
   return normalizeRect(nx1, ny1, nx2, ny2)
 }

@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  Crop,
   MousePointer,
   Pause,
   Play,
@@ -7,6 +8,7 @@ import {
   ShieldAlert,
   Sparkles,
   Undo2,
+  X,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -28,6 +30,10 @@ export interface RegionEditorToolbarProps {
   counts: { roi: number; mask: number }
   /** 是否允许修改区域（画面已出首帧 **且** 已选中算法）。 */
   isEditable: boolean
+  /** 是否允许编辑裁剪窗口（画面已出首帧即可，不要求已选算法）。 */
+  cropEditable: boolean
+  /** 是否已有裁剪窗口。 */
+  hasCrop: boolean
   /** 画面是否已出首帧。与 `isEditable` 分开：未就绪与未选算法是两种不同的只读原因。 */
   isStreamReady: boolean
   canUndo: boolean
@@ -35,6 +41,8 @@ export interface RegionEditorToolbarProps {
   onToolChange: (tool: RegionTool) => void
   onUndo: () => void
   onReset: () => void
+  /** 清空裁剪窗口。 */
+  onCropClear: () => void
   onTogglePause: () => void
 }
 
@@ -42,12 +50,15 @@ export function RegionEditorToolbar({
   tool,
   counts,
   isEditable,
+  cropEditable,
+  hasCrop,
   isStreamReady,
   canUndo,
   isPaused,
   onToolChange,
   onUndo,
   onReset,
+  onCropClear,
   onTogglePause,
 }: RegionEditorToolbarProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
@@ -164,6 +175,28 @@ export function RegionEditorToolbar({
 
         {renderToolButton('roi')}
         {renderToolButton('mask')}
+
+        <Button
+          type='button'
+          variant='ghost'
+          size='sm'
+          disabled={!cropEditable}
+          className={cn(
+            'h-7.5 gap-1.5 text-xs font-medium transition-all',
+            tool === 'crop'
+              ? 'bg-cyan-500/15 font-semibold text-cyan-700 shadow-xs ring-1 ring-cyan-500/30 dark:text-cyan-300'
+              : 'text-muted-foreground hover:text-cyan-600 dark:hover:text-cyan-400'
+          )}
+          title={
+            cropEditable
+              ? t('region.cropHint', '在画面上拖拽设置任务级裁剪窗口')
+              : t('region.streamNotLive', '画面未就绪（等待视频首帧）')
+          }
+          onClick={() => onToolChange(tool === 'crop' ? 'select' : 'crop')}
+        >
+          <Crop className='size-3.5' />
+          <span>{t('region.toolCrop', '裁剪窗口')}</span>
+        </Button>
       </div>
 
       <div className='flex items-center gap-2'>
@@ -217,7 +250,8 @@ export function RegionEditorToolbar({
           type='button'
           variant='ghost'
           size='sm'
-          disabled={!isEditable || !canUndo}
+          // 撤销范围覆盖 ROI/MASK 与 crop：只要任一可编辑就必须可用。
+          disabled={(!isEditable && !cropEditable) || !canUndo}
           className='h-8 gap-1.5 text-xs'
           title={t('region.undoHint', '撤销上一步操作')}
           onClick={onUndo}
@@ -237,6 +271,19 @@ export function RegionEditorToolbar({
         >
           <RotateCcw className='size-3.5' />
           <span>{t('region.reset', '重置')}</span>
+        </Button>
+
+        <Button
+          type='button'
+          variant='ghost'
+          size='sm'
+          disabled={!cropEditable || !hasCrop}
+          className='h-8 gap-1.5 text-xs text-muted-foreground hover:text-cyan-600 dark:hover:text-cyan-400'
+          title={t('region.cropClearHint', '清除任务级裁剪窗口（恢复全幅）')}
+          onClick={onCropClear}
+        >
+          <X className='size-3.5' />
+          <span>{t('region.cropClear', '清除裁剪')}</span>
         </Button>
       </div>
     </div>

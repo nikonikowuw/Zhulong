@@ -86,6 +86,7 @@ describe('useTaskComputeBudget', () => {
         cameraId: 'cam-01',
         name: 'Cam 1',
         enabled: true,
+        crop: null,
         algorithms: [
           {
             id: 'sub-1',
@@ -120,6 +121,7 @@ describe('useTaskComputeBudget', () => {
         cameraId: 'cam-02',
         name: 'Cam 2',
         enabled: true,
+        crop: null,
         algorithms: [
           {
             id: 'sub-3',
@@ -159,6 +161,7 @@ describe('useTaskComputeBudget', () => {
         cameraId: 'cam-01',
         name: '',
         enabled: true,
+        crop: null,
         algorithms: [
           {
             id: 'sub-heavy',
@@ -192,6 +195,7 @@ describe('useTaskComputeBudget', () => {
         cameraId: 'cam-01',
         name: '',
         enabled: true,
+        crop: null,
         algorithms: [
           {
             id: 'sub-over',
@@ -226,6 +230,7 @@ describe('useChannelTasks', () => {
         cameraId: 'cam-01',
         name: '',
         enabled: true,
+        crop: null,
         algorithms: [
           {
             id: 'sub-1',

@@ -24,6 +24,7 @@
 #include "nodes/capture/rtsp_input.hpp"
 #include "nodes/decode/decoder.hpp"
 #include "pipeline/bounded_queue.hpp"
+#include "common/view_window.hpp"
 #include "pipeline/preview_normalizer.hpp"
 #include "pipeline/audio_normalizer.hpp"
 #include "pipeline/subscription.hpp"
@@ -282,6 +283,60 @@ struct Stream {
 
     /** @brief 获取被隔离的订阅者回调异常累计次数 (无锁，relaxed 读取) */
     uint64_t callback_exception_count() const;
+
+    // =========================================================================
+    // AI 分析视图（任务级裁剪窗口）
+    // =========================================================================
+
+    /** @brief 一次发布用的视图快照：窗口 + 统一时间戳。 */
+    struct ViewSnapshot {
+        ViewWindow window{};        /**< active=false 表示本帧不裁剪 */
+        int64_t capture_time_ms{0}; /**< 单调推进的宿主 UTC 毫秒 */
+    };
+
+    /** @brief set_view 的结果；`ready == false` 表示尚无解码帧尺寸（NOT_READY）。 */
+    struct ViewApplyResult {
+        bool ready{false};
+        ViewRect rect{};
+        int64_t effective_since_ms{0};
+    };
+
+    /**
+     * @brief 为本次发布取视图快照。
+     *
+     * 几何在**本函数内**按 `frame_w/frame_h` 求解：与缓存尺寸不同即视为一次几何变更，
+     * 推进 `effective_since_ms`。`capture_time_ms` 与窗口在同一临界区内生成，
+     * 因此“像素用哪个窗口”与“结果用哪个 E”由同一个时间戳串起来。
+     *
+     * ⚠️ frame_w/frame_h 必须是**解码帧**尺寸，不是 RTSP 元数据尺寸。
+     */
+    ViewSnapshot view_snapshot(int frame_w, int frame_h);
+
+    /**
+     * @brief 设置或清除视图。`clear == true` 或整帧矩形等价于清除。
+     *
+     * 已有几何缓存时立即按缓存尺寸重算并推进 since；尚无解码帧尺寸时只登记配置并
+     * 返回 `ready=false`，由首个 view_snapshot 落地。
+     */
+    ViewApplyResult set_view(bool clear, const ViewRect &rect);
+
+    /** @brief 查询当前生效 E 与生效起点（未设置/未就绪时 rect=identity, since=0）。 */
+    void get_view(ViewRect *out_rect, int64_t *out_since_ms) const;
+
+private:
+    /** @brief 取一次单调递增的发布时钟（只增不减）。 */
+    int64_t advance_capture_locked();
+    /** @brief 推进视图生效起点；同时推进 last_capture，保证改窗后的第一帧落在新时间戳。 */
+    int64_t advance_since_locked();
+
+    bool view_configured_{false};
+    ViewRect view_rect_{};
+    ViewWindow view_window_{};
+    int view_frame_w_{0};
+    int view_frame_h_{0};
+    bool view_geometry_ready_{false};
+    int64_t view_since_ms_{0};
+    int64_t last_capture_ms_{0};
 };
 
 } // namespace zhulong

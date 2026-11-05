@@ -6,6 +6,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
+  MIN_CROP_SIDE,
   draftItems,
   withDraftItems,
   type Rect,
@@ -52,6 +53,26 @@ type DragMode =
       startY: number
       originRect: Rect
     }
+  | {
+      type: 'crop-creating'
+      startX: number
+      startY: number
+      currentX: number
+      currentY: number
+    }
+  | {
+      type: 'crop-moving'
+      startX: number
+      startY: number
+      originRect: Rect
+    }
+  | {
+      type: 'crop-resizing'
+      handle: DragHandle
+      startX: number
+      startY: number
+      originRect: Rect
+    }
   | null
 
 /**
@@ -69,6 +90,9 @@ export function useRegionDrag({
   onCreate,
   onSelect,
   onBeforeChange,
+  crop = null,
+  onCropChange,
+  cropMinSide = MIN_CROP_SIDE,
 }: UseRegionDragOptions): UseRegionDragResult {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [drag, setDragState] = useState<DragMode>(null)
@@ -87,6 +111,9 @@ export function useRegionDrag({
     onCreate,
     onSelect,
     onBeforeChange,
+    crop,
+    onCropChange,
+    cropMinSide,
   })
   useEffect(() => {
     latestRef.current = {
@@ -97,6 +124,9 @@ export function useRegionDrag({
       onCreate,
       onSelect,
       onBeforeChange,
+      crop,
+      onCropChange,
+      cropMinSide,
     }
   })
 
@@ -133,6 +163,18 @@ export function useRegionDrag({
       if (!pos) return
 
       const activeTool = latestRef.current.tool
+      if (activeTool === 'crop') {
+        // 绘制即替换：crop 只允许一个窗口，新拖拽直接覆盖旧窗口。
+        mutatedRef.current = false
+        setDrag({
+          type: 'crop-creating',
+          startX: pos.x,
+          startY: pos.y,
+          currentX: pos.x,
+          currentY: pos.y,
+        })
+        return
+      }
       if (activeTool === 'roi' || activeTool === 'mask') {
         mutatedRef.current = false
         setDrag({
@@ -210,6 +252,32 @@ export function useRegionDrag({
     [beginDrag]
   )
 
+  const startCropMove = useCallback(
+    (rect: Rect) => (e: ReactMouseEvent<HTMLDivElement>) => {
+      beginDrag(e, (pos) => ({
+        type: 'crop-moving',
+        startX: pos.x,
+        startY: pos.y,
+        originRect: rect,
+      }))
+    },
+    [beginDrag]
+  )
+
+  const startCropResize = useCallback(
+    (handle: DragHandle, rect: Rect) =>
+      (e: ReactMouseEvent<HTMLDivElement>) => {
+        beginDrag(e, (pos) => ({
+          type: 'crop-resizing',
+          handle,
+          startX: pos.x,
+          startY: pos.y,
+          originRect: rect,
+        }))
+      },
+    [beginDrag]
+  )
+
   const isDragging = drag !== null
 
   useEffect(() => {
@@ -221,8 +289,27 @@ export function useRegionDrag({
       const pos = getNormCoords(e)
       if (!pos) return
 
-      if (current.type === 'creating') {
+      if (current.type === 'creating' || current.type === 'crop-creating') {
         setDrag({ ...current, currentX: pos.x, currentY: pos.y })
+        return
+      }
+
+      if (current.type === 'crop-moving' || current.type === 'crop-resizing') {
+        const nextCrop =
+          current.type === 'crop-moving'
+            ? moveRect(
+                current.originRect,
+                pos.x - current.startX,
+                pos.y - current.startY
+              )
+            : resizeRect(
+                current.originRect,
+                current.handle,
+                pos,
+                latestRef.current.cropMinSide
+              )
+        beginMutation()
+        latestRef.current.onCropChange?.(nextCrop)
         return
       }
 
@@ -247,6 +334,21 @@ export function useRegionDrag({
 
     const handleMouseUp = () => {
       const current = dragRef.current
+      if (current?.type === 'crop-creating') {
+        const newCrop = rectFromCorners(
+          current.startX,
+          current.startY,
+          current.currentX,
+          current.currentY
+        )
+        if (isLargeEnough(newCrop, latestRef.current.cropMinSide)) {
+          beginMutation()
+          latestRef.current.onCropChange?.(newCrop)
+        }
+        mutatedRef.current = false
+        setDrag(null)
+        return
+      }
       if (current?.type === 'creating') {
         const newRect = rectFromCorners(
           current.startX,
@@ -277,16 +379,20 @@ export function useRegionDrag({
   }, [isDragging, beginMutation, getNormCoords, setDrag])
 
   const creatingPreview =
-    drag?.type === 'creating'
+    drag?.type === 'creating' || drag?.type === 'crop-creating'
       ? rectFromCorners(drag.startX, drag.startY, drag.currentX, drag.currentY)
       : null
+  const creatingCrop = drag?.type === 'crop-creating'
 
   return {
     containerRef,
     creatingPreview,
+    creatingCrop,
     getNormCoords,
     handleBackgroundMouseDown,
     startMove,
     startResize,
+    startCropMove,
+    startCropResize,
   }
 }

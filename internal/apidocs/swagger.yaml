@@ -2425,6 +2425,10 @@ definitions:
         type: string
       configJson:
         type: string
+      crop:
+        items:
+          type: number
+        type: array
       enabled:
         type: boolean
       id:
@@ -2500,6 +2504,11 @@ definitions:
         type: string
       createdAt:
         type: string
+      crop:
+        description: Crop 是任务级前置裁剪窗口；null 表示不裁剪。
+        items:
+          type: number
+        type: array
       enabled:
         type: boolean
       id:
@@ -2519,6 +2528,15 @@ definitions:
         type: string
       configJson:
         type: string
+      crop:
+        description: |-
+          Crop 是三态合并字段：省略=不改、null/[]/{}=清除、[x1,y1,x2,y2]=设置。
+
+          用 json.RawMessage 而不是 *region.Rect：后者无法区分“字段缺省”与“显式 null”，
+          而 PUT /tasks/:id 的合并语义必须区分这两者（缺省不得清空已保存的裁剪）。
+        items:
+          type: number
+        type: array
       enabled:
         type: boolean
       name:

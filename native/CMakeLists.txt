@@ -143,6 +143,7 @@ add_library(ZhulongEngine STATIC
     src/nodes/decode/ffmpeg_decoder.cpp
     src/nodes/decode/mpp_loader.cpp
     src/nodes/decode/mpp_decoder.cpp
+    src/nodes/preprocess/window_crop.cpp
     src/nodes/snapshot/jpeg_encoder.cpp
     src/nodes/snapshot/jpeg_encoder_backend.cpp
     src/nodes/snapshot/mpp_jpeg_encoder.cpp
@@ -597,6 +598,22 @@ if(BUILD_TESTING)
     target_link_libraries(ZhulongCpuVisionTests PRIVATE ZhulongAlgoRuntime)
     add_test(NAME ZhulongCpuVision COMMAND ZhulongCpuVisionTests)
     set_tests_properties(ZhulongCpuVision PROPERTIES TIMEOUT 10)
+
+    # AI 分析视图：纯几何 / 紧打包布局（无设备、无后端依赖）
+    add_executable(ZhulongViewWindowTests tests/view_window_test.cpp)
+    target_compile_features(ZhulongViewWindowTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongViewWindowTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(ZhulongViewWindowTests PRIVATE ZhulongEngine)
+    add_test(NAME ZhulongViewWindow COMMAND ZhulongViewWindowTests)
+    set_tests_properties(ZhulongViewWindow PROPERTIES TIMEOUT 10)
+
+    # 宿主侧窗口物化（CPU 行拷贝）：紧打包、vstride、独立 plane_strides、越界拒绝
+    add_executable(ZhulongWindowCropTests tests/window_crop_test.cpp)
+    target_compile_features(ZhulongWindowCropTests PRIVATE cxx_std_17)
+    target_include_directories(ZhulongWindowCropTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(ZhulongWindowCropTests PRIVATE ZhulongEngine)
+    add_test(NAME ZhulongWindowCrop COMMAND ZhulongWindowCropTests)
+    set_tests_properties(ZhulongWindowCrop PROPERTIES TIMEOUT 15)
 
     # FrameBroker 跨进程共享内存与租约集成测试
     add_executable(ZhulongFrameBrokerTests tests/frame_broker_test.cpp)

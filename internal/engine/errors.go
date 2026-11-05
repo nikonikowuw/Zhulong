@@ -29,6 +29,7 @@ const (
 	StatusBufferTooSmall      StatusCode = -14
 	StatusHardwareUnavailable StatusCode = -15
 	StatusCapacityExceeded    StatusCode = -16
+	StatusNotReady            StatusCode = -17
 	StatusInternal            StatusCode = -99
 
 	// Go 桥接特有状态码
@@ -62,6 +63,7 @@ var statusMessages = map[StatusCode]string{
 	StatusBufferTooSmall:      "buffer too small",
 	StatusHardwareUnavailable: "hardware decoder is unavailable and software fallback is disabled",
 	StatusCapacityExceeded:    "maximum concurrent decode sessions exceeded",
+	StatusNotReady:            "resource is not ready yet",
 	StatusInternal:            "internal engine error",
 
 	StatusClosed:              "engine or resource is closed",
@@ -152,6 +154,7 @@ var (
 	ErrBufferTooSmall      = sentinel(StatusBufferTooSmall)
 	ErrHardwareUnavailable = sentinel(StatusHardwareUnavailable)
 	ErrCapacityExceeded    = sentinel(StatusCapacityExceeded)
+	ErrStreamNotReady      = sentinel(StatusNotReady)
 	ErrInternal            = sentinel(StatusInternal)
 )
 

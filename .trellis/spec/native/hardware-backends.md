@@ -151,6 +151,22 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 
 ---
 
+### 3.4 宿主侧窗口物化（AI 分析视图）
+
+- **默认 CPU 行拷贝**（`src/nodes/preprocess/window_crop.cpp`）：按平面逐行 `memcpy` 到紧打包布局
+  （`stride = align_up(w, 64)`），NV12 的 UV 紧跟在 Y 之后。1080p 半宽半高约 0.8 MB/帧，
+  目标帧率下 CPU 开销可接受；**RGA 同格式拷贝是可选第二刀**，不是正确性前提。
+- **源可能是 dmabuf**：先用 `platform::ScopedFdSync(fd, kDmaSyncRead)` 包住整个读取窗口；
+  目标是 DMA 槽位时再对目标 fd 加 `kDmaSyncWrite`。两者都是 **借用的 fd**，绝不 close。
+- **绝不假设平面连续**：优先用 `host_planes[]` + `plane_strides[]`；只有 `host_ptr` 时才按
+  `y_plane_size()` 定位 NV12 的 UV，`vstride > height` 必须按 `stride * vstride` 算偏移。
+- **失败必须整体失败**：几何越界、格式不支持、目标容量不足、回调失败一律让 `publish_frame` 走
+  `fail_publish`，绝不发出半张帧。
+- 与算法侧 `crop_scale` 的区别：宿主窗口**不做硬件对齐外扩**，几何完全由归一化矩形 + 解码帧尺寸决定；
+  算法侧的前处理仍按自己的 stride 规则处理收到的紧打包画面。
+
+---
+
 ## 4. 全链路 DMA-BUF 硬件零拷贝流转契约 (Zero-Copy Pipeline)
 
 *覆盖链路：解码 ➔ FrameBroker ➔ SCM_RIGHTS ➔ RGA 视觉前处理 ➔ RKNPU2 零拷贝绑定。*

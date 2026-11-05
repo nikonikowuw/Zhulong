@@ -16,8 +16,9 @@
 
 namespace zhulong {
 
-FramePublisher::FramePublisher(std::shared_ptr<Stream> stream, ipc::FrameBroker* broker)
-    : stream_(std::move(stream)), broker_(broker) {}
+FramePublisher::FramePublisher(std::shared_ptr<Stream> stream, ipc::FrameBroker* broker,
+                               CropCopyFn crop)
+    : stream_(std::move(stream)), broker_(broker), crop_(std::move(crop)) {}
 
 FramePublisher::~FramePublisher() {
     stop();
@@ -141,17 +142,30 @@ void FramePublisher::publish_loop() noexcept {
         }
 
         if (broker_ && broker_->is_running()) {
+            // 视图快照必须是本帧的第一件事：窗口几何、capture_time 与后续像素/结果
+            // 由同一次加锁串起来（边界时钟的不变量）。
+            const auto snapshot = stream_->view_snapshot(static_cast<int>(frame->width),
+                                                         static_cast<int>(frame->height));
+            if (snapshot.window.active != last_window_.active ||
+                snapshot.window.x != last_window_.x || snapshot.window.y != last_window_.y ||
+                snapshot.window.w != last_window_.w || snapshot.window.h != last_window_.h) {
+                // 换窗后网格内容全变：重置底图，避免把窗口切换误判成一次 anti-flash。
+                motion_detector_.reset();
+                last_window_ = snapshot.window;
+            }
+
             // 运动元数据只是「省算力」的提示，不是正确性前提：检测失败一律保持
             // FrameMotionInfo 的默认值（has_motion = 1）走全帧推理（fail-open），
             // 绝不让一次像素读取失败变成漏检。
             MotionResult motion_res{};
             ipc::FrameMotionInfo motion_info{};
-            if (motion_detector_.detect(*frame, motion_res)) {
+            if (motion_detector_.detect(*frame, snapshot.window, motion_res)) {
                 motion_info.has_motion = motion_res.has_motion ? 1U : 0U;
                 motion_info.motion_box_count = motion_res.box_count;
                 std::copy_n(motion_res.boxes, motion_res.box_count, motion_info.motion_boxes);
             }
-            if (!broker_->publish_frame(*frame, motion_info)) {
+            if (!broker_->publish_frame(*frame, snapshot.window, motion_info, crop_,
+                                        snapshot.capture_time_ms)) {
                 if (now - last_drop_warn > std::chrono::seconds(1)) {
                     ZL_LOGW(stream_->id, "pipeline.frame_publisher", "frame_publish_failed");
                     last_drop_warn = now;

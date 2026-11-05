@@ -22,6 +22,7 @@
 #pragma once
 
 #include "algorithm/ipc/ipc_protocol.hpp"
+#include "common/view_window.hpp"
 
 #include <Zhulong/frame.hpp>
 #include <cstddef>
@@ -96,7 +97,7 @@ public:
     void reset() noexcept;
 
     /**
-     * @brief 对输入硬件帧执行运动检测
+     * @brief 对输入硬件帧执行运动检测（全幅，兼容既有调用点）
      *
      * @param frame 输入解码帧（NV12 或 YUV420P）
      * @param[out] out_result 检测结果
@@ -104,8 +105,16 @@ public:
      */
     bool detect(const HardwareFrame& frame, MotionResult& out_result);
 
+    /**
+     * @brief 在 AI 分析视图窗口内执行运动检测
+     *
+     * `view.active == false` 时等价于全幅检测。窗口越界/尺寸过小时返回 false（fail-open）。
+     * 网格仍是固定的 320×180，只是采样源变成窗口内部——窗口越小，单点覆盖的源像素越少。
+     */
+    bool detect(const HardwareFrame& frame, const ViewWindow& view, MotionResult& out_result);
+
 private:
-    bool sample_y_plane(const HardwareFrame& frame, uint8_t* out_grid);
+    bool sample_y_plane(const HardwareFrame& frame, const ViewWindow& view, uint8_t* out_grid);
 
     /** @brief 宏块连通域（聚类中间结果，栈上数组承载，不进堆） */
     struct Component {

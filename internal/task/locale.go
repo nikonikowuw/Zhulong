@@ -56,6 +56,11 @@ func init() {
 			"zh-Hans": "分析任务配置不符合算法参数规范",
 			"zh-Hant": "分析任務設定不符合演算法參數規範",
 		},
+		"INVALID_CROP_CONFIG": {
+			"en":      "Invalid crop region configuration",
+			"zh-Hans": "无效的裁剪区域配置",
+			"zh-Hant": "無效的裁剪區域設定",
+		},
 		"INVALID_REGION_CONFIG": {
 			"en":      "Invalid region configuration",
 			"zh-Hans": "无效的区域策略配置",

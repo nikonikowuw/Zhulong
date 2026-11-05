@@ -26,6 +26,12 @@ export interface ChannelTaskRegionViewportProps {
    * 产出的坐标没有任何参考意义。画面不可用时一律只读（PRD R5 / AC8）。
    */
   canEditRegion: boolean
+  /** 是否允许编辑任务级裁剪窗口：只要画面出首帧即可，**不要求已选算法**。 */
+  canEditCrop: boolean
+  /** 是否已有裁剪窗口（决定“清除裁剪”按钮可用性）。 */
+  hasCrop: boolean
+  /** 清空裁剪窗口（自带撤销快照）。 */
+  onClearCrop: () => void
 }
 
 /**
@@ -45,6 +51,9 @@ export function ChannelTaskRegionViewport({
   regionEditor,
   showEditor,
   canEditRegion,
+  canEditCrop,
+  hasCrop,
+  onClearCrop,
 }: ChannelTaskRegionViewportProps): React.JSX.Element {
   const { t } = useTranslation('tasks')
 
@@ -60,12 +69,15 @@ export function ChannelTaskRegionViewport({
         tool={regionEditor.tool}
         counts={regionEditor.counts}
         isEditable={canEditRegion}
+        cropEditable={canEditCrop}
+        hasCrop={hasCrop}
         isStreamReady={surfaceState === 'live'}
         canUndo={regionEditor.canUndo}
         isPaused={isPaused}
         onToolChange={regionEditor.setTool}
         onUndo={regionEditor.undo}
         onReset={handleReset}
+        onCropClear={onClearCrop}
         onTogglePause={onTogglePause}
       />
 
@@ -80,11 +92,16 @@ export function ChannelTaskRegionViewport({
                 tool={regionEditor.tool}
                 draft={regionEditor.draft}
                 selected={regionEditor.selected}
-                disabled={!canEditRegion}
+                // 门禁按工具分流：crop 不依赖「已选算法」，ROI/MASK 依赖。
+                disabled={
+                  regionEditor.tool === 'crop' ? !canEditCrop : !canEditRegion
+                }
                 onChange={regionEditor.changeDraft}
                 onCreate={regionEditor.createRect}
                 onSelect={regionEditor.select}
                 onBeforeChange={regionEditor.snapshot}
+                crop={regionEditor.crop}
+                onCropChange={regionEditor.setCrop}
               />
             )}
           />
@@ -138,21 +155,21 @@ export function ChannelTaskRegionViewport({
           </div>
         )}
 
+        {/*
+          没有选中算法时不再用全屏遮罩挡住画布：裁剪窗口属于任务、不属于算法，
+          仍然可以查看/编辑。提示改成不拦截指针的浮动条。
+        */}
         {!showEditor && (
-          <div className='absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/80 p-6 text-center text-white backdrop-blur-[2px]'>
-            <ShieldAlert className='mb-1 size-8 text-muted-foreground' />
-            <p className='text-sm font-semibold'>
-              {t(
-                'dialog.selectAlgoToConfigure',
-                '在右侧勾选算法以开始配置采样率与运行参数'
-              )}
-            </p>
-            <p className='max-w-sm text-xs text-muted-foreground'>
-              {t(
-                'dialog.selectAlgoToConfigureDesc',
-                '勾选算法后，可在此画面上直接拖拽圈定 ROI 识别区与 MASK 屏蔽区。'
-              )}
-            </p>
+          <div className='pointer-events-none absolute inset-x-0 top-3 flex justify-center p-1'>
+            <div className='flex items-center gap-1.5 rounded-md bg-black/80 px-3 py-1.5 text-xs text-white shadow-md backdrop-blur-sm'>
+              <ShieldAlert className='size-3.5 text-amber-400' />
+              <span>
+                {t(
+                  'dialog.selectAlgoToConfigure',
+                  '在右侧勾选算法以配置 ROI / MASK；裁剪窗口可独立编辑'
+                )}
+              </span>
+            </div>
           </div>
         )}
       </div>

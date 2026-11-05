@@ -21,6 +21,9 @@
 #include "pipeline/stream.hpp"
 #include "common/log.hpp"
 
+#include <algorithm>
+#include <chrono>
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/error.h>
@@ -665,5 +668,114 @@ void Stream::capture() noexcept {
     std::lock_guard<std::mutex> lock(mutex);
     status = {Zhulong_STREAM_FAILED, error == Zhulong_OK ? Zhulong_ERR_CANCELLED : error};
 }
+
+namespace {
+
+/** @brief 宿主 UTC 毫秒时钟（单调性由 Stream 的 last_capture 提升保证）。 */
+int64_t system_now_ms() noexcept {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+} // namespace
+
+int64_t Stream::advance_capture_locked() {
+    last_capture_ms_ = std::max(system_now_ms(), last_capture_ms_);
+    return last_capture_ms_;
+}
+
+int64_t Stream::advance_since_locked() {
+    // +1 让“同一毫秒内改窗”也能把旧帧与新帧分到两侧；同时推进 last_capture，
+    // 否则改窗后的第一帧仍可能拿到 < since 的时间戳。
+    last_capture_ms_ = std::max(system_now_ms(), last_capture_ms_ + 1);
+    view_since_ms_ = last_capture_ms_;
+    return view_since_ms_;
+}
+
+Stream::ViewSnapshot Stream::view_snapshot(int frame_w, int frame_h) {
+    std::lock_guard<std::mutex> lock(mutex);
+    ViewSnapshot snapshot{};
+
+    if (view_configured_) {
+        const bool size_changed = !view_geometry_ready_ || frame_w != view_frame_w_ || frame_h != view_frame_h_;
+        if (size_changed) {
+            view_window_ = compute_view_window(view_rect_, frame_w, frame_h);
+            view_frame_w_ = frame_w;
+            view_frame_h_ = frame_h;
+            view_geometry_ready_ = true;
+            advance_since_locked();
+        }
+        snapshot.window = view_window_;
+    }
+
+    snapshot.capture_time_ms = advance_capture_locked();
+    return snapshot;
+}
+
+Stream::ViewApplyResult Stream::set_view(bool clear, const ViewRect &rect) {
+    std::lock_guard<std::mutex> lock(mutex);
+    ViewApplyResult result{};
+
+    if (clear || view_rect_is_full_frame(rect)) {
+        // 幂等：从未配置过的流上重复清除不得推进边界，否则每次 acquire 都会制造
+        // 一个假的“窗口切换点”，把在途帧误判成上一代。
+        const bool was_configured = view_configured_;
+        view_configured_ = false;
+        view_rect_ = identity_view_rect();
+        view_window_ = ViewWindow{};
+        result.ready = true;
+        result.rect = identity_view_rect();
+        result.effective_since_ms = was_configured ? advance_since_locked() : view_since_ms_;
+        return result;
+    }
+
+    const bool same = view_configured_ &&
+                      view_rect_.x1 == rect.x1 && view_rect_.y1 == rect.y1 &&
+                      view_rect_.x2 == rect.x2 && view_rect_.y2 == rect.y2;
+    if (same) {
+        result.ready = view_geometry_ready_;
+        result.rect = view_geometry_ready_
+                          ? window_to_view_rect(view_window_, view_frame_w_, view_frame_h_)
+                          : identity_view_rect();
+        result.effective_since_ms = view_geometry_ready_ ? view_since_ms_ : 0;
+        return result;
+    }
+
+    view_configured_ = true;
+    view_rect_ = rect;
+    if (view_geometry_ready_ && view_frame_w_ >= 2 && view_frame_h_ >= 2) {
+        view_window_ = compute_view_window(view_rect_, view_frame_w_, view_frame_h_);
+        result.ready = true;
+        result.rect = window_to_view_rect(view_window_, view_frame_w_, view_frame_h_);
+        result.effective_since_ms = advance_since_locked();
+        return result;
+    }
+
+    // 尚无解码帧尺寸：配置登记成功，但视图暂不生效（NOT_READY）。
+    view_window_ = ViewWindow{};
+    result.ready = false;
+    result.rect = identity_view_rect();
+    result.effective_since_ms = 0;
+    return result;
+}
+
+void Stream::get_view(ViewRect *out_rect, int64_t *out_since_ms) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    const bool effective = view_configured_ && view_geometry_ready_;
+    if (out_rect != nullptr) {
+        *out_rect = effective ? window_to_view_rect(view_window_, view_frame_w_, view_frame_h_)
+                              : identity_view_rect();
+    }
+    if (out_since_ms != nullptr) {
+        if (effective) {
+            *out_since_ms = view_since_ms_;
+        } else {
+            // 未配置 → 沿用最后一次清除的边界；已配置但未就绪 → 0（与 NOT_READY 契约一致）。
+            *out_since_ms = view_configured_ ? 0 : view_since_ms_;
+        }
+    }
+}
+
 
 } // namespace zhulong

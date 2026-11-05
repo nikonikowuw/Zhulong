@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"sync"
 
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/region"
@@ -40,12 +42,26 @@ type TaskChangeListener interface {
 	OnTaskChanged(ctx context.Context, algorithmID string)
 }
 
+// TaskSavedListener 按**任务/相机**粒度接收保存通知，与按算法的 TaskChangeListener 正交。
+//
+// 存在的理由：只改 crop 时不得重启算法子进程，但仍要把新视图应用给正在跑的 AI 流。
+// 回调发生在写库成功之后；实现方必须自行脱钩请求 ctx（见 notifyTaskSaved）。
+type TaskSavedListener interface {
+	OnTaskSaved(ctx context.Context, taskID, cameraID string)
+}
+
 // Service manages the business lifecycle of video analysis tasks.
 type Service struct {
 	store        *Store
 	algoProvider AlgorithmSpecProvider
 	listeners    []TaskChangeListener
 	logger       *zap.Logger
+
+	// savedMu 保护 savedListener：它与构造期注入的 listeners 不同，是可运行时替换的
+	// 单槽位（与 camera.StreamHub.SetTaskCropProvider 同一口径）。不加锁就是一条
+	// 只有真并发调用才会暴露的 data race，而 -race 不会替我们捉住想象中的调用者。
+	savedMu       sync.RWMutex
+	savedListener TaskSavedListener
 }
 
 // NewService instantiates a new Task Service.
@@ -65,6 +81,26 @@ func NewService(
 		listeners:    listeners,
 		logger:       logger,
 	}
+}
+
+// SetTaskSavedListener 注册按任务粒度的保存通知；传 nil 可取消。
+func (s *Service) SetTaskSavedListener(listener TaskSavedListener) {
+	s.savedMu.Lock()
+	defer s.savedMu.Unlock()
+	s.savedListener = listener
+}
+
+// notifyTaskSaved 在写库成功后广播保存事件。
+//
+// ⚠️ 必须脱钩请求 ctx：写库已经提交，客户端断连导致的取消不应让“应用新 crop”静默失败。
+func (s *Service) notifyTaskSaved(ctx context.Context, taskID, cameraID string) {
+	s.savedMu.RLock()
+	listener := s.savedListener
+	s.savedMu.RUnlock()
+	if listener == nil {
+		return
+	}
+	listener.OnTaskSaved(context.WithoutCancel(ctx), taskID, cameraID)
 }
 
 // notifyTaskChanged 通知单个算法；空 ID 已在 notifyTasksChanged 里过滤。
@@ -101,6 +137,14 @@ func (s *Service) prepareTask(ctx context.Context, t *Task) error {
 	if t.CameraID == "" {
 		return apperr.Invalid("VALIDATION_FAILED", "cameraId is required", nil)
 	}
+	// crop 的校验与归一化收敛在这里：创建与按相机 upsert 都走 prepareTask，
+	// 存储层的 null/缺省/[]/{} ≡ 不裁剪，整帧也归一化为 '{}'。
+	crop, err := region.ParseCrop(t.CropJSON)
+	if err != nil {
+		return apperr.Invalid("INVALID_CROP_CONFIG", fmt.Sprintf("invalid crop config: %v", err), err)
+	}
+	// ParseCrop 内部已做 ValidateCrop（有限、范围、非退化、MinCropSide），此处不再重复。
+	t.CropJSON = serializeCrop(crop)
 	return s.normalizeAndValidateAlgorithms(ctx, t.Algorithms)
 }
 
@@ -254,6 +298,8 @@ func (s *Service) CreateTask(ctx context.Context, t *Task) error {
 		zap.Int("algorithm_count", len(t.Algorithms)),
 	)
 
+	// 先应用视图，再重启算法子树：停止旧视图不必要地晚于新算法进程启动。
+	s.notifyTaskSaved(ctx, t.ID, t.CameraID)
 	s.notifyTasksChanged(ctx, collectAlgorithmIDs(t))
 	return nil
 }
@@ -272,7 +318,14 @@ func (s *Service) UpdateTask(ctx context.Context, id string, req *UpdateTaskRequ
 		return nil, err
 	}
 
+	// 深拷贝必须在 ApplyTo 之前：ApplyTo 原地改 Algorithms，改完就没有旧值可比较了。
+	before := cloneTask(task)
 	previousIDs := collectAlgorithmIDs(task)
+
+	// 先校验后改内存：ApplyCrop 可能返回 INVALID_CROP_CONFIG，此时 task 是本地副本，不落库。
+	if err := req.ApplyCrop(task); err != nil {
+		return nil, err
+	}
 	req.ApplyTo(task)
 
 	if err := s.normalizeAndValidateAlgorithms(ctx, task.Algorithms); err != nil {
@@ -288,7 +341,11 @@ func (s *Service) UpdateTask(ctx context.Context, id string, req *UpdateTaskRequ
 		zap.Int("algorithm_count", len(task.Algorithms)),
 	)
 
-	s.notifyTasksChanged(ctx, append(previousIDs, collectAlgorithmIDs(task)...))
+	s.notifyTaskSaved(ctx, task.ID, task.CameraID)
+	// 仅 crop 变化 → 不重启算法子进程；其余任何语义变化保持现有行为。
+	if !sameTaskSemantics(before, task) {
+		s.notifyTasksChanged(ctx, append(previousIDs, collectAlgorithmIDs(task)...))
+	}
 	return task, nil
 }
 
@@ -298,8 +355,17 @@ func (s *Service) SaveTask(ctx context.Context, t *Task) error {
 		return err
 	}
 
+	// 读旧值失败不阻断保存，但必须留痕：拿不到旧值时下面的比较只能按“新任务”处理
+	// （即多发一次重启）。排查“保存一下就重启”时这行日志是关键证据。
+	var existing *Task
+	if found, loadErr := s.store.GetTaskByCamera(ctx, t.CameraID); loadErr != nil {
+		s.logger.Debug("load task before save failed; treating as new task",
+			zap.String("camera_id", t.CameraID), zap.Error(loadErr))
+	} else if found != nil {
+		existing = found
+	}
 	var previousIDs []string
-	if existing, err := s.store.GetTaskByCamera(ctx, t.CameraID); err == nil && existing != nil {
+	if existing != nil {
 		previousIDs = collectAlgorithmIDs(existing)
 	}
 
@@ -307,7 +373,10 @@ func (s *Service) SaveTask(ctx context.Context, t *Task) error {
 		return mapWriteError(err, "TASK_SAVE_FAILED", "failed to save analysis task")
 	}
 
-	s.notifyTasksChanged(ctx, append(previousIDs, collectAlgorithmIDs(t)...))
+	s.notifyTaskSaved(ctx, t.ID, t.CameraID)
+	if existing == nil || !sameTaskSemantics(existing, t) {
+		s.notifyTasksChanged(ctx, append(previousIDs, collectAlgorithmIDs(t)...))
+	}
 	return nil
 }
 
@@ -333,13 +402,19 @@ func (s *Service) DeleteTask(ctx context.Context, id string) error {
 		zap.Int("algorithms", len(task.Algorithms)),
 	)
 
+	s.notifyTaskSaved(ctx, id, task.CameraID)
 	s.notifyTasksChanged(ctx, collectAlgorithmIDs(task))
 	return nil
 }
 
 // GetTask returns a task by its ID.
 func (s *Service) GetTask(ctx context.Context, id string) (*Task, error) {
-	return s.loadTask(ctx, id)
+	task, err := s.loadTask(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	s.warnInvalidCrop(task)
+	return task, nil
 }
 
 // GetTaskByCamera returns a task by its camera ID.
@@ -348,28 +423,112 @@ func (s *Service) GetTaskByCamera(ctx context.Context, cameraID string) (*Task, 
 	if err != nil {
 		return nil, mapTaskError(err)
 	}
+	s.warnInvalidCrop(task)
 	return task, nil
 }
 
 // ListTasks returns tasks matching optional camera or algorithm filters.
 // cameraID 优先；两个过滤条件同时给出时 algorithmID 被忽略（单摄像头单任务的模型下没有交集语义）。
 func (s *Service) ListTasks(ctx context.Context, cameraID, algorithmID string) ([]Task, error) {
+	var (
+		tasks []Task
+		err   error
+	)
 	switch {
 	case cameraID != "":
-		return s.store.ListTasksByCamera(ctx, cameraID)
+		tasks, err = s.store.ListTasksByCamera(ctx, cameraID)
 	case algorithmID != "":
-		return s.store.ListTasksByAlgorithm(ctx, algorithmID)
+		tasks, err = s.store.ListTasksByAlgorithm(ctx, algorithmID)
+	default:
+		tasks, err = s.store.ListTasks(ctx)
 	}
-	return s.store.ListTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range tasks {
+		s.warnInvalidCrop(&tasks[i])
+	}
+	return tasks, nil
+}
+
+// warnInvalidCrop 对“库里存在但解析失败”的 crop 配置记一次可定位的告警。
+//
+// 写入路径会拒绝非法配置，因此这只可能来自手工改库/降级回滚；读路径不得因此拒绝服务。
+func (s *Service) warnInvalidCrop(task *Task) {
+	if task == nil {
+		return
+	}
+	if _, err := region.ParseCrop(task.CropJSON); err != nil {
+		s.logger.Warn("analysis task carries invalid crop config",
+			zap.String("task_id", task.ID),
+			zap.String("camera_id", task.CameraID),
+			zap.Error(err))
+	}
 }
 
 // collectAlgorithmIDs 汇总给定任务下的所有算法 ID。
 func collectAlgorithmIDs(tasks ...*Task) []string {
 	ids := make([]string, 0, len(tasks))
 	for _, t := range tasks {
+		if t == nil {
+			continue
+		}
 		for _, sub := range t.Algorithms {
 			ids = append(ids, sub.AlgorithmID)
 		}
 	}
 	return ids
+}
+
+// cloneTask 深拷贝任务聚合并把 Algorithms 切片与源对象隔离。
+// TaskAlgorithm 只含标量与字符串，逐值拷贝即可；CropJSON 是 string，天然独立。
+func cloneTask(t *Task) *Task {
+	if t == nil {
+		return nil
+	}
+	clone := *t
+	clone.Algorithms = append([]TaskAlgorithm(nil), t.Algorithms...)
+	return &clone
+}
+
+// sameTaskSemantics 比较“会进算法子进程的那部分任务语义”，用于决定是否需要重启算法子进程。
+//
+// 只比较 CameraID / Enabled / 算法集合（AlgorithmID、Enabled、SampleFPS、ConfigJSON、
+// RegionConfigJSON、ScheduleJSON）。刻意忽略：
+//   - CropJSON：只换视图，不换算法输入（走 TaskSavedListener 而不是重启）；
+//   - Name：纯展示字段，从不外发给算法包，改名重启只是白白打断流；
+//   - Task.ID / 子项 ID / CreatedAt / UpdatedAt：簿记字段，重建子项会换 ID 但语义不变。
+//
+// 保守方向是“不确定就当变了”：误重启只损失一次重连，漏重启会让配置静默不生效。
+// 新增 TaskAlgorithm 字段时必须同步增到 sameAlgorithmSet 的比较列表里，否则新配置改完不生效。
+func sameTaskSemantics(a, b *Task) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.CameraID != b.CameraID || a.Enabled != b.Enabled {
+		return false
+	}
+	return sameAlgorithmSet(a.Algorithms, b.Algorithms)
+}
+
+func sameAlgorithmSet(a, b []TaskAlgorithm) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	as := append([]TaskAlgorithm(nil), a...)
+	bs := append([]TaskAlgorithm(nil), b...)
+	sort.Slice(as, func(i, j int) bool { return as[i].AlgorithmID < as[j].AlgorithmID })
+	sort.Slice(bs, func(i, j int) bool { return bs[i].AlgorithmID < bs[j].AlgorithmID })
+	for i := range as {
+		left, right := as[i], bs[i]
+		if left.AlgorithmID != right.AlgorithmID ||
+			left.Enabled != right.Enabled ||
+			left.SampleFPS != right.SampleFPS ||
+			left.ConfigJSON != right.ConfigJSON ||
+			left.RegionConfigJSON != right.RegionConfigJSON ||
+			left.ScheduleJSON != right.ScheduleJSON {
+			return false
+		}
+	}
+	return true
 }

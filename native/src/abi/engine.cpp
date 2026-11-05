@@ -348,6 +348,82 @@ extern "C" Zhulong_status_t Zhulong_stream_set_publish_rate(Zhulong_engine_h eng
     });
 }
 
+namespace {
+
+/** @brief C ABI 视图矩形 -> 内部 ViewRect。 */
+zhulong::ViewRect to_view_rect(const Zhulong_view_rect &rect) {
+    return zhulong::ViewRect{rect.x1, rect.y1, rect.x2, rect.y2};
+}
+
+/** @brief 内部 ViewRect -> C ABI 视图矩形。 */
+Zhulong_view_rect from_view_rect(const zhulong::ViewRect &rect) {
+    return Zhulong_view_rect{rect.x1, rect.y1, rect.x2, rect.y2};
+}
+
+/**
+ * @brief 结构校验：有限、严格归一化、非退化。
+ *
+ * ⚠️ 刻意不校验最小边长：Go 侧 MinCropSide=0.02 过 float32 会舍入成 0.0199999996，
+ *    在这里比较阈值会把边界值误拒。阈值权威只在宿主 Go 层。
+ */
+bool valid_view_rect(const Zhulong_view_rect &rect) {
+    if (!std::isfinite(rect.x1) || !std::isfinite(rect.y1) ||
+        !std::isfinite(rect.x2) || !std::isfinite(rect.y2)) {
+        return false;
+    }
+    if (rect.x1 < 0.0f || rect.y1 < 0.0f || rect.x2 > 1.0f || rect.y2 > 1.0f) {
+        return false;
+    }
+    return rect.x1 < rect.x2 && rect.y1 < rect.y2;
+}
+
+} // namespace
+
+/**
+ * @brief 设置 AI 流分析视图（v6）
+ *
+ * `view == NULL` 或整帧等价于清除；清除永远成功。非空窗口在还没有解码帧尺寸时
+ * 返回 Zhulong_ERR_NOT_READY（配置已登记，首个解码帧后由引擎落地）。
+ */
+extern "C" Zhulong_status_t Zhulong_stream_set_view(Zhulong_engine_h engine,
+    Zhulong_stream_id stream, const Zhulong_view_rect *view,
+    Zhulong_view_state *out_effective) {
+    if (out_effective) *out_effective = {};
+    return boundary([&] {
+        require(engine && stream);
+
+        bool clear = (view == nullptr);
+        zhulong::ViewRect rect = zhulong::identity_view_rect();
+        if (!clear) {
+            require(valid_view_rect(*view));
+            rect = to_view_rect(*view);
+            clear = zhulong::view_rect_is_full_frame(rect);
+        }
+
+        zhulong::ViewRect effective = zhulong::identity_view_rect();
+        int64_t since = 0;
+        engine->implementation.set_view(stream, clear, rect, &effective, &since);
+        if (out_effective) {
+            out_effective->rect = from_view_rect(effective);
+            out_effective->effective_since_ms = since;
+        }
+    });
+}
+
+/** @brief 查询 AI 流当前生效 E 与生效起点（v6，只读，不 acquire）。 */
+extern "C" Zhulong_status_t Zhulong_stream_get_view(Zhulong_engine_h engine,
+    Zhulong_stream_id stream, Zhulong_view_state *out_effective) {
+    if (out_effective) *out_effective = {};
+    return boundary([&] {
+        require(engine && stream && out_effective);
+        zhulong::ViewRect rect = zhulong::identity_view_rect();
+        int64_t since = 0;
+        engine->implementation.get_view(stream, &rect, &since);
+        out_effective->rect = from_view_rect(rect);
+        out_effective->effective_since_ms = since;
+    });
+}
+
 /**
  * @brief 按轨订阅流的数据包通道（v5）
  */

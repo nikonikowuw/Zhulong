@@ -97,13 +97,31 @@ void MotionDetector::reset() noexcept {
     std::fill(curr_grid_.begin(), curr_grid_.end(), 0);
 }
 
-bool MotionDetector::sample_y_plane(const HardwareFrame& frame, uint8_t* out_grid) {
+bool MotionDetector::sample_y_plane(const HardwareFrame& frame, const ViewWindow& view,
+                                   uint8_t* out_grid) {
     if (frame.format != FRAME_FORMAT_NV12 && frame.format != FRAME_FORMAT_YUV420P) {
         return false;
     }
     const uint32_t stride = frame.plane_strides[0] > 0 ? frame.plane_strides[0] : frame.stride;
     if (frame.width < 16 || frame.height < 16 || stride < frame.width) {
         return false;
+    }
+
+    // 窗口只做只读采样：越界/过小一律 fail-open，绝不因一次读取失败关掉整条流。
+    uint32_t origin_x = 0;
+    uint32_t origin_y = 0;
+    uint32_t sample_w = frame.width;
+    uint32_t sample_h = frame.height;
+    if (view.active) {
+        if (view.x < 0 || view.y < 0 || view.w < 16 || view.h < 16 ||
+            static_cast<uint32_t>(view.x) + static_cast<uint32_t>(view.w) > frame.width ||
+            static_cast<uint32_t>(view.y) + static_cast<uint32_t>(view.h) > frame.height) {
+            return false;
+        }
+        origin_x = static_cast<uint32_t>(view.x);
+        origin_y = static_cast<uint32_t>(view.y);
+        sample_w = static_cast<uint32_t>(view.w);
+        sample_h = static_cast<uint32_t>(view.h);
     }
 
     ScopedDmaReader dma_reader;
@@ -125,16 +143,13 @@ bool MotionDetector::sample_y_plane(const HardwareFrame& frame, uint8_t* out_gri
         return false;
     }
 
-    const uint32_t src_w = frame.width;
-    const uint32_t src_h = frame.height;
-
     for (int y = 0; y < GRID_HEIGHT; ++y) {
-        const uint32_t sy = (static_cast<uint32_t>(y) * src_h) / GRID_HEIGHT;
+        const uint32_t sy = origin_y + (static_cast<uint32_t>(y) * sample_h) / GRID_HEIGHT;
         const uint8_t* row = y_src + static_cast<size_t>(sy) * stride;
         uint8_t* dst = out_grid + static_cast<size_t>(y) * GRID_WIDTH;
 
         for (int x = 0; x < GRID_WIDTH; ++x) {
-            const uint32_t sx = (static_cast<uint32_t>(x) * src_w) / GRID_WIDTH;
+            const uint32_t sx = origin_x + (static_cast<uint32_t>(x) * sample_w) / GRID_WIDTH;
             dst[x] = row[sx];
         }
     }
@@ -172,9 +187,14 @@ void MotionDetector::report_static(MotionResult& out_result) noexcept {
 }
 
 bool MotionDetector::detect(const HardwareFrame& frame, MotionResult& out_result) {
+    return detect(frame, ViewWindow{}, out_result);
+}
+
+bool MotionDetector::detect(const HardwareFrame& frame, const ViewWindow& view,
+                            MotionResult& out_result) {
     out_result = MotionResult{};
 
-    if (!sample_y_plane(frame, curr_grid_.data())) {
+    if (!sample_y_plane(frame, view, curr_grid_.data())) {
         return false;
     }
 

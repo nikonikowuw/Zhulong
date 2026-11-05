@@ -129,7 +129,10 @@ export function useChannelTaskDrafts({
     ? (drafts[state.activeAlgoId]?.regionConfigJson ?? EMPTY_CONFIG_JSON)
     : EMPTY_CONFIG_JSON
 
-  const regionEditor = useRegionEditor(initialRegionJson)
+  // crop 属于任务（= 相机），与当前选中算法无关：切算法不重载，切相机才重载。
+  const initialCrop =
+    allTasks.find((task) => task.cameraId === initialCameraId)?.crop ?? null
+  const regionEditor = useRegionEditor(initialRegionJson, initialCrop)
 
   const currentRegionJson = useCallback(
     () => serializeRegionConfig(fromDraft(regionEditor.draft)),
@@ -216,6 +219,9 @@ export function useChannelTaskDrafts({
           ? (draftsForCamera[activeAlgoId]?.regionConfigJson ??
               EMPTY_CONFIG_JSON)
           : EMPTY_CONFIG_JSON
+      )
+      regionEditor.resetCrop(
+        allTasks.find((task) => task.cameraId === cameraId)?.crop ?? null
       )
     },
     [

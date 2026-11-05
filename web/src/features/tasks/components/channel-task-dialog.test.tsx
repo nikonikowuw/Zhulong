@@ -148,6 +148,7 @@ function buildTask(
     cameraId: 'cam-1',
     name: '',
     enabled: true,
+    crop: null,
     algorithms: [subAlgo],
     createdAt: '',
     updatedAt: '',
@@ -329,6 +330,37 @@ describe('ChannelTaskDialog', () => {
     expect(payload.drafts).toHaveLength(1)
     // AC8：无参考画面时不得产生新坐标，只能沿用已保存值。
     expect(payload.drafts[0].regionConfigJson).toBe(stored)
+  })
+
+  it('submits the task-level crop window alongside the algorithm drafts', async () => {
+    streamState = 'live'
+    const { getByRole } = await renderDialog({
+      allTasks: [buildTask({ crop: [0.1, 0.2, 0.6, 0.8] })],
+    })
+
+    await getByRole('button', { name: '保存并下发调度' }).click()
+
+    expect(mockSyncMutate).toHaveBeenCalledTimes(1)
+    const payload = mockSyncMutate.mock.calls[0][0] as {
+      crop?: number[] | null
+    }
+    // 整任务 upsert：crop 必须显式随载荷提交，省略会被服务端当成“保留旧值”。
+    expect(payload.crop).toEqual([0.1, 0.2, 0.6, 0.8])
+  })
+
+  it('keeps the saved crop when the stream is unavailable (read-only)', async () => {
+    streamState = 'unavailable'
+    const { getByRole } = await renderDialog({
+      allTasks: [buildTask({ crop: [0.2, 0.2, 0.8, 0.8] })],
+    })
+
+    await getByRole('button', { name: '保存并下发调度' }).click()
+
+    const payload = mockSyncMutate.mock.calls[0][0] as {
+      crop?: number[] | null
+    }
+    // 画面不可用时不许编辑 crop，但也不能顺手把它清掉。
+    expect(payload.crop).toEqual([0.2, 0.2, 0.8, 0.8])
   })
 
   it('blocks save when algorithm configuration violates schema bounds', async () => {

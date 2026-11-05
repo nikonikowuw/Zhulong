@@ -41,6 +41,7 @@ describe('useSyncChannelAlgorithms', () => {
       cameraId: 'cam-01',
       name: '',
       enabled: true,
+      crop: null,
       algorithms: [],
       createdAt: '',
       updatedAt: '',
@@ -71,6 +72,7 @@ describe('useSyncChannelAlgorithms', () => {
     expect(tasksApi.saveChannelTask).toHaveBeenCalledWith({
       cameraId: 'cam-01',
       enabled: true,
+      crop: null,
       algorithms: [
         {
           algorithmId: 'algo-fire',
@@ -98,6 +100,7 @@ describe('useSyncChannelAlgorithms', () => {
       cameraId: 'cam-01',
       name: '',
       enabled: true,
+      crop: null,
       algorithms: [],
       createdAt: '',
       updatedAt: '',
@@ -129,6 +132,7 @@ describe('useSyncChannelAlgorithms', () => {
     expect(tasksApi.saveChannelTask).toHaveBeenCalledWith({
       cameraId: 'cam-01',
       enabled: true,
+      crop: null,
       algorithms: [
         {
           algorithmId: 'algo-fire',
@@ -148,6 +152,7 @@ describe('useSyncChannelAlgorithms', () => {
       cameraId: 'cam-01',
       name: '',
       enabled: false,
+      crop: null,
       algorithms: [],
       createdAt: '',
       updatedAt: '',
@@ -166,6 +171,7 @@ describe('useSyncChannelAlgorithms', () => {
     expect(tasksApi.saveChannelTask).toHaveBeenCalledWith({
       cameraId: 'cam-01',
       enabled: false,
+      crop: null,
       algorithms: [],
     })
   })

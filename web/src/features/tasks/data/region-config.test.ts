@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { CATEGORY_HUES } from '@/lib/category-palette'
 import {
+  cropEqual,
+  cropRectSchema,
   emptyDraft,
   fromDraft,
+  parseCrop,
   parseRegionConfig,
   serializeRegionConfig,
   toDraft,
@@ -94,6 +97,27 @@ describe('region-config editor draft round-trip', () => {
     const b = emptyDraft()
     expect(a).not.toBe(b)
     expect(a).toEqual(b)
+  })
+
+  it('enforces the stricter minimum side for crop windows', () => {
+    // ROI 的 0.01 边长合法，但同一个矩形不能当 crop 用：逆映射会把误差放大 100 倍。
+    expect(rectSchema.safeParse([0.1, 0.1, 0.11, 0.5]).success).toBe(true)
+    expect(cropRectSchema.safeParse([0.1, 0.1, 0.11, 0.5]).success).toBe(false)
+    expect(cropRectSchema.safeParse([0.1, 0.1, 0.15, 0.5]).success).toBe(true)
+  })
+
+  it('folds a full-frame crop back to null', () => {
+    expect(parseCrop([0, 0, 1, 1])).toBeNull()
+    expect(parseCrop([0.1, 0.1, 0.9, 0.9])).toEqual([0.1, 0.1, 0.9, 0.9])
+    // 坏数据按“不裁剪”处理，不让整个任务解析失败
+    expect(parseCrop([0.5, 0.5, 0.4, 0.4])).toBeNull()
+    expect(parseCrop(null)).toBeNull()
+  })
+
+  it('treats null and the full frame as the same crop', () => {
+    expect(cropEqual(null, [0, 0, 1, 1])).toBe(true)
+    expect(cropEqual([0.1, 0.1, 0.5, 0.5], [0.1, 0.1, 0.5, 0.5])).toBe(true)
+    expect(cropEqual([0.1, 0.1, 0.5, 0.5], [0.1, 0.1, 0.6, 0.5])).toBe(false)
   })
 
   it('maps each region category onto a distinct valid category hue', () => {

@@ -195,6 +195,36 @@ func (r *appBrokerPathResolver) SyncBrokerSubscriptions(ctx context.Context, alg
 	return paths, nil
 }
 
+// taskCropListener 把「任务已保存」翻译成媒体层的视图刷新。
+//
+// 为什么不用 TaskChangeListener：后者驱动算法包重启，crop-only 编辑不应重启进程
+// （Service 已按 sameTaskSemantics 过滤）；而这里只关心「窗口变了，AI 流要跟上」。
+type taskCropListener struct {
+	hub    *camera.StreamHub
+	logger *zap.Logger
+}
+
+// OnTaskSaved 在任务写库成功后刷新该相机的分析视图。
+//
+// ⚠️ 保存路径不能等媒体层：给刷新一个很小的上限，超时就放弃（日志留痕），
+// 下一次 acquire / 下一次保存会重新读取最新配置。宁可慢一拍生效，也不能让保存失败。
+func (l taskCropListener) OnTaskSaved(ctx context.Context, _, cameraID string) {
+	if l.hub == nil || cameraID == "" {
+		return
+	}
+	refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskCropRefreshTimeout)
+	defer cancel()
+	l.hub.RefreshTaskCrop(refreshCtx, cameraID)
+	if l.logger != nil {
+		l.logger.Debug("refresh AI view after task save", zap.String("camera_id", cameraID))
+	}
+}
+
+// taskCropRefreshTimeout 是「保存即生效」的等待上限。
+//
+// 只需覆盖一次 SQLite 读 + 一次 cgo SetView；150–200ms 在板端也足够。
+const taskCropRefreshTimeout = 200 * time.Millisecond
+
 // publishRateByCamera 返回每个相机上所有 enabled 分析任务的最大采样帧率。
 func (r *appBrokerPathResolver) publishRateByCamera(ctx context.Context) (map[string]uint32, error) {
 	tasks, err := r.taskStore.ListTasks(ctx)

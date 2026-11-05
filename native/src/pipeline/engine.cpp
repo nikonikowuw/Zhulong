@@ -361,7 +361,13 @@ bool Engine::ensure_frame_broker(const std::shared_ptr<Stream> &stream, int32_t 
 
     // ⚠️ publisher 持有 broker 的裸指针，因此必须在 broker 入池之后再启动，
     // 且两者在 release()/stop() 中按 publisher → broker 的顺序停止。
-    auto publisher = std::make_shared<FramePublisher>(stream, broker.get());
+    auto crop = window_crop;
+    auto publisher = std::make_shared<FramePublisher>(
+        stream, broker.get(),
+        [crop](const HardwareFrame &frame, const ViewWindow &view, uint8_t *dst,
+               size_t dst_size, int dst_stride, int dst_dma_fd) {
+            return crop->copy(frame, view, dst, dst_size, dst_stride, dst_dma_fd);
+        });
     try {
         publisher->start();
     } catch (...) {
@@ -664,6 +670,29 @@ void Engine::set_publish_rate(Zhulong_stream_id id, uint32_t max_sample_fps) {
         throw Failure{Zhulong_ERR_NOT_FOUND};
     }
     it->second->set_max_sample_fps(max_sample_fps);
+}
+
+void Engine::set_view(Zhulong_stream_id id, bool clear, const ViewRect &rect,
+                      ViewRect *out_rect, int64_t *out_since_ms) {
+    std::lock_guard<std::mutex> lock(control);
+    auto stream = find_stream(id);
+    // 锁顺序与 release() 一致：control -> Stream::mutex。
+    auto result = stream->set_view(clear, rect);
+    if (!result.ready) {
+        throw Failure{Zhulong_ERR_NOT_READY};
+    }
+    if (out_rect != nullptr) {
+        *out_rect = result.rect;
+    }
+    if (out_since_ms != nullptr) {
+        *out_since_ms = result.effective_since_ms;
+    }
+}
+
+void Engine::get_view(Zhulong_stream_id id, ViewRect *out_rect, int64_t *out_since_ms) {
+    std::lock_guard<std::mutex> lock(control);
+    auto stream = find_stream(id);
+    stream->get_view(out_rect, out_since_ms);
 }
 
 HardwareFrame::ConstPtr Engine::latest_frame(Zhulong_stream_id id) {

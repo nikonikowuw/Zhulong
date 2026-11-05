@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include "common/view_window.hpp"
 #include "ipc_protocol.hpp"
 #include "shm_pool.hpp"
 #include "unix_socket.hpp"
@@ -104,10 +105,23 @@ public:
     /**
      * @brief 写入帧数据到共享内存槽位并向所有已连接的 Runner 广播分发
      * @param frame 输入硬件帧
+     * @param view AI 分析视图窗口；`active == false` 时走既有全幅路径
      * @param motion 可选运动检测元数据（默认 has_motion = 1 放行）
-     * @return true 若帧成功写入并至少分发或进入槽位；false 若全槽位枯竭且无法驱逐导致丢帧
+     * @param crop 窗口物化回调（`view.active` 时必需；返回 false 表示该帧必须丢弃）
+     * @param capture_time_ms 视图快照时钟；<= 0 时回退到当前时间（仅防御）
+     * @return true 若帧成功写入并至少分发或进入槽位；false 若全槽位枯竭、容量超限或物化失败导致丢帧
      */
     bool publish_frame(const HardwareFrame& frame, const FrameMotionInfo& motion = {});
+
+    /**
+     * @brief 视图感知的发布重载：窗口激活时一律物化写入 slot（绝不发全幅 fd）。
+     *
+     * 与上面两参重载分开声明（而不是全部默认参数）是为了避免 `publish_frame(frame)`
+     * 在两次重载之间产生歧义。
+     */
+    bool publish_frame(const HardwareFrame& frame, const ViewWindow& view,
+                       const FrameMotionInfo& motion, const CropCopyFn& crop,
+                       int64_t capture_time_ms);
 
     /**
      * @brief 检查 Broker 是否处于运行状态

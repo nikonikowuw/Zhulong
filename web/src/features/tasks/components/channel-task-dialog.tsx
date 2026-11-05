@@ -104,6 +104,10 @@ function ChannelTaskDialogContent({
   // 二者缺一都必须只读，否则会产出没有参考意义的归一化坐标。
   const showEditor = Boolean(activeDraft?.selected)
   const canEditRegion = showEditor && surfaceState === 'live'
+  // 裁剪窗口属于任务（= 相机），不属于某个算法：只要画面出首帧就能编辑，
+  // 即使一个算法都没勾选也一样。保存仍要求至少一个算法（否则就是删任务）。
+  const canEditCrop = Boolean(cameraId) && surfaceState === 'live'
+  const hasCrop = regionEditor.crop !== null
 
   const points = useMemo(() => {
     const thisCameraItems: SchedulableItem[] = []
@@ -260,6 +264,8 @@ function ChannelTaskDialogContent({
       {
         cameraId,
         enabled: channelEnabled,
+        // 整任务 upsert：显式带上当前窗口（null = 全幅），省略会保留旧值。
+        crop: regionEditor.serializeCrop(),
         drafts: payloadDrafts,
         existingTasks: allTasks.filter((task) => task.cameraId === cameraId),
       },
@@ -349,6 +355,9 @@ function ChannelTaskDialogContent({
           regionEditor={regionEditor}
           showEditor={showEditor}
           canEditRegion={canEditRegion}
+          canEditCrop={canEditCrop}
+          hasCrop={hasCrop}
+          onClearCrop={regionEditor.clearCrop}
         />
 
         <ChannelTaskAlgoPanel

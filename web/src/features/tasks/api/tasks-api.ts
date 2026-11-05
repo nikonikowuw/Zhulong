@@ -1,4 +1,5 @@
 import { apiClient, type ApiResponse } from '@/lib/api-client'
+import { type Rect } from '../data/region-config'
 import { taskListResponseSchema, taskSchema, type Task } from '../data/schema'
 
 export interface GetTasksParams {
@@ -22,6 +23,12 @@ export interface SaveChannelTaskRequest {
   cameraId: string
   name?: string
   enabled?: boolean
+  /**
+   * 任务级裁剪窗口；`null` = 全幅。
+   *
+   * upsert 语义：省略字段会保留旧值，想清除必须显式传 `null`。
+   */
+  crop?: Rect | null
   algorithms: TaskAlgorithmItemInfo[]
 }
 
@@ -35,6 +42,7 @@ export interface CreateTaskRequest {
   configJson?: string
   regionConfigJson?: string
   name?: string
+  crop?: Rect | null
   algorithms?: TaskAlgorithmItemInfo[]
 }
 
@@ -46,6 +54,13 @@ export interface UpdateTaskRequest {
   sampleFps?: number
   configJson?: string
   regionConfigJson?: string
+  /**
+   * 三态：省略 = 保留，`null` = 清除，数组 = 设置。
+   *
+   * ⚠️ 不要把 `dto.crop ?? null` 写进来：普通字段编辑（改名/改采样率）没有 crop 概念，
+   * 补 `null` 会在用户不知情时清掉裁剪窗口。
+   */
+  crop?: Rect | null
   algorithms?: TaskAlgorithmItemInfo[]
 }
 
@@ -106,6 +121,7 @@ export const tasksApi = {
       sampleFps: dto.sampleFps,
       configJson: dto.configJson,
       regionConfigJson: dto.regionConfigJson,
+      crop: dto.crop,
       algorithms: dto.algorithms,
     })
     return taskSchema.parse(resp.data.data)
@@ -121,6 +137,8 @@ export const tasksApi = {
       sampleFps: dto.sampleFps,
       configJson: dto.configJson,
       regionConfigJson: dto.regionConfigJson,
+      // undefined 会被 JSON.stringify 丢掉，因此“省略 = 保留”在 wire 上成立。
+      crop: dto.crop,
       algorithms: dto.algorithms,
     })
     return taskSchema.parse(resp.data.data)

@@ -24,6 +24,55 @@ export const MAX_RECTS_PER_CATEGORY = 8
 export const MIN_SIDE_LENGTH = 0.01
 
 /**
+ * 任务级裁剪窗口的最小边长。
+ *
+ * 刻意不复用 ROI 的 0.01：crop 的坐标要参与「窗口 → 全幅」的逆映射，窗口越小，
+ * 归一化误差被放大的倍数越大（0.01 宽 ≈ 100×）。Go 侧 `region.MinCropSide` 是权威，
+ * 这里只做保存前的提前拦截；两处必须同时改。
+ */
+export const MIN_CROP_SIDE = 0.02
+
+/** 整帧窗口的规范形式；`null` 与它等价（都表示“不裁剪”）。 */
+export const FULL_FRAME_CROP: Rect = [0, 0, 1, 1]
+
+/**
+ * 裁剪窗口契约：与 {@link rectSchema} 同构，但最小边长更严。
+ *
+ * 注意 `rectSchema` 本身不改：ROI/MASK 的历史数据里存在 0.01 边长，放宽/收紧都会
+ * 让旧任务在打开弹窗时解析失败。
+ */
+export const cropRectSchema = rectSchema.refine(
+  ([x1, y1, x2, y2]) =>
+    x2 - x1 >= MIN_CROP_SIDE - 1e-9 && y2 - y1 >= MIN_CROP_SIDE - 1e-9,
+  { message: '裁剪窗口最小边长不得小于 0.02' }
+)
+
+/** 比较两个窗口是否等价（整帧与 null 视为等价）。 */
+export function cropEqual(a: Rect | null, b: Rect | null): boolean {
+  const left = a && !isFullFrame(a) ? a : null
+  const right = b && !isFullFrame(b) ? b : null
+  if (left === null || right === null) return left === right
+  return left.every((value, index) => Math.abs(value - right[index]) < 1e-9)
+}
+
+/** 是否覆盖整帧。 */
+export function isFullFrame(rect: Rect): boolean {
+  return rect[0] <= 0 && rect[1] <= 0 && rect[2] >= 1 && rect[3] >= 1
+}
+
+/**
+ * 规范化 wire 值：整帧折叠为 `null`，非法值也按“不裁剪”处理。
+ *
+ * 服务端已经校验过一遍，但历史行可能来自手工 SQL；前端不因为一个坏字段
+ * 让整个任务解析失败（`taskSchema.parse` 会抛）。
+ */
+export function parseCrop(value: unknown): Rect | null {
+  const result = cropRectSchema.safeParse(value)
+  if (!result.success) return null
+  return isFullFrame(result.data) ? null : result.data
+}
+
+/**
  * 区域策略配置契约
  */
 export const regionConfigSchema = z.object({

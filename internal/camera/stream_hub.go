@@ -41,17 +41,18 @@ const defaultMaxWarmStreamDispatchers = 4
 
 // StreamHub 管理全系统的摄像机媒体分发器生命周期与按需订阅。
 type StreamHub struct {
-	aiConsumer     AIResultConsumer
-	store          CameraStore
-	flight         singleflight.Group
-	engine         MediaEngine
-	regionProvider RegionConfigProvider
-	registry       *StateRegistry
-	logger         *zap.Logger
-	eventHub       *EventHub
-	dispatchers    map[string]*StreamDispatcher
-	aiStreams      map[string]*aiStreamRef
-	aiSubscribers  map[string]map[string]struct{}
+	aiConsumer       AIResultConsumer
+	store            CameraStore
+	flight           singleflight.Group
+	engine           MediaEngine
+	regionProvider   RegionConfigProvider
+	taskCropProvider TaskCropProvider
+	registry         *StateRegistry
+	logger           *zap.Logger
+	eventHub         *EventHub
+	dispatchers      map[string]*StreamDispatcher
+	aiStreams        map[string]*aiStreamRef
+	aiSubscribers    map[string]map[string]struct{}
 	// warmOrder 记录处于空闲热保留窗口的分发器 key，最早进入的在前。
 	warmOrder     []string
 	warmStreamCap int
@@ -79,6 +80,83 @@ type aiStreamRef struct {
 	stream MediaStream
 	aiSub  *engine.AIResultSubscription
 	cancel context.CancelFunc
+
+	// applySem（容量 1）串行化「读 provider + SetView」这一个复合动作。
+	// 不加它，RefreshTaskCrop（读到 v2）与 existing-ref 快路径（读到 v1）可能倒序生效，
+	// 让视图回退到旧配置。串行后「最后写入」必然对应「最后读取」。
+	//
+	// 刻意用 channel 而不是 sync.Mutex：等锁必须能被 ctx 取消。保存路径带着 200ms
+	// 预算进来，Mutex 等锁那段时间不受预算约束——前一次 apply 卡在慢 SQLite 读上时，
+	// 「保存不等媒体层」就成了一句空话。
+	applySem chan struct{}
+
+	// viewMu 保护视图快照。view 是引擎回报的生效 E；viewPrev 只保留上一代，
+	// 用于把换窗前已发布的在途帧映射回正确的全幅坐标。
+	viewMu      sync.Mutex
+	view        region.ViewState
+	viewPrev    region.Rect
+	viewPending bool
+}
+
+// newAIStreamRef 构造一个视图为全幅的 ref。
+func newAIStreamRef(stream MediaStream) *aiStreamRef {
+	return &aiStreamRef{
+		stream:   stream,
+		applySem: make(chan struct{}, 1),
+		view:     region.ViewState{Rect: region.Identity()},
+		viewPrev: region.Identity(),
+	}
+}
+
+// viewFor 选出生效窗口：早于切换点用上一代，否则用当前。
+func (r *aiStreamRef) viewFor(timestamp time.Time) region.Rect {
+	r.viewMu.Lock()
+	defer r.viewMu.Unlock()
+	if r.view.Since.IsZero() {
+		return r.view.Rect
+	}
+	if timestamp.Before(r.view.Since) {
+		return r.viewPrev
+	}
+	return r.view.Rect
+}
+
+// updateView 吸收引擎回报的生效窗口。
+//
+// 单调性防护：引擎的切换点只会前进（`advance_since_locked` 取 max(now, last+1)）。
+// 零切换点 = 「从未切换过」，更旧的切换点 = 并发读到的旧值；两者都不得覆盖已知状态，
+// 否则视图会静默退回旧窗口，整批结果按错的映射落库。
+//
+// ⚠️ 被忽略的快照**不清 viewPending**：NOT_READY 之后的首帧还没到，清了就再也没人去捞它。
+func (r *aiStreamRef) updateView(state region.ViewState) {
+	r.viewMu.Lock()
+	defer r.viewMu.Unlock()
+	stale := state.Since.IsZero() || state.Since.Before(r.view.Since)
+	if stale && (r.viewPending || !r.view.Since.IsZero()) {
+		return
+	}
+	r.viewPending = false
+	if state.Rect != r.view.Rect || !state.Since.Equal(r.view.Since) {
+		r.viewPrev = r.view.Rect
+		r.view = state
+	}
+}
+
+// needsViewPoll 报告结果路径是否需要轮询引擎的生效窗口。
+//
+// 引擎只会在两种情况下自己改窗口：延迟生效（配了 crop 但首帧尺寸还没到）与分辨率热切换。
+// 两者都以「本机配过窗口」为前提，所以未裁剪的相机可以完全省掉每条结果一次
+// cgo + handle lease；裁剪过的相机必须继续轮询（热切换只有引擎知道）。
+func (r *aiStreamRef) needsViewPoll() bool {
+	r.viewMu.Lock()
+	defer r.viewMu.Unlock()
+	return r.viewPending || !r.view.Rect.IsIdentity()
+}
+
+func (r *aiStreamRef) setViewPending(pending bool) {
+	r.viewMu.Lock()
+	r.viewPending = pending
+	r.viewMu.Unlock()
 }
 
 // AIResultConsumer consumes parsed AI inference results for persistence or business rules.
@@ -89,6 +167,14 @@ type AIResultConsumer interface {
 // RegionConfigProvider provides read access to the compiled region configuration for a given camera and algorithm.
 type RegionConfigProvider interface {
 	ConfigFor(cameraID, algorithmID string) (region.Config, bool)
+}
+
+// TaskCropProvider 提供任务级裁剪窗口（按相机）。
+//
+// 返回 (nil, nil) 表示「当前无 crop / 任务不存在 / 任务停用」；error 表示读库或解析失败，
+// 调用方必须保留当前视图而不是误清。
+type TaskCropProvider interface {
+	CropFor(ctx context.Context, cameraID string) (*region.Rect, error)
 }
 
 // SetAIConsumer registers an optional consumer for AI inference results.
@@ -103,6 +189,13 @@ func (h *StreamHub) SetRegionConfigProvider(provider RegionConfigProvider) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.regionProvider = provider
+}
+
+// SetTaskCropProvider registers an optional provider for task-level crop windows.
+func (h *StreamHub) SetTaskCropProvider(provider TaskCropProvider) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.taskCropProvider = provider
 }
 
 // NewStreamHub 构造全局流分发中心。
@@ -551,9 +644,13 @@ func (h *StreamHub) acquireAIStreamBrokerPath(ctx context.Context, cameraID stri
 		return "", ErrStreamHubClosed
 	}
 	if ref, ok := h.aiStreams[cameraID]; ok {
-		path, err := ref.stream.BrokerPath(ctx)
 		h.mu.Unlock()
-		return path, err
+		// 已存在的流也要跟一次配置：订阅者可能在任务保存后重连，
+		// 而 RefreshTaskCrop 恰好落在释放/重建的空档里。
+		// 代价是订阅路径上一次 task 读库（每台相机每次解析一次，频率跟着算法包重启走）；
+		// 换成「只在 dirty 时读」需要额外维护配置版本号，当前规模不值得。
+		h.applyTaskCrop(ctx, cameraID, ref)
+		return ref.stream.BrokerPath(ctx)
 	}
 	h.mu.Unlock()
 
@@ -565,8 +662,9 @@ func (h *StreamHub) acquireAIStreamBrokerPath(ctx context.Context, cameraID stri
 			return "", ErrStreamHubClosed
 		}
 		if ref, ok := h.aiStreams[cameraID]; ok {
-			path, err := ref.stream.BrokerPath(ctx)
 			h.mu.Unlock()
+			h.applyTaskCrop(ctx, cameraID, ref)
+			path, err := ref.stream.BrokerPath(ctx)
 			return path, err
 		}
 		h.mu.Unlock()
@@ -635,6 +733,11 @@ func (h *StreamHub) acquireAIStreamBrokerPath(ctx context.Context, cameraID stri
 			return "", err
 		}
 
+		// 视图必须在首个订阅建立前生效：算法包一订阅就可能立刻收到帧，
+		// 迟一步应用等于允许若干帧按全幅坐标解码，后续逆映射会静默错位。
+		ref := newAIStreamRef(mediaStream)
+		h.applyTaskCrop(ctx, cameraID, ref)
+
 		path, err := mediaStream.BrokerPath(ctx)
 		if err != nil {
 			if closeErr := mediaStream.Close(); closeErr != nil {
@@ -650,10 +753,11 @@ func (h *StreamHub) acquireAIStreamBrokerPath(ctx context.Context, cameraID stri
 			h.logger.Warn("subscribe AI results for camera failed",
 				zap.String("camera_id", cameraID), zap.Error(err))
 		}
+		var consumeCtx context.Context
 		if err == nil && aiSub != nil {
-			var ctx context.Context
-			ctx, cancel = context.WithCancel(context.Background())
-			go h.consumeAIResults(ctx, cameraID, aiSub)
+			consumeCtx, cancel = context.WithCancel(context.Background())
+			ref.aiSub = aiSub
+			ref.cancel = cancel
 		}
 
 		h.mu.Lock()
@@ -673,7 +777,7 @@ func (h *StreamHub) acquireAIStreamBrokerPath(ctx context.Context, cameraID stri
 			}
 			return "", ErrStreamHubClosed
 		}
-		h.aiStreams[cameraID] = &aiStreamRef{stream: mediaStream, aiSub: aiSub, cancel: cancel}
+		h.aiStreams[cameraID] = ref
 		var newState *CameraStateInfo
 		if h.registry != nil {
 			newState = h.registry.UpdateSessionState(cameraID, role, SessionStateRunning)
@@ -682,6 +786,12 @@ func (h *StreamHub) acquireAIStreamBrokerPath(ctx context.Context, cameraID stri
 
 		if newState != nil {
 			h.broadcastState(newState)
+		}
+
+		// 先注册再启动消费者：注册之前没有任何路径能拿到 ref，
+		// 消费者一跑起来就必须能读到正确的窗口快照。
+		if consumeCtx != nil {
+			go h.consumeAIResults(consumeCtx, cameraID, ref, aiSub)
 		}
 
 		return path, nil
@@ -752,6 +862,16 @@ func (h *StreamHub) ReleaseAIStreamSubscriber(cameraID, subscriberID string) {
 	h.mu.Unlock()
 
 	if toClose != nil {
+		// 清除视图必须发生在关闭之前：流交回引擎池后可能被无 crop 的相机复用，
+		// 上一任的窗口会变成别人的默认值（而且是静默的）。
+		clearCtx, clearCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer clearCancel()
+		if _, err := toClose.SetView(clearCtx, nil); err != nil &&
+			!errors.Is(err, engine.ErrNotFound) && !errors.Is(err, engine.ErrStreamNotReady) {
+			h.logger.Warn("clear AI view before release failed",
+				zap.String("camera_id", cameraID), zap.Error(err))
+		}
+
 		if err := toClose.Close(); err != nil {
 			h.logger.Warn("release AI stream after last subscriber left",
 				zap.String("camera_id", cameraID), zap.Error(err))
@@ -774,6 +894,75 @@ func (h *StreamHub) SetAIPublishRate(ctx context.Context, cameraID string, fps u
 		return nil
 	}
 	return ref.stream.SetPublishRate(ctx, fps)
+}
+
+// RefreshTaskCrop 让指定相机的 AI 流重新读取并应用任务级 crop。
+//
+// 非阻塞语义：没有活跃 AI 流时直接返回（下一次 acquire 会带上最新配置）；
+// 读库/应用失败只记日志，绝不让「保存任务」因为媒体层问题失败。
+func (h *StreamHub) RefreshTaskCrop(ctx context.Context, cameraID string) {
+	h.mu.Lock()
+	ref := h.aiStreams[cameraID]
+	h.mu.Unlock()
+	if ref == nil {
+		return
+	}
+	h.applyTaskCrop(ctx, cameraID, ref)
+}
+
+// applyTaskCrop 读取 provider 并把视图应用到流上。
+//
+// 并发口径分两层：applySem 串行化「读 + 写」保证「最后写入 = 最后读取」；等锁本身
+// 吃调用方的 ctx——保存路径带着 200ms 预算进来，别人正在跑就直接放弃（Debug 留痕）。
+// 放弃不会丢配置：每次 apply 都重读 provider，下一次 acquire / 保存会带上最新值。
+func (h *StreamHub) applyTaskCrop(ctx context.Context, cameraID string, ref *aiStreamRef) {
+	if ref == nil || ref.stream == nil {
+		return
+	}
+
+	h.mu.Lock()
+	provider := h.taskCropProvider
+	logger := h.logger
+	h.mu.Unlock()
+	if provider == nil {
+		return
+	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
+	// ctx 没有 Done 通道时（Background/WithoutCancel）这一支永远不会就绪，等价于纯等锁。
+	select {
+	case ref.applySem <- struct{}{}:
+		defer func() { <-ref.applySem }()
+	case <-ctx.Done():
+		logger.Debug("skip AI view refresh: another apply holds the slot",
+			zap.String("camera_id", cameraID), zap.Error(ctx.Err()))
+		return
+	}
+
+	crop, err := provider.CropFor(ctx, cameraID)
+	if err != nil {
+		logger.Warn("read task crop failed; keeping current AI view",
+			zap.String("camera_id", cameraID), zap.Error(err))
+		return
+	}
+
+	state, err := ref.stream.SetView(ctx, crop)
+	if err != nil {
+		switch {
+		case errors.Is(err, engine.ErrStreamNotReady):
+			// 配置已登记在引擎里，首个解码帧到达后自动生效。
+			ref.setViewPending(true)
+		case errors.Is(err, engine.ErrNotFound):
+			// 流已失效：不冒错给调用方，后续 acquire 会重建并重新应用。
+		default:
+			logger.Warn("apply task crop failed; keeping current AI view",
+				zap.String("camera_id", cameraID), zap.Error(err))
+		}
+		return
+	}
+	ref.updateView(state)
 }
 
 // AIStreamBrokerStats 返回该相机 AI 分析流上各算法包的帧投递统计快照。
@@ -919,7 +1108,7 @@ func (h *StreamHub) handleAIStreamFailure(cameraID string, err error) {
 	h.scheduleAIRecovery(cameraID)
 }
 
-func (h *StreamHub) consumeAIResults(ctx context.Context, cameraID string, sub *engine.AIResultSubscription) {
+func (h *StreamHub) consumeAIResults(ctx context.Context, cameraID string, ref *aiStreamRef, sub *engine.AIResultSubscription) {
 	defer sub.Close()
 	for {
 		data, err := sub.Next(ctx)
@@ -955,6 +1144,16 @@ func (h *StreamHub) consumeAIResults(ctx context.Context, cameraID string, sub *
 				zap.Int("payload_len", len(data)))
 			continue
 		}
+
+		// 引擎是生效窗口的唯一权威：只有配置过窗口（或待生效）的路由才轮询快照，
+		// 未裁剪的相机因此零 cgo 开销。轮询本身不能省：切换点之后仍可能有旧窗口帧到达
+		// （发布线程与解码线程不是同一个），延迟生效与分辨率热切换也只有引擎知道。
+		if ref.needsViewPoll() {
+			if state, stateErr := ref.stream.GetView(ctx); stateErr == nil {
+				ref.updateView(state)
+			}
+		}
+		res = region.Reproject(res, ref.viewFor(res.Timestamp))
 
 		h.mu.Lock()
 		consumer := h.aiConsumer

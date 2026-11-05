@@ -39,6 +39,7 @@ const tasks: Task[] = [
     cameraId: 'cam-01',
     name: '',
     enabled: true,
+    crop: null,
     algorithms: [
       {
         id: 'sub-01',

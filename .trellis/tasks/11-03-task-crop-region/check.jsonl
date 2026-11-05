@@ -1,7 +1,13 @@
 {"file": ".trellis/spec/architecture.md", "reason": "检查是否越过了宿主/算法包的层边界"}
-{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "检查 publish 路径顺序、history 全幅不变量与零拷贝退化"}
-{"file": ".trellis/spec/native/hardware-backends.md", "reason": "检查 RGA/CPU 两条路径几何一致、无外扩"}
-{"file": ".trellis/spec/native/algo-plugin-contract.md", "reason": "检查算法包契约是否被隐式改变"}
-{"file": ".trellis/spec/backend/task-guidelines.md", "reason": "检查存储/校验/三态更新与错误码"}
+{"file": ".trellis/spec/native/pipeline-guidelines.md", "reason": "检查 publish 路径顺序、view_snapshot/capture_time、history 全幅不变量与零拷贝退化"}
+{"file": ".trellis/tasks/11-03-task-crop-region/research/rga-host-loader-notes.md", "reason": "检查 RGA/CPU 两条路径几何一致、无外扩、无 librga 链接、缓存同步正确"}
+{"file": ".trellis/tasks/11-03-task-crop-region/research/plugin-view-contract-notes.md", "reason": "检查算法包契约是否被隐式改变、capture_time 是否原样回传"}
+{"file": ".trellis/tasks/11-03-task-crop-region/research/view-boundary-clock.md", "reason": "检查换窗边界、首帧/重放、共享 Stream 生命周期"}
+{"file": ".trellis/spec/backend/task-guidelines.md", "reason": "检查存储/校验/三态更新/只改 crop 的比较与错误码"}
+{"file": ".trellis/spec/backend/camera-guidelines.md", "reason": "检查 Hub 的是非 acquire、共享 Stream 清空/重放与并发"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "检查 INVALID_CROP_CONFIG 的稳定机器码与本地化"}
 {"file": ".trellis/spec/frontend/theme-and-i18n.md", "reason": "检查色相不占状态色、三语键齐全"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "检查真实浏览器测试与未就绪画面下的保存门禁"}
 {"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流与坐标系一致性检查清单"}
+{"file": ".trellis/spec/native/cgo-contract.md", "reason": "检查 set_view/get_view ABI、指针生命周期、错误映射与 ABI 6"}
+{"file": ".trellis/spec/backend/http-api-guidelines.md", "reason": "检查 crop 请求/响应命名、三态语义与 null/[]/{} 文档"}

@@ -132,7 +132,22 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
 5. **跨层停机顺序**（Go 侧，硬约束）：
    - `camera.Stop` → `algorithm.Stop` → `native.Close`。理由：AI 消费者与 StreamHub 先撤，runner 子进程再排空，最后才销毁 broker 宿主。
    - 该顺序由 `internal/app/runtime_test.go` 的 `TestAIShutdownOrderPrecedesNativeClose` 守护；改坏顺序会让测试失败，而不是静默产生 use-after-free。
-6. **共享内存预算（板端实测）**：
+6. **任务级分析视图（v6）**：
+   - `Stream::set_view(clear, rect)` 只登记归一化矩形；`view_snapshot(frame_w, frame_h)` 在**发布线程**
+     内按**解码帧尺寸**计算像素窗口（floor 起点 + ceil 终点 + 外向取偶），并同时推进 `capture_time_ms`。
+     两者必须在同一个 `Stream::mutex` 临界区里取，否则「窗口」与「时间戳」会来自两次不同的配置。
+   - **几何只认解码帧尺寸**：`codecpar` 的宽高在 1088 裁切/MPP 对齐/热切换时会与真实帧不一致；
+     用元数据算窗口会让 `y + h > frame.height`，`publish_frame` 每帧 fail，整路 AI 静默停摆。
+   - **零拷贝只在未窗口化时直通**：`view.active == true` 必须物化到槽位（紧打包），
+     **绝不**把全幅 fd 配上窗口尺寸下发。
+   - **边界时钟**：窗口切换推进 `effective_since_ms`（同毫秒内改窗 `+1`）。消费侧按
+     「结果的 `capture_time_ms` < since → 旧窗口」选择 E；`StreamHub` 只保留当前与上一代两代，
+     因此不要在窗口上做「隔两代才生效」的优化。
+   - **清除必须发生在释放流之前**：`ReleaseAIStreamSubscriber` 先 `SetView(NULL)` 再 `Close`，
+     否则流交回引擎池被无 crop 的相机复用时，会继承上一任窗口且完全静默。
+   - **`has_motion` 是窗口内语义**：运动检测器只采样窗口内部；窗口外运动不再触发整帧放行。
+
+7. **共享内存预算（板端实测）**：
    - 每路 AI 流一份 broker 共享内存：`DEFAULT_SLOT_COUNT=8` × `DEFAULT_SLOT_SIZE=4MB` = **32MB/路**，且槽位在 `start` 时**一次性分配**（发布侧节流不改变静态预算）。
    - ⚠️ RK3568 实测 `/dev/shm` 总容量仅 **976MB**，因此默认参数下约 **30 路** AI 流即打满。若需提高路数上限，应通过 `BrokerOptions` 调小 `slot_count`（`frame_queue_` 只有 3 帧，8 槽位偏保守）。
    - 预算核算请按**最坏情况**（`slot_count` 全部在途）而非稳态估算。

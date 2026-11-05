@@ -21,6 +21,8 @@
 
 #pragma once
 
+#include "common/view_window.hpp"
+#include "nodes/preprocess/window_crop.hpp"
 #include "pipeline/stream.hpp"
 #include "pipeline/frame_publisher.hpp"
 #include "pipeline/ai_subscription.hpp"
@@ -61,6 +63,7 @@ struct Engine {
     std::map<Zhulong_stream_id, std::unique_ptr<ipc::FrameBroker>> brokers; /**< AI 帧分发 Broker 实例池 */
     std::map<Zhulong_stream_id, std::shared_ptr<FramePublisher>> publishers; /**< AI 帧发布线程池 */
     std::string broker_base_dir{"/tmp"};        /**< Broker socket 存放目录 (读取环境变量覆写) */
+    std::shared_ptr<WindowCrop> window_crop{std::make_shared<WindowCrop>()}; /**< 宿主侧窗口物化器（与 publisher 共享） */
 
     std::mutex ai_sub_mutex;                    /**< 保护 AI 结果订阅池 */
     std::map<Zhulong_subscription_id, std::shared_ptr<AISubscription>> ai_subscriptions; /**< AI 结果订阅池 */
@@ -170,6 +173,18 @@ struct Engine {
 
     /** @brief 动态设置指定流的帧发布采样帧率 */
     void set_publish_rate(Zhulong_stream_id id, uint32_t max_sample_fps);
+
+    /**
+     * @brief 设置或清除 AI 流的分析视图。
+     *
+     * 只操作已存在的流（非 acquire）；`ready == false` 时抛出 Zhulong_ERR_NOT_READY，
+     * 调用方据此把配置标记为 pending（首个解码帧后由引擎落地）。
+     */
+    void set_view(Zhulong_stream_id id, bool clear, const ViewRect &rect,
+                  ViewRect *out_rect, int64_t *out_since_ms);
+
+    /** @brief 查询当前生效 E 与生效起点（只读，不 acquire）。 */
+    void get_view(Zhulong_stream_id id, ViewRect *out_rect, int64_t *out_since_ms);
 
     /**
      * @brief 向指定流（或所有活跃流）关联的 FrameBroker 广播下行控制消息

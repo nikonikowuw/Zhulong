@@ -39,8 +39,10 @@ public:
      * @brief 构造函数
      * @param stream 关联的物理流共享指针
      * @param broker 对应的 FrameBroker 实例指针
+     * @param crop   窗口物化回调（由 Engine 提供，生命周期覆盖 publisher；可空 = 不支持裁剪）
      */
-    FramePublisher(std::shared_ptr<Stream> stream, ipc::FrameBroker* broker);
+    FramePublisher(std::shared_ptr<Stream> stream, ipc::FrameBroker* broker,
+                   CropCopyFn crop = {});
 
     /** @brief 析构函数，调用 stop() 汇合后台工作线程 */
     ~FramePublisher();
@@ -88,6 +90,9 @@ private:
 
     std::shared_ptr<Stream> stream_;
     ipc::FrameBroker* broker_{nullptr};
+    CropCopyFn crop_;
+    /** @brief 上一次发布使用的窗口；变化时重置运动检测底图（只由发布线程写）。 */
+    ViewWindow last_window_{};
     std::atomic<bool> stop_{false};
     std::atomic<uint32_t> max_sample_fps_{0};
     std::thread worker_;

@@ -74,6 +74,7 @@ const mockTasks: Task[] = [
     cameraId: 'cam-01',
     name: '南门分析任务',
     enabled: true,
+    crop: null,
     algorithms: [
       {
         id: 'sub-01JAYZ7B901234567890123456',

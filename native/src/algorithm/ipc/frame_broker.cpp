@@ -228,6 +228,12 @@ int FrameBroker::find_or_evict_free_slot(std::unique_lock<std::mutex>& lock) {
 }
 
 bool FrameBroker::publish_frame(const HardwareFrame& frame, const FrameMotionInfo& motion) {
+    return publish_frame(frame, ViewWindow{}, motion, CropCopyFn{}, 0);
+}
+
+bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& view,
+                                const FrameMotionInfo& motion, const CropCopyFn& crop,
+                                int64_t capture_time_ms) {
     if (!running_.load(std::memory_order_acquire)) return false;
 
     struct PublishGuard {
@@ -283,15 +289,25 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const FrameMotionInf
         return true;
     }
 
-    // 写入数据到共享内存槽位或硬件 DMA-BUF 槽位
-    const bool is_zero_copy_frame = (frame.dma_fd >= 0);
-    uint8_t* slot_data = nullptr;
-    uint8_t* dma_slot_data = nullptr;
+    // ⚠️ 零拷贝分叉只允许在“不裁剪”时直通：窗口尺寸绝不能配全幅 fd 下发。
+    const bool windowed = view.active;
+    const bool is_zero_copy_frame = (frame.dma_fd >= 0) && !windowed;
+
+    uint8_t* slot_data = nullptr;     // shm 槽位目标
+    uint8_t* dma_slot_data = nullptr; // DMA 槽位目标
     int dma_fd_to_send = -1;
 
     if (is_zero_copy_frame) {
-        // 硬件帧零拷贝直通：直接复用源帧的 DMA-BUF 文件描述符，绕过 memcpy 与槽位 CPU 映射
+        // 全幅零拷贝直通：复用源帧 fd，绕过拷贝与槽位 CPU 映射。
         dma_fd_to_send = frame.dma_fd;
+    } else if (windowed) {
+        // 窗口物化：只写一个目标，绝不“先写 shm 再抄 dma”。
+        if (has_dma_slots_) {
+            dma_slot_data = static_cast<uint8_t*>(dma_slots_[slot_idx]->mmap_addr());
+            dma_fd_to_send = dma_slots_[slot_idx]->fd();
+        } else {
+            slot_data = shm_pool_.slot_write_ptr(slot_idx);
+        }
     } else {
         slot_data = shm_pool_.slot_write_ptr(slot_idx);
         if (has_dma_slots_) {
@@ -300,15 +316,29 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const FrameMotionInf
         }
     }
 
-    if (!is_zero_copy_frame && !slot_data) {
+    if (!is_zero_copy_frame && !slot_data && !dma_slot_data) {
         // 槽位获取失败：统一回滚在途配额与槽位状态
         return fail_publish(slot_idx, target_clients);
     }
 
     // ⚠️ 容量前置门禁：必须在任何 memcpy 之前完成，杜绝「部分写入 + 静默发旧帧」。
-    //    超限时若继续走下发路径，客户端会收到「新 frame_id / 新 pts + 上一帧画面」。
-    //    零拷贝帧（frame.dma_fd >= 0）不占槽位、不拷贝，因此不受此门禁约束。
-    if (!is_zero_copy_frame) {
+    //    零拷贝帧（frame.dma_fd >= 0 且未窗口化）不占槽位、不拷贝，因此不受此门禁约束。
+    PackedLayout layout{};
+    if (windowed) {
+        if (!crop) {
+            return fail_publish(slot_idx, target_clients);
+        }
+        layout = packed_layout_for(view, frame.format);
+        if (!layout.valid || layout.bytes == 0 || layout.bytes > options_.slot_size) {
+            return fail_publish(slot_idx, target_clients);
+        }
+        // 防御性边界校验：几何已按帧尺寸计算，这里覆盖元数据/帧尺寸的瞬时不一致。
+        if (view.x < 0 || view.y < 0 ||
+            static_cast<uint64_t>(view.x) + static_cast<uint64_t>(view.w) > frame.width ||
+            static_cast<uint64_t>(view.y) + static_cast<uint64_t>(view.h) > frame.height) {
+            return fail_publish(slot_idx, target_clients);
+        }
+    } else if (!is_zero_copy_frame) {
         const size_t required = frame_payload_bytes(frame);
         if (required == 0 || required > options_.slot_size) {
             return fail_publish(slot_idx, target_clients);
@@ -319,13 +349,16 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const FrameMotionInf
     msg.stream_id = stream_id_;
     msg.frame_id = frame_seq_.fetch_add(1);
     msg.pts = frame.pts;
-    msg.capture_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    msg.capture_time_ms = capture_time_ms > 0
+                              ? capture_time_ms
+                              : std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::system_clock::now().time_since_epoch())
+                                    .count();
     msg.slot_index = static_cast<uint32_t>(slot_idx);
     msg.generation = generation;
-    msg.width = static_cast<int32_t>(frame.width);
-    msg.height = static_cast<int32_t>(frame.height);
-    msg.strides[0] = static_cast<int32_t>(frame.stride);
+    msg.width = static_cast<int32_t>(windowed ? view.w : frame.width);
+    msg.height = static_cast<int32_t>(windowed ? view.h : frame.height);
+    msg.strides[0] = static_cast<int32_t>(windowed ? layout.stride : frame.stride);
     // ⚠️ 恒为 -1：fd 是进程本地句柄，跨进程传值无意义且危险（见 ipc_protocol.hpp 注释）。
     //    真实的 DMA-BUF 句柄仅通过 SCM_RIGHTS 传递，接收端必须只认本地副本 fd。
     msg.reserved_fd = -1;
@@ -335,11 +368,26 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const FrameMotionInf
     for (size_t i = 0; i < msg.motion_box_count; ++i) {
         msg.motion_boxes[i] = motion.motion_boxes[i];
     }
-    if (is_zero_copy_frame) {
+    if (is_zero_copy_frame || (windowed && dma_fd_to_send >= 0)) {
         msg.flags |= FRAME_DISPATCH_FLAG_DMA_FD;
     }
 
-    if (frame.format == FRAME_FORMAT_NV12) {
+    if (windowed) {
+        msg.format = frame.format == FRAME_FORMAT_NV12 ? ZHULONG_PIXEL_FORMAT_NV12
+                                                       : ZHULONG_PIXEL_FORMAT_YUV420P;
+        for (int i = 0; i < 4; ++i) {
+            msg.strides[i] = layout.strides[i];
+            msg.offsets[i] = layout.offsets[i];
+        }
+
+        uint8_t* dst = dma_slot_data != nullptr ? dma_slot_data : slot_data;
+        const int dst_dma_fd = dma_slot_data != nullptr ? dma_fd_to_send : -1;
+        if (dst == nullptr ||
+            !crop(frame, view, dst, layout.bytes, static_cast<int>(layout.stride), dst_dma_fd)) {
+            // 物化失败：绝不发送半截帧。
+            return fail_publish(slot_idx, target_clients);
+        }
+    } else if (frame.format == FRAME_FORMAT_NV12) {
         msg.format = ZHULONG_PIXEL_FORMAT_NV12;
         msg.strides[1] = static_cast<int32_t>(frame.stride);
         msg.offsets[0] = 0;
@@ -436,7 +484,7 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const FrameMotionInf
     }
 
     // 若非零拷贝直通且使用 DMA 槽位，同步拷入 DMA-BUF 并刷出 CPU Cache (RAII 守卫保护)
-    if (!is_zero_copy_frame && dma_slot_data) {
+    if (!is_zero_copy_frame && !windowed && dma_slot_data) {
         // ⚠️ 耦合前提：DMA 槽位与 SHM 槽位由 start() 用**同一个** options_.slot_size
         //    分配（dma_slots_[i] = allocate(slot_size)；shm_pool_.init(..., slot_size)），
         //    因此「通过上面的 SHM 前置门禁」⟹「DMA 槽位也够」。若未来把两者尺寸解耦，

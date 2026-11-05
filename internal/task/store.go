@@ -231,6 +231,7 @@ func writeTaskRow(ctx context.Context, tx *gorm.DB, task *Task, update bool) err
 		"camera_id":  task.CameraID,
 		"enabled":    task.Enabled,
 		"name":       task.Name,
+		"crop_json":  task.CropJSON,
 		"updated_at": task.UpdatedAt,
 	}).Error
 	if err != nil {

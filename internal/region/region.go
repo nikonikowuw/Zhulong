@@ -1,6 +1,7 @@
 package region
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,10 +19,45 @@ var (
 	ErrInvalidCoordinate = errors.New("coordinate component outside [0.0, 1.0]")
 	ErrDegenerateRect    = errors.New("degenerate rectangle: x1 >= x2 or y1 >= y2")
 	ErrRectTooSmall      = errors.New("rectangle width or height smaller than minimum side length")
+	// ErrRectShape 是**通用**矩形解码错误：ROI/MASK 与裁剪窗口都会命中它。
+	// 裁剪专用的 ErrCropShape（internal/region/crop.go）只描述 crop 文档形状，
+	// 两者不能混用——否则 ROI 配置报错时会显示「crop must be ...」，排查方向被带偏。
+	ErrRectShape = errors.New("rectangle must be an array of exactly four numbers")
 )
 
 // Rect represents a bounding box or region in strictly normalized coordinates [x1, y1, x2, y2].
 type Rect [4]float64
+
+// Identity returns the full-frame rect.
+func Identity() Rect { return Rect{0, 0, 1, 1} }
+
+// IsIdentity reports whether the rect is exactly the full frame.
+//
+// Bit-exact comparison, no epsilon: every producer of a full-frame value (engine reply,
+// normalized config) uses Identity() verbatim. Tolerating "almost full frame" would
+// silently skip a reprojection, which is worse than a slightly-off crop.
+func (r Rect) IsIdentity() bool { return r == Identity() }
+
+// UnmarshalJSON 要求**恰好 4 个数字**。
+//
+// 不能依赖 Go 数组的默认解码语义：少元素会静默补零、多元素会静默截断，
+// 两种都会把畸形配置变成另一个矩形。`null` 不是合法矩形（清空语义由上层的三态
+// 请求字段 / ParseCrop 负责）。
+func (r *Rect) UnmarshalJSON(b []byte) error {
+	trimmed := bytes.TrimSpace(b)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return fmt.Errorf("%w: null is not a rectangle", ErrRectShape)
+	}
+	var values []float64
+	if err := json.Unmarshal(trimmed, &values); err != nil {
+		return fmt.Errorf("unmarshal rect: %w", err)
+	}
+	if len(values) != 4 {
+		return fmt.Errorf("%w: got %d value(s)", ErrRectShape, len(values))
+	}
+	*r = Rect{values[0], values[1], values[2], values[3]}
+	return nil
+}
 
 // X1 returns the left coordinate.
 func (r Rect) X1() float64 { return r[0] }

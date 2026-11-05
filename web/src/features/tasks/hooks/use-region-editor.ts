@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type RegionTool } from '../components/region-drag-types'
 import {
   MAX_RECTS_PER_CATEGORY,
+  cropEqual,
   draftItems,
   fromDraft,
+  isFullFrame,
   parseRegionConfig,
   serializeRegionConfig,
   toDraft,
@@ -27,18 +29,34 @@ export interface RegionEditorController {
   canUndo: boolean
   isDirty: boolean
   counts: { roi: number; mask: number }
-  /** 载入新的基线配置（打开弹窗时调用），并清空撤销历史。 */
+  /** 任务级裁剪窗口；`null` = 全幅。与 ROI/MASK 同处一个撤销栈。 */
+  crop: Rect | null
+  /** 载入新的 ROI 基线（切换算法时调用），并清空撤销历史。**不动 crop**。 */
   reset: (value: string) => void
+  /** 载入新的 crop 基线（打开弹窗/切换相机时调用），并清空撤销历史。 */
+  resetCrop: (value: Rect | null) => void
   setTool: (tool: RegionTool) => void
   select: (selection: RegionSelection | null) => void
   changeDraft: (next: RegionDraft) => void
   createRect: (category: RegionCategory, rect: Rect) => void
   deleteRect: (category: RegionCategory, index: number) => void
-  /** 在一次操作真正变更前压入撤销快照。 */
+  /** 替换裁剪窗口；调用方负责先 {@link snapshot}。 */
+  setCrop: (rect: Rect | null) => void
+  /** 清空裁剪窗口（自带快照，可直接绑到按钮）。 */
+  clearCrop: () => void
+  /** 在一次操作真正变更前压入撤销快照（区域与裁剪一起压）。 */
   snapshot: () => void
   undo: () => void
   /** 序列化为 wire 契约 JSON。 */
   serialize: () => string
+  /** 序列化裁剪窗口；整帧折叠为 `null`。 */
+  serializeCrop: () => Rect | null
+}
+
+/** 一次撤销快照同时覆盖区域与裁剪：两套独立栈会让一次 Ctrl+Z 只回退一半。 */
+interface EditorSnapshot {
+  draft: RegionDraft
+  crop: Rect | null
 }
 
 /**
@@ -51,7 +69,8 @@ export interface RegionEditorController {
  * 那样会把外部真源与编辑缓冲变成双写。切换编辑对象时由调用方显式调 {@link reset}。
  */
 export function useRegionEditor(
-  initialValue: string = EMPTY_REGION_JSON
+  initialValue: string = EMPTY_REGION_JSON,
+  initialCrop: Rect | null = null
 ): RegionEditorController {
   const idSeqRef = useRef(0)
   const makeId = useCallback(() => {
@@ -69,7 +88,9 @@ export function useRegionEditor(
     let seq = 0
     return toDraft(parseRegionConfig(initialValue), () => `init-${++seq}`)
   })
-  const [history, setHistory] = useState<RegionDraft[]>([])
+  const [crop, setCropState] = useState<Rect | null>(initialCrop)
+  const [cropBaseline, setCropBaseline] = useState<Rect | null>(initialCrop)
+  const [history, setHistory] = useState<EditorSnapshot[]>([])
   const [selected, setSelected] = useState<RegionSelection | null>(null)
   const [tool, setTool] = useState<RegionTool>('select')
 
@@ -83,6 +104,10 @@ export function useRegionEditor(
   useEffect(() => {
     historyRef.current = history
   }, [history])
+  const cropRef = useRef(crop)
+  useEffect(() => {
+    cropRef.current = crop
+  }, [crop])
 
   const reset = useCallback(
     (value: string) => {
@@ -96,9 +121,18 @@ export function useRegionEditor(
     [makeId]
   )
 
+  // ⚠️ 切算法会调 reset()，但 crop 属于任务而不是算法：这里绝不碰 crop，
+  // 否则「切一次算法 = 清空裁剪窗口」。
+  const resetCrop = useCallback((value: Rect | null) => {
+    setCropState(value)
+    setCropBaseline(value)
+    setHistory([])
+    setSelected(null)
+  }, [])
+
   const snapshot = useCallback(() => {
     setHistory((prev) => {
-      const next = [...prev, draftRef.current]
+      const next = [...prev, { draft: draftRef.current, crop: cropRef.current }]
       return next.length > MAX_HISTORY
         ? next.slice(next.length - MAX_HISTORY)
         : next
@@ -108,7 +142,9 @@ export function useRegionEditor(
   const undo = useCallback(() => {
     const prev = historyRef.current
     if (prev.length === 0) return
-    setDraft(prev[prev.length - 1])
+    const last = prev[prev.length - 1]
+    setDraft(last.draft)
+    setCropState(last.crop)
     setHistory(prev.slice(0, -1))
     setSelected(null)
   }, [])
@@ -151,11 +187,21 @@ export function useRegionEditor(
     setSelected(selection)
   }, [])
 
+  const setCrop = useCallback((rect: Rect | null) => {
+    setCropState(rect)
+  }, [])
+
+  const clearCrop = useCallback(() => {
+    snapshot()
+    setCropState(null)
+  }, [snapshot])
+
   const isDirty = useMemo(
     () =>
       serializeRegionConfig(fromDraft(draft)) !==
-      serializeRegionConfig(fromDraft(baseline)),
-    [draft, baseline]
+        serializeRegionConfig(fromDraft(baseline)) ||
+      !cropEqual(crop, cropBaseline),
+    [draft, baseline, crop, cropBaseline]
   )
 
   const counts = useMemo(
@@ -168,6 +214,11 @@ export function useRegionEditor(
     []
   )
 
+  const serializeCrop = useCallback(() => {
+    const value = cropRef.current
+    return value && !isFullFrame(value) ? value : null
+  }, [])
+
   return {
     draft,
     selected,
@@ -175,14 +226,19 @@ export function useRegionEditor(
     canUndo: history.length > 0,
     isDirty,
     counts,
+    crop,
     reset,
+    resetCrop,
     setTool,
     select,
     changeDraft,
     createRect,
     deleteRect,
+    setCrop,
+    clearCrop,
     snapshot,
     undo,
     serialize,
+    serializeCrop,
   }
 }

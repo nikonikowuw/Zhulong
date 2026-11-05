@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { type Algorithm } from '@/features/algorithms/data/schema'
 import { type Camera } from '@/features/cameras/data/schema'
+import { cropRectSchema } from './region-config'
 
 /**
  * 算法配置子项实体契约 (映射后端 TaskAlgorithm 实体)
@@ -28,6 +29,8 @@ export const taskSchema = z.object({
   cameraId: z.string(),
   name: z.string().default(''),
   enabled: z.boolean(),
+  // 任务级裁剪窗口（null = 全幅）。Zod 默认 strip，漏掉这一行会在保存时静默清空配置。
+  crop: cropRectSchema.nullable().default(null),
   algorithms: z.array(taskAlgorithmSchema).default([]),
   createdAt: z.string(),
   updatedAt: z.string(),
