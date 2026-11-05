@@ -20,6 +20,10 @@ constexpr int64_t rtp_half_period = 1LL << 31;
 
 } // namespace
 
+AudioNormalizer::AudioNormalizer() {
+    update_metadata(0, 8000, 1, 1, 8000);
+}
+
 void AudioNormalizer::update_metadata(int32_t codec, int32_t sample_rate, int32_t channels,
                                      int32_t time_base_num, int32_t time_base_den) {
     codec_ = codec;
@@ -27,6 +31,8 @@ void AudioNormalizer::update_metadata(int32_t codec, int32_t sample_rate, int32_
     channels_ = channels > 0 ? channels : 1;
     time_base_num_ = time_base_num > 0 ? time_base_num : 1;
     time_base_den_ = time_base_den > 0 ? time_base_den : 8000;
+    rtp_half_period_us_ = rescale_to_microseconds(rtp_half_period, time_base_num_, time_base_den_);
+    rtp_full_period_us_ = rescale_to_microseconds(rtp_tick_period, time_base_num_, time_base_den_);
 }
 
 int64_t AudioNormalizer::rescale_to_microseconds(int64_t ticks, int32_t num, int32_t den) {
@@ -63,10 +69,8 @@ Zhulong_packet_view AudioNormalizer::normalize(const Zhulong_packet_view &in,
         // 32 位 RTP 滴答回绕检测与展开 (约 2^31 滴答突降)
         if (has_last_abs_) {
             const int64_t diff = audio_abs_us - (last_abs_us_ - wrap_offset_us_);
-            const int64_t half_period_us = rescale_to_microseconds(rtp_half_period, time_base_num_, time_base_den_);
-            const int64_t full_period_us = rescale_to_microseconds(rtp_tick_period, time_base_num_, time_base_den_);
-            if (half_period_us > 0 && diff < -half_period_us) {
-                wrap_offset_us_ += full_period_us;
+            if (rtp_half_period_us_ > 0 && diff < -rtp_half_period_us_) {
+                wrap_offset_us_ += rtp_full_period_us_;
             }
         }
         audio_abs_us += wrap_offset_us_;

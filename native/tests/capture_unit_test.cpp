@@ -18,12 +18,14 @@
 #include "nodes/capture/rtsp_input.hpp"
 #include "pipeline/engine.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
 
 #define CHECK(condition) do { if (!(condition)) throw std::runtime_error("check failed at line " + std::to_string(__LINE__)); } while (false)
 using namespace std::chrono_literals;
@@ -140,7 +142,63 @@ int main() {
             }
             CHECK(caught);
             CHECK(!zhulong::in_callback);
-            CHECK(!ai_throwing.enabled);
+            CHECK(!ai_throwing.is_enabled());
+        }
+
+        /* 10. 测试并发多回调执行期间 disable_and_drain 的排空屏障（活动计数器） */
+        {
+            std::atomic<int> active_in_cb{0};
+            std::atomic<bool> release_cb{false};
+            std::atomic<int> completed_cbs{0};
+
+            auto sub = std::make_shared<zhulong::AISubscription>(
+                1,
+                [](uintptr_t tok, Zhulong_stream_id, const char*, size_t) {
+                    auto *ctx = reinterpret_cast<std::tuple<std::atomic<int>*, std::atomic<bool>*, std::atomic<int>*>*>(tok);
+                    auto *active = std::get<0>(*ctx);
+                    auto *release = std::get<1>(*ctx);
+                    auto *completed = std::get<2>(*ctx);
+
+                    active->fetch_add(1);
+                    while (!release->load()) {
+                        std::this_thread::yield();
+                    }
+                    active->fetch_sub(1);
+                    completed->fetch_add(1);
+                },
+                0
+            );
+            auto ctx = std::make_tuple(&active_in_cb, &release_cb, &completed_cbs);
+            sub->token = reinterpret_cast<uintptr_t>(&ctx);
+
+            std::thread t1([&] { sub->invoke(1, "{}", 2); });
+            std::thread t2([&] { sub->invoke(1, "{}", 2); });
+
+            // 等待两个线程都进入回调
+            while (active_in_cb.load() < 2) {
+                std::this_thread::yield();
+            }
+
+            std::atomic<bool> drain_finished{false};
+            std::thread drain_thread([&] {
+                sub->disable_and_drain();
+                drain_finished.store(true);
+            });
+
+            // 给 drain 线程时间启动并等待
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            CHECK(!drain_finished.load());
+
+            // 释放回调
+            release_cb.store(true);
+
+            drain_thread.join();
+            t1.join();
+            t2.join();
+
+            CHECK(drain_finished.load());
+            CHECK(completed_cbs.load() == 2);
+            CHECK(!sub->is_enabled());
         }
 
         std::cout << "URL/options/ownership/drain unit tests passed\n";

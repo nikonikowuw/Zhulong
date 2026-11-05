@@ -44,15 +44,10 @@ private:
 /**
  * @brief 订阅通道同步排空基类
  *
- * 封装 enabled/active 状态、互斥锁、条件变量与同步排空状态机。
+ * 封装 enabled_/active_count_ 状态、互斥锁、条件变量与基于并发计数的同步排空状态机。
  */
 class SubscriptionBase {
 public:
-    std::mutex mutex;                           /**< 保护 enabled 与 active 状态 */
-    std::condition_variable drained;            /**< 当 active 变为 false 时发出的排空信号 */
-    bool enabled{true};                         /**< 订阅是否有效，置 false 即拒绝后续派发 */
-    bool active{false};                         /**< 当前是否有回调正在执行中 */
-
     SubscriptionBase() = default;
     virtual ~SubscriptionBase() = default;
 
@@ -64,9 +59,20 @@ public:
     /**
      * @brief 禁用该订阅并阻塞等待所有正在执行的回调彻底排空
      *
-     * 同步阻塞直至 active 变为 false。返回后保证没有任何回调在运行，且后续也不会再触发。
+     * 同步阻塞直至 active_count_ 归零。返回后保证没有任何回调在运行，且后续也不会再触发。
      */
     void disable_and_drain();
+
+    /** @brief 检查订阅通道是否处于使能状态 */
+    bool is_enabled() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return enabled_;
+    }
+
+    /** @brief 兼容性查询方法 */
+    bool enabled() const {
+        return is_enabled();
+    }
 
 protected:
     /**
@@ -75,26 +81,36 @@ protected:
     template <typename Invoker>
     void execute_callback(Invoker&& invoker) {
         {
-            std::lock_guard<std::mutex> lock(mutex);
-            if (!enabled) return;
-            active = true;
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!enabled_) return;
+            ++active_count_;
         }
 
         try {
             InCallbackGuard guard;
             invoker();
         } catch (...) {
-            std::lock_guard<std::mutex> lock(mutex);
-            active = false;
-            enabled = false;
-            drained.notify_all();
+            std::lock_guard<std::mutex> lock(mutex_);
+            --active_count_;
+            enabled_ = false;
+            if (active_count_ == 0) {
+                drained_.notify_all();
+            }
             throw;
         }
 
-        std::lock_guard<std::mutex> lock(mutex);
-        active = false;
-        drained.notify_all();
+        std::lock_guard<std::mutex> lock(mutex_);
+        --active_count_;
+        if (active_count_ == 0) {
+            drained_.notify_all();
+        }
     }
+
+private:
+    mutable std::mutex mutex_;                   /**< 保护 enabled_ 与 active_count_ 状态 */
+    std::condition_variable drained_;            /**< 当 active_count_ 归零时发出的排空信号 */
+    bool enabled_{true};                         /**< 订阅是否有效，置 false 即拒绝后续派发 */
+    size_t active_count_{0};                     /**< 当前正在执行中的回调并发计数 */
 };
 
 /**

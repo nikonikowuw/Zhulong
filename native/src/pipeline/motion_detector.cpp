@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <utility>
 
 #if defined(__linux__)
@@ -40,10 +41,8 @@ public:
 
     ~ScopedDmaReader() {
 #if defined(__linux__)
+        sync_.reset();
         if (addr_ != nullptr) {
-            struct dma_buf_sync sync{};
-            sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
-            (void)::ioctl(fd_, DMA_BUF_IOCTL_SYNC, &sync);
             ::munmap(addr_, size_);
         }
 #endif
@@ -59,15 +58,14 @@ public:
         if (addr == MAP_FAILED || addr == nullptr) {
             return nullptr;
         }
-        struct dma_buf_sync sync{};
-        sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ;
-        if (::ioctl(dma_fd, DMA_BUF_IOCTL_SYNC, &sync) < 0) {
+        sync_ = std::make_unique<platform::ScopedFdSync>(dma_fd, platform::kDmaSyncRead);
+        if (!sync_->active()) {
+            sync_.reset();
             ::munmap(addr, map_size);
             return nullptr;
         }
         addr_ = addr;
         size_ = map_size;
-        fd_ = dma_fd;
         return static_cast<const uint8_t*>(addr_);
 #else
         (void)dma_fd;
@@ -77,9 +75,11 @@ public:
     }
 
 private:
+#if defined(__linux__)
     void* addr_{nullptr};
     size_t size_{0};
-    int fd_{-1};
+    std::unique_ptr<platform::ScopedFdSync> sync_;
+#endif
 };
 
 } // namespace

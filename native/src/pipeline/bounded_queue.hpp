@@ -61,18 +61,37 @@ public:
     BoundedQueue& operator=(BoundedQueue&&) = delete;
 
     /**
-     * @brief 数据入队
+     * @brief 数据入队（左值引用）
      *
      * ⚠️ 锁外析构：
      *   - 在 DROP_OLDEST 策略下被淘汰的最旧元素，在锁外完成移动与析构，防止持有队列锁时触发复杂的外部回收。
-     *   - 被拒收的 item（取消 / DROP_NEWEST）同样在锁外析构：标准保证**形参**在函数体局部对象
-     *     （包括 lock）之后析构。如果把签名改成“先 move 进局部变量再 return”，这条保证就失效，
-     *     必须自己把释放放到临界区外。
      *
      * @param item 待入队的数据元素
      * @return true 成功入队；false 队列已被取消或因 DROP_NEWEST 策略被拒绝
      */
-    bool push(T item) {
+    bool push(const T &item) {
+        return push_internal(item);
+    }
+
+    /**
+     * @brief 数据入队（右值移动）
+     *
+     * ⚠️ 锁外析构：
+     *   - 在 DROP_OLDEST 策略下被淘汰的最旧元素，在锁外完成移动与析构；
+     *   - 被拒收的 item 仍在调用方作用域析构（锁外）。
+     *
+     * @param item 待入队的右值数据元素
+     * @return true 成功入队；false 队列已被取消或因 DROP_NEWEST 策略被拒绝
+     */
+    bool push(T &&item) {
+        return push_internal(std::move(item));
+    }
+
+    /**
+     * @brief 原位构造数据入队
+     */
+    template <typename... Args>
+    bool emplace(Args &&...args) {
         std::optional<T> discarded;
         {
             std::unique_lock<std::mutex> lock(mutex_);
@@ -80,7 +99,6 @@ public:
 
             if (queue_.size() >= capacity_) {
                 if (strategy_ == OverflowStrategy::DROP_OLDEST) {
-                    // 移出最旧元素并在锁外析构，避免持锁执行潜在复杂的回收闭包
                     discarded = std::move(queue_.front());
                     queue_.pop_front();
                 } else if (strategy_ == OverflowStrategy::DROP_NEWEST) {
@@ -93,7 +111,7 @@ public:
                 }
             }
 
-            queue_.push_back(std::move(item));
+            queue_.emplace_back(std::forward<Args>(args)...);
             not_empty_.notify_one();
         }
         return true;
@@ -176,7 +194,6 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             discarded = std::move(queue_);
-            queue_.clear();
         }
         not_full_.notify_all();
     }
@@ -205,6 +222,33 @@ public:
     }
 
 private:
+    template <typename U>
+    bool push_internal(U &&item) {
+        std::optional<T> discarded;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            if (cancelled_) return false;
+
+            if (queue_.size() >= capacity_) {
+                if (strategy_ == OverflowStrategy::DROP_OLDEST) {
+                    discarded = std::move(queue_.front());
+                    queue_.pop_front();
+                } else if (strategy_ == OverflowStrategy::DROP_NEWEST) {
+                    return false;
+                } else { // BLOCK
+                    not_full_.wait(lock, [this] {
+                        return cancelled_ || queue_.size() < capacity_;
+                    });
+                    if (cancelled_) return false;
+                }
+            }
+
+            queue_.push_back(std::forward<U>(item));
+            not_empty_.notify_one();
+        }
+        return true;
+    }
+
     const size_t capacity_;                 /**< 队列容量上限 */
     const OverflowStrategy strategy_;       /**< 溢出淘汰策略 */
     mutable std::mutex mutex_;              /**< 保护内部 deque 与状态 */

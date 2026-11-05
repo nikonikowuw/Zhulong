@@ -30,7 +30,7 @@ namespace zhulong {
 
 class AudioNormalizer {
 public:
-    AudioNormalizer() = default;
+    AudioNormalizer();
 
     /**
      * @brief 更新音频流元数据配置
@@ -73,6 +73,8 @@ private:
     int32_t channels_{1};
     int32_t time_base_num_{1};
     int32_t time_base_den_{8000};
+    int64_t rtp_half_period_us_{0};
+    int64_t rtp_full_period_us_{0};
 
     bool anchor_established_{false};
     /** 锚点是否取自真实 PTS（false = 建在合成时钟上，等待首枚真实 PTS 重锚一次） */

@@ -34,11 +34,11 @@ void Subscription::invoke(const Zhulong_packet_view &packet) {
 }
 
 void SubscriptionBase::disable_and_drain() {
-    std::unique_lock<std::mutex> lock(mutex);
+    std::unique_lock<std::mutex> lock(mutex_);
     // 禁用后续派发
-    enabled = false;
+    enabled_ = false;
     // 阻塞等待当前正在执行的回调完全返回
-    drained.wait(lock, [this] { return !active; });
+    drained_.wait(lock, [this] { return active_count_ == 0; });
 }
 
 } // namespace zhulong
