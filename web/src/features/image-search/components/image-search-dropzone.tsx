@@ -1,4 +1,4 @@
-import { type DragEvent, useRef, useState } from 'react'
+import { type DragEvent, memo, useRef, useState } from 'react'
 import {
   CheckCircle2,
   FileImage,
@@ -38,7 +38,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function ImageSearchDropzone({
+export const ImageSearchDropzone = memo(function ImageSearchDropzone({
   selectedFile,
   previewUrl,
   onFileSelect,
@@ -266,4 +266,4 @@ export function ImageSearchDropzone({
       )}
     </Card>
   )
-}
+})

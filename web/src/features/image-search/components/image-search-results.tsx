@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import {
   AlertCircle,
   Cpu,
@@ -32,7 +33,7 @@ function getErrorMessage(error: Error | null, fallback: string): string {
   return error.message || fallback
 }
 
-export function ImageSearchResults({
+export const ImageSearchResults = memo(function ImageSearchResults({
   results,
   isSearching,
   isError,
@@ -237,4 +238,4 @@ export function ImageSearchResults({
       </div>
     </div>
   )
-}
+})

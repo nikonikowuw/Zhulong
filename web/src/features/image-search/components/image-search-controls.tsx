@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import {
   Activity,
   Gauge,
@@ -28,7 +29,7 @@ interface ImageSearchControlsProps {
 const TOP_K_OPTIONS = [10, 20, 50]
 const PRESET_THRESHOLDS = [50, 70, 85]
 
-export function ImageSearchControls({
+export const ImageSearchControls = memo(function ImageSearchControls({
   threshold,
   onThresholdChange,
   topK,
@@ -171,7 +172,7 @@ export function ImageSearchControls({
           type='button'
           className='relative h-9.5 flex-1 gap-2 overflow-hidden text-xs font-semibold shadow-xs transition-all duration-200 active:scale-[0.99]'
           disabled={!canSearch || isSearching}
-          onClick={() => onSearch()}
+          onClick={onSearch}
         >
           {isSearching ? (
             <>
@@ -197,7 +198,7 @@ export function ImageSearchControls({
           size='sm'
           className='h-9.5 gap-1.5 px-3 text-xs transition-colors hover:border-border hover:bg-muted/60'
           disabled={isSearching}
-          onClick={() => onReset()}
+          onClick={onReset}
         >
           <RotateCcw className='h-3.5 w-3.5 text-muted-foreground' />
           <span>{t('controls.reset')}</span>
@@ -205,4 +206,4 @@ export function ImageSearchControls({
       </div>
     </Card>
   )
-}
+})

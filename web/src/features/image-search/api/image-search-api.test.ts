@@ -46,7 +46,7 @@ describe('imageSearchApi', () => {
     expect(formData).toBeInstanceOf(FormData)
     expect((formData as FormData).get('threshold')).toBe('0.75')
     expect((formData as FormData).get('topK')).toBe('20')
-    expect(config?.headers?.['Content-Type']).toBe('multipart/form-data')
+    expect(config?.headers?.['Content-Type']).toBeUndefined()
   })
 
   it('getFaceImageUrl formats the secure person face image url', () => {

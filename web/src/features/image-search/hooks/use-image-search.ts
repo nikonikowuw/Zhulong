@@ -6,6 +6,12 @@ import { type ImageSearchResponse } from '../data/schema'
 const DEFAULT_IMAGE_SEARCH_THRESHOLD = 0.7
 const DEFAULT_IMAGE_SEARCH_TOP_K = 10
 
+interface SearchVariables {
+  file: File
+  threshold: number
+  topK: number
+}
+
 export function useImageSearch() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
@@ -17,7 +23,7 @@ export function useImageSearch() {
 
   const previewUrlRef = useRef<string | null>(null)
 
-  // 卸载时回收可能存在的 ObjectURL
+  // 组件卸载时释放最终可能残留的 ObjectURL
   useEffect(() => {
     return () => {
       if (previewUrlRef.current) {
@@ -34,16 +40,17 @@ export function useImageSearch() {
     isError,
     error,
     data: searchData,
-  } = useMutation<ImageSearchResponse, Error, void>({
-    mutationFn: async () => {
-      if (!selectedFile) {
-        throw new Error('No image selected')
-      }
+  } = useMutation<ImageSearchResponse, Error, SearchVariables>({
+    mutationFn: async ({
+      file,
+      threshold: searchThreshold,
+      topK: searchTopK,
+    }) => {
       setUploadProgress(0)
       return imageSearchApi.searchByImage({
-        image: selectedFile,
-        threshold,
-        topK,
+        image: file,
+        threshold: searchThreshold,
+        topK: searchTopK,
         onUploadProgress: (progressEvent) => {
           if (progressEvent.total) {
             const percent = Math.round(
@@ -59,7 +66,7 @@ export function useImageSearch() {
     },
   })
 
-  // 变更或清除图片时释放旧 ObjectURL 并联动重置旧检索结果，避免图文脱节
+  // 交互逻辑归位事件处理函数：变更或清除图片时即时释放旧 ObjectURL，避免图文脱节与级联渲染
   const setFile = useCallback(
     (file: File | null) => {
       if (previewUrlRef.current) {
@@ -85,6 +92,15 @@ export function useImageSearch() {
     setTopK(DEFAULT_IMAGE_SEARCH_TOP_K)
   }, [setFile])
 
+  const search = useCallback(() => {
+    if (!selectedFile) return
+    executeSearch({
+      file: selectedFile,
+      threshold,
+      topK,
+    })
+  }, [executeSearch, selectedFile, threshold, topK])
+
   return {
     selectedFile,
     previewUrl,
@@ -95,7 +111,7 @@ export function useImageSearch() {
     uploadProgress,
     setFile,
     reset,
-    search: () => executeSearch(),
+    search,
     isSearching,
     isSuccess,
     isError,

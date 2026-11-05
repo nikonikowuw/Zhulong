@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { Crown, Images, Map, User, UserCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -13,10 +13,12 @@ interface ImageSearchMatchRowProps {
   rank: number
 }
 
-export function ImageSearchMatchRow({ match, rank }: ImageSearchMatchRowProps) {
+export const ImageSearchMatchRow = memo(function ImageSearchMatchRow({
+  match,
+  rank,
+}: ImageSearchMatchRowProps) {
   const { t } = useTranslation('imageSearch')
   const navigate = useNavigate()
-  const [imgError, setImgError] = useState(false)
 
   const faceUrl = imageSearchApi.getFaceImageUrl(
     match.personId,
@@ -124,14 +126,11 @@ export function ImageSearchMatchRow({ match, rank }: ImageSearchMatchRowProps) {
           </div>
 
           <Avatar className='h-full w-full rounded-xl'>
-            {!imgError ? (
-              <AvatarImage
-                src={faceUrl}
-                alt={t('results.card.matchedFaceAlt')}
-                className='h-full w-full object-cover transition-transform duration-300 group-hover:scale-105'
-                onError={() => setImgError(true)}
-              />
-            ) : null}
+            <AvatarImage
+              src={faceUrl}
+              alt={t('results.card.matchedFaceAlt')}
+              className='h-full w-full object-cover transition-transform duration-300 group-hover:scale-105'
+            />
             <AvatarFallback className='rounded-xl bg-muted/60 text-muted-foreground'>
               <User className='h-6 w-6 opacity-60' />
             </AvatarFallback>
@@ -256,4 +255,4 @@ export function ImageSearchMatchRow({ match, rank }: ImageSearchMatchRowProps) {
       </div>
     </div>
   )
-}
+})
