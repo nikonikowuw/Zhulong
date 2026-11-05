@@ -22,6 +22,7 @@ export interface GetPersonsParams {
   page?: number
   pageSize?: number
   search?: string
+  faceStatus?: string
 }
 
 export interface GetFacesParams {
@@ -41,6 +42,7 @@ export const personsApi = {
           page: params?.page ?? 1,
           pageSize: params?.pageSize ?? 10,
           search: params?.search,
+          faceStatus: params?.faceStatus,
         },
       }
     )
@@ -215,5 +217,44 @@ export const personsApi = {
    */
   getFaceImportFailedReportUrl(jobId: string): string {
     return `/api/v1/persons/import-face-jobs/${jobId}/failed-report`
+  },
+
+  /**
+   * 导出人员照片采像清单 CSV（支持按关键词与底库状态过滤）
+   */
+  async exportManifest(params?: {
+    search?: string
+    faceStatus?: string
+  }): Promise<void> {
+    const resp = await apiClient.get<Blob>('/persons/export', {
+      params: {
+        search: params?.search?.trim() || undefined,
+        faceStatus: params?.faceStatus?.trim() || undefined,
+      },
+      responseType: 'blob',
+    })
+
+    const disposition = resp.headers['content-disposition'] as
+      | string
+      | undefined
+    let filename = 'person_photo_manifest.csv'
+    if (disposition) {
+      const match = /filename=["']?([^"';]+)["']?/.exec(disposition)
+      if (match && match[1]) {
+        filename = match[1]
+      }
+    }
+
+    const blob = new Blob([resp.data], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    requestAnimationFrame(() => {
+      document.body.removeChild(anchor)
+      URL.revokeObjectURL(url)
+    })
   },
 }

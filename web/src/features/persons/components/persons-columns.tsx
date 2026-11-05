@@ -114,6 +114,8 @@ export const personsColumns: ColumnDef<Person>[] = [
   },
   {
     id: 'faces',
+    accessorFn: (row) =>
+      row.faces && row.faces.length > 0 ? 'enrolled' : 'missing',
     header: ({ column }) => {
       // eslint-disable-next-line react-hooks/rules-of-hooks
       const { t } = useTranslation('persons')

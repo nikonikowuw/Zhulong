@@ -35,6 +35,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	group := rg.Group("/persons")
 	{
 		group.GET("", h.List)
+		group.GET("/export", h.Export)
 		group.POST("", h.Create)
 		group.GET("/:id", h.Get)
 		group.PUT("/:id", h.Update)
@@ -79,7 +80,8 @@ func (h *Handler) UploadRouteRegistrar() RouteRegistrar {
 
 type listPersonsQuery struct {
 	httputil.PaginationQuery
-	Search string `form:"search"`
+	Search     string `form:"search"`
+	FaceStatus string `form:"faceStatus"`
 }
 
 // List godoc
@@ -91,6 +93,7 @@ type listPersonsQuery struct {
 // @Param        limit query int false "Legacy pagination limit"
 // @Param        offset query int false "Legacy pagination offset"
 // @Param        search query string false "Search keyword for name or personId"
+// @Param        faceStatus query string false "Filter by face enrollment status (all, enrolled, missing)"
 // @Success      200  {object}  httputil.Response{data=httputil.PaginatedData[PersonResponse]}
 // @Failure      422  {object}  httputil.Response
 // @Failure      500  {object}  httputil.Response
@@ -103,13 +106,45 @@ func (h *Handler) List(c *gin.Context) {
 	}
 	window := query.Normalize()
 
-	persons, total, err := h.service.ListPersons(c.Request.Context(), window.PageSize, window.Offset, query.Search)
+	persons, total, err := h.service.ListPersons(c.Request.Context(), window.PageSize, window.Offset, query.Search, query.FaceStatus)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
 
 	httputil.PaginatedSuccess(c, newPersonResponses(persons), total, window)
+}
+
+type exportPersonsQuery struct {
+	Search     string `form:"search"`
+	FaceStatus string `form:"faceStatus"`
+}
+
+// Export godoc
+// @Summary      Export persons photo manifest CSV
+// @Tags         person
+// @Produce      text/csv
+// @Param        search query string false "Search keyword for name or personId"
+// @Param        faceStatus query string false "Filter by face enrollment status (all, enrolled, missing)"
+// @Success      200  {file}    binary
+// @Failure      500  {object}  httputil.Response
+// @Router       /persons/export [get]
+func (h *Handler) Export(c *gin.Context) {
+	var query exportPersonsQuery
+	if err := c.ShouldBindQuery(&query); err != nil {
+		httputil.HandleBindError(c, err)
+		return
+	}
+
+	csvBytes, filename, err := h.service.ExportPersonsManifestCSV(c.Request.Context(), query.Search, query.FaceStatus)
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
+
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", csvBytes)
 }
 
 // Create godoc

@@ -23,7 +23,13 @@
     "emptyDesc": "点击右上角「+ 新增人员」添加第一位人员",
     "filterEmpty": "未找到匹配的人员",
     "filterEmptyDesc": "请尝试调整搜索关键词",
-    "resetFilter": "重置筛选"
+    "resetFilter": "重置筛选",
+    "filterFaceStatus": {
+      "title": "人脸底库",
+      "enrolled": "已建模",
+      "missing": "未录入"
+    },
+    "missingFaceBadge": "待采像"
   },
   "actions": {
     "retry": "重试",
@@ -42,7 +48,12 @@
     "deleting": "删除中...",
     "setPrimary": "设为主人脸",
     "import": "批量导入",
-    "importFaces": "人脸批量导入"
+    "importFaces": "人脸批量导入",
+    "exportManifest": "导出采像清单"
+  },
+  "export": {
+    "success": "采像清单已导出",
+    "tooltip": "按当前搜索与底库筛选导出 CSV，含姓名、工号与建议照片文件名，可直接回传给「人脸批量导入」补录底库"
   },
   "dialogs": {
     "createTitle": "新增人员档案",

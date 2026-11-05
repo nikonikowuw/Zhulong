@@ -1,14 +1,41 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { FileUp, Images, Plus, RefreshCw } from 'lucide-react'
+import {
+  FileSpreadsheet,
+  FileUp,
+  Images,
+  Loader2,
+  Plus,
+  RefreshCw,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { PERSONS_QUERY_KEY } from '../hooks/use-persons'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import {
+  PERSONS_QUERY_KEY,
+  useExportPersonsManifest,
+} from '../hooks/use-persons'
 import { usePersonsContext } from './persons-provider'
 
-export function PersonsPrimaryButtons() {
+interface PersonsPrimaryButtonsProps {
+  /** 当前 URL 搜索关键词，导出时保持一致，避免「看到的」和「导出的」不是同一批人。 */
+  search?: string
+  /** 当前底库筛选状态（enrolled / missing），同上。 */
+  faceStatus?: string
+}
+
+export function PersonsPrimaryButtons({
+  search,
+  faceStatus,
+}: PersonsPrimaryButtonsProps) {
   const { t } = useTranslation('persons')
   const { setOpen, setCurrentRow } = usePersonsContext()
   const queryClient = useQueryClient()
+  const exportMutation = useExportPersonsManifest()
 
   const handleRefresh = () => {
     void queryClient.invalidateQueries({ queryKey: PERSONS_QUERY_KEY })
@@ -29,6 +56,15 @@ export function PersonsPrimaryButtons() {
     setOpen('import-faces')
   }
 
+  const handleExportManifest = async () => {
+    try {
+      await exportMutation.mutateAsync({ search, faceStatus })
+      toast.success(t('export.success', { defaultValue: '采像清单已导出' }))
+    } catch {
+      // 全局 API 错误处理已展示本地化服务端消息
+    }
+  }
+
   return (
     <div className='flex items-center gap-2'>
       <Button
@@ -43,6 +79,38 @@ export function PersonsPrimaryButtons() {
           {t('actions.refresh', { defaultValue: '刷新' })}
         </span>
       </Button>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant='outline'
+            size='sm'
+            className='h-8'
+            onClick={() => void handleExportManifest()}
+            disabled={exportMutation.isPending}
+            title={t('actions.exportManifest', {
+              defaultValue: '导出采像清单',
+            })}
+          >
+            {exportMutation.isPending ? (
+              <Loader2 className='me-1 h-4 w-4 animate-spin' />
+            ) : (
+              <FileSpreadsheet className='me-1 h-4 w-4' />
+            )}
+            <span className='hidden md:inline'>
+              {t('actions.exportManifest', { defaultValue: '导出采像清单' })}
+            </span>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>
+            {t('export.tooltip', {
+              defaultValue:
+                '按当前搜索与底库筛选导出 CSV，含姓名、工号与建议照片文件名，可直接回传给「人脸批量导入」',
+            })}
+          </p>
+        </TooltipContent>
+      </Tooltip>
 
       <Button
         variant='outline'

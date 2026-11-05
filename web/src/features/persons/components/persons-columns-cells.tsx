@@ -1,5 +1,6 @@
 import { Eye, Image as ImageIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -109,13 +110,24 @@ export function PersonsFacesCell({ person }: { person: Person }) {
       variant='outline'
       size='sm'
       onClick={handleOpenFaces}
-      className='h-7 gap-1.5 px-2 text-xs font-normal hover:bg-muted'
+      className={cn(
+        'h-7 gap-1.5 px-2 text-xs font-normal hover:bg-muted',
+        faceCount === 0 &&
+          'border-amber-500/30 bg-amber-500/5 text-amber-700 hover:bg-amber-500/10 dark:text-amber-400'
+      )}
     >
       <ImageIcon className='h-3.5 w-3.5 text-muted-foreground' />
       <span>{t('fields.faceCountUnit', { count: faceCount })}</span>
-      {faceCount > 0 && (
+      {faceCount > 0 ? (
         <Badge variant='secondary' className='h-4 px-1 text-[10px]'>
           {faceCount}
+        </Badge>
+      ) : (
+        <Badge
+          variant='outline'
+          className='h-4 border-amber-500/40 bg-amber-500/10 px-1 text-[10px] text-amber-700 dark:text-amber-400'
+        >
+          {t('table.missingFaceBadge', { defaultValue: '待采像' })}
         </Badge>
       )}
     </Button>

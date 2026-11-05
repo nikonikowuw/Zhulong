@@ -31,10 +31,19 @@ function PersonsContent() {
       ? search.search.trim()
       : undefined
 
+  const selectedFaceStatuses = Array.isArray(search.faceStatus)
+    ? search.faceStatus
+    : search.faceStatus
+      ? [search.faceStatus]
+      : []
+  const faceStatus =
+    selectedFaceStatuses.length === 1 ? selectedFaceStatuses[0] : undefined
+
   const { data, isLoading, isError, refetch } = usePersons({
     page,
     pageSize,
     search: searchQuery,
+    faceStatus,
   })
 
   const { open, setOpen, setCurrentRow } = usePersonsContext()
@@ -90,7 +99,7 @@ function PersonsContent() {
             <h2 className='text-2xl font-bold tracking-tight'>{t('title')}</h2>
             <p className='text-sm text-muted-foreground'>{t('description')}</p>
           </div>
-          <PersonsPrimaryButtons />
+          <PersonsPrimaryButtons search={searchQuery} faceStatus={faceStatus} />
         </div>
 
         {/* 核心数据表格 */}

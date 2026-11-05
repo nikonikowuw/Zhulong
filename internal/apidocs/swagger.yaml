@@ -4512,6 +4512,10 @@ paths:
         in: query
         name: search
         type: string
+      - description: Filter by face enrollment status (all, enrolled, missing)
+        in: query
+        name: faceStatus
+        type: string
       produces:
       - application/json
       responses:
@@ -4897,6 +4901,31 @@ paths:
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Set primary face for a person
+      tags:
+      - person
+  /persons/export:
+    get:
+      parameters:
+      - description: Search keyword for name or personId
+        in: query
+        name: search
+        type: string
+      - description: Filter by face enrollment status (all, enrolled, missing)
+        in: query
+        name: faceStatus
+        type: string
+      produces:
+      - text/csv
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      summary: Export persons photo manifest CSV
       tags:
       - person
   /persons/import-face-jobs:

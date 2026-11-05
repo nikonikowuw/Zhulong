@@ -66,6 +66,9 @@ describe('PersonsTable', () => {
     await expect.element(getByText(/人脸照片/i)).toBeInTheDocument()
     await expect.element(getByText('Alice Cooper')).toBeInTheDocument()
     await expect.element(getByText('EMP-001')).toBeInTheDocument()
+    await expect
+      .element(getByRole('button', { name: /人脸底库/i }))
+      .toBeInTheDocument()
   })
 
   it('clicking face avatar triggers full-size image preview dialog', async () => {
@@ -161,6 +164,7 @@ describe('PersonsTable', () => {
 
     await expect.element(getByText('Bob Unbound')).toBeInTheDocument()
     await expect.element(getByText('-')).toBeInTheDocument()
+    await expect.element(getByText('待采像')).toBeInTheDocument()
   })
 
   it('switches between table and grid views when clicking view toggle', async () => {

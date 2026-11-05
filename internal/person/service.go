@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -280,13 +281,14 @@ func (s *Service) GetPerson(ctx context.Context, id string) (*Person, error) {
 func (s *Service) ListPersons(
 	ctx context.Context,
 	limit, offset int,
-	search string,
+	search, faceStatus string,
 ) ([]Person, int64, error) {
 	list, total, err := s.store.ListPersons(
 		ctx,
 		limit,
 		offset,
 		search,
+		faceStatus,
 	)
 	if err != nil {
 		return nil, 0, apperr.Internal("DATABASE_ERROR", "Failed to list persons", err)
@@ -1683,4 +1685,128 @@ func importIssueResponses(issues []personImportIssue) []PersonImportIssueRespons
 		out = append(out, PersonImportIssueResponse{Field: issue.Field, Code: issue.Code})
 	}
 	return out
+}
+
+// ExportPersonsManifestCSV generates a manifest CSV for all persons matching the filter.
+//
+// The output is the round-trip companion of the ZIP importer: its columns are the ones
+// parseManifestColumns accepts (name / personId / imagePath / isPrimary), and the
+// suggested imagePath uses the `images/<personId>_<name>.jpg` shape that both the
+// manifest reader and the manifest-less filename fallback can resolve.
+func (s *Service) ExportPersonsManifestCSV(ctx context.Context, search, faceStatus string) ([]byte, string, error) {
+	persons, err := s.store.ListAllPersonsForExport(ctx, search, faceStatus)
+	if err != nil {
+		return nil, "", apperr.Internal("DATABASE_ERROR", "Failed to list persons for export", err)
+	}
+
+	var buf bytes.Buffer
+	if _, err := buf.Write([]byte("\xef\xbb\xbf")); err != nil {
+		return nil, "", fmt.Errorf("write csv bom: %w", err)
+	}
+
+	w := csv.NewWriter(&buf)
+	if err := w.Write([]string{"name", "personId", "imagePath", "isPrimary", "faceCount"}); err != nil {
+		return nil, "", fmt.Errorf("write csv header: %w", err)
+	}
+
+	// Two operators may legitimately share a name and carry no business key, so the
+	// suggested paths are de-duplicated: two rows pointing at one photo would enroll the
+	// same face under two identities and poison the gallery.
+	usedPaths := make(map[string]int, len(persons))
+
+	for _, p := range persons {
+		personID := ""
+		if p.PersonID != nil {
+			personID = strings.TrimSpace(*p.PersonID)
+		}
+
+		// isPrimary stays false for a person that already owns a face: the import path
+		// would otherwise silently replace a curated primary template with whatever
+		// photo happens to come back. A brand-new person starts with its first face as
+		// primary per the auto-provision contract.
+		isPrimary := strconv.FormatBool(p.FaceCount == 0)
+
+		record := []string{
+			escapeCSVFormula(p.Name),
+			escapeCSVFormula(personID),
+			dedupeManifestImagePath(usedPaths, manifestImageStem(personID, p.Name)),
+			isPrimary,
+			strconv.Itoa(p.FaceCount),
+		}
+		if err := w.Write(record); err != nil {
+			return nil, "", fmt.Errorf("write csv row: %w", err)
+		}
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return nil, "", fmt.Errorf("flush csv writer: %w", err)
+	}
+
+	now := time.Now().UTC().Format("20060102_150405")
+	statusTag := "all"
+	switch strings.ToLower(strings.TrimSpace(faceStatus)) {
+	case "missing":
+		statusTag = "missing"
+	case "enrolled":
+		statusTag = "enrolled"
+	}
+	filename := fmt.Sprintf("person_photo_manifest_%s_%s.csv", statusTag, now)
+
+	return buf.Bytes(), filename, nil
+}
+
+// manifestImageStem builds the `images/<stem>` path suggested for one person, minus the
+// collision suffix.
+func manifestImageStem(personID, name string) string {
+	namePart := sanitizeManifestPathSegment(name)
+	if namePart == "" {
+		namePart = "person"
+	}
+	personIDPart := sanitizeManifestPathSegment(personID)
+	if personIDPart == "" {
+		return "images/" + namePart
+	}
+	return "images/" + personIDPart + "_" + namePart
+}
+
+// sanitizeManifestPathSegment makes one filename segment safe for both consumers:
+//
+//   - the separator heuristic in scanImagesFallback splits on the FIRST `.` or `_`, so a
+//     name carrying one of those would be cut in half (and a name like `张_三` with no
+//     personId would even be re-imported with `张` as its business key);
+//   - `/` and `\` would escape the `images/` directory or break unzipping on Windows.
+func sanitizeManifestPathSegment(segment string) string {
+	replacer := strings.NewReplacer(
+		"_", "-",
+		".", "-",
+		"/", "-",
+		"\\", "-",
+		"\x00", "",
+	)
+	cleaned := strings.TrimSpace(replacer.Replace(segment))
+	// A leading formula trigger would turn the path cell into a spreadsheet formula.
+	if cleaned != "" && strings.ContainsRune("=+-@\t\r", rune(cleaned[0])) {
+		cleaned = "_" + cleaned
+	}
+	return cleaned
+}
+
+// dedupeManifestImagePath appends `.ext`→`_2.ext` style suffixes so every row owns a
+// distinct path. `used` is carried across rows by the caller.
+func dedupeManifestImagePath(used map[string]int, stem string) string {
+	used[stem]++
+	if used[stem] == 1 {
+		return stem + ".jpg"
+	}
+	return fmt.Sprintf("%s_%d.jpg", stem, used[stem])
+}
+
+// escapeCSVFormula prefixes a leading formula trigger so Excel/WPS evaluates the cell as
+// text. Deliberately narrow — real names and business keys never start with one of these,
+// so the round-trip through the importer stays faithful.
+func escapeCSVFormula(val string) string {
+	if val != "" && strings.ContainsRune("=+-@\t\r", rune(val[0])) {
+		return "'" + val
+	}
+	return val
 }

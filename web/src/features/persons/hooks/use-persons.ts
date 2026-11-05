@@ -247,6 +247,18 @@ export function useCreateFaceImportJob() {
 }
 
 /**
+ * 导出待采像名单（照片采像清单 CSV）
+ *
+ * 下载是一次性命令，不缓存任何服务端状态，因此只借 mutation 拿 isPending。
+ */
+export function useExportPersonsManifest() {
+  return useMutation({
+    mutationFn: (params: { search?: string; faceStatus?: string }) =>
+      personsApi.exportManifest(params),
+  })
+}
+
+/**
  * 轮询/查询人脸批量导入任务状态
  */
 export function useFaceImportJob(jobId: string | null, enabled: boolean) {

@@ -237,8 +237,8 @@ func (s *Store) GetPersonMeta(ctx context.Context, id string) (*Person, error) {
 	return &p, nil
 }
 
-// ListPersons returns paginated persons with associated Face templates, optionally filtered by keyword.
-func (s *Store) ListPersons(ctx context.Context, limit, offset int, search string) ([]Person, int64, error) {
+// ListPersons returns paginated persons with associated Face templates, optionally filtered by keyword and faceStatus.
+func (s *Store) ListPersons(ctx context.Context, limit, offset int, search, faceStatus string) ([]Person, int64, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return nil, 0, err
@@ -255,6 +255,13 @@ func (s *Store) ListPersons(ctx context.Context, limit, offset int, search strin
 		likePattern := "%" + escapeLike(search) + "%"
 		g = g.Where(`name LIKE ? ESCAPE '\' OR (person_id IS NOT NULL AND person_id LIKE ? ESCAPE '\')`,
 			likePattern, likePattern)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(faceStatus)) {
+	case "enrolled":
+		g = g.Where("EXISTS (SELECT 1 FROM person_faces WHERE person_faces.person_id = persons.id)")
+	case "missing":
+		g = g.Where("NOT EXISTS (SELECT 1 FROM person_faces WHERE person_faces.person_id = persons.id)")
 	}
 
 	total, err := g.Count(ctx, "*")
@@ -275,6 +282,106 @@ func (s *Store) ListPersons(ctx context.Context, limit, offset int, search strin
 		list = []Person{}
 	}
 	return list, total, nil
+}
+
+// PersonManifestRow is one row of the photo-manifest CSV export: identity fields plus the
+// number of templates already enrolled.
+//
+// It exists instead of a `[]Person` with a preloaded Faces slice on purpose: the export
+// walks the whole table, and preloading every template row (up to MaxFacesPerPerson each)
+// would pull the entire gallery into memory just to print a count. The counts are read
+// separately with one grouped aggregation.
+type PersonManifestRow struct {
+	Name      string
+	PersonID  *string
+	FaceCount int
+}
+
+// ListAllPersonsForExport returns every person matching the filter, unpaginated, together
+// with its enrolled-template count.
+//
+// This is intentionally the only unbounded reader in the store: it backs a file the
+// operator asked for explicitly, and the caller streams it straight into a CSV writer
+// rather than holding a page in a UI. It still avoids Preload("Faces") so the cost stays
+// proportional to the person count, not the face count.
+func (s *Store) ListAllPersonsForExport(ctx context.Context, search, faceStatus string) ([]PersonManifestRow, error) {
+	db, err := s.db(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	g := gorm.G[Person](db).Scopes()
+	search = strings.TrimSpace(search)
+	if search != "" {
+		likePattern := "%" + escapeLike(search) + "%"
+		g = g.Where(`name LIKE ? ESCAPE '\' OR (person_id IS NOT NULL AND person_id LIKE ? ESCAPE '\')`,
+			likePattern, likePattern)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(faceStatus)) {
+	case "enrolled":
+		g = g.Where("EXISTS (SELECT 1 FROM person_faces WHERE person_faces.person_id = persons.id)")
+	case "missing":
+		g = g.Where("NOT EXISTS (SELECT 1 FROM person_faces WHERE person_faces.person_id = persons.id)")
+	}
+
+	persons, err := g.Select("id", "name", "person_id").Order("created_at ASC, id ASC").Find(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(persons) == 0 {
+		return []PersonManifestRow{}, nil
+	}
+
+	ids := make([]string, 0, len(persons))
+	for _, p := range persons {
+		ids = append(ids, p.ID)
+	}
+
+	counts, err := faceCountsByPerson(ctx, db, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]PersonManifestRow, 0, len(persons))
+	for _, p := range persons {
+		rows = append(rows, PersonManifestRow{
+			Name:      p.Name,
+			PersonID:  p.PersonID,
+			FaceCount: counts[p.ID],
+		})
+	}
+	return rows, nil
+}
+
+// faceCountsByPerson reads template counts for the given person row ids in one grouped
+// query. Chunking keeps the IN list below SQLite's default 32766 bound-parameter ceiling.
+func faceCountsByPerson(ctx context.Context, db *gorm.DB, ids []string) (map[string]int, error) {
+	type countRow struct {
+		PersonRowID string
+		Total       int
+	}
+
+	const chunkSize = 500
+	counts := make(map[string]int, len(ids))
+	for start := 0; start < len(ids); start += chunkSize {
+		end := min(start+chunkSize, len(ids))
+		chunk := ids[start:end]
+
+		var rows []countRow
+		if err := db.WithContext(ctx).
+			Table("person_faces").
+			Select("person_id AS person_row_id, COUNT(*) AS total").
+			Where("person_id IN ?", chunk).
+			Group("person_id").
+			Scan(&rows).Error; err != nil {
+			return nil, fmt.Errorf("count faces by person: %w", err)
+		}
+		for _, row := range rows {
+			counts[row.PersonRowID] = row.Total
+		}
+	}
+	return counts, nil
 }
 
 // escapeLike neutralises the LIKE metacharacters of a user-supplied keyword.

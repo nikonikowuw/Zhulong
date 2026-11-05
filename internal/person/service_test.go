@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1267,7 +1268,7 @@ func TestListPersonsSearchTreatsWildcardsAsText(t *testing.T) {
 		{search: "A_B", want: []string{"A_B"}},
 		{search: "502", want: []string{"502员工"}},
 	} {
-		got, total, err := svc.ListPersons(ctx, 20, 0, tc.search)
+		got, total, err := svc.ListPersons(ctx, 20, 0, tc.search, "")
 		if err != nil {
 			t.Fatalf("ListPersons(%q) failed: %v", tc.search, err)
 		}
@@ -1620,5 +1621,151 @@ func TestService_SearchByImage_RankingAndAggregation(t *testing.T) {
 	}
 	if respEmpty.Matches == nil || len(respEmpty.Matches) != 0 {
 		t.Errorf("expected empty non-nil slice, got %+v", respEmpty.Matches)
+	}
+}
+
+// TestExportPersonsManifestCSVRoundTrip pins the two properties the exported manifest has
+// to satisfy at once: it must be readable by Excel/WPS (formula-safe, BOM-prefixed) and it
+// must survive a round-trip through the ZIP importer without renaming anyone.
+func TestExportPersonsManifestCSVRoundTrip(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	// A person whose name contains the fallback separator and a dot: the suggested
+	// filename must not turn into `张` + business key on the manifest-less path.
+	if _, err := svc.CreatePerson(ctx, CreatePersonRequest{
+		Name:     "张_三.测",
+		PersonID: strPtr("EMP_001"),
+	}); err != nil {
+		t.Fatalf("create person with separators in name: %v", err)
+	}
+	// Two different people sharing one name and carrying no business key: their rows
+	// must not point at the same image path.
+	for i := 0; i < 2; i++ {
+		if _, err := svc.CreatePerson(ctx, CreatePersonRequest{Name: "李四"}); err != nil {
+			t.Fatalf("create duplicate-name person: %v", err)
+		}
+	}
+
+	payload, filename, err := svc.ExportPersonsManifestCSV(ctx, "", "missing")
+	if err != nil {
+		t.Fatalf("ExportPersonsManifestCSV failed: %v", err)
+	}
+	if !strings.HasPrefix(filename, "person_photo_manifest_missing_") {
+		t.Errorf("expected a missing-status filename, got %q", filename)
+	}
+	if !bytes.HasPrefix(payload, []byte("\xef\xbb\xbf")) {
+		t.Fatalf("expected UTF-8 BOM so Excel reads the Chinese names correctly")
+	}
+
+	records, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(payload, []byte("\xef\xbb\xbf")))).ReadAll()
+	if err != nil {
+		t.Fatalf("re-parse exported manifest: %v", err)
+	}
+	if len(records) != 4 {
+		t.Fatalf("expected a header plus 3 rows, got %d records: %+v", len(records), records)
+	}
+	if got := strings.Join(records[0], ","); got != "name,personId,imagePath,isPrimary,faceCount" {
+		t.Fatalf("unexpected header %q", got)
+	}
+
+	seenPaths := make(map[string]string, len(records))
+	for _, record := range records[1:] {
+		imagePath := record[2]
+		if !strings.HasPrefix(imagePath, "images/") {
+			t.Errorf("suggested path must stay inside images/: %q", imagePath)
+		}
+		if strings.ContainsAny(strings.TrimPrefix(imagePath, "images/"), `/\`) {
+			t.Errorf("suggested path must not nest further: %q", imagePath)
+		}
+		if previous, ok := seenPaths[imagePath]; ok {
+			t.Errorf("image path %q reused by %q and %q", imagePath, previous, record[0])
+		}
+		seenPaths[imagePath] = record[0]
+		// A person with no faces is the one that should claim the primary slot.
+		if record[3] != "true" || record[4] != "0" {
+			t.Errorf("expected isPrimary=true faceCount=0 for a person with no faces, got %v", record)
+		}
+		// Names and business keys come back byte-for-byte; only the path is rewritten.
+		if record[0] == "'" || strings.HasPrefix(record[0], "'-") {
+			t.Errorf("exported name must stay importable, got %q", record[0])
+		}
+	}
+
+	// The exported manifest must parse back through the importer's own reader.
+	manifestDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(manifestDir, "manifest.csv"), payload, 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	entries, err := parseFaceImportManifest(manifestDir)
+	if err != nil {
+		t.Fatalf("parse exported manifest: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 manifest entries, got %d: %+v", len(entries), entries)
+	}
+	// Row order follows created_at/id, so look the person up by name instead of index.
+	var roundTripped *faceImportEntry
+	for i := range entries {
+		if entries[i].PersonID == "EMP_001" {
+			roundTripped = &entries[i]
+			break
+		}
+	}
+	if roundTripped == nil {
+		t.Fatalf("business key EMP_001 vanished on round-trip: %+v", entries)
+	}
+	if roundTripped.Name != "张_三.测" {
+		t.Errorf("round-trip changed the name: %+v", roundTripped)
+	}
+}
+
+// TestSanitizeManifestPathSegment covers the characters that would otherwise split a
+// suggested filename at the wrong separator or escape the images/ prefix.
+func TestSanitizeManifestPathSegment(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "plain multilingual name", in: "张三", want: "张三"},
+		{name: "business key with dash", in: "EMP-001", want: "EMP-001"},
+		{name: "underscore becomes dash", in: "张_三", want: "张-三"},
+		{name: "dot becomes dash", in: "李.四", want: "李-四"},
+		// `../` collapses to dashes, and the leading dash then reads as a formula
+		// trigger, so the segment gains one more `_` prefix.
+		{name: "path separators cannot escape", in: "../etc/passwd", want: "_---etc-passwd"},
+		{name: "windows separator", in: `a\b`, want: "a-b"},
+		{name: "leading formula trigger is defused", in: "=SUM(A1)", want: "_=SUM(A1)"},
+		{name: "blank stays blank", in: "   ", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sanitizeManifestPathSegment(tc.in); got != tc.want {
+				t.Errorf("sanitizeManifestPathSegment(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDedupeManifestImagePath pins that repeated stems fan out instead of collapsing onto
+// one path, which would enroll a single photo under several identities.
+func TestDedupeManifestImagePath(t *testing.T) {
+	used := map[string]int{}
+	got := []string{
+		dedupeManifestImagePath(used, "images/李四"),
+		dedupeManifestImagePath(used, "images/李四"),
+		dedupeManifestImagePath(used, "images/李四"),
+		dedupeManifestImagePath(used, "images/王五"),
+	}
+	want := []string{
+		"images/李四.jpg",
+		"images/李四_2.jpg",
+		"images/李四_3.jpg",
+		"images/王五.jpg",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d: got %q, want %q", i, got[i], want[i])
+		}
 	}
 }

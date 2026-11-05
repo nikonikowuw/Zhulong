@@ -23,7 +23,13 @@
     "emptyDesc": "Click '+ Add Person' to register your first profile",
     "filterEmpty": "No matching personnel found",
     "filterEmptyDesc": "Try adjusting your search criteria",
-    "resetFilter": "Reset Filters"
+    "resetFilter": "Reset Filters",
+    "filterFaceStatus": {
+      "title": "Face Template",
+      "enrolled": "Enrolled",
+      "missing": "Missing"
+    },
+    "missingFaceBadge": "Pending"
   },
   "actions": {
     "retry": "Retry",
@@ -41,7 +47,12 @@
     "saving": "Saving...",
     "deleting": "Deleting...",
     "setPrimary": "Set Primary",
-    "importFaces": "Bulk Import Faces"
+    "importFaces": "Bulk Import Faces",
+    "exportManifest": "Export Photo Manifest"
+  },
+  "export": {
+    "success": "Manifest exported",
+    "tooltip": "Export a CSV using the current search and face-status filters. It lists names, personnel IDs and suggested photo filenames, ready to feed back into Bulk Import Faces."
   },
   "dialogs": {
     "createTitle": "Add Personnel Profile",

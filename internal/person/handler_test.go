@@ -1264,3 +1264,169 @@ func TestHandler_SearchByImage(t *testing.T) {
 		}
 	}
 }
+
+func TestHandlerListPersonsFaceStatusFilter(t *testing.T) {
+	router, _ := setupTestRouter(t)
+
+	// 1. Create Person A (has face)
+	bodyA := bytes.NewReader([]byte(`{"personId":"EMP_FACE_A","name":"Person With Face"}`))
+	reqA := httptest.NewRequest(http.MethodPost, "/api/v1/persons", bodyA)
+	reqA.Header.Set("Content-Type", "application/json")
+	wA := httptest.NewRecorder()
+	router.ServeHTTP(wA, reqA)
+	if wA.Code != http.StatusCreated {
+		t.Fatalf("create Person A failed: %d", wA.Code)
+	}
+	var respA struct {
+		Data person.PersonResponse `json:"data"`
+	}
+	if err := json.Unmarshal(wA.Body.Bytes(), &respA); err != nil {
+		t.Fatalf("unmarshal Person A: %v", err)
+	}
+
+	// Add face to Person A
+	faceReq := makeMultipartFaceRequest("/api/v1/persons/"+respA.Data.ID+"/faces", "face.jpg", testJPEGBytes)
+	faceW := httptest.NewRecorder()
+	router.ServeHTTP(faceW, faceReq)
+	if faceW.Code != http.StatusCreated {
+		t.Fatalf("add face to Person A failed: %d", faceW.Code)
+	}
+
+	// 2. Create Person B (no face)
+	bodyB := bytes.NewReader([]byte(`{"personId":"EMP_NO_FACE_B","name":"Person No Face"}`))
+	reqB := httptest.NewRequest(http.MethodPost, "/api/v1/persons", bodyB)
+	reqB.Header.Set("Content-Type", "application/json")
+	wB := httptest.NewRecorder()
+	router.ServeHTTP(wB, reqB)
+	if wB.Code != http.StatusCreated {
+		t.Fatalf("create Person B failed: %d", wB.Code)
+	}
+	var respB struct {
+		Data person.PersonResponse `json:"data"`
+	}
+	if err := json.Unmarshal(wB.Body.Bytes(), &respB); err != nil {
+		t.Fatalf("unmarshal Person B: %v", err)
+	}
+
+	// 3. Query faceStatus=enrolled -> expect Person A only
+	reqEnrolled := httptest.NewRequest(http.MethodGet, "/api/v1/persons?faceStatus=enrolled", nil)
+	wEnrolled := httptest.NewRecorder()
+	router.ServeHTTP(wEnrolled, reqEnrolled)
+	if wEnrolled.Code != http.StatusOK {
+		t.Fatalf("query faceStatus=enrolled failed: %d", wEnrolled.Code)
+	}
+	var respEnrolled struct {
+		Data struct {
+			Items []person.PersonResponse `json:"items"`
+			Total int64                   `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(wEnrolled.Body.Bytes(), &respEnrolled); err != nil {
+		t.Fatalf("unmarshal enrolled: %v", err)
+	}
+	if respEnrolled.Data.Total != 1 || len(respEnrolled.Data.Items) != 1 || respEnrolled.Data.Items[0].ID != respA.Data.ID {
+		t.Fatalf("expected only Person A for enrolled, got: %+v", respEnrolled.Data.Items)
+	}
+
+	// 4. Query faceStatus=missing -> expect Person B only
+	reqMissing := httptest.NewRequest(http.MethodGet, "/api/v1/persons?faceStatus=missing", nil)
+	wMissing := httptest.NewRecorder()
+	router.ServeHTTP(wMissing, reqMissing)
+	if wMissing.Code != http.StatusOK {
+		t.Fatalf("query faceStatus=missing failed: %d", wMissing.Code)
+	}
+	var respMissing struct {
+		Data struct {
+			Items []person.PersonResponse `json:"items"`
+			Total int64                   `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(wMissing.Body.Bytes(), &respMissing); err != nil {
+		t.Fatalf("unmarshal missing: %v", err)
+	}
+	if respMissing.Data.Total != 1 || len(respMissing.Data.Items) != 1 || respMissing.Data.Items[0].ID != respB.Data.ID {
+		t.Fatalf("expected only Person B for missing, got: %+v", respMissing.Data.Items)
+	}
+
+	// 5. Query faceStatus=all -> expect both
+	reqAll := httptest.NewRequest(http.MethodGet, "/api/v1/persons?faceStatus=all", nil)
+	wAll := httptest.NewRecorder()
+	router.ServeHTTP(wAll, reqAll)
+	if wAll.Code != http.StatusOK {
+		t.Fatalf("query faceStatus=all failed: %d", wAll.Code)
+	}
+	var respAll struct {
+		Data struct {
+			Items []person.PersonResponse `json:"items"`
+			Total int64                   `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(wAll.Body.Bytes(), &respAll); err != nil {
+		t.Fatalf("unmarshal all: %v", err)
+	}
+	if respAll.Data.Total != 2 || len(respAll.Data.Items) != 2 {
+		t.Fatalf("expected both persons for all, got: %+v", respAll.Data.Items)
+	}
+}
+
+func TestHandlerExportPersonsManifest(t *testing.T) {
+	router, _ := setupTestRouter(t)
+
+	// Create Person A with face
+	bodyA := bytes.NewReader([]byte(`{"personId":"EXP-001","name":"Alice"}`))
+	reqA := httptest.NewRequest(http.MethodPost, "/api/v1/persons", bodyA)
+	reqA.Header.Set("Content-Type", "application/json")
+	wA := httptest.NewRecorder()
+	router.ServeHTTP(wA, reqA)
+	if wA.Code != http.StatusCreated {
+		t.Fatalf("create Alice failed: %d", wA.Code)
+	}
+	var respA struct {
+		Data person.PersonResponse `json:"data"`
+	}
+	_ = json.Unmarshal(wA.Body.Bytes(), &respA)
+	faceReq := makeMultipartFaceRequest("/api/v1/persons/"+respA.Data.ID+"/faces", "face.jpg", testJPEGBytes)
+	faceW := httptest.NewRecorder()
+	router.ServeHTTP(faceW, faceReq)
+
+	// Create Person B without face
+	bodyB := bytes.NewReader([]byte(`{"personId":"EXP-002","name":"Bob"}`))
+	reqB := httptest.NewRequest(http.MethodPost, "/api/v1/persons", bodyB)
+	reqB.Header.Set("Content-Type", "application/json")
+	wB := httptest.NewRecorder()
+	router.ServeHTTP(wB, reqB)
+
+	// Export faceStatus=missing
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/persons/export?faceStatus=missing", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("export failed: %d", w.Code)
+	}
+
+	contentType := w.Header().Get("Content-Type")
+	if !strings.HasPrefix(contentType, "text/csv") {
+		t.Errorf("expected Content-Type text/csv, got %q", contentType)
+	}
+	disposition := w.Header().Get("Content-Disposition")
+	if !strings.Contains(disposition, "attachment; filename=\"person_photo_manifest_missing_") {
+		t.Errorf("expected attachment Content-Disposition, got %q", disposition)
+	}
+
+	bodyStr := w.Body.String()
+	// Must have UTF-8 BOM
+	if !strings.HasPrefix(bodyStr, "\xef\xbb\xbf") {
+		t.Errorf("expected body to start with UTF-8 BOM")
+	}
+
+	// Should contain header and Bob only
+	if !strings.Contains(bodyStr, "name,personId,imagePath,isPrimary,faceCount") {
+		t.Errorf("missing csv header in: %s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "Bob,EXP-002,images/EXP-002_Bob.jpg,true,0") {
+		t.Errorf("expected Bob manifest row in: %s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "Alice") {
+		t.Errorf("Alice should not be in missing manifest: %s", bodyStr)
+	}
+}

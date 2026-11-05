@@ -96,6 +96,9 @@ export function PersonsTable({
     navigate,
     pagination: { defaultPage: 1, defaultPageSize: 10 },
     globalFilter: { enabled: true, key: 'search' },
+    columnFilters: [
+      { columnId: 'faces', searchKey: 'faceStatus', type: 'array' },
+    ],
   })
 
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -133,7 +136,19 @@ export function PersonsTable({
     ensurePageInRange(pageCount)
   }, [pageCount, ensurePageInRange])
 
-  const isFiltered = Boolean(globalFilter)
+  const isFiltered =
+    Boolean(globalFilter) || (columnFilters && columnFilters.length > 0)
+
+  const faceStatusOptions = [
+    {
+      label: t('table.filterFaceStatus.enrolled', { defaultValue: '已建模' }),
+      value: 'enrolled',
+    },
+    {
+      label: t('table.filterFaceStatus.missing', { defaultValue: '未录入' }),
+      value: 'missing',
+    },
+  ]
 
   return (
     <div className='flex flex-1 flex-col gap-4'>
@@ -142,6 +157,15 @@ export function PersonsTable({
           <DataTableToolbar
             table={table}
             searchPlaceholder={t('table.searchPlaceholder')}
+            filters={[
+              {
+                columnId: 'faces',
+                title: t('table.filterFaceStatus.title', {
+                  defaultValue: '人脸底库',
+                }),
+                options: faceStatusOptions,
+              },
+            ]}
             columnLabels={{
               name: t('table.columns.name'),
               personId: t('table.columns.personId'),

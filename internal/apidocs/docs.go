@@ -3150,6 +3150,12 @@ const docTemplate = `{
                         "description": "Search keyword for name or personId",
                         "name": "search",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by face enrollment status (all, enrolled, missing)",
+                        "name": "faceStatus",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -3242,6 +3248,45 @@ const docTemplate = `{
                         "description": "Unprocessable Entity",
                         "schema": {
                             "$ref": "#/definitions/httputil.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/httputil.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/persons/export": {
+            "get": {
+                "produces": [
+                    "text/csv"
+                ],
+                "tags": [
+                    "person"
+                ],
+                "summary": "Export persons photo manifest CSV",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Search keyword for name or personId",
+                        "name": "search",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by face enrollment status (all, enrolled, missing)",
+                        "name": "faceStatus",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
                         }
                     },
                     "500": {

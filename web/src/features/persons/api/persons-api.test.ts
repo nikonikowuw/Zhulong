@@ -45,10 +45,11 @@ describe('personsApi', () => {
       page: 2,
       pageSize: 20,
       search: 'Alice',
+      faceStatus: 'missing',
     })
     expect(res).toEqual(mockData)
     expect(spy).toHaveBeenCalledWith('/persons', {
-      params: { page: 2, pageSize: 20, search: 'Alice' },
+      params: { page: 2, pageSize: 20, search: 'Alice', faceStatus: 'missing' },
     })
   })
 
@@ -272,5 +273,74 @@ describe('personsApi', () => {
     expect(spy).toHaveBeenCalledWith('/persons/p-01/primary-face', {
       faceId: 'f-02',
     })
+  })
+
+  it('exportManifest downloads the CSV named by Content-Disposition', async () => {
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => {})
+    const createUrlSpy = vi
+      .spyOn(URL, 'createObjectURL')
+      .mockReturnValue('blob:manifest-url')
+    const revokeUrlSpy = vi
+      .spyOn(URL, 'revokeObjectURL')
+      .mockImplementation(() => {})
+
+    const blob = new Blob(['\uFEFFname,personId'], { type: 'text/csv' })
+    const spy = vi.spyOn(apiClient, 'get').mockResolvedValueOnce({
+      data: blob,
+      status: 200,
+      statusText: 'OK',
+      headers: {
+        'content-disposition':
+          'attachment; filename="person_photo_manifest_missing_20260101_000000.csv"',
+      },
+      config: {} as AxiosResponse['config'],
+    })
+
+    await personsApi.exportManifest({
+      search: ' alice ',
+      faceStatus: 'missing',
+    })
+
+    expect(spy).toHaveBeenCalledWith('/persons/export', {
+      params: { search: 'alice', faceStatus: 'missing' },
+      responseType: 'blob',
+    })
+    expect(createUrlSpy).toHaveBeenCalledWith(blob)
+    expect(clickSpy).toHaveBeenCalled()
+
+    await vi.waitFor(() => {
+      expect(revokeUrlSpy).toHaveBeenCalledWith('blob:manifest-url')
+    })
+  })
+
+  it('exportManifest omits blank filters and falls back to a default filename', async () => {
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:fallback-url')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+
+    let downloadedName = ''
+    vi.spyOn(HTMLAnchorElement.prototype, 'download', 'set').mockImplementation(
+      (value: string) => {
+        downloadedName = value
+      }
+    )
+
+    const spy = vi.spyOn(apiClient, 'get').mockResolvedValueOnce({
+      data: new Blob(['']),
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config: {} as AxiosResponse['config'],
+    })
+
+    await personsApi.exportManifest({ search: '   ', faceStatus: '' })
+
+    expect(spy).toHaveBeenCalledWith('/persons/export', {
+      params: { search: undefined, faceStatus: undefined },
+      responseType: 'blob',
+    })
+    expect(downloadedName).toBe('person_photo_manifest.csv')
   })
 })

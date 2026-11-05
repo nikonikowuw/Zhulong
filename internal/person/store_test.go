@@ -88,12 +88,28 @@ func TestStorePersonMultiFaceCRUD(t *testing.T) {
 	}
 
 	// 4.1 Test ListPersons (paginated) and the gallery page reader
-	pList, total, err := store.ListPersons(ctx, 10, 0, "")
+	pList, total, err := store.ListPersons(ctx, 10, 0, "", "")
 	if err != nil {
 		t.Fatalf("ListPersons failed: %v", err)
 	}
 	if total != 1 || len(pList) != 1 {
 		t.Fatalf("expected total 1 and len 1, got total=%d len=%d", total, len(pList))
+	}
+
+	// 4.1.1 Test ListPersons faceStatus filtering
+	enrolledList, enrolledTotal, err := store.ListPersons(ctx, 10, 0, "", "enrolled")
+	if err != nil {
+		t.Fatalf("ListPersons enrolled failed: %v", err)
+	}
+	if enrolledTotal != 1 || len(enrolledList) != 1 {
+		t.Fatalf("expected enrolled 1, got total=%d len=%d", enrolledTotal, len(enrolledList))
+	}
+	missingList, missingTotal, err := store.ListPersons(ctx, 10, 0, "", "missing")
+	if err != nil {
+		t.Fatalf("ListPersons missing failed: %v", err)
+	}
+	if missingTotal != 0 || len(missingList) != 0 {
+		t.Fatalf("expected missing 0, got total=%d len=%d", missingTotal, len(missingList))
 	}
 	allPersons, err := store.ListPersonsForGallery(ctx, 10, 0)
 	if err != nil {
@@ -553,5 +569,88 @@ func TestStore_ListSearchFaceItems(t *testing.T) {
 	}
 	if len(it2.FeatureVector) != 100 {
 		t.Errorf("unexpected it2 vector length: %d", len(it2.FeatureVector))
+	}
+}
+
+// TestStoreListAllPersonsForExport pins the aggregation behind the photo-manifest export:
+// counts must reflect every template (not just the preloaded summary), and the filter must
+// still split enrolled from missing.
+func TestStoreListAllPersonsForExport(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	for _, p := range []*person.Person{
+		{ID: "exp_a", PersonID: strPtr("EXP-A"), Name: "Alice"},
+		{ID: "exp_b", PersonID: strPtr("EXP-B"), Name: "Bob"},
+		{ID: "exp_c", Name: "Carol"},
+	} {
+		if err := store.CreatePerson(ctx, p); err != nil {
+			t.Fatalf("CreatePerson(%s) failed: %v", p.ID, err)
+		}
+	}
+
+	// Alice gets two templates, so a count of 1 would mean the aggregation collapsed rows.
+	for i, faceID := range []string{"exp_face_1", "exp_face_2"} {
+		if err := store.AddFace(ctx, &person.Face{
+			ID:            faceID,
+			PersonRowID:   "exp_a",
+			ImagePath:     "/data/faces/" + faceID + ".jpg",
+			FeatureVector: make([]byte, 2048),
+		}); err != nil {
+			t.Fatalf("AddFace %d failed: %v", i, err)
+		}
+	}
+
+	all, err := store.ListAllPersonsForExport(ctx, "", "")
+	if err != nil {
+		t.Fatalf("ListAllPersonsForExport failed: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("expected 3 rows for the unfiltered export, got %d: %+v", len(all), all)
+	}
+	counts := make(map[string]int, len(all))
+	unbound := 0
+	for _, row := range all {
+		key := ""
+		if row.PersonID != nil {
+			key = *row.PersonID
+		} else {
+			unbound++
+		}
+		counts[key] = row.FaceCount
+	}
+	if counts["EXP-A"] != 2 {
+		t.Errorf("expected Alice to report 2 templates, got %d", counts["EXP-A"])
+	}
+	if counts["EXP-B"] != 0 {
+		t.Errorf("expected Bob to report 0 templates, got %d", counts["EXP-B"])
+	}
+	if unbound != 1 || counts[""] != 0 {
+		t.Errorf("expected the one person without a business key to be counted, got %+v", counts)
+	}
+
+	enrolled, err := store.ListAllPersonsForExport(ctx, "", "enrolled")
+	if err != nil {
+		t.Fatalf("ListAllPersonsForExport(enrolled) failed: %v", err)
+	}
+	if len(enrolled) != 1 || enrolled[0].PersonID == nil || *enrolled[0].PersonID != "EXP-A" {
+		t.Fatalf("expected only Alice for enrolled, got %+v", enrolled)
+	}
+
+	missing, err := store.ListAllPersonsForExport(ctx, "Bo", "missing")
+	if err != nil {
+		t.Fatalf("ListAllPersonsForExport(search+missing) failed: %v", err)
+	}
+	if len(missing) != 1 || missing[0].Name != "Bob" {
+		t.Fatalf("expected only Bob for search=Bo&missing, got %+v", missing)
+	}
+
+	none, err := store.ListAllPersonsForExport(ctx, "no-such-person", "")
+	if err != nil {
+		t.Fatalf("ListAllPersonsForExport(no match) failed: %v", err)
+	}
+	if none == nil || len(none) != 0 {
+		t.Fatalf("expected an empty non-nil slice, got %#v", none)
 	}
 }
