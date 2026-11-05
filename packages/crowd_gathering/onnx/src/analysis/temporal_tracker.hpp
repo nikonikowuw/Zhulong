@@ -56,6 +56,7 @@ struct TrackedCluster {
     std::chrono::steady_clock::time_point first_seen;
     std::chrono::steady_clock::time_point last_seen;
     bool alarmed{false};
+    bool active_this_frame{false}; /**< 当前帧是否被观测到（被成功匹配或新生） */
 };
 
 /**

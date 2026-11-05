@@ -25,6 +25,15 @@ constexpr std::string_view kModuleName = "crowd_gathering";
 constexpr float kDetectMean = 127.5f;
 constexpr float kDetectInvStd = 1.0f / 128.0f;
 
+/** @brief 256 项归一化不可变查找表（Per.11: 编译期生成，消除每帧 73 万次浮点运算） */
+constexpr auto kNormLut = []() constexpr {
+    std::array<float, 256> table{};
+    for (std::size_t i = 0; i < 256; ++i) {
+        table[i] = (static_cast<float>(i) - kDetectMean) * kDetectInvStd;
+    }
+    return table;
+}();
+
 /** @brief 人体检测模型的 FPN 步长表 */
 constexpr std::array<int, 5> kPersonFpnStrides{8, 16, 32, 64, 128};
 /** @brief 每格 anchor 数（scrfd_person_2.5g 为 1；人脸模型才是 2，混用会整帧零检出） */
@@ -57,22 +66,20 @@ std::size_t safe_element_count(const zhulong::Tensor& tensor) noexcept {
     }
 }
 
-bool hwc_to_nchw_normalized(const uint8_t* src_hwc, int height, int width,
-                            float mean, float inv_std, float* dst_nchw) noexcept {
+bool hwc_to_nchw_normalized(const uint8_t* src_hwc, int height, int width, float* dst_nchw) noexcept {
     if (src_hwc == nullptr || dst_nchw == nullptr || height <= 0 || width <= 0) {
         return false;
     }
     const std::size_t plane_size = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
-    // 三个平面共用同一 mean/std，因此通道顺序在这里不影响结果；按物理平面取名，避免
-    // 让人以为做了 RGB→BGR 交换。
+    // 三个平面共用同一 LUT，按物理平面连续写入，流水线与缓存友好
     float* plane0 = dst_nchw;
     float* plane1 = dst_nchw + plane_size;
     float* plane2 = dst_nchw + plane_size * 2;
 
     for (std::size_t i = 0; i < plane_size; ++i) {
-        plane0[i] = (static_cast<float>(src_hwc[i * 3 + 0]) - mean) * inv_std;
-        plane1[i] = (static_cast<float>(src_hwc[i * 3 + 1]) - mean) * inv_std;
-        plane2[i] = (static_cast<float>(src_hwc[i * 3 + 2]) - mean) * inv_std;
+        plane0[i] = kNormLut[src_hwc[i * 3 + 0]];
+        plane1[i] = kNormLut[src_hwc[i * 3 + 1]];
+        plane2[i] = kNormLut[src_hwc[i * 3 + 2]];
     }
     return true;
 }
@@ -149,7 +156,7 @@ std::array<float, 4> to_normalized_box(const std::array<float, 4>& pixels, int w
 DetectorWorkspace::DetectorWorkspace(int model_width, int model_height)
     : model_width_(model_width),
       model_height_(model_height),
-      letterboxed_(std::vector<int64_t>{1, model_height, model_width, 3}, zhulong::DataType::UINT8) {
+      letterboxed_(std::vector<int64_t>{model_height, model_width, 3}, zhulong::DataType::UINT8) {
     inputs_.reserve(1);
     inputs_.emplace_back(std::vector<int64_t>{1, 3, model_height, model_width}, zhulong::DataType::FLOAT32);
 }
@@ -187,9 +194,9 @@ std::vector<DetectedPerson> PersonDetector::detect(
         return {};
     }
 
-    // 2. 转换成 NCHW float32（就地写入工作区的输入张量）
+    // 2. 转换成 NCHW float32（就地写入工作区的输入张量，使用编译期查表）
     if (!hwc_to_nchw_normalized(workspace.letterboxed_tensor().data<uint8_t>(), model_h, model_w,
-                                kDetectMean, kDetectInvStd, workspace.model_input().data<float>())) {
+                                workspace.model_input().data<float>())) {
         return {};
     }
 
@@ -232,6 +239,10 @@ std::vector<DetectedPerson> PersonDetector::detect(
                     const int index = (h * grid_w + w) * kPersonAnchorsPerCell + a;
                     const float score = scores[index];
                     if (!(score >= score_threshold)) { // 同时排除 NaN
+                        continue;
+                    }
+                    // 堆满且不高于堆顶最小值时，直接跳过昂贵的几何反算
+                    if (top_candidates.size() >= kMaxPersonCandidates && score <= top_candidates.top().score) {
                         continue;
                     }
 

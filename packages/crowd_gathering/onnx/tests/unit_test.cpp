@@ -251,6 +251,33 @@ void test_temporal_tracker() {
     // (f) 空候选不会制造告警
     TaskStreamTracker idle;
     check(idle.update({}, 0.0f, now).empty(), "tracker: empty candidates never alarm");
+
+    // (g) 幽灵告警防护：触发告警后，单帧漏检（候选为空）在宽限期内绝不上报历史旧框！
+    TaskStreamTracker ghost_guard;
+    ghost_guard.update(candidates, 1.0f, now);
+    const auto g_alarmed = ghost_guard.update(candidates, 1.0f, now + std::chrono::milliseconds(1100));
+    check(g_alarmed.size() == 1, "ghost_guard: triggered alarm");
+    // 下一帧画面人群短暂遮挡/漏检（候选为空）
+    const auto g_miss = ghost_guard.update({}, 1.0f, now + std::chrono::milliseconds(1500));
+    check(g_miss.empty(), "ghost_guard: no ghost alarms emitted on empty frame during grace period");
+    check(ghost_guard.track_count() == 1, "ghost_guard: track kept alive in grace period");
+    // 下一帧重新被检测到：恢复告警，且滞留时长累积（由 first_seen 维持）
+    const auto g_recovered = ghost_guard.update(candidates, 1.0f, now + std::chrono::milliseconds(2000));
+    check(g_recovered.size() == 1, "ghost_guard: alarm resumes when crowd reappears");
+    if (!g_recovered.empty()) {
+        check(g_recovered[0].dwell_seconds >= 2.0f, "ghost_guard: dwell time accumulated properly");
+    }
+
+    // (h) 全局最高分优先匹配：候选 0 微弱匹配，候选 1 极高匹配 → 候选 1 必须成功绑定 track
+    TaskStreamTracker match_prio;
+    match_prio.update(make_candidate(0.5f, 3), 1.0f, now); // track 位于 center_x = 0.5
+    // 候选 0 在 0.62（IoU 极低/边缘），候选 1 在 0.51（IoU 极高）
+    const auto cand_weak = make_candidate(0.62f, 3)[0];
+    const auto cand_strong = make_candidate(0.51f, 3)[0];
+    std::vector<zhulong::crowd::ClusterCandidate> mixed{cand_weak, cand_strong};
+    match_prio.update(mixed, 1.0f, now + std::chrono::milliseconds(200));
+    // 检查 track_count：有 1 个被绑定，1 个变为新 track，总数为 2
+    check(match_prio.track_count() == 2, "match_prio: strong candidate matches existing track, weak becomes new");
 }
 
 } // namespace

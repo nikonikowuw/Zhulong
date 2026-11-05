@@ -57,38 +57,52 @@ std::vector<bool> TaskStreamTracker::match_existing_tracks(
     float duration_seconds,
     std::chrono::steady_clock::time_point now
 ) {
+    for (auto& track : tracks_) {
+        track.active_this_frame = false;
+    }
+
     std::vector<bool> cand_matched(candidates.size(), false);
     std::vector<bool> track_matched(tracks_.size(), false);
 
-    for (size_t c = 0; c < candidates.size(); ++c) {
-        size_t best_track = tracks_.size();
-        float best_score = -1.0f;
+    struct MatchPair {
+        float score;
+        size_t cand_idx;
+        size_t track_idx;
+    };
 
+    std::vector<MatchPair> pairs;
+    pairs.reserve(candidates.size() * tracks_.size());
+
+    for (size_t c = 0; c < candidates.size(); ++c) {
         for (size_t t = 0; t < tracks_.size(); ++t) {
-            if (track_matched[t]) {
-                continue;
-            }
             const float score = match_score(candidates[c], tracks_[t]);
-            if (score > best_score) {
-                best_score = score;
-                best_track = t;
+            if (score >= 0.0f) {
+                pairs.push_back({score, c, t});
             }
         }
+    }
 
-        if (best_score < 0.0f || best_track >= tracks_.size()) {
+    // 全局得分降序匹配，消除候选遍历顺序引起的偏差
+    std::sort(pairs.begin(), pairs.end(), [](const MatchPair& a, const MatchPair& b) {
+        return a.score > b.score;
+    });
+
+    for (const auto& pair : pairs) {
+        if (cand_matched[pair.cand_idx] || track_matched[pair.track_idx]) {
             continue;
         }
 
-        track_matched[best_track] = true;
-        cand_matched[c] = true;
+        cand_matched[pair.cand_idx] = true;
+        track_matched[pair.track_idx] = true;
 
-        auto& track = tracks_[best_track];
-        track.box = candidates[c].enclosing_box;
-        track.centroid_x = candidates[c].centroid_x;
-        track.centroid_y = candidates[c].centroid_y;
-        track.person_count = candidates[c].person_count;
-        track.score = candidates[c].score;
+        auto& track = tracks_[pair.track_idx];
+        track.box = candidates[pair.cand_idx].enclosing_box;
+        track.centroid_x = candidates[pair.cand_idx].centroid_x;
+        track.centroid_y = candidates[pair.cand_idx].centroid_y;
+        track.person_count = candidates[pair.cand_idx].person_count;
+        track.score = candidates[pair.cand_idx].score;
         track.last_seen = now;
+        track.active_this_frame = true;
 
         // 告警是一次性闩锁：跨过阈值后一直上报，由宿主的告警冷却去重
         const float elapsed = std::chrono::duration<float>(now - track.first_seen).count();
@@ -120,6 +134,7 @@ void TaskStreamTracker::append_new_tracks(
         track.last_seen = now;
         // 时长为 0 表示「单帧命中即告警」
         track.alarmed = (duration_seconds <= kImmediateAlarmDurationSeconds);
+        track.active_this_frame = true;
 
         tracks_.push_back(track);
     }
@@ -143,7 +158,8 @@ std::vector<ConfirmedAlarm> TaskStreamTracker::collect_alarms(std::chrono::stead
     std::vector<ConfirmedAlarm> alarms;
     alarms.reserve(tracks_.size());
     for (const auto& track : tracks_) {
-        if (!track.alarmed) {
+        // 关键守门：当前帧未观测到目标，即使处于宽限期也绝不上报幽灵告警！
+        if (!track.alarmed || !track.active_this_frame) {
             continue;
         }
         ConfirmedAlarm alarm;
