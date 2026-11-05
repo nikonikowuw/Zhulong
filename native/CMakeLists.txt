@@ -158,6 +158,13 @@ set_target_properties(ZhulongEngine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_options(ZhulongEngine PRIVATE
     $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wall;-Wextra;-Wpedantic>
 )
+# 针对交叉编译（使用 GCC 10 sysroot libstdc++）或 GCC < 11 环境下 std::function 移动/swap 触发的假阳性未初始化警告（GCC Bug 88880/96003）进行精准压制
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND (CMAKE_CROSSCOMPILING OR CMAKE_CXX_COMPILER_VERSION VERSION_LESS 11))
+    target_compile_options(ZhulongEngine PRIVATE
+        -Wno-maybe-uninitialized
+        -Wno-uninitialized
+    )
+endif()
 
 # ==============================================================================
 #          4.0 后端选择：推理 / 视觉前处理（编译期 profile 隔离）
