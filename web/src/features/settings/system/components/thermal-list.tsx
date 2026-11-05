@@ -11,11 +11,6 @@ interface ThermalListProps {
 export function ThermalList({ thermals }: ThermalListProps) {
   const { t } = useTranslation('system')
 
-  const maxTemp =
-    thermals.length > 0
-      ? Math.max(...thermals.map((s) => s.temperature))
-      : 0
-
   return (
     <Card className='gap-3 border-border/80 bg-card/75 p-4.5 shadow-xs backdrop-blur-md transition-all'>
       <CardHeader className='flex-row items-center justify-between space-y-0 p-0'>

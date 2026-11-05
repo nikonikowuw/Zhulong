@@ -69,16 +69,24 @@ export function NetworkTable({ network }: NetworkTableProps) {
                   {t('details.networkColStatus', { defaultValue: '连接状态' })}
                 </TableHead>
                 <TableHead className='h-8 text-xs font-medium'>
-                  {t('details.networkColRxRate', { defaultValue: '当前下行速率' })}
+                  {t('details.networkColRxRate', {
+                    defaultValue: '当前下行速率',
+                  })}
                 </TableHead>
                 <TableHead className='h-8 text-xs font-medium'>
-                  {t('details.networkColTxRate', { defaultValue: '当前上行速率' })}
+                  {t('details.networkColTxRate', {
+                    defaultValue: '当前上行速率',
+                  })}
                 </TableHead>
                 <TableHead className='h-8 text-xs font-medium'>
-                  {t('details.networkColRxTotal', { defaultValue: '累计接收流量' })}
+                  {t('details.networkColRxTotal', {
+                    defaultValue: '累计接收流量',
+                  })}
                 </TableHead>
                 <TableHead className='h-8 text-xs font-medium'>
-                  {t('details.networkColTxTotal', { defaultValue: '累计发送流量' })}
+                  {t('details.networkColTxTotal', {
+                    defaultValue: '累计发送流量',
+                  })}
                 </TableHead>
               </TableRow>
             </TableHeader>
