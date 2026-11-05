@@ -11,7 +11,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table'
-import { AlertCircle, RefreshCw, ServerOff } from 'lucide-react'
+import { AlertCircle, Plus, RefreshCw, ServerOff } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { type NavigateFn, useTableUrlState } from '@/hooks/use-table-url-state'
 import { Button } from '@/components/ui/button'
@@ -34,6 +34,7 @@ interface Gb28181DevicesTableProps {
   isError: boolean
   errorMessage?: string
   onRetry: () => void
+  onAdd?: () => void
   onEdit: (device: Gb28181Device) => void
   onViewChannels: (device: Gb28181Device) => void
   onDelete: (device: Gb28181Device) => void
@@ -55,6 +56,7 @@ export function Gb28181DevicesTable({
   isError,
   errorMessage,
   onRetry,
+  onAdd,
   onEdit,
   onViewChannels,
   onDelete,
@@ -156,7 +158,7 @@ export function Gb28181DevicesTable({
         }}
       />
 
-      <div className='rounded-md border border-border bg-card'>
+      <div className='overflow-hidden rounded-xl border border-border/80 bg-card/75 shadow-2xs'>
         <Table className='border-separate border-spacing-0'>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
@@ -266,6 +268,16 @@ export function Gb28181DevicesTable({
                         ? t('devices.filterEmptyDesc')
                         : t('devices.emptyDesc')}
                     </p>
+                    {onAdd && !isFiltered && (
+                      <Button
+                        size='sm'
+                        onClick={onAdd}
+                        className='mt-2 h-8 gap-1.5 text-xs shadow-2xs'
+                      >
+                        <Plus className='size-3.5' />
+                        {t('devices.addTitle')}
+                      </Button>
+                    )}
                   </div>
                 </TableCell>
               </TableRow>

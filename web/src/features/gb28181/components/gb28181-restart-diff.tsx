@@ -1,6 +1,8 @@
 import { useMemo } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { statusLevelClass, statusTextClass } from '@/lib/status-palette'
+import { cn } from '@/lib/utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   Table,
@@ -51,25 +53,30 @@ export function Gb28181RestartDiff({
   }
 
   return (
-    <Alert className='border-amber-200 bg-amber-100/30 text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200'>
-      <AlertTriangle className='h-4 w-4' />
-      <AlertTitle className='text-sm font-semibold'>
+    <Alert
+      className={cn(
+        'rounded-xl border shadow-2xs',
+        statusLevelClass('warning')
+      )}
+    >
+      <AlertTriangle className={cn('h-4 w-4', statusTextClass('warning'))} />
+      <AlertTitle className='text-sm font-semibold tracking-tight'>
         {t('config.restartRequiredTitle')}
       </AlertTitle>
-      <AlertDescription className='space-y-2 text-xs'>
-        <p>{t('config.restartRequiredDesc')}</p>
+      <AlertDescription className='space-y-2.5 text-xs'>
+        <p className='leading-relaxed'>{t('config.restartRequiredDesc')}</p>
         {differences.length > 0 && (
-          <div className='overflow-hidden rounded-md border border-amber-500/30 bg-background/60'>
+          <div className='overflow-hidden rounded-lg border border-border/60 bg-background/80 shadow-2xs'>
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead className='h-8 text-[11px]'>
+                <TableRow className='hover:bg-transparent'>
+                  <TableHead className='h-8 text-xs font-medium'>
                     {t('config.diffField')}
                   </TableHead>
-                  <TableHead className='h-8 text-[11px]'>
+                  <TableHead className='h-8 text-xs font-medium'>
                     {t('config.diffStartup')}
                   </TableHead>
-                  <TableHead className='h-8 text-[11px]'>
+                  <TableHead className='h-8 text-xs font-medium'>
                     {t('config.diffDesired')}
                   </TableHead>
                 </TableRow>
@@ -77,13 +84,13 @@ export function Gb28181RestartDiff({
               <TableBody>
                 {differences.map((difference) => (
                   <TableRow key={difference.field}>
-                    <TableCell className='py-1.5 text-xs'>
+                    <TableCell className='py-2 text-xs'>
                       {t(`fields.${difference.field}`)}
                     </TableCell>
-                    <TableCell className='py-1.5 font-mono text-xs'>
+                    <TableCell className='py-2 font-mono text-xs text-muted-foreground'>
                       {formatValue(difference.startup)}
                     </TableCell>
-                    <TableCell className='py-1.5 font-mono text-xs font-medium'>
+                    <TableCell className='py-2 font-mono text-xs font-semibold text-foreground'>
                       {formatValue(difference.desired)}
                     </TableCell>
                   </TableRow>

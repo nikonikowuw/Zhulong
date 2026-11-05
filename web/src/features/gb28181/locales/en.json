@@ -6,6 +6,10 @@
     "config": "Target configuration",
     "devices": "Device allowlist"
   },
+  "groups": {
+    "signalling": "SIP Signalling & Identity",
+    "media": "Media Transport & Port Pool"
+  },
   "actions": {
     "refresh": "Refresh",
     "retry": "Retry",
@@ -90,7 +94,9 @@
     "mediaAdvertisedIpPlaceholder": "Empty derives it automatically",
     "mediaAdvertisedIpDesc": "Address written into SDP that devices must reach. Empty lets the server derive the single non-loopback IPv4; behind NAT you must set it explicitly.",
     "rtpPortMin": "RTP port range start",
+    "rtpPortMinDesc": "Start port for RTP/RTCP media streams",
     "rtpPortMax": "RTP port range end",
+    "rtpPortMaxDesc": "End port for RTP/RTCP media streams",
     "portSpanHint": "This range supports {{count}} concurrent sessions (RTP/RTCP are leased as a pair of 2 ports).",
     "fixedTitle": "Fixed in P0",
     "securityProfile": "Security profile",

@@ -1,10 +1,11 @@
 import { useMemo } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Save } from 'lucide-react'
+import { Info, Lock, RotateCcw, Save } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { handleFormError } from '@/lib/form-error'
+import { statusLevelClass } from '@/lib/status-palette'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -32,6 +33,7 @@ import {
 import { describeGb28181Error } from '../utils/error-message'
 import { Gb28181ConfigFields } from './gb28181-config-fields'
 import { Gb28181RestartDiff } from './gb28181-restart-diff'
+import { Gb28181StatusBadge } from './gb28181-status-badge'
 
 interface Gb28181ConfigFormProps {
   config: Gb28181Config
@@ -87,15 +89,19 @@ export function Gb28181ConfigForm({
 
   return (
     <section className='space-y-4'>
-      <div className='flex flex-wrap items-start justify-between gap-2'>
-        <div className='space-y-1'>
-          <h3 className='text-sm font-semibold'>{t('sections.config')}</h3>
+      <div className='flex flex-wrap items-center justify-between gap-3'>
+        <div className='space-y-0.5'>
+          <h3 className='text-sm font-semibold tracking-tight'>
+            {t('sections.config')}
+          </h3>
           <p className='text-xs text-muted-foreground'>{t('config.desc')}</p>
         </div>
         {isDirty && (
-          <span className='text-xs text-amber-600 dark:text-amber-400'>
-            {t('config.unsaved')}
-          </span>
+          <Gb28181StatusBadge
+            level='warning'
+            label={t('config.unsaved')}
+            className='h-6 font-medium'
+          />
         )}
       </div>
 
@@ -107,14 +113,19 @@ export function Gb28181ConfigForm({
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-4'>
+          {/* 总开关：卡片化呈现 */}
           <FormField
             control={form.control}
             name='enabled'
             render={({ field }) => (
-              <FormItem className='flex flex-row items-center justify-between rounded-lg border border-border bg-card p-3'>
+              <FormItem className='flex flex-row items-center justify-between rounded-xl border border-border/80 bg-card/75 p-4 shadow-2xs'>
                 <div className='space-y-0.5'>
-                  <FormLabel>{t('config.enabled')}</FormLabel>
-                  <FormDescription>{t('config.enabledDesc')}</FormDescription>
+                  <FormLabel className='text-sm font-semibold text-foreground'>
+                    {t('config.enabled')}
+                  </FormLabel>
+                  <FormDescription className='text-xs text-muted-foreground'>
+                    {t('config.enabledDesc')}
+                  </FormDescription>
                 </div>
                 <FormControl>
                   <Switch
@@ -129,49 +140,69 @@ export function Gb28181ConfigForm({
 
           <Gb28181ConfigFields form={form} isEnabled={isEnabled} />
 
-          <p
+          {/* 端口容量推算提示 */}
+          <div
             className={cn(
-              'rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground',
-              capacity < 1 && 'text-destructive'
+              'flex items-center gap-2 rounded-xl border border-border/60 bg-muted/30 px-3.5 py-2.5 text-xs text-muted-foreground',
+              capacity < 1 && statusLevelClass('destructive')
             )}
           >
-            {t('config.portSpanHint', { count: capacity })}
-          </p>
+            <Info className='size-4 shrink-0 text-primary' />
+            <p className='leading-relaxed'>
+              {t('config.portSpanHint', { count: capacity })}
+            </p>
+          </div>
 
-          <div className='space-y-2 rounded-lg border border-border bg-muted/30 p-3'>
-            <h4 className='text-xs font-semibold'>{t('config.fixedTitle')}</h4>
+          {/* 协议与安全策略固定项 */}
+          <div className='space-y-2.5 rounded-xl border border-border/70 bg-card/50 p-4 shadow-2xs'>
+            <div className='flex items-center gap-2 text-xs font-semibold text-foreground'>
+              <Lock className='size-3.5 text-muted-foreground' />
+              <h4>{t('config.fixedTitle')}</h4>
+            </div>
             {/* 这两项不可编辑，且保存时由 `toGb28181ConfigPayload` 强制写成 P0 取值，
                 因此这里展示的必须就是「保存后会发生什么」，而不是库里可能残留的旧值。 */}
-            <dl className='space-y-1 text-xs text-muted-foreground'>
-              <div className='flex gap-2'>
-                <dt className='shrink-0'>{t('config.securityProfile')}</dt>
-                <dd className='font-mono text-foreground'>
+            <dl className='grid grid-cols-1 gap-2 text-xs sm:grid-cols-2'>
+              <div className='flex items-center justify-between rounded-lg border border-border/40 bg-muted/20 px-3 py-2'>
+                <dt className='text-muted-foreground'>
+                  {t('config.securityProfile')}
+                </dt>
+                <dd className='font-mono font-medium text-foreground'>
                   {SUPPORTED_SECURITY_PROFILE}
                 </dd>
               </div>
-              <div className='flex gap-2'>
-                <dt className='shrink-0'>
+              <div className='flex items-center justify-between rounded-lg border border-border/40 bg-muted/20 px-3 py-2'>
+                <dt className='text-muted-foreground'>
                   {t('config.requireRegisteredDevice')}
                 </dt>
-                <dd className='font-mono text-foreground'>{t('value.on')}</dd>
+                <dd className='font-mono font-medium text-foreground'>
+                  {t('value.on')}
+                </dd>
               </div>
             </dl>
-            <p className='text-[11px] text-muted-foreground'>
+            <p className='text-xs leading-relaxed text-muted-foreground/80'>
               {t('config.fixedDesc')}
             </p>
           </div>
 
-          <div className='flex justify-end gap-2'>
+          <div className='flex justify-end gap-2.5 pt-1'>
             <Button
               type='button'
               variant='outline'
+              size='sm'
               onClick={() => form.reset(toGb28181ConfigFormValues(config))}
               disabled={isSaving || !isDirty}
+              className='h-8 gap-1.5 text-xs'
             >
+              <RotateCcw className='size-3.5' />
               {t('actions.reset')}
             </Button>
-            <Button type='submit' disabled={isSaving} className='gap-1.5'>
-              <Save className='h-4 w-4' />
+            <Button
+              type='submit'
+              size='sm'
+              disabled={isSaving}
+              className='h-8 gap-1.5 text-xs shadow-2xs'
+            >
+              <Save className='size-3.5' />
               {isSaving ? t('actions.saving') : t('actions.save')}
             </Button>
           </div>

@@ -6,6 +6,10 @@
     "config": "目标配置",
     "devices": "设备白名单"
   },
+  "groups": {
+    "signalling": "SIP 信令与服务端身份",
+    "media": "媒体传输与端口池"
+  },
   "actions": {
     "refresh": "刷新",
     "retry": "重试",
@@ -90,7 +94,9 @@
     "mediaAdvertisedIpPlaceholder": "留空则自动推导",
     "mediaAdvertisedIpDesc": "写进 SDP 的设备可达地址。留空时服务端推导唯一非回环 IPv4；存在 NAT 时必须显式填写。",
     "rtpPortMin": "RTP 起始端口",
+    "rtpPortMinDesc": "RTP/RTCP 媒体流接收起始端口",
     "rtpPortMax": "RTP 结束端口",
+    "rtpPortMaxDesc": "RTP/RTCP 媒体流接收结束端口",
     "portSpanHint": "当前区间可支撑 {{count}} 路并发会话（RTP/RTCP 成对占用 2 个端口）。",
     "fixedTitle": "P0 固定项",
     "securityProfile": "安全档位",

@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { getRouteApi } from '@tanstack/react-router'
-import { AlertCircle, Plus, RefreshCw } from 'lucide-react'
+import { AlertCircle, Plus, RefreshCw, Server, Sliders } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import useDialogState from '@/hooks/use-dialog-state'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ContentSection } from '@/components/layout/content-section'
 import { Gb28181ChannelsDrawer } from './components/gb28181-channels-drawer'
 import { Gb28181ConfigForm } from './components/gb28181-config-form'
@@ -31,12 +31,17 @@ const route = getRouteApi('/_authenticated/settings/gb28181')
 /**
  * GB28181 接入设置页。
  *
- * 页面展示运行状态、配置和允许注册的设备，并提供设备目录查看、目录同步与摄像机添加操作。
+ * 页面采用双层架构：
+ * 1. 顶部现场 Cockpit 仪表盘：秒级展示服务运行状态、在线/会话核心容量与底层防护计数；
+ * 2. 主体选项卡解耦：将高频日常运维（设备白名单与通道同步）与低频服务配置解耦，
+ *    解决以往长表单下压列表、动线混乱的问题。
  */
 export function SettingsGb28181() {
   const { t } = useTranslation('gb28181')
   const search = route.useSearch()
   const navigate = route.useNavigate()
+
+  const [activeTab, setActiveTab] = useState<'devices' | 'config'>('devices')
 
   const configQuery = useGb28181Config()
   const runtimeQuery = useGb28181Runtime()
@@ -117,6 +122,7 @@ export function SettingsGb28181() {
 
   const config = configQuery.data?.config
   const runtimeInfo = configQuery.data?.runtime
+  const deviceCount = devicesQuery.data?.length
 
   return (
     <ContentSection
@@ -124,7 +130,8 @@ export function SettingsGb28181() {
       desc={t('description')}
       className='w-full'
     >
-      <div className='space-y-6'>
+      <div className='space-y-5'>
+        {/* 顶部运行态排障 Cockpit 面板 */}
         <Gb28181RuntimePanel
           runtimeInfo={runtimeInfo}
           snapshot={runtimeQuery.data}
@@ -141,83 +148,108 @@ export function SettingsGb28181() {
           onRetry={handleRefresh}
         />
 
-        <Separator />
+        {/* 主体：Tabs 分组解耦 */}
+        <Tabs
+          value={activeTab}
+          onValueChange={(val) => setActiveTab(val as 'devices' | 'config')}
+          className='w-full space-y-4'
+        >
+          {/* 工具栏：分栏切换 + 主操作 */}
+          <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+            <TabsList className='h-9 bg-muted/70 p-1'>
+              <TabsTrigger value='devices' className='gap-2 px-3 text-xs'>
+                <Server className='size-3.5' />
+                <span>{t('sections.devices')}</span>
+                {typeof deviceCount === 'number' && (
+                  <span className='py-0.2 rounded-full bg-muted-foreground/15 px-1.5 font-mono text-[11px] leading-tight text-foreground'>
+                    {deviceCount}
+                  </span>
+                )}
+              </TabsTrigger>
+              <TabsTrigger value='config' className='gap-2 px-3 text-xs'>
+                <Sliders className='size-3.5' />
+                <span>{t('sections.config')}</span>
+                {runtimeInfo?.restartRequired && (
+                  <span className='size-1.5 animate-pulse rounded-full bg-amber-500' />
+                )}
+              </TabsTrigger>
+            </TabsList>
 
-        {configQuery.isLoading ? (
-          <div className='space-y-3'>
-            <Skeleton className='h-4 w-32' />
-            <Skeleton className='h-9 w-full' />
-            <Skeleton className='h-9 w-full' />
-            <Skeleton className='h-9 w-2/3' />
-          </div>
-        ) : configQuery.isError || !config || !runtimeInfo ? (
-          <Alert className='border-destructive/20 bg-destructive/10 text-destructive dark:border-destructive/40 dark:bg-destructive/20'>
-            <AlertCircle className='h-4 w-4' />
-            <AlertTitle className='flex items-center justify-between gap-2 text-sm font-semibold'>
-              {t('config.loadError')}
+            {activeTab === 'devices' && (
               <Button
-                variant='outline'
                 size='sm'
-                onClick={() => void configQuery.refetch()}
-                className='h-7 gap-1 text-xs'
+                onClick={handleAddDevice}
+                className='h-8 gap-1.5 self-start text-xs shadow-2xs sm:self-auto'
               >
-                <RefreshCw className='h-3 w-3' />
-                {t('actions.retry')}
+                <Plus className='size-3.5' />
+                {t('devices.addTitle')}
               </Button>
-            </AlertTitle>
-            <AlertDescription className='text-xs'>
-              {configQuery.error
-                ? describeGb28181Error(configQuery.error, t)
-                : t('errors.unknown')}
-            </AlertDescription>
-          </Alert>
-        ) : (
-          <Gb28181ConfigForm
-            config={config}
-            runtime={runtimeInfo}
-            isSaving={updateConfig.isPending}
-            onSave={(payload) => updateConfig.mutateAsync(payload)}
-          />
-        )}
-
-        <Separator />
-
-        <section className='space-y-3'>
-          <div className='flex flex-wrap items-start justify-between gap-2'>
-            <div className='space-y-1'>
-              <h3 className='text-sm font-semibold'>{t('sections.devices')}</h3>
-              <p className='text-xs text-muted-foreground'>
-                {t('devices.desc')}
-              </p>
-            </div>
-            <Button
-              size='sm'
-              onClick={handleAddDevice}
-              className='h-8 gap-1.5 text-xs'
-            >
-              <Plus className='h-3.5 w-3.5' />
-              {t('devices.addTitle')}
-            </Button>
+            )}
           </div>
 
-          <Gb28181DevicesTable
-            devices={devicesQuery.data ?? []}
-            isLoading={devicesQuery.isLoading}
-            isError={devicesQuery.isError}
-            errorMessage={
-              devicesQuery.error
-                ? describeGb28181Error(devicesQuery.error, t)
-                : undefined
-            }
-            onRetry={() => void devicesQuery.refetch()}
-            onEdit={handleEditDevice}
-            onViewChannels={handleViewChannels}
-            onDelete={handleDeleteDevice}
-            search={search}
-            navigate={navigate}
-          />
-        </section>
+          {/* 选项卡一：设备白名单与通道管理 */}
+          <TabsContent value='devices' className='space-y-4 outline-none'>
+            <Gb28181DevicesTable
+              devices={devicesQuery.data ?? []}
+              isLoading={devicesQuery.isLoading}
+              isError={devicesQuery.isError}
+              errorMessage={
+                devicesQuery.error
+                  ? describeGb28181Error(devicesQuery.error, t)
+                  : undefined
+              }
+              onRetry={() => void devicesQuery.refetch()}
+              onAdd={handleAddDevice}
+              onEdit={handleEditDevice}
+              onViewChannels={handleViewChannels}
+              onDelete={handleDeleteDevice}
+              search={search}
+              navigate={navigate}
+            />
+          </TabsContent>
 
+          {/* 选项卡二：接入服务目标配置 */}
+          <TabsContent value='config' className='space-y-4 outline-none'>
+            {configQuery.isLoading ? (
+              <div className='space-y-3 rounded-xl border border-border/70 bg-card/50 p-4'>
+                <Skeleton className='h-4 w-32' />
+                <Skeleton className='h-9 w-full' />
+                <Skeleton className='h-9 w-full' />
+                <Skeleton className='h-9 w-2/3' />
+              </div>
+            ) : configQuery.isError || !config || !runtimeInfo ? (
+              <Alert className='border-destructive/20 bg-destructive/10 text-destructive dark:border-destructive/40 dark:bg-destructive/20'>
+                <AlertCircle className='h-4 w-4' />
+                <AlertTitle className='flex items-center justify-between gap-2 text-sm font-semibold'>
+                  {t('config.loadError')}
+                  <Button
+                    variant='outline'
+                    size='sm'
+                    onClick={() => void configQuery.refetch()}
+                    className='h-7 gap-1 text-xs'
+                  >
+                    <RefreshCw className='h-3 w-3' />
+                    {t('actions.retry')}
+                  </Button>
+                </AlertTitle>
+                <AlertDescription className='text-xs'>
+                  {configQuery.error
+                    ? describeGb28181Error(configQuery.error, t)
+                    : t('errors.unknown')}
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <Gb28181ConfigForm
+                config={config}
+                runtime={runtimeInfo}
+                isSaving={updateConfig.isPending}
+                onSave={(payload) => updateConfig.mutateAsync(payload)}
+              />
+            )}
+          </TabsContent>
+        </Tabs>
+
+        {/* 弹窗与抽屉（同构生命周期管理） */}
         <Gb28181ChannelsDrawer
           device={channelsDevice}
           open={channelsDrawerOpen ?? false}

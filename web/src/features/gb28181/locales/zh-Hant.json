@@ -6,6 +6,10 @@
     "config": "目標設定",
     "devices": "裝置白名單"
   },
+  "groups": {
+    "signalling": "SIP 信令與服務端身份",
+    "media": "媒體傳輸與端口池"
+  },
   "actions": {
     "refresh": "重新整理",
     "retry": "重試",
@@ -90,7 +94,9 @@
     "mediaAdvertisedIpPlaceholder": "留空則自動推導",
     "mediaAdvertisedIpDesc": "寫入 SDP 的裝置可達位址。留空時伺服端推導唯一非回環 IPv4；存在 NAT 時必須明確填寫。",
     "rtpPortMin": "RTP 起始埠",
+    "rtpPortMinDesc": "RTP/RTCP 媒體流接收起始埠",
     "rtpPortMax": "RTP 結束埠",
+    "rtpPortMaxDesc": "RTP/RTCP 媒體流接收結束埠",
     "portSpanHint": "目前區間可支撐 {{count}} 路並行會話（RTP/RTCP 成對佔用 2 個埠）。",
     "fixedTitle": "P0 固定項",
     "securityProfile": "安全等級",
