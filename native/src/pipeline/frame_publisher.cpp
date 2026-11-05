@@ -141,6 +141,7 @@ void FramePublisher::publish_loop() noexcept {
             }
         }
 
+        bool dispatched = false;
         if (broker_ && broker_->is_running()) {
             // 视图快照必须是本帧的第一件事：窗口几何、capture_time 与后续像素/结果
             // 由同一次加锁串起来（边界时钟的不变量）。
@@ -170,12 +171,17 @@ void FramePublisher::publish_loop() noexcept {
                     ZL_LOGW(stream_->id, "pipeline.frame_publisher", "frame_publish_failed");
                     last_drop_warn = now;
                 }
+            } else {
+                dispatched = true;
             }
         }
 
-        // 抓拍快照历史引用：环形保留最近 kHistoryCapacity 帧，支持按 PTS 精确匹配。
+        // 抓拍快照历史**只收确实提交给 broker 的帧**，与 latest_frame()/find_frame() 的
+        // 「最近一次发布过的帧」契约一致：未下发的帧留在旧记录上，不会被误当成在途结果。
         // ⚠️ 必须在 frame.reset() 之前压入；淘汰帧析构在互斥锁外执行。
-        push_frame(frame);
+        if (dispatched) {
+            push_frame(frame);
+        }
 
         // ⚠️ 防慢算法拖垮解码器准则：
         // 帧复制进共享内存（或无客户端丢弃）后立即 reset 释放物理帧借用引用，绝不将 HardwareFrame 持有至推理阶段

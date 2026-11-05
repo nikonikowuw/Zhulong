@@ -104,6 +104,7 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
 ⚠️ **禁令**：
 - 严禁在持有 `Engine::control` 或 `Stream::mutex` 期间调用任何 `thread.join()`；
 - 严禁在工作线程尚未 `join()` 时销毁其正在访问的内存资源。
+- ⚠️ **熔断回调同样适用**：`DecodeSession` 的 `on_fatal_error` 在**解码线程**上回调 `Stream::on_decode_fatal_error`，后者若在 `Stream::mutex` 临界区内调 `request_stop()`（内部再取同一把 `std::mutex`），就是同线程二次加锁直接死锁，且随后的 `join()` 永远等不到解码线程退出。故障路径（VPU 不可用）恰好是最需要它能退出的时刻。由 `native/tests/decoder_test.cpp` 的 5.1 节守护。
 
 ---
 
@@ -116,11 +117,13 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
    - 每路 AI 流由独占的 `FramePublisher` 线程拉取解码帧，并依据 `max(sample_fps)`（由 Go 经 C ABI `Zhulong_stream_set_publish_rate` 动态设置）执行发布侧节流；
    - 未到发布周期的帧就地丢弃释放，杜绝无意义的共享内存拷贝与 socket 通知；
    - 推送至 `FrameBroker` 后立即 reset `HardwareFrame` 句柄，杜绝慢算法跨进程反压卡死上游解码会话。
+   - ⚠️ **抓拍历史只收已下发的帧**：`FramePublisher` 的环形缓存只在 `publish_frame` 返回 `true` 后压入，与 `latest_frame()`/`find_frame()` 的「最近一次发布过的帧」契约一致；节流丢弃与发布失败都不入环。
    - ⚠️ **发布失败是显式失败，不是静默丢帧**：`publish_frame` 返回 `false` 时必须已完整回滚（配额归还、槽位置 `FREE`、`total_dropped_` 递增），且**绝不**发出 `MSG_FRAME_DISPATCH`。订阅方不得假设「没收到通知 = 帧被节流丢弃」与「收到通知 = 槽位内容就是该帧」以外还有第三种状态。
    - ⚠️ **慢消费者导致发送超时后走租约清算**：`write_all` 在 `SO_SNDTIMEO` 下 `EAGAIN` 必须 `poll(POLLOUT)` 有界等待（详见 [算法插件契约 §6.4](./algo-plugin-contract.md)）。超时返回 `false` 后由 `publish_frame` 清算该客户端租约，**绝不**无界自旋 —— 否则发布线程与持 `Engine::control` 锁的广播路径会一并挂死。
 3. **宿主生命周期绑定与资源隔离**：
    - `FrameBroker` 与 `FramePublisher` 由 `Engine` 按需生命周期管理，当首个 `ConsumerAI` 接入时拉起，最后一个 `ConsumerAI` 注销时销毁；
    - 停机时遵循第 4 节无锁汇合与五步优雅停机，先于工作线程 join 前完成停机与资源解绑。
+   - ⚠️ **停止顺序在每一条退出路径上都成立**：`FramePublisher` 持有 `FrameBroker` 的**裸指针**，因此任何路径（含 `ensure_frame_broker` 的 `brokers.emplace`/`publishers.emplace` 抛异常）都必须先 `publisher->stop()` 汇合发布线程，**再**让 broker 停机和析构。反序就是发布线程在已释放的 broker 上调 `is_running()`/`publish_frame()`。
 4. **AI 流保活由订阅者集合决定，不由「谁先 acquire」决定**：
    - `Engine` 侧只认 `ConsumerAI` 计数（首个接入建 broker、最后一个注销销毁）；Go 侧另有一层**按算法包**的订阅者集合（`StreamHub` 的 `aiSubscribers`），用于回答「这一路 AI 流现在还该不该活着」。
    - 解析路径与同步订阅必须是**同一次操作**（`BrokerSubscriptionResolver.SyncBrokerSubscriptions`）：只解析不登记，下一轮同步就会把该流回收；只登记不解析，则会留下无 broker 的孤儿流。
@@ -128,6 +131,7 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
    - ⚠️ **发布率跨包取 max**：一个 broker 只有一个发布率，因此该 stream 上的发布率是其**所有** enabled 分析任务 `max(sample_fps)`，而不是单个算法包内的 max。
    - ⚠️ **运动检测是发布侧的一部分，不在算法包里做**：`FramePublisher` 内嵌一个 `MotionDetector`，对**已通过节流**的帧做 320×180 Y 平面网格差分，并把 `has_motion` / `motion_boxes` 一并放进 `publish_frame`。因为是每流一个 publisher，「每流每帧只算一次」由持有关系保证，与挂载了多少算法包无关。
    - ⚠️ **检测失败必须 fail-open**：`MotionResult` 未被执行检测时默认 `has_motion = true`，`FrameMotionInfo` 默认同样放行；`detect()` 返回 `false`（格式不支持 / 像素拿不到）时直接把默认值发出去，**绝不**因为一次读取失败就把整条流的推理关掉。
+   - ⚠️ **首帧同样 fail-open**：`MotionDetector` 没有参考底图时（流启动、`reset()` 之后、换窗重置之后）返回 `has_motion = true, box_count = 0`，下游按全帧推理。判静会让「画面里已经站着人」的启动瞬间一直空转到心跳（`MOTION_HEARTBEAT_FRAMES`），改一次裁剪区域就盲几秒。
    - ⚠️ **DMA-BUF 帧要算上系统调用代价**：MPP 硬解帧只填 `dma_fd`，检测器每帧需要 `mmap` + `DMA_BUF_IOCTL_SYNC(START/END)` + `munmap`。这属于发布线程的常驻开销，写性能数字前先实测；不要把「检测本身零堆分配」讲成「整条路径零开销」。
 5. **跨层停机顺序**（Go 侧，硬约束）：
    - `camera.Stop` → `algorithm.Stop` → `native.Close`。理由：AI 消费者与 StreamHub 先撤，runner 子进程再排空，最后才销毁 broker 宿主。

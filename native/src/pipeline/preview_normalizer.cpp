@@ -276,25 +276,6 @@ bool is_non_reference_frame(int32_t codec, const uint8_t *data, size_t size) {
     return saw_slice && !saw_reference;
 }
 
-void PreviewNormalizer::reset() {
-    codec_ = 0;
-    time_base_num_ = 1;
-    time_base_den_ = 90000;
-    parameter_sets_.clear();
-    // 保留 stitch_ 容量：流重建很频繁（相机抖动、重连），反复释放会制造堆抖动
-    origin_set_ = false;
-    origin_ticks_ = 0;
-    timestamp_shift_us_ = 0;
-    has_last_source_clock_ = false;
-    last_source_clock_us_ = 0;
-    last_source_clock_has_dts_ = false;
-    has_last_dts_ = false;
-    last_dts_us_ = 0;
-    gop_id_ = 0;
-    injected_count_ = 0;
-    discontinuity_count_ = 0;
-}
-
 void PreviewNormalizer::update_metadata(int32_t codec, const uint8_t *extradata,
                                         size_t extradata_size, int32_t time_base_num,
                                         int32_t time_base_den) {
@@ -419,7 +400,7 @@ Zhulong_packet_view PreviewNormalizer::normalize(const Zhulong_packet_view &in) 
         out.frame_class = Zhulong_FRAME_IDR;
         out.gop_id = ++gop_id_;
         if (!parameter_sets_.empty() &&
-            !has_complete_parameter_sets(in.codec, in.data, in.size)) {
+            !has_complete_parameter_sets(codec_, in.data, in.size)) {
             // 复用 stitch_ 缓冲：只在关键帧触发，容量一次长到最大帧后不再增长
             stitch_.resize(parameter_sets_.size() + in.size);
             std::memcpy(stitch_.data(), parameter_sets_.data(), parameter_sets_.size());

@@ -359,8 +359,9 @@ bool Engine::ensure_frame_broker(const std::shared_ptr<Stream> &stream, int32_t 
         this->dispatch_ai_result(stream_id, reinterpret_cast<const char*>(payload), size);
     });
 
-    // ⚠️ publisher 持有 broker 的裸指针，因此必须在 broker 入池之后再启动，
-    // 且两者在 release()/stop() 中按 publisher → broker 的顺序停止。
+    // ⚠️ publisher 持有 broker 的**裸指针**，任何退出路径都必须先停止 publisher（汇合发布线程）
+    // 再让 broker 析构；正常路径由 release()/stop() 按 publisher → broker 顺序停止。
+    // 下面「先启动再入池」能成立，靠的就是 catch 分支里那个停止顺序。
     auto crop = window_crop;
     auto publisher = std::make_shared<FramePublisher>(
         stream, broker.get(),
@@ -382,6 +383,11 @@ bool Engine::ensure_frame_broker(const std::shared_ptr<Stream> &stream, int32_t 
         publishers.emplace(stream->id, std::move(publisher));
     } catch (...) {
         ZL_LOGE(stream->id, "pipeline.engine", "broker_map_insert_failed");
+        // ⚠️ 顺序不可调换：发布线程可能正在 broker_->is_running()/publish_frame()。
+        // 先汇合发布线程，再让 broker 从 map 里析构；否则就是 use-after-free。
+        if (publisher) {
+            publisher->stop();
+        }
         auto pub_it = publishers.find(stream->id);
         if (pub_it != publishers.end()) {
             pub_it->second->stop();
@@ -392,6 +398,7 @@ bool Engine::ensure_frame_broker(const std::shared_ptr<Stream> &stream, int32_t 
             brk_it->second->stop();
             brokers.erase(brk_it);
         }
+        // 未入池的 broker 仍由局部 unique_ptr 拥有，其析构晚于局部 publisher，会自己 stop()
         if (rollback) rollback();
         return false;
     }
@@ -644,6 +651,11 @@ uint32_t Engine::broker_client_stats(Zhulong_stream_id id, Zhulong_broker_client
     const ipc::FrameBroker &broker = *it->second;
     const std::vector<ipc::ClientInfo> snapshot = broker.clients_snapshot();
     const uint32_t max_in_flight = broker.max_in_flight_per_client();
+
+    // 防御：out == nullptr 时即使 capacity > 0 也不得写（契约只保证 capacity == 0 时可空）
+    if (out == nullptr) {
+        capacity = 0;
+    }
 
     for (size_t i = 0; i < snapshot.size() && i < capacity; ++i) {
         Zhulong_broker_client_stats &slot = out[i];

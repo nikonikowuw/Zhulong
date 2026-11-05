@@ -99,6 +99,9 @@ public:
     /**
      * @brief 对输入硬件帧执行运动检测（全幅，兼容既有调用点）
      *
+     * ⚠️ fail-open：输入非法 / 格式不支持 / 无参考底图（首帧）都返回 has_motion = true
+     *    （首帧 path 返回 true 但 box_count = 0）。漏检代价高于算力。
+     *
      * @param frame 输入解码帧（NV12 或 YUV420P）
      * @param[out] out_result 检测结果
      * @return true 成功执行检测；false 输入非法或格式不支持（调用方必须降级放行）

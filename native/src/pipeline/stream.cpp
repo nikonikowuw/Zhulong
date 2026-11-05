@@ -29,8 +29,6 @@ extern "C" {
 #include <libavutil/error.h>
 }
 
-#include <algorithm>
-#include <chrono>
 #include <utility>
 
 namespace zhulong {
@@ -40,9 +38,15 @@ namespace zhulong {
 // ============================================================================
 
 namespace {
-/** 缓冲池最多保留的缓冲数量与单个缓冲容量上限 (防止异常大包长期占用内存) */
+/**
+ * 缓冲池上限：块数、单块容量、池总字节数。
+ *
+ * 总字节上限是主约束：只限块数时，16 块 × 4MB = 64MB 会被一路流长期占住。
+ * 8MB 足以覆盖 60 包队列里绝大多数复用，又不至于让板端内存被空池吃掉。
+ */
 constexpr size_t kMaxPooledBuffers = 16;
 constexpr size_t kMaxPooledCapacity = 4u * 1024u * 1024u;
+constexpr size_t kMaxPooledBytes = 8u * 1024u * 1024u;
 }
 
 DecodeSession::DecodeSession(uint64_t stream_id, Video video_meta,
@@ -62,6 +66,7 @@ std::vector<uint8_t> DecodeSession::acquire_buffer(size_t size) {
         if (!buffer_pool_.empty()) {
             buffer = std::move(buffer_pool_.back());
             buffer_pool_.pop_back();
+            pooled_bytes_ -= buffer.capacity();
         }
     }
     buffer.reserve(size);
@@ -69,12 +74,17 @@ std::vector<uint8_t> DecodeSession::acquire_buffer(size_t size) {
 }
 
 void DecodeSession::recycle_buffer(std::vector<uint8_t> &&buffer) {
-    if (buffer.capacity() == 0 || buffer.capacity() > kMaxPooledCapacity) return;
+    const size_t capacity = buffer.capacity();
+    if (capacity == 0 || capacity > kMaxPooledCapacity) return;
     buffer.clear();
     std::lock_guard<std::mutex> lock(pool_mutex_);
-    if (buffer_pool_.size() < kMaxPooledBuffers) {
-        buffer_pool_.push_back(std::move(buffer));
+    // ⚠️ 形参 buffer 在函数体局部对象（含上面的 lock）之后析构，因此这里提前 return
+    //    释放的是锁外的内存，不会持锁触发堆分配器。改成移动进局部变量再 return 就会破掉这点。
+    if (buffer_pool_.size() >= kMaxPooledBuffers || pooled_bytes_ + capacity > kMaxPooledBytes) {
+        return;
     }
+    pooled_bytes_ += capacity;
+    buffer_pool_.push_back(std::move(buffer));
 }
 
 DecodeSession::~DecodeSession() {
@@ -280,12 +290,21 @@ void DecodeSession::decode_loop() noexcept {
         return decoder.get();
     };
 
+    // ⚠️ 本 lambda 自己吞掉异常：decode_loop 是 noexcept，而 receive_frame() 里的
+    //    make_shared 与 frame_queue_.push 的 deque 扩容都可能抛 bad_alloc。
+    //    异常一旦穿出 decode_loop 就是 std::terminate —— 只能在这里收口。
     auto drain_frames = [&](IDecodeNode *dec) {
         if (!dec) return;
-        HardwareFrame::Ptr frame;
-        while (dec->receive_frame(frame) == decode_ok && frame != nullptr) {
-            frame->stream_id = stream_id_;
-            frame_queue_.push(std::move(frame));
+        try {
+            HardwareFrame::Ptr frame;
+            while (dec->receive_frame(frame) == decode_ok && frame != nullptr) {
+                frame->stream_id = stream_id_;
+                frame_queue_.push(std::move(frame));
+            }
+        } catch (...) {
+            // 排空中断：丢弃已解出的帧比崩掉整个宿主便宜，随后按解码错误重同步关键帧
+            need_keyframe = true;
+            ZL_LOGW(stream_id_, "pipeline.stream", "decode_drain_exception");
         }
     };
 
@@ -457,9 +476,14 @@ std::shared_ptr<DecodeSession> Stream::sync_decode_pipeline(const Zhulong_decode
 }
 
 void Stream::on_decode_fatal_error(Zhulong_status_t fatal_err) {
-    std::lock_guard<std::mutex> lock(mutex);
-    status.state = Zhulong_STREAM_FAILED;
-    status.error = fatal_err;
+    // ⚠️ request_stop() 也要拿 mutex，且本函数在**解码线程**上执行（DecodeSession 的熔断回调）。
+    //    两个临界区必须分开：嵌套就是同线程二次加锁 std::mutex —— 直接死锁，
+    //    随后 join() 永远等不到解码线程退出，整机停机挂死。
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        status.state = Zhulong_STREAM_FAILED;
+        status.error = fatal_err;
+    }
     ZL_LOGE(id, "pipeline.stream", "fatal_decode_error fail_closed status=%d", fatal_err);
     request_stop();
 }
@@ -509,7 +533,10 @@ void Stream::on_ready(const Media &media) {
         std::lock_guard<std::mutex> lock(mutex);
         video_meta_ = media.video;
         audio_meta_ = media.audio;
-        status.state = Zhulong_STREAM_RUNNING;
+        // FAILED 是终态：迟到的就绪回调整不得把它洗回 RUNNING，否则熔断会被静默撤销
+        if (status.state != Zhulong_STREAM_FAILED) {
+            status.state = Zhulong_STREAM_RUNNING;
+        }
         session = decode_session_;
     }
     // 参数集在此完成 Annex B 归一化；放在锁外，不与 dispatch 热路径争锁
@@ -551,6 +578,21 @@ void Stream::dispatch(const Zhulong_packet_view &packet) {
         return;
     }
 
+    // 单次加锁同时取得解码会话与订阅者快照 (仅拷贝 shared_ptr，热路径无堆分配)
+    std::shared_ptr<DecodeSession> session;
+    std::shared_ptr<const SubscriberList> subscribers;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        session = decode_session_;
+        subscribers = subscriber_snapshot_;
+    }
+
+    // 无人接收时不做整形：normalize() 会逐包扫 NAL 并推进时间轴，全部是纯开销。
+    // 原点因此从「首个消费者看到的第一包」建立，比在无人期空转更贴近订阅语义。
+    if (!session && subscribers->empty()) {
+        return;
+    }
+
     if (!preview_normalizer_.origin_ready()) {
         video_origin_arrival_us_ = std::chrono::duration_cast<std::chrono::microseconds>(
             Clock::now().time_since_epoch()).count();
@@ -560,15 +602,6 @@ void Stream::dispatch(const Zhulong_packet_view &packet) {
     // 返回值中的 data 可能借用整形器内部缓冲，仅在下一次 dispatch 前有效，
     // 与 engine.h 的「回调期间借用」契约一致；解码队列会在 push_packet 内深拷贝。
     const Zhulong_packet_view shaped = preview_normalizer_.normalize(packet);
-
-    // 单次加锁同时取得解码会话与订阅者快照 (仅拷贝 shared_ptr，热路径无堆分配)
-    std::shared_ptr<DecodeSession> session;
-    std::shared_ptr<const SubscriberList> subscribers;
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        session = decode_session_;
-        subscribers = subscriber_snapshot_;
-    }
 
     // 1. 优先推送至 AI 解码队列 (先于 Preview 回调，避免慢回调延迟 AI 处理)
     if (session && !cancel.stopped.load()) {
@@ -666,6 +699,8 @@ void Stream::capture() noexcept {
     }
 
     std::lock_guard<std::mutex> lock(mutex);
+    // C ABI 只有 STARTING/RUNNING/FAILED 三态，没有 STOPPED：正常停机在这里统一表达为
+    // FAILED + Zhulong_ERR_CANCELLED，调用方靠 error 区分「被停机」与「真故障」（见 engine.h）。
     status = {Zhulong_STREAM_FAILED, error == Zhulong_OK ? Zhulong_ERR_CANCELLED : error};
 }
 

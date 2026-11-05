@@ -61,7 +61,9 @@ void test_initial_and_still_frames() {
 
     MotionResult res1{};
     assert(detector.detect(frame1, res1));
-    assert(!res1.has_motion);
+    // 首帧无参考底图，按 fail-open 放行（无外接框）：流刚起来时画面里可能已经站着人，
+    // 判静会一直停到心跳（MOTION_HEARTBEAT_FRAMES）才恢复推理。
+    assert(res1.has_motion);
     assert(res1.box_count == 0);
 
     auto frame2 = create_dummy_nv12(1920, 1080, 50);
@@ -207,11 +209,11 @@ void test_reset() {
 
     detector.reset();
 
-    // reset 后再次输入任何帧，都按首帧处理（只建底图）
+    // reset 后再次输入任何帧，都按首帧处理（只建底图，fail-open 放行）
     auto frame2 = create_dummy_nv12(1920, 1080, 200);
     MotionResult res2{};
     assert(detector.detect(frame2, res2));
-    assert(!res2.has_motion);
+    assert(res2.has_motion);
     assert(res2.box_count == 0);
 
     std::cout << "[PASS] test_reset" << std::endl;
@@ -223,9 +225,10 @@ void test_still_heartbeat_keepalive() {
     auto base_frame = create_dummy_nv12(1920, 1080, 50);
 
     MotionResult res{};
-    // 首帧：建立底图，无运动
+    // 首帧：建立底图，按 fail-open 放行（同时作为心跳计数的 0 点）
     assert(detector.detect(base_frame, res));
-    assert(!res.has_motion);
+    assert(res.has_motion);
+    assert(res.box_count == 0);
 
     // 触发一次有效运动
     auto moving = create_dummy_nv12(1920, 1080, 50);
@@ -321,7 +324,8 @@ void test_plane_stride_padded() {
     frame1.host_planes[0] = buf1.data();
     MotionResult res1{};
     assert(detector.detect(frame1, res1));
-    assert(!res1.has_motion);
+    assert(res1.has_motion);   // 首帧 fail-open：没有参考底图时一律放行
+    assert(res1.box_count == 0);
 
     std::cout << "[PASS] test_plane_stride_padded" << std::endl;
 }

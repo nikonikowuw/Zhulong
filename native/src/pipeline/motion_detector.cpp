@@ -198,12 +198,16 @@ bool MotionDetector::detect(const HardwareFrame& frame, const ViewWindow& view,
         return false;
     }
 
-    // 首帧只建底图，不做判定（无参考帧可比）
+    // 首帧只建底图，不做差分判定（无参考帧可比）。
+    // ⚠️ 但绝不能返回 has_motion = false：流启动与每次换窗口 / reset() 之后的第一帧，
+    //    往往正是「画面里已经站着人」的时刻；判静会让推理一直停到心跳
+    //    （MOTION_HEARTBEAT_FRAMES）才恢复，改一次裁剪区域就盲十秒。
+    //    无外接框（box_count = 0）表示「不知道在哪」，下游按全帧推理。
     if (!initialized_) {
         std::memcpy(prev_grid_.data(), curr_grid_.data(), GRID_SIZE);
         initialized_ = true;
         still_frames_count_ = 0;
-        out_result.has_motion = false;
+        out_result.has_motion = true;
         out_result.box_count = 0;
         return true;
     }

@@ -152,6 +152,7 @@ private:
 
     std::mutex pool_mutex_;
     std::vector<std::vector<uint8_t>> buffer_pool_;
+    size_t pooled_bytes_{0};                    /**< 池内缓冲容量总和，受 kMaxPooledBytes 约束 */
 
     // 累计观测计数 (仅统计用途，relaxed 原子，无同步依赖)
     std::atomic<uint64_t> decoder_unavailable_drops_{0};
@@ -161,6 +162,11 @@ private:
     Zhulong_decode_policy_t policy_{Zhulong_DECODE_BACKEND_AUTO, 1, 0};
     std::function<void(Zhulong_status_t)> on_fatal_error_{nullptr};
 
+    /**
+     * 包队列按**包数**限容，不按字节：60 个条目本身不保证 60KB。
+     * 实际占用 = 60 × 单包大小（RTSP 常见 1~64KB，最大受 FFmpeg 单包限制），
+     * 与缓冲池的 8MB 上限相互独立，写内存预算时两者要一起算。
+     */
     BoundedQueue<QueuedPacket> packet_queue_{60, OverflowStrategy::DROP_NEWEST};
     BoundedQueue<HardwareFrame::ConstPtr> frame_queue_{3, OverflowStrategy::DROP_OLDEST};
     std::thread worker_;
@@ -249,11 +255,15 @@ struct Stream {
      */
     void dispatch_audio(const Zhulong_packet_view &packet);
 
-    /** @brief 检查当前是否有 AI 消费者 */
+    /** @brief 检查当前是否有 AI 消费者 (⚠️ 调用方必须持有 Engine::control) */
     bool has_ai_consumer() const;
 
     /**
      * @brief 根据当前消费者列表动态调整解码会话启停
+     *
+     * ⚠️ 调用方**必须**持有 `Engine::control`：`consumers` 的唯一合法保护是 control 锁，
+     *    本函数内部只额外持 `Stream::mutex` 来读写 `decode_session_`。
+     *
      * @param policy 解码策略
      * @return 若需要休眠，返回需要停止的旧会话对象 (调用方须在锁外调用 stop_decode_session)
      */

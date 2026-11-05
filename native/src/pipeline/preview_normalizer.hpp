@@ -91,10 +91,9 @@ class PreviewNormalizer {
 public:
     PreviewNormalizer() = default;
 
-    /**
-     * @brief 重置全部状态（流重建时调用，使新会话从干净基准开始）
-     */
-    void reset();
+    // ⚠️ 本类**故意没有** reset()：时间轴只能单向前进，重锚点是 normalize() 内部的
+    // 不连续检测（DISCONTINUITY + timestamp_shift_us_）。把状态清零会让预览时间轴
+    // 回到 0，对已订阅的消费者就是一次大幅倒流。
 
     /**
      * @brief 更新流元数据

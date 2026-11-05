@@ -476,6 +476,28 @@ int main() {
         }
 
         // ====================================================================
+        // 5.1 致命解码错误熔断：必须在锁外发停止信号（自死锁回归）
+        // ====================================================================
+        {
+            // 本回调在**解码线程**上执行。旧实现持 Stream::mutex 调 request_stop()，
+            // 同线程二次加锁 std::mutex → 死锁，随后的 join() 永远等不到解码线程退出，
+            // 整个宿主停机挂死。回归表现为本测试卡死（ctest 超时）。
+            zhulong::Stream stream(7001, "rtsp://127.0.0.1/fatal", {});
+            stream.consumers.emplace(1, Zhulong_CONSUMER_AI);
+            CHECK(!stream.sync_decode_pipeline());
+            CHECK(stream.has_active_decoder());
+
+            stream.on_decode_fatal_error(Zhulong_ERR_HARDWARE_UNAVAILABLE);
+            CHECK(stream.status.state == Zhulong_STREAM_FAILED);
+            CHECK(stream.status.error == Zhulong_ERR_HARDWARE_UNAVAILABLE);
+            CHECK(stream.cancel.stopped.load());
+
+            stream.request_stop();
+            stream.join();
+            CHECK(!stream.has_active_decoder());
+        }
+
+        // ====================================================================
         // 6. 压缩包满载拥塞与关键帧自愈重同步测试
         // ====================================================================
         {

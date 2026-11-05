@@ -100,7 +100,7 @@ enum {
 enum {
     Zhulong_STREAM_STARTING = 0,          /**< 流正在建立连接与解析格式 */
     Zhulong_STREAM_RUNNING  = 1,          /**< 流已正常建立并持续接收数据 */
-    Zhulong_STREAM_FAILED   = 2           /**< 流已失败或遇到不可恢复错误 */
+    Zhulong_STREAM_FAILED   = 2           /**< 流已终止（含正常停机，此时 error 为 Zhulong_ERR_CANCELLED） */
 };
 
 /**
@@ -232,9 +232,12 @@ enum {
  *
  * 字段说明：
  *   - state: 物理流当前运行状态，取值为 Zhulong_STREAM_STARTING（建连与格式解析中）、
- *     Zhulong_STREAM_RUNNING（正常运行持续拉流）或 Zhulong_STREAM_FAILED（遇到不可恢复错误已终止）。
- *   - error: 错误码。当 state 为 Zhulong_STREAM_FAILED 时记录导致失败的具体错误码
- *     （如 Zhulong_ERR_IO、Zhulong_ERR_TIMEOUT 等）；流正常运行或处于启动中状态时为 Zhulong_OK。
+ *     Zhulong_STREAM_RUNNING（正常运行持续拉流）或 Zhulong_STREAM_FAILED（已终止）。
+ *     ⚠️ 本枚举没有 STOPPED 态：正常停机也报 FAILED，调用方必须结合 error 判断——
+ *     `FAILED + Zhulong_ERR_CANCELLED` 是受控停机，其余 error 才是真故障。
+ *   - error: 错误码。当 state 为 Zhulong_STREAM_FAILED 时记录导致终止的具体错误码
+ *     （如 Zhulong_ERR_IO、Zhulong_ERR_TIMEOUT、Zhulong_ERR_CANCELLED 等）；
+ *     流正常运行或处于启动中状态时为 Zhulong_OK。
  */
 typedef struct {
     int32_t state;               /**< 流当前运行状态（Zhulong_STREAM_STARTING / RUNNING / FAILED） */
