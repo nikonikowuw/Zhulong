@@ -412,7 +412,7 @@ func (s *Store) retentionCandidatesBatch(
 		)
 	}
 
-	var rows []retentionCandidate
+	rows := []retentionCandidate{}
 	if err := query.Order("captured_at ASC, id ASC").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -472,7 +472,7 @@ func (s *Store) pendingSnapshotDeleteIDs(ctx context.Context, limit int) ([]stri
 		return nil, err
 	}
 
-	var ids []string
+	ids := []string{}
 	query := db.Model(&pendingSnapshotDelete{}).Order("queued_at ASC, id ASC")
 	if limit > 0 {
 		query = query.Limit(limit)
@@ -536,9 +536,8 @@ func (s *Store) deleteRecordsByIDs(ctx context.Context, ids []string) (int64, er
 // evidence guard uses this to protect historical alarm images that predate the
 // .lock sidecar convention.
 func (s *Store) ExistingAlarmIDs(ctx context.Context, ids []string) (map[string]bool, error) {
-	found := make(map[string]bool)
 	if len(ids) == 0 {
-		return found, nil
+		return map[string]bool{}, nil
 	}
 	db, err := s.db(ctx)
 	if err != nil {
@@ -558,10 +557,11 @@ func (s *Store) ExistingAlarmIDs(ctx context.Context, ids []string) (map[string]
 		unique = append(unique, id)
 	}
 	if len(unique) == 0 {
-		return found, nil
+		return map[string]bool{}, nil
 	}
 
-	var rows []string
+	found := make(map[string]bool, len(unique))
+	rows := []string{}
 	if err := db.Model(&Alarm{}).Where("id IN ?", unique).Pluck("id", &rows).Error; err != nil {
 		return nil, err
 	}
@@ -573,30 +573,58 @@ func (s *Store) ExistingAlarmIDs(ctx context.Context, ids []string) (map[string]
 }
 
 // AlarmEvidencePaths returns every non-empty alarm image/crop path, for the
-// one-time lock backfill on upgrade.
+// one-time lock backfill on upgrade. Uses cursor-based pagination so historical
+// alarms do not exhaust memory on edge devices.
 func (s *Store) AlarmEvidencePaths(ctx context.Context) ([]string, error) {
 	db, err := s.db(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	var rows []Alarm
-	if err := db.Model(&Alarm{}).Select("image_path, crop_path").Find(&rows).Error; err != nil {
-		return nil, err
-	}
+	const batchSize = 1000
+	seen := make(map[string]struct{})
+	paths := []string{}
+	var lastID string
 
-	seen := make(map[string]struct{}, len(rows)*2)
-	paths := make([]string, 0, len(rows)*2)
-	for _, row := range rows {
-		for _, path := range []string{row.ImagePath, row.CropPath} {
-			if path == "" {
-				continue
+	for {
+		var rows []struct {
+			ID        string `gorm:"column:id"`
+			ImagePath string `gorm:"column:image_path"`
+			CropPath  string `gorm:"column:crop_path"`
+		}
+
+		query := db.Model(&Alarm{}).
+			Select("id, image_path, crop_path").
+			Order("id ASC").
+			Limit(batchSize)
+
+		if lastID != "" {
+			query = query.Where("id > ?", lastID)
+		}
+
+		if err := query.Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		if len(rows) == 0 {
+			break
+		}
+
+		for _, row := range rows {
+			for _, p := range []string{row.ImagePath, row.CropPath} {
+				if p == "" {
+					continue
+				}
+				if _, ok := seen[p]; ok {
+					continue
+				}
+				seen[p] = struct{}{}
+				paths = append(paths, p)
 			}
-			if _, ok := seen[path]; ok {
-				continue
-			}
-			seen[path] = struct{}{}
-			paths = append(paths, path)
+		}
+
+		lastID = rows[len(rows)-1].ID
+		if len(rows) < batchSize {
+			break
 		}
 	}
 

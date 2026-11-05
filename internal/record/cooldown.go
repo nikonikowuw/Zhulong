@@ -104,16 +104,23 @@ func (cm *CooldownManager) Window() time.Duration {
 }
 
 func (cm *CooldownManager) lazyCleanLocked(now time.Time) {
-	// Lazy clean if map grows large (> 5000 items) with a 30s throttle to avoid lock contention
-	if len(cm.records) > 5000 && (cm.lastCleaned.IsZero() || now.Sub(cm.lastCleaned) >= 30*time.Second) {
-		cutoff := now.Add(-2 * cm.cooldown)
-		for k, t := range cm.records {
-			if t.Before(cutoff) {
-				delete(cm.records, k)
-			}
-		}
-		cm.lastCleaned = now
+	// 满足两类条件之一即清理：
+	// 1. 规模达到 5000 且距离上次清理超 30s（高频激进清理）
+	// 2. 距离上次清理超 10 分钟且非空（低频兜底清理，避免冷启动低吞吐时僵尸键滞留）
+	isLarge := len(cm.records) > 5000 && (cm.lastCleaned.IsZero() || now.Sub(cm.lastCleaned) >= 30*time.Second)
+	isPeriodic := len(cm.records) > 0 && (cm.lastCleaned.IsZero() || now.Sub(cm.lastCleaned) >= 10*time.Minute)
+
+	if !isLarge && !isPeriodic {
+		return
 	}
+
+	cutoff := now.Add(-2 * cm.cooldown)
+	for k, t := range cm.records {
+		if t.Before(cutoff) {
+			delete(cm.records, k)
+		}
+	}
+	cm.lastCleaned = now
 }
 
 // SetCooldown updates the cooldown window in a thread-safe manner.

@@ -206,16 +206,20 @@ func (s *SnapshotStore) Enqueue(job snapshotJob) bool {
 		return false
 	}
 
+	enqueued := false
 	s.enqMu.RLock()
 	if !s.stopped {
 		select {
 		case s.queue <- job:
-			s.enqMu.RUnlock()
-			return true
+			enqueued = true
 		default:
 		}
 	}
 	s.enqMu.RUnlock()
+
+	if enqueued {
+		return true
+	}
 
 	s.dropMu.Lock()
 	s.dropped++

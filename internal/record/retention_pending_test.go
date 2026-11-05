@@ -109,6 +109,38 @@ func TestStoreAlarmEvidencePaths(t *testing.T) {
 	if !found {
 		t.Fatalf("alarm evidence paths = %v, want %q", paths, want)
 	}
+
+	// Insert additional alarm with duplicate paths and verify deduplication
+	extraAlarm := &record.Alarm{
+		ID:        "extra_alarm_1",
+		CameraID:  "cam_01",
+		ImagePath: want, // duplicate path
+		CropPath:  "snapshots/cam_01/crop-extra.jpg",
+	}
+	if err := store.CreateAlarm(ctx, extraAlarm); err != nil {
+		t.Fatalf("CreateAlarm: %v", err)
+	}
+
+	paths2, err := store.AlarmEvidencePaths(ctx)
+	if err != nil {
+		t.Fatalf("AlarmEvidencePaths2: %v", err)
+	}
+	seenCount := 0
+	hasCrop := false
+	for _, p := range paths2 {
+		if p == want {
+			seenCount++
+		}
+		if p == "snapshots/cam_01/crop-extra.jpg" {
+			hasCrop = true
+		}
+	}
+	if seenCount != 1 {
+		t.Fatalf("expected duplicate path %q to appear exactly once, got %d", want, seenCount)
+	}
+	if !hasCrop {
+		t.Fatalf("expected crop path to be included")
+	}
 }
 
 type staticMediaRoot string

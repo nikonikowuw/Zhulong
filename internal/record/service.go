@@ -210,7 +210,7 @@ func (s *Service) expirePending(now time.Time) []AlarmEvent {
 	s.pendingMu.Lock()
 	defer s.pendingMu.Unlock()
 
-	var expired []AlarmEvent
+	expired := []AlarmEvent{}
 	for id, entry := range s.pendingAlarms {
 		if now.Sub(entry.createdAt) <= pendingAlarmTimeout {
 			continue
@@ -353,7 +353,12 @@ func (s *Service) resolveIdentities(b bucketKey, obs []observation, at time.Time
 	if s.tracker == nil {
 		return make([]int64, len(obs))
 	}
-	return s.tracker.resolveFrame(b, obs, at, 2*s.cooldown.Window())
+	return s.tracker.resolveFrame(
+		b,
+		obs,
+		at,
+		2*s.cooldown.Window(),
+	)
 }
 
 // =========================================================================
@@ -467,7 +472,11 @@ func (s *Service) processPersonStructure(ctx context.Context, f ingestFrame) err
 	plan := planPersonStructure(f.res)
 
 	personIDs := s.resolveIdentities(
-		bucketKey{camera: f.res.CameraID, algorithm: f.res.AlgorithmID, kind: "person"},
+		bucketKey{
+			camera:    f.res.CameraID,
+			algorithm: f.res.AlgorithmID,
+			kind:      "person",
+		},
 		personObservations(plan.persons),
 		f.capturedAt,
 	)
@@ -476,7 +485,11 @@ func (s *Service) processPersonStructure(ctx context.Context, f ingestFrame) err
 	}
 
 	faceIDs := s.resolveIdentities(
-		bucketKey{camera: f.res.CameraID, algorithm: f.res.AlgorithmID, kind: "face"},
+		bucketKey{
+			camera:    f.res.CameraID,
+			algorithm: f.res.AlgorithmID,
+			kind:      "face",
+		},
 		faceObservations(plan.isolated),
 		f.capturedAt,
 	)
@@ -579,7 +592,14 @@ func (s *Service) planRecognitions(
 	recognitions := make([]*Recognition, 0, len(drafts))
 	jobs := make([]snapshotJob, 0, len(drafts))
 	for _, d := range drafts {
-		rec, job := buildRecognitionRecordAndJob(f, d.face, d.bodyBox, d.personAttrs, d.trackID, gallery[d.face.MatchedFaceID])
+		rec, job := buildRecognitionRecordAndJob(
+			f,
+			d.face,
+			d.bodyBox,
+			d.personAttrs,
+			d.trackID,
+			gallery[d.face.MatchedFaceID],
+		)
 		recognitions = append(recognitions, rec)
 		jobs = append(jobs, job)
 	}
@@ -604,9 +624,10 @@ func (s *Service) filterRecognitions(
 		var personAttrs map[string]any
 
 		if face.PersonIndex >= 0 && int(face.PersonIndex) < len(plan.persons) {
-			trackID = trackIDAt(personIDs, int(face.PersonIndex))
-			bodyBox = plan.persons[face.PersonIndex].BodyBox
-			personAttrs = plan.persons[face.PersonIndex].Attributes
+			pIdx := int(face.PersonIndex)
+			trackID = trackIDAt(personIDs, pIdx)
+			bodyBox = plan.persons[pIdx].BodyBox
+			personAttrs = plan.persons[pIdx].Attributes
 		} else {
 			trackID = trackIDAt(faceIDs, isolatedIdx)
 			isolatedIdx++
@@ -683,7 +704,13 @@ func (s *Service) planVehicleCaptures(f ingestFrame, identities []int64) ([]*Cap
 		trackID := trackIDAt(identities, i)
 		plateNo := firstPlateNumber(v)
 
-		if !s.cooldown.AllowAll(vehicleCaptureCooldownKeys(f.res.CameraID, trackID, plateNo, v.VehicleBox), f.capturedAt) {
+		keys := vehicleCaptureCooldownKeys(
+			f.res.CameraID,
+			trackID,
+			plateNo,
+			v.VehicleBox,
+		)
+		if !s.cooldown.AllowAll(keys, f.capturedAt) {
 			continue
 		}
 
@@ -734,7 +761,8 @@ func (s *Service) planDetectionAlarms(f ingestFrame) ([]*Alarm, []snapshotJob) {
 	jobs := make([]snapshotJob, 0, cap(alarms))
 
 	for _, d := range f.res.Detections {
-		if !isAlarmLabel(d.Label) {
+		lowered := strings.ToLower(d.Label)
+		if !isNormalizedAlarmLabel(lowered) {
 			continue
 		}
 		if !s.cooldown.Allow(alarmCooldownKey(f.res.CameraID, d.Label), f.capturedAt) {
@@ -742,7 +770,7 @@ func (s *Service) planDetectionAlarms(f ingestFrame) ([]*Alarm, []snapshotJob) {
 		}
 		// 场景级告警（烟火）没有目标裁剪框，只出全幅图。
 		var cropBox *[4]float64
-		if !isSceneWideAlarm(d.Label) {
+		if !isNormalizedSceneWideAlarm(lowered) {
 			box := d.Box
 			cropBox = &box
 		}
@@ -772,8 +800,8 @@ func (s *Service) planDetectionCaptures(f ingestFrame) ([]*Capture, []snapshotJo
 		}
 	}
 
-	var captures []*Capture
-	var jobs []snapshotJob
+	captures := make([]*Capture, 0, len(f.res.Detections))
+	jobs := make([]snapshotJob, 0, len(f.res.Detections))
 	for label, items := range groups {
 		observations := make([]observation, len(items))
 		for i, it := range items {
@@ -781,7 +809,11 @@ func (s *Service) planDetectionCaptures(f ingestFrame) ([]*Capture, []snapshotJo
 		}
 
 		identities := s.resolveIdentities(
-			bucketKey{camera: f.res.CameraID, algorithm: f.res.AlgorithmID, kind: "detection:" + label},
+			bucketKey{
+				camera:    f.res.CameraID,
+				algorithm: f.res.AlgorithmID,
+				kind:      "detection:" + label,
+			},
 			observations,
 			f.capturedAt,
 		)
@@ -942,7 +974,12 @@ func dispatchCreated[T any](
 	for _, rec := range records {
 		ev := toEvent(rec)
 		job, hasJob := jobMap[ev.ID]
-		s.dispatchOrEnqueueEvent(ctx, listener, sink, pendingEvent{event: ev, job: job, hasJob: hasJob})
+		s.dispatchOrEnqueueEvent(
+			ctx,
+			listener,
+			sink,
+			pendingEvent{event: ev, job: job, hasJob: hasJob},
+		)
 	}
 }
 
@@ -1096,24 +1133,30 @@ var (
 	sceneWideAlarmKeywords = [...]string{"smoke", "fire", "flame"}
 )
 
-func isAlarmLabel(label string) bool {
-	l := strings.ToLower(label)
-	if matchesNonAlarmMarker(l) || slices.Contains(nonAlarmExactLabels[:], l) {
+func isNormalizedAlarmLabel(lowered string) bool {
+	if matchesNonAlarmMarker(lowered) || slices.Contains(nonAlarmExactLabels[:], lowered) {
 		return false
 	}
 	return slices.ContainsFunc(alarmKeywords[:], func(kw string) bool {
-		return strings.Contains(l, kw)
+		return strings.Contains(lowered, kw)
 	})
 }
 
-func isSceneWideAlarm(label string) bool {
-	l := strings.ToLower(label)
-	if matchesNonAlarmMarker(l) {
+func isNormalizedSceneWideAlarm(lowered string) bool {
+	if matchesNonAlarmMarker(lowered) {
 		return false
 	}
 	return slices.ContainsFunc(sceneWideAlarmKeywords[:], func(kw string) bool {
-		return strings.Contains(l, kw)
+		return strings.Contains(lowered, kw)
 	})
+}
+
+func isAlarmLabel(label string) bool {
+	return isNormalizedAlarmLabel(strings.ToLower(label))
+}
+
+func isSceneWideAlarm(label string) bool {
+	return isNormalizedSceneWideAlarm(strings.ToLower(label))
 }
 
 // matchesNonAlarmMarker 报告已小写的标签是否命中「正常设备」反向关键词。

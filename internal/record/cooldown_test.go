@@ -129,3 +129,29 @@ func TestCooldownManager_ConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestCooldownManager_PeriodicClean(t *testing.T) {
+	cm := record.NewCooldownManager(2 * time.Second)
+	base := time.Date(2026, 10, 17, 10, 0, 0, 0, time.UTC)
+
+	// Add 3 keys (well below 5000 threshold)
+	cm.Allow("key1", base)
+	cm.Allow("key2", base)
+	cm.Allow("key3", base)
+
+	if count := record.CooldownRecordsCountForTest(cm); count != 3 {
+		t.Fatalf("expected 3 records, got %d", count)
+	}
+
+	// 5 minutes later, an active key arrives. Not yet 10 minutes, so stale keys remain.
+	cm.Allow("key_fresh", base.Add(5*time.Minute))
+	if count := record.CooldownRecordsCountForTest(cm); count != 4 {
+		t.Fatalf("expected 4 records before periodic threshold, got %d", count)
+	}
+
+	// 11 minutes later (elapsed >= 10m from start), new event arrives and triggers periodic lazy clean.
+	cm.Allow("key_new", base.Add(11*time.Minute))
+	if count := record.CooldownRecordsCountForTest(cm); count != 1 {
+		t.Fatalf("expected 1 record after periodic cleanup, got %d", count)
+	}
+}

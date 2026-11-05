@@ -97,3 +97,9 @@ var (
 	AlarmCooldownKeyForTest            = alarmCooldownKey
 	SnapshotRelDirForTest              = snapshotRelDir
 )
+
+func CooldownRecordsCountForTest(cm *CooldownManager) int {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	return len(cm.records)
+}
