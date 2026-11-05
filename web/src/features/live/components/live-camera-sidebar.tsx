@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useDeferredValue, useMemo } from 'react'
 import {
   Search,
   Video,
@@ -48,17 +48,22 @@ export function LiveCameraSidebar({
 }: LiveCameraSidebarProps): React.JSX.Element {
   const { t } = useTranslation('live')
   const [search, setSearch] = useState('')
+  const deferredSearch = useDeferredValue(search)
 
-  const normalizedSearch = search.trim().toLowerCase()
-  const filteredCameras = normalizedSearch
-    ? cameras.filter(
-        (cam) =>
-          cam.name.toLowerCase().includes(normalizedSearch) ||
-          (cam.host?.includes(normalizedSearch) ?? false)
-      )
-    : cameras
+  const normalizedSearch = deferredSearch.trim().toLowerCase()
+  const filteredCameras = useMemo(() => {
+    if (!normalizedSearch) return cameras
+    return cameras.filter(
+      (cam) =>
+        cam.name.toLowerCase().includes(normalizedSearch) ||
+        (cam.host?.includes(normalizedSearch) ?? false)
+    )
+  }, [cameras, normalizedSearch])
 
-  const onlineCount = cameras.filter((c) => c.status === 'online').length
+  const onlineCount = useMemo(
+    () => cameras.filter((c) => c.status === 'online').length,
+    [cameras]
+  )
 
   function renderSidebarContent(): React.JSX.Element | React.JSX.Element[] {
     // 1. 加载骨架屏

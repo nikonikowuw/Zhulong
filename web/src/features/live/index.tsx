@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ConfigDrawer } from '@/components/config-drawer'
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -49,9 +49,37 @@ export function Live(): React.JSX.Element {
   })
 
   // 统计当前分配了摄像机的活跃单元格数量
-  const activeStreamsCount = cells
-    .slice(0, layout)
-    .filter((c) => Boolean(c.cameraId)).length
+  const activeStreamsCount = useMemo(
+    () => cells.slice(0, layout).filter((c) => Boolean(c.cameraId)).length,
+    [cells, layout]
+  )
+
+  const handleToggleAIOverlay = useCallback(() => {
+    setShowAIOverlay((prev) => !prev)
+  }, [])
+
+  const handleOpenClearConfirm = useCallback(() => {
+    setIsClearConfirmOpen(true)
+  }, [])
+
+  const handleToggleSidebar = useCallback(() => {
+    setIsSidebarCollapsed((prev) => !prev)
+  }, [])
+
+  const handleAssignToActiveCell = useCallback(
+    (camera: (typeof cameras)[number], streamType?: 'main' | 'sub') => {
+      assignCamera(activeCellId, camera, streamType)
+    },
+    [assignCamera, activeCellId]
+  )
+
+  const handleDropCameraToCell = useCallback(
+    (cellId: number, cam: (typeof cameras)[number]) => {
+      assignCamera(cellId, cam, 'main')
+      setActiveCellId(cellId)
+    },
+    [assignCamera, setActiveCellId]
+  )
 
   return (
     <>
@@ -81,12 +109,12 @@ export function Live(): React.JSX.Element {
             layout={layout}
             onLayoutChange={setLayout}
             onMuteAll={muteAll}
-            onClearAll={() => setIsClearConfirmOpen(true)}
+            onClearAll={handleOpenClearConfirm}
             activeStreamsCount={activeStreamsCount}
             volume={volume}
             onVolumeChange={setVolume}
             showAIOverlay={showAIOverlay}
-            onToggleAIOverlay={() => setShowAIOverlay(!showAIOverlay)}
+            onToggleAIOverlay={handleToggleAIOverlay}
           />
         </div>
 
@@ -98,11 +126,9 @@ export function Live(): React.JSX.Element {
             error={error}
             onRetry={() => void refetch()}
             activeCellId={activeCellId}
-            onAssignCamera={(camera, streamType) => {
-              assignCamera(activeCellId, camera, streamType)
-            }}
+            onAssignCamera={handleAssignToActiveCell}
             isCollapsed={isSidebarCollapsed}
-            onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+            onToggleCollapse={handleToggleSidebar}
           />
 
           <div className='flex flex-1 flex-col overflow-hidden rounded-xl border border-border/80 bg-card/60 p-1.5 shadow-sm backdrop-blur-xs sm:p-2'>
@@ -118,10 +144,7 @@ export function Live(): React.JSX.Element {
               onSetCellMute={setCellMute}
               onSetCellStreamType={setCellStreamType}
               volume={volume}
-              onDropCameraToCell={(cellId, cam) => {
-                assignCamera(cellId, cam, 'main')
-                setActiveCellId(cellId)
-              }}
+              onDropCameraToCell={handleDropCameraToCell}
             />
           </div>
         </div>

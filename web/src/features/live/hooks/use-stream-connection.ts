@@ -48,19 +48,14 @@ export function useStreamConnection({
 
   // 保持最新回调引用，避免因外部传入内联闭包导致频繁向连接池重复订阅与断开
   const onFrameRef = useRef(onFrame)
+  const onPacketRef = useRef(onPacket)
+  const onStreamInfoRef = useRef(onStreamInfo)
+
   useEffect(() => {
     onFrameRef.current = onFrame
-  }, [onFrame])
-
-  const onPacketRef = useRef(onPacket)
-  useEffect(() => {
     onPacketRef.current = onPacket
-  }, [onPacket])
-
-  const onStreamInfoRef = useRef(onStreamInfo)
-  useEffect(() => {
     onStreamInfoRef.current = onStreamInfo
-  }, [onStreamInfo])
+  }, [onFrame, onPacket, onStreamInfo])
 
   useEffect(() => {
     if (!enabled || !cameraId) {

@@ -24,7 +24,8 @@ export function LiveFaceOverlay({
   const { containerRef, canvasRef } = useAIOverlayCanvas<FaceSubItem[]>({
     cameraId,
     enabled,
-    extract: (event) => event.persons.flatMap((person) => person.faces),
+    extract: (event) =>
+      (event.persons ?? []).flatMap((person) => person.faces ?? []),
     draw: (ctx, size, faces) => {
       drawFaceOverlay({
         ctx,

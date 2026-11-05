@@ -64,4 +64,26 @@ describe('LiveFaceOverlay', () => {
     const canvas = container.querySelector('canvas')
     expect(canvas).not.toBeNull()
   })
+
+  it('handles events without persons gracefully without throwing', async () => {
+    const { container } = await render(
+      <div style={{ width: '400px', height: '300px', position: 'relative' }}>
+        <LiveFaceOverlay cameraId='cam-01' enabled={true} />
+      </div>
+    )
+
+    const eventWithoutPersons: AIResultEventInput = {
+      camera_id: 'cam-01',
+      task_type: 'vehicle_plate',
+      pts: 1235,
+      cost_ms: 10,
+    }
+
+    expect(() => {
+      AIResultService.getInstance().dispatchEvent(eventWithoutPersons)
+    }).not.toThrow()
+
+    const canvas = container.querySelector('canvas')
+    expect(canvas).not.toBeNull()
+  })
 })

@@ -1,4 +1,5 @@
 import { memo, useCallback } from 'react'
+import { cn } from '@/lib/utils'
 import {
   type GridLayout,
   type LiveCameraItem,
@@ -121,58 +122,62 @@ export function LiveGrid({
   onDropCameraToCell,
   volume = 1,
 }: LiveGridProps): React.JSX.Element {
-  // 单窗最大化展示
-  if (maximizedCellId !== null) {
-    const cell = cells.find((c) => c.cellId === maximizedCellId) ?? cells[0]
-    return (
-      <div className='relative h-full w-full'>
-        <LivePlayerCell
-          cell={cell}
-          layout={1}
-          isActive={true}
-          isMaximized={true}
-          showAIOverlay={showAIOverlay}
-          onSelect={() => onSelectCell(cell.cellId)}
-          onClear={() => onClearCell(cell.cellId)}
-          onToggleMaximize={() => onToggleMaximizeCell(cell.cellId)}
-          onSetMute={(muted) => onSetCellMute(cell.cellId, muted)}
-          onSetStreamType={(type) => onSetCellStreamType(cell.cellId, type)}
-          onDropCamera={(cam) => onDropCameraToCell?.(cell.cellId, cam)}
-          volume={volume}
-        />
-      </div>
-    )
-  }
-
   // 计算当前网格需要展示的单元格列表 (截取前 layout 个)
   const visibleCells = cells.slice(0, layout)
+  // 若当前最大化的格子不在 visibleCells 内，补入渲染列表以确保挂载
+  const maximizedCell =
+    maximizedCellId !== null
+      ? (cells.find((c) => c.cellId === maximizedCellId) ?? null)
+      : null
+  const cellsToRender =
+    maximizedCell &&
+    !visibleCells.some((c) => c.cellId === maximizedCell.cellId)
+      ? [...visibleCells, maximizedCell]
+      : visibleCells
 
   return (
     <div className='relative h-full w-full overflow-hidden'>
       <div
-        className={`grid h-full w-full gap-1.5 sm:gap-2.5 ${GRID_LAYOUT_CLASSES[layout]}`}
+        className={cn(
+          'grid h-full w-full gap-1.5 sm:gap-2.5',
+          maximizedCellId === null
+            ? GRID_LAYOUT_CLASSES[layout]
+            : 'grid-cols-1 grid-rows-1'
+        )}
       >
-        {visibleCells.map((cell) => (
-          <div key={cell.cellId} className='h-full min-h-0 w-full min-w-0'>
-            <LiveGridCellItem
-              cell={cell}
-              layout={layout}
-              isActive={cell.cellId === activeCellId}
-              isMaximized={false}
-              showAIOverlay={showAIOverlay}
-              onSelectCell={onSelectCell}
-              onClearCell={onClearCell}
-              onToggleMaximizeCell={onToggleMaximizeCell}
-              onSetCellMute={onSetCellMute}
-              onSetCellStreamType={onSetCellStreamType}
-              onDropCameraToCell={onDropCameraToCell}
-              // 只有**正在出声**的格（`isMuted === false`，且全局最多一个）需要音量。
-              // 其它格固定传 1：`LiveGridCellItem` 是 memo 的，音量变化时（拖滑杆）
-              // 这样不会把 16 个格子的 `LivePlayer` 全部重渲染一遍。
-              volume={cell.isMuted ? 1 : volume}
-            />
-          </div>
-        ))}
+        {cellsToRender.map((cell) => {
+          const isMaximized = cell.cellId === maximizedCellId
+          const shouldHide = maximizedCellId !== null && !isMaximized
+
+          return (
+            <div
+              key={cell.cellId}
+              className={cn(
+                'h-full min-h-0 w-full min-w-0',
+                isMaximized && 'absolute inset-0 z-20 h-full w-full',
+                shouldHide && 'hidden'
+              )}
+            >
+              <LiveGridCellItem
+                cell={cell}
+                layout={isMaximized ? 1 : layout}
+                isActive={isMaximized || cell.cellId === activeCellId}
+                isMaximized={isMaximized}
+                showAIOverlay={showAIOverlay}
+                onSelectCell={onSelectCell}
+                onClearCell={onClearCell}
+                onToggleMaximizeCell={onToggleMaximizeCell}
+                onSetCellMute={onSetCellMute}
+                onSetCellStreamType={onSetCellStreamType}
+                onDropCameraToCell={onDropCameraToCell}
+                // 只有**正在出声**的格（`isMuted === false`，且全局最多一个）需要音量。
+                // 其它格固定传 1：`LiveGridCellItem` 是 memo 的，音量变化时（拖滑杆）
+                // 这样不会把 16 个格子的 `LivePlayer` 全部重渲染一遍。
+                volume={cell.isMuted ? 1 : volume}
+              />
+            </div>
+          )
+        })}
       </div>
     </div>
   )

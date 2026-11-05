@@ -24,7 +24,7 @@ export function LiveVehicleOverlay({
   const { containerRef, canvasRef } = useAIOverlayCanvas<VehicleItem[]>({
     cameraId,
     enabled,
-    extract: (event) => event.vehicles,
+    extract: (event) => event.vehicles ?? [],
     draw: (ctx, size, vehicles) => {
       drawVehicleOverlay({
         ctx,

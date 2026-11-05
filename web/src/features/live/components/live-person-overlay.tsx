@@ -25,7 +25,7 @@ export function LivePersonOverlay({
   const { containerRef, canvasRef } = useAIOverlayCanvas<PersonItem[]>({
     cameraId,
     enabled,
-    extract: (event) => event.persons,
+    extract: (event) => event.persons ?? [],
     draw: (ctx, size, persons) => {
       drawPersonOverlay({
         ctx,

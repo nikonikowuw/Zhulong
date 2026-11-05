@@ -43,11 +43,8 @@ export function CameraFrameSurface({
 
   useEffect(() => {
     pausedRef.current = paused
-  }, [paused])
-
-  useEffect(() => {
     onStateChangeRef.current = onStateChange
-  }, [onStateChange])
+  }, [paused, onStateChange])
 
   const [renderedCameraId, setRenderedCameraId] = useState<string | null>(null)
   const [imageRect, setImageRect] = useState<ImageRect | null>(null)

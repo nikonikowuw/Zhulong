@@ -88,31 +88,21 @@ export function useWebCodecsRenderLoop({
   const lastRafRequestedAtRef = useRef<number | null>(null)
   const decoderRef = useRef<StreamDecoder | null>(null)
   const traceIdRef = useRef(traceId)
+  const isPausedRef = useRef(isPaused)
+  const onFrameDrawnRef = useRef(onFrameDrawn)
+  const onDecodeErrorRef = useRef(onDecodeError)
+  const onResyncRef = useRef(onResync)
+  const onFirstFrameRef = useRef(onFirstFrame)
+
+  // 回调经 ref 读取：放进依赖数组会让解码器按帧重建；统一在单一 effect 内同步最新值，降低生命周期调度开销
   useEffect(() => {
     traceIdRef.current = traceId
-  }, [traceId])
-
-  // 回调经 ref 读取：放进依赖数组会让解码器按帧重建
-  const isPausedRef = useRef(isPaused)
-  useEffect(() => {
     isPausedRef.current = isPaused
-  }, [isPaused])
-  const onFrameDrawnRef = useRef(onFrameDrawn)
-  useEffect(() => {
     onFrameDrawnRef.current = onFrameDrawn
-  }, [onFrameDrawn])
-  const onDecodeErrorRef = useRef(onDecodeError)
-  useEffect(() => {
     onDecodeErrorRef.current = onDecodeError
-  }, [onDecodeError])
-  const onResyncRef = useRef(onResync)
-  useEffect(() => {
     onResyncRef.current = onResync
-  }, [onResync])
-  const onFirstFrameRef = useRef(onFirstFrame)
-  useEffect(() => {
     onFirstFrameRef.current = onFirstFrame
-  }, [onFirstFrame])
+  }, [traceId, isPaused, onFrameDrawn, onDecodeError, onResync, onFirstFrame])
 
   /** 释放所有待呈现帧。视频帧不关闭会持续占用解码器的 buffer group。 */
   const releaseScheduledFrames = useCallback(() => {

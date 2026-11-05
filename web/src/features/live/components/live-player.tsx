@@ -108,16 +108,17 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
      * 静音状态：prop 是权威（`useLiveGrid.cells[].isMuted` 是唯一真相源），
      * 命令式 `setMute` 只在同一个值上镜像。
      *
-     * prop 变化时在渲染期同步过来（React 官方推荐的「用 prop 调整 state」写法），
-     * 这样 `muteAll()` 这种从外部一次性置全静音的路径也能生效 —— 若只保留一个
-     * 「override 优先」的内部值，`muteAll` 之后 override 仍为 false，声音会继续响。
+     * 避免在 render 期间调用 setState 触发丢弃与重渲（rerender-derived-state-no-effect），
+     * 通过关联 prop 值的 override 结构实现派生：只要外部 prop 发生变化，override 自动失效。
      */
-    const [muted, setMuted] = useState(isMuted)
-    const [lastMutedProp, setLastMutedProp] = useState(isMuted)
-    if (lastMutedProp !== isMuted) {
-      setLastMutedProp(isMuted)
-      setMuted(isMuted)
-    }
+    const [overrideMute, setOverrideMute] = useState<{
+      propVal: boolean
+      value: boolean
+    } | null>(null)
+    const muted =
+      overrideMute && overrideMute.propVal === isMuted
+        ? overrideMute.value
+        : isMuted
 
     /** `useLiveAudio` 的 `flush` 经 ref 暴露，避免进渲染循环的依赖数组。 */
     const flushAudioRef = useRef<() => void>(() => {})
@@ -353,14 +354,15 @@ export const LivePlayer = forwardRef<LivePlayerRef, LivePlayerProps>(
           // 真实的建连/断连全部由 `muted` 驱动的那条 effect 决定。
           // 无音频（`hasAudio === false`）时不建任何连接，因此 setMute 就是 no-op。
           if (!hasAudio) return
-          setMuted(next)
+          setOverrideMute({ propVal: isMuted, value: next })
         },
         reset: () => {
           resetRenderLoop()
           lastResolutionRef.current = null
+          setOverrideMute(null)
         },
       }),
-      [showAIOverlay, resetRenderLoop, decoderRef, hasAudio]
+      [showAIOverlay, resetRenderLoop, decoderRef, hasAudio, isMuted]
     )
 
     if (!isSupported) {
