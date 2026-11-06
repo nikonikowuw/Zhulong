@@ -107,86 +107,104 @@ void FramePublisher::publish_loop() noexcept {
     if (!stream_) return;
     auto next_due = std::chrono::steady_clock::now();
     auto last_drop_warn = std::chrono::steady_clock::time_point::min();
+    // 异常日志限频：持续 OOM 时不能每帧刷屏
+    auto last_exception_warn = std::chrono::steady_clock::time_point::min();
 
     while (!stop_.load(std::memory_order_relaxed)) {
-        HardwareFrame::ConstPtr frame;
-        // 等待最长 50ms 超时，确保 stop 信号能在 50ms 内被响应
-        if (!stream_->acquire_frame(frame, std::chrono::milliseconds(50))) {
-            continue;
-        }
-
-        if (!frame) {
-            continue;
-        }
-
-        const uint32_t fps = max_sample_fps_.load(std::memory_order_relaxed);
-        const auto now = std::chrono::steady_clock::now();
-
-        if (fps > 0) {
-            const auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                std::chrono::duration<double>(1.0 / static_cast<double>(fps))
-            );
-
-            if (now < next_due) {
-                // 发布侧节流：未到期帧立即在发布侧丢弃，规避无谓的 shm 拷贝与 socket 广播通知
-                frame.reset();
-                continue;
-            }
-
-            if (now > next_due + interval * 2) {
-                // 解码停顿或长间隔后重置基准点，防止连发补帧
-                next_due = now + interval;
-            } else {
-                next_due += interval;
+        // ⚠️ 线程入口必须自行收口异常：本函数是 noexcept，而 publish_frame 会为
+        //    客户端快照/发送缓冲分配内存，任何逃出的异常都会直接 std::terminate 掉
+        //    整个宿主进程。单帧失败只丢这一帧，绝不停掉整路 AI 发布。
+        try {
+            publish_once(next_due, last_drop_warn);
+        } catch (...) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_exception_warn > std::chrono::seconds(1)) {
+                ZL_LOGE(stream_->id, "pipeline.frame_publisher", "publish_loop_exception");
+                last_exception_warn = now;
             }
         }
-
-        bool dispatched = false;
-        if (broker_ && broker_->is_running()) {
-            // 视图快照必须是本帧的第一件事：窗口几何、capture_time 与后续像素/结果
-            // 由同一次加锁串起来（边界时钟的不变量）。
-            const auto snapshot = stream_->view_snapshot(static_cast<int>(frame->width),
-                                                         static_cast<int>(frame->height));
-            if (snapshot.window.active != last_window_.active ||
-                snapshot.window.x != last_window_.x || snapshot.window.y != last_window_.y ||
-                snapshot.window.w != last_window_.w || snapshot.window.h != last_window_.h) {
-                // 换窗后网格内容全变：重置底图，避免把窗口切换误判成一次 anti-flash。
-                motion_detector_.reset();
-                last_window_ = snapshot.window;
-            }
-
-            // 运动元数据只是「省算力」的提示，不是正确性前提：检测失败一律保持
-            // FrameMotionInfo 的默认值（has_motion = 1）走全帧推理（fail-open），
-            // 绝不让一次像素读取失败变成漏检。
-            MotionResult motion_res{};
-            ipc::FrameMotionInfo motion_info{};
-            if (motion_detector_.detect(*frame, snapshot.window, motion_res)) {
-                motion_info.has_motion = motion_res.has_motion ? 1U : 0U;
-                motion_info.motion_box_count = motion_res.box_count;
-                std::copy_n(motion_res.boxes, motion_res.box_count, motion_info.motion_boxes);
-            }
-            if (!broker_->publish_frame(*frame, snapshot.window, motion_info, crop_,
-                                        snapshot.capture_time_ms)) {
-                if (now - last_drop_warn > std::chrono::seconds(1)) {
-                    ZL_LOGW(stream_->id, "pipeline.frame_publisher", "frame_publish_failed");
-                    last_drop_warn = now;
-                }
-            } else {
-                dispatched = true;
-            }
-        }
-
-        // 抓拍快照历史**只收确实提交给 broker 的帧**，与 latest_frame()/find_frame() 的
-        // 「最近一次发布过的帧」契约一致：未下发的帧留在旧记录上，不会被误当成在途结果。
-        // ⚠️ 必须在 frame.reset() 之前压入；淘汰帧析构在互斥锁外执行。
-        if (dispatched) {
-            push_frame(frame);
-        }
-
-        // ⚠️ 防慢算法拖垮解码器准则：
-        // 帧复制进共享内存（或无客户端丢弃）后立即 reset 释放物理帧借用引用，绝不将 HardwareFrame 持有至推理阶段
-        frame.reset();
     }
+}
+
+void FramePublisher::publish_once(std::chrono::steady_clock::time_point &next_due,
+                                  std::chrono::steady_clock::time_point &last_drop_warn) {
+    HardwareFrame::ConstPtr frame;
+    // 等待最长 50ms 超时，确保 stop 信号能在 50ms 内被响应
+    if (!stream_->acquire_frame(frame, std::chrono::milliseconds(50))) {
+        return;
+    }
+
+    if (!frame) {
+        return;
+    }
+
+    const uint32_t fps = max_sample_fps_.load(std::memory_order_relaxed);
+    const auto now = std::chrono::steady_clock::now();
+
+    if (fps > 0) {
+        const auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(1.0 / static_cast<double>(fps))
+        );
+
+        if (now < next_due) {
+            // 发布侧节流：未到期帧立即在发布侧丢弃，规避无谓的 shm 拷贝与 socket 广播通知
+            frame.reset();
+            return;
+        }
+
+        if (now > next_due + interval * 2) {
+            // 解码停顿或长间隔后重置基准点，防止连发补帧
+            next_due = now + interval;
+        } else {
+            next_due += interval;
+        }
+    }
+
+    bool dispatched = false;
+    if (broker_ && broker_->is_running()) {
+        // 视图快照必须是本帧的第一件事：窗口几何、capture_time 与后续像素/结果
+        // 由同一次加锁串起来（边界时钟的不变量）。
+        const auto snapshot = stream_->view_snapshot(static_cast<int>(frame->width),
+                                                    static_cast<int>(frame->height));
+        if (snapshot.window.active != last_window_.active ||
+            snapshot.window.x != last_window_.x || snapshot.window.y != last_window_.y ||
+            snapshot.window.w != last_window_.w || snapshot.window.h != last_window_.h) {
+            // 换窗后网格内容全变：重置底图，避免把窗口切换误判成一次 anti-flash。
+            motion_detector_.reset();
+            last_window_ = snapshot.window;
+        }
+
+        // 运动元数据只是「省算力」的提示，不是正确性前提：检测失败一律保持
+        // FrameMotionInfo 的默认值（has_motion = 1）走全帧推理（fail-open），
+        // 绝不让一次像素读取失败变成漏检。
+        MotionResult motion_res{};
+        ipc::FrameMotionInfo motion_info{};
+        if (motion_detector_.detect(*frame, snapshot.window, motion_res)) {
+            motion_info.has_motion = motion_res.has_motion ? 1U : 0U;
+            motion_info.motion_box_count = motion_res.box_count;
+            std::copy_n(motion_res.boxes, motion_res.box_count, motion_info.motion_boxes);
+        }
+        if (!broker_->publish_frame(*frame, snapshot.window, motion_info, crop_,
+                                    snapshot.capture_time_ms)) {
+            if (now - last_drop_warn > std::chrono::seconds(1)) {
+                ZL_LOGW(stream_->id, "pipeline.frame_publisher", "frame_publish_failed");
+                last_drop_warn = now;
+            }
+        } else {
+            dispatched = true;
+        }
+    }
+
+    // 抓拍快照历史**只收确实提交给 broker 的帧**，与 latest_frame()/find_frame() 的
+    // 「最近一次发布过的帧」契约一致：未下发的帧留在旧记录上，不会被误当成在途结果。
+    // ⚠️ 必须在 frame.reset() 之前压入；淘汰帧析构在互斥锁外执行。
+    if (dispatched) {
+        push_frame(frame);
+    }
+
+    // ⚠️ 防慢算法拖垮解码器准则：
+    // 帧复制进共享内存（或无客户端丢弃）后立即 reset 释放物理帧借用引用，绝不将 HardwareFrame 持有至推理阶段
+    frame.reset();
 }
 
 } // namespace zhulong

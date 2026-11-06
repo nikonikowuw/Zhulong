@@ -86,7 +86,19 @@ public:
     void push_frame(HardwareFrame::ConstPtr frame);
 
 private:
+    /** @brief 线程入口：逐帧收口异常，绝不让其穿出 noexcept 线程入口 */
     void publish_loop() noexcept;
+
+    /**
+     * @brief 单次发布迭代（允许抛出，由 publish_loop 统一收口）
+     *
+     * broker 发布路径会分配（客户端快照、发送缓冲），单帧失败只丢这一帧。
+     *
+     * @param[in,out] next_due 发布侧节流基准点
+     * @param[in,out] last_drop_warn 发布失败日志限频时间点
+     */
+    void publish_once(std::chrono::steady_clock::time_point &next_due,
+                     std::chrono::steady_clock::time_point &last_drop_warn);
 
     std::shared_ptr<Stream> stream_;
     ipc::FrameBroker* broker_{nullptr};

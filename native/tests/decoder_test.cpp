@@ -16,6 +16,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -492,9 +493,60 @@ int main() {
             CHECK(stream.status.error == Zhulong_ERR_HARDWARE_UNAVAILABLE);
             CHECK(stream.cancel.stopped.load());
 
+            // 5.1b 拉流线程收尾不得覆盖已记录的硬件故障：
+            //      熔断会 request_stop()，随后拉流线程以 ERR_CANCELLED 收尾；若无条件
+            //      重写 status，对外就变成「受控停机」（FAILED + CANCELLED），
+            //      真实硬件故障从此静默。cancel 已置位，capture() 在建连前即抛 CANCELLED。
+            stream.capture();
+            CHECK(stream.status.state == Zhulong_STREAM_FAILED);
+            CHECK(stream.status.error == Zhulong_ERR_HARDWARE_UNAVAILABLE);
+
             stream.request_stop();
             stream.join();
             CHECK(!stream.has_active_decoder());
+        }
+
+        // ====================================================================
+        // 5.2 订阅快照必须「先构建、后提交」（engine 事务化订阅变更）
+        // ====================================================================
+        {
+            // 构建快照不得触碰 subscriptions；提交由调用方用不抛的 shared_ptr 赋值完成，
+            // 因此快照分配失败时不会留下「map 已变、快照未变」的半提交状态：
+            // 既不会产生「已登记但不可派发」的孤儿订阅，也不会让已注销订阅继续收到回调。
+            zhulong::Stream stream(7002, "rtsp://127.0.0.1/snapshot", {});
+            auto first = std::make_shared<zhulong::Subscription>(1, nullptr, 0, ZHULONG_TRACK_MASK_VIDEO);
+            auto second = std::make_shared<zhulong::Subscription>(2, nullptr, 0, ZHULONG_TRACK_MASK_AUDIO);
+
+            auto with_first = stream.make_subscriber_snapshot(first, 0);
+            CHECK(stream.subscriptions.empty()); // 构建阶段不提交
+            CHECK(with_first->size() == 1);
+            CHECK((*with_first)[0] == first);
+
+            stream.subscriptions.emplace(11, first);
+            stream.subscriber_snapshot_ = with_first;
+
+            // 追加：快照含两者，map 仍只有已提交的 first（构建阶段不提交）
+            auto with_both = stream.make_subscriber_snapshot(second, 0);
+            CHECK(with_both->size() == 2);
+            CHECK((*with_both)[0] == first);
+            CHECK((*with_both)[1] == second);
+            CHECK(stream.subscriptions.size() == 1);
+
+            // 模拟 second 也成功登记，以便验证排除分支
+            stream.subscriptions.emplace(12, second);
+            stream.subscriber_snapshot_ = with_both;
+
+            // 排除 11：只剩 second，且构建阶段不得改动 map（删除仍需调用方提交）
+            auto only_second = stream.make_subscriber_snapshot(nullptr, 11);
+            CHECK(only_second->size() == 1);
+            CHECK((*only_second)[0] == second);
+            CHECK(stream.subscriptions.size() == 2);
+
+            // 排除不存在的 ID 时不误删
+            auto unchanged = stream.make_subscriber_snapshot(nullptr, 99);
+            CHECK(unchanged->size() == 2);
+            CHECK((*unchanged)[0] == first);
+            CHECK((*unchanged)[1] == second);
         }
 
         // ====================================================================

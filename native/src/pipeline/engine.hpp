@@ -100,6 +100,9 @@ struct Engine {
     /** @brief 后台清理线程函数：休眠至最近的流到期时间，回收已过期的物理流 */
     void reap() noexcept;
 
+    /** @brief 单次回收扫描（允许抛出，由 reap 统一收口） */
+    void reap_once();
+
     /** @brief 唤醒清理线程重新计算最近到期时间 (可在持有 control 时调用，不会反向加锁) */
     void wake_reaper();
 

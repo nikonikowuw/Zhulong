@@ -40,6 +40,10 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
   - `Stream::dispatch` 的扇出循环必须对每个 `subscription->invoke()` 单独 `try/catch`。回调抛 C++ 异常是调用方违约（`engine.h` 明文禁止），**不得**中断同流其他订阅者的数据供给，**也不得**将流置为 `FAILED`。
   - `Subscription::invoke` 在重抛前已恢复 `in_callback` 并置 `enabled=false`，故违约订阅者自动静默失效（后续 `invoke` 首行直接返回），无需从快照移除。
   - ⚠️ 不得改为在 `Subscription::invoke` 内吞掉异常：`native/tests/capture_unit_test.cpp` 依赖其重抛语义来验证 `in_callback` TLS 恢复。
+- **订阅表变更必须事务化（先构建、后提交）**：
+  - `subscriptions` 与 `subscriber_snapshot_` 是一对不容错位的状态。`Engine::subscribe` / `unsubscribe` 必须先用 `Stream::make_subscriber_snapshot()` 把新快照**完整构建出来**（这一步允许因 `bad_alloc` 抛异常），再用 `subscriptions` 变更 + `shared_ptr` 移动赋值提交（两者都不抛）。
+  - 反序（先改 map 再重建快照）会留下半提交状态：订阅登记成功但快照未更新 → 该订阅永不被派发、且消费者 `release` 永远撞 `ERR_BUSY`；注销时快照未更新 → 已删订阅仍被派发，且异常使 `disable_and_drain()` 被跳过，回调永不停止。
+  - 由 `native/tests/decoder_test.cpp` 的 5.2 节守护。
 - **解码丢包与重同步可观测性**：
   - `DecodeSession::counters()` 返回 `DecodeCounters` 快照（`decoder_unavailable_drops` / `keyframe_gate_drops` / `congestion_resyncs`），`Stream::callback_exception_count()` 返回被隔离的回调异常数。
   - 全部为 `memory_order_relaxed` 原子自增，无锁、无同步依赖；仅供测试与运维观测，**不跨越 C ABI**（`engine.h` 无对应符号）。
@@ -105,6 +109,9 @@ Capture Node (RTSP/V4L2) ➔ Decode Node (HW/SW) ➔ Preprocess Node (Resize/CSC
 - 严禁在持有 `Engine::control` 或 `Stream::mutex` 期间调用任何 `thread.join()`；
 - 严禁在工作线程尚未 `join()` 时销毁其正在访问的内存资源。
 - ⚠️ **熔断回调同样适用**：`DecodeSession` 的 `on_fatal_error` 在**解码线程**上回调 `Stream::on_decode_fatal_error`，后者若在 `Stream::mutex` 临界区内调 `request_stop()`（内部再取同一把 `std::mutex`），就是同线程二次加锁直接死锁，且随后的 `join()` 永远等不到解码线程退出。故障路径（VPU 不可用）恰好是最需要它能退出的时刻。由 `native/tests/decoder_test.cpp` 的 5.1 节守护。
+- ⚠️ **熔断错误码不得被拉流线程收尾覆盖**：`on_decode_fatal_error` 先写入 `FAILED + 具体故障码`，再 `request_stop()`；`Stream::capture` 收尾会拿到 `ERR_CANCELLED`。若收尾无条件重写 `status`，对外就变成 `FAILED + CANCELLED` —— 按 `engine.h` 的契约这正是「受控停机」，硬件故障从此静默。收尾只能在「尚未记录非取消类故障」时落盘。由 `native/tests/decoder_test.cpp` 的 5.1b 节守护。
+- ⚠️ **`noexcept` 线程入口必须自行收口异常**：`DecodeSession::decode_loop`、`FramePublisher::publish_loop`、`Engine::reap`、`Stream::capture` 都是 `noexcept` 的线程入口，而它们都会分配内存（缓冲池 `push_back`、broker 客户端快照与发送缓冲、过期流快照 `vector`）。任何逃出的异常都是 `std::terminate`，一次 `bad_alloc` 会带走整个宿主（含其他流与 Go 侧调用）。做法：入口 `try/catch` 包住工作体（`decode_loop_body` / `publish_once` / `reap_once`），异常翻译成受控失败或单帧丢弃并落稳定 token 日志；`ZL_LOG*` 自身是 `noexcept`，可以安全用于收口路径。
+- ⚠️ **`noexcept` 热路径不得用 `make_unique` 兜底**：`MotionDetector` 的 DMA-BUF 读取守卫用 `std::optional<ScopedFdSync>` 就地构造，而非 `unique_ptr` —— 后者在 OOM 时抛 `bad_alloc` 穿出 `noexcept`，把「读不到像素就 fail-open」变成进程崩溃。
 
 ---
 

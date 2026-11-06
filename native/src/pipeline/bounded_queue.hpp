@@ -171,6 +171,11 @@ public:
      * ⚠️ 不可逆性契约：
      *   - 一旦取消，cancelled_ 恒为 true，队列不再接受新数据且无法复活；
      *   - 残余数据在锁外释放，清空内存。
+     *
+     * ⚠️ 本函数不是 noexcept：锁外托管的 `std::deque` 默认构造在内存紧张时会抛
+     *    `bad_alloc`（残余元素必须移出锁外销毁，不能在这里 `clear()`，否则
+     *    HardwareFrame 的 release_fn 会在队列锁内执行）。因此 noexcept 线程入口
+     *    的异常收口路径调用它时必须自己 `try/catch`（见 `DecodeSession::decode_loop`）。
      */
     void cancel() {
         std::deque<T> discarded;

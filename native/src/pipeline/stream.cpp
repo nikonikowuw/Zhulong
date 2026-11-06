@@ -73,7 +73,7 @@ std::vector<uint8_t> DecodeSession::acquire_buffer(size_t size) {
     return buffer;
 }
 
-void DecodeSession::recycle_buffer(std::vector<uint8_t> &&buffer) {
+void DecodeSession::recycle_buffer(std::vector<uint8_t> &&buffer) noexcept {
     const size_t capacity = buffer.capacity();
     if (capacity == 0 || capacity > kMaxPooledCapacity) return;
     buffer.clear();
@@ -83,8 +83,14 @@ void DecodeSession::recycle_buffer(std::vector<uint8_t> &&buffer) {
     if (buffer_pool_.size() >= kMaxPooledBuffers || pooled_bytes_ + capacity > kMaxPooledBytes) {
         return;
     }
+    // ⚠️ 本函数在解码线程入口的热路径上且是 noexcept：池扩容失败只放弃这一次复用
+    //    （缓冲在锁外析构），绝不让 bad_alloc 穿出 noexcept 触发 std::terminate。
+    try {
+        buffer_pool_.push_back(std::move(buffer));
+    } catch (...) {
+        return;
+    }
     pooled_bytes_ += capacity;
-    buffer_pool_.push_back(std::move(buffer));
 }
 
 DecodeSession::~DecodeSession() {
@@ -194,6 +200,36 @@ bool DecodeSession::is_active() const {
 }
 
 void DecodeSession::decode_loop() noexcept {
+    // ⚠️ 线程入口必须自行收口异常：本函数是 noexcept，任何逃出的异常都会直接
+    //    std::terminate 掉整个宿主进程（同进程里还有其他流与 Go 侧调用在跑）。
+    //    收口后按「解码会话不可用」受控降级，并把故障上报给 Stream 熔断。
+    auto fail_closed = [this](Zhulong_status_t status) noexcept {
+        active_.store(false, std::memory_order_relaxed);
+        // 取消队列与熔断回调都可能分配内存（`std::deque` 默认构造、Stream 侧容器），
+        // 而本 lambda 已在异常收口路径上：二次异常穿出 noexcept 就是 std::terminate。
+        // 二者都不是恢复正确性所必需——`active_` 已置 false，发布线程最迟 50ms 超时退出。
+        try {
+            packet_queue_.cancel();
+            frame_queue_.cancel();
+            if (on_fatal_error_) {
+                on_fatal_error_(status);
+            }
+        } catch (...) {
+        }
+    };
+
+    try {
+        decode_loop_body();
+    } catch (const std::bad_alloc &) {
+        ZL_LOGE(stream_id_, "pipeline.stream", "decode_loop_out_of_memory");
+        fail_closed(Zhulong_ERR_OUT_OF_MEMORY);
+    } catch (...) {
+        ZL_LOGE(stream_id_, "pipeline.stream", "decode_loop_exception");
+        fail_closed(Zhulong_ERR_INTERNAL);
+    }
+}
+
+void DecodeSession::decode_loop_body() {
     using SteadyClock = std::chrono::steady_clock;
     constexpr auto kInitialRetryDelay = std::chrono::milliseconds(250);
     constexpr auto kMaxRetryDelay = std::chrono::milliseconds(5000);
@@ -290,9 +326,8 @@ void DecodeSession::decode_loop() noexcept {
         return decoder.get();
     };
 
-    // ⚠️ 本 lambda 自己吞掉异常：decode_loop 是 noexcept，而 receive_frame() 里的
-    //    make_shared 与 frame_queue_.push 的 deque 扩容都可能抛 bad_alloc。
-    //    异常一旦穿出 decode_loop 就是 std::terminate —— 只能在这里收口。
+    // ⚠️ 本 lambda 自己吞掉异常：decode_loop_body() 允许抛出（由 decode_loop 收口），
+    //    但排空帧失败只该丢帧并按解码错误重同步关键帧，不值得终止整个解码会话。
     auto drain_frames = [&](IDecodeNode *dec) {
         if (!dec) return;
         try {
@@ -563,13 +598,18 @@ void Stream::on_ready(const Media &media) {
         media.audio.has_audio ? 1 : 0, media.audio.codec, media.audio.sample_rate, media.audio.channels);
 }
 
-void Stream::rebuild_subscribers() {
+std::shared_ptr<const Stream::SubscriberList> Stream::make_subscriber_snapshot(
+    const std::shared_ptr<Subscription> &append, Zhulong_subscription_id exclude) const {
     auto list = std::make_shared<SubscriberList>();
-    list->reserve(subscriptions.size());
+    list->reserve(subscriptions.size() + (append ? 1u : 0u));
     for (const auto &entry : subscriptions) {
+        if (exclude != 0 && entry.first == exclude) continue;
         list->push_back(entry.second);
     }
-    subscriber_snapshot_ = std::move(list);
+    if (append) {
+        list->push_back(append);
+    }
+    return list;
 }
 
 void Stream::dispatch(const Zhulong_packet_view &packet) {
@@ -701,7 +741,15 @@ void Stream::capture() noexcept {
     std::lock_guard<std::mutex> lock(mutex);
     // C ABI 只有 STARTING/RUNNING/FAILED 三态，没有 STOPPED：正常停机在这里统一表达为
     // FAILED + Zhulong_ERR_CANCELLED，调用方靠 error 区分「被停机」与「真故障」（见 engine.h）。
-    status = {Zhulong_STREAM_FAILED, error == Zhulong_OK ? Zhulong_ERR_CANCELLED : error};
+    // ⚠️ 但熔断（on_decode_fatal_error，来自解码线程）先记录的真实故障必须保留：它随后会
+    //    request_stop()，让本线程以 ERR_CANCELLED 收尾；若无条件覆盖，FAILED + CANCELLED
+    //    会被读成「受控停机」，硬件故障就此静默。
+    const bool fatal_error_recorded = status.state == Zhulong_STREAM_FAILED &&
+                                      status.error != Zhulong_OK &&
+                                      status.error != Zhulong_ERR_CANCELLED;
+    if (!fatal_error_recorded) {
+        status = {Zhulong_STREAM_FAILED, error == Zhulong_OK ? Zhulong_ERR_CANCELLED : error};
+    }
 }
 
 namespace {

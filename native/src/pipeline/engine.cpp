@@ -143,57 +143,69 @@ void Engine::wake_reaper() {
 }
 
 void Engine::reap() noexcept {
+    while (!reaper_stop.load()) {
+        // ⚠️ 线程入口必须自行收口异常：本函数是 noexcept，而回收扫描会分配
+        //    （过期流快照 vector），任何逃出的异常都会直接 std::terminate 掉整个宿主。
+        try {
+            reap_once();
+        } catch (...) {
+            ZL_LOGE(0, "pipeline.engine", "reaper_exception");
+            // 异常路径不经过条件变量等待，自己补一次有界休眠，避免持续 OOM 时空转烧 CPU。
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
+}
+
+void Engine::reap_once() {
     // 兜底唤醒上限：即使出现未预期的状态变化，最迟 1 秒内重新扫描
     constexpr auto kMaxSleep = std::chrono::seconds(1);
 
-    while (!reaper_stop.load()) {
-        // 先记录唤醒纪元再扫描：扫描之后发生的任何变更都会让下面的等待立即返回
-        uint64_t seen_epoch = 0;
-        {
-            std::lock_guard<std::mutex> timer(timer_mutex);
-            seen_epoch = wake_epoch;
-        }
-
-        std::vector<std::shared_ptr<Stream>> expired;
-        auto earliest = Clock::time_point::max();
-        {
-            std::lock_guard<std::mutex> lock(control);
-            if (reaper_stop.load()) break;
-            const auto now = Clock::now();
-            for (const auto &entry : streams) {
-                const auto &stream = entry.second;
-                if (!stream->consumers.empty()) continue;
-                if (now >= stream->expiry) {
-                    expired.push_back(stream);
-                } else {
-                    earliest = std::min(earliest, stream->expiry);
-                }
-            }
-        }
-
-        if (!expired.empty()) {
-            // 先统一发出停止信号，再逐个汇合：某一路 FFmpeg 取消较慢时不会延后其它流的停止
-            for (const auto &stream : expired) stream->request_stop();
-            for (const auto &stream : expired) {
-                stream->join();
-                {
-                    std::lock_guard<std::mutex> lock(control);
-                    streams.erase(stream->id);
-                }
-                ZL_LOGI(stream->id, "pipeline.engine", "stream_retired");
-                stream_retired.notify_all();
-            }
-            continue;
-        }
-
-        const auto now = Clock::now();
-        const auto deadline = earliest == Clock::time_point::max() ? now + kMaxSleep
-                                                                   : std::min(earliest, now + kMaxSleep);
-        std::unique_lock<std::mutex> timer(timer_mutex);
-        timer_wakeup.wait_until(timer, deadline, [this, seen_epoch] {
-            return reaper_stop.load() || wake_epoch != seen_epoch;
-        });
+    // 先记录唤醒纪元再扫描：扫描之后发生的任何变更都会让下面的等待立即返回
+    uint64_t seen_epoch = 0;
+    {
+        std::lock_guard<std::mutex> timer(timer_mutex);
+        seen_epoch = wake_epoch;
     }
+
+    std::vector<std::shared_ptr<Stream>> expired;
+    auto earliest = Clock::time_point::max();
+    {
+        std::lock_guard<std::mutex> lock(control);
+        if (reaper_stop.load()) return;
+        const auto now = Clock::now();
+        for (const auto &entry : streams) {
+            const auto &stream = entry.second;
+            if (!stream->consumers.empty()) continue;
+            if (now >= stream->expiry) {
+                expired.push_back(stream);
+            } else {
+                earliest = std::min(earliest, stream->expiry);
+            }
+        }
+    }
+
+    if (!expired.empty()) {
+        // 先统一发出停止信号，再逐个汇合：某一路 FFmpeg 取消较慢时不会延后其它流的停止
+        for (const auto &stream : expired) stream->request_stop();
+        for (const auto &stream : expired) {
+            stream->join();
+            {
+                std::lock_guard<std::mutex> lock(control);
+                streams.erase(stream->id);
+            }
+            ZL_LOGI(stream->id, "pipeline.engine", "stream_retired");
+            stream_retired.notify_all();
+        }
+        return;
+    }
+
+    const auto now = Clock::now();
+    const auto deadline = earliest == Clock::time_point::max() ? now + kMaxSleep
+                                                               : std::min(earliest, now + kMaxSleep);
+    std::unique_lock<std::mutex> timer(timer_mutex);
+    timer_wakeup.wait_until(timer, deadline, [this, seen_epoch] {
+        return reaper_stop.load() || wake_epoch != seen_epoch;
+    });
 }
 
 std::shared_ptr<Stream> Engine::find_stream(Zhulong_stream_id id) {
@@ -502,8 +514,13 @@ Zhulong_subscription_id Engine::subscribe(Zhulong_stream_id id, uint64_t consume
 
     if (!next_subscription) throw Failure{Zhulong_ERR_INTERNAL};
     const auto subscription = next_subscription++;
-    stream->subscriptions.emplace(subscription, std::make_shared<Subscription>(consumer, callback, token, track_mask));
-    stream->rebuild_subscribers();
+    auto created = std::make_shared<Subscription>(consumer, callback, token, track_mask);
+
+    // ⚠️ 先构建「含新订阅」的快照，再一次性提交：快照分配失败时 map 与快照都没动，
+    //    不会留下「已登记但不可派发」的孤儿订阅（那会让该消费者的 release 永远撞 BUSY）。
+    auto snapshot = stream->make_subscriber_snapshot(created, 0);
+    stream->subscriptions.emplace(subscription, std::move(created));
+    stream->subscriber_snapshot_ = std::move(snapshot); // shared_ptr 移动赋值，不抛
     ZL_LOGI(id, "pipeline.engine", "packet_subscription_attached track_mask=%u", track_mask);
     return subscription;
 }
@@ -543,9 +560,13 @@ void Engine::unsubscribe(Zhulong_stream_id id, Zhulong_subscription_id subscript
         std::lock_guard<std::mutex> lock(stream->mutex);
         const auto found = stream->subscriptions.find(subscription);
         if (found == stream->subscriptions.end()) throw Failure{Zhulong_ERR_NOT_FOUND};
+        // ⚠️ 先构建「不含该订阅」的快照，再提交删除：快照构建失败时直接抛出，
+        //    订阅仍是完整登记状态（可重试），不会出现「已从 map 删除、却仍在旧快照里派发」
+        //    且 disable_and_drain() 因异常未被调用的半注销状态。
+        auto snapshot = stream->make_subscriber_snapshot(nullptr, subscription);
         removed = found->second;
         stream->subscriptions.erase(found);
-        stream->rebuild_subscribers();
+        stream->subscriber_snapshot_ = std::move(snapshot);
     }
 
     operation.unlock();

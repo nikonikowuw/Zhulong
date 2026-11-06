@@ -9,7 +9,7 @@
 
 #include <algorithm>
 #include <cstring>
-#include <memory>
+#include <optional>
 #include <utility>
 
 #if defined(__linux__)
@@ -48,7 +48,12 @@ public:
 #endif
     }
 
-    /** @brief 建立只读映射；成功返回可读指针，失败返回 nullptr（调用方降级放行） */
+    /**
+     * @brief 建立只读映射；成功返回可读指针，失败返回 nullptr（调用方降级放行）
+     *
+     * ⚠️ 本函数是发布线程热路径上的 noexcept：同步守卫用 `std::optional` 原地构造，
+     *    不像 `make_unique` 那样在 OOM 时抛 `bad_alloc` 穿出 noexcept 触发 std::terminate。
+     */
     const uint8_t* open(int dma_fd, size_t map_size) noexcept {
 #if defined(__linux__)
         if (dma_fd < 0 || map_size == 0) {
@@ -58,7 +63,7 @@ public:
         if (addr == MAP_FAILED || addr == nullptr) {
             return nullptr;
         }
-        sync_ = std::make_unique<platform::ScopedFdSync>(dma_fd, platform::kDmaSyncRead);
+        sync_.emplace(dma_fd, platform::kDmaSyncRead);
         if (!sync_->active()) {
             sync_.reset();
             ::munmap(addr, map_size);
@@ -78,7 +83,7 @@ private:
 #if defined(__linux__)
     void* addr_{nullptr};
     size_t size_{0};
-    std::unique_ptr<platform::ScopedFdSync> sync_;
+    std::optional<platform::ScopedFdSync> sync_;
 #endif
 };
 

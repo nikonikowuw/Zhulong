@@ -131,13 +131,17 @@ public:
     bool is_active() const;
 
 private:
+    /** @brief 线程入口：收口解码循环抛出的所有异常，绝不让其穿出 noexcept 线程入口 */
     void decode_loop() noexcept;
+
+    /** @brief 实际解码循环体（允许抛出，由 decode_loop 统一收口） */
+    void decode_loop_body();
 
     /** @brief 取得至少 size 字节容量的复用缓冲 (避免每包堆分配) */
     std::vector<uint8_t> acquire_buffer(size_t size);
 
-    /** @brief 归还包缓冲供后续复用 */
-    void recycle_buffer(std::vector<uint8_t> &&buffer);
+    /** @brief 归还包缓冲供后续复用（池扩容失败只放弃本次复用，不抛异常） */
+    void recycle_buffer(std::vector<uint8_t> &&buffer) noexcept;
 
     const uint64_t stream_id_{0};
     mutable std::mutex meta_mutex_;
@@ -236,8 +240,19 @@ struct Stream {
     /** @brief 流就绪时回调，接收复合媒体元数据 */
     void on_ready(const Media &media);
 
-    /** @brief 将 subscriptions 重新发布为不可变快照 (调用方必须持有 mutex) */
-    void rebuild_subscribers();
+    /**
+     * @brief 预构建不可变订阅者快照（**不修改** `subscriptions`）
+     *
+     * 调用方必须持有 mutex。所有分配都发生在提交之前：本函数抛异常时
+     * `subscriptions` 与 `subscriber_snapshot_` 均保持原状，不会留下
+     * 「map 已变、快照未变」的半提交状态（那会让该消费者的 release 永远撞 BUSY，
+     * 或让已注销订阅继续被派发）。
+     *
+     * @param append  需要追加的订阅（可为空，表示不追加）
+     * @param exclude 需要排除的订阅 ID（0 表示不排除）
+     */
+    std::shared_ptr<const SubscriberList> make_subscriber_snapshot(
+        const std::shared_ptr<Subscription> &append, Zhulong_subscription_id exclude) const;
 
     /**
      * @brief 将解析出的数据包整形后派发至该流的所有活跃订阅者及解码队列
