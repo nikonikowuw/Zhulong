@@ -20,6 +20,7 @@ export const imageSearchApi = {
       '/persons/search-by-image',
       formData,
       {
+        headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: params.onUploadProgress,
       }
     )

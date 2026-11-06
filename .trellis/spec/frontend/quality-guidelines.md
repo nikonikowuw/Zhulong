@@ -182,6 +182,32 @@ useEffect(() => {
 并把 `now` 做成可注入参数（`options.now?: () => number`）而不是用 fake timers ——
 排期类逻辑全是纯算术，注入墙钟比操纵全局定时器确定得多。
 
+### 2.8 FormData 上传测试必须经过 Axios 的真实序列化
+
+`src/lib/api-client.ts` 默认设置 `Content-Type: application/json`。Axios 1.15.0 在
+`transformRequest` 阶段会把带这个头的 `FormData` 转成 JSON，文件字段变成 `{}`；后端
+`FormFile("image")` 因此报 `422 VALIDATION_FAILED` / `image REQUIRED`，即使前端已经选了文件。
+
+上传调用必须在 Axios 转换前覆盖默认头。当前浏览器适配器随后会移除该头，让浏览器按
+`FormData` 生成含 boundary 的实际请求头；**不要手工拼 boundary**。
+
+```typescript
+// ❌ 继承 JSON 默认头，文件内容在序列化时丢失
+apiClient.post('/persons/search-by-image', formData)
+
+// ✅ 在转换前覆盖默认头；浏览器负责实际 multipart 编码
+apiClient.post('/persons/search-by-image', formData, {
+  headers: { 'Content-Type': 'multipart/form-data' },
+})
+```
+
+**回归边界**：不能只 mock `apiClient.post` 再检查传入了 `FormData`——这会跳过默认头合并和
+序列化。仅替换 transport adapter，并在测试后恢复；断言 adapter 收到 `FormData`、正确的
+文件字段/文件名/MIME/实际字节、可选参数和上传进度回调。去掉上传头时用例必须失败。
+Adapter 测试不证明线上 boundary；要验证完整编码，应使用真实浏览器 XHR 与 HTTP 接收端。
+
+参考用例：`src/features/image-search/api/image-search-api.test.ts`。
+
 ---
 
 ## 3. 严格类型约束与零 any 审计
