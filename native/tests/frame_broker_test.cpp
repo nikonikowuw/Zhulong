@@ -632,7 +632,7 @@ void test_protocol_alignment_assertions() {
     assert(sizeof(HandshakeResp) == 80);
     assert(sizeof(IpcMotionBox) == 16);
     assert(LEGACY_FRAME_DISPATCH_SIZE == 96);
-    assert(sizeof(FrameDispatchMsg) == 168);
+    assert(sizeof(FrameDispatchMsg) == 184);
     assert(sizeof(FrameAckMsg) == 32);
 
     assert(offsetof(FrameDispatchMsg, stream_id) % 8 == 0);
@@ -1101,6 +1101,17 @@ void test_consumer_result_algorithm_id_e2e(const char* consumer_bin) {
     opt.slot_size = 1024 * 1024;
     assert(broker.start(stream_id, "/tmp", opt));
 
+    const auto seed = [&](uint16_t type, const std::string& json) {
+        TaskConfigMsg header{};
+        header.config_json_len=static_cast<uint32_t>(json.size());
+        std::strncpy(header.algorithm_id,"e2e_algo",sizeof(header.algorithm_id)-1);
+        std::string payload(sizeof(header),'\0');
+        std::memcpy(payload.data(),&header,sizeof(header)); payload+=json;
+        assert(broker.broadcast_message(type,payload.data(),payload.size())==0);
+    };
+    seed(MSG_TASK_REGIONS,R"({"tripwires":[{"id":"entry","name":"入口","points":[[0.2,0.5],[0.8,0.5]],"direction":"a_to_b"}]})");
+    seed(MSG_TASK_CONFIG,R"({"threshold":0.7})");
+
     // 捕获 runner 经 MSG_RESULT 上报的载荷。回调由 broker 接收线程异步触发，
     // 因此下方必须做有界轮询等待，不能依赖 waitpid 之后立即断言。
     std::atomic<bool> received{false};
@@ -1164,6 +1175,11 @@ void test_consumer_result_algorithm_id_e2e(const char* consumer_bin) {
     broker.stop();
 
     assert(received_payload.find("\"algorithm_id\":\"e2e_algo\"") != std::string::npos);
+
+    assert(received_payload.find("tripwires") != std::string::npos);
+    assert(received_payload.find("a_to_b") != std::string::npos);
+    assert(received_payload.find("params-ok") != std::string::npos);
+    assert(received_payload.find("|revision=1|view=known") != std::string::npos);
 
     std::cout << "[PASS] test_consumer_result_algorithm_id_e2e" << std::endl;
 }
@@ -1275,43 +1291,46 @@ void test_frame_broker_task_config_cache_replay() {
     std::string err;
     assert(broker.start(stream_id, "/tmp", opts, &err));
 
-    // 1) 无客户端时推送：广播计数为 0，但必须被缓存
-    std::string config_v1 = R"({"threshold":0.55})";
-    assert(broker.broadcast_message(MSG_TASK_CONFIG, config_v1.data(), config_v1.size()) == 0);
-
-    // 底库消息不参与重放：它跟随自己的全量 sync 流程。
-    std::string gallery_json = R"({"face_id":"f1","person_id":"p1"})";
-    assert(broker.broadcast_message(MSG_GALLERY_UPSERT, gallery_json.data(), gallery_json.size()) == 0);
-
-    auto handshake_and_expect = [&](const std::string& expected) {
+    const auto encode = [](const std::string& id, const std::string& json) {
+        TaskConfigMsg header{};
+        header.config_json_len = static_cast<uint32_t>(json.size());
+        std::strncpy(header.algorithm_id, id.c_str(), sizeof(header.algorithm_id)-1);
+        std::string payload(sizeof(header), '\0');
+        std::memcpy(payload.data(), &header, sizeof(header));
+        return payload + json;
+    };
+    const std::string face = encode("face", R"({"threshold":0.55})");
+    const std::string vehicle = encode("vehicle", R"({"threshold":0.8})");
+    const std::string regions = encode("face", R"({"tripwires":[{"id":"entry"}]})");
+    assert(broker.broadcast_message(MSG_TASK_CONFIG, face.data(), face.size()) == 0);
+    assert(broker.broadcast_message(MSG_TASK_CONFIG, vehicle.data(), vehicle.size()) == 0);
+    assert(broker.broadcast_message(MSG_TASK_REGIONS, regions.data(), regions.size()) == 0);
+    const auto handshake_and_expect = [&](const std::string& expected_regions) {
         UnixSocketClient client;
         assert(client.connect(broker.socket_path()));
         HandshakeReq req{};
         req.client_id = 1;
         req.api_version = 1;
-        std::strncpy(req.client_name, "task_config_client", sizeof(req.client_name) - 1);
+        std::strncpy(req.client_name, "task_config_client", sizeof(req.client_name)-1);
         assert(client.send_msg(MSG_HANDSHAKE_REQ, &req, sizeof(req)));
-
         IpcHeader hdr{};
         std::vector<uint8_t> payload;
         assert(client.recv_msg(hdr, payload, 2000));
         assert(hdr.msg_type == MSG_HANDSHAKE_RESP);
-
-        // 握手应答之后紧跟着就是重放的任务级配置
-        IpcHeader replay_hdr{};
-        std::vector<uint8_t> replay_payload;
-        assert(client.recv_msg(replay_hdr, replay_payload, 2000));
-        assert(replay_hdr.msg_type == MSG_TASK_CONFIG);
-        assert(std::string(replay_payload.begin(), replay_payload.end()) == expected);
+        bool got_face=false, got_vehicle=false, got_regions=false;
+        for (int i=0;i<3;++i) {
+            assert(client.recv_msg(hdr,payload,2000));
+            const std::string value(payload.begin(),payload.end());
+            if (hdr.msg_type == MSG_TASK_REGIONS) { assert(value==expected_regions); got_regions=true; }
+            else { assert(hdr.msg_type==MSG_TASK_CONFIG); if(value==face) got_face=true; else {assert(value==vehicle);got_vehicle=true;} }
+        }
+        assert(got_face && got_vehicle && got_regions);
         client.disconnect();
     };
-
-    handshake_and_expect(config_v1);
-
-    // 2) 更新后再连：重放的必须是最新值，而不是第一条
-    std::string config_v2 = R"({"threshold":0.80,"top_k":5})";
-    assert(broker.broadcast_message(MSG_TASK_CONFIG, config_v2.data(), config_v2.size()) == 0);
-    handshake_and_expect(config_v2);
+    handshake_and_expect(regions);
+    const std::string cleared = encode("face", "{}");
+    assert(broker.broadcast_message(MSG_TASK_REGIONS, cleared.data(), cleared.size()) == 0);
+    handshake_and_expect(cleared);
 
     broker.stop();
     std::cout << "[PASS] test_frame_broker_task_config_cache_replay" << std::endl;
@@ -1919,6 +1938,10 @@ void test_frame_broker_windowed_publish() {
 
     FrameDispatchMsg dispatch{};
     std::memcpy(&dispatch, dispatch_payload.data(), sizeof(dispatch));
+    assert(dispatch.input_view[0] == static_cast<float>(view.x) / src_w);
+    assert(dispatch.input_view[1] == static_cast<float>(view.y) / src_h);
+    assert(dispatch.input_view[2] == static_cast<float>(view.x + view.w) / src_w);
+    assert(dispatch.input_view[3] == static_cast<float>(view.y + view.h) / src_h);
     assert(dispatch.width == view.w);
     assert(dispatch.height == view.h);
     assert(dispatch.format == ZHULONG_PIXEL_FORMAT_NV12);

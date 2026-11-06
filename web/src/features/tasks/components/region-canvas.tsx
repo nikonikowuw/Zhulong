@@ -17,6 +17,7 @@ import {
   type RegionSelection,
 } from '../data/region-config'
 import { type RegionTool } from './region-drag-types'
+import { TripwireCanvas } from './tripwire-canvas'
 import { useRegionDrag } from './use-region-drag'
 
 export type { RegionTool }
@@ -82,8 +83,8 @@ export function RegionCanvas({
     startCropResize,
   } = useRegionDrag({
     draft,
-    tool,
-    disabled,
+    tool: tool === 'tripwire' ? 'select' : tool,
+    disabled: disabled || tool === 'tripwire',
     onChange,
     onCreate,
     onSelect,
@@ -273,6 +274,13 @@ export function RegionCanvas({
       {draft.mask.map((item, i) => renderItem(item, 'mask', i))}
 
       {cropRect && renderCrop(cropRect)}
+      <TripwireCanvas
+        draft={draft}
+        drawing={tool === 'tripwire'}
+        editable={!disabled && (tool === 'select' || tool === 'tripwire')}
+        onChange={onChange}
+        onBeforeChange={onBeforeChange}
+      />
 
       {creatingPreview && (
         <div

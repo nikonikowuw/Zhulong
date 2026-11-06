@@ -54,6 +54,15 @@ func (r *appBrokerPathResolver) log() *zap.Logger {
 //	但不同 task 仍可指向同一相机）。真的出现两份时取任务顺序里的第一条并告警：静默挑一个
 //	会让「改了配置没生效」变成无解问题。
 func (r *appBrokerPathResolver) TaskConfigsFor(ctx context.Context, algorithmID string) (map[uint64]string, error) {
+	return r.taskConfigsFor(ctx, algorithmID, false)
+}
+
+// TaskRegionsFor resolves the full-frame region snapshot independently of plugin parameters.
+func (r *appBrokerPathResolver) TaskRegionsFor(ctx context.Context, algorithmID string) (map[uint64]string, error) {
+	return r.taskConfigsFor(ctx, algorithmID, true)
+}
+
+func (r *appBrokerPathResolver) taskConfigsFor(ctx context.Context, algorithmID string, regions bool) (map[uint64]string, error) {
 	if r.taskStore == nil || r.streamHub == nil {
 		return nil, nil
 	}
@@ -83,6 +92,9 @@ func (r *appBrokerPathResolver) TaskConfigsFor(ctx context.Context, algorithmID 
 			}
 
 			cfg := algo.ConfigJSON
+			if regions {
+				cfg = algo.RegionConfigJSON
+			}
 			if cfg == "" {
 				cfg = "{}"
 			}

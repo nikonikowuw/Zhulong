@@ -228,7 +228,16 @@
     "toolCrop": "裁剪視窗",
     "cropHint": "在畫面上拖曳設定任務級裁剪視窗（只把該區域送進 AI，省算力）",
     "cropClear": "清除裁剪",
-    "cropClearHint": "清除任務級裁剪視窗（恢復全幅推理）"
+    "cropClearHint": "清除任務級裁剪視窗（恢復全幅推理）",
+    "toolTripwire": "+ 絆線",
+    "tripwireDefaultName": "絆線 {{number}}",
+    "tripwireTitle": "絆線設定",
+    "tripwireHint": "拖曳繪製直線；使用「選擇 / 調整」拖動端點。A/B 表示線的兩側。此處僅設定，不代表已啟用越線統計。",
+    "tripwireName": "絆線名稱",
+    "tripwireNameInvalid": "名稱需為 1～64 個字元。",
+    "tripwireDirection": "越線方向",
+    "tripwireDelete": "刪除絆線",
+    "tripwireEndpoint": "{{name}} 端點 {{endpoint}}"
   },
   "actions": {
     "refresh": "重新整理",

@@ -18,6 +18,7 @@
 #include "internal/gallery_index.hpp"
 #include "internal/gallery_parser.hpp"
 #include "internal/motion_gate.hpp"
+#include "internal/task_regions.hpp"
 #include "internal/stall_watch.hpp"
 #include "internal/worker_guard.hpp"
 #include "algorithm/ipc/ipc_protocol.hpp"
@@ -1125,6 +1126,7 @@ namespace detail
             // 本路流的任务级配置原文（MSG_TASK_CONFIG）。生命周期覆盖整个 Worker 线程：
             // TaskContext.params.json 只是指向它的视图。
             std::string task_config_json;
+            TaskRegionState task_regions;
 
             int frames_processed = 0;
             bool last_had_targets = false;
@@ -1234,6 +1236,9 @@ namespace detail
                             if (task)
                             {
                                 drain_control_messages(task->user, task_config_json);
+                                task->user.regions = task_regions.view();
+                                task->user.input_view.known = payload.size() >= sizeof(ipc::FrameDispatchMsg);
+                                std::copy(std::begin(dispatch.input_view), std::end(dispatch.input_view), task->user.input_view.rect.begin());
                             }
 
                             zhulong_inference_result *result = nullptr;
@@ -1345,6 +1350,10 @@ namespace detail
                 {
                     ParsedDelete del = parse_delete_payload(payload.data(), payload.size());
                     gallery_index.remove(del.face_id, del.person_id);
+                }
+                else if (hdr.msg_type == ipc::MSG_TASK_REGIONS)
+                {
+                    task_regions.receive(payload.data(), payload.size(), algorithm_id);
                 }
                 else if (hdr.msg_type == ipc::MSG_TASK_CONFIG && payload.size() >= sizeof(ipc::TaskConfigMsg))
                 {

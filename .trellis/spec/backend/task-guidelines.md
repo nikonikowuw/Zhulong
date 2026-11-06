@@ -123,3 +123,10 @@ type TaskChangeListener interface {
 1. **通道卡片与表格双重视角**：前端将每个摄像头呈现为「通道分析任务（Channel Task）」，同时保留扁平表格视图用于底层按算法排查。
 2. **原子保存契约**：在「配置通道算法」弹窗中，用户编辑勾选状态、FPS 和配置参数后，单次调用 `PUT /tasks/camera/:cameraId` 提交，后端在事务内原子校验与持久化，彻底废除多请求 diff 脆弱逻辑。
 3. **全局算力预算前置阻断**：前端基于 1,000 点总预算池实时核算 $\sum (\text{cost} \times \text{fps})$，超限时前端立即阻止提交，并在后端返回 409 `COMPUTE_BUDGET_EXCEEDED` 时友好提示。
+
+
+## 绊线区域配置
+
+`region_config_json` 在既有ROI/MASK之外支持 `tripwires`，完整字段与方向合同见 [SDK绊线配置](../native/algo-plugin-contract.md#绊线配置与区域读取sdk-120)。每算法最多8条，稳定ID和有序端点持久化；名称与方向属于配置。保存只表示配置存在，不代表算法支持或已启用统计。无需新增数据库列。Go服务继续用 `region.ParseConfig` 校验，错误复用 `INVALID_REGION_CONFIG`。
+
+区域读取沿现有 `appBrokerPathResolver` → `TaskRegionProvider` → `TaskConfigBroadcaster.BroadcastRegions` → `MSG_TASK_REGIONS`；不改变 `config_json` 的算法自定义参数语义。任务变更按现有生命周期重启包，启动前播种Broker缓存。

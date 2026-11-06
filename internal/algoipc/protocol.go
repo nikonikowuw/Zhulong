@@ -76,6 +76,8 @@ const (
 	// native/src/algorithm/ipc/ipc_protocol.hpp (TaskConfigMsg): a 68-byte header
 	// followed by raw UTF-8 JSON that the algorithm parses itself.
 	MsgTaskConfig uint16 = 14
+	// MsgTaskRegions carries the host-owned full-frame region JSON, with the same framing.
+	MsgTaskRegions uint16 = 15
 )
 
 // IPC control payload layouts.

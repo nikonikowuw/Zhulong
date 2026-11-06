@@ -146,3 +146,44 @@ func TestSupervisorPushTaskConfigsWithoutWiringIsNoop(t *testing.T) {
 	s := &Supervisor{logger: zap.NewNop()}
 	s.pushTaskConfigs("face_recognition") // must not panic or block
 }
+
+type staticTaskRegionProvider struct {
+	staticTaskConfigProvider
+	regions map[uint64]string
+}
+
+func (p *staticTaskRegionProvider) TaskRegionsFor(_ context.Context, _ string) (map[uint64]string, error) {
+	return p.regions, nil
+}
+
+func TestSupervisorPushRegionsAndUnchangedParams(t *testing.T) {
+	broadcaster := &fakeBroadcaster{}
+	provider := &staticTaskRegionProvider{
+		staticTaskConfigProvider: staticTaskConfigProvider{configs: map[uint64]string{5: `{"threshold":0.7}`}},
+		regions:                  map[uint64]string{5: `{"tripwires":[{"id":"entry","name":"入口","points":[[0,0.5],[1,0.5]],"direction":"both"}]}`},
+	}
+	s := &Supervisor{logger: zap.NewNop()}
+	s.SetTaskConfig(provider, NewTaskConfigBroadcaster(broadcaster, zap.NewNop()))
+	s.pushTaskConfigs("face")
+	if len(broadcaster.records) != 2 {
+		t.Fatalf("want region and params, got %+v", broadcaster.records)
+	}
+	for _, record := range broadcaster.records {
+		want := provider.configs[5]
+		if record.msgType == algoipc.MsgTaskRegions {
+			want = provider.regions[5]
+		} else if record.msgType != algoipc.MsgTaskConfig {
+			t.Fatalf("unexpected type %d", record.msgType)
+		}
+		if got := string(record.payload[algoipc.TaskConfigHeaderSize:]); got != want {
+			t.Fatalf("payload %q != %q", got, want)
+		}
+	}
+	broadcaster.records = nil
+	if err := s.taskConfigCast.BroadcastRegions(context.Background(), "face", map[uint64]string{5: `{}`}); err != nil {
+		t.Fatal(err)
+	}
+	if string(broadcaster.records[0].payload[algoipc.TaskConfigHeaderSize:]) != "{}" {
+		t.Fatal("clear snapshot missing")
+	}
+}

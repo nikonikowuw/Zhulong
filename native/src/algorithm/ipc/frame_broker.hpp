@@ -243,14 +243,14 @@ private:
     ResultCallback on_result_;
 
     /**
-     * @brief 最近一次下发的任务级配置报文（MSG_TASK_CONFIG），按流缓存一份
+     * @brief 最近一次任务参数与区域报文，按消息类型和 algorithm_id 缓存（最多256项）
      *
      * 两个必须由 Broker 兜住的时序问题：
      *   1. 宿主推配置时包进程可能还没连上（broadcast 会打到 0 个客户端）；
      *   2. 包进程崩溃重启后重连，宿主的推送早已发生。
      * 两种情况都只能靠「缓存 + 握手后重放」解决；底库有全量 sync 兜底，任务级配置没有。
      */
-    std::vector<uint8_t> last_task_config_payload_;
+    std::unordered_map<std::string, std::pair<uint16_t, std::vector<uint8_t>>> task_config_payloads_;
 };
 
 } // namespace zhulong::ipc

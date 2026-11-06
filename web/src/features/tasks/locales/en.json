@@ -228,7 +228,16 @@
     "toolCrop": "Crop window",
     "cropHint": "Drag on the frame to set a task-level crop window (only that area is sent to AI)",
     "cropClear": "Clear crop",
-    "cropClearHint": "Clear the task-level crop window (restore full-frame inference)"
+    "cropClearHint": "Clear the task-level crop window (restore full-frame inference)",
+    "toolTripwire": "+ Tripwire",
+    "tripwireDefaultName": "Tripwire {{number}}",
+    "tripwireTitle": "Tripwires",
+    "tripwireHint": "Drag to draw a line; use Select / Adjust to move endpoints. A/B label its two sides. Configuration does not enable counting by itself.",
+    "tripwireName": "Line name",
+    "tripwireNameInvalid": "Use 1–64 characters.",
+    "tripwireDirection": "Crossing direction",
+    "tripwireDelete": "Delete line",
+    "tripwireEndpoint": "{{name}} endpoint {{endpoint}}"
   },
   "actions": {
     "refresh": "Refresh",

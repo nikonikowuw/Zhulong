@@ -102,6 +102,35 @@ describe('useChannelTaskDrafts', () => {
     expect(result.current.regionEditor.draft.roi).toHaveLength(1)
   })
 
+  it('preserves tripwire IDs and directions across algorithm switches and payload generation', async () => {
+    const { result, act } = await renderDrafts()
+    act(() =>
+      result.current.regionEditor.changeDraft({
+        ...result.current.regionEditor.draft,
+        tripwires: [
+          {
+            id: 'entry',
+            name: '入口',
+            points: [
+              [0.2, 0.5],
+              [0.8, 0.5],
+            ],
+            direction: 'a_to_b',
+          },
+        ],
+      })
+    )
+    act(() => result.current.toggleAlgo('algo-smoke', true))
+    expect(result.current.regionEditor.draft.tripwires ?? []).toEqual([])
+    act(() => result.current.selectActiveAlgo('algo-face'))
+    expect(result.current.regionEditor.draft.tripwires?.[0].id).toBe('entry')
+    const payload = result.current.toPayloadDrafts({ regionEditable: true })
+    const face = payload.find((item) => item.algorithmId === 'algo-face')!
+    expect(
+      parseRegionConfig(face.regionConfigJson).tripwires?.[0].direction
+    ).toBe('a_to_b')
+  })
+
   it('keeps unsaved region edits when switching camera away and back', async () => {
     const { result, act } = await renderDrafts()
 

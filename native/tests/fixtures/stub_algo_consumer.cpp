@@ -42,7 +42,7 @@ public:
                                           zhulong::TaskContext& task_context) {
         (void)session;
         (void)image;
-        (void)task_context;
+
 
         // 集成测试用：让该路**卡在推理里**，验证无进展看门狗能把「卡死」变成可诊断的
         // 受控退出。默认 0 = 不睡眠，其余用例（含生产夹具行为）完全不变。
@@ -61,6 +61,15 @@ public:
         det.confidence = 0.9f;
         det.class_id = 1;
         det.label = "person";
+        // Exercise the actual SDK transport without a model or JSON dependency.
+        if (!task_context.regions.json.empty()) {
+            const bool line_received = task_context.regions.json.find("a_to_b") != std::string_view::npos &&
+                                       task_context.regions.json.find("tripwires") != std::string_view::npos;
+            det.label = (line_received ? "tripwires|a_to_b" : "regions-missing") +
+                        std::string(task_context.params.json == R"({"threshold":0.7})" ? "|params-ok" : "|params-missing") +
+                        "|revision=" + std::to_string(task_context.regions.revision) +
+                        (task_context.input_view.known ? "|view=known" : "|view=unknown");
+        }
         return {det};
     }
 };

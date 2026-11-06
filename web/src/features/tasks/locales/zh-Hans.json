@@ -228,7 +228,16 @@
     "toolCrop": "裁剪窗口",
     "cropHint": "在画面上拖拽设置任务级裁剪窗口（只把该区域送进 AI，省算力）",
     "cropClear": "清除裁剪",
-    "cropClearHint": "清除任务级裁剪窗口（恢复全幅推理）"
+    "cropClearHint": "清除任务级裁剪窗口（恢复全幅推理）",
+    "toolTripwire": "+ 绊线",
+    "tripwireDefaultName": "绊线 {{number}}",
+    "tripwireTitle": "绊线配置",
+    "tripwireHint": "拖拽绘制直线；使用“选择 / 调整”拖动端点。A/B 表示线的两侧。此处仅配置，不代表已启用越线统计。",
+    "tripwireName": "绊线名称",
+    "tripwireNameInvalid": "名称需为 1～64 个字符。",
+    "tripwireDirection": "越线方向",
+    "tripwireDelete": "删除绊线",
+    "tripwireEndpoint": "{{name}} 端点 {{endpoint}}"
   },
   "actions": {
     "refresh": "刷新",

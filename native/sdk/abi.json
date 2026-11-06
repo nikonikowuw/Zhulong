@@ -1,5 +1,5 @@
 {
-  "sdk_version": "1.1.0",
+  "sdk_version": "1.2.0",
   "api_version": 1,
   "protocol": 1,
   "_comment": [
@@ -8,7 +8,8 @@
     "protocol 对应 IPC 协议版本（ipc_protocol.hpp 的 IPC_VERSION）。",
     "改任何一项都意味着已发布的算法包需要重新构建，别在补丁版本里静默改。",
     "1.1.0：TaskConfig 不再是空值类型（新增 face_match_threshold / face_match_top_k / flags），并引入进程级 `--config` 与任务级 MSG_TASK_CONFIG。api_version / protocol 未变。",
-    "capabilities.extract_feature=optional 表示「实现它才能被宿主用于底库登记」：宿主通过 `--extract-feature` 子命令 + 弱符号 zhulong_face_extract_feature 调用，未实现时如实返回 UNSUPPORTED（进程级退出码 5），而不是构建错误。"
+    "capabilities.extract_feature=optional 表示「实现它才能被宿主用于底库登记」：宿主通过 `--extract-feature` 子命令 + 弱符号 zhulong_face_extract_feature 调用，未实现时如实返回 UNSUPPORTED（进程级退出码 5），而不是构建错误。",
+    "1.2.0：新增 TaskContext.regions 与 input_view、MSG_TASK_REGIONS=15 及帧尾窗口元数据；使用新能力的包需重建，旧参数消息与 C ABI 不变。"
   ],
   "capabilities": {
     "verify": "required",

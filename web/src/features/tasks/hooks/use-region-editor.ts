@@ -28,7 +28,7 @@ export interface RegionEditorController {
   tool: RegionTool
   canUndo: boolean
   isDirty: boolean
-  counts: { roi: number; mask: number }
+  counts: { roi: number; mask: number; tripwires?: number }
   /** 任务级裁剪窗口；`null` = 全幅。与 ROI/MASK 同处一个撤销栈。 */
   crop: Rect | null
   /** 载入新的 ROI 基线（切换算法时调用），并清空撤销历史。**不动 crop**。 */
@@ -205,7 +205,11 @@ export function useRegionEditor(
   )
 
   const counts = useMemo(
-    () => ({ roi: draft.roi.length, mask: draft.mask.length }),
+    () => ({
+      roi: draft.roi.length,
+      mask: draft.mask.length,
+      tripwires: draft.tripwires?.length ?? 0,
+    }),
     [draft]
   )
 

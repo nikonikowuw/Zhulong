@@ -22,8 +22,8 @@ namespace zhulong::sdk::gate {
 /**
  * @brief 从 MSG_FRAME_DISPATCH 负载解码帧分发报文（兼容遗留 96 字节线格式）
  *
- * - `size >= sizeof(FrameDispatchMsg)`：按当前格式整体解析；
- * - `size ∈ [LEGACY_FRAME_DISPATCH_SIZE, sizeof(FrameDispatchMsg))`：按遗留格式解析，
+ * - 184 字节：当前格式，含实际输入窗口；168 字节：保留完整运动字段，窗口未知；
+ * - `size ∈ [LEGACY_FRAME_DISPATCH_SIZE, 168)`：按遗留格式解析，
  *   运动字段保持默认值（`has_motion = 1` 放行）。新 Runner 连旧宿主时必须退化为
  *   「全帧推理」，绝不能因为读不到运动字段就既不推理也不 ACK；
  * - 更短：连遗留前缀都不完整，返回 false，调用方按畸形报文丢弃。
@@ -42,7 +42,7 @@ inline bool decode_frame_dispatch(const void* payload, size_t size,
 
     std::memcpy(&out, payload, std::min(size, sizeof(out)));
 
-    if (size < sizeof(ipc::FrameDispatchMsg)) {
+    if (size < offsetof(ipc::FrameDispatchMsg, input_view)) {
         // 遗留报文：没有运动字段，一律放行。out 已在函数入口整体重置，
         // 这里只需要把可能被半截拷贝写脏的运动字段拉回默认值。
         out.has_motion = 1;
@@ -50,6 +50,10 @@ inline bool decode_frame_dispatch(const void* payload, size_t size,
         for (auto& box : out.motion_boxes) {
             box = ipc::IpcMotionBox{};
         }
+    }
+    if (size < sizeof(ipc::FrameDispatchMsg)) {
+        out.input_view[0] = 0; out.input_view[1] = 0;
+        out.input_view[2] = 1; out.input_view[3] = 1;
     }
     return true;
 }

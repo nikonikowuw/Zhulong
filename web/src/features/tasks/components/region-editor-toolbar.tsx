@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   Crop,
+  MoveUpRight,
   MousePointer,
   Pause,
   Play,
@@ -22,12 +23,12 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { MAX_RECTS_PER_CATEGORY } from '../data/region-config'
+import { MAX_RECTS_PER_CATEGORY, MAX_TRIPWIRES } from '../data/region-config'
 import { type RegionTool } from './region-drag-types'
 
 export interface RegionEditorToolbarProps {
   tool: RegionTool
-  counts: { roi: number; mask: number }
+  counts: { roi: number; mask: number; tripwires?: number }
   /** 是否允许修改区域（画面已出首帧 **且** 已选中算法）。 */
   isEditable: boolean
   /** 是否允许编辑裁剪窗口（画面已出首帧即可，不要求已选算法）。 */
@@ -155,7 +156,7 @@ export function RegionEditorToolbar({
   }
 
   return (
-    <div className='flex items-center justify-between gap-2 border-b border-border bg-card px-5 py-2'>
+    <div className='flex flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-5 py-2'>
       <div className='flex items-center rounded-lg border border-border bg-background p-0.5 shadow-xs'>
         <Button
           type='button'
@@ -175,6 +176,16 @@ export function RegionEditorToolbar({
 
         {renderToolButton('roi')}
         {renderToolButton('mask')}
+        <Button
+          type='button'
+          variant={tool === 'tripwire' ? 'secondary' : 'ghost'}
+          size='sm'
+          disabled={!isEditable || (counts.tripwires ?? 0) >= MAX_TRIPWIRES}
+          onClick={() => onToolChange('tripwire')}
+        >
+          <MoveUpRight className='size-3.5' />
+          {t('region.toolTripwire')} ({counts.tripwires ?? 0}/{MAX_TRIPWIRES})
+        </Button>
 
         <Button
           type='button'

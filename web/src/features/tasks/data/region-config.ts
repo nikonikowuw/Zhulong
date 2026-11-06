@@ -75,9 +75,38 @@ export function parseCrop(value: unknown): Rect | null {
 /**
  * 区域策略配置契约
  */
+export const MAX_TRIPWIRES = 8
+export const MIN_LINE_LENGTH = 0.01
+
+export const tripwireSchema = z
+  .object({
+    id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+    name: z
+      .string()
+      .refine((name) => name.trim().length > 0 && [...name].length <= 64),
+    points: z.tuple([
+      z.tuple([z.number().min(0).max(1), z.number().min(0).max(1)]),
+      z.tuple([z.number().min(0).max(1), z.number().min(0).max(1)]),
+    ]),
+    direction: z.enum(['a_to_b', 'b_to_a', 'both']),
+  })
+  .refine(
+    ({ points: [a, b] }) =>
+      Math.hypot(b[0] - a[0], b[1] - a[1]) >= MIN_LINE_LENGTH - 1e-9
+  )
+
+export type Tripwire = z.infer<typeof tripwireSchema>
+
 export const regionConfigSchema = z.object({
   roi: z.array(rectSchema).max(MAX_RECTS_PER_CATEGORY).default([]),
   mask: z.array(rectSchema).max(MAX_RECTS_PER_CATEGORY).default([]),
+  tripwires: z
+    .array(tripwireSchema)
+    .max(MAX_TRIPWIRES)
+    .refine(
+      (lines) => new Set(lines.map((line) => line.id)).size === lines.length
+    )
+    .optional(),
 })
 
 export type RegionConfig = z.infer<typeof regionConfigSchema>
@@ -101,12 +130,13 @@ export function parseRegionConfig(
 }
 
 export function serializeRegionConfig(cfg: RegionConfig): string {
-  if (cfg.roi.length === 0 && cfg.mask.length === 0) {
+  if (cfg.roi.length === 0 && cfg.mask.length === 0 && !cfg.tripwires?.length) {
     return '{}'
   }
   return JSON.stringify({
     roi: cfg.roi,
     mask: cfg.mask,
+    ...(cfg.tripwires?.length ? { tripwires: cfg.tripwires } : {}),
   })
 }
 
@@ -139,6 +169,7 @@ export interface RegionItem {
 export interface RegionDraft {
   roi: RegionItem[]
   mask: RegionItem[]
+  tripwires?: Tripwire[]
 }
 
 /** 一条被选中的矩形。分类与下标必须成对出现，因此合并为一个类型。 */
@@ -160,6 +191,7 @@ export function toDraft(cfg: RegionConfig, makeId: () => string): RegionDraft {
   return {
     roi: cfg.roi.map((rect) => ({ id: makeId(), rect })),
     mask: cfg.mask.map((rect) => ({ id: makeId(), rect })),
+    ...(cfg.tripwires?.length ? { tripwires: cfg.tripwires } : {}),
   }
 }
 
@@ -168,6 +200,7 @@ export function fromDraft(draft: RegionDraft): RegionConfig {
   return {
     roi: draft.roi.map((item) => item.rect),
     mask: draft.mask.map((item) => item.rect),
+    ...(draft.tripwires?.length ? { tripwires: draft.tripwires } : {}),
   }
 }
 

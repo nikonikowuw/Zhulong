@@ -10,6 +10,7 @@
  */
 
 #include "internal/motion_gate.hpp"
+#include "internal/task_regions.hpp"
 
 #include <cassert>
 #include <cstdint>
@@ -125,10 +126,48 @@ void test_disable_motion_gate_always_runs() {
     std::cout << "[PASS] test_disable_motion_gate_always_runs" << std::endl;
 }
 
+void test_regions_and_input_view() {
+    TaskRegionState state;
+    const auto send = [&](const char* id, const std::string& json) {
+        ipc::TaskConfigMsg header{};
+        header.config_json_len = static_cast<uint32_t>(json.size());
+        std::strncpy(header.algorithm_id, id, sizeof(header.algorithm_id) - 1);
+        std::string payload(sizeof(header), '\0');
+        std::memcpy(payload.data(), &header, sizeof(header));
+        payload += json;
+        return state.receive(payload.data(), payload.size(), "face");
+    };
+    assert(state.view().revision == 0 && state.view().json.empty());
+    assert(!send("other", "{}"));
+    assert(send("face", R"({"tripwires":[{"id":"入口"}]})"));
+    const std::string copied(state.view().json);
+    assert(state.view().revision == 1);
+    assert(send("face", copied));
+    assert(state.view().revision == 1);
+    assert(send("face", "{}"));
+    assert(state.view().json == "{}" && state.view().revision == 2);
+    assert(!state.receive("bad", 3, "face"));
+    assert(state.view().revision == 2);
+
+    InputView view;
+    view.rect = {0.25f, 0.25f, 0.75f, 0.75f};
+    view.known = true;
+    assert(view.to_input(0.5, 0.5)[0] == 0.5);
+    assert(view.to_input(0, 0)[0] == -0.5);
+    assert(view.to_full_frame(0.5, 0.5)[1] == 0.5);
+
+    const auto sent = make_dispatch(0, 1);
+    ipc::FrameDispatchMsg decoded{};
+    assert(gate::decode_frame_dispatch(&sent, 168, decoded));
+    assert(decoded.has_motion == 0 && decoded.motion_box_count == 1);
+    assert(decoded.input_view[0] == 0 && decoded.input_view[2] == 1);
+}
+
 } // namespace
 
 int main() {
     std::cout << "Running Runner motion gate unit tests..." << std::endl;
+    test_regions_and_input_view();
     test_current_format_roundtrip();
     test_legacy_dispatch_fails_open();
     test_truncated_dispatch_rejected();

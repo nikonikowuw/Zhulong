@@ -15,11 +15,11 @@ import { type DragHandle } from './region-geometry'
  */
 
 /**
- * 当前工具：绘制 ROI、绘制 MASK、编辑任务级裁剪窗口，或仅选择/调整。
+ * 当前工具：绘制 ROI、绘制 MASK、绘制绊线、编辑任务级裁剪窗口，或仅选择/调整。
  *
  * `crop` 不依赖“已勾选算法”（它属于任务，不属于某个算法），但同样要求画面已出首帧。
  */
-export type RegionTool = RegionCategory | 'select' | 'crop'
+export type RegionTool = RegionCategory | 'select' | 'crop' | 'tripwire'
 
 export interface UseRegionDragOptions {
   draft: RegionDraft

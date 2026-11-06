@@ -104,6 +104,7 @@ func TestIpcContractMatchesNativeHeader(t *testing.T) {
 	checkEnumConst(t, content, "MSG_GALLERY_DELETE", uint64(algoipc.MsgGalleryDelete))
 	checkEnumConst(t, content, "MSG_GALLERY_ACK", uint64(algoipc.MsgGalleryAck))
 	checkEnumConst(t, content, "MSG_TASK_CONFIG", uint64(algoipc.MsgTaskConfig))
+	checkEnumConst(t, content, "MSG_TASK_REGIONS", uint64(algoipc.MsgTaskRegions))
 }
 
 func checkUint32Const(t *testing.T, content, name string, want uint64) {

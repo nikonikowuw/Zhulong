@@ -140,6 +140,7 @@ bool FrameBroker::start(uint64_t stream_id, const std::string& base_dir,
             slots_[i].active_leases.clear();
         }
         clients_.clear();
+        task_config_payloads_.clear();
     }
 
     // 3. 配置并启动 Unix Domain Socket 服务端
@@ -179,6 +180,7 @@ void FrameBroker::stop() {
     std::lock_guard<std::mutex> lock(mutex_);
     slots_.clear();
     clients_.clear();
+    task_config_payloads_.clear();
     dma_slots_.clear();
     has_dma_slots_ = false;
 }
@@ -346,6 +348,12 @@ bool FrameBroker::publish_frame(const HardwareFrame& frame, const ViewWindow& vi
     }
 
     FrameDispatchMsg msg{};
+    if (windowed) {
+        msg.input_view[0] = static_cast<float>(view.x) / frame.width;
+        msg.input_view[1] = static_cast<float>(view.y) / frame.height;
+        msg.input_view[2] = static_cast<float>(view.x + view.w) / frame.width;
+        msg.input_view[3] = static_cast<float>(view.y + view.h) / frame.height;
+    }
     msg.stream_id = stream_id_;
     msg.frame_id = frame_seq_.fetch_add(1);
     msg.pts = frame.pts;
@@ -571,13 +579,14 @@ void FrameBroker::handle_handshake(uint32_t client_id, const HandshakeReq& req) 
 
     // 重放最近一次任务级配置：晚启动 / 崩溃重启的包进程必须能重新拿到它，否则会静默
     // 回落到算法默认值（表现为「跑几天后阈值自己变回去了」）。拷贝一份再发，避免持锁做 IO。
-    std::vector<uint8_t> replay;
+    decltype(task_config_payloads_) replay;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        replay = last_task_config_payload_;
+        replay = task_config_payloads_;
     }
-    if (!replay.empty()) {
-        server_.send_msg(client_id, MSG_TASK_CONFIG, replay.data(), replay.size());
+    for (const auto& entry : replay) {
+        const auto& message = entry.second;
+        server_.send_msg(client_id, message.first, message.second.data(), message.second.size());
     }
 }
 
@@ -680,10 +689,21 @@ size_t FrameBroker::broadcast_message(uint16_t msg_type, const void* payload, si
 
     // 任务级配置必须**先缓存再广播**：缓存是「晚连上 / 重连」的包进程唯一能拿到配置的途径，
     // 而广播只覆盖此刻已连接的客户端。缓存在 running_ 之后做，停止中的 Broker 不会存半条。
-    if (msg_type == MSG_TASK_CONFIG && payload != nullptr && size > 0) {
+    if ((msg_type == MSG_TASK_CONFIG || msg_type == MSG_TASK_REGIONS) &&
+        payload != nullptr && size >= sizeof(TaskConfigMsg) && size <= MAX_IPC_PAYLOAD_SIZE) {
         const auto* bytes = static_cast<const uint8_t*>(payload);
+        TaskConfigMsg header{};
+        std::memcpy(&header, payload, sizeof(header));
+        const size_t id_length = ::strnlen(header.algorithm_id, sizeof(header.algorithm_id));
+        if (id_length == 0 || id_length == sizeof(header.algorithm_id) ||
+            header.config_json_len != size - sizeof(header)) return 0;
+        const std::string key = std::to_string(msg_type) + ":" + std::string(header.algorithm_id, id_length);
         std::lock_guard<std::mutex> lock(mutex_);
-        last_task_config_payload_.assign(bytes, bytes + size);
+        if (task_config_payloads_.find(key) == task_config_payloads_.end() && task_config_payloads_.size() >= 256) {
+            ZL_LOGW(0, "ipc.broker", "task config cache capacity exceeded");
+            return 0;
+        }
+        task_config_payloads_[key] = {msg_type, std::vector<uint8_t>(bytes, bytes + size)};
     }
 
     return server_.broadcast(msg_type, payload, size);

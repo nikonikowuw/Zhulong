@@ -18,6 +18,7 @@
 #define ZHULONG_ALGO_HPP
 
 #include <zhulong/plugin.h>
+#include <zhulong/regions.hpp>
 #include <zhulong/runtime/runtime_factory.hpp>
 #include <zhulong/runtime/vision_backend.hpp>
 #include <zhulong/runtime/tensor.hpp>
@@ -118,6 +119,8 @@ struct TaskConfig {
 struct TaskContext {
     uint64_t task_id{0};   /**< 任务身份（一路 broker 一个） */
     TaskConfig params{};   /**< 任务参数（未下发时为空视图） */
+    TaskRegions regions{}; /**< Full-frame host region snapshot; borrowed for this call. */
+    InputView input_view{}; /**< Actual input crop for this frame; check known before use. */
 };
 
 } // namespace zhulong

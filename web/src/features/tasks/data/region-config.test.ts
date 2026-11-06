@@ -127,3 +127,56 @@ describe('region-config editor draft round-trip', () => {
     expect(REGION_CATEGORY_HUE.roi).not.toBe(REGION_CATEGORY_HUE.mask)
   })
 })
+
+describe('tripwire configuration', () => {
+  const line = {
+    id: 'entry-1',
+    name: '入口',
+    points: [
+      [0.2, 0.5],
+      [0.8, 0.5],
+    ],
+    direction: 'a_to_b',
+  }
+  it('preserves persisted identity and direction through editor round trips', () => {
+    const config = regionConfigSchema.parse({ tripwires: [line] })
+    const draft = toDraft(config, () => 'temporary-rect-id')
+    expect(
+      parseRegionConfig(serializeRegionConfig(fromDraft(draft))).tripwires
+    ).toEqual([line])
+  })
+  it('rejects degenerate lines, invalid directions, duplicate IDs and malformed points', () => {
+    for (const tripwires of [
+      [line, { ...line, name: 'duplicate' }],
+      [
+        {
+          ...line,
+          points: [
+            [0.2, 0.5],
+            [0.2, 0.5],
+          ],
+        },
+      ],
+      [{ ...line, direction: 'forward' }],
+      [
+        {
+          ...line,
+          points: [
+            [0, 0, 0],
+            [1, 1],
+          ],
+        },
+      ],
+      [
+        {
+          ...line,
+          points: [
+            [0, Number.NaN],
+            [1, 1],
+          ],
+        },
+      ],
+    ])
+      expect(regionConfigSchema.safeParse({ tripwires }).success).toBe(false)
+  })
+})

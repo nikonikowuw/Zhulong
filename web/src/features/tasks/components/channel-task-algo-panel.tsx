@@ -20,6 +20,7 @@ import { AlgoConfigDynamicForm } from './algo-config-dynamic-form'
 import { FpsStepper } from './fps-stepper'
 import { RegionRectList } from './region-rect-list'
 import { ScheduleGrid } from './schedule-grid'
+import { TripwireList } from './tripwire-list'
 
 export interface ChannelTaskAlgoPanelProps {
   algorithms: Algorithm[]
@@ -281,6 +282,12 @@ export function ChannelTaskAlgoPanel({
                   disabled={!canEditRegion}
                   onSelect={regionEditor.select}
                   onDelete={regionEditor.deleteRect}
+                />
+                <TripwireList
+                  draft={regionEditor.draft}
+                  disabled={!canEditRegion}
+                  onChange={regionEditor.changeDraft}
+                  onBeforeChange={regionEditor.snapshot}
                 />
               </div>
             </TabsContent>

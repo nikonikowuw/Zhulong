@@ -49,6 +49,7 @@ enum MessageType : uint16_t {
     MSG_GALLERY_UPSERT  = 11, /**< 底库增量注册包（Broker -> Client）：下发单张新增/更新人脸特征 */
     MSG_GALLERY_DELETE  = 12, /**< 底库增量删除包（Broker -> Client）：通知删除指定人脸或人员特征 */
     MSG_GALLERY_ACK     = 13, /**< 底库同步确认包（Client -> Broker）：全量底库分片聚合完成确认 */
+    MSG_TASK_REGIONS    = 15, /**< Host-owned region JSON; TaskConfigMsg framing. */
     MSG_TASK_CONFIG     = 14  /**< 任务级配置下发包（Broker -> Client）：每路流一份，见 TaskConfigMsg */
 };
 
@@ -115,7 +116,7 @@ struct FrameMotionInfo {
 };
 
 /**
- * @brief 帧分发通知负载（MSG_FRAME_DISPATCH，定长 168 字节）
+ * @brief 帧分发通知负载（MSG_FRAME_DISPATCH，定长 184 字节）
  *
  * ⚠️ 64 位整数字段前置并严格保持 8 字节自然对齐，尾部含运动检测扩展字段保证结构体总尺寸被 8 整除。
  *
@@ -145,6 +146,7 @@ struct FrameDispatchMsg {
     uint32_t has_motion{1};       /**< 1 表示有运动或未启用检测（默认放行）；0 表示画面静止 */
     uint32_t motion_box_count{0}; /**< 有效运动外接框数量（0 ~ MAX_IPC_MOTION_BOXES） */
     IpcMotionBox motion_boxes[MAX_IPC_MOTION_BOXES]{}; /**< 4 * 16 = 64 字节归一化坐标 [x1, y1, x2, y2] */
+    float input_view[4]{0.0f, 0.0f, 1.0f, 1.0f}; /**< Actual pixel-aligned input window in full-frame coordinates. */
 };
 
 /**
@@ -196,7 +198,8 @@ static_assert(sizeof(IpcHeader) == 16, "IpcHeader must be 16 bytes");
 static_assert(sizeof(HandshakeReq) == 40, "HandshakeReq size mismatch");
 static_assert(sizeof(HandshakeResp) == 80, "HandshakeResp size mismatch");
 static_assert(sizeof(IpcMotionBox) == 16, "IpcMotionBox size mismatch");
-static_assert(sizeof(FrameDispatchMsg) == 168, "FrameDispatchMsg size mismatch");
+static_assert(offsetof(FrameDispatchMsg, input_view) == 168, "FrameDispatchMsg legacy motion prefix changed");
+static_assert(sizeof(FrameDispatchMsg) == 184, "FrameDispatchMsg size mismatch");
 static_assert(sizeof(FrameAckMsg) == 32, "FrameAckMsg size mismatch");
 static_assert(sizeof(TaskConfigMsg) == 68, "TaskConfigMsg size mismatch");
 

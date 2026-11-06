@@ -139,6 +139,15 @@ func (s *Supervisor) pushTaskConfigs(algoID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), taskConfigPushTimeout)
 	defer cancel()
 
+	if regions, ok := provider.(TaskRegionProvider); ok {
+		snapshots, err := regions.TaskRegionsFor(ctx, algoID)
+		if err == nil {
+			err = broadcaster.BroadcastRegions(ctx, algoID, snapshots)
+		}
+		if err != nil {
+			s.logger.Warn("failed to push task regions", zap.String("id", algoID), zap.Error(err))
+		}
+	}
 	configs, err := provider.TaskConfigsFor(ctx, algoID)
 	if err != nil {
 		s.logger.Warn("failed to resolve task configs for package",

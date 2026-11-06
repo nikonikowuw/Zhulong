@@ -9,13 +9,14 @@ import (
 	"go.uber.org/zap"
 )
 
-// TaskConfigProvider resolves the **task-level** configuration of an algorithm
-// package, keyed by engine stream id.
-//
-// One package process serves many streams (one `--broker` each, one `task_id`
-// each), and every stream may carry a different `task_algorithms.config_json`.
-// That is why this cannot travel as argv: argv has exactly one slot for the whole
-// process. Process-level configuration uses `--config` instead.
+// TaskRegionProvider supplies host-owned region snapshots separately from plugin parameters.
+type TaskRegionProvider interface {
+	TaskRegionsFor(ctx context.Context, algorithmID string) (map[uint64]string, error)
+}
+
+// TaskConfigProvider resolves task-level algorithm parameters, keyed by engine
+// stream ID. Each stream may have different parameters, so these travel over
+// task IPC rather than the process-wide --config argument.
 type TaskConfigProvider interface {
 	TaskConfigsFor(ctx context.Context, algorithmID string) (map[uint64]string, error)
 }
@@ -48,6 +49,15 @@ func NewTaskConfigBroadcaster(broadcaster AIMessageBroadcaster, logger *zap.Logg
 // their configuration. The aggregated error is returned so the caller can log it
 // once per algorithm instead of once per stream.
 func (b *TaskConfigBroadcaster) BroadcastAlgorithm(ctx context.Context, algorithmID string, configs map[uint64]string) error {
+	return b.broadcast(ctx, algorithmID, configs, algoipc.MsgTaskConfig)
+}
+
+// BroadcastRegions sends complete snapshots; {} explicitly clears all regions.
+func (b *TaskConfigBroadcaster) BroadcastRegions(ctx context.Context, algorithmID string, configs map[uint64]string) error {
+	return b.broadcast(ctx, algorithmID, configs, algoipc.MsgTaskRegions)
+}
+
+func (b *TaskConfigBroadcaster) broadcast(ctx context.Context, algorithmID string, configs map[uint64]string, msgType uint16) error {
 	if b.broadcaster == nil || len(configs) == 0 {
 		return nil
 	}
@@ -87,7 +97,7 @@ func (b *TaskConfigBroadcaster) BroadcastAlgorithm(ctx context.Context, algorith
 			}
 			continue
 		}
-		if err := b.broadcaster.BroadcastAIMessage(ctx, streamID, algoipc.MsgTaskConfig, payload); err != nil {
+		if err := b.broadcaster.BroadcastAIMessage(ctx, streamID, msgType, payload); err != nil {
 			err = fmt.Errorf("broadcast task config for stream %d: %w", streamID, err)
 			b.logger.Warn("failed to broadcast task config",
 				zap.String("algorithm_id", algorithmID),

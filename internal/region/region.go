@@ -101,17 +101,21 @@ func (r Rect) Contains(px, py float64) bool {
 
 // Config defines the ROI and MASK region policy for a task.
 type Config struct {
-	ROI  []Rect `json:"roi,omitempty"`
-	MASK []Rect `json:"mask,omitempty"`
+	ROI       []Rect     `json:"roi,omitempty"`
+	MASK      []Rect     `json:"mask,omitempty"`
+	Tripwires []Tripwire `json:"tripwires,omitempty"`
 }
 
 // IsEmpty returns true if there are no ROI and no MASK regions defined.
 func (c Config) IsEmpty() bool {
-	return len(c.ROI) == 0 && len(c.MASK) == 0
+	return len(c.ROI) == 0 && len(c.MASK) == 0 && len(c.Tripwires) == 0
 }
 
 // Validate checks all rectangles and category count limits in the configuration.
 func (c Config) Validate() error {
+	if err := validateTripwires(c.Tripwires); err != nil {
+		return err
+	}
 	if len(c.ROI) > MaxRectsPerCategory {
 		return fmt.Errorf("%w: roi count %d > %d", ErrTooManyRects, len(c.ROI), MaxRectsPerCategory)
 	}

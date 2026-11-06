@@ -193,6 +193,8 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 | :--- | :--- | :--- |
 | `task_id` | 该路流的任务身份（骨架按「一路 broker 一个 Worker」创建，取 `stream_id`） | 已生效 |
 | `params.json`（`TaskConfig`） | 宿主下发的**配置原文**（`task_algorithms.config_json`） | 已生效，见 §「两层配置通道」 |
+| `regions.json` / `regions.revision` | 宿主统一区域原文及 worker 生命周期内修订号 | SDK 1.2.0；完整快照、只读借用 |
+| `input_view.rect` / `input_view.known` | 当前帧实际像素对齐裁剪窗口，全幅坐标 | SDK 1.2.0；旧宿主为 unknown |
 
 铁律：
 
@@ -218,7 +220,7 @@ zhulong_status_t resize(const uint8_t* src, int src_w, int src_h, int src_stride
 - `MSG_TASK_CONFIG` 的负载 = `TaskConfigMsg`（68 字节头：`config_json_len` + `algorithm_id[64]`）+
   UTF-8 JSON 原文。**`algorithm_id` 过滤是硬要求**：`FrameBroker::broadcast_message` 会打到该流上
   所有算法包，不比对就会让车牌包收到人脸的阈值。
-- **Broker 必须缓存该报文并在握手后重放**：宿主推送时包可能还没连上，或崩溃重启后重连。
+- **Broker 必须按消息类型与 algorithm_id 缓存该报文并在握手后重放**：宿主推送时包可能还没连上，或崩溃重启后重连。
   底库有全量 sync 兜底，任务级配置没有——漏掉重放的故障形态是「跑几天后突然回默认值」。
 - 缺省语义：未下发 = 空视图 = 算法用自己的默认值；越界值回落默认而不是报错（宿主与包分开交付，
   版本偏斜真实存在）。
@@ -469,7 +471,7 @@ env 覆盖与「开发期源码树候选」只能排在后面。原因不是洁�
 
 ### 6.4 IPC 协议自然对齐与 Socket 鲁棒性规约
 
-- **严格 8 字节自然对齐**：IPC 二进制包中 64 位字段（`generation`、`stream_id`、`frame_id`、`pts`、`capture_time_ms`）必须排布在 8 字节自然对齐偏移上；`FrameDispatchMsg` 包含 `int64_t capture_time_ms`（帧物理采样绝对 UTC 毫秒时间戳），当前总尺寸 **168 字节**（运动检测扩展后），编译期 `static_assert(offsetof(...) % 8 == 0)` 与总大小校验，杜绝嵌入式体系下非对齐访问与时钟时序漂移。
+- **严格 8 字节自然对齐**：IPC 二进制包中 64 位字段（`generation`、`stream_id`、`frame_id`、`pts`、`capture_time_ms`）必须排布在 8 字节自然对齐偏移上；`FrameDispatchMsg` 包含 `int64_t capture_time_ms`（帧物理采样绝对 UTC 毫秒时间戳），当前总尺寸 **184 字节**（168 字节运动字段前缀 + 16 字节实际输入窗口），编译期 `static_assert(offsetof(...) % 8 == 0)` 与总大小校验，杜绝嵌入式体系下非对齐访问与时钟时序漂移。
 - **追加字段只能落在尾部（前缀兼容铁律）**：`has_motion` / `motion_box_count` / `motion_boxes[4]` 追加在原 96 字节布局**之后**，前 96 字节一个字节都不许动，由 `static_assert(LEGACY_FRAME_DISPATCH_SIZE == offsetof(FrameDispatchMsg, has_motion))` 钉死。原因是宿主与算法包**分开交付**（`make sdk-dist`），版本偏斜两个方向都会真实发生：
   - 旧宿主（96 字节报文）+ 新 Runner：Runner 必须按遗留前缀解析，运动字段取默认值（`has_motion = 1`）退化为**全帧推理**。⚠️ 绝不可改回 `payload.size() >= sizeof(FrameDispatchMsg)` 的长度门禁 —— 那会让新 Runner 一条报文都不认，既不推理也不发 `MSG_FRAME_ACK`，静默退化成「每 `lease_timeout` 只收 2 帧」。解码统一走 `sdk/src/internal/motion_gate.hpp` 的 `gate::decode_frame_dispatch`。
   - 新宿主 + 旧 Runner：旧 Runner 忽略多出的 72 字节，照常推理，只是不享受运动门禁。
@@ -646,3 +648,60 @@ assert(received_payload.find("\"algorithm_id\":\"e2e_algo\"") != std::string::np
 ⚠️ **`assert` 生效的前提**：本测试文件全篇用 `assert`，依赖 `native/CMakeLists.txt` 的 `ASSERT_TEST_TARGETS` 对 `ZhulongFrameBrokerTests` 显式 `-UNDEBUG`。新增断言型测试目标必须一并加入该列表，否则 NDEBUG 下断言会被静默编译掉，测试变成空跑。
 
 ⚠️ **stream_id 与 socket 名不得与既有用例重名**：socket 路径由 stream_id 派生（`zhulong_broker_<stream_id>.sock`），`main()` 内串行执行。新增用例前先全文件 grep 已用编号（当前已占用 1001-1008/1010/1011/999/2001/2002/2007/3001-3003/9002）。
+
+
+## 绊线配置与区域读取（SDK 1.2.0）
+
+### 1. 范围与触发
+
+任务算法配置绊线后，宿主在现有任务参数播种时机（启动/任务变更触发重启）下发完整区域快照。SDK只提供配置与坐标转换，不实现跟踪、越线判断、计数或告警。现有任务变更仍可能重启包，不承诺无重启热更新。
+
+### 2. 签名与线格式
+
+- Go `TaskRegionProvider.TaskRegionsFor(ctx, algorithmID) (map[uint64]string, error)`。
+- `MSG_TASK_REGIONS=15`，复用 `TaskConfigMsg` 的68字节头，尾部是 `task_algorithms.region_config_json` UTF-8原文。
+- SDK `TaskContext::regions` 为 `TaskRegions{std::string_view json, uint64_t revision}`。
+- SDK `TaskContext::input_view` 为 `InputView{std::array<float,4> rect, bool known}`，提供 `to_input(x,y)`、`to_full_frame(x,y)`。
+- `FrameDispatchMsg::input_view[4]` 从offset168开始，总长184；前96/168字节保持兼容。
+
+### 3. 契约
+
+- 区域JSON新增 `tripwires:[{id,name,points:[[x0,y0],[x1,y1]],direction}]`，所有坐标是原始全幅归一化坐标。
+- `direction` 为 `a_to_b`、`b_to_a`、`both`。屏幕坐标中 `(p1-p0) × (target-p0)` 为负是A侧、正是B侧、零在线上；端点顺序不得自动重排。
+- `MSG_TASK_CONFIG=14` 和 `params.json` 原文不变，禁止混入宿主保留字段。
+- Broker按流、消息类型、算法ID保存最新报文（最多256项），新连接握手后重放。旧包忽略15号消息；使用新字段的包必须以SDK1.2.0重建。
+- SDK worker拥有区域字符串，推理前挂借用视图；算法不得保留引用，跨帧内容必须拷贝。
+- 第一次收到快照revision从0变1，内容不变不递增，清空也递增；revision仅在当前worker生命周期有意义。
+- 实际窗口随帧携带，来自像素对齐后的view，而非数据库请求值。旧96/168字节宿主的 `input_view.known=false`；不得假设它一定是全幅。168字节报文仍保留完整运动门禁字段。
+- 坐标变换不clamp：裁剪外端点可能映射到[0,1]外。算法应自行决定裁剪外绊线策略；配置或窗口变化时重置相关历史状态。
+
+### 4. 校验与错误矩阵
+
+| 输入 | 行为 |
+| --- | --- |
+| 无tripwires、空数组 | 兼容旧数据；清空发送完整 `{}` 快照 |
+| 超过8条、重复ID、非法方向、短线 | Go服务返回 `INVALID_REGION_CONFIG`，不保存 |
+| ID不满足 `[A-Za-z0-9_-]{1,64}`、空名称或名称超过64 Unicode字符 | 拒绝保存 |
+| 端点不是两个二维有限[0,1]坐标、线长小于 `.01-1e-9` | 前后端拒绝 |
+| IPC算法ID不匹配、长度不符、超64KiB | SDK忽略，不替换现有快照 |
+| 首次未下发 | `regions.json.empty()`，revision为0 |
+
+### 5. 正常、基础与错误场景
+
+正常：画水平线，A为上方、B为下方，配置A→B；算法从regions解析线，并用实际input_view转换坐标。
+基础：旧任务仅有ROI/MASK；参数原文与过滤行为保持原样。
+错误：把全幅绊线直接与裁剪图中的检测框比较，或仅缓存最后一个算法的配置，会分别导致空间错误和重连丢配置。
+
+### 6. 必需测试
+
+- `internal/region/tripwire_test.go`：校验、重复ID、边界与解析。
+- 前端区域数据与绊线画布浏览器测试：稳定ID、方向、绘制、删除、撤销、只读。
+- `internal/algorunner/taskconfig_test.go`：区域单独下发、参数原文、清空。
+- `native/tests/frame_broker_test.cpp`：多算法重放、清空重放、真实SDK子进程读取与实际窗口元数据。
+- `native/tests/motion_gate_test.cpp`：区域隔离、revision、坐标变换与旧168字节门禁兼容。
+
+### 7. 错误与正确示例
+
+错误：把 `tripwires` 塞入 `params.json` 并要求所有算法schema接受；或者用CROP请求值当作本帧实际窗口。
+
+正确：插件独立读取 `ctx.regions.json`，以 `ctx.regions.revision` 缓存解析结果；确认 `ctx.input_view.known` 后用 `ctx.input_view.to_input(x,y)` 转换端点。需同时观测窗口变化，不能只看区域revision。
