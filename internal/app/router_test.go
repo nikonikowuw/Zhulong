@@ -59,6 +59,8 @@ func TestRouterSeparatesAPIAndSPA(t *testing.T) {
 		{name: "client route", path: "/settings/network", wantStatus: http.StatusOK, wantBody: "<!doctype html>"},
 		{name: "static asset", path: "/assets/app.js", wantStatus: http.StatusOK, wantBody: "window.app"},
 		{name: "missing API route", path: "/api/v1/missing", wantStatus: http.StatusNotFound, wantBody: `"code":"ROUTE_NOT_FOUND"`},
+		{name: "disabled Swagger route", path: "/swagger", wantStatus: http.StatusNotFound, wantBody: `"code":"ROUTE_NOT_FOUND"`},
+		{name: "disabled Swagger UI", path: "/swagger/index.html", wantStatus: http.StatusNotFound, wantBody: `"code":"ROUTE_NOT_FOUND"`},
 		{name: "missing static asset", path: "/assets/missing.js", wantStatus: http.StatusNotFound, wantBody: "404 page not found"},
 	}
 
@@ -73,8 +75,9 @@ func TestRouterSeparatesAPIAndSPA(t *testing.T) {
 			if !contains(recorder.Body.String(), test.wantBody) {
 				t.Fatalf("expected body to contain %q, got %s", test.wantBody, recorder.Body.String())
 			}
-			if test.path == "/api/v1/missing" && contains(recorder.Body.String(), "<!doctype html>") {
-				t.Fatal("unmatched API route returned SPA HTML")
+			if (test.path == "/api/v1/missing" || strings.HasPrefix(test.path, "/swagger")) &&
+				contains(recorder.Body.String(), "<!doctype html>") {
+				t.Fatalf("reserved route %s returned SPA HTML", test.path)
 			}
 		})
 	}

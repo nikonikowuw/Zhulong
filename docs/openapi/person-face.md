@@ -333,4 +333,4 @@ curl -X DELETE http://192.168.1.100:8000/api/v1/openapi/persons/EMP-8080 \
 2. 各端点的成功状态码与响应 `data` 类型名；
 3. `docs/openapi/person-face.md` 中出现的路径字面量。
 
-因此本文档不接受手工添加未被实现覆盖的端点或字段。Swagger UI 挂载在 `/swagger/index.html`，可实时对照调试。
+因此本文档不接受手工添加未被实现覆盖的端点或字段。Swagger 生成物供契约测试与外部文档发布使用；Go 宿主不挂载 Swagger UI。

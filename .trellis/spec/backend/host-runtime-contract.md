@@ -25,7 +25,7 @@
 
 - Every API JSON response includes `code`, `message`, and `data`. Success uses `code: "OK"`; errors use `data: null`. Only HTTP 422 field validation errors may add localized `details`.
 - `GET /api/v1/health` returns HTTP 200 only after both database migrations and native startup complete; otherwise it returns HTTP 503 with the standard error envelope.
-- `/api/*` and `/swagger/*` are reserved. Unknown API routes and unsupported API methods return an HTTP 404 JSON envelope and must not fall back to SPA HTML. `/` and extensionless client routes serve the embedded SPA.
+- `/api/*` and `/swagger/*` are reserved. Unknown API routes, unsupported API methods, and the disabled Swagger UI paths return an HTTP 404 JSON envelope and must not fall back to SPA HTML. `/` and extensionless client routes serve the embedded SPA.
 - SQLite stores `<data-dir>/zhulong.db`; DSN settings are `_busy_timeout=5000`, `_foreign_keys=on`, `_journal_mode=WAL`. GORM uses one open/idle connection. Schema changes are embedded, versioned `internal/database/migrations/*.sql`; never use GORM `AutoMigrate`.
 - `lifecycleRuntime.Start` 先准备日志、打开数据库并执行迁移，再按领域顺序启动 Audit、Network、SystemTime、Storage、Person、Snapshot、Record、Native 日志回调、Native Engine、Camera 与 Algorithm，最后绑定 TCP listener 并启动 HTTP Serve；关键步骤失败时清理已获取资源，可选域失败则记入降级清单继续启动。`lifecycleRuntime.Stop` 先排空 HTTP，再按依赖顺序停止 Camera、Algorithm、Record/Snapshot、Storage 等服务，最后关闭 Native 与 SQLite 并同步日志；`Stop` 与启动回滚共用同一份 `stopSequence()`。具体顺序以 [依赖注入与生命周期规范](./dependency-injection.md) 和运行时测试为准。
 - Vite outputs to `internal/webui/dist` and clears that directory. A tracked `.keep` preserves the embed target before the first build, and the build plugin recreates it after Vite clears the output. Root `make build` builds frontend and native dependencies before the Go binary.
@@ -47,7 +47,7 @@
 
 ### 5. Good / Base / Bad Cases
 
-- Good: run `make check && make smoke`; the smoke test starts the built binary with a temporary data directory and verifies health, embedded SPA routing, favicon, API 404 isolation, Swagger's required response fields, and graceful SIGTERM shutdown.
+- Good: run `make check && make smoke`; the smoke test starts the built binary with a temporary data directory and verifies health, embedded SPA routing, favicon, API 404 isolation, disabled Swagger routes, and graceful SIGTERM shutdown.
 - Base: closing a not-started engine or an already closed database is idempotent and does not release resources twice.
 - Bad: start HTTP before migrations, return raw SQLite/CGO errors in JSON, pass Go pointers to the current C ABI, or claim lifecycle readiness proves an active media stream, inference, or target-board compatibility.
 

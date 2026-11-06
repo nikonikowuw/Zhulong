@@ -7,7 +7,7 @@
 ## 1. 路由组织与上下文解耦
 
 - **前缀规范**：所有业务 API 统一挂载在 `/api/v1/`。各业务模块暴露 `RegisterRoutes(rg *gin.RouterGroup)`，由 `internal/app` 装配。
-- **中间件挂载隔离**：业务 API 专用的 `AccessLog`、`CORS`、请求体限流等中间件必须统一挂载在 `/api/v1/` 路由组，严禁以 `router.Use()` 挂在全局根引擎，防止污染内嵌 SPA 静态资源与 Swagger 文档。详见 [HTTP 中间件开发与编排规范](./middleware-guidelines.md)。
+- **中间件挂载隔离**：业务 API 专用的 `AccessLog`、`CORS`、请求体限流等中间件必须统一挂载在 `/api/v1/` 路由组，严禁以 `router.Use()` 挂在全局根引擎，防止污染内嵌 SPA 静态资源。详见 [HTTP 中间件开发与编排规范](./middleware-guidelines.md)。
 - **Context 解耦**：`*gin.Context` 仅在 Handler 内部负责入参解析与响应，**严禁传入 Service/Store 或后台长时 goroutine**；透传上下文使用 `c.Request.Context()`。
 
 ---
@@ -174,14 +174,14 @@ apiClient.get('/audit/logs', {
 ```
 
 - **生成命令**：从仓库根目录运行 `make api-docs`；该 target 固定 `swag` 版本并输出至 `internal/apidocs/`。
-- **UI 挂载**：挂载在 `/swagger/*any`。
+- **运行时页面**：Go 宿主不挂载 Swagger UI。生成的 `internal/apidocs/` 供契约测试和外部文档发布使用，不随设备 HTTP 服务暴露。
 
 ---
 
 ## 6. 前端 SPA 与 API 路由防击穿隔离
 
 1. `/api/*` ➔ 业务 API。未命中（包含不支持的 HTTP method）必须返回 HTTP 404 JSON，遵循 `{ "code": "ROUTE_NOT_FOUND", "message": "Route not found", "data": null }`，**绝对禁止回退到前端 HTML**！
-2. `/swagger/*` ➔ API 调试文档。
+2. `/swagger/*` ➔ 保留但不提供服务，返回 JSON `ROUTE_NOT_FOUND`，不得回退到 SPA。
 3. `/*` ➔ 前端 SPA 路由，未匹配静态资源一律回退至 `internal/webui` 内嵌的 `index.html`。
 
 ---
@@ -206,11 +206,11 @@ apiClient.get('/audit/logs', {
 // ✅ 生成 /api/v1/openapi/persons/{personId}
 // @Router /openapi/persons/{personId} [post]
 
-// ❌ 生成 /api/v1/api/v1/openapi/persons/{personId}，Swagger UI 里点不动
+// ❌ 生成 /api/v1/api/v1/openapi/persons/{personId}；外部 Swagger UI 中的 Try-it-out 会得到 404
 // @Router /api/v1/openapi/persons/{personId} [post]
 ```
 
-生成物出现重复前缀时 Swagger UI 仍会渲染，只是 Try-it-out 全部 404 —— 不会报错，所以只能靠自动比对发现。
+生成物出现重复前缀时，外部 Swagger UI 仍可能渲染成功，但 Try-it-out 全部 404 —— 不会报错，所以只能靠自动比对发现。
 
 ### 7.4 路径/方法与文档的自动对账
 

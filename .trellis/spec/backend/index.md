@@ -21,7 +21,7 @@
 | [感知记录与抓拍](./record-guidelines.md) | 推理结果过滤与 fan-out、记录归属快照、异步证据图和记录保留清理 |
 | [算法包开发与交付规范](./algorithm-guidelines.md) | 算法包物理拓扑、manifest 元数据、C ABI/SDK 契约、结果规范与验包门禁 |
 | [视频分析任务管理](./task-guidelines.md) | 视频流分析任务调度、算法与相机绑定、算力预算分配与 D5 联动契约 |
-| [宿主启动与构建合同](./host-runtime-contract.md) | CLI、health/SPA/Swagger、迁移、CGO 静态链接与跨层验证合同 |
+| [宿主启动与构建合同](./host-runtime-contract.md) | CLI、health/SPA/API 路由隔离、迁移、CGO 静态链接与跨层验证合同 |
 | [错误处理与统一契约](./error-handling.md) | `AppError` 结构、必需三字段与可选字段级 `details`、后端 i18n 错误翻译、Zap 日志脱敏 |
 | [结构化日志规范](./logging-guidelines.md) | Uber Zap 规约、强类型字段、等级划分、敏感信息脱敏 |
 | [质量检查与测试门禁](./quality-guidelines.md) | 格式化、`-race` 竞态检测、审计测试接线与组件包构造期捕获约定 |
@@ -35,7 +35,7 @@
 - [ ] **依赖单向无环**：是否未反向引用 `internal/app`？无模块间循环引用？
 - [ ] **Fx 纯粹性**：业务构造函数是否保持普通纯函数（无 `fx.App` 侵入业务包）？
 - [ ] **统一响应体**：Handler 是否遵循 `{ code, message, data }`，且仅 422 字段校验错误可附带 `details`？
-- [ ] **中间件分层隔离**：API 中间件（日志/鉴权/CORS）是否仅挂载在 `/api/` 路由组，未污染 SPA 静态资源与 Swagger？
+- [ ] **中间件分层隔离**：API 中间件（日志/鉴权/CORS）是否仅挂载在 `/api/` 路由组，未污染 SPA 静态资源？
 - [ ] **大体积上传端点归组**：上传端点是否打标 `group:"upload_routes"` 而非混在 `protected_routes`？（受保护组的 1 MiB `MaxBodyLimit()` 会毙掉合法上传，且**无法事后放宽**——见 [middleware-guidelines.md](./middleware-guidelines.md)）
 - [ ] **中间件执行时序**：中间件流水线是否遵循 Recovery ➔ RequestID ➔ CORS ➔ AccessLog ➔ Handler？
 - [ ] **Context 存取类型安全**：Gin 上下文数据是否使用私有 key 与导出 Accessor 包装，未直接使用裸字符串 `c.Set/c.Get`？

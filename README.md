@@ -55,7 +55,7 @@ Zhulong（烛龙）把四件事编译进**同一个二进制**：
 **工程**
 
 - 统一响应信封 `{code, message, data, details?}` + 后端三语 i18n（`en` / `zh-Hans` / `zh-Hant`）
-- Swagger 2.0 文档自动生成，随二进制提供
+- Swagger 2.0 API 文档自动生成并供 CI / 外部文档发布使用，Go 宿主二进制不内嵌 Swagger UI
 - Go 全量 `-race` 测试；原生 CTest 套件，可选 ASan/UBSan/TSan
 - 前端测试跑在**真实无头浏览器**（Vitest browser mode + Playwright），不是 JSDOM
 
@@ -104,7 +104,7 @@ C++ 异常绝不穿越 C ABI、包视图仅在同步回调期间有效。完整�
 
 ```bash
 make native-deps     # 一次性，下载并校验固定版本 FFmpeg
-make build           # 前端 → C++ 静态库 → Swagger → 单个 Go 二进制
+make build           # 前端 → C++ 静态库 → API 文档生成 → 单个 Go 二进制
 ```
 
 产物是 `build/Zhulong`。
@@ -123,9 +123,8 @@ make run             # 构建后以仓库根的 config.toml 启动
 | --- | --- |
 | 控制台 | `http://127.0.0.1:8000/` |
 | 健康检查 | `/api/v1/health` |
-| API 文档（Swagger） | `/swagger/index.html` |
 
-`make smoke` 会跑内置集成冒烟测试（健康检查、内嵌 SPA、API 404 隔离、Swagger）。
+API 文档由 `make api-docs` 生成至 `internal/apidocs/`，不通过设备运行时 HTTP 路由提供。`make smoke` 会验证健康检查、内嵌 SPA、API 404 隔离、Swagger 路由已关闭及优雅退出。
 
 ### 开发
 

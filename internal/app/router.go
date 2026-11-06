@@ -9,7 +9,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/algorithm"
-	_ "github.com/nikonikowuw/Zhulong/internal/apidocs"
 	"github.com/nikonikowuw/Zhulong/internal/apitoken"
 	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/audit"
@@ -19,8 +18,6 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/engine"
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
-	swaggerFiles "github.com/swaggo/files"
-	ginSwagger "github.com/swaggo/gin-swagger"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 )
@@ -188,12 +185,6 @@ func newRouter(p RouterParams) *gin.Engine {
 	for _, r := range p.OpenAPIRoutes {
 		r.RegisterRoutes(openapi)
 	}
-
-	swaggerHandler := ginSwagger.WrapHandler(swaggerFiles.Handler)
-	router.GET("/swagger", func(c *gin.Context) {
-		c.Redirect(http.StatusTemporaryRedirect, "/swagger/index.html")
-	})
-	router.GET("/swagger/*any", swaggerHandler)
 
 	staticHandler := http.FileServer(p.Assets)
 	router.NoRoute(func(c *gin.Context) {

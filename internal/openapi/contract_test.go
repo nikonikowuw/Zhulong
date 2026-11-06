@@ -15,8 +15,8 @@ import (
 )
 
 // swaggerSpec is the subset of the generated spec this contract test reads. Parsing the
-// whole document through swag keeps the test tied to the artifact the release ships
-// rather than to a hand-maintained list of paths.
+// whole document through swag keeps the test tied to the generated API artifact rather
+// than to a hand-maintained list of paths.
 type swaggerSpec struct {
 	BasePath string                    `json:"basePath"`
 	Paths    map[string]map[string]any `json:"paths"`
@@ -84,10 +84,9 @@ func swaggerOpenAPIRoutes(t *testing.T) (string, map[route]bool) {
 	return parsed.BasePath, routes
 }
 
-// TestContract_RoutesMatchSwagger keeps the generated documentation and the mounted
+// TestContract_RoutesMatchSwagger keeps the generated API specification and the mounted
 // router from drifting apart. A handler added without an annotation — or an annotation
-// left behind by a removed endpoint — makes the shipped Swagger UI describe an API that
-// does not exist.
+// left behind by a removed endpoint — makes the published contract inaccurate.
 func TestContract_RoutesMatchSwagger(t *testing.T) {
 	env := newOpenAPITestEnv(t)
 

@@ -23,7 +23,7 @@ trap cleanup EXIT
 
 port="$(python3 -c 'import socket; listener = socket.socket(); listener.bind(("127.0.0.1", 0)); print(listener.getsockname()[1]); listener.close()')"
 address="127.0.0.1:${port}"
-printf '[http]\naddress = "%s"\n\n[data]\ndirectory = "./data"\n\n[logging]\ndevelopment = false\n' "$address" >"$temporary_directory/config.toml"
+printf '[http]\naddress = "%s"\n\n[data]\ndirectory = "./data"\n\n[logging]\nlevel = "info"\n' "$address" >"$temporary_directory/config.toml"
 cd "$temporary_directory"
 "$binary" >"$temporary_directory/application.log" 2>&1 &
 application_pid=$!
@@ -50,7 +50,7 @@ python3 -c 'import json,sys; body=json.load(open(sys.argv[1], encoding="utf-8"))
 root_file="$temporary_directory/root.html"
 curl --silent --show-error --fail "http://${address}/" >"$root_file"
 grep -qi 'Zhulong' "$root_file"
-curl --silent --show-error --fail "http://${address}/favicon.svg" >"$temporary_directory/favicon.svg"
+curl --silent --show-error --fail "http://${address}/images/favicon.svg" >"$temporary_directory/favicon.svg"
 grep -q '<svg' "$temporary_directory/favicon.svg"
 client_route_file="$temporary_directory/client-route.html"
 curl --silent --show-error --fail "http://${address}/settings/network" >"$client_route_file"
@@ -63,10 +63,17 @@ if [[ "$api_status" != "404" ]]; then
 fi
 python3 -c 'import json,sys; body=json.load(open(sys.argv[1], encoding="utf-8")); assert set(body)=={"code","message","data"}, body; assert body["code"]=="ROUTE_NOT_FOUND" and body["data"] is None, body' "$temporary_directory/api-error.json"
 
-curl --silent --show-error --fail "http://${address}/swagger/doc.json" >"$temporary_directory/swagger.json"
-python3 -c 'import json,sys; body=json.load(open(sys.argv[1], encoding="utf-8")); response=body["definitions"]["httputil.Response"]; assert body["swagger"]=="2.0", body; assert set(response["required"])=={"code","message","data"}, response' "$temporary_directory/swagger.json"
+for swagger_path in /swagger /swagger/index.html; do
+  swagger_file="$temporary_directory/swagger-$(basename "$swagger_path").json"
+  swagger_status="$(curl --silent --show-error --output "$swagger_file" --write-out '%{http_code}' "http://${address}${swagger_path}")"
+  if [[ "$swagger_status" != "404" ]]; then
+    printf 'Expected disabled Swagger route %s to return 404, got %s.\n' "$swagger_path" "$swagger_status" >&2
+    exit 1
+  fi
+  python3 -c 'import json,sys; body=json.load(open(sys.argv[1], encoding="utf-8")); assert body["code"]=="ROUTE_NOT_FOUND" and body["data"] is None, body' "$swagger_file"
+done
 
 kill -TERM "$application_pid"
 wait "$application_pid"
 application_pid=""
-printf 'Smoke test passed: health, embedded SPA, API 404 isolation, Swagger, graceful stop.\n'
+printf 'Smoke test passed: health, embedded SPA, API 404 isolation, disabled Swagger, graceful stop.\n'
