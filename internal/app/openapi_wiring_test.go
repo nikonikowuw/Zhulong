@@ -37,7 +37,7 @@ func TestOpenAPIAndTokenWiring(t *testing.T) {
 	personSvc := person.NewService(personStore, tempDir, zap.NewNop(), person.Options{Extractor: dummyExtractor{}})
 
 	limiter := openapi.NewUploadLimiter()
-	openAPIHandler := openapi.NewHandler(personSvc, limiter, zap.NewNop())
+	openAPIHandler := openapi.NewHandler(personSvc, limiter)
 	tokenHandler := apitoken.NewHandler(tokenSvc, zap.NewNop())
 
 	router := newRouter(RouterParams{
@@ -68,7 +68,11 @@ func TestOpenAPIAndTokenWiring(t *testing.T) {
 
 	// 3. Authenticated openapi upsert -> 201 Created
 	upsertBody := `{"name":"Wiring User"}`
-	reqAuth := httptest.NewRequest(http.MethodPost, "/api/v1/openapi/persons/EMP-WIRE-1", bytes.NewBufferString(upsertBody))
+	reqAuth := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/openapi/persons/EMP-WIRE-1",
+		bytes.NewBufferString(upsertBody),
+	)
 	reqAuth.Header.Set("Authorization", "Bearer "+rawToken)
 	reqAuth.Header.Set("Content-Type", "application/json")
 	wAuth := httptest.NewRecorder()

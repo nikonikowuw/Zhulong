@@ -542,17 +542,23 @@ func (s *Store) AddFace(ctx context.Context, face *Face) error {
 
 // AddFaceWithLimit inserts a new Face template for a person inside a transaction,
 // checking that the current face count has not reached or exceeded limit.
-func (s *Store) AddFaceWithLimit(ctx context.Context, face *Face, limit int) error {
+//
+// It also reports whether the inserted row became the person's primary face. That
+// decision is made by the same transaction that inserts the row, so the answer is the
+// one the database committed; callers must not re-derive it from a later read, which
+// can observe a different primary face when two enrollments race.
+func (s *Store) AddFaceWithLimit(ctx context.Context, face *Face, limit int) (bool, error) {
 	if face == nil {
-		return ErrNilFace
+		return false, ErrNilFace
 	}
 	db, err := s.db(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	face.CreatedAt = normalizeTimestamp(face.CreatedAt, time.Now())
 
-	return db.Transaction(func(tx *gorm.DB) error {
+	isPrimary := false
+	err = db.Transaction(func(tx *gorm.DB) error {
 		p, err := gorm.G[Person](tx).Where("id = ?", face.PersonRowID).First(ctx)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -583,13 +589,19 @@ func (s *Store) AddFaceWithLimit(ctx context.Context, face *Face, limit int) err
 			}).Error; err != nil {
 				return err
 			}
+			isPrimary = true
 		}
 		return nil
 	})
+	if err != nil {
+		return false, err
+	}
+	return isPrimary, nil
 }
 
 // ReplaceFaces atomically replaces all existing face templates of a person with a single new face,
-// setting the person's primary_face_id to the new face.
+// setting the person's primary_face_id to the new face, so the replacement is always
+// primary once this returns nil.
 // It returns the list of removed Face records so callers can clean up the corresponding files on disk.
 func (s *Store) ReplaceFaces(ctx context.Context, personRowID string, face *Face) ([]Face, error) {
 	if face == nil {

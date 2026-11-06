@@ -556,7 +556,7 @@ func (s *Service) enrollFaceRecord(
 		CreatedAt:     time.Now().UTC(),
 	}
 
-	if err := s.addFaceRowWithLimit(ctx, face, savePath); err != nil {
+	if _, err := s.addFaceRowWithLimit(ctx, face, savePath); err != nil {
 		return nil, faceImportEnrollError(err, targetPerson.Name)
 	}
 

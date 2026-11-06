@@ -59,6 +59,12 @@ Response 桃 [1. Recovery 捕获] 桃 ------------------- 桃 [4. AccessLog 耗�
 
 * **413 错误码归属**：`MaxBodyLimitWithLimitAndCode` 的 `errorCode` 在**整组**生效。上传组统一用 `FILE_TOO_LARGE`，而 person 域 `Service.AddFace` 对「文件本身超过 10 MiB」也返回 `FILE_TOO_LARGE`——两者虽然同为 413 + 同码，但语义分层不同（中间件层 = 请求体超限；领域层 = 文件超限）。前端若要区分，只能依据 `details` 或文案，**不要**依赖 `code` 去判断是哪一层拒绝的。
 
+* **multipart 解析失败必须先认 `*http.MaxBytesError`**：组级限额在**解析阶段**截断时，`c.FormFile` 返回的是读取错误而不是 nil file，而它跟「表单没有这个字段」共享同一个 `err` 位置。不先分支就会把「图太大」报成 `422 FILE_REQUIRED`。固定顺序：`errors.As(err, &maxBytesErr)` → `413 FILE_TOO_LARGE`；否则 → `422 FILE_REQUIRED`。
+
+* **并发限流器必须回收空闲令牌桶**：用 `map[tokenID]chan struct{}` 做 per-token 并发限制时，吊锁后的 token 入口永不清空就是慢性内存泄漏（板端跑几个月不会重启）。用「信号量 + 引用计数」：每次取桶 `refs++`，释放完 `refs--`，归零时 `delete`。删除前比较指针相等，避开「旧桶已释放、新桶已插入」的竞态。
+
+* **限流只修饰真正昂贵的那一个端点**：把人脸录入的 429 中间件挂在包含 `DELETE` 的子组上，会在录入通道打满时连带封死「清空人脸」这条逃生通道。必须逐路由挂载（`rg.POST(path, limiter.Middleware(), handler)`），不要把限流器装到 `rg.Group("")` 上。
+
 ---
 
 ## 4. 上下文与代码规范

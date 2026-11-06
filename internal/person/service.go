@@ -659,16 +659,19 @@ func tooLargeError() error {
 // written from when the row cannot be created. Writing the file and writing the row are
 // two separate steps, so the compensating delete belongs with the step that failed —
 // every enrollment path shares it instead of repeating the same five lines.
-func (s *Service) addFaceRowWithLimit(ctx context.Context, face *Face, savePath string) error {
-	err := s.store.AddFaceWithLimit(ctx, face, MaxFacesPerPerson)
+//
+// The returned flag says whether the row became the person's primary face, as decided
+// inside the inserting transaction.
+func (s *Service) addFaceRowWithLimit(ctx context.Context, face *Face, savePath string) (bool, error) {
+	isPrimary, err := s.store.AddFaceWithLimit(ctx, face, MaxFacesPerPerson)
 	if err == nil {
-		return nil
+		return isPrimary, nil
 	}
 	if rmErr := os.Remove(savePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 		s.logger.Warn("failed to clean up face image after enrollment failure",
 			zap.String("path", savePath), zap.Error(rmErr))
 	}
-	return err
+	return false, err
 }
 
 // faceEnrollError maps a failed face insert onto the API contract.
@@ -722,7 +725,7 @@ func (s *Service) AddFaceWithReader(ctx context.Context, personID string, filena
 		return nil, err
 	}
 
-	if err := s.addFaceRowWithLimit(ctx, face, savePath); err != nil {
+	if _, err := s.addFaceRowWithLimit(ctx, face, savePath); err != nil {
 		return nil, faceEnrollError(err, personMeta.Name)
 	}
 
@@ -917,30 +920,48 @@ func (s *Service) UpsertPersonByExternalID(
 // renameProvisionedPerson brings an existing provisioned person's name in line with the
 // caller's, reusing the ordinary update path so the gallery re-publish and the audit of
 // a rename happen exactly once, wherever the rename came from.
+//
+// Both branches answer with the same projection: the update path reloads the person
+// with its face summary, and the no-op path has to do the same or a repeated upsert
+// would answer with an empty face list that the create path never returns.
 func (s *Service) renameProvisionedPerson(ctx context.Context, p *Person, name string) (*Person, error) {
 	if p.Name == name {
-		return p, nil
+		return s.reloadPerson(ctx, p.ID, p)
 	}
 	return s.UpdatePerson(ctx, p.ID, UpdatePersonRequest{Name: &name})
 }
 
+// FaceEnrollment is the outcome of one enrollment: the stored template plus the two
+// facts the caller cannot derive afterwards.
+//
+// IsPrimary is resolved by the transaction that inserted the row. Re-deriving it from a
+// later read races with concurrent enrollments of the same person, and the loser of that
+// race reports a primary face it did not get.
+type FaceEnrollment struct {
+	Face      *Face
+	Replaced  bool
+	IsPrimary bool
+}
+
 // AddFaceByExternalID enrolls a face for the person identified by externalID. When
 // upload.Replace is set, all existing faces are atomically replaced with the new one.
-// Returns the enrolled Face, a boolean indicating whether it was a replacement, and an
-// error.
-func (s *Service) AddFaceByExternalID(ctx context.Context, externalID string, upload FaceUpload) (*Face, bool, error) {
+func (s *Service) AddFaceByExternalID(
+	ctx context.Context,
+	externalID string,
+	upload FaceUpload,
+) (*FaceEnrollment, error) {
 	normID, err := NormalizeExternalPersonID(externalID)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	personMeta, err := s.store.GetPersonMetaByExternalID(ctx, normID)
 	if err != nil {
-		return nil, false, personLookupError(err, "Failed to verify person")
+		return nil, personLookupError(err, "Failed to verify person")
 	}
 
 	face, savePath, err := s.enrollFace(ctx, personMeta, upload)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 
 	if upload.Replace {
@@ -950,7 +971,7 @@ func (s *Service) AddFaceByExternalID(ctx context.Context, externalID string, up
 				s.logger.Warn("failed to clean up face image after replace failure",
 					zap.String("path", savePath), zap.Error(rmErr))
 			}
-			return nil, false, apperr.Internal("FACE_REPLACE_FAILED", "Failed to replace face templates", err)
+			return nil, apperr.Internal("FACE_REPLACE_FAILED", "Failed to replace face templates", err)
 		}
 
 		for _, f := range removed {
@@ -960,16 +981,19 @@ func (s *Service) AddFaceByExternalID(ctx context.Context, externalID string, up
 		// Atomic IPC notification: broadcast delete for externalID, followed by upsert for new face
 		s.broadcastDelete(ctx, "", normID)
 		s.broadcastUpsert(ctx, newGalleryItem(*face, normID, personMeta.Name))
-		return face, true, nil
+
+		// ReplaceFaces rewrites primary_face_id to the replacement inside its transaction.
+		return &FaceEnrollment{Face: face, Replaced: true, IsPrimary: true}, nil
 	}
 
 	// Normal append enrollment
-	if err := s.addFaceRowWithLimit(ctx, face, savePath); err != nil {
-		return nil, false, faceEnrollError(err, personMeta.Name)
+	isPrimary, err := s.addFaceRowWithLimit(ctx, face, savePath)
+	if err != nil {
+		return nil, faceEnrollError(err, personMeta.Name)
 	}
 
 	s.broadcastUpsert(ctx, newGalleryItem(*face, normID, personMeta.Name))
-	return face, false, nil
+	return &FaceEnrollment{Face: face, Replaced: false, IsPrimary: isPrimary}, nil
 }
 
 // ClearFacesByExternalID deletes all enrolled faces for the given externalID.

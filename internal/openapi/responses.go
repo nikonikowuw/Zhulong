@@ -6,10 +6,13 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/person"
 )
 
-// PersonFaceInfo represents the face summary nested inside PersonProvisionResponse.
+// PersonFaceInfo is one enrolled face as the machine API describes it.
+//
+// It deliberately omits the stored image path: the on-disk name encodes the internal
+// person row id, and this API exposes no endpoint that would let a caller read the
+// photo back. Publishing it would leak an internal identifier for no consumer's benefit.
 type PersonFaceInfo struct {
 	FaceID    string    `json:"faceId"`
-	ImagePath string    `json:"imagePath"`
 	IsPrimary bool      `json:"isPrimary"`
 	CreatedAt time.Time `json:"createdAt"`
 }
@@ -42,6 +45,11 @@ type DeleteResponse struct {
 	Deleted bool `json:"deleted"`
 }
 
+// newPersonProvisionResponse projects a persisted person onto the machine API contract.
+//
+// Timestamps are normalized to UTC so they always serialize with a trailing Z: the
+// stored location is whatever the driver hands back, and an offset-bearing timestamp
+// would silently break clients parsing the documented RFC3339 UTC form.
 func newPersonProvisionResponse(p *person.Person) PersonProvisionResponse {
 	personKey := ""
 	if p.PersonID != nil {
@@ -52,9 +60,8 @@ func newPersonProvisionResponse(p *person.Person) PersonProvisionResponse {
 		isPrimary := p.PrimaryFaceID != nil && *p.PrimaryFaceID == f.ID
 		faces = append(faces, PersonFaceInfo{
 			FaceID:    f.ID,
-			ImagePath: f.ImagePath,
 			IsPrimary: isPrimary,
-			CreatedAt: f.CreatedAt,
+			CreatedAt: f.CreatedAt.UTC(),
 		})
 	}
 	return PersonProvisionResponse{
@@ -62,7 +69,7 @@ func newPersonProvisionResponse(p *person.Person) PersonProvisionResponse {
 		Name:          p.Name,
 		PrimaryFaceID: p.PrimaryFaceID,
 		Faces:         faces,
-		CreatedAt:     p.CreatedAt,
-		UpdatedAt:     p.UpdatedAt,
+		CreatedAt:     p.CreatedAt.UTC(),
+		UpdatedAt:     p.UpdatedAt.UTC(),
 	}
 }

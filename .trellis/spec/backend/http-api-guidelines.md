@@ -21,7 +21,9 @@
 
 ### 时间字段格式与时区
 
-- API 中表示绝对时刻的字段统一序列化为 UTC RFC3339Nano，并带 `Z`，例如 `2026-10-04T08:12:34.123Z`。Go 响应类型写出前应将 `time.Time` 规范化为 UTC（见 §4「命名约定」）。
+- API 中表示绝对时刻的字段统一序列化为 UTC RFC3339Nano，并带 `Z`，例如 `2026-10-04T08:12:34.123Z`。Go 响应类型写出前应将 `time.Time` **逐个字段**调 `.UTC()` 规范化（见 §4「命名约定」）。
+
+  **不要靠 "数据库里就是 UTC" 蒙混**：当前驱动恰好不输出偏移，是因为 DSN 没配 `_loc`，属于巧合而非契约。换个驱动、加个 DSN 参数、或给模型塞一个 `time.Now()` 本地位，响应就会静默变成 `+08:00`，而客户端按文档写的 `Z` 解析会直接报错。规范化必须在投影函数的每个字段上显式完成，并由测试断言 `Location() == UTC`。
 - 纯日期使用 `YYYY-MM-DD`，不附加时区，也不转换为时间戳；持续时间使用带明确单位的数值字段。
 - 数据库与 API 的详细存储/序列化约定见 [SQLite 与 GORM 数据库开发规范](./database-guidelines.md)；前端不得把本地化后的显示字符串回传为 API 时间值。
 
@@ -134,6 +136,9 @@ apiClient.get('/audit/logs', {
 3. **校验失败返回字段细节**：`c.ShouldBindJSON(&req)` 报错时将 validator 结果映射为请求 JSON 字段路径、稳定校验码和本地化消息，再以 HTTP 422 返回 `httputil.NewValidationError(message, details)`。不得把原始输入或 validator/底层错误字符串直接返回客户端。
 4. **不可变字段必须显式拒绝，不得静默忽略**：对外业务键（如 `persons.personId`）等创建后不可修改的字段，必须**保留在 Update 请求类型中**，并对"改成不同值"的请求返回显式冲突错误（409 + 专属错误码，如 `PERSON_ID_IMMUTABLE`）。把字段从 Update 请求类型里删掉会让 `ShouldBindJSON` 静默丢弃它，接口返回 200 而值没变——集成方无法区分"改成功了"和"没生效"。
 5. **部分更新（PATCH 语义）的三态约定**：Update 请求类型用指针字段区分"未提供"（`nil` → 不修改）与"提供了值"（→ 修改）。**严禁把"提供了空值"当成"未提供"**：`{"name": ""}` 必须返回 422 字段级校验失败，而不是 200 且值保持不变——后者与成功响应不可区分。若某字段确实允许被清空，就明确接受空值并写入空值，不要采用"空值即忽略"的隐式语义。
+6. **查询参数里的破坏性开关必须严格解析，非法值 422**：`?replace=true` 这类在"追加"与"原子替换"之间切换语义的参数，**不得用 `c.Query(...) == "true"` 字面量比较**。`strconv.ParseBool` 能识别的 `TRUE`/`1` 会被静默当作 `false`，客户端以为在替换、服务端在追加，而 201 响应里除了一个 `replaced:false` 没有任何信号。用 `strconv.ParseBool` 解析，解析失败返回 `422` + 专属 code。
+7. **体积错误要分层命名，不得把"太大"报成"没传"**：路径上限（如组级 11 MiB）、文件上限（如单图 10 MiB）与 JSON 体上限（1 MiB）是三个不同的限制。**解析阶段失败时必须先 `errors.As(err, &maxBytesErr)` 判 `*http.MaxBytesError`**：`c.FormFile` 在请求体被 `MaxBytesReader` 截断时返回的 err 与"没传文件"是同一个 `err` 位置，统一映射成 `FILE_REQUIRED` 会让客户端把"图太大"当成"忘传图"去改请求内容。固定映射：组级截断 → `413 PAYLOAD_TOO_LARGE`；端点自身体积检查 → `413 FILE_TOO_LARGE`；字段缺失 → `422 FILE_REQUIRED`。
+8. **写权限后补读失败，不得让响应说谎**：写操作成功后为了丰富响应再读一次模型，失败时不能把成功报成失败（写已落库），但**也不能静默给一个猜的默认值**——那等于在成功响应里撒谎（典型：`isPrimary` 因补读失败而恒为 `false`）。优先让**写路径在事务内一次性返回**调用方需要的事实（如 `AddFaceWithLimit` 同时返回 `isPrimary`）；确实需要补读时，失败必须落 Warn 日志并回退到写路径已知的部分。
 
 ### 命名约定：请求 / 响应类型（强制）
 
@@ -192,6 +197,30 @@ apiClient.get('/audit/logs', {
 ### 7.2 Swagger 生成的 `--dir` 显式白名单
 
 `Makefile` 中 `make api-docs` 命令的 `--dir` 参数采用**显式目录白名单**。若新增了业务模块且包含 Swagger 注释端点，**必须同步在 `Makefile` 的 `api-docs` target 中追加该目录**；否则新端点不会被扫描，导致 Swagger 文档静默遗漏。
+
+### 7.3 `@Router` 路径不带 `/api/v1` 前缀
+
+`SwaggerInfo.BasePath` 已是 `/api/v1`，`@Router` 只写基准路径之后的相对段：
+
+```go
+// ✅ 生成 /api/v1/openapi/persons/{personId}
+// @Router /openapi/persons/{personId} [post]
+
+// ❌ 生成 /api/v1/api/v1/openapi/persons/{personId}，Swagger UI 里点不动
+// @Router /api/v1/openapi/persons/{personId} [post]
+```
+
+生成物出现重复前缀时 Swagger UI 仍会渲染，只是 Try-it-out 全部 404 —— 不会报错，所以只能靠自动比对发现。
+
+### 7.4 路径/方法与文档的自动对账
+
+`@Router` 是**注释**，改路由签名时它不会跟着变。新增或调整端点后运行 `make api-docs`，并依赖仓内的契约测试守住三件事：
+
+- **路由集对账**：`gin.Engine.Routes()` 里属于该模块的 (方法, 路径) 集合必须与生成 spec 的 `paths` 完全相等，多一个少一个都失败；
+- **文档路径对账**：面向第三方的对接文档（如 `docs/openapi/person-face.md`）里出现的每个端点都必须真实挂载，且每个挂载端点都必须在文档里有条目；
+- **响应字段对账**：文档承诺的 JSON 字段名必须与投影类型实际序列化结果一致（含「无数据时为 `[]` 而非 `null`」）。
+
+参考实现：`internal/openapi/contract_test.go`。契约测试读的是 `swag.ReadDoc()` 的真实产物，不是手抄的第二份路径清单 —— 手抄的清单本身就是下一个漂移源。
 
 ---
 

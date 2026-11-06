@@ -1,7 +1,9 @@
 package openapi
 
 import (
+	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/nikonikowuw/Zhulong/internal/apitoken"
@@ -9,42 +11,52 @@ import (
 	"github.com/nikonikowuw/Zhulong/internal/httpmiddleware"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"github.com/nikonikowuw/Zhulong/internal/person"
-	"go.uber.org/zap"
 )
+
+// defaultCallerName is the audit actor recorded when the authenticated token carries no
+// name. Every provisioning call is attributed to the token, so the fallback has to be a
+// stable, recognizable value rather than an empty source.
+const defaultCallerName = "API"
 
 // Handler handles third-party OpenAPI provisioning requests.
 type Handler struct {
 	personService *person.Service
 	limiter       *UploadLimiter
-	logger        *zap.Logger
 }
 
 // NewHandler constructs a new OpenAPI handler.
-func NewHandler(personService *person.Service, limiter *UploadLimiter, logger *zap.Logger) *Handler {
+func NewHandler(personService *person.Service, limiter *UploadLimiter) *Handler {
 	if limiter == nil {
 		limiter = NewUploadLimiter()
 	}
 	return &Handler{
 		personService: personService,
 		limiter:       limiter,
-		logger:        logger,
 	}
 }
 
 // RegisterRoutes mounts all OpenAPI endpoints onto the provided router group.
+//
+// The group is sized for enrollment photos by internal/app/router.go. The JSON
+// endpoints are nested under their own 1 MiB ceiling so an oversized body is rejected
+// before it is buffered, and so the answer stays PAYLOAD_TOO_LARGE rather than the
+// photo-sized limit.
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
-	jsonLimit := httpmiddleware.MaxBodyLimitWithLimit(1 * 1024 * 1024)
+	jsonEndpoints := rg.Group("")
+	jsonEndpoints.Use(httpmiddleware.MaxBodyLimit())
 
 	// Person routes
-	rg.POST("/persons/:personId", jsonLimit, h.UpsertPerson)
+	jsonEndpoints.POST("/persons/:personId", h.UpsertPerson)
 	rg.GET("/persons/:personId", h.GetPerson)
 	rg.DELETE("/persons/:personId", h.DeletePerson)
 
-	// Face routes
+	// Face routes. The limiter decorates the enrollment endpoint alone: mounting it on
+	// the whole group would answer 429 for the clear/delete calls that drain a saturated
+	// upload pipeline.
 	rg.POST("/persons/:personId/faces", h.limiter.Middleware(), h.UploadFace)
 	rg.DELETE("/persons/:personId/faces", h.ClearFaces)
 	rg.DELETE("/persons/:personId/faces/:faceId", h.DeleteFace)
-	rg.PUT("/persons/:personId/faces/:faceId/primary", jsonLimit, h.SetPrimaryFace)
+	jsonEndpoints.PUT("/persons/:personId/faces/:faceId/primary", h.SetPrimaryFace)
 }
 
 // UpsertPerson creates or updates a person by external personId.
@@ -60,9 +72,10 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Success      201       {object}  httputil.Response{data=PersonProvisionResponse}
 // @Failure      400       {object}  httputil.Response
 // @Failure      401       {object}  httputil.Response
+// @Failure      413       {object}  httputil.Response
 // @Failure      422       {object}  httputil.Response
 // @Failure      500       {object}  httputil.Response
-// @Router       /api/v1/openapi/persons/{personId} [post]
+// @Router       /openapi/persons/{personId} [post]
 func (h *Handler) UpsertPerson(c *gin.Context) {
 	personID := c.Param("personId")
 	var req UpsertPersonRequest
@@ -71,24 +84,18 @@ func (h *Handler) UpsertPerson(c *gin.Context) {
 		return
 	}
 
-	tokenName := "API"
-	if identity, ok := apitoken.GetIdentity(c); ok && identity.Name != "" {
-		tokenName = identity.Name
-	}
-
-	p, created, err := h.personService.UpsertPersonByExternalID(c.Request.Context(), personID, req.Name, tokenName)
+	p, created, err := h.personService.UpsertPersonByExternalID(
+		c.Request.Context(),
+		personID,
+		req.Name,
+		callerName(c),
+	)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
 
-	// Fetch complete person with faces for the response
-	fullPerson, err := h.personService.GetPersonByExternalID(c.Request.Context(), personID)
-	if err != nil {
-		fullPerson = p
-	}
-
-	resp := newPersonProvisionResponse(fullPerson)
+	resp := newPersonProvisionResponse(p)
 	if created {
 		httputil.SuccessWithStatus(c, http.StatusCreated, resp)
 		return
@@ -106,8 +113,9 @@ func (h *Handler) UpsertPerson(c *gin.Context) {
 // @Success      200       {object}  httputil.Response{data=PersonProvisionResponse}
 // @Failure      401       {object}  httputil.Response
 // @Failure      404       {object}  httputil.Response
+// @Failure      422       {object}  httputil.Response
 // @Failure      500       {object}  httputil.Response
-// @Router       /api/v1/openapi/persons/{personId} [get]
+// @Router       /openapi/persons/{personId} [get]
 func (h *Handler) GetPerson(c *gin.Context) {
 	personID := c.Param("personId")
 	p, err := h.personService.GetPersonByExternalID(c.Request.Context(), personID)
@@ -128,8 +136,9 @@ func (h *Handler) GetPerson(c *gin.Context) {
 // @Success      200       {object}  httputil.Response{data=DeleteResponse}
 // @Failure      401       {object}  httputil.Response
 // @Failure      404       {object}  httputil.Response
+// @Failure      422       {object}  httputil.Response
 // @Failure      500       {object}  httputil.Response
-// @Router       /api/v1/openapi/persons/{personId} [delete]
+// @Router       /openapi/persons/{personId} [delete]
 func (h *Handler) DeletePerson(c *gin.Context) {
 	personID := c.Param("personId")
 	if err := h.personService.DeletePersonByExternalID(c.Request.Context(), personID); err != nil {
@@ -141,7 +150,8 @@ func (h *Handler) DeletePerson(c *gin.Context) {
 
 // UploadFace uploads or replaces a face photo for a person.
 // @Summary      Upload or replace face
-// @Description  Uploads an enrolled face photo. If replace=true query param is set, existing faces are atomically replaced.
+// @Description  Uploads an enrolled face photo. With replace=true the person's existing
+// @Description  faces are atomically replaced; otherwise the photo is appended.
 // @Tags         OpenAPI
 // @Accept       multipart/form-data
 // @Produce      json
@@ -158,19 +168,32 @@ func (h *Handler) DeletePerson(c *gin.Context) {
 // @Failure      422       {object}  httputil.Response
 // @Failure      429       {object}  httputil.Response
 // @Failure      500       {object}  httputil.Response
-// @Router       /api/v1/openapi/persons/{personId}/faces [post]
+// @Router       /openapi/persons/{personId}/faces [post]
 func (h *Handler) UploadFace(c *gin.Context) {
 	personID := c.Param("personId")
-	file, err := c.FormFile("image")
+
+	// Parsed before the body is touched: an unreadable flag must be answered without
+	// buffering the upload it would have applied to.
+	replace, err := parseReplaceFlag(c.Query("replace"))
 	if err != nil {
-		httputil.WriteError(c, apperr.Invalid("FILE_REQUIRED", "Face image file 'image' is required", err))
+		httputil.WriteError(c, err)
 		return
 	}
 
-	// The same 413 the person service answers with: this early check only avoids
-	// buffering an obviously oversized upload.
+	file, err := c.FormFile("image")
+	if err != nil {
+		writeUploadFormError(c, err)
+		return
+	}
+
+	// The service answers 413 for the same limit; this early check only avoids reading
+	// an obviously oversized file into the enrollment buffer.
 	if file.Size > person.MaxFaceImageBytes {
-		httputil.WriteError(c, apperr.PayloadTooLarge("FILE_TOO_LARGE", "File size exceeds the 10MB limit", nil))
+		httputil.WriteError(c, apperr.PayloadTooLarge(
+			"FILE_TOO_LARGE",
+			"File size exceeds the 10MB limit",
+			nil,
+		))
 		return
 	}
 
@@ -181,25 +204,21 @@ func (h *Handler) UploadFace(c *gin.Context) {
 	}
 	defer src.Close()
 
-	face, wasReplaced, err := h.personService.AddFaceByExternalID(c.Request.Context(), personID, person.FaceUpload{
+	enrollment, err := h.personService.AddFaceByExternalID(c.Request.Context(), personID, person.FaceUpload{
 		Filename: file.Filename,
 		Content:  src,
-		Replace:  c.Query("replace") == "true",
+		Replace:  replace,
 	})
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
 
-	// Determine if this face became the primary face
-	p, err := h.personService.GetPersonByExternalID(c.Request.Context(), personID)
-	isPrimary := err == nil && p.PrimaryFaceID != nil && *p.PrimaryFaceID == face.ID
-
 	httputil.SuccessWithStatus(c, http.StatusCreated, FaceUploadResponse{
-		FaceID:    face.ID,
-		Replaced:  wasReplaced,
-		IsPrimary: isPrimary,
-		CreatedAt: face.CreatedAt,
+		FaceID:    enrollment.Face.ID,
+		Replaced:  enrollment.Replaced,
+		IsPrimary: enrollment.IsPrimary,
+		CreatedAt: enrollment.Face.CreatedAt,
 	})
 }
 
@@ -213,8 +232,9 @@ func (h *Handler) UploadFace(c *gin.Context) {
 // @Success      200       {object}  httputil.Response{data=FaceClearResponse}
 // @Failure      401       {object}  httputil.Response
 // @Failure      404       {object}  httputil.Response
+// @Failure      422       {object}  httputil.Response
 // @Failure      500       {object}  httputil.Response
-// @Router       /api/v1/openapi/persons/{personId}/faces [delete]
+// @Router       /openapi/persons/{personId}/faces [delete]
 func (h *Handler) ClearFaces(c *gin.Context) {
 	personID := c.Param("personId")
 	cleared, err := h.personService.ClearFacesByExternalID(c.Request.Context(), personID)
@@ -236,8 +256,9 @@ func (h *Handler) ClearFaces(c *gin.Context) {
 // @Success      200       {object}  httputil.Response{data=DeleteResponse}
 // @Failure      401       {object}  httputil.Response
 // @Failure      404       {object}  httputil.Response
+// @Failure      422       {object}  httputil.Response
 // @Failure      500       {object}  httputil.Response
-// @Router       /api/v1/openapi/persons/{personId}/faces/{faceId} [delete]
+// @Router       /openapi/persons/{personId}/faces/{faceId} [delete]
 func (h *Handler) DeleteFace(c *gin.Context) {
 	personID := c.Param("personId")
 	faceID := c.Param("faceId")
@@ -259,21 +280,72 @@ func (h *Handler) DeleteFace(c *gin.Context) {
 // @Success      200       {object}  httputil.Response{data=PersonProvisionResponse}
 // @Failure      401       {object}  httputil.Response
 // @Failure      404       {object}  httputil.Response
+// @Failure      422       {object}  httputil.Response
 // @Failure      500       {object}  httputil.Response
-// @Router       /api/v1/openapi/persons/{personId}/faces/{faceId}/primary [put]
+// @Router       /openapi/persons/{personId}/faces/{faceId}/primary [put]
 func (h *Handler) SetPrimaryFace(c *gin.Context) {
 	personID := c.Param("personId")
 	faceID := c.Param("faceId")
+
+	// The service reloads the person with its face summary, so the response is the same
+	// projection GET answers without a second read here.
 	p, err := h.personService.SetPrimaryFaceByExternalID(c.Request.Context(), personID, faceID)
 	if err != nil {
 		httputil.WriteError(c, err)
 		return
 	}
+	httputil.Success(c, newPersonProvisionResponse(p))
+}
 
-	// Fetch complete person with faces for the response
-	fullPerson, err := h.personService.GetPersonByExternalID(c.Request.Context(), personID)
-	if err != nil {
-		fullPerson = p
+// callerName is the audit actor for a provisioning call: the token's own name, or the
+// stable fallback when the token has none.
+func callerName(c *gin.Context) string {
+	if identity, ok := apitoken.GetIdentity(c); ok && identity.Name != "" {
+		return identity.Name
 	}
-	httputil.Success(c, newPersonProvisionResponse(fullPerson))
+	return defaultCallerName
+}
+
+// parseReplaceFlag decodes the replace query parameter.
+//
+// The flag switches the endpoint between appending a template and atomically dropping
+// the person's existing ones, so an unparsable value must not be guessed: silently
+// treating "TRUE" or "yes" as false would append a face the caller believed it was
+// replacing.
+func parseReplaceFlag(raw string) (bool, error) {
+	if raw == "" {
+		return false, nil
+	}
+	replace, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, apperr.Invalid(
+			"REPLACE_INVALID",
+			"replace must be a boolean (true or false)",
+			err,
+		)
+	}
+	return replace, nil
+}
+
+// writeUploadFormError maps a multipart parse failure onto the documented contract.
+//
+// The group-level body limit aborts the parse for an oversized request, and that
+// surfaces here as *http.MaxBytesError with no file at all. Reporting it as
+// FILE_REQUIRED would tell the caller to attach a photo it had already sent, so the
+// size answer wins whenever the parser says the body was cut short.
+func writeUploadFormError(c *gin.Context, err error) {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		httputil.WriteError(c, apperr.PayloadTooLarge(
+			"FILE_TOO_LARGE",
+			"File size exceeds the 10MB limit",
+			err,
+		))
+		return
+	}
+	httputil.WriteError(c, apperr.Invalid(
+		"FILE_REQUIRED",
+		"Face image file 'image' is required",
+		err,
+	))
 }

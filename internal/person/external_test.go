@@ -161,7 +161,7 @@ func TestExternalPersonFlow_FaceReplaceAndLimit(t *testing.T) {
 	}
 
 	// 1. Add first face with inferred extension (no extension provided in filename)
-	face1, replaced, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
+	first, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
 		Filename: "rawphoto",
 		Content:  bytes.NewReader(testJPEGBytes),
 		Replace:  false,
@@ -169,16 +169,20 @@ func TestExternalPersonFlow_FaceReplaceAndLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddFaceByExternalID 1 failed: %v", err)
 	}
-	if replaced {
+	if first.Replaced {
 		t.Errorf("expected replaced=false on append")
 	}
+	if !first.IsPrimary {
+		t.Errorf("expected the first face to become primary")
+	}
+	face1 := first.Face
 	file1Path := filepath.Join(svc.facesDir, face1.ImagePath)
 	if _, err := os.Stat(file1Path); err != nil {
 		t.Fatalf("expected face1 file to exist on disk: %v", err)
 	}
 
 	// 2. Add second face
-	face2, _, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
+	second, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
 		Filename: "photo2.jpg",
 		Content:  bytes.NewReader(testJPEGBytes),
 		Replace:  false,
@@ -186,6 +190,10 @@ func TestExternalPersonFlow_FaceReplaceAndLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddFaceByExternalID 2 failed: %v", err)
 	}
+	if second.IsPrimary {
+		t.Errorf("expected the second face not to become primary")
+	}
+	face2 := second.Face
 	file2Path := filepath.Join(svc.facesDir, face2.ImagePath)
 
 	// Verify person has 2 faces
@@ -198,7 +206,7 @@ func TestExternalPersonFlow_FaceReplaceAndLimit(t *testing.T) {
 	}
 
 	// 3. Atomic replacement: replace=true
-	faceRepl, replaced, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
+	replacement, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
 		Filename: "new_single.png",
 		Content:  bytes.NewReader(testPNGBytes),
 		Replace:  true,
@@ -206,9 +214,13 @@ func TestExternalPersonFlow_FaceReplaceAndLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddFaceByExternalID replace failed: %v", err)
 	}
-	if !replaced {
+	if !replacement.Replaced {
 		t.Errorf("expected replaced=true")
 	}
+	if !replacement.IsPrimary {
+		t.Errorf("expected the replacement to become primary")
+	}
+	faceRepl := replacement.Face
 
 	// Old files should be removed from disk
 	if _, err := os.Stat(file1Path); !errors.Is(err, os.ErrNotExist) {
@@ -250,7 +262,7 @@ func TestExternalPersonFlow_FaceReplaceAndLimit(t *testing.T) {
 
 	// 4. Add until 10 faces
 	for i := 2; i <= MaxFacesPerPerson; i++ {
-		_, _, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
+		_, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
 			Filename: fmt.Sprintf("face_%d.jpg", i),
 			Content:  bytes.NewReader(testJPEGBytes),
 			Replace:  false,
@@ -260,7 +272,7 @@ func TestExternalPersonFlow_FaceReplaceAndLimit(t *testing.T) {
 		}
 	}
 	// 11th should fail
-	_, _, err = svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
+	_, err = svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
 		Filename: "overflow.jpg",
 		Content:  bytes.NewReader(testJPEGBytes),
 		Replace:  false,
@@ -271,7 +283,7 @@ func TestExternalPersonFlow_FaceReplaceAndLimit(t *testing.T) {
 	}
 
 	// 5. Replace when at 10 faces should succeed and reset to 1
-	faceReset, replacedReset, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
+	reset, err := svc.AddFaceByExternalID(ctx, "EXT-REPLACE", FaceUpload{
 		Filename: "reset.jpg",
 		Content:  bytes.NewReader(testJPEGBytes),
 		Replace:  true,
@@ -279,9 +291,10 @@ func TestExternalPersonFlow_FaceReplaceAndLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replace at limit failed: %v", err)
 	}
-	if !replacedReset {
+	if !reset.Replaced {
 		t.Errorf("expected replaced=true on reset")
 	}
+	faceReset := reset.Face
 	personReset, err := svc.GetPersonByExternalID(ctx, "EXT-REPLACE")
 	if err != nil {
 		t.Fatalf("GetPersonByExternalID after reset failed: %v", err)
@@ -300,16 +313,23 @@ func TestExternalPersonFlow_ClearAndDelete(t *testing.T) {
 		t.Fatalf("upsert person failed: %v", err)
 	}
 
-	f1, _, _ := svc.AddFaceByExternalID(ctx, "EXT-CLEAR", FaceUpload{
+	f1Enrollment, err := svc.AddFaceByExternalID(ctx, "EXT-CLEAR", FaceUpload{
 		Filename: "1.jpg",
 		Content:  bytes.NewReader(testJPEGBytes),
 		Replace:  false,
 	})
-	f2, _, _ := svc.AddFaceByExternalID(ctx, "EXT-CLEAR", FaceUpload{
+	if err != nil {
+		t.Fatalf("add face 1 failed: %v", err)
+	}
+	f2Enrollment, err := svc.AddFaceByExternalID(ctx, "EXT-CLEAR", FaceUpload{
 		Filename: "2.jpg",
 		Content:  bytes.NewReader(testJPEGBytes),
 		Replace:  false,
 	})
+	if err != nil {
+		t.Fatalf("add face 2 failed: %v", err)
+	}
+	f1, f2 := f1Enrollment.Face, f2Enrollment.Face
 	p1Path := filepath.Join(svc.facesDir, f1.ImagePath)
 	p2Path := filepath.Join(svc.facesDir, f2.ImagePath)
 
@@ -363,5 +383,110 @@ func TestExternalPersonFlow_ClearAndDelete(t *testing.T) {
 		if !errors.As(err, &aErr) || aErr.Code != "PERSON_NOT_FOUND" {
 			t.Fatalf("expected PERSON_NOT_FOUND after deletion, got %v", err)
 		}
+	}
+}
+
+// TestUpsertPersonByExternalID_NoOpAnswersFullProjection guards the asymmetry between
+// the create and no-op update paths: a repeated upsert commits nothing, but it still has
+// to answer with the same projection the create path returns. Answering from the
+// pre-update copy would drop the enrolled faces from the response.
+func TestUpsertPersonByExternalID_NoOpAnswersFullProjection(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	if _, created, err := svc.UpsertPersonByExternalID(ctx, "EXT-PROJ", "Projection", "Sync"); err != nil || !created {
+		t.Fatalf("create: created=%v err=%v", created, err)
+	}
+	if _, err := svc.AddFaceByExternalID(ctx, "EXT-PROJ", FaceUpload{
+		Filename: "a.jpg",
+		Content:  bytes.NewReader(testJPEGBytes),
+	}); err != nil {
+		t.Fatalf("enroll face: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		callerID string
+		wantName string
+	}{
+		{name: "unchanged name", callerID: "EXT-PROJ", wantName: "Projection"},
+		{name: "renamed", callerID: "EXT-PROJ", wantName: "Projection v2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, created, err := svc.UpsertPersonByExternalID(ctx, tt.callerID, tt.wantName, "Sync")
+			if err != nil {
+				t.Fatalf("upsert: %v", err)
+			}
+			if created {
+				t.Errorf("created = true, want false for an existing person")
+			}
+			if p.Name != tt.wantName {
+				t.Errorf("name = %q, want %q", p.Name, tt.wantName)
+			}
+			if len(p.Faces) != 1 {
+				t.Fatalf("faces = %d, want the enrolled face in the projection", len(p.Faces))
+			}
+			if p.PrimaryFaceID == nil || *p.PrimaryFaceID != p.Faces[0].ID {
+				t.Errorf("primaryFaceID = %v, want %q", p.PrimaryFaceID, p.Faces[0].ID)
+			}
+		})
+	}
+}
+
+// TestAddFaceByExternalID_ReportsPrimaryFromTransaction pins where the primary-face
+// answer comes from. Deriving it from a follow-up read races with concurrent enrollments:
+// two appends can both land before either reload runs, and then both callers would be told
+// they are primary.
+func TestAddFaceByExternalID_ReportsPrimaryFromTransaction(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	if _, _, err := svc.UpsertPersonByExternalID(ctx, "EXT-PRIMARY", "Primary", "Sync"); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	tests := []struct {
+		name          string
+		replace       bool
+		wantPrimary   bool
+		wantReplaced  bool
+		wantFaceCount int
+	}{
+		{name: "first append becomes primary", wantPrimary: true, wantFaceCount: 1},
+		{name: "second append does not", wantPrimary: false, wantFaceCount: 2},
+		{name: "replace always becomes primary", replace: true, wantPrimary: true, wantReplaced: true, wantFaceCount: 1},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			enrollment, err := svc.AddFaceByExternalID(ctx, "EXT-PRIMARY", FaceUpload{
+				Filename: fmt.Sprintf("face_%d.jpg", i),
+				Content:  bytes.NewReader(testJPEGBytes),
+				Replace:  tt.replace,
+			})
+			if err != nil {
+				t.Fatalf("enroll: %v", err)
+			}
+			if enrollment.IsPrimary != tt.wantPrimary {
+				t.Errorf("isPrimary = %v, want %v", enrollment.IsPrimary, tt.wantPrimary)
+			}
+			if enrollment.Replaced != tt.wantReplaced {
+				t.Errorf("replaced = %v, want %v", enrollment.Replaced, tt.wantReplaced)
+			}
+
+			p, err := svc.GetPersonByExternalID(ctx, "EXT-PRIMARY")
+			if err != nil {
+				t.Fatalf("reload: %v", err)
+			}
+			if len(p.Faces) != tt.wantFaceCount {
+				t.Fatalf("faces = %d, want %d", len(p.Faces), tt.wantFaceCount)
+			}
+			// The reported answer must match what the database actually committed.
+			isPrimaryStored := p.PrimaryFaceID != nil && *p.PrimaryFaceID == enrollment.Face.ID
+			if isPrimaryStored != tt.wantPrimary {
+				t.Errorf("stored primary = %v, reported %v", isPrimaryStored, tt.wantPrimary)
+			}
+		})
 	}
 }

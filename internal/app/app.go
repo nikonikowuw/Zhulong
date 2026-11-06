@@ -358,7 +358,6 @@ var systemTimeModule = fx.Module("systemtime",
 type systemInfoOut struct {
 	fx.Out
 
-	Collector       systeminfo.Collector
 	Service         *systeminfo.Service
 	Identity        *systeminfo.IdentityService
 	Handler         *systeminfo.Handler
@@ -369,7 +368,6 @@ type systemInfoOut struct {
 func provideSystemInfo(dbProvider database.DBProvider, logger *zap.Logger) systemInfoOut {
 	comp := systeminfo.NewSystemInfoComponents(dbProvider, logger)
 	return systemInfoOut{
-		Collector:       comp.Collector,
 		Service:         comp.Service,
 		Identity:        comp.Identity,
 		Handler:         comp.Handler,
@@ -901,16 +899,13 @@ var apiTokenModule = fx.Module("apitoken",
 type openAPIOut struct {
 	fx.Out
 
-	Limiter       *openapi.UploadLimiter
 	Handler       *openapi.Handler
 	OpenAPIRoutes RouteRegistrar `group:"openapi_routes"`
 }
 
-func provideOpenAPI(personSvc *person.Service, logger *zap.Logger) openAPIOut {
-	limiter := openapi.NewUploadLimiter()
-	handler := openapi.NewHandler(personSvc, limiter, logger)
+func provideOpenAPI(personSvc *person.Service) openAPIOut {
+	handler := openapi.NewHandler(personSvc, openapi.NewUploadLimiter())
 	return openAPIOut{
-		Limiter:       limiter,
 		Handler:       handler,
 		OpenAPIRoutes: handler,
 	}

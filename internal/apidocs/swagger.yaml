@@ -1465,8 +1465,6 @@ definitions:
         type: string
       faceId:
         type: string
-      imagePath:
-        type: string
       isPrimary:
         type: boolean
     type: object
@@ -3193,334 +3191,6 @@ paths:
       summary: Revoke API token
       tags:
       - apitoken
-  /api/v1/openapi/persons/{personId}:
-    delete:
-      description: Deletes a person, their enrolled faces, and algorithm gallery entries.
-      parameters:
-      - description: External Person ID
-        in: path
-        name: personId
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/httputil.Response'
-            - properties:
-                data:
-                  $ref: '#/definitions/openapi.DeleteResponse'
-              type: object
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/httputil.Response'
-      security:
-      - BearerAuth: []
-      summary: Delete person
-      tags:
-      - OpenAPI
-    get:
-      description: Retrieves person metadata and enrolled faces.
-      parameters:
-      - description: External Person ID
-        in: path
-        name: personId
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/httputil.Response'
-            - properties:
-                data:
-                  $ref: '#/definitions/openapi.PersonProvisionResponse'
-              type: object
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/httputil.Response'
-      security:
-      - BearerAuth: []
-      summary: Get person by external ID
-      tags:
-      - OpenAPI
-    post:
-      consumes:
-      - application/json
-      description: Provisions a person by their external personId. Returns 201 on
-        creation and 200 on update.
-      parameters:
-      - description: External Person ID
-        in: path
-        name: personId
-        required: true
-        type: string
-      - description: Person payload
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/openapi.UpsertPersonRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/httputil.Response'
-            - properties:
-                data:
-                  $ref: '#/definitions/openapi.PersonProvisionResponse'
-              type: object
-        "201":
-          description: Created
-          schema:
-            allOf:
-            - $ref: '#/definitions/httputil.Response'
-            - properties:
-                data:
-                  $ref: '#/definitions/openapi.PersonProvisionResponse'
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "422":
-          description: Unprocessable Entity
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/httputil.Response'
-      security:
-      - BearerAuth: []
-      summary: Create or update person
-      tags:
-      - OpenAPI
-  /api/v1/openapi/persons/{personId}/faces:
-    delete:
-      description: Deletes all enrolled faces for a person without deleting the person
-        record itself.
-      parameters:
-      - description: External Person ID
-        in: path
-        name: personId
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/httputil.Response'
-            - properties:
-                data:
-                  $ref: '#/definitions/openapi.FaceClearResponse'
-              type: object
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/httputil.Response'
-      security:
-      - BearerAuth: []
-      summary: Clear all faces
-      tags:
-      - OpenAPI
-    post:
-      consumes:
-      - multipart/form-data
-      description: Uploads an enrolled face photo. If replace=true query param is
-        set, existing faces are atomically replaced.
-      parameters:
-      - description: External Person ID
-        in: path
-        name: personId
-        required: true
-        type: string
-      - description: Replace all existing faces (default false)
-        in: query
-        name: replace
-        type: boolean
-      - description: Face photo file (JPG, PNG, WebP)
-        in: formData
-        name: image
-        required: true
-        type: file
-      produces:
-      - application/json
-      responses:
-        "201":
-          description: Created
-          schema:
-            allOf:
-            - $ref: '#/definitions/httputil.Response'
-            - properties:
-                data:
-                  $ref: '#/definitions/openapi.FaceUploadResponse'
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "409":
-          description: Conflict
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "413":
-          description: Request Entity Too Large
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "422":
-          description: Unprocessable Entity
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "429":
-          description: Too Many Requests
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/httputil.Response'
-      security:
-      - BearerAuth: []
-      summary: Upload or replace face
-      tags:
-      - OpenAPI
-  /api/v1/openapi/persons/{personId}/faces/{faceId}:
-    delete:
-      description: Deletes a single face template by its ID.
-      parameters:
-      - description: External Person ID
-        in: path
-        name: personId
-        required: true
-        type: string
-      - description: Face template ID
-        in: path
-        name: faceId
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/httputil.Response'
-            - properties:
-                data:
-                  $ref: '#/definitions/openapi.DeleteResponse'
-              type: object
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/httputil.Response'
-      security:
-      - BearerAuth: []
-      summary: Delete specific face
-      tags:
-      - OpenAPI
-  /api/v1/openapi/persons/{personId}/faces/{faceId}/primary:
-    put:
-      description: Sets an enrolled face template as the primary face for the person.
-      parameters:
-      - description: External Person ID
-        in: path
-        name: personId
-        required: true
-        type: string
-      - description: Face template ID
-        in: path
-        name: faceId
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            allOf:
-            - $ref: '#/definitions/httputil.Response'
-            - properties:
-                data:
-                  $ref: '#/definitions/openapi.PersonProvisionResponse'
-              type: object
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/httputil.Response'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/httputil.Response'
-      security:
-      - BearerAuth: []
-      summary: Set primary face
-      tags:
-      - OpenAPI
   /audit/logs:
     delete:
       parameters:
@@ -4489,6 +4159,359 @@ paths:
       summary: Serve signed media content
       tags:
       - media
+  /openapi/persons/{personId}:
+    delete:
+      description: Deletes a person, their enrolled faces, and algorithm gallery entries.
+      parameters:
+      - description: External Person ID
+        in: path
+        name: personId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/openapi.DeleteResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete person
+      tags:
+      - OpenAPI
+    get:
+      description: Retrieves person metadata and enrolled faces.
+      parameters:
+      - description: External Person ID
+        in: path
+        name: personId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/openapi.PersonProvisionResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      security:
+      - BearerAuth: []
+      summary: Get person by external ID
+      tags:
+      - OpenAPI
+    post:
+      consumes:
+      - application/json
+      description: Provisions a person by their external personId. Returns 201 on
+        creation and 200 on update.
+      parameters:
+      - description: External Person ID
+        in: path
+        name: personId
+        required: true
+        type: string
+      - description: Person payload
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/openapi.UpsertPersonRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/openapi.PersonProvisionResponse'
+              type: object
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/openapi.PersonProvisionResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      security:
+      - BearerAuth: []
+      summary: Create or update person
+      tags:
+      - OpenAPI
+  /openapi/persons/{personId}/faces:
+    delete:
+      description: Deletes all enrolled faces for a person without deleting the person
+        record itself.
+      parameters:
+      - description: External Person ID
+        in: path
+        name: personId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/openapi.FaceClearResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      security:
+      - BearerAuth: []
+      summary: Clear all faces
+      tags:
+      - OpenAPI
+    post:
+      consumes:
+      - multipart/form-data
+      description: |-
+        Uploads an enrolled face photo. With replace=true the person's existing
+        faces are atomically replaced; otherwise the photo is appended.
+      parameters:
+      - description: External Person ID
+        in: path
+        name: personId
+        required: true
+        type: string
+      - description: Replace all existing faces (default false)
+        in: query
+        name: replace
+        type: boolean
+      - description: Face photo file (JPG, PNG, WebP)
+        in: formData
+        name: image
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/openapi.FaceUploadResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      security:
+      - BearerAuth: []
+      summary: Upload or replace face
+      tags:
+      - OpenAPI
+  /openapi/persons/{personId}/faces/{faceId}:
+    delete:
+      description: Deletes a single face template by its ID.
+      parameters:
+      - description: External Person ID
+        in: path
+        name: personId
+        required: true
+        type: string
+      - description: Face template ID
+        in: path
+        name: faceId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/openapi.DeleteResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      security:
+      - BearerAuth: []
+      summary: Delete specific face
+      tags:
+      - OpenAPI
+  /openapi/persons/{personId}/faces/{faceId}/primary:
+    put:
+      description: Sets an enrolled face template as the primary face for the person.
+      parameters:
+      - description: External Person ID
+        in: path
+        name: personId
+        required: true
+        type: string
+      - description: Face template ID
+        in: path
+        name: faceId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/httputil.Response'
+            - properties:
+                data:
+                  $ref: '#/definitions/openapi.PersonProvisionResponse'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/httputil.Response'
+      security:
+      - BearerAuth: []
+      summary: Set primary face
+      tags:
+      - OpenAPI
   /persons:
     get:
       parameters:
@@ -5751,8 +5774,8 @@ paths:
                 data:
                   $ref: '#/definitions/systeminfo.SystemHardwareResponse'
               type: object
-        "500":
-          description: INTERNAL_ERROR
+        "503":
+          description: SYSTEM_TELEMETRY_UNAVAILABLE
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Get system hardware telemetry and trend history
@@ -5805,6 +5828,10 @@ paths:
               type: object
         "422":
           description: SYSTEM_IDENTITY_INVALID
+          schema:
+            $ref: '#/definitions/httputil.Response'
+        "503":
+          description: SYSTEM_IDENTITY_UNAVAILABLE
           schema:
             $ref: '#/definitions/httputil.Response'
       summary: Update this host's device identity
