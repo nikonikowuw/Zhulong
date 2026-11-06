@@ -101,7 +101,11 @@ inline FaceQualityAssessment assess_face_quality(
     }
 
     // 3. 姿态与对称性分析 (基于 5 点关键点: 0=左眼, 1=右眼, 2=鼻尖, 3=左嘴, 4=右嘴)
-    if (detection.landmarks.size() >= 5) {
+    //
+    // `FaceDetection::landmarks` 恒为满 5 点（`std::array`，解码阶段已丢弃任何关键点
+    // 非有限的候选），所以这里没有「缺关键点」的降级分支 —— 曾经写过 `if (size() >= 5)`
+    // 的那种判据对 `std::array` 恒真，只会变成死代码。
+    {
         const auto& le = detection.landmarks[0];
         const auto& re = detection.landmarks[1];
         const auto& nose = detection.landmarks[2];
@@ -154,10 +158,6 @@ inline FaceQualityAssessment assess_face_quality(
                 res.pitch_score = std::clamp((0.85f - r_pitch) / 0.20f, 0.0f, 1.0f);
             }
         }
-    } else {
-        // 无关键点降级
-        res.yaw_score = 0.6f;
-        res.pitch_score = 0.6f;
     }
 
     // 4. 综合加权打分 (0.0 ~ 1.0)

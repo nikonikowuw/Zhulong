@@ -15,6 +15,7 @@
 #include "common/face_association.hpp"
 #include "common/face_quality.hpp"
 #include "common/match_config.hpp"
+#include "common/scene_filter.hpp"
 
 #include <dlfcn.h>
 #include <unistd.h>
@@ -352,7 +353,10 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
     }
 
     // 5. 独立人脸构造与空间几何关联（person_index: -1 为孤立人脸）
-    std::vector<bool> person_taken(scene.persons.size(), false);
+    //
+    // 关联判据只有 `face_belongs_to_person` 两条几何条件（插件契约 §2），**不**做
+    // 「一个人体只能挂一张脸」的独占：一张真实人体上出现两张脸（贴得近的两个人、
+    // 或前景小脸落在同一框内）时，两张都如实挂上去，由宿主决定怎么用。
     for (auto& processed : processed_faces) {
         zhulong::FaceStructureItem face;
         face.box[0] = processed.item.box[0];
@@ -371,13 +375,21 @@ zhulong::SceneStructure FaceRecognitionPlugin::detect_scene_structure(zhulong::S
         face.person_index = -1;
 
         for (size_t p_idx = 0; p_idx < person_detections.size(); ++p_idx) {
-            if (!person_taken[p_idx] && face_belongs_to_person(processed.face_box, person_detections[p_idx].body_box)) {
+            if (face_belongs_to_person(processed.face_box, person_detections[p_idx].body_box)) {
                 face.person_index = static_cast<int32_t>(p_idx);
-                person_taken[p_idx] = true;
                 break;
             }
         }
         scene.faces.push_back(std::move(face));
+    }
+
+    // 6. `filter_unmatched` 的完整语义：陌生人不产生**任何**结果。
+    //    人脸在上一步已被 `build_face_item` 挡掉，但「只检到人体、没人脸」的陌生目标
+    //    （背身、遮挡、距离太远）仍会留在 persons 里 —— 那和 schema 的
+    //    「开启后陌生人不产生结果与抓拍」矛盾，所以这里按「是否挂载了已匹配人脸」
+    //    把人一起裁掉，并重排场景内的 person_index（纯数据逻辑，见 scene_filter.hpp）。
+    if (match_params.filter_unmatched) {
+        drop_unmatched_persons(scene);
     }
 
     return scene;
@@ -439,6 +451,9 @@ FaceExtractorContext& FaceExtractorContext::instance() {
 
 void FaceExtractorContext::release() {
     std::lock_guard<std::mutex> lock(mu_);
+    // 失败负缓存也必须在这里失效：宿主 TTL 回收的语义是「下次重新探测环境」，
+    // 运维换好权重后不该还需要重启进程才能恢复登记能力。
+    init_status_ = ZHULONG_PLUGIN_OK;
     if (!initialized_) {
         return;
     }
@@ -492,6 +507,12 @@ zhulong_status_t FaceExtractorContext::init_locked() {
     if (initialized_) {
         return ZHULONG_PLUGIN_OK;
     }
+    // 失败负缓存：模型装错/后端建不出会话是**环境问题**，不会因为下一帧就好。
+    // 不缓存的结果是每个登记请求都重新解析一遍权重（facelivtv2-l 就有 35 MB），
+    // 在宿主超时重试下变成重试风暴。`release()` 会清掉它（宿主 TTL 回收 = 重新探测）。
+    if (init_status_ != ZHULONG_PLUGIN_OK) {
+        return init_status_;
+    }
 
     // 1. 人脸检测模型 (SCRFD det_500m)
     det_model_ = load_target_model("models/det_500m");
@@ -499,19 +520,30 @@ zhulong_status_t FaceExtractorContext::init_locked() {
     rec_model_ = load_target_model("models/facelivtv2-l");
 
     // 模型缺失属于「能力不可用」，绝不等同于「图中没有人脸」：必须闭环报错，禁止伪造特征。
-    if (!det_model_.valid()) {
-        return model_unavailable_status("models/det_500m");
-    }
-    if (!rec_model_.valid()) {
-        return model_unavailable_status("models/facelivtv2-l");
+    // 任一侧权重不可用就把**两侧**都放掉：负缓存期间它们是白占内存的死引用，
+    // 而下次重试（`release()` 之后）本来就要重新加载。
+    if (!det_model_.valid() || !rec_model_.valid()) {
+        init_status_ = det_model_.valid() ? model_unavailable_status("models/facelivtv2-l")
+                                          : model_unavailable_status("models/det_500m");
+        det_model_ = zhulong::Model();
+        rec_model_ = zhulong::Model();
+        return init_status_;
     }
 
     det_session_ = det_model_.create_session(kExtractSessionWorkerID);
     rec_session_ = rec_model_.create_session(kExtractSessionWorkerID);
     if (!det_session_.valid() || !rec_session_.valid()) {
-        return ZHULONG_PLUGIN_ERR_INTERNAL;
+        // 会话建不出来时把权重一起放掉：留着它们只会让负缓存期间白占几 MB，
+        // 而下次重试（`release()` 之后）本来就要重新加载。
+        det_session_ = zhulong::Session();
+        rec_session_ = zhulong::Session();
+        det_model_ = zhulong::Model();
+        rec_model_ = zhulong::Model();
+        init_status_ = ZHULONG_PLUGIN_ERR_INTERNAL;
+        return init_status_;
     }
 
+    init_status_ = ZHULONG_PLUGIN_OK;
     initialized_ = true;
     return ZHULONG_PLUGIN_OK;
 }
@@ -530,7 +562,10 @@ zhulong_status_t FaceExtractorContext::extract(
         return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
     if (format != ZHULONG_PIXEL_FORMAT_BGR24 && format != ZHULONG_PIXEL_FORMAT_RGB24) {
-        return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
+        // ⚠️ 必须是 INVALID_ARGUMENT 而不是 NOT_SUPPORTED：骨架把 NOT_SUPPORTED 当成
+        //    「本包没有真实人脸能力」（协议码 MODEL_UNAVAILABLE + 进程退出 5），拿它回
+        //    一个不支持的像素格式，等于让宿主为一张坏图杀掉整个热进程。
+        return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
     }
 
     std::lock_guard<std::mutex> lock(mu_);
@@ -540,6 +575,7 @@ zhulong_status_t FaceExtractorContext::extract(
         // ⚠️ `init_locked` 在权重缺失时返回 NOT_FOUND，本协议把它理解成「这张脸没检出
         //    人脸」——所以在这一条边界上必须显式折叠成 NOT_SUPPORTED，把包缺陷留在
         //    包侧语义里，绝不伪装成用户照片问题。
+        //    失败已被 `init_status_` 负缓存，重复请求不会再解析一遍权重。
         return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
     }
 
@@ -565,7 +601,22 @@ zhulong_status_t FaceExtractorContext::extract(
         return ZHULONG_PLUGIN_ERR_NOT_FOUND;
     }
 
-    // 2. 选取置信度最高的主人脸
+    // 2. 底库登记只接受**单人特写**：可入册的人脸（真实检出且置信度达标）多于一张时
+    //    一律拒绝，绝不猜「哪张是本人」。
+    //    工业标准（GA/T 1400 类项目与 NVIDIA 录入流程）都要求人工复核合影，盲选最高分
+    //    脸会把同事、路人写进底库，而且写入后**无法从特征向量看出错**。
+    //    进程级退出码不跟着变：这是帧级裁决，下一张单人照照常登记。
+    size_t embeddable_faces = 0;
+    for (const auto& detection : detections) {
+        if (detection.is_real_detection && detection.face_score >= kMinimumEmbeddableFaceScore) {
+            ++embeddable_faces;
+        }
+    }
+    if (embeddable_faces > 1) {
+        return ZHULONG_PLUGIN_ERR_AMBIGUOUS;
+    }
+
+    // 3. 选取置信度最高的主人脸
     const FaceDetection* best_detection = &detections.front();
     for (const auto& detection : detections) {
         if (detection.face_score > best_detection->face_score) {
@@ -582,7 +633,7 @@ zhulong_status_t FaceExtractorContext::extract(
         return ZHULONG_PLUGIN_ERR_NOT_FOUND;
     }
 
-    // 3. 关键点仿射对齐
+    // 4. 关键点仿射对齐
     const auto src_pixels = pixel_landmarks(*best_detection, width, height);
     std::array<float, 6> affine_mat{};
     if (!Aligner::estimate_similarity_transform(src_pixels, affine_mat)) {

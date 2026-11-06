@@ -24,7 +24,9 @@
 #include "alignment/aligner.hpp"
 #include "common/face_association.hpp"
 #include "common/face_quality.hpp"
+#include "common/scene_filter.hpp"
 #include "detection/detector.hpp"
+#include "detection/scrfd_decode.hpp"
 #include "matching/matcher.hpp"
 
 // HWC→NCHW 归一化只存在于「模型不自带归一化」的档位（ONNX）；RKNN 档位由模型自身
@@ -757,6 +759,301 @@ void test_detector_dimensions() {
 #endif
 }
 
+
+// ============================================================================
+// 6. SCRFD 输出解码（网格 → 原帧像素框、letterbox 逆变换、定长 Top-K、NMS）
+//
+// 这一段是全流水线里「写错也不报错」的极端：anchor 索引偏一位、letterbox 反算漏掉
+// pad_top、或者把「满员即 break」当优化，症状都只有**零检出**或「远处小脸都在、近处
+// 大脸丢了」——没有崩溃、没有错误码。所以它被抽成 header-only 纯函数（scrfd_decode.hpp），
+// 用合成张量把每条数学钉死。
+// ============================================================================
+
+/** @brief 造一个 packed float32 张量并填入给定数据（形状只用于推导 element_count） */
+zhulong::Tensor make_float_tensor(std::initializer_list<int64_t> dims, const std::vector<float>& values) {
+    zhulong::Tensor tensor(std::vector<int64_t>(dims), zhulong::DataType::FLOAT32);
+    check(tensor.element_count() == values.size(), "测试夹具：张量元素数与填值数量不符");
+    std::copy(values.begin(), values.end(), tensor.data<float>());
+    return tensor;
+}
+
+/** @brief 把若干组输出张量打包成 `Session::forward` 的返回形态（尺寸由数据长度决定） */
+std::vector<zhulong::Tensor> pack_outputs(const std::vector<std::vector<float>>& groups) {
+    std::vector<zhulong::Tensor> outputs;
+    outputs.reserve(groups.size());
+    for (const auto& values : groups) {
+        outputs.push_back(make_float_tensor({static_cast<int64_t>(values.size()), 1}, values));
+    }
+    return outputs;
+}
+
+void test_scrfd_decode_maps_letterbox_back_to_source() {
+    using namespace zhulong::face;
+
+    // 模型 32×32、单层 stride 8 ⇒ 4×4 网格 × 2 anchor = 32 个位置
+    // letterbox：原图 64×48 → scale 0.5 → 32×24 → 垂直居中补边 pad_top=4、pad_left=0
+    constexpr int kModel = 32;
+    constexpr int kAnchors = 2;
+    constexpr size_t kAnchorsTotal = (kModel / 8) * (kModel / 8) * kAnchors;
+    const std::array<int, 1> strides{8};
+
+    std::vector<float> scores(kAnchorsTotal, 0.0f);
+    std::vector<float> boxes(kAnchorsTotal * 4, 0.0f);
+    std::vector<float> kps(kAnchorsTotal * 10, 0.0f);
+
+    // 网格 (h=1, w=1) 的第 2 个 anchor ⇒ index = (1*4 + 1) * 2 + 1 = 11，中心 = (8, 8) 模型像素
+    const size_t index = (1 * 4 + 1) * 2 + 1;
+    scores[index] = 0.9f;
+    // 偏移 0.5 个 stride = 4 像素
+    boxes[index * 4 + 0] = 0.5f;
+    boxes[index * 4 + 1] = 0.5f;
+    boxes[index * 4 + 2] = 0.5f;
+    boxes[index * 4 + 3] = 0.5f;
+    // 关键点全部落在中心（偏移 0）
+
+    const auto candidates = decode_scrfd_candidates<1>(
+        pack_outputs({scores, boxes, kps}), strides, kAnchors, kModel, kModel,
+        0.5f, 0.4f, 128, 64, 48, 0.5f, 0, 4);
+
+    check(candidates.size() == 1, "应解出唯一候选");
+    if (candidates.size() == 1) {
+        // x1 = (8 - 4 - 0) / 0.5 = 8 ; y1 = (8 - 4 - 4) / 0.5 = 0
+        // x2 = (8 + 4 - 0) / 0.5 = 24 ; y2 = (8 + 4 - 4) / 0.5 = 16
+        check(nearly_equal(candidates[0].box[0], 8.0f, 1e-3f), "x1 未按 letterbox 逆变换映射回原帧");
+        check(nearly_equal(candidates[0].box[1], 0.0f, 1e-3f), "y1 未扣除 pad_top");
+        check(nearly_equal(candidates[0].box[2], 24.0f, 1e-3f), "x2 未按 letterbox 逆变换映射回原帧");
+        check(nearly_equal(candidates[0].box[3], 16.0f, 1e-3f), "y2 未按 letterbox 逆变换映射回原帧");
+        // 关键点偏移 0：x = (8 - 0) / 0.5 = 16 ; y = (8 - 4) / 0.5 = 8
+        check(nearly_equal(candidates[0].kps[0].x, 16.0f, 1e-3f), "关键点 x 未按 letterbox 逆变换");
+        check(nearly_equal(candidates[0].kps[0].y, 8.0f, 1e-3f), "关键点 y 未扣除 pad_top");
+        check(nearly_equal(candidates[0].score, 0.9f, 1e-6f), "分数未透传");
+    }
+}
+
+void test_scrfd_decode_keeps_best_score_across_strides() {
+    using namespace zhulong::face;
+
+    // 模型 32×32、stride 8 / 16 各一层、每格 1 anchor
+    // 回归点：候选上限 1 时，**细层先扫**不得把粗层（远景小脸 vs 近景大脸）的高分框挤掉。
+    constexpr int kModel = 32;
+    constexpr int kAnchors = 1;
+    const std::array<int, 2> strides{8, 16};
+    const size_t fine = (kModel / 8) * (kModel / 8) * kAnchors;   // 16
+    const size_t coarse = (kModel / 16) * (kModel / 16) * kAnchors; // 4
+
+    std::vector<float> score_fine(fine, 0.0f), score_coarse(coarse, 0.0f);
+    std::vector<float> box_fine(fine * 4, 0.0f), box_coarse(coarse * 4, 0.0f);
+    std::vector<float> kps_fine(fine * 10, 0.0f), kps_coarse(coarse * 10, 0.0f);
+
+    score_fine[0] = 0.6f;   // 细层：低分
+    score_coarse[0] = 0.9f; // 粗层：高分（必须活下来）
+    for (int i = 0; i < 4; ++i) {
+        box_fine[i] = 0.5f;
+        box_coarse[i] = 0.5f;
+    }
+
+    const auto candidates = decode_scrfd_candidates<2>(
+        pack_outputs({score_fine, score_coarse, box_fine, box_coarse, kps_fine, kps_coarse}),
+        strides, kAnchors, kModel, kModel, 0.5f, 0.4f, 1, 32, 32, 1.0f, 0, 0);
+
+    check(candidates.size() == 1, "候选上限为 1 时应只保留一条");
+    if (candidates.size() == 1) {
+        check(nearly_equal(candidates[0].score, 0.9f, 1e-6f),
+              "候选上限截断必须按分数取 Top-K，不得因扫描顺序丢掉粗层高分框");
+    }
+}
+
+void test_scrfd_decode_nms_and_filters() {
+    using namespace zhulong::face;
+
+    constexpr int kModel = 32;
+    constexpr int kAnchors = 2;
+    constexpr size_t kAnchorsTotal = (kModel / 8) * (kModel / 8) * kAnchors;
+    const std::array<int, 1> strides{8};
+
+    std::vector<float> scores(kAnchorsTotal, 0.0f);
+    std::vector<float> boxes(kAnchorsTotal * 4, 0.0f);
+    std::vector<float> kps(kAnchorsTotal * 10, 0.0f);
+
+    // 同一格子两个 anchor 给出完全重合的框：IoU = 1 ⇒ 只留高分那个
+    scores[0] = 0.90f;
+    scores[1] = 0.80f;
+    // 另加一个低分框（应被阈值挡掉）与一个退化框（x2 == x1，应被丢弃）
+    scores[2] = 0.30f;
+    scores[3] = 0.95f;
+    for (size_t a = 0; a < 2; ++a) {
+        boxes[a * 4 + 0] = 0.5f;
+        boxes[a * 4 + 1] = 0.5f;
+        boxes[a * 4 + 2] = 0.5f;
+        boxes[a * 4 + 3] = 0.5f;
+    }
+    boxes[3 * 4 + 0] = 1.0f;  // 退化：x1 = 中心 - 8 = 0
+    boxes[3 * 4 + 1] = 1.0f;
+    boxes[3 * 4 + 2] = -1.0f; // x2 = 中心 - 8 = 0 ⇒ x2 == x1
+    boxes[3 * 4 + 3] = -1.0f;
+
+    const auto candidates = decode_scrfd_candidates<1>(
+        pack_outputs({scores, boxes, kps}), strides, kAnchors, kModel, kModel,
+        0.5f, 0.4f, 128, 32, 32, 1.0f, 0, 0);
+
+    check(candidates.size() == 1, "NMS 后应只剩 1 条（重合框被抑制、低分与退化框被丢弃）");
+    if (candidates.size() == 1) {
+        check(nearly_equal(candidates[0].score, 0.90f, 1e-6f), "NMS 后保留的必须是最高分框");
+    }
+
+    // NaN 分数不得参与比较，也不得把整帧结果清空
+    std::vector<float> nan_scores = scores;
+    nan_scores[4] = std::nanf("");
+    const auto with_nan = decode_scrfd_candidates<1>(
+        pack_outputs({nan_scores, boxes, kps}), strides, kAnchors, kModel, kModel,
+        0.5f, 0.4f, 128, 32, 32, 1.0f, 0, 0);
+    check(with_nan.size() == 1, "NaN 分数候选必须被跳过，且不影响其余候选");
+
+    // 全部低于阈值 ⇒ 空结果
+    const auto none = decode_scrfd_candidates<1>(
+        pack_outputs({std::vector<float>(kAnchorsTotal, 0.1f), boxes, kps}),
+        strides, kAnchors, kModel, kModel, 0.5f, 0.4f, 128, 32, 32, 1.0f, 0, 0);
+    check(none.empty(), "全部低于阈值时必须返回空结果");
+}
+
+void test_scrfd_decode_rejects_bad_layout() {
+    using namespace zhulong::face;
+
+    constexpr int kModel = 32;
+    constexpr int kAnchors = 2;
+    constexpr size_t kAnchorsTotal = (kModel / 8) * (kModel / 8) * kAnchors;
+    const std::array<int, 1> strides{8};
+
+    std::vector<float> scores(kAnchorsTotal, 0.9f);
+    std::vector<float> boxes(kAnchorsTotal * 4, 0.5f);
+    std::vector<float> kps(kAnchorsTotal * 10, 0.0f);
+
+    // 1) 张量个数不符（少一组）
+    std::vector<zhulong::Tensor> two_tensors;
+    two_tensors.push_back(make_float_tensor({static_cast<int64_t>(kAnchorsTotal), 1}, scores));
+    two_tensors.push_back(make_float_tensor({static_cast<int64_t>(kAnchorsTotal * 4), 1}, boxes));
+    check(decode_scrfd_candidates<1>(two_tensors, strides, kAnchors, kModel, kModel,
+                                     0.5f, 0.4f, 128, 32, 32, 1.0f, 0, 0).empty(),
+          "张量个数不符时必须整体放弃解码（否则会越界索引）");
+
+    // 2) element_count 不符（模拟换了 anchor 数或空间尺度却没改解码参数）
+    std::vector<float> short_scores(kAnchorsTotal - 1, 0.9f);
+    check(decode_scrfd_candidates<1>(pack_outputs({short_scores, boxes, kps}),
+                                     strides, kAnchors, kModel, kModel, 0.5f, 0.4f, 128, 32, 32,
+                                     1.0f, 0, 0).empty(),
+          "元素数不符时必须整体放弃解码");
+
+    // 3) dtype 不符（量化档位会产出 INT8/INT32）
+    std::vector<zhulong::Tensor> wrong_dtype;
+    wrong_dtype.push_back(zhulong::Tensor({static_cast<int64_t>(kAnchorsTotal), 1}, zhulong::DataType::INT32));
+    wrong_dtype.push_back(make_float_tensor({static_cast<int64_t>(kAnchorsTotal * 4), 1}, boxes));
+    wrong_dtype.push_back(make_float_tensor({static_cast<int64_t>(kAnchorsTotal * 10), 1}, kps));
+    check(decode_scrfd_candidates<1>(wrong_dtype, strides, kAnchors, kModel, kModel,
+                                     0.5f, 0.4f, 128, 32, 32, 1.0f, 0, 0).empty(),
+          "非 FLOAT32 输出必须被拒绝（按 float 读 Int8 会得到垃圾框）");
+
+    // 4) 模型尺寸不能被 stride 整除 / letterbox 参数非法
+    check(decode_scrfd_candidates<1>(pack_outputs({scores, boxes, kps}),
+                                     strides, kAnchors, 30, 30, 0.5f, 0.4f, 128, 32, 32,
+                                     1.0f, 0, 0).empty(),
+          "模型尺寸不能被 stride 整除时必须拒绝解码");
+    check(decode_scrfd_candidates<1>(pack_outputs({scores, boxes, kps}),
+                                     strides, kAnchors, kModel, kModel, 0.5f, 0.4f, 128, 32, 32,
+                                     0.0f, 0, 0).empty(),
+          "det_scale <= 0 时必须拒绝解码（否则除零出 inf）");
+    check(decode_scrfd_candidates<1>(pack_outputs({scores, boxes, kps}),
+                                     strides, kAnchors, kModel, kModel, 0.5f, 0.4f, 0, 32, 32,
+                                     1.0f, 0, 0).empty(),
+          "候选上限为 0 时必须返回空结果");
+}
+
+
+// ============================================================================
+// 7. `filter_unmatched` 的场景裁剪（容器重排 + person_index 重映射）
+//
+// 裁剪本身不难，难的是「裁掉一个人体后，挂在他身上的脸还指着旧下标」—— 宿主会据此
+// 把脸画到别人的框里（或越界）。这里不需要模型，只造场景结构体即可钉死。
+// ============================================================================
+
+zhulong::PersonItem make_person(float x1, float y1, float x2, float y2, float score) {
+    zhulong::PersonItem person;
+    person.track_id = 0;
+    person.body_box[0] = x1;
+    person.body_box[1] = y1;
+    person.body_box[2] = x2;
+    person.body_box[3] = y2;
+    person.body_score = score;
+    return person;
+}
+
+zhulong::FaceStructureItem make_face(int32_t person_index, bool matched) {
+    zhulong::FaceStructureItem face;
+    face.box[0] = 0.1f;
+    face.box[1] = 0.1f;
+    face.box[2] = 0.2f;
+    face.box[3] = 0.2f;
+    face.quality = 0.8f;
+    face.matched = matched;
+    face.person_index = person_index;
+    return face;
+}
+
+void test_drop_unmatched_persons() {
+    using namespace zhulong::face;
+
+    // 人体 0：背身（无脸）→ 必须消失
+    // 人体 1：挂一张已匹配人脸 → 保留，新下标 0
+    // 人体 2：挂一张已匹配 + 一张未匹配人脸 → 保留，新下标 1
+    zhulong::SceneStructure scene;
+    scene.persons.push_back(make_person(0.0f, 0.2f, 0.2f, 1.0f, 0.9f));
+    scene.persons.push_back(make_person(0.3f, 0.2f, 0.5f, 1.0f, 0.8f));
+    scene.persons.push_back(make_person(0.6f, 0.2f, 0.8f, 1.0f, 0.7f));
+    scene.faces.push_back(make_face(1, true));
+    scene.faces.push_back(make_face(2, true));
+    scene.faces.push_back(make_face(2, false));
+    scene.faces.push_back(make_face(-1, true)); // 孤立人脸：无人体可挂，保持 -1
+
+    drop_unmatched_persons(scene);
+
+    check(scene.persons.size() == 2, "无人脸/只挂未匹配人脸的人体必须被裁掉");
+    check(scene.faces.size() == 4, "裁剪人体不得丢人脸（未匹配脸已由上层过滤）");
+    if (scene.persons.size() == 2 && scene.faces.size() == 4) {
+        check(nearly_equal(scene.persons[0].body_box[0], 0.3f, 1e-6f), "保留的第一个人体应是原下标 1");
+        check(nearly_equal(scene.persons[1].body_box[0], 0.6f, 1e-6f), "保留的第二个人体应是原下标 2");
+        check(scene.faces[0].person_index == 0, "原下标 1 的人脸必须重映射为 0");
+        check(scene.faces[1].person_index == 1, "原下标 2 的人脸必须重映射为 1");
+        check(scene.faces[2].person_index == 1, "同一人体的第二张脸必须指向同一新下标");
+        check(scene.faces[3].person_index == -1, "孤立人脸的 person_index 必须保持 -1");
+    }
+
+    // 全部人体都无人脸 ⇒ 场景里既没有人体也没有索引可指
+    zhulong::SceneStructure dropped;
+    dropped.persons.push_back(make_person(0.0f, 0.2f, 0.2f, 1.0f, 0.9f));
+    dropped.faces.push_back(make_face(-1, true));
+    drop_unmatched_persons(dropped);
+    check(dropped.persons.empty(), "没有已匹配人脸时所有人体都必须消失");
+    check(dropped.faces.size() == 1 && dropped.faces[0].person_index == -1,
+          "孤立人脸不得因为裁剪被误连到不存在的人体上");
+
+    // 语义边界：越界/负下标的 face.person_index 不得越界访问
+    zhulong::SceneStructure rogue;
+    rogue.persons.push_back(make_person(0.0f, 0.2f, 0.2f, 1.0f, 0.9f));
+    rogue.faces.push_back(make_face(7, true));
+    drop_unmatched_persons(rogue);
+    check(rogue.persons.empty() && rogue.faces[0].person_index == -1,
+          "越界的 person_index 必须按「无关联」处理，绝不得越界读 persons");
+
+    // 幂等
+    zhulong::SceneStructure idempotent;
+    idempotent.persons.push_back(make_person(0.3f, 0.2f, 0.5f, 1.0f, 0.8f));
+    idempotent.faces.push_back(make_face(0, true));
+    drop_unmatched_persons(idempotent);
+    const size_t persons_after_first = idempotent.persons.size();
+    drop_unmatched_persons(idempotent);
+    check(idempotent.persons.size() == persons_after_first && idempotent.faces[0].person_index == 0,
+          "重复裁剪必须幂等");
+}
+
 } // namespace
 
 int main() {
@@ -771,6 +1068,11 @@ int main() {
     test_resolve_match_params();
     test_face_association();
     test_detector_dimensions();
+    test_scrfd_decode_maps_letterbox_back_to_source();
+    test_scrfd_decode_keeps_best_score_across_strides();
+    test_scrfd_decode_nms_and_filters();
+    test_scrfd_decode_rejects_bad_layout();
+    test_drop_unmatched_persons();
 #if defined(ZHULONG_FACE_HAS_PREPROCESS_HELPER)
     test_hwc_to_nchw_normalized();
 #endif

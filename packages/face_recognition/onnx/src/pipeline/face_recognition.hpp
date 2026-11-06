@@ -97,6 +97,16 @@ private:
      * 必须在释放互斥锁之后继续使用会话，而并发的 `create_session` 会插入新条目
      * 触发 rehash/覆盖 —— 裸指针或引用在这种情况下会悬垂。
      */
+    /**
+     * @brief worker_id → 本 worker 的级联会话
+     *
+     * ⚠️ 生命周期边界：SDK 的 `worker_destroy` 只销毁它自己的 `WorkerContext`，**不会**
+     *    回调算法类（`zhulong::sdk::PluginApi` 没有 worker 级析构钩子），所以这里的条目
+     *    没有显式删除路径。当前实现下 worker_id 是 `--broker` 列表下标（`algo_main.cpp`
+     *    的 `worker_create(model, idx)`），进程启动后即有界且固定，字典大小 = 路数；
+     *    若将来 SDK 改成动态增删 worker，必须同时补一个释放钩子，否则每条退役 worker
+     *    都会留下一个 session（含后端工作区）。
+     */
     using SessionTable = std::unordered_map<uint32_t, std::shared_ptr<zhulong::Session>>;
 
     void parse_config(const std::string& config_json);
@@ -166,6 +176,8 @@ private:
 
     std::mutex mu_;
     bool initialized_{false};
+    /** @brief 上一次懒加载的结果；非 OK 表示环境坏了，后续请求直接复用这个裁决 */
+    zhulong_status_t init_status_{ZHULONG_PLUGIN_OK};
     zhulong::Model det_model_;
     zhulong::Model rec_model_;
     zhulong::Session det_session_;

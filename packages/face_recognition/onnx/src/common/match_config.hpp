@@ -65,17 +65,32 @@ struct MatchParams {
 };
 
 /**
- * @brief 从扁平 JSON 对象里取一个数值字段
+ * @brief 在扁平 JSON 里定位某个成员名后的冒号位置
  *
  * 只处理 `{"key": 1.5}` 这种形态（本项目的算法配置 schema 都是扁平数值），
- * 但键必须是**完整成员名**：前一个非空白字符是 `{` 或 `,`。
+ * 但键必须是**完整成员名**：引号包住的键名逐字相等，且前一个非空白字符是 `{` 或 `,`。
  * 按子串找 `"threshold"` 会命中 `"my_threshold"`，把别人的值当成自己的。
  *
- * @return true 表示找到并解析出有限数值
+ * 实现刻意不拼 `"\"" + key + "\""` 的 needle：本函数每帧、每路流都会被调用十余次，
+ * 每次一个堆分配纯属浪费（解析结果只是几个标量）。
+ *
+ * @param from 从此偏移开始找（用于继续搜索同名成员的其他出现）
+ * @return 冒号位置；未找到返回 npos
  */
-inline bool find_json_number(const std::string& json, std::string_view key, double& out_value) {
-    const std::string quoted_key = "\"" + std::string(key) + "\"";
-    for (size_t pos = json.find(quoted_key); pos != std::string::npos; pos = json.find(quoted_key, pos + 1)) {
+inline size_t find_member_colon(std::string_view json, std::string_view key, size_t from = 0) {
+    for (size_t pos = json.find('"', from); pos != std::string_view::npos; pos = json.find('"', pos + 1)) {
+        const size_t name_begin = pos + 1;
+        if (name_begin >= json.size() || json.size() - name_begin < key.size() + 1) {
+            // 剩余长度连「键名 + 闭合引号」都放不下
+            break;
+        }
+        if (json.compare(name_begin, key.size(), key) != 0) {
+            continue;
+        }
+        if (json[name_begin + key.size()] != '"') {
+            continue;
+        }
+
         size_t before = pos;
         while (before > 0 && static_cast<unsigned char>(json[before - 1]) <= ' ') {
             --before;
@@ -88,28 +103,13 @@ inline bool find_json_number(const std::string& json, std::string_view key, doub
             continue;
         }
 
-        const size_t colon = json.find(':', pos + quoted_key.size());
-        if (colon == std::string::npos) {
+        const size_t colon = json.find(':', name_begin + key.size() + 1);
+        if (colon == std::string_view::npos) {
             continue;
         }
-        const size_t value_start = json.find_first_not_of(" \t\r\n", colon + 1);
-        if (value_start == std::string::npos) {
-            continue;
-        }
-        try {
-            size_t parsed = 0;
-            const double value = std::stod(json.substr(value_start), &parsed);
-            if (parsed == 0 || !std::isfinite(value)) {
-                continue;
-            }
-            out_value = value;
-            return true;
-        } catch (const std::exception&) {
-            // 该键不是数值（布尔/字符串）：继续找同名成员的其他出现
-            continue;
-        }
+        return colon;
     }
-    return false;
+    return std::string_view::npos;
 }
 
 inline bool is_json_delimiter(char ch) noexcept {
@@ -117,29 +117,60 @@ inline bool is_json_delimiter(char ch) noexcept {
 }
 
 /**
+ * @brief 从扁平 JSON 对象里取一个数值字段
+ *
+ * @return true 表示找到并解析出有限数值
+ */
+inline bool find_json_number(std::string_view json, std::string_view key, double& out_value) {
+    size_t from = 0;
+    while (true) {
+        const size_t colon = find_member_colon(json, key, from);
+        if (colon == std::string_view::npos) {
+            return false;
+        }
+        from = colon + 1;
+
+        const size_t value_start = json.find_first_not_of(" \t\r\n", colon + 1);
+        if (value_start == std::string_view::npos) {
+            continue;
+        }
+        // 只截数值 token 交给 stod：拷贝落在 SSO 里（不像旧实现那样把整个 JSON 尾串拷贝一份）
+        size_t value_end = value_start;
+        while (value_end < json.size() &&
+               std::string_view("+-0123456789.eE").find(json[value_end]) != std::string_view::npos) {
+            ++value_end;
+        }
+        if (value_end == value_start) {
+            continue; // 该键不是数值（布尔/字符串/null）：继续找同名成员的其他出现
+        }
+        try {
+            size_t parsed = 0;
+            const double value = std::stod(std::string(json.substr(value_start, value_end - value_start)), &parsed);
+            if (parsed == 0 || !std::isfinite(value)) {
+                continue;
+            }
+            out_value = value;
+            return true;
+        } catch (const std::exception&) {
+            continue;
+        }
+    }
+}
+
+/**
  * @brief 从扁平 JSON 对象里取一个布尔字段
  */
-inline bool find_json_bool(const std::string& json, std::string_view key, bool& out_value) {
-    const std::string quoted_key = "\"" + std::string(key) + "\"";
-    for (size_t pos = json.find(quoted_key); pos != std::string::npos; pos = json.find(quoted_key, pos + 1)) {
-        size_t before = pos;
-        while (before > 0 && static_cast<unsigned char>(json[before - 1]) <= ' ') {
-            --before;
+inline bool find_json_bool(std::string_view json, std::string_view key, bool& out_value) {
+    size_t from = 0;
+    while (true) {
+        const size_t colon = find_member_colon(json, key, from);
+        if (colon == std::string_view::npos) {
+            return false;
         }
-        if (before == 0) {
-            continue;
-        }
-        const char preceding = json[before - 1];
-        if (preceding != '{' && preceding != ',') {
-            continue;
-        }
+        from = colon + 1;
 
-        const size_t colon = json.find(':', pos + quoted_key.size());
-        if (colon == std::string::npos) {
-            continue;
-        }
         const size_t value_start = json.find_first_not_of(" \t\r\n", colon + 1);
-        if (value_start == std::string::npos) {
+        if (value_start == std::string_view::npos) {
             continue;
         }
         if (json.compare(value_start, 4, "true") == 0) {
@@ -157,11 +188,13 @@ inline bool find_json_bool(const std::string& json, std::string_view key, bool& 
             }
         }
     }
-    return false;
 }
 
 /**
  * @brief 在默认值之上叠加任务级 JSON 的覆盖
+ *
+ * 全程按 `string_view` 扫原文：本函数在**每帧、每路流**的推理入口各调用一次
+ * （见 `detect_scene_structure`），没有理由为它每帧拷贝整份配置。
  *
  * @param task_json 宿主下发的配置原文；空视图表示未下发，原样返回 defaults
  * @param defaults 进程级默认（来自 `init(config_json)`）
@@ -176,7 +209,7 @@ inline MatchParams resolve_match_params(std::string_view task_json, MatchParams 
     }
 
     MatchParams resolved = defaults;
-    const std::string json(task_json);
+    const std::string_view json = task_json;
 
     // 1. 比对阈值 (支持 threshold 与别名 match_threshold)
     double threshold = 0.0;

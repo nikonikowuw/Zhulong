@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 namespace zhulong::face {
@@ -15,6 +16,19 @@ constexpr float kEmbeddingMean = 127.5f;
 constexpr float kEmbeddingInvStd = 1.0f / 127.5f;
 /** @brief 单位化时的零范数保护下限 */
 constexpr float kMinimumFeatureNorm = 1e-6f;
+
+/**
+ * @brief 把输入张量搬进 forward 的入参列表
+ *
+ * `Session::forward` 收 `const std::vector<Tensor>&`：直接写 `forward({patch})` 会先深拷
+ * 一份输入（1×3×112×112 float32 = 150 KB，每脸每帧一份）。因此先 move 进局部 vector。
+ */
+std::vector<zhulong::Tensor> single_input(zhulong::Tensor&& tensor) {
+    std::vector<zhulong::Tensor> inputs;
+    inputs.reserve(1);
+    inputs.emplace_back(std::move(tensor));
+    return inputs;
+}
 
 } // namespace
 
@@ -37,7 +51,7 @@ std::vector<float> FaceFeatureExtractor::extract(
         return {};
     }
 
-    const std::vector<zhulong::Tensor> outputs = session.forward({onnx_patch});
+    const std::vector<zhulong::Tensor> outputs = session.forward(single_input(std::move(onnx_patch)));
     if (outputs.size() != 1 || outputs[0].dtype() != zhulong::DataType::FLOAT32 ||
         outputs[0].element_count() != kFeatureDimension) {
         return {};

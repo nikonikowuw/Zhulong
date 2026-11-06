@@ -31,37 +31,28 @@ inline constexpr int kFaceInputGranularity = 32;
 inline constexpr int kPersonInputGranularity = 128;
 
 /**
- * @brief 人脸与人体检测输入尺寸支持策略
- *
- * rk3568 的人脸检测采用动态双 shape 模型（支持 640×640 与 640×384），人体检测仍为
- * 静态 shape [1,3,640,640]；onnx 档位 det_500m / scrfd_person_2.5g 均为动态轴。
- */
-#if defined(ZHULONG_INFERENCE_RKNN)
-inline constexpr bool kFaceDetectionInputShapeIsDynamic = true;
-inline constexpr bool kPersonDetectionInputShapeIsStatic = true;
-#else
-inline constexpr bool kFaceDetectionInputShapeIsDynamic = true;
-inline constexpr bool kPersonDetectionInputShapeIsStatic = false;
-#endif
-
-/**
  * @brief 判断检测输入分辨率是否与 FPN 步长表兼容
  *
  * 不兼容时解码网格与模型输出必然错位，而 `scrfd_outputs_match` 只能看到「张量个数/element_count
  * 不符」并返回空结果 —— 那就是一次静默的零检出。因此校验必须发生在设置阶段（fail fast）。
+ *
+ * 档位差异（rk3568 人体模型是静态 640×640、人脸是 640×640/640×384 双 shape）由
+ * `set_input_size` 里的 `#if defined(ZHULONG_INFERENCE_RKNN)` 分支表达，**不**另设
+ * 「shape 是否动态」的常量：那种常量没有任何消费者，只会在两处各写一份然后漂移。
  */
 inline bool is_supported_detection_input(int width, int height, int granularity) noexcept {
     return width > 0 && height > 0 && granularity > 0 &&
            width % granularity == 0 && height % granularity == 0;
 }
-/** @brief 关键点个数（双眼、鼻尖、双嘴角），也是 ArcFace 对齐的输入点数 */
-inline constexpr size_t kLandmarkCount = 5;
 
 /**
  * @brief 单个检出的人脸
  *
  * 只保留下游真正消费的字段：像素关键点用于对齐，归一化框与关键点用于结果序列化。
  * 像素坐标与归一化坐标同时保留，避免消费方各自乘一次宽高算出不一致的值。
+ *
+ * `landmarks` 恒为满 5 点（`std::array`）——结构体没有「关键点缺失」态：解码阶段任何
+ * 关键点非有限都会整框丢弃，所以质量评估不需要（也不该）为缺失态留降级分支。
  */
 struct FaceDetection {
     std::array<float, 4> face_box{0.0f, 0.0f, 0.0f, 0.0f};    /**< 归一化人脸框 [x1, y1, x2, y2] ∈ [0, 1] */

@@ -199,11 +199,13 @@ int main(int argc, char** argv) {
     const char* result_type_name = "person_structure";
     const uint32_t count = static_cast<uint32_t>(persons.size());
     print_table(sample_path, result_type_name, count, cost_ms, rows);
-    std::printf("result written: %s\n", output_path.c_str());
 
+    // 先落地再宣告成功：反过来写会在写盘失败时同时输出「failed to write」和
+    // 「result written」，看日志的人只能靠猜。
     if (stbi_write_jpg(output_path.c_str(), width, height, 3, canvas.data(), 92) == 0) {
         std::fprintf(stderr, "failed to write %s\n", output_path.c_str());
         return 1;
     }
+    std::printf("result written: %s\n", output_path.c_str());
     return 0;
 }
