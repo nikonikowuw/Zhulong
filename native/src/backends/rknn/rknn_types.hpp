@@ -95,10 +95,11 @@ struct CachedDmaMem {
     int fd{-1};
     void* va{nullptr};
     size_t size{0};
+    DataType dtype{DataType::UINT8};
     RknnTensorMemPtr mem{nullptr, RknnTensorMemDeleter{}};
 
     /**
-     * @brief 判断缓存是否与本次输入一致（fd/va/size 三元组命中即无需重建）
+     * @brief 内存身份一致可复用注册；绑定 dtype 另行检查，shape 切换由会话清空缓存。
      */
     [[nodiscard]] bool matches(int candidate_fd, const void* candidate_va, size_t candidate_size) const noexcept {
         return mem != nullptr && fd == candidate_fd && va == candidate_va && size == candidate_size;
@@ -117,11 +118,13 @@ struct CachedDmaMem {
     /**
      * @brief 事务提交：仅在 rknn_set_io_mem 成功之后调用
      */
-    void commit(RknnTensorMemPtr next_mem, int next_fd, void* next_va, size_t next_size) noexcept {
+    void commit(RknnTensorMemPtr next_mem, int next_fd, void* next_va, size_t next_size,
+                DataType next_dtype) noexcept {
         mem = std::move(next_mem);
         fd = next_fd;
         va = next_va;
         size = next_size;
+        dtype = next_dtype;
     }
 };
 
@@ -141,6 +144,7 @@ struct RknnSessionContext : public SessionContext {
 
     bool shapes_set{false};                                      /**< 当前上下文是否已配置 dynamic shape */
     std::vector<std::vector<int64_t>> current_input_shapes;      /**< 当前生效的输入 shape */
+    std::vector<rknn_tensor_attr> current_input_attrs;             /**< 会话当前输入属性，不改共享 asset */
     std::vector<rknn_tensor_attr> current_output_attrs;          /**< 当前生效的输出属性 */
 
     RknnSessionContext() = default;

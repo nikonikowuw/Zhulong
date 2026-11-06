@@ -21,6 +21,7 @@
 #include <algorithm/runtime/cpu_vision_backend.hpp>
 #include <algorithm/runtime/letterbox_geometry.hpp>
 #include <algorithm/runtime/letterbox_target.hpp>
+#include <platform/dmabuf/dmabuf_sync.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -32,6 +33,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace zhulong {
@@ -61,6 +63,41 @@ constexpr int kOffsetProbeHeight = 256;
 constexpr int kOffsetProbeRoi = 128;
 /** @brief 偏移对齐探测的搜索上界（RGA2 实测 2，RGA3 实测可达 64） */
 constexpr uint32_t kOffsetProbeMaxAlign = 64;
+
+// 只暂存需要重建/重绑的目标；热路径复用不复制像素，也不重新分配 Tensor。
+class StagedLetterboxTarget {
+public:
+    explicit StagedLetterboxTarget(Tensor& destination) noexcept : destination_(destination), target_(&destination) {}
+    ~StagedLetterboxTarget() = default;
+    StagedLetterboxTarget(const StagedLetterboxTarget&) = delete;
+    StagedLetterboxTarget& operator=(const StagedLetterboxTarget&) = delete;
+    StagedLetterboxTarget(StagedLetterboxTarget&&) = delete;
+    StagedLetterboxTarget& operator=(StagedLetterboxTarget&&) = delete;
+
+    zhulong_status_t prepare(const std::vector<int64_t>& shape, size_t bytes) {
+        const auto action = letterbox_target_action(destination_, shape, bytes);
+        if (action != LetterboxTargetAction::reuse) {
+            if (action == LetterboxTargetAction::rebind_dma) {
+                replacement_ = destination_; // 外部 Tensor 只复制元数据，不复制 DMA 像素。
+            }
+            target_ = &replacement_;
+        }
+        return prepare_letterbox_target(*target_, shape, bytes);
+    }
+
+    Tensor& tensor() noexcept { return *target_; }
+
+    void commit() noexcept {
+        if (target_ == &replacement_) {
+            destination_ = std::move(replacement_);
+        }
+    }
+
+private:
+    Tensor& destination_;
+    Tensor replacement_;
+    Tensor* target_;
+};
 
 // ── 格式映射 ──────────────────────────────────────────────────────────────
 // RGA 用 RK_FORMAT_* 表达通道顺序（rga.h 实测值）。
@@ -350,9 +387,12 @@ void RgaVisionBackend::probe() {
     rga_usable_ = false;
     stride_align_ = 0;
     offset_align_ = 0;
+    record_rga_error(ZHULONG_PLUGIN_ERR_NOT_SUPPORTED);
 
     // 1) 头文件与运行库版本一致性检查。失败即视为不可用（回退 CPU）。
-    if (!imcheck_is_ok(imcheckHeader())) {
+    const IM_STATUS header_status = imcheckHeader();
+    if (!imcheck_is_ok(header_status)) {
+        record_rga_error(map_rga_status(header_status));
         return;
     }
 
@@ -382,7 +422,8 @@ void RgaVisionBackend::probe() {
         }
     }
 
-    if (stride_align_ == 0) {
+    const bool stride_probed = stride_align_ > 0;
+    if (!stride_probed) {
         stride_align_ = kPlatformStrideAlignFallback;
     }
 
@@ -438,6 +479,8 @@ void RgaVisionBackend::probe() {
     }
 
     rga_usable_ = true;
+    // 基准对齐兜底仍允许 imcheck 门禁，但探测失败在首次成功操作之前必须可观测。
+    record_rga_error(stride_probed ? ZHULONG_PLUGIN_OK : ZHULONG_PLUGIN_ERR_NOT_SUPPORTED);
 }
 
 /**
@@ -493,20 +536,20 @@ zhulong_status_t RgaVisionBackend::try_rga_letterbox(const zhulong_frame_view& s
     const size_t required_bytes = static_cast<size_t>(target_h) * row_bytes;
     const std::vector<int64_t> target_shape{target_h, target_w, 3};
 
-    // 复用/重建决策与 CPU 后端共用同一份实现（letterbox_target.hpp）。
-    const zhulong_status_t prepare_status =
-        prepare_letterbox_target(dst, target_shape, required_bytes);
+    StagedLetterboxTarget staged(dst);
+    const zhulong_status_t prepare_status = staged.prepare(target_shape, required_bytes);
     if (prepare_status != ZHULONG_PLUGIN_OK) {
         return prepare_status;
     }
 
-    uint8_t* dst_buf = dst.data<uint8_t>();
+    Tensor& target = staged.tensor();
+    uint8_t* dst_buf = target.data<uint8_t>();
 
     // ⚠️ 描述完整的 dst buffer（含 padding）；内容区偏移只能通过 drect 传递，
     // 绝不可把 dst_buf 指针偏移到内容区起点（R12）。
     rga_buffer_t src_buffer = resolved.buffer;
     rga_buffer_t dst_buffer = make_rga_buffer(
-        dst.dma_buf_fd(), dst_buf, target_w, target_h, dst_format, target_w, target_h);
+        target.dma_buf_fd(), dst_buf, target_w, target_h, dst_format, target_w, target_h);
 
     if (dst_buffer.width <= 0) {
         return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
@@ -524,13 +567,23 @@ zhulong_status_t RgaVisionBackend::try_rga_letterbox(const zhulong_frame_view& s
         return map_rga_status(checked);
     }
 
-    std::memset(dst_buf, letterbox_pad_value, required_bytes);
+    {
+        platform::ScopedFdSync write_sync(target.dma_buf_fd(), platform::kDmaSyncWrite);
+        if (target.dma_buf_fd() >= 0 && !write_sync.active()) {
+            return ZHULONG_PLUGIN_ERR_INVALID_STATE;
+        }
+        std::memset(dst_buf, letterbox_pad_value, required_bytes);
+        if (!write_sync.finish()) {
+            return ZHULONG_PLUGIN_ERR_INVALID_STATE;
+        }
+    }
 
     const IM_STATUS status = run_rga_process(src_buffer, dst_buffer, srect, drect);
     if (!imcheck_is_ok(status)) {
         return map_rga_status(status);
     }
 
+    staged.commit();
     inout_params.scale = geometry.scale;
     inout_params.pad_left = geometry.pad_left;
     inout_params.pad_top = geometry.pad_top;
@@ -728,10 +781,10 @@ zhulong_status_t RgaVisionBackend::crop_scale(const zhulong_frame_view& src, con
         try {
             const zhulong_status_t rga_status =
                 try_rga_crop_scale(src, roi, dst, dst_stride, dst_w, dst_h, dst_format);
+            record_rga_error(rga_status);
             if (rga_status == ZHULONG_PLUGIN_OK) {
                 return ZHULONG_PLUGIN_OK;
             }
-            record_rga_error(rga_status);
         } catch (...) {
             // 异常不穿越 ABI。RGA 是不是“失败”跟这里的回退无关，但失败原因必须可观测。
             record_rga_error(ZHULONG_PLUGIN_ERR_INTERNAL);
@@ -762,10 +815,13 @@ zhulong_status_t RgaVisionBackend::letterbox(const zhulong_frame_view& src,
     if (rga_usable_) {
         try {
             const zhulong_status_t rga_status = try_rga_letterbox(src, dst, inout_params);
+            record_rga_error(rga_status);
+            if (rga_status == ZHULONG_PLUGIN_ERR_INVALID_STATE) {
+                return rga_status;
+            }
             if (rga_status == ZHULONG_PLUGIN_OK) {
                 return ZHULONG_PLUGIN_OK;
             }
-            record_rga_error(rga_status);
         } catch (...) {
             // RGA 路径异常不向上传播：回退 CPU
             record_rga_error(ZHULONG_PLUGIN_ERR_INTERNAL);
@@ -773,7 +829,58 @@ zhulong_status_t RgaVisionBackend::letterbox(const zhulong_frame_view& src,
     }
 
     fallback_count_.fetch_add(1, std::memory_order_relaxed);
-    return fallback_.letterbox(src, dst, inout_params);
+    try {
+        const bool supported_source = src.format == ZHULONG_PIXEL_FORMAT_RGB24 ||
+                                      src.format == ZHULONG_PIXEL_FORMAT_BGR24 ||
+                                      src.format == ZHULONG_PIXEL_FORMAT_NV12 ||
+                                      src.format == ZHULONG_PIXEL_FORMAT_YUV420P;
+        if (!supported_source || rga_format_for_target_24bit(inout_params.target_format) == 0) {
+            return ZHULONG_PLUGIN_ERR_NOT_SUPPORTED;
+        }
+        const int width = inout_params.target_width;
+        const int height = inout_params.target_height;
+        if (!src.planes[0] || src.width <= 0 || src.height <= 0 || width <= 0 || height <= 0 ||
+            width > std::numeric_limits<int>::max() / 3) {
+            return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+        }
+        const size_t row_bytes = static_cast<size_t>(width) * 3;
+        if (static_cast<size_t>(height) > std::numeric_limits<size_t>::max() / row_bytes) {
+            return ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT;
+        }
+        StagedLetterboxTarget staged(dst);
+        const zhulong_status_t prepared = staged.prepare({height, width, 3}, row_bytes * height);
+        if (prepared != ZHULONG_PLUGIN_OK) {
+            return prepared;
+        }
+        Tensor& target = staged.tensor();
+        platform::ScopedFdSync read_sync(src.dma_buf_fd, platform::kDmaSyncRead);
+        if (src.dma_buf_fd >= 0 && !read_sync.active()) {
+            record_rga_error(ZHULONG_PLUGIN_ERR_INVALID_STATE);
+            return ZHULONG_PLUGIN_ERR_INVALID_STATE;
+        }
+        platform::ScopedFdSync write_sync(target.dma_buf_fd(), platform::kDmaSyncWrite);
+        if (target.dma_buf_fd() >= 0 && !write_sync.active()) {
+            record_rga_error(ZHULONG_PLUGIN_ERR_INVALID_STATE);
+            return ZHULONG_PLUGIN_ERR_INVALID_STATE;
+        }
+        LetterboxParams params = inout_params;
+        const zhulong_status_t status = fallback_.letterbox(src, target, params);
+        const bool write_finished = write_sync.finish();
+        const bool read_finished = read_sync.finish();
+        if (!write_finished || !read_finished) {
+            record_rga_error(ZHULONG_PLUGIN_ERR_INVALID_STATE);
+            return ZHULONG_PLUGIN_ERR_INVALID_STATE;
+        }
+        if (status == ZHULONG_PLUGIN_OK) {
+            staged.commit();
+            inout_params = params;
+        }
+        return status;
+    } catch (const std::bad_alloc&) {
+        return ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY;
+    } catch (...) {
+        return ZHULONG_PLUGIN_ERR_INTERNAL;
+    }
 }
 
 /**
@@ -786,10 +893,10 @@ zhulong_status_t RgaVisionBackend::resize(const uint8_t* src, int src_w, int src
         try {
             const zhulong_status_t rga_status = try_rga_resize(src, src_w, src_h, src_stride, src_format,
                                                               dst, dst_stride, dst_w, dst_h, dst_format);
+            record_rga_error(rga_status);
             if (rga_status == ZHULONG_PLUGIN_OK) {
                 return ZHULONG_PLUGIN_OK;
             }
-            record_rga_error(rga_status);
         } catch (...) {
             // 同上：异常不穿越
             record_rga_error(ZHULONG_PLUGIN_ERR_INTERNAL);

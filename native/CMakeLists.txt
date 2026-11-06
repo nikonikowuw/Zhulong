@@ -884,6 +884,30 @@ if(BUILD_TESTING)
 
     set_tests_properties(ZhulongEngineLifecycle ZhulongCAbiLifecycle ZhulongCaptureUnit ZhulongFrameLifecycle ZhulongDecoder PROPERTIES TIMEOUT 20)
 
+    # SDK 调用契约：宿主编译真实后端 + API stub，不链接/执行板端厂商库。
+    if(NOT CMAKE_CROSSCOMPILING)
+        add_executable(ZhulongRknnContractTests
+            tests/rknn_backend_contract_test.cpp
+            src/backends/rknn/rknn_inference_backend.cpp)
+        target_include_directories(ZhulongRknnContractTests PRIVATE src sdk/include vendor/rknpu2/include)
+        target_link_libraries(ZhulongRknnContractTests PRIVATE Threads::Threads)
+        add_test(NAME ZhulongRknnContract COMMAND ZhulongRknnContractTests)
+        set_tests_properties(ZhulongRknnContract PROPERTIES TIMEOUT 15)
+
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            add_executable(ZhulongRgaContractTests
+                tests/rga_backend_contract_test.cpp
+                src/backends/rga/rga_vision_backend.cpp
+                src/algorithm/runtime/cpu_vision_backend.cpp
+                src/algorithm/runtime/letterbox_geometry.cpp)
+            target_include_directories(ZhulongRgaContractTests PRIVATE src sdk/include vendor/rga/include)
+            target_link_libraries(ZhulongRgaContractTests PRIVATE Threads::Threads)
+            target_link_options(ZhulongRgaContractTests PRIVATE -Wl,--wrap=open -Wl,--wrap=fopen -Wl,--wrap=ioctl)
+            add_test(NAME ZhulongRgaContract COMMAND ZhulongRgaContractTests)
+            set_tests_properties(ZhulongRgaContract PROPERTIES TIMEOUT 15)
+        endif()
+    endif()
+
     # RKNN 后端测试：仅在推理后端为 rknn 时构建。
     # 交叉时只编译不注册 CTest（板端手动执行）；host/rknn 时注册。
     if(ZHULONG_INFERENCE_BACKEND STREQUAL "rknn")
@@ -909,6 +933,14 @@ if(BUILD_TESTING)
         target_compile_options(ZhulongOnnxTests PRIVATE $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-UNDEBUG>)
         target_link_libraries(ZhulongOnnxTests PRIVATE ZhulongAlgoRuntime ${ZHULONG_ONNX_ROOT}/lib/libonnxruntime.so Threads::Threads)
         if(NOT CMAKE_CROSSCOMPILING)
+            # 独立进程替换 operator new，避免 OOM 注入影响并发/真实模型回归。
+            add_executable(ZhulongOnnxLoadOomTests tests/onnx_load_oom_test.cpp)
+            target_include_directories(ZhulongOnnxLoadOomTests PRIVATE src)
+            target_link_libraries(ZhulongOnnxLoadOomTests PRIVATE ZhulongAlgoRuntime)
+            add_test(NAME ZhulongOnnxLoadOom COMMAND ZhulongOnnxLoadOomTests)
+            set_tests_properties(ZhulongOnnxLoadOom PROPERTIES
+                TIMEOUT 15
+                ENVIRONMENT "LD_LIBRARY_PATH=${ZHULONG_ONNX_ROOT}/lib:$ENV{LD_LIBRARY_PATH}")
             add_test(NAME ZhulongOnnxBackend COMMAND ZhulongOnnxTests)
             set_tests_properties(ZhulongOnnxBackend PROPERTIES
                 TIMEOUT 60

@@ -68,6 +68,7 @@ zhulong_status_t run_letterbox(zhulong::IVisionBackend& backend, const uint8_t* 
                                int target_height, zhulong::Tensor& output,
                                zhulong::LetterboxParams* output_params = nullptr) {
     zhulong_frame_view frame{};
+    frame.dma_buf_fd = -1;
     frame.width = width;
     frame.height = height;
     frame.format = format;
@@ -215,6 +216,7 @@ void case_formats() {
         std::vector<uint8_t> nv12(
             static_cast<size_t>(w) * h + static_cast<size_t>(w) * (h / 2) + 1, 128);
         zhulong_frame_view frame{};
+        frame.dma_buf_fd = -1;
         frame.width = w;
         frame.height = h;
         frame.format = ZHULONG_PIXEL_FORMAT_NV12;
@@ -248,6 +250,7 @@ void case_formats() {
             const int vstride = 80; // 80 > 64，对齐为 16 的倍数
             std::vector<uint8_t> nv12_vpad(static_cast<size_t>(w) * vstride + w * (h / 2), 128);
             zhulong_frame_view frame_vpad{};
+            frame_vpad.dma_buf_fd = -1;
             frame_vpad.width = w;
             frame_vpad.height = h;
             frame_vpad.format = ZHULONG_PIXEL_FORMAT_NV12;
@@ -269,6 +272,7 @@ void case_formats() {
         std::vector<uint8_t> yuv420p(
             static_cast<size_t>(w) * h + 2 * static_cast<size_t>(w / 2) * (h / 2) + 1, 128);
         zhulong_frame_view frame{};
+        frame.dma_buf_fd = -1;
         frame.width = w;
         frame.height = h;
         frame.format = ZHULONG_PIXEL_FORMAT_YUV420P;
@@ -495,6 +499,7 @@ void case_crop_scale() {
     const int src_w = 640, src_h = 480;
     const std::vector<uint8_t> source = make_image(src_w, src_h, 3);
     zhulong_frame_view frame{};
+    frame.dma_buf_fd = -1;
     frame.width = src_w;
     frame.height = src_h;
     frame.format = ZHULONG_PIXEL_FORMAT_RGB24;

@@ -51,12 +51,12 @@ OnnxSessionContext::~OnnxSessionContext() = default;
 std::shared_ptr<ModelAsset> OnnxInferenceBackend::load_model(const std::string& model_path_or_config) {
     // ⚠️ 每个失败出口都必须经 fail_load() 留下原因：本函数返回 shared_ptr，没有状态码通道，
     //    运行库也没有日志通道，last_load_status() 是唯一的诊断面。
-    const std::string basename = file_basename(model_path_or_config);
-    if (model_path_or_config.empty() || basename.empty()) {
-        return fail_load(ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT);
-    }
-
     try {
+        const std::string basename = file_basename(model_path_or_config);
+        if (model_path_or_config.empty() || basename.empty()) {
+            return fail_load(ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT);
+        }
+
         auto asset = std::make_shared<OnnxModelAsset>();
         asset->model_path = model_path_or_config;
         asset->config_json = model_path_or_config;

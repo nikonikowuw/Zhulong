@@ -20,6 +20,9 @@
 #include <cstdint>
 
 #if defined(__linux__)
+#include <cerrno>
+#include <chrono>
+#include <thread>
 #include <linux/ioctl.h>
 #include <sys/ioctl.h>
 
@@ -77,20 +80,21 @@ constexpr uint64_t kDmaSyncReadWrite = kDmaSyncRead | kDmaSyncWrite;
 class ScopedFdSync {
 public:
     ScopedFdSync(int fd, uint64_t flags) noexcept : fd_(fd), flags_(flags) {
-#if defined(__linux__)
         if (fd_ < 0) {
             return;
         }
-        struct dma_buf_sync sync{};
-        sync.flags = DMA_BUF_SYNC_START | flags_;
-        active_ = ::ioctl(fd_, DMA_BUF_IOCTL_SYNC, &sync) == 0;
+#if defined(__linux__)
+        active_ = request(DMA_BUF_SYNC_START | flags_);
 #else
-        (void)fd_;
-        (void)flags_;
+        active_ = true;
 #endif
     }
 
-    ~ScopedFdSync() { reset(); }
+    ~ScopedFdSync() {
+        if (active_) {
+            (void)finish();
+        }
+    }
 
     ScopedFdSync(const ScopedFdSync&) = delete;
     ScopedFdSync& operator=(const ScopedFdSync&) = delete;
@@ -99,18 +103,39 @@ public:
 
     [[nodiscard]] bool active() const noexcept { return active_; }
 
-private:
-    void reset() noexcept {
-#if defined(__linux__)
+    // 硬件提交前必须显式检查 END，不能只依赖无法报告失败的析构函数。
+    [[nodiscard]] bool finish() noexcept {
         if (!active_) {
-            return;
+            return fd_ < 0;
         }
-        struct dma_buf_sync sync{};
-        sync.flags = DMA_BUF_SYNC_END | flags_;
-        (void)::ioctl(fd_, DMA_BUF_IOCTL_SYNC, &sync);
         active_ = false;
+#if defined(__linux__)
+        return request(DMA_BUF_SYNC_END | flags_);
+#else
+        return true;
 #endif
     }
+
+private:
+#if defined(__linux__)
+    bool request(uint64_t flags) noexcept {
+        struct dma_buf_sync sync{};
+        sync.flags = flags;
+        constexpr int max_retries = 50;
+        for (int attempt = 0; ; ++attempt) {
+            if (::ioctl(fd_, DMA_BUF_IOCTL_SYNC, &sync) == 0) {
+                return true;
+            }
+            const int error = errno;
+            if ((error != EINTR && error != EAGAIN) || attempt == max_retries) {
+                return false;
+            }
+            if (error == EAGAIN) {
+                std::this_thread::sleep_for(std::chrono::microseconds{100});
+            }
+        }
+    }
+#endif
 
     int fd_{-1};
     uint64_t flags_{0};

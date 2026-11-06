@@ -33,6 +33,24 @@ namespace zhulong {
  */
 inline constexpr uint8_t letterbox_pad_value = 114;
 
+enum class LetterboxTargetAction { reuse, rebind_dma, allocate_cpu };
+
+// RGA 用同一份决策暂存更新，避免预校验失败时改变调用方的 Tensor 元数据/所有权。
+inline LetterboxTargetAction letterbox_target_action(const Tensor& dst,
+                                                     const std::vector<int64_t>& target_shape,
+                                                     std::size_t required_bytes) noexcept {
+    const bool dma_reusable = dst.dma_buf_fd() >= 0 && dst.raw_data() != nullptr &&
+                              dst.byte_size() >= required_bytes;
+    const bool shape_matches = dst.dtype() == DataType::UINT8 && dst.shape() == target_shape;
+    if (dma_reusable) {
+        return shape_matches ? LetterboxTargetAction::reuse : LetterboxTargetAction::rebind_dma;
+    }
+    if (dst.dma_buf_fd() < 0 && dst.raw_data() != nullptr && dst.byte_size() >= required_bytes && shape_matches) {
+        return LetterboxTargetAction::reuse;
+    }
+    return LetterboxTargetAction::allocate_cpu;
+}
+
 /**
  * @brief 按目标形状准备 dst 缓冲（能原地复用就不重新分配）
  *
@@ -50,18 +68,16 @@ inline constexpr uint8_t letterbox_pad_value = 114;
 inline zhulong_status_t prepare_letterbox_target(Tensor& dst,
                                                  const std::vector<int64_t>& target_shape,
                                                  std::size_t required_bytes) {
-    const bool dma_reusable = (dst.dma_buf_fd() >= 0 && dst.raw_data() != nullptr &&
-                               dst.byte_size() >= required_bytes);
-    const bool cpu_reusable = (dst.dma_buf_fd() < 0 && dst.byte_size() >= required_bytes &&
-                               dst.dtype() == DataType::UINT8 && dst.shape() == target_shape);
-
     try {
-        if (dma_reusable) {
-            if (dst.dtype() != DataType::UINT8 || dst.shape() != target_shape) {
+        switch (letterbox_target_action(dst, target_shape, required_bytes)) {
+            case LetterboxTargetAction::reuse:
+                break;
+            case LetterboxTargetAction::rebind_dma:
                 dst = Tensor::from_dma_buf(dst.dma_buf_fd(), target_shape, DataType::UINT8, dst.raw_data());
-            }
-        } else if (!cpu_reusable) {
-            dst = Tensor(target_shape, DataType::UINT8);
+                break;
+            case LetterboxTargetAction::allocate_cpu:
+                dst = Tensor(target_shape, DataType::UINT8);
+                break;
         }
     } catch (const std::bad_alloc&) {
         return ZHULONG_PLUGIN_ERR_OUT_OF_MEMORY;

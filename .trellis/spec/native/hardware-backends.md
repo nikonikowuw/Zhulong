@@ -96,10 +96,18 @@ if (rknn_init(&probe, path, 0, 0, nullptr) == RKNN_SUCC) {
 ### 2.5 数据传输与并发约束
 
 1. **输入缓冲要求 Packed**：`rknn_input` 无 stride 字段，传入内存必须紧凑排布。输入校验按元素总数 `inputs[i].element_count() == attr.n_elems` 比对，适配 UINT8 图像到 FP16 模型的内部自动转换。
-2. **输出 Float32 零拷贝直写 (`is_prealloc = 1`)**：设置 `want_float = 1` 与 `is_prealloc = 1`，输出前预分配目标 `Tensor` 并将 `raw_data()` 挂载给 `rknn_output.buf`，由底层 runtime 直接写出 float32，彻底消除中间临时堆分配（malloc/free）与 `memcpy` 拷贝开销。校验 `rknn_outputs[i].size == tensor.byte_size()` 防范 Stride 截断错位。
+2. **输出 Float32 预分配直写 (`is_prealloc = 1`)**：设置 `want_float = 1` 与 `is_prealloc = 1`，预分配 `Tensor` 并挂载 `raw_data()`，避免后端额外拷贝；这不证明 Runtime 内部无分配，也不代表 NPU 原生 float32 执行。分配前校验 `n_elems * sizeof(float) <= UINT32_MAX`；输出后校验 `rknn_outputs[i].size == tensor.byte_size()`。
 3. **输出资源释放 Guard**：`rknn_outputs_release` 必须由 RAII guard 管理；当 `is_prealloc = 1` 时只释放底层句柄，不释放外部 Tensor 缓冲区。
 4. **单核 NPU 特性**：RK3568 为单核 NPU，增加 Worker 数仅能重叠前后处理时间，不能提升纯 NPU 推理并行度；严禁开启未经充分验证的 `RKNN_FLAG_ASYNC_MASK`。
 5. **C++ 资源规范 (Rule of 5)**：`RknnModelAsset` 与 `RknnSessionContext` 显式禁用拷贝构造函数与拷贝赋值运算符，杜绝底层 `rknn_context` 双重释放。
+6. **SDK 窄化门禁**：输入的每个维度与 `byte_size()` 必须在转换为 `uint32_t` **之前**验证；超出 `UINT32_MAX` 返回 `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`，不调用 shape/注册/输入/运行 API。即使元素数匹配，FLOAT32 的字节倍率仍可能越界。
+
+### 2.6 动态 shape 与失败元数据（会话级事务）
+
+- shape 切换时用 `rknn_set_input_shapes`，随后同时查询 `RKNN_QUERY_CURRENT_INPUT_ATTR` 与 `RKNN_QUERY_CURRENT_OUTPUT_ATTR`。`current_input_attrs/current_output_attrs/current_input_shapes` 归 Worker 会话所有，**不修改共享 `RknnModelAsset`**。
+- 调用 shape API 前将 `shapes_set = false`；成功切换后立即释放旧 DMA 注册，再查询候选属性。只有输入、输出属性全部合法才提交候选并置 `shapes_set = true`。查询失败后请求旧 shape，也必须重新配置，不能命中已失效的旧缓存。
+- SDK 返回 `RKNN_SUCC` 不代表属性合法：rank 必须在 `1..RKNN_MAX_DIMS`，每个维度、`n_elems`、`size` 非零，维度乘积无 uint32 溢出且等于 `n_elems`。非法属性返回 `ZHULONG_PLUGIN_ERR_INTERNAL`，**不得**把查询返回的 0 再映射为 `OK`。
+- 任一 `forward` 失败（包括空会话）清空 `outputs`；不得运行使用部分刷新/加载期尺寸的 DMA 绑定。
 
 ---
 
@@ -141,13 +149,23 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
      RGA 与 CPU 下得到不同的缓冲区所有权语义。
 6. ⚠️ **先预校验、再动调用方的缓冲区**：`imcheck_t` 通过之前不得执行 O(N) 的补边 `memset`
    （见第 2 条的两阶段 `check` / `run` 拆分）。预先 memset 会让「注定回退 CPU」的帧白付
-   一次全图写入，并在失败后给调用方留下「新张量 + 已 memset」的半成品状态。
+   一次全图写入，并在失败后给调用方留下半成品。需要重建/重绑的目标由局部候选暂存，
+   只有硬件成功或 CPU 回退成功后才提交 Tensor 元数据与几何；已匹配的热路径目标仍原地复用，不复制像素。
 7. ⚠️ **`target_width/height <= 0` 必须与 CPU 同口径拒绝**：`LetterboxParams` 自带 640 默认值，
    后端**不得**再兜一次——那会产出 640×640 张量却不回写 `target_*`，让后处理按 0 反算坐标
    （静默错结果，板端整机测试也看不见）。
 8. **降级必须可观测**：运行库刻意不链接 `ZhulongLog`（见 `native/CMakeLists.txt`），因此
    RGA 后端以 `last_error()`（`zhulong_status_t`，原子）暴露「最近一次 RGA 尝试为何失败」，
    与 `fallback_count()`（降级次数）互补。`map_rga_status()` 是唯一映射口径，不得只在测试里用。
+   `letterbox/resize/crop_scale` 的 RGA 成功均复位为 `OK`；CPU 回退成功保留 RGA 失败原因。
+   头/设备/偏移探测失败记录 `NOT_SUPPORTED`（头检查错误按映射表）；debugfs 行对齐兜底的事实在首次 RGA 成功之前仍可见。
+9. **DMA 补边 CPU 同步**：`imcheck_t` 通过后，对目标借用 fd 用 `platform::ScopedFdSync(fd, kDmaSyncWrite)`：
+   `START | WRITE → memset → finish() (END | WRITE) 成功 → improcess(IM_SYNC)`。
+   `IM_SYNC` 只代表硬件任务同步，不替代 CPU cache 写回。START/END 失败返回
+   `ZHULONG_PLUGIN_ERR_INVALID_STATE`，**不下发硬件、不在同一缓冲上继续 CPU 回退**。
+   CPU letterbox 回退也须包住 DMA 源 READ 与 DMA 目标 WRITE，END 全部成功才提交结果。
+   fd 由调用方拥有，守卫不 close；`EINTR/EAGAIN` 最多重试 50 次（EAGAIN 每次退避 100µs）。
+   **END 失败可能留下已写的脏像素**；元数据未提交不等于字节回滚，调用方必须停止消费并恢复/丢弃该缓冲。
 
 ---
 
@@ -208,18 +226,40 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
 - 目标输出 `Tensor` 同理支持通过 `tensor.dma_buf_fd()` 直接进行 `wrapbuffer_fd`。
 - **混合模式保护**：当 `dma_buf_fd < 0` 时，透明安全回退至已有的 `wrapbuffer_virtualaddr` 虚拟地址通路。
 
-### 4.3 RKNPU2 零拷贝张量绑定 (`rknn_create_mem_from_fd`)
+### 4.3 RKNPU2 DMA 张量注册与绑定 (`rknn_create_mem_from_fd`)
 
-- **全量 DMA-BUF 门禁（防混用冲突）**：
-  Rockchip RKNPU2 底层驱动严禁同一 Context 混用常规拷贝 `rknn_inputs_set` 与零拷贝 `rknn_set_io_mem`。输入张量若存在部分提供 DMA-BUF 部分为 Host 内存，严格拦截并返回 `ZHULONG_STATUS_INVALID_ARGUMENT`；当从 DMA 模式切回 Host 模式时，主动清理会话缓存中残留的 `rknn_tensor_mem`。
-- **两阶段事务提交缓存机制**：
-  会话中缓存已注册的 `CachedDmaMem`。当检测到 fd/va/size 变动时：
-  1. 先校验尺寸（`in_size >= attr.size`）。⚠️ 校验必须在动旧绑定**之前**，否则一个非法输入就会把上一帧仍有效的注册拆掉；
-  2. 调用 `rknn_create_mem_from_fd` 创建新句柄，并立即移交 `RknnTensorMemPtr`（带上下文的自定义 deleter，析构即 `rknn_destroy_mem`）；
-  3. 配置 `io_attr`（类型一致时设置 `pass_through = 1`）并执行 `rknn_set_io_mem`；
-  4. ⚠️ **失败事务回滚**：若 `rknn_set_io_mem` 失败，新句柄由 RAII 立即销毁且不更新缓存元数据，杜绝下帧幽灵缓存命中跳过绑定；只有绑定成功才 `commit()`（旧句柄在提交时释放，不在事务开头释放）。
-  - ⚠️ **不要手工 `reset(context)`**：外部注册句柄必须由创立它的上下文释放，靠调用点传参只能靠人保证；`RknnSessionContext` 析构时 `cached_input_mems.clear()` 就是全部释放。
-- **软硬件自动降级**：当所有输入张量均为常规 CPU 虚拟内存时，后端自动采用标准的 `rknn_inputs_set` 内存拷贝流程。
+- **作用域与签名**：仅修改私有后端，不改公开 C ABI 或 HAL 虚表。
+  `RknnInferenceBackend::forward(SessionContext*, const std::vector<Tensor>&, std::vector<Tensor>&)`
+  仍返回 `zhulong_status_t`。Tensor 是 packed 视图，**没有独立的物理 stride/容量描述**。
+- **全量 DMA 门禁**：单次输入必须全 DMA 或全 Host，混合返回 `ZHULONG_PLUGIN_ERR_INVALID_ARGUMENT`。
+  切回 Host 时释放会话 DMA 注册；普通 Host 仍走 `rknn_inputs_set`，不会因模型原生 padding 而拒绝 packed Host 输入。
+- **布局与容量契约**：DMA 的 rank/dims 必须与会话当前输入属性逐维一致，fmt 只能为 NCHW/NHWC；
+  `size_with_stride == size > 0`，`w_stride` 为 0（厂商头定义为逻辑宽度）或逻辑宽度，
+  `h_stride` 为 0 或逻辑高度；非 4D 只接受两者为 0。任何不能表达的 padding/native layout 先拒绝，
+  不能只比较元素数或 `attr.size`。导入的 `byte_size()` 还必须覆盖 `size_with_stride` 且不超过 `UINT32_MAX`。
+- **转换契约**：Host 与 DMA 均设置 `pass_through = 0`，保留 Runtime 按 type/fmt 转换的行为。
+  **错误**：`io_attr.pass_through = (io_attr.type == attr.type)`；
+  **正确**：先验证布局/容量，再 `io_attr.pass_through = 0`。
+  dtype 相等不证明 native layout、转换侧归一化或量化可跳过。此路径不承诺端到端零拷贝；
+  模型转换配置/实际量化类型仍需模型证据与板端数值回归确认。
+- **注册缓存与绑定缓存分开**：fd/va/size 相同可复用 `rknn_tensor_mem`，但 dtype 不同必须重新
+  `rknn_set_io_mem`，**不重复注册同一内存**。注册变化先创建候选 `RknnTensorMemPtr`，只有绑定成功
+  才提交内存凭据/dtype；失败回收新注册，保留旧凭据。shape 切换则按 §2.6 清空注册。
+  注册句柄由会话释放，外部 DMA fd 与映射由调用方拥有；会话析构先释放注册，再销毁 context。
+
+| 情况（Good/Base/Bad） | 返回 | 必须断言的边界 |
+| --- | --- | --- |
+| packed 当前 shape、容量足够（Good） | `OK` | `pass_through=0`；绑定当前属性，不读加载期属性 |
+| 普通 Host + 带 padding 的模型（Base） | `OK` | 仍走 `rknn_inputs_set` 转换 |
+| DMA shape/layout/stride 无法证明 packed（Bad） | `NOT_SUPPORTED` | 不调用 import/bind/run |
+| packed DMA 字节数不足 / 超 uint32（Bad） | `INVALID_ARGUMENT` | 不窄化、不导入、不运行 |
+| 当前属性查询成功但元数据非法（Bad） | `INTERNAL` | 清空输出，shape 缓存失效，重试旧 shape 也重新配置 |
+| 实际 SDK 查询/绑定失败 | 按错误映射 | 不提交缓存；候选注册被释放 |
+
+**必需回归**：`native/tests/rknn_backend_contract_test.cpp`（真实后端 + 宿主 API stub）覆盖
+stride>width、缺失 stride-aware 容量、同元素数不同 dims、dtype 失效/失败重试、动态大→小→大与双 Worker 隔离、
+非法输入/输出属性、`UINT32_MAX` 及匹配 shape 的字节倍率越界、输出 float32 容量越界与资源释放。
+这些测试只证明参数与控制流，不替代真实 Runtime、驱动与模型布局/精度验收。
 
 ---
 
@@ -334,6 +374,8 @@ RGA 后端启动时必须执行硬件能力自适应探测，**严禁硬编码�
      `OnnxInferenceBackend::last_load_status()`（非虚、原子）留下映射后的状态：模型不存在
      （`NOT_FOUND`）与 protobuf 损坏（`INVALID_ARGUMENT`）必须可区分，否则上面这张映射表
      在加载路径上就是死代码。成功加载会把状态复位为 `OK`。
+   - basename/path 等可能分配的操作必须放在 `load_model` 的 try 内；`file_basename` 的 `bad_alloc`
+     也走 `fail_load(OUT_OF_MEMORY)`。独立 `onnx_load_oom_test.cpp` 通过一次分配故障验证不逃逸，不向产品添加注入开关。
    - `forward` 的失败仍走返回值；深层的 `std::invalid_argument`（如张量 dtype 不匹配）归 `INTERNAL`。
 
 ### 6.4 跨后端算法包模型适配与单测 Mock 委派
@@ -464,7 +506,18 @@ cmake --build build/native/host-address --parallel 8 --target ZhulongOnnxTests Z
 ctest --test-dir build/native/host-address -R "ZhulongOnnx|ZhulongFaceRecognitionOnnx" -V
 
 # 4. 运行本地默认 CPU 与 DMA-BUF / IPC SCM_RIGHTS 全量回归单元测试
+#    含 RKNN API stub + Linux RGA/UAPI stub（不链接厂商库），以及 ONNX basename OOM。
 python3 native/scripts/build.py test
+
+# 4.0 后端安全契约定向测试与 ASan/UBSan（先通过 wrapper configure/build）
+ctest --test-dir build/native/host -R 'Zhulong(RknnContract|RgaContract|OnnxLoadOom)' --output-on-failure
+python3 native/scripts/build.py --inference-backend onnx --sanitizer address configure
+cmake --build build/native/host-address --parallel 8 --target ZhulongRknnContractTests ZhulongRgaContractTests ZhulongOnnxLoadOomTests
+ctest --test-dir build/native/host-address -R 'Zhulong(RknnContract|RgaContract|OnnxLoadOom)' --output-on-failure
+
+# RGA 断言：失败→成功状态复位、预校验失败不提交 Tensor、WRITE START→padding→END→RGA、
+# START/END 失败不提交硬件/不继续 CPU 回退、CPU letterbox 回退 READ/WRITE 括号、借用 fd 不关闭。
+# RGA stub 使用 GNU/Linux 链接器 --wrap；交叉档位只编译真实板端测试，不构建/执行宿主 stub。
 
 # 4.1 ⚠️ Go 测试缓存不感知运行期 dlopen 的算法插件
 #     `libFaceRecognitionPlugin.so` 既不在 Go 构建输入里，也不进 CGO_LDFLAGS 的内容哈希，

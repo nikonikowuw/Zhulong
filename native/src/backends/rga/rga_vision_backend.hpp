@@ -3,8 +3,8 @@
  * @brief RGA 硬件视觉前处理后端（组合 CPU 实现，任一前置条件不满足时透明回退）
  *
  * 核心设计原则（对应 prd R1–R9 与 design §5/§7）：
- * 1. **组合而非继承** CPU 实现：任一 RGA 前置条件不满足时**透明回退**到 CPU，
- *    调用方只看到成功结果。回退是常态路径，不是异常路径。
+ * 1. **组合而非继承** CPU 实现：RGA 前置条件不满足时透明回退 CPU。
+ *    CPU 也不支持的输入仍返回错误；DMA CPU 同步失败必须直接失败，不继续访问或提交。
  * 2. **对齐值运行期探测**，绝不硬编码真值：硬编码 4 会在 RGA3（RK3576/RK3588
  *    的 16）上白跑一次注定被 imcheck_t 拒掉的尝试；硬编码 16 会浪费 RGA2 带宽。
  *    debugfs 不可读时回退到平台基准值（4，见 hardware-backends.md §3.1）——那是
@@ -170,7 +170,7 @@ private:
 
     // 三个 try_* 的返回语义：OK = RGA 已完成；INVALID_ARGUMENT = 入参非法；
     // OUT_OF_MEMORY = 目标缓冲分配失败；NOT_SUPPORTED = 前置条件不满足；
-    // 其余 = imcheck_t / improcess 映射后的错误码。非 OK 一律由调用方回退 CPU。
+    // INVALID_STATE = DMA CPU 同步失败，必须停止；其余 = imcheck_t / improcess 映射，允许 CPU 回退。
     zhulong_status_t try_rga_letterbox(const zhulong_frame_view& src, Tensor& dst, LetterboxParams& inout_params);
     zhulong_status_t try_rga_resize(const uint8_t* src, int src_w, int src_h, int src_stride,
                                     zhulong_pixel_format_t src_format, uint8_t* dst, int dst_stride,
