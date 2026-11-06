@@ -1,53 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import { UTF8_BOM } from '@/lib/csv'
 import { type Alarm, type Capture, type Recognition } from '../data/schema'
 import {
-  escapeCsvField,
   exportAlarmsCsv,
   exportCapturesCsv,
   exportRecognitionsCsv,
   exportRecordsToCsv,
-  UTF8_BOM,
 } from './export-csv'
 
 describe('export-csv', () => {
-  describe('escapeCsvField', () => {
-    it('escapes empty or null values', () => {
-      expect(escapeCsvField(null)).toBe('')
-      expect(escapeCsvField(undefined)).toBe('')
-      expect(escapeCsvField('')).toBe('')
-    })
-
-    it('returns raw string when no special characters exist', () => {
-      expect(escapeCsvField('hello_world')).toBe('hello_world')
-      expect(escapeCsvField(12345)).toBe('12345')
-    })
-
-    it('wraps and escapes quotes, commas, and newlines', () => {
-      expect(escapeCsvField('hello,world')).toBe('"hello,world"')
-      expect(escapeCsvField('quote "test"')).toBe('"quote ""test"""')
-      expect(escapeCsvField('multi\nline')).toBe('"multi\nline"')
-      expect(escapeCsvField('multi\r\nline')).toBe('"multi\r\nline"')
-    })
-
-    it('stringifies objects', () => {
-      expect(escapeCsvField({ a: 1, b: 'two' })).toBe(
-        '"{""a"":1,""b"":""two""}"'
-      )
-    })
-
-    it('neutralises spreadsheet formula injection', () => {
-      expect(escapeCsvField('=1+1')).toBe("'=1+1")
-      expect(escapeCsvField('@SUM(A1)')).toBe("'@SUM(A1)")
-      expect(escapeCsvField('+8613800000000')).toBe("'+8613800000000")
-      expect(escapeCsvField('-12:30')).toBe("'-12:30")
-    })
-
-    it('never prefixes plain numbers (would turn them into text)', () => {
-      expect(escapeCsvField(-0.5)).toBe('-0.5')
-      expect(escapeCsvField(-12345)).toBe('-12345')
-    })
-  })
-
   describe('exportRecognitionsCsv', () => {
     const mockRecognition: Recognition = {
       id: '01JH0000000000000000000001',

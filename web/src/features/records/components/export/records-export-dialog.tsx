@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { triggerDownload } from '@/lib/csv'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -34,7 +35,6 @@ import {
   HARD_MAX_IMAGES,
   type ExportLabels,
   type ExportProgress,
-  triggerDownload,
 } from '../../lib/export-zip-pipeline'
 
 export interface RecordsExportDialogProps {

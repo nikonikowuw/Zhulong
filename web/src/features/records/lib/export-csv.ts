@@ -1,4 +1,4 @@
-import { format } from 'date-fns'
+import { formatLocalDateTime, toCsv } from '@/lib/csv'
 import { cameraLabel, type CameraNameLookup } from '../data/camera-label'
 import {
   type Alarm,
@@ -8,41 +8,6 @@ import {
   type RecordsTab,
 } from '../data/schema'
 
-/**
- * UTF-8 BOM 字符，用于解决 Windows Excel 打开 CSV 时的中文乱码问题。
- */
-export const UTF8_BOM = '\uFEFF'
-
-/**
- * Excel / WPS 会把以这些字符开头的单元格当公式求值（CSV 注入）。
- * 人员姓名、摄像机名、`attributes` 都可能来自外部上报，必须防御。
- */
-const FORMULA_PREFIX = /^[=+\-@\t\r]/
-
-/**
- * 根据 RFC 4180 标准转义 CSV 单元格内容，并阻断公式注入。
- *
- * 数值类型不做前缀防护：`-0.5` 只是负数，Excel 不会把它当公式；
- * 加了 `'` 反而会把数字变成文本，破坏业务系统对账。
- */
-export function escapeCsvField(value: unknown): string {
-  if (value === null || value === undefined) {
-    return ''
-  }
-  const raw = typeof value === 'object' ? JSON.stringify(value) : String(value)
-  const guarded =
-    typeof value !== 'number' && FORMULA_PREFIX.test(raw) ? `'${raw}` : raw
-  if (
-    guarded.includes(',') ||
-    guarded.includes('"') ||
-    guarded.includes('\n') ||
-    guarded.includes('\r')
-  ) {
-    return `"${guarded.replace(/"/g, '""')}"`
-  }
-  return guarded
-}
-
 export type CameraNameResolver = CameraNameLookup
 
 /**
@@ -51,12 +16,11 @@ export type CameraNameResolver = CameraNameLookup
  * 规范要求「接口传输 UTC、展示用本地时区」。CSV 是交付给人的报表，
  * 属于展示侧；如果只写 `toISOString()`，国内部署下每一行都比页面上
  * 早 8 小时，对账时一定会被当成 bug 报回来。
+ *
+ * 格式化实现收敛在 `@/lib/csv`，audit 导出与这里共用同一份时区口径。
  */
 function formatLocalTime(isoStr?: string): string {
-  if (!isoStr) return ''
-  const d = new Date(isoStr)
-  if (Number.isNaN(d.getTime())) return isoStr
-  return format(d, 'yyyy-MM-dd HH:mm:ss')
+  return isoStr ? formatLocalDateTime(isoStr) : ''
 }
 
 /**
@@ -215,15 +179,6 @@ export function exportCapturesCsv(
   ])
 
   return toCsv(headers, rows)
-}
-
-function toCsv(headers: string[], rows: unknown[][]): string {
-  const csvContent = [
-    headers.map(escapeCsvField).join(','),
-    ...rows.map((row) => row.map(escapeCsvField).join(',')),
-  ].join('\r\n')
-
-  return `${UTF8_BOM}${csvContent}`
 }
 
 /**

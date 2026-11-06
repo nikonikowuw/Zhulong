@@ -355,23 +355,6 @@ function reportFileName(tab: RecordsTab): string {
   return `${tab}${REPORT_KEY_SUFFIX}`
 }
 
-/**
- * 触发浏览器动态下载。
- *
- * 撤销太早会让部分浏览器（Safari/Firefox 对大 Blob 尤其明显）在下载
- * 真正启动前就把 URL 吊销掉，留下一个失败项。
- */
-export function triggerDownload(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  setTimeout(() => URL.revokeObjectURL(url), 10_000)
-}
-
 function defaultSceneLabel(ctx: OverlayLabelContext): string {
   const pct = ((ctx.similarity ?? ctx.score ?? 0) * 100).toFixed(0)
   if (ctx.tab === 'recognitions') {
