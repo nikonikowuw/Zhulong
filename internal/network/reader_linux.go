@@ -10,7 +10,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 // virtualInterfacePrefixes lists interface name prefixes that never represent physical hardware.
@@ -45,12 +48,26 @@ func readPhysicalInterfaces(ctx context.Context) ([]InterfaceInfo, error) {
 		if _, err := os.Stat(devicePath); err != nil {
 			continue
 		}
+		if !isEthernetLikeInterface(filepath.Join("/sys/class/net", name)) {
+			continue
+		}
 
 		route := defaultRoutes[name]
 		result = append(result, readLinuxInterface(name, route.gateway, route.isDefaultGW, dnsServers))
 	}
 
 	return result, nil
+}
+
+// isEthernetLikeInterface limits IP configuration to Ethernet-type links, including Wi-Fi.
+func isEthernetLikeInterface(interfacePath string) bool {
+	typeBytes, err := os.ReadFile(filepath.Join(interfacePath, "type"))
+	if err != nil {
+		return false
+	}
+
+	linkType, err := strconv.Atoi(strings.TrimSpace(string(typeBytes)))
+	return err == nil && linkType == unix.ARPHRD_ETHER
 }
 
 // readLinuxInterface collects the runtime state of a single physical interface.
