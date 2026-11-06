@@ -8,11 +8,11 @@ import { Main } from '@/components/layout/main'
 import { ProfileDropdown } from '@/components/profile-dropdown'
 import { Search } from '@/components/search'
 import { ThemeSwitch } from '@/components/theme-switch'
-import { AuditClearDialog } from './components/AuditClearDialog'
 import { AuditDetailDialog } from './components/AuditDetailDialog'
 import { AuditPrimaryButtons } from './components/AuditPrimaryButtons'
 import { AuditProvider } from './components/AuditProvider'
 import { AuditTable } from './components/AuditTable'
+import { type GetAuditLogsParams } from './data/schema'
 import {
   computeRangeFromPreset,
   type AuditDateRange,
@@ -62,14 +62,19 @@ function AuditContent() {
     })
   }
 
-  const { data, isLoading, isFetching, isError, refetch } = useAuditLogs({
+  // 列表与导出共用同一份归一化筛选条件：路由 search 里 action/status 可能是数组，
+  // 而 api 层只收单个 action + actions[]。
+  const listParams: GetAuditLogsParams = {
     page,
     pageSize,
     actions: actions.length > 0 ? actions : undefined,
     status,
     startTime: effectiveRange.startTime,
     endTime: effectiveRange.endTime,
-  })
+  }
+
+  const { data, isLoading, isFetching, isError, refetch } =
+    useAuditLogs(listParams)
 
   const handleRefresh = () => {
     if (preset) {
@@ -109,6 +114,7 @@ function AuditContent() {
           <AuditPrimaryButtons
             onRefresh={handleRefresh}
             isRefreshing={isFetching}
+            filter={listParams}
           />
         </div>
 
@@ -130,7 +136,6 @@ function AuditContent() {
 
       {/* 弹窗与抽屉容器 */}
       <AuditDetailDialog />
-      <AuditClearDialog />
     </>
   )
 }

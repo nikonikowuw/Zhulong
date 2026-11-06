@@ -33,10 +33,6 @@ export interface GetAuditLogsParams {
   endTime?: string
 }
 
-export interface ClearAuditLogsParams {
-  before?: string
-}
-
 const statusFilterSchema = z.enum(['success', 'failed'])
 const timeSearchSchema = z.iso.datetime({ offset: true })
 

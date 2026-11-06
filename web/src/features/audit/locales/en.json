@@ -17,6 +17,9 @@
     "error": "Failed to load audit logs",
     "retry": "Retry"
   },
+  "csv": {
+    "detailColumn": "Details"
+  },
   "status": {
     "all": "All Statuses",
     "success": "Success",
@@ -83,7 +86,7 @@
   },
   "actions": {
     "viewDetail": "View Details",
-    "clearLogs": "Clear Logs",
+    "exportLogs": "Export Logs",
     "refresh": "Refresh",
     "copyJson": "Copy JSON",
     "copied": "Copied to clipboard",
@@ -122,24 +125,18 @@
   "dialog": {
     "detailTitle": "Audit Log Details",
     "detailDesc": "Inspect full request context, modified parameters, and execution state.",
-    "clearTitle": "Clear Audit Logs",
-    "clearDesc": "This action permanently deletes historical audit logs within the selected scope from the database. This action cannot be undone.",
-    "clearRange": "Scope",
-    "clearAll": "Delete all audit logs",
-    "clearOlderThan7Days": "Delete logs older than 7 days",
-    "clearOlderThan30Days": "Delete logs older than 30 days",
-    "confirmClear": "Permanently Delete",
-    "cancel": "Cancel",
     "errorMsgTitle": "Error Details",
     "detailPayload": "Payload / Parameters (Detail)",
     "noDetail": "No additional details available"
   },
   "toast": {
-    "clearSuccess": "Successfully cleared {{count}} audit log record(s)",
-    "clearFailed": "Failed to clear audit logs: {{error}}",
+    "exportSuccess": "Successfully exported {{count}} audit log record(s)",
+    "exportFailed": "Failed to export audit logs: {{error}}",
+    "exportEmpty": "No audit logs found to export",
     "copySuccess": "Detail copied to clipboard",
     "copyFailed": "Failed to copy to clipboard",
     "copyTargetSuccess": "Target copied to clipboard",
-    "copyIpSuccess": "IP address copied to clipboard"
+    "copyIpSuccess": "IP address copied to clipboard",
+    "exportTruncated": "Too many records; exported the newest {{count}} of {{total}}"
   }
 }

@@ -113,30 +113,4 @@ describe('auditApi', () => {
 
     await expect(auditApi.getAuditLogs()).rejects.toThrow()
   })
-
-  it('rejects malformed clear responses', async () => {
-    vi.spyOn(apiClient, 'delete').mockResolvedValueOnce(
-      mockResponse({ cleared: 'many' })
-    )
-
-    await expect(auditApi.clearAuditLogs()).rejects.toThrow()
-  })
-
-  it('clearAuditLogs sends DELETE to /audit/logs with optional before parameter', async () => {
-    const mockCleared = { cleared: 42 }
-    const spy = vi
-      .spyOn(apiClient, 'delete')
-      .mockResolvedValueOnce(mockResponse(mockCleared))
-
-    const res = await auditApi.clearAuditLogs({
-      before: '2026-10-01T00:00:00Z',
-    })
-
-    expect(res).toEqual(mockCleared)
-    expect(spy).toHaveBeenCalledWith('/audit/logs', {
-      params: {
-        before: '2026-10-01T00:00:00Z',
-      },
-    })
-  })
 })

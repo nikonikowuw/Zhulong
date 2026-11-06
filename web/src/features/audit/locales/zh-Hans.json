@@ -17,6 +17,9 @@
     "error": "加载审计日志失败",
     "retry": "重新加载"
   },
+  "csv": {
+    "detailColumn": "详情"
+  },
   "status": {
     "all": "全部状态",
     "success": "成功",
@@ -83,7 +86,7 @@
   },
   "actions": {
     "viewDetail": "查看明细",
-    "clearLogs": "清理日志",
+    "exportLogs": "导出日志",
     "refresh": "刷新",
     "copyJson": "复制 JSON",
     "copied": "已复制到剪贴板",
@@ -122,24 +125,18 @@
   "dialog": {
     "detailTitle": "审计日志明细",
     "detailDesc": "查看当前事件的完整请求上下文与变更明细。",
-    "clearTitle": "清理审计日志",
-    "clearDesc": "此操作将从数据库中永久移除选定范围内的历史审计记录，无法撤销。请谨慎操作。",
-    "clearRange": "清理范围",
-    "clearAll": "清空全部日志",
-    "clearOlderThan7Days": "清理 7 天前的历史日志",
-    "clearOlderThan30Days": "清理 30 天前的历史日志",
-    "confirmClear": "确认永久删除",
-    "cancel": "取消",
     "errorMsgTitle": "执行失败异常摘要",
     "detailPayload": "操作变更上下文 (Detail)",
     "noDetail": "无额外明细数据"
   },
   "toast": {
-    "clearSuccess": "已成功清理 {{count}} 条历史审计记录",
-    "clearFailed": "清理审计日志失败: {{error}}",
+    "exportSuccess": "已成功导出 {{count}} 条审计记录",
+    "exportFailed": "导出审计日志失败: {{error}}",
+    "exportEmpty": "当前筛选条件下无审计记录可导出",
     "copySuccess": "详情内容已复制到剪贴板",
     "copyFailed": "复制到剪贴板失败",
     "copyTargetSuccess": "目标已复制到剪贴板",
-    "copyIpSuccess": "IP 地址已复制到剪贴板"
+    "copyIpSuccess": "IP 地址已复制到剪贴板",
+    "exportTruncated": "记录过多，仅导出最新 {{count}} / {{total}} 条"
   }
 }

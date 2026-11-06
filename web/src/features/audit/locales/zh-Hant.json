@@ -17,6 +17,9 @@
     "error": "載入稽核日誌失敗",
     "retry": "重新載入"
   },
+  "csv": {
+    "detailColumn": "明細"
+  },
   "status": {
     "all": "全部狀態",
     "success": "成功",
@@ -83,7 +86,7 @@
   },
   "actions": {
     "viewDetail": "查看明細",
-    "clearLogs": "清理日誌",
+    "exportLogs": "匯出日誌",
     "refresh": "重新整理",
     "copyJson": "複製 JSON",
     "copied": "已複製到剪貼簿",
@@ -122,24 +125,18 @@
   "dialog": {
     "detailTitle": "稽核日誌明細",
     "detailDesc": "查看當前事件的完整請求上下文與變更明細。",
-    "clearTitle": "清理稽核日誌",
-    "clearDesc": "此操作將從資料庫中永久移除選定範圍內的歷史稽核記錄，無法撤銷。請謹慎操作。",
-    "clearRange": "清理範圍",
-    "clearAll": "清空全部日誌",
-    "clearOlderThan7Days": "清理 7 天前的歷史日誌",
-    "clearOlderThan30Days": "清理 30 天前的歷史日誌",
-    "confirmClear": "確認永久刪除",
-    "cancel": "取消",
     "errorMsgTitle": "執行失敗異常摘要",
     "detailPayload": "操作變更上下文 (Detail)",
     "noDetail": "無額外明細數據"
   },
   "toast": {
-    "clearSuccess": "已成功清理 {{count}} 條歷史稽核記錄",
-    "clearFailed": "清理稽核日誌失敗: {{error}}",
+    "exportSuccess": "已成功匯出 {{count}} 筆審計記錄",
+    "exportFailed": "匯出審計日誌失敗: {{error}}",
+    "exportEmpty": "目前篩選條件下無審計記錄可匯出",
     "copySuccess": "明細內容已複製到剪貼簿",
     "copyFailed": "複製到剪貼簿失敗",
     "copyTargetSuccess": "目標已複製到剪貼簿",
-    "copyIpSuccess": "IP 位址已複製到剪貼簿"
+    "copyIpSuccess": "IP 位址已複製到剪貼簿",
+    "exportTruncated": "記錄過多，僅匯出最新 {{count}} / {{total}} 筆"
   }
 }
