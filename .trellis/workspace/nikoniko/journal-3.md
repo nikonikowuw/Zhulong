@@ -76,3 +76,30 @@ Implemented the storage emergency self-heal fix: used/(used+free) usage accounti
 ### Status
 
 [OK] **Completed**
+
+
+## Session 98: Finish alert-push task
+<!-- trellis-session: v=2 fp=8c1e0427cfd107c6 -->
+
+**Date**: 2026-11-06
+**Task**: Finish alert-push task
+**Package**: backend
+**Branch**: `dev`
+
+### Summary
+
+归档告警上报模块与多通道分发任务；保留进行中的 crop-region 任务。未提交的 .trellis/.template-hashes.json 与本次归档无关，未改动。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `36a936a` | feat(alertpush): add multi-channel event dispatch with host identity |
+| `1501b46` | feat(web/settings): expose api-tokens and alert-push in sidebar and polish system status ui |
+| `e1968bc` | fix(web/settings): let token and alert-push pages fill the settings pane |
+| `464baa0` | refactor(web/alert-push): streamline destination dialog with single-flow progressive disclosure |
+| `c474103` | refactor(alert-push): optimize render performance and enhance type safety |
+
+### Status
+
+[OK] **Completed**
