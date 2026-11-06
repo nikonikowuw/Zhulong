@@ -105,6 +105,19 @@ func TestFaceFeatureExtractorAdapter_MapsInputFailuresToDomainSentinels(t *testi
 		}
 	})
 
+	t.Run("multiple faces map to ErrMultipleFaces", func(t *testing.T) {
+		// 合影不是「照片坏了」也不是「服务坏了」：它是必须退回人工复核的输入裁决，
+		// 所以既不能落到 ErrInternal（500），也不能落到 ErrUnsupportedImageFormat。
+		adapter := newStubAdapter(t, `{"status":"failed","code":"MULTIPLE_FACES"}`)
+		_, err := adapter.ExtractFaceFeature(ctx, blackPNG(t))
+		if !errors.Is(err, person.ErrMultipleFaces) {
+			t.Fatalf("want person.ErrMultipleFaces, got %v", err)
+		}
+		if errors.Is(err, person.ErrNoFaceDetected) || errors.Is(err, person.ErrUnsupportedImageFormat) {
+			t.Fatalf("a group photo must not be reported as an input-format problem, got %v", err)
+		}
+	})
+
 	t.Run("provider incapable of extraction stays a server error", func(t *testing.T) {
 		adapter := newStubAdapter(t, `{"status":"failed","code":"UNSUPPORTED"}`)
 		_, err := adapter.ExtractFaceFeature(ctx, blackPNG(t))

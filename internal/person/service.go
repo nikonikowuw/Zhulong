@@ -68,6 +68,13 @@ var allowedFaceImageExts = map[string]struct{}{
 // can answer 422 instead of reporting an infrastructure failure as a bad photo.
 var ErrNoFaceDetected = errors.New("no face detected in image")
 
+// ErrMultipleFaces is the sentinel a FaceFeatureExtractor returns when the image is
+// valid but contains more than one candidate face. Enrollment/matching only accepts a
+// single portrait: answering "which face did you mean" by picking the highest-scoring
+// one would silently store the wrong person, so the service answers 422
+// MULTIPLE_FACES_DETECTED and lets a human re-upload a cropped photo.
+var ErrMultipleFaces = errors.New("multiple candidate faces in image")
+
 // ErrUnsupportedImageFormat is the sentinel a FaceFeatureExtractor returns when the
 // image bytes cannot be decoded at all (unsupported format or corrupted file). It is
 // the caller's input that is at fault, so the service answers 400 rather than 500 —
@@ -830,6 +837,10 @@ func (s *Service) enrollFace(ctx context.Context, personMeta *Person, upload Fac
 		if errors.Is(err, ErrNoFaceDetected) {
 			return nil, "", apperr.BadRequest("NO_FACE_DETECTED", "No detectable face found in the uploaded photo", err)
 		}
+		if errors.Is(err, ErrMultipleFaces) {
+			return nil, "", apperr.Invalid("MULTIPLE_FACES_DETECTED",
+				"Multiple faces detected; gallery faces must be a single-person close-up", err)
+		}
 		if errors.Is(err, ErrUnsupportedImageFormat) {
 			return nil, "", apperr.BadRequest("UNSUPPORTED_IMAGE_FORMAT", "The uploaded image could not be decoded", err)
 		}
@@ -1186,6 +1197,10 @@ func (s *Service) SearchByImage(
 	if err != nil {
 		if errors.Is(err, ErrNoFaceDetected) {
 			return nil, apperr.BadRequest("NO_FACE_DETECTED", "No face detected in image", err)
+		}
+		if errors.Is(err, ErrMultipleFaces) {
+			return nil, apperr.Invalid("MULTIPLE_FACES_DETECTED",
+				"Multiple faces detected; face search requires a single-person close-up", err)
 		}
 		if errors.Is(err, ErrUnsupportedImageFormat) {
 			return nil, apperr.BadRequest("UNSUPPORTED_IMAGE_FORMAT", "Unsupported image format or corrupt image", err)

@@ -381,6 +381,8 @@ func (a *supervisorGallerySyncAdapter) GetGallerySyncData(ctx context.Context) (
 //   - an undecodable upload, or one the size guard rejects → person.ErrUnsupportedImageFormat
 //     (the caller's input is unusable; answering 500 would blame the server);
 //   - "no face in the photo" → person.ErrNoFaceDetected;
+//   - "more than one face in the photo" → person.ErrMultipleFaces (a group shot must
+//     be rejected instead of enrolling whichever face scored highest);
 //   - anything else (crash, timeout, protocol desync, package missing) → the raw error,
 //     which the service reports as a server failure.
 //
@@ -413,6 +415,8 @@ func (a *faceFeatureExtractorAdapter) ExtractFaceFeature(ctx context.Context, im
 			return nil, fmt.Errorf("%w: %v", person.ErrNoFaceDetected, err)
 		case errors.Is(err, faceextract.ErrInvalidArgument):
 			return nil, fmt.Errorf("%w: %v", person.ErrUnsupportedImageFormat, err)
+		case errors.Is(err, faceextract.ErrAmbiguous):
+			return nil, fmt.Errorf("%w: %v", person.ErrMultipleFaces, err)
 		}
 		return nil, err
 	}

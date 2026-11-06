@@ -880,6 +880,49 @@ func TestAddFace_WithExtractor_NoFaceDetected(t *testing.T) {
 	}
 }
 
+func TestAddFace_WithExtractor_MultipleFaces(t *testing.T) {
+	tempDir := t.TempDir()
+	dbStore := database.New(tempDir, zap.NewNop())
+	if err := dbStore.OpenAndMigrate(context.Background()); err != nil {
+		t.Fatalf("OpenAndMigrate failed: %v", err)
+	}
+	t.Cleanup(func() { _ = dbStore.Close() })
+
+	extractor := &mockExtractor{err: fmt.Errorf("%w: mock extractor", ErrMultipleFaces)}
+	svc := NewService(NewStore(dbStore), tempDir, zap.NewNop(), Options{Extractor: extractor})
+	ctx := context.Background()
+
+	p, err := svc.CreatePerson(ctx, CreatePersonRequest{PersonID: strPtr("P_EXTRACT_MULTI"), Name: "合影测试员"})
+	if err != nil {
+		t.Fatalf("CreatePerson failed: %v", err)
+	}
+
+	fakeJPEG := append([]byte{0xff, 0xd8, 0xff, 0xe0}, bytes.Repeat([]byte{0xdd}, 100)...)
+	_, err = svc.AddFaceWithReader(ctx, p.ID, "team.jpg", bytes.NewReader(fakeJPEG))
+	if err == nil {
+		t.Fatal("expected error for a group photo")
+	}
+
+	// 合影是「输入不可用于底库」而不是「服务坏了」，也不是「照片里有 0 张脸」：
+	// 必须回答 422 MULTIPLE_FACES_DETECTED，让人工换一张单人特写。
+	requireDomainError(t, err, apperr.KindInvalid, "MULTIPLE_FACES_DETECTED")
+
+	entries, _ := os.ReadDir(tempDir)
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".jpg") {
+			t.Errorf("unexpected image file found on disk after rejected group photo: %s", entry.Name())
+		}
+	}
+
+	faces, _, listErr := svc.ListFaces(ctx, p.ID, 0, 0)
+	if listErr != nil {
+		t.Fatalf("ListFaces failed: %v", listErr)
+	}
+	if len(faces) != 0 {
+		t.Fatalf("expected 0 faces after a group photo, got %d", len(faces))
+	}
+}
+
 func TestAddFace_WithExtractor_DimMismatch(t *testing.T) {
 	tempDir := t.TempDir()
 	dbStore := database.New(tempDir, zap.NewNop())

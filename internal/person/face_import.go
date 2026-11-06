@@ -426,10 +426,11 @@ func faceImportEnrollError(err error, personName string) *faceProcessError {
 
 // isMultipleFacesError reports whether an extractor rejected a group photo.
 //
-// The check is textual because the provider protocol has no code for this verdict yet:
-// faceextract.failureForCode only knows NO_FACE_DETECTED / INVALID_INPUT / UNSUPPORTED.
-// Keep it here, in one place, so adding the code later is a one-line switch to errors.Is
-// instead of a hunt for string comparisons.
+// This is the **legacy** path: the provider protocol now carries a real code
+// (`MULTIPLE_FACES` → faceextract.ErrAmbiguous → person.ErrMultipleFaces), and the
+// primary check is `errors.Is(err, ErrMultipleFaces)`. The textual fallback is kept
+// only for extractors outside this repo that phrase the verdict themselves; do not add
+// new string matching here.
 func isMultipleFacesError(err error) bool {
 	detail := strings.ToLower(err.Error())
 	return strings.Contains(detail, "multiple faces") || strings.Contains(detail, "multiple_faces")
@@ -447,7 +448,7 @@ func (s *Service) extractFaceFeatures(ctx context.Context, imgBytes []byte) ([]b
 		if errors.Is(err, ErrUnsupportedImageFormat) {
 			return nil, &faceProcessError{code: "CORRUPT_OR_OVERSIZED_IMAGE", message: "图片格式不支持或无法解码"}
 		}
-		if isMultipleFacesError(err) {
+		if errors.Is(err, ErrMultipleFaces) || isMultipleFacesError(err) {
 			return nil, &faceProcessError{
 				code:    "MULTIPLE_FACES_DETECTED",
 				message: "检测到多张人脸（合影照拒绝录入）",

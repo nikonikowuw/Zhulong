@@ -46,6 +46,12 @@ var (
 	// ErrNoFaceDetected means the frame was valid and processed, but contains no
 	// usable face. Not retryable and not a server error.
 	ErrNoFaceDetected = errors.New("no face detected in the supplied image")
+	// ErrAmbiguous means the frame was valid and faces were found, but more than one
+	// could be the subject (a group photo). Enrollment only accepts a single portrait,
+	// so the provider refuses to guess: the caller must answer 422 and have a human
+	// pick the right photo. Enrolling the top-scoring face of a group shot writes the
+	// wrong person into the gallery, and no later verification can tell.
+	ErrAmbiguous = errors.New("multiple candidate faces in the supplied image")
 	// ErrInvalidArgument means the frame violated the protocol (dimensions,
 	// stride, payload size, format). A caller bug, not a package failure.
 	ErrInvalidArgument = errors.New("invalid feature-extraction frame")
@@ -677,6 +683,8 @@ func failureForCode(code, detail string) error {
 		return fmt.Errorf("%w: %s", ErrInvalidArgument, detail)
 	case "UNSUPPORTED", "MODEL_UNAVAILABLE":
 		return fmt.Errorf("%w: %s", ErrUnsupported, detail)
+	case "MULTIPLE_FACES":
+		return fmt.Errorf("%w: %s", ErrAmbiguous, detail)
 	default:
 		return fmt.Errorf("%w: %s", ErrInternal, detail)
 	}

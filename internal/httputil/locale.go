@@ -110,6 +110,11 @@ var (
 			"zh-Hans": "上传的照片中未检测到清晰人脸",
 			"zh-Hant": "上傳的照片中未檢測到清晰人臉",
 		},
+		"MULTIPLE_FACES_DETECTED": {
+			"en":      "Multiple faces detected; upload a single-person close-up photo",
+			"zh-Hans": "检测到多张人脸，请上传单人特写照片",
+			"zh-Hant": "偵測到多張人臉，請上傳單人特寫照片",
+		},
 		"UNSUPPORTED_IMAGE_FORMAT": {
 			"en":      "The image file is unsupported or corrupted; use a static JPG, PNG or WebP",
 			"zh-Hans": "图片格式不受支持或文件已损坏，请上传静态的 JPG、PNG 或 WebP 图片",

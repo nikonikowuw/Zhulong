@@ -168,6 +168,7 @@ func TestExtractMapsFailureCodes(t *testing.T) {
 		{"invalid input", "INVALID_INPUT", faceextract.ErrInvalidArgument},
 		{"unsupported", "UNSUPPORTED", faceextract.ErrUnsupported},
 		{"model unavailable", "MODEL_UNAVAILABLE", faceextract.ErrUnsupported},
+		{"multiple faces", "MULTIPLE_FACES", faceextract.ErrAmbiguous},
 		{"internal", "INTERNAL", faceextract.ErrInternal},
 	}
 
