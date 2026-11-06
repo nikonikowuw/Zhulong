@@ -137,7 +137,11 @@ func (h *Handler) CreateTask(c *gin.Context) {
 		return
 	}
 
-	task := req.ToTask()
+	task, err := req.ToTask()
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
 	if err := h.service.CreateTask(c.Request.Context(), task); err != nil {
 		httputil.WriteError(c, err)
 		return
@@ -202,7 +206,11 @@ func (h *Handler) SaveTaskByCamera(c *gin.Context) {
 	}
 	req.CameraID = camID
 
-	task := req.ToTask()
+	task, err := req.ToTask()
+	if err != nil {
+		httputil.WriteError(c, err)
+		return
+	}
 	if err := h.service.SaveTask(c.Request.Context(), task); err != nil {
 		httputil.WriteError(c, err)
 		return

@@ -77,6 +77,22 @@ describe('Gb28181RuntimePanel', () => {
     await expect.element(getByText(/50 路/)).toBeInTheDocument()
   })
 
+  it('uses the polled runtime snapshot as the current service state', async () => {
+    const { getByText } = await render(
+      <Gb28181RuntimePanel
+        runtimeInfo={mockRuntime}
+        snapshot={{ ...mockSnapshot, state: 'error' }}
+        isLoading={false}
+        isError={false}
+        isFetching={false}
+        onRetry={vi.fn()}
+      />
+    )
+
+    await expect.element(getByText('故障')).toBeInTheDocument()
+    await expect.element(getByText('运行中')).not.toBeInTheDocument()
+  })
+
   it('renders error alert with message and triggers retry', async () => {
     const onRetry = vi.fn()
     const { getByRole, getByText } = await render(
@@ -109,7 +125,7 @@ describe('Gb28181RuntimePanel', () => {
     const { getByText } = await render(
       <Gb28181RuntimePanel
         runtimeInfo={errorRuntime}
-        snapshot={mockSnapshot}
+        snapshot={{ ...mockSnapshot, state: 'error' }}
         isLoading={false}
         isError={false}
         isFetching={false}

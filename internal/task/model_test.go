@@ -125,7 +125,10 @@ func TestCreateTaskRequestToTask(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := test.req.ToTask()
+			got, err := test.req.ToTask()
+			if err != nil {
+				t.Fatalf("ToTask failed: %v", err)
+			}
 			if got.CameraID != test.wantCam {
 				t.Fatalf("expected camera %q, got %q", test.wantCam, got.CameraID)
 			}

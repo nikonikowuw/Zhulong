@@ -68,7 +68,8 @@ func (TaskAlgorithm) TableName() string {
 
 // ValidateSampleFPS 校验分析任务的采样帧率。
 //
-// 负数与超过上限都是调用方的输入错误，直接拒绝而不做静默纠正；0 由调用方按默认值收敛。
+// 负数与超过上限都是调用方的输入错误，直接拒绝而不做静默纠正；
+// 0 由调用方按默认值收敛。
 func ValidateSampleFPS(raw int) (uint32, error) {
 	if raw < 0 || raw > SampleFPSMax {
 		return 0, apperr.Invalid(
@@ -141,17 +142,22 @@ type CreateTaskRequest struct {
 
 // ToTask converts CreateTaskRequest into a Task entity skeleton,
 // resolving camelCase and snake_case alias fields and supporting legacy single-algorithm payloads.
-func (req *CreateTaskRequest) ToTask() *Task {
+// It returns an error if the crop region is invalid.
+func (req *CreateTaskRequest) ToTask() (*Task, error) {
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
+	}
+	cropJSON, err := serializeCrop(req.Crop)
+	if err != nil {
+		return nil, err
 	}
 	t := &Task{
 		ID:       req.ID,
 		CameraID: firstNonZero(req.CameraID, req.CameraIDAlt),
 		Name:     req.Name,
 		Enabled:  enabled,
-		CropJSON: serializeCrop(req.Crop),
+		CropJSON: cropJSON,
 	}
 
 	items := req.Algorithms
@@ -163,7 +169,7 @@ func (req *CreateTaskRequest) ToTask() *Task {
 	for _, item := range items {
 		t.Algorithms = append(t.Algorithms, item.ToEntity(t.ID))
 	}
-	return t
+	return t, nil
 }
 
 // legacyAlgorithmItem 把旧的扁平单算法字段折成一个算法项；没有 legacy 字段时返回 nil。
@@ -217,7 +223,8 @@ func (req *UpdateTaskRequest) ApplyCrop(t *Task) error {
 		return nil
 	}
 	// 显式清空：null / [] / {}。
-	if bytes.Equal(trimmed, []byte("null")) || bytes.Equal(trimmed, []byte("[]")) || bytes.Equal(trimmed, []byte("{}")) {
+	switch string(trimmed) {
+	case "null", "[]", "{}":
 		t.CropJSON = defaultConfigJSON
 		return nil
 	}
@@ -225,23 +232,40 @@ func (req *UpdateTaskRequest) ApplyCrop(t *Task) error {
 	if err != nil {
 		return apperr.Invalid("INVALID_CROP_CONFIG", fmt.Sprintf("invalid crop config: %v", err), err)
 	}
-	t.CropJSON = serializeCrop(crop)
+	cropJSON, err := serializeCrop(crop)
+	if err != nil {
+		return err
+	}
+	t.CropJSON = cropJSON
 	return nil
 }
 
 // serializeCrop 把裁剪矩形序列化为存储形态；nil / 整帧统一为 '{}'。
-func serializeCrop(crop *region.Rect) string {
-	if crop == nil || crop.IsIdentity() {
-		return defaultConfigJSON
+func serializeCrop(crop *region.Rect) (string, error) {
+	if crop == nil {
+		return defaultConfigJSON, nil
+	}
+	if err := region.ValidateCrop(*crop); err != nil {
+		return "", apperr.Invalid(
+			"INVALID_CROP_CONFIG",
+			fmt.Sprintf("invalid crop config: %v", err),
+			err,
+		)
+	}
+	if crop.IsIdentity() {
+		return defaultConfigJSON, nil
 	}
 	payload, err := json.Marshal(struct {
 		Crop *region.Rect `json:"crop"`
 	}{Crop: crop})
 	if err != nil {
-		// 不可能发生：Rect 只含 float64，json.Marshal 不会失败。保留分支以避免吞错。
-		return defaultConfigJSON
+		return "", apperr.Invalid(
+			"INVALID_CROP_CONFIG",
+			fmt.Sprintf("invalid crop config: %v", err),
+			err,
+		)
 	}
-	return string(payload)
+	return string(payload), nil
 }
 
 // ApplyTo applies the update fields onto the target task entity.

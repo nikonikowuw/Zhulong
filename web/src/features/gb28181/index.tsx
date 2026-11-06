@@ -209,7 +209,12 @@ export function SettingsGb28181() {
           </TabsContent>
 
           {/* 选项卡二：接入服务目标配置 */}
-          <TabsContent value='config' className='space-y-4 outline-none'>
+          <TabsContent
+            value='config'
+            forceMount
+            hidden={activeTab !== 'config'}
+            className='space-y-4 outline-none'
+          >
             {configQuery.isLoading ? (
               <div className='space-y-3 rounded-xl border border-border/70 bg-card/50 p-4'>
                 <Skeleton className='h-4 w-32' />

@@ -33,6 +33,8 @@ export function useGb28181Config(): UseQueryResult<
   return useQuery({
     queryKey: GB28181_QUERY_KEYS.config(),
     queryFn: () => gb28181Api.getConfig(),
+    refetchInterval: 5000,
+    refetchIntervalInBackground: false,
     staleTime: 10_000,
   })
 }

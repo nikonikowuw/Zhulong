@@ -58,7 +58,8 @@ func (c *RegionConfigCache) OnTaskChanged(ctx context.Context, _ string) {
 // Reload queries all active tasks from the store, compiles their region configurations,
 // and atomically replaces the current snapshot.
 //
-// 契约：全量重建（每次任务变更都重新扫一遍启用中的任务）。缓存规模与任务数同级、变更频率低，
+// 契约：全量重建（每次任务变更都重新扫一遍启用中的任务）。
+// 缓存规模与任务数同级、变更频率低，
 // 因此不做增量 diff。
 func (c *RegionConfigCache) Reload(ctx context.Context) error {
 	if c.store == nil {

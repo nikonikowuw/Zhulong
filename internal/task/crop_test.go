@@ -3,8 +3,11 @@ package task_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"math"
 	"testing"
 
+	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	"github.com/nikonikowuw/Zhulong/internal/region"
 	"github.com/nikonikowuw/Zhulong/internal/task"
 )
@@ -33,11 +36,31 @@ func TestCreateTaskRequestToTaskCrop(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := (&task.CreateTaskRequest{CameraID: "cam", Crop: tt.crop}).ToTask()
+			req := &task.CreateTaskRequest{CameraID: "cam", Crop: tt.crop}
+			got, err := req.ToTask()
+			if err != nil {
+				t.Fatalf("ToTask failed: %v", err)
+			}
 			if got.CropJSON != tt.want {
 				t.Fatalf("expected %q, got %q", tt.want, got.CropJSON)
 			}
 		})
+	}
+}
+
+func TestCreateTaskRequestToTaskRejectsNonFiniteCrop(t *testing.T) {
+	crop := region.Rect{math.NaN(), 0.2, 0.5, 0.6}
+	_, err := (&task.CreateTaskRequest{CameraID: "cam", Crop: &crop}).ToTask()
+	if err == nil {
+		t.Fatal("expected non-finite crop to be rejected")
+	}
+
+	var appErr *apperr.Error
+	if !errors.As(err, &appErr) {
+		t.Fatalf("expected apperr.Error, got %T", err)
+	}
+	if appErr.Code != "INVALID_CROP_CONFIG" {
+		t.Fatalf("expected INVALID_CROP_CONFIG, got %s", appErr.Code)
 	}
 }
 

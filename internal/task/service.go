@@ -92,7 +92,8 @@ func (s *Service) SetTaskSavedListener(listener TaskSavedListener) {
 
 // notifyTaskSaved 在写库成功后广播保存事件。
 //
-// ⚠️ 必须脱钩请求 ctx：写库已经提交，客户端断连导致的取消不应让“应用新 crop”静默失败。
+// ⚠️ 必须脱钩请求 ctx：写库已经提交，客户端断连导致的取消不应让
+// “应用新 crop”静默失败。
 func (s *Service) notifyTaskSaved(ctx context.Context, taskID, cameraID string) {
 	s.savedMu.RLock()
 	listener := s.savedListener
@@ -129,7 +130,8 @@ func (s *Service) notifyTasksChanged(ctx context.Context, algorithmIDs []string)
 
 // prepareTask 校验必填字段，并就地归一化 + 校验算法子项。
 //
-// 任务主键不在这里补全：upsert 需要先按 camera_id 命中既有行，由 Store 在事务内决定沿用还是新建。
+// 任务主键不在这里补全：upsert 需要先按 camera_id 命中既有行，
+// 由 Store 在事务内决定沿用还是新建。
 func (s *Service) prepareTask(ctx context.Context, t *Task) error {
 	if t == nil {
 		return apperr.Invalid("INVALID_TASK_CONFIG", "task payload is nil", nil)
@@ -144,7 +146,11 @@ func (s *Service) prepareTask(ctx context.Context, t *Task) error {
 		return apperr.Invalid("INVALID_CROP_CONFIG", fmt.Sprintf("invalid crop config: %v", err), err)
 	}
 	// ParseCrop 内部已做 ValidateCrop（有限、范围、非退化、MinCropSide），此处不再重复。
-	t.CropJSON = serializeCrop(crop)
+	cropJSON, err := serializeCrop(crop)
+	if err != nil {
+		return err
+	}
+	t.CropJSON = cropJSON
 	return s.normalizeAndValidateAlgorithms(ctx, t.Algorithms)
 }
 
@@ -428,7 +434,8 @@ func (s *Service) GetTaskByCamera(ctx context.Context, cameraID string) (*Task, 
 }
 
 // ListTasks returns tasks matching optional camera or algorithm filters.
-// cameraID 优先；两个过滤条件同时给出时 algorithmID 被忽略（单摄像头单任务的模型下没有交集语义）。
+// cameraID 优先；两个过滤条件同时给出时 algorithmID 被忽略。
+// 单摄像头单任务的模型下没有交集语义。
 func (s *Service) ListTasks(ctx context.Context, cameraID, algorithmID string) ([]Task, error) {
 	var (
 		tasks []Task
@@ -453,7 +460,8 @@ func (s *Service) ListTasks(ctx context.Context, cameraID, algorithmID string) (
 
 // warnInvalidCrop 对“库里存在但解析失败”的 crop 配置记一次可定位的告警。
 //
-// 写入路径会拒绝非法配置，因此这只可能来自手工改库/降级回滚；读路径不得因此拒绝服务。
+// 写入路径会拒绝非法配置，因此这只可能来自手工改库或降级回滚；
+// 读路径不得因此拒绝服务。
 func (s *Service) warnInvalidCrop(task *Task) {
 	if task == nil {
 		return
@@ -491,7 +499,8 @@ func cloneTask(t *Task) *Task {
 	return &clone
 }
 
-// sameTaskSemantics 比较“会进算法子进程的那部分任务语义”，用于决定是否需要重启算法子进程。
+// sameTaskSemantics 比较“会进算法子进程的那部分任务语义”，
+// 用于决定是否需要重启算法子进程。
 //
 // 只比较 CameraID / Enabled / 算法集合（AlgorithmID、Enabled、SampleFPS、ConfigJSON、
 // RegionConfigJSON、ScheduleJSON）。刻意忽略：
@@ -500,7 +509,8 @@ func cloneTask(t *Task) *Task {
 //   - Task.ID / 子项 ID / CreatedAt / UpdatedAt：簿记字段，重建子项会换 ID 但语义不变。
 //
 // 保守方向是“不确定就当变了”：误重启只损失一次重连，漏重启会让配置静默不生效。
-// 新增 TaskAlgorithm 字段时必须同步增到 sameAlgorithmSet 的比较列表里，否则新配置改完不生效。
+// 新增 TaskAlgorithm 字段时必须同步增到 sameAlgorithmSet 的比较列表里，
+// 否则新配置改完不生效。
 func sameTaskSemantics(a, b *Task) bool {
 	if a == nil || b == nil {
 		return a == b

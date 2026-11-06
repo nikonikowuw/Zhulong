@@ -6,6 +6,7 @@ import { type Gb28181Config, type Gb28181ConfigResponse } from '../data/schema'
 import {
   GB28181_QUERY_KEYS,
   useDeleteGb28181Device,
+  useGb28181Config,
   useUpdateGb28181Config,
 } from './use-gb28181'
 
@@ -79,6 +80,34 @@ function createClient(): QueryClient {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
 }
+
+describe('useGb28181Config', () => {
+  it('polls runtime diagnostics while the page is visible', async () => {
+    const getConfig = vi.mocked(gb28181Api.getConfig)
+    getConfig.mockResolvedValue(beforeSave)
+    const client = createClient()
+    vi.useFakeTimers()
+
+    let unmount: (() => void) | undefined
+    try {
+      const hook = await renderHook(() => useGb28181Config(), {
+        wrapper: ({ children }) => (
+          <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        ),
+      })
+      unmount = hook.unmount
+
+      expect(getConfig).toHaveBeenCalledTimes(1)
+      await hook.act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+      expect(getConfig).toHaveBeenCalledTimes(2)
+    } finally {
+      unmount?.()
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('useDeleteGb28181Device', () => {
   it('invalidates device/runtime data and removes the deleted device catalog', async () => {

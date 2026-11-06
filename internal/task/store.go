@@ -138,8 +138,8 @@ func (s *Store) CreateTaskWithinBudget(ctx context.Context, task *Task, maxPoint
 // SaveTaskWithinBudget upserts a channel task and syncs its algorithm rows inside one transaction,
 // rejecting the write when the total compute points would exceed maxPoints.
 //
-// 定位顺序：显式 ID 优先，其次按 camera_id（单摄像头单任务）。两种路径都不会把任务挪到
-// 已被其它任务占用的摄像头上。
+// 定位顺序：显式 ID 优先，其次按 camera_id（单摄像头单任务）。
+// 两种路径都不会把任务挪到已被其它任务占用的摄像头上。
 func (s *Store) SaveTaskWithinBudget(ctx context.Context, task *Task, maxPoints int64) error {
 	if task == nil {
 		return errNilTask
@@ -265,7 +265,9 @@ func syncTaskAlgorithms(ctx context.Context, tx *gorm.DB, task *Task, now time.T
 
 // upsertTaskAlgorithm 按 (task_id, algorithm_id) upsert 单条子项，并保留既有业务主键与创建时间。
 func upsertTaskAlgorithm(ctx context.Context, tx *gorm.DB, sub *TaskAlgorithm, now time.Time) error {
-	existing, err := gorm.G[TaskAlgorithm](tx).Where("task_id = ? AND algorithm_id = ?", sub.TaskID, sub.AlgorithmID).First(ctx)
+	existing, err := gorm.G[TaskAlgorithm](tx).
+		Where("task_id = ? AND algorithm_id = ?", sub.TaskID, sub.AlgorithmID).
+		First(ctx)
 	switch {
 	case err == nil:
 		sub.ID = existing.ID
@@ -305,7 +307,8 @@ func cameraTaskTaken(ctx context.Context, tx *gorm.DB, cameraID string) (bool, e
 	return count > 0, nil
 }
 
-// validateComputeBudget 累加"其它启用中的任务"与"本次任务的启用子项"所需算力点，并按时间切片校验瞬时峰值。
+// validateComputeBudget 累加"其它启用中的任务"与"本次任务的启用子项"所需算力点，
+// 并按时间切片校验瞬时峰值。
 func validateComputeBudget(tx *gorm.DB, task *Task, excludeTaskID string, maxPoints int64) error {
 	items, err := otherTasksSchedulableItems(tx, excludeTaskID)
 	if err != nil {
@@ -354,7 +357,10 @@ func validateComputeBudget(tx *gorm.DB, task *Task, excludeTaskID string, maxPoi
 // otherTasksSchedulableItems 汇总除 excludeTaskID 之外、所有启用中任务的算力调度项。
 func otherTasksSchedulableItems(tx *gorm.DB, excludeTaskID string) ([]schedule.SchedulableItem, error) {
 	query := tx.Table("task_algorithms").
-		Select("task_algorithms.id AS sub_id, task_algorithms.sample_fps, algorithms.compute_cost, task_algorithms.schedule_json").
+		Select(
+			"task_algorithms.id AS sub_id, task_algorithms.sample_fps, "+
+				"algorithms.compute_cost, task_algorithms.schedule_json",
+		).
 		Joins("JOIN analysis_tasks ON analysis_tasks.id = task_algorithms.task_id").
 		Joins("JOIN algorithms ON algorithms.id = task_algorithms.algorithm_id").
 		Where("analysis_tasks.enabled = ? AND task_algorithms.enabled = ?", true, true)

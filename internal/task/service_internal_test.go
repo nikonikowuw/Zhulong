@@ -94,7 +94,8 @@ func (l *recordingListener) OnTaskChanged(_ context.Context, algorithmID string)
 	l.ids = append(l.ids, algorithmID)
 }
 
-// TestNotifyTasksChangedFiltersEmptyAndDuplicateIDs 钉住广播契约：空 ID 不外发，重复 ID 只广播一次。
+// TestNotifyTasksChangedFiltersEmptyAndDuplicateIDs 钉住广播契约：
+// 空 ID 不外发，重复 ID 只广播一次。
 func TestNotifyTasksChangedFiltersEmptyAndDuplicateIDs(t *testing.T) {
 	listener := &recordingListener{}
 	svc := NewService(

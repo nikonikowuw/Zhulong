@@ -56,7 +56,7 @@ export function Gb28181RuntimePanel({
 }: Gb28181RuntimePanelProps) {
   const { t, i18n } = useTranslation('gb28181')
 
-  const state = runtimeInfo?.state ?? ''
+  const state = snapshot?.state ?? runtimeInfo?.state ?? ''
   const stateLevel = runtimeStateLevel(state)
   const stateLabel = state
     ? t(`state.${state}`, { defaultValue: state })
