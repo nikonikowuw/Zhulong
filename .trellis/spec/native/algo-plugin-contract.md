@@ -41,6 +41,9 @@
    - 人脸中心落入人体框上半身（$y \le y_{top} + 0.45 \cdot h$）且人脸在人体内的交并覆盖比 $\text{IoF} \ge 0.50$ 时，该人脸挂载进对应人体的 `faces` 列表；
 3. **真实检测的结构化语义**：
    - **背身/无正脸人体**：模型检出的真实全身框可以生成 `faces` 为空的 `zhulong_person_item`，供宿主生成人员抓拍记录与周界报警；
+     ⚠️ 该行为只在默认配置下成立：包配置 `filter_unmatched=true` 时，**没有挂载任何已匹配
+     人脸的人体也必须一并裁掉**（并重排 `faces[].person_index`），否则「陌生人不产生结果与
+     抓拍」只是半句话 —— 人脸被过滤了、人体还在。
    - **近景特写人脸**：真实检出但未匹配人体框的人脸，可以生成 `body_box = face_box` 的 `zhulong_person_item`，保证人脸比对结果不丢失。
      ⚠️ 退化项必须**可识别**：`track_id = 0` 且 `body_box` **逐位等于** `faces[0].box`（不得外扩），
      `body_score` 填**该人脸的质量分**——它描述的是「这个框里那张脸有多可信」，不是人体检出置信度。
@@ -403,7 +406,14 @@ env 覆盖与「开发期源码树候选」只能排在后面。原因不是洁�
   的 `capabilities.extract_feature` 标为 `optional`；
 - ⚠️ 定义必须来自包内**直接编译**的源文件：ld 不会为满足弱未定义引用去抽取静态归档成员，
   搬进 `.a` 会让能力静默消失；
-- 帧级错误（`NO_FACE_DETECTED` / `INVALID_INPUT`）**不退出进程**——一张坏图不该毁掉热进程；
+- 帧级错误（`NO_FACE_DETECTED` / `INVALID_INPUT` / `MULTIPLE_FACES`）**不退出进程**——一张坏图
+  不该毁掉热进程；只有「能力缺失」（`UNSUPPORTED` / `MODEL_UNAVAILABLE`）与流截断才退 5；
+- ⚠️ **`MULTIPLE_FACES`（帧级裁决）与 `MODEL_UNAVAILABLE`（进程级能力）不可混用**：包把
+  「不支持的像素格式」当作能力缺失回 `NOT_SUPPORTED`，骨架就会退 5 杀掉热进程，一张坏图
+  毁掉整条登记链路。输入的格式/stride/尺寸问题一律是 `INVALID_ARGUMENT`。
+- 单张登记照里检出**多于一张**可用人脸时必须回 `MULTIPLE_FACES`（状态码
+  `ZHULONG_PLUGIN_ERR_AMBIGUOUS`），**禁止**盲选最高分脸：写进底库的错人从特征向量上
+  看不出来，只能靠人工复核输入图；
 - `request_id` 必须回显，宿主侧会校验：错配等于把别人的特征写进底库。
 
 宿主侧实现与进程生命周期（并发 1、崩溃单帧重试 1 次、超时杀进程组、空闲回收、入口指纹失效）

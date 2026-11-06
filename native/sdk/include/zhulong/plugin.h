@@ -40,6 +40,18 @@ enum {
     ZHULONG_PLUGIN_ERR_ALREADY_EXISTS   = -5,  /**< 资源已存在或重复初始化 */
     ZHULONG_PLUGIN_ERR_INVALID_STATE    = -6,  /**< 句柄状态无效或生命周期未对齐 */
     ZHULONG_PLUGIN_ERR_TIMEOUT          = -7,  /**< 操作或推理执行超时 */
+    /**
+     * @brief 输入有效但存在多个候选目标，无法唯一决策
+     *
+     * 与 `NOT_SUPPORTED` 的区分是刻意的：后者表示「这台机器/这次构建做不到」，
+     * 属于**进程级**能力缺失（`--extract-feature` 直接退 5）；本码是**帧级**
+     * 裁决（例如单张登记照里检出多张人脸），进程健康、下一帧照常服务，
+     * 调方应把图退回人工复核而不是重试。
+     *
+     * 追加在末尾：不改变任何已有枚举值，旧包不会返回它，旧宿主遇到未知码按
+     * `INTERNAL` 处理（fail-closed），因此是向后兼容的扩展。
+     */
+    ZHULONG_PLUGIN_ERR_AMBIGUOUS        = -8,
     ZHULONG_PLUGIN_ERR_INTERNAL         = -99  /**< 插件内部未捕获或未知错误 */
 };
 

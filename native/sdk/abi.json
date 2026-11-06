@@ -9,7 +9,8 @@
     "改任何一项都意味着已发布的算法包需要重新构建，别在补丁版本里静默改。",
     "1.1.0：TaskConfig 不再是空值类型（新增 face_match_threshold / face_match_top_k / flags），并引入进程级 `--config` 与任务级 MSG_TASK_CONFIG。api_version / protocol 未变。",
     "capabilities.extract_feature=optional 表示「实现它才能被宿主用于底库登记」：宿主通过 `--extract-feature` 子命令 + 弱符号 zhulong_face_extract_feature 调用，未实现时如实返回 UNSUPPORTED（进程级退出码 5），而不是构建错误。",
-    "1.2.0：新增 TaskContext.regions 与 input_view、MSG_TASK_REGIONS=15 及帧尾窗口元数据；使用新能力的包需重建，旧参数消息与 C ABI 不变。"
+    "1.2.0：新增 TaskContext.regions 与 input_view、MSG_TASK_REGIONS=15 及帧尾窗口元数据；使用新能力的包需重建，旧参数消息与 C ABI 不变。",
+    "1.2.0+（追加式扩展，无需重建已发布包）：新增状态码 ZHULONG_PLUGIN_ERR_AMBIGUOUS (-8) 与 --extract-feature 协议码 MULTIPLE_FACES（单张登记照检出多张人脸，帧级拒绝、进程不退出）。旧包不会返回它，旧宿主遇未知码按 INTERNAL fail-closed。"
   ],
   "capabilities": {
     "verify": "required",

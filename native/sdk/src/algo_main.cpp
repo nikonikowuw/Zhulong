@@ -643,7 +643,12 @@ namespace detail
             write_protocol_line(output.str());
         }
 
-        /** @brief zhulong_status_t → 协议 code；失败语义见 design §11.8 */
+        /**
+         * @brief zhulong_status_t → 协议 code；失败语义见 design §11.8
+         *
+         * 注意 `NOT_SUPPORTED` 与 `AMBIGUOUS` 的定位完全不同：前者是**进程级**能力缺失
+         * （缺模型/降级桩），后者是**帧级**裁决（例如登记照里多张人脸）。
+         */
         const char *extract_code_for_status(zhulong_status_t status)
         {
             switch (status)
@@ -656,6 +661,9 @@ namespace detail
                 return "NO_FACE_DETECTED";
             case ZHULONG_PLUGIN_ERR_NOT_SUPPORTED:
                 return "MODEL_UNAVAILABLE";
+            case ZHULONG_PLUGIN_ERR_AMBIGUOUS:
+                // 单张登记照里出现多个候选人脸：底库录入只接受单人特写，交人工复核。
+                return "MULTIPLE_FACES";
             default:
                 return "INTERNAL";
             }
@@ -665,7 +673,7 @@ namespace detail
     /**
      * @brief 执行 `--extract-feature`：stdin 帧流 → stdout 每帧一行 JSON
      *
-     * 帧级错误（无脸/输入非法）**不退出进程**——一张坏图毁掉热进程会让后续登记全部失败。
+     * 帧级错误（无脸/输入非法/多张人脸）**不退出进程**——一张坏图毁掉热进程会让后续登记全部失败。
      * 只有「能力缺失 / 流截断」这类进程级问题才返回非 0。
      *
      * @return 0 = stdin 正常 EOF；5 = 能力缺失（弱符号未解析）或帧流截断

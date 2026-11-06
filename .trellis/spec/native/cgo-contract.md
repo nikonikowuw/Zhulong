@@ -216,6 +216,7 @@ func (s *Subscription) Close() error
 | :--- | :--- | :--- | :--- |
 | 成功 | `status=passed`，`feature_dim=512` | `nil` | 200 |
 | 无脸 / 输出无法解码 | `code=NO_FACE_DETECTED` | `ErrNoFaceDetected` | 400 `NO_FACE_DETECTED` |
+| 单张登记照检出多张人脸 | `code=MULTIPLE_FACES` | `ErrAmbiguous` → `person.ErrMultipleFaces` | 422 `MULTIPLE_FACES_DETECTED` |
 | 帧头非法 / 尺寸越界 / payload 长度不符 | `code=INVALID_INPUT` | `ErrInvalidArgument` | 400 |
 | 包未安装 / 入口缺失 / 符号缺失 | `code=UNSUPPORTED`，exit 5 | `ErrUnsupported` / `ErrEntry` | 500 |
 | 模型不可用 | `code=MODEL_UNAVAILABLE`，exit 5 | `ErrUnsupported` | 500 |
@@ -227,7 +228,7 @@ func (s *Subscription) Close() error
 ### 7.3 进程生命周期与并发
 
 - **并发 1、一问一答**：与旧的插件互斥锁语义等价；请求排队由 30s 超时兜底，不引入无界并发 spawn。
-- **只对「流失步」换进程**：写失败 / 读失败 / 超时 / 非 JSON / `request_id` 错配 / 维度非法 → 杀进程组 + `Wait()` → 重建 → 重发该帧，第二次失败 fail-closed。**帧级裁决（`NO_FACE_DETECTED` / `INVALID_INPUT`）不回显错误但换了进程**：包进程是健康的，换掉它只会让下一帧再付一次模型冷加载（见 §6.1「一张坏图不该毁掉热进程」）。`request_id` 必须回显并校验——错配等于把别人的特征写进底库。
+- **只对「流失步」换进程**：写失败 / 读失败 / 超时 / 非 JSON / `request_id` 错配 / 维度非法 → 杀进程组 + `Wait()` → 重建 → 重发该帧，第二次失败 fail-closed。**帧级裁决（`NO_FACE_DETECTED` / `INVALID_INPUT` / `MULTIPLE_FACES`）不回显错误但换了进程**：包进程是健康的，换掉它只会让下一帧再付一次模型冷加载（见 §6.1「一张坏图不该毁掉热进程」）。`request_id` 必须回显并校验——错配等于把别人的特征写进底库。
 - **调用方取消不重试**：ctx 到期/取消时子进程已被 `AfterFunc` 杀掉，重试只会再起一个立刻再杀的进程；此时对外仍是 `ErrInternal`（宿主侧失败），但不进重试循环。
 - **单行上限 256 KiB**：stdout 一行 = 一条 JSON 回复，超过上限按失步处理；不然失控的包能用一行输出吃光宿主内存。
 - **`Close` 之后不再 spawn**：reaper 已停，此后再 spawn 就没人回收——`Extract` 直接返回 `ErrInternal`。
