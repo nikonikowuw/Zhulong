@@ -167,6 +167,7 @@ native-cross-build:
 #    `webui-dist-check` 会把「忘了重建」变成硬失败，而不是带着旧控制台交叉编译。
 CROSS_TARGET ?=
 CROSS_BOARD ?= rk3568-rknn-rga
+CROSS_BOARD_STRIP ?= aarch64-linux-gnu-strip
 
 cross: webui-dist-check
 	@test -n "$(CROSS_TARGET)" || { \
@@ -180,10 +181,20 @@ cross: webui-dist-check
 		CROSS_OUTPUT="build/targets/$(CROSS_TARGET)/Zhulong"
 	@file "build/targets/$(CROSS_TARGET)/Zhulong" | grep -q 'ARM aarch64' \
 		|| { echo "错误: 产物不是 aarch64" >&2; exit 1; }
-	@printf '[✓] %s (%s)\n' "build/targets/$(CROSS_TARGET)/Zhulong" "$$(du -h "build/targets/$(CROSS_TARGET)/Zhulong" | cut -f1)"
+	@printf '[✓] 已构建 %s (%s)\n' "build/targets/$(CROSS_TARGET)/Zhulong" "$$(du -h "build/targets/$(CROSS_TARGET)/Zhulong" | cut -f1)"
 
 cross-board:
+	@command -v "$(CROSS_BOARD_STRIP)" >/dev/null 2>&1 || { \
+		echo "错误: 找不到 AArch64 strip 工具: $(CROSS_BOARD_STRIP)" >&2; exit 1; }
 	$(MAKE) cross CROSS_TARGET=$(CROSS_BOARD)
+	cp -p "build/targets/$(CROSS_BOARD)/Zhulong" "build/targets/$(CROSS_BOARD)/Zhulong.unstripped"
+	$(CROSS_BOARD_STRIP) --strip-all "build/targets/$(CROSS_BOARD)/Zhulong"
+	@file "build/targets/$(CROSS_BOARD)/Zhulong" | grep -q 'ARM aarch64.*stripped' \
+		|| { echo "错误: 交叉剥离后的产物校验失败" >&2; exit 1; }
+	@printf '[✓] 已剥离 %s (%s)；调试备份保存在 %s.unstripped\n' \
+		"build/targets/$(CROSS_BOARD)/Zhulong" \
+		"$$(du -h "build/targets/$(CROSS_BOARD)/Zhulong" | cut -f1)" \
+		"build/targets/$(CROSS_BOARD)/Zhulong"
 
 # 算法包：RKNN 与 RGA 真正落地的交付物。
 # SDK 前缀必须与档位**同源**：libZhulongAlgoRuntime 是按档位编的，拿 rknn 档位的前缀
