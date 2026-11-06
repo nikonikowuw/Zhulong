@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <optional>
 
 namespace zhulong {
 
@@ -160,6 +161,24 @@ struct PackedLayout {
     size_t bytes{0};
 };
 
+namespace detail {
+
+inline std::optional<size_t> checked_size_product(size_t lhs, size_t rhs) noexcept {
+    if (rhs != 0 && lhs > std::numeric_limits<size_t>::max() / rhs) {
+        return std::nullopt;
+    }
+    return lhs * rhs;
+}
+
+inline std::optional<size_t> checked_size_sum(size_t lhs, size_t rhs) noexcept {
+    if (lhs > std::numeric_limits<size_t>::max() - rhs) {
+        return std::nullopt;
+    }
+    return lhs + rhs;
+}
+
+} // namespace detail
+
 /**
  * @brief 按窗口尺寸计算紧打包布局；未知格式返回 `valid=false`（调用方必须 fail_publish）。
  *
@@ -179,25 +198,61 @@ inline PackedLayout packed_layout_for(const ViewWindow &win, uint32_t format) no
         if (stride == 0 || stride > static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) {
             return layout;
         }
-        const uint32_t y_size = stride * h;
+
+        const auto y_size = detail::checked_size_product(static_cast<size_t>(stride), static_cast<size_t>(h));
+        if (!y_size || *y_size > std::numeric_limits<uint32_t>::max()) {
+            return layout;
+        }
+
+        size_t bytes = 0;
+        size_t second_plane_offset = *y_size;
+        uint32_t chroma_stride = 0;
+        if (format == FRAME_FORMAT_NV12) {
+            const size_t chroma_rows = (static_cast<size_t>(h) + 1) / 2;
+            const auto chroma_size = detail::checked_size_product(static_cast<size_t>(stride), chroma_rows);
+            if (!chroma_size) {
+                return layout;
+            }
+            const auto total_size = detail::checked_size_sum(*y_size, *chroma_size);
+            if (!total_size) {
+                return layout;
+            }
+            bytes = *total_size;
+        } else {
+            chroma_stride = stride / 2;
+            const size_t chroma_rows = (static_cast<size_t>(h) + 1) / 2;
+            const auto chroma_plane_size =
+                detail::checked_size_product(static_cast<size_t>(chroma_stride), chroma_rows);
+            if (!chroma_plane_size ||
+                *chroma_plane_size > std::numeric_limits<uint32_t>::max() - *y_size) {
+                return layout;
+            }
+            const auto chroma_total_size = detail::checked_size_product(*chroma_plane_size, 2);
+            if (!chroma_total_size) {
+                return layout;
+            }
+            const auto total_size = detail::checked_size_sum(*y_size, *chroma_total_size);
+            if (!total_size) {
+                return layout;
+            }
+            second_plane_offset += *chroma_plane_size;
+            bytes = *total_size;
+        }
+
         layout.stride = stride;
         layout.offsets[0] = 0;
         layout.strides[0] = static_cast<int32_t>(stride);
 
         if (format == FRAME_FORMAT_NV12) {
-            layout.offsets[1] = y_size;
+            layout.offsets[1] = static_cast<uint32_t>(*y_size);
             layout.strides[1] = static_cast<int32_t>(stride);
-            layout.bytes = static_cast<size_t>(y_size) + static_cast<size_t>(stride) * ((h + 1) / 2);
         } else {
-            const uint32_t chroma_stride = stride / 2;
-            const uint32_t chroma_rows = (h + 1) / 2;
-            const uint32_t u_size = chroma_stride * chroma_rows;
-            layout.offsets[1] = y_size;
-            layout.offsets[2] = y_size + u_size;
+            layout.offsets[1] = static_cast<uint32_t>(*y_size);
+            layout.offsets[2] = static_cast<uint32_t>(second_plane_offset);
             layout.strides[1] = static_cast<int32_t>(chroma_stride);
             layout.strides[2] = static_cast<int32_t>(chroma_stride);
-            layout.bytes = static_cast<size_t>(y_size) + static_cast<size_t>(u_size) * 2;
         }
+        layout.bytes = bytes;
         layout.valid = true;
     }
     return layout;

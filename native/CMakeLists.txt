@@ -780,6 +780,7 @@ if(BUILD_TESTING)
     set(ASSERT_TEST_TARGETS
         ZhulongAlgoRuntimeTests
         ZhulongCpuVisionTests
+        ZhulongViewWindowTests
         ZhulongAlgoJsonTests
         ZhulongFrameBrokerTests
         ZhulongGallerySyncTests

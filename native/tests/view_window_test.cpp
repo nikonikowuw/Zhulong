@@ -113,6 +113,14 @@ void test_packed_layout_rejects_unknown() {
     assert(!packed_layout_for(ViewWindow{}, FRAME_FORMAT_NV12).valid);
 }
 
+void test_packed_layout_rejects_overflow() {
+    const ViewWindow nv12{true, 0, 0, 65536, 65536};
+    assert(!packed_layout_for(nv12, FRAME_FORMAT_NV12).valid);
+
+    const ViewWindow yuv420p{true, 0, 0, 65536, 57344};
+    assert(!packed_layout_for(yuv420p, FRAME_FORMAT_YUV420P).valid);
+}
+
 void test_full_frame_helper() {
     assert(view_rect_is_full_frame(ViewRect{0.0f, 0.0f, 1.0f, 1.0f}));
     assert(view_rect_is_full_frame(ViewRect{-0.5f, -0.5f, 1.5f, 1.5f}));
@@ -130,6 +138,7 @@ int main() {
     test_packed_layout_nv12();
     test_packed_layout_yuv420p_alignment();
     test_packed_layout_rejects_unknown();
+    test_packed_layout_rejects_overflow();
     test_full_frame_helper();
     std::cout << "[PASS] view_window_test" << std::endl;
     return 0;
