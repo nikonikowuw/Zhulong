@@ -49,7 +49,7 @@ describe('LiveCameraSidebar', () => {
   })
 
   it('filters by host so operators can still locate same-named devices', async () => {
-    const { getByRole, getByText, container } = await renderSidebar([
+    const { getByRole, getByText } = await renderSidebar([
       camera({ id: 'cam-01', name: '摄像头1', host: '10.0.0.11' }),
       camera({ id: 'cam-02', name: '摄像头2', host: '10.0.0.12' }),
       camera({ id: 'cam-03', name: '摄像头3', host: undefined }),
@@ -60,8 +60,8 @@ describe('LiveCameraSidebar', () => {
     await input.fill('10.0.0.12')
 
     await expect.element(getByText('摄像头2')).toBeVisible()
-    expect(container.textContent).not.toContain('摄像头1')
-    expect(container.textContent).not.toContain('摄像头3')
+    await expect.element(getByText('摄像头1')).not.toBeInTheDocument()
+    await expect.element(getByText('摄像头3')).not.toBeInTheDocument()
   })
 
   it('never fabricates a host when the backend provides none', async () => {

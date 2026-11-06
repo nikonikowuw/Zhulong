@@ -207,15 +207,16 @@ describe('createLiveAudioPlayer', () => {
     expect(FakeAudioContext.instances).toHaveLength(0)
   })
 
-  it('start() 装配 worklet：不 resume，图连到 destination', async () => {
+  it('start() 装配 worklet：非阻塞触发 resume()（不 await），图连到 destination', async () => {
     const player = createPlayer(() => null)
     try {
       await player.start()
 
       expect(FakeAudioContext.instances).toHaveLength(1)
       const ctx = FakeAudioContext.instances[0]
-      // ⚠️ 绝不 await resume()：无手势时它永不落地（research §2.1）。
-      expect(ctx.resumeCalls).toBe(0)
+      // ⚠️ 必须触发 resume() 尝试唤醒硬件，但绝不 await resume()：无手势时它永不落地（research §2.1）。
+      // FakeAudioContext.resume() 返回的是挂起的 Promise，若 player.start() await 了它，此处单测会超时挂死。
+      expect(ctx.resumeCalls).toBeGreaterThanOrEqual(1)
       expect(ctx.state).toBe('suspended')
 
       // 必须是 blob URL，且 addModule 之后立刻回收（不泄漏）

@@ -16,9 +16,9 @@
  * ## 必须知道的浏览器行为
  *
  * 无用户手势时 `ctx.resume()` 的 Promise **既不 resolve 也不 reject**，`await` 它会
- * 永久挂起（实测，见 `research/worklet-loading.md` §2.1）。所以 `start()` 只负责
- * 建图，绝不 `await resume()`：`AudioContext` 在构造时就是 `suspended`，`addModule()`
- * 在这个状态下仍能成功，真正的出声交给首次缓冲读取 —— 反正没手势时本来也播不出声。
+ * 永久挂起（实测，见 `research/worklet-loading.md` §2.1）。所以 `start()` 非阻塞地
+ * 触发 `void context.resume().catch(...)`，绝不 `await resume()`：`AudioContext` 在构造时处于 `suspended`，
+ * `addModule()` 在这个状态下仍能成功；触发 resume() 请求浏览器在具备手势激活时唤醒渲染线程。
  */
 import { AUDIO_FLAG_DISCONTINUITY, type AudioFrame } from './audio-channel'
 import workletSource from './live-audio-worklet.js?raw'
@@ -450,8 +450,11 @@ export function createLiveAudioPlayer(
             return
           }
 
-          // ⚠️ 不 await ctx.resume()：无手势时该 Promise 永不落地（research §2.1）。
+          // ⚠️ 触发 resume() 尝试唤醒渲染线程，但绝不 await 它（无用户手势时该 Promise 永不落地，await 会挂死，见 research §2.1）。
           const context = new Ctor()
+          if (context.state === 'suspended') {
+            void context.resume().catch(() => {})
+          }
           if (
             !context.audioWorklet ||
             typeof globalThis.AudioWorkletNode !== 'function'
@@ -497,6 +500,10 @@ export function createLiveAudioPlayer(
           attached = true
           applyGain()
 
+          if (context.state === 'suspended') {
+            void context.resume().catch(() => {})
+          }
+
           // start() 与首帧之间通常有几毫秒：把这期间攒下的帧补投。
           const clock = getClock()
           if (clock) drainHeld(clock)
@@ -517,6 +524,10 @@ export function createLiveAudioPlayer(
 
     push(frame: AudioFrame, pcm: Float32Array, inputRate: number): void {
       if (closed || stats.degraded) return
+
+      if (ctx && ctx.state === 'suspended') {
+        void ctx.resume().catch(() => {})
+      }
 
       if (!attached) {
         // start() 还在等 addModule，或压根没 start。按时钟未建立的语义暂存 100 ms：
@@ -544,6 +555,9 @@ export function createLiveAudioPlayer(
     setMuted(next: boolean): void {
       muted = next
       applyGain()
+      if (!muted && ctx && ctx.state === 'suspended') {
+        void ctx.resume().catch(() => {})
+      }
     },
 
     setVolume(next: number): void {
