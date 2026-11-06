@@ -8,8 +8,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// SystemInfoLifecycle defines start and stop actions for system hardware monitoring service.
-type SystemInfoLifecycle interface {
+// systemInfoLifecycle defines start and stop actions for system hardware monitoring service.
+type systemInfoLifecycle interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 }
@@ -23,17 +23,15 @@ type systemInfoLifecycleImpl struct {
 func (l *systemInfoLifecycleImpl) Start(ctx context.Context) error {
 	// Identity loads first: dispatchers read it right after startup and a late load
 	// would leave the first pushed events unattributable.
-	if l.identity != nil {
-		if err := l.identity.Start(ctx); err != nil {
-			return err
-		}
+	if err := l.identity.Start(ctx); err != nil {
+		return err
 	}
-	l.logger.Info("Starting system hardware telemetry service...")
+	l.logger.Info("starting system hardware telemetry service")
 	return l.service.Start(ctx)
 }
 
 func (l *systemInfoLifecycleImpl) Stop(ctx context.Context) error {
-	l.logger.Info("Stopping system hardware telemetry service...")
+	l.logger.Info("stopping system hardware telemetry service")
 	return l.service.Stop(ctx)
 }
 
@@ -44,11 +42,10 @@ type RouteRegistrar interface {
 
 // SystemInfoComponents bundles all instantiated hardware telemetry services and adapters.
 type SystemInfoComponents struct {
-	Collector       Collector
 	Service         *Service
 	Identity        *IdentityService
 	Handler         *Handler
-	Lifecycle       SystemInfoLifecycle
+	Lifecycle       systemInfoLifecycle
 	ProtectedRoutes RouteRegistrar
 }
 
@@ -58,22 +55,19 @@ func NewSystemInfoComponents(dbProvider database.DBProvider, logger *zap.Logger)
 		logger = zap.NewNop()
 	}
 
-	collector := NewDefaultCollector()
-	svc := NewService(collector, logger)
+	svc := NewService(newDefaultCollector(), logger)
 	identity := NewIdentityService(dbProvider, logger)
 	handler := NewHandler(svc, identity, logger)
-	lifecycle := &systemInfoLifecycleImpl{
-		service:  svc,
-		identity: identity,
-		logger:   logger,
-	}
 
 	return SystemInfoComponents{
-		Collector:       collector,
-		Service:         svc,
-		Identity:        identity,
-		Handler:         handler,
-		Lifecycle:       lifecycle,
+		Service:  svc,
+		Identity: identity,
+		Handler:  handler,
+		Lifecycle: &systemInfoLifecycleImpl{
+			service:  svc,
+			identity: identity,
+			logger:   logger,
+		},
 		ProtectedRoutes: handler,
 	}
 }

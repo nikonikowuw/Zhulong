@@ -7,20 +7,27 @@ import (
 	"time"
 )
 
-// FallbackCollector provides simulated telemetry for non-Linux platforms (e.g. macOS development).
-type FallbackCollector struct{}
+// fallbackCollector provides simulated telemetry for non-Linux platforms
+// (e.g. macOS development), where none of the procfs/sysfs nodes exist.
+//
+// It exists so the UI can be developed off-target; the numbers are fixed by design
+// and must never be mistaken for a real reading.
+type fallbackCollector struct{}
 
-// NewFallbackCollector creates a new fallback hardware telemetry collector.
-func NewFallbackCollector() *FallbackCollector {
-	return &FallbackCollector{}
+func newFallbackCollector() collector {
+	return &fallbackCollector{}
 }
 
 // CollectSnapshot returns simulated system hardware metrics.
-func (c *FallbackCollector) CollectSnapshot(ctx context.Context) (*RawHardwareSnapshot, error) {
+func (c *fallbackCollector) CollectSnapshot(ctx context.Context) (*rawHardwareSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	now := time.Now().UTC()
 	hostname, _ := os.Hostname()
 
-	return &RawHardwareSnapshot{
+	return &rawHardwareSnapshot{
 		Timestamp: now,
 		Host: HostInfo{
 			Hostname:      hostname,
@@ -31,13 +38,13 @@ func (c *FallbackCollector) CollectSnapshot(ctx context.Context) (*RawHardwareSn
 			BootTime:      now.Add(-1 * time.Hour),
 			LoadAvg:       [3]float64{0.85, 0.72, 0.65},
 		},
-		CPUTotal: RawCPUTimes{
+		CPUTotal: rawCPUTimes{
 			User:   12000,
 			Nice:   0,
 			System: 4000,
 			Idle:   24000,
 		},
-		CPUCores: []RawCPUTimes{
+		CPUCores: []rawCPUTimes{
 			{User: 3000, System: 1000, Idle: 6000},
 			{User: 3000, System: 1000, Idle: 6000},
 			{User: 3000, System: 1000, Idle: 6000},
@@ -67,7 +74,7 @@ func (c *FallbackCollector) CollectSnapshot(ctx context.Context) (*RawHardwareSn
 				UsedPercent: 50.0,
 			},
 		},
-		Network: map[string]RawNetworkInterface{
+		Network: map[string]rawNetworkInterface{
 			"en0": {
 				Interface:    "en0",
 				RxTotalBytes: 1024 * 1024 * 1024,

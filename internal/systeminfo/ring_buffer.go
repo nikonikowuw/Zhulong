@@ -1,11 +1,10 @@
 package systeminfo
 
-import (
-	"sync"
-)
+import "sync"
 
-// RingBuffer stores a fixed-capacity circular buffer of hardware history points.
-type RingBuffer struct {
+// ringBuffer stores a fixed-capacity circular buffer of hardware history points.
+// The zero value is not usable: construct it with newRingBuffer.
+type ringBuffer struct {
 	mu       sync.RWMutex
 	capacity int
 	data     []HardwareHistoryPoint
@@ -13,37 +12,40 @@ type RingBuffer struct {
 	count    int
 }
 
-// NewRingBuffer creates a new RingBuffer with a fixed positive capacity.
-func NewRingBuffer(capacity int) *RingBuffer {
-	if capacity <= 0 {
-		capacity = 60
+// newRingBuffer creates a ring buffer with a fixed capacity.
+//
+// A non-positive capacity would make the backing slice panic, so it degrades to a
+// single-point buffer: the trend chart then shows the newest sample instead of the
+// host refusing to start over a configuration mistake.
+func newRingBuffer(capacity int) *ringBuffer {
+	if capacity < 1 {
+		capacity = 1
 	}
-	return &RingBuffer{
+	return &ringBuffer{
 		capacity: capacity,
 		data:     make([]HardwareHistoryPoint, capacity),
 	}
 }
 
-// Push appends a new point to the buffer, overwriting the oldest point if full.
-func (r *RingBuffer) Push(point HardwareHistoryPoint) {
+// push appends a point, overwriting the oldest one once the buffer is full.
+func (r *ringBuffer) push(point HardwareHistoryPoint) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.count < r.capacity {
-		idx := (r.start + r.count) % r.capacity
-		r.data[idx] = point
+		r.data[(r.start+r.count)%r.capacity] = point
 		r.count++
 		return
 	}
 
-	// Overwrite the oldest element at r.start
+	// Full: overwrite the oldest element in place and advance the window.
 	r.data[r.start] = point
 	r.start = (r.start + 1) % r.capacity
 }
 
-// Snapshot returns a copy of points in chronological order (oldest to newest).
+// snapshot returns a copy of the points in chronological order (oldest to newest).
 // It always returns an initialized slice, never nil.
-func (r *RingBuffer) Snapshot() []HardwareHistoryPoint {
+func (r *ringBuffer) snapshot() []HardwareHistoryPoint {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -52,15 +54,14 @@ func (r *RingBuffer) Snapshot() []HardwareHistoryPoint {
 	}
 
 	result := make([]HardwareHistoryPoint, r.count)
-	for i := 0; i < r.count; i++ {
-		idx := (r.start + i) % r.capacity
-		result[i] = r.data[idx]
+	for i := range r.count {
+		result[i] = r.data[(r.start+i)%r.capacity]
 	}
 	return result
 }
 
-// Len returns the current number of items stored in the buffer.
-func (r *RingBuffer) Len() int {
+// length returns the number of stored points.
+func (r *ringBuffer) length() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.count

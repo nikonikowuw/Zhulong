@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"regexp"
 	"strings"
 	"sync"
@@ -23,6 +24,16 @@ const (
 
 	// CodeIdentityInvalid is the stable machine code for a rejected device_id.
 	CodeIdentityInvalid = "SYSTEM_IDENTITY_INVALID"
+
+	// CodeIdentityUnavailable reports that an accepted device_id could not be
+	// persisted. It is deliberately separate from CodeIdentityInvalid: a 503 must not
+	// carry the "your input is malformed" wording.
+	CodeIdentityUnavailable = "SYSTEM_IDENTITY_UNAVAILABLE"
+
+	// CodeTelemetryUnavailable reports that no hardware sample could be produced at
+	// all — nothing published yet and the on-demand sweep failed. It maps to 503 so a
+	// client can distinguish "telemetry is down" from a genuine server fault.
+	CodeTelemetryUnavailable = "SYSTEM_TELEMETRY_UNAVAILABLE"
 
 	// identitySingletonID pins the single row of system_settings (CHECK id = 1).
 	identitySingletonID = 1
@@ -146,20 +157,14 @@ func (s *IdentityService) Start(ctx context.Context) error {
 
 	row, err := s.store.Load(ctx)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return s.regenerate(ctx)
+		}
 		return err
 	}
 
 	if strings.TrimSpace(row.DeviceID) == "" {
-		generated, genErr := generateDeviceID()
-		if genErr != nil {
-			return genErr
-		}
-		if saveErr := s.store.Save(ctx, generated, true); saveErr != nil {
-			return saveErr
-		}
-		s.set(generated, true, time.Now().UTC())
-		s.logger.Info("generated fallback device identity", zap.String("device_id", generated))
-		return nil
+		return s.regenerate(ctx)
 	}
 
 	s.set(row.DeviceID, row.DeviceIDAuto, row.UpdatedAt)
@@ -167,6 +172,21 @@ func (s *IdentityService) Start(ctx context.Context) error {
 		zap.String("device_id", row.DeviceID),
 		zap.Bool("auto_generated", row.DeviceIDAuto),
 	)
+	return nil
+}
+
+// regenerate mints and persists a fallback identity, then publishes it.
+func (s *IdentityService) regenerate(ctx context.Context) error {
+	generated, err := generateDeviceID()
+	if err != nil {
+		return err
+	}
+	if err := s.store.Save(ctx, generated, true); err != nil {
+		return err
+	}
+
+	s.set(generated, true, time.Now().UTC())
+	s.logger.Info("generated fallback device identity", zap.String("device_id", generated))
 	return nil
 }
 
@@ -203,12 +223,22 @@ func (s *IdentityService) Update(ctx context.Context, raw string) (SystemIdentit
 		)
 	}
 
+	// Without a database there is nothing to persist to; report it as a dependency
+	// failure instead of dereferencing a nil provider inside the store.
+	if s.store == nil || s.store.db == nil {
+		return SystemIdentityResponse{}, apperr.New(
+			apperr.KindUnavailable,
+			CodeIdentityUnavailable,
+			"identity persistence is unavailable",
+			nil,
+		)
+	}
+
 	if err := s.store.Save(ctx, deviceID, false); err != nil {
 		return SystemIdentityResponse{}, err
 	}
 
-	now := time.Now().UTC()
-	s.set(deviceID, false, now)
+	s.set(deviceID, false, time.Now().UTC())
 	s.logger.Info("device identity updated", zap.String("device_id", deviceID))
 	return s.Snapshot(), nil
 }

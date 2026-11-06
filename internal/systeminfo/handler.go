@@ -2,7 +2,6 @@ package systeminfo
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/nikonikowuw/Zhulong/internal/apperr"
 	audithttp "github.com/nikonikowuw/Zhulong/internal/audit/http"
 	"github.com/nikonikowuw/Zhulong/internal/httputil"
 	"go.uber.org/zap"
@@ -29,16 +28,11 @@ func NewHandler(service *Service, identity *IdentityService, logger *zap.Logger)
 
 // RegisterRoutes mounts the telemetry and host identity endpoints onto the protected route group.
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
-	hardware := rg.Group("/system/hardware")
-	{
-		hardware.GET("", h.GetHardware)
-	}
+	rg.GET("/system/hardware", h.GetHardware)
 
-	identity := rg.Group("/system/identity")
-	{
-		identity.GET("", h.GetIdentity)
-		identity.PUT("", h.UpdateIdentity)
-	}
+	identityGroup := rg.Group("/system/identity")
+	identityGroup.GET("", h.GetIdentity)
+	identityGroup.PUT("", h.UpdateIdentity)
 }
 
 // GetIdentity godoc
@@ -50,12 +44,6 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Success      200  {object}  httputil.Response{data=SystemIdentityResponse}
 // @Router       /system/identity [get]
 func (h *Handler) GetIdentity(c *gin.Context) {
-	// identity is always wired by NewSystemInfoComponents; the nil branch only keeps
-	// a partially constructed handler (tests, future callers) from panicking.
-	if h.identity == nil {
-		httputil.Success(c, SystemIdentityResponse{})
-		return
-	}
 	httputil.Success(c, h.identity.Snapshot())
 }
 
@@ -69,14 +57,10 @@ func (h *Handler) GetIdentity(c *gin.Context) {
 // @Param        request  body      UpdateSystemIdentityRequest  true  "Device identity"
 // @Success      200      {object}  httputil.Response{data=SystemIdentityResponse}
 // @Failure      422      {object}  httputil.Response  "SYSTEM_IDENTITY_INVALID"
+// @Failure      503      {object}  httputil.Response  "SYSTEM_IDENTITY_UNAVAILABLE"
 // @Router       /system/identity [put]
 func (h *Handler) UpdateIdentity(c *gin.Context) {
 	audithttp.Tag(c, ActionIdentityUpdate, "system", "Update host device identity")
-
-	if h.identity == nil {
-		httputil.WriteError(c, apperr.New(apperr.KindUnavailable, CodeIdentityInvalid, "identity service unavailable", nil))
-		return
-	}
 
 	var req UpdateSystemIdentityRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -86,11 +70,10 @@ func (h *Handler) UpdateIdentity(c *gin.Context) {
 
 	resp, err := h.identity.Update(c.Request.Context(), req.DeviceID)
 	if err != nil {
-		httputil.WriteError(c, err)
+		httputil.WriteErrorWithLogger(c, err, h.logger)
 		return
 	}
 
-	h.logger.Info("device identity saved", zap.String("device_id", resp.DeviceID))
 	httputil.Success(c, resp)
 }
 
@@ -101,7 +84,7 @@ func (h *Handler) UpdateIdentity(c *gin.Context) {
 // @Tags         system
 // @Produce      json
 // @Success      200  {object}  httputil.Response{data=SystemHardwareResponse}
-// @Failure      500  {object}  httputil.Response  "INTERNAL_ERROR"
+// @Failure      503  {object}  httputil.Response  "SYSTEM_TELEMETRY_UNAVAILABLE"
 // @Router       /system/hardware [get]
 func (h *Handler) GetHardware(c *gin.Context) {
 	status, err := h.service.GetHardwareStatus(c.Request.Context())

@@ -6,31 +6,41 @@ import (
 )
 
 func TestCalculateUsage(t *testing.T) {
-	prev := RawCPUTimes{
+	prev := rawCPUTimes{
 		User:   100,
 		System: 50,
 		Idle:   850,
 	} // Total = 1000, Idle = 850
-	curr := RawCPUTimes{
+	curr := rawCPUTimes{
 		User:   200,
 		System: 100,
 		Idle:   1700,
 	} // Total = 2000, Idle = 1700
 	// Delta Total = 1000, Delta Idle = 850 -> Usage = 15.0%
 
-	usage := CalculateUsage(prev, curr)
-	if usage != 15.0 {
+	if usage := calculateUsage(prev, curr); usage != 15.0 {
 		t.Fatalf("expected usage 15.0, got %v", usage)
 	}
 
 	// Boundary: identical times
-	if zero := CalculateUsage(curr, curr); zero != 0.0 {
+	if zero := calculateUsage(curr, curr); zero != 0.0 {
 		t.Fatalf("expected 0 usage when times unchanged, got %v", zero)
 	}
 
 	// Boundary: inverted
-	if zero := CalculateUsage(curr, prev); zero != 0.0 {
+	if zero := calculateUsage(curr, prev); zero != 0.0 {
 		t.Fatalf("expected 0 usage when curr <= prev, got %v", zero)
+	}
+}
+
+func TestCalculateUsage_ClampsOutOfRange(t *testing.T) {
+	// iowait accounted non-monotonically: idle delta exceeds total delta, which would
+	// otherwise produce a negative percentage.
+	prev := rawCPUTimes{User: 100, Idle: 100, IOWait: 500}
+	curr := rawCPUTimes{User: 150, Idle: 100, IOWait: 0}
+
+	if usage := calculateUsage(prev, curr); usage < 0 || usage > 100 {
+		t.Fatalf("expected usage clamped into [0,100], got %v", usage)
 	}
 }
 
@@ -49,8 +59,7 @@ func TestFormatThermalLabel(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := formatThermalLabel(tt.input)
-		if got != tt.expected {
+		if got := formatThermalLabel(tt.input); got != tt.expected {
 			t.Errorf("formatThermalLabel(%q) = %q; want %q", tt.input, got, tt.expected)
 		}
 	}
@@ -63,20 +72,34 @@ func TestFindThermalByPattern(t *testing.T) {
 		{Label: "NPU", Temperature: 49.8},
 	}
 
-	if temp := findThermalByPattern(thermals, "cpu"); temp != 53.2 {
-		t.Fatalf("expected CPU temp 53.2, got %v", temp)
+	tests := []struct {
+		keyword   string
+		wantTemp  float64
+		wantFound bool
+	}{
+		{keyword: "cpu", wantTemp: 53.2, wantFound: true},
+		{keyword: "npu", wantTemp: 49.8, wantFound: true},
+		{keyword: "nonexistent", wantTemp: 0, wantFound: false},
 	}
-	if temp := findThermalByPattern(thermals, "npu"); temp != 49.8 {
-		t.Fatalf("expected NPU temp 49.8, got %v", temp)
+
+	for _, tt := range tests {
+		temp, found := findThermalByPattern(thermals, tt.keyword)
+		if found != tt.wantFound || temp != tt.wantTemp {
+			t.Errorf("findThermalByPattern(%q) = (%v, %v); want (%v, %v)",
+				tt.keyword, temp, found, tt.wantTemp, tt.wantFound)
+		}
 	}
-	if temp := findThermalByPattern(thermals, "nonexistent"); temp != 0 {
-		t.Fatalf("expected 0 for nonexistent thermal, got %v", temp)
+}
+
+func TestFindThermalByPattern_ZeroReadingIsFound(t *testing.T) {
+	// 0°C is a legal sensor reading, so presence cannot be inferred from the value.
+	if _, found := findThermalByPattern([]TemperatureInfo{{Label: "CPU"}}, "cpu"); !found {
+		t.Fatal("a 0°C CPU sensor must still report as found")
 	}
 }
 
 func TestFallbackCollector(t *testing.T) {
-	col := NewFallbackCollector()
-	snap, err := col.CollectSnapshot(context.Background())
+	snap, err := newFallbackCollector().CollectSnapshot(context.Background())
 	if err != nil {
 		t.Fatalf("fallback collector failed: %v", err)
 	}
@@ -88,5 +111,17 @@ func TestFallbackCollector(t *testing.T) {
 	}
 	if len(snap.Storage) == 0 {
 		t.Fatal("expected non-empty storage mounts")
+	}
+	if snap.Network == nil || snap.NPU.CoreLoads == nil || snap.Thermals == nil {
+		t.Fatal("fallback snapshot must initialize every slice and map")
+	}
+}
+
+func TestFallbackCollector_HonorsCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := newFallbackCollector().CollectSnapshot(ctx); err == nil {
+		t.Fatal("expected a cancelled context to abort the sample")
 	}
 }

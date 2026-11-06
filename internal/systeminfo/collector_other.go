@@ -2,6 +2,6 @@
 
 package systeminfo
 
-func newPlatformCollector() Collector {
-	return NewFallbackCollector()
+func newPlatformCollector() collector {
+	return newFallbackCollector()
 }

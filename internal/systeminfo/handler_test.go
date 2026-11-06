@@ -13,22 +13,21 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-func TestHandler_GetHardware(t *testing.T) {
+func newTestRouter(t *testing.T, identity *IdentityService) *gin.Engine {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
-	logger := zaptest.NewLogger(t)
-	col := &mockCollector{}
-	svc := NewService(col, logger)
-	identity := NewIdentityService(nil, logger)
-	handler := NewHandler(svc, identity, logger)
 
+	handler := NewHandler(NewService(&mockCollector{}, zaptest.NewLogger(t)), identity, zaptest.NewLogger(t))
 	router := gin.New()
-	apiGroup := router.Group("/api/v1")
-	handler.RegisterRoutes(apiGroup)
+	handler.RegisterRoutes(router.Group("/api/v1"))
+	return router
+}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/system/hardware", nil)
+func TestHandler_GetHardware(t *testing.T) {
+	router := newTestRouter(t, NewIdentityService(nil, zaptest.NewLogger(t)))
+
 	rec := httptest.NewRecorder()
-
-	router.ServeHTTP(rec, req)
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/system/hardware", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d, body: %s", rec.Code, rec.Body.String())
@@ -38,23 +37,18 @@ func TestHandler_GetHardware(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to decode response envelope: %v", err)
 	}
-
 	if resp.Code != "OK" {
 		t.Fatalf("expected code 'OK', got %q", resp.Code)
 	}
 }
 
 func TestHandler_IdentityGetAndUpdate(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	logger := zaptest.NewLogger(t)
 	identity := NewIdentityService(newTestIdentityDB(t), logger)
 	if err := identity.Start(context.Background()); err != nil {
 		t.Fatalf("identity Start: %v", err)
 	}
-	handler := NewHandler(NewService(&mockCollector{}, logger), identity, logger)
-
-	router := gin.New()
-	handler.RegisterRoutes(router.Group("/api/v1"))
+	router := newTestRouter(t, identity)
 
 	// GET returns the generated fallback.
 	rec := httptest.NewRecorder()
@@ -74,11 +68,8 @@ func TestHandler_IdentityGetAndUpdate(t *testing.T) {
 	}
 
 	// PUT persists an operator-supplied id.
-	body, _ := json.Marshal(UpdateSystemIdentityRequest{DeviceID: "site-b-02"})
 	rec = httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/system/identity", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(rec, req)
+	router.ServeHTTP(rec, identityPutRequest(t, "site-b-02"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT identity status %d, body: %s", rec.Code, rec.Body.String())
 	}
@@ -87,15 +78,46 @@ func TestHandler_IdentityGetAndUpdate(t *testing.T) {
 	}
 
 	// PUT with an illegal value is rejected as a validation error.
-	body, _ = json.Marshal(UpdateSystemIdentityRequest{DeviceID: "bad value"})
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPut, "/api/v1/system/identity", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(rec, req)
+	router.ServeHTTP(rec, identityPutRequest(t, "bad value"))
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422 for invalid id, got %d, body: %s", rec.Code, rec.Body.String())
 	}
 	if got := identity.DeviceID(); got != "site-b-02" {
 		t.Fatalf("rejected update must not change the identity, got %q", got)
 	}
+}
+
+func TestHandler_UpdateIdentityWithoutDatabase(t *testing.T) {
+	// A handler wired with an identity service that has no store must answer 503 and,
+	// critically, must not reuse the "malformed input" machine code for it.
+	router := newTestRouter(t, NewIdentityService(nil, zaptest.NewLogger(t)))
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, identityPutRequest(t, "site-b-02"))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d, body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp httputil.Response
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Code != CodeIdentityUnavailable {
+		t.Fatalf("expected code %q, got %q", CodeIdentityUnavailable, resp.Code)
+	}
+}
+
+func identityPutRequest(t *testing.T, deviceID string) *http.Request {
+	t.Helper()
+
+	body, err := json.Marshal(UpdateSystemIdentityRequest{DeviceID: deviceID})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/system/identity", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	return req
 }

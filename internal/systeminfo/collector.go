@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// RawCPUTimes captures tick counters from /proc/stat for one processor or total.
-type RawCPUTimes struct {
+// rawCPUTimes captures tick counters from /proc/stat for one processor or total.
+type rawCPUTimes struct {
 	User    uint64
 	Nice    uint64
 	System  uint64
@@ -19,72 +19,79 @@ type RawCPUTimes struct {
 	Steal   uint64
 }
 
-// TotalTicks returns the aggregate ticks across all accounted CPU categories.
-func (t RawCPUTimes) TotalTicks() uint64 {
+// totalTicks returns the aggregate ticks across all accounted CPU categories.
+func (t rawCPUTimes) totalTicks() uint64 {
 	return t.User + t.Nice + t.System + t.Idle + t.IOWait + t.IRQ + t.SoftIRQ + t.Steal
 }
 
-// IdleTicks returns the aggregate idle ticks (idle + iowait).
-func (t RawCPUTimes) IdleTicks() uint64 {
+// idleTicks returns the aggregate idle ticks (idle + iowait).
+func (t rawCPUTimes) idleTicks() uint64 {
 	return t.Idle + t.IOWait
 }
 
-// CalculateUsage calculates the percentage between previous and current CPU times.
-func CalculateUsage(prev, curr RawCPUTimes) float64 {
-	prevTotal := prev.TotalTicks()
-	currTotal := curr.TotalTicks()
+// calculateUsage computes the utilization percentage between two CPU time samples.
+//
+// Kernel counters are monotonic, but a snapshot pair can still arrive out of order
+// (NTP step, 32-bit tick wrap on older kernels), so a non-advancing total reports 0
+// instead of a negative or NaN percentage.
+func calculateUsage(prev, curr rawCPUTimes) float64 {
+	prevTotal := prev.totalTicks()
+	currTotal := curr.totalTicks()
 	if currTotal <= prevTotal {
-		return 0.0
+		return 0
 	}
 
-	prevIdle := prev.IdleTicks()
-	currIdle := curr.IdleTicks()
-	if currIdle < prevIdle {
-		currIdle = prevIdle
-	}
+	// iowait can be accounted non-monotonically on some kernels; clamping to the
+	// previous reading keeps the idle delta inside the total delta.
+	currIdle := max(curr.idleTicks(), prev.idleTicks())
+	idleDelta := currIdle - prev.idleTicks()
+	totalDelta := currTotal - prevTotal
 
-	deltaTotal := float64(currTotal - prevTotal)
-	deltaIdle := float64(currIdle - prevIdle)
-
-	usage := (1.0 - (deltaIdle / deltaTotal)) * 100.0
-	if usage < 0.0 {
-		return 0.0
-	}
-	if usage > 100.0 {
-		return 100.0
-	}
-	return math.Round(usage*10) / 10
+	usage := (1 - float64(idleDelta)/float64(totalDelta)) * 100
+	return roundPercent(min(max(usage, 0), 100))
 }
 
-// RawNetworkInterface holds byte counters from /proc/net/dev.
-type RawNetworkInterface struct {
+// roundPercent keeps a single decimal so the UI never renders 33.33333333333333%.
+func roundPercent(value float64) float64 {
+	return math.Round(value*10) / 10
+}
+
+// rawNetworkInterface holds byte counters from /proc/net/dev.
+type rawNetworkInterface struct {
 	Interface    string
 	RxTotalBytes uint64
 	TxTotalBytes uint64
 	IsUp         bool
 }
 
-// RawHardwareSnapshot captures instantaneous hardware counter states.
-type RawHardwareSnapshot struct {
+// rawHardwareSnapshot captures instantaneous hardware counter states.
+type rawHardwareSnapshot struct {
 	Timestamp time.Time
 	Host      HostInfo
-	CPUTotal  RawCPUTimes
-	CPUCores  []RawCPUTimes
+	CPUTotal  rawCPUTimes
+	CPUCores  []rawCPUTimes
 	CPUModel  string
 	Memory    MemoryStatus
 	Storage   []StorageMountStatus
-	Network   map[string]RawNetworkInterface
+	Network   map[string]rawNetworkInterface
 	NPU       NPUStatus
 	Thermals  []TemperatureInfo
 }
 
-// Collector defines the interface for probing system hardware counters.
-type Collector interface {
-	CollectSnapshot(ctx context.Context) (*RawHardwareSnapshot, error)
+// collector probes system hardware counters.
+//
+// Implementations must return initialized slices and maps, never nil: the JSON
+// envelope promises [] rather than null, and a nil here would leak straight to the
+// API. A collector may also leave optional values at their zero state — every
+// /proc or /sys node it cannot read means "this host does not expose it", not an
+// error, unless it is a node whose truncation would publish half a sample (see
+// scanLines).
+type collector interface {
+	CollectSnapshot(ctx context.Context) (*rawHardwareSnapshot, error)
 }
 
-// NewDefaultCollector returns the platform-appropriate Collector.
-func NewDefaultCollector() Collector {
+// newDefaultCollector returns the platform-appropriate collector.
+func newDefaultCollector() collector {
 	return newPlatformCollector()
 }
 
@@ -110,12 +117,15 @@ func formatThermalLabel(rawType string) string {
 	}
 }
 
-func findThermalByPattern(thermals []TemperatureInfo, keyword string) float64 {
-	lowerKey := strings.ToLower(keyword)
-	for _, t := range thermals {
-		if strings.Contains(strings.ToLower(t.Label), lowerKey) {
-			return t.Temperature
+// findThermalByPattern returns the temperature of the first sensor whose label
+// contains keyword (case-insensitive). ok is false when nothing matched: 0°C is a
+// legal reading, so the temperature itself cannot double as the "not found" sentinel.
+func findThermalByPattern(thermals []TemperatureInfo, keyword string) (float64, bool) {
+	lowerKeyword := strings.ToLower(keyword)
+	for _, thermal := range thermals {
+		if strings.Contains(strings.ToLower(thermal.Label), lowerKeyword) {
+			return thermal.Temperature, true
 		}
 	}
-	return 0
+	return 0, false
 }
